@@ -16,6 +16,7 @@ from sandbox.routers import (
     executions,
     files,
     health,
+    mcp_router,
     sessions,
 )
 
@@ -111,6 +112,7 @@ app.include_router(executions.router)
 app.include_router(files.router)
 app.include_router(artifacts.router)
 app.include_router(health.router)
+app.include_router(mcp_router.router)
 
 
 # ── Root ───────────────────────────────────────────────────────────────

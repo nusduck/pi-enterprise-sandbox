@@ -30,9 +30,10 @@ RUN uv venv /app/.venv && \
 # Copy application code
 COPY sandbox/ /app/sandbox/
 COPY tests/ /app/tests/
+COPY sandbox/entrypoint.sh /app/entrypoint.sh
 
 # Fix ownership
-RUN chown -R sandbox:sandbox /app
+RUN chown -R sandbox:sandbox /app && chmod +x /app/entrypoint.sh
 
 USER sandbox
 WORKDIR /app
@@ -46,7 +47,7 @@ ENV \
 
 EXPOSE 8081 8091
 
-HEALTHCHECK --interval=15s --timeout=5s --retries=3 --start-period=5s \
+HEALTHCHECK --interval=15s --timeout=5s --retries=3 --start-period=10s \
     CMD curl -sf http://localhost:8081/health || exit 1
 
-CMD ["uvicorn", "sandbox.main:app", "--host", "0.0.0.0", "--port", "8081"]
+CMD ["/app/entrypoint.sh"]
