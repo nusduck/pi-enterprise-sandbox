@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import logging
+import os
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 
 from sandbox import __version__
 from sandbox.config import settings
@@ -112,11 +115,21 @@ app.include_router(files.router)
 app.include_router(artifacts.router)
 app.include_router(health.router)
 
+# ── WebUI (static files) ───────────────────────────────────────────────
+
+_webui_dir = Path(__file__).parent / "webui"
+if _webui_dir.is_dir():
+    app.mount("/webui", StaticFiles(directory=str(_webui_dir), html=True), name="webui")
+
 
 # ── Root ───────────────────────────────────────────────────────────────
 
 @app.get("/")
 def root():
+    """Serve the WebUI or return API info if webui not found."""
+    index = _webui_dir / "index.html"
+    if index.is_file():
+        return HTMLResponse(index.read_text(encoding="utf-8"))
     return {
         "service": "enterprise-sandbox",
         "version": __version__,

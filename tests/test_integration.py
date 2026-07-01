@@ -199,4 +199,4 @@ class TestHealthIntegration:
     def test_root_endpoint(self):
         resp = client.get("/")
         assert resp.status_code == 200
-        assert resp.json()["service"] == "enterprise-sandbox"
+        assert resp.headers["content-type"].startswith("text/html") or "enterprise-sandbox" in resp.text
