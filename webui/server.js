@@ -1,55 +1,536 @@
 #!/usr/bin/env node
 /**
- * Agent WebUI Server
+ * Pi Agent WebUI Server v2 — Pi SDK integration
  *
- * Serves a chat interface for Pi Agent.
- * For each prompt, spawns `pi --print` and streams the response.
+ * Uses @mariozechner/pi-agent-core Agent class directly (no CLI subprocess).
+ * Each conversation gets its own Agent + Sandbox session.
+ * SSE streaming via Agent events.
  */
-
 import http from "node:http";
 import fs from "node:fs";
 import path from "node:path";
-import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import crypto from "node:crypto";
+import { Agent } from "@mariozechner/pi-agent-core";
+import { Type } from "@sinclair/typebox";
 
+// ── Config ──────────────────────────────────────────────────────────────
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = parseInt(process.env.AGENT_WEBUI_PORT || "3000", 10);
-const PI_BIN = process.env.PI_BIN || "pi";
-const PI_MODEL = process.env.PI_MODEL || "llmio:deepseek-v4-flash";
-const PI_PROVIDER = process.env.PI_PROVIDER || "";
 const SANDBOX_URL = process.env.SANDBOX_BASE_URL || "http://sandbox:8081";
+const LLMIO_BASE_URL = process.env.LLMIO_BASE_URL || "";
+const LLMIO_API_KEY = process.env.LLMIO_API_KEY || "";
+const MODEL_ID = process.env.PI_MODEL || "deepseek-v4-flash";
+const CHAT_TIMEOUT_MS = 120_000; // 2 min max per chat turn
+const SYSTEM_PROMPT = [
+  "You are an enterprise AI agent running in a secure sandbox environment.",
+  "Your role is to help users with development, analysis, and automation tasks.",
+  "",
+  "## Available Tools",
+  "- **read**: Read file contents from the sandbox workspace",
+  "- **write**: Write content to a file in the sandbox workspace",
+  "- **edit**: Edit a file using targeted find-and-replace",
+  "- **bash**: Run shell commands (including Python, Node.js, grep, find, etc.)",
+  "",
+  "## Important Rules",
+  "1. All file operations and commands execute inside the sandbox — isolated and secure.",
+  "2. Use **bash** for ALL terminal operations: Python scripts, Node.js, compilation, testing, grep, find, ls, cat, etc.",
+  "3. Output files go under the workspace directory (use relative paths).",
+  "4. Do NOT attempt to access files outside the workspace.",
+  "5. Do NOT run raw network requests or install packages without being asked.",
+  "6. For data analysis tasks, use Python via bash.",
+  "7. When writing code, be thorough: include error handling and tests.",
+  "8. After completing a task, summarize what was done and where files were saved.",
+].join("\n");
 
-// ── Shared sandbox session (created once, reused across all turns) ─
-let sandboxSessionId = null;
-
-async function ensureSandboxSession() {
-  if (sandboxSessionId) return sandboxSessionId;
+// Detect llmio base URL: try env, or construct from models.json conventions
+function resolveBaseUrl() {
+  if (LLMIO_BASE_URL) return LLMIO_BASE_URL;
+  // Fallback: read from models.json if present
+  const modelsPath = path.join(os.homedir(), ".pi", "agent", "models.json");
   try {
-    const resp = await fetch(`${SANDBOX_URL}/sessions`, {
+    const cfg = JSON.parse(fs.readFileSync(modelsPath, "utf-8"));
+    const llmio = cfg.providers?.llmio;
+    if (llmio?.baseUrl) return llmio.baseUrl;
+  } catch { /* ignore */ }
+  return "https://llm.009100.xyz/openai/v1";
+}
+import os from "node:os";
+
+const LLMIO_URL = resolveBaseUrl();
+
+// ── Model factory ───────────────────────────────────────────────────────
+function createModel() {
+  return {
+    id: MODEL_ID,
+    name: MODEL_ID,
+    api: "openai-completions",
+    provider: "llmio",
+    baseUrl: LLMIO_URL,
+    reasoning: false,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 128000,
+    maxTokens: 8192,
+    headers: LLMIO_API_KEY ? { Authorization: `Bearer ${LLMIO_API_KEY}` } : undefined,
+    compat: {
+      supportsStore: false,
+      supportsDeveloperRole: false,
+      maxTokensField: "max_tokens",
+      requiresAssistantAfterToolResult: false,
+    },
+  };
+}
+
+// ── Sandbox HTTP helpers ────────────────────────────────────────────────
+const SANDBOX_HEADERS = { "Content-Type": "application/json" };
+if (process.env.SANDBOX_AUTH_TOKEN) {
+  SANDBOX_HEADERS["X-Auth-Token"] = process.env.SANDBOX_AUTH_TOKEN;
+}
+
+async function sandboxFetch(path, options = {}) {
+  const url = `${SANDBOX_URL}${path}`;
+  const resp = await fetch(url, {
+    ...options,
+    headers: { ...SANDBOX_HEADERS, ...(options.headers || {}) },
+  });
+  if (!resp.ok) {
+    const body = await resp.text().catch(() => "");
+    throw new Error(`Sandbox API ${resp.status} ${resp.statusText}: ${body.slice(0, 200)}`);
+  }
+  const text = await resp.text();
+  return text ? JSON.parse(text) : null;
+}
+
+function toolContent(text) {
+  const lines = text.split("\n");
+  const preview = lines.slice(0, 250).join("\n");
+  const note = lines.length > 250 ? `\n... [${lines.length - 250} more lines]` : "";
+  const truncated = (preview + note).slice(0, 50000);
+  return [{ type: "text", text: truncated }];
+}
+
+// ── Sandbox Tool Factory ────────────────────────────────────────────────
+const BLOCKED_COMMANDS = [
+  "sudo", "su ", "chmod 777", "chown ", "rm -rf /", "rm -rf /*",
+  "dd if=", "mkfs.", "fdisk", "> /dev/", "< /dev/",
+];
+
+function isBlocked(command) {
+  for (const prefix of BLOCKED_COMMANDS) {
+    if (command.trim().startsWith(prefix)) return prefix;
+  }
+  return null;
+}
+
+function createSandboxTools(sandboxSessionId) {
+  const sid = sandboxSessionId;
+
+  return [
+    {
+      name: "read",
+      label: "Read file",
+      description: "Read the contents of a file at the given path within the sandbox workspace.",
+      parameters: Type.Object({
+        path: Type.String({ description: "File path (relative to workspace)" }),
+        offset: Type.Optional(Type.Number({ description: "Line number to start from (1-indexed)" })),
+        limit: Type.Optional(Type.Number({ description: "Max lines to return" })),
+      }),
+      async execute(_toolCallId, params) {
+        const q = new URLSearchParams({ path: params.path });
+        if (params.offset != null) q.set("offset", String(params.offset));
+        if (params.limit != null) q.set("limit", String(params.limit));
+        const result = await sandboxFetch(`/sessions/${sid}/files/read?${q}`);
+        return {
+          content: toolContent(result.content || ""),
+          details: { size: result.size, truncated: result.truncated, mime_type: result.mime_type },
+        };
+      },
+    },
+    {
+      name: "write",
+      label: "Write file",
+      description: "Write content to a file at the given path in the sandbox workspace.",
+      parameters: Type.Object({
+        path: Type.String({ description: "File path (relative to workspace)" }),
+        content: Type.String({ description: "Content to write" }),
+      }),
+      async execute(_toolCallId, params) {
+        const result = await sandboxFetch(`/sessions/${sid}/files/write`, {
+          method: "POST",
+          body: JSON.stringify({ path: params.path, content: params.content }),
+        });
+        return {
+          content: toolContent(`Written ${result.size} bytes to ${params.path}`),
+          details: { size: result.size },
+        };
+      },
+    },
+    {
+      name: "edit",
+      label: "Edit file",
+      description: "Edit a file by replacing old_string with new_string (targeted find-and-replace).",
+      parameters: Type.Object({
+        path: Type.String({ description: "File path (relative to workspace)" }),
+        old_string: Type.String({ description: "Text to find and replace (must match exactly)" }),
+        new_string: Type.String({ description: "Replacement text" }),
+      }),
+      async execute(_toolCallId, params) {
+        // Read current content
+        const q = new URLSearchParams({ path: params.path });
+        const file = await sandboxFetch(`/sessions/${sid}/files/read?${q}`);
+        const content = file.content || "";
+
+        // Perform replacement
+        const idx = content.lastIndexOf(params.old_string);
+        if (idx === -1) {
+          throw new Error(`old_string not found in ${params.path}. Make sure it matches exactly.`);
+        }
+        const newContent =
+          content.slice(0, idx) + params.new_string + content.slice(idx + params.old_string.length);
+
+        await sandboxFetch(`/sessions/${sid}/files/write`, {
+          method: "POST",
+          body: JSON.stringify({ path: params.path, content: newContent }),
+        });
+
+        const diffLines = params.new_string.split("\n").length;
+        return {
+          content: toolContent(`Replaced "${params.old_string}" with "${params.new_string}" in ${params.path} (${diffLines} lines changed)`),
+          details: { path: params.path, diff_lines: diffLines },
+        };
+      },
+    },
+    {
+      name: "bash",
+      label: "Run command",
+      description: "Run a shell command inside the sandbox. Use for any terminal operation including Python, Node.js, grep, find, ls, cat, compilation, and testing.",
+      parameters: Type.Object({
+        command: Type.String({ description: "Shell command to execute" }),
+        timeout: Type.Optional(Type.Number({ description: "Timeout in seconds (default: 120, max: 300)" })),
+        description: Type.Optional(Type.String({ description: "Short description for audit" })),
+      }),
+      async execute(_toolCallId, params) {
+        // Pre-flight policy check
+        const blocked = isBlocked(params.command);
+        if (blocked) {
+          return {
+            content: toolContent(`Command blocked: "${blocked}" prefix is not allowed.`),
+            details: { blocked: true, exit_code: -1 },
+            isError: true,
+          };
+        }
+
+        const body = { command: params.command };
+        if (params.timeout) body.timeout = params.timeout;
+
+        const result = await sandboxFetch(`/sessions/${sid}/executions/command`, {
+          method: "POST",
+          body: JSON.stringify(body),
+        });
+
+        const isError = result.exit_code != null && result.exit_code !== 0;
+        const output = [
+          result.stdout_preview ? `STDOUT:\n${result.stdout_preview}` : "",
+          result.stderr_preview ? `STDERR:\n${result.stderr_preview}` : "",
+        ].filter(Boolean).join("\n\n") || "(no output)";
+
+        return {
+          content: toolContent(output),
+          details: {
+            exit_code: result.exit_code,
+            duration_ms: result.duration_ms,
+            truncated: result.truncated,
+          },
+          isError,
+        };
+      },
+    },
+  ];
+}
+
+// ── Conversation Manager ────────────────────────────────────────────────
+const conversations = new Map(); // Map<id, Conversation>
+
+class Conversation {
+  constructor(id) {
+    this.id = id;
+    this.title = "New conversation";
+    this.createdAt = Date.now();
+    this.agent = null;
+    this.sandboxSessionId = null;
+    this.messages = []; // kept for frontend
+    this._sandboxCreated = false;
+  }
+
+  async init() {
+    // 1. Create sandbox session
+    const session = await sandboxFetch("/sessions", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ caller_id: "agent-webui", metadata: { source: "webui" } }),
+      body: JSON.stringify({
+        caller_id: "agent-webui",
+        metadata: { source: "webui", conversation_id: this.id },
+      }),
     });
-    const session = await resp.json();
-    sandboxSessionId = session.session_id;
-    console.log(`[sandbox] Session created: ${sandboxSessionId}`);
-  } catch (err) {
-    console.error(`[sandbox] Failed to create session: ${err.message}`);
+    this.sandboxSessionId = session.session_id;
+    this._sandboxCreated = true;
+
+    // 2. Create Pi Agent with API key resolver
+    const agent = new Agent({
+      getApiKey: (provider) => {
+        if (provider === "llmio") return LLMIO_API_KEY || undefined;
+        return undefined;
+      },
+    });
+    agent.setModel(createModel());
+    agent.setTools(createSandboxTools(this.sandboxSessionId));
+    agent.setSystemPrompt(SYSTEM_PROMPT);
+    this.agent = agent;
+
+    return this;
   }
-  return sandboxSessionId;
+
+  async destroy() {
+    // Cleanup sandbox session
+    if (this.sandboxSessionId && this._sandboxCreated) {
+      try {
+        await sandboxFetch(`/sessions/${this.sandboxSessionId}`, { method: "DELETE" });
+      } catch { /* best effort */ }
+    }
+    this.agent?.abort();
+    conversations.delete(this.id);
+  }
+
+  toJSON() {
+    return {
+      id: this.id,
+      title: this.title,
+      createdAt: this.createdAt,
+      messageCount: this.messages.length,
+    };
+  }
 }
 
-async function destroySandboxSession() {
-  if (!sandboxSessionId) return;
+// ── API handlers ────────────────────────────────────────────────────────
+
+async function handleConversations(req, res) {
+  // GET /api/conversations — list all
+  if (req.method === "GET") {
+    const list = [];
+    for (const conv of conversations.values()) {
+      list.push(conv.toJSON());
+    }
+    list.sort((a, b) => b.createdAt - a.createdAt);
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify(list));
+    return;
+  }
+
+  // POST /api/conversations — create new
+  if (req.method === "POST") {
+    try {
+      const id = crypto.randomUUID();
+      const conv = new Conversation(id);
+      await conv.init();
+      conversations.set(id, conv);
+      res.writeHead(201, { "Content-Type": "application/json" });
+      res.end(JSON.stringify(conv.toJSON()));
+    } catch (err) {
+      res.writeHead(500, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: err.message }));
+    }
+    return;
+  }
+
+  res.writeHead(405);
+  res.end();
+}
+
+async function handleConversation(req, res, urlParts) {
+  const convId = urlParts[2];
+  const conv = conversations.get(convId);
+
+  if (!conv) {
+    res.writeHead(404, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ error: "Conversation not found" }));
+    return;
+  }
+
+  // DELETE /api/conversations/:id
+  if (req.method === "DELETE") {
+    await conv.destroy();
+    res.writeHead(204);
+    res.end();
+    return;
+  }
+
+  // PATCH /api/conversations/:id — rename
+  if (req.method === "PATCH") {
+    const chunks = [];
+    for await (const chunk of req) chunks.push(chunk);
+    const body = JSON.parse(Buffer.concat(chunks).toString());
+    if (body.title) {
+      conv.title = body.title;
+    }
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify(conv.toJSON()));
+    return;
+  }
+
+  // GET /api/conversations/:id/messages — get message history
+  if (req.method === "GET" && urlParts[3] === "messages") {
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify(conv.messages));
+    return;
+  }
+
+  res.writeHead(405);
+  res.end();
+}
+
+async function handleChat(req, res, urlParts) {
+  const convId = urlParts[2];
+  const conv = conversations.get(convId);
+
+  if (!conv) {
+    res.writeHead(404, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ error: "Conversation not found" }));
+    return;
+  }
+
+  // POST /api/conversations/:id/chat — SSE stream
+  if (req.method !== "POST") {
+    res.writeHead(405);
+    res.end();
+    return;
+  }
+
+  // Read body
+  const chunks = [];
+  for await (const chunk of req) chunks.push(chunk);
+  const body = JSON.parse(Buffer.concat(chunks).toString());
+  const { message } = body;
+  if (!message || !message.trim()) {
+    res.writeHead(400, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ error: "message is required" }));
+    return;
+  }
+
+  // Auto-title: use first message as title
+  if (conv.messages.length === 0) {
+    conv.title = message.slice(0, 60) + (message.length > 60 ? "…" : "");
+  }
+
+  // Push user message
+  conv.messages.push({ role: "user", content: message, timestamp: Date.now() });
+
+  // SSE setup
+  res.writeHead(200, {
+    "Content-Type": "text/event-stream",
+    "Cache-Control": "no-cache",
+    Connection: "keep-alive",
+  });
+
+  const abortController = new AbortController();
+  let assistantText = "";
+  let done = false;
+
+  // Forward Agent events → SSE
+  const unsubscribe = conv.agent.subscribe((event) => {
+    try {
+      switch (event.type) {
+        case "turn_start":
+          res.write(`data: ${JSON.stringify({ type: "turn_start" })}\n\n`);
+          break;
+
+        case "message_update": {
+          const ae = event.assistantMessageEvent;
+          if (ae.type === "text_delta") {
+            assistantText += ae.delta;
+            res.write(`data: ${JSON.stringify({ type: "token", text: ae.delta })}\n\n`);
+          }
+          break;
+        }
+
+        case "message_end":
+          // finalize text
+          break;
+
+        case "tool_execution_start":
+          res.write(
+            `data: ${JSON.stringify({ type: "tool_start", toolName: event.toolName, args: event.args })}\n\n`
+          );
+          break;
+
+        case "tool_execution_end":
+          res.write(
+            `data: ${JSON.stringify({
+              type: "tool_end",
+              toolName: event.toolName,
+              isError: event.isError,
+            })}\n\n`
+          );
+          break;
+
+        case "agent_start":
+          assistantText = "";
+          break;
+
+        case "agent_end":
+          // Conversation complete
+          break;
+
+        case "turn_end":
+          break;
+      }
+    } catch { /* SSE write failed — client likely disconnected */ }
+  });
+
+  // Cleanup on client disconnect
+  req.on("close", () => {
+    abortController.abort();
+    conv.agent.abort();
+    unsubscribe();
+    if (!done) {
+      // Still save partial result
+      if (assistantText.trim()) {
+        conv.messages.push({
+          role: "assistant",
+          content: assistantText.trim(),
+          timestamp: Date.now(),
+        });
+      }
+    }
+  });
+
   try {
-    await fetch(`${SANDBOX_URL}/sessions/${sandboxSessionId}`, { method: "DELETE" });
-    console.log(`[sandbox] Session deleted: ${sandboxSessionId}`);
+    // Run the agent prompt with timeout
+    const timeoutId = setTimeout(() => {
+      abortController.abort();
+      conv.agent.abort();
+    }, CHAT_TIMEOUT_MS);
+
+    await conv.agent.prompt(message, [], abortController.signal);
+    clearTimeout(timeoutId);
+    done = true;
+
+    // Save assistant message
+    const trimmed = assistantText.trim();
+    if (trimmed) {
+      conv.messages.push({ role: "assistant", content: trimmed, timestamp: Date.now() });
+    }
+
+    res.write(`data: ${JSON.stringify({ type: "done" })}\n\n`);
   } catch (err) {
-    console.error(`[sandbox] Failed to delete session: ${err.message}`);
+    if (err.name === "AbortError") return;
+    res.write(`data: ${JSON.stringify({ type: "error", text: err.message })}\n\n`);
+  } finally {
+    unsubscribe();
+    res.end();
   }
-  sandboxSessionId = null;
 }
 
+// ── MIME types ──────────────────────────────────────────────────────────
 const MIME = {
   ".html": "text/html; charset=utf-8",
   ".css": "text/css; charset=utf-8",
@@ -60,40 +541,10 @@ const MIME = {
   ".ico": "image/x-icon",
 };
 
-// ── Run Pi with a prompt ────────────────────────────────────────────
-function runPi(prompt, history = []) {
-  // Build a self-contained prompt with history context
-  let fullPrompt = prompt;
-  if (history.length > 0) {
-    const ctx = history
-      .slice(-10) // last 10 exchanges
-      .map((m) => `${m.role}: ${m.content}`)
-      .join("\n");
-    fullPrompt = `Previous conversation:\n${ctx}\n\nUser: ${prompt}`;
-  }
-
-  const args = ["--print", "--no-session"];
-  if (PI_PROVIDER) args.push("--provider", PI_PROVIDER);
-  if (PI_MODEL) args.push("--model", PI_MODEL);
-  args.push(fullPrompt);
-
-  const env = {
-    ...process.env,
-    SANDBOX_SESSION_ID: sandboxSessionId || "",
-  };
-
-  return spawn(PI_BIN, args, {
-    stdio: ["ignore", "pipe", "pipe"],
-    env,
-  });
-}
-
-// ── Serve static files ──────────────────────────────────────────────
 function serveStatic(req, res) {
   let filePath = req.url === "/" ? "/index.html" : req.url;
   filePath = path.join(__dirname, filePath);
 
-  // Security: prevent path traversal
   if (!filePath.startsWith(__dirname)) {
     res.writeHead(403);
     res.end("Forbidden");
@@ -112,29 +563,10 @@ function serveStatic(req, res) {
   res.end(content);
 }
 
-// ── Health check ────────────────────────────────────────────────────
-async function healthCheck() {
-  try {
-    const proc = spawn(PI_BIN, ["--list-models"], {
-      stdio: ["ignore", "pipe", "pipe"],
-      timeout: 5000,
-    });
-    const output = await new Promise((resolve) => {
-      let out = "";
-      proc.stdout.on("data", (d) => (out += d));
-      proc.on("close", () => resolve(out));
-    });
-    return { status: "ok", models: output.trim().split("\n").slice(0, 5) };
-  } catch {
-    return { status: "error", models: [] };
-  }
-}
-
-// ── HTTP Server ─────────────────────────────────────────────────────
+// ── Server ──────────────────────────────────────────────────────────────
 const server = http.createServer(async (req, res) => {
-  // CORS headers
   res.setHeader("Access-Control-Allow-Origin", "*");
-  res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+  res.setHeader("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
 
   if (req.method === "OPTIONS") {
@@ -143,95 +575,66 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  // ── API: Health ────────────────────────────────────────────────
-  if (req.url === "/api/health" && req.method === "GET") {
-    const health = await healthCheck();
-    res.writeHead(200, { "Content-Type": "application/json" });
-    res.end(JSON.stringify(health));
-    return;
-  }
+  const url = new URL(req.url, `http://${req.headers.host}`);
+  const pathname = url.pathname;
+  const parts = pathname.split("/").filter(Boolean);
 
-  // ── API: Sandbox Health proxy ────────────────────────────────
-  if (req.url === "/api/sandbox-health" && req.method === "GET") {
+  // ── API routes ──
+
+  // GET /api/status
+  if (pathname === "/api/status" && req.method === "GET") {
+    const result = { status: "ok", conversations: conversations.size };
     try {
-      const resp = await fetch("http://sandbox:8081/health");
-      const data = await resp.json();
-      res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(JSON.stringify(data));
+      const health = await sandboxFetch("/health");
+      result.sandbox = { status: health.status, sessions_active: health.sessions_active };
     } catch {
-      res.writeHead(502, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ status: "unreachable" }));
+      result.sandbox = { status: "unreachable" };
     }
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify(result));
     return;
   }
 
-  // ── API: Chat (SSE stream) ─────────────────────────────────────
-  if (req.url === "/api/chat" && req.method === "POST") {
-    // Ensure a shared sandbox session exists (created once, reused for all turns)
-    await ensureSandboxSession();
-
-    // Read body
-    const chunks = [];
-    for await (const chunk of req) chunks.push(chunk);
-    const body = JSON.parse(Buffer.concat(chunks).toString());
-    const { message, history = [] } = body;
-
-    // SSE headers
-    res.writeHead(200, {
-      "Content-Type": "text/event-stream",
-      "Cache-Control": "no-cache",
-      Connection: "keep-alive",
-    });
-
-    const child = runPi(message, history);
-    let fullOutput = "";
-
-    child.stdout.on("data", (data) => {
-      const text = data.toString();
-      fullOutput += text;
-      // SSE: send each chunk
-      res.write(`data: ${JSON.stringify({ type: "token", text })}\n\n`);
-    });
-
-    child.stderr.on("data", (data) => {
-      const text = data.toString();
-      // Only send non-trivial stderr
-      if (text.trim() && !text.includes("node:syscall") && !text.includes("ExperimentalWarning")) {
-        res.write(`data: ${JSON.stringify({ type: "stderr", text })}\n\n`);
-      }
-    });
-
-    child.on("close", (code) => {
-      res.write(`data: ${JSON.stringify({ type: "done", exitCode: code })}\n\n`);
-      res.end();
-    });
-
-    child.on("error", (err) => {
-      res.write(`data: ${JSON.stringify({ type: "error", text: err.message })}\n\n`);
-      res.end();
-    });
-
-    // Cleanup on client disconnect
-    req.on("close", () => {
-      child.kill();
-    });
-    return;
+  // /api/conversations (list / create)
+  if (pathname === "/api/conversations") {
+    return handleConversations(req, res);
   }
 
-  // ── Static files ───────────────────────────────────────────────
+  // /api/conversations/:id ...
+  if (parts[0] === "api" && parts[1] === "conversations" && parts[2]) {
+    if (parts[3] === "chat" && parts.length === 4) {
+      return handleChat(req, res, parts);
+    }
+    // Without sub-path: GET/DELETE/PATCH conversation metadata
+    // With /messages: GET messages
+    return handleConversation(req, res, parts);
+  }
+
+  // ── Static files ──
   serveStatic(req, res);
 });
 
+// ── Start ───────────────────────────────────────────────────────────────
 server.listen(PORT, "0.0.0.0", () => {
   console.log(`[agent-webui] Server running on http://0.0.0.0:${PORT}`);
-  console.log(`[agent-webui] Pi binary: ${PI_BIN}`);
   console.log(`[agent-webui] Sandbox URL: ${SANDBOX_URL}`);
+  console.log(`[agent-webui] Model: llmio:${MODEL_ID}`);
 });
 
-// Cleanup sandbox session on shutdown
+// Global error logging — prevent silent failures
+process.on("unhandledRejection", (reason) => {
+  console.error("[agent-webui] UNHANDLED REJECTION:", reason);
+});
+process.on("uncaughtException", (err) => {
+  console.error("[agent-webui] UNCAUGHT EXCEPTION:", err);
+});
+
+// Graceful shutdown — destroy all sandbox sessions
 const handleShutdown = async () => {
-  console.log("[agent-webui] Shutting down...");
-  await destroySandboxSession();
+  console.log("[agent-webui] Shutting down, cleaning up sandbox sessions...");
+  for (const conv of conversations.values()) {
+    await conv.destroy().catch(() => {});
+  }
   process.exit(0);
 };
 process.on("SIGINT", handleShutdown);

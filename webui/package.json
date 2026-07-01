@@ -1,7 +1,12 @@
 {
   "name": "agent-webui",
-  "version": "0.1.0",
+  "version": "2.0.0",
   "private": true,
   "type": "module",
-  "description": "Pi Agent WebUI — chat interface for the Enterprise Sandbox Agent"
+  "description": "Pi Agent WebUI — ChatGPT-style chat with Pi SDK & Sandbox",
+  "dependencies": {
+    "@mariozechner/pi-agent-core": "^0.52.6",
+    "@mariozechner/pi-ai": "^0.52.6",
+    "@sinclair/typebox": "^0.34.41"
+  }
 }

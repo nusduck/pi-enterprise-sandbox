@@ -30,6 +30,11 @@ COPY --chown=pi-agent:pi-agent skills/ /home/pi-agent/.pi/agent/skills/
 # Copy WebUI files (from repo root webui/)
 COPY --chown=pi-agent:pi-agent webui/ /home/pi-agent/webui/
 
+# Install WebUI dependencies (Pi SDK, TypeBox)
+RUN cd /home/pi-agent/webui && \
+    npm install && \
+    npm cache clean --force
+
 # Copy default config (overridden by volume mount at runtime)
 RUN mkdir -p /home/pi-agent/.pi/agent
 COPY --chown=pi-agent:pi-agent config/agent/settings.json /home/pi-agent/.pi/agent/settings.json
@@ -43,5 +48,5 @@ ENV \
 
 EXPOSE 3000
 
-# Start WebUI server — users can also docker exec -it pi-agent pi for CLI
+# Start WebUI server — uses Pi SDK directly (no CLI subprocess)
 CMD ["node", "/home/pi-agent/webui/server.js"]

@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -7,47 +7,63 @@
   <link rel="stylesheet" href="/style.css">
 </head>
 <body>
-  <!-- Top bar -->
-  <header class="topbar">
-    <div class="topbar-left">
-      <span class="logo">⊞</span>
-      <span class="title">Pi Agent</span>
-      <span class="badge" id="sandboxBadge">sandbox: --</span>
+  <!-- Sidebar -->
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-header">
+      <button class="btn-new-chat" id="btnNewChat">✚ New chat</button>
     </div>
-    <div class="topbar-right">
-      <span class="status-dot" id="agentDot"></span>
-      <span id="agentStatus">connecting…</span>
-      <button class="icon-btn" id="btnNewChat" title="New chat">✚</button>
+    <nav class="conversation-list" id="convList">
+      <!-- rendered by app.js -->
+    </nav>
+    <div class="sidebar-footer">
+      <div class="status-row">
+        <span class="dot" id="agentDot"></span>
+        <span id="agentStatus">connecting…</span>
+      </div>
+      <button class="sidebar-toggle" id="btnToggleSidebar" title="Close sidebar">◀</button>
     </div>
-  </header>
+  </aside>
 
-  <!-- Chat messages -->
-  <main class="chat-container" id="chatContainer">
-    <div class="welcome" id="welcome">
-      <div class="welcome-icon">⊞</div>
-      <h1>Enterprise Sandbox Agent</h1>
-      <p>Pi Agent with secure sandbox execution — all tools route through the Sandbox Service.</p>
-      <div class="welcome-hints">
-        <span>📁 Read / write files</span>
-        <span>💻 Run commands</span>
-        <span>🐍 Execute Python</span>
-        <span>🔒 Sandbox-isolated</span>
+  <!-- Overlay for mobile -->
+  <div class="sidebar-overlay" id="sidebarOverlay"></div>
+
+  <!-- Main area -->
+  <main class="main" id="main">
+    <!-- Top bar -->
+    <header class="topbar">
+      <button class="topbar-menu" id="btnMenu" title="Open sidebar">☰</button>
+      <span class="topbar-title" id="convTitle">New conversation</span>
+      <span class="sandbox-badge" id="sandboxBadge">sandbox: --</span>
+    </header>
+
+    <!-- Chat messages -->
+    <div class="chat-container" id="chatContainer">
+      <div class="welcome" id="welcome">
+        <div class="welcome-icon">⊞</div>
+        <h1>Enterprise Sandbox Agent</h1>
+        <p>Pi Agent with secure sandbox execution — all tools route through the Sandbox Service.</p>
+        <div class="welcome-hints">
+          <span>📁 Read / write files</span>
+          <span>💻 Run commands</span>
+          <span>🐍 Execute Python</span>
+          <span>🔒 Sandbox-isolated</span>
+        </div>
+      </div>
+      <div id="messages"></div>
+      <div id="streamingIndicator" class="streaming" style="display:none">
+        <span class="dot-pulse"></span> Pi is thinking…
       </div>
     </div>
-    <div id="messages"></div>
-    <div id="streamingIndicator" class="streaming" style="display:none">
-      <span class="dot-pulse"></span> Pi is thinking…
-    </div>
-  </main>
 
-  <!-- Input area -->
-  <footer class="input-area">
-    <div class="input-row">
-      <textarea id="promptInput" rows="1" placeholder="Ask Pi to do something…" spellcheck="false"></textarea>
-      <button id="btnSend" class="send-btn" disabled>→</button>
-    </div>
-    <div class="input-hint">Sandbox-isolated · read/write/edit/bash tools proxied</div>
-  </footer>
+    <!-- Input area -->
+    <footer class="input-area">
+      <div class="input-row">
+        <textarea id="promptInput" rows="1" placeholder="Ask Pi to do something…" spellcheck="false"></textarea>
+        <button id="btnSend" class="send-btn" disabled>→</button>
+      </div>
+      <div class="input-hint">Sandbox-isolated · read/write/edit/bash tools proxied</div>
+    </footer>
+  </main>
 
   <script src="/app.js"></script>
 </body>
