@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse as FastAPIFileResponse
 
 from sandbox.models import (
@@ -86,3 +86,15 @@ def delete_file(session_id: str, path: str):
     except PermissionError as exc:
         raise HTTPException(status_code=403, detail=str(exc))
     return
+
+
+@router.post("/upload", status_code=201)
+async def upload_file(session_id: str, file: UploadFile = File(...), path: str = ""):
+    """Upload a binary file to the workspace."""
+    ws = _get_workspace(session_id)
+    content = await file.read()
+    filename = file.filename or "upload"
+    # Use provided path or default to filename
+    user_path = path or filename
+    result = file_manager.write_file(ws, user_path, content.decode("utf-8", errors="replace"))
+    return result

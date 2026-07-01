@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 
@@ -19,6 +20,7 @@ from sandbox.routers import (
     mcp_router,
     sessions,
 )
+from sandbox.services.session_manager import session_manager
 
 
 def _configure_logging() -> None:
@@ -26,6 +28,21 @@ def _configure_logging() -> None:
         level=getattr(logging, settings.log_level.upper(), logging.INFO),
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     )
+
+
+async def _cleanup_loop() -> None:
+    """Background task: periodically clean up expired sessions."""
+    logger = logging.getLogger("sandbox.cleanup")
+    while True:
+        try:
+            await asyncio.sleep(settings.cleanup_interval_minutes * 60)
+            count = session_manager.cleanup_expired()
+            if count:
+                logger.info("Cleaned up %d expired sessions", count)
+        except asyncio.CancelledError:
+            break
+        except Exception:
+            logger.exception("Error during session cleanup")
 
 
 @asynccontextmanager
@@ -45,7 +62,22 @@ async def lifespan(app: FastAPI):
         settings.skills_path,
         "enabled" if settings.mcp_enabled else "disabled",
     )
+
+    # Start TTL background cleanup task
+    cleanup_task = asyncio.create_task(_cleanup_loop())
+    logger.info(
+        "Session cleanup every %d minutes",
+        settings.cleanup_interval_minutes,
+    )
+
     yield
+
+    # Shutdown: cancel the cleanup task
+    cleanup_task.cancel()
+    try:
+        await cleanup_task
+    except asyncio.CancelledError:
+        pass
     logger.info("Sandbox Service shutting down")
 
 
@@ -65,6 +97,22 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def mcp_auth_middleware(request: Request, call_next):
+    """Check X-Auth-Token for /mcp/ endpoints if auth tokens are configured."""
+    if (
+        settings.mcp_auth_tokens
+        and request.url.path.startswith("/mcp/")
+    ):
+        token = request.headers.get("X-Auth-Token", "")
+        if token not in settings.mcp_auth_tokens:
+            return JSONResponse(
+                status_code=401,
+                content={"detail": "Invalid or missing MCP auth token"},
+            )
+    return await call_next(request)
 
 
 @app.middleware("http")

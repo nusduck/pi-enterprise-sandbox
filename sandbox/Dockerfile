@@ -1,13 +1,15 @@
 # ── Sandbox Service (Python FastAPI) ──────────────────────────────
 FROM python:3.11-slim AS sandbox-base
 
-# Install system deps
+# Install system deps — including Node.js (via nodesource) for runtime and iptables for network isolation
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
+    ca-certificates \
     gosu \
+    iptables \
+    && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
+    && apt-get install -y --no-install-recommends nodejs \
     && rm -rf /var/lib/apt/lists/*
-
-# Create non-root user
 RUN groupadd -g 10001 sandbox && \
     useradd -m -u 10001 -g sandbox sandbox && \
     mkdir -p /sandbox/workspaces /sandbox/skills /sandbox/data && \
@@ -35,7 +37,8 @@ COPY sandbox/entrypoint.sh /app/entrypoint.sh
 # Fix ownership
 RUN chown -R sandbox:sandbox /app && chmod +x /app/entrypoint.sh
 
-USER sandbox
+# NOTE: No USER directive — entrypoint.sh runs as root to apply iptables,
+# then drops privileges to the sandbox user before starting the app.
 WORKDIR /app
 
 ENV \

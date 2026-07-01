@@ -303,8 +303,13 @@ class MCPServerAdapter:
     def available_tools(self) -> list[str]:
         return list(self.TOOL_MAP.keys())
 
-    async def call_tool(self, tool_name: str, caller_id: str, **kwargs) -> dict[str, Any]:
+    async def call_tool(self, tool_name: str, caller_id: str, auth_token: str | None = None, **kwargs) -> dict[str, Any]:
         """Route an MCP tool call with rate limiting and auth check."""
+        # Check MCP auth tokens if configured
+        if settings.mcp_auth_tokens:
+            if not auth_token or auth_token not in settings.mcp_auth_tokens:
+                return {"error": "Invalid or missing MCP auth token", "status": "denied"}
+
         if not self.check_rate_limit(caller_id, tool_name):
             from sandbox.routers.health import sandbox_rate_limited_total
             sandbox_rate_limited_total.labels(caller_id=caller_id).inc()

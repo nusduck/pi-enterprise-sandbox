@@ -73,6 +73,12 @@ class CommandExecutionRequest(BaseModel):
     env_overrides: dict[str, str] = Field(default_factory=dict)
 
 
+class NodeExecutionRequest(BaseModel):
+    code: str = Field(..., description="Node.js code string to execute")
+    timeout: int | None = None
+    env_overrides: dict[str, str] = Field(default_factory=dict)
+
+
 class ExecutionResponse(BaseModel):
     execution_id: str
     session_id: str

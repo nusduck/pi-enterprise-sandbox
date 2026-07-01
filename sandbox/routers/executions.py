@@ -8,6 +8,7 @@ from sandbox.models import (
     CommandExecutionRequest,
     ExecutionResponse,
     ExecutionStatus,
+    NodeExecutionRequest,
     PythonExecutionRequest,
 )
 from sandbox.services.audit_logger import audit_logger
@@ -74,6 +75,38 @@ def run_command(session_id: str, body: CommandExecutionRequest):
         session_id=session_id,
         execution_id=result["execution_id"],
         run_type="command",
+        exit_code=result.get("exit_code"),
+        duration_ms=result.get("duration_ms", 0.0),
+        truncated=result.get("truncated", False),
+    )
+
+    return ExecutionResponse(**result)
+
+
+@router.post("/node", response_model=ExecutionResponse, status_code=201)
+def run_node(session_id: str, body: NodeExecutionRequest):
+    session = session_manager.get(session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+    if session.status != "RUNNING":
+        raise HTTPException(status_code=400, detail="Session is not active")
+
+    ws = workspace_manager.get_workspace_path(session_id)
+    result = execution_manager.run_node(
+        session_id=session_id,
+        code=body.code,
+        workspace_path=str(ws),
+        timeout=body.timeout,
+        env_overrides=body.env_overrides if body.env_overrides else None,
+    )
+
+    if result.get("status") == "conflict":
+        raise HTTPException(status_code=409, detail=result["error"])
+
+    audit_logger.log_execution(
+        session_id=session_id,
+        execution_id=result["execution_id"],
+        run_type="node",
         exit_code=result.get("exit_code"),
         duration_ms=result.get("duration_ms", 0.0),
         truncated=result.get("truncated", False),

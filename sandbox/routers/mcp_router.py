@@ -12,7 +12,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
 from sandbox.mcp.server import mcp_server
@@ -37,19 +37,22 @@ async def list_tools():
 
 
 @router.post("/call")
-async def call_tool(req: ToolCallRequest):
+async def call_tool(req: ToolCallRequest, request: Request):
     """Call an MCP tool by name with keyword arguments."""
     logger.info(
         "MCP call: tool=%s caller=%s",
         req.tool_name,
         req.caller_id,
     )
+    # Extract auth token from header for MCP-level auth check
+    auth_token = request.headers.get("X-Auth-Token")
     # caller_id is an MCP-level param, don't pass it in kwargs
     if "caller_id" in req.kwargs:
         del req.kwargs["caller_id"]
     result = await mcp_server.call_tool(
         tool_name=req.tool_name,
         caller_id=req.caller_id,
+        auth_token=auth_token,
         **req.kwargs,
     )
     if result.get("status") == "denied" and "rate_limited" in result.get("error", ""):
