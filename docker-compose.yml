@@ -36,6 +36,8 @@ services:
     image: enterprise-pi-agent:latest
     container_name: pi-enterprise-agent
     user: "10001:10001"
+    ports:
+      - "3000:3000"
     volumes:
       - ./skills:/home/pi-agent/.pi/skills:ro
     environment:

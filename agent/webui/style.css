@@ -1,0 +1,80 @@
+/* ── Agent WebUI Theme ────────────────────────────────────────────── */
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+
+:root {
+  --bg: #0f1117;
+  --bg2: #161822;
+  --card: #1c1e2e;
+  --border: #2a2d44;
+  --text: #e2e4f0;
+  --text2: #8b8fa8;
+  --text3: #5c6080;
+  --accent: #6c8aff;
+  --accent2: #4a6adf;
+  --green: #3dd68c;
+  --red: #f0625c;
+  --user-bg: #1e2540;
+  --assistant-bg: #1a1c2c;
+  --font: -apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif;
+  --mono: 'SF Mono','Fira Code','Cascadia Code',monospace;
+}
+html{font-size:14px}body{font-family:var(--font);background:var(--bg);color:var(--text);display:flex;flex-direction:column;height:100dvh;overflow:hidden}
+
+/* ── Topbar ──────────────────────────────────────────────────────── */
+.topbar{display:flex;align-items:center;justify-content:space-between;padding:0 16px;height:48px;background:var(--bg2);border-bottom:1px solid var(--border);flex-shrink:0}
+.topbar-left,.topbar-right{display:flex;align-items:center;gap:10px}
+.logo{font-size:1.4rem;color:var(--accent)}
+.title{font-weight:700;font-size:1rem}
+.badge{font-size:.7rem;padding:2px 8px;border-radius:4px;background:var(--card);color:var(--text2)}
+.status-dot{width:8px;height:8px;border-radius:50%;display:inline-block}
+.status-dot.on{background:var(--green);box-shadow:0 0 6px var(--green)}
+.status-dot.off{background:var(--red)}
+.status-dot.pending{background:#f5b85a;animation:pulse 1.5s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
+.icon-btn{background:none;border:1px solid var(--border);color:var(--text2);border-radius:6px;padding:4px 10px;cursor:pointer;font-size:.9rem}
+.icon-btn:hover{background:var(--card);color:var(--text)}
+
+/* ── Chat ────────────────────────────────────────────────────────── */
+.chat-container{flex:1;overflow-y:auto;padding:16px 0;scroll-behavior:smooth}
+#messages{max-width:800px;margin:0 auto;display:flex;flex-direction:column;gap:4px}
+
+.welcome{text-align:center;padding:60px 20px 40px;max-width:600px;margin:0 auto}
+.welcome-icon{font-size:3rem;color:var(--accent);margin-bottom:12px}
+.welcome h1{font-size:1.5rem;margin-bottom:8px}
+.welcome p{color:var(--text2);margin-bottom:24px;line-height:1.6}
+.welcome-hints{display:flex;flex-wrap:wrap;gap:8px;justify-content:center}
+.welcome-hints span{padding:6px 14px;border-radius:6px;background:var(--card);border:1px solid var(--border);font-size:.8rem;color:var(--text2)}
+
+/* ── Messages ────────────────────────────────────────────────────── */
+.msg{display:flex;gap:12px;padding:12px 20px;max-width:800px;margin:0 auto;width:100%}
+.msg.user{background:var(--user-bg)}
+.msg.assistant{background:var(--assistant-bg)}
+.msg.system{background:transparent;justify-content:center}
+.msg.system .msg-bubble{background:var(--card);border:1px solid var(--border);color:var(--text2);font-size:.8rem;padding:6px 14px;border-radius:8px}
+.msg-avatar{width:28px;height:28px;border-radius:6px;display:flex;align-items:center;justify-content:center;font-size:.8rem;font-weight:700;flex-shrink:0;margin-top:2px}
+.msg.user .msg-avatar{background:var(--accent2);color:#fff}
+.msg.assistant .msg-avatar{background:var(--card);color:var(--accent);border:1px solid var(--border)}
+.msg-bubble{flex:1;min-width:0;line-height:1.6;font-size:.9rem;white-space:pre-wrap;word-break:break-word}
+.msg-bubble pre{background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:12px;margin:8px 0;overflow-x:auto;font-family:var(--mono);font-size:.8rem;line-height:1.4}
+.msg-bubble code{background:var(--bg);padding:1px 5px;border-radius:3px;font-family:var(--mono);font-size:.85em}
+.msg-bubble p{margin:4px 0}
+.msg-time{font-size:.7rem;color:var(--text3);margin-top:4px}
+
+/* Streaming dots */
+.streaming{text-align:center;padding:8px;color:var(--text2);max-width:800px;margin:0 auto;font-size:.85rem}
+.dot-pulse{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--accent);animation:pulse 1s infinite;margin-right:6px;vertical-align:middle}
+
+/* ── Input ───────────────────────────────────────────────────────── */
+.input-area{border-top:1px solid var(--border);background:var(--bg2);padding:12px 16px;flex-shrink:0}
+.input-row{display:flex;gap:8px;max-width:800px;margin:0 auto}
+.input-row textarea{flex:1;padding:10px 14px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text);font-family:var(--font);font-size:.9rem;resize:none;outline:none;line-height:1.4;max-height:200px}
+.input-row textarea:focus{border-color:var(--accent)}
+.send-btn{padding:8px 16px;border:none;border-radius:8px;background:var(--accent);color:#fff;font-size:1.1rem;cursor:pointer;align-self:flex-end}
+.send-btn:disabled{opacity:.4;cursor:not-allowed}
+.input-hint{text-align:center;font-size:.7rem;color:var(--text3);margin-top:6px}
+
+/* ── Scrollbar ───────────────────────────────────────────────────── */
+::-webkit-scrollbar{width:6px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px}
+::-webkit-scrollbar-thumb:hover{background:var(--text3)}

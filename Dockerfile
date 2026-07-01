@@ -27,14 +27,20 @@ RUN cd /home/pi-agent/.pi/agent/extensions/enterprise-sandbox && \
 # Copy shared skills
 COPY --chown=pi-agent:pi-agent skills/ /home/pi-agent/.pi/skills/
 
+# Copy WebUI files
+COPY --chown=pi-agent:pi-agent agent/webui/ /home/pi-agent/webui/
+
 # Create a default settings.json that enables the extension
 RUN mkdir -p /home/pi-agent/.pi/agent && \
     echo '{"extensions":["enterprise-sandbox"]}' > /home/pi-agent/.pi/agent/settings.json
 
 ENV \
     SANDBOX_BASE_URL=http://sandbox:8081 \
+    AGENT_WEBUI_PORT=3000 \
     LANG=C.UTF-8 \
     LC_ALL=C.UTF-8
 
-# Stay alive — users docker exec -it pi-agent pi to interact
-CMD ["tail", "-f", "/dev/null"]
+EXPOSE 3000
+
+# Start WebUI server — users can also docker exec -it pi-agent pi for CLI
+CMD ["node", "/home/pi-agent/webui/server.js"]

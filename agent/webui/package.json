@@ -1,0 +1,7 @@
+{
+  "name": "agent-webui",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Pi Agent WebUI — chat interface for the Enterprise Sandbox Agent"
+}
