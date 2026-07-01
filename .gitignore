@@ -1,0 +1,38 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+*.egg
+.venv/
+venv/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Environment
+.env
+.env.local
+*.pem
+
+# Workspace data (runtime)
+workspaces/
+!workspaces/.gitkeep
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+sandbox/data/
+
+# Coverage
+htmlcov/
+.coverage
+.coverage.*
+coverage.xml

@@ -1,0 +1,49 @@
+services:
+  sandbox:
+    build:
+      context: .
+      target: sandbox-base
+    image: enterprise-sandbox:latest
+    container_name: pi-enterprise-sandbox
+    user: "10001:10001"
+    ports:
+      - "8081:8081"
+      - "8091:8091"
+    volumes:
+      - ./skills:/sandbox/skills:ro
+      - ./workspaces:/sandbox/workspaces
+      - sandbox_data:/sandbox/data
+    environment:
+      SANDBOX_HOST: "0.0.0.0"
+      SANDBOX_PORT: 8081
+      SANDBOX_MCP_PORT: 8091
+      SANDBOX_MCP_ENABLED: "true"
+      SANDBOX_LOG_LEVEL: "INFO"
+      LANG: C.UTF-8
+      LC_ALL: C.UTF-8
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8081/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 5s
+
+  pi-agent:
+    build:
+      context: .
+      target: agent-base
+    image: enterprise-pi-agent:latest
+    container_name: pi-enterprise-agent
+    user: "10001:10001"
+    volumes:
+      - ./skills:/app/skills:ro
+    environment:
+      SANDBOX_BASE_URL: http://sandbox:8081
+    restart: unless-stopped
+    depends_on:
+      sandbox:
+        condition: service_healthy
+
+volumes:
+  sandbox_data:
