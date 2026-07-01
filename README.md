@@ -40,28 +40,43 @@
 
 ### Prerequisites
 
-- Python 3.11+
-- Docker & Docker Compose (for containerised deployment)
+- Docker & Docker Compose
+- Python 3.11+ (for local sandbox development)
 
-### Local Development
-
-```bash
-# Install
-pip install -e .
-
-# Start Sandbox Service
-uvicorn sandbox.main:app --port 8081 --reload
-```
-
-### Docker Deployment
+### Docker Deployment (recommended)
 
 ```bash
 docker compose up --build
 ```
 
 This starts:
-- **sandbox** (port 8081 HTTP, 8091 MCP) — execution plane
-- **pi-agent** (no exposed ports) — agent with EnterpriseToolAdapter
+- **sandbox** (port 8081 HTTP, 8091 MCP) — secure execution plane
+- **pi-agent** (no exposed ports) — Pi Agent with Enterprise Sandbox Extension
+
+### Using Pi Agent with Sandbox
+
+The agent container has Pi Agent pre-installed with the Enterprise Sandbox Extension. The extension automatically replaces Pi's built-in `read`/`write`/`edit`/`bash` tools to proxy through the Sandbox.
+
+```bash
+# Open an interactive Pi session (with sandbox-proxied tools)
+docker exec -it pi-enterprise-agent pi
+
+# Check sandbox status from within Pi
+#   /sandbox-status
+
+# Reset sandbox session
+#   /sandbox-reset
+```
+
+### Local Sandbox Development
+
+```bash
+# Install
+pip install -e ".[test]"
+
+# Start Sandbox Service only
+uvicorn sandbox.main:app --port 8081 --reload
+```
 
 ## API Overview
 
@@ -131,11 +146,13 @@ pi-sandbox/
 │   ├── security/     # Path validation, safe_env
 │   ├── utils/        # Resource limits
 │   └── mcp/          # MCP Server Adapter
-├── agent/            # Agent-side SDK
-│   ├── sandbox_client.py  # HTTP client
-│   ├── tool_adapter.py    # Pi Tool Adapter
-│   ├── tool_policy.py     # Policy checker
-│   └── main.py            # Entry point
+├── agent/            # Agent-side SDK + Pi Extension
+│   ├── sandbox_client.py       # Python HTTP client for Sandbox
+│   ├── tool_adapter.py         # Pi tool routing adapter
+│   ├── tool_policy.py          # Policy checker
+│   └── enterprise-sandbox-ext/ # Pi Extension (TypeScript)
+│       ├── package.json
+│       └── index.ts            # Replaces read/write/edit/bash → Sandbox
 ├── skills/           # Read-only skills
 ├── tests/            # Test suite
 ├── Dockerfile        # Multi-stage build
@@ -161,3 +178,5 @@ pi-sandbox/
 - [x] Docker multi-stage build
 - [x] EnterpriseToolAdapter with policy pre-check
 - [x] SandboxClient SDK
+- [x] Pi Extension (TypeScript): replaces read/write/edit/bash via Sandbox
+- [x] Pi /sandbox-status and /sandbox-reset slash commands
