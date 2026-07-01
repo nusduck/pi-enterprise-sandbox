@@ -17,6 +17,39 @@ const PORT = parseInt(process.env.AGENT_WEBUI_PORT || "3000", 10);
 const PI_BIN = process.env.PI_BIN || "pi";
 const PI_MODEL = process.env.PI_MODEL || "llmio:deepseek-v4-flash";
 const PI_PROVIDER = process.env.PI_PROVIDER || "";
+const SANDBOX_URL = process.env.SANDBOX_BASE_URL || "http://sandbox:8081";
+
+// ── Shared sandbox session (created once, reused across all turns) ─
+let sandboxSessionId = null;
+
+async function ensureSandboxSession() {
+  if (sandboxSessionId) return sandboxSessionId;
+  try {
+    const resp = await fetch(`${SANDBOX_URL}/sessions`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ caller_id: "agent-webui", metadata: { source: "webui" } }),
+    });
+    const session = await resp.json();
+    sandboxSessionId = session.session_id;
+    console.log(`[sandbox] Session created: ${sandboxSessionId}`);
+  } catch (err) {
+    console.error(`[sandbox] Failed to create session: ${err.message}`);
+  }
+  return sandboxSessionId;
+}
+
+async function destroySandboxSession() {
+  if (!sandboxSessionId) return;
+  try {
+    await fetch(`${SANDBOX_URL}/sessions/${sandboxSessionId}`, { method: "DELETE" });
+    console.log(`[sandbox] Session deleted: ${sandboxSessionId}`);
+  } catch (err) {
+    console.error(`[sandbox] Failed to delete session: ${err.message}`);
+  }
+  sandboxSessionId = null;
+}
+
 const MIME = {
   ".html": "text/html; charset=utf-8",
   ".css": "text/css; charset=utf-8",
@@ -44,9 +77,14 @@ function runPi(prompt, history = []) {
   if (PI_MODEL) args.push("--model", PI_MODEL);
   args.push(fullPrompt);
 
+  const env = {
+    ...process.env,
+    SANDBOX_SESSION_ID: sandboxSessionId || "",
+  };
+
   return spawn(PI_BIN, args, {
     stdio: ["ignore", "pipe", "pipe"],
-    env: { ...process.env },
+    env,
   });
 }
 
@@ -129,6 +167,9 @@ const server = http.createServer(async (req, res) => {
 
   // ── API: Chat (SSE stream) ─────────────────────────────────────
   if (req.url === "/api/chat" && req.method === "POST") {
+    // Ensure a shared sandbox session exists (created once, reused for all turns)
+    await ensureSandboxSession();
+
     // Read body
     const chunks = [];
     for await (const chunk of req) chunks.push(chunk);
@@ -184,4 +225,14 @@ const server = http.createServer(async (req, res) => {
 server.listen(PORT, "0.0.0.0", () => {
   console.log(`[agent-webui] Server running on http://0.0.0.0:${PORT}`);
   console.log(`[agent-webui] Pi binary: ${PI_BIN}`);
+  console.log(`[agent-webui] Sandbox URL: ${SANDBOX_URL}`);
 });
+
+// Cleanup sandbox session on shutdown
+const handleShutdown = async () => {
+  console.log("[agent-webui] Shutting down...");
+  await destroySandboxSession();
+  process.exit(0);
+};
+process.on("SIGINT", handleShutdown);
+process.on("SIGTERM", handleShutdown);

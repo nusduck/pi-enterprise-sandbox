@@ -89,6 +89,24 @@ export default function (pi: ExtensionAPI) {
   // ── Session lifecycle ──────────────────────────────────────────
 
   pi.on("session_start", async (_event, ctx) => {
+    // Use existing sandbox session if provided via env var
+    const envSessionId = process.env.SANDBOX_SESSION_ID;
+    if (envSessionId) {
+      try {
+        // Verify it still exists
+        const session = await sandboxFetch(`/sessions/${envSessionId}`);
+        sandboxSessionId = session.session_id;
+        ctx.ui.notify(`Reusing sandbox session: ${sandboxSessionId}`, "info");
+        return;
+      } catch {
+        // Session expired or invalid, fall through to create new
+        ctx.ui.notify(
+          `Provided sandbox session ${envSessionId} not found, creating new`,
+          "warn",
+        );
+      }
+    }
+
     try {
       const session = await sandboxFetch("/sessions", {
         method: "POST",
@@ -112,6 +130,13 @@ export default function (pi: ExtensionAPI) {
 
   pi.on("session_shutdown", async (_event, _ctx) => {
     if (sandboxSessionId) {
+      // Only delete if we created it (not a shared session from env)
+      const envSessionId = process.env.SANDBOX_SESSION_ID;
+      if (envSessionId === sandboxSessionId) {
+        // Shared session — leave it for the WebUI to manage
+        sandboxSessionId = null;
+        return;
+      }
       try {
         await sandboxFetch(`/sessions/${sandboxSessionId}`, {
           method: "DELETE",
