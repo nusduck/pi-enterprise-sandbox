@@ -2,13 +2,13 @@ services:
   sandbox:
     build:
       context: .
-      target: sandbox-base
+      dockerfile: sandbox/Dockerfile
     image: enterprise-sandbox:latest
     container_name: pi-enterprise-sandbox
     user: "10001:10001"
     ports:
-      - "8081:8081"
-      - "8091:8091"
+      - "8083:8081"
+      - "8093:8091"
     volumes:
       - ./skills:/sandbox/skills:ro
       - ./workspaces:/sandbox/workspaces
