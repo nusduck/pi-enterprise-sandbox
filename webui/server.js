@@ -15,6 +15,8 @@ import { fileURLToPath } from "node:url";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = parseInt(process.env.AGENT_WEBUI_PORT || "3000", 10);
 const PI_BIN = process.env.PI_BIN || "pi";
+const PI_MODEL = process.env.PI_MODEL || "llmio:deepseek-v4-flash";
+const PI_PROVIDER = process.env.PI_PROVIDER || "";
 const MIME = {
   ".html": "text/html; charset=utf-8",
   ".css": "text/css; charset=utf-8",
@@ -37,7 +39,12 @@ function runPi(prompt, history = []) {
     fullPrompt = `Previous conversation:\n${ctx}\n\nUser: ${prompt}`;
   }
 
-  return spawn(PI_BIN, ["--print", "--no-session", fullPrompt], {
+  const args = ["--print", "--no-session"];
+  if (PI_PROVIDER) args.push("--provider", PI_PROVIDER);
+  if (PI_MODEL) args.push("--model", PI_MODEL);
+  args.push(fullPrompt);
+
+  return spawn(PI_BIN, args, {
     stdio: ["ignore", "pipe", "pipe"],
     env: { ...process.env },
   });

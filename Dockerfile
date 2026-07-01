@@ -27,12 +27,13 @@ RUN cd /home/pi-agent/.pi/agent/extensions/enterprise-sandbox && \
 # Copy shared skills
 COPY --chown=pi-agent:pi-agent skills/ /home/pi-agent/.pi/skills/
 
-# Copy WebUI files
-COPY --chown=pi-agent:pi-agent agent/webui/ /home/pi-agent/webui/
+# Copy WebUI files (from repo root webui/)
+COPY --chown=pi-agent:pi-agent webui/ /home/pi-agent/webui/
 
-# Create a default settings.json that enables the extension
-RUN mkdir -p /home/pi-agent/.pi/agent && \
-    echo '{"extensions":["enterprise-sandbox"]}' > /home/pi-agent/.pi/agent/settings.json
+# Copy default config (overridden by volume mount at runtime)
+RUN mkdir -p /home/pi-agent/.pi/agent
+COPY --chown=pi-agent:pi-agent config/agent/settings.json /home/pi-agent/.pi/agent/settings.json
+COPY --chown=pi-agent:pi-agent config/agent/models.json /home/pi-agent/.pi/agent/models.json
 
 ENV \
     SANDBOX_BASE_URL=http://sandbox:8081 \

@@ -57,7 +57,7 @@ class Settings(BaseSettings):
     def skills_path(self) -> Path:
         return Path(self.skills_root)
 
-    model_config = {"env_prefix": "SANDBOX_", "env_file": ".env"}
+    model_config = {"env_prefix": "SANDBOX_"}
 
 
 settings = Settings()
