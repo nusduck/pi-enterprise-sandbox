@@ -25,7 +25,7 @@ RUN cd /home/pi-agent/.pi/agent/extensions/enterprise-sandbox && \
     npm cache clean --force
 
 # Copy shared skills
-COPY --chown=pi-agent:pi-agent skills/ /home/pi-agent/.pi/skills/
+COPY --chown=pi-agent:pi-agent skills/ /home/pi-agent/.pi/agent/skills/
 
 # Copy WebUI files (from repo root webui/)
 COPY --chown=pi-agent:pi-agent webui/ /home/pi-agent/webui/

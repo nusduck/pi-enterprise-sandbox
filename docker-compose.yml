@@ -39,7 +39,7 @@ services:
     ports:
       - "3000:3000"
     volumes:
-      - ./skills:/home/pi-agent/.pi/skills:ro
+      - ./skills:/home/pi-agent/.pi/agent/skills:ro
       - ./config/agent/settings.json:/home/pi-agent/.pi/agent/settings.json:ro
       - ./config/agent/models.json:/home/pi-agent/.pi/agent/models.json:ro
     env_file:
