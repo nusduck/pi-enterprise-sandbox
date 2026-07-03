@@ -17,6 +17,7 @@ import crypto from 'node:crypto';
 
 const PORT = parseInt(process.env.PORT || '3000', 10);
 const SANDBOX_URL = process.env.SANDBOX_BASE_URL || 'http://sandbox:8081';
+const SANDBOX_API_TOKEN = process.env.SANDBOX_API_TOKEN || '';
 const DIST_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), 'dist');
 const DATA_DIR = process.env.WEBUI_DATA_DIR || path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'data');
 const CONVERSATIONS_FILE = path.join(DATA_DIR, 'conversations.json');
@@ -34,6 +35,7 @@ const FRONTEND_CONFIG = {
 function sandboxFetch(sandboxPath, options) {
   const url = SANDBOX_URL + sandboxPath;
   const headers = { 'Content-Type': 'application/json', ...(options?.headers || {}) };
+  if (SANDBOX_API_TOKEN) headers['X-API-Key'] = SANDBOX_API_TOKEN;
   return fetch(url, { ...options, headers });
 }
 
@@ -228,7 +230,10 @@ function serveStatic(req, res) {
   try {
     const content = fs.readFileSync(filePath);
     const ext = path.extname(filePath).toLowerCase();
-    res.writeHead(200, { 'Content-Type': MIME_TYPES[ext] || 'application/octet-stream' });
+    res.writeHead(200, {
+      'Content-Type': MIME_TYPES[ext] || 'application/octet-stream',
+      'Cache-Control': 'no-cache, no-store, must-revalidate',
+    });
     res.end(content);
   } catch {
     res.writeHead(404); res.end('Not found');

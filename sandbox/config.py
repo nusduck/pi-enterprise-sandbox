@@ -42,6 +42,10 @@ class Settings(BaseSettings):
     mcp_port: int = 8091
     mcp_auth_tokens: list[str] = []
 
+    # ── Auth ─────────────────────────────────────────────────────────
+    api_token: str = ""  # If set, all endpoints require X-API-Key header
+    api_token_header: str = "X-API-Key"
+
     # ── Logging ──────────────────────────────────────────────────────
     log_level: str = "INFO"
     sensitive_keys: list[str] = [

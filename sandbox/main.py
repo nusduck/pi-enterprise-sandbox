@@ -105,6 +105,21 @@ app.add_middleware(
 
 
 @app.middleware("http")
+async def api_token_auth_middleware(request: Request, call_next):
+    """Require X-API-Key header for all endpoints except health/public, if configured."""
+    if settings.api_token:
+        public_paths = ("/health", "/ready", "/metrics", "/docs", "/openapi", "/redoc")
+        if not request.url.path.startswith(public_paths):
+            token = request.headers.get(settings.api_token_header, "")
+            if token != settings.api_token:
+                return JSONResponse(
+                    status_code=401,
+                    content={"detail": "Invalid or missing API token"},
+                )
+    return await call_next(request)
+
+
+@app.middleware("http")
 async def trace_id_middleware(request: Request, call_next):
     """Attach a trace ID to request context and echo it in responses."""
     trace_id = request.headers.get("X-Trace-Id") or f"trace_{uuid.uuid4().hex}"

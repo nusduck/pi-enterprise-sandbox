@@ -42,6 +42,7 @@ services:
       SANDBOX_UVICORN_PROXY_HEADERS: ${SANDBOX_UVICORN_PROXY_HEADERS:-true}
       SANDBOX_UVICORN_FORWARDED_ALLOW_IPS: ${SANDBOX_UVICORN_FORWARDED_ALLOW_IPS:-}
       SANDBOX_UVICORN_EXTRA_ARGS: ${SANDBOX_UVICORN_EXTRA_ARGS:-}
+      SANDBOX_API_TOKEN: ${SANDBOX_API_TOKEN:-}
       LANG: ${SANDBOX_LANG:-C.UTF-8}
       LC_ALL: ${SANDBOX_LC_ALL:-C.UTF-8}
     restart: ${SANDBOX_RESTART_POLICY:-unless-stopped}
@@ -72,6 +73,7 @@ services:
       - ${AGENT_ENV_FILE:-.env}
     environment:
       SANDBOX_BASE_URL: ${SANDBOX_BASE_URL:-http://sandbox:8081}
+      SANDBOX_API_TOKEN: ${SANDBOX_API_TOKEN:-}
       PORT: ${AGENT_PORT:-3000}
       # VITE_ env vars for pi-web-ui frontend (injected at build time)
       VITE_MODEL_ID: ${VITE_MODEL_ID:-deepseek-v4-flash}
