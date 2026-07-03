@@ -25,6 +25,9 @@ class ExecutionStatus(str, Enum):
     FAILED = "FAILED"
     TIMEOUT = "TIMEOUT"
     CANCELLED = "CANCELLED"
+    PENDING_APPROVAL = "PENDING_APPROVAL"
+    APPROVED = "APPROVED"
+    REJECTED = "REJECTED"
 
 
 class RiskLevel(str, Enum):
@@ -42,6 +45,7 @@ class ToolExecutionMode(str, Enum):
 
 class SessionCreate(BaseModel):
     agent_session_id: str | None = None
+    enterprise_session_id: str | None = None
     user_id: str | None = None
     caller_id: str = "unknown"
     metadata: dict[str, Any] = Field(default_factory=dict)
@@ -50,6 +54,7 @@ class SessionCreate(BaseModel):
 class SessionResponse(BaseModel):
     session_id: str
     agent_session_id: str | None = None
+    enterprise_session_id: str | None = None
     user_id: str | None = None
     caller_id: str = "unknown"
     status: SessionStatus = SessionStatus.RUNNING
@@ -88,6 +93,7 @@ class ExecutionResponse(BaseModel):
     exit_code: int | None = None
     duration_ms: float = 0.0
     truncated: bool = False
+    trace_id: str | None = None
 
 
 # ── File ───────────────────────────────────────────────────────────────
@@ -167,6 +173,26 @@ class ToolCallDecision(BaseModel):
     allowed: bool = True
     reason: str = ""
     risk_level: RiskLevel = RiskLevel.LOW
+
+
+class ApprovalCheckRequest(BaseModel):
+    tool_name: str
+    command: str | None = None
+    path: str | None = None
+    timeout: int | None = None
+    file_size: int | None = None
+
+
+class ApprovalDecisionRequest(BaseModel):
+    approval_id: str
+    decision: str = Field(..., pattern="^(approve|reject)$")
+
+
+class ApprovalResponse(BaseModel):
+    approval_id: str | None = None
+    status: str
+    risk_level: RiskLevel
+    reason: str = ""
 
 
 # ── Health ─────────────────────────────────────────────────────────────

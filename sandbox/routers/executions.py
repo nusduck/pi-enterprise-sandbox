@@ -2,17 +2,23 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Response
 
 from sandbox.models import (
+    ApprovalCheckRequest,
+    ApprovalDecisionRequest,
+    ApprovalResponse,
     CommandExecutionRequest,
     ExecutionResponse,
     ExecutionStatus,
     NodeExecutionRequest,
     PythonExecutionRequest,
+    ToolCallCheck,
 )
 from sandbox.services.audit_logger import audit_logger
+from sandbox.services.approval_manager import approval_manager
 from sandbox.services.execution_manager import execution_manager
+from sandbox.services.policy_checker import policy_checker
 from sandbox.services.session_manager import session_manager
 from sandbox.services.workspace_manager import workspace_manager
 
@@ -113,6 +119,61 @@ def run_node(session_id: str, body: NodeExecutionRequest):
     )
 
     return ExecutionResponse(**result)
+
+
+@router.post("/approval-check", response_model=ApprovalResponse, status_code=200)
+def approval_check(session_id: str, body: ApprovalCheckRequest, response: Response):
+    session = session_manager.get(session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    decision = policy_checker.check(ToolCallCheck(
+        session_id=session_id,
+        caller_id=session.caller_id,
+        user_id=session.user_id,
+        tool_name=body.tool_name,
+        command=body.command,
+        path=body.path,
+        timeout=body.timeout,
+        file_size=body.file_size,
+    ))
+    audit_logger.log_tool_call(
+        session_id=session_id,
+        tool_name=body.tool_name,
+        caller_id=session.caller_id,
+        allowed=decision.allowed,
+        risk_level=decision.risk_level.value,
+        reason=decision.reason,
+        metadata={"approval_check": True},
+    )
+    if decision.allowed:
+        return ApprovalResponse(
+            status="approved",
+            risk_level=decision.risk_level,
+            reason=decision.reason,
+        )
+
+    if decision.risk_level.value == "high":
+        response.status_code = 202
+        entry = approval_manager.create(
+            session_id=session_id,
+            tool_name=body.tool_name,
+            risk_level=decision.risk_level,
+            reason=decision.reason,
+            payload=body.model_dump(),
+        )
+        return ApprovalResponse(
+            approval_id=entry["approval_id"],
+            status="pending_approval",
+            risk_level=decision.risk_level,
+            reason=decision.reason,
+        )
+
+    return ApprovalResponse(
+        status="rejected",
+        risk_level=decision.risk_level,
+        reason=decision.reason,
+    )
 
 
 @router.get("/{execution_id}", response_model=ExecutionResponse)

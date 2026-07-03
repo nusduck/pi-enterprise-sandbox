@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import uuid
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
@@ -13,14 +14,17 @@ from fastapi.responses import JSONResponse
 from sandbox import __version__
 from sandbox.config import settings
 from sandbox.routers import (
+    approvals,
     artifacts,
     executions,
     files,
     health,
     mcp_router,
     sessions,
+    traces,
 )
 from sandbox.services.session_manager import session_manager
+from sandbox.trace import reset_trace_id, set_trace_id
 
 
 def _configure_logging() -> None:
@@ -100,6 +104,19 @@ app.add_middleware(
 
 
 @app.middleware("http")
+async def trace_id_middleware(request: Request, call_next):
+    """Attach a trace ID to request context and echo it in responses."""
+    trace_id = request.headers.get("X-Trace-Id") or f"trace_{uuid.uuid4().hex}"
+    token = set_trace_id(trace_id)
+    try:
+        response = await call_next(request)
+        response.headers["X-Trace-Id"] = trace_id
+        return response
+    finally:
+        reset_trace_id(token)
+
+
+@app.middleware("http")
 async def mcp_auth_middleware(request: Request, call_next):
     """Check X-Auth-Token for /mcp/ endpoints if auth tokens are configured."""
     if (
@@ -156,9 +173,11 @@ async def value_error_handler(request: Request, exc: ValueError):
 # ── Register routers ───────────────────────────────────────────────────
 
 app.include_router(sessions.router)
+app.include_router(approvals.router)
 app.include_router(executions.router)
 app.include_router(files.router)
 app.include_router(artifacts.router)
+app.include_router(traces.router)
 app.include_router(health.router)
 app.include_router(mcp_router.router)
 

@@ -30,6 +30,7 @@ class SandboxClient:
         base_url: str = "http://localhost:8081",
         timeout: float = 30.0,
         auth_token: str | None = None,
+        trace_id: str | None = None,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
@@ -37,12 +38,15 @@ class SandboxClient:
         self._headers: dict[str, str] = {}
         if auth_token:
             self._headers["X-Auth-Token"] = auth_token
+        if trace_id:
+            self._headers["X-Trace-Id"] = trace_id
 
     # ── Session lifecycle ─────────────────────────────────────────
 
     def create_session(
         self,
         agent_session_id: str | None = None,
+        enterprise_session_id: str | None = None,
         user_id: str | None = None,
         caller_id: str = "pi-agent",
         metadata: dict[str, Any] | None = None,
@@ -50,6 +54,7 @@ class SandboxClient:
         """Create a new sandbox session. Returns session metadata."""
         body = {
             "agent_session_id": agent_session_id,
+            "enterprise_session_id": enterprise_session_id,
             "user_id": user_id,
             "caller_id": caller_id,
             "metadata": metadata or {},

@@ -108,9 +108,18 @@ export default function (pi: ExtensionAPI) {
     }
 
     try {
+      const piSessionId =
+        (ctx as any)?.sessionId ||
+        (ctx as any)?.session?.id ||
+        process.env.PI_SESSION_ID ||
+        process.env.ENTERPRISE_SESSION_ID ||
+        `pi_${Date.now()}`;
+      const enterpriseSessionId = process.env.ENTERPRISE_SESSION_ID || piSessionId;
       const session = await sandboxFetch("/sessions", {
         method: "POST",
         body: JSON.stringify({
+          agent_session_id: piSessionId,
+          enterprise_session_id: enterpriseSessionId,
           caller_id: sandboxCallerId,
           metadata: { source: "pi-enterprise-extension" },
         }),
@@ -391,9 +400,21 @@ export default function (pi: ExtensionAPI) {
         sandboxSessionId = null;
       }
       try {
+        const piSessionId =
+          (ctx as any)?.sessionId ||
+          (ctx as any)?.session?.id ||
+          process.env.PI_SESSION_ID ||
+          process.env.ENTERPRISE_SESSION_ID ||
+          `pi_${Date.now()}`;
+        const enterpriseSessionId = process.env.ENTERPRISE_SESSION_ID || piSessionId;
         const session = await sandboxFetch("/sessions", {
           method: "POST",
-          body: JSON.stringify({ caller_id: sandboxCallerId }),
+          body: JSON.stringify({
+            agent_session_id: piSessionId,
+            enterprise_session_id: enterpriseSessionId,
+            caller_id: sandboxCallerId,
+            metadata: { source: "pi-enterprise-extension", reset: true },
+          }),
         });
         sandboxSessionId = session.session_id;
         ctx.ui.notify(`New sandbox session: ${sandboxSessionId}`, "info");

@@ -33,6 +33,9 @@ class Settings(BaseSettings):
     session_ttl_minutes: int = 30
     cleanup_interval_minutes: int = 5
 
+    # ── Approval ─────────────────────────────────────────────────────
+    approval_timeout_seconds: int = 300
+
     # ── MCP ──────────────────────────────────────────────────────────
     mcp_enabled: bool = True
     mcp_host: str = "0.0.0.0"
@@ -47,7 +50,7 @@ class Settings(BaseSettings):
     ]
 
     # ── Database ─────────────────────────────────────────────────────
-    database_url: str = "sqlite:///sandbox/data/sandbox.db"
+    database_url: str = "sqlite:////sandbox/data/sandbox.db"
 
     @property
     def workspaces_path(self) -> Path:

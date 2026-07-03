@@ -22,6 +22,8 @@ const LLMIO_BASE_URL = process.env.LLMIO_BASE_URL || "";
 const LLMIO_API_KEY = process.env.LLMIO_API_KEY || "";
 const MODEL_ID = process.env.PI_MODEL || "deepseek-v4-flash";
 const CHAT_TIMEOUT_MS = 120_000; // 2 min max per chat turn
+const WEBUI_DATA_DIR = process.env.AGENT_WEBUI_DATA_DIR || path.join(__dirname, "..", "sandbox", "data", "webui");
+const CONVERSATIONS_FILE = path.join(WEBUI_DATA_DIR, "conversations.json");
 const SYSTEM_PROMPT = [
   "You are an enterprise AI agent running in a secure sandbox environment.",
   "Your role is to help users with development, analysis, and automation tasks.",
@@ -105,9 +107,11 @@ if (process.env.SANDBOX_AUTH_TOKEN) {
 
 async function sandboxFetch(path, options = {}) {
   const url = `${SANDBOX_URL}${path}`;
+  const { traceId, ...fetchOptions } = options;
+  const traceHeaders = traceId ? { "X-Trace-Id": traceId } : {};
   const resp = await fetch(url, {
-    ...options,
-    headers: { ...SANDBOX_HEADERS, ...(options.headers || {}) },
+    ...fetchOptions,
+    headers: { ...SANDBOX_HEADERS, ...traceHeaders, ...(fetchOptions.headers || {}) },
   });
   if (!resp.ok) {
     const body = await resp.text().catch(() => "");
@@ -138,7 +142,7 @@ function isBlocked(command) {
   return null;
 }
 
-function createSandboxTools(sandboxSessionId) {
+function createSandboxTools(sandboxSessionId, getTraceId = () => null) {
   const sid = sandboxSessionId;
 
   return [
@@ -155,7 +159,7 @@ function createSandboxTools(sandboxSessionId) {
         const q = new URLSearchParams({ path: params.path });
         if (params.offset != null) q.set("offset", String(params.offset));
         if (params.limit != null) q.set("limit", String(params.limit));
-        const result = await sandboxFetch(`/sessions/${sid}/files/read?${q}`);
+        const result = await sandboxFetch(`/sessions/${sid}/files/read?${q}`, { traceId: getTraceId() });
         return {
           content: toolContent(result.content || ""),
           details: { size: result.size, truncated: result.truncated, mime_type: result.mime_type },
@@ -172,6 +176,7 @@ function createSandboxTools(sandboxSessionId) {
       }),
       async execute(_toolCallId, params) {
         const result = await sandboxFetch(`/sessions/${sid}/files/write`, {
+          traceId: getTraceId(),
           method: "POST",
           body: JSON.stringify({ path: params.path, content: params.content }),
         });
@@ -193,7 +198,7 @@ function createSandboxTools(sandboxSessionId) {
       async execute(_toolCallId, params) {
         // Read current content
         const q = new URLSearchParams({ path: params.path });
-        const file = await sandboxFetch(`/sessions/${sid}/files/read?${q}`);
+        const file = await sandboxFetch(`/sessions/${sid}/files/read?${q}`, { traceId: getTraceId() });
         const content = file.content || "";
 
         // Perform replacement
@@ -205,6 +210,7 @@ function createSandboxTools(sandboxSessionId) {
           content.slice(0, idx) + params.new_string + content.slice(idx + params.old_string.length);
 
         await sandboxFetch(`/sessions/${sid}/files/write`, {
+          traceId: getTraceId(),
           method: "POST",
           body: JSON.stringify({ path: params.path, content: newContent }),
         });
@@ -240,6 +246,7 @@ function createSandboxTools(sandboxSessionId) {
         if (params.timeout) body.timeout = params.timeout;
 
         const result = await sandboxFetch(`/sessions/${sid}/executions/command`, {
+          traceId: getTraceId(),
           method: "POST",
           body: JSON.stringify(body),
         });
@@ -267,28 +274,66 @@ function createSandboxTools(sandboxSessionId) {
 // ── Conversation Manager ────────────────────────────────────────────────
 const conversations = new Map(); // Map<id, Conversation>
 
+function ensureDataDir() {
+  fs.mkdirSync(WEBUI_DATA_DIR, { recursive: true });
+}
+
+function saveConversations() {
+  ensureDataDir();
+  const payload = [...conversations.values()].map((conv) => conv.toPersistedJSON());
+  fs.writeFileSync(CONVERSATIONS_FILE, JSON.stringify(payload, null, 2));
+}
+
+async function loadConversations() {
+  try {
+    if (!fs.existsSync(CONVERSATIONS_FILE)) return;
+    const payload = JSON.parse(fs.readFileSync(CONVERSATIONS_FILE, "utf-8"));
+    for (const item of payload) {
+      const conv = Conversation.fromPersistedJSON(item);
+      await conv.init({ restore: true });
+      conversations.set(conv.id, conv);
+    }
+  } catch (err) {
+    console.error("Failed to load persisted conversations:", err);
+  }
+}
+
 class Conversation {
-  constructor(id) {
+  constructor(id, persisted = {}) {
     this.id = id;
-    this.title = "New conversation";
-    this.createdAt = Date.now();
+    this.title = persisted.title || "New conversation";
+    this.createdAt = persisted.createdAt || Date.now();
     this.agent = null;
-    this.sandboxSessionId = null;
-    this.messages = []; // kept for frontend
-    this._sandboxCreated = false;
+    this.sandboxSessionId = persisted.sandboxSessionId || null;
+    this.messages = persisted.messages || []; // kept for frontend
+    this.currentTraceId = null;
+    this._sandboxCreated = Boolean(persisted.sandboxSessionId);
   }
 
-  async init() {
-    // 1. Create sandbox session
-    const session = await sandboxFetch("/sessions", {
-      method: "POST",
-      body: JSON.stringify({
-        caller_id: "agent-webui",
-        metadata: { source: "webui", conversation_id: this.id },
-      }),
-    });
-    this.sandboxSessionId = session.session_id;
-    this._sandboxCreated = true;
+  async init(options = {}) {
+    // 1. Create or restore sandbox session
+    if (options.restore && this.sandboxSessionId) {
+      try {
+        const existing = await sandboxFetch(`/sessions/${this.sandboxSessionId}`);
+        this.sandboxSessionId = existing.session_id;
+      } catch {
+        this.sandboxSessionId = null;
+      }
+    }
+
+    if (!this.sandboxSessionId) {
+      const session = await sandboxFetch("/sessions", {
+        method: "POST",
+        body: JSON.stringify({
+          agent_session_id: this.id,
+          enterprise_session_id: this.id,
+          caller_id: "agent-webui",
+          metadata: { source: "webui", conversation_id: this.id },
+        }),
+      });
+      this.sandboxSessionId = session.session_id;
+      this._sandboxCreated = true;
+    }
 
     // 2. Create Pi Agent with API key resolver
     const agent = new Agent({
@@ -298,7 +343,7 @@ class Conversation {
       },
     });
     agent.setModel(createModel());
-    agent.setTools(createSandboxTools(this.sandboxSessionId));
+    agent.setTools(createSandboxTools(this.sandboxSessionId, () => this.currentTraceId));
     agent.setSystemPrompt(SYSTEM_PROMPT);
     this.agent = agent;
 
@@ -314,6 +359,7 @@ class Conversation {
     }
     this.agent?.abort();
     conversations.delete(this.id);
+    saveConversations();
   }
 
   toJSON() {
@@ -321,8 +367,23 @@ class Conversation {
       id: this.id,
       title: this.title,
       createdAt: this.createdAt,
+      sandboxSessionId: this.sandboxSessionId,
       messageCount: this.messages.length,
     };
+  }
+
+  toPersistedJSON() {
+    return {
+      id: this.id,
+      title: this.title,
+      createdAt: this.createdAt,
+      sandboxSessionId: this.sandboxSessionId,
+      messages: this.messages,
+    };
+  }
+
+  static fromPersistedJSON(item) {
+    return new Conversation(item.id, item);
   }
 }
 
@@ -348,6 +409,7 @@ async function handleConversations(req, res) {
       const conv = new Conversation(id);
       await conv.init();
       conversations.set(id, conv);
+      saveConversations();
       res.writeHead(201, { "Content-Type": "application/json" });
       res.end(JSON.stringify(conv.toJSON()));
     } catch (err) {
@@ -386,6 +448,7 @@ async function handleConversation(req, res, urlParts) {
     const body = JSON.parse(Buffer.concat(chunks).toString());
     if (body.title) {
       conv.title = body.title;
+      saveConversations();
     }
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(JSON.stringify(conv.toJSON()));
@@ -437,7 +500,10 @@ async function handleChat(req, res, urlParts) {
   }
 
   // Push user message
-  conv.messages.push({ role: "user", content: message, timestamp: Date.now() });
+  const traceId = `trace_${crypto.randomUUID().replaceAll("-", "")}`;
+  conv.currentTraceId = traceId;
+  conv.messages.push({ role: "user", content: message, timestamp: Date.now(), trace_id: traceId });
+  saveConversations();
 
   // SSE setup
   res.writeHead(200, {
@@ -455,7 +521,7 @@ async function handleChat(req, res, urlParts) {
     try {
       switch (event.type) {
         case "turn_start":
-          res.write(`data: ${JSON.stringify({ type: "turn_start" })}\n\n`);
+          res.write(`data: ${JSON.stringify({ type: "turn_start", trace_id: traceId })}\n\n`);
           break;
 
         case "message_update": {
@@ -512,8 +578,10 @@ async function handleChat(req, res, urlParts) {
         conv.messages.push({
           role: "assistant",
           content: assistantText.trim(),
+          trace_id: traceId,
           timestamp: Date.now(),
         });
+        saveConversations();
       }
     }
   });
@@ -532,7 +600,8 @@ async function handleChat(req, res, urlParts) {
     // Save assistant message
     const trimmed = assistantText.trim();
     if (trimmed) {
-      conv.messages.push({ role: "assistant", content: trimmed, timestamp: Date.now() });
+      conv.messages.push({ role: "assistant", content: trimmed, trace_id: traceId, timestamp: Date.now() });
+      saveConversations();
     }
 
     res.write(`data: ${JSON.stringify({ type: "done" })}\n\n`);
@@ -540,6 +609,7 @@ async function handleChat(req, res, urlParts) {
     if (err.name === "AbortError") return;
     res.write(`data: ${JSON.stringify({ type: "error", text: err.message })}\n\n`);
   } finally {
+    conv.currentTraceId = null;
     unsubscribe();
     res.end();
   }
@@ -630,6 +700,7 @@ const server = http.createServer(async (req, res) => {
 });
 
 // ── Start ───────────────────────────────────────────────────────────────
+await loadConversations();
 server.listen(PORT, "0.0.0.0", () => {
   console.log(`[agent-webui] Server running on http://0.0.0.0:${PORT}`);
   console.log(`[agent-webui] Sandbox URL: ${SANDBOX_URL}`);
@@ -644,11 +715,12 @@ process.on("uncaughtException", (err) => {
   console.error("[agent-webui] UNCAUGHT EXCEPTION:", err);
 });
 
-// Graceful shutdown — destroy all sandbox sessions
+// Graceful shutdown — persist conversations and keep sandbox sessions recoverable
 const handleShutdown = async () => {
-  console.log("[agent-webui] Shutting down, cleaning up sandbox sessions...");
+  console.log("[agent-webui] Shutting down, preserving sandbox sessions for recovery...");
+  saveConversations();
   for (const conv of conversations.values()) {
-    await conv.destroy().catch(() => {});
+    conv.agent?.abort();
   }
   process.exit(0);
 };

@@ -16,6 +16,7 @@ router = APIRouter(prefix="/sessions", tags=["sessions"])
 def create_session(body: SessionCreate):
     session = session_manager.create(
         agent_session_id=body.agent_session_id,
+        enterprise_session_id=body.enterprise_session_id,
         user_id=body.user_id,
         caller_id=body.caller_id,
         metadata=body.metadata,
@@ -25,6 +26,22 @@ def create_session(body: SessionCreate):
         session.session_id, "created",
         {"caller_id": body.caller_id},
     )
+    return session
+
+
+@router.get("/by-agent/{agent_session_id}", response_model=SessionResponse)
+def get_session_by_agent_session_id(agent_session_id: str):
+    session = session_manager.get_by_agent_session_id(agent_session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+    return session
+
+
+@router.get("/by-enterprise/{enterprise_session_id}", response_model=SessionResponse)
+def get_session_by_enterprise_session_id(enterprise_session_id: str):
+    session = session_manager.get_by_enterprise_session_id(enterprise_session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Session not found")
     return session
 
 

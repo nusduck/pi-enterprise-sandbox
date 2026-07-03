@@ -11,9 +11,12 @@ from pathlib import Path
 from typing import Any
 
 from sandbox.config import settings
+from sandbox.database import Database
 from sandbox.models import ExecutionResponse, ExecutionStatus
+from sandbox.repositories import ExecutionRepository
 from sandbox.security.safe_env import safe_env
 from sandbox.services.artifact_manager import artifact_manager
+from sandbox.trace import get_trace_id
 from sandbox.utils.resource_limits import contains_network_command, run_with_timeout
 
 
@@ -23,11 +26,12 @@ class ExecutionManager:
     Ensures serial execution per session (one running execution at a time).
     """
 
-    def __init__(self) -> None:
+    def __init__(self, database: Database | None = None) -> None:
+        self.repository = ExecutionRepository(database)
         self._executions: dict[str, dict] = {}
         # session_id -> current running execution_id or None
         self._session_locks: dict[str, str | None] = defaultdict(lambda: None)
-        self._total_count = 0
+        self._total_count = self.repository.total_count()
 
     def is_session_busy(self, session_id: str) -> bool:
         return self._session_locks.get(session_id) is not None
@@ -59,9 +63,12 @@ class ExecutionManager:
             "execution_id": execution_id,
             "session_id": session_id,
             "status": ExecutionStatus.RUNNING,
+            "run_type": "python",
+            "trace_id": get_trace_id(),
             "created_at": now,
         }
         self._executions[execution_id] = entry
+        self.repository.upsert(entry)
         self._session_locks[session_id] = execution_id
         self._total_count += 1
 
@@ -122,6 +129,7 @@ class ExecutionManager:
                 "exit_code": -1,
             })
         finally:
+            self.repository.upsert(entry)
             self._session_locks[session_id] = None
 
         return entry
@@ -161,9 +169,12 @@ class ExecutionManager:
             "execution_id": execution_id,
             "session_id": session_id,
             "status": ExecutionStatus.RUNNING,
+            "run_type": "command",
+            "trace_id": get_trace_id(),
             "created_at": now,
         }
         self._executions[execution_id] = entry
+        self.repository.upsert(entry)
         self._session_locks[session_id] = execution_id
         self._total_count += 1
 
@@ -218,6 +229,7 @@ class ExecutionManager:
                 "exit_code": -1,
             })
         finally:
+            self.repository.upsert(entry)
             self._session_locks[session_id] = None
 
         return entry
@@ -246,9 +258,12 @@ class ExecutionManager:
             "execution_id": execution_id,
             "session_id": session_id,
             "status": ExecutionStatus.RUNNING,
+            "run_type": "node",
+            "trace_id": get_trace_id(),
             "created_at": now,
         }
         self._executions[execution_id] = entry
+        self.repository.upsert(entry)
         self._session_locks[session_id] = execution_id
         self._total_count += 1
 
@@ -309,6 +324,7 @@ class ExecutionManager:
                 "exit_code": -1,
             })
         finally:
+            self.repository.upsert(entry)
             self._session_locks[session_id] = None
 
         return entry
@@ -316,18 +332,22 @@ class ExecutionManager:
     # ── Query ────────────────────────────────────────────────────
 
     def get(self, execution_id: str) -> dict | None:
-        return self._executions.get(execution_id)
+        return self._executions.get(execution_id) or self.repository.get(execution_id)
 
     def cancel(self, execution_id: str) -> bool:
         """Mark an execution as cancelled (actual process kill is handled
         elsewhere; this is a metadata update)."""
-        entry = self._executions.get(execution_id)
+        entry = self.get(execution_id)
         if entry is None or entry["status"] not in (
             ExecutionStatus.PENDING,
             ExecutionStatus.RUNNING,
+            ExecutionStatus.PENDING.value,
+            ExecutionStatus.RUNNING.value,
         ):
             return False
         entry["status"] = ExecutionStatus.CANCELLED
+        self._executions[execution_id] = entry
+        self.repository.upsert(entry)
         # Release session lock if this was the running execution
         sid = entry["session_id"]
         if self._session_locks.get(sid) == execution_id:

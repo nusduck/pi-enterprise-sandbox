@@ -8,17 +8,19 @@ from datetime import datetime, timezone
 from typing import Any
 
 from sandbox.config import settings
+from sandbox.database import Database
+from sandbox.repositories import AuditRepository
 from sandbox.security.safe_env import sanitize_for_log
+from sandbox.trace import get_trace_id
 
 logger = logging.getLogger("sandbox.audit")
 
 
 class AuditLogger:
-    """Log all tool calls, execution results, and policy decisions.
+    """Log all tool calls, execution results, and policy decisions to stdout and SQLite."""
 
-    In v1, writes structured JSON lines via Python logging.
-    In v2, replace with external database / event stream.
-    """
+    def __init__(self, database: Database | None = None) -> None:
+        self.repository = AuditRepository(database)
 
     def log_tool_call(
         self,
@@ -83,7 +85,7 @@ class AuditLogger:
     def log_session_lifecycle(
         self,
         session_id: str,
-        action: str,  # created | deleted | expired
+        action: str,
         metadata: dict[str, Any] | None = None,
     ) -> None:
         entry = {
@@ -96,7 +98,17 @@ class AuditLogger:
         self._write(entry)
 
     def _write(self, entry: dict[str, Any]) -> None:
+        if not entry.get("trace_id"):
+            entry["trace_id"] = get_trace_id()
         logger.info(json.dumps(entry, default=str))
+        self.repository.insert(
+            event_type=entry["event"],
+            payload=entry,
+            session_id=entry.get("session_id"),
+            execution_id=entry.get("execution_id"),
+            trace_id=entry.get("trace_id"),
+            created_at=entry.get("timestamp"),
+        )
 
 
 audit_logger = AuditLogger()

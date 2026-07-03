@@ -6,63 +6,88 @@ import uuid
 from datetime import datetime, timedelta, timezone
 
 from sandbox.config import settings
+from sandbox.database import Database, database as default_database
 from sandbox.models import SessionResponse, SessionStatus
+from sandbox.repositories import SessionRepository
 
 
 class SessionManager:
-    """In-memory session registry (v1; swap to SQLite/PostgreSQL in v2).
+    """Session registry.
 
-    Thread-safety note: called from async endpoints in the same event loop.
-    For v1 the GIL + single-threaded FastAPI prevents races; if async executors
-    are used, wrap writes with an ``asyncio.Lock``.
+    Uses in-memory storage by default for isolated unit tests and lightweight
+    callers. The module-level singleton is wired to SQLite for service runtime.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, database: Database | None = None) -> None:
+        self.repository = SessionRepository(database) if database is not None else None
         self._sessions: dict[str, dict] = {}
-
-    # ── CRUD ──────────────────────────────────────────────────────────
 
     def create(
         self,
         agent_session_id: str | None = None,
+        enterprise_session_id: str | None = None,
         user_id: str | None = None,
         caller_id: str = "unknown",
         metadata: dict | None = None,
     ) -> SessionResponse:
         session_id = f"sandbox_{uuid.uuid4().hex[:12]}"
         now = datetime.now(timezone.utc).isoformat()
-        ws_path = str(settings.workspaces_path / session_id)
-
         entry = {
             "session_id": session_id,
             "agent_session_id": agent_session_id,
+            "enterprise_session_id": enterprise_session_id,
             "user_id": user_id,
             "caller_id": caller_id,
             "status": SessionStatus.RUNNING,
-            "workspace_path": ws_path,
+            "workspace_path": str(settings.workspaces_path / session_id),
             "created_at": now,
             "updated_at": now,
             "metadata": metadata or {},
-            "ttl_until": datetime.now(timezone.utc)
-            + timedelta(minutes=settings.session_ttl_minutes),
+            "ttl_until": datetime.now(timezone.utc) + timedelta(minutes=settings.session_ttl_minutes),
         }
-        self._sessions[session_id] = entry
+        if self.repository:
+            self.repository.upsert(entry)
+        else:
+            self._sessions[session_id] = entry
         return SessionResponse(**entry)
 
     def get(self, session_id: str) -> SessionResponse | None:
+        if self.repository:
+            session = self.repository.get(session_id)
+            if session:
+                self.cleanup_expired()
+                return self.repository.get(session_id)
+            return None
         entry = self._sessions.get(session_id)
         if entry is None:
             return None
-        self._maybe_expire(entry)
+        self._maybe_expire_entry(entry)
         return SessionResponse(**entry)
 
-    def delete(self, session_id: str) -> bool:
-        entry = self._sessions.pop(session_id, None)
-        return entry is not None
+    def get_by_agent_session_id(self, agent_session_id: str) -> SessionResponse | None:
+        if self.repository:
+            return self.repository.get_by_agent_session_id(agent_session_id)
+        for entry in self._sessions.values():
+            if entry.get("agent_session_id") == agent_session_id:
+                return SessionResponse(**entry)
+        return None
 
-    def update_status(
-        self, session_id: str, status: SessionStatus
-    ) -> SessionResponse | None:
+    def get_by_enterprise_session_id(self, enterprise_session_id: str) -> SessionResponse | None:
+        if self.repository:
+            return self.repository.get_by_enterprise_session_id(enterprise_session_id)
+        for entry in self._sessions.values():
+            if entry.get("enterprise_session_id") == enterprise_session_id:
+                return SessionResponse(**entry)
+        return None
+
+    def delete(self, session_id: str) -> bool:
+        if self.repository:
+            return self.repository.delete(session_id)
+        return self._sessions.pop(session_id, None) is not None
+
+    def update_status(self, session_id: str, status: SessionStatus) -> SessionResponse | None:
+        if self.repository:
+            return self.repository.update_status(session_id, status)
         entry = self._sessions.get(session_id)
         if entry is None:
             return None
@@ -71,9 +96,12 @@ class SessionManager:
         return SessionResponse(**entry)
 
     def list_active(self) -> list[SessionResponse]:
+        if self.repository:
+            self.cleanup_expired()
+            return self.repository.list_active()
         results = []
         for entry in list(self._sessions.values()):
-            self._maybe_expire(entry)
+            self._maybe_expire_entry(entry)
             if entry["status"] == SessionStatus.RUNNING:
                 results.append(SessionResponse(**entry))
         return results
@@ -81,30 +109,23 @@ class SessionManager:
     def count_active(self) -> int:
         return len(self.list_active())
 
-    # ── TTL / Cleanup ────────────────────────────────────────────────
-
     def cleanup_expired(self) -> int:
-        """Mark expired sessions as EXPIRED and return count cleaned."""
+        if self.repository:
+            return self.repository.cleanup_expired(datetime.now(timezone.utc).isoformat())
         now = datetime.now(timezone.utc)
         count = 0
         for entry in list(self._sessions.values()):
-            if (
-                entry["status"] == SessionStatus.RUNNING
-                and entry["ttl_until"] < now
-            ):
+            if entry["status"] == SessionStatus.RUNNING and entry["ttl_until"] < now:
                 entry["status"] = SessionStatus.EXPIRED
                 entry["updated_at"] = now.isoformat()
                 count += 1
         return count
 
-    def _maybe_expire(self, entry: dict) -> None:
-        if (
-            entry["status"] == SessionStatus.RUNNING
-            and entry["ttl_until"] < datetime.now(timezone.utc)
-        ):
+    @staticmethod
+    def _maybe_expire_entry(entry: dict) -> None:
+        if entry["status"] == SessionStatus.RUNNING and entry["ttl_until"] < datetime.now(timezone.utc):
             entry["status"] = SessionStatus.EXPIRED
             entry["updated_at"] = datetime.now(timezone.utc).isoformat()
 
 
-# Module-level singleton
-session_manager = SessionManager()
+session_manager = SessionManager(database=default_database)

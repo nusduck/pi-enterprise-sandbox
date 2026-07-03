@@ -50,6 +50,7 @@ class TestSessionIntegration:
     def test_create_session_with_metadata(self):
         resp = client.post("/sessions", json={
             "agent_session_id": "pi_001",
+            "enterprise_session_id": "ent_001",
             "user_id": "user_abc",
             "caller_id": "pi-agent",
             "metadata": {"env": "prod"},
@@ -57,7 +58,23 @@ class TestSessionIntegration:
         assert resp.status_code == 201
         data = resp.json()
         assert data["agent_session_id"] == "pi_001"
+        assert data["enterprise_session_id"] == "ent_001"
         assert data["user_id"] == "user_abc"
+
+    def test_get_session_by_external_ids(self):
+        created = client.post("/sessions", json={
+            "agent_session_id": "pi_lookup_001",
+            "enterprise_session_id": "ent_lookup_001",
+            "caller_id": "pi-agent",
+        }).json()
+
+        by_agent = client.get("/sessions/by-agent/pi_lookup_001")
+        by_enterprise = client.get("/sessions/by-enterprise/ent_lookup_001")
+
+        assert by_agent.status_code == 200
+        assert by_agent.json()["session_id"] == created["session_id"]
+        assert by_enterprise.status_code == 200
+        assert by_enterprise.json()["session_id"] == created["session_id"]
 
 
 class TestExecutionIntegration:
