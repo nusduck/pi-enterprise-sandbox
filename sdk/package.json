@@ -1,0 +1,14 @@
+{
+  "name": "pi-enterprise-sandbox-sdk",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "SDK for Pi Enterprise Sandbox — REST API client for frontend developers",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./types": "./types.js"
+  },
+  "dependencies": {}
+}

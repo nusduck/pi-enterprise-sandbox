@@ -205,3 +205,21 @@ class HealthResponse(BaseModel):
     workspace_available: bool = False
     disk_free_mb: float = 0.0
     runtimes: dict[str, bool] = Field(default_factory=dict)
+
+
+# ── Conversation ────────────────────────────────────────────────────────
+
+class ConversationResponse(BaseModel):
+    id: str
+    title: str = "New conversation"
+    sandbox_session_id: str | None = None
+    messages: list[dict[str, Any]] = Field(default_factory=list)
+    created_at: str = ""
+    updated_at: str = ""
+
+
+class ConversationCreate(BaseModel):
+    id: str | None = None
+    title: str = "New conversation"
+    sandbox_session_id: str | None = None
+    messages: list[dict[str, Any]] = Field(default_factory=list)

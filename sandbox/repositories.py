@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 from datetime import datetime, timezone
 from typing import Any
 
 from sandbox.database import Database, database
-from sandbox.models import ArtifactResponse, ExecutionStatus, SessionResponse, SessionStatus
+from sandbox.models import ArtifactResponse, ConversationResponse, ExecutionStatus, SessionResponse, SessionStatus
 
 
 def _json_dumps(value: Any) -> str:
@@ -245,6 +246,102 @@ class ArtifactRepository:
             source_execution_id=row["source_execution_id"],
             size=row["size"] or 0,
             created_at=row["created_at"],
+        )
+
+
+class ConversationRepository:
+    """CRUD for persisted conversations."""
+
+    def __init__(self, db: Database | None = None) -> None:
+        self.db = db or database
+
+    def upsert(self, entry: dict[str, Any]) -> ConversationResponse:
+        now = entry.get("updated_at") or entry.get("created_at") or datetime.now(timezone.utc).isoformat()
+        with self.db.connect() as conn:
+            conn.execute(
+                """\
+                INSERT INTO conversations (id, title, sandbox_session_id, messages, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    title=excluded.title,
+                    sandbox_session_id=excluded.sandbox_session_id,
+                    messages=excluded.messages,
+                    updated_at=excluded.updated_at
+                """,
+                (
+                    entry["id"],
+                    entry.get("title", "New conversation"),
+                    entry.get("sandbox_session_id"),
+                    _json_dumps(entry.get("messages", [])),
+                    entry.get("created_at", now),
+                    now,
+                ),
+            )
+            conn.commit()
+        return self.get(entry["id"])
+
+    def get(self, conversation_id: str) -> ConversationResponse | None:
+        with self.db.connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM conversations WHERE id = ?", (conversation_id,)
+            ).fetchone()
+        return self._row_to_model(row) if row else None
+
+    def list_all(self) -> list[ConversationResponse]:
+        with self.db.connect() as conn:
+            rows = conn.execute(
+                "SELECT * FROM conversations ORDER BY updated_at DESC"
+            ).fetchall()
+        return [self._row_to_model(row) for row in rows]
+
+    def update_messages(
+        self, conversation_id: str, messages: list[dict[str, Any]]
+    ) -> ConversationResponse | None:
+        now = datetime.now(timezone.utc).isoformat()
+        with self.db.connect() as conn:
+            conn.execute(
+                "UPDATE conversations SET messages = ?, updated_at = ? WHERE id = ?",
+                (_json_dumps(messages), now, conversation_id),
+            )
+            conn.commit()
+        return self.get(conversation_id)
+
+    def update_title(self, conversation_id: str, title: str) -> ConversationResponse | None:
+        now = datetime.now(timezone.utc).isoformat()
+        with self.db.connect() as conn:
+            conn.execute(
+                "UPDATE conversations SET title = ?, updated_at = ? WHERE id = ?",
+                (title, now, conversation_id),
+            )
+            conn.commit()
+        return self.get(conversation_id)
+
+    def delete(self, conversation_id: str) -> bool:
+        with self.db.connect() as conn:
+            cur = conn.execute(
+                "DELETE FROM conversations WHERE id = ?", (conversation_id,)
+            )
+            conn.commit()
+            return cur.rowcount > 0
+
+    def delete_by_session(self, sandbox_session_id: str) -> int:
+        with self.db.connect() as conn:
+            cur = conn.execute(
+                "DELETE FROM conversations WHERE sandbox_session_id = ?",
+                (sandbox_session_id,),
+            )
+            conn.commit()
+            return cur.rowcount
+
+    @staticmethod
+    def _row_to_model(row) -> ConversationResponse:
+        return ConversationResponse(
+            id=row["id"],
+            title=row["title"],
+            sandbox_session_id=row["sandbox_session_id"],
+            messages=_json_loads(row["messages"]),
+            created_at=row["created_at"],
+            updated_at=row["updated_at"],
         )
 
 
