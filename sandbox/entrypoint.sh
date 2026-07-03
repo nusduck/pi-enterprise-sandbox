@@ -1,56 +1,121 @@
 #!/bin/bash
-set -e
+set -euo pipefail
 
 # ── Sandbox Service Entrypoint ─────────────────────────────────────
-# This entrypoint runs as root (no USER in Dockerfile) so iptables
-# rules can be applied. It then drops privileges to the sandbox user
-# before starting the application.
+# Runs as root when network isolation is enabled, applies optional
+# iptables policy, then drops privileges to SANDBOX_RUN_AS_USER.
 
-LOG_LEVEL=$(echo "${SANDBOX_LOG_LEVEL:-info}" | tr '[:upper:]' '[:lower:]')
+bool_enabled() {
+    case "${1:-}" in
+        1|true|TRUE|yes|YES|on|ON) return 0 ;;
+        *) return 1 ;;
+    esac
+}
 
-# ── Apply iptables network isolation (defense-in-depth) ───────────
-# Blocks all outbound traffic except loopback and DNS resolution.
-# This is a safety net on top of the Docker internal network isolation.
-# Requires NET_ADMIN and NET_RAW capabilities.
+SANDBOX_HOST="${SANDBOX_HOST:-0.0.0.0}"
+SANDBOX_PORT="${SANDBOX_PORT:-8081}"
+SANDBOX_APP_MODULE="${SANDBOX_APP_MODULE:-sandbox.main:app}"
+SANDBOX_RUN_AS_USER="${SANDBOX_RUN_AS_USER:-sandbox}"
+SANDBOX_LOG_LEVEL="$(echo "${SANDBOX_LOG_LEVEL:-info}" | tr '[:upper:]' '[:lower:]')"
+SANDBOX_UVICORN_WORKERS="${SANDBOX_UVICORN_WORKERS:-1}"
+SANDBOX_IPTABLES_ENABLED="${SANDBOX_IPTABLES_ENABLED:-true}"
+SANDBOX_IPTABLES_DEFAULT_POLICY="${SANDBOX_IPTABLES_DEFAULT_POLICY:-DROP}"
+SANDBOX_ALLOWED_DNS_PORTS="${SANDBOX_ALLOWED_DNS_PORTS:-53}"
+SANDBOX_ALLOWED_TCP_PORTS="${SANDBOX_ALLOWED_TCP_PORTS:-}"
+SANDBOX_ALLOWED_UDP_PORTS="${SANDBOX_ALLOWED_UDP_PORTS:-}"
+SANDBOX_ALLOWED_CIDRS="${SANDBOX_ALLOWED_CIDRS:-}"
+SANDBOX_ALLOW_LOOPBACK="${SANDBOX_ALLOW_LOOPBACK:-true}"
+SANDBOX_ALLOW_ESTABLISHED="${SANDBOX_ALLOW_ESTABLISHED:-true}"
 
-if command -v iptables &> /dev/null; then
-    echo "[entrypoint] Applying iptables network isolation rules..."
+apply_iptables_rules() {
+    if ! bool_enabled "$SANDBOX_IPTABLES_ENABLED"; then
+        echo "[entrypoint] iptables disabled by SANDBOX_IPTABLES_ENABLED=$SANDBOX_IPTABLES_ENABLED"
+        return 0
+    fi
+    if ! command -v iptables &> /dev/null; then
+        echo "[entrypoint] WARNING: iptables not found — skipping network isolation rules."
+        return 0
+    fi
 
-    # Flush any existing rules (safety)
+    echo "[entrypoint] Applying iptables isolation: default=$SANDBOX_IPTABLES_DEFAULT_POLICY dns=$SANDBOX_ALLOWED_DNS_PORTS tcp=${SANDBOX_ALLOWED_TCP_PORTS:-none} udp=${SANDBOX_ALLOWED_UDP_PORTS:-none} cidrs=${SANDBOX_ALLOWED_CIDRS:-none}"
+
     iptables -F OUTPUT 2>/dev/null || true
 
-    # Allow loopback traffic
-    iptables -A OUTPUT -o lo -j ACCEPT
+    if bool_enabled "$SANDBOX_ALLOW_LOOPBACK"; then
+        iptables -A OUTPUT -o lo -j ACCEPT
+    fi
 
-    # Allow established/related connections (so responses come back)
-    iptables -A OUTPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+    if bool_enabled "$SANDBOX_ALLOW_ESTABLISHED"; then
+        iptables -A OUTPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+    fi
 
-    # Allow DNS resolution (UDP and TCP port 53)
-    iptables -A OUTPUT -p udp --dport 53 -j ACCEPT
-    iptables -A OUTPUT -p tcp --dport 53 -j ACCEPT
+    local port cidr
+    IFS=',' read -ra dns_ports <<< "$SANDBOX_ALLOWED_DNS_PORTS"
+    for port in "${dns_ports[@]}"; do
+        port="$(echo "$port" | xargs)"
+        [ -z "$port" ] && continue
+        iptables -A OUTPUT -p udp --dport "$port" -j ACCEPT
+        iptables -A OUTPUT -p tcp --dport "$port" -j ACCEPT
+    done
 
-    # Block all other outbound traffic
-    iptables -A OUTPUT -j DROP
+    IFS=',' read -ra tcp_ports <<< "$SANDBOX_ALLOWED_TCP_PORTS"
+    for port in "${tcp_ports[@]}"; do
+        port="$(echo "$port" | xargs)"
+        [ -z "$port" ] && continue
+        iptables -A OUTPUT -p tcp --dport "$port" -j ACCEPT
+    done
 
+    IFS=',' read -ra udp_ports <<< "$SANDBOX_ALLOWED_UDP_PORTS"
+    for port in "${udp_ports[@]}"; do
+        port="$(echo "$port" | xargs)"
+        [ -z "$port" ] && continue
+        iptables -A OUTPUT -p udp --dport "$port" -j ACCEPT
+    done
+
+    IFS=',' read -ra cidrs <<< "$SANDBOX_ALLOWED_CIDRS"
+    for cidr in "${cidrs[@]}"; do
+        cidr="$(echo "$cidr" | xargs)"
+        [ -z "$cidr" ] && continue
+        iptables -A OUTPUT -d "$cidr" -j ACCEPT
+    done
+
+    iptables -A OUTPUT -j "$SANDBOX_IPTABLES_DEFAULT_POLICY"
     echo "[entrypoint] iptables rules applied successfully."
-else
-    echo "[entrypoint] WARNING: iptables not found — skipping network isolation rules."
-fi
+}
 
-echo "[entrypoint] Starting Sandbox API (MCP embedded) on 0.0.0.0:${SANDBOX_PORT:-8081}"
+build_uvicorn_args() {
+    local args="$(printf '%q' "$SANDBOX_APP_MODULE") --host $(printf '%q' "$SANDBOX_HOST") --port $(printf '%q' "$SANDBOX_PORT") --log-level $(printf '%q' "$SANDBOX_LOG_LEVEL")"
+
+    if [ "${SANDBOX_UVICORN_WORKERS}" != "1" ]; then
+        args="$args --workers $(printf '%q' "$SANDBOX_UVICORN_WORKERS")"
+    fi
+    if bool_enabled "${SANDBOX_UVICORN_RELOAD:-false}"; then
+        args="$args --reload"
+    fi
+    if bool_enabled "${SANDBOX_UVICORN_PROXY_HEADERS:-true}"; then
+        args="$args --proxy-headers"
+    fi
+    if [ -n "${SANDBOX_UVICORN_FORWARDED_ALLOW_IPS:-}" ]; then
+        args="$args --forwarded-allow-ips $(printf '%q' "$SANDBOX_UVICORN_FORWARDED_ALLOW_IPS")"
+    fi
+    if [ -n "${SANDBOX_UVICORN_EXTRA_ARGS:-}" ]; then
+        # Space-delimited advanced escape hatch for operators who need a
+        # Uvicorn flag not exposed above, e.g. "--limit-concurrency 20".
+        args="$args ${SANDBOX_UVICORN_EXTRA_ARGS}"
+    fi
+    echo "$args"
+}
+
+apply_iptables_rules
+
+UVICORN_ARGS="$(build_uvicorn_args)"
+echo "[entrypoint] Starting Sandbox API: uvicorn $UVICORN_ARGS"
 
 # ── Drop privileges to the sandbox user and start the app ──────────
 if [ "$(id -u)" -eq 0 ] && command -v gosu &> /dev/null; then
-    exec gosu sandbox uvicorn sandbox.main:app \
-        --host 0.0.0.0 \
-        --port "${SANDBOX_PORT:-8081}" \
-        --log-level "$LOG_LEVEL"
+    exec gosu "$SANDBOX_RUN_AS_USER" bash -c "exec /app/.venv/bin/uvicorn $UVICORN_ARGS"
 elif [ "$(id -u)" -eq 0 ] && command -v su &> /dev/null; then
-    exec su -s /bin/bash sandbox -c "uvicorn sandbox.main:app --host 0.0.0.0 --port ${SANDBOX_PORT:-8081} --log-level $LOG_LEVEL"
+    exec su -s /bin/bash "$SANDBOX_RUN_AS_USER" -c "exec /app/.venv/bin/uvicorn $UVICORN_ARGS"
 else
-    # Already running as non-root, just start the app
-    exec uvicorn sandbox.main:app \
-        --host 0.0.0.0 \
-        --port "${SANDBOX_PORT:-8081}" \
-        --log-level "$LOG_LEVEL"
+    exec /app/.venv/bin/uvicorn $UVICORN_ARGS
 fi

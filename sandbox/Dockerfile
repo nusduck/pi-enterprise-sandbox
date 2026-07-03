@@ -20,13 +20,15 @@ WORKDIR /app
 # Install uv
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 
-# Copy dependency file first for caching
+# Copy dependency files first for caching
 COPY pyproject.toml /app/
+COPY sandbox/requirements.txt /app/sandbox/requirements.txt
 
-# Create venv and install deps (no dev deps)
+# Create venv and install API deps plus preinstalled workload/tooling deps (no dev deps)
 RUN uv venv /app/.venv && \
     . /app/.venv/bin/activate && \
     uv pip install --no-cache -e ".[test]" && \
+    uv pip install --no-cache -r /app/sandbox/requirements.txt && \
     chown -R sandbox:sandbox /app
 
 # Copy application code

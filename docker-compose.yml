@@ -1,63 +1,87 @@
 services:
   sandbox:
     build:
-      context: .
-      dockerfile: sandbox/Dockerfile
-    image: enterprise-sandbox:latest
-    container_name: pi-enterprise-sandbox
+      context: ${SANDBOX_BUILD_CONTEXT:-.}
+      dockerfile: ${SANDBOX_DOCKERFILE:-sandbox/Dockerfile}
+    image: ${SANDBOX_IMAGE:-enterprise-sandbox:latest}
+    container_name: ${SANDBOX_CONTAINER_NAME:-pi-enterprise-sandbox}
     ports:
-      - "8083:8081"
-      - "8093:8091"
+      - "${SANDBOX_HOST_PORT:-8083}:${SANDBOX_PORT:-8081}"
+      - "${SANDBOX_MCP_HOST_PORT:-8093}:${SANDBOX_MCP_PORT:-8091}"
     volumes:
-      - ./skills:/sandbox/skills:ro
-      - ./workspaces:/sandbox/workspaces
-      - sandbox_data:/sandbox/data
+      - ${SANDBOX_SKILLS_MOUNT:-./skills:/sandbox/skills:ro}
+      - ${SANDBOX_WORKSPACES_MOUNT:-./workspaces:/sandbox/workspaces}
+      - ${SANDBOX_DATA_VOLUME:-sandbox_data}:/sandbox/data
     environment:
-      SANDBOX_HOST: "0.0.0.0"
-      SANDBOX_PORT: 8081
-      SANDBOX_MCP_PORT: 8091
-      SANDBOX_MCP_ENABLED: "true"
-      SANDBOX_LOG_LEVEL: "INFO"
-      LANG: C.UTF-8
-      LC_ALL: C.UTF-8
-    restart: unless-stopped
+      SANDBOX_HOST: ${SANDBOX_HOST:-0.0.0.0}
+      SANDBOX_PORT: ${SANDBOX_PORT:-8081}
+      SANDBOX_MCP_HOST: ${SANDBOX_MCP_HOST:-0.0.0.0}
+      SANDBOX_MCP_PORT: ${SANDBOX_MCP_PORT:-8091}
+      SANDBOX_MCP_ENABLED: ${SANDBOX_MCP_ENABLED:-true}
+      SANDBOX_LOG_LEVEL: ${SANDBOX_LOG_LEVEL:-INFO}
+      SANDBOX_DATABASE_URL: ${SANDBOX_DATABASE_URL:-sqlite:////sandbox/data/sandbox.db}
+      SANDBOX_WORKSPACES_ROOT: ${SANDBOX_WORKSPACES_ROOT:-/sandbox/workspaces}
+      SANDBOX_SKILLS_ROOT: ${SANDBOX_SKILLS_ROOT:-/sandbox/skills}
+      SANDBOX_EXECUTION_TIMEOUT_SECONDS: ${SANDBOX_EXECUTION_TIMEOUT_SECONDS:-120}
+      SANDBOX_MAX_OUTPUT_CHARS: ${SANDBOX_MAX_OUTPUT_CHARS:-50000}
+      SANDBOX_MAX_PROCESS_COUNT: ${SANDBOX_MAX_PROCESS_COUNT:-20}
+      SANDBOX_MAX_CPU_TIME_SECONDS: ${SANDBOX_MAX_CPU_TIME_SECONDS:-300}
+      SANDBOX_MAX_MEMORY_MB: ${SANDBOX_MAX_MEMORY_MB:-512}
+      SANDBOX_MAX_FILE_SIZE_MB: ${SANDBOX_MAX_FILE_SIZE_MB:-50}
+      SANDBOX_WORKSPACE_QUOTA_MB: ${SANDBOX_WORKSPACE_QUOTA_MB:-500}
+      SANDBOX_SESSION_TTL_MINUTES: ${SANDBOX_SESSION_TTL_MINUTES:-30}
+      SANDBOX_CLEANUP_INTERVAL_MINUTES: ${SANDBOX_CLEANUP_INTERVAL_MINUTES:-5}
+      SANDBOX_IPTABLES_ENABLED: ${SANDBOX_IPTABLES_ENABLED:-true}
+      SANDBOX_IPTABLES_DEFAULT_POLICY: ${SANDBOX_IPTABLES_DEFAULT_POLICY:-DROP}
+      SANDBOX_ALLOWED_DNS_PORTS: ${SANDBOX_ALLOWED_DNS_PORTS:-53}
+      SANDBOX_ALLOWED_TCP_PORTS: ${SANDBOX_ALLOWED_TCP_PORTS:-}
+      SANDBOX_ALLOWED_UDP_PORTS: ${SANDBOX_ALLOWED_UDP_PORTS:-}
+      SANDBOX_ALLOWED_CIDRS: ${SANDBOX_ALLOWED_CIDRS:-}
+      SANDBOX_UVICORN_WORKERS: ${SANDBOX_UVICORN_WORKERS:-1}
+      SANDBOX_UVICORN_RELOAD: ${SANDBOX_UVICORN_RELOAD:-false}
+      SANDBOX_UVICORN_PROXY_HEADERS: ${SANDBOX_UVICORN_PROXY_HEADERS:-true}
+      SANDBOX_UVICORN_FORWARDED_ALLOW_IPS: ${SANDBOX_UVICORN_FORWARDED_ALLOW_IPS:-}
+      SANDBOX_UVICORN_EXTRA_ARGS: ${SANDBOX_UVICORN_EXTRA_ARGS:-}
+      LANG: ${SANDBOX_LANG:-C.UTF-8}
+      LC_ALL: ${SANDBOX_LC_ALL:-C.UTF-8}
+    restart: ${SANDBOX_RESTART_POLICY:-unless-stopped}
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8081/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 10s
+      test: ["CMD", "curl", "-f", "http://localhost:${SANDBOX_PORT:-8081}/health"]
+      interval: ${SANDBOX_HEALTH_INTERVAL:-30s}
+      timeout: ${SANDBOX_HEALTH_TIMEOUT:-10s}
+      retries: ${SANDBOX_HEALTH_RETRIES:-3}
+      start_period: ${SANDBOX_HEALTH_START_PERIOD:-10s}
     cap_add:
       - NET_ADMIN
       - NET_RAW
 
   pi-agent:
     build:
-      context: .
-      target: agent-base
-    image: enterprise-pi-agent:latest
-    container_name: pi-enterprise-agent
-    user: "10001:10001"
+      context: ${AGENT_BUILD_CONTEXT:-.}
+      target: ${AGENT_BUILD_TARGET:-agent-base}
+    image: ${AGENT_IMAGE:-enterprise-pi-agent:latest}
+    container_name: ${AGENT_CONTAINER_NAME:-pi-enterprise-agent}
+    user: "${AGENT_USER:-10001:10001}"
     ports:
-      - "3000:3000"
+      - "${AGENT_HOST_PORT:-3000}:${AGENT_PORT:-3000}"
     volumes:
-      - ./skills:/home/pi-agent/.pi/agent/skills:ro
-      - ./config/agent/settings.json:/home/pi-agent/.pi/agent/settings.json:ro
-      - ./config/agent/models.json:/home/pi-agent/.pi/agent/models.json:ro
+      - ${AGENT_SKILLS_MOUNT:-./skills:/home/pi-agent/.pi/agent/skills:ro}
+      - ${AGENT_SETTINGS_MOUNT:-./config/agent/settings.json:/home/pi-agent/.pi/agent/settings.json:ro}
+      - ${AGENT_MODELS_MOUNT:-./config/agent/models.json:/home/pi-agent/.pi/agent/models.json:ro}
     env_file:
-      - .env
+      - ${AGENT_ENV_FILE:-.env}
     environment:
-      SANDBOX_BASE_URL: http://sandbox:8081
-    stdin_open: true
-    tty: true
-    restart: unless-stopped
+      SANDBOX_BASE_URL: ${SANDBOX_BASE_URL:-http://sandbox:8081}
+    stdin_open: ${AGENT_STDIN_OPEN:-true}
+    tty: ${AGENT_TTY:-true}
+    restart: ${AGENT_RESTART_POLICY:-unless-stopped}
     depends_on:
       sandbox:
         condition: service_healthy
 
 networks:
   default:
-    driver: bridge
+    driver: ${COMPOSE_NETWORK_DRIVER:-bridge}
     # NOTE: Outbound network isolation is enforced by iptables rules
     # inside the sandbox container (cap_add: NET_ADMIN). Docker's
     # internal:true is NOT used because it breaks host port publishing.

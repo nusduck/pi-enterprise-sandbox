@@ -1,0 +1,41 @@
+# Runtime libraries preinstalled in the sandbox container for agent-executed code.
+# Keep API service dependencies in ../pyproject.toml; this file is for user workload/tooling deps.
+
+# ── Data Analysis ──────────────────────────────────────────────────
+pandas
+numpy
+scipy
+scikit-learn
+statsmodels
+
+# ── Visualization ──────────────────────────────────────────────────
+matplotlib
+seaborn
+plotly
+wordcloud
+
+# ── Document Processing ────────────────────────────────────────────
+mammoth
+openpyxl
+PyMuPDF
+pdfplumber
+python-docx
+markitdown
+python-pptx
+
+# ── Database ───────────────────────────────────────────────────────
+psycopg2-binary
+pymysql
+redis
+
+# ── HTTP / Web ─────────────────────────────────────────────────────
+requests
+httpx
+beautifulsoup4
+lxml
+
+# ── Utilities ──────────────────────────────────────────────────────
+Pillow
+python-dotenv
+pyyaml
+jinja2
