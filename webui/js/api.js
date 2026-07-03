@@ -77,6 +77,36 @@ export async function checkHealth() {
 }
 
 /**
+ * Fetch sandbox session ID for a conversation.
+ * @param {string} convId
+ * @returns {Promise<string|null>}
+ */
+export async function getSandboxSessionId(convId) {
+  try {
+    const resp = await api(`/api/conversations/${convId}/sandbox`);
+    const data = await resp.json();
+    return data.sandboxSessionId || null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Fetch artifacts (output files) for a sandbox session.
+ * @param {string} sessionId - sandbox session ID
+ * @returns {Promise<Array>} Artifact list
+ */
+export async function fetchArtifacts(sessionId) {
+  try {
+    const resp = await api(`/api/sessions/${sessionId}/artifacts`);
+    const data = await resp.json();
+    return data.artifacts || [];
+  } catch {
+    return [];
+  }
+}
+
+/**
  * Stream a chat message via SSE. Calls the provided callbacks as events arrive.
  *
  * @param {string}   convId   - Active conversation ID
@@ -145,5 +175,5 @@ export async function streamChat(convId, message, signal, callbacks = {}) {
     }
   }
 
-  onDone(fullText.trim());
+  await onDone(fullText.trim());
 }

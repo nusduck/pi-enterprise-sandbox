@@ -97,3 +97,17 @@ export async function handleConversation(req, res, urlParts) {
   res.writeHead(405);
   res.end();
 }
+
+/**
+ * GET /api/conversations/:id/sandbox — return sandbox session ID for this conversation.
+ */
+export async function handleConversationSandbox(req, res, convId) {
+  const conv = conversations.get(convId);
+  if (!conv) {
+    res.writeHead(404, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ error: "Conversation not found" }));
+    return;
+  }
+  res.writeHead(200, { "Content-Type": "application/json" });
+  res.end(JSON.stringify({ sandboxSessionId: conv.sandboxSessionId || null }));
+}

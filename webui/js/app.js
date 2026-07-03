@@ -8,6 +8,8 @@ import {
   fetchMessages,
   checkHealth,
   streamChat,
+  getSandboxSessionId,
+  fetchArtifacts,
 } from "./api.js";
 import { scrollToBottom } from "./utils.js";
 import { ChatUI } from "./chat.js";
@@ -198,8 +200,18 @@ async function sendMessage() {
         chatUI.addSystemMessage(`Error: ${errorMsg}`);
       },
 
-      onDone: (fullText) => {
+      onDone: async (fullText) => {
         chatUI.finalizeStreamingMessage(fullText);
+        // Fetch and display artifacts (output files) after response
+        try {
+          const sid = await getSandboxSessionId(activeConvId);
+          if (sid) {
+            const artifacts = await fetchArtifacts(sid);
+            if (artifacts.length > 0) {
+              chatUI.addArtifactsPanel(artifacts, sid);
+            }
+          }
+        } catch { /* ignore artifact errors */ }
       },
     });
   } catch (err) {

@@ -182,6 +182,72 @@ export class ChatUI {
   }
 
   /**
+   * Add an artifacts panel showing downloadable output files.
+   * @param {Array} artifacts - Array of {id, name, path, mime_type, size}
+   * @param {string} sessionId - Sandbox session ID for download URLs
+   */
+  addArtifactsPanel(artifacts, sessionId) {
+    // Remove any previous artifacts panel to avoid duplicates
+    const existing = this.messagesEl.querySelector(".artifacts-panel");
+    if (existing) existing.remove();
+
+    const div = document.createElement("div");
+    div.className = "msg system artifacts-panel";
+
+    const inner = document.createElement("div");
+    inner.className = "artifacts-inner";
+
+    const heading = document.createElement("div");
+    heading.className = "artifacts-heading";
+    heading.textContent = `📎 Output Files (${artifacts.length})`;
+    inner.appendChild(heading);
+
+    const list = document.createElement("div");
+    list.className = "artifacts-list";
+
+    for (const art of artifacts) {
+      const item = document.createElement("div");
+      item.className = "artifact-item";
+
+      const icon = document.createElement("span");
+      icon.className = "artifact-icon";
+      const mime = art.mime_type || "";
+      if (mime.includes("html")) icon.textContent = "🌐";
+      else if (mime.includes("image")) icon.textContent = "🖼";
+      else if (mime.includes("json")) icon.textContent = "📋";
+      else if (mime.includes("pdf")) icon.textContent = "📄";
+      else if (mime.includes("csv") || mime.includes("text")) icon.textContent = "📝";
+      else icon.textContent = "📎";
+
+      const nameSpan = document.createElement("span");
+      nameSpan.className = "artifact-name";
+      nameSpan.textContent = art.name;
+
+      const sizeSpan = document.createElement("span");
+      sizeSpan.className = "artifact-size";
+      sizeSpan.textContent = art.size ? `${(art.size / 1024).toFixed(1)} KB` : "";
+
+      const dlLink = document.createElement("a");
+      dlLink.className = "artifact-download";
+      dlLink.textContent = "⬇ Download";
+      dlLink.href = `/api/sessions/${sessionId}/files/download?path=${encodeURIComponent(art.path)}`;
+      dlLink.target = "_blank";
+      dlLink.rel = "noopener";
+
+      item.appendChild(icon);
+      item.appendChild(nameSpan);
+      item.appendChild(sizeSpan);
+      item.appendChild(dlLink);
+      list.appendChild(item);
+    }
+
+    inner.appendChild(list);
+    div.appendChild(inner);
+    this.messagesEl.appendChild(div);
+    scrollToBottom();
+  }
+
+  /**
    * Set streaming indicator visibility.
    * @param {boolean} visible
    */

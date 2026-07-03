@@ -11,6 +11,8 @@ import { handleStatus } from "./routes/status.js";
 import { handleConversations, handleConversation } from "./routes/conversations.js";
 import { handleChat } from "./routes/chat.js";
 import { serveStatic } from "./routes/static.js";
+import { handleSessionFiles, handleSessionFileDownload, handleSessionArtifacts } from "./routes/files.js";
+import { handleConversationSandbox } from "./routes/conversations.js";
 
 // ── Server ──────────────────────────────────────────────────────────────
 const server = http.createServer(async (req, res) => {
@@ -40,7 +42,13 @@ const server = http.createServer(async (req, res) => {
     return handleConversations(req, res);
   }
 
-  // /api/conversations/:id ...
+  // GET /api/conversations/:id/sandbox — get sandbox session ID
+  // NOTE: must be BEFORE the catch-all /api/conversations/:id handler below
+  if (parts[0] === "api" && parts[1] === "conversations" && parts[2] && parts[3] === "sandbox" && parts.length === 4 && req.method === "GET") {
+    return handleConversationSandbox(req, res, parts[2]);
+  }
+
+  // /api/conversations/:id ... (catch-all: chat, messages, metadata)
   if (parts[0] === "api" && parts[1] === "conversations" && parts[2]) {
     if (parts[3] === "chat" && parts.length === 4) {
       return handleChat(req, res, parts);
@@ -48,6 +56,28 @@ const server = http.createServer(async (req, res) => {
     // Without sub-path: GET/DELETE/PATCH conversation metadata
     // With /messages: GET messages
     return handleConversation(req, res, parts);
+  }
+
+  // ── Sandbox file/artifact proxy (for WebUI to browse & download outputs) ──
+
+  // GET /api/sessions/:id/files — list files in session workspace
+  if (parts[0] === "api" && parts[1] === "sessions" && parts[3] === "files" && parts.length === 4 && req.method === "GET") {
+    const sessionId = parts[2];
+    const subpath = url.searchParams.get("path") || ".";
+    return handleSessionFiles(req, res, sessionId, subpath);
+  }
+
+  // GET /api/sessions/:id/files/download?path=... — download a file
+  if (parts[0] === "api" && parts[1] === "sessions" && parts[3] === "files" && parts[4] === "download" && req.method === "GET") {
+    const sessionId = parts[2];
+    const filepath = url.searchParams.get("path") || "";
+    return handleSessionFileDownload(req, res, sessionId, filepath);
+  }
+
+  // GET /api/sessions/:id/artifacts — list artifacts
+  if (parts[0] === "api" && parts[1] === "sessions" && parts[3] === "artifacts" && parts.length === 4 && req.method === "GET") {
+    const sessionId = parts[2];
+    return handleSessionArtifacts(req, res, sessionId);
   }
 
   // ── Static files ──

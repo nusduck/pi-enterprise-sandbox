@@ -10,7 +10,7 @@ from typing import Any
 # we never forward the full os.environ to subprocesses.
 _BASE_SAFE_ENV: dict[str, str] = {
     "HOME": "",  # overridden per-execution
-    "PATH": "/usr/local/bin:/usr/bin:/bin",
+    "PATH": "/app/.venv/bin:/usr/local/bin:/usr/bin:/bin",
     "LANG": "C.UTF-8",
     "LC_ALL": "C.UTF-8",
     "PYTHONIOENCODING": "utf-8",

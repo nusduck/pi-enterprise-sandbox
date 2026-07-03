@@ -2,14 +2,15 @@
  * Pi Agent WebUI — Agent Factory
  *
  * Creates the Pi model config and sandbox tool definitions.
+ * Tools are registered via agent.setTools() — NOT via Extension,
+ * because the WebUI uses @mariozechner/pi-agent-core which doesn't
+ * support the Extension loading mechanism.
  */
 import { Type } from "@sinclair/typebox";
-import { Agent } from "@mariozechner/pi-agent-core";
 import {
   MODEL_ID,
   LLMIO_API_KEY,
   resolveBaseUrl,
-  SYSTEM_PROMPT,
 } from "../config.js";
 import { sandboxFetch, isBlocked, toolContent } from "./sandbox-client.js";
 
@@ -102,25 +103,20 @@ export function createSandboxTools(sandboxSessionId, getTraceId = () => null) {
         new_string: Type.String({ description: "Replacement text" }),
       }),
       async execute(_toolCallId, params) {
-        // Read current content
         const q = new URLSearchParams({ path: params.path });
         const file = await sandboxFetch(`/sessions/${sid}/files/read?${q}`, { traceId: getTraceId() });
         const content = file.content || "";
-
-        // Perform replacement
         const idx = content.lastIndexOf(params.old_string);
         if (idx === -1) {
           throw new Error(`old_string not found in ${params.path}. Make sure it matches exactly.`);
         }
         const newContent =
           content.slice(0, idx) + params.new_string + content.slice(idx + params.old_string.length);
-
         await sandboxFetch(`/sessions/${sid}/files/write`, {
           traceId: getTraceId(),
           method: "POST",
           body: JSON.stringify({ path: params.path, content: newContent }),
         });
-
         const diffLines = params.new_string.split("\n").length;
         return {
           content: toolContent(`Replaced "${params.old_string}" with "${params.new_string}" in ${params.path} (${diffLines} lines changed)`),
@@ -138,7 +134,6 @@ export function createSandboxTools(sandboxSessionId, getTraceId = () => null) {
         description: Type.Optional(Type.String({ description: "Short description for audit" })),
       }),
       async execute(_toolCallId, params) {
-        // Pre-flight policy check
         const blocked = isBlocked(params.command);
         if (blocked) {
           return {
@@ -147,31 +142,66 @@ export function createSandboxTools(sandboxSessionId, getTraceId = () => null) {
             isError: true,
           };
         }
-
         const body = { command: params.command };
         if (params.timeout) body.timeout = params.timeout;
-
         const result = await sandboxFetch(`/sessions/${sid}/executions/command`, {
           traceId: getTraceId(),
           method: "POST",
           body: JSON.stringify(body),
         });
-
         const isError = result.exit_code != null && result.exit_code !== 0;
         const output = [
           result.stdout_preview ? `STDOUT:\n${result.stdout_preview}` : "",
           result.stderr_preview ? `STDERR:\n${result.stderr_preview}` : "",
         ].filter(Boolean).join("\n\n") || "(no output)";
-
         return {
           content: toolContent(output),
-          details: {
-            exit_code: result.exit_code,
-            duration_ms: result.duration_ms,
-            truncated: result.truncated,
-          },
+          details: { exit_code: result.exit_code, duration_ms: result.duration_ms, truncated: result.truncated },
           isError,
         };
+      },
+    },
+    {
+      name: "skill_view",
+      label: "View skill",
+      description: "Load a workflow skill by name to get step-by-step guidance for common tasks (document parsing, data analysis, SQL queries). Use this when the user asks about a skill or when a task matches a known pattern.",
+      parameters: Type.Object({
+        name: Type.String({ description: "Skill name (e.g. 'document-parser', 'data-analysis', 'sql-query')" }),
+        file_path: Type.Optional(Type.String({ description: "Optional file within the skill (e.g. 'scripts/parse.py')" })),
+      }),
+      async execute(_toolCallId, params) {
+        const SKILLS_DIR = "/home/pi-agent/.pi/agent/skills";
+        const { name, file_path } = params;
+        if (!/^[a-zA-Z0-9_-]+$/.test(name)) {
+          return { content: `Invalid skill name: "${name}"`, isError: true };
+        }
+        const { readFileSync, existsSync, readdirSync } = await import("node:fs");
+        const path = await import("node:path");
+        const skillDir = path.join(SKILLS_DIR, name);
+        if (!existsSync(skillDir)) {
+          let available = [];
+          try {
+            available = readdirSync(SKILLS_DIR, { withFileTypes: true })
+              .filter((d) => d.isDirectory())
+              .map((d) => d.name);
+          } catch { /* ignore */ }
+          return {
+            content: `Skill "${name}" not found. Available skills: ${available.join(", ") || "(none)"}`,
+            isError: true,
+          };
+        }
+        const targetPath = file_path
+          ? path.join(skillDir, file_path)
+          : path.join(skillDir, "SKILL.md");
+        if (!targetPath.startsWith(skillDir)) {
+          return { content: "Forbidden: path traversal detected", isError: true };
+        }
+        try {
+          const content = readFileSync(targetPath, "utf-8");
+          return { content };
+        } catch (err) {
+          return { content: `Failed to read: ${err.message}`, isError: true };
+        }
       },
     },
   ];

@@ -54,7 +54,7 @@ export const SYSTEM_PROMPT = [
   "8. After completing a task, summarize what was done and where files were saved.",
   "",
   "## Skills",
-  "Skills are available for reference and can be used to guide your work. You can invoke skill_view() to load proven workflows for common tasks.",
+  "Skills are available for reference — use `skill_view(name)` to load proven workflows for common tasks (document parsing, data analysis, SQL queries).",
 ].join("\n");
 
 // ── MIME types ───────────────────────────────────────────────────────────

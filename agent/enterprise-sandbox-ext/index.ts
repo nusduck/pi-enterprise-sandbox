@@ -423,4 +423,70 @@ export default function (pi: ExtensionAPI) {
       }
     },
   });
+
+  // ── Tool: skill_view ────────────────────────────────────────────
+
+  pi.registerTool({
+    name: "skill_view",
+    description:
+      "Load a workflow skill by name to get step-by-step guidance for common tasks (document parsing, data analysis, SQL queries). Use this when the user asks about a skill or when a task matches a known pattern.",
+    parameters: Type.Object({
+      name: Type.String({
+        description: "Skill name (e.g. 'document-parser', 'data-analysis', 'sql-query')",
+      }),
+      file_path: Type.Optional(
+        Type.String({
+          description: "Optional file within the skill (e.g. 'scripts/parse.py')",
+        }),
+      ),
+    }),
+    promptGuidelines: [
+      "Use skill_view to load workflow guidance when a user asks about a skill or when you suspect a skill exists for the current task.",
+      "Example: skill_view({ name: 'document-parser' }) loads the document parsing skill.",
+    ],
+    async execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const fs = require("node:fs");
+      const path = require("node:path");
+
+      const SKILLS_DIR = "/home/pi-agent/.pi/agent/skills";
+      const { name, file_path } = params;
+
+      // Validate skill name (prevent path traversal)
+      if (!/^[a-zA-Z0-9_-]+$/.test(name)) {
+        return { content: toolContent(`Invalid skill name: "${name}"`) };
+      }
+
+      const skillDir = path.join(SKILLS_DIR, name);
+      if (!fs.existsSync(skillDir)) {
+        let available: string[] = [];
+        try {
+          available = fs
+            .readdirSync(SKILLS_DIR, { withFileTypes: true })
+            .filter((d: any) => d.isDirectory())
+            .map((d: any) => d.name);
+        } catch { /* ignore */ }
+        return {
+          content: toolContent(
+            `Skill "${name}" not found. Available skills: ${available.join(", ") || "(none)"}`,
+          ),
+        };
+      }
+
+      const targetPath = file_path
+        ? path.join(skillDir, file_path)
+        : path.join(skillDir, "SKILL.md");
+
+      if (!targetPath.startsWith(skillDir)) {
+        return { content: toolContent("Forbidden: path traversal detected") };
+      }
+
+      try {
+        const content = fs.readFileSync(targetPath, "utf-8");
+        return { content: toolContent(content) };
+      } catch (err: any) {
+        return { content: toolContent(`Failed to read: ${err.message}`) };
+      }
+    },
+  });
 }

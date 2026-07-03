@@ -110,18 +110,35 @@ class ExecutionManager:
             })
 
             # Auto-register artifacts on successful execution
-            if status == ExecutionStatus.SUCCESS and output_dir.exists():
-                for f in output_dir.iterdir():
-                    if f.is_file():
-                        mime_type, _ = mimetypes.guess_type(str(f))
-                        artifact_manager.register(
-                            session_id=session_id,
-                            name=f.name,
-                            path=str(f.relative_to(Path(workspace_path))),
-                            mime_type=mime_type or "application/octet-stream",
-                            source_execution_id=execution_id,
-                            size=f.stat().st_size,
-                        )
+            if status == ExecutionStatus.SUCCESS:
+                # 1. Register files from execution-specific output dir
+                if output_dir.exists():
+                    for f in output_dir.iterdir():
+                        if f.is_file():
+                            mime_type, _ = mimetypes.guess_type(str(f))
+                            artifact_manager.register(
+                                session_id=session_id,
+                                name=f.name,
+                                path=str(f.relative_to(Path(workspace_path))),
+                                mime_type=mime_type or "application/octet-stream",
+                                source_execution_id=execution_id,
+                                size=f.stat().st_size,
+                            )
+                # 2. Also scan workspace-root output/ for files created
+                #    outside the execution-specific subdirectory
+                ws_output_dir = Path(workspace_path) / "output"
+                if ws_output_dir.exists():
+                    for f in ws_output_dir.iterdir():
+                        if f.is_file() and f.parent != output_dir:
+                            mime_type, _ = mimetypes.guess_type(str(f))
+                            artifact_manager.register(
+                                session_id=session_id,
+                                name=f.name,
+                                path=str(f.relative_to(Path(workspace_path))),
+                                mime_type=mime_type or "application/octet-stream",
+                                source_execution_id=execution_id,
+                                size=f.stat().st_size,
+                            )
         except Exception as exc:
             entry.update({
                 "status": ExecutionStatus.FAILED,
@@ -210,18 +227,35 @@ class ExecutionManager:
             })
 
             # Auto-register artifacts on successful execution
-            if status == ExecutionStatus.SUCCESS and output_dir.exists():
-                for f in output_dir.iterdir():
-                    if f.is_file():
-                        mime_type, _ = mimetypes.guess_type(str(f))
-                        artifact_manager.register(
-                            session_id=session_id,
-                            name=f.name,
-                            path=str(f.relative_to(Path(workspace_path))),
-                            mime_type=mime_type or "application/octet-stream",
-                            source_execution_id=execution_id,
-                            size=f.stat().st_size,
-                        )
+            if status == ExecutionStatus.SUCCESS:
+                # 1. Register files from execution-specific output dir
+                if output_dir.exists():
+                    for f in output_dir.iterdir():
+                        if f.is_file():
+                            mime_type, _ = mimetypes.guess_type(str(f))
+                            artifact_manager.register(
+                                session_id=session_id,
+                                name=f.name,
+                                path=str(f.relative_to(Path(workspace_path))),
+                                mime_type=mime_type or "application/octet-stream",
+                                source_execution_id=execution_id,
+                                size=f.stat().st_size,
+                            )
+                # 2. Also scan workspace-root output/ for files created
+                #    outside the execution-specific subdirectory
+                ws_output_dir = Path(workspace_path) / "output"
+                if ws_output_dir.exists():
+                    for f in ws_output_dir.iterdir():
+                        if f.is_file() and f.parent != output_dir:
+                            mime_type, _ = mimetypes.guess_type(str(f))
+                            artifact_manager.register(
+                                session_id=session_id,
+                                name=f.name,
+                                path=str(f.relative_to(Path(workspace_path))),
+                                mime_type=mime_type or "application/octet-stream",
+                                source_execution_id=execution_id,
+                                size=f.stat().st_size,
+                            )
         except Exception as exc:
             entry.update({
                 "status": ExecutionStatus.FAILED,
@@ -305,18 +339,35 @@ class ExecutionManager:
             })
 
             # Auto-register artifacts on successful execution
-            if status == ExecutionStatus.SUCCESS and output_dir.exists():
-                for f in output_dir.iterdir():
-                    if f.is_file():
-                        mime_type, _ = mimetypes.guess_type(str(f))
-                        artifact_manager.register(
-                            session_id=session_id,
-                            name=f.name,
-                            path=str(f.relative_to(Path(workspace_path))),
-                            mime_type=mime_type or "application/octet-stream",
-                            source_execution_id=execution_id,
-                            size=f.stat().st_size,
-                        )
+            if status == ExecutionStatus.SUCCESS:
+                # 1. Register files from execution-specific output dir
+                if output_dir.exists():
+                    for f in output_dir.iterdir():
+                        if f.is_file():
+                            mime_type, _ = mimetypes.guess_type(str(f))
+                            artifact_manager.register(
+                                session_id=session_id,
+                                name=f.name,
+                                path=str(f.relative_to(Path(workspace_path))),
+                                mime_type=mime_type or "application/octet-stream",
+                                source_execution_id=execution_id,
+                                size=f.stat().st_size,
+                            )
+                # 2. Also scan workspace-root output/ for files created
+                #    outside the execution-specific subdirectory
+                ws_output_dir = Path(workspace_path) / "output"
+                if ws_output_dir.exists():
+                    for f in ws_output_dir.iterdir():
+                        if f.is_file() and f.parent != output_dir:
+                            mime_type, _ = mimetypes.guess_type(str(f))
+                            artifact_manager.register(
+                                session_id=session_id,
+                                name=f.name,
+                                path=str(f.relative_to(Path(workspace_path))),
+                                mime_type=mime_type or "application/octet-stream",
+                                source_execution_id=execution_id,
+                                size=f.stat().st_size,
+                            )
         except Exception as exc:
             entry.update({
                 "status": ExecutionStatus.FAILED,

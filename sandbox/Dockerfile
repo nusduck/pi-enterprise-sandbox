@@ -29,6 +29,7 @@ RUN uv venv /app/.venv && \
     . /app/.venv/bin/activate && \
     uv pip install --no-cache -e ".[test]" && \
     uv pip install --no-cache -r /app/sandbox/requirements.txt && \
+    uv pip install --no-cache pip && \
     chown -R sandbox:sandbox /app
 
 # Copy application code
