@@ -1,182 +1,254 @@
 # Pi Enterprise Sandbox Runtime
 
-> **Pi 负责 Agent 内核，Sandbox 负责企业级安全执行数据面，Enterprise Tool Adapter 负责将 Pi 的高风险工具调用路由到 Sandbox。**
+> Enterprise-grade secure execution sandbox with AI agent integration, approval workflows, and a WebUI chat interface.
+
+[![Python 3.11+](https://img.shields.io/badge/Python-3.11%2B-blue)]()
+[![FastAPI](https://img.shields.io/badge/FastAPI-0.115%2B-009688)]()
+[![Node.js](https://img.shields.io/badge/Node.js-20%2B-339933)]()
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow)]()
+
+## Features
+
+- **🔒 Secure Sandbox** — Isolated execution environment with iptables network isolation, ulimit resource limits, and non-root process execution
+- **💬 WebUI Chat** — ChatGPT-style interface with SSE streaming, tool visualization, dark/light themes
+- **🛡️ Approval Workflow** — High-risk commands require manual approval; configurable timeout auto-rejects
+- **🔗 Trace ID** — End-to-end tracing across sessions, executions, and audit logs via `X-Trace-Id`
+- **💾 SQLite Persistence** — WAL mode database for session, execution, artifact, and audit log storage
+- **📁 File Management** — Read, write, list, preview, and download files within session workspaces
+- **🎨 Artifact Management** — Register, list, and download execution outputs
+- **📊 Prometheus Metrics** — `/metrics` endpoint for monitoring
+- **🔌 MCP Server** — External Protocol adapter for Dify/Hi-Agent integration (port 8091)
+- **🧩 Built-in Skills** — Document parsing, data analysis, SQL query skills
+- **🐳 Docker Support** — Multi-stage Docker build, docker compose orchestration
 
 ## Architecture
 
 ```
-┌──────────────────────────────┐
-│  Pi Agent Runtime            │
-│  - Agent Loop / Tool Calling │
-│  - Skill Progressive Display │
-├──────────────────────────────┤
-│  Enterprise Tool Adapter     │  ← replaces Pi tool executors
-│  - Policy Check              │
-│  - SandboxClient             │
-├──────────────────────────────┤
-│  Sandbox Service (FastAPI)   │  ← HTTP API (port 8081)
-│  - Session/Workspace/Exec    │
-│  - File/Artifact Management  │
-│  - Resource/Network Policy   │
-│  - Audit Logging / Metrics   │
-├──────────────────────────────┤
-│  Sandbox MCP Server          │  ← MCP (port 8091)
-│  - Dify / Hi-Agent / Ext.    │
-└──────────────────────────────┘
+┌──────────────────────────────────────────────────────────┐
+│                     WebUI (port 3000)                     │
+│    Server: routes/ + services/   Client: js/ ES modules   │
+├──────────────────────────────────────────────────────────┤
+│                    Sandbox Service (port 8081)            │
+│    Session · Workspace · Execution · File · Artifact      │
+│    Audit Logging · Approval Workflow · Resource Limits    │
+│    SQLite Persistence (WAL) · Trace ID Middleware         │
+├──────────────────────────────────────────────────────────┤
+│              MCP Adapter (port 8091) — Optional           │
+│         External protocol for low-code platforms          │
+├──────────────────────────────────────────────────────────┤
+│              Docker Container (sandbox)                   │
+│    iptables DROP · ulimit · non-root · path security      │
+└──────────────────────────────────────────────────────────┘
 ```
 
-**Key design decisions (per final design doc):**
-
-| Decision | Choice |
-|---|---|
-| Pi→Sandbox protocol | **HTTP API** (not MCP) |
-| External exposure | **MCP Server** (for Dify/Hi-Agent) |
-| Skill mechanism | Standard Pi progressive disclosure |
-| File access | Always via Sandbox API (no direct mount) |
-| Security boundary | Sandbox Service, not Pi |
-| Session isolation | One execution at a time per session |
+**[Full Architecture Documentation →](docs/architecture.md)**
 
 ## Quick Start
 
 ### Prerequisites
 
 - Docker & Docker Compose
-- Python 3.11+ (for local sandbox development)
+- Git
 
-### Docker Deployment (recommended)
+### One-Command Start
 
 ```bash
+git clone <repo-url>
+cd pi-sandbox
+cp .env.example .env
+# Edit .env with your LLMIO_API_KEY
 docker compose up --build
 ```
 
-This starts:
-- **sandbox** (port 8081 HTTP, 8091 MCP) — secure execution plane
-- **pi-agent** (no exposed ports) — Pi Agent with Enterprise Sandbox Extension
+Open **http://localhost:3000** in your browser.
 
-### Using Pi Agent with Sandbox
-
-The agent container has Pi Agent pre-installed with the Enterprise Sandbox Extension. The extension automatically replaces Pi's built-in `read`/`write`/`edit`/`bash` tools to proxy through the Sandbox.
+### Verify
 
 ```bash
-# Open an interactive Pi session (with sandbox-proxied tools)
-docker exec -it pi-enterprise-agent pi
+# Sandbox health
+curl http://localhost:8083/health
 
-# Check sandbox status from within Pi
-#   /sandbox-status
-
-# Reset sandbox session
-#   /sandbox-reset
+# WebUI status
+curl http://localhost:3000/api/status
 ```
-
-### Local Sandbox Development
-
-```bash
-# Install
-pip install -e ".[test]"
-
-# Start Sandbox Service only
-uvicorn sandbox.main:app --port 8081 --reload
-```
-
-## API Overview
-
-### Sessions
-
-```bash
-curl -X POST http://localhost:8081/sessions \
-  -H 'Content-Type: application/json' \
-  -d '{"caller_id": "pi-agent"}'
-```
-
-### Execution
-
-```bash
-# Python
-curl -X POST http://localhost:8081/sessions/{id}/executions/python \
-  -H 'Content-Type: application/json' \
-  -d '{"code": "print(\"hello sandbox\")"}'
-
-# Command
-curl -X POST http://localhost:8081/sessions/{id}/executions/command \
-  -H 'Content-Type: application/json' \
-  -d '{"command": "ls -la"}'
-```
-
-### Files
-
-```bash
-# Write
-curl -X POST http://localhost:8081/sessions/{id}/files/write \
-  -H 'Content-Type: application/json' \
-  -d '{"path": "test.txt", "content": "hello"}'
-
-# Read
-curl "http://localhost:8081/sessions/{id}/files/read?path=test.txt"
-```
-
-### Health
-
-```bash
-curl http://localhost:8081/health
-curl http://localhost:8081/ready
-curl http://localhost:8081/metrics
-```
-
-## MCP Tools
-
-Exposed on port 8091 for external low-code platforms:
-
-- `create_session` / `close_session`
-- `run_python` / `run_command_limited`
-- `read_file` / `write_file` / `preview_file` / `download_file`
-- `list_files` / `get_artifacts`
-
-Authentication via `X-Caller-Id` + `X-Auth-Token` headers.
 
 ## Project Structure
 
 ```
 pi-sandbox/
-├── sandbox/          # Sandbox Service (FastAPI)
-│   ├── main.py       # App entry, routers registration
-│   ├── config.py     # Settings (env-based)
-│   ├── models.py     # Pydantic models
-│   ├── routers/      # API routers
-│   ├── services/     # Business logic
-│   ├── security/     # Path validation, safe_env
-│   ├── utils/        # Resource limits
-│   └── mcp/          # MCP Server Adapter
-├── agent/            # Agent-side SDK + Pi Extension
-│   ├── sandbox_client.py       # Python HTTP client for Sandbox
-│   ├── tool_adapter.py         # Pi tool routing adapter
-│   ├── tool_policy.py          # Policy checker
-│   └── enterprise-sandbox-ext/ # Pi Extension (TypeScript)
-│       ├── package.json
-│       └── index.ts            # Replaces read/write/edit/bash → Sandbox
-├── skills/           # Read-only skills
-├── tests/            # Test suite
-├── Dockerfile        # Multi-stage build
+├── sandbox/              # FastAPI Sandbox Service
+│   ├── main.py           # App entry, middleware, routers
+│   ├── config.py         # Settings (env-based)
+│   ├── models.py         # Pydantic request/response models
+│   ├── database.py       # SQLite persistence (WAL)
+│   ├── repositories.py   # Data access layer
+│   ├── trace.py          # Trace ID context
+│   ├── routers/          # API route handlers
+│   │   ├── sessions.py   # Session CRUD
+│   │   ├── executions.py # Code/command execution
+│   │   ├── files.py      # File operations
+│   │   ├── artifacts.py  # Artifact management
+│   │   ├── approvals.py  # Approval workflow
+│   │   ├── traces.py     # Trace query
+│   │   ├── health.py     # Health/readiness/metrics
+│   │   └── mcp_router.py # MCP adapter
+│   ├── services/         # Business logic
+│   │   ├── session_manager.py
+│   │   ├── execution_manager.py
+│   │   ├── file_manager.py
+│   │   ├── artifact_manager.py
+│   │   ├── workspace_manager.py
+│   │   ├── audit_logger.py
+│   │   ├── policy_checker.py
+│   │   └── approval_manager.py
+│   ├── security/         # Path validation, safe env
+│   ├── mcp/              # MCP server adapter
+│   └── utils/            # Resource limits
+├── webui/                # WebUI (Node.js)
+│   ├── server.js         # Entry point (thin HTTP router)
+│   ├── config.js         # Configuration
+│   ├── services/         # Backend services
+│   │   ├── sandbox-client.js
+│   │   ├── conversation-manager.js
+│   │   └── agent-factory.js
+│   ├── routes/           # Route handlers
+│   │   ├── status.js
+│   │   ├── conversations.js
+│   │   ├── chat.js
+│   │   └── static.js
+│   ├── js/               # Frontend ES modules
+│   │   ├── app.js        # Main entry
+│   │   ├── api.js        # API client
+│   │   ├── chat.js       # Chat UI
+│   │   ├── conversations.js # Conversation list
+│   │   └── utils.js      # Utilities
+│   ├── index.html        # Main page
+│   └── style.css         # Dark/light theme
+├── agent/                # Agent SDK + Pi Extension
+│   ├── sandbox_client.py
+│   ├── tool_adapter.py
+│   ├── tool_policy.py
+│   └── enterprise-sandbox-ext/
+├── skills/               # Built-in skills
+│   ├── document-parser/
+│   ├── data-analysis/
+│   └── sql-query/
+├── tests/                # Test suite (14 test files)
+├── docs/                 # Documentation
+│   ├── architecture.md
+│   ├── api.md
+│   ├── deployment.md
+│   ├── development.md
+│   └── webui.md
+├── config/               # Runtime config
+├── Dockerfile
 ├── docker-compose.yml
 └── pyproject.toml
 ```
 
-## V1 Scope (Implemented)
+## API Overview
 
-- [x] Sandbox Service with Session/Workspace/Execution management
-- [x] ToolPolicyChecker (low/medium/high risk levels)
-- [x] Path escape protection (resolve + is_relative_to)
-- [x] Non-root execution + safe_env
-- [x] stdout/stderr preview limits
-- [x] Serial execution per session
-- [x] Resource limits (timeout, output size)
-- [x] File API (read/write/list/preview/download)
-- [x] Artifact API (register/list/download)
-- [x] Audit logging
-- [x] Prometheus metrics (/metrics)
-- [x] Health / Readiness checks
-- [x] MCP Server Adapter
-- [x] Docker multi-stage build
-- [x] EnterpriseToolAdapter with policy pre-check
-- [x] SandboxClient SDK
-- [x] Pi Extension (TypeScript): replaces read/write/edit/bash via Sandbox
-- [x] Pi /sandbox-status and /sandbox-reset slash commands
+### Sandbox Service (port 8081)
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `POST` | `/sessions` | Create sandbox session |
+| `GET` | `/sessions/{id}` | Get session details |
+| `DELETE` | `/sessions/{id}` | Close session |
+| `POST` | `/sessions/{id}/executions/python` | Run Python code |
+| `POST` | `/sessions/{id}/executions/command` | Run shell command |
+| `POST` | `/sessions/{id}/executions/approval-check` | Check tool risk |
+| `POST` | `/approve` | Approve/reject execution |
+| `POST` | `/sessions/{id}/files/write` | Write file |
+| `GET` | `/sessions/{id}/files/read` | Read file |
+| `GET` | `/sessions/{id}/files` | List files |
+| `POST` | `/sessions/{id}/artifacts/register` | Register artifact |
+| `GET` | `/sessions/{id}/artifacts` | List artifacts |
+| `GET` | `/traces/{trace_id}` | Get trace chain |
+| `GET` | `/health` | Health check |
+| `GET` | `/metrics` | Prometheus metrics |
+
+### WebUI API (port 3000)
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `GET` | `/api/conversations` | List conversations |
+| `POST` | `/api/conversations` | Create conversation |
+| `DELETE` | `/api/conversations/{id}` | Delete conversation |
+| `PATCH` | `/api/conversations/{id}` | Rename conversation |
+| `GET` | `/api/conversations/{id}/messages` | Get message history |
+| `POST` | `/api/conversations/{id}/chat` | Send message (SSE stream) |
+| `GET` | `/api/status` | Server + sandbox status |
+
+**[Full API Reference →](docs/api.md)**
+
+## Configuration
+
+All configuration is via environment variables. See [deployment guide](docs/deployment.md#environment-variables-reference) for the complete reference.
+
+Key variables:
+
+| Variable | Default | Description |
+|---|---|---|
+| `LLMIO_API_KEY` | — | **Required** — API key for the LLM |
+| `LLMIO_BASE_URL` | — | LLM API base URL |
+| `PI_MODEL` | `deepseek-v4-flash` | Model to use |
+| `SANDBOX_PORT` | `8081` | Sandbox service port |
+| `SANDBOX_HOST_PORT` | `8083` | Host port for sandbox |
+| `SANDBOX_LOG_LEVEL` | `INFO` | Log level |
+| `SANDBOX_DATABASE_URL` | `sqlite:////sandbox/data/sandbox.db` | DB URL |
+| `SANDBOX_SESSION_TTL_MINUTES` | `30` | Session idle timeout |
+
+## Testing
+
+```bash
+# Run all tests
+uv run pytest -q
+
+# With coverage
+uv run pytest --cov=sandbox --cov-report=term-missing
+
+# Specific test areas
+uv run pytest tests/test_integration.py -v  # End-to-end API tests
+uv run pytest tests/test_webui_api.py -v    # WebUI API tests
+uv run pytest tests/test_approval.py -v     # Approval workflow
+uv run pytest tests/test_persistence.py -v  # Database persistence
+```
+
+## Documentation Index
+
+| Document | Description |
+|---|---|
+| [Architecture](docs/architecture.md) | Design decisions, data flows, security model |
+| [API Reference](docs/api.md) | Full API documentation with examples |
+| [Deployment Guide](docs/deployment.md) | Docker, production config, troubleshooting |
+| [Development Guide](docs/development.md) | Local setup, workflows, testing, coding standards |
+| [WebUI Guide](docs/webui.md) | Frontend architecture, SSE events, theming, extending |
+| [Contributing](CONTRIBUTING.md) | How to contribute, code style, PR checklist |
+| [Changelog](CHANGELOG.md) | Version history and release notes |
+
+## Roadmap
+
+- [x] Sandbox Service with session/workspace/execution management
+- [x] Security: path validation, non-root, iptables, command blocking
+- [x] Resource limits: timeout, output size, memory, CPU, process count
+- [x] File API: read, write, list, preview, download
+- [x] Artifact management
+- [x] Audit logging with trace IDs
+- [x] Prometheus metrics
+- [x] Health/readiness checks
+- [x] MCP server adapter
+- [x] SQLite persistence (WAL mode)
+- [x] Approval workflow for high-risk tools
+- [x] WebUI chat interface with SSE streaming
+- [x] Frontend/backend separation with modular architecture
+- [x] Light/dark theme support
+- [x] Built-in skills (document parser, data analysis, SQL query)
+- [x] Comprehensive documentation
+- [x] WebUI API test suite
+- [ ] Authentication/authorization (JWT or OAuth2)
+- [ ] User management and multi-tenancy
+- [ ] PostgreSQL support for high-availability deployments
+- [ ] Rate limiting per session
+- [ ] File upload through WebUI
+- [ ] Real-time workspace file browser in WebUI

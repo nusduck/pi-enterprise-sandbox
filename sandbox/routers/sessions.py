@@ -53,6 +53,12 @@ def get_session(session_id: str):
     return session
 
 
+@router.get("", response_model=list[SessionResponse])
+def list_sessions():
+    """List all active sessions."""
+    return session_manager.list_active()
+
+
 @router.delete("/{session_id}", status_code=204)
 def delete_session(session_id: str):
     session = session_manager.get(session_id)
@@ -60,5 +66,6 @@ def delete_session(session_id: str):
         raise HTTPException(status_code=404, detail="Session not found")
     session_manager.update_status(session_id, SessionStatus.COMPLETED)
     workspace_manager.remove_workspace(session_id)
+    session_manager.delete(session_id)
     audit_logger.log_session_lifecycle(session_id, "deleted")
     return

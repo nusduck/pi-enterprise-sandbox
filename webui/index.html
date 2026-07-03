@@ -1,8 +1,9 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="zh-CN" data-theme="dark">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#212121">
   <title>Pi Agent · Chat</title>
   <link rel="stylesheet" href="/style.css">
 </head>
@@ -20,7 +21,10 @@
         <span class="dot" id="agentDot"></span>
         <span id="agentStatus">connecting…</span>
       </div>
-      <button class="sidebar-toggle" id="btnToggleSidebar" title="Close sidebar">◀</button>
+      <div class="sidebar-actions">
+        <button class="sidebar-toggle" id="btnToggleSidebar" title="Close sidebar">◀</button>
+        <button class="sidebar-toggle" id="btnThemeToggle" title="Toggle theme">🌓</button>
+      </div>
     </div>
   </aside>
 
@@ -49,7 +53,15 @@
           <span>🔒 Sandbox-isolated</span>
         </div>
       </div>
-      <div id="messages"></div>
+      <div id="messages">
+        <!-- skeleton loading placeholder -->
+        <div class="skeleton-msg" id="skeletonMsgs" style="display:none">
+          <div class="skeleton skeleton-avatar"></div>
+          <div class="skeleton skeleton-line w-60"></div>
+          <div class="skeleton skeleton-line w-80"></div>
+          <div class="skeleton skeleton-line w-40"></div>
+        </div>
+      </div>
       <div id="streamingIndicator" class="streaming" style="display:none">
         <span class="dot-pulse"></span> Pi is thinking…
       </div>
@@ -59,12 +71,14 @@
     <footer class="input-area">
       <div class="input-row">
         <textarea id="promptInput" rows="1" placeholder="Ask Pi to do something…" spellcheck="false"></textarea>
-        <button id="btnSend" class="send-btn" disabled>→</button>
+        <button id="btnSend" class="send-btn" disabled><kbd>↵</kbd></button>
       </div>
-      <div class="input-hint">Sandbox-isolated · read/write/edit/bash tools proxied</div>
+      <div class="input-hint">
+        Sandbox-isolated · <kbd>Enter</kbd> to send · <kbd>Shift+Enter</kbd> newline
+      </div>
     </footer>
   </main>
 
-  <script src="/app.js"></script>
+  <script type="module" src="/js/app.js"></script>
 </body>
 </html>
