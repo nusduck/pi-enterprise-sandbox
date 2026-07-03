@@ -24,8 +24,9 @@ const CONVERSATIONS_FILE = path.join(DATA_DIR, 'conversations.json');
 // Expose LLMIO config to frontend at runtime (not baked into Vite bundle)
 const FRONTEND_CONFIG = {
   modelId: process.env.VITE_MODEL_ID || process.env.MODEL_ID || 'deepseek-v4-flash',
-  llmioBaseUrl: process.env.VITE_LLMIO_BASE_URL || process.env.LLMIO_BASE_URL || '',
-  llmioApiKey: process.env.VITE_LLMIO_API_KEY || process.env.LLMIO_API_KEY || '',
+  // Proxy LLM through our server to avoid CORS issues in browser
+  llmioBaseUrl: '/api/proxy/llm',
+  llmioApiKey: 'proxied', // Key stays server-side
 };
 
 // ── Sandbox API Client ─────────────────────────────────────────────────
@@ -271,6 +272,38 @@ const server = http.createServer(async (req, res) => {
     if (pathname === '/api/config' && req.method === 'GET') {
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify(FRONTEND_CONFIG));
+      return;
+    }
+
+    // ── API: LLM API proxy (avoid CORS in browser) ─────────────────
+    if (pathname.startsWith('/api/proxy/llm')) {
+      const targetPath = pathname.replace('/api/proxy/llm', '') + (url.search || '');
+      const llmBaseUrl = process.env.LLMIO_BASE_URL || process.env.VITE_LLMIO_BASE_URL || '';
+      const llmApiKey = process.env.LLMIO_API_KEY || process.env.VITE_LLMIO_API_KEY || '';
+      if (!llmBaseUrl) {
+        res.writeHead(502, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'LLMIO_BASE_URL not configured' }));
+        return;
+      }
+      const target = llmBaseUrl.replace(/\/+$/, '') + targetPath;
+      const body = req.method !== 'GET' && req.method !== 'HEAD' ? await readBody(req) : null;
+      const headers = { 'Content-Type': 'application/json' };
+      if (llmApiKey) headers['Authorization'] = 'Bearer ' + llmApiKey;
+      try {
+        const resp = await fetch(target, {
+          method: req.method,
+          headers,
+          body: body ? JSON.stringify(body) : null,
+        });
+        const data = await resp.text();
+        res.writeHead(resp.status, {
+          'Content-Type': resp.headers.get('content-type') || 'application/json',
+        });
+        res.end(data);
+      } catch (err) {
+        res.writeHead(502, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: err.message }));
+      }
       return;
     }
 
