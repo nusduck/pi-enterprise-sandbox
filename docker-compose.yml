@@ -58,7 +58,7 @@ services:
   pi-agent:
     build:
       context: ${AGENT_BUILD_CONTEXT:-.}
-      target: ${AGENT_BUILD_TARGET:-agent-base}
+      dockerfile: ${AGENT_DOCKERFILE:-Dockerfile}
     image: ${AGENT_IMAGE:-enterprise-pi-agent:latest}
     container_name: ${AGENT_CONTAINER_NAME:-pi-enterprise-agent}
     user: "${AGENT_USER:-10001:10001}"
@@ -72,6 +72,7 @@ services:
       - ${AGENT_ENV_FILE:-.env}
     environment:
       SANDBOX_BASE_URL: ${SANDBOX_BASE_URL:-http://sandbox:8081}
+      PORT: ${AGENT_PORT:-3000}
     stdin_open: ${AGENT_STDIN_OPEN:-true}
     tty: ${AGENT_TTY:-true}
     restart: ${AGENT_RESTART_POLICY:-unless-stopped}
@@ -82,9 +83,6 @@ services:
 networks:
   default:
     driver: ${COMPOSE_NETWORK_DRIVER:-bridge}
-    # NOTE: Outbound network isolation is enforced by iptables rules
-    # inside the sandbox container (cap_add: NET_ADMIN). Docker's
-    # internal:true is NOT used because it breaks host port publishing.
 
 volumes:
   sandbox_data:

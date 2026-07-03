@@ -1,52 +1,37 @@
-# ── Pi Agent (with Enterprise Sandbox Extension) ──────────────────────
-FROM node:22-slim AS agent-base
+# ── Pi Agent WebUI ──────────────────────────────────────────────
+FROM node:20-slim AS agent-base
 
-# Install Pi Agent globally
-RUN npm install -g --ignore-scripts @earendil-works/pi-coding-agent && \
-    npm cache clean --force
+RUN groupadd -g 10001 pi-agent && \
+    useradd -m -u 10001 -g pi-agent pi-agent && \
+    mkdir -p /home/pi-agent/.pi/agent/skills /home/pi-agent/webui && \
+    chown -R pi-agent:pi-agent /home/pi-agent
 
-# Create non-root user
-RUN useradd -m -u 10001 pi-agent
-USER pi-agent
-WORKDIR /home/pi-agent
+WORKDIR /home/pi-agent/webui
 
-# Set up the Enterprise Sandbox Extension
-RUN mkdir -p /home/pi-agent/.pi/agent/extensions/enterprise-sandbox
+# Copy package files first for layer caching
+COPY webui/package.json webui/package-lock.json* ./
 
-# Copy extension files
-COPY --chown=pi-agent:pi-agent agent/enterprise-sandbox-ext/index.ts \
-    /home/pi-agent/.pi/agent/extensions/enterprise-sandbox/index.ts
-COPY --chown=pi-agent:pi-agent agent/enterprise-sandbox-ext/package.json \
-    /home/pi-agent/.pi/agent/extensions/enterprise-sandbox/package.json
+# Install dependencies
+RUN npm ci && npm cache clean --force
 
-# Install extension dependencies (typebox for parameter schemas)
-RUN cd /home/pi-agent/.pi/agent/extensions/enterprise-sandbox && \
-    npm install && \
-    npm cache clean --force
+# Copy source files
+COPY webui/vite.config.js webui/tsconfig.json ./
+COPY webui/index.html ./
+COPY webui/src/ ./src/
+COPY webui/server.js ./
 
-# Copy shared skills
-COPY --chown=pi-agent:pi-agent skills/ /home/pi-agent/.pi/agent/skills/
+# Build frontend
+RUN npx vite build
 
-# Copy WebUI files (from repo root webui/)
-COPY --chown=pi-agent:pi-agent webui/ /home/pi-agent/webui/
-
-# Install WebUI dependencies (Pi SDK, TypeBox)
-RUN cd /home/pi-agent/webui && \
-    npm install && \
-    npm cache clean --force
-
-# Copy default config (overridden by volume mount at runtime)
-RUN mkdir -p /home/pi-agent/.pi/agent
-COPY --chown=pi-agent:pi-agent config/agent/settings.json /home/pi-agent/.pi/agent/settings.json
-COPY --chown=pi-agent:pi-agent config/agent/models.json /home/pi-agent/.pi/agent/models.json
-
-ENV \
-    SANDBOX_BASE_URL=http://sandbox:8081 \
-    AGENT_WEBUI_PORT=3000 \
-    LANG=C.UTF-8 \
-    LC_ALL=C.UTF-8
-
+# Expose port
 EXPOSE 3000
 
-# Start WebUI server — uses Pi SDK directly (no CLI subprocess)
-CMD ["node", "/home/pi-agent/webui/server.js"]
+# Health check (requires curl or wget)
+RUN apt-get update && apt-get install -y --no-install-recommends curl && rm -rf /var/lib/apt/lists/*
+
+HEALTHCHECK --interval=30s --timeout=10s --retries=3 --start-period=5s \
+    CMD curl -sf http://localhost:3000/api/status || exit 1
+
+USER pi-agent
+
+CMD ["node", "server.js"]

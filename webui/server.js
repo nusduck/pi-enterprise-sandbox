@@ -1,113 +1,310 @@
 #!/usr/bin/env node
 /**
- * Pi Agent WebUI Server v2 — Modular Entry Point
+ * Pi Enterprise Sandbox Server — v3
  *
- * Thin HTTP server that delegates routing to modular handlers.
+ * BFF (Backend For Frontend) serving:
+ *  - Built static files (Vite build -> dist/)
+ *  - REST API proxy to Sandbox container
+ *  - Conversation management with JSON persistence
  */
-import http from "node:http";
-import { PORT, SANDBOX_URL, MODEL_ID } from "./config.js";
-import { conversations, loadConversations, saveConversations } from "./services/conversation-manager.js";
-import { handleStatus } from "./routes/status.js";
-import { handleConversations, handleConversation } from "./routes/conversations.js";
-import { handleChat } from "./routes/chat.js";
-import { serveStatic } from "./routes/static.js";
-import { handleSessionFiles, handleSessionFileDownload, handleSessionArtifacts } from "./routes/files.js";
-import { handleConversationSandbox } from "./routes/conversations.js";
+import http from 'node:http';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import crypto from 'node:crypto';
 
-// ── Server ──────────────────────────────────────────────────────────────
-const server = http.createServer(async (req, res) => {
-  res.setHeader("Access-Control-Allow-Origin", "*");
-  res.setHeader("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+// ── Config ─────────────────────────────────────────────────────────────
 
-  if (req.method === "OPTIONS") {
-    res.writeHead(204);
-    res.end();
+const PORT = parseInt(process.env.PORT || '3000', 10);
+const SANDBOX_URL = process.env.SANDBOX_BASE_URL || 'http://sandbox:8081';
+const DIST_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), 'dist');
+const DATA_DIR = process.env.WEBUI_DATA_DIR || path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'data');
+const CONVERSATIONS_FILE = path.join(DATA_DIR, 'conversations.json');
+
+// ── Sandbox API Client ─────────────────────────────────────────────────
+
+function sandboxFetch(sandboxPath, options) {
+  return fetch(`${SANDBOX_URL}${sandboxPath}`, {
+    headers: { 'Content-Type': 'application/json', ...(options?.headers || {}) },
+    ...options,
+  });
+}
+
+// ── Conversation Manager ───────────────────────────────────────────────
+
+const conversations = new Map();
+
+function ensureDataDir() { fs.mkdirSync(DATA_DIR, { recursive: true }); }
+
+function saveConversations() {
+  try {
+    ensureDataDir();
+    const data = Array.from(conversations.values()).map(c => ({
+      id: c.id, title: c.title,
+      sandboxSessionId: c.sandboxSessionId,
+      createdAt: c.createdAt, updatedAt: c.updatedAt,
+    }));
+    fs.writeFileSync(CONVERSATIONS_FILE, JSON.stringify(data, null, 2));
+  } catch (err) {
+    console.error('[conv] Failed to save:', err.message);
+  }
+}
+
+function loadConversations() {
+  try {
+    ensureDataDir();
+    if (!fs.existsSync(CONVERSATIONS_FILE)) return;
+    const data = JSON.parse(fs.readFileSync(CONVERSATIONS_FILE, 'utf-8'));
+    for (const item of data) {
+      conversations.set(item.id, {
+        id: item.id, title: item.title || 'New conversation',
+        messages: [], sandboxSessionId: item.sandboxSessionId || null,
+        createdAt: item.createdAt || new Date().toISOString(),
+        updatedAt: item.updatedAt || new Date().toISOString(),
+      });
+    }
+    console.log('[conv] Loaded', conversations.size, 'conversations');
+  } catch (err) {
+    console.error('[conv] Failed to load:', err.message);
+  }
+}
+
+function createConversation(title) {
+  const id = 'conv_' + crypto.randomUUID().slice(0, 8);
+  const now = new Date().toISOString();
+  const conv = { id, title: title || 'New conversation', messages: [],
+    sandboxSessionId: null, createdAt: now, updatedAt: now };
+  conversations.set(id, conv);
+  saveConversations();
+  return conv;
+}
+
+// ── MIME types ─────────────────────────────────────────────────────────
+
+const MIME_TYPES = {
+  '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8',
+  '.js': 'application/javascript; charset=utf-8',
+  '.mjs': 'application/javascript; charset=utf-8',
+  '.json': 'application/json', '.png': 'image/png', '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.svg': 'image/svg+xml',
+  '.ico': 'image/x-icon', '.woff': 'font/woff', '.woff2': 'font/woff2',
+  '.map': 'application/json',
+};
+
+// ── Route handlers ─────────────────────────────────────────────────────
+
+async function handleStatus(req, res) {
+  const healthResp = await sandboxFetch('/health').catch(() => null);
+  const health = healthResp?.ok ? await healthResp.json() : { status: 'error', error: 'sandbox unreachable' };
+  res.writeHead(200, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify({ status: 'ok', sandbox: health, conversations: conversations.size, version: '3.0.0' }));
+}
+
+async function handleCreateSession(req, res) {
+  const body = await readBody(req);
+  const resp = await sandboxFetch('/sessions', {
+    method: 'POST',
+    body: JSON.stringify(body || { caller_id: 'pi-webui' }),
+  });
+  const data = await resp.json();
+  res.writeHead(resp.status, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify(data));
+}
+
+async function handleSandboxProxy(req, res, sessionId, subpath, url) {
+  const options = { method: req.method, headers: {} };
+  if (req.method !== 'GET' && req.method !== 'HEAD') {
+    const body = await readBody(req);
+    if (body) options.body = JSON.stringify(body);
+  }
+  const targetPath = '/sessions/' + sessionId + '/' + subpath + (url.search || '');
+  const resp = await sandboxFetch(targetPath, options);
+  const body = await resp.text();
+  res.writeHead(resp.status, { 'Content-Type': resp.headers.get('content-type') || 'application/json' });
+  res.end(body);
+}
+
+async function handleSandboxDirect(req, res, pathname, url) {
+  const targetPath = pathname.replace(/^\/api/, '') + (url.search || '');
+  const options = { method: req.method, headers: {} };
+  if (req.method !== 'GET' && req.method !== 'HEAD') {
+    const body = await readBody(req);
+    if (body) options.body = JSON.stringify(body);
+  }
+  const resp = await sandboxFetch(targetPath, options);
+  const data = await resp.text();
+  res.writeHead(resp.status, { 'Content-Type': 'application/json' });
+  res.end(data);
+}
+
+async function handleConversationsAPI(req, res, url) {
+  const pathname = url.pathname;
+  const parts = pathname.split('/').filter(Boolean);
+
+  // GET /api/conversations — list
+  if (parts.length === 2 && req.method === 'GET') {
+    const list = Array.from(conversations.values())
+      .map(c => ({ id: c.id, title: c.title, messageCount: c.messages.length,
+        createdAt: c.createdAt, updatedAt: c.updatedAt }))
+      .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify(list));
     return;
   }
 
-  const url = new URL(req.url, `http://${req.headers.host}`);
+  // POST /api/conversations — create
+  if (parts.length === 2 && req.method === 'POST') {
+    const body = await readBody(req);
+    const conv = createConversation(body?.title);
+    res.writeHead(201, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify(conv));
+    return;
+  }
+
+  const convId = parts[2];
+  const conv = conversations.get(convId);
+
+  if (!conv) {
+    res.writeHead(404, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: 'not found' }));
+    return;
+  }
+
+  // GET /api/conversations/:id
+  if (parts.length === 3 && req.method === 'GET') {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ id: conv.id, title: conv.title,
+      sandboxSessionId: conv.sandboxSessionId, createdAt: conv.createdAt, updatedAt: conv.updatedAt }));
+    return;
+  }
+
+  // DELETE /api/conversations/:id
+  if (parts.length === 3 && req.method === 'DELETE') {
+    conversations.delete(convId);
+    saveConversations();
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ ok: true }));
+    return;
+  }
+
+  // PATCH /api/conversations/:id — rename
+  if (parts.length === 3 && req.method === 'PATCH') {
+    const body = await readBody(req);
+    if (body?.title) conv.title = body.title;
+    conv.updatedAt = new Date().toISOString();
+    saveConversations();
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ id: conv.id, title: conv.title }));
+    return;
+  }
+
+  // GET /api/conversations/:id/messages
+  if (parts.length === 4 && parts[3] === 'messages' && req.method === 'GET') {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify(conv.messages || []));
+    return;
+  }
+
+  res.writeHead(404, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify({ error: 'not found' }));
+}
+
+function serveStatic(req, res) {
+  let filePath = path.join(DIST_DIR, req.url === '/' ? 'index.html' : req.url);
+  if (!fs.existsSync(filePath) || fs.statSync(filePath).isDirectory()) {
+    filePath = path.join(DIST_DIR, 'index.html');
+  }
+  if (!filePath.startsWith(DIST_DIR)) {
+    res.writeHead(403); res.end('Forbidden');
+    return;
+  }
+  try {
+    const content = fs.readFileSync(filePath);
+    const ext = path.extname(filePath).toLowerCase();
+    res.writeHead(200, { 'Content-Type': MIME_TYPES[ext] || 'application/octet-stream' });
+    res.end(content);
+  } catch {
+    res.writeHead(404); res.end('Not found');
+  }
+}
+
+// ── Utilities ──────────────────────────────────────────────────────────
+
+function readBody(req) {
+  return new Promise((resolve) => {
+    if (req.method === 'GET' || req.method === 'HEAD') return resolve(null);
+    const chunks = [];
+    req.on('data', c => chunks.push(c));
+    req.on('end', () => {
+      const raw = Buffer.concat(chunks).toString();
+      if (!raw) return resolve(null);
+      try { resolve(JSON.parse(raw)); } catch { resolve(raw); }
+    });
+    req.on('error', () => resolve(null));
+  });
+}
+
+// ── Router ─────────────────────────────────────────────────────────────
+
+const server = http.createServer(async (req, res) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PATCH, DELETE, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Trace-Id');
+  if (req.method === 'OPTIONS') { res.writeHead(204); res.end(); return; }
+
+  const url = new URL(req.url, 'http://' + (req.headers.host || 'localhost'));
   const pathname = url.pathname;
-  const parts = pathname.split("/").filter(Boolean);
 
-  // ── API routes ──
-
-  // GET /api/status
-  if (pathname === "/api/status" && req.method === "GET") {
-    return handleStatus(req, res);
-  }
-
-  // /api/conversations (list / create)
-  if (pathname === "/api/conversations") {
-    return handleConversations(req, res);
-  }
-
-  // GET /api/conversations/:id/sandbox — get sandbox session ID
-  // NOTE: must be BEFORE the catch-all /api/conversations/:id handler below
-  if (parts[0] === "api" && parts[1] === "conversations" && parts[2] && parts[3] === "sandbox" && parts.length === 4 && req.method === "GET") {
-    return handleConversationSandbox(req, res, parts[2]);
-  }
-
-  // /api/conversations/:id ... (catch-all: chat, messages, metadata)
-  if (parts[0] === "api" && parts[1] === "conversations" && parts[2]) {
-    if (parts[3] === "chat" && parts.length === 4) {
-      return handleChat(req, res, parts);
+  try {
+    // Health check
+    if (pathname === '/api/status' && req.method === 'GET') {
+      return await handleStatus(req, res);
     }
-    // Without sub-path: GET/DELETE/PATCH conversation metadata
-    // With /messages: GET messages
-    return handleConversation(req, res, parts);
+
+    // Create session
+    if (pathname === '/api/sessions' && req.method === 'POST') {
+      return await handleCreateSession(req, res);
+    }
+
+    // Sandbox session proxy: /api/sessions/:id/...
+    const sessionMatch = pathname.match(/^\/api\/sessions\/([^/]+)\/(.+)$/);
+    if (sessionMatch) {
+      return await handleSandboxProxy(req, res, sessionMatch[1], sessionMatch[2], url);
+    }
+
+    // Sandbox direct proxy: /api/health, /api/skills, /api/sessions (GET list)
+    if (pathname.startsWith('/api/') && !pathname.startsWith('/api/conversations') && pathname !== '/api/status') {
+      return await handleSandboxDirect(req, res, pathname, url);
+    }
+
+    // Conversations API
+    if (pathname.startsWith('/api/conversations')) {
+      return await handleConversationsAPI(req, res, url);
+    }
+
+    // Static files
+    serveStatic(req, res);
+
+  } catch (err) {
+    console.error('[server] Error:', err);
+    if (!res.headersSent) {
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: err.message }));
+    }
   }
-
-  // ── Sandbox file/artifact proxy (for WebUI to browse & download outputs) ──
-
-  // GET /api/sessions/:id/files — list files in session workspace
-  if (parts[0] === "api" && parts[1] === "sessions" && parts[3] === "files" && parts.length === 4 && req.method === "GET") {
-    const sessionId = parts[2];
-    const subpath = url.searchParams.get("path") || ".";
-    return handleSessionFiles(req, res, sessionId, subpath);
-  }
-
-  // GET /api/sessions/:id/files/download?path=... — download a file
-  if (parts[0] === "api" && parts[1] === "sessions" && parts[3] === "files" && parts[4] === "download" && req.method === "GET") {
-    const sessionId = parts[2];
-    const filepath = url.searchParams.get("path") || "";
-    return handleSessionFileDownload(req, res, sessionId, filepath);
-  }
-
-  // GET /api/sessions/:id/artifacts — list artifacts
-  if (parts[0] === "api" && parts[1] === "sessions" && parts[3] === "artifacts" && parts.length === 4 && req.method === "GET") {
-    const sessionId = parts[2];
-    return handleSessionArtifacts(req, res, sessionId);
-  }
-
-  // ── Static files ──
-  serveStatic(req, res);
 });
 
-// ── Start ───────────────────────────────────────────────────────────────
-await loadConversations();
-server.listen(PORT, "0.0.0.0", () => {
-  console.log(`[agent-webui] Server running on http://0.0.0.0:${PORT}`);
-  console.log(`[agent-webui] Sandbox URL: ${SANDBOX_URL}`);
-  console.log(`[agent-webui] Model: llmio:${MODEL_ID}`);
+// ── Start ──────────────────────────────────────────────────────────────
+
+loadConversations();
+server.listen(PORT, '0.0.0.0', () => {
+  console.log('[server] Pi Enterprise Sandbox v3');
+  console.log('[server] http://0.0.0.0:' + PORT);
+  console.log('[server] Sandbox proxy:', SANDBOX_URL);
+  console.log('[server] Static:', DIST_DIR);
 });
 
-// Global error logging — prevent silent failures
-process.on("unhandledRejection", (reason) => {
-  console.error("[agent-webui] UNHANDLED REJECTION:", reason);
-});
-process.on("uncaughtException", (err) => {
-  console.error("[agent-webui] UNCAUGHT EXCEPTION:", err);
-});
-
-// Graceful shutdown — persist conversations and keep sandbox sessions recoverable
-const handleShutdown = async () => {
-  console.log("[agent-webui] Shutting down, preserving sandbox sessions for recovery...");
-  saveConversations();
-  for (const conv of conversations.values()) {
-    conv.agent?.abort();
-  }
-  process.exit(0);
-};
-process.on("SIGINT", handleShutdown);
-process.on("SIGTERM", handleShutdown);
+process.on('unhandledRejection', reason => console.error('[server] UNHANDLED REJECTION:', reason));
+process.on('uncaughtException', err => console.error('[server] UNCAUGHT EXCEPTION:', err));
+process.on('SIGINT', () => { saveConversations(); process.exit(0); });
+process.on('SIGTERM', () => { saveConversations(); process.exit(0); });
