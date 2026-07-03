@@ -16,6 +16,7 @@ from sandbox.config import settings
 from sandbox.routers import (
     approvals,
     artifacts,
+    conversations,
     executions,
     files,
     health,
@@ -174,6 +175,7 @@ async def value_error_handler(request: Request, exc: ValueError):
 
 app.include_router(sessions.router)
 app.include_router(approvals.router)
+app.include_router(conversations.router)
 app.include_router(executions.router)
 app.include_router(files.router)
 app.include_router(artifacts.router)

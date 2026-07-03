@@ -21,6 +21,13 @@ const DIST_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), 'dis
 const DATA_DIR = process.env.WEBUI_DATA_DIR || path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'data');
 const CONVERSATIONS_FILE = path.join(DATA_DIR, 'conversations.json');
 
+// Expose LLMIO config to frontend at runtime (not baked into Vite bundle)
+const FRONTEND_CONFIG = {
+  modelId: process.env.VITE_MODEL_ID || process.env.MODEL_ID || 'deepseek-v4-flash',
+  llmioBaseUrl: process.env.VITE_LLMIO_BASE_URL || process.env.LLMIO_BASE_URL || '',
+  llmioApiKey: process.env.VITE_LLMIO_API_KEY || process.env.LLMIO_API_KEY || '',
+};
+
 // ── Sandbox API Client ─────────────────────────────────────────────────
 
 function sandboxFetch(sandboxPath, options) {
@@ -258,6 +265,13 @@ const server = http.createServer(async (req, res) => {
     // Health check
     if (pathname === '/api/status' && req.method === 'GET') {
       return await handleStatus(req, res);
+    }
+
+    // ── API: Frontend config (runtime, not build-time) ──────────────
+    if (pathname === '/api/config' && req.method === 'GET') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(FRONTEND_CONFIG));
+      return;
     }
 
     // Create session

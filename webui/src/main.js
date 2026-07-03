@@ -18,12 +18,26 @@ import {
 } from '@earendil-works/pi-web-ui';
 import '@earendil-works/pi-web-ui/app.css';
 
-// ── Config ─────────────────────────────────────────────────────────────
+// ── Config (fetched from server at init) ────────────────────────────────
 
-const MODEL_ID = import.meta.env.VITE_MODEL_ID || 'deepseek-v4-flash';
-const LLMIO_API_KEY = import.meta.env.VITE_LLMIO_API_KEY || '';
+let MODEL_ID = 'deepseek-v4-flash';
+let LLMIO_API_KEY = '';
+let LLMIO_BASE_URL = '';
 const API_BASE = '/api';
 
+async function loadConfig() {
+  try {
+    const resp = await fetch(API_BASE + '/config');
+    if (resp.ok) {
+      const cfg = await resp.json();
+      MODEL_ID = cfg.modelId || MODEL_ID;
+      LLMIO_BASE_URL = cfg.llmioBaseUrl || '';
+      LLMIO_API_KEY = cfg.llmioApiKey || '';
+    }
+  } catch (e) {
+    console.warn('[config] Failed to load, using defaults:', e.message);
+  }
+}
 // ── API Client ─────────────────────────────────────────────────────────
 
 function apiFetch(path, options = {}) {
@@ -179,7 +193,7 @@ function makeModel() {
   return {
     id: MODEL_ID, name: MODEL_ID,
     api: 'openai-completions', provider: 'llmio',
-    baseUrl: import.meta.env.VITE_LLMIO_BASE_URL || '',
+    baseUrl: LLMIO_BASE_URL || '',
     headers: LLMIO_API_KEY ? { Authorization: 'Bearer ' + LLMIO_API_KEY } : undefined,
     input: ['text'], output: ['text'],
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
@@ -194,6 +208,9 @@ function makeModel() {
 async function initApp() {
   const app = document.getElementById('app');
   if (!app) throw new Error('No app container');
+
+  // Load LLMIO config from server at runtime
+  await loadConfig();
 
   setupStorage();
 

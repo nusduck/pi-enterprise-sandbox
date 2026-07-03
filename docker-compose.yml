@@ -73,6 +73,10 @@ services:
     environment:
       SANDBOX_BASE_URL: ${SANDBOX_BASE_URL:-http://sandbox:8081}
       PORT: ${AGENT_PORT:-3000}
+      # VITE_ env vars for pi-web-ui frontend (injected at build time)
+      VITE_MODEL_ID: ${VITE_MODEL_ID:-deepseek-v4-flash}
+      VITE_LLMIO_BASE_URL: ${VITE_LLMIO_BASE_URL:-${LLMIO_BASE_URL:-https://llm.009100.xyz/openai/v1}}
+      VITE_LLMIO_API_KEY: ${VITE_LLMIO_API_KEY:-${LLMIO_API_KEY:-}}
     stdin_open: ${AGENT_STDIN_OPEN:-true}
     tty: ${AGENT_TTY:-true}
     restart: ${AGENT_RESTART_POLICY:-unless-stopped}
