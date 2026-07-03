@@ -24,10 +24,9 @@ const CONVERSATIONS_FILE = path.join(DATA_DIR, 'conversations.json');
 // ── Sandbox API Client ─────────────────────────────────────────────────
 
 function sandboxFetch(sandboxPath, options) {
-  return fetch(`${SANDBOX_URL}${sandboxPath}`, {
-    headers: { 'Content-Type': 'application/json', ...(options?.headers || {}) },
-    ...options,
-  });
+  const url = SANDBOX_URL + sandboxPath;
+  const headers = { 'Content-Type': 'application/json', ...(options?.headers || {}) };
+  return fetch(url, { ...options, headers });
 }
 
 // ── Conversation Manager ───────────────────────────────────────────────
