@@ -108,6 +108,15 @@ build_uvicorn_args() {
 
 apply_iptables_rules
 
+# ── Lock down workspace parent directory ──────────────────────────
+# Prevent agents from listing /var/sandbox/workspaces/ to discover
+# other conversation workspaces.  The sandbox user needs execute-only
+# (to traverse via symlink) but not read (to list).
+WORKSPACES_DIR="/var/sandbox/workspaces"
+if [ -d "$WORKSPACES_DIR" ]; then
+    chmod 0311 "$WORKSPACES_DIR"
+fi
+
 UVICORN_ARGS="$(build_uvicorn_args)"
 echo "[entrypoint] Starting Sandbox API: uvicorn $UVICORN_ARGS"
 

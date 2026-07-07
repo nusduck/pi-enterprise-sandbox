@@ -31,7 +31,9 @@ def register_artifact(session_id: str, body: ArtifactRegister):
     if session is None:
         raise HTTPException(status_code=404, detail="Session not found")
 
-    ws = workspace_manager.get_workspace_path(session_id)
+    physical = session.metadata.get("_physical_workspace")
+    ws_path = physical or str(workspace_manager.get_workspace_path(session_id))
+    ws = Path(ws_path)
     artifact_path = ws / body.path
 
     size = artifact_path.stat().st_size if artifact_path.exists() else 0
@@ -56,7 +58,9 @@ def download_artifact(session_id: str, artifact_id: str):
     if artifact is None:
         raise HTTPException(status_code=404, detail="Artifact not found")
 
-    ws = workspace_manager.get_workspace_path(session_id)
+    physical = session.metadata.get("_physical_workspace")
+    ws_path = physical or str(workspace_manager.get_workspace_path(session_id))
+    ws = Path(ws_path)
     file_path = ws / artifact.path
 
     if not file_path.is_file():
@@ -71,4 +75,34 @@ def download_artifact(session_id: str, artifact_id: str):
         path=str(file_path),
         filename=artifact.name,
         media_type=artifact.mime_type,
+    )
+
+
+@router.post("/submit", response_model=ArtifactResponse, status_code=201)
+def submit_artifact(session_id: str, body: ArtifactRegister):
+    """Explicitly submit a file as an artifact.
+
+    This is the primary endpoint for agent-originated artifact submissions.
+    The agent calls this (via submit_artifact tool or bash → HTTP) to
+    declare a workspace file as a downloadable artifact.
+    No automatic scans happen — only explicitly submitted files are tracked.
+    """
+    session = session_manager.get(session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    physical = session.metadata.get("_physical_workspace")
+    ws_path = physical or str(workspace_manager.get_workspace_path(session_id))
+    ws = Path(ws_path)
+    artifact_path = ws / body.path
+
+    size = artifact_path.stat().st_size if artifact_path.exists() else 0
+
+    return artifact_manager.register(
+        session_id=session_id,
+        name=body.name,
+        path=body.path,
+        mime_type=body.mime_type,
+        source_execution_id=body.source_execution_id,
+        size=size,
     )

@@ -1,254 +1,173 @@
-# Pi Enterprise Sandbox Runtime
+# Pi Enterprise Sandbox
 
-> Enterprise-grade secure execution sandbox with AI agent integration, approval workflows, and a WebUI chat interface.
+> 三容器安全沙箱 + AI 编程助手 · v4.0
 
-[![Python 3.11+](https://img.shields.io/badge/Python-3.11%2B-blue)]()
-[![FastAPI](https://img.shields.io/badge/FastAPI-0.115%2B-009688)]()
-[![Node.js](https://img.shields.io/badge/Node.js-20%2B-339933)]()
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow)]()
+三容器架构：前端 SPA + REST API Server + 安全沙箱执行环境。Agent 运行在服务端，浏览器零接触 LLM API Key 和工具执行细节。
 
-## Features
-
-- **🔒 Secure Sandbox** — Isolated execution environment with iptables network isolation, ulimit resource limits, and non-root process execution
-- **💬 WebUI Chat** — ChatGPT-style interface with SSE streaming, tool visualization, dark/light themes
-- **🛡️ Approval Workflow** — High-risk commands require manual approval; configurable timeout auto-rejects
-- **🔗 Trace ID** — End-to-end tracing across sessions, executions, and audit logs via `X-Trace-Id`
-- **💾 SQLite Persistence** — WAL mode database for session, execution, artifact, and audit log storage
-- **📁 File Management** — Read, write, list, preview, and download files within session workspaces
-- **🎨 Artifact Management** — Register, list, and download execution outputs
-- **📊 Prometheus Metrics** — `/metrics` endpoint for monitoring
-- **🔌 MCP Server** — External Protocol adapter for Dify/Hi-Agent integration (port 8091)
-- **🧩 Built-in Skills** — Document parsing, data analysis, SQL query skills
-- **🐳 Docker Support** — Multi-stage Docker build, docker compose orchestration
-
-## Architecture
-
-```
-┌──────────────────────────────────────────────────────────┐
-│                     WebUI (port 3000)                     │
-│    Server: routes/ + services/   Client: js/ ES modules   │
-├──────────────────────────────────────────────────────────┤
-│                    Sandbox Service (port 8081)            │
-│    Session · Workspace · Execution · File · Artifact      │
-│    Audit Logging · Approval Workflow · Resource Limits    │
-│    SQLite Persistence (WAL) · Trace ID Middleware         │
-├──────────────────────────────────────────────────────────┤
-│              MCP Adapter (port 8091) — Optional           │
-│         External protocol for low-code platforms          │
-├──────────────────────────────────────────────────────────┤
-│              Docker Container (sandbox)                   │
-│    iptables DROP · ulimit · non-root · path security      │
-└──────────────────────────────────────────────────────────┘
-```
-
-**[Full Architecture Documentation →](docs/architecture.md)**
-
-## Quick Start
-
-### Prerequisites
-
-- Docker & Docker Compose
-- Git
-
-### One-Command Start
+## 快速启动
 
 ```bash
-git clone <repo-url>
-cd pi-sandbox
+# 1. 配置
 cp .env.example .env
-# Edit .env with your LLMIO_API_KEY
-docker compose up --build
+vi .env  # 填入 LLMIO_BASE_URL 和 LLMIO_API_KEY
+
+# 2. 构建并启动（开发模式）
+docker compose up --build -d
+
+# 3. 访问
+open http://localhost:3000
 ```
 
-Open **http://localhost:3000** in your browser.
+## 架构
 
-### Verify
-
-```bash
-# Sandbox health
-curl http://localhost:8083/health
-
-# WebUI status
-curl http://localhost:3000/api/status
+```
+  Browser              Frontend               API Server              Sandbox
+  (SPA)                (Nginx:80)             (Node.js:4000)          (FastAPI:8081)
+┌──────────┐    HTTP  ┌──────────────┐   HTTP  ┌──────────────┐   HTTP  ┌──────────────┐
+│ pi-web-ui│◄───────►│ 静态文件服务   │◄───────►│ pi-coding-   │◄───────►│ 安全执行环境   │
+│ 纯 UI 层  │         │ /api/* 反向代理 │         │ agent SDK    │         │              │
+│          │         │              │         │              │         │ iptables      │
+│          │         │              │         │ SSE 流推送    │         │ ulimit        │
+│          │         │              │         │ LLM 直连      │         │ 非 root       │
+└──────────┘         └──────────────┘         └──────────────┘         │ 路径逃逸防护    │
+ host:3000             host:3000→80            host:4000→4000           │ MCP host:8093→8091
+                                                                       └──────────────┘
+                                                                         API host:8083→8081
 ```
 
-## Project Structure
+| 组件 | 技术栈 | host→容器端口 |
+|------|--------|---------------|
+| **Frontend** | Vite + pi-web-ui → Nginx | `3000→80` |
+| **API Server** | Node.js 20 + pi-coding-agent SDK | `4000→4000` |
+| **Sandbox API** | Python 3.11 + FastAPI | `8083→8081` |
+| **Sandbox MCP** | MCP adapter (REST over HTTP) | `8093→8091` |
+
+## 目录结构
 
 ```
 pi-sandbox/
-├── sandbox/              # FastAPI Sandbox Service
-│   ├── main.py           # App entry, middleware, routers
-│   ├── config.py         # Settings (env-based)
-│   ├── models.py         # Pydantic request/response models
-│   ├── database.py       # SQLite persistence (WAL)
-│   ├── repositories.py   # Data access layer
-│   ├── trace.py          # Trace ID context
-│   ├── routers/          # API route handlers
-│   │   ├── sessions.py   # Session CRUD
-│   │   ├── executions.py # Code/command execution
-│   │   ├── files.py      # File operations
-│   │   ├── artifacts.py  # Artifact management
-│   │   ├── approvals.py  # Approval workflow
-│   │   ├── traces.py     # Trace query
-│   │   ├── health.py     # Health/readiness/metrics
-│   │   └── mcp_router.py # MCP adapter
-│   ├── services/         # Business logic
-│   │   ├── session_manager.py
-│   │   ├── execution_manager.py
-│   │   ├── file_manager.py
-│   │   ├── artifact_manager.py
-│   │   ├── workspace_manager.py
-│   │   ├── audit_logger.py
-│   │   ├── policy_checker.py
-│   │   └── approval_manager.py
-│   ├── security/         # Path validation, safe env
-│   ├── mcp/              # MCP server adapter
-│   └── utils/            # Resource limits
-├── webui/                # WebUI (Node.js)
-│   ├── server.js         # Entry point (thin HTTP router)
-│   ├── config.js         # Configuration
-│   ├── services/         # Backend services
-│   │   ├── sandbox-client.js
-│   │   ├── conversation-manager.js
-│   │   └── agent-factory.js
-│   ├── routes/           # Route handlers
-│   │   ├── status.js
-│   │   ├── conversations.js
-│   │   ├── chat.js
-│   │   └── static.js
-│   ├── js/               # Frontend ES modules
-│   │   ├── app.js        # Main entry
-│   │   ├── api.js        # API client
-│   │   ├── chat.js       # Chat UI
-│   │   ├── conversations.js # Conversation list
-│   │   └── utils.js      # Utilities
-│   ├── index.html        # Main page
-│   └── style.css         # Dark/light theme
-├── agent/                # Agent SDK + Pi Extension
-│   ├── sandbox_client.py
-│   ├── tool_adapter.py
-│   ├── tool_policy.py
-│   └── enterprise-sandbox-ext/
-├── skills/               # Built-in skills
-│   ├── document-parser/
-│   ├── data-analysis/
-│   └── sql-query/
-├── tests/                # Test suite (14 test files)
-├── docs/                 # Documentation
-│   ├── architecture.md
-│   ├── api.md
-│   ├── deployment.md
-│   ├── development.md
-│   └── webui.md
-├── config/               # Runtime config
-├── Dockerfile
-├── docker-compose.yml
-└── pyproject.toml
+├── frontend/             ← SPA 前端（Vite + @earendil-works/pi-web-ui）
+│   ├── src/main.js       ← 前端入口（纯 UI，零 Agent）
+│   ├── Dockerfile        ← Nginx 静态服务
+│   └── nginx.conf        ← /api/* 反向代理到 api-server
+├── api-server/           ← REST API（@earendil-works/pi-coding-agent SDK）
+│   ├── server.js         ← HTTP 入口（/api/chat SSE, /api/status）
+│   ├── agent-handler.js  ← Agent 会话管理与工具编排
+│   ├── sandbox-tools.js  ← read/write/edit/bash 工具（重定向到 Sandbox）
+│   └── Dockerfile
+├── sandbox/              ← 安全沙箱（Python FastAPI + 多层防护）
+│   ├── main.py           ← FastAPI 入口
+│   ├── routers/          ← sessions, executions, files, artifacts, traces, MCP...
+│   ├── services/         ← 会话/执行/文件/审计/审批策略
+│   ├── mcp/              ← MCP 协议适配器
+│   └── Dockerfile
+├── skills/               ← 技能文件（只读挂载到容器）
+├── extensions/           ← Pi Agent TypeScript 扩展
+├── sdk/                  ← Sandbox Node.js SDK
+├── scripts/              ← 备份/恢复脚本
+├── tests/                ← pytest 测试套件
+├── config/               ← 配置文件
+├── nginx/                ← 生产 Nginx + SSL
+├── docs/                 ← 文档
+├── workspaces/           ← 会话工作区（运行时，持久化）
+├── docker-compose.yml           ← 开发 3 容器编排
+├── docker-compose.prod.yml      ← 生产 overlay（Nginx + SSL + 资源限制）
+└── .env.example          ← 环境变量模板
 ```
 
-## API Overview
+## 环境变量
 
-### Sandbox Service (port 8081)
+### 必需
 
-| Method | Endpoint | Description |
-|---|---|---|
-| `POST` | `/sessions` | Create sandbox session |
-| `GET` | `/sessions/{id}` | Get session details |
-| `DELETE` | `/sessions/{id}` | Close session |
-| `POST` | `/sessions/{id}/executions/python` | Run Python code |
-| `POST` | `/sessions/{id}/executions/command` | Run shell command |
-| `POST` | `/sessions/{id}/executions/approval-check` | Check tool risk |
-| `POST` | `/approve` | Approve/reject execution |
-| `POST` | `/sessions/{id}/files/write` | Write file |
-| `GET` | `/sessions/{id}/files/read` | Read file |
-| `GET` | `/sessions/{id}/files` | List files |
-| `POST` | `/sessions/{id}/artifacts/register` | Register artifact |
-| `GET` | `/sessions/{id}/artifacts` | List artifacts |
-| `GET` | `/traces/{trace_id}` | Get trace chain |
-| `GET` | `/health` | Health check |
-| `GET` | `/metrics` | Prometheus metrics |
+| 变量 | 说明 |
+|------|------|
+| `LLMIO_BASE_URL` | LLM API 基地址（OpenAI 兼容） |
+| `LLMIO_API_KEY` | LLM API 密钥 |
 
-### WebUI API (port 3000)
+### 推荐
 
-| Method | Endpoint | Description |
-|---|---|---|
-| `GET` | `/api/conversations` | List conversations |
-| `POST` | `/api/conversations` | Create conversation |
-| `DELETE` | `/api/conversations/{id}` | Delete conversation |
-| `PATCH` | `/api/conversations/{id}` | Rename conversation |
-| `GET` | `/api/conversations/{id}/messages` | Get message history |
-| `POST` | `/api/conversations/{id}/chat` | Send message (SSE stream) |
-| `GET` | `/api/status` | Server + sandbox status |
+| 变量 | 说明 |
+|------|------|
+| `SANDBOX_API_TOKEN` | Sandbox API 认证令牌（生成: `openssl rand -hex 32`） |
+| `SANDBOX_MCP_AUTH_TOKENS` | MCP 端点认证令牌（逗号分隔） |
 
-**[Full API Reference →](docs/api.md)**
+### 执行限制
 
-## Configuration
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `SANDBOX_EXECUTION_TIMEOUT_SECONDS` | `120` | 单次命令超时 |
+| `SANDBOX_MAX_OUTPUT_CHARS` | `50000` | stdout/stderr 上限 |
+| `SANDBOX_MAX_PROCESS_COUNT` | `20` | 最大子进程数 |
+| `SANDBOX_MAX_CPU_TIME_SECONDS` | `300` | CPU 时间上限 |
+| `SANDBOX_MAX_MEMORY_MB` | `512` | 内存上限 |
+| `SANDBOX_MAX_FILE_SIZE_MB` | `50` | 单文件大小上限 |
+| `SANDBOX_WORKSPACE_QUOTA_MB` | `500` | 工作区总空间上限 |
 
-All configuration is via environment variables. See [deployment guide](docs/deployment.md#environment-variables-reference) for the complete reference.
+### 会话管理
 
-Key variables:
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `SANDBOX_SESSION_TTL_MINUTES` | `30` | 会话空闲自动清理时间 |
+| `SANDBOX_CLEANUP_INTERVAL_MINUTES` | `5` | 清理任务运行间隔 |
 
-| Variable | Default | Description |
-|---|---|---|
-| `LLMIO_API_KEY` | — | **Required** — API key for the LLM |
-| `LLMIO_BASE_URL` | — | LLM API base URL |
-| `PI_MODEL` | `deepseek-v4-flash` | Model to use |
-| `SANDBOX_PORT` | `8081` | Sandbox service port |
-| `SANDBOX_HOST_PORT` | `8083` | Host port for sandbox |
-| `SANDBOX_LOG_LEVEL` | `INFO` | Log level |
-| `SANDBOX_DATABASE_URL` | `sqlite:////sandbox/data/sandbox.db` | DB URL |
-| `SANDBOX_SESSION_TTL_MINUTES` | `30` | Session idle timeout |
+### 网络隔离
 
-## Testing
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `SANDBOX_IPTABLES_ENABLED` | `true` | 启用 iptables 网络隔离 |
+| `SANDBOX_IPTABLES_DEFAULT_POLICY` | `DROP` | 默认出站策略 |
+| `SANDBOX_ALLOWED_TCP_PORTS` | — | 放行 TCP 端口 |
+| `SANDBOX_ALLOWED_UDP_PORTS` | — | 放行 UDP 端口 |
+| `SANDBOX_ALLOWED_CIDRS` | — | 放行 IP 段 |
+
+### 数据库
+
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `SANDBOX_DATABASE_URL` | `sqlite:////sandbox/data/sandbox.db` | SQLite（WAL 模式）/ PostgreSQL |
+
+### 其他
+
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `SANDBOX_LOG_LEVEL` | `INFO` | 日志级别 |
+| `SANDBOX_MCP_ENABLED` | `true` | 启用 MCP 适配器 |
+| `SANDBOX_MCP_PORT` | `8091` | MCP 端口 |
+| `SANDBOX_UVICORN_WORKERS` | `1` | Uvicorn worker 数 |
+
+## 开发
 
 ```bash
-# Run all tests
-uv run pytest -q
+# 前端（Vite 热更新）
+cd frontend && npm install && npm run dev
 
-# With coverage
-uv run pytest --cov=sandbox --cov-report=term-missing
+# API Server（热更新）
+cd api-server && npm install && npm run dev
 
-# Specific test areas
-uv run pytest tests/test_integration.py -v  # End-to-end API tests
-uv run pytest tests/test_webui_api.py -v    # WebUI API tests
-uv run pytest tests/test_approval.py -v     # Approval workflow
-uv run pytest tests/test_persistence.py -v  # Database persistence
+# Sandbox 测试
+cd sandbox && uv run pytest -q
 ```
 
-## Documentation Index
+## 安全特性
 
-| Document | Description |
-|---|---|
-| [Architecture](docs/architecture.md) | Design decisions, data flows, security model |
-| [API Reference](docs/api.md) | Full API documentation with examples |
-| [Deployment Guide](docs/deployment.md) | Docker, production config, troubleshooting |
-| [Development Guide](docs/development.md) | Local setup, workflows, testing, coding standards |
-| [WebUI Guide](docs/webui.md) | Frontend architecture, SSE events, theming, extending |
-| [Contributing](CONTRIBUTING.md) | How to contribute, code style, PR checklist |
-| [Changelog](CHANGELOG.md) | Version history and release notes |
+| 层级 | 措施 |
+|------|------|
+| 容器 | Docker 隔离，只读 root FS |
+| 网络 | iptables 默认 DROP 出站策略 |
+| 用户 | 子进程以非 root `sandbox` 用户运行 |
+| 资源 | ulimit: CPU / 内存 / 进程数 / 文件大小 |
+| 路径 | `resolve() + is_relative_to()` 防逃逸 |
+| 命令 | 禁止 `sudo, su, rm -rf /, dd, mkfs, fdisk, chmod 777` |
+| 输出 | stdout/stderr 上限截断 |
+| 审计 | 每次执行记录 trace_id + 全量日志 |
+| API Key | 仅存服务端环境变量，浏览器零接触 |
 
-## Roadmap
+## 文档
 
-- [x] Sandbox Service with session/workspace/execution management
-- [x] Security: path validation, non-root, iptables, command blocking
-- [x] Resource limits: timeout, output size, memory, CPU, process count
-- [x] File API: read, write, list, preview, download
-- [x] Artifact management
-- [x] Audit logging with trace IDs
-- [x] Prometheus metrics
-- [x] Health/readiness checks
-- [x] MCP server adapter
-- [x] SQLite persistence (WAL mode)
-- [x] Approval workflow for high-risk tools
-- [x] WebUI chat interface with SSE streaming
-- [x] Frontend/backend separation with modular architecture
-- [x] Light/dark theme support
-- [x] Built-in skills (document parser, data analysis, SQL query)
-- [x] Comprehensive documentation
-- [x] WebUI API test suite
-- [ ] Authentication/authorization (JWT or OAuth2)
-- [ ] User management and multi-tenancy
-- [ ] PostgreSQL support for high-availability deployments
-- [ ] Rate limiting per session
-- [ ] File upload through WebUI
-- [ ] Real-time workspace file browser in WebUI
+| 文档 | 说明 |
+|------|------|
+| [架构设计](docs/architecture.md) | 系统架构、设计决策、安全模型、数据流 |
+| [部署指南](docs/deployment.md) | 生产部署、SSL、备份、监控 |
+| [开发指南](docs/development.md) | 本地开发、测试、调试 |
+| [API 参考](docs/api.md) | Sandbox API + MCP + SSE 协议、Artifact 提交流程 |
+| [前端指南](docs/webui.md) | 前端 SPA 架构、SSE 消费、扩展 |

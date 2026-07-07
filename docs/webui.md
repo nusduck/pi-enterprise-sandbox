@@ -1,178 +1,164 @@
 # WebUI Guide
 
-## Overview
+## 概述
 
-The WebUI provides a ChatGPT-style chat interface for interacting with the Pi Agent through the Sandbox. It consists of a Node.js backend server and a vanilla JavaScript frontend.
+v4 前端是一个**纯 UI SPA**，零 Agent 逻辑。Agent 运行在服务端（API Server），前端通过 SSE 消费事件流并渲染。
 
-## Architecture
+架构：
 
 ```
-Browser (ES modules)          Node.js Server            Sandbox Service
-┌─────────────────┐    HTTP    ┌────────────────┐   HTTP   ┌────────────────┐
-│  js/app.js       │◄─────────►│  server.js      │◄────────►│  FastAPI        │
-│  js/chat.js      │  SSE      │  routes/        │          │  (port 8081)    │
-│  js/api.js       │           │  services/      │          └────────────────┘
-│  js/utils.js     │           │  config.js      │
-│  js/conversations.js│        └────────────────┘
-│  index.html       │
-│  style.css        │
-└─────────────────┘
+Browser                  Frontend (Nginx:80)          API Server (Node:4000)
+┌──────────────┐  HTTP  ┌──────────────────┐  SSE   ┌──────────────────┐
+│ main.js       │◄──────►│ 静态文件服务       │◄──────►│ POST /api/chat   │
+│              │        │ /api/* 反向代理    │        │                  │
+│ 消息渲染      │        └──────────────────┘        │ SSE event stream │
+│ SSE 消费      │        host:3000 → container:80    └──────────────────┘
+│ 文件上传/下载  │
+│ 拖拽支持      │
+└──────────────┘
 ```
 
-### Server-Side Modules
+## 目录结构
 
-| Module | Purpose |
-|---|---|
-| `server.js` | HTTP server, routing, startup/shutdown |
-| `config.js` | All configuration constants (env-based) |
-| `services/sandbox-client.js` | HTTP client for Sandbox API |
-| `services/conversation-manager.js` | Conversation CRUD, persistence |
-| `services/agent-factory.js` | Pi Agent creation, tool definitions |
-| `routes/status.js` | `GET /api/status` handler |
-| `routes/conversations.js` | Conversation CRUD handlers |
-| `routes/chat.js` | SSE chat streaming handler |
-| `routes/static.js` | Static file serving |
+```
+frontend/
+├── src/
+│   └── main.js              ← 唯一入口（~463 行 vanilla JS）
+├── index.html               ← HTML 结构
+├── nginx.conf               ← Nginx 配置（/api/* 反向代理，SSE buffering off）
+├── vite.config.js           ← Vite dev proxy → localhost:4000
+├── package.json             ← @earendil-works/pi-web-ui
+├── Dockerfile               ← Nginx + build
+└── dist/                    ← Vite 构建产物
+```
 
-### Client-Side Modules
+## 核心架构
 
-| Module | Purpose |
-|---|---|
-| `js/app.js` | Main entry, state management, event handlers |
-| `js/api.js` | HTTP client for WebUI API |
-| `js/chat.js` | Message rendering, streaming, tool indicators |
-| `js/conversations.js` | Sidebar conversation list |
-| `js/utils.js` | Markdown rendering, HTML escape, clipboard |
+### 单文件 SPA
 
-## Theming
+`main.js` 是唯一的前端入口，使用原生 JavaScript（无框架），所有逻辑内联。依赖：
 
-The UI supports **dark** (default) and **light** themes.
+- `@earendil-works/pi-web-ui` — 目前仅引用 CSS 样式（`app.css`），v4 不使用 Web Components
 
-- Toggle via the theme button in the sidebar footer
-- Theme is persisted in `localStorage`
-- Light theme is activated by `data-theme="light"` on `<html>`
-
-### CSS Custom Properties
-
-All colors are driven by CSS custom properties on `:root` / `[data-theme="light"]`:
-
-- `--bg`, `--bg2` — background colors
-- `--text`, `--text2`, `--text3` — text colors
-- `--sidebar-bg`, `--sidebar-hover`, `--sidebar-active` — sidebar colors
-- `--accent`, `--accent2` — primary accent (green)
-- `--card`, `--border` — card and border colors
-- `--danger` — error/danger color
-
-## SSE Event Stream
-
-The chat endpoint uses Server-Sent Events (SSE) for real-time communication.
-
-### Event Types
+### 状态管理
 
 ```javascript
-// Turn started
-{ type: "turn_start", trace_id: "trace_abc123" }
-
-// Token stream (text delta)
-{ type: "token", text: "Hello" }
-
-// Tool execution started
-{ type: "tool_start", toolName: "bash", args: {command: "ls -la"} }
-
-// Tool execution ended
-{ type: "tool_end", toolName: "bash", isError: false }
-
-// Error occurred
-{ type: "error", text: "Something went wrong" }
-
-// Conversation turn complete
-{ type: "done" }
+const state = {
+  messages: [],            // 消息历史 [{ role, content, _fileLinks }]
+  isStreaming: false,      // 是否正在接收 SSE 流
+  abortCtrl: null,         // AbortController 引用
+  currentMsg: null,        // 流式构建中的 assistant 消息
+  sessionId: null,         // Sandbox session ID
+  readyFiles: new Set(),   // 已 emit file_ready 的文件路径（去重）
+  pendingTool: null,       // 当前工具执行信息 { id, name, args }
+};
 ```
 
-### Client-Side Consumption
+### 消息格式
 
 ```javascript
-// In js/api.js
-async function streamChat(convId, message, signal, callbacks) {
-  const resp = await fetch(`/api/conversations/${convId}/chat`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ message }),
-    signal,
-  });
-
-  const reader = resp.body.getReader();
-  const decoder = new TextDecoder();
-
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-
-    const chunk = decoder.decode(value);
-    for (const line of chunk.split("\n")) {
-      if (!line.startsWith("data: ")) continue;
-      const data = JSON.parse(line.slice(6));
-
-      switch (data.type) {
-        case "token": callbacks.onToken?.(data.text); break;
-        case "tool_start": callbacks.onToolStart?.(data); break;
-        case "tool_end": callbacks.onToolEnd?.(data); break;
-        case "done": callbacks.onDone?.(); break;
-        case "error": callbacks.onError?.(data.text); break;
-      }
-    }
-  }
+{
+  role: 'user' | 'assistant',
+  content: [
+    { type: 'text', text: '...' },
+    { type: 'tool_use', name: 'bash', input: {...}, status: 'running' | 'complete', isError, result },
+  ],
+  _fileLinks: [{ name: 'file.txt', url: '/api/files/download?...', path: 'file.txt' }],
+  stopReason: 'aborted'  // 仅用户中断时
 }
 ```
 
-## Keyboard Shortcuts
+## 请求流
 
-| Shortcut | Action |
-|---|---|
-| `Enter` | Send message |
-| `Shift+Enter` | New line in input |
-| `Ctrl+Shift+C` (on code block) | Copy code |
+### 发送消息
 
-## Extending the WebUI
-
-### Adding a New Route
-
-1. Create `webui/routes/my-route.js`
-2. Export handler function(s)
-3. Import and register in `webui/server.js`
-
-```javascript
-// webui/routes/my-route.js
-export async function handleMyRoute(req, res) {
-  res.writeHead(200, { "Content-Type": "application/json" });
-  res.end(JSON.stringify({ data: "hello" }));
-}
-
-// In server.js
-import { handleMyRoute } from "./routes/my-route.js";
-
-// In the router:
-if (pathname === "/api/my-route") {
-  return handleMyRoute(req, res);
-}
+```
+用户输入 → Enter / 点击发送
+  ↓
+sendMessage(text)
+  ├── 添加 user 消息到 state.messages
+  ├── 设置 state.isStreaming = true
+  ├── 初始化 state.currentMsg + state.readyFiles
+  ├── render() 更新 DOM
+  ├── fetch POST /api/chat { messages }
+  │     ↓ SSE stream
+  │     handleSSE(ev):
+  │       session      → 记录 sessionId，更新状态指示
+  │       token        → 追加到 currentMsg.content (text delta)
+  │       tool_start   → 插入 tool_use 条目（status: running）
+  │       tool_end     → 更新 tool_use 条目（status: complete）
+  │       file_ready   → 生成下载链接，追加 _fileLinks
+  │       done         → 标记完成
+  │       session_closed → 状态指示
+  │       error        → 错误注入消息
+  ├── 将 currentMsg 推入 state.messages
+  └── render() 最终渲染
 ```
 
-### Adding a New Frontend Feature
+### 文件上传
 
-1. Add logic in the appropriate `webui/js/*.js` module
-2. Or create a new module and import it in `app.js`
-3. Update `webui/style.css` as needed
+```
+拖拽文件 / 点击上传
+  ↓
+uploadFile(file)
+  ├── 添加 user 消息（显示文件名和大小）
+  ├── POST /api/files/upload?session_id=xxx (multipart)
+  └── 自动发送分析请求
+```
 
-### Changing the System Prompt
+### 文件下载
 
-Edit the `SYSTEM_PROMPT` constant in `webui/config.js`. The prompt is injected into every new conversation's Pi Agent.
+```
+file_ready SSE 事件
+  ↓
+handleSSE → state.currentMsg._fileLinks.push()
+  ↓
+render() → 生成 <a class="dl" href="/api/files/download?...">⬇ filename</a>
+```
 
-## Data Persistence
+## 事件绑定
 
-Conversations are persisted to `sandbox/data/webui/conversations.json`:
+`init()` 函数负责所有事件绑定：
 
-- Written after every conversation change
-- Loaded on server startup
-- Each conversation includes: id, title, createdAt, sandboxSessionId, messages[]
-- Messages include role, content, trace_id, timestamp
+| 交互 | 触发 | 处理函数 |
+|------|------|----------|
+| 发送消息 | Enter / 点击发送按钮 | `sendMessage(text)` |
+| 中断流 | 流式过程中点击停止 | `cancelStream()` → `abortCtrl.abort()` |
+| 新行 | Shift+Enter | textarea 默认行为 |
+| 上传文件 | 点击上传按钮 / Ctrl+U | `uploadFile(file)` |
+| 拖拽上传 | dragenter / dragover / drop | `uploadFile(file)` |
+| 自动调整高度 | textarea input | 动态 height |
 
-Sandbox sessions are **not** persisted — they're recreated if the server restarts (conversations with `sandboxSessionId` attempt to restore).
+## SSE 事件消费
+
+见 `handleSSE(ev)` 函数。支持的 8 种事件类型与 [API 文档](api.md#sse-事件协议) 一致：
+
+| 事件类型 | UI 行为 |
+|----------|---------|
+| `session` | 更新状态栏显示 session ID 后 8 位 |
+| `token` | 增量追加文本到流式消息气泡 |
+| `tool_start` | 插入工具调用卡片（带 running 动画） |
+| `tool_end` | 更新工具卡片为完成/错误状态 |
+| `file_ready` | 生成下载链接 `<a>` 标签 |
+| `done` | 结束流式状态 |
+| `session_closed` | 状态栏显示 "Session ended" |
+| `error` | 错误文本注入消息，红色闪出通知 |
+
+## 渲染机制
+
+- `render()` — 全量渲染：遍历 `state.messages` 构建 DOM
+- `incBubble()` — 增量更新：仅更新最后一条 assistant 消息的文本内容（高频率 token 流）
+- `rerenderLast()` — 最后一条消息重新渲染（tool card 状态变化）
+- `showWelcome()` / `removeWelcome()` — 空状态欢迎页切换
+
+## 主题
+
+支持暗色（默认）和亮色主题，通过 CSS `[data-theme]` 切换。当前版本未暴露切换 UI，默认暗色。
+
+## 键盘快捷键
+
+| 快捷键 | 操作 |
+|--------|------|
+| `Enter` | 发送消息 |
+| `Shift+Enter` | 换行 |
+| `Ctrl+U` | 打开文件选择器上传 |

@@ -49,12 +49,11 @@ def test_entrypoint_exposes_startup_network_and_uvicorn_parameters() -> None:
 def test_compose_parameterizes_runtime_defaults() -> None:
     text = COMPOSE.read_text()
     expected_fragments = [
-        "${SANDBOX_HOST_PORT:-8083}:${SANDBOX_PORT:-8081}",
+        '"${SANDBOX_MCP_HOST_PORT:-8093}:${SANDBOX_MCP_PORT:-8091}"',
         "SANDBOX_DATABASE_URL: ${SANDBOX_DATABASE_URL:-sqlite:////sandbox/data/sandbox.db}",
         "SANDBOX_MAX_MEMORY_MB: ${SANDBOX_MAX_MEMORY_MB:-512}",
         "SANDBOX_IPTABLES_ENABLED: ${SANDBOX_IPTABLES_ENABLED:-true}",
-        "${AGENT_HOST_PORT:-3000}:${AGENT_PORT:-3000}",
-        "SANDBOX_BASE_URL: ${SANDBOX_BASE_URL:-http://sandbox:8081}",
+        "${FRONTEND_PORT:-3000}:80",
     ]
     for fragment in expected_fragments:
         assert fragment in text

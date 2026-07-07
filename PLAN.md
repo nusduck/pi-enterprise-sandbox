@@ -2,6 +2,7 @@
 
 > 基于 `pi_sandbox_final_design.md` 的设计方案和 `AUDIT.md` 的差距分析，输出后续开发计划。
 > 版本：v1.0 · 2026-07-03
+> ⚠️ **注意**: 本文档基于 v2 架构编写（引用 `webui/`、`webui/server.js` 等已废弃路径）。当前实现为 v4 三容器架构，详见 [README.md](README.md) 和 [docs/architecture.md](docs/architecture.md)。
 
 ---
 

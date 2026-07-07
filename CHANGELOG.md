@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [4.0.0] — 2026-07-04
+
+### Added
+
+- **三容器架构 (v4)**: 前端 (Nginx + SPA) + API Server (Node.js + pi-coding-agent) + Sandbox (Python FastAPI)，前端零 Agent，LLM Key 仅存服务端
+
+### Changed
+
+- **文档全面重写**: README.md、docs/architecture.md、docs/deployment.md、docs/development.md、docs/api.md、docs/webui.md 全部基于实际代码重写
+- **端口规范化**: 统一 host→container 端口标注格式，修正所有文档中的端口不一致问题
+- **API 文档**: 补全三层 API（Frontend → API Server → Sandbox），新增 Conversations、Approvals、Traces、MCP 端点文档，补充 SSE 事件协议完整列表
+- **部署文档**: 更新架构图和端口，标注 docker-compose.prod.yml 服务名不匹配问题
+
+### Removed
+
+- **旧文档归档**: `docs/system-design-v2.md` 和 `docs/system-design-v3.md` 移至 `docs/archive/`，保留 v4 作为当前设计文档
+
 ## [0.2.0] — 2026-07-03
 
 ### Added

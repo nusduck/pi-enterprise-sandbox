@@ -34,10 +34,12 @@ def run_python(session_id: str, body: PythonExecutionRequest):
         raise HTTPException(status_code=400, detail="Session is not active")
 
     ws = workspace_manager.get_workspace_path(session_id)
+    if not ws.exists():
+        ws.mkdir(parents=True, exist_ok=True)
     result = execution_manager.run_python(
         session_id=session_id,
         code=body.code,
-        workspace_path=str(ws),
+        workspace_path="/sandbox/workspace",
         timeout=body.timeout,
         env_overrides=body.env_overrides if body.env_overrides else None,
     )
@@ -66,10 +68,12 @@ def run_command(session_id: str, body: CommandExecutionRequest):
         raise HTTPException(status_code=400, detail="Session is not active")
 
     ws = workspace_manager.get_workspace_path(session_id)
+    if not ws.exists():
+        ws.mkdir(parents=True, exist_ok=True)
     result = execution_manager.run_command(
         session_id=session_id,
         command=body.command,
-        workspace_path=str(ws),
+        workspace_path="/sandbox/workspace",
         timeout=body.timeout,
         env_overrides=body.env_overrides if body.env_overrides else None,
     )
@@ -98,10 +102,12 @@ def run_node(session_id: str, body: NodeExecutionRequest):
         raise HTTPException(status_code=400, detail="Session is not active")
 
     ws = workspace_manager.get_workspace_path(session_id)
+    if not ws.exists():
+        ws.mkdir(parents=True, exist_ok=True)
     result = execution_manager.run_node(
         session_id=session_id,
         code=body.code,
-        workspace_path=str(ws),
+        workspace_path="/sandbox/workspace",
         timeout=body.timeout,
         env_overrides=body.env_overrides if body.env_overrides else None,
     )

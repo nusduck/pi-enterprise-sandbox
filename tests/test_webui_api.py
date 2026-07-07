@@ -41,6 +41,8 @@ class TestSandboxSessionAPI:
         data = resp.json()
         assert data["session_id"].startswith("sandbox_")
         assert data["status"] == "RUNNING"
+        # Cleanup
+        sandbox_client.delete(f"/sessions/{data['session_id']}")
 
     def test_create_session_with_enterprise_id(self):
         resp = sandbox_client.post(
@@ -55,18 +57,33 @@ class TestSandboxSessionAPI:
         data = resp.json()
         assert data["enterprise_session_id"] == "ent-test-001"
         assert data["agent_session_id"] == "agent-test-001"
+        # Cleanup
+        sandbox_client.delete(f"/sessions/{data['session_id']}")
 
     def test_lookup_by_agent_id(self):
+        # Clean up any stale session from previous runs
+        stale = sandbox_client.get("/sessions/by-agent/agent-lookup-001")
+        if stale.status_code == 200:
+            sandbox_client.delete(f"/sessions/{stale.json()['session_id']}")
+
         created = sandbox_client.post(
             "/sessions",
             json={"caller_id": "webui-test", "agent_session_id": "agent-lookup-001"},
         ).json()
+        assert created["session_id"].startswith("sandbox_")
 
         resp = sandbox_client.get("/sessions/by-agent/agent-lookup-001")
         assert resp.status_code == 200
         assert resp.json()["session_id"] == created["session_id"]
+        # Cleanup
+        sandbox_client.delete(f"/sessions/{created['session_id']}")
 
     def test_lookup_by_enterprise_id(self):
+        # Clean up any stale session from previous runs
+        stale = sandbox_client.get("/sessions/by-enterprise/ent-lookup-001")
+        if stale.status_code == 200:
+            sandbox_client.delete(f"/sessions/{stale.json()['session_id']}")
+
         created = sandbox_client.post(
             "/sessions",
             json={
@@ -74,10 +91,13 @@ class TestSandboxSessionAPI:
                 "enterprise_session_id": "ent-lookup-001",
             },
         ).json()
+        assert created["session_id"].startswith("sandbox_")
 
         resp = sandbox_client.get("/sessions/by-enterprise/ent-lookup-001")
         assert resp.status_code == 200
         assert resp.json()["session_id"] == created["session_id"]
+        # Cleanup
+        sandbox_client.delete(f"/sessions/{created['session_id']}")
 
     def test_delete_session(self):
         resp = sandbox_client.post("/sessions", json={"caller_id": "webui-test"})

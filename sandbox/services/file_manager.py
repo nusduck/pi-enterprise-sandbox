@@ -99,7 +99,7 @@ class FileManager:
                 stat = entry.stat()
                 files.append(FileInfo(
                     name=entry.name,
-                    path=str(entry.relative_to(Path(workspace_path))),
+                    path=str(entry.relative_to(safe)),
                     is_dir=entry.is_dir(),
                     size=stat.st_size if entry.is_file() else 0,
                     modified_at=__import__("datetime").datetime.fromtimestamp(

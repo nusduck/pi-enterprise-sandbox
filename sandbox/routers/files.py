@@ -22,7 +22,9 @@ def _get_workspace(session_id: str) -> str:
     session = session_manager.get(session_id)
     if session is None:
         raise HTTPException(status_code=404, detail="Session not found")
-    return session.workspace_path
+    # Use physical path for reliable file operations (symlink is per-agent-turn)
+    physical = session.metadata.get("_physical_workspace")
+    return physical or session.workspace_path
 
 
 @router.get("", response_model=FileListResponse)

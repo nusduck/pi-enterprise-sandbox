@@ -13,7 +13,7 @@ class Settings(BaseSettings):
     debug: bool = False
 
     # ── Paths ────────────────────────────────────────────────────────
-    workspaces_root: str = "/sandbox/workspaces"
+    workspaces_root: str = "/var/sandbox/workspaces"
     skills_root: str = "/sandbox/skills"
 
     # ── Resource limits ──────────────────────────────────────────────

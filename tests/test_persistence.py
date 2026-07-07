@@ -49,7 +49,8 @@ def test_sessions_persist_across_manager_instances(tmp_path):
 
     assert restored is not None
     assert restored.status == SessionStatus.COMPLETED
-    assert restored.metadata == {"topic": "restore"}
+    assert restored.metadata.get("topic") == "restore"
+    assert "_physical_workspace" in restored.metadata
     assert by_agent is not None and by_agent.session_id == session.session_id
     assert by_enterprise is not None and by_enterprise.session_id == session.session_id
 

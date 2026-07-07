@@ -27,8 +27,11 @@ uv venv
 source .venv/bin/activate
 uv pip install -e ".[test]"
 
-# WebUI (if working on frontend)
-cd webui && npm install && cd ..
+# Frontend
+cd frontend && npm install && cd ..
+
+# API Server
+cd api-server && npm install && cd ..
 ```
 
 ### Run Tests
@@ -39,7 +42,7 @@ uv run pytest -q
 
 # Specific area
 uv run pytest tests/test_integration.py -v
-uv run pytest tests/test_webui_api.py -v   # WebUI API tests
+uv run pytest tests/test_webui_api.py -v   # API Server tests
 uv run pytest tests/test_persistence.py -v # DB persistence tests
 
 # With coverage
@@ -50,30 +53,34 @@ uv run pytest --cov=sandbox --cov-report=term-missing
 
 ```
 pi-sandbox/
-├── sandbox/          # Sandbox Service (FastAPI backend)
-│   ├── main.py       # App entry point
-│   ├── config.py     # Settings (env-based)
-│   ├── models.py     # Pydantic models
-│   ├── database.py   # SQLite persistence
+├── frontend/          # Frontend SPA (Vite + pi-web-ui → Nginx)
+│   ├── src/main.js    # Single entry point (~463 lines vanilla JS)
+│   ├── index.html     # Main page
+│   ├── Dockerfile     # Nginx + Vite build
+│   └── nginx.conf     # /api/* → api-server:4000
+├── api-server/        # API Server (Node.js + pi-coding-agent SDK)
+│   ├── server.js      # HTTP entry (POST /api/chat SSE, /api/status)
+│   ├── agent-handler.js  # Agent session lifecycle + SSE streaming
+│   ├── sandbox-tools.js  # read/write/edit/bash tools (→ Sandbox API)
+│   └── Dockerfile
+├── sandbox/           # Sandbox Service (FastAPI backend)
+│   ├── main.py        # App entry + middleware + router registration
+│   ├── config.py      # Settings (env-based)
+│   ├── models.py      # Pydantic models
+│   ├── database.py    # SQLite WAL persistence
 │   ├── repositories.py # Data access layer
-│   ├── trace.py      # Trace ID context
-│   ├── routers/      # API routers
-│   ├── services/     # Business logic
-│   ├── security/     # Path validation, safe_env
-│   └── mcp/          # MCP Server Adapter
-├── webui/            # WebUI (Node.js)
-│   ├── server.js     # Entry point (thin router)
-│   ├── config.js     # Configuration
-│   ├── services/     # Backend services
-│   ├── routes/       # Route handlers
-│   ├── js/           # Frontend ES modules
-│   ├── index.html    # Main page
-│   └── style.css     # Styles
-├── agent/            # Agent-side SDK + Pi Extension
-├── skills/           # Built-in skills
-├── tests/            # Test suite
-├── docs/             # Documentation
-├── config/           # Runtime config files
+│   ├── routers/       # API routers (sessions/executions/files/artifacts/traces...)
+│   ├── services/      # Business logic (session/execution/file/approval/audit...)
+│   ├── security/      # Path validation, safe_env
+│   └── mcp/           # MCP Server Adapter
+├── extensions/        # Pi Agent TypeScript extension
+├── sdk/               # Sandbox Node.js SDK
+├── skills/            # Built-in skills
+├── tests/             # Test suite (pytest)
+├── docs/              # Documentation
+├── config/            # Runtime config files
+├── nginx/             # Production Nginx + SSL
+├── scripts/           # Backup/restore utilities
 └── pyproject.toml
 ```
 
@@ -120,15 +127,17 @@ pi-sandbox/
 - [ ] CHANGELOG.md updated
 - [ ] No hardcoded secrets
 - [ ] Docker build succeeds (`docker compose build sandbox`)
-- [ ] Frontend syntax valid (`node --check webui/server.js`)
+- [ ] API Server syntax valid (`node --check api-server/server.js`)
 
 ## Architecture Decisions
 
 See [docs/architecture.md](./docs/architecture.md) for a detailed explanation of:
 
-- Why HTTP API (not MCP) for agent→sandbox communication
-- Why SQLite with WAL for persistence
+- Why service-side Agent runtime (no LLM Key in browser)
+- Three-container architecture (Frontend + API Server + Sandbox)
+- Why SQLite with WAL for persistence (optional PostgreSQL)
 - Why session-per-conversation isolation model
+- Why SSE streaming (not WebSocket)
 - Why approval workflow for high-risk tools
 
 ## Getting Help

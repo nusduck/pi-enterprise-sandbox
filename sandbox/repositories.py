@@ -259,11 +259,12 @@ class ConversationRepository:
         with self.db.connect() as conn:
             conn.execute(
                 """\
-                INSERT INTO conversations (id, title, sandbox_session_id, messages, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?)
+                INSERT INTO conversations (id, title, sandbox_session_id, workspace_path, messages, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
                     title=excluded.title,
                     sandbox_session_id=excluded.sandbox_session_id,
+                    workspace_path=excluded.workspace_path,
                     messages=excluded.messages,
                     updated_at=excluded.updated_at
                 """,
@@ -271,6 +272,7 @@ class ConversationRepository:
                     entry["id"],
                     entry.get("title", "New conversation"),
                     entry.get("sandbox_session_id"),
+                    entry.get("workspace_path"),
                     _json_dumps(entry.get("messages", [])),
                     entry.get("created_at", now),
                     now,
@@ -332,12 +334,20 @@ class ConversationRepository:
             conn.commit()
             return cur.rowcount
 
+    def get_by_workspace_path(self, workspace_path: str) -> ConversationResponse | None:
+        with self.db.connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM conversations WHERE workspace_path = ?", (workspace_path,)
+            ).fetchone()
+        return self._row_to_model(row) if row else None
+
     @staticmethod
     def _row_to_model(row) -> ConversationResponse:
         return ConversationResponse(
             id=row["id"],
             title=row["title"],
             sandbox_session_id=row["sandbox_session_id"],
+            workspace_path=row["workspace_path"],
             messages=_json_loads(row["messages"]),
             created_at=row["created_at"],
             updated_at=row["updated_at"],

@@ -57,9 +57,13 @@ async def lifespan(app: FastAPI):
     logger = logging.getLogger("sandbox")
     logger.info("Sandbox Service v%s starting", __version__)
 
-    # Ensure workspaces root exists
+    # Ensure workspaces root and skills dir exist
     settings.workspaces_path.mkdir(parents=True, exist_ok=True)
     settings.skills_path.mkdir(parents=True, exist_ok=True)
+
+    # Ensure /sandbox/workspace exists as a directory (bind-mount target for active workspace)
+    from sandbox.services.workspace_manager import WORKSPACE_LINK
+    WORKSPACE_LINK.mkdir(parents=True, exist_ok=True)
 
     logger.info(
         "Workspaces: %s | Skills: %s | MCP: %s",

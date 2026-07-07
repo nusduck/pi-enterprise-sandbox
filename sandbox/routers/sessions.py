@@ -20,8 +20,14 @@ def create_session(body: SessionCreate):
         user_id=body.user_id,
         caller_id=body.caller_id,
         metadata=body.metadata,
+        workspace_path_override=body.workspace_path,
     )
-    workspace_manager.init_workspace(session.session_id)
+    if body.workspace_path:
+        # Point the unified /sandbox/workspace symlink to the conversation workspace
+        workspace_manager.activate_workspace(body.workspace_path)
+    else:
+        # Init fresh workspace and point symlink to it
+        workspace_manager.init_workspace(session.session_id)
     audit_logger.log_session_lifecycle(
         session.session_id, "created",
         {"caller_id": body.caller_id},

@@ -20,7 +20,9 @@ services:
     environment:
       DOMAIN: "${DOMAIN:-localhost}"
     depends_on:
-      pi-agent:
+      frontend:
+        condition: service_started
+      api-server:
         condition: service_started
     restart: always
     healthcheck:
@@ -58,7 +60,7 @@ services:
         max-file: "3"
     restart: always
 
-  pi-agent:
+  api-server:
     # ── Production resource limits ──────────────────────────────────
     deploy:
       resources:

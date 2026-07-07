@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="description" content="Enterprise Sandbox — AI-powered sandboxed coding environment" />
+  <title>Enterprise Sandbox</title>
+  <link rel="stylesheet" href="/src/style.css" />
+</head>
+<body>
+  <div id="app">
+    <header class="header">
+      <div class="logo">◆</div>
+      <h1>Enterprise Sandbox</h1>
+      <div class="badge"><span class="dot"></span><span id="status-label">Agent Ready</span></div>
+    </header>
+    <div id="flash-zone"></div>
+    <div id="messages" class="msgs"></div>
+    <div id="dropzone" class="dropzone">
+      <div class="dropzone-inner">
+        <div class="dz-icon">📤</div>
+        <p>Drop file to upload</p>
+        <small>Uploaded to sandbox workspace</small>
+      </div>
+    </div>
+    <div class="input-wrap">
+      <div class="input-inner">
+        <button class="btn btn-upload" id="btn-upload" title="Upload file (Ctrl+U)">📎</button>
+        <textarea id="input" rows="1" placeholder="Type a message… (Ctrl+L to clear)"></textarea>
+        <button class="btn btn-send" id="btn-send" title="Send (Enter)">➤</button>
+      </div>
+    </div>
+  </div>
+  <script type="module" src="/src/main.js"></script>
+</body>
+</html>

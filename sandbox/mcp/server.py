@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 import os
+from pathlib import Path
 from typing import Any
 
 from sandbox.config import settings
@@ -240,6 +241,39 @@ class MCPServerAdapter:
             "total": len(artifacts),
         }
 
+    async def submit_artifact(self, **kwargs) -> dict[str, Any]:
+        """Explicitly submit a workspace file as an artifact."""
+        session_id = kwargs.get("session_id", "")
+        path = kwargs.get("path", "")
+        name = kwargs.get("name", path.split("/")[-1] if path else "untitled")
+        mime_type = kwargs.get("mime_type", "application/octet-stream")
+
+        session = session_manager.get(session_id)
+        if session is None:
+            return {"error": "Session not found"}
+
+        physical = session.metadata.get("_physical_workspace")
+        ws_path = physical or session.workspace_path
+        ws = Path(ws_path)
+        artifact_path = ws / path
+
+        size = artifact_path.stat().st_size if artifact_path.exists() else 0
+
+        result = artifact_manager.register(
+            session_id=session_id,
+            name=name,
+            path=path,
+            mime_type=mime_type,
+            size=size,
+        )
+        return {
+            "artifact_id": result.artifact_id,
+            "name": result.name,
+            "path": result.path,
+            "mime_type": result.mime_type,
+            "size": result.size,
+        }
+
     async def download_file(self, **kwargs) -> dict[str, Any]:
         """Return file path for external download (MCP client fetches the file)."""
         session_id = kwargs.get("session_id", "")
@@ -297,6 +331,7 @@ class MCPServerAdapter:
         "download_file": "download_file",
         "list_files": "list_files",
         "get_artifacts": "get_artifacts",
+        "submit_artifact": "submit_artifact",
     }
 
     @property

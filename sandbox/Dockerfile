@@ -12,8 +12,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 RUN groupadd -g 10001 sandbox && \
     useradd -m -u 10001 -g sandbox sandbox && \
-    mkdir -p /sandbox/workspaces /sandbox/skills /sandbox/data && \
-    chown -R sandbox:sandbox /sandbox
+    mkdir -p /sandbox/workspace /var/sandbox/workspaces /sandbox/skills /sandbox/data && \
+    chmod 0311 /var/sandbox/workspaces && \
+    chown -R sandbox:sandbox /sandbox /var/sandbox
 
 WORKDIR /app
 

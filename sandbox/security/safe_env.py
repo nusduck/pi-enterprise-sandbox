@@ -30,6 +30,7 @@ def safe_env(
     env = dict(_BASE_SAFE_ENV)
     if workspace_path:
         env["HOME"] = workspace_path
+        env["PWD"] = workspace_path  # bash pwd reads PWD for logical path
     if overrides:
         env.update(overrides)
     return env

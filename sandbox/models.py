@@ -49,6 +49,7 @@ class SessionCreate(BaseModel):
     user_id: str | None = None
     caller_id: str = "unknown"
     metadata: dict[str, Any] = Field(default_factory=dict)
+    workspace_path: str | None = None  # override: point to existing workspace
 
 
 class SessionResponse(BaseModel):
@@ -213,6 +214,7 @@ class ConversationResponse(BaseModel):
     id: str
     title: str = "New conversation"
     sandbox_session_id: str | None = None
+    workspace_path: str | None = None
     messages: list[dict[str, Any]] = Field(default_factory=list)
     created_at: str = ""
     updated_at: str = ""
@@ -222,4 +224,5 @@ class ConversationCreate(BaseModel):
     id: str | None = None
     title: str = "New conversation"
     sandbox_session_id: str | None = None
+    workspace_path: str | None = None
     messages: list[dict[str, Any]] = Field(default_factory=list)

@@ -178,6 +178,23 @@ async def get_artifacts(session_id: str) -> dict[str, Any]:
     return await adapter.get_artifacts(session_id=session_id)
 
 
+@mcp_app.tool()
+async def submit_artifact(
+    session_id: str,
+    path: str,
+    name: str | None = None,
+    mime_type: str | None = None,
+) -> dict[str, Any]:
+    """Explicitly submit a workspace file as a downloadable artifact.
+    Only explicitly submitted files are tracked — no automatic scans."""
+    return await adapter.submit_artifact(
+        session_id=session_id,
+        path=path,
+        name=name or path.split("/")[-1],
+        mime_type=mime_type or "application/octet-stream",
+    )
+
+
 # ── Main entry point ──────────────────────────────────────────────
 
 if __name__ == "__main__":

@@ -1,6 +1,6 @@
 ---
-name: data-analysis
-description: Use when analyzing tabular data, generating summary statistics, charts, or structured reports.
+name: sample-skill
+description: A sample skill template demonstrating the SKILL.md format and structure.
 ---
 
 # Data Analysis Skill
@@ -14,8 +14,7 @@ Use this skill when the task involves CSV, Excel, database exports, transaction 
 1. Inspect files with `list` / `read` / `preview`.
 2. Understand columns and data types.
 3. Use Python to generate summary statistics.
-4. Save intermediate outputs under `output/`.
-5. Register artifacts if files are generated.
+4. Call `submit_artifact` to make generated files downloadable.
 
 ## Notes
 

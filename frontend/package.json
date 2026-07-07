@@ -1,0 +1,17 @@
+{
+  "name": "pi-enterprise-frontend",
+  "version": "4.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@earendil-works/pi-web-ui": "^0.75.3"
+  },
+  "devDependencies": {
+    "vite": "^6.0.0"
+  }
+}

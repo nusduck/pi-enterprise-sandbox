@@ -173,7 +173,6 @@ class TestArtifactIntegration:
     def test_register_and_list(self):
         session = client.post("/sessions", json={}).json()
         sid = session["session_id"]
-        ws = session["workspace_path"]
 
         # Create a file first, then register it as artifact
         client.post(f"/sessions/{sid}/files/write",
@@ -194,6 +193,39 @@ class TestArtifactIntegration:
         resp = client.get(f"/sessions/{sid}/artifacts")
         assert resp.status_code == 200
         assert resp.json()["total"] == 1
+
+    def test_submit_artifact(self):
+        """Explicit artifact submission via POST /artifacts/submit."""
+        session = client.post("/sessions", json={}).json()
+        sid = session["session_id"]
+
+        # Create a file via bash
+        client.post(
+            f"/sessions/{sid}/executions/command",
+            json={"command": "echo 'chart data' > chart.png"},
+        )
+
+        # Explicitly submit as artifact
+        resp = client.post(
+            f"/sessions/{sid}/artifacts/submit",
+            json={
+                "name": "chart.png",
+                "path": "chart.png",
+                "mime_type": "image/png",
+            },
+        )
+        assert resp.status_code == 201
+        data = resp.json()
+        assert data["artifact_id"].startswith("art_")
+        assert data["name"] == "chart.png"
+        assert data["path"] == "chart.png"
+        assert data["size"] > 0
+
+        # List should include it
+        resp = client.get(f"/sessions/{sid}/artifacts")
+        assert resp.status_code == 200
+        assert resp.json()["total"] >= 1
+        assert any(a["path"] == "chart.png" for a in resp.json()["artifacts"])
 
 
 class TestHealthIntegration:

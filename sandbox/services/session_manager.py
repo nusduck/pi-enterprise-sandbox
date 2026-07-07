@@ -29,9 +29,21 @@ class SessionManager:
         user_id: str | None = None,
         caller_id: str = "unknown",
         metadata: dict | None = None,
+        workspace_path_override: str | None = None,
     ) -> SessionResponse:
         session_id = f"sandbox_{uuid.uuid4().hex[:12]}"
         now = datetime.now(timezone.utc).isoformat()
+        # When workspace_path_override is given, expose the unified /sandbox/workspace
+        # path to API consumers (agent cwd).  The physical directory is tracked
+        # in metadata so the router can update the symlink.
+        if workspace_path_override:
+            ws_path = "/sandbox/workspace"
+            meta = dict(metadata or {})
+            meta["_physical_workspace"] = workspace_path_override
+        else:
+            ws_path = "/sandbox/workspace"
+            meta = dict(metadata or {})
+            meta["_physical_workspace"] = str(settings.workspaces_path / session_id)
         entry = {
             "session_id": session_id,
             "agent_session_id": agent_session_id,
@@ -39,10 +51,10 @@ class SessionManager:
             "user_id": user_id,
             "caller_id": caller_id,
             "status": SessionStatus.RUNNING,
-            "workspace_path": str(settings.workspaces_path / session_id),
+            "workspace_path": ws_path,
             "created_at": now,
             "updated_at": now,
-            "metadata": metadata or {},
+            "metadata": meta,
             "ttl_until": datetime.now(timezone.utc) + timedelta(minutes=settings.session_ttl_minutes),
         }
         if self.repository:
