@@ -52,7 +52,8 @@ pi-sandbox/
 │   └── nginx.conf        ← /api/* 反向代理到 api-server
 ├── api-server/           ← REST API（@earendil-works/pi-coding-agent SDK）
 │   ├── server.js         ← HTTP 入口（/api/chat SSE, /api/status）
-│   ├── agent-handler.js  ← Agent 会话管理与工具编排
+│   ├── routes/           ← chat, files, status 路由
+│   ├── services/         ← Sandbox HTTP 客户端
 │   ├── sandbox-tools.js  ← read/write/edit/bash 工具（重定向到 Sandbox）
 │   └── Dockerfile
 ├── sandbox/              ← 安全沙箱（Python FastAPI + 多层防护）
@@ -62,11 +63,8 @@ pi-sandbox/
 │   ├── mcp/              ← MCP 协议适配器
 │   └── Dockerfile
 ├── skills/               ← 技能文件（只读挂载到容器）
-├── extensions/           ← Pi Agent TypeScript 扩展
-├── sdk/                  ← Sandbox Node.js SDK
-├── scripts/              ← 备份/恢复脚本
 ├── tests/                ← pytest 测试套件
-├── config/               ← 配置文件
+├── scripts/              ← 备份/恢复脚本
 ├── nginx/                ← 生产 Nginx + SSL
 ├── docs/                 ← 文档
 ├── workspaces/           ← 会话工作区（运行时，持久化）

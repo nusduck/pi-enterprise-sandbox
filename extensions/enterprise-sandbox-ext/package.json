@@ -1,9 +1,0 @@
-{
-  "name": "enterprise-sandbox",
-  "version": "0.1.0",
-  "description": "Pi Extension: routes read/write/edit/bash tools to Enterprise Sandbox Service",
-  "type": "module",
-  "pi": {
-    "extensions": ["index.ts"]
-  }
-}
