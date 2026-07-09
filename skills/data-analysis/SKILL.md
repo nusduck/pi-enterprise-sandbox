@@ -13,3 +13,6 @@ Examples:
 python skills/data-analysis/scripts/analyze_table.py sales.csv
 python skills/data-analysis/scripts/analyze_table.py sales.xlsx --chart revenue.png
 ```
+
+After generating final charts or exports the user should receive, call `submit_artifact` with the file path.
+`write` / script output alone stays private in the workspace and does not create a download link.

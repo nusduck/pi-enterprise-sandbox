@@ -78,6 +78,103 @@ export async function getStatus() {
   return resp.json();
 }
 
+// ── Conversations ───────────────────────────────
+
+/**
+ * List all conversations (newest first).
+ * @returns {Promise<object[]>}
+ */
+export async function listConversations() {
+  const resp = await fetch(`${BASE}/conversations`);
+  if (!resp.ok) {
+    const err = await resp.json().catch(() => ({}));
+    throw new Error(err.error || `List conversations failed: ${resp.status}`);
+  }
+  return resp.json();
+}
+
+/**
+ * Get one conversation (includes messages).
+ * @param {string} id
+ */
+export async function getConversation(id) {
+  const resp = await fetch(`${BASE}/conversations/${encodeURIComponent(id)}`);
+  if (!resp.ok) {
+    const err = await resp.json().catch(() => ({}));
+    throw new Error(err.error || `Get conversation failed: ${resp.status}`);
+  }
+  return resp.json();
+}
+
+/**
+ * Create a new empty conversation.
+ * @param {string} [title]
+ */
+export async function createConversation(title = 'New chat') {
+  const resp = await fetch(`${BASE}/conversations`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ title }),
+  });
+  if (!resp.ok) {
+    const err = await resp.json().catch(() => ({}));
+    throw new Error(err.error || `Create conversation failed: ${resp.status}`);
+  }
+  return resp.json();
+}
+
+/**
+ * Delete a conversation.
+ * @param {string} id
+ */
+export async function deleteConversation(id) {
+  const resp = await fetch(`${BASE}/conversations/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+  });
+  if (!resp.ok && resp.status !== 204) {
+    const err = await resp.json().catch(() => ({}));
+    throw new Error(err.error || `Delete conversation failed: ${resp.status}`);
+  }
+  return true;
+}
+
+// ── Artifacts ───────────────────────────────────
+
+/**
+ * List artifacts for a sandbox session.
+ * @param {string} sessionId
+ * @returns {Promise<{ artifacts: object[], total?: number }>}
+ */
+export async function listArtifacts(sessionId) {
+  const q = new URLSearchParams({ session_id: sessionId });
+  const resp = await fetch(`${BASE}/artifacts?${q}`);
+  if (!resp.ok) {
+    const err = await resp.json().catch(() => ({}));
+    throw new Error(err.error || `List artifacts failed: ${resp.status}`);
+  }
+  return resp.json();
+}
+
+/**
+ * Decide a pending approval (approve | reject).
+ * @param {string} approvalId
+ * @param {'approve'|'reject'} decision
+ */
+export async function decideApproval(approvalId, decision) {
+  const resp = await fetch(`${BASE}/approvals/${encodeURIComponent(approvalId)}/decide`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ decision }),
+  });
+  if (!resp.ok) {
+    const err = await resp.json().catch(() => ({}));
+    throw new Error(err.error || `Approval failed: ${resp.status}`);
+  }
+  return resp.json();
+}
+
+// ── Files ───────────────────────────────────────
+
 /**
  * Upload a file to the sandbox workspace.
  * @param {string} sessionId
@@ -114,8 +211,16 @@ export async function uploadFile(sessionId, file, signal) {
 }
 
 /**
- * Build a download URL for a file in the sandbox.
+ * Build a download URL for a raw workspace file (e.g. user uploads inspection).
+ * Agent deliverables should use getArtifactDownloadUrl instead (P7).
  */
 export function getDownloadUrl(sessionId, path) {
   return `${BASE}/files/download?session_id=${encodeURIComponent(sessionId)}&path=${encodeURIComponent(path)}`;
+}
+
+/**
+ * Build a download URL for a registered artifact deliverable (P7).
+ */
+export function getArtifactDownloadUrl(sessionId, artifactId) {
+  return `${BASE}/files/artifact-download?session_id=${encodeURIComponent(sessionId)}&artifact_id=${encodeURIComponent(artifactId)}`;
 }

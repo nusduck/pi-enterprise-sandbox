@@ -2,6 +2,7 @@
 
 import pytest
 from sandbox.models import SessionStatus
+from sandbox.paths import AGENT_WORKSPACE_PATH
 from sandbox.services.session_manager import SessionManager
 
 
@@ -63,8 +64,8 @@ class TestSessionManager:
 
     def test_workspace_path_generated(self, mgr: SessionManager):
         session = mgr.create()
-        # Always exposed as /sandbox/workspace (the unified symlink path)
-        assert session.workspace_path == "/sandbox/workspace"
+        # Always exposed as stable agent path (P3)
+        assert session.workspace_path == AGENT_WORKSPACE_PATH
 
     def test_multiple_sessions_have_unique_ids(self, mgr: SessionManager):
         s1 = mgr.create()
@@ -77,11 +78,17 @@ class TestSessionManager:
             caller_id="test-override",
             workspace_path_override=override_path,
         )
-        # Unified path /sandbox/workspace is exposed; physical path stored in metadata
-        assert session.workspace_path == "/sandbox/workspace"
+        assert session.workspace_path == AGENT_WORKSPACE_PATH
         assert session.metadata.get("_physical_workspace") == override_path
         assert session.session_id.startswith("sandbox_")
 
     def test_create_without_override_generates_path(self, mgr: SessionManager):
         session = mgr.create()
-        assert session.workspace_path == "/sandbox/workspace"
+        assert session.workspace_path == AGENT_WORKSPACE_PATH
+        physical = session.metadata.get("_physical_workspace", "")
+        assert session.session_id in physical
+
+    def test_two_sessions_different_physical_metadata(self, mgr: SessionManager):
+        s1 = mgr.create()
+        s2 = mgr.create()
+        assert s1.metadata["_physical_workspace"] != s2.metadata["_physical_workspace"]

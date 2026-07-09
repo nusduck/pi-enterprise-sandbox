@@ -23,10 +23,10 @@ def create_session(body: SessionCreate):
         workspace_path_override=body.workspace_path,
     )
     if body.workspace_path:
-        # Point the unified /sandbox/workspace symlink to the conversation workspace
+        # Ensure physical path exists; optional presentation link is best-effort
         workspace_manager.activate_workspace(body.workspace_path)
     else:
-        # Init fresh workspace and point symlink to it
+        # Init empty physical workspace for this session (no skills seed)
         workspace_manager.init_workspace(session.session_id)
     audit_logger.log_session_lifecycle(
         session.session_id, "created",

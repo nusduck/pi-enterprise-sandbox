@@ -222,7 +222,8 @@ class ConversationResponse(BaseModel):
 
 class ConversationCreate(BaseModel):
     id: str | None = None
-    title: str = "New conversation"
+    title: str | None = None  # None = leave unchanged on PATCH
     sandbox_session_id: str | None = None
     workspace_path: str | None = None
-    messages: list[dict[str, Any]] = Field(default_factory=list)
+    # None on PATCH means "do not replace messages"; empty list is a valid clear
+    messages: list[dict[str, Any]] | None = None

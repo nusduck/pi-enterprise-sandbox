@@ -5,7 +5,8 @@ import tempfile
 from pathlib import Path
 
 import pytest
-from sandbox.services.file_manager import FileManager
+from sandbox.config import settings
+from sandbox.services.file_manager import FileManager, workspace_size_bytes
 
 
 @pytest.fixture
@@ -73,3 +74,22 @@ class TestFileManager:
         result = mgr.read_file(ws, "append.txt")
         assert "first" in result.content
         assert "second" in result.content
+
+    def test_workspace_size_bytes(self, mgr: FileManager, ws: str):
+        mgr.write_file(ws, "a.txt", "abcd")  # 4 bytes
+        mgr.write_file(ws, "sub/b.txt", "ef")  # 2 bytes
+        assert workspace_size_bytes(ws) == 6
+        assert workspace_size_bytes(Path(ws) / "missing") == 0
+
+    def test_workspace_quota_exceeded(self, mgr: FileManager, ws: str, monkeypatch):
+        # ~10 bytes quota so a modest write fails
+        monkeypatch.setattr(settings, "workspace_quota_mb", 0)
+        # 0 MB → 0 bytes; any non-empty write exceeds
+        with pytest.raises(ValueError, match="Workspace quota exceeded"):
+            mgr.write_file(ws, "too_big.txt", "x")
+
+    def test_workspace_quota_allows_within_limit(self, mgr: FileManager, ws: str, monkeypatch):
+        # 1 MB is ample for a small write
+        monkeypatch.setattr(settings, "workspace_quota_mb", 1)
+        result = mgr.write_file(ws, "ok.txt", "hello")
+        assert result.size == 5

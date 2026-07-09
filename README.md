@@ -154,9 +154,10 @@ cd sandbox && uv run pytest -q
 | 网络 | iptables 默认 DROP 出站策略 |
 | 用户 | 子进程以非 root `sandbox` 用户运行 |
 | 资源 | ulimit: CPU / 内存 / 进程数 / 文件大小 |
-| 路径 | `resolve() + is_relative_to()` 防逃逸 |
+| 路径 | Session 物理工作区隔离；agent 稳定路径 `/home/sandbox/workspace` + `/home/sandbox/skill` |
 | 命令 | 禁止 `sudo, su, rm -rf /, dd, mkfs, fdisk, chmod 777` |
 | 输出 | stdout/stderr 上限截断 |
+| 交付 | 仅 Artifact API / `submit_artifact` 向用户分享文件（`write` 不自动下载） |
 | 审计 | 每次执行记录 trace_id + 全量日志 |
 | API Key | 仅存服务端环境变量，浏览器零接触 |
 

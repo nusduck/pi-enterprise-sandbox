@@ -1,68 +1,86 @@
 """Workspace Manager — initialise and clean up per-session workspaces.
 
-The unified workspace path ``/sandbox/workspace`` is a **symlink** that always
-points to the active conversation's physical directory (e.g.
-``/var/sandbox/workspaces/conv_xxx/``).  Agent and user only ever see
-``/sandbox/workspace`` — no IDs leak into the visible path.
+Physical workspaces live under ``settings.workspaces_path / {session_id}``.
+Agent-visible logical path is always ``/home/sandbox/workspace`` (see
+``sandbox.paths.AGENT_WORKSPACE_PATH``).
 
-The parent directory ``/var/sandbox/workspaces/`` has **0311** permissions
-(execute-only for owner=sandbox), so the agent cannot ``ls`` it or discover
-other conversation workspaces.  ``cd /sandbox/workspace/..`` lands in the
-restricted parent, where ``ls`` returns ``Permission denied``.
+A process-global presentation symlink is **optional** and best-effort for
+single-session container compatibility.  Concurrent multi-session correctness
+depends on physical paths only — never on the global link.
 """
 
 from __future__ import annotations
 
+import logging
 import os
 import shutil
 from pathlib import Path
 
 from sandbox.config import settings
+from sandbox.paths import AGENT_WORKSPACE_PATH
 
-WORKSPACE_LINK = Path("/sandbox/workspace")
+logger = logging.getLogger("sandbox.workspace")
+
+# Optional presentation link (agent-visible stable path). Not used as exec cwd.
+WORKSPACE_LINK = Path(AGENT_WORKSPACE_PATH)
 
 
 class WorkspaceManager:
     """Manage per-session workspace directories on disk."""
 
-    # ── Unified symlink ──────────────────────────────────────────
+    # ── Optional presentation symlink (single-session compat only) ──
 
     def activate_workspace(self, target_dir: str | Path) -> Path:
-        """Point ``/sandbox/workspace`` → *target_dir*.
+        """Best-effort: point agent-visible workspace path → *target_dir*.
 
-        *target_dir* must already exist.  Returns the resolved physical path.
-        Removes the fallback directory and replaces it with a symlink.
+        Failures are swallowed so host tests and multi-session runs never
+        depend on writing under ``/home/sandbox``.  Callers must use the
+        returned physical path (or session metadata) for real I/O.
         """
         target = Path(target_dir).resolve()
         if not target.is_dir():
             target.mkdir(parents=True, exist_ok=True)
 
-        # Remove old link/directory
-        if WORKSPACE_LINK.is_symlink():
-            WORKSPACE_LINK.unlink()
-        elif WORKSPACE_LINK.exists():
-            shutil.rmtree(str(WORKSPACE_LINK))
+        try:
+            if WORKSPACE_LINK.is_symlink():
+                WORKSPACE_LINK.unlink()
+            elif WORKSPACE_LINK.exists():
+                # Only remove empty dirs / non-critical fallbacks
+                if WORKSPACE_LINK.is_dir() and not any(WORKSPACE_LINK.iterdir()):
+                    WORKSPACE_LINK.rmdir()
+                elif WORKSPACE_LINK.is_file():
+                    WORKSPACE_LINK.unlink()
+                else:
+                    return target
 
-        WORKSPACE_LINK.symlink_to(target)
+            WORKSPACE_LINK.parent.mkdir(parents=True, exist_ok=True)
+            if not WORKSPACE_LINK.exists():
+                WORKSPACE_LINK.symlink_to(target)
+        except OSError as exc:
+            logger.debug("activate_workspace skipped (%s): %s", WORKSPACE_LINK, exc)
+
         return target
 
     def get_unified_workspace(self) -> Path:
-        """Return the resolved physical path behind ``/sandbox/workspace``."""
+        """Return the resolved physical path behind the presentation link if any."""
         try:
-            return WORKSPACE_LINK.resolve()
+            if WORKSPACE_LINK.exists() or WORKSPACE_LINK.is_symlink():
+                return WORKSPACE_LINK.resolve()
         except (OSError, RuntimeError):
-            return WORKSPACE_LINK
+            pass
+        return WORKSPACE_LINK
 
     # ── Physical directory management ────────────────────────────
 
     def init_workspace(self, session_id: str) -> Path:
-        """Create a clean workspace directory for an ephemeral sandbox session.
+        """Create an **empty** workspace directory for a sandbox session (P2).
 
-        Also updates the unified symlink so the agent always sees ``/sandbox/workspace``.
+        Does **not** add skills symlinks or seed folders. Skills are only
+        available at the agent skill path (``/home/sandbox/skill``).
         """
         ws = settings.workspaces_path / session_id
         ws.mkdir(parents=True, exist_ok=True)
-        self._add_skills_symlink(ws)
+        # Optional single-session presentation — executions must not rely on it
         self.activate_workspace(ws)
         return ws
 
@@ -70,11 +88,10 @@ class WorkspaceManager:
         """Create a persistent workspace directory for a conversation session.
 
         Physical path: ``<workspaces_root>/conv_<conversation_id>/``.
-        Updates the unified symlink so the agent sees ``/sandbox/workspace``.
+        Empty at init (P2). Presentation symlink is best-effort only.
         """
         ws = settings.workspaces_path / f"conv_{conversation_id}"
         ws.mkdir(parents=True, exist_ok=True)
-        self._add_skills_symlink(ws)
         self.activate_workspace(ws)
         return ws
 
@@ -85,19 +102,19 @@ class WorkspaceManager:
             shutil.rmtree(str(ws), ignore_errors=True)
 
     def remove_conversation_workspace(self, conversation_id: str) -> None:
-        """Remove a conversation's persistent workspace.
-
-        Also cleans up the unified symlink if it points to the removed workspace.
-        """
+        """Remove a conversation's persistent workspace."""
         ws = settings.workspaces_path / f"conv_{conversation_id}"
         if ws.exists():
             shutil.rmtree(str(ws), ignore_errors=True)
-        # Restore /sandbox/workspace as empty directory
-        if WORKSPACE_LINK.is_symlink() and not WORKSPACE_LINK.exists():
-            WORKSPACE_LINK.unlink()
-            WORKSPACE_LINK.mkdir(parents=True, exist_ok=True)
+        # Clean dangling presentation symlink if it pointed at removed path
+        try:
+            if WORKSPACE_LINK.is_symlink() and not WORKSPACE_LINK.exists():
+                WORKSPACE_LINK.unlink()
+        except OSError:
+            pass
 
     def get_workspace_path(self, session_id: str) -> Path:
+        """Return the physical workspace path for *session_id* (may not exist yet)."""
         return settings.workspaces_path / session_id
 
     def workspace_exists(self, session_id: str) -> bool:
@@ -108,17 +125,10 @@ class WorkspaceManager:
 
     @property
     def disk_free_mb(self) -> float:
-        st = os.statvfs(str(settings.workspaces_path))
+        root = settings.workspaces_path
+        root.mkdir(parents=True, exist_ok=True)
+        st = os.statvfs(str(root))
         return (st.f_frsize * st.f_bavail) / (1024 * 1024)
-
-    # ── Internal helpers ─────────────────────────────────────────
-
-    @staticmethod
-    def _add_skills_symlink(ws: Path) -> None:
-        """Add a ``skills`` symlink so workspace-relative skill paths resolve."""
-        skills_link = ws / "skills"
-        if not skills_link.exists():
-            skills_link.symlink_to(settings.skills_path)
 
 
 workspace_manager = WorkspaceManager()

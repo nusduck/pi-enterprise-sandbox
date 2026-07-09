@@ -90,6 +90,7 @@ class ExecutionManager:
                 cwd=workspace_path,
                 max_process_count=settings.max_process_count,
                 max_memory_mb=settings.max_memory_mb,
+                max_cpu_seconds=settings.max_cpu_time_seconds,
             )
 
             status = ExecutionStatus.SUCCESS if result["exit_code"] == 0 else ExecutionStatus.FAILED
@@ -171,6 +172,7 @@ class ExecutionManager:
                 cwd=workspace_path,
                 max_process_count=settings.max_process_count,
                 max_memory_mb=settings.max_memory_mb,
+                max_cpu_seconds=settings.max_cpu_time_seconds,
             )
 
             status = ExecutionStatus.SUCCESS if result["exit_code"] == 0 else ExecutionStatus.FAILED
@@ -247,6 +249,7 @@ class ExecutionManager:
                 cwd=workspace_path,
                 max_process_count=settings.max_process_count,
                 max_memory_mb=settings.max_memory_mb,
+                max_cpu_seconds=settings.max_cpu_time_seconds,
             )
 
             status = ExecutionStatus.SUCCESS if result["exit_code"] == 0 else ExecutionStatus.FAILED

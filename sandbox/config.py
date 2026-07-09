@@ -3,7 +3,13 @@
 from __future__ import annotations
 
 from pathlib import Path
+
 from pydantic_settings import BaseSettings
+
+from sandbox.paths import AGENT_SKILL_PATH, AGENT_WORKSPACE_PATH
+
+# Host-safe local defaults (container/compose override via SANDBOX_* env vars).
+_LOCAL_DATA_ROOT = Path.home() / ".pi-enterprise-sandbox"
 
 
 class Settings(BaseSettings):
@@ -12,9 +18,16 @@ class Settings(BaseSettings):
     port: int = 8081
     debug: bool = False
 
-    # ── Paths ────────────────────────────────────────────────────────
-    workspaces_root: str = "/var/sandbox/workspaces"
-    skills_root: str = "/sandbox/skills"
+    # ── Paths (physical storage) ─────────────────────────────────────
+    # Physical per-session workspaces live under workspaces_root/{session_id}.
+    # Agent-visible logical path is always agent_workspace_path.
+    workspaces_root: str = str(_LOCAL_DATA_ROOT / "workspaces")
+    # Shared skills tree (read-only in containers). Default aligns with P3.
+    skills_root: str = str(_LOCAL_DATA_ROOT / "skill")
+
+    # Agent-visible stable paths (logical; not necessarily physical)
+    agent_workspace_path: str = AGENT_WORKSPACE_PATH
+    agent_skill_path: str = AGENT_SKILL_PATH
 
     # ── Resource limits ──────────────────────────────────────────────
     execution_timeout_seconds: int = 120
@@ -45,6 +58,10 @@ class Settings(BaseSettings):
     # ── Auth ─────────────────────────────────────────────────────────
     api_token: str = ""  # If set, all endpoints require X-API-Key header
     api_token_header: str = "X-API-Key"
+    # Optional JWT user auth (multi-user foundation). Off by default.
+    auth_enabled: bool = False
+    jwt_secret: str = ""
+    jwt_ttl_seconds: int = 86400
 
     # ── Logging ──────────────────────────────────────────────────────
     log_level: str = "INFO"
@@ -54,7 +71,8 @@ class Settings(BaseSettings):
     ]
 
     # ── Database ─────────────────────────────────────────────────────
-    database_url: str = "sqlite:////sandbox/data/sandbox.db"
+    # Host-safe default; compose sets sqlite:////sandbox/data/sandbox.db
+    database_url: str = f"sqlite:///{_LOCAL_DATA_ROOT / 'data' / 'sandbox.db'}"
 
     @property
     def workspaces_path(self) -> Path:

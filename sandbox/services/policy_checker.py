@@ -51,6 +51,16 @@ _BLOCKED_COMMAND_PREFIXES = (
     "> /dev/", "< /dev/",
 )
 
+# Bash command substrings that elevate bash/command to HIGH risk → human approval
+_APPROVAL_REQUIRED_SUBSTRINGS = (
+    "rm -rf", "rm -r ", "mkfs", "dd if=",
+    "curl ", "wget ", "nc ", "ncat ",
+    "pip install", "pip3 install", "npm install", "npm i ",
+    "yarn add", "pnpm add",
+    "chmod ", "chown ", "kill ", "pkill ",
+    "eval ", "base64 -d",
+)
+
 # Blocked metadata network destinations
 _BLOCKED_METADATA_IPS = (
     "169.254.169.254", "169.254.169.253",
@@ -67,6 +77,16 @@ class ToolPolicyChecker:
         """Check if a tool call is allowed. Returns decision with reason."""
         risk = self._get_risk_level(request.tool_name)
 
+        # Elevate bash/command risk when the command body matches approval patterns
+        if request.command and request.tool_name in {"bash", "command", "raw_bash", "raw_shell"}:
+            if self.is_blocked_command(request.command):
+                return ToolCallDecision(
+                    allowed=False, risk_level=RiskLevel.HIGH,
+                    reason=f"blocked command: {request.command.split()[0]}",
+                )
+            if self.command_requires_approval(request.command):
+                risk = RiskLevel.HIGH
+
         # ── Low risk: always allow ──────────────────────────────
         if risk == RiskLevel.LOW:
             return ToolCallDecision(
@@ -74,15 +94,15 @@ class ToolPolicyChecker:
                 reason="low risk tool, auto-allowed",
             )
 
-        # ── High risk: default deny ─────────────────────────────
+        # ── High risk: default deny → caller creates approval ──
         if risk == RiskLevel.HIGH:
             return ToolCallDecision(
                 allowed=False, risk_level=risk,
-                reason="high risk tool, requires approval or whitelist",
+                reason="high risk tool/command, requires human approval",
             )
 
         # ── Medium risk: check specific constraints ─────────────
-        if request.command and request.command.startswith(_BLOCKED_COMMAND_PREFIXES):
+        if request.command and self.is_blocked_command(request.command):
             return ToolCallDecision(
                 allowed=False, risk_level=risk,
                 reason=f"blocked command prefix: {request.command.split()[0]}",
@@ -104,6 +124,12 @@ class ToolPolicyChecker:
             allowed=True, risk_level=risk,
             reason="medium risk tool, allowed with constraints",
         )
+
+    @staticmethod
+    def command_requires_approval(command: str) -> bool:
+        """True when a bash command body should pause for human approval."""
+        cmd = (command or "").lower()
+        return any(s in cmd for s in _APPROVAL_REQUIRED_SUBSTRINGS)
 
     def check_network_access(self, host: str) -> bool:
         """Check if outbound network access is permitted for a given host."""

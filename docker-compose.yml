@@ -31,6 +31,7 @@ services:
       LLMIO_API_KEY: ${LLMIO_API_KEY:-}
       PORT: 4000
     volumes:
+      - ./skills:/home/sandbox/skill:ro
       - ./skills:/sandbox/skills:ro
       - ./skills:/app/.pi/skills:ro
     restart: unless-stopped
@@ -54,6 +55,8 @@ services:
     ports:
       - "${SANDBOX_MCP_HOST_PORT:-8093}:${SANDBOX_MCP_PORT:-8091}"
     volumes:
+      # P3 agent path: /home/sandbox/skill; keep /sandbox/skills for legacy tools
+      - ${SANDBOX_SKILLS_MOUNT:-./skills:/home/sandbox/skill:ro}
       - ${SANDBOX_SKILLS_MOUNT:-./skills:/sandbox/skills:ro}
       - ${SANDBOX_SKILLS_MOUNT:-./skills:/app/.pi/skills:ro}
       - ${SANDBOX_WORKSPACES_MOUNT:-./workspaces:/var/sandbox/workspaces}
@@ -67,7 +70,7 @@ services:
       SANDBOX_LOG_LEVEL: ${SANDBOX_LOG_LEVEL:-INFO}
       SANDBOX_DATABASE_URL: ${SANDBOX_DATABASE_URL:-sqlite:////sandbox/data/sandbox.db}
       SANDBOX_WORKSPACES_ROOT: /var/sandbox/workspaces
-      SANDBOX_SKILLS_ROOT: /sandbox/skills
+      SANDBOX_SKILLS_ROOT: /home/sandbox/skill
       SANDBOX_EXECUTION_TIMEOUT_SECONDS: ${SANDBOX_EXECUTION_TIMEOUT_SECONDS:-120}
       SANDBOX_MAX_OUTPUT_CHARS: ${SANDBOX_MAX_OUTPUT_CHARS:-50000}
       SANDBOX_MAX_PROCESS_COUNT: ${SANDBOX_MAX_PROCESS_COUNT:-20}

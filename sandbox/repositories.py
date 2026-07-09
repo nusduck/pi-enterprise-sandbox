@@ -403,3 +403,149 @@ class AuditRepository:
             }
             for row in rows
         ]
+
+
+class ApprovalRepository:
+    """CRUD for persisted high-risk approval requests."""
+
+    def __init__(self, db: Database | None = None) -> None:
+        self.db = db or database
+
+    def upsert(self, entry: dict[str, Any]) -> None:
+        risk = entry.get("risk_level")
+        risk_value = risk.value if hasattr(risk, "value") else str(risk or "")
+        with self.db.connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO approvals (
+                    approval_id, session_id, tool_name, risk_level, reason,
+                    payload, status, created_at, expires_at, decided_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(approval_id) DO UPDATE SET
+                    session_id=excluded.session_id,
+                    tool_name=excluded.tool_name,
+                    risk_level=excluded.risk_level,
+                    reason=excluded.reason,
+                    payload=excluded.payload,
+                    status=excluded.status,
+                    created_at=excluded.created_at,
+                    expires_at=excluded.expires_at,
+                    decided_at=excluded.decided_at
+                """,
+                (
+                    entry["approval_id"],
+                    entry["session_id"],
+                    entry["tool_name"],
+                    risk_value,
+                    entry.get("reason", ""),
+                    _json_dumps(entry.get("payload", {})),
+                    entry.get("status", "pending_approval"),
+                    entry.get("created_at"),
+                    entry.get("expires_at"),
+                    entry.get("decided_at"),
+                ),
+            )
+            conn.commit()
+
+    def get(self, approval_id: str) -> dict[str, Any] | None:
+        with self.db.connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM approvals WHERE approval_id = ?",
+                (approval_id,),
+            ).fetchone()
+        if not row:
+            return None
+        return self._row_to_dict(row)
+
+    def list_by_session(self, session_id: str) -> list[dict[str, Any]]:
+        with self.db.connect() as conn:
+            rows = conn.execute(
+                "SELECT * FROM approvals WHERE session_id = ? ORDER BY created_at",
+                (session_id,),
+            ).fetchall()
+        return [self._row_to_dict(row) for row in rows]
+
+    @staticmethod
+    def _row_to_dict(row) -> dict[str, Any]:
+        return {
+            "approval_id": row["approval_id"],
+            "session_id": row["session_id"],
+            "tool_name": row["tool_name"],
+            "risk_level": row["risk_level"],
+            "reason": row["reason"] or "",
+            "payload": _json_loads(row["payload"]),
+            "status": row["status"],
+            "created_at": row["created_at"],
+            "expires_at": row["expires_at"],
+            "decided_at": row["decided_at"],
+        }
+
+
+class UserRepository:
+    """CRUD for optional multi-user auth foundation."""
+
+    def __init__(self, db: Database | None = None) -> None:
+        self.db = db or database
+
+    def create(
+        self,
+        *,
+        user_id: str,
+        username: str,
+        password_hash: str,
+        email: str | None = None,
+        display_name: str | None = None,
+        role: str = "user",
+    ) -> dict[str, Any]:
+        now = datetime.now(timezone.utc).isoformat()
+        with self.db.connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO users (
+                    id, username, email, password_hash, display_name,
+                    role, is_active, created_at, updated_at, last_login_at
+                ) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, NULL)
+                """,
+                (
+                    user_id, username, email, password_hash,
+                    display_name or username, role, now, now,
+                ),
+            )
+            conn.commit()
+        return self.get_by_id(user_id)  # type: ignore[return-value]
+
+    def get_by_id(self, user_id: str) -> dict[str, Any] | None:
+        with self.db.connect() as conn:
+            row = conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
+        return self._row_to_dict(row) if row else None
+
+    def get_by_username(self, username: str) -> dict[str, Any] | None:
+        with self.db.connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM users WHERE username = ?", (username,)
+            ).fetchone()
+        return self._row_to_dict(row) if row else None
+
+    def touch_login(self, user_id: str) -> None:
+        now = datetime.now(timezone.utc).isoformat()
+        with self.db.connect() as conn:
+            conn.execute(
+                "UPDATE users SET last_login_at = ?, updated_at = ? WHERE id = ?",
+                (now, now, user_id),
+            )
+            conn.commit()
+
+    @staticmethod
+    def _row_to_dict(row) -> dict[str, Any]:
+        return {
+            "id": row["id"],
+            "username": row["username"],
+            "email": row["email"],
+            "password_hash": row["password_hash"],
+            "display_name": row["display_name"],
+            "role": row["role"],
+            "is_active": bool(row["is_active"]),
+            "created_at": row["created_at"],
+            "updated_at": row["updated_at"],
+            "last_login_at": row["last_login_at"],
+        }

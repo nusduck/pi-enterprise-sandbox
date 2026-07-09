@@ -24,6 +24,7 @@ from sandbox.routers import (
     sessions,
     traces,
 )
+from sandbox.routers import auth_router, agent_router
 from sandbox.services.session_manager import session_manager
 from sandbox.trace import reset_trace_id, set_trace_id
 
@@ -57,18 +58,27 @@ async def lifespan(app: FastAPI):
     logger = logging.getLogger("sandbox")
     logger.info("Sandbox Service v%s starting", __version__)
 
-    # Ensure workspaces root and skills dir exist
+    # Ensure physical storage roots exist
     settings.workspaces_path.mkdir(parents=True, exist_ok=True)
     settings.skills_path.mkdir(parents=True, exist_ok=True)
 
-    # Ensure /sandbox/workspace exists as a directory (bind-mount target for active workspace)
-    from sandbox.services.workspace_manager import WORKSPACE_LINK
-    WORKSPACE_LINK.mkdir(parents=True, exist_ok=True)
+    # Best-effort agent-visible presentation dirs (container layout)
+    from pathlib import Path
+
+    from sandbox.paths import AGENT_SKILL_PATH, AGENT_WORKSPACE_PATH
+
+    for agent_path in (AGENT_WORKSPACE_PATH, AGENT_SKILL_PATH):
+        try:
+            Path(agent_path).mkdir(parents=True, exist_ok=True)
+        except OSError:
+            pass  # host tests may not have permission under /home/sandbox
 
     logger.info(
-        "Workspaces: %s | Skills: %s | MCP: %s",
+        "Workspaces: %s | Skills: %s | Agent paths: %s , %s | MCP: %s",
         settings.workspaces_path,
         settings.skills_path,
+        settings.agent_workspace_path,
+        settings.agent_skill_path,
         "enabled" if settings.mcp_enabled else "disabled",
     )
 
@@ -112,7 +122,9 @@ app.add_middleware(
 async def api_token_auth_middleware(request: Request, call_next):
     """Require X-API-Key header for all endpoints except health/public, if configured."""
     if settings.api_token:
-        public_paths = ("/health", "/ready", "/metrics", "/docs", "/openapi", "/redoc")
+        public_paths = (
+            "/health", "/ready", "/metrics", "/docs", "/openapi", "/redoc", "/auth/",
+        )
         if not request.url.path.startswith(public_paths):
             token = request.headers.get(settings.api_token_header, "")
             if token != settings.api_token:
@@ -120,6 +132,43 @@ async def api_token_auth_middleware(request: Request, call_next):
                     status_code=401,
                     content={"detail": "Invalid or missing API token"},
                 )
+    return await call_next(request)
+
+
+@app.middleware("http")
+async def jwt_auth_middleware(request: Request, call_next):
+    """Optional user JWT when SANDBOX_AUTH_ENABLED=true.
+
+    Service-to-service X-API-Key still works. When auth is enabled, browser-facing
+    paths can send Authorization: Bearer <token>. Public: health, auth, docs, metrics.
+    """
+    if not settings.auth_enabled:
+        return await call_next(request)
+
+    public_prefixes = (
+        "/health", "/ready", "/metrics", "/docs", "/openapi", "/redoc",
+        "/auth/", "/",
+    )
+    path = request.url.path
+    if path == "/" or any(path.startswith(p) for p in public_prefixes):
+        return await call_next(request)
+
+    # Allow service token to bypass user JWT (api-server → sandbox)
+    if settings.api_token:
+        svc = request.headers.get(settings.api_token_header, "")
+        if svc and svc == settings.api_token:
+            return await call_next(request)
+
+    from sandbox.auth import verify_token
+
+    auth = request.headers.get("Authorization", "")
+    if not auth.startswith("Bearer "):
+        return JSONResponse(status_code=401, content={"detail": "Authentication required"})
+    payload = verify_token(auth[7:].strip())
+    if not payload:
+        return JSONResponse(status_code=401, content={"detail": "Invalid or expired token"})
+    request.state.user_id = payload.get("sub")
+    request.state.user_role = payload.get("role", "user")
     return await call_next(request)
 
 
@@ -192,6 +241,8 @@ async def value_error_handler(request: Request, exc: ValueError):
 
 # ── Register routers ───────────────────────────────────────────────────
 
+app.include_router(auth_router.router)
+app.include_router(agent_router.router)
 app.include_router(sessions.router)
 app.include_router(approvals.router)
 app.include_router(conversations.router)

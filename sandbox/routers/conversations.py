@@ -34,10 +34,10 @@ def create_conversation(body: ConversationCreate):
     ws_path = str(workspace_manager.init_conversation_workspace(conv_id))
     entry = {
         "id": conv_id,
-        "title": body.title,
+        "title": body.title or "New conversation",
         "sandbox_session_id": body.sandbox_session_id,
         "workspace_path": ws_path,
-        "messages": [m for m in body.messages],
+        "messages": list(body.messages or []),
     }
     return repo.upsert(entry)
 
@@ -55,15 +55,51 @@ def update_conversation(conversation_id: str, body: ConversationCreate):
     existing = repo.get(conversation_id)
     if not existing:
         raise HTTPException(status_code=404, detail="Conversation not found")
+    # Only replace fields that were explicitly provided (None = leave unchanged)
     entry = {
         "id": conversation_id,
-        "title": body.title or existing.title,
-        "sandbox_session_id": body.sandbox_session_id or existing.sandbox_session_id,
-        "workspace_path": body.workspace_path or existing.workspace_path,
-        "messages": [m for m in (body.messages or existing.messages)],
+        "title": body.title if body.title is not None else existing.title,
+        "sandbox_session_id": (
+            body.sandbox_session_id
+            if body.sandbox_session_id is not None
+            else existing.sandbox_session_id
+        ),
+        "workspace_path": (
+            body.workspace_path
+            if body.workspace_path is not None
+            else existing.workspace_path
+        ),
+        "messages": (
+            list(body.messages)
+            if body.messages is not None
+            else list(existing.messages)
+        ),
         "created_at": existing.created_at,
     }
     return repo.upsert(entry)
+
+
+def _cleanup_linked_session(sandbox_session_id: str) -> None:
+    """Mark linked sandbox session completed and delete when safe.
+
+    Safe means: no in-flight execution for that session. Session workspace is
+    removed only after a successful delete of the session record.
+    """
+    from sandbox.models import SessionStatus
+    from sandbox.services.execution_manager import execution_manager
+    from sandbox.services.session_manager import session_manager
+
+    session = session_manager.get(sandbox_session_id)
+    if session is None:
+        return
+
+    session_manager.update_status(sandbox_session_id, SessionStatus.COMPLETED)
+
+    if execution_manager.is_session_busy(sandbox_session_id):
+        return
+
+    if session_manager.delete(sandbox_session_id):
+        workspace_manager.remove_workspace(sandbox_session_id)
 
 
 @router.delete("/{conversation_id}", status_code=204)
@@ -71,6 +107,11 @@ def delete_conversation(conversation_id: str):
     conv = repo.get(conversation_id)
     if not conv:
         raise HTTPException(status_code=404, detail="Conversation not found")
+
+    # If a sandbox session is linked, complete it and delete when idle.
+    if conv.sandbox_session_id:
+        _cleanup_linked_session(conv.sandbox_session_id)
+
     repo.delete(conversation_id)
     workspace_manager.remove_conversation_workspace(conversation_id)
 

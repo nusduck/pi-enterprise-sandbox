@@ -1,26 +1,68 @@
 /**
  * Sandbox HTTP Client — typed wrapper around fetch to the sandbox FastAPI service.
+ *
+ * Supports end-to-end tracing via X-Trace-Id (module-level, per-request set/reset).
  */
+import { randomUUID } from 'node:crypto';
 import { config, AUTH_HEADER } from '../config.js';
 
 const BASE = config.SANDBOX_BASE_URL;
 
+/** Active trace id for sandbox calls (set at the start of each chat turn). */
+let _traceId = null;
+
+export function setTraceId(id) {
+  _traceId = id || null;
+  return _traceId;
+}
+
+export function getTraceId() {
+  return _traceId;
+}
+
+/**
+ * Ensure a trace id exists (generate UUID if missing) and return it.
+ */
+export function ensureTraceId(preferred) {
+  if (preferred) {
+    _traceId = preferred;
+    return _traceId;
+  }
+  if (!_traceId) {
+    _traceId = randomUUID();
+  }
+  return _traceId;
+}
+
 function headers(extra = {}) {
-  return {
+  const h = {
     'Content-Type': 'application/json',
     ...AUTH_HEADER,
     ...extra,
   };
+  const tid = _traceId || extra['X-Trace-Id'];
+  if (tid) {
+    h['X-Trace-Id'] = tid;
+  } else {
+    // Auto-generate so every sandbox call is always traced
+    const generated = randomUUID();
+    _traceId = generated;
+    h['X-Trace-Id'] = generated;
+  }
+  return h;
 }
 
 /**
  * Low-level sandbox fetch helper.
+ * @param {string} path
+ * @param {RequestInit & { headers?: Record<string,string> }} [opts]
  */
 async function sbFetch(path, opts = {}) {
   const url = `${BASE}${path}`;
+  const { headers: extraHeaders, ...rest } = opts;
   const resp = await fetch(url, {
-    ...opts,
-    headers: { ...headers(), ...(opts.headers || {}) },
+    ...rest,
+    headers: headers(extraHeaders || {}),
   });
   if (!resp.ok) {
     const detail = await resp.json().catch(() => ({ detail: resp.statusText }));
@@ -55,6 +97,11 @@ export async function getSession(sessionId) {
 
 // ── Conversation ───────────────────────────────
 
+export async function listConversations() {
+  const resp = await sbFetch('/conversations');
+  return resp.json();
+}
+
 export async function createConversation(title = 'New chat') {
   const resp = await sbFetch('/conversations', {
     method: 'POST',
@@ -63,9 +110,35 @@ export async function createConversation(title = 'New chat') {
   return resp.json();
 }
 
+export async function getConversation(conversationId) {
+  const resp = await sbFetch(`/conversations/${conversationId}`);
+  return resp.json();
+}
+
 export async function getConversationWorkspace(conversationId) {
   const resp = await sbFetch(`/conversations/${conversationId}/workspace`);
   return resp.json();
+}
+
+/**
+ * Partial update of a conversation (messages, sandbox_session_id, title, …).
+ */
+export async function updateConversation(conversationId, patch = {}) {
+  const resp = await sbFetch(`/conversations/${conversationId}`, {
+    method: 'PATCH',
+    body: JSON.stringify(patch),
+  });
+  return resp.json();
+}
+
+export async function deleteConversation(conversationId) {
+  const resp = await sbFetch(`/conversations/${conversationId}`, {
+    method: 'DELETE',
+  });
+  // 204 No Content
+  if (resp.status === 204) return { ok: true };
+  const text = await resp.text();
+  return text ? JSON.parse(text) : { ok: true };
 }
 
 // ── Execution ───────────────────────────────────
@@ -132,6 +205,48 @@ export async function submitArtifact(sessionId, name, path, mimeType) {
 
 export async function listArtifacts(sessionId) {
   const resp = await sbFetch(`/sessions/${sessionId}/artifacts`);
+  return resp.json();
+}
+
+/** Sandbox path for downloading a registered artifact by id. */
+export function artifactDownloadPath(sessionId, artifactId) {
+  return `/sessions/${sessionId}/artifacts/${encodeURIComponent(artifactId)}/download`;
+}
+
+export async function downloadArtifactStream(sessionId, artifactId) {
+  return sbFetch(artifactDownloadPath(sessionId, artifactId));
+}
+
+// ── Approvals ───────────────────────────────────
+
+/**
+ * Policy check before high-risk tools.
+ * @returns {{ status, approval_id?, risk_level, reason }}
+ */
+export async function approvalCheck(sessionId, body) {
+  const resp = await sbFetch(`/sessions/${sessionId}/executions/approval-check`, {
+    method: 'POST',
+    body: JSON.stringify(body),
+  });
+  return resp.json();
+}
+
+/** Poll approval status. */
+export async function getApproval(approvalId) {
+  const resp = await sbFetch(`/approvals/${encodeURIComponent(approvalId)}`);
+  return resp.json();
+}
+
+/**
+ * Decide a pending approval (sandbox POST /approve).
+ * @param {string} approvalId
+ * @param {'approve'|'reject'} decision
+ */
+export async function decideApproval(approvalId, decision) {
+  const resp = await sbFetch('/approve', {
+    method: 'POST',
+    body: JSON.stringify({ approval_id: approvalId, decision }),
+  });
   return resp.json();
 }
 

@@ -8,26 +8,50 @@
   <link rel="stylesheet" href="/src/style.css" />
 </head>
 <body>
-  <div id="app">
-    <header class="header">
-      <div class="logo">◆</div>
-      <h1>Enterprise Sandbox</h1>
-      <div class="badge"><span class="dot"></span><span id="status-label">Agent Ready</span></div>
-    </header>
-    <div id="flash-zone"></div>
-    <div id="messages" class="msgs"></div>
-    <div id="dropzone" class="dropzone">
-      <div class="dropzone-inner">
-        <div class="dz-icon">📤</div>
-        <p>Drop file to upload</p>
-        <small>Uploaded to sandbox workspace</small>
+  <div id="app" class="app-shell">
+    <!-- Left sidebar: conversations -->
+    <aside id="sidebar" class="sidebar">
+      <div class="sidebar-head">
+        <button type="button" class="btn-new-chat" id="btn-new-chat" title="New chat">＋ New chat</button>
+        <button type="button" class="btn-icon sidebar-close-btn" id="btn-sidebar-close" title="Close sidebar" aria-label="Close sidebar">✕</button>
       </div>
-    </div>
-    <div class="input-wrap">
-      <div class="input-inner">
-        <button class="btn btn-upload" id="btn-upload" title="Upload file (Ctrl+U)">📎</button>
-        <textarea id="input" rows="1" placeholder="Type a message… (Ctrl+L to clear)"></textarea>
-        <button class="btn btn-send" id="btn-send" title="Send (Enter)">➤</button>
+      <div class="sidebar-list" id="conversation-list" role="list"></div>
+    </aside>
+    <div id="sidebar-backdrop" class="sidebar-backdrop" hidden></div>
+
+    <!-- Main column -->
+    <div class="main-col">
+      <header class="header">
+        <button type="button" class="btn-icon" id="btn-sidebar-toggle" title="Toggle conversations" aria-label="Toggle sidebar">☰</button>
+        <div class="logo">◆</div>
+        <h1>Enterprise Sandbox</h1>
+        <div class="badge"><span class="dot"></span><span id="status-label">Agent Ready</span></div>
+      </header>
+      <div id="flash-zone"></div>
+      <div id="messages" class="msgs"></div>
+
+      <!-- Deliverables panel -->
+      <div id="deliverables" class="deliverables" hidden>
+        <div class="deliverables-head">
+          <span class="deliverables-title">Deliverables</span>
+          <span class="deliverables-count" id="deliverables-count">0</span>
+        </div>
+        <div class="deliverables-list" id="deliverables-list"></div>
+      </div>
+
+      <div id="dropzone" class="dropzone">
+        <div class="dropzone-inner">
+          <div class="dz-icon">📤</div>
+          <p>Drop file to upload</p>
+          <small>Uploaded to sandbox workspace</small>
+        </div>
+      </div>
+      <div class="input-wrap">
+        <div class="input-inner">
+          <button class="btn btn-upload" id="btn-upload" title="Upload file (Ctrl+U)">📎</button>
+          <textarea id="input" rows="1" placeholder="Type a message… (Ctrl+L new chat)"></textarea>
+          <button class="btn btn-send" id="btn-send" title="Send (Enter)">➤</button>
+        </div>
       </div>
     </div>
   </div>

@@ -18,6 +18,7 @@ from sandbox.models import (
     FileWriteRequest,
     PythonExecutionRequest,
 )
+from sandbox.paths import get_session_physical_workspace
 from sandbox.services.artifact_manager import artifact_manager
 from sandbox.services.execution_manager import execution_manager
 from sandbox.services.file_manager import file_manager
@@ -79,11 +80,11 @@ class MCPServerAdapter:
         if session.status != "RUNNING":
             return {"error": "Session is not active"}
 
-        ws = workspace_manager.get_workspace_path(session_id)
+        ws = get_session_physical_workspace(session)
         result = execution_manager.run_python(
             session_id=session_id,
             code=code,
-            workspace_path=str(ws),
+            workspace_path=ws,
             timeout=timeout,
         )
 
@@ -119,11 +120,11 @@ class MCPServerAdapter:
         if session.status != "RUNNING":
             return {"error": "Session is not active"}
 
-        ws = workspace_manager.get_workspace_path(session_id)
+        ws = get_session_physical_workspace(session)
         result = execution_manager.run_command(
             session_id=session_id,
             command=command,
-            workspace_path=str(ws),
+            workspace_path=ws,
             timeout=timeout,
         )
 
@@ -149,7 +150,7 @@ class MCPServerAdapter:
         if session is None:
             return {"error": "Session not found"}
 
-        ws = session.workspace_path
+        ws = get_session_physical_workspace(session)
         try:
             result = file_manager.read_file(ws, path, offset, limit)
             return {
@@ -171,7 +172,7 @@ class MCPServerAdapter:
         if session is None:
             return {"error": "Session not found"}
 
-        ws = session.workspace_path
+        ws = get_session_physical_workspace(session)
         try:
             result = file_manager.write_file(ws, path, content)
             return {
@@ -190,7 +191,7 @@ class MCPServerAdapter:
         if session is None:
             return {"error": "Session not found"}
 
-        ws = session.workspace_path
+        ws = get_session_physical_workspace(session)
         try:
             result = file_manager.read_file(ws, path, offset=1, limit=40)
             return {
@@ -210,7 +211,7 @@ class MCPServerAdapter:
         if session is None:
             return {"error": "Session not found"}
 
-        ws = session.workspace_path
+        ws = get_session_physical_workspace(session)
         try:
             files = file_manager.list_files(ws, path)
             return {
@@ -252,9 +253,7 @@ class MCPServerAdapter:
         if session is None:
             return {"error": "Session not found"}
 
-        physical = session.metadata.get("_physical_workspace")
-        ws_path = physical or session.workspace_path
-        ws = Path(ws_path)
+        ws = Path(get_session_physical_workspace(session))
         artifact_path = ws / path
 
         size = artifact_path.stat().st_size if artifact_path.exists() else 0
@@ -283,7 +282,7 @@ class MCPServerAdapter:
         if session is None:
             return {"error": "Session not found"}
 
-        ws = session.workspace_path
+        ws = get_session_physical_workspace(session)
         try:
             safe_path = file_manager.get_binary_path(ws, path)
             if not safe_path.is_file():

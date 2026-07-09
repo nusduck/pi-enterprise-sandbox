@@ -97,6 +97,35 @@ CREATE TABLE IF NOT EXISTS conversations (
     updated_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_conversations_sandbox_session ON conversations(sandbox_session_id);
+
+CREATE TABLE IF NOT EXISTS approvals (
+    approval_id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL,
+    tool_name TEXT NOT NULL,
+    risk_level TEXT NOT NULL,
+    reason TEXT,
+    payload TEXT NOT NULL DEFAULT '{}',
+    status TEXT NOT NULL DEFAULT 'pending_approval',
+    created_at TEXT NOT NULL,
+    expires_at TEXT,
+    decided_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_approvals_session_id ON approvals(session_id);
+CREATE INDEX IF NOT EXISTS idx_approvals_status ON approvals(status);
+
+CREATE TABLE IF NOT EXISTS users (
+    id TEXT PRIMARY KEY,
+    username TEXT UNIQUE NOT NULL,
+    email TEXT UNIQUE,
+    password_hash TEXT NOT NULL,
+    display_name TEXT,
+    role TEXT NOT NULL DEFAULT 'user',
+    is_active INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    last_login_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_users_username ON users(username);
 """
 
 PG_SCHEMA = """
@@ -167,6 +196,35 @@ CREATE TABLE IF NOT EXISTS conversations (
     updated_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_conversations_sandbox_session ON conversations(sandbox_session_id);
+
+CREATE TABLE IF NOT EXISTS approvals (
+    approval_id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL,
+    tool_name TEXT NOT NULL,
+    risk_level TEXT NOT NULL,
+    reason TEXT,
+    payload TEXT NOT NULL DEFAULT '{}',
+    status TEXT NOT NULL DEFAULT 'pending_approval',
+    created_at TEXT NOT NULL,
+    expires_at TEXT,
+    decided_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_approvals_session_id ON approvals(session_id);
+CREATE INDEX IF NOT EXISTS idx_approvals_status ON approvals(status);
+
+CREATE TABLE IF NOT EXISTS users (
+    id TEXT PRIMARY KEY,
+    username TEXT UNIQUE NOT NULL,
+    email TEXT UNIQUE,
+    password_hash TEXT NOT NULL,
+    display_name TEXT,
+    role TEXT NOT NULL DEFAULT 'user',
+    is_active INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    last_login_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_users_username ON users(username);
 """
 
 

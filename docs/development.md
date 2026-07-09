@@ -73,8 +73,8 @@ cd api-server && SANDBOX_BASE_URL=http://localhost:8083 npm run dev
 1. 在 `skills/your-skill-name/` 创建目录
 2. 添加 `SKILL.md`（YAML frontmatter + 描述）
 3. 添加脚本到 `skills/your-skill-name/scripts/`
-4. `skills/` 在容器中以只读方式挂载到 `/sandbox/skills/`
-5. Agent 自动发现技能
+4. `skills/` 在容器中以只读方式挂载到 `/home/sandbox/skill/`（以及兼容路径 `/sandbox/skills`）
+5. Agent 自动发现技能；工作区始终从空目录起步，技能不复制进 workspace
 
 ### 修改前端
 

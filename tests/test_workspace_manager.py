@@ -1,32 +1,114 @@
-"""Tests for WorkspaceManager — clean init and conversation workspace."""
+"""Tests for WorkspaceManager — empty init, no skills symlink, physical paths."""
 from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
+from sandbox.config import settings
+from sandbox.paths import AGENT_WORKSPACE_PATH, get_session_physical_workspace
+from sandbox.services.session_manager import SessionManager
 from sandbox.services.workspace_manager import WorkspaceManager
 
 
 class TestWorkspaceManager:
-    def test_init_workspace_creates_empty_dir(self, tmp_path):
+    def test_init_workspace_creates_empty_dir(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(settings, "workspaces_root", str(tmp_path / "workspaces"))
+        (tmp_path / "workspaces").mkdir()
         mgr = WorkspaceManager()
-        # Temporarily override the settings path via monkeypatching is complex;
-        # instead we test the directory structure logic directly
-        ws = tmp_path / "sessions" / "sandbox_abc"
-        ws.mkdir(parents=True)
-
-        # Verify it's clean (no auto-created subdirs)
+        ws = mgr.init_workspace("sandbox_abc")
+        assert ws.is_dir()
+        # P2: empty — no skills symlink, no seed folders
         children = list(ws.iterdir())
-        assert len(children) == 0 or all(c.name == "skills" for c in children)
+        assert children == []
 
-    def test_init_conversation_workspace_path(self):
-        """Verify init_conversation_workspace returns conv_ prefixed path."""
-        # We can't test init_conversation_workspace directly because it uses
-        # settings.workspaces_path, so we verify the naming convention.
-        conv_id = "conv-test-123"
-        expected_name = f"conv_{conv_id}"
-        assert expected_name == "conv_conv-test-123"
+    def test_init_workspace_no_skills_symlink(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(settings, "workspaces_root", str(tmp_path / "workspaces"))
+        monkeypatch.setattr(settings, "skills_root", str(tmp_path / "skill"))
+        (tmp_path / "workspaces").mkdir()
+        (tmp_path / "skill").mkdir()
+        mgr = WorkspaceManager()
+        ws = mgr.init_workspace("sandbox_skills_check")
+        assert not (ws / "skills").exists()
+        assert not (ws / "skill").exists()
+
+    def test_init_conversation_workspace_path(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(settings, "workspaces_root", str(tmp_path / "workspaces"))
+        (tmp_path / "workspaces").mkdir()
+        mgr = WorkspaceManager()
+        conv_id = "test-123"
+        ws = mgr.init_conversation_workspace(conv_id)
+        assert ws.name == f"conv_{conv_id}"
+        assert list(ws.iterdir()) == []
 
     def test_conversation_workspace_naming(self):
         conv_a = "550e8400-e29b-41d4-a716-446655440000"
         conv_b = "550e8400-e29b-41d4-a716-446655440001"
         assert f"conv_{conv_a}" != f"conv_{conv_b}"
+
+    def test_get_workspace_path_is_physical(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(settings, "workspaces_root", str(tmp_path / "workspaces"))
+        mgr = WorkspaceManager()
+        path = mgr.get_workspace_path("sandbox_xyz")
+        assert path == Path(tmp_path / "workspaces" / "sandbox_xyz")
+        assert str(path) != AGENT_WORKSPACE_PATH
+
+
+class TestSessionPhysicalIsolation:
+    def test_two_sessions_use_different_physical_paths(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(settings, "workspaces_root", str(tmp_path / "workspaces"))
+        (tmp_path / "workspaces").mkdir(parents=True, exist_ok=True)
+        mgr = WorkspaceManager()
+        sm = SessionManager()  # in-memory
+
+        s1 = sm.create(caller_id="a")
+        s2 = sm.create(caller_id="b")
+        p1 = Path(get_session_physical_workspace(s1))
+        p2 = Path(get_session_physical_workspace(s2))
+        assert p1 != p2
+        assert s1.workspace_path == AGENT_WORKSPACE_PATH
+        assert s2.workspace_path == AGENT_WORKSPACE_PATH
+
+        mgr.init_workspace(s1.session_id)
+        mgr.init_workspace(s2.session_id)
+        # Align physical metadata with manager paths under monkeypatched root
+        s1.metadata["_physical_workspace"] = str(mgr.get_workspace_path(s1.session_id))
+        s2.metadata["_physical_workspace"] = str(mgr.get_workspace_path(s2.session_id))
+        p1 = Path(get_session_physical_workspace(s1))
+        p2 = Path(get_session_physical_workspace(s2))
+
+        (p1 / "only_a.txt").write_text("a")
+        (p2 / "only_b.txt").write_text("b")
+        assert (p1 / "only_a.txt").read_text() == "a"
+        assert not (p1 / "only_b.txt").exists()
+        assert (p2 / "only_b.txt").read_text() == "b"
+        assert not (p2 / "only_a.txt").exists()
+
+    def test_concurrent_writes_do_not_collide(self, tmp_path, monkeypatch):
+        from concurrent.futures import ThreadPoolExecutor
+
+        monkeypatch.setattr(settings, "workspaces_root", str(tmp_path / "workspaces"))
+        (tmp_path / "workspaces").mkdir(parents=True, exist_ok=True)
+        mgr = WorkspaceManager()
+        sm = SessionManager()
+
+        sessions = [sm.create(caller_id=f"c{i}") for i in range(4)]
+        for s in sessions:
+            mgr.init_workspace(s.session_id)
+            s.metadata["_physical_workspace"] = str(mgr.get_workspace_path(s.session_id))
+
+        def write_marker(session):
+            root = Path(get_session_physical_workspace(session))
+            marker = root / f"{session.session_id}.txt"
+            marker.write_text(session.session_id)
+            return marker.read_text()
+
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            results = list(pool.map(write_marker, sessions))
+
+        assert results == [s.session_id for s in sessions]
+        for s in sessions:
+            root = Path(get_session_physical_workspace(s))
+            # Only this session's marker
+            files = {p.name for p in root.iterdir() if p.is_file()}
+            assert files == {f"{s.session_id}.txt"}

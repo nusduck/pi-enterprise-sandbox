@@ -49,7 +49,7 @@ const state = {
   abortCtrl: null,         // AbortController 引用
   currentMsg: null,        // 流式构建中的 assistant 消息
   sessionId: null,         // Sandbox session ID
-  readyFiles: new Set(),   // 已 emit file_ready 的文件路径（去重）
+  readyFiles: new Set(),   // 已 emit file_ready 的 artifact_id 或 path（去重）
   pendingTool: null,       // 当前工具执行信息 { id, name, args }
 };
 ```
@@ -63,7 +63,13 @@ const state = {
     { type: 'text', text: '...' },
     { type: 'tool_use', name: 'bash', input: {...}, status: 'running' | 'complete', isError, result },
   ],
-  _fileLinks: [{ name: 'file.txt', url: '/api/files/download?...', path: 'file.txt' }],
+  // P7: prefer artifact download URL for deliverables
+  _fileLinks: [{
+    name: 'file.txt',
+    url: '/api/files/artifact-download?session_id=...&artifact_id=art_...',
+    path: 'file.txt',
+    artifact_id: 'art_...',
+  }],
   stopReason: 'aborted'  // 仅用户中断时
 }
 ```
@@ -87,7 +93,7 @@ sendMessage(text)
   │       token        → 追加到 currentMsg.content (text delta)
   │       tool_start   → 插入 tool_use 条目（status: running）
   │       tool_end     → 更新 tool_use 条目（status: complete）
-  │       file_ready   → 生成下载链接，追加 _fileLinks
+  │       file_ready   → 优先用 artifact_id 生成交付物下载链接，追加 _fileLinks
   │       done         → 标记完成
   │       session_closed → 状态指示
   │       error        → 错误注入消息
@@ -106,14 +112,16 @@ uploadFile(file)
   └── 自动发送分析请求
 ```
 
-### 文件下载
+### 文件下载（P7 产物唯一交付）
 
 ```
-file_ready SSE 事件
+file_ready SSE 事件（仅 submit_artifact 成功后）
   ↓
-handleSSE → state.currentMsg._fileLinks.push()
+handleSSE:
+  - 有 artifact_id → getArtifactDownloadUrl(sessionId, artifact_id)
+  - 无 artifact_id 仅 path → 兼容回退 getDownloadUrl（非推荐）
   ↓
-render() → 生成 <a class="dl" href="/api/files/download?...">⬇ filename</a>
+render() → 生成 <a class="dl" href="/api/files/artifact-download?...">⬇ filename</a>
 ```
 
 ## 事件绑定
@@ -139,7 +147,7 @@ render() → 生成 <a class="dl" href="/api/files/download?...">⬇ filename</a
 | `token` | 增量追加文本到流式消息气泡 |
 | `tool_start` | 插入工具调用卡片（带 running 动画） |
 | `tool_end` | 更新工具卡片为完成/错误状态 |
-| `file_ready` | 生成下载链接 `<a>` 标签 |
+| `file_ready` | 用 `artifact_id` 生成交付物下载链接 `<a>` 标签 |
 | `done` | 结束流式状态 |
 | `session_closed` | 状态栏显示 "Session ended" |
 | `error` | 错误文本注入消息，红色闪出通知 |

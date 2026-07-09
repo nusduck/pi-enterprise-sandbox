@@ -62,10 +62,12 @@ Agent（`pi-coding-agent` SDK）运行在 API Server 的 Node.js 进程中，而
 
 前端仅使用 `@earendil-works/pi-web-ui` 的 UI 组件（MessageList / MessageEditor / StreamingMessageContainer），不 import `pi-agent-core`、`pi-ai`。前端通过 SSE 消费事件流直接渲染，自己管理简单状态。
 
-### 3. Session-Per-Conversation 隔离
+### 3. Session-owned workspace 隔离
 
-每次对话请求创建一个独立的 Sandbox Session：
-- 唯一 workspace 目录（`/sandbox/workspaces/{session_id}`）
+每个 Agent/Sandbox session 绑定 **唯一物理工作区**（1 session → 1 workspace）：
+- 物理路径：`{SANDBOX_WORKSPACES_ROOT}/{session_id}/`（空目录起步）
+- Agent 可见稳定路径：`/home/sandbox/workspace`（API 元数据）；执行/文件/产物一律用物理路径
+- Skills：`/home/sandbox/skill`（只读，共享，不进 workspace）
 - 串行执行（同一会话内命令排队，防止竞态）
 - 30 分钟 TTL 自动清理
 
@@ -112,10 +114,10 @@ Agent（`pi-coding-agent` SDK）运行在 API Server 的 Node.js 进程中，而
    e. Agent 循环：
       - LLM text_delta → SSE: {type:"token", text:"..."}
       - 工具调用 → Sandbox API → SSE: tool_start/tool_end
-      - write 工具成功 → SSE: {type:"file_ready", path:"..."}
-      - submit_artifact 工具成功 → SSE: {type:"file_ready", path:"..."}
+      - write/edit 成功 → 仅私有工作区变更，**不**发 file_ready
+      - submit_artifact 成功 → Artifact API + SSE: {type:"file_ready", artifact_id, path, name, mime_type, size}
    f. SSE: {type:"done"} — 无自动 workspace 扫描
-4. Browser 消费 SSE 流，更新 UI
+4. Browser 消费 SSE 流；交付物用 artifact_id 下载（`/api/files/artifact-download`）
 ```
 
 ### SSE 事件协议
@@ -126,7 +128,7 @@ Agent（`pi-coding-agent` SDK）运行在 API Server 的 Node.js 进程中，而
 | `token` | `{ text: string }` | LLM 文本增量 |
 | `tool_start` | `{ id, name, args }` | 工具开始执行 |
 | `tool_end` | `{ id, name, result, isError }` | 工具执行完成 |
-| `file_ready` | `{ path: string }` | 文件可供下载 |
+| `file_ready` | `{ artifact_id, path, name?, mime_type?, size? }` | 产物可供下载（仅 `submit_artifact` 成功后） |
 | `done` | `{}` | Agent 回合结束 |
 | `session_closed` | `{ session_id }` | 会话连接关闭 |
 | `error` | `{ message: string }` | 错误信息 |
@@ -147,7 +149,8 @@ POST /sessions → CREATE → RUNNING → (TTL 30min 无活动) → EXPIRED → 
 | **iptables** | 默认 DROP 出站策略，仅放行配置的端口/CIDR |
 | **non-root** | 子进程以 `sandbox` 用户运行 |
 | **ulimit** | CPU 300s、内存 512MB、进程数 20、文件大小 50MB |
-| **Path validation** | `resolve()` + `is_relative_to()` — 防止路径逃逸 |
+| **Path validation** | `resolve()` + `is_relative_to()` — 防止路径逃逸；每 session 物理根隔离 |
+| **Artifact-only delivery** | 仅 `submit_artifact` 向用户交付；`write` 不自动分享 |
 | **Command blocking** | 禁止 `sudo`, `su`, `rm -rf /`, `dd`, `mkfs`, `fdisk`, `chmod 777` |
 | **Output limits** | stdout/stderr 上限 50K chars |
 | **Audit logging** | 每次执行记录 trace_id |

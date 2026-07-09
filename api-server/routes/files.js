@@ -1,12 +1,13 @@
 /**
- * Routes: file download / upload proxy to Sandbox.
+ * Routes: file download / upload / artifact-download proxy to Sandbox.
  */
 import * as sb from '../services/sandbox-client.js';
 import { config, AUTH_HEADER } from '../config.js';
 
 /**
  * GET /api/files/download?session_id=xxx&path=yyy
- * Stream a file from sandbox workspace to the client.
+ * Stream a raw workspace file from sandbox (e.g. user uploads inspection).
+ * Agent deliverables should use handleArtifactDownload instead.
  */
 export async function handleFileDownload(parsedUrl, res) {
   const sessionId = parsedUrl.searchParams.get('session_id');
@@ -29,6 +30,45 @@ export async function handleFileDownload(parsedUrl, res) {
 
   const disposition = sanRes.headers.get('content-disposition')
     || `attachment; filename="${filePath.split('/').pop()}"`;
+
+  res.writeHead(200, {
+    'Content-Type': sanRes.headers.get('content-type') || 'application/octet-stream',
+    'Content-Disposition': disposition,
+    'Content-Length': sanRes.headers.get('content-length') || '',
+  });
+
+  for await (const chunk of sanRes.body) {
+    res.write(chunk);
+  }
+  res.end();
+}
+
+/**
+ * GET /api/files/artifact-download?session_id=xxx&artifact_id=yyy
+ * Stream a registered artifact (P7 deliverable path).
+ */
+export async function handleArtifactDownload(parsedUrl, res) {
+  const sessionId = parsedUrl.searchParams.get('session_id');
+  const artifactId = parsedUrl.searchParams.get('artifact_id');
+
+  if (!sessionId || !artifactId) {
+    res.writeHead(400, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: 'session_id and artifact_id required' }));
+    return;
+  }
+
+  const sanPath = sb.artifactDownloadPath(sessionId, artifactId);
+  const sanUrl = `${config.SANDBOX_BASE_URL}${sanPath}`;
+  const sanRes = await fetch(sanUrl, { headers: { ...AUTH_HEADER } });
+
+  if (!sanRes.ok) {
+    res.writeHead(sanRes.status, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: 'Artifact not found in sandbox' }));
+    return;
+  }
+
+  const disposition = sanRes.headers.get('content-disposition')
+    || `attachment; filename="${artifactId}"`;
 
   res.writeHead(200, {
     'Content-Type': sanRes.headers.get('content-type') || 'application/octet-stream',

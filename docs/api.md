@@ -23,24 +23,27 @@ API Server 通过 SSE (`text/event-stream`) 推送以下事件类型：
 | `token` | `{ text: string }` | LLM 文本增量 |
 | `tool_start` | `{ id, name, args }` | 工具开始执行 |
 | `tool_end` | `{ id, name, result, isError }` | 工具执行完成 |
-| `file_ready` | `{ path: string }` | 文件可供下载（前端渲染下载链接） |
+| `file_ready` | `{ artifact_id, path, name?, mime_type?, size? }` | 产物可供下载（仅 `submit_artifact` 成功后） |
 | `done` | `{}` | Agent 回合结束 |
 | `session_closed` | `{ session_id }` | 流连接关闭 |
 | `error` | `{ message }` | 错误信息 |
 
-**file_ready 触发来源：**
-- `write` 工具执行成功 → 自动触发（显式提交）
-- `submit_artifact` 工具执行成功 → 自动触发
+**file_ready 触发来源（P7 产物唯一交付）：**
+- ✅ `submit_artifact` 工具执行成功 → 发出 `file_ready`（含 `artifact_id` 等字段）
+- ❌ `write` / `edit` 成功 **不会** 发出 `file_ready`（仅写私有工作区）
 - ❌ bash 或代码执行不会自动触发 — Agent 须调用 `submit_artifact` 显式提交
+- ❌ 无 workspace 自动扫描
 
 示例流：
 ```
-data: {"type":"session","session_id":"sandbox_abc123","workspace_path":"/sandbox/workspace","conversation_id":"conv_xxx"}
+data: {"type":"session","session_id":"sandbox_abc123","workspace_path":"/home/sandbox/workspace","conversation_id":"conv_xxx"}
 data: {"type":"token","text":"我来帮你写一个"}
 data: {"type":"token","text":"Python 脚本。"}
 data: {"type":"tool_start","id":"call_1","name":"write","args":{"path":"fib.py","content":"def fib..."}}
 data: {"type":"tool_end","id":"call_1","name":"write","result":{"content":[{"type":"text","text":"Written..."}]}}
-data: {"type":"file_ready","path":"fib.py"}
+data: {"type":"tool_start","id":"call_2","name":"submit_artifact","args":{"path":"fib.py","name":"fib.py"}}
+data: {"type":"tool_end","id":"call_2","name":"submit_artifact","result":{...}}
+data: {"type":"file_ready","artifact_id":"art_abc123","path":"fib.py","name":"fib.py","mime_type":"application/octet-stream","size":42}
 data: {"type":"done"}
 data: {"type":"session_closed","session_id":"sandbox_abc123"}
 ```
@@ -71,10 +74,12 @@ Base URL: `http://host:4000`
 
 | 端点 | 说明 |
 |------|------|
-| `GET /api/files/download?session_id=xxx&path=yyy` | 从 Sandbox workspace 下载文件 |
+| `GET /api/files/artifact-download?session_id=xxx&artifact_id=yyy` | **Agent 交付物下载**（代理到 Sandbox artifact download） |
+| `GET /api/files/download?session_id=xxx&path=yyy` | 按路径下载 workspace 文件（上传文件等非交付物场景） |
 | `POST /api/files/upload?session_id=xxx` | 上传文件 (multipart) |
 
-两者均代理到 Sandbox `/sessions/{id}/files/download` 和 `/sessions/{id}/files/upload`。
+- Artifact 下载代理到 `GET /sessions/{id}/artifacts/{aid}/download`
+- 路径下载 / 上传代理到 `/sessions/{id}/files/download` 与 `/sessions/{id}/files/upload`
 
 ---
 
@@ -118,7 +123,7 @@ Base URL: `http://sandbox:8081`（Docker 内网）
 {
   "session_id": "sandbox_abc123",
   "status": "RUNNING",
-  "workspace_path": "/sandbox/workspace",       // ← 统一路径（symlink）
+  "workspace_path": "/home/sandbox/workspace",  // ← agent-visible stable path (P3)
   "agent_session_id": "...",
   "enterprise_session_id": "...",
   "user_id": "...",
@@ -126,12 +131,14 @@ Base URL: `http://sandbox:8081`（Docker 内网）
   "created_at": "2026-07-04T10:00:00Z",
   "updated_at": "2026-07-04T10:00:00Z",
   "metadata": {
-    "_physical_workspace": "/var/sandbox/workspaces/sandbox_xxx"  // 实际物理路径
+    "_physical_workspace": "/var/sandbox/workspaces/sandbox_xxx"  // actual on-disk path
   }
 }
 ```
 
-> **workspace_path 始终返回 `/sandbox/workspace`**（统一 symlink 路径）。物理路径在 `metadata._physical_workspace` 中。
+> **workspace_path** is the stable agent-visible path **`/home/sandbox/workspace`**.  
+> Physical storage is **`metadata._physical_workspace`** (session-owned; all exec/file/artifact I/O uses this).  
+> Skills are always **`/home/sandbox/skill`** (read-only), outside the workspace.
 
 ---
 
@@ -222,7 +229,7 @@ Base URL: `http://sandbox:8081`（Docker 内网）
 | **`POST`** | **`/sessions/{id}/artifacts/submit`** | **显式提交产物（推荐）** |
 | `GET` | `/sessions/{id}/artifacts/{aid}/download` | 下载产物 |
 
-> **核心设计**：系统**不会自动扫描** workspace 来发现产物。只有通过 `write` 工具 或 `submit_artifact` 显式提交的文件才会出现在 artifact 列表中。Agent 使用 `bash` 创建文件后，须调用 `submit_artifact` 使其可下载。
+> **核心设计（P7）**：系统**不会自动扫描** workspace。`write` / `edit` / `bash` 只改私有工作区，**不会**注册 artifact，也**不会**触发 `file_ready`。只有通过 `submit_artifact`（或等价 `POST .../artifacts/submit`）显式提交的文件才会出现在 artifact 列表并可供用户下载。
 
 #### `POST /sessions/{id}/artifacts/submit` — 显式提交产物（推荐）
 

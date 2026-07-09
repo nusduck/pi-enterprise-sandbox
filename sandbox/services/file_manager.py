@@ -11,6 +11,26 @@ from sandbox.models import FileInfo, FileResponse
 from sandbox.security.path_validation import enforce_path_within_workspace
 
 
+def workspace_size_bytes(path: str | Path) -> int:
+    """Return total size in bytes of all files under *path* (recursive walk)."""
+    root = Path(path)
+    if not root.exists():
+        return 0
+    total = 0
+    for dirpath, _dirnames, filenames in os.walk(root):
+        for name in filenames:
+            fp = Path(dirpath) / name
+            try:
+                if fp.is_file() and not fp.is_symlink():
+                    total += fp.stat().st_size
+                elif fp.is_file():
+                    # Count symlink targets that still live inside the tree
+                    total += fp.stat().st_size
+            except OSError:
+                continue
+    return total
+
+
 class FileManager:
     """File operations within a session workspace.
 
@@ -76,6 +96,11 @@ class FileManager:
                 f"Content exceeds max file size of {settings.max_file_size_mb}MB"
             )
 
+        # Enforce workspace quota before writing
+        self._enforce_workspace_quota(
+            workspace_path, safe, len(content_bytes), mode=mode,
+        )
+
         with open(safe, "w" if mode == "w" else "a",
                   encoding="utf-8") as f:
             f.write(content)
@@ -85,6 +110,37 @@ class FileManager:
             path=user_path, content="", size=len(content_bytes),
             mime_type=mime_type or "text/plain",
         )
+
+    @staticmethod
+    def _enforce_workspace_quota(
+        workspace_path: str,
+        target: Path,
+        new_bytes: int,
+        mode: str = "w",
+    ) -> None:
+        """Raise ValueError if the write would exceed ``settings.workspace_quota_mb``."""
+        quota_bytes = settings.workspace_quota_mb * 1024 * 1024
+        current = workspace_size_bytes(workspace_path)
+
+        existing = 0
+        if target.is_file():
+            try:
+                existing = target.stat().st_size
+            except OSError:
+                existing = 0
+
+        if mode == "a":
+            projected = current + new_bytes
+        else:
+            # Overwrite replaces existing bytes for this file
+            projected = current - existing + new_bytes
+
+        if projected > quota_bytes:
+            raise ValueError(
+                f"Workspace quota exceeded: write would use ~{projected} bytes "
+                f"but quota is {settings.workspace_quota_mb}MB "
+                f"({quota_bytes} bytes). Current usage: {current} bytes."
+            )
 
     def list_files(
         self, workspace_path: str, user_path: str = ".",

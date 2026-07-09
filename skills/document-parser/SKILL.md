@@ -13,3 +13,6 @@ Examples:
 python skills/document-parser/scripts/parse_document.py report.pdf --output report.md
 python skills/document-parser/scripts/parse_document.py workbook.xlsx
 ```
+
+When the user should download a converted file, call `submit_artifact` on that path after generation.
+Workspace writes alone do not share files with the user.

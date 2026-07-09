@@ -11,9 +11,9 @@ from sandbox.models import (
     FileResponse,
     FileWriteRequest,
 )
+from sandbox.paths import get_session_physical_workspace
 from sandbox.services.file_manager import file_manager
 from sandbox.services.session_manager import session_manager
-from sandbox.services.workspace_manager import workspace_manager
 
 router = APIRouter(prefix="/sessions/{session_id}/files", tags=["files"])
 
@@ -22,9 +22,7 @@ def _get_workspace(session_id: str) -> str:
     session = session_manager.get(session_id)
     if session is None:
         raise HTTPException(status_code=404, detail="Session not found")
-    # Use physical path for reliable file operations (symlink is per-agent-turn)
-    physical = session.metadata.get("_physical_workspace")
-    return physical or session.workspace_path
+    return get_session_physical_workspace(session)
 
 
 @router.get("", response_model=FileListResponse)
@@ -53,6 +51,8 @@ def write_file(session_id: str, body: FileWriteRequest):
         return file_manager.write_file(ws, body.path, body.content, body.mode)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc))
 
 
 @router.get("/preview", response_model=FileResponse)
@@ -98,5 +98,12 @@ async def upload_file(session_id: str, file: UploadFile = File(...), path: str =
     filename = file.filename or "upload"
     # Use provided path or default to filename
     user_path = path or filename
-    result = file_manager.write_file(ws, user_path, content.decode("utf-8", errors="replace"))
+    try:
+        result = file_manager.write_file(
+            ws, user_path, content.decode("utf-8", errors="replace"),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc))
     return result

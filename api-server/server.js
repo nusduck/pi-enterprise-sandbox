@@ -6,7 +6,15 @@ import http from 'node:http';
 import { config } from './config.js';
 import { handleChat } from './routes/chat.js';
 import { handleStatus } from './routes/status.js';
-import { handleFileDownload, handleFileUpload } from './routes/files.js';
+import { handleFileDownload, handleFileUpload, handleArtifactDownload } from './routes/files.js';
+import {
+  handleListConversations,
+  handleGetConversation,
+  handleCreateConversation,
+  handleDeleteConversation,
+} from './routes/conversations.js';
+import { handleListArtifacts } from './routes/artifacts.js';
+import { handleDecideApproval } from './routes/approvals.js';
 import { checkHealth } from './services/sandbox-client.js';
 
 // ── Startup health check ────────────────────────
@@ -49,8 +57,8 @@ function readBodyBuffer(req) {
 
 function setCommonHeaders(res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PATCH, DELETE, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Trace-Id');
 }
 
 function jsonError(res, status, message) {
@@ -85,9 +93,59 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
-    // ── GET /api/files/download — file proxy ──
+    // ── Conversations ──
+    if (req.method === 'GET' && path === '/api/conversations') {
+      await handleListConversations(res);
+      return;
+    }
+    if (req.method === 'POST' && path === '/api/conversations') {
+      const body = await readBody(req);
+      const parsed = body ? JSON.parse(body) : {};
+      await handleCreateConversation(parsed, res);
+      return;
+    }
+    {
+      const convMatch = path.match(/^\/api\/conversations\/([^/]+)$/);
+      if (convMatch) {
+        const id = decodeURIComponent(convMatch[1]);
+        if (req.method === 'GET') {
+          await handleGetConversation(id, res);
+          return;
+        }
+        if (req.method === 'DELETE') {
+          await handleDeleteConversation(id, res);
+          return;
+        }
+      }
+    }
+
+    // ── Artifacts ──
+    if (req.method === 'GET' && path === '/api/artifacts') {
+      await handleListArtifacts(parsedUrl, res);
+      return;
+    }
+
+    // ── Approvals: POST /api/approvals/:id/decide ──
+    {
+      const apprMatch = path.match(/^\/api\/approvals\/([^/]+)\/decide$/);
+      if (req.method === 'POST' && apprMatch) {
+        const approvalId = decodeURIComponent(apprMatch[1]);
+        const body = await readBody(req);
+        const parsed = body ? JSON.parse(body) : {};
+        await handleDecideApproval(approvalId, parsed, res);
+        return;
+      }
+    }
+
+    // ── GET /api/files/download — raw workspace file proxy ──
     if (req.method === 'GET' && path === '/api/files/download') {
       await handleFileDownload(parsedUrl, res);
+      return;
+    }
+
+    // ── GET /api/files/artifact-download — artifact deliverable proxy (P7) ──
+    if (req.method === 'GET' && path === '/api/files/artifact-download') {
+      await handleArtifactDownload(parsedUrl, res);
       return;
     }
 

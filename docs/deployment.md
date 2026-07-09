@@ -173,8 +173,8 @@ curl http://localhost:8083/sessions                        # 401
 | `sandbox_data` | `/sandbox/data` | SQLite 数据库、审计日志 |
 | `nginx_ssl` | `/etc/nginx/ssl` | SSL 证书（生产） |
 | `nginx_certbot` | `/var/www/certbot` | Let's Encrypt ACME challenge（生产） |
-| `./skills` | `/sandbox/skills:ro` | 内置技能（只读） |
-| `./workspaces` | `/sandbox/workspaces` | 会话工作区 |
+| `./skills` | `/home/sandbox/skill:ro` (+ legacy `/sandbox/skills`) | 内置技能（只读） |
+| `./workspaces` | `/var/sandbox/workspaces` | 会话物理工作区 |
 
 ## Health Checks
 

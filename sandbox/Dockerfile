@@ -12,9 +12,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 RUN groupadd -g 10001 sandbox && \
     useradd -m -u 10001 -g sandbox sandbox && \
-    mkdir -p /sandbox/workspace /var/sandbox/workspaces /sandbox/skills /sandbox/data && \
+    mkdir -p \
+        /home/sandbox/workspace \
+        /home/sandbox/skill \
+        /var/sandbox/workspaces \
+        /sandbox/workspace \
+        /sandbox/skills \
+        /sandbox/data && \
+    # Keep legacy /sandbox/* paths as compatibility pointers into the P3 layout
+    ln -sfn /home/sandbox/skill /sandbox/skills-link || true && \
     chmod 0311 /var/sandbox/workspaces && \
-    chown -R sandbox:sandbox /sandbox /var/sandbox
+    chown -R sandbox:sandbox /home/sandbox /sandbox /var/sandbox
 
 WORKDIR /app
 

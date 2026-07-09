@@ -6,7 +6,6 @@ from fastapi import APIRouter, HTTPException, Response
 
 from sandbox.models import (
     ApprovalCheckRequest,
-    ApprovalDecisionRequest,
     ApprovalResponse,
     CommandExecutionRequest,
     ExecutionResponse,
@@ -15,6 +14,7 @@ from sandbox.models import (
     PythonExecutionRequest,
     ToolCallCheck,
 )
+from sandbox.paths import ensure_physical_workspace
 from sandbox.services.audit_logger import audit_logger
 from sandbox.services.approval_manager import approval_manager
 from sandbox.services.execution_manager import execution_manager
@@ -25,21 +25,35 @@ from sandbox.services.workspace_manager import workspace_manager
 router = APIRouter(prefix="/sessions/{session_id}/executions", tags=["executions"])
 
 
-@router.post("/python", response_model=ExecutionResponse, status_code=201)
-def run_python(session_id: str, body: PythonExecutionRequest):
+def _require_active_session(session_id: str):
     session = session_manager.get(session_id)
     if session is None:
         raise HTTPException(status_code=404, detail="Session not found")
     if session.status != "RUNNING":
         raise HTTPException(status_code=400, detail="Session is not active")
+    return session
 
-    ws = workspace_manager.get_workspace_path(session_id)
-    if not ws.exists():
-        ws.mkdir(parents=True, exist_ok=True)
+
+def _execution_cwd(session) -> str:
+    """Always return the physical workspace path for concurrent-safe execution.
+
+    Never use the process-global presentation symlink as cwd — concurrent
+    sessions would race on that link. Activate remains best-effort for
+    single-session presentation only and is never used as the exec cwd.
+    """
+    physical = ensure_physical_workspace(session)
+    workspace_manager.activate_workspace(physical)
+    return str(physical)
+
+
+@router.post("/python", response_model=ExecutionResponse, status_code=201)
+def run_python(session_id: str, body: PythonExecutionRequest):
+    session = _require_active_session(session_id)
+    ws = _execution_cwd(session)
     result = execution_manager.run_python(
         session_id=session_id,
         code=body.code,
-        workspace_path="/sandbox/workspace",
+        workspace_path=ws,
         timeout=body.timeout,
         env_overrides=body.env_overrides if body.env_overrides else None,
     )
@@ -61,19 +75,12 @@ def run_python(session_id: str, body: PythonExecutionRequest):
 
 @router.post("/command", response_model=ExecutionResponse, status_code=201)
 def run_command(session_id: str, body: CommandExecutionRequest):
-    session = session_manager.get(session_id)
-    if session is None:
-        raise HTTPException(status_code=404, detail="Session not found")
-    if session.status != "RUNNING":
-        raise HTTPException(status_code=400, detail="Session is not active")
-
-    ws = workspace_manager.get_workspace_path(session_id)
-    if not ws.exists():
-        ws.mkdir(parents=True, exist_ok=True)
+    session = _require_active_session(session_id)
+    ws = _execution_cwd(session)
     result = execution_manager.run_command(
         session_id=session_id,
         command=body.command,
-        workspace_path="/sandbox/workspace",
+        workspace_path=ws,
         timeout=body.timeout,
         env_overrides=body.env_overrides if body.env_overrides else None,
     )
@@ -95,19 +102,12 @@ def run_command(session_id: str, body: CommandExecutionRequest):
 
 @router.post("/node", response_model=ExecutionResponse, status_code=201)
 def run_node(session_id: str, body: NodeExecutionRequest):
-    session = session_manager.get(session_id)
-    if session is None:
-        raise HTTPException(status_code=404, detail="Session not found")
-    if session.status != "RUNNING":
-        raise HTTPException(status_code=400, detail="Session is not active")
-
-    ws = workspace_manager.get_workspace_path(session_id)
-    if not ws.exists():
-        ws.mkdir(parents=True, exist_ok=True)
+    session = _require_active_session(session_id)
+    ws = _execution_cwd(session)
     result = execution_manager.run_node(
         session_id=session_id,
         code=body.code,
-        workspace_path="/sandbox/workspace",
+        workspace_path=ws,
         timeout=body.timeout,
         env_overrides=body.env_overrides if body.env_overrides else None,
     )

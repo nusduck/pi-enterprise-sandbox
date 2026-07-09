@@ -110,6 +110,7 @@ def run_with_timeout(
     cwd: str | None = None,
     max_process_count: int = 0,
     max_memory_mb: int = 0,
+    max_cpu_seconds: int = 0,
 ) -> dict[str, Any]:
     """Run a subprocess with timeout, kill-after-timeout, and output limits.
 
@@ -119,6 +120,8 @@ def run_with_timeout(
         RLIMIT_NPROC applied in the child process (0 = no limit).
     max_memory_mb : int
         RLIMIT_AS applied in the child process (0 = no limit).
+    max_cpu_seconds : int
+        RLIMIT_CPU applied in the child process (0 = no limit).
 
     Returns
     -------
@@ -131,6 +134,7 @@ def run_with_timeout(
         apply_resource_limits(
             max_process_count=max_process_count,
             max_memory_mb=max_memory_mb,
+            max_cpu_seconds=max_cpu_seconds,
         )
 
     try:

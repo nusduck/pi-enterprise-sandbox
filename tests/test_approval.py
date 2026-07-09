@@ -4,7 +4,10 @@ from __future__ import annotations
 
 from fastapi.testclient import TestClient
 
+from sandbox.database import Database
 from sandbox.main import app
+from sandbox.models import RiskLevel
+from sandbox.services.approval_manager import ApprovalManager
 
 client = TestClient(app)
 
@@ -44,3 +47,52 @@ def test_medium_risk_tool_is_auto_allowed_by_approval_check():
     body = resp.json()
     assert body["status"] == "approved"
     assert body["risk_level"] == "medium"
+
+
+def test_approvals_persist_across_manager_instances(tmp_path):
+    """create + decide + get after restart (new manager, same DB)."""
+    db = Database(f"sqlite:///{tmp_path / 'approvals.db'}")
+    db.initialize()
+
+    first = ApprovalManager(database=db)
+    created = first.create(
+        session_id="sandbox_abc",
+        tool_name="raw_bash",
+        risk_level=RiskLevel.HIGH,
+        reason="dangerous command",
+        payload={"command": "rm -rf /"},
+    )
+    approval_id = created["approval_id"]
+    decided = first.decide(approval_id, "approve")
+    assert decided is not None
+    assert decided["status"] == "approved"
+    assert decided["decided_at"] is not None
+
+    # Simulate process restart — fresh manager, empty cache, same DB
+    second = ApprovalManager(database=db)
+    restored = second.get(approval_id)
+    assert restored is not None
+    assert restored["approval_id"] == approval_id
+    assert restored["session_id"] == "sandbox_abc"
+    assert restored["tool_name"] == "raw_bash"
+    assert restored["status"] == "approved"
+    assert restored["payload"]["command"] == "rm -rf /"
+    assert restored["decided_at"] is not None
+
+
+def test_approval_create_and_get_pending_persists(tmp_path):
+    db = Database(f"sqlite:///{tmp_path / 'approvals.db'}")
+    db.initialize()
+
+    first = ApprovalManager(database=db)
+    created = first.create(
+        session_id="sandbox_xyz",
+        tool_name="raw_bash",
+        risk_level=RiskLevel.HIGH,
+        reason="needs review",
+    )
+    second = ApprovalManager(database=db)
+    pending = second.get(created["approval_id"])
+    assert pending is not None
+    assert pending["status"] == "pending_approval"
+    assert pending["risk_level"] == "high"

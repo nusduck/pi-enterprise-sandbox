@@ -1,8 +1,11 @@
 /**
- * Sandbox tool definitions for pi-coding-agent (4 built-in tools).
+ * Sandbox tool definitions for pi-coding-agent.
  * Each tool defers execution to the shared sandbox-client.js.
  *
- * Tools: read, write, edit, bash
+ * Tools: read, write, edit, bash, submit_artifact
+ *
+ * NOTE: createAgentSession({ tools: [...] }) is an allowlist — every tool
+ * name here must also appear in that list or the model will not see it.
  */
 import { Type } from 'typebox';
 import * as sb from './services/sandbox-client.js';
@@ -11,6 +14,74 @@ import * as sb from './services/sandbox-client.js';
 let _sessionId = null;
 export function setSandboxSessionId(sid) { _sessionId = sid; }
 export function getSandboxSessionId() { return _sessionId; }
+
+/** Optional SSE notifier for approval_required (wired from chat.js). */
+let _approvalNotifier = null;
+export function setApprovalNotifier(fn) {
+  _approvalNotifier = typeof fn === 'function' ? fn : null;
+}
+
+const APPROVAL_POLL_MS = 1500;
+const APPROVAL_MAX_WAIT_MS = 5 * 60 * 1000;
+
+/**
+ * Run policy check; if pending, notify UI and poll until approved/rejected/timeout.
+ * @returns {{ ok: boolean, reason?: string, approval_id?: string }}
+ */
+async function ensureApproved(toolName, params = {}) {
+  if (!_sessionId) return { ok: true };
+  let check;
+  try {
+    check = await sb.approvalCheck(_sessionId, {
+      tool_name: toolName,
+      command: params.command || null,
+      path: params.path || null,
+      timeout: params.timeout || null,
+    });
+  } catch (err) {
+    // If check endpoint fails, fail closed for safety on bash
+    if (toolName === 'bash') {
+      return { ok: false, reason: `Approval check failed: ${err.message}` };
+    }
+    return { ok: true };
+  }
+
+  if (check.status === 'approved') return { ok: true };
+  if (check.status === 'rejected') {
+    return { ok: false, reason: check.reason || 'Rejected by policy' };
+  }
+  if (check.status !== 'pending_approval' || !check.approval_id) {
+    return { ok: false, reason: check.reason || 'Not allowed' };
+  }
+
+  const approvalId = check.approval_id;
+  if (_approvalNotifier) {
+    _approvalNotifier({
+      type: 'approval_required',
+      approval_id: approvalId,
+      tool_name: toolName,
+      command: params.command,
+      path: params.path,
+      reason: check.reason,
+      risk_level: check.risk_level,
+    });
+  }
+
+  const deadline = Date.now() + APPROVAL_MAX_WAIT_MS;
+  while (Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, APPROVAL_POLL_MS));
+    try {
+      const st = await sb.getApproval(approvalId);
+      if (st.status === 'approved') return { ok: true, approval_id: approvalId };
+      if (st.status === 'rejected') {
+        return { ok: false, reason: st.reason || 'Rejected by operator', approval_id: approvalId };
+      }
+    } catch {
+      // keep polling until timeout
+    }
+  }
+  return { ok: false, reason: 'Approval timed out', approval_id: approvalId };
+}
 
 // ── Tool: read ──────────────────────────────────
 
@@ -25,7 +96,12 @@ const readTool = {
   }),
   execute: async (_toolCallId, params) => {
     // Skill files: read from api-server local FS, not sandbox
-    if (params.path.startsWith('/sandbox/skills/') || params.path.startsWith('/app/.pi/skills/') || params.path.startsWith('.pi/skills/')) {
+    if (
+      params.path.startsWith('/home/sandbox/skill/') ||
+      params.path.startsWith('/sandbox/skills/') ||
+      params.path.startsWith('/app/.pi/skills/') ||
+      params.path.startsWith('.pi/skills/')
+    ) {
       return readLocalSkill(params.path);
     }
     try {
@@ -69,7 +145,10 @@ async function readLocalSkill(path) {
 const writeTool = {
   name: 'write',
   label: 'Write File',
-  description: 'Write content to a file in the sandbox workspace.',
+  description:
+    'Write content to a private file in the sandbox workspace. ' +
+    'Does NOT share the file with the user or create a download link. ' +
+    'To deliver a file to the user, call submit_artifact after writing.',
   parameters: Type.Object({
     path: Type.String({ description: 'File path' }),
     content: Type.String({ description: 'Content to write' }),
@@ -79,7 +158,7 @@ const writeTool = {
       const data = await sb.writeFile(_sessionId, params.path, params.content);
       return {
         content: [{ type: 'text', text: `Written ${data.size} bytes to ${params.path}` }],
-        details: { size: data.size },
+        details: { size: data.size, path: params.path },
       };
     } catch (err) {
       return {
@@ -95,7 +174,9 @@ const writeTool = {
 const editTool = {
   name: 'edit',
   label: 'Edit File',
-  description: 'Find-and-replace edit on a file in the sandbox workspace.',
+  description:
+    'Find-and-replace edit on a private file in the sandbox workspace. ' +
+    'Does NOT share the file with the user. Call submit_artifact to deliver a file.',
   parameters: Type.Object({
     path: Type.String({ description: 'File path' }),
     old_string: Type.String({ description: 'Text to find' }),
@@ -132,13 +213,26 @@ const editTool = {
 const bashTool = {
   name: 'bash',
   label: 'Run Command',
-  description: 'Run a shell command in the sandbox (Python, bash, node).',
+  description:
+    'Run a shell command in the sandbox (Python, bash, node). ' +
+    'Destructive or network-related commands may pause for human approval.',
   parameters: Type.Object({
     command: Type.String({ description: 'Shell command' }),
     timeout: Type.Optional(Type.Number({ description: 'Seconds (max 300)' })),
   }),
   execute: async (_toolCallId, params) => {
     try {
+      const gate = await ensureApproved('bash', {
+        command: params.command,
+        timeout: params.timeout,
+      });
+      if (!gate.ok) {
+        return {
+          content: [{ type: 'text', text: `Blocked (approval): ${gate.reason}` }],
+          details: { isError: true, approval_id: gate.approval_id },
+          isError: true,
+        };
+      }
       const r = await sb.executeCommand(_sessionId, params.command, params.timeout || 120);
       const isErr = r.exit_code != null && r.exit_code !== 0;
       const out = [r.stdout_preview ? `STDOUT:\n${r.stdout_preview}` : '',
@@ -162,7 +256,11 @@ const bashTool = {
 const submitArtifactTool = {
   name: 'submit_artifact',
   label: 'Submit Artifact',
-  description: 'Explicitly submit a workspace file as a downloadable artifact. Only explicitly submitted files are tracked — no automatic scans.',
+  description:
+    'Submit a workspace file as a user deliverable (downloadable artifact). ' +
+    'This is the ONLY way to share files with the user — write/edit/bash do not create download links. ' +
+    'Call only for final, important, or user-requested files. ' +
+    'There is no automatic workspace scan; intermediate work stays private until submitted.',
   parameters: Type.Object({
     path: Type.String({ description: 'File path relative to workspace' }),
     name: Type.Optional(Type.String({ description: 'Display name (defaults to filename)' })),
@@ -173,9 +271,24 @@ const submitArtifactTool = {
       const name = params.name || params.path.split('/').pop();
       const mime = params.mime_type || 'application/octet-stream';
       const data = await sb.submitArtifact(_sessionId, name, params.path, mime);
+      const artifactId = data.artifact_id;
+      const path = data.path || params.path;
+      const displayName = data.name || name;
+      const mimeType = data.mime_type || mime;
+      const size = data.size != null ? data.size : undefined;
       return {
-        content: [{ type: 'text', text: `Artifact submitted: ${data.name} (${data.artifact_id})` }],
-        details: { artifact_id: data.artifact_id, path: params.path },
+        content: [{
+          type: 'text',
+          text: `Artifact submitted: ${displayName} (artifact_id=${artifactId}, path=${path}` +
+            (size != null ? `, size=${size}` : '') + `)`,
+        }],
+        details: {
+          artifact_id: artifactId,
+          path,
+          name: displayName,
+          mime_type: mimeType,
+          size,
+        },
       };
     } catch (err) {
       return {

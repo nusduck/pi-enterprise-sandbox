@@ -8,6 +8,7 @@ from datetime import datetime, timedelta, timezone
 from sandbox.config import settings
 from sandbox.database import Database, database as default_database
 from sandbox.models import SessionResponse, SessionStatus
+from sandbox.paths import AGENT_WORKSPACE_PATH
 from sandbox.repositories import SessionRepository
 
 
@@ -33,16 +34,12 @@ class SessionManager:
     ) -> SessionResponse:
         session_id = f"sandbox_{uuid.uuid4().hex[:12]}"
         now = datetime.now(timezone.utc).isoformat()
-        # When workspace_path_override is given, expose the unified /sandbox/workspace
-        # path to API consumers (agent cwd).  The physical directory is tracked
-        # in metadata so the router can update the symlink.
+        # Expose stable agent-visible path; store physical root in metadata.
+        # All exec/file/artifact ops use _physical_workspace, never a global link.
+        meta = dict(metadata or {})
         if workspace_path_override:
-            ws_path = "/sandbox/workspace"
-            meta = dict(metadata or {})
             meta["_physical_workspace"] = workspace_path_override
         else:
-            ws_path = "/sandbox/workspace"
-            meta = dict(metadata or {})
             meta["_physical_workspace"] = str(settings.workspaces_path / session_id)
         entry = {
             "session_id": session_id,
@@ -51,7 +48,7 @@ class SessionManager:
             "user_id": user_id,
             "caller_id": caller_id,
             "status": SessionStatus.RUNNING,
-            "workspace_path": ws_path,
+            "workspace_path": AGENT_WORKSPACE_PATH,
             "created_at": now,
             "updated_at": now,
             "metadata": meta,
