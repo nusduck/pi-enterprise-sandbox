@@ -92,16 +92,37 @@ def delete_file(session_id: str, path: str):
 
 @router.post("/upload", status_code=201)
 async def upload_file(session_id: str, file: UploadFile = File(...), path: str = ""):
-    """Upload a binary file to the workspace."""
+    """Upload a binary file to the workspace.
+
+    Writes exact bytes (no UTF-8 decode). Size is bounded by max_file_size_mb
+    while reading in chunks so large uploads fail cleanly.
+    """
+    from sandbox.config import settings
+
     ws = _get_workspace(session_id)
-    content = await file.read()
     filename = file.filename or "upload"
     # Use provided path or default to filename
     user_path = path or filename
+
+    max_bytes = settings.max_file_size_mb * 1024 * 1024
+    chunk_size = 64 * 1024
+    chunks: list[bytes] = []
+    total = 0
+    while True:
+        chunk = await file.read(chunk_size)
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > max_bytes:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Content exceeds max file size of {settings.max_file_size_mb}MB",
+            )
+        chunks.append(chunk)
+    content = b"".join(chunks)
+
     try:
-        result = file_manager.write_file(
-            ws, user_path, content.decode("utf-8", errors="replace"),
-        )
+        result = file_manager.write_binary(ws, user_path, content)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     except PermissionError as exc:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import mimetypes
 import os
+import tempfile
 from pathlib import Path
 
 from sandbox.config import settings
@@ -109,6 +110,54 @@ class FileManager:
         return FileResponse(
             path=user_path, content="", size=len(content_bytes),
             mime_type=mime_type or "text/plain",
+        )
+
+    def write_binary(
+        self, workspace_path: str, user_path: str, content: bytes,
+    ) -> FileResponse:
+        """Write exact bytes to a workspace path (atomic temp + replace).
+
+        Used by binary upload. Does not decode/re-encode content. Failures
+        after quota checks leave the destination unchanged (no partial file).
+        """
+        if not isinstance(content, (bytes, bytearray)):
+            raise TypeError("write_binary requires bytes content")
+
+        safe = enforce_path_within_workspace(workspace_path, user_path)
+        safe.parent.mkdir(parents=True, exist_ok=True)
+
+        data = bytes(content)
+        max_bytes = settings.max_file_size_mb * 1024 * 1024
+        if len(data) > max_bytes:
+            raise ValueError(
+                f"Content exceeds max file size of {settings.max_file_size_mb}MB"
+            )
+
+        self._enforce_workspace_quota(
+            workspace_path, safe, len(data), mode="w",
+        )
+
+        # Write to a temp file in the target directory, then atomically replace.
+        fd, tmp_name = tempfile.mkstemp(
+            dir=str(safe.parent), prefix=".upload_", suffix=".tmp",
+        )
+        try:
+            with os.fdopen(fd, "wb") as tmp_file:
+                tmp_file.write(data)
+                tmp_file.flush()
+                os.fsync(tmp_file.fileno())
+            os.replace(tmp_name, safe)
+        except Exception:
+            try:
+                os.unlink(tmp_name)
+            except OSError:
+                pass
+            raise
+
+        mime_type, _ = mimetypes.guess_type(str(safe))
+        return FileResponse(
+            path=user_path, content="", size=len(data),
+            mime_type=mime_type or "application/octet-stream",
         )
 
     @staticmethod

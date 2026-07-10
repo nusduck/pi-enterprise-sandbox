@@ -122,10 +122,9 @@ app.add_middleware(
 async def api_token_auth_middleware(request: Request, call_next):
     """Require X-API-Key header for all endpoints except health/public, if configured."""
     if settings.api_token:
-        public_paths = (
-            "/health", "/ready", "/metrics", "/docs", "/openapi", "/redoc", "/auth/",
-        )
-        if not request.url.path.startswith(public_paths):
+        from sandbox.security.public_routes import is_public_route
+
+        if not is_public_route(request.url.path):
             token = request.headers.get(settings.api_token_header, "")
             if token != settings.api_token:
                 return JSONResponse(
@@ -145,12 +144,9 @@ async def jwt_auth_middleware(request: Request, call_next):
     if not settings.auth_enabled:
         return await call_next(request)
 
-    public_prefixes = (
-        "/health", "/ready", "/metrics", "/docs", "/openapi", "/redoc",
-        "/auth/", "/",
-    )
-    path = request.url.path
-    if path == "/" or any(path.startswith(p) for p in public_prefixes):
+    from sandbox.security.public_routes import is_public_route
+
+    if is_public_route(request.url.path):
         return await call_next(request)
 
     # Allow service token to bypass user JWT (api-server → sandbox)

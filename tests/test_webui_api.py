@@ -256,6 +256,9 @@ class TestWebUIHealthAPI:
     def test_ready(self):
         resp = sandbox_client.get("/ready")
         assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "ok"
+        assert data["workspace_available"] is True
 
     def test_metrics(self):
         resp = sandbox_client.get("/metrics")

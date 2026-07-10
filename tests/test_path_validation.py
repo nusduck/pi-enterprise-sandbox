@@ -5,6 +5,7 @@ from pathlib import Path
 from sandbox.security.path_validation import (
     resolve_safe_path,
     is_path_in_workspace,
+    validate_conversation_id,
 )
 
 
@@ -63,3 +64,26 @@ class TestPathValidation:
         link.symlink_to(outside.resolve())
         with pytest.raises(PermissionError):
             resolve_safe_path(ws, "evil_link")
+
+
+class TestConversationIdValidation:
+    def test_accepts_uuid_and_simple_ids(self):
+        assert validate_conversation_id("550e8400-e29b-41d4-a716-446655440000")
+        assert validate_conversation_id("test-conv-empty")
+        assert validate_conversation_id("abc_123")
+
+    def test_rejects_traversal_and_separators(self):
+        for bad in (
+            "../etc",
+            "..",
+            "a/b",
+            "a\\b",
+            "/abs",
+            "conv/../../x",
+            "",
+            "has space",
+            "dot.dot",
+            "../../passwd",
+        ):
+            with pytest.raises(ValueError):
+                validate_conversation_id(bad)

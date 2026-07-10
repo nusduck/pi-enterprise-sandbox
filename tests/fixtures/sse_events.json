@@ -1,0 +1,104 @@
+{
+  "description": "Shared SSE event contract for Node BFF, Python agent, and frontend consumer.",
+  "version": 1,
+  "required_event_types": [
+    "trace",
+    "session",
+    "token",
+    "tool_start",
+    "tool_end",
+    "file_ready",
+    "approval_required",
+    "error",
+    "done",
+    "session_closed"
+  ],
+  "event_shapes": {
+    "trace": { "type": "trace", "trace_id": "string" },
+    "session": {
+      "type": "session",
+      "session_id": "string",
+      "workspace_path": "string?",
+      "conversation_id": "string?",
+      "session_reused": "boolean?",
+      "trace_id": "string?"
+    },
+    "token": { "type": "token", "text": "string" },
+    "tool_start": { "type": "tool_start", "id": "string", "name": "string", "args": "object?" },
+    "tool_end": {
+      "type": "tool_end",
+      "id": "string",
+      "name": "string",
+      "result": "any",
+      "isError": "boolean?"
+    },
+    "file_ready": {
+      "type": "file_ready",
+      "artifact_id": "string?",
+      "path": "string?",
+      "name": "string?",
+      "mime_type": "string?",
+      "size": "number?"
+    },
+    "approval_required": {
+      "type": "approval_required",
+      "approval_id": "string",
+      "tool_name": "string?",
+      "command": "string?",
+      "path": "string?",
+      "reason": "string?",
+      "risk_level": "string?"
+    },
+    "error": { "type": "error", "message": "string" },
+    "done": { "type": "done" },
+    "session_closed": { "type": "session_closed", "session_id": "string?" }
+  },
+  "sample_stream": [
+    { "type": "trace", "trace_id": "trace_example" },
+    {
+      "type": "session",
+      "session_id": "sandbox_abc",
+      "workspace_path": "/home/sandbox/workspace",
+      "conversation_id": "conv_xyz",
+      "session_reused": false,
+      "trace_id": "trace_example"
+    },
+    { "type": "token", "text": "Working on it." },
+    {
+      "type": "tool_start",
+      "id": "call_1",
+      "name": "write",
+      "args": { "path": "note.txt", "content": "hi" }
+    },
+    {
+      "type": "tool_end",
+      "id": "call_1",
+      "name": "write",
+      "result": "Written 2 bytes to note.txt",
+      "isError": false
+    },
+    {
+      "type": "tool_start",
+      "id": "call_2",
+      "name": "submit_artifact",
+      "args": { "path": "note.txt" }
+    },
+    {
+      "type": "tool_end",
+      "id": "call_2",
+      "name": "submit_artifact",
+      "result": "{\"artifact_id\":\"art_1\",\"path\":\"note.txt\"}",
+      "isError": false
+    },
+    {
+      "type": "file_ready",
+      "artifact_id": "art_1",
+      "path": "note.txt",
+      "name": "note.txt",
+      "mime_type": "application/octet-stream",
+      "size": 2
+    },
+    { "type": "done" },
+    { "type": "session_closed", "session_id": "sandbox_abc" }
+  ]
+}

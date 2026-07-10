@@ -40,6 +40,11 @@ class TestArtifactManager:
     def test_get_nonexistent(self, mgr: ArtifactManager):
         assert mgr.get("nonexistent") is None
 
+    def test_get_for_session_rejects_cross_session(self, mgr: ArtifactManager):
+        art = mgr.register(session_id="owner", name="secret.txt", path="secret.txt")
+        assert mgr.get_for_session("owner", art.artifact_id) is not None
+        assert mgr.get_for_session("other", art.artifact_id) is None
+
     def test_delete_by_session(self, mgr: ArtifactManager):
         mgr.register(session_id="s4", name="a.txt", path="a.txt")
         mgr.register(session_id="s4", name="b.txt", path="b.txt")

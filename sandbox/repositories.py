@@ -229,6 +229,15 @@ class ArtifactRepository:
             row = conn.execute("SELECT * FROM artifacts WHERE artifact_id = ?", (artifact_id,)).fetchone()
         return self._row_to_model(row) if row else None
 
+    def get_for_session(self, session_id: str, artifact_id: str) -> ArtifactResponse | None:
+        """Return artifact only when it belongs to *session_id*."""
+        with self.db.connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM artifacts WHERE artifact_id = ? AND session_id = ?",
+                (artifact_id, session_id),
+            ).fetchone()
+        return self._row_to_model(row) if row else None
+
     def delete_by_session(self, session_id: str) -> int:
         with self.db.connect() as conn:
             cur = conn.execute("DELETE FROM artifacts WHERE session_id = ?", (session_id,))

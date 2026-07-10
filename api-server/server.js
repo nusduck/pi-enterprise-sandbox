@@ -83,7 +83,7 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'POST' && path === '/api/chat') {
       const body = await readBody(req);
       const parsed = JSON.parse(body);
-      await handleChat(parsed, res);
+      await handleChat(parsed, res, req);
       return;
     }
 

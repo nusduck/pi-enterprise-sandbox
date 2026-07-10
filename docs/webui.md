@@ -2,19 +2,17 @@
 
 ## 概述
 
-v4 前端是一个**纯 UI SPA**，零 Agent 逻辑。Agent 运行在服务端（API Server），前端通过 SSE 消费事件流并渲染。
+v4 前端是一个**纯 UI SPA**，零 Agent 逻辑。Agent 运行在服务端（API Server；`AGENT_RUNTIME=node|python`），前端通过 SSE 消费事件流并渲染。
 
 架构：
 
 ```
 Browser                  Frontend (Nginx:80)          API Server (Node:4000)
 ┌──────────────┐  HTTP  ┌──────────────────┐  SSE   ┌──────────────────┐
-│ main.js       │◄──────►│ 静态文件服务       │◄──────►│ POST /api/chat   │
-│              │        │ /api/* 反向代理    │        │                  │
-│ 消息渲染      │        └──────────────────┘        │ SSE event stream │
-│ SSE 消费      │        host:3000 → container:80    └──────────────────┘
-│ 文件上传/下载  │
-│ 拖拽支持      │
+│ main.js 编排  │◄──────►│ 静态文件服务       │◄──────►│ POST /api/chat   │
+│ state/api/    │        │ /api/* 反向代理    │        │                  │
+│ render/sse    │        └──────────────────┘        │ SSE event stream │
+│ security      │        host:3000 → container:80    └──────────────────┘
 └──────────────┘
 ```
 
@@ -23,36 +21,63 @@ Browser                  Frontend (Nginx:80)          API Server (Node:4000)
 ```
 frontend/
 ├── src/
-│   └── main.js              ← 唯一入口（~463 行 vanilla JS）
-├── index.html               ← HTML 结构
-├── nginx.conf               ← Nginx 配置（/api/* 反向代理，SSE buffering off）
-├── vite.config.js           ← Vite dev proxy → localhost:4000
-├── package.json             ← @earendil-works/pi-web-ui
-├── Dockerfile               ← Nginx + build
+│   ├── main.js              ← 入口编排（事件绑定、对话切换、SSE 分发）
+│   ├── state.js             ← 状态 + streamGeneration / 会话切换
+│   ├── api.js               ← /api/* fetch 与 URL 构造
+│   ├── render.js            ← DOM 渲染（消息、侧栏、审批、交付物）
+│   ├── sse.js               ← 增量 SSE 解析（分片/UTF-8/abort）
+│   ├── security.js          ← /api URL 白名单与转义
+│   └── style.css
+├── test/                    ← node:test（SSE / state / security）
+├── index.html
+├── nginx.conf               ← /api/* 反代，SSE buffering off
+├── vite.config.js           ← dev proxy → localhost:4000
+├── package.json
+├── Dockerfile
 └── dist/                    ← Vite 构建产物
 ```
 
 ## 核心架构
 
-### 单文件 SPA
+### 模块边界
 
-`main.js` 是唯一的前端入口，使用原生 JavaScript（无框架），所有逻辑内联。依赖：
+| 模块 | 职责 |
+|------|------|
+| `main.js` | 编排：绑定 UI、调用 api、分发 SSE、驱动 render |
+| `state.js` | 单一状态源；`startStream` / `abortStream` / `switchConversation` |
+| `api.js` | 协议层：`sendChatMessage`、upload/download、approvals、conversations |
+| `sse.js` | 纯解析 + `readSSEStream`（支持分片、CRLF、尾缓冲 flush、abort） |
+| `render.js` | DOM：消息气泡、工具卡片、审批横幅、侧栏、交付物列表 |
+| `security.js` | `isAllowedApiUrl` / `esc` — 拒绝 `javascript:` 与站外 URL，HTML 转义 |
 
-- `@earendil-works/pi-web-ui` — 目前仅引用 CSS 样式（`app.css`），v4 不使用 Web Components
+依赖：
+
+- `@earendil-works/pi-web-ui` — 当前主要引用样式；业务逻辑不依赖其 Web Components
+- 生产构建：`npm run build --prefix frontend`（Vite）
 
 ### 状态管理
 
 ```javascript
-const state = {
-  messages: [],            // 消息历史 [{ role, content, _fileLinks }]
-  isStreaming: false,      // 是否正在接收 SSE 流
-  abortCtrl: null,         // AbortController 引用
-  currentMsg: null,        // 流式构建中的 assistant 消息
-  sessionId: null,         // Sandbox session ID
-  readyFiles: new Set(),   // 已 emit file_ready 的 artifact_id 或 path（去重）
-  pendingTool: null,       // 当前工具执行信息 { id, name, args }
-};
+// frontend/src/state.js — INITIAL（示意）
+{
+  messages: [],
+  isStreaming: false,
+  abortCtrl: null,
+  currentMsg: null,
+  sessionId: null,
+  conversationId: null,
+  readyFiles: new Set(),     // file_ready 去重
+  pendingTool: null,         // { id, name, args }
+  pendingApproval: null,     // 审批横幅
+  conversations: [],
+  artifacts: [],
+  traceId: null,
+  sidebarOpen: true,
+  streamGeneration: 0,       // 中止/切换会话后丢弃迟到 SSE
+}
 ```
+
+`update(state, patch)` 做浅拷贝并通知订阅者；`streamGeneration` 在 start/abort/switch 时递增，编排层用 `isActiveGeneration` 忽略过期事件。
 
 ### 消息格式
 
@@ -63,7 +88,7 @@ const state = {
     { type: 'text', text: '...' },
     { type: 'tool_use', name: 'bash', input: {...}, status: 'running' | 'complete', isError, result },
   ],
-  // P7: prefer artifact download URL for deliverables
+  // P7: 交付物优先 artifact download URL
   _fileLinks: [{
     name: 'file.txt',
     url: '/api/files/artifact-download?session_id=...&artifact_id=art_...',
@@ -82,86 +107,101 @@ const state = {
 用户输入 → Enter / 点击发送
   ↓
 sendMessage(text)
-  ├── 添加 user 消息到 state.messages
-  ├── 设置 state.isStreaming = true
-  ├── 初始化 state.currentMsg + state.readyFiles
+  ├── 添加 user 消息
+  ├── startStream（bump streamGeneration，AbortController）
   ├── render() 更新 DOM
-  ├── fetch POST /api/chat { messages }
-  │     ↓ SSE stream
-  │     handleSSE(ev):
-  │       session      → 记录 sessionId，更新状态指示
-  │       token        → 追加到 currentMsg.content (text delta)
-  │       tool_start   → 插入 tool_use 条目（status: running）
-  │       tool_end     → 更新 tool_use 条目（status: complete）
-  │       file_ready   → 优先用 artifact_id 生成交付物下载链接，追加 _fileLinks
-  │       done         → 标记完成
-  │       session_closed → 状态指示
-  │       error        → 错误注入消息
-  ├── 将 currentMsg 推入 state.messages
+  ├── api.sendChatMessage → POST /api/chat { messages, conversation_id? }
+  │     ↓ SSE (sse.readSSEStream)
+  │     handleSSE(ev) 且 isActiveGeneration:
+  │       trace             → 记录 traceId
+  │       session           → sessionId / conversationId / 状态栏
+  │       token             → 追加 text delta
+  │       tool_start/end    → 工具卡片 running → complete
+  │       approval_required → 审批横幅（approve/reject → /api）
+  │       file_ready        → artifact 下载链接 → _fileLinks / deliverables
+  │       done / error      → 结束流或注入错误
+  │       session_closed    → 状态指示
+  ├── endStream / errorStream
   └── render() 最终渲染
 ```
+
+### 会话切换与中止
+
+- 侧栏选择历史会话 → `switchConversation`：abort 在途流、清空 ephemeral（tokens/approvals/artifacts）、从服务端加载消息
+- 新对话 → 清空 `conversationId`，下次发送创建新会话
+- 停止按钮 → `abortStream` + `abortCtrl.abort()`，迟到 SSE 因 generation 失效被忽略
 
 ### 文件上传
 
 ```
-拖拽文件 / 点击上传
+拖拽 / 点击上传
   ↓
 uploadFile(file)
-  ├── 添加 user 消息（显示文件名和大小）
+  ├── user 消息展示文件名与大小
   ├── POST /api/files/upload?session_id=xxx (multipart)
-  └── 自动发送分析请求
+  └── 可选自动跟进分析请求
 ```
 
 ### 文件下载（P7 产物唯一交付）
 
 ```
-file_ready SSE 事件（仅 submit_artifact 成功后）
+file_ready（仅 submit_artifact 成功后）
   ↓
-handleSSE:
-  - 有 artifact_id → getArtifactDownloadUrl(sessionId, artifact_id)
-  - 无 artifact_id 仅 path → 兼容回退 getDownloadUrl（非推荐）
+  有 artifact_id → getArtifactDownloadUrl(sessionId, artifact_id)
+  无 artifact_id 仅 path → 兼容 getDownloadUrl（非推荐）
   ↓
-render() → 生成 <a class="dl" href="/api/files/artifact-download?...">⬇ filename</a>
+render → security.isAllowedApiUrl 校验后生成 <a class="dl" href="/api/...">
 ```
 
 ## 事件绑定
 
-`init()` 函数负责所有事件绑定：
-
-| 交互 | 触发 | 处理函数 |
-|------|------|----------|
-| 发送消息 | Enter / 点击发送按钮 | `sendMessage(text)` |
-| 中断流 | 流式过程中点击停止 | `cancelStream()` → `abortCtrl.abort()` |
-| 新行 | Shift+Enter | textarea 默认行为 |
-| 上传文件 | 点击上传按钮 / Ctrl+U | `uploadFile(file)` |
-| 拖拽上传 | dragenter / dragover / drop | `uploadFile(file)` |
-| 自动调整高度 | textarea input | 动态 height |
+| 交互 | 触发 | 处理 |
+|------|------|------|
+| 发送消息 | Enter / 发送按钮 | `sendMessage` |
+| 中断流 | 停止按钮 | `abortStream` |
+| 新行 | Shift+Enter | textarea 默认 |
+| 上传 | 按钮 / Ctrl+U / 拖拽 | `uploadFile` |
+| 新对话 | 侧栏 New chat | `startNewChat` |
+| 切换会话 | 侧栏列表 | `selectConversation` |
+| 审批 | 横幅按钮 | `decideApproval` |
 
 ## SSE 事件消费
 
-见 `handleSSE(ev)` 函数。支持的 8 种事件类型与 [API 文档](api.md#sse-事件协议) 一致：
+解析见 `frontend/src/sse.js`；事件类型与 [API 文档](api.md#sse-事件协议) 及 `tests/fixtures/sse_events.json` 对齐：
 
 | 事件类型 | UI 行为 |
 |----------|---------|
-| `session` | 更新状态栏显示 session ID 后 8 位 |
-| `token` | 增量追加文本到流式消息气泡 |
-| `tool_start` | 插入工具调用卡片（带 running 动画） |
-| `tool_end` | 更新工具卡片为完成/错误状态 |
-| `file_ready` | 用 `artifact_id` 生成交付物下载链接 `<a>` 标签 |
-| `done` | 结束流式状态 |
-| `session_closed` | 状态栏显示 "Session ended" |
-| `error` | 错误文本注入消息，红色闪出通知 |
+| `trace` | 记录 `traceId` |
+| `session` | 状态栏 session 后 8 位；可带 `conversation_id` / `session_reused` |
+| `token` | 增量追加文本到流式气泡 |
+| `tool_start` | 工具卡片 running |
+| `tool_end` | 工具卡片 complete / error |
+| `approval_required` | 审批横幅 |
+| `file_ready` | artifact 下载链接 / 交付物列表 |
+| `done` | 结束流式 |
+| `session_closed` | 状态栏 Session ended |
+| `error` | 错误文本 + flash |
 
 ## 渲染机制
 
-- `render()` — 全量渲染：遍历 `state.messages` 构建 DOM
-- `incBubble()` — 增量更新：仅更新最后一条 assistant 消息的文本内容（高频率 token 流）
-- `rerenderLast()` — 最后一条消息重新渲染（tool card 状态变化）
-- `showWelcome()` / `removeWelcome()` — 空状态欢迎页切换
+- `render(state)` — 消息列表与流式气泡
+- `incBubble` — 高频 token 增量更新最后一条 assistant
+- `rerenderLast` — 工具卡片状态变化时重绘最后一条
+- `renderConversationList` / `renderDeliverables` / `showApprovalBanner` — 侧栏与审批
+- 文本经 `esc()` 转义；下载链接经 `isAllowedApiUrl` 过滤
+
+## 测试
+
+```bash
+npm test --prefix frontend          # node:test — test/*.test.js
+npm run build --prefix frontend     # 生产构建（CI 同款）
+```
+
+覆盖：SSE 分片/abort/错误、会话切换与 generation、URL/HTML 注入防护、基础 a11y 语义。
 
 ## 主题
 
-支持暗色（默认）和亮色主题，通过 CSS `[data-theme]` 切换。当前版本未暴露切换 UI，默认暗色。
+支持暗色（默认）和亮色主题，通过 CSS `[data-theme]` 切换。
 
 ## 键盘快捷键
 

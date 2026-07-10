@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/backend/index.md", "reason": "Backend boundaries for agent vs sandbox"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "SSE and HTTP error conventions"}
+{"file": ".trellis/spec/project-architecture.md", "reason": "Python-first agent and BFF topology"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "SSE contract across Python, Node, frontend"}

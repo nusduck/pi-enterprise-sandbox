@@ -29,6 +29,9 @@ services:
       SANDBOX_API_TOKEN: ${SANDBOX_API_TOKEN:-}
       LLMIO_BASE_URL: ${LLMIO_BASE_URL:-}
       LLMIO_API_KEY: ${LLMIO_API_KEY:-}
+      MODEL_ID: ${MODEL_ID:-deepseek-v4-flash}
+      # node (default) | python — see .env.example rollback notes
+      AGENT_RUNTIME: ${AGENT_RUNTIME:-node}
       PORT: 4000
     volumes:
       - ./skills:/home/sandbox/skill:ro
@@ -88,6 +91,11 @@ services:
       SANDBOX_UVICORN_WORKERS: ${SANDBOX_UVICORN_WORKERS:-1}
       SANDBOX_UVICORN_PROXY_HEADERS: true
       SANDBOX_API_TOKEN: ${SANDBOX_API_TOKEN:-}
+      # Required when AGENT_RUNTIME=python (Python agent loop calls LLM + self REST)
+      LLMIO_BASE_URL: ${LLMIO_BASE_URL:-}
+      LLMIO_API_KEY: ${LLMIO_API_KEY:-}
+      MODEL_ID: ${MODEL_ID:-deepseek-v4-flash}
+      SANDBOX_INTERNAL_URL: http://127.0.0.1:8081
       LANG: C.UTF-8
       LC_ALL: C.UTF-8
     restart: unless-stopped

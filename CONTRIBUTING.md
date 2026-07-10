@@ -17,81 +17,87 @@ Be respectful, constructive, and inclusive. We're all here to build something gr
 
 ### Local Setup
 
+权威干净安装与本地三进程步骤见 [docs/development.md](./docs/development.md)。摘要：
+
 ```bash
 # Clone and enter
 git clone <repo-url>
-cd pi-sandbox
+cd pi-enterprise-sandbox
 
-# Python environment
-uv venv
-source .venv/bin/activate
-uv pip install -e ".[test]"
+cp .env.example .env   # fill LLMIO_*; never commit real secrets
 
-# Frontend
-cd frontend && npm install && cd ..
+# Python (Sandbox + pytest)
+uv sync --extra test
 
-# API Server
-cd api-server && npm install && cd ..
+# Node API Server + Frontend (lockfile present → prefer npm ci)
+npm ci --prefix api-server
+npm ci --prefix frontend
 ```
 
-### Run Tests
+### Run Tests (aligned with `.github/workflows/test.yml`)
 
 ```bash
-# All tests
-uv run pytest -q
+# Python
+uv run pytest tests/ -q --tb=short
 
-# Specific area
-uv run pytest tests/test_integration.py -v
-uv run pytest tests/test_webui_api.py -v   # API Server tests
-uv run pytest tests/test_persistence.py -v # DB persistence tests
+# Node API Server
+node --test api-server/tests/*.test.js
+# or: npm test --prefix api-server
 
-# With coverage
-uv run pytest --cov=sandbox --cov-report=term-missing
+# Frontend
+npm test --prefix frontend
+npm run build --prefix frontend
+
+# Compose file validation
+test -f .env || cp .env.example .env
+docker compose config -q
 ```
+
+Ruff/Black/Mypy 与覆盖率阈值目前**不是** CI 强制门禁（见 `.trellis/spec/backend/quality-guidelines.md`）。
 
 ## Project Structure
 
 ```
-pi-sandbox/
-├── frontend/          # Frontend SPA (Vite + pi-web-ui → Nginx)
-│   ├── src/main.js    # Single entry point (~463 lines vanilla JS)
-│   ├── index.html     # Main page
-│   ├── Dockerfile     # Nginx + Vite build
+pi-enterprise-sandbox/
+├── frontend/          # Vite SPA → Nginx；src/{main,state,api,render,sse,security}.js
+│   ├── test/          # node:test
+│   ├── index.html
+│   ├── Dockerfile
 │   └── nginx.conf     # /api/* → api-server:4000
-├── api-server/        # API Server (Node.js + pi-coding-agent SDK)
-│   ├── server.js      # HTTP entry (POST /api/chat SSE, /api/status)
-│   ├── agent-handler.js  # Agent session lifecycle + SSE streaming
-│   ├── sandbox-tools.js  # read/write/edit/bash tools (→ Sandbox API)
-│   └── Dockerfile
-├── sandbox/           # Sandbox Service (FastAPI backend)
-│   ├── main.py        # App entry + middleware + router registration
-│   ├── config.py      # Settings (env-based)
-│   ├── models.py      # Pydantic models
-│   ├── database.py    # SQLite WAL persistence
-│   ├── repositories.py # Data access layer
-│   ├── routers/       # API routers (sessions/executions/files/artifacts/traces...)
-│   ├── services/      # Business logic (session/execution/file/approval/audit...)
-│   ├── security/      # Path validation, safe_env
-│   └── mcp/           # MCP Server Adapter
-├── extensions/        # Pi Agent TypeScript extension
-├── sdk/               # Sandbox Node.js SDK
+├── api-server/        # Node BFF + optional AGENT_RUNTIME=python proxy
+│   ├── server.js
+│   ├── routes/        # chat.js, status.js, conversations, files, …
+│   ├── services/      # sandbox-client.js
+│   ├── sandbox-tools.js
+│   ├── config.js      # AGENT_RUNTIME normalization
+│   └── tests/         # node:test
+├── sandbox/           # FastAPI execution / files / approvals / agent
+│   ├── main.py
+│   ├── routers/       # incl. health.py (/health liveness, /ready readiness)
+│   ├── services/
+│   ├── security/      # path_validation, safe_env, public_routes
+│   └── mcp/
 ├── skills/            # Built-in skills
-├── tests/             # Test suite (pytest)
-├── docs/              # Documentation
+├── tests/             # pytest (unit + FastAPI integration)
+├── docs/              # Active docs (archive/ is historical)
 ├── config/            # Runtime config files
 ├── nginx/             # Production Nginx + SSL
 ├── scripts/           # Backup/restore utilities
+├── .github/workflows/ # CI matrix: python / node-api / frontend / compose
+├── .trellis/          # Specs + tasks
 └── pyproject.toml
 ```
+
+> `extensions/` 与 `sdk/` 已从仓库移除；勿按历史文档恢复。
 
 ## How to Contribute
 
 1. **Pick an issue** — check open issues or create one
 2. **Fork & branch** — `git checkout -b feat/your-feature`
-3. **Make changes** — follow existing code style
-4. **Write tests** — cover new functionality
-5. **Run tests** — ensure all pass: `uv run pytest -q`
-6. **Lint** — `ruff check .` or `black --check .`
+3. **Make changes** — follow existing code style and `.trellis/spec/`
+4. **Write tests** — cover new functionality at the nearest layer
+5. **Run gates** — Python + Node + frontend + `docker compose config -q` as above
+6. **Lint (optional)** — `ruff check .` / `black --check .` if available locally
 7. **Push & PR** — open a pull request with a clear description
 
 ## Code Style
@@ -101,17 +107,18 @@ pi-sandbox/
 - Follow [PEP 8](https://peps.python.org/pep-0008/)
 - Use type hints for all function signatures
 - Use `from __future__ import annotations` for forward references
-- Prefer async/await over synchronous blocking calls
+- Prefer async/await at I/O boundaries; sync is fine for most Router/Service/DB paths
 - Use `pathlib.Path` for filesystem operations
 - Use Pydantic models for data validation
 
-### JavaScript (Node.js)
+### JavaScript (Node.js + Frontend)
 
 - ES modules (`import`/`export`) — no CommonJS
 - `const` > `let` > `var` (no `var`)
 - `async/await` over raw promises
 - 2-space indentation
 - Descriptive variable names
+- Frontend: keep agent/LLM logic out of the browser; sanitize/allowlist download URLs
 
 ### CSS
 
@@ -121,24 +128,26 @@ pi-sandbox/
 
 ## Pull Request Checklist
 
-- [ ] Tests pass (`uv run pytest -q`)
-- [ ] New code has tests
-- [ ] Docs updated if API changes
-- [ ] CHANGELOG.md updated
+- [ ] Python tests pass (`uv run pytest tests/ -q --tb=short`)
+- [ ] Node API tests pass (`node --test api-server/tests/*.test.js`)
+- [ ] Frontend tests + build pass
+- [ ] `docker compose config -q` succeeds
+- [ ] New code has tests where behavior changed
+- [ ] Active docs / `.env.example` updated if API or ops behavior changes
 - [ ] No hardcoded secrets
-- [ ] Docker build succeeds (`docker compose build sandbox`)
-- [ ] API Server syntax valid (`node --check api-server/server.js`)
+- [ ] API Server syntax valid (`node --check` on touched sources)
 
 ## Architecture Decisions
 
-See [docs/architecture.md](./docs/architecture.md) for a detailed explanation of:
+See [docs/architecture.md](./docs/architecture.md) and [`.trellis/spec/project-architecture.md`](./.trellis/spec/project-architecture.md) for:
 
-- Why service-side Agent runtime (no LLM Key in browser)
+- Why service-side Agent runtime (no LLM key in the browser)
 - Three-container architecture (Frontend + API Server + Sandbox)
 - Why SQLite with WAL for persistence (optional PostgreSQL)
 - Why session-per-conversation isolation model
 - Why SSE streaming (not WebSocket)
 - Why approval workflow for high-risk tools
+- `AGENT_RUNTIME=node` default with reversible `python` cutover
 
 ## Getting Help
 

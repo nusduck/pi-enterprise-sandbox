@@ -3,7 +3,28 @@
 from __future__ import annotations
 
 import os
+import re
 from pathlib import Path
+
+# Conservative conversation identifiers: UUID-friendly, no path separators.
+_CONVERSATION_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
+
+
+def validate_conversation_id(conversation_id: str) -> str:
+    """Validate a client-supplied conversation id used in workspace names.
+
+    Rejects empty values, path separators, traversal sequences and other
+    characters that could escape ``workspaces_root`` when joined as
+    ``conv_<id>``. Returns the validated id unchanged.
+    """
+    if not conversation_id or not isinstance(conversation_id, str):
+        raise ValueError("Invalid conversation id")
+    if not _CONVERSATION_ID_RE.fullmatch(conversation_id):
+        raise ValueError(
+            "Invalid conversation id: must be 1-128 chars of "
+            "[A-Za-z0-9_-], starting with alphanumeric"
+        )
+    return conversation_id
 
 
 def resolve_safe_path(workspace: str, user_path: str) -> Path:

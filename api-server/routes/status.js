@@ -23,6 +23,8 @@ export async function handleStatus(res) {
   const body = JSON.stringify({
     status: sandboxStatus === 'ok' ? 'ok' : 'degraded',
     version: '4.0.0',
+    /** Active chat orchestration path: `node` | `python` (no secrets). */
+    agent_runtime: config.AGENT_RUNTIME || 'node',
     sandbox: { status: sandboxStatus, ...sandboxInfo },
   });
 

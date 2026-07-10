@@ -2,13 +2,15 @@
 
 Production chat still defaults to Node api-server. This module provides a
 working Python-side agent loop against the local sandbox REST API so the
-project can cut over incrementally (P5).
+project can cut over incrementally via AGENT_RUNTIME=python (P5).
 """
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
+import time
 import uuid
 from dataclasses import dataclass, field
 from typing import Any, AsyncIterator, Callable
@@ -19,6 +21,9 @@ from sandbox.agent.message_manager import MessageManager
 from sandbox.agent.skill_manager import SkillManager
 from sandbox.agent.tool_registry import ToolRegistry
 from sandbox.paths import AGENT_SKILL_PATH, AGENT_WORKSPACE_PATH
+
+APPROVAL_POLL_S = 1.5
+APPROVAL_MAX_WAIT_S = 5 * 60
 
 
 @dataclass
@@ -61,6 +66,25 @@ SANDBOX_TOOL_DEFS = [
                     "content": {"type": "string"},
                 },
                 "required": ["path", "content"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "edit",
+            "description": (
+                "Find-and-replace edit on a private workspace file. "
+                "Does not share the file with the user."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string"},
+                    "old_string": {"type": "string"},
+                    "new_string": {"type": "string"},
+                },
+                "required": ["path", "old_string", "new_string"],
             },
         },
     },
@@ -112,12 +136,15 @@ class AgentRuntime:
         llm_base_url: str | None = None,
         llm_api_key: str | None = None,
         max_tool_rounds: int = 8,
+        approval_poll_s: float = APPROVAL_POLL_S,
+        approval_max_wait_s: float = APPROVAL_MAX_WAIT_S,
     ) -> None:
         self.model_id = model_id or os.environ.get("MODEL_ID", "deepseek-v4-flash")
         self.workspace_path = workspace_path
         self.skill_path = skill_path
         self.sandbox_base_url = (
             sandbox_base_url
+            or os.environ.get("SANDBOX_INTERNAL_URL")
             or os.environ.get("SANDBOX_BASE_URL", "http://127.0.0.1:8081")
         ).rstrip("/")
         self.api_token = api_token if api_token is not None else os.environ.get("SANDBOX_API_TOKEN", "")
@@ -126,14 +153,26 @@ class AgentRuntime:
         ).rstrip("/")
         self.llm_api_key = llm_api_key if llm_api_key is not None else os.environ.get("LLMIO_API_KEY", "")
         self.max_tool_rounds = max_tool_rounds
+        self.approval_poll_s = approval_poll_s
+        self.approval_max_wait_s = approval_max_wait_s
         self.message_manager = MessageManager()
         self.skill_manager = SkillManager()
         self.tool_registry = ToolRegistry()
         self.tool_registry.register_defaults()
         self._session_id: str | None = None
+        self._conversation_id: str | None = None
+        self._session_reused: bool = False
         self._messages: list[dict[str, Any]] = []
         self._trace_id: str | None = None
         self._on_event: Callable[[dict[str, Any]], None] | None = None
+
+    def set_trace_id(self, trace_id: str | None) -> str:
+        """Set or generate an end-to-end trace id for sandbox calls."""
+        if trace_id:
+            self._trace_id = str(trace_id)
+        elif not self._trace_id:
+            self._trace_id = f"trace_{uuid.uuid4().hex}"
+        return self._trace_id or ""
 
     def _headers(self) -> dict[str, str]:
         h = {"Content-Type": "application/json"}
@@ -150,18 +189,79 @@ class AgentRuntime:
         sandbox_session_id: str | None = None,
         system_prompt_extra: str = "",
         workspace_path_override: str | None = None,
+        trace_id: str | None = None,
     ) -> str:
-        """Create or attach a sandbox session; initialize system prompt."""
-        self._trace_id = f"trace_{uuid.uuid4().hex}"
-        if sandbox_session_id:
-            self._session_id = sandbox_session_id
-        else:
-            body: dict[str, Any] = {"caller_id": "python-agent-runtime"}
-            if conversation_id:
-                body["enterprise_session_id"] = conversation_id
-            if workspace_path_override:
-                body["workspace_path"] = workspace_path_override
-            async with httpx.AsyncClient(timeout=60.0) as client:
+        """Create or attach a sandbox session; initialize system prompt.
+
+        Resolves conversation workspace and reuses a RUNNING sandbox session
+        when possible (parity with Node handleChat).
+        """
+        self.set_trace_id(trace_id)
+        self._conversation_id = conversation_id
+        self._session_reused = False
+        target_workspace = workspace_path_override
+        sid = sandbox_session_id
+
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            # Resolve conversation if provided
+            if conversation_id and not (sid and target_workspace):
+                try:
+                    resp = await client.get(
+                        f"{self.sandbox_base_url}/conversations/{conversation_id}",
+                        headers=self._headers(),
+                    )
+                    if resp.status_code == 200:
+                        conv = resp.json()
+                        target_workspace = target_workspace or conv.get("workspace_path")
+                        if not sid and conv.get("sandbox_session_id"):
+                            try:
+                                sresp = await client.get(
+                                    f"{self.sandbox_base_url}/sessions/{conv['sandbox_session_id']}",
+                                    headers=self._headers(),
+                                )
+                                if sresp.status_code == 200:
+                                    existing = sresp.json()
+                                    if existing.get("status") == "RUNNING" and existing.get("session_id"):
+                                        sid = existing["session_id"]
+                                        self._session_reused = True
+                            except Exception:
+                                pass
+                    elif resp.status_code == 404:
+                        # Create conversation so multi-turn has a stable id
+                        cresp = await client.post(
+                            f"{self.sandbox_base_url}/conversations",
+                            headers=self._headers(),
+                            json={"id": conversation_id},
+                        )
+                        if cresp.status_code in (200, 201):
+                            conv = cresp.json()
+                            self._conversation_id = conv.get("id") or conversation_id
+                            target_workspace = target_workspace or conv.get("workspace_path")
+                except Exception:
+                    pass
+
+            if not self._conversation_id and not conversation_id:
+                try:
+                    cresp = await client.post(
+                        f"{self.sandbox_base_url}/conversations",
+                        headers=self._headers(),
+                        json={"title": "New conversation"},
+                    )
+                    if cresp.status_code in (200, 201):
+                        conv = cresp.json()
+                        self._conversation_id = conv.get("id")
+                        target_workspace = target_workspace or conv.get("workspace_path")
+                except Exception:
+                    pass
+
+            if sid:
+                self._session_id = sid
+            else:
+                body: dict[str, Any] = {"caller_id": "python-agent-runtime"}
+                if self._conversation_id:
+                    body["enterprise_session_id"] = self._conversation_id
+                if target_workspace:
+                    body["workspace_path"] = target_workspace
                 resp = await client.post(
                     f"{self.sandbox_base_url}/sessions",
                     headers=self._headers(),
@@ -170,22 +270,49 @@ class AgentRuntime:
                 resp.raise_for_status()
                 data = resp.json()
                 self._session_id = data["session_id"]
+                if not target_workspace:
+                    target_workspace = data.get("workspace_path")
+
+                # Bind session onto conversation for next turn
+                if self._conversation_id:
+                    try:
+                        await client.patch(
+                            f"{self.sandbox_base_url}/conversations/{self._conversation_id}",
+                            headers=self._headers(),
+                            json={
+                                "sandbox_session_id": self._session_id,
+                                "workspace_path": target_workspace,
+                            },
+                        )
+                    except Exception:
+                        pass
 
         skills_block = self.skill_manager.to_prompt()
         system = f"""You are an enterprise coding agent in a secure sandbox.
 Workspace (always): {self.workspace_path}
 Skills (read-only): {self.skill_path}
 Use relative paths. write/edit are private. Use submit_artifact to share files with the user.
+
+## Multi-turn context
+Prior user/assistant messages in this conversation may already be in your transcript.
+Continue the task with that context; do not ask the user to repeat earlier details.
+
+## File Sharing (Artifact-only delivery)
+Available tools: read, write, edit, bash, submit_artifact.
+write/edit/bash only touch the private workspace. To share a file, call submit_artifact.
 {system_prompt_extra}
 {skills_block}
 """
         self._messages = [{"role": "system", "content": system}]
         return self._session_id or ""
 
-    async def restore_messages(self, messages: list[dict[str, Any]]) -> None:
-        """Load prior user/assistant messages into the agent transcript."""
-        hist = self.message_manager.to_agent_history(messages, exclude_last=False)
-        # Keep system if present
+    async def restore_messages(self, messages: list[dict[str, Any]], *, exclude_last: bool = False) -> None:
+        """Load prior user/assistant messages into the agent transcript.
+
+        When prompting with the latest user text separately, pass only *prior*
+        messages (or set exclude_last=True) so the last user turn is not doubled.
+        """
+        hist = self.message_manager.to_agent_history(messages, exclude_last=exclude_last)
         system = [m for m in self._messages if m.get("role") == "system"]
         self._messages = system + hist
 
@@ -197,6 +324,8 @@ Use relative paths. write/edit are private. Use submit_artifact to share files w
             "Authorization": f"Bearer {self.llm_api_key}",
             "Content-Type": "application/json",
         }
+        if self._trace_id:
+            headers["X-Trace-Id"] = self._trace_id
         payload = {
             "model": self.model_id,
             "messages": messages,
@@ -208,12 +337,115 @@ Use relative paths. write/edit are private. Use submit_artifact to share files w
             resp.raise_for_status()
             return resp.json()
 
+    async def _approval_gate(
+        self, tool_name: str, params: dict[str, Any]
+    ) -> AsyncIterator[dict[str, Any]]:
+        """Yield approval_required events; final yield is a gate result dict with type=_gate."""
+        assert self._session_id
+        sid = self._session_id
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                r = await client.post(
+                    f"{self.sandbox_base_url}/sessions/{sid}/executions/approval-check",
+                    headers=self._headers(),
+                    json={
+                        "tool_name": tool_name,
+                        "command": params.get("command"),
+                        "path": params.get("path"),
+                        "timeout": params.get("timeout"),
+                    },
+                )
+                # 200 approved/rejected, 202 pending
+                if r.status_code >= 400:
+                    if tool_name == "bash":
+                        yield {
+                            "type": "_gate",
+                            "ok": False,
+                            "reason": f"Approval check failed: HTTP {r.status_code}",
+                        }
+                        return
+                    yield {"type": "_gate", "ok": True}
+                    return
+                check = r.json()
+        except Exception as exc:
+            if tool_name == "bash":
+                yield {
+                    "type": "_gate",
+                    "ok": False,
+                    "reason": f"Approval check failed: {exc}",
+                }
+                return
+            yield {"type": "_gate", "ok": True}
+            return
+
+        status = check.get("status")
+        if status == "approved":
+            yield {"type": "_gate", "ok": True}
+            return
+        if status == "rejected":
+            yield {
+                "type": "_gate",
+                "ok": False,
+                "reason": check.get("reason") or "Rejected by policy",
+            }
+            return
+        if status != "pending_approval" or not check.get("approval_id"):
+            yield {
+                "type": "_gate",
+                "ok": False,
+                "reason": check.get("reason") or "Not allowed",
+            }
+            return
+
+        approval_id = check["approval_id"]
+        yield {
+            "type": "approval_required",
+            "approval_id": approval_id,
+            "tool_name": tool_name,
+            "command": params.get("command"),
+            "path": params.get("path"),
+            "reason": check.get("reason"),
+            "risk_level": check.get("risk_level"),
+        }
+
+        deadline = time.monotonic() + self.approval_max_wait_s
+        while time.monotonic() < deadline:
+            await asyncio.sleep(self.approval_poll_s)
+            try:
+                async with httpx.AsyncClient(timeout=30.0) as client:
+                    st_r = await client.get(
+                        f"{self.sandbox_base_url}/approvals/{approval_id}",
+                        headers=self._headers(),
+                    )
+                    if st_r.status_code >= 400:
+                        continue
+                    st = st_r.json()
+                if st.get("status") == "approved":
+                    yield {"type": "_gate", "ok": True, "approval_id": approval_id}
+                    return
+                if st.get("status") == "rejected":
+                    yield {
+                        "type": "_gate",
+                        "ok": False,
+                        "reason": st.get("reason") or "Rejected by operator",
+                        "approval_id": approval_id,
+                    }
+                    return
+            except Exception:
+                continue
+        yield {
+            "type": "_gate",
+            "ok": False,
+            "reason": "Approval timed out",
+            "approval_id": approval_id,
+        }
+
     async def _exec_tool(self, name: str, args: dict[str, Any]) -> str:
         assert self._session_id
         sid = self._session_id
         async with httpx.AsyncClient(timeout=180.0) as client:
             if name == "read":
-                q = {"path": args["path"]}
+                q: dict[str, Any] = {"path": args["path"]}
                 if args.get("offset") is not None:
                     q["offset"] = args["offset"]
                 if args.get("limit") is not None:
@@ -233,6 +465,29 @@ Use relative paths. write/edit are private. Use submit_artifact to share files w
                 )
                 r.raise_for_status()
                 return f"Written {r.json().get('size', 0)} bytes to {args['path']}"
+            if name == "edit":
+                # read → replace last occurrence → write (mirrors Node edit tool)
+                path = args["path"]
+                old = args.get("old_string") or ""
+                new = args.get("new_string") if args.get("new_string") is not None else ""
+                r = await client.get(
+                    f"{self.sandbox_base_url}/sessions/{sid}/files/read",
+                    headers=self._headers(),
+                    params={"path": path},
+                )
+                r.raise_for_status()
+                content = r.json().get("content") or ""
+                idx = content.rfind(old)
+                if idx == -1:
+                    return f"Error: old_string not found in {path}"
+                new_content = content[:idx] + new + content[idx + len(old) :]
+                w = await client.post(
+                    f"{self.sandbox_base_url}/sessions/{sid}/files/write",
+                    headers=self._headers(),
+                    json={"path": path, "content": new_content},
+                )
+                w.raise_for_status()
+                return f"Replaced in {path}"
             if name == "bash":
                 r = await client.post(
                     f"{self.sandbox_base_url}/sessions/{sid}/executions/command",
@@ -269,10 +524,9 @@ Use relative paths. write/edit are private. Use submit_artifact to share files w
     async def prompt(self, text: str) -> AgentTurnResult:
         """Run one user prompt turn (aggregate result)."""
         result = AgentTurnResult()
-        events: list[dict[str, Any]] = []
 
         def capture(ev: dict[str, Any]) -> None:
-            events.append(ev)
+            pass
 
         self._on_event = capture
         try:
@@ -295,8 +549,18 @@ Use relative paths. write/edit are private. Use submit_artifact to share files w
         if not self._session_id:
             await self.create_session()
 
+        self.set_trace_id(self._trace_id)
+        yield {"type": "trace", "trace_id": self._trace_id}
+        yield {
+            "type": "session",
+            "session_id": self._session_id,
+            "workspace_path": self.workspace_path,
+            "conversation_id": self._conversation_id,
+            "session_reused": self._session_reused,
+            "trace_id": self._trace_id,
+        }
+
         self._messages.append({"role": "user", "content": text})
-        yield {"type": "session", "session_id": self._session_id, "trace_id": self._trace_id}
 
         for _round in range(self.max_tool_rounds):
             try:
@@ -330,9 +594,39 @@ Use relative paths. write/edit are private. Use submit_artifact to share files w
                     args = {}
                 tid = tc.get("id") or f"call_{uuid.uuid4().hex[:8]}"
                 yield {"type": "tool_start", "id": tid, "name": name, "args": args}
+
+                # Approval gate for bash (fail-closed) — mirrors Node sandbox-tools
+                if name == "bash":
+                    gate_ok = True
+                    gate_reason = ""
+                    async for gev in self._approval_gate(name, args):
+                        if gev.get("type") == "approval_required":
+                            yield gev
+                        elif gev.get("type") == "_gate":
+                            gate_ok = bool(gev.get("ok"))
+                            gate_reason = gev.get("reason") or ""
+                    if not gate_ok:
+                        tool_result = f"Blocked (approval): {gate_reason}"
+                        yield {
+                            "type": "tool_end",
+                            "id": tid,
+                            "name": name,
+                            "result": tool_result,
+                            "isError": True,
+                        }
+                        self._messages.append({
+                            "role": "tool",
+                            "tool_call_id": tid,
+                            "content": tool_result,
+                        })
+                        continue
+
                 try:
                     tool_result = await self._exec_tool(name, args)
-                    is_error = tool_result.startswith("Error") or tool_result.startswith("Unknown")
+                    is_error = (
+                        tool_result.startswith("Error")
+                        or tool_result.startswith("Unknown")
+                    )
                 except Exception as exc:
                     tool_result = f"Error: {exc}"
                     is_error = True
@@ -349,7 +643,7 @@ Use relative paths. write/edit are private. Use submit_artifact to share files w
                         yield {
                             "type": "file_ready",
                             "artifact_id": art.get("artifact_id"),
-                            "path": art.get("path"),
+                            "path": art.get("path") or args.get("path"),
                             "name": art.get("name"),
                             "mime_type": art.get("mime_type"),
                             "size": art.get("size"),
@@ -363,6 +657,37 @@ Use relative paths. write/edit are private. Use submit_artifact to share files w
                 })
 
         yield {"type": "done"}
+
+    async def persist_turn_messages(
+        self,
+        client_messages: list[dict[str, Any]],
+        assistant_text: str = "",
+    ) -> None:
+        """Patch conversation DB with client history + this assistant turn.
+
+        Mirrors Node handleChat post-turn persistence so reload/list still
+        show messages when AGENT_RUNTIME=python. Failures are swallowed —
+        SSE already completed for the user.
+        """
+        cid = self._conversation_id
+        if not cid:
+            return
+        persisted = self.message_manager.to_persistable(client_messages or [])
+        text = (assistant_text or "").strip()
+        if text:
+            persisted.append({"role": "assistant", "content": text})
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                await client.patch(
+                    f"{self.sandbox_base_url}/conversations/{cid}",
+                    headers=self._headers(),
+                    json={
+                        "messages": persisted,
+                        "sandbox_session_id": self._session_id,
+                    },
+                )
+        except Exception:
+            pass
 
     async def close(self) -> None:
         """Release agent session resources (sandbox session kept for reuse)."""

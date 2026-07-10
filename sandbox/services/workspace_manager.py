@@ -89,8 +89,24 @@ class WorkspaceManager:
 
         Physical path: ``<workspaces_root>/conv_<conversation_id>/``.
         Empty at init (P2). Presentation symlink is best-effort only.
+        Client-supplied ids are validated and the resolved path must stay
+        under ``settings.workspaces_path``.
         """
-        ws = settings.workspaces_path / f"conv_{conversation_id}"
+        from sandbox.security.path_validation import validate_conversation_id
+
+        safe_id = validate_conversation_id(conversation_id)
+        root = settings.workspaces_path.resolve()
+        ws = (root / f"conv_{safe_id}").resolve()
+        try:
+            if not ws.is_relative_to(root):
+                raise PermissionError(
+                    f"Conversation workspace escapes workspaces root: {conversation_id}"
+                )
+        except AttributeError:  # pragma: no cover - Python < 3.9 fallback
+            if os.path.commonpath([str(root), str(ws)]) != str(root):
+                raise PermissionError(
+                    f"Conversation workspace escapes workspaces root: {conversation_id}"
+                )
         ws.mkdir(parents=True, exist_ok=True)
         self.activate_workspace(ws)
         return ws
@@ -103,7 +119,20 @@ class WorkspaceManager:
 
     def remove_conversation_workspace(self, conversation_id: str) -> None:
         """Remove a conversation's persistent workspace."""
-        ws = settings.workspaces_path / f"conv_{conversation_id}"
+        from sandbox.security.path_validation import validate_conversation_id
+
+        try:
+            safe_id = validate_conversation_id(conversation_id)
+        except ValueError:
+            return
+        root = settings.workspaces_path.resolve()
+        ws = (root / f"conv_{safe_id}").resolve()
+        try:
+            if not ws.is_relative_to(root):
+                return
+        except AttributeError:  # pragma: no cover
+            if os.path.commonpath([str(root), str(ws)]) != str(root):
+                return
         if ws.exists():
             shutil.rmtree(str(ws), ignore_errors=True)
         # Clean dangling presentation symlink if it pointed at removed path

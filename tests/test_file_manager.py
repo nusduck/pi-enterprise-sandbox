@@ -93,3 +93,36 @@ class TestFileManager:
         monkeypatch.setattr(settings, "workspace_quota_mb", 1)
         result = mgr.write_file(ws, "ok.txt", "hello")
         assert result.size == 5
+
+    def test_write_binary_roundtrip_invalid_utf8_and_nul(self, mgr: FileManager, ws: str):
+        payload = b"hello\x00world\xff\xfe binary"
+        result = mgr.write_binary(ws, "bin.dat", payload)
+        assert result.size == len(payload)
+        on_disk = (Path(ws) / "bin.dat").read_bytes()
+        assert on_disk == payload
+
+    def test_write_binary_quota_no_partial(self, mgr: FileManager, ws: str, monkeypatch):
+        monkeypatch.setattr(settings, "workspace_quota_mb", 0)
+        target = Path(ws) / "too_big.bin"
+        with pytest.raises(ValueError, match="Workspace quota exceeded"):
+            mgr.write_binary(ws, "too_big.bin", b"\x00\x01\x02")
+        assert not target.exists()
+        # No leftover temp files either
+        leftovers = list(Path(ws).glob(".upload_*"))
+        assert leftovers == []
+
+    def test_write_binary_file_size_limit(self, mgr: FileManager, ws: str, monkeypatch):
+        monkeypatch.setattr(settings, "max_file_size_mb", 0)
+        with pytest.raises(ValueError, match="max file size"):
+            mgr.write_binary(ws, "big.bin", b"x")
+        assert not (Path(ws) / "big.bin").exists()
+
+    def test_write_binary_does_not_corrupt_existing_on_quota_fail(
+        self, mgr: FileManager, ws: str, monkeypatch,
+    ):
+        original = b"\x00keep-me"
+        mgr.write_binary(ws, "keep.bin", original)
+        monkeypatch.setattr(settings, "workspace_quota_mb", 0)
+        with pytest.raises(ValueError, match="Workspace quota exceeded"):
+            mgr.write_binary(ws, "keep.bin", b"overwrite-should-fail")
+        assert (Path(ws) / "keep.bin").read_bytes() == original

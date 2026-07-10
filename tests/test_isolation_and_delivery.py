@@ -175,3 +175,105 @@ def test_empty_init_conversation_workspace():
     assert ws.is_dir()
     assert list(ws.iterdir()) == []
     workspace_manager.remove_conversation_workspace("test-conv-empty")
+
+
+def test_conversation_id_traversal_rejected():
+    """Client conversation IDs with traversal must not create dirs outside root."""
+    from sandbox.config import settings
+
+    root = Path(settings.workspaces_path).resolve()
+    for bad_id in ("../escape", "a/b", "../../tmp", "has space"):
+        resp = client.post("/conversations", json={"id": bad_id, "title": "evil"})
+        assert resp.status_code == 400, f"accepted bad id {bad_id!r}: {resp.status_code}"
+        # No directory created outside workspaces root
+        assert not (root.parent / "escape").exists()
+
+
+def test_artifact_submit_rejects_traversal_missing_dir_and_symlink():
+    data = _create_session()
+    sid = data["session_id"]
+    physical = Path(data["metadata"]["_physical_workspace"])
+
+    # Missing file
+    missing = client.post(
+        f"/sessions/{sid}/artifacts/submit",
+        json={"name": "gone.txt", "path": "no-such-file.txt", "mime_type": "text/plain"},
+    )
+    assert missing.status_code in (400, 404)
+
+    # Directory is not a regular file
+    (physical / "subdir").mkdir()
+    is_dir = client.post(
+        f"/sessions/{sid}/artifacts/submit",
+        json={"name": "subdir", "path": "subdir", "mime_type": "text/plain"},
+    )
+    assert is_dir.status_code in (400, 403)
+
+    # Path traversal
+    for bad in ("../outside.txt", "/etc/passwd"):
+        trav = client.post(
+            f"/sessions/{sid}/artifacts/submit",
+            json={"name": "x", "path": bad, "mime_type": "text/plain"},
+        )
+        assert trav.status_code in (400, 403), f"accepted {bad}"
+
+    # Symlink pointing outside workspace
+    outside = physical.parent / "outside_secret.txt"
+    outside.write_text("secret-data", encoding="utf-8")
+    link = physical / "evil_link"
+    link.symlink_to(outside)
+    symlink = client.post(
+        f"/sessions/{sid}/artifacts/submit",
+        json={"name": "evil", "path": "evil_link", "mime_type": "text/plain"},
+    )
+    assert symlink.status_code in (400, 403)
+    outside.unlink(missing_ok=True)
+
+
+def test_artifact_cross_session_download_denied():
+    """Session B cannot download Session A's artifact by ID."""
+    a = _create_session("art-a")
+    b = _create_session("art-b")
+    sa, sb = a["session_id"], b["session_id"]
+
+    client.post(
+        f"/sessions/{sa}/files/write",
+        json={"path": "a-only.txt", "content": "private-A"},
+    )
+    sub = client.post(
+        f"/sessions/{sa}/artifacts/submit",
+        json={"name": "a-only.txt", "path": "a-only.txt", "mime_type": "text/plain"},
+    )
+    assert sub.status_code == 201, sub.text
+    art_id = sub.json()["artifact_id"]
+
+    # Owner can download
+    own = client.get(f"/sessions/{sa}/artifacts/{art_id}/download")
+    assert own.status_code == 200
+    assert b"private-A" in own.content
+
+    # Other session must not obtain the bytes
+    cross = client.get(f"/sessions/{sb}/artifacts/{art_id}/download")
+    assert cross.status_code in (403, 404)
+    assert b"private-A" not in cross.content
+
+
+def test_binary_upload_roundtrip_invalid_utf8():
+    """Upload must preserve exact bytes including NUL and invalid UTF-8."""
+    data = _create_session("bin")
+    sid = data["session_id"]
+    payload = b"hello\x00world\xff\xfe binary"
+
+    resp = client.post(
+        f"/sessions/{sid}/files/upload",
+        files={"file": ("bin.dat", payload, "application/octet-stream")},
+        params={"path": "bin.dat"},
+    )
+    assert resp.status_code == 201, resp.text
+
+    physical = Path(data["metadata"]["_physical_workspace"])
+    assert (physical / "bin.dat").read_bytes() == payload
+
+    dl = client.get(f"/sessions/{sid}/files/download", params={"path": "bin.dat"})
+    assert dl.status_code == 200
+    assert dl.content == payload

@@ -7,12 +7,16 @@
  *
  * Each chat turn generates a trace_id (UUID) and propagates it to the sandbox
  * via X-Trace-Id on all sandbox-client calls.
+ *
+ * Runtime selection (reversible):
+ * - AGENT_RUNTIME=node (default): this handleChat Node path
+ * - AGENT_RUNTIME=python: SSE pass-through proxy to sandbox POST /agent/chat
  */
 import { randomUUID } from 'node:crypto';
 import { createAgentSession, SessionManager, AuthStorage, ModelRegistry, DefaultResourceLoader, SettingsManager, getAgentDir } from '@earendil-works/pi-coding-agent';
-import { sandboxTools, setSandboxSessionId, setApprovalNotifier } from '../sandbox-tools.js';
-import * as sb from '../services/sandbox-client.js';
-import { config } from '../config.js';
+import { createSandboxTools } from '../sandbox-tools.js';
+import { createSandboxClient } from '../services/sandbox-client.js';
+import { config, AUTH_HEADER, isPythonAgentRuntime } from '../config.js';
 
 const AGENT_WORKSPACE = '/home/sandbox/workspace';
 const AGENT_SKILL = '/home/sandbox/skill';
@@ -168,8 +172,10 @@ function parseArtifactFieldsFromText(text) {
 
 /**
  * Resolve conversation + sandbox session (reuse when possible).
+ * @param {ReturnType<typeof createSandboxClient>} client
+ * @param {string | null | undefined} conversation_id
  */
-async function resolveConversationAndSession(conversation_id) {
+async function resolveConversationAndSession(client, conversation_id) {
   let activeConversationId = conversation_id || null;
   let targetWorkspace = null;
   let sandboxSessionId = null;
@@ -177,17 +183,17 @@ async function resolveConversationAndSession(conversation_id) {
 
   if (activeConversationId) {
     try {
-      const conv = await sb.getConversation(activeConversationId);
+      const conv = await client.getConversation(activeConversationId);
       targetWorkspace = conv.workspace_path || null;
       // Prefer dedicated workspace endpoint if path missing
       if (!targetWorkspace) {
-        const convWs = await sb.getConversationWorkspace(activeConversationId);
+        const convWs = await client.getConversationWorkspace(activeConversationId);
         targetWorkspace = convWs.workspace_path;
       }
       // Reuse sandbox session if still RUNNING
       if (conv.sandbox_session_id) {
         try {
-          const existing = await sb.getSession(conv.sandbox_session_id);
+          const existing = await client.getSession(conv.sandbox_session_id);
           if (existing?.status === 'RUNNING' && existing.session_id) {
             sandboxSessionId = existing.session_id;
             reusedSession = true;
@@ -206,7 +212,7 @@ async function resolveConversationAndSession(conversation_id) {
   }
 
   if (!activeConversationId) {
-    const convResp = await sb.createConversation();
+    const convResp = await client.createConversation();
     activeConversationId = convResp.id;
     targetWorkspace = convResp.workspace_path;
     console.log(`[agent] Created conversation ${activeConversationId} workspace: ${targetWorkspace}`);
@@ -214,14 +220,14 @@ async function resolveConversationAndSession(conversation_id) {
 
   if (!sandboxSessionId) {
     const extra = targetWorkspace ? { workspace_path: targetWorkspace } : {};
-    const sessionData = await sb.createSession('pi-coding-agent', {
+    const sessionData = await client.createSession('pi-coding-agent', {
       ...extra,
       enterprise_session_id: activeConversationId,
     });
     sandboxSessionId = sessionData.session_id;
     // Bind session id onto conversation for next turn
     try {
-      await sb.updateConversation(activeConversationId, {
+      await client.updateConversation(activeConversationId, {
         sandbox_session_id: sandboxSessionId,
         workspace_path: targetWorkspace || sessionData.workspace_path,
       });
@@ -234,12 +240,32 @@ async function resolveConversationAndSession(conversation_id) {
   return { activeConversationId, targetWorkspace, sandboxSessionId, reusedSession };
 }
 
-export async function handleChat(body, res) {
-  const { messages, conversation_id } = body;
-
-  // End-to-end trace for this chat turn (sandbox X-Trace-Id)
+/**
+ * Proxy browser chat SSE to Python sandbox agent (AGENT_RUNTIME=python).
+ * Node remains BFF for CORS/auth; orchestration runs in sandbox.
+ *
+ * @param {object} body
+ * @param {import('node:http').ServerResponse} res
+ * @param {import('node:http').IncomingMessage} [req]
+ */
+export async function handleChatPythonProxy(body, res, req = null) {
   const trace_id = randomUUID();
-  sb.setTraceId(trace_id);
+  const ac = new AbortController();
+  let finished = false;
+
+  const onClientGone = () => {
+    if (finished) return;
+    try {
+      ac.abort();
+    } catch {
+      /* ignore */
+    }
+  };
+  if (req) {
+    req.on('close', onClientGone);
+    req.on('aborted', onClientGone);
+  }
+  res.on('close', onClientGone);
 
   res.writeHead(200, {
     'Content-Type': 'text/event-stream',
@@ -248,30 +274,170 @@ export async function handleChat(body, res) {
     'X-Trace-Id': trace_id,
   });
 
-  const sse = (data) => { res.write(`data: ${JSON.stringify(data)}\n\n`); };
-
-  // Emit trace id early so the UI can display / correlate
-  sse({ type: 'trace', trace_id });
-
-  // Wire tool-layer approvals into the SSE stream (human-in-the-loop)
-  setApprovalNotifier((ev) => {
+  const sse = (data) => {
+    if (res.writableEnded || res.destroyed) return;
     try {
-      sse(ev);
+      res.write(`data: ${JSON.stringify(data)}\n\n`);
     } catch {
       /* stream may be closed */
     }
+  };
+
+  // Early trace so UI can correlate even before Python responds
+  sse({ type: 'trace', trace_id });
+
+  const url = `${config.SANDBOX_BASE_URL}/agent/chat`;
+  try {
+    const upstream = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Accept: 'text/event-stream',
+        ...AUTH_HEADER,
+        'X-Trace-Id': trace_id,
+      },
+      body: JSON.stringify({
+        messages: body.messages || [],
+        conversation_id: body.conversation_id || null,
+        sandbox_session_id: body.sandbox_session_id || null,
+        workspace_path: body.workspace_path || null,
+      }),
+      signal: ac.signal,
+    });
+
+    if (!upstream.ok || !upstream.body) {
+      const detail = await upstream.text().catch(() => upstream.statusText);
+      sse({
+        type: 'error',
+        message: `Python agent proxy failed (${upstream.status}): ${detail || upstream.statusText}`,
+      });
+      sse({ type: 'done' });
+      return;
+    }
+
+    const reader = upstream.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (res.writableEnded || res.destroyed) {
+        try {
+          await reader.cancel();
+        } catch {
+          /* ignore */
+        }
+        ac.abort();
+        break;
+      }
+      buffer += decoder.decode(value, { stream: true });
+      // Pass through SSE frames; flush complete lines only
+      let idx;
+      while ((idx = buffer.indexOf('\n')) !== -1) {
+        const line = buffer.slice(0, idx + 1);
+        buffer = buffer.slice(idx + 1);
+        try {
+          res.write(line);
+        } catch {
+          ac.abort();
+          return;
+        }
+      }
+    }
+    if (buffer && !res.writableEnded && !res.destroyed) {
+      try {
+        res.write(buffer);
+      } catch {
+        /* ignore */
+      }
+    }
+  } catch (err) {
+    if (err?.name === 'AbortError') {
+      // Client disconnected — Python side cancels on disconnect
+      return;
+    }
+    console.error('[agent-proxy] Error:', err);
+    sse({ type: 'error', message: err.message || String(err) });
+    sse({ type: 'done' });
+  } finally {
+    finished = true;
+    if (!res.writableEnded) res.end();
+  }
+}
+
+/**
+ * @param {object} body
+ * @param {import('node:http').ServerResponse} res
+ * @param {import('node:http').IncomingMessage} [req]
+ */
+export async function handleChat(body, res, req = null) {
+  if (isPythonAgentRuntime()) {
+    return handleChatPythonProxy(body, res, req);
+  }
+
+  const { messages, conversation_id } = body;
+
+  // End-to-end trace + request-scoped sandbox client for this chat turn only
+  const trace_id = randomUUID();
+  const client = createSandboxClient({ traceId: trace_id });
+
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache',
+    'Connection': 'keep-alive',
+    'X-Trace-Id': trace_id,
   });
+
+  const sse = (data) => {
+    if (res.writableEnded || res.destroyed) return;
+    try {
+      res.write(`data: ${JSON.stringify(data)}\n\n`);
+    } catch {
+      /* stream may be closed */
+    }
+  };
+
+  // Emit trace id early so the UI can display / correlate
+  sse({ type: 'trace', trace_id });
 
   let sandboxSessionId = null;
   let activeConversationId = null;
   const pendingToolArgs = new Map();
   let assistantText = '';
+  let finished = false;
+
+  // Policy: interactive chat SSE owns in-flight sandbox work — cancel on disconnect.
+  const onClientGone = () => {
+    if (finished) return;
+    const sid = sandboxSessionId;
+    if (!sid) return;
+    client.cancelActiveExecution(sid).catch((err) => {
+      console.warn('[agent] cancel-active on disconnect failed:', err.message);
+    });
+  };
+  if (req) {
+    req.on('close', onClientGone);
+    req.on('aborted', onClientGone);
+  }
+  res.on('close', onClientGone);
+
+  // Per-turn tools closed over this client, session, and SSE notifier
+  const sandboxTools = createSandboxTools({
+    client,
+    getSessionId: () => sandboxSessionId,
+    approvalNotifier: (ev) => {
+      try {
+        sse(ev);
+      } catch {
+        /* stream may be closed */
+      }
+    },
+  });
 
   try {
-    const resolved = await resolveConversationAndSession(conversation_id);
+    const resolved = await resolveConversationAndSession(client, conversation_id);
     activeConversationId = resolved.activeConversationId;
     sandboxSessionId = resolved.sandboxSessionId;
-    setSandboxSessionId(sandboxSessionId);
 
     sse({
       type: 'session',
@@ -413,7 +579,7 @@ Available tools: \`read\`, \`write\`, \`edit\`, \`bash\`, **\`submit_artifact\`*
       if (assistantText.trim()) {
         persisted.push({ role: 'assistant', content: assistantText.trim() });
       }
-      await sb.updateConversation(activeConversationId, {
+      await client.updateConversation(activeConversationId, {
         messages: persisted,
         sandbox_session_id: sandboxSessionId,
       });
@@ -426,10 +592,10 @@ Available tools: \`read\`, \`write\`, \`edit\`, \`bash\`, **\`submit_artifact\`*
     console.error('[agent] Error:', err);
     sse({ type: 'error', message: err.message });
   } finally {
-    setApprovalNotifier(null);
+    finished = true;
     // Keep sandbox session alive for multi-turn reuse — do not delete.
     // Emit closed for the SSE stream only.
     sse({ type: 'session_closed', session_id: sandboxSessionId });
-    res.end();
+    if (!res.writableEnded) res.end();
   }
 }

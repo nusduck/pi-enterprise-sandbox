@@ -19,14 +19,18 @@ API Server 通过 SSE (`text/event-stream`) 推送以下事件类型：
 
 | 事件 | 字段 | 说明 |
 |------|------|------|
-| `session` | `{ session_id, workspace_path, conversation_id? }` | **首个事件** — Sandbox 会话已创建 |
+| `trace` | `{ trace_id }` | 端到端追踪 ID（BFF/Agent 入口） |
+| `session` | `{ session_id, workspace_path, conversation_id?, session_reused?, trace_id? }` | Sandbox 会话已创建/复用 |
 | `token` | `{ text: string }` | LLM 文本增量 |
 | `tool_start` | `{ id, name, args }` | 工具开始执行 |
 | `tool_end` | `{ id, name, result, isError }` | 工具执行完成 |
 | `file_ready` | `{ artifact_id, path, name?, mime_type?, size? }` | 产物可供下载（仅 `submit_artifact` 成功后） |
+| `approval_required` | `{ approval_id, tool_name?, command?, reason?, risk_level? }` | 高风险工具等待人工审批 |
 | `done` | `{}` | Agent 回合结束 |
 | `session_closed` | `{ session_id }` | 流连接关闭 |
 | `error` | `{ message }` | 错误信息 |
+
+共享契约夹具：`tests/fixtures/sse_events.json`。
 
 **file_ready 触发来源（P7 产物唯一交付）：**
 - ✅ `submit_artifact` 工具执行成功 → 发出 `file_ready`（含 `artifact_id` 等字段）
@@ -58,16 +62,30 @@ Base URL: `http://host:4000`
 
 ```json
 // Request
-{ "messages": [{ "role": "user", "content": "写一个 Python 脚本" }] }
+{ "messages": [{ "role": "user", "content": "写一个 Python 脚本" }], "conversation_id": "optional" }
 ```
 
 响应: SSE `text/event-stream`，见上方事件协议。
 
-### `GET /api/status` — 健康检查
+**运行时选择（`AGENT_RUNTIME`）：**
+
+| 值 | 行为 |
+|----|------|
+| `node`（默认） | Node `handleChat` + pi-coding-agent |
+| `python` | BFF 将请求/SSE 透传到 Sandbox `POST /agent/chat` |
+
+回滚：将 `AGENT_RUNTIME` 设回 `node` 并重启 api-server；前端无需变更。
+
+### `GET /api/status` — BFF 状态
 
 ```json
-// Response (200)
-{ "status": "ok", "version": "4.0.0" }
+// Response (HTTP 200；Sandbox 不可达时 status 可为 "degraded"，不含密钥)
+{
+  "status": "ok",
+  "version": "4.0.0",
+  "agent_runtime": "node",
+  "sandbox": { "status": "ok" }
+}
 ```
 
 ### 文件代理
@@ -400,12 +418,15 @@ MCP 以 REST over HTTP 模式暴露，兼容 Dify、Hi-Agent 等外部平台。*
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| `GET` | `/health` | 健康检查 |
-| `GET` | `/ready` | 就绪检查 |
+| `GET` | `/health` | **Liveness** — 进程存活。只要服务能应答即 **200**（不因依赖失败而 503） |
+| `GET` | `/ready` | **Readiness** — 依赖就绪（工作区可写 + 数据库可 `SELECT 1`）。未就绪返回 **503** |
 | `GET` | `/metrics` | Prometheus 指标 (文本格式) |
 
+两者均为 public 路由（无需 `X-API-Key` / JWT）。响应**不**包含密钥、连接串、绝对路径或环境变量 dump。
+
 ```json
-// GET /health — Response (200)
+// GET /health — Response (200)  进程存活
+// GET /ready  — Response (200)  依赖就绪；未就绪时 HTTP 503 且 status="not_ready"
 {
   "status": "ok",
   "version": "0.1.0",
@@ -416,6 +437,13 @@ MCP 以 REST over HTTP 模式暴露，兼容 Dify、Hi-Agent 等外部平台。*
   "runtimes": { "python": true, "bash": true, "node": true }
 }
 ```
+
+| 字段 | `/health` | `/ready` |
+|------|-----------|----------|
+| `status` | 始终 `"ok"`（能应答即存活） | `"ok"` 或 `"not_ready"` |
+| HTTP | 200 | 200 就绪 / **503** 未就绪 |
+| `workspace_available` | 尽力探测；失败不影响 liveness 状态码 | 工作区根目录存在且可写 |
+| 数据库 | 不检查 | 必须 `SELECT 1` 成功 |
 
 #### Prometheus Metrics
 

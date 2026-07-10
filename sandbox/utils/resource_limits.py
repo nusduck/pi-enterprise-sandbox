@@ -101,6 +101,43 @@ def apply_ulimit_env(max_memory_mb: int = 512) -> dict[str, str]:
 # ── Subprocess runner ───────────────────────────────────────────────
 
 
+def terminate_process_group(
+    proc: subprocess.Popen[Any],
+    *,
+    grace_seconds: float = 2.0,
+) -> None:
+    """SIGTERM the process group, escalate to SIGKILL, then reap.
+
+    Safe to call if the process has already exited.
+    """
+    if proc.poll() is not None:
+        return
+    try:
+        os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+    except (ProcessLookupError, PermissionError, OSError):
+        try:
+            proc.terminate()
+        except (ProcessLookupError, OSError):
+            pass
+    deadline = time.monotonic() + grace_seconds
+    while time.monotonic() < deadline:
+        if proc.poll() is not None:
+            return
+        time.sleep(0.05)
+    if proc.poll() is None:
+        try:
+            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+        except (ProcessLookupError, PermissionError, OSError):
+            try:
+                proc.kill()
+            except (ProcessLookupError, OSError):
+                pass
+        try:
+            proc.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            pass
+
+
 def run_with_timeout(
     cmd: list[str],
     *,
@@ -111,6 +148,7 @@ def run_with_timeout(
     max_process_count: int = 0,
     max_memory_mb: int = 0,
     max_cpu_seconds: int = 0,
+    on_started: Any | None = None,
 ) -> dict[str, Any]:
     """Run a subprocess with timeout, kill-after-timeout, and output limits.
 
@@ -122,6 +160,9 @@ def run_with_timeout(
         RLIMIT_AS applied in the child process (0 = no limit).
     max_cpu_seconds : int
         RLIMIT_CPU applied in the child process (0 = no limit).
+    on_started :
+        Optional callback ``(proc: subprocess.Popen) -> None`` invoked after
+        the child is spawned so callers can track / cancel the process group.
 
     Returns
     -------
@@ -155,18 +196,29 @@ def run_with_timeout(
             "truncated": False,
         }
 
+    if on_started is not None:
+        try:
+            on_started(proc)
+        except Exception:
+            # Registration failure must not leave an orphan process
+            terminate_process_group(proc, grace_seconds=0.5)
+            raise
+
     try:
         stdout_raw, stderr_raw = proc.communicate(timeout=timeout)
     except subprocess.TimeoutExpired:
         # Kill the entire process group
+        terminate_process_group(proc, grace_seconds=0.1)
         try:
             os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-        except ProcessLookupError:
+        except (ProcessLookupError, PermissionError, OSError):
             pass
-        stdout_raw, stderr_raw = proc.communicate(timeout=5)
+        try:
+            stdout_raw, stderr_raw = proc.communicate(timeout=5)
+        except Exception:
+            stdout_raw, stderr_raw = b"", b""
         duration_ms = (time.monotonic() - start) * 1000
         exit_code = -signal.SIGKILL
-        truncated = False
         stdout_str = stdout_raw.decode("utf-8", errors="replace") if stdout_raw else ""
         stderr_str = stderr_raw.decode("utf-8", errors="replace") if stderr_raw else ""
 

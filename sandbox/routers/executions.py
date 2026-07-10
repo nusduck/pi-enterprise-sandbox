@@ -182,6 +182,23 @@ def approval_check(session_id: str, body: ApprovalCheckRequest, response: Respon
     )
 
 
+@router.post("/cancel-active")
+def cancel_active_execution(session_id: str):
+    """Cancel the session's currently running execution, if any.
+
+    Used by chat/SSE disconnect cleanup. Returns 404 when the session is
+    unknown, and a small JSON body when idle (no active execution).
+    """
+    session = session_manager.get(session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    result = execution_manager.cancel_active(session_id)
+    if result is None:
+        return {"cancelled": False, "reason": "no active execution"}
+    return ExecutionResponse(**result)
+
+
 @router.get("/{execution_id}", response_model=ExecutionResponse)
 def get_execution(session_id: str, execution_id: str):
     session = session_manager.get(session_id)
@@ -208,5 +225,17 @@ def cancel_execution(session_id: str, execution_id: str):
         raise HTTPException(status_code=404, detail="Execution not found")
 
     if execution_manager.cancel(execution_id):
-        result["status"] = ExecutionStatus.CANCELLED
+        # Re-read after cancel so race-resolved terminal status is returned
+        result = execution_manager.get(execution_id) or result
+        if result.get("status") not in (
+            ExecutionStatus.CANCELLED,
+            ExecutionStatus.CANCELLED.value,
+            ExecutionStatus.SUCCESS,
+            ExecutionStatus.SUCCESS.value,
+            ExecutionStatus.FAILED,
+            ExecutionStatus.FAILED.value,
+            ExecutionStatus.TIMEOUT,
+            ExecutionStatus.TIMEOUT.value,
+        ):
+            result["status"] = ExecutionStatus.CANCELLED
     return ExecutionResponse(**result)

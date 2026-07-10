@@ -15,6 +15,12 @@ import {
   loadPersistedConversationId,
   clearPersistedChat,
   normalizeServerMessages,
+  startStream,
+  endStream,
+  abortStream,
+  errorStream,
+  switchConversation,
+  isActiveGeneration,
 } from './state.js';
 import {
   sendChatMessage,
@@ -39,7 +45,8 @@ import {
   rerenderLast,
   setStatus,
   flashError,
-  showWelcome,
+  clearApprovals,
+  showApprovalBanner,
 } from './render.js';
 
 // ── Init DOM references ─────────────────────────
@@ -68,6 +75,9 @@ let state = createState({
   ...INITIAL,
   sidebarOpen: !isMobileBoot,
 });
+
+/** Generation captured at stream start; late events for old gens are ignored. */
+let activeStreamGen = 0;
 
 // Re-render messages + chrome on state changes
 subscribe((changes) => {
@@ -118,6 +128,7 @@ async function refreshArtifacts(sessionId) {
 
 /**
  * Switch to an existing conversation — load messages from server.
+ * Mid-stream switch aborts the active stream and clears ephemeral state.
  */
 async function selectConversation(id) {
   if (!id || id === state.conversationId) {
@@ -127,10 +138,13 @@ async function selectConversation(id) {
     }
     return;
   }
-  if (state.isStreaming) {
-    flashError('Wait for the current response to finish');
-    return;
+
+  // Abort any in-flight stream so late SSE events are ignored via generation bump
+  if (state.isStreaming || state.abortCtrl) {
+    state = abortStream(state);
+    activeStreamGen = state.streamGeneration;
   }
+  clearApprovals();
 
   try {
     setStatus('Loading…', '#94a3b8');
@@ -138,24 +152,18 @@ async function selectConversation(id) {
     const messages = normalizeServerMessages(conv.messages);
     const sessionId = conv.sandbox_session_id || null;
 
-    state = update(state, {
+    state = switchConversation(state, {
       conversationId: conv.id,
       messages,
-      currentMsg: null,
       sessionId,
-      readyFiles: new Set(),
-      artifacts: [],
-      pendingTool: null,
-      traceId: null,
+      sidebarOpen: window.matchMedia('(max-width: 768px)').matches ? false : state.sidebarOpen,
     });
+    activeStreamGen = state.streamGeneration;
     persistConversationId(conv.id);
     persistMessages(messages);
     renderMessagesFull(state);
     renderConversationList(state, { onSelect: selectConversation, onDelete: removeConversation });
-
-    if (window.matchMedia('(max-width: 768px)').matches) {
-      state = update(state, { sidebarOpen: false });
-    }
+    renderDeliverables(state);
 
     if (sessionId) {
       await refreshArtifacts(sessionId);
@@ -172,32 +180,28 @@ async function selectConversation(id) {
 
 /**
  * Start a blank chat (clears conversationId so next send creates new).
+ * Mid-stream new-chat aborts and clears tokens/approvals/artifacts.
  */
 async function startNewChat() {
-  if (state.isStreaming) {
-    flashError('Wait for the current response to finish');
-    return;
+  if (state.isStreaming || state.abortCtrl) {
+    state = abortStream(state);
+    activeStreamGen = state.streamGeneration;
   }
-  state = update(state, {
+  clearApprovals();
+
+  state = switchConversation(state, {
+    conversationId: null,
     messages: [],
     sessionId: null,
-    conversationId: null,
-    readyFiles: new Set(),
-    currentMsg: null,
-    artifacts: [],
-    pendingTool: null,
-    traceId: null,
+    sidebarOpen: window.matchMedia('(max-width: 768px)').matches ? false : state.sidebarOpen,
   });
+  activeStreamGen = state.streamGeneration;
   clearPersistedChat();
   renderMessagesFull(state);
   renderConversationList(state, { onSelect: selectConversation, onDelete: removeConversation });
   renderDeliverables(state);
   setStatus('Agent Ready');
   dom.input?.focus();
-
-  if (window.matchMedia('(max-width: 768px)').matches) {
-    state = update(state, { sidebarOpen: false });
-  }
 }
 
 /**
@@ -206,8 +210,9 @@ async function startNewChat() {
 async function removeConversation(id) {
   if (!id) return;
   if (state.isStreaming && id === state.conversationId) {
-    flashError('Cannot delete while streaming');
-    return;
+    // Abort first so delete can proceed cleanly
+    state = abortStream(state);
+    activeStreamGen = state.streamGeneration;
   }
   if (!confirm('Delete this conversation? Workspace and linked session may be cleaned up.')) {
     return;
@@ -230,7 +235,10 @@ async function removeConversation(id) {
 
 // ── SSE event handler ───────────────────────────
 
-function handleSSE(ev) {
+function handleSSE(ev, generation) {
+  // Ignore late events from a previous stream / conversation
+  if (!isActiveGeneration(state, generation)) return;
+
   switch (ev.type) {
     case 'trace':
       if (ev.trace_id) {
@@ -328,41 +336,46 @@ function handleSSE(ev) {
     }
 
     case 'approval_required': {
-      // Optional wire — show approve/reject banner if sandbox emits approval events
       const approvalId = ev.approval_id || ev.id;
-      if (!approvalId || !dom.flash) break;
-      const banner = document.createElement('div');
-      banner.className = 'approval-banner';
-      banner.innerHTML = `
-        <span>⚠ Approval required: ${escText(ev.reason || ev.command || approvalId)}</span>
-        <button type="button" class="btn-approve">Approve</button>
-        <button type="button" class="btn-reject">Reject</button>
-      `;
-      banner.querySelector('.btn-approve')?.addEventListener('click', async () => {
-        try {
-          await decideApproval(approvalId, 'approve');
-          banner.remove();
-          setStatus('Approved', '#22c55e');
-        } catch (err) {
-          flashError(err.message);
-        }
+      if (!approvalId) break;
+      state = update(state, {
+        pendingApproval: { id: approvalId, reason: ev.reason || ev.command || '' },
       });
-      banner.querySelector('.btn-reject')?.addEventListener('click', async () => {
-        try {
-          await decideApproval(approvalId, 'reject');
-          banner.remove();
-          setStatus('Rejected', '#ef4444');
-        } catch (err) {
-          flashError(err.message);
-        }
+      showApprovalBanner({
+        id: approvalId,
+        reason: ev.reason || ev.command || approvalId,
+        onApprove: async () => {
+          if (!isActiveGeneration(state, generation)) return;
+          try {
+            await decideApproval(approvalId, 'approve');
+            clearApprovals();
+            state = update(state, { pendingApproval: null });
+            setStatus('Approved', '#22c55e');
+          } catch (err) {
+            flashError(err.message);
+          }
+        },
+        onReject: async () => {
+          if (!isActiveGeneration(state, generation)) return;
+          try {
+            await decideApproval(approvalId, 'reject');
+            clearApprovals();
+            state = update(state, { pendingApproval: null });
+            setStatus('Rejected', '#ef4444');
+          } catch (err) {
+            flashError(err.message);
+          }
+        },
       });
-      dom.flash.appendChild(banner);
       break;
     }
 
     case 'error':
       if (state.currentMsg) {
-        state.currentMsg.content.push({ type: 'text', text: `\n[Error: ${ev.message || ev.text}]` });
+        state.currentMsg.content.push({
+          type: 'text',
+          text: `\n[Error: ${ev.message || ev.text}]`,
+        });
         rerenderLast(state);
       }
       flashError(ev.message || ev.text || 'Unknown error');
@@ -378,12 +391,6 @@ function handleSSE(ev) {
   }
 }
 
-function escText(s) {
-  const d = document.createElement('div');
-  d.textContent = s == null ? '' : String(s);
-  return d.innerHTML;
-}
-
 // ── Send message ────────────────────────────────
 
 async function sendMessage(text) {
@@ -396,24 +403,31 @@ async function sendMessage(text) {
   };
   state = update(state, { messages: [...state.messages, userMsg] });
 
-  // Prepare streaming
-  state = update(state, {
-    abortCtrl: new AbortController(),
-    isStreaming: true,
-    currentMsg: { role: 'assistant', content: [{ type: 'text', text: '' }] },
-    readyFiles: new Set(),
-    pendingTool: null,
-  });
+  // Prepare streaming with generation token
+  state = startStream(state);
+  activeStreamGen = state.streamGeneration;
+  const generation = activeStreamGen;
+  clearApprovals();
   render(state);
 
   try {
     // Send full message history (state already includes the user msg)
-    await sendChatMessage(state.messages, handleSSE, state.abortCtrl.signal, state.conversationId);
+    await sendChatMessage(
+      state.messages,
+      (ev) => handleSSE(ev, generation),
+      state.abortCtrl?.signal,
+      state.conversationId,
+    );
+
+    // If generation changed mid-flight (conversation switch), discard
+    if (!isActiveGeneration(state, generation)) return;
 
     // Finalize: append assistant response to messages
     if (state.currentMsg) {
       const newMessages = [...state.messages, state.currentMsg];
-      state = update(state, { messages: newMessages, currentMsg: null });
+      state = endStream(state, { messages: newMessages });
+    } else {
+      state = endStream(state);
     }
     render(state);
     persistMessages(state.messages);
@@ -421,13 +435,18 @@ async function sendMessage(text) {
     await refreshConversations();
     await refreshArtifacts(state.sessionId);
   } catch (err) {
+    if (!isActiveGeneration(state, generation)) return;
+
     if (err.name === 'AbortError') {
       // User cancelled — keep partial message
       if (state.currentMsg) {
         state.currentMsg.stopReason = 'aborted';
         const messages = [...state.messages, state.currentMsg];
-        state = update(state, { messages, currentMsg: null });
+        state = abortStream(state, { messages, currentMsg: null });
+      } else {
+        state = abortStream(state);
       }
+      activeStreamGen = state.streamGeneration;
       render(state);
       return;
     }
@@ -436,18 +455,26 @@ async function sendMessage(text) {
     if (state.currentMsg) {
       state.currentMsg.content.push({ type: 'text', text: `\n[Connection error: ${err.message}]` });
       const messages = [...state.messages, state.currentMsg];
-      state = update(state, { messages, currentMsg: null });
+      state = errorStream(state, { messages, currentMsg: null });
+    } else {
+      state = errorStream(state);
     }
     render(state);
   } finally {
-    state = update(state, { isStreaming: false, abortCtrl: null });
-    dom.input.disabled = false;
-    dom.input.focus();
+    if (isActiveGeneration(state, generation) && state.isStreaming) {
+      state = update(state, { isStreaming: false, abortCtrl: null });
+    }
+    if (isActiveGeneration(state, generation)) {
+      dom.input.disabled = false;
+      dom.input.focus();
+    }
   }
 }
 
 function cancelStream() {
-  if (state.abortCtrl) state.abortCtrl.abort();
+  if (state.abortCtrl) {
+    state.abortCtrl.abort();
+  }
 }
 
 // ── File upload ─────────────────────────────────

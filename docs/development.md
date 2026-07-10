@@ -6,43 +6,63 @@
 
 - **Python 3.11+** + `uv`（推荐）或 pip
 - **Node.js 20+**
-- **Docker**
+- **Docker** / Docker Compose
 - **Git**
 
-### 初始化
+### 干净安装（CI 同款）
+
+从仓库根目录执行。自动化环境优先 `npm ci`（需 lockfile）；本地首次可用 `npm install`。
 
 ```bash
-# 1. 克隆仓库
-git clone <repo-url>
-cd pi-sandbox
+# 0. 环境模板（勿提交真实 .env）
+cp .env.example .env
+# 编辑 .env：至少填入 LLMIO_BASE_URL / LLMIO_API_KEY；可选 SANDBOX_API_TOKEN
 
-# 2. 创建 Python 虚拟环境
-uv venv
-source .venv/bin/activate
-uv pip install -e ".[test]"
+# 1. Python（Sandbox + pytest）
+uv sync --extra test
 
-# 3. 安装前端依赖
-cd frontend && npm install && cd ..
+# 2. Node API Server
+npm ci --prefix api-server
+# 无 lock 或本地开发也可用：npm install --prefix api-server
 
-# 4. 安装 API Server 依赖
-cd api-server && npm install && cd ..
+# 3. Frontend
+npm ci --prefix frontend
+# 或：npm install --prefix frontend
 ```
 
-### 运行
+### 权威验证命令（与 `.github/workflows/test.yml` 对齐）
 
 ```bash
-# Terminal 1: 启动 Sandbox
-cd sandbox && uv run uvicorn sandbox.main:app --port 8081 --reload
+# Python
+uv run pytest tests/ -q --tb=short
 
-# Terminal 2: 启动 API Server（需要 Sandbox 运行）
-cd api-server && SANDBOX_BASE_URL=http://localhost:8081 npm run dev
+# Node API Server
+node --test api-server/tests/*.test.js
+# 或：npm test --prefix api-server
+find api-server -name '*.js' -type f ! -path '*/node_modules/*' -exec node --check {} \;
 
-# Terminal 3: 启动前端（Vite 热更新，dev proxy → localhost:4000）
-cd frontend && npm run dev
+# Frontend
+npm test --prefix frontend
+npm run build --prefix frontend
+
+# Compose 文件合法性（需要 .env；可用 .env.example 复制）
+test -f .env || cp .env.example .env
+docker compose config -q
+```
+
+### 运行（本地三进程）
+
+```bash
+# Terminal 1: Sandbox
+uv run uvicorn sandbox.main:app --port 8081 --reload
+
+# Terminal 2: API Server（需要 Sandbox）
+# 默认 AGENT_RUNTIME=node；Python 编排试运行：AGENT_RUNTIME=python
+SANDBOX_BASE_URL=http://localhost:8081 npm run dev --prefix api-server
+
+# Terminal 3: 前端（Vite 热更新，dev proxy → localhost:4000）
+npm run dev --prefix frontend
 # 访问 http://localhost:5173
-
-# Terminal 4: 运行测试
-uv run pytest -q
 ```
 
 或使用 Docker：
@@ -53,8 +73,8 @@ docker compose up --build
 
 # 仅 Sandbox（用于 API Server 本地开发）
 docker compose up --build sandbox -d
-# 然后本地运行 API Server：
-cd api-server && SANDBOX_BASE_URL=http://localhost:8083 npm run dev
+# 然后本地运行 API Server（注意 host 映射端口）：
+SANDBOX_BASE_URL=http://localhost:8083 npm run dev --prefix api-server
 ```
 
 ## 开发流程
@@ -85,27 +105,31 @@ cd api-server && SANDBOX_BASE_URL=http://localhost:8083 npm run dev
 
 ### 修改 API Server
 
-1. `api-server/server.js` — 路由和 HTTP 处理
-2. `api-server/agent-handler.js` — pi-coding-agent 封装
-3. `api-server/sandbox-tools.js` — read/write/edit/bash 工具
-4. 运行语法检查: `node --check api-server/server.js`
+1. `api-server/server.js` — HTTP 入口与路由分派
+2. `api-server/routes/chat.js` — SSE chat（受 `AGENT_RUNTIME` 影响）
+3. `api-server/sandbox-tools.js` — read/write/edit/bash/submit_artifact
+4. `api-server/config.js` — 环境变量与 `AGENT_RUNTIME` 规范化
+5. 语法检查: `node --check api-server/server.js`
+6. 单元测试: `npm test --prefix api-server`
 
 ### 数据库操作
 
-Sandbox 使用 SQLite WAL 模式，首次访问自动创建。
+Sandbox 使用 SQLite WAL 模式（可选 PostgreSQL），启动时 `database.initialize()` 建表。
 
 ```python
-# 代码中访问数据库
-from sandbox.database import get_db
+from sandbox.database import database
 
-async with get_db() as db:
-    cursor = await db.execute("SELECT * FROM sessions")
-    rows = await cursor.fetchall()
+with database.connect() as conn:
+    cur = conn.execute("SELECT session_id FROM sessions")
+    rows = cur.fetchall()
 ```
 
-重置数据库：
+重置数据库（本地默认路径因环境而异；容器内为 `/sandbox/data/sandbox.db`）：
+
 ```bash
-rm sandbox/data/sandbox.db  # SQLite 下次启动自动重建
+# 容器
+docker exec pi-enterprise-sandbox rm -f /sandbox/data/sandbox.db
+# 下次启动自动重建
 ```
 
 ## 测试
@@ -113,41 +137,45 @@ rm sandbox/data/sandbox.db  # SQLite 下次启动自动重建
 ### 运行测试
 
 ```bash
-# 快速运行全部
-uv run pytest -q
+# Python — 快速全部（CI 同款）
+uv run pytest tests/ -q --tb=short
 
-# 详细模式
+# 详细 / 定向
 uv run pytest -v
-
-# 指定文件
 uv run pytest tests/test_integration.py -v
 
-# 覆盖率
+# 覆盖率（可选；非 CI 强制门禁）
 uv run pytest --cov=sandbox --cov-report=term-missing
-
-# HTML 覆盖率报告
 uv run pytest --cov=sandbox --cov-report=html
-open htmlcov/index.html
+
+# Node API Server（node:test）
+node --test api-server/tests/*.test.js
+npm test --prefix api-server
+
+# Frontend（node:test，见 frontend/test/*.test.js）
+npm test --prefix frontend
+npm run build --prefix frontend
 ```
 
 ### 测试结构
 
-| 测试文件 | 测试内容 |
-|----------|----------|
-| `test_integration.py` | 端到端 API (TestClient) |
-| `test_session_manager.py` | 会话 CRUD, TTL, 清理 |
-| `test_execution_manager.py` | Python/命令执行 |
-| `test_file_manager.py` | 文件读写/列表/预览 |
-| `test_artifact_manager.py` | 产物注册/列表/下载 |
-| `test_policy_checker.py` | 风险等级分类 |
-| `test_tool_policy.py` | 工具策略检查 |
-| `test_path_validation.py` | 路径逃逸防护 |
-| `test_approval.py` | 审批工作流 |
-| `test_persistence.py` | SQLite 持久化层 |
-| `test_trace.py` | Trace ID 中间件 |
-| `test_builtin_skills.py` | 内置技能脚本 |
-| `test_container_startup.py` | Docker entrypoint, compose 配置 |
-| `test_webui_api.py` | API Server 测试 |
+| 位置 | 测试内容 |
+|------|----------|
+| `tests/test_integration.py` | Sandbox 端到端 API (TestClient)，含 `/health` `/ready` |
+| `tests/test_session_manager.py` | 会话 CRUD, TTL, 清理 |
+| `tests/test_execution_manager.py` | Python/命令执行、取消 |
+| `tests/test_file_manager.py` | 文件读写/列表/预览/二进制 |
+| `tests/test_artifact_manager.py` | 产物注册/列表/下载 |
+| `tests/test_policy_checker.py` | 风险等级分类 |
+| `tests/test_path_validation.py` | 路径逃逸防护 |
+| `tests/test_approval.py` | 审批工作流 |
+| `tests/test_persistence.py` | SQLite 持久化层 |
+| `tests/test_auth.py` / `test_auth_foundation.py` | 公开路由、API key / JWT |
+| `tests/test_agent_*.py` | Python Agent 路由与对等 |
+| `tests/test_container_startup.py` | Docker entrypoint, compose 配置 |
+| `tests/test_webui_api.py` | 跨层 WebUI/API 契约 |
+| `api-server/tests/*.test.js` | AGENT_RUNTIME、request-context 隔离 |
+| `frontend/test/*.test.js` | SSE 解析、state、security/a11y |
 
 ### 编写测试
 
@@ -255,5 +283,6 @@ cd frontend && npm run build && ls dist/
 |------|----------|
 | `port already in use` | 修改 `FRONTEND_PORT`, `API_PORT` 或 `SANDBOX_MCP_HOST_PORT` |
 | `sqlite3.OperationalError: database is locked` | 等待或重启 Sandbox 容器 |
-| `Connection refused` 访问 Sandbox | 先确认 Sandbox 健康: `curl localhost:8083/health` |
-| SSE 流中断 | 检查 API Server 和 Sandbox 日志 |
+| `Connection refused` 访问 Sandbox | 先确认 liveness: `curl -f localhost:8083/health`，再确认 readiness: `curl -f localhost:8083/ready` |
+| `/ready` 返回 503 | 检查 `SANDBOX_WORKSPACES_ROOT` 可写与 `SANDBOX_DATABASE_URL` 可达；日志仅有 warning，不含连接串 |
+| SSE 流中断 | 检查 API Server 和 Sandbox 日志；确认客户端 abort 后执行已取消 |

@@ -1,5 +1,10 @@
 # Design Doc → Implementation Audit
 
+> ⚠️ **OUTDATED / HISTORICAL SNAPSHOT** — 本文档记录早期设计对照，**不能**作为当前实现的权威来源。  
+> 多项 ❌ 状态已在后续迭代中修复（例如 trace_id、SQLite WAL、artifact 流程、auth 公开路由等）。  
+> 当前事实以代码、`tests/`、`docs/`、`.trellis/spec/` 与 `.github/workflows/test.yml` 为准。  
+> 全栈硬化证据见 `.trellis/tasks/07-11-quality-operations-docs/research/verification-evidence.md`。
+
 ## 一期必须做 (Section 15.1) — 25 items
 
 | # | Feature | Status | File |

@@ -25,10 +25,10 @@
         <button type="button" class="btn-icon" id="btn-sidebar-toggle" title="Toggle conversations" aria-label="Toggle sidebar">☰</button>
         <div class="logo">◆</div>
         <h1>Enterprise Sandbox</h1>
-        <div class="badge"><span class="dot"></span><span id="status-label">Agent Ready</span></div>
+        <div class="badge" aria-live="polite"><span class="dot" aria-hidden="true"></span><span id="status-label">Agent Ready</span></div>
       </header>
-      <div id="flash-zone"></div>
-      <div id="messages" class="msgs"></div>
+      <div id="flash-zone" class="flash-zone" role="status" aria-live="assertive" aria-relevant="additions text"></div>
+      <div id="messages" class="msgs" role="log" aria-live="polite" aria-relevant="additions"></div>
 
       <!-- Deliverables panel -->
       <div id="deliverables" class="deliverables" hidden>

@@ -36,6 +36,8 @@ def test_tool_registry_defaults_include_submit_artifact():
     assert "submit_artifact" in names
     assert "read" in names
     assert "write" in names
+    assert "edit" in names
+    assert "bash" in names
 
 
 def test_skill_manager_lists_builtin_skills():

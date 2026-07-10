@@ -2,45 +2,14 @@
  * HTTP + SSE stream client for the Sandbox API Server.
  */
 
+import { readSSEStream } from './sse.js';
+import { isAllowedApiUrl } from './security.js';
+
+export { readSSEStream } from './sse.js';
+export { isAllowedApiUrl, safeApiUrl } from './security.js';
+
 const BASE = '/api';
 const MAX_RETRIES = 3;
-
-/**
- * Helper: read SSE stream from a fetch Response.
- * @param {Response} resp
- * @param {function} onEvent  — called with parsed event object
- * @param {AbortSignal} [signal]
- */
-export async function readSSEStream(resp, onEvent, signal) {
-  const reader = resp.body.getReader();
-  const decoder = new TextDecoder();
-  let buf = '';
-
-  try {
-    while (true) {
-      if (signal?.aborted) break;
-      const { done, value } = await reader.read();
-      if (done) break;
-
-      buf += decoder.decode(value, { stream: true });
-      const lines = buf.split('\n');
-      buf = lines.pop() || '';
-
-      for (const line of lines) {
-        if (!line.startsWith('data: ')) continue;
-        const json = line.slice(6).trim();
-        if (!json) continue;
-        try {
-          onEvent(JSON.parse(json));
-        } catch (e) {
-          console.warn('[api] SSE parse error:', e, line);
-        }
-      }
-    }
-  } finally {
-    reader.releaseLock?.();
-  }
-}
 
 /**
  * Send a chat message and consume the SSE stream.
@@ -215,12 +184,14 @@ export async function uploadFile(sessionId, file, signal) {
  * Agent deliverables should use getArtifactDownloadUrl instead (P7).
  */
 export function getDownloadUrl(sessionId, path) {
-  return `${BASE}/files/download?session_id=${encodeURIComponent(sessionId)}&path=${encodeURIComponent(path)}`;
+  const url = `${BASE}/files/download?session_id=${encodeURIComponent(sessionId)}&path=${encodeURIComponent(path)}`;
+  return isAllowedApiUrl(url) ? url : null;
 }
 
 /**
  * Build a download URL for a registered artifact deliverable (P7).
  */
 export function getArtifactDownloadUrl(sessionId, artifactId) {
-  return `${BASE}/files/artifact-download?session_id=${encodeURIComponent(sessionId)}&artifact_id=${encodeURIComponent(artifactId)}`;
+  const url = `${BASE}/files/artifact-download?session_id=${encodeURIComponent(sessionId)}&artifact_id=${encodeURIComponent(artifactId)}`;
+  return isAllowedApiUrl(url) ? url : null;
 }

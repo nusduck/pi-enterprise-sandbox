@@ -1,7 +1,11 @@
 # Pi Enterprise Sandbox — Project Review & Improvement Plan
 
 > **Generated:** 2026-07-09 · **Revised:** 2026-07-09 (implementation complete for Phase 0 + Phase 1 core)  
-> **Implementation status:** **Phase 0–1 done**. **Phase 1.5 done:** approval pause in bash tool + SSE/UI, policy high-risk command patterns, GET /approvals/{id}, Python `AgentRuntime` tool loop + POST /agent/chat, auth foundation (register/login/JWT, optional SANDBOX_AUTH_ENABLED). **Remaining:** production cutover of browser chat to Python agent, full multi-user ownership, mount-namespace polish.  
+> **Partial update 2026-07-11:** 全栈硬化子任务已落地（backend security、request-context/cancel、`AGENT_RUNTIME` 可逆 cutover、frontend SSE/security 测试、CI 矩阵与 readiness）。详见 `.trellis/tasks/07-11-*`。  
+> **Implementation status:** **Phase 0–1 done**. **Phase 1.5 done:** approval pause in bash tool + SSE/UI, policy high-risk command patterns, GET /approvals/{id}, Python `AgentRuntime` tool loop + POST /agent/chat, auth foundation (register/login/JWT, optional SANDBOX_AUTH_ENABLED).  
+> **Runtime cutover (2026-07-11):** 浏览器仍统一 `POST /api/chat`；`AGENT_RUNTIME=node`（**默认，勿随意翻转**）| `python`（BFF 透传 sandbox `/agent/chat`）。完整默认切到 python 前需对等多轮/工具/审批/产物/abort 验证。  
+> **Still remaining / out of this hardening wave:** full multi-user ownership, mount-namespace polish, 强制 Ruff/Mypy 门禁等。  
+> ⚠️ 文中部分“当前代码问题”描述可能已修复；**以仓库代码与测试为准**，本文件作原则与路线图，不作逐行审计。  
 > **Based on:** live v4 review + design principles + manual Docker test feedback  
 > **Supersedes:** `PLAN.md` (v2-era paths); corrects stale gaps in `AUDIT.md`  
 > **Scope:** architecture, security, reliability, UX, ops, and phased delivery

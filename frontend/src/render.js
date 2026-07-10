@@ -1,23 +1,45 @@
 /**
  * DOM rendering helpers for the chat UI.
  * Download URLs are prebuilt in main.js (artifact-first, P7) and stored on _fileLinks.
+ *
+ * Security: untrusted model/tool/filename/error text uses textContent / createTextNode.
+ * No inline event-handler attributes. Download hrefs must pass isAllowedApiUrl.
  */
 
 import { conversationTitle } from './state.js';
 import { getArtifactDownloadUrl, getDownloadUrl } from './api.js';
+import { isAllowedApiUrl, safeApiUrl } from './security.js';
+
+export { isAllowedApiUrl, safeApiUrl };
 
 // ── DOM references (set once during init) ──────
 export let dom = {};
 
 export function initDOM(refs) {
   dom = refs;
+  // Ensure live region semantics for status/errors
+  if (dom.flash) {
+    if (!dom.flash.getAttribute('aria-live')) {
+      dom.flash.setAttribute('aria-live', 'assertive');
+    }
+    if (!dom.flash.getAttribute('role')) {
+      dom.flash.setAttribute('role', 'status');
+    }
+  }
+  if (dom.status) {
+    const badge = dom.status.closest?.('.badge') || dom.status.parentElement;
+    if (badge && !badge.getAttribute('aria-live')) {
+      badge.setAttribute('aria-live', 'polite');
+    }
+  }
 }
 
 // ── Helpers ─────────────────────────────────────
 
-function esc(s) {
+/** Escape for the rare cases where we still build HTML strings from fixed templates. */
+export function esc(s) {
   const d = document.createElement('div');
-  d.textContent = s;
+  d.textContent = s == null ? '' : String(s);
   return d.innerHTML;
 }
 
@@ -49,6 +71,110 @@ function shortDate(iso) {
   }
 }
 
+/**
+ * Create a download anchor only if the URL passes the same-origin /api allowlist.
+ * @param {string} url
+ * @param {string} name
+ * @param {string} [className='dl']
+ * @returns {HTMLAnchorElement|null}
+ */
+export function createSafeDownloadLink(url, name, className = 'dl') {
+  const safe = safeApiUrl(url);
+  if (!safe) return null;
+  const a = document.createElement('a');
+  a.className = className;
+  a.href = safe;
+  a.download = '';
+  a.appendChild(document.createTextNode('⬇ '));
+  a.appendChild(document.createTextNode(name == null ? 'file' : String(name)));
+  return a;
+}
+
+/**
+ * Build a tool pill with event listeners (no inline onclick).
+ * Untrusted name/args/result go through textContent.
+ * @param {object} p tool_use content part
+ * @returns {HTMLElement}
+ */
+export function createToolPill(p) {
+  const span = document.createElement('span');
+  const st = p.isError ? 'tp-e' : p.status === 'running' ? 'tp-r' : 'tp-d';
+  span.className = `tp ${st}`;
+  span.setAttribute('role', 'button');
+  span.tabIndex = 0;
+  span.setAttribute('aria-expanded', 'false');
+
+  if (p.status === 'running') {
+    const spinner = document.createElement('span');
+    spinner.className = 'tpd';
+    spinner.setAttribute('aria-hidden', 'true');
+    span.appendChild(spinner);
+  }
+
+  const label = document.createElement('span');
+  label.className = 'tp-label';
+  const icon = p.isError ? '✕' : p.status === 'running' ? '' : '✓';
+  label.textContent = `🔧 ${p.name || 'tool'}${icon ? ` ${icon}` : ''}`;
+  span.appendChild(label);
+
+  const pop = document.createElement('span');
+  pop.className = 'tp-pop hide';
+  pop.setAttribute('role', 'tooltip');
+  const args = p.input ? JSON.stringify(p.input, null, 2) : '';
+  const res = p.result
+    ? (typeof p.result === 'string' ? p.result : JSON.stringify(p.result, null, 2))
+    : '';
+  pop.textContent = args || res || '(no data)';
+  span.appendChild(pop);
+
+  const toggle = () => {
+    const hidden = pop.classList.toggle('hide');
+    span.setAttribute('aria-expanded', hidden ? 'false' : 'true');
+  };
+  span.addEventListener('click', (e) => {
+    e.stopPropagation();
+    toggle();
+  });
+  span.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      toggle();
+    }
+  });
+
+  return span;
+}
+
+/**
+ * Append text content, converting known download-markdown patterns into safe links.
+ * Unknown / unsafe URLs are rendered as plain text.
+ * @param {HTMLElement} parent
+ * @param {string} text
+ */
+function appendTextWithSafeLinks(parent, text) {
+  const re = /📄 \*\*([^*]+)\*\* — \[Download\]\(([^)]+)\)\n?/g;
+  let last = 0;
+  let m;
+  while ((m = re.exec(text)) !== null) {
+    if (m.index > last) {
+      parent.appendChild(document.createTextNode(text.slice(last, m.index)));
+    }
+    const name = m[1];
+    const url = m[2];
+    const link = createSafeDownloadLink(url, name);
+    if (link) {
+      parent.appendChild(link);
+    } else {
+      // Unsafe URL — show as plain text, never as href
+      parent.appendChild(document.createTextNode(m[0]));
+    }
+    last = m.index + m[0].length;
+  }
+  if (last < text.length) {
+    parent.appendChild(document.createTextNode(text.slice(last)));
+  }
+}
+
 // ── Status bar ──────────────────────────────────
 
 export function setStatus(text, color) {
@@ -59,11 +185,94 @@ export function setStatus(text, color) {
 }
 
 let errorTimer = null;
+
+/**
+ * Show an error in the live region using textContent (no HTML injection).
+ * Focuses the flash zone for screen-reader / keyboard awareness.
+ */
 export function flashError(msg) {
   if (!dom.flash) return;
-  dom.flash.innerHTML = `<div class="flash">${esc(msg)}</div>`;
+  // Keep non-error children (e.g. approval banners); replace only flash messages
+  for (const el of Array.from(dom.flash.querySelectorAll('.flash'))) {
+    el.remove();
+  }
+  const el = document.createElement('div');
+  el.className = 'flash';
+  el.setAttribute('role', 'alert');
+  el.tabIndex = -1;
+  el.textContent = msg == null ? '' : String(msg);
+  dom.flash.prepend(el);
+  try {
+    el.focus({ preventScroll: true });
+  } catch {
+    /* focus may fail in non-browser test envs */
+  }
   clearTimeout(errorTimer);
-  errorTimer = setTimeout(() => { dom.flash.innerHTML = ''; }, 4000);
+  errorTimer = setTimeout(() => {
+    el.remove();
+  }, 4000);
+}
+
+/**
+ * Clear approval banners from the flash zone.
+ */
+export function clearApprovals() {
+  if (!dom.flash) return;
+  for (const el of Array.from(dom.flash.querySelectorAll('.approval-banner'))) {
+    el.remove();
+  }
+}
+
+/**
+ * Render an accessible approval banner with keyboard-usable actions.
+ * @param {{ id: string, reason?: string, onApprove: () => void|Promise<void>, onReject: () => void|Promise<void> }} opts
+ * @returns {HTMLElement|null}
+ */
+export function showApprovalBanner(opts) {
+  if (!dom.flash || !opts?.id) return null;
+  // One banner per approval id — compare dataset (no attribute-selector interpolation)
+  for (const el of Array.from(dom.flash.querySelectorAll('.approval-banner'))) {
+    if (el.dataset?.approvalId === opts.id) return el;
+  }
+
+  const banner = document.createElement('div');
+  banner.className = 'approval-banner';
+  banner.setAttribute('role', 'alertdialog');
+  banner.setAttribute('aria-modal', 'false');
+  banner.dataset.approvalId = opts.id;
+  banner.tabIndex = -1;
+
+  // Sanitize id for use as a DOM id / aria-labelledby target
+  const safeDomId = `approval-label-${String(opts.id).replace(/[^a-zA-Z0-9_-]/g, '_')}`;
+  const label = document.createElement('span');
+  label.id = safeDomId;
+  label.textContent = `⚠ Approval required: ${opts.reason || opts.id}`;
+  banner.setAttribute('aria-labelledby', safeDomId);
+  banner.appendChild(label);
+
+  const btnApprove = document.createElement('button');
+  btnApprove.type = 'button';
+  btnApprove.className = 'btn-approve';
+  btnApprove.textContent = 'Approve';
+  btnApprove.addEventListener('click', () => { opts.onApprove?.(); });
+
+  const btnReject = document.createElement('button');
+  btnReject.type = 'button';
+  btnReject.className = 'btn-reject';
+  btnReject.textContent = 'Reject';
+  btnReject.addEventListener('click', () => { opts.onReject?.(); });
+
+  banner.appendChild(btnApprove);
+  banner.appendChild(btnReject);
+  dom.flash.appendChild(banner);
+
+  try {
+    btnApprove.focus();
+  } catch {
+    /* ignore */
+  }
+
+  return banner;
 }
 
 // ── Welcome screen ──────────────────────────────
@@ -71,6 +280,7 @@ export function flashError(msg) {
 export function showWelcome() {
   // Only show if truly empty
   if (dom.msgs.querySelector('.mw')) return;
+  // Static trusted template only
   dom.msgs.innerHTML = `
     <div class="welcome">
       <div class="icon">◆</div>
@@ -89,47 +299,71 @@ function removeWelcome() {
 
 // ── Message rendering ───────────────────────────
 
-function renderMsg(msg, idx) {
+/**
+ * Build a message node with DOM APIs (no untrusted innerHTML / inline handlers).
+ * @param {object} msg
+ * @param {number} idx
+ * @returns {HTMLElement}
+ */
+export function renderMsg(msg, idx) {
   const div = document.createElement('div');
   const role = msg.role || 'assistant';
   const isUser = role === 'user';
   div.className = `mw ${role}`;
   div.style.animationDelay = `${idx * 40}ms`;
 
-  let html = '';
+  const av = document.createElement('div');
+  av.className = 'av';
+  av.textContent = isUser ? '🧑' : '●';
+  av.setAttribute('aria-hidden', 'true');
+
+  const body = document.createElement('div');
+  body.className = 'body';
+
+  const bubble = document.createElement('div');
+  bubble.className = 'bubble';
+
   const parts = msg.content || [];
+  let hasContent = false;
 
   for (const p of parts) {
     if (p.type === 'text' && p.text) {
-      html += esc(p.text) + '\n';
+      appendTextWithSafeLinks(bubble, p.text);
+      // Preserve pre-wrap newlines between text parts
+      bubble.appendChild(document.createTextNode('\n'));
+      hasContent = true;
     } else if (p.type === 'tool_use') {
-      const st = p.isError ? 'tp-e' : p.status === 'running' ? 'tp-r' : 'tp-d';
-      const icon = p.isError ? '✕' : p.status === 'running' ? '' : '✓';
-      const name = esc(p.name || 'tool');
-      const spinner = p.status === 'running' ? '<span class="tpd"></span>' : '';
-      const args = p.input ? JSON.stringify(p.input, null, 2) : '';
-      const res = p.result ? (typeof p.result === 'string' ? p.result : JSON.stringify(p.result, null, 2)) : '';
-      const detail = esc(args || res || '(no data)');
-      html += `<span class="tp ${st}" onclick="const p=this.querySelector('.tp-pop');if(p)p.classList.toggle('hide')">${spinner}🔧 ${name} ${icon}<span class="tp-pop hide">${detail}</span></span> `;
+      bubble.appendChild(createToolPill(p));
+      bubble.appendChild(document.createTextNode(' '));
+      hasContent = true;
     }
   }
 
-  // Convert download markdown to styled links
-  html = html.replace(/📄 \*\*([^*]+)\*\* — \[Download\]\(([^)]+)\)\n?/g,
-    (m, name, url) => `<a class="dl" href="${esc(url)}" download>⬇ ${esc(name)}</a>`);
-
-  // File links attached to message
   if (msg._fileLinks) {
     for (const fl of msg._fileLinks) {
-      html += `<a class="dl" href="${esc(fl.url)}" download>⬇ ${esc(fl.name)}</a>`;
+      const link = createSafeDownloadLink(fl.url, fl.name || 'file');
+      if (link) {
+        bubble.appendChild(link);
+        hasContent = true;
+      }
     }
   }
 
-  div.innerHTML = `<div class="av">${isUser ? '🧑' : '●'}</div>
-    <div class="body">
-      <div class="bubble">${html || '<em style="color:#64748b">(empty)</em>'}</div>
-      <div class="time">${time()}</div>
-    </div>`;
+  if (!hasContent) {
+    const empty = document.createElement('em');
+    empty.style.color = '#64748b';
+    empty.textContent = '(empty)';
+    bubble.appendChild(empty);
+  }
+
+  const timeEl = document.createElement('div');
+  timeEl.className = 'time';
+  timeEl.textContent = time();
+
+  body.appendChild(bubble);
+  body.appendChild(timeEl);
+  div.appendChild(av);
+  div.appendChild(body);
   return div;
 }
 
@@ -146,11 +380,15 @@ export function renderConversationList(state, handlers = {}) {
 
   const convs = state.conversations || [];
   if (!convs.length) {
-    list.innerHTML = `<div class="sidebar-empty">No conversations yet.<br/>Start a new chat.</div>`;
+    list.textContent = '';
+    const empty = document.createElement('div');
+    empty.className = 'sidebar-empty';
+    empty.innerHTML = 'No conversations yet.<br/>Start a new chat.';
+    list.appendChild(empty);
     return;
   }
 
-  list.innerHTML = '';
+  list.textContent = '';
   for (const conv of convs) {
     const item = document.createElement('div');
     item.className = `conv-item${conv.id === state.conversationId ? ' active' : ''}`;
@@ -170,6 +408,7 @@ export function renderConversationList(state, handlers = {}) {
     del.type = 'button';
     del.className = 'btn-del-conv';
     del.title = 'Delete conversation';
+    del.setAttribute('aria-label', 'Delete conversation');
     del.textContent = '🗑';
     del.addEventListener('click', (e) => {
       e.stopPropagation();
@@ -180,6 +419,14 @@ export function renderConversationList(state, handlers = {}) {
     item.appendChild(meta);
     item.appendChild(del);
     item.addEventListener('click', () => handlers.onSelect?.(conv.id));
+    // Keyboard: Enter/Space on focused item
+    item.tabIndex = 0;
+    item.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        handlers.onSelect?.(conv.id);
+      }
+    });
     list.appendChild(item);
   }
 }
@@ -221,14 +468,14 @@ export function renderDeliverables(state) {
   const artifacts = state.artifacts || [];
   if (!artifacts.length || !state.sessionId) {
     panel.hidden = true;
-    list.innerHTML = '';
+    list.textContent = '';
     if (countEl) countEl.textContent = '0';
     return;
   }
 
   panel.hidden = false;
   if (countEl) countEl.textContent = String(artifacts.length);
-  list.innerHTML = '';
+  list.textContent = '';
 
   for (const a of artifacts) {
     const id = a.artifact_id || a.id;
@@ -239,15 +486,23 @@ export function renderDeliverables(state) {
     } else if (a.path && state.sessionId) {
       url = getDownloadUrl(state.sessionId, a.path);
     }
-    if (!url) continue;
+    const safe = safeApiUrl(url);
+    if (!safe) continue;
 
     const chip = document.createElement('a');
     chip.className = 'artifact-chip';
-    chip.href = url;
-    chip.download = name;
+    chip.href = safe;
+    chip.download = '';
     chip.title = a.path || name;
+    chip.appendChild(document.createTextNode('⬇ '));
+    chip.appendChild(document.createTextNode(String(name)));
     const size = formatSize(a.size);
-    chip.innerHTML = `⬇ ${esc(name)}${size ? ` <span class="chip-size">${esc(size)}</span>` : ''}`;
+    if (size) {
+      const sizeEl = document.createElement('span');
+      sizeEl.className = 'chip-size';
+      sizeEl.textContent = ` ${size}`;
+      chip.appendChild(sizeEl);
+    }
     list.appendChild(chip);
   }
 }
@@ -272,6 +527,13 @@ export function render(state) {
   dom.send.textContent = state.isStreaming ? '■' : '➤';
   dom.send.className = `btn ${state.isStreaming ? 'btn-stop' : 'btn-send'}`;
   dom.send.disabled = false;
+  if (state.isStreaming) {
+    dom.send.setAttribute('aria-label', 'Stop generating');
+    dom.send.title = 'Stop';
+  } else {
+    dom.send.setAttribute('aria-label', 'Send message');
+    dom.send.title = 'Send (Enter)';
+  }
   dom.input.disabled = state.isStreaming;
 
   if (!state.isStreaming && !dom.msgs.querySelector('.mw')) showWelcome();
@@ -283,7 +545,7 @@ export function render(state) {
  */
 export function renderMessagesFull(state) {
   if (!dom.msgs) return;
-  dom.msgs.innerHTML = '';
+  dom.msgs.textContent = '';
   const display = state.currentMsg
     ? [...state.messages, state.currentMsg]
     : state.messages;
@@ -318,14 +580,12 @@ export function incBubble(state) {
     .filter(p => p.type === 'text')
     .map(p => p.text).join('');
 
+  // Preserve tool pills and download links already in the bubble
   const pills = Array.from(bubble.querySelectorAll('.tp'));
   const dls = Array.from(bubble.querySelectorAll('.dl'));
 
-  let txt = esc(textParts);
-  txt = txt.replace(/📄 \*\*([^*]+)\*\* — \[Download\]\(([^)]+)\)\n?/g,
-    (m, name, url) => `<a class="dl" href="${esc(url)}" download>⬇ ${esc(name)}</a>`);
-
-  bubble.innerHTML = txt;
+  bubble.textContent = '';
+  appendTextWithSafeLinks(bubble, textParts);
   pills.forEach(el => bubble.appendChild(el));
   dls.forEach(el => bubble.appendChild(el));
   scrollBottom();

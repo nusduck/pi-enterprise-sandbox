@@ -5,6 +5,7 @@ from __future__ import annotations
 from fastapi.testclient import TestClient
 
 from sandbox.auth import create_token, hash_password, verify_password, verify_token
+from sandbox.config import settings
 from sandbox.main import app
 
 
@@ -47,3 +48,49 @@ def test_register_login_me():
     me = client.get("/auth/me", headers={"Authorization": f"Bearer {token}"})
     assert me.status_code == 200
     assert me.json()["username"] == "alice_test_user"
+
+
+def test_jwt_enabled_unauthenticated_sessions_401(monkeypatch):
+    """With auth enabled, protected routes require a bearer token."""
+    monkeypatch.setattr(settings, "auth_enabled", True)
+    monkeypatch.setattr(settings, "api_token", "")
+    resp = client.get("/sessions")
+    assert resp.status_code == 401
+    assert "auth" in resp.json()["detail"].lower() or "token" in resp.json()["detail"].lower()
+
+
+def test_jwt_enabled_public_routes_remain_open(monkeypatch):
+    monkeypatch.setattr(settings, "auth_enabled", True)
+    monkeypatch.setattr(settings, "api_token", "")
+    assert client.get("/health").status_code == 200
+    assert client.get("/").status_code == 200
+    # Swagger UI and login path stay public with JWT auth enabled
+    assert client.get("/docs").status_code == 200
+    # /auth/* is public to middleware; missing body → 422 validation, not middleware 401
+    login = client.post("/auth/login", json={})
+    assert login.status_code == 422
+
+
+def test_jwt_valid_token_reaches_protected(monkeypatch):
+    monkeypatch.setattr(settings, "auth_enabled", True)
+    monkeypatch.setattr(settings, "api_token", "")
+    token = create_token("user_jwt", "bob", role="user", ttl_seconds=60)
+    resp = client.get("/sessions", headers={"Authorization": f"Bearer {token}"})
+    assert resp.status_code != 401
+
+
+def test_service_api_token_bypasses_jwt(monkeypatch):
+    """Valid X-API-Key still works for BFF→Sandbox when JWT auth is on."""
+    monkeypatch.setattr(settings, "auth_enabled", True)
+    monkeypatch.setattr(settings, "api_token", "svc-secret")
+    resp = client.get("/sessions", headers={"X-API-Key": "svc-secret"})
+    assert resp.status_code != 401
+
+
+def test_jwt_slash_prefix_does_not_expose_all_routes(monkeypatch):
+    """Regression: public policy must not treat every path as public via '/'."""
+    monkeypatch.setattr(settings, "auth_enabled", True)
+    monkeypatch.setattr(settings, "api_token", "")
+    # Protected resources must be 401 without token (not open via startswith("/"))
+    assert client.get("/sessions").status_code == 401
+    assert client.get("/conversations").status_code == 401

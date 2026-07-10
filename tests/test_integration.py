@@ -236,10 +236,47 @@ class TestHealthIntegration:
         assert data["status"] == "ok"
         assert "version" in data
         assert "runtimes" in data
+        # Liveness must not leak secrets / env dumps
+        body = resp.text.lower()
+        assert "api_key" not in body
+        assert "password" not in body
+        assert "sqlite:///" not in body
 
     def test_ready_endpoint(self):
         resp = client.get("/ready")
         assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "ok"
+        assert data["workspace_available"] is True
+        # Readiness must not leak secrets / connection strings
+        body = resp.text.lower()
+        assert "api_key" not in body
+        assert "password" not in body
+        assert "sqlite:///" not in body
+
+    def test_ready_returns_503_when_workspace_unwritable(self, monkeypatch):
+        """Workspace dependency failure → 503 not_ready (not a silent 200)."""
+        from sandbox.routers import health as health_router
+
+        monkeypatch.setattr(health_router, "_workspace_ready", lambda: (False, 0.0))
+        monkeypatch.setattr(health_router, "_database_ready", lambda: True)
+
+        resp = client.get("/ready")
+        assert resp.status_code == 503
+        data = resp.json()
+        assert data["status"] == "not_ready"
+        assert data["workspace_available"] is False
+
+    def test_ready_returns_503_when_database_unavailable(self, monkeypatch):
+        """Database dependency failure → 503 not_ready."""
+        from sandbox.routers import health as health_router
+
+        monkeypatch.setattr(health_router, "_workspace_ready", lambda: (True, 100.0))
+        monkeypatch.setattr(health_router, "_database_ready", lambda: False)
+
+        resp = client.get("/ready")
+        assert resp.status_code == 503
+        assert resp.json()["status"] == "not_ready"
 
     def test_metrics_endpoint(self):
         resp = client.get("/metrics")

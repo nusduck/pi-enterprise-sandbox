@@ -88,6 +88,27 @@ pi-sandbox/
 |------|------|
 | `SANDBOX_API_TOKEN` | Sandbox API 认证令牌（生成: `openssl rand -hex 32`） |
 | `SANDBOX_MCP_AUTH_TOKENS` | MCP 端点认证令牌（逗号分隔） |
+| `AGENT_RUNTIME` | Chat 编排运行时：`node`（默认）或 `python`（BFF 代理到 sandbox `/agent/chat`） |
+
+### Agent 运行时切换与回滚
+
+生产浏览器仍走 `POST /api/chat`（Node BFF）。通过 `AGENT_RUNTIME` 选择编排实现：
+
+| 值 | 行为 |
+|----|------|
+| `node`（默认） | 现有 `api-server/routes/chat.js` + pi-coding-agent |
+| `python` | Node 将 SSE 透传到 sandbox `POST /agent/chat`（Python `AgentRuntime`） |
+
+**回滚（无需重部署前端）：**
+
+```bash
+# .env
+AGENT_RUNTIME=node
+docker compose up -d api-server
+# 或本地：重启 api-server 进程
+```
+
+确认 `GET /api/status` 返回 `"agent_runtime":"node"`。在多轮/工具/审批/产物/中止对等验证完成前，请保持默认 `node`。
 
 ### 执行限制
 
@@ -135,15 +156,24 @@ pi-sandbox/
 
 ## 开发
 
+完整干净安装与验证命令见 [docs/development.md](docs/development.md)。摘要：
+
 ```bash
-# 前端（Vite 热更新）
-cd frontend && npm install && npm run dev
+# 依赖（从仓库根目录）
+uv sync --extra test
+npm ci --prefix api-server
+npm ci --prefix frontend
 
-# API Server（热更新）
-cd api-server && npm install && npm run dev
+# 本地三进程
+uv run uvicorn sandbox.main:app --port 8081 --reload
+SANDBOX_BASE_URL=http://localhost:8081 npm run dev --prefix api-server
+npm run dev --prefix frontend
 
-# Sandbox 测试
-cd sandbox && uv run pytest -q
+# 质量门禁（与 CI 对齐）
+uv run pytest tests/ -q --tb=short
+node --test api-server/tests/*.test.js
+npm test --prefix frontend && npm run build --prefix frontend
+docker compose config -q
 ```
 
 ## 安全特性

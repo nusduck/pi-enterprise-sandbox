@@ -13,9 +13,10 @@ vi .env  # 填入 LLMIO_BASE_URL 和 LLMIO_API_KEY
 docker compose up --build -d
 
 # 3. 验证
-curl http://localhost:3000           # Frontend
-curl http://localhost:4000/api/status # API Server
-curl http://localhost:8083/health     # Sandbox (MCP 端口)
+curl -f http://localhost:3000/            # Frontend
+curl -f http://localhost:4000/api/status  # API Server
+curl -f http://localhost:8083/health      # Sandbox liveness
+curl -f http://localhost:8083/ready       # Sandbox readiness (workspaces + DB)
 ```
 
 | 服务 | 端口 | 容器内端口 |
@@ -178,21 +179,47 @@ curl http://localhost:8083/sessions                        # 401
 
 ## Health Checks
 
+区分 **liveness**（进程存活）与 **readiness**（依赖就绪）：
+
+| 探针 | 端点 | 成功 | 失败含义 |
+|------|------|------|----------|
+| Sandbox liveness | `GET /health` | 200 | 进程无响应 |
+| Sandbox readiness | `GET /ready` | 200 | **503** = 工作区不可写或数据库不可用 |
+| API Server | `GET /api/status` | 200 | BFF 进程未就绪 |
+| Frontend | `GET /` | 200 | 静态站/反代不可用 |
+
 ```bash
 # Frontend
 curl -f http://localhost:3000/
 
-# API Server
+# API Server（含 agent_runtime 字段：node | python）
 curl -f http://localhost:4000/api/status
-# {"status":"ok","version":"4.0.0"}
+# {"status":"ok","version":"4.0.0","agent_runtime":"node"}
 
-# Sandbox
+# Sandbox liveness（进程存活；公开路由，无需 API key）
 curl -f http://localhost:8083/health
-# {"status":"ok","version":"0.1.0",...}
+# {"status":"ok","version":"…","workspace_available":true,…}
+
+# Sandbox readiness（依赖就绪；未就绪时 curl -f 因 503 失败）
+curl -f http://localhost:8083/ready
+# {"status":"ok","workspace_available":true,…}  或 HTTP 503 status=not_ready
 
 # Nginx (生产)
 curl -f https://localhost/nginx/status
 ```
+
+容器 `healthcheck` 当前使用 `/health`（liveness）。编排侧若需“可接流量”语义，应对 Sandbox 使用 `/ready`。
+
+### Compose smoke path（多轮 / 审批 / 二进制 / 取消 / 产物）
+
+完整栈起来后，手工或脚本按此路径冒烟（需有效 `LLMIO_*`）：
+
+1. `docker compose up --build -d` → 等待 `curl -f localhost:4000/api/status` 与 `curl -f localhost:8083/ready`
+2. 浏览器打开 `http://localhost:3000`，发送多轮消息（同一 conversation）
+3. 触发高风险 bash → UI 出现审批 → approve/reject
+4. 上传二进制文件 → 下载校验字节一致
+5. 生成中点击停止 → 流结束且无悬挂执行
+6. Agent `submit_artifact` 后出现可下载交付物（非 `write` 自动下载）
 
 ## Backup
 

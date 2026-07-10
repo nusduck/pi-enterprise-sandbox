@@ -27,11 +27,27 @@ def create_conversation(body: ConversationCreate):
     """Create a new conversation (or upsert if id is provided).
 
     Initializes a persistent workspace directory tied to the conversation.
+    Client-supplied ids are validated so they cannot escape workspaces_root.
     """
     import uuid
-    conv_id = body.id or str(uuid.uuid4())
+
+    from sandbox.security.path_validation import validate_conversation_id
+
+    if body.id is not None:
+        try:
+            conv_id = validate_conversation_id(body.id)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+    else:
+        conv_id = str(uuid.uuid4())
     # Initialize persistent workspace for this conversation
-    ws_path = str(workspace_manager.init_conversation_workspace(conv_id))
+    try:
+        ws_path = str(workspace_manager.init_conversation_workspace(conv_id))
+    except (ValueError, PermissionError) as exc:
+        raise HTTPException(
+            status_code=400 if isinstance(exc, ValueError) else 403,
+            detail=str(exc),
+        )
     entry = {
         "id": conv_id,
         "title": body.title or "New conversation",

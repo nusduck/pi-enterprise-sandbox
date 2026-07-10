@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/frontend/index.md", "reason": "Frontend pre-dev checklist"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "Frontend testing and security review"}
+{"file": ".trellis/spec/frontend/component-guidelines.md", "reason": "DOM and rendering conventions"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "Conversation/stream state patterns"}
+{"file": ".trellis/spec/project-architecture.md", "reason": "SSE and artifact delivery contract"}

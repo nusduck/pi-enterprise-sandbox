@@ -1,5 +1,8 @@
 /**
  * State management — single source of truth for the chat UI.
+ *
+ * Stream lifecycle uses streamGeneration so late SSE events from an
+ * aborted/switched conversation are ignored by the orchestrator.
  */
 export const INITIAL = Object.freeze({
   messages: [],
@@ -9,12 +12,15 @@ export const INITIAL = Object.freeze({
   sessionId: null,
   conversationId: null,
   readyFiles: new Set(),
-  pendingTool: null,  // {id, name, args}
+  pendingTool: null, // {id, name, args}
+  pendingApproval: null, // {id, reason} when an approval banner is active
   // Conversation sidebar + deliverables
   conversations: [],
   artifacts: [],
   traceId: null,
   sidebarOpen: true,
+  /** Monotonic generation; bumped on stream start / abort / conversation switch. */
+  streamGeneration: 0,
 });
 
 /**
@@ -68,6 +74,142 @@ export function update(state, patch) {
   }
   if (Object.keys(changes).length) notify(changes);
   return next;
+}
+
+// ── Explicit stream / conversation transitions ──
+
+function _abortController(ctrl) {
+  if (!ctrl) return;
+  try {
+    ctrl.abort();
+  } catch {
+    /* ignore */
+  }
+}
+
+/**
+ * Begin a streaming response. Bumps streamGeneration and clears ephemeral
+ * tool/approval/file state from any previous turn.
+ *
+ * @param {object} state
+ * @param {{ abortCtrl?: AbortController, currentMsg?: object }} [opts]
+ */
+export function startStream(state, opts = {}) {
+  const abortCtrl = opts.abortCtrl || new AbortController();
+  const currentMsg = opts.currentMsg || {
+    role: 'assistant',
+    content: [{ type: 'text', text: '' }],
+  };
+  return update(state, {
+    isStreaming: true,
+    abortCtrl,
+    currentMsg,
+    readyFiles: new Set(),
+    pendingTool: null,
+    pendingApproval: null,
+    streamGeneration: (state.streamGeneration || 0) + 1,
+  });
+}
+
+/**
+ * End a stream successfully (or after finalize). Clears streaming flags.
+ * @param {object} state
+ * @param {object} [patch] extra fields (e.g. messages)
+ */
+export function endStream(state, patch = {}) {
+  return update(state, {
+    isStreaming: false,
+    abortCtrl: null,
+    currentMsg: null,
+    pendingTool: null,
+    ...patch,
+  });
+}
+
+/**
+ * Abort the active stream. Bumps generation so late SSE events are ignored.
+ * Does not drop currentMsg — caller decides whether to keep partial text.
+ * @param {object} state
+ * @param {object} [patch]
+ */
+export function abortStream(state, patch = {}) {
+  _abortController(state.abortCtrl);
+  return update(state, {
+    isStreaming: false,
+    abortCtrl: null,
+    pendingTool: null,
+    pendingApproval: null,
+    streamGeneration: (state.streamGeneration || 0) + 1,
+    ...patch,
+  });
+}
+
+/**
+ * Record a stream-level error. Clears streaming flags; keeps currentMsg for
+ * the caller to append error text if desired.
+ * @param {object} state
+ * @param {object} [patch]
+ */
+export function errorStream(state, patch = {}) {
+  return update(state, {
+    isStreaming: false,
+    abortCtrl: null,
+    pendingTool: null,
+    ...patch,
+  });
+}
+
+/**
+ * Clear ephemeral UI state (tokens mid-stream, tools, approvals, artifacts).
+ * Used when resetting context without necessarily changing conversationId.
+ * @param {object} state
+ * @param {object} [patch]
+ */
+export function clearEphemeral(state, patch = {}) {
+  return update(state, {
+    currentMsg: null,
+    pendingTool: null,
+    pendingApproval: null,
+    readyFiles: new Set(),
+    artifacts: [],
+    traceId: null,
+    ...patch,
+  });
+}
+
+/**
+ * Switch to another conversation (or blank). Aborts any active stream,
+ * bumps generation, and clears tokens/approvals/artifacts from the previous id.
+ *
+ * @param {object} state
+ * @param {{ conversationId?: string|null, messages?: object[], sessionId?: string|null, sidebarOpen?: boolean }} [opts]
+ */
+export function switchConversation(state, opts = {}) {
+  _abortController(state.abortCtrl);
+  return update(state, {
+    conversationId: opts.conversationId !== undefined ? opts.conversationId : null,
+    messages: opts.messages !== undefined ? opts.messages : [],
+    sessionId: opts.sessionId !== undefined ? opts.sessionId : null,
+    isStreaming: false,
+    abortCtrl: null,
+    currentMsg: null,
+    readyFiles: new Set(),
+    artifacts: [],
+    pendingTool: null,
+    pendingApproval: null,
+    traceId: null,
+    streamGeneration: (state.streamGeneration || 0) + 1,
+    ...(opts.sidebarOpen !== undefined ? { sidebarOpen: opts.sidebarOpen } : {}),
+  });
+}
+
+/**
+ * True if an SSE handler should still apply events for this generation.
+ * @param {object} state
+ * @param {number} generation
+ */
+export function isActiveGeneration(state, generation) {
+  return (state.streamGeneration || 0) === generation;
 }
 
 /**
