@@ -61,7 +61,7 @@ Version policy: **exact pin** in `api-server/package.json` (no `^` / `~` range).
 | Maintenance ownership (this repo) | **api-server / agent runtime owners** own pin, upgrade PR, compat suite, and runbook |
 | Upstream maintenance | Earendil / package publishers; we consume releases only |
 
-**Note:** CI historically used Node 20 for unit tests that do not exercise the full agent runtime. Runtime images and any environment that *executes* `createAgentSession` should meet the SDK engine requirement. Do not silently ignore engine bumps on upgrade.
+**Note:** CI, Docker images, and package `engines` are aligned on **Node 22**. Runtime images and any environment that *executes* `createAgentSession` must meet the SDK engine requirement (`>=22.19.0`). Do not silently ignore engine bumps on upgrade.
 
 ## Security boundary
 

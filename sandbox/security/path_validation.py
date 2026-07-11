@@ -1,12 +1,13 @@
 """Path escape detection — safe workspace path resolution.
 
-Path policy (agent-facing contract):
+Path policy (public agent / API contract):
 
-- Accept relative paths (``foo/bar.txt``) and workspace logical absolute paths
-  (``/home/sandbox/workspace/...``).
-- Reject other absolute paths, null bytes, and paths that escape the physical
-  workspace via ``..`` or symlink/hardlink resolution.
-- Error messages never include physical workspace roots.
+- Accept **relative** paths only (``foo/bar.txt``, ``.``, ``./x``).
+- Reject absolute paths (including legacy ``/home/sandbox/workspace/...``).
+- Reject null bytes, home expansion (``~``), and paths that escape the
+  physical workspace via ``..`` or symlink/hardlink resolution.
+- Error messages never include physical workspace roots (redacted to
+  ``<workspace>``).
 """
 
 from __future__ import annotations
@@ -15,11 +16,7 @@ import os
 import re
 from pathlib import Path
 
-from sandbox.paths import (
-    AGENT_WORKSPACE_PATH,
-    is_logical_workspace_path,
-    sanitize_path_error,
-)
+from sandbox.paths import sanitize_path_error
 
 # Conservative conversation identifiers: UUID-friendly, no path separators.
 _CONVERSATION_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
@@ -47,12 +44,12 @@ def normalize_user_path(user_path: str) -> str:
 
     Accepts:
     - relative paths: ``foo/bar.txt``, ``.``, ``./x``
-    - logical absolute under ``/home/sandbox/workspace``
 
     Rejects:
     - empty / non-string
     - null bytes
-    - absolute paths outside the logical workspace root
+    - home expansion
+    - any absolute path (POSIX or Windows drive)
     """
     if user_path is None or not isinstance(user_path, str):
         raise ValueError("Invalid path")
@@ -64,12 +61,7 @@ def normalize_user_path(user_path: str) -> str:
     if raw.startswith("~"):
         raise ValueError("Invalid path: home expansion not allowed")
 
-    # Logical absolute → relative under workspace
-    if is_logical_workspace_path(raw):
-        rest = raw[len(AGENT_WORKSPACE_PATH) :].lstrip("/")
-        return rest if rest else "."
-
-    # Other absolute paths are rejected (do not join onto workspace)
+    # Absolute paths fail closed (no legacy logical-absolute mapping).
     if raw.startswith("/") or (len(raw) > 1 and raw[1] == ":"):
         raise PermissionError(
             f"Path escape detected: absolute path outside workspace: {raw}"

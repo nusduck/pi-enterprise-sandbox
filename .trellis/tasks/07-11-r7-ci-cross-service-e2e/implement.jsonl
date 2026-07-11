@@ -1,0 +1,3 @@
+{"file":".trellis/tasks/07-11-production-boundaries-trellis-gates/research/evidence-audit.md","reason":"加载 Node 漂移、启动漏测和 E2E 缺口。"}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"实现权威 CI、启动和跨服务门禁。"}
+{"file":".trellis/spec/project-architecture.md","reason":"保持四服务 smoke 数据流正确。"}

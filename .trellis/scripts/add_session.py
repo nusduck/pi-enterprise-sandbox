@@ -22,6 +22,7 @@ Branch resolution order:
 from __future__ import annotations
 
 import argparse
+import json
 import re
 import sys
 from datetime import datetime
@@ -212,8 +213,14 @@ def generate_session_content(
     package: str | None = None,
     branch: str | None = None,
     testing_content: str = DEFAULT_TESTING,
+    status: str = "completed",
 ) -> str:
     """Generate session content."""
+    if status == "completed" and (
+        not testing_content.strip() or testing_content.strip() == DEFAULT_TESTING
+    ):
+        raise ValueError("Completed journal sessions require validation evidence")
+
     if commit and commit != "-":
         commit_table = """| Hash | Message |
 |------|---------|"""
@@ -225,6 +232,13 @@ def generate_session_content(
 
     package_line = f"\n**Package**: {package}" if package else ""
     branch_line = f"\n**Branch**: `{branch}`" if branch else ""
+
+    if status == "completed":
+        status_block = "[OK] **Completed**"
+        next_steps = "- None - task complete"
+    else:
+        status_block = "[~] **Planning**"
+        next_steps = "- Continue implementation and record validation before completion"
 
     return f"""
 
@@ -247,16 +261,44 @@ def generate_session_content(
 
 ### Testing
 
-{testing_content}
+{testing_content if testing_content.strip() else "- Not run (planning session)."}
 
 ### Status
 
-[OK] **Completed**
+{status_block}
 
 ### Next Steps
 
-- None - task complete
+{next_steps}
 """
+
+
+def load_validation_evidence(path: Path) -> str:
+    """Load successful validation JSONL rows into concise journal bullets."""
+    if not path.is_file():
+        raise ValueError(f"validation evidence file not found: {path}")
+    bullets: list[str] = []
+    for number, raw in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+        if not raw.strip():
+            continue
+        try:
+            row = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"{path.name}:{number} invalid JSON: {exc.msg}") from exc
+        required = ("command", "commit", "exit_code", "result", "recorded_at")
+        if not isinstance(row, dict) or any(field not in row for field in required):
+            raise ValueError(f"{path.name}:{number} missing validation fields")
+        if type(row["exit_code"]) is not int or row["exit_code"] != 0:
+            raise ValueError(f"{path.name}:{number} is not successful")
+        if not all(str(row[field]).strip() for field in ("command", "commit", "result", "recorded_at")):
+            raise ValueError(f"{path.name}:{number} has empty validation fields")
+        bullets.append(
+            f"- `{row['command']}` — exit {row['exit_code']}; {row['result']} "
+            f"(commit `{row['commit']}`, {row['recorded_at']})"
+        )
+    if not bullets:
+        raise ValueError(f"{path.name} has no successful validation evidence")
+    return "\n".join(bullets)
 
 
 def update_index(
@@ -458,6 +500,8 @@ def add_session(
     auto_commit: bool = True,
     package: str | None = None,
     branch: str | None = None,
+    testing_content: str = DEFAULT_TESTING,
+    status: str = "completed",
 ) -> int:
     """Add a new session."""
     repo_root = get_repo_root()
@@ -482,10 +526,14 @@ def add_session(
     current_session = get_current_session(index_file)
     new_session = current_session + 1
 
-    session_content = generate_session_content(
-        new_session, title, commit, summary, extra_content, today, package,
-        branch,
-    )
+    try:
+        session_content = generate_session_content(
+            new_session, title, commit, summary, extra_content, today, package,
+            branch, testing_content, status,
+        )
+    except ValueError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
     content_lines = len(session_content.splitlines())
 
     print("========================================", file=sys.stderr)
@@ -569,6 +617,16 @@ def main() -> int:
                         help="Skip auto-commit of workspace changes")
     parser.add_argument("--stdin", action="store_true",
                         help="Read extra content from stdin (explicit opt-in)")
+    parser.add_argument(
+        "--status",
+        choices=("planning", "completed"),
+        default="completed",
+        help="Journal outcome; completed requires successful validation evidence",
+    )
+    parser.add_argument(
+        "--validation-file",
+        help="JSONL evidence with command, commit, exit_code=0, result and recorded_at",
+    )
 
     args = parser.parse_args()
 
@@ -603,11 +661,36 @@ def main() -> int:
 
     branch = resolve_session_branch(repo_root, args.branch, task_data)
 
+    testing_content = DEFAULT_TESTING
+    if args.status == "planning":
+        testing_content = "- Not run (planning session)."
+    else:
+        validation_path: Path | None = None
+        if args.validation_file:
+            validation_path = Path(args.validation_file)
+            if not validation_path.is_absolute():
+                validation_path = repo_root / validation_path
+        elif current:
+            validation_path = repo_root / current / "validation.jsonl"
+        if validation_path is None:
+            print(
+                "Error: completed journal sessions require --validation-file or an active task validation.jsonl",
+                file=sys.stderr,
+            )
+            return 1
+        try:
+            testing_content = load_validation_evidence(validation_path)
+        except ValueError as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            return 1
+
     return add_session(
         args.title, args.commit, args.summary, extra_content,
         auto_commit=not args.no_commit,
         package=package,
         branch=branch,
+        testing_content=testing_content,
+        status=args.status,
     )
 
 

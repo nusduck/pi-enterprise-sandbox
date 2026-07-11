@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 
 from sandbox.config import settings
 from sandbox.main import app
+from sandbox.paths import get_session_physical_workspace
 from sandbox.services.attachment_manager import (
     AttachmentError,
     attachment_manager,
@@ -16,6 +17,7 @@ from sandbox.services.attachment_manager import (
     is_allowed_extension,
     sanitize_filename,
 )
+from sandbox.services.session_manager import session_manager
 
 client = TestClient(app)
 
@@ -24,6 +26,12 @@ def _create_session(caller: str = "att-test") -> dict:
     resp = client.post("/sessions", json={"caller_id": caller})
     assert resp.status_code == 201, resp.text
     return resp.json()
+
+
+def _physical_for(session_id: str) -> Path:
+    session = session_manager.get(session_id)
+    assert session is not None
+    return Path(get_session_physical_workspace(session))
 
 
 def test_extension_whitelist_allows_common_types():
@@ -52,7 +60,7 @@ def test_sanitize_filename_strips_path():
 def test_upload_isolated_path_not_bare_filename():
     data = _create_session("iso")
     sid = data["session_id"]
-    physical = Path(data["metadata"]["_physical_workspace"])
+    physical = _physical_for(sid)
 
     resp = client.post(
         f"/sessions/{sid}/files/upload",
@@ -74,7 +82,7 @@ def test_upload_isolated_path_not_bare_filename():
 def test_same_display_name_different_attachment_ids_no_overwrite():
     data = _create_session("same-name")
     sid = data["session_id"]
-    physical = Path(data["metadata"]["_physical_workspace"])
+    physical = _physical_for(data["session_id"])
 
     r1 = client.post(
         f"/sessions/{sid}/files/upload",
@@ -95,7 +103,7 @@ def test_same_display_name_different_attachment_ids_no_overwrite():
 def test_idempotent_upload_same_key():
     data = _create_session("idem")
     sid = data["session_id"]
-    physical = Path(data["metadata"]["_physical_workspace"])
+    physical = _physical_for(data["session_id"])
     headers = {"Idempotency-Key": "idem-key-fixed-001"}
 
     r1 = client.post(
@@ -160,7 +168,7 @@ def test_upload_quota_exceeded_413(monkeypatch):
 def test_archive_not_auto_extracted():
     data = _create_session("zip")
     sid = data["session_id"]
-    physical = Path(data["metadata"]["_physical_workspace"])
+    physical = _physical_for(data["session_id"])
     # Minimal zip local file header prefix (not a valid full zip — stored as bytes)
     payload = b"PK\x03\x04fake-zip-bytes"
     resp = client.post(

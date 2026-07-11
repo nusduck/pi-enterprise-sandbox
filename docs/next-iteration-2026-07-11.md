@@ -1,8 +1,11 @@
 # 下一迭代：生产边界闭环与可升级性
 
-**状态：** 建议进入规划，尚未开始实现  
-**审查基线：** `main` 的 `e6dfa407`；未纳入工作区中未提交的 `api-server/routes/chat.js` 改动  
-**需求基线：** `.trellis/tasks/archive/2026-07/` 下已归档 PRD，优先采用后续确认的目标拓扑：`Frontend → BFF → 独立 Node Agent → Python Sandbox`。
+> ⚠️ **SUPERSEDED by Trellis R1–R8 (2026-07-11)** — 本文件是进入规划前的问题清单；实现与验收以 `.trellis/tasks/07-11-r*` 与活跃 `docs/*` 为准。  
+> 目标拓扑：`Frontend → BFF → 独立 Node Agent → Python Sandbox`（无 Python Agent / 双 Runtime）。
+
+**状态：** 已拆分为 R1–R8 任务并实施中/完成中  
+**审查基线：** 历史 `e6dfa407`；后续以仓库当前代码为准  
+**需求基线：** `.trellis/tasks/07-11-r*` 与父级 production-boundaries 任务。
 
 ## 结论
 

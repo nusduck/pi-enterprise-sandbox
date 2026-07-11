@@ -30,6 +30,7 @@ from .config import (
     resolve_package,
     validate_package,
 )
+from .completion_validation import validate_completion
 from .git import run_git
 from .io import read_json, write_json
 from .log import Colors, colored
@@ -458,6 +459,20 @@ def cmd_archive(args: argparse.Namespace) -> int:
     dir_name = task_dir.name
     task_json_path = task_dir / FILE_TASK_JSON
 
+    # Completion is a fail-closed precondition.  Keep this before every write,
+    # pointer clear, directory move, hook, and git operation.
+    completion = validate_completion(task_dir, repo_root)
+    if not completion.ok:
+        print(colored("Error: completion gate rejected archive", Colors.RED), file=sys.stderr)
+        for finding in completion.findings:
+            print(f"  - [{finding.code}] {finding.message}", file=sys.stderr)
+        if completion.incomplete_ids:
+            print(
+                "  Deferred acceptance IDs: " + ", ".join(completion.incomplete_ids),
+                file=sys.stderr,
+            )
+        return 1
+
     # Update status before archiving
     today = datetime.now().strftime("%Y-%m-%d")
     # Names of child task dirs whose task.json gets modified below; passed
@@ -466,7 +481,7 @@ def cmd_archive(args: argparse.Namespace) -> int:
     if task_json_path.is_file():
         data = read_json(task_json_path)
         if data:
-            data["status"] = "completed"
+            data["status"] = completion.target_status
             data["completedAt"] = today
             write_json(task_json_path, data)
 

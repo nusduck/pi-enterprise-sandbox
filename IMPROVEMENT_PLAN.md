@@ -1,5 +1,9 @@
 # Pi Enterprise Sandbox — Project Review & Improvement Plan
 
+> ⚠️ **SUPERSEDED / HISTORICAL (2026-07-11)** — 本文档不再是现行实现规范。  
+> **当前单一事实源：** `README.md`、`docs/architecture.md`、`docs/api.md`、`docs/deployment.md`、`docs/development.md`、`.trellis/spec/`、活跃 Trellis 任务。  
+> 最终发行边界：四服务（Frontend→BFF→Agent→Sandbox）、Node 22、零内置 Skill、PostgreSQL 生产、相对 workspace/`workspace_id`、无 Python Agent / 双 Runtime。  
+>
 > **Generated:** 2026-07-09 · **Revised:** 2026-07-09 (implementation complete for Phase 0 + Phase 1 core)  
 > **Partial update 2026-07-11:** 全栈硬化子任务已落地（backend security、request-context/cancel、frontend SSE/security 测试、CI 矩阵与 readiness）。详见 `.trellis/tasks/07-11-*`。  
 > **Implementation status:** **Phase 0–1 done**. **Phase 1.5 done:** approval pause in bash tool + SSE/UI, policy high-risk command patterns, GET /approvals/{id}, auth foundation (register/login/JWT, optional SANDBOX_AUTH_ENABLED).  

@@ -9,13 +9,29 @@ from pathlib import Path
 from sandbox.config import settings
 from sandbox.database import Database, database as default_database
 from sandbox.models import SessionResponse, SessionStatus
-from sandbox.paths import (
-    AGENT_WORKSPACE_PATH,
-    conversation_workspace_id,
-    is_logical_workspace_path,
-)
+from sandbox.paths import conversation_workspace_id, public_metadata
 from sandbox.repositories import SessionRepository
 from sandbox.services.workspace_manager import WorkspaceWriteConflict, write_lease
+
+
+def public_session_response(session: SessionResponse) -> SessionResponse:
+    """Return a copy safe for external JSON (no physical path leakage)."""
+    meta = public_metadata(session.metadata)
+    workspace_id = session.workspace_id or meta.get("workspace_id")
+    if not workspace_id and isinstance(session.metadata, dict):
+        workspace_id = session.metadata.get("workspace_id")
+    return SessionResponse(
+        session_id=session.session_id,
+        agent_session_id=session.agent_session_id,
+        enterprise_session_id=session.enterprise_session_id,
+        user_id=session.user_id,
+        caller_id=session.caller_id,
+        status=session.status,
+        workspace_id=workspace_id,
+        created_at=session.created_at,
+        updated_at=session.updated_at,
+        metadata=meta,
+    )
 
 
 class SessionManager:
@@ -36,18 +52,19 @@ class SessionManager:
         user_id: str | None = None,
         caller_id: str = "unknown",
         metadata: dict | None = None,
-        workspace_path_override: str | None = None,
         conversation_id: str | None = None,
         workspace_id: str | None = None,
         *,
         claim_write: bool = True,
+        # Internal-only rebind for tests / migration; never accepted from public API.
+        workspace_path_override: str | None = None,
     ) -> SessionResponse:
         """Create a sandbox session bound to a physical workspace.
 
         Workspace binding preference:
         1. Explicit ``workspace_id``
         2. ``conversation_id`` → ``conv_<id>`` (conversation-owned workspace)
-        3. ``workspace_path_override`` when it is a physical path (not logical)
+        3. Internal ``workspace_path_override`` (physical path; tests only)
         4. Else session-private ``sandbox_<id>`` directory
 
         When the workspace is conversation-owned (or any shared workspace_id),
@@ -65,6 +82,7 @@ class SessionManager:
             workspace_path_override=workspace_path_override,
         )
         meta["workspace_id"] = resolved_workspace_id
+        # Internal recovery key — stripped by public_session_response.
         meta["_physical_workspace"] = physical
         if conversation_id:
             meta["conversation_id"] = conversation_id
@@ -79,7 +97,9 @@ class SessionManager:
             "user_id": user_id,
             "caller_id": caller_id,
             "status": SessionStatus.RUNNING,
-            "workspace_path": AGENT_WORKSPACE_PATH,
+            "workspace_id": resolved_workspace_id,
+            # DB column name is historical; value is opaque workspace_id.
+            "workspace_path": resolved_workspace_id,
             "created_at": now,
             "updated_at": now,
             "metadata": meta,
@@ -89,7 +109,18 @@ class SessionManager:
             self.repository.upsert(entry)
         else:
             self._sessions[session_id] = entry
-        return SessionResponse(**entry)
+        return SessionResponse(
+            session_id=session_id,
+            agent_session_id=agent_session_id,
+            enterprise_session_id=enterprise_session_id,
+            user_id=user_id,
+            caller_id=caller_id,
+            status=SessionStatus.RUNNING,
+            workspace_id=resolved_workspace_id,
+            created_at=now,
+            updated_at=now,
+            metadata=meta,
+        )
 
     def _resolve_workspace_binding(
         self,
@@ -113,12 +144,12 @@ class SessionManager:
             wid = conversation_workspace_id(safe)
             return wid, str(settings.workspaces_path / wid)
 
-        # 3. Physical path override (legacy rebind to existing workspace dir)
-        if workspace_path_override and not is_logical_workspace_path(
-            workspace_path_override
-        ):
+        # 3. Internal physical path override (tests / recovery only)
+        if workspace_path_override:
+            # Reject absolute logical legacy paths; they are not physical roots.
+            if str(workspace_path_override).startswith("/home/sandbox/workspace"):
+                return session_id, str(settings.workspaces_path / session_id)
             physical = str(Path(workspace_path_override))
-            # Derive workspace_id from last path component when under root
             try:
                 root = settings.workspaces_path.resolve()
                 p = Path(physical).resolve()
@@ -126,7 +157,6 @@ class SessionManager:
                     return p.name, str(p)
             except (OSError, ValueError, AttributeError):
                 pass
-            # Fallback: use basename as workspace_id for lease keying
             return Path(physical).name or session_id, physical
 
         # 4. Session-private workspace
@@ -158,14 +188,14 @@ class SessionManager:
         if entry is None:
             return None
         self._maybe_expire_entry(entry)
-        return SessionResponse(**entry)
+        return self._entry_to_response(entry)
 
     def get_by_agent_session_id(self, agent_session_id: str) -> SessionResponse | None:
         if self.repository:
             return self.repository.get_by_agent_session_id(agent_session_id)
         for entry in self._sessions.values():
             if entry.get("agent_session_id") == agent_session_id:
-                return SessionResponse(**entry)
+                return self._entry_to_response(entry)
         return None
 
     def get_by_enterprise_session_id(self, enterprise_session_id: str) -> SessionResponse | None:
@@ -173,7 +203,7 @@ class SessionManager:
             return self.repository.get_by_enterprise_session_id(enterprise_session_id)
         for entry in self._sessions.values():
             if entry.get("enterprise_session_id") == enterprise_session_id:
-                return SessionResponse(**entry)
+                return self._entry_to_response(entry)
         return None
 
     def delete(self, session_id: str) -> bool:
@@ -204,7 +234,7 @@ class SessionManager:
             return None
         entry["status"] = status
         entry["updated_at"] = datetime.now(timezone.utc).isoformat()
-        return SessionResponse(**entry)
+        return self._entry_to_response(entry)
 
     def list_active(self) -> list[SessionResponse]:
         if self.repository:
@@ -214,7 +244,7 @@ class SessionManager:
         for entry in list(self._sessions.values()):
             self._maybe_expire_entry(entry)
             if entry["status"] == SessionStatus.RUNNING:
-                results.append(SessionResponse(**entry))
+                results.append(self._entry_to_response(entry))
         return results
 
     def count_active(self) -> int:
@@ -222,15 +252,8 @@ class SessionManager:
 
     def cleanup_expired(self) -> int:
         if self.repository:
-            # Release leases for sessions about to expire
-            active = self.repository.list_active()
             now = datetime.now(timezone.utc)
-            for s in active:
-                # ttl is not on SessionResponse — re-check via cleanup
-                pass
             count = self.repository.cleanup_expired(now.isoformat())
-            # Best-effort: release leases for non-RUNNING holders
-            # (holders validated on next claim via liveness)
             return count
         now = datetime.now(timezone.utc)
         count = 0
@@ -244,6 +267,22 @@ class SessionManager:
         return count
 
     @staticmethod
+    def _entry_to_response(entry: dict) -> SessionResponse:
+        meta = entry.get("metadata") or {}
+        return SessionResponse(
+            session_id=entry["session_id"],
+            agent_session_id=entry.get("agent_session_id"),
+            enterprise_session_id=entry.get("enterprise_session_id"),
+            user_id=entry.get("user_id"),
+            caller_id=entry.get("caller_id", "unknown"),
+            status=entry["status"],
+            workspace_id=entry.get("workspace_id") or meta.get("workspace_id"),
+            created_at=entry.get("created_at", ""),
+            updated_at=entry.get("updated_at", ""),
+            metadata=meta,
+        )
+
+    @staticmethod
     def _maybe_expire_entry(entry: dict) -> None:
         if entry["status"] == SessionStatus.RUNNING and entry["ttl_until"] < datetime.now(timezone.utc):
             entry["status"] = SessionStatus.EXPIRED
@@ -255,4 +294,9 @@ class SessionManager:
 session_manager = SessionManager(database=default_database)
 
 # Re-export for routers
-__all__ = ["SessionManager", "session_manager", "WorkspaceWriteConflict"]
+__all__ = [
+    "SessionManager",
+    "session_manager",
+    "WorkspaceWriteConflict",
+    "public_session_response",
+]

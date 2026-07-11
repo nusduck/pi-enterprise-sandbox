@@ -7,10 +7,10 @@ Pi Enterprise Sandbox 是一个四服务全栈仓库：浏览器 UI、薄 Node B
 ```text
 Browser
   -> frontend (Vite 构建，Nginx 静态托管与 /api 反代)
-  -> api-server (Node BFF：auth/files/SSE relay)
-  -> agent (Node：pi-coding-agent SDK / Run API)
+  -> api-server (Node 22 BFF：auth/files/SSE relay)
+  -> agent (Node 22：pi-coding-agent SDK / Run API；零内置 Skill)
   -> sandbox (FastAPI、执行/文件/审批/产物/持久化/MCP)
-  -> per-session physical workspace + SQLite/PostgreSQL
+  -> per-session workspace_id + PostgreSQL(prod) / empty SQLite(dev·test)
 ```
 
 证据：`docker-compose.yml`、`frontend/nginx.conf`、`api-server/server.js`、`agent/server.js`、`sandbox/main.py`、`docs/architecture.md`。
@@ -24,7 +24,7 @@ Browser
 | `agent/` | 独立 Agent Runtime：SDK、tools、extensions、内部 Run API | `agent/chat-runner.js`、`agent/server.js` |
 | `frontend/` | 无框架 Vanilla JS SPA，Vite 构建，Nginx 托管 | `frontend/src/main.js`、`frontend/src/state.js` |
 | `tests/` | 统一 pytest 测试，包括单元、FastAPI 集成、配置/容器契约 | `tests/test_integration.py`、`tests/test_container_startup.py` |
-| `skills/` | 内置 Agent 技能及其脚本 | `skills/data-analysis/SKILL.md` |
+| `skills/` | 空发行基线；研发环境可通过受审计 install/edit/reload 引入 Skill | 初始无 package |
 | `config/agent/` | Agent 模型和运行时配置 JSON | `models.json`、`settings.json` |
 | `nginx/` | 生产入口、TLS 与跨服务反向代理 | `nginx/conf.d/sandbox.conf` |
 | `scripts/` | 运维脚本 | `backup.sh`、`restore.sh` |
@@ -45,7 +45,8 @@ Browser
 
 ### 文件与产物
 
-- 会话 API 暴露稳定逻辑路径 `/home/sandbox/workspace`，真实 I/O 使用 session metadata 中的物理工作区。
+- 公共协议使用 opaque `workspace_id`；工具/文件/Artifact 仅接受相对 Session 根路径。
+- 物理工作区根只存在于 service/repository 内部，不进入 API/SSE/模型上下文。
 - 所有用户路径必须通过 `sandbox/security/path_validation.py` 的 `resolve()` 边界校验。
 - `write`/`edit` 只写私有工作区；只有显式 `submit_artifact` 注册后才作为交付物发出 `file_ready`。
 - 同一 session 的执行由 `ExecutionManager._session_locks` 串行化；不同 session 使用不同物理目录。
@@ -75,6 +76,7 @@ Browser
 
 ### Skill 执行与变更边界
 
+- 发行基线：`skills/` 无任何 Skill package；Agent 在零 Skill 下使用基础工具即可运行。
 - 默认和生产模式使用 `SKILLS_MODE=readonly`，Agent/Sandbox 的 Skill 挂载保持只读。
 - 通用 `write`、`edit` 和 Bash 不得修改 Skill 根；研发变更只能通过 `skill_install`、`skill_edit`、`skill_reload` 完成。
 - 允许 Python/Shell 解释器直接执行 Skill 根下的单个只读脚本，但命令中出现重定向、管道、命令拼接或子命令替换时仍硬拒绝。
@@ -116,15 +118,16 @@ docker compose -f docker-compose.yml -f docker-compose.prod.yml up --build -d
 
 ## 测试方式
 
-CI 权威入口：`.github/workflows/test.yml`（五个并行 job）：
+CI 权威入口：`.github/workflows/test.yml`（并行 job，Node **22**）：
 
 | Job | 命令摘要 |
 |-----|----------|
 | `python` | `uv sync --extra test` → `uv run pytest tests/ -q --tb=short` |
-| `node-bff` | `npm ci --prefix api-server` → `node --test api-server/tests/*.test.js` + `node --check` |
-| `node-agent` | `npm ci --prefix agent` → `node --test agent/tests/**/*.test.js` + `node --check` |
+| `node-bff` | `npm ci --prefix api-server` → unit tests + syntax + listen smoke |
+| `node-agent` | `npm ci --prefix agent` → unit/sdk-compat + listen + fake OpenAI tests |
 | `frontend` | `npm ci --prefix frontend` → `npm test` → `npm run build` |
 | `compose` | 确保 `.env` 存在后 `docker compose config -q` |
+| `cross-service-smoke` | fake OpenAI + Sandbox + Agent + BFF，无真实 LLM key |
 
 ```bash
 uv sync --extra test && uv run pytest tests/ -q --tb=short
@@ -132,17 +135,19 @@ npm ci --prefix api-server && node --test api-server/tests/*.test.js
 npm ci --prefix agent && node --test agent/tests/*.test.js agent/tests/sdk-compat/*.test.js
 npm ci --prefix frontend && npm test --prefix frontend && npm run build --prefix frontend
 test -f .env || cp .env.example .env; docker compose config -q
+node scripts/smoke-cross-service.mjs
 ```
 
 测试形态包括：
 
 - 纯单元测试：直接实例化 Manager/Checker，如 `test_session_manager.py`、`test_policy_checker.py`。
 - FastAPI 集成测试：模块级 `TestClient(app)`，如 `test_integration.py`（含 `/health` liveness 与 `/ready` readiness/503）。
-- Node BFF `node:test`：`api-server/tests/`（agent-client、auth、upload）。
-- Node Agent `node:test`：`agent/tests/` + `agent/tests/sdk-compat/`（Run API、SDK pin、事件映射、Extension）。
+- Node BFF `node:test`：`api-server/tests/`（agent-client、auth、upload、listen smoke）。
+- Node Agent `node:test`：`agent/tests/` + `agent/tests/sdk-compat/`（Run API、SDK pin、事件映射、Extension、fake provider）。
 - Frontend `node:test`：`frontend/test/`（SSE、state、security）。
 - 临时路径隔离：`tests/conftest.py` 在导入应用前覆盖 `SANDBOX_*` 路径和数据库。
 - 文件/配置契约：读取 Docker/Compose 或运行 `bash -n`，如 `test_container_startup.py`。
+- 无密钥跨服务 smoke：`scripts/smoke-cross-service.mjs`（`AGENT_ENABLE_FAKE_LLM`；production 禁止）。
 - 手工/环境依赖 E2E：`tests/e2e_artifact_flow.py`、`tests/mcp_full_e2e.py` 不应默认视作 CI 外部服务已就绪。
 
 ## 待确认

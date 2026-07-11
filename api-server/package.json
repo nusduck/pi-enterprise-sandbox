@@ -3,10 +3,14 @@
   "version": "4.0.0",
   "private": true,
   "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
     "start": "node server.js",
     "dev": "node --watch server.js",
-    "test": "node --test tests/*.test.js"
+    "test": "node --test tests/*.test.js",
+    "smoke": "node --test tests/listen-smoke.test.js"
   },
   "dependencies": {}
 }

@@ -133,13 +133,27 @@ class AgentRunManager:
         event_id: str | None = None,
         schema_version: int = 1,
     ) -> AgentEventResponse:
-        return self.events.append(
-            run_id=run_id,
-            event_type=event_type,
-            payload=payload,
-            event_id=event_id,
-            schema_version=schema_version,
-        )
+        """Append an event; on hard failure after retries mark run failed.
+
+        Hard failures (exhausted sequence retries, unexpected DB errors) make
+        the run observably ``failed`` via status update only — we do not try
+        to append an error event, which would re-enter the failing path.
+        """
+        try:
+            return self.events.append(
+                run_id=run_id,
+                event_type=event_type,
+                payload=payload,
+                event_id=event_id,
+                schema_version=schema_version,
+            )
+        except Exception:
+            try:
+                self.runs.update_status(run_id, AgentRunStatus.FAILED.value)
+            except Exception:
+                # Best-effort observability; original append error is authoritative.
+                pass
+            raise
 
     def list_events(
         self,

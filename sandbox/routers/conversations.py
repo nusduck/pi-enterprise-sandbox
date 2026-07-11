@@ -13,7 +13,7 @@ from fastapi import APIRouter, HTTPException, Request
 
 from sandbox.config import settings
 from sandbox.models import ConversationCreate, ConversationResponse
-from sandbox.paths import AGENT_WORKSPACE_PATH, conversation_workspace_id, to_public_workspace_path
+from sandbox.paths import conversation_workspace_id
 from sandbox.repositories import ConversationRepository
 from sandbox.security.ownership import require_actor
 from sandbox.services.workspace_manager import workspace_manager
@@ -24,8 +24,23 @@ repo = ConversationRepository()
 
 def _public_conversation(conv: ConversationResponse) -> ConversationResponse:
     """Ensure API responses never expose host physical workspace paths."""
-    conv.workspace_path = to_public_workspace_path(conv.workspace_path)
-    return conv
+    wid = conv.workspace_id
+    if not wid or str(wid).startswith("/"):
+        wid = conversation_workspace_id(conv.id)
+    return ConversationResponse(
+        id=conv.id,
+        title=conv.title,
+        sandbox_session_id=conv.sandbox_session_id,
+        workspace_id=wid,
+        messages=list(conv.messages or []),
+        owner_user_id=conv.owner_user_id,
+        organization_id=conv.organization_id,
+        interrupted=conv.interrupted,
+        last_run_id=conv.last_run_id,
+        legal_hold=conv.legal_hold,
+        created_at=conv.created_at,
+        updated_at=conv.updated_at,
+    )
 
 
 def _get_owned_or_404(conversation_id: str, request: Request) -> ConversationResponse:
@@ -93,7 +108,6 @@ def create_conversation(body: ConversationCreate, request: Request):
     else:
         conv_id = str(uuid.uuid4())
     # Initialize persistent workspace for this conversation.
-    # Store workspace_id key in DB; API always returns logical path.
     try:
         workspace_manager.init_conversation_workspace(conv_id)
     except (ValueError, PermissionError) as exc:
@@ -101,7 +115,7 @@ def create_conversation(body: ConversationCreate, request: Request):
             status_code=400 if isinstance(exc, ValueError) else 403,
             detail=str(exc),
         )
-    # Persist a stable workspace key (not host absolute path) for rebind.
+    # Persist opaque workspace_id (not host absolute path) for rebind.
     stored_workspace = conversation_workspace_id(conv_id)
 
     owner_user_id = None
@@ -120,6 +134,7 @@ def create_conversation(body: ConversationCreate, request: Request):
         "id": conv_id,
         "title": body.title or "New conversation",
         "sandbox_session_id": body.sandbox_session_id,
+        "workspace_id": stored_workspace,
         "workspace_path": stored_workspace,
         "messages": list(body.messages or []),
         "owner_user_id": owner_user_id,
@@ -137,6 +152,7 @@ def get_conversation(conversation_id: str, request: Request):
 def update_conversation(conversation_id: str, body: ConversationCreate, request: Request):
     existing = _get_owned_or_404(conversation_id, request)
     # Only replace fields that were explicitly provided (None = leave unchanged)
+    stored_workspace = conversation_workspace_id(conversation_id)
     entry = {
         "id": conversation_id,
         "title": body.title if body.title is not None else existing.title,
@@ -146,7 +162,8 @@ def update_conversation(conversation_id: str, body: ConversationCreate, request:
             else existing.sandbox_session_id
         ),
         # Always persist the stable workspace_id key (never host absolute paths).
-        "workspace_path": conversation_workspace_id(conversation_id),
+        "workspace_id": stored_workspace,
+        "workspace_path": stored_workspace,
         "messages": (
             list(body.messages)
             if body.messages is not None
@@ -227,14 +244,12 @@ def update_conversation_title(conversation_id: str, body: dict, request: Request
 
 @router.get("/{conversation_id}/workspace", response_model=dict)
 def get_conversation_workspace(conversation_id: str, request: Request):
-    """Return the persistent workspace path for a conversation.
+    """Return the opaque workspace identity for a conversation.
 
-    ``workspace_path`` is always the agent-visible logical root.
-    ``workspace_id`` is the stable conversation-owned storage key.
+    Public contract: ``workspace_id`` only — never physical host paths.
     """
-    conv = _get_owned_or_404(conversation_id, request)
+    _get_owned_or_404(conversation_id, request)
     return {
         "conversation_id": conversation_id,
-        "workspace_path": AGENT_WORKSPACE_PATH,
         "workspace_id": conversation_workspace_id(conversation_id),
     }

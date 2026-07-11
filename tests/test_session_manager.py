@@ -3,8 +3,8 @@
 import pytest
 
 from sandbox.models import SessionStatus
-from sandbox.paths import AGENT_WORKSPACE_PATH, conversation_workspace_id
-from sandbox.services.session_manager import SessionManager
+from sandbox.paths import conversation_workspace_id
+from sandbox.services.session_manager import SessionManager, public_session_response
 from sandbox.services.workspace_manager import WorkspaceWriteConflict, write_lease
 
 
@@ -30,8 +30,15 @@ class TestSessionManager:
         assert session.agent_session_id == "pi_abc123"
         assert session.user_id == "u001"
         assert session.metadata["env"] == "staging"
-        assert "_physical_workspace" in session.metadata
+        assert "_physical_workspace" in session.metadata  # internal only
         assert "workspace_id" in session.metadata
+
+    def test_public_session_strips_physical(self, mgr: SessionManager):
+        session = mgr.create(caller_id="pub")
+        public = public_session_response(session)
+        assert "_physical_workspace" not in public.metadata
+        assert public.workspace_id
+        assert public.workspace_id == session.metadata["workspace_id"]
 
     def test_get_existing(self, mgr: SessionManager):
         created = mgr.create()
@@ -66,29 +73,29 @@ class TestSessionManager:
         mgr.create()
         assert mgr.count_active() == 1
 
-    def test_workspace_path_generated(self, mgr: SessionManager):
+    def test_workspace_id_generated(self, mgr: SessionManager):
         session = mgr.create()
-        # Always exposed as stable agent path (P3)
-        assert session.workspace_path == AGENT_WORKSPACE_PATH
+        assert session.workspace_id
+        assert session.workspace_id == session.session_id  # private session workspace
 
     def test_multiple_sessions_have_unique_ids(self, mgr: SessionManager):
         s1 = mgr.create()
         s2 = mgr.create()
         assert s1.session_id != s2.session_id
 
-    def test_create_with_workspace_path_override(self, mgr: SessionManager):
+    def test_create_with_workspace_path_override_internal(self, mgr: SessionManager):
         override_path = "/custom/workspace/path"
         session = mgr.create(
             caller_id="test-override",
             workspace_path_override=override_path,
         )
-        assert session.workspace_path == AGENT_WORKSPACE_PATH
+        assert session.workspace_id == "path"
         assert session.metadata.get("_physical_workspace") == override_path
         assert session.session_id.startswith("sandbox_")
 
     def test_create_without_override_generates_path(self, mgr: SessionManager):
         session = mgr.create()
-        assert session.workspace_path == AGENT_WORKSPACE_PATH
+        assert session.workspace_id == session.session_id
         physical = session.metadata.get("_physical_workspace", "")
         assert session.session_id in physical
 
@@ -101,6 +108,7 @@ class TestSessionManager:
         conv = "conv-bind-1"
         s1 = mgr.create(caller_id="a", conversation_id=conv)
         assert s1.metadata["workspace_id"] == conversation_workspace_id(conv)
+        assert s1.workspace_id == conversation_workspace_id(conv)
         assert s1.metadata["conversation_id"] == conv
         assert conversation_workspace_id(conv) in s1.metadata["_physical_workspace"]
         # Complete first so second can claim write lease

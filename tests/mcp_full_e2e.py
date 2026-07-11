@@ -68,8 +68,8 @@ check("create_session OK", ok(r), f"status={s}")
 sid = r.get("session_id", "")
 check("Has session_id", sid.startswith("sandbox_"))
 check("Status RUNNING", r.get("status") == "RUNNING")
-check("Has workspace_path", bool(r.get("workspace_path")))
-print(f"  workspace_path = {r.get('workspace_path')}")
+check("Has workspace_id", bool(r.get("workspace_id")))
+print(f"  workspace_id = {r.get('workspace_id')}")
 
 # Write file
 s, r = call("write_file", {"session_id": sid, "path": "hello.txt", "content": "Hello MCP!"})

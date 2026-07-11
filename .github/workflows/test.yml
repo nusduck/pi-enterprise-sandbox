@@ -28,7 +28,7 @@ jobs:
         run: uv run pytest tests/ -q --tb=short
 
   node-bff:
-    name: Node BFF (tests + syntax)
+    name: Node BFF (tests + smoke)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -37,7 +37,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "22"
           cache: npm
           cache-dependency-path: api-server/package-lock.json
 
@@ -52,8 +52,11 @@ jobs:
           find api-server -name '*.js' -type f ! -path '*/node_modules/*' -print0 \
             | xargs -0 -n1 node --check
 
+      - name: Import/listen smoke
+        run: node --test api-server/tests/listen-smoke.test.js
+
   node-agent:
-    name: Node Agent (tests + syntax)
+    name: Node Agent (tests + smoke)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -62,7 +65,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "22"
           cache: npm
           cache-dependency-path: agent/package-lock.json
 
@@ -74,8 +77,12 @@ jobs:
 
       - name: Syntax-check Agent sources
         run: |
-          find agent -name '*.js' -type f ! -path '*/node_modules/*' -print0 \
+          find agent -name '*.js' -type f ! -path '*/node_modules/*' ! -path '*/testing/*' -print0 \
             | xargs -0 -n1 node --check
+          node --check agent/testing/fake-openai-provider.js
+
+      - name: Import/listen + fake provider smoke
+        run: node --test agent/tests/listen-smoke.test.js agent/tests/fake-openai-provider.test.js
 
   frontend:
     name: Frontend (test + build)
@@ -87,7 +94,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "22"
           cache: npm
           cache-dependency-path: frontend/package-lock.json
 
@@ -112,3 +119,40 @@ jobs:
           # env_file references .env; use the committed template (no real secrets)
           if [ ! -f .env ]; then cp .env.example .env; fi
           docker compose config -q
+
+  cross-service-smoke:
+    name: Cross-service smoke (no real LLM key)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        run: uv python install 3.11
+
+      - name: Install project with test extras
+        run: uv sync --extra test
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: |
+            agent/package-lock.json
+            api-server/package-lock.json
+
+      - name: Install Node service dependencies
+        run: |
+          npm ci --prefix agent
+          npm ci --prefix api-server
+
+      - name: Run cross-service smoke (fake OpenAI provider)
+        run: |
+          mkdir -p .smoke-tmp
+          uv run node scripts/smoke-cross-service.mjs

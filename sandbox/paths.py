@@ -1,13 +1,19 @@
-"""Stable agent-visible path constants and physical-workspace helpers.
+"""Relative workspace path contract and physical-workspace helpers.
 
-Agent-facing tools, prompts, and docs must use only these logical paths:
+Public contract (API / SSE / model context / tools / logs):
 
-- ``/home/sandbox/workspace`` — current conversation/session workspace (R/W)
-- ``/home/sandbox/skill`` — shared skills directory (R/O)
+- Tool and file paths are **relative to the session workspace root**
+  (e.g. ``notes/a.txt``, ``.``, ``uploads/…``).
+- Workspaces are identified only by opaque ``workspace_id``.
+- Physical host paths must never appear on public surfaces; redact them to
+  ``<workspace>``.
 
-Physical storage lives under ``settings.workspaces_path / {workspace_id}``
-(and ``settings.skills_path``). Execution / file / artifact operations always
-use the session's physical workspace, never a process-global symlink.
+Internal only (service / repository):
+
+- Physical roots live under ``settings.workspaces_path / {workspace_id}``.
+- Resolve via :func:`get_session_physical_workspace` / metadata / WorkspaceRef.
+- ``_physical_workspace`` may exist in stored session metadata for recovery but
+  must be stripped before any external JSON response.
 """
 
 from __future__ import annotations
@@ -16,20 +22,32 @@ import re
 from pathlib import Path
 from typing import Any
 
-# ── Agent-visible stable paths (single source of truth) ─────────────────
+# ── Public redaction tokens ─────────────────────────────────────────────
 
-AGENT_WORKSPACE_PATH = "/home/sandbox/workspace"
+# Opaque stand-in for any physical workspace root in errors, logs, and docs.
+PUBLIC_WORKSPACE_TOKEN = "<workspace>"
+
+# Agent-visible skill tree (shared, not session workspace). Skill tools may
+# still use this absolute root; session file tools do not.
 AGENT_SKILL_PATH = "/home/sandbox/skill"
 
+# Deprecated legacy absolute logical workspace path. Not part of the public
+# API/SSE/tool contract. Kept only for optional presentation-symlink internals
+# and historical constant imports.
+LEGACY_AGENT_WORKSPACE_PATH = "/home/sandbox/workspace"
+AGENT_WORKSPACE_PATH = LEGACY_AGENT_WORKSPACE_PATH  # internal alias
+
 # Backward-compat alias used only for optional single-session presentation.
-# Must not be used as the execution cwd for multi-session correctness.
 LEGACY_WORKSPACE_LINK = "/sandbox/workspace"
 
-# Common physical-root prefixes that must never appear in agent-facing text.
+# Common physical-root prefixes that must never appear in public text.
 _DEFAULT_PHYSICAL_PREFIXES = (
     "/var/sandbox/workspaces",
     "/sandbox/workspaces",
 )
+
+# Internal metadata keys stripped from public session/conversation JSON.
+_INTERNAL_METADATA_PREFIX = "_"
 
 
 def conversation_workspace_id(conversation_id: str) -> str:
@@ -37,12 +55,18 @@ def conversation_workspace_id(conversation_id: str) -> str:
     return f"conv_{conversation_id}"
 
 
-def is_logical_workspace_path(path: str | None) -> bool:
-    """Return True if *path* is the logical workspace root or under it."""
+def is_legacy_logical_workspace_path(path: str | None) -> bool:
+    """Return True if *path* is the deprecated absolute logical workspace root."""
     if not path:
         return False
     p = path.rstrip("/")
-    return p == AGENT_WORKSPACE_PATH or p.startswith(AGENT_WORKSPACE_PATH + "/")
+    return p == LEGACY_AGENT_WORKSPACE_PATH or p.startswith(
+        LEGACY_AGENT_WORKSPACE_PATH + "/"
+    )
+
+
+# Backward-compat name used by older call sites during the cutover.
+is_logical_workspace_path = is_legacy_logical_workspace_path
 
 
 def is_logical_skill_path(path: str | None) -> bool:
@@ -52,22 +76,45 @@ def is_logical_skill_path(path: str | None) -> bool:
     return p == AGENT_SKILL_PATH or p.startswith(AGENT_SKILL_PATH + "/")
 
 
-def to_public_workspace_path(path: str | None) -> str:
-    """Map any stored workspace path to the agent-visible logical root.
+def public_metadata(metadata: dict[str, Any] | None) -> dict[str, Any]:
+    """Return metadata safe for external JSON (strip internal ``_`` keys)."""
+    if not metadata or not isinstance(metadata, dict):
+        return {}
+    return {
+        k: v
+        for k, v in metadata.items()
+        if not str(k).startswith(_INTERNAL_METADATA_PREFIX)
+    }
 
-    Conversations historically stored physical paths; API responses must
-    always expose the stable logical path when a workspace exists.
+
+def get_session_workspace_id(session: Any) -> str | None:
+    """Opaque workspace_id for a session object or dict-like entry."""
+    metadata = getattr(session, "metadata", None)
+    if metadata is None and isinstance(session, dict):
+        metadata = session.get("metadata")
+    if isinstance(metadata, dict):
+        wid = metadata.get("workspace_id")
+        if wid:
+            return str(wid)
+    # Fallback: session_id as private workspace key
+    session_id = getattr(session, "session_id", None)
+    if session_id is None and isinstance(session, dict):
+        session_id = session.get("session_id")
+    return str(session_id) if session_id else None
+
+
+def to_public_workspace_path(path: str | None) -> str:
+    """Deprecated: public surfaces no longer expose a workspace path.
+
+    Returns the redaction token. Prefer :func:`get_session_workspace_id` /
+    ``workspace_id`` fields on API models.
     """
-    if not path:
-        return AGENT_WORKSPACE_PATH
-    if is_logical_workspace_path(path):
-        return AGENT_WORKSPACE_PATH
-    # Any non-empty stored path represents an existing workspace.
-    return AGENT_WORKSPACE_PATH
+    _ = path
+    return PUBLIC_WORKSPACE_TOKEN
 
 
 def get_session_physical_workspace(session: Any) -> str:
-    """Return the physical on-disk workspace root for a session.
+    """Return the physical on-disk workspace root for a session (internal).
 
     Preference order:
     1. ``session.metadata["_physical_workspace"]`` (set at create time)
@@ -108,8 +155,8 @@ def sanitize_path_error(
 ) -> str:
     """Strip host physical roots from error messages for API/audit hygiene.
 
-    Replaces known physical prefixes with the logical workspace path so
-    agents and clients never see host layout details.
+    Replaces known physical prefixes with ``<workspace>`` so agents and
+    clients never see host layout details.
     """
     if not message:
         return message
@@ -136,12 +183,32 @@ def sanitize_path_error(
     sanitized = message
     for root in unique:
         if root in sanitized:
-            sanitized = sanitized.replace(root, AGENT_WORKSPACE_PATH)
+            sanitized = sanitized.replace(root, PUBLIC_WORKSPACE_TOKEN)
 
-    # Collapse accidental double logical prefixes
+    # Also redact legacy logical absolute paths if they leaked in
+    if LEGACY_AGENT_WORKSPACE_PATH in sanitized:
+        sanitized = sanitized.replace(
+            LEGACY_AGENT_WORKSPACE_PATH, PUBLIC_WORKSPACE_TOKEN
+        )
+
+    # Collapse accidental double redaction tokens
     sanitized = re.sub(
-        re.escape(AGENT_WORKSPACE_PATH) + r"{2,}",
-        AGENT_WORKSPACE_PATH,
+        re.escape(PUBLIC_WORKSPACE_TOKEN) + r"{2,}",
+        PUBLIC_WORKSPACE_TOKEN,
         sanitized,
     )
     return sanitized
+
+
+def sanitize_physical_paths(
+    text: str,
+    *,
+    physical_workspace: str | None = None,
+    extra_roots: list[str] | None = None,
+) -> str:
+    """Public alias for path redaction (logs, SSE text, model-facing strings)."""
+    return sanitize_path_error(
+        text,
+        physical_workspace=physical_workspace,
+        extra_roots=extra_roots,
+    )

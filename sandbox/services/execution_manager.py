@@ -195,7 +195,6 @@ class ExecutionManager:
             def _on_started(proc: Any) -> None:
                 self._register_proc(execution_id, proc)
 
-            from sandbox.paths import AGENT_WORKSPACE_PATH
 
             result = run_with_timeout(
                 cmd,
@@ -204,7 +203,8 @@ class ExecutionManager:
                 env=safe_env(
                     workspace_path=workspace_path,
                     overrides=env_overrides,
-                    logical_workspace=AGENT_WORKSPACE_PATH,
+                    # Relative public contract — never leak physical roots via PWD.
+                    logical_workspace=".",
                 ),
                 cwd=workspace_path,
                 max_process_count=settings.max_process_count,

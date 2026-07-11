@@ -57,15 +57,15 @@ pi-sandbox/
 │   ├── services/         ← 会话/执行/文件/审计/审批策略
 │   ├── mcp/              ← MCP 协议适配器
 │   └── Dockerfile
-├── skills/               ← 技能文件（默认只读挂载；研发可 SKILLS_MODE=development + RW）
+├── skills/               ← 空发行基线（无内置 Skill package；loader 保留；研发可 install）
 ├── tests/                ← pytest 测试套件
-├── scripts/              ← 备份/恢复脚本
+├── scripts/              ← 备份/恢复、development reset、跨服务 smoke
 ├── nginx/                ← 生产 Nginx + SSL
-├── docs/                 ← 文档
-├── workspaces/           ← 会话工作区（运行时，持久化）
+├── docs/                 ← 活跃文档（archive/ 与历史 PLAN 不作现行规范）
+├── workspaces/           ← 会话工作区（运行时，按 workspace_id 隔离）
 ├── docker-compose.yml           ← 开发 4 服务编排
-├── docker-compose.prod.yml      ← 生产 overlay（Nginx + SSL + 资源限制）
-└── .env.example          ← 环境变量模板
+├── docker-compose.prod.yml      ← 生产 overlay（PostgreSQL + Nginx + SSL）
+└── .env.example          ← 环境变量模板（与部署文档一致）
 ```
 
 ## 环境变量
@@ -131,7 +131,14 @@ SANDBOX_BASE_URL=http://localhost:8081
 
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
-| `SANDBOX_DATABASE_URL` | `sqlite:////sandbox/data/sandbox.db` | SQLite（WAL 模式）/ PostgreSQL |
+| `SANDBOX_DATABASE_URL` | `sqlite:////sandbox/data/sandbox.db` | **开发/测试**空库 SQLite；**生产强制 PostgreSQL**（见 `docker-compose.prod.yml`） |
+| `POSTGRES_PASSWORD` | 无 | 生产必填；无默认值 |
+
+发行基线为不可变 `schema_migrations` 空库初始化；不提供旧 schema 自动升级或旧数据迁移。研发清库见 [docs/runbooks/development-reset.md](docs/runbooks/development-reset.md)。
+
+### Skill
+
+发行基线 **零内置 Skill package**（`skills/` 为空）。Agent 在零 Skill 下可用基础工具（read/write/edit/bash/…）。未来 Skill 仅通过研发 `SKILLS_MODE=development` 的 install/edit/reload 流程引入；生产默认 `readonly`。
 
 ### 其他
 
@@ -147,21 +154,27 @@ SANDBOX_BASE_URL=http://localhost:8081
 完整干净安装与验证命令见 [docs/development.md](docs/development.md)。摘要：
 
 ```bash
-# 依赖（从仓库根目录）
+# 依赖（从仓库根目录；Node 22）
 uv sync --extra test
 npm ci --prefix api-server
+npm ci --prefix agent
 npm ci --prefix frontend
 
-# 本地三进程
+# 本地四进程
 uv run uvicorn sandbox.main:app --port 8081 --reload
-SANDBOX_BASE_URL=http://localhost:8081 npm run dev --prefix api-server
+SANDBOX_BASE_URL=http://localhost:8081 npm run dev --prefix agent
+SANDBOX_BASE_URL=http://localhost:8081 AGENT_BASE_URL=http://localhost:4100 \
+  npm run dev --prefix api-server
 npm run dev --prefix frontend
 
 # 质量门禁（与 CI 对齐）
 uv run pytest tests/ -q --tb=short
-node --test api-server/tests/*.test.js api-server/tests/sdk-compat/*.test.js
+node --test api-server/tests/*.test.js
+node --test agent/tests/*.test.js agent/tests/sdk-compat/*.test.js
 npm test --prefix frontend && npm run build --prefix frontend
 docker compose config -q
+# 无真实 LLM key 的跨服务 smoke（fake OpenAI；禁止 production）
+node scripts/smoke-cross-service.mjs
 ```
 
 ## 安全特性
@@ -172,7 +185,8 @@ docker compose config -q
 | 网络 | iptables 默认 DROP 出站策略 |
 | 用户 | 子进程以非 root `sandbox` 用户运行 |
 | 资源 | ulimit: CPU / 内存 / 进程数 / 文件大小 |
-| 路径 | Session 物理工作区隔离；agent 稳定路径 `/home/sandbox/workspace` + `/home/sandbox/skill`（默认只读；`SKILLS_MODE=development` 时仅专用 skill 工具可写） |
+| 路径 | Session 工作区按 opaque `workspace_id` 隔离；工具路径相对 Session 根；物理路径不进入公共协议 |
+| Skill | 发行零内置 package；默认只读；`SKILLS_MODE=development` 时仅专用 skill 工具可写 |
 | 命令 | 禁止 `sudo, su, rm -rf /, dd, mkfs, fdisk, chmod 777` |
 | 输出 | stdout/stderr 上限截断 |
 | 交付 | 仅 Artifact API / `submit_artifact` 向用户分享文件（`write` 不自动下载） |
@@ -183,8 +197,11 @@ docker compose config -q
 
 | 文档 | 说明 |
 |------|------|
-| [架构设计](docs/architecture.md) | 系统架构、设计决策、安全模型、数据流 |
-| [部署指南](docs/deployment.md) | 生产部署、SSL、备份、监控 |
-| [开发指南](docs/development.md) | 本地开发、测试、调试 |
-| [API 参考](docs/api.md) | Sandbox API + MCP + SSE 协议、Artifact 提交流程 |
+| [架构设计](docs/architecture.md) | 四服务架构、设计决策、安全模型、数据流 |
+| [部署指南](docs/deployment.md) | 生产部署（PostgreSQL）、SSL、备份、监控 |
+| [开发指南](docs/development.md) | 本地开发、零 Skill、测试、调试 |
+| [API 参考](docs/api.md) | Sandbox API + MCP + SSE、workspace_id 契约 |
 | [前端指南](docs/webui.md) | 前端 SPA 架构、SSE 消费、扩展 |
+| [Development reset](docs/runbooks/development-reset.md) | 研发清库停机窗口（不可逆） |
+
+历史资料（`PLAN.md`、`IMPROVEMENT_PLAN.md`、`docs/archive/*`、部分 field-issues 表述）已 **superseded**，不作现行实现规范；以本 README、`docs/*` 活跃页与 `.trellis/spec/` 为准。

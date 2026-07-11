@@ -13,11 +13,11 @@ import {
   cancelAgentRun,
 } from '../services/agent-client.js';
 
-const AGENT_WORKSPACE = '/home/sandbox/workspace';
-
 /**
  * Resolve a conversation and its sandbox session, reusing a running session
  * when possible. Kept here for the draft-upload session route compatibility.
+ *
+ * Public contract: opaque workspace_id only (never physical/absolute workspace paths).
  *
  * @param {ReturnType<import('../services/sandbox-client.js').createSandboxClient>} client
  * @param {string | null | undefined} conversationId
@@ -68,7 +68,7 @@ export async function resolveConversationAndSession(client, conversationId) {
 
   return {
     activeConversationId,
-    targetWorkspace: AGENT_WORKSPACE,
+    workspace_id: activeConversationId ? `conv_${activeConversationId}` : null,
     sandboxSessionId,
     reusedSession,
   };

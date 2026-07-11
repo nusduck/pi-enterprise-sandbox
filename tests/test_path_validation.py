@@ -3,7 +3,7 @@
 import pytest
 from pathlib import Path
 
-from sandbox.paths import AGENT_WORKSPACE_PATH, sanitize_path_error
+from sandbox.paths import PUBLIC_WORKSPACE_TOKEN, sanitize_path_error
 from sandbox.security.path_validation import (
     enforce_path_within_workspace,
     is_path_in_workspace,
@@ -35,6 +35,13 @@ class TestPathValidation:
         with pytest.raises(PermissionError):
             resolve_safe_path(ws, "/etc/passwd")
 
+    def test_legacy_logical_absolute_rejected(self, tmp_path: Path):
+        """R2: /home/sandbox/workspace is no longer accepted (fail-closed)."""
+        with pytest.raises(PermissionError):
+            resolve_safe_path(str(tmp_path), "/home/sandbox/workspace/notes/a.txt")
+        with pytest.raises(PermissionError):
+            normalize_user_path("/home/sandbox/workspace")
+
     def test_dot_is_safe(self, tmp_path: Path):
         ws = str(tmp_path)
         result = resolve_safe_path(ws, ".")
@@ -44,6 +51,7 @@ class TestPathValidation:
         ws = str(tmp_path)
         assert is_path_in_workspace(ws, "sub/file.txt")
         assert not is_path_in_workspace(ws, "../etc/")
+        assert not is_path_in_workspace(ws, "/etc/passwd")
 
     def test_deeply_nested(self, tmp_path: Path):
         ws = str(tmp_path)
@@ -68,19 +76,6 @@ class TestPathValidation:
         link.symlink_to(outside.resolve())
         with pytest.raises(PermissionError):
             resolve_safe_path(ws, "evil_link")
-
-    def test_logical_absolute_workspace_path_accepted(self, tmp_path: Path):
-        ws = str(tmp_path)
-        (tmp_path / "notes").mkdir()
-        (tmp_path / "notes" / "a.txt").write_text("ok")
-        result = resolve_safe_path(ws, f"{AGENT_WORKSPACE_PATH}/notes/a.txt")
-        assert result == (tmp_path / "notes" / "a.txt").resolve()
-
-    def test_logical_workspace_root_is_dot(self, tmp_path: Path):
-        assert normalize_user_path(AGENT_WORKSPACE_PATH) == "."
-        assert normalize_user_path(AGENT_WORKSPACE_PATH + "/") == "."
-        result = resolve_safe_path(str(tmp_path), AGENT_WORKSPACE_PATH)
-        assert result == tmp_path.resolve()
 
     def test_physical_path_not_in_error_detail(self, tmp_path: Path):
         """PermissionError messages must not leak physical workspace roots."""
@@ -113,7 +108,7 @@ class TestSanitizePathError:
         msg = f"failed under {physical}/file.txt"
         out = sanitize_path_error(msg, physical_workspace=physical)
         assert physical not in out
-        assert AGENT_WORKSPACE_PATH in out
+        assert PUBLIC_WORKSPACE_TOKEN in out
         assert "/var/sandbox/workspaces" not in out
 
 

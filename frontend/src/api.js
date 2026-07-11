@@ -242,7 +242,7 @@ export async function decideApproval(approvalId, decision) {
 /**
  * Ensure a conversation + sandbox session exist (for pre-chat uploads).
  * @param {string|null} [conversationId]
- * @returns {Promise<{ conversation_id: string, session_id: string, workspace_path?: string, trace_id?: string }>}
+ * @returns {Promise<{ conversation_id: string, session_id: string, workspace_id?: string, trace_id?: string }>}
  */
 export async function ensureSession(conversationId = null) {
   const resp = await fetch(`${BASE}/sessions/ensure`, {

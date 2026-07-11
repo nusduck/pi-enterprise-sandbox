@@ -43,6 +43,12 @@ def _public_user(u: dict) -> dict:
 
 @router.post("/register")
 def register(body: RegisterBody):
+    # Production / hardened deployments disable public self-registration.
+    if not settings.auth_allow_public_register:
+        raise HTTPException(
+            status_code=403,
+            detail="Public registration is disabled; contact an administrator",
+        )
     if users.get_by_username(body.username):
         raise HTTPException(status_code=409, detail="Username already exists")
     user_id = f"user_{uuid.uuid4().hex[:12]}"

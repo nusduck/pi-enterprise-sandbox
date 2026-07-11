@@ -8,7 +8,7 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from sandbox.main import app
-from sandbox.paths import AGENT_SKILL_PATH, AGENT_WORKSPACE_PATH, get_session_physical_workspace
+from sandbox.paths import AGENT_SKILL_PATH, get_session_physical_workspace
 from sandbox.services.session_manager import session_manager
 from sandbox.services.workspace_manager import workspace_manager
 
@@ -20,14 +20,22 @@ def _create_session(caller: str = "test") -> dict:
     resp = client.post("/sessions", json={"caller_id": caller})
     assert resp.status_code == 201, resp.text
     data = resp.json()
-    assert data["workspace_path"] == AGENT_WORKSPACE_PATH
+    assert data.get("workspace_id")
+    assert "workspace_path" not in data or data.get("workspace_path") in (None, "")
+    assert "_physical_workspace" not in (data.get("metadata") or {})
     return data
+
+
+def _physical_for(session_id: str) -> Path:
+    session = session_manager.get(session_id)
+    assert session is not None
+    return Path(get_session_physical_workspace(session))
 
 
 def test_new_session_workspace_is_empty():
     data = _create_session()
     sid = data["session_id"]
-    physical = Path(data["metadata"]["_physical_workspace"])
+    physical = _physical_for(sid)
     assert physical.is_dir()
     assert list(physical.iterdir()) == []
 
@@ -94,7 +102,7 @@ def test_skill_path_readable_workspace_not_skill(tmp_path, monkeypatch):
     (demo / "SKILL.md").write_text("# Demo\n", encoding="utf-8")
 
     data = _create_session()
-    physical = Path(data["metadata"]["_physical_workspace"])
+    physical = _physical_for(data["session_id"])
     # Workspace must not contain skills seed
     assert "skills" not in {p.name for p in physical.iterdir()} if physical.exists() else True
     assert skill_root.is_dir()
@@ -102,9 +110,8 @@ def test_skill_path_readable_workspace_not_skill(tmp_path, monkeypatch):
     # Skills live outside the workspace tree
     assert not str(skill_root.resolve()).startswith(str(physical.resolve()) + "/")
     assert skill_root.resolve() != physical.resolve()
-    # Agent-visible constants
+    # Skill constant remains (skills are not the session workspace contract)
     assert AGENT_SKILL_PATH == "/home/sandbox/skill"
-    assert AGENT_WORKSPACE_PATH == "/home/sandbox/workspace"
 
 
 def test_file_api_write_outside_workspace_fails():
@@ -123,7 +130,7 @@ def test_file_api_write_outside_workspace_fails():
         assert resp.status_code in (400, 403, 500)
 
     # Confirm nothing escaped into the physical parent
-    physical = Path(data["metadata"]["_physical_workspace"])
+    physical = _physical_for(sid)
     assert not (physical.parent / "outside.txt").exists()
 
 
@@ -189,23 +196,26 @@ def test_conversation_id_traversal_rejected():
         assert not (root.parent / "escape").exists()
 
 
-def test_conversation_api_returns_logical_workspace_path():
-    """ConversationResponse.workspace_path must be the logical root, not host path."""
+def test_conversation_api_returns_workspace_id_only():
+    """ConversationResponse exposes opaque workspace_id, never host paths."""
     from sandbox.config import settings
 
     resp = client.post("/conversations", json={"title": "logical-ws"})
     assert resp.status_code == 201, resp.text
     data = resp.json()
-    assert data["workspace_path"] == AGENT_WORKSPACE_PATH
+    assert data["workspace_id"].startswith("conv_")
+    assert "workspace_path" not in data or data.get("workspace_path") in (None, "")
     physical_root = str(Path(settings.workspaces_path).resolve())
-    assert physical_root not in data["workspace_path"]
-    assert "/var/sandbox/workspaces" not in (data["workspace_path"] or "")
+    dumped = str(data)
+    assert physical_root not in dumped
+    assert "/var/sandbox/workspaces" not in dumped
+    assert "/home/sandbox/workspace" not in dumped
 
     ws = client.get(f"/conversations/{data['id']}/workspace")
     assert ws.status_code == 200
     body = ws.json()
-    assert body["workspace_path"] == AGENT_WORKSPACE_PATH
     assert body["workspace_id"].startswith("conv_")
+    assert "workspace_path" not in body
 
 
 def test_two_conversations_isolated_concurrently():
@@ -223,9 +233,10 @@ def test_two_conversations_isolated_concurrently():
     assert s1.status_code == 201, s1.text
     assert s2.status_code == 201, s2.text
     d1, d2 = s1.json(), s2.json()
-    assert d1["metadata"]["_physical_workspace"] != d2["metadata"]["_physical_workspace"]
-    assert d1["workspace_path"] == AGENT_WORKSPACE_PATH
-    assert d2["workspace_path"] == AGENT_WORKSPACE_PATH
+    assert d1["workspace_id"] != d2["workspace_id"]
+    assert "_physical_workspace" not in (d1.get("metadata") or {})
+    assert "_physical_workspace" not in (d2.get("metadata") or {})
+    assert _physical_for(d1["session_id"]) != _physical_for(d2["session_id"])
 
     client.post(
         f"/sessions/{d1['session_id']}/files/write",
@@ -295,7 +306,7 @@ def test_path_escape_error_detail_has_no_physical_root():
 
     data = _create_session("leak-check")
     sid = data["session_id"]
-    physical = data["metadata"]["_physical_workspace"]
+    physical = str(_physical_for(sid))
     resp = client.post(
         f"/sessions/{sid}/files/write",
         json={"path": "../outside.txt", "content": "nope"},
@@ -310,7 +321,7 @@ def test_path_escape_error_detail_has_no_physical_root():
 def test_artifact_submit_rejects_traversal_missing_dir_and_symlink():
     data = _create_session()
     sid = data["session_id"]
-    physical = Path(data["metadata"]["_physical_workspace"])
+    physical = _physical_for(sid)
 
     # Missing file
     missing = client.post(
@@ -397,7 +408,7 @@ def test_binary_upload_roundtrip_invalid_utf8():
     assert rel.startswith("uploads/")
     assert body.get("attachment_id")
 
-    physical = Path(data["metadata"]["_physical_workspace"])
+    physical = _physical_for(sid)
     assert (physical / rel).read_bytes() == payload
 
     dl = client.get(f"/sessions/{sid}/files/download", params={"path": rel})

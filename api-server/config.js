@@ -3,6 +3,19 @@
  * All environment variable reads are centralized here.
  */
 
+const MIN_SECRET_LEN = 32;
+const WEAK_SECRET_MARKERS = [
+  'change-me',
+  'changeme',
+  'dev-only',
+  'secret',
+  'password',
+  'example',
+  'replace',
+  'todo',
+  'xxx',
+];
+
 /**
  * Whether BFF should require browser Authorization on user-facing routes.
  * Aligns with SANDBOX_AUTH_ENABLED when AUTH_ENABLED is unset.
@@ -34,6 +47,88 @@ export function resolveApprovalEnabled(env = process.env) {
   return true;
 }
 
+/**
+ * @param {NodeJS.ProcessEnv | Record<string, string|undefined>} [env]
+ * @returns {'development' | 'production'}
+ */
+export function resolveDeploymentEnv(env = process.env) {
+  const raw = String(env.DEPLOYMENT_ENV || env.NODE_ENV || 'development')
+    .trim()
+    .toLowerCase();
+  if (raw === 'production' || raw === 'prod') return 'production';
+  return 'development';
+}
+
+/**
+ * @param {string | undefined | null} value
+ */
+export function isWeakSecret(value) {
+  const text = String(value || '').trim();
+  if (text.length < MIN_SECRET_LEN) return true;
+  const lower = text.toLowerCase();
+  return WEAK_SECRET_MARKERS.some((m) => lower.includes(m));
+}
+
+/**
+ * Production fail-fast for BFF. Call before listen.
+ * @param {NodeJS.ProcessEnv | Record<string, string|undefined>} [env]
+ */
+export function validateProductionConfig(env = process.env) {
+  if (resolveDeploymentEnv(env) !== 'production') return;
+
+  const errors = [];
+  const internal = String(env.AGENT_INTERNAL_TOKEN || '').trim();
+  const sandboxToken = String(env.SANDBOX_API_TOKEN || '').trim();
+  const authEnabled = resolveAuthEnabled(env);
+
+  if (!internal) {
+    errors.push('AGENT_INTERNAL_TOKEN must be non-empty in production');
+  } else if (isWeakSecret(internal)) {
+    errors.push(
+      `AGENT_INTERNAL_TOKEN is weak or shorter than ${MIN_SECRET_LEN} characters`,
+    );
+  }
+
+  if (!sandboxToken) {
+    errors.push('SANDBOX_API_TOKEN must be non-empty in production');
+  } else if (isWeakSecret(sandboxToken)) {
+    errors.push(
+      `SANDBOX_API_TOKEN is weak or shorter than ${MIN_SECRET_LEN} characters`,
+    );
+  }
+
+  if (!authEnabled) {
+    errors.push('AUTH_ENABLED (or SANDBOX_AUTH_ENABLED) must be true in production');
+  }
+
+  if (errors.length) {
+    const err = new Error(
+      `Production configuration is unsafe (${errors.length} issue(s)): ${errors.join('; ')}`,
+    );
+    err.name = 'ProductionConfigError';
+    err.errors = errors;
+    throw err;
+  }
+}
+
+/**
+ * Redacted effective config for INFO logs.
+ * @param {typeof config} [cfg]
+ */
+export function effectiveConfig(cfg = config) {
+  return {
+    PORT: cfg.PORT,
+    NODE_ENV: cfg.NODE_ENV,
+    DEPLOYMENT_ENV: cfg.DEPLOYMENT_ENV,
+    SANDBOX_BASE_URL: cfg.SANDBOX_BASE_URL,
+    SANDBOX_API_TOKEN: cfg.SANDBOX_API_TOKEN ? '***' : '<empty>',
+    AGENT_BASE_URL: cfg.AGENT_BASE_URL,
+    AGENT_INTERNAL_TOKEN: cfg.AGENT_INTERNAL_TOKEN ? '***' : '<empty>',
+    AUTH_ENABLED: cfg.AUTH_ENABLED,
+    APPROVAL_ENABLED: cfg.APPROVAL_ENABLED,
+  };
+}
+
 export const config = {
   PORT: parseInt(process.env.PORT, 10) || 4000,
   SANDBOX_BASE_URL: process.env.SANDBOX_BASE_URL || 'http://sandbox:8081',
@@ -48,6 +143,7 @@ export const config = {
    */
   AGENT_INTERNAL_TOKEN: process.env.AGENT_INTERNAL_TOKEN || '',
   NODE_ENV: process.env.NODE_ENV || 'development',
+  DEPLOYMENT_ENV: resolveDeploymentEnv(),
   /**
    * When true, protect user-facing /api/* routes with Bearer token and
    * forward Authorization to sandbox. Default false (open dev mode).

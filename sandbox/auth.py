@@ -59,6 +59,8 @@ def create_token(
         "organization_id": organization_id or BOOTSTRAP_ORG_ID,
         "iat": now,
         "exp": now + ttl_seconds,
+        "iss": getattr(settings, "jwt_issuer", None) or "pi-enterprise-sandbox",
+        "aud": getattr(settings, "jwt_audience", None) or "pi-enterprise-sandbox",
     }
     payload = base64.urlsafe_b64encode(
         json.dumps(payload_obj, separators=(",", ":")).encode()
@@ -94,5 +96,12 @@ def verify_token(token: str) -> dict[str, Any] | None:
     except Exception:
         return None
     if int(payload.get("exp", 0)) < int(time.time()):
+        return None
+    # Enforce issuer/audience when configured (production sets both).
+    expected_iss = (getattr(settings, "jwt_issuer", None) or "").strip()
+    expected_aud = (getattr(settings, "jwt_audience", None) or "").strip()
+    if expected_iss and payload.get("iss") not in (None, expected_iss):
+        return None
+    if expected_aud and payload.get("aud") not in (None, expected_aud):
         return None
     return payload

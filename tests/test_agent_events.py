@@ -3,13 +3,16 @@
 from __future__ import annotations
 
 import sqlite3
+import threading
 from datetime import datetime, timedelta, timezone
+from unittest.mock import patch
 
 import pytest
 
 from sandbox.database import Database
 from sandbox.models import AgentRunStatus, ToolExecutionStatus
 from sandbox.repositories import (
+    MAX_APPEND_SEQUENCE_RETRIES,
     AgentEventRepository,
     AgentRunRepository,
     ConversationRepository,
@@ -371,3 +374,225 @@ def test_conversation_last_run_and_events_endpoint_data(mgr, conversation):
     assert latest.run_id == run.run_id
     events = mgr.list_events(latest.run_id)
     assert len(events) >= 2
+
+
+def test_concurrent_appends_same_run_no_gaps_or_duplicates(mgr, conversation):
+    """Many threads append to one run: monotonic sequences, no 500s/errors."""
+    run = mgr.start_run(conversation_id=conversation.id, lease_owner="w1")
+    n = 40
+    results: list = []
+    errors: list[BaseException] = []
+    lock = threading.Lock()
+
+    def worker(i: int) -> None:
+        try:
+            evt = mgr.append_event(
+                run.run_id,
+                event_type="token_batch",
+                payload={"i": i},
+            )
+            with lock:
+                results.append(evt)
+        except BaseException as exc:  # noqa: BLE001 — collect any failure
+            with lock:
+                errors.append(exc)
+
+    threads = [threading.Thread(target=worker, args=(i,)) for i in range(n)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=60)
+
+    assert errors == [], f"concurrent append errors: {errors!r}"
+    assert len(results) == n
+
+    events = mgr.list_events(run.run_id)
+    # start_run emits run_started (seq 1) + n concurrent appends
+    sequences = [e.sequence for e in events]
+    assert sequences == list(range(1, n + 2))
+    assert len(set(sequences)) == len(sequences)
+    assert len({e.event_id for e in events}) == len(events)
+
+
+def test_duplicate_event_id_idempotent(mgr, conversation):
+    """Same event_id returns the stable existing row; no second row."""
+    run = mgr.start_run(conversation_id=conversation.id, lease_owner="w1")
+    first = mgr.append_event(
+        run.run_id,
+        event_type="token_batch",
+        payload={"text": "first"},
+        event_id="evt_idem_1",
+    )
+    second = mgr.append_event(
+        run.run_id,
+        event_type="token_batch",
+        payload={"text": "second-should-not-overwrite"},
+        event_id="evt_idem_1",
+    )
+    assert first.event_id == second.event_id == "evt_idem_1"
+    assert first.sequence == second.sequence
+    assert first.payload == {"text": "first"}
+    assert second.payload == {"text": "first"}
+
+    matching = [e for e in mgr.list_events(run.run_id) if e.event_id == "evt_idem_1"]
+    assert len(matching) == 1
+
+
+def test_concurrent_duplicate_event_id_single_row(mgr, conversation):
+    """Concurrent retries with the same event_id yield one row."""
+    run = mgr.start_run(conversation_id=conversation.id, lease_owner="w1")
+    results: list = []
+    errors: list[BaseException] = []
+    lock = threading.Lock()
+    event_id = "evt_concurrent_idem"
+
+    def worker() -> None:
+        try:
+            evt = mgr.append_event(
+                run.run_id,
+                event_type="tool_start",
+                payload={"name": "bash"},
+                event_id=event_id,
+            )
+            with lock:
+                results.append(evt)
+        except BaseException as exc:  # noqa: BLE001
+            with lock:
+                errors.append(exc)
+
+    threads = [threading.Thread(target=worker) for _ in range(16)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=60)
+
+    assert errors == [], f"idempotent concurrent errors: {errors!r}"
+    assert len(results) == 16
+    assert {e.sequence for e in results} == {results[0].sequence}
+    assert {e.event_id for e in results} == {event_id}
+    matching = [e for e in mgr.list_events(run.run_id) if e.event_id == event_id]
+    assert len(matching) == 1
+
+
+def test_sequence_conflict_retry_bounded(db, conversation):
+    """Sequence unique conflicts retry at most MAX_APPEND_SEQUENCE_RETRIES times."""
+    runs = AgentRunRepository(db)
+    events = AgentEventRepository(db)
+    run = runs.create(
+        {
+            "run_id": "run_retry_bound",
+            "conversation_id": conversation.id,
+            "status": "running",
+            "version": 0,
+        }
+    )
+
+    calls = {"n": 0}
+
+    def always_sequence_conflict(*args, **kwargs):
+        calls["n"] += 1
+        raise sqlite3.IntegrityError(
+            "UNIQUE constraint failed: agent_events.run_id, agent_events.sequence"
+        )
+
+    with patch.object(events, "_append_once", side_effect=always_sequence_conflict):
+        with pytest.raises(RuntimeError, match="sequence retries"):
+            events.append(
+                run_id=run.run_id,
+                event_type="token_batch",
+                payload={"x": 1},
+            )
+
+    assert calls["n"] == MAX_APPEND_SEQUENCE_RETRIES
+    assert MAX_APPEND_SEQUENCE_RETRIES == 8
+
+
+def test_append_hard_failure_marks_run_failed(mgr, conversation):
+    """Exhausted append retries make the run observably failed (not only a warning)."""
+    run = mgr.start_run(conversation_id=conversation.id, lease_owner="w1")
+
+    def boom(**kwargs):
+        raise RuntimeError(
+            f"agent event append failed after {MAX_APPEND_SEQUENCE_RETRIES} "
+            f"sequence retries for run_id={run.run_id!r}"
+        )
+
+    with patch.object(mgr.events, "append", side_effect=boom):
+        with pytest.raises(RuntimeError, match="sequence retries"):
+            mgr.append_event(
+                run.run_id,
+                event_type="token_batch",
+                payload={"text": "x"},
+            )
+
+    updated = mgr.get_run(run.run_id)
+    assert updated is not None
+    assert updated.status == AgentRunStatus.FAILED.value
+
+
+def _postgres_url() -> str | None:
+    import os
+
+    for key in ("TEST_POSTGRES_URL", "SANDBOX_TEST_DATABASE_URL"):
+        value = os.environ.get(key, "").strip()
+        if value.startswith("postgresql://") or value.startswith("postgres://"):
+            return value
+    return None
+
+
+@pytest.mark.skipif(_postgres_url() is None, reason="PostgreSQL test URL not set")
+def test_postgres_100_concurrent_appends_same_run_no_gaps():
+    """PostgreSQL: 100 concurrent appends to one run — no gaps, dups, or errors."""
+    url = _postgres_url()
+    assert url is not None
+    db = Database(url)
+    db.initialize()
+    conv_repo = ConversationRepository(db)
+    conv = conv_repo.upsert(
+        {
+            "id": "conv_pg_concurrent",
+            "title": "PG concurrent",
+            "messages": [],
+            "owner_user_id": "u1",
+            "organization_id": "org1",
+        }
+    )
+    mgr = AgentRunManager(
+        runs=AgentRunRepository(db),
+        events=AgentEventRepository(db),
+        tools=ToolExecutionRepository(db),
+        conversations=conv_repo,
+    )
+    run = mgr.start_run(conversation_id=conv.id, lease_owner="w1")
+    n = 100
+    results: list = []
+    errors: list[BaseException] = []
+    lock = threading.Lock()
+
+    def worker(i: int) -> None:
+        try:
+            evt = mgr.append_event(
+                run.run_id,
+                event_type="token_batch",
+                payload={"i": i},
+            )
+            with lock:
+                results.append(evt)
+        except BaseException as exc:  # noqa: BLE001
+            with lock:
+                errors.append(exc)
+
+    threads = [threading.Thread(target=worker, args=(i,)) for i in range(n)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=120)
+
+    assert errors == [], f"PostgreSQL concurrent append errors: {errors!r}"
+    assert len(results) == n
+    events = mgr.list_events(run.run_id)
+    sequences = [e.sequence for e in events]
+    # run_started + 100 appends
+    assert sequences == list(range(1, n + 2))
+    assert len(set(sequences)) == len(sequences)
+    assert len({e.event_id for e in events}) == len(events)

@@ -73,6 +73,23 @@ describe('resolveSkillsMode', () => {
   });
 });
 
+describe('zero-Skill baseline', () => {
+  it('starts with an empty root while retaining the base tool allowlist', async () => {
+    const emptyRoot = await fsp.mkdtemp(path.join(os.tmpdir(), 'zero-skills-'));
+    try {
+      const manager = createSkillManager({
+        mode: SKILLS_MODE.READONLY,
+        skillRoots: [emptyRoot],
+      });
+      assert.deepEqual(manager.listInstalled(), []);
+      assert.ok(BASE_TOOL_NAMES.length > 0);
+      assert.deepEqual(resolveToolAllowlist(SKILLS_MODE.READONLY), BASE_TOOL_NAMES);
+    } finally {
+      await fsp.rm(emptyRoot, { recursive: true, force: true });
+    }
+  });
+});
+
 describe('git / source validators', () => {
   it('allows clean HTTPS git URLs', () => {
     assert.equal(

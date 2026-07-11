@@ -67,7 +67,7 @@ curl -sf https://localhost/nginx/status
                   ┌───────────────▼──────────────┐
                   │   sandbox (FastAPI:8081)       │
                   │   Execution · Files · Auth     │
-                  │   SQLite / PostgreSQL         │
+                  │   PostgreSQL (prod required)  │
                   │   MCP:8091                    │
                   └──────────────────────────────┘
 ```
@@ -130,33 +130,16 @@ SANDBOX_TRUSTED_PROXY_CIDRS=172.16.0.0/12
 
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
-| `SANDBOX_DATABASE_URL` | `sqlite:////sandbox/data/sandbox.db` | SQLite（开发）或 PostgreSQL（生产） |
+| `SANDBOX_DATABASE_URL` | `sqlite:////sandbox/data/sandbox.db` | SQLite（仅开发/测试）或 PostgreSQL（生产强制） |
+| `POSTGRES_DB` | `sandbox` | 生产 PostgreSQL database name |
+| `POSTGRES_USER` | `sandbox` | 生产 PostgreSQL user |
+| `POSTGRES_PASSWORD` | 无 | 生产必填 secret；无默认值 |
 
 **开发（SQLite）:** 无需额外配置，自动创建。
 
-**生产（PostgreSQL）:**
-```yaml
-# 添加到 docker-compose.yml:
-services:
-  postgres:
-    image: postgres:16-alpine
-    environment:
-      POSTGRES_USER: sandbox
-      POSTGRES_PASSWORD: <secure-password>
-      POSTGRES_DB: sandbox
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U sandbox"]
-    restart: always
+**生产（PostgreSQL）:** `docker-compose.prod.yml` 已内置 PostgreSQL 17、healthcheck、持久 volume 和 Sandbox 依赖。启动前必须设置强 `POSTGRES_PASSWORD`；production overlay 不回退 SQLite。Sandbox 以不可变 `schema_migrations` 初始化空库，checksum 不一致时拒绝启动。
 
-volumes:
-  postgres_data:
-```
-
-```env
-SANDBOX_DATABASE_URL=postgresql://sandbox:***@postgres:5432/sandbox
-```
+研发阶段不可逆的空环境切换见 [Development reset runbook](runbooks/development-reset.md)。该流程明确不备份、不迁移、不恢复旧数据。
 
 ### 资源限制
 
@@ -236,9 +219,9 @@ curl http://localhost:8083/sessions                        # 401
 # Frontend
 curl -f http://localhost:3000/
 
-# API Server（含 agent_runtime 字段：node | python）
+# API Server（仅 node-agent；无 Python/双 Runtime）
 curl -f http://localhost:4000/api/status
-# {"status":"ok","version":"4.0.0","agent_runtime":"node"}
+# {"status":"ok","version":"4.0.0","agent_runtime":"node-agent"}
 
 # Sandbox liveness（进程存活；公开路由，无需 API key）
 curl -f http://localhost:8083/health
@@ -256,7 +239,16 @@ curl -f https://localhost/nginx/status
 
 ### Compose smoke path（多轮 / 审批 / 二进制 / 取消 / 产物）
 
-完整栈起来后，手工或脚本按此路径冒烟（需有效 `LLMIO_*`）：
+**无真实 LLM key（CI / 本地）：**
+
+```bash
+# 启动 deterministic fake OpenAI + Sandbox + Agent + BFF
+node scripts/smoke-cross-service.mjs
+```
+
+`AGENT_ENABLE_FAKE_LLM` 仅允许 `NODE_ENV`/`DEPLOYMENT_ENV` 非 production；生产启用会在 Agent 配置加载时 fail-closed。
+
+**完整栈（需有效 `LLMIO_*` 或测试用 fake 指向可路由地址）：**
 
 1. `docker compose up --build -d` → 等待 `curl -f localhost:4000/api/status` 与 `curl -f localhost:8083/ready`
 2. 浏览器打开 `http://localhost:3000`，发送多轮消息（同一 conversation）
@@ -265,7 +257,11 @@ curl -f https://localhost/nginx/status
 5. 生成中点击停止 → 流结束且无悬挂执行
 6. Agent `submit_artifact` 后出现可下载交付物（非 `write` 自动下载）
 
+Node 运行时与 CI 统一 **Node 22**（`api-server` / `agent` / `frontend` 镜像与 `.github/workflows/test.yml`）。
+
 ## Backup
+
+以下脚本用于常规已上线环境的人工运维，不属于当前研发阶段的全量 reset。执行 [Development reset](runbooks/development-reset.md) 时不得先创建备份或快照。
 
 ```bash
 # Full backup
@@ -335,7 +331,8 @@ docker exec pi-enterprise-nginx nginx -s reload
 
 | 场景 | 推荐方案 |
 |------|----------|
-| 单实例 | SQLite + Docker Compose（默认） |
+| 单实例开发 | 空库 SQLite + Docker Compose |
+| 生产 | PostgreSQL 17 + Compose prod overlay |
 | 多实例 | PostgreSQL + 共享工作区存储 (NFS/EFS) |
 | 高可用 | 负载均衡器 + PostgreSQL 复制 |
 

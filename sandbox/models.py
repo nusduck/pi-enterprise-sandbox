@@ -57,11 +57,9 @@ class SessionCreate(BaseModel):
     user_id: str | None = None
     caller_id: str = "unknown"
     metadata: dict[str, Any] = Field(default_factory=dict)
-    # Bind to conversation-owned workspace (preferred over raw physical path).
+    # Bind to conversation-owned workspace via opaque ids only.
     conversation_id: str | None = None
     workspace_id: str | None = None
-    # Legacy: physical path override for rebinding. Logical path is ignored.
-    workspace_path: str | None = None
 
 
 class SessionResponse(BaseModel):
@@ -71,9 +69,11 @@ class SessionResponse(BaseModel):
     user_id: str | None = None
     caller_id: str = "unknown"
     status: SessionStatus = SessionStatus.RUNNING
-    workspace_path: str = ""
+    # Opaque workspace identity (never a host physical path).
+    workspace_id: str | None = None
     created_at: str = ""
     updated_at: str = ""
+    # Public metadata only — internal keys (``_physical_workspace`` …) stripped.
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -323,7 +323,8 @@ class ConversationResponse(BaseModel):
     id: str
     title: str = "New conversation"
     sandbox_session_id: str | None = None
-    workspace_path: str | None = None
+    # Opaque conversation workspace id (e.g. conv_<id>); never a host path.
+    workspace_id: str | None = None
     messages: list[dict[str, Any]] = Field(default_factory=list)
     owner_user_id: str | None = None
     organization_id: str | None = None
@@ -338,7 +339,6 @@ class ConversationCreate(BaseModel):
     id: str | None = None
     title: str | None = None  # None = leave unchanged on PATCH
     sandbox_session_id: str | None = None
-    workspace_path: str | None = None
     # None on PATCH means "do not replace messages"; empty list is a valid clear
     messages: list[dict[str, Any]] | None = None
     owner_user_id: str | None = None

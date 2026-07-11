@@ -17,7 +17,7 @@ function json(res, status, body, traceId) {
 /**
  * POST /api/sessions/ensure
  * Body: { conversation_id?: string }
- * Returns: { conversation_id, session_id, workspace_path, reused_session, trace_id }
+ * Returns: { conversation_id, session_id, workspace_id, reused_session, trace_id }
  */
 export async function handleEnsureSession(body, res, req = null) {
   const traceId =
@@ -33,8 +33,8 @@ export async function handleEnsureSession(body, res, req = null) {
     json(res, 200, {
       conversation_id: resolved.activeConversationId,
       session_id: resolved.sandboxSessionId,
-      // Always logical agent-visible path (never host physical roots)
-      workspace_path: resolved.targetWorkspace || '/home/sandbox/workspace',
+      // Opaque workspace id only (never host physical roots or absolute paths)
+      workspace_id: resolved.workspace_id,
       reused_session: resolved.reusedSession,
       trace_id: traceId,
     }, traceId);

@@ -15,7 +15,7 @@ import {
 } from '@earendil-works/pi-coding-agent';
 import { createSandboxTools } from './sandbox-tools.js';
 import { createSandboxClient } from './services/sandbox-client.js';
-import { config, SKILLS_MODE } from './config.js';
+import { config, SKILLS_MODE, composeSystemPrompt, PLATFORM_SYSTEM_PROMPT_LAYER } from './config.js';
 import { mapSdkEventToSse } from './services/sdk-sse-map.js';
 import {
   createSandboxSecurityExtension,
@@ -29,7 +29,8 @@ import {
 import { createSkillTools, SKILL_TOOL_NAMES } from './skills/tools.js';
 import { createSkillManager } from './skills/manager.js';
 
-const AGENT_WORKSPACE = '/home/sandbox/workspace';
+// Public contract: relative paths under session root + opaque workspace_id.
+// No absolute logical workspace path is part of the agent/SSE contract.
 const AGENT_SKILL = config.SKILLS_ROOT || '/home/sandbox/skill';
 
 /** Base sandbox tool allowlist (always present). */
@@ -69,8 +70,8 @@ function makeModel() {
     input: ['text'],
     output: ['text'],
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: 128000,
-    maxTokens: 8192,
+    contextWindow: config.MODEL_CONTEXT_WINDOW || 128000,
+    maxTokens: config.MODEL_MAX_TOKENS || 8192,
     compat: {
       supportsStore: false,
       supportsDeveloperRole: false,
@@ -106,7 +107,7 @@ export async function resolveConversationAndSession(client, conversation_id) {
         }
       }
       console.log(
-        `[agent] Reusing conversation ${activeConversationId} workspace: ${AGENT_WORKSPACE}`,
+        `[agent] Reusing conversation ${activeConversationId} workspace_id=conv_${activeConversationId}`,
       );
     } catch {
       console.log(`[agent] Conversation ${activeConversationId} not found, will create new`);
@@ -118,7 +119,7 @@ export async function resolveConversationAndSession(client, conversation_id) {
     const convResp = await client.createConversation();
     activeConversationId = convResp.id;
     console.log(
-      `[agent] Created conversation ${activeConversationId} workspace: ${AGENT_WORKSPACE}`,
+      `[agent] Created conversation ${activeConversationId} workspace_id=conv_${activeConversationId}`,
     );
   }
 
@@ -140,7 +141,7 @@ export async function resolveConversationAndSession(client, conversation_id) {
 
   return {
     activeConversationId,
-    targetWorkspace: AGENT_WORKSPACE,
+    workspace_id: activeConversationId ? `conv_${activeConversationId}` : null,
     sandboxSessionId,
     reusedSession,
   };
@@ -285,7 +286,7 @@ export async function runAgentTurn(opts) {
     emit({
       type: 'session',
       session_id: sandboxSessionId,
-      workspace_path: AGENT_WORKSPACE,
+      workspace_id: resolved.workspace_id || `conv_${activeConversationId}`,
       conversation_id: activeConversationId,
       session_reused: resolved.reusedSession,
       trace_id,
@@ -336,7 +337,8 @@ export async function runAgentTurn(opts) {
       model: makeModel(),
       tools: toolAllowlist,
       customTools,
-      cwd: AGENT_WORKSPACE,
+      // Agent process cwd is not the session workspace; tools use relative paths.
+      cwd: '/tmp',
       sessionManager: SessionManager.inMemory(),
       authStorage,
       modelRegistry,
@@ -370,16 +372,13 @@ Skill install/edit tools are not available.
 `;
 
     const DOWNLOAD_INSTRUCTIONS = `
-## Workspace layout (stable paths)
+## Workspace layout (relative paths)
 
-Your working directory is always:
-\`${AGENT_WORKSPACE}\`
+The session workspace is identified by opaque \`workspace_id\` only. There is **no** public absolute workspace path.
 
 ${skillModeHint}
 
-Use **relative paths** under the workspace for all file tools. Do not rely on host/physical paths
-(e.g. \`/var/sandbox/workspaces/...\`). If a shell prints a different absolute path, still treat
-\`${AGENT_WORKSPACE}\` as your logical workspace.
+Use **relative paths** for all file tools (\`notes/a.txt\`, \`.\`, \`uploads/...\`). Absolute paths and \`..\` escapes are rejected. Do not use or invent host/physical paths (e.g. \`/var/sandbox/workspaces/...\` or \`/home/sandbox/workspace\`).
 
 ## Multi-turn context
 
@@ -408,10 +407,21 @@ Prefer structured \`ls\` / \`find\` / \`grep\` over shell for file discovery and
 5. After submitting, mention the file name clearly so the user knows what to download.
 `;
 
-    const currentPrompt = session.agent.state.systemPrompt;
-    if (currentPrompt && !currentPrompt.includes('File Sharing')) {
-      session.agent.state.systemPrompt = currentPrompt + DOWNLOAD_INSTRUCTIONS;
+    // Layered system prompt: product (env) + platform security (always) +
+    // runtime workspace/artifact instructions. Platform layer cannot be disabled.
+    const currentPrompt = session.agent.state.systemPrompt || '';
+    const productLayer = config.PRODUCT_SYSTEM_PROMPT || '';
+    let nextPrompt = currentPrompt;
+    if (productLayer && !nextPrompt.includes(productLayer.slice(0, 64))) {
+      nextPrompt = composeSystemPrompt(productLayer, PLATFORM_SYSTEM_PROMPT_LAYER)
+        + (nextPrompt ? `\n\n${nextPrompt}` : '');
+    } else if (!nextPrompt.includes('Platform security (non-overridable)')) {
+      nextPrompt = composeSystemPrompt(nextPrompt, PLATFORM_SYSTEM_PROMPT_LAYER);
     }
+    if (!nextPrompt.includes('File Sharing')) {
+      nextPrompt = nextPrompt + DOWNLOAD_INSTRUCTIONS;
+    }
+    session.agent.state.systemPrompt = nextPrompt;
 
     const allMessages = Array.isArray(messages) ? messages : [];
     const priorMessages = allMessages.slice(0, -1);

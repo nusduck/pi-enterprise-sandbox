@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import json
+import sqlite3
+import time
+import uuid
 from datetime import datetime, timezone
 from typing import Any
 
-from sandbox.database import Database, database
+from sandbox.database import Database, PostgreSQLBackend, SQLiteBackend, database
 from sandbox.models import (
     AgentEventResponse,
     AgentRunResponse,
@@ -20,6 +23,9 @@ from sandbox.models import (
     ToolExecutionResponse,
     ToolExecutionStatus,
 )
+
+# Bounded retries when concurrent writers race on (run_id, sequence).
+MAX_APPEND_SEQUENCE_RETRIES = 8
 
 
 def _json_dumps(value: Any) -> str:
@@ -37,6 +43,14 @@ class SessionRepository:
         self.db = db or database
 
     def upsert(self, entry: dict[str, Any]) -> None:
+        # DB column ``workspace_path`` stores the opaque workspace_id (never a host path).
+        meta = entry.get("metadata") or {}
+        stored_workspace_id = (
+            entry.get("workspace_id")
+            or (meta.get("workspace_id") if isinstance(meta, dict) else None)
+            or entry.get("workspace_path")
+            or ""
+        )
         with self.db.connect() as conn:
             conn.execute(
                 """
@@ -63,7 +77,7 @@ class SessionRepository:
                     entry.get("user_id"),
                     entry.get("caller_id", "unknown"),
                     str(entry.get("status", SessionStatus.RUNNING).value if hasattr(entry.get("status"), "value") else entry.get("status", "RUNNING")),
-                    entry.get("workspace_path"),
+                    stored_workspace_id,
                     _json_dumps(entry.get("metadata", {})),
                     entry.get("created_at"),
                     entry.get("updated_at"),
@@ -121,6 +135,17 @@ class SessionRepository:
 
     @staticmethod
     def _row_to_model(row) -> SessionResponse:
+        raw_meta = _json_loads(row["metadata"])
+        # Keep full metadata in-memory for service-layer physical resolution;
+        # routers must call public_session_response before returning JSON.
+        workspace_id = None
+        if isinstance(raw_meta, dict):
+            workspace_id = raw_meta.get("workspace_id")
+        if not workspace_id:
+            stored = row["workspace_path"] or ""
+            # Ignore legacy absolute paths stored before R2 cutover.
+            if stored and not str(stored).startswith("/"):
+                workspace_id = stored
         return SessionResponse(
             session_id=row["session_id"],
             agent_session_id=row["agent_session_id"],
@@ -128,10 +153,10 @@ class SessionRepository:
             user_id=row["user_id"],
             caller_id=row["caller_id"],
             status=row["status"],
-            workspace_path=row["workspace_path"] or "",
+            workspace_id=workspace_id,
             created_at=row["created_at"],
             updated_at=row["updated_at"],
-            metadata=_json_loads(row["metadata"]),
+            metadata=raw_meta if isinstance(raw_meta, dict) else {},
         )
 
 
@@ -201,6 +226,69 @@ class ExecutionRepository:
         with self.db.connect() as conn:
             rows = conn.execute("SELECT * FROM executions WHERE trace_id = ? ORDER BY created_at", (trace_id,)).fetchall()
         return [self.get(row["execution_id"]) for row in rows if self.get(row["execution_id"])]
+
+    def count_older_than(self, older_than_iso: str) -> int:
+        with self.db.connect() as conn:
+            row = conn.execute(
+                "SELECT COUNT(*) AS n FROM executions WHERE created_at < ?",
+                (older_than_iso,),
+            ).fetchone()
+        return int(row["n"] if row is not None else 0)
+
+    def delete_older_than(
+        self,
+        *,
+        older_than_iso: str,
+        exclude_legal_hold: bool = True,
+        limit: int | None = None,
+    ) -> int:
+        """Hard-delete execution rows older than cutoff.
+
+        When ``exclude_legal_hold`` is True, skip executions whose session is
+        still referenced by a legal-hold conversation.
+        """
+        hold_clause = ""
+        if exclude_legal_hold:
+            hold_clause = """
+              AND session_id NOT IN (
+                SELECT sandbox_session_id FROM conversations
+                WHERE COALESCE(legal_hold, 0) = 1
+                  AND sandbox_session_id IS NOT NULL
+                  AND sandbox_session_id != ''
+              )
+            """
+        # Two-step for portable LIMIT delete across SQLite/PG
+        with self.db.connect() as conn:
+            if limit is not None:
+                id_rows = conn.execute(
+                    f"""
+                    SELECT execution_id FROM executions
+                    WHERE created_at < ?
+                    {hold_clause}
+                    ORDER BY created_at ASC
+                    LIMIT ?
+                    """,
+                    (older_than_iso, limit),
+                ).fetchall()
+                ids = [r["execution_id"] for r in id_rows]
+                if not ids:
+                    return 0
+                placeholders = ",".join("?" for _ in ids)
+                cur = conn.execute(
+                    f"DELETE FROM executions WHERE execution_id IN ({placeholders})",
+                    tuple(ids),
+                )
+            else:
+                cur = conn.execute(
+                    f"""
+                    DELETE FROM executions
+                    WHERE created_at < ?
+                    {hold_clause}
+                    """,
+                    (older_than_iso,),
+                )
+            conn.commit()
+            return cur.rowcount
 
 
 class ArtifactRepository:
@@ -324,7 +412,8 @@ class ConversationRepository:
                     entry["id"],
                     entry.get("title", "New conversation"),
                     entry.get("sandbox_session_id"),
-                    entry.get("workspace_path"),
+                    # DB column stores opaque workspace_id (never host path).
+                    entry.get("workspace_id") or entry.get("workspace_path"),
                     _json_dumps(entry.get("messages", [])),
                     owner,
                     org,
@@ -481,37 +570,86 @@ class ConversationRepository:
         *,
         older_than_iso: str,
         exclude_legal_hold: bool = True,
+        limit: int | None = None,
     ) -> list[ConversationResponse]:
         """Draft conversations: empty messages and no activity after cutoff."""
+        hold_clause = "AND COALESCE(legal_hold, 0) = 0" if exclude_legal_hold else ""
+        limit_clause = "LIMIT ?" if limit is not None else ""
+        params: list[Any] = [older_than_iso]
+        if limit is not None:
+            params.append(limit)
         with self.db.connect() as conn:
-            if exclude_legal_hold:
-                rows = conn.execute(
-                    """
-                    SELECT * FROM conversations
-                    WHERE updated_at < ?
-                      AND (messages = '[]' OR messages IS NULL OR messages = '')
-                      AND COALESCE(legal_hold, 0) = 0
-                    ORDER BY updated_at ASC
-                    """,
-                    (older_than_iso,),
-                ).fetchall()
-            else:
-                rows = conn.execute(
-                    """
-                    SELECT * FROM conversations
-                    WHERE updated_at < ?
-                      AND (messages = '[]' OR messages IS NULL OR messages = '')
-                    ORDER BY updated_at ASC
-                    """,
-                    (older_than_iso,),
-                ).fetchall()
+            rows = conn.execute(
+                f"""
+                SELECT * FROM conversations
+                WHERE updated_at < ?
+                  AND (messages = '[]' OR messages IS NULL OR messages = '')
+                  {hold_clause}
+                ORDER BY updated_at ASC
+                {limit_clause}
+                """,
+                tuple(params),
+            ).fetchall()
         return [self._row_to_model(row) for row in rows]
 
-    def delete(self, conversation_id: str) -> bool:
+    def list_inactive(
+        self,
+        *,
+        older_than_iso: str,
+        exclude_legal_hold: bool = True,
+        limit: int | None = None,
+    ) -> list[ConversationResponse]:
+        """Inactive conversations (any messages) with no activity after cutoff.
+
+        Used for the 90-day retention path. Legal-hold rows are skipped when
+        ``exclude_legal_hold`` is True (default — shared delete boundary).
+        """
+        hold_clause = "AND COALESCE(legal_hold, 0) = 0" if exclude_legal_hold else ""
+        limit_clause = "LIMIT ?" if limit is not None else ""
+        params: list[Any] = [older_than_iso]
+        if limit is not None:
+            params.append(limit)
         with self.db.connect() as conn:
-            cur = conn.execute(
-                "DELETE FROM conversations WHERE id = ?", (conversation_id,)
-            )
+            rows = conn.execute(
+                f"""
+                SELECT * FROM conversations
+                WHERE updated_at < ?
+                  {hold_clause}
+                ORDER BY updated_at ASC
+                {limit_clause}
+                """,
+                tuple(params),
+            ).fetchall()
+        return [self._row_to_model(row) for row in rows]
+
+    def delete(
+        self,
+        conversation_id: str,
+        *,
+        respect_legal_hold: bool = True,
+    ) -> bool:
+        """Delete a conversation row.
+
+        When ``respect_legal_hold`` is True (default), legal-hold conversations
+        are never deleted (shared cleanup boundary).
+        """
+        if respect_legal_hold:
+            existing = self.get(conversation_id)
+            if existing is not None and existing.legal_hold:
+                return False
+        with self.db.connect() as conn:
+            if respect_legal_hold:
+                cur = conn.execute(
+                    """
+                    DELETE FROM conversations
+                    WHERE id = ? AND COALESCE(legal_hold, 0) = 0
+                    """,
+                    (conversation_id,),
+                )
+            else:
+                cur = conn.execute(
+                    "DELETE FROM conversations WHERE id = ?", (conversation_id,)
+                )
             conn.commit()
             return cur.rowcount > 0
 
@@ -525,11 +663,15 @@ class ConversationRepository:
             return cur.rowcount
 
     def get_by_workspace_path(self, workspace_path: str) -> ConversationResponse | None:
+        """Lookup by stored workspace key (opaque workspace_id in DB column)."""
         with self.db.connect() as conn:
             row = conn.execute(
                 "SELECT * FROM conversations WHERE workspace_path = ?", (workspace_path,)
             ).fetchone()
         return self._row_to_model(row) if row else None
+
+    def get_by_workspace_id(self, workspace_id: str) -> ConversationResponse | None:
+        return self.get_by_workspace_path(workspace_id)
 
     def _row_to_model(self, row) -> ConversationResponse:
         # sqlite3.Row has no .get; use try/keys for optional ownership columns
@@ -540,11 +682,21 @@ class ConversationRepository:
                 return default
             return default if val is None else val
 
+        stored = row["workspace_path"]
+        workspace_id = None
+        if stored and not str(stored).startswith("/"):
+            workspace_id = stored
+        elif stored and str(stored).startswith("/"):
+            # Legacy physical path → derive opaque id from basename when possible.
+            from pathlib import Path
+
+            workspace_id = Path(str(stored)).name or None
+
         return ConversationResponse(
             id=row["id"],
             title=row["title"],
             sandbox_session_id=row["sandbox_session_id"],
-            workspace_path=row["workspace_path"],
+            workspace_id=workspace_id,
             messages=_json_loads(row["messages"]),
             owner_user_id=_col("owner_user_id"),
             organization_id=_col("organization_id"),
@@ -738,6 +890,31 @@ class AgentRunRepository:
     def mark_interrupted(self, run_id: str) -> AgentRunResponse | None:
         return self.update_status(run_id, AgentRunStatus.INTERRUPTED.value)
 
+    def list_run_ids_for_conversation(self, conversation_id: str) -> list[str]:
+        with self.db.connect() as conn:
+            rows = conn.execute(
+                "SELECT run_id FROM agent_runs WHERE conversation_id = ?",
+                (conversation_id,),
+            ).fetchall()
+        return [r["run_id"] for r in rows]
+
+    def delete_by_conversation(self, conversation_id: str) -> int:
+        with self.db.connect() as conn:
+            cur = conn.execute(
+                "DELETE FROM agent_runs WHERE conversation_id = ?",
+                (conversation_id,),
+            )
+            conn.commit()
+            return cur.rowcount
+
+    def delete(self, run_id: str) -> bool:
+        with self.db.connect() as conn:
+            cur = conn.execute(
+                "DELETE FROM agent_runs WHERE run_id = ?", (run_id,)
+            )
+            conn.commit()
+            return cur.rowcount > 0
+
     @staticmethod
     def _row_to_model(row) -> AgentRunResponse:
         def _col(name: str, default=None):
@@ -764,6 +941,37 @@ class AgentRunRepository:
         )
 
 
+def _is_unique_violation(exc: BaseException) -> bool:
+    """True if *exc* is a unique/primary-key constraint failure (SQLite or PG)."""
+    if isinstance(exc, sqlite3.IntegrityError):
+        return True
+    name = type(exc).__name__
+    if name in {"IntegrityError", "UniqueViolation"}:
+        return True
+    # psycopg2.IntegrityError subclasses Exception; pgcode 23505 = unique_violation
+    pgcode = getattr(exc, "pgcode", None)
+    if pgcode == "23505":
+        return True
+    msg = str(exc).lower()
+    return "unique" in msg or "duplicate key" in msg
+
+
+def _unique_violation_kind(exc: BaseException) -> str:
+    """Classify unique violation as ``event_id``, ``sequence``, or ``unknown``."""
+    msg = str(exc).lower()
+    if "event_id" in msg or "idx_agent_events_event_id" in msg:
+        return "event_id"
+    if (
+        "sequence" in msg
+        or "agent_events_pkey" in msg
+        or "primary key" in msg
+        or "(run_id, sequence)" in msg
+        or "run_id, agent_events.sequence" in msg
+    ):
+        return "sequence"
+    return "unknown"
+
+
 class AgentEventRepository:
     """Append-only event store with monotonic sequence per run."""
 
@@ -779,42 +987,151 @@ class AgentEventRepository:
         event_id: str | None = None,
         schema_version: int = 1,
     ) -> AgentEventResponse:
-        """Append event with next monotonic sequence. Raises on unique conflict."""
-        import uuid
+        """Append event with next monotonic sequence.
 
+        Uses an exclusive write transaction (SQLite ``BEGIN IMMEDIATE`` /
+        PostgreSQL ``SELECT … FOR UPDATE`` on the run row) so concurrent
+        appends on the same run allocate contiguous sequences. On
+        ``UNIQUE(run_id, sequence)`` conflict, retries up to
+        :data:`MAX_APPEND_SEQUENCE_RETRIES` times. On ``UNIQUE(event_id)``
+        conflict, returns the existing row (idempotent success). Never
+        leaves a partial commit for a failed attempt.
+        """
         now = datetime.now(timezone.utc).isoformat()
         eid = event_id or f"evt_{uuid.uuid4().hex}"
         payload_json = _json_dumps(payload or {})
+        payload_dict = payload or {}
 
-        with self.db.connect() as conn:
-            row = conn.execute(
-                "SELECT COALESCE(MAX(sequence), 0) AS max_seq FROM agent_events WHERE run_id = ?",
-                (run_id,),
-            ).fetchone()
+        # Fast path: stable idempotent return if event_id already exists.
+        if event_id is not None:
+            existing = self.get_by_event_id(eid)
+            if existing is not None:
+                return existing
+
+        last_error: BaseException | None = None
+        for attempt in range(MAX_APPEND_SEQUENCE_RETRIES):
             try:
-                max_seq = int(row["max_seq"] if row is not None else 0)
-            except (KeyError, IndexError, TypeError):
-                max_seq = int(row[0]) if row is not None else 0
-            sequence = max_seq + 1
-            conn.execute(
-                """
-                INSERT INTO agent_events (
-                    run_id, sequence, event_id, type, payload, schema_version, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?)
-                """,
-                (run_id, sequence, eid, event_type, payload_json, schema_version, now),
-            )
-            conn.commit()
+                return self._append_once(
+                    run_id=run_id,
+                    event_type=event_type,
+                    payload_json=payload_json,
+                    payload_dict=payload_dict,
+                    eid=eid,
+                    schema_version=schema_version,
+                    now=now,
+                )
+            except Exception as exc:
+                if not _is_unique_violation(exc):
+                    raise
+                kind = _unique_violation_kind(exc)
+                if kind == "event_id" or kind == "unknown":
+                    # Idempotent: another writer committed this event_id.
+                    existing = self.get_by_event_id(eid)
+                    if existing is not None:
+                        return existing
+                    if kind == "event_id":
+                        # Race: constraint fired but row not visible yet; brief retry.
+                        last_error = exc
+                        if attempt + 1 < MAX_APPEND_SEQUENCE_RETRIES:
+                            time.sleep(0.001 * (attempt + 1))
+                            continue
+                        raise
+                # sequence conflict (or unclassified unique) → bounded retry
+                last_error = exc
+                if attempt + 1 >= MAX_APPEND_SEQUENCE_RETRIES:
+                    break
+                time.sleep(0.001 * (attempt + 1))
+
+        raise RuntimeError(
+            f"agent event append failed after {MAX_APPEND_SEQUENCE_RETRIES} "
+            f"sequence retries for run_id={run_id!r}"
+        ) from last_error
+
+    def _append_once(
+        self,
+        *,
+        run_id: str,
+        event_type: str,
+        payload_json: str,
+        payload_dict: dict[str, Any],
+        eid: str,
+        schema_version: int,
+        now: str,
+    ) -> AgentEventResponse:
+        """Single transactional attempt: lock, allocate sequence, insert."""
+        with self.db.connect() as conn:
+            backend = conn.backend
+            try:
+                if isinstance(backend, SQLiteBackend):
+                    # Exclusive write lock for the whole allocate+insert unit.
+                    conn.execute("BEGIN IMMEDIATE")
+                elif isinstance(backend, PostgreSQLBackend):
+                    # Serialize appends per run via the parent run row when present.
+                    conn.execute(
+                        "SELECT run_id FROM agent_runs WHERE run_id = ? FOR UPDATE",
+                        (run_id,),
+                    )
+
+                existing = conn.execute(
+                    "SELECT * FROM agent_events WHERE event_id = ?",
+                    (eid,),
+                ).fetchone()
+                if existing is not None:
+                    conn.commit()
+                    return self._row_to_model(existing)
+
+                row = conn.execute(
+                    "SELECT COALESCE(MAX(sequence), 0) AS max_seq "
+                    "FROM agent_events WHERE run_id = ?",
+                    (run_id,),
+                ).fetchone()
+                try:
+                    max_seq = int(row["max_seq"] if row is not None else 0)
+                except (KeyError, IndexError, TypeError):
+                    max_seq = int(row[0]) if row is not None else 0
+                sequence = max_seq + 1
+
+                conn.execute(
+                    """
+                    INSERT INTO agent_events (
+                        run_id, sequence, event_id, type, payload, schema_version, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        run_id,
+                        sequence,
+                        eid,
+                        event_type,
+                        payload_json,
+                        schema_version,
+                        now,
+                    ),
+                )
+                conn.commit()
+            except Exception:
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
+                raise
 
         return AgentEventResponse(
             run_id=run_id,
             sequence=sequence,
             event_id=eid,
             type=event_type,
-            payload=payload or {},
+            payload=payload_dict,
             schema_version=schema_version,
             created_at=now,
         )
+
+    def get_by_event_id(self, event_id: str) -> AgentEventResponse | None:
+        with self.db.connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM agent_events WHERE event_id = ?",
+                (event_id,),
+            ).fetchone()
+        return self._row_to_model(row) if row else None
 
     def list_by_run(
         self,
@@ -857,6 +1174,94 @@ class AgentEventRepository:
             return int(row["max_seq"])
         except (KeyError, IndexError, TypeError):
             return int(row[0])
+
+    def delete_by_run_ids(self, run_ids: list[str]) -> int:
+        if not run_ids:
+            return 0
+        placeholders = ",".join("?" for _ in run_ids)
+        with self.db.connect() as conn:
+            cur = conn.execute(
+                f"DELETE FROM agent_events WHERE run_id IN ({placeholders})",
+                tuple(run_ids),
+            )
+            conn.commit()
+            return cur.rowcount
+
+    def count_older_than(
+        self,
+        older_than_iso: str,
+        *,
+        exclude_legal_hold: bool = True,
+    ) -> int:
+        hold_clause = ""
+        if exclude_legal_hold:
+            hold_clause = """
+              AND run_id NOT IN (
+                SELECT ar.run_id FROM agent_runs ar
+                INNER JOIN conversations c ON c.id = ar.conversation_id
+                WHERE COALESCE(c.legal_hold, 0) = 1
+              )
+            """
+        with self.db.connect() as conn:
+            row = conn.execute(
+                f"""
+                SELECT COUNT(*) AS n FROM agent_events
+                WHERE created_at < ?
+                {hold_clause}
+                """,
+                (older_than_iso,),
+            ).fetchone()
+        return int(row["n"] if row is not None else 0)
+
+    def delete_older_than(
+        self,
+        *,
+        older_than_iso: str,
+        exclude_legal_hold: bool = True,
+        limit: int | None = None,
+    ) -> int:
+        """Hard-delete agent_events older than cutoff (Legal Hold aware)."""
+        hold_clause = ""
+        if exclude_legal_hold:
+            hold_clause = """
+              AND run_id NOT IN (
+                SELECT ar.run_id FROM agent_runs ar
+                INNER JOIN conversations c ON c.id = ar.conversation_id
+                WHERE COALESCE(c.legal_hold, 0) = 1
+              )
+            """
+        with self.db.connect() as conn:
+            if limit is not None:
+                # Delete by (run_id, sequence) primary key in a bounded batch
+                rows = conn.execute(
+                    f"""
+                    SELECT run_id, sequence FROM agent_events
+                    WHERE created_at < ?
+                    {hold_clause}
+                    ORDER BY created_at ASC
+                    LIMIT ?
+                    """,
+                    (older_than_iso, limit),
+                ).fetchall()
+                deleted = 0
+                for r in rows:
+                    cur = conn.execute(
+                        "DELETE FROM agent_events WHERE run_id = ? AND sequence = ?",
+                        (r["run_id"], r["sequence"]),
+                    )
+                    deleted += cur.rowcount
+                conn.commit()
+                return deleted
+            cur = conn.execute(
+                f"""
+                DELETE FROM agent_events
+                WHERE created_at < ?
+                {hold_clause}
+                """,
+                (older_than_iso,),
+            )
+            conn.commit()
+            return cur.rowcount
 
     @staticmethod
     def _row_to_model(row) -> AgentEventResponse:
@@ -1012,6 +1417,18 @@ class ToolExecutionRepository:
             return False
         return True
 
+    def delete_by_run_ids(self, run_ids: list[str]) -> int:
+        if not run_ids:
+            return 0
+        placeholders = ",".join("?" for _ in run_ids)
+        with self.db.connect() as conn:
+            cur = conn.execute(
+                f"DELETE FROM tool_executions WHERE run_id IN ({placeholders})",
+                tuple(run_ids),
+            )
+            conn.commit()
+            return cur.rowcount
+
     def _transition(
         self,
         tool_call_id: str,
@@ -1108,6 +1525,91 @@ class AuditRepository:
             }
             for row in rows
         ]
+
+    def count_older_than(
+        self,
+        older_than_iso: str,
+        *,
+        exclude_legal_hold: bool = True,
+    ) -> int:
+        hold_clause = ""
+        if exclude_legal_hold:
+            hold_clause = """
+              AND (
+                session_id IS NULL
+                OR session_id = ''
+                OR session_id NOT IN (
+                  SELECT sandbox_session_id FROM conversations
+                  WHERE COALESCE(legal_hold, 0) = 1
+                    AND sandbox_session_id IS NOT NULL
+                    AND sandbox_session_id != ''
+                )
+              )
+            """
+        with self.db.connect() as conn:
+            row = conn.execute(
+                f"""
+                SELECT COUNT(*) AS n FROM audit_logs
+                WHERE created_at < ?
+                {hold_clause}
+                """,
+                (older_than_iso,),
+            ).fetchone()
+        return int(row["n"] if row is not None else 0)
+
+    def delete_older_than(
+        self,
+        *,
+        older_than_iso: str,
+        exclude_legal_hold: bool = True,
+        limit: int | None = None,
+    ) -> int:
+        """Hard-delete audit_logs older than cutoff (Legal Hold aware)."""
+        hold_clause = ""
+        if exclude_legal_hold:
+            hold_clause = """
+              AND (
+                session_id IS NULL
+                OR session_id = ''
+                OR session_id NOT IN (
+                  SELECT sandbox_session_id FROM conversations
+                  WHERE COALESCE(legal_hold, 0) = 1
+                    AND sandbox_session_id IS NOT NULL
+                    AND sandbox_session_id != ''
+                )
+              )
+            """
+        with self.db.connect() as conn:
+            if limit is not None:
+                id_rows = conn.execute(
+                    f"""
+                    SELECT id FROM audit_logs
+                    WHERE created_at < ?
+                    {hold_clause}
+                    ORDER BY created_at ASC, id ASC
+                    LIMIT ?
+                    """,
+                    (older_than_iso, limit),
+                ).fetchall()
+                ids = [r["id"] for r in id_rows]
+                if not ids:
+                    return 0
+                placeholders = ",".join("?" for _ in ids)
+                cur = conn.execute(
+                    f"DELETE FROM audit_logs WHERE id IN ({placeholders})",
+                    tuple(ids),
+                )
+            else:
+                cur = conn.execute(
+                    f"""
+                    DELETE FROM audit_logs
+                    WHERE created_at < ?
+                    {hold_clause}
+                    """,
+                    (older_than_iso,),
+                )
+            conn.commit()
+            return cur.rowcount
 
 
 class ApprovalRepository:

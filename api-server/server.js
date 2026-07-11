@@ -4,7 +4,12 @@
  * Chat orchestration is delegated to the independent Agent service.
  */
 import http from 'node:http';
-import { config, isProtectedApiPath } from './config.js';
+import {
+  config,
+  isProtectedApiPath,
+  validateProductionConfig,
+  effectiveConfig,
+} from './config.js';
 import { handleChat } from './routes/chat.js';
 import { handleStatus } from './routes/status.js';
 import { handleFileDownload, handleFileUpload, handleArtifactDownload } from './routes/files.js';
@@ -21,6 +26,14 @@ import { handleRegister, handleLogin, handleMe } from './routes/auth.js';
 import { handleEnsureSession } from './routes/sessions.js';
 import { checkHealth } from './services/sandbox-client.js';
 import { checkAgentHealth } from './services/agent-client.js';
+
+// Production fail-fast before bind.
+try {
+  validateProductionConfig(process.env);
+} catch (err) {
+  console.error(`[server] ${err.message}`);
+  process.exit(1);
+}
 
 // ── Startup health check ────────────────────────
 
@@ -224,8 +237,11 @@ const server = http.createServer(async (req, res) => {
 // ── Start ───────────────────────────────────────
 
 server.listen(config.PORT, async () => {
-  console.log(`[server] pi-enterprise-api-server v4.0.0 (${config.NODE_ENV}) on port ${config.PORT}`);
+  console.log(
+    `[server] pi-enterprise-api-server v4.0.0 (${config.DEPLOYMENT_ENV}/${config.NODE_ENV}) on port ${config.PORT}`,
+  );
   console.log(`[server] Agent base URL: ${config.AGENT_BASE_URL}`);
+  console.log('[server] Effective config:', JSON.stringify(effectiveConfig()));
   if (config.AUTH_ENABLED) {
     console.log('[server] AUTH_ENABLED=true — user-facing /api routes require Bearer token');
   }

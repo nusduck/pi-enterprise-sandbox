@@ -18,8 +18,11 @@ URL scheme.
 from __future__ import annotations
 
 import abc
+import hashlib
 import json
 import sqlite3
+from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
@@ -348,6 +351,42 @@ CREATE INDEX IF NOT EXISTS idx_users_organization ON users(organization_id);
 """
 
 
+# ── Immutable empty-database migrations ─────────────────────────────────
+
+MIGRATION_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS schema_migrations (
+    version TEXT PRIMARY KEY,
+    checksum TEXT NOT NULL,
+    applied_at TEXT NOT NULL
+)
+"""
+
+
+class MigrationChecksumError(RuntimeError):
+    """An applied migration no longer matches its immutable source."""
+
+
+@dataclass(frozen=True)
+class Migration:
+    """One immutable schema migration with optional PostgreSQL SQL."""
+
+    version: str
+    sql: str
+    pg_sql: str | None = None
+
+    @property
+    def checksum(self) -> str:
+        payload = f"{self.version}\0{self.sql}\0{self.pg_sql or self.sql}"
+        return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+    def for_dialect(self, dialect: str) -> str:
+        return self.pg_sql if dialect == "postgresql" and self.pg_sql else self.sql
+
+
+BASELINE_MIGRATION = Migration("0001_baseline", SQLITE_SCHEMA, PG_SCHEMA)
+MIGRATIONS: tuple[Migration, ...] = (BASELINE_MIGRATION,)
+
+
 # ── Abstract backend ──────────────────────────────────────────────────────
 
 class DatabaseBackend(abc.ABC):
@@ -400,22 +439,25 @@ class SQLiteBackend(DatabaseBackend):
 
     def connect(self) -> sqlite3.Connection:
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        conn = sqlite3.connect(self.path)
+        # timeout allows concurrent writers to wait on BEGIN IMMEDIATE locks
+        conn = sqlite3.connect(self.path, timeout=30.0)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA foreign_keys = ON")
         return conn
 
     def initialize(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        with self.connect() as conn:
+        conn = self.connect()
+        try:
             conn.execute("PRAGMA journal_mode=WAL")
-            conn.executescript(SQLITE_SCHEMA)
+            conn.execute("BEGIN IMMEDIATE")
+            apply_migrations(_ConnectionWrapper(conn, self), dialect="sqlite")
             conn.commit()
-        # Safe ALTER / backfill for existing DBs (idempotent)
-        with self.connect() as conn:
-            migrate_ownership_schema(conn, dialect="sqlite")
-            migrate_agent_session_schema(conn, dialect="sqlite")
-            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
 
     def param_style(self) -> str:
         return "?"
@@ -463,21 +505,17 @@ class PostgreSQLBackend(DatabaseBackend):
         return conn
 
     def initialize(self) -> None:
-        import psycopg2
-
         conn = self._connect_or_create_db()
         if conn is None:
             conn = self.connect()
-
-        with conn:
-            with conn.cursor() as cur:
-                cur.execute(PG_SCHEMA)
-        # Safe ALTER / backfill via wrapper API
-        wrapper = _ConnectionWrapper(conn, self)
-        migrate_ownership_schema(wrapper, dialect="postgresql")
-        migrate_agent_session_schema(wrapper, dialect="postgresql")
-        conn.commit()
-        conn.close()
+        try:
+            apply_migrations(_ConnectionWrapper(conn, self), dialect="postgresql")
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
 
     def _connect_or_create_db(self):
         """Try to connect; if the database doesn't exist, create it."""
@@ -573,14 +611,74 @@ class _ConnectionWrapper:
     def commit(self) -> None:
         self._conn.commit()
 
+    def rollback(self) -> None:
+        self._conn.rollback()
+
     def close(self) -> None:
         self._conn.close()
+
+    @property
+    def backend(self) -> DatabaseBackend:
+        return self._backend
 
     def __enter__(self) -> _ConnectionWrapper:
         return self
 
     def __exit__(self, *args: Any) -> None:
         self.close()
+
+
+def _row_value(row: Any, key: str, index: int = 0) -> Any:
+    try:
+        return row[key]
+    except (KeyError, IndexError, TypeError):
+        return row[index]
+
+
+def _execute_statements(conn: _ConnectionWrapper, script: str) -> None:
+    """Execute simple schema SQL without SQLite ``executescript`` auto-commit."""
+    for statement in script.split(";"):
+        sql = statement.strip()
+        if sql:
+            conn.execute(sql)
+
+
+def apply_migrations(
+    conn: _ConnectionWrapper,
+    *,
+    dialect: str,
+    migrations: tuple[Migration, ...] | None = None,
+) -> None:
+    """Apply immutable migrations inside the caller-owned transaction."""
+    selected = MIGRATIONS if migrations is None else migrations
+    versions = [migration.version for migration in selected]
+    if len(versions) != len(set(versions)):
+        raise ValueError("migration versions must be unique")
+
+    conn.execute(MIGRATION_TABLE_SQL)
+    for migration in selected:
+        row = conn.execute(
+            "SELECT checksum FROM schema_migrations WHERE version = ?",
+            (migration.version,),
+        ).fetchone()
+        if row is not None:
+            actual = str(_row_value(row, "checksum"))
+            if actual != migration.checksum:
+                raise MigrationChecksumError(
+                    f"migration {migration.version} checksum mismatch: "
+                    f"database={actual} source={migration.checksum}"
+                )
+            continue
+
+        _execute_statements(conn, migration.for_dialect(dialect))
+        conn.execute(
+            "INSERT INTO schema_migrations (version, checksum, applied_at) VALUES (?, ?, ?)",
+            (
+                migration.version,
+                migration.checksum,
+                datetime.now(timezone.utc).isoformat(),
+            ),
+        )
 
 
 # ── Ownership schema migration (dual dialect) ─────────────────────────────

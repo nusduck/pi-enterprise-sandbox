@@ -2,8 +2,9 @@
 
 > 记录日期：2026-07-11  
 > 来源：一线使用反馈  
-> 状态：待评审、待拆分 Trellis 任务  
-> 说明：本文记录问题、目标和验收口径，不代表具体技术方案已经定稿。
+> ⚠️ **Partially SUPERSEDED (2026-07-11 R1–R8)** — Python Agent/双 Runtime、内置 Skill 发行、Node 20、公共绝对 workspace 路径等目标已由现行四服务基线取代。  
+> **现行规范：** `README.md`、`docs/architecture.md`、`docs/api.md`、`docs/deployment.md`、`docs/development.md`、`.trellis/spec/`。  
+> 本文保留问题溯源；勿当作当前实现清单。
 
 ## 1. 背景与目标
 
@@ -93,7 +94,7 @@
 - 支持声明式 Skill 清单，至少包含来源、版本/commit、校验信息和启用状态。
 - 安装发生在构建或受控初始化阶段，不允许 Agent 在普通回合中任意联网安装。
 - 支持离线镜像、只读挂载、版本锁定、完整性校验和安装审计。
-- 安装失败不应破坏已有内置 Skill；应提供清晰的启动诊断。
+- 安装失败不应破坏已安装 Skill；零 Skill 初始发行也应提供清晰的启动诊断。
 
 **验收标准**
 

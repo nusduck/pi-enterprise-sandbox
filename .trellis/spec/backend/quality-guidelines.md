@@ -33,7 +33,7 @@
 
 ## 权威验证命令
 
-与 `.github/workflows/test.yml` 对齐（分 job：python / node-api / frontend / compose）：
+与 `.github/workflows/test.yml` 对齐（Node **22**；分 job：python / node-bff / node-agent / frontend / compose / cross-service-smoke）：
 
 ```bash
 # Python
@@ -48,7 +48,7 @@ npm ci --prefix api-server
 node --test api-server/tests/*.test.js
 find api-server -name '*.js' -type f ! -path '*/node_modules/*' -exec node --check {} \;
 
-# Node Agent（含 sdk-compat）
+# Node Agent（含 sdk-compat + fake provider）
 npm ci --prefix agent
 node --test agent/tests/*.test.js agent/tests/sdk-compat/*.test.js
 find agent -name '*.js' -type f ! -path '*/node_modules/*' -exec node --check {} \;
@@ -61,6 +61,9 @@ npm run build --prefix frontend
 # Compose
 test -f .env || cp .env.example .env
 docker compose config -q
+
+# 无真实 LLM key 跨服务 smoke（production 禁止 AGENT_ENABLE_FAKE_LLM）
+node scripts/smoke-cross-service.mjs
 ```
 
 `CONTRIBUTING.md` 还建议 `ruff check .`/`black --check .`，`docs/development.md` 建议 Ruff/Mypy/coverage；当前 `pyproject.toml` 与 CI 没有相应强制 job，因此只能作为建议，不能声称强制通过。

@@ -6,10 +6,9 @@ from fastapi import APIRouter, HTTPException, Request
 
 from sandbox.config import settings
 from sandbox.models import SessionCreate, SessionResponse, SessionStatus
-from sandbox.paths import AGENT_WORKSPACE_PATH, is_logical_workspace_path
 from sandbox.security.ownership import assert_session_owner, resolve_actor
 from sandbox.services.audit_logger import audit_logger
-from sandbox.services.session_manager import session_manager
+from sandbox.services.session_manager import public_session_response, session_manager
 from sandbox.services.workspace_manager import (
     WorkspaceWriteConflict,
     workspace_manager,
@@ -26,10 +25,10 @@ def create_session(body: SessionCreate, request: Request):
     if actor is not None:
         user_id = actor.user_id
 
-    # Ignore logical workspace_path overrides — they are not physical roots.
-    physical_override = body.workspace_path
-    if physical_override and is_logical_workspace_path(physical_override):
-        physical_override = None
+    # Stamp organization_id into session metadata for trace/owner filtering.
+    create_meta = dict(body.metadata or {})
+    if actor is not None:
+        create_meta.setdefault("organization_id", actor.organization_id)
 
     try:
         session = session_manager.create(
@@ -37,8 +36,7 @@ def create_session(body: SessionCreate, request: Request):
             enterprise_session_id=body.enterprise_session_id,
             user_id=user_id,
             caller_id=body.caller_id,
-            metadata=body.metadata,
-            workspace_path_override=physical_override,
+            metadata=create_meta,
             conversation_id=body.conversation_id,
             workspace_id=body.workspace_id,
         )
@@ -62,17 +60,13 @@ def create_session(body: SessionCreate, request: Request):
     else:
         workspace_manager.init_workspace(session.session_id)
 
-    # Guarantee agent-visible path is logical
-    if session.workspace_path != AGENT_WORKSPACE_PATH:
-        session.workspace_path = AGENT_WORKSPACE_PATH
-
     meta = {"caller_id": body.caller_id}
     if actor is not None:
         meta["user_id"] = actor.user_id
         meta["organization_id"] = actor.organization_id
     elif user_id:
         meta["user_id"] = user_id
-    workspace_id = (session.metadata or {}).get("workspace_id")
+    workspace_id = (session.metadata or {}).get("workspace_id") or session.workspace_id
     if workspace_id:
         meta["workspace_id"] = workspace_id
 
@@ -80,7 +74,7 @@ def create_session(body: SessionCreate, request: Request):
         session.session_id, "created",
         meta,
     )
-    return session
+    return public_session_response(session)
 
 
 @router.get("/by-agent/{agent_session_id}", response_model=SessionResponse)
@@ -90,7 +84,7 @@ def get_session_by_agent_session_id(agent_session_id: str, request: Request):
         raise HTTPException(status_code=404, detail="Session not found")
     actor = resolve_actor(request) if settings.auth_enabled else None
     assert_session_owner(session, actor)
-    return session
+    return public_session_response(session)
 
 
 @router.get("/by-enterprise/{enterprise_session_id}", response_model=SessionResponse)
@@ -100,7 +94,7 @@ def get_session_by_enterprise_session_id(enterprise_session_id: str, request: Re
         raise HTTPException(status_code=404, detail="Session not found")
     actor = resolve_actor(request) if settings.auth_enabled else None
     assert_session_owner(session, actor)
-    return session
+    return public_session_response(session)
 
 
 @router.get("/{session_id}", response_model=SessionResponse)
@@ -110,7 +104,7 @@ def get_session(session_id: str, request: Request):
         raise HTTPException(status_code=404, detail="Session not found")
     actor = resolve_actor(request) if settings.auth_enabled else None
     assert_session_owner(session, actor)
-    return session
+    return public_session_response(session)
 
 
 @router.get("", response_model=list[SessionResponse])
@@ -120,7 +114,7 @@ def list_sessions():
     Service token alone may list sessions (internal sandbox ops). End-user
     conversation listing is separately ownership-scoped.
     """
-    return session_manager.list_active()
+    return [public_session_response(s) for s in session_manager.list_active()]
 
 
 @router.delete("/{session_id}", status_code=204)
@@ -134,7 +128,7 @@ def delete_session(session_id: str, request: Request):
     # Only remove session-private trees (workspace_id == session_id).
     # Conversation workspaces are retained for rebind.
     meta = session.metadata or {}
-    wid = meta.get("workspace_id")
+    wid = meta.get("workspace_id") or session.workspace_id
     if not wid or wid == session_id:
         workspace_manager.remove_workspace(session_id)
     session_manager.delete(session_id)

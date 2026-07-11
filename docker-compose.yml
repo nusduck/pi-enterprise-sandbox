@@ -25,10 +25,13 @@ services:
     env_file:
       - ${API_ENV_FILE:-.env}
     environment:
+      DEPLOYMENT_ENV: ${DEPLOYMENT_ENV:-development}
       SANDBOX_BASE_URL: http://sandbox:8081
       SANDBOX_API_TOKEN: ${SANDBOX_API_TOKEN:-}
       AGENT_BASE_URL: http://agent:4100
       AGENT_INTERNAL_TOKEN: ${AGENT_INTERNAL_TOKEN:-}
+      AUTH_ENABLED: ${AUTH_ENABLED:-}
+      APPROVAL_ENABLED: ${APPROVAL_ENABLED:-}
       PORT: 4000
     restart: unless-stopped
     depends_on:
@@ -61,12 +64,17 @@ services:
     env_file:
       - ${API_ENV_FILE:-.env}
     environment:
+      DEPLOYMENT_ENV: ${DEPLOYMENT_ENV:-development}
       SANDBOX_BASE_URL: http://sandbox:8081
       SANDBOX_API_TOKEN: ${SANDBOX_API_TOKEN:-}
       AGENT_INTERNAL_TOKEN: ${AGENT_INTERNAL_TOKEN:-}
       LLMIO_BASE_URL: ${LLMIO_BASE_URL:-}
       LLMIO_API_KEY: ${LLMIO_API_KEY:-}
       MODEL_ID: ${MODEL_ID:-deepseek-v4-flash}
+      MODEL_CONTEXT_WINDOW: ${MODEL_CONTEXT_WINDOW:-128000}
+      MODEL_MAX_TOKENS: ${MODEL_MAX_TOKENS:-8192}
+      AGENT_SYSTEM_PROMPT: ${AGENT_SYSTEM_PROMPT:-}
+      AGENT_SYSTEM_PROMPT_FILE: ${AGENT_SYSTEM_PROMPT_FILE:-}
       APPROVAL_ENABLED: ${APPROVAL_ENABLED:-}
       # readonly (default) | development — skill_install/edit/reload only in development
       SKILLS_MODE: ${SKILLS_MODE:-readonly}
@@ -107,6 +115,7 @@ services:
       - ${SANDBOX_WORKSPACES_MOUNT:-./workspaces:/var/sandbox/workspaces}
       - ${SANDBOX_DATA_VOLUME:-sandbox_data}:/sandbox/data
     environment:
+      DEPLOYMENT_ENV: ${DEPLOYMENT_ENV:-development}
       # Listen address only — does NOT authorize clients. See ALLOWED_CLIENT_CIDRS.
       SANDBOX_BIND_HOST: ${SANDBOX_BIND_HOST:-0.0.0.0}
       SANDBOX_HOST: ${SANDBOX_BIND_HOST:-0.0.0.0}
@@ -127,6 +136,9 @@ services:
       SANDBOX_WORKSPACE_QUOTA_MB: ${SANDBOX_WORKSPACE_QUOTA_MB:-500}
       SANDBOX_SESSION_TTL_MINUTES: ${SANDBOX_SESSION_TTL_MINUTES:-30}
       SANDBOX_CLEANUP_INTERVAL_MINUTES: ${SANDBOX_CLEANUP_INTERVAL_MINUTES:-5}
+      # Single outbound network mode (disabled|allowlist|unrestricted).
+      # Dev .env.example uses unrestricted; production overlay forces disabled/allowlist.
+      SANDBOX_NETWORK_MODE: ${SANDBOX_NETWORK_MODE:-disabled}
       SANDBOX_IPTABLES_ENABLED: ${SANDBOX_IPTABLES_ENABLED:-true}
       SANDBOX_IPTABLES_DEFAULT_POLICY: ${SANDBOX_IPTABLES_DEFAULT_POLICY:-DROP}
       SANDBOX_ALLOWED_TCP_PORTS: ${SANDBOX_ALLOWED_TCP_PORTS:-}
@@ -138,6 +150,15 @@ services:
       SANDBOX_ALLOWED_CLIENT_CIDRS: ${SANDBOX_ALLOWED_CLIENT_CIDRS:-127.0.0.1/32,::1/128,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16}
       # Trusted reverse proxies only (default empty → ignore X-Forwarded-For).
       SANDBOX_TRUSTED_PROXY_CIDRS: ${SANDBOX_TRUSTED_PROXY_CIDRS:-}
+      SANDBOX_CORS_ORIGINS: ${SANDBOX_CORS_ORIGINS:-*}
+      SANDBOX_CORS_ALLOW_CREDENTIALS: ${SANDBOX_CORS_ALLOW_CREDENTIALS:-true}
+      SANDBOX_AUTH_ENABLED: ${SANDBOX_AUTH_ENABLED:-false}
+      SANDBOX_JWT_SECRET: ${SANDBOX_JWT_SECRET:-}
+      SANDBOX_JWT_TTL_SECONDS: ${SANDBOX_JWT_TTL_SECONDS:-86400}
+      SANDBOX_JWT_ISSUER: ${SANDBOX_JWT_ISSUER:-pi-enterprise-sandbox}
+      SANDBOX_JWT_AUDIENCE: ${SANDBOX_JWT_AUDIENCE:-pi-enterprise-sandbox}
+      SANDBOX_AUTH_ALLOW_PUBLIC_REGISTER: ${SANDBOX_AUTH_ALLOW_PUBLIC_REGISTER:-true}
+      SANDBOX_APPROVAL_ENABLED: ${SANDBOX_APPROVAL_ENABLED:-true}
       SANDBOX_UVICORN_WORKERS: ${SANDBOX_UVICORN_WORKERS:-1}
       SANDBOX_UVICORN_PROXY_HEADERS: true
       SANDBOX_API_TOKEN: ${SANDBOX_API_TOKEN:-}

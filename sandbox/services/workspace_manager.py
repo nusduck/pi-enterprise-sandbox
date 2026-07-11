@@ -1,12 +1,11 @@
 """Workspace Manager — initialise and clean up conversation/session workspaces.
 
 Physical workspaces live under ``settings.workspaces_path / {workspace_id}``.
-Agent-visible logical path is always ``/home/sandbox/workspace`` (see
-``sandbox.paths.AGENT_WORKSPACE_PATH``).
+Public contract uses opaque ``workspace_id`` + relative tool paths only
+(see ``sandbox.paths``). Physical roots never leave service/repository layers.
 
 A process-global presentation symlink is **disabled by default** because it
-races under concurrent multi-session load. Execution uses physical cwd;
-agent/API surfaces use logical paths only.
+races under concurrent multi-session load. Execution uses physical cwd.
 """
 
 from __future__ import annotations
@@ -20,14 +19,14 @@ from pathlib import Path
 
 from sandbox.config import settings
 from sandbox.paths import (
-    AGENT_WORKSPACE_PATH,
+    LEGACY_AGENT_WORKSPACE_PATH,
     conversation_workspace_id,
 )
 
 logger = logging.getLogger("sandbox.workspace")
 
-# Optional presentation link (agent-visible stable path). Not used as exec cwd.
-WORKSPACE_LINK = Path(AGENT_WORKSPACE_PATH)
+# Optional presentation link (legacy absolute path). Not used as exec cwd.
+WORKSPACE_LINK = Path(LEGACY_AGENT_WORKSPACE_PATH)
 
 
 class WorkspaceWriteConflict(Exception):
@@ -173,8 +172,8 @@ class WorkspaceManager:
         """Create an **empty** workspace directory for a sandbox session (P2).
 
         Does **not** add skills symlinks or seed folders. Skills are only
-        available at the agent skill path (``/home/sandbox/skill``).
-        Does **not** activate the global presentation symlink.
+        available at the agent skill path. Does **not** activate the global
+        presentation symlink.
         """
         ws = settings.workspaces_path / session_id
         ws.mkdir(parents=True, exist_ok=True)
@@ -268,5 +267,4 @@ __all__ = [
     "WorkspaceWriteLease",
     "workspace_manager",
     "write_lease",
-    "to_public_workspace_path",
 ]

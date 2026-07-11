@@ -20,6 +20,28 @@ SANDBOX_APP_MODULE="${SANDBOX_APP_MODULE:-sandbox.main:app}"
 SANDBOX_RUN_AS_USER="${SANDBOX_RUN_AS_USER:-sandbox}"
 SANDBOX_LOG_LEVEL="$(echo "${SANDBOX_LOG_LEVEL:-info}" | tr '[:upper:]' '[:lower:]')"
 SANDBOX_UVICORN_WORKERS="${SANDBOX_UVICORN_WORKERS:-1}"
+# Single network mode drives iptables + (in-app) command policy.
+# disabled | allowlist | unrestricted — must match SANDBOX_NETWORK_MODE in Settings.
+SANDBOX_NETWORK_MODE="$(echo "${SANDBOX_NETWORK_MODE:-disabled}" | tr '[:upper:]' '[:lower:]')"
+case "$SANDBOX_NETWORK_MODE" in
+    unrestricted|open|full)
+        SANDBOX_NETWORK_MODE="unrestricted"
+        # Unrestricted: skip iptables isolation (dev only; production rejects this mode).
+        SANDBOX_IPTABLES_ENABLED="${SANDBOX_IPTABLES_ENABLED:-false}"
+        ;;
+    allowlist|allow|whitelist)
+        SANDBOX_NETWORK_MODE="allowlist"
+        SANDBOX_IPTABLES_ENABLED="${SANDBOX_IPTABLES_ENABLED:-true}"
+        SANDBOX_IPTABLES_DEFAULT_POLICY="${SANDBOX_IPTABLES_DEFAULT_POLICY:-DROP}"
+        ;;
+    disabled|off|none|deny|block|*)
+        SANDBOX_NETWORK_MODE="disabled"
+        SANDBOX_IPTABLES_ENABLED="${SANDBOX_IPTABLES_ENABLED:-true}"
+        SANDBOX_IPTABLES_DEFAULT_POLICY="${SANDBOX_IPTABLES_DEFAULT_POLICY:-DROP}"
+        # No outbound destinations beyond DNS unless explicitly set.
+        ;;
+esac
+
 SANDBOX_IPTABLES_ENABLED="${SANDBOX_IPTABLES_ENABLED:-true}"
 SANDBOX_IPTABLES_DEFAULT_POLICY="${SANDBOX_IPTABLES_DEFAULT_POLICY:-DROP}"
 SANDBOX_ALLOWED_DNS_PORTS="${SANDBOX_ALLOWED_DNS_PORTS:-53}"
@@ -29,9 +51,11 @@ SANDBOX_ALLOWED_CIDRS="${SANDBOX_ALLOWED_CIDRS:-}"
 SANDBOX_ALLOW_LOOPBACK="${SANDBOX_ALLOW_LOOPBACK:-true}"
 SANDBOX_ALLOW_ESTABLISHED="${SANDBOX_ALLOW_ESTABLISHED:-true}"
 
+echo "[entrypoint] SANDBOX_NETWORK_MODE=$SANDBOX_NETWORK_MODE iptables_enabled=$SANDBOX_IPTABLES_ENABLED"
+
 apply_iptables_rules() {
     if ! bool_enabled "$SANDBOX_IPTABLES_ENABLED"; then
-        echo "[entrypoint] iptables disabled by SANDBOX_IPTABLES_ENABLED=$SANDBOX_IPTABLES_ENABLED"
+        echo "[entrypoint] iptables disabled by SANDBOX_IPTABLES_ENABLED=$SANDBOX_IPTABLES_ENABLED (network_mode=$SANDBOX_NETWORK_MODE)"
         return 0
     fi
     if ! command -v iptables &> /dev/null; then

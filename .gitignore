@@ -2,6 +2,7 @@ node_modules/
 dist/
 build/
 workspaces/
+.smoke-tmp/
 *.pyc
 __pycache__/
 *.egg-info/

@@ -31,6 +31,7 @@ def test_entrypoint_exposes_startup_network_and_uvicorn_parameters() -> None:
         "SANDBOX_PORT",
         "SANDBOX_APP_MODULE",
         "SANDBOX_RUN_AS_USER",
+        "SANDBOX_NETWORK_MODE",
         "SANDBOX_IPTABLES_ENABLED",
         "SANDBOX_IPTABLES_DEFAULT_POLICY",
         "SANDBOX_ALLOWED_DNS_PORTS",
@@ -54,9 +55,11 @@ def test_compose_parameterizes_runtime_defaults() -> None:
         "SANDBOX_DATABASE_URL: ${SANDBOX_DATABASE_URL:-sqlite:////sandbox/data/sandbox.db}",
         "SANDBOX_MAX_MEMORY_MB: ${SANDBOX_MAX_MEMORY_MB:-512}",
         "SANDBOX_IPTABLES_ENABLED: ${SANDBOX_IPTABLES_ENABLED:-true}",
+        "SANDBOX_NETWORK_MODE:",
         "SANDBOX_ALLOWED_CLIENT_CIDRS:",
         "SANDBOX_TRUSTED_PROXY_CIDRS:",
         "SANDBOX_BIND_HOST:",
+        "DEPLOYMENT_ENV:",
         "${FRONTEND_PORT:-3000}:80",
     ]
     for fragment in expected_fragments:

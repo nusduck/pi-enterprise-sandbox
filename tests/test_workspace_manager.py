@@ -7,7 +7,7 @@ import pytest
 
 from sandbox.config import settings
 from sandbox.paths import (
-    AGENT_WORKSPACE_PATH,
+    PUBLIC_WORKSPACE_TOKEN,
     conversation_workspace_id,
     get_session_physical_workspace,
 )
@@ -59,7 +59,8 @@ class TestWorkspaceManager:
         mgr = WorkspaceManager()
         path = mgr.get_workspace_path("sandbox_xyz")
         assert path == Path(tmp_path / "workspaces" / "sandbox_xyz")
-        assert str(path) != AGENT_WORKSPACE_PATH
+        assert str(path) != PUBLIC_WORKSPACE_TOKEN
+        assert not str(path).startswith("/home/sandbox")
 
     def test_activate_workspace_disabled_by_default(self, tmp_path, monkeypatch):
         monkeypatch.setattr(settings, "workspaces_root", str(tmp_path / "workspaces"))
@@ -113,8 +114,9 @@ class TestSessionPhysicalIsolation:
         p1 = Path(get_session_physical_workspace(s1))
         p2 = Path(get_session_physical_workspace(s2))
         assert p1 != p2
-        assert s1.workspace_path == AGENT_WORKSPACE_PATH
-        assert s2.workspace_path == AGENT_WORKSPACE_PATH
+        assert s1.workspace_id == s1.session_id
+        assert s2.workspace_id == s2.session_id
+        assert s1.workspace_id != s2.workspace_id
 
         mgr.init_workspace(s1.session_id)
         mgr.init_workspace(s2.session_id)

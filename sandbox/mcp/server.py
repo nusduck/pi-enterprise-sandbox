@@ -57,7 +57,8 @@ class MCPServerAdapter:
         return {
             "session_id": session.session_id,
             "status": session.status,
-            "workspace_path": session.workspace_path,
+            "workspace_id": session.workspace_id
+            or (session.metadata or {}).get("workspace_id"),
         }
 
     async def close_session(self, **kwargs) -> dict[str, Any]:

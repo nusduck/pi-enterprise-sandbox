@@ -10,7 +10,11 @@
  *   GET  /ready
  */
 import http from 'node:http';
-import { config } from './config.js';
+import {
+  config,
+  validateProductionConfig,
+  effectiveConfig,
+} from './config.js';
 import { checkHealth } from './services/sandbox-client.js';
 import {
   createRun,
@@ -19,6 +23,14 @@ import {
   cancelRun,
   activeRunCount,
 } from './run-manager.js';
+
+// Production fail-fast before bind.
+try {
+  validateProductionConfig(process.env, { skillsMode: config.SKILLS_MODE });
+} catch (err) {
+  console.error(`[agent-server] ${err.message}`);
+  process.exit(1);
+}
 
 // ── Startup health check ────────────────────────
 
@@ -256,8 +268,9 @@ const server = http.createServer(async (req, res) => {
 
 server.listen(config.PORT, async () => {
   console.log(
-    `[agent-server] pi-enterprise-agent v4.0.0 (${config.NODE_ENV}) on port ${config.PORT}`,
+    `[agent-server] pi-enterprise-agent v4.0.0 (${config.DEPLOYMENT_ENV}/${config.NODE_ENV}) on port ${config.PORT}`,
   );
+  console.log('[agent-server] Effective config:', JSON.stringify(effectiveConfig()));
   if (config.AGENT_INTERNAL_TOKEN) {
     console.log('[agent-server] Internal token auth enabled');
   } else {

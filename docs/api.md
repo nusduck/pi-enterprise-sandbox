@@ -1,12 +1,15 @@
 # API Reference
 
-Pi Enterprise Sandbox 有三层 API：
+Pi Enterprise Sandbox 四服务 API 分层：
 
 | 层 | 组件 | 说明 |
 |----|------|------|
 | **Public** | Frontend Nginx | `/api/*` 反向代理到 API Server |
-| **API Server** | Node.js (port 4000) | `/api/chat` SSE, `/api/status`, 文件上传/下载代理 |
+| **API Server (BFF)** | Node.js 22 (port 4000) | `/api/chat` SSE relay, `/api/status`, 文件上传/下载代理 |
+| **Agent** | Node.js 22 (port 4100) | 内部 Run API + pi-coding-agent SDK（浏览器不直连） |
 | **Sandbox** | FastAPI (port 8081) | 会话/执行/文件/产物/审计/审批/MCP (Docker 内网) |
+
+无 Python Agent Runtime、无双 Runtime 开关。发行基线 **零内置 Skill package**。
 
 > **Sandbox 端口 8081 仅 Docker 内网可访问**。API Server 自动为所有 Sandbox 请求添加 `X-API-Key` header（如配置 `SANDBOX_API_TOKEN`）。
 > MCP-over-HTTP 通过 `GET /mcp/tools` + `POST /mcp/call` 对外暴露（端口 8093→8091）。
@@ -20,7 +23,7 @@ API Server 通过 SSE (`text/event-stream`) 推送以下事件类型：
 | 事件 | 字段 | 说明 |
 |------|------|------|
 | `trace` | `{ trace_id }` | 端到端追踪 ID（BFF/Agent 入口） |
-| `session` | `{ session_id, workspace_path, conversation_id?, session_reused?, trace_id? }` | Sandbox 会话已创建/复用 |
+| `session` | `{ session_id, workspace_id, conversation_id?, session_reused?, trace_id? }` | Sandbox 会话已创建/复用（公共协议不暴露物理路径） |
 | `token` | `{ text: string }` | LLM 文本增量 |
 | `tool_start` | `{ id, name, args }` | 工具开始执行 |
 | `tool_end` | `{ id, name, result, isError }` | 工具执行完成 |
@@ -40,7 +43,7 @@ API Server 通过 SSE (`text/event-stream`) 推送以下事件类型：
 
 示例流：
 ```
-data: {"type":"session","session_id":"sandbox_abc123","workspace_path":"/home/sandbox/workspace","conversation_id":"conv_xxx"}
+data: {"type":"session","session_id":"sandbox_abc123","workspace_id":"ws_abc","conversation_id":"conv_xxx"}
 data: {"type":"token","text":"我来帮你写一个"}
 data: {"type":"token","text":"Python 脚本。"}
 data: {"type":"tool_start","id":"call_1","name":"write","args":{"path":"fib.py","content":"def fib..."}}
@@ -138,29 +141,27 @@ Base URL: `http://sandbox:8081`（Docker 内网）
   "enterprise_session_id": "...",
   "user_id": "...",
   "metadata": {},
-  "workspace_path": "/var/sandbox/workspaces/conv_xxx"  // 可选：复用已有工作区
+  "workspace_id": "ws_optional_reuse"  // 可选：复用已有工作区（opaque id，非物理路径）
 }
 
 // Response (201)
 {
   "session_id": "sandbox_abc123",
   "status": "RUNNING",
-  "workspace_path": "/home/sandbox/workspace",  // ← agent-visible stable path (P3)
+  "workspace_id": "ws_abc",
   "agent_session_id": "...",
   "enterprise_session_id": "...",
   "user_id": "...",
   "caller_id": "pi-coding-agent",
   "created_at": "2026-07-04T10:00:00Z",
   "updated_at": "2026-07-04T10:00:00Z",
-  "metadata": {
-    "_physical_workspace": "/var/sandbox/workspaces/sandbox_xxx"  // actual on-disk path
-  }
+  "metadata": {}
 }
 ```
 
-> **workspace_path** is the stable agent-visible path **`/home/sandbox/workspace`**.  
-> Physical storage is **`metadata._physical_workspace`** (session-owned; all exec/file/artifact I/O uses this).  
-> Skills are always **`/home/sandbox/skill`** (read-only), outside the workspace.
+> 公共协议使用 opaque **`workspace_id`**。工具/文件/Artifact 路径均为相对 Session 根的相对路径；绝对路径与路径逃逸 fail-closed。  
+> 物理存储根仅存在于服务内部，**不**出现在 API、SSE 或模型上下文。  
+> Skill 根在 workspace 外；发行基线零内置 Skill package，默认只读。
 
 ---
 
@@ -400,7 +401,7 @@ Agent 工具 `ls` / `find` / `grep` 覆盖 SDK 本地同名工具，全部转发
 | `GET` | `/conversations/{id}` | 获取对话详情 |
 | `PATCH` | `/conversations/{id}` | 更新对话 |
 | `DELETE` | `/conversations/{id}` | 删除对话 + 清理工作区 |
-| `GET` | `/conversations/{id}/workspace` | 获取对话工作区路径 |
+| `GET` | `/conversations/{id}/workspace` | 获取对话 opaque workspace_id |
 | `GET` | `/conversations/{id}/messages` | 获取消息列表 |
 | `PATCH` | `/conversations/{id}/title` | 重命名对话 |
 
@@ -412,14 +413,14 @@ Agent 工具 `ls` / `find` / `grep` 覆盖 SDK 本地同名工具，全部转发
 {
   "id": "conv_uuid",
   "title": "My Conversation",
-  "workspace_path": "/var/sandbox/workspaces/conv_uuid",
+  "workspace_id": "ws_conv_uuid",
   "messages": [],
   "created_at": "...",
   "updated_at": "..."
 }
 ```
 
-对话工作区路径存储在 `conversations.workspace_path` 中，可在后续 `POST /sessions` 时通过 `workspace_path` 参数复用（实现跨轮次文件持久化）。
+对话绑定 opaque `workspace_id`，后续 `POST /sessions` 通过 `workspace_id` 复用（跨轮次文件持久化）。公共响应不返回物理路径。
 
 ---
 

@@ -2,9 +2,9 @@
 
 > 基于 `pi_sandbox_final_design.md` 的设计方案和 `AUDIT.md` 的差距分析，输出后续开发计划。
 > 版本：v1.0 · 2026-07-03
-> ⚠️ **OUTDATED / HISTORICAL** — 本文档基于 v2 架构编写（引用 `webui/`、`webui/server.js` 等已废弃路径）。  
-> **不要**按本文路径或任务清单实施。当前实现为 v4 三容器架构，详见 [README.md](README.md)、[docs/architecture.md](docs/architecture.md)、`.trellis/spec/project-architecture.md`。  
-> 活跃改进原则见 `IMPROVEMENT_PLAN.md`（亦可能部分过时；以代码与 Trellis 任务为准）。
+> ⚠️ **SUPERSEDED / HISTORICAL** — 本文档基于 v2 架构编写（引用 `webui/`、`webui/server.js` 等已废弃路径）。  
+> **不要**按本文路径或任务清单实施。当前实现为 v4 **四服务**架构（Frontend→BFF→Agent→Sandbox），详见 [README.md](README.md)、[docs/architecture.md](docs/architecture.md)、`.trellis/spec/project-architecture.md`。  
+> `IMPROVEMENT_PLAN.md` 同样已标记 superseded；以代码、活跃 `docs/*` 与 Trellis 任务为准。
 
 ---
 

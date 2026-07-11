@@ -1,0 +1,4 @@
+{"file":".trellis/tasks/07-11-production-boundaries-trellis-gates/prd.md","reason":"逐条核对 R1-R8 和全部 Acceptance Criteria，不得以局部测试代替父级验收。"}
+{"file":".trellis/tasks/07-11-production-boundaries-trellis-gates/research/evidence-audit.md","reason":"复核历史缺陷是否真正关闭，并检查已决的不兼容、清库、零 Skill 和停机切换边界。"}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"执行权威 Python、BFF、Agent、Frontend、Compose、PostgreSQL 和跨服务 smoke 门禁。"}
+{"file":".trellis/spec/project-architecture.md","reason":"检查最终实现和文档仍保持唯一四服务拓扑、相对 workspace 契约及内部物理路径私有。"}

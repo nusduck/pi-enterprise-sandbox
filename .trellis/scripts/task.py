@@ -44,7 +44,7 @@ from common.active_task import (
 )
 from common.io import read_json, write_json
 from common.task_utils import resolve_task_dir, run_task_hooks
-from common.tasks import iter_active_tasks, children_progress
+from common.tasks import children_progress, get_all_statuses, iter_active_tasks
 
 # Import command handlers from split modules (also re-exports for plan.py compatibility)
 from common.task_store import (
@@ -204,7 +204,7 @@ def cmd_list(args: argparse.Namespace) -> int:
 
     # Single pass: collect all tasks via shared iterator
     all_tasks = {t.dir_name: t for t in iter_active_tasks(tasks_dir)}
-    all_statuses = {name: t.status for name, t in all_tasks.items()}
+    all_statuses = get_all_statuses(tasks_dir)
 
     # Display tasks hierarchically
     count = 0
@@ -328,7 +328,7 @@ Monorepo options:
 
 List options:
   --mine, -m           Show only tasks assigned to current developer
-  --status, -s <s>     Filter by status (planning, in_progress, review, completed)
+  --status, -s <s>     Filter by status (planning, in_progress, review, completed, completed_with_deferred)
 
 Examples:
   python3 task.py create "Add login feature" --slug add-login

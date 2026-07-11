@@ -1,0 +1,3 @@
+{"file":".trellis/tasks/07-11-production-boundaries-trellis-gates/research/evidence-audit.md","reason":"加载清库、无备份、PostgreSQL 新基线和停机切换决策。"}
+{"file":".trellis/spec/backend/database-guidelines.md","reason":"实现事务、schema、PostgreSQL/SQLite 空库边界。"}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"实现破坏性 reset fail-closed 和数据库合同测试。"}

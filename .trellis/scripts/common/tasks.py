@@ -74,7 +74,7 @@ def iter_active_tasks(tasks_dir: Path) -> Iterator[TaskInfo]:
 
 
 def get_all_statuses(tasks_dir: Path) -> dict[str, str]:
-    """Get a {dir_name: status} mapping for all active tasks.
+    """Get a {dir_name: status} mapping for active and archived tasks.
 
     Useful for computing children progress without loading full TaskInfo.
 
@@ -84,7 +84,19 @@ def get_all_statuses(tasks_dir: Path) -> dict[str, str]:
     Returns:
         Dict mapping directory names to status strings.
     """
-    return {t.dir_name: t.status for t in iter_active_tasks(tasks_dir)}
+    statuses = {t.dir_name: t.status for t in iter_active_tasks(tasks_dir)}
+    archive_dir = tasks_dir / "archive"
+    if archive_dir.is_dir():
+        for month_dir in sorted(archive_dir.iterdir()):
+            if not month_dir.is_dir():
+                continue
+            for task_dir in sorted(month_dir.iterdir()):
+                if not task_dir.is_dir():
+                    continue
+                info = load_task(task_dir)
+                if info is not None:
+                    statuses.setdefault(info.dir_name, info.status)
+    return statuses
 
 
 def children_progress(
@@ -102,11 +114,14 @@ def children_progress(
     """
     if not children:
         return ""
-    # A child missing from active statuses has been archived (cmd_archive
-    # sets status=completed before moving the dir). Count it as done so
-    # parent progress doesn't regress when children are archived.
+    # Callers should include archived statuses via get_all_statuses(). Keep
+    # the legacy missing=done fallback for old archives without task.json.
     done = sum(
         1 for c in children
         if c not in all_statuses or all_statuses.get(c) in ("completed", "done")
     )
-    return f" [{done}/{len(children)} done]"
+    deferred = sum(
+        1 for c in children if all_statuses.get(c) == "completed_with_deferred"
+    )
+    deferred_label = f", {deferred} deferred" if deferred else ""
+    return f" [{done}/{len(children)} done{deferred_label}]"

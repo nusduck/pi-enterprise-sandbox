@@ -4,8 +4,6 @@ from __future__ import annotations
 
 from typing import Any
 
-from sandbox.paths import AGENT_WORKSPACE_PATH
-
 # Safe environment that excludes host secrets.
 # The sandbox service process may have tokens in its own environment;
 # we never forward the full os.environ to subprocesses.
@@ -30,17 +28,19 @@ def safe_env(
 
     Never inherits from ``os.environ`` — only explicitly set keys.
 
-    ``workspace_path`` is the physical cwd used for real I/O. ``PWD`` is set
-    to the agent-visible logical workspace so bash ``pwd`` (when it trusts
-    PWD) does not leak host layout. True ``os.getcwd()`` still reflects the
-    physical cwd unless a mount namespace is enabled (stretch / deferred).
+    ``workspace_path`` is the physical cwd used for real I/O (internal only).
+    ``PWD`` is set to a non-physical token (``.`` by default, or the caller-
+    supplied ``logical_workspace``) so bash ``pwd`` does not leak host layout
+    when it trusts ``PWD``. True ``os.getcwd()`` still reflects the physical
+    cwd unless a mount namespace is enabled (stretch / deferred).
     """
     env = dict(_BASE_SAFE_ENV)
     if workspace_path:
         # HOME points at physical tree so tools that write under $HOME land
         # inside the session workspace on disk.
         env["HOME"] = workspace_path
-        env["PWD"] = logical_workspace or AGENT_WORKSPACE_PATH
+        # Prefer relative / redacted logical view — never a host absolute path.
+        env["PWD"] = logical_workspace or "."
     if overrides:
         env.update(overrides)
     return env

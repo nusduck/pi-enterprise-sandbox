@@ -23,7 +23,7 @@ describe('resolveConversationAndSession', () => {
     const resolved = await resolveConversationAndSession(client, null);
     assert.deepEqual(resolved, {
       activeConversationId: 'conversation-new',
-      targetWorkspace: '/home/sandbox/workspace',
+      workspace_id: 'conv_conversation-new',
       sandboxSessionId: 'sandbox-new',
       reusedSession: false,
     });

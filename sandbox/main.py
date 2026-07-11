@@ -12,7 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from sandbox import __version__
-from sandbox.config import settings
+from sandbox.config import effective_config, ensure_safe_to_start, settings
 from sandbox.routers import (
     agent_runs,
     approvals,
@@ -30,6 +30,9 @@ from sandbox.security.network_policy import get_network_policy, init_network_pol
 from sandbox.services.session_manager import session_manager
 from sandbox.trace import reset_trace_id, set_trace_id
 
+# Fail-fast before uvicorn binds when import loads this module in production.
+ensure_safe_to_start(settings)
+
 
 def _configure_logging() -> None:
     logging.basicConfig(
@@ -38,8 +41,18 @@ def _configure_logging() -> None:
     )
 
 
+def _cors_origins() -> list[str]:
+    """Production requires an explicit allowlist; development may use '*'."""
+    origins = [o.strip() for o in (settings.cors_origins or []) if o and str(o).strip()]
+    if settings.is_production:
+        # Defensive: validator already rejects '*'; still never emit empty/wildcard.
+        cleaned = [o for o in origins if o != "*"]
+        return cleaned or ["https://localhost"]
+    return origins or ["*"]
+
+
 async def _cleanup_loop() -> None:
-    """Background task: periodically clean up expired sessions."""
+    """Background task: session TTL then retention (drafts/inactive/audit)."""
     logger = logging.getLogger("sandbox.cleanup")
     while True:
         try:
@@ -47,6 +60,20 @@ async def _cleanup_loop() -> None:
             count = session_manager.cleanup_expired()
             if count:
                 logger.info("Cleaned up %d expired sessions", count)
+            # Retention: 24h drafts, 90d inactive conversations, 180d events/audit.
+            # Logs metrics only (ids/counts); never message bodies.
+            try:
+                from sandbox.services.ttl_cleanup import run_retention_cleanup
+
+                report = run_retention_cleanup(dry_run=False)
+                if report.get("deleted_total"):
+                    logger.info(
+                        "Retention cleanup deleted_total=%s duration_ms=%s",
+                        report.get("deleted_total"),
+                        report.get("duration_ms"),
+                    )
+            except Exception:
+                logger.exception("Error during retention cleanup")
         except asyncio.CancelledError:
             break
         except Exception:
@@ -58,7 +85,15 @@ async def lifespan(app: FastAPI):
     """Startup / shutdown lifecycle."""
     _configure_logging()
     logger = logging.getLogger("sandbox")
-    logger.info("Sandbox Service v%s starting", __version__)
+    # Belt-and-suspenders: re-validate production matrix on lifespan start.
+    ensure_safe_to_start(settings)
+    logger.info(
+        "Sandbox Service v%s starting (deployment_env=%s network_mode=%s)",
+        __version__,
+        settings.deployment_env,
+        settings.network_mode,
+    )
+    logger.info("Effective config (redacted): %s", effective_config(settings))
 
     # Validate and install inbound network policy (illegal CIDR fails startup).
     policy = init_network_policy(settings)
@@ -73,31 +108,32 @@ async def lifespan(app: FastAPI):
     settings.workspaces_path.mkdir(parents=True, exist_ok=True)
     settings.skills_path.mkdir(parents=True, exist_ok=True)
 
-    # Best-effort agent-visible presentation dirs (container layout)
+    # Best-effort skill presentation dir (container layout). Workspace
+    # identity is opaque workspace_id + relative paths; no public absolute cwd.
     from pathlib import Path
 
-    from sandbox.paths import AGENT_SKILL_PATH, AGENT_WORKSPACE_PATH
+    from sandbox.paths import AGENT_SKILL_PATH, LEGACY_AGENT_WORKSPACE_PATH
 
-    for agent_path in (AGENT_WORKSPACE_PATH, AGENT_SKILL_PATH):
+    for agent_path in (LEGACY_AGENT_WORKSPACE_PATH, AGENT_SKILL_PATH):
         try:
             Path(agent_path).mkdir(parents=True, exist_ok=True)
         except OSError:
             pass  # host tests may not have permission under /home/sandbox
 
     logger.info(
-        "Workspaces: %s | Skills: %s | Agent paths: %s , %s | MCP: %s",
-        settings.workspaces_path,
-        settings.skills_path,
-        settings.agent_workspace_path,
-        settings.agent_skill_path,
+        "Workspaces root configured | Skills configured | MCP: %s",
         "enabled" if settings.mcp_enabled else "disabled",
     )
 
-    # Start TTL background cleanup task
+    # Start session + retention background cleanup task
     cleanup_task = asyncio.create_task(_cleanup_loop())
     logger.info(
-        "Session cleanup every %d minutes",
+        "Session + retention cleanup every %d minutes "
+        "(drafts=%dh inactive=%dd audit=%dd)",
         settings.cleanup_interval_minutes,
+        settings.draft_ttl_hours,
+        settings.conversation_ttl_days,
+        settings.audit_ttl_days,
     )
 
     yield
@@ -124,8 +160,8 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=_cors_origins(),
+    allow_credentials=settings.cors_allow_credentials,
     allow_methods=["*"],
     allow_headers=["*"],
 )

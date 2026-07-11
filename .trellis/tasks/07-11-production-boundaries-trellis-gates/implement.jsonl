@@ -1,0 +1,5 @@
+{"file":".trellis/tasks/07-11-production-boundaries-trellis-gates/research/evidence-audit.md","reason":"实现前加载历史遗漏、代码锚点、已决破坏性切换约束和 R1-R8 映射。"}
+{"file":".trellis/spec/project-architecture.md","reason":"保持 Frontend/BFF/Node Agent/Python Sandbox 四服务边界，不恢复 Python Agent 或新增 runner。"}
+{"file":".trellis/spec/backend/database-guidelines.md","reason":"实现 PostgreSQL 生产基线、SQLite 空库开发兼容、事务与未来 migration 约束。"}
+{"file":".trellis/spec/backend/error-handling.md","reason":"实现 404 防存在性泄露、稳定生产预检错误和 reset fail-closed。"}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"实现跨服务 E2E、并发、启动/import、破坏性 reset 与 Trellis gate 测试。"}

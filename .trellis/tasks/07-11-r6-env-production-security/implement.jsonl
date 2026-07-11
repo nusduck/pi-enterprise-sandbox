@@ -1,0 +1,4 @@
+{"file":".trellis/tasks/07-11-production-boundaries-trellis-gates/research/evidence-audit.md","reason":"加载 Env 缺口、研发 profile 和 system prompt 分层决定。"}
+{"file":".trellis/spec/project-architecture.md","reason":"实现四服务集中配置与生产边界。"}
+{"file":".trellis/spec/backend/error-handling.md","reason":"实现 production fail-fast 和脱敏错误。"}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"实现配置类型、组合、未知变量和 profile 矩阵。"}

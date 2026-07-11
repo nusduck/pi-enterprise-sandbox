@@ -49,14 +49,15 @@ def test_conversation_binds_workspace_and_session():
     r = client.post("/conversations", json={"title": "bind"})
     conv = r.json()
     cid = conv["id"]
-    assert conv["workspace_path"]
+    assert conv["workspace_id"]
 
     s = client.post(
         "/sessions",
         json={
             "caller_id": "pi-coding-agent",
             "enterprise_session_id": cid,
-            "workspace_path": conv["workspace_path"],
+            "conversation_id": cid,
+            "workspace_id": conv["workspace_id"],
         },
     )
     assert s.status_code == 201

@@ -1,8 +1,28 @@
 # ── Pi Enterprise Sandbox — Production Docker Compose ─────────────
 # Overlay on top of docker-compose.yml:
 #   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+#
+# Required env (no empty defaults for secrets):
+#   POSTGRES_PASSWORD, SANDBOX_API_TOKEN, AGENT_INTERNAL_TOKEN, SANDBOX_JWT_SECRET
+# Optional but recommended:
+#   SANDBOX_CORS_ORIGINS, DOMAIN
 
 services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-sandbox}
+      POSTGRES_USER: ${POSTGRES_USER:-sandbox}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD for production}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-sandbox} -d ${POSTGRES_DB:-sandbox}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: always
+
   nginx:
     build:
       context: .
@@ -38,6 +58,25 @@ services:
         max-file: "3"
 
   sandbox:
+    environment:
+      DEPLOYMENT_ENV: production
+      SANDBOX_DATABASE_URL: postgresql://${POSTGRES_USER:-sandbox}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD for production}@postgres:5432/${POSTGRES_DB:-sandbox}
+      SANDBOX_API_TOKEN: ${SANDBOX_API_TOKEN:?Set SANDBOX_API_TOKEN for production}
+      SANDBOX_AUTH_ENABLED: ${SANDBOX_AUTH_ENABLED:-true}
+      SANDBOX_JWT_SECRET: ${SANDBOX_JWT_SECRET:?Set SANDBOX_JWT_SECRET for production}
+      SANDBOX_JWT_ISSUER: ${SANDBOX_JWT_ISSUER:-pi-enterprise-sandbox}
+      SANDBOX_JWT_AUDIENCE: ${SANDBOX_JWT_AUDIENCE:-pi-enterprise-sandbox}
+      SANDBOX_AUTH_ALLOW_PUBLIC_REGISTER: "false"
+      # Outbound: disabled or allowlist only (never unrestricted).
+      SANDBOX_NETWORK_MODE: ${SANDBOX_NETWORK_MODE:-disabled}
+      SANDBOX_CORS_ORIGINS: ${SANDBOX_CORS_ORIGINS:?Set SANDBOX_CORS_ORIGINS for production (no wildcard)}
+      SANDBOX_CORS_ALLOW_CREDENTIALS: ${SANDBOX_CORS_ALLOW_CREDENTIALS:-true}
+      SANDBOX_DEBUG: "false"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    # No host port publish — internal compose network only (MCP/API).
+    ports: []
     # ── Production resource limits ──────────────────────────────────
     deploy:
       resources:
@@ -61,6 +100,12 @@ services:
     restart: always
 
   api-server:
+    environment:
+      DEPLOYMENT_ENV: production
+      SANDBOX_API_TOKEN: ${SANDBOX_API_TOKEN:?Set SANDBOX_API_TOKEN for production}
+      AGENT_INTERNAL_TOKEN: ${AGENT_INTERNAL_TOKEN:?Set AGENT_INTERNAL_TOKEN for production}
+      AUTH_ENABLED: ${AUTH_ENABLED:-true}
+      SANDBOX_AUTH_ENABLED: ${SANDBOX_AUTH_ENABLED:-true}
     # ── Production resource limits ──────────────────────────────────
     deploy:
       resources:
@@ -82,8 +127,14 @@ services:
   agent:
     # Production: skills stay read-only; skill management tools disabled.
     environment:
-      SKILLS_MODE: ${SKILLS_MODE:-readonly}
+      DEPLOYMENT_ENV: production
+      SANDBOX_API_TOKEN: ${SANDBOX_API_TOKEN:?Set SANDBOX_API_TOKEN for production}
+      AGENT_INTERNAL_TOKEN: ${AGENT_INTERNAL_TOKEN:?Set AGENT_INTERNAL_TOKEN for production}
+      SKILLS_MODE: readonly
       SKILLS_ROOT: /home/sandbox/skill
+      # Clear any product prompt file path unless explicitly provided.
+      AGENT_SYSTEM_PROMPT: ${AGENT_SYSTEM_PROMPT:-}
+      AGENT_SYSTEM_PROMPT_FILE: ${AGENT_SYSTEM_PROMPT_FILE:-}
     volumes:
       # Force read-only skill mounts in production (override any RW dev mount)
       - ./skills:/home/sandbox/skill:ro
@@ -107,6 +158,8 @@ services:
     ports: []
 
 volumes:
+  postgres_data:
+    driver: local
   nginx_ssl:
     driver: local
   nginx_certbot:

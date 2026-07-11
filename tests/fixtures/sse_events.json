@@ -18,7 +18,7 @@
     "session": {
       "type": "session",
       "session_id": "string",
-      "workspace_path": "string?",
+      "workspace_id": "string?",
       "conversation_id": "string?",
       "session_reused": "boolean?",
       "trace_id": "string?"
@@ -58,7 +58,7 @@
     {
       "type": "session",
       "session_id": "sandbox_abc",
-      "workspace_path": "/home/sandbox/workspace",
+      "workspace_id": "conv_xyz",
       "conversation_id": "conv_xyz",
       "session_reused": false,
       "trace_id": "trace_example"
