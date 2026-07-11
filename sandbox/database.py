@@ -87,16 +87,26 @@ CREATE INDEX IF NOT EXISTS idx_audit_session_id ON audit_logs(session_id);
 CREATE INDEX IF NOT EXISTS idx_audit_execution_id ON audit_logs(execution_id);
 CREATE INDEX IF NOT EXISTS idx_audit_trace_id ON audit_logs(trace_id);
 
+CREATE TABLE IF NOT EXISTS organizations (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS conversations (
     id TEXT PRIMARY KEY,
     title TEXT NOT NULL DEFAULT 'New conversation',
     sandbox_session_id TEXT,
     workspace_path TEXT,
     messages TEXT NOT NULL DEFAULT '[]',
+    owner_user_id TEXT,
+    organization_id TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_conversations_sandbox_session ON conversations(sandbox_session_id);
+CREATE INDEX IF NOT EXISTS idx_conversations_owner ON conversations(owner_user_id);
+CREATE INDEX IF NOT EXISTS idx_conversations_org ON conversations(organization_id);
 
 CREATE TABLE IF NOT EXISTS approvals (
     approval_id TEXT PRIMARY KEY,
@@ -120,12 +130,14 @@ CREATE TABLE IF NOT EXISTS users (
     password_hash TEXT NOT NULL,
     display_name TEXT,
     role TEXT NOT NULL DEFAULT 'user',
+    organization_id TEXT,
     is_active INTEGER NOT NULL DEFAULT 1,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
     last_login_at TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_users_username ON users(username);
+CREATE INDEX IF NOT EXISTS idx_users_organization ON users(organization_id);
 """
 
 PG_SCHEMA = """
@@ -186,16 +198,26 @@ CREATE INDEX IF NOT EXISTS idx_audit_session_id ON audit_logs(session_id);
 CREATE INDEX IF NOT EXISTS idx_audit_execution_id ON audit_logs(execution_id);
 CREATE INDEX IF NOT EXISTS idx_audit_trace_id ON audit_logs(trace_id);
 
+CREATE TABLE IF NOT EXISTS organizations (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS conversations (
     id TEXT PRIMARY KEY,
     title TEXT NOT NULL DEFAULT 'New conversation',
     sandbox_session_id TEXT,
     workspace_path TEXT,
     messages TEXT NOT NULL DEFAULT '[]',
+    owner_user_id TEXT,
+    organization_id TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_conversations_sandbox_session ON conversations(sandbox_session_id);
+CREATE INDEX IF NOT EXISTS idx_conversations_owner ON conversations(owner_user_id);
+CREATE INDEX IF NOT EXISTS idx_conversations_org ON conversations(organization_id);
 
 CREATE TABLE IF NOT EXISTS approvals (
     approval_id TEXT PRIMARY KEY,
@@ -219,12 +241,14 @@ CREATE TABLE IF NOT EXISTS users (
     password_hash TEXT NOT NULL,
     display_name TEXT,
     role TEXT NOT NULL DEFAULT 'user',
+    organization_id TEXT,
     is_active INTEGER NOT NULL DEFAULT 1,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
     last_login_at TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_users_username ON users(username);
+CREATE INDEX IF NOT EXISTS idx_users_organization ON users(organization_id);
 """
 
 
@@ -291,6 +315,10 @@ class SQLiteBackend(DatabaseBackend):
             conn.execute("PRAGMA journal_mode=WAL")
             conn.executescript(SQLITE_SCHEMA)
             conn.commit()
+        # Safe ALTER / backfill for existing DBs (idempotent)
+        with self.connect() as conn:
+            migrate_ownership_schema(conn, dialect="sqlite")
+            conn.commit()
 
     def param_style(self) -> str:
         return "?"
@@ -347,6 +375,10 @@ class PostgreSQLBackend(DatabaseBackend):
         with conn:
             with conn.cursor() as cur:
                 cur.execute(PG_SCHEMA)
+        # Safe ALTER / backfill via wrapper API
+        wrapper = _ConnectionWrapper(conn, self)
+        migrate_ownership_schema(wrapper, dialect="postgresql")
+        conn.commit()
         conn.close()
 
     def _connect_or_create_db(self):
@@ -453,6 +485,191 @@ class _ConnectionWrapper:
         self.close()
 
 
+# ── Ownership schema migration (dual dialect) ─────────────────────────────
+
+def _table_columns(conn: Any, table: str, dialect: str) -> set[str]:
+    """Return existing column names for *table*."""
+    if dialect == "sqlite":
+        rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
+        # sqlite3.Row supports both index and key access
+        cols: set[str] = set()
+        for row in rows:
+            try:
+                cols.add(row["name"])
+            except (KeyError, IndexError, TypeError):
+                cols.add(row[1])
+        return cols
+    # PostgreSQL
+    rows = conn.execute(
+        """
+        SELECT column_name FROM information_schema.columns
+        WHERE table_name = ? AND table_schema = 'public'
+        """,
+        (table,),
+    ).fetchall()
+    cols = set()
+    for row in rows:
+        try:
+            cols.add(row["column_name"])
+        except (KeyError, IndexError, TypeError):
+            cols.add(row[0])
+    return cols
+
+
+def _count_scalar(conn: Any, sql: str, params: tuple = ()) -> int:
+    row = conn.execute(sql, params).fetchone()
+    if row is None:
+        return 0
+    try:
+        return int(row[0])
+    except (KeyError, IndexError, TypeError):
+        # RealDictCursor single-column row
+        return int(next(iter(dict(row).values())))
+
+
+def migrate_ownership_schema(conn: Any, dialect: str = "sqlite") -> dict[str, int]:
+    """Ensure org/ownership columns exist, seed bootstrap, backfill null owners.
+
+    Safe to run repeatedly. Returns a small report with orphan counts before/after.
+    """
+    from datetime import datetime, timezone
+
+    from sandbox.security.ownership import (
+        BOOTSTRAP_ORG_ID,
+        BOOTSTRAP_ORG_NAME,
+        BOOTSTRAP_USER_ID,
+    )
+
+    now = datetime.now(timezone.utc).isoformat()
+    report = {"orphans_before": 0, "orphans_after": 0, "backfilled": 0}
+
+    # organizations table (CREATE IF NOT EXISTS already in schema; re-run for old DBs)
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS organizations (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        )
+        """
+    )
+
+    # conversations ownership columns
+    conv_cols = _table_columns(conn, "conversations", dialect)
+    if "owner_user_id" not in conv_cols:
+        conn.execute("ALTER TABLE conversations ADD COLUMN owner_user_id TEXT")
+    if "organization_id" not in conv_cols:
+        conn.execute("ALTER TABLE conversations ADD COLUMN organization_id TEXT")
+
+    # users.organization_id
+    user_cols = _table_columns(conn, "users", dialect)
+    if "organization_id" not in user_cols:
+        conn.execute("ALTER TABLE users ADD COLUMN organization_id TEXT")
+
+    # Indexes (IF NOT EXISTS)
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_conversations_owner ON conversations(owner_user_id)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_conversations_org ON conversations(organization_id)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_users_organization ON users(organization_id)"
+    )
+
+    # Bootstrap org
+    conn.execute(
+        """
+        INSERT INTO organizations (id, name, created_at)
+        VALUES (?, ?, ?)
+        ON CONFLICT(id) DO NOTHING
+        """,
+        (BOOTSTRAP_ORG_ID, BOOTSTRAP_ORG_NAME, now),
+    )
+
+    # Bootstrap user (inactive password; used only for legacy ownership binding)
+    existing = conn.execute(
+        "SELECT id FROM users WHERE id = ?", (BOOTSTRAP_USER_ID,)
+    ).fetchone()
+    if not existing:
+        # password_hash is a non-login placeholder
+        conn.execute(
+            """
+            INSERT INTO users (
+                id, username, email, password_hash, display_name,
+                role, organization_id, is_active, created_at, updated_at, last_login_at
+            ) VALUES (?, ?, NULL, ?, ?, 'admin', ?, 0, ?, ?, NULL)
+            """,
+            (
+                BOOTSTRAP_USER_ID,
+                "bootstrap",
+                "bootstrap-disabled",
+                "Bootstrap",
+                BOOTSTRAP_ORG_ID,
+                now,
+                now,
+            ),
+        )
+
+    # Backfill users without organization_id
+    conn.execute(
+        "UPDATE users SET organization_id = ? WHERE organization_id IS NULL OR organization_id = ''",
+        (BOOTSTRAP_ORG_ID,),
+    )
+
+    # Count orphans before backfill
+    report["orphans_before"] = _count_scalar(
+        conn,
+        """
+        SELECT COUNT(*) FROM conversations
+        WHERE owner_user_id IS NULL OR owner_user_id = ''
+        """,
+    )
+
+    if report["orphans_before"]:
+        conn.execute(
+            """
+            UPDATE conversations
+            SET owner_user_id = ?, organization_id = ?
+            WHERE owner_user_id IS NULL OR owner_user_id = ''
+            """,
+            (BOOTSTRAP_USER_ID, BOOTSTRAP_ORG_ID),
+        )
+        report["backfilled"] = report["orphans_before"]
+
+    # Also fill org when owner is set but org is missing
+    conn.execute(
+        """
+        UPDATE conversations
+        SET organization_id = ?
+        WHERE organization_id IS NULL OR organization_id = ''
+        """,
+        (BOOTSTRAP_ORG_ID,),
+    )
+
+    report["orphans_after"] = _count_scalar(
+        conn,
+        """
+        SELECT COUNT(*) FROM conversations
+        WHERE owner_user_id IS NULL OR owner_user_id = ''
+        """,
+    )
+    return report
+
+
+def count_conversation_orphans(db: "Database | None" = None) -> int:
+    """Return count of conversations still missing owner_user_id."""
+    target = db or database
+    with target.connect() as conn:
+        return _count_scalar(
+            conn,
+            """
+            SELECT COUNT(*) FROM conversations
+            WHERE owner_user_id IS NULL OR owner_user_id = ''
+            """,
+        )
+
+
 # ── Database wrapper (backward-compatible) ────────────────────────────────
 
 class Database:
@@ -496,6 +713,18 @@ class Database:
     def initialize(self) -> None:
         """Create all tables and indexes via the active backend."""
         self._backend.initialize()
+
+    def migrate_ownership(self) -> dict[str, int]:
+        """Run ownership migration / backfill; return orphan report."""
+        dialect = (
+            "sqlite"
+            if isinstance(self._backend, SQLiteBackend)
+            else "postgresql"
+        )
+        with self.connect() as conn:
+            report = migrate_ownership_schema(conn, dialect=dialect)
+            conn.commit()
+        return report
 
     # ── Convenience helpers ──────────────────────────────────────────────
 

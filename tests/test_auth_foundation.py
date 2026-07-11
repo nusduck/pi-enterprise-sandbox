@@ -25,6 +25,7 @@ def test_token_roundtrip():
     assert payload["sub"] == "user_1"
     assert payload["username"] == "alice"
     assert payload["role"] == "admin"
+    assert payload.get("organization_id")  # default bootstrap org claim
 
 
 def test_register_login_me():

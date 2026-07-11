@@ -15,7 +15,7 @@
 import { randomUUID } from 'node:crypto';
 import { createAgentSession, SessionManager, AuthStorage, ModelRegistry, DefaultResourceLoader, SettingsManager, getAgentDir } from '@earendil-works/pi-coding-agent';
 import { createSandboxTools } from '../sandbox-tools.js';
-import { createSandboxClient } from '../services/sandbox-client.js';
+import { authFromRequest, createSandboxClient } from '../services/sandbox-client.js';
 import { config, AUTH_HEADER, isPythonAgentRuntime } from '../config.js';
 
 const AGENT_WORKSPACE = '/home/sandbox/workspace';
@@ -287,15 +287,20 @@ export async function handleChatPythonProxy(body, res, req = null) {
   sse({ type: 'trace', trace_id });
 
   const url = `${config.SANDBOX_BASE_URL}/agent/chat`;
+  const auth = authFromRequest(req);
   try {
+    const upstreamHeaders = {
+      'Content-Type': 'application/json',
+      Accept: 'text/event-stream',
+      ...AUTH_HEADER,
+      'X-Trace-Id': trace_id,
+    };
+    if (auth.authorization) {
+      upstreamHeaders.Authorization = auth.authorization;
+    }
     const upstream = await fetch(url, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Accept: 'text/event-stream',
-        ...AUTH_HEADER,
-        'X-Trace-Id': trace_id,
-      },
+      headers: upstreamHeaders,
       body: JSON.stringify({
         messages: body.messages || [],
         conversation_id: body.conversation_id || null,
@@ -379,7 +384,10 @@ export async function handleChat(body, res, req = null) {
 
   // End-to-end trace + request-scoped sandbox client for this chat turn only
   const trace_id = randomUUID();
-  const client = createSandboxClient({ traceId: trace_id });
+  const client = createSandboxClient({
+    traceId: trace_id,
+    auth: authFromRequest(req),
+  });
 
   res.writeHead(200, {
     'Content-Type': 'text/event-stream',

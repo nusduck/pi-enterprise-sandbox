@@ -216,6 +216,8 @@ class ConversationResponse(BaseModel):
     sandbox_session_id: str | None = None
     workspace_path: str | None = None
     messages: list[dict[str, Any]] = Field(default_factory=list)
+    owner_user_id: str | None = None
+    organization_id: str | None = None
     created_at: str = ""
     updated_at: str = ""
 
@@ -227,3 +229,5 @@ class ConversationCreate(BaseModel):
     workspace_path: str | None = None
     # None on PATCH means "do not replace messages"; empty list is a valid clear
     messages: list[dict[str, Any]] | None = None
+    owner_user_id: str | None = None
+    organization_id: str | None = None

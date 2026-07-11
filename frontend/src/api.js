@@ -10,6 +10,40 @@ export { isAllowedApiUrl, safeApiUrl } from './security.js';
 
 const BASE = '/api';
 const MAX_RETRIES = 3;
+const TOKEN_KEY = 'sandbox_auth_token';
+
+// ── Auth token (localStorage) ───────────────────
+
+export function getAuthToken() {
+  try {
+    return localStorage.getItem(TOKEN_KEY) || '';
+  } catch {
+    return '';
+  }
+}
+
+export function setAuthToken(token) {
+  try {
+    if (token) localStorage.setItem(TOKEN_KEY, token);
+    else localStorage.removeItem(TOKEN_KEY);
+  } catch {
+    /* private mode / blocked storage */
+  }
+}
+
+export function clearAuthToken() {
+  setAuthToken('');
+}
+
+/** Headers with optional Authorization when a token is stored. */
+export function authHeaders(extra = {}) {
+  const h = { ...extra };
+  const token = getAuthToken();
+  if (token) {
+    h.Authorization = `Bearer ${token}`;
+  }
+  return h;
+}
 
 /**
  * Send a chat message and consume the SSE stream.
@@ -25,7 +59,7 @@ export async function sendChatMessage(messages, onEvent, signal, conversationId)
 
   const resp = await fetch(`${BASE}/chat`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: authHeaders({ 'Content-Type': 'application/json' }),
     body: JSON.stringify(body),
     signal,
   });
@@ -47,6 +81,60 @@ export async function getStatus() {
   return resp.json();
 }
 
+// ── Auth ────────────────────────────────────────
+
+/**
+ * Register a new user; persists token on success.
+ * @param {{ username: string, password: string, display_name?: string }} body
+ */
+export async function register(body) {
+  const resp = await fetch(`${BASE}/auth/register`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!resp.ok) {
+    const err = await resp.json().catch(() => ({}));
+    throw new Error(err.error || err.detail || `Register failed: ${resp.status}`);
+  }
+  const data = await resp.json();
+  if (data.token) setAuthToken(data.token);
+  return data;
+}
+
+/**
+ * Login; persists token on success.
+ * @param {{ username: string, password: string }} body
+ */
+export async function login(body) {
+  const resp = await fetch(`${BASE}/auth/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!resp.ok) {
+    const err = await resp.json().catch(() => ({}));
+    throw new Error(err.error || err.detail || `Login failed: ${resp.status}`);
+  }
+  const data = await resp.json();
+  if (data.token) setAuthToken(data.token);
+  return data;
+}
+
+/**
+ * Current user (requires stored token).
+ */
+export async function me() {
+  const resp = await fetch(`${BASE}/auth/me`, {
+    headers: authHeaders(),
+  });
+  if (!resp.ok) {
+    const err = await resp.json().catch(() => ({}));
+    throw new Error(err.error || err.detail || `Me failed: ${resp.status}`);
+  }
+  return resp.json();
+}
+
 // ── Conversations ───────────────────────────────
 
 /**
@@ -54,7 +142,9 @@ export async function getStatus() {
  * @returns {Promise<object[]>}
  */
 export async function listConversations() {
-  const resp = await fetch(`${BASE}/conversations`);
+  const resp = await fetch(`${BASE}/conversations`, {
+    headers: authHeaders(),
+  });
   if (!resp.ok) {
     const err = await resp.json().catch(() => ({}));
     throw new Error(err.error || `List conversations failed: ${resp.status}`);
@@ -67,7 +157,9 @@ export async function listConversations() {
  * @param {string} id
  */
 export async function getConversation(id) {
-  const resp = await fetch(`${BASE}/conversations/${encodeURIComponent(id)}`);
+  const resp = await fetch(`${BASE}/conversations/${encodeURIComponent(id)}`, {
+    headers: authHeaders(),
+  });
   if (!resp.ok) {
     const err = await resp.json().catch(() => ({}));
     throw new Error(err.error || `Get conversation failed: ${resp.status}`);
@@ -82,7 +174,7 @@ export async function getConversation(id) {
 export async function createConversation(title = 'New chat') {
   const resp = await fetch(`${BASE}/conversations`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: authHeaders({ 'Content-Type': 'application/json' }),
     body: JSON.stringify({ title }),
   });
   if (!resp.ok) {
@@ -99,6 +191,7 @@ export async function createConversation(title = 'New chat') {
 export async function deleteConversation(id) {
   const resp = await fetch(`${BASE}/conversations/${encodeURIComponent(id)}`, {
     method: 'DELETE',
+    headers: authHeaders(),
   });
   if (!resp.ok && resp.status !== 204) {
     const err = await resp.json().catch(() => ({}));
@@ -116,7 +209,9 @@ export async function deleteConversation(id) {
  */
 export async function listArtifacts(sessionId) {
   const q = new URLSearchParams({ session_id: sessionId });
-  const resp = await fetch(`${BASE}/artifacts?${q}`);
+  const resp = await fetch(`${BASE}/artifacts?${q}`, {
+    headers: authHeaders(),
+  });
   if (!resp.ok) {
     const err = await resp.json().catch(() => ({}));
     throw new Error(err.error || `List artifacts failed: ${resp.status}`);
@@ -132,7 +227,7 @@ export async function listArtifacts(sessionId) {
 export async function decideApproval(approvalId, decision) {
   const resp = await fetch(`${BASE}/approvals/${encodeURIComponent(approvalId)}/decide`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: authHeaders({ 'Content-Type': 'application/json' }),
     body: JSON.stringify({ decision }),
   });
   if (!resp.ok) {
@@ -160,6 +255,7 @@ export async function uploadFile(sessionId, file, signal) {
     try {
       const resp = await fetch(`${BASE}/files/upload?session_id=${sessionId}`, {
         method: 'POST',
+        headers: authHeaders(),
         body: fd,
         signal,
       });

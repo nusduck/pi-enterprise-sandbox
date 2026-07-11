@@ -2,6 +2,7 @@
  * Routes: conversation CRUD proxies → sandbox /conversations
  */
 import * as sb from '../services/sandbox-client.js';
+import { authFromRequest } from '../services/sandbox-client.js';
 
 function json(res, status, data) {
   res.writeHead(status, { 'Content-Type': 'application/json' });
@@ -14,10 +15,12 @@ function jsonError(res, status, message) {
 
 /**
  * GET /api/conversations
+ * @param {import('node:http').ServerResponse} res
+ * @param {import('node:http').IncomingMessage} [req]
  */
-export async function handleListConversations(res) {
+export async function handleListConversations(res, req) {
   try {
-    const list = await sb.listConversations();
+    const list = await sb.listConversations(authFromRequest(req));
     json(res, 200, list);
   } catch (err) {
     console.error('[conversations] list:', err.message);
@@ -28,9 +31,9 @@ export async function handleListConversations(res) {
 /**
  * GET /api/conversations/:id
  */
-export async function handleGetConversation(id, res) {
+export async function handleGetConversation(id, res, req) {
   try {
-    const conv = await sb.getConversation(id);
+    const conv = await sb.getConversation(id, authFromRequest(req));
     json(res, 200, conv);
   } catch (err) {
     console.error('[conversations] get:', err.message);
@@ -41,10 +44,10 @@ export async function handleGetConversation(id, res) {
 /**
  * POST /api/conversations  body: { title? }
  */
-export async function handleCreateConversation(body, res) {
+export async function handleCreateConversation(body, res, req) {
   try {
     const title = body?.title || 'New chat';
-    const conv = await sb.createConversation(title);
+    const conv = await sb.createConversation(title, authFromRequest(req));
     json(res, 201, conv);
   } catch (err) {
     console.error('[conversations] create:', err.message);
@@ -55,9 +58,9 @@ export async function handleCreateConversation(body, res) {
 /**
  * DELETE /api/conversations/:id
  */
-export async function handleDeleteConversation(id, res) {
+export async function handleDeleteConversation(id, res, req) {
   try {
-    await sb.deleteConversation(id);
+    await sb.deleteConversation(id, authFromRequest(req));
     res.writeHead(204);
     res.end();
   } catch (err) {

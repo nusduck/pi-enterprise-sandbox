@@ -1,9 +1,15 @@
 /**
  * Sandbox HTTP Client — typed wrapper around fetch to the sandbox FastAPI service.
  *
- * Prefer `createSandboxClient({ traceId })` for request-scoped usage (chat turns).
+ * Prefer `createSandboxClient({ traceId, auth })` for request-scoped usage (chat turns).
  * Module-level helpers use ephemeral clients so concurrent requests never share
  * mutable trace state.
+ *
+ * Auth model:
+ * - Always send service X-API-Key when configured.
+ * - Forward browser `Authorization: Bearer <jwt>` so sandbox resolves the actor.
+ * - Never trust browser-supplied X-Acting-* headers (stripped via authFromRequest).
+ * - Server code may set acting headers after validating the user.
  */
 import { randomUUID } from 'node:crypto';
 import { config, AUTH_HEADER } from '../config.js';
@@ -20,11 +26,37 @@ export class SandboxError extends Error {
 }
 
 /**
- * Create a request-scoped sandbox client.
- * @param {{ traceId?: string|null }} [options]
+ * Extract sandbox-forwardable auth from an incoming HTTP request.
+ * Strips client X-Acting-* (untrusted from browser).
+ * @param {import('node:http').IncomingMessage | null | undefined} req
+ * @returns {{ authorization?: string, actingUserId?: string, actingOrganizationId?: string, actingRole?: string }}
  */
-export function createSandboxClient({ traceId = null } = {}) {
+export function authFromRequest(req) {
+  if (!req || !req.headers) return {};
+  const out = {};
+  const auth = req.headers.authorization || req.headers.Authorization;
+  if (typeof auth === 'string' && auth.toLowerCase().startsWith('bearer ')) {
+    out.authorization = auth;
+  }
+  // Do NOT copy X-Acting-* from browser. Callers may set acting* only after server auth.
+  return out;
+}
+
+/**
+ * Create a request-scoped sandbox client.
+ * @param {{
+ *   traceId?: string|null,
+ *   auth?: {
+ *     authorization?: string,
+ *     actingUserId?: string,
+ *     actingOrganizationId?: string,
+ *     actingRole?: string,
+ *   } | null,
+ * }} [options]
+ */
+export function createSandboxClient({ traceId = null, auth = null } = {}) {
   let clientTraceId = traceId || null;
+  const authCtx = auth || {};
 
   function setTraceId(id) {
     clientTraceId = id || null;
@@ -47,11 +79,29 @@ export function createSandboxClient({ traceId = null } = {}) {
   }
 
   function headers(extra = {}) {
+    // Drop any client-supplied acting headers from extra (defense in depth)
+    const safeExtra = { ...extra };
+    delete safeExtra['X-Acting-User-Id'];
+    delete safeExtra['X-Acting-Organization-Id'];
+    delete safeExtra['X-Acting-Role'];
+    delete safeExtra['x-acting-user-id'];
+    delete safeExtra['x-acting-organization-id'];
+    delete safeExtra['x-acting-role'];
+
     const h = {
       'Content-Type': 'application/json',
       ...AUTH_HEADER,
-      ...extra,
+      ...safeExtra,
     };
+    if (authCtx.authorization) {
+      h.Authorization = authCtx.authorization;
+    }
+    // Only server-provided acting context (never from browser extra)
+    if (authCtx.actingUserId && authCtx.actingOrganizationId) {
+      h['X-Acting-User-Id'] = authCtx.actingUserId;
+      h['X-Acting-Organization-Id'] = authCtx.actingOrganizationId;
+      if (authCtx.actingRole) h['X-Acting-Role'] = authCtx.actingRole;
+    }
     const tid = clientTraceId || extra['X-Trace-Id'];
     if (tid) {
       h['X-Trace-Id'] = tid;
@@ -257,6 +307,28 @@ export function createSandboxClient({ traceId = null } = {}) {
       return resp.json();
     },
 
+    // ── Auth proxy ──────────────────────────────────
+    async authRegister(body) {
+      const resp = await sbFetch('/auth/register', {
+        method: 'POST',
+        body: JSON.stringify(body),
+      });
+      return resp.json();
+    },
+
+    async authLogin(body) {
+      const resp = await sbFetch('/auth/login', {
+        method: 'POST',
+        body: JSON.stringify(body),
+      });
+      return resp.json();
+    },
+
+    async authMe() {
+      const resp = await sbFetch('/auth/me', { method: 'GET' });
+      return resp.json();
+    },
+
     // ── Health ──────────────────────────────────────
     async checkHealth() {
       try {
@@ -299,28 +371,40 @@ export async function getSession(sessionId) {
   return createSandboxClient().getSession(sessionId);
 }
 
-export async function listConversations() {
-  return createSandboxClient().listConversations();
+export async function listConversations(auth = null) {
+  return createSandboxClient({ auth }).listConversations();
 }
 
-export async function createConversation(title = 'New chat') {
-  return createSandboxClient().createConversation(title);
+export async function createConversation(title = 'New chat', auth = null) {
+  return createSandboxClient({ auth }).createConversation(title);
 }
 
-export async function getConversation(conversationId) {
-  return createSandboxClient().getConversation(conversationId);
+export async function getConversation(conversationId, auth = null) {
+  return createSandboxClient({ auth }).getConversation(conversationId);
 }
 
-export async function getConversationWorkspace(conversationId) {
-  return createSandboxClient().getConversationWorkspace(conversationId);
+export async function getConversationWorkspace(conversationId, auth = null) {
+  return createSandboxClient({ auth }).getConversationWorkspace(conversationId);
 }
 
-export async function updateConversation(conversationId, patch = {}) {
-  return createSandboxClient().updateConversation(conversationId, patch);
+export async function updateConversation(conversationId, patch = {}, auth = null) {
+  return createSandboxClient({ auth }).updateConversation(conversationId, patch);
 }
 
-export async function deleteConversation(conversationId) {
-  return createSandboxClient().deleteConversation(conversationId);
+export async function deleteConversation(conversationId, auth = null) {
+  return createSandboxClient({ auth }).deleteConversation(conversationId);
+}
+
+export async function authRegister(body) {
+  return createSandboxClient().authRegister(body);
+}
+
+export async function authLogin(body) {
+  return createSandboxClient().authLogin(body);
+}
+
+export async function authMe(auth = null) {
+  return createSandboxClient({ auth }).authMe();
 }
 
 export async function executeCommand(sessionId, command, timeout = 120) {

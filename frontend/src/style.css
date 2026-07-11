@@ -405,3 +405,45 @@ body {
   .welcome h2 { font-size: 16px; }
   .deliverables-list { padding: 6px 10px 10px; }
 }
+
+/* ── Auth panel (sidebar) ─────────────────────── */
+.sidebar-auth {
+  padding: 8px 10px 10px;
+  border-bottom: 1px solid #1e293b;
+}
+.auth-form {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.auth-form input {
+  background: #111827;
+  border: 1px solid #334155;
+  color: #e2e8f0;
+  border-radius: 6px;
+  padding: 6px 8px;
+  font-size: 13px;
+}
+.auth-actions {
+  display: flex;
+  gap: 6px;
+}
+.btn-auth {
+  flex: 1;
+  background: #2563eb;
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  padding: 6px 8px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.btn-auth.secondary {
+  background: #1e293b;
+  border: 1px solid #334155;
+}
+.auth-hint {
+  font-size: 11px;
+  color: #94a3b8;
+  min-height: 1.2em;
+}

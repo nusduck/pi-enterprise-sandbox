@@ -3,7 +3,7 @@
  * Routes are modular: no monolithic switch statement.
  */
 import http from 'node:http';
-import { config } from './config.js';
+import { config, isProtectedApiPath } from './config.js';
 import { handleChat } from './routes/chat.js';
 import { handleStatus } from './routes/status.js';
 import { handleFileDownload, handleFileUpload, handleArtifactDownload } from './routes/files.js';
@@ -15,6 +15,7 @@ import {
 } from './routes/conversations.js';
 import { handleListArtifacts } from './routes/artifacts.js';
 import { handleDecideApproval } from './routes/approvals.js';
+import { handleRegister, handleLogin, handleMe } from './routes/auth.js';
 import { checkHealth } from './services/sandbox-client.js';
 
 // ── Startup health check ────────────────────────
@@ -66,6 +67,25 @@ function jsonError(res, status, message) {
   res.end(JSON.stringify({ error: message }));
 }
 
+/**
+ * When AUTH_ENABLED, require Bearer on protected user-facing routes.
+ * Does not re-verify JWT (sandbox validates); only checks presence.
+ * @param {import('node:http').IncomingMessage} req
+ * @param {import('node:http').ServerResponse} res
+ * @param {string} path
+ * @returns {boolean} true if request may proceed
+ */
+function enforceBffAuth(req, res, path) {
+  if (!config.AUTH_ENABLED) return true;
+  if (!isProtectedApiPath(path)) return true;
+  const auth = req.headers.authorization || '';
+  if (!auth.toLowerCase().startsWith('bearer ') || auth.length < 16) {
+    jsonError(res, 401, 'Authentication required');
+    return false;
+  }
+  return true;
+}
+
 const server = http.createServer(async (req, res) => {
   setCommonHeaders(res);
 
@@ -78,6 +98,28 @@ const server = http.createServer(async (req, res) => {
   try {
     const parsedUrl = new URL(req.url, `http://${req.headers.host}`);
     const path = parsedUrl.pathname;
+
+    if (!enforceBffAuth(req, res, path)) {
+      return;
+    }
+
+    // ── Auth proxy (public) ──
+    if (req.method === 'POST' && path === '/api/auth/register') {
+      const body = await readBody(req);
+      const parsed = body ? JSON.parse(body) : {};
+      await handleRegister(parsed, res);
+      return;
+    }
+    if (req.method === 'POST' && path === '/api/auth/login') {
+      const body = await readBody(req);
+      const parsed = body ? JSON.parse(body) : {};
+      await handleLogin(parsed, res);
+      return;
+    }
+    if (req.method === 'GET' && path === '/api/auth/me') {
+      await handleMe(res, req);
+      return;
+    }
 
     // ── POST /api/chat — SSE agent stream ──
     if (req.method === 'POST' && path === '/api/chat') {
@@ -95,13 +137,13 @@ const server = http.createServer(async (req, res) => {
 
     // ── Conversations ──
     if (req.method === 'GET' && path === '/api/conversations') {
-      await handleListConversations(res);
+      await handleListConversations(res, req);
       return;
     }
     if (req.method === 'POST' && path === '/api/conversations') {
       const body = await readBody(req);
       const parsed = body ? JSON.parse(body) : {};
-      await handleCreateConversation(parsed, res);
+      await handleCreateConversation(parsed, res, req);
       return;
     }
     {
@@ -109,11 +151,11 @@ const server = http.createServer(async (req, res) => {
       if (convMatch) {
         const id = decodeURIComponent(convMatch[1]);
         if (req.method === 'GET') {
-          await handleGetConversation(id, res);
+          await handleGetConversation(id, res, req);
           return;
         }
         if (req.method === 'DELETE') {
-          await handleDeleteConversation(id, res);
+          await handleDeleteConversation(id, res, req);
           return;
         }
       }
@@ -121,7 +163,7 @@ const server = http.createServer(async (req, res) => {
 
     // ── Artifacts ──
     if (req.method === 'GET' && path === '/api/artifacts') {
-      await handleListArtifacts(parsedUrl, res);
+      await handleListArtifacts(parsedUrl, res, req);
       return;
     }
 
@@ -132,20 +174,20 @@ const server = http.createServer(async (req, res) => {
         const approvalId = decodeURIComponent(apprMatch[1]);
         const body = await readBody(req);
         const parsed = body ? JSON.parse(body) : {};
-        await handleDecideApproval(approvalId, parsed, res);
+        await handleDecideApproval(approvalId, parsed, res, req);
         return;
       }
     }
 
     // ── GET /api/files/download — raw workspace file proxy ──
     if (req.method === 'GET' && path === '/api/files/download') {
-      await handleFileDownload(parsedUrl, res);
+      await handleFileDownload(parsedUrl, res, req);
       return;
     }
 
     // ── GET /api/files/artifact-download — artifact deliverable proxy (P7) ──
     if (req.method === 'GET' && path === '/api/files/artifact-download') {
-      await handleArtifactDownload(parsedUrl, res);
+      await handleArtifactDownload(parsedUrl, res, req);
       return;
     }
 
@@ -153,7 +195,7 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'POST' && path === '/api/files/upload') {
       const rawBody = await readBodyBuffer(req);
       const ct = req.headers['content-type'] || 'application/octet-stream';
-      await handleFileUpload(parsedUrl, rawBody, ct, res);
+      await handleFileUpload(parsedUrl, rawBody, ct, res, req);
       return;
     }
 
@@ -168,5 +210,8 @@ const server = http.createServer(async (req, res) => {
 
 server.listen(config.PORT, async () => {
   console.log(`[server] pi-enterprise-api-server v4.0.0 (${config.NODE_ENV}) on port ${config.PORT}`);
+  if (config.AUTH_ENABLED) {
+    console.log('[server] AUTH_ENABLED=true — user-facing /api routes require Bearer token');
+  }
   await startupCheck();
 });

@@ -15,6 +15,17 @@
         <button type="button" class="btn-new-chat" id="btn-new-chat" title="New chat">＋ New chat</button>
         <button type="button" class="btn-icon sidebar-close-btn" id="btn-sidebar-close" title="Close sidebar" aria-label="Close sidebar">✕</button>
       </div>
+      <div class="sidebar-auth" id="auth-panel" hidden>
+        <form id="auth-form" class="auth-form" autocomplete="on">
+          <input type="text" id="auth-username" name="username" placeholder="Username" minlength="2" required />
+          <input type="password" id="auth-password" name="password" placeholder="Password" minlength="6" required />
+          <div class="auth-actions">
+            <button type="submit" class="btn-auth" id="btn-login" data-mode="login">Login</button>
+            <button type="button" class="btn-auth secondary" id="btn-register">Register</button>
+          </div>
+          <p class="auth-hint" id="auth-user-label"></p>
+        </form>
+      </div>
       <div class="sidebar-list" id="conversation-list" role="list"></div>
     </aside>
     <div id="sidebar-backdrop" class="sidebar-backdrop" hidden></div>

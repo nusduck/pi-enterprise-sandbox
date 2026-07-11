@@ -32,6 +32,11 @@ import {
   deleteConversation,
   listArtifacts,
   decideApproval,
+  getAuthToken,
+  clearAuthToken,
+  login as apiLogin,
+  register as apiRegister,
+  me as apiMe,
 } from './api.js';
 import {
   initDOM,
@@ -509,6 +514,91 @@ async function handleUpload(file) {
   }
 }
 
+// ── Auth panel (optional; token in localStorage) ──
+
+function updateAuthUi(user) {
+  const panel = document.getElementById('auth-panel');
+  const label = document.getElementById('auth-user-label');
+  if (!panel) return;
+  // Always show panel when AUTH is likely needed or a token exists
+  panel.hidden = false;
+  if (label) {
+    if (user?.username) {
+      label.textContent = `Signed in as ${user.username}`;
+    } else if (getAuthToken()) {
+      label.textContent = 'Token stored (local)';
+    } else {
+      label.textContent = 'Optional login when AUTH_ENABLED';
+    }
+  }
+}
+
+async function refreshAuthState() {
+  const token = getAuthToken();
+  if (!token) {
+    updateAuthUi(null);
+    return;
+  }
+  try {
+    const user = await apiMe();
+    updateAuthUi(user);
+  } catch {
+    // Stale token — keep it visible but mark unknown
+    updateAuthUi(null);
+  }
+}
+
+function wireAuthForm() {
+  const form = document.getElementById('auth-form');
+  const panel = document.getElementById('auth-panel');
+  if (!form || !panel) return;
+  panel.hidden = false;
+
+  const usernameEl = document.getElementById('auth-username');
+  const passwordEl = document.getElementById('auth-password');
+  const btnRegister = document.getElementById('btn-register');
+
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const username = usernameEl?.value?.trim();
+    const password = passwordEl?.value || '';
+    if (!username || !password) return;
+    try {
+      const data = await apiLogin({ username, password });
+      updateAuthUi(data.user);
+      flashError(''); // clear
+      setStatus(`Logged in as ${data.user?.username || username}`);
+      await bootConversations();
+    } catch (err) {
+      flashError(err.message || 'Login failed');
+    }
+  });
+
+  btnRegister?.addEventListener('click', async () => {
+    const username = usernameEl?.value?.trim();
+    const password = passwordEl?.value || '';
+    if (!username || !password) {
+      flashError('Username and password required');
+      return;
+    }
+    try {
+      const data = await apiRegister({ username, password });
+      updateAuthUi(data.user);
+      setStatus(`Registered as ${data.user?.username || username}`);
+      await bootConversations();
+    } catch (err) {
+      flashError(err.message || 'Register failed');
+    }
+  });
+
+  // Double-click label to clear token (dev convenience)
+  document.getElementById('auth-user-label')?.addEventListener('dblclick', () => {
+    clearAuthToken();
+    updateAuthUi(null);
+    setStatus('Logged out');
+  });
+}
+
 // ── Boot: load conversation list + prefer server history ──
 
 async function bootConversations() {
@@ -554,6 +644,9 @@ function init() {
   renderMessagesFull(state);
   renderConversationList(state, { onSelect: selectConversation, onDelete: removeConversation });
   renderDeliverables(state);
+
+  wireAuthForm();
+  refreshAuthState().catch(() => {});
 
   // Boot load from API
   bootConversations().catch(err => console.warn('[boot]', err));

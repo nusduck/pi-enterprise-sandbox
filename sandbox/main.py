@@ -138,34 +138,38 @@ async def api_token_auth_middleware(request: Request, call_next):
 async def jwt_auth_middleware(request: Request, call_next):
     """Optional user JWT when SANDBOX_AUTH_ENABLED=true.
 
-    Service-to-service X-API-Key still works. When auth is enabled, browser-facing
-    paths can send Authorization: Bearer <token>. Public: health, auth, docs, metrics.
+    Service-to-service X-API-Key still authenticates the *service* and may reach
+    internal routes (e.g. /sessions). End-user actor identity is resolved from:
+
+      1. Authorization: Bearer <user jwt>
+      2. Service token + X-Acting-User-Id + X-Acting-Organization-Id
+
+    Service token alone is **not** an end-user actor; ownership routes require
+    an actor via ``require_actor`` (401). Public: health, auth, docs, metrics.
     """
     if not settings.auth_enabled:
         return await call_next(request)
 
+    from sandbox.security.ownership import apply_actor_to_request_state
     from sandbox.security.public_routes import is_public_route
 
     if is_public_route(request.url.path):
         return await call_next(request)
 
-    # Allow service token to bypass user JWT (api-server → sandbox)
+    # Always try to attach actor (JWT or service+acting); never trust alone for identity
+    actor = apply_actor_to_request_state(request)
+    if actor is not None:
+        return await call_next(request)
+
+    # Valid service API key: allow request through without end-user actor
+    # (sessions/health-style internal ops). Ownership routes still call require_actor.
     if settings.api_token:
         svc = request.headers.get(settings.api_token_header, "")
         if svc and svc == settings.api_token:
             return await call_next(request)
 
-    from sandbox.auth import verify_token
-
-    auth = request.headers.get("Authorization", "")
-    if not auth.startswith("Bearer "):
-        return JSONResponse(status_code=401, content={"detail": "Authentication required"})
-    payload = verify_token(auth[7:].strip())
-    if not payload:
-        return JSONResponse(status_code=401, content={"detail": "Invalid or expired token"})
-    request.state.user_id = payload.get("sub")
-    request.state.user_role = payload.get("role", "user")
-    return await call_next(request)
+    # No JWT, no service token → 401
+    return JSONResponse(status_code=401, content={"detail": "Authentication required"})
 
 
 @app.middleware("http")

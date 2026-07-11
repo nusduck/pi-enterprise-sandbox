@@ -1,7 +1,7 @@
 /**
  * Route: GET /api/artifacts?session_id= — list artifacts for a sandbox session
  */
-import * as sb from '../services/sandbox-client.js';
+import { authFromRequest, createSandboxClient } from '../services/sandbox-client.js';
 
 function json(res, status, data) {
   res.writeHead(status, { 'Content-Type': 'application/json' });
@@ -11,14 +11,15 @@ function json(res, status, data) {
 /**
  * GET /api/artifacts?session_id=
  */
-export async function handleListArtifacts(parsedUrl, res) {
+export async function handleListArtifacts(parsedUrl, res, req = null) {
   const sessionId = parsedUrl.searchParams.get('session_id');
   if (!sessionId) {
     json(res, 400, { error: 'session_id is required' });
     return;
   }
   try {
-    const data = await sb.listArtifacts(sessionId);
+    const client = createSandboxClient({ auth: authFromRequest(req) });
+    const data = await client.listArtifacts(sessionId);
     json(res, 200, data);
   } catch (err) {
     console.error('[artifacts] list:', err.message);

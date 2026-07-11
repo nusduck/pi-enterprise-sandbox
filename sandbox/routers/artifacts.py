@@ -4,11 +4,13 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse as FastAPIFileResponse
 
+from sandbox.config import settings
 from sandbox.models import ArtifactListResponse, ArtifactRegister, ArtifactResponse
 from sandbox.paths import get_session_physical_workspace
+from sandbox.security.ownership import assert_session_owner, resolve_actor
 from sandbox.security.path_validation import enforce_path_within_workspace
 from sandbox.services.artifact_manager import artifact_manager
 from sandbox.services.session_manager import session_manager
@@ -16,10 +18,27 @@ from sandbox.services.session_manager import session_manager
 router = APIRouter(prefix="/sessions/{session_id}/artifacts", tags=["artifacts"])
 
 
-def _session_workspace(session_id: str) -> Path:
+def _require_session(session_id: str, request: Request | None = None):
+    """Load session and enforce ownership when auth is on."""
     session = session_manager.get(session_id)
     if session is None:
         raise HTTPException(status_code=404, detail="Session not found")
+    if settings.auth_enabled and request is not None:
+        actor = resolve_actor(request)
+        if getattr(session, "user_id", None):
+            if actor is None:
+                raise HTTPException(
+                    status_code=401,
+                    detail="Authentication required: user JWT or service token with acting headers",
+                )
+            assert_session_owner(session, actor)
+        elif actor is not None:
+            assert_session_owner(session, actor)
+    return session
+
+
+def _session_workspace(session_id: str, request: Request | None = None) -> Path:
+    session = _require_session(session_id, request)
     return Path(get_session_physical_workspace(session))
 
 
@@ -38,17 +57,15 @@ def _resolve_artifact_file(workspace: Path, user_path: str) -> Path:
 
 
 @router.get("", response_model=ArtifactListResponse)
-def list_artifacts(session_id: str):
-    session = session_manager.get(session_id)
-    if session is None:
-        raise HTTPException(status_code=404, detail="Session not found")
+def list_artifacts(session_id: str, request: Request):
+    _require_session(session_id, request)
     artifacts = artifact_manager.list_by_session(session_id)
     return ArtifactListResponse(artifacts=artifacts, total=len(artifacts))
 
 
 @router.post("/register", response_model=ArtifactResponse, status_code=201)
-def register_artifact(session_id: str, body: ArtifactRegister):
-    ws = _session_workspace(session_id)
+def register_artifact(session_id: str, body: ArtifactRegister, request: Request):
+    ws = _session_workspace(session_id, request)
     safe = _resolve_artifact_file(ws, body.path)
     # Persist a workspace-relative path so download revalidates safely.
     rel_path = str(safe.relative_to(ws.resolve()))
@@ -64,8 +81,8 @@ def register_artifact(session_id: str, body: ArtifactRegister):
 
 
 @router.get("/{artifact_id}/download")
-def download_artifact(session_id: str, artifact_id: str):
-    ws = _session_workspace(session_id)
+def download_artifact(session_id: str, artifact_id: str, request: Request):
+    ws = _session_workspace(session_id, request)
 
     # Session-scoped lookup — rejects artifacts owned by another session.
     artifact = artifact_manager.get_for_session(session_id, artifact_id)
@@ -88,7 +105,7 @@ def download_artifact(session_id: str, artifact_id: str):
 
 
 @router.post("/submit", response_model=ArtifactResponse, status_code=201)
-def submit_artifact(session_id: str, body: ArtifactRegister):
+def submit_artifact(session_id: str, body: ArtifactRegister, request: Request):
     """Explicitly submit a file as an artifact.
 
     This is the primary endpoint for agent-originated artifact submissions.
@@ -96,7 +113,7 @@ def submit_artifact(session_id: str, body: ArtifactRegister):
     declare a workspace file as a downloadable artifact.
     No automatic scans happen — only explicitly submitted files are tracked.
     """
-    ws = _session_workspace(session_id)
+    ws = _session_workspace(session_id, request)
     safe = _resolve_artifact_file(ws, body.path)
     rel_path = str(safe.relative_to(ws.resolve()))
 

@@ -37,10 +37,18 @@ def verify_password(password: str, stored: str) -> bool:
     return hmac.compare_digest(check, stored)
 
 
-def create_token(user_id: str, username: str, role: str = "user", ttl_seconds: int = 86400) -> str:
+def create_token(
+    user_id: str,
+    username: str,
+    role: str = "user",
+    organization_id: str | None = None,
+    ttl_seconds: int = 86400,
+) -> str:
     """Create a compact signed token: base.payload.sig (not full JWT lib dependency)."""
     import base64
     import json
+
+    from sandbox.security.ownership import BOOTSTRAP_ORG_ID
 
     header = base64.urlsafe_b64encode(b'{"alg":"HS256","typ":"JWT"}').decode().rstrip("=")
     now = int(time.time())
@@ -48,6 +56,7 @@ def create_token(user_id: str, username: str, role: str = "user", ttl_seconds: i
         "sub": user_id,
         "username": username,
         "role": role,
+        "organization_id": organization_id or BOOTSTRAP_ORG_ID,
         "iat": now,
         "exp": now + ttl_seconds,
     }

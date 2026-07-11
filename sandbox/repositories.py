@@ -265,16 +265,30 @@ class ConversationRepository:
 
     def upsert(self, entry: dict[str, Any]) -> ConversationResponse:
         now = entry.get("updated_at") or entry.get("created_at") or datetime.now(timezone.utc).isoformat()
+        # Preserve ownership on update when not explicitly provided
+        existing = self.get(entry["id"]) if entry.get("id") else None
+        owner = entry.get("owner_user_id")
+        org = entry.get("organization_id")
+        if existing is not None:
+            if owner is None:
+                owner = existing.owner_user_id
+            if org is None:
+                org = existing.organization_id
         with self.db.connect() as conn:
             conn.execute(
                 """\
-                INSERT INTO conversations (id, title, sandbox_session_id, workspace_path, messages, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO conversations (
+                    id, title, sandbox_session_id, workspace_path, messages,
+                    owner_user_id, organization_id, created_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
                     title=excluded.title,
                     sandbox_session_id=excluded.sandbox_session_id,
                     workspace_path=excluded.workspace_path,
                     messages=excluded.messages,
+                    owner_user_id=COALESCE(excluded.owner_user_id, conversations.owner_user_id),
+                    organization_id=COALESCE(excluded.organization_id, conversations.organization_id),
                     updated_at=excluded.updated_at
                 """,
                 (
@@ -283,6 +297,8 @@ class ConversationRepository:
                     entry.get("sandbox_session_id"),
                     entry.get("workspace_path"),
                     _json_dumps(entry.get("messages", [])),
+                    owner,
+                    org,
                     entry.get("created_at", now),
                     now,
                 ),
@@ -303,6 +319,61 @@ class ConversationRepository:
                 "SELECT * FROM conversations ORDER BY updated_at DESC"
             ).fetchall()
         return [self._row_to_model(row) for row in rows]
+
+    def list_for_user(
+        self,
+        *,
+        user_id: str,
+        organization_id: str,
+        is_admin: bool = False,
+    ) -> list[ConversationResponse]:
+        """List conversations visible to a user (owner) or admin (same org)."""
+        with self.db.connect() as conn:
+            if is_admin:
+                rows = conn.execute(
+                    """
+                    SELECT * FROM conversations
+                    WHERE organization_id = ?
+                    ORDER BY updated_at DESC
+                    """,
+                    (organization_id,),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    """
+                    SELECT * FROM conversations
+                    WHERE owner_user_id = ? AND organization_id = ?
+                    ORDER BY updated_at DESC
+                    """,
+                    (user_id, organization_id),
+                ).fetchall()
+        return [self._row_to_model(row) for row in rows]
+
+    def get_for_owner(
+        self,
+        conversation_id: str,
+        *,
+        user_id: str,
+        organization_id: str,
+        is_admin: bool = False,
+    ) -> ConversationResponse | None:
+        """Return conversation only if actor may access it; else None.
+
+        Rows missing owner/org are treated as inaccessible (no existence leak)
+        so pre-migration orphans cannot be read by arbitrary users.
+        """
+        conv = self.get(conversation_id)
+        if not conv:
+            return None
+        if not conv.organization_id or not conv.owner_user_id:
+            return None
+        if conv.organization_id != organization_id:
+            return None
+        if is_admin:
+            return conv
+        if conv.owner_user_id != user_id:
+            return None
+        return conv
 
     def update_messages(
         self, conversation_id: str, messages: list[dict[str, Any]]
@@ -352,12 +423,22 @@ class ConversationRepository:
 
     @staticmethod
     def _row_to_model(row) -> ConversationResponse:
+        # sqlite3.Row has no .get; use try/keys for optional ownership columns
+        def _col(name: str, default=None):
+            try:
+                val = row[name]
+            except (KeyError, IndexError, TypeError):
+                return default
+            return default if val is None else val
+
         return ConversationResponse(
             id=row["id"],
             title=row["title"],
             sandbox_session_id=row["sandbox_session_id"],
             workspace_path=row["workspace_path"],
             messages=_json_loads(row["messages"]),
+            owner_user_id=_col("owner_user_id"),
+            organization_id=_col("organization_id"),
             created_at=row["created_at"],
             updated_at=row["updated_at"],
         )
@@ -505,19 +586,23 @@ class UserRepository:
         email: str | None = None,
         display_name: str | None = None,
         role: str = "user",
+        organization_id: str | None = None,
     ) -> dict[str, Any]:
+        from sandbox.security.ownership import BOOTSTRAP_ORG_ID
+
         now = datetime.now(timezone.utc).isoformat()
+        org_id = organization_id or BOOTSTRAP_ORG_ID
         with self.db.connect() as conn:
             conn.execute(
                 """
                 INSERT INTO users (
                     id, username, email, password_hash, display_name,
-                    role, is_active, created_at, updated_at, last_login_at
-                ) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, NULL)
+                    role, organization_id, is_active, created_at, updated_at, last_login_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?, NULL)
                 """,
                 (
                     user_id, username, email, password_hash,
-                    display_name or username, role, now, now,
+                    display_name or username, role, org_id, now, now,
                 ),
             )
             conn.commit()
@@ -546,6 +631,12 @@ class UserRepository:
 
     @staticmethod
     def _row_to_dict(row) -> dict[str, Any]:
+        from sandbox.security.ownership import BOOTSTRAP_ORG_ID
+
+        try:
+            org_id = row["organization_id"]
+        except (KeyError, IndexError, TypeError):
+            org_id = None
         return {
             "id": row["id"],
             "username": row["username"],
@@ -553,6 +644,7 @@ class UserRepository:
             "password_hash": row["password_hash"],
             "display_name": row["display_name"],
             "role": row["role"],
+            "organization_id": org_id or BOOTSTRAP_ORG_ID,
             "is_active": bool(row["is_active"]),
             "created_at": row["created_at"],
             "updated_at": row["updated_at"],

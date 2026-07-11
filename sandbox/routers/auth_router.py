@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 from sandbox.auth import create_token, hash_password, verify_password, verify_token
 from sandbox.config import settings
 from sandbox.repositories import UserRepository
+from sandbox.security.ownership import BOOTSTRAP_ORG_ID
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 users = UserRepository()
@@ -20,6 +21,8 @@ class RegisterBody(BaseModel):
     password: str = Field(..., min_length=6, max_length=128)
     email: str | None = None
     display_name: str | None = None
+    # Phase 1: clients cannot self-select org; always bootstrap (field ignored if sent).
+    organization_id: str | None = None
 
 
 class LoginBody(BaseModel):
@@ -34,6 +37,7 @@ def _public_user(u: dict) -> dict:
         "email": u.get("email"),
         "display_name": u.get("display_name"),
         "role": u.get("role", "user"),
+        "organization_id": u.get("organization_id") or BOOTSTRAP_ORG_ID,
     }
 
 
@@ -48,11 +52,14 @@ def register(body: RegisterBody):
         password_hash=hash_password(body.password),
         email=body.email,
         display_name=body.display_name,
+        # Ignore client-supplied organization_id (no self-join into arbitrary orgs).
+        organization_id=BOOTSTRAP_ORG_ID,
     )
     token = create_token(
         user_id=entry["id"],
         username=entry["username"],
         role=entry.get("role", "user"),
+        organization_id=entry.get("organization_id") or BOOTSTRAP_ORG_ID,
         ttl_seconds=settings.jwt_ttl_seconds,
     )
     return {"token": token, "user": _public_user(entry)}
@@ -70,6 +77,7 @@ def login(body: LoginBody):
         user_id=entry["id"],
         username=entry["username"],
         role=entry.get("role", "user"),
+        organization_id=entry.get("organization_id") or BOOTSTRAP_ORG_ID,
         ttl_seconds=settings.jwt_ttl_seconds,
     )
     return {"token": token, "user": _public_user(entry)}

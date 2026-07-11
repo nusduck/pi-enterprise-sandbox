@@ -111,7 +111,14 @@ Base URL: `http://sandbox:8081`（Docker 内网）
 - 错误返回 `{ "detail": "message" }`
 - `X-Trace-Id` header 回显 + 关联审计日志
 - 认证: `X-API-Key` header（如配置 `SANDBOX_API_TOKEN`）
-- Public 端点豁免认证: `/health`, `/ready`, `/metrics`, `/docs`, `/openapi`, `/redoc`
+- Public 端点豁免认证: `/health`, `/ready`, `/metrics`, `/docs`, `/openapi`, `/redoc`, `/auth/*`
+- **可选用户归属**（`SANDBOX_AUTH_ENABLED=true`）:
+  - 终端用户: `Authorization: Bearer <jwt>`（`POST /auth/register|login` 签发，含 `organization_id` / `role`）
+  - BFF→Sandbox: 服务 `X-API-Key` + 用户 JWT；或服务 key + `X-Acting-User-Id` / `X-Acting-Organization-Id` / `X-Acting-Role`
+  - **服务 Token alone 不是终端用户**：可访问内部 `/sessions` 等，但 `/conversations` 与已归属 session 的 files/artifacts 需 actor，否则 401
+  - 跨用户/跨组织访问 Conversation 返回 **404**（不泄露资源是否存在）
+  - 旧数据迁移绑定 `user_bootstrap` / `org_bootstrap`；新用户默认加入 bootstrap org
+  - BFF `AUTH_ENABLED`（默认同 `SANDBOX_AUTH_ENABLED`）保护 `/api/conversations`、`/api/chat`、文件/产物路由；`/api/status` 与 `/api/auth/*` 保持公开
 
 ### Sessions
 

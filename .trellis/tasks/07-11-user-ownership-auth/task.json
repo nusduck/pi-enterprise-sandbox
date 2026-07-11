@@ -3,7 +3,7 @@
   "name": "user-ownership-auth",
   "title": "End-to-end user ownership and authentication",
   "description": "Persist and enforce per-user ownership across backend resources and frontend authentication flows.",
-  "status": "planning",
+  "status": "completed",
   "dev_type": null,
   "scope": null,
   "package": null,
@@ -11,7 +11,7 @@
   "creator": "nusduck",
   "assignee": "nusduck",
   "createdAt": "2026-07-11",
-  "completedAt": null,
+  "completedAt": "2026-07-11",
   "branch": null,
   "base_branch": "main",
   "worktree_path": null,
@@ -19,8 +19,8 @@
   "pr_url": null,
   "subtasks": [],
   "children": [],
-  "parent": null,
+  "parent": "07-11-field-issues-evolution-planning",
   "relatedFiles": [],
-  "notes": "Deferred by explicit product decision on 2026-07-11. Multi-user ownership/auth is outside the current optimization iteration; do not start this task until the user reopens that scope.",
+  "notes": "Ownership+JWT org; conversation/session file isolation; BFF AUTH_ENABLED; 211 pytest. Residual: executions/approvals full ownership, BFF presence-only Bearer.",
   "meta": {}
 }

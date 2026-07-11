@@ -17,6 +17,8 @@
 # 0. 环境模板（勿提交真实 .env）
 cp .env.example .env
 # 编辑 .env：至少填入 LLMIO_BASE_URL / LLMIO_API_KEY；可选 SANDBOX_API_TOKEN
+# 多用户归属（默认关闭）: SANDBOX_AUTH_ENABLED=true + AUTH_ENABLED=true + SANDBOX_JWT_SECRET
+# 关闭鉴权即回退 open 单用户模式；ownership 列与 bootstrap 回填结果保留
 
 # 1. Python（Sandbox + pytest）
 uv sync --extra test

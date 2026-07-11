@@ -1,7 +1,7 @@
 /**
  * Route: POST /api/approvals/:id/decide — proxy sandbox approval decision
  */
-import * as sb from '../services/sandbox-client.js';
+import { authFromRequest, createSandboxClient } from '../services/sandbox-client.js';
 
 function json(res, status, data) {
   res.writeHead(status, { 'Content-Type': 'application/json' });
@@ -11,7 +11,7 @@ function json(res, status, data) {
 /**
  * POST /api/approvals/:id/decide  body: { decision: 'approve' | 'reject' }
  */
-export async function handleDecideApproval(approvalId, body, res) {
+export async function handleDecideApproval(approvalId, body, res, req = null) {
   const decision = body?.decision;
   if (!approvalId) {
     json(res, 400, { error: 'approval id is required' });
@@ -22,7 +22,8 @@ export async function handleDecideApproval(approvalId, body, res) {
     return;
   }
   try {
-    const result = await sb.decideApproval(approvalId, decision);
+    const client = createSandboxClient({ auth: authFromRequest(req) });
+    const result = await client.decideApproval(approvalId, decision);
     json(res, 200, result);
   } catch (err) {
     console.error('[approvals] decide:', err.message);
