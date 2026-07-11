@@ -1,8 +1,8 @@
 {
   "id": "structured-file-search-tools",
   "name": "structured-file-search-tools",
-  "title": "\u7ed3\u6784\u5316 ls find grep \u5de5\u5177",
-  "description": "\u5728 Sandbox \u63d0\u4f9b\u53d7\u9650\u3001\u7ed3\u6784\u5316\u7684 ls/find/grep \u5e76\u8986\u76d6 SDK \u5185\u7f6e\u672c\u5730\u5de5\u5177\u3002",
+  "title": "结构化 ls find grep 工具",
+  "description": "在 Sandbox 提供受限、结构化的 ls/find/grep 并覆盖 SDK 内置本地工具。",
   "status": "completed",
   "dev_type": null,
   "scope": null,
