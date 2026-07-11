@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 6
-- **Last Active**: 2026-07-11
+- **Total Sessions**: 7
+- **Last Active**: 2026-07-12
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~237 | Active |
+| `journal-1.md` | ~268 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 7 | 2026-07-12 | ADR 0002/0003 task split + parallel P0 start | - | `main` |
 | 6 | 2026-07-11 | Finish: env setup, .env.example CN comments, session wrap-up | `8f064b1c`, `4cc14607` | `main` |
 | 5 | 2026-07-11 | Complete production-boundaries R1-R8 in parallel | `f1e20d8e` | `main` |
 | 4 | 2026-07-11 | Finish database experiment review without experiment assets | `69cb28e9`, `8c5e9e2f`, `75652426`, `02dca2c1`, `f96f031e` | `main` |
