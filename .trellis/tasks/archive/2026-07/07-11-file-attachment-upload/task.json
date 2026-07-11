@@ -1,8 +1,8 @@
 {
   "id": "file-attachment-upload",
   "name": "file-attachment-upload",
-  "title": "\u6587\u4ef6\u9644\u4ef6\u8f93\u5165\u4e0e\u4e0a\u4f20\u4fee\u590d",
-  "description": "\u4fee\u590d\u4e0a\u4f20\u5185\u90e8\u9519\u8bef\u5e76\u5b9e\u73b0\u9644\u4ef6\u8349\u7a3f\u3001\u540e\u53f0\u4e0a\u4f20\u4e0e\u540c\u56de\u5408\u63d0\u4ea4\u3002",
+  "title": "文件附件输入与上传修复",
+  "description": "修复上传内部错误并实现附件草稿、后台上传与同回合提交。",
   "status": "completed",
   "dev_type": null,
   "scope": null,
