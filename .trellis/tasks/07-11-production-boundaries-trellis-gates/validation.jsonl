@@ -1,3 +1,0 @@
-{"ts": "2026-07-11T14:54:07Z", "command": "pytest tests/ -q", "exit_code": 0, "summary": "382+ passed (see suite)"}
-{"ts": "2026-07-11T14:54:07Z", "command": "node --test api-server/tests + agent/tests", "exit_code": 0, "summary": "BFF 34 + Agent 127 passed"}
-{"ts": "2026-07-11T14:54:07Z", "command": "node scripts/smoke-cross-service.mjs", "exit_code": 0, "summary": "cross-service smoke PASS without real LLM key"}

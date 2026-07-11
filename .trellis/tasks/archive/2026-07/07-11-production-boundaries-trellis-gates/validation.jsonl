@@ -1,0 +1,5 @@
+{"command": ".venv/bin/pytest tests/ -q --tb=line", "commit": "07bcf290", "exit_code": 0, "result": "382 pytest + 4 skipped; full python regression", "recorded_at": "2026-07-11T14:54:49+00:00", "scope": "integration"}
+{"command": "node --test api-server/tests/*.test.js", "commit": "07bcf290", "exit_code": 0, "result": "BFF 34 passed", "recorded_at": "2026-07-11T14:54:49+00:00", "scope": "integration"}
+{"command": "node --test agent/tests/*.test.js agent/tests/sdk-compat/*.test.js", "commit": "07bcf290", "exit_code": 0, "result": "Agent 127 passed", "recorded_at": "2026-07-11T14:54:49+00:00", "scope": "integration"}
+{"command": "node scripts/smoke-cross-service.mjs", "commit": "07bcf290", "exit_code": 0, "result": "four-service smoke without real LLM key", "recorded_at": "2026-07-11T14:54:49+00:00", "scope": "integration"}
+{"command": "docker compose config -q", "commit": "07bcf290", "exit_code": 0, "result": "compose config valid", "recorded_at": "2026-07-11T14:54:49+00:00", "scope": "integration"}
