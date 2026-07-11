@@ -26,6 +26,7 @@ import {
 import {
   isUnderSkillRoot,
   commandTouchesSkillRoot,
+  isReadonlySkillExecution,
   resolveSkillPath,
   validateSkillName,
   DEFAULT_SKILL_ROOTS,
@@ -143,6 +144,17 @@ describe('path policy', () => {
     assert.equal(commandTouchesSkillRoot('ls /tmp'), false);
   });
 
+  it('recognizes only simple read-only skill script execution', () => {
+    const run =
+      "python /home/sandbox/skill/data-analysis/scripts/report.py input.csv --output-dir .";
+    assert.equal(isReadonlySkillExecution(run), true);
+    assert.equal(
+      isReadonlySkillExecution(`${run} > /home/sandbox/skill/output.txt`),
+      false,
+    );
+    assert.equal(isReadonlySkillExecution('touch /home/sandbox/skill/pwned'), false);
+  });
+
   it('resolveSkillPath blocks escape', () => {
     const root = '/home/sandbox/skill';
     assert.throws(() => resolveSkillPath('../etc/passwd', root), /escape|Invalid/i);
@@ -179,6 +191,14 @@ describe('policy hard-deny skill root writes', () => {
       command: 'rm -rf /home/sandbox/skill/sample-skill',
     });
     assert.equal(b.decision, POLICY_DECISION.HARD_DENY);
+  });
+
+  it('allows direct execution of a read-only skill script', () => {
+    const b = evaluateToolPolicy('bash', {
+      command:
+        "python /home/sandbox/skill/data-analysis/scripts/report.py input.csv --output-dir .",
+    });
+    assert.equal(b.decision, POLICY_DECISION.ALLOW);
   });
 
   it('allows normal workspace write', () => {
@@ -231,6 +251,27 @@ describe('createSandboxTools skill root guard', () => {
     });
     assert.equal(br.isError, true);
     assert.equal(wrote, false);
+  });
+
+  it('passes a read-only skill script execution to the sandbox', async () => {
+    let executed = false;
+    const client = {
+      async approvalCheck() {
+        return { status: 'approved', risk_level: 'medium' };
+      },
+      async executeCommand() {
+        executed = true;
+        return { exit_code: 0, stdout_preview: 'ok', stderr_preview: '' };
+      },
+    };
+    const tools = createSandboxTools({ client, sessionId: 's1' });
+    const bash = tools.find((t) => t.name === 'bash');
+    const result = await bash.execute('1', {
+      command:
+        "python /home/sandbox/skill/data-analysis/scripts/report.py input.csv --output-dir .",
+    });
+    assert.equal(result.isError, false);
+    assert.equal(executed, true);
   });
 });
 

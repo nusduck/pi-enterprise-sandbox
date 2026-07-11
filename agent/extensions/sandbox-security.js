@@ -15,6 +15,7 @@ import {
   DEFAULT_SKILL_ROOTS,
   isUnderSkillRoot,
   commandTouchesSkillRoot,
+  isReadonlySkillExecution,
 } from '../skills/paths.js';
 
 /** Immutable policy catalog version echoed in audits and approval responses. */
@@ -199,7 +200,8 @@ export function evaluateToolPolicy(toolName, params = {}, options = {}) {
       if (
         params.command &&
         ['bash', 'command', 'raw_bash', 'raw_shell'].includes(name) &&
-        commandTouchesSkillRoot(params.command, skillRoots)
+        commandTouchesSkillRoot(params.command, skillRoots) &&
+        !isReadonlySkillExecution(params.command, skillRoots)
       ) {
         return {
           ...base,

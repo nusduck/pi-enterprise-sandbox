@@ -73,6 +73,13 @@ Browser
 - 子进程只接收 `sandbox/security/safe_env.py` 构造的最小环境，不继承完整 `os.environ`。
 - 高风险工具默认进入审批或拒绝；未知工具在 `policy_checker.py` 中按中风险处理。
 
+### Skill 执行与变更边界
+
+- 默认和生产模式使用 `SKILLS_MODE=readonly`，Agent/Sandbox 的 Skill 挂载保持只读。
+- 通用 `write`、`edit` 和 Bash 不得修改 Skill 根；研发变更只能通过 `skill_install`、`skill_edit`、`skill_reload` 完成。
+- 允许 Python/Shell 解释器直接执行 Skill 根下的单个只读脚本，但命令中出现重定向、管道、命令拼接或子命令替换时仍硬拒绝。
+- 资源受限的 Sandbox pipeline 应优先使用轻量依赖；引入 pandas、NumPy、matplotlib 等原生扩展前，必须在容器内存限制下实际执行验证。
+
 ## 安装、开发、构建和验证命令
 
 以下命令均从仓库根目录理解；子目录命令明确使用 `--prefix`，避免依赖当前 shell 目录。
@@ -102,6 +109,7 @@ docker compose up --build
 
 # 生产 overlay
 docker compose -f docker-compose.yml -f docker-compose.prod.yml up --build -d
+
 ```
 
 说明：`api-server/` 与 `agent/` 的 `package.json` 没有独立 build 脚本，直接运行 ESM 源码；Python 使用 setuptools 构建元数据，但日常服务启动依赖 Uvicorn/Docker。

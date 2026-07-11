@@ -139,6 +139,30 @@ export function commandTouchesSkillRoot(command, skillRoots = DEFAULT_SKILL_ROOT
 }
 
 /**
+ * True only for a simple, read-only execution of a script stored under a skill
+ * root. Shell operators are deliberately rejected so the script path cannot be
+ * combined with a write or a second command.
+ *
+ * @param {string | null | undefined} command
+ * @param {string[]} [skillRoots]
+ */
+export function isReadonlySkillExecution(command, skillRoots = DEFAULT_SKILL_ROOTS) {
+  if (!command || typeof command !== 'string') return false;
+  if (/[;&|<>`\n\r]/.test(command) || command.includes('$(')) return false;
+
+  const match = command.match(
+    /^\s*(python3?|\/usr\/bin\/python3?|bash|sh)\s+(?:"([^"]+)"|'([^']+)'|([^\s]+))(?:\s+.*)?\s*$/,
+  );
+  if (!match) return false;
+
+  const interpreter = match[1];
+  const scriptPath = match[2] || match[3] || match[4] || '';
+  if (!isUnderSkillRoot(scriptPath, skillRoots)) return false;
+  if (interpreter === 'bash' || interpreter === 'sh') return scriptPath.endsWith('.sh');
+  return scriptPath.endsWith('.py');
+}
+
+/**
  * Resolve a skill-relative path strictly under the primary skill root.
  * Rejects escape via `..`, absolute paths outside root, and null bytes.
  *

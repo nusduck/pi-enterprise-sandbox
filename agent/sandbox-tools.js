@@ -28,7 +28,12 @@ import {
   buildToolAuditEvent,
   POLICY_DECISION,
 } from './extensions/sandbox-security.js';
-import { isUnderSkillRoot, commandTouchesSkillRoot, DEFAULT_SKILL_ROOTS } from './skills/paths.js';
+import {
+  isUnderSkillRoot,
+  commandTouchesSkillRoot,
+  isReadonlySkillExecution,
+  DEFAULT_SKILL_ROOTS,
+} from './skills/paths.js';
 
 const APPROVAL_POLL_MS = 1500;
 const APPROVAL_MAX_WAIT_MS = 5 * 60 * 1000;
@@ -94,7 +99,8 @@ export function createSandboxTools(ctx = {}) {
     if (
       toolName === 'bash' &&
       params.command &&
-      commandTouchesSkillRoot(params.command, skillRoots)
+      commandTouchesSkillRoot(params.command, skillRoots) &&
+      !isReadonlySkillExecution(params.command, skillRoots)
     ) {
       return {
         blocked: true,
