@@ -1,6 +1,0 @@
-{"ts":"2026-07-11T00:00:00Z","command":"uv run pytest tests/ -q --tb=short","exit_code":0,"summary":"382 passed, 3 skipped — full Python suite after relative workspace contract"}
-{"ts":"2026-07-11T00:00:00Z","command":"uv run pytest tests/test_paths.py tests/test_path_validation.py tests/test_session_manager.py tests/test_workspace_manager.py tests/test_file_manager.py tests/test_isolation_and_delivery.py tests/test_attachment_upload.py tests/test_multi_turn_history.py tests/test_persistence.py -q --tb=line","exit_code":0,"summary":"106 passed — path/workspace focused suite"}
-{"ts":"2026-07-11T00:00:00Z","command":"node --test api-server/tests/*.test.js","exit_code":0,"summary":"34 passed — BFF session resolution uses workspace_id"}
-{"ts":"2026-07-11T00:00:00Z","command":"node --test agent/tests/*.test.js agent/tests/sdk-compat/*.test.js","exit_code":0,"summary":"127 passed — agent suite green after relative workspace prompt/SSE"}
-{"ts":"2026-07-11T00:00:00Z","command":"npm test --prefix frontend","exit_code":0,"summary":"51 passed — frontend SSE/state tests"}
-{"ts":"2026-07-11T00:00:00Z","command":"node --check agent/chat-runner.js && node --check api-server/routes/chat.js && node --check api-server/routes/sessions.js","exit_code":0,"summary":"syntax check on modified JS entrypoints"}
