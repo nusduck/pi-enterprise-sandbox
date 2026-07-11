@@ -17,6 +17,7 @@ import { createAgentSession, SessionManager, AuthStorage, ModelRegistry, Default
 import { createSandboxTools } from '../sandbox-tools.js';
 import { authFromRequest, createSandboxClient } from '../services/sandbox-client.js';
 import { config, AUTH_HEADER, isPythonAgentRuntime } from '../config.js';
+import { mapSdkEventToSse } from '../services/sdk-sse-map.js';
 
 const AGENT_WORKSPACE = '/home/sandbox/workspace';
 const AGENT_SKILL = '/home/sandbox/skill';
@@ -127,47 +128,6 @@ export function toPersistableMessages(messages) {
     })
     .filter(Boolean)
     .slice(-100);
-}
-
-/**
- * Pull structured fields from a tool result.
- */
-function extractToolDetails(result) {
-  if (!result) return {};
-  if (typeof result === 'string') {
-    return parseArtifactFieldsFromText(result);
-  }
-  if (typeof result !== 'object') return {};
-
-  const sources = [];
-  if (result.details && typeof result.details === 'object') sources.push(result.details);
-  sources.push(result);
-  if (Array.isArray(result.content)) {
-    for (const part of result.content) {
-      if (part?.type === 'text' && part.text) sources.push(parseArtifactFieldsFromText(part.text));
-    }
-  }
-
-  const out = {};
-  for (const s of sources) {
-    if (!s || typeof s !== 'object') continue;
-    for (const key of ['artifact_id', 'path', 'name', 'mime_type', 'size']) {
-      if (out[key] == null && s[key] != null) out[key] = s[key];
-    }
-  }
-  return out;
-}
-
-function parseArtifactFieldsFromText(text) {
-  if (!text || typeof text !== 'string') return {};
-  const out = {};
-  const id = text.match(/artifact_id[=:\s]+([a-zA-Z0-9_-]+)/);
-  if (id) out.artifact_id = id[1];
-  const path = text.match(/\bpath[=:\s]+([^\s,)]+)/);
-  if (path) out.path = path[1];
-  const size = text.match(/\bsize[=:\s]+(\d+)/);
-  if (size) out.size = Number(size[1]);
-  return out;
 }
 
 /**
@@ -534,44 +494,12 @@ Available tools: \`read\`, \`write\`, \`edit\`, \`bash\`, **\`submit_artifact\`*
     }
 
     session.subscribe((event) => {
-      switch (event.type) {
-        case 'message_update':
-          if (event.assistantMessageEvent?.type === 'text_delta') {
-            const delta = event.assistantMessageEvent.delta || '';
-            assistantText += delta;
-            sse({ type: 'token', text: delta });
-          }
-          break;
-        case 'tool_execution_start':
-          sse({ type: 'tool_start', id: event.toolCallId, name: event.toolName, args: event.args });
-          if (event.args) pendingToolArgs.set(event.toolCallId, event.args);
-          break;
-        case 'tool_execution_end':
-          sse({
-            type: 'tool_end', id: event.toolCallId, name: event.toolName,
-            result: event.result, isError: event.isError,
-          });
-          if (event.toolName === 'submit_artifact' && !event.isError) {
-            const toolArgs = pendingToolArgs.get(event.toolCallId) || {};
-            const details = {
-              ...extractToolDetails(event.result),
-              ...extractToolDetails(event.details),
-            };
-            const path = details.path || toolArgs.path;
-            if (path || details.artifact_id) {
-              const payload = { type: 'file_ready' };
-              if (details.artifact_id) payload.artifact_id = details.artifact_id;
-              if (path) payload.path = path;
-              const name = details.name || toolArgs.name || (path ? path.split('/').pop() : undefined);
-              if (name) payload.name = name;
-              const mime = details.mime_type || toolArgs.mime_type;
-              if (mime) payload.mime_type = mime;
-              if (details.size != null) payload.size = details.size;
-              sse(payload);
-            }
-          }
-          pendingToolArgs.delete(event.toolCallId);
-          break;
+      const mapped = mapSdkEventToSse(event, { pendingToolArgs });
+      for (const payload of mapped) {
+        if (payload.type === 'token' && typeof payload.text === 'string') {
+          assistantText += payload.text;
+        }
+        sse(payload);
       }
     });
 

@@ -1,0 +1,200 @@
+{
+  "description": "Golden vectors: synthetic pi-coding-agent session events → BFF SSE payloads (mapSdkEventToSse). No live LLM.",
+  "version": 1,
+  "pinned_sdk": "0.80.3",
+  "cases": [
+    {
+      "name": "text_delta_to_token",
+      "sdk_events": [
+        {
+          "type": "message_update",
+          "assistantMessageEvent": { "type": "text_delta", "delta": "Hello" }
+        },
+        {
+          "type": "message_update",
+          "assistantMessageEvent": { "type": "text_delta", "delta": " world" }
+        }
+      ],
+      "expected_sse": [
+        { "type": "token", "text": "Hello" },
+        { "type": "token", "text": " world" }
+      ]
+    },
+    {
+      "name": "non_text_message_update_ignored",
+      "sdk_events": [
+        {
+          "type": "message_update",
+          "assistantMessageEvent": { "type": "thinking_delta", "delta": "..." }
+        }
+      ],
+      "expected_sse": []
+    },
+    {
+      "name": "tool_start_end",
+      "sdk_events": [
+        {
+          "type": "tool_execution_start",
+          "toolCallId": "call_1",
+          "toolName": "write",
+          "args": { "path": "note.txt", "content": "hi" }
+        },
+        {
+          "type": "tool_execution_end",
+          "toolCallId": "call_1",
+          "toolName": "write",
+          "result": {
+            "content": [{ "type": "text", "text": "Written 2 bytes to note.txt" }],
+            "details": { "size": 2, "path": "note.txt" }
+          },
+          "isError": false
+        }
+      ],
+      "expected_sse": [
+        {
+          "type": "tool_start",
+          "id": "call_1",
+          "name": "write",
+          "args": { "path": "note.txt", "content": "hi" }
+        },
+        {
+          "type": "tool_end",
+          "id": "call_1",
+          "name": "write",
+          "result": {
+            "content": [{ "type": "text", "text": "Written 2 bytes to note.txt" }],
+            "details": { "size": 2, "path": "note.txt" }
+          },
+          "isError": false
+        }
+      ]
+    },
+    {
+      "name": "submit_artifact_emits_file_ready",
+      "sdk_events": [
+        {
+          "type": "tool_execution_start",
+          "toolCallId": "call_2",
+          "toolName": "submit_artifact",
+          "args": { "path": "note.txt", "name": "note.txt" }
+        },
+        {
+          "type": "tool_execution_end",
+          "toolCallId": "call_2",
+          "toolName": "submit_artifact",
+          "result": {
+            "content": [
+              {
+                "type": "text",
+                "text": "Artifact submitted: note.txt (artifact_id=art_1, path=note.txt, size=2)"
+              }
+            ],
+            "details": {
+              "artifact_id": "art_1",
+              "path": "note.txt",
+              "name": "note.txt",
+              "mime_type": "application/octet-stream",
+              "size": 2
+            }
+          },
+          "isError": false
+        }
+      ],
+      "expected_sse": [
+        {
+          "type": "tool_start",
+          "id": "call_2",
+          "name": "submit_artifact",
+          "args": { "path": "note.txt", "name": "note.txt" }
+        },
+        {
+          "type": "tool_end",
+          "id": "call_2",
+          "name": "submit_artifact",
+          "result": {
+            "content": [
+              {
+                "type": "text",
+                "text": "Artifact submitted: note.txt (artifact_id=art_1, path=note.txt, size=2)"
+              }
+            ],
+            "details": {
+              "artifact_id": "art_1",
+              "path": "note.txt",
+              "name": "note.txt",
+              "mime_type": "application/octet-stream",
+              "size": 2
+            }
+          },
+          "isError": false
+        },
+        {
+          "type": "file_ready",
+          "artifact_id": "art_1",
+          "path": "note.txt",
+          "name": "note.txt",
+          "mime_type": "application/octet-stream",
+          "size": 2
+        }
+      ]
+    },
+    {
+      "name": "submit_artifact_error_no_file_ready",
+      "sdk_events": [
+        {
+          "type": "tool_execution_start",
+          "toolCallId": "call_3",
+          "toolName": "submit_artifact",
+          "args": { "path": "missing.txt" }
+        },
+        {
+          "type": "tool_execution_end",
+          "toolCallId": "call_3",
+          "toolName": "submit_artifact",
+          "result": {
+            "content": [{ "type": "text", "text": "Error: not found" }],
+            "details": { "isError": true }
+          },
+          "isError": true
+        }
+      ],
+      "expected_sse": [
+        {
+          "type": "tool_start",
+          "id": "call_3",
+          "name": "submit_artifact",
+          "args": { "path": "missing.txt" }
+        },
+        {
+          "type": "tool_end",
+          "id": "call_3",
+          "name": "submit_artifact",
+          "result": {
+            "content": [{ "type": "text", "text": "Error: not found" }],
+            "details": { "isError": true }
+          },
+          "isError": true
+        }
+      ]
+    },
+    {
+      "name": "unknown_sdk_events_not_forwarded",
+      "sdk_events": [
+        { "type": "agent_start" },
+        { "type": "turn_start" },
+        { "type": "turn_end" },
+        { "type": "agent_end", "messages": [], "willRetry": false }
+      ],
+      "expected_sse": []
+    }
+  ],
+  "required_bff_sse_types_from_sdk": ["token", "tool_start", "tool_end", "file_ready"],
+  "required_lifecycle_sse_types": [
+    "trace",
+    "session",
+    "approval_required",
+    "error",
+    "done",
+    "session_closed"
+  ]
+}

@@ -45,7 +45,7 @@ jobs:
         run: npm ci --prefix api-server
 
       - name: Run API Server unit tests
-        run: node --test api-server/tests/*.test.js
+        run: node --test api-server/tests/*.test.js api-server/tests/sdk-compat/*.test.js
 
       - name: Syntax-check API Server sources
         run: |

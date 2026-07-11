@@ -38,9 +38,11 @@ npm ci --prefix frontend
 # Python
 uv run pytest tests/ -q --tb=short
 
-# Node API Server
-node --test api-server/tests/*.test.js
+# Node API Server（含 sdk-compat；无 live LLM）
+node --test api-server/tests/*.test.js api-server/tests/sdk-compat/*.test.js
 # 或：npm test --prefix api-server
+# SDK 精确版本：npm ls --prefix api-server @earendil-works/pi-coding-agent
+# 升级流程：docs/runbooks/sdk-upgrade.md · ADR：docs/adr/0001-pi-coding-agent-sdk.md
 find api-server -name '*.js' -type f ! -path '*/node_modules/*' -exec node --check {} \;
 
 # Frontend
@@ -150,8 +152,8 @@ uv run pytest tests/test_integration.py -v
 uv run pytest --cov=sandbox --cov-report=term-missing
 uv run pytest --cov=sandbox --cov-report=html
 
-# Node API Server（node:test）
-node --test api-server/tests/*.test.js
+# Node API Server（node:test，含 sdk-compat）
+node --test api-server/tests/*.test.js api-server/tests/sdk-compat/*.test.js
 npm test --prefix api-server
 
 # Frontend（node:test，见 frontend/test/*.test.js）

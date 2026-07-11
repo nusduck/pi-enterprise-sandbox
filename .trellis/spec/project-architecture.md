@@ -107,13 +107,13 @@ CI 权威入口：`.github/workflows/test.yml`（四个并行 job）：
 | Job | 命令摘要 |
 |-----|----------|
 | `python` | `uv sync --extra test` → `uv run pytest tests/ -q --tb=short` |
-| `node-api` | `npm ci --prefix api-server` → `node --test api-server/tests/*.test.js` + `node --check` |
+| `node-api` | `npm ci --prefix api-server` → `node --test api-server/tests/*.test.js api-server/tests/sdk-compat/*.test.js` + `node --check` |
 | `frontend` | `npm ci --prefix frontend` → `npm test` → `npm run build` |
 | `compose` | 确保 `.env` 存在后 `docker compose config -q` |
 
 ```bash
 uv sync --extra test && uv run pytest tests/ -q --tb=short
-npm ci --prefix api-server && node --test api-server/tests/*.test.js
+npm ci --prefix api-server && node --test api-server/tests/*.test.js api-server/tests/sdk-compat/*.test.js
 npm ci --prefix frontend && npm test --prefix frontend && npm run build --prefix frontend
 test -f .env || cp .env.example .env; docker compose config -q
 ```
@@ -122,7 +122,7 @@ test -f .env || cp .env.example .env; docker compose config -q
 
 - 纯单元测试：直接实例化 Manager/Checker，如 `test_session_manager.py`、`test_policy_checker.py`。
 - FastAPI 集成测试：模块级 `TestClient(app)`，如 `test_integration.py`（含 `/health` liveness 与 `/ready` readiness/503）。
-- Node `node:test`：`api-server/tests/`（runtime 选择、request-context）。
+- Node `node:test`：`api-server/tests/`（runtime 选择、request-context）与 `api-server/tests/sdk-compat/`（SDK pin / 事件映射 / Extension / Session）。
 - Frontend `node:test`：`frontend/test/`（SSE、state、security）。
 - 临时路径隔离：`tests/conftest.py` 在导入应用前覆盖 `SANDBOX_*` 路径和数据库。
 - 文件/配置契约：读取 Docker/Compose 或运行 `bash -n`，如 `test_container_startup.py`。

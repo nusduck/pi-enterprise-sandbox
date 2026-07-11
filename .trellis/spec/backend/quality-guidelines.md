@@ -43,9 +43,9 @@ uv run pytest tests/ -q --tb=short
 # 定向
 uv run pytest tests/test_<area>.py -v
 
-# Node API Server
+# Node API Server（含 sdk-compat）
 npm ci --prefix api-server
-node --test api-server/tests/*.test.js
+node --test api-server/tests/*.test.js api-server/tests/sdk-compat/*.test.js
 find api-server -name '*.js' -type f ! -path '*/node_modules/*' -exec node --check {} \;
 
 # Frontend

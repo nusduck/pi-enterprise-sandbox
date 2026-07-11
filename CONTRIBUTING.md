@@ -40,8 +40,8 @@ npm ci --prefix frontend
 # Python
 uv run pytest tests/ -q --tb=short
 
-# Node API Server
-node --test api-server/tests/*.test.js
+# Node API Server（含 sdk-compat）
+node --test api-server/tests/*.test.js api-server/tests/sdk-compat/*.test.js
 # or: npm test --prefix api-server
 
 # Frontend
@@ -129,7 +129,7 @@ pi-enterprise-sandbox/
 ## Pull Request Checklist
 
 - [ ] Python tests pass (`uv run pytest tests/ -q --tb=short`)
-- [ ] Node API tests pass (`node --test api-server/tests/*.test.js`)
+- [ ] Node API tests pass (`node --test api-server/tests/*.test.js api-server/tests/sdk-compat/*.test.js` or `npm test --prefix api-server`)
 - [ ] Frontend tests + build pass
 - [ ] `docker compose config -q` succeeds
 - [ ] New code has tests where behavior changed

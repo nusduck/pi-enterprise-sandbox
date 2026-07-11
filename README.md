@@ -171,7 +171,7 @@ npm run dev --prefix frontend
 
 # 质量门禁（与 CI 对齐）
 uv run pytest tests/ -q --tb=short
-node --test api-server/tests/*.test.js
+node --test api-server/tests/*.test.js api-server/tests/sdk-compat/*.test.js
 npm test --prefix frontend && npm run build --prefix frontend
 docker compose config -q
 ```
