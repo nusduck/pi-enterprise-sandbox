@@ -131,15 +131,19 @@ sendMessage(text)
 - 新对话 → 清空 `conversationId`，下次发送创建新会话
 - 停止按钮 → `abortStream` + `abortCtrl.abort()`，迟到 SSE 因 generation 失效被忽略
 
-### 文件上传
+### 文件附件（草稿生命周期）
 
 ```
-拖拽 / 点击上传
+选择/拖拽文件（可多选，同名不去重）
   ↓
-uploadFile(file)
-  ├── user 消息展示文件名与大小
-  ├── POST /api/files/upload?session_id=xxx (multipart)
-  └── 可选自动跟进分析请求
+ensureSession → POST /api/sessions/ensure（创建/复用 Conversation + Session）
+  ↓
+attachment draft: queued → uploading → uploaded | failed
+  ├── POST /api/files/upload?session_id=xxx (+ Idempotency-Key)
+  ├── 不自动发送聊天
+  └── 可移除 / 失败重试；上传中或失败时禁用发送
+  ↓
+用户点击发送 → 文本 + attachment manifest 组成同一 user turn
 ```
 
 ### 文件下载（P7 产物唯一交付）
@@ -160,7 +164,7 @@ render → security.isAllowedApiUrl 校验后生成 <a class="dl" href="/api/...
 | 发送消息 | Enter / 发送按钮 | `sendMessage` |
 | 中断流 | 停止按钮 | `abortStream` |
 | 新行 | Shift+Enter | textarea 默认 |
-| 上传 | 按钮 / Ctrl+U / 拖拽 | `uploadFile` |
+| 附件 | 按钮 / Ctrl+U / 拖拽 | `handleFilesSelected`（后台上传，不自动发送） |
 | 新对话 | 侧栏 New chat | `startNewChat` |
 | 切换会话 | 侧栏列表 | `selectConversation` |
 | 审批 | 横幅按钮 | `decideApproval` |

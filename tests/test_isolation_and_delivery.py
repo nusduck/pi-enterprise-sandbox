@@ -259,21 +259,29 @@ def test_artifact_cross_session_download_denied():
 
 
 def test_binary_upload_roundtrip_invalid_utf8():
-    """Upload must preserve exact bytes including NUL and invalid UTF-8."""
+    """Upload must preserve exact bytes including NUL and invalid UTF-8.
+
+    Attachments use isolated paths uploads/{id}/{name}; .dat is not on the
+    whitelist, so we use .bin-equivalent via .txt for whitelist + binary body.
+    """
     data = _create_session("bin")
     sid = data["session_id"]
     payload = b"hello\x00world\xff\xfe binary"
 
+    # .zip is whitelisted and stored as opaque bytes (no extract)
     resp = client.post(
         f"/sessions/{sid}/files/upload",
-        files={"file": ("bin.dat", payload, "application/octet-stream")},
-        params={"path": "bin.dat"},
+        files={"file": ("bin.zip", payload, "application/octet-stream")},
     )
     assert resp.status_code == 201, resp.text
+    body = resp.json()
+    rel = body["path"]
+    assert rel.startswith("uploads/")
+    assert body.get("attachment_id")
 
     physical = Path(data["metadata"]["_physical_workspace"])
-    assert (physical / "bin.dat").read_bytes() == payload
+    assert (physical / rel).read_bytes() == payload
 
-    dl = client.get(f"/sessions/{sid}/files/download", params={"path": "bin.dat"})
+    dl = client.get(f"/sessions/{sid}/files/download", params={"path": rel})
     assert dl.status_code == 200
     assert dl.content == payload

@@ -16,6 +16,7 @@ import {
 import { handleListArtifacts } from './routes/artifacts.js';
 import { handleDecideApproval } from './routes/approvals.js';
 import { handleRegister, handleLogin, handleMe } from './routes/auth.js';
+import { handleEnsureSession } from './routes/sessions.js';
 import { checkHealth } from './services/sandbox-client.js';
 
 // ── Startup health check ────────────────────────
@@ -45,21 +46,15 @@ function readBody(req) {
   });
 }
 
-function readBodyBuffer(req) {
-  return new Promise((resolve, reject) => {
-    const chunks = [];
-    req.on('data', (chunk) => chunks.push(chunk));
-    req.on('end', () => resolve(Buffer.concat(chunks)));
-    req.on('error', reject);
-  });
-}
-
 // ── Router ──────────────────────────────────────
 
 function setCommonHeaders(res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PATCH, DELETE, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Trace-Id');
+  res.setHeader(
+    'Access-Control-Allow-Headers',
+    'Content-Type, Authorization, X-Trace-Id, Idempotency-Key',
+  );
 }
 
 function jsonError(res, status, message) {
@@ -191,11 +186,17 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
-    // ── POST /api/files/upload — upload proxy ──
+    // ── POST /api/files/upload — streaming upload proxy (no full heap buffer) ──
     if (req.method === 'POST' && path === '/api/files/upload') {
-      const rawBody = await readBodyBuffer(req);
-      const ct = req.headers['content-type'] || 'application/octet-stream';
-      await handleFileUpload(parsedUrl, rawBody, ct, res, req);
+      await handleFileUpload(parsedUrl, req, res);
+      return;
+    }
+
+    // ── POST /api/sessions/ensure — create/reuse conversation + sandbox session ──
+    if (req.method === 'POST' && path === '/api/sessions/ensure') {
+      const body = await readBody(req);
+      const parsed = body ? JSON.parse(body) : {};
+      await handleEnsureSession(parsed, res, req);
       return;
     }
 

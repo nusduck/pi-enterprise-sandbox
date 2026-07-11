@@ -6,7 +6,12 @@
  * No inline event-handler attributes. Download hrefs must pass isAllowedApiUrl.
  */
 
-import { conversationTitle } from './state.js';
+import {
+  conversationTitle,
+  activeAttachments,
+  canSendAttachments,
+  hasUploadingAttachments,
+} from './state.js';
 import { getArtifactDownloadUrl, getDownloadUrl } from './api.js';
 import { isAllowedApiUrl, safeApiUrl } from './security.js';
 
@@ -507,6 +512,139 @@ export function renderDeliverables(state) {
   }
 }
 
+// ── Attachment drafts (composer) ────────────────
+
+/**
+ * Render composer attachment chips.
+ * @param {object} state
+ * @param {{ onRemove?: (localId: string) => void, onRetry?: (localId: string) => void }} [handlers]
+ */
+export function renderAttachmentDrafts(state, handlers = {}) {
+  const root = dom.attachmentDrafts || document.getElementById('attachment-drafts');
+  if (!root) return;
+  // Keep handlers for re-entry from render() without re-passing
+  if (handlers.onRemove || handlers.onRetry) {
+    root._handlers = handlers;
+  }
+  const h = root._handlers || handlers;
+
+  const list = activeAttachments(state.attachments);
+  root.textContent = '';
+  if (!list.length) {
+    root.hidden = true;
+    return;
+  }
+  root.hidden = false;
+
+  for (const a of list) {
+    const chip = document.createElement('div');
+    chip.className = `att-chip att-${a.status}`;
+    chip.dataset.localId = a.localId;
+
+    const icon = document.createElement('span');
+    icon.className = 'att-icon';
+    icon.setAttribute('aria-hidden', 'true');
+    if (a.status === 'uploading' || a.status === 'queued') icon.textContent = '⏳';
+    else if (a.status === 'uploaded') icon.textContent = '📎';
+    else if (a.status === 'failed') icon.textContent = '⚠';
+    else icon.textContent = '📎';
+    chip.appendChild(icon);
+
+    const meta = document.createElement('span');
+    meta.className = 'att-meta';
+    const nameEl = document.createElement('span');
+    nameEl.className = 'att-name';
+    nameEl.textContent = a.name || 'file';
+    nameEl.title = a.path || a.name || '';
+    meta.appendChild(nameEl);
+    const size = formatSize(a.size);
+    if (size) {
+      const sizeEl = document.createElement('span');
+      sizeEl.className = 'att-size';
+      sizeEl.textContent = size;
+      meta.appendChild(sizeEl);
+    }
+    if (a.status === 'failed' && a.error) {
+      const errEl = document.createElement('span');
+      errEl.className = 'att-error';
+      const trace = a.traceId ? ` (trace ${a.traceId.slice(0, 8)})` : '';
+      errEl.textContent = `${a.error}${trace}`;
+      errEl.title = a.errorCode ? `${a.errorCode}: ${a.error}` : a.error;
+      meta.appendChild(errEl);
+    } else if (a.status === 'uploading' || a.status === 'queued') {
+      const st = document.createElement('span');
+      st.className = 'att-status';
+      st.textContent = a.status === 'queued' ? 'queued' : 'uploading…';
+      meta.appendChild(st);
+    }
+    chip.appendChild(meta);
+
+    const actions = document.createElement('span');
+    actions.className = 'att-actions';
+    if (a.status === 'failed' && typeof h.onRetry === 'function') {
+      const retry = document.createElement('button');
+      retry.type = 'button';
+      retry.className = 'att-btn att-retry';
+      retry.title = 'Retry upload';
+      retry.setAttribute('aria-label', `Retry ${a.name}`);
+      retry.textContent = '↻';
+      retry.addEventListener('click', (e) => {
+        e.preventDefault();
+        h.onRetry(a.localId);
+      });
+      actions.appendChild(retry);
+    }
+    if (typeof h.onRemove === 'function') {
+      const rm = document.createElement('button');
+      rm.type = 'button';
+      rm.className = 'att-btn att-remove';
+      rm.title = 'Remove attachment';
+      rm.setAttribute('aria-label', `Remove ${a.name}`);
+      rm.textContent = '×';
+      rm.addEventListener('click', (e) => {
+        e.preventDefault();
+        h.onRemove(a.localId);
+      });
+      actions.appendChild(rm);
+    }
+    chip.appendChild(actions);
+    root.appendChild(chip);
+  }
+}
+
+/**
+ * Update send button enabled/disabled based on stream + attachment gate.
+ * @param {object} state
+ */
+export function updateSendButton(state) {
+  if (!dom.send) return;
+  dom.send.textContent = state.isStreaming ? '■' : '➤';
+  dom.send.className = `btn ${state.isStreaming ? 'btn-stop' : 'btn-send'}`;
+  if (state.isStreaming) {
+    dom.send.disabled = false;
+    dom.send.setAttribute('aria-label', 'Stop generating');
+    dom.send.title = 'Stop';
+    return;
+  }
+  const gateOk = canSendAttachments(state.attachments);
+  const hasText = !!(dom.input && dom.input.value.trim());
+  const hasAtt = activeAttachments(state.attachments).some((a) => a.status === 'uploaded');
+  // Disable only when attachments block send; empty text is handled at click time
+  // unless attachments are mid-flight/failed.
+  const blocked = !gateOk;
+  dom.send.disabled = blocked;
+  if (blocked) {
+    const uploading = hasUploadingAttachments(state.attachments);
+    dom.send.title = uploading
+      ? 'Wait for uploads to finish'
+      : 'Remove or retry failed attachments';
+    dom.send.setAttribute('aria-label', dom.send.title);
+  } else {
+    dom.send.setAttribute('aria-label', 'Send message');
+    dom.send.title = hasText || hasAtt ? 'Send (Enter)' : 'Send (Enter)';
+  }
+}
+
 // ── Full render ─────────────────────────────────
 
 export function render(state) {
@@ -523,18 +661,9 @@ export function render(state) {
     dom.msgs.appendChild(renderMsg(display[i], i));
   }
 
-  // Update send button
-  dom.send.textContent = state.isStreaming ? '■' : '➤';
-  dom.send.className = `btn ${state.isStreaming ? 'btn-stop' : 'btn-send'}`;
-  dom.send.disabled = false;
-  if (state.isStreaming) {
-    dom.send.setAttribute('aria-label', 'Stop generating');
-    dom.send.title = 'Stop';
-  } else {
-    dom.send.setAttribute('aria-label', 'Send message');
-    dom.send.title = 'Send (Enter)';
-  }
-  dom.input.disabled = state.isStreaming;
+  updateSendButton(state);
+  renderAttachmentDrafts(state);
+  if (dom.input) dom.input.disabled = state.isStreaming;
 
   if (!state.isStreaming && !dom.msgs.querySelector('.mw')) showWelcome();
   scrollBottom();
@@ -556,12 +685,8 @@ export function renderMessagesFull(state) {
       dom.msgs.appendChild(renderMsg(display[i], i));
     }
   }
-  // Update send button
-  if (dom.send) {
-    dom.send.textContent = state.isStreaming ? '■' : '➤';
-    dom.send.className = `btn ${state.isStreaming ? 'btn-stop' : 'btn-send'}`;
-    dom.send.disabled = false;
-  }
+  updateSendButton(state);
+  renderAttachmentDrafts(state);
   if (dom.input) dom.input.disabled = state.isStreaming;
   scrollBottom();
 }

@@ -37,6 +37,9 @@ class Settings(BaseSettings):
     max_memory_mb: int = 512
     max_file_size_mb: int = 50
     workspace_quota_mb: int = 500
+    # Attachment upload limits (parent task P-00F1 defaults)
+    max_attachments_per_turn: int = 10
+    max_turn_attachment_mb: int = 200
 
     # ── Network ──────────────────────────────────────────────────────
     block_metadata_ips: bool = True

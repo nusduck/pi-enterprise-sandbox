@@ -94,10 +94,13 @@ Base URL: `http://host:4000`
 |------|------|
 | `GET /api/files/artifact-download?session_id=xxx&artifact_id=yyy` | **Agent 交付物下载**（代理到 Sandbox artifact download） |
 | `GET /api/files/download?session_id=xxx&path=yyy` | 按路径下载 workspace 文件（上传文件等非交付物场景） |
-| `POST /api/files/upload?session_id=xxx` | 上传文件 (multipart) |
+| `POST /api/files/upload?session_id=xxx` | 上传附件 (multipart，流式代理) |
+| `POST /api/sessions/ensure` | 创建/复用 Conversation + Sandbox Session（供上传前准备，不发消息） |
 
 - Artifact 下载代理到 `GET /sessions/{id}/artifacts/{aid}/download`
 - 路径下载 / 上传代理到 `/sessions/{id}/files/download` 与 `/sessions/{id}/files/upload`
+- 上传支持 `Idempotency-Key` 与 `X-Trace-Id` 请求头；BFF 流式落盘后转发，不整包进堆内存
+- 超限返回 **413**，业务码见下方 Attachment 约定
 
 ---
 
@@ -222,7 +225,39 @@ Base URL: `http://sandbox:8081`（Docker 内网）
 | `GET` | `/sessions/{id}/files/preview?path=` | 预览文件前 40 行 |
 | `GET` | `/sessions/{id}/files/download?path=` | 下载文件 |
 | `DELETE` | `/sessions/{id}/files?path=` | 删除文件 |
-| `POST` | `/sessions/{id}/files/upload` | 上传文件 (multipart) |
+| `POST` | `/sessions/{id}/files/upload` | 上传附件 (multipart，隔离路径) |
+
+#### Attachment upload (`POST /sessions/{id}/files/upload`)
+
+- **存储路径**：`uploads/{attachment_id}/{sanitized_name}`（同名文件不覆盖）
+- **请求**：`multipart/form-data` 字段 `file`；可选头 `Idempotency-Key`、`X-Trace-Id`
+- **流式写入**：分块落临时文件再原子提交，不在内存中拼接完整 body
+- **白名单扩展名**：常见文本/代码/图片/PDF/Office 以及 `.zip` / `.tar` / `.gz` / `.tgz` / `.tar.gz`（上传不自动解压）
+- **限额**（可配置）：单文件默认 50MB、workspace 500MB；超限 **413**
+
+```json
+// Response 201
+{
+  "attachment_id": "att_…",
+  "path": "uploads/att_…/report.pdf",
+  "name": "report.pdf",
+  "size": 12345,
+  "mime_type": "application/pdf",
+  "idempotency_key": "idem_…"
+}
+```
+
+稳定业务码（`detail.code` 或 BFF `code`）：
+
+| code | HTTP | 说明 |
+|------|------|------|
+| `attachment_too_large` | 413 | 单文件超限 |
+| `workspace_quota_exceeded` | 413 | workspace 配额不足 |
+| `attachment_type_denied` | 400 | 扩展名不在白名单 |
+| `turn_attachment_limit` | 400/413 | 回合附件个数/总量（前端与可选服务端） |
+| `upload_incomplete` | 500 | 提交失败 |
+
+同一 `Idempotency-Key` 重试返回同一 `attachment_id` / `path`，不生成第二份文件。
 
 #### `POST /sessions/{id}/files/write`
 

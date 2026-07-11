@@ -135,7 +135,7 @@ export function toPersistableMessages(messages) {
  * @param {ReturnType<typeof createSandboxClient>} client
  * @param {string | null | undefined} conversation_id
  */
-async function resolveConversationAndSession(client, conversation_id) {
+export async function resolveConversationAndSession(client, conversation_id) {
   let activeConversationId = conversation_id || null;
   let targetWorkspace = null;
   let sandboxSessionId = null;

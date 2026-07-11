@@ -4,6 +4,61 @@
  * Stream lifecycle uses streamGeneration so late SSE events from an
  * aborted/switched conversation are ignored by the orchestrator.
  */
+/** Attachment draft statuses (composer, pre-send). */
+export const ATTACHMENT_STATUSES = Object.freeze([
+  'queued',
+  'uploading',
+  'uploaded',
+  'failed',
+  'removed',
+]);
+
+/** Defaults aligned with parent task P-00F1. */
+export const ATTACHMENT_LIMITS = Object.freeze({
+  maxCount: 10,
+  maxFileBytes: 50 * 1024 * 1024,
+  maxTurnBytes: 200 * 1024 * 1024,
+});
+
+/**
+ * Client-side extension allowlist (mirrors sandbox attachment_manager).
+ * Server remains authoritative; this is layered UX/pre-check only.
+ */
+const _ALLOWED_EXTENSIONS = new Set([
+  '.txt', '.md', '.markdown', '.csv', '.tsv', '.json', '.jsonl', '.xml',
+  '.yaml', '.yml', '.toml', '.ini', '.cfg', '.conf', '.log', '.env',
+  '.py', '.js', '.ts', '.tsx', '.jsx', '.mjs', '.cjs', '.java', '.go', '.rs',
+  '.rb', '.php', '.c', '.h', '.cpp', '.cc', '.hpp', '.cs', '.swift', '.kt',
+  '.scala', '.sh', '.bash', '.zsh', '.ps1', '.sql', '.r', '.m', '.mm',
+  '.html', '.htm', '.css', '.scss', '.less', '.vue', '.svelte', '.lua',
+  '.pl', '.pm', '.ex', '.exs', '.erl', '.hs', '.clj', '.dockerfile',
+  '.ipynb', '.graphql', '.gql', '.proto', '.tf', '.hcl',
+  '.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.bmp', '.ico',
+  '.tif', '.tiff',
+  '.pdf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx',
+  '.odt', '.ods', '.odp', '.rtf', '.epub',
+  // archives stored as-is (never auto-extracted)
+  '.zip', '.tar', '.gz', '.tgz', '.tar.gz',
+]);
+
+const _COMPOUND_SUFFIXES = ['.tar.gz', '.tar.bz2', '.tar.xz'];
+
+/** @param {string} filename */
+export function extensionOf(filename) {
+  const lower = String(filename || '').toLowerCase().trim();
+  for (const compound of _COMPOUND_SUFFIXES) {
+    if (lower.endsWith(compound)) return compound;
+  }
+  const i = lower.lastIndexOf('.');
+  return i >= 0 ? lower.slice(i) : '';
+}
+
+/** @param {string} filename */
+export function isAllowedAttachmentName(filename) {
+  const ext = extensionOf(filename);
+  return Boolean(ext) && _ALLOWED_EXTENSIONS.has(ext);
+}
+
 export const INITIAL = Object.freeze({
   messages: [],
   isStreaming: false,
@@ -17,6 +72,8 @@ export const INITIAL = Object.freeze({
   // Conversation sidebar + deliverables
   conversations: [],
   artifacts: [],
+  /** Composer attachment drafts (not yet sent with a user turn). */
+  attachments: [],
   traceId: null,
   sidebarOpen: true,
   /** Monotonic generation; bumped on stream start / abort / conversation switch. */
@@ -32,6 +89,7 @@ export function createState(initial = INITIAL) {
     readyFiles: new Set(initial.readyFiles),
     conversations: [...(initial.conversations || [])],
     artifacts: [...(initial.artifacts || [])],
+    attachments: [...(initial.attachments || [])],
   };
 }
 
@@ -68,12 +126,191 @@ export function update(state, patch) {
   if (patch.artifacts !== undefined) {
     next.artifacts = [...patch.artifacts];
   }
+  if (patch.attachments !== undefined) {
+    next.attachments = [...patch.attachments];
+  }
   const changes = {};
   for (const k of Object.keys(patch)) {
     if (prev[k] !== next[k]) changes[k] = { prev: prev[k], next: next[k] };
   }
   if (Object.keys(changes).length) notify(changes);
   return next;
+}
+
+// ── Attachment draft state machine ──────────────
+
+let _attachmentSeq = 0;
+
+/**
+ * Create a new attachment draft (queued). Same display names are independent.
+ * @param {File|Blob} file
+ * @param {{ localId?: string, idempotencyKey?: string }} [opts]
+ */
+export function createAttachmentDraft(file, opts = {}) {
+  _attachmentSeq += 1;
+  const name = file?.name || 'upload';
+  const size = typeof file?.size === 'number' ? file.size : 0;
+  return {
+    localId: opts.localId || `local_${Date.now()}_${_attachmentSeq}`,
+    status: 'queued',
+    name,
+    size,
+    mimeType: file?.type || '',
+    file: file || null,
+    attachmentId: null,
+    path: null,
+    idempotencyKey: opts.idempotencyKey || `idem_${Date.now()}_${_attachmentSeq}_${Math.random().toString(36).slice(2, 10)}`,
+    error: null,
+    errorCode: null,
+    traceId: null,
+    progress: 0,
+    /** @type {AbortController|null} in-flight upload controller */
+    abortCtrl: null,
+  };
+}
+
+/** Active (non-removed) drafts. */
+export function activeAttachments(attachments) {
+  return (attachments || []).filter((a) => a && a.status !== 'removed');
+}
+
+/**
+ * Whether the composer may send: no uploading/queued/failed drafts remain.
+ * Empty attachment list is allowed (text-only send).
+ * @param {object[]} attachments
+ */
+export function canSendAttachments(attachments) {
+  const active = activeAttachments(attachments);
+  for (const a of active) {
+    if (a.status === 'queued' || a.status === 'uploading' || a.status === 'failed') {
+      return false;
+    }
+  }
+  return true;
+}
+
+/** True when any non-removed draft is mid-upload. */
+export function hasUploadingAttachments(attachments) {
+  return activeAttachments(attachments).some(
+    (a) => a.status === 'queued' || a.status === 'uploading',
+  );
+}
+
+/** Uploaded drafts ready for the next user turn. */
+export function uploadedAttachments(attachments) {
+  return activeAttachments(attachments).filter((a) => a.status === 'uploaded' && a.path);
+}
+
+/**
+ * Patch a single draft by localId. Returns new attachments array.
+ * @param {object[]} attachments
+ * @param {string} localId
+ * @param {object} patch
+ */
+export function patchAttachment(attachments, localId, patch) {
+  return (attachments || []).map((a) =>
+    a.localId === localId ? { ...a, ...patch } : a,
+  );
+}
+
+/**
+ * Mark draft removed (soft). Aborts any in-flight upload; does not dedupe by name.
+ * @param {object[]} attachments
+ * @param {string} localId
+ */
+export function removeAttachment(attachments, localId) {
+  const list = attachments || [];
+  const target = list.find((a) => a.localId === localId);
+  if (target?.abortCtrl) {
+    try {
+      target.abortCtrl.abort();
+    } catch { /* ignore */ }
+  }
+  return patchAttachment(list, localId, {
+    status: 'removed',
+    file: null,
+    error: null,
+    abortCtrl: null,
+  });
+}
+
+/**
+ * Validate adding files against count/size limits.
+ * @param {object[]} existing
+ * @param {File[]} files
+ * @param {typeof ATTACHMENT_LIMITS} [limits]
+ * @returns {{ ok: true } | { ok: false, code: string, message: string }}
+ */
+export function validateNewAttachments(existing, files, limits = ATTACHMENT_LIMITS) {
+  const active = activeAttachments(existing);
+  const incoming = Array.from(files || []);
+  if (active.length + incoming.length > limits.maxCount) {
+    return {
+      ok: false,
+      code: 'turn_attachment_limit',
+      message: `At most ${limits.maxCount} attachments per turn`,
+    };
+  }
+  let turnBytes = active.reduce((s, a) => s + (a.size || 0), 0);
+  for (const f of incoming) {
+    const name = f?.name || 'upload';
+    if (!isAllowedAttachmentName(name)) {
+      const ext = extensionOf(name) || '(none)';
+      return {
+        ok: false,
+        code: 'attachment_type_denied',
+        message: `File type not allowed: ${ext}`,
+      };
+    }
+    const size = f?.size || 0;
+    if (size > limits.maxFileBytes) {
+      return {
+        ok: false,
+        code: 'attachment_too_large',
+        message: `"${name}" exceeds ${Math.round(limits.maxFileBytes / (1024 * 1024))}MB limit`,
+      };
+    }
+    turnBytes += size;
+  }
+  if (turnBytes > limits.maxTurnBytes) {
+    return {
+      ok: false,
+      code: 'turn_attachment_limit',
+      message: `Total attachment size exceeds ${Math.round(limits.maxTurnBytes / (1024 * 1024))}MB per turn`,
+    };
+  }
+  return { ok: true };
+}
+
+/**
+ * Build user message content + attachment manifest for send.
+ * Injects logical paths so the agent can read files without a separate channel.
+ * @param {string} text
+ * @param {object[]} attachments uploaded drafts
+ */
+export function buildUserTurnWithAttachments(text, attachments) {
+  const uploaded = uploadedAttachments(attachments);
+  const trimmed = (text || '').trim();
+  const manifest = uploaded.map((a) => ({
+    attachment_id: a.attachmentId,
+    path: a.path,
+    name: a.name,
+    size: a.size,
+  }));
+
+  let body = trimmed;
+  if (manifest.length) {
+    const lines = manifest.map((m) => `- ${m.name} → ${m.path}`).join('\n');
+    body = body
+      ? `${body}\n\n[Attachments]\n${lines}`
+      : `[Attachments]\n${lines}`;
+  }
+
+  return {
+    role: 'user',
+    content: [{ type: 'text', text: body }],
+    attachments: manifest,
+  };
 }
 
 // ── Explicit stream / conversation transitions ──
@@ -195,6 +432,7 @@ export function switchConversation(state, opts = {}) {
     currentMsg: null,
     readyFiles: new Set(),
     artifacts: [],
+    attachments: [],
     pendingTool: null,
     pendingApproval: null,
     traceId: null,

@@ -132,6 +132,20 @@ class FileListResponse(BaseModel):
     total: int = 0
 
 
+class AttachmentUploadResponse(BaseModel):
+    """Stable shape returned by multipart attachment upload."""
+
+    attachment_id: str
+    path: str
+    name: str
+    size: int = 0
+    mime_type: str = "application/octet-stream"
+    idempotency_key: str | None = None
+    # Backward-compatible FileResponse-ish fields
+    content: str = ""
+    truncated: bool = False
+
+
 # ── Artifact ───────────────────────────────────────────────────────────
 
 class ArtifactRegister(BaseModel):

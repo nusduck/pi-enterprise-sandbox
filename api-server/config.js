@@ -82,6 +82,7 @@ export function isProtectedApiPath(path) {
     path === '/api/chat' ||
     path.startsWith('/api/conversations') ||
     path.startsWith('/api/files/') ||
+    path.startsWith('/api/sessions') ||
     path.startsWith('/api/artifacts') ||
     path.startsWith('/api/approvals')
   );

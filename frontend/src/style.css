@@ -311,6 +311,38 @@ body {
 
 /* Input area */
 .input-wrap { flex-shrink: 0; border-top: 1px solid #334155; background: #1e293b; padding: 6px 16px 10px; }
+.attachment-drafts {
+  max-width: 800px; margin: 0 auto 6px; display: flex; flex-wrap: wrap; gap: 6px;
+}
+.attachment-drafts[hidden] { display: none !important; }
+.att-chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  max-width: 100%;
+  padding: 4px 8px; border-radius: 8px;
+  background: #0f172a; border: 1px solid #334155;
+  font-size: 12px; color: #e2e8f0;
+}
+.att-chip.att-uploading, .att-chip.att-queued { border-color: #64748b; color: #94a3b8; }
+.att-chip.att-uploaded { border-color: #3b82f6; }
+.att-chip.att-failed { border-color: #ef4444; background: rgba(239,68,68,.08); }
+.att-meta { display: flex; flex-direction: column; min-width: 0; gap: 1px; }
+.att-name {
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  max-width: 220px; font-weight: 500;
+}
+.att-size, .att-status { font-size: 10px; color: #64748b; }
+.att-error { font-size: 10px; color: #f87171; max-width: 240px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.att-actions { display: inline-flex; gap: 2px; margin-left: 2px; }
+.att-btn {
+  width: 22px; height: 22px; border: none; border-radius: 6px;
+  background: transparent; color: #94a3b8; cursor: pointer;
+  font-size: 14px; line-height: 1; display: flex; align-items: center;
+  justify-content: center;
+}
+.att-btn:hover { background: #334155; color: #f1f5f9; }
+.att-btn.att-retry:hover { color: #60a5fa; }
+.att-btn.att-remove:hover { color: #f87171; }
 .input-inner { max-width: 800px; margin: 0 auto; display: flex; gap: 6px; align-items: flex-end; }
 .input-inner textarea {
   flex: 1; resize: none; min-height: 40px; max-height: 150px;

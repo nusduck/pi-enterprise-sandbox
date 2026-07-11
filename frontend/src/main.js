@@ -21,10 +21,19 @@ import {
   errorStream,
   switchConversation,
   isActiveGeneration,
+  createAttachmentDraft,
+  patchAttachment,
+  removeAttachment,
+  validateNewAttachments,
+  canSendAttachments,
+  uploadedAttachments,
+  buildUserTurnWithAttachments,
+  activeAttachments,
 } from './state.js';
 import {
   sendChatMessage,
   uploadFile,
+  ensureSession,
   getDownloadUrl,
   getArtifactDownloadUrl,
   listConversations,
@@ -45,6 +54,8 @@ import {
   renderMessagesFull,
   renderConversationList,
   renderDeliverables,
+  renderAttachmentDrafts,
+  updateSendButton,
   applySidebarLayout,
   incBubble,
   rerenderLast,
@@ -61,6 +72,7 @@ initDOM({
   send: document.getElementById('btn-send'),
   upload: document.getElementById('btn-upload'),
   dropzone: document.getElementById('dropzone'),
+  attachmentDrafts: document.getElementById('attachment-drafts'),
   status: document.getElementById('status-label'),
   flash: document.getElementById('flash-zone'),
   sidebar: document.getElementById('sidebar'),
@@ -102,6 +114,13 @@ subscribe((changes) => {
   }
   if (changes.sidebarOpen) {
     applySidebarLayout(state);
+  }
+  if (changes.attachments) {
+    renderAttachmentDrafts(state, {
+      onRemove: removeAttachmentDraft,
+      onRetry: retryAttachmentDraft,
+    });
+    updateSendButton(state);
   }
 });
 
@@ -399,14 +418,32 @@ function handleSSE(ev, generation) {
 // ── Send message ────────────────────────────────
 
 async function sendMessage(text) {
-  if (state.isStreaming || !text.trim()) return;
+  if (state.isStreaming) return;
 
-  // Add user message to state immediately so it renders
-  const userMsg = {
-    role: 'user',
-    content: [{ type: 'text', text: text.trim() }],
-  };
-  state = update(state, { messages: [...state.messages, userMsg] });
+  // Gate: block incomplete/failed attachments
+  if (!canSendAttachments(state.attachments)) {
+    const active = activeAttachments(state.attachments);
+    const failed = active.some((a) => a.status === 'failed');
+    flashError(
+      failed
+        ? 'Remove or retry failed attachments before sending'
+        : 'Wait for uploads to finish before sending',
+    );
+    updateSendButton(state);
+    return;
+  }
+
+  const uploaded = uploadedAttachments(state.attachments);
+  const trimmed = (text || '').trim();
+  if (!trimmed && uploaded.length === 0) return;
+
+  // Compose user turn with attachment manifest (no auto-send on select)
+  const userMsg = buildUserTurnWithAttachments(trimmed, state.attachments);
+  // Clear drafts that are included in this turn (and removed ones)
+  state = update(state, {
+    messages: [...state.messages, userMsg],
+    attachments: [],
+  });
 
   // Prepare streaming with generation token
   state = startStream(state);
@@ -414,6 +451,10 @@ async function sendMessage(text) {
   const generation = activeStreamGen;
   clearApprovals();
   render(state);
+  renderAttachmentDrafts(state, {
+    onRemove: removeAttachmentDraft,
+    onRetry: retryAttachmentDraft,
+  });
 
   try {
     // Send full message history (state already includes the user msg)
@@ -443,7 +484,7 @@ async function sendMessage(text) {
     if (!isActiveGeneration(state, generation)) return;
 
     if (err.name === 'AbortError') {
-      // User cancelled — keep partial message
+      // User cancelled — keep partial message (attachments already committed with user turn)
       if (state.currentMsg) {
         state.currentMsg.stopReason = 'aborted';
         const messages = [...state.messages, state.currentMsg];
@@ -456,7 +497,8 @@ async function sendMessage(text) {
       return;
     }
     console.error('[chat] Error:', err);
-    flashError(`Connection error: ${err.message}`);
+    const trace = state.traceId ? ` [trace ${state.traceId.slice(0, 8)}]` : '';
+    flashError(`Connection error: ${err.message}${trace}`);
     if (state.currentMsg) {
       state.currentMsg.content.push({ type: 'text', text: `\n[Connection error: ${err.message}]` });
       const messages = [...state.messages, state.currentMsg];
@@ -472,6 +514,7 @@ async function sendMessage(text) {
     if (isActiveGeneration(state, generation)) {
       dom.input.disabled = false;
       dom.input.focus();
+      updateSendButton(state);
     }
   }
 }
@@ -482,36 +525,176 @@ function cancelStream() {
   }
 }
 
-// ── File upload ─────────────────────────────────
+// ── File attachments (draft lifecycle) ──────────
 
-async function handleUpload(file) {
-  if (!state.sessionId) {
-    flashError('Send a message first to create a session');
+/**
+ * Ensure conversation + sandbox session exist before upload.
+ * Does not send a chat message.
+ */
+async function ensureConversationSession() {
+  if (state.sessionId && state.conversationId) {
+    return { sessionId: state.sessionId, conversationId: state.conversationId };
+  }
+  try {
+    const data = await ensureSession(state.conversationId);
+    const conversationId = data.conversation_id || state.conversationId;
+    const sessionId = data.session_id;
+    const patch = {};
+    if (conversationId && conversationId !== state.conversationId) {
+      patch.conversationId = conversationId;
+      persistConversationId(conversationId);
+    }
+    if (sessionId) patch.sessionId = sessionId;
+    if (data.trace_id) patch.traceId = data.trace_id;
+    if (Object.keys(patch).length) {
+      state = update(state, patch);
+    }
+    if (sessionId) setStatus(`Session ${sessionId.slice(-8)}`);
+    await refreshConversations();
+    return { sessionId, conversationId };
+  } catch (err) {
+    const trace = err.traceId ? ` [trace ${String(err.traceId).slice(0, 8)}]` : '';
+    throw new Error(`${err.message || 'Failed to prepare session'}${trace}`);
+  }
+}
+
+function syncAttachmentUi() {
+  renderAttachmentDrafts(state, {
+    onRemove: removeAttachmentDraft,
+    onRetry: retryAttachmentDraft,
+  });
+  updateSendButton(state);
+}
+
+function removeAttachmentDraft(localId) {
+  state = update(state, {
+    attachments: removeAttachment(state.attachments, localId),
+  });
+  syncAttachmentUi();
+}
+
+async function retryAttachmentDraft(localId) {
+  const draft = (state.attachments || []).find((a) => a.localId === localId);
+  if (!draft || draft.status === 'removed') return;
+  if (!draft.file) {
+    flashError('Cannot retry: original file is no longer available');
+    return;
+  }
+  // Keep same idempotency key so server returns the same attachment if partial succeeded
+  state = update(state, {
+    attachments: patchAttachment(state.attachments, localId, {
+      status: 'queued',
+      error: null,
+      errorCode: null,
+      progress: 0,
+    }),
+  });
+  syncAttachmentUi();
+  await runUploadForDraft(localId);
+}
+
+/**
+ * Upload a single draft. Does NOT auto-send chat.
+ * @param {string} localId
+ */
+async function runUploadForDraft(localId) {
+  const draft = (state.attachments || []).find((a) => a.localId === localId);
+  if (!draft || !draft.file || draft.status === 'removed') return;
+
+  // Per-draft abort so remove/cancel stops the network request
+  const abortCtrl = new AbortController();
+  state = update(state, {
+    attachments: patchAttachment(state.attachments, localId, {
+      status: 'uploading',
+      error: null,
+      errorCode: null,
+      abortCtrl,
+    }),
+  });
+  syncAttachmentUi();
+
+  try {
+    const { sessionId } = await ensureConversationSession();
+    if (!sessionId) throw new Error('No sandbox session');
+
+    // Re-check draft still active after await
+    const current = (state.attachments || []).find((a) => a.localId === localId);
+    if (!current || current.status === 'removed') return;
+
+    const result = await uploadFile(sessionId, current.file, abortCtrl.signal, {
+      idempotencyKey: current.idempotencyKey,
+      traceId: state.traceId || undefined,
+    });
+
+    // Ignore if removed while uploading
+    const still = (state.attachments || []).find((a) => a.localId === localId);
+    if (!still || still.status === 'removed') return;
+
+    state = update(state, {
+      attachments: patchAttachment(state.attachments, localId, {
+        status: 'uploaded',
+        attachmentId: result.attachment_id || result.attachmentId || null,
+        path: result.path || null,
+        size: result.size != null ? result.size : still.size,
+        progress: 100,
+        error: null,
+        errorCode: null,
+        traceId: result.trace_id || state.traceId || null,
+        abortCtrl: null,
+        // Keep File for rare post-success edge retries until send clears drafts
+        file: still.file,
+      }),
+      ...(result.trace_id ? { traceId: result.trace_id } : {}),
+    });
+    syncAttachmentUi();
+  } catch (err) {
+    if (err.name === 'AbortError') {
+      // Removed or cancelled mid-flight — leave soft-removed / do not mark failed
+      return;
+    }
+    console.error('[upload] Error:', err);
+    const still = (state.attachments || []).find((a) => a.localId === localId);
+    if (!still || still.status === 'removed') return;
+    const traceId = err.traceId || state.traceId || null;
+    state = update(state, {
+      attachments: patchAttachment(state.attachments, localId, {
+        status: 'failed',
+        error: err.message || 'Upload failed',
+        errorCode: err.code || null,
+        traceId,
+        abortCtrl: null,
+      }),
+      ...(traceId ? { traceId } : {}),
+    });
+    const t = traceId ? ` [trace ${String(traceId).slice(0, 8)}]` : '';
+    flashError(`Upload error: ${err.message || 'failed'}${t}`);
+    syncAttachmentUi();
+  }
+}
+
+/**
+ * Select files → create drafts → background upload. Never auto-sends chat.
+ * Same display name creates separate drafts (no overwrite / no dedupe).
+ * @param {FileList|File[]} fileList
+ */
+async function handleFilesSelected(fileList) {
+  const files = Array.from(fileList || []).filter(Boolean);
+  if (!files.length) return;
+
+  const check = validateNewAttachments(state.attachments, files);
+  if (!check.ok) {
+    flashError(check.message);
     return;
   }
 
-  const messages = [
-    ...state.messages,
-    {
-      role: 'user',
-      content: [{ type: 'text', text: `📎 Uploaded: **${file.name}** (${(file.size / 1024).toFixed(1)} KB)` }],
-    },
-  ];
-  state = update(state, { messages });
-  render(state);
+  const drafts = files.map((f) => createAttachmentDraft(f));
+  state = update(state, {
+    attachments: [...(state.attachments || []), ...drafts],
+  });
+  syncAttachmentUi();
 
-  try {
-    await uploadFile(state.sessionId, file, state.abortCtrl?.signal);
-    // Auto-send follow-up to analyze
-    dom.input.value = `I uploaded ${file.name}. Please analyze this file.`;
-    sendMessage(dom.input.value);
-    dom.input.value = '';
-    dom.input.style.height = 'auto';
-  } catch (err) {
-    if (err.name === 'AbortError') return;
-    console.error('[upload] Error:', err);
-    flashError(`Upload error: ${err.message}`);
-  }
+  // Kick off uploads in parallel (background); do not send chat
+  await Promise.all(drafts.map((d) => runUploadForDraft(d.localId)));
 }
 
 // ── Auth panel (optional; token in localStorage) ──
@@ -669,34 +852,47 @@ function init() {
   // Send / Stop
   dom.send.addEventListener('click', () => {
     if (state.isStreaming) { cancelStream(); return; }
-    const text = dom.input.value.trim();
-    if (text) {
-      dom.input.value = '';
-      dom.input.style.height = 'auto';
-      sendMessage(text);
+    if (dom.send.disabled) return;
+    const text = dom.input.value;
+    const hasUploaded = uploadedAttachments(state.attachments).length > 0;
+    if (!text.trim() && !hasUploaded) return;
+    if (!canSendAttachments(state.attachments)) {
+      updateSendButton(state);
+      return;
     }
+    dom.input.value = '';
+    dom.input.style.height = 'auto';
+    sendMessage(text);
   });
 
-  // Textarea auto-resize
+  // Textarea auto-resize + re-evaluate send gate
   dom.input.addEventListener('input', () => {
     dom.input.style.height = 'auto';
     dom.input.style.height = Math.min(dom.input.scrollHeight, 150) + 'px';
+    updateSendButton(state);
   });
 
   // Ctrl+Enter or Enter to send
   dom.input.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
-      dom.send.click();
+      if (!dom.send.disabled) dom.send.click();
     }
   });
 
-  // Upload button
+  // Wire attachment draft handlers once
+  renderAttachmentDrafts(state, {
+    onRemove: removeAttachmentDraft,
+    onRetry: retryAttachmentDraft,
+  });
+
+  // Upload button — multi-select; no auto-send
   dom.upload.addEventListener('click', () => {
     const inp = document.createElement('input');
     inp.type = 'file';
+    inp.multiple = true;
     inp.addEventListener('change', () => {
-      if (inp.files?.[0]) handleUpload(inp.files[0]);
+      if (inp.files?.length) handleFilesSelected(inp.files);
     });
     inp.click();
   });
@@ -717,7 +913,7 @@ function init() {
     e.preventDefault();
     dom.dropzone.classList.remove('show');
     const files = e.dataTransfer.files;
-    if (files?.[0]) handleUpload(files[0]);
+    if (files?.length) handleFilesSelected(files);
   });
 
   // Ctrl+U for upload

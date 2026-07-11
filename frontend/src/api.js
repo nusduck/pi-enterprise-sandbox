@@ -237,36 +237,107 @@ export async function decideApproval(approvalId, decision) {
   return resp.json();
 }
 
+// ── Sessions ────────────────────────────────────
+
+/**
+ * Ensure a conversation + sandbox session exist (for pre-chat uploads).
+ * @param {string|null} [conversationId]
+ * @returns {Promise<{ conversation_id: string, session_id: string, workspace_path?: string, trace_id?: string }>}
+ */
+export async function ensureSession(conversationId = null) {
+  const resp = await fetch(`${BASE}/sessions/ensure`, {
+    method: 'POST',
+    headers: authHeaders({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify(conversationId ? { conversation_id: conversationId } : {}),
+  });
+  if (!resp.ok) {
+    const err = await resp.json().catch(() => ({}));
+    const msg = err.error || err.detail || `Ensure session failed: ${resp.status}`;
+    const e = new Error(typeof msg === 'string' ? msg : JSON.stringify(msg));
+    e.status = resp.status;
+    e.traceId = err.trace_id || resp.headers.get('x-trace-id') || null;
+    throw e;
+  }
+  return resp.json();
+}
+
 // ── Files ───────────────────────────────────────
 
 /**
- * Upload a file to the sandbox workspace.
+ * Parse a non-OK upload response into a structured Error.
+ * @param {Response} resp
+ */
+async function uploadErrorFromResponse(resp) {
+  const err = await resp.json().catch(() => ({}));
+  const detail = err.detail;
+  let code = err.code || null;
+  let message = err.error || null;
+  if (detail && typeof detail === 'object') {
+    code = detail.code || code;
+    message = detail.message || message;
+  } else if (typeof detail === 'string') {
+    message = message || detail;
+  }
+  if (!message) message = `Upload failed (HTTP ${resp.status})`;
+  const e = new Error(message);
+  e.status = resp.status;
+  e.code = code;
+  e.traceId = err.trace_id || resp.headers.get('x-trace-id') || null;
+  e.detail = detail;
+  return e;
+}
+
+/**
+ * Upload a file to the sandbox workspace as an isolated attachment.
  * @param {string} sessionId
  * @param {File} file
  * @param {AbortSignal} [signal]
- * @returns {Promise<object>} sandbox API response
+ * @param {{ idempotencyKey?: string, traceId?: string }} [opts]
+ * @returns {Promise<object>} attachment upload response
  */
-export async function uploadFile(sessionId, file, signal) {
+export async function uploadFile(sessionId, file, signal, opts = {}) {
   const fd = new FormData();
   fd.append('file', file);
 
   let lastErr;
   for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
     try {
-      const resp = await fetch(`${BASE}/files/upload?session_id=${sessionId}`, {
+      const headers = authHeaders();
+      if (opts.idempotencyKey) {
+        headers['Idempotency-Key'] = opts.idempotencyKey;
+      }
+      if (opts.traceId) {
+        headers['X-Trace-Id'] = opts.traceId;
+      }
+      // Do not set Content-Type — browser sets multipart boundary.
+
+      const resp = await fetch(`${BASE}/files/upload?session_id=${encodeURIComponent(sessionId)}`, {
         method: 'POST',
-        headers: authHeaders(),
+        headers,
         body: fd,
         signal,
       });
 
       if (!resp.ok) {
-        const err = await resp.json().catch(() => ({}));
-        throw new Error(err.detail || err.error || `Upload failed (HTTP ${resp.status})`);
+        // Do not retry client errors (4xx) except 408/429
+        const e = await uploadErrorFromResponse(resp);
+        if (resp.status >= 400 && resp.status < 500 && resp.status !== 408 && resp.status !== 429) {
+          throw e;
+        }
+        throw e;
       }
-      return resp.json();
+      const data = await resp.json();
+      data.trace_id = data.trace_id || resp.headers.get('x-trace-id') || null;
+      return data;
     } catch (err) {
       if (err.name === 'AbortError') throw err;
+      // Non-retryable business codes
+      if (err.code === 'attachment_too_large' ||
+          err.code === 'attachment_type_denied' ||
+          err.code === 'workspace_quota_exceeded' ||
+          err.code === 'turn_attachment_limit') {
+        throw err;
+      }
       if (attempt === MAX_RETRIES - 1) throw err;
       lastErr = err;
       await new Promise(r => setTimeout(r, 1000 * (attempt + 1)));
