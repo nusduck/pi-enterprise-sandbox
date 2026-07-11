@@ -209,8 +209,17 @@ curl http://localhost:8083/sessions                        # 401
 | `sandbox_data` | `/sandbox/data` | SQLite 数据库、审计日志 |
 | `nginx_ssl` | `/etc/nginx/ssl` | SSL 证书（生产） |
 | `nginx_certbot` | `/var/www/certbot` | Let's Encrypt ACME challenge（生产） |
-| `./skills` | `/home/sandbox/skill:ro` (+ legacy `/sandbox/skills`) | 内置技能（只读） |
+| `./skills` | Agent `/home/sandbox/skill`（默认 `:ro`；研发可 `:rw`）+ Sandbox `:ro` | 共享技能；生产只读 |
 | `./workspaces` | `/var/sandbox/workspaces` | 会话物理工作区 |
+
+### Skill 挂载与 SKILLS_MODE
+
+| 环境 | `SKILLS_MODE` | Agent 挂载 | Sandbox 挂载 | 说明 |
+|------|---------------|------------|--------------|------|
+| 生产 | `readonly`（默认） | `:ro` | `:ro` | 无 `skill_install` / `skill_edit`；通用工具硬拒绝写 skill 根 |
+| 研发 | `development` | `AGENT_SKILLS_MOUNT=...:rw` | `:ro` | 仅 Agent 可写；Sandbox 只执行 |
+
+生产 overlay（`docker-compose.prod.yml`）强制 Agent skill 卷为 `:ro`。
 
 ## Health Checks
 

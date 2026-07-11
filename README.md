@@ -57,7 +57,7 @@ pi-sandbox/
 │   ├── services/         ← 会话/执行/文件/审计/审批策略
 │   ├── mcp/              ← MCP 协议适配器
 │   └── Dockerfile
-├── skills/               ← 技能文件（只读挂载到容器）
+├── skills/               ← 技能文件（默认只读挂载；研发可 SKILLS_MODE=development + RW）
 ├── tests/                ← pytest 测试套件
 ├── scripts/              ← 备份/恢复脚本
 ├── nginx/                ← 生产 Nginx + SSL
@@ -172,7 +172,7 @@ docker compose config -q
 | 网络 | iptables 默认 DROP 出站策略 |
 | 用户 | 子进程以非 root `sandbox` 用户运行 |
 | 资源 | ulimit: CPU / 内存 / 进程数 / 文件大小 |
-| 路径 | Session 物理工作区隔离；agent 稳定路径 `/home/sandbox/workspace` + `/home/sandbox/skill` |
+| 路径 | Session 物理工作区隔离；agent 稳定路径 `/home/sandbox/workspace` + `/home/sandbox/skill`（默认只读；`SKILLS_MODE=development` 时仅专用 skill 工具可写） |
 | 命令 | 禁止 `sudo, su, rm -rf /, dd, mkfs, fdisk, chmod 777` |
 | 输出 | stdout/stderr 上限截断 |
 | 交付 | 仅 Artifact API / `submit_artifact` 向用户分享文件（`write` 不自动下载） |

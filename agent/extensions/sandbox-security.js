@@ -7,10 +7,18 @@
  * - Sandbox layer: independent hard-deny / path / session / approval checks.
  *
  * Extension exceptions are fail-closed (block the tool).
+ *
+ * Skill tree writes: generic write/edit/bash cannot target skill roots;
+ * only dedicated skill_* tools (development mode) may mutate skills.
  */
+import {
+  DEFAULT_SKILL_ROOTS,
+  isUnderSkillRoot,
+  commandTouchesSkillRoot,
+} from '../skills/paths.js';
 
 /** Immutable policy catalog version echoed in audits and approval responses. */
-export const POLICY_VERSION = '2026-07-11.1';
+export const POLICY_VERSION = '2026-07-11.2';
 
 /** Side-effect classes for concurrency control. */
 export const TOOL_SIDE_EFFECT = Object.freeze({
@@ -58,6 +66,24 @@ const WRITE_TOOLS = new Set([
   'npm_install',
   'kill_process',
   'run_python',
+  // Skill management (development mode only; still serial write-class)
+  'skill_install',
+  'skill_edit',
+  'skill_reload',
+]);
+
+/** Generic tools that must never write the shared skill tree. */
+const SKILL_ROOT_BLOCKED_TOOLS = new Set([
+  'write',
+  'write_file',
+  'edit',
+  'edit_file',
+  'bash',
+  'command',
+  'raw_bash',
+  'raw_shell',
+  'submit_artifact',
+  'delete_file',
 ]);
 
 /** Always blocked command prefixes (hard deny; cannot be approved). */
@@ -149,14 +175,42 @@ export function commandRequiresApproval(command) {
  * Three-tier local policy evaluation (mirrors Sandbox ToolPolicyChecker).
  * @param {string} toolName
  * @param {{ command?: string, path?: string, timeout?: number, file_size?: number }} [params]
+ * @param {{ skillRoots?: string[] }} [options]
  * @returns {{ decision: string, reason: string, risk_level: string, side_effect: string, policy_version: string }}
  */
-export function evaluateToolPolicy(toolName, params = {}) {
+export function evaluateToolPolicy(toolName, params = {}, options = {}) {
   const name = String(toolName || '').trim() || 'unknown';
   const side_effect = classifyToolSideEffect(name);
   const base = { side_effect, policy_version: POLICY_VERSION };
+  const skillRoots = options.skillRoots || DEFAULT_SKILL_ROOTS;
 
   try {
+    // Skill root path policy: generic tools cannot mutate shared skills
+    if (SKILL_ROOT_BLOCKED_TOOLS.has(name)) {
+      if (params.path && isUnderSkillRoot(params.path, skillRoots)) {
+        return {
+          ...base,
+          decision: POLICY_DECISION.HARD_DENY,
+          reason:
+            'blocked: skill root is not writable via generic tools; use skill_install/skill_edit in development mode',
+          risk_level: 'high',
+        };
+      }
+      if (
+        params.command &&
+        ['bash', 'command', 'raw_bash', 'raw_shell'].includes(name) &&
+        commandTouchesSkillRoot(params.command, skillRoots)
+      ) {
+        return {
+          ...base,
+          decision: POLICY_DECISION.HARD_DENY,
+          reason:
+            'blocked: bash must not target skill root; use skill_install/skill_edit in development mode',
+          risk_level: 'high',
+        };
+      }
+    }
+
     if (HIGH_RISK_TOOLS.has(name) && !params.command) {
       return {
         ...base,

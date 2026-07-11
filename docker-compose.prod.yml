@@ -65,11 +65,11 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "${AGENT_CPU_LIMIT:-1}"
-          memory: "${AGENT_MEM_LIMIT:-512m}"
+          cpus: "${BFF_CPU_LIMIT:-${AGENT_CPU_LIMIT:-1}}"
+          memory: "${BFF_MEM_LIMIT:-${AGENT_MEM_LIMIT:-512m}}"
         reservations:
-          cpus: "${AGENT_CPU_RESERVE:-0.25}"
-          memory: "${AGENT_MEM_RESERVE:-128m}"
+          cpus: "${BFF_CPU_RESERVE:-${AGENT_CPU_RESERVE:-0.25}}"
+          memory: "${BFF_MEM_RESERVE:-${AGENT_MEM_RESERVE:-128m}}"
     logging:
       driver: "json-file"
       options:
@@ -77,6 +77,33 @@ services:
         max-file: "3"
     restart: always
     # No ports exposed in production — all traffic goes through nginx
+    ports: []
+
+  agent:
+    # Production: skills stay read-only; skill management tools disabled.
+    environment:
+      SKILLS_MODE: ${SKILLS_MODE:-readonly}
+      SKILLS_ROOT: /home/sandbox/skill
+    volumes:
+      # Force read-only skill mounts in production (override any RW dev mount)
+      - ./skills:/home/sandbox/skill:ro
+      - ./skills:/sandbox/skills:ro
+      - ./skills:/app/.pi/skills:ro
+    deploy:
+      resources:
+        limits:
+          cpus: "${AGENT_SVC_CPU_LIMIT:-2}"
+          memory: "${AGENT_SVC_MEM_LIMIT:-1g}"
+        reservations:
+          cpus: "${AGENT_SVC_CPU_RESERVE:-0.5}"
+          memory: "${AGENT_SVC_MEM_RESERVE:-256m}"
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    restart: always
+    # Internal only — BFF reaches agent on the compose network
     ports: []
 
 volumes:

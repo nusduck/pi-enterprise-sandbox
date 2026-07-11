@@ -1,9 +1,9 @@
 {
   "id": "field-issues-evolution-planning",
   "name": "field-issues-evolution-planning",
-  "title": "一线问题与架构演进需求厘清",
+  "title": "\u4e00\u7ebf\u95ee\u9898\u4e0e\u67b6\u6784\u6f14\u8fdb\u9700\u6c42\u5398\u6e05",
   "description": "",
-  "status": "planning",
+  "status": "completed",
   "dev_type": null,
   "scope": null,
   "package": null,
@@ -11,7 +11,7 @@
   "creator": "nusduck",
   "assignee": "nusduck",
   "createdAt": "2026-07-11",
-  "completedAt": null,
+  "completedAt": "2026-07-11",
   "branch": null,
   "base_branch": "main",
   "worktree_path": null,
@@ -32,6 +32,6 @@
   ],
   "parent": null,
   "relatedFiles": [],
-  "notes": "",
+  "notes": "All 10 children delivered in dependency order. Residual risks per child residual notes.",
   "meta": {}
 }

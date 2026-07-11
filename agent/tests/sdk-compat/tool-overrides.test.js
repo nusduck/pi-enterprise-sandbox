@@ -8,10 +8,13 @@ import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createSandboxTools } from '../../sandbox-tools.js';
+import { BASE_TOOL_NAMES, resolveToolAllowlist } from '../../chat-runner.js';
+import { createSkillTools, SKILL_TOOL_NAMES } from '../../skills/tools.js';
+import { SKILLS_MODE } from '../../skills/manager.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
-/** Names passed to createAgentSession({ tools }) in routes/chat.js */
+/** Base sandbox tool names (always present). */
 const CHAT_TOOL_ALLOWLIST = [
   'read',
   'bash',
@@ -24,10 +27,11 @@ const CHAT_TOOL_ALLOWLIST = [
 ];
 
 describe('createSandboxTools override contract', () => {
-  it('exposes exactly the chat allowlist names', () => {
+  it('exposes exactly the base chat allowlist names', () => {
     const tools = createSandboxTools({ sessionId: 'sess-test' });
     const names = tools.map((t) => t.name).sort();
     assert.deepEqual(names, [...CHAT_TOOL_ALLOWLIST].sort());
+    assert.deepEqual(names, [...BASE_TOOL_NAMES].sort());
   });
 
   it('each tool has name, description, parameters, execute', () => {
@@ -39,14 +43,21 @@ describe('createSandboxTools override contract', () => {
     }
   });
 
-  it('chat-runner allowlist matches createSandboxTools names (source contract)', () => {
+  it('chat-runner resolveToolAllowlist is base tools + optional skill tools', () => {
+    assert.deepEqual(resolveToolAllowlist(SKILLS_MODE.READONLY).sort(), [...BASE_TOOL_NAMES].sort());
+    assert.deepEqual(
+      resolveToolAllowlist(SKILLS_MODE.DEVELOPMENT).sort(),
+      [...BASE_TOOL_NAMES, ...SKILL_TOOL_NAMES].sort(),
+    );
     const runnerSrc = readFileSync(join(__dirname, '../../chat-runner.js'), 'utf8');
-    // tools: ['read', 'bash', 'edit', 'write', 'submit_artifact', ...]
-    const m = runnerSrc.match(/tools:\s*\[([^\]]+)\]/);
-    assert.ok(m, 'createAgentSession tools allowlist not found in chat-runner.js');
-    const listed = [...m[1].matchAll(/'([^']+)'/g)].map((x) => x[1]).sort();
-    const toolNames = createSandboxTools().map((t) => t.name).sort();
-    assert.deepEqual(listed, toolNames);
+    assert.match(runnerSrc, /resolveToolAllowlist/);
+    assert.match(runnerSrc, /createSkillTools/);
+  });
+
+  it('skill tools only appear in development mode', () => {
+    assert.equal(createSkillTools({ mode: SKILLS_MODE.READONLY }).length, 0);
+    const dev = createSkillTools({ mode: SKILLS_MODE.DEVELOPMENT });
+    assert.deepEqual(dev.map((t) => t.name).sort(), [...SKILL_TOOL_NAMES].sort());
   });
 
   it('bash tool defers to client.executeCommand (not local shell)', async () => {

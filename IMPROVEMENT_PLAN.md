@@ -1,9 +1,9 @@
 # Pi Enterprise Sandbox — Project Review & Improvement Plan
 
 > **Generated:** 2026-07-09 · **Revised:** 2026-07-09 (implementation complete for Phase 0 + Phase 1 core)  
-> **Partial update 2026-07-11:** 全栈硬化子任务已落地（backend security、request-context/cancel、`AGENT_RUNTIME` 可逆 cutover、frontend SSE/security 测试、CI 矩阵与 readiness）。详见 `.trellis/tasks/07-11-*`。  
-> **Implementation status:** **Phase 0–1 done**. **Phase 1.5 done:** approval pause in bash tool + SSE/UI, policy high-risk command patterns, GET /approvals/{id}, Python `AgentRuntime` tool loop + POST /agent/chat, auth foundation (register/login/JWT, optional SANDBOX_AUTH_ENABLED).  
-> **Runtime cutover (2026-07-11):** 浏览器仍统一 `POST /api/chat`；`AGENT_RUNTIME=node`（**默认，勿随意翻转**）| `python`（BFF 透传 sandbox `/agent/chat`）。完整默认切到 python 前需对等多轮/工具/审批/产物/abort 验证。  
+> **Partial update 2026-07-11:** 全栈硬化子任务已落地（backend security、request-context/cancel、frontend SSE/security 测试、CI 矩阵与 readiness）。详见 `.trellis/tasks/07-11-*`。  
+> **Implementation status:** **Phase 0–1 done**. **Phase 1.5 done:** approval pause in bash tool + SSE/UI, policy high-risk command patterns, GET /approvals/{id}, auth foundation (register/login/JWT, optional SANDBOX_AUTH_ENABLED).  
+> **Independent Node Agent (2026-07-11):** `agent/` 独立服务承载 pi-coding-agent；BFF 仅 SSE relay；Python Agent Runtime / `AGENT_RUNTIME` / `POST /agent/chat` 已删除。  
 > **Still remaining / out of this hardening wave:** full multi-user ownership, mount-namespace polish, 强制 Ruff/Mypy 门禁等。  
 > ⚠️ 文中部分“当前代码问题”描述可能已修复；**以仓库代码与测试为准**，本文件作原则与路线图，不作逐行审计。  
 > **Based on:** live v4 review + design principles + manual Docker test feedback  
@@ -152,7 +152,7 @@ User UI download (Artifact API only)
 | P2 Empty workspace | ✅ | Empty init; no seed skills-in-ws |
 | P3 Stable paths | ⚠️ | Agent cwd + constants `/home/sandbox/*`; exec uses physical path (mount-ns still ideal) |
 | P4 Isolation all surfaces | ✅ | Physical-only exec cwd; isolation + path-escape tests |
-| P5 Python-first agent | ⚠️ | `sandbox/agent/` scaffold; production loop still Node |
+| P5 Python-first agent | ❌ removed | Independent Node `agent/` service; Python agent runtime deleted |
 | P6 First-class persistence | ⚠️ | Messages/approvals/sessions/artifacts in DB; UI approvals pause not fully wired into bash path |
 | P7 Artifact-only user delivery | ✅ | submit_artifact only; allowlist fixed; frontend artifact download |
 

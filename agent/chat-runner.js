@@ -15,7 +15,7 @@ import {
 } from '@earendil-works/pi-coding-agent';
 import { createSandboxTools } from './sandbox-tools.js';
 import { createSandboxClient } from './services/sandbox-client.js';
-import { config } from './config.js';
+import { config, SKILLS_MODE } from './config.js';
 import { mapSdkEventToSse } from './services/sdk-sse-map.js';
 import {
   createSandboxSecurityExtension,
@@ -26,9 +26,34 @@ import {
   toAgentHistoryMessages,
   toPersistableMessages,
 } from './message-helpers.js';
+import { createSkillTools, SKILL_TOOL_NAMES } from './skills/tools.js';
+import { createSkillManager } from './skills/manager.js';
 
 const AGENT_WORKSPACE = '/home/sandbox/workspace';
-const AGENT_SKILL = '/home/sandbox/skill';
+const AGENT_SKILL = config.SKILLS_ROOT || '/home/sandbox/skill';
+
+/** Base sandbox tool allowlist (always present). */
+export const BASE_TOOL_NAMES = [
+  'read',
+  'bash',
+  'edit',
+  'write',
+  'submit_artifact',
+  'ls',
+  'find',
+  'grep',
+];
+
+/**
+ * Tool allowlist for createAgentSession — includes skill tools only in development.
+ * @param {string} [skillsMode]
+ */
+export function resolveToolAllowlist(skillsMode = config.SKILLS_MODE) {
+  if (skillsMode === SKILLS_MODE.DEVELOPMENT) {
+    return [...BASE_TOOL_NAMES, ...SKILL_TOOL_NAMES];
+  }
+  return [...BASE_TOOL_NAMES];
+}
 
 /**
  * Build a proper pi-ai Model object from env vars.
@@ -201,6 +226,7 @@ export async function runAgentTurn(opts) {
     getWorkspaceKey: () => activeConversationId || sandboxSessionId || 'default',
     approvalEnabled: config.APPROVAL_ENABLED,
     getMeta: securityGetMeta,
+    skillRoots: config.SKILL_ROOTS,
     approvalNotifier: (ev) => {
       try {
         emit(ev);
@@ -209,6 +235,27 @@ export async function runAgentTurn(opts) {
       }
     },
   });
+
+  /** @type {{ reload?: () => Promise<void>, resourceLoader?: object } | null} */
+  let liveAgentSession = null;
+
+  const skillManager = createSkillManager({
+    mode: config.SKILLS_MODE,
+    skillRoots: config.SKILL_ROOTS,
+    localAllowlist: config.SKILLS_INSTALL_LOCAL_ALLOWLIST,
+    auditLogPath: config.SKILLS_AUDIT_LOG || null,
+    getMeta: securityGetMeta,
+    getAgentSession: () => liveAgentSession,
+  });
+
+  const skillTools = createSkillTools({
+    manager: skillManager,
+    getAgentSession: () => liveAgentSession,
+    getMeta: securityGetMeta,
+  });
+
+  const customTools = [...sandboxTools, ...skillTools];
+  const toolAllowlist = resolveToolAllowlist(config.SKILLS_MODE);
 
   try {
     if (isCancelled()) {
@@ -245,6 +292,7 @@ export async function runAgentTurn(opts) {
       run_id: activeRunId,
       policy_version: POLICY_VERSION,
       approval_enabled: config.APPROVAL_ENABLED,
+      skills_mode: config.SKILLS_MODE,
     });
     if (activeRunId) {
       await persistEvent('session', {
@@ -286,8 +334,8 @@ export async function runAgentTurn(opts) {
 
     const { session } = await createAgentSession({
       model: makeModel(),
-      tools: ['read', 'bash', 'edit', 'write', 'submit_artifact', 'ls', 'find', 'grep'],
-      customTools: sandboxTools,
+      tools: toolAllowlist,
+      customTools,
       cwd: AGENT_WORKSPACE,
       sessionManager: SessionManager.inMemory(),
       authStorage,
@@ -296,10 +344,30 @@ export async function runAgentTurn(opts) {
       settingsManager,
     });
     agentSession = session;
+    liveAgentSession = session;
 
     if (typeof onSessionReady === 'function') {
       onSessionReady({ session, sandboxSessionId, client });
     }
+
+    const skillModeHint =
+      config.SKILLS_MODE === SKILLS_MODE.DEVELOPMENT
+        ? `
+## Skill management (development mode)
+
+Shared skills live at \`${AGENT_SKILL}\` (SKILLS_MODE=development).
+
+- Install: \`skill_install\` (allowlisted local dir or HTTPS Git with required \`ref\`)
+- Edit: \`skill_edit\` (path under skill root only)
+- Reload: \`skill_reload\` (or continue in the next turn)
+
+Generic \`write\` / \`edit\` / \`bash\` **cannot** modify the skill tree.
+Git must be HTTPS; git@/SSH, credentials-in-URL, npm/OCI, and arbitrary install scripts are rejected.
+`
+        : `
+Shared skills at \`${AGENT_SKILL}\` are **read-only** (SKILLS_MODE=readonly).
+Skill install/edit tools are not available.
+`;
 
     const DOWNLOAD_INSTRUCTIONS = `
 ## Workspace layout (stable paths)
@@ -307,8 +375,7 @@ export async function runAgentTurn(opts) {
 Your working directory is always:
 \`${AGENT_WORKSPACE}\`
 
-Shared read-only skills:
-\`${AGENT_SKILL}\`
+${skillModeHint}
 
 Use **relative paths** under the workspace for all file tools. Do not rely on host/physical paths
 (e.g. \`/var/sandbox/workspaces/...\`). If a shell prints a different absolute path, still treat
@@ -321,7 +388,11 @@ Continue the task with that context; do not ask the user to repeat earlier detai
 
 ## File Sharing (Artifact-only delivery)
 
-Available tools: \`read\`, \`write\`, \`edit\`, \`bash\`, \`ls\`, \`find\`, \`grep\`, **\`submit_artifact\`**.
+Available tools: \`read\`, \`write\`, \`edit\`, \`bash\`, \`ls\`, \`find\`, \`grep\`, **\`submit_artifact\`` +
+      (config.SKILLS_MODE === SKILLS_MODE.DEVELOPMENT
+        ? `, \`skill_install\`, \`skill_edit\`, \`skill_reload\``
+        : '') +
+      `.
 
 Prefer structured \`ls\` / \`find\` / \`grep\` over shell for file discovery and text search (bounded, audited, workspace-only).
 
@@ -482,5 +553,6 @@ Prefer structured \`ls\` / \`find\` / \`grep\` over shell for file discovery and
     }
     // Drop reference; GC session
     agentSession = null;
+    liveAgentSession = null;
   }
 }

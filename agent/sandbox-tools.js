@@ -28,6 +28,7 @@ import {
   buildToolAuditEvent,
   POLICY_DECISION,
 } from './extensions/sandbox-security.js';
+import { isUnderSkillRoot, commandTouchesSkillRoot, DEFAULT_SKILL_ROOTS } from './skills/paths.js';
 
 const APPROVAL_POLL_MS = 1500;
 const APPROVAL_MAX_WAIT_MS = 5 * 60 * 1000;
@@ -64,6 +65,7 @@ export function createSandboxTools(ctx = {}) {
     ctx.approvalEnabled != null ? Boolean(ctx.approvalEnabled) : config.APPROVAL_ENABLED !== false;
   const getMeta = typeof ctx.getMeta === 'function' ? ctx.getMeta : () => ({});
   const auditSink = typeof ctx.auditSink === 'function' ? ctx.auditSink : null;
+  const skillRoots = ctx.skillRoots || config.SKILL_ROOTS || DEFAULT_SKILL_ROOTS;
 
   function metaNow() {
     return {
@@ -72,6 +74,35 @@ export function createSandboxTools(ctx = {}) {
       policy_version: POLICY_VERSION,
       ...getMeta(),
     };
+  }
+
+  /**
+   * Block generic tools from writing / shelling into the shared skill tree.
+   * Skill mutations must go through skill_install / skill_edit (development).
+   * @param {string} toolName
+   * @param {object} params
+   * @returns {{ blocked: true, reason: string } | { blocked: false }}
+   */
+  function skillRootGuard(toolName, params = {}) {
+    if (params.path && isUnderSkillRoot(params.path, skillRoots)) {
+      return {
+        blocked: true,
+        reason:
+          'skill root is not writable via generic tools; use skill_install/skill_edit (SKILLS_MODE=development)',
+      };
+    }
+    if (
+      toolName === 'bash' &&
+      params.command &&
+      commandTouchesSkillRoot(params.command, skillRoots)
+    ) {
+      return {
+        blocked: true,
+        reason:
+          'bash must not target skill root; use skill_install/skill_edit (SKILLS_MODE=development)',
+      };
+    }
+    return { blocked: false };
   }
 
   /**
@@ -318,6 +349,14 @@ export function createSandboxTools(ctx = {}) {
       content: Type.String({ description: 'Content to write' }),
     }),
     execute: wrapExecute('write', async (_toolCallId, params) => {
+      const guard = skillRootGuard('write', params);
+      if (guard.blocked) {
+        return {
+          content: [{ type: 'text', text: `Blocked (policy): ${guard.reason}` }],
+          details: { isError: true, policy_version: POLICY_VERSION },
+          isError: true,
+        };
+      }
       try {
         const data = await sb.writeFile(getSessionId(), params.path, params.content);
         return {
@@ -347,6 +386,14 @@ export function createSandboxTools(ctx = {}) {
       new_string: Type.String({ description: 'Replacement text' }),
     }),
     execute: wrapExecute('edit', async (_toolCallId, params) => {
+      const guard = skillRootGuard('edit', params);
+      if (guard.blocked) {
+        return {
+          content: [{ type: 'text', text: `Blocked (policy): ${guard.reason}` }],
+          details: { isError: true, policy_version: POLICY_VERSION },
+          isError: true,
+        };
+      }
       try {
         const sessionId = getSessionId();
         const file = await sb.readFile(sessionId, params.path);
@@ -387,6 +434,14 @@ export function createSandboxTools(ctx = {}) {
       timeout: Type.Optional(Type.Number({ description: 'Seconds (max 300)' })),
     }),
     execute: wrapExecute('bash', async (_toolCallId, params) => {
+      const guard = skillRootGuard('bash', params);
+      if (guard.blocked) {
+        return {
+          content: [{ type: 'text', text: `Blocked (policy): ${guard.reason}` }],
+          details: { isError: true, policy_version: POLICY_VERSION },
+          isError: true,
+        };
+      }
       try {
         const r = await sb.executeCommand(getSessionId(), params.command, params.timeout || 120);
         const isErr = r.exit_code != null && r.exit_code !== 0;

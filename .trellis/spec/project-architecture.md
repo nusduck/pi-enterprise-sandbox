@@ -2,24 +2,26 @@
 
 ## 系统定位
 
-Pi Enterprise Sandbox 是一个三服务全栈仓库：浏览器 UI、Node.js Agent/API 编排层、Python FastAPI 安全沙箱分别运行，默认由 Docker Compose 组合。
+Pi Enterprise Sandbox 是一个四服务全栈仓库：浏览器 UI、薄 Node BFF、独立 Node Agent、Python FastAPI 安全沙箱分别运行，默认由 Docker Compose 组合。
 
 ```text
 Browser
   -> frontend (Vite 构建，Nginx 静态托管与 /api 反代)
-  -> api-server (Node 原生 HTTP、pi-coding-agent、SSE)
+  -> api-server (Node BFF：auth/files/SSE relay)
+  -> agent (Node：pi-coding-agent SDK / Run API)
   -> sandbox (FastAPI、执行/文件/审批/产物/持久化/MCP)
   -> per-session physical workspace + SQLite/PostgreSQL
 ```
 
-证据：`docker-compose.yml`、`frontend/nginx.conf`、`api-server/server.js`、`sandbox/main.py`、`docs/architecture.md`。
+证据：`docker-compose.yml`、`frontend/nginx.conf`、`api-server/server.js`、`agent/server.js`、`sandbox/main.py`、`docs/architecture.md`。
 
 ## 顶层目录职责
 
 | 路径 | 当前职责 | 示例 |
 |---|---|---|
-| `sandbox/` | Python 3.11+ FastAPI 服务及安全执行运行时 | `sandbox/main.py`、`sandbox/routers/executions.py` |
-| `api-server/` | 服务端 Agent 会话、SSE、Sandbox REST 代理 | `api-server/routes/chat.js`、`api-server/services/sandbox-client.js` |
+| `sandbox/` | Python 3.11+ FastAPI 服务及安全执行运行时（无 Agent 主循环） | `sandbox/main.py`、`sandbox/routers/executions.py` |
+| `api-server/` | 薄 BFF：认证、会话/文件边缘、chat SSE relay | `api-server/routes/chat.js`、`api-server/services/agent-client.js` |
+| `agent/` | 独立 Agent Runtime：SDK、tools、extensions、内部 Run API | `agent/chat-runner.js`、`agent/server.js` |
 | `frontend/` | 无框架 Vanilla JS SPA，Vite 构建，Nginx 托管 | `frontend/src/main.js`、`frontend/src/state.js` |
 | `tests/` | 统一 pytest 测试，包括单元、FastAPI 集成、配置/容器契约 | `tests/test_integration.py`、`tests/test_container_startup.py` |
 | `skills/` | 内置 Agent 技能及其脚本 | `skills/data-analysis/SKILL.md` |
@@ -35,12 +37,11 @@ Browser
 ### 对话与工具调用
 
 1. `frontend/src/api.js` 向 `POST /api/chat` 提交完整消息历史并消费 SSE。
-2. `api-server` 根据 **`AGENT_RUNTIME`**（默认 **`node`**）选择编排：
-   - `node`：`routes/chat.js` 创建/复用 conversation 与 sandbox session，初始化 `pi-coding-agent`。
-   - `python`：BFF 将请求/SSE 透传到 Sandbox `POST /agent/chat`（Python `AgentRuntime`）；回滚只需改回 `node` 并重启 api-server。
-3. `api-server/sandbox-tools.js`（Node 路径）将 `read/write/edit/bash/submit_artifact` 转为 Sandbox REST 调用；高风险 bash 先走审批。
-4. `sandbox/routers/` 校验 HTTP 输入并调用 `sandbox/services/`；需要持久化时再进入 `sandbox/repositories.py`。
-5. `token/tool_start/tool_end/file_ready/done/error` 等事件回到浏览器；`frontend/src/main.js` 更新状态并触发增量渲染。
+2. `api-server/routes/chat.js`（BFF）创建 Agent run（`POST /internal/agent-runs`）并 relay 序列化 SSE；**不** import `pi-coding-agent`。
+3. `agent/chat-runner.js` 创建/复用 conversation 与 sandbox session，初始化 `pi-coding-agent`。
+4. `agent/sandbox-tools.js` 将 `read/write/edit/bash/submit_artifact` 转为 Sandbox REST 调用；高风险 bash 先走审批。
+5. `sandbox/routers/` 校验 HTTP 输入并调用 `sandbox/services/`；需要持久化时再进入 `sandbox/repositories.py`。
+6. `token/tool_start/tool_end/file_ready/done/error` 等事件经 BFF 回到浏览器；`frontend/src/main.js` 更新状态并触发增量渲染。
 
 ### 文件与产物
 
@@ -54,19 +55,21 @@ Browser
 ### 统一边界，再下沉逻辑
 
 - Python：Router 负责 HTTP 状态和 Pydantic 响应，Service 负责业务/安全，Repository 负责 SQL。例如 `routers/sessions.py` -> `services/session_manager.py` -> `repositories.py`。
-- Node：`server.js` 只分派路径，`routes/*.js` 处理 HTTP/SSE，`services/sandbox-client.js` 集中 Sandbox fetch 与错误转换。
+- Node BFF：`server.js` 只分派路径，`routes/*.js` 处理 HTTP/SSE relay，`services/sandbox-client.js` / `agent-client.js` 集中下游 fetch。
+- Node Agent：`server.js` 暴露内部 Run API；`chat-runner.js` 承载 SDK 循环。
 - Frontend：`api.js` 管协议，`state.js` 管状态，`render.js` 管 DOM，`main.js` 负责编排和事件绑定。
 
 ### 配置集中化
 
 - Python 环境变量通过 `sandbox/config.py::Settings` 读取，前缀为 `SANDBOX_`。
-- Node 环境变量集中在 `api-server/config.js`。
+- Node BFF 环境变量集中在 `api-server/config.js`（`AGENT_BASE_URL`、`AGENT_INTERNAL_TOKEN`）。
+- Node Agent 环境变量集中在 `agent/config.js`（LLM、Sandbox、内部令牌）。
 - 容器默认值集中在 `docker-compose.yml`；生产覆盖在 `docker-compose.prod.yml`。
 - 不在路由或 UI 模块新增散落的 secret/default；安全值不进入浏览器。
 
 ### 可追踪与安全默认值
 
-- `X-Trace-Id` 由 Node 生成/传递，FastAPI middleware 回显，并写入 execution/audit 数据。
+- `X-Trace-Id` 由 BFF 生成/传递，Agent 透传，FastAPI middleware 回显，并写入 execution/audit 数据。
 - 子进程只接收 `sandbox/security/safe_env.py` 构造的最小环境，不继承完整 `os.environ`。
 - 高风险工具默认进入审批或拒绝；未知工具在 `policy_checker.py` 中按中风险处理。
 
@@ -80,11 +83,14 @@ uv sync --extra test
 
 # Node 依赖（存在 package-lock.json，自动化优先 npm ci）
 npm ci --prefix api-server
+npm ci --prefix agent
 npm ci --prefix frontend
 
-# 本地开发（三个终端）
+# 本地开发（四个终端）
 uv run uvicorn sandbox.main:app --port 8081 --reload
-SANDBOX_BASE_URL=http://localhost:8081 npm run dev --prefix api-server
+SANDBOX_BASE_URL=http://localhost:8081 npm run dev --prefix agent
+SANDBOX_BASE_URL=http://localhost:8081 AGENT_BASE_URL=http://localhost:4100 \
+  npm run dev --prefix api-server
 npm run dev --prefix frontend
 
 # 前端生产构建
@@ -98,22 +104,24 @@ docker compose up --build
 docker compose -f docker-compose.yml -f docker-compose.prod.yml up --build -d
 ```
 
-说明：`api-server/package.json` 没有独立 build 脚本，直接运行 ESM 源码；Python 使用 setuptools 构建元数据，但日常服务启动依赖 Uvicorn/Docker。
+说明：`api-server/` 与 `agent/` 的 `package.json` 没有独立 build 脚本，直接运行 ESM 源码；Python 使用 setuptools 构建元数据，但日常服务启动依赖 Uvicorn/Docker。
 
 ## 测试方式
 
-CI 权威入口：`.github/workflows/test.yml`（四个并行 job）：
+CI 权威入口：`.github/workflows/test.yml`（五个并行 job）：
 
 | Job | 命令摘要 |
 |-----|----------|
 | `python` | `uv sync --extra test` → `uv run pytest tests/ -q --tb=short` |
-| `node-api` | `npm ci --prefix api-server` → `node --test api-server/tests/*.test.js api-server/tests/sdk-compat/*.test.js` + `node --check` |
+| `node-bff` | `npm ci --prefix api-server` → `node --test api-server/tests/*.test.js` + `node --check` |
+| `node-agent` | `npm ci --prefix agent` → `node --test agent/tests/**/*.test.js` + `node --check` |
 | `frontend` | `npm ci --prefix frontend` → `npm test` → `npm run build` |
 | `compose` | 确保 `.env` 存在后 `docker compose config -q` |
 
 ```bash
 uv sync --extra test && uv run pytest tests/ -q --tb=short
-npm ci --prefix api-server && node --test api-server/tests/*.test.js api-server/tests/sdk-compat/*.test.js
+npm ci --prefix api-server && node --test api-server/tests/*.test.js
+npm ci --prefix agent && node --test agent/tests/*.test.js agent/tests/sdk-compat/*.test.js
 npm ci --prefix frontend && npm test --prefix frontend && npm run build --prefix frontend
 test -f .env || cp .env.example .env; docker compose config -q
 ```
@@ -122,7 +130,8 @@ test -f .env || cp .env.example .env; docker compose config -q
 
 - 纯单元测试：直接实例化 Manager/Checker，如 `test_session_manager.py`、`test_policy_checker.py`。
 - FastAPI 集成测试：模块级 `TestClient(app)`，如 `test_integration.py`（含 `/health` liveness 与 `/ready` readiness/503）。
-- Node `node:test`：`api-server/tests/`（runtime 选择、request-context）与 `api-server/tests/sdk-compat/`（SDK pin / 事件映射 / Extension / Session）。
+- Node BFF `node:test`：`api-server/tests/`（agent-client、auth、upload）。
+- Node Agent `node:test`：`agent/tests/` + `agent/tests/sdk-compat/`（Run API、SDK pin、事件映射、Extension）。
 - Frontend `node:test`：`frontend/test/`（SSE、state、security）。
 - 临时路径隔离：`tests/conftest.py` 在导入应用前覆盖 `SANDBOX_*` 路径和数据库。
 - 文件/配置契约：读取 Docker/Compose 或运行 `bash -n`，如 `test_container_startup.py`。
@@ -131,7 +140,7 @@ test -f .env || cp .env.example .env; docker compose config -q
 ## 待确认
 
 - **待确认：** 是否将 Ruff、Black、Mypy 和覆盖率设为强制门禁。当前 `CONTRIBUTING.md`/`docs/development.md` 仅推荐，`pyproject.toml` 和 CI 未配置对应 job。
-- **已落地：** Node API 与 Frontend 均有 `test` script（`node:test`），CI 分 job 执行。
+- **已落地：** Node BFF / Agent 与 Frontend 均有 `test` script（`node:test`），CI 分 job 执行。
 - **待确认：** 前端 `@earendil-works/pi-web-ui` 仍列为依赖，但当前 `frontend/src/*.js` 未 import；是否保留该依赖属于后续清理决策。
 - **待确认：** 数据库 schema 变更的正式迁移/回滚流程；当前仓库没有 Alembic 或独立 migration 目录。
-- **运行时选择：** 生产浏览器始终 `POST /api/chat`；`AGENT_RUNTIME=node|python`（默认 `node`）控制编排实现，见 `.env.example` 与 `docs/api.md`。
+- **已落地：** 独立 Node Agent 服务；Python Agent Runtime 与 `AGENT_RUNTIME` 开关已删除。

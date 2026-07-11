@@ -44,6 +44,12 @@ services:
       start_period: 15s
 
   # ── Agent — pi-coding-agent orchestration (independent) ──
+  # Skills volume: production/default is read-only.
+  # Development skill install/edit:
+  #   SKILLS_MODE=development
+  #   AGENT_SKILLS_MOUNT=./skills:/home/sandbox/skill:rw
+  #   SKILLS_INSTALL_LOCAL_ALLOWLIST=/path/inside/container
+  # Sandbox keeps skills mounted read-only (execute only).
   agent:
     build:
       context: ./agent
@@ -62,9 +68,15 @@ services:
       LLMIO_API_KEY: ${LLMIO_API_KEY:-}
       MODEL_ID: ${MODEL_ID:-deepseek-v4-flash}
       APPROVAL_ENABLED: ${APPROVAL_ENABLED:-}
+      # readonly (default) | development — skill_install/edit/reload only in development
+      SKILLS_MODE: ${SKILLS_MODE:-readonly}
+      SKILLS_ROOT: /home/sandbox/skill
+      SKILLS_INSTALL_LOCAL_ALLOWLIST: ${SKILLS_INSTALL_LOCAL_ALLOWLIST:-}
+      SKILLS_AUDIT_LOG: ${SKILLS_AUDIT_LOG:-}
       PORT: 4100
     volumes:
-      - ./skills:/home/sandbox/skill:ro
+      # Default :ro. For SKILLS_MODE=development set AGENT_SKILLS_MOUNT=./skills:/home/sandbox/skill:rw
+      - ${AGENT_SKILLS_MOUNT:-./skills:/home/sandbox/skill:ro}
       - ./skills:/sandbox/skills:ro
       - ./skills:/app/.pi/skills:ro
     restart: unless-stopped

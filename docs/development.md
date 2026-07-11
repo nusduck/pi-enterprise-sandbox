@@ -101,11 +101,37 @@ SANDBOX_BASE_URL=http://localhost:8081 AGENT_BASE_URL=http://localhost:4100 \
 
 ### 新增技能
 
+**方式 A — 手工（生产 / 默认只读）**
+
 1. 在 `skills/your-skill-name/` 创建目录
-2. 添加 `SKILL.md`（YAML frontmatter + 描述）
+2. 添加 `SKILL.md`（YAML frontmatter：`name` + `description` 必填）
 3. 添加脚本到 `skills/your-skill-name/scripts/`
-4. `skills/` 在容器中以只读方式挂载到 `/home/sandbox/skill/`（以及兼容路径 `/sandbox/skills`）
+4. `skills/` 默认以**只读**挂载到 Agent / Sandbox 的 `/home/sandbox/skill/`（兼容路径 `/sandbox/skills`）
 5. Agent 自动发现技能；工作区始终从空目录起步，技能不复制进 workspace
+
+**方式 B — 研发对话安装（`SKILLS_MODE=development`）**
+
+单用户可信研发环境可通过 Agent 专用工具安装/修改共享 Skill（不建设 overlay / 审批流）：
+
+```bash
+# .env
+SKILLS_MODE=development
+AGENT_SKILLS_MOUNT=./skills:/home/sandbox/skill:rw
+# 本地安装源白名单（容器内绝对路径，逗号分隔）
+SKILLS_INSTALL_LOCAL_ALLOWLIST=/tmp/skill-src
+# 可选审计文件
+# SKILLS_AUDIT_LOG=/tmp/skill-audit.jsonl
+```
+
+| 工具 | 作用 |
+|------|------|
+| `skill_install` | 从**白名单本地目录**或 **HTTPS Git（必须指定 ref）** 安装；记录 resolved commit；临时目录 + 原子替换 |
+| `skill_edit` | 写 skill 根下文件（校验路径不逃逸；`SKILL.md` 格式校验） |
+| `skill_reload` | 显式 reload loader；下一回合也会重新扫描 |
+
+**拒绝**：`git@` / SSH、URL 内嵌凭证、任意压缩包/安装脚本、npm/OCI。  
+**路径策略**：通用 `write` / `edit` / `bash` **不能**写 skill 根；生产 `SKILLS_MODE=readonly` 时上述工具不注册。  
+Sandbox 始终只读挂载 skill（仅执行）；写操作只发生在 Agent 侧可写卷。
 
 ### 修改前端
 
@@ -128,9 +154,10 @@ SANDBOX_BASE_URL=http://localhost:8081 AGENT_BASE_URL=http://localhost:4100 \
 1. `agent/server.js` — 内部 Run API / health
 2. `agent/chat-runner.js` — pi-coding-agent 会话循环
 3. `agent/sandbox-tools.js` — read/write/edit/bash/submit_artifact
-4. `agent/extensions/sandbox-security.js` — 安全 Extension
-5. 语法检查: `node --check agent/server.js`
-6. 单元测试: `npm test --prefix agent`
+4. `agent/skills/` — SKILLS_MODE、install/edit/reload、路径策略
+5. `agent/extensions/sandbox-security.js` — 安全 Extension（含 skill 根硬拒绝）
+6. 语法检查: `node --check agent/server.js`
+7. 单元测试: `npm test --prefix agent`
 
 ### 数据库操作
 
