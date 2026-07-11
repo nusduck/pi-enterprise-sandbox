@@ -118,3 +118,48 @@ Session wrap-up. All Trellis active tasks archived (0 remaining). Two iterations
 ### Next Steps
 
 - None - task complete
+
+
+## Session 4: Finish database experiment review without experiment assets
+
+**Date**: 2026-07-11
+**Task**: Finish database experiment review without experiment assets
+**Branch**: `main`
+
+### Summary
+
+Removed all temporary database-analysis experiment assets at user request; retained and committed the general BFF session, safe Skill execution, network-command parsing fixes, Trellis spec corrections, and next-iteration production-boundary review.
+
+### Main Changes
+
+- Restored and tested BFF conversation/Sandbox session resolution used by draft uploads.
+- Allowed simple read-only Skill script execution while preserving Skill-root mutation hard-denies.
+- Fixed network-command detection so source-code substrings such as `ncc` do not trigger netcat policy.
+- Recorded production-boundary follow-up work and synchronized Trellis architecture/quality guidance.
+- Removed the Compose database overlay, synthetic data, experiment Skill, runner, generated artifacts, tests and experiment task before committing.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `69cb28e9` | (see git log) |
+| `8c5e9e2f` | (see git log) |
+| `75652426` | (see git log) |
+| `02dca2c1` | (see git log) |
+| `f96f031e` | (see git log) |
+
+### Testing
+
+- Python: `317 passed`.
+- BFF: `23 passed`.
+- Agent affected + SDK compatibility scope: `97 passed`.
+- Frontend: `51 passed`; Vite production build passed.
+- `git diff --check` passed; repository scan found no remaining database-analysis experiment references.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
