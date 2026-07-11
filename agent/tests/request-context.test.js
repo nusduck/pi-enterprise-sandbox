@@ -2,7 +2,7 @@
  * Request-scoped sandbox client + tools — concurrent chat contexts must not
  * cross-talk on traceId, sessionId, or approval notifier.
  *
- * Run: node --test api-server/tests/request-context.test.js
+ * Run: node --test agent/tests/request-context.test.js
  */
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';

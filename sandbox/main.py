@@ -25,7 +25,7 @@ from sandbox.routers import (
     sessions,
     traces,
 )
-from sandbox.routers import auth_router, agent_router
+from sandbox.routers import auth_router
 from sandbox.security.network_policy import get_network_policy, init_network_policy
 from sandbox.services.session_manager import session_manager
 from sandbox.trace import reset_trace_id, set_trace_id
@@ -304,7 +304,6 @@ async def value_error_handler(request: Request, exc: ValueError):
 # ── Register routers ───────────────────────────────────────────────────
 
 app.include_router(auth_router.router)
-app.include_router(agent_router.router)
 app.include_router(agent_runs.router)
 app.include_router(sessions.router)
 app.include_router(approvals.router)

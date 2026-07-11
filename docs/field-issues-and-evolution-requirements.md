@@ -134,8 +134,8 @@ Sandbox 的监听地址和允许访问方缺少一套容易理解的配置语义
 
 **现象**
 
-- Python Runtime 当前位于 `sandbox/agent/`，使 Agent 编排与不可信代码执行边界混在同一个服务中。
-- Python Runtime 没有以 `pi-coding-agent` SDK 为唯一编排核心，与 Node Runtime 存在能力和行为分叉。
+- ~~Python Runtime 位于 `sandbox/agent/`，使 Agent 编排与不可信代码执行边界混在同一个服务中。~~ **已解决（2026-07-11）：** Python Agent Runtime 已删除；编排在独立 `agent/` Node 服务。
+- ~~Python Runtime 没有以 `pi-coding-agent` SDK 为唯一编排核心，与 Node Runtime 存在能力和行为分叉。~~ **已解决：** 仅保留 Node SDK 路径。
 
 **目标结构**
 

@@ -41,7 +41,7 @@ uv run pytest tests/ -q --tb=short
 # Node API Server（含 sdk-compat；无 live LLM）
 node --test api-server/tests/*.test.js api-server/tests/sdk-compat/*.test.js
 # 或：npm test --prefix api-server
-# SDK 精确版本：npm ls --prefix api-server @earendil-works/pi-coding-agent
+# SDK 精确版本：npm ls --prefix agent @earendil-works/pi-coding-agent
 # 升级流程：docs/runbooks/sdk-upgrade.md · ADR：docs/adr/0001-pi-coding-agent-sdk.md
 find api-server -name '*.js' -type f ! -path '*/node_modules/*' -exec node --check {} \;
 
@@ -54,7 +54,7 @@ test -f .env || cp .env.example .env
 docker compose config -q
 ```
 
-### 运行（本地三进程）
+### 运行（本地四进程）
 
 ```bash
 # Terminal 1: Sandbox
@@ -62,11 +62,14 @@ docker compose config -q
 # SANDBOX_BIND_HOST only sets the listen address (0.0.0.0 ≠ allow any client).
 uv run uvicorn sandbox.main:app --host 127.0.0.1 --port 8081 --reload
 
-# Terminal 2: API Server（需要 Sandbox）
-# 默认 AGENT_RUNTIME=node；Python 编排试运行：AGENT_RUNTIME=python
-SANDBOX_BASE_URL=http://localhost:8081 npm run dev --prefix api-server
+# Terminal 2: Agent（需要 Sandbox + LLM 配置）
+SANDBOX_BASE_URL=http://localhost:8081 npm run dev --prefix agent
 
-# Terminal 3: 前端（Vite 热更新，dev proxy → localhost:4000）
+# Terminal 3: API Server / BFF（需要 Sandbox + Agent）
+SANDBOX_BASE_URL=http://localhost:8081 AGENT_BASE_URL=http://localhost:4100 \
+  npm run dev --prefix api-server
+
+# Terminal 4: 前端（Vite 热更新，dev proxy → localhost:4000）
 npm run dev --prefix frontend
 # 访问 http://localhost:5173
 ```
@@ -77,10 +80,12 @@ npm run dev --prefix frontend
 # 完整栈
 docker compose up --build
 
-# 仅 Sandbox（用于 API Server 本地开发）
+# 仅 Sandbox（用于 Agent / BFF 本地开发）
 docker compose up --build sandbox -d
-# 然后本地运行 API Server（注意 host 映射端口）：
-SANDBOX_BASE_URL=http://localhost:8083 npm run dev --prefix api-server
+# 然后本地运行 Agent + BFF：
+SANDBOX_BASE_URL=http://localhost:8081 npm run dev --prefix agent
+SANDBOX_BASE_URL=http://localhost:8081 AGENT_BASE_URL=http://localhost:4100 \
+  npm run dev --prefix api-server
 ```
 
 ## 开发流程
@@ -109,14 +114,23 @@ SANDBOX_BASE_URL=http://localhost:8083 npm run dev --prefix api-server
 3. Vite 热更新自动生效
 4. 测试亮色和暗色主题
 
-### 修改 API Server
+### 修改 API Server（BFF）
 
 1. `api-server/server.js` — HTTP 入口与路由分派
-2. `api-server/routes/chat.js` — SSE chat（受 `AGENT_RUNTIME` 影响）
-3. `api-server/sandbox-tools.js` — read/write/edit/bash/submit_artifact
-4. `api-server/config.js` — 环境变量与 `AGENT_RUNTIME` 规范化
+2. `api-server/routes/chat.js` — 薄 SSE relay → Agent Run API
+3. `api-server/services/agent-client.js` — BFF → Agent HTTP 客户端
+4. `api-server/config.js` — `AGENT_BASE_URL` / 内部令牌等
 5. 语法检查: `node --check api-server/server.js`
 6. 单元测试: `npm test --prefix api-server`
+
+### 修改 Agent 服务
+
+1. `agent/server.js` — 内部 Run API / health
+2. `agent/chat-runner.js` — pi-coding-agent 会话循环
+3. `agent/sandbox-tools.js` — read/write/edit/bash/submit_artifact
+4. `agent/extensions/sandbox-security.js` — 安全 Extension
+5. 语法检查: `node --check agent/server.js`
+6. 单元测试: `npm test --prefix agent`
 
 ### 数据库操作
 
@@ -177,10 +191,11 @@ npm run build --prefix frontend
 | `tests/test_approval.py` | 审批工作流 |
 | `tests/test_persistence.py` | SQLite 持久化层 |
 | `tests/test_auth.py` / `test_auth_foundation.py` | 公开路由、API key / JWT |
-| `tests/test_agent_*.py` | Python Agent 路由与对等 |
+| `tests/test_python_agent_removed.py` | 确认 Python Agent Runtime 已删除 |
 | `tests/test_container_startup.py` | Docker entrypoint, compose 配置 |
 | `tests/test_webui_api.py` | 跨层 WebUI/API 契约 |
-| `api-server/tests/*.test.js` | AGENT_RUNTIME、request-context 隔离 |
+| `api-server/tests/*.test.js` | BFF agent-client / chat relay |
+| `agent/tests/*.test.js` | Run API、request-context、SDK compat |
 | `frontend/test/*.test.js` | SSE 解析、state、security/a11y |
 
 ### 编写测试

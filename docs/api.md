@@ -67,23 +67,17 @@ Base URL: `http://host:4000`
 
 响应: SSE `text/event-stream`，见上方事件协议。
 
-**运行时选择（`AGENT_RUNTIME`）：**
-
-| 值 | 行为 |
-|----|------|
-| `node`（默认） | Node `handleChat` + pi-coding-agent |
-| `python` | BFF 将请求/SSE 透传到 Sandbox `POST /agent/chat` |
-
-回滚：将 `AGENT_RUNTIME` 设回 `node` 并重启 api-server；前端无需变更。
+**编排路径：** BFF `POST /api/chat` → Agent `POST /internal/agent-runs` + `GET /internal/agent-runs/:id/events`（序列化 SSE）。浏览器事件契约不变。Python Agent Runtime 与 `AGENT_RUNTIME` 已移除。
 
 ### `GET /api/status` — BFF 状态
 
 ```json
-// Response (HTTP 200；Sandbox 不可达时 status 可为 "degraded"，不含密钥)
+// Response (HTTP 200；依赖不可达时 status 可为 "degraded"，不含密钥)
 {
   "status": "ok",
   "version": "4.0.0",
-  "agent_runtime": "node",
+  "agent_runtime": "node-agent",
+  "agent": { "status": "ok", "base_url": "http://agent:4100" },
   "sandbox": { "status": "ok" }
 }
 ```

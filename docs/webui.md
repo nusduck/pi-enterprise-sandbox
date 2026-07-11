@@ -2,7 +2,7 @@
 
 ## 概述
 
-v4 前端是一个**纯 UI SPA**，零 Agent 逻辑。Agent 运行在服务端（API Server；`AGENT_RUNTIME=node|python`），前端通过 SSE 消费事件流并渲染。
+v4 前端是一个**纯 UI SPA**，零 Agent 逻辑。Agent 运行在独立 Node Agent 服务；BFF 负责 `POST /api/chat` SSE relay，前端通过 SSE 消费事件流并渲染。
 
 架构：
 

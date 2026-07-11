@@ -37,7 +37,7 @@ Version policy: **exact pin** in `api-server/package.json` (no `^` / `~` range).
 |--------|---------|----------------|
 | **A. Upstream SDK (chosen)** | Depend on published npm package; override tools; map events in BFF | Fits current architecture; lowest maintenance; MIT license |
 | **B. Long-lived fork** | Fork repo, publish private package, cherry-pick upstream | High merge cost; splits security fixes; only justified by exit criteria below |
-| **C. Python binding / primary Python agent** | Re-wrap SDK or reimplement loop in Sandbox | No official Python entry; dual runtimes already diverge; `AGENT_RUNTIME=python` stays optional rollback, not the default strategy |
+| **C. Python binding / primary Python agent** | Re-wrap SDK or reimplement loop in Sandbox | Rejected and removed: no official Python entry; dual runtimes diverged; Python is Sandbox-only |
 | **D. Full reimplementation** | Build our own agent loop, tools, session, model adapters | Multi-year product work; no clear ROI while public API covers needs |
 | **E. Thin compatibility shim over multiple agent engines** | Abstract “any coding agent” behind our interface | Premature; adds indirection without a second engine requirement |
 
@@ -47,7 +47,7 @@ Version policy: **exact pin** in `api-server/package.json` (no `^` / `~` range).
 - Shipping the SDK CLI/TUI as the enterprise UX (browser + BFF SSE remains the product surface).
 - Guaranteeing bit-identical behavior with every upstream CLI release beyond contracts covered by `api-server/tests/sdk-compat/`.
 - Auto-bumping the dependency via Dependabot major upgrades without a human-reviewed PR.
-- Making `AGENT_RUNTIME=python` the long-term primary path (it remains a reversible BFF proxy for experimentation/rollback).
+- Reintroducing a Python Agent runtime or dual-runtime switch (removed; use the independent Node Agent service).
 
 ## License, engine, maintenance
 

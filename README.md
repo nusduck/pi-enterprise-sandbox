@@ -1,8 +1,8 @@
 # Pi Enterprise Sandbox
 
-> 三容器安全沙箱 + AI 编程助手 · v4.0
+> 四服务安全沙箱 + AI 编程助手 · v4.0
 
-三容器架构：前端 SPA + REST API Server + 安全沙箱执行环境。Agent 运行在服务端，浏览器零接触 LLM API Key 和工具执行细节。
+四服务架构：前端 SPA + 薄 BFF API Server + 独立 Node Agent + 安全沙箱执行环境。Agent 运行在独立服务中，浏览器零接触 LLM API Key 和工具执行细节。
 
 ## 快速启动
 
@@ -21,24 +21,15 @@ open http://localhost:3000
 ## 架构
 
 ```
-  Browser              Frontend               API Server              Sandbox
-  (SPA)                (Nginx:80)             (Node.js:4000)          (FastAPI:8081)
-┌──────────┐    HTTP  ┌──────────────┐   HTTP  ┌──────────────┐   HTTP  ┌──────────────┐
-│ pi-web-ui│◄───────►│ 静态文件服务   │◄───────►│ pi-coding-   │◄───────►│ 安全执行环境   │
-│ 纯 UI 层  │         │ /api/* 反向代理 │         │ agent SDK    │         │              │
-│          │         │              │         │              │         │ iptables      │
-│          │         │              │         │ SSE 流推送    │         │ ulimit        │
-│          │         │              │         │ LLM 直连      │         │ 非 root       │
-└──────────┘         └──────────────┘         └──────────────┘         │ 路径逃逸防护    │
- host:3000             host:3000→80            host:4000→4000           │ MCP host:8093→8091
-                                                                       └──────────────┘
-                                                                         API host:8083→8081
+  Browser → Frontend → API Server (BFF) → Agent (pi-coding-agent) → Sandbox
+  (SPA)     (Nginx)    (Node:4000)        (Node:4100)               (FastAPI:8081)
 ```
 
 | 组件 | 技术栈 | host→容器端口 |
 |------|--------|---------------|
 | **Frontend** | Vite + pi-web-ui → Nginx | `3000→80` |
-| **API Server** | Node.js 20 + pi-coding-agent SDK | `4000→4000` |
+| **API Server (BFF)** | Node.js 22 — auth / files / SSE relay | `4000→4000` |
+| **Agent** | Node.js 22 + pi-coding-agent SDK | `4100→4100` |
 | **Sandbox API** | Python 3.11 + FastAPI | `8083→8081` |
 | **Sandbox MCP** | MCP adapter (REST over HTTP) | `8093→8091` |
 
@@ -50,13 +41,17 @@ pi-sandbox/
 │   ├── src/main.js       ← 前端入口（纯 UI，零 Agent）
 │   ├── Dockerfile        ← Nginx 静态服务
 │   └── nginx.conf        ← /api/* 反向代理到 api-server
-├── api-server/           ← REST API（@earendil-works/pi-coding-agent SDK）
+├── api-server/           ← 薄 BFF（auth / files / SSE relay）
 │   ├── server.js         ← HTTP 入口（/api/chat SSE, /api/status）
-│   ├── routes/           ← chat, files, status 路由
-│   ├── services/         ← Sandbox HTTP 客户端
-│   ├── sandbox-tools.js  ← read/write/edit/bash 工具（重定向到 Sandbox）
+│   ├── routes/           ← chat, files, status, conversations...
+│   ├── services/         ← sandbox-client + agent-client
 │   └── Dockerfile
-├── sandbox/              ← 安全沙箱（Python FastAPI + 多层防护）
+├── agent/                ← 独立 Agent（@earendil-works/pi-coding-agent 0.80.3）
+│   ├── server.js         ← 内部 Run API + /health /ready
+│   ├── chat-runner.js    ← SDK 会话循环
+│   ├── sandbox-tools.js  ← read/write/edit/bash → Sandbox REST
+│   └── Dockerfile
+├── sandbox/              ← 安全沙箱（Python FastAPI + 多层防护，无 Agent 主循环）
 │   ├── main.py           ← FastAPI 入口
 │   ├── routers/          ← sessions, executions, files, artifacts, traces, MCP...
 │   ├── services/         ← 会话/执行/文件/审计/审批策略
@@ -68,7 +63,7 @@ pi-sandbox/
 ├── nginx/                ← 生产 Nginx + SSL
 ├── docs/                 ← 文档
 ├── workspaces/           ← 会话工作区（运行时，持久化）
-├── docker-compose.yml           ← 开发 3 容器编排
+├── docker-compose.yml           ← 开发 4 服务编排
 ├── docker-compose.prod.yml      ← 生产 overlay（Nginx + SSL + 资源限制）
 └── .env.example          ← 环境变量模板
 ```
@@ -88,27 +83,20 @@ pi-sandbox/
 |------|------|
 | `SANDBOX_API_TOKEN` | Sandbox API 认证令牌（生成: `openssl rand -hex 32`） |
 | `SANDBOX_MCP_AUTH_TOKENS` | MCP 端点认证令牌（逗号分隔） |
-| `AGENT_RUNTIME` | Chat 编排运行时：`node`（默认）或 `python`（BFF 代理到 sandbox `/agent/chat`） |
+| `AGENT_BASE_URL` | BFF → Agent 服务地址（compose 内默认 `http://agent:4100`） |
+| `AGENT_INTERNAL_TOKEN` | BFF ↔ Agent 共享内部令牌（生产必填） |
 
-### Agent 运行时切换与回滚
+### Agent 服务
 
-生产浏览器仍走 `POST /api/chat`（Node BFF）。通过 `AGENT_RUNTIME` 选择编排实现：
-
-| 值 | 行为 |
-|----|------|
-| `node`（默认） | 现有 `api-server/routes/chat.js` + pi-coding-agent |
-| `python` | Node 将 SSE 透传到 sandbox `POST /agent/chat`（Python `AgentRuntime`） |
-
-**回滚（无需重部署前端）：**
+浏览器仍统一走 `POST /api/chat`（BFF）。BFF 创建 Agent run 并 relay 序列化 SSE；编排与 SDK 循环只在 `agent/` 服务中。
 
 ```bash
-# .env
-AGENT_RUNTIME=node
-docker compose up -d api-server
-# 或本地：重启 api-server 进程
+# 本地四进程开发时
+AGENT_BASE_URL=http://localhost:4100
+SANDBOX_BASE_URL=http://localhost:8081
 ```
 
-确认 `GET /api/status` 返回 `"agent_runtime":"node"`。在多轮/工具/审批/产物/中止对等验证完成前，请保持默认 `node`。
+`GET /api/status` 返回 `"agent_runtime":"node-agent"` 以及 agent/sandbox 健康信息。Python Agent Runtime 与 `AGENT_RUNTIME` 开关已删除。
 
 ### 执行限制
 

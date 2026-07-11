@@ -39,11 +39,11 @@ describe('createSandboxTools override contract', () => {
     }
   });
 
-  it('chat.js allowlist matches createSandboxTools names (source contract)', () => {
-    const chatSrc = readFileSync(join(__dirname, '../../routes/chat.js'), 'utf8');
-    // tools: ['read', 'bash', 'edit', 'write', 'submit_artifact']
-    const m = chatSrc.match(/tools:\s*\[([^\]]+)\]/);
-    assert.ok(m, 'createAgentSession tools allowlist not found in chat.js');
+  it('chat-runner allowlist matches createSandboxTools names (source contract)', () => {
+    const runnerSrc = readFileSync(join(__dirname, '../../chat-runner.js'), 'utf8');
+    // tools: ['read', 'bash', 'edit', 'write', 'submit_artifact', ...]
+    const m = runnerSrc.match(/tools:\s*\[([^\]]+)\]/);
+    assert.ok(m, 'createAgentSession tools allowlist not found in chat-runner.js');
     const listed = [...m[1].matchAll(/'([^']+)'/g)].map((x) => x[1]).sort();
     const toolNames = createSandboxTools().map((t) => t.name).sort();
     assert.deepEqual(listed, toolNames);

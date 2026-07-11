@@ -13,7 +13,7 @@ services:
       api-server:
         condition: service_started
 
-  # ── API Server — REST API (Node.js + pi-coding-agent) ────
+  # ── API Server — thin BFF (auth, conversations, files, SSE relay) ─
   api-server:
     build:
       context: ./api-server
@@ -27,12 +27,42 @@ services:
     environment:
       SANDBOX_BASE_URL: http://sandbox:8081
       SANDBOX_API_TOKEN: ${SANDBOX_API_TOKEN:-}
+      AGENT_BASE_URL: http://agent:4100
+      AGENT_INTERNAL_TOKEN: ${AGENT_INTERNAL_TOKEN:-}
+      PORT: 4000
+    restart: unless-stopped
+    depends_on:
+      sandbox:
+        condition: service_healthy
+      agent:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:4000/api/status',r=>{process.exit(r.statusCode===200?0:1)}).on('error',()=>process.exit(1))"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+
+  # ── Agent — pi-coding-agent orchestration (independent) ──
+  agent:
+    build:
+      context: ./agent
+      dockerfile: Dockerfile
+    image: ${AGENT_IMAGE:-pi-enterprise-agent:latest}
+    container_name: ${AGENT_CONTAINER:-pi-enterprise-agent}
+    ports:
+      - "${AGENT_PORT:-4100}:4100"
+    env_file:
+      - ${API_ENV_FILE:-.env}
+    environment:
+      SANDBOX_BASE_URL: http://sandbox:8081
+      SANDBOX_API_TOKEN: ${SANDBOX_API_TOKEN:-}
+      AGENT_INTERNAL_TOKEN: ${AGENT_INTERNAL_TOKEN:-}
       LLMIO_BASE_URL: ${LLMIO_BASE_URL:-}
       LLMIO_API_KEY: ${LLMIO_API_KEY:-}
       MODEL_ID: ${MODEL_ID:-deepseek-v4-flash}
-      # node (default) | python — see .env.example rollback notes
-      AGENT_RUNTIME: ${AGENT_RUNTIME:-node}
-      PORT: 4000
+      APPROVAL_ENABLED: ${APPROVAL_ENABLED:-}
+      PORT: 4100
     volumes:
       - ./skills:/home/sandbox/skill:ro
       - ./skills:/sandbox/skills:ro
@@ -42,7 +72,7 @@ services:
       sandbox:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "node", "-e", "require('http').get('http://localhost:4000/api/status',r=>{process.exit(r.statusCode===200?0:1)}).on('error',()=>process.exit(1))"]
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:4100/health',r=>{process.exit(r.statusCode===200?0:1)}).on('error',()=>process.exit(1))"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -99,11 +129,6 @@ services:
       SANDBOX_UVICORN_WORKERS: ${SANDBOX_UVICORN_WORKERS:-1}
       SANDBOX_UVICORN_PROXY_HEADERS: true
       SANDBOX_API_TOKEN: ${SANDBOX_API_TOKEN:-}
-      # Required when AGENT_RUNTIME=python (Python agent loop calls LLM + self REST)
-      LLMIO_BASE_URL: ${LLMIO_BASE_URL:-}
-      LLMIO_API_KEY: ${LLMIO_API_KEY:-}
-      MODEL_ID: ${MODEL_ID:-deepseek-v4-flash}
-      SANDBOX_INTERNAL_URL: http://127.0.0.1:8081
       LANG: C.UTF-8
       LC_ALL: C.UTF-8
     restart: unless-stopped

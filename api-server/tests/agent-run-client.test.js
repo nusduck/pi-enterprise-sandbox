@@ -1,5 +1,5 @@
 /**
- * Smoke tests for agent-run sandbox client method shapes (no live sandbox).
+ * Smoke tests for BFF agent-client + chat relay hooks (no live agent).
  * Run: node --test api-server/tests/agent-run-client.test.js
  */
 import { describe, it } from 'node:test';
@@ -10,12 +10,37 @@ import { dirname, join } from 'node:path';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const clientSrc = readFileSync(join(__dirname, '../services/sandbox-client.js'), 'utf8');
+const agentClientSrc = readFileSync(join(__dirname, '../services/agent-client.js'), 'utf8');
 const chatSrc = readFileSync(join(__dirname, '../routes/chat.js'), 'utf8');
 const serverSrc = readFileSync(join(__dirname, '../server.js'), 'utf8');
 const convSrc = readFileSync(join(__dirname, '../routes/conversations.js'), 'utf8');
+const pkg = JSON.parse(readFileSync(join(__dirname, '../package.json'), 'utf8'));
 
-describe('agent session persistence BFF hooks', () => {
-  it('sandbox-client exposes agent run / event methods', () => {
+describe('thin BFF agent relay', () => {
+  it('does not depend on pi-coding-agent', () => {
+    const deps = pkg.dependencies || {};
+    assert.equal(
+      deps['@earendil-works/pi-coding-agent'],
+      undefined,
+      'api-server must not depend on SDK after cutover',
+    );
+    assert.doesNotMatch(chatSrc, /createAgentSession|@earendil-works\/pi-coding-agent/);
+  });
+
+  it('agent-client exposes create / events / cancel', () => {
+    for (const name of ['createAgentRun', 'openAgentRunEvents', 'cancelAgentRun', 'checkAgentHealth']) {
+      assert.match(agentClientSrc, new RegExp(`export async function ${name}\\(`));
+    }
+  });
+
+  it('chat creates run and streams events; cancels on disconnect', () => {
+    assert.match(chatSrc, /createAgentRun/);
+    assert.match(chatSrc, /openAgentRunEvents/);
+    assert.match(chatSrc, /cancelAgentRun/);
+    assert.match(chatSrc, /onClientGone|disconnect/);
+  });
+
+  it('sandbox-client still exposes agent-run persistence helpers for conversations', () => {
     for (const name of [
       'createAgentRun',
       'appendAgentEvent',
@@ -25,19 +50,9 @@ describe('agent session persistence BFF hooks', () => {
       'interruptAgentRun',
       'completeAgentRun',
       'failAgentRun',
-      'prepareToolExecution',
     ]) {
       assert.match(clientSrc, new RegExp(`async ${name}\\(`));
     }
-  });
-
-  it('chat creates run, appends events, interrupts on disconnect', () => {
-    assert.match(chatSrc, /createAgentRun/);
-    assert.match(chatSrc, /appendAgentEvent|persistEvent/);
-    assert.match(chatSrc, /interruptAgentRun|markRunInterrupted/);
-    assert.match(chatSrc, /completeAgentRun/);
-    assert.match(chatSrc, /token_batch/);
-    assert.match(chatSrc, /client_disconnect/);
   });
 
   it('server routes conversation events endpoint', () => {

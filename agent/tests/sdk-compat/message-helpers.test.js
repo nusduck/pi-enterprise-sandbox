@@ -1,6 +1,6 @@
 /**
  * Message extract / history helpers used when restoring multi-turn into the SDK.
- * Run: node --test api-server/tests/sdk-compat/message-helpers.test.js
+ * Run: node --test agent/tests/sdk-compat/message-helpers.test.js
  */
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
@@ -8,7 +8,7 @@ import {
   extractMessageText,
   toAgentHistoryMessages,
   toPersistableMessages,
-} from '../../routes/chat.js';
+} from '../../message-helpers.js';
 
 describe('extractMessageText', () => {
   it('handles string content', () => {

@@ -1,13 +1,13 @@
 # Runbook: Upgrade `@earendil-works/pi-coding-agent`
 
-Use this when bumping the pinned SDK version in `api-server`. Do **not** widen the pin to a semver range (`^` / `~`).
+Use this when bumping the pinned SDK version in `agent/`. Do **not** widen the pin to a semver range (`^` / `~`). The BFF (`api-server/`) must **not** depend on the SDK.
 
-Related: [ADR 0001](../adr/0001-pi-coding-agent-sdk.md), compat suite `api-server/tests/sdk-compat/`.
+Related: [ADR 0001](../adr/0001-pi-coding-agent-sdk.md), compat suite `agent/tests/sdk-compat/`.
 
 ## Preconditions
 
 - [ ] Independent task/PR (no mixed feature work).
-- [ ] Note current pin: `npm ls --prefix api-server @earendil-works/pi-coding-agent`
+- [ ] Note current pin: `npm ls --prefix agent @earendil-works/pi-coding-agent`
 - [ ] Read upstream changelog / release notes for the candidate version.
 - [ ] Confirm license remains MIT (or re-open ADR if not).
 - [ ] Confirm `engines.node` still matches runtime images (SDK currently declares `>=22.19.0`).
@@ -18,23 +18,23 @@ From repo root:
 
 ```bash
 # Baseline (current pin)
-npm ci --prefix api-server
-npm ls --prefix api-server @earendil-works/pi-coding-agent
-node --test api-server/tests/*.test.js api-server/tests/sdk-compat/*.test.js
+npm ci --prefix agent
+npm ls --prefix agent @earendil-works/pi-coding-agent
+node --test agent/tests/*.test.js agent/tests/sdk-compat/*.test.js
 ```
 
 Install candidate (example `0.81.0` — replace with real target):
 
 ```bash
 # Exact version only
-npm install --prefix api-server @earendil-works/pi-coding-agent@0.81.0 --save-exact
-npm ls --prefix api-server @earendil-works/pi-coding-agent
+npm install --prefix agent @earendil-works/pi-coding-agent@0.81.0 --save-exact
+npm ls --prefix agent @earendil-works/pi-coding-agent
 
 # Compat + unit suite (no live LLM)
-node --test api-server/tests/*.test.js api-server/tests/sdk-compat/*.test.js
+node --test agent/tests/*.test.js agent/tests/sdk-compat/*.test.js
 
 # Syntax
-find api-server -name '*.js' -type f ! -path '*/node_modules/*' -print0 \
+find agent -name '*.js' -type f ! -path '*/node_modules/*' -print0 \
   | xargs -0 -n1 node --check
 ```
 
@@ -52,11 +52,11 @@ Optional: stash `sdk-compat` failure output as PR artifacts for diff review.
 | SDK pin + VERSION export | `sdk-surface.test.js` |
 | SDK event → BFF SSE golden vectors | `sse-event-map.test.js` |
 
-If the candidate breaks only golden SSE mapping, update `api-server/tests/sdk-compat/fixtures/sdk-to-sse-golden.json` **only after** confirming intentional upstream event changes and BFF still matches `tests/fixtures/sse_events.json`.
+If the candidate breaks only golden SSE mapping, update `agent/tests/sdk-compat/fixtures/sdk-to-sse-golden.json` **only after** confirming intentional upstream event changes and BFF still matches `tests/fixtures/sse_events.json`.
 
 ## 2. Gray check (staging)
 
-1. Build **Agent/api-server image** with the candidate pin (do not change production compose defaults in the same PR if possible).
+1. Build **Agent image** with the candidate pin (do not change production compose defaults in the same PR if possible).
 2. Deploy to staging with a single canary replica if available.
 3. Smoke (manual or scripted against staging):
    - Multi-turn chat (history restore)
@@ -70,7 +70,7 @@ If the candidate breaks only golden SSE mapping, update `api-server/tests/sdk-co
 Current enterprise persistence:
 
 - Conversation messages + `sandbox_session_id` → Sandbox DB
-- SDK `SessionManager.inMemory()` → **not** durable across api-server restarts
+- SDK `SessionManager.inMemory()` → **not** durable across agent restarts
 
 Therefore most SDK bumps need **no conversation schema migration**.
 
@@ -79,7 +79,7 @@ When upstream changes matter:
 | Change | Action |
 |--------|--------|
 | `CURRENT_SESSION_VERSION` or JSONL entry shapes (if you start persisting SDK sessions) | Copy sample sessions; run `parseSessionEntries` / open-migrate offline; keep rollback image |
-| Tool result / event field renames | Update `sdk-sse-map.js` + golden fixtures; keep BFF SSE types stable for frontend |
+| Tool result / event field renames | Update `agent/services/sdk-sse-map.js` + golden fixtures; keep BFF SSE types stable for frontend |
 | Default built-in tools reintroduced | **Block release** until allowlist + customTools still override host I/O |
 | Model / auth storage format | Verify `AuthStorage` + `ModelRegistry` still accept LLMIO key path |
 
@@ -87,18 +87,18 @@ If durable SDK session files are introduced later: migrate by **copy-then-valida
 
 ## 4. PR checklist
 
-- [ ] `api-server/package.json` has **exact** version (e.g. `"0.81.0"`, not `^0.81.0`)
-- [ ] `api-server/package-lock.json` committed and matches (`npm ci --prefix api-server`)
+- [ ] `agent/package.json` has **exact** version (e.g. `"0.81.0"`, not `^0.81.0`)
+- [ ] `agent/package-lock.json` committed and matches (`npm ci --prefix agent`)
 - [ ] ADR inventory updated if imports/events change (`docs/adr/0001-pi-coding-agent-sdk.md`)
-- [ ] Compat suite green in CI (`node-api` job)
+- [ ] Compat suite green in CI (`node-agent` job)
 - [ ] Staging gray check notes in PR body
-- [ ] No production default flips unrelated to the pin (e.g. `AGENT_RUNTIME`)
+- [ ] No production default flips unrelated to the pin (Agent service image/config only)
 
 ## 5. Image rollback
 
 If production misbehaves after release:
 
-1. **Roll back the api-server/Agent image** to the previous digest/tag (compose/k8s).
+1. **Roll back the Agent image** to the previous digest/tag (compose/k8s).
 2. Confirm `npm ls` inside the rolled-back image shows the previous pin.
 3. Leave Sandbox DB as-is (conversation text remains valid).
 4. Do **not** delete sandbox sessions solely because of an Agent rollback; multi-turn reuse still applies.

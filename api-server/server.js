@@ -1,6 +1,7 @@
 /**
- * Api Server — HTTP entry point.
- * Routes are modular: no monolithic switch statement.
+ * Api Server — thin BFF HTTP entry point.
+ * Auth, conversations, files, uploads stay here.
+ * Chat orchestration is delegated to the independent Agent service.
  */
 import http from 'node:http';
 import { config, isProtectedApiPath } from './config.js';
@@ -19,6 +20,7 @@ import { handleDecideApproval } from './routes/approvals.js';
 import { handleRegister, handleLogin, handleMe } from './routes/auth.js';
 import { handleEnsureSession } from './routes/sessions.js';
 import { checkHealth } from './services/sandbox-client.js';
+import { checkAgentHealth } from './services/agent-client.js';
 
 // ── Startup health check ────────────────────────
 
@@ -28,12 +30,16 @@ async function startupCheck() {
     const health = await checkHealth();
     if (health?.status === 'ok') {
       console.log(`[server] Sandbox healthy (v${health.version}, ${health.sessions_active} sessions active)`);
-      return true;
+      break;
     }
-    await new Promise(r => setTimeout(r, 2000));
+    await new Promise((r) => setTimeout(r, 2000));
   }
-  console.warn('[server] Sandbox not responding after startup — will retry on demand');
-  return false;
+  const agent = await checkAgentHealth();
+  if (agent?.status === 'ok') {
+    console.log(`[server] Agent healthy (active_runs=${agent.active_runs ?? '?'})`);
+  } else {
+    console.warn('[server] Agent not responding after startup — will retry on demand');
+  }
 }
 
 // ── Body parsing ────────────────────────────────
@@ -117,7 +123,7 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
-    // ── POST /api/chat — SSE agent stream ──
+    // ── POST /api/chat — SSE relay to Agent service ──
     if (req.method === 'POST' && path === '/api/chat') {
       const body = await readBody(req);
       const parsed = JSON.parse(body);
@@ -219,6 +225,7 @@ const server = http.createServer(async (req, res) => {
 
 server.listen(config.PORT, async () => {
   console.log(`[server] pi-enterprise-api-server v4.0.0 (${config.NODE_ENV}) on port ${config.PORT}`);
+  console.log(`[server] Agent base URL: ${config.AGENT_BASE_URL}`);
   if (config.AUTH_ENABLED) {
     console.log('[server] AUTH_ENABLED=true — user-facing /api routes require Bearer token');
   }

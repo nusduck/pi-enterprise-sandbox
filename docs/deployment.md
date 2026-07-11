@@ -1,6 +1,6 @@
 # Deployment Guide
 
-> 生产部署指南 — 三容器 + Nginx 反向代理 + SSL + 资源限制 + 持久化存储
+> 生产部署指南 — 四服务 + Nginx 反向代理 + SSL + 资源限制 + 持久化存储
 
 ## 快速启动（开发模式）
 
@@ -14,7 +14,8 @@ docker compose up --build -d
 
 # 3. 验证
 curl -f http://localhost:3000/            # Frontend
-curl -f http://localhost:4000/api/status  # API Server
+curl -f http://localhost:4000/api/status  # BFF
+curl -f http://localhost:4100/health      # Agent
 curl -f http://localhost:8083/health      # Sandbox liveness
 curl -f http://localhost:8083/ready       # Sandbox readiness (workspaces + DB)
 ```
@@ -22,7 +23,8 @@ curl -f http://localhost:8083/ready       # Sandbox readiness (workspaces + DB)
 | 服务 | 端口 | 容器内端口 |
 |------|------|-----------|
 | Frontend (Nginx) | `3000` | `80` |
-| API Server | `4000` | `4000` |
+| API Server (BFF) | `4000` | `4000` |
+| Agent | `4100` | `4100` |
 | Sandbox MCP | `8093` | `8091` |
 | Sandbox API | 内网仅 | `8081` |
 
@@ -53,9 +55,13 @@ curl -sf https://localhost/nginx/status
                   └───────────────┬──────────────┘
                                   │
                   ┌───────────────▼──────────────┐
-                  │   api-server (Node:4000)      │
-                  │   pi-coding-agent SDK          │
-                  │   LLM proxy (直连, 无代理层)    │
+                  │   api-server BFF (Node:4000)  │
+                  │   Auth · Files · SSE relay    │
+                  └───────────────┬──────────────┘
+                                  │
+                  ┌───────────────▼──────────────┐
+                  │   agent (Node:4100)           │
+                  │   pi-coding-agent SDK · LLM   │
                   └───────────────┬──────────────┘
                                   │
                   ┌───────────────▼──────────────┐

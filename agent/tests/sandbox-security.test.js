@@ -1,6 +1,6 @@
 /**
  * SDK Extension security governance: policy matrix, fail-closed, write mutex.
- * Run: node --test api-server/tests/sandbox-security.test.js
+ * Run: node --test agent/tests/sandbox-security.test.js
  */
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';

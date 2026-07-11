@@ -1,9 +1,9 @@
 {
   "id": "independent-node-agent-runtime",
   "name": "independent-node-agent-runtime",
-  "title": "独立 Node Agent Runtime",
-  "description": "拆出独立 Node Agent 服务并移除未启用 Python Runtime。",
-  "status": "planning",
+  "title": "\u72ec\u7acb Node Agent Runtime",
+  "description": "\u62c6\u51fa\u72ec\u7acb Node Agent \u670d\u52a1\u5e76\u79fb\u9664\u672a\u542f\u7528 Python Runtime\u3002",
+  "status": "completed",
   "dev_type": null,
   "scope": null,
   "package": null,
@@ -11,7 +11,7 @@
   "creator": "nusduck",
   "assignee": "nusduck",
   "createdAt": "2026-07-11",
-  "completedAt": null,
+  "completedAt": "2026-07-11",
   "branch": null,
   "base_branch": "main",
   "worktree_path": null,
@@ -21,6 +21,6 @@
   "children": [],
   "parent": "07-11-field-issues-evolution-planning",
   "relatedFiles": [],
-  "notes": "",
+  "notes": "Independent agent/ service; BFF relay; python agent removed. 316 pytest, 70 agent + 21 bff tests.",
   "meta": {}
 }

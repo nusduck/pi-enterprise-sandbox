@@ -1,6 +1,6 @@
 /**
- * Pinned SDK package identity + exports required by api-server.
- * Run: node --test api-server/tests/sdk-compat/sdk-surface.test.js
+ * Pinned SDK package identity + exports required by agent service.
+ * Run: node --test agent/tests/sdk-compat/sdk-surface.test.js
  */
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';

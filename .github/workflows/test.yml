@@ -27,8 +27,8 @@ jobs:
       - name: Run pytest
         run: uv run pytest tests/ -q --tb=short
 
-  node-api:
-    name: Node API (tests + syntax)
+  node-bff:
+    name: Node BFF (tests + syntax)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -45,11 +45,36 @@ jobs:
         run: npm ci --prefix api-server
 
       - name: Run API Server unit tests
-        run: node --test api-server/tests/*.test.js api-server/tests/sdk-compat/*.test.js
+        run: node --test api-server/tests/*.test.js
 
       - name: Syntax-check API Server sources
         run: |
           find api-server -name '*.js' -type f ! -path '*/node_modules/*' -print0 \
+            | xargs -0 -n1 node --check
+
+  node-agent:
+    name: Node Agent (tests + syntax)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: agent/package-lock.json
+
+      - name: Install Agent dependencies
+        run: npm ci --prefix agent
+
+      - name: Run Agent unit tests
+        run: node --test agent/tests/*.test.js agent/tests/sdk-compat/*.test.js
+
+      - name: Syntax-check Agent sources
+        run: |
+          find agent -name '*.js' -type f ! -path '*/node_modules/*' -print0 \
             | xargs -0 -n1 node --check
 
   frontend:
