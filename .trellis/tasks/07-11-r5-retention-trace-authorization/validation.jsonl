@@ -1,7 +1,0 @@
-{"ts":"2026-07-11T00:00:00Z","command":".venv/bin/python -m pytest tests/test_retention_cleanup.py tests/test_trace.py tests/test_agent_events.py::test_ttl_cleanup_skips_legal_hold_and_deletes_drafts -q --tb=short","exit_code":0,"passed":15,"failed":0,"summary":"R5 retention + Legal Hold + trace owner/org auth: 15 passed"}
-{"ts":"2026-07-11T00:00:00Z","check":"draft_24h","evidence":"test_draft_ttl_deletes_expired_keeps_fresh_and_legal_hold: expired empty draft deleted, fresh kept, legal_hold kept, messages not in report"}
-{"ts":"2026-07-11T00:00:00Z","check":"inactive_90d","evidence":"test_inactive_90d_deletes_expired_keeps_fresh_and_legal_hold: cascade removes runs/events/tools; legal_hold retained"}
-{"ts":"2026-07-11T00:00:00Z","check":"audit_180d","evidence":"test_audit_180d_deletes_expired_keeps_fresh_and_legal_hold: free events/executions/audit purged; legal_hold-linked retained"}
-{"ts":"2026-07-11T00:00:00Z","check":"dry_run_retry","evidence":"test_draft_dry_run_does_not_mutate + test_audit_dry_run_no_mutation + test_run_retention_cleanup_batches_retryable"}
-{"ts":"2026-07-11T00:00:00Z","check":"trace_auth","evidence":"test_trace_cross_user_returns_404 + test_trace_cross_org_returns_404 + test_trace_admin_same_org_only + test_trace_unknown_returns_404_when_auth_on"}
-{"ts":"2026-07-11T00:00:00Z","check":"logs_no_body","evidence":"test_cleanup_logs_omit_message_body + report_str asserts no secret content"}
