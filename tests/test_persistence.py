@@ -23,6 +23,10 @@ def test_database_initializes_schema_and_wal(tmp_path):
             ).fetchall()
         }
         journal_mode = conn.execute("PRAGMA journal_mode").fetchone()[0]
+        conv_cols = {
+            row[1]
+            for row in conn.execute("PRAGMA table_info(conversations)").fetchall()
+        }
 
     assert {
         "sessions",
@@ -31,8 +35,25 @@ def test_database_initializes_schema_and_wal(tmp_path):
         "audit_logs",
         "approvals",
         "conversations",
+        "agent_runs",
+        "agent_events",
+        "tool_executions",
     }.issubset(tables)
+    assert {"interrupted", "last_run_id", "legal_hold"}.issubset(conv_cols)
     assert journal_mode == "wal"
+
+
+def test_agent_session_migrate_is_alter_safe(tmp_path):
+    """Existing DB without agent tables gains them via expand-only migration."""
+    path = tmp_path / "pre_agent.db"
+    # Bootstrap minimal DB then expand
+    db = Database(f"sqlite:///{path}")
+    db.initialize()
+    report = db.migrate_agent_session()
+    assert report["tables_ensured"] >= 3
+    # Idempotent
+    again = db.migrate_agent_session()
+    assert again["columns_added"] == 0
 
 
 def test_sessions_persist_across_manager_instances(tmp_path):

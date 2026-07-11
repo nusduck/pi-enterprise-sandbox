@@ -520,10 +520,17 @@ export function normalizeServerMessages(messages) {
           .filter(Boolean)
           .join('\n');
       }
-      return {
+      const out = {
         role: m.role,
         content: [{ type: 'text', text }],
       };
+      // Preserve interrupted status from server dual-write / recovery
+      if (m.interrupted === true || m.status === 'interrupted') {
+        out.interrupted = true;
+        out.status = 'interrupted';
+      }
+      if (m.stopReason) out.stopReason = m.stopReason;
+      return out;
     });
 }
 

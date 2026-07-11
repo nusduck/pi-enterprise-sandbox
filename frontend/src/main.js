@@ -487,6 +487,8 @@ async function sendMessage(text) {
       // User cancelled — keep partial message (attachments already committed with user turn)
       if (state.currentMsg) {
         state.currentMsg.stopReason = 'aborted';
+        state.currentMsg.interrupted = true;
+        state.currentMsg.status = 'interrupted';
         const messages = [...state.messages, state.currentMsg];
         state = abortStream(state, { messages, currentMsg: null });
       } else {
@@ -501,6 +503,8 @@ async function sendMessage(text) {
     flashError(`Connection error: ${err.message}${trace}`);
     if (state.currentMsg) {
       state.currentMsg.content.push({ type: 'text', text: `\n[Connection error: ${err.message}]` });
+      state.currentMsg.interrupted = true;
+      state.currentMsg.status = 'interrupted';
       const messages = [...state.messages, state.currentMsg];
       state = errorStream(state, { messages, currentMsg: null });
     } else {

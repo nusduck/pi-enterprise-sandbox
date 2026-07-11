@@ -380,18 +380,49 @@ export async function handleChat(body, res, req = null) {
 
   let sandboxSessionId = null;
   let activeConversationId = null;
+  let activeRunId = null;
+  let activeLeaseOwner = null;
   const pendingToolArgs = new Map();
   let assistantText = '';
   let finished = false;
+  let runTerminal = false; // completed / interrupted / failed already recorded
+
+  // Best-effort persistence helpers (never break the SSE stream)
+  const persistEvent = (type, payload = {}) => {
+    if (!activeRunId) return Promise.resolve(null);
+    return client
+      .appendAgentEvent(activeRunId, { type, payload })
+      .catch((err) => {
+        console.warn(`[agent] append event ${type} failed:`, err.message);
+        return null;
+      });
+  };
+
+  const markRunInterrupted = (reason) => {
+    if (!activeRunId || runTerminal) return Promise.resolve(null);
+    runTerminal = true;
+    return client
+      .interruptAgentRun(activeRunId, {
+        reason,
+        partial_text: assistantText.trim() || null,
+      })
+      .catch((err) => {
+        console.warn('[agent] interrupt run failed:', err.message);
+        return null;
+      });
+  };
 
   // Policy: interactive chat SSE owns in-flight sandbox work — cancel on disconnect.
+  // Also mark the agent run interrupted so recovery can surface partial assistant text.
   const onClientGone = () => {
     if (finished) return;
     const sid = sandboxSessionId;
-    if (!sid) return;
-    client.cancelActiveExecution(sid).catch((err) => {
-      console.warn('[agent] cancel-active on disconnect failed:', err.message);
-    });
+    if (sid) {
+      client.cancelActiveExecution(sid).catch((err) => {
+        console.warn('[agent] cancel-active on disconnect failed:', err.message);
+      });
+    }
+    markRunInterrupted('client_disconnect');
   };
   if (req) {
     req.on('close', onClientGone);
@@ -429,6 +460,23 @@ export async function handleChat(body, res, req = null) {
     activeConversationId = resolved.activeConversationId;
     sandboxSessionId = resolved.sandboxSessionId;
 
+    // Create agent run + claim lease (DB-backed; multi-process best-effort)
+    try {
+      const leaseOwner = `node_${trace_id.slice(0, 12)}`;
+      const run = await client.createAgentRun({
+        conversation_id: activeConversationId,
+        sandbox_session_id: sandboxSessionId,
+        workspace_id: activeConversationId,
+        model_id: config.MODEL_ID,
+        lease_owner: leaseOwner,
+        lease_seconds: 300,
+      });
+      activeRunId = run.run_id;
+      activeLeaseOwner = run.lease_owner || leaseOwner;
+    } catch (err) {
+      console.warn('[agent] Failed to create agent run:', err.message);
+    }
+
     sse({
       type: 'session',
       session_id: sandboxSessionId,
@@ -436,9 +484,17 @@ export async function handleChat(body, res, req = null) {
       conversation_id: activeConversationId,
       session_reused: resolved.reusedSession,
       trace_id,
+      run_id: activeRunId,
       policy_version: POLICY_VERSION,
       approval_enabled: config.APPROVAL_ENABLED,
     });
+    if (activeRunId) {
+      await persistEvent('session', {
+        session_id: sandboxSessionId,
+        conversation_id: activeConversationId,
+        trace_id,
+      });
+    }
 
     const authStorage = AuthStorage.create();
     const modelRegistry = ModelRegistry.create(authStorage);
@@ -524,11 +580,40 @@ Available tools: \`read\`, \`write\`, \`edit\`, \`bash\`, **\`submit_artifact\`*
       console.log(`[agent] Restored ${history.length} prior message(s) into agent transcript`);
     }
 
+    // Token batching for event store (avoid one row per token)
+    let tokenBatch = '';
+    let tokenBatchTimer = null;
+    const flushTokenBatch = () => {
+      if (!tokenBatch) return;
+      const text = tokenBatch;
+      tokenBatch = '';
+      if (tokenBatchTimer) {
+        clearTimeout(tokenBatchTimer);
+        tokenBatchTimer = null;
+      }
+      persistEvent('token_batch', { text });
+    };
+    const scheduleTokenBatch = (chunk) => {
+      tokenBatch += chunk;
+      if (tokenBatchTimer) return;
+      tokenBatchTimer = setTimeout(flushTokenBatch, 250);
+    };
+
     session.subscribe((event) => {
       const mapped = mapSdkEventToSse(event, { pendingToolArgs });
       for (const payload of mapped) {
         if (payload.type === 'token' && typeof payload.text === 'string') {
           assistantText += payload.text;
+          scheduleTokenBatch(payload.text);
+        } else if (
+          payload.type === 'tool_start' ||
+          payload.type === 'tool_end' ||
+          payload.type === 'approval_required' ||
+          payload.type === 'error' ||
+          payload.type === 'file_ready'
+        ) {
+          flushTokenBatch();
+          persistEvent(payload.type, payload);
         }
         sse(payload);
       }
@@ -537,10 +622,15 @@ Available tools: \`read\`, \`write\`, \`edit\`, \`bash\`, **\`submit_artifact\`*
     // Prompt with latest user message only (history already in transcript)
     if (lastMsg) {
       const text = extractMessageText(lastMsg).trim();
-      if (text) await session.prompt(text);
+      if (text) {
+        await persistEvent('user_message', { text: text.slice(0, 4000) });
+        await session.prompt(text);
+      }
     }
 
-    // Persist full conversation messages (client history + this assistant turn)
+    flushTokenBatch();
+
+    // Dual-write: conversation messages projection + done event
     try {
       const persisted = toPersistableMessages(allMessages);
       if (assistantText.trim()) {
@@ -549,15 +639,40 @@ Available tools: \`read\`, \`write\`, \`edit\`, \`bash\`, **\`submit_artifact\`*
       await client.updateConversation(activeConversationId, {
         messages: persisted,
         sandbox_session_id: sandboxSessionId,
+        interrupted: false,
+        last_run_id: activeRunId || undefined,
       });
     } catch (err) {
       console.warn('[agent] Failed to persist conversation messages:', err.message);
+    }
+
+    if (activeRunId && !runTerminal) {
+      runTerminal = true;
+      try {
+        await client.completeAgentRun(activeRunId, {
+          lease_owner: activeLeaseOwner || undefined,
+        });
+      } catch (err) {
+        console.warn('[agent] complete run failed:', err.message);
+        await persistEvent('done', { status: 'completed' });
+      }
     }
 
     sse({ type: 'done' });
   } catch (err) {
     console.error('[agent] Error:', err);
     sse({ type: 'error', message: err.message });
+    if (activeRunId && !runTerminal) {
+      runTerminal = true;
+      try {
+        await client.failAgentRun(activeRunId, {
+          error: err.message,
+          lease_owner: activeLeaseOwner || undefined,
+        });
+      } catch {
+        await markRunInterrupted('error');
+      }
+    }
   } finally {
     finished = true;
     // Keep sandbox session alive for multi-turn reuse — do not delete.

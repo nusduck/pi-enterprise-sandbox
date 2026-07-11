@@ -209,6 +209,24 @@ body {
 }
 .mw.user .bubble { background: #3b82f6; color: #fff; border-bottom-right-radius: 4px; }
 .mw.assistant .bubble { background: #1e293b; color: #f1f5f9; border: 1px solid #334155; border-bottom-left-radius: 4px; }
+
+/* Interrupted assistant status badge */
+.msg-status {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  vertical-align: middle;
+  text-transform: lowercase;
+}
+.msg-status-interrupted {
+  background: rgba(245, 158, 11, 0.15);
+  color: #fbbf24;
+  border: 1px solid rgba(245, 158, 11, 0.35);
+}
 .mw .time { font-size: 10px; color: #64748b; padding: 0 4px; }
 .mw.user .time { text-align: right; }
 

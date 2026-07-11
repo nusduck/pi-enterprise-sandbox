@@ -250,6 +250,9 @@ class ConversationResponse(BaseModel):
     messages: list[dict[str, Any]] = Field(default_factory=list)
     owner_user_id: str | None = None
     organization_id: str | None = None
+    interrupted: bool = False
+    last_run_id: str | None = None
+    legal_hold: bool = False
     created_at: str = ""
     updated_at: str = ""
 
@@ -263,3 +266,105 @@ class ConversationCreate(BaseModel):
     messages: list[dict[str, Any]] | None = None
     owner_user_id: str | None = None
     organization_id: str | None = None
+    interrupted: bool | None = None
+    last_run_id: str | None = None
+    legal_hold: bool | None = None
+
+
+# ── Agent run / event / tool ledger ─────────────────────────────────────
+
+class AgentRunStatus(str, Enum):
+    PENDING = "pending"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    INTERRUPTED = "interrupted"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+
+
+class ToolExecutionStatus(str, Enum):
+    PREPARED = "prepared"
+    WAITING_APPROVAL = "waiting_approval"
+    EXECUTING = "executing"
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+    UNKNOWN = "unknown"
+
+
+# Terminal tool statuses — never auto-retry (especially ``unknown``).
+TOOL_TERMINAL_STATUSES = frozenset(
+    {
+        ToolExecutionStatus.SUCCEEDED.value,
+        ToolExecutionStatus.FAILED.value,
+        ToolExecutionStatus.CANCELLED.value,
+        ToolExecutionStatus.UNKNOWN.value,
+    }
+)
+
+
+class AgentRunCreate(BaseModel):
+    conversation_id: str
+    owner_user_id: str | None = None
+    organization_id: str | None = None
+    sandbox_session_id: str | None = None
+    workspace_id: str | None = None
+    model_id: str | None = None
+    lease_owner: str | None = None
+    lease_seconds: int = 120
+
+
+class AgentRunResponse(BaseModel):
+    run_id: str
+    conversation_id: str
+    owner_user_id: str | None = None
+    organization_id: str | None = None
+    status: str = AgentRunStatus.PENDING.value
+    lease_owner: str | None = None
+    lease_until: str | None = None
+    version: int = 0
+    sandbox_session_id: str | None = None
+    workspace_id: str | None = None
+    model_id: str | None = None
+    created_at: str = ""
+    updated_at: str = ""
+
+
+class AgentEventAppend(BaseModel):
+    type: str
+    payload: dict[str, Any] = Field(default_factory=dict)
+    event_id: str | None = None
+    schema_version: int = 1
+
+
+class AgentEventResponse(BaseModel):
+    run_id: str
+    sequence: int
+    event_id: str
+    type: str
+    payload: dict[str, Any] = Field(default_factory=dict)
+    schema_version: int = 1
+    created_at: str = ""
+
+
+class ToolExecutionPrepare(BaseModel):
+    tool_call_id: str
+    run_id: str
+    idempotency_key: str
+    summary: str | None = None
+
+
+class ToolExecutionResponse(BaseModel):
+    tool_call_id: str
+    run_id: str
+    status: str = ToolExecutionStatus.PREPARED.value
+    idempotency_key: str
+    summary: str | None = None
+    created_at: str = ""
+    updated_at: str = ""
+
+
+class ClaimLeaseRequest(BaseModel):
+    lease_owner: str
+    expected_version: int | None = None
+    lease_seconds: int = 120

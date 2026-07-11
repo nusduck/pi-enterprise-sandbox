@@ -12,6 +12,7 @@ import {
   handleGetConversation,
   handleCreateConversation,
   handleDeleteConversation,
+  handleGetConversationEvents,
 } from './routes/conversations.js';
 import { handleListArtifacts } from './routes/artifacts.js';
 import { handleDecideApproval } from './routes/approvals.js';
@@ -142,6 +143,13 @@ const server = http.createServer(async (req, res) => {
       return;
     }
     {
+      const convEventsMatch = path.match(/^\/api\/conversations\/([^/]+)\/events$/);
+      if (convEventsMatch && req.method === 'GET') {
+        const id = decodeURIComponent(convEventsMatch[1]);
+        const query = Object.fromEntries(parsedUrl.searchParams.entries());
+        await handleGetConversationEvents(id, res, req, query);
+        return;
+      }
       const convMatch = path.match(/^\/api\/conversations\/([^/]+)$/);
       if (convMatch) {
         const id = decodeURIComponent(convMatch[1]);

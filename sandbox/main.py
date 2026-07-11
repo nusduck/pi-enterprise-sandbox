@@ -14,6 +14,7 @@ from fastapi.responses import JSONResponse
 from sandbox import __version__
 from sandbox.config import settings
 from sandbox.routers import (
+    agent_runs,
     approvals,
     artifacts,
     conversations,
@@ -304,6 +305,7 @@ async def value_error_handler(request: Request, exc: ValueError):
 
 app.include_router(auth_router.router)
 app.include_router(agent_router.router)
+app.include_router(agent_runs.router)
 app.include_router(sessions.router)
 app.include_router(approvals.router)
 app.include_router(conversations.router)

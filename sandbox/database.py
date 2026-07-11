@@ -101,12 +101,60 @@ CREATE TABLE IF NOT EXISTS conversations (
     messages TEXT NOT NULL DEFAULT '[]',
     owner_user_id TEXT,
     organization_id TEXT,
+    interrupted INTEGER NOT NULL DEFAULT 0,
+    last_run_id TEXT,
+    legal_hold INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_conversations_sandbox_session ON conversations(sandbox_session_id);
 CREATE INDEX IF NOT EXISTS idx_conversations_owner ON conversations(owner_user_id);
 CREATE INDEX IF NOT EXISTS idx_conversations_org ON conversations(organization_id);
+
+CREATE TABLE IF NOT EXISTS agent_runs (
+    run_id TEXT PRIMARY KEY,
+    conversation_id TEXT NOT NULL,
+    owner_user_id TEXT,
+    organization_id TEXT,
+    status TEXT NOT NULL DEFAULT 'pending',
+    lease_owner TEXT,
+    lease_until TEXT,
+    version INTEGER NOT NULL DEFAULT 0,
+    sandbox_session_id TEXT,
+    workspace_id TEXT,
+    model_id TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_agent_runs_conversation ON agent_runs(conversation_id);
+CREATE INDEX IF NOT EXISTS idx_agent_runs_status ON agent_runs(status);
+CREATE INDEX IF NOT EXISTS idx_agent_runs_lease_until ON agent_runs(lease_until);
+
+CREATE TABLE IF NOT EXISTS agent_events (
+    run_id TEXT NOT NULL,
+    sequence INTEGER NOT NULL,
+    event_id TEXT NOT NULL,
+    type TEXT NOT NULL,
+    payload TEXT NOT NULL DEFAULT '{}',
+    schema_version INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (run_id, sequence)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_events_event_id ON agent_events(event_id);
+CREATE INDEX IF NOT EXISTS idx_agent_events_run_id ON agent_events(run_id);
+
+CREATE TABLE IF NOT EXISTS tool_executions (
+    tool_call_id TEXT PRIMARY KEY,
+    run_id TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'prepared',
+    idempotency_key TEXT NOT NULL,
+    summary TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_tool_executions_idempotency
+    ON tool_executions(idempotency_key);
+CREATE INDEX IF NOT EXISTS idx_tool_executions_run_id ON tool_executions(run_id);
 
 CREATE TABLE IF NOT EXISTS approvals (
     approval_id TEXT PRIMARY KEY,
@@ -212,12 +260,60 @@ CREATE TABLE IF NOT EXISTS conversations (
     messages TEXT NOT NULL DEFAULT '[]',
     owner_user_id TEXT,
     organization_id TEXT,
+    interrupted INTEGER NOT NULL DEFAULT 0,
+    last_run_id TEXT,
+    legal_hold INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_conversations_sandbox_session ON conversations(sandbox_session_id);
 CREATE INDEX IF NOT EXISTS idx_conversations_owner ON conversations(owner_user_id);
 CREATE INDEX IF NOT EXISTS idx_conversations_org ON conversations(organization_id);
+
+CREATE TABLE IF NOT EXISTS agent_runs (
+    run_id TEXT PRIMARY KEY,
+    conversation_id TEXT NOT NULL,
+    owner_user_id TEXT,
+    organization_id TEXT,
+    status TEXT NOT NULL DEFAULT 'pending',
+    lease_owner TEXT,
+    lease_until TEXT,
+    version INTEGER NOT NULL DEFAULT 0,
+    sandbox_session_id TEXT,
+    workspace_id TEXT,
+    model_id TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_agent_runs_conversation ON agent_runs(conversation_id);
+CREATE INDEX IF NOT EXISTS idx_agent_runs_status ON agent_runs(status);
+CREATE INDEX IF NOT EXISTS idx_agent_runs_lease_until ON agent_runs(lease_until);
+
+CREATE TABLE IF NOT EXISTS agent_events (
+    run_id TEXT NOT NULL,
+    sequence INTEGER NOT NULL,
+    event_id TEXT NOT NULL,
+    type TEXT NOT NULL,
+    payload TEXT NOT NULL DEFAULT '{}',
+    schema_version INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (run_id, sequence)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_events_event_id ON agent_events(event_id);
+CREATE INDEX IF NOT EXISTS idx_agent_events_run_id ON agent_events(run_id);
+
+CREATE TABLE IF NOT EXISTS tool_executions (
+    tool_call_id TEXT PRIMARY KEY,
+    run_id TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'prepared',
+    idempotency_key TEXT NOT NULL,
+    summary TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_tool_executions_idempotency
+    ON tool_executions(idempotency_key);
+CREATE INDEX IF NOT EXISTS idx_tool_executions_run_id ON tool_executions(run_id);
 
 CREATE TABLE IF NOT EXISTS approvals (
     approval_id TEXT PRIMARY KEY,
@@ -318,6 +414,7 @@ class SQLiteBackend(DatabaseBackend):
         # Safe ALTER / backfill for existing DBs (idempotent)
         with self.connect() as conn:
             migrate_ownership_schema(conn, dialect="sqlite")
+            migrate_agent_session_schema(conn, dialect="sqlite")
             conn.commit()
 
     def param_style(self) -> str:
@@ -378,6 +475,7 @@ class PostgreSQLBackend(DatabaseBackend):
         # Safe ALTER / backfill via wrapper API
         wrapper = _ConnectionWrapper(conn, self)
         migrate_ownership_schema(wrapper, dialect="postgresql")
+        migrate_agent_session_schema(wrapper, dialect="postgresql")
         conn.commit()
         conn.close()
 
@@ -670,6 +768,112 @@ def count_conversation_orphans(db: "Database | None" = None) -> int:
         )
 
 
+def migrate_agent_session_schema(conn: Any, dialect: str = "sqlite") -> dict[str, int]:
+    """Ensure agent session tables/columns exist (expand-only, dual dialect).
+
+    Safe to run repeatedly. Creates agent_runs / agent_events / tool_executions
+    if missing and ALTERs conversations for interrupted / last_run_id / legal_hold.
+    """
+    report = {"tables_ensured": 0, "columns_added": 0}
+
+    # Conversation optional columns
+    conv_cols = _table_columns(conn, "conversations", dialect)
+    if "interrupted" not in conv_cols:
+        conn.execute(
+            "ALTER TABLE conversations ADD COLUMN interrupted INTEGER NOT NULL DEFAULT 0"
+        )
+        report["columns_added"] += 1
+    if "last_run_id" not in conv_cols:
+        conn.execute("ALTER TABLE conversations ADD COLUMN last_run_id TEXT")
+        report["columns_added"] += 1
+    if "legal_hold" not in conv_cols:
+        conn.execute(
+            "ALTER TABLE conversations ADD COLUMN legal_hold INTEGER NOT NULL DEFAULT 0"
+        )
+        report["columns_added"] += 1
+
+    # agent_runs
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS agent_runs (
+            run_id TEXT PRIMARY KEY,
+            conversation_id TEXT NOT NULL,
+            owner_user_id TEXT,
+            organization_id TEXT,
+            status TEXT NOT NULL DEFAULT 'pending',
+            lease_owner TEXT,
+            lease_until TEXT,
+            version INTEGER NOT NULL DEFAULT 0,
+            sandbox_session_id TEXT,
+            workspace_id TEXT,
+            model_id TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_agent_runs_conversation ON agent_runs(conversation_id)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_agent_runs_status ON agent_runs(status)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_agent_runs_lease_until ON agent_runs(lease_until)"
+    )
+    report["tables_ensured"] += 1
+
+    # agent_events (append-only, unique sequence per run)
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS agent_events (
+            run_id TEXT NOT NULL,
+            sequence INTEGER NOT NULL,
+            event_id TEXT NOT NULL,
+            type TEXT NOT NULL,
+            payload TEXT NOT NULL DEFAULT '{}',
+            schema_version INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT NOT NULL,
+            PRIMARY KEY (run_id, sequence)
+        )
+        """
+    )
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_events_event_id ON agent_events(event_id)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_agent_events_run_id ON agent_events(run_id)"
+    )
+    report["tables_ensured"] += 1
+
+    # tool_executions ledger
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS tool_executions (
+            tool_call_id TEXT PRIMARY KEY,
+            run_id TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'prepared',
+            idempotency_key TEXT NOT NULL,
+            summary TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_tool_executions_idempotency
+            ON tool_executions(idempotency_key)
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_tool_executions_run_id ON tool_executions(run_id)"
+    )
+    report["tables_ensured"] += 1
+
+    return report
+
+
 # ── Database wrapper (backward-compatible) ────────────────────────────────
 
 class Database:
@@ -723,6 +927,18 @@ class Database:
         )
         with self.connect() as conn:
             report = migrate_ownership_schema(conn, dialect=dialect)
+            conn.commit()
+        return report
+
+    def migrate_agent_session(self) -> dict[str, int]:
+        """Run agent session schema expand migration; return report."""
+        dialect = (
+            "sqlite"
+            if isinstance(self._backend, SQLiteBackend)
+            else "postgresql"
+        )
+        with self.connect() as conn:
+            report = migrate_agent_session_schema(conn, dialect=dialect)
             conn.commit()
         return report
 

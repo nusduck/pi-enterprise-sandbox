@@ -1,9 +1,9 @@
 {
   "id": "agent-session-persistence",
   "name": "agent-session-persistence",
-  "title": "Agent Session 持久化与恢复",
-  "description": "以 PostgreSQL 事件台账恢复 SDK Session、Run、工具和审批状态。",
-  "status": "planning",
+  "title": "Agent Session \u6301\u4e45\u5316\u4e0e\u6062\u590d",
+  "description": "\u4ee5 PostgreSQL \u4e8b\u4ef6\u53f0\u8d26\u6062\u590d SDK Session\u3001Run\u3001\u5de5\u5177\u548c\u5ba1\u6279\u72b6\u6001\u3002",
+  "status": "completed",
   "dev_type": null,
   "scope": null,
   "package": null,
@@ -11,7 +11,7 @@
   "creator": "nusduck",
   "assignee": "nusduck",
   "createdAt": "2026-07-11",
-  "completedAt": null,
+  "completedAt": "2026-07-11",
   "branch": null,
   "base_branch": "main",
   "worktree_path": null,
@@ -21,6 +21,6 @@
   "children": [],
   "parent": "07-11-field-issues-evolution-planning",
   "relatedFiles": [],
-  "notes": "",
+  "notes": "MVP event store + run lease + interrupt UI; Redis/SDK-JSONL deferred. 281 pytest.",
   "meta": {}
 }

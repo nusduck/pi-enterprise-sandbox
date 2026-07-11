@@ -361,6 +361,21 @@ export function renderMsg(msg, idx) {
     bubble.appendChild(empty);
   }
 
+  const interrupted =
+    msg.interrupted === true ||
+    msg.status === 'interrupted' ||
+    msg.stopReason === 'aborted' ||
+    msg.stopReason === 'interrupted';
+
+  if (!isUser && interrupted) {
+    const badge = document.createElement('span');
+    badge.className = 'msg-status msg-status-interrupted';
+    badge.setAttribute('role', 'status');
+    badge.textContent = 'interrupted';
+    bubble.appendChild(document.createTextNode(' '));
+    bubble.appendChild(badge);
+  }
+
   const timeEl = document.createElement('div');
   timeEl.className = 'time';
   timeEl.textContent = time();

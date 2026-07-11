@@ -188,6 +188,87 @@ export function createSandboxClient({ traceId = null, auth = null } = {}) {
       return text ? JSON.parse(text) : { ok: true };
     },
 
+    // ── Agent runs / events (session persistence MVP) ─
+    async createAgentRun(body = {}) {
+      const resp = await sbFetch('/agent-runs', {
+        method: 'POST',
+        body: JSON.stringify(body),
+      });
+      return resp.json();
+    },
+
+    async getAgentRun(runId) {
+      const resp = await sbFetch(`/agent-runs/${encodeURIComponent(runId)}`);
+      return resp.json();
+    },
+
+    async appendAgentEvent(runId, event) {
+      const resp = await sbFetch(`/agent-runs/${encodeURIComponent(runId)}/events`, {
+        method: 'POST',
+        body: JSON.stringify(event),
+      });
+      return resp.json();
+    },
+
+    async listAgentEvents(runId, { afterSequence = 0, limit } = {}) {
+      const q = new URLSearchParams();
+      if (afterSequence) q.set('after_sequence', String(afterSequence));
+      if (limit != null) q.set('limit', String(limit));
+      const qs = q.toString();
+      const path = `/agent-runs/${encodeURIComponent(runId)}/events${qs ? `?${qs}` : ''}`;
+      const resp = await sbFetch(path);
+      return resp.json();
+    },
+
+    async listConversationEvents(conversationId, { afterSequence = 0, limit } = {}) {
+      const q = new URLSearchParams();
+      if (afterSequence) q.set('after_sequence', String(afterSequence));
+      if (limit != null) q.set('limit', String(limit));
+      const qs = q.toString();
+      const path = `/conversations/${encodeURIComponent(conversationId)}/events${qs ? `?${qs}` : ''}`;
+      const resp = await sbFetch(path);
+      return resp.json();
+    },
+
+    async getLatestAgentRun(conversationId) {
+      const resp = await sbFetch(
+        `/conversations/${encodeURIComponent(conversationId)}/agent-runs/latest`,
+      );
+      return resp.json();
+    },
+
+    async interruptAgentRun(runId, body = {}) {
+      const resp = await sbFetch(`/agent-runs/${encodeURIComponent(runId)}/interrupt`, {
+        method: 'POST',
+        body: JSON.stringify(body),
+      });
+      return resp.json();
+    },
+
+    async completeAgentRun(runId, body = {}) {
+      const resp = await sbFetch(`/agent-runs/${encodeURIComponent(runId)}/complete`, {
+        method: 'POST',
+        body: JSON.stringify(body),
+      });
+      return resp.json();
+    },
+
+    async failAgentRun(runId, body = {}) {
+      const resp = await sbFetch(`/agent-runs/${encodeURIComponent(runId)}/fail`, {
+        method: 'POST',
+        body: JSON.stringify(body),
+      });
+      return resp.json();
+    },
+
+    async prepareToolExecution(body) {
+      const resp = await sbFetch('/tool-executions', {
+        method: 'POST',
+        body: JSON.stringify(body),
+      });
+      return resp.json();
+    },
+
     // ── Execution ───────────────────────────────────
     async executeCommand(sessionId, command, timeout = 120) {
       const resp = await sbFetch(`/sessions/${sessionId}/executions/command`, {

@@ -7,7 +7,19 @@ from datetime import datetime, timezone
 from typing import Any
 
 from sandbox.database import Database, database
-from sandbox.models import ArtifactResponse, ConversationResponse, ExecutionStatus, SessionResponse, SessionStatus
+from sandbox.models import (
+    AgentEventResponse,
+    AgentRunResponse,
+    AgentRunStatus,
+    ArtifactResponse,
+    ConversationResponse,
+    ExecutionStatus,
+    SessionResponse,
+    SessionStatus,
+    TOOL_TERMINAL_STATUSES,
+    ToolExecutionResponse,
+    ToolExecutionStatus,
+)
 
 
 def _json_dumps(value: Any) -> str:
@@ -269,19 +281,33 @@ class ConversationRepository:
         existing = self.get(entry["id"]) if entry.get("id") else None
         owner = entry.get("owner_user_id")
         org = entry.get("organization_id")
+        interrupted = entry.get("interrupted")
+        last_run_id = entry.get("last_run_id")
+        legal_hold = entry.get("legal_hold")
         if existing is not None:
             if owner is None:
                 owner = existing.owner_user_id
             if org is None:
                 org = existing.organization_id
+            if interrupted is None:
+                interrupted = existing.interrupted
+            if last_run_id is None and "last_run_id" not in entry:
+                last_run_id = existing.last_run_id
+            if legal_hold is None:
+                legal_hold = existing.legal_hold
+        if interrupted is None:
+            interrupted = False
+        if legal_hold is None:
+            legal_hold = False
         with self.db.connect() as conn:
             conn.execute(
                 """\
                 INSERT INTO conversations (
                     id, title, sandbox_session_id, workspace_path, messages,
-                    owner_user_id, organization_id, created_at, updated_at
+                    owner_user_id, organization_id, interrupted, last_run_id,
+                    legal_hold, created_at, updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
                     title=excluded.title,
                     sandbox_session_id=excluded.sandbox_session_id,
@@ -289,6 +315,9 @@ class ConversationRepository:
                     messages=excluded.messages,
                     owner_user_id=COALESCE(excluded.owner_user_id, conversations.owner_user_id),
                     organization_id=COALESCE(excluded.organization_id, conversations.organization_id),
+                    interrupted=excluded.interrupted,
+                    last_run_id=excluded.last_run_id,
+                    legal_hold=excluded.legal_hold,
                     updated_at=excluded.updated_at
                 """,
                 (
@@ -299,6 +328,9 @@ class ConversationRepository:
                     _json_dumps(entry.get("messages", [])),
                     owner,
                     org,
+                    1 if interrupted else 0,
+                    last_run_id,
+                    1 if legal_hold else 0,
                     entry.get("created_at", now),
                     now,
                 ),
@@ -397,6 +429,84 @@ class ConversationRepository:
             conn.commit()
         return self.get(conversation_id)
 
+    def set_interrupted(
+        self,
+        conversation_id: str,
+        *,
+        interrupted: bool = True,
+        last_run_id: str | None = None,
+    ) -> ConversationResponse | None:
+        """Mark conversation interrupted and optionally bind last_run_id."""
+        now = datetime.now(timezone.utc).isoformat()
+        with self.db.connect() as conn:
+            if last_run_id is not None:
+                conn.execute(
+                    """
+                    UPDATE conversations
+                    SET interrupted = ?, last_run_id = ?, updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (1 if interrupted else 0, last_run_id, now, conversation_id),
+                )
+            else:
+                conn.execute(
+                    """
+                    UPDATE conversations
+                    SET interrupted = ?, updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (1 if interrupted else 0, now, conversation_id),
+                )
+            conn.commit()
+        return self.get(conversation_id)
+
+    def set_last_run_id(
+        self, conversation_id: str, last_run_id: str
+    ) -> ConversationResponse | None:
+        now = datetime.now(timezone.utc).isoformat()
+        with self.db.connect() as conn:
+            conn.execute(
+                """
+                UPDATE conversations
+                SET last_run_id = ?, interrupted = 0, updated_at = ?
+                WHERE id = ?
+                """,
+                (last_run_id, now, conversation_id),
+            )
+            conn.commit()
+        return self.get(conversation_id)
+
+    def list_expired_drafts(
+        self,
+        *,
+        older_than_iso: str,
+        exclude_legal_hold: bool = True,
+    ) -> list[ConversationResponse]:
+        """Draft conversations: empty messages and no activity after cutoff."""
+        with self.db.connect() as conn:
+            if exclude_legal_hold:
+                rows = conn.execute(
+                    """
+                    SELECT * FROM conversations
+                    WHERE updated_at < ?
+                      AND (messages = '[]' OR messages IS NULL OR messages = '')
+                      AND COALESCE(legal_hold, 0) = 0
+                    ORDER BY updated_at ASC
+                    """,
+                    (older_than_iso,),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    """
+                    SELECT * FROM conversations
+                    WHERE updated_at < ?
+                      AND (messages = '[]' OR messages IS NULL OR messages = '')
+                    ORDER BY updated_at ASC
+                    """,
+                    (older_than_iso,),
+                ).fetchall()
+        return [self._row_to_model(row) for row in rows]
+
     def delete(self, conversation_id: str) -> bool:
         with self.db.connect() as conn:
             cur = conn.execute(
@@ -421,8 +531,7 @@ class ConversationRepository:
             ).fetchone()
         return self._row_to_model(row) if row else None
 
-    @staticmethod
-    def _row_to_model(row) -> ConversationResponse:
+    def _row_to_model(self, row) -> ConversationResponse:
         # sqlite3.Row has no .get; use try/keys for optional ownership columns
         def _col(name: str, default=None):
             try:
@@ -439,6 +548,512 @@ class ConversationRepository:
             messages=_json_loads(row["messages"]),
             owner_user_id=_col("owner_user_id"),
             organization_id=_col("organization_id"),
+            interrupted=bool(_col("interrupted", 0)),
+            last_run_id=_col("last_run_id"),
+            legal_hold=bool(_col("legal_hold", 0)),
+            created_at=row["created_at"],
+            updated_at=row["updated_at"],
+        )
+
+
+class AgentRunRepository:
+    """CRUD + optimistic lease for agent runs."""
+
+    def __init__(self, db: Database | None = None) -> None:
+        self.db = db or database
+
+    def create(self, entry: dict[str, Any]) -> AgentRunResponse:
+        now = datetime.now(timezone.utc).isoformat()
+        with self.db.connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO agent_runs (
+                    run_id, conversation_id, owner_user_id, organization_id,
+                    status, lease_owner, lease_until, version,
+                    sandbox_session_id, workspace_id, model_id,
+                    created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    entry["run_id"],
+                    entry["conversation_id"],
+                    entry.get("owner_user_id"),
+                    entry.get("organization_id"),
+                    entry.get("status", AgentRunStatus.PENDING.value),
+                    entry.get("lease_owner"),
+                    entry.get("lease_until"),
+                    int(entry.get("version", 0)),
+                    entry.get("sandbox_session_id"),
+                    entry.get("workspace_id"),
+                    entry.get("model_id"),
+                    entry.get("created_at", now),
+                    entry.get("updated_at", now),
+                ),
+            )
+            conn.commit()
+        return self.get(entry["run_id"])  # type: ignore[return-value]
+
+    def get(self, run_id: str) -> AgentRunResponse | None:
+        with self.db.connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM agent_runs WHERE run_id = ?", (run_id,)
+            ).fetchone()
+        return self._row_to_model(row) if row else None
+
+    def get_active_for_conversation(
+        self, conversation_id: str
+    ) -> AgentRunResponse | None:
+        with self.db.connect() as conn:
+            row = conn.execute(
+                """
+                SELECT * FROM agent_runs
+                WHERE conversation_id = ?
+                  AND status IN ('pending', 'running')
+                ORDER BY created_at DESC
+                LIMIT 1
+                """,
+                (conversation_id,),
+            ).fetchone()
+        return self._row_to_model(row) if row else None
+
+    def list_by_conversation(self, conversation_id: str) -> list[AgentRunResponse]:
+        with self.db.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT * FROM agent_runs
+                WHERE conversation_id = ?
+                ORDER BY created_at DESC
+                """,
+                (conversation_id,),
+            ).fetchall()
+        return [self._row_to_model(r) for r in rows]
+
+    def claim_lease(
+        self,
+        run_id: str,
+        *,
+        lease_owner: str,
+        lease_until: str,
+        expected_version: int | None = None,
+        now_iso: str | None = None,
+    ) -> AgentRunResponse | None:
+        """Optimistic lease claim. Returns updated run or None on conflict."""
+        now = now_iso or datetime.now(timezone.utc).isoformat()
+        current = self.get(run_id)
+        if current is None:
+            return None
+        version = (
+            expected_version if expected_version is not None else current.version
+        )
+        # Reject if another owner holds a non-expired lease
+        if (
+            current.lease_owner
+            and current.lease_owner != lease_owner
+            and current.lease_until
+            and current.lease_until > now
+        ):
+            return None
+        if current.version != version:
+            return None
+
+        with self.db.connect() as conn:
+            cur = conn.execute(
+                """
+                UPDATE agent_runs
+                SET lease_owner = ?,
+                    lease_until = ?,
+                    version = version + 1,
+                    status = ?,
+                    updated_at = ?
+                WHERE run_id = ?
+                  AND version = ?
+                  AND (
+                    lease_owner IS NULL
+                    OR lease_owner = ?
+                    OR lease_until IS NULL
+                    OR lease_until <= ?
+                  )
+                """,
+                (
+                    lease_owner,
+                    lease_until,
+                    AgentRunStatus.RUNNING.value,
+                    now,
+                    run_id,
+                    version,
+                    lease_owner,
+                    now,
+                ),
+            )
+            conn.commit()
+            if cur.rowcount == 0:
+                return None
+        return self.get(run_id)
+
+    def release_lease(
+        self,
+        run_id: str,
+        *,
+        lease_owner: str,
+        status: str | None = None,
+    ) -> AgentRunResponse | None:
+        now = datetime.now(timezone.utc).isoformat()
+        current = self.get(run_id)
+        if current is None:
+            return None
+        if current.lease_owner and current.lease_owner != lease_owner:
+            return None
+        new_status = status or current.status
+        with self.db.connect() as conn:
+            conn.execute(
+                """
+                UPDATE agent_runs
+                SET lease_owner = NULL,
+                    lease_until = NULL,
+                    version = version + 1,
+                    status = ?,
+                    updated_at = ?
+                WHERE run_id = ?
+                  AND (lease_owner IS NULL OR lease_owner = ?)
+                """,
+                (new_status, now, run_id, lease_owner),
+            )
+            conn.commit()
+        return self.get(run_id)
+
+    def update_status(self, run_id: str, status: str) -> AgentRunResponse | None:
+        now = datetime.now(timezone.utc).isoformat()
+        with self.db.connect() as conn:
+            conn.execute(
+                """
+                UPDATE agent_runs
+                SET status = ?, version = version + 1, updated_at = ?
+                WHERE run_id = ?
+                """,
+                (status, now, run_id),
+            )
+            conn.commit()
+        return self.get(run_id)
+
+    def mark_interrupted(self, run_id: str) -> AgentRunResponse | None:
+        return self.update_status(run_id, AgentRunStatus.INTERRUPTED.value)
+
+    @staticmethod
+    def _row_to_model(row) -> AgentRunResponse:
+        def _col(name: str, default=None):
+            try:
+                val = row[name]
+            except (KeyError, IndexError, TypeError):
+                return default
+            return default if val is None else val
+
+        return AgentRunResponse(
+            run_id=row["run_id"],
+            conversation_id=row["conversation_id"],
+            owner_user_id=_col("owner_user_id"),
+            organization_id=_col("organization_id"),
+            status=row["status"],
+            lease_owner=_col("lease_owner"),
+            lease_until=_col("lease_until"),
+            version=int(row["version"] or 0),
+            sandbox_session_id=_col("sandbox_session_id"),
+            workspace_id=_col("workspace_id"),
+            model_id=_col("model_id"),
+            created_at=row["created_at"],
+            updated_at=row["updated_at"],
+        )
+
+
+class AgentEventRepository:
+    """Append-only event store with monotonic sequence per run."""
+
+    def __init__(self, db: Database | None = None) -> None:
+        self.db = db or database
+
+    def append(
+        self,
+        *,
+        run_id: str,
+        event_type: str,
+        payload: dict[str, Any] | None = None,
+        event_id: str | None = None,
+        schema_version: int = 1,
+    ) -> AgentEventResponse:
+        """Append event with next monotonic sequence. Raises on unique conflict."""
+        import uuid
+
+        now = datetime.now(timezone.utc).isoformat()
+        eid = event_id or f"evt_{uuid.uuid4().hex}"
+        payload_json = _json_dumps(payload or {})
+
+        with self.db.connect() as conn:
+            row = conn.execute(
+                "SELECT COALESCE(MAX(sequence), 0) AS max_seq FROM agent_events WHERE run_id = ?",
+                (run_id,),
+            ).fetchone()
+            try:
+                max_seq = int(row["max_seq"] if row is not None else 0)
+            except (KeyError, IndexError, TypeError):
+                max_seq = int(row[0]) if row is not None else 0
+            sequence = max_seq + 1
+            conn.execute(
+                """
+                INSERT INTO agent_events (
+                    run_id, sequence, event_id, type, payload, schema_version, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (run_id, sequence, eid, event_type, payload_json, schema_version, now),
+            )
+            conn.commit()
+
+        return AgentEventResponse(
+            run_id=run_id,
+            sequence=sequence,
+            event_id=eid,
+            type=event_type,
+            payload=payload or {},
+            schema_version=schema_version,
+            created_at=now,
+        )
+
+    def list_by_run(
+        self,
+        run_id: str,
+        *,
+        after_sequence: int = 0,
+        limit: int | None = None,
+    ) -> list[AgentEventResponse]:
+        with self.db.connect() as conn:
+            if limit is not None:
+                rows = conn.execute(
+                    """
+                    SELECT * FROM agent_events
+                    WHERE run_id = ? AND sequence > ?
+                    ORDER BY sequence ASC
+                    LIMIT ?
+                    """,
+                    (run_id, after_sequence, limit),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    """
+                    SELECT * FROM agent_events
+                    WHERE run_id = ? AND sequence > ?
+                    ORDER BY sequence ASC
+                    """,
+                    (run_id, after_sequence),
+                ).fetchall()
+        return [self._row_to_model(r) for r in rows]
+
+    def max_sequence(self, run_id: str) -> int:
+        with self.db.connect() as conn:
+            row = conn.execute(
+                "SELECT COALESCE(MAX(sequence), 0) AS max_seq FROM agent_events WHERE run_id = ?",
+                (run_id,),
+            ).fetchone()
+        if row is None:
+            return 0
+        try:
+            return int(row["max_seq"])
+        except (KeyError, IndexError, TypeError):
+            return int(row[0])
+
+    @staticmethod
+    def _row_to_model(row) -> AgentEventResponse:
+        payload_raw = row["payload"]
+        if isinstance(payload_raw, dict):
+            payload = payload_raw
+        else:
+            payload = _json_loads(payload_raw) if payload_raw else {}
+            if not isinstance(payload, dict):
+                payload = {"value": payload}
+        return AgentEventResponse(
+            run_id=row["run_id"],
+            sequence=int(row["sequence"]),
+            event_id=row["event_id"],
+            type=row["type"],
+            payload=payload,
+            schema_version=int(row["schema_version"] or 1),
+            created_at=row["created_at"],
+        )
+
+
+class ToolExecutionRepository:
+    """Tool execution ledger: prepared → executing → terminal; never auto-retry unknown."""
+
+    def __init__(self, db: Database | None = None) -> None:
+        self.db = db or database
+
+    def prepare(
+        self,
+        *,
+        tool_call_id: str,
+        run_id: str,
+        idempotency_key: str,
+        summary: str | None = None,
+    ) -> ToolExecutionResponse:
+        """Insert prepared row. Idempotent on tool_call_id / idempotency_key."""
+        existing = self.get_by_idempotency_key(idempotency_key)
+        if existing is not None:
+            return existing
+        by_id = self.get(tool_call_id)
+        if by_id is not None:
+            return by_id
+
+        now = datetime.now(timezone.utc).isoformat()
+        with self.db.connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO tool_executions (
+                    tool_call_id, run_id, status, idempotency_key, summary,
+                    created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    tool_call_id,
+                    run_id,
+                    ToolExecutionStatus.PREPARED.value,
+                    idempotency_key,
+                    summary,
+                    now,
+                    now,
+                ),
+            )
+            conn.commit()
+        return self.get(tool_call_id)  # type: ignore[return-value]
+
+    def get(self, tool_call_id: str) -> ToolExecutionResponse | None:
+        with self.db.connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM tool_executions WHERE tool_call_id = ?",
+                (tool_call_id,),
+            ).fetchone()
+        return self._row_to_model(row) if row else None
+
+    def get_by_idempotency_key(
+        self, idempotency_key: str
+    ) -> ToolExecutionResponse | None:
+        with self.db.connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM tool_executions WHERE idempotency_key = ?",
+                (idempotency_key,),
+            ).fetchone()
+        return self._row_to_model(row) if row else None
+
+    def list_by_run(self, run_id: str) -> list[ToolExecutionResponse]:
+        with self.db.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT * FROM tool_executions
+                WHERE run_id = ?
+                ORDER BY created_at ASC
+                """,
+                (run_id,),
+            ).fetchall()
+        return [self._row_to_model(r) for r in rows]
+
+    def mark_executing(self, tool_call_id: str) -> ToolExecutionResponse | None:
+        return self._transition(
+            tool_call_id,
+            allowed_from={
+                ToolExecutionStatus.PREPARED.value,
+                ToolExecutionStatus.WAITING_APPROVAL.value,
+            },
+            to_status=ToolExecutionStatus.EXECUTING.value,
+        )
+
+    def mark_waiting_approval(
+        self, tool_call_id: str
+    ) -> ToolExecutionResponse | None:
+        return self._transition(
+            tool_call_id,
+            allowed_from={ToolExecutionStatus.PREPARED.value},
+            to_status=ToolExecutionStatus.WAITING_APPROVAL.value,
+        )
+
+    def mark_terminal(
+        self,
+        tool_call_id: str,
+        status: str,
+        *,
+        summary: str | None = None,
+    ) -> ToolExecutionResponse | None:
+        if status not in TOOL_TERMINAL_STATUSES:
+            raise ValueError(
+                f"status must be terminal ({sorted(TOOL_TERMINAL_STATUSES)}), got {status!r}"
+            )
+        current = self.get(tool_call_id)
+        if current is None:
+            return None
+        if current.status in TOOL_TERMINAL_STATUSES:
+            # Already terminal — do not overwrite (especially unknown)
+            return current
+        now = datetime.now(timezone.utc).isoformat()
+        with self.db.connect() as conn:
+            conn.execute(
+                """
+                UPDATE tool_executions
+                SET status = ?, summary = COALESCE(?, summary), updated_at = ?
+                WHERE tool_call_id = ?
+                """,
+                (status, summary, now, tool_call_id),
+            )
+            conn.commit()
+        return self.get(tool_call_id)
+
+    def can_auto_retry(self, tool_call_id: str) -> bool:
+        """Return False for missing, terminal, or unknown executions."""
+        row = self.get(tool_call_id)
+        if row is None:
+            return True  # never prepared → may start
+        if row.status == ToolExecutionStatus.UNKNOWN.value:
+            return False
+        if row.status in TOOL_TERMINAL_STATUSES:
+            return False
+        return True
+
+    def _transition(
+        self,
+        tool_call_id: str,
+        *,
+        allowed_from: set[str],
+        to_status: str,
+    ) -> ToolExecutionResponse | None:
+        current = self.get(tool_call_id)
+        if current is None:
+            return None
+        if current.status in TOOL_TERMINAL_STATUSES:
+            return current
+        if current.status not in allowed_from:
+            return current
+        now = datetime.now(timezone.utc).isoformat()
+        with self.db.connect() as conn:
+            conn.execute(
+                """
+                UPDATE tool_executions
+                SET status = ?, updated_at = ?
+                WHERE tool_call_id = ? AND status = ?
+                """,
+                (to_status, now, tool_call_id, current.status),
+            )
+            conn.commit()
+        return self.get(tool_call_id)
+
+    @staticmethod
+    def _row_to_model(row) -> ToolExecutionResponse:
+        def _col(name: str, default=None):
+            try:
+                val = row[name]
+            except (KeyError, IndexError, TypeError):
+                return default
+            return default if val is None else val
+
+        return ToolExecutionResponse(
+            tool_call_id=row["tool_call_id"],
+            run_id=row["run_id"],
+            status=row["status"],
+            idempotency_key=row["idempotency_key"],
+            summary=_col("summary"),
             created_at=row["created_at"],
             updated_at=row["updated_at"],
         )

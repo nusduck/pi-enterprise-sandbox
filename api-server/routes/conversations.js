@@ -68,3 +68,31 @@ export async function handleDeleteConversation(id, res, req) {
     jsonError(res, err.status || 500, err.message || 'Failed to delete conversation');
   }
 }
+
+/**
+ * GET /api/conversations/:id/events — last run event stream for recovery UI.
+ */
+export async function handleGetConversationEvents(id, res, req, query = {}) {
+  try {
+    const client = sb.createSandboxClient({ auth: authFromRequest(req) });
+    const afterSequence = query.after_sequence != null
+      ? Number(query.after_sequence)
+      : 0;
+    const limit = query.limit != null ? Number(query.limit) : undefined;
+    const events = await client.listConversationEvents(id, {
+      afterSequence: Number.isFinite(afterSequence) ? afterSequence : 0,
+      limit: Number.isFinite(limit) ? limit : undefined,
+    });
+    // Include last_run status for UI badge
+    let last_run = null;
+    try {
+      last_run = await client.getLatestAgentRun(id);
+    } catch {
+      last_run = null;
+    }
+    json(res, 200, { events, last_run });
+  } catch (err) {
+    console.error('[conversations] events:', err.message);
+    jsonError(res, err.status || 500, err.message || 'Failed to list conversation events');
+  }
+}

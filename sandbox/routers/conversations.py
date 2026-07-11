@@ -154,6 +154,19 @@ def update_conversation(conversation_id: str, body: ConversationCreate, request:
         ),
         "owner_user_id": existing.owner_user_id,
         "organization_id": existing.organization_id,
+        "interrupted": (
+            body.interrupted
+            if body.interrupted is not None
+            else existing.interrupted
+        ),
+        "last_run_id": (
+            body.last_run_id
+            if body.last_run_id is not None
+            else existing.last_run_id
+        ),
+        "legal_hold": (
+            body.legal_hold if body.legal_hold is not None else existing.legal_hold
+        ),
         "created_at": existing.created_at,
     }
     return _public_conversation(repo.upsert(entry))

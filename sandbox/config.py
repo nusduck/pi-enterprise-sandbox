@@ -78,6 +78,14 @@ class Settings(BaseSettings):
     session_ttl_minutes: int = 30
     cleanup_interval_minutes: int = 5
 
+    # ── Conversation / audit retention (agent session persistence) ───
+    # Draft (empty / never continued) conversations: 24h
+    draft_ttl_hours: int = 24
+    # Active conversations without activity: 90 days
+    conversation_ttl_days: int = 90
+    # Audit / agent_events retention: 180 days
+    audit_ttl_days: int = 180
+
     # ── Approval ─────────────────────────────────────────────────────
     approval_timeout_seconds: int = 300
     # When false, approval_required tools auto-execute with bypass audit;
