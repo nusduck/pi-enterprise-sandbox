@@ -19,7 +19,7 @@
 - 复杂协议对象用小型纯函数转换：`extractMessageText`、`toAgentHistoryMessages`、`extractToolDetails`。
 - HTTP/SSE handler 负责边界适配，底层 fetch 统一在 `sandbox-client.js`。
 
-真实实例：`api-server/routes/chat.js`、`api-server/routes/conversations.js`、`api-server/sandbox-tools.js`。
+真实实例：`api-server/routes/chat.js`、`api-server/routes/conversations.js`、`agent/sandbox-tools.js`。
 
 ## 测试模式
 
@@ -43,10 +43,15 @@ uv run pytest tests/ -q --tb=short
 # 定向
 uv run pytest tests/test_<area>.py -v
 
-# Node API Server（含 sdk-compat）
+# Node BFF
 npm ci --prefix api-server
-node --test api-server/tests/*.test.js api-server/tests/sdk-compat/*.test.js
+node --test api-server/tests/*.test.js
 find api-server -name '*.js' -type f ! -path '*/node_modules/*' -exec node --check {} \;
+
+# Node Agent（含 sdk-compat）
+npm ci --prefix agent
+node --test agent/tests/*.test.js agent/tests/sdk-compat/*.test.js
+find agent -name '*.js' -type f ! -path '*/node_modules/*' -exec node --check {} \;
 
 # Frontend
 npm ci --prefix frontend
@@ -68,10 +73,10 @@ docker compose config -q
 - 持久化：SQLite/PostgreSQL、commit、JSON/boolean/row 映射一致。
 - 生命周期：创建、复用、TTL、删除时 workspace 与 DB 状态一致。
 - 文档：API/环境变量/部署行为变化时更新活跃 `docs/` 和 `.env.example`。
+- E2E：跨 BFF/Agent/Sandbox 或资源限制边界的行为必须在真实 Compose 容器中至少运行一条成功路径；包级 mock 不能替代启动/import、网络、cwd、资源限制和 artifact 提交检查。
 
 ## 待确认
 
 - **待确认：** formatter/linter/type checker 的唯一选型与版本锁定。
 - **待确认：** 最低覆盖率阈值和哪些 E2E 属于合并门禁。
 - **已落地：** Node API 与 Frontend 均使用 `node:test`（`api-server/tests/`、`frontend/test/`），CI 分 job 执行。
-
