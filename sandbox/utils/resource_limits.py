@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 import resource
 import signal
 import subprocess
@@ -34,16 +35,14 @@ def contains_network_command(command: str) -> bool:
     cmd_lower = command.lower().strip()
 
     for net_cmd in NETWORK_COMMANDS:
-        # Multi-word commands like "pip install" / "npm install"
-        if net_cmd in cmd_lower:
-            return True
-        # Single-word commands — check as whole-word boundaries
-        # (prepend/append spaces to avoid matching substrings like 'curl' in 'curly')
         if " " in net_cmd:
-            continue  # already handled above
-        if f" {net_cmd} " in f" {cmd_lower} ":
-            return True
-        if cmd_lower.startswith(f"{net_cmd} ") or cmd_lower == net_cmd:
+            if net_cmd in cmd_lower:
+                return True
+            continue
+        # Single-word tools must be shell tokens. A raw substring check makes
+        # harmless source such as ``nc=len(rows)`` look like a netcat call.
+        pattern = rf"(?:^|[\s;&|()]){re.escape(net_cmd)}(?=$|[\s;&|()])"
+        if re.search(pattern, cmd_lower):
             return True
 
     return False

@@ -14,6 +14,7 @@ import pytest
 from sandbox.config import settings
 from sandbox.models import ExecutionStatus
 from sandbox.services.execution_manager import ExecutionManager
+from sandbox.utils.resource_limits import contains_network_command
 
 
 @pytest.fixture
@@ -39,6 +40,12 @@ _LONG_PY = (
     "import os,time; open('pid.txt','w').write(str(os.getpid())); "
     "open('pid.txt','a').flush(); time.sleep(60)"
 )
+
+
+def test_network_command_detection_matches_shell_tokens_not_source_substrings():
+    assert contains_network_command("nc example.com 80") is True
+    assert contains_network_command("python -c 'ncc=len(rows)'") is False
+    assert contains_network_command("python -c 'variance=len(rows)'") is False
 
 
 class TestExecutionManager:
