@@ -30,6 +30,22 @@ export function resolveAuthEnabled(env = process.env) {
   return false;
 }
 
+/**
+ * Whether interactive approval is required for high-risk tools.
+ * Default true. When false, approval_required tools execute with bypass audit;
+ * hard_deny is never overridden. Aligns with SANDBOX_APPROVAL_ENABLED when unset.
+ * @param {NodeJS.ProcessEnv} [env]
+ */
+export function resolveApprovalEnabled(env = process.env) {
+  if (env.APPROVAL_ENABLED != null && String(env.APPROVAL_ENABLED).trim() !== '') {
+    return String(env.APPROVAL_ENABLED).toLowerCase() !== 'false';
+  }
+  if (env.SANDBOX_APPROVAL_ENABLED != null && String(env.SANDBOX_APPROVAL_ENABLED).trim() !== '') {
+    return String(env.SANDBOX_APPROVAL_ENABLED).toLowerCase() !== 'false';
+  }
+  return true;
+}
+
 export const config = {
   PORT: parseInt(process.env.PORT, 10) || 4000,
   SANDBOX_BASE_URL: process.env.SANDBOX_BASE_URL || 'http://sandbox:8081',
@@ -50,6 +66,11 @@ export const config = {
    * forward Authorization to sandbox. Default false (open dev mode).
    */
   AUTH_ENABLED: resolveAuthEnabled(),
+  /**
+   * Interactive human approval for high-risk tools. Default true.
+   * false → risk tools execute with bypass audit; hard_deny still blocks.
+   */
+  APPROVAL_ENABLED: resolveApprovalEnabled(),
 };
 
 export const AUTH_HEADER = config.SANDBOX_API_TOKEN

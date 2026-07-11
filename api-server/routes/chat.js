@@ -18,6 +18,10 @@ import { createSandboxTools } from '../sandbox-tools.js';
 import { authFromRequest, createSandboxClient } from '../services/sandbox-client.js';
 import { config, AUTH_HEADER, isPythonAgentRuntime } from '../config.js';
 import { mapSdkEventToSse } from '../services/sdk-sse-map.js';
+import {
+  createSandboxSecurityExtension,
+  POLICY_VERSION,
+} from '../extensions/sandbox-security.js';
 
 const AGENT_WORKSPACE = '/home/sandbox/workspace';
 const AGENT_SKILL = '/home/sandbox/skill';
@@ -395,10 +399,22 @@ export async function handleChat(body, res, req = null) {
   }
   res.on('close', onClientGone);
 
+  // Security meta for extension + tool audit (resolved after conversation setup)
+  const securityGetMeta = () => ({
+    conversation_id: activeConversationId,
+    session_id: sandboxSessionId,
+    trace_id,
+    workspace_key: activeConversationId || sandboxSessionId,
+    policy_version: POLICY_VERSION,
+  });
+
   // Per-turn tools closed over this client, session, and SSE notifier
   const sandboxTools = createSandboxTools({
     client,
     getSessionId: () => sandboxSessionId,
+    getWorkspaceKey: () => activeConversationId || sandboxSessionId || 'default',
+    approvalEnabled: config.APPROVAL_ENABLED,
+    getMeta: securityGetMeta,
     approvalNotifier: (ev) => {
       try {
         sse(ev);
@@ -420,6 +436,8 @@ export async function handleChat(body, res, req = null) {
       conversation_id: activeConversationId,
       session_reused: resolved.reusedSession,
       trace_id,
+      policy_version: POLICY_VERSION,
+      approval_enabled: config.APPROVAL_ENABLED,
     });
 
     const authStorage = AuthStorage.create();
@@ -434,6 +452,13 @@ export async function handleChat(body, res, req = null) {
       agentDir: getAgentDir(),
       settingsManager,
       additionalSkillPaths: [AGENT_SKILL, '/sandbox/skills'],
+      // Unified tool_call / tool_result security lifecycle (fail-closed)
+      extensionFactories: [
+        createSandboxSecurityExtension({
+          getMeta: securityGetMeta,
+          approvalEnabled: () => config.APPROVAL_ENABLED,
+        }),
+      ],
     });
     await resourceLoader.reload();
 

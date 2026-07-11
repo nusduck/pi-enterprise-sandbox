@@ -1,9 +1,9 @@
 {
   "id": "sdk-extension-security",
   "name": "sdk-extension-security",
-  "title": "SDK Extension 安全治理",
-  "description": "统一工具前后置策略、审批、审计和 Sandbox 双重强制。",
-  "status": "planning",
+  "title": "SDK Extension \u5b89\u5168\u6cbb\u7406",
+  "description": "\u7edf\u4e00\u5de5\u5177\u524d\u540e\u7f6e\u7b56\u7565\u3001\u5ba1\u6279\u3001\u5ba1\u8ba1\u548c Sandbox \u53cc\u91cd\u5f3a\u5236\u3002",
+  "status": "completed",
   "dev_type": null,
   "scope": null,
   "package": null,
@@ -11,7 +11,7 @@
   "creator": "nusduck",
   "assignee": "nusduck",
   "createdAt": "2026-07-11",
-  "completedAt": null,
+  "completedAt": "2026-07-11",
   "branch": null,
   "base_branch": "main",
   "worktree_path": null,
@@ -21,6 +21,6 @@
   "children": [],
   "parent": "07-11-field-issues-evolution-planning",
   "relatedFiles": [],
-  "notes": "",
+  "notes": "Extension dual enforcement; three-tier policy; write mutex; 268 pytest, 81 node tests.",
   "meta": {}
 }

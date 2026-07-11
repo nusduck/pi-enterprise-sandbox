@@ -292,3 +292,27 @@ cd frontend && npm run build && ls dist/
 | `Connection refused` 访问 Sandbox | 先确认 liveness: `curl -f localhost:8083/health`，再确认 readiness: `curl -f localhost:8083/ready` |
 | `/ready` 返回 503 | 检查 `SANDBOX_WORKSPACES_ROOT` 可写与 `SANDBOX_DATABASE_URL` 可达；日志仅有 warning，不含连接串 |
 | SSE 流中断 | 检查 API Server 和 Sandbox 日志；确认客户端 abort 后执行已取消 |
+
+## 安全治理（SDK Extension + Sandbox 双重强制）
+
+开发时默认开启人审：
+
+```bash
+# api-server（默认 true；显式关闭仅用于受控环境）
+APPROVAL_ENABLED=true
+
+# sandbox（与上对齐；未设置时默认 true）
+SANDBOX_APPROVAL_ENABLED=true
+```
+
+- **Agent 层**：`api-server/extensions/sandbox-security.js` 作为 `extensionFactories` 挂到 `createAgentSession`；`createSandboxTools` 对写工具做互斥与审批 fail-closed。
+- **Sandbox 层**：`policy_checker` 三层决策；`POST .../approval-check` 与 `POST .../executions/command` 独立 hard_deny。
+- **关闭审批**：`APPROVAL_ENABLED=false` 时风险命令可直接跑，但 hard_deny 模式（如 `sudo`、`rm -rf /`）仍 403/拒绝，并写 bypass 审计。
+- **定向测试**：
+
+```bash
+node --test api-server/tests/sandbox-security.test.js
+uv run pytest tests/test_policy_checker.py tests/test_approval.py tests/test_policy_approval.py -q
+```
+
+详见 [architecture.md](./architecture.md)「双重强制」一节。

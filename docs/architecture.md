@@ -151,11 +151,38 @@ POST /sessions → CREATE → RUNNING → (TTL 30min 无活动) → EXPIRED → 
 | **ulimit** | CPU 300s、内存 512MB、进程数 20、文件大小 50MB |
 | **Path validation** | `resolve()` + `is_relative_to()` — 防止路径逃逸；每 session 物理根隔离 |
 | **Artifact-only delivery** | 仅 `submit_artifact` 向用户交付；`write` 不自动分享 |
-| **Command blocking** | 禁止 `sudo`, `su`, `rm -rf /`, `dd`, `mkfs`, `fdisk`, `chmod 777` |
+| **Command blocking** | 禁止 `sudo`, `su`, `rm -rf /`, `dd`, `mkfs`, `fdisk`, `chmod 777`（hard_deny） |
 | **Output limits** | stdout/stderr 上限 50K chars |
 | **Audit logging** | 每次执行记录 trace_id |
-| **Approval** | 高风险命令需外部审批 |
+| **Approval** | 高风险命令需外部审批（`APPROVAL_ENABLED`，默认 true） |
 | **API Key** | 仅存服务端环境变量，浏览器零接触 |
+| **SDK Extension** | Agent 侧统一 `tool_call` 策略入口；异常 fail-closed |
+
+### 双重强制（Agent Extension + Sandbox）
+
+安全策略在两层独立执行，**Sandbox 不信任 Extension 结论**：
+
+```text
+Agent (api-server)
+  Extension tool_call  → 三层策略 allow | approval_required | hard_deny
+  createSandboxTools   → 写工具串行互斥、审批轮询、fail-closed
+        │
+        ▼
+Sandbox (FastAPI)
+  approval-check       → 重复策略评估；hard_deny 永不进审批队列
+  /executions/command  → 再次 hard_deny；无 session 不可执行
+  path / ownership     → 路径与归属校验
+```
+
+| 策略结果 | `APPROVAL_ENABLED=true` | `APPROVAL_ENABLED=false` |
+|----------|-------------------------|---------------------------|
+| `allow` | 直接执行 | 直接执行 |
+| `approval_required` | 暂停等人审 | 执行 + bypass 审计 |
+| `hard_deny` | 拒绝 | **仍拒绝**（开关与 approval credential 不可覆盖） |
+
+- 读工具（`read`/`ls`/`find`/`grep`…）可并行；写/副作用工具（`write`/`edit`/`bash`/`submit_artifact`/未知）按 conversation/workspace 串行。
+- 策略版本常量 `POLICY_VERSION`（当前 `2026-07-11.1`）写入审批响应与审计 meta，便于追溯。
+- 实现：`api-server/extensions/sandbox-security.js`、`sandbox/services/policy_checker.py`。
 
 ## Technology Stack
 

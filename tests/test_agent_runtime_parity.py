@@ -219,8 +219,14 @@ async def test_submit_artifact_emits_file_ready():
             }
         )
 
+    async def fake_gate(_tool_name: str, _params: dict[str, Any]):
+        # Write-class tools always go through the approval gate; unit test
+        # isolates artifact SSE without a live Sandbox approval-check.
+        yield {"type": "_gate", "ok": True}
+
     runtime._call_llm = fake_llm  # type: ignore[method-assign]
     runtime._exec_tool = fake_exec  # type: ignore[method-assign]
+    runtime._approval_gate = fake_gate  # type: ignore[method-assign]
 
     events = []
     async for ev in runtime.stream_prompt("submit"):

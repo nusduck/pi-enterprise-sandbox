@@ -36,6 +36,14 @@ class RiskLevel(str, Enum):
     HIGH = "high"
 
 
+class PolicyDecision(str, Enum):
+    """Three-tier tool policy outcome (Agent + Sandbox dual enforcement)."""
+
+    ALLOW = "allow"
+    APPROVAL_REQUIRED = "approval_required"
+    HARD_DENY = "hard_deny"
+
+
 class ToolExecutionMode(str, Enum):
     DIRECT = "direct"  # sandbox runtime via subprocess
     HTTP_API = "http_api"  # sandbox HTTP API
@@ -190,8 +198,11 @@ class ToolCallCheck(BaseModel):
 
 class ToolCallDecision(BaseModel):
     allowed: bool = True
+    # Three-tier: allow | approval_required | hard_deny
+    decision: str = "allow"
     reason: str = ""
     risk_level: RiskLevel = RiskLevel.LOW
+    policy_version: str = "2026-07-11.1"
 
 
 class ApprovalCheckRequest(BaseModel):
@@ -212,6 +223,9 @@ class ApprovalResponse(BaseModel):
     status: str
     risk_level: RiskLevel
     reason: str = ""
+    decision: str | None = None  # allow | approval_required | hard_deny
+    policy_version: str | None = None
+    approval_bypassed: bool = False
 
 
 # ── Health ─────────────────────────────────────────────────────────────

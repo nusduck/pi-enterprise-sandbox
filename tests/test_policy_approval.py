@@ -4,9 +4,10 @@ from __future__ import annotations
 
 from fastapi.testclient import TestClient
 
+from sandbox.config import settings
 from sandbox.main import app
 from sandbox.models import ToolCallCheck
-from sandbox.services.policy_checker import policy_checker
+from sandbox.services.policy_checker import POLICY_VERSION, policy_checker
 
 
 client = TestClient(app)
@@ -19,6 +20,7 @@ def test_bash_pip_install_requires_approval_decision():
         command="pip install requests",
     ))
     assert d.allowed is False
+    assert d.decision == "approval_required"
     assert d.risk_level.value == "high"
 
 
@@ -29,6 +31,7 @@ def test_bash_echo_auto_allowed():
         command="echo hello",
     ))
     assert d.allowed is True
+    assert d.decision == "allow"
 
 
 def test_approval_check_creates_pending_for_high_risk():
@@ -42,6 +45,8 @@ def test_approval_check_creates_pending_for_high_risk():
     body = r.json()
     assert body["status"] == "pending_approval"
     assert body.get("approval_id")
+    assert body.get("policy_version") == POLICY_VERSION
+    assert body.get("decision") == "approval_required"
 
     g = client.get(f"/approvals/{body['approval_id']}")
     assert g.status_code == 200
@@ -53,3 +58,65 @@ def test_approval_check_creates_pending_for_high_risk():
     )
     assert d.status_code == 200
     assert d.json()["status"] == "approved"
+
+
+def test_hard_deny_rejected_not_pending():
+    """Blocked commands must never enter the approval queue."""
+    s = client.post("/sessions", json={"caller_id": "test"}).json()
+    sid = s["session_id"]
+    r = client.post(
+        f"/sessions/{sid}/executions/approval-check",
+        json={"tool_name": "bash", "command": "sudo rm -rf /"},
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["status"] == "rejected"
+    assert body.get("decision") == "hard_deny"
+    assert body.get("policy_version") == POLICY_VERSION
+    assert body.get("approval_id") is None
+
+
+def test_hard_deny_blocks_command_execution_even_with_session():
+    """Sandbox re-enforces hard_deny on /executions/command (bypass Agent)."""
+    s = client.post("/sessions", json={"caller_id": "test"}).json()
+    sid = s["session_id"]
+    r = client.post(
+        f"/sessions/{sid}/executions/command",
+        json={"command": "sudo ls"},
+    )
+    assert r.status_code == 403
+    assert "blocked" in r.json()["detail"].lower() or "sudo" in r.json()["detail"].lower()
+
+
+def test_approval_disabled_bypasses_risk_but_not_hard_deny(monkeypatch):
+    """APPROVAL_ENABLED=false → risk tools approved+bypassed; hard_deny still rejected."""
+    monkeypatch.setattr(settings, "approval_enabled", False)
+    s = client.post("/sessions", json={"caller_id": "test"}).json()
+    sid = s["session_id"]
+
+    risk = client.post(
+        f"/sessions/{sid}/executions/approval-check",
+        json={"tool_name": "bash", "command": "pip install requests"},
+    )
+    assert risk.status_code == 200
+    body = risk.json()
+    assert body["status"] == "approved"
+    assert body.get("approval_bypassed") is True
+    assert body.get("decision") == "approval_required"
+
+    hard = client.post(
+        f"/sessions/{sid}/executions/approval-check",
+        json={"tool_name": "bash", "command": "sudo id"},
+    )
+    assert hard.status_code == 200
+    hbody = hard.json()
+    assert hbody["status"] == "rejected"
+    assert hbody.get("decision") == "hard_deny"
+    assert hbody.get("approval_bypassed") is False
+
+    # Direct execution path still hard-denies
+    exec_r = client.post(
+        f"/sessions/{sid}/executions/command",
+        json={"command": "sudo id"},
+    )
+    assert exec_r.status_code == 403

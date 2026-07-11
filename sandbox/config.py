@@ -80,6 +80,9 @@ class Settings(BaseSettings):
 
     # ── Approval ─────────────────────────────────────────────────────
     approval_timeout_seconds: int = 300
+    # When false, approval_required tools auto-execute with bypass audit;
+    # hard_deny is never overridden. Default true (safe production posture).
+    approval_enabled: bool = True
 
     # ── MCP ──────────────────────────────────────────────────────────
     mcp_enabled: bool = True

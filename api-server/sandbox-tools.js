@@ -7,11 +7,27 @@
  * Prefer createSandboxTools({ client, sessionId|getSessionId, approvalNotifier })
  * so concurrent chat turns never share session/approval state.
  *
+ * Security:
+ * - preExecuteGate + ensureApproved (fail-closed for write tools)
+ * - workspace write mutex for serial side-effect tools
+ * - APPROVAL_ENABLED maps approval_required → execute + bypass audit;
+ *   hard_deny is never overridden
+ *
  * NOTE: createAgentSession({ tools: [...] }) is an allowlist — every tool
  * name here must also appear in that list or the model will not see it.
  */
 import { Type } from 'typebox';
 import * as defaultSb from './services/sandbox-client.js';
+import { config } from './config.js';
+import {
+  POLICY_VERSION,
+  classifyToolSideEffect,
+  preExecuteGate,
+  workspaceWriteMutex,
+  emitToolAudit,
+  buildToolAuditEvent,
+  POLICY_DECISION,
+} from './extensions/sandbox-security.js';
 
 const APPROVAL_POLL_MS = 1500;
 const APPROVAL_MAX_WAIT_MS = 5 * 60 * 1000;
@@ -21,7 +37,11 @@ const APPROVAL_MAX_WAIT_MS = 5 * 60 * 1000;
  * @property {ReturnType<typeof defaultSb.createSandboxClient> | typeof defaultSb} [client]
  * @property {string | null} [sessionId]
  * @property {() => string | null | undefined} [getSessionId]
+ * @property {() => string | null | undefined} [getWorkspaceKey]
  * @property {((ev: object) => void) | null} [approvalNotifier]
+ * @property {boolean} [approvalEnabled]
+ * @property {() => object} [getMeta]
+ * @property {((ev: object) => void) | null} [auditSink]
  */
 
 /**
@@ -34,16 +54,64 @@ export function createSandboxTools(ctx = {}) {
     typeof ctx.getSessionId === 'function'
       ? ctx.getSessionId
       : () => ctx.sessionId ?? null;
+  const getWorkspaceKey =
+    typeof ctx.getWorkspaceKey === 'function'
+      ? ctx.getWorkspaceKey
+      : () => getSessionId() || 'default';
   const approvalNotifier =
     typeof ctx.approvalNotifier === 'function' ? ctx.approvalNotifier : null;
+  const approvalEnabled =
+    ctx.approvalEnabled != null ? Boolean(ctx.approvalEnabled) : config.APPROVAL_ENABLED !== false;
+  const getMeta = typeof ctx.getMeta === 'function' ? ctx.getMeta : () => ({});
+  const auditSink = typeof ctx.auditSink === 'function' ? ctx.auditSink : null;
+
+  function metaNow() {
+    return {
+      session_id: getSessionId(),
+      workspace_key: getWorkspaceKey(),
+      policy_version: POLICY_VERSION,
+      ...getMeta(),
+    };
+  }
 
   /**
    * Run policy check; if pending, notify UI and poll until approved/rejected/timeout.
-   * @returns {Promise<{ ok: boolean, reason?: string, approval_id?: string }>}
+   * Fail-closed for all write-class tools when the check endpoint errors.
+   * When APPROVAL_ENABLED=false, remote may auto-approve with bypass; local
+   * hard_deny still blocks before this is called.
+   *
+   * @returns {Promise<{ ok: boolean, reason?: string, approval_id?: string, policy_version?: string, approval_bypassed?: boolean }>}
    */
   async function ensureApproved(toolName, params = {}) {
     const sessionId = getSessionId();
-    if (!sessionId) return { ok: true };
+    if (!sessionId) {
+      // No session: fail-closed for write tools (cannot re-check Sandbox)
+      const side = classifyToolSideEffect(toolName);
+      if (side === 'write') {
+        return { ok: false, reason: 'No sandbox session for policy check (fail-closed)' };
+      }
+      return { ok: true };
+    }
+
+    // Local three-tier gate first (hard_deny short-circuit + audit)
+    const local = preExecuteGate({
+      toolName,
+      params,
+      approvalEnabled,
+      meta: metaNow(),
+      auditSink,
+    });
+    if (!local.ok) {
+      return {
+        ok: false,
+        reason: local.reason,
+        policy_version: local.policy?.policy_version || POLICY_VERSION,
+      };
+    }
+
+    // Remote Sandbox re-check is authoritative (dual enforcement). Always call for
+    // write-class tools so approval UX / bypass audit stay consistent even when
+    // the local catalog would auto-allow.
     let check;
     try {
       check = await sb.approvalCheck(sessionId, {
@@ -53,19 +121,67 @@ export function createSandboxTools(ctx = {}) {
         timeout: params.timeout || null,
       });
     } catch (err) {
-      // If check endpoint fails, fail closed for safety on bash
-      if (toolName === 'bash') {
-        return { ok: false, reason: `Approval check failed: ${err.message}` };
+      // Fail-closed for write-class tools (includes bash, write, edit, submit_artifact, unknown)
+      const side = classifyToolSideEffect(toolName);
+      if (side === 'write') {
+        return {
+          ok: false,
+          reason: `Approval check failed: ${err.message}`,
+          policy_version: POLICY_VERSION,
+        };
       }
-      return { ok: true };
+      return { ok: true, policy_version: POLICY_VERSION };
     }
 
-    if (check.status === 'approved') return { ok: true };
+    if (check.status === 'approved') {
+      return {
+        ok: true,
+        policy_version: check.policy_version || POLICY_VERSION,
+        approval_bypassed: Boolean(check.approval_bypassed),
+      };
+    }
     if (check.status === 'rejected') {
-      return { ok: false, reason: check.reason || 'Rejected by policy' };
+      return {
+        ok: false,
+        reason: check.reason || 'Rejected by policy',
+        policy_version: check.policy_version || POLICY_VERSION,
+      };
     }
     if (check.status !== 'pending_approval' || !check.approval_id) {
-      return { ok: false, reason: check.reason || 'Not allowed' };
+      return {
+        ok: false,
+        reason: check.reason || 'Not allowed',
+        policy_version: check.policy_version || POLICY_VERSION,
+      };
+    }
+
+    // If approvals disabled client-side but sandbox still returned pending, fail-closed
+    // only when we expected bypass — prefer trust sandbox; if APPROVAL_ENABLED false,
+    // treat pending as execute (audit was on sandbox when configured consistently).
+    if (!approvalEnabled) {
+      emitToolAudit(
+        buildToolAuditEvent({
+          toolName,
+          params,
+          policy: {
+            decision: POLICY_DECISION.ALLOW,
+            reason: 'approval bypassed client-side (APPROVAL_ENABLED=false)',
+            risk_level: check.risk_level || 'high',
+            policy_version: check.policy_version || POLICY_VERSION,
+            approval_bypassed: true,
+            side_effect: classifyToolSideEffect(toolName),
+          },
+          phase: 'approval_bypass',
+          meta: metaNow(),
+        }),
+        auditSink,
+      );
+      return {
+        ok: true,
+        approval_id: check.approval_id,
+        policy_version: check.policy_version || POLICY_VERSION,
+        approval_bypassed: true,
+      };
     }
 
     const approvalId = check.approval_id;
@@ -78,6 +194,7 @@ export function createSandboxTools(ctx = {}) {
         path: params.path,
         reason: check.reason,
         risk_level: check.risk_level,
+        policy_version: check.policy_version || POLICY_VERSION,
       });
     }
 
@@ -86,19 +203,65 @@ export function createSandboxTools(ctx = {}) {
       await new Promise((r) => setTimeout(r, APPROVAL_POLL_MS));
       try {
         const st = await sb.getApproval(approvalId);
-        if (st.status === 'approved') return { ok: true, approval_id: approvalId };
+        if (st.status === 'approved') {
+          return {
+            ok: true,
+            approval_id: approvalId,
+            policy_version: check.policy_version || POLICY_VERSION,
+          };
+        }
         if (st.status === 'rejected') {
           return {
             ok: false,
             reason: st.reason || 'Rejected by operator',
             approval_id: approvalId,
+            policy_version: check.policy_version || POLICY_VERSION,
           };
         }
       } catch {
         // keep polling until timeout
       }
     }
-    return { ok: false, reason: 'Approval timed out', approval_id: approvalId };
+    return {
+      ok: false,
+      reason: 'Approval timed out',
+      approval_id: approvalId,
+      policy_version: check.policy_version || POLICY_VERSION,
+    };
+  }
+
+  /**
+   * Wrap execute with write mutex + approval gate for write-class tools.
+   * @param {string} toolName
+   * @param {Function} executeFn
+   */
+  function wrapExecute(toolName, executeFn) {
+    return async (toolCallId, params, ...rest) => {
+      const side = classifyToolSideEffect(toolName);
+      const run = async () => {
+        if (side === 'write') {
+          const gate = await ensureApproved(toolName, params || {});
+          if (!gate.ok) {
+            return {
+              content: [{ type: 'text', text: `Blocked (policy): ${gate.reason}` }],
+              details: {
+                isError: true,
+                approval_id: gate.approval_id,
+                policy_version: gate.policy_version || POLICY_VERSION,
+              },
+              isError: true,
+            };
+          }
+        }
+        return executeFn(toolCallId, params, ...rest);
+      };
+
+      if (side === 'write') {
+        const key = getWorkspaceKey() || getSessionId() || 'default';
+        return workspaceWriteMutex.runExclusive(key, run);
+      }
+      return run();
+    };
   }
 
   // ── Tool: read ──────────────────────────────────
@@ -112,7 +275,7 @@ export function createSandboxTools(ctx = {}) {
       offset: Type.Optional(Type.Number({ description: 'Start line (1-indexed)' })),
       limit: Type.Optional(Type.Number({ description: 'Max lines' })),
     }),
-    execute: async (_toolCallId, params) => {
+    execute: wrapExecute('read', async (_toolCallId, params) => {
       // Skill files: read from api-server local FS, not sandbox
       if (
         params.path.startsWith('/home/sandbox/skill/') ||
@@ -138,7 +301,7 @@ export function createSandboxTools(ctx = {}) {
           details: { isError: true },
         };
       }
-    },
+    }),
   };
 
   // ── Tool: write ─────────────────────────────────
@@ -154,7 +317,7 @@ export function createSandboxTools(ctx = {}) {
       path: Type.String({ description: 'File path' }),
       content: Type.String({ description: 'Content to write' }),
     }),
-    execute: async (_toolCallId, params) => {
+    execute: wrapExecute('write', async (_toolCallId, params) => {
       try {
         const data = await sb.writeFile(getSessionId(), params.path, params.content);
         return {
@@ -167,7 +330,7 @@ export function createSandboxTools(ctx = {}) {
           details: { isError: true },
         };
       }
-    },
+    }),
   };
 
   // ── Tool: edit — read → replace → write ────────
@@ -183,7 +346,7 @@ export function createSandboxTools(ctx = {}) {
       old_string: Type.String({ description: 'Text to find' }),
       new_string: Type.String({ description: 'Replacement text' }),
     }),
-    execute: async (_toolCallId, params) => {
+    execute: wrapExecute('edit', async (_toolCallId, params) => {
       try {
         const sessionId = getSessionId();
         const file = await sb.readFile(sessionId, params.path);
@@ -208,7 +371,7 @@ export function createSandboxTools(ctx = {}) {
           details: { isError: true },
         };
       }
-    },
+    }),
   };
 
   // ── Tool: bash ──────────────────────────────────
@@ -223,19 +386,8 @@ export function createSandboxTools(ctx = {}) {
       command: Type.String({ description: 'Shell command' }),
       timeout: Type.Optional(Type.Number({ description: 'Seconds (max 300)' })),
     }),
-    execute: async (_toolCallId, params) => {
+    execute: wrapExecute('bash', async (_toolCallId, params) => {
       try {
-        const gate = await ensureApproved('bash', {
-          command: params.command,
-          timeout: params.timeout,
-        });
-        if (!gate.ok) {
-          return {
-            content: [{ type: 'text', text: `Blocked (approval): ${gate.reason}` }],
-            details: { isError: true, approval_id: gate.approval_id },
-            isError: true,
-          };
-        }
         const r = await sb.executeCommand(getSessionId(), params.command, params.timeout || 120);
         const isErr = r.exit_code != null && r.exit_code !== 0;
         const out = [
@@ -255,7 +407,7 @@ export function createSandboxTools(ctx = {}) {
           details: { isError: true },
         };
       }
-    },
+    }),
   };
 
   // ── Tool: submit_artifact ───────────────────────
@@ -275,7 +427,7 @@ export function createSandboxTools(ctx = {}) {
         Type.String({ description: 'MIME type (default: application/octet-stream)' }),
       ),
     }),
-    execute: async (_toolCallId, params) => {
+    execute: wrapExecute('submit_artifact', async (_toolCallId, params) => {
       try {
         const name = params.name || params.path.split('/').pop();
         const mime = params.mime_type || 'application/octet-stream';
@@ -309,7 +461,7 @@ export function createSandboxTools(ctx = {}) {
           details: { isError: true },
         };
       }
-    },
+    }),
   };
 
   return [readTool, writeTool, editTool, bashTool, submitArtifactTool];

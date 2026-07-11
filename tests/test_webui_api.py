@@ -312,15 +312,16 @@ class TestWebUIApprovalAPI:
         sandbox_client.delete(f"/sessions/{sid}")
 
     def test_approval_check_pending(self, session_id):
-        """High-risk command should return pending_approval."""
+        """High-risk tool should return pending_approval (not hard_deny)."""
         resp = sandbox_client.post(
             f"/sessions/{session_id}/executions/approval-check",
-            json={"tool_name": "raw_bash", "command": "rm -rf /tmp/test"},
+            json={"tool_name": "raw_bash", "command": "echo high-risk"},
         )
         assert resp.status_code == 202
         data = resp.json()
         assert data["status"] == "pending_approval"
         assert data["approval_id"].startswith("approval_")
+        assert data.get("decision") == "approval_required"
 
     def test_approval_check_auto_allowed(self, session_id):
         """Medium-risk command should be auto-allowed."""
@@ -333,12 +334,13 @@ class TestWebUIApprovalAPI:
         assert data["status"] == "approved"
 
     def test_approve_and_reject(self, session_id):
-        # Submit high-risk command
+        # Submit high-risk tool (approval_required, not hard_deny prefix)
         pending = sandbox_client.post(
             f"/sessions/{session_id}/executions/approval-check",
-            json={"tool_name": "raw_bash", "command": "rm -rf /tmp/test"},
+            json={"tool_name": "raw_bash", "command": "echo high-risk"},
         ).json()
         approval_id = pending["approval_id"]
+        assert approval_id
 
         # Reject
         resp = sandbox_client.post(

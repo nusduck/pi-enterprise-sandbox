@@ -25,6 +25,17 @@ from sandbox.paths import AGENT_SKILL_PATH, AGENT_WORKSPACE_PATH
 APPROVAL_POLL_S = 1.5
 APPROVAL_MAX_WAIT_S = 5 * 60
 
+# Concurrency / fail-closed classes (mirror api-server/extensions/sandbox-security.js)
+_READ_CLASS_TOOLS = frozenset({
+    "read", "read_file", "ls", "find", "grep",
+    "list_files", "preview_file", "view_file", "cat", "head", "tail",
+})
+_WRITE_CLASS_TOOLS = frozenset({
+    "write", "write_file", "edit", "edit_file", "bash", "command",
+    "raw_bash", "raw_shell", "submit_artifact", "delete_file",
+    "run_python",
+})
+
 
 @dataclass
 class AgentTurnResult:
@@ -357,7 +368,8 @@ write/edit/bash only touch the private workspace. To share a file, call submit_a
                 )
                 # 200 approved/rejected, 202 pending
                 if r.status_code >= 400:
-                    if tool_name == "bash":
+                    # Fail-closed for write-class tools (bash/write/edit/submit_artifact/unknown)
+                    if tool_name in _WRITE_CLASS_TOOLS or tool_name not in _READ_CLASS_TOOLS:
                         yield {
                             "type": "_gate",
                             "ok": False,
@@ -368,7 +380,7 @@ write/edit/bash only touch the private workspace. To share a file, call submit_a
                     return
                 check = r.json()
         except Exception as exc:
-            if tool_name == "bash":
+            if tool_name in _WRITE_CLASS_TOOLS or tool_name not in _READ_CLASS_TOOLS:
                 yield {
                     "type": "_gate",
                     "ok": False,
@@ -595,8 +607,8 @@ write/edit/bash only touch the private workspace. To share a file, call submit_a
                 tid = tc.get("id") or f"call_{uuid.uuid4().hex[:8]}"
                 yield {"type": "tool_start", "id": tid, "name": name, "args": args}
 
-                # Approval gate for bash (fail-closed) — mirrors Node sandbox-tools
-                if name == "bash":
+                # Approval gate for write-class tools (fail-closed) — mirrors Node sandbox-tools
+                if name in _WRITE_CLASS_TOOLS or name not in _READ_CLASS_TOOLS:
                     gate_ok = True
                     gate_reason = ""
                     async for gev in self._approval_gate(name, args):

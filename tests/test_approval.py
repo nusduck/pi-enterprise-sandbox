@@ -16,15 +16,18 @@ def test_high_risk_tool_returns_pending_approval_and_can_be_rejected():
     session = client.post("/sessions", json={"caller_id": "approval-test"}).json()
     sid = session["session_id"]
 
+    # Use approval_required (not hard_deny): raw_bash is high-risk; avoid
+    # blocked prefixes like "rm -rf /" which are never approval-eligible.
     resp = client.post(
         f"/sessions/{sid}/executions/approval-check",
-        json={"tool_name": "raw_bash", "command": "rm -rf /tmp/example"},
+        json={"tool_name": "raw_bash", "command": "echo high-risk-tool"},
     )
 
     assert resp.status_code == 202
     pending = resp.json()
     assert pending["status"] == "pending_approval"
     assert pending["approval_id"].startswith("approval_")
+    assert pending.get("decision") == "approval_required"
 
     rejected = client.post(
         "/approve",

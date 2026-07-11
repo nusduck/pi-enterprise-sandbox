@@ -63,6 +63,9 @@ describe('createSandboxTools override contract', () => {
   it('write tool defers to client.writeFile', async () => {
     const calls = [];
     const client = {
+      async approvalCheck() {
+        return { status: 'approved', risk_level: 'medium' };
+      },
       async writeFile(sessionId, path, content) {
         calls.push({ sessionId, path, content });
         return { size: content.length, path };
@@ -72,5 +75,21 @@ describe('createSandboxTools override contract', () => {
     const write = tools.find((t) => t.name === 'write');
     await write.execute('tc2', { path: 'a.txt', content: 'body' });
     assert.deepEqual(calls, [{ sessionId: 's2', path: 'a.txt', content: 'body' }]);
+  });
+
+  it('write tools fail closed when approval check errors', async () => {
+    const client = {
+      async approvalCheck() {
+        throw new Error('upstream down');
+      },
+      async writeFile() {
+        throw new Error('should not write');
+      },
+    };
+    const tools = createSandboxTools({ client, sessionId: 's3' });
+    const write = tools.find((t) => t.name === 'write');
+    const result = await write.execute('tc3', { path: 'x.txt', content: 'nope' });
+    assert.equal(result.isError, true);
+    assert.match(result.content[0].text, /Approval check failed|upstream down/i);
   });
 });
