@@ -49,7 +49,11 @@ class SessionCreate(BaseModel):
     user_id: str | None = None
     caller_id: str = "unknown"
     metadata: dict[str, Any] = Field(default_factory=dict)
-    workspace_path: str | None = None  # override: point to existing workspace
+    # Bind to conversation-owned workspace (preferred over raw physical path).
+    conversation_id: str | None = None
+    workspace_id: str | None = None
+    # Legacy: physical path override for rebinding. Logical path is ignored.
+    workspace_path: str | None = None
 
 
 class SessionResponse(BaseModel):

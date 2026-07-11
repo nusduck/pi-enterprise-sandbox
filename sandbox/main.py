@@ -225,17 +225,21 @@ async def request_logging(request: Request, call_next):
 
 @app.exception_handler(PermissionError)
 async def permission_error_handler(request: Request, exc: PermissionError):
+    from sandbox.paths import sanitize_path_error
+
     return JSONResponse(
         status_code=403,
-        content={"detail": str(exc)},
+        content={"detail": sanitize_path_error(str(exc))},
     )
 
 
 @app.exception_handler(ValueError)
 async def value_error_handler(request: Request, exc: ValueError):
+    from sandbox.paths import sanitize_path_error
+
     return JSONResponse(
         status_code=400,
-        content={"detail": str(exc)},
+        content={"detail": sanitize_path_error(str(exc))},
     )
 
 

@@ -33,7 +33,8 @@ export async function handleEnsureSession(body, res, req = null) {
     json(res, 200, {
       conversation_id: resolved.activeConversationId,
       session_id: resolved.sandboxSessionId,
-      workspace_path: resolved.targetWorkspace,
+      // Always logical agent-visible path (never host physical roots)
+      workspace_path: resolved.targetWorkspace || '/home/sandbox/workspace',
       reused_session: resolved.reusedSession,
       trace_id: traceId,
     }, traceId);

@@ -189,6 +189,124 @@ def test_conversation_id_traversal_rejected():
         assert not (root.parent / "escape").exists()
 
 
+def test_conversation_api_returns_logical_workspace_path():
+    """ConversationResponse.workspace_path must be the logical root, not host path."""
+    from sandbox.config import settings
+
+    resp = client.post("/conversations", json={"title": "logical-ws"})
+    assert resp.status_code == 201, resp.text
+    data = resp.json()
+    assert data["workspace_path"] == AGENT_WORKSPACE_PATH
+    physical_root = str(Path(settings.workspaces_path).resolve())
+    assert physical_root not in data["workspace_path"]
+    assert "/var/sandbox/workspaces" not in (data["workspace_path"] or "")
+
+    ws = client.get(f"/conversations/{data['id']}/workspace")
+    assert ws.status_code == 200
+    body = ws.json()
+    assert body["workspace_path"] == AGENT_WORKSPACE_PATH
+    assert body["workspace_id"].startswith("conv_")
+
+
+def test_two_conversations_isolated_concurrently():
+    """Concurrent conversations must not share files or physical roots."""
+    c1 = client.post("/conversations", json={"title": "iso-a"}).json()
+    c2 = client.post("/conversations", json={"title": "iso-b"}).json()
+    s1 = client.post(
+        "/sessions",
+        json={"caller_id": "a", "conversation_id": c1["id"]},
+    )
+    s2 = client.post(
+        "/sessions",
+        json={"caller_id": "b", "conversation_id": c2["id"]},
+    )
+    assert s1.status_code == 201, s1.text
+    assert s2.status_code == 201, s2.text
+    d1, d2 = s1.json(), s2.json()
+    assert d1["metadata"]["_physical_workspace"] != d2["metadata"]["_physical_workspace"]
+    assert d1["workspace_path"] == AGENT_WORKSPACE_PATH
+    assert d2["workspace_path"] == AGENT_WORKSPACE_PATH
+
+    client.post(
+        f"/sessions/{d1['session_id']}/files/write",
+        json={"path": "a-only.txt", "content": "A"},
+    )
+    client.post(
+        f"/sessions/{d2['session_id']}/files/write",
+        json={"path": "b-only.txt", "content": "B"},
+    )
+    list_a = client.get(f"/sessions/{d1['session_id']}/files", params={"path": "."}).json()
+    list_b = client.get(f"/sessions/{d2['session_id']}/files", params={"path": "."}).json()
+    names_a = {f["name"] for f in list_a["files"]}
+    names_b = {f["name"] for f in list_b["files"]}
+    assert "a-only.txt" in names_a and "b-only.txt" not in names_a
+    assert "b-only.txt" in names_b and "a-only.txt" not in names_b
+
+
+def test_write_lease_conflict_http_409():
+    """Second concurrent session on the same conversation workspace → 409."""
+    conv = client.post("/conversations", json={"title": "lease"}).json()
+    first = client.post(
+        "/sessions",
+        json={"caller_id": "writer-1", "conversation_id": conv["id"]},
+    )
+    assert first.status_code == 201, first.text
+    second = client.post(
+        "/sessions",
+        json={"caller_id": "writer-2", "conversation_id": conv["id"]},
+    )
+    assert second.status_code == 409, second.text
+    detail = second.json().get("detail", "")
+    assert "lease" in detail.lower() or "conflict" in detail.lower()
+
+
+def test_session_rebind_sees_same_conversation_files():
+    """After first session ends, a new session rebinds and sees prior files."""
+    conv = client.post("/conversations", json={"title": "rebind"}).json()
+    s1 = client.post(
+        "/sessions",
+        json={"caller_id": "t1", "conversation_id": conv["id"]},
+    ).json()
+    sid1 = s1["session_id"]
+    w = client.post(
+        f"/sessions/{sid1}/files/write",
+        json={"path": "keep.txt", "content": "persisted"},
+    )
+    assert w.status_code == 201
+
+    # End first session (releases write lease; keeps conversation workspace)
+    deleted = client.delete(f"/sessions/{sid1}")
+    assert deleted.status_code == 204
+
+    s2 = client.post(
+        "/sessions",
+        json={"caller_id": "t2", "conversation_id": conv["id"]},
+    )
+    assert s2.status_code == 201, s2.text
+    sid2 = s2.json()["session_id"]
+    read = client.get(f"/sessions/{sid2}/files/read", params={"path": "keep.txt"})
+    assert read.status_code == 200
+    assert read.json().get("content") == "persisted"
+
+
+def test_path_escape_error_detail_has_no_physical_root():
+    """File API escape errors must not include host workspace roots."""
+    from sandbox.config import settings
+
+    data = _create_session("leak-check")
+    sid = data["session_id"]
+    physical = data["metadata"]["_physical_workspace"]
+    resp = client.post(
+        f"/sessions/{sid}/files/write",
+        json={"path": "../outside.txt", "content": "nope"},
+    )
+    assert resp.status_code in (400, 403, 500)
+    body = resp.text
+    assert physical not in body
+    assert str(settings.workspaces_path) not in body
+    assert "/var/sandbox/workspaces" not in body
+
+
 def test_artifact_submit_rejects_traversal_missing_dir_and_symlink():
     data = _create_session()
     sid = data["session_id"]

@@ -6,10 +6,14 @@ from fastapi import APIRouter, HTTPException, Request
 
 from sandbox.config import settings
 from sandbox.models import SessionCreate, SessionResponse, SessionStatus
+from sandbox.paths import AGENT_WORKSPACE_PATH, is_logical_workspace_path
 from sandbox.security.ownership import assert_session_owner, resolve_actor
 from sandbox.services.audit_logger import audit_logger
 from sandbox.services.session_manager import session_manager
-from sandbox.services.workspace_manager import workspace_manager
+from sandbox.services.workspace_manager import (
+    WorkspaceWriteConflict,
+    workspace_manager,
+)
 
 router = APIRouter(prefix="/sessions", tags=["sessions"])
 
@@ -22,20 +26,45 @@ def create_session(body: SessionCreate, request: Request):
     if actor is not None:
         user_id = actor.user_id
 
-    session = session_manager.create(
-        agent_session_id=body.agent_session_id,
-        enterprise_session_id=body.enterprise_session_id,
-        user_id=user_id,
-        caller_id=body.caller_id,
-        metadata=body.metadata,
-        workspace_path_override=body.workspace_path,
-    )
-    if body.workspace_path:
-        # Ensure physical path exists; optional presentation link is best-effort
-        workspace_manager.activate_workspace(body.workspace_path)
+    # Ignore logical workspace_path overrides — they are not physical roots.
+    physical_override = body.workspace_path
+    if physical_override and is_logical_workspace_path(physical_override):
+        physical_override = None
+
+    try:
+        session = session_manager.create(
+            agent_session_id=body.agent_session_id,
+            enterprise_session_id=body.enterprise_session_id,
+            user_id=user_id,
+            caller_id=body.caller_id,
+            metadata=body.metadata,
+            workspace_path_override=physical_override,
+            conversation_id=body.conversation_id,
+            workspace_id=body.workspace_id,
+        )
+    except WorkspaceWriteConflict as exc:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Workspace write lease conflict: another session already holds "
+                f"write access (holder={exc.holder_session_id})"
+            ),
+        ) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+
+    # Ensure physical directory exists. Never rely on the global symlink.
+    physical = (session.metadata or {}).get("_physical_workspace")
+    if physical:
+        workspace_manager.activate_workspace(physical)  # no-op unless flag on
     else:
-        # Init empty physical workspace for this session (no skills seed)
         workspace_manager.init_workspace(session.session_id)
+
+    # Guarantee agent-visible path is logical
+    if session.workspace_path != AGENT_WORKSPACE_PATH:
+        session.workspace_path = AGENT_WORKSPACE_PATH
 
     meta = {"caller_id": body.caller_id}
     if actor is not None:
@@ -43,6 +72,9 @@ def create_session(body: SessionCreate, request: Request):
         meta["organization_id"] = actor.organization_id
     elif user_id:
         meta["user_id"] = user_id
+    workspace_id = (session.metadata or {}).get("workspace_id")
+    if workspace_id:
+        meta["workspace_id"] = workspace_id
 
     audit_logger.log_session_lifecycle(
         session.session_id, "created",
@@ -99,10 +131,15 @@ def delete_session(session_id: str, request: Request):
     actor = resolve_actor(request) if settings.auth_enabled else None
     assert_session_owner(session, actor)
     session_manager.update_status(session_id, SessionStatus.COMPLETED)
-    workspace_manager.remove_workspace(session_id)
+    # Only remove session-private trees (workspace_id == session_id).
+    # Conversation workspaces are retained for rebind.
+    meta = session.metadata or {}
+    wid = meta.get("workspace_id")
+    if not wid or wid == session_id:
+        workspace_manager.remove_workspace(session_id)
     session_manager.delete(session_id)
-    meta = None
+    meta_log = None
     if actor is not None:
-        meta = {"user_id": actor.user_id, "organization_id": actor.organization_id}
-    audit_logger.log_session_lifecycle(session_id, "deleted", meta)
+        meta_log = {"user_id": actor.user_id, "organization_id": actor.organization_id}
+    audit_logger.log_session_lifecycle(session_id, "deleted", meta_log)
     return

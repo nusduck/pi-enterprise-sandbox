@@ -38,10 +38,10 @@ def _execution_cwd(session) -> str:
     """Always return the physical workspace path for concurrent-safe execution.
 
     Never use the process-global presentation symlink as cwd — concurrent
-    sessions would race on that link. Activate remains best-effort for
-    single-session presentation only and is never used as the exec cwd.
+    sessions would race on that link. Global activate is disabled by default.
     """
     physical = ensure_physical_workspace(session)
+    # No-op unless SANDBOX_ENABLE_GLOBAL_WORKSPACE_SYMLINK=true
     workspace_manager.activate_workspace(physical)
     return str(physical)
 

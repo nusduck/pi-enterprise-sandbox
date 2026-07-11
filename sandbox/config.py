@@ -29,6 +29,10 @@ class Settings(BaseSettings):
     agent_workspace_path: str = AGENT_WORKSPACE_PATH
     agent_skill_path: str = AGENT_SKILL_PATH
 
+    # Global /home/sandbox/workspace symlink is concurrent-unsafe; off by default.
+    # Prefer physical per-session cwd + logical path mapping in API/agent surfaces.
+    enable_global_workspace_symlink: bool = False
+
     # ── Resource limits ──────────────────────────────────────────────
     execution_timeout_seconds: int = 120
     max_output_chars: int = 50_000

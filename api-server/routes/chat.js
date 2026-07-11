@@ -137,19 +137,16 @@ export function toPersistableMessages(messages) {
  */
 export async function resolveConversationAndSession(client, conversation_id) {
   let activeConversationId = conversation_id || null;
-  let targetWorkspace = null;
+  // Always agent-visible logical path — never host physical roots.
+  let targetWorkspace = AGENT_WORKSPACE;
   let sandboxSessionId = null;
   let reusedSession = false;
 
   if (activeConversationId) {
     try {
       const conv = await client.getConversation(activeConversationId);
-      targetWorkspace = conv.workspace_path || null;
-      // Prefer dedicated workspace endpoint if path missing
-      if (!targetWorkspace) {
-        const convWs = await client.getConversationWorkspace(activeConversationId);
-        targetWorkspace = convWs.workspace_path;
-      }
+      // API returns logical workspace_path; keep logical for clients/SSE.
+      targetWorkspace = conv.workspace_path || AGENT_WORKSPACE;
       // Reuse sandbox session if still RUNNING
       if (conv.sandbox_session_id) {
         try {
@@ -163,25 +160,30 @@ export async function resolveConversationAndSession(client, conversation_id) {
           // session expired or missing
         }
       }
-      console.log(`[agent] Reusing conversation ${activeConversationId} workspace: ${targetWorkspace}`);
+      console.log(
+        `[agent] Reusing conversation ${activeConversationId} workspace: ${AGENT_WORKSPACE}`,
+      );
     } catch {
       console.log(`[agent] Conversation ${activeConversationId} not found, will create new`);
       activeConversationId = null;
-      targetWorkspace = null;
+      targetWorkspace = AGENT_WORKSPACE;
     }
   }
 
   if (!activeConversationId) {
     const convResp = await client.createConversation();
     activeConversationId = convResp.id;
-    targetWorkspace = convResp.workspace_path;
-    console.log(`[agent] Created conversation ${activeConversationId} workspace: ${targetWorkspace}`);
+    targetWorkspace = convResp.workspace_path || AGENT_WORKSPACE;
+    console.log(
+      `[agent] Created conversation ${activeConversationId} workspace: ${AGENT_WORKSPACE}`,
+    );
   }
 
   if (!sandboxSessionId) {
-    const extra = targetWorkspace ? { workspace_path: targetWorkspace } : {};
+    // Bind session to conversation-owned workspace via conversation_id.
+    // Do NOT pass host physical paths — sandbox resolves conv_<id> on disk.
     const sessionData = await client.createSession('pi-coding-agent', {
-      ...extra,
+      conversation_id: activeConversationId,
       enterprise_session_id: activeConversationId,
     });
     sandboxSessionId = sessionData.session_id;
@@ -189,7 +191,6 @@ export async function resolveConversationAndSession(client, conversation_id) {
     try {
       await client.updateConversation(activeConversationId, {
         sandbox_session_id: sandboxSessionId,
-        workspace_path: targetWorkspace || sessionData.workspace_path,
       });
     } catch (err) {
       console.warn('[agent] Failed to bind sandbox_session_id on conversation:', err.message);
@@ -197,7 +198,12 @@ export async function resolveConversationAndSession(client, conversation_id) {
     console.log(`[agent] Created sandbox session ${sandboxSessionId}`);
   }
 
-  return { activeConversationId, targetWorkspace, sandboxSessionId, reusedSession };
+  return {
+    activeConversationId,
+    targetWorkspace: AGENT_WORKSPACE,
+    sandboxSessionId,
+    reusedSession,
+  };
 }
 
 /**

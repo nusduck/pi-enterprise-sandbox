@@ -2,9 +2,13 @@
 
 import pytest
 from pathlib import Path
+
+from sandbox.paths import AGENT_WORKSPACE_PATH, sanitize_path_error
 from sandbox.security.path_validation import (
-    resolve_safe_path,
+    enforce_path_within_workspace,
     is_path_in_workspace,
+    normalize_user_path,
+    resolve_safe_path,
     validate_conversation_id,
 )
 
@@ -64,6 +68,53 @@ class TestPathValidation:
         link.symlink_to(outside.resolve())
         with pytest.raises(PermissionError):
             resolve_safe_path(ws, "evil_link")
+
+    def test_logical_absolute_workspace_path_accepted(self, tmp_path: Path):
+        ws = str(tmp_path)
+        (tmp_path / "notes").mkdir()
+        (tmp_path / "notes" / "a.txt").write_text("ok")
+        result = resolve_safe_path(ws, f"{AGENT_WORKSPACE_PATH}/notes/a.txt")
+        assert result == (tmp_path / "notes" / "a.txt").resolve()
+
+    def test_logical_workspace_root_is_dot(self, tmp_path: Path):
+        assert normalize_user_path(AGENT_WORKSPACE_PATH) == "."
+        assert normalize_user_path(AGENT_WORKSPACE_PATH + "/") == "."
+        result = resolve_safe_path(str(tmp_path), AGENT_WORKSPACE_PATH)
+        assert result == tmp_path.resolve()
+
+    def test_physical_path_not_in_error_detail(self, tmp_path: Path):
+        """PermissionError messages must not leak physical workspace roots."""
+        ws = str(tmp_path)
+        with pytest.raises(PermissionError) as ei:
+            resolve_safe_path(ws, "../escape.txt")
+        msg = str(ei.value)
+        assert str(tmp_path) not in msg
+        assert "Path escape detected" in msg
+
+    def test_enforce_path_within_workspace_alias(self, tmp_path: Path):
+        p = enforce_path_within_workspace(str(tmp_path), "x.txt")
+        assert p == (tmp_path / "x.txt").resolve()
+
+    def test_null_byte_rejected(self, tmp_path: Path):
+        with pytest.raises(ValueError):
+            resolve_safe_path(str(tmp_path), "foo\x00bar")
+
+    def test_home_expansion_rejected(self, tmp_path: Path):
+        with pytest.raises(ValueError):
+            normalize_user_path("~/secret")
+
+
+class TestSanitizePathError:
+    def test_replaces_physical_roots(self, tmp_path: Path, monkeypatch):
+        from sandbox.config import settings
+
+        monkeypatch.setattr(settings, "workspaces_root", str(tmp_path / "workspaces"))
+        physical = str(tmp_path / "workspaces" / "conv_abc")
+        msg = f"failed under {physical}/file.txt"
+        out = sanitize_path_error(msg, physical_workspace=physical)
+        assert physical not in out
+        assert AGENT_WORKSPACE_PATH in out
+        assert "/var/sandbox/workspaces" not in out
 
 
 class TestConversationIdValidation:

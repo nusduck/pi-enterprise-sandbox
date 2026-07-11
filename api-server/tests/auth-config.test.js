@@ -32,6 +32,7 @@ describe('isProtectedApiPath', () => {
     assert.equal(isProtectedApiPath('/api/conversations'), true);
     assert.equal(isProtectedApiPath('/api/chat'), true);
     assert.equal(isProtectedApiPath('/api/files/upload'), true);
+    assert.equal(isProtectedApiPath('/api/sessions/ensure'), true);
   });
 });
 

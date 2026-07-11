@@ -1,9 +1,9 @@
 {
   "id": "logical-path-workspace-isolation",
   "name": "logical-path-workspace-isolation",
-  "title": "逻辑路径与 Workspace 隔离",
-  "description": "建立双逻辑根、Conversation workspace 所有权与 Session 级执行隔离。",
-  "status": "planning",
+  "title": "\u903b\u8f91\u8def\u5f84\u4e0e Workspace \u9694\u79bb",
+  "description": "\u5efa\u7acb\u53cc\u903b\u8f91\u6839\u3001Conversation workspace \u6240\u6709\u6743\u4e0e Session \u7ea7\u6267\u884c\u9694\u79bb\u3002",
+  "status": "completed",
   "dev_type": null,
   "scope": null,
   "package": null,
@@ -11,7 +11,7 @@
   "creator": "nusduck",
   "assignee": "nusduck",
   "createdAt": "2026-07-11",
-  "completedAt": null,
+  "completedAt": "2026-07-11",
   "branch": null,
   "base_branch": "main",
   "worktree_path": null,
@@ -21,6 +21,6 @@
   "children": [],
   "parent": "07-11-field-issues-evolution-planning",
   "relatedFiles": [],
-  "notes": "",
+  "notes": "Logical paths, write lease, global symlink off; true mount NS deferred. 244 pytest.",
   "meta": {}
 }

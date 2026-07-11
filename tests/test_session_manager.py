@@ -1,14 +1,17 @@
 """Tests for SessionManager."""
 
 import pytest
+
 from sandbox.models import SessionStatus
-from sandbox.paths import AGENT_WORKSPACE_PATH
+from sandbox.paths import AGENT_WORKSPACE_PATH, conversation_workspace_id
 from sandbox.services.session_manager import SessionManager
+from sandbox.services.workspace_manager import WorkspaceWriteConflict, write_lease
 
 
 class TestSessionManager:
     @pytest.fixture
     def mgr(self):
+        write_lease.clear()
         return SessionManager()
 
     def test_create_session(self, mgr: SessionManager):
@@ -28,6 +31,7 @@ class TestSessionManager:
         assert session.user_id == "u001"
         assert session.metadata["env"] == "staging"
         assert "_physical_workspace" in session.metadata
+        assert "workspace_id" in session.metadata
 
     def test_get_existing(self, mgr: SessionManager):
         created = mgr.create()
@@ -92,3 +96,21 @@ class TestSessionManager:
         s1 = mgr.create()
         s2 = mgr.create()
         assert s1.metadata["_physical_workspace"] != s2.metadata["_physical_workspace"]
+
+    def test_conversation_id_binds_shared_workspace(self, mgr: SessionManager):
+        conv = "conv-bind-1"
+        s1 = mgr.create(caller_id="a", conversation_id=conv)
+        assert s1.metadata["workspace_id"] == conversation_workspace_id(conv)
+        assert s1.metadata["conversation_id"] == conv
+        assert conversation_workspace_id(conv) in s1.metadata["_physical_workspace"]
+        # Complete first so second can claim write lease
+        mgr.update_status(s1.session_id, SessionStatus.COMPLETED)
+        s2 = mgr.create(caller_id="b", conversation_id=conv)
+        assert s2.metadata["_physical_workspace"] == s1.metadata["_physical_workspace"]
+
+    def test_write_lease_conflict_on_second_writer(self, mgr: SessionManager):
+        conv = "lease-conflict-1"
+        s1 = mgr.create(caller_id="a", conversation_id=conv)
+        assert s1.status == SessionStatus.RUNNING
+        with pytest.raises(WorkspaceWriteConflict):
+            mgr.create(caller_id="b", conversation_id=conv)

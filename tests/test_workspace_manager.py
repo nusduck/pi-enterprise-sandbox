@@ -6,9 +6,17 @@ from pathlib import Path
 import pytest
 
 from sandbox.config import settings
-from sandbox.paths import AGENT_WORKSPACE_PATH, get_session_physical_workspace
+from sandbox.paths import (
+    AGENT_WORKSPACE_PATH,
+    conversation_workspace_id,
+    get_session_physical_workspace,
+)
 from sandbox.services.session_manager import SessionManager
-from sandbox.services.workspace_manager import WorkspaceManager
+from sandbox.services.workspace_manager import (
+    WorkspaceManager,
+    WorkspaceWriteConflict,
+    write_lease,
+)
 
 
 class TestWorkspaceManager:
@@ -44,7 +52,7 @@ class TestWorkspaceManager:
     def test_conversation_workspace_naming(self):
         conv_a = "550e8400-e29b-41d4-a716-446655440000"
         conv_b = "550e8400-e29b-41d4-a716-446655440001"
-        assert f"conv_{conv_a}" != f"conv_{conv_b}"
+        assert conversation_workspace_id(conv_a) != conversation_workspace_id(conv_b)
 
     def test_get_workspace_path_is_physical(self, tmp_path, monkeypatch):
         monkeypatch.setattr(settings, "workspaces_root", str(tmp_path / "workspaces"))
@@ -53,8 +61,47 @@ class TestWorkspaceManager:
         assert path == Path(tmp_path / "workspaces" / "sandbox_xyz")
         assert str(path) != AGENT_WORKSPACE_PATH
 
+    def test_activate_workspace_disabled_by_default(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(settings, "workspaces_root", str(tmp_path / "workspaces"))
+        monkeypatch.setattr(settings, "enable_global_workspace_symlink", False)
+        mgr = WorkspaceManager()
+        target = tmp_path / "workspaces" / "s1"
+        target.mkdir(parents=True)
+        # Must not raise and must not require /home/sandbox
+        assert mgr.activate_workspace(target) == target.resolve()
+
+
+class TestWriteLease:
+    def setup_method(self):
+        write_lease.clear()
+
+    def test_single_writer_claim(self):
+        write_lease.claim("conv_a", "session_1")
+        assert write_lease.holder("conv_a") == "session_1"
+        # Same session re-claim is idempotent
+        write_lease.claim("conv_a", "session_1")
+        with pytest.raises(WorkspaceWriteConflict):
+            write_lease.claim("conv_a", "session_2")
+        write_lease.release("conv_a", "session_1")
+        write_lease.claim("conv_a", "session_2")
+        assert write_lease.holder("conv_a") == "session_2"
+
+    def test_reclaim_when_holder_dead(self):
+        write_lease.claim("conv_b", "dead_session")
+
+        def alive(sid: str) -> bool:
+            return sid != "dead_session"
+
+        write_lease.claim_with_liveness(
+            "conv_b", "new_session", is_holder_alive=alive
+        )
+        assert write_lease.holder("conv_b") == "new_session"
+
 
 class TestSessionPhysicalIsolation:
+    def setup_method(self):
+        write_lease.clear()
+
     def test_two_sessions_use_different_physical_paths(self, tmp_path, monkeypatch):
         monkeypatch.setattr(settings, "workspaces_root", str(tmp_path / "workspaces"))
         (tmp_path / "workspaces").mkdir(parents=True, exist_ok=True)
@@ -112,3 +159,27 @@ class TestSessionPhysicalIsolation:
             # Only this session's marker
             files = {p.name for p in root.iterdir() if p.is_file()}
             assert files == {f"{s.session_id}.txt"}
+
+    def test_conversation_workspace_shared_across_session_rebind(
+        self, tmp_path, monkeypatch
+    ):
+        monkeypatch.setattr(settings, "workspaces_root", str(tmp_path / "workspaces"))
+        (tmp_path / "workspaces").mkdir(parents=True, exist_ok=True)
+        mgr = WorkspaceManager()
+        sm = SessionManager()
+        conv = "rebind-conv-1"
+        physical = mgr.init_conversation_workspace(conv)
+        (physical / "persist.txt").write_text("kept", encoding="utf-8")
+
+        s1 = sm.create(caller_id="a", conversation_id=conv)
+        assert Path(get_session_physical_workspace(s1)) == physical.resolve() or Path(
+            get_session_physical_workspace(s1)
+        ).name == conversation_workspace_id(conv)
+        assert (Path(get_session_physical_workspace(s1)) / "persist.txt").read_text() == "kept"
+
+        # End first session → lease released
+        sm.update_status(s1.session_id, __import__("sandbox.models", fromlist=["SessionStatus"]).SessionStatus.COMPLETED)
+        sm.delete(s1.session_id)
+
+        s2 = sm.create(caller_id="b", conversation_id=conv)
+        assert (Path(get_session_physical_workspace(s2)) / "persist.txt").read_text() == "kept"

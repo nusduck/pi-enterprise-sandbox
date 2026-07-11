@@ -13,6 +13,7 @@ from fastapi import APIRouter, HTTPException, Request
 
 from sandbox.config import settings
 from sandbox.models import ConversationCreate, ConversationResponse
+from sandbox.paths import AGENT_WORKSPACE_PATH, conversation_workspace_id, to_public_workspace_path
 from sandbox.repositories import ConversationRepository
 from sandbox.security.ownership import require_actor
 from sandbox.services.workspace_manager import workspace_manager
@@ -21,13 +22,19 @@ router = APIRouter(prefix="/conversations", tags=["conversations"])
 repo = ConversationRepository()
 
 
+def _public_conversation(conv: ConversationResponse) -> ConversationResponse:
+    """Ensure API responses never expose host physical workspace paths."""
+    conv.workspace_path = to_public_workspace_path(conv.workspace_path)
+    return conv
+
+
 def _get_owned_or_404(conversation_id: str, request: Request) -> ConversationResponse:
     """Load conversation and enforce ownership when auth is on."""
     if not settings.auth_enabled:
         conv = repo.get(conversation_id)
         if not conv:
             raise HTTPException(status_code=404, detail="Conversation not found")
-        return conv
+        return _public_conversation(conv)
 
     actor = require_actor(request)
     conv = repo.get_for_owner(
@@ -39,7 +46,7 @@ def _get_owned_or_404(conversation_id: str, request: Request) -> ConversationRes
     if not conv:
         # Fall back to generic not-found (no existence leak)
         raise HTTPException(status_code=404, detail="Conversation not found")
-    return conv
+    return _public_conversation(conv)
 
 
 @router.get("", response_model=list[ConversationResponse])
@@ -51,14 +58,17 @@ def list_conversations(request: Request):
     Service token alone (no acting user / JWT) → 401.
     """
     if not settings.auth_enabled:
-        return repo.list_all()
+        return [_public_conversation(c) for c in repo.list_all()]
 
     actor = require_actor(request)
-    return repo.list_for_user(
-        user_id=actor.user_id,
-        organization_id=actor.organization_id,
-        is_admin=actor.is_admin,
-    )
+    return [
+        _public_conversation(c)
+        for c in repo.list_for_user(
+            user_id=actor.user_id,
+            organization_id=actor.organization_id,
+            is_admin=actor.is_admin,
+        )
+    ]
 
 
 @router.post("", response_model=ConversationResponse, status_code=201)
@@ -82,14 +92,17 @@ def create_conversation(body: ConversationCreate, request: Request):
             raise HTTPException(status_code=400, detail=str(exc))
     else:
         conv_id = str(uuid.uuid4())
-    # Initialize persistent workspace for this conversation
+    # Initialize persistent workspace for this conversation.
+    # Store workspace_id key in DB; API always returns logical path.
     try:
-        ws_path = str(workspace_manager.init_conversation_workspace(conv_id))
+        workspace_manager.init_conversation_workspace(conv_id)
     except (ValueError, PermissionError) as exc:
         raise HTTPException(
             status_code=400 if isinstance(exc, ValueError) else 403,
             detail=str(exc),
         )
+    # Persist a stable workspace key (not host absolute path) for rebind.
+    stored_workspace = conversation_workspace_id(conv_id)
 
     owner_user_id = None
     organization_id = None
@@ -107,12 +120,12 @@ def create_conversation(body: ConversationCreate, request: Request):
         "id": conv_id,
         "title": body.title or "New conversation",
         "sandbox_session_id": body.sandbox_session_id,
-        "workspace_path": ws_path,
+        "workspace_path": stored_workspace,
         "messages": list(body.messages or []),
         "owner_user_id": owner_user_id,
         "organization_id": organization_id,
     }
-    return repo.upsert(entry)
+    return _public_conversation(repo.upsert(entry))
 
 
 @router.get("/{conversation_id}", response_model=ConversationResponse)
@@ -132,11 +145,8 @@ def update_conversation(conversation_id: str, body: ConversationCreate, request:
             if body.sandbox_session_id is not None
             else existing.sandbox_session_id
         ),
-        "workspace_path": (
-            body.workspace_path
-            if body.workspace_path is not None
-            else existing.workspace_path
-        ),
+        # Always persist the stable workspace_id key (never host absolute paths).
+        "workspace_path": conversation_workspace_id(conversation_id),
         "messages": (
             list(body.messages)
             if body.messages is not None
@@ -146,7 +156,7 @@ def update_conversation(conversation_id: str, body: ConversationCreate, request:
         "organization_id": existing.organization_id,
         "created_at": existing.created_at,
     }
-    return repo.upsert(entry)
+    return _public_conversation(repo.upsert(entry))
 
 
 def _cleanup_linked_session(sandbox_session_id: str) -> None:
@@ -199,11 +209,19 @@ def update_conversation_title(conversation_id: str, body: dict, request: Request
     updated = repo.update_title(conversation_id, title)
     if not updated:
         raise HTTPException(status_code=404, detail="Conversation not found")
-    return updated
+    return _public_conversation(updated)
 
 
 @router.get("/{conversation_id}/workspace", response_model=dict)
 def get_conversation_workspace(conversation_id: str, request: Request):
-    """Return the persistent workspace path for a conversation."""
+    """Return the persistent workspace path for a conversation.
+
+    ``workspace_path`` is always the agent-visible logical root.
+    ``workspace_id`` is the stable conversation-owned storage key.
+    """
     conv = _get_owned_or_404(conversation_id, request)
-    return {"conversation_id": conversation_id, "workspace_path": conv.workspace_path}
+    return {
+        "conversation_id": conversation_id,
+        "workspace_path": AGENT_WORKSPACE_PATH,
+        "workspace_id": conversation_workspace_id(conversation_id),
+    }

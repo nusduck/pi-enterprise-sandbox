@@ -1,10 +1,25 @@
-"""Path escape detection — safe workspace path resolution."""
+"""Path escape detection — safe workspace path resolution.
+
+Path policy (agent-facing contract):
+
+- Accept relative paths (``foo/bar.txt``) and workspace logical absolute paths
+  (``/home/sandbox/workspace/...``).
+- Reject other absolute paths, null bytes, and paths that escape the physical
+  workspace via ``..`` or symlink/hardlink resolution.
+- Error messages never include physical workspace roots.
+"""
 
 from __future__ import annotations
 
 import os
 import re
 from pathlib import Path
+
+from sandbox.paths import (
+    AGENT_WORKSPACE_PATH,
+    is_logical_workspace_path,
+    sanitize_path_error,
+)
 
 # Conservative conversation identifiers: UUID-friendly, no path separators.
 _CONVERSATION_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
@@ -27,27 +42,73 @@ def validate_conversation_id(conversation_id: str) -> str:
     return conversation_id
 
 
-def resolve_safe_path(workspace: str, user_path: str) -> Path:
-    """Resolve a user-supplied path relative to the workspace root, raising
-    PermissionError if the resolved path escapes the workspace boundary.
+def normalize_user_path(user_path: str) -> str:
+    """Normalize a user-supplied path to a workspace-relative form.
 
-    Uses ``Path.resolve() + is_relative_to`` (Python 3.9+) with
-    ``os.path.commonpath`` fallback for older runtimes.
+    Accepts:
+    - relative paths: ``foo/bar.txt``, ``.``, ``./x``
+    - logical absolute under ``/home/sandbox/workspace``
+
+    Rejects:
+    - empty / non-string
+    - null bytes
+    - absolute paths outside the logical workspace root
     """
+    if user_path is None or not isinstance(user_path, str):
+        raise ValueError("Invalid path")
+    if "\x00" in user_path:
+        raise ValueError("Invalid path: null byte")
+
+    raw = user_path.strip() or "."
+
+    if raw.startswith("~"):
+        raise ValueError("Invalid path: home expansion not allowed")
+
+    # Logical absolute → relative under workspace
+    if is_logical_workspace_path(raw):
+        rest = raw[len(AGENT_WORKSPACE_PATH) :].lstrip("/")
+        return rest if rest else "."
+
+    # Other absolute paths are rejected (do not join onto workspace)
+    if raw.startswith("/") or (len(raw) > 1 and raw[1] == ":"):
+        raise PermissionError(
+            f"Path escape detected: absolute path outside workspace: {raw}"
+        )
+
+    return raw if raw else "."
+
+
+def _raise_escape(user_path: str, physical_workspace: str | None = None) -> None:
+    msg = sanitize_path_error(
+        f"Path escape detected: {user_path} is outside workspace",
+        physical_workspace=physical_workspace,
+    )
+    raise PermissionError(msg)
+
+
+def resolve_safe_path(workspace: str, user_path: str) -> Path:
+    """Resolve a user-supplied path relative to the workspace root.
+
+    Raises ``PermissionError`` if the resolved path escapes the workspace
+    boundary. Error text is sanitized so physical roots are never returned.
+    """
+    try:
+        relative = normalize_user_path(user_path)
+    except PermissionError:
+        raise
+    except ValueError as exc:
+        raise ValueError(sanitize_path_error(str(exc), physical_workspace=workspace)) from exc
+
     base = Path(workspace).resolve()
-    target = (base / user_path).resolve()
+    # Join relative segments only — never re-introduce absolute user paths.
+    target = (base / relative).resolve()
 
     try:
         if not target.is_relative_to(base):
-            raise PermissionError(
-                f"Path escape detected: {user_path} -> {target} "
-                f"is outside workspace {workspace}"
-            )
+            _raise_escape(user_path, physical_workspace=str(base))
     except AttributeError:  # Python < 3.9 fallback
         if os.path.commonpath([str(base), str(target)]) != str(base):
-            raise PermissionError(
-                f"Path escape detected: {user_path} -> {target}"
-            )
+            _raise_escape(user_path, physical_workspace=str(base))
 
     return target
 
@@ -73,5 +134,5 @@ def is_path_in_workspace(workspace: str, user_path: str) -> bool:
     try:
         resolve_safe_path(workspace, user_path)
         return True
-    except PermissionError:
+    except (PermissionError, ValueError):
         return False
