@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 5
+- **Total Sessions**: 6
 - **Last Active**: 2026-07-11
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~202 | Active |
+| `journal-1.md` | ~237 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 6 | 2026-07-11 | Finish: env setup, .env.example CN comments, session wrap-up | `8f064b1c`, `4cc14607` | `main` |
 | 5 | 2026-07-11 | Complete production-boundaries R1-R8 in parallel | `f1e20d8e` | `main` |
 | 4 | 2026-07-11 | Finish database experiment review without experiment assets | `69cb28e9`, `8c5e9e2f`, `75652426`, `02dca2c1`, `f96f031e` | `main` |
 | 3 | 2026-07-11 | Finish work: field-issues evolution + prior hardening | `accdeaea`, `8cf04be6`, `fc3396cd`, `14382d15`, `c844c9b8`, `a578a371`, `baa11839`, `77889c53`, `b6c26617`, `65a9e541`, `76b67b40`, `c2272097`, `852b3268`, `e71c4627`, `8b0c6e2e` | `main` |
