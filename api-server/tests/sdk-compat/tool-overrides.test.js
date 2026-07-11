@@ -12,7 +12,16 @@ import { createSandboxTools } from '../../sandbox-tools.js';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 /** Names passed to createAgentSession({ tools }) in routes/chat.js */
-const CHAT_TOOL_ALLOWLIST = ['read', 'bash', 'edit', 'write', 'submit_artifact'];
+const CHAT_TOOL_ALLOWLIST = [
+  'read',
+  'bash',
+  'edit',
+  'write',
+  'submit_artifact',
+  'ls',
+  'find',
+  'grep',
+];
 
 describe('createSandboxTools override contract', () => {
   it('exposes exactly the chat allowlist names', () => {
@@ -91,5 +100,37 @@ describe('createSandboxTools override contract', () => {
     const result = await write.execute('tc3', { path: 'x.txt', content: 'nope' });
     assert.equal(result.isError, true);
     assert.match(result.content[0].text, /Approval check failed|upstream down/i);
+  });
+
+  it('ls/find/grep tools defer to sandbox client (not local FS)', async () => {
+    const calls = [];
+    const client = {
+      async lsFiles(sessionId, body) {
+        calls.push({ op: 'ls', sessionId, body });
+        return { items: [], skipped: [], stats: { matched: 0 }, truncated: false };
+      },
+      async findFiles(sessionId, body) {
+        calls.push({ op: 'find', sessionId, body });
+        return { items: [], skipped: [], stats: { matched: 0 }, truncated: false };
+      },
+      async grepFiles(sessionId, body) {
+        calls.push({ op: 'grep', sessionId, body });
+        return { matches: [], skipped: [], stats: { matched: 0 }, truncated: false };
+      },
+    };
+    const tools = createSandboxTools({ client, sessionId: 's-search' });
+    const ls = tools.find((t) => t.name === 'ls');
+    const find = tools.find((t) => t.name === 'find');
+    const grep = tools.find((t) => t.name === 'grep');
+    await ls.execute('t1', { path: '.', depth: 2 });
+    await find.execute('t2', { pattern: '*.py' });
+    await grep.execute('t3', { query: 'TODO', regex: false });
+    assert.equal(calls.length, 3);
+    assert.equal(calls[0].op, 'ls');
+    assert.equal(calls[0].sessionId, 's-search');
+    assert.equal(calls[1].op, 'find');
+    assert.equal(calls[1].body.pattern, '*.py');
+    assert.equal(calls[2].op, 'grep');
+    assert.equal(calls[2].body.query, 'TODO');
   });
 });

@@ -158,6 +158,83 @@ class AttachmentUploadResponse(BaseModel):
     truncated: bool = False
 
 
+# ── Structured file search (ls / find / grep) ──────────────────────────
+
+class LsRequest(BaseModel):
+    path: str = "."
+    depth: int = Field(default=1, ge=0, le=5)
+    include_hidden: bool = False
+
+
+class FindRequest(BaseModel):
+    path: str = "."
+    pattern: str = "*"
+    type: str | None = Field(
+        default=None,
+        description="Optional filter: file | dir | symlink",
+    )
+    max_depth: int | None = Field(default=None, ge=0, le=20)
+    limit: int | None = Field(default=None, ge=1, le=500)
+
+
+class GrepRequest(BaseModel):
+    path: str = "."
+    query: str = Field(..., min_length=1)
+    glob: str | None = None
+    regex: bool = False
+    case_sensitive: bool = True
+    context: int | None = Field(default=None, ge=0, le=5)
+    limit: int | None = Field(default=None, ge=1, le=500)
+
+
+class FileSearchItem(BaseModel):
+    path: str
+    name: str
+    type: str  # file | dir | symlink
+    size: int = 0
+
+
+class FileSearchSkipped(BaseModel):
+    path: str
+    reason: str
+
+
+class FileSearchStats(BaseModel):
+    examined: int = 0
+    matched: int = 0
+    skipped: int = 0
+    bytes_scanned: int = 0
+    duration_ms: float = 0.0
+    depth_reached: int = 0
+
+
+class FileSearchResponse(BaseModel):
+    """Shared response envelope for ls / find."""
+
+    items: list[FileSearchItem] = Field(default_factory=list)
+    skipped: list[FileSearchSkipped] = Field(default_factory=list)
+    stats: FileSearchStats = Field(default_factory=FileSearchStats)
+    truncated: bool = False
+    stop_reason: str | None = None
+
+
+class GrepMatch(BaseModel):
+    path: str
+    line: int
+    column: int = 1
+    text: str
+    before: list[str] = Field(default_factory=list)
+    after: list[str] = Field(default_factory=list)
+
+
+class GrepResponse(BaseModel):
+    matches: list[GrepMatch] = Field(default_factory=list)
+    skipped: list[FileSearchSkipped] = Field(default_factory=list)
+    stats: FileSearchStats = Field(default_factory=FileSearchStats)
+    truncated: bool = False
+    stop_reason: str | None = None
+
+
 # ── Artifact ───────────────────────────────────────────────────────────
 
 class ArtifactRegister(BaseModel):

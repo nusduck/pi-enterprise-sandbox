@@ -2,7 +2,7 @@
  * Sandbox tool definitions for pi-coding-agent.
  * Each tool defers execution to a request-scoped sandbox client.
  *
- * Tools: read, write, edit, bash, submit_artifact
+ * Tools: read, write, edit, bash, submit_artifact, ls, find, grep
  *
  * Prefer createSandboxTools({ client, sessionId|getSessionId, approvalNotifier })
  * so concurrent chat turns never share session/approval state.
@@ -464,7 +464,174 @@ export function createSandboxTools(ctx = {}) {
     }),
   };
 
-  return [readTool, writeTool, editTool, bashTool, submitArtifactTool];
+  // ── Tool: ls (structured, sandbox-backed) ───────
+
+  const lsTool = {
+    name: 'ls',
+    label: 'List Directory',
+    description:
+      'List files and directories in the sandbox workspace (structured, bounded). ' +
+      'Prefer this over bash ls. Max depth 5, max 1000 items. Paths are workspace-relative.',
+    parameters: Type.Object({
+      path: Type.Optional(
+        Type.String({ description: 'Directory path relative to workspace (default: .)' }),
+      ),
+      depth: Type.Optional(
+        Type.Number({ description: 'Recursion depth 0–5 (default: 1)' }),
+      ),
+      include_hidden: Type.Optional(
+        Type.Boolean({ description: 'Include dotfiles (default: false)' }),
+      ),
+    }),
+    execute: wrapExecute('ls', async (_toolCallId, params) => {
+      try {
+        const data = await sb.lsFiles(getSessionId(), {
+          path: params.path ?? '.',
+          depth: params.depth ?? 1,
+          include_hidden: Boolean(params.include_hidden),
+        });
+        return {
+          content: [{ type: 'text', text: JSON.stringify(data, null, 2) }],
+          details: {
+            matched: data.stats?.matched,
+            truncated: data.truncated,
+            stop_reason: data.stop_reason,
+          },
+        };
+      } catch (err) {
+        return {
+          content: [{ type: 'text', text: `Error: ${err.message}` }],
+          details: { isError: true },
+        };
+      }
+    }),
+  };
+
+  // ── Tool: find (structured, sandbox-backed) ─────
+
+  const findTool = {
+    name: 'find',
+    label: 'Find Files',
+    description:
+      'Find files by glob pattern in the sandbox workspace (structured, bounded). ' +
+      'Prefer this over bash find. Default max_depth 20, max 500 items.',
+    parameters: Type.Object({
+      path: Type.Optional(
+        Type.String({ description: 'Start path relative to workspace (default: .)' }),
+      ),
+      pattern: Type.Optional(
+        Type.String({ description: 'Glob pattern (default: *)' }),
+      ),
+      type: Type.Optional(
+        Type.String({ description: 'Optional filter: file | dir | symlink' }),
+      ),
+      max_depth: Type.Optional(
+        Type.Number({ description: 'Max recursion depth 0–20 (default: 20)' }),
+      ),
+      limit: Type.Optional(
+        Type.Number({ description: 'Max results 1–500 (default: 500)' }),
+      ),
+    }),
+    execute: wrapExecute('find', async (_toolCallId, params) => {
+      try {
+        const data = await sb.findFiles(getSessionId(), {
+          path: params.path ?? '.',
+          pattern: params.pattern ?? '*',
+          type: params.type,
+          max_depth: params.max_depth,
+          limit: params.limit,
+        });
+        return {
+          content: [{ type: 'text', text: JSON.stringify(data, null, 2) }],
+          details: {
+            matched: data.stats?.matched,
+            truncated: data.truncated,
+            stop_reason: data.stop_reason,
+          },
+        };
+      } catch (err) {
+        return {
+          content: [{ type: 'text', text: `Error: ${err.message}` }],
+          details: { isError: true },
+        };
+      }
+    }),
+  };
+
+  // ── Tool: grep (structured, sandbox-backed) ─────
+
+  const grepTool = {
+    name: 'grep',
+    label: 'Search Text',
+    description:
+      'Search file contents in the sandbox workspace (structured, bounded). ' +
+      'Prefer this over bash grep. Default is literal text; set regex=true for restricted regex. ' +
+      'Skips binary/large files. Max 500 matches, 5s timeout.',
+    parameters: Type.Object({
+      path: Type.Optional(
+        Type.String({ description: 'Start path relative to workspace (default: .)' }),
+      ),
+      query: Type.String({ description: 'Search string or regex' }),
+      glob: Type.Optional(
+        Type.String({ description: 'Optional filename glob filter (e.g. *.py)' }),
+      ),
+      regex: Type.Optional(
+        Type.Boolean({ description: 'Treat query as regex (default: false)' }),
+      ),
+      case_sensitive: Type.Optional(
+        Type.Boolean({ description: 'Case-sensitive match (default: true)' }),
+      ),
+      context: Type.Optional(
+        Type.Number({ description: 'Context lines each side 0–5 (default: 0)' }),
+      ),
+      limit: Type.Optional(
+        Type.Number({ description: 'Max matches 1–500 (default: 500)' }),
+      ),
+    }),
+    execute: wrapExecute('grep', async (_toolCallId, params) => {
+      if (!params.query || !String(params.query).trim()) {
+        return {
+          content: [{ type: 'text', text: 'Error: query is required' }],
+          details: { isError: true },
+        };
+      }
+      try {
+        const data = await sb.grepFiles(getSessionId(), {
+          path: params.path ?? '.',
+          query: params.query,
+          glob: params.glob,
+          regex: Boolean(params.regex),
+          case_sensitive: params.case_sensitive !== false,
+          context: params.context,
+          limit: params.limit,
+        });
+        return {
+          content: [{ type: 'text', text: JSON.stringify(data, null, 2) }],
+          details: {
+            matched: data.stats?.matched,
+            truncated: data.truncated,
+            stop_reason: data.stop_reason,
+          },
+        };
+      } catch (err) {
+        return {
+          content: [{ type: 'text', text: `Error: ${err.message}` }],
+          details: { isError: true },
+        };
+      }
+    }),
+  };
+
+  return [
+    readTool,
+    writeTool,
+    editTool,
+    bashTool,
+    submitArtifactTool,
+    lsTool,
+    findTool,
+    grepTool,
+  ];
 }
 
 async function readLocalSkill(path) {

@@ -521,7 +521,7 @@ export async function handleChat(body, res, req = null) {
     // IMPORTANT: `tools` is an *allowlist* — custom tools must be listed.
     const { session } = await createAgentSession({
       model: makeModel(),
-      tools: ['read', 'bash', 'edit', 'write', 'submit_artifact'],
+      tools: ['read', 'bash', 'edit', 'write', 'submit_artifact', 'ls', 'find', 'grep'],
       customTools: sandboxTools,
       cwd: AGENT_WORKSPACE,
       sessionManager: SessionManager.inMemory(),
@@ -551,7 +551,9 @@ Continue the task with that context; do not ask the user to repeat earlier detai
 
 ## File Sharing (Artifact-only delivery)
 
-Available tools: \`read\`, \`write\`, \`edit\`, \`bash\`, **\`submit_artifact\`**.
+Available tools: \`read\`, \`write\`, \`edit\`, \`bash\`, \`ls\`, \`find\`, \`grep\`, **\`submit_artifact\`**.
+
+Prefer structured \`ls\` / \`find\` / \`grep\` over shell for file discovery and text search (bounded, audited, workspace-only).
 
 \`write\` and \`edit\` only create or update **private workspace files**. They do **not** share anything with the user and do **not** create download links.
 

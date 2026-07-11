@@ -218,7 +218,10 @@ Base URL: `http://sandbox:8081`（Docker 内网）
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| `GET` | `/sessions/{id}/files?path=.` | 列出文件 |
+| `GET` | `/sessions/{id}/files?path=.` | 列出文件（浅层） |
+| `POST` | `/sessions/{id}/files/ls` | **结构化 ls**（深度/隐藏/预算） |
+| `POST` | `/sessions/{id}/files/find` | **结构化 find**（glob/类型/深度） |
+| `POST` | `/sessions/{id}/files/grep` | **结构化 grep**（字面/受限正则） |
 | `GET` | `/sessions/{id}/files/read?path=&offset=&limit=` | 读取文件 |
 | `POST` | `/sessions/{id}/files/read` | 读取文件（POST body） |
 | `POST` | `/sessions/{id}/files/write` | 写入文件 |
@@ -226,6 +229,56 @@ Base URL: `http://sandbox:8081`（Docker 内网）
 | `GET` | `/sessions/{id}/files/download?path=` | 下载文件 |
 | `DELETE` | `/sessions/{id}/files?path=` | 删除文件 |
 | `POST` | `/sessions/{id}/files/upload` | 上传附件 (multipart，隔离路径) |
+
+#### Structured search (`ls` / `find` / `grep`)
+
+Agent 工具 `ls` / `find` / `grep` 覆盖 SDK 本地同名工具，全部转发到下列 Sandbox 端点。仅访问当前 session workspace；不跟随逃逸 symlink；不返回物理根路径。调用方只能收紧限制。
+
+| 工具 | 默认 | 硬上限 |
+|------|------|--------|
+| `ls` | `path=.`, `depth=1`, `include_hidden=false` | 深度 5，最多 1000 项 |
+| `find` | `path=.`, `pattern=*`, `max_depth=20`, `limit=500` | 深度 20，最多 500 项 |
+| `grep` | `path=.`, `regex=false`, `case_sensitive=true` | 500 matches、context 每侧 5、单文件 5MB、总扫描 100MB、超时 5s |
+
+统一响应 envelope（`ls`/`find` 用 `items`，`grep` 用 `matches`）：
+
+```json
+{
+  "items": [{ "path": "src/a.py", "name": "a.py", "type": "file", "size": 12 }],
+  "skipped": [{ "path": "bin.dat", "reason": "binary" }],
+  "stats": {
+    "examined": 10,
+    "matched": 1,
+    "skipped": 1,
+    "bytes_scanned": 0,
+    "duration_ms": 1.2,
+    "depth_reached": 2
+  },
+  "truncated": false,
+  "stop_reason": null
+}
+```
+
+```json
+// POST /sessions/{id}/files/ls
+{ "path": ".", "depth": 1, "include_hidden": false }
+
+// POST /sessions/{id}/files/find
+{ "path": ".", "pattern": "*.py", "type": "file", "max_depth": 20, "limit": 500 }
+
+// POST /sessions/{id}/files/grep
+{
+  "path": ".",
+  "query": "TODO",
+  "glob": "*.py",
+  "regex": false,
+  "case_sensitive": true,
+  "context": 1,
+  "limit": 100
+}
+```
+
+`stop_reason` 常见值：`item_limit` / `match_limit` / `timeout` / `scan_budget` / `not_found`。路径逃逸 → **403**；非法参数/不安全正则 → **400**。
 
 #### Attachment upload (`POST /sessions/{id}/files/upload`)
 

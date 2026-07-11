@@ -1,9 +1,9 @@
 {
   "id": "structured-file-search-tools",
   "name": "structured-file-search-tools",
-  "title": "结构化 ls find grep 工具",
-  "description": "在 Sandbox 提供受限、结构化的 ls/find/grep 并覆盖 SDK 内置本地工具。",
-  "status": "planning",
+  "title": "\u7ed3\u6784\u5316 ls find grep \u5de5\u5177",
+  "description": "\u5728 Sandbox \u63d0\u4f9b\u53d7\u9650\u3001\u7ed3\u6784\u5316\u7684 ls/find/grep \u5e76\u8986\u76d6 SDK \u5185\u7f6e\u672c\u5730\u5de5\u5177\u3002",
+  "status": "completed",
   "dev_type": null,
   "scope": null,
   "package": null,
@@ -11,7 +11,7 @@
   "creator": "nusduck",
   "assignee": "nusduck",
   "createdAt": "2026-07-11",
-  "completedAt": null,
+  "completedAt": "2026-07-11",
   "branch": null,
   "base_branch": "main",
   "worktree_path": null,
@@ -21,6 +21,6 @@
   "children": [],
   "parent": "07-11-field-issues-evolution-planning",
   "relatedFiles": [],
-  "notes": "",
+  "notes": "Sandbox ls/find/grep + agent tools; 327 pytest, 85 node tests.",
   "meta": {}
 }

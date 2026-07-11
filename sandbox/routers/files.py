@@ -1,4 +1,4 @@
-"""File API router — read, write, list, preview, download, attachment upload."""
+"""File API router — read, write, list, preview, download, attachment upload, search."""
 
 from __future__ import annotations
 
@@ -14,16 +14,23 @@ from sandbox.models import (
     FileListResponse,
     FileReadRequest,
     FileResponse,
+    FileSearchResponse,
     FileWriteRequest,
+    FindRequest,
+    GrepRequest,
+    GrepResponse,
+    LsRequest,
 )
-from sandbox.paths import get_session_physical_workspace
+from sandbox.paths import get_session_physical_workspace, sanitize_path_error
 from sandbox.security.ownership import assert_session_owner, resolve_actor
 from sandbox.services.attachment_manager import (
     AttachmentError,
     attachment_manager,
     new_attachment_id,
 )
+from sandbox.services.audit_logger import audit_logger
 from sandbox.services.file_manager import file_manager
+from sandbox.services.file_search import file_search_service
 from sandbox.services.session_manager import session_manager
 
 router = APIRouter(prefix="/sessions/{session_id}/files", tags=["files"])
@@ -61,6 +68,116 @@ def list_files(session_id: str, request: Request, path: str = "."):
     ws = _get_workspace(session_id, request)
     files = file_manager.list_files(ws, path)
     return FileListResponse(files=files, total=len(files))
+
+
+# ── Structured search tools (ls / find / grep) ─────────────────────────
+
+def _search_http_error(exc: Exception, workspace: str) -> HTTPException:
+    msg = sanitize_path_error(str(exc), physical_workspace=workspace)
+    if isinstance(exc, PermissionError):
+        return HTTPException(status_code=403, detail=msg)
+    if isinstance(exc, ValueError):
+        return HTTPException(status_code=400, detail=msg)
+    return HTTPException(status_code=400, detail=msg)
+
+
+@router.post("/ls", response_model=FileSearchResponse)
+def ls_files(session_id: str, body: LsRequest, request: Request):
+    """Bounded directory listing (depth ≤ 5, ≤ 1000 items)."""
+    ws = _get_workspace(session_id, request)
+    try:
+        result = file_search_service.ls(
+            ws,
+            path=body.path,
+            depth=body.depth,
+            include_hidden=body.include_hidden,
+        )
+    except (PermissionError, ValueError) as exc:
+        raise _search_http_error(exc, ws) from exc
+    audit_logger.log_tool_call(
+        session_id=session_id,
+        tool_name="ls",
+        caller_id="api",
+        allowed=True,
+        risk_level="low",
+        reason="structured ls",
+        metadata={
+            "path": body.path,
+            "depth": body.depth,
+            "matched": result.stats.matched,
+            "truncated": result.truncated,
+            "stop_reason": result.stop_reason,
+        },
+    )
+    return result
+
+
+@router.post("/find", response_model=FileSearchResponse)
+def find_files(session_id: str, body: FindRequest, request: Request):
+    """Glob file discovery (default depth 20, ≤ 500 items)."""
+    ws = _get_workspace(session_id, request)
+    try:
+        result = file_search_service.find(
+            ws,
+            path=body.path,
+            pattern=body.pattern,
+            type=body.type,
+            max_depth=body.max_depth,
+            limit=body.limit,
+        )
+    except (PermissionError, ValueError) as exc:
+        raise _search_http_error(exc, ws) from exc
+    audit_logger.log_tool_call(
+        session_id=session_id,
+        tool_name="find",
+        caller_id="api",
+        allowed=True,
+        risk_level="low",
+        reason="structured find",
+        metadata={
+            "path": body.path,
+            "pattern": body.pattern,
+            "matched": result.stats.matched,
+            "truncated": result.truncated,
+            "stop_reason": result.stop_reason,
+        },
+    )
+    return result
+
+
+@router.post("/grep", response_model=GrepResponse)
+def grep_files(session_id: str, body: GrepRequest, request: Request):
+    """Text search with budgets (≤ 500 matches, 5s, 100MB scan)."""
+    ws = _get_workspace(session_id, request)
+    try:
+        result = file_search_service.grep(
+            ws,
+            path=body.path,
+            query=body.query,
+            glob=body.glob,
+            regex=body.regex,
+            case_sensitive=body.case_sensitive,
+            context=body.context,
+            limit=body.limit,
+        )
+    except (PermissionError, ValueError) as exc:
+        raise _search_http_error(exc, ws) from exc
+    audit_logger.log_tool_call(
+        session_id=session_id,
+        tool_name="grep",
+        caller_id="api",
+        allowed=True,
+        risk_level="low",
+        reason="structured grep",
+        metadata={
+            "path": body.path,
+            "regex": body.regex,
+            "matched": result.stats.matched,
+            "truncated": result.truncated,
+            "stop_reason": result.stop_reason,
+        },
+    )
+    return result
 
 
 @router.post("/read", response_model=FileResponse)

@@ -323,6 +323,53 @@ export function createSandboxClient({ traceId = null, auth = null } = {}) {
       return resp.json();
     },
 
+    /** Structured ls — POST /sessions/{id}/files/ls */
+    async lsFiles(sessionId, body = {}) {
+      const resp = await sbFetch(`/sessions/${sessionId}/files/ls`, {
+        method: 'POST',
+        body: JSON.stringify({
+          path: body.path ?? '.',
+          depth: body.depth ?? 1,
+          include_hidden: Boolean(body.include_hidden),
+        }),
+      });
+      return resp.json();
+    },
+
+    /** Structured find — POST /sessions/{id}/files/find */
+    async findFiles(sessionId, body = {}) {
+      const payload = {
+        path: body.path ?? '.',
+        pattern: body.pattern ?? '*',
+      };
+      if (body.type != null) payload.type = body.type;
+      if (body.max_depth != null) payload.max_depth = body.max_depth;
+      if (body.limit != null) payload.limit = body.limit;
+      const resp = await sbFetch(`/sessions/${sessionId}/files/find`, {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      });
+      return resp.json();
+    },
+
+    /** Structured grep — POST /sessions/{id}/files/grep */
+    async grepFiles(sessionId, body = {}) {
+      const payload = {
+        path: body.path ?? '.',
+        query: body.query,
+        regex: Boolean(body.regex),
+        case_sensitive: body.case_sensitive !== false,
+      };
+      if (body.glob != null) payload.glob = body.glob;
+      if (body.context != null) payload.context = body.context;
+      if (body.limit != null) payload.limit = body.limit;
+      const resp = await sbFetch(`/sessions/${sessionId}/files/grep`, {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      });
+      return resp.json();
+    },
+
     async downloadFileStream(sessionId, path) {
       return sbFetch(`/sessions/${sessionId}/files/download?path=${encodeURIComponent(path)}`);
     },
@@ -514,6 +561,18 @@ export async function writeFile(sessionId, path, content) {
 
 export async function listFiles(sessionId, dir = '.') {
   return createSandboxClient().listFiles(sessionId, dir);
+}
+
+export async function lsFiles(sessionId, body = {}) {
+  return createSandboxClient().lsFiles(sessionId, body);
+}
+
+export async function findFiles(sessionId, body = {}) {
+  return createSandboxClient().findFiles(sessionId, body);
+}
+
+export async function grepFiles(sessionId, body = {}) {
+  return createSandboxClient().grepFiles(sessionId, body);
 }
 
 export async function downloadFileStream(sessionId, path) {
