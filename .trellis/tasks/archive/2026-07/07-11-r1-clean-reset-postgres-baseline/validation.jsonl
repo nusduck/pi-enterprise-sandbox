@@ -1,0 +1,2 @@
+{"command": ".venv/bin/pytest tests/test_database_baseline.py tests/test_development_reset.py -q", "commit": "07bcf290", "exit_code": 0, "result": "baseline+reset tests passed", "recorded_at": "2026-07-11T14:54:49+00:00"}
+{"command": "docker compose config -q", "commit": "07bcf290", "exit_code": 0, "result": "compose config valid", "recorded_at": "2026-07-11T14:54:49+00:00"}
