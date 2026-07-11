@@ -1,8 +1,8 @@
 {
   "id": "pi-sdk-adoption-adr",
   "name": "pi-sdk-adoption-adr",
-  "title": "pi-coding-agent \u4f7f\u7528\u4e0e\u5347\u7ea7 ADR",
-  "description": "\u786e\u8ba4\u76f4\u63a5\u4f7f\u7528\u5b98\u65b9 SDK\u3001\u7cbe\u786e\u7248\u672c\u3001\u517c\u5bb9\u6d4b\u8bd5\u4e0e\u5347\u7ea7\u7b56\u7565\u3002",
+  "title": "pi-coding-agent 使用与升级 ADR",
+  "description": "确认直接使用官方 SDK、精确版本、兼容测试与升级策略。",
   "status": "completed",
   "dev_type": null,
   "scope": null,
