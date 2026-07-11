@@ -13,6 +13,67 @@ import {
   cancelAgentRun,
 } from '../services/agent-client.js';
 
+const AGENT_WORKSPACE = '/home/sandbox/workspace';
+
+/**
+ * Resolve a conversation and its sandbox session, reusing a running session
+ * when possible. Kept here for the draft-upload session route compatibility.
+ *
+ * @param {ReturnType<import('../services/sandbox-client.js').createSandboxClient>} client
+ * @param {string | null | undefined} conversationId
+ */
+export async function resolveConversationAndSession(client, conversationId) {
+  let activeConversationId = conversationId || null;
+  let sandboxSessionId = null;
+  let reusedSession = false;
+
+  if (activeConversationId) {
+    try {
+      const conversation = await client.getConversation(activeConversationId);
+      if (conversation.sandbox_session_id) {
+        try {
+          const existing = await client.getSession(conversation.sandbox_session_id);
+          if (existing?.status === 'RUNNING' && existing.session_id) {
+            sandboxSessionId = existing.session_id;
+            reusedSession = true;
+          }
+        } catch {
+          // The previous session is missing or expired; create a replacement.
+        }
+      }
+    } catch {
+      activeConversationId = null;
+    }
+  }
+
+  if (!activeConversationId) {
+    const conversation = await client.createConversation();
+    activeConversationId = conversation.id;
+  }
+
+  if (!sandboxSessionId) {
+    const session = await client.createSession('pi-coding-agent', {
+      conversation_id: activeConversationId,
+      enterprise_session_id: activeConversationId,
+    });
+    sandboxSessionId = session.session_id;
+    try {
+      await client.updateConversation(activeConversationId, {
+        sandbox_session_id: sandboxSessionId,
+      });
+    } catch (err) {
+      console.warn('[bff-chat] failed to bind sandbox session:', err.message);
+    }
+  }
+
+  return {
+    activeConversationId,
+    targetWorkspace: AGENT_WORKSPACE,
+    sandboxSessionId,
+    reusedSession,
+  };
+}
+
 /**
  * @param {object} body
  * @param {import('node:http').ServerResponse} res
