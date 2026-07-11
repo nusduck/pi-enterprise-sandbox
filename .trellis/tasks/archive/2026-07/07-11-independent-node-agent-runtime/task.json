@@ -1,8 +1,8 @@
 {
   "id": "independent-node-agent-runtime",
   "name": "independent-node-agent-runtime",
-  "title": "\u72ec\u7acb Node Agent Runtime",
-  "description": "\u62c6\u51fa\u72ec\u7acb Node Agent \u670d\u52a1\u5e76\u79fb\u9664\u672a\u542f\u7528 Python Runtime\u3002",
+  "title": "独立 Node Agent Runtime",
+  "description": "拆出独立 Node Agent 服务并移除未启用 Python Runtime。",
   "status": "completed",
   "dev_type": null,
   "scope": null,
