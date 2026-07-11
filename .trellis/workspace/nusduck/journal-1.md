@@ -71,3 +71,50 @@ Completed parent field-issues-evolution: ownership, SDK ADR, attachments, logica
 ### Next Steps
 
 - None - task complete
+
+
+## Session 3: Finish work: field-issues evolution + prior hardening
+
+**Date**: 2026-07-11
+**Task**: Finish work: field-issues evolution + prior hardening
+**Branch**: `main`
+
+### Summary
+
+Session wrap-up. All Trellis active tasks archived (0 remaining). Two iterations delivered: fullstack stability hardening; field-issues evolution (ownership, SDK ADR, attachments, paths, network, extension security, session persistence MVP, search tools, independent agent service, skill management). Working tree clean except .DS_Store. main ahead of origin; not pushed.
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `accdeaea` | (see git log) |
+| `8cf04be6` | (see git log) |
+| `fc3396cd` | (see git log) |
+| `14382d15` | (see git log) |
+| `c844c9b8` | (see git log) |
+| `a578a371` | (see git log) |
+| `baa11839` | (see git log) |
+| `77889c53` | (see git log) |
+| `b6c26617` | (see git log) |
+| `65a9e541` | (see git log) |
+| `76b67b40` | (see git log) |
+| `c2272097` | (see git log) |
+| `852b3268` | (see git log) |
+| `e71c4627` | (see git log) |
+| `8b0c6e2e` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
