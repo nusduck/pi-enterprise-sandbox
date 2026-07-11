@@ -1,8 +1,8 @@
 {
   "id": "sdk-extension-security",
   "name": "sdk-extension-security",
-  "title": "SDK Extension \u5b89\u5168\u6cbb\u7406",
-  "description": "\u7edf\u4e00\u5de5\u5177\u524d\u540e\u7f6e\u7b56\u7565\u3001\u5ba1\u6279\u3001\u5ba1\u8ba1\u548c Sandbox \u53cc\u91cd\u5f3a\u5236\u3002",
+  "title": "SDK Extension 安全治理",
+  "description": "统一工具前后置策略、审批、审计和 Sandbox 双重强制。",
   "status": "completed",
   "dev_type": null,
   "scope": null,
