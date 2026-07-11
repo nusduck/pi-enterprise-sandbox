@@ -163,3 +163,40 @@ Removed all temporary database-analysis experiment assets at user request; retai
 ### Next Steps
 
 - None - task complete
+
+
+## Session 5: Complete production-boundaries R1-R8 in parallel
+
+**Date**: 2026-07-11
+**Task**: Complete production-boundaries R1-R8 in parallel
+**Branch**: `main`
+
+### Summary
+
+Parallel-implemented remaining production boundary children R1-R8 (R4 already done): empty-DB baseline/reset, relative workspace_id, atomic agent events with Postgres 100-way, retention+legal hold+trace auth, env production fail-fast catalog, Node 22 CI + cross-service fake-LLM smoke, zero-skill docs SSOT. Full suite green; all 8 tasks archived via completion gates.
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `f1e20d8e` | (see git log) |
+
+### Testing
+
+- `.venv/bin/pytest tests/ -q --tb=line` — exit 0; 382 pytest + 4 skipped; full python regression (commit `07bcf290`, 2026-07-11T14:54:49+00:00)
+- `node --test api-server/tests/*.test.js` — exit 0; BFF 34 passed (commit `07bcf290`, 2026-07-11T14:54:49+00:00)
+- `node --test agent/tests/*.test.js agent/tests/sdk-compat/*.test.js` — exit 0; Agent 127 passed (commit `07bcf290`, 2026-07-11T14:54:49+00:00)
+- `node scripts/smoke-cross-service.mjs` — exit 0; four-service smoke without real LLM key (commit `07bcf290`, 2026-07-11T14:54:49+00:00)
+- `docker compose config -q` — exit 0; compose config valid (commit `07bcf290`, 2026-07-11T14:54:49+00:00)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
