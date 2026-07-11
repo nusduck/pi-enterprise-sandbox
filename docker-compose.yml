@@ -65,7 +65,9 @@ services:
       - ${SANDBOX_WORKSPACES_MOUNT:-./workspaces:/var/sandbox/workspaces}
       - ${SANDBOX_DATA_VOLUME:-sandbox_data}:/sandbox/data
     environment:
-      SANDBOX_HOST: 0.0.0.0
+      # Listen address only — does NOT authorize clients. See ALLOWED_CLIENT_CIDRS.
+      SANDBOX_BIND_HOST: ${SANDBOX_BIND_HOST:-0.0.0.0}
+      SANDBOX_HOST: ${SANDBOX_BIND_HOST:-0.0.0.0}
       SANDBOX_PORT: 8081
       SANDBOX_MCP_HOST: 0.0.0.0
       SANDBOX_MCP_PORT: 8091
@@ -87,7 +89,13 @@ services:
       SANDBOX_IPTABLES_DEFAULT_POLICY: ${SANDBOX_IPTABLES_DEFAULT_POLICY:-DROP}
       SANDBOX_ALLOWED_TCP_PORTS: ${SANDBOX_ALLOWED_TCP_PORTS:-}
       SANDBOX_ALLOWED_UDP_PORTS: ${SANDBOX_ALLOWED_UDP_PORTS:-}
+      # Outbound iptables destinations (egress) — NOT inbound client allowlist.
       SANDBOX_ALLOWED_CIDRS: ${SANDBOX_ALLOWED_CIDRS:-}
+      # Inbound client allowlist (HTTP + MCP). Default: loopback + Docker private ranges.
+      # Empty string denies all clients. External MCP peers need explicit CIDRs + token.
+      SANDBOX_ALLOWED_CLIENT_CIDRS: ${SANDBOX_ALLOWED_CLIENT_CIDRS:-127.0.0.1/32,::1/128,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16}
+      # Trusted reverse proxies only (default empty → ignore X-Forwarded-For).
+      SANDBOX_TRUSTED_PROXY_CIDRS: ${SANDBOX_TRUSTED_PROXY_CIDRS:-}
       SANDBOX_UVICORN_WORKERS: ${SANDBOX_UVICORN_WORKERS:-1}
       SANDBOX_UVICORN_PROXY_HEADERS: true
       SANDBOX_API_TOKEN: ${SANDBOX_API_TOKEN:-}

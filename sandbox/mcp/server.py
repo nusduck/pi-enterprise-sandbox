@@ -337,8 +337,36 @@ class MCPServerAdapter:
     def available_tools(self) -> list[str]:
         return list(self.TOOL_MAP.keys())
 
-    async def call_tool(self, tool_name: str, caller_id: str, auth_token: str | None = None, **kwargs) -> dict[str, Any]:
-        """Route an MCP tool call with rate limiting and auth check."""
+    async def call_tool(
+        self,
+        tool_name: str,
+        caller_id: str,
+        auth_token: str | None = None,
+        client_ip: str | None = None,
+        **kwargs,
+    ) -> dict[str, Any]:
+        """Route an MCP tool call with rate limiting and auth check.
+
+        ``client_ip`` is optional defense-in-depth: HTTP/MCP entry points already
+        enforce ``NetworkPolicy`` in middleware. When provided (e.g. standalone
+        adapters), the same allowlist is applied before tool dispatch.
+        """
+        if client_ip is not None:
+            from sandbox.security.network_policy import get_network_policy
+
+            allowed, _effective, reason = get_network_policy().evaluate(client_ip)
+            if not allowed:
+                try:
+                    from sandbox.routers.health import sandbox_client_denied_total
+
+                    sandbox_client_denied_total.labels(reason=reason).inc()
+                except Exception:  # pragma: no cover
+                    pass
+                return {
+                    "error": "Client address not allowlisted",
+                    "status": "denied",
+                }
+
         # Check MCP auth tokens if configured
         if settings.mcp_auth_tokens:
             if not auth_token or auth_token not in settings.mcp_auth_tokens:

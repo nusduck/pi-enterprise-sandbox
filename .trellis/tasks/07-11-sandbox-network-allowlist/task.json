@@ -1,9 +1,9 @@
 {
   "id": "sandbox-network-allowlist",
   "name": "sandbox-network-allowlist",
-  "title": "Sandbox CIDR 与代理信任",
-  "description": "实现 bind、客户端 CIDR allowlist 与显式 trusted proxy 语义。",
-  "status": "planning",
+  "title": "Sandbox CIDR \u4e0e\u4ee3\u7406\u4fe1\u4efb",
+  "description": "\u5b9e\u73b0 bind\u3001\u5ba2\u6237\u7aef CIDR allowlist \u4e0e\u663e\u5f0f trusted proxy \u8bed\u4e49\u3002",
+  "status": "completed",
   "dev_type": null,
   "scope": null,
   "package": null,
@@ -11,7 +11,7 @@
   "creator": "nusduck",
   "assignee": "nusduck",
   "createdAt": "2026-07-11",
-  "completedAt": null,
+  "completedAt": "2026-07-11",
   "branch": null,
   "base_branch": "main",
   "worktree_path": null,
@@ -21,6 +21,6 @@
   "children": [],
   "parent": "07-11-field-issues-evolution-planning",
   "relatedFiles": [],
-  "notes": "",
+  "notes": "CIDR allowlist + trusted proxy; 264 pytest.",
   "meta": {}
 }

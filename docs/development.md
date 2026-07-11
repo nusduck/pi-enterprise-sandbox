@@ -58,7 +58,9 @@ docker compose config -q
 
 ```bash
 # Terminal 1: Sandbox
-uv run uvicorn sandbox.main:app --port 8081 --reload
+# Inbound allowlist defaults to loopback + private ranges; see SANDBOX_ALLOWED_CLIENT_CIDRS.
+# SANDBOX_BIND_HOST only sets the listen address (0.0.0.0 ≠ allow any client).
+uv run uvicorn sandbox.main:app --host 127.0.0.1 --port 8081 --reload
 
 # Terminal 2: API Server（需要 Sandbox）
 # 默认 AGENT_RUNTIME=node；Python 编排试运行：AGENT_RUNTIME=python

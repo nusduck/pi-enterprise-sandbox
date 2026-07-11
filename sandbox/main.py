@@ -25,6 +25,7 @@ from sandbox.routers import (
     traces,
 )
 from sandbox.routers import auth_router, agent_router
+from sandbox.security.network_policy import get_network_policy, init_network_policy
 from sandbox.services.session_manager import session_manager
 from sandbox.trace import reset_trace_id, set_trace_id
 
@@ -57,6 +58,15 @@ async def lifespan(app: FastAPI):
     _configure_logging()
     logger = logging.getLogger("sandbox")
     logger.info("Sandbox Service v%s starting", __version__)
+
+    # Validate and install inbound network policy (illegal CIDR fails startup).
+    policy = init_network_policy(settings)
+    logger.info(
+        "Bind host: %s | Client allowlist: %d CIDR(s) | Trusted proxies: %d CIDR(s)",
+        policy.bind_host,
+        len(policy.allowed_networks),
+        len(policy.trusted_proxy_networks),
+    )
 
     # Ensure physical storage roots exist
     settings.workspaces_path.mkdir(parents=True, exist_ok=True)
@@ -108,6 +118,8 @@ app = FastAPI(
 )
 
 # ── Middleware ──────────────────────────────────────────────────────────
+# Starlette runs middleware in reverse registration order on the way in.
+# Register allowlist last so it runs first — before auth and business routes.
 
 app.add_middleware(
     CORSMiddleware,
@@ -219,6 +231,51 @@ async def request_logging(request: Request, call_next):
         duration_ms,
     )
     return response
+
+
+@app.middleware("http")
+async def client_allowlist_middleware(request: Request, call_next):
+    """Reject clients outside SANDBOX_ALLOWED_CLIENT_CIDRS before auth/routes.
+
+    Effective client IP:
+    - Default: TCP peer only (``X-Forwarded-For`` ignored).
+    - If peer ∈ SANDBOX_TRUSTED_PROXY_CIDRS: parse XFF right-to-left,
+      stripping trusted hops.
+
+    Applied to HTTP and MCP (``/mcp/*``) alike. All routes including
+    ``/health`` and ``/ready`` are gated for consistency; loopback is in the
+    default allowlist so container healthchecks keep working. Add the probe
+    network to the allowlist if orchestrator probes arrive from elsewhere.
+    """
+    policy = get_network_policy()
+    peer = request.client.host if request.client else None
+    xff = request.headers.get("x-forwarded-for")
+    allowed, effective, reason = policy.evaluate(peer, xff)
+
+    # Expose resolved IP to downstream handlers without re-parsing headers.
+    request.state.client_ip = str(effective) if effective is not None else None
+    request.state.client_ip_reason = reason
+
+    if allowed:
+        return await call_next(request)
+
+    try:
+        from sandbox.routers.health import sandbox_client_denied_total
+
+        sandbox_client_denied_total.labels(reason=reason).inc()
+    except Exception:  # pragma: no cover — metrics must not break deny path
+        pass
+
+    logging.getLogger("sandbox.security.network_policy").warning(
+        "Client denied method=%s path=%s reason=%s",
+        request.method,
+        request.url.path,
+        reason,
+    )
+    return JSONResponse(
+        status_code=403,
+        content={"detail": "Client address not allowlisted"},
+    )
 
 
 # ── Error handlers ─────────────────────────────────────────────────────

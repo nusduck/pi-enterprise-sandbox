@@ -23,8 +23,14 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
 
 from sandbox.config import settings
 from sandbox.mcp.server import mcp_server as adapter
+from sandbox.security.network_policy import init_network_policy
 
 logger = logging.getLogger("sandbox.mcp.fastmcp")
+
+# Reuse the same inbound CIDR policy as the HTTP app (listen ≠ allow-all).
+# Prefer exposing MCP via sandbox.main ``/mcp/*`` so ASGI middleware enforces
+# peer/XFF allowlisting; standalone SSE still validates settings at import.
+init_network_policy(settings)
 
 # ── Create MCP server ─────────────────────────────────────────────
 

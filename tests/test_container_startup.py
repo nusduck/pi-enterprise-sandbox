@@ -26,6 +26,7 @@ def test_entrypoint_shell_syntax_is_valid() -> None:
 def test_entrypoint_exposes_startup_network_and_uvicorn_parameters() -> None:
     text = ENTRYPOINT.read_text()
     expected_vars = [
+        "SANDBOX_BIND_HOST",
         "SANDBOX_HOST",
         "SANDBOX_PORT",
         "SANDBOX_APP_MODULE",
@@ -53,6 +54,9 @@ def test_compose_parameterizes_runtime_defaults() -> None:
         "SANDBOX_DATABASE_URL: ${SANDBOX_DATABASE_URL:-sqlite:////sandbox/data/sandbox.db}",
         "SANDBOX_MAX_MEMORY_MB: ${SANDBOX_MAX_MEMORY_MB:-512}",
         "SANDBOX_IPTABLES_ENABLED: ${SANDBOX_IPTABLES_ENABLED:-true}",
+        "SANDBOX_ALLOWED_CLIENT_CIDRS:",
+        "SANDBOX_TRUSTED_PROXY_CIDRS:",
+        "SANDBOX_BIND_HOST:",
         "${FRONTEND_PORT:-3000}:80",
     ]
     for fragment in expected_fragments:

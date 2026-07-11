@@ -49,10 +49,13 @@ async def call_tool(req: ToolCallRequest, request: Request):
     # caller_id is an MCP-level param, don't pass it in kwargs
     if "caller_id" in req.kwargs:
         del req.kwargs["caller_id"]
+    # Middleware already enforced allowlist; pass resolved IP for shared policy reuse.
+    client_ip = getattr(request.state, "client_ip", None)
     result = await mcp_server.call_tool(
         tool_name=req.tool_name,
         caller_id=req.caller_id,
         auth_token=auth_token,
+        client_ip=client_ip,
         **req.kwargs,
     )
     if result.get("status") == "denied" and "rate_limited" in result.get("error", ""):

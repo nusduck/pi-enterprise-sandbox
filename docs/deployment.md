@@ -75,6 +75,35 @@ curl -sf https://localhost/nginx/status
 | `SANDBOX_API_TOKEN` | — | Sandbox API 令牌。生成: `openssl rand -hex 32`。所有 API 调用需带 `X-API-Key` header |
 | `SANDBOX_MCP_AUTH_TOKENS` | — | MCP 端点认证令牌，逗号分隔 |
 
+### 入站网络（监听 vs 来源白名单）
+
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `SANDBOX_BIND_HOST` | `0.0.0.0` | **仅控制监听接口**。`0.0.0.0` 不等于允许任意来源。旧名 `SANDBOX_HOST` 仍可用 |
+| `SANDBOX_ALLOWED_CLIENT_CIDRS` | loopback + Docker 私网 | 入站 HTTP/MCP 来源 CIDR 白名单。空列表 = 拒绝全部（失败关闭）。非法 CIDR 导致启动失败 |
+| `SANDBOX_TRUSTED_PROXY_CIDRS` | _(空)_ | 可信反向代理。默认忽略 `X-Forwarded-For`；仅当 TCP peer 属于此列表时，才从右向左剥离可信代理解析真实客户端 |
+
+**默认 allowlist（compose / 本地容器）:**
+`127.0.0.1/32,::1/128,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16`
+
+**本机非 Docker 更严示例（仅 loopback）:**
+```env
+SANDBOX_BIND_HOST=127.0.0.1
+SANDBOX_ALLOWED_CLIENT_CIDRS=127.0.0.1/32,::1/128
+SANDBOX_TRUSTED_PROXY_CIDRS=
+```
+
+**反向代理示例（nginx 在 Docker 网桥，业务来源为办公网）:**
+```env
+SANDBOX_BIND_HOST=0.0.0.0
+SANDBOX_ALLOWED_CLIENT_CIDRS=10.0.0.0/8,172.16.0.0/12
+SANDBOX_TRUSTED_PROXY_CIDRS=172.16.0.0/12
+```
+
+**外部 MCP 直连:** 必须把对端 CIDR 写入 `SANDBOX_ALLOWED_CLIENT_CIDRS`，并配置 `SANDBOX_API_TOKEN` / `SANDBOX_MCP_AUTH_TOKENS`。BFF 不直接执行 Sandbox 工具。
+
+注意：`SANDBOX_ALLOWED_CIDRS` 是 **出站 iptables** 目的网段，与入站 `SANDBOX_ALLOWED_CLIENT_CIDRS` 无关。
+
 ### LLM Provider
 
 | 变量 | 默认值 | 说明 |

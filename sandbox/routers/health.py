@@ -56,6 +56,11 @@ sandbox_rate_limited_total = Counter(
     "sandbox_rate_limited_total", "Rate limited requests",
     ["caller_id"],
 )
+sandbox_client_denied_total = Counter(
+    "sandbox_client_denied_total",
+    "Inbound clients rejected by CIDR allowlist",
+    ["reason"],
+)
 
 
 def _check_runtime(name: str) -> bool:

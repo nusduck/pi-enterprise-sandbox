@@ -12,7 +12,9 @@ bool_enabled() {
     esac
 }
 
-SANDBOX_HOST="${SANDBOX_HOST:-0.0.0.0}"
+# Prefer SANDBOX_BIND_HOST (canonical); fall back to legacy SANDBOX_HOST.
+SANDBOX_BIND_HOST="${SANDBOX_BIND_HOST:-${SANDBOX_HOST:-0.0.0.0}}"
+SANDBOX_HOST="$SANDBOX_BIND_HOST"
 SANDBOX_PORT="${SANDBOX_PORT:-8081}"
 SANDBOX_APP_MODULE="${SANDBOX_APP_MODULE:-sandbox.main:app}"
 SANDBOX_RUN_AS_USER="${SANDBOX_RUN_AS_USER:-sandbox}"
@@ -84,7 +86,9 @@ apply_iptables_rules() {
 }
 
 build_uvicorn_args() {
-    local args="$(printf '%q' "$SANDBOX_APP_MODULE") --host $(printf '%q' "$SANDBOX_HOST") --port $(printf '%q' "$SANDBOX_PORT") --log-level $(printf '%q' "$SANDBOX_LOG_LEVEL")"
+    # Listen address only — inbound client allowlist is enforced in-app via
+    # SANDBOX_ALLOWED_CLIENT_CIDRS (0.0.0.0 bind ≠ allow any client).
+    local args="$(printf '%q' "$SANDBOX_APP_MODULE") --host $(printf '%q' "$SANDBOX_BIND_HOST") --port $(printf '%q' "$SANDBOX_PORT") --log-level $(printf '%q' "$SANDBOX_LOG_LEVEL")"
 
     if [ "${SANDBOX_UVICORN_WORKERS}" != "1" ]; then
         args="$args --workers $(printf '%q' "$SANDBOX_UVICORN_WORKERS")"
