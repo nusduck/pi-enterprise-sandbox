@@ -5,68 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta name="description" content="Enterprise Sandbox — AI-powered sandboxed coding environment" />
   <title>Enterprise Sandbox</title>
-  <link rel="stylesheet" href="/src/style.css" />
 </head>
 <body>
-  <div id="app" class="app-shell">
-    <!-- Left sidebar: conversations -->
-    <aside id="sidebar" class="sidebar">
-      <div class="sidebar-head">
-        <button type="button" class="btn-new-chat" id="btn-new-chat" title="New chat">＋ New chat</button>
-        <button type="button" class="btn-icon sidebar-close-btn" id="btn-sidebar-close" title="Close sidebar" aria-label="Close sidebar">✕</button>
-      </div>
-      <div class="sidebar-auth" id="auth-panel" hidden>
-        <form id="auth-form" class="auth-form" autocomplete="on">
-          <input type="text" id="auth-username" name="username" placeholder="Username" minlength="2" required />
-          <input type="password" id="auth-password" name="password" placeholder="Password" minlength="6" required />
-          <div class="auth-actions">
-            <button type="submit" class="btn-auth" id="btn-login" data-mode="login">Login</button>
-            <button type="button" class="btn-auth secondary" id="btn-register">Register</button>
-          </div>
-          <p class="auth-hint" id="auth-user-label"></p>
-        </form>
-      </div>
-      <div class="sidebar-list" id="conversation-list" role="list"></div>
-    </aside>
-    <div id="sidebar-backdrop" class="sidebar-backdrop" hidden></div>
-
-    <!-- Main column -->
-    <div class="main-col">
-      <header class="header">
-        <button type="button" class="btn-icon" id="btn-sidebar-toggle" title="Toggle conversations" aria-label="Toggle sidebar">☰</button>
-        <div class="logo">◆</div>
-        <h1>Enterprise Sandbox</h1>
-        <div class="badge" aria-live="polite"><span class="dot" aria-hidden="true"></span><span id="status-label">Agent Ready</span></div>
-      </header>
-      <div id="flash-zone" class="flash-zone" role="status" aria-live="assertive" aria-relevant="additions text"></div>
-      <div id="messages" class="msgs" role="log" aria-live="polite" aria-relevant="additions"></div>
-
-      <!-- Deliverables panel -->
-      <div id="deliverables" class="deliverables" hidden>
-        <div class="deliverables-head">
-          <span class="deliverables-title">Deliverables</span>
-          <span class="deliverables-count" id="deliverables-count">0</span>
-        </div>
-        <div class="deliverables-list" id="deliverables-list"></div>
-      </div>
-
-      <div id="dropzone" class="dropzone">
-        <div class="dropzone-inner">
-          <div class="dz-icon">📤</div>
-          <p>Drop file to upload</p>
-          <small>Uploaded to sandbox workspace</small>
-        </div>
-      </div>
-      <div class="input-wrap">
-        <div id="attachment-drafts" class="attachment-drafts" hidden aria-live="polite"></div>
-        <div class="input-inner">
-          <button class="btn btn-upload" id="btn-upload" title="Attach files (Ctrl+U)">📎</button>
-          <textarea id="input" rows="1" placeholder="Type a message… (Ctrl+L new chat)"></textarea>
-          <button class="btn btn-send" id="btn-send" title="Send (Enter)">➤</button>
-        </div>
-      </div>
-    </div>
-  </div>
-  <script type="module" src="/src/main.js"></script>
+  <div id="root"></div>
+  <script type="module" src="/src/main.tsx"></script>
 </body>
 </html>
