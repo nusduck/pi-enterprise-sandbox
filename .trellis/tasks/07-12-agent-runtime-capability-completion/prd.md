@@ -40,3 +40,14 @@
 ## Integration Gate
 
 Parent 仅在所有 child 归档（或显式 deferred 到新 active task）且跨 child 验收通过后归档。
+
+## Infrastructure Note (2026-07-12)
+
+**Dedicated PostgreSQL container is approved for this iteration.**
+
+- Dev: `docker compose --profile postgres up -d postgres`
+- URL (host): `postgresql://sandbox:sandbox_dev_only@localhost:5432/sandbox`
+- URL (compose): `postgresql://sandbox:sandbox_dev_only@postgres:5432/sandbox`
+- SQLite remains valid for unit tests / offline CI; live multi-turn session, process, ledger, and streaming integration may use the Postgres container via `SANDBOX_DATABASE_URL` / `TEST_POSTGRES_URL`.
+- Weak `sandbox_dev_only` password is development-only; production still requires strong secrets via prod overlay.
+

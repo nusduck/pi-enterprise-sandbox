@@ -1,0 +1,3 @@
+{"id": "prd", "action": "must_read", "file": ".trellis/tasks/07-12-b5-attachment-mcp-registry/prd.md", "reason": "Check: requirements"}
+{"id": "design", "action": "must_read", "file": ".trellis/tasks/07-12-b5-attachment-mcp-registry/design.md", "reason": "Check: design"}
+{"id": "implement-plan", "action": "must_read", "file": ".trellis/tasks/07-12-b5-attachment-mcp-registry/implement.md", "reason": "Check: plan"}

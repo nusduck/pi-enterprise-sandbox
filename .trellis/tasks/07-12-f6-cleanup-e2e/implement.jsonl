@@ -1,0 +1,3 @@
+{"id": "prd", "action": "must_read", "file": ".trellis/tasks/07-12-f6-cleanup-e2e/prd.md", "reason": "Impl: requirements"}
+{"id": "design", "action": "must_read", "file": ".trellis/tasks/07-12-f6-cleanup-e2e/design.md", "reason": "Impl: design"}
+{"id": "implement-plan", "action": "must_read", "file": ".trellis/tasks/07-12-f6-cleanup-e2e/implement.md", "reason": "Impl: plan"}

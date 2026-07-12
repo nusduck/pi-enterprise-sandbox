@@ -1,4 +1,30 @@
 services:
+  # ── PostgreSQL (optional dedicated DB container) ──────────
+  # Default stack still uses SQLite. Start Postgres with:
+  #   docker compose --profile postgres up -d postgres
+  # Point Sandbox at it (host / compose network):
+  #   SANDBOX_DATABASE_URL=postgresql://sandbox:sandbox_dev_only@localhost:5432/sandbox
+  #   SANDBOX_DATABASE_URL=postgresql://sandbox:sandbox_dev_only@postgres:5432/sandbox
+  # Do not use the weak default password outside development.
+  postgres:
+    image: postgres:17-alpine
+    container_name: ${POSTGRES_CONTAINER:-pi-enterprise-postgres}
+    profiles: ["postgres"]
+    ports:
+      - "${POSTGRES_HOST_PORT:-5432}:5432"
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-sandbox}
+      POSTGRES_USER: ${POSTGRES_USER:-sandbox}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-sandbox_dev_only}
+    volumes:
+      - ${POSTGRES_DATA_VOLUME:-postgres_dev_data}:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-sandbox} -d ${POSTGRES_DB:-sandbox}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
   # ── Frontend — SPA (Nginx) ────────────────────────────────
   frontend:
     build:
@@ -177,3 +203,4 @@ services:
 
 volumes:
   sandbox_data:
+  postgres_dev_data:

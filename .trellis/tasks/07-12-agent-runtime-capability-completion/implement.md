@@ -1,19 +1,14 @@
-# Implement — Parent Integration Plan
+# Implement — Backend Parent
 
-## Checklist
+## Status 2026-07-12
 
-- [ ] Create and review all child PRDs (done in planning batch)
-- [ ] Parallel P0: start B1 + B2 + (frontend F1 independently)
-- [ ] B3 after process/bash streaming hooks exist
-- [ ] B4 after tool paths from B1/B2 stable
-- [ ] P1 children after P0 parent gate criteria green
-- [ ] Parent integration review + archive only after children done
+- [x] B1 Agent Session Persistence
+- [x] B2 Process Manager
+- [x] B3 Streaming Execution Events
+- [x] B4 Tool Ledger Completion
+- [x] B5 Attachment and MCP Registry
+- [x] B6 Runtime Interaction / Budget / Approval
+- [x] B7 Model Registry
 
-## Validation (parent)
-
-```bash
-# Aggregate after children
-node --test agent/tests/*.test.js
-uv run pytest tests/ -q --tb=short
-# Plus child-specific integration scenarios from ADR §13
-```
+Migrations: 0001…0007. Postgres container profile available.
+Pending formal trellis-check / archive / commit.
