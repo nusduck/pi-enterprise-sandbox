@@ -11,6 +11,9 @@ from fastapi.responses import FileResponse as FastAPIFileResponse
 from sandbox.config import settings
 from sandbox.models import (
     AttachmentUploadResponse,
+    FileApplyPatchRequest,
+    FileEditRequest,
+    FileEditResponse,
     FileListResponse,
     FileReadRequest,
     FileResponse,
@@ -29,6 +32,7 @@ from sandbox.services.attachment_manager import (
     new_attachment_id,
 )
 from sandbox.services.audit_logger import audit_logger
+from sandbox.services.file_edit import file_edit_service
 from sandbox.services.file_manager import file_manager
 from sandbox.services.file_search import file_search_service
 from sandbox.services.session_manager import session_manager
@@ -220,6 +224,71 @@ def write_file(session_id: str, body: FileWriteRequest, request: Request):
         raise HTTPException(status_code=403, detail=str(exc)) from exc
 
 
+@router.post("/edit", response_model=FileEditResponse)
+def edit_file(session_id: str, body: FileEditRequest, request: Request):
+    """Unique old_string replacement with unified diff + hashes (ADR §9)."""
+    ws = _get_workspace(session_id, request)
+    try:
+        result = file_edit_service.edit(
+            ws,
+            body.path,
+            body.old_string,
+            body.new_string,
+            expected_hash=body.expected_hash,
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    audit_logger.log_tool_call(
+        session_id=session_id,
+        tool_name="edit",
+        caller_id="api",
+        allowed=result.ok,
+        risk_level="medium",
+        reason=result.error or "unique edit",
+        metadata={
+            "path": body.path,
+            "ok": result.ok,
+            "match_count": result.match_count,
+            "match_lines": result.match_lines,
+            "before_hash": result.before_hash,
+            "after_hash": result.after_hash,
+            "changed_lines": result.changed_lines,
+        },
+    )
+    return result
+
+
+@router.post("/apply_patch", response_model=FileEditResponse)
+def apply_patch_file(session_id: str, body: FileApplyPatchRequest, request: Request):
+    """Apply unified diff patch with before/after hashes (ADR §9)."""
+    ws = _get_workspace(session_id, request)
+    try:
+        result = file_edit_service.apply_patch(
+            ws,
+            body.path,
+            body.patch,
+            expected_hash=body.expected_hash,
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    audit_logger.log_tool_call(
+        session_id=session_id,
+        tool_name="apply_patch",
+        caller_id="api",
+        allowed=result.ok,
+        risk_level="medium",
+        reason=result.error or "apply_patch",
+        metadata={
+            "path": body.path,
+            "ok": result.ok,
+            "before_hash": result.before_hash,
+            "after_hash": result.after_hash,
+            "changed_lines": result.changed_lines,
+        },
+    )
+    return result
+
+
 @router.get("/preview", response_model=FileResponse)
 def preview_file(session_id: str, request: Request, path: str):
     ws = _get_workspace(session_id, request)
@@ -288,6 +357,7 @@ async def upload_file(
                 name=existing.get("name") or existing.get("sanitized_name") or filename,
                 size=int(existing.get("size") or 0),
                 mime_type=existing.get("mime_type") or "application/octet-stream",
+                upload_time=existing.get("upload_time"),
                 idempotency_key=idempotency_key,
             )
 
@@ -354,6 +424,7 @@ async def upload_file(
             name=entry["name"],
             size=entry["size"],
             mime_type=entry.get("mime_type") or mime,
+            upload_time=entry.get("upload_time"),
             idempotency_key=entry.get("idempotency_key"),
         )
     except AttachmentError as exc:

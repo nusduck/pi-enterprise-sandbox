@@ -47,6 +47,10 @@ const READ_TOOLS = new Set([
   'cat',
   'head',
   'tail',
+  // Process Manager read/observe tools
+  'process_status',
+  'process_logs',
+  'process_wait',
 ]);
 
 /** Known write / side-effect tools (serial per workspace). */
@@ -55,6 +59,7 @@ const WRITE_TOOLS = new Set([
   'write_file',
   'edit',
   'edit_file',
+  'apply_patch',
   'bash',
   'command',
   'raw_bash',
@@ -67,11 +72,21 @@ const WRITE_TOOLS = new Set([
   'npm_install',
   'kill_process',
   'run_python',
+  // Process Manager control tools
+  'process_start',
+  'process_write_stdin',
+  'process_signal',
+  'process_cancel',
   // Skill management (development mode only; still serial write-class)
   'skill_install',
   'skill_edit',
   'skill_reload',
 ]);
+
+/** MCP tools are treated as write-class by default (unknown side effects). */
+function isMcpTool(toolName) {
+  return typeof toolName === 'string' && toolName.startsWith('mcp_');
+}
 
 /** Generic tools that must never write the shared skill tree. */
 const SKILL_ROOT_BLOCKED_TOOLS = new Set([
@@ -79,6 +94,7 @@ const SKILL_ROOT_BLOCKED_TOOLS = new Set([
   'write_file',
   'edit',
   'edit_file',
+  'apply_patch',
   'bash',
   'command',
   'raw_bash',
@@ -136,6 +152,8 @@ const HIGH_RISK_TOOLS = new Set([
   'pip_install',
   'npm_install',
   'kill_process',
+  // Arbitrary signals can be destructive; cancel is a managed lifecycle op (not high-risk).
+  'process_signal',
 ]);
 
 /**
@@ -147,7 +165,8 @@ export function classifyToolSideEffect(toolName) {
   const name = String(toolName || '').trim();
   if (!name) return TOOL_SIDE_EFFECT.WRITE;
   if (READ_TOOLS.has(name)) return TOOL_SIDE_EFFECT.READ;
-  if (WRITE_TOOLS.has(name)) return TOOL_SIDE_EFFECT.WRITE;
+  if (WRITE_TOOLS.has(name) || isMcpTool(name)) return TOOL_SIDE_EFFECT.WRITE;
+  // Unknown tools default to write (serial + fail-closed approval path)
   return TOOL_SIDE_EFFECT.WRITE;
 }
 
@@ -222,7 +241,14 @@ export function evaluateToolPolicy(toolName, params = {}, options = {}) {
       };
     }
 
-    if (params.command && ['bash', 'command', 'raw_bash', 'raw_shell'].includes(name)) {
+    const commandTools = [
+      'bash',
+      'command',
+      'raw_bash',
+      'raw_shell',
+      'process_start',
+    ];
+    if (params.command && commandTools.includes(name)) {
       if (isHardDenyCommand(params.command)) {
         const token = String(params.command).trim().split(/\s+/)[0] || 'command';
         return {
@@ -252,7 +278,12 @@ export function evaluateToolPolicy(toolName, params = {}, options = {}) {
       };
     }
 
-    if (params.timeout != null && Number(params.timeout) > 300) {
+    // Sync bash max 300s; managed processes may run longer (timeout is optional TTL).
+    if (
+      params.timeout != null &&
+      Number(params.timeout) > 300 &&
+      !name.startsWith('process_')
+    ) {
       return {
         ...base,
         decision: POLICY_DECISION.HARD_DENY,

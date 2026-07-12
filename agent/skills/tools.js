@@ -1,9 +1,15 @@
 /**
  * Dedicated skill management tools (development mode only).
  * skill_install, skill_edit, skill_reload
+ *
+ * When a sandbox client is provided, executions are recorded in the Tool Ledger
+ * (ADR §4.4) with the same prepare → executing → terminal lifecycle.
  */
 import { Type } from 'typebox';
+import { createHash, randomUUID } from 'node:crypto';
 import { createSkillManager, SKILLS_MODE } from './manager.js';
+
+const LEDGER_TERMINAL = new Set(['succeeded', 'failed', 'cancelled', 'unknown']);
 
 /**
  * @param {{
@@ -11,6 +17,7 @@ import { createSkillManager, SKILLS_MODE } from './manager.js';
  *   mode?: string,
  *   getAgentSession?: () => object | null,
  *   getMeta?: () => object,
+ *   client?: object | null,
  *   skillRoots?: string[],
  *   localAllowlist?: string[],
  *   auditLogPath?: string | null,
@@ -33,6 +40,130 @@ export function createSkillTools(ctx = {}) {
 
   if (!manager.isDevelopment()) {
     return [];
+  }
+
+  const sb = ctx.client || null;
+  const getMeta = typeof ctx.getMeta === 'function' ? ctx.getMeta : () => ({});
+
+  /**
+   * Ledger wrap for skill tools (best-effort; fail-open if client missing).
+   * @param {string} toolName
+   * @param {Function} executeFn
+   */
+  function withSkillLedger(toolName, executeFn) {
+    return async (toolCallId, params, ...rest) => {
+      if (!sb || typeof sb.prepareToolExecution !== 'function') {
+        return executeFn(toolCallId, params, ...rest);
+      }
+      const meta = getMeta() || {};
+      const callId =
+        toolCallId || `tc_${randomUUID().replace(/-/g, '').slice(0, 16)}`;
+      const basis = JSON.stringify({
+        tool: toolName,
+        run_id: meta.run_id || null,
+        params: params || {},
+      });
+      const idem =
+        `tc_${callId}` ||
+        `idem_${toolName}_${createHash('sha256').update(basis).digest('hex').slice(0, 24)}`;
+      let active = false;
+      try {
+        const prepared = await sb.prepareToolExecution({
+          tool_call_id: callId,
+          run_id: meta.run_id || 'run_unknown',
+          idempotency_key: idem,
+          tool_name: toolName,
+          arguments: params || {},
+          session_id: meta.session_id || null,
+          conversation_id: meta.conversation_id || null,
+          workspace_id: meta.workspace_id || meta.workspace_key || null,
+          summary: toolName,
+        });
+        active = true;
+        if (prepared && LEDGER_TERMINAL.has(prepared.status)) {
+          const cached = prepared.result_json;
+          if (cached && Array.isArray(cached.content)) {
+            return {
+              content: cached.content,
+              details: { ...(cached.details || {}), ledger_replay: true },
+              isError: Boolean(cached.isError),
+            };
+          }
+          return {
+            content: [
+              {
+                type: 'text',
+                text:
+                  prepared.result_summary ||
+                  prepared.summary ||
+                  `already ${prepared.status}`,
+              },
+            ],
+            details: { ledger_replay: true, status: prepared.status },
+            isError: prepared.status === 'failed',
+          };
+        }
+        if (prepared?.status === 'executing') {
+          return {
+            content: [
+              {
+                type: 'text',
+                text: `Tool call ${callId} already executing; refusing duplicate`,
+              },
+            ],
+            details: { isError: true, idempotent_block: true },
+            isError: true,
+          };
+        }
+      } catch {
+        active = false;
+      }
+
+      if (active && typeof sb.markToolExecuting === 'function') {
+        try {
+          await sb.markToolExecuting(callId);
+        } catch {
+          /* ignore */
+        }
+      }
+
+      let result;
+      try {
+        result = await executeFn(callId, params, ...rest);
+      } catch (err) {
+        result = {
+          content: [{ type: 'text', text: `${toolName} failed: ${err.message}` }],
+          details: { isError: true },
+          isError: true,
+        };
+      }
+
+      if (active && typeof sb.markToolTerminal === 'function') {
+        const isErr = Boolean(result?.isError);
+        const summary = Array.isArray(result?.content)
+          ? result.content
+              .filter((c) => c?.type === 'text')
+              .map((c) => c.text)
+              .join('\n')
+              .slice(0, 2000)
+          : toolName;
+        try {
+          await sb.markToolTerminal(callId, {
+            status: isErr ? 'failed' : 'succeeded',
+            summary,
+            error: isErr ? summary : null,
+            result_json: {
+              content: result?.content || [],
+              details: result?.details || {},
+              isError: isErr,
+            },
+          });
+        } catch {
+          /* ignore */
+        }
+      }
+      return result;
+    };
   }
 
   const installTool = {
@@ -66,7 +197,7 @@ export function createSkillTools(ctx = {}) {
         }),
       ),
     }),
-    execute: async (_toolCallId, params) => {
+    execute: withSkillLedger('skill_install', async (_toolCallId, params) => {
       try {
         const result = await manager.install({
           name: params.name,
@@ -98,7 +229,7 @@ export function createSkillTools(ctx = {}) {
           isError: true,
         };
       }
-    },
+    }),
   };
 
   const editTool = {
@@ -116,7 +247,7 @@ export function createSkillTools(ctx = {}) {
       }),
       content: Type.String({ description: 'Full file content to write' }),
     }),
-    execute: async (_toolCallId, params) => {
+    execute: withSkillLedger('skill_edit', async (_toolCallId, params) => {
       try {
         const result = await manager.edit({
           path: params.path,
@@ -138,7 +269,7 @@ export function createSkillTools(ctx = {}) {
           isError: true,
         };
       }
-    },
+    }),
   };
 
   const reloadTool = {
@@ -148,7 +279,7 @@ export function createSkillTools(ctx = {}) {
       'Reload the skill loader so newly installed/edited skills are visible. ' +
       'If a live session reload is unavailable, the next agent turn will pick up changes.',
     parameters: Type.Object({}),
-    execute: async () => {
+    execute: withSkillLedger('skill_reload', async () => {
       try {
         const result = await manager.reload();
         return {
@@ -162,7 +293,7 @@ export function createSkillTools(ctx = {}) {
           isError: true,
         };
       }
-    },
+    }),
   };
 
   return [installTool, editTool, reloadTool];

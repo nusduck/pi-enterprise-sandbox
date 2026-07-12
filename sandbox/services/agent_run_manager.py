@@ -49,6 +49,7 @@ class AgentRunManager:
         model_id: str | None = None,
         lease_owner: str | None = None,
         lease_seconds: int = 120,
+        budget: dict[str, Any] | None = None,
     ) -> AgentRunResponse:
         """Create a run, claim lease, and stamp conversation.last_run_id."""
         run_id = f"run_{uuid.uuid4().hex}"
@@ -69,6 +70,7 @@ class AgentRunManager:
                 "sandbox_session_id": sandbox_session_id,
                 "workspace_id": workspace_id,
                 "model_id": model_id,
+                "budget_json": budget,
                 "created_at": now.isoformat(),
                 "updated_at": now.isoformat(),
             }
@@ -235,10 +237,15 @@ class AgentRunManager:
         run_id: str,
         *,
         lease_owner: str | None = None,
+        usage: dict[str, Any] | None = None,
+        model_id: str | None = None,
     ) -> AgentRunResponse | None:
         run = self.runs.get(run_id)
         if run is None:
             return None
+        # Record actual model + usage before releasing lease (B7).
+        if usage is not None or model_id is not None:
+            self.runs.update_usage(run_id, usage=usage, model_id=model_id)
         if lease_owner:
             updated = self.runs.release_lease(
                 run_id,
@@ -249,10 +256,15 @@ class AgentRunManager:
             updated = self.runs.update_status(
                 run_id, AgentRunStatus.COMPLETED.value
             )
+        done_payload: dict[str, Any] = {"status": AgentRunStatus.COMPLETED.value}
+        if model_id is not None:
+            done_payload["model_id"] = model_id
+        if usage is not None:
+            done_payload["usage"] = usage
         self.events.append(
             run_id=run_id,
             event_type="done",
-            payload={"status": AgentRunStatus.COMPLETED.value},
+            payload=done_payload,
         )
         self.conversations.set_interrupted(
             run.conversation_id, interrupted=False, last_run_id=run_id
@@ -284,6 +296,79 @@ class AgentRunManager:
         )
         return updated
 
+    def mark_waiting_approval(
+        self,
+        run_id: str,
+        *,
+        approval_id: str | None = None,
+        pending_approval: dict[str, Any] | None = None,
+        lease_owner: str | None = None,
+    ) -> AgentRunResponse | None:
+        """Park run for recoverable approval (ADR §4.8). Releases lease."""
+        run = self.runs.get(run_id)
+        if run is None:
+            return None
+        pending = pending_approval or {}
+        if approval_id and "approval_id" not in pending:
+            pending = {**pending, "approval_id": approval_id}
+        if lease_owner:
+            self.runs.release_lease(
+                run_id,
+                lease_owner=lease_owner,
+                status=AgentRunStatus.WAITING_APPROVAL.value,
+            )
+        updated = self.runs.set_pending_approval(
+            run_id,
+            pending or None,
+            status=AgentRunStatus.WAITING_APPROVAL.value,
+        )
+        self.events.append(
+            run_id=run_id,
+            event_type="waiting_approval",
+            payload={
+                "approval_id": pending.get("approval_id") or approval_id,
+                "pending_approval": pending,
+            },
+        )
+        return updated
+
+    def mark_budget_exceeded(
+        self,
+        run_id: str,
+        *,
+        reason: str | None = None,
+        usage: dict[str, Any] | None = None,
+        lease_owner: str | None = None,
+    ) -> AgentRunResponse | None:
+        """Terminal budget_exceeded (ADR §4.9)."""
+        run = self.runs.get(run_id)
+        if run is None:
+            return None
+        if lease_owner:
+            updated = self.runs.release_lease(
+                run_id,
+                lease_owner=lease_owner,
+                status=AgentRunStatus.BUDGET_EXCEEDED.value,
+            )
+        else:
+            updated = self.runs.update_status(
+                run_id, AgentRunStatus.BUDGET_EXCEEDED.value
+            )
+        self.events.append(
+            run_id=run_id,
+            event_type="budget_exceeded",
+            payload={"reason": reason or "budget_exceeded", "usage": usage or {}},
+        )
+        return updated
+
+    def list_waiting_approval(self) -> list[AgentRunResponse]:
+        return self.runs.list_by_status(AgentRunStatus.WAITING_APPROVAL.value)
+
+    def clear_pending_approval(
+        self, run_id: str, *, status: str | None = None
+    ) -> AgentRunResponse | None:
+        return self.runs.set_pending_approval(run_id, None, status=status)
+
     # ── Tool ledger ───────────────────────────────────────────────────
 
     def prepare_tool(
@@ -292,14 +377,37 @@ class AgentRunManager:
         tool_call_id: str,
         run_id: str,
         idempotency_key: str,
+        tool_name: str | None = None,
+        arguments: dict | None = None,
+        session_id: str | None = None,
+        conversation_id: str | None = None,
+        workspace_id: str | None = None,
+        execution_id: str | None = None,
         summary: str | None = None,
     ) -> ToolExecutionResponse:
         return self.tools.prepare(
             tool_call_id=tool_call_id,
             run_id=run_id,
             idempotency_key=idempotency_key,
+            tool_name=tool_name,
+            arguments=arguments,
+            session_id=session_id,
+            conversation_id=conversation_id,
+            workspace_id=workspace_id,
+            execution_id=execution_id,
             summary=summary,
         )
+
+    def get_tool(self, tool_call_id: str) -> ToolExecutionResponse | None:
+        return self.tools.get(tool_call_id)
+
+    def get_tool_by_idempotency(
+        self, idempotency_key: str
+    ) -> ToolExecutionResponse | None:
+        return self.tools.get_by_idempotency_key(idempotency_key)
+
+    def list_tools_for_run(self, run_id: str) -> list[ToolExecutionResponse]:
+        return self.tools.list_by_run(run_id)
 
     def tool_can_auto_retry(self, tool_call_id: str) -> bool:
         return self.tools.can_auto_retry(tool_call_id)
@@ -307,14 +415,29 @@ class AgentRunManager:
     def mark_tool_executing(self, tool_call_id: str) -> ToolExecutionResponse | None:
         return self.tools.mark_executing(tool_call_id)
 
+    def mark_tool_waiting_approval(
+        self, tool_call_id: str
+    ) -> ToolExecutionResponse | None:
+        return self.tools.mark_waiting_approval(tool_call_id)
+
     def mark_tool_terminal(
         self,
         tool_call_id: str,
         status: str,
         *,
         summary: str | None = None,
+        error: str | None = None,
+        result_json: dict | list | None = None,
+        execution_id: str | None = None,
     ) -> ToolExecutionResponse | None:
-        return self.tools.mark_terminal(tool_call_id, status, summary=summary)
+        return self.tools.mark_terminal(
+            tool_call_id,
+            status,
+            summary=summary,
+            error=error,
+            result_json=result_json,
+            execution_id=execution_id,
+        )
 
     def get_run(self, run_id: str) -> AgentRunResponse | None:
         return self.runs.get(run_id)

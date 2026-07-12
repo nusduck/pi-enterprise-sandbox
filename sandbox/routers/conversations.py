@@ -31,6 +31,7 @@ def _public_conversation(conv: ConversationResponse) -> ConversationResponse:
         id=conv.id,
         title=conv.title,
         sandbox_session_id=conv.sandbox_session_id,
+        agent_session_id=conv.agent_session_id,
         workspace_id=wid,
         messages=list(conv.messages or []),
         owner_user_id=conv.owner_user_id,
@@ -160,6 +161,11 @@ def update_conversation(conversation_id: str, body: ConversationCreate, request:
             body.sandbox_session_id
             if body.sandbox_session_id is not None
             else existing.sandbox_session_id
+        ),
+        "agent_session_id": (
+            body.agent_session_id
+            if body.agent_session_id is not None
+            else existing.agent_session_id
         ),
         # Always persist the stable workspace_id key (never host absolute paths).
         "workspace_id": stored_workspace,

@@ -6,6 +6,10 @@
  *   GET  /internal/agent-runs/:id
  *   GET  /internal/agent-runs/:id/events?after=N  (SSE)
  *   POST /internal/agent-runs/:id/cancel
+ *   POST /internal/agent-runs/:id/steer
+ *   POST /internal/agent-runs/:id/follow-up
+ *   POST /internal/agent-runs/:id/resume-approval
+ *   POST /internal/approvals/:id/decide
  *   GET  /health
  *   GET  /ready
  */
@@ -22,6 +26,11 @@ import {
   subscribeEvents,
   cancelRun,
   activeRunCount,
+  steerRun,
+  followUpRun,
+  resumeRunAfterApproval,
+  decideApprovalLocal,
+  rehydrateWaitingRun,
 } from './run-manager.js';
 
 // Production fail-fast before bind.
@@ -160,6 +169,7 @@ const server = http.createServer(async (req, res) => {
         conversation_id: body.conversation_id || null,
         auth,
         trace_id: req.headers['x-trace-id'] || body.trace_id || null,
+        budget: body.budget || null,
       });
       json(res, 202, result);
       return;
@@ -251,6 +261,135 @@ const server = http.createServer(async (req, res) => {
           return;
         }
         json(res, 200, result);
+        return;
+      }
+    }
+
+    // POST /internal/agent-runs/:id/steer  (ADR §4.7 → session.steer)
+    {
+      const m = path.match(/^\/internal\/agent-runs\/([^/]+)\/steer$/);
+      if (m && req.method === 'POST') {
+        const raw = await readBody(req);
+        let body = {};
+        try {
+          body = raw ? JSON.parse(raw) : {};
+        } catch {
+          json(res, 400, { error: 'Invalid JSON body' });
+          return;
+        }
+        const result = await steerRun(decodeURIComponent(m[1]), body);
+        if (!result) {
+          json(res, 404, { error: 'run not found' });
+          return;
+        }
+        if (result.error) {
+          json(res, result.status || 400, result);
+          return;
+        }
+        json(res, 200, result);
+        return;
+      }
+    }
+
+    // POST /internal/agent-runs/:id/follow-up  (ADR §4.7 → session.followUp)
+    {
+      const m = path.match(/^\/internal\/agent-runs\/([^/]+)\/follow-up$/);
+      if (m && req.method === 'POST') {
+        const raw = await readBody(req);
+        let body = {};
+        try {
+          body = raw ? JSON.parse(raw) : {};
+        } catch {
+          json(res, 400, { error: 'Invalid JSON body' });
+          return;
+        }
+        const result = await followUpRun(decodeURIComponent(m[1]), body);
+        if (!result) {
+          json(res, 404, { error: 'run not found' });
+          return;
+        }
+        if (result.error) {
+          json(res, result.status || 400, result);
+          return;
+        }
+        json(res, 200, result);
+        return;
+      }
+    }
+
+    // POST /internal/agent-runs/:id/resume-approval
+    {
+      const m = path.match(/^\/internal\/agent-runs\/([^/]+)\/resume-approval$/);
+      if (m && req.method === 'POST') {
+        const raw = await readBody(req);
+        let body = {};
+        try {
+          body = raw ? JSON.parse(raw) : {};
+        } catch {
+          json(res, 400, { error: 'Invalid JSON body' });
+          return;
+        }
+        const result = await resumeRunAfterApproval(decodeURIComponent(m[1]), body);
+        if (!result) {
+          json(res, 404, { error: 'run not found' });
+          return;
+        }
+        if (result.error) {
+          json(res, result.status || 400, result);
+          return;
+        }
+        json(res, 200, result);
+        return;
+      }
+    }
+
+    // POST /internal/agent-runs/rehydrate-waiting — agent restart recovery
+    if (req.method === 'POST' && path === '/internal/agent-runs/rehydrate-waiting') {
+      const raw = await readBody(req);
+      let body = {};
+      try {
+        body = raw ? JSON.parse(raw) : {};
+      } catch {
+        json(res, 400, { error: 'Invalid JSON body' });
+        return;
+      }
+      try {
+        const result = rehydrateWaitingRun(body);
+        json(res, 200, result);
+      } catch (err) {
+        json(res, 400, { error: err.message || String(err) });
+      }
+      return;
+    }
+
+    // POST /internal/approvals/:id/decide — resolve local waiter + optional resume
+    {
+      const m = path.match(/^\/internal\/approvals\/([^/]+)\/decide$/);
+      if (m && req.method === 'POST') {
+        const raw = await readBody(req);
+        let body = {};
+        try {
+          body = raw ? JSON.parse(raw) : {};
+        } catch {
+          json(res, 400, { error: 'Invalid JSON body' });
+          return;
+        }
+        const approvalId = decodeURIComponent(m[1]);
+        const local = decideApprovalLocal(approvalId, body);
+        // If pending carries a run_id and decision is terminal, try resume
+        const runId = body.run_id || local.pending?.run_id;
+        if (runId && (body.decision === 'approve' || body.decision === 'reject' ||
+            body.decision === 'approved' || body.decision === 'rejected')) {
+          const resumed = await resumeRunAfterApproval(runId, {
+            ...body,
+            approval_id: approvalId,
+          });
+          if (resumed && !resumed.error) {
+            json(res, 200, { ...local, resume: resumed });
+            return;
+          }
+        }
+        json(res, 200, local);
         return;
       }
     }

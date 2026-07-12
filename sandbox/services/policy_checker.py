@@ -42,6 +42,7 @@ _TOOL_RISK_MAP: dict[str, RiskLevel] = {
     "write_file": RiskLevel.MEDIUM,
     "edit": RiskLevel.MEDIUM,
     "edit_file": RiskLevel.MEDIUM,
+    "apply_patch": RiskLevel.MEDIUM,
     "submit_artifact": RiskLevel.MEDIUM,
     "run_python": RiskLevel.MEDIUM,
     "bash": RiskLevel.MEDIUM,
@@ -189,6 +190,20 @@ class ToolPolicyChecker:
 
     @staticmethod
     def _get_risk_level(tool_name: str) -> RiskLevel:
+        # MCP namespaced tools: consult MCP manager risk map when available
+        if tool_name and tool_name.startswith("mcp_"):
+            try:
+                from sandbox.services.mcp_manager import mcp_manager
+
+                decision = mcp_manager.approval_decision(tool_name)
+                risk = str(decision.get("risk_level") or "medium").lower()
+                if risk == "low":
+                    return RiskLevel.LOW
+                if risk == "high":
+                    return RiskLevel.HIGH
+                return RiskLevel.MEDIUM
+            except Exception:
+                return RiskLevel.MEDIUM
         return _TOOL_RISK_MAP.get(tool_name, RiskLevel.MEDIUM)
 
     @staticmethod

@@ -46,8 +46,23 @@ def test_sqlite_empty_database_records_baseline_and_is_idempotent(tmp_path: Path
             "SELECT version, checksum FROM schema_migrations ORDER BY version"
         ).fetchall()
         user_count = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
-    assert rows == [(database_module.BASELINE_MIGRATION.version, database_module.BASELINE_MIGRATION.checksum)]
+        tables = {
+            row[0]
+            for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            ).fetchall()
+        }
+
+    expected = [
+        (m.version, m.checksum) for m in database_module.MIGRATIONS
+    ]
+    assert rows == expected
     assert user_count == 0
+    assert "agent_sessions" in tables
+    assert "agent_session_entries" in tables
+    assert "process_executions" in tables
+    assert "execution_events" in tables
+    assert "execution_log_chunks" in tables
 
 
 def test_applied_migration_checksum_mismatch_fails_closed(tmp_path: Path) -> None:
@@ -124,7 +139,7 @@ def test_postgres_empty_database_reinit_is_noop() -> None:
         for row in rows
     ]
     assert versions == [
-        (database_module.BASELINE_MIGRATION.version, database_module.BASELINE_MIGRATION.checksum)
+        (m.version, m.checksum) for m in database_module.MIGRATIONS
     ]
     assert int(database_module._row_value(user_count, "count", 0)) == 0
 

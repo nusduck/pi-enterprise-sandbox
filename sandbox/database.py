@@ -384,7 +384,189 @@ class Migration:
 
 
 BASELINE_MIGRATION = Migration("0001_baseline", SQLITE_SCHEMA, PG_SCHEMA)
-MIGRATIONS: tuple[Migration, ...] = (BASELINE_MIGRATION,)
+
+# Pi SDK logical session tables (ADR 0002 §7.1 / Phase 1). Expand-only; never
+# mutate BASELINE_MIGRATION (checksum fail-closed once applied).
+# Conversation.agent_session_id is added via migrate_agent_session_schema so
+# SQLite ALTER stays idempotent with the expand helper.
+AGENT_SESSIONS_MIGRATION_SQL = """
+CREATE TABLE IF NOT EXISTS agent_sessions (
+    id TEXT PRIMARY KEY,
+    conversation_id TEXT NOT NULL,
+    sdk_session_id TEXT,
+    workspace_id TEXT,
+    sandbox_session_id TEXT,
+    status TEXT NOT NULL DEFAULT 'active',
+    model_id TEXT,
+    thinking_level TEXT,
+    system_prompt_version TEXT,
+    tool_registry_version TEXT,
+    sdk_version TEXT,
+    session_schema_version INTEGER NOT NULL DEFAULT 3,
+    header_payload TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    last_compacted_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_agent_sessions_conversation
+    ON agent_sessions(conversation_id);
+CREATE INDEX IF NOT EXISTS idx_agent_sessions_sdk
+    ON agent_sessions(sdk_session_id);
+
+CREATE TABLE IF NOT EXISTS agent_session_entries (
+    id TEXT PRIMARY KEY,
+    agent_session_id TEXT NOT NULL,
+    sequence INTEGER NOT NULL,
+    entry_type TEXT NOT NULL,
+    entry_payload TEXT NOT NULL DEFAULT '{}',
+    parent_entry_id TEXT,
+    branch_id TEXT,
+    created_at TEXT NOT NULL,
+    UNIQUE (agent_session_id, sequence)
+);
+CREATE INDEX IF NOT EXISTS idx_agent_session_entries_session
+    ON agent_session_entries(agent_session_id);
+CREATE INDEX IF NOT EXISTS idx_agent_session_entries_type
+    ON agent_session_entries(agent_session_id, entry_type);
+"""
+
+AGENT_SESSIONS_MIGRATION = Migration(
+    "0002_agent_sessions",
+    AGENT_SESSIONS_MIGRATION_SQL,
+)
+
+# B2 Process Manager — managed long-running process ledger (expand-only).
+_PROCESS_EXECUTIONS_SQL = """
+CREATE TABLE IF NOT EXISTS process_executions (
+    process_id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL,
+    run_id TEXT,
+    command TEXT NOT NULL,
+    cwd TEXT,
+    env_json TEXT,
+    status TEXT NOT NULL DEFAULT 'created',
+    pid INTEGER,
+    exit_code INTEGER,
+    background INTEGER NOT NULL DEFAULT 0,
+    timeout_seconds INTEGER,
+    error TEXT,
+    stdout_log TEXT NOT NULL DEFAULT '',
+    stderr_log TEXT NOT NULL DEFAULT '',
+    log_truncated INTEGER NOT NULL DEFAULT 0,
+    log_total INTEGER NOT NULL DEFAULT 0,
+    started_at TEXT,
+    finished_at TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    trace_id TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_process_executions_session_id
+    ON process_executions(session_id);
+CREATE INDEX IF NOT EXISTS idx_process_executions_run_id
+    ON process_executions(run_id);
+CREATE INDEX IF NOT EXISTS idx_process_executions_status
+    ON process_executions(status);
+"""
+
+PROCESS_EXECUTIONS_MIGRATION = Migration(
+    "0003_process_executions",
+    _PROCESS_EXECUTIONS_SQL,
+    _PROCESS_EXECUTIONS_SQL,
+)
+
+# B3 Streaming Execution Events — sequenced lifecycle + durable log chunks.
+_EXECUTION_EVENTS_SQL = """
+CREATE TABLE IF NOT EXISTS execution_events (
+    event_id TEXT PRIMARY KEY,
+    source_type TEXT NOT NULL,
+    source_id TEXT NOT NULL,
+    sequence INTEGER NOT NULL,
+    event_type TEXT NOT NULL,
+    payload TEXT NOT NULL DEFAULT '{}',
+    run_id TEXT,
+    created_at TEXT NOT NULL,
+    UNIQUE (source_type, source_id, sequence)
+);
+CREATE INDEX IF NOT EXISTS idx_execution_events_source
+    ON execution_events(source_type, source_id, sequence);
+CREATE INDEX IF NOT EXISTS idx_execution_events_run_id
+    ON execution_events(run_id);
+
+CREATE TABLE IF NOT EXISTS execution_log_chunks (
+    source_type TEXT NOT NULL,
+    source_id TEXT NOT NULL,
+    stream TEXT NOT NULL,
+    offset_start INTEGER NOT NULL,
+    data TEXT NOT NULL,
+    char_len INTEGER NOT NULL,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (source_type, source_id, stream, offset_start)
+);
+CREATE INDEX IF NOT EXISTS idx_execution_log_chunks_source
+    ON execution_log_chunks(source_type, source_id, offset_start);
+"""
+
+EXECUTION_EVENTS_MIGRATION = Migration(
+    "0004_execution_events",
+    _EXECUTION_EVENTS_SQL,
+    _EXECUTION_EVENTS_SQL,
+)
+
+# B4 Tool Ledger Completion — expand tool_executions with ADR §4.4 fields.
+# Expand-only ALTERs; never mutate BASELINE_MIGRATION (checksum fail-closed).
+_TOOL_LEDGER_COLUMNS_SQL = """
+ALTER TABLE tool_executions ADD COLUMN session_id TEXT;
+ALTER TABLE tool_executions ADD COLUMN conversation_id TEXT;
+ALTER TABLE tool_executions ADD COLUMN workspace_id TEXT;
+ALTER TABLE tool_executions ADD COLUMN tool_name TEXT;
+ALTER TABLE tool_executions ADD COLUMN arguments TEXT;
+ALTER TABLE tool_executions ADD COLUMN execution_id TEXT;
+ALTER TABLE tool_executions ADD COLUMN started_at TEXT;
+ALTER TABLE tool_executions ADD COLUMN finished_at TEXT;
+ALTER TABLE tool_executions ADD COLUMN result_summary TEXT;
+ALTER TABLE tool_executions ADD COLUMN error TEXT;
+ALTER TABLE tool_executions ADD COLUMN result_json TEXT;
+"""
+
+TOOL_LEDGER_MIGRATION = Migration(
+    "0005_tool_ledger_fields",
+    _TOOL_LEDGER_COLUMNS_SQL,
+    _TOOL_LEDGER_COLUMNS_SQL,
+)
+
+# B6 Runtime Interaction — budget + recoverable approval payload on agent_runs.
+_B6_RUN_COLUMNS_SQL = """
+ALTER TABLE agent_runs ADD COLUMN budget_json TEXT;
+ALTER TABLE agent_runs ADD COLUMN pending_approval_json TEXT;
+"""
+
+B6_RUNTIME_MIGRATION = Migration(
+    "0006_b6_runtime_interaction",
+    _B6_RUN_COLUMNS_SQL,
+    _B6_RUN_COLUMNS_SQL,
+)
+
+_AGENT_RUN_USAGE_SQL = """
+ALTER TABLE agent_runs ADD COLUMN usage TEXT;
+"""
+
+AGENT_RUN_USAGE_MIGRATION = Migration(
+    "0007_agent_run_usage",
+    _AGENT_RUN_USAGE_SQL,
+    _AGENT_RUN_USAGE_SQL,
+)
+
+
+MIGRATIONS: tuple[Migration, ...] = (
+    BASELINE_MIGRATION,
+    AGENT_SESSIONS_MIGRATION,
+    PROCESS_EXECUTIONS_MIGRATION,
+    EXECUTION_EVENTS_MIGRATION,
+    TOOL_LEDGER_MIGRATION,
+    B6_RUNTIME_MIGRATION,
+    AGENT_RUN_USAGE_MIGRATION,
+)
+
 
 
 # ── Abstract backend ──────────────────────────────────────────────────────
@@ -451,7 +633,15 @@ class SQLiteBackend(DatabaseBackend):
         try:
             conn.execute("PRAGMA journal_mode=WAL")
             conn.execute("BEGIN IMMEDIATE")
-            apply_migrations(_ConnectionWrapper(conn, self), dialect="sqlite")
+            wrapped = _ConnectionWrapper(conn, self)
+            apply_migrations(wrapped, dialect="sqlite")
+            # Expand-safe columns/tables for DBs that predate versioned migrations
+            migrate_agent_session_schema(wrapped, dialect="sqlite")
+            migrate_process_schema(wrapped, dialect="sqlite")
+            migrate_execution_events_schema(wrapped, dialect="sqlite")
+            migrate_tool_ledger_schema(wrapped, dialect="sqlite")
+            migrate_b6_runtime_schema(wrapped, dialect="sqlite")
+            migrate_agent_run_usage_schema(wrapped, dialect="sqlite")
             conn.commit()
         except Exception:
             conn.rollback()
@@ -509,7 +699,14 @@ class PostgreSQLBackend(DatabaseBackend):
         if conn is None:
             conn = self.connect()
         try:
-            apply_migrations(_ConnectionWrapper(conn, self), dialect="postgresql")
+            wrapped = _ConnectionWrapper(conn, self)
+            apply_migrations(wrapped, dialect="postgresql")
+            migrate_agent_session_schema(wrapped, dialect="postgresql")
+            migrate_process_schema(wrapped, dialect="postgresql")
+            migrate_execution_events_schema(wrapped, dialect="postgresql")
+            migrate_tool_ledger_schema(wrapped, dialect="postgresql")
+            migrate_b6_runtime_schema(wrapped, dialect="postgresql")
+            migrate_agent_run_usage_schema(wrapped, dialect="postgresql")
             conn.commit()
         except Exception:
             conn.rollback()
@@ -869,8 +1066,9 @@ def count_conversation_orphans(db: "Database | None" = None) -> int:
 def migrate_agent_session_schema(conn: Any, dialect: str = "sqlite") -> dict[str, int]:
     """Ensure agent session tables/columns exist (expand-only, dual dialect).
 
-    Safe to run repeatedly. Creates agent_runs / agent_events / tool_executions
-    if missing and ALTERs conversations for interrupted / last_run_id / legal_hold.
+    Safe to run repeatedly. Creates agent_runs / agent_events / tool_executions /
+    agent_sessions / agent_session_entries if missing and ALTERs conversations for
+    interrupted / last_run_id / legal_hold / agent_session_id.
     """
     report = {"tables_ensured": 0, "columns_added": 0}
 
@@ -889,6 +1087,14 @@ def migrate_agent_session_schema(conn: Any, dialect: str = "sqlite") -> dict[str
             "ALTER TABLE conversations ADD COLUMN legal_hold INTEGER NOT NULL DEFAULT 0"
         )
         report["columns_added"] += 1
+    if "agent_session_id" not in conv_cols:
+        conn.execute("ALTER TABLE conversations ADD COLUMN agent_session_id TEXT")
+        report["columns_added"] += 1
+    # Index is safe to re-create
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_conversations_agent_session "
+        "ON conversations(agent_session_id)"
+    )
 
     # agent_runs
     conn.execute(
@@ -969,7 +1175,291 @@ def migrate_agent_session_schema(conn: Any, dialect: str = "sqlite") -> dict[str
     )
     report["tables_ensured"] += 1
 
+    # Logical Pi SDK agent sessions (ADR 0002 §7.1)
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS agent_sessions (
+            id TEXT PRIMARY KEY,
+            conversation_id TEXT NOT NULL,
+            sdk_session_id TEXT,
+            workspace_id TEXT,
+            sandbox_session_id TEXT,
+            status TEXT NOT NULL DEFAULT 'active',
+            model_id TEXT,
+            thinking_level TEXT,
+            system_prompt_version TEXT,
+            tool_registry_version TEXT,
+            sdk_version TEXT,
+            session_schema_version INTEGER NOT NULL DEFAULT 3,
+            header_payload TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            last_compacted_at TEXT
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_agent_sessions_conversation "
+        "ON agent_sessions(conversation_id)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_agent_sessions_sdk "
+        "ON agent_sessions(sdk_session_id)"
+    )
+    report["tables_ensured"] += 1
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS agent_session_entries (
+            id TEXT PRIMARY KEY,
+            agent_session_id TEXT NOT NULL,
+            sequence INTEGER NOT NULL,
+            entry_type TEXT NOT NULL,
+            entry_payload TEXT NOT NULL DEFAULT '{}',
+            parent_entry_id TEXT,
+            branch_id TEXT,
+            created_at TEXT NOT NULL,
+            UNIQUE (agent_session_id, sequence)
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_agent_session_entries_session "
+        "ON agent_session_entries(agent_session_id)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_agent_session_entries_type "
+        "ON agent_session_entries(agent_session_id, entry_type)"
+    )
+    report["tables_ensured"] += 1
+
     return report
+
+
+def migrate_process_schema(conn: Any, dialect: str = "sqlite") -> dict[str, int]:
+    """Ensure process_executions table exists (expand-only, dual dialect).
+
+    Safe to run repeatedly. Complements immutable migration
+    ``0003_process_executions`` for older DBs that only ran expand migrations.
+    """
+    report = {"tables_ensured": 0}
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS process_executions (
+            process_id TEXT PRIMARY KEY,
+            session_id TEXT NOT NULL,
+            run_id TEXT,
+            command TEXT NOT NULL,
+            cwd TEXT,
+            env_json TEXT,
+            status TEXT NOT NULL DEFAULT 'created',
+            pid INTEGER,
+            exit_code INTEGER,
+            background INTEGER NOT NULL DEFAULT 0,
+            timeout_seconds INTEGER,
+            error TEXT,
+            stdout_log TEXT NOT NULL DEFAULT '',
+            stderr_log TEXT NOT NULL DEFAULT '',
+            log_truncated INTEGER NOT NULL DEFAULT 0,
+            log_total INTEGER NOT NULL DEFAULT 0,
+            started_at TEXT,
+            finished_at TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            trace_id TEXT
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_process_executions_session_id
+            ON process_executions(session_id)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_process_executions_run_id
+            ON process_executions(run_id)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_process_executions_status
+            ON process_executions(status)
+        """
+    )
+    report["tables_ensured"] += 1
+    return report
+
+
+def migrate_execution_events_schema(conn: Any, dialect: str = "sqlite") -> dict[str, int]:
+    """Ensure execution_events + execution_log_chunks (B3, expand-only)."""
+    report = {"tables_ensured": 0}
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS execution_events (
+            event_id TEXT PRIMARY KEY,
+            source_type TEXT NOT NULL,
+            source_id TEXT NOT NULL,
+            sequence INTEGER NOT NULL,
+            event_type TEXT NOT NULL,
+            payload TEXT NOT NULL DEFAULT '{}',
+            run_id TEXT,
+            created_at TEXT NOT NULL,
+            UNIQUE (source_type, source_id, sequence)
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_execution_events_source
+            ON execution_events(source_type, source_id, sequence)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_execution_events_run_id
+            ON execution_events(run_id)
+        """
+    )
+    report["tables_ensured"] += 1
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS execution_log_chunks (
+            source_type TEXT NOT NULL,
+            source_id TEXT NOT NULL,
+            stream TEXT NOT NULL,
+            offset_start INTEGER NOT NULL,
+            data TEXT NOT NULL,
+            char_len INTEGER NOT NULL,
+            created_at TEXT NOT NULL,
+            PRIMARY KEY (source_type, source_id, stream, offset_start)
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_execution_log_chunks_source
+            ON execution_log_chunks(source_type, source_id, offset_start)
+        """
+    )
+    report["tables_ensured"] += 1
+    return report
+
+
+# ADR §4.4 ledger fields added after baseline thin tool_executions table.
+_TOOL_LEDGER_EXPAND_COLUMNS: tuple[str, ...] = (
+    "session_id",
+    "conversation_id",
+    "workspace_id",
+    "tool_name",
+    "arguments",
+    "execution_id",
+    "started_at",
+    "finished_at",
+    "result_summary",
+    "error",
+    "result_json",
+)
+
+
+def migrate_tool_ledger_schema(conn: Any, dialect: str = "sqlite") -> dict[str, int]:
+    """Ensure tool_executions ADR §4.4 columns exist (expand-only, dual dialect).
+
+    Safe to run repeatedly. Complements immutable migration
+    ``0005_tool_ledger_fields`` for DBs that only ran expand helpers.
+    """
+    report = {"columns_added": 0, "tables_ensured": 0}
+    # Ensure base table exists (thin schema)
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS tool_executions (
+            tool_call_id TEXT PRIMARY KEY,
+            run_id TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'prepared',
+            idempotency_key TEXT NOT NULL,
+            summary TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_tool_executions_idempotency
+            ON tool_executions(idempotency_key)
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_tool_executions_run_id ON tool_executions(run_id)"
+    )
+    report["tables_ensured"] += 1
+
+    cols = _table_columns(conn, "tool_executions", dialect)
+    for col in _TOOL_LEDGER_EXPAND_COLUMNS:
+        if col not in cols:
+            conn.execute(f"ALTER TABLE tool_executions ADD COLUMN {col} TEXT")
+            report["columns_added"] += 1
+    return report
+
+
+_B6_RUN_EXPAND_COLUMNS = (
+    "budget_json",
+    "pending_approval_json",
+)
+
+
+def migrate_b6_runtime_schema(conn: Any, dialect: str = "sqlite") -> dict[str, int]:
+    """Ensure agent_runs B6 columns (budget + pending approval) exist.
+
+    Expand-only; safe to run repeatedly. Complements ``0006_b6_runtime_interaction``.
+    """
+    report = {"columns_added": 0}
+    cols = _table_columns(conn, "agent_runs", dialect)
+    if not cols:
+        return report
+    for col in _B6_RUN_EXPAND_COLUMNS:
+        if col not in cols:
+            conn.execute(f"ALTER TABLE agent_runs ADD COLUMN {col} TEXT")
+            report["columns_added"] += 1
+    return report
+
+
+def migrate_agent_run_usage_schema(conn: Any, dialect: str = "sqlite") -> dict[str, int]:
+    """Ensure agent_runs.usage column exists (expand-only, dual dialect).
+
+    Safe to run repeatedly. Complements immutable migration
+    ``0007_agent_run_usage`` for DBs that only ran expand helpers.
+    """
+    report = {"columns_added": 0, "tables_ensured": 0}
+    # Ensure base table exists (thin schema from agent session migrate)
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS agent_runs (
+            run_id TEXT PRIMARY KEY,
+            conversation_id TEXT NOT NULL,
+            owner_user_id TEXT,
+            organization_id TEXT,
+            status TEXT NOT NULL DEFAULT 'pending',
+            lease_owner TEXT,
+            lease_until TEXT,
+            version INTEGER NOT NULL DEFAULT 0,
+            sandbox_session_id TEXT,
+            workspace_id TEXT,
+            model_id TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        """
+    )
+    report["tables_ensured"] += 1
+    cols = _table_columns(conn, "agent_runs", dialect)
+    if "usage" not in cols:
+        conn.execute("ALTER TABLE agent_runs ADD COLUMN usage TEXT")
+        report["columns_added"] += 1
+    return report
+
+
 
 
 # ── Database wrapper (backward-compatible) ────────────────────────────────
@@ -1039,6 +1529,67 @@ class Database:
             report = migrate_agent_session_schema(conn, dialect=dialect)
             conn.commit()
         return report
+
+    def migrate_process(self) -> dict[str, int]:
+        """Run process_executions expand migration; return report."""
+        dialect = (
+            "sqlite"
+            if isinstance(self._backend, SQLiteBackend)
+            else "postgresql"
+        )
+        with self.connect() as conn:
+            report = migrate_process_schema(conn, dialect=dialect)
+            conn.commit()
+        return report
+
+    def migrate_execution_events(self) -> dict[str, int]:
+        """Run execution_events / log_chunks expand migration; return report."""
+        dialect = (
+            "sqlite"
+            if isinstance(self._backend, SQLiteBackend)
+            else "postgresql"
+        )
+        with self.connect() as conn:
+            report = migrate_execution_events_schema(conn, dialect=dialect)
+            conn.commit()
+        return report
+
+    def migrate_tool_ledger(self) -> dict[str, int]:
+        """Run tool_executions ADR field expand migration; return report."""
+        dialect = (
+            "sqlite"
+            if isinstance(self._backend, SQLiteBackend)
+            else "postgresql"
+        )
+        with self.connect() as conn:
+            report = migrate_tool_ledger_schema(conn, dialect=dialect)
+            conn.commit()
+        return report
+
+    def migrate_b6_runtime(self) -> dict[str, int]:
+        """Run B6 runtime interaction expand migration; return report."""
+        dialect = (
+            "sqlite"
+            if isinstance(self._backend, SQLiteBackend)
+            else "postgresql"
+        )
+        with self.connect() as conn:
+            report = migrate_b6_runtime_schema(conn, dialect=dialect)
+            conn.commit()
+        return report
+
+    def migrate_agent_run_usage(self) -> dict[str, int]:
+        """Run agent_runs.usage expand migration; return report."""
+        dialect = (
+            "sqlite"
+            if isinstance(self._backend, SQLiteBackend)
+            else "postgresql"
+        )
+        with self.connect() as conn:
+            report = migrate_agent_run_usage_schema(conn, dialect=dialect)
+            conn.commit()
+        return report
+
 
     # ── Convenience helpers ──────────────────────────────────────────────
 

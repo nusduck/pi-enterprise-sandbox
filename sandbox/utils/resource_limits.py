@@ -148,6 +148,7 @@ def run_with_timeout(
     max_memory_mb: int = 0,
     max_cpu_seconds: int = 0,
     on_started: Any | None = None,
+    on_output: Any | None = None,
 ) -> dict[str, Any]:
     """Run a subprocess with timeout, kill-after-timeout, and output limits.
 
@@ -162,11 +163,17 @@ def run_with_timeout(
     on_started :
         Optional callback ``(proc: subprocess.Popen) -> None`` invoked after
         the child is spawned so callers can track / cancel the process group.
+    on_output :
+        Optional callback ``(stream: str, text: str) -> None`` invoked for each
+        stdout/stderr chunk as it arrives (B3 streaming). When provided, uses
+        threaded readers instead of ``communicate``.
 
     Returns
     -------
     dict with keys: stdout_preview, stderr_preview, exit_code, duration_ms, truncated
     """
+    import threading
+
     start = time.monotonic()
 
     # Build a preexec closure that applies resource limits + setsid
@@ -185,6 +192,7 @@ def run_with_timeout(
             env=env,
             cwd=cwd,
             preexec_fn=_preexec,
+            bufsize=0 if on_output is not None else -1,
         )
     except FileNotFoundError as exc:
         return {
@@ -203,6 +211,85 @@ def run_with_timeout(
             terminate_process_group(proc, grace_seconds=0.5)
             raise
 
+    # ── Streaming path (B3): live stdout/stderr deltas ───────────────
+    if on_output is not None:
+        stdout_parts: list[str] = []
+        stderr_parts: list[str] = []
+        lock = threading.Lock()
+        total_chars = 0
+        truncated_flag = False
+
+        def _reader(pipe: Any, name: str, bucket: list[str]) -> None:
+            nonlocal total_chars, truncated_flag
+            try:
+                while True:
+                    chunk = pipe.read(4096)
+                    if not chunk:
+                        break
+                    text = chunk.decode("utf-8", errors="replace")
+                    with lock:
+                        bucket.append(text)
+                        total_chars += len(text)
+                        if total_chars > max_output_chars * 4:
+                            # Soft cap on accumulation; still forward delta.
+                            truncated_flag = True
+                    try:
+                        on_output(name, text)
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+            finally:
+                try:
+                    pipe.close()
+                except Exception:
+                    pass
+
+        t_out = threading.Thread(
+            target=_reader, args=(proc.stdout, "stdout", stdout_parts), daemon=True
+        )
+        t_err = threading.Thread(
+            target=_reader, args=(proc.stderr, "stderr", stderr_parts), daemon=True
+        )
+        t_out.start()
+        t_err.start()
+
+        timed_out = False
+        try:
+            proc.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            timed_out = True
+            terminate_process_group(proc, grace_seconds=0.1)
+            try:
+                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+            except (ProcessLookupError, PermissionError, OSError):
+                pass
+            try:
+                proc.wait(timeout=5)
+            except Exception:
+                pass
+
+        t_out.join(timeout=2.0)
+        t_err.join(timeout=2.0)
+
+        duration_ms = (time.monotonic() - start) * 1000
+        stdout_str = "".join(stdout_parts)
+        stderr_str = "".join(stderr_parts)
+        exit_code = -signal.SIGKILL if timed_out else proc.returncode
+        truncated = (
+            truncated_flag
+            or len(stdout_str) > max_output_chars
+            or len(stderr_str) > max_output_chars
+        )
+        return {
+            "stdout_preview": stdout_str[:max_output_chars],
+            "stderr_preview": stderr_str[:max_output_chars],
+            "exit_code": exit_code,
+            "duration_ms": round(duration_ms, 1),
+            "truncated": truncated,
+        }
+
+    # ── Buffered path (legacy short-command) ─────────────────────────
     try:
         stdout_raw, stderr_raw = proc.communicate(timeout=timeout)
     except subprocess.TimeoutExpired:

@@ -2,12 +2,20 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException, Response
+import json
+import queue
+import threading
+from typing import Iterator
+
+from fastapi import APIRouter, Header, HTTPException, Query, Request, Response
+from fastapi.responses import StreamingResponse
 
 from sandbox.models import (
     ApprovalCheckRequest,
     ApprovalResponse,
     CommandExecutionRequest,
+    ExecutionEventResponse,
+    ExecutionLogsResponse,
     ExecutionResponse,
     ExecutionStatus,
     NodeExecutionRequest,
@@ -297,15 +305,34 @@ def cancel_active_execution(session_id: str):
 
     Used by chat/SSE disconnect cleanup. Returns 404 when the session is
     unknown, and a small JSON body when idle (no active execution).
+
+    Also cancels foreground managed processes for the session (B2 cascade).
     """
     session = session_manager.get(session_id)
     if session is None:
         raise HTTPException(status_code=404, detail="Session not found")
 
+    # B2: run cancel must stop associated managed processes (foreground).
+    process_ids: list[str] = []
+    try:
+        from sandbox.services.process_manager import process_manager
+
+        process_ids = process_manager.cancel_for_session(
+            session_id, foreground_only=False
+        )
+    except Exception:
+        process_ids = []
+
     result = execution_manager.cancel_active(session_id)
     if result is None:
-        return {"cancelled": False, "reason": "no active execution"}
-    return ExecutionResponse(**result)
+        return {
+            "cancelled": bool(process_ids),
+            "reason": "no active execution",
+            "processes_cancelled": process_ids,
+        }
+    payload = ExecutionResponse(**result).model_dump()
+    payload["processes_cancelled"] = process_ids
+    return payload
 
 
 @router.get("/{execution_id}", response_model=ExecutionResponse)
@@ -321,6 +348,141 @@ def get_execution(session_id: str, execution_id: str):
         raise HTTPException(status_code=400, detail="Execution does not belong to this session")
 
     return ExecutionResponse(**result)
+
+
+@router.get("/{execution_id}/logs", response_model=ExecutionLogsResponse)
+def get_execution_logs(
+    session_id: str,
+    execution_id: str,
+    offset: int = Query(0, ge=0),
+    limit: int | None = Query(None, ge=1, le=500_000),
+):
+    """Pageable execution logs (B3). Supports offset/limit pull after disconnect."""
+    session = session_manager.get(session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    result = execution_manager.get(execution_id)
+    if result is None:
+        raise HTTPException(status_code=404, detail="Execution not found")
+    if result["session_id"] != session_id:
+        raise HTTPException(status_code=400, detail="Execution does not belong to this session")
+
+    logs = execution_manager.logs(execution_id, offset=offset, limit=limit)
+    if logs is None:
+        raise HTTPException(status_code=404, detail="Execution not found")
+    return ExecutionLogsResponse(**logs)
+
+
+@router.get(
+    "/{execution_id}/events",
+    response_model=list[ExecutionEventResponse],
+)
+def list_execution_events(
+    session_id: str,
+    execution_id: str,
+    after_sequence: int = Query(0, ge=0),
+    limit: int | None = Query(None, ge=1, le=5000),
+):
+    session = session_manager.get(session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    result = execution_manager.get(execution_id)
+    if result is None:
+        raise HTTPException(status_code=404, detail="Execution not found")
+    if result["session_id"] != session_id:
+        raise HTTPException(status_code=400, detail="Execution does not belong to this session")
+
+    events = execution_manager.list_events(
+        execution_id, after_sequence=after_sequence, limit=limit
+    )
+    if events is None:
+        raise HTTPException(status_code=404, detail="Execution not found")
+    return [ExecutionEventResponse(**e) for e in events]
+
+
+@router.get("/{execution_id}/events/stream")
+def stream_execution_events(
+    session_id: str,
+    execution_id: str,
+    request: Request,
+    after_sequence: int = Query(0, ge=0),
+    last_event_id: str | None = Header(None, alias="Last-Event-ID"),
+):
+    """SSE stream of short-command execution events with sequence resume (B3)."""
+    session = session_manager.get(session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    result = execution_manager.get(execution_id)
+    if result is None:
+        raise HTTPException(status_code=404, detail="Execution not found")
+    if result["session_id"] != session_id:
+        raise HTTPException(status_code=400, detail="Execution does not belong to this session")
+
+    after = after_sequence
+    if last_event_id is not None:
+        try:
+            after = max(after, int(str(last_event_id).strip()))
+        except (TypeError, ValueError):
+            pass
+
+    q: queue.Queue[dict | None] = queue.Queue()
+    closed = threading.Event()
+
+    def _on_event(entry: dict) -> None:
+        if closed.is_set():
+            return
+        q.put(entry)
+
+    unsub = execution_manager.subscribe_events(execution_id, after, _on_event)
+    if unsub is None:
+        raise HTTPException(status_code=404, detail="Execution not found")
+
+    def _generate() -> Iterator[str]:
+        try:
+            while not closed.is_set():
+                try:
+                    entry = q.get(timeout=15.0)
+                except queue.Empty:
+                    yield ": keepalive\n\n"
+                    continue
+                if entry is None:
+                    break
+                if entry.get("type") == "__stream_terminal__":
+                    term = entry.get("terminal") or {}
+                    yield (
+                        f"event: end\ndata: {json.dumps({'status': (term.get('payload') or {}).get('status') or 'done', 'sequence': term.get('sequence')})}\n\n"
+                    )
+                    break
+                seq = entry.get("sequence", 0)
+                payload = {
+                    "sequence": seq,
+                    "event_id": entry.get("event_id"),
+                    "type": entry.get("type"),
+                    "payload": entry.get("payload") or {},
+                    "source_type": entry.get("source_type"),
+                    "source_id": entry.get("source_id"),
+                    "created_at": entry.get("created_at"),
+                }
+                yield f"id: {seq}\nevent: {entry.get('type')}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
+        finally:
+            closed.set()
+            try:
+                unsub()
+            except Exception:
+                pass
+
+    return StreamingResponse(
+        _generate(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @router.post("/{execution_id}/cancel", response_model=ExecutionResponse)

@@ -14,9 +14,14 @@ from sandbox.models import (
     AgentEventResponse,
     AgentRunResponse,
     AgentRunStatus,
+    AgentSessionEntryResponse,
+    AgentSessionResponse,
+    AgentSessionStatus,
     ArtifactResponse,
     ConversationResponse,
     ExecutionStatus,
+    PROCESS_ACTIVE_STATUSES,
+    ProcessStatus,
     SessionResponse,
     SessionStatus,
     TOOL_TERMINAL_STATUSES,
@@ -372,6 +377,7 @@ class ConversationRepository:
         interrupted = entry.get("interrupted")
         last_run_id = entry.get("last_run_id")
         legal_hold = entry.get("legal_hold")
+        agent_session_id = entry.get("agent_session_id")
         if existing is not None:
             if owner is None:
                 owner = existing.owner_user_id
@@ -383,6 +389,8 @@ class ConversationRepository:
                 last_run_id = existing.last_run_id
             if legal_hold is None:
                 legal_hold = existing.legal_hold
+            if agent_session_id is None and "agent_session_id" not in entry:
+                agent_session_id = existing.agent_session_id
         if interrupted is None:
             interrupted = False
         if legal_hold is None:
@@ -393,9 +401,9 @@ class ConversationRepository:
                 INSERT INTO conversations (
                     id, title, sandbox_session_id, workspace_path, messages,
                     owner_user_id, organization_id, interrupted, last_run_id,
-                    legal_hold, created_at, updated_at
+                    legal_hold, agent_session_id, created_at, updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
                     title=excluded.title,
                     sandbox_session_id=excluded.sandbox_session_id,
@@ -406,6 +414,7 @@ class ConversationRepository:
                     interrupted=excluded.interrupted,
                     last_run_id=excluded.last_run_id,
                     legal_hold=excluded.legal_hold,
+                    agent_session_id=COALESCE(excluded.agent_session_id, conversations.agent_session_id),
                     updated_at=excluded.updated_at
                 """,
                 (
@@ -420,6 +429,7 @@ class ConversationRepository:
                     1 if interrupted else 0,
                     last_run_id,
                     1 if legal_hold else 0,
+                    agent_session_id,
                     entry.get("created_at", now),
                     now,
                 ),
@@ -565,6 +575,23 @@ class ConversationRepository:
             conn.commit()
         return self.get(conversation_id)
 
+    def set_agent_session_id(
+        self, conversation_id: str, agent_session_id: str
+    ) -> ConversationResponse | None:
+        """Bind a logical Pi SDK agent session to the conversation (1:1)."""
+        now = datetime.now(timezone.utc).isoformat()
+        with self.db.connect() as conn:
+            conn.execute(
+                """
+                UPDATE conversations
+                SET agent_session_id = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (agent_session_id, now, conversation_id),
+            )
+            conn.commit()
+        return self.get(conversation_id)
+
     def list_expired_drafts(
         self,
         *,
@@ -696,6 +723,7 @@ class ConversationRepository:
             id=row["id"],
             title=row["title"],
             sandbox_session_id=row["sandbox_session_id"],
+            agent_session_id=_col("agent_session_id"),
             workspace_id=workspace_id,
             messages=_json_loads(row["messages"]),
             owner_user_id=_col("owner_user_id"),
@@ -708,6 +736,375 @@ class ConversationRepository:
         )
 
 
+class AgentSessionRepository:
+    """Persist logical Pi SDK sessions and append-only entries (ADR 0002 §7)."""
+
+    def __init__(self, db: Database | None = None) -> None:
+        self.db = db or database
+
+    def create(self, entry: dict[str, Any]) -> AgentSessionResponse:
+        now = datetime.now(timezone.utc).isoformat()
+        session_id = entry.get("id") or f"asess_{uuid.uuid4().hex}"
+        with self.db.connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO agent_sessions (
+                    id, conversation_id, sdk_session_id, workspace_id,
+                    sandbox_session_id, status, model_id, thinking_level,
+                    system_prompt_version, tool_registry_version, sdk_version,
+                    session_schema_version, header_payload,
+                    created_at, updated_at, last_compacted_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    session_id,
+                    entry["conversation_id"],
+                    entry.get("sdk_session_id"),
+                    entry.get("workspace_id"),
+                    entry.get("sandbox_session_id"),
+                    entry.get("status", AgentSessionStatus.ACTIVE.value),
+                    entry.get("model_id"),
+                    entry.get("thinking_level"),
+                    entry.get("system_prompt_version"),
+                    entry.get("tool_registry_version"),
+                    entry.get("sdk_version"),
+                    int(entry.get("session_schema_version", 3)),
+                    _json_dumps(entry.get("header_payload") or {}),
+                    entry.get("created_at", now),
+                    entry.get("updated_at", now),
+                    entry.get("last_compacted_at"),
+                ),
+            )
+            conn.commit()
+        return self.get(session_id)  # type: ignore[return-value]
+
+    def get(self, agent_session_id: str) -> AgentSessionResponse | None:
+        with self.db.connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM agent_sessions WHERE id = ?",
+                (agent_session_id,),
+            ).fetchone()
+        if not row:
+            return None
+        return self._row_to_model(row, entry_count=self.count_entries(agent_session_id))
+
+    def get_by_conversation(
+        self, conversation_id: str
+    ) -> AgentSessionResponse | None:
+        with self.db.connect() as conn:
+            row = conn.execute(
+                """
+                SELECT * FROM agent_sessions
+                WHERE conversation_id = ?
+                ORDER BY created_at DESC
+                LIMIT 1
+                """,
+                (conversation_id,),
+            ).fetchone()
+        if not row:
+            return None
+        sid = row["id"]
+        return self._row_to_model(row, entry_count=self.count_entries(sid))
+
+    def update_meta(
+        self,
+        agent_session_id: str,
+        *,
+        header_payload: dict[str, Any] | None = None,
+        sdk_session_id: str | None = None,
+        model_id: str | None = None,
+        thinking_level: str | None = None,
+        sandbox_session_id: str | None = None,
+        workspace_id: str | None = None,
+        status: str | None = None,
+        last_compacted_at: str | None = None,
+        system_prompt_version: str | None = None,
+        tool_registry_version: str | None = None,
+        sdk_version: str | None = None,
+        session_schema_version: int | None = None,
+    ) -> AgentSessionResponse | None:
+        current = self.get(agent_session_id)
+        if current is None:
+            return None
+        now = datetime.now(timezone.utc).isoformat()
+        with self.db.connect() as conn:
+            conn.execute(
+                """
+                UPDATE agent_sessions SET
+                    header_payload = ?,
+                    sdk_session_id = ?,
+                    model_id = ?,
+                    thinking_level = ?,
+                    sandbox_session_id = ?,
+                    workspace_id = ?,
+                    status = ?,
+                    last_compacted_at = ?,
+                    system_prompt_version = ?,
+                    tool_registry_version = ?,
+                    sdk_version = ?,
+                    session_schema_version = ?,
+                    updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    _json_dumps(
+                        header_payload
+                        if header_payload is not None
+                        else current.header_payload
+                    ),
+                    sdk_session_id
+                    if sdk_session_id is not None
+                    else current.sdk_session_id,
+                    model_id if model_id is not None else current.model_id,
+                    thinking_level
+                    if thinking_level is not None
+                    else current.thinking_level,
+                    sandbox_session_id
+                    if sandbox_session_id is not None
+                    else current.sandbox_session_id,
+                    workspace_id if workspace_id is not None else current.workspace_id,
+                    status if status is not None else current.status,
+                    last_compacted_at
+                    if last_compacted_at is not None
+                    else current.last_compacted_at,
+                    system_prompt_version
+                    if system_prompt_version is not None
+                    else current.system_prompt_version,
+                    tool_registry_version
+                    if tool_registry_version is not None
+                    else current.tool_registry_version,
+                    sdk_version if sdk_version is not None else current.sdk_version,
+                    int(
+                        session_schema_version
+                        if session_schema_version is not None
+                        else current.session_schema_version
+                    ),
+                    now,
+                    agent_session_id,
+                ),
+            )
+            conn.commit()
+        return self.get(agent_session_id)
+
+    def count_entries(self, agent_session_id: str) -> int:
+        with self.db.connect() as conn:
+            row = conn.execute(
+                "SELECT COUNT(*) AS cnt FROM agent_session_entries "
+                "WHERE agent_session_id = ?",
+                (agent_session_id,),
+            ).fetchone()
+        if row is None:
+            return 0
+        try:
+            return int(row["cnt"])
+        except (KeyError, IndexError, TypeError):
+            return int(row[0])
+
+    def max_sequence(self, agent_session_id: str) -> int:
+        with self.db.connect() as conn:
+            row = conn.execute(
+                "SELECT COALESCE(MAX(sequence), 0) AS max_seq "
+                "FROM agent_session_entries WHERE agent_session_id = ?",
+                (agent_session_id,),
+            ).fetchone()
+        if row is None:
+            return 0
+        try:
+            return int(row["max_seq"])
+        except (KeyError, IndexError, TypeError):
+            return int(row[0])
+
+    def list_entries(
+        self,
+        agent_session_id: str,
+        *,
+        after_sequence: int = 0,
+        limit: int | None = None,
+    ) -> list[AgentSessionEntryResponse]:
+        limit_clause = "LIMIT ?" if limit is not None else ""
+        params: list[Any] = [agent_session_id, after_sequence]
+        if limit is not None:
+            params.append(limit)
+        with self.db.connect() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT * FROM agent_session_entries
+                WHERE agent_session_id = ? AND sequence > ?
+                ORDER BY sequence ASC
+                {limit_clause}
+                """,
+                tuple(params),
+            ).fetchall()
+        return [self._entry_row_to_model(r) for r in rows]
+
+    def append_entries(
+        self,
+        agent_session_id: str,
+        entries: list[dict[str, Any]],
+    ) -> list[AgentSessionEntryResponse]:
+        """Append entries with monotonic sequence. Idempotent on entry id."""
+        if not entries:
+            return []
+        now = datetime.now(timezone.utc).isoformat()
+        created: list[AgentSessionEntryResponse] = []
+        with self.db.connect() as conn:
+            backend = conn.backend
+            if isinstance(backend, SQLiteBackend):
+                conn.execute("BEGIN IMMEDIATE")
+            elif isinstance(backend, PostgreSQLBackend):
+                conn.execute(
+                    "SELECT id FROM agent_sessions WHERE id = ? FOR UPDATE",
+                    (agent_session_id,),
+                )
+
+            row = conn.execute(
+                "SELECT COALESCE(MAX(sequence), 0) AS max_seq "
+                "FROM agent_session_entries WHERE agent_session_id = ?",
+                (agent_session_id,),
+            ).fetchone()
+            try:
+                next_seq = int(row["max_seq"] if row is not None else 0) + 1
+            except (KeyError, IndexError, TypeError):
+                next_seq = int(row[0]) + 1 if row is not None else 1
+
+            for item in entries:
+                entry_id = item.get("id") or f"ase_{uuid.uuid4().hex}"
+                existing = conn.execute(
+                    "SELECT * FROM agent_session_entries WHERE id = ?",
+                    (entry_id,),
+                ).fetchone()
+                if existing is not None:
+                    created.append(self._entry_row_to_model(existing))
+                    continue
+
+                sequence = item.get("sequence")
+                if sequence is None:
+                    sequence = next_seq
+                    next_seq += 1
+                else:
+                    sequence = int(sequence)
+                    next_seq = max(next_seq, sequence + 1)
+
+                parent_id = item.get("parent_entry_id")
+                payload = item.get("entry_payload") or {}
+                if parent_id is None and isinstance(payload, dict):
+                    parent_id = payload.get("parentId")
+
+                conn.execute(
+                    """
+                    INSERT INTO agent_session_entries (
+                        id, agent_session_id, sequence, entry_type,
+                        entry_payload, parent_entry_id, branch_id, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        entry_id,
+                        agent_session_id,
+                        sequence,
+                        item.get("entry_type") or "custom",
+                        _json_dumps(payload),
+                        parent_id,
+                        item.get("branch_id"),
+                        item.get("created_at") or now,
+                    ),
+                )
+                created.append(
+                    AgentSessionEntryResponse(
+                        id=entry_id,
+                        agent_session_id=agent_session_id,
+                        sequence=sequence,
+                        entry_type=item.get("entry_type") or "custom",
+                        entry_payload=payload if isinstance(payload, dict) else {},
+                        parent_entry_id=parent_id,
+                        branch_id=item.get("branch_id"),
+                        created_at=item.get("created_at") or now,
+                    )
+                )
+
+            conn.execute(
+                "UPDATE agent_sessions SET updated_at = ? WHERE id = ?",
+                (now, agent_session_id),
+            )
+            conn.commit()
+        return created
+
+    def build_jsonl(self, agent_session_id: str) -> str:
+        """Materialize full Pi SDK JSONL (header + entries in sequence order)."""
+        session = self.get(agent_session_id)
+        if session is None:
+            raise KeyError(f"agent session not found: {agent_session_id}")
+        header = dict(session.header_payload or {})
+        if not header or header.get("type") != "session":
+            header = {
+                "type": "session",
+                "version": session.session_schema_version or 3,
+                "id": session.sdk_session_id or session.id,
+                "timestamp": session.created_at or datetime.now(timezone.utc).isoformat(),
+                "cwd": "/tmp",
+            }
+        lines = [json.dumps(header, ensure_ascii=False, default=str)]
+        for entry in self.list_entries(agent_session_id):
+            payload = entry.entry_payload or {}
+            lines.append(json.dumps(payload, ensure_ascii=False, default=str))
+        return "\n".join(lines) + ("\n" if lines else "")
+
+    def _row_to_model(
+        self, row: Any, *, entry_count: int = 0
+    ) -> AgentSessionResponse:
+        def _col(name: str, default=None):
+            try:
+                val = row[name]
+            except (KeyError, IndexError, TypeError):
+                return default
+            return default if val is None else val
+
+        header = _json_loads(_col("header_payload", "{}"))
+        if not isinstance(header, dict):
+            header = {}
+        return AgentSessionResponse(
+            id=row["id"],
+            conversation_id=row["conversation_id"],
+            sdk_session_id=_col("sdk_session_id"),
+            workspace_id=_col("workspace_id"),
+            sandbox_session_id=_col("sandbox_session_id"),
+            status=_col("status", AgentSessionStatus.ACTIVE.value),
+            model_id=_col("model_id"),
+            thinking_level=_col("thinking_level"),
+            system_prompt_version=_col("system_prompt_version"),
+            tool_registry_version=_col("tool_registry_version"),
+            sdk_version=_col("sdk_version"),
+            session_schema_version=int(_col("session_schema_version", 3) or 3),
+            header_payload=header,
+            created_at=row["created_at"],
+            updated_at=row["updated_at"],
+            last_compacted_at=_col("last_compacted_at"),
+            entry_count=entry_count,
+        )
+
+    @staticmethod
+    def _entry_row_to_model(row: Any) -> AgentSessionEntryResponse:
+        def _col(name: str, default=None):
+            try:
+                val = row[name]
+            except (KeyError, IndexError, TypeError):
+                return default
+            return default if val is None else val
+
+        payload = _json_loads(_col("entry_payload", "{}"))
+        if not isinstance(payload, dict):
+            payload = {}
+        return AgentSessionEntryResponse(
+            id=row["id"],
+            agent_session_id=row["agent_session_id"],
+            sequence=int(row["sequence"]),
+            entry_type=row["entry_type"],
+            entry_payload=payload,
+            parent_entry_id=_col("parent_entry_id"),
+            branch_id=_col("branch_id"),
+            created_at=row["created_at"],
+        )
+
+
 class AgentRunRepository:
     """CRUD + optimistic lease for agent runs."""
 
@@ -716,6 +1113,12 @@ class AgentRunRepository:
 
     def create(self, entry: dict[str, Any]) -> AgentRunResponse:
         now = datetime.now(timezone.utc).isoformat()
+        budget_json = entry.get("budget_json")
+        if budget_json is not None and not isinstance(budget_json, str):
+            budget_json = _json_dumps(budget_json)
+        pending_json = entry.get("pending_approval_json")
+        if pending_json is not None and not isinstance(pending_json, str):
+            pending_json = _json_dumps(pending_json)
         with self.db.connect() as conn:
             conn.execute(
                 """
@@ -723,8 +1126,9 @@ class AgentRunRepository:
                     run_id, conversation_id, owner_user_id, organization_id,
                     status, lease_owner, lease_until, version,
                     sandbox_session_id, workspace_id, model_id,
+                    budget_json, pending_approval_json,
                     created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     entry["run_id"],
@@ -738,6 +1142,8 @@ class AgentRunRepository:
                     entry.get("sandbox_session_id"),
                     entry.get("workspace_id"),
                     entry.get("model_id"),
+                    budget_json,
+                    pending_json,
                     entry.get("created_at", now),
                     entry.get("updated_at", now),
                 ),
@@ -760,7 +1166,7 @@ class AgentRunRepository:
                 """
                 SELECT * FROM agent_runs
                 WHERE conversation_id = ?
-                  AND status IN ('pending', 'running')
+                  AND status IN ('pending', 'running', 'waiting_approval')
                 ORDER BY created_at DESC
                 LIMIT 1
                 """,
@@ -779,6 +1185,65 @@ class AgentRunRepository:
                 (conversation_id,),
             ).fetchall()
         return [self._row_to_model(r) for r in rows]
+
+    def list_by_status(self, status: str) -> list[AgentRunResponse]:
+        with self.db.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT * FROM agent_runs
+                WHERE status = ?
+                ORDER BY created_at DESC
+                """,
+                (status,),
+            ).fetchall()
+        return [self._row_to_model(r) for r in rows]
+
+    def set_pending_approval(
+        self,
+        run_id: str,
+        pending: dict[str, Any] | None,
+        *,
+        status: str | None = None,
+    ) -> AgentRunResponse | None:
+        now = datetime.now(timezone.utc).isoformat()
+        current = self.get(run_id)
+        if current is None:
+            return None
+        new_status = status or current.status
+        payload = _json_dumps(pending) if pending is not None else None
+        with self.db.connect() as conn:
+            conn.execute(
+                """
+                UPDATE agent_runs
+                SET pending_approval_json = ?,
+                    status = ?,
+                    version = version + 1,
+                    updated_at = ?
+                WHERE run_id = ?
+                """,
+                (payload, new_status, now, run_id),
+            )
+            conn.commit()
+        return self.get(run_id)
+
+    def set_budget_json(
+        self, run_id: str, budget: dict[str, Any] | None
+    ) -> AgentRunResponse | None:
+        now = datetime.now(timezone.utc).isoformat()
+        if self.get(run_id) is None:
+            return None
+        payload = _json_dumps(budget) if budget is not None else None
+        with self.db.connect() as conn:
+            conn.execute(
+                """
+                UPDATE agent_runs
+                SET budget_json = ?, version = version + 1, updated_at = ?
+                WHERE run_id = ?
+                """,
+                (payload, now, run_id),
+            )
+            conn.commit()
+        return self.get(run_id)
 
     def claim_lease(
         self,
@@ -890,6 +1355,56 @@ class AgentRunRepository:
     def mark_interrupted(self, run_id: str) -> AgentRunResponse | None:
         return self.update_status(run_id, AgentRunStatus.INTERRUPTED.value)
 
+    def update_usage(
+        self,
+        run_id: str,
+        *,
+        usage: dict[str, Any] | None = None,
+        model_id: str | None = None,
+    ) -> AgentRunResponse | None:
+        """Persist run usage (tokens/cost) and optional final model_id."""
+        now = datetime.now(timezone.utc).isoformat()
+        current = self.get(run_id)
+        if current is None:
+            return None
+        usage_json = (
+            json.dumps(usage, ensure_ascii=False, default=str)
+            if usage is not None
+            else None
+        )
+        with self.db.connect() as conn:
+            if usage is not None and model_id is not None:
+                conn.execute(
+                    """
+                    UPDATE agent_runs
+                    SET usage = ?, model_id = ?, version = version + 1, updated_at = ?
+                    WHERE run_id = ?
+                    """,
+                    (usage_json, model_id, now, run_id),
+                )
+            elif usage is not None:
+                conn.execute(
+                    """
+                    UPDATE agent_runs
+                    SET usage = ?, version = version + 1, updated_at = ?
+                    WHERE run_id = ?
+                    """,
+                    (usage_json, now, run_id),
+                )
+            elif model_id is not None:
+                conn.execute(
+                    """
+                    UPDATE agent_runs
+                    SET model_id = ?, version = version + 1, updated_at = ?
+                    WHERE run_id = ?
+                    """,
+                    (model_id, now, run_id),
+                )
+            else:
+                return current
+            conn.commit()
+        return self.get(run_id)
+
     def list_run_ids_for_conversation(self, conversation_id: str) -> list[str]:
         with self.db.connect() as conn:
             rows = conn.execute(
@@ -924,6 +1439,21 @@ class AgentRunRepository:
                 return default
             return default if val is None else val
 
+        budget_raw = _col("budget_json")
+        pending_raw = _col("pending_approval_json")
+        usage_raw = _col("usage")
+        usage: dict[str, Any] | None = None
+        if usage_raw:
+            if isinstance(usage_raw, dict):
+                usage = usage_raw
+            elif isinstance(usage_raw, str):
+                try:
+                    parsed = json.loads(usage_raw)
+                    if isinstance(parsed, dict):
+                        usage = parsed
+                except (TypeError, ValueError, json.JSONDecodeError):
+                    usage = None
+
         return AgentRunResponse(
             run_id=row["run_id"],
             conversation_id=row["conversation_id"],
@@ -936,6 +1466,11 @@ class AgentRunRepository:
             sandbox_session_id=_col("sandbox_session_id"),
             workspace_id=_col("workspace_id"),
             model_id=_col("model_id"),
+            budget_json=_json_loads(budget_raw) if isinstance(budget_raw, str) else budget_raw,
+            pending_approval_json=(
+                _json_loads(pending_raw) if isinstance(pending_raw, str) else pending_raw
+            ),
+            usage=usage,
             created_at=row["created_at"],
             updated_at=row["updated_at"],
         )
@@ -1284,7 +1819,10 @@ class AgentEventRepository:
 
 
 class ToolExecutionRepository:
-    """Tool execution ledger: prepared → executing → terminal; never auto-retry unknown."""
+    """Tool execution ledger: prepared → waiting_approval → executing → terminal.
+
+    Never auto-retry ``unknown`` or other terminal statuses (ADR §4.4 / §12.3).
+    """
 
     def __init__(self, db: Database | None = None) -> None:
         self.db = db or database
@@ -1295,6 +1833,12 @@ class ToolExecutionRepository:
         tool_call_id: str,
         run_id: str,
         idempotency_key: str,
+        tool_name: str | None = None,
+        arguments: dict | list | None = None,
+        session_id: str | None = None,
+        conversation_id: str | None = None,
+        workspace_id: str | None = None,
+        execution_id: str | None = None,
         summary: str | None = None,
     ) -> ToolExecutionResponse:
         """Insert prepared row. Idempotent on tool_call_id / idempotency_key."""
@@ -1306,19 +1850,29 @@ class ToolExecutionRepository:
             return by_id
 
         now = datetime.now(timezone.utc).isoformat()
+        args_json = _json_dumps(arguments) if arguments is not None else None
         with self.db.connect() as conn:
             conn.execute(
                 """
                 INSERT INTO tool_executions (
                     tool_call_id, run_id, status, idempotency_key, summary,
+                    session_id, conversation_id, workspace_id, tool_name,
+                    arguments, execution_id, result_summary,
                     created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     tool_call_id,
                     run_id,
                     ToolExecutionStatus.PREPARED.value,
                     idempotency_key,
+                    summary,
+                    session_id,
+                    conversation_id,
+                    workspace_id,
+                    tool_name,
+                    args_json,
+                    execution_id,
                     summary,
                     now,
                     now,
@@ -1358,14 +1912,38 @@ class ToolExecutionRepository:
         return [self._row_to_model(r) for r in rows]
 
     def mark_executing(self, tool_call_id: str) -> ToolExecutionResponse | None:
-        return self._transition(
-            tool_call_id,
-            allowed_from={
-                ToolExecutionStatus.PREPARED.value,
-                ToolExecutionStatus.WAITING_APPROVAL.value,
-            },
-            to_status=ToolExecutionStatus.EXECUTING.value,
-        )
+        current = self.get(tool_call_id)
+        if current is None:
+            return None
+        if current.status in TOOL_TERMINAL_STATUSES:
+            return current
+        if current.status not in {
+            ToolExecutionStatus.PREPARED.value,
+            ToolExecutionStatus.WAITING_APPROVAL.value,
+            ToolExecutionStatus.EXECUTING.value,
+        }:
+            return current
+        if current.status == ToolExecutionStatus.EXECUTING.value:
+            return current
+        now = datetime.now(timezone.utc).isoformat()
+        with self.db.connect() as conn:
+            conn.execute(
+                """
+                UPDATE tool_executions
+                SET status = ?, started_at = COALESCE(started_at, ?), updated_at = ?
+                WHERE tool_call_id = ? AND status IN (?, ?)
+                """,
+                (
+                    ToolExecutionStatus.EXECUTING.value,
+                    now,
+                    now,
+                    tool_call_id,
+                    ToolExecutionStatus.PREPARED.value,
+                    ToolExecutionStatus.WAITING_APPROVAL.value,
+                ),
+            )
+            conn.commit()
+        return self.get(tool_call_id)
 
     def mark_waiting_approval(
         self, tool_call_id: str
@@ -1382,6 +1960,9 @@ class ToolExecutionRepository:
         status: str,
         *,
         summary: str | None = None,
+        error: str | None = None,
+        result_json: dict | list | None = None,
+        execution_id: str | None = None,
     ) -> ToolExecutionResponse | None:
         if status not in TOOL_TERMINAL_STATUSES:
             raise ValueError(
@@ -1394,26 +1975,50 @@ class ToolExecutionRepository:
             # Already terminal — do not overwrite (especially unknown)
             return current
         now = datetime.now(timezone.utc).isoformat()
+        result_blob = _json_dumps(result_json) if result_json is not None else None
         with self.db.connect() as conn:
             conn.execute(
                 """
                 UPDATE tool_executions
-                SET status = ?, summary = COALESCE(?, summary), updated_at = ?
+                SET status = ?,
+                    summary = COALESCE(?, summary),
+                    result_summary = COALESCE(?, result_summary),
+                    error = COALESCE(?, error),
+                    result_json = COALESCE(?, result_json),
+                    execution_id = COALESCE(?, execution_id),
+                    finished_at = ?,
+                    updated_at = ?
                 WHERE tool_call_id = ?
                 """,
-                (status, summary, now, tool_call_id),
+                (
+                    status,
+                    summary,
+                    summary,
+                    error,
+                    result_blob,
+                    execution_id,
+                    now,
+                    now,
+                    tool_call_id,
+                ),
             )
             conn.commit()
         return self.get(tool_call_id)
 
     def can_auto_retry(self, tool_call_id: str) -> bool:
-        """Return False for missing, terminal, or unknown executions."""
+        """Return False for terminal or unknown; True only if never prepared or non-terminal."""
         row = self.get(tool_call_id)
         if row is None:
             return True  # never prepared → may start
         if row.status == ToolExecutionStatus.UNKNOWN.value:
             return False
         if row.status in TOOL_TERMINAL_STATUSES:
+            return False
+        # executing / waiting_approval: do not auto-retry side effects
+        if row.status in {
+            ToolExecutionStatus.EXECUTING.value,
+            ToolExecutionStatus.WAITING_APPROVAL.value,
+        }:
             return False
         return True
 
@@ -1465,12 +2070,27 @@ class ToolExecutionRepository:
                 return default
             return default if val is None else val
 
+        summary = _col("summary")
+        result_summary = _col("result_summary") or summary
+        args_raw = _col("arguments")
+        result_raw = _col("result_json")
         return ToolExecutionResponse(
             tool_call_id=row["tool_call_id"],
             run_id=row["run_id"],
             status=row["status"],
             idempotency_key=row["idempotency_key"],
-            summary=_col("summary"),
+            tool_name=_col("tool_name"),
+            arguments=_json_loads(args_raw) if args_raw else None,
+            session_id=_col("session_id"),
+            conversation_id=_col("conversation_id"),
+            workspace_id=_col("workspace_id"),
+            execution_id=_col("execution_id"),
+            started_at=_col("started_at"),
+            finished_at=_col("finished_at"),
+            result_summary=result_summary,
+            error=_col("error"),
+            result_json=_json_loads(result_raw) if result_raw else None,
+            summary=result_summary,
             created_at=row["created_at"],
             updated_at=row["updated_at"],
         )
@@ -1766,4 +2386,158 @@ class UserRepository:
             "created_at": row["created_at"],
             "updated_at": row["updated_at"],
             "last_login_at": row["last_login_at"],
+        }
+
+
+class ProcessRepository:
+    """Persistence for managed process_executions (B2 Process Manager)."""
+
+    def __init__(self, db: Database | None = None) -> None:
+        self.db = db or database
+
+    def upsert(self, entry: dict[str, Any]) -> None:
+        status = entry.get("status", ProcessStatus.CREATED)
+        if hasattr(status, "value"):
+            status = status.value
+        with self.db.connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO process_executions (
+                    process_id, session_id, run_id, command, cwd, env_json,
+                    status, pid, exit_code, background, timeout_seconds, error,
+                    stdout_log, stderr_log, log_truncated, log_total,
+                    started_at, finished_at, created_at, updated_at, trace_id
+                ) VALUES (
+                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+                )
+                ON CONFLICT(process_id) DO UPDATE SET
+                    session_id=excluded.session_id,
+                    run_id=excluded.run_id,
+                    command=excluded.command,
+                    cwd=excluded.cwd,
+                    env_json=excluded.env_json,
+                    status=excluded.status,
+                    pid=excluded.pid,
+                    exit_code=excluded.exit_code,
+                    background=excluded.background,
+                    timeout_seconds=excluded.timeout_seconds,
+                    error=excluded.error,
+                    stdout_log=excluded.stdout_log,
+                    stderr_log=excluded.stderr_log,
+                    log_truncated=excluded.log_truncated,
+                    log_total=excluded.log_total,
+                    started_at=excluded.started_at,
+                    finished_at=excluded.finished_at,
+                    updated_at=excluded.updated_at,
+                    trace_id=excluded.trace_id
+                """,
+                (
+                    entry["process_id"],
+                    entry["session_id"],
+                    entry.get("run_id"),
+                    entry.get("command", ""),
+                    entry.get("cwd"),
+                    entry.get("env_json"),
+                    str(status),
+                    entry.get("pid"),
+                    entry.get("exit_code"),
+                    1 if entry.get("background") else 0,
+                    entry.get("timeout_seconds"),
+                    entry.get("error"),
+                    entry.get("stdout_log", "") or "",
+                    entry.get("stderr_log", "") or "",
+                    1 if entry.get("log_truncated") else 0,
+                    int(entry.get("log_total") or 0),
+                    entry.get("started_at"),
+                    entry.get("finished_at"),
+                    entry.get("created_at"),
+                    entry.get("updated_at"),
+                    entry.get("trace_id"),
+                ),
+            )
+            conn.commit()
+
+    def get(self, process_id: str) -> dict[str, Any] | None:
+        with self.db.connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM process_executions WHERE process_id = ?",
+                (process_id,),
+            ).fetchone()
+        return self._row_to_dict(row) if row else None
+
+    def list_by_session(self, session_id: str) -> list[dict[str, Any]]:
+        with self.db.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT * FROM process_executions
+                WHERE session_id = ?
+                ORDER BY created_at
+                """,
+                (session_id,),
+            ).fetchall()
+        return [self._row_to_dict(r) for r in rows if r is not None]
+
+    def list_by_run(self, run_id: str) -> list[dict[str, Any]]:
+        with self.db.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT * FROM process_executions
+                WHERE run_id = ?
+                ORDER BY created_at
+                """,
+                (run_id,),
+            ).fetchall()
+        return [self._row_to_dict(r) for r in rows if r is not None]
+
+    def list_active(self) -> list[dict[str, Any]]:
+        """Return processes that were non-terminal at last persist (orphan candidates)."""
+        active_values = sorted(
+            {s.value if hasattr(s, "value") else str(s) for s in PROCESS_ACTIVE_STATUSES}
+        )
+        placeholders = ",".join("?" for _ in active_values)
+        with self.db.connect() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT * FROM process_executions
+                WHERE status IN ({placeholders})
+                ORDER BY created_at
+                """,
+                tuple(active_values),
+            ).fetchall()
+        return [self._row_to_dict(r) for r in rows if r is not None]
+
+    def total_count(self) -> int:
+        with self.db.connect() as conn:
+            row = conn.execute("SELECT COUNT(*) FROM process_executions").fetchone()
+        if row is None:
+            return 0
+        try:
+            return int(row[0])
+        except (KeyError, IndexError, TypeError):
+            return int(next(iter(dict(row).values())))
+
+    @staticmethod
+    def _row_to_dict(row: Any) -> dict[str, Any]:
+        return {
+            "process_id": row["process_id"],
+            "session_id": row["session_id"],
+            "run_id": row["run_id"],
+            "command": row["command"] or "",
+            "cwd": row["cwd"],
+            "env_json": row["env_json"],
+            "status": row["status"],
+            "pid": row["pid"],
+            "exit_code": row["exit_code"],
+            "background": bool(row["background"]),
+            "timeout_seconds": row["timeout_seconds"],
+            "error": row["error"],
+            "stdout_log": row["stdout_log"] or "",
+            "stderr_log": row["stderr_log"] or "",
+            "log_truncated": bool(row["log_truncated"]),
+            "log_total": int(row["log_total"] or 0),
+            "started_at": row["started_at"],
+            "finished_at": row["finished_at"],
+            "created_at": row["created_at"],
+            "updated_at": row["updated_at"],
+            "trace_id": row["trace_id"],
         }

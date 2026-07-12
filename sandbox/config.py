@@ -142,6 +142,8 @@ class Settings(BaseSettings):
     execution_timeout_seconds: int = 120
     max_output_chars: int = 50_000
     max_process_count: int = 20
+    # Concurrent managed long-running processes (B2 Process Manager).
+    max_managed_processes: int = 32
     max_cpu_time_seconds: int = 300
     max_memory_mb: int = 512
     max_file_size_mb: int = 50

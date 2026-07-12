@@ -28,10 +28,17 @@ class InterruptBody(BaseModel):
 class ToolTerminalBody(BaseModel):
     status: str
     summary: str | None = None
+    error: str | None = None
+    result_json: dict | list | None = None
+    execution_id: str | None = None
 
 
 class CompleteBody(BaseModel):
     lease_owner: str | None = None
+    status: str | None = None
+    # B7: actual model + usage (tokens/cost) recorded at completion
+    model_id: str | None = None
+    usage: dict | None = None
 
 
 class FailBody(BaseModel):
@@ -39,9 +46,24 @@ class FailBody(BaseModel):
     lease_owner: str | None = None
 
 
+class WaitingApprovalBody(BaseModel):
+    approval_id: str | None = None
+    pending_approval: dict | None = None
+    lease_owner: str | None = None
+
+
+class BudgetExceededBody(BaseModel):
+    reason: str | None = None
+    usage: dict | None = None
+    lease_owner: str | None = None
+
+
 @router.post("/agent-runs", response_model=AgentRunResponse, status_code=201)
 def create_agent_run(body: AgentRunCreate):
     """Create run, claim lease, stamp conversation.last_run_id."""
+    budget = body.budget
+    if budget is not None and hasattr(budget, "model_dump"):
+        budget = budget.model_dump(exclude_none=True)
     return agent_run_manager.start_run(
         conversation_id=body.conversation_id,
         owner_user_id=body.owner_user_id,
@@ -51,7 +73,16 @@ def create_agent_run(body: AgentRunCreate):
         model_id=body.model_id,
         lease_owner=body.lease_owner,
         lease_seconds=body.lease_seconds,
+        budget=budget,
     )
+
+
+@router.get("/agent-runs", response_model=list[AgentRunResponse])
+def list_agent_runs(status: str | None = Query(default=None)):
+    """List runs, optionally filtered by status (e.g. waiting_approval)."""
+    if status:
+        return agent_run_manager.runs.list_by_status(status)
+    return []
 
 
 @router.get("/agent-runs/{run_id}", response_model=AgentRunResponse)
@@ -79,18 +110,54 @@ def claim_agent_run(run_id: str, body: ClaimLeaseRequest):
 def release_agent_run(run_id: str, body: CompleteBody):
     if not body.lease_owner:
         raise HTTPException(status_code=400, detail="lease_owner is required")
+    status = body.status or "completed"
     released = agent_run_manager.release_lease(
-        run_id, lease_owner=body.lease_owner, status="completed"
+        run_id, lease_owner=body.lease_owner, status=status
     )
     if released is None:
         raise HTTPException(status_code=409, detail="Lease release failed")
     return released
 
 
+@router.post("/agent-runs/{run_id}/waiting-approval", response_model=AgentRunResponse)
+def mark_run_waiting_approval(run_id: str, body: WaitingApprovalBody | None = None):
+    """Park run for recoverable approval; release execution lease."""
+    body = body or WaitingApprovalBody()
+    updated = agent_run_manager.mark_waiting_approval(
+        run_id,
+        approval_id=body.approval_id,
+        pending_approval=body.pending_approval,
+        lease_owner=body.lease_owner,
+    )
+    if updated is None:
+        raise HTTPException(status_code=404, detail="Agent run not found")
+    return updated
+
+
+@router.post("/agent-runs/{run_id}/budget-exceeded", response_model=AgentRunResponse)
+def mark_run_budget_exceeded(run_id: str, body: BudgetExceededBody | None = None):
+    """Terminal budget_exceeded status (ADR §4.9)."""
+    body = body or BudgetExceededBody()
+    updated = agent_run_manager.mark_budget_exceeded(
+        run_id,
+        reason=body.reason,
+        usage=body.usage,
+        lease_owner=body.lease_owner,
+    )
+    if updated is None:
+        raise HTTPException(status_code=404, detail="Agent run not found")
+    return updated
+
+
 @router.post("/agent-runs/{run_id}/complete", response_model=AgentRunResponse)
 def complete_agent_run(run_id: str, body: CompleteBody | None = None):
     body = body or CompleteBody()
-    updated = agent_run_manager.complete_run(run_id, lease_owner=body.lease_owner)
+    updated = agent_run_manager.complete_run(
+        run_id,
+        lease_owner=body.lease_owner,
+        usage=body.usage,
+        model_id=body.model_id,
+    )
     if updated is None:
         raise HTTPException(status_code=404, detail="Agent run not found")
     return updated
@@ -187,7 +254,43 @@ def prepare_tool_execution(body: ToolExecutionPrepare):
         tool_call_id=body.tool_call_id,
         run_id=body.run_id,
         idempotency_key=body.idempotency_key,
+        tool_name=body.tool_name,
+        arguments=body.arguments,
+        session_id=body.session_id,
+        conversation_id=body.conversation_id,
+        workspace_id=body.workspace_id,
+        execution_id=body.execution_id,
         summary=body.summary,
+    )
+
+
+@router.get(
+    "/tool-executions/{tool_call_id}",
+    response_model=ToolExecutionResponse,
+)
+def get_tool_execution(tool_call_id: str):
+    row = agent_run_manager.get_tool(tool_call_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Tool execution not found")
+    return row
+
+
+@router.get(
+    "/tool-executions",
+    response_model=list[ToolExecutionResponse],
+)
+def list_tool_executions(
+    run_id: str | None = Query(default=None),
+    idempotency_key: str | None = Query(default=None),
+):
+    """Lookup by run_id or idempotency_key (for lost-response recovery)."""
+    if idempotency_key:
+        row = agent_run_manager.get_tool_by_idempotency(idempotency_key)
+        return [row] if row else []
+    if run_id:
+        return agent_run_manager.list_tools_for_run(run_id)
+    raise HTTPException(
+        status_code=400, detail="run_id or idempotency_key query required"
     )
 
 
@@ -197,6 +300,17 @@ def prepare_tool_execution(body: ToolExecutionPrepare):
 )
 def mark_tool_executing(tool_call_id: str):
     updated = agent_run_manager.mark_tool_executing(tool_call_id)
+    if updated is None:
+        raise HTTPException(status_code=404, detail="Tool execution not found")
+    return updated
+
+
+@router.post(
+    "/tool-executions/{tool_call_id}/waiting-approval",
+    response_model=ToolExecutionResponse,
+)
+def mark_tool_waiting_approval(tool_call_id: str):
+    updated = agent_run_manager.mark_tool_waiting_approval(tool_call_id)
     if updated is None:
         raise HTTPException(status_code=404, detail="Tool execution not found")
     return updated
@@ -213,7 +327,12 @@ def mark_tool_terminal(tool_call_id: str, body: ToolTerminalBody):
             detail=f"status must be one of {sorted(TOOL_TERMINAL_STATUSES)}",
         )
     updated = agent_run_manager.mark_tool_terminal(
-        tool_call_id, body.status, summary=body.summary
+        tool_call_id,
+        body.status,
+        summary=body.summary,
+        error=body.error,
+        result_json=body.result_json,
+        execution_id=body.execution_id,
     )
     if updated is None:
         raise HTTPException(status_code=404, detail="Tool execution not found")

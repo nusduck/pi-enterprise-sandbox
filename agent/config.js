@@ -199,8 +199,10 @@ export function effectiveConfig(cfg = config) {
     LLMIO_BASE_URL: cfg.LLMIO_BASE_URL ? cfg.LLMIO_BASE_URL : '<empty>',
     LLMIO_API_KEY: cfg.LLMIO_API_KEY ? '***' : '<empty>',
     MODEL_ID: cfg.MODEL_ID,
+    // Env overrides remain for backward compat; hot path uses model registry.
     MODEL_CONTEXT_WINDOW: cfg.MODEL_CONTEXT_WINDOW,
     MODEL_MAX_TOKENS: cfg.MODEL_MAX_TOKENS,
+    MODEL_REGISTRY_PATH: cfg.MODEL_REGISTRY_PATH || process.env.MODEL_REGISTRY_PATH || '<default>',
     APPROVAL_ENABLED: cfg.APPROVAL_ENABLED,
     SKILLS_MODE: cfg.SKILLS_MODE,
     SKILLS_ROOT: cfg.SKILLS_ROOT,
@@ -211,6 +213,7 @@ export function effectiveConfig(cfg = config) {
       : '<empty>',
     // Full composed prompt never dumped.
     SYSTEM_PROMPT: '<redacted>',
+    AGENT_FORCE_INMEMORY: Boolean(cfg.AGENT_FORCE_INMEMORY),
   };
 }
 
@@ -235,8 +238,15 @@ export const config = {
   LLMIO_BASE_URL: process.env.LLMIO_BASE_URL || '',
   LLMIO_API_KEY: process.env.LLMIO_API_KEY || '',
   MODEL_ID: process.env.MODEL_ID || 'deepseek-v4-flash',
+  /**
+   * Backward-compatible env overrides applied on top of the Model Registry
+   * entry for the active MODEL_ID. Registry is the sole capability source on
+   * the session-create hot path (see services/model-registry.js).
+   */
   MODEL_CONTEXT_WINDOW: parseInt(process.env.MODEL_CONTEXT_WINDOW, 10) || 128000,
   MODEL_MAX_TOKENS: parseInt(process.env.MODEL_MAX_TOKENS, 10) || 8192,
+  /** Optional path to enterprise model-registry.json (overrides seed). */
+  MODEL_REGISTRY_PATH: process.env.MODEL_REGISTRY_PATH || '',
   /** True only when AGENT_ENABLE_FAKE_LLM is set and production guards pass. */
   FAKE_LLM_ENABLED: isFakeLlmEnabled(),
   NODE_ENV: process.env.NODE_ENV || 'development',
@@ -264,6 +274,15 @@ export const config = {
    * Platform security cannot be disabled via env.
    */
   SYSTEM_PROMPT: composeSystemPrompt(productSystemPrompt),
+  /**
+   * Rollback flag: force SessionManager.inMemory() and skip DB session restore.
+   * Default false — production uses durable agent_sessions + JSONL materialize.
+   */
+  AGENT_FORCE_INMEMORY:
+    String(process.env.AGENT_FORCE_INMEMORY || '')
+      .trim()
+      .toLowerCase() === 'true' ||
+    String(process.env.AGENT_FORCE_INMEMORY || '').trim() === '1',
 };
 
 export const AUTH_HEADER = config.SANDBOX_API_TOKEN

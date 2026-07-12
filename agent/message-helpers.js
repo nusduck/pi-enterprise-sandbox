@@ -2,6 +2,7 @@
  * Message extract / history helpers for multi-turn agent transcript restore.
  */
 import { config } from './config.js';
+import { extractMessageAttachments } from './attachment-context.js';
 
 /** Cap restored turns to keep context bounded. */
 const MAX_HISTORY_MESSAGES = 40;
@@ -28,6 +29,8 @@ export function extractMessageText(msg) {
   }
   return '';
 }
+
+export { extractMessageAttachments };
 
 /**
  * Convert UI/history messages into pi-ai UserMessage / AssistantMessage shapes
@@ -71,7 +74,7 @@ export function toAgentHistoryMessages(messages, modelId = config.MODEL_ID) {
 }
 
 /**
- * Normalize messages for conversation DB persistence (text-only roles).
+ * Normalize messages for conversation DB persistence (text + attachment metadata).
  */
 export function toPersistableMessages(messages) {
   return (messages || [])
@@ -79,8 +82,13 @@ export function toPersistableMessages(messages) {
       const role = m.role === 'assistant' ? 'assistant' : m.role === 'user' ? 'user' : null;
       if (!role) return null;
       const text = extractMessageText(m).trim();
-      if (!text) return null;
-      return { role, content: text };
+      const attachments = extractMessageAttachments(m);
+      if (!text && !attachments.length) return null;
+      const row = { role, content: text || '' };
+      if (attachments.length) {
+        row.attachments = attachments;
+      }
+      return row;
     })
     .filter(Boolean)
     .slice(-100);

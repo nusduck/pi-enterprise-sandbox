@@ -22,6 +22,13 @@ import {
 } from './routes/conversations.js';
 import { handleListArtifacts } from './routes/artifacts.js';
 import { handleDecideApproval } from './routes/approvals.js';
+import {
+  handleSteerRun,
+  handleFollowUpRun,
+  handleCancelRun,
+  handleGetRun,
+  handleResumeApproval,
+} from './routes/runs.js';
 import { handleRegister, handleLogin, handleMe } from './routes/auth.js';
 import { handleEnsureSession } from './routes/sessions.js';
 import { checkHealth } from './services/sandbox-client.js';
@@ -197,6 +204,44 @@ const server = http.createServer(async (req, res) => {
         const body = await readBody(req);
         const parsed = body ? JSON.parse(body) : {};
         await handleDecideApproval(approvalId, parsed, res, req);
+        return;
+      }
+    }
+
+    // ── Run control (ADR §4.7 / §10) ──
+    {
+      const runSteer = path.match(/^\/api\/runs\/([^/]+)\/steer$/);
+      if (req.method === 'POST' && runSteer) {
+        const runId = decodeURIComponent(runSteer[1]);
+        const body = await readBody(req);
+        const parsed = body ? JSON.parse(body) : {};
+        await handleSteerRun(runId, parsed, res);
+        return;
+      }
+      const runFollow = path.match(/^\/api\/runs\/([^/]+)\/follow-up$/);
+      if (req.method === 'POST' && runFollow) {
+        const runId = decodeURIComponent(runFollow[1]);
+        const body = await readBody(req);
+        const parsed = body ? JSON.parse(body) : {};
+        await handleFollowUpRun(runId, parsed, res);
+        return;
+      }
+      const runCancel = path.match(/^\/api\/runs\/([^/]+)\/cancel$/);
+      if (req.method === 'POST' && runCancel) {
+        await handleCancelRun(decodeURIComponent(runCancel[1]), res);
+        return;
+      }
+      const runResume = path.match(/^\/api\/runs\/([^/]+)\/resume-approval$/);
+      if (req.method === 'POST' && runResume) {
+        const runId = decodeURIComponent(runResume[1]);
+        const body = await readBody(req);
+        const parsed = body ? JSON.parse(body) : {};
+        await handleResumeApproval(runId, parsed, res);
+        return;
+      }
+      const runGet = path.match(/^\/api\/runs\/([^/]+)$/);
+      if (req.method === 'GET' && runGet) {
+        await handleGetRun(decodeURIComponent(runGet[1]), res);
         return;
       }
     }

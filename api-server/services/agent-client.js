@@ -61,6 +61,98 @@ export async function cancelAgentRun(runId) {
 }
 
 /**
+ * POST /internal/agent-runs/:id/steer
+ * @param {string} runId
+ * @param {{ text: string, conversation_id?: string|null }} body
+ */
+export async function steerAgentRun(runId, body) {
+  const resp = await fetch(
+    `${config.AGENT_BASE_URL}/internal/agent-runs/${encodeURIComponent(runId)}/steer`,
+    {
+      method: 'POST',
+      headers: internalHeaders(),
+      body: JSON.stringify(body),
+    },
+  );
+  if (!resp.ok) {
+    const text = await resp.text().catch(() => resp.statusText);
+    const err = new Error(`Agent steer failed (${resp.status}): ${text}`);
+    err.status = resp.status;
+    throw err;
+  }
+  return resp.json();
+}
+
+/**
+ * POST /internal/agent-runs/:id/follow-up
+ * @param {string} runId
+ * @param {{ text: string, conversation_id?: string|null }} body
+ */
+export async function followUpAgentRun(runId, body) {
+  const resp = await fetch(
+    `${config.AGENT_BASE_URL}/internal/agent-runs/${encodeURIComponent(runId)}/follow-up`,
+    {
+      method: 'POST',
+      headers: internalHeaders(),
+      body: JSON.stringify(body),
+    },
+  );
+  if (!resp.ok) {
+    const text = await resp.text().catch(() => resp.statusText);
+    const err = new Error(`Agent follow-up failed (${resp.status}): ${text}`);
+    err.status = resp.status;
+    throw err;
+  }
+  return resp.json();
+}
+
+/**
+ * POST /internal/agent-runs/:id/resume-approval
+ * @param {string} runId
+ * @param {object} body
+ */
+export async function resumeAgentRunApproval(runId, body = {}) {
+  const resp = await fetch(
+    `${config.AGENT_BASE_URL}/internal/agent-runs/${encodeURIComponent(runId)}/resume-approval`,
+    {
+      method: 'POST',
+      headers: internalHeaders(),
+      body: JSON.stringify(body),
+    },
+  );
+  if (!resp.ok) {
+    const text = await resp.text().catch(() => resp.statusText);
+    const err = new Error(`Agent resume-approval failed (${resp.status}): ${text}`);
+    err.status = resp.status;
+    throw err;
+  }
+  return resp.json();
+}
+
+/**
+ * Notify agent of an approval decision (wakes waiter / resumes run).
+ * @param {string} approvalId
+ * @param {{ decision: string, run_id?: string, reason?: string }} body
+ */
+export async function decideAgentApproval(approvalId, body) {
+  const resp = await fetch(
+    `${config.AGENT_BASE_URL}/internal/approvals/${encodeURIComponent(approvalId)}/decide`,
+    {
+      method: 'POST',
+      headers: internalHeaders(),
+      body: JSON.stringify(body),
+    },
+  );
+  if (!resp.ok) {
+    const text = await resp.text().catch(() => resp.statusText);
+    const err = new Error(`Agent approval decide failed (${resp.status}): ${text}`);
+    err.status = resp.status;
+    throw err;
+  }
+  return resp.json();
+}
+
+/**
  * @param {string} runId
  */
 export async function getAgentRun(runId) {

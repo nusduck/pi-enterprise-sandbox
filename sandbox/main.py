@@ -15,6 +15,7 @@ from sandbox import __version__
 from sandbox.config import effective_config, ensure_safe_to_start, settings
 from sandbox.routers import (
     agent_runs,
+    agent_sessions,
     approvals,
     artifacts,
     conversations,
@@ -22,6 +23,7 @@ from sandbox.routers import (
     files,
     health,
     mcp_router,
+    processes,
     sessions,
     traces,
 )
@@ -124,6 +126,23 @@ async def lifespan(app: FastAPI):
         "Workspaces root configured | Skills configured | MCP: %s",
         "enabled" if settings.mcp_enabled else "disabled",
     )
+
+    # Process Manager: re-scan orphaned processes after schema is ready
+    try:
+        from sandbox.database import database as _db
+        from sandbox.services.process_manager import process_manager
+
+        _db.migrate_agent_session()
+        _db.migrate_process()
+        _db.migrate_execution_events()
+        _db.migrate_tool_ledger()
+        _db.migrate_b6_runtime()
+        _db.migrate_agent_run_usage()
+        orphaned = process_manager.mark_orphans()
+        if orphaned:
+            logger.info("Process Manager marked %d orphaned process(es)", orphaned)
+    except Exception:
+        logger.exception("Process Manager orphan scan failed at startup")
 
     # Start session + retention background cleanup task
     cleanup_task = asyncio.create_task(_cleanup_loop())
@@ -341,10 +360,12 @@ async def value_error_handler(request: Request, exc: ValueError):
 
 app.include_router(auth_router.router)
 app.include_router(agent_runs.router)
+app.include_router(agent_sessions.router)
 app.include_router(sessions.router)
 app.include_router(approvals.router)
 app.include_router(conversations.router)
 app.include_router(executions.router)
+app.include_router(processes.router)
 app.include_router(files.router)
 app.include_router(artifacts.router)
 app.include_router(traces.router)

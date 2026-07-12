@@ -184,6 +184,7 @@ export function isProtectedApiPath(path) {
     path.startsWith('/api/files/') ||
     path.startsWith('/api/sessions') ||
     path.startsWith('/api/artifacts') ||
-    path.startsWith('/api/approvals')
+    path.startsWith('/api/approvals') ||
+    path.startsWith('/api/runs')
   );
 }

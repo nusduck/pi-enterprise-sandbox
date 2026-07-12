@@ -157,11 +157,22 @@ describe('createSandboxTools concurrent contexts', () => {
     assert.equal(last.sessionId, 'session-a-rotated');
     assert.equal(notifsB.length, 0);
 
-    // Concurrent approval paths: each notifier receives only its own approval_id
-    await Promise.all([
-      bashA.execute('tc-a5', { command: 'need-approval-A' }),
-      bashB.execute('tc-b5', { command: 'need-approval-B' }),
+    // Concurrent approval paths (B6): tools suspend with ApprovalSuspendedError
+    // after notifying — no in-tool getApproval polling. Notifiers must not cross-talk.
+    const [errA, errB] = await Promise.all([
+      bashA.execute('tc-a5', { command: 'need-approval-A' }).then(
+        () => null,
+        (e) => e,
+      ),
+      bashB.execute('tc-b5', { command: 'need-approval-B' }).then(
+        () => null,
+        (e) => e,
+      ),
     ]);
+    assert.equal(errA?.name, 'ApprovalSuspendedError', `expected suspend A, got ${errA}`);
+    assert.equal(errB?.name, 'ApprovalSuspendedError', `expected suspend B, got ${errB}`);
+    assert.equal(errA?.pending?.approval_id, 'appr-A');
+    assert.equal(errB?.pending?.approval_id, 'appr-B');
     assert.ok(
       notifsA.some((n) => n.type === 'approval_required' && n.approval_id === 'appr-A'),
       `expected notifier A to receive appr-A, got ${JSON.stringify(notifsA)}`,
@@ -172,7 +183,8 @@ describe('createSandboxTools concurrent contexts', () => {
     );
     assert.ok(!notifsA.some((n) => String(n.approval_id || '').includes('B')));
     assert.ok(!notifsB.some((n) => String(n.approval_id || '').includes('A')));
-    assert.ok(clientA.calls.some((c) => c.op === 'getApproval' && c.approvalId === 'appr-A'));
-    assert.ok(clientB.calls.some((c) => c.op === 'getApproval' && c.approvalId === 'appr-B'));
+    // No cross-session approval checks on the wrong client
+    assert.ok(!clientA.calls.some((c) => c.op === 'approvalCheck' && String(c.body?.command || '').includes('B')));
+    assert.ok(!clientB.calls.some((c) => c.op === 'approvalCheck' && String(c.body?.command || '').includes('A')));
   });
 });

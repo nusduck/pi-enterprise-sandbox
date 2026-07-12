@@ -2,7 +2,8 @@
  * Sandbox tool definitions for pi-coding-agent.
  * Each tool defers execution to a request-scoped sandbox client.
  *
- * Tools: read, write, edit, bash, submit_artifact, ls, find, grep
+ * Tools: read, write, edit, apply_patch, bash, submit_artifact, ls, find, grep,
+ *        process_start/status/logs/wait/write_stdin/signal/cancel
  *
  * Prefer createSandboxTools({ client, sessionId|getSessionId, approvalNotifier })
  * so concurrent chat turns never share session/approval state.
@@ -12,11 +13,14 @@
  * - workspace write mutex for serial side-effect tools
  * - APPROVAL_ENABLED maps approval_required → execute + bypass audit;
  *   hard_deny is never overridden
+ * - Tool Execution Ledger (ADR §4.4): prepare → executing → terminal
+ *   with idempotency so lost HTTP responses do not double side-effects
  *
  * NOTE: createAgentSession({ tools: [...] }) is an allowlist — every tool
  * name here must also appear in that list or the model will not see it.
  */
 import { Type } from 'typebox';
+import { createHash, randomUUID } from 'node:crypto';
 import * as defaultSb from './services/sandbox-client.js';
 import { config } from './config.js';
 import {
@@ -34,9 +38,10 @@ import {
   isReadonlySkillExecution,
   DEFAULT_SKILL_ROOTS,
 } from './skills/paths.js';
+import { ApprovalSuspendedError } from './services/approval-waiter.js';
 
-const APPROVAL_POLL_MS = 1500;
-const APPROVAL_MAX_WAIT_MS = 5 * 60 * 1000;
+/** Terminal ledger statuses that must never re-execute side effects. */
+const LEDGER_TERMINAL = new Set(['succeeded', 'failed', 'cancelled', 'unknown']);
 
 /**
  * @typedef {object} SandboxToolsContext
@@ -48,6 +53,9 @@ const APPROVAL_MAX_WAIT_MS = 5 * 60 * 1000;
  * @property {boolean} [approvalEnabled]
  * @property {() => object} [getMeta]
  * @property {((ev: object) => void) | null} [auditSink]
+ * @property {(pending: object) => Promise<void> | void} [onApprovalSuspend]
+ * @property {() => Set<string>|null|undefined} [getPreApprovedIds]
+ * @property {string|null} [toolCallIdHint]
  */
 
 /**
@@ -71,6 +79,10 @@ export function createSandboxTools(ctx = {}) {
   const getMeta = typeof ctx.getMeta === 'function' ? ctx.getMeta : () => ({});
   const auditSink = typeof ctx.auditSink === 'function' ? ctx.auditSink : null;
   const skillRoots = ctx.skillRoots || config.SKILL_ROOTS || DEFAULT_SKILL_ROOTS;
+  const onApprovalSuspend =
+    typeof ctx.onApprovalSuspend === 'function' ? ctx.onApprovalSuspend : null;
+  const getPreApprovedIds =
+    typeof ctx.getPreApprovedIds === 'function' ? ctx.getPreApprovedIds : () => null;
 
   function metaNow() {
     return {
@@ -112,14 +124,18 @@ export function createSandboxTools(ctx = {}) {
   }
 
   /**
-   * Run policy check; if pending, notify UI and poll until approved/rejected/timeout.
+   * Run policy check. When pending_approval, park the run via checkpoint +
+   * ApprovalSuspendedError (no fixed-time in-tool polling — ADR §4.8).
    * Fail-closed for all write-class tools when the check endpoint errors.
    * When APPROVAL_ENABLED=false, remote may auto-approve with bypass; local
    * hard_deny still blocks before this is called.
    *
+   * @param {string} toolName
+   * @param {object} [params]
+   * @param {string|null} [toolCallId]
    * @returns {Promise<{ ok: boolean, reason?: string, approval_id?: string, policy_version?: string, approval_bypassed?: boolean }>}
    */
-  async function ensureApproved(toolName, params = {}) {
+  async function ensureApproved(toolName, params = {}, toolCallId = null) {
     const sessionId = getSessionId();
     if (!sessionId) {
       // No session: fail-closed for write tools (cannot re-check Sandbox)
@@ -192,8 +208,17 @@ export function createSandboxTools(ctx = {}) {
       };
     }
 
-    // If approvals disabled client-side but sandbox still returned pending, fail-closed
-    // only when we expected bypass — prefer trust sandbox; if APPROVAL_ENABLED false,
+    // Pre-approved after resume: skip re-park for the same approval_id
+    const pre = getPreApprovedIds();
+    if (pre && pre.has(check.approval_id)) {
+      return {
+        ok: true,
+        approval_id: check.approval_id,
+        policy_version: check.policy_version || POLICY_VERSION,
+      };
+    }
+
+    // If approvals disabled client-side but sandbox still returned pending,
     // treat pending as execute (audit was on sandbox when configured consistently).
     if (!approvalEnabled) {
       emitToolAudit(
@@ -222,6 +247,20 @@ export function createSandboxTools(ctx = {}) {
     }
 
     const approvalId = check.approval_id;
+    const meta = metaNow();
+    const pending = {
+      approval_id: approvalId,
+      tool_name: toolName,
+      tool_call_id: toolCallId || null,
+      params: params || {},
+      run_id: meta.run_id || null,
+      conversation_id: meta.conversation_id || null,
+      sandbox_session_id: sessionId,
+      reason: check.reason,
+      risk_level: check.risk_level,
+      policy_version: check.policy_version || POLICY_VERSION,
+    };
+
     if (approvalNotifier) {
       approvalNotifier({
         type: 'approval_required',
@@ -235,63 +274,247 @@ export function createSandboxTools(ctx = {}) {
       });
     }
 
-    const deadline = Date.now() + APPROVAL_MAX_WAIT_MS;
-    while (Date.now() < deadline) {
-      await new Promise((r) => setTimeout(r, APPROVAL_POLL_MS));
-      try {
-        const st = await sb.getApproval(approvalId);
-        if (st.status === 'approved') {
-          return {
-            ok: true,
-            approval_id: approvalId,
-            policy_version: check.policy_version || POLICY_VERSION,
-          };
-        }
-        if (st.status === 'rejected') {
-          return {
-            ok: false,
-            reason: st.reason || 'Rejected by operator',
-            approval_id: approvalId,
-            policy_version: check.policy_version || POLICY_VERSION,
-          };
-        }
-      } catch {
-        // keep polling until timeout
-      }
+    // B6: checkpoint + release path — no fixed-time poll inside the tool.
+    if (onApprovalSuspend) {
+      await onApprovalSuspend(pending);
     }
+    throw new ApprovalSuspendedError(pending);
+  }
+
+  /**
+   * Build a stable idempotency key for a tool call.
+   * Prefer toolCallId; fall back to hash of name+args so retries collide.
+   * @param {string} toolName
+   * @param {string|null} toolCallId
+   * @param {object} params
+   */
+  function makeIdempotencyKey(toolName, toolCallId, params) {
+    if (toolCallId) return `tc_${toolCallId}`;
+    const meta = metaNow();
+    const basis = JSON.stringify({
+      tool: toolName,
+      run_id: meta.run_id || null,
+      params: params || {},
+    });
+    const h = createHash('sha256').update(basis).digest('hex').slice(0, 24);
+    return `idem_${toolName}_${h}`;
+  }
+
+  /**
+   * Replay a previously stored tool result from the ledger (idempotent retry).
+   * @param {object} ledgerRow
+   */
+  function replayFromLedger(ledgerRow) {
+    const cached = ledgerRow?.result_json;
+    if (cached && typeof cached === 'object' && Array.isArray(cached.content)) {
+      return {
+        content: cached.content,
+        details: {
+          ...(cached.details || {}),
+          ledger_replay: true,
+          tool_call_id: ledgerRow.tool_call_id,
+          status: ledgerRow.status,
+        },
+        isError: Boolean(cached.isError || ledgerRow.status === 'failed'),
+      };
+    }
+    const summary =
+      ledgerRow?.result_summary ||
+      ledgerRow?.summary ||
+      ledgerRow?.error ||
+      `Tool already ${ledgerRow?.status || 'terminal'} (idempotent replay)`;
+    const isErr = ledgerRow?.status === 'failed' || ledgerRow?.status === 'cancelled';
     return {
-      ok: false,
-      reason: 'Approval timed out',
-      approval_id: approvalId,
-      policy_version: check.policy_version || POLICY_VERSION,
+      content: [{ type: 'text', text: summary }],
+      details: {
+        ledger_replay: true,
+        tool_call_id: ledgerRow?.tool_call_id,
+        status: ledgerRow?.status,
+        isError: isErr,
+      },
+      isError: isErr,
     };
   }
 
   /**
-   * Wrap execute with write mutex + approval gate for write-class tools.
+   * Best-effort ledger lifecycle around a tool body.
+   * Fail-open on ledger HTTP errors so sandbox tools still work offline,
+   * but when a terminal row is observed, never re-run side effects.
+   *
+   * Status flow: prepared → (waiting_approval) → executing → terminal
+   *
+   * @param {string} toolName
+   * @param {string|null} toolCallId
+   * @param {object} params
+   * @param {(ctx: { callId: string, markWaitingApproval: () => Promise<void>, markExecuting: () => Promise<void> }) => Promise<object>} bodyFn
+   */
+  async function withLedger(toolName, toolCallId, params, bodyFn) {
+    const meta = metaNow();
+    const callId = toolCallId || `tc_${randomUUID().replace(/-/g, '').slice(0, 16)}`;
+    const idempotencyKey = makeIdempotencyKey(toolName, callId, params);
+    const runId = meta.run_id || 'run_unknown';
+    let ledgerActive = false;
+
+    // 1) Prepare (idempotent)
+    try {
+      if (typeof sb.prepareToolExecution === 'function') {
+        const prepared = await sb.prepareToolExecution({
+          tool_call_id: callId,
+          run_id: runId,
+          idempotency_key: idempotencyKey,
+          tool_name: toolName,
+          arguments: params || {},
+          session_id: meta.session_id || getSessionId() || null,
+          conversation_id: meta.conversation_id || null,
+          workspace_id: meta.workspace_id || meta.workspace_key || null,
+          summary: `${toolName}`,
+        });
+        ledgerActive = true;
+        if (prepared && LEDGER_TERMINAL.has(prepared.status)) {
+          return replayFromLedger(prepared);
+        }
+        // executing already: do not double side-effects
+        if (prepared?.status === 'executing') {
+          return {
+            content: [
+              {
+                type: 'text',
+                text:
+                  `Tool call ${callId} is already executing; ` +
+                  'refusing duplicate side-effect (query ledger for final status)',
+              },
+            ],
+            details: {
+              isError: true,
+              tool_call_id: callId,
+              status: 'executing',
+              idempotent_block: true,
+            },
+            isError: true,
+          };
+        }
+      }
+    } catch {
+      ledgerActive = false;
+    }
+
+    const markWaitingApproval = async () => {
+      if (ledgerActive && typeof sb.markToolWaitingApproval === 'function') {
+        try {
+          await sb.markToolWaitingApproval(callId);
+        } catch {
+          /* best-effort */
+        }
+      }
+    };
+
+    const markExecuting = async () => {
+      if (ledgerActive && typeof sb.markToolExecuting === 'function') {
+        try {
+          await sb.markToolExecuting(callId);
+        } catch {
+          /* best-effort */
+        }
+      }
+    };
+
+    // 2) Body (approval may mark waiting_approval; then executing; then side effect)
+    let result;
+    let thrown = null;
+    try {
+      result = await bodyFn({ callId, markWaitingApproval, markExecuting });
+    } catch (err) {
+      // Do not terminalize suspended approvals — resume will complete the ledger.
+      if (err instanceof ApprovalSuspendedError || err?.name === 'ApprovalSuspendedError') {
+        await markWaitingApproval();
+        throw err;
+      }
+      thrown = err;
+      result = {
+        content: [{ type: 'text', text: `Error: ${err.message}` }],
+        details: { isError: true },
+        isError: true,
+      };
+    }
+
+    // 3) Terminal
+    if (ledgerActive && typeof sb.markToolTerminal === 'function') {
+      const isErr = Boolean(result?.isError || thrown);
+      const textParts = Array.isArray(result?.content)
+        ? result.content
+            .filter((c) => c && c.type === 'text' && c.text)
+            .map((c) => c.text)
+            .join('\n')
+        : '';
+      const summary = (textParts || (thrown ? thrown.message : `${toolName} done`)).slice(
+        0,
+        2000,
+      );
+      try {
+        await sb.markToolTerminal(callId, {
+          status: isErr ? 'failed' : 'succeeded',
+          summary,
+          error: isErr ? summary : null,
+          result_json: {
+            content: result?.content || [],
+            details: result?.details || {},
+            isError: isErr,
+          },
+        });
+      } catch {
+        try {
+          await sb.markToolTerminal(callId, {
+            status: 'unknown',
+            summary: 'terminal mark failed after execution',
+            error: 'ledger terminal update failed',
+          });
+        } catch {
+          /* ignore */
+        }
+      }
+    }
+
+    if (result && typeof result === 'object') {
+      result.details = {
+        ...(result.details || {}),
+        tool_call_id: callId,
+      };
+    }
+    return result;
+  }
+
+  /**
+   * Wrap execute with ledger + write mutex + approval gate for write-class tools.
    * @param {string} toolName
    * @param {Function} executeFn
    */
   function wrapExecute(toolName, executeFn) {
     return async (toolCallId, params, ...rest) => {
       const side = classifyToolSideEffect(toolName);
-      const run = async () => {
-        if (side === 'write') {
-          const gate = await ensureApproved(toolName, params || {});
-          if (!gate.ok) {
-            return {
-              content: [{ type: 'text', text: `Blocked (policy): ${gate.reason}` }],
-              details: {
+      const run = async () =>
+        withLedger(toolName, toolCallId, params || {}, async (ctx) => {
+          if (side === 'write') {
+            // Mark waiting before policy gate (resume keeps ledger at waiting_approval)
+            await ctx.markWaitingApproval();
+            const gate = await ensureApproved(toolName, params || {}, ctx.callId);
+            if (!gate.ok) {
+              return {
+                content: [
+                  { type: 'text', text: `Blocked (policy): ${gate.reason}` },
+                ],
+                details: {
+                  isError: true,
+                  approval_id: gate.approval_id,
+                  policy_version: gate.policy_version || POLICY_VERSION,
+                  tool_call_id: ctx.callId,
+                },
                 isError: true,
-                approval_id: gate.approval_id,
-                policy_version: gate.policy_version || POLICY_VERSION,
-              },
-              isError: true,
-            };
+              };
+            }
           }
-        }
-        return executeFn(toolCallId, params, ...rest);
-      };
+          await ctx.markExecuting();
+          return executeFn(ctx.callId, params, ...rest);
+        });
 
       if (side === 'write') {
         const key = getWorkspaceKey() || getSessionId() || 'default';
@@ -378,18 +601,23 @@ export function createSandboxTools(ctx = {}) {
     }),
   };
 
-  // ── Tool: edit — read → replace → write ────────
+  // ── Tool: edit — unique replace via sandbox (ADR §9) ──
 
   const editTool = {
     name: 'edit',
     label: 'Edit File',
     description:
-      'Find-and-replace edit on a private file in the sandbox workspace. ' +
+      'Replace a unique old_string with new_string in a private workspace file. ' +
+      'Fails if old_string is missing or matches multiple times (returns match count + line numbers). ' +
+      'Returns unified diff and before/after SHA-256 hashes. ' +
       'Does NOT share the file with the user. Call submit_artifact to deliver a file.',
     parameters: Type.Object({
       path: Type.String({ description: 'File path' }),
-      old_string: Type.String({ description: 'Text to find' }),
+      old_string: Type.String({ description: 'Exact text to find (must match once)' }),
       new_string: Type.String({ description: 'Replacement text' }),
+      expected_hash: Type.Optional(
+        Type.String({ description: 'Optional SHA-256 of current content (race check)' }),
+      ),
     }),
     execute: wrapExecute('edit', async (_toolCallId, params) => {
       const guard = skillRootGuard('edit', params);
@@ -402,26 +630,134 @@ export function createSandboxTools(ctx = {}) {
       }
       try {
         const sessionId = getSessionId();
-        const file = await sb.readFile(sessionId, params.path);
-        const content = file.content || '';
-        const idx = content.lastIndexOf(params.old_string);
-        if (idx === -1) {
+        const data = await sb.editFile(sessionId, {
+          path: params.path,
+          old_string: params.old_string,
+          new_string: params.new_string,
+          expected_hash: params.expected_hash || null,
+        });
+        if (!data.ok) {
+          const multi =
+            data.match_count != null && data.match_count > 1
+              ? `\nmatch_count=${data.match_count} lines=[${(data.match_lines || []).join(', ')}]`
+              : '';
           return {
-            content: [{ type: 'text', text: `Error: old_string not found in ${params.path}` }],
-            details: { isError: true },
+            content: [
+              {
+                type: 'text',
+                text: `Error: ${data.error || 'edit failed'}${multi}`,
+              },
+            ],
+            details: {
+              isError: true,
+              path: data.path || params.path,
+              match_count: data.match_count,
+              match_lines: data.match_lines,
+              before_hash: data.before_hash,
+            },
+            isError: true,
           };
         }
-        const newContent =
-          content.slice(0, idx) + params.new_string + content.slice(idx + params.old_string.length);
-        await sb.writeFile(sessionId, params.path, newContent);
+        const header =
+          `Edited ${data.path}\n` +
+          `before_hash=${data.before_hash}\n` +
+          `after_hash=${data.after_hash}\n` +
+          `changed_lines=${data.changed_lines}`;
         return {
-          content: [{ type: 'text', text: `Replaced in ${params.path}` }],
-          details: { path: params.path },
+          content: [
+            {
+              type: 'text',
+              text: data.diff ? `${header}\n\n${data.diff}` : header,
+            },
+          ],
+          details: {
+            path: data.path,
+            before_hash: data.before_hash,
+            after_hash: data.after_hash,
+            diff: data.diff,
+            changed_lines: data.changed_lines,
+          },
         };
       } catch (err) {
         return {
           content: [{ type: 'text', text: `Error: ${err.message}` }],
           details: { isError: true },
+          isError: true,
+        };
+      }
+    }),
+  };
+
+  // ── Tool: apply_patch ───────────────────────────
+
+  const applyPatchTool = {
+    name: 'apply_patch',
+    label: 'Apply Patch',
+    description:
+      'Apply a unified diff patch to a single private workspace file. ' +
+      'Returns unified diff of the applied change plus before/after SHA-256 hashes. ' +
+      'Does NOT share the file with the user. Call submit_artifact to deliver a file.',
+    parameters: Type.Object({
+      path: Type.String({ description: 'File path relative to workspace' }),
+      patch: Type.String({ description: 'Unified diff (---/+++/@@ hunks)' }),
+      expected_hash: Type.Optional(
+        Type.String({ description: 'Optional SHA-256 of current content (race check)' }),
+      ),
+    }),
+    execute: wrapExecute('apply_patch', async (_toolCallId, params) => {
+      const guard = skillRootGuard('apply_patch', params);
+      if (guard.blocked) {
+        return {
+          content: [{ type: 'text', text: `Blocked (policy): ${guard.reason}` }],
+          details: { isError: true, policy_version: POLICY_VERSION },
+          isError: true,
+        };
+      }
+      try {
+        const sessionId = getSessionId();
+        const data = await sb.applyPatch(sessionId, {
+          path: params.path,
+          patch: params.patch,
+          expected_hash: params.expected_hash || null,
+        });
+        if (!data.ok) {
+          return {
+            content: [
+              { type: 'text', text: `Error: ${data.error || 'apply_patch failed'}` },
+            ],
+            details: {
+              isError: true,
+              path: data.path || params.path,
+              before_hash: data.before_hash,
+            },
+            isError: true,
+          };
+        }
+        const header =
+          `Patched ${data.path}\n` +
+          `before_hash=${data.before_hash}\n` +
+          `after_hash=${data.after_hash}\n` +
+          `changed_lines=${data.changed_lines}`;
+        return {
+          content: [
+            {
+              type: 'text',
+              text: data.diff ? `${header}\n\n${data.diff}` : header,
+            },
+          ],
+          details: {
+            path: data.path,
+            before_hash: data.before_hash,
+            after_hash: data.after_hash,
+            diff: data.diff,
+            changed_lines: data.changed_lines,
+          },
+        };
+      } catch (err) {
+        return {
+          content: [{ type: 'text', text: `Error: ${err.message}` }],
+          details: { isError: true },
+          isError: true,
         };
       }
     }),
@@ -683,15 +1019,296 @@ export function createSandboxTools(ctx = {}) {
     }),
   };
 
+  // ── Managed process tools (B2) ──────────────────
+  // Long-running / background / interactive processes. Sync bash stays for short commands.
+
+  const processStartTool = {
+    name: 'process_start',
+    label: 'Start Process',
+    description:
+      'Start a managed long-running process in the sandbox (web server, watcher, REPL). ' +
+      'Returns process_id immediately. Use process_logs / process_status / process_wait to observe. ' +
+      'Do not use nohup or shell backgrounding (&) — the platform must own the process lifecycle. ' +
+      'For short one-shot commands prefer bash.',
+    parameters: Type.Object({
+      command: Type.String({ description: 'Shell command to run' }),
+      cwd: Type.Optional(
+        Type.String({ description: 'Workspace-relative working directory (default: .)' }),
+      ),
+      env: Type.Optional(Type.Record(Type.String(), Type.String())),
+      timeout: Type.Optional(
+        Type.Number({ description: 'Seconds before timeout kill; omit for no limit' }),
+      ),
+      background: Type.Optional(
+        Type.Boolean({
+          description: 'If true, process may outlive a single run (default false / foreground)',
+        }),
+      ),
+    }),
+    execute: wrapExecute('process_start', async (_toolCallId, params) => {
+      const guard = skillRootGuard('bash', { command: params.command });
+      if (guard.blocked) {
+        return {
+          content: [{ type: 'text', text: `Blocked (policy): ${guard.reason}` }],
+          details: { isError: true, policy_version: POLICY_VERSION },
+          isError: true,
+        };
+      }
+      try {
+        const sessionId = getSessionId();
+        if (!sessionId) {
+          return {
+            content: [{ type: 'text', text: 'Error: no sandbox session' }],
+            details: { isError: true },
+            isError: true,
+          };
+        }
+        const r = await sb.startProcess({
+          session_id: sessionId,
+          command: params.command,
+          cwd: params.cwd,
+          env: params.env,
+          timeout: params.timeout,
+          background: Boolean(params.background),
+        });
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify(
+                {
+                  process_id: r.process_id,
+                  status: r.status,
+                  started_at: r.started_at,
+                },
+                null,
+                2,
+              ),
+            },
+          ],
+          details: {
+            process_id: r.process_id,
+            status: r.status,
+            started_at: r.started_at,
+          },
+        };
+      } catch (err) {
+        return {
+          content: [{ type: 'text', text: `Error: ${err.message}` }],
+          details: { isError: true },
+          isError: true,
+        };
+      }
+    }),
+  };
+
+  const processStatusTool = {
+    name: 'process_status',
+    label: 'Process Status',
+    description: 'Get status of a managed process (running, completed, failed, cancelled, …).',
+    parameters: Type.Object({
+      process_id: Type.String({ description: 'Process id from process_start' }),
+    }),
+    execute: wrapExecute('process_status', async (_toolCallId, params) => {
+      try {
+        const r = await sb.getProcess(params.process_id);
+        return {
+          content: [{ type: 'text', text: JSON.stringify(r, null, 2) }],
+          details: {
+            process_id: r.process_id,
+            status: r.status,
+            exit_code: r.exit_code,
+          },
+        };
+      } catch (err) {
+        return {
+          content: [{ type: 'text', text: `Error: ${err.message}` }],
+          details: { isError: true },
+          isError: true,
+        };
+      }
+    }),
+  };
+
+  const processLogsTool = {
+    name: 'process_logs',
+    label: 'Process Logs',
+    description:
+      'Read stdout/stderr of a managed process from an offset. ' +
+      'Poll with next_offset until completed is true.',
+    parameters: Type.Object({
+      process_id: Type.String({ description: 'Process id from process_start' }),
+      offset: Type.Optional(Type.Number({ description: 'Log offset (default 0)' })),
+      limit: Type.Optional(Type.Number({ description: 'Max characters to return' })),
+    }),
+    execute: wrapExecute('process_logs', async (_toolCallId, params) => {
+      try {
+        const r = await sb.getProcessLogs(
+          params.process_id,
+          params.offset || 0,
+          params.limit != null ? params.limit : null,
+        );
+        const out = [
+          r.stdout ? `STDOUT:\n${r.stdout}` : '',
+          r.stderr ? `STDERR:\n${r.stderr}` : '',
+          `next_offset=${r.next_offset} completed=${r.completed} truncated=${r.truncated}`,
+        ]
+          .filter(Boolean)
+          .join('\n\n');
+        return {
+          content: [{ type: 'text', text: out || '(no output yet)' }],
+          details: {
+            next_offset: r.next_offset,
+            completed: r.completed,
+            truncated: r.truncated,
+          },
+        };
+      } catch (err) {
+        return {
+          content: [{ type: 'text', text: `Error: ${err.message}` }],
+          details: { isError: true },
+          isError: true,
+        };
+      }
+    }),
+  };
+
+  const processWaitTool = {
+    name: 'process_wait',
+    label: 'Wait Process',
+    description: 'Block until a managed process reaches a terminal state (or timeout).',
+    parameters: Type.Object({
+      process_id: Type.String({ description: 'Process id from process_start' }),
+      timeout: Type.Optional(
+        Type.Number({ description: 'Seconds to wait (omit to wait until done)' }),
+      ),
+    }),
+    execute: wrapExecute('process_wait', async (_toolCallId, params) => {
+      try {
+        const r = await sb.waitProcess(
+          params.process_id,
+          params.timeout != null ? params.timeout : null,
+        );
+        return {
+          content: [{ type: 'text', text: JSON.stringify(r, null, 2) }],
+          details: {
+            process_id: r.process_id,
+            status: r.status,
+            exit_code: r.exit_code,
+          },
+        };
+      } catch (err) {
+        return {
+          content: [{ type: 'text', text: `Error: ${err.message}` }],
+          details: { isError: true },
+          isError: true,
+        };
+      }
+    }),
+  };
+
+  const processWriteStdinTool = {
+    name: 'process_write_stdin',
+    label: 'Process Stdin',
+    description: 'Write text to a managed process stdin (interactive programs).',
+    parameters: Type.Object({
+      process_id: Type.String({ description: 'Process id from process_start' }),
+      data: Type.String({ description: 'Text to write' }),
+      eof: Type.Optional(Type.Boolean({ description: 'Close stdin after write' })),
+    }),
+    execute: wrapExecute('process_write_stdin', async (_toolCallId, params) => {
+      try {
+        const r = await sb.writeProcessStdin(
+          params.process_id,
+          params.data,
+          Boolean(params.eof),
+        );
+        return {
+          content: [{ type: 'text', text: JSON.stringify(r, null, 2) }],
+          details: r,
+        };
+      } catch (err) {
+        return {
+          content: [{ type: 'text', text: `Error: ${err.message}` }],
+          details: { isError: true },
+          isError: true,
+        };
+      }
+    }),
+  };
+
+  const processSignalTool = {
+    name: 'process_signal',
+    label: 'Signal Process',
+    description: 'Send a POSIX signal to a managed process (SIGTERM, SIGINT, SIGKILL, …).',
+    parameters: Type.Object({
+      process_id: Type.String({ description: 'Process id from process_start' }),
+      signal: Type.Optional(
+        Type.String({ description: 'Signal name or number (default SIGTERM)' }),
+      ),
+    }),
+    execute: wrapExecute('process_signal', async (_toolCallId, params) => {
+      try {
+        const r = await sb.signalProcess(params.process_id, params.signal || 'SIGTERM');
+        return {
+          content: [{ type: 'text', text: JSON.stringify(r, null, 2) }],
+          details: r,
+        };
+      } catch (err) {
+        return {
+          content: [{ type: 'text', text: `Error: ${err.message}` }],
+          details: { isError: true },
+          isError: true,
+        };
+      }
+    }),
+  };
+
+  const processCancelTool = {
+    name: 'process_cancel',
+    label: 'Cancel Process',
+    description: 'Cancel (stop) a managed process. Idempotent after terminal state.',
+    parameters: Type.Object({
+      process_id: Type.String({ description: 'Process id from process_start' }),
+    }),
+    execute: wrapExecute('process_cancel', async (_toolCallId, params) => {
+      try {
+        const r = await sb.cancelProcess(params.process_id);
+        return {
+          content: [{ type: 'text', text: JSON.stringify(r, null, 2) }],
+          details: {
+            process_id: r.process_id,
+            status: r.status,
+            exit_code: r.exit_code,
+          },
+        };
+      } catch (err) {
+        return {
+          content: [{ type: 'text', text: `Error: ${err.message}` }],
+          details: { isError: true },
+          isError: true,
+        };
+      }
+    }),
+  };
+
   return [
     readTool,
     writeTool,
     editTool,
+    applyPatchTool,
     bashTool,
     submitArtifactTool,
     lsTool,
     findTool,
     grepTool,
+    processStartTool,
+    processStatusTool,
+    processLogsTool,
+    processWaitTool,
+    processWriteStdinTool,
+    processSignalTool,
+    processCancelTool,
   ];
 }
 

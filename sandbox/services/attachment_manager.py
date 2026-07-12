@@ -12,11 +12,16 @@ import os
 import re
 import tempfile
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 
 from sandbox.config import settings
 from sandbox.security.path_validation import enforce_path_within_workspace
 from sandbox.services.file_manager import workspace_size_bytes
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
 
 # Common text / code / images / pdf / office + limited archives (no auto-extract).
 # RAR / 7z intentionally excluded (parent task P-00F1).
@@ -252,13 +257,16 @@ class AttachmentManager:
 
         rel = self.logical_path(attachment_id, sanitized_name)
         mime = mime_type or "application/octet-stream"
+        upload_time = _now_iso()
         entry = {
             "attachment_id": attachment_id,
             "path": rel,
             "name": original_name or sanitized_name,
+            "filename": original_name or sanitized_name,
             "sanitized_name": sanitized_name,
             "size": size,
             "mime_type": mime,
+            "upload_time": upload_time,
             "idempotency_key": idempotency_key,
         }
 
@@ -318,6 +326,80 @@ class AttachmentManager:
         except Exception:
             self.abort_temp(tmp, handle)
             raise
+
+
+def normalize_attachment_context(item: dict | None) -> dict | None:
+    """Normalize a message attachment dict to ADR §4.5 fields.
+
+    Required/expected keys:
+      attachment_id, filename, path (workspace), mime_type, size, upload_time
+    """
+    if not item or not isinstance(item, dict):
+        return None
+    attachment_id = item.get("attachment_id") or item.get("attachmentId") or ""
+    path = item.get("path") or item.get("workspace_path") or ""
+    filename = (
+        item.get("filename")
+        or item.get("name")
+        or item.get("sanitized_name")
+        or (Path(str(path)).name if path else "")
+        or "upload"
+    )
+    if not attachment_id and not path:
+        return None
+    size_raw = item.get("size")
+    try:
+        size = int(size_raw) if size_raw is not None else 0
+    except (TypeError, ValueError):
+        size = 0
+    return {
+        "attachment_id": str(attachment_id) if attachment_id else None,
+        "filename": str(filename),
+        "path": str(path) if path else None,
+        "workspace_path": str(path) if path else None,
+        "mime_type": str(
+            item.get("mime_type") or item.get("mimeType") or "application/octet-stream"
+        ),
+        "size": size,
+        "upload_time": item.get("upload_time")
+        or item.get("uploadTime")
+        or item.get("created_at")
+        or None,
+    }
+
+
+def format_attachment_prompt_block(attachments: list[dict] | None) -> str:
+    """Build the explicit current-turn attachment section for the agent prompt.
+
+    Agent must not scan uploads/; this block is the sole source of truth for
+    which files belong to the current user turn.
+    """
+    normalized = []
+    for raw in attachments or []:
+        n = normalize_attachment_context(raw if isinstance(raw, dict) else None)
+        if n:
+            normalized.append(n)
+    if not normalized:
+        return ""
+    lines = [
+        "## Current-turn attachments",
+        "",
+        "The user attached the following file(s) for **this turn only**.",
+        "Use the listed workspace paths with the `read` tool. "
+        "Do **not** scan or list the entire `uploads/` directory to guess attachments.",
+        "",
+    ]
+    for i, a in enumerate(normalized, 1):
+        lines.append(
+            f"{i}. **{a['filename']}**"
+            f" — path=`{a.get('path') or a.get('workspace_path')}`"
+            f" | mime=`{a.get('mime_type')}`"
+            f" | size={a.get('size', 0)}"
+            f" | attachment_id=`{a.get('attachment_id') or 'n/a'}`"
+            f" | upload_time=`{a.get('upload_time') or 'n/a'}`"
+        )
+    lines.append("")
+    return "\n".join(lines)
 
 
 attachment_manager = AttachmentManager()

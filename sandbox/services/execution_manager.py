@@ -15,6 +15,11 @@ from sandbox.database import Database
 from sandbox.models import ExecutionStatus
 from sandbox.repositories import ExecutionRepository
 from sandbox.security.safe_env import safe_env
+from sandbox.services.execution_stream import (
+    SOURCE_EXECUTION,
+    execution_stream,
+    full_log_location,
+)
 from sandbox.trace import get_trace_id
 from sandbox.utils.resource_limits import contains_network_command, run_with_timeout, terminate_process_group
 
@@ -46,8 +51,14 @@ class ExecutionManager:
     cancel() can terminate them.
     """
 
-    def __init__(self, database: Database | None = None) -> None:
+    def __init__(
+        self,
+        database: Database | None = None,
+        *,
+        stream_hub: Any | None = None,
+    ) -> None:
         self.repository = ExecutionRepository(database)
+        self._stream = stream_hub if stream_hub is not None else execution_stream
         self._executions: dict[str, dict] = {}
         # session_id -> current running execution_id or None
         self._session_locks: dict[str, str | None] = defaultdict(lambda: None)
@@ -163,6 +174,9 @@ class ExecutionManager:
         execution_id: str,
         session_id: str,
         run_type: str,
+        *,
+        run_id: str | None = None,
+        command: str | None = None,
     ) -> dict[str, Any]:
         now = datetime.now(timezone.utc).isoformat()
         return {
@@ -172,6 +186,8 @@ class ExecutionManager:
             "run_type": run_type,
             "trace_id": get_trace_id(),
             "created_at": now,
+            "run_id": run_id,
+            "command": command,
         }
 
     def _run_body(
@@ -187,14 +203,42 @@ class ExecutionManager:
         # Cancel may have won between admit and run body
         with self._lock:
             if execution_id in self._cancel_requested:
-                return self._finalize(session_id, execution_id, entry)
+                finalized = self._finalize(session_id, execution_id, entry)
+                self._emit_terminal(entry, finalized)
+                return finalized
 
+        run_id = entry.get("run_id")
         try:
+            # B3: execution_started before spawn
+            try:
+                self._stream.emit_started(
+                    source_type=SOURCE_EXECUTION,
+                    source_id=execution_id,
+                    session_id=session_id,
+                    command=entry.get("command") or " ".join(cmd),
+                    run_id=run_id,
+                    extra={"run_type": entry.get("run_type")},
+                )
+            except Exception:
+                pass
+
             env_overrides = env_overrides or {}
 
             def _on_started(proc: Any) -> None:
                 self._register_proc(execution_id, proc)
 
+            def _on_output(stream: str, text: str) -> None:
+                try:
+                    self._stream.emit_delta(
+                        source_type=SOURCE_EXECUTION,
+                        source_id=execution_id,
+                        stream=stream,
+                        text=text,
+                        run_id=run_id,
+                        persist_chunk=True,
+                    )
+                except Exception:
+                    pass
 
             result = run_with_timeout(
                 cmd,
@@ -211,15 +255,44 @@ class ExecutionManager:
                 max_memory_mb=settings.max_memory_mb,
                 max_cpu_seconds=settings.max_cpu_time_seconds,
                 on_started=_on_started,
+                on_output=_on_output,
             )
-            return self._finalize(session_id, execution_id, entry, result=result)
+            finalized = self._finalize(session_id, execution_id, entry, result=result)
+            self._emit_terminal(entry, finalized)
+            return finalized
         except Exception as exc:
-            return self._finalize(
+            finalized = self._finalize(
                 session_id,
                 execution_id,
                 entry,
                 error=f"Execution error: {exc}",
             )
+            self._emit_terminal(entry, finalized)
+            return finalized
+
+    def _emit_terminal(self, entry: dict, finalized: dict) -> None:
+        try:
+            status = finalized.get("status")
+            status_s = status.value if hasattr(status, "value") else str(status or "")
+            truncated = bool(finalized.get("truncated"))
+            self._stream.emit_terminal(
+                source_type=SOURCE_EXECUTION,
+                source_id=entry["execution_id"],
+                status=status_s.lower() if status_s else "failed",
+                exit_code=finalized.get("exit_code"),
+                error=finalized.get("stderr_preview") if status_s in (
+                    "FAILED", "failed", "TIMEOUT", "timeout", "CANCELLED", "cancelled"
+                ) else None,
+                truncated=truncated,
+                session_id=entry.get("session_id"),
+                run_id=entry.get("run_id"),
+                extra={
+                    "run_type": entry.get("run_type"),
+                    "duration_ms": finalized.get("duration_ms"),
+                },
+            )
+        except Exception:
+            pass
 
     # ── Python execution ─────────────────────────────────────────
 
@@ -230,10 +303,13 @@ class ExecutionManager:
         workspace_path: str,
         timeout: int | None = None,
         env_overrides: dict[str, str] | None = None,
+        run_id: str | None = None,
     ) -> dict[str, Any]:
         execution_id = f"exec_{uuid.uuid4().hex[:10]}"
         timeout = timeout or settings.execution_timeout_seconds
-        entry = self._new_entry(execution_id, session_id, "python")
+        entry = self._new_entry(
+            execution_id, session_id, "python", run_id=run_id, command="python3"
+        )
         conflict = self._admit(session_id, execution_id, entry)
         if conflict is not None:
             return conflict
@@ -262,6 +338,7 @@ class ExecutionManager:
         workspace_path: str,
         timeout: int | None = None,
         env_overrides: dict[str, str] | None = None,
+        run_id: str | None = None,
     ) -> dict[str, Any]:
         # Network check before admission so blocked commands never hold the lock
         if settings.default_deny_network and contains_network_command(command):
@@ -276,7 +353,9 @@ class ExecutionManager:
 
         execution_id = f"exec_{uuid.uuid4().hex[:10]}"
         timeout = timeout or settings.execution_timeout_seconds
-        entry = self._new_entry(execution_id, session_id, "command")
+        entry = self._new_entry(
+            execution_id, session_id, "command", run_id=run_id, command=command
+        )
         conflict = self._admit(session_id, execution_id, entry)
         if conflict is not None:
             return conflict
@@ -300,10 +379,13 @@ class ExecutionManager:
         workspace_path: str,
         timeout: int | None = None,
         env_overrides: dict[str, str] | None = None,
+        run_id: str | None = None,
     ) -> dict[str, Any]:
         execution_id = f"exec_{uuid.uuid4().hex[:10]}"
         timeout = timeout or settings.execution_timeout_seconds
-        entry = self._new_entry(execution_id, session_id, "node")
+        entry = self._new_entry(
+            execution_id, session_id, "node", run_id=run_id, command="node"
+        )
         conflict = self._admit(session_id, execution_id, entry)
         if conflict is not None:
             return conflict
@@ -331,6 +413,70 @@ class ExecutionManager:
             if mem is not None:
                 return mem
         return self.repository.get(execution_id)
+
+    def logs(
+        self,
+        execution_id: str,
+        *,
+        offset: int = 0,
+        limit: int | None = None,
+    ) -> dict[str, Any] | None:
+        entry = self.get(execution_id)
+        if entry is None:
+            return None
+        status = entry.get("status")
+        completed = status in _TERMINAL_STATUSES
+        truncated = bool(entry.get("truncated"))
+        lim = limit if limit is not None else settings.max_output_chars
+        result = self._stream.get_logs(
+            SOURCE_EXECUTION,
+            execution_id,
+            offset=offset,
+            limit=lim,
+            completed=completed,
+            truncated=truncated,
+            session_id=entry.get("session_id"),
+        )
+        # Fallback: if no chunks yet but previews exist (edge race), surface them
+        if not result["stdout"] and not result["stderr"] and offset == 0:
+            result["stdout"] = entry.get("stdout_preview") or ""
+            result["stderr"] = entry.get("stderr_preview") or ""
+            result["next_offset"] = len(result["stdout"]) + len(result["stderr"])
+        if truncated and not result.get("full_log_location"):
+            result["full_log_location"] = full_log_location(
+                SOURCE_EXECUTION,
+                execution_id,
+                session_id=entry.get("session_id"),
+            )
+        return result
+
+    def list_events(
+        self,
+        execution_id: str,
+        *,
+        after_sequence: int = 0,
+        limit: int | None = None,
+    ) -> list[dict[str, Any]] | None:
+        if self.get(execution_id) is None:
+            return None
+        return self._stream.list_events(
+            SOURCE_EXECUTION,
+            execution_id,
+            after_sequence=after_sequence,
+            limit=limit,
+        )
+
+    def subscribe_events(
+        self,
+        execution_id: str,
+        after_sequence: int,
+        callback: Any,
+    ) -> Any:
+        if self.get(execution_id) is None:
+            return None
+        return self._stream.subscribe(
+            SOURCE_EXECUTION, execution_id, after_sequence, callback
+        )
 
     def cancel(self, execution_id: str) -> bool:
         """Terminate a running execution's process group and mark CANCELLED.

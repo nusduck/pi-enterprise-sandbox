@@ -20,10 +20,18 @@ const CHAT_TOOL_ALLOWLIST = [
   'bash',
   'edit',
   'write',
+  'apply_patch',
   'submit_artifact',
   'ls',
   'find',
   'grep',
+  'process_start',
+  'process_status',
+  'process_logs',
+  'process_wait',
+  'process_write_stdin',
+  'process_signal',
+  'process_cancel',
 ];
 
 describe('createSandboxTools override contract', () => {

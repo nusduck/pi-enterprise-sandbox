@@ -241,7 +241,8 @@ def test_tool_unknown_not_auto_retry(mgr, conversation):
     assert mgr.tool_can_auto_retry("tc_1") is True
 
     mgr.mark_tool_executing("tc_1")
-    assert mgr.tool_can_auto_retry("tc_1") is True
+    # Side-effect safety (B4): executing must not auto-retry
+    assert mgr.tool_can_auto_retry("tc_1") is False
 
     terminal = mgr.mark_tool_terminal(
         "tc_1", ToolExecutionStatus.UNKNOWN.value, summary="crash mid-flight"

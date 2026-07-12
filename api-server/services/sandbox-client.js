@@ -269,6 +269,27 @@ export function createSandboxClient({ traceId = null, auth = null } = {}) {
       return resp.json();
     },
 
+    async getToolExecution(toolCallId) {
+      const resp = await sbFetch(`/tool-executions/${encodeURIComponent(toolCallId)}`);
+      return resp.json();
+    },
+
+    async markToolExecuting(toolCallId) {
+      const resp = await sbFetch(
+        `/tool-executions/${encodeURIComponent(toolCallId)}/executing`,
+        { method: 'POST', body: JSON.stringify({}) },
+      );
+      return resp.json();
+    },
+
+    async markToolTerminal(toolCallId, body) {
+      const resp = await sbFetch(
+        `/tool-executions/${encodeURIComponent(toolCallId)}/terminal`,
+        { method: 'POST', body: JSON.stringify(body) },
+      );
+      return resp.json();
+    },
+
     // ── Execution ───────────────────────────────────
     async executeCommand(sessionId, command, timeout = 120) {
       const resp = await sbFetch(`/sessions/${sessionId}/executions/command`, {

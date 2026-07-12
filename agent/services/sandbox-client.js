@@ -188,6 +188,56 @@ export function createSandboxClient({ traceId = null, auth = null } = {}) {
       return text ? JSON.parse(text) : { ok: true };
     },
 
+    // ── Logical Pi SDK agent sessions (ADR 0002 §7) ─
+    async createAgentSession(body = {}) {
+      const resp = await sbFetch('/agent-sessions', {
+        method: 'POST',
+        body: JSON.stringify(body),
+      });
+      return resp.json();
+    },
+
+    async getAgentSession(sessionId) {
+      const resp = await sbFetch(`/agent-sessions/${encodeURIComponent(sessionId)}`);
+      return resp.json();
+    },
+
+    async resumeAgentSession(sessionId) {
+      const resp = await sbFetch(
+        `/agent-sessions/${encodeURIComponent(sessionId)}/resume`,
+        { method: 'POST', body: JSON.stringify({}) },
+      );
+      return resp.json();
+    },
+
+    async listAgentSessionEntries(sessionId, { afterSequence = 0, limit } = {}) {
+      const q = new URLSearchParams();
+      if (afterSequence) q.set('after_sequence', String(afterSequence));
+      if (limit != null) q.set('limit', String(limit));
+      const qs = q.toString();
+      const path = `/agent-sessions/${encodeURIComponent(sessionId)}/entries${qs ? `?${qs}` : ''}`;
+      const resp = await sbFetch(path);
+      return resp.json();
+    },
+
+    async appendAgentSessionEntries(sessionId, body = {}) {
+      const resp = await sbFetch(
+        `/agent-sessions/${encodeURIComponent(sessionId)}/entries`,
+        {
+          method: 'POST',
+          body: JSON.stringify(body),
+        },
+      );
+      return resp.json();
+    },
+
+    async getConversationAgentSession(conversationId) {
+      const resp = await sbFetch(
+        `/conversations/${encodeURIComponent(conversationId)}/agent-session`,
+      );
+      return resp.json();
+    },
+
     // ── Agent runs / events (session persistence MVP) ─
     async createAgentRun(body = {}) {
       const resp = await sbFetch('/agent-runs', {
@@ -261,8 +311,108 @@ export function createSandboxClient({ traceId = null, auth = null } = {}) {
       return resp.json();
     },
 
+    /** B6: park run while waiting for human approval (releases lease). */
+    async markAgentRunWaitingApproval(runId, body = {}) {
+      const resp = await sbFetch(
+        `/agent-runs/${encodeURIComponent(runId)}/waiting-approval`,
+        { method: 'POST', body: JSON.stringify(body) },
+      );
+      return resp.json();
+    },
+
+    /** B6: terminal budget_exceeded. */
+    async budgetExceedAgentRun(runId, body = {}) {
+      const resp = await sbFetch(
+        `/agent-runs/${encodeURIComponent(runId)}/budget-exceeded`,
+        { method: 'POST', body: JSON.stringify(body) },
+      );
+      return resp.json();
+    },
+
+    async releaseAgentRun(runId, body = {}) {
+      const resp = await sbFetch(`/agent-runs/${encodeURIComponent(runId)}/release`, {
+        method: 'POST',
+        body: JSON.stringify(body),
+      });
+      return resp.json();
+    },
+
+    async claimAgentRun(runId, body = {}) {
+      const resp = await sbFetch(`/agent-runs/${encodeURIComponent(runId)}/claim`, {
+        method: 'POST',
+        body: JSON.stringify(body),
+      });
+      return resp.json();
+    },
+
+    async listWaitingApprovalRuns() {
+      const resp = await sbFetch('/agent-runs?status=waiting_approval');
+      return resp.json();
+    },
+
     async prepareToolExecution(body) {
       const resp = await sbFetch('/tool-executions', {
+        method: 'POST',
+        body: JSON.stringify(body),
+      });
+      return resp.json();
+    },
+
+    async getToolExecution(toolCallId) {
+      const resp = await sbFetch(`/tool-executions/${encodeURIComponent(toolCallId)}`);
+      return resp.json();
+    },
+
+    async listToolExecutions({ runId, idempotencyKey } = {}) {
+      const q = new URLSearchParams();
+      if (runId) q.set('run_id', runId);
+      if (idempotencyKey) q.set('idempotency_key', idempotencyKey);
+      const qs = q.toString();
+      const resp = await sbFetch(`/tool-executions${qs ? `?${qs}` : ''}`);
+      return resp.json();
+    },
+
+    async markToolExecuting(toolCallId) {
+      const resp = await sbFetch(
+        `/tool-executions/${encodeURIComponent(toolCallId)}/executing`,
+        { method: 'POST', body: JSON.stringify({}) },
+      );
+      return resp.json();
+    },
+
+    async markToolWaitingApproval(toolCallId) {
+      const resp = await sbFetch(
+        `/tool-executions/${encodeURIComponent(toolCallId)}/waiting-approval`,
+        { method: 'POST', body: JSON.stringify({}) },
+      );
+      return resp.json();
+    },
+
+    async markToolTerminal(toolCallId, body) {
+      const resp = await sbFetch(
+        `/tool-executions/${encodeURIComponent(toolCallId)}/terminal`,
+        { method: 'POST', body: JSON.stringify(body) },
+      );
+      return resp.json();
+    },
+
+    async toolCanAutoRetry(toolCallId) {
+      const resp = await sbFetch(
+        `/tool-executions/${encodeURIComponent(toolCallId)}/can-auto-retry`,
+      );
+      return resp.json();
+    },
+
+    async editFile(sessionId, body) {
+      const resp = await sbFetch(`/sessions/${sessionId}/files/edit`, {
+        method: 'POST',
+        body: JSON.stringify(body),
+      });
+      return resp.json();
+    },
+
+    async applyPatch(sessionId, body) {
+      const resp = await sbFetch(`/sessions/${sessionId}/files/apply_patch`, {
         method: 'POST',
         body: JSON.stringify(body),
       });
@@ -291,6 +441,128 @@ export function createSandboxClient({ traceId = null, auth = null } = {}) {
       const resp = await sbFetch(`/sessions/${sessionId}/executions/cancel-active`, {
         method: 'POST',
       });
+      return resp.json();
+    },
+
+    // ── Managed processes (B2 Process Manager) ──────
+    async startProcess(body) {
+      const resp = await sbFetch('/processes', {
+        method: 'POST',
+        body: JSON.stringify(body),
+      });
+      return resp.json();
+    },
+
+    async getProcess(processId) {
+      const resp = await sbFetch(`/processes/${encodeURIComponent(processId)}`);
+      return resp.json();
+    },
+
+    async getProcessLogs(processId, offset = 0, limit = null) {
+      const q = new URLSearchParams({ offset: String(offset ?? 0) });
+      if (limit != null) q.set('limit', String(limit));
+      const resp = await sbFetch(
+        `/processes/${encodeURIComponent(processId)}/logs?${q}`,
+      );
+      return resp.json();
+    },
+
+    /**
+     * List sequenced process execution events (B3) after a sequence.
+     * @param {string} processId
+     * @param {{ afterSequence?: number, limit?: number|null }} [opts]
+     */
+    async listProcessEvents(processId, { afterSequence = 0, limit } = {}) {
+      const q = new URLSearchParams();
+      if (afterSequence) q.set('after_sequence', String(afterSequence));
+      if (limit != null) q.set('limit', String(limit));
+      const qs = q.toString();
+      const resp = await sbFetch(
+        `/processes/${encodeURIComponent(processId)}/events${qs ? `?${qs}` : ''}`,
+      );
+      return resp.json();
+    },
+
+    /**
+     * Open SSE stream of process execution events (B3).
+     * Resume via afterSequence or Last-Event-ID semantics on the sandbox.
+     * @param {string} processId
+     * @param {number} [afterSequence]
+     * @param {{ signal?: AbortSignal, lastEventId?: string|number }} [opts]
+     * @returns {Promise<Response>}
+     */
+    async openProcessEventStream(processId, afterSequence = 0, { signal, lastEventId } = {}) {
+      const q = new URLSearchParams();
+      if (afterSequence) q.set('after_sequence', String(afterSequence));
+      const headers = { Accept: 'text/event-stream' };
+      if (lastEventId != null) headers['Last-Event-ID'] = String(lastEventId);
+      const qs = q.toString();
+      // sbFetch returns the Response; caller reads the SSE body stream.
+      return sbFetch(
+        `/processes/${encodeURIComponent(processId)}/events/stream${qs ? `?${qs}` : ''}`,
+        { headers, signal },
+      );
+    },
+
+    async getExecutionLogs(sessionId, executionId, offset = 0, limit = null) {
+      const q = new URLSearchParams({ offset: String(offset ?? 0) });
+      if (limit != null) q.set('limit', String(limit));
+      const resp = await sbFetch(
+        `/sessions/${encodeURIComponent(sessionId)}/executions/${encodeURIComponent(executionId)}/logs?${q}`,
+      );
+      return resp.json();
+    },
+
+    async listExecutionEvents(sessionId, executionId, { afterSequence = 0, limit } = {}) {
+      const q = new URLSearchParams();
+      if (afterSequence) q.set('after_sequence', String(afterSequence));
+      if (limit != null) q.set('limit', String(limit));
+      const qs = q.toString();
+      const resp = await sbFetch(
+        `/sessions/${encodeURIComponent(sessionId)}/executions/${encodeURIComponent(executionId)}/events${qs ? `?${qs}` : ''}`,
+      );
+      return resp.json();
+    },
+
+    async waitProcess(processId, timeout = null) {
+      const resp = await sbFetch(`/processes/${encodeURIComponent(processId)}/wait`, {
+        method: 'POST',
+        body: JSON.stringify({ timeout }),
+      });
+      return resp.json();
+    },
+
+    async writeProcessStdin(processId, data, eof = false) {
+      const resp = await sbFetch(`/processes/${encodeURIComponent(processId)}/stdin`, {
+        method: 'POST',
+        body: JSON.stringify({ data, eof }),
+      });
+      return resp.json();
+    },
+
+    async signalProcess(processId, signal = 'SIGTERM') {
+      const resp = await sbFetch(`/processes/${encodeURIComponent(processId)}/signal`, {
+        method: 'POST',
+        body: JSON.stringify({ signal }),
+      });
+      return resp.json();
+    },
+
+    async cancelProcess(processId) {
+      const resp = await sbFetch(`/processes/${encodeURIComponent(processId)}/cancel`, {
+        method: 'POST',
+      });
+      return resp.json();
+    },
+
+    async cancelSessionProcesses(sessionId, foregroundOnly = false) {
+      const q = new URLSearchParams();
+      if (foregroundOnly) q.set('foreground_only', 'true');
+      const qs = q.toString();
+      const resp = await sbFetch(
+        `/processes/session/${encodeURIComponent(sessionId)}/cancel${qs ? `?${qs}` : ''}`,
+        { method: 'POST' },
+      );
       return resp.json();
     },
 
@@ -435,6 +707,58 @@ export function createSandboxClient({ traceId = null, auth = null } = {}) {
       return resp.json();
     },
 
+    // ── MCP / Tool Registry (B5) ────────────────────
+    async getToolRegistry() {
+      const resp = await sbFetch('/mcp/registry');
+      return resp.json();
+    },
+
+    async listMcpServers({ enabledOnly = false } = {}) {
+      const q = new URLSearchParams();
+      if (enabledOnly) q.set('enabled_only', 'true');
+      const qs = q.toString();
+      const resp = await sbFetch(`/mcp/servers${qs ? `?${qs}` : ''}`);
+      return resp.json();
+    },
+
+    async registerMcpServer(body) {
+      const resp = await sbFetch('/mcp/servers', {
+        method: 'POST',
+        body: JSON.stringify(body),
+      });
+      return resp.json();
+    },
+
+    async discoverMcpTools({
+      serverId = null,
+      userId = null,
+      organizationId = null,
+      applyAuthz = true,
+    } = {}) {
+      const q = new URLSearchParams();
+      if (serverId) q.set('server_id', serverId);
+      if (userId) q.set('user_id', userId);
+      if (organizationId) q.set('organization_id', organizationId);
+      q.set('apply_authz', applyAuthz ? 'true' : 'false');
+      const resp = await sbFetch(`/mcp/discover?${q.toString()}`);
+      return resp.json();
+    },
+
+    async mcpToolPolicy(toolName, serverId = null) {
+      const q = new URLSearchParams({ tool_name: toolName });
+      if (serverId) q.set('server_id', serverId);
+      const resp = await sbFetch(`/mcp/policy?${q.toString()}`);
+      return resp.json();
+    },
+
+    async invokeMcpTool(body) {
+      const resp = await sbFetch('/mcp/invoke', {
+        method: 'POST',
+        body: JSON.stringify(body),
+      });
+      return resp.json();
+    },
+
     // ── Auth proxy ──────────────────────────────────
     async authRegister(body) {
       const resp = await sbFetch('/auth/register', {
@@ -545,6 +869,38 @@ export async function cancelExecution(sessionId, executionId) {
 
 export async function cancelActiveExecution(sessionId) {
   return createSandboxClient().cancelActiveExecution(sessionId);
+}
+
+export async function startProcess(body) {
+  return createSandboxClient().startProcess(body);
+}
+
+export async function getProcess(processId) {
+  return createSandboxClient().getProcess(processId);
+}
+
+export async function getProcessLogs(processId, offset = 0, limit = null) {
+  return createSandboxClient().getProcessLogs(processId, offset, limit);
+}
+
+export async function waitProcess(processId, timeout = null) {
+  return createSandboxClient().waitProcess(processId, timeout);
+}
+
+export async function writeProcessStdin(processId, data, eof = false) {
+  return createSandboxClient().writeProcessStdin(processId, data, eof);
+}
+
+export async function signalProcess(processId, signal = 'SIGTERM') {
+  return createSandboxClient().signalProcess(processId, signal);
+}
+
+export async function cancelProcess(processId) {
+  return createSandboxClient().cancelProcess(processId);
+}
+
+export async function cancelSessionProcesses(sessionId, foregroundOnly = false) {
+  return createSandboxClient().cancelSessionProcesses(sessionId, foregroundOnly);
 }
 
 export async function readFile(sessionId, path) {
