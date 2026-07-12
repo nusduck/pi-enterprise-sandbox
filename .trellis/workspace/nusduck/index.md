@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 7
+- **Total Sessions**: 8
 - **Last Active**: 2026-07-12
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~268 | Active |
+| `journal-1.md` | ~306 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 8 | 2026-07-12 | 修复 session cwd 并统一前端状态源 | `79b111fc` | `main` |
 | 7 | 2026-07-12 | ADR 0002/0003 task split + parallel P0 start | - | `main` |
 | 6 | 2026-07-11 | Finish: env setup, .env.example CN comments, session wrap-up | `8f064b1c`, `4cc14607` | `main` |
 | 5 | 2026-07-11 | Complete production-boundaries R1-R8 in parallel | `f1e20d8e` | `main` |

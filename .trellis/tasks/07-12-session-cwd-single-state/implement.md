@@ -18,7 +18,7 @@
 - [x] 更新/新增前端单测，覆盖单次归约、增量消息、终止/错误、审批、artifact 与后台 run 切换。
 - [x] 执行局部测试后运行 Agent 与 Frontend 全量测试和 Frontend build。
 - [x] 检查是否需要更新 `.trellis/spec/frontend/state-management.md` 中已过时的 Vanilla/单状态说明。
-- [ ] 记录 validation.jsonl、完成 Trellis check/spec 更新、提交并 archive task。
+- [x] 记录 validation.jsonl、完成 Trellis check/spec 更新、提交并 archive task。
 
 ## Validation
 
