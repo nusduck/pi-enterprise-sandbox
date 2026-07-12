@@ -208,6 +208,7 @@ export function effectiveConfig(cfg = config) {
     SKILLS_ROOT: cfg.SKILLS_ROOT,
     SKILLS_INSTALL_LOCAL_ALLOWLIST: cfg.SKILLS_INSTALL_LOCAL_ALLOWLIST,
     SKILLS_AUDIT_LOG: cfg.SKILLS_AUDIT_LOG ? '<set>' : '<empty>',
+    SESSION_WORKSPACE_CWD: cfg.SESSION_WORKSPACE_CWD,
     PRODUCT_SYSTEM_PROMPT: cfg.PRODUCT_SYSTEM_PROMPT
       ? `<set:${cfg.PRODUCT_SYSTEM_PROMPT.length} chars>`
       : '<empty>',
@@ -230,6 +231,13 @@ export const config = {
   PORT: parseInt(process.env.PORT, 10) || 4100,
   SANDBOX_BASE_URL: process.env.SANDBOX_BASE_URL || 'http://sandbox:8081',
   SANDBOX_API_TOKEN: process.env.SANDBOX_API_TOKEN || '',
+  /**
+   * Stable logical cwd recorded by Pi SDK sessions after Sandbox creates or
+   * reuses the session workspace. This is intentionally not a physical host
+   * path; sandbox tools continue to resolve relative paths over REST.
+   */
+  SESSION_WORKSPACE_CWD:
+    process.env.AGENT_SESSION_WORKSPACE_CWD || '/home/sandbox/workspace',
   /**
    * Shared secret for BFF → Agent internal API.
    * Empty allows open dev mode (same host only recommended).

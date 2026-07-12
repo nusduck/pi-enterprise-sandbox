@@ -59,8 +59,8 @@ import {
   toPiModel,
 } from './services/model-registry.js';
 
-// Public contract: relative paths under session root + opaque workspace_id.
-// No absolute logical workspace path is part of the agent/SSE contract.
+// Public tool contract remains relative paths + opaque workspace_id. Pi SDK
+// itself receives the stable logical session cwd, never the physical host path.
 const AGENT_SKILL = config.SKILLS_ROOT || '/home/sandbox/skill';
 
 /** Base sandbox tool allowlist (always present). Derived from ToolRegistry builtins. */
@@ -112,6 +112,25 @@ export function makeModel(entry) {
     baseUrl: config.LLMIO_BASE_URL,
     apiKey: config.LLMIO_API_KEY,
   });
+}
+
+/**
+ * Build the Pi SDK createAgentSession options in one place so cwd cannot drift
+ * from the SessionManager/ResourceLoader contract.
+ * @param {object} opts
+ */
+export function buildCreateAgentSessionOptions(opts) {
+  return {
+    model: opts.model,
+    tools: opts.tools,
+    customTools: opts.customTools,
+    cwd: opts.sessionCwd,
+    sessionManager: opts.sessionManager,
+    authStorage: opts.authStorage,
+    modelRegistry: opts.modelRegistry,
+    resourceLoader: opts.resourceLoader,
+    settingsManager: opts.settingsManager,
+  };
 }
 
 /**
@@ -175,6 +194,7 @@ export async function resolveConversationAndSession(client, conversation_id) {
   return {
     activeConversationId,
     workspace_id: activeConversationId ? `conv_${activeConversationId}` : null,
+    sessionCwd: config.SESSION_WORKSPACE_CWD,
     sandboxSessionId,
     reusedSession,
     agentSessionId: null,
@@ -190,17 +210,19 @@ export async function resolveConversationAndSession(client, conversation_id) {
  * @param {{
  *   sandboxSessionId?: string|null,
  *   workspaceId?: string|null,
+ *   sessionCwd?: string|null,
  *   modelId?: string|null,
  *   emit?: (event: object) => void,
  * }} [opts]
  */
 export async function resolveAgentSessionManager(client, conversationId, opts = {}) {
   const emit = typeof opts.emit === 'function' ? opts.emit : () => {};
+  const sessionCwd = opts.sessionCwd || config.SESSION_WORKSPACE_CWD;
 
   if (isForceInMemory() || config.AGENT_FORCE_INMEMORY) {
     console.warn('[agent] AGENT_FORCE_INMEMORY set — using ephemeral SessionManager.inMemory()');
     return {
-      ...createInMemorySession({ cwd: '/tmp' }),
+      ...createInMemorySession({ cwd: sessionCwd }),
       agentSessionId: null,
       restored: false,
       forceInMemory: true,
@@ -226,7 +248,7 @@ export async function resolveAgentSessionManager(client, conversationId, opts = 
       }
       const opened = openSessionFromResume(resume, {
         conversationId,
-        cwd: '/tmp',
+        cwd: sessionCwd,
       });
       console.log(
         `[agent] Restored agent session ${boundAgentSessionId} ` +
@@ -256,13 +278,13 @@ export async function resolveAgentSessionManager(client, conversationId, opts = 
   }
 
   // First turn: create a file-backed SessionManager and bind a new agent session row.
-  const created = createNewPersistedSession({ cwd: '/tmp' });
+  const created = createNewPersistedSession({ cwd: sessionCwd });
   const header = created.sessionManager.getHeader() || {
     type: 'session',
     version: 3,
     id: created.sessionManager.getSessionId(),
     timestamp: new Date().toISOString(),
-    cwd: '/tmp',
+    cwd: sessionCwd,
   };
   try {
     const row = await client.createAgentSession({
@@ -639,6 +661,7 @@ export async function runAgentTurn(opts) {
     sessionHandle = await resolveAgentSessionManager(client, activeConversationId, {
       sandboxSessionId,
       workspaceId: resolved.workspace_id || `conv_${activeConversationId}`,
+      sessionCwd: resolved.sessionCwd,
       modelId: activeModelId,
       emit,
     });
@@ -651,9 +674,10 @@ export async function runAgentTurn(opts) {
       await authStorage.set(activeModelEntry.provider || 'llmio', config.LLMIO_API_KEY);
     }
 
-    const settingsManager = SettingsManager.create('/tmp', getAgentDir());
+    const sessionCwd = resolved.sessionCwd || config.SESSION_WORKSPACE_CWD;
+    const settingsManager = SettingsManager.create(sessionCwd, getAgentDir());
     const resourceLoader = new DefaultResourceLoader({
-      cwd: '/tmp',
+      cwd: sessionCwd,
       agentDir: getAgentDir(),
       settingsManager,
       additionalSkillPaths: [AGENT_SKILL, '/sandbox/skills'],
@@ -667,18 +691,19 @@ export async function runAgentTurn(opts) {
     await resourceLoader.reload();
 
     const piModel = makeModel(activeModelEntry);
-    const { session } = await createAgentSession({
+    const { session } = await createAgentSession(buildCreateAgentSessionOptions({
       model: piModel,
       tools: toolAllowlist,
       customTools,
-      // Agent process cwd is not the session workspace; tools use relative paths.
-      cwd: '/tmp',
+      // Logical session cwd matches Sandbox's workspace contract. Physical
+      // access remains isolated behind the relative-path sandbox tools.
+      cwd: sessionCwd,
       sessionManager: sessionHandle.sessionManager,
       authStorage,
       modelRegistry,
       resourceLoader,
       settingsManager,
-    });
+    }));
     agentSession = session;
     liveAgentSession = session;
 

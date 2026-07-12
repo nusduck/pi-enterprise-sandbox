@@ -1,6 +1,6 @@
 /**
  * Normalized entity types for Agent Runtime Workbench (F2 / ADR 0003 §13).
- * Relationships are ID-based — runtime content is NOT nested in currentMsg.content.
+ * Relationships are ID-based; runtime content has no parallel chat-state copy.
  */
 
 // ── Status enums ────────────────────────────────
@@ -112,6 +112,8 @@ export type RunEntity = {
   lastSequence: number;
   /** Last applied event_id (for Last-Event-ID resume). */
   lastEventId: string | null;
+  /** End-to-end request trace carried by this run. */
+  traceId: string | null;
   error: string | null;
   /** Live budget usage when backend/SSE provides it (F4). */
   budgetUsage: RunBudgetUsage | null;

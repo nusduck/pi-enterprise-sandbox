@@ -17,9 +17,7 @@ import {
   createState,
   update,
   startStream,
-  endStream,
   abortStream,
-  errorStream,
   isActiveGeneration,
   persistConversationId,
   loadPersistedConversationId,
@@ -57,7 +55,6 @@ import {
   followUpRun as apiFollowUpRun,
   resumeApproval as apiResumeApproval,
 } from '../../shared/api';
-import { handleSSEEvent, cloneCurrentMsg } from './sseHandler';
 import { createEntityBridge, type EntityBridge } from './entityBridge';
 import type { EntityStore } from '../../entities';
 import type { SSEEvent } from '../../shared/sse/parser';
@@ -108,8 +105,12 @@ export type ChatController = {
   canSend: boolean;
   /** F2 normalized entity store (Conversation / Session / Run hierarchy). */
   entityStore: EntityStore;
-  /** Active run id for the current stream (entity layer). */
+  /** Active run id, derived directly from EntityStore. */
   activeRunId: string | null;
+  /** Active Sandbox session, preferring the focused run entity. */
+  activeSessionId: string | null;
+  /** Active trace, owned by the focused run entity. */
+  activeTraceId: string | null;
   /** Inspector drawer open (tablet/mobile + desktop toggle). */
   inspectorOpen: boolean;
   setInspectorOpen: (open: boolean) => void;
@@ -143,7 +144,6 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   const [entityStore, setEntityStore] = useState<EntityStore>(() =>
     createEntityBridge().getStore(),
   );
-  const [activeRunId, setActiveRunId] = useState<string | null>(null);
   const [inspectorOpen, setInspectorOpen] = useState(() => !isMobile());
 
   // Always-current refs for async handlers
@@ -155,10 +155,25 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   if (!bridgeRef.current) {
     bridgeRef.current = createEntityBridge((store) => {
       setEntityStore(store);
-      if (store.activeRunId) setActiveRunId(store.activeRunId);
     });
   }
   const bridge = bridgeRef.current;
+  const activeRunId = entityStore.activeRunId;
+  const activeRun = activeRunId ? entityStore.runsById[activeRunId] : null;
+  const activeSessionId = activeRun?.sandboxSessionId || state.sessionId;
+  const activeTraceId = activeRun?.traceId || state.traceId;
+
+  const currentSessionId = useCallback(() => {
+    const store = bridge.getStore();
+    const run = store.activeRunId ? store.runsById[store.activeRunId] : null;
+    return run?.sandboxSessionId || stateRef.current.sessionId;
+  }, [bridge]);
+
+  const currentTraceId = useCallback(() => {
+    const store = bridge.getStore();
+    const run = store.activeRunId ? store.runsById[store.activeRunId] : null;
+    return run?.traceId || stateRef.current.traceId;
+  }, [bridge]);
 
   const setStatus = useCallback((text: string, color = '#22c55e') => {
     setState((s) => update(s, { statusLabel: text, statusColor: color }));
@@ -196,7 +211,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const refreshArtifacts = useCallback(async (sessionId?: string | null) => {
-    const sid = sessionId || stateRef.current.sessionId;
+    const sid = sessionId || currentSessionId();
     if (!sid) {
       setState((s) => update(s, { artifacts: [] }));
       return;
@@ -207,12 +222,12 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     } catch (err) {
       console.warn('[artifacts] list failed:', (err as Error).message);
     }
-  }, []);
+  }, [currentSessionId]);
 
   const applySSE = useCallback(
     (ev: SSEEvent, generation: number, runId?: string | null) => {
-      // F2: always dual-write into entity store (even if UI generation is stale).
-      // Background runs keep updating entities when the user switches conversations.
+      // Runtime events have exactly one write path: legacy adapter -> reducer ->
+      // EntityStore. Background runs keep updating when focus changes.
       if (runId) {
         try {
           bridge.ingestLegacyEvent(runId, ev);
@@ -221,42 +236,33 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         }
       }
 
-      setState((s) => {
-        // UI layer: only apply to currentMsg when this generation is focused
-        if (!isActiveGeneration(s, generation)) return s;
-        const { state: next, effects } = handleSSEEvent(s, ev, generation);
-        // Schedule side effects outside of setState
-        Promise.resolve().then(() => {
-          for (const fx of effects) {
-            switch (fx.type) {
-              case 'setStatus':
-                setStatus(fx.text, fx.color);
-                break;
-              case 'flashError':
-                flashError(fx.message);
-                break;
-              case 'refreshArtifacts':
-                void refreshArtifacts(fx.sessionId);
-                break;
-              case 'showApproval':
-                // pendingApproval already set on state
-                break;
-              default:
-                break;
-            }
-          }
-        });
-        // Force React to see content mutations on currentMsg
-        if (next.currentMsg && next.currentMsg === s.currentMsg) {
-          return {
-            ...next,
-            currentMsg: cloneCurrentMsg(next.currentMsg),
-          };
+      // UI-only effects may follow the event, but never store a second copy of
+      // runtime messages/tools/approvals/artifacts.
+      if (!isActiveGeneration(stateRef.current, generation)) return;
+      const type = String(ev.type || '');
+      if (type === 'session') {
+        const sessionId = ev.session_id ? String(ev.session_id) : null;
+        const conversationId = ev.conversation_id
+          ? String(ev.conversation_id)
+          : null;
+        if (conversationId && conversationId !== stateRef.current.conversationId) {
+          setState((s) => update(s, { conversationId }));
+          persistConversationId(conversationId);
         }
-        return { ...next };
-      });
+        if (sessionId) {
+          setStatus(`Session ${sessionId.slice(-8)}`);
+          void refreshArtifacts(sessionId);
+        }
+      } else if (type === 'file_ready') {
+        const sessionId = currentSessionId();
+        if (sessionId) void refreshArtifacts(sessionId);
+      } else if (type === 'error') {
+        flashError(String(ev.message || ev.text || 'Unknown error'));
+      } else if (type === 'session_closed') {
+        setStatus('Session ended', '#64748b');
+      }
     },
-    [setStatus, flashError, refreshArtifacts, bridge],
+    [setStatus, flashError, refreshArtifacts, bridge, currentSessionId],
   );
 
   const selectConversation = useCallback(
@@ -270,18 +276,16 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       }
 
       // F2: do NOT abort background runs / SSE managers on conversation switch.
-      // Only detach UI focus (bump generation so late events skip currentMsg).
-      // Entity store continues receiving dual-written events for in-flight runs.
+      // Only detach UI focus. EntityStore continues receiving events for
+      // in-flight background runs.
       if (cur.isStreaming || cur.abortCtrl) {
         setState((s) => {
           // Detach UI without aborting the underlying AbortController —
           // the stream fetch keeps running so the server run is not cancelled.
           const n = update(s, {
             isStreaming: false,
-            // Keep abortCtrl so Stop can still cancel the background run
-            currentMsg: null,
-            pendingTool: null,
-            pendingApproval: null,
+            // EntityBridge keeps the per-run controller while focus detaches.
+            abortCtrl: null,
             streamGeneration: (s.streamGeneration || 0) + 1,
           });
           activeStreamGenRef.current = n.streamGeneration;
@@ -303,12 +307,8 @@ export function ChatProvider({ children }: { children: ReactNode }) {
             conversationId: conv.id,
             messages,
             sessionId,
-            currentMsg: null,
-            readyFiles: new Set(),
             artifacts: [],
             attachments: [],
-            pendingTool: null,
-            pendingApproval: null,
             traceId: null,
             isStreaming: false,
             streamGeneration: (s.streamGeneration || 0) + 1,
@@ -346,9 +346,6 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       setState((s) => {
         const n = update(s, {
           isStreaming: false,
-          currentMsg: null,
-          pendingTool: null,
-          pendingApproval: null,
           streamGeneration: (s.streamGeneration || 0) + 1,
         });
         activeStreamGenRef.current = n.streamGeneration;
@@ -363,14 +360,11 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         conversationId: null,
         messages: [],
         sessionId: null,
-        currentMsg: null,
-        readyFiles: new Set(),
         artifacts: [],
         attachments: [],
-        pendingTool: null,
-        pendingApproval: null,
         traceId: null,
         isStreaming: false,
+        abortCtrl: null,
         streamGeneration: (s.streamGeneration || 0) + 1,
         sidebarOpen: isMobile() ? false : s.sidebarOpen,
       });
@@ -442,18 +436,17 @@ export function ChatProvider({ children }: { children: ReactNode }) {
 
       const abortCtrl = new AbortController();
       let generation = 0;
-      // F2: open a run entity for dual-write (synthetic id until POST /runs lands)
+      // Open the single runtime entity path (synthetic id until POST /runs lands).
       const runId = bridge.beginRun({
         conversationId: cur.conversationId,
-        sessionId: cur.sessionId,
+        sessionId: currentSessionId(),
       });
-      setActiveRunId(runId);
+      bridge.attachTransport(runId, abortCtrl);
 
       setState((s) => {
         let n = update(s, {
           messages: [...s.messages, userMsg],
           attachments: [],
-          pendingApproval: null,
         });
         n = startStream(n, { abortCtrl });
         generation = n.streamGeneration;
@@ -472,57 +465,31 @@ export function ChatProvider({ children }: { children: ReactNode }) {
 
         setState((s) => {
           if (!isActiveGeneration(s, generation)) return s;
-          if (s.currentMsg) {
-            const newMessages = [...s.messages, s.currentMsg];
-            return endStream(s, { messages: newMessages });
-          }
-          return endStream(s);
+          return update(s, { isStreaming: false, abortCtrl: null });
         });
         await refreshConversations();
-        await refreshArtifacts(stateRef.current.sessionId);
+        await refreshArtifacts(currentSessionId());
       } catch (err) {
         const error = err as Error & { name?: string };
+        if (error.name === 'AbortError') {
+          bridge.interruptRun(runId, 'User stopped the run');
+        } else {
+          console.error('[chat] Error:', error);
+          bridge.failRun(runId, error.message || 'Connection error');
+          const traceId = currentTraceId();
+          const trace = traceId ? ` [trace ${traceId.slice(0, 8)}]` : '';
+          flashError(`Connection error: ${error.message}${trace}`);
+        }
         setState((s) => {
           if (!isActiveGeneration(s, generation)) return s;
-
           if (error.name === 'AbortError') {
-            if (s.currentMsg) {
-              const msg = {
-                ...s.currentMsg,
-                stopReason: 'aborted',
-                interrupted: true,
-                status: 'interrupted',
-              };
-              const messages = [...s.messages, msg];
-              activeStreamGenRef.current = (s.streamGeneration || 0) + 1;
-              return abortStream(s, { messages, currentMsg: null });
-            }
             activeStreamGenRef.current = (s.streamGeneration || 0) + 1;
             return abortStream(s);
           }
-
-          console.error('[chat] Error:', error);
-          const trace = s.traceId ? ` [trace ${s.traceId.slice(0, 8)}]` : '';
-          Promise.resolve().then(() =>
-            flashError(`Connection error: ${error.message}${trace}`),
-          );
-          if (s.currentMsg) {
-            const content = [
-              ...s.currentMsg.content,
-              { type: 'text' as const, text: `\n[Connection error: ${error.message}]` },
-            ];
-            const msg: ChatMessage = {
-              ...s.currentMsg,
-              content,
-              interrupted: true,
-              status: 'interrupted',
-            };
-            const messages = [...s.messages, msg];
-            return errorStream(s, { messages, currentMsg: null });
-          }
-          return errorStream(s);
+          return update(s, { isStreaming: false, abortCtrl: null });
         });
       } finally {
+        bridge.releaseTransport(runId);
         setState((s) => {
           if (!isActiveGeneration(s, generation)) return s;
           if (s.isStreaming) {
@@ -532,19 +499,26 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         });
       }
     },
-    [draftText, applySSE, flashError, refreshConversations, refreshArtifacts, bridge],
+    [
+      draftText,
+      applySSE,
+      flashError,
+      refreshConversations,
+      refreshArtifacts,
+      bridge,
+      currentSessionId,
+      currentTraceId,
+    ],
   );
 
   const cancelStream = useCallback(() => {
     // User-initiated Stop only — cancels the active fetch and entity SSE
-    const ctrl = stateRef.current.abortCtrl;
-    if (ctrl) ctrl.abort();
-    const runId = bridge.getStore().activeRunId || activeRunId;
-    if (runId) bridge.stopRun(runId);
-  }, [bridge, activeRunId]);
+    const runId = bridge.getStore().activeRunId;
+    if (runId) bridge.abortRun(runId);
+  }, [bridge]);
 
   const stopRun = useCallback(() => {
-    const runId = bridge.getStore().activeRunId || activeRunId;
+    const runId = bridge.getStore().activeRunId;
     cancelStream();
     if (runId) {
       void cancelRun(runId).then((ok) => {
@@ -555,13 +529,13 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       });
     }
     setStatus('Stopping…', '#f59e0b');
-  }, [bridge, activeRunId, cancelStream, setStatus]);
+  }, [bridge, cancelStream, setStatus]);
 
   const steerRun = useCallback(
     async (text: string): Promise<boolean> => {
       const trimmed = text.trim();
       if (!trimmed) return false;
-      const runId = bridge.getStore().activeRunId || activeRunId;
+      const runId = bridge.getStore().activeRunId;
       if (!runId) {
         flashError('No active run to steer');
         return false;
@@ -584,14 +558,14 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         return false;
       }
     },
-    [bridge, activeRunId, flashError, setStatus],
+    [bridge, flashError, setStatus],
   );
 
   const followUpRun = useCallback(
     async (text: string): Promise<boolean> => {
       const trimmed = text.trim();
       if (!trimmed) return false;
-      const runId = bridge.getStore().activeRunId || activeRunId;
+      const runId = bridge.getStore().activeRunId;
       if (!runId) {
         flashError('No active run for follow-up');
         return false;
@@ -613,7 +587,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         return false;
       }
     },
-    [bridge, activeRunId, flashError, setStatus],
+    [bridge, flashError, setStatus],
   );
 
   /**
@@ -622,7 +596,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
    * - otherwise focus composer so user can continue the conversation
    */
   const resumeInterrupted = useCallback(async () => {
-    const runId = bridge.getStore().activeRunId || activeRunId;
+    const runId = bridge.getStore().activeRunId;
     const store = bridge.getStore();
     const run = runId ? store.runsById[runId] : null;
 
@@ -655,7 +629,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       const el = document.getElementById('input') as HTMLTextAreaElement | null;
       el?.focus();
     }, 0);
-  }, [bridge, activeRunId, flashError, setStatus]);
+  }, [bridge, flashError, setStatus]);
 
   const ensureConversationSession = useCallback(async () => {
     const cur = stateRef.current;
@@ -840,12 +814,6 @@ export function ChatProvider({ children }: { children: ReactNode }) {
           approvalId,
           decision === 'approve' ? 'approved' : 'rejected',
         );
-        setState((s) =>
-          update(s, {
-            pendingApproval:
-              s.pendingApproval?.id === approvalId ? null : s.pendingApproval,
-          }),
-        );
         setStatus(
           decision === 'approve' ? 'Approved' : 'Rejected',
           decision === 'approve' ? '#22c55e' : '#ef4444',
@@ -858,16 +826,24 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   );
 
   const approvePending = useCallback(async () => {
-    const approval = stateRef.current.pendingApproval;
+    const store = bridge.getStore();
+    const runId = store.activeRunId;
+    const approval = Object.values(store.approvalsById).find(
+      (item) => item.runId === runId && item.status === 'pending',
+    );
     if (!approval?.id) return;
     await resolveApproval(approval.id, 'approve');
-  }, [resolveApproval]);
+  }, [bridge, resolveApproval]);
 
   const rejectPending = useCallback(async () => {
-    const approval = stateRef.current.pendingApproval;
+    const store = bridge.getStore();
+    const runId = store.activeRunId;
+    const approval = Object.values(store.approvalsById).find(
+      (item) => item.runId === runId && item.status === 'pending',
+    );
     if (!approval?.id) return;
     await resolveApproval(approval.id, 'reject');
-  }, [resolveApproval]);
+  }, [bridge, resolveApproval]);
 
   const toggleInspector = useCallback(() => {
     setInspectorOpen((v) => !v);
@@ -997,10 +973,46 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   }, [startNewChat]);
 
   const displayMessages = useMemo(() => {
-    return state.currentMsg
-      ? [...state.messages, state.currentMsg]
-      : state.messages;
-  }, [state.messages, state.currentMsg]);
+    if (!activeRunId) return state.messages;
+    const run = entityStore.runsById[activeRunId];
+    if (!run || (state.conversationId && run.conversationId !== state.conversationId)) {
+      return state.messages;
+    }
+    const projected = bridge.projectRunMessages(activeRunId);
+    const result = [...state.messages];
+    for (const message of projected) {
+      const text = message.content
+        .filter((part) => part.type === 'text' && 'text' in part)
+        .map((part) => String((part as { text?: unknown }).text || ''))
+        .join('');
+      let match = -1;
+      for (let i = result.length - 1; i >= 0; i -= 1) {
+        if (result[i].role !== message.role) continue;
+        const existingText = result[i].content
+          .filter((part) => part.type === 'text' && 'text' in part)
+          .map((part) => String((part as { text?: unknown }).text || ''))
+          .join('');
+        if (existingText === text) {
+          match = i;
+          break;
+        }
+      }
+      if (match >= 0) {
+        // Replace matching server history with the richer entity projection
+        // when it carries tool/artifact/interrupted runtime detail.
+        if (
+          message._fileLinks?.length ||
+          message.content.some((part) => part.type === 'tool_use') ||
+          message.interrupted
+        ) {
+          result[match] = message;
+        }
+      } else {
+        result.push(message);
+      }
+    }
+    return result;
+  }, [state.messages, state.conversationId, entityStore, activeRunId, bridge]);
 
   const canSend = canSendAttachments(state.attachments);
 
@@ -1035,6 +1047,8 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     canSend,
     entityStore,
     activeRunId,
+    activeSessionId,
+    activeTraceId,
     inspectorOpen,
     setInspectorOpen,
     toggleInspector,

@@ -36,7 +36,6 @@ import {
   login,
   authHeaders,
 } from '../src/shared/api/client.ts';
-import { handleSSEEvent } from '../src/features/chat/sseHandler.ts';
 import { createEntityBridge } from '../src/features/chat/entityBridge.ts';
 import { createEntityStore } from '../src/entities/index.ts';
 import { createRunSSEManager } from '../src/shared/sse/manager.ts';
@@ -190,31 +189,19 @@ describe('F6 E2E smoke — core flows (mock backend)', () => {
 
   // ── 3. Stream ───────────────────────────────────────────────
 
-  it('stream: token SSE builds assistant text via handleSSEEvent', () => {
-    let s = createState(INITIAL);
-    s = startStream(s);
-    const gen = s.streamGeneration;
-
+  it('stream: token SSE builds assistant text only through EntityStore', () => {
+    const bridge = createEntityBridge();
+    const runId = bridge.beginRun({ conversationId: 'c1' });
     for (const chunk of ['Hel', 'lo', ' world']) {
-      const result = handleSSEEvent(s, { type: 'token', text: chunk }, gen);
-      s = result.state;
+      bridge.ingestLegacyEvent(runId, { type: 'token', text: chunk });
     }
-
-    const textParts = (s.currentMsg?.content || []).filter(
-      (p) => p.type === 'text',
-    ) as Array<{ text: string }>;
-    assert.ok(textParts.length >= 1);
-    assert.equal(textParts.map((p) => p.text).join(''), 'Hello world');
-
-    s = endStream(s, {
-      messages: [...s.messages, s.currentMsg!],
-      currentMsg: null,
-    });
-    assert.equal(s.isStreaming, false);
-    assert.equal(s.messages.length, 1);
+    const projected = bridge.projectRunMessages(runId);
+    assert.equal((projected[0].content[0] as { text: string }).text, 'Hello world');
+    assert.equal('currentMsg' in createState(INITIAL), false);
+    bridge.dispose();
   });
 
-  it('stream: legacy adapter + entity bridge dual-write full turn', () => {
+  it('stream: legacy adapter has one EntityStore write path for a full turn', () => {
     const bridge = createEntityBridge();
     const runId = bridge.beginRun({ conversationId: 'c1', sessionId: 's1' });
 
@@ -238,37 +225,31 @@ describe('F6 E2E smoke — core flows (mock backend)', () => {
 
   // ── 4. Approval ─────────────────────────────────────────────
 
-  it('approval: SSE approval_required sets pendingApproval; decide clears it', () => {
-    let s = createState(INITIAL);
-    s = startStream(s);
-    const gen = s.streamGeneration;
-
-    const { state: withApproval, effects } = handleSSEEvent(
-      s,
-      {
-        type: 'approval_required',
-        approval_id: 'appr_1',
-        reason: 'rm -rf /tmp/cache',
-      },
-      gen,
-    );
-    s = withApproval;
-    assert.equal(s.pendingApproval?.id, 'appr_1');
-    assert.match(s.pendingApproval?.reason || '', /rm -rf/);
-    assert.ok(effects.some((e) => e.type === 'showApproval'));
+  it('approval: SSE approval state exists only in EntityStore', () => {
+    const bridge = createEntityBridge();
+    const runId = bridge.beginRun({ conversationId: 'c1' });
+    bridge.ingestLegacyEvent(runId, {
+      type: 'approval_required',
+      approval_id: 'appr_1',
+      reason: 'rm -rf /tmp/cache',
+    });
+    let approval = bridge.getStore().approvalsById.appr_1;
+    assert.equal(approval.id, 'appr_1');
+    assert.match(approval.reason, /rm -rf/);
+    assert.equal('pendingApproval' in createState(INITIAL), false);
 
     // Composer mode switches to waiting_approval
     assert.equal(
       resolveComposerMode({
         isStreaming: true,
-        hasPendingApproval: Boolean(s.pendingApproval),
+        hasPendingApproval: approval.status === 'pending',
       }),
       'waiting_approval',
     );
 
-    // User decides → clear pending
-    s = update(s, { pendingApproval: null });
-    assert.equal(s.pendingApproval, null);
+    bridge.markApproval('appr_1', 'approved');
+    approval = bridge.getStore().approvalsById.appr_1;
+    assert.equal(approval.status, 'approved');
     assert.equal(
       resolveComposerMode({
         isStreaming: true,
@@ -277,6 +258,7 @@ describe('F6 E2E smoke — core flows (mock backend)', () => {
       }),
       'running',
     );
+    bridge.dispose();
   });
 
   it('approval: entity bridge marks approval decided', () => {
@@ -353,7 +335,7 @@ describe('F6 E2E smoke — core flows (mock backend)', () => {
     assert.equal(mode, 'running');
     assert.equal(canStop(mode), true);
 
-    s = abortStream(s, { currentMsg: null });
+    s = abortStream(s);
     assert.equal(s.isStreaming, false);
     assert.equal(s.abortCtrl, null);
     assert.equal(ctrl!.signal.aborted, true);

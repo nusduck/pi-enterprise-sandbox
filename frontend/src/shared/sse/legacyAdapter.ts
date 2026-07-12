@@ -10,11 +10,15 @@ export type LegacyAdapterState = {
   runId: string;
   sessionId: string | null;
   conversationId: string | null;
+  workspaceId: string | null;
+  modelId: string | null;
   sequence: number;
   /** Active streaming message id for token deltas. */
   messageId: string | null;
   /** Map tool index / id → tool execution id. */
   toolIds: string[];
+  /** Terminal status already emitted for this legacy stream. */
+  terminalStatus: 'succeeded' | 'failed' | 'cancelled' | 'budget_exceeded' | null;
 };
 
 export function createLegacyAdapterState(
@@ -23,9 +27,12 @@ export function createLegacyAdapterState(
   return {
     sessionId: null,
     conversationId: null,
+    workspaceId: null,
+    modelId: null,
     sequence: 0,
     messageId: null,
     toolIds: [],
+    terminalStatus: null,
     ...partial,
   };
 }
@@ -55,13 +62,26 @@ export function legacyEventToRuntime(
   };
 
   switch (type) {
-    case 'trace':
-      // No entity change; skip envelope noise
+    case 'trace': {
+      if (!ev.trace_id) break;
+      const seq = nextSeq(state);
+      out.push(
+        makeRuntimeEvent({
+          ...base,
+          event_id: eventId(state, seq),
+          sequence: seq,
+          type: 'run.trace',
+          payload: { trace_id: String(ev.trace_id) },
+        }),
+      );
       break;
+    }
 
     case 'session': {
       if (ev.session_id) state.sessionId = String(ev.session_id);
       if (ev.conversation_id) state.conversationId = String(ev.conversation_id);
+      if (ev.workspace_id) state.workspaceId = String(ev.workspace_id);
+      if (ev.model_id) state.modelId = String(ev.model_id);
       const seq = nextSeq(state);
       out.push(
         makeRuntimeEvent({
@@ -73,7 +93,36 @@ export function legacyEventToRuntime(
           payload: {
             conversation_id: state.conversationId,
             session_id: state.sessionId,
+            workspace_id: state.workspaceId,
+            model_id: state.modelId,
             ...(ev.trace_id ? { trace_id: String(ev.trace_id) } : {}),
+          },
+        }),
+      );
+      break;
+    }
+
+    case 'agent_session': {
+      const agentSessionId = String(ev.agent_session_id || '');
+      if (!agentSessionId) break;
+      if (ev.conversation_id) state.conversationId = String(ev.conversation_id);
+      const seq = nextSeq(state);
+      out.push(
+        makeRuntimeEvent({
+          ...base,
+          event_id: eventId(state, seq),
+          sequence: seq,
+          session_id: state.sessionId,
+          type: 'session.restored',
+          payload: {
+            agent_session_id: agentSessionId,
+            conversation_id: state.conversationId,
+            sandbox_session_id: state.sessionId,
+            workspace_id:
+              ev.workspace_id != null ? String(ev.workspace_id) : state.workspaceId,
+            model_id:
+              ev.model_id != null ? String(ev.model_id) : state.modelId,
+            restored: Boolean(ev.restored),
           },
         }),
       );
@@ -223,6 +272,7 @@ export function legacyEventToRuntime(
           },
         }),
       );
+      state.terminalStatus = 'failed';
       break;
     }
 
@@ -240,21 +290,36 @@ export function legacyEventToRuntime(
           }),
         );
       }
-      const seq = nextSeq(state);
-      out.push(
-        makeRuntimeEvent({
-          ...base,
-          event_id: eventId(state, seq),
-          sequence: seq,
-          session_id: state.sessionId,
-          type: 'run.completed',
-          payload: {},
-        }),
-      );
+      if (!state.terminalStatus) {
+        const seq = nextSeq(state);
+        const rawStatus = String(ev.status || '');
+        const status =
+          rawStatus === 'cancelled'
+            ? 'cancelled'
+            : rawStatus === 'budget_exceeded'
+              ? 'budget_exceeded'
+              : rawStatus === 'rejected' || rawStatus === 'failed'
+                ? 'failed'
+                : 'succeeded';
+        out.push(
+          makeRuntimeEvent({
+            ...base,
+            event_id: eventId(state, seq),
+            sequence: seq,
+            session_id: state.sessionId,
+            type: status === 'succeeded' ? 'run.completed' : 'run.status_changed',
+            payload: { status },
+          }),
+        );
+        state.terminalStatus = status;
+      }
       break;
     }
 
     case 'session_closed': {
+      // Normal streams emit done before session_closed. Never let the lifecycle
+      // tail overwrite an already terminal run (especially succeeded → cancelled).
+      if (state.terminalStatus) break;
       const seq = nextSeq(state);
       out.push(
         makeRuntimeEvent({
@@ -266,6 +331,7 @@ export function legacyEventToRuntime(
           payload: { status: 'cancelled' },
         }),
       );
+      state.terminalStatus = 'cancelled';
       break;
     }
 
@@ -310,6 +376,7 @@ export function legacyEventToRuntime(
           },
         }),
       );
+      state.terminalStatus = 'budget_exceeded';
       break;
     }
 

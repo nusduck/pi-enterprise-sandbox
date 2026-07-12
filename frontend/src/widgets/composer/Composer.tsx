@@ -59,6 +59,7 @@ export function Composer() {
     rejectPending,
     resumeInterrupted,
     resolveApproval,
+    displayMessages,
   } = useChat();
 
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -66,15 +67,12 @@ export function Composer() {
   const [runningAction, setRunningAction] = useState<RunningAction>('steer');
   const [submitting, setSubmitting] = useState(false);
 
-  const runId = activeRunId || entityStore.activeRunId;
+  const runId = activeRunId;
   const run = getActiveRunEntity(entityStore, runId);
-  const hasPendingApproval = Boolean(
-    state.pendingApproval ||
-      (run &&
-        Object.values(entityStore.approvalsById).some(
-          (a) => a.runId === run.id && a.status === 'pending',
-        )),
+  const pendingApproval = Object.values(entityStore.approvalsById).find(
+    (a) => a.runId === run?.id && a.status === 'pending',
   );
+  const hasPendingApproval = Boolean(pendingApproval);
 
   const mode = resolveComposerMode({
     isStreaming: state.isStreaming,
@@ -83,16 +81,13 @@ export function Composer() {
   });
 
   const lastInterrupted = useMemo(() => {
-    const msgs = state.currentMsg
-      ? [...state.messages, state.currentMsg]
-      : state.messages;
-    for (let i = msgs.length - 1; i >= 0; i--) {
-      if (msgs[i].role === 'assistant') {
-        return isInterruptedMessage(msgs[i]);
+    for (let i = displayMessages.length - 1; i >= 0; i--) {
+      if (displayMessages[i].role === 'assistant') {
+        return isInterruptedMessage(displayMessages[i]);
       }
     }
     return false;
-  }, [state.messages, state.currentMsg]);
+  }, [displayMessages]);
 
   const showResume = shouldShowResumeEntry({
     runStatus: run?.status,
@@ -218,8 +213,8 @@ export function Composer() {
           <div className="composer-banner waiting" role="status">
             <span className="composer-banner-text">
               Agent is waiting for approval
-              {state.pendingApproval?.reason
-                ? `: ${state.pendingApproval.reason}`
+              {pendingApproval?.reason
+                ? `: ${pendingApproval.reason}`
                 : ''}
             </span>
             <span className="composer-banner-actions">
@@ -227,8 +222,8 @@ export function Composer() {
                 type="button"
                 className="composer-banner-btn approve"
                 onClick={() => {
-                  if (state.pendingApproval?.id) {
-                    void resolveApproval(state.pendingApproval.id, 'approve');
+                  if (pendingApproval?.id) {
+                    void resolveApproval(pendingApproval.id, 'approve');
                   } else {
                     void approvePending();
                   }
@@ -240,8 +235,8 @@ export function Composer() {
                 type="button"
                 className="composer-banner-btn reject"
                 onClick={() => {
-                  if (state.pendingApproval?.id) {
-                    void resolveApproval(state.pendingApproval.id, 'reject');
+                  if (pendingApproval?.id) {
+                    void resolveApproval(pendingApproval.id, 'reject');
                   } else {
                     void rejectPending();
                   }

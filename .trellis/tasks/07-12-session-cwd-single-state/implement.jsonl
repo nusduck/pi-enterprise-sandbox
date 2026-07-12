@@ -1,0 +1,4 @@
+{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/project-architecture.md", "reason": "Agent/Sandbox cwd and cross-service boundaries"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "Runtime entity single-source implementation contract"}
+{"file": ".trellis/tasks/07-12-session-cwd-single-state/research/feasibility-audit.md", "reason": "SDK cwd and SSE coverage findings"}

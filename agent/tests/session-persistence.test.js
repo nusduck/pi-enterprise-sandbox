@@ -16,6 +16,7 @@ import {
   mapSdkEntryType,
   materializeSessionFile,
   openSessionFromResume,
+  normalizeSessionHeaderCwd,
   toPersistableEntries,
   isForceInMemory,
 } from '../services/session-persistence.js';
@@ -345,6 +346,21 @@ describe('buildJsonlFromResume', () => {
   it('prefers jsonl field when present', () => {
     const j = buildJsonlFromResume({ jsonl: '{"type":"session"}\n' });
     assert.ok(j.includes('session'));
+  });
+
+  it('normalizes the materialized header cwd without changing entries', () => {
+    const input = [
+      JSON.stringify({ type: 'session', id: 'x', version: 3, cwd: '/tmp' }),
+      JSON.stringify({ type: 'message', id: 'm1', message: { role: 'user' } }),
+      '',
+    ].join('\n');
+    const normalized = normalizeSessionHeaderCwd(
+      input,
+      '/home/sandbox/workspace',
+    );
+    const lines = normalized.trim().split('\n').map((line) => JSON.parse(line));
+    assert.equal(lines[0].cwd, '/home/sandbox/workspace');
+    assert.deepEqual(lines[1], JSON.parse(input.trim().split('\n')[1]));
   });
 
   it('builds from header + entries', () => {

@@ -74,7 +74,7 @@ describe('legacy SSE adapter', () => {
     assert.equal(store.messagesById[msgId].text, 'Hi');
   });
 
-  it('entity bridge dual-writes multi-run without cross-talk', () => {
+  it('entity bridge reduces multi-run events once without cross-talk', () => {
     const bridge = createEntityBridge();
     const r1 = bridge.beginRun({ conversationId: 'c1' });
     const r2 = bridge.beginRun({ conversationId: 'c2' });
@@ -99,6 +99,67 @@ describe('legacy SSE adapter', () => {
       ? msgs2[0].content[0].text
       : '', 'B');
 
+    bridge.dispose();
+  });
+
+  it('keeps legacy fetch controllers isolated per background run', () => {
+    const bridge = createEntityBridge();
+    const r1 = bridge.beginRun({ conversationId: 'c1' });
+    const r2 = bridge.beginRun({ conversationId: 'c2' });
+    const c1 = new AbortController();
+    const c2 = new AbortController();
+    bridge.attachTransport(r1, c1);
+    bridge.attachTransport(r2, c2);
+
+    bridge.focusConversation('c1');
+    bridge.abortRun(r1);
+    assert.equal(c1.signal.aborted, true);
+    assert.equal(c2.signal.aborted, false);
+    bridge.dispose();
+    assert.equal(c2.signal.aborted, true);
+  });
+
+  it('keeps successful terminal status when session_closed follows done', () => {
+    const { events } = adaptLegacyStream('run_terminal', [
+      { type: 'session', session_id: 's1', conversation_id: 'c1' },
+      { type: 'token', text: 'ok' },
+      { type: 'done' },
+      { type: 'session_closed', session_id: 's1' },
+    ]);
+    const { store } = reduceRuntimeEventBatch(createEntityStore(), events);
+    assert.equal(store.runsById.run_terminal.status, 'succeeded');
+    assert.equal(
+      events.filter((event) => event.type === 'run.status_changed').length,
+      0,
+    );
+  });
+
+  it('does not let done overwrite a preceding failure', () => {
+    const { events } = adaptLegacyStream('run_failed', [
+      { type: 'error', message: 'boom' },
+      { type: 'done' },
+      { type: 'session_closed' },
+    ]);
+    const { store } = reduceRuntimeEventBatch(createEntityStore(), events);
+    assert.equal(store.runsById.run_failed.status, 'failed');
+    assert.equal(store.runsById.run_failed.error, 'boom');
+  });
+
+  it('maps trace and agent session into the normalized store', () => {
+    const bridge = createEntityBridge();
+    const runId = bridge.beginRun({ conversationId: 'c1', sessionId: 's1' });
+    bridge.ingestLegacyEvent(runId, { type: 'trace', trace_id: 'trace_1' });
+    bridge.ingestLegacyEvent(runId, {
+      type: 'agent_session',
+      agent_session_id: 'asess_1',
+      conversation_id: 'c1',
+      workspace_id: 'conv_c1',
+      restored: true,
+    });
+    const store = bridge.getStore();
+    assert.equal(store.runsById[runId].traceId, 'trace_1');
+    assert.equal(store.runsById[runId].agentSessionId, 'asess_1');
+    assert.equal(store.agentSessionsById.asess_1.workspaceId, 'conv_c1');
     bridge.dispose();
   });
 

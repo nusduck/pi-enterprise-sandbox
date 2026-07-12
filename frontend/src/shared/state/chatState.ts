@@ -4,12 +4,8 @@ export const INITIAL: Readonly<ChatState> = Object.freeze({
   messages: [],
   isStreaming: false,
   abortCtrl: null,
-  currentMsg: null,
   sessionId: null,
   conversationId: null,
-  readyFiles: new Set<string>(),
-  pendingTool: null,
-  pendingApproval: null,
   conversations: [],
   artifacts: [],
   attachments: [],
@@ -29,7 +25,6 @@ export function createState(initial: Partial<ChatState> | ChatState = INITIAL): 
   const base = { ...INITIAL, ...initial };
   return {
     ...base,
-    readyFiles: new Set(base.readyFiles || []),
     conversations: [...(base.conversations || [])],
     artifacts: [...(base.artifacts || [])],
     attachments: [...(base.attachments || [])],
@@ -60,9 +55,6 @@ function notify(changes: ChangeMap): void {
 export function update(state: ChatState, patch: Partial<ChatState>): ChatState {
   const prev = state;
   const next: ChatState = { ...state, ...patch };
-  if (patch.readyFiles !== undefined) {
-    next.readyFiles = new Set(patch.readyFiles);
-  }
   if (patch.conversations !== undefined) {
     next.conversations = [...patch.conversations];
   }
@@ -102,20 +94,12 @@ function abortController(ctrl: AbortController | null | undefined): void {
  */
 export function startStream(
   state: ChatState,
-  opts: { abortCtrl?: AbortController; currentMsg?: ChatMessage } = {},
+  opts: { abortCtrl?: AbortController } = {},
 ): ChatState {
   const abortCtrl = opts.abortCtrl || new AbortController();
-  const currentMsg = opts.currentMsg || {
-    role: 'assistant',
-    content: [{ type: 'text', text: '' }],
-  };
   return update(state, {
     isStreaming: true,
     abortCtrl,
-    currentMsg,
-    readyFiles: new Set(),
-    pendingTool: null,
-    pendingApproval: null,
     streamGeneration: (state.streamGeneration || 0) + 1,
   });
 }
@@ -127,50 +111,40 @@ export function endStream(state: ChatState, patch: Partial<ChatState> = {}): Cha
   return update(state, {
     isStreaming: false,
     abortCtrl: null,
-    currentMsg: null,
-    pendingTool: null,
     ...patch,
   });
 }
 
 /**
  * Abort the active stream. Bumps generation so late SSE events are ignored.
- * Does not drop currentMsg — caller decides whether to keep partial text.
+ * Runtime messages remain in EntityStore; this only closes transport state.
  */
 export function abortStream(state: ChatState, patch: Partial<ChatState> = {}): ChatState {
   abortController(state.abortCtrl);
   return update(state, {
     isStreaming: false,
     abortCtrl: null,
-    pendingTool: null,
-    pendingApproval: null,
     streamGeneration: (state.streamGeneration || 0) + 1,
     ...patch,
   });
 }
 
 /**
- * Record a stream-level error. Clears streaming flags; keeps currentMsg for
- * the caller to append error text if desired.
+ * Record a stream-level transport error. Runtime error data lives in EntityStore.
  */
 export function errorStream(state: ChatState, patch: Partial<ChatState> = {}): ChatState {
   return update(state, {
     isStreaming: false,
     abortCtrl: null,
-    pendingTool: null,
     ...patch,
   });
 }
 
 /**
- * Clear ephemeral UI state (tokens mid-stream, tools, approvals, artifacts).
+ * Clear ephemeral non-runtime UI state.
  */
 export function clearEphemeral(state: ChatState, patch: Partial<ChatState> = {}): ChatState {
   return update(state, {
-    currentMsg: null,
-    pendingTool: null,
-    pendingApproval: null,
-    readyFiles: new Set(),
     artifacts: [],
     traceId: null,
     ...patch,
@@ -179,7 +153,7 @@ export function clearEphemeral(state: ChatState, patch: Partial<ChatState> = {})
 
 /**
  * Switch to another conversation (or blank). Aborts any active stream,
- * bumps generation, and clears tokens/approvals/artifacts from the previous id.
+ * bumps generation, and clears conversation-scoped UI snapshots.
  */
 export function switchConversation(
   state: ChatState,
@@ -197,12 +171,8 @@ export function switchConversation(
     sessionId: opts.sessionId !== undefined ? opts.sessionId : null,
     isStreaming: false,
     abortCtrl: null,
-    currentMsg: null,
-    readyFiles: new Set(),
     artifacts: [],
     attachments: [],
-    pendingTool: null,
-    pendingApproval: null,
     traceId: null,
     streamGeneration: (state.streamGeneration || 0) + 1,
     ...(opts.sidebarOpen !== undefined ? { sidebarOpen: opts.sidebarOpen } : {}),
@@ -322,7 +292,7 @@ export function normalizeServerMessages(messages: unknown): ChatMessage[] {
         role: m.role as string,
         content: [{ type: 'text', text }],
       };
-      // Preserve interrupted status from server dual-write / recovery
+      // Preserve interrupted status from server persistence / recovery
       if (m.interrupted === true || m.status === 'interrupted') {
         out.interrupted = true;
         out.status = 'interrupted';

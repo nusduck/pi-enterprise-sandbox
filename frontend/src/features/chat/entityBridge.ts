@@ -1,9 +1,9 @@
 /**
- * Bridge between legacy ChatState SSE path and F2 entity architecture.
+ * Bridge from the legacy /chat transport into the normalized entity runtime.
  *
- * - Dual-writes runtime events into EntityStore via RunSSEManager
+ * - Reduces runtime events exactly once via RunSSEManager
  * - Conversation switch does NOT disconnect background run managers
- * - Projects entity messages for optional UI consumption
+ * - Owns per-run legacy fetch controllers and entity projections
  */
 import {
   createEntityStore,
@@ -34,21 +34,28 @@ import {
   type RunDetail,
 } from '../../shared/api/runs';
 import type { ChatMessage } from '../../shared/state/types';
+import type { ContentPart, ToolUsePart } from '../../shared/state/types';
+import { getArtifactDownloadUrl, getDownloadUrl } from '../../shared/api/client';
+import { makeRuntimeEvent } from '../../shared/schemas/events';
 
 export type EntityBridge = {
   manager: RunSSEManager;
   getStore: () => EntityStore;
   /**
    * Start tracking a new run (local synthetic id or server run_id).
-   * Returns the runId used for subsequent legacy SSE dual-write.
+   * Returns the runId used for subsequent legacy SSE reduction.
    */
   beginRun: (opts?: {
     runId?: string;
     conversationId?: string | null;
     sessionId?: string | null;
   }) => string;
-  /** Dual-write one legacy /chat SSE event into the entity store. */
+  /** Reduce one legacy /chat SSE event into the entity store. */
   ingestLegacyEvent: (runId: string, ev: SSEEvent) => void;
+  /** Register/release the legacy fetch transport owned by a run. */
+  attachTransport: (runId: string, controller: AbortController) => void;
+  releaseTransport: (runId: string) => void;
+  abortRun: (runId: string) => void;
   /**
    * Focus a conversation without cancelling background runs.
    * Unlike ChatState.switchConversation, this never aborts SSE managers.
@@ -56,6 +63,10 @@ export type EntityBridge = {
   focusConversation: (conversationId: string | null) => void;
   /** User-initiated stop: disconnect SSE for this run only. */
   stopRun: (runId: string) => void;
+  /** Mark a locally aborted transport as an interrupted runtime event. */
+  interruptRun: (runId: string, reason?: string) => void;
+  /** Mark a transport failure in the same runtime store used by SSE events. */
+  failRun: (runId: string, message: string) => void;
   /** Disconnect all (page unload). */
   dispose: () => void;
   /** Rehydrate in-progress runs after refresh (API may stub empty). */
@@ -79,6 +90,7 @@ export function createEntityBridge(
 ): EntityBridge {
   let store = createEntityStore();
   const legacyAdapters = new Map<string, LegacyAdapterState>();
+  const transports = new Map<string, AbortController>();
 
   const manager = createRunSSEManager(store, {
     onStoreChange: (s) => {
@@ -125,7 +137,10 @@ export function createEntityBridge(
   function ingestLegacyEvent(runId: string, ev: SSEEvent): void {
     let adapter = legacyAdapters.get(runId);
     if (!adapter) {
-      adapter = createLegacyAdapterState({ runId });
+      adapter = createLegacyAdapterState({
+        runId,
+        sequence: manager.getStore().runsById[runId]?.lastSequence || 0,
+      });
       legacyAdapters.set(runId, adapter);
     }
     const runtimeEvents = legacyEventToRuntime(adapter, ev);
@@ -146,7 +161,61 @@ export function createEntityBridge(
     manager.disconnect(runId);
   }
 
+  function attachTransport(runId: string, controller: AbortController): void {
+    transports.set(runId, controller);
+  }
+
+  function releaseTransport(runId: string): void {
+    transports.delete(runId);
+  }
+
+  function abortRun(runId: string): void {
+    transports.get(runId)?.abort();
+    transports.delete(runId);
+    stopRun(runId);
+  }
+
+  function applyLocalRunEvent(
+    runId: string,
+    type: 'run.status_changed' | 'run.failed',
+    payload: Record<string, unknown>,
+  ): void {
+    let adapter = legacyAdapters.get(runId);
+    if (!adapter) {
+      adapter = createLegacyAdapterState({
+        runId,
+        sequence: manager.getStore().runsById[runId]?.lastSequence || 0,
+      });
+      legacyAdapters.set(runId, adapter);
+    }
+    adapter.sequence += 1;
+    manager.handleRuntimeEvent(
+      makeRuntimeEvent({
+        event_id: `local_${runId}_${adapter.sequence}`,
+        sequence: adapter.sequence,
+        run_id: runId,
+        session_id: adapter.sessionId,
+        type,
+        payload,
+      }),
+    );
+    store = manager.getStore();
+  }
+
+  function interruptRun(runId: string, reason = 'Run interrupted'): void {
+    applyLocalRunEvent(runId, 'run.status_changed', {
+      status: 'interrupted',
+      message: reason,
+    });
+  }
+
+  function failRun(runId: string, message: string): void {
+    applyLocalRunEvent(runId, 'run.failed', { message });
+  }
+
   function dispose(): void {
+    for (const controller of transports.values()) controller.abort();
+    transports.clear();
     manager.disconnectAll();
   }
 
@@ -190,7 +259,7 @@ export function createEntityBridge(
     const s = manager.getStore();
     const run = s.runsById[runId];
     if (!run) return [];
-    return run.messageIds
+    const messages: ChatMessage[] = run.messageIds
       .map((id) => s.messagesById[id])
       .filter((m): m is MessageEntity => Boolean(m))
       .map((m) => ({
@@ -200,6 +269,87 @@ export function createEntityBridge(
           ? { interrupted: true, status: 'interrupted' as const }
           : {}),
       }));
+    const content: ContentPart[] = [];
+    let assistant: ChatMessage | undefined;
+    for (let i = messages.length - 1; i >= 0; i -= 1) {
+      if (messages[i].role === 'assistant') {
+        assistant = messages[i];
+        break;
+      }
+    }
+    if (assistant) content.push(...assistant.content);
+
+    for (const toolId of run.toolExecutionIds) {
+      const tool = s.toolExecutionsById[toolId];
+      if (!tool) continue;
+      const part: ToolUsePart = {
+        type: 'tool_use',
+        name: tool.name,
+        input: tool.input,
+        status:
+          tool.status === 'running' || tool.status === 'waiting_approval'
+            ? 'running'
+            : 'complete',
+        isError: tool.isError,
+        result: tool.result,
+      };
+      content.push(part);
+    }
+
+    if (
+      run.error &&
+      !content.some(
+        (part) =>
+          part.type === 'text' &&
+          'text' in part &&
+          String((part as { text?: unknown }).text || '').includes(run.error || ''),
+      )
+    ) {
+      content.push({ type: 'text', text: `\n[Error: ${run.error}]` });
+    }
+
+    const fileLinks = run.artifactIds.flatMap((artifactId) => {
+      const artifact = s.artifactsById[artifactId];
+      if (!artifact) return [];
+      const sessionId = artifact.sessionId || run.sandboxSessionId;
+      const isServerArtifact = !artifact.id.startsWith(`art_${runId}_`);
+      const url = sessionId
+        ? isServerArtifact
+          ? getArtifactDownloadUrl(sessionId, artifact.id)
+          : artifact.path
+            ? getDownloadUrl(sessionId, artifact.path)
+            : null
+        : null;
+      if (!url) return [];
+      return [{
+        name: artifact.name,
+        url,
+        path: artifact.path || undefined,
+        artifact_id: artifact.id,
+        mime_type: artifact.mimeType || undefined,
+        size: artifact.size ?? undefined,
+      }];
+    });
+
+    if (!assistant && (content.length || fileLinks.length)) {
+      messages.push({ role: 'assistant', content: [] });
+    }
+    let projected: ChatMessage | undefined;
+    for (let i = messages.length - 1; i >= 0; i -= 1) {
+      if (messages[i].role === 'assistant') {
+        projected = messages[i];
+        break;
+      }
+    }
+    if (projected) {
+      projected.content = content;
+      projected._fileLinks = fileLinks;
+      if (run.status === 'interrupted' || run.status === 'cancelled') {
+        projected.interrupted = true;
+        projected.status = 'interrupted';
+      }
+    }
+    return messages;
   }
 
   function markApproval(
@@ -223,8 +373,13 @@ export function createEntityBridge(
     getStore: () => manager.getStore(),
     beginRun,
     ingestLegacyEvent,
+    attachTransport,
+    releaseTransport,
+    abortRun,
     focusConversation,
     stopRun,
+    interruptRun,
+    failRun,
     dispose,
     rehydrateInProgress,
     projectRunMessages,

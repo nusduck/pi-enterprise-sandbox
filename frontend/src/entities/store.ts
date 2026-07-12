@@ -128,6 +128,7 @@ export function createRun(
     attachmentIds: [],
     lastSequence: 0,
     lastEventId: null,
+    traceId: null,
     error: null,
     budgetUsage: null,
     budgetLimits: null,

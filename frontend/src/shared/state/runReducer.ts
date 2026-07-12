@@ -1,9 +1,10 @@
 /**
  * Run Event Reducer — applies RuntimeEvents to the normalized EntityStore.
- * Pure: no I/O, no DOM, no currentMsg mutation (F2 / ADR 0003 §13–15).
+ * Pure: no I/O or DOM mutation (F2 / ADR 0003 §13–15).
  */
 import type { EntityStore, RunEntity, RunStatus } from '../../entities/types';
 import {
+  createAgentSession,
   createApproval,
   createArtifact,
   createMessage,
@@ -11,7 +12,9 @@ import {
   createRun,
   createToolExecution,
   isTerminalRunStatus,
+  setActiveConversation,
   upsertApproval,
+  upsertAgentSession,
   upsertArtifact,
   upsertMessage,
   upsertProcess,
@@ -191,14 +194,34 @@ export function reduceRuntimeEvent(
     }
 
     case 'run.started': {
+      const conversationId =
+        str(payload.conversation_id) ||
+        next.runsById[runId]?.conversationId ||
+        null;
       next = touchRun(next, runId, {
         status: 'running',
+        conversationId,
         startedAt: ts || next.runsById[runId]?.startedAt,
         sandboxSessionId:
           str(ev.session_id) ||
           str(payload.session_id) ||
           next.runsById[runId]?.sandboxSessionId ||
           null,
+        traceId:
+          str(payload.trace_id) || next.runsById[runId]?.traceId || null,
+      });
+      if (
+        conversationId &&
+        (next.activeRunId === runId || next.activeConversationId == null)
+      ) {
+        next = setActiveConversation(next, conversationId, { activeRunId: runId });
+      }
+      break;
+    }
+
+    case 'run.trace': {
+      next = touchRun(next, runId, {
+        traceId: str(payload.trace_id) || next.runsById[runId]?.traceId || null,
       });
       break;
     }
@@ -208,6 +231,10 @@ export function reduceRuntimeEvent(
       if (status) {
         next = touchRun(next, runId, {
           status,
+          error:
+            str(payload.error || payload.message) ||
+            next.runsById[runId]?.error ||
+            null,
           ...(isTerminalRunStatus(status)
             ? { finishedAt: ts || next.runsById[runId]?.finishedAt }
             : {}),
@@ -481,18 +508,43 @@ export function reduceRuntimeEvent(
     }
 
     case 'session.restored': {
+      const agentSessionId =
+        str(payload.agent_session_id || payload.session_id) ||
+        next.runsById[runId]?.agentSessionId ||
+        null;
+      const conversationId =
+        str(payload.conversation_id) ||
+        next.runsById[runId]?.conversationId ||
+        null;
+      const sandboxSessionId =
+        str(ev.session_id) ||
+        str(payload.sandbox_session_id) ||
+        next.runsById[runId]?.sandboxSessionId ||
+        null;
       next = touchRun(next, runId, {
-        status: 'restoring_session',
-        agentSessionId:
-          str(payload.agent_session_id || payload.session_id) ||
-          next.runsById[runId]?.agentSessionId ||
-          null,
-        sandboxSessionId:
-          str(ev.session_id) ||
-          str(payload.sandbox_session_id) ||
-          next.runsById[runId]?.sandboxSessionId ||
-          null,
+        // Legacy agent_session arrives after restore/create has completed.
+        status:
+          next.runsById[runId]?.status === 'queued'
+            ? 'running'
+            : next.runsById[runId]?.status,
+        agentSessionId,
+        sandboxSessionId,
       });
+      if (agentSessionId && conversationId) {
+        next = upsertAgentSession(
+          next,
+          createAgentSession({
+            id: agentSessionId,
+            conversationId,
+            sandboxSessionId,
+            workspaceId: str(payload.workspace_id) || null,
+            modelId: str(payload.model_id) || null,
+            status: 'active',
+            runIds: [runId],
+            updatedAt: ts,
+          }),
+        );
+      }
       break;
     }
 

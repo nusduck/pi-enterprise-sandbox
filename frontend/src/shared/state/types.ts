@@ -87,27 +87,12 @@ export type Artifact = {
   [k: string]: unknown;
 };
 
-export type PendingTool = {
-  id?: string;
-  name?: string;
-  args?: unknown;
-} | null;
-
-export type PendingApproval = {
-  id: string;
-  reason?: string;
-} | null;
-
 export type ChatState = {
   messages: ChatMessage[];
   isStreaming: boolean;
   abortCtrl: AbortController | null;
-  currentMsg: ChatMessage | null;
   sessionId: string | null;
   conversationId: string | null;
-  readyFiles: Set<string>;
-  pendingTool: PendingTool;
-  pendingApproval: PendingApproval;
   conversations: ConversationSummary[];
   artifacts: Artifact[];
   attachments: AttachmentDraft[];

@@ -102,6 +102,32 @@ export function buildJsonlFromResume(resume) {
 }
 
 /**
+ * Normalize the persisted SDK session header to the current Sandbox logical
+ * cwd before opening it. SessionManager.open(cwdOverride) changes its runtime
+ * cwd but intentionally preserves the original header object, so rewriting the
+ * materialized copy is required to avoid two cwd values after restore.
+ *
+ * @param {string} jsonl
+ * @param {string} cwd
+ * @returns {string}
+ */
+export function normalizeSessionHeaderCwd(jsonl, cwd) {
+  if (!cwd || typeof jsonl !== 'string' || !jsonl.trim()) return jsonl;
+  const lines = jsonl.trimEnd().split('\n');
+  for (let i = 0; i < lines.length; i += 1) {
+    try {
+      const entry = JSON.parse(lines[i]);
+      if (entry?.type !== 'session') continue;
+      lines[i] = JSON.stringify({ ...entry, cwd });
+      return `${lines.join('\n')}\n`;
+    } catch {
+      // SessionManager owns malformed-line validation; only rewrite valid header.
+    }
+  }
+  return jsonl.endsWith('\n') ? jsonl : `${jsonl}\n`;
+}
+
+/**
  * Write JSONL to a temp file and return path + cleanup.
  * @param {string} jsonl
  * @param {{ prefix?: string }} [opts]
@@ -140,12 +166,15 @@ export function openSessionFromResume(resume, opts = {}) {
   const agentSessionId = resume?.session?.id || resume?.id || null;
   const conversationId = opts.conversationId || resume?.session?.conversation_id || null;
   try {
-    const jsonl = buildJsonlFromResume(resume);
+    let jsonl = buildJsonlFromResume(resume);
     if (!jsonl.trim()) {
       throw new SessionRestoreError('Resume payload has no JSONL content', {
         agentSessionId,
         conversationId,
       });
+    }
+    if (opts.cwd) {
+      jsonl = normalizeSessionHeaderCwd(jsonl, opts.cwd);
     }
     const { sessionFile, sessionDir, cleanup } = materializeSessionFile(jsonl);
     try {

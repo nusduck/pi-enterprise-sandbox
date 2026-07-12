@@ -15,8 +15,8 @@ import { isInterruptedMessage } from '../../shared/state';
  * Run Status Bar — Running · N Tool Calls · duration · budget · resume (ADR §5.2 / F4).
  */
 export function RunStatusBar() {
-  const { entityStore, activeRunId, state, resumeInterrupted } = useChat();
-  const runId = activeRunId || entityStore.activeRunId;
+  const { entityStore, activeRunId, activeTraceId, state, displayMessages, resumeInterrupted } = useChat();
+  const runId = activeRunId;
   const run = getActiveRunEntity(entityStore, runId);
   const [, setTick] = useState(0);
 
@@ -56,11 +56,8 @@ export function RunStatusBar() {
   const step = tools > 0 ? tools : null;
 
   const lastInterrupted = (() => {
-    const msgs = state.currentMsg
-      ? [...state.messages, state.currentMsg]
-      : state.messages;
-    for (let i = msgs.length - 1; i >= 0; i--) {
-      if (msgs[i].role === 'assistant') return isInterruptedMessage(msgs[i]);
+    for (let i = displayMessages.length - 1; i >= 0; i--) {
+      if (displayMessages[i].role === 'assistant') return isInterruptedMessage(displayMessages[i]);
     }
     return false;
   })();
@@ -112,9 +109,9 @@ export function RunStatusBar() {
           Resume
         </button>
       ) : null}
-      {state.traceId ? (
-        <span className="rsb-trace" title={state.traceId}>
-          trace {state.traceId.slice(0, 8)}
+      {activeTraceId ? (
+        <span className="rsb-trace" title={activeTraceId}>
+          trace {activeTraceId.slice(0, 8)}
         </span>
       ) : null}
     </div>

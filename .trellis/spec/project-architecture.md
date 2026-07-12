@@ -22,7 +22,7 @@ Browser
 | `sandbox/` | Python 3.11+ FastAPI 服务及安全执行运行时（无 Agent 主循环） | `sandbox/main.py`、`sandbox/routers/executions.py` |
 | `api-server/` | 薄 BFF：认证、会话/文件边缘、chat SSE relay | `api-server/routes/chat.js`、`api-server/services/agent-client.js` |
 | `agent/` | 独立 Agent Runtime：SDK、tools、extensions、内部 Run API | `agent/chat-runner.js`、`agent/server.js` |
-| `frontend/` | 无框架 Vanilla JS SPA，Vite 构建，Nginx 托管 | `frontend/src/main.js`、`frontend/src/state.js` |
+| `frontend/` | React + TypeScript Agent Runtime Workbench，Vite 构建，Nginx 托管 | `frontend/src/main.tsx`、`frontend/src/features/chat/ChatContext.tsx`、`frontend/src/entities/store.ts` |
 | `tests/` | 统一 pytest 测试，包括单元、FastAPI 集成、配置/容器契约 | `tests/test_integration.py`、`tests/test_container_startup.py` |
 | `skills/` | 空发行基线；研发环境可通过受审计 install/edit/reload 引入 Skill | 初始无 package |
 | `config/agent/` | Agent 模型和运行时配置 JSON | `models.json`、`settings.json` |
@@ -36,12 +36,21 @@ Browser
 
 ### 对话与工具调用
 
-1. `frontend/src/api.js` 向 `POST /api/chat` 提交完整消息历史并消费 SSE。
+1. `frontend/src/shared/api/client.ts` 向 `POST /api/chat` 提交完整消息历史并消费 SSE。
 2. `api-server/routes/chat.js`（BFF）创建 Agent run（`POST /internal/agent-runs`）并 relay 序列化 SSE；**不** import `pi-coding-agent`。
 3. `agent/chat-runner.js` 创建/复用 conversation 与 sandbox session，初始化 `pi-coding-agent`。
 4. `agent/sandbox-tools.js` 将 `read/write/edit/bash/submit_artifact` 转为 Sandbox REST 调用；高风险 bash 先走审批。
 5. `sandbox/routers/` 校验 HTTP 输入并调用 `sandbox/services/`；需要持久化时再进入 `sandbox/repositories.py`。
-6. `token/tool_start/tool_end/file_ready/done/error` 等事件经 BFF 回到浏览器；`frontend/src/main.js` 更新状态并触发增量渲染。
+6. `token/tool_start/tool_end/file_ready/done/error` 等事件经 BFF 回到浏览器；legacy adapter 将其转为 RuntimeEvent，run reducer 单次归约到 EntityStore，React 通过 selector/projection 渲染。
+
+### Agent session cwd
+
+- Sandbox 创建/复用 session 后，Agent 将稳定逻辑 cwd `/home/sandbox/workspace` 贯穿 Pi SDK
+  SessionManager、session header、SettingsManager、ResourceLoader 与 `createAgentSession`。
+- 旧持久化 header 恢复时先把 materialized JSONL header cwd 规范化为当前逻辑 cwd，避免 runtime
+  override 与 header 出现两个值。
+- cwd 不是 `/var/sandbox/workspaces/...` 物理路径；Agent 不挂载 workspace volume，文件和命令仍只经
+  Sandbox REST 相对路径工具执行。
 
 ### 文件与产物
 
@@ -58,7 +67,8 @@ Browser
 - Python：Router 负责 HTTP 状态和 Pydantic 响应，Service 负责业务/安全，Repository 负责 SQL。例如 `routers/sessions.py` -> `services/session_manager.py` -> `repositories.py`。
 - Node BFF：`server.js` 只分派路径，`routes/*.js` 处理 HTTP/SSE relay，`services/sandbox-client.js` / `agent-client.js` 集中下游 fetch。
 - Node Agent：`server.js` 暴露内部 Run API；`chat-runner.js` 承载 SDK 循环。
-- Frontend：`api.js` 管协议，`state.js` 管状态，`render.js` 管 DOM，`main.js` 负责编排和事件绑定。
+- Frontend：`shared/api/` 管协议，`entities/` + `shared/state/runReducer.ts` 管 runtime 实体，
+  `features/chat/ChatContext.tsx` 负责编排，`widgets/` / `pages/` 负责 React 展示。
 
 ### 配置集中化
 
@@ -154,6 +164,6 @@ node scripts/smoke-cross-service.mjs
 
 - **待确认：** 是否将 Ruff、Black、Mypy 和覆盖率设为强制门禁。当前 `CONTRIBUTING.md`/`docs/development.md` 仅推荐，`pyproject.toml` 和 CI 未配置对应 job。
 - **已落地：** Node BFF / Agent 与 Frontend 均有 `test` script（`node:test`），CI 分 job 执行。
-- **待确认：** 前端 `@earendil-works/pi-web-ui` 仍列为依赖，但当前 `frontend/src/*.js` 未 import；是否保留该依赖属于后续清理决策。
+- **待确认：** 前端 `@earendil-works/pi-web-ui` 是否仍需保留；当前 Workbench 主要使用仓库内 React widgets。
 - **待确认：** 数据库 schema 变更的正式迁移/回滚流程；当前仓库没有 Alembic 或独立 migration 目录。
 - **已落地：** 独立 Node Agent 服务；Python Agent Runtime 与 `AGENT_RUNTIME` 开关已删除。

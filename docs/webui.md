@@ -6,14 +6,9 @@ v4 前端是一个**纯 UI SPA**，零 Agent 逻辑。Agent 运行在独立 Node
 
 架构：
 
-```
-Browser                  Frontend (Nginx:80)          API Server (Node:4000)
-┌──────────────┐  HTTP  ┌──────────────────┐  SSE   ┌──────────────────┐
-│ main.js 编排  │◄──────►│ 静态文件服务       │◄──────►│ POST /api/chat   │
-│ state/api/    │        │ /api/* 反向代理    │        │                  │
-│ render/sse    │        └──────────────────┘        │ SSE event stream │
-│ security      │        host:3000 → container:80    └──────────────────┘
-└──────────────┘
+```text
+React Workbench -> Nginx /api proxy -> Node BFF -> Node Agent -> Sandbox
+                     <- serialized SSE <-         <- runtime events <-
 ```
 
 ## 目录结构
@@ -21,17 +16,19 @@ Browser                  Frontend (Nginx:80)          API Server (Node:4000)
 ```
 frontend/
 ├── src/
-│   ├── main.js              ← 入口编排（事件绑定、对话切换、SSE 分发）
-│   ├── state.js             ← 状态 + streamGeneration / 会话切换
-│   ├── api.js               ← /api/* fetch 与 URL 构造
-│   ├── render.js            ← DOM 渲染（消息、侧栏、审批、交付物）
-│   ├── sse.js               ← 增量 SSE 解析（分片/UTF-8/abort）
-│   ├── security.js          ← /api URL 白名单与转义
-│   └── style.css
-├── test/                    ← node:test（SSE / state / security）
+│   ├── main.tsx             ← React 入口
+│   ├── app/                 ← Router 与 Workbench shell
+│   ├── entities/            ← 规范化 runtime entity store
+│   ├── features/chat/       ← ChatContext、legacy adapter bridge
+│   ├── shared/api/          ← /api fetch 与 URL 构造
+│   ├── shared/sse/          ← SSE parser/manager/legacy adapter
+│   ├── shared/state/        ← UI state + run reducer
+│   ├── widgets/             ← 消息、时间线、审批、交付物等组件
+│   └── pages/
+├── test/                    ← node:test + tsx
 ├── index.html
 ├── nginx.conf               ← /api/* 反代，SSE buffering off
-├── vite.config.js           ← dev proxy → localhost:4000
+├── vite.config.ts           ← dev proxy → localhost:4000
 ├── package.json
 ├── Dockerfile
 └── dist/                    ← Vite 构建产物
@@ -43,41 +40,24 @@ frontend/
 
 | 模块 | 职责 |
 |------|------|
-| `main.js` | 编排：绑定 UI、调用 api、分发 SSE、驱动 render |
-| `state.js` | 单一状态源；`startStream` / `abortStream` / `switchConversation` |
-| `api.js` | 协议层：`sendChatMessage`、upload/download、approvals、conversations |
-| `sse.js` | 纯解析 + `readSSEStream`（支持分片、CRLF、尾缓冲 flush、abort） |
-| `render.js` | DOM：消息气泡、工具卡片、审批横幅、侧栏、交付物列表 |
-| `security.js` | `isAllowedApiUrl` / `esc` — 拒绝 `javascript:` 与站外 URL，HTML 转义 |
+| `features/chat/ChatContext.tsx` | 用户流程、conversation focus、transport 与 UI side effects |
+| `entities/store.ts` | runtime 实体唯一 source of truth 与 selectors |
+| `shared/state/runReducer.ts` | RuntimeEvent 的唯一归约器 |
+| `features/chat/entityBridge.ts` | legacy SSE 适配、per-run transport、UI projection |
+| `shared/state/chatState.ts` | 非 runtime UI snapshot、上传草稿和 transport 控制 |
+| `shared/api/client.ts` | chat、upload/download、approval、conversation 协议 |
+| `shared/sse/parser.ts` | SSE 分片、CRLF、尾缓冲和 abort |
 
 依赖：
 
-- `@earendil-works/pi-web-ui` — 当前主要引用样式；业务逻辑不依赖其 Web Components
 - 生产构建：`npm run build --prefix frontend`（Vite）
 
 ### 状态管理
 
-```javascript
-// frontend/src/state.js — INITIAL（示意）
-{
-  messages: [],
-  isStreaming: false,
-  abortCtrl: null,
-  currentMsg: null,
-  sessionId: null,
-  conversationId: null,
-  readyFiles: new Set(),     // file_ready 去重
-  pendingTool: null,         // { id, name, args }
-  pendingApproval: null,     // 审批横幅
-  conversations: [],
-  artifacts: [],
-  traceId: null,
-  sidebarOpen: true,
-  streamGeneration: 0,       // 中止/切换会话后丢弃迟到 SSE
-}
-```
-
-`update(state, patch)` 做浅拷贝并通知订阅者；`streamGeneration` 在 start/abort/switch 时递增，编排层用 `isActiveGeneration` 忽略过期事件。
+Runtime 状态只写 `EntityStore`：Run、增量 Message、Tool、Process、Approval、Artifact、trace 和
+AgentSession 都由 `legacyAdapter -> runReducer` 单次归约。`ChatState` 不含 `currentMsg`、
+`pendingTool`、`pendingApproval` 或 `readyFiles`，只保存服务端历史快照、选择状态、上传草稿、布局、
+认证与 transport 控制。`activeRunId` 直接从 EntityStore 读取，不维护 React 镜像 state。
 
 ### 消息格式
 
@@ -108,28 +88,24 @@ frontend/
   ↓
 sendMessage(text)
   ├── 添加 user 消息
-  ├── startStream（bump streamGeneration，AbortController）
-  ├── render() 更新 DOM
+  ├── EntityBridge.beginRun + 注册 per-run AbortController
+  ├── React 更新 user message / transport UI
   ├── api.sendChatMessage → POST /api/chat { messages, conversation_id? }
   │     ↓ SSE (sse.readSSEStream)
-  │     handleSSE(ev) 且 isActiveGeneration:
-  │       trace             → 记录 traceId
-  │       session           → sessionId / conversationId / 状态栏
-  │       token             → 追加 text delta
-  │       tool_start/end    → 工具卡片 running → complete
-  │       approval_required → 审批横幅（approve/reject → /api）
-  │       file_ready        → artifact 下载链接 → _fileLinks / deliverables
-  │       done / error      → 结束流或注入错误
-  │       session_closed    → 状态指示
-  ├── endStream / errorStream
-  └── render() 最终渲染
+  │     legacyAdapter -> RuntimeEvent -> runReducer -> EntityStore
+  │       trace/session/agent_session → Run + AgentSession 关系
+  │       token                    → MessageEntity delta
+  │       tool/approval/file_ready → 对应规范化实体
+  │       done/error               → 不可被尾随 session_closed 覆盖的终态
+  ├── selectors/projectRunMessages
+  └── React 最终渲染
 ```
 
 ### 会话切换与中止
 
-- 侧栏选择历史会话 → `switchConversation`：abort 在途流、清空 ephemeral（tokens/approvals/artifacts）、从服务端加载消息
+- 侧栏选择历史会话只改变 focus；后台 run 和它自己的 fetch controller 继续运行
 - 新对话 → 清空 `conversationId`，下次发送创建新会话
-- 停止按钮 → `abortStream` + `abortCtrl.abort()`，迟到 SSE 因 generation 失效被忽略
+- 停止按钮 → EntityBridge 按 active run abort；不会误停其他 conversation 的后台 run
 
 ### 文件附件（草稿生命周期）
 
@@ -171,7 +147,7 @@ render → security.isAllowedApiUrl 校验后生成 <a class="dl" href="/api/...
 
 ## SSE 事件消费
 
-解析见 `frontend/src/sse.js`；事件类型与 [API 文档](api.md#sse-事件协议) 及 `tests/fixtures/sse_events.json` 对齐：
+解析见 `frontend/src/shared/sse/parser.ts`；事件类型与 [API 文档](api.md#sse-事件协议) 及 `tests/fixtures/sse_events.json` 对齐：
 
 | 事件类型 | UI 行为 |
 |----------|---------|

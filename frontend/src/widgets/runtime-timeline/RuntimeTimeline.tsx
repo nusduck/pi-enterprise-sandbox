@@ -20,23 +20,14 @@ export function RuntimeTimeline({
   onSelect: (sel: SelectedEntity) => void;
   onOpenProcessConsole?: (processId: string) => void;
 }) {
-  const { entityStore, activeRunId, state, resolveApproval } = useChat();
+  const { entityStore, activeRunId, activeSessionId, resolveApproval } = useChat();
 
   const items = useMemo(
-    () => buildRunTimeline(entityStore, activeRunId || entityStore.activeRunId),
+    () => buildRunTimeline(entityStore, activeRunId),
     [entityStore, activeRunId],
   );
 
-  // Also surface pending approvals for the active run that may not be linked yet
-  // (legacy pendingApproval while entity dual-write catches up).
-  const legacyApproval = state.pendingApproval;
-  const showLegacy =
-    legacyApproval &&
-    !items.some(
-      (i) => i.kind === 'approval' && i.approval.id === legacyApproval.id,
-    );
-
-  if (items.length === 0 && !showLegacy) {
+  if (items.length === 0) {
     return (
       <section
         className="runtime-timeline empty"
@@ -77,30 +68,10 @@ export function RuntimeTimeline({
       <div className="runtime-timeline-head">
         <span className="runtime-timeline-title">Runtime activity</span>
         <span className="runtime-timeline-count">
-          {items.length + (showLegacy ? 1 : 0)}
+          {items.length}
         </span>
       </div>
       <div className="runtime-timeline-list">
-        {showLegacy && legacyApproval ? (
-          <ApprovalCard
-            approval={{
-              id: legacyApproval.id,
-              runId: activeRunId || entityStore.activeRunId || '',
-              toolExecutionId: null,
-              status: 'pending',
-              reason: legacyApproval.reason || '',
-              command: null,
-              createdAt: null,
-              decidedAt: null,
-            }}
-            selected={
-              selected?.kind === 'approval' && selected.id === legacyApproval.id
-            }
-            onSelect={(id) => onSelect({ kind: 'approval', id })}
-            onApprove={(id) => void resolveApproval(id, 'approve')}
-            onReject={(id) => void resolveApproval(id, 'reject')}
-          />
-        ) : null}
         {items.map((item) => {
           switch (item.kind) {
             case 'tool':
@@ -138,7 +109,7 @@ export function RuntimeTimeline({
                 <ArtifactCard
                   key={item.id}
                   artifact={item.artifact}
-                  sessionId={state.sessionId}
+                  sessionId={activeSessionId}
                   selected={isSelected(item)}
                   onSelect={(id) => onSelect({ kind: 'artifact', id })}
                 />

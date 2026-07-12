@@ -11,6 +11,7 @@ export const RUNTIME_EVENT_TYPES = [
   'run.status_changed',
   'run.completed',
   'run.failed',
+  'run.trace',
   'message.started',
   'message.delta',
   'message.completed',

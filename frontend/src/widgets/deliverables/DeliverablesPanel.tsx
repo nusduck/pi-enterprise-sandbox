@@ -14,9 +14,9 @@ function formatSize(n?: number | null): string {
 }
 
 export function DeliverablesPanel() {
-  const { state } = useChat();
+  const { state, activeSessionId } = useChat();
   const artifacts = state.artifacts || [];
-  const hidden = !artifacts.length || !state.sessionId;
+  const hidden = !artifacts.length || !activeSessionId;
 
   if (hidden) {
     return (
@@ -45,10 +45,10 @@ export function DeliverablesPanel() {
           const id = a.artifact_id || a.id;
           const name = a.name || a.path || id || 'file';
           let url: string | null = null;
-          if (id && state.sessionId) {
-            url = getArtifactDownloadUrl(state.sessionId, id);
-          } else if (a.path && state.sessionId) {
-            url = getDownloadUrl(state.sessionId, a.path);
+          if (id && activeSessionId) {
+            url = getArtifactDownloadUrl(activeSessionId, id);
+          } else if (a.path && activeSessionId) {
+            url = getDownloadUrl(activeSessionId, a.path);
           }
           const safe = safeApiUrl(url);
           if (!safe) return null;

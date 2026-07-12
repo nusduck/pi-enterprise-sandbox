@@ -109,6 +109,7 @@ async function main() {
   const smokeDir = path.join(ROOT, '.smoke-tmp');
   const dbPath = path.join(smokeDir, `sandbox-${process.pid}.db`);
   const wsPath = path.join(smokeDir, `ws-${process.pid}`);
+  const skillsPath = path.join(smokeDir, `skills-${process.pid}`);
   await import('node:fs/promises').then((fs) => fs.mkdir(smokeDir, { recursive: true }));
 
   console.log('[smoke] fake LLM', fake.baseUrl);
@@ -133,6 +134,7 @@ async function main() {
       SANDBOX_DATABASE_URL: `sqlite:///${dbPath}`,
       SANDBOX_WORKSPACES_ROOT: wsPath,
       SANDBOX_ATTACHMENTS_ROOT: wsPath,
+      SANDBOX_SKILLS_ROOT: skillsPath,
       SANDBOX_API_TOKEN: '',
       SANDBOX_AUTH_ENABLED: 'false',
       SANDBOX_IPTABLES_ENABLED: 'false',

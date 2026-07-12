@@ -1,8 +1,10 @@
 import { useChat } from '../../features/chat/ChatContext';
 
 export function FlashZone() {
-  const { state, approvePending, rejectPending, clearFlash } = useChat();
-  const approval = state.pendingApproval;
+  const { state, entityStore, activeRunId, approvePending, rejectPending, clearFlash } = useChat();
+  const approval = Object.values(entityStore.approvalsById).find(
+    (item) => item.runId === activeRunId && item.status === 'pending',
+  );
 
   return (
     <div

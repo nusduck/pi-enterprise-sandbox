@@ -94,6 +94,9 @@ services:
       SANDBOX_BASE_URL: http://sandbox:8081
       SANDBOX_API_TOKEN: ${SANDBOX_API_TOKEN:-}
       AGENT_INTERNAL_TOKEN: ${AGENT_INTERNAL_TOKEN:-}
+      # Pi SDK logical cwd for the workspace created by Sandbox. The Agent does
+      # not mount or directly access the physical workspace volume.
+      AGENT_SESSION_WORKSPACE_CWD: ${AGENT_SESSION_WORKSPACE_CWD:-/home/sandbox/workspace}
       LLMIO_BASE_URL: ${LLMIO_BASE_URL:-}
       LLMIO_API_KEY: ${LLMIO_API_KEY:-}
       MODEL_ID: ${MODEL_ID:-deepseek-v4-flash}

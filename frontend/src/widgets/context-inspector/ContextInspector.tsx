@@ -51,8 +51,8 @@ export function ContextInspector({
   onTabChange: (t: InspectorTabId) => void;
   selected: SelectedEntity;
 }) {
-  const { entityStore, activeRunId, state } = useChat();
-  const runId = activeRunId || entityStore.activeRunId;
+  const { entityStore, activeRunId, activeSessionId, activeTraceId, state } = useChat();
+  const runId = activeRunId;
   const run = getActiveRunEntity(entityStore, runId);
 
   const tools = useMemo(
@@ -135,9 +135,9 @@ export function ContextInspector({
               toolsCount={tools.length}
               processesCount={processes.length}
               approvals={approvals}
-              sessionId={state.sessionId}
+              sessionId={activeSessionId}
               conversationId={state.conversationId}
-              traceId={state.traceId}
+              traceId={activeTraceId}
             />
           ) : null}
 
@@ -145,7 +145,7 @@ export function ContextInspector({
             <FilesPanel
               artifacts={artifacts}
               legacyArtifacts={legacyArtifacts}
-              sessionId={state.sessionId}
+              sessionId={activeSessionId}
               tools={tools}
             />
           ) : null}
@@ -168,7 +168,7 @@ export function ContextInspector({
             <ArtifactsPanel
               artifacts={artifacts}
               legacyArtifacts={legacyArtifacts}
-              sessionId={state.sessionId}
+              sessionId={activeSessionId}
               selectedId={selected?.kind === 'artifact' ? selected.id : null}
             />
           ) : null}
@@ -177,9 +177,9 @@ export function ContextInspector({
             <SessionPanel
               run={run}
               agentSession={agentSession}
-              sessionId={state.sessionId}
+              sessionId={activeSessionId}
               conversationId={state.conversationId}
-              traceId={state.traceId}
+              traceId={activeTraceId}
             />
           ) : null}
         </div>

@@ -6,7 +6,7 @@ import {
 } from '../runtime-timeline/buildTimeline';
 
 export function ConversationHeader() {
-  const { state, entityStore, activeRunId } = useChat();
+  const { state, entityStore, activeRunId, activeSessionId } = useChat();
 
   const conv = (state.conversations || []).find(
     (c) => c.id === state.conversationId,
@@ -19,7 +19,7 @@ export function ConversationHeader() {
 
   const run = getActiveRunEntity(
     entityStore,
-    activeRunId || entityStore.activeRunId,
+    activeRunId,
   );
   const agentSession =
     (run?.agentSessionId &&
@@ -37,7 +37,7 @@ export function ConversationHeader() {
   const workspace =
     agentSession?.workspaceId ||
     run?.sandboxSessionId ||
-    state.sessionId ||
+    activeSessionId ||
     null;
 
   return (
@@ -51,9 +51,9 @@ export function ConversationHeader() {
             <span className="conv-chip" title={agentSession.id}>
               Session {agentSession.status}
             </span>
-          ) : state.sessionId ? (
-            <span className="conv-chip" title={state.sessionId}>
-              Sandbox …{state.sessionId.slice(-8)}
+          ) : activeSessionId ? (
+            <span className="conv-chip" title={activeSessionId}>
+              Sandbox …{activeSessionId.slice(-8)}
             </span>
           ) : (
             <span className="conv-chip muted">No session</span>
