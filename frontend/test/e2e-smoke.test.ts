@@ -223,6 +223,25 @@ describe('F6 E2E smoke — core flows (mock backend)', () => {
     bridge.dispose();
   });
 
+
+  it('stream: second turn keeps first assistant via multi-run projection', () => {
+    const bridge = createEntityBridge();
+    const r1 = bridge.beginRun({ conversationId: 'c-multi' });
+    bridge.ingestLegacyEvent(r1, { type: 'token', text: 'First reply' });
+    bridge.ingestLegacyEvent(r1, { type: 'done' });
+    const r2 = bridge.beginRun({ conversationId: 'c-multi' });
+    bridge.ingestLegacyEvent(r2, { type: 'token', text: 'Second reply' });
+    const fromR1 = bridge.projectRunMessages(r1);
+    const fromR2 = bridge.projectRunMessages(r2);
+    assert.match(String((fromR1[0]?.content[0] as { text?: string })?.text || ''), /First reply/);
+    assert.match(String((fromR2[0]?.content[0] as { text?: string })?.text || ''), /Second reply/);
+    // Both runs remain addressable after activeRunId moves to r2
+    assert.equal(bridge.getStore().activeRunId, r2);
+    assert.ok(bridge.getStore().runsById[r1]);
+    assert.ok(bridge.getStore().runsById[r2]);
+    bridge.dispose();
+  });
+
   // ── 4. Approval ─────────────────────────────────────────────
 
   it('approval: SSE approval state exists only in EntityStore', () => {

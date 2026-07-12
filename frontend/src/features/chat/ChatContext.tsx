@@ -144,7 +144,8 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   const [entityStore, setEntityStore] = useState<EntityStore>(() =>
     createEntityBridge().getStore(),
   );
-  const [inspectorOpen, setInspectorOpen] = useState(() => !isMobile());
+  // Closed by default — chat is primary; open via Details or entity select.
+  const [inspectorOpen, setInspectorOpen] = useState(false);
 
   // Always-current refs for async handlers
   const stateRef = useRef(state);
@@ -463,9 +464,49 @@ export function ChatProvider({ children }: { children: ReactNode }) {
           cur.conversationId,
         );
 
+        // Commit this run's assistant projection into ChatState so later turns
+        // keep history even if activeRunId moves to a new synthetic run.
+        const projected = bridge.projectRunMessages(runId);
+        const assistantCommitted = projected.filter(
+          (m) =>
+            m.role === 'assistant' &&
+            (m.content.some(
+              (p) =>
+                (p.type === 'text' &&
+                  'text' in p &&
+                  String((p as { text?: unknown }).text || '').trim()) ||
+                p.type === 'tool_use',
+            ) ||
+              Boolean(m._fileLinks?.length)),
+        );
         setState((s) => {
           if (!isActiveGeneration(s, generation)) return s;
-          return update(s, { isStreaming: false, abortCtrl: null });
+          let messages = s.messages;
+          if (assistantCommitted.length) {
+            messages = [...messages];
+            for (const msg of assistantCommitted) {
+              const text = msg.content
+                .filter((part) => part.type === 'text' && 'text' in part)
+                .map((part) => String((part as { text?: unknown }).text || ''))
+                .join('');
+              const exists = messages.some((m) => {
+                if (m.role !== 'assistant') return false;
+                const existing = m.content
+                  .filter((part) => part.type === 'text' && 'text' in part)
+                  .map((part) =>
+                    String((part as { text?: unknown }).text || ''),
+                  )
+                  .join('');
+                return existing === text;
+              });
+              if (!exists) messages.push(msg);
+            }
+          }
+          return update(s, {
+            isStreaming: false,
+            abortCtrl: null,
+            messages,
+          });
         });
         await refreshConversations();
         await refreshArtifacts(currentSessionId());
@@ -660,24 +701,36 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     }
   }, [setStatus, refreshConversations]);
 
+  /**
+   * Upload one draft. Prefer the optional `seed` draft: React setState is async,
+   * so stateRef may not yet include drafts that were just enqueued.
+   */
   const runUploadForDraft = useCallback(
-    async (localId: string) => {
-      const draft = (stateRef.current.attachments || []).find(
+    async (localId: string, seed?: (typeof state.attachments)[number]) => {
+      const fromRef = (stateRef.current.attachments || []).find(
         (a) => a.localId === localId,
       );
+      const draft = fromRef || seed;
       if (!draft || !draft.file || draft.status === 'removed') return;
 
+      // Capture file + key now — do not depend on a later ref lookup for the blob.
+      const file = draft.file as File;
+      const idempotencyKey = draft.idempotencyKey;
+      const sizeHint = draft.size;
+
       const abortCtrl = new AbortController();
-      setState((s) =>
-        update(s, {
+      setState((s) => {
+        const next = update(s, {
           attachments: patchAttachment(s.attachments, localId, {
             status: 'uploading',
             error: null,
             errorCode: null,
             abortCtrl,
           }),
-        }),
-      );
+        });
+        stateRef.current = next;
+        return next;
+      });
 
       try {
         const { sessionId } = await ensureConversationSession();
@@ -686,52 +739,53 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         const current = (stateRef.current.attachments || []).find(
           (a) => a.localId === localId,
         );
-        if (!current || current.status === 'removed') return;
+        if (current?.status === 'removed') return;
 
-        const result = await uploadFile(
-          sessionId,
-          current.file as File,
-          abortCtrl.signal,
-          {
-            idempotencyKey: current.idempotencyKey,
-            traceId: stateRef.current.traceId || undefined,
-          },
-        );
+        const result = await uploadFile(sessionId, file, abortCtrl.signal, {
+          idempotencyKey,
+          traceId: stateRef.current.traceId || undefined,
+        });
 
         const still = (stateRef.current.attachments || []).find(
           (a) => a.localId === localId,
         );
-        if (!still || still.status === 'removed') return;
+        if (still?.status === 'removed') return;
 
-        setState((s) =>
-          update(s, {
+        setState((s) => {
+          const next = update(s, {
             attachments: patchAttachment(s.attachments, localId, {
               status: 'uploaded',
               attachmentId:
                 result.attachment_id || result.attachmentId || null,
               path: result.path || null,
-              size: result.size != null ? result.size : still.size,
+              size: result.size != null ? result.size : sizeHint,
               progress: 100,
               error: null,
               errorCode: null,
               traceId: result.trace_id || s.traceId || null,
               abortCtrl: null,
-              file: still.file,
+              file: still?.file ?? file,
             }),
             ...(result.trace_id ? { traceId: result.trace_id } : {}),
-          }),
-        );
+          });
+          stateRef.current = next;
+          return next;
+        });
       } catch (err) {
-        const error = err as Error & { name?: string; code?: string; traceId?: string };
+        const error = err as Error & {
+          name?: string;
+          code?: string;
+          traceId?: string;
+        };
         if (error.name === 'AbortError') return;
         console.error('[upload] Error:', error);
         const still = (stateRef.current.attachments || []).find(
           (a) => a.localId === localId,
         );
-        if (!still || still.status === 'removed') return;
+        if (still?.status === 'removed') return;
         const traceId = error.traceId || stateRef.current.traceId || null;
-        setState((s) =>
-          update(s, {
+        setState((s) => {
+          const next = update(s, {
             attachments: patchAttachment(s.attachments, localId, {
               status: 'failed',
               error: error.message || 'Upload failed',
@@ -740,8 +794,10 @@ export function ChatProvider({ children }: { children: ReactNode }) {
               abortCtrl: null,
             }),
             ...(traceId ? { traceId } : {}),
-          }),
-        );
+          });
+          stateRef.current = next;
+          return next;
+        });
         const t = traceId ? ` [trace ${String(traceId).slice(0, 8)}]` : '';
         flashError(`Upload error: ${error.message || 'failed'}${t}`);
       }
@@ -761,13 +817,17 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       }
 
       const drafts = files.map((f) => createAttachmentDraft(f));
-      setState((s) =>
-        update(s, {
+      // Synchronously publish drafts into stateRef before kicking off uploads.
+      // Otherwise runUploadForDraft cannot find them (setState is async).
+      setState((s) => {
+        const next = update(s, {
           attachments: [...(s.attachments || []), ...drafts],
-        }),
-      );
+        });
+        stateRef.current = next;
+        return next;
+      });
 
-      await Promise.all(drafts.map((d) => runUploadForDraft(d.localId)));
+      await Promise.all(drafts.map((d) => runUploadForDraft(d.localId, d)));
     },
     [flashError, runUploadForDraft],
   );
@@ -790,17 +850,26 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         flashError('Cannot retry: original file is no longer available');
         return;
       }
-      setState((s) =>
-        update(s, {
+      const retried = {
+        ...draft,
+        status: 'queued' as const,
+        error: null,
+        errorCode: null,
+        progress: 0,
+      };
+      setState((s) => {
+        const next = update(s, {
           attachments: patchAttachment(s.attachments, localId, {
             status: 'queued',
             error: null,
             errorCode: null,
             progress: 0,
           }),
-        }),
-      );
-      await runUploadForDraft(localId);
+        });
+        stateRef.current = next;
+        return next;
+      });
+      await runUploadForDraft(localId, retried);
     },
     [flashError, runUploadForDraft],
   );
@@ -972,43 +1041,83 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     return () => document.removeEventListener('keydown', onKey);
   }, [startNewChat]);
 
+  /**
+   * Conversation transcript:
+   * - ChatState.messages holds user turns + committed server history
+   * - EntityStore holds live run projections (assistant/tools) per run
+   *
+   * Project **all runs for this conversation** (not only activeRunId), so
+   * starting a second turn does not drop the previous assistant reply.
+   */
   const displayMessages = useMemo(() => {
-    if (!activeRunId) return state.messages;
-    const run = entityStore.runsById[activeRunId];
-    if (!run || (state.conversationId && run.conversationId !== state.conversationId)) {
-      return state.messages;
-    }
-    const projected = bridge.projectRunMessages(activeRunId);
     const result = [...state.messages];
-    for (const message of projected) {
-      const text = message.content
+    const convId = state.conversationId;
+
+    const runs = Object.values(entityStore.runsById)
+      .filter((run) => {
+        if (!run) return false;
+        if (convId) {
+          // Include runs bound to this conversation; also synthetic runs that
+          // have not received conversation_id yet while we are on a blank chat.
+          return (
+            run.conversationId === convId ||
+            run.conversationId == null ||
+            run.id === activeRunId
+          );
+        }
+        return true;
+      })
+      .sort((a, b) => {
+        const ta = a.startedAt || a.createdAt || a.id;
+        const tb = b.startedAt || b.createdAt || b.id;
+        return String(ta).localeCompare(String(tb));
+      });
+
+    function messageText(message: ChatMessage): string {
+      return message.content
         .filter((part) => part.type === 'text' && 'text' in part)
         .map((part) => String((part as { text?: unknown }).text || ''))
         .join('');
+    }
+
+    function mergeProjected(message: ChatMessage) {
+      // Prefer assistant/runtime rows from entity projection; skip empty shells.
+      const text = messageText(message);
+      const hasTools = message.content.some((part) => part.type === 'tool_use');
+      const hasFiles = Boolean(message._fileLinks?.length);
+      if (message.role === 'assistant' && !text && !hasTools && !hasFiles) {
+        return;
+      }
+      // User turns already live in ChatState from sendMessage / server history.
+      if (message.role === 'user') {
+        if (!text) return;
+        const exists = result.some(
+          (m) => m.role === 'user' && messageText(m) === text,
+        );
+        if (!exists) result.push(message);
+        return;
+      }
+
       let match = -1;
       for (let i = result.length - 1; i >= 0; i -= 1) {
         if (result[i].role !== message.role) continue;
-        const existingText = result[i].content
-          .filter((part) => part.type === 'text' && 'text' in part)
-          .map((part) => String((part as { text?: unknown }).text || ''))
-          .join('');
-        if (existingText === text) {
+        if (messageText(result[i]) === text) {
           match = i;
           break;
         }
       }
       if (match >= 0) {
-        // Replace matching server history with the richer entity projection
-        // when it carries tool/artifact/interrupted runtime detail.
-        if (
-          message._fileLinks?.length ||
-          message.content.some((part) => part.type === 'tool_use') ||
-          message.interrupted
-        ) {
+        if (hasFiles || hasTools || message.interrupted) {
           result[match] = message;
         }
       } else {
         result.push(message);
+      }
+    }
+
+    for (const run of runs) {
+      for (const message of bridge.projectRunMessages(run.id)) {
+        mergeProjected(message);
       }
     }
     return result;

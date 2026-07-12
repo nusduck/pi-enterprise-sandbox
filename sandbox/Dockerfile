@@ -1,14 +1,31 @@
 # ── Sandbox Service (Python FastAPI) ──────────────────────────────
 FROM python:3.11-slim AS sandbox-base
 
-# Install system deps — including Node.js (via nodesource) for runtime and iptables for network isolation
+# System deps: runtime isolation + everyday agent tooling (docs, git, text utils)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     ca-certificates \
     gosu \
     iptables \
+    git \
+    jq \
+    unzip \
+    zip \
+    file \
+    less \
+    tree \
+    ripgrep \
+    fd-find \
+    pandoc \
+    poppler-utils \
+    tesseract-ocr \
+    tesseract-ocr-eng \
+    tesseract-ocr-chi-sim \
+    ffmpeg \
+    build-essential \
     && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
     && apt-get install -y --no-install-recommends nodejs \
+    && ln -sf "$(command -v fdfind || true)" /usr/local/bin/fd || true \
     && rm -rf /var/lib/apt/lists/*
 RUN groupadd -g 10001 sandbox && \
     useradd -m -u 10001 -g sandbox sandbox && \

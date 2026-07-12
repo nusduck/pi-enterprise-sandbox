@@ -22,20 +22,33 @@ pdfplumber
 python-docx
 markitdown
 python-pptx
+pypdf
+tabulate
+markdownify
+html2text
+chardet
 
 # ── Database ───────────────────────────────────────────────────────
 psycopg2-binary
 pymysql
 redis
+sqlalchemy
 
 # ── HTTP / Web ─────────────────────────────────────────────────────
 requests
 httpx
 beautifulsoup4
 lxml
+feedparser
 
 # ── Utilities ──────────────────────────────────────────────────────
 Pillow
 python-dotenv
 pyyaml
 jinja2
+rich
+tqdm
+orjson
+tenacity
+jsonschema
+arrow

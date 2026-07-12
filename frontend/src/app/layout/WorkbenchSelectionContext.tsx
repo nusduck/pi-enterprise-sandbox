@@ -13,6 +13,10 @@ export type WorkbenchSelectionValue = {
   consoleProcessId: string | null;
   openProcessConsole: (processId: string) => void;
   closeProcessConsole: () => void;
+  /** Runtime activity drawer under the chat (collapsed by default when empty). */
+  activityOpen: boolean;
+  setActivityOpen: (open: boolean) => void;
+  toggleActivity: () => void;
 };
 
 const WorkbenchSelectionContext = createContext<WorkbenchSelectionValue | null>(

@@ -98,6 +98,22 @@ describe('attachment drafts', () => {
     assert.equal(uploadedAttachments(list).length, 1);
   });
 
+  it('send gate: queued drafts block send until uploaded (queue stuck scenario)', () => {
+    // Regression context: drafts must leave "queued" via upload; if upload
+    // never starts (async stateRef miss), canSend stays false forever.
+    const d = createAttachmentDraft(fakeFile('stuck.txt'));
+    assert.equal(canSendAttachments([d]), false);
+    assert.equal(hasUploadingAttachments([d]), true);
+    const uploaded = {
+      ...d,
+      status: 'uploaded' as const,
+      path: 'uploads/att/stuck.txt',
+      attachmentId: 'att_stuck',
+    };
+    assert.equal(canSendAttachments([uploaded]), true);
+    assert.equal(hasUploadingAttachments([uploaded]), false);
+  });
+
   it('validateNewAttachments enforces count and size limits', () => {
     const limits = { ...ATTACHMENT_LIMITS, maxCount: 2, maxFileBytes: 100, maxTurnBytes: 150 };
     const existing = [

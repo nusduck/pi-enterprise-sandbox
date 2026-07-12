@@ -26,6 +26,12 @@ function runMarkerLabel(status: string | null, hasApproval: boolean): string {
   return formatRunStatusLabel(status);
 }
 
+/**
+ * Sidebar hierarchy (top → bottom):
+ * 1. Brand + new conversation
+ * 2. Conversation list (primary content)
+ * 3. Footer: app sections + compact auth
+ */
 export function ConversationSidebar() {
   const {
     state,
@@ -42,6 +48,7 @@ export function ConversationSidebar() {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [authError, setAuthError] = useState('');
+  const [authOpen, setAuthOpen] = useState(false);
 
   const open = state.sidebarOpen !== false;
   const isMobile =
@@ -58,6 +65,8 @@ export function ConversationSidebar() {
     [entityStore],
   );
 
+  const signedIn = Boolean(state.authUser?.username);
+
   const sidebarClass = [
     'sidebar',
     !isMobile && !open ? 'collapsed' : '',
@@ -72,6 +81,7 @@ export function ConversationSidebar() {
     try {
       setAuthError('');
       await login(username.trim(), password);
+      setAuthOpen(false);
     } catch (err) {
       setAuthError((err as Error).message || 'Login failed');
     }
@@ -85,6 +95,7 @@ export function ConversationSidebar() {
     try {
       setAuthError('');
       await register(username.trim(), password);
+      setAuthOpen(false);
     } catch (err) {
       setAuthError((err as Error).message || 'Register failed');
     }
@@ -94,14 +105,12 @@ export function ConversationSidebar() {
     <>
       <aside id="sidebar" className={sidebarClass}>
         <div className="sidebar-head">
-          <button
-            type="button"
-            className="btn-new-chat"
-            title="New chat"
-            onClick={() => void startNewChat()}
-          >
-            ＋ New chat
-          </button>
+          <div className="sidebar-brand">
+            <span className="sidebar-brand-mark" aria-hidden="true">
+              π
+            </span>
+            <span className="sidebar-brand-name">Sandbox</span>
+          </div>
           <button
             type="button"
             className="btn-icon sidebar-close-btn"
@@ -113,111 +122,25 @@ export function ConversationSidebar() {
           </button>
         </div>
 
-        <div className="sidebar-auth" id="auth-panel">
-          <form className="auth-form" onSubmit={onLogin} autoComplete="on">
-            <input
-              type="text"
-              name="username"
-              placeholder="Username"
-              minLength={2}
-              required
-              value={username}
-              onChange={(e) => setUsername(e.target.value)}
-            />
-            <input
-              type="password"
-              name="password"
-              placeholder="Password"
-              minLength={6}
-              required
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-            />
-            <div className="auth-actions">
-              <button type="submit" className="btn-auth">
-                Login
-              </button>
-              <button
-                type="button"
-                className="btn-auth secondary"
-                onClick={() => void onRegister()}
-              >
-                Register
-              </button>
-            </div>
-            <p
-              className="auth-hint"
-              onDoubleClick={logout}
-              title="Double-click to log out"
-            >
-              {state.authUser?.username
-                ? `Signed in as ${state.authUser.username}`
-                : 'Optional login when AUTH_ENABLED'}
-            </p>
-            {authError ? (
-              <p className="auth-hint" style={{ color: 'var(--color-danger)' }}>
-                {authError}
-              </p>
-            ) : null}
-          </form>
+        <div className="sidebar-actions">
+          <button
+            type="button"
+            className="btn-new-chat"
+            title="New conversation"
+            onClick={() => void startNewChat()}
+          >
+            New Conversation
+          </button>
         </div>
 
-        {/* Workbench + management nav (F5 / ADR §5.1, §9–11) */}
-        <nav className="sidebar-nav" aria-label="Primary">
-          <NavLink
-            to="/"
-            end
-            className={({ isActive }) =>
-              `sidebar-nav-link${isActive ? ' active' : ''}`
-            }
-          >
-            Conversations
-          </NavLink>
-          <NavLink
-            to="/runs"
-            className={({ isActive }) =>
-              `sidebar-nav-link${isActive ? ' active' : ''}`
-            }
-          >
-            <span>Active Runs</span>
-            {activeRuns.length > 0 ? (
-              <span className="sidebar-nav-badge" aria-label={`${activeRuns.length} active`}>
-                {activeRuns.length}
-              </span>
-            ) : null}
-          </NavLink>
-          <NavLink
-            to="/approvals"
-            className={({ isActive }) =>
-              `sidebar-nav-link${isActive ? ' active' : ''}`
-            }
-          >
-            <span>Approvals</span>
-            {pendingApprovals.length > 0 ? (
-              <span
-                className="sidebar-nav-badge warn"
-                aria-label={`${pendingApprovals.length} pending`}
-              >
-                {pendingApprovals.length}
-              </span>
-            ) : null}
-          </NavLink>
-          <NavLink
-            to="/settings/capabilities"
-            className={({ isActive }) =>
-              `sidebar-nav-link${isActive ? ' active' : ''}`
-            }
-          >
-            Capabilities
-          </NavLink>
-        </nav>
+        <div className="sidebar-section-label">Conversations</div>
 
         <div className="sidebar-list" role="list">
           {(state.conversations || []).length === 0 ? (
             <div className="sidebar-empty">
               No conversations yet.
               <br />
-              Start a new chat.
+              Start a new one above.
             </div>
           ) : (
             state.conversations.map((conv) => {
@@ -234,11 +157,15 @@ export function ConversationSidebar() {
                   className={`conv-item${conv.id === state.conversationId ? ' active' : ''}${hasApproval ? ' needs-approval' : ''}${hasRun && !hasApproval ? ' has-active-run' : ''}`}
                   role="listitem"
                   tabIndex={0}
-                  onClick={() => void selectConversation(conv.id)}
+                  onClick={() => {
+                    void selectConversation(conv.id);
+                    if (isMobile) closeSidebar();
+                  }}
                   onKeyDown={(e) => {
                     if (e.key === 'Enter' || e.key === ' ') {
                       e.preventDefault();
                       void selectConversation(conv.id);
+                      if (isMobile) closeSidebar();
                     }
                   }}
                 >
@@ -251,7 +178,7 @@ export function ConversationSidebar() {
                         className={`conv-run-marker${hasApproval ? ' warn' : ' active'}`}
                         title={markerText}
                       >
-                        {hasApproval ? '⏸' : '●'}
+                        {hasApproval ? '!' : '●'}
                       </span>
                     ) : null}
                     {shortDate(conv.updated_at || conv.created_at)}
@@ -266,12 +193,145 @@ export function ConversationSidebar() {
                       void removeConversation(conv.id);
                     }}
                   >
-                    🗑
+                    ×
                   </button>
                 </div>
               );
             })
           )}
+        </div>
+
+        <div className="sidebar-footer">
+          <nav className="sidebar-nav" aria-label="Primary">
+            <NavLink
+              to="/"
+              end
+              className={({ isActive }) =>
+                `sidebar-nav-link${isActive ? ' active' : ''}`
+              }
+            >
+              Chat
+            </NavLink>
+            <NavLink
+              to="/runs"
+              className={({ isActive }) =>
+                `sidebar-nav-link${isActive ? ' active' : ''}`
+              }
+            >
+              <span>Runs</span>
+              {activeRuns.length > 0 ? (
+                <span
+                  className="sidebar-nav-badge"
+                  aria-label={`${activeRuns.length} active`}
+                >
+                  {activeRuns.length}
+                </span>
+              ) : null}
+            </NavLink>
+            <NavLink
+              to="/approvals"
+              className={({ isActive }) =>
+                `sidebar-nav-link${isActive ? ' active' : ''}`
+              }
+            >
+              <span>Approvals</span>
+              {pendingApprovals.length > 0 ? (
+                <span
+                  className="sidebar-nav-badge warn"
+                  aria-label={`${pendingApprovals.length} pending`}
+                >
+                  {pendingApprovals.length}
+                </span>
+              ) : null}
+            </NavLink>
+            <NavLink
+              to="/settings/capabilities"
+              className={({ isActive }) =>
+                `sidebar-nav-link${isActive ? ' active' : ''}`
+              }
+            >
+              Settings
+            </NavLink>
+          </nav>
+
+          <div className="sidebar-auth" id="auth-panel">
+            {signedIn ? (
+              <button
+                type="button"
+                className="sidebar-user"
+                title="Double-click to log out"
+                onDoubleClick={() => void logout()}
+                onClick={() => setAuthOpen((v) => !v)}
+              >
+                <span className="sidebar-user-dot" aria-hidden="true" />
+                <span className="sidebar-user-name">
+                  {state.authUser?.username}
+                </span>
+              </button>
+            ) : (
+              <button
+                type="button"
+                className="sidebar-auth-toggle"
+                aria-expanded={authOpen}
+                onClick={() => setAuthOpen((v) => !v)}
+              >
+                Sign in
+              </button>
+            )}
+            {authOpen && !signedIn ? (
+              <form className="auth-form" onSubmit={onLogin} autoComplete="on">
+                <input
+                  type="text"
+                  name="username"
+                  placeholder="Username"
+                  minLength={2}
+                  required
+                  value={username}
+                  onChange={(e) => setUsername(e.target.value)}
+                />
+                <input
+                  type="password"
+                  name="password"
+                  placeholder="Password"
+                  minLength={6}
+                  required
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                />
+                <div className="auth-actions">
+                  <button type="submit" className="btn-auth">
+                    Login
+                  </button>
+                  <button
+                    type="button"
+                    className="btn-auth secondary"
+                    onClick={() => void onRegister()}
+                  >
+                    Register
+                  </button>
+                </div>
+                {authError ? (
+                  <p
+                    className="auth-hint"
+                    style={{ color: 'var(--color-danger)' }}
+                  >
+                    {authError}
+                  </p>
+                ) : (
+                  <p className="auth-hint">Optional when AUTH_ENABLED</p>
+                )}
+              </form>
+            ) : null}
+            {authOpen && signedIn ? (
+              <button
+                type="button"
+                className="btn-auth secondary"
+                onClick={() => void logout()}
+              >
+                Log out
+              </button>
+            ) : null}
+          </div>
         </div>
       </aside>
       <div

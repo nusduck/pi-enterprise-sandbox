@@ -25,13 +25,13 @@ export function MessageList() {
     >
       {displayMessages.length === 0 ? (
         <div className="welcome">
-          <div className="icon">◆</div>
-          <h2>Enterprise Sandbox</h2>
+          <div className="icon">π</div>
+          <h2>How can I help?</h2>
           <p>
-            AI-powered sandboxed coding environment. Upload files or ask the
-            agent to write code.
+            A focused sandbox for building, reviewing, and shipping with an
+            agent. Upload files or just start typing.
           </p>
-          <p style={{ fontSize: 12, color: '#64748b' }}>
+          <p className="welcome-hints">
             <kbd>Enter</kbd> send · <kbd>Shift+Enter</kbd> newline ·{' '}
             <kbd>Ctrl+L</kbd> new chat
           </p>

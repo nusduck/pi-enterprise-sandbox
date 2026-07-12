@@ -40,12 +40,20 @@ describe('F6 responsive layout (CSS breakpoints)', () => {
 });
 
 describe('F6 a11y attributes on key surfaces', () => {
-  it('AppShell: live status region + labelled toggles', () => {
+  it('AppShell / workbench toolbar: live status + labelled toggles', () => {
     const shell = readSrc('app', 'layout', 'AppShell.tsx');
+    const toolbar = readSrc(
+      'widgets',
+      'conversation-header',
+      'ConversationHeader.tsx',
+    );
+    // Management chrome keeps sidebar toggle; chat toolbar owns both toggles.
     assert.match(shell, /aria-label=["']Toggle sidebar["']/);
     assert.match(shell, /aria-live=["']polite["']/);
-    assert.match(shell, /aria-label=["']Toggle context inspector["']/);
-    assert.match(shell, /aria-pressed=\{inspectorOpen\}/);
+    assert.match(toolbar, /aria-label=["']Toggle sidebar["']/);
+    assert.match(toolbar, /aria-label=["']Toggle context inspector["']/);
+    assert.match(toolbar, /aria-pressed=\{inspectorOpen\}/);
+    assert.match(toolbar, /aria-live=["']polite["']/);
   });
 
   it('ConversationSidebar: primary nav + list semantics', () => {

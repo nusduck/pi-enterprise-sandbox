@@ -529,21 +529,41 @@ export function createSandboxTools(ctx = {}) {
   const readTool = {
     name: 'read',
     label: 'Read File',
-    description: 'Read file contents from the sandbox workspace.',
+    description:
+      'Read a workspace file (relative path) OR load a Skill package. ' +
+      'For skills listed in <available_skills>, pass the absolute <location> ' +
+      'path (e.g. /home/sandbox/skill/docx/SKILL.md) — required before specialized document work.',
     parameters: Type.Object({
-      path: Type.String({ description: 'File path (relative to workspace)' }),
+      path: Type.String({
+        description:
+          'Workspace-relative path, or absolute skill path under /home/sandbox/skill/.../SKILL.md',
+      }),
       offset: Type.Optional(Type.Number({ description: 'Start line (1-indexed)' })),
       limit: Type.Optional(Type.Number({ description: 'Max lines' })),
     }),
     execute: wrapExecute('read', async (_toolCallId, params) => {
-      // Skill files: read from api-server local FS, not sandbox
+      // Skill files: read from Agent local FS (mounted skills), not sandbox workspace
+      const p = String(params.path || '');
       if (
-        params.path.startsWith('/home/sandbox/skill/') ||
-        params.path.startsWith('/sandbox/skills/') ||
-        params.path.startsWith('/app/.pi/skills/') ||
-        params.path.startsWith('.pi/skills/')
+        p.startsWith('/home/sandbox/skill/') ||
+        p.startsWith('/sandbox/skills/') ||
+        p.startsWith('/app/.pi/skills/') ||
+        p.startsWith('.pi/skills/') ||
+        // bare skill package name → default SKILL.md
+        (!p.includes('/') && !p.includes('\\') && p.length > 0 && p !== '.' && p !== '..')
       ) {
-        return readLocalSkill(params.path);
+        const skillPath =
+          !p.includes('/') && !p.includes('\\')
+            ? `/home/sandbox/skill/${p}/SKILL.md`
+            : p;
+        if (
+          skillPath.startsWith('/home/sandbox/skill/') ||
+          skillPath.startsWith('/sandbox/skills/') ||
+          skillPath.startsWith('/app/.pi/skills/') ||
+          skillPath.startsWith('.pi/skills/')
+        ) {
+          return readLocalSkill(skillPath);
+        }
       }
       try {
         const sessionId = getSessionId();

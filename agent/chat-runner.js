@@ -680,7 +680,9 @@ export async function runAgentTurn(opts) {
       cwd: sessionCwd,
       agentDir: getAgentDir(),
       settingsManager,
-      additionalSkillPaths: [AGENT_SKILL, '/sandbox/skills'],
+      // Single skill root — avoid duplicate mounts (/sandbox/skills, /app/.pi/skills)
+      // which only create name collisions; all compose to the same host ./skills.
+      additionalSkillPaths: [AGENT_SKILL],
       extensionFactories: [
         createSandboxSecurityExtension({
           getMeta: securityGetMeta,
@@ -754,7 +756,7 @@ export async function runAgentTurn(opts) {
     const skillModeHint =
       config.SKILLS_MODE === SKILLS_MODE.DEVELOPMENT
         ? `
-## Skill management (development mode)
+### Skill management (development mode)
 
 Shared skills live at \`${AGENT_SKILL}\` (SKILLS_MODE=development).
 
@@ -771,13 +773,30 @@ Skill install/edit tools are not available.
 `;
 
     const DOWNLOAD_INSTRUCTIONS = `
-## Workspace layout (relative paths)
+## Skills (required when they match)
 
-The session workspace is identified by opaque \`workspace_id\` only. There is **no** public absolute workspace path.
+You have specialized skills listed in \`<available_skills>\` (name + description + location).
+
+**Progressive disclosure:** only skill names/descriptions are always in context. Full instructions live in each skill's \`SKILL.md\`.
+
+**You MUST load a matching skill before doing specialized work** (documents, PDF/DOCX/XLSX/PPTX, conversion, summarization of office files, formatting, code review playbooks, MCP builders, etc.):
+
+1. Match the user task to a skill \`description\` (e.g. .docx → \`docx\`, PDF → \`pdf\`, convert/总结文档 → \`convert-to-markdown\` or \`docx\`/\`pdf\`).
+2. Call \`read\` with the skill's absolute \`<location>\` path (e.g. \`${AGENT_SKILL}/docx/SKILL.md\`).
+3. Follow that SKILL.md workflow. Do **not** invent a parallel approach when a skill already covers the task.
+4. If multiple skills match, load the most specific one first.
+
+Skill absolute paths under \`${AGENT_SKILL}/\` (and legacy \`/sandbox/skills/\`, \`/app/.pi/skills/\`) are **allowed for \`read\`**. They are not workspace paths.
 
 ${skillModeHint}
 
-Use **relative paths** for all file tools (\`notes/a.txt\`, \`.\`, \`uploads/...\`). Absolute paths and \`..\` escapes are rejected. Do not use or invent host/physical paths (e.g. \`/var/sandbox/workspaces/...\` or \`/home/sandbox/workspace\`).
+## Workspace layout (relative paths)
+
+The session workspace is identified by opaque \`workspace_id\` only. There is **no** public absolute workspace path for user files.
+
+For **workspace** file tools use **relative paths** (\`notes/a.txt\`, \`.\`, \`uploads/...\`). Workspace absolute paths and \`..\` escapes are rejected. Do not invent host/physical paths (e.g. \`/var/sandbox/workspaces/...\`).
+
+Exception: skill package paths under \`${AGENT_SKILL}/.../SKILL.md\` as listed in \`<available_skills>\`.
 
 ## Multi-turn context
 

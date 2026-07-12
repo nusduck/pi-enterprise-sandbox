@@ -15,12 +15,16 @@ export function RuntimeTimeline({
   selected,
   onSelect,
   onOpenProcessConsole,
+  /** When true, parent drawer owns the heading — skip duplicate chrome. */
+  embedded = false,
 }: {
   selected: SelectedEntity;
   onSelect: (sel: SelectedEntity) => void;
   onOpenProcessConsole?: (processId: string) => void;
+  embedded?: boolean;
 }) {
-  const { entityStore, activeRunId, activeSessionId, resolveApproval } = useChat();
+  const { entityStore, activeRunId, activeSessionId, resolveApproval } =
+    useChat();
 
   const items = useMemo(
     () => buildRunTimeline(entityStore, activeRunId),
@@ -30,14 +34,17 @@ export function RuntimeTimeline({
   if (items.length === 0) {
     return (
       <section
-        className="runtime-timeline empty"
+        className={`runtime-timeline empty${embedded ? ' embedded' : ''}`}
         aria-label="Runtime activity"
       >
-        <div className="runtime-timeline-head">
-          <span className="runtime-timeline-title">Runtime activity</span>
-        </div>
+        {!embedded ? (
+          <div className="runtime-timeline-head">
+            <span className="runtime-timeline-title">Runtime activity</span>
+          </div>
+        ) : null}
         <p className="runtime-timeline-empty">
-          Tool calls, processes, approvals, and artifacts appear here.
+          Tool calls, processes, approvals, and artifacts show up here while the
+          agent works.
         </p>
       </section>
     );
@@ -64,13 +71,16 @@ export function RuntimeTimeline({
   }
 
   return (
-    <section className="runtime-timeline" aria-label="Runtime activity">
-      <div className="runtime-timeline-head">
-        <span className="runtime-timeline-title">Runtime activity</span>
-        <span className="runtime-timeline-count">
-          {items.length}
-        </span>
-      </div>
+    <section
+      className={`runtime-timeline${embedded ? ' embedded' : ''}`}
+      aria-label="Runtime activity"
+    >
+      {!embedded ? (
+        <div className="runtime-timeline-head">
+          <span className="runtime-timeline-title">Runtime activity</span>
+          <span className="runtime-timeline-count">{items.length}</span>
+        </div>
+      ) : null}
       <div className="runtime-timeline-list">
         {items.map((item) => {
           switch (item.kind) {
