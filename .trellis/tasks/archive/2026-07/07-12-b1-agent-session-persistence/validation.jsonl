@@ -1,0 +1,2 @@
+{"command": "uv run pytest tests/test_agent_session_persistence.py tests/test_database_baseline.py -q", "commit": "2b18cdf004e8", "exit_code": 0, "result": "session persistence + migrations", "recorded_at": "2026-07-12T04:24:15+00:00"}
+{"command": "node --test agent/tests/session-persistence.test.js", "commit": "2b18cdf004e8", "exit_code": 0, "result": "agent session materialize/restore tests", "recorded_at": "2026-07-12T04:24:15+00:00"}

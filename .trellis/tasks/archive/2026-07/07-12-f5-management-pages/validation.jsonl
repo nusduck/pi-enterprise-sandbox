@@ -1,0 +1,1 @@
+{"command": "npm test --prefix frontend", "commit": "2b18cdf004e8", "exit_code": 0, "result": "management pages tests", "recorded_at": "2026-07-12T04:24:15+00:00"}

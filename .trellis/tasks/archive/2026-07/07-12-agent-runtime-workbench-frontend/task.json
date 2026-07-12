@@ -1,0 +1,33 @@
+{
+  "id": "agent-runtime-workbench-frontend",
+  "name": "agent-runtime-workbench-frontend",
+  "title": "Agent Runtime Workbench Frontend Refactor",
+  "description": "ADR 0003: refactor Chat UI into Agent Runtime Workbench — React/TS shell, entities, timeline, process console, management pages.",
+  "status": "completed",
+  "dev_type": null,
+  "scope": null,
+  "package": null,
+  "priority": "P0",
+  "creator": "nusduck",
+  "assignee": "nusduck",
+  "createdAt": "2026-07-12",
+  "completedAt": "2026-07-12",
+  "branch": null,
+  "base_branch": "main",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [
+    "07-12-f1-workbench-foundation",
+    "07-12-f2-entity-event-architecture",
+    "07-12-f3-runtime-workbench-ui",
+    "07-12-f4-process-interaction-ui",
+    "07-12-f5-management-pages",
+    "07-12-f6-cleanup-e2e"
+  ],
+  "parent": null,
+  "relatedFiles": [],
+  "notes": "",
+  "meta": {}
+}
