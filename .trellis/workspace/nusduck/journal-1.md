@@ -304,3 +304,41 @@ Pi SDK session cwd 统一为 Sandbox 逻辑工作区；前端 runtime SSE 只归
 ### Next Steps
 
 - None - task complete
+
+
+## Session 9: Archive session cwd single-state fix
+
+**Date**: 2026-07-12
+**Task**: Archive session cwd single-state fix
+**Branch**: `main`
+
+### Summary
+
+Archived 07-12-session-cwd-single-state after aligning Pi SDK session cwd with Sandbox workspace and unifying frontend runtime state onto EntityStore (no ChatState dual-write). Work commit: fix: align session cwd and runtime state.
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `79b111fc` | (see git log) |
+
+### Testing
+
+- `npm test --prefix agent` — exit 0; 197 tests passed, including new/create/reuse/restore/in-memory/createAgentSession cwd contract (commit `79b111fc`, 2026-07-12T14:10:00+08:00)
+- `npm test --prefix frontend` — exit 0; 132 tests passed, including single EntityStore reduction, terminal status, trace/agent-session, and per-run background transport isolation (commit `79b111fc`, 2026-07-12T14:10:00+08:00)
+- `npm run build --prefix frontend` — exit 0; TypeScript noEmit and Vite production build passed (commit `79b111fc`, 2026-07-12T14:10:00+08:00)
+- `uv run pytest tests/test_session_manager.py tests/test_isolation_and_delivery.py tests/test_paths.py -q --tb=short` — exit 0; 43 focused Sandbox workspace isolation and physical-path redaction tests passed (commit `79b111fc`, 2026-07-12T14:10:00+08:00)
+- `node scripts/smoke-cross-service.mjs` — exit 0; Cross-service Sandbox + Agent + BFF + fake LLM smoke passed without a real LLM key (commit `79b111fc`, 2026-07-12T14:10:00+08:00)
+- `docker compose config -q` — exit 0; Compose configuration with AGENT_SESSION_WORKSPACE_CWD validated (commit `79b111fc`, 2026-07-12T14:10:00+08:00)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
