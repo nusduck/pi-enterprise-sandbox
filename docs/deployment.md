@@ -194,6 +194,7 @@ curl http://localhost:8083/sessions                        # 401
 | `nginx_certbot` | `/var/www/certbot` | Let's Encrypt ACME challenge（生产） |
 | `./skills` | Agent `/home/sandbox/skill`（默认 `:ro`；研发可 `:rw`）+ Sandbox `:ro` | 共享技能；生产只读 |
 | `./workspaces` | `/var/sandbox/workspaces` | 会话物理工作区 |
+| `./tmp-workspaces` | `/var/sandbox/tmp` | Conversation-owned 持久化 `/tmp`（`tmp_{workspace_id}`） |
 
 ### Skill 挂载与 SKILLS_MODE
 
@@ -211,7 +212,7 @@ curl http://localhost:8083/sessions                        # 401
 | 探针 | 端点 | 成功 | 失败含义 |
 |------|------|------|----------|
 | Sandbox liveness | `GET /health` | 200 | 进程无响应 |
-| Sandbox readiness | `GET /ready` | 200 | **503** = 工作区不可写或数据库不可用 |
+| Sandbox readiness | `GET /ready` | 200 | **503** = workspace/`/tmp` 不可写、数据库不可用或 Bubblewrap preflight 失败 |
 | API Server | `GET /api/status` | 200 | BFF 进程未就绪 |
 | Frontend | `GET /` | 200 | 静态站/反代不可用 |
 

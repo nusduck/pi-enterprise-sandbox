@@ -26,6 +26,7 @@ describe('Sandbox session cwd contract', () => {
     assert.equal(resolved.sessionCwd, LOGICAL_CWD);
     assert.equal(resolved.sessionCwd, config.SESSION_WORKSPACE_CWD);
     assert.equal(resolved.sandboxSessionId, 'sandbox_new');
+    assert.equal(resolved.workspace_id, 'conv_conv_new');
   });
 
   it('keeps the same cwd when reusing an existing Sandbox session', async () => {
@@ -45,6 +46,7 @@ describe('Sandbox session cwd contract', () => {
     const resolved = await resolveConversationAndSession(client, 'conv_existing');
     assert.equal(resolved.sessionCwd, LOGICAL_CWD);
     assert.equal(resolved.reusedSession, true);
+    assert.equal(resolved.workspace_id, 'conv_conv_existing');
   });
 
   it('records the Sandbox cwd in a newly persisted Pi SDK session header', async () => {

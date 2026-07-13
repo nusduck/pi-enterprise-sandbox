@@ -7,19 +7,15 @@ Exposed as an independent MCP server for external low-code platforms
 from __future__ import annotations
 
 import logging
-import os
-from pathlib import Path
 from typing import Any
 
 from sandbox.config import settings
-from sandbox.models import (
-    CommandExecutionRequest,
-    FileReadRequest,
-    FileWriteRequest,
-    PythonExecutionRequest,
-)
-from sandbox.paths import get_session_physical_workspace
+from sandbox.models import SessionStatus
+from sandbox.paths import conversation_workspace_id
+from sandbox.repositories import ConversationRepository
+from sandbox.security.path_validation import resolve_sandbox_path
 from sandbox.services.artifact_manager import artifact_manager
+from sandbox.services.execution_context import SandboxExecutionContext
 from sandbox.services.execution_manager import execution_manager
 from sandbox.services.file_manager import file_manager
 from sandbox.services.session_manager import session_manager
@@ -47,13 +43,26 @@ class MCPServerAdapter:
     # ── MCP tool implementations ──────────────────────────────────
 
     async def create_session(self, **kwargs) -> dict[str, Any]:
+        conversation_id = kwargs.get("conversation_id")
+        workspace_id = kwargs.get("workspace_id")
+        if workspace_id and not conversation_id:
+            return {"error": "workspace_id cannot be used without conversation_id"}
+        if conversation_id:
+            conversation = ConversationRepository().get(conversation_id)
+            if conversation is None:
+                return {"error": "Conversation not found"}
+            expected = conversation_workspace_id(conversation_id)
+            if workspace_id and workspace_id != expected:
+                return {"error": "workspace_id does not match conversation binding"}
         session = session_manager.create(
             agent_session_id=kwargs.get("agent_session_id"),
             user_id=kwargs.get("user_id"),
             caller_id=kwargs.get("caller_id", "mcp"),
             metadata=kwargs.get("metadata"),
+            conversation_id=conversation_id,
+            workspace_id=workspace_id,
         )
-        workspace_manager.init_workspace(session.session_id)
+        SandboxExecutionContext.from_session(session)
         return {
             "session_id": session.session_id,
             "status": session.status,
@@ -66,7 +75,16 @@ class MCPServerAdapter:
         session = session_manager.get(session_id)
         if session is None:
             return {"error": "Session not found"}
-        workspace_manager.remove_workspace(session_id)
+        from sandbox.services.execution_manager import execution_manager
+        from sandbox.services.process_manager import process_manager
+
+        session_manager.update_status(session_id, SessionStatus.COMPLETED)
+        workspace_id = session.workspace_id or (session.metadata or {}).get("workspace_id")
+        if workspace_id:
+            execution_manager.cancel_active_workspace(workspace_id)
+            process_manager.cancel_for_workspace(workspace_id)
+        if not workspace_id or workspace_id == session_id:
+            workspace_manager.remove_workspace(session_id)
         session_manager.delete(session_id)
         return {"status": "closed"}
 
@@ -81,11 +99,11 @@ class MCPServerAdapter:
         if session.status != "RUNNING":
             return {"error": "Session is not active"}
 
-        ws = get_session_physical_workspace(session)
+        context = SandboxExecutionContext.from_session(session)
         result = execution_manager.run_python(
             session_id=session_id,
             code=code,
-            workspace_path=ws,
+            context=context,
             timeout=timeout,
         )
 
@@ -121,11 +139,11 @@ class MCPServerAdapter:
         if session.status != "RUNNING":
             return {"error": "Session is not active"}
 
-        ws = get_session_physical_workspace(session)
+        context = SandboxExecutionContext.from_session(session)
         result = execution_manager.run_command(
             session_id=session_id,
             command=command,
-            workspace_path=ws,
+            context=context,
             timeout=timeout,
         )
 
@@ -151,9 +169,15 @@ class MCPServerAdapter:
         if session is None:
             return {"error": "Session not found"}
 
-        ws = get_session_physical_workspace(session)
+        context = SandboxExecutionContext.from_session(session)
         try:
-            result = file_manager.read_file(ws, path, offset, limit)
+            result = file_manager.read_file(
+                str(context.physical_workspace),
+                path,
+                offset,
+                limit,
+                temp_path=str(context.physical_temp),
+            )
             return {
                 "path": result.path,
                 "content": result.content,
@@ -173,9 +197,14 @@ class MCPServerAdapter:
         if session is None:
             return {"error": "Session not found"}
 
-        ws = get_session_physical_workspace(session)
+        context = SandboxExecutionContext.from_session(session)
         try:
-            result = file_manager.write_file(ws, path, content)
+            result = file_manager.write_file(
+                str(context.physical_workspace),
+                path,
+                content,
+                temp_path=str(context.physical_temp),
+            )
             return {
                 "path": result.path,
                 "size": result.size,
@@ -192,9 +221,15 @@ class MCPServerAdapter:
         if session is None:
             return {"error": "Session not found"}
 
-        ws = get_session_physical_workspace(session)
+        context = SandboxExecutionContext.from_session(session)
         try:
-            result = file_manager.read_file(ws, path, offset=1, limit=40)
+            result = file_manager.read_file(
+                str(context.physical_workspace),
+                path,
+                offset=1,
+                limit=40,
+                temp_path=str(context.physical_temp),
+            )
             return {
                 "path": result.path,
                 "content": result.content,
@@ -212,9 +247,13 @@ class MCPServerAdapter:
         if session is None:
             return {"error": "Session not found"}
 
-        ws = get_session_physical_workspace(session)
+        context = SandboxExecutionContext.from_session(session)
         try:
-            files = file_manager.list_files(ws, path)
+            files = file_manager.list_files(
+                str(context.physical_workspace),
+                path,
+                temp_path=str(context.physical_temp),
+            )
             return {
                 "files": [
                     {"name": f.name, "path": f.path, "is_dir": f.is_dir,
@@ -254,17 +293,24 @@ class MCPServerAdapter:
         if session is None:
             return {"error": "Session not found"}
 
-        ws = Path(get_session_physical_workspace(session))
-        artifact_path = ws / path
-
-        size = artifact_path.stat().st_size if artifact_path.exists() else 0
+        context = SandboxExecutionContext.from_session(session)
+        try:
+            parsed, artifact_path = resolve_sandbox_path(
+                context.physical_workspace,
+                context.physical_temp,
+                path,
+            )
+        except (PermissionError, ValueError) as exc:
+            return {"error": str(exc)}
+        if not artifact_path.is_file():
+            return {"error": "Artifact path must be an existing regular file"}
 
         result = artifact_manager.register(
             session_id=session_id,
             name=name,
-            path=path,
+            path=parsed.as_public(),
             mime_type=mime_type,
-            size=size,
+            size=artifact_path.stat().st_size,
         )
         return {
             "artifact_id": result.artifact_id,
@@ -283,13 +329,17 @@ class MCPServerAdapter:
         if session is None:
             return {"error": "Session not found"}
 
-        ws = get_session_physical_workspace(session)
+        context = SandboxExecutionContext.from_session(session)
         try:
-            safe_path = file_manager.get_binary_path(ws, path)
+            parsed, safe_path = resolve_sandbox_path(
+                context.physical_workspace,
+                context.physical_temp,
+                path,
+            )
             if not safe_path.is_file():
                 return {"error": "File not found"}
             return {
-                "path": str(safe_path),
+                "path": parsed.as_public(),
                 "name": safe_path.name,
                 "size": safe_path.stat().st_size,
             }

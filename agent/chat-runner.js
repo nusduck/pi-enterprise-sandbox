@@ -141,6 +141,7 @@ export function buildCreateAgentSessionOptions(opts) {
 export async function resolveConversationAndSession(client, conversation_id) {
   let activeConversationId = conversation_id || null;
   let sandboxSessionId = null;
+  let workspaceId = null;
   let reusedSession = false;
 
   if (activeConversationId) {
@@ -151,6 +152,7 @@ export async function resolveConversationAndSession(client, conversation_id) {
           const existing = await client.getSession(conv.sandbox_session_id);
           if (existing?.status === 'RUNNING' && existing.session_id) {
             sandboxSessionId = existing.session_id;
+            workspaceId = existing.workspace_id || null;
             reusedSession = true;
             console.log(`[agent] Reusing sandbox session ${sandboxSessionId}`);
           }
@@ -181,6 +183,7 @@ export async function resolveConversationAndSession(client, conversation_id) {
       enterprise_session_id: activeConversationId,
     });
     sandboxSessionId = sessionData.session_id;
+    workspaceId = sessionData.workspace_id || null;
     try {
       await client.updateConversation(activeConversationId, {
         sandbox_session_id: sandboxSessionId,
@@ -193,7 +196,7 @@ export async function resolveConversationAndSession(client, conversation_id) {
 
   return {
     activeConversationId,
-    workspace_id: activeConversationId ? `conv_${activeConversationId}` : null,
+    workspace_id: workspaceId || (activeConversationId ? `conv_${activeConversationId}` : null),
     sessionCwd: config.SESSION_WORKSPACE_CWD,
     sandboxSessionId,
     reusedSession,
@@ -357,6 +360,7 @@ export async function runAgentTurn(opts) {
 
   let sandboxSessionId = null;
   let activeConversationId = null;
+  let activeWorkspaceId = null;
   let activeRunId = null;
   let activeLeaseOwner = null;
   let activeAgentSessionId = null;
@@ -449,8 +453,8 @@ export async function runAgentTurn(opts) {
     conversation_id: activeConversationId,
     session_id: sandboxSessionId,
     run_id: activeRunId,
-    workspace_id: activeConversationId || sandboxSessionId,
-    workspace_key: activeConversationId || sandboxSessionId,
+    workspace_id: activeWorkspaceId || sandboxSessionId,
+    workspace_key: activeWorkspaceId || sandboxSessionId,
     trace_id,
     policy_version: POLICY_VERSION,
   });
@@ -500,7 +504,7 @@ export async function runAgentTurn(opts) {
   const sandboxTools = createSandboxTools({
     client,
     getSessionId: () => sandboxSessionId,
-    getWorkspaceKey: () => activeConversationId || sandboxSessionId || 'default',
+    getWorkspaceKey: () => activeWorkspaceId || sandboxSessionId || 'default',
     approvalEnabled: config.APPROVAL_ENABLED,
     getMeta: securityGetMeta,
     skillRoots: config.SKILL_ROOTS,
@@ -597,6 +601,7 @@ export async function runAgentTurn(opts) {
     const resolved = await resolveConversationAndSession(client, conversation_id);
     activeConversationId = resolved.activeConversationId;
     sandboxSessionId = resolved.sandboxSessionId;
+    activeWorkspaceId = resolved.workspace_id;
 
     // Registry-driven capabilities (context window, max output, tool/reasoning flags).
     activeModelEntry = resolveActiveModel(opts.model_id || config.MODEL_ID);
@@ -607,7 +612,7 @@ export async function runAgentTurn(opts) {
       const run = await client.createAgentRun({
         conversation_id: activeConversationId,
         sandbox_session_id: sandboxSessionId,
-        workspace_id: activeConversationId,
+        workspace_id: activeWorkspaceId,
         model_id: activeModelId,
         lease_owner: leaseOwner,
         lease_seconds: 300,
@@ -790,11 +795,13 @@ Skill absolute paths under \`${AGENT_SKILL}/\` (and legacy \`/sandbox/skills/\`,
 
 ${skillModeHint}
 
-## Workspace layout (relative paths)
+## Workspace and persistent temp layout
 
 The session workspace is identified by opaque \`workspace_id\` only. There is **no** public absolute workspace path for user files.
 
-For **workspace** file tools use **relative paths** (\`notes/a.txt\`, \`.\`, \`uploads/...\`). Workspace absolute paths and \`..\` escapes are rejected. Do not invent host/physical paths (e.g. \`/var/sandbox/workspaces/...\`).
+For **workspace** tools prefer **relative paths** (\`notes/a.txt\`, \`.\`, \`uploads/...\`). The stable logical cwd prefix \`${config.SESSION_WORKSPACE_CWD}/...\` is also accepted in file parameters and shell commands, and normalized to the same relative path. Other workspace absolute paths and \`..\` escapes are rejected. Never invent host/physical paths (e.g. \`/var/sandbox/workspaces/...\`).
+
+\`/tmp\` is a second private, Conversation-owned persistent root. Files under \`/tmp/...\` survive separate Bash/process calls and Session rebinds for the same Conversation, but are isolated from every other Conversation and deleted with the Conversation. File, search, Artifact, Bash, and process tools accept \`/tmp/...\` directly.
 
 Exception: skill package paths under \`${AGENT_SKILL}/.../SKILL.md\` as listed in \`<available_skills>\`.
 
@@ -816,7 +823,7 @@ Prefer structured \`ls\` / \`find\` / \`grep\` over shell for file discovery and
 
 \`bash\` is for **short synchronous** commands. For long-running, background, or interactive processes (web servers, watchers, REPLs), use **process_*** tools — do not use \`nohup\`, \`&\`, or shell backgrounding to bypass process management.
 
-\`write\`, \`edit\`, and \`apply_patch\` only create or update **private workspace files**. They do **not** share anything with the user and do **not** create download links.
+\`write\`, \`edit\`, and \`apply_patch\` only create or update **private workspace or persistent /tmp files**. They do **not** share anything with the user and do **not** create download links.
 \`edit\` requires a unique \`old_string\` (multi-match is rejected with line numbers) and returns a unified diff + hashes.
 \`apply_patch\` applies a unified diff to one file.
 

@@ -9,7 +9,11 @@ from pathlib import Path
 from sandbox.config import settings
 from sandbox.database import Database, database as default_database
 from sandbox.models import SessionResponse, SessionStatus
-from sandbox.paths import conversation_workspace_id, public_metadata
+from sandbox.paths import (
+    conversation_workspace_id,
+    public_metadata,
+    temp_id_for_workspace_id,
+)
 from sandbox.repositories import SessionRepository
 from sandbox.services.workspace_manager import WorkspaceWriteConflict, write_lease
 
@@ -62,8 +66,9 @@ class SessionManager:
         """Create a sandbox session bound to a physical workspace.
 
         Workspace binding preference:
-        1. Explicit ``workspace_id``
-        2. ``conversation_id`` → ``conv_<id>`` (conversation-owned workspace)
+        1. ``conversation_id`` → ``conv_<id>`` (conversation-owned workspace)
+           with any compatibility ``workspace_id`` required to match
+        2. Explicit ``workspace_id`` (trusted internal callers only)
         3. Internal ``workspace_path_override`` (physical path; tests only)
         4. Else session-private ``sandbox_<id>`` directory
 
@@ -84,6 +89,9 @@ class SessionManager:
         meta["workspace_id"] = resolved_workspace_id
         # Internal recovery key — stripped by public_session_response.
         meta["_physical_workspace"] = physical
+        temp_id = temp_id_for_workspace_id(resolved_workspace_id)
+        meta["_temp_id"] = temp_id
+        meta["_physical_temp"] = str(settings.temp_path / temp_id)
         if conversation_id:
             meta["conversation_id"] = conversation_id
 
@@ -131,18 +139,21 @@ class SessionManager:
         workspace_path_override: str | None,
     ) -> tuple[str, str]:
         """Return (workspace_id, physical_path)."""
-        # 1. Explicit workspace_id
-        if workspace_id:
-            physical = str(settings.workspaces_path / workspace_id)
-            return workspace_id, physical
-
-        # 2. conversation_id → conv_<id> (1:1 conversation-owned workspace)
+        # 1. conversation_id is the public source of truth. A supplied
+        # workspace_id is only a compatibility assertion, never an override.
         if conversation_id:
             from sandbox.security.path_validation import validate_conversation_id
 
             safe = validate_conversation_id(conversation_id)
             wid = conversation_workspace_id(safe)
+            if workspace_id and workspace_id != wid:
+                raise ValueError("workspace_id does not match conversation binding")
             return wid, str(settings.workspaces_path / wid)
+
+        # 2. Explicit workspace_id is retained for trusted internal recovery.
+        if workspace_id:
+            physical = str(settings.workspaces_path / workspace_id)
+            return workspace_id, physical
 
         # 3. Internal physical path override (tests / recovery only)
         if workspace_path_override:

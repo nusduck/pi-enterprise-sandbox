@@ -13,10 +13,12 @@ from pathlib import Path
 # ── Temp roots for this test process ────────────────────────────────────
 _TEST_ROOT = Path(tempfile.mkdtemp(prefix="pi_sandbox_pytest_"))
 _WORKSPACES = _TEST_ROOT / "workspaces"
+_TEMPS = _TEST_ROOT / "tmp-workspaces"
 _SKILLS = _TEST_ROOT / "skill"
 _DATA = _TEST_ROOT / "data"
 
 _WORKSPACES.mkdir(parents=True, exist_ok=True)
+_TEMPS.mkdir(parents=True, exist_ok=True)
 _SKILLS.mkdir(parents=True, exist_ok=True)
 _DATA.mkdir(parents=True, exist_ok=True)
 
@@ -25,6 +27,7 @@ _DATA.mkdir(parents=True, exist_ok=True)
 # /sandbox cannot break collection.
 os.environ["SANDBOX_DATABASE_URL"] = f"sqlite:///{_DATA / 'sandbox.db'}"
 os.environ["SANDBOX_WORKSPACES_ROOT"] = str(_WORKSPACES)
+os.environ["SANDBOX_TEMP_ROOT"] = str(_TEMPS)
 os.environ["SANDBOX_SKILLS_ROOT"] = str(_SKILLS)
 # Default allowlist includes loopback; pair with TestClient client=127.0.0.1 below.
 os.environ.setdefault(
@@ -38,8 +41,10 @@ def pytest_configure(config):  # noqa: ARG001
     """Re-assert env and ensure dirs exist early in the pytest lifecycle."""
     os.environ["SANDBOX_DATABASE_URL"] = f"sqlite:///{_DATA / 'sandbox.db'}"
     os.environ["SANDBOX_WORKSPACES_ROOT"] = str(_WORKSPACES)
+    os.environ["SANDBOX_TEMP_ROOT"] = str(_TEMPS)
     os.environ["SANDBOX_SKILLS_ROOT"] = str(_SKILLS)
     _WORKSPACES.mkdir(parents=True, exist_ok=True)
+    _TEMPS.mkdir(parents=True, exist_ok=True)
     _SKILLS.mkdir(parents=True, exist_ok=True)
     _DATA.mkdir(parents=True, exist_ok=True)
 

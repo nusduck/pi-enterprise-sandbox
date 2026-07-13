@@ -6,7 +6,13 @@ from fastapi import APIRouter, HTTPException, Request
 
 from sandbox.config import settings
 from sandbox.models import SessionCreate, SessionResponse, SessionStatus
-from sandbox.security.ownership import assert_session_owner, resolve_actor
+from sandbox.paths import conversation_workspace_id
+from sandbox.repositories import ConversationRepository
+from sandbox.security.ownership import (
+    assert_resource_owner,
+    assert_session_owner,
+    resolve_actor,
+)
 from sandbox.services.audit_logger import audit_logger
 from sandbox.services.session_manager import public_session_response, session_manager
 from sandbox.services.workspace_manager import (
@@ -15,6 +21,7 @@ from sandbox.services.workspace_manager import (
 )
 
 router = APIRouter(prefix="/sessions", tags=["sessions"])
+conversation_repository = ConversationRepository()
 
 
 @router.post("", response_model=SessionResponse, status_code=201)
@@ -29,6 +36,28 @@ def create_session(body: SessionCreate, request: Request):
     create_meta = dict(body.metadata or {})
     if actor is not None:
         create_meta.setdefault("organization_id", actor.organization_id)
+
+    if body.workspace_id and not body.conversation_id:
+        raise HTTPException(
+            status_code=400,
+            detail="workspace_id cannot be used without conversation_id",
+        )
+    if body.conversation_id:
+        conversation = conversation_repository.get(body.conversation_id)
+        if conversation is None:
+            raise HTTPException(status_code=404, detail="Conversation not found")
+        if actor is not None:
+            assert_resource_owner(
+                conversation,
+                actor,
+                not_found_detail="Conversation not found",
+            )
+        expected_workspace = conversation_workspace_id(body.conversation_id)
+        if body.workspace_id and body.workspace_id != expected_workspace:
+            raise HTTPException(
+                status_code=400,
+                detail="workspace_id does not match conversation binding",
+            )
 
     try:
         session = session_manager.create(
@@ -55,8 +84,11 @@ def create_session(body: SessionCreate, request: Request):
 
     # Ensure physical directory exists. Never rely on the global symlink.
     physical = (session.metadata or {}).get("_physical_workspace")
+    workspace_id = (session.metadata or {}).get("workspace_id") or session.workspace_id
     if physical:
         workspace_manager.activate_workspace(physical)  # no-op unless flag on
+        if workspace_id:
+            workspace_manager.init_temp(workspace_id)
     else:
         workspace_manager.init_workspace(session.session_id)
 
@@ -66,7 +98,6 @@ def create_session(body: SessionCreate, request: Request):
         meta["organization_id"] = actor.organization_id
     elif user_id:
         meta["user_id"] = user_id
-    workspace_id = (session.metadata or {}).get("workspace_id") or session.workspace_id
     if workspace_id:
         meta["workspace_id"] = workspace_id
 
@@ -125,6 +156,11 @@ def delete_session(session_id: str, request: Request):
     actor = resolve_actor(request) if settings.auth_enabled else None
     assert_session_owner(session, actor)
     session_manager.update_status(session_id, SessionStatus.COMPLETED)
+    from sandbox.services.execution_manager import execution_manager
+    from sandbox.services.process_manager import process_manager
+
+    execution_manager.cancel_active_workspace(session.workspace_id)
+    process_manager.cancel_for_workspace(session.workspace_id)
     # Only remove session-private trees (workspace_id == session_id).
     # Conversation workspaces are retained for rebind.
     meta = session.metadata or {}

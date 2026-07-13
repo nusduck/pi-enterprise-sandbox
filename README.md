@@ -63,6 +63,7 @@ pi-sandbox/
 ├── nginx/                ← 生产 Nginx + SSL
 ├── docs/                 ← 活跃文档（archive/ 与历史 PLAN 不作现行规范）
 ├── workspaces/           ← 会话工作区（运行时，按 workspace_id 隔离）
+├── tmp-workspaces/       ← Conversation 持久化 /tmp（按 tmp_{workspace_id} 隔离）
 ├── docker-compose.yml           ← 开发 4 服务编排
 ├── docker-compose.prod.yml      ← 生产 overlay（PostgreSQL + Nginx + SSL）
 └── .env.example          ← 环境变量模板（与部署文档一致）
@@ -109,6 +110,7 @@ SANDBOX_BASE_URL=http://localhost:8081
 | `SANDBOX_MAX_MEMORY_MB` | `512` | 内存上限 |
 | `SANDBOX_MAX_FILE_SIZE_MB` | `50` | 单文件大小上限 |
 | `SANDBOX_WORKSPACE_QUOTA_MB` | `500` | 工作区总空间上限 |
+| `SANDBOX_TEMP_QUOTA_MB` | `500` | Conversation 持久化 `/tmp` 空间上限 |
 
 ### 会话管理
 
@@ -181,11 +183,11 @@ node scripts/smoke-cross-service.mjs
 
 | 层级 | 措施 |
 |------|------|
-| 容器 | Docker 隔离，只读 root FS |
+| 进程 | 每次 Bash/Python/Node/process 经 Bubblewrap；只挂载当前 workspace、持久化 `/tmp` 和只读 Skills |
 | 网络 | iptables 默认 DROP 出站策略 |
 | 用户 | 子进程以非 root `sandbox` 用户运行 |
 | 资源 | ulimit: CPU / 内存 / 进程数 / 文件大小 |
-| 路径 | Session 工作区按 opaque `workspace_id` 隔离；工具路径相对 Session 根；物理路径不进入公共协议 |
+| 路径 | Conversation 工作区按 opaque `workspace_id` 隔离；接受相对路径、逻辑 workspace 路径和 `/tmp`；物理路径不进入公共协议 |
 | Skill | 发行零内置 package；默认只读；`SKILLS_MODE=development` 时仅专用 skill 工具可写 |
 | 命令 | 禁止 `sudo, su, rm -rf /, dd, mkfs, fdisk, chmod 777` |
 | 输出 | stdout/stderr 上限截断 |

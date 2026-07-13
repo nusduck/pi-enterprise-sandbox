@@ -2,19 +2,21 @@
 
 from __future__ import annotations
 
-import os
 import signal
 import threading
 import uuid
 from collections import defaultdict
 from datetime import datetime, timezone
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from sandbox.config import settings
 from sandbox.database import Database
+from sandbox.isolation import IsolationBackend, LaunchSpec, build_isolation_backend
 from sandbox.models import ExecutionStatus
+from sandbox.paths import temp_id_for_workspace_id
 from sandbox.repositories import ExecutionRepository
-from sandbox.security.safe_env import safe_env
+from sandbox.services.execution_context import SandboxExecutionContext
 from sandbox.services.execution_stream import (
     SOURCE_EXECUTION,
     execution_stream,
@@ -56,11 +58,13 @@ class ExecutionManager:
         database: Database | None = None,
         *,
         stream_hub: Any | None = None,
+        isolation_backend: IsolationBackend | None = None,
     ) -> None:
         self.repository = ExecutionRepository(database)
         self._stream = stream_hub if stream_hub is not None else execution_stream
+        self._isolation = isolation_backend or build_isolation_backend()
         self._executions: dict[str, dict] = {}
-        # session_id -> current running execution_id or None
+        # workspace_id -> current running execution_id or None
         self._session_locks: dict[str, str | None] = defaultdict(lambda: None)
         # Protects admission + status + process-handle maps
         self._lock = threading.RLock()
@@ -72,26 +76,43 @@ class ExecutionManager:
 
     def is_session_busy(self, session_id: str) -> bool:
         with self._lock:
-            return self._session_locks.get(session_id) is not None
+            return self.get_running_execution_id(session_id) is not None
+
+    def is_workspace_busy(self, workspace_id: str) -> bool:
+        """Return whether a synchronous execution owns this workspace lock."""
+        with self._lock:
+            execution_id = self._session_locks.get(workspace_id)
+            return bool(execution_id and execution_id in self._runner_active)
 
     def get_running_execution_id(self, session_id: str) -> str | None:
         with self._lock:
-            return self._session_locks.get(session_id)
+            for execution_id, entry in self._executions.items():
+                if (
+                    entry.get("session_id") == session_id
+                    and execution_id in self._runner_active
+                ):
+                    return execution_id
+            return None
 
-    def _admit(self, session_id: str, execution_id: str, entry: dict) -> dict | None:
-        """Atomically admit an execution for a session.
+    def _admit(
+        self,
+        workspace_id: str,
+        execution_id: str,
+        entry: dict,
+    ) -> dict | None:
+        """Atomically admit an execution for a workspace.
 
         Returns a conflict error dict if the session is busy, else None.
         """
         with self._lock:
-            if self._session_locks.get(session_id) is not None:
+            if self._session_locks.get(workspace_id) is not None:
                 return {
-                    "error": f"Session {session_id} already has a running execution",
+                    "error": f"Workspace {workspace_id} already has a running execution",
                     "status": "conflict",
                 }
             self._executions[execution_id] = entry
             self.repository.upsert(entry)
-            self._session_locks[session_id] = execution_id
+            self._session_locks[workspace_id] = execution_id
             self._runner_active.add(execution_id)
             self._total_count += 1
             return None
@@ -163,8 +184,9 @@ class ExecutionManager:
                 })
 
             self.repository.upsert(entry)
-            if self._session_locks.get(session_id) == execution_id:
-                self._session_locks[session_id] = None
+            workspace_id = entry.get("workspace_id") or session_id
+            if self._session_locks.get(workspace_id) == execution_id:
+                self._session_locks[workspace_id] = None
             self._cancel_requested.discard(execution_id)
             self._runner_active.discard(execution_id)
             return entry
@@ -175,6 +197,7 @@ class ExecutionManager:
         session_id: str,
         run_type: str,
         *,
+        workspace_id: str | None = None,
         run_id: str | None = None,
         command: str | None = None,
     ) -> dict[str, Any]:
@@ -182,13 +205,43 @@ class ExecutionManager:
         return {
             "execution_id": execution_id,
             "session_id": session_id,
+            "workspace_id": workspace_id or session_id,
             "status": ExecutionStatus.RUNNING,
             "run_type": run_type,
             "trace_id": get_trace_id(),
             "created_at": now,
             "run_id": run_id,
             "command": command,
+            "isolation_backend": self._isolation.name,
         }
+
+    @staticmethod
+    def _coerce_context(
+        session_id: str,
+        workspace_path: str | None,
+        context: SandboxExecutionContext | None,
+    ) -> SandboxExecutionContext:
+        if context is not None:
+            if context.session_id != session_id:
+                raise ValueError("Execution context does not belong to session")
+            return context
+        if not workspace_path:
+            raise ValueError("Execution context is required")
+        # Internal compatibility for existing unit/service callers. Public
+        # routers and MCP resolve a context from the trusted session binding.
+        workspace = Path(workspace_path).resolve()
+        workspace_id = workspace.name or session_id
+        temp_id = temp_id_for_workspace_id(workspace_id)
+        temp = (settings.temp_path / temp_id).resolve()
+        workspace.mkdir(parents=True, exist_ok=True)
+        temp.mkdir(parents=True, exist_ok=True)
+        return SandboxExecutionContext(
+            session_id=session_id,
+            workspace_id=workspace_id,
+            temp_id=temp_id,
+            physical_workspace=workspace,
+            physical_temp=temp,
+        )
 
     def _run_body(
         self,
@@ -196,7 +249,7 @@ class ExecutionManager:
         execution_id: str,
         entry: dict,
         cmd: list[str],
-        workspace_path: str,
+        context: SandboxExecutionContext,
         timeout: int,
         env_overrides: dict[str, str] | None,
     ) -> dict[str, Any]:
@@ -224,6 +277,17 @@ class ExecutionManager:
 
             env_overrides = env_overrides or {}
 
+            prepared = self._isolation.prepare(
+                LaunchSpec(
+                    context=context,
+                    argv=cmd,
+                    relative_cwd=PurePosixPath("."),
+                    env_overrides=env_overrides,
+                    network_mode=settings.network_mode,
+                )
+            )
+            entry["isolation_backend"] = prepared.backend
+
             def _on_started(proc: Any) -> None:
                 self._register_proc(execution_id, proc)
 
@@ -241,16 +305,11 @@ class ExecutionManager:
                     pass
 
             result = run_with_timeout(
-                cmd,
+                prepared.argv,
                 timeout=timeout,
                 max_output_chars=settings.max_output_chars,
-                env=safe_env(
-                    workspace_path=workspace_path,
-                    overrides=env_overrides,
-                    # Relative public contract — never leak physical roots via PWD.
-                    logical_workspace=".",
-                ),
-                cwd=workspace_path,
+                env=prepared.env,
+                cwd=prepared.cwd,
                 max_process_count=settings.max_process_count,
                 max_memory_mb=settings.max_memory_mb,
                 max_cpu_seconds=settings.max_cpu_time_seconds,
@@ -300,34 +359,50 @@ class ExecutionManager:
         self,
         session_id: str,
         code: str,
-        workspace_path: str,
+        workspace_path: str | None = None,
         timeout: int | None = None,
         env_overrides: dict[str, str] | None = None,
         run_id: str | None = None,
+        *,
+        context: SandboxExecutionContext | None = None,
     ) -> dict[str, Any]:
+        context = self._coerce_context(session_id, workspace_path, context)
         execution_id = f"exec_{uuid.uuid4().hex[:10]}"
         timeout = timeout or settings.execution_timeout_seconds
         entry = self._new_entry(
-            execution_id, session_id, "python", run_id=run_id, command="python3"
+            execution_id,
+            session_id,
+            "python",
+            workspace_id=context.workspace_id,
+            run_id=run_id,
+            command="python3",
         )
-        conflict = self._admit(session_id, execution_id, entry)
+        conflict = self._admit(context.workspace_id, execution_id, entry)
         if conflict is not None:
             return conflict
 
-        code_path = f"{workspace_path}/tmp/{execution_id}.py"
-        os.makedirs(os.path.dirname(code_path), exist_ok=True)
-        with open(code_path, "w") as f:
+        code_dir = context.physical_temp / ".pi-executions"
+        code_dir.mkdir(parents=True, exist_ok=True)
+        code_path = code_dir / f"{execution_id}.py"
+        with code_path.open("w", encoding="utf-8") as f:
             f.write(code)
-
-        return self._run_body(
-            session_id,
-            execution_id,
-            entry,
-            ["python3", "-u", code_path],
-            workspace_path,
-            timeout,
-            env_overrides,
+        payload_path = (
+            f"/tmp/.pi-executions/{execution_id}.py"
+            if self._isolation.name == "bubblewrap"
+            else str(code_path)
         )
+        try:
+            return self._run_body(
+                session_id,
+                execution_id,
+                entry,
+                ["python3", "-u", payload_path],
+                context,
+                timeout,
+                env_overrides,
+            )
+        finally:
+            code_path.unlink(missing_ok=True)
 
     # ── Command execution ────────────────────────────────────────
 
@@ -335,10 +410,12 @@ class ExecutionManager:
         self,
         session_id: str,
         command: str,
-        workspace_path: str,
+        workspace_path: str | None = None,
         timeout: int | None = None,
         env_overrides: dict[str, str] | None = None,
         run_id: str | None = None,
+        *,
+        context: SandboxExecutionContext | None = None,
     ) -> dict[str, Any]:
         # Network check before admission so blocked commands never hold the lock
         if settings.default_deny_network and contains_network_command(command):
@@ -351,12 +428,18 @@ class ExecutionManager:
                 "truncated": False,
             }
 
+        context = self._coerce_context(session_id, workspace_path, context)
         execution_id = f"exec_{uuid.uuid4().hex[:10]}"
         timeout = timeout or settings.execution_timeout_seconds
         entry = self._new_entry(
-            execution_id, session_id, "command", run_id=run_id, command=command
+            execution_id,
+            session_id,
+            "command",
+            workspace_id=context.workspace_id,
+            run_id=run_id,
+            command=command,
         )
-        conflict = self._admit(session_id, execution_id, entry)
+        conflict = self._admit(context.workspace_id, execution_id, entry)
         if conflict is not None:
             return conflict
 
@@ -365,7 +448,7 @@ class ExecutionManager:
             execution_id,
             entry,
             ["bash", "-c", command],
-            workspace_path,
+            context,
             timeout,
             env_overrides,
         )
@@ -376,34 +459,50 @@ class ExecutionManager:
         self,
         session_id: str,
         code: str,
-        workspace_path: str,
+        workspace_path: str | None = None,
         timeout: int | None = None,
         env_overrides: dict[str, str] | None = None,
         run_id: str | None = None,
+        *,
+        context: SandboxExecutionContext | None = None,
     ) -> dict[str, Any]:
+        context = self._coerce_context(session_id, workspace_path, context)
         execution_id = f"exec_{uuid.uuid4().hex[:10]}"
         timeout = timeout or settings.execution_timeout_seconds
         entry = self._new_entry(
-            execution_id, session_id, "node", run_id=run_id, command="node"
+            execution_id,
+            session_id,
+            "node",
+            workspace_id=context.workspace_id,
+            run_id=run_id,
+            command="node",
         )
-        conflict = self._admit(session_id, execution_id, entry)
+        conflict = self._admit(context.workspace_id, execution_id, entry)
         if conflict is not None:
             return conflict
 
-        code_path = f"{workspace_path}/tmp/{execution_id}.js"
-        os.makedirs(os.path.dirname(code_path), exist_ok=True)
-        with open(code_path, "w") as f:
+        code_dir = context.physical_temp / ".pi-executions"
+        code_dir.mkdir(parents=True, exist_ok=True)
+        code_path = code_dir / f"{execution_id}.js"
+        with code_path.open("w", encoding="utf-8") as f:
             f.write(code)
-
-        return self._run_body(
-            session_id,
-            execution_id,
-            entry,
-            ["node", code_path],
-            workspace_path,
-            timeout,
-            env_overrides,
+        payload_path = (
+            f"/tmp/.pi-executions/{execution_id}.js"
+            if self._isolation.name == "bubblewrap"
+            else str(code_path)
         )
+        try:
+            return self._run_body(
+                session_id,
+                execution_id,
+                entry,
+                ["node", payload_path],
+                context,
+                timeout,
+                env_overrides,
+            )
+        finally:
+            code_path.unlink(missing_ok=True)
 
     # ── Query / cancel ───────────────────────────────────────────
 
@@ -516,9 +615,9 @@ class ExecutionManager:
             # If the runner is still active it owns lock release via _finalize.
             # Only release here when there is no active runner (orphan / race).
             if not runner_active and execution_id not in self._runner_active:
-                sid = entry.get("session_id")
-                if sid and self._session_locks.get(sid) == execution_id:
-                    self._session_locks[sid] = None
+                lock_key = entry.get("workspace_id") or entry.get("session_id")
+                if lock_key and self._session_locks.get(lock_key) == execution_id:
+                    self._session_locks[lock_key] = None
                 self._cancel_requested.discard(execution_id)
                 self._active_procs.pop(execution_id, None)
             return True
@@ -533,6 +632,15 @@ class ExecutionManager:
             return None
         self.cancel(exec_id)
         return self.get(exec_id)
+
+    def cancel_active_workspace(self, workspace_id: str) -> dict | None:
+        """Cancel the execution mounted on a stable workspace, if any."""
+        with self._lock:
+            execution_id = self._session_locks.get(workspace_id)
+        if not execution_id:
+            return None
+        self.cancel(execution_id)
+        return self.get(execution_id)
 
     @property
     def total_count(self) -> int:

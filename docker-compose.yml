@@ -142,6 +142,7 @@ services:
       - ${SANDBOX_SKILLS_MOUNT:-./skills:/sandbox/skills:ro}
       - ${SANDBOX_SKILLS_MOUNT:-./skills:/app/.pi/skills:ro}
       - ${SANDBOX_WORKSPACES_MOUNT:-./workspaces:/var/sandbox/workspaces}
+      - ${SANDBOX_TEMP_MOUNT:-./tmp-workspaces:/var/sandbox/tmp}
       - ${SANDBOX_DATA_VOLUME:-sandbox_data}:/sandbox/data
     environment:
       DEPLOYMENT_ENV: ${DEPLOYMENT_ENV:-development}
@@ -155,7 +156,13 @@ services:
       SANDBOX_LOG_LEVEL: ${SANDBOX_LOG_LEVEL:-INFO}
       SANDBOX_DATABASE_URL: ${SANDBOX_DATABASE_URL:-sqlite:////sandbox/data/sandbox.db}
       SANDBOX_WORKSPACES_ROOT: /var/sandbox/workspaces
+      SANDBOX_TEMP_ROOT: /var/sandbox/tmp
       SANDBOX_SKILLS_ROOT: /home/sandbox/skill
+      SANDBOX_ISOLATION_BACKEND: ${SANDBOX_ISOLATION_BACKEND:-bubblewrap}
+      SANDBOX_ISOLATION_REQUIRED: ${SANDBOX_ISOLATION_REQUIRED:-true}
+      SANDBOX_BWRAP_PATH: ${SANDBOX_BWRAP_PATH:-/usr/bin/bwrap}
+      SANDBOX_BWRAP_UID: ${SANDBOX_BWRAP_UID:-10001}
+      SANDBOX_BWRAP_GID: ${SANDBOX_BWRAP_GID:-10001}
       SANDBOX_EXECUTION_TIMEOUT_SECONDS: ${SANDBOX_EXECUTION_TIMEOUT_SECONDS:-120}
       SANDBOX_MAX_OUTPUT_CHARS: ${SANDBOX_MAX_OUTPUT_CHARS:-50000}
       SANDBOX_MAX_PROCESS_COUNT: ${SANDBOX_MAX_PROCESS_COUNT:-20}
@@ -163,6 +170,7 @@ services:
       SANDBOX_MAX_MEMORY_MB: ${SANDBOX_MAX_MEMORY_MB:-512}
       SANDBOX_MAX_FILE_SIZE_MB: ${SANDBOX_MAX_FILE_SIZE_MB:-50}
       SANDBOX_WORKSPACE_QUOTA_MB: ${SANDBOX_WORKSPACE_QUOTA_MB:-500}
+      SANDBOX_TEMP_QUOTA_MB: ${SANDBOX_TEMP_QUOTA_MB:-500}
       SANDBOX_SESSION_TTL_MINUTES: ${SANDBOX_SESSION_TTL_MINUTES:-30}
       SANDBOX_CLEANUP_INTERVAL_MINUTES: ${SANDBOX_CLEANUP_INTERVAL_MINUTES:-5}
       # Single outbound network mode (disabled|allowlist|unrestricted).
@@ -195,7 +203,7 @@ services:
       LC_ALL: C.UTF-8
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8081/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:8081/ready"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -203,6 +211,13 @@ services:
     cap_add:
       - NET_ADMIN
       - NET_RAW
+    security_opt:
+      # Docker's default seccomp profile blocks the namespace/mount syscalls
+      # Bubblewrap needs. This repo profile narrowly adds its child/user/mount
+      # namespace operations without granting CAP_SYS_ADMIN.
+      - seccomp=./sandbox/seccomp-bubblewrap.json
+      # Allow the unprivileged mount namespace to mount its private /proc.
+      - systempaths=unconfined
 
 volumes:
   sandbox_data:

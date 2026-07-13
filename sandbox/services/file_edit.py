@@ -17,7 +17,10 @@ from pathlib import Path
 
 from sandbox.config import settings
 from sandbox.models import FileEditResponse
-from sandbox.security.path_validation import enforce_path_within_workspace
+from sandbox.security.path_validation import (
+    enforce_path_within_workspace,
+    resolve_sandbox_path,
+)
 
 
 def content_sha256(content: str) -> str:
@@ -327,8 +330,18 @@ def plan_apply_patch(
 class FileEditService:
     """Workspace-scoped edit / apply_patch operations."""
 
-    def _read_text(self, workspace_path: str, user_path: str) -> tuple[Path, str]:
-        safe = enforce_path_within_workspace(workspace_path, user_path)
+    def _read_text(
+        self,
+        workspace_path: str,
+        user_path: str,
+        temp_path: str | None = None,
+    ) -> tuple[Path, str, str]:
+        if temp_path is None:
+            safe = enforce_path_within_workspace(workspace_path, user_path)
+            public_path = user_path
+        else:
+            parsed, safe = resolve_sandbox_path(workspace_path, temp_path, user_path)
+            public_path = parsed.as_public()
         if not safe.exists():
             raise FileNotFoundError(f"file not found: {user_path}")
         if not safe.is_file():
@@ -341,7 +354,7 @@ class FileEditService:
                 f"({size} bytes)"
             )
         content = safe.read_text(encoding="utf-8", errors="replace")
-        return safe, content
+        return safe, content, public_path
 
     def _write_text(self, safe: Path, content: str) -> None:
         content_bytes = content.encode("utf-8")
@@ -361,9 +374,12 @@ class FileEditService:
         new_string: str,
         *,
         expected_hash: str | None = None,
+        temp_path: str | None = None,
     ) -> FileEditResponse:
         try:
-            safe, content = self._read_text(workspace_path, user_path)
+            safe, content, public_path = self._read_text(
+                workspace_path, user_path, temp_path
+            )
         except FileNotFoundError as exc:
             return FileEditResponse(path=user_path, ok=False, error=str(exc))
         except ValueError as exc:
@@ -373,21 +389,21 @@ class FileEditService:
             content,
             old_string,
             new_string,
-            path=user_path,
+            path=public_path,
             expected_hash=expected_hash,
         )
         if not plan.ok:
-            return plan.to_response(user_path)
+            return plan.to_response(public_path)
         try:
             self._write_text(safe, plan.after)
         except ValueError as exc:
             return FileEditResponse(
-                path=user_path,
+                path=public_path,
                 before_hash=plan.before_hash,
                 ok=False,
                 error=str(exc),
             )
-        return plan.to_response(user_path)
+        return plan.to_response(public_path)
 
     def apply_patch(
         self,
@@ -396,29 +412,32 @@ class FileEditService:
         patch: str,
         *,
         expected_hash: str | None = None,
+        temp_path: str | None = None,
     ) -> FileEditResponse:
         try:
-            safe, content = self._read_text(workspace_path, user_path)
+            safe, content, public_path = self._read_text(
+                workspace_path, user_path, temp_path
+            )
         except FileNotFoundError as exc:
             return FileEditResponse(path=user_path, ok=False, error=str(exc))
         except ValueError as exc:
             return FileEditResponse(path=user_path, ok=False, error=str(exc))
 
         plan = plan_apply_patch(
-            content, patch, path=user_path, expected_hash=expected_hash
+            content, patch, path=public_path, expected_hash=expected_hash
         )
         if not plan.ok:
-            return plan.to_response(user_path)
+            return plan.to_response(public_path)
         try:
             self._write_text(safe, plan.after)
         except ValueError as exc:
             return FileEditResponse(
-                path=user_path,
+                path=public_path,
                 before_hash=plan.before_hash,
                 ok=False,
                 error=str(exc),
             )
-        return plan.to_response(user_path)
+        return plan.to_response(public_path)
 
 
 file_edit_service = FileEditService()

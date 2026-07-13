@@ -5,6 +5,7 @@ FROM python:3.11-slim AS sandbox-base
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     ca-certificates \
+    bubblewrap \
     gosu \
     iptables \
     git \
@@ -33,12 +34,13 @@ RUN groupadd -g 10001 sandbox && \
         /home/sandbox/workspace \
         /home/sandbox/skill \
         /var/sandbox/workspaces \
+        /var/sandbox/tmp \
         /sandbox/workspace \
         /sandbox/skills \
         /sandbox/data && \
     # Keep legacy /sandbox/* paths as compatibility pointers into the P3 layout
     ln -sfn /home/sandbox/skill /sandbox/skills-link || true && \
-    chmod 0311 /var/sandbox/workspaces && \
+    chmod 0700 /var/sandbox/workspaces /var/sandbox/tmp && \
     chown -R sandbox:sandbox /home/sandbox /sandbox /var/sandbox
 
 WORKDIR /app

@@ -9,7 +9,11 @@ from pathlib import Path
 
 from sandbox.config import settings
 from sandbox.models import FileInfo, FileResponse
-from sandbox.security.path_validation import enforce_path_within_workspace
+from sandbox.paths import SandboxPath, SandboxPathScope
+from sandbox.security.path_validation import (
+    enforce_path_within_workspace,
+    resolve_sandbox_path,
+)
 
 
 def workspace_size_bytes(path: str | Path) -> int:
@@ -38,14 +42,26 @@ class FileManager:
     All paths are validated against workspace boundaries.
     """
 
+    @staticmethod
+    def _resolve(
+        workspace_path: str,
+        user_path: str,
+        temp_path: str | None,
+    ) -> tuple[SandboxPath | None, Path]:
+        if temp_path is None:
+            return None, enforce_path_within_workspace(workspace_path, user_path)
+        return resolve_sandbox_path(workspace_path, temp_path, user_path)
+
     def read_file(
         self, workspace_path: str, user_path: str,
         offset: int | None = None, limit: int | None = None,
+        *, temp_path: str | None = None,
     ) -> FileResponse:
-        safe = enforce_path_within_workspace(workspace_path, user_path)
+        parsed, safe = self._resolve(workspace_path, user_path, temp_path)
+        public_path = parsed.as_public() if parsed is not None else user_path
         if not safe.is_file():
             return FileResponse(
-                path=user_path, content="", size=0,
+                path=public_path, content="", size=0,
                 mime_type="text/plain",
             )
 
@@ -72,21 +88,23 @@ class FileManager:
                 with open(safe, "r", encoding="utf-8", errors="replace") as f:
                     content = f.read(max_read)
                 return FileResponse(
-                    path=user_path, content=content, size=size,
+                    path=public_path, content=content, size=size,
                     truncated=True, mime_type=mime_type,
                 )
             content = safe.read_text(encoding="utf-8", errors="replace")
 
         return FileResponse(
-            path=user_path, content=content, size=size,
+            path=public_path, content=content, size=size,
             truncated=False, mime_type=mime_type,
         )
 
     def write_file(
         self, workspace_path: str, user_path: str,
         content: str, mode: str = "w",
+        *, temp_path: str | None = None,
     ) -> FileResponse:
-        safe = enforce_path_within_workspace(workspace_path, user_path)
+        parsed, safe = self._resolve(workspace_path, user_path, temp_path)
+        public_path = parsed.as_public() if parsed is not None else user_path
         safe.parent.mkdir(parents=True, exist_ok=True)
 
         # Check file size limit
@@ -98,8 +116,24 @@ class FileManager:
             )
 
         # Enforce workspace quota before writing
-        self._enforce_workspace_quota(
-            workspace_path, safe, len(content_bytes), mode=mode,
+        storage_root = (
+            temp_path
+            if parsed is not None and parsed.scope == SandboxPathScope.TEMP
+            else workspace_path
+        )
+        quota_mb = (
+            settings.temp_quota_mb
+            if parsed is not None and parsed.scope == SandboxPathScope.TEMP
+            else settings.workspace_quota_mb
+        )
+        quota_name = (
+            "Temp"
+            if parsed is not None and parsed.scope == SandboxPathScope.TEMP
+            else "Workspace"
+        )
+        self._enforce_storage_quota(
+            str(storage_root), safe, len(content_bytes), mode=mode,
+            quota_mb=quota_mb, quota_name=quota_name,
         )
 
         with open(safe, "w" if mode == "w" else "a",
@@ -108,12 +142,13 @@ class FileManager:
 
         mime_type, _ = mimetypes.guess_type(str(safe))
         return FileResponse(
-            path=user_path, content="", size=len(content_bytes),
+            path=public_path, content="", size=len(content_bytes),
             mime_type=mime_type or "text/plain",
         )
 
     def write_binary(
         self, workspace_path: str, user_path: str, content: bytes,
+        *, temp_path: str | None = None,
     ) -> FileResponse:
         """Write exact bytes to a workspace path (atomic temp + replace).
 
@@ -123,7 +158,8 @@ class FileManager:
         if not isinstance(content, (bytes, bytearray)):
             raise TypeError("write_binary requires bytes content")
 
-        safe = enforce_path_within_workspace(workspace_path, user_path)
+        parsed, safe = self._resolve(workspace_path, user_path, temp_path)
+        public_path = parsed.as_public() if parsed is not None else user_path
         safe.parent.mkdir(parents=True, exist_ok=True)
 
         data = bytes(content)
@@ -133,8 +169,24 @@ class FileManager:
                 f"Content exceeds max file size of {settings.max_file_size_mb}MB"
             )
 
-        self._enforce_workspace_quota(
-            workspace_path, safe, len(data), mode="w",
+        storage_root = (
+            temp_path
+            if parsed is not None and parsed.scope == SandboxPathScope.TEMP
+            else workspace_path
+        )
+        quota_mb = (
+            settings.temp_quota_mb
+            if parsed is not None and parsed.scope == SandboxPathScope.TEMP
+            else settings.workspace_quota_mb
+        )
+        quota_name = (
+            "Temp"
+            if parsed is not None and parsed.scope == SandboxPathScope.TEMP
+            else "Workspace"
+        )
+        self._enforce_storage_quota(
+            str(storage_root), safe, len(data), mode="w",
+            quota_mb=quota_mb, quota_name=quota_name,
         )
 
         # Write to a temp file in the target directory, then atomically replace.
@@ -156,20 +208,23 @@ class FileManager:
 
         mime_type, _ = mimetypes.guess_type(str(safe))
         return FileResponse(
-            path=user_path, content="", size=len(data),
+            path=public_path, content="", size=len(data),
             mime_type=mime_type or "application/octet-stream",
         )
 
     @staticmethod
-    def _enforce_workspace_quota(
-        workspace_path: str,
+    def _enforce_storage_quota(
+        storage_path: str,
         target: Path,
         new_bytes: int,
         mode: str = "w",
+        quota_mb: int | None = None,
+        quota_name: str = "Workspace",
     ) -> None:
-        """Raise ValueError if the write would exceed ``settings.workspace_quota_mb``."""
-        quota_bytes = settings.workspace_quota_mb * 1024 * 1024
-        current = workspace_size_bytes(workspace_path)
+        """Raise ValueError if a workspace/temp write exceeds its quota."""
+        effective_quota_mb = settings.workspace_quota_mb if quota_mb is None else quota_mb
+        quota_bytes = effective_quota_mb * 1024 * 1024
+        current = workspace_size_bytes(storage_path)
 
         existing = 0
         if target.is_file():
@@ -186,15 +241,16 @@ class FileManager:
 
         if projected > quota_bytes:
             raise ValueError(
-                f"Workspace quota exceeded: write would use ~{projected} bytes "
-                f"but quota is {settings.workspace_quota_mb}MB "
+                f"{quota_name} quota exceeded: write would use ~{projected} bytes "
+                f"but quota is {effective_quota_mb}MB "
                 f"({quota_bytes} bytes). Current usage: {current} bytes."
             )
 
     def list_files(
         self, workspace_path: str, user_path: str = ".",
+        *, temp_path: str | None = None,
     ) -> list[FileInfo]:
-        safe = enforce_path_within_workspace(workspace_path, user_path)
+        _parsed, safe = self._resolve(workspace_path, user_path, temp_path)
         if not safe.is_dir():
             return []
 
@@ -218,9 +274,10 @@ class FileManager:
 
     def delete_file(
         self, workspace_path: str, user_path: str,
+        *, temp_path: str | None = None,
     ) -> bool:
         """Delete a file (not directory). Returns True if deleted."""
-        safe = enforce_path_within_workspace(workspace_path, user_path)
+        _parsed, safe = self._resolve(workspace_path, user_path, temp_path)
         if safe.is_file():
             safe.unlink()
             return True
@@ -228,14 +285,16 @@ class FileManager:
 
     def get_file_path(
         self, workspace_path: str, user_path: str,
+        *, temp_path: str | None = None,
     ) -> Path:
-        return enforce_path_within_workspace(workspace_path, user_path)
+        return self._resolve(workspace_path, user_path, temp_path)[1]
 
     def get_binary_path(
         self, workspace_path: str, user_path: str,
+        *, temp_path: str | None = None,
     ) -> Path:
         """Resolve path for binary file download (no content read)."""
-        return enforce_path_within_workspace(workspace_path, user_path)
+        return self._resolve(workspace_path, user_path, temp_path)[1]
 
 
 file_manager = FileManager()

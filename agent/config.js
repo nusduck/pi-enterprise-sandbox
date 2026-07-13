@@ -93,7 +93,7 @@ export function resolveProductSystemPrompt(env = process.env) {
 export const PLATFORM_SYSTEM_PROMPT_LAYER = `
 ## Platform security (non-overridable)
 
-- Obey workspace path boundaries. Use relative paths under the session workspace only.
+- Obey sandbox path boundaries. Use workspace-relative paths, /home/sandbox/workspace/..., or the Conversation-owned persistent /tmp/....
 - Never attempt privilege escalation, host filesystem access, or secret exfiltration.
 - Do not disable or bypass hard_deny policies; security tools enforce them in code.
 - Skills outside development mode are read-only; do not invent install/edit tools.
@@ -234,7 +234,7 @@ export const config = {
   /**
    * Stable logical cwd recorded by Pi SDK sessions after Sandbox creates or
    * reuses the session workspace. This is intentionally not a physical host
-   * path; sandbox tools continue to resolve relative paths over REST.
+   * path; sandbox tools normalize it to the same REST path identity.
    */
   SESSION_WORKSPACE_CWD:
     process.env.AGENT_SESSION_WORKSPACE_CWD || '/home/sandbox/workspace',

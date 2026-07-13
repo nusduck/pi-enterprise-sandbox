@@ -50,6 +50,8 @@ async def create_session(
     user_id: str | None = None,
     caller_id: str = "mcp",
     metadata: dict[str, Any] | None = None,
+    conversation_id: str | None = None,
+    workspace_id: str | None = None,
 ) -> dict[str, Any]:
     """Create a new sandbox session with an isolated workspace."""
     return await adapter.create_session(
@@ -57,6 +59,8 @@ async def create_session(
         user_id=user_id,
         caller_id=caller_id,
         metadata=metadata,
+        conversation_id=conversation_id,
+        workspace_id=workspace_id,
     )
 
 
@@ -64,7 +68,7 @@ async def create_session(
 
 @mcp_app.tool()
 async def close_session(session_id: str) -> dict[str, Any]:
-    """Close a sandbox session and remove its workspace."""
+    """Close a session; conversation-owned storage remains persistent."""
     return await adapter.close_session(session_id=session_id)
 
 

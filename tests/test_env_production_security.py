@@ -35,6 +35,8 @@ def _production_kwargs(**overrides):
         "jwt_audience": "pi-enterprise-sandbox",
         "auth_allow_public_register": False,
         "network_mode": "disabled",
+        "isolation_backend": "bubblewrap",
+        "isolation_required": True,
         "cors_origins": ["https://app.example.com"],
         "cors_allow_credentials": True,
         "debug": False,

@@ -20,11 +20,10 @@ from sandbox.models import (
     ProcessStdinRequest,
     ProcessWaitRequest,
 )
-from sandbox.paths import ensure_physical_workspace
 from sandbox.services.policy_checker import policy_checker
 from sandbox.services.process_manager import process_manager
+from sandbox.services.execution_context import SandboxExecutionContext
 from sandbox.services.session_manager import session_manager
-from sandbox.services.workspace_manager import workspace_manager
 
 router = APIRouter(prefix="/processes", tags=["processes"])
 
@@ -36,12 +35,6 @@ def _require_session(session_id: str):
     if session.status != "RUNNING":
         raise HTTPException(status_code=400, detail="Session is not active")
     return session
-
-
-def _workspace_cwd(session) -> str:
-    physical = ensure_physical_workspace(session)
-    workspace_manager.activate_workspace(physical)
-    return str(physical)
 
 
 def _to_response(entry: dict) -> ProcessResponse:
@@ -72,11 +65,11 @@ def start_process(body: ProcessStartRequest):
         token = body.command.strip().split()[0] if body.command.strip() else "command"
         raise HTTPException(status_code=403, detail=f"blocked command: {token}")
 
-    ws = _workspace_cwd(session)
+    context = SandboxExecutionContext.from_session(session)
     result = process_manager.start(
         session_id=body.session_id,
         command=body.command,
-        workspace_path=ws,
+        context=context,
         cwd=body.cwd,
         env=body.env or None,
         timeout=body.timeout,

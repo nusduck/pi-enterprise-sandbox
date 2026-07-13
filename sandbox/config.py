@@ -28,6 +28,7 @@ _LOCAL_DATA_ROOT = Path.home() / ".pi-enterprise-sandbox"
 
 DeploymentEnv = Literal["development", "production"]
 NetworkMode = Literal["disabled", "allowlist", "unrestricted"]
+IsolationBackendName = Literal["direct", "bubblewrap"]
 
 # Production JWT secret must be high-entropy (recommend: openssl rand -hex 32).
 _MIN_JWT_SECRET_LEN = 32
@@ -125,18 +126,32 @@ class Settings(BaseSettings):
 
     # ── Paths (physical storage) ─────────────────────────────────────
     # Physical per-session workspaces live under workspaces_root/{workspace_id}.
-    # Public API/SSE/tools use opaque workspace_id + relative paths only.
+    # Public surfaces use opaque workspace_id plus relative/logical paths;
+    # physical storage paths never leave the Sandbox service.
     workspaces_root: str = str(_LOCAL_DATA_ROOT / "workspaces")
+    # Persistent per-workspace temp trees live under temp_root/tmp_{workspace_id}.
+    # Untrusted executions see the selected tree as /tmp.
+    temp_root: str = str(_LOCAL_DATA_ROOT / "tmp-workspaces")
     # Shared skills tree (read-only in containers).
     skills_root: str = str(_LOCAL_DATA_ROOT / "skill")
 
-    # Legacy absolute presentation paths (internal only; not public contract).
+    # Stable Agent-visible logical roots; never physical storage paths.
     agent_workspace_path: str = AGENT_WORKSPACE_PATH
     agent_skill_path: str = AGENT_SKILL_PATH
 
     # Global presentation symlink is concurrent-unsafe; off by default.
-    # Prefer physical per-session cwd + relative path contract on public surfaces.
+    # Bubblewrap provides the concurrent-safe logical mount; the global symlink
+    # remains disabled compatibility code.
     enable_global_workspace_symlink: bool = False
+
+    # ── Process isolation ────────────────────────────────────────────
+    # Host tests/local Python default to direct. Compose explicitly enables
+    # bubblewrap; production validation requires it and fail-closed readiness.
+    isolation_backend: str = "direct"
+    isolation_required: bool = False
+    bwrap_path: str = "/usr/bin/bwrap"
+    bwrap_uid: int = 10001
+    bwrap_gid: int = 10001
 
     # ── Resource limits ──────────────────────────────────────────────
     execution_timeout_seconds: int = 120
@@ -148,6 +163,7 @@ class Settings(BaseSettings):
     max_memory_mb: int = 512
     max_file_size_mb: int = 50
     workspace_quota_mb: int = 500
+    temp_quota_mb: int = 500
     # Attachment upload limits (parent task P-00F1 defaults)
     max_attachments_per_turn: int = 10
     max_turn_attachment_mb: int = 200
@@ -338,6 +354,10 @@ class Settings(BaseSettings):
         return Path(self.workspaces_root)
 
     @property
+    def temp_path(self) -> Path:
+        return Path(self.temp_root)
+
+    @property
     def skills_path(self) -> Path:
         return Path(self.skills_root)
 
@@ -374,6 +394,11 @@ def validate_production_settings(s: Settings | None = None) -> None:
             "SANDBOX_NETWORK_MODE=unrestricted is forbidden in production "
             "(use disabled or allowlist)"
         )
+
+    if cfg.isolation_backend != "bubblewrap":
+        errors.append("SANDBOX_ISOLATION_BACKEND must be bubblewrap in production")
+    if not cfg.isolation_required:
+        errors.append("SANDBOX_ISOLATION_REQUIRED must be true in production")
 
     origins = [o.strip() for o in (cfg.cors_origins or []) if o and str(o).strip()]
     if not origins:

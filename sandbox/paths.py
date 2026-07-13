@@ -1,9 +1,10 @@
-"""Relative workspace path contract and physical-workspace helpers.
+"""Logical sandbox path contract and physical-root helpers.
 
 Public contract (API / SSE / model context / tools / logs):
 
-- Tool and file paths are **relative to the session workspace root**
-  (e.g. ``notes/a.txt``, ``.``, ``uploads/…``).
+- Relative paths address the session workspace (e.g. ``notes/a.txt``).
+- ``/home/sandbox/workspace/...`` is the accepted logical workspace form.
+- ``/tmp/...`` addresses the conversation-owned persistent temp tree.
 - Workspaces are identified only by opaque ``workspace_id``.
 - Physical host paths must never appear on public surfaces; redact them to
   ``<workspace>``.
@@ -19,7 +20,10 @@ Internal only (service / repository):
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
+from pathlib import PurePosixPath
 from typing import Any
 
 # ── Public redaction tokens ─────────────────────────────────────────────
@@ -31,11 +35,14 @@ PUBLIC_WORKSPACE_TOKEN = "<workspace>"
 # still use this absolute root; session file tools do not.
 AGENT_SKILL_PATH = "/home/sandbox/skill"
 
-# Deprecated legacy absolute logical workspace path. Not part of the public
-# API/SSE/tool contract. Kept only for optional presentation-symlink internals
-# and historical constant imports.
+# Stable Agent-visible logical workspace path. The historical constant name is
+# retained because several integrations already import it.
 LEGACY_AGENT_WORKSPACE_PATH = "/home/sandbox/workspace"
 AGENT_WORKSPACE_PATH = LEGACY_AGENT_WORKSPACE_PATH  # internal alias
+
+# Agent-visible persistent temp root. Its physical backing is resolved from
+# the current workspace identity and never appears on public surfaces.
+AGENT_TEMP_PATH = "/tmp"
 
 # Backward-compat alias used only for optional single-session presentation.
 LEGACY_WORKSPACE_LINK = "/sandbox/workspace"
@@ -55,8 +62,44 @@ def conversation_workspace_id(conversation_id: str) -> str:
     return f"conv_{conversation_id}"
 
 
+def temp_id_for_workspace_id(workspace_id: str) -> str:
+    """Stable persistent-temp identity paired with an opaque workspace id."""
+    if not workspace_id or "/" in workspace_id or "\\" in workspace_id:
+        raise ValueError("Invalid workspace id for temp storage")
+    return f"tmp_{workspace_id}"
+
+
+class SandboxPathScope(str, Enum):
+    WORKSPACE = "workspace"
+    TEMP = "temp"
+
+
+@dataclass(frozen=True)
+class SandboxPath:
+    """Validated logical path in the workspace or persistent temp tree."""
+
+    scope: SandboxPathScope
+    relative: PurePosixPath
+
+    def as_public(self) -> str:
+        """Canonical public form preserving legacy relative workspace paths."""
+        relative = self.relative.as_posix()
+        if self.scope == SandboxPathScope.WORKSPACE:
+            return "." if relative == "." else relative
+        return AGENT_TEMP_PATH if relative == "." else f"{AGENT_TEMP_PATH}/{relative}"
+
+    def as_logical(self) -> str:
+        root = (
+            LEGACY_AGENT_WORKSPACE_PATH
+            if self.scope == SandboxPathScope.WORKSPACE
+            else AGENT_TEMP_PATH
+        )
+        relative = self.relative.as_posix()
+        return root if relative == "." else f"{root}/{relative}"
+
+
 def is_legacy_logical_workspace_path(path: str | None) -> bool:
-    """Return True if *path* is the deprecated absolute logical workspace root."""
+    """Return True if *path* uses the accepted logical workspace root."""
     if not path:
         return False
     p = path.rstrip("/")
@@ -140,9 +183,45 @@ def get_session_physical_workspace(session: Any) -> str:
     return str(settings.workspaces_path)
 
 
+def get_session_temp_id(session: Any) -> str:
+    """Return stable temp id derived from the session workspace identity."""
+    metadata = getattr(session, "metadata", None)
+    if metadata is None and isinstance(session, dict):
+        metadata = session.get("metadata")
+    if isinstance(metadata, dict):
+        temp_id = metadata.get("_temp_id")
+        if temp_id:
+            return str(temp_id)
+    workspace_id = get_session_workspace_id(session)
+    if not workspace_id:
+        raise ValueError("Session has no workspace identity")
+    return temp_id_for_workspace_id(workspace_id)
+
+
+def get_session_physical_temp(session: Any) -> str:
+    """Return the internal physical persistent-temp root for a session."""
+    from sandbox.config import settings
+
+    metadata = getattr(session, "metadata", None)
+    if metadata is None and isinstance(session, dict):
+        metadata = session.get("metadata")
+    if isinstance(metadata, dict):
+        physical = metadata.get("_physical_temp")
+        if physical:
+            return str(physical)
+    return str(settings.temp_path / get_session_temp_id(session))
+
+
 def ensure_physical_workspace(session: Any) -> Path:
     """Resolve physical workspace and create the directory if missing."""
     path = Path(get_session_physical_workspace(session))
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def ensure_physical_temp(session: Any) -> Path:
+    """Resolve and create the persistent temp tree for a session."""
+    path = Path(get_session_physical_temp(session))
     path.mkdir(parents=True, exist_ok=True)
     return path
 
@@ -168,6 +247,8 @@ def sanitize_path_error(
         roots.append(str(physical_workspace))
     roots.append(str(settings.workspaces_path))
     roots.append(str(settings.workspaces_root))
+    roots.append(str(settings.temp_path))
+    roots.append(str(settings.temp_root))
     roots.extend(_DEFAULT_PHYSICAL_PREFIXES)
     if extra_roots:
         roots.extend(extra_roots)

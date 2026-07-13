@@ -21,6 +21,7 @@ from sandbox.config import settings
 from sandbox.paths import (
     LEGACY_AGENT_WORKSPACE_PATH,
     conversation_workspace_id,
+    temp_id_for_workspace_id,
 )
 
 logger = logging.getLogger("sandbox.workspace")
@@ -168,6 +169,10 @@ class WorkspaceManager:
         """Return physical root for a workspace_id (may not exist yet)."""
         return settings.workspaces_path / workspace_id
 
+    def physical_temp_path_for_workspace_id(self, workspace_id: str) -> Path:
+        """Return persistent-temp root paired with *workspace_id*."""
+        return settings.temp_path / temp_id_for_workspace_id(workspace_id)
+
     def init_workspace(self, session_id: str) -> Path:
         """Create an **empty** workspace directory for a sandbox session (P2).
 
@@ -177,7 +182,26 @@ class WorkspaceManager:
         """
         ws = settings.workspaces_path / session_id
         ws.mkdir(parents=True, exist_ok=True)
+        self.init_temp(session_id)
         return ws
+
+    def init_temp(self, workspace_id: str) -> Path:
+        """Create persistent temp storage for an opaque workspace identity."""
+        root = settings.temp_path.resolve()
+        root.mkdir(parents=True, exist_ok=True)
+        temp = (root / temp_id_for_workspace_id(workspace_id)).resolve()
+        try:
+            if not temp.is_relative_to(root):
+                raise PermissionError("Persistent temp escapes configured temp root")
+        except AttributeError:  # pragma: no cover
+            if os.path.commonpath([str(root), str(temp)]) != str(root):
+                raise PermissionError("Persistent temp escapes configured temp root")
+        temp.mkdir(parents=True, exist_ok=True)
+        try:
+            temp.chmod(0o700)
+        except OSError:
+            pass
+        return temp
 
     def init_conversation_workspace(self, conversation_id: str) -> Path:
         """Create a persistent workspace directory for a conversation session.
@@ -204,6 +228,7 @@ class WorkspaceManager:
                     "Conversation workspace escapes workspaces root"
                 )
         ws.mkdir(parents=True, exist_ok=True)
+        self.init_temp(workspace_id)
         return ws
 
     def remove_workspace(self, session_id: str) -> None:
@@ -211,6 +236,9 @@ class WorkspaceManager:
         ws = settings.workspaces_path / session_id
         if ws.exists():
             shutil.rmtree(str(ws), ignore_errors=True)
+        temp = self.physical_temp_path_for_workspace_id(session_id)
+        if temp.exists():
+            shutil.rmtree(str(temp), ignore_errors=True)
         write_lease.release(session_id)
 
     def remove_conversation_workspace(self, conversation_id: str) -> None:
@@ -232,6 +260,9 @@ class WorkspaceManager:
                 return
         if ws.exists():
             shutil.rmtree(str(ws), ignore_errors=True)
+        temp = self.physical_temp_path_for_workspace_id(workspace_id)
+        if temp.exists():
+            shutil.rmtree(str(temp), ignore_errors=True)
         write_lease.release(workspace_id)
         # Clean dangling presentation symlink if it pointed at removed path
         try:
@@ -243,6 +274,10 @@ class WorkspaceManager:
     def get_workspace_path(self, session_id: str) -> Path:
         """Return the physical workspace path for *session_id* (may not exist yet)."""
         return settings.workspaces_path / session_id
+
+    def get_temp_path(self, workspace_id: str) -> Path:
+        """Return physical persistent-temp path for an opaque workspace id."""
+        return self.physical_temp_path_for_workspace_id(workspace_id)
 
     def workspace_exists(self, session_id: str) -> bool:
         return (settings.workspaces_path / session_id).exists()

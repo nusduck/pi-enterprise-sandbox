@@ -2,8 +2,10 @@
 
 Path policy (public agent / API contract):
 
-- Accept **relative** paths only (``foo/bar.txt``, ``.``, ``./x``).
-- Reject absolute paths (including legacy ``/home/sandbox/workspace/...``).
+- Relative paths address the workspace (``foo/bar.txt``, ``.``, ``./x``).
+- ``/home/sandbox/workspace/...`` addresses the same workspace.
+- ``/tmp/...`` addresses the current workspace's persistent temp tree.
+- Reject every other absolute path.
 - Reject null bytes, home expansion (``~``), and paths that escape the
   physical workspace via ``..`` or symlink/hardlink resolution.
 - Error messages never include physical workspace roots (redacted to
@@ -14,9 +16,15 @@ from __future__ import annotations
 
 import os
 import re
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
-from sandbox.paths import sanitize_path_error
+from sandbox.paths import (
+    AGENT_TEMP_PATH,
+    LEGACY_AGENT_WORKSPACE_PATH,
+    SandboxPath,
+    SandboxPathScope,
+    sanitize_path_error,
+)
 
 # Conservative conversation identifiers: UUID-friendly, no path separators.
 _CONVERSATION_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
@@ -39,17 +47,20 @@ def validate_conversation_id(conversation_id: str) -> str:
     return conversation_id
 
 
-def normalize_user_path(user_path: str) -> str:
-    """Normalize a user-supplied path to a workspace-relative form.
+def parse_sandbox_path(user_path: str) -> SandboxPath:
+    """Parse a user path into a validated logical root plus relative path.
 
     Accepts:
     - relative paths: ``foo/bar.txt``, ``.``, ``./x``
+    - logical workspace paths under ``/home/sandbox/workspace``
+    - persistent temp paths under ``/tmp``
 
     Rejects:
     - empty / non-string
     - null bytes
     - home expansion
-    - any absolute path (POSIX or Windows drive)
+    - any other absolute path (POSIX or Windows drive)
+    - parent traversal
     """
     if user_path is None or not isinstance(user_path, str):
         raise ValueError("Invalid path")
@@ -61,13 +72,45 @@ def normalize_user_path(user_path: str) -> str:
     if raw.startswith("~"):
         raise ValueError("Invalid path: home expansion not allowed")
 
-    # Absolute paths fail closed (no legacy logical-absolute mapping).
-    if raw.startswith("/") or (len(raw) > 1 and raw[1] == ":"):
+    if len(raw) > 1 and raw[1] == ":":
         raise PermissionError(
             f"Path escape detected: absolute path outside workspace: {raw}"
         )
 
-    return raw if raw else "."
+    scope = SandboxPathScope.WORKSPACE
+    candidate = PurePosixPath(raw)
+    workspace_root = PurePosixPath(LEGACY_AGENT_WORKSPACE_PATH)
+    temp_root = PurePosixPath(AGENT_TEMP_PATH)
+
+    if candidate == workspace_root:
+        candidate = PurePosixPath(".")
+    elif candidate.is_relative_to(workspace_root):
+        candidate = candidate.relative_to(workspace_root)
+    elif candidate == temp_root:
+        scope = SandboxPathScope.TEMP
+        candidate = PurePosixPath(".")
+    elif candidate.is_relative_to(temp_root):
+        scope = SandboxPathScope.TEMP
+        candidate = candidate.relative_to(temp_root)
+    elif candidate.is_absolute():
+        raise PermissionError(
+            f"Path escape detected: absolute path outside sandbox roots: {raw}"
+        )
+
+    if ".." in candidate.parts:
+        raise PermissionError(f"Path escape detected: parent traversal: {raw}")
+
+    parts = [part for part in candidate.parts if part not in ("", ".")]
+    relative = PurePosixPath(*parts) if parts else PurePosixPath(".")
+    return SandboxPath(scope=scope, relative=relative)
+
+
+def normalize_user_path(user_path: str) -> str:
+    """Backward-compatible normalization for workspace-only call sites."""
+    parsed = parse_sandbox_path(user_path)
+    if parsed.scope != SandboxPathScope.WORKSPACE:
+        raise PermissionError("Path belongs to persistent temp, not workspace")
+    return parsed.relative.as_posix()
 
 
 def _raise_escape(user_path: str, physical_workspace: str | None = None) -> None:
@@ -103,6 +146,25 @@ def resolve_safe_path(workspace: str, user_path: str) -> Path:
             _raise_escape(user_path, physical_workspace=str(base))
 
     return target
+
+
+def resolve_sandbox_path(
+    workspace: str | Path,
+    temp: str | Path,
+    user_path: str,
+) -> tuple[SandboxPath, Path]:
+    """Resolve a public path against the current workspace or temp root."""
+    parsed = parse_sandbox_path(user_path)
+    base = Path(workspace if parsed.scope == SandboxPathScope.WORKSPACE else temp).resolve()
+    target = (base / parsed.relative).resolve()
+
+    try:
+        inside = target.is_relative_to(base)
+    except AttributeError:  # pragma: no cover - Python < 3.9 fallback
+        inside = os.path.commonpath([str(base), str(target)]) == str(base)
+    if not inside:
+        _raise_escape(user_path, physical_workspace=str(base))
+    return parsed, target
 
 
 def enforce_path_within_workspace(

@@ -39,6 +39,7 @@ import {
   DEFAULT_SKILL_ROOTS,
 } from './skills/paths.js';
 import { ApprovalSuspendedError } from './services/approval-waiter.js';
+import { normalizeWorkspaceToolParams } from './workspace-paths.js';
 
 /** Terminal ledger statuses that must never re-execute side effects. */
 const LEDGER_TERMINAL = new Set(['succeeded', 'failed', 'cancelled', 'unknown']);
@@ -490,13 +491,26 @@ export function createSandboxTools(ctx = {}) {
    */
   function wrapExecute(toolName, executeFn) {
     return async (toolCallId, params, ...rest) => {
+      let normalizedParams;
+      try {
+        normalizedParams = normalizeWorkspaceToolParams(toolName, params, {
+          logicalRoot: config.SESSION_WORKSPACE_CWD,
+          isSkillPath: (value) => isUnderSkillRoot(value, skillRoots),
+        });
+      } catch (err) {
+        return {
+          content: [{ type: 'text', text: `Error: ${err.message}` }],
+          details: { isError: true },
+          isError: true,
+        };
+      }
       const side = classifyToolSideEffect(toolName);
       const run = async () =>
-        withLedger(toolName, toolCallId, params || {}, async (ctx) => {
+        withLedger(toolName, toolCallId, normalizedParams, async (ctx) => {
           if (side === 'write') {
             // Mark waiting before policy gate (resume keeps ledger at waiting_approval)
             await ctx.markWaitingApproval();
-            const gate = await ensureApproved(toolName, params || {}, ctx.callId);
+            const gate = await ensureApproved(toolName, normalizedParams, ctx.callId);
             if (!gate.ok) {
               return {
                 content: [
@@ -513,7 +527,7 @@ export function createSandboxTools(ctx = {}) {
             }
           }
           await ctx.markExecuting();
-          return executeFn(ctx.callId, params, ...rest);
+          return executeFn(ctx.callId, normalizedParams, ...rest);
         });
 
       if (side === 'write') {
@@ -530,13 +544,13 @@ export function createSandboxTools(ctx = {}) {
     name: 'read',
     label: 'Read File',
     description:
-      'Read a workspace file (relative path) OR load a Skill package. ' +
+      'Read a workspace or persistent /tmp file (relative or logical path) OR load a Skill package. ' +
       'For skills listed in <available_skills>, pass the absolute <location> ' +
       'path (e.g. /home/sandbox/skill/docx/SKILL.md) — required before specialized document work.',
     parameters: Type.Object({
       path: Type.String({
         description:
-          'Workspace-relative path, or absolute skill path under /home/sandbox/skill/.../SKILL.md',
+          'Workspace-relative path, logical /home/sandbox/workspace/... path, persistent /tmp/... path, or absolute skill path under /home/sandbox/skill/.../SKILL.md',
       }),
       offset: Type.Optional(Type.Number({ description: 'Start line (1-indexed)' })),
       limit: Type.Optional(Type.Number({ description: 'Max lines' })),
@@ -590,11 +604,11 @@ export function createSandboxTools(ctx = {}) {
     name: 'write',
     label: 'Write File',
     description:
-      'Write content to a private file in the sandbox workspace. ' +
+      'Write content to a private file in the sandbox workspace or persistent conversation /tmp. ' +
       'Does NOT share the file with the user or create a download link. ' +
       'To deliver a file to the user, call submit_artifact after writing.',
     parameters: Type.Object({
-      path: Type.String({ description: 'File path' }),
+      path: Type.String({ description: 'Workspace-relative, logical workspace, or /tmp path' }),
       content: Type.String({ description: 'Content to write' }),
     }),
     execute: wrapExecute('write', async (_toolCallId, params) => {
@@ -632,7 +646,7 @@ export function createSandboxTools(ctx = {}) {
       'Returns unified diff and before/after SHA-256 hashes. ' +
       'Does NOT share the file with the user. Call submit_artifact to deliver a file.',
     parameters: Type.Object({
-      path: Type.String({ description: 'File path' }),
+      path: Type.String({ description: 'Workspace-relative, logical workspace, or /tmp path' }),
       old_string: Type.String({ description: 'Exact text to find (must match once)' }),
       new_string: Type.String({ description: 'Replacement text' }),
       expected_hash: Type.Optional(
@@ -718,7 +732,7 @@ export function createSandboxTools(ctx = {}) {
       'Returns unified diff of the applied change plus before/after SHA-256 hashes. ' +
       'Does NOT share the file with the user. Call submit_artifact to deliver a file.',
     parameters: Type.Object({
-      path: Type.String({ description: 'File path relative to workspace' }),
+      path: Type.String({ description: 'Workspace-relative, logical workspace, or /tmp path' }),
       patch: Type.String({ description: 'Unified diff (---/+++/@@ hunks)' }),
       expected_hash: Type.Optional(
         Type.String({ description: 'Optional SHA-256 of current content (race check)' }),
@@ -838,7 +852,7 @@ export function createSandboxTools(ctx = {}) {
       'Call only for final, important, or user-requested files. ' +
       'There is no automatic workspace scan; intermediate work stays private until submitted.',
     parameters: Type.Object({
-      path: Type.String({ description: 'File path relative to workspace' }),
+      path: Type.String({ description: 'Workspace-relative, logical workspace, or /tmp path' }),
       name: Type.Optional(Type.String({ description: 'Display name (defaults to filename)' })),
       mime_type: Type.Optional(
         Type.String({ description: 'MIME type (default: application/octet-stream)' }),
@@ -888,10 +902,10 @@ export function createSandboxTools(ctx = {}) {
     label: 'List Directory',
     description:
       'List files and directories in the sandbox workspace (structured, bounded). ' +
-      'Prefer this over bash ls. Max depth 5, max 1000 items. Paths are workspace-relative.',
+      'Prefer this over bash ls. Max depth 5, max 1000 items. Relative, logical workspace, and /tmp paths are accepted.',
     parameters: Type.Object({
       path: Type.Optional(
-        Type.String({ description: 'Directory path relative to workspace (default: .)' }),
+        Type.String({ description: 'Relative, logical workspace, or /tmp directory (default: .)' }),
       ),
       depth: Type.Optional(
         Type.Number({ description: 'Recursion depth 0–5 (default: 1)' }),
@@ -934,7 +948,7 @@ export function createSandboxTools(ctx = {}) {
       'Prefer this over bash find. Default max_depth 20, max 500 items.',
     parameters: Type.Object({
       path: Type.Optional(
-        Type.String({ description: 'Start path relative to workspace (default: .)' }),
+        Type.String({ description: 'Relative, logical workspace, or /tmp start path (default: .)' }),
       ),
       pattern: Type.Optional(
         Type.String({ description: 'Glob pattern (default: *)' }),
@@ -986,7 +1000,7 @@ export function createSandboxTools(ctx = {}) {
       'Skips binary/large files. Max 500 matches, 5s timeout.',
     parameters: Type.Object({
       path: Type.Optional(
-        Type.String({ description: 'Start path relative to workspace (default: .)' }),
+        Type.String({ description: 'Relative, logical workspace, or /tmp start path (default: .)' }),
       ),
       query: Type.String({ description: 'Search string or regex' }),
       glob: Type.Optional(
@@ -1053,7 +1067,7 @@ export function createSandboxTools(ctx = {}) {
     parameters: Type.Object({
       command: Type.String({ description: 'Shell command to run' }),
       cwd: Type.Optional(
-        Type.String({ description: 'Workspace-relative working directory (default: .)' }),
+        Type.String({ description: 'Relative, logical workspace, or /tmp directory (default: .)' }),
       ),
       env: Type.Optional(Type.Record(Type.String(), Type.String())),
       timeout: Type.Optional(

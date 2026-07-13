@@ -203,6 +203,7 @@ def _cleanup_linked_session(sandbox_session_id: str) -> None:
     """
     from sandbox.models import SessionStatus
     from sandbox.services.execution_manager import execution_manager
+    from sandbox.services.process_manager import process_manager
     from sandbox.services.session_manager import session_manager
 
     session = session_manager.get(sandbox_session_id)
@@ -210,6 +211,9 @@ def _cleanup_linked_session(sandbox_session_id: str) -> None:
         return
 
     session_manager.update_status(sandbox_session_id, SessionStatus.COMPLETED)
+
+    execution_manager.cancel_active_workspace(session.workspace_id)
+    process_manager.cancel_for_workspace(session.workspace_id)
 
     if execution_manager.is_session_busy(sandbox_session_id):
         return
@@ -225,6 +229,15 @@ def delete_conversation(conversation_id: str, request: Request):
     # If a sandbox session is linked, complete it and delete when idle.
     if conv.sandbox_session_id:
         _cleanup_linked_session(conv.sandbox_session_id)
+
+    # A restored conversation may have processes from another session. Stop
+    # every process using its stable workspace before removing either mount.
+    from sandbox.services.execution_manager import execution_manager
+    from sandbox.services.process_manager import process_manager
+
+    workspace_id = conversation_workspace_id(conversation_id)
+    execution_manager.cancel_active_workspace(workspace_id)
+    process_manager.cancel_for_workspace(workspace_id)
 
     repo.delete(conversation_id)
     workspace_manager.remove_conversation_workspace(conversation_id)

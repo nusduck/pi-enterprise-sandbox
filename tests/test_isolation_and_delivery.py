@@ -300,6 +300,46 @@ def test_session_rebind_sees_same_conversation_files():
     assert read.json().get("content") == "persisted"
 
 
+def test_session_rebind_sees_same_conversation_temp_and_cleanup_removes_both():
+    """Persistent /tmp follows the Conversation, not an individual Session."""
+    from sandbox.config import settings
+
+    conv = client.post("/conversations", json={"title": "tmp-rebind"}).json()
+    session = client.post(
+        "/sessions",
+        json={"caller_id": "tmp-1", "conversation_id": conv["id"]},
+    ).json()
+    session_id = session["session_id"]
+    written = client.post(
+        f"/sessions/{session_id}/files/write",
+        json={"path": "/tmp/cache/state.json", "content": "persisted-temp"},
+    )
+    assert written.status_code == 201, written.text
+    assert written.json()["path"] == "/tmp/cache/state.json"
+
+    assert client.delete(f"/sessions/{session_id}").status_code == 204
+    rebound = client.post(
+        "/sessions",
+        json={"caller_id": "tmp-2", "conversation_id": conv["id"]},
+    )
+    assert rebound.status_code == 201, rebound.text
+    rebound_id = rebound.json()["session_id"]
+    read = client.get(
+        f"/sessions/{rebound_id}/files/read",
+        params={"path": "/tmp/cache/state.json"},
+    )
+    assert read.status_code == 200
+    assert read.json()["content"] == "persisted-temp"
+
+    workspace_id = conv["workspace_id"]
+    workspace = settings.workspaces_path / workspace_id
+    temp = settings.temp_path / f"tmp_{workspace_id}"
+    assert workspace.exists() and temp.exists()
+    assert client.delete(f"/conversations/{conv['id']}").status_code == 204
+    assert not workspace.exists()
+    assert not temp.exists()
+
+
 def test_path_escape_error_detail_has_no_physical_root():
     """File API escape errors must not include host workspace roots."""
     from sandbox.config import settings

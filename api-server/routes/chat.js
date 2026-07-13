@@ -25,6 +25,7 @@ import {
 export async function resolveConversationAndSession(client, conversationId) {
   let activeConversationId = conversationId || null;
   let sandboxSessionId = null;
+  let workspaceId = null;
   let reusedSession = false;
 
   if (activeConversationId) {
@@ -35,6 +36,7 @@ export async function resolveConversationAndSession(client, conversationId) {
           const existing = await client.getSession(conversation.sandbox_session_id);
           if (existing?.status === 'RUNNING' && existing.session_id) {
             sandboxSessionId = existing.session_id;
+            workspaceId = existing.workspace_id || null;
             reusedSession = true;
           }
         } catch {
@@ -57,6 +59,7 @@ export async function resolveConversationAndSession(client, conversationId) {
       enterprise_session_id: activeConversationId,
     });
     sandboxSessionId = session.session_id;
+    workspaceId = session.workspace_id || null;
     try {
       await client.updateConversation(activeConversationId, {
         sandbox_session_id: sandboxSessionId,
@@ -68,7 +71,7 @@ export async function resolveConversationAndSession(client, conversationId) {
 
   return {
     activeConversationId,
-    workspace_id: activeConversationId ? `conv_${activeConversationId}` : null,
+    workspace_id: workspaceId || (activeConversationId ? `conv_${activeConversationId}` : null),
     sandboxSessionId,
     reusedSession,
   };

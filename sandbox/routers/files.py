@@ -24,7 +24,7 @@ from sandbox.models import (
     GrepResponse,
     LsRequest,
 )
-from sandbox.paths import get_session_physical_workspace, sanitize_path_error
+from sandbox.paths import sanitize_path_error
 from sandbox.security.ownership import assert_session_owner, resolve_actor
 from sandbox.services.attachment_manager import (
     AttachmentError,
@@ -33,6 +33,7 @@ from sandbox.services.attachment_manager import (
 )
 from sandbox.services.audit_logger import audit_logger
 from sandbox.services.file_edit import file_edit_service
+from sandbox.services.execution_context import SandboxExecutionContext
 from sandbox.services.file_manager import file_manager
 from sandbox.services.file_search import file_search_service
 from sandbox.services.session_manager import session_manager
@@ -43,8 +44,10 @@ router = APIRouter(prefix="/sessions/{session_id}/files", tags=["files"])
 _CHUNK_SIZE = 64 * 1024
 
 
-def _get_workspace(session_id: str, request: Request | None = None) -> str:
-    """Resolve physical workspace; enforce session ownership when auth is on."""
+def _get_context(
+    session_id: str, request: Request | None = None
+) -> SandboxExecutionContext:
+    """Resolve trusted workspace/temp roots and enforce session ownership."""
     session = session_manager.get(session_id)
     if session is None:
         raise HTTPException(status_code=404, detail="Session not found")
@@ -60,7 +63,12 @@ def _get_workspace(session_id: str, request: Request | None = None) -> str:
             assert_session_owner(session, actor)
         elif actor is not None:
             assert_session_owner(session, actor)
-    return get_session_physical_workspace(session)
+    return SandboxExecutionContext.from_session(session)
+
+
+def _get_workspace(session_id: str, request: Request | None = None) -> str:
+    """Compatibility helper for workspace-only attachment operations."""
+    return str(_get_context(session_id, request).physical_workspace)
 
 
 def _attachment_http_error(exc: AttachmentError) -> HTTPException:
@@ -69,8 +77,12 @@ def _attachment_http_error(exc: AttachmentError) -> HTTPException:
 
 @router.get("", response_model=FileListResponse)
 def list_files(session_id: str, request: Request, path: str = "."):
-    ws = _get_workspace(session_id, request)
-    files = file_manager.list_files(ws, path)
+    context = _get_context(session_id, request)
+    files = file_manager.list_files(
+        str(context.physical_workspace),
+        path,
+        temp_path=str(context.physical_temp),
+    )
     return FileListResponse(files=files, total=len(files))
 
 
@@ -88,13 +100,15 @@ def _search_http_error(exc: Exception, workspace: str) -> HTTPException:
 @router.post("/ls", response_model=FileSearchResponse)
 def ls_files(session_id: str, body: LsRequest, request: Request):
     """Bounded directory listing (depth ≤ 5, ≤ 1000 items)."""
-    ws = _get_workspace(session_id, request)
+    context = _get_context(session_id, request)
+    ws = str(context.physical_workspace)
     try:
         result = file_search_service.ls(
             ws,
             path=body.path,
             depth=body.depth,
             include_hidden=body.include_hidden,
+            temp_path=str(context.physical_temp),
         )
     except (PermissionError, ValueError) as exc:
         raise _search_http_error(exc, ws) from exc
@@ -119,7 +133,8 @@ def ls_files(session_id: str, body: LsRequest, request: Request):
 @router.post("/find", response_model=FileSearchResponse)
 def find_files(session_id: str, body: FindRequest, request: Request):
     """Glob file discovery (default depth 20, ≤ 500 items)."""
-    ws = _get_workspace(session_id, request)
+    context = _get_context(session_id, request)
+    ws = str(context.physical_workspace)
     try:
         result = file_search_service.find(
             ws,
@@ -128,6 +143,7 @@ def find_files(session_id: str, body: FindRequest, request: Request):
             type=body.type,
             max_depth=body.max_depth,
             limit=body.limit,
+            temp_path=str(context.physical_temp),
         )
     except (PermissionError, ValueError) as exc:
         raise _search_http_error(exc, ws) from exc
@@ -152,7 +168,8 @@ def find_files(session_id: str, body: FindRequest, request: Request):
 @router.post("/grep", response_model=GrepResponse)
 def grep_files(session_id: str, body: GrepRequest, request: Request):
     """Text search with budgets (≤ 500 matches, 5s, 100MB scan)."""
-    ws = _get_workspace(session_id, request)
+    context = _get_context(session_id, request)
+    ws = str(context.physical_workspace)
     try:
         result = file_search_service.grep(
             ws,
@@ -163,6 +180,7 @@ def grep_files(session_id: str, body: GrepRequest, request: Request):
             case_sensitive=body.case_sensitive,
             context=body.context,
             limit=body.limit,
+            temp_path=str(context.physical_temp),
         )
     except (PermissionError, ValueError) as exc:
         raise _search_http_error(exc, ws) from exc
@@ -186,8 +204,14 @@ def grep_files(session_id: str, body: GrepRequest, request: Request):
 
 @router.post("/read", response_model=FileResponse)
 def read_file(session_id: str, body: FileReadRequest, request: Request):
-    ws = _get_workspace(session_id, request)
-    return file_manager.read_file(ws, body.path, body.offset, body.limit)
+    context = _get_context(session_id, request)
+    return file_manager.read_file(
+        str(context.physical_workspace),
+        body.path,
+        body.offset,
+        body.limit,
+        temp_path=str(context.physical_temp),
+    )
 
 
 @router.get("/read", response_model=FileResponse)
@@ -198,15 +222,27 @@ def read_file_query(
     offset: int | None = None,
     limit: int | None = None,
 ):
-    ws = _get_workspace(session_id, request)
-    return file_manager.read_file(ws, path, offset, limit)
+    context = _get_context(session_id, request)
+    return file_manager.read_file(
+        str(context.physical_workspace),
+        path,
+        offset,
+        limit,
+        temp_path=str(context.physical_temp),
+    )
 
 
 @router.post("/write", response_model=FileResponse, status_code=201)
 def write_file(session_id: str, body: FileWriteRequest, request: Request):
-    ws = _get_workspace(session_id, request)
+    context = _get_context(session_id, request)
     try:
-        return file_manager.write_file(ws, body.path, body.content, body.mode)
+        return file_manager.write_file(
+            str(context.physical_workspace),
+            body.path,
+            body.content,
+            body.mode,
+            temp_path=str(context.physical_temp),
+        )
     except ValueError as exc:
         msg = str(exc)
         if "quota" in msg.lower():
@@ -227,14 +263,15 @@ def write_file(session_id: str, body: FileWriteRequest, request: Request):
 @router.post("/edit", response_model=FileEditResponse)
 def edit_file(session_id: str, body: FileEditRequest, request: Request):
     """Unique old_string replacement with unified diff + hashes (ADR §9)."""
-    ws = _get_workspace(session_id, request)
+    context = _get_context(session_id, request)
     try:
         result = file_edit_service.edit(
-            ws,
+            str(context.physical_workspace),
             body.path,
             body.old_string,
             body.new_string,
             expected_hash=body.expected_hash,
+            temp_path=str(context.physical_temp),
         )
     except PermissionError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
@@ -261,13 +298,14 @@ def edit_file(session_id: str, body: FileEditRequest, request: Request):
 @router.post("/apply_patch", response_model=FileEditResponse)
 def apply_patch_file(session_id: str, body: FileApplyPatchRequest, request: Request):
     """Apply unified diff patch with before/after hashes (ADR §9)."""
-    ws = _get_workspace(session_id, request)
+    context = _get_context(session_id, request)
     try:
         result = file_edit_service.apply_patch(
-            ws,
+            str(context.physical_workspace),
             body.path,
             body.patch,
             expected_hash=body.expected_hash,
+            temp_path=str(context.physical_temp),
         )
     except PermissionError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
@@ -291,16 +329,26 @@ def apply_patch_file(session_id: str, body: FileApplyPatchRequest, request: Requ
 
 @router.get("/preview", response_model=FileResponse)
 def preview_file(session_id: str, request: Request, path: str):
-    ws = _get_workspace(session_id, request)
+    context = _get_context(session_id, request)
     # Preview = first 2000 chars
-    return file_manager.read_file(ws, path, offset=1, limit=40)
+    return file_manager.read_file(
+        str(context.physical_workspace),
+        path,
+        offset=1,
+        limit=40,
+        temp_path=str(context.physical_temp),
+    )
 
 
 @router.get("/download")
 def download_file(session_id: str, request: Request, path: str):
-    ws = _get_workspace(session_id, request)
+    context = _get_context(session_id, request)
     try:
-        safe = file_manager.get_binary_path(ws, path)
+        safe = file_manager.get_binary_path(
+            str(context.physical_workspace),
+            path,
+            temp_path=str(context.physical_temp),
+        )
     except PermissionError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
 
@@ -316,9 +364,13 @@ def download_file(session_id: str, request: Request, path: str):
 
 @router.delete("", status_code=204)
 def delete_file(session_id: str, request: Request, path: str):
-    ws = _get_workspace(session_id, request)
+    context = _get_context(session_id, request)
     try:
-        file_manager.delete_file(ws, path)
+        file_manager.delete_file(
+            str(context.physical_workspace),
+            path,
+            temp_path=str(context.physical_temp),
+        )
     except PermissionError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
     return

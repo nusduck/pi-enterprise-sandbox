@@ -13,7 +13,7 @@ describe('resolveConversationAndSession', () => {
       async createSession(agentName, metadata) {
         assert.equal(agentName, 'pi-coding-agent');
         assert.equal(metadata.conversation_id, 'conversation-new');
-        return { session_id: 'sandbox-new' };
+        return { session_id: 'sandbox-new', workspace_id: 'workspace-authoritative' };
       },
       async updateConversation(id, body) {
         updates.push([id, body]);
@@ -23,7 +23,7 @@ describe('resolveConversationAndSession', () => {
     const resolved = await resolveConversationAndSession(client, null);
     assert.deepEqual(resolved, {
       activeConversationId: 'conversation-new',
-      workspace_id: 'conv_conversation-new',
+      workspace_id: 'workspace-authoritative',
       sandboxSessionId: 'sandbox-new',
       reusedSession: false,
     });
@@ -39,7 +39,7 @@ describe('resolveConversationAndSession', () => {
         return { id: 'conversation-1', sandbox_session_id: 'sandbox-1' };
       },
       async getSession() {
-        return { session_id: 'sandbox-1', status: 'RUNNING' };
+        return { session_id: 'sandbox-1', workspace_id: 'workspace-existing', status: 'RUNNING' };
       },
       async createSession() {
         created = true;
@@ -49,6 +49,7 @@ describe('resolveConversationAndSession', () => {
     const resolved = await resolveConversationAndSession(client, 'conversation-1');
     assert.equal(resolved.sandboxSessionId, 'sandbox-1');
     assert.equal(resolved.reusedSession, true);
+    assert.equal(resolved.workspace_id, 'workspace-existing');
     assert.equal(created, false);
   });
 });

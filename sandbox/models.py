@@ -57,7 +57,8 @@ class SessionCreate(BaseModel):
     user_id: str | None = None
     caller_id: str = "unknown"
     metadata: dict[str, Any] = Field(default_factory=dict)
-    # Bind to conversation-owned workspace via opaque ids only.
+    # Public binding source of truth. workspace_id is a compatibility
+    # assertion and is rejected without conversation_id or when mismatched.
     conversation_id: str | None = None
     workspace_id: str | None = None
 
@@ -328,6 +329,10 @@ class HealthResponse(BaseModel):
     workspace_available: bool = False
     disk_free_mb: float = 0.0
     runtimes: dict[str, bool] = Field(default_factory=dict)
+    isolation_backend: str = "unknown"
+    isolation_required: bool = False
+    isolation_preflight_passed: bool = False
+    isolation_policy_version: str = ""
 
 
 # ── Conversation ────────────────────────────────────────────────────────
@@ -815,4 +820,3 @@ class ProcessWaitRequest(BaseModel):
         default=None,
         description="Seconds to wait; null waits until terminal (or server default)",
     )
-

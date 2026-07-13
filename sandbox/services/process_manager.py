@@ -15,18 +15,21 @@ import threading
 import time
 import uuid
 from datetime import datetime, timezone
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from sandbox.config import settings
 from sandbox.database import Database
+from sandbox.isolation import IsolationBackend, LaunchSpec, build_isolation_backend
 from sandbox.models import (
     PROCESS_ACTIVE_STATUSES,
     PROCESS_TERMINAL_STATUSES,
     ProcessStatus,
 )
 from sandbox.repositories import ProcessRepository
-from sandbox.security.path_validation import resolve_safe_path
-from sandbox.security.safe_env import safe_env
+from sandbox.paths import SandboxPathScope, temp_id_for_workspace_id
+from sandbox.security.path_validation import parse_sandbox_path
+from sandbox.services.execution_context import SandboxExecutionContext
 from sandbox.services.execution_stream import (
     SOURCE_PROCESS,
     execution_stream,
@@ -220,9 +223,11 @@ class ProcessManager:
         database: Database | None = None,
         *,
         stream_hub: Any | None = None,
+        isolation_backend: IsolationBackend | None = None,
     ) -> None:
         self.repository = ProcessRepository(database)
         self._stream = stream_hub if stream_hub is not None else execution_stream
+        self._isolation = isolation_backend or build_isolation_backend()
         self._lock = threading.RLock()
         self._entries: dict[str, dict[str, Any]] = {}
         self._procs: dict[str, subprocess.Popen[Any]] = {}
@@ -283,6 +288,34 @@ class ProcessManager:
         with self._lock:
             return self._mark_orphans_from_db()
 
+    @staticmethod
+    def _coerce_context(
+        session_id: str,
+        workspace_path: str | None,
+        context: SandboxExecutionContext | None,
+    ) -> SandboxExecutionContext:
+        if context is not None:
+            if context.session_id != session_id:
+                raise ValueError("Execution context does not belong to session")
+            return context
+        if not workspace_path:
+            raise ValueError("Execution context is required")
+        # Compatibility for internal service tests. Public REST/MCP callers
+        # always resolve this context from the trusted session binding.
+        workspace = Path(workspace_path).resolve()
+        workspace_id = workspace.name or session_id
+        temp_id = temp_id_for_workspace_id(workspace_id)
+        temp = (settings.temp_path / temp_id).resolve()
+        workspace.mkdir(parents=True, exist_ok=True)
+        temp.mkdir(parents=True, exist_ok=True)
+        return SandboxExecutionContext(
+            session_id=session_id,
+            workspace_id=workspace_id,
+            temp_id=temp_id,
+            physical_workspace=workspace,
+            physical_temp=temp,
+        )
+
     # ── Start ────────────────────────────────────────────────────────
 
     def start(
@@ -290,12 +323,13 @@ class ProcessManager:
         *,
         session_id: str,
         command: str,
-        workspace_path: str,
+        workspace_path: str | None = None,
         cwd: str | None = None,
         env: dict[str, str] | None = None,
         timeout: int | None = None,
         background: bool = False,
         run_id: str | None = None,
+        context: SandboxExecutionContext | None = None,
     ) -> dict[str, Any]:
         """Spawn a managed process. Returns start payload or error dict."""
         if not command or not str(command).strip():
@@ -310,26 +344,19 @@ class ProcessManager:
                 "status": "blocked",
             }
 
-        # Resolve optional relative cwd inside workspace
-        physical_cwd = workspace_path
-        logical_cwd = cwd or "."
-        if cwd and cwd not in (".", "./", ""):
-            try:
-                resolved = resolve_safe_path(workspace_path, cwd)
-            except (PermissionError, ValueError) as exc:
-                return {"error": str(exc), "status": "invalid"}
-            if not resolved.exists():
-                try:
-                    resolved.mkdir(parents=True, exist_ok=True)
-                except OSError as exc:
-                    return {"error": f"Cannot create cwd: {exc}", "status": "invalid"}
-            physical_cwd = str(resolved)
+        try:
+            context = self._coerce_context(session_id, workspace_path, context)
+            sandbox_cwd = parse_sandbox_path(cwd or ".")
+        except (PermissionError, ValueError) as exc:
+            return {"error": str(exc), "status": "invalid"}
+        logical_cwd = sandbox_cwd.as_public()
 
         process_id = f"proc_{uuid.uuid4().hex[:12]}"
         now = _now_iso()
         entry: dict[str, Any] = {
             "process_id": process_id,
             "session_id": session_id,
+            "workspace_id": context.workspace_id,
             "run_id": run_id,
             "command": command,
             "cwd": logical_cwd,
@@ -349,6 +376,7 @@ class ProcessManager:
             "created_at": now,
             "updated_at": now,
             "trace_id": get_trace_id(),
+            "isolation_backend": self._isolation.name,
         }
         if env:
             import json
@@ -378,20 +406,29 @@ class ProcessManager:
                 max_cpu_seconds=settings.max_cpu_time_seconds,
             )
 
-        child_env = safe_env(
-            workspace_path=workspace_path,
-            overrides=env or {},
-            logical_workspace=".",
-        )
+        try:
+            prepared = self._isolation.prepare(
+                LaunchSpec(
+                    context=context,
+                    argv=["bash", "-c", command],
+                    relative_cwd=PurePosixPath(sandbox_cwd.relative),
+                    cwd_scope=sandbox_cwd.scope,
+                    env_overrides=env or {},
+                    network_mode=settings.network_mode,
+                )
+            )
+            entry["isolation_backend"] = prepared.backend
+        except (OSError, PermissionError, ValueError) as exc:
+            return self._fail_start(entry, f"Isolation preparation failed: {exc}")
 
         try:
             proc = subprocess.Popen(
-                ["bash", "-c", command],
+                prepared.argv,
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
-                cwd=physical_cwd,
-                env=child_env,
+                cwd=prepared.cwd,
+                env=prepared.env,
                 preexec_fn=_preexec,
                 bufsize=0,
             )
@@ -978,6 +1015,38 @@ class ProcessManager:
                 continue
             if self.cancel(entry["process_id"]):
                 cancelled.append(entry["process_id"])
+        return cancelled
+
+    def cancel_for_workspace(
+        self,
+        workspace_id: str,
+        *,
+        wait_timeout: float = 5.0,
+    ) -> list[str]:
+        """Cancel every live process currently mounted on a workspace.
+
+        Workspace identity can span multiple restored Agent sessions, so
+        lifecycle cleanup must not stop at a single ``session_id``.
+        """
+        with self._lock:
+            candidates = [
+                e
+                for e in self._entries.values()
+                if e.get("workspace_id") == workspace_id
+                and _is_active(e.get("status"))
+            ]
+
+        cancelled: list[str] = []
+        for entry in candidates:
+            process_id = entry["process_id"]
+            if self.cancel(process_id):
+                cancelled.append(process_id)
+
+        if cancelled and wait_timeout > 0:
+            deadline = time.monotonic() + wait_timeout
+            for process_id in cancelled:
+                remaining = max(0.0, deadline - time.monotonic())
+                self.wait(process_id, timeout=remaining)
         return cancelled
 
     def cancel_for_run(self, run_id: str) -> list[str]:

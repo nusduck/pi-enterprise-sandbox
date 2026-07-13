@@ -127,7 +127,7 @@ Base URL: `http://sandbox:8081`（Docker 内网）
 | `POST` | `/sessions` | 创建会话 |
 | `GET` | `/sessions` | 列出所有活跃会话 |
 | `GET` | `/sessions/{id}` | 获取会话详情 |
-| `DELETE` | `/sessions/{id}` | 关闭会话 + 清理工作区 |
+| `DELETE` | `/sessions/{id}` | 关闭会话；仅清理 Session-private 存储，Conversation-owned 存储保留 |
 | `GET` | `/sessions/by-agent/{aid}` | 按 agent session ID 查询 |
 | `GET` | `/sessions/by-enterprise/{eid}` | 按 enterprise session ID 查询 |
 
@@ -141,7 +141,8 @@ Base URL: `http://sandbox:8081`（Docker 内网）
   "enterprise_session_id": "...",
   "user_id": "...",
   "metadata": {},
-  "workspace_id": "ws_optional_reuse"  // 可选：复用已有工作区（opaque id，非物理路径）
+  "conversation_id": "conversation_uuid",
+  "workspace_id": "conv_conversation_uuid"  // 可选校验值；不能脱离 conversation_id 自报
 }
 
 // Response (201)
@@ -159,9 +160,10 @@ Base URL: `http://sandbox:8081`（Docker 内网）
 }
 ```
 
-> 公共协议使用 opaque **`workspace_id`**。工具/文件/Artifact 路径均为相对 Session 根的相对路径；绝对路径与路径逃逸 fail-closed。  
-> 物理存储根仅存在于服务内部，**不**出现在 API、SSE 或模型上下文。  
-> Skill 根在 workspace 外；发行基线零内置 Skill package，默认只读。
+> 公共协议使用 opaque **`workspace_id`**。工具/文件/Artifact 接受 workspace 相对路径、`/home/sandbox/workspace/...` 和 Conversation 私有的持久化 `/tmp/...`；其他绝对路径与路径逃逸 fail-closed。
+> 物理存储根仅存在于服务内部，**不**出现在 API、SSE 或模型上下文。
+> `workspace_id` 由服务端从 `conversation_id` 派生；REST/MCP 都拒绝未绑定 Conversation 的自报 workspace。
+> Skill 根在 workspace 外；发行基线零内置 Skill package，Sandbox 执行侧始终只读。
 
 ---
 
@@ -227,7 +229,7 @@ Base URL: `http://sandbox:8081`（Docker 内网）
 
 #### Structured search (`ls` / `find` / `grep`)
 
-Agent 工具 `ls` / `find` / `grep` 覆盖 SDK 本地同名工具，全部转发到下列 Sandbox 端点。仅访问当前 session workspace；不跟随逃逸 symlink；不返回物理根路径。调用方只能收紧限制。
+Agent 工具 `ls` / `find` / `grep` 覆盖 SDK 本地同名工具，全部转发到下列 Sandbox 端点。仅访问当前 workspace 或其持久化 `/tmp`；不跟随逃逸 symlink；不返回物理根路径。调用方只能收紧限制。
 
 | 工具 | 默认 | 硬上限 |
 |------|------|--------|
@@ -420,7 +422,7 @@ Agent 工具 `ls` / `find` / `grep` 覆盖 SDK 本地同名工具，全部转发
 }
 ```
 
-对话绑定 opaque `workspace_id`，后续 `POST /sessions` 通过 `workspace_id` 复用（跨轮次文件持久化）。公共响应不返回物理路径。
+对话绑定 opaque `workspace_id`，后续 `POST /sessions` 携带 `conversation_id`，由服务端恢复该 workspace 与 `tmp_{workspace_id}`。客户端可回传 `workspace_id` 作为一致性校验，但不能单独指定它。公共响应不返回物理路径。
 
 ---
 
@@ -458,7 +460,7 @@ MCP 以 REST over HTTP 模式暴露，兼容 Dify、Hi-Agent 等外部平台。*
 | 工具名 | 说明 |
 |--------|------|
 | `create_session` | 创建 Sandbox 会话 + 初始化工作区 |
-| `close_session` | 关闭会话 + 清理工作区 |
+| `close_session` | 关闭会话；Conversation-owned workspace 与 `/tmp` 保留以便重绑定 |
 | `run_python` | 执行 Python 代码 |
 | `run_command_limited` | 执行受限制的 Shell 命令（危险命令被阻止） |
 | `read_file` | 读取工作区文件 |
@@ -468,6 +470,9 @@ MCP 以 REST over HTTP 模式暴露，兼容 Dify、Hi-Agent 等外部平台。*
 | `download_file` | 获取文件下载信息 |
 | `get_artifacts` | 列出会话的 artifact 列表 |
 | `submit_artifact` | 显式提交文件为 artifact |
+
+所有 MCP 文件、Artifact 与执行工具使用和 REST 相同的路径解析及
+`conversation_id → workspace_id → tmp_{workspace_id}` 绑定规则。
 
 #### `POST /mcp/call`
 

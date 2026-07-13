@@ -8,6 +8,8 @@ from sandbox.security.path_validation import (
     enforce_path_within_workspace,
     is_path_in_workspace,
     normalize_user_path,
+    parse_sandbox_path,
+    resolve_sandbox_path,
     resolve_safe_path,
     validate_conversation_id,
 )
@@ -35,12 +37,27 @@ class TestPathValidation:
         with pytest.raises(PermissionError):
             resolve_safe_path(ws, "/etc/passwd")
 
-    def test_legacy_logical_absolute_rejected(self, tmp_path: Path):
-        """R2: /home/sandbox/workspace is no longer accepted (fail-closed)."""
-        with pytest.raises(PermissionError):
-            resolve_safe_path(str(tmp_path), "/home/sandbox/workspace/notes/a.txt")
-        with pytest.raises(PermissionError):
-            normalize_user_path("/home/sandbox/workspace")
+    def test_logical_workspace_absolute_is_normalized(self, tmp_path: Path):
+        result = resolve_safe_path(
+            str(tmp_path), "/home/sandbox/workspace/notes/a.txt"
+        )
+        assert result == (tmp_path / "notes" / "a.txt").resolve()
+        assert normalize_user_path("/home/sandbox/workspace") == "."
+
+    def test_persistent_temp_absolute_uses_temp_root(self, tmp_path: Path):
+        workspace = tmp_path / "workspace"
+        temp = tmp_path / "temp"
+        workspace.mkdir()
+        temp.mkdir()
+        parsed, target = resolve_sandbox_path(workspace, temp, "/tmp/cache/a.txt")
+        assert parsed.scope.value == "temp"
+        assert parsed.as_public() == "/tmp/cache/a.txt"
+        assert target == (temp / "cache" / "a.txt").resolve()
+
+    def test_other_absolute_roots_are_rejected(self):
+        for path in ("/etc/passwd", "/var/sandbox/workspaces/x", "/home/sandbox/skill/x"):
+            with pytest.raises(PermissionError):
+                parse_sandbox_path(path)
 
     def test_dot_is_safe(self, tmp_path: Path):
         ws = str(tmp_path)
@@ -62,10 +79,8 @@ class TestPathValidation:
     def test_dot_dot_in_middle(self, tmp_path: Path):
         ws = str(tmp_path)
         (tmp_path / "sub").mkdir()
-        # a/b/../c resolves to a/c which is inside workspace
-        result = resolve_safe_path(ws, "sub/../outside.txt")
-        # sub/../ resolves to workspace root, so it's inside
-        assert result == (tmp_path / "outside.txt").resolve()
+        with pytest.raises(PermissionError):
+            resolve_safe_path(ws, "sub/../outside.txt")
 
     def test_traversal_via_symlink_blocked(self, tmp_path: Path):
         """Symlinks that point outside workspace should be caught by resolve()."""

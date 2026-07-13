@@ -22,13 +22,12 @@ from sandbox.models import (
     PythonExecutionRequest,
     ToolCallCheck,
 )
-from sandbox.paths import ensure_physical_workspace
 from sandbox.services.audit_logger import audit_logger
 from sandbox.services.approval_manager import approval_manager
 from sandbox.services.execution_manager import execution_manager
+from sandbox.services.execution_context import SandboxExecutionContext
 from sandbox.services.policy_checker import policy_checker
 from sandbox.services.session_manager import session_manager
-from sandbox.services.workspace_manager import workspace_manager
 
 router = APIRouter(prefix="/sessions/{session_id}/executions", tags=["executions"])
 
@@ -42,26 +41,19 @@ def _require_active_session(session_id: str):
     return session
 
 
-def _execution_cwd(session) -> str:
-    """Always return the physical workspace path for concurrent-safe execution.
-
-    Never use the process-global presentation symlink as cwd — concurrent
-    sessions would race on that link. Global activate is disabled by default.
-    """
-    physical = ensure_physical_workspace(session)
-    # No-op unless SANDBOX_ENABLE_GLOBAL_WORKSPACE_SYMLINK=true
-    workspace_manager.activate_workspace(physical)
-    return str(physical)
+def _execution_context(session) -> SandboxExecutionContext:
+    """Resolve physical roots only from the trusted session binding."""
+    return SandboxExecutionContext.from_session(session)
 
 
 @router.post("/python", response_model=ExecutionResponse, status_code=201)
 def run_python(session_id: str, body: PythonExecutionRequest):
     session = _require_active_session(session_id)
-    ws = _execution_cwd(session)
+    context = _execution_context(session)
     result = execution_manager.run_python(
         session_id=session_id,
         code=body.code,
-        workspace_path=ws,
+        context=context,
         timeout=body.timeout,
         env_overrides=body.env_overrides if body.env_overrides else None,
     )
@@ -106,11 +98,11 @@ def run_command(session_id: str, body: CommandExecutionRequest):
         )
         raise HTTPException(status_code=403, detail=reason)
 
-    ws = _execution_cwd(session)
+    context = _execution_context(session)
     result = execution_manager.run_command(
         session_id=session_id,
         command=body.command,
-        workspace_path=ws,
+        context=context,
         timeout=body.timeout,
         env_overrides=body.env_overrides if body.env_overrides else None,
     )
@@ -138,11 +130,11 @@ def run_command(session_id: str, body: CommandExecutionRequest):
 @router.post("/node", response_model=ExecutionResponse, status_code=201)
 def run_node(session_id: str, body: NodeExecutionRequest):
     session = _require_active_session(session_id)
-    ws = _execution_cwd(session)
+    context = _execution_context(session)
     result = execution_manager.run_node(
         session_id=session_id,
         code=body.code,
-        workspace_path=ws,
+        context=context,
         timeout=body.timeout,
         env_overrides=body.env_overrides if body.env_overrides else None,
     )

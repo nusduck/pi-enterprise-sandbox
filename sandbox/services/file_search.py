@@ -20,8 +20,11 @@ from sandbox.models import (
     GrepMatch,
     GrepResponse,
 )
-from sandbox.paths import sanitize_path_error
-from sandbox.security.path_validation import enforce_path_within_workspace
+from sandbox.paths import SandboxPathScope, sanitize_path_error
+from sandbox.security.path_validation import (
+    enforce_path_within_workspace,
+    resolve_sandbox_path,
+)
 
 # ── Hard ceilings (callers may only tighten) ────────────────────────────
 
@@ -71,7 +74,7 @@ def _workspace_root(workspace_path: str) -> Path:
     return Path(workspace_path).resolve()
 
 
-def _to_rel(root: Path, path: Path) -> str:
+def _to_rel(root: Path, path: Path, public_prefix: str | None = None) -> str:
     """Workspace-relative POSIX path; never leak absolute/physical roots."""
     try:
         rel = path.resolve(strict=False).relative_to(root)
@@ -82,7 +85,24 @@ def _to_rel(root: Path, path: Path) -> str:
         except ValueError:
             return path.name or "."
     s = rel.as_posix()
-    return s if s and s != "." else "."
+    relative = s if s and s != "." else "."
+    if public_prefix is None:
+        return relative
+    return public_prefix if relative == "." else f"{public_prefix}/{relative}"
+
+
+def _resolve_search_root(
+    workspace_path: str,
+    path: str,
+    temp_path: str | None,
+) -> tuple[Path, Path, str | None]:
+    if temp_path is None:
+        root = _workspace_root(workspace_path)
+        return root, enforce_path_within_workspace(workspace_path, path), None
+    parsed, start = resolve_sandbox_path(workspace_path, temp_path, path)
+    if parsed.scope == SandboxPathScope.TEMP:
+        return Path(temp_path).resolve(), start, "/tmp"
+    return _workspace_root(workspace_path), start, None
 
 
 def _is_hidden_name(name: str) -> bool:
@@ -194,10 +214,13 @@ class FileSearchService:
         path: str = ".",
         depth: int = 1,
         include_hidden: bool = False,
+        *,
+        temp_path: str | None = None,
     ) -> FileSearchResponse:
         depth = _clamp_int(depth, 1, 0, LS_MAX_DEPTH)
-        root = _workspace_root(workspace_path)
-        start = enforce_path_within_workspace(workspace_path, path)
+        root, start, public_prefix = _resolve_search_root(
+            workspace_path, path, temp_path
+        )
 
         t0 = time.monotonic()
         items: list[FileSearchItem] = []
@@ -210,7 +233,7 @@ class FileSearchService:
         if not start.exists():
             return FileSearchResponse(
                 items=[],
-                skipped=[FileSearchSkipped(path=_to_rel(root, start), reason="not_found")],
+                skipped=[FileSearchSkipped(path=_to_rel(root, start, public_prefix), reason="not_found")],
                 stats=FileSearchStats(
                     examined=0,
                     matched=0,
@@ -228,7 +251,7 @@ class FileSearchService:
             size = int(st.st_size) if st and et == "file" else 0
             items.append(
                 FileSearchItem(
-                    path=_to_rel(root, start),
+                    path=_to_rel(root, start, public_prefix),
                     name=start.name or ".",
                     type=et,
                     size=size,
@@ -252,7 +275,7 @@ class FileSearchService:
             size = int(st.st_size) if st and et == "file" else 0
             items.append(
                 FileSearchItem(
-                    path=_to_rel(root, start),
+                    path=_to_rel(root, start, public_prefix),
                     name=start.name,
                     type=et,
                     size=size,
@@ -281,7 +304,7 @@ class FileSearchService:
 
                 child = dir_path / name
                 examined += 1
-                rel = _to_rel(root, child)
+                rel = _to_rel(root, child, public_prefix)
 
                 try:
                     is_link = entry.is_symlink()
@@ -376,6 +399,8 @@ class FileSearchService:
         type: str | None = None,  # noqa: A002 — matches tool schema
         max_depth: int | None = None,
         limit: int | None = None,
+        *,
+        temp_path: str | None = None,
     ) -> FileSearchResponse:
         max_depth = _clamp_int(
             max_depth, FIND_DEFAULT_MAX_DEPTH, 0, FIND_MAX_DEPTH
@@ -392,8 +417,9 @@ class FileSearchService:
         if len(pattern) > 256:
             raise ValueError("pattern exceeds max length (256)")
 
-        root = _workspace_root(workspace_path)
-        start = enforce_path_within_workspace(workspace_path, path)
+        root, start, public_prefix = _resolve_search_root(
+            workspace_path, path, temp_path
+        )
 
         t0 = time.monotonic()
         items: list[FileSearchItem] = []
@@ -407,7 +433,7 @@ class FileSearchService:
             return FileSearchResponse(
                 items=[],
                 skipped=[
-                    FileSearchSkipped(path=_to_rel(root, start), reason="not_found")
+                    FileSearchSkipped(path=_to_rel(root, start, public_prefix), reason="not_found")
                 ],
                 stats=FileSearchStats(
                     skipped=1,
@@ -430,7 +456,7 @@ class FileSearchService:
                 return True
             items.append(
                 FileSearchItem(
-                    path=_to_rel(root, child),
+                    path=_to_rel(root, child, public_prefix),
                     name=name,
                     type=et,
                     size=size,
@@ -475,7 +501,7 @@ class FileSearchService:
                 name = entry.name
                 child = dir_path / name
                 examined += 1
-                rel = _to_rel(root, child)
+                rel = _to_rel(root, child, public_prefix)
 
                 try:
                     is_link = entry.is_symlink()
@@ -555,6 +581,8 @@ class FileSearchService:
         case_sensitive: bool = True,
         context: int | None = None,
         limit: int | None = None,
+        *,
+        temp_path: str | None = None,
     ) -> GrepResponse:
         context_n = _clamp_int(context, 0, 0, GREP_MAX_CONTEXT)
         limit_n = _clamp_int(limit, GREP_DEFAULT_LIMIT, 1, GREP_MAX_LIMIT)
@@ -565,8 +593,9 @@ class FileSearchService:
         if glob_pat and len(glob_pat) > 256:
             raise ValueError("glob exceeds max length (256)")
 
-        root = _workspace_root(workspace_path)
-        start = enforce_path_within_workspace(workspace_path, path)
+        root, start, public_prefix = _resolve_search_root(
+            workspace_path, path, temp_path
+        )
 
         t0 = time.monotonic()
         deadline = t0 + GREP_TIMEOUT_S
@@ -609,7 +638,7 @@ class FileSearchService:
             if not budget_ok():
                 return False
 
-            rel = _to_rel(root, file_path)
+            rel = _to_rel(root, file_path, public_prefix)
             examined += 1
 
             if file_path.is_symlink():
@@ -706,7 +735,7 @@ class FileSearchService:
             return GrepResponse(
                 matches=[],
                 skipped=[
-                    FileSearchSkipped(path=_to_rel(root, start), reason="not_found")
+                    FileSearchSkipped(path=_to_rel(root, start, public_prefix), reason="not_found")
                 ],
                 stats=FileSearchStats(
                     skipped=1,
@@ -737,7 +766,7 @@ class FileSearchService:
                     if dpath.is_symlink():
                         skipped.append(
                             FileSearchSkipped(
-                                path=_to_rel(root, dpath),
+                                path=_to_rel(root, dpath, public_prefix),
                                 reason="symlink_dir_skipped",
                             )
                         )
@@ -745,7 +774,7 @@ class FileSearchService:
                     if not _within_workspace(root, dpath):
                         skipped.append(
                             FileSearchSkipped(
-                                path=_to_rel(root, dpath),
+                                path=_to_rel(root, dpath, public_prefix),
                                 reason="path_escape",
                             )
                         )

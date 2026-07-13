@@ -108,7 +108,14 @@ async def lifespan(app: FastAPI):
 
     # Ensure physical storage roots exist
     settings.workspaces_path.mkdir(parents=True, exist_ok=True)
+    settings.temp_path.mkdir(parents=True, exist_ok=True)
     settings.skills_path.mkdir(parents=True, exist_ok=True)
+
+    # Fail closed when isolation is required. Development direct mode still
+    # runs this check so readiness truthfully reports the selected backend.
+    from sandbox.isolation import isolation_preflight
+
+    isolation_preflight.check(settings)
 
     # Best-effort skill presentation dir (container layout). Workspace
     # identity is opaque workspace_id + relative paths; no public absolute cwd.
