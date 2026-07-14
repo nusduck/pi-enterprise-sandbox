@@ -74,8 +74,9 @@ describe('thin BFF agent relay', () => {
   });
 
   it('falls back to persisted Run detail when the live Agent log was evicted', () => {
-    assert.match(runsSrc, /runtime_available: true/);
-    assert.match(runsSrc, /runtime_available: false/);
+    assert.match(runsSrc, /presentRunDetail\(run, live, true\)/);
+    assert.match(runsSrc, /presentRunDetail\(run, null, false\)/);
+    assert.match(runsSrc, /runtime_available: runtimeAvailable/);
     assert.match(runsSrc, /authorizeRunRequest/);
   });
 });

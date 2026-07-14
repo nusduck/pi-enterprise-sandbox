@@ -22,6 +22,53 @@ import { authFromRequest, createSandboxClient } from '../services/sandbox-client
 import { authorizeRunRequest, resolveTrustedAuth } from '../application/run-access-service.js';
 import { sendError, sendJson as json } from '../http/response.js';
 
+/**
+ * Coerce a timestamp to an ISO 8601 string for the public wire contract.
+ * Accepts epoch milliseconds (Agent live runs), ISO strings (Sandbox rows),
+ * or Date. Returns null when the value is missing or unusable.
+ * @param {unknown} value
+ * @returns {string|null}
+ */
+export function toIsoTimestamp(value) {
+  if (value == null || value === '') return null;
+  if (typeof value === 'number') {
+    if (!Number.isFinite(value)) return null;
+    const date = new Date(value);
+    return Number.isNaN(date.getTime()) ? null : date.toISOString();
+  }
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (!trimmed) return null;
+    const ms = Date.parse(trimmed);
+    return Number.isNaN(ms) ? null : new Date(ms).toISOString();
+  }
+  if (value instanceof Date) {
+    return Number.isNaN(value.getTime()) ? null : value.toISOString();
+  }
+  return null;
+}
+
+/**
+ * Merge persisted Sandbox run detail with optional Agent live snapshot.
+ * Ensures created_at / updated_at are always ISO strings or null so the
+ * frontend RunDetailSchema never sees Agent epoch-ms numbers.
+ * @param {object|null|undefined} persisted
+ * @param {object|null|undefined} live
+ * @param {boolean} runtimeAvailable
+ */
+export function presentRunDetail(persisted, live, runtimeAvailable) {
+  const base = persisted && typeof persisted === 'object' ? persisted : {};
+  const liveObj = live && typeof live === 'object' ? live : null;
+  const body = liveObj
+    ? { ...base, ...liveObj, runtime_available: runtimeAvailable }
+    : { ...base, runtime_available: runtimeAvailable };
+  body.created_at =
+    toIsoTimestamp(liveObj?.created_at) ?? toIsoTimestamp(base.created_at);
+  body.updated_at =
+    toIsoTimestamp(liveObj?.updated_at) ?? toIsoTimestamp(base.updated_at);
+  return body;
+}
+
 export async function handleCreateRun(body, res, req = null) {
   if (!Array.isArray(body?.messages) || body.messages.length === 0) {
     json(res, 400, { error: 'messages array is required' });
@@ -177,12 +224,12 @@ export async function handleGetRun(runId, res, req = null) {
     const { auth, run } = await authorizeRunRequest(runId, req);
     try {
       const live = await getAgentRun(runId, { auth, traceId: req?.traceId });
-      json(res, 200, { ...run, ...live, runtime_available: true });
+      json(res, 200, presentRunDetail(run, live, true));
     } catch {
       // A durable run remains inspectable after the Agent evicts its bounded
       // live log or restarts. Returning the persisted row avoids a false 404;
       // the frontend then restores tools from the append-only event timeline.
-      json(res, 200, { ...run, runtime_available: false });
+      json(res, 200, presentRunDetail(run, null, false));
     }
   } catch (err) {
     console.error('[runs] get:', err.message);
