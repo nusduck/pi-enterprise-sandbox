@@ -72,4 +72,10 @@ describe('thin BFF agent relay', () => {
     assert.match(runsSrc, /handleListRuns/);
     assert.match(clientSrc, /async listAgentRuns\(/);
   });
+
+  it('falls back to persisted Run detail when the live Agent log was evicted', () => {
+    assert.match(runsSrc, /runtime_available: true/);
+    assert.match(runsSrc, /runtime_available: false/);
+    assert.match(runsSrc, /authorizeRunRequest/);
+  });
 });

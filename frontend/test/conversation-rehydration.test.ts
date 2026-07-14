@@ -72,4 +72,68 @@ describe('conversation history rehydration', () => {
       globalThis.fetch = originalFetch;
     }
   });
+
+  it('restores persisted tools when a stale running Run has no live Agent log', async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (input) => {
+      const url = String(input);
+      if (url.endsWith('/api/conversations/conv_stale/events')) {
+        return new Response(
+          JSON.stringify({
+            runs: [
+              {
+                run_id: 'run_stale',
+                conversation_id: 'conv_stale',
+                sandbox_session_id: 'session_stale',
+                status: 'running',
+                created_at: '2026-07-14T00:00:00Z',
+              },
+            ],
+            events: [
+              {
+                run_id: 'run_stale',
+                sequence: 1,
+                event_id: 'evt_tool_start',
+                type: 'tool_start',
+                payload: { id: 'tool_stale', name: 'read', args: { path: 'README.md' } },
+              },
+              {
+                run_id: 'run_stale',
+                sequence: 2,
+                event_id: 'evt_tool_end',
+                type: 'tool_end',
+                payload: { id: 'tool_stale', result: 'contents' },
+              },
+            ],
+            last_run: { run_id: 'run_stale', status: 'running' },
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        );
+      }
+      if (url.endsWith('/api/runs/run_stale')) {
+        return new Response(
+          JSON.stringify({
+            run_id: 'run_stale',
+            conversation_id: 'conv_stale',
+            status: 'running',
+            runtime_available: false,
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        );
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    }) as typeof fetch;
+
+    try {
+      const bridge = createEntityBridge();
+      await bridge.rehydrateConversation('conv_stale');
+      const store = bridge.getStore();
+      assert.deepEqual(store.runsById.run_stale.toolExecutionIds, ['tool_stale']);
+      assert.equal(store.toolExecutionsById.tool_stale.name, 'read');
+      assert.equal(store.toolExecutionsById.tool_stale.status, 'completed');
+      assert.equal(store.activeRunId, 'run_stale');
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
 });

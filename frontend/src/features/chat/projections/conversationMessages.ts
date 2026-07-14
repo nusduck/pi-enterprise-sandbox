@@ -29,7 +29,7 @@ export function projectConversationMessages(options: {
   const runs = Object.values(store.runsById)
     .filter((run) => {
       if (!run) return false;
-      if (!conversationId) return true;
+      if (!conversationId) return false;
       return run.conversationId === conversationId || run.id === activeRunId;
     })
     .sort((a, b) => {

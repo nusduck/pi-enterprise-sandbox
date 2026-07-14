@@ -174,8 +174,16 @@ export async function handleGetRun(runId, res, req = null) {
     return;
   }
   try {
-    const { run } = await authorizeRunRequest(runId, req);
-    json(res, 200, run);
+    const { auth, run } = await authorizeRunRequest(runId, req);
+    try {
+      const live = await getAgentRun(runId, { auth, traceId: req?.traceId });
+      json(res, 200, { ...run, ...live, runtime_available: true });
+    } catch {
+      // A durable run remains inspectable after the Agent evicts its bounded
+      // live log or restarts. Returning the persisted row avoids a false 404;
+      // the frontend then restores tools from the append-only event timeline.
+      json(res, 200, { ...run, runtime_available: false });
+    }
   } catch (err) {
     console.error('[runs] get:', err.message);
     sendError(res, err, req?.traceId);

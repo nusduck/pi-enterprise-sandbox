@@ -121,6 +121,7 @@ export const RunDetailSchema = z
     updated_at: z.string().optional().nullable(),
     event_count: z.number().int().nonnegative().optional(),
     next_sequence: z.number().int().nonnegative().optional(),
+    runtime_available: z.boolean().optional(),
   })
   .passthrough();
 

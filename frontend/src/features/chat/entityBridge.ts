@@ -298,7 +298,7 @@ export function createEntityBridge(
       const activelyStreaming = status === 'pending' || status === 'queued' || status === 'running';
       const resumable = status === 'waiting_approval' || status === 'waiting_input';
 
-      if (!activelyStreaming) {
+      const replayPersisted = () => {
         eventAdapters.set(
           runId,
           createAgentEventAdapterState({
@@ -314,6 +314,10 @@ export function createEntityBridge(
         // for terminal/waiting status and timestamps.
         store = rehydrateRun(manager.getStore(), detail);
         manager.setStore(store);
+      };
+
+      if (!activelyStreaming) {
+        replayPersisted();
       }
 
       if (activelyStreaming || resumable) {
@@ -322,10 +326,14 @@ export function createEntityBridge(
           store = rehydrateRun(manager.getStore(), live);
           manager.setStore(store);
         }
-        const liveCursor = resumable && live?.next_sequence
-          ? Math.max(0, live.next_sequence - 1)
-          : 0;
-        manager.connect(runId, { lastSequence: liveCursor });
+        if (live.runtime_available === false) {
+          if (activelyStreaming) replayPersisted();
+        } else {
+          const liveCursor = resumable && live?.next_sequence
+            ? Math.max(0, live.next_sequence - 1)
+            : 0;
+          manager.connect(runId, { lastSequence: liveCursor });
+        }
       }
 
       const run = manager.getStore().runsById[runId];

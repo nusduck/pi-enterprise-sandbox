@@ -1,7 +1,6 @@
 /** Resolve and authorize trusted browser identity for Run operations. */
 import { config } from '../config.js';
 import { HttpError } from '../http/errors.js';
-import { getAgentRun } from '../services/agent-client.js';
 import { authFromRequest, createSandboxClient } from '../services/sandbox-client.js';
 
 export async function resolveTrustedAuth(req) {
@@ -33,7 +32,11 @@ export async function resolveTrustedAuth(req) {
 
 export async function authorizeRunRequest(runId, req) {
   const auth = await resolveTrustedAuth(req);
-  const run = await getAgentRun(runId, { auth });
+  // Persisted run ownership is authoritative. The Agent keeps only a bounded
+  // in-memory execution log, so completed or pre-restart runs may no longer be
+  // available there even though their durable history still exists.
+  const sandbox = createSandboxClient({ auth });
+  const run = await sandbox.getAgentRun(runId);
   if (!config.AUTH_ENABLED) return { auth, run };
 
   if (
@@ -51,7 +54,6 @@ export async function authorizeRunRequest(runId, req) {
   }
 
   if (run.conversation_id) {
-    const sandbox = createSandboxClient({ auth });
     await sandbox.getConversation(run.conversation_id);
   } else if (!run.owner_user_id) {
     throw new HttpError(409, 'RUN_OWNERSHIP_PENDING', 'Run ownership is not ready');

@@ -27,7 +27,7 @@ describe('trusted Run request identity', () => {
           username: 'alice',
         }), { status: 200 });
       }
-      if (url === 'http://agent.test/internal/agent-runs/run_a') {
+      if (url === 'http://sandbox.test/agent-runs/run_a') {
         return new Response(JSON.stringify({
           run_id: 'run_a',
           conversation_id: 'conv_a',
@@ -36,7 +36,7 @@ describe('trusted Run request identity', () => {
           status: 'running',
         }), { status: 200 });
       }
-      if (url === 'http://agent.test/internal/agent-runs/run_other') {
+      if (url === 'http://sandbox.test/agent-runs/run_other') {
         return new Response(JSON.stringify({
           run_id: 'run_other',
           conversation_id: 'conv_other',

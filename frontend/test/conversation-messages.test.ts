@@ -5,6 +5,27 @@ import { projectConversationMessages } from '../src/features/chat/projections/co
 import type { ChatMessage } from '../src/shared/state/types.ts';
 
 describe('conversation message projection', () => {
+  it('does not project an old run after starting a new conversation', () => {
+    let store = createEntityStore();
+    store = upsertRun(store, createRun({
+      id: 'run_old',
+      conversationId: 'conv_old',
+    }));
+
+    const projected = projectConversationMessages({
+      serverMessages: [],
+      conversationId: null,
+      store,
+      activeRunId: null,
+      projectRunMessages: () => [{
+        role: 'assistant',
+        content: [{ type: 'text', text: 'old answer' }],
+      }],
+    });
+
+    assert.deepEqual(projected, []);
+  });
+
   it('keeps distinct runs when assistant text is identical', () => {
     let store = createEntityStore();
     store = upsertRun(store, createRun({

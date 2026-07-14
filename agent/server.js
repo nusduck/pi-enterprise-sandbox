@@ -156,6 +156,7 @@ const server = http.createServer(async (req, res) => {
         json(res, 200, getExtensionDiagnostics({
           profileId: parsedUrl.searchParams.get('profile_id') || 'coding-agent',
           mcpServers: config.MCP_SERVERS,
+          skillRoots: config.SKILL_ROOTS,
         }));
       } catch (error) {
         json(res, 400, { error: error.message });
