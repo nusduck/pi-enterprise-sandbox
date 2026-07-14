@@ -26,8 +26,11 @@ describe('resolveAuthEnabled', () => {
 describe('isProtectedApiPath', () => {
   it('protects runs, conversations, capabilities and files; leaves status/auth public', () => {
     assert.equal(isPublicApiPath('/api/status'), true);
+    assert.equal(isPublicApiPath('/health/live'), true);
+    assert.equal(isPublicApiPath('/health/ready'), true);
     assert.equal(isPublicApiPath('/api/auth/login'), true);
     assert.equal(isProtectedApiPath('/api/status'), false);
+    assert.equal(isProtectedApiPath('/health/live'), false);
     assert.equal(isProtectedApiPath('/api/auth/login'), false);
     assert.equal(isProtectedApiPath('/api/conversations'), true);
     assert.equal(isProtectedApiPath('/api/runs'), true);
@@ -51,6 +54,13 @@ describe('authFromRequest', () => {
     assert.equal(auth.authorization, 'Bearer user-jwt-token');
     assert.equal(auth.actingUserId, undefined);
     assert.equal(auth.actingOrganizationId, undefined);
+  });
+
+  it('uses the HttpOnly session cookie when Authorization is absent', () => {
+    const auth = authFromRequest({
+      headers: { cookie: 'theme=dark; pi_enterprise_session=jwt.cookie.token' },
+    });
+    assert.equal(auth.authorization, 'Bearer jwt.cookie.token');
   });
 
   it('returns empty for missing auth', () => {

@@ -1,7 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { resolveConversationAndSession } from '../services/conversation-session-resolver.js';
+import { resolveConversationAndSession } from '../application/conversation-session-service.js';
 
 describe('resolveConversationAndSession', () => {
   it('creates and binds a sandbox session for a new conversation', async () => {

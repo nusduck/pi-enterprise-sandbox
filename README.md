@@ -41,7 +41,7 @@ pi-sandbox/
 │   ├── Dockerfile        ← Nginx 静态服务
 │   └── nginx.conf        ← /api/* 反向代理到 api-server
 ├── api-server/           ← 薄 BFF（auth / files / SSE relay）
-│   ├── server.js         ← HTTP 入口（Run API、SSE、/api/status）
+│   ├── server.js         ← HTTP 入口（Run API、SSE、health）
 │   ├── routes/           ← runs, files, status, conversations, capabilities...
 │   ├── services/         ← sandbox-client + agent-client
 │   └── Dockerfile
@@ -95,7 +95,7 @@ AGENT_BASE_URL=http://localhost:4100
 SANDBOX_BASE_URL=http://localhost:8081
 ```
 
-`GET /api/status` 返回 `"agent_runtime":"node-agent"` 以及 agent/sandbox 健康信息。Python Agent Runtime 与 `AGENT_RUNTIME` 开关已删除。
+`GET /health/live` 检查 BFF 进程，`GET /health/ready` 聚合 Agent/Sandbox readiness；`GET /api/status` 保留为 UI 状态视图。Python Agent Runtime 与 `AGENT_RUNTIME` 开关已删除。
 
 ### 执行限制
 

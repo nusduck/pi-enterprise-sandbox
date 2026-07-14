@@ -14,7 +14,7 @@ docker compose up --build -d
 
 # 3. 验证
 curl -f http://localhost:3000/            # Frontend
-curl -f http://localhost:4000/api/status  # BFF
+curl -f http://localhost:4000/health/ready  # BFF + dependencies
 curl -f http://localhost:4100/health      # Agent
 curl -f http://localhost:8083/health      # Sandbox liveness
 curl -f http://localhost:8083/ready       # Sandbox readiness (workspaces + DB)
@@ -34,7 +34,7 @@ curl -f http://localhost:8083/ready       # Sandbox readiness (workspaces + DB)
 docker compose -f docker-compose.yml -f docker-compose.prod.yml up --build -d
 
 # 验证
-curl -sf https://localhost/api/status
+curl -sf https://localhost/health/ready
 curl -sf https://localhost/nginx/status
 ```
 
@@ -215,7 +215,8 @@ curl http://localhost:8083/sessions                        # 401
 |------|------|------|----------|
 | Sandbox liveness | `GET /health` | 200 | 进程无响应 |
 | Sandbox readiness | `GET /ready` | 200 | **503** = workspace/`/tmp` 不可写、数据库不可用或 Bubblewrap preflight 失败 |
-| API Server | `GET /api/status` | 200 | BFF 进程未就绪 |
+| API Server liveness | `GET /health/live` | 200 | BFF 进程不可用 |
+| API Server readiness | `GET /health/ready` | 200 | Agent 或 Sandbox 未就绪（503） |
 | Frontend | `GET /` | 200 | 静态站/反代不可用 |
 
 ```bash
@@ -223,7 +224,7 @@ curl http://localhost:8083/sessions                        # 401
 curl -f http://localhost:3000/
 
 # API Server（仅 node-agent；无 Python/双 Runtime）
-curl -f http://localhost:4000/api/status
+curl -f http://localhost:4000/health/ready
 # {"status":"ok","version":"4.0.0","agent_runtime":"node-agent"}
 
 # Sandbox liveness（进程存活；公开路由，无需 API key）
@@ -253,7 +254,7 @@ node scripts/smoke-cross-service.mjs
 
 **完整栈（需有效 `LLMIO_*` 或测试用 fake 指向可路由地址）：**
 
-1. `docker compose up --build -d` → 等待 `curl -f localhost:4000/api/status` 与 `curl -f localhost:8083/ready`
+1. `docker compose up --build -d` → 等待 `curl -f localhost:4000/health/ready` 与 `curl -f localhost:8083/ready`
 2. 浏览器打开 `http://localhost:3000`，发送多轮消息（同一 conversation）
 3. 触发高风险 bash → UI 出现审批 → approve/reject
 4. 上传二进制文件 → 下载校验字节一致
@@ -352,7 +353,7 @@ docker compose run --rm sandbox python -c "import fastapi; print('ok')"
 
 ```bash
 # 检查 API Server 健康
-curl http://localhost:4000/api/status
+curl http://localhost:4000/health/ready
 
 # 检查 API Server → Sandbox 通信
 docker exec pi-enterprise-api curl -f http://sandbox:8081/health

@@ -15,9 +15,13 @@ export async function resolveConversationAndSession(client, conversationId) {
             workspaceId = existing.workspace_id || null;
             reusedSession = true;
           }
-        } catch { /* replace expired session below */ }
+        } catch {
+          // Expired sessions are replaced below.
+        }
       }
-    } catch { activeConversationId = null; }
+    } catch {
+      activeConversationId = null;
+    }
   }
   if (!activeConversationId) {
     activeConversationId = (await client.createConversation()).id;
@@ -31,7 +35,7 @@ export async function resolveConversationAndSession(client, conversationId) {
     workspaceId = session.workspace_id || null;
     await client.updateConversation(activeConversationId, {
       sandbox_session_id: sandboxSessionId,
-    }).catch(() => {});
+    });
   }
   return {
     activeConversationId,

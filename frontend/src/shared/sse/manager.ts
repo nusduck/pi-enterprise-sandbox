@@ -53,7 +53,7 @@ export type RunSSEManager = {
   disconnect: (runId: string) => void;
   /** Disconnect all runs (page unload). */
   disconnectAll: () => void;
-  /** Feed a raw/parsed event (tests + legacy adapter). */
+  /** Feed a raw/parsed event (tests + Agent event adapter). */
   handleEvent: (raw: unknown) => ReduceResult;
   /** Apply a RuntimeEvent that already belongs to a run. */
   handleRuntimeEvent: (ev: RuntimeEvent) => ReduceResult;

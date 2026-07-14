@@ -150,6 +150,8 @@ function toPublic(run) {
     budget_limits: run.budget_limits || null,
     pending_approval: run.pending_approval || null,
     pending_input: run.pending_input || null,
+    owner_user_id: run.auth?.actingUserId || null,
+    organization_id: run.auth?.actingOrganizationId || null,
   };
 }
 

@@ -55,6 +55,10 @@ describe('api-server import/listen smoke', () => {
       assert.ok(body.status === 'ok' || body.status === 'degraded');
       assert.equal(body.agent_runtime, 'node-agent');
       assert.equal(body.version, '4.0.0');
+      const live = await fetch(`http://127.0.0.1:${port}/health/live`);
+      assert.equal(live.status, 200);
+      const ready = await fetch(`http://127.0.0.1:${port}/health/ready`);
+      assert.equal(ready.status, 503);
     } finally {
       child.kill('SIGTERM');
       await Promise.race([once(child, 'exit'), new Promise((r) => setTimeout(r, 3000))]);

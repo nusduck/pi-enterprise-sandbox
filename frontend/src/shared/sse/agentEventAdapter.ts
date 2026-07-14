@@ -1,12 +1,12 @@
 /**
- * Compatibility adapter: legacy /chat SSE events → RuntimeEvent envelopes.
- * Keeps F1 chat streaming working until run-centric API fully lands.
+ * Agent wire-event adapter: sequenced Agent SSE / persisted event payloads
+ * → normalized RuntimeEvent envelopes consumed by the EntityStore reducer.
  */
 import type { RuntimeEvent } from '../schemas/events';
 import { makeRuntimeEvent } from '../schemas/events';
 import type { SSEEvent } from './parser';
 
-export type LegacyAdapterState = {
+export type AgentEventAdapterState = {
   runId: string;
   sessionId: string | null;
   conversationId: string | null;
@@ -17,14 +17,14 @@ export type LegacyAdapterState = {
   messageId: string | null;
   /** Map tool index / id → tool execution id. */
   toolIds: string[];
-  /** Terminal status already emitted for this legacy stream. */
+  /** Terminal status already emitted for this run stream. */
   terminalStatus: 'succeeded' | 'failed' | 'cancelled' | 'budget_exceeded' | null;
   suspendedStatus: 'waiting_approval' | 'waiting_input' | null;
 };
 
-export function createLegacyAdapterState(
-  partial: Partial<LegacyAdapterState> & { runId: string },
-): LegacyAdapterState {
+export function createAgentEventAdapterState(
+  partial: Partial<AgentEventAdapterState> & { runId: string },
+): AgentEventAdapterState {
   return {
     sessionId: null,
     conversationId: null,
@@ -39,21 +39,21 @@ export function createLegacyAdapterState(
   };
 }
 
-function nextSeq(state: LegacyAdapterState): number {
+function nextSeq(state: AgentEventAdapterState): number {
   state.sequence += 1;
   return state.sequence;
 }
 
-function eventId(state: LegacyAdapterState, seq: number): string {
-  return `legacy_${state.runId}_${seq}`;
+function eventId(state: AgentEventAdapterState, seq: number): string {
+  return `agent_${state.runId}_${seq}`;
 }
 
 /**
- * Convert one legacy chat SSE event into zero or more RuntimeEvents.
+ * Convert one Agent wire event into zero or more RuntimeEvents.
  * Mutates adapter state (sequence cursor, message/tool ids).
  */
-export function legacyEventToRuntime(
-  state: LegacyAdapterState,
+export function agentEventToRuntime(
+  state: AgentEventAdapterState,
   ev: SSEEvent,
 ): RuntimeEvent[] {
   const type = String(ev.type || '');
@@ -493,7 +493,7 @@ export function legacyEventToRuntime(
     }
 
     default:
-      // Unknown legacy types ignored
+      // Unknown extension events are intentionally ignored by this projection.
       break;
   }
 
@@ -501,17 +501,17 @@ export function legacyEventToRuntime(
 }
 
 /**
- * Convenience: map a list of legacy events through the adapter.
+ * Convenience: map a list of Agent events through the adapter.
  */
-export function adaptLegacyStream(
+export function adaptAgentEventStream(
   runId: string,
   events: SSEEvent[],
-  seed: Partial<LegacyAdapterState> = {},
-): { events: RuntimeEvent[]; state: LegacyAdapterState } {
-  const state = createLegacyAdapterState({ runId, ...seed });
+  seed: Partial<AgentEventAdapterState> = {},
+): { events: RuntimeEvent[]; state: AgentEventAdapterState } {
+  const state = createAgentEventAdapterState({ runId, ...seed });
   const all: RuntimeEvent[] = [];
   for (const ev of events) {
-    all.push(...legacyEventToRuntime(state, ev));
+    all.push(...agentEventToRuntime(state, ev));
   }
   return { events: all, state };
 }

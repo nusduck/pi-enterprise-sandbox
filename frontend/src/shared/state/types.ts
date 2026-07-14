@@ -30,6 +30,9 @@ export type ChatMessage = {
   status?: string;
   stopReason?: string;
   _fileLinks?: FileLink[];
+  /** Runtime identity used for stable merge/dedupe; never used as display text. */
+  _runId?: string;
+  _messageId?: string;
 };
 
 export type AttachmentStatus =

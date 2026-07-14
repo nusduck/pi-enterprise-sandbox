@@ -704,6 +704,7 @@ export function rehydrateRun(
     run_id?: string;
     conversation_id?: string | null;
     session_id?: string | null;
+    sandbox_session_id?: string | null;
     agent_session_id?: string | null;
     status?: string;
     last_sequence?: number | null;
@@ -712,6 +713,7 @@ export function rehydrateRun(
     started_at?: string | null;
     finished_at?: string | null;
     created_at?: string | null;
+    updated_at?: string | null;
     budget?: unknown;
     budget_limits?: unknown;
   },
@@ -719,6 +721,20 @@ export function rehydrateRun(
 ): EntityStore {
   const runId = detail.run_id || detail.id;
   if (!runId) return store;
+  const existing = store.runsById[runId];
+
+  const status = (() => {
+    switch (detail.status) {
+      case 'pending':
+        return 'queued';
+      case 'completed':
+        return 'succeeded';
+      case 'rejected':
+        return 'failed';
+      default:
+        return detail.status || existing?.status || 'running';
+    }
+  })() as RunStatus;
 
   const budgetUsage =
     detail.budget && typeof detail.budget === 'object'
@@ -732,19 +748,22 @@ export function rehydrateRun(
   let next = upsertRun(
     store,
     createRun({
+      ...existing,
       id: runId,
-      conversationId: detail.conversation_id || null,
-      agentSessionId: detail.agent_session_id || null,
-      sandboxSessionId: detail.session_id || null,
-      status: (detail.status as RunStatus) || 'running',
-      lastSequence: detail.last_sequence ?? 0,
-      lastEventId: detail.last_event_id || null,
-      error: detail.error || null,
-      budgetUsage,
-      budgetLimits,
-      startedAt: detail.started_at || null,
-      finishedAt: detail.finished_at || null,
-      createdAt: detail.created_at || null,
+      conversationId: detail.conversation_id ?? existing?.conversationId ?? null,
+      agentSessionId: detail.agent_session_id ?? existing?.agentSessionId ?? null,
+      sandboxSessionId:
+        detail.session_id ?? detail.sandbox_session_id ?? existing?.sandboxSessionId ?? null,
+      status,
+      lastSequence: detail.last_sequence ?? existing?.lastSequence ?? 0,
+      lastEventId: detail.last_event_id ?? existing?.lastEventId ?? null,
+      error: detail.error ?? existing?.error ?? null,
+      budgetUsage: budgetUsage ?? existing?.budgetUsage ?? null,
+      budgetLimits: budgetLimits ?? existing?.budgetLimits ?? null,
+      startedAt: detail.started_at ?? existing?.startedAt ?? null,
+      finishedAt: detail.finished_at ?? existing?.finishedAt ?? null,
+      createdAt: detail.created_at ?? existing?.createdAt ?? null,
+      updatedAt: detail.updated_at ?? existing?.updatedAt ?? null,
     }),
   );
 

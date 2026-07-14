@@ -46,20 +46,17 @@ import {
   deleteConversation,
   listArtifacts,
   decideApproval,
-  getAuthToken,
-  clearAuthToken,
   login as apiLogin,
   register as apiRegister,
+  logout as apiLogout,
   me as apiMe,
-  cancelRun,
-  steerRun as apiSteerRun,
-  followUpRun as apiFollowUpRun,
-  resumeApproval as apiResumeApproval,
-  respondInteraction as apiRespondInteraction,
 } from '../../shared/api';
 import { createEntityBridge, type EntityBridge } from './entityBridge';
 import type { EntityStore } from '../../entities';
 import type { SSEEvent } from '../../shared/sse/parser';
+import { projectConversationMessages } from './projections/conversationMessages';
+import { runUploadQueue } from './uploads/runUploadQueue';
+import { useRunControls } from './controllers/useRunControls';
 
 export type ChatController = {
   state: ChatState;
@@ -100,7 +97,7 @@ export type ChatController = {
   // Auth
   login: (username: string, password: string) => Promise<void>;
   register: (username: string, password: string) => Promise<void>;
-  logout: () => void;
+  logout: () => Promise<void>;
   // Flash
   clearFlash: () => void;
   // Display helpers
@@ -154,6 +151,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   const stateRef = useRef(state);
   stateRef.current = state;
   const activeStreamGenRef = useRef(0);
+  const conversationLoadGenerationRef = useRef(0);
   /** F2 entity bridge — multi-run SSE + normalized stores. */
   const bridgeRef = useRef<EntityBridge | null>(null);
   if (!bridgeRef.current) {
@@ -230,11 +228,11 @@ export function ChatProvider({ children }: { children: ReactNode }) {
 
   const applySSE = useCallback(
     (ev: SSEEvent, generation: number, runId?: string | null) => {
-      // Runtime events have exactly one write path: legacy adapter -> reducer ->
+      // Runtime events have exactly one write path: Agent adapter -> reducer ->
       // EntityStore. Background runs keep updating when focus changes.
       if (runId) {
         try {
-          bridge.ingestLegacyEvent(runId, ev);
+          bridge.ingestAgentEvent(runId, ev);
         } catch (err) {
           console.warn('[entity] ingest failed:', (err as Error).message);
         }
@@ -278,6 +276,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         }
         return;
       }
+      const loadGeneration = ++conversationLoadGenerationRef.current;
 
       // F2: do NOT abort background runs / SSE managers on conversation switch.
       // Only detach UI focus. EntityStore continues receiving events for
@@ -297,13 +296,14 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         });
       }
 
-      bridge.focusConversation(id);
-
       try {
         setStatus('Loading…', '#94a3b8');
         const conv = await getConversation(id);
+        if (loadGeneration !== conversationLoadGenerationRef.current) return;
         const messages = normalizeServerMessages(conv.messages);
         const sessionId = conv.sandbox_session_id || null;
+
+        bridge.focusConversation(conv.id);
 
         setState((s) => {
           // Focus switch without aborting abortCtrl (background run continues)
@@ -323,10 +323,8 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         });
         persistConversationId(conv.id);
 
-        // Rehydrate any in-progress runs for this conversation (stub-safe)
-        void bridge.rehydrateInProgress(conv.id).catch((err) => {
-          console.warn('[entity] rehydrate failed:', (err as Error).message);
-        });
+        await bridge.rehydrateConversation(conv.id);
+        if (loadGeneration !== conversationLoadGenerationRef.current) return;
 
         if (sessionId) {
           await refreshArtifacts(sessionId);
@@ -335,6 +333,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
           setStatus('Agent Ready');
         }
       } catch (err) {
+        if (loadGeneration !== conversationLoadGenerationRef.current) return;
         console.error('[conv] select failed:', err);
         flashError(`Failed to load conversation: ${(err as Error).message}`);
         setStatus('Agent Ready');
@@ -344,6 +343,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   );
 
   const startNewChat = useCallback(async () => {
+    conversationLoadGenerationRef.current += 1;
     const cur = stateRef.current;
     // F2: detaching UI focus does not cancel background runs
     if (cur.isStreaming) {
@@ -458,7 +458,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
           session_id: currentSessionId(),
           messages: [...cur.messages, userMsg],
         });
-        if (!created?.run_id) throw new Error('Run API unavailable');
+        if (!created.run_id) throw new Error('Run response is missing run_id');
         runId = bridge.beginRun({
           runId: created.run_id,
           conversationId: created.conversation_id || cur.conversationId,
@@ -475,7 +475,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         );
 
         // Commit this run's assistant projection into ChatState so later turns
-        // keep history even if activeRunId moves to a new synthetic run.
+        // keep history even if activeRunId moves to another server run.
         const projected = bridge.projectRunMessages(runId);
         const assistantCommitted = projected.filter(
           (m) =>
@@ -495,20 +495,12 @@ export function ChatProvider({ children }: { children: ReactNode }) {
           if (assistantCommitted.length) {
             messages = [...messages];
             for (const msg of assistantCommitted) {
-              const text = msg.content
-                .filter((part) => part.type === 'text' && 'text' in part)
-                .map((part) => String((part as { text?: unknown }).text || ''))
-                .join('');
-              const exists = messages.some((m) => {
-                if (m.role !== 'assistant') return false;
-                const existing = m.content
-                  .filter((part) => part.type === 'text' && 'text' in part)
-                  .map((part) =>
-                    String((part as { text?: unknown }).text || ''),
-                  )
-                  .join('');
-                return existing === text;
-              });
+              const exists = messages.some(
+                (message) =>
+                  message.role === 'assistant' &&
+                  message._runId != null &&
+                  message._runId === runId,
+              );
               if (!exists) messages.push(msg);
             }
           }
@@ -562,143 +554,20 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     ],
   );
 
-  const cancelStream = useCallback(() => {
-    // User-initiated Stop only — cancels the active fetch and entity SSE
-    const runId = bridge.getStore().activeRunId;
-    if (runId) bridge.abortRun(runId);
-  }, [bridge]);
-
-  const stopRun = useCallback(() => {
-    const runId = bridge.getStore().activeRunId;
-    cancelStream();
-    if (runId) {
-      void cancelRun(runId).then((ok) => {
-        if (!ok) {
-          // Soft-fail: local abort still applied
-          console.warn('[runs] cancelRun soft-failed for', runId);
-        }
-      });
-    }
-    setStatus('Stopping…', '#f59e0b');
-  }, [bridge, cancelStream, setStatus]);
-
-  const steerRun = useCallback(
-    async (text: string): Promise<boolean> => {
-      const trimmed = text.trim();
-      if (!trimmed) return false;
-      const runId = bridge.getStore().activeRunId;
-      if (!runId) {
-        flashError('No active run to steer');
-        return false;
-      }
-      try {
-        const result = await apiSteerRun(runId, {
-          text: trimmed,
-          conversation_id: stateRef.current.conversationId,
-        });
-        if (!result.ok) {
-          // Fallback: if API missing, surface error but keep draft
-          flashError(result.error || 'Steer unavailable');
-          return false;
-        }
-        setDraftText('');
-        setStatus('Steered', '#3b82f6');
-        return true;
-      } catch (err) {
-        flashError((err as Error).message || 'Steer failed');
-        return false;
-      }
-    },
-    [bridge, flashError, setStatus],
-  );
-
-  const followUpRun = useCallback(
-    async (text: string): Promise<boolean> => {
-      const trimmed = text.trim();
-      if (!trimmed) return false;
-      const runId = bridge.getStore().activeRunId;
-      if (!runId) {
-        flashError('No active run for follow-up');
-        return false;
-      }
-      try {
-        const result = await apiFollowUpRun(runId, {
-          text: trimmed,
-          conversation_id: stateRef.current.conversationId,
-        });
-        if (!result.ok) {
-          flashError(result.error || 'Follow-up unavailable');
-          return false;
-        }
-        setDraftText('');
-        setStatus('Follow-up queued', '#8b5cf6');
-        return true;
-      } catch (err) {
-        flashError((err as Error).message || 'Follow-up failed');
-        return false;
-      }
-    },
-    [bridge, flashError, setStatus],
-  );
-
-  /**
-   * Resume entry for interrupted runs:
-   * - waiting_approval → try resume-approval API
-   * - otherwise focus composer so user can continue the conversation
-   */
-  const resumeInterrupted = useCallback(async () => {
-    const runId = bridge.getStore().activeRunId;
-    const store = bridge.getStore();
-    const run = runId ? store.runsById[runId] : null;
-
-    if (run?.status === 'waiting_approval' && runId) {
-      try {
-        const result = await apiResumeApproval(runId, {});
-        if (result.ok) {
-          setStatus('Resuming approval…', '#fbbf24');
-          return;
-        }
-      } catch (err) {
-        flashError((err as Error).message || 'Resume failed');
-        return;
-      }
-    }
-
-    // Rehydrate in-progress runs for this conversation (best-effort)
-    const convId = stateRef.current.conversationId;
-    if (convId) {
-      try {
-        await bridge.rehydrateInProgress(convId);
-      } catch {
-        /* stub-safe */
-      }
-    }
-
-    setStatus('Ready to continue — type a message', '#22c55e');
-    // Focus composer via known input id
-    window.setTimeout(() => {
-      const el = document.getElementById('input') as HTMLTextAreaElement | null;
-      el?.focus();
-    }, 0);
-  }, [bridge, flashError, setStatus]);
-
-  const respondInteraction = useCallback(async (response: unknown): Promise<boolean> => {
-    const store = bridge.getStore();
-    const runId = store.activeRunId;
-    const pending = runId ? store.runsById[runId]?.pendingInput : null;
-    if (!runId || !pending?.interactionId) {
-      flashError('No pending interaction');
-      return false;
-    }
-    try {
-      await apiRespondInteraction(runId, pending.interactionId, response);
-      setStatus('Input submitted', '#3b82f6');
-      return true;
-    } catch (err) {
-      flashError((err as Error).message || 'Input response failed');
-      return false;
-    }
-  }, [bridge, flashError, setStatus]);
+  const {
+    cancelStream,
+    stopRun,
+    steerRun,
+    followUpRun,
+    resumeInterrupted,
+    respondInteraction,
+  } = useRunControls({
+    bridge,
+    stateRef,
+    setDraftText,
+    setStatus,
+    flashError,
+  });
 
   const ensureConversationSession = useCallback(async () => {
     const cur = stateRef.current;
@@ -855,7 +724,11 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         return next;
       });
 
-      await Promise.all(drafts.map((d) => runUploadForDraft(d.localId, d)));
+      await runUploadQueue(
+        drafts,
+        (draft) => runUploadForDraft(draft.localId, draft),
+        3,
+      );
     },
     [flashError, runUploadForDraft],
   );
@@ -906,7 +779,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     async (approvalId: string, decision: 'approve' | 'reject') => {
       if (!approvalId) return;
       try {
-        await decideApproval(approvalId, decision);
+        const result = await decideApproval(approvalId, decision);
         bridge.markApproval(
           approvalId,
           decision === 'approve' ? 'approved' : 'rejected',
@@ -915,6 +788,9 @@ export function ChatProvider({ children }: { children: ReactNode }) {
           decision === 'approve' ? 'Approved' : 'Rejected',
           decision === 'approve' ? '#22c55e' : '#ef4444',
         );
+        if (result.agent_resume_status === 'pending') {
+          flashError('Decision saved; Agent resume is pending. Use Resume to retry.');
+        }
       } catch (err) {
         flashError((err as Error).message);
       }
@@ -966,11 +842,15 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     [setStatus, refreshConversations],
   );
 
-  const logout = useCallback(() => {
-    clearAuthToken();
-    setState((s) => update(s, { authUser: null }));
-    setStatus('Logged out');
-  }, [setStatus]);
+  const logout = useCallback(async () => {
+    try {
+      await apiLogout();
+      setState((s) => update(s, { authUser: null }));
+      setStatus('Logged out');
+    } catch (err) {
+      flashError((err as Error).message || 'Logout failed');
+    }
+  }, [flashError, setStatus]);
 
   const toggleSidebar = useCallback(() => {
     setState((s) => {
@@ -992,17 +872,15 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     let cancelled = false;
 
     async function boot() {
+      const loadGeneration = ++conversationLoadGenerationRef.current;
       // Auth
-      const token = getAuthToken();
-      if (token) {
-        try {
-          const user = await apiMe();
-          if (!cancelled) {
-            setState((s) => update(s, { authUser: user }));
-          }
-        } catch {
-          /* stale token */
+      try {
+        const user = await apiMe();
+        if (!cancelled) {
+          setState((s) => update(s, { authUser: user }));
         }
+      } catch {
+        /* no active BFF session */
       }
 
       await refreshConversations();
@@ -1014,7 +892,10 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       if (savedConvId) {
         try {
           const conv = await getConversation(savedConvId);
-          if (cancelled) return;
+          if (
+            cancelled ||
+            loadGeneration !== conversationLoadGenerationRef.current
+          ) return;
           const messages = normalizeServerMessages(conv.messages);
           setState((s) =>
             update(s, {
@@ -1025,10 +906,16 @@ export function ChatProvider({ children }: { children: ReactNode }) {
           );
           persistConversationId(conv.id);
           bridge.focusConversation(conv.id);
-          // F2: rehydrate in-progress runs after refresh (API may be stub)
-          void bridge.rehydrateInProgress(conv.id).catch(() => {
-            /* endpoint may not exist yet */
-          });
+          try {
+            await bridge.rehydrateConversation(conv.id);
+          } catch (error) {
+            console.warn('[boot] timeline restore failed:', (error as Error).message);
+            flashError('Conversation loaded, but activity history could not be restored');
+          }
+          if (
+            cancelled ||
+            loadGeneration !== conversationLoadGenerationRef.current
+          ) return;
           if (conv.sandbox_session_id) {
             await refreshArtifacts(conv.sandbox_session_id);
             setStatus(`Session ${conv.sandbox_session_id.slice(-8)}`);
@@ -1044,7 +931,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     return () => {
       cancelled = true;
     };
-  }, [refreshConversations, refreshArtifacts, setStatus, bridge]);
+  }, [refreshConversations, refreshArtifacts, setStatus, flashError, bridge]);
 
   // Dispose entity SSE managers on unmount (page unload)
   useEffect(() => {
@@ -1078,77 +965,13 @@ export function ChatProvider({ children }: { children: ReactNode }) {
    * starting a second turn does not drop the previous assistant reply.
    */
   const displayMessages = useMemo(() => {
-    const result = [...state.messages];
-    const convId = state.conversationId;
-
-    const runs = Object.values(entityStore.runsById)
-      .filter((run) => {
-        if (!run) return false;
-        if (convId) {
-          // Include runs bound to this conversation; also synthetic runs that
-          // have not received conversation_id yet while we are on a blank chat.
-          return (
-            run.conversationId === convId ||
-            run.conversationId == null ||
-            run.id === activeRunId
-          );
-        }
-        return true;
-      })
-      .sort((a, b) => {
-        const ta = a.startedAt || a.createdAt || a.id;
-        const tb = b.startedAt || b.createdAt || b.id;
-        return String(ta).localeCompare(String(tb));
-      });
-
-    function messageText(message: ChatMessage): string {
-      return message.content
-        .filter((part) => part.type === 'text' && 'text' in part)
-        .map((part) => String((part as { text?: unknown }).text || ''))
-        .join('');
-    }
-
-    function mergeProjected(message: ChatMessage) {
-      // Prefer assistant/runtime rows from entity projection; skip empty shells.
-      const text = messageText(message);
-      const hasTools = message.content.some((part) => part.type === 'tool_use');
-      const hasFiles = Boolean(message._fileLinks?.length);
-      if (message.role === 'assistant' && !text && !hasTools && !hasFiles) {
-        return;
-      }
-      // User turns already live in ChatState from sendMessage / server history.
-      if (message.role === 'user') {
-        if (!text) return;
-        const exists = result.some(
-          (m) => m.role === 'user' && messageText(m) === text,
-        );
-        if (!exists) result.push(message);
-        return;
-      }
-
-      let match = -1;
-      for (let i = result.length - 1; i >= 0; i -= 1) {
-        if (result[i].role !== message.role) continue;
-        if (messageText(result[i]) === text) {
-          match = i;
-          break;
-        }
-      }
-      if (match >= 0) {
-        if (hasFiles || hasTools || message.interrupted) {
-          result[match] = message;
-        }
-      } else {
-        result.push(message);
-      }
-    }
-
-    for (const run of runs) {
-      for (const message of bridge.projectRunMessages(run.id)) {
-        mergeProjected(message);
-      }
-    }
-    return result;
+    return projectConversationMessages({
+      serverMessages: state.messages,
+      conversationId: state.conversationId,
+      store: entityStore,
+      activeRunId,
+      projectRunMessages: bridge.projectRunMessages,
+    });
   }, [state.messages, state.conversationId, entityStore, activeRunId, bridge]);
 
   const canSend = canSendAttachments(state.attachments);

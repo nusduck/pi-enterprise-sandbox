@@ -4,13 +4,14 @@
  * Chat orchestration is delegated to the independent Agent service.
  */
 import http from 'node:http';
+import { randomUUID } from 'node:crypto';
 import {
   config,
   isProtectedApiPath,
   validateProductionConfig,
   effectiveConfig,
 } from './config.js';
-import { handleStatus } from './routes/status.js';
+import { handleLiveness, handleReadiness, handleStatus } from './routes/status.js';
 import { handleFileDownload, handleFileUpload, handleArtifactDownload } from './routes/files.js';
 import {
   handleListConversations,
@@ -29,16 +30,19 @@ import {
   handleResumeApproval,
   handleInteractionResponse,
   handleCreateRun,
+  handleListRuns,
   handleRunEvents,
 } from './routes/runs.js';
-import { handleRegister, handleLogin, handleMe } from './routes/auth.js';
+import { handleRegister, handleLogin, handleLogout, handleMe } from './routes/auth.js';
 import { handleEnsureSession } from './routes/sessions.js';
 import {
   handleCapabilityRegistry,
   handleExtensionDiagnostics,
 } from './routes/capabilities.js';
-import { checkHealth } from './services/sandbox-client.js';
+import { authFromRequest, checkHealth } from './services/sandbox-client.js';
 import { checkAgentHealth } from './services/agent-client.js';
+import { readJsonBody } from './http/body.js';
+import { sendError } from './http/response.js';
 
 // Production fail-fast before bind.
 try {
@@ -68,21 +72,18 @@ async function startupCheck() {
   }
 }
 
-// ── Body parsing ────────────────────────────────
-
-function readBody(req) {
-  return new Promise((resolve, reject) => {
-    const chunks = [];
-    req.on('data', (chunk) => chunks.push(chunk));
-    req.on('end', () => resolve(Buffer.concat(chunks).toString()));
-    req.on('error', reject);
-  });
-}
-
 // ── Router ──────────────────────────────────────
 
-function setCommonHeaders(res) {
-  res.setHeader('Access-Control-Allow-Origin', '*');
+function setCommonHeaders(req, res) {
+  const origin = String(req.headers.origin || '');
+  const allowed = config.CORS_ALLOWED_ORIGINS;
+  if (allowed.includes(origin)) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
+    res.setHeader('Vary', 'Origin');
+  } else if (config.DEPLOYMENT_ENV !== 'production' && allowed.length === 0) {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+  }
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PATCH, DELETE, OPTIONS');
   res.setHeader(
     'Access-Control-Allow-Headers',
@@ -106,7 +107,7 @@ function jsonError(res, status, message) {
 function enforceBffAuth(req, res, path) {
   if (!config.AUTH_ENABLED) return true;
   if (!isProtectedApiPath(path)) return true;
-  const auth = req.headers.authorization || '';
+  const auth = authFromRequest(req).authorization || '';
   if (!auth.toLowerCase().startsWith('bearer ') || auth.length < 16) {
     jsonError(res, 401, 'Authentication required');
     return false;
@@ -115,7 +116,10 @@ function enforceBffAuth(req, res, path) {
 }
 
 const server = http.createServer(async (req, res) => {
-  setCommonHeaders(res);
+  const traceId = String(req.headers['x-trace-id'] || `trace_${randomUUID().replaceAll('-', '')}`);
+  req.traceId = traceId;
+  res.setHeader('X-Trace-Id', traceId);
+  setCommonHeaders(req, res);
 
   if (req.method === 'OPTIONS') {
     res.writeHead(204);
@@ -133,25 +137,35 @@ const server = http.createServer(async (req, res) => {
 
     // ── Auth proxy (public) ──
     if (req.method === 'POST' && path === '/api/auth/register') {
-      const body = await readBody(req);
-      const parsed = body ? JSON.parse(body) : {};
-      await handleRegister(parsed, res);
+      const parsed = await readJsonBody(req, { maxBytes: config.JSON_BODY_LIMIT_BYTES });
+      await handleRegister(parsed, res, req);
       return;
     }
     if (req.method === 'POST' && path === '/api/auth/login') {
-      const body = await readBody(req);
-      const parsed = body ? JSON.parse(body) : {};
-      await handleLogin(parsed, res);
+      const parsed = await readJsonBody(req, { maxBytes: config.JSON_BODY_LIMIT_BYTES });
+      await handleLogin(parsed, res, req);
       return;
     }
     if (req.method === 'GET' && path === '/api/auth/me') {
       await handleMe(res, req);
       return;
     }
+    if (req.method === 'POST' && path === '/api/auth/logout') {
+      handleLogout(res);
+      return;
+    }
 
     // ── GET /api/status — health check ──
     if (req.method === 'GET' && path === '/api/status') {
       await handleStatus(res);
+      return;
+    }
+    if (req.method === 'GET' && path === '/health/live') {
+      handleLiveness(res);
+      return;
+    }
+    if (req.method === 'GET' && path === '/health/ready') {
+      await handleReadiness(res);
       return;
     }
 
@@ -173,8 +187,7 @@ const server = http.createServer(async (req, res) => {
       return;
     }
     if (req.method === 'POST' && path === '/api/conversations') {
-      const body = await readBody(req);
-      const parsed = body ? JSON.parse(body) : {};
+      const parsed = await readJsonBody(req, { maxBytes: config.JSON_BODY_LIMIT_BYTES });
       await handleCreateConversation(parsed, res, req);
       return;
     }
@@ -211,8 +224,7 @@ const server = http.createServer(async (req, res) => {
       const apprMatch = path.match(/^\/api\/approvals\/([^/]+)\/decide$/);
       if (req.method === 'POST' && apprMatch) {
         const approvalId = decodeURIComponent(apprMatch[1]);
-        const body = await readBody(req);
-        const parsed = body ? JSON.parse(body) : {};
+        const parsed = await readJsonBody(req, { maxBytes: config.JSON_BODY_LIMIT_BYTES });
         await handleDecideApproval(approvalId, parsed, res, req);
         return;
       }
@@ -221,9 +233,12 @@ const server = http.createServer(async (req, res) => {
     // ── Run control (ADR §4.7 / §10) ──
     {
       if (req.method === 'POST' && path === '/api/runs') {
-        const body = await readBody(req);
-        const parsed = body ? JSON.parse(body) : {};
+        const parsed = await readJsonBody(req, { maxBytes: config.JSON_BODY_LIMIT_BYTES });
         await handleCreateRun(parsed, res, req);
+        return;
+      }
+      if (req.method === 'GET' && path === '/api/runs') {
+        await handleListRuns(parsedUrl, res, req);
         return;
       }
       const runEvents = path.match(/^\/api\/runs\/([^/]+)\/events$/);
@@ -234,29 +249,26 @@ const server = http.createServer(async (req, res) => {
       const runSteer = path.match(/^\/api\/runs\/([^/]+)\/steer$/);
       if (req.method === 'POST' && runSteer) {
         const runId = decodeURIComponent(runSteer[1]);
-        const body = await readBody(req);
-        const parsed = body ? JSON.parse(body) : {};
-        await handleSteerRun(runId, parsed, res);
+        const parsed = await readJsonBody(req, { maxBytes: config.JSON_BODY_LIMIT_BYTES });
+        await handleSteerRun(runId, parsed, res, req);
         return;
       }
       const runFollow = path.match(/^\/api\/runs\/([^/]+)\/follow-up$/);
       if (req.method === 'POST' && runFollow) {
         const runId = decodeURIComponent(runFollow[1]);
-        const body = await readBody(req);
-        const parsed = body ? JSON.parse(body) : {};
-        await handleFollowUpRun(runId, parsed, res);
+        const parsed = await readJsonBody(req, { maxBytes: config.JSON_BODY_LIMIT_BYTES });
+        await handleFollowUpRun(runId, parsed, res, req);
         return;
       }
       const runCancel = path.match(/^\/api\/runs\/([^/]+)\/cancel$/);
       if (req.method === 'POST' && runCancel) {
-        await handleCancelRun(decodeURIComponent(runCancel[1]), res);
+        await handleCancelRun(decodeURIComponent(runCancel[1]), res, req);
         return;
       }
       const runResume = path.match(/^\/api\/runs\/([^/]+)\/resume-approval$/);
       if (req.method === 'POST' && runResume) {
         const runId = decodeURIComponent(runResume[1]);
-        const body = await readBody(req);
-        const parsed = body ? JSON.parse(body) : {};
+        const parsed = await readJsonBody(req, { maxBytes: config.JSON_BODY_LIMIT_BYTES });
         await handleResumeApproval(runId, parsed, res, req);
         return;
       }
@@ -264,8 +276,7 @@ const server = http.createServer(async (req, res) => {
         /^\/api\/runs\/([^/]+)\/interactions\/([^/]+)\/respond$/,
       );
       if (req.method === 'POST' && runInteraction) {
-        const body = await readBody(req);
-        const parsed = body ? JSON.parse(body) : {};
+        const parsed = await readJsonBody(req, { maxBytes: config.JSON_BODY_LIMIT_BYTES });
         await handleInteractionResponse(
           decodeURIComponent(runInteraction[1]),
           decodeURIComponent(runInteraction[2]),
@@ -277,7 +288,7 @@ const server = http.createServer(async (req, res) => {
       }
       const runGet = path.match(/^\/api\/runs\/([^/]+)$/);
       if (req.method === 'GET' && runGet) {
-        await handleGetRun(decodeURIComponent(runGet[1]), res);
+        await handleGetRun(decodeURIComponent(runGet[1]), res, req);
         return;
       }
     }
@@ -302,8 +313,7 @@ const server = http.createServer(async (req, res) => {
 
     // ── POST /api/sessions/ensure — create/reuse conversation + sandbox session ──
     if (req.method === 'POST' && path === '/api/sessions/ensure') {
-      const body = await readBody(req);
-      const parsed = body ? JSON.parse(body) : {};
+      const parsed = await readJsonBody(req, { maxBytes: config.JSON_BODY_LIMIT_BYTES });
       await handleEnsureSession(parsed, res, req);
       return;
     }
@@ -311,7 +321,8 @@ const server = http.createServer(async (req, res) => {
     jsonError(res, 404, 'Not found');
   } catch (err) {
     console.error('[server] Unhandled:', err);
-    jsonError(res, 500, 'Internal server error');
+    if (!res.headersSent) sendError(res, err, traceId);
+    else if (!res.writableEnded) res.end();
   }
 });
 

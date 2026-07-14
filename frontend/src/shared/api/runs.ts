@@ -1,6 +1,6 @@
 /**
  * Run-centric API adapters (ADR 0003 §14, §16).
- * When backend endpoints are incomplete, helpers soft-fail / stub so UI can rehydrate later.
+ * Core Run endpoints fail loudly so API contract regressions are visible.
  */
 import {
   CreateRunResponseSchema,
@@ -8,7 +8,7 @@ import {
   type CreateRunResponse,
   type RunDetail,
 } from '../schemas/events';
-import { parseApi } from '../schemas/api';
+import { parseApiStrict } from '../schemas/api';
 import { authHeaders, ApiError } from './client';
 import type { SSEEvent } from '../sse/parser';
 import { readSSEStream } from '../sse/parser';
@@ -23,22 +23,18 @@ async function errorBody(resp: Response): Promise<Record<string, unknown>> {
 
 /**
  * POST /runs — create a run and return run_id.
- * Returns null when endpoint is not available yet (404/501).
  */
 export async function createRun(body: {
   conversation_id?: string | null;
   session_id?: string | null;
   messages?: unknown[];
-}): Promise<CreateRunResponse | null> {
+}): Promise<CreateRunResponse> {
   try {
     const resp = await fetch(`${BASE}/runs`, {
       method: 'POST',
       headers: authHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify(body),
     });
-    if (resp.status === 404 || resp.status === 501 || resp.status === 405) {
-      return null;
-    }
     if (!resp.ok) {
       const err = await errorBody(resp);
       throw new ApiError(
@@ -49,25 +45,21 @@ export async function createRun(body: {
         },
       );
     }
-    return parseApi(CreateRunResponseSchema, await resp.json(), 'createRun');
+    return parseApiStrict(CreateRunResponseSchema, await resp.json(), 'createRun');
   } catch (err) {
     if (err instanceof ApiError) throw err;
-    // Network / not implemented — soft null for adapter path
-    console.warn('[runs] createRun unavailable:', (err as Error).message);
-    return null;
+    throw new ApiError((err as Error).message || 'Create run failed');
   }
 }
 
 /**
  * GET /runs/{run_id} — fetch run detail for rehydrate after refresh.
- * Returns null when endpoint is not available.
  */
-export async function getRun(runId: string): Promise<RunDetail | null> {
+export async function getRun(runId: string): Promise<RunDetail> {
   try {
     const resp = await fetch(`${BASE}/runs/${encodeURIComponent(runId)}`, {
       headers: authHeaders(),
     });
-    if (resp.status === 404 || resp.status === 501) return null;
     if (!resp.ok) {
       const err = await errorBody(resp);
       throw new ApiError(
@@ -75,11 +67,10 @@ export async function getRun(runId: string): Promise<RunDetail | null> {
         { status: resp.status },
       );
     }
-    return parseApi(RunDetailSchema, await resp.json(), 'getRun');
+    return parseApiStrict(RunDetailSchema, await resp.json(), 'getRun');
   } catch (err) {
     if (err instanceof ApiError) throw err;
-    console.warn('[runs] getRun unavailable:', (err as Error).message);
-    return null;
+    throw new ApiError((err as Error).message || 'Get run failed');
   }
 }
 
@@ -96,7 +87,6 @@ export async function cancelRun(runId: string): Promise<boolean> {
         body: JSON.stringify({}),
       },
     );
-    if (resp.status === 404 || resp.status === 501) return false;
     if (!resp.ok) {
       const err = await errorBody(resp);
       throw new ApiError(
@@ -107,8 +97,7 @@ export async function cancelRun(runId: string): Promise<boolean> {
     return true;
   } catch (err) {
     if (err instanceof ApiError) throw err;
-    console.warn('[runs] cancelRun unavailable:', (err as Error).message);
-    return false;
+    throw new ApiError((err as Error).message || 'Cancel run failed');
   }
 }
 
@@ -154,38 +143,38 @@ export async function streamRunEvents(
 }
 
 /**
- * List in-progress runs for a conversation (rehydrate after refresh).
- * Soft-fails to [] when endpoint missing.
+ * List runs, optionally scoped to a conversation and status.
  */
 export async function listRuns(opts: {
   conversation_id?: string;
   status?: string;
 } = {}): Promise<RunDetail[]> {
-  try {
-    const q = new URLSearchParams();
-    if (opts.conversation_id) q.set('conversation_id', opts.conversation_id);
-    if (opts.status) q.set('status', opts.status);
-    const qs = q.toString() ? `?${q}` : '';
-    const resp = await fetch(`${BASE}/runs${qs}`, {
-      headers: authHeaders(),
+  const q = new URLSearchParams();
+  if (opts.conversation_id) q.set('conversation_id', opts.conversation_id);
+  if (opts.status) q.set('status', opts.status);
+  const qs = q.toString() ? `?${q}` : '';
+  const resp = await fetch(`${BASE}/runs${qs}`, {
+    headers: authHeaders(),
+  });
+  if (!resp.ok) {
+    const err = await errorBody(resp);
+    throw new ApiError(String(err.error || `List runs failed: ${resp.status}`), {
+      status: resp.status,
+      traceId: resp.headers.get('x-trace-id'),
     });
-    if (resp.status === 404 || resp.status === 501) return [];
-    if (!resp.ok) return [];
-    const data = (await resp.json()) as unknown;
-    const list = Array.isArray(data)
-      ? data
-      : Array.isArray((data as { runs?: unknown[] })?.runs)
-        ? (data as { runs: unknown[] }).runs
-        : [];
-    return list.map((item) => parseApi(RunDetailSchema, item, 'listRuns'));
-  } catch {
-    return [];
   }
+  const data = (await resp.json()) as unknown;
+  const list = Array.isArray(data)
+    ? data
+    : Array.isArray((data as { runs?: unknown[] })?.runs)
+      ? (data as { runs: unknown[] }).runs
+      : [];
+  return list.map((item) => parseApiStrict(RunDetailSchema, item, 'listRuns'));
 }
 
 /**
  * POST /api/runs/{run_id}/steer — change current execution direction.
- * Soft-fails to false when endpoint missing.
+ * Contract failures are surfaced to the caller.
  */
 export async function steerRun(
   runId: string,
@@ -203,9 +192,6 @@ export async function steerRun(
         }),
       },
     );
-    if (resp.status === 404 || resp.status === 501) {
-      return { ok: false, error: 'Steer API unavailable' };
-    }
     if (!resp.ok) {
       const err = await errorBody(resp);
       throw new ApiError(
@@ -216,14 +202,13 @@ export async function steerRun(
     return { ok: true, data: await resp.json().catch(() => ({})) };
   } catch (err) {
     if (err instanceof ApiError) throw err;
-    console.warn('[runs] steerRun unavailable:', (err as Error).message);
-    return { ok: false, error: (err as Error).message };
+    throw new ApiError((err as Error).message || 'Steer failed');
   }
 }
 
 /**
  * POST /api/runs/{run_id}/follow-up — queue text after current run work.
- * Soft-fails to false when endpoint missing.
+ * Contract failures are surfaced to the caller.
  */
 export async function followUpRun(
   runId: string,
@@ -241,9 +226,6 @@ export async function followUpRun(
         }),
       },
     );
-    if (resp.status === 404 || resp.status === 501) {
-      return { ok: false, error: 'Follow-up API unavailable' };
-    }
     if (!resp.ok) {
       const err = await errorBody(resp);
       throw new ApiError(
@@ -254,14 +236,13 @@ export async function followUpRun(
     return { ok: true, data: await resp.json().catch(() => ({})) };
   } catch (err) {
     if (err instanceof ApiError) throw err;
-    console.warn('[runs] followUpRun unavailable:', (err as Error).message);
-    return { ok: false, error: (err as Error).message };
+    throw new ApiError((err as Error).message || 'Follow-up failed');
   }
 }
 
 /**
  * POST /api/runs/{run_id}/resume-approval — recover parked approval wait.
- * Soft-fails when endpoint missing.
+ * Contract failures are surfaced to the caller.
  */
 export async function resumeApproval(
   runId: string,
@@ -276,9 +257,6 @@ export async function resumeApproval(
         body: JSON.stringify(body),
       },
     );
-    if (resp.status === 404 || resp.status === 501) {
-      return { ok: false, error: 'Resume-approval API unavailable' };
-    }
     if (!resp.ok) {
       const err = await errorBody(resp);
       throw new ApiError(
@@ -289,8 +267,7 @@ export async function resumeApproval(
     return { ok: true, data: await resp.json().catch(() => ({})) };
   } catch (err) {
     if (err instanceof ApiError) throw err;
-    console.warn('[runs] resumeApproval unavailable:', (err as Error).message);
-    return { ok: false, error: (err as Error).message };
+    throw new ApiError((err as Error).message || 'Resume failed');
   }
 }
 
@@ -315,12 +292,4 @@ export async function respondInteraction(
     });
   }
   return { ok: true, data: await resp.json().catch(() => ({})) };
-}
-
-/**
- * Synthetic local run id when create-run API is not ready.
- * Used by legacy /chat adapter path.
- */
-export function syntheticRunId(prefix = 'run'): string {
-  return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
 }

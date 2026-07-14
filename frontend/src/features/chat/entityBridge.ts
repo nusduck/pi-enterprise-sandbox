@@ -1,9 +1,9 @@
 /**
- * Bridge from the legacy /chat transport into the normalized entity runtime.
+ * Bridge from Agent run events into the normalized entity runtime.
  *
  * - Reduces runtime events exactly once via RunSSEManager
  * - Conversation switch does NOT disconnect background run managers
- * - Owns per-run legacy fetch controllers and entity projections
+ * - Owns per-run fetch controllers and durable-history projections
  */
 import {
   createEntityStore,
@@ -21,18 +21,19 @@ import {
   type RunSSEManager,
 } from '../../shared/sse/manager';
 import {
-  createLegacyAdapterState,
-  legacyEventToRuntime,
-  type LegacyAdapterState,
-} from '../../shared/sse/legacyAdapter';
+  createAgentEventAdapterState,
+  agentEventToRuntime,
+  type AgentEventAdapterState,
+} from '../../shared/sse/agentEventAdapter';
 import type { SSEEvent } from '../../shared/sse/parser';
 import { rehydrateRun } from '../../shared/state/runReducer';
 import {
   getRun,
   listRuns,
-  syntheticRunId,
   type RunDetail,
 } from '../../shared/api/runs';
+import { getConversationEvents } from '../../shared/api/client';
+import type { PersistedAgentEvent } from '../../shared/schemas/events';
 import type { ChatMessage } from '../../shared/state/types';
 import type { ContentPart, ToolUsePart } from '../../shared/state/types';
 import { getArtifactDownloadUrl, getDownloadUrl } from '../../shared/api/client';
@@ -42,17 +43,17 @@ export type EntityBridge = {
   manager: RunSSEManager;
   getStore: () => EntityStore;
   /**
-   * Start tracking a new run (local synthetic id or server run_id).
-   * Returns the runId used for subsequent legacy SSE reduction.
+   * Start tracking a new run (local test id or server run_id).
+   * Returns the runId used for subsequent Agent event reduction.
    */
   beginRun: (opts?: {
     runId?: string;
     conversationId?: string | null;
     sessionId?: string | null;
   }) => string;
-  /** Reduce one legacy /chat SSE event into the entity store. */
-  ingestLegacyEvent: (runId: string, ev: SSEEvent) => void;
-  /** Register/release the legacy fetch transport owned by a run. */
+  /** Reduce one Agent wire event into the entity store. */
+  ingestAgentEvent: (runId: string, ev: SSEEvent) => void;
+  /** Register/release the fetch transport owned by a run. */
   attachTransport: (runId: string, controller: AbortController) => void;
   releaseTransport: (runId: string) => void;
   abortRun: (runId: string) => void;
@@ -69,12 +70,14 @@ export type EntityBridge = {
   failRun: (runId: string, message: string) => void;
   /** Disconnect all (page unload). */
   dispose: () => void;
-  /** Rehydrate in-progress runs after refresh (API may stub empty). */
+  /** Rehydrate in-progress runs after refresh. */
   rehydrateInProgress: (conversationId?: string | null) => Promise<RunEntity[]>;
+  /** Restore the complete persisted timeline and reconnect non-terminal runs. */
+  rehydrateConversation: (conversationId: string) => Promise<RunEntity[]>;
   /** Project run assistant messages to ChatMessage[] for UI. */
   projectRunMessages: (runId: string) => ChatMessage[];
   /** Adapter state for a run (tests). */
-  getLegacyAdapter: (runId: string) => LegacyAdapterState | null;
+  getAgentEventAdapter: (runId: string) => AgentEventAdapterState | null;
   /** Mark an approval decided (optimistic UI after user action). */
   markApproval: (
     approvalId: string,
@@ -89,8 +92,13 @@ export function createEntityBridge(
   onStoreChange?: (store: EntityStore) => void,
 ): EntityBridge {
   let store = createEntityStore();
-  const legacyAdapters = new Map<string, LegacyAdapterState>();
+  const eventAdapters = new Map<string, AgentEventAdapterState>();
   const transports = new Map<string, AbortController>();
+
+  function localRunId(): string {
+    const uuid = globalThis.crypto?.randomUUID?.();
+    return uuid ? `local_${uuid}` : `local_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+  }
 
   const manager = createRunSSEManager(store, {
     onStoreChange: (s) => {
@@ -106,7 +114,7 @@ export function createEntityBridge(
       sessionId?: string | null;
     } = {},
   ): string {
-    const runId = opts.runId || syntheticRunId();
+    const runId = opts.runId || localRunId();
     store = upsertRun(
       store,
       createRun({
@@ -122,9 +130,9 @@ export function createEntityBridge(
       activeConversationId: opts.conversationId || store.activeConversationId,
     };
     manager.setStore(store);
-    legacyAdapters.set(
+    eventAdapters.set(
       runId,
-      createLegacyAdapterState({
+      createAgentEventAdapterState({
         runId,
         conversationId: opts.conversationId || null,
         sessionId: opts.sessionId || null,
@@ -134,16 +142,16 @@ export function createEntityBridge(
     return runId;
   }
 
-  function ingestLegacyEvent(runId: string, ev: SSEEvent): void {
-    let adapter = legacyAdapters.get(runId);
+  function ingestAgentEvent(runId: string, ev: SSEEvent): void {
+    let adapter = eventAdapters.get(runId);
     if (!adapter) {
-      adapter = createLegacyAdapterState({
+      adapter = createAgentEventAdapterState({
         runId,
         sequence: manager.getStore().runsById[runId]?.lastSequence || 0,
       });
-      legacyAdapters.set(runId, adapter);
+      eventAdapters.set(runId, adapter);
     }
-    const runtimeEvents = legacyEventToRuntime(adapter, ev);
+    const runtimeEvents = agentEventToRuntime(adapter, ev);
     for (const re of runtimeEvents) {
       manager.handleRuntimeEvent(re);
     }
@@ -180,13 +188,13 @@ export function createEntityBridge(
     type: 'run.status_changed' | 'run.failed',
     payload: Record<string, unknown>,
   ): void {
-    let adapter = legacyAdapters.get(runId);
+    let adapter = eventAdapters.get(runId);
     if (!adapter) {
-      adapter = createLegacyAdapterState({
+      adapter = createAgentEventAdapterState({
         runId,
         sequence: manager.getStore().runsById[runId]?.lastSequence || 0,
       });
-      legacyAdapters.set(runId, adapter);
+      eventAdapters.set(runId, adapter);
     }
     adapter.sequence += 1;
     manager.handleRuntimeEvent(
@@ -255,6 +263,81 @@ export function createEntityBridge(
     return rehydrated;
   }
 
+  function persistedEventPayload(event: PersistedAgentEvent): SSEEvent {
+    const persistedType = event.type === 'token_batch' ? 'token' : event.type;
+    return {
+      ...(event.payload || {}),
+      type: persistedType,
+      persisted_event_id: event.event_id,
+      persisted_sequence: event.sequence,
+      timestamp: event.created_at || undefined,
+    } as SSEEvent;
+  }
+
+  async function rehydrateConversation(conversationId: string): Promise<RunEntity[]> {
+    const timeline = await getConversationEvents(conversationId);
+    const eventsByRun = new Map<string, PersistedAgentEvent[]>();
+    for (const event of timeline.events) {
+      const list = eventsByRun.get(event.run_id) || [];
+      list.push(event);
+      eventsByRun.set(event.run_id, list);
+    }
+
+    const restored: RunEntity[] = [];
+    for (const detail of timeline.runs) {
+      const runId = detail.run_id || detail.id;
+      if (!runId) continue;
+
+      store = rehydrateRun(manager.getStore(), detail);
+      manager.setStore(store);
+
+      const persisted = (eventsByRun.get(runId) || [])
+        .slice()
+        .sort((a, b) => a.sequence - b.sequence);
+      const status = String(detail.status || '');
+      const activelyStreaming = status === 'pending' || status === 'queued' || status === 'running';
+      const resumable = status === 'waiting_approval' || status === 'waiting_input';
+
+      if (!activelyStreaming) {
+        eventAdapters.set(
+          runId,
+          createAgentEventAdapterState({
+            runId,
+            conversationId,
+            sessionId: detail.session_id || detail.sandbox_session_id || null,
+          }),
+        );
+        for (const event of persisted) {
+          ingestAgentEvent(runId, persistedEventPayload(event));
+        }
+        // Persisted event types are projections; the run row is authoritative
+        // for terminal/waiting status and timestamps.
+        store = rehydrateRun(manager.getStore(), detail);
+        manager.setStore(store);
+      }
+
+      if (activelyStreaming || resumable) {
+        const live = await getRun(runId);
+        if (live) {
+          store = rehydrateRun(manager.getStore(), live);
+          manager.setStore(store);
+        }
+        const liveCursor = resumable && live?.next_sequence
+          ? Math.max(0, live.next_sequence - 1)
+          : 0;
+        manager.connect(runId, { lastSequence: liveCursor });
+      }
+
+      const run = manager.getStore().runsById[runId];
+      if (run) restored.push(run);
+    }
+
+    store = setActiveConversation(manager.getStore(), conversationId);
+    manager.setStore(store);
+    onStoreChange?.(store);
+    return restored;
+  }
+
   function projectRunMessages(runId: string): ChatMessage[] {
     const s = manager.getStore();
     const run = s.runsById[runId];
@@ -265,6 +348,8 @@ export function createEntityBridge(
       .map((m) => ({
         role: m.role,
         content: [{ type: 'text' as const, text: m.text }],
+        _runId: runId,
+        _messageId: m.id,
         ...(m.status === 'interrupted'
           ? { interrupted: true, status: 'interrupted' as const }
           : {}),
@@ -332,7 +417,7 @@ export function createEntityBridge(
     });
 
     if (!assistant && (content.length || fileLinks.length)) {
-      messages.push({ role: 'assistant', content: [] });
+      messages.push({ role: 'assistant', content: [], _runId: runId });
     }
     let projected: ChatMessage | undefined;
     for (let i = messages.length - 1; i >= 0; i -= 1) {
@@ -344,6 +429,7 @@ export function createEntityBridge(
     if (projected) {
       projected.content = content;
       projected._fileLinks = fileLinks;
+      projected._runId = runId;
       if (run.status === 'interrupted' || run.status === 'cancelled') {
         projected.interrupted = true;
         projected.status = 'interrupted';
@@ -372,7 +458,7 @@ export function createEntityBridge(
     manager,
     getStore: () => manager.getStore(),
     beginRun,
-    ingestLegacyEvent,
+    ingestAgentEvent,
     attachTransport,
     releaseTransport,
     abortRun,
@@ -382,8 +468,9 @@ export function createEntityBridge(
     failRun,
     dispose,
     rehydrateInProgress,
+    rehydrateConversation,
     projectRunMessages,
-    getLegacyAdapter: (runId) => legacyAdapters.get(runId) || null,
+    getAgentEventAdapter: (runId) => eventAdapters.get(runId) || null,
     markApproval,
   };
 }

@@ -37,13 +37,13 @@ describe('API schemas', () => {
     assert.equal(data.session_id, 'sess_1');
   });
 
-  it('parses auth response with token', () => {
+  it('parses auth response without exposing a token', () => {
     const data = parseApi(
       AuthResponseSchema,
       { token: 'abc', user: { username: 'alice' } },
       'auth',
     );
-    assert.equal(data.token, 'abc');
+    assert.equal('token' in data, false);
     assert.equal(data.user?.username, 'alice');
   });
 

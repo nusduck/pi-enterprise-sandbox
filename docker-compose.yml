@@ -57,6 +57,7 @@ services:
       AGENT_BASE_URL: http://agent:4100
       AGENT_INTERNAL_TOKEN: ${AGENT_INTERNAL_TOKEN:-}
       AUTH_ENABLED: ${AUTH_ENABLED:-}
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-}
       APPROVAL_ENABLED: ${APPROVAL_ENABLED:-}
       PORT: 4000
     restart: unless-stopped
@@ -66,7 +67,7 @@ services:
       agent:
         condition: service_started
     healthcheck:
-      test: ["CMD", "node", "-e", "require('http').get('http://localhost:4000/api/status',r=>{process.exit(r.statusCode===200?0:1)}).on('error',()=>process.exit(1))"]
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:4000/health/ready',r=>{process.exit(r.statusCode===200?0:1)}).on('error',()=>process.exit(1))"]
       interval: 30s
       timeout: 10s
       retries: 3

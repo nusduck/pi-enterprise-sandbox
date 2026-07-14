@@ -93,6 +93,52 @@ def test_cross_user_conversation_404(monkeypatch):
     assert any(c["id"] == cid for c in listed_a.json())
 
 
+def test_agent_run_endpoints_enforce_conversation_ownership(monkeypatch):
+    """Run history cannot be created, listed, or read across users."""
+    monkeypatch.setattr(settings, "auth_enabled", True)
+    monkeypatch.setattr(settings, "api_token", "")
+
+    a = _register(_unique("run_alice"))
+    b = _register(_unique("run_bob"))
+    headers_a = {"Authorization": f"Bearer {a['token']}"}
+    headers_b = {"Authorization": f"Bearer {b['token']}"}
+    created = client.post(
+        "/conversations",
+        json={"title": "Alice run"},
+        headers=headers_a,
+    )
+    assert created.status_code == 201, created.text
+    conversation_id = created.json()["id"]
+
+    denied = client.post(
+        "/agent-runs",
+        json={"conversation_id": conversation_id},
+        headers=headers_b,
+    )
+    assert denied.status_code == 404
+
+    run_response = client.post(
+        "/agent-runs",
+        json={"conversation_id": conversation_id},
+        headers=headers_a,
+    )
+    assert run_response.status_code == 201, run_response.text
+    run = run_response.json()
+    assert run["owner_user_id"] == a["user"]["id"]
+    run_id = run["run_id"]
+
+    assert client.get(f"/agent-runs/{run_id}", headers=headers_a).status_code == 200
+    assert client.get(f"/agent-runs/{run_id}", headers=headers_b).status_code == 404
+    assert client.get(f"/agent-runs/{run_id}/events", headers=headers_b).status_code == 404
+    listed_b = client.get(
+        "/agent-runs",
+        params={"conversation_id": conversation_id},
+        headers=headers_b,
+    )
+    assert listed_b.status_code == 200
+    assert listed_b.json() == []
+
+
 def test_cross_org_conversation_404(monkeypatch):
     """Users in different orgs cannot see each other's conversations."""
     monkeypatch.setattr(settings, "auth_enabled", True)

@@ -126,6 +126,8 @@ export function effectiveConfig(cfg = config) {
     AGENT_INTERNAL_TOKEN: cfg.AGENT_INTERNAL_TOKEN ? '***' : '<empty>',
     AUTH_ENABLED: cfg.AUTH_ENABLED,
     APPROVAL_ENABLED: cfg.APPROVAL_ENABLED,
+    JSON_BODY_LIMIT_BYTES: cfg.JSON_BODY_LIMIT_BYTES,
+    CORS_ALLOWED_ORIGINS: cfg.CORS_ALLOWED_ORIGINS,
   };
 }
 
@@ -155,6 +157,12 @@ export const config = {
    * Surfaced on status for UI; enforcement lives in Agent + Sandbox.
    */
   APPROVAL_ENABLED: resolveApprovalEnabled(),
+  JSON_BODY_LIMIT_BYTES:
+    parseInt(process.env.JSON_BODY_LIMIT_BYTES, 10) || 1024 * 1024,
+  CORS_ALLOWED_ORIGINS: String(process.env.CORS_ALLOWED_ORIGINS || '')
+    .split(',')
+    .map((value) => value.trim())
+    .filter(Boolean),
 };
 
 export const AUTH_HEADER = config.SANDBOX_API_TOKEN
@@ -167,6 +175,7 @@ export const AUTH_HEADER = config.SANDBOX_API_TOKEN
  */
 export function isPublicApiPath(path) {
   if (path === '/api/status') return true;
+  if (path === '/health/live' || path === '/health/ready') return true;
   if (path.startsWith('/api/auth/')) return true;
   return false;
 }

@@ -31,8 +31,6 @@ import {
   resolveComposerMode,
 } from '../src/widgets/composer/composerMode.ts';
 import {
-  getAuthToken,
-  clearAuthToken,
   login,
   authHeaders,
 } from '../src/shared/api/client.ts';
@@ -40,7 +38,7 @@ import { createEntityBridge } from '../src/features/chat/entityBridge.ts';
 import { createEntityStore } from '../src/entities/index.ts';
 import { createRunSSEManager } from '../src/shared/sse/manager.ts';
 import { makeRuntimeEvent } from '../src/shared/schemas/events.ts';
-import { adaptLegacyStream } from '../src/shared/sse/legacyAdapter.ts';
+import { adaptAgentEventStream } from '../src/shared/sse/agentEventAdapter.ts';
 import { reduceRuntimeEventBatch } from '../src/shared/state/runReducer.ts';
 
 // ── In-memory localStorage for Node ─────────────────────────────
@@ -105,13 +103,12 @@ describe('F6 E2E smoke — core flows (mock backend)', () => {
 
   afterEach(() => {
     if (originalFetch) globalThis.fetch = originalFetch;
-    clearAuthToken();
     store.clear();
   });
 
   // ── 1. Login ────────────────────────────────────────────────
 
-  it('login: stores auth token and attaches Authorization header', async () => {
+  it('login: relies on the BFF HttpOnly session and exposes no auth header', async () => {
     globalThis.fetch = async (input, init) => {
       const url = String(input);
       assert.match(url, /\/api\/auth\/login$/);
@@ -121,34 +118,20 @@ describe('F6 E2E smoke — core flows (mock backend)', () => {
       };
       assert.equal(body.username, 'alice');
       assert.equal(body.password, 'secret');
-      return jsonResponse({
-        token: 'tok_test_abc',
-        user: { id: 'u1', username: 'alice' },
-      });
+      return jsonResponse({ user: { id: 'u1', username: 'alice' } });
     };
 
-    assert.equal(getAuthToken(), '');
     const res = await login({ username: 'alice', password: 'secret' });
-    assert.equal(res.token, 'tok_test_abc');
-    assert.equal(getAuthToken(), 'tok_test_abc');
+    assert.equal(res.user?.username, 'alice');
 
     const headers = authHeaders();
-    assert.equal(headers.Authorization, 'Bearer tok_test_abc');
-
-    clearAuthToken();
-    assert.equal(getAuthToken(), '');
     assert.equal(authHeaders().Authorization, undefined);
+    assert.deepEqual(headers, {});
   });
 
   // ── 2. Conversation ─────────────────────────────────────────
 
   it('conversation: loads messages from server payload; UI pref is id only', () => {
-    // Seed a legacy message cache that MUST be ignored / scrubbed
-    store.set(
-      'sandbox_messages',
-      JSON.stringify([{ role: 'user', content: 'STALE local message' }]),
-    );
-
     const serverMessages = normalizeServerMessages([
       { role: 'user', content: 'Hello from server' },
       { role: 'assistant', content: 'Hi there' },
@@ -161,9 +144,6 @@ describe('F6 E2E smoke — core flows (mock backend)', () => {
 
     persistConversationId('conv_server_1');
     assert.equal(loadPersistedConversationId(), 'conv_server_1');
-    // Scrub of legacy message key happens on persist/load
-    assert.equal(store.has('sandbox_messages'), false);
-
     // Conversation switch state
     let s = createState(INITIAL);
     s = update(s, {
@@ -193,7 +173,7 @@ describe('F6 E2E smoke — core flows (mock backend)', () => {
     const bridge = createEntityBridge();
     const runId = bridge.beginRun({ conversationId: 'c1' });
     for (const chunk of ['Hel', 'lo', ' world']) {
-      bridge.ingestLegacyEvent(runId, { type: 'token', text: chunk });
+      bridge.ingestAgentEvent(runId, { type: 'token', text: chunk });
     }
     const projected = bridge.projectRunMessages(runId);
     assert.equal((projected[0].content[0] as { text: string }).text, 'Hello world');
@@ -201,17 +181,17 @@ describe('F6 E2E smoke — core flows (mock backend)', () => {
     bridge.dispose();
   });
 
-  it('stream: legacy adapter has one EntityStore write path for a full turn', () => {
+  it('stream: Agent event adapter has one EntityStore write path for a full turn', () => {
     const bridge = createEntityBridge();
     const runId = bridge.beginRun({ conversationId: 'c1', sessionId: 's1' });
 
-    const legacyEvents = [
+    const agentEvents = [
       { type: 'session', session_id: 's1', conversation_id: 'c1' },
       { type: 'token', text: 'Answer' },
       { type: 'done' },
     ];
-    for (const ev of legacyEvents) {
-      bridge.ingestLegacyEvent(runId, ev);
+    for (const ev of agentEvents) {
+      bridge.ingestAgentEvent(runId, ev);
     }
 
     const storeSnap = bridge.getStore();
@@ -227,10 +207,10 @@ describe('F6 E2E smoke — core flows (mock backend)', () => {
   it('stream: second turn keeps first assistant via multi-run projection', () => {
     const bridge = createEntityBridge();
     const r1 = bridge.beginRun({ conversationId: 'c-multi' });
-    bridge.ingestLegacyEvent(r1, { type: 'token', text: 'First reply' });
-    bridge.ingestLegacyEvent(r1, { type: 'done' });
+    bridge.ingestAgentEvent(r1, { type: 'token', text: 'First reply' });
+    bridge.ingestAgentEvent(r1, { type: 'done' });
     const r2 = bridge.beginRun({ conversationId: 'c-multi' });
-    bridge.ingestLegacyEvent(r2, { type: 'token', text: 'Second reply' });
+    bridge.ingestAgentEvent(r2, { type: 'token', text: 'Second reply' });
     const fromR1 = bridge.projectRunMessages(r1);
     const fromR2 = bridge.projectRunMessages(r2);
     assert.match(String((fromR1[0]?.content[0] as { text?: string })?.text || ''), /First reply/);
@@ -247,7 +227,7 @@ describe('F6 E2E smoke — core flows (mock backend)', () => {
   it('approval: SSE approval state exists only in EntityStore', () => {
     const bridge = createEntityBridge();
     const runId = bridge.beginRun({ conversationId: 'c1' });
-    bridge.ingestLegacyEvent(runId, {
+    bridge.ingestAgentEvent(runId, {
       type: 'approval_required',
       approval_id: 'appr_1',
       reason: 'rm -rf /tmp/cache',
@@ -283,7 +263,7 @@ describe('F6 E2E smoke — core flows (mock backend)', () => {
   it('approval: entity bridge marks approval decided', () => {
     const bridge = createEntityBridge();
     const runId = bridge.beginRun({ conversationId: 'c2' });
-    bridge.ingestLegacyEvent(runId, {
+    bridge.ingestAgentEvent(runId, {
       type: 'approval_required',
       approval_id: 'ap_entity',
       reason: 'sudo',
@@ -368,8 +348,8 @@ describe('F6 E2E smoke — core flows (mock backend)', () => {
     const bridge = createEntityBridge();
     const r1 = bridge.beginRun({ conversationId: 'cA' });
     const r2 = bridge.beginRun({ conversationId: 'cB' });
-    bridge.ingestLegacyEvent(r1, { type: 'token', text: 'a' });
-    bridge.ingestLegacyEvent(r2, { type: 'token', text: 'b' });
+    bridge.ingestAgentEvent(r1, { type: 'token', text: 'a' });
+    bridge.ingestAgentEvent(r2, { type: 'token', text: 'b' });
 
     bridge.stopRun(r1);
     // r2 still present in store
@@ -478,8 +458,8 @@ describe('F6 E2E smoke — core flows (mock backend)', () => {
     mgr.disconnect('run_re');
   });
 
-  it('reconnect: adaptLegacyStream sequences are monotonic across a full flow', () => {
-    const { events } = adaptLegacyStream('run_flow', [
+  it('reconnect: adaptAgentEventStream sequences are monotonic across a full flow', () => {
+    const { events } = adaptAgentEventStream('run_flow', [
       { type: 'session', session_id: 's' },
       { type: 'token', text: 'x' },
       { type: 'approval_required', approval_id: 'a1', reason: 'risk' },

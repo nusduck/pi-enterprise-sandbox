@@ -72,8 +72,8 @@ export function ContextInspector({
     [entityStore, runId],
   );
 
-  // Merge legacy deliverables when entity artifacts empty
-  const legacyArtifacts = state.artifacts || [];
+  // Merge server-listed deliverables when entity artifacts empty
+  const listedArtifacts = state.artifacts || [];
 
   const agentSession =
     (run?.agentSessionId &&
@@ -144,7 +144,7 @@ export function ContextInspector({
           {tab === 'files' ? (
             <FilesPanel
               artifacts={artifacts}
-              legacyArtifacts={legacyArtifacts}
+              listedArtifacts={listedArtifacts}
               sessionId={activeSessionId}
               tools={tools}
             />
@@ -167,7 +167,7 @@ export function ContextInspector({
           {tab === 'artifacts' ? (
             <ArtifactsPanel
               artifacts={artifacts}
-              legacyArtifacts={legacyArtifacts}
+              listedArtifacts={listedArtifacts}
               sessionId={activeSessionId}
               selectedId={selected?.kind === 'artifact' ? selected.id : null}
             />
@@ -278,16 +278,16 @@ function OverviewPanel({
 
 function FilesPanel({
   artifacts,
-  legacyArtifacts,
+  listedArtifacts,
   sessionId,
   tools,
 }: {
   artifacts: { id: string; name: string; path: string | null; size: number | null }[];
-  legacyArtifacts: { artifact_id?: string; id?: string; name?: string; path?: string; size?: number }[];
+  listedArtifacts: { artifact_id?: string; id?: string; name?: string; path?: string; size?: number }[];
   sessionId: string | null;
   tools: { id: string; name: string; input: unknown }[];
 }) {
-  // Paths referenced by tools (read/edit etc.) — lightweight file browser stub
+  // Paths referenced by tools (read/edit etc.) — lightweight file references
   const toolPaths = tools
     .map((t) => {
       const s = summarizeToolInput(t.input);
@@ -297,7 +297,7 @@ function FilesPanel({
 
   const uniquePaths = [...new Set(toolPaths)];
 
-  if (!artifacts.length && !legacyArtifacts.length && !uniquePaths.length) {
+  if (!artifacts.length && !listedArtifacts.length && !uniquePaths.length) {
     return <p className="inspector-empty">No files for this run yet.</p>;
   }
 
@@ -315,7 +315,7 @@ function FilesPanel({
           </ul>
         </>
       ) : null}
-      {artifacts.length > 0 || legacyArtifacts.length > 0 ? (
+      {artifacts.length > 0 || listedArtifacts.length > 0 ? (
         <>
           <h3 className="inspector-subhead">Artifacts</h3>
           <ul className="inspector-list">
@@ -327,7 +327,7 @@ function FilesPanel({
                 ) : null}
               </li>
             ))}
-            {legacyArtifacts.map((a) => {
+            {listedArtifacts.map((a) => {
               const id = a.artifact_id || a.id || a.path || a.name;
               return (
                 <li key={String(id)}>
@@ -440,7 +440,7 @@ function ToolsPanel({
 
 function ArtifactsPanel({
   artifacts,
-  legacyArtifacts,
+  listedArtifacts,
   sessionId,
   selectedId,
 }: {
@@ -452,7 +452,7 @@ function ArtifactsPanel({
     runId: string | null;
     mimeType: string | null;
   }[];
-  legacyArtifacts: {
+  listedArtifacts: {
     artifact_id?: string;
     id?: string;
     name?: string;
@@ -462,7 +462,7 @@ function ArtifactsPanel({
   sessionId: string | null;
   selectedId: string | null;
 }) {
-  if (!artifacts.length && !legacyArtifacts.length) {
+  if (!artifacts.length && !listedArtifacts.length) {
     return <p className="inspector-empty">No artifacts yet.</p>;
   }
 
@@ -492,7 +492,7 @@ function ArtifactsPanel({
           </li>
         );
       })}
-      {legacyArtifacts.map((a) => {
+      {listedArtifacts.map((a) => {
         const id = a.artifact_id || a.id;
         const name = a.name || a.path || id || 'file';
         let url: string | null = null;

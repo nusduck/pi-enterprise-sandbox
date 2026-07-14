@@ -79,7 +79,11 @@ Base URL: `http://host:4000`
 
 `GET /api/extensions/diagnostics` 返回 Extension Package、Agent Profile、Tool/MCP allowlist 和供应链审计状态，不含凭据。
 
-### `GET /api/status` — BFF 状态
+### BFF 健康检查
+
+- `GET /health/live`：仅检查 BFF 进程，正常返回 200。
+- `GET /health/ready`：检查 Agent 与 Sandbox，任一不可用返回 503。
+- `GET /api/status`：兼容 UI 的依赖状态视图，始终返回 200。
 
 ```json
 // Response (HTTP 200；依赖不可达时 status 可为 "degraded"，不含密钥)
@@ -87,7 +91,7 @@ Base URL: `http://host:4000`
   "status": "ok",
   "version": "4.0.0",
   "agent_runtime": "node-agent",
-  "agent": { "status": "ok", "base_url": "http://agent:4100" },
+  "agent": { "status": "ok" },
   "sandbox": { "status": "ok" }
 }
 ```
@@ -120,7 +124,8 @@ Base URL: `http://sandbox:8081`（Docker 内网）
 - 认证: `X-API-Key` header（如配置 `SANDBOX_API_TOKEN`）
 - Public 端点豁免认证: `/health`, `/ready`, `/metrics`, `/docs`, `/openapi`, `/redoc`, `/auth/*`
 - **可选用户归属**（`SANDBOX_AUTH_ENABLED=true`）:
-  - 终端用户: `Authorization: Bearer <jwt>`（`POST /auth/register|login` 签发，含 `organization_id` / `role`）
+  - 浏览器终端用户：`POST /api/auth/register|login` 后由 BFF 写入 `HttpOnly; SameSite=Lax` 会话 Cookie；JWT 不暴露给前端 JavaScript。`POST /api/auth/logout` 清理会话。
+  - 非浏览器 API 客户端仍可使用 `Authorization: Bearer <jwt>`；BFF 验证后转发可信用户上下文。
   - BFF→Sandbox: 服务 `X-API-Key` + 用户 JWT；或服务 key + `X-Acting-User-Id` / `X-Acting-Organization-Id` / `X-Acting-Role`
   - **服务 Token alone 不是终端用户**：可访问内部 `/sessions` 等，但 `/conversations` 与已归属 session 的 files/artifacts 需 actor，否则 401
   - 跨用户/跨组织访问 Conversation 返回 **404**（不泄露资源是否存在）

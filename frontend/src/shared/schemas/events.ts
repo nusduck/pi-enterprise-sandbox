@@ -84,7 +84,7 @@ export function makeRuntimeEvent(
   };
 }
 
-// ── Create-run / rehydrate API shapes (stub-friendly) ──
+// ── Create-run / rehydrate API shapes ──
 
 export const CreateRunRequestSchema = z
   .object({
@@ -106,19 +106,45 @@ export const CreateRunResponseSchema = z
 export const RunDetailSchema = z
   .object({
     id: z.string().optional(),
-    run_id: z.string().optional(),
+    run_id: z.string(),
     conversation_id: z.string().optional().nullable(),
     session_id: z.string().optional().nullable(),
+    sandbox_session_id: z.string().optional().nullable(),
     agent_session_id: z.string().optional().nullable(),
-    status: z.string().optional(),
+    status: z.string(),
     last_sequence: z.number().optional().nullable(),
     last_event_id: z.string().optional().nullable(),
     error: z.string().optional().nullable(),
     started_at: z.string().optional().nullable(),
     finished_at: z.string().optional().nullable(),
     created_at: z.string().optional().nullable(),
+    updated_at: z.string().optional().nullable(),
+    event_count: z.number().int().nonnegative().optional(),
+    next_sequence: z.number().int().nonnegative().optional(),
+  })
+  .passthrough();
+
+export const PersistedAgentEventSchema = z
+  .object({
+    run_id: z.string(),
+    sequence: z.number().int().positive(),
+    event_id: z.string(),
+    type: z.string(),
+    payload: z.record(z.string(), z.unknown()).optional().default({}),
+    schema_version: z.number().int().optional(),
+    created_at: z.string().optional().nullable(),
+  })
+  .passthrough();
+
+export const ConversationEventsResponseSchema = z
+  .object({
+    runs: z.array(RunDetailSchema).default([]),
+    events: z.array(PersistedAgentEventSchema).default([]),
+    last_run: RunDetailSchema.optional().nullable(),
   })
   .passthrough();
 
 export type CreateRunResponse = z.infer<typeof CreateRunResponseSchema>;
 export type RunDetail = z.infer<typeof RunDetailSchema>;
+export type PersistedAgentEvent = z.infer<typeof PersistedAgentEventSchema>;
+export type ConversationEventsResponse = z.infer<typeof ConversationEventsResponseSchema>;

@@ -13,6 +13,7 @@
  */
 import { randomUUID } from 'node:crypto';
 import { config, AUTH_HEADER } from '../config.js';
+import { readCookie } from '../http/cookies.js';
 
 const BASE = config.SANDBOX_BASE_URL;
 
@@ -27,6 +28,7 @@ export class SandboxError extends Error {
 
 /**
  * Extract sandbox-forwardable auth from an incoming HTTP request.
+ * Browser sessions use the BFF HttpOnly cookie; API clients may use Bearer.
  * Strips client X-Acting-* (untrusted from browser).
  * @param {import('node:http').IncomingMessage | null | undefined} req
  * @returns {{ authorization?: string, actingUserId?: string, actingOrganizationId?: string, actingRole?: string }}
@@ -37,6 +39,9 @@ export function authFromRequest(req) {
   const auth = req.headers.authorization || req.headers.Authorization;
   if (typeof auth === 'string' && auth.toLowerCase().startsWith('bearer ')) {
     out.authorization = auth;
+  } else {
+    const sessionToken = readCookie(req);
+    if (sessionToken) out.authorization = `Bearer ${sessionToken}`;
   }
   // Do NOT copy X-Acting-* from browser. Callers may set acting* only after server auth.
   return out;
@@ -197,6 +202,15 @@ export function createSandboxClient({ traceId = null, auth = null } = {}) {
       return resp.json();
     },
 
+    async listAgentRuns({ conversationId, status } = {}) {
+      const q = new URLSearchParams();
+      if (conversationId) q.set('conversation_id', String(conversationId));
+      if (status) q.set('status', String(status));
+      const qs = q.toString();
+      const resp = await sbFetch(`/agent-runs${qs ? `?${qs}` : ''}`);
+      return resp.json();
+    },
+
     async getAgentRun(runId) {
       const resp = await sbFetch(`/agent-runs/${encodeURIComponent(runId)}`);
       return resp.json();
@@ -217,23 +231,6 @@ export function createSandboxClient({ traceId = null, auth = null } = {}) {
       const qs = q.toString();
       const path = `/agent-runs/${encodeURIComponent(runId)}/events${qs ? `?${qs}` : ''}`;
       const resp = await sbFetch(path);
-      return resp.json();
-    },
-
-    async listConversationEvents(conversationId, { afterSequence = 0, limit } = {}) {
-      const q = new URLSearchParams();
-      if (afterSequence) q.set('after_sequence', String(afterSequence));
-      if (limit != null) q.set('limit', String(limit));
-      const qs = q.toString();
-      const path = `/conversations/${encodeURIComponent(conversationId)}/events${qs ? `?${qs}` : ''}`;
-      const resp = await sbFetch(path);
-      return resp.json();
-    },
-
-    async getLatestAgentRun(conversationId) {
-      const resp = await sbFetch(
-        `/conversations/${encodeURIComponent(conversationId)}/agent-runs/latest`,
-      );
       return resp.json();
     },
 
@@ -493,16 +490,6 @@ export function createSandboxClient({ traceId = null, auth = null } = {}) {
 
 // ── Module-level helpers (ephemeral client per call — no shared request state) ──
 
-/** @deprecated Prefer createSandboxClient({ traceId }). No shared mutable state. */
-export function setTraceId(_id) {
-  return null;
-}
-
-/** @deprecated Prefer client.getTraceId() from createSandboxClient. */
-export function getTraceId() {
-  return null;
-}
-
 /** Generate or return a preferred trace id without mutating shared state. */
 export function ensureTraceId(preferred) {
   return preferred || randomUUID();
@@ -518,6 +505,10 @@ export async function createSession(callerId = 'pi-coding-agent', extra = {}) {
 
 export async function getSession(sessionId) {
   return createSandboxClient().getSession(sessionId);
+}
+
+export async function listAgentRuns(filters = {}, auth = null) {
+  return createSandboxClient({ auth }).listAgentRuns(filters);
 }
 
 export async function listConversations(auth = null) {

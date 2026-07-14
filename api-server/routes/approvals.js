@@ -2,13 +2,11 @@
  * Route: POST /api/approvals/:id/decide — proxy sandbox approval decision
  * and notify Agent to resume any parked waiting_approval run (B6).
  */
-import { authFromRequest, createSandboxClient } from '../services/sandbox-client.js';
+import { createSandboxClient } from '../services/sandbox-client.js';
 import { decideAgentApproval } from '../services/agent-client.js';
-
-function json(res, status, data) {
-  res.writeHead(status, { 'Content-Type': 'application/json' });
-  res.end(JSON.stringify(data));
-}
+import { resolveTrustedAuth } from '../application/run-access-service.js';
+import { decideApprovalAndResume } from '../application/approval-decision-service.js';
+import { sendError, sendJson as json } from '../http/response.js';
 
 /**
  * POST /api/approvals/:id/decide  body: { decision: 'approve' | 'reject', run_id? }
@@ -24,28 +22,40 @@ export async function handleDecideApproval(approvalId, body, res, req = null) {
     return;
   }
   try {
-    const client = createSandboxClient({ auth: authFromRequest(req) });
-    const result = await client.decideApproval(approvalId, decision);
+    const auth = await resolveTrustedAuth(req);
+    const client = createSandboxClient({ auth, traceId: req?.traceId });
+    const outcome = await decideApprovalAndResume({
+      sandbox: client,
+      notifyAgent: (id, payload) =>
+        decideAgentApproval(
+          id,
+          payload,
+          { auth, traceId: req?.traceId },
+        ),
+      approvalId,
+      decision,
+      runId: body.run_id || null,
+      reason: body.reason || null,
+    });
 
-    // B6: wake agent waiter / resume parked run (best-effort; durable state is in sandbox)
-    let agentResume = null;
-    try {
-      agentResume = await decideAgentApproval(
-        approvalId,
-        {
-          decision,
-          run_id: body.run_id || result?.payload?.run_id || null,
-          reason: body.reason || result?.reason || null,
-        },
-        { auth: authFromRequest(req) },
-      );
-    } catch (err) {
-      console.warn('[approvals] agent resume notify failed:', err.message);
+    if (outcome.resumePending) {
+      console.warn('[approvals] decision persisted; Agent resume is pending:', outcome.resumeError);
+      json(res, 202, {
+        ...outcome.result,
+        agent_resume: null,
+        agent_resume_status: 'pending',
+        agent_resume_error: outcome.resumeError,
+      });
+      return;
     }
 
-    json(res, 200, { ...result, agent_resume: agentResume });
+    json(res, 200, {
+      ...outcome.result,
+      agent_resume: outcome.agentResume,
+      agent_resume_status: 'resumed',
+    });
   } catch (err) {
     console.error('[approvals] decide:', err.message);
-    json(res, err.status || 500, { error: err.message || 'Approval decision failed' });
+    sendError(res, err, req?.traceId);
   }
 }

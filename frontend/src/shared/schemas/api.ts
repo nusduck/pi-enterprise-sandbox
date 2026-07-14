@@ -1,5 +1,5 @@
 /**
- * Zod schemas for existing Sandbox API endpoints (legacy chat SSE compatible).
+ * Zod schemas for API Server resources.
  * Wire format remains snake_case; UI maps to camelCase where needed.
  */
 import { z } from 'zod';
@@ -14,10 +14,8 @@ export const AuthUserSchema = z
 
 export const AuthResponseSchema = z
   .object({
-    token: z.string().optional(),
     user: AuthUserSchema.optional(),
-  })
-  .passthrough();
+  });
 
 export const MeResponseSchema = AuthUserSchema;
 
@@ -105,12 +103,15 @@ export {
   RUNTIME_EVENT_TYPES,
   CreateRunResponseSchema,
   RunDetailSchema,
+  ConversationEventsResponseSchema,
 } from './events';
 export type {
   RuntimeEvent,
   RuntimeEventType,
   CreateRunResponse,
   RunDetail,
+  PersistedAgentEvent,
+  ConversationEventsResponse,
 } from './events';
 
 export type AuthUser = z.infer<typeof AuthUserSchema>;
@@ -134,6 +135,23 @@ export function parseApi<T>(
     console.warn(`[schema] ${label} validation failed:`, result.error.issues);
     // Soft-fail: return original data cast when structure is close enough for UI
     return data as T;
+  }
+  return result.data;
+}
+
+/** Strict parser for core contracts where silently accepting drift is unsafe. */
+export function parseApiStrict<T>(
+  schema: z.ZodType<T>,
+  data: unknown,
+  label = 'API response',
+): T {
+  const result = schema.safeParse(data);
+  if (!result.success) {
+    throw new Error(
+      `${label} contract mismatch: ${result.error.issues
+        .map((issue) => `${issue.path.join('.') || '<root>'}: ${issue.message}`)
+        .join('; ')}`,
+    );
   }
   return result.data;
 }

@@ -197,20 +197,9 @@ export function isActiveGeneration(state: ChatState, generation: number): boolea
 
 const PREF_CONVERSATION_ID = 'sandbox_conversation_id';
 const PREF_SIDEBAR_OPEN = 'sandbox_ui_sidebar_open';
-/** Legacy key — cleared on write so old installs do not rehydrate messages. */
-const LEGACY_MESSAGES_KEY = 'sandbox_messages';
-
-function scrubLegacyMessageCache(): void {
-  try {
-    localStorage.removeItem(LEGACY_MESSAGES_KEY);
-  } catch {
-    /* ignore */
-  }
-}
 
 /** Persist last-focused conversation (UI preference, not message cache). */
 export function persistConversationId(conversationId: string | null | undefined): void {
-  scrubLegacyMessageCache();
   try {
     if (conversationId) {
       localStorage.setItem(PREF_CONVERSATION_ID, conversationId);
@@ -223,7 +212,6 @@ export function persistConversationId(conversationId: string | null | undefined)
 }
 
 export function loadPersistedConversationId(): string | null {
-  scrubLegacyMessageCache();
   try {
     return localStorage.getItem(PREF_CONVERSATION_ID) || null;
   } catch {
@@ -251,11 +239,10 @@ export function loadPersistedSidebarOpen(): boolean | null {
   }
 }
 
-/** Clear UI conversation preference and any leftover legacy message cache. */
+/** Clear the last-focused conversation preference. */
 export function clearPersistedChat(): void {
   try {
     localStorage.removeItem(PREF_CONVERSATION_ID);
-    localStorage.removeItem(LEGACY_MESSAGES_KEY);
   } catch {
     /* ignore */
   }

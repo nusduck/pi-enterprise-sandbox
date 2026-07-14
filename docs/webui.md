@@ -19,9 +19,9 @@ frontend/
 │   ├── main.tsx             ← React 入口
 │   ├── app/                 ← Router 与 Workbench shell
 │   ├── entities/            ← 规范化 runtime entity store
-│   ├── features/chat/       ← ChatContext、legacy adapter bridge
+│   ├── features/chat/       ← Chat controller、event bridge、projections、upload queue
 │   ├── shared/api/          ← /api fetch 与 URL 构造
-│   ├── shared/sse/          ← SSE parser/manager/legacy adapter
+│   ├── shared/sse/          ← SSE parser/manager/Agent event adapter
 │   ├── shared/state/        ← UI state + run reducer
 │   ├── widgets/             ← 消息、时间线、审批、交付物等组件
 │   └── pages/
@@ -41,9 +41,12 @@ frontend/
 | 模块 | 职责 |
 |------|------|
 | `features/chat/ChatContext.tsx` | 用户流程、conversation focus、transport 与 UI side effects |
+| `features/chat/controllers/` | Run cancel/steer/follow-up/resume/interaction 控制器 |
 | `entities/store.ts` | runtime 实体唯一 source of truth 与 selectors |
 | `shared/state/runReducer.ts` | RuntimeEvent 的唯一归约器 |
-| `features/chat/entityBridge.ts` | legacy SSE 适配、per-run transport、UI projection |
+| `features/chat/entityBridge.ts` | Agent SSE 适配、历史事件重放、per-run transport、UI projection |
+| `features/chat/projections/` | 按稳定 run/message id 合并服务端消息与 runtime 投影 |
+| `features/chat/uploads/` | 附件上传并发队列（最多 3 个） |
 | `shared/state/chatState.ts` | 非 runtime UI snapshot、上传草稿和 transport 控制 |
 | `shared/api/client.ts` / `runs.ts` | Run、upload/download、approval、conversation 协议 |
 | `shared/sse/parser.ts` | SSE 分片、CRLF、尾缓冲和 abort |
@@ -55,7 +58,7 @@ frontend/
 ### 状态管理
 
 Runtime 状态只写 `EntityStore`：Run、增量 Message、Tool、Process、Approval、Artifact、trace 和
-AgentSession 都由 `legacyAdapter -> runReducer` 单次归约。`ChatState` 不含 `currentMsg`、
+AgentSession 都由 `agentEventAdapter -> runReducer` 单次归约。`ChatState` 不含 `currentMsg`、
 `pendingTool`、`pendingApproval` 或 `readyFiles`，只保存服务端历史快照、选择状态、上传草稿、布局、
 认证与 transport 控制。`activeRunId` 直接从 EntityStore 读取，不维护 React 镜像 state。
 
@@ -93,7 +96,7 @@ sendMessage(text)
   ├── React 更新 user message / transport UI
   ├── GET /api/runs/:run_id/events（支持 sequence 续传）
   │     ↓ SSE (sse.readSSEStream)
-  │     legacyAdapter -> RuntimeEvent -> runReducer -> EntityStore
+  │     agentEventAdapter -> RuntimeEvent -> runReducer -> EntityStore
   │       trace/session/agent_session → Run + AgentSession 关系
   │       token                    → MessageEntity delta
   │       tool/approval/file_ready → 对应规范化实体

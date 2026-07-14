@@ -8,15 +8,18 @@ import {
   ArtifactListSchema,
   AuthResponseSchema,
   ConversationDetailSchema,
+  ConversationEventsResponseSchema,
   ConversationListSchema,
   EnsureSessionSchema,
   MeResponseSchema,
   StatusSchema,
   UploadResponseSchema,
   parseApi,
+  parseApiStrict,
   type AuthResponse,
   type AuthUser,
   type Conversation,
+  type ConversationEventsResponse,
   type EnsureSession,
   type UploadResponse,
 } from '../schemas/api';
@@ -27,39 +30,10 @@ export { isAllowedApiUrl, safeApiUrl } from '../security/url';
 
 const BASE = '/api';
 const MAX_RETRIES = 3;
-const TOKEN_KEY = 'sandbox_auth_token';
 
-// ── Auth token (localStorage) ───────────────────
-
-export function getAuthToken(): string {
-  try {
-    return localStorage.getItem(TOKEN_KEY) || '';
-  } catch {
-    return '';
-  }
-}
-
-export function setAuthToken(token: string): void {
-  try {
-    if (token) localStorage.setItem(TOKEN_KEY, token);
-    else localStorage.removeItem(TOKEN_KEY);
-  } catch {
-    /* private mode / blocked storage */
-  }
-}
-
-export function clearAuthToken(): void {
-  setAuthToken('');
-}
-
-/** Headers with optional Authorization when a token is stored. */
+/** Browser authentication is carried by the BFF-owned HttpOnly session cookie. */
 export function authHeaders(extra: Record<string, string> = {}): Record<string, string> {
-  const h = { ...extra };
-  const token = getAuthToken();
-  if (token) {
-    h.Authorization = `Bearer ${token}`;
-  }
-  return h;
+  return { ...extra };
 }
 
 export class ApiError extends Error {
@@ -105,7 +79,6 @@ export async function register(body: {
     );
   }
   const data = parseApi(AuthResponseSchema, await resp.json(), 'register');
-  if (data.token) setAuthToken(data.token);
   return data;
 }
 
@@ -123,8 +96,15 @@ export async function login(body: {
     throw new Error(String(err.error || err.detail || `Login failed: ${resp.status}`));
   }
   const data = parseApi(AuthResponseSchema, await resp.json(), 'login');
-  if (data.token) setAuthToken(data.token);
   return data;
+}
+
+export async function logout(): Promise<void> {
+  const resp = await fetch(`${BASE}/auth/logout`, { method: 'POST' });
+  if (!resp.ok) {
+    const err = await errorBody(resp);
+    throw new Error(String(err.error || `Logout failed: ${resp.status}`));
+  }
 }
 
 export async function me(): Promise<AuthUser> {
@@ -160,6 +140,30 @@ export async function getConversation(id: string): Promise<Conversation> {
     throw new Error(String(err.error || `Get conversation failed: ${resp.status}`));
   }
   return parseApi(ConversationDetailSchema, await resp.json(), 'conversation');
+}
+
+export async function getConversationEvents(
+  id: string,
+): Promise<ConversationEventsResponse> {
+  const resp = await fetch(
+    `${BASE}/conversations/${encodeURIComponent(id)}/events`,
+    { headers: authHeaders() },
+  );
+  if (!resp.ok) {
+    const err = await errorBody(resp);
+    throw new ApiError(
+      String(err.error || err.detail || `Conversation events failed: ${resp.status}`),
+      {
+        status: resp.status,
+        traceId: resp.headers.get('x-trace-id'),
+      },
+    );
+  }
+  return parseApiStrict(
+    ConversationEventsResponseSchema,
+    await resp.json(),
+    'conversation events',
+  );
 }
 
 export async function createConversation(title = 'New chat'): Promise<Conversation> {

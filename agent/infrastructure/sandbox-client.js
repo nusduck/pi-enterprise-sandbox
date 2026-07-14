@@ -270,23 +270,6 @@ export function createSandboxClient({ traceId = null, auth = null } = {}) {
       return resp.json();
     },
 
-    async listConversationEvents(conversationId, { afterSequence = 0, limit } = {}) {
-      const q = new URLSearchParams();
-      if (afterSequence) q.set('after_sequence', String(afterSequence));
-      if (limit != null) q.set('limit', String(limit));
-      const qs = q.toString();
-      const path = `/conversations/${encodeURIComponent(conversationId)}/events${qs ? `?${qs}` : ''}`;
-      const resp = await sbFetch(path);
-      return resp.json();
-    },
-
-    async getLatestAgentRun(conversationId) {
-      const resp = await sbFetch(
-        `/conversations/${encodeURIComponent(conversationId)}/agent-runs/latest`,
-      );
-      return resp.json();
-    },
-
     async interruptAgentRun(runId, body = {}) {
       const resp = await sbFetch(`/agent-runs/${encodeURIComponent(runId)}/interrupt`, {
         method: 'POST',
@@ -767,16 +750,6 @@ export function createSandboxClient({ traceId = null, auth = null } = {}) {
 }
 
 // ── Module-level helpers (ephemeral client per call — no shared request state) ──
-
-/** @deprecated Prefer createSandboxClient({ traceId }). No shared mutable state. */
-export function setTraceId(_id) {
-  return null;
-}
-
-/** @deprecated Prefer client.getTraceId() from createSandboxClient. */
-export function getTraceId() {
-  return null;
-}
 
 /** Generate or return a preferred trace id without mutating shared state. */
 export function ensureTraceId(preferred) {

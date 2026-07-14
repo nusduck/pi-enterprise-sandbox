@@ -8,8 +8,6 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   createSandboxClient,
-  setTraceId as setClientTraceId,
-  getTraceId as getClientTraceId,
   ensureTraceId,
 } from '../services/sandbox-client.js';
 import {
@@ -79,13 +77,10 @@ describe('createSandboxClient request isolation', () => {
     assert.equal(b.getTraceId(), 'trace-bbb');
   });
 
-  it('module-level setTraceId does not share mutable request state', () => {
-    setClientTraceId('should-not-stick');
-    assert.equal(getClientTraceId(), null);
+  it('generates trace ids without shared module state', () => {
     const id = ensureTraceId('preferred-id');
     assert.equal(id, 'preferred-id');
-    // still no shared module state
-    assert.equal(getClientTraceId(), null);
+    assert.notEqual(ensureTraceId(), ensureTraceId());
   });
 });
 

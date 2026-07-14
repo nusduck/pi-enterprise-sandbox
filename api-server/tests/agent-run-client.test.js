@@ -14,6 +14,10 @@ const agentClientSrc = readFileSync(join(__dirname, '../services/agent-client.js
 const runsSrc = readFileSync(join(__dirname, '../routes/runs.js'), 'utf8');
 const serverSrc = readFileSync(join(__dirname, '../server.js'), 'utf8');
 const convSrc = readFileSync(join(__dirname, '../routes/conversations.js'), 'utf8');
+const timelineSrc = readFileSync(
+  join(__dirname, '../application/conversation-timeline-service.js'),
+  'utf8',
+);
 const pkg = JSON.parse(readFileSync(join(__dirname, '../package.json'), 'utf8'));
 
 describe('thin BFF agent relay', () => {
@@ -45,8 +49,7 @@ describe('thin BFF agent relay', () => {
       'createAgentRun',
       'appendAgentEvent',
       'listAgentEvents',
-      'listConversationEvents',
-      'getLatestAgentRun',
+      'listAgentRuns',
       'interruptAgentRun',
       'completeAgentRun',
       'failAgentRun',
@@ -58,7 +61,15 @@ describe('thin BFF agent relay', () => {
   it('server routes conversation events endpoint', () => {
     assert.match(serverSrc, /handleGetConversationEvents/);
     assert.match(serverSrc, /\/events/);
-    assert.match(convSrc, /listConversationEvents/);
-    assert.match(convSrc, /last_run/);
+    assert.match(convSrc, /loadConversationTimeline/);
+    assert.match(timelineSrc, /listAgentRuns/);
+    assert.match(timelineSrc, /listAgentEvents/);
+    assert.match(timelineSrc, /last_run/);
+  });
+
+  it('server exposes the Run list contract used by refresh recovery', () => {
+    assert.match(serverSrc, /req\.method === 'GET' && path === '\/api\/runs'/);
+    assert.match(runsSrc, /handleListRuns/);
+    assert.match(clientSrc, /async listAgentRuns\(/);
   });
 });

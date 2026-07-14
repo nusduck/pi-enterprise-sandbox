@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
 from sandbox.models import (
@@ -17,6 +17,8 @@ from sandbox.models import (
 )
 from sandbox.services.agent_run_manager import agent_run_manager
 from sandbox.repositories import TaskPlanProjectionRepository
+from sandbox.config import settings
+from sandbox.security.ownership import assert_resource_owner, require_actor
 
 router = APIRouter(tags=["agent-runs"])
 task_plan_projection = TaskPlanProjectionRepository()
@@ -69,17 +71,66 @@ class TaskPlanProjectionBody(BaseModel):
     tasks: list[dict] = Field(default_factory=list)
 
 
+def _owned_run_or_404(run_id: str, request: Request) -> AgentRunResponse:
+    run = agent_run_manager.get_run(run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail="Agent run not found")
+    if settings.auth_enabled:
+        actor = require_actor(request)
+        assert_resource_owner(run, actor, not_found_detail="Agent run not found")
+        # Legacy rows may predate run ownership. In that case the owning
+        # conversation remains the authoritative isolation boundary.
+        if not run.owner_user_id or not run.organization_id:
+            conversation = agent_run_manager.conversations.get_for_owner(
+                run.conversation_id,
+                user_id=actor.user_id,
+                organization_id=actor.organization_id,
+                is_admin=actor.is_admin,
+            )
+            if conversation is None:
+                raise HTTPException(status_code=404, detail="Agent run not found")
+    return run
+
+
+def _assert_owned_conversation(conversation_id: str, request: Request) -> None:
+    if not settings.auth_enabled:
+        return
+    actor = require_actor(request)
+    conversation = agent_run_manager.conversations.get_for_owner(
+        conversation_id,
+        user_id=actor.user_id,
+        organization_id=actor.organization_id,
+        is_admin=actor.is_admin,
+    )
+    if conversation is None:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+
+
 @router.post("/agent-runs", response_model=AgentRunResponse, status_code=201)
-def create_agent_run(body: AgentRunCreate):
+def create_agent_run(body: AgentRunCreate, request: Request):
     """Create run, claim lease, stamp conversation.last_run_id."""
     budget = body.budget
     if budget is not None and hasattr(budget, "model_dump"):
         budget = budget.model_dump(exclude_none=True)
+    owner_user_id = body.owner_user_id
+    organization_id = body.organization_id
+    if settings.auth_enabled:
+        actor = require_actor(request)
+        conversation = agent_run_manager.conversations.get_for_owner(
+            body.conversation_id,
+            user_id=actor.user_id,
+            organization_id=actor.organization_id,
+            is_admin=actor.is_admin,
+        )
+        if conversation is None:
+            raise HTTPException(status_code=404, detail="Conversation not found")
+        owner_user_id = actor.user_id
+        organization_id = actor.organization_id
     return agent_run_manager.start_run(
         run_id=body.run_id,
         conversation_id=body.conversation_id,
-        owner_user_id=body.owner_user_id,
-        organization_id=body.organization_id,
+        owner_user_id=owner_user_id,
+        organization_id=organization_id,
         sandbox_session_id=body.sandbox_session_id,
         workspace_id=body.workspace_id,
         model_id=body.model_id,
@@ -90,19 +141,46 @@ def create_agent_run(body: AgentRunCreate):
 
 
 @router.get("/agent-runs", response_model=list[AgentRunResponse])
-def list_agent_runs(status: str | None = Query(default=None)):
-    """List runs, optionally filtered by status (e.g. waiting_approval)."""
+def list_agent_runs(
+    request: Request,
+    status: str | None = Query(default=None),
+    conversation_id: str | None = Query(default=None),
+):
+    """List visible runs, optionally filtered by conversation and status."""
+    if conversation_id:
+        rows = agent_run_manager.runs.list_by_conversation(conversation_id)
+    elif status:
+        rows = agent_run_manager.runs.list_by_status(status)
+    else:
+        rows = agent_run_manager.runs.list_all()
     if status:
-        return agent_run_manager.runs.list_by_status(status)
-    return []
+        rows = [run for run in rows if run.status == status]
+    if not settings.auth_enabled:
+        return rows
+
+    actor = require_actor(request)
+    visible: list[AgentRunResponse] = []
+    for run in rows:
+        try:
+            assert_resource_owner(run, actor, not_found_detail="Agent run not found")
+            if not run.owner_user_id or not run.organization_id:
+                conversation = agent_run_manager.conversations.get_for_owner(
+                    run.conversation_id,
+                    user_id=actor.user_id,
+                    organization_id=actor.organization_id,
+                    is_admin=actor.is_admin,
+                )
+                if conversation is None:
+                    continue
+            visible.append(run)
+        except HTTPException:
+            continue
+    return visible
 
 
 @router.get("/agent-runs/{run_id}", response_model=AgentRunResponse)
-def get_agent_run(run_id: str):
-    run = agent_run_manager.get_run(run_id)
-    if not run:
-        raise HTTPException(status_code=404, detail="Agent run not found")
-    return run
+def get_agent_run(run_id: str, request: Request):
+    return _owned_run_or_404(run_id, request)
 
 
 @router.post("/agent-runs/{run_id}/claim", response_model=AgentRunResponse)
@@ -241,11 +319,11 @@ def append_agent_event(run_id: str, body: AgentEventAppend):
 @router.get("/agent-runs/{run_id}/events", response_model=list[AgentEventResponse])
 def list_agent_events(
     run_id: str,
+    request: Request,
     after_sequence: int = Query(0, ge=0),
     limit: int | None = Query(None, ge=1, le=5000),
 ):
-    if not agent_run_manager.get_run(run_id):
-        raise HTTPException(status_code=404, detail="Agent run not found")
+    _owned_run_or_404(run_id, request)
     return agent_run_manager.list_events(
         run_id, after_sequence=after_sequence, limit=limit
     )
@@ -255,7 +333,8 @@ def list_agent_events(
     "/conversations/{conversation_id}/agent-runs/latest",
     response_model=AgentRunResponse,
 )
-def get_latest_run(conversation_id: str):
+def get_latest_run(conversation_id: str, request: Request):
+    _assert_owned_conversation(conversation_id, request)
     run = agent_run_manager.get_last_run_for_conversation(conversation_id)
     if not run:
         raise HTTPException(status_code=404, detail="No agent run for conversation")
@@ -268,10 +347,12 @@ def get_latest_run(conversation_id: str):
 )
 def list_conversation_events(
     conversation_id: str,
+    request: Request,
     after_sequence: int = Query(0, ge=0),
     limit: int | None = Query(None, ge=1, le=5000),
 ):
     """Events for the conversation's last (or active) run — UI recovery helper."""
+    _assert_owned_conversation(conversation_id, request)
     run = agent_run_manager.get_last_run_for_conversation(conversation_id)
     if not run:
         return []

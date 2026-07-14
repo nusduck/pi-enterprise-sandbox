@@ -5,12 +5,12 @@
 | Status | Accepted |
 | Date | 2026-07-11 |
 | Decision owners | Agent runtime / api-server maintainers |
-| Related | R-01 (field-issues), A-02 Agent Runtime, package `api-server` |
-| Pinned version | `0.80.3` (exact; see `api-server/package.json`) |
+| Related | R-01 (field-issues), A-02 Agent Runtime, package `agent` |
+| Pinned version | `0.80.3` (exact; see `agent/package.json`) |
 
 ## Context
 
-Pi Enterprise Sandbox runs the agent loop in `api-server` (Node ESM BFF) and enforces security, workspace I/O, approvals, and artifacts in the Python `sandbox` service. The Node path already imports `@earendil-works/pi-coding-agent` to create sessions, stream tokens/tool events, and restore multi-turn history.
+Pi Enterprise Sandbox runs the agent loop in the independent Node `agent` service. The `api-server` is a thin BFF, while the Python `sandbox` service enforces security, workspace I/O, approvals, artifacts, and durable event persistence. The Agent imports `@earendil-works/pi-coding-agent` to create sessions, stream tokens/tool events, and restore multi-turn history.
 
 We needed an explicit decision on whether to:
 
@@ -26,10 +26,10 @@ We needed an explicit decision on whether to:
 - **No fork** of the SDK repository for product features.
 - **No Python binding** as a first-class replacement for the Node SDK.
 - **No full reimplementation** of the coding-agent product (CLI, TUI, tool system, Extension host, Session JSONL, model adapters).
-- Customize behavior via **public APIs only**: `createAgentSession`, `customTools` + tool allowlist, `SessionManager`, resource loaders, and BFF-side SSE mapping.
+- Customize behavior via **public APIs only**: `createAgentSession`, `customTools` + tool allowlist, `SessionManager`, resource loaders, and Agent-side SSE mapping.
 - **Sandbox remains the security boundary.** SDK built-in file/exec tools must not run host-local I/O for user work; they are overridden with Sandbox-backed tools.
 
-Version policy: **exact pin** in `api-server/package.json` (no `^` / `~` range). Upgrades are deliberate PRs that run the compatibility suite (see [sdk-upgrade runbook](../runbooks/sdk-upgrade.md)).
+Version policy: **exact pin** in `agent/package.json` (no `^` / `~` range). Upgrades are deliberate PRs that run the compatibility suite (see [sdk-upgrade runbook](../runbooks/sdk-upgrade.md)).
 
 ## Alternatives considered
 
@@ -45,7 +45,7 @@ Version policy: **exact pin** in `api-server/package.json` (no `^` / `~` range).
 
 - Replacing Sandbox path validation, policy/approval, or artifact registry with SDK features.
 - Shipping the SDK CLI/TUI as the enterprise UX (browser + BFF SSE remains the product surface).
-- Guaranteeing bit-identical behavior with every upstream CLI release beyond contracts covered by `api-server/tests/sdk-compat/`.
+- Guaranteeing bit-identical behavior with every upstream CLI release beyond contracts covered by `agent/tests/sdk-compat/`.
 - Auto-bumping the dependency via Dependabot major upgrades without a human-reviewed PR.
 - Reintroducing a Python Agent runtime or dual-runtime switch (removed; use the independent Node Agent service).
 
@@ -58,7 +58,7 @@ Version policy: **exact pin** in `api-server/package.json` (no `^` / `~` range).
 | Module type | ESM (`"type": "module"`) |
 | Node engines (SDK) | **`>=22.19.0`** (declared in package `engines`) |
 | Entry | `main` / export `.` → `./dist/index.js` |
-| Maintenance ownership (this repo) | **api-server / agent runtime owners** own pin, upgrade PR, compat suite, and runbook |
+| Maintenance ownership (this repo) | **Agent runtime owners** own pin, upgrade PR, compat suite, and runbook |
 | Upstream maintenance | Earendil / package publishers; we consume releases only |
 
 **Note:** CI, Docker images, and package `engines` are aligned on **Node 22**. Runtime images and any environment that *executes* `createAgentSession` must meet the SDK engine requirement (`>=22.19.0`). Do not silently ignore engine bumps on upgrade.
@@ -66,9 +66,9 @@ Version policy: **exact pin** in `api-server/package.json` (no `^` / `~` range).
 ## Security boundary
 
 ```
-Browser → api-server (pi-coding-agent orchestration + SSE)
-                ↓ customTools only (allowlist)
-         sandbox REST (path validation, exec, approval, artifacts)
+Browser → api-server (BFF / Run API / SSE relay) → agent (pi-coding-agent)
+                                                   ↓ customTools only (allowlist)
+                                            sandbox REST (policy, exec, artifacts)
 ```
 
 **Hard rules:**
@@ -97,7 +97,7 @@ Until those criteria are met, prefer Extension/custom tools, BFF mapping, and ve
 
 ## API surface inventory (this repo)
 
-Authoritative code: `api-server/routes/chat.js`, `api-server/sandbox-tools.js`, `api-server/services/sdk-sse-map.js`.
+Authoritative code: `agent/chat-runner.js`, `agent/sandbox-tools.js`, `agent/services/sdk-sse-map.js`, and `agent/tests/sdk-compat/`.
 
 ### Imports from `@earendil-works/pi-coding-agent`
 
@@ -142,7 +142,7 @@ Not imported by the BFF today (available upstream, out of scope unless a task ad
 
 `trace`, `session`, `approval_required` (from tool approval notifier), `error`, `done`, `session_closed`.
 
-Shared fixture: `tests/fixtures/sse_events.json`. Mapper: `api-server/services/sdk-sse-map.js`.
+Shared fixture: `tests/fixtures/sse_events.json`. Mapper: `agent/services/sdk-sse-map.js`.
 
 ### Sandbox tool contract
 
@@ -154,11 +154,11 @@ Shared fixture: `tests/fixtures/sse_events.json`. Mapper: `api-server/services/s
 | `bash` | approval gate + `executeCommand` |
 | `submit_artifact` | `submitArtifact` → drives `file_ready` |
 
-Tool result shape expected by BFF: `{ content: [{ type: 'text', text }], details?, isError? }`.
+Tool result shape expected by the Agent runtime: `{ content: [{ type: 'text', text }], details?, isError? }`.
 
 ## Compatibility suite
 
-Location: `api-server/tests/sdk-compat/`.
+Location: `agent/tests/sdk-compat/`.
 
 - Runs under `node:test` **without live LLM calls**.
 - Asserts message helpers, tool allowlist/override names, SessionManager branch/custom entries, Extension `tool_call` fail-safe + `tool_result` rewrite, cancel-on-disconnect / multi-turn resume contracts, SDK version pin, and SDK→SSE golden mapping.
@@ -180,9 +180,10 @@ Location: `api-server/tests/sdk-compat/`.
 
 ## References
 
-- `api-server/routes/chat.js`
-- `api-server/sandbox-tools.js`
-- `api-server/services/sdk-sse-map.js`
+- `agent/chat-runner.js`
+- `agent/sandbox-tools.js`
+- `agent/services/sdk-sse-map.js`
+- `agent/tests/sdk-compat/`
 - `tests/fixtures/sse_events.json`
 - `docs/runbooks/sdk-upgrade.md`
 - `docs/field-issues-and-evolution-requirements.md` (R-01, A-02, S-03)

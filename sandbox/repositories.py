@@ -1190,6 +1190,14 @@ class AgentRunRepository:
             ).fetchall()
         return [self._row_to_model(r) for r in rows]
 
+    def list_all(self) -> list[AgentRunResponse]:
+        """List runs newest first for management and recovery projections."""
+        with self.db.connect() as conn:
+            rows = conn.execute(
+                "SELECT * FROM agent_runs ORDER BY created_at DESC"
+            ).fetchall()
+        return [self._row_to_model(r) for r in rows]
+
     def list_by_status(self, status: str) -> list[AgentRunResponse]:
         with self.db.connect() as conn:
             rows = conn.execute(

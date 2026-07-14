@@ -3,9 +3,9 @@
  */
 import { checkHealth } from '../services/sandbox-client.js';
 import { checkAgentHealth } from '../services/agent-client.js';
-import { config } from '../config.js';
+import { sendJson } from '../http/response.js';
 
-export async function handleStatus(res) {
+async function dependencyHealth() {
   let sandboxStatus = 'unknown';
   let sandboxInfo = {};
   let agentStatus = 'unknown';
@@ -36,15 +36,26 @@ export async function handleStatus(res) {
   }
 
   const ok = sandboxStatus === 'ok' && agentStatus === 'ok';
-  const body = JSON.stringify({
+  return {
     status: ok ? 'ok' : 'degraded',
     version: '4.0.0',
     /** Chat orchestration is always the independent Node Agent service. */
     agent_runtime: 'node-agent',
-    agent: { status: agentStatus, base_url: config.AGENT_BASE_URL, ...agentInfo },
+    agent: { status: agentStatus, ...agentInfo },
     sandbox: { status: sandboxStatus, ...sandboxInfo },
-  });
+  };
+}
 
-  res.writeHead(200, { 'Content-Type': 'application/json' });
-  res.end(body);
+export function handleLiveness(res) {
+  sendJson(res, 200, { status: 'ok', service: 'api-server' });
+}
+
+export async function handleReadiness(res) {
+  const body = await dependencyHealth();
+  sendJson(res, body.status === 'ok' ? 200 : 503, body);
+}
+
+/** Compatibility endpoint for clients that still display dependency status. */
+export async function handleStatus(res) {
+  sendJson(res, 200, await dependencyHealth());
 }

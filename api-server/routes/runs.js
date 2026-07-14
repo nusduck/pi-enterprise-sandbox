@@ -18,21 +18,18 @@ import {
   resumeAgentRunApproval,
   respondAgentInteraction,
 } from '../services/agent-client.js';
-import { authFromRequest } from '../services/sandbox-client.js';
-import { randomUUID } from 'node:crypto';
-
-function json(res, status, data) {
-  res.writeHead(status, { 'Content-Type': 'application/json' });
-  res.end(JSON.stringify(data));
-}
+import { authFromRequest, createSandboxClient } from '../services/sandbox-client.js';
+import { authorizeRunRequest, resolveTrustedAuth } from '../application/run-access-service.js';
+import { sendError, sendJson as json } from '../http/response.js';
 
 export async function handleCreateRun(body, res, req = null) {
   if (!Array.isArray(body?.messages) || body.messages.length === 0) {
     json(res, 400, { error: 'messages array is required' });
     return;
   }
-  const traceId = randomUUID();
+  const traceId = req?.traceId || null;
   try {
+    const auth = await resolveTrustedAuth(req);
     const result = await createAgentRun(
       {
         messages: body.messages,
@@ -41,12 +38,24 @@ export async function handleCreateRun(body, res, req = null) {
         agent_profile_id: body.agent_profile_id || undefined,
         budget: body.budget || undefined,
       },
-      { auth: authFromRequest(req), traceId },
+      { auth, traceId },
     );
-    res.setHeader('X-Trace-Id', traceId);
+    if (traceId) res.setHeader('X-Trace-Id', traceId);
     json(res, 201, result);
   } catch (err) {
-    json(res, err.status || 500, { error: err.message || 'Create run failed', trace_id: traceId });
+    sendError(res, err, traceId);
+  }
+}
+
+export async function handleListRuns(parsedUrl, res, req = null) {
+  const conversationId = parsedUrl.searchParams.get('conversation_id') || undefined;
+  const status = parsedUrl.searchParams.get('status') || undefined;
+  try {
+    const client = createSandboxClient({ auth: authFromRequest(req) });
+    const result = await client.listAgentRuns({ conversationId, status });
+    json(res, 200, result);
+  } catch (err) {
+    sendError(res, err, req?.traceId);
   }
 }
 
@@ -61,7 +70,12 @@ export async function handleRunEvents(runId, parsedUrl, res, req = null) {
   const controller = new AbortController();
   req?.on('close', () => controller.abort());
   try {
-    const upstream = await openAgentRunEvents(runId, after, { signal: controller.signal });
+    const { auth } = await authorizeRunRequest(runId, req);
+    const upstream = await openAgentRunEvents(runId, after, {
+      signal: controller.signal,
+      auth,
+      traceId: req?.traceId,
+    });
     res.writeHead(200, {
       'Content-Type': 'text/event-stream',
       'Cache-Control': 'no-cache',
@@ -76,7 +90,7 @@ export async function handleRunEvents(runId, parsedUrl, res, req = null) {
     if (!res.writableEnded) res.end();
   } catch (err) {
     if (err?.name === 'AbortError') return;
-    if (!res.headersSent) json(res, err.status || 500, { error: err.message });
+    if (!res.headersSent) sendError(res, err, req?.traceId);
     else if (!res.writableEnded) res.end();
   }
 }
@@ -84,7 +98,7 @@ export async function handleRunEvents(runId, parsedUrl, res, req = null) {
 /**
  * POST /api/runs/:id/steer  body: { text, conversation_id? }
  */
-export async function handleSteerRun(runId, body, res) {
+export async function handleSteerRun(runId, body, res, req = null) {
   const text = body?.text;
   if (!runId) {
     json(res, 400, { error: 'run id is required' });
@@ -95,21 +109,22 @@ export async function handleSteerRun(runId, body, res) {
     return;
   }
   try {
+    const { auth } = await authorizeRunRequest(runId, req);
     const result = await steerAgentRun(runId, {
       text: text.trim(),
       conversation_id: body.conversation_id || null,
-    });
+    }, { auth, traceId: req?.traceId });
     json(res, 200, result);
   } catch (err) {
     console.error('[runs] steer:', err.message);
-    json(res, err.status || 500, { error: err.message || 'Steer failed' });
+    sendError(res, err, req?.traceId);
   }
 }
 
 /**
  * POST /api/runs/:id/follow-up  body: { text, conversation_id? }
  */
-export async function handleFollowUpRun(runId, body, res) {
+export async function handleFollowUpRun(runId, body, res, req = null) {
   const text = body?.text;
   if (!runId) {
     json(res, 400, { error: 'run id is required' });
@@ -120,48 +135,50 @@ export async function handleFollowUpRun(runId, body, res) {
     return;
   }
   try {
+    const { auth } = await authorizeRunRequest(runId, req);
     const result = await followUpAgentRun(runId, {
       text: text.trim(),
       conversation_id: body.conversation_id || null,
-    });
+    }, { auth, traceId: req?.traceId });
     json(res, 200, result);
   } catch (err) {
     console.error('[runs] follow-up:', err.message);
-    json(res, err.status || 500, { error: err.message || 'Follow-up failed' });
+    sendError(res, err, req?.traceId);
   }
 }
 
 /**
  * POST /api/runs/:id/cancel
  */
-export async function handleCancelRun(runId, res) {
+export async function handleCancelRun(runId, res, req = null) {
   if (!runId) {
     json(res, 400, { error: 'run id is required' });
     return;
   }
   try {
-    const result = await cancelAgentRun(runId);
+    const { auth } = await authorizeRunRequest(runId, req);
+    const result = await cancelAgentRun(runId, { auth, traceId: req?.traceId });
     json(res, 200, result);
   } catch (err) {
     console.error('[runs] cancel:', err.message);
-    json(res, err.status || 500, { error: err.message || 'Cancel failed' });
+    sendError(res, err, req?.traceId);
   }
 }
 
 /**
  * GET /api/runs/:id
  */
-export async function handleGetRun(runId, res) {
+export async function handleGetRun(runId, res, req = null) {
   if (!runId) {
     json(res, 400, { error: 'run id is required' });
     return;
   }
   try {
-    const result = await getAgentRun(runId);
-    json(res, 200, result);
+    const { run } = await authorizeRunRequest(runId, req);
+    json(res, 200, run);
   } catch (err) {
     console.error('[runs] get:', err.message);
-    json(res, err.status || 500, { error: err.message || 'Get run failed' });
+    sendError(res, err, req?.traceId);
   }
 }
 
@@ -175,13 +192,15 @@ export async function handleResumeApproval(runId, body, res, req = null) {
     return;
   }
   try {
+    const { auth } = await authorizeRunRequest(runId, req);
     const result = await resumeAgentRunApproval(runId, body || {}, {
-      auth: authFromRequest(req),
+      auth,
+      traceId: req?.traceId,
     });
     json(res, 200, result);
   } catch (err) {
     console.error('[runs] resume-approval:', err.message);
-    json(res, err.status || 500, { error: err.message || 'Resume failed' });
+    sendError(res, err, req?.traceId);
   }
 }
 
@@ -191,12 +210,14 @@ export async function handleInteractionResponse(runId, interactionId, body, res,
     return;
   }
   try {
+    const { auth } = await authorizeRunRequest(runId, req);
     const result = await respondAgentInteraction(runId, interactionId, body, {
-      auth: authFromRequest(req),
+      auth,
+      traceId: req?.traceId,
     });
     json(res, 200, result);
   } catch (err) {
     console.error('[runs] interaction response:', err.message);
-    json(res, err.status || 500, { error: err.message || 'Interaction failed' });
+    sendError(res, err, req?.traceId);
   }
 }

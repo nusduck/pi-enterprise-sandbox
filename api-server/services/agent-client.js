@@ -15,12 +15,8 @@ function internalHeaders(extra = {}) {
   return h;
 }
 
-/**
- * @param {{ messages: unknown[], conversation_id?: string|null, trace_id?: string|null }} body
- * @param {{ auth?: object|null, traceId?: string|null }} [opts]
- */
-export async function createAgentRun(body, { auth = null, traceId = null } = {}) {
-  const headers = internalHeaders();
+function requestHeaders({ auth = null, traceId = null, extra = {} } = {}) {
+  const headers = internalHeaders(extra);
   if (auth?.authorization) headers.Authorization = auth.authorization;
   if (auth?.actingUserId) headers['X-Acting-User-Id'] = auth.actingUserId;
   if (auth?.actingOrganizationId) {
@@ -28,6 +24,15 @@ export async function createAgentRun(body, { auth = null, traceId = null } = {})
   }
   if (auth?.actingRole) headers['X-Acting-Role'] = auth.actingRole;
   if (traceId) headers['X-Trace-Id'] = traceId;
+  return headers;
+}
+
+/**
+ * @param {{ messages: unknown[], conversation_id?: string|null, trace_id?: string|null }} body
+ * @param {{ auth?: object|null, traceId?: string|null }} [opts]
+ */
+export async function createAgentRun(body, { auth = null, traceId = null } = {}) {
+  const headers = requestHeaders({ auth, traceId });
 
   const resp = await fetch(`${config.AGENT_BASE_URL}/internal/agent-runs`, {
     method: 'POST',
@@ -59,10 +64,10 @@ export async function getAgentExtensionDiagnostics(profileId = 'coding-agent') {
 /**
  * @param {string} runId
  */
-export async function cancelAgentRun(runId) {
+export async function cancelAgentRun(runId, { auth = null, traceId = null } = {}) {
   const resp = await fetch(
     `${config.AGENT_BASE_URL}/internal/agent-runs/${encodeURIComponent(runId)}/cancel`,
-    { method: 'POST', headers: internalHeaders() },
+    { method: 'POST', headers: requestHeaders({ auth, traceId }) },
   );
   if (!resp.ok) {
     const text = await resp.text().catch(() => resp.statusText);
@@ -78,12 +83,12 @@ export async function cancelAgentRun(runId) {
  * @param {string} runId
  * @param {{ text: string, conversation_id?: string|null }} body
  */
-export async function steerAgentRun(runId, body) {
+export async function steerAgentRun(runId, body, { auth = null, traceId = null } = {}) {
   const resp = await fetch(
     `${config.AGENT_BASE_URL}/internal/agent-runs/${encodeURIComponent(runId)}/steer`,
     {
       method: 'POST',
-      headers: internalHeaders(),
+      headers: requestHeaders({ auth, traceId }),
       body: JSON.stringify(body),
     },
   );
@@ -101,12 +106,12 @@ export async function steerAgentRun(runId, body) {
  * @param {string} runId
  * @param {{ text: string, conversation_id?: string|null }} body
  */
-export async function followUpAgentRun(runId, body) {
+export async function followUpAgentRun(runId, body, { auth = null, traceId = null } = {}) {
   const resp = await fetch(
     `${config.AGENT_BASE_URL}/internal/agent-runs/${encodeURIComponent(runId)}/follow-up`,
     {
       method: 'POST',
-      headers: internalHeaders(),
+      headers: requestHeaders({ auth, traceId }),
       body: JSON.stringify(body),
     },
   );
@@ -124,9 +129,12 @@ export async function followUpAgentRun(runId, body) {
  * @param {string} runId
  * @param {object} body
  */
-export async function resumeAgentRunApproval(runId, body = {}, { auth = null } = {}) {
-  const headers = internalHeaders();
-  if (auth?.authorization) headers.Authorization = auth.authorization;
+export async function resumeAgentRunApproval(
+  runId,
+  body = {},
+  { auth = null, traceId = null } = {},
+) {
+  const headers = requestHeaders({ auth, traceId });
   const resp = await fetch(
     `${config.AGENT_BASE_URL}/internal/agent-runs/${encodeURIComponent(runId)}/resume-approval`,
     {
@@ -144,9 +152,13 @@ export async function resumeAgentRunApproval(runId, body = {}, { auth = null } =
   return resp.json();
 }
 
-export async function respondAgentInteraction(runId, interactionId, body, { auth = null } = {}) {
-  const headers = internalHeaders();
-  if (auth?.authorization) headers.Authorization = auth.authorization;
+export async function respondAgentInteraction(
+  runId,
+  interactionId,
+  body,
+  { auth = null, traceId = null } = {},
+) {
+  const headers = requestHeaders({ auth, traceId });
   const resp = await fetch(
     `${config.AGENT_BASE_URL}/internal/agent-runs/${encodeURIComponent(runId)}` +
       `/interactions/${encodeURIComponent(interactionId)}/respond`,
@@ -170,9 +182,12 @@ export async function respondAgentInteraction(runId, interactionId, body, { auth
  * @param {string} approvalId
  * @param {{ decision: string, run_id?: string, reason?: string }} body
  */
-export async function decideAgentApproval(approvalId, body, { auth = null } = {}) {
-  const headers = internalHeaders();
-  if (auth?.authorization) headers.Authorization = auth.authorization;
+export async function decideAgentApproval(
+  approvalId,
+  body,
+  { auth = null, traceId = null } = {},
+) {
+  const headers = requestHeaders({ auth, traceId });
   const resp = await fetch(
     `${config.AGENT_BASE_URL}/internal/approvals/${encodeURIComponent(approvalId)}/decide`,
     {
@@ -193,10 +208,10 @@ export async function decideAgentApproval(approvalId, body, { auth = null } = {}
 /**
  * @param {string} runId
  */
-export async function getAgentRun(runId) {
+export async function getAgentRun(runId, { auth = null, traceId = null } = {}) {
   const resp = await fetch(
     `${config.AGENT_BASE_URL}/internal/agent-runs/${encodeURIComponent(runId)}`,
-    { headers: internalHeaders() },
+    { headers: requestHeaders({ auth, traceId }) },
   );
   if (!resp.ok) {
     const text = await resp.text().catch(() => resp.statusText);
@@ -214,14 +229,17 @@ export async function getAgentRun(runId) {
  * @param {{ signal?: AbortSignal }} [opts]
  * @returns {Promise<Response>}
  */
-export async function openAgentRunEvents(runId, after = 0, { signal } = {}) {
+export async function openAgentRunEvents(
+  runId,
+  after = 0,
+  { signal, auth = null, traceId = null } = {},
+) {
   const url = `${config.AGENT_BASE_URL}/internal/agent-runs/${encodeURIComponent(runId)}/events?after=${after}`;
-  const headers = {
-    Accept: 'text/event-stream',
-  };
-  if (config.AGENT_INTERNAL_TOKEN) {
-    headers['X-Internal-Token'] = config.AGENT_INTERNAL_TOKEN;
-  }
+  const headers = requestHeaders({
+    auth,
+    traceId,
+    extra: { Accept: 'text/event-stream' },
+  });
   const resp = await fetch(url, { headers, signal });
   if (!resp.ok || !resp.body) {
     const text = await resp.text().catch(() => resp.statusText);

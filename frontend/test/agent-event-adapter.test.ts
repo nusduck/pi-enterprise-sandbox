@@ -1,20 +1,20 @@
 /**
- * Legacy /chat SSE → RuntimeEvent adapter tests.
+ * Agent wire-event → RuntimeEvent adapter tests.
  */
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  adaptLegacyStream,
-  createLegacyAdapterState,
-  legacyEventToRuntime,
-} from '../src/shared/sse/legacyAdapter.ts';
+  adaptAgentEventStream,
+  createAgentEventAdapterState,
+  agentEventToRuntime,
+} from '../src/shared/sse/agentEventAdapter.ts';
 import { createEntityStore } from '../src/entities/index.ts';
 import { reduceRuntimeEventBatch } from '../src/shared/state/runReducer.ts';
 import { createEntityBridge } from '../src/features/chat/entityBridge.ts';
 
-describe('legacy SSE adapter', () => {
+describe('Agent event adapter', () => {
   it('maps token stream to message.started + message.delta', () => {
-    const { events } = adaptLegacyStream('run_leg', [
+    const { events } = adaptAgentEventStream('run_leg', [
       { type: 'session', session_id: 'sess1', conversation_id: 'c1' },
       { type: 'token', text: 'Hel' },
       { type: 'token', text: 'lo' },
@@ -40,7 +40,7 @@ describe('legacy SSE adapter', () => {
   });
 
   it('maps tools, approvals, artifacts', () => {
-    const { events } = adaptLegacyStream('run_t', [
+    const { events } = adaptAgentEventStream('run_t', [
       { type: 'tool_start', id: 't1', name: 'bash', args: { cmd: 'ls' } },
       { type: 'approval_required', approval_id: 'ap1', reason: 'sudo' },
       { type: 'tool_end', id: 't1', result: 'ok', isError: false },
@@ -59,7 +59,7 @@ describe('legacy SSE adapter', () => {
   });
 
   it('feeds adapter output into reducer without currentMsg', () => {
-    const { events } = adaptLegacyStream('run_full', [
+    const { events } = adaptAgentEventStream('run_full', [
       { type: 'session', session_id: 's1' },
       { type: 'token', text: 'Hi' },
       { type: 'tool_start', name: 'read', id: 'tc' },
@@ -79,9 +79,9 @@ describe('legacy SSE adapter', () => {
     const r1 = bridge.beginRun({ conversationId: 'c1' });
     const r2 = bridge.beginRun({ conversationId: 'c2' });
 
-    bridge.ingestLegacyEvent(r1, { type: 'token', text: 'A' });
-    bridge.ingestLegacyEvent(r2, { type: 'token', text: 'B' });
-    bridge.ingestLegacyEvent(r1, { type: 'token', text: 'A2' });
+    bridge.ingestAgentEvent(r1, { type: 'token', text: 'A' });
+    bridge.ingestAgentEvent(r2, { type: 'token', text: 'B' });
+    bridge.ingestAgentEvent(r1, { type: 'token', text: 'A2' });
 
     // Switch conversation focus — must not clear runs
     bridge.focusConversation('c2');
@@ -102,7 +102,7 @@ describe('legacy SSE adapter', () => {
     bridge.dispose();
   });
 
-  it('keeps legacy fetch controllers isolated per background run', () => {
+  it('keeps fetch controllers isolated per background run', () => {
     const bridge = createEntityBridge();
     const r1 = bridge.beginRun({ conversationId: 'c1' });
     const r2 = bridge.beginRun({ conversationId: 'c2' });
@@ -120,7 +120,7 @@ describe('legacy SSE adapter', () => {
   });
 
   it('keeps successful terminal status when session_closed follows done', () => {
-    const { events } = adaptLegacyStream('run_terminal', [
+    const { events } = adaptAgentEventStream('run_terminal', [
       { type: 'session', session_id: 's1', conversation_id: 'c1' },
       { type: 'token', text: 'ok' },
       { type: 'done' },
@@ -135,7 +135,7 @@ describe('legacy SSE adapter', () => {
   });
 
   it('does not let done overwrite a preceding failure', () => {
-    const { events } = adaptLegacyStream('run_failed', [
+    const { events } = adaptAgentEventStream('run_failed', [
       { type: 'error', message: 'boom' },
       { type: 'done' },
       { type: 'session_closed' },
@@ -148,8 +148,8 @@ describe('legacy SSE adapter', () => {
   it('maps trace and agent session into the normalized store', () => {
     const bridge = createEntityBridge();
     const runId = bridge.beginRun({ conversationId: 'c1', sessionId: 's1' });
-    bridge.ingestLegacyEvent(runId, { type: 'trace', trace_id: 'trace_1' });
-    bridge.ingestLegacyEvent(runId, {
+    bridge.ingestAgentEvent(runId, { type: 'trace', trace_id: 'trace_1' });
+    bridge.ingestAgentEvent(runId, {
       type: 'agent_session',
       agent_session_id: 'asess_1',
       conversation_id: 'c1',
@@ -163,13 +163,13 @@ describe('legacy SSE adapter', () => {
     bridge.dispose();
   });
 
-  it('createLegacyAdapterState seeds conversation/session', () => {
-    const st = createLegacyAdapterState({
+  it('createAgentEventAdapterState seeds conversation/session', () => {
+    const st = createAgentEventAdapterState({
       runId: 'r',
       conversationId: 'c',
       sessionId: 's',
     });
-    const out = legacyEventToRuntime(st, { type: 'token', text: 'x' });
+    const out = agentEventToRuntime(st, { type: 'token', text: 'x' });
     assert.ok(out.some((e) => e.type === 'message.delta'));
     assert.equal(st.sessionId, 's');
   });

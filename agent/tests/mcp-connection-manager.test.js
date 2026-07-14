@@ -22,6 +22,16 @@ const schema = {
   },
 };
 
+const EXA_REMOTE_MCP = Object.freeze({
+  id: 'exa',
+  name: 'Exa Search',
+  url: 'https://mcp.exa.ai/mcp',
+  transport: 'streamable-http',
+  timeoutMs: 30_000,
+  retries: 1,
+  enabled: true,
+});
+
 test('JSON Schema validation preserves required, nested arrays, enum and strict properties', () => {
   assert.deepEqual(validateJsonSchema(schema, {
     merchant_id: 'm1',
@@ -119,6 +129,49 @@ test('MCP manager discovers on demand, keeps schema, injects credentials outside
   assert.equal(invoked.status, 'ok');
   assert.equal(calls[1].headers.authorization, 'Bearer top-secret');
   assert.equal(JSON.stringify(calls[1].request).includes('top-secret'), false);
+});
+
+test('remote Exa MCP search contract is discoverable and invokable without embedded credentials', async () => {
+  const requests = [];
+  const manager = new McpConnectionManager({
+    servers: [EXA_REMOTE_MCP],
+    allowedServers: ['exa'],
+    allowedTools: ['exa:web_search_exa'],
+    fetch: async (url, init) => {
+      assert.equal(url, EXA_REMOTE_MCP.url);
+      const request = JSON.parse(init.body);
+      requests.push({ request, headers: init.headers });
+      const result = request.method === 'tools/list'
+        ? {
+            tools: [{
+              name: 'web_search_exa',
+              description: 'Search the web and return grounded results',
+              inputSchema: {
+                type: 'object',
+                required: ['query'],
+                properties: { query: { type: 'string' } },
+                additionalProperties: false,
+              },
+            }],
+          }
+        : { content: [{ type: 'text', text: 'search result' }] };
+      return new Response(JSON.stringify({ jsonrpc: '2.0', id: request.id, result }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    },
+  });
+
+  const found = await manager.search('web search');
+  assert.deepEqual(found.map((tool) => tool.tool), ['exa:web_search_exa']);
+  const invoked = await manager.invoke('exa:web_search_exa', { query: 'remote MCP' });
+  assert.equal(invoked.status, 'ok');
+  assert.equal(requests[1].request.method, 'tools/call');
+  assert.deepEqual(requests[1].request.params, {
+    name: 'web_search_exa',
+    arguments: { query: 'remote MCP' },
+  });
+  assert.equal(Object.hasOwn(requests[0].headers, 'authorization'), false);
 });
 
 test('single MCP extension exposes only mcp and defers side effects to durable approval', async () => {
