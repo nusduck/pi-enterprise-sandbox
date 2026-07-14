@@ -21,8 +21,8 @@ open http://localhost:3000
 ## 架构
 
 ```
-  Browser → Frontend → API Server (BFF) → Agent (pi-coding-agent) → Sandbox
-  (SPA)     (Nginx)    (Node:4000)        (Node:4100)               (FastAPI:8081)
+  Browser → Frontend → API Server → Agent Host → Pi Extension ─┬→ Sandbox API
+                                                               └→ MCP Server
 ```
 
 | 组件 | 技术栈 | host→容器端口 |
@@ -31,7 +31,6 @@ open http://localhost:3000
 | **API Server (BFF)** | Node.js 22 — auth / files / SSE relay | `4000→4000` |
 | **Agent** | Node.js 22 + pi-coding-agent SDK | `4100→4100` |
 | **Sandbox API** | Python 3.11 + FastAPI | `8083→8081` |
-| **Sandbox MCP** | MCP adapter (REST over HTTP) | `8093→8091` |
 
 ## 目录结构
 
@@ -42,20 +41,19 @@ pi-sandbox/
 │   ├── Dockerfile        ← Nginx 静态服务
 │   └── nginx.conf        ← /api/* 反向代理到 api-server
 ├── api-server/           ← 薄 BFF（auth / files / SSE relay）
-│   ├── server.js         ← HTTP 入口（/api/chat SSE, /api/status）
-│   ├── routes/           ← chat, files, status, conversations...
+│   ├── server.js         ← HTTP 入口（Run API、SSE、/api/status）
+│   ├── routes/           ← runs, files, status, conversations, capabilities...
 │   ├── services/         ← sandbox-client + agent-client
 │   └── Dockerfile
 ├── agent/                ← 独立 Agent（@earendil-works/pi-coding-agent 0.80.3）
-│   ├── server.js         ← 内部 Run API + /health /ready
-│   ├── chat-runner.js    ← SDK 会话循环
-│   ├── sandbox-tools.js  ← read/write/edit/bash → Sandbox REST
+│   ├── runtime/          ← Agent Runtime 编排 + Session factory + Extension Host Adapter
+│   ├── packages/         ← @company/pi-enterprise-agent-kit
+│   ├── infrastructure/   ← Sandbox client + MCP Connection Manager
 │   └── Dockerfile
 ├── sandbox/              ← 安全沙箱（Python FastAPI + 多层防护，无 Agent 主循环）
 │   ├── main.py           ← FastAPI 入口
-│   ├── routers/          ← sessions, executions, files, artifacts, traces, MCP...
+│   ├── routers/          ← sessions, executions, files, artifacts, traces...
 │   ├── services/         ← 会话/执行/文件/审计/审批策略
-│   ├── mcp/              ← MCP 协议适配器
 │   └── Dockerfile
 ├── skills/               ← 空发行基线（无内置 Skill package；loader 保留；研发可 install）
 ├── tests/                ← pytest 测试套件
@@ -83,13 +81,13 @@ pi-sandbox/
 | 变量 | 说明 |
 |------|------|
 | `SANDBOX_API_TOKEN` | Sandbox API 认证令牌（生成: `openssl rand -hex 32`） |
-| `SANDBOX_MCP_AUTH_TOKENS` | MCP 端点认证令牌（逗号分隔） |
+| `MCP_SERVERS_JSON` | Agent Runtime 外部 MCP Server 配置（凭据使用 `authTokenRef`） |
 | `AGENT_BASE_URL` | BFF → Agent 服务地址（compose 内默认 `http://agent:4100`） |
 | `AGENT_INTERNAL_TOKEN` | BFF ↔ Agent 共享内部令牌（生产必填） |
 
 ### Agent 服务
 
-浏览器仍统一走 `POST /api/chat`（BFF）。BFF 创建 Agent run 并 relay 序列化 SSE；编排与 SDK 循环只在 `agent/` 服务中。
+浏览器走 `POST /api/runs` 并通过 `GET /api/runs/:id/events` 接收序列化 SSE；编排与 SDK 循环只在 `agent/` 服务中。
 
 ```bash
 # 本地四进程开发时
@@ -147,8 +145,7 @@ SANDBOX_BASE_URL=http://localhost:8081
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
 | `SANDBOX_LOG_LEVEL` | `INFO` | 日志级别 |
-| `SANDBOX_MCP_ENABLED` | `true` | 启用 MCP 适配器 |
-| `SANDBOX_MCP_PORT` | `8091` | MCP 端口 |
+| `MCP_SERVERS_JSON` | `[]` | Agent Runtime 管理的外部 MCP Server 列表 |
 | `SANDBOX_UVICORN_WORKERS` | `1` | Uvicorn worker 数 |
 
 ## 开发

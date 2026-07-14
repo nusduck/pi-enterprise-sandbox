@@ -9,7 +9,11 @@
  * is process-local. Sandbox DB agent-runs provide cross-process lease/status.
  */
 import { randomUUID } from 'node:crypto';
-import { runAgentTurn, resumeAgentTurnAfterApproval } from './chat-runner.js';
+import {
+  runAgentTurn,
+  resumeAgentTurnAfterApproval,
+  resumeAgentTurnAfterInput,
+} from './chat-runner.js';
 import { createBudgetTracker, resolveBudgetLimits } from './services/budget.js';
 import {
   resolveApproval,
@@ -19,9 +23,16 @@ import {
   clearPendingForRun,
   _resetApprovalWaiters,
 } from './services/approval-waiter.js';
+import {
+  getPendingInput,
+  getPendingInputForRun,
+  clearPendingInput,
+  registerPendingInput,
+} from './services/interaction-waiter.js';
+import { createSandboxClient } from './infrastructure/sandbox-client.js';
 
 /**
- * @typedef {'queued'|'running'|'waiting_approval'|'completed'|'cancelled'|'failed'|'budget_exceeded'|'rejected'} RunStatus
+ * @typedef {'queued'|'running'|'waiting_approval'|'waiting_input'|'completed'|'cancelled'|'failed'|'budget_exceeded'|'rejected'} RunStatus
  */
 
 /**
@@ -42,9 +53,11 @@ import {
  * @property {ReturnType<typeof createBudgetTracker>|null} budget
  * @property {object|null} budget_limits
  * @property {object|null} pending_approval
+ * @property {object|null} pending_input
  * @property {object|null} auth
  * @property {string|null} trace_id
  * @property {unknown[]} messages
+ * @property {string|null} agent_profile_id
  */
 
 /** @type {Map<string, AgentRun>} */
@@ -136,6 +149,7 @@ function toPublic(run) {
     budget: run.budget ? run.budget.snapshot() : null,
     budget_limits: run.budget_limits || null,
     pending_approval: run.pending_approval || null,
+    pending_input: run.pending_input || null,
   };
 }
 
@@ -174,9 +188,11 @@ export function createRun(body) {
     budget,
     budget_limits: budgetLimits,
     pending_approval: null,
+    pending_input: null,
     auth: body.auth || null,
     trace_id: body.trace_id || null,
     messages: Array.isArray(body.messages) ? body.messages : [],
+    agent_profile_id: body.agent_profile_id || null,
   };
   runs.set(id, run);
 
@@ -185,11 +201,13 @@ export function createRun(body) {
     run.updated_at = now();
     try {
       const result = await runAgentTurn({
+        run_id: run.id,
         messages: run.messages,
         conversation_id: run.conversation_id,
         auth: run.auth,
         trace_id: run.trace_id,
         budget,
+        agent_profile_id: run.agent_profile_id || undefined,
         emit: (event) => {
           if (
             run.cancelled &&
@@ -235,6 +253,24 @@ export function createRun(body) {
           // Release live SDK handles so waiting does not pin execution resources.
           run.handles = null;
         },
+        onInputSuspend: async (pending) => {
+          run.pending_input = pending;
+          run.status = 'waiting_input';
+          run.updated_at = now();
+          appendEvent(run, {
+            type: 'interaction_requested',
+            durable: true,
+            ...pending,
+            run_id: run.id,
+            conversation_id: run.conversation_id,
+          });
+          appendEvent(run, {
+            type: 'run_status',
+            status: 'waiting_input',
+            interaction_id: pending.interaction_id,
+          });
+          run.handles = null;
+        },
       });
 
       if (run.cancelled) {
@@ -243,6 +279,9 @@ export function createRun(body) {
         run.status = 'waiting_approval';
         run.pending_approval = result.pending_approval || run.pending_approval;
         // Do not emit done — run is parked and resumable.
+      } else if (result.status === 'waiting_input') {
+        run.status = 'waiting_input';
+        run.pending_input = result.pending_input || run.pending_input;
       } else if (result.status === 'budget_exceeded') {
         run.status = 'budget_exceeded';
         run.error = result.error || 'budget_exceeded';
@@ -266,7 +305,7 @@ export function createRun(body) {
       appendEvent(run, { type: 'done' });
     } finally {
       run.updated_at = now();
-      if (run.status !== 'waiting_approval') {
+      if (run.status !== 'waiting_approval' && run.status !== 'waiting_input') {
         run.handles = null;
         notifyTerminal(run);
       }
@@ -426,9 +465,13 @@ export async function followUpRun(runId, body) {
     };
   }
 
-  if (!ACTIVE_STREAMING.has(run.status) && run.status !== 'waiting_approval') {
+  if (
+    !ACTIVE_STREAMING.has(run.status) &&
+    run.status !== 'waiting_approval' &&
+    run.status !== 'waiting_input'
+  ) {
     return {
-      error: `run is ${run.status}; follow-up only allowed while running or waiting_approval`,
+      error: `run is ${run.status}; follow-up only allowed while running or waiting`,
       status: 409,
       run_id: run.id,
       status_run: run.status,
@@ -642,6 +685,7 @@ export async function resumeRunAfterApproval(runId, body = {}) {
         decision,
         decision_reason: body.reason || null,
         budget: run.budget,
+        agent_profile_id: run.agent_profile_id || undefined,
         messages: run.messages,
         emit: (event) => {
           appendEvent(run, event);
@@ -669,6 +713,13 @@ export async function resumeRunAfterApproval(runId, body = {}) {
           });
           run.handles = null;
         },
+        onInputSuspend: async (nextInput) => {
+          registerPendingInput(nextInput);
+          run.pending_input = nextInput;
+          run.status = 'waiting_input';
+          appendEvent(run, { type: 'interaction_requested', durable: true, ...nextInput });
+          run.handles = null;
+        },
       });
 
       clearPendingApproval(pending.approval_id);
@@ -679,6 +730,9 @@ export async function resumeRunAfterApproval(runId, body = {}) {
       } else if (result.status === 'waiting_approval') {
         run.status = 'waiting_approval';
         run.pending_approval = result.pending_approval || null;
+      } else if (result.status === 'waiting_input') {
+        run.status = 'waiting_input';
+        run.pending_input = result.pending_input || null;
       } else if (result.status === 'budget_exceeded') {
         run.status = 'budget_exceeded';
         run.error = result.error || 'budget_exceeded';
@@ -702,7 +756,7 @@ export async function resumeRunAfterApproval(runId, body = {}) {
       appendEvent(run, { type: 'done' });
     } finally {
       run.updated_at = now();
-      if (run.status !== 'waiting_approval') {
+      if (run.status !== 'waiting_approval' && run.status !== 'waiting_input') {
         run.handles = null;
         notifyTerminal(run);
       }
@@ -719,15 +773,106 @@ export async function resumeRunAfterApproval(runId, body = {}) {
   };
 }
 
+/** Resume a parked waiting_input run after a durable interaction response. */
+export async function resumeRunAfterInput(runId, interactionId, body = {}) {
+  const run = runs.get(runId);
+  if (!run) return null;
+  if (run.status !== 'waiting_input') {
+    return { error: `run is ${run.status}; resume only for waiting_input`, status: 409 };
+  }
+  const pending =
+    run.pending_input ||
+    getPendingInputForRun(runId) ||
+    getPendingInput(interactionId);
+  if (!pending || pending.interaction_id !== interactionId) {
+    return { error: 'interaction does not match pending input', status: 409 };
+  }
+  if (!Object.prototype.hasOwnProperty.call(body, 'response')) {
+    return { error: 'response is required', status: 400 };
+  }
+
+  run.status = 'running';
+  run.updated_at = now();
+  appendEvent(run, {
+    type: 'interaction_resolved',
+    interaction_id: interactionId,
+    response: body.response,
+  });
+  appendEvent(run, { type: 'run_status', status: 'running' });
+
+  run.done = (async () => {
+    try {
+      const result = await resumeAgentTurnAfterInput({
+        conversation_id: run.conversation_id,
+        auth: run.auth,
+        trace_id: run.trace_id,
+        sandbox_run_id: run.sandbox_run_id,
+        pending_input: pending,
+        response: body.response,
+        budget: run.budget,
+        agent_profile_id: run.agent_profile_id || undefined,
+        messages: run.messages,
+        emit: (event) => appendEvent(run, event),
+        isCancelled: () => run.cancelled,
+        onSessionReady: (handles) => {
+          run.handles = { ...handles, budget: run.budget };
+        },
+        onApprovalSuspend: async (nextPending) => {
+          run.pending_approval = nextPending;
+          run.status = 'waiting_approval';
+          appendEvent(run, { type: 'approval_required', ...nextPending });
+          run.handles = null;
+        },
+        onInputSuspend: async (nextInput) => {
+          registerPendingInput(nextInput);
+          run.pending_input = nextInput;
+          run.status = 'waiting_input';
+          appendEvent(run, { type: 'interaction_requested', durable: true, ...nextInput });
+          run.handles = null;
+        },
+      });
+      clearPendingInput(interactionId);
+      run.pending_input = null;
+      if (run.cancelled) run.status = 'cancelled';
+      else if (result.status === 'waiting_input') {
+        run.status = 'waiting_input';
+        run.pending_input = result.pending_input || null;
+      } else if (result.status === 'waiting_approval') {
+        run.status = 'waiting_approval';
+        run.pending_approval = result.pending_approval || null;
+      } else if (result.status === 'budget_exceeded') run.status = 'budget_exceeded';
+      else if (result.status === 'failed') {
+        run.status = 'failed';
+        run.error = result.error || 'failed';
+      } else run.status = 'completed';
+    } catch (error) {
+      run.status = 'failed';
+      run.error = error?.message || String(error);
+      appendEvent(run, { type: 'error', message: run.error });
+    } finally {
+      run.updated_at = now();
+      if (run.status !== 'waiting_input' && run.status !== 'waiting_approval') {
+        run.handles = null;
+        notifyTerminal(run);
+      }
+    }
+    return toPublic(run);
+  })();
+
+  return { run_id: run.id, status: 'running', resumed: true, interaction_id: interactionId };
+}
+
 /**
- * Rehydrate a waiting_approval run into the local registry after agent restart.
+ * Rehydrate a waiting_approval or waiting_input run after Agent restart.
  * Does not hold SDK resources — only parks metadata until resume.
  *
  * @param {{
  *   run_id: string,
  *   conversation_id?: string|null,
  *   sandbox_run_id?: string|null,
+ *   status?: 'waiting_approval'|'waiting_input',
  *   pending_approval?: object|null,
+ *   pending_input?: object|null,
  *   budget?: object|null,
  *   auth?: object|null,
  *   messages?: unknown[],
@@ -742,7 +887,9 @@ export function rehydrateWaitingRun(snapshot) {
   /** @type {AgentRun} */
   const run = {
     id: snapshot.run_id,
-    status: 'waiting_approval',
+    status: snapshot.status === 'waiting_input' || snapshot.pending_input
+      ? 'waiting_input'
+      : 'waiting_approval',
     conversation_id: snapshot.conversation_id || null,
     sandbox_run_id: snapshot.sandbox_run_id || null,
     error: null,
@@ -756,23 +903,68 @@ export function rehydrateWaitingRun(snapshot) {
     done: null,
     budget: createBudgetTracker(budgetLimits),
     budget_limits: budgetLimits,
-    pending_approval: snapshot.pending_approval || null,
+    pending_approval: snapshot.pending_approval
+      ? { run_id: snapshot.run_id, ...snapshot.pending_approval }
+      : null,
+    pending_input: snapshot.pending_input
+      ? { run_id: snapshot.run_id, ...snapshot.pending_input }
+      : null,
     auth: snapshot.auth || null,
     trace_id: null,
     messages: Array.isArray(snapshot.messages) ? snapshot.messages : [],
+    agent_profile_id: snapshot.agent_profile_id || null,
   };
   runs.set(run.id, run);
   if (run.pending_approval?.approval_id) {
     // Register waiter so decide can resolve if someone was mid-flight
     // (resume path is the primary after restart)
+    appendEvent(run, {
+      type: 'approval_required',
+      durable: true,
+      rehydrated: true,
+      ...run.pending_approval,
+    });
+  }
+  if (run.pending_input?.interaction_id) {
+    registerPendingInput(run.pending_input);
+    appendEvent(run, {
+      type: 'interaction_requested',
+      durable: true,
+      rehydrated: true,
+      ...run.pending_input,
+    });
   }
   appendEvent(run, {
     type: 'run_status',
-    status: 'waiting_approval',
+    status: run.status,
     rehydrated: true,
     approval_id: run.pending_approval?.approval_id,
+    interaction_id: run.pending_input?.interaction_id,
   });
   return toPublic(run);
+}
+
+/** Recover a durable parked run from the Sandbox repository on first resume request. */
+export async function rehydrateWaitingRunFromSandbox(runId, auth = null) {
+  const client = createSandboxClient({ auth: auth || {} });
+  const snapshot = await client.getAgentRun(runId);
+  if (!snapshot || !['waiting_approval', 'waiting_input'].includes(snapshot.status)) {
+    return null;
+  }
+  const pendingApproval = snapshot.pending_approval_json || null;
+  const pendingInput = snapshot.pending_input_json || null;
+  return rehydrateWaitingRun({
+    run_id: snapshot.run_id || runId,
+    conversation_id: snapshot.conversation_id,
+    sandbox_run_id: snapshot.run_id || runId,
+    status: snapshot.status,
+    pending_approval: pendingApproval,
+    pending_input: pendingInput,
+    budget: snapshot.budget_json,
+    auth,
+    agent_profile_id:
+      pendingApproval?.agent_profile_id || pendingInput?.agent_profile_id || 'coding-agent',
+  });
 }
 
 /** Active running/queued count — used by /ready (waiting_approval does not pin workers) */

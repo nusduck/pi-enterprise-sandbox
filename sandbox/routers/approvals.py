@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException
 
-from sandbox.models import ApprovalDecisionRequest
+from sandbox.models import ApprovalCreateRequest, ApprovalDecisionRequest
 from sandbox.services.approval_manager import approval_manager
 
 router = APIRouter(tags=["approvals"])
@@ -25,6 +25,19 @@ def _serialize(entry: dict) -> dict:
         "expires_at": entry.get("expires_at"),
         "decided_at": entry.get("decided_at"),
     }
+
+
+@router.post("/approvals", status_code=201)
+def create_approval(body: ApprovalCreateRequest):
+    """Persist a host-level approval without proxying the underlying tool call."""
+    entry = approval_manager.create(
+        session_id=body.session_id,
+        tool_name=body.tool_name,
+        risk_level=body.risk_level,
+        reason=body.reason,
+        payload=body.payload,
+    )
+    return _serialize(entry)
 
 
 @router.get("/approvals/{approval_id}")

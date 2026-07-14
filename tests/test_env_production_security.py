@@ -192,17 +192,6 @@ class TestEffectiveConfigRedaction:
         assert snap["database_url"] == "sqlite:///<redacted>"
         assert "/var/sandbox" not in snap["database_url"]
 
-    def test_mcp_tokens_redacted(self):
-        s = Settings(
-            deployment_env="development",
-            mcp_auth_tokens=["secret-token-value"],
-            database_url="sqlite:////tmp/mcp.db",
-            allowed_client_cidrs=["127.0.0.1/32"],
-        )
-        snap = effective_config(s)
-        assert snap["mcp_auth_tokens"] == ["***"]
-
-
 class TestEnvCatalogConsistency:
     """Catalog surface matches .env.example (no secrets committed)."""
 

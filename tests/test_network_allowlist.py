@@ -264,32 +264,10 @@ def test_middleware_ipv6_peer(allowlist_policy):
     assert resp2.status_code == 403
 
 
-def test_mcp_route_respects_allowlist(allowlist_policy):
-    client = TestClient(app, client=("8.8.8.8", 50000))
-    resp = client.get("/mcp/tools")
-    assert resp.status_code == 403
-
-    client_ok = TestClient(app, client=("10.0.0.9", 50000))
-    resp_ok = client_ok.get("/mcp/tools")
-    assert resp_ok.status_code == 200
-    assert "tools" in resp_ok.json()
-
-
-def test_mcp_adapter_reuses_policy(allowlist_policy):
-    import asyncio
-
-    from sandbox.mcp.server import mcp_server
-
-    denied = asyncio.run(
-        mcp_server.call_tool(
-            tool_name="list_files",
-            caller_id="t",
-            client_ip="8.8.8.8",
-            session_id="x",
-        )
-    )
-    assert denied.get("status") == "denied"
-    assert "allowlist" in denied.get("error", "").lower()
+def test_sandbox_has_no_mcp_execution_routes(allowlist_policy):
+    client = TestClient(app, client=("10.0.0.9", 50000))
+    assert client.get("/mcp/tools").status_code == 404
+    assert client.post("/mcp/invoke", json={}).status_code == 404
 
 
 def test_init_network_policy_from_live_settings():

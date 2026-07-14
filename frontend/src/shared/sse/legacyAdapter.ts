@@ -19,6 +19,7 @@ export type LegacyAdapterState = {
   toolIds: string[];
   /** Terminal status already emitted for this legacy stream. */
   terminalStatus: 'succeeded' | 'failed' | 'cancelled' | 'budget_exceeded' | null;
+  suspendedStatus: 'waiting_approval' | 'waiting_input' | null;
 };
 
 export function createLegacyAdapterState(
@@ -33,6 +34,7 @@ export function createLegacyAdapterState(
     messageId: null,
     toolIds: [],
     terminalStatus: null,
+    suspendedStatus: null,
     ...partial,
   };
 }
@@ -255,6 +257,115 @@ export function legacyEventToRuntime(
           },
         }),
       );
+      state.suspendedStatus = 'waiting_approval';
+      break;
+    }
+
+    case 'interaction_requested': {
+      state.suspendedStatus = 'waiting_input';
+      const seq = nextSeq(state);
+      out.push(
+        makeRuntimeEvent({
+          ...base,
+          event_id: eventId(state, seq),
+          sequence: seq,
+          session_id: state.sessionId,
+          type: 'run.status_changed',
+          payload: {
+            status: 'waiting_input',
+            interaction_id: ev.interaction_id,
+            interaction_type: ev.interaction_type,
+            title: ev.title,
+            message: ev.message,
+            options: ev.options,
+          },
+        }),
+      );
+      break;
+    }
+
+    case 'interaction_resolved': {
+      state.suspendedStatus = null;
+      const seq = nextSeq(state);
+      out.push(makeRuntimeEvent({
+        ...base,
+        event_id: eventId(state, seq),
+        sequence: seq,
+        session_id: state.sessionId,
+        type: 'run.status_changed',
+        payload: { status: 'running', interaction_id: ev.interaction_id },
+      }));
+      break;
+    }
+
+    case 'context_stats':
+    case 'context_warning': {
+      const seq = nextSeq(state);
+      out.push(makeRuntimeEvent({
+        ...base,
+        event_id: eventId(state, seq),
+        sequence: seq,
+        session_id: state.sessionId,
+        type: 'run.context_updated',
+        payload: { ...ev, warning: ev.type === 'context_warning' },
+      }));
+      break;
+    }
+
+    case 'task_plan_updated': {
+      const seq = nextSeq(state);
+      out.push(makeRuntimeEvent({
+        ...base,
+        event_id: eventId(state, seq),
+        sequence: seq,
+        session_id: state.sessionId,
+        type: 'run.task_plan_updated',
+        payload: { tasks: ev.tasks },
+      }));
+      break;
+    }
+
+    case 'compaction_started':
+    case 'compaction_completed':
+    case 'compaction_failed': {
+      const seq = nextSeq(state);
+      out.push(makeRuntimeEvent({
+        ...base,
+        event_id: eventId(state, seq),
+        sequence: seq,
+        session_id: state.sessionId,
+        type: 'run.compaction_updated',
+        payload: {
+          status: ev.type === 'compaction_started'
+            ? 'running'
+            : ev.type === 'compaction_completed'
+              ? 'completed'
+              : 'failed',
+          error: ev.error,
+          reason: ev.reason,
+        },
+      }));
+      break;
+    }
+
+    case 'run_status': {
+      const status = String(ev.status || '');
+      if (status === 'waiting_approval' || status === 'waiting_input') {
+        state.suspendedStatus = status;
+      } else if (status === 'running') {
+        state.suspendedStatus = null;
+      }
+      const seq = nextSeq(state);
+      out.push(
+        makeRuntimeEvent({
+          ...base,
+          event_id: eventId(state, seq),
+          sequence: seq,
+          session_id: state.sessionId,
+          type: 'run.status_changed',
+          payload: { ...ev, status },
+        }),
+      );
       break;
     }
 
@@ -320,6 +431,7 @@ export function legacyEventToRuntime(
       // Normal streams emit done before session_closed. Never let the lifecycle
       // tail overwrite an already terminal run (especially succeeded → cancelled).
       if (state.terminalStatus) break;
+      if (state.suspendedStatus) break;
       const seq = nextSeq(state);
       out.push(
         makeRuntimeEvent({

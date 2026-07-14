@@ -1,7 +1,7 @@
 /**
  * Map pi-coding-agent AgentSession events → BFF SSE payloads.
  *
- * Pure helpers used by routes/chat.js and the sdk-compat suite.
+ * Pure helpers used by the Agent Run event bridge and sdk-compat suite.
  * No live LLM / network dependency.
  */
 
@@ -116,6 +116,18 @@ export function mapSdkEventToSse(event, ctx = {}) {
       break;
     }
 
+    case 'compaction_end':
+      if (event.errorMessage) {
+        out.push({
+          type: 'compaction_failed',
+          reason: event.reason,
+          error: event.errorMessage,
+          aborted: Boolean(event.aborted),
+          will_retry: Boolean(event.willRetry),
+        });
+      }
+      break;
+
     default:
       // Other SDK events (agent_start, turn_*, etc.) are not forwarded as BFF SSE.
       break;
@@ -144,6 +156,7 @@ export const SDK_SUBSCRIBED_EVENT_TYPES = Object.freeze([
   'message_update',
   'tool_execution_start',
   'tool_execution_end',
+  'compaction_end',
 ]);
 
 /**
@@ -154,4 +167,5 @@ export const SDK_MAPPED_SSE_TYPES = Object.freeze([
   'tool_start',
   'tool_end',
   'file_ready',
+  'compaction_failed',
 ]);

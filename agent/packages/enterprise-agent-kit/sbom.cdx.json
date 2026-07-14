@@ -1,0 +1,34 @@
+{
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.5",
+  "serialNumber": "urn:uuid:09d537eb-e2d7-4fc4-bce4-0a50b1ec8fa0",
+  "version": 1,
+  "metadata": {
+    "timestamp": "2026-07-14T00:00:00Z",
+    "component": {
+      "type": "library",
+      "name": "@company/pi-enterprise-agent-kit",
+      "version": "1.0.0"
+    }
+  },
+  "components": [
+    {
+      "type": "library",
+      "name": "@earendil-works/pi-ai",
+      "version": "0.80.3",
+      "purl": "pkg:npm/%40earendil-works/pi-ai@0.80.3"
+    },
+    {
+      "type": "library",
+      "name": "@earendil-works/pi-coding-agent",
+      "version": "0.80.3",
+      "purl": "pkg:npm/%40earendil-works/pi-coding-agent@0.80.3"
+    },
+    {
+      "type": "library",
+      "name": "typebox",
+      "version": "1.3.6",
+      "purl": "pkg:npm/typebox@1.3.6"
+    }
+  ]
+}

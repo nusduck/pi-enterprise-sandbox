@@ -2,7 +2,7 @@
 
 ## 概述
 
-v4 前端是一个**纯 UI SPA**，零 Agent 逻辑。Agent 运行在独立 Node Agent 服务；BFF 负责 `POST /api/chat` SSE relay，前端通过 SSE 消费事件流并渲染。
+v4 前端是一个**纯 UI SPA**，零 Agent 逻辑。Agent 运行在独立 Node Agent 服务；BFF 负责 Run API 与序列化 SSE relay，前端通过 SSE 消费事件流并渲染。
 
 架构：
 
@@ -45,7 +45,7 @@ frontend/
 | `shared/state/runReducer.ts` | RuntimeEvent 的唯一归约器 |
 | `features/chat/entityBridge.ts` | legacy SSE 适配、per-run transport、UI projection |
 | `shared/state/chatState.ts` | 非 runtime UI snapshot、上传草稿和 transport 控制 |
-| `shared/api/client.ts` | chat、upload/download、approval、conversation 协议 |
+| `shared/api/client.ts` / `runs.ts` | Run、upload/download、approval、conversation 协议 |
 | `shared/sse/parser.ts` | SSE 分片、CRLF、尾缓冲和 abort |
 
 依赖：
@@ -88,9 +88,10 @@ AgentSession 都由 `legacyAdapter -> runReducer` 单次归约。`ChatState` 不
   ↓
 sendMessage(text)
   ├── 添加 user 消息
-  ├── EntityBridge.beginRun + 注册 per-run AbortController
+  ├── POST /api/runs，取得服务端 canonical run_id
+  ├── EntityBridge.beginRun(run_id) + 注册 per-run AbortController
   ├── React 更新 user message / transport UI
-  ├── api.sendChatMessage → POST /api/chat { messages, conversation_id? }
+  ├── GET /api/runs/:run_id/events（支持 sequence 续传）
   │     ↓ SSE (sse.readSSEStream)
   │     legacyAdapter -> RuntimeEvent -> runReducer -> EntityStore
   │       trace/session/agent_session → Run + AgentSession 关系

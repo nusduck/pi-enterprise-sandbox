@@ -4,7 +4,7 @@ Semantics (independent of listen address):
 
 - ``bind_host`` only controls which interface(s) the process listens on.
   ``0.0.0.0`` is **not** an allow-all for clients.
-- ``allowed_client_cidrs`` is the inbound source allowlist for HTTP/MCP.
+- ``allowed_client_cidrs`` is the inbound source allowlist for Sandbox HTTP.
   An empty list denies every client (fail-closed); it never means allow-all.
 - ``trusted_proxy_cidrs`` defaults to empty. ``X-Forwarded-For`` is ignored
   unless the TCP peer is inside a trusted proxy CIDR. When trusted, XFF is
@@ -128,7 +128,7 @@ def _ip_in_networks(ip: IPAddress, networks: Sequence[IPNetwork]) -> bool:
 
 @dataclass(frozen=True, slots=True)
 class NetworkPolicy:
-    """Immutable inbound network policy used by HTTP and MCP entry points."""
+    """Immutable inbound network policy used by Sandbox HTTP entry points."""
 
     bind_host: str
     allowed_networks: tuple[IPNetwork, ...]

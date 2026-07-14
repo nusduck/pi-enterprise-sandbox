@@ -9,6 +9,8 @@ import {
   listModels,
   listSkills,
   listTools,
+  getExtensionDiagnostics,
+  type ExtensionDiagnostics,
   type McpServerItem,
   type ModelItem,
   type SkillItem,
@@ -21,6 +23,7 @@ const TABS = [
   { id: 'mcp', label: 'MCP Servers' },
   { id: 'tools', label: 'Tools' },
   { id: 'models', label: 'Models' },
+  { id: 'diagnostics', label: 'Extension diagnostics' },
 ] as const;
 
 type TabId = (typeof TABS)[number]['id'];
@@ -236,20 +239,23 @@ export function CapabilitiesPage() {
     items: [],
     available: false,
   });
+  const [diagnostics, setDiagnostics] = useState<ExtensionDiagnostics | null>(null);
 
   const refresh = useCallback(async () => {
     setLoading(true);
     try {
-      const [s, m, t, mod] = await Promise.all([
+      const [s, m, t, mod, diag] = await Promise.all([
         listSkills(),
         listMcpServers(),
         listTools(),
         listModels(),
+        getExtensionDiagnostics(),
       ]);
       setSkills(s);
       setMcp(m);
       setTools(t);
       setModels(mod);
+      setDiagnostics(diag);
     } finally {
       setLoading(false);
     }
@@ -295,7 +301,7 @@ export function CapabilitiesPage() {
       ) : (
         <ToolCards items={tools.items} />
       );
-  } else {
+  } else if (tab === 'models') {
     body =
       models.items.length === 0 ? (
         <EmptyRegistry
@@ -306,6 +312,20 @@ export function CapabilitiesPage() {
       ) : (
         <ModelCards items={models.items} />
       );
+  } else {
+    body = diagnostics ? (
+      <div className="mgmt-card">
+        <h3 className="mgmt-card-title">{diagnostics.package.package}@{diagnostics.package.version}</h3>
+        <dl className="mgmt-meta-grid">
+          <div><dt>Profile</dt><dd>{diagnostics.profile.id}@{diagnostics.profile.version}</dd></div>
+          <div><dt>Audit</dt><dd>{diagnostics.package.audit?.status || '—'}</dd></div>
+          <div><dt>Extensions</dt><dd>{diagnostics.profile.extensions.join(', ')}</dd></div>
+          <div><dt>Allowed tools</dt><dd>{diagnostics.profile.allowed_tools.length}</dd></div>
+          <div><dt>MCP servers</dt><dd>{diagnostics.mcp_servers.map((server) => server.server_id).join(', ') || 'None configured'}</dd></div>
+          <div><dt>Generated</dt><dd>{diagnostics.generated_at}</dd></div>
+        </dl>
+      </div>
+    ) : <EmptyRegistry label="extension diagnostics" available={false} />;
   }
 
   return (

@@ -49,10 +49,6 @@ sandbox_active_sessions = Gauge(
 sandbox_workspace_bytes = Gauge(
     "sandbox_workspace_bytes", "Workspace disk usage bytes",
 )
-sandbox_mcp_requests_total = Counter(
-    "sandbox_mcp_requests_total", "Total MCP requests",
-    ["tool_name"],
-)
 sandbox_rate_limited_total = Counter(
     "sandbox_rate_limited_total", "Rate limited requests",
     ["caller_id"],

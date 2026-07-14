@@ -228,7 +228,7 @@ class ExecutionManager:
         if not workspace_path:
             raise ValueError("Execution context is required")
         # Internal compatibility for existing unit/service callers. Public
-        # routers and MCP resolve a context from the trusted session binding.
+        # routers and internal callers resolve context from the trusted session binding.
         workspace = Path(workspace_path).resolve()
         workspace_id = workspace.name or session_id
         temp_id = temp_id_for_workspace_id(workspace_id)

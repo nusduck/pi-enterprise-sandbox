@@ -19,7 +19,7 @@ from sandbox.models import (
     ToolCallDecision,
 )
 
-# Keep in sync with api-server/extensions/sandbox-security.js POLICY_VERSION
+# Keep in sync with agent/packages/enterprise-agent-kit/extensions/policy/index.js.
 POLICY_VERSION = "2026-07-11.1"
 
 # ── Built-in tool risk mapping ─────────────────────────────────────────
@@ -190,20 +190,10 @@ class ToolPolicyChecker:
 
     @staticmethod
     def _get_risk_level(tool_name: str) -> RiskLevel:
-        # MCP namespaced tools: consult MCP manager risk map when available
+        # MCP never executes through Sandbox. Fail closed if an old caller tries
+        # to submit a namespaced MCP tool to the Sandbox approval path.
         if tool_name and tool_name.startswith("mcp_"):
-            try:
-                from sandbox.services.mcp_manager import mcp_manager
-
-                decision = mcp_manager.approval_decision(tool_name)
-                risk = str(decision.get("risk_level") or "medium").lower()
-                if risk == "low":
-                    return RiskLevel.LOW
-                if risk == "high":
-                    return RiskLevel.HIGH
-                return RiskLevel.MEDIUM
-            except Exception:
-                return RiskLevel.MEDIUM
+            return RiskLevel.HIGH
         return _TOOL_RISK_MAP.get(tool_name, RiskLevel.MEDIUM)
 
     @staticmethod

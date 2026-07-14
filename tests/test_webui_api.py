@@ -397,8 +397,6 @@ class TestConfigDefaults:
         assert settings.max_output_chars == 50_000
         assert settings.session_ttl_minutes == 30
         assert settings.approval_timeout_seconds == 300
-        assert settings.mcp_enabled is True
-        assert settings.mcp_port == 8091
         assert settings.log_level == "INFO"
 
     def test_database_url(self):

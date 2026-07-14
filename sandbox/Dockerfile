@@ -79,7 +79,7 @@ ENV \
     LANG=C.UTF-8 \
     LC_ALL=C.UTF-8
 
-EXPOSE 8081 8091
+EXPOSE 8081
 
 HEALTHCHECK --interval=15s --timeout=5s --retries=3 --start-period=10s \
     CMD curl -sf http://localhost:8081/health || exit 1

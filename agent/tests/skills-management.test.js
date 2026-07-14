@@ -32,8 +32,14 @@ import {
   DEFAULT_SKILL_ROOTS,
 } from '../skills/paths.js';
 import { installSkill, atomicReplaceDir, editSkillFile } from '../skills/install.js';
-import { createSkillTools, SKILL_TOOL_NAMES } from '../skills/tools.js';
-import { evaluateToolPolicy, POLICY_DECISION } from '../extensions/sandbox-security.js';
+import {
+  createSkillTools,
+  SKILL_TOOL_NAMES,
+} from '../packages/enterprise-agent-kit/extensions/skill-management/tool-definitions.js';
+import {
+  evaluateToolPolicy,
+  POLICY_DECISION,
+} from '../packages/enterprise-agent-kit/extensions/policy/index.js';
 import { createSandboxTools } from '../sandbox-tools.js';
 import { resolveToolAllowlist, BASE_TOOL_NAMES } from '../chat-runner.js';
 

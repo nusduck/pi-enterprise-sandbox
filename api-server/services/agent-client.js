@@ -43,6 +43,19 @@ export async function createAgentRun(body, { auth = null, traceId = null } = {})
   return resp.json();
 }
 
+export async function getAgentExtensionDiagnostics(profileId = 'coding-agent') {
+  const url = new URL(`${config.AGENT_BASE_URL}/internal/extensions/diagnostics`);
+  url.searchParams.set('profile_id', profileId);
+  const resp = await fetch(url, { headers: internalHeaders() });
+  if (!resp.ok) {
+    const text = await resp.text().catch(() => resp.statusText);
+    const error = new Error(`Agent diagnostics failed (${resp.status}): ${text}`);
+    error.status = resp.status;
+    throw error;
+  }
+  return resp.json();
+}
+
 /**
  * @param {string} runId
  */
@@ -111,12 +124,14 @@ export async function followUpAgentRun(runId, body) {
  * @param {string} runId
  * @param {object} body
  */
-export async function resumeAgentRunApproval(runId, body = {}) {
+export async function resumeAgentRunApproval(runId, body = {}, { auth = null } = {}) {
+  const headers = internalHeaders();
+  if (auth?.authorization) headers.Authorization = auth.authorization;
   const resp = await fetch(
     `${config.AGENT_BASE_URL}/internal/agent-runs/${encodeURIComponent(runId)}/resume-approval`,
     {
       method: 'POST',
-      headers: internalHeaders(),
+      headers,
       body: JSON.stringify(body),
     },
   );
@@ -129,17 +144,40 @@ export async function resumeAgentRunApproval(runId, body = {}) {
   return resp.json();
 }
 
+export async function respondAgentInteraction(runId, interactionId, body, { auth = null } = {}) {
+  const headers = internalHeaders();
+  if (auth?.authorization) headers.Authorization = auth.authorization;
+  const resp = await fetch(
+    `${config.AGENT_BASE_URL}/internal/agent-runs/${encodeURIComponent(runId)}` +
+      `/interactions/${encodeURIComponent(interactionId)}/respond`,
+    {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(body),
+    },
+  );
+  if (!resp.ok) {
+    const text = await resp.text().catch(() => resp.statusText);
+    const err = new Error(`Agent interaction response failed (${resp.status}): ${text}`);
+    err.status = resp.status;
+    throw err;
+  }
+  return resp.json();
+}
+
 /**
  * Notify agent of an approval decision (wakes waiter / resumes run).
  * @param {string} approvalId
  * @param {{ decision: string, run_id?: string, reason?: string }} body
  */
-export async function decideAgentApproval(approvalId, body) {
+export async function decideAgentApproval(approvalId, body, { auth = null } = {}) {
+  const headers = internalHeaders();
+  if (auth?.authorization) headers.Authorization = auth.authorization;
   const resp = await fetch(
     `${config.AGENT_BASE_URL}/internal/approvals/${encodeURIComponent(approvalId)}/decide`,
     {
       method: 'POST',
-      headers: internalHeaders(),
+      headers,
       body: JSON.stringify(body),
     },
   );

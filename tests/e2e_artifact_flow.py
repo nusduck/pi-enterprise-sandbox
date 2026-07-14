@@ -62,16 +62,9 @@ check("Both files now registered", al3["total"] == 2)
 paths = sorted(a["path"] for a in al3["artifacts"])
 check("Paths in list", paths == ["chart.png", "report.txt"])
 
-# === Test 4: MCP endpoint ===
+# === Test 4: Download artifact ===
 print()
-print("--- Test 4: MCP integration ---")
-mcpt = req("GET", "/mcp/tools")
-tools = mcpt.get("tools", [])
-check("MCP tools includes submit_artifact", "submit_artifact" in tools)
-
-# === Test 5: Download artifact ===
-print()
-print("--- Test 5: Download submitted artifact ---")
+print("--- Test 4: Download submitted artifact ---")
 arth = req("GET", f"/sessions/{sid}/artifacts")
 aid = arth["artifacts"][0]["artifact_id"]
 # Download returns binary FileResponse — verify HTTP 200

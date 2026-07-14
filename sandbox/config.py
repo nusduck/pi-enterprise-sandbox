@@ -216,12 +216,6 @@ class Settings(BaseSettings):
     # hard_deny is never overridden. Default true (safe production posture).
     approval_enabled: bool = True
 
-    # ── MCP ──────────────────────────────────────────────────────────
-    mcp_enabled: bool = True
-    mcp_host: str = "0.0.0.0"
-    mcp_port: int = 8091
-    mcp_auth_tokens: Annotated[list[str], NoDecode] = []
-
     # ── Auth ─────────────────────────────────────────────────────────
     api_token: str = ""  # If set, all endpoints require X-API-Key header
     api_token_header: str = "X-API-Key"
@@ -270,27 +264,6 @@ class Settings(BaseSettings):
                     return parse_csv_or_list(loaded)
             return parse_csv_or_list(text)
         return parse_csv_or_list(value)
-
-    @field_validator("mcp_auth_tokens", mode="before")
-    @classmethod
-    def _split_mcp_tokens(cls, value: Any) -> list[str]:
-        if value is None or value == "":
-            return []
-        if isinstance(value, str):
-            text = value.strip()
-            if text.startswith("["):
-                import json
-
-                try:
-                    loaded = json.loads(text)
-                except json.JSONDecodeError:
-                    loaded = None
-                if isinstance(loaded, list):
-                    return [str(x).strip() for x in loaded if str(x).strip()]
-            return [part.strip() for part in text.split(",") if part.strip()]
-        if isinstance(value, list):
-            return [str(x).strip() for x in value if str(x).strip()]
-        return []
 
     @field_validator("network_mode", mode="before")
     @classmethod
@@ -434,15 +407,6 @@ def validate_production_settings(s: Settings | None = None) -> None:
             "SANDBOX_AUTH_ALLOW_PUBLIC_REGISTER must be false in production "
             "(admin pre-provision / invite only)"
         )
-
-    if cfg.mcp_enabled and cfg.mcp_host in ("0.0.0.0", "::", "[::]"):
-        tokens = [t for t in (cfg.mcp_auth_tokens or []) if t and str(t).strip()]
-        # MCP on all interfaces without tokens is open to the network.
-        if not tokens and not (cfg.api_token or "").strip():
-            errors.append(
-                "MCP listening on all interfaces requires SANDBOX_MCP_AUTH_TOKENS "
-                "or SANDBOX_API_TOKEN in production"
-            )
 
     if cfg.debug:
         errors.append("SANDBOX_DEBUG must be false in production")

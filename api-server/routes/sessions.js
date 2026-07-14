@@ -5,7 +5,7 @@
  */
 import { randomUUID } from 'node:crypto';
 import { authFromRequest, createSandboxClient } from '../services/sandbox-client.js';
-import { resolveConversationAndSession } from './chat.js';
+import { resolveConversationAndSession } from '../services/conversation-session-resolver.js';
 
 function json(res, status, body, traceId) {
   const headers = { 'Content-Type': 'application/json' };

@@ -48,7 +48,7 @@ describe('exact version pin', () => {
 });
 
 describe('required named exports', () => {
-  it('exports symbols imported by routes/chat.js', () => {
+  it('exports symbols used by the Agent Run Host', () => {
     const required = {
       createAgentSession,
       SessionManager,

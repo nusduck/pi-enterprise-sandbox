@@ -300,7 +300,7 @@ class ProcessManager:
             return context
         if not workspace_path:
             raise ValueError("Execution context is required")
-        # Compatibility for internal service tests. Public REST/MCP callers
+        # Compatibility for internal service tests. Public REST callers
         # always resolve this context from the trusted session binding.
         workspace = Path(workspace_path).resolve()
         workspace_id = workspace.name or session_id

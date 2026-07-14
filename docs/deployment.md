@@ -25,7 +25,6 @@ curl -f http://localhost:8083/ready       # Sandbox readiness (workspaces + DB)
 | Frontend (Nginx) | `3000` | `80` |
 | API Server (BFF) | `4000` | `4000` |
 | Agent | `4100` | `4100` |
-| Sandbox MCP | `8093` | `8091` |
 | Sandbox API | 内网仅 | `8081` |
 
 ## 生产部署
@@ -68,7 +67,10 @@ curl -sf https://localhost/nginx/status
                   │   sandbox (FastAPI:8081)       │
                   │   Execution · Files · Auth     │
                   │   PostgreSQL (prod required)  │
-                  │   MCP:8091                    │
+                  └──────────────────────────────┘
+                                  │
+                  ┌───────────────▼──────────────┐
+                  │ External MCP Gateway/Servers │
                   └──────────────────────────────┘
 ```
 
@@ -79,14 +81,14 @@ curl -sf https://localhost/nginx/status
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
 | `SANDBOX_API_TOKEN` | — | Sandbox API 令牌。生成: `openssl rand -hex 32`。所有 API 调用需带 `X-API-Key` header |
-| `SANDBOX_MCP_AUTH_TOKENS` | — | MCP 端点认证令牌，逗号分隔 |
+| `MCP_SERVERS_JSON` | `[]` | Agent Runtime 外部 MCP Server 配置；凭据使用环境变量引用 |
 
 ### 入站网络（监听 vs 来源白名单）
 
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
 | `SANDBOX_BIND_HOST` | `0.0.0.0` | **仅控制监听接口**。`0.0.0.0` 不等于允许任意来源。旧名 `SANDBOX_HOST` 仍可用 |
-| `SANDBOX_ALLOWED_CLIENT_CIDRS` | loopback + Docker 私网 | 入站 HTTP/MCP 来源 CIDR 白名单。空列表 = 拒绝全部（失败关闭）。非法 CIDR 导致启动失败 |
+| `SANDBOX_ALLOWED_CLIENT_CIDRS` | loopback + Docker 私网 | Sandbox HTTP 来源 CIDR 白名单。空列表 = 拒绝全部（失败关闭） |
 | `SANDBOX_TRUSTED_PROXY_CIDRS` | _(空)_ | 可信反向代理。默认忽略 `X-Forwarded-For`；仅当 TCP peer 属于此列表时，才从右向左剥离可信代理解析真实客户端 |
 
 **默认 allowlist（compose / 本地容器）:**
@@ -106,7 +108,7 @@ SANDBOX_ALLOWED_CLIENT_CIDRS=10.0.0.0/8,172.16.0.0/12
 SANDBOX_TRUSTED_PROXY_CIDRS=172.16.0.0/12
 ```
 
-**外部 MCP 直连:** 必须把对端 CIDR 写入 `SANDBOX_ALLOWED_CLIENT_CIDRS`，并配置 `SANDBOX_API_TOKEN` / `SANDBOX_MCP_AUTH_TOKENS`。BFF 不直接执行 Sandbox 工具。
+外部 MCP 由 Agent Runtime 直接连接，不经过 Sandbox。凭据由 `authTokenRef` 指向的环境变量注入。
 
 注意：`SANDBOX_ALLOWED_CIDRS` 是 **出站 iptables** 目的网段，与入站 `SANDBOX_ALLOWED_CLIENT_CIDRS` 无关。
 

@@ -5,14 +5,14 @@ Pi Enterprise Sandbox 四服务 API 分层：
 | 层 | 组件 | 说明 |
 |----|------|------|
 | **Public** | Frontend Nginx | `/api/*` 反向代理到 API Server |
-| **API Server (BFF)** | Node.js 22 (port 4000) | `/api/chat` SSE relay, `/api/status`, 文件上传/下载代理 |
+| **API Server (BFF)** | Node.js 22 (port 4000) | Run API/SSE relay、`/api/status`、文件上传/下载代理 |
 | **Agent** | Node.js 22 (port 4100) | 内部 Run API + pi-coding-agent SDK（浏览器不直连） |
-| **Sandbox** | FastAPI (port 8081) | 会话/执行/文件/产物/审计/审批/MCP (Docker 内网) |
+| **Sandbox** | FastAPI (port 8081) | 会话/执行/文件/产物/审计/审批（Docker 内网） |
 
 无 Python Agent Runtime、无双 Runtime 开关。发行基线 **零内置 Skill package**。
 
 > **Sandbox 端口 8081 仅 Docker 内网可访问**。API Server 自动为所有 Sandbox 请求添加 `X-API-Key` header（如配置 `SANDBOX_API_TOKEN`）。
-> MCP-over-HTTP 通过 `GET /mcp/tools` + `POST /mcp/call` 对外暴露（端口 8093→8091）。
+> MCP 由 Agent Host 的 MCP Connection Manager 直连企业 MCP Gateway/Server，不经过 Sandbox，也不向浏览器暴露凭据。
 
 ---
 
@@ -29,6 +29,11 @@ API Server 通过 SSE (`text/event-stream`) 推送以下事件类型：
 | `tool_end` | `{ id, name, result, isError }` | 工具执行完成 |
 | `file_ready` | `{ artifact_id, path, name?, mime_type?, size? }` | 产物可供下载（仅 `submit_artifact` 成功后） |
 | `approval_required` | `{ approval_id, tool_name?, command?, reason?, risk_level? }` | 高风险工具等待人工审批 |
+| `interaction_requested` | `{ interaction_id, interaction_type, title, options? }` | Agent 等待用户输入 |
+| `task_plan_updated` | `{ tasks }` | 结构化任务计划更新 |
+| `context_warning` | `{ tokens, context_window, percent }` | 上下文使用率预警 |
+| `compaction_started/completed/failed` | `{ reason }` | 上下文压缩生命周期 |
+| `mcp_discovered/invoked/failed` | `{ server?, tool?, result_ref? }` | MCP 按需发现与调用审计 |
 | `done` | `{}` | Agent 回合结束 |
 | `session_closed` | `{ session_id }` | 流连接关闭 |
 | `error` | `{ message }` | 错误信息 |
@@ -61,16 +66,18 @@ data: {"type":"session_closed","session_id":"sandbox_abc123"}
 
 Base URL: `http://host:4000`
 
-### `POST /api/chat` — 发送消息（SSE 流）
+### `POST /api/runs` — 创建 Agent Run
 
 ```json
 // Request
-{ "messages": [{ "role": "user", "content": "写一个 Python 脚本" }], "conversation_id": "optional" }
+{ "messages": [{ "role": "user", "content": "写一个 Python 脚本" }], "conversation_id": "optional", "agent_profile_id": "coding-agent" }
 ```
 
-响应: SSE `text/event-stream`，见上方事件协议。
+响应（201）：`{ "run_id": "arun_...", "status": "running|queued", "conversation_id": "..." }`。
 
-**编排路径：** BFF `POST /api/chat` → Agent `POST /internal/agent-runs` + `GET /internal/agent-runs/:id/events`（序列化 SSE）。浏览器事件契约不变。Python Agent Runtime 与 `AGENT_RUNTIME` 已移除。
+随后调用 `GET /api/runs/:id/events?after_sequence=N` 接收 SSE。可用 `POST /api/runs/:id/cancel|steer|follow-up` 控制；审批恢复使用 `resume-approval`，用户输入使用 `/interactions/:interactionId/respond`。
+
+`GET /api/extensions/diagnostics` 返回 Extension Package、Agent Profile、Tool/MCP allowlist 和供应链审计状态，不含凭据。
 
 ### `GET /api/status` — BFF 状态
 
@@ -118,7 +125,7 @@ Base URL: `http://sandbox:8081`（Docker 内网）
   - **服务 Token alone 不是终端用户**：可访问内部 `/sessions` 等，但 `/conversations` 与已归属 session 的 files/artifacts 需 actor，否则 401
   - 跨用户/跨组织访问 Conversation 返回 **404**（不泄露资源是否存在）
   - 旧数据迁移绑定 `user_bootstrap` / `org_bootstrap`；新用户默认加入 bootstrap org
-  - BFF `AUTH_ENABLED`（默认同 `SANDBOX_AUTH_ENABLED`）保护 `/api/conversations`、`/api/chat`、文件/产物路由；`/api/status` 与 `/api/auth/*` 保持公开
+  - BFF `AUTH_ENABLED`（默认同 `SANDBOX_AUTH_ENABLED`）保护 `/api/conversations`、`/api/runs`、Extension diagnostics、文件/产物路由；`/api/status` 与 `/api/auth/*` 保持公开
 
 ### Sessions
 
@@ -446,66 +453,7 @@ Agent 工具 `ls` / `find` / `grep` 覆盖 SDK 本地同名工具，全部转发
 
 ### MCP (Model Context Protocol)
 
-MCP 以 REST over HTTP 模式暴露，兼容 Dify、Hi-Agent 等外部平台。**不是**独立的 SSE 服务器——路由在 Sandbox 主应用中。
-
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| `GET` | `/mcp/tools` | 列出可用 MCP 工具及其参数 |
-| `POST` | `/mcp/call` | 调用 MCP 工具 |
-
-认证: `X-Auth-Token` header（如配置 `SANDBOX_MCP_AUTH_TOKENS`）
-
-#### 可用工具（11 个）
-
-| 工具名 | 说明 |
-|--------|------|
-| `create_session` | 创建 Sandbox 会话 + 初始化工作区 |
-| `close_session` | 关闭会话；Conversation-owned workspace 与 `/tmp` 保留以便重绑定 |
-| `run_python` | 执行 Python 代码 |
-| `run_command_limited` | 执行受限制的 Shell 命令（危险命令被阻止） |
-| `read_file` | 读取工作区文件 |
-| `write_file` | 写入工作区文件 |
-| `preview_file` | 预览文件前 40 行 |
-| `list_files` | 列出工作区目录 |
-| `download_file` | 获取文件下载信息 |
-| `get_artifacts` | 列出会话的 artifact 列表 |
-| `submit_artifact` | 显式提交文件为 artifact |
-
-所有 MCP 文件、Artifact 与执行工具使用和 REST 相同的路径解析及
-`conversation_id → workspace_id → tmp_{workspace_id}` 绑定规则。
-
-#### `POST /mcp/call`
-
-```json
-// Request
-{
-  "tool_name": "submit_artifact",
-  "caller_id": "external-platform",
-  "kwargs": {
-    "session_id": "sandbox_abc123",
-    "path": "report.csv",
-    "name": "report.csv",
-    "mime_type": "text/csv"
-  }
-}
-
-// Response (200)
-{
-  "artifact_id": "art_abc123",
-  "name": "report.csv",
-  "path": "report.csv",
-  "mime_type": "text/csv",
-  "size": 1024
-}
-```
-
-#### 错误码
-
-| HTTP 状态 | 说明 |
-|-----------|------|
-| `404` | 工具不存在 |
-| `403` | 工具被安全策略拒绝 |
-| `429` | 速率限制触发 |
+Sandbox 不再暴露或代理 MCP 路由。Agent 仅向模型注册单一 `mcp` Extension Tool，支持 `search`、`describe`、`invoke`；Agent Runtime 的 MCP Connection Manager 直接连接外部 MCP Gateway/Server，并负责鉴权、allowlist、超时、参数校验、审批和审计。
 
 ---
 
@@ -550,5 +498,4 @@ MCP 以 REST over HTTP 模式暴露，兼容 Dify、Hi-Agent 等外部平台。*
 | `sandbox_execution_duration_seconds` | Gauge | — | 执行耗时 |
 | `sandbox_active_sessions` | Gauge | — | 活跃会话数 |
 | `sandbox_workspace_bytes` | Gauge | — | 工作区磁盘使用量 |
-| `sandbox_mcp_requests_total` | Counter | `tool_name` | MCP 请求总数 |
 | `sandbox_rate_limited_total` | Counter | `caller_id` | 速率限制触发数 |

@@ -42,6 +42,7 @@ class AgentRunManager:
         self,
         *,
         conversation_id: str,
+        run_id: str | None = None,
         owner_user_id: str | None = None,
         organization_id: str | None = None,
         sandbox_session_id: str | None = None,
@@ -52,7 +53,7 @@ class AgentRunManager:
         budget: dict[str, Any] | None = None,
     ) -> AgentRunResponse:
         """Create a run, claim lease, and stamp conversation.last_run_id."""
-        run_id = f"run_{uuid.uuid4().hex}"
+        run_id = run_id or f"run_{uuid.uuid4().hex}"
         now = datetime.now(timezone.utc)
         owner = lease_owner or f"worker_{uuid.uuid4().hex[:12]}"
         lease_until = (now + timedelta(seconds=lease_seconds)).isoformat()
@@ -358,6 +359,34 @@ class AgentRunManager:
             run_id=run_id,
             event_type="budget_exceeded",
             payload={"reason": reason or "budget_exceeded", "usage": usage or {}},
+        )
+        return updated
+
+    def mark_waiting_input(
+        self,
+        run_id: str,
+        *,
+        pending_input: dict[str, Any],
+        lease_owner: str | None = None,
+    ) -> AgentRunResponse | None:
+        """Park a run for durable user input and release its execution lease."""
+        if self.runs.get(run_id) is None:
+            return None
+        if lease_owner:
+            self.runs.release_lease(
+                run_id,
+                lease_owner=lease_owner,
+                status=AgentRunStatus.WAITING_INPUT.value,
+            )
+        updated = self.runs.set_pending_input(
+            run_id,
+            pending_input,
+            status=AgentRunStatus.WAITING_INPUT.value,
+        )
+        self.events.append(
+            run_id=run_id,
+            event_type="waiting_input",
+            payload={"pending_input": pending_input},
         )
         return updated
 

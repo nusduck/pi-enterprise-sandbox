@@ -10,7 +10,6 @@ import {
   validateProductionConfig,
   effectiveConfig,
 } from './config.js';
-import { handleChat } from './routes/chat.js';
 import { handleStatus } from './routes/status.js';
 import { handleFileDownload, handleFileUpload, handleArtifactDownload } from './routes/files.js';
 import {
@@ -28,9 +27,16 @@ import {
   handleCancelRun,
   handleGetRun,
   handleResumeApproval,
+  handleInteractionResponse,
+  handleCreateRun,
+  handleRunEvents,
 } from './routes/runs.js';
 import { handleRegister, handleLogin, handleMe } from './routes/auth.js';
 import { handleEnsureSession } from './routes/sessions.js';
+import {
+  handleCapabilityRegistry,
+  handleExtensionDiagnostics,
+} from './routes/capabilities.js';
 import { checkHealth } from './services/sandbox-client.js';
 import { checkAgentHealth } from './services/agent-client.js';
 
@@ -143,18 +149,22 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
-    // ── POST /api/chat — SSE relay to Agent service ──
-    if (req.method === 'POST' && path === '/api/chat') {
-      const body = await readBody(req);
-      const parsed = JSON.parse(body);
-      await handleChat(parsed, res, req);
-      return;
-    }
-
     // ── GET /api/status — health check ──
     if (req.method === 'GET' && path === '/api/status') {
       await handleStatus(res);
       return;
+    }
+
+    if (req.method === 'GET' && path === '/api/extensions/diagnostics') {
+      await handleExtensionDiagnostics(parsedUrl, res);
+      return;
+    }
+    {
+      const capability = path.match(/^\/api\/capabilities\/(skills|mcp|tools|models)$/);
+      if (req.method === 'GET' && capability) {
+        await handleCapabilityRegistry(capability[1], parsedUrl, res);
+        return;
+      }
     }
 
     // ── Conversations ──
@@ -210,6 +220,17 @@ const server = http.createServer(async (req, res) => {
 
     // ── Run control (ADR §4.7 / §10) ──
     {
+      if (req.method === 'POST' && path === '/api/runs') {
+        const body = await readBody(req);
+        const parsed = body ? JSON.parse(body) : {};
+        await handleCreateRun(parsed, res, req);
+        return;
+      }
+      const runEvents = path.match(/^\/api\/runs\/([^/]+)\/events$/);
+      if (req.method === 'GET' && runEvents) {
+        await handleRunEvents(decodeURIComponent(runEvents[1]), parsedUrl, res, req);
+        return;
+      }
       const runSteer = path.match(/^\/api\/runs\/([^/]+)\/steer$/);
       if (req.method === 'POST' && runSteer) {
         const runId = decodeURIComponent(runSteer[1]);
@@ -236,7 +257,22 @@ const server = http.createServer(async (req, res) => {
         const runId = decodeURIComponent(runResume[1]);
         const body = await readBody(req);
         const parsed = body ? JSON.parse(body) : {};
-        await handleResumeApproval(runId, parsed, res);
+        await handleResumeApproval(runId, parsed, res, req);
+        return;
+      }
+      const runInteraction = path.match(
+        /^\/api\/runs\/([^/]+)\/interactions\/([^/]+)\/respond$/,
+      );
+      if (req.method === 'POST' && runInteraction) {
+        const body = await readBody(req);
+        const parsed = body ? JSON.parse(body) : {};
+        await handleInteractionResponse(
+          decodeURIComponent(runInteraction[1]),
+          decodeURIComponent(runInteraction[2]),
+          parsed,
+          res,
+          req,
+        );
         return;
       }
       const runGet = path.match(/^\/api\/runs\/([^/]+)$/);

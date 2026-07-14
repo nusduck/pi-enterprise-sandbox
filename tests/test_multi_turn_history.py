@@ -1,6 +1,6 @@
 """Unit tests for multi-turn history conversion helpers (Node logic mirrored in pure Python).
 
-The production converter lives in api-server/routes/chat.js. These tests document
+The production converter lives in the Node Agent Run Host. These tests document
 the expected contract and exercise the conversation message persistence path.
 """
 

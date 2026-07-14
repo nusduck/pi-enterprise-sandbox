@@ -1,5 +1,5 @@
 /**
- * Smoke tests for BFF agent-client + chat relay hooks (no live agent).
+ * Smoke tests for BFF agent-client + Run relay hooks (no live agent).
  * Run: node --test api-server/tests/agent-run-client.test.js
  */
 import { describe, it } from 'node:test';
@@ -11,7 +11,7 @@ import { dirname, join } from 'node:path';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const clientSrc = readFileSync(join(__dirname, '../services/sandbox-client.js'), 'utf8');
 const agentClientSrc = readFileSync(join(__dirname, '../services/agent-client.js'), 'utf8');
-const chatSrc = readFileSync(join(__dirname, '../routes/chat.js'), 'utf8');
+const runsSrc = readFileSync(join(__dirname, '../routes/runs.js'), 'utf8');
 const serverSrc = readFileSync(join(__dirname, '../server.js'), 'utf8');
 const convSrc = readFileSync(join(__dirname, '../routes/conversations.js'), 'utf8');
 const pkg = JSON.parse(readFileSync(join(__dirname, '../package.json'), 'utf8'));
@@ -24,7 +24,7 @@ describe('thin BFF agent relay', () => {
       undefined,
       'api-server must not depend on SDK after cutover',
     );
-    assert.doesNotMatch(chatSrc, /createAgentSession|@earendil-works\/pi-coding-agent/);
+    assert.doesNotMatch(runsSrc, /createAgentSession|@earendil-works\/pi-coding-agent/);
   });
 
   it('agent-client exposes create / events / cancel', () => {
@@ -33,11 +33,11 @@ describe('thin BFF agent relay', () => {
     }
   });
 
-  it('chat creates run and streams events; cancels on disconnect', () => {
-    assert.match(chatSrc, /createAgentRun/);
-    assert.match(chatSrc, /openAgentRunEvents/);
-    assert.match(chatSrc, /cancelAgentRun/);
-    assert.match(chatSrc, /onClientGone|disconnect/);
+  it('Run API creates runs and streams sequenced events', () => {
+    assert.match(runsSrc, /handleCreateRun/);
+    assert.match(runsSrc, /createAgentRun/);
+    assert.match(runsSrc, /handleRunEvents/);
+    assert.match(runsSrc, /openAgentRunEvents/);
   });
 
   it('sandbox-client still exposes agent-run persistence helpers for conversations', () => {

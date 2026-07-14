@@ -1,7 +1,7 @@
 """Server-resolved filesystem context for sandbox tool execution.
 
 Callers provide only a session id. Physical workspace/temp paths are derived
-from the trusted session binding and are never accepted from API, MCP, or model
+from the trusted session binding and are never accepted from API or model
 arguments.
 """
 
@@ -46,4 +46,3 @@ class SandboxExecutionContext:
             physical_workspace=ensure_physical_workspace(session).resolve(),
             physical_temp=ensure_physical_temp(session).resolve(),
         )
-

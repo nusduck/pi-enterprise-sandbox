@@ -24,13 +24,15 @@ describe('resolveAuthEnabled', () => {
 });
 
 describe('isProtectedApiPath', () => {
-  it('protects conversations/chat/files; leaves status and auth public', () => {
+  it('protects runs, conversations, capabilities and files; leaves status/auth public', () => {
     assert.equal(isPublicApiPath('/api/status'), true);
     assert.equal(isPublicApiPath('/api/auth/login'), true);
     assert.equal(isProtectedApiPath('/api/status'), false);
     assert.equal(isProtectedApiPath('/api/auth/login'), false);
     assert.equal(isProtectedApiPath('/api/conversations'), true);
-    assert.equal(isProtectedApiPath('/api/chat'), true);
+    assert.equal(isProtectedApiPath('/api/runs'), true);
+    assert.equal(isProtectedApiPath('/api/extensions/diagnostics'), true);
+    assert.equal(isProtectedApiPath('/api/capabilities/tools'), true);
     assert.equal(isProtectedApiPath('/api/files/upload'), true);
     assert.equal(isProtectedApiPath('/api/sessions/ensure'), true);
   });

@@ -304,6 +304,16 @@ class ApprovalCheckRequest(BaseModel):
     file_size: int | None = None
 
 
+class ApprovalCreateRequest(BaseModel):
+    """Durable Agent Host interaction gate (also used by external MCP calls)."""
+
+    session_id: str
+    tool_name: str
+    risk_level: RiskLevel = RiskLevel.HIGH
+    reason: str = "approval required"
+    payload: dict[str, Any] = Field(default_factory=dict)
+
+
 class ApprovalDecisionRequest(BaseModel):
     approval_id: str
     decision: str = Field(..., pattern="^(approve|reject)$")
@@ -375,6 +385,7 @@ class AgentRunStatus(str, Enum):
     PENDING = "pending"
     RUNNING = "running"
     WAITING_APPROVAL = "waiting_approval"
+    WAITING_INPUT = "waiting_input"
     COMPLETED = "completed"
     INTERRUPTED = "interrupted"
     FAILED = "failed"
@@ -417,6 +428,7 @@ class AgentRunBudget(BaseModel):
 
 
 class AgentRunCreate(BaseModel):
+    run_id: str | None = None
     conversation_id: str
     owner_user_id: str | None = None
     organization_id: str | None = None
@@ -442,6 +454,7 @@ class AgentRunResponse(BaseModel):
     model_id: str | None = None
     budget_json: dict[str, Any] | None = None
     pending_approval_json: dict[str, Any] | None = None
+    pending_input_json: dict[str, Any] | None = None
     # B7: actual model tokens/cost recorded at run completion
     usage: dict[str, Any] | None = None
     created_at: str = ""
@@ -545,46 +558,6 @@ class ClaimLeaseRequest(BaseModel):
     lease_owner: str
     expected_version: int | None = None
     lease_seconds: int = 120
-
-
-# ── MCP / Tool Registry (ADR 0002 §4.6) ─────────────────────────────────
-
-class MCPServerRegister(BaseModel):
-    """Register or replace an MCP server in the manager."""
-
-    server_id: str = Field(..., min_length=1, max_length=64)
-    name: str | None = None
-    transport: str = "local"
-    url: str | None = None
-    enabled: bool = True
-    allowlist: list[str] | None = None
-    allowed_orgs: list[str] | None = None
-    allowed_users: list[str] | None = None
-    risk_overrides: dict[str, str] = Field(default_factory=dict)
-    high_risk_tools: list[str] = Field(default_factory=list)
-    auth_token: str | None = None
-    timeout_seconds: float = 30.0
-    max_retries: int = 1
-    tools: list[dict[str, Any]] = Field(default_factory=list)
-    metadata: dict[str, Any] = Field(default_factory=dict)
-
-
-class MCPToolInvoke(BaseModel):
-    """Invoke a discovered MCP tool (namespaced or raw + server_id)."""
-
-    tool_name: str
-    arguments: dict[str, Any] = Field(default_factory=dict)
-    server_id: str | None = None
-    user_id: str | None = None
-    organization_id: str | None = None
-    run_id: str | None = None
-    session_id: str | None = None
-    conversation_id: str | None = None
-    workspace_id: str | None = None
-    tool_call_id: str | None = None
-    idempotency_key: str | None = None
-    skip_approval: bool = False
-    approval_id: str | None = None
 
 
 # ── Logical Pi SDK Agent Session (ADR 0002 §7) ──────────────────────────

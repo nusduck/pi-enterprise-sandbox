@@ -247,6 +247,22 @@ function OverviewPanel({
         <dd>{processesCount}</dd>
         <dt>Pending approvals</dt>
         <dd>{pending.length}</dd>
+        <dt>Context usage</dt>
+        <dd>
+          {run?.contextUsage
+            ? `${run.contextUsage.tokens ?? '—'} / ${run.contextUsage.contextWindow ?? '—'} (${run.contextUsage.percent ?? '—'}${typeof run.contextUsage.percent === 'number' && run.contextUsage.percent <= 1 ? '' : '%'})${run.contextUsage.warning ? ' ⚠' : ''}`
+            : '—'}
+        </dd>
+        <dt>Compaction</dt>
+        <dd className={run?.compactionStatus === 'failed' ? 'danger' : undefined}>
+          {run?.compactionStatus || 'idle'}{run?.compactionError ? `: ${run.compactionError}` : ''}
+        </dd>
+        <dt>Task plan</dt>
+        <dd>
+          {run?.taskPlan.length
+            ? run.taskPlan.map((task) => `${task.taskId}: ${task.status}`).join(', ')
+            : '—'}
+        </dd>
         <dt>Trace ID</dt>
         <dd className="mono">{traceId || '—'}</dd>
         {run?.error ? (

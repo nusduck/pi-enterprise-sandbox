@@ -208,6 +208,7 @@ export function effectiveConfig(cfg = config) {
     SKILLS_ROOT: cfg.SKILLS_ROOT,
     SKILLS_INSTALL_LOCAL_ALLOWLIST: cfg.SKILLS_INSTALL_LOCAL_ALLOWLIST,
     SKILLS_AUDIT_LOG: cfg.SKILLS_AUDIT_LOG ? '<set>' : '<empty>',
+    MCP_SERVERS: Array.isArray(cfg.MCP_SERVERS) ? cfg.MCP_SERVERS.map((server) => server.id) : [],
     SESSION_WORKSPACE_CWD: cfg.SESSION_WORKSPACE_CWD,
     PRODUCT_SYSTEM_PROMPT: cfg.PRODUCT_SYSTEM_PROMPT
       ? `<set:${cfg.PRODUCT_SYSTEM_PROMPT.length} chars>`
@@ -226,6 +227,17 @@ assertFakeLlmAllowed(process.env);
 
 const skillRoots = resolveSkillRoots();
 const productSystemPrompt = resolveProductSystemPrompt();
+
+function resolveMcpServers(env = process.env) {
+  if (!env.MCP_SERVERS_JSON) return [];
+  try {
+    const parsed = JSON.parse(env.MCP_SERVERS_JSON);
+    if (!Array.isArray(parsed)) throw new Error('must be an array');
+    return parsed;
+  } catch (error) {
+    throw new Error(`Invalid MCP_SERVERS_JSON: ${error.message}`);
+  }
+}
 
 export const config = {
   PORT: parseInt(process.env.PORT, 10) || 4100,
@@ -260,6 +272,8 @@ export const config = {
   NODE_ENV: process.env.NODE_ENV || 'development',
   DEPLOYMENT_ENV: resolveDeploymentEnv(),
   APPROVAL_ENABLED: resolveApprovalEnabled(),
+  /** External MCP servers owned by Agent Runtime/MCP Gateway, never Sandbox. */
+  MCP_SERVERS: resolveMcpServers(),
   /**
    * Skill management mode.
    * - readonly (default): production-safe; skill_install/edit absent; skill tree R/O policy
@@ -277,10 +291,7 @@ export const config = {
   DEFAULT_SKILL_ROOTS,
   /** Env-controlled product/role layer only (no secrets). */
   PRODUCT_SYSTEM_PROMPT: productSystemPrompt,
-  /**
-   * Full system prompt = product layer + non-overridable platform layer.
-   * Platform security cannot be disabled via env.
-   */
+  /** Legacy composed prompt export; runtime composition is owned by Prompt Extension. */
   SYSTEM_PROMPT: composeSystemPrompt(productSystemPrompt),
   /**
    * Rollback flag: force SessionManager.inMemory() and skip DB session restore.

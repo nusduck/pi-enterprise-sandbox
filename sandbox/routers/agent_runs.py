@@ -16,8 +16,10 @@ from sandbox.models import (
     TOOL_TERMINAL_STATUSES,
 )
 from sandbox.services.agent_run_manager import agent_run_manager
+from sandbox.repositories import TaskPlanProjectionRepository
 
 router = APIRouter(tags=["agent-runs"])
+task_plan_projection = TaskPlanProjectionRepository()
 
 
 class InterruptBody(BaseModel):
@@ -52,10 +54,19 @@ class WaitingApprovalBody(BaseModel):
     lease_owner: str | None = None
 
 
+class WaitingInputBody(BaseModel):
+    pending_input: dict = Field(default_factory=dict)
+    lease_owner: str | None = None
+
+
 class BudgetExceededBody(BaseModel):
     reason: str | None = None
     usage: dict | None = None
     lease_owner: str | None = None
+
+
+class TaskPlanProjectionBody(BaseModel):
+    tasks: list[dict] = Field(default_factory=list)
 
 
 @router.post("/agent-runs", response_model=AgentRunResponse, status_code=201)
@@ -65,6 +76,7 @@ def create_agent_run(body: AgentRunCreate):
     if budget is not None and hasattr(budget, "model_dump"):
         budget = budget.model_dump(exclude_none=True)
     return agent_run_manager.start_run(
+        run_id=body.run_id,
         conversation_id=body.conversation_id,
         owner_user_id=body.owner_user_id,
         organization_id=body.organization_id,
@@ -149,6 +161,18 @@ def mark_run_budget_exceeded(run_id: str, body: BudgetExceededBody | None = None
     return updated
 
 
+@router.post("/agent-runs/{run_id}/waiting-input", response_model=AgentRunResponse)
+def mark_run_waiting_input(run_id: str, body: WaitingInputBody):
+    updated = agent_run_manager.mark_waiting_input(
+        run_id,
+        pending_input=body.pending_input,
+        lease_owner=body.lease_owner,
+    )
+    if updated is None:
+        raise HTTPException(status_code=404, detail="Agent run not found")
+    return updated
+
+
 @router.post("/agent-runs/{run_id}/complete", response_model=AgentRunResponse)
 def complete_agent_run(run_id: str, body: CompleteBody | None = None):
     body = body or CompleteBody()
@@ -161,6 +185,18 @@ def complete_agent_run(run_id: str, body: CompleteBody | None = None):
     if updated is None:
         raise HTTPException(status_code=404, detail="Agent run not found")
     return updated
+
+
+@router.put("/agent-runs/{run_id}/task-plan")
+def replace_task_plan(run_id: str, body: TaskPlanProjectionBody):
+    if agent_run_manager.get_run(run_id) is None:
+        raise HTTPException(status_code=404, detail="Agent run not found")
+    return {"run_id": run_id, "tasks": task_plan_projection.replace(run_id, body.tasks)}
+
+
+@router.get("/agent-runs/{run_id}/task-plan")
+def get_task_plan(run_id: str):
+    return {"run_id": run_id, "tasks": task_plan_projection.list(run_id)}
 
 
 @router.post("/agent-runs/{run_id}/fail", response_model=AgentRunResponse)

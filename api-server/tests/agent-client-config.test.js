@@ -42,9 +42,9 @@ describe('shared SSE fixture is readable from Node', () => {
 });
 
 describe('python agent path is gone', () => {
-  it('chat.js has no python proxy', async () => {
-    const chat = await import('../routes/chat.js');
-    assert.equal(typeof chat.handleChat, 'function');
-    assert.equal(chat.handleChatPythonProxy, undefined);
+  it('BFF has no Python Agent proxy', async () => {
+    const runs = await import('../routes/runs.js');
+    assert.equal(typeof runs.handleCreateRun, 'function');
+    assert.equal(typeof runs.handleRunEvents, 'function');
   });
 });

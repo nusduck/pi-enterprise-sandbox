@@ -1,5 +1,5 @@
 /**
- * SessionManager / auth surface used by chat.js — importable without live LLM.
+ * SessionManager / auth surface used by Agent Run Host — importable without live LLM.
  * Covers JSONL-style entries, branch, and custom entries for upgrade awareness.
  * Run: node --test api-server/tests/sdk-compat/session-api.test.js
  */

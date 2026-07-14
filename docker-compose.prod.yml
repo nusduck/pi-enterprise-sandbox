@@ -77,7 +77,7 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-    # No host port publish — internal compose network only (MCP/API).
+    # No host port publish — internal compose network only (Sandbox API).
     ports: []
     # ── Production resource limits ──────────────────────────────────
     deploy:

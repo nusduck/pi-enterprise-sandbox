@@ -30,9 +30,6 @@ import {
   _resetForTests,
 } from '../run-manager.js';
 
-// Stub chat-runner so createRun does not hit live LLM/sandbox.
-const chatRunnerPath = new URL('../chat-runner.js', import.meta.url).pathname;
-
 describe('budget tracker', () => {
   it('resolves defaults and null-as-unlimited', () => {
     const d = resolveBudgetLimits(null);
@@ -238,6 +235,25 @@ describe('approval park + restart rehydrate', () => {
     assert.equal(activeRunCount(), 0, 'waiting_approval must not count as active worker');
   });
 
+  it('rehydrates durable waiting_input without holding a worker', () => {
+    rehydrateWaitingRun({
+      run_id: 'arun_input_restart',
+      conversation_id: 'conv_input',
+      status: 'waiting_input',
+      pending_input: {
+        interaction_id: 'interaction_restart',
+        interaction_type: 'select',
+        title: 'Environment',
+        options: ['dev', 'prod'],
+        run_id: 'arun_input_restart',
+      },
+    });
+    const snap = getRun('arun_input_restart');
+    assert.equal(snap.status, 'waiting_input');
+    assert.equal(snap.pending_input.interaction_id, 'interaction_restart');
+    assert.equal(activeRunCount(), 0);
+  });
+
   it('resume reject ends as rejected', async () => {
     rehydrateWaitingRun({
       run_id: 'arun_rej',
@@ -278,7 +294,10 @@ describe('ensureApproved no longer polls with fixed timeout', () => {
     const { fileURLToPath } = await import('node:url');
     const { dirname, join } = await import('node:path');
     const dir = dirname(fileURLToPath(import.meta.url));
-    const src = readFileSync(join(dir, '../sandbox-tools.js'), 'utf8');
+    const src = readFileSync(
+      join(dir, '../packages/enterprise-agent-kit/extensions/sandbox-tools/tool-definitions.js'),
+      'utf8',
+    );
     assert.doesNotMatch(src, /APPROVAL_MAX_WAIT_MS/);
     assert.doesNotMatch(src, /APPROVAL_POLL_MS/);
     assert.match(src, /ApprovalSuspendedError/);

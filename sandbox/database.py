@@ -556,6 +556,36 @@ AGENT_RUN_USAGE_MIGRATION = Migration(
     _AGENT_RUN_USAGE_SQL,
 )
 
+_AGENT_RUN_INPUT_SQL = """
+ALTER TABLE agent_runs ADD COLUMN pending_input_json TEXT;
+"""
+
+AGENT_RUN_INPUT_MIGRATION = Migration(
+    "0008_agent_run_waiting_input",
+    _AGENT_RUN_INPUT_SQL,
+    _AGENT_RUN_INPUT_SQL,
+)
+
+_TASK_PLAN_PROJECTION_SQL = """
+CREATE TABLE IF NOT EXISTS agent_task_plan_items (
+    run_id TEXT NOT NULL,
+    task_id TEXT NOT NULL,
+    content TEXT NOT NULL,
+    status TEXT NOT NULL,
+    evidence TEXT,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (run_id, task_id)
+);
+CREATE INDEX IF NOT EXISTS idx_agent_task_plan_run
+    ON agent_task_plan_items(run_id, updated_at);
+"""
+
+TASK_PLAN_PROJECTION_MIGRATION = Migration(
+    "0009_agent_task_plan_projection",
+    _TASK_PLAN_PROJECTION_SQL,
+    _TASK_PLAN_PROJECTION_SQL,
+)
+
 
 MIGRATIONS: tuple[Migration, ...] = (
     BASELINE_MIGRATION,
@@ -565,6 +595,8 @@ MIGRATIONS: tuple[Migration, ...] = (
     TOOL_LEDGER_MIGRATION,
     B6_RUNTIME_MIGRATION,
     AGENT_RUN_USAGE_MIGRATION,
+    AGENT_RUN_INPUT_MIGRATION,
+    TASK_PLAN_PROJECTION_MIGRATION,
 )
 
 

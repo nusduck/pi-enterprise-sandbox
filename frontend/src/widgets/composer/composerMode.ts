@@ -2,7 +2,7 @@
  * Composer mode resolution (ADR 0003 §7) — pure helpers for tests + UI.
  */
 
-export type ComposerMode = 'idle' | 'running' | 'waiting_approval';
+export type ComposerMode = 'idle' | 'running' | 'waiting_approval' | 'waiting_input';
 
 /** Interaction sub-mode while the agent is running. */
 export type RunningAction = 'steer' | 'follow_up';
@@ -17,7 +17,6 @@ const RUNNING_STATUSES = new Set([
   'queued',
   'restoring_session',
   'running',
-  'waiting_input',
   'cancel_requested',
 ]);
 
@@ -31,6 +30,7 @@ export function resolveComposerMode(input: ComposerModeInput): ComposerMode {
   if (input.hasPendingApproval || status === 'waiting_approval') {
     return 'waiting_approval';
   }
+  if (status === 'waiting_input') return 'waiting_input';
   if (input.isStreaming || (status != null && RUNNING_STATUSES.has(status))) {
     return 'running';
   }
@@ -46,6 +46,8 @@ export function composerModeLabel(mode: ComposerMode): string {
       return 'Agent running';
     case 'waiting_approval':
       return 'Waiting approval';
+    case 'waiting_input':
+      return 'Waiting for input';
     default:
       return mode;
   }
@@ -62,6 +64,7 @@ export function composerPlaceholder(
   if (mode === 'waiting_approval') {
     return 'Add a note, or approve/reject above…';
   }
+  if (mode === 'waiting_input') return 'Answer the agent…';
   if (action === 'follow_up') {
     return 'Follow-up: runs after the current task finishes…';
   }
@@ -90,7 +93,7 @@ export function canFollowUp(mode: ComposerMode): boolean {
 
 /** True when Stop should be offered. */
 export function canStop(mode: ComposerMode): boolean {
-  return mode === 'running' || mode === 'waiting_approval';
+  return mode === 'running' || mode === 'waiting_approval' || mode === 'waiting_input';
 }
 
 /**

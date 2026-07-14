@@ -135,7 +135,7 @@ export const config = {
   SANDBOX_API_TOKEN: process.env.SANDBOX_API_TOKEN || '',
   /**
    * Independent Agent service base URL (no trailing slash).
-   * BFF relays POST /api/chat → Agent internal run API.
+   * BFF relays the Run API → Agent internal run API.
    */
   AGENT_BASE_URL: (process.env.AGENT_BASE_URL || 'http://agent:4100').replace(/\/$/, ''),
   /**
@@ -179,12 +179,13 @@ export function isProtectedApiPath(path) {
   if (!path.startsWith('/api/')) return false;
   if (isPublicApiPath(path)) return false;
   return (
-    path === '/api/chat' ||
     path.startsWith('/api/conversations') ||
     path.startsWith('/api/files/') ||
     path.startsWith('/api/sessions') ||
     path.startsWith('/api/artifacts') ||
     path.startsWith('/api/approvals') ||
-    path.startsWith('/api/runs')
+    path.startsWith('/api/runs') ||
+    path.startsWith('/api/extensions') ||
+    path.startsWith('/api/capabilities')
   );
 }

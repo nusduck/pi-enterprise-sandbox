@@ -19,7 +19,7 @@ import {
   validateProductionConfig,
   effectiveConfig,
 } from './config.js';
-import { checkHealth } from './services/sandbox-client.js';
+import { checkHealth } from './infrastructure/sandbox-client.js';
 import {
   createRun,
   getRun,
@@ -29,9 +29,12 @@ import {
   steerRun,
   followUpRun,
   resumeRunAfterApproval,
+  resumeRunAfterInput,
   decideApprovalLocal,
   rehydrateWaitingRun,
+  rehydrateWaitingRunFromSandbox,
 } from './run-manager.js';
+import { getExtensionDiagnostics } from './application/extension-diagnostics-service.js';
 
 // Production fail-fast before bind.
 try {
@@ -148,6 +151,18 @@ const server = http.createServer(async (req, res) => {
       if (!enforceInternalAuth(req, res)) return;
     }
 
+    if (req.method === 'GET' && path === '/internal/extensions/diagnostics') {
+      try {
+        json(res, 200, getExtensionDiagnostics({
+          profileId: parsedUrl.searchParams.get('profile_id') || 'coding-agent',
+          mcpServers: config.MCP_SERVERS,
+        }));
+      } catch (error) {
+        json(res, 400, { error: error.message });
+      }
+      return;
+    }
+
     // POST /internal/agent-runs
     if (req.method === 'POST' && path === '/internal/agent-runs') {
       const raw = await readBody(req);
@@ -170,6 +185,7 @@ const server = http.createServer(async (req, res) => {
         auth,
         trace_id: req.headers['x-trace-id'] || body.trace_id || null,
         budget: body.budget || null,
+        agent_profile_id: body.agent_profile_id || null,
       });
       json(res, 202, result);
       return;
@@ -179,7 +195,15 @@ const server = http.createServer(async (req, res) => {
     {
       const m = path.match(/^\/internal\/agent-runs\/([^/]+)$/);
       if (m && req.method === 'GET') {
-        const run = getRun(decodeURIComponent(m[1]));
+        const runId = decodeURIComponent(m[1]);
+        let run = getRun(runId);
+        if (!run) {
+          await rehydrateWaitingRunFromSandbox(
+            runId,
+            authFromInternalRequest(req),
+          ).catch(() => null);
+          run = getRun(runId);
+        }
         if (!run) {
           json(res, 404, { error: 'run not found' });
           return;
@@ -194,7 +218,14 @@ const server = http.createServer(async (req, res) => {
       const m = path.match(/^\/internal\/agent-runs\/([^/]+)\/events$/);
       if (m && req.method === 'GET') {
         const runId = decodeURIComponent(m[1]);
-        const run = getRun(runId);
+        let run = getRun(runId);
+        if (!run) {
+          await rehydrateWaitingRunFromSandbox(
+            runId,
+            authFromInternalRequest(req),
+          ).catch(() => null);
+          run = getRun(runId);
+        }
         if (!run) {
           json(res, 404, { error: 'run not found' });
           return;
@@ -329,7 +360,15 @@ const server = http.createServer(async (req, res) => {
           json(res, 400, { error: 'Invalid JSON body' });
           return;
         }
-        const result = await resumeRunAfterApproval(decodeURIComponent(m[1]), body);
+        const runId = decodeURIComponent(m[1]);
+        let result = await resumeRunAfterApproval(runId, body);
+        if (!result) {
+          await rehydrateWaitingRunFromSandbox(
+            runId,
+            authFromInternalRequest(req),
+          ).catch(() => null);
+          result = await resumeRunAfterApproval(runId, body);
+        }
         if (!result) {
           json(res, 404, { error: 'run not found' });
           return;
@@ -339,6 +378,43 @@ const server = http.createServer(async (req, res) => {
           return;
         }
         json(res, 200, result);
+        return;
+      }
+    }
+
+    // POST /internal/agent-runs/:id/interactions/:interactionId/respond
+    {
+      const m = path.match(
+        /^\/internal\/agent-runs\/([^/]+)\/interactions\/([^/]+)\/respond$/,
+      );
+      if (m && req.method === 'POST') {
+        const raw = await readBody(req);
+        let body = {};
+        try {
+          body = raw ? JSON.parse(raw) : {};
+        } catch {
+          json(res, 400, { error: 'Invalid JSON body' });
+          return;
+        }
+        let result = await resumeRunAfterInput(
+          decodeURIComponent(m[1]),
+          decodeURIComponent(m[2]),
+          body,
+        );
+        if (!result) {
+          await rehydrateWaitingRunFromSandbox(
+            decodeURIComponent(m[1]),
+            authFromInternalRequest(req),
+          ).catch(() => null);
+          result = await resumeRunAfterInput(
+            decodeURIComponent(m[1]),
+            decodeURIComponent(m[2]),
+            body,
+          );
+        }
+        if (!result) json(res, 404, { error: 'run not found' });
+        else if (result.error) json(res, result.status || 400, result);
+        else json(res, 200, result);
         return;
       }
     }
@@ -380,10 +456,20 @@ const server = http.createServer(async (req, res) => {
         const runId = body.run_id || local.pending?.run_id;
         if (runId && (body.decision === 'approve' || body.decision === 'reject' ||
             body.decision === 'approved' || body.decision === 'rejected')) {
-          const resumed = await resumeRunAfterApproval(runId, {
+          let resumed = await resumeRunAfterApproval(runId, {
             ...body,
             approval_id: approvalId,
           });
+          if (!resumed) {
+            await rehydrateWaitingRunFromSandbox(
+              runId,
+              authFromInternalRequest(req),
+            ).catch(() => null);
+            resumed = await resumeRunAfterApproval(runId, {
+              ...body,
+              approval_id: approvalId,
+            });
+          }
           if (resumed && !resumed.error) {
             json(res, 200, { ...local, resume: resumed });
             return;

@@ -22,7 +22,6 @@ from sandbox.routers import (
     executions,
     files,
     health,
-    mcp_router,
     processes,
     sessions,
     traces,
@@ -129,10 +128,7 @@ async def lifespan(app: FastAPI):
         except OSError:
             pass  # host tests may not have permission under /home/sandbox
 
-    logger.info(
-        "Workspaces root configured | Skills configured | MCP: %s",
-        "enabled" if settings.mcp_enabled else "disabled",
-    )
+    logger.info("Workspaces root configured | Skills configured")
 
     # Process Manager: re-scan orphaned processes after schema is ready
     try:
@@ -261,22 +257,6 @@ async def trace_id_middleware(request: Request, call_next):
 
 
 @app.middleware("http")
-async def mcp_auth_middleware(request: Request, call_next):
-    """Check X-Auth-Token for /mcp/ endpoints if auth tokens are configured."""
-    if (
-        settings.mcp_auth_tokens
-        and request.url.path.startswith("/mcp/")
-    ):
-        token = request.headers.get("X-Auth-Token", "")
-        if token not in settings.mcp_auth_tokens:
-            return JSONResponse(
-                status_code=401,
-                content={"detail": "Invalid or missing MCP auth token"},
-            )
-    return await call_next(request)
-
-
-@app.middleware("http")
 async def request_logging(request: Request, call_next):
     """Log every incoming request with duration."""
     import time
@@ -305,7 +285,7 @@ async def client_allowlist_middleware(request: Request, call_next):
     - If peer ∈ SANDBOX_TRUSTED_PROXY_CIDRS: parse XFF right-to-left,
       stripping trusted hops.
 
-    Applied to HTTP and MCP (``/mcp/*``) alike. All routes including
+    Applied to all Sandbox HTTP routes, including
     ``/health`` and ``/ready`` are gated for consistency; loopback is in the
     default allowlist so container healthchecks keep working. Add the probe
     network to the allowlist if orchestrator probes arrive from elsewhere.
@@ -377,7 +357,6 @@ app.include_router(files.router)
 app.include_router(artifacts.router)
 app.include_router(traces.router)
 app.include_router(health.router)
-app.include_router(mcp_router.router)
 
 
 # ── Root ───────────────────────────────────────────────────────────────

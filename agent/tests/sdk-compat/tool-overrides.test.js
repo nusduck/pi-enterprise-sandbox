@@ -9,7 +9,10 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createSandboxTools } from '../../sandbox-tools.js';
 import { BASE_TOOL_NAMES, resolveToolAllowlist } from '../../chat-runner.js';
-import { createSkillTools, SKILL_TOOL_NAMES } from '../../skills/tools.js';
+import {
+  createSkillTools,
+  SKILL_TOOL_NAMES,
+} from '../../packages/enterprise-agent-kit/extensions/skill-management/tool-definitions.js';
 import { SKILLS_MODE } from '../../skills/manager.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -57,7 +60,7 @@ describe('createSandboxTools override contract', () => {
       resolveToolAllowlist(SKILLS_MODE.DEVELOPMENT).sort(),
       [...BASE_TOOL_NAMES, ...SKILL_TOOL_NAMES].sort(),
     );
-    const runnerSrc = readFileSync(join(__dirname, '../../chat-runner.js'), 'utf8');
+    const runnerSrc = readFileSync(join(__dirname, '../../runtime/agent-runtime.js'), 'utf8');
     assert.match(runnerSrc, /resolveToolAllowlist/);
     assert.match(runnerSrc, /createSkillTools/);
   });

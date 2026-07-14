@@ -30,6 +30,9 @@ export const RUNTIME_EVENT_TYPES = [
   'session.compacted',
   'budget.warning',
   'budget.exceeded',
+  'run.context_updated',
+  'run.task_plan_updated',
+  'run.compaction_updated',
 ] as const;
 
 export type RuntimeEventType = (typeof RUNTIME_EVENT_TYPES)[number] | string;

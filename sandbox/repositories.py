@@ -1119,6 +1119,9 @@ class AgentRunRepository:
         pending_json = entry.get("pending_approval_json")
         if pending_json is not None and not isinstance(pending_json, str):
             pending_json = _json_dumps(pending_json)
+        pending_input_json = entry.get("pending_input_json")
+        if pending_input_json is not None and not isinstance(pending_input_json, str):
+            pending_input_json = _json_dumps(pending_input_json)
         with self.db.connect() as conn:
             conn.execute(
                 """
@@ -1126,9 +1129,9 @@ class AgentRunRepository:
                     run_id, conversation_id, owner_user_id, organization_id,
                     status, lease_owner, lease_until, version,
                     sandbox_session_id, workspace_id, model_id,
-                    budget_json, pending_approval_json,
+                    budget_json, pending_approval_json, pending_input_json,
                     created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     entry["run_id"],
@@ -1144,6 +1147,7 @@ class AgentRunRepository:
                     entry.get("model_id"),
                     budget_json,
                     pending_json,
+                    pending_input_json,
                     entry.get("created_at", now),
                     entry.get("updated_at", now),
                 ),
@@ -1166,7 +1170,7 @@ class AgentRunRepository:
                 """
                 SELECT * FROM agent_runs
                 WHERE conversation_id = ?
-                  AND status IN ('pending', 'running', 'waiting_approval')
+                  AND status IN ('pending', 'running', 'waiting_approval', 'waiting_input')
                 ORDER BY created_at DESC
                 LIMIT 1
                 """,
@@ -1241,6 +1245,30 @@ class AgentRunRepository:
                 WHERE run_id = ?
                 """,
                 (payload, now, run_id),
+            )
+            conn.commit()
+        return self.get(run_id)
+
+    def set_pending_input(
+        self,
+        run_id: str,
+        pending: dict[str, Any] | None,
+        *,
+        status: str | None = None,
+    ) -> AgentRunResponse | None:
+        now = datetime.now(timezone.utc).isoformat()
+        current = self.get(run_id)
+        if current is None:
+            return None
+        payload = _json_dumps(pending) if pending is not None else None
+        with self.db.connect() as conn:
+            conn.execute(
+                """
+                UPDATE agent_runs
+                SET pending_input_json = ?, status = ?, version = version + 1, updated_at = ?
+                WHERE run_id = ?
+                """,
+                (payload, status or current.status, now, run_id),
             )
             conn.commit()
         return self.get(run_id)
@@ -1441,6 +1469,7 @@ class AgentRunRepository:
 
         budget_raw = _col("budget_json")
         pending_raw = _col("pending_approval_json")
+        pending_input_raw = _col("pending_input_json")
         usage_raw = _col("usage")
         usage: dict[str, Any] | None = None
         if usage_raw:
@@ -1470,10 +1499,57 @@ class AgentRunRepository:
             pending_approval_json=(
                 _json_loads(pending_raw) if isinstance(pending_raw, str) else pending_raw
             ),
+            pending_input_json=(
+                _json_loads(pending_input_raw)
+                if isinstance(pending_input_raw, str)
+                else pending_input_raw
+            ),
             usage=usage,
             created_at=row["created_at"],
             updated_at=row["updated_at"],
         )
+
+
+class TaskPlanProjectionRepository:
+    """Read model for frontend task-plan display; Pi entries remain context source."""
+
+    def __init__(self, db: Database | None = None) -> None:
+        self.db = db or database
+
+    def replace(self, run_id: str, tasks: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        now = datetime.now(timezone.utc).isoformat()
+        with self.db.connect() as conn:
+            conn.execute("DELETE FROM agent_task_plan_items WHERE run_id = ?", (run_id,))
+            for task in tasks:
+                conn.execute(
+                    """
+                    INSERT INTO agent_task_plan_items
+                        (run_id, task_id, content, status, evidence, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        run_id,
+                        str(task.get("task_id") or ""),
+                        str(task.get("content") or ""),
+                        str(task.get("status") or "pending"),
+                        task.get("evidence"),
+                        str(task.get("updated_at") or now),
+                    ),
+                )
+            conn.commit()
+        return self.list(run_id)
+
+    def list(self, run_id: str) -> list[dict[str, Any]]:
+        with self.db.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT task_id, content, status, evidence, updated_at
+                FROM agent_task_plan_items WHERE run_id = ?
+                ORDER BY updated_at, task_id
+                """,
+                (run_id,),
+            ).fetchall()
+        return [dict(row) for row in rows]
 
 
 def _is_unique_violation(exc: BaseException) -> bool:

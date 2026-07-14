@@ -11,24 +11,22 @@ import { fileURLToPath } from 'node:url';
 import { toAgentHistoryMessages, toPersistableMessages } from '../../message-helpers.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const runnerSrc = readFileSync(join(__dirname, '../../chat-runner.js'), 'utf8');
+const runnerSrc = readFileSync(join(__dirname, '../../runtime/agent-runtime.js'), 'utf8');
 const managerSrc = readFileSync(join(__dirname, '../../run-manager.js'), 'utf8');
-const bffChatSrc = readFileSync(
-  join(__dirname, '../../../api-server/routes/chat.js'),
+const bffRunSrc = readFileSync(
+  join(__dirname, '../../../api-server/routes/runs.js'),
   'utf8',
 );
 
-describe('cancel on client disconnect', () => {
-  it('BFF cancels agent run when the SSE client goes away', () => {
-    assert.match(bffChatSrc, /cancelAgentRun/);
-    assert.match(bffChatSrc, /onClientGone/);
-    assert.match(bffChatSrc, /req\.on\('close',\s*onClientGone\)/);
-    assert.match(bffChatSrc, /req\.on\('aborted',\s*onClientGone\)/);
-    assert.match(bffChatSrc, /res\.on\('close',\s*onClientGone\)/);
+describe('durable Run SSE disconnect', () => {
+  it('BFF aborts only the upstream SSE relay when the client goes away', () => {
+    assert.match(bffRunSrc, /req\?\.on\('close',\s*\(\)\s*=>\s*controller\.abort\(\)\)/);
+    assert.match(bffRunSrc, /openAgentRunEvents/);
   });
 
-  it('BFF does not treat finished turns as cancel targets', () => {
-    assert.match(bffChatSrc, /if\s*\(\s*finished\s*\)\s*return/);
+  it('BFF exposes explicit cancel instead of coupling cancellation to transport', () => {
+    assert.match(bffRunSrc, /handleCancelRun/);
+    assert.match(bffRunSrc, /cancelAgentRun/);
   });
 
   it('agent runner cancels sandbox execution when run is cancelled', () => {

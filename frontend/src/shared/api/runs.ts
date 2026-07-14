@@ -294,6 +294,29 @@ export async function resumeApproval(
   }
 }
 
+export async function respondInteraction(
+  runId: string,
+  interactionId: string,
+  response: unknown,
+): Promise<{ ok: boolean; data?: unknown; error?: string }> {
+  const resp = await fetch(
+    `${BASE}/runs/${encodeURIComponent(runId)}` +
+      `/interactions/${encodeURIComponent(interactionId)}/respond`,
+    {
+      method: 'POST',
+      headers: authHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ response }),
+    },
+  );
+  if (!resp.ok) {
+    const err = await errorBody(resp);
+    throw new ApiError(String(err.error || `Interaction failed: ${resp.status}`), {
+      status: resp.status,
+    });
+  }
+  return { ok: true, data: await resp.json().catch(() => ({})) };
+}
+
 /**
  * Synthetic local run id when create-run API is not ready.
  * Used by legacy /chat adapter path.

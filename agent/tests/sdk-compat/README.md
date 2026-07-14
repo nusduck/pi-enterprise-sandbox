@@ -34,7 +34,7 @@ node --test api-server/tests/sdk-compat/*.test.js
 
 | File | Contract |
 |------|----------|
-| `message-helpers.test.js` | History restore helpers in `routes/chat.js` |
+| `message-helpers.test.js` | Agent Run history restore helpers |
 | `tool-overrides.test.js` | Sandbox tools override host built-ins / allowlist |
 | `session-api.test.js` | SessionManager branch/custom entries + auth factories |
 | `extension-failsafe.test.js` | Extension `tool_call` block / `tool_result` rewrite |

@@ -231,6 +231,18 @@ export function reduceRuntimeEvent(
       if (status) {
         next = touchRun(next, runId, {
           status,
+          pendingInput:
+            status === 'waiting_input'
+              ? {
+                  interactionId: str(payload.interaction_id),
+                  interactionType: str(payload.interaction_type, 'input'),
+                  title: str(payload.title, 'Input required'),
+                  message: payload.message != null ? str(payload.message) : null,
+                  options: Array.isArray(payload.options)
+                    ? payload.options.map((item) => str(item)).filter(Boolean)
+                    : [],
+                }
+              : null,
           error:
             str(payload.error || payload.message) ||
             next.runsById[runId]?.error ||
@@ -550,6 +562,48 @@ export function reduceRuntimeEvent(
 
     case 'session.compacted': {
       // No run status change; metadata only
+      break;
+    }
+
+    case 'run.context_updated': {
+      const prior = next.runsById[runId]?.contextUsage;
+      next = touchRun(next, runId, {
+        contextUsage: {
+          tokens: typeof payload.tokens === 'number' ? payload.tokens : prior?.tokens ?? null,
+          contextWindow: typeof payload.context_window === 'number'
+            ? payload.context_window
+            : prior?.contextWindow ?? null,
+          percent: typeof payload.percent === 'number' ? payload.percent : prior?.percent ?? null,
+          warning: typeof payload.warning === 'boolean'
+            ? payload.warning
+            : prior?.warning === true,
+        },
+      });
+      break;
+    }
+
+    case 'run.task_plan_updated': {
+      const tasks = Array.isArray(payload.tasks) ? payload.tasks : [];
+      next = touchRun(next, runId, {
+        taskPlan: tasks.map((item) => {
+          const task = item && typeof item === 'object' ? item as Record<string, unknown> : {};
+          return {
+            taskId: str(task.task_id),
+            content: str(task.content),
+            status: str(task.status, 'pending'),
+            evidence: task.evidence != null ? str(task.evidence) : null,
+          };
+        }),
+      });
+      break;
+    }
+
+    case 'run.compaction_updated': {
+      const status = str(payload.status, 'idle') as RunEntity['compactionStatus'];
+      next = touchRun(next, runId, {
+        compactionStatus: status,
+        compactionError: payload.error != null ? str(payload.error) : null,
+      });
       break;
     }
 

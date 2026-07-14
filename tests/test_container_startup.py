@@ -51,7 +51,7 @@ def test_entrypoint_exposes_startup_network_and_uvicorn_parameters() -> None:
 def test_compose_parameterizes_runtime_defaults() -> None:
     text = COMPOSE.read_text()
     expected_fragments = [
-        '"${SANDBOX_MCP_HOST_PORT:-8093}:${SANDBOX_MCP_PORT:-8091}"',
+        "MCP_SERVERS_JSON: ${MCP_SERVERS_JSON:-[]}",
         "SANDBOX_DATABASE_URL: ${SANDBOX_DATABASE_URL:-sqlite:////sandbox/data/sandbox.db}",
         "SANDBOX_MAX_MEMORY_MB: ${SANDBOX_MAX_MEMORY_MB:-512}",
         "SANDBOX_IPTABLES_ENABLED: ${SANDBOX_IPTABLES_ENABLED:-true}",

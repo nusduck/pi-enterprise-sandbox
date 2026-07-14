@@ -30,11 +30,15 @@ export async function handleDecideApproval(approvalId, body, res, req = null) {
     // B6: wake agent waiter / resume parked run (best-effort; durable state is in sandbox)
     let agentResume = null;
     try {
-      agentResume = await decideAgentApproval(approvalId, {
-        decision,
-        run_id: body.run_id || result?.payload?.run_id || null,
-        reason: body.reason || result?.reason || null,
-      });
+      agentResume = await decideAgentApproval(
+        approvalId,
+        {
+          decision,
+          run_id: body.run_id || result?.payload?.run_id || null,
+          reason: body.reason || result?.reason || null,
+        },
+        { auth: authFromRequest(req) },
+      );
     } catch (err) {
       console.warn('[approvals] agent resume notify failed:', err.message);
     }

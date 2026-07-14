@@ -13,9 +13,17 @@ FRAMEWORK = {
     "install.js",
     "manager.js",
     "paths.js",
-    "tools.js",
     "validator.js",
 }
+SKILL_EXTENSION_TOOLS = (
+    ROOT
+    / "agent"
+    / "packages"
+    / "enterprise-agent-kit"
+    / "extensions"
+    / "skill-management"
+    / "tool-definitions.js"
+)
 
 # Minimum curated set we ship for agent daily use.
 REQUIRED_SKILLS = {
@@ -52,6 +60,8 @@ def _parse_frontmatter(text: str) -> dict[str, str]:
 def test_skill_framework_remains_available() -> None:
     names = {path.name for path in (ROOT / "agent" / "skills").iterdir()}
     assert FRAMEWORK <= names
+    assert "tools.js" not in names
+    assert SKILL_EXTENSION_TOOLS.is_file()
 
 
 def test_curated_skills_are_valid_packages() -> None:

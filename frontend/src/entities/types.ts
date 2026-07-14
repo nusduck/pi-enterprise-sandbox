@@ -121,6 +121,27 @@ export type RunEntity = {
   budgetLimits: RunBudgetLimits | null;
   /** 'warning' | 'exceeded' | null */
   budgetWarning: string | null;
+  pendingInput: {
+    interactionId: string;
+    interactionType: string;
+    title: string;
+    message: string | null;
+    options: string[];
+  } | null;
+  contextUsage: {
+    tokens: number | null;
+    contextWindow: number | null;
+    percent: number | null;
+    warning: boolean;
+  } | null;
+  compactionStatus: 'idle' | 'running' | 'completed' | 'failed';
+  compactionError: string | null;
+  taskPlan: Array<{
+    taskId: string;
+    content: string;
+    status: string;
+    evidence: string | null;
+  }>;
   startedAt: string | null;
   finishedAt: string | null;
   createdAt: string | null;

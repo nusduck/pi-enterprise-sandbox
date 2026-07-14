@@ -21,6 +21,22 @@ import { authHeaders } from './client';
 
 export type { McpServerItem, ModelItem, SkillItem, ToolRegistryItem };
 
+export type ExtensionDiagnostics = {
+  status: string;
+  generated_at: string;
+  profile: {
+    id: string;
+    version: string;
+    extensions: string[];
+    allowed_tools: string[];
+    allowed_mcp_servers: string[];
+    skills: string[];
+    context_policy: Record<string, unknown>;
+  };
+  package: { package: string; version: string; audit?: { status?: string } };
+  mcp_servers: Array<{ server_id: string; connection_status: string }>;
+};
+
 const BASE = '/api';
 
 /** Result with soft-fail metadata so UI can show "backend incomplete" empty states. */
@@ -57,6 +73,11 @@ async function softGet(
   }
 }
 
+export async function getExtensionDiagnostics(): Promise<ExtensionDiagnostics | null> {
+  const res = await softGet('/extensions/diagnostics');
+  return res.ok ? (res.data as ExtensionDiagnostics) : null;
+}
+
 function unwrapArray(data: unknown, keys: string[]): unknown[] {
   if (Array.isArray(data)) return data;
   if (data && typeof data === 'object') {
@@ -69,68 +90,37 @@ function unwrapArray(data: unknown, keys: string[]): unknown[] {
 }
 
 /**
- * GET /api/skills or /api/capabilities/skills
- * Tries both paths; soft-fails to empty.
+ * GET /api/capabilities/skills
  */
 export async function listSkills(): Promise<SoftListResult<SkillItem>> {
-  for (const path of ['/skills', '/capabilities/skills']) {
-    const res = await softGet(path);
-    if (!res.ok) {
-      if (res.available === false) continue;
-      return { items: [], available: true, error: res.error };
-    }
-    parseApi(SkillListSchema, res.data, 'listSkills');
-    const items = unwrapArray(res.data, ['skills']).map((item) =>
-      parseApi(SkillItemSchema, item, 'listSkills.item'),
-    );
-    return { items, available: true };
-  }
-  return { items: [], available: false };
+  const res = await softGet('/capabilities/skills');
+  if (!res.ok) return { items: [], available: res.available, error: res.error };
+  parseApi(SkillListSchema, res.data, 'listSkills');
+  const items = unwrapArray(res.data, ['skills']).map((item) =>
+    parseApi(SkillItemSchema, item, 'listSkills.item'),
+  );
+  return { items, available: true };
 }
 
 /**
- * GET /api/mcp/servers or /api/capabilities/mcp
+ * GET /api/capabilities/mcp
  */
 export async function listMcpServers(): Promise<SoftListResult<McpServerItem>> {
-  for (const path of ['/mcp/servers', '/capabilities/mcp', '/mcp/registry']) {
-    const res = await softGet(path);
-    if (!res.ok) {
-      if (res.available === false) continue;
-      return { items: [], available: true, error: res.error };
-    }
-    // /mcp/registry returns tools tree — treat as available but extract servers if present
-    if (path === '/mcp/registry') {
-      parseApi(ToolRegistrySchema, res.data, 'mcpRegistry');
-      const servers = unwrapArray(res.data, ['servers']);
-      if (servers.length === 0) {
-        return { items: [], available: true };
-      }
-      return {
-        items: servers.map((s) =>
-          parseApi(McpServerSchema, s, 'listMcpServers.item'),
-        ),
-        available: true,
-      };
-    }
-    parseApi(McpServerListSchema, res.data, 'listMcpServers');
-    const items = unwrapArray(res.data, ['servers']).map((item) =>
-      parseApi(McpServerSchema, item, 'listMcpServers.item'),
-    );
-    return { items, available: true };
-  }
-  return { items: [], available: false };
+  const res = await softGet('/capabilities/mcp');
+  if (!res.ok) return { items: [], available: res.available, error: res.error };
+  parseApi(McpServerListSchema, res.data, 'listMcpServers');
+  const items = unwrapArray(res.data, ['servers']).map((item) =>
+    parseApi(McpServerSchema, item, 'listMcpServers.item'),
+  );
+  return { items, available: true };
 }
 
 /**
- * GET /api/mcp/registry or /api/tools or /api/capabilities/tools
+ * GET /api/capabilities/tools
  */
 export async function listTools(): Promise<SoftListResult<ToolRegistryItem>> {
-  for (const path of ['/mcp/registry', '/tools', '/capabilities/tools']) {
-    const res = await softGet(path);
-    if (!res.ok) {
-      if (res.available === false) continue;
-      return { items: [], available: true, error: res.error };
-    }
+  const res = await softGet('/capabilities/tools');
+  if (!res.ok) return { items: [], available: res.available, error: res.error };
     parseApi(ToolRegistrySchema, res.data, 'listTools');
     const data = res.data;
     if (data && typeof data === 'object') {
@@ -174,26 +164,18 @@ export async function listTools(): Promise<SoftListResult<ToolRegistryItem>> {
     const items = unwrapArray(data, ['tools']).map((item) =>
       parseApi(ToolRegistryItemSchema, item, 'listTools.item'),
     );
-    return { items, available: true };
-  }
-  return { items: [], available: false };
+  return { items, available: true };
 }
 
 /**
- * GET /api/models or /api/capabilities/models
+ * GET /api/capabilities/models
  */
 export async function listModels(): Promise<SoftListResult<ModelItem>> {
-  for (const path of ['/models', '/capabilities/models']) {
-    const res = await softGet(path);
-    if (!res.ok) {
-      if (res.available === false) continue;
-      return { items: [], available: true, error: res.error };
-    }
-    parseApi(ModelListSchema, res.data, 'listModels');
-    const items = unwrapArray(res.data, ['models']).map((item) =>
-      parseApi(ModelItemSchema, item, 'listModels.item'),
-    );
-    return { items, available: true };
-  }
-  return { items: [], available: false };
+  const res = await softGet('/capabilities/models');
+  if (!res.ok) return { items: [], available: res.available, error: res.error };
+  parseApi(ModelListSchema, res.data, 'listModels');
+  const items = unwrapArray(res.data, ['models']).map((item) =>
+    parseApi(ModelItemSchema, item, 'listModels.item'),
+  );
+  return { items, available: true };
 }

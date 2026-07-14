@@ -1,6 +1,6 @@
 /**
  * Chat application controller for the Agent Runtime Workbench.
- * Dual-writes legacy /chat SSE into the entity store via EntityBridge.
+ * Projects Agent Run SSE into the normalized entity store via EntityBridge.
  */
 import {
   createContext,
@@ -37,7 +37,8 @@ import {
   type ChatMessage,
 } from '../../shared/state';
 import {
-  sendChatMessage,
+  createRun as apiCreateRun,
+  streamRunEvents,
   uploadFile,
   ensureSession,
   listConversations,
@@ -54,6 +55,7 @@ import {
   steerRun as apiSteerRun,
   followUpRun as apiFollowUpRun,
   resumeApproval as apiResumeApproval,
+  respondInteraction as apiRespondInteraction,
 } from '../../shared/api';
 import { createEntityBridge, type EntityBridge } from './entityBridge';
 import type { EntityStore } from '../../entities';
@@ -81,6 +83,7 @@ export type ChatController = {
   followUpRun: (text: string) => Promise<boolean>;
   /** F4: resume entry for interrupted runs. */
   resumeInterrupted: () => Promise<void>;
+  respondInteraction: (response: unknown) => Promise<boolean>;
   // Attachments
   handleFilesSelected: (files: FileList | File[]) => Promise<void>;
   removeAttachmentDraft: (localId: string) => void;
@@ -437,13 +440,6 @@ export function ChatProvider({ children }: { children: ReactNode }) {
 
       const abortCtrl = new AbortController();
       let generation = 0;
-      // Open the single runtime entity path (synthetic id until POST /runs lands).
-      const runId = bridge.beginRun({
-        conversationId: cur.conversationId,
-        sessionId: currentSessionId(),
-      });
-      bridge.attachTransport(runId, abortCtrl);
-
       setState((s) => {
         let n = update(s, {
           messages: [...s.messages, userMsg],
@@ -455,13 +451,27 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         return n;
       });
 
+      let runId: string | null = null;
       try {
-        await sendChatMessage(
-          // Include user message we just added
-          [...cur.messages, userMsg],
-          (ev) => applySSE(ev, generation, runId),
-          abortCtrl.signal,
-          cur.conversationId,
+        const created = await apiCreateRun({
+          conversation_id: cur.conversationId,
+          session_id: currentSessionId(),
+          messages: [...cur.messages, userMsg],
+        });
+        if (!created?.run_id) throw new Error('Run API unavailable');
+        runId = bridge.beginRun({
+          runId: created.run_id,
+          conversationId: created.conversation_id || cur.conversationId,
+          sessionId: created.session_id || currentSessionId(),
+        });
+        bridge.attachTransport(runId, abortCtrl);
+        await streamRunEvents(
+          runId,
+          (envelope) => {
+            const event = (envelope as unknown as { event?: SSEEvent }).event || envelope;
+            applySSE(event, generation, runId as string);
+          },
+          { signal: abortCtrl.signal },
         );
 
         // Commit this run's assistant projection into ChatState so later turns
@@ -513,10 +523,10 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       } catch (err) {
         const error = err as Error & { name?: string };
         if (error.name === 'AbortError') {
-          bridge.interruptRun(runId, 'User stopped the run');
+          if (runId) bridge.interruptRun(runId, 'User stopped the run');
         } else {
           console.error('[chat] Error:', error);
-          bridge.failRun(runId, error.message || 'Connection error');
+          if (runId) bridge.failRun(runId, error.message || 'Connection error');
           const traceId = currentTraceId();
           const trace = traceId ? ` [trace ${traceId.slice(0, 8)}]` : '';
           flashError(`Connection error: ${error.message}${trace}`);
@@ -530,7 +540,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
           return update(s, { isStreaming: false, abortCtrl: null });
         });
       } finally {
-        bridge.releaseTransport(runId);
+        if (runId) bridge.releaseTransport(runId);
         setState((s) => {
           if (!isActiveGeneration(s, generation)) return s;
           if (s.isStreaming) {
@@ -670,6 +680,24 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       const el = document.getElementById('input') as HTMLTextAreaElement | null;
       el?.focus();
     }, 0);
+  }, [bridge, flashError, setStatus]);
+
+  const respondInteraction = useCallback(async (response: unknown): Promise<boolean> => {
+    const store = bridge.getStore();
+    const runId = store.activeRunId;
+    const pending = runId ? store.runsById[runId]?.pendingInput : null;
+    if (!runId || !pending?.interactionId) {
+      flashError('No pending interaction');
+      return false;
+    }
+    try {
+      await apiRespondInteraction(runId, pending.interactionId, response);
+      setStatus('Input submitted', '#3b82f6');
+      return true;
+    } catch (err) {
+      flashError((err as Error).message || 'Input response failed');
+      return false;
+    }
   }, [bridge, flashError, setStatus]);
 
   const ensureConversationSession = useCallback(async () => {
@@ -1141,6 +1169,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     steerRun,
     followUpRun,
     resumeInterrupted,
+    respondInteraction,
     handleFilesSelected,
     removeAttachmentDraft,
     retryAttachmentDraft,

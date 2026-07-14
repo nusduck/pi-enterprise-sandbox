@@ -59,6 +59,7 @@ export function Composer() {
     rejectPending,
     resumeInterrupted,
     resolveApproval,
+    respondInteraction,
     displayMessages,
   } = useChat();
 
@@ -136,6 +137,18 @@ export function Composer() {
       return;
     }
 
+    if (mode === 'waiting_input') {
+      const text = draftText.trim();
+      if (!text) return;
+      setSubmitting(true);
+      try {
+        if (await respondInteraction(text)) setDraftText('');
+      } finally {
+        setSubmitting(false);
+      }
+      return;
+    }
+
     if (mode === 'running' || mode === 'waiting_approval') {
       const text = draftText.trim();
       if (!text) return;
@@ -160,7 +173,9 @@ export function Composer() {
   const primaryLabel =
     mode === 'idle'
       ? 'Send'
-      : mode === 'running' && runningAction === 'steer'
+      : mode === 'waiting_input'
+        ? 'Respond'
+        : mode === 'running' && runningAction === 'steer'
         ? 'Steer'
         : 'Follow-up';
 
@@ -254,6 +269,29 @@ export function Composer() {
                 </button>
               ) : null}
             </span>
+          </div>
+        ) : null}
+
+        {mode === 'waiting_input' && run?.pendingInput ? (
+          <div className="composer-banner waiting" role="status">
+            <span className="composer-banner-text">
+              {run.pendingInput.title}
+              {run.pendingInput.message ? `: ${run.pendingInput.message}` : ''}
+            </span>
+            {run.pendingInput.options.length ? (
+              <span className="composer-banner-actions">
+                {run.pendingInput.options.map((option) => (
+                  <button
+                    key={option}
+                    type="button"
+                    className="composer-banner-btn"
+                    onClick={() => void respondInteraction(option)}
+                  >
+                    {option}
+                  </button>
+                ))}
+              </span>
+            ) : null}
           </div>
         ) : null}
 

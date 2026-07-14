@@ -1,8 +1,7 @@
 /**
  * Typed HTTP + SSE stream client for the Sandbox API Server.
- * Compatibility adapter for legacy chat SSE endpoints.
+ * Typed client for API Server resources.
  */
-import { readSSEStream, type SSEEvent } from '../sse/parser';
 import { isAllowedApiUrl, safeApiUrl } from '../security/url';
 import {
   ApprovalDecisionSchema,
@@ -78,34 +77,6 @@ export class ApiError extends Error {
 
 async function errorBody(resp: Response): Promise<Record<string, unknown>> {
   return (await resp.json().catch(() => ({}))) as Record<string, unknown>;
-}
-
-/**
- * Send a chat message and consume the SSE stream.
- * @returns HTTP status
- */
-export async function sendChatMessage(
-  messages: unknown[],
-  onEvent: (ev: SSEEvent) => void,
-  signal?: AbortSignal | null,
-  conversationId?: string | null,
-): Promise<number> {
-  const body: Record<string, unknown> = { messages };
-  if (conversationId) body.conversation_id = conversationId;
-
-  const resp = await fetch(`${BASE}/chat`, {
-    method: 'POST',
-    headers: authHeaders({ 'Content-Type': 'application/json' }),
-    body: JSON.stringify(body),
-    signal: signal ?? undefined,
-  });
-
-  if (!resp.ok) {
-    throw new Error(`HTTP ${resp.status}: ${resp.statusText}`);
-  }
-
-  await readSSEStream(resp, onEvent, signal);
-  return resp.status;
 }
 
 /** Get API Server status. */

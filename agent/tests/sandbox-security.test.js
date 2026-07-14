@@ -17,7 +17,8 @@ import {
   buildToolAuditEvent,
   createSandboxSecurityExtension,
   resolveApprovalEnabled,
-} from '../extensions/sandbox-security.js';
+  filterToolResultContent,
+} from '../packages/enterprise-agent-kit/extensions/policy/index.js';
 import { resolveApprovalEnabled as configResolveApproval } from '../config.js';
 import {
   DefaultResourceLoader,
@@ -235,6 +236,17 @@ describe('extension fail-closed', () => {
     });
     assert.equal(out?.block, true);
     assert.match(out.reason, /fail-closed|meta boom/i);
+  });
+});
+
+describe('tool result governance', () => {
+  it('redacts secrets and truncates oversized text', () => {
+    const filtered = filterToolResultContent([
+      { type: 'text', text: `api_key=super-secret ${'x'.repeat(40)}` },
+    ], 24);
+    assert.equal(filtered.changed, true);
+    assert.doesNotMatch(filtered.content[0].text, /super-secret/);
+    assert.match(filtered.content[0].text, /truncated/);
   });
 });
 
