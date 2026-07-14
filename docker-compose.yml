@@ -132,6 +132,7 @@ services:
 
   # ── Sandbox — Safe Execution Environment (Python FastAPI) ─
   sandbox:
+    init: true
     build:
       context: .
       dockerfile: ${SANDBOX_DOCKERFILE:-sandbox/Dockerfile}
