@@ -2589,6 +2589,41 @@ class ApprovalRepository:
             return None
         return self._row_to_dict(row)
 
+    def decide_if_pending(
+        self,
+        approval_id: str,
+        *,
+        status: str,
+        decided_at: str,
+        reason: str | None = None,
+    ) -> dict[str, Any] | None:
+        """Atomically make one terminal approval decision.
+
+        Concurrent approvers, timeout handling, and retries all converge on
+        the first terminal value. A later request reads that winner instead
+        of overwriting it with a conflicting decision.
+        """
+        if status not in {"approved", "rejected"}:
+            raise ValueError("approval status must be approved or rejected")
+        with self.db.connect() as conn:
+            conn.execute(
+                """
+                UPDATE approvals
+                SET status = ?,
+                    decided_at = ?,
+                    reason = COALESCE(?, reason)
+                WHERE approval_id = ?
+                  AND status = 'pending_approval'
+                """,
+                (status, decided_at, reason, approval_id),
+            )
+            row = conn.execute(
+                "SELECT * FROM approvals WHERE approval_id = ?",
+                (approval_id,),
+            ).fetchone()
+            conn.commit()
+        return self._row_to_dict(row) if row else None
+
     def get_by_idempotency_key(
         self, session_id: str, idempotency_key: str
     ) -> dict[str, Any] | None:

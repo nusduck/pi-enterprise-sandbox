@@ -88,10 +88,20 @@ class ApprovalManager:
             return None
 
         if entry["status"] == "pending_approval" and self._is_expired(entry):
-            entry["status"] = "rejected"
-            entry["reason"] = "approval timed out"
-            entry["decided_at"] = datetime.now(timezone.utc).isoformat()
-            self._persist(entry)
+            decided_at = datetime.now(timezone.utc).isoformat()
+            if self.repository is not None:
+                entry = self.repository.decide_if_pending(
+                    approval_id,
+                    status="rejected",
+                    decided_at=decided_at,
+                    reason="approval timed out",
+                ) or entry
+                self._remember(entry)
+            else:
+                entry["status"] = "rejected"
+                entry["reason"] = "approval timed out"
+                entry["decided_at"] = decided_at
+                self._remember(entry)
         return entry
 
     def decide(self, approval_id: str, decision: str) -> dict[str, Any] | None:
@@ -100,15 +110,20 @@ class ApprovalManager:
             return None
         if entry["status"] != "pending_approval":
             return entry
-        entry["status"] = "approved" if decision == "approve" else "rejected"
-        entry["decided_at"] = datetime.now(timezone.utc).isoformat()
-        self._persist(entry)
-        return entry
-
-    def _persist(self, entry: dict[str, Any]) -> None:
-        self._remember(entry)
+        status = "approved" if decision == "approve" else "rejected"
+        decided_at = datetime.now(timezone.utc).isoformat()
         if self.repository is not None:
-            self.repository.upsert(entry)
+            entry = self.repository.decide_if_pending(
+                approval_id,
+                status=status,
+                decided_at=decided_at,
+            ) or entry
+            self._remember(entry)
+            return entry
+        entry["status"] = status
+        entry["decided_at"] = decided_at
+        self._remember(entry)
+        return entry
 
     def _remember(self, entry: dict[str, Any]) -> None:
         self._approvals[entry["approval_id"]] = entry

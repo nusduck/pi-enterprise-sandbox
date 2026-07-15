@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+from threading import Barrier
 
 import pytest
 from fastapi.testclient import TestClient
@@ -186,3 +187,42 @@ def test_concurrent_managers_with_separate_connections_create_one_approval(tmp_p
         approval_ids = list(pool.map(create_from_fresh_manager, range(8)))
 
     assert len(set(approval_ids)) == 1
+
+
+def test_concurrent_terminal_decisions_are_first_writer_sticky(tmp_path):
+    db_path = tmp_path / "approval-decision-race.db"
+    database_url = f"sqlite:///{db_path}"
+    initial_db = Database(database_url)
+    initial_db.initialize()
+    initial = ApprovalManager(database=initial_db)
+    pending = initial.create(
+        session_id="session_decision_race",
+        tool_name="raw_bash",
+        risk_level=RiskLevel.HIGH,
+        reason="concurrent decision",
+        payload={"command": "curl https://example.com"},
+        idempotency_key="decision-race-key",
+        operation_fingerprint="decision-race-fingerprint",
+    )
+    barrier = Barrier(2)
+
+    def decide_from_fresh_manager(decision: str) -> str:
+        manager = ApprovalManager(database=Database(database_url))
+        barrier.wait()
+        decided = manager.decide(pending["approval_id"], decision)
+        assert decided is not None
+        return decided["status"]
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        statuses = list(pool.map(decide_from_fresh_manager, ["approve", "reject"]))
+
+    assert len(set(statuses)) == 1
+    winner = statuses[0]
+    final = ApprovalManager(database=Database(database_url)).get(pending["approval_id"])
+    assert final is not None
+    assert final["status"] == winner
+
+    opposite = "reject" if winner == "approved" else "approve"
+    repeated = initial.decide(pending["approval_id"], opposite)
+    assert repeated is not None
+    assert repeated["status"] == winner
