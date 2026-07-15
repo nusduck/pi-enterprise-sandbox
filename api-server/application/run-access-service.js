@@ -3,6 +3,31 @@ import { config } from '../config.js';
 import { HttpError } from '../http/errors.js';
 import { authFromRequest, createSandboxClient } from '../services/sandbox-client.js';
 
+export const DURABLE_RUN_READ_RETRY_DELAYS_MS = Object.freeze([5, 15]);
+
+function wait(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Read the durable run row with a small eventual-consistency cushion.
+ * The Agent's create endpoint is the correctness barrier; this retry only
+ * protects deployments whose database reads can briefly lag a committed write.
+ * A genuinely unknown or foreign ID still returns the original 404.
+ */
+export async function getDurableRun(sandbox, runId) {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return await sandbox.getAgentRun(runId);
+    } catch (err) {
+      if (err?.status !== 404 || attempt >= DURABLE_RUN_READ_RETRY_DELAYS_MS.length) {
+        throw err;
+      }
+      await wait(DURABLE_RUN_READ_RETRY_DELAYS_MS[attempt]);
+    }
+  }
+}
+
 export async function resolveTrustedAuth(req) {
   const forwarded = authFromRequest(req);
   if (!config.AUTH_ENABLED) return forwarded;
@@ -36,7 +61,7 @@ export async function authorizeRunRequest(runId, req) {
   // in-memory execution log, so completed or pre-restart runs may no longer be
   // available there even though their durable history still exists.
   const sandbox = createSandboxClient({ auth });
-  const run = await sandbox.getAgentRun(runId);
+  const run = await getDurableRun(sandbox, runId);
   if (!config.AUTH_ENABLED) return { auth, run };
 
   if (

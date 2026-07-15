@@ -18,7 +18,9 @@ from sandbox.models import (
     ToolExecutionResponse,
 )
 from sandbox.repositories import (
+    AgentEventIdConflictError,
     AgentEventRepository,
+    AgentRunNotFoundError,
     AgentRunRepository,
     ConversationRepository,
     ToolExecutionRepository,
@@ -76,29 +78,50 @@ class AgentRunManager:
                 "updated_at": now.isoformat(),
             }
         )
-        claimed = self.runs.claim_lease(
-            run_id,
-            lease_owner=owner,
-            lease_until=lease_until,
-            expected_version=run.version,
-            now_iso=now.isoformat(),
-        )
-        if claimed is None:
-            # Single-process should always succeed; surface current state
-            claimed = self.runs.get(run_id)
-        assert claimed is not None
+        try:
+            claimed = self.runs.claim_lease(
+                run_id,
+                lease_owner=owner,
+                lease_until=lease_until,
+                expected_version=run.version,
+                now_iso=now.isoformat(),
+            )
+            if claimed is None:
+                # Single-process should always succeed; surface current state
+                claimed = self.runs.get(run_id)
+            if claimed is None:
+                raise RuntimeError(f"Agent run disappeared during start: {run_id}")
 
-        self.conversations.set_last_run_id(conversation_id, run_id)
-        self.events.append(
-            run_id=run_id,
-            event_type="run_started",
-            payload={
-                "conversation_id": conversation_id,
-                "lease_owner": claimed.lease_owner,
-                "model_id": model_id,
-            },
-        )
-        return claimed
+            self.conversations.set_last_run_id(conversation_id, run_id)
+            self.events.append(
+                run_id=run_id,
+                event_type="run_started",
+                payload={
+                    "conversation_id": conversation_id,
+                    "lease_owner": claimed.lease_owner,
+                    "model_id": model_id,
+                },
+            )
+            return claimed
+        except Exception:
+            # ``create`` commits before the ancillary projections above. If a
+            # later initialization step fails, leave the durable row terminal
+            # and lease-free so a caller cannot execute an orphaned run.
+            try:
+                current = self.runs.get(run_id)
+                if current is not None:
+                    if current.lease_owner in (None, owner):
+                        self.runs.release_lease(
+                            run_id,
+                            lease_owner=owner,
+                            status=AgentRunStatus.FAILED.value,
+                        )
+                    else:
+                        self.runs.update_status(run_id, AgentRunStatus.FAILED.value)
+            except Exception:
+                # Preserve the original creation error; cleanup is best effort.
+                pass
+            raise
 
     def claim_lease(
         self,
@@ -150,6 +173,12 @@ class AgentRunManager:
                 event_id=event_id,
                 schema_version=schema_version,
             )
+        except (AgentRunNotFoundError, AgentEventIdConflictError):
+            # A missing parent is a normal 404 condition, not a failed run;
+            # an event_id collision is a client conflict, not a run failure.
+            # In both cases the repository transaction has not inserted an
+            # invalid or cross-linked event row.
+            raise
         except Exception:
             try:
                 self.runs.update_status(run_id, AgentRunStatus.FAILED.value)
@@ -257,6 +286,10 @@ class AgentRunManager:
             updated = self.runs.update_status(
                 run_id, AgentRunStatus.COMPLETED.value
             )
+        if updated is None:
+            # The run disappeared between the initial read and the terminal
+            # update. Do not append a terminal event for a deleted run.
+            return None
         done_payload: dict[str, Any] = {"status": AgentRunStatus.COMPLETED.value}
         if model_id is not None:
             done_payload["model_id"] = model_id

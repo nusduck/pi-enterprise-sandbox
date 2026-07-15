@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 
 from fastapi.testclient import TestClient
 
@@ -130,6 +131,21 @@ def test_agent_run_endpoints_enforce_conversation_ownership(monkeypatch):
     assert client.get(f"/agent-runs/{run_id}", headers=headers_a).status_code == 200
     assert client.get(f"/agent-runs/{run_id}", headers=headers_b).status_code == 404
     assert client.get(f"/agent-runs/{run_id}/events", headers=headers_b).status_code == 404
+
+    # The row and ownership are committed before POST returns, so concurrent
+    # first reads cannot observe a transient 404 for an accepted run.
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        immediate = list(
+            pool.map(
+                lambda path: client.get(path, headers=headers_a),
+                [f"/agent-runs/{run_id}", f"/agent-runs/{run_id}/events"],
+            )
+        )
+    assert [response.status_code for response in immediate] == [200, 200]
+
+    unknown_id = _unique("run_unknown")
+    assert client.get(f"/agent-runs/{unknown_id}", headers=headers_a).status_code == 404
+    assert client.get(f"/agent-runs/{unknown_id}/events", headers=headers_a).status_code == 404
     listed_b = client.get(
         "/agent-runs",
         params={"conversation_id": conversation_id},

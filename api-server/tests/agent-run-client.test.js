@@ -8,6 +8,8 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
+import { createAgentRun } from '../services/agent-client.js';
+
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const clientSrc = readFileSync(join(__dirname, '../services/sandbox-client.js'), 'utf8');
 const agentClientSrc = readFileSync(join(__dirname, '../services/agent-client.js'), 'utf8');
@@ -21,6 +23,31 @@ const timelineSrc = readFileSync(
 const pkg = JSON.parse(readFileSync(join(__dirname, '../package.json'), 'utf8'));
 
 describe('thin BFF agent relay', () => {
+  it('preserves the Agent initialization timeout code for the public BFF error', async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async () =>
+      new Response(
+        JSON.stringify({
+          error: 'Agent run initialization timed out after 15000ms',
+          code: 'RUN_INITIALIZATION_TIMEOUT',
+        }),
+        { status: 504, headers: { 'Content-Type': 'application/json' } },
+      );
+    try {
+      await assert.rejects(
+        createAgentRun({ messages: [{ role: 'user', content: 'timeout' }] }),
+        (error) => {
+          assert.equal(error.status, 504);
+          assert.equal(error.code, 'RUN_INITIALIZATION_TIMEOUT');
+          assert.match(error.message, /initialization timed out/);
+          return true;
+        },
+      );
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   it('does not depend on pi-coding-agent', () => {
     const deps = pkg.dependencies || {};
     assert.equal(

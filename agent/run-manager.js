@@ -30,6 +30,7 @@ import {
   registerPendingInput,
 } from './services/interaction-waiter.js';
 import { createSandboxClient } from './infrastructure/sandbox-client.js';
+import { config } from './config.js';
 
 /**
  * @typedef {'queued'|'running'|'waiting_approval'|'waiting_input'|'completed'|'cancelled'|'failed'|'budget_exceeded'|'rejected'} RunStatus
@@ -77,6 +78,17 @@ const TERMINAL = new Set([
 
 /** Statuses that still accept steer/follow-up. */
 const ACTIVE_STREAMING = new Set(['queued', 'running']);
+
+export class RunInitializationTimeoutError extends Error {
+  constructor(runId, timeoutMs) {
+    super(`Agent run initialization timed out after ${timeoutMs}ms`);
+    this.name = 'RunInitializationTimeoutError';
+    this.code = 'RUN_INITIALIZATION_TIMEOUT';
+    this.status = 504;
+    this.runId = runId;
+    this.timeoutMs = timeoutMs;
+  }
+}
 
 function now() {
   return Date.now();
@@ -158,6 +170,10 @@ function toPublic(run) {
 /**
  * Create and start an agent run.
  *
+ * The returned promise resolves only after the corresponding durable Sandbox
+ * run has been created. This is the publication barrier for the public run ID:
+ * callers must not receive an ID that cannot yet be authorized or queried.
+ *
  * @param {{
  *   messages: unknown[],
  *   conversation_id?: string|null,
@@ -165,12 +181,46 @@ function toPublic(run) {
  *   trace_id?: string|null,
  *   budget?: object|null,
  * }} body
+ * @param {{ runAgentTurn?: typeof runAgentTurn, timeoutMs?: number }} [deps]
  */
-export function createRun(body) {
+export async function createRun(
+  body,
+  {
+    runAgentTurn: runTurn = runAgentTurn,
+    timeoutMs = config.RUN_INITIALIZATION_TIMEOUT_MS,
+  } = {},
+) {
   pruneOldRuns();
   const id = `arun_${randomUUID().replace(/-/g, '').slice(0, 24)}`;
   const budgetLimits = resolveBudgetLimits(body.budget || null);
   const budget = createBudgetTracker(budgetLimits);
+
+  let readyResolve;
+  let readyReject;
+  let readySettled = false;
+  const ready = new Promise((resolve, reject) => {
+    readyResolve = resolve;
+    readyReject = reject;
+  });
+  const markReady = (snapshot) => {
+    if (snapshot?.run_id !== id) {
+      throw new Error(
+        `Durable run id mismatch: expected ${id}, got ${snapshot?.run_id || 'none'}`,
+      );
+    }
+    run.sandbox_run_id = snapshot.run_id;
+    if (snapshot.conversation_id) run.conversation_id = snapshot.conversation_id;
+    if (!readySettled) {
+      readySettled = true;
+      readyResolve(snapshot);
+    }
+  };
+  const failReady = (error) => {
+    if (!readySettled) {
+      readySettled = true;
+      readyReject(error);
+    }
+  };
 
   /** @type {AgentRun} */
   const run = {
@@ -202,7 +252,7 @@ export function createRun(body) {
     run.status = 'running';
     run.updated_at = now();
     try {
-      const result = await runAgentTurn({
+      const result = await runTurn({
         run_id: run.id,
         messages: run.messages,
         conversation_id: run.conversation_id,
@@ -210,6 +260,7 @@ export function createRun(body) {
         trace_id: run.trace_id,
         budget,
         agent_profile_id: run.agent_profile_id || undefined,
+        onRunReady: markReady,
         emit: (event) => {
           if (
             run.cancelled &&
@@ -301,11 +352,13 @@ export function createRun(body) {
       if (result.conversation_id) run.conversation_id = result.conversation_id;
       if (result.run_id) run.sandbox_run_id = result.run_id;
     } catch (err) {
+      failReady(err);
       run.status = 'failed';
       run.error = err?.message || String(err);
       appendEvent(run, { type: 'error', message: run.error });
       appendEvent(run, { type: 'done' });
     } finally {
+      failReady(new Error('Agent run did not become durably ready'));
       run.updated_at = now();
       if (run.status !== 'waiting_approval' && run.status !== 'waiting_input') {
         run.handles = null;
@@ -314,6 +367,29 @@ export function createRun(body) {
     }
     return toPublic(run);
   })();
+
+  const timeout = setTimeout(() => {
+    // Permanently fail the barrier. A durable create that ignores cancellation
+    // may still return later, but it must never publish this local run.
+    failReady(new RunInitializationTimeoutError(id, timeoutMs));
+  }, timeoutMs);
+  try {
+    await ready;
+  } catch (err) {
+    if (err instanceof RunInitializationTimeoutError) {
+      // Stop the local runner. It checks isCancelled after slow setup and
+      // again immediately before durable creation, preventing a late orphan.
+      await cancelRun(id).catch(() => {});
+    } else {
+      // The run ID was never published, so a failed initialization must not
+      // leave an addressable in-memory phantom behind.
+      await run.done.catch(() => {});
+    }
+    if (runs.get(id) === run) runs.delete(id);
+    throw err;
+  } finally {
+    clearTimeout(timeout);
+  }
 
   return {
     run_id: id,

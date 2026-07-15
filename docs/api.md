@@ -73,7 +73,7 @@ Base URL: `http://host:4000`
 { "messages": [{ "role": "user", "content": "写一个 Python 脚本" }], "conversation_id": "optional", "agent_profile_id": "coding-agent" }
 ```
 
-响应（201）：`{ "run_id": "arun_...", "status": "running|queued", "conversation_id": "..." }`。
+响应（201）：`{ "run_id": "arun_...", "status": "running|queued", "conversation_id": "..." }`。只有在对应的 Durable Sandbox run 已创建并可按授权查询后才返回 `run_id`；初始化超过 `AGENT_RUN_INIT_TIMEOUT_MS` 时返回 504（`code=RUN_INITIALIZATION_TIMEOUT`）。
 
 随后调用 `GET /api/runs/:id/events?after_sequence=N` 接收 SSE。可用 `POST /api/runs/:id/cancel|steer|follow-up` 控制；审批恢复使用 `resume-approval`，用户输入使用 `/interactions/:interactionId/respond`。
 

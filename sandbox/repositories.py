@@ -1518,6 +1518,26 @@ class AgentRunRepository:
         )
 
 
+class AgentRunNotFoundError(LookupError):
+    """Raised when an event targets a run that is not durably present."""
+
+    def __init__(self, run_id: str) -> None:
+        super().__init__(f"Agent run not found: {run_id}")
+        self.run_id = run_id
+
+
+class AgentEventIdConflictError(ValueError):
+    """Raised when an event_id is already owned by a different run."""
+
+    def __init__(self, event_id: str, run_id: str, existing_run_id: str) -> None:
+        super().__init__(
+            f"event_id {event_id!r} already belongs to run {existing_run_id!r}"
+        )
+        self.event_id = event_id
+        self.run_id = run_id
+        self.existing_run_id = existing_run_id
+
+
 class TaskPlanProjectionRepository:
     """Read model for frontend task-plan display; Pi entries remain context source."""
 
@@ -1613,19 +1633,15 @@ class AgentEventRepository:
         appends on the same run allocate contiguous sequences. On
         ``UNIQUE(run_id, sequence)`` conflict, retries up to
         :data:`MAX_APPEND_SEQUENCE_RETRIES` times. On ``UNIQUE(event_id)``
-        conflict, returns the existing row (idempotent success). Never
+        conflict, returns the existing row only when it belongs to the same
+        run (idempotent success); cross-run reuse raises
+        :class:`AgentEventIdConflictError`. Never
         leaves a partial commit for a failed attempt.
         """
         now = datetime.now(timezone.utc).isoformat()
         eid = event_id or f"evt_{uuid.uuid4().hex}"
         payload_json = _json_dumps(payload or {})
         payload_dict = payload or {}
-
-        # Fast path: stable idempotent return if event_id already exists.
-        if event_id is not None:
-            existing = self.get_by_event_id(eid)
-            if existing is not None:
-                return existing
 
         last_error: BaseException | None = None
         for attempt in range(MAX_APPEND_SEQUENCE_RETRIES):
@@ -1647,6 +1663,10 @@ class AgentEventRepository:
                     # Idempotent: another writer committed this event_id.
                     existing = self.get_by_event_id(eid)
                     if existing is not None:
+                        if existing.run_id != run_id:
+                            raise AgentEventIdConflictError(
+                                eid, run_id, existing.run_id
+                            ) from exc
                         return existing
                     if kind == "event_id":
                         # Race: constraint fired but row not visible yet; brief retry.
@@ -1684,18 +1704,30 @@ class AgentEventRepository:
                 if isinstance(backend, SQLiteBackend):
                     # Exclusive write lock for the whole allocate+insert unit.
                     conn.execute("BEGIN IMMEDIATE")
-                elif isinstance(backend, PostgreSQLBackend):
-                    # Serialize appends per run via the parent run row when present.
-                    conn.execute(
+                if isinstance(backend, PostgreSQLBackend):
+                    # Serialize appends per run and make the parent existence
+                    # check part of the same transaction as sequence allocation.
+                    parent = conn.execute(
                         "SELECT run_id FROM agent_runs WHERE run_id = ? FOR UPDATE",
                         (run_id,),
-                    )
+                    ).fetchone()
+                else:
+                    parent = conn.execute(
+                        "SELECT run_id FROM agent_runs WHERE run_id = ?",
+                        (run_id,),
+                    ).fetchone()
+                if parent is None:
+                    raise AgentRunNotFoundError(run_id)
 
                 existing = conn.execute(
                     "SELECT * FROM agent_events WHERE event_id = ?",
                     (eid,),
                 ).fetchone()
                 if existing is not None:
+                    if existing["run_id"] != run_id:
+                        raise AgentEventIdConflictError(
+                            eid, run_id, existing["run_id"]
+                        )
                     conn.commit()
                     return self._row_to_model(existing)
 

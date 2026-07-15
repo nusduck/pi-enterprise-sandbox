@@ -84,6 +84,7 @@ pi-sandbox/
 | `MCP_SERVERS_JSON` | Agent Runtime 外部 MCP Server 配置（凭据使用 `authTokenRef`） |
 | `AGENT_BASE_URL` | BFF → Agent 服务地址（compose 内默认 `http://agent:4100`） |
 | `AGENT_INTERNAL_TOKEN` | BFF ↔ Agent 共享内部令牌（生产必填） |
+| `AGENT_RUN_INIT_TIMEOUT_MS` | `15000` 默认；Durable Sandbox run 初始化超时（1000–60000 毫秒，超时返回 504） |
 
 ### Agent 服务
 

@@ -41,8 +41,19 @@ export async function createAgentRun(body, { auth = null, traceId = null } = {})
   });
   if (!resp.ok) {
     const text = await resp.text().catch(() => resp.statusText);
-    const err = new Error(`Agent create run failed (${resp.status}): ${text}`);
+    let body = null;
+    try {
+      body = JSON.parse(text);
+    } catch {
+      // Preserve the raw response text for non-JSON Agent failures.
+    }
+    const message =
+      typeof body?.error === 'string'
+        ? body.error
+        : `Agent create run failed (${resp.status}): ${text}`;
+    const err = new Error(message);
     err.status = resp.status;
+    if (typeof body?.code === 'string' && body.code) err.code = body.code;
     throw err;
   }
   return resp.json();

@@ -13,7 +13,9 @@ from sandbox.database import Database
 from sandbox.models import AgentRunStatus, ToolExecutionStatus
 from sandbox.repositories import (
     MAX_APPEND_SEQUENCE_RETRIES,
+    AgentEventIdConflictError,
     AgentEventRepository,
+    AgentRunNotFoundError,
     AgentRunRepository,
     ConversationRepository,
     ToolExecutionRepository,
@@ -167,6 +169,36 @@ def test_event_sequence_unique_constraint_conflict(db, conversation):
                 ),
             )
             conn.commit()
+
+
+def test_event_append_requires_durable_parent_run(db):
+    events = AgentEventRepository(db)
+
+    with pytest.raises(AgentRunNotFoundError):
+        events.append(run_id="run_missing", event_type="token_batch", payload={"text": "x"})
+
+    assert events.list_by_run("run_missing") == []
+    with db.connect() as conn:
+        count = conn.execute(
+            "SELECT COUNT(*) AS count FROM agent_events WHERE run_id = ?",
+            ("run_missing",),
+        ).fetchone()["count"]
+    assert count == 0
+
+
+def test_start_run_failure_terminalizes_created_row(mgr, conversation, monkeypatch):
+    """Ancillary start-up failure cannot leave a running durable orphan."""
+    def fail_projection(*args, **kwargs):
+        raise RuntimeError("projection failed")
+
+    monkeypatch.setattr(mgr.conversations, "set_last_run_id", fail_projection)
+    with pytest.raises(RuntimeError, match="projection failed"):
+        mgr.start_run(conversation_id=conversation.id, lease_owner="w1")
+
+    runs = mgr.runs.list_by_conversation(conversation.id)
+    assert len(runs) == 1
+    assert runs[0].status == AgentRunStatus.FAILED.value
+    assert runs[0].lease_owner is None
 
 
 def test_lease_claim_conflict(mgr, conversation):
@@ -437,6 +469,31 @@ def test_duplicate_event_id_idempotent(mgr, conversation):
 
     matching = [e for e in mgr.list_events(run.run_id) if e.event_id == "evt_idem_1"]
     assert len(matching) == 1
+
+
+def test_event_id_cannot_cross_link_another_run(mgr, conversation):
+    """A global event_id collision never returns the other run's event."""
+    first_run = mgr.start_run(conversation_id=conversation.id, lease_owner="w1")
+    second_run = mgr.start_run(conversation_id=conversation.id, lease_owner="w2")
+    first = mgr.append_event(
+        first_run.run_id,
+        event_type="token_batch",
+        payload={"text": "first"},
+        event_id="evt_cross_run",
+    )
+
+    with pytest.raises(AgentEventIdConflictError):
+        mgr.append_event(
+            second_run.run_id,
+            event_type="token_batch",
+            payload={"text": "must not link"},
+            event_id="evt_cross_run",
+        )
+
+    assert [e.event_id for e in mgr.list_events(first_run.run_id)].count("evt_cross_run") == 1
+    assert [e.event_id for e in mgr.list_events(second_run.run_id)].count("evt_cross_run") == 0
+    assert mgr.events.get_by_event_id(first.event_id).run_id == first_run.run_id
+    assert mgr.runs.get(second_run.run_id).status == AgentRunStatus.RUNNING.value
 
 
 def test_concurrent_duplicate_event_id_single_row(mgr, conversation):

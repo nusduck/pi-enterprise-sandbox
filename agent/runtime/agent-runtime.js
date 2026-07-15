@@ -349,6 +349,8 @@ export async function resolveAgentSessionManager(client, conversationId, opts = 
  *   emit: (event: object) => void,
  *   isCancelled: () => boolean,
  *   onSessionReady?: (info: { session: object, sandboxSessionId: string, client: object }) => void,
+ *   onRunReady?: (run: object) => Promise<void>|void,
+ *   sandboxClient?: ReturnType<typeof createSandboxClient>,
  *   onApprovalSuspend?: (pending: object) => Promise<void>|void,
  *   onInputSuspend?: (pending: object) => Promise<void>|void,
  *   agent_profile_id?: string,
@@ -371,7 +373,7 @@ export async function runAgentTurn(opts) {
 
   const budget = opts.budget || createBudgetTracker();
   const trace_id = opts.trace_id || randomUUID();
-  const client = createSandboxClient({
+  const client = opts.sandboxClient || createSandboxClient({
     traceId: trace_id,
     auth: auth || {},
   });
@@ -642,9 +644,25 @@ export async function runAgentTurn(opts) {
     sandboxSessionId = resolved.sandboxSessionId;
     activeWorkspaceId = resolved.workspace_id;
 
+    if (isCancelled()) {
+      return {
+        status: 'cancelled',
+        run_id: null,
+        conversation_id: activeConversationId,
+      };
+    }
+
     // Registry-driven capabilities (context window, max output, tool/reasoning flags).
     activeModelEntry = resolveActiveModel(opts.model_id || config.MODEL_ID);
     const activeModelId = activeModelEntry.model_id;
+
+    if (isCancelled()) {
+      return {
+        status: 'cancelled',
+        run_id: null,
+        conversation_id: activeConversationId,
+      };
+    }
 
     try {
       const leaseOwner = `agent_${trace_id.slice(0, 12)}`;
@@ -662,10 +680,28 @@ export async function runAgentTurn(opts) {
             lease_owner: leaseOwner,
             lease_seconds: 300,
           });
+      if (!run?.run_id) {
+        throw new Error('Sandbox did not return a durable run_id');
+      }
       activeRunId = run.run_id;
       activeLeaseOwner = run.lease_owner || leaseOwner;
+      if (isCancelled()) {
+        runTerminal = true;
+        await client.failAgentRun(run.run_id, {
+          error: 'run initialization cancelled',
+          lease_owner: activeLeaseOwner || undefined,
+        }).catch(() => {});
+        return {
+          status: 'cancelled',
+          run_id: activeRunId,
+          conversation_id: activeConversationId,
+        };
+      }
+      await opts.onRunReady?.(run);
     } catch (err) {
-      console.warn('[agent] Failed to create agent run:', err.message);
+      throw new Error(`Failed to create durable agent run: ${err.message}`, {
+        cause: err,
+      });
     }
 
     emit({

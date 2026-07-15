@@ -180,14 +180,26 @@ const server = http.createServer(async (req, res) => {
         return;
       }
       const auth = authFromInternalRequest(req);
-      const result = createRun({
-        messages,
-        conversation_id: body.conversation_id || null,
-        auth,
-        trace_id: req.headers['x-trace-id'] || body.trace_id || null,
-        budget: body.budget || null,
-        agent_profile_id: body.agent_profile_id || null,
-      });
+      let result;
+      try {
+        result = await createRun({
+          messages,
+          conversation_id: body.conversation_id || null,
+          auth,
+          trace_id: req.headers['x-trace-id'] || body.trace_id || null,
+          budget: body.budget || null,
+          agent_profile_id: body.agent_profile_id || null,
+        });
+      } catch (error) {
+        if (error?.code === 'RUN_INITIALIZATION_TIMEOUT') {
+          json(res, error.status || 504, {
+            error: error.message,
+            code: error.code,
+          });
+          return;
+        }
+        throw error;
+      }
       json(res, 202, result);
       return;
     }

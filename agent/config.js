@@ -191,6 +191,7 @@ export function validateProductionConfig(env = process.env, opts = {}) {
 export function effectiveConfig(cfg = config) {
   return {
     PORT: cfg.PORT,
+    RUN_INITIALIZATION_TIMEOUT_MS: cfg.RUN_INITIALIZATION_TIMEOUT_MS,
     NODE_ENV: cfg.NODE_ENV,
     DEPLOYMENT_ENV: cfg.DEPLOYMENT_ENV,
     SANDBOX_BASE_URL: cfg.SANDBOX_BASE_URL,
@@ -241,6 +242,11 @@ function resolveMcpServers(env = process.env) {
 
 export const config = {
   PORT: parseInt(process.env.PORT, 10) || 4100,
+  // Bounded publication barrier for conversation/session/durable-run setup.
+  RUN_INITIALIZATION_TIMEOUT_MS: Math.min(
+    60_000,
+    Math.max(1_000, parseInt(process.env.AGENT_RUN_INIT_TIMEOUT_MS, 10) || 15_000),
+  ),
   SANDBOX_BASE_URL: process.env.SANDBOX_BASE_URL || 'http://sandbox:8081',
   SANDBOX_API_TOKEN: process.env.SANDBOX_API_TOKEN || '',
   /**

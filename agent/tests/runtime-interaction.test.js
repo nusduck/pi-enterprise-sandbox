@@ -21,6 +21,8 @@ import {
 import {
   createRun,
   getRun,
+  subscribeEvents,
+  RunInitializationTimeoutError,
   steerRun,
   followUpRun,
   cancelRun,
@@ -29,6 +31,7 @@ import {
   activeRunCount,
   _resetForTests,
 } from '../run-manager.js';
+import { runAgentTurn } from '../runtime/agent-runtime.js';
 
 describe('budget tracker', () => {
   it('resolves defaults and null-as-unlimited', () => {
@@ -122,6 +125,180 @@ describe('approval waiter (no fixed poll)', () => {
     });
     assert.equal(err.name, 'ApprovalSuspendedError');
     assert.equal(err.pending.approval_id, 'a1');
+  });
+});
+
+describe('durable run publication barrier', () => {
+  beforeEach(() => {
+    _resetForTests();
+  });
+
+  it('does not resolve create until the durable run is ready, then replays events immediately', async () => {
+    let runId = null;
+    let releaseTurn;
+    let markTurnFinished;
+    const turnMayFinish = new Promise((resolve) => {
+      releaseTurn = resolve;
+    });
+    const turnFinished = new Promise((resolve) => {
+      markTurnFinished = resolve;
+    });
+
+    const createPromise = createRun(
+      {
+        messages: [{ role: 'user', content: 'hello' }],
+        conversation_id: 'conv_ready',
+      },
+      {
+        runAgentTurn: async (opts) => {
+          runId = opts.run_id;
+          opts.emit({ type: 'trace', trace_id: 'trace_ready' });
+          await new Promise((resolve) => setTimeout(resolve, 5));
+          await opts.onRunReady({
+            run_id: opts.run_id,
+            conversation_id: 'conv_ready',
+          });
+          await turnMayFinish;
+          opts.emit({ type: 'done' });
+          markTurnFinished();
+          return {
+            status: 'completed',
+            run_id: opts.run_id,
+            conversation_id: 'conv_ready',
+          };
+        },
+      },
+    );
+
+    let published = false;
+    createPromise.then(() => {
+      published = true;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.equal(published, false, 'run id must not publish before durable create');
+    assert.equal(activeRunCount(), 1);
+
+    const created = await createPromise;
+    assert.equal(created.run_id, runId);
+    assert.equal(created.conversation_id, 'conv_ready');
+
+    const replayed = [];
+    const unsubscribe = subscribeEvents(created.run_id, 0, (entry) => {
+      replayed.push(entry.event.type);
+    });
+    assert.equal(typeof unsubscribe, 'function');
+    assert.deepEqual(replayed, ['trace']);
+
+    // Release the fake runner so the test does not leave an active run behind.
+    releaseTurn();
+    await turnFinished;
+  });
+
+  it('removes the local phantom when durable creation fails', async () => {
+    let runId = null;
+    await assert.rejects(
+      createRun(
+        { messages: [{ role: 'user', content: 'fail' }] },
+        {
+          runAgentTurn: async (opts) => {
+            runId = opts.run_id;
+            throw new Error('durable write failed');
+          },
+        },
+      ),
+      /durable write failed/,
+    );
+    assert.ok(runId);
+    assert.equal(getRun(runId), null);
+    assert.equal(activeRunCount(), 0);
+  });
+
+  it('times out initialization, cancels the runner, and removes the local phantom', async () => {
+    let runId = null;
+    await assert.rejects(
+      createRun(
+        { messages: [{ role: 'user', content: 'slow' }] },
+        {
+          timeoutMs: 5,
+          runAgentTurn: async (opts) => {
+            runId = opts.run_id;
+            while (!opts.isCancelled()) {
+              await new Promise((resolve) => setTimeout(resolve, 1));
+            }
+            return { status: 'cancelled', run_id: null, conversation_id: null };
+          },
+        },
+      ),
+      (error) => {
+        assert.ok(error instanceof RunInitializationTimeoutError);
+        assert.equal(error.code, 'RUN_INITIALIZATION_TIMEOUT');
+        assert.equal(error.status, 504);
+        return true;
+      },
+    );
+    assert.ok(runId);
+    assert.equal(getRun(runId), null);
+    assert.equal(activeRunCount(), 0);
+  });
+
+  it('terminalizes a durable row created after timeout cancellation', async () => {
+    let durableCreateStarted;
+    const durableCreate = new Promise((resolve) => {
+      durableCreateStarted = resolve;
+    });
+    const terminalized = [];
+    let durableRunId = null;
+    const sandboxClient = {
+      async getConversation() {
+        return { id: 'conv_late', sandbox_session_id: null };
+      },
+      async createSession() {
+        return { session_id: 'sess_late', workspace_id: 'conv_conv_late' };
+      },
+      async updateConversation() {
+        return null;
+      },
+      async createAgentRun(body) {
+        durableCreateStarted();
+        durableRunId = body.run_id;
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        return { run_id: body.run_id, lease_owner: 'lease_late' };
+      },
+      async failAgentRun(runId, body) {
+        terminalized.push({ runId, body });
+        return { run_id: runId, status: 'failed' };
+      },
+      async cancelActiveExecution() {
+        return null;
+      },
+    };
+
+    const createPromise = createRun(
+      {
+        messages: [{ role: 'user', content: 'late create' }],
+        conversation_id: 'conv_late',
+      },
+      {
+        timeoutMs: 5,
+        runAgentTurn: (opts) => runAgentTurn({ ...opts, sandboxClient }),
+      },
+    );
+    await durableCreate;
+
+    await assert.rejects(
+      createPromise,
+      (error) => {
+        assert.ok(error instanceof RunInitializationTimeoutError);
+        assert.equal(error.code, 'RUN_INITIALIZATION_TIMEOUT');
+        return true;
+      },
+    );
+
+    assert.equal(terminalized.length, 1);
+    assert.equal(terminalized[0].runId, durableRunId);
+    assert.equal(terminalized[0].body.error, 'run initialization cancelled');
+    assert.equal(getRun(terminalized[0].runId), null);
+    assert.equal(activeRunCount(), 0);
   });
 });
 

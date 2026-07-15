@@ -16,7 +16,11 @@ from sandbox.models import (
     TOOL_TERMINAL_STATUSES,
 )
 from sandbox.services.agent_run_manager import agent_run_manager
-from sandbox.repositories import TaskPlanProjectionRepository
+from sandbox.repositories import (
+    AgentEventIdConflictError,
+    AgentRunNotFoundError,
+    TaskPlanProjectionRepository,
+)
 from sandbox.config import settings
 from sandbox.security.ownership import assert_resource_owner, require_actor
 
@@ -305,15 +309,18 @@ def interrupt_agent_run(run_id: str, body: InterruptBody | None = None):
     status_code=201,
 )
 def append_agent_event(run_id: str, body: AgentEventAppend):
-    if not agent_run_manager.get_run(run_id):
+    try:
+        return agent_run_manager.append_event(
+            run_id,
+            event_type=body.type,
+            payload=body.payload,
+            event_id=body.event_id,
+            schema_version=body.schema_version,
+        )
+    except AgentRunNotFoundError:
         raise HTTPException(status_code=404, detail="Agent run not found")
-    return agent_run_manager.append_event(
-        run_id,
-        event_type=body.type,
-        payload=body.payload,
-        event_id=body.event_id,
-        schema_version=body.schema_version,
-    )
+    except AgentEventIdConflictError:
+        raise HTTPException(status_code=409, detail="event_id belongs to another run")
 
 
 @router.get("/agent-runs/{run_id}/events", response_model=list[AgentEventResponse])
