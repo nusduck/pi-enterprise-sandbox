@@ -44,6 +44,14 @@ _LONG_PY = (
 
 def test_network_command_detection_matches_shell_tokens_not_source_substrings():
     assert contains_network_command("nc example.com 80") is True
+    for command in (
+        "pip3 install requests",
+        "python -m pip install requests",
+        "npm ci",
+        "yarn install",
+        "pnpm install",
+    ):
+        assert contains_network_command(command) is True
     assert contains_network_command("python -c 'ncc=len(rows)'") is False
     assert contains_network_command("python -c 'variance=len(rows)'") is False
 

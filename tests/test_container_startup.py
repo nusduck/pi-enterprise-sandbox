@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-from pathlib import Path
+import re
 import subprocess
+from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -56,6 +57,9 @@ def test_compose_parameterizes_runtime_defaults() -> None:
         "SANDBOX_MAX_MEMORY_MB: ${SANDBOX_MAX_MEMORY_MB:-512}",
         "SANDBOX_IPTABLES_ENABLED: ${SANDBOX_IPTABLES_ENABLED:-true}",
         "SANDBOX_NETWORK_MODE:",
+        "SANDBOX_POLICY_PROFILE: ${SANDBOX_POLICY_PROFILE:-balanced}",
+        "SANDBOX_ISOLATION_BACKEND: ${SANDBOX_ISOLATION_BACKEND:-bubblewrap}",
+        "SANDBOX_ISOLATION_REQUIRED: ${SANDBOX_ISOLATION_REQUIRED:-true}",
         "SANDBOX_ALLOWED_CLIENT_CIDRS:",
         "SANDBOX_TRUSTED_PROXY_CIDRS:",
         "SANDBOX_BIND_HOST:",
@@ -64,6 +68,26 @@ def test_compose_parameterizes_runtime_defaults() -> None:
     ]
     for fragment in expected_fragments:
         assert fragment in text
+
+
+def test_compose_projects_symmetric_policy_into_agent_and_sandbox_only() -> None:
+    text = COMPOSE.read_text()
+
+    def service_block(name: str) -> str:
+        marker = f"\n  {name}:\n"
+        start = text.index(marker) + len(marker)
+        remainder = text[start:]
+        next_service = re.search(r"\n  [A-Za-z][A-Za-z0-9_-]*:\n", remainder)
+        return remainder if next_service is None else remainder[:next_service.start()]
+
+    agent = service_block("agent")
+    sandbox = service_block("sandbox")
+    api_server = service_block("api-server")
+    for block in (agent, sandbox):
+        assert "SANDBOX_POLICY_PROFILE: ${SANDBOX_POLICY_PROFILE:-balanced}" in block
+        assert "SANDBOX_ISOLATION_BACKEND: ${SANDBOX_ISOLATION_BACKEND:-bubblewrap}" in block
+        assert "SANDBOX_ISOLATION_REQUIRED: ${SANDBOX_ISOLATION_REQUIRED:-true}" in block
+    assert "SANDBOX_POLICY_PROFILE" not in api_server
 
 
 def test_sandbox_requirements_cover_plan_dependency_buckets() -> None:

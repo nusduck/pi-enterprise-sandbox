@@ -6,6 +6,8 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   resolveDeploymentEnv,
+  requestedPolicyProfile,
+  resolvePolicyProfile,
   validateProductionConfig,
   composeSystemPrompt,
   PLATFORM_SYSTEM_PROMPT_LAYER,
@@ -90,6 +92,45 @@ describe('validateProductionConfig', () => {
         SKILLS_MODE: 'readonly',
         LLMIO_BASE_URL: 'https://llm.example.com/v1',
       }),
+    );
+  });
+
+  it('rejects balanced production policy even when bwrap is effective', () => {
+    assert.throws(
+      () =>
+        validateProductionConfig({
+          DEPLOYMENT_ENV: 'production',
+          AGENT_INTERNAL_TOKEN: STRONG,
+          SANDBOX_API_TOKEN: STRONG,
+          SKILLS_MODE: 'readonly',
+          LLMIO_BASE_URL: 'https://llm.example.com/v1',
+          SANDBOX_POLICY_PROFILE: 'balanced',
+          SANDBOX_ISOLATION_BACKEND: 'bubblewrap',
+          SANDBOX_ISOLATION_REQUIRED: 'true',
+        }),
+      /SANDBOX_POLICY_PROFILE=balanced is forbidden in production/,
+    );
+  });
+});
+
+describe('policy profile resolution', () => {
+  it('defaults to strict and accepts balanced only with required bwrap', () => {
+    assert.equal(requestedPolicyProfile({}), 'strict');
+    assert.equal(
+      resolvePolicyProfile({
+        SANDBOX_POLICY_PROFILE: 'balanced',
+        SANDBOX_ISOLATION_BACKEND: 'bubblewrap',
+        SANDBOX_ISOLATION_REQUIRED: 'true',
+      }),
+      'balanced',
+    );
+  });
+
+  it('fails fast for invalid or ineffective balanced isolation', () => {
+    assert.throws(() => requestedPolicyProfile({ SANDBOX_POLICY_PROFILE: 'loose' }), /Invalid/);
+    assert.throws(
+      () => resolvePolicyProfile({ SANDBOX_POLICY_PROFILE: 'balanced' }),
+      /requires effective.*bubblewrap/i,
     );
   });
 });

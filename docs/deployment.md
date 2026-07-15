@@ -83,6 +83,24 @@ curl -sf https://localhost/nginx/status
 | `SANDBOX_API_TOKEN` | — | Sandbox API 令牌。生成: `openssl rand -hex 32`。所有 API 调用需带 `X-API-Key` header |
 | `MCP_SERVERS_JSON` | `[]` | Agent Runtime 外部 MCP Server 配置；凭据使用环境变量引用 |
 
+### Execution policy profile
+
+| 变量 | 开发 Compose 默认值 | 生产值 | 说明 |
+|------|-------------------|--------|------|
+| `SANDBOX_POLICY_PROFILE` | `balanced` | `strict` | `balanced` 只在 required Bubblewrap 生效时放行常见包管理器命令的审批前置门；网络仍由 `SANDBOX_NETWORK_MODE` 决定 |
+| `SANDBOX_ISOLATION_BACKEND` | `bubblewrap` | `bubblewrap` | `balanced` 的必要隔离后端 |
+| `SANDBOX_ISOLATION_REQUIRED` | `true` | `true` | 隔离 preflight 失败即不 Ready |
+
+`strict` 是代码默认值，也是生产唯一允许的 profile。`balanced` 不放宽 session/path
+归属、Skill 根只读、最小环境、能力丢弃、设备/namespace hard-deny 或审批开关；它只
+减少 `pip/npm/yarn/pnpm install` 等常见开发命令的重复审批。若 `network_mode=disabled`，
+进程启动器仍会拒绝这些需要网络的命令；若使用 `allowlist`，请只配置必要的目的 CIDR
+和端口，并保持 metadata/link-local 目的地阻断。
+
+迁移与回滚：开发环境可先设置 `SANDBOX_POLICY_PROFILE=strict`，验证 `/ready` 和审批
+流后再切换到 `balanced`。出现异常时把该变量改回 `strict` 并重启 Agent/Sandbox；不需要
+迁移 workspace 或数据库。生产 overlay 固定为 `strict`，不能通过 `.env` 覆盖。
+
 ### 入站网络（监听 vs 来源白名单）
 
 | 变量 | 默认值 | 说明 |

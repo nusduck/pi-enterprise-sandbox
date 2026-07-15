@@ -29,6 +29,40 @@ const WEAK_SECRET_MARKERS = [
   'xxx',
 ];
 
+const POLICY_PROFILES = new Set(['strict', 'balanced']);
+
+function envTruthy(value) {
+  return ['1', 'true', 'yes', 'on'].includes(String(value ?? '').trim().toLowerCase());
+}
+
+function effectiveBubblewrap(env = process.env) {
+  return (
+    String(env.SANDBOX_ISOLATION_BACKEND || '').trim().toLowerCase() === 'bubblewrap' &&
+    envTruthy(env.SANDBOX_ISOLATION_REQUIRED)
+  );
+}
+
+export function requestedPolicyProfile(env = process.env) {
+  const raw = String(env.SANDBOX_POLICY_PROFILE || 'strict').trim().toLowerCase();
+  if (!POLICY_PROFILES.has(raw)) {
+    throw new Error(
+      `Invalid SANDBOX_POLICY_PROFILE=${raw || '<empty>'}; expected strict|balanced`,
+    );
+  }
+  return raw;
+}
+
+/** Balanced fails fast unless required bwrap is effective. */
+export function resolvePolicyProfile(env = process.env) {
+  const requested = requestedPolicyProfile(env);
+  if (requested === 'balanced' && !effectiveBubblewrap(env)) {
+    throw new Error(
+      'SANDBOX_POLICY_PROFILE=balanced requires effective SANDBOX_ISOLATION_BACKEND=bubblewrap and SANDBOX_ISOLATION_REQUIRED=true',
+    );
+  }
+  return requested;
+}
+
 /**
  * Whether interactive approval is required for high-risk tools.
  * Default true. When false, approval_required tools execute with bypass audit;
@@ -134,6 +168,7 @@ export function validateProductionConfig(env = process.env, opts = {}) {
   const internal = String(env.AGENT_INTERNAL_TOKEN || '').trim();
   const sandboxToken = String(env.SANDBOX_API_TOKEN || '').trim();
   const skillsMode = opts.skillsMode || resolveSkillsMode(env);
+  const requestedProfile = requestedPolicyProfile(env);
 
   if (!internal) {
     errors.push('AGENT_INTERNAL_TOKEN must be non-empty in production');
@@ -153,6 +188,15 @@ export function validateProductionConfig(env = process.env, opts = {}) {
 
   if (skillsMode === SKILLS_MODE.DEVELOPMENT) {
     errors.push('SKILLS_MODE=development is forbidden in production (use readonly)');
+  }
+
+  if (requestedProfile === 'balanced' && !effectiveBubblewrap(env)) {
+    errors.push(
+      'SANDBOX_POLICY_PROFILE=balanced requires effective SANDBOX_ISOLATION_BACKEND=bubblewrap and SANDBOX_ISOLATION_REQUIRED=true',
+    );
+  }
+  if (requestedProfile === 'balanced') {
+    errors.push('SANDBOX_POLICY_PROFILE=balanced is forbidden in production (use strict)');
   }
 
   const baseUrl = String(env.LLMIO_BASE_URL || '').toLowerCase();
@@ -205,6 +249,7 @@ export function effectiveConfig(cfg = config) {
     MODEL_MAX_TOKENS: cfg.MODEL_MAX_TOKENS,
     MODEL_REGISTRY_PATH: cfg.MODEL_REGISTRY_PATH || process.env.MODEL_REGISTRY_PATH || '<default>',
     APPROVAL_ENABLED: cfg.APPROVAL_ENABLED,
+    POLICY_PROFILE: cfg.POLICY_PROFILE,
     SKILLS_MODE: cfg.SKILLS_MODE,
     SKILLS_ROOT: cfg.SKILLS_ROOT,
     SKILLS_INSTALL_LOCAL_ALLOWLIST: cfg.SKILLS_INSTALL_LOCAL_ALLOWLIST,
@@ -278,6 +323,8 @@ export const config = {
   NODE_ENV: process.env.NODE_ENV || 'development',
   DEPLOYMENT_ENV: resolveDeploymentEnv(),
   APPROVAL_ENABLED: resolveApprovalEnabled(),
+  /** strict by default; balanced only activates with effective required bwrap. */
+  POLICY_PROFILE: resolvePolicyProfile(),
   /** External MCP servers owned by Agent Runtime/MCP Gateway, never Sandbox. */
   MCP_SERVERS: resolveMcpServers(),
   /**

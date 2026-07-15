@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pathlib import PurePosixPath
 
+import pytest
+
 from sandbox.isolation import LaunchSpec
 from sandbox.isolation.bubblewrap import BubblewrapIsolationBackend
 from sandbox.paths import SandboxPathScope
@@ -96,3 +98,37 @@ def test_bwrap_can_start_process_in_persistent_temp(tmp_path):
     chdir_index = prepared.argv.index("--chdir")
     assert prepared.argv[chdir_index + 1] == "/tmp/service"
 
+
+def test_bwrap_rejects_unknown_network_mode(tmp_path):
+    context = _context(tmp_path)
+    skills = tmp_path / "skills"
+    skills.mkdir()
+    backend = BubblewrapIsolationBackend(executable="/usr/bin/bwrap", skills_root=skills)
+
+    with pytest.raises(ValueError, match="network mode"):
+        backend.prepare(
+            LaunchSpec(
+                context=context,
+                argv=["bash", "-c", "echo ok"],
+                network_mode="open-everything",
+            )
+        )
+
+
+def test_bwrap_never_inherits_host_secret_environment(tmp_path, monkeypatch):
+    context = _context(tmp_path)
+    skills = tmp_path / "skills"
+    skills.mkdir()
+    monkeypatch.setenv("SANDBOX_API_TOKEN", "host-secret-that-must-not-cross")
+    backend = BubblewrapIsolationBackend(executable="/usr/bin/bwrap", skills_root=skills)
+
+    prepared = backend.prepare(
+        LaunchSpec(
+            context=context,
+            argv=["bash", "-c", "echo ok"],
+            network_mode="disabled",
+        )
+    )
+
+    assert "host-secret-that-must-not-cross" not in prepared.argv
+    assert "SANDBOX_API_TOKEN" not in prepared.argv

@@ -1,6 +1,7 @@
 """Tests for ToolPolicyChecker."""
 
 import pytest
+from sandbox.config import Settings
 from sandbox.models import PolicyDecision, RiskLevel, ToolCallCheck
 from sandbox.services.policy_checker import (
     POLICY_VERSION,
@@ -84,3 +85,103 @@ class TestToolPolicyChecker:
         ))
         assert decision.decision == PolicyDecision.APPROVAL_REQUIRED.value
         assert decision.allowed is False
+
+    def test_balanced_allows_package_manager_but_keeps_network_and_destructive_gates(
+        self, monkeypatch
+    ):
+        from sandbox.config import settings
+
+        monkeypatch.setattr(settings, "policy_profile", "balanced")
+        monkeypatch.setattr(settings, "isolation_backend", "bubblewrap")
+        monkeypatch.setattr(settings, "isolation_required", True)
+        checker = ToolPolicyChecker()
+
+        package = checker.check(ToolCallCheck(
+            session_id="s1", tool_name="bash", command="npm install marked",
+        ))
+        assert package.decision == PolicyDecision.ALLOW.value
+
+        network = checker.check(ToolCallCheck(
+            session_id="s1", tool_name="bash", command="curl https://example.com",
+        ))
+        assert network.decision == PolicyDecision.APPROVAL_REQUIRED.value
+
+        for command in (
+            "wget https://example.com/file",
+            "nc example.com 80",
+            "ncat example.com 80",
+        ):
+            assert checker.check(ToolCallCheck(
+                session_id="s1", tool_name="bash", command=command,
+            )).decision == PolicyDecision.APPROVAL_REQUIRED.value
+
+        assert checker.check(ToolCallCheck(
+            session_id="s1", tool_name="bash", command="timeout 10 npm install marked",
+        )).decision == PolicyDecision.ALLOW.value
+        assert checker.check(ToolCallCheck(
+            session_id="s1", tool_name="bash",
+            command="sh -c 'npm install marked && echo done'",
+        )).decision == PolicyDecision.ALLOW.value
+
+        destructive = checker.check(ToolCallCheck(
+            session_id="s1", tool_name="bash", command="rm -r build",
+        ))
+        assert destructive.decision == PolicyDecision.APPROVAL_REQUIRED.value
+
+    def test_balanced_profile_requires_effective_bubblewrap(self, monkeypatch):
+        with pytest.raises(ValueError, match="bubblewrap"):
+            Settings(
+                policy_profile="balanced",
+                isolation_backend="direct",
+                isolation_required=False,
+                database_url="sqlite:////tmp/profile-invalid.db",
+                allowed_client_cidrs=["127.0.0.1/32"],
+            )
+
+    def test_checker_rejects_runtime_profile_drift(self, monkeypatch):
+        from sandbox.config import settings
+
+        monkeypatch.setattr(settings, "policy_profile", "balanced")
+        monkeypatch.setattr(settings, "isolation_backend", "direct")
+        monkeypatch.setattr(settings, "isolation_required", False)
+        with pytest.raises(ValueError, match="bubblewrap"):
+            ToolPolicyChecker()
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "echo ok | sudo id",
+            "env -i sudo id",
+            "env -S 'sudo id'",
+            "timeout 10 /usr/bin/sudo id",
+            "timeout --signal KILL 10 sudo id",
+            "timeout -s KILL 10 /usr/bin/unshare -Ur true",
+            "command /bin/mount /dev/sda /mnt",
+            "command -x /bin/mount /dev/sda /mnt",
+            "exec /usr/bin/unshare -Ur true",
+            "setcap cap_net_raw+ep /usr/bin/ping",
+            "sysctl -w kernel.unprivileged_userns_clone=1",
+            "sh -c 'sudo id'",
+            "bash -c 'unshare -Ur true'",
+            "timeout --unknown 10 npm install marked",
+            "echo x > /dev/sda",
+            "cat /run/secrets/token",
+        ],
+    )
+    def test_escape_and_privilege_boundaries_are_hard_denied(self, checker, command):
+        assert checker.is_blocked_command(command) is True
+
+    def test_host_path_is_hard_denied_but_logical_workspace_path_is_allowed(self, checker):
+        outside = checker.check(ToolCallCheck(
+            session_id="s1", tool_name="read_file", path="/etc/passwd",
+        ))
+        assert outside.decision == PolicyDecision.HARD_DENY.value
+
+        inside = checker.check(ToolCallCheck(
+            session_id="s1", tool_name="read_file", path="/home/sandbox/workspace/a.txt",
+        ))
+        assert inside.decision == PolicyDecision.ALLOW.value
+
+    def test_container_scoped_diagnostics_remain_available(self, checker):
+        for command in ("ip addr", "ip route show", "getcap /usr/bin/python", "sysctl kernel.ostype"):
+            assert checker.is_blocked_command(command) is False

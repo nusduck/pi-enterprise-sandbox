@@ -29,6 +29,7 @@ _LOCAL_DATA_ROOT = Path.home() / ".pi-enterprise-sandbox"
 DeploymentEnv = Literal["development", "production"]
 NetworkMode = Literal["disabled", "allowlist", "unrestricted"]
 IsolationBackendName = Literal["direct", "bubblewrap"]
+PolicyProfile = Literal["strict", "balanced"]
 
 # Production JWT secret must be high-entropy (recommend: openssl rand -hex 32).
 _MIN_JWT_SECRET_LEN = 32
@@ -82,6 +83,25 @@ def _normalize_network_mode(value: str | None) -> str:
             "expected disabled|allowlist|unrestricted"
         )
     return mode
+
+
+def _normalize_policy_profile(value: str | None) -> str:
+    raw = (value or "strict").strip().lower()
+    profile = raw
+    if profile not in ("strict", "balanced"):
+        raise ValueError(
+            f"Invalid SANDBOX_POLICY_PROFILE={value!r}; expected strict|balanced"
+        )
+    return profile
+
+
+def _normalize_isolation_backend(value: str | None) -> str:
+    raw = (value or "direct").strip().lower()
+    if raw not in ("direct", "bubblewrap"):
+        raise ValueError(
+            f"Invalid SANDBOX_ISOLATION_BACKEND={value!r}; expected direct|bubblewrap"
+        )
+    return raw
 
 
 def _is_weak_secret(value: str) -> bool:
@@ -152,6 +172,9 @@ class Settings(BaseSettings):
     bwrap_path: str = "/usr/bin/bwrap"
     bwrap_uid: int = 10001
     bwrap_gid: int = 10001
+    # strict is the safe code default. balanced is only valid with required
+    # Bubblewrap isolation; Compose enables it explicitly for development.
+    policy_profile: str = "strict"
 
     # ── Resource limits ──────────────────────────────────────────────
     execution_timeout_seconds: int = 120
@@ -270,6 +293,16 @@ class Settings(BaseSettings):
     def _validate_network_mode(cls, value: Any) -> str:
         return _normalize_network_mode(None if value is None else str(value))
 
+    @field_validator("policy_profile", mode="before")
+    @classmethod
+    def _validate_policy_profile(cls, value: Any) -> str:
+        return _normalize_policy_profile(None if value is None else str(value))
+
+    @field_validator("isolation_backend", mode="before")
+    @classmethod
+    def _validate_isolation_backend(cls, value: Any) -> str:
+        return _normalize_isolation_backend(None if value is None else str(value))
+
     @field_validator("deployment_env", mode="before")
     @classmethod
     def _validate_deployment_env(cls, value: Any) -> str:
@@ -314,6 +347,15 @@ class Settings(BaseSettings):
 
         # Hard invariant: metadata IPs cannot be opened via env.
         object.__setattr__(self, "block_metadata_ips", True)
+
+        if self.policy_profile == "balanced" and (
+            self.isolation_backend != "bubblewrap" or not self.isolation_required
+        ):
+            raise ValueError(
+                "SANDBOX_POLICY_PROFILE=balanced requires "
+                "SANDBOX_ISOLATION_BACKEND=bubblewrap and "
+                "SANDBOX_ISOLATION_REQUIRED=true"
+            )
 
         # Fail fast on illegal CIDR / empty bind — never treat as allow-all.
         try:
@@ -366,6 +408,11 @@ def validate_production_settings(s: Settings | None = None) -> None:
         errors.append(
             "SANDBOX_NETWORK_MODE=unrestricted is forbidden in production "
             "(use disabled or allowlist)"
+        )
+
+    if cfg.policy_profile != "strict":
+        errors.append(
+            "SANDBOX_POLICY_PROFILE=balanced is forbidden in production (use strict)"
         )
 
     if cfg.isolation_backend != "bubblewrap":

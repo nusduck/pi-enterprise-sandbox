@@ -46,6 +46,8 @@ class BubblewrapIsolationBackend:
         return root if suffix in ("", ".") else f"{root}/{suffix}"
 
     def prepare(self, spec: LaunchSpec) -> PreparedLaunch:
+        if spec.network_mode not in {"disabled", "allowlist", "unrestricted"}:
+            raise ValueError(f"Unsupported sandbox network mode: {spec.network_mode!r}")
         workspace = spec.context.physical_workspace.resolve(strict=True)
         temp = spec.context.physical_temp.resolve(strict=True)
         logical_cwd = self._logical_cwd(spec.relative_cwd, spec.cwd_scope)
@@ -86,6 +88,10 @@ class BubblewrapIsolationBackend:
             "/app/.pi",
         ]
 
+        # Disabled gets a private network namespace. allowlist/unrestricted
+        # intentionally retain the container network because the entrypoint's
+        # iptables policy is the network authority; no policy profile bypasses
+        # that control.
         if spec.network_mode == "disabled":
             args.append("--unshare-net")
 

@@ -18,6 +18,8 @@ import {
   createSandboxSecurityExtension,
   resolveApprovalEnabled,
   filterToolResultContent,
+  resolvePolicyProfile,
+  isBlockedSandboxPath,
 } from '../packages/enterprise-agent-kit/extensions/policy/index.js';
 import { resolveApprovalEnabled as configResolveApproval } from '../config.js';
 import {
@@ -87,11 +89,73 @@ describe('policy matrix allow / approval_required / hard_deny', () => {
     assert.equal(commandRequiresApproval('curl https://x'), true);
   });
 
+  it('balanced relaxes only package-manager approval with effective bwrap', () => {
+    const options = {
+      policyProfile: 'balanced',
+      isolationBackend: 'bubblewrap',
+      isolationRequired: true,
+    };
+    assert.equal(resolvePolicyProfile({
+      SANDBOX_POLICY_PROFILE: 'balanced',
+      SANDBOX_ISOLATION_BACKEND: 'bubblewrap',
+      SANDBOX_ISOLATION_REQUIRED: 'true',
+    }), 'balanced');
+    assert.equal(evaluateToolPolicy('bash', { command: 'npm install marked' }, options).decision, POLICY_DECISION.ALLOW);
+    assert.equal(evaluateToolPolicy('bash', { command: 'timeout 10 npm install marked' }, options).decision, POLICY_DECISION.ALLOW);
+    assert.equal(evaluateToolPolicy('bash', { command: "sh -c 'npm install marked && echo done'" }, options).decision, POLICY_DECISION.ALLOW);
+    assert.equal(evaluateToolPolicy('bash', { command: 'curl https://x' }, options).decision, POLICY_DECISION.APPROVAL_REQUIRED);
+    assert.equal(evaluateToolPolicy('bash', { command: 'nc example.com 80' }, options).decision, POLICY_DECISION.APPROVAL_REQUIRED);
+    for (const command of ['wget https://x/file', 'ncat example.com 80']) {
+      assert.equal(evaluateToolPolicy('bash', { command }, options).decision, POLICY_DECISION.APPROVAL_REQUIRED);
+    }
+    assert.throws(
+      () => resolvePolicyProfile({ SANDBOX_POLICY_PROFILE: 'balanced' }),
+      /requires effective.*bubblewrap/i,
+    );
+  });
+
   it('hard-denies blocked prefixes', () => {
-    for (const cmd of ['sudo ls', 'rm -rf /', 'chmod 777 /etc', 'dd if=/dev/zero']) {
+    for (const cmd of [
+      'sudo ls',
+      'rm -rf /',
+      'chmod 777 /etc',
+      'dd if=/dev/zero',
+      'echo ok | sudo id',
+      'env -i sudo id',
+      "env -S 'sudo id'",
+      'timeout 10 /usr/bin/sudo id',
+      'timeout --signal KILL 10 sudo id',
+      'timeout -s KILL 10 /usr/bin/unshare -Ur true',
+      'command /bin/mount /dev/sda /mnt',
+      'command -x /bin/mount /dev/sda /mnt',
+      'exec /usr/bin/unshare -Ur true',
+      'setcap cap_net_raw+ep /usr/bin/ping',
+      'sysctl -w kernel.unprivileged_userns_clone=1',
+      'ip link add dummy0 type dummy',
+      'ip link set dummy0 up',
+      'ip netns add escape',
+      "sh -c 'sudo id'",
+      "bash -c 'unshare -Ur true'",
+      'timeout --unknown 10 npm install marked',
+      'echo x > /dev/sda',
+      'cat /run/secrets/token',
+    ]) {
       assert.equal(isHardDenyCommand(cmd), true, cmd);
       const p = evaluateToolPolicy('bash', { command: cmd });
       assert.equal(p.decision, POLICY_DECISION.HARD_DENY, cmd);
+    }
+  });
+
+  it('hard-denies host paths while retaining logical workspace and skill reads', () => {
+    assert.equal(isBlockedSandboxPath('/etc/passwd', 'read'), true);
+    assert.equal(isBlockedSandboxPath('/home/sandbox/workspace/a.txt', 'read'), false);
+    assert.equal(isBlockedSandboxPath('/home/sandbox/skill/demo/SKILL.md', 'read'), false);
+    assert.equal(isBlockedSandboxPath('/home/sandbox/workspace/../other', 'read'), true);
+  });
+
+  it('allows container-scoped read-only diagnostics', () => {
+    for (const command of ['ip addr', 'ip route show', 'getcap /usr/bin/node', 'sysctl kernel.ostype']) {
+      assert.equal(isHardDenyCommand(command), false, command);
     }
   });
 

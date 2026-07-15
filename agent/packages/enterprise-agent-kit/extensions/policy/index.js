@@ -19,7 +19,41 @@ import {
 } from '../../../../skills/paths.js';
 
 /** Immutable policy catalog version echoed in audits and approval responses. */
-export const POLICY_VERSION = '2026-07-11.2';
+export const POLICY_VERSION = '2026-07-15.1';
+export const POLICY_PROFILES = Object.freeze({ STRICT: 'strict', BALANCED: 'balanced' });
+
+function isTruthy(value) {
+  return ['1', 'true', 'yes', 'on'].includes(String(value ?? '').trim().toLowerCase());
+}
+
+function hasEffectiveBubblewrap(env = process.env) {
+  return (
+    String(env?.SANDBOX_ISOLATION_BACKEND || '').trim().toLowerCase() === 'bubblewrap' &&
+    isTruthy(env?.SANDBOX_ISOLATION_REQUIRED)
+  );
+}
+
+/** Return the requested profile, rejecting unknown values. */
+export function requestedPolicyProfile(env = process.env) {
+  const raw = String(env?.SANDBOX_POLICY_PROFILE || 'strict').trim().toLowerCase();
+  if (!['strict', 'balanced'].includes(raw)) {
+    throw new Error(
+      `Invalid SANDBOX_POLICY_PROFILE=${raw || '<empty>'}; expected strict|balanced`,
+    );
+  }
+  return raw;
+}
+
+/** Balanced never activates unless the effective Sandbox is required bwrap. */
+export function resolvePolicyProfile(env = process.env) {
+  const requested = requestedPolicyProfile(env);
+  if (requested === POLICY_PROFILES.BALANCED && !hasEffectiveBubblewrap(env)) {
+    throw new Error(
+      'SANDBOX_POLICY_PROFILE=balanced requires effective SANDBOX_ISOLATION_BACKEND=bubblewrap and SANDBOX_ISOLATION_REQUIRED=true',
+    );
+  }
+  return requested;
+}
 
 /** Side-effect classes for concurrency control. */
 export const TOOL_SIDE_EFFECT = Object.freeze({
@@ -118,6 +152,49 @@ const HARD_DENY_PREFIXES = [
   '< /dev/',
 ];
 
+const PRIVILEGE_COMMANDS = new Set(['sudo', 'su', 'doas', 'runuser']);
+const NAMESPACE_COMMANDS = new Set([
+  'bwrap', 'capsh', 'chroot', 'mount', 'newgidmap', 'newuidmap',
+  'nsenter', 'pivot_root', 'setns', 'setpriv', 'umount', 'unshare',
+]);
+const DEVICE_COMMANDS = new Set([
+  'blkdiscard', 'blockdev', 'fdisk', 'insmod', 'iptables', 'ip6tables',
+  'losetup', 'mknod', 'modprobe', 'nft', 'rmmod', 'swapon', 'swapoff',
+]);
+const CAPABILITY_COMMANDS = new Set(['setcap']);
+const NETWORK_MUTATION_VERBS = new Set([
+  'add', 'append', 'change', 'del', 'delete', 'flush', 'prepend', 'remove', 'replace', 'set',
+]);
+const SAFE_DEVICE_NAMES = new Set([
+  'full', 'null', 'random', 'stderr', 'stdin', 'stdout', 'tty', 'urandom', 'zero',
+]);
+const SENSITIVE_HOST_PATHS = [
+  '/etc/shadow',
+  '/etc/gshadow',
+  '/etc/passwd-',
+  '/run/secrets',
+  '/var/run/secrets',
+  '/var/sandbox/workspaces',
+  '/var/sandbox/tmp',
+  '/sandbox/workspaces',
+  '/sandbox/tmp',
+  '/sandbox/data',
+  '/var/run/docker.sock',
+];
+const SENSITIVE_PROC_RE = /\/proc\/\d+\/(?:environ|mem|syscall)(?:\b|\/)/i;
+const DANGEROUS_DEVICE_REDIRECT_RE = new RegExp(
+  String.raw`(?:>{1,2}|<)\s*(?:/dev/(?!${[...SAFE_DEVICE_NAMES].join('|')}(?:\b|$))[^\s;&|()]+|/proc/(?:sys|kcore|keys)(?:\/|\b)|/sys(?:\/|\b))`,
+  'i',
+);
+const METADATA_DESTINATIONS = [
+  '169.254.',
+  'metadata.google.internal',
+  'metadata.amazonaws.com',
+  '169.254.170.2',
+];
+const POLICY_PARSE_ERROR = '__policy_parse_error__';
+const SHELL_WRAPPERS = new Set(['sh', 'bash', 'dash', 'zsh', 'ksh']);
+
 /** Bash substrings that elevate to human approval when APPROVAL_ENABLED. */
 const APPROVAL_REQUIRED_SUBSTRINGS = [
   'rm -rf',
@@ -130,16 +207,38 @@ const APPROVAL_REQUIRED_SUBSTRINGS = [
   'ncat ',
   'pip install',
   'pip3 install',
+  'python -m pip install',
+  'python3 -m pip install',
   'npm install',
   'npm i ',
+  'npm ci',
   'yarn add',
+  'yarn install',
   'pnpm add',
+  'pnpm install',
   'chmod ',
   'chown ',
   'kill ',
   'pkill ',
   'eval ',
   'base64 -d',
+];
+
+const BALANCED_APPROVAL_SUBSTRINGS = [
+  'rm -rf',
+  'rm -r ',
+  'mkfs',
+  'dd if=',
+  'chmod ',
+  'chown ',
+  'kill ',
+  'pkill ',
+  'eval ',
+  'base64 -d',
+  'curl ',
+  'wget ',
+  'nc ',
+  'ncat ',
 ];
 
 /** Tools that are always high-risk (approval_required unless hard-denied). */
@@ -170,25 +269,343 @@ export function classifyToolSideEffect(toolName) {
   return TOOL_SIDE_EFFECT.WRITE;
 }
 
-/**
- * @param {string} command
- * @returns {boolean}
- */
+function splitShellSegments(command) {
+  const segments = [];
+  let current = '';
+  let quote = null;
+  let escaped = false;
+  const text = String(command || '');
+  for (let i = 0; i < text.length; i += 1) {
+    const char = text[i];
+    if (escaped) {
+      current += char;
+      escaped = false;
+      continue;
+    }
+    if (char === '\\' && !quote) {
+      current += char;
+      escaped = true;
+      continue;
+    }
+    if (quote) {
+      current += char;
+      if (char === quote) quote = null;
+      continue;
+    }
+    if (char === "'" || char === '"') {
+      current += char;
+      quote = char;
+      continue;
+    }
+    if (char === ';' || char === '&' || char === '|' || char === '\n') {
+      if (char === '&' || char === '|') {
+        const next = text[i + 1];
+        if (next === char) i += 1;
+      }
+      segments.push(current);
+      current = '';
+      continue;
+    }
+    current += char;
+  }
+  segments.push(current);
+  return segments;
+}
+
+function tokenizeShellSegment(segment) {
+  const words = [];
+  let current = '';
+  let quote = null;
+  let escaped = false;
+  for (const char of String(segment || '')) {
+    if (escaped) {
+      current += char;
+      escaped = false;
+      continue;
+    }
+    if (char === '\\' && !quote) {
+      escaped = true;
+      continue;
+    }
+    if (quote) {
+      if (char === quote) quote = null;
+      else current += char;
+      continue;
+    }
+    if (char === "'" || char === '"') {
+      quote = char;
+      continue;
+    }
+    if (/\s/.test(char)) {
+      if (current) {
+        words.push(current);
+        current = '';
+      }
+      continue;
+    }
+    current += char;
+  }
+  if (escaped || quote) return null;
+  if (current) words.push(current);
+  return words;
+}
+
+function shellSegments(command, depth = 0) {
+  if (depth > 8) return [[POLICY_PARSE_ERROR]];
+  const parsed = [];
+  for (const segment of splitShellSegments(command)) {
+    const words = tokenizeShellSegment(segment);
+    if (!words || words.length === 0) {
+      if (words === null) parsed.push([POLICY_PARSE_ERROR]);
+      continue;
+    }
+    while (words.length > 0) {
+      if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(words[0])) {
+        words.shift();
+        continue;
+      }
+      const executable = String(words[0]).split('/').pop().toLowerCase();
+      if (executable === 'command') {
+        words.shift();
+        while (words.length > 0 && words[0] !== '--' && words[0].startsWith('-')) {
+          if (words.shift() !== '-p') {
+            parsed.push([POLICY_PARSE_ERROR]);
+            words.length = 0;
+            break;
+          }
+        }
+        if (words[0] === '--') words.shift();
+        continue;
+      }
+      if (executable === 'exec') {
+        words.shift();
+        while (words.length > 0 && words[0] !== '--' && words[0].startsWith('-')) {
+          const option = words.shift();
+          if (option === '-a') {
+            if (words.length === 0) {
+              parsed.push([POLICY_PARSE_ERROR]);
+              words.length = 0;
+              break;
+            }
+            words.shift();
+          } else if (option.startsWith('-a') && option.length > 2) {
+            continue;
+          } else if (option.startsWith('-') && [...option.slice(1)].every((char) => ['c', 'l'].includes(char))) {
+            continue;
+          } else {
+            parsed.push([POLICY_PARSE_ERROR]);
+            words.length = 0;
+            break;
+          }
+        }
+        if (words[0] === '--') words.shift();
+        continue;
+      }
+      if (executable === 'env') {
+        words.shift();
+        while (words.length > 0) {
+          if (words[0] === '--') {
+            words.shift();
+            break;
+          }
+          if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(words[0])) {
+            words.shift();
+            continue;
+          }
+          if (!words[0].startsWith('-')) break;
+          const option = words.shift();
+          if (['-u', '--unset', '-C', '--chdir', '-S', '--split-string'].includes(option)) {
+            if (words.length === 0) {
+              parsed.push([POLICY_PARSE_ERROR]);
+              words.length = 0;
+              break;
+            }
+            const value = words.shift();
+            if (['-S', '--split-string'].includes(option)) {
+              parsed.push(...shellSegments(value, depth + 1));
+            }
+          } else if (
+            option.startsWith('-u') ||
+            option.startsWith('--unset=') ||
+            option.startsWith('-C') ||
+            option.startsWith('--chdir=')
+          ) {
+            continue;
+          } else if (option.startsWith('-S')) {
+            parsed.push(...shellSegments(option.slice(2), depth + 1));
+          } else if (option.startsWith('--split-string=')) {
+            parsed.push(...shellSegments(option.split('=', 2)[1], depth + 1));
+          } else if (['-i', '--ignore-environment', '-0', '--null'].includes(option)) {
+            continue;
+          } else {
+            parsed.push([POLICY_PARSE_ERROR]);
+            words.length = 0;
+            break;
+          }
+        }
+        continue;
+      }
+      if (executable === 'timeout') {
+        words.shift();
+        while (words.length > 0 && words[0] !== '--' && words[0].startsWith('-')) {
+          const option = words.shift();
+          if (['-k', '-s', '--kill-after', '--signal'].includes(option)) {
+            if (words.length === 0) {
+              parsed.push([POLICY_PARSE_ERROR]);
+              words.length = 0;
+              break;
+            }
+            words.shift();
+          } else if (
+            option.startsWith('-k') ||
+            option.startsWith('-s') ||
+            option.startsWith('--kill-after=') ||
+            option.startsWith('--signal=')
+          ) {
+            continue;
+          } else if (['--preserve-status', '--foreground', '--verbose'].includes(option)) {
+            continue;
+          } else {
+            parsed.push([POLICY_PARSE_ERROR]);
+            words.length = 0;
+            break;
+          }
+        }
+        if (words[0] === '--') words.shift();
+        if (words.length > 0) words.shift(); // duration, e.g. 10 or 1m
+        else parsed.push([POLICY_PARSE_ERROR]);
+        continue;
+      }
+      if (SHELL_WRAPPERS.has(executable)) {
+        words.shift();
+        let payload = null;
+        let shellError = false;
+        while (words.length > 0) {
+          const option = words.shift();
+          if (option === '-c') {
+            if (words.length === 0) shellError = true;
+            else payload = words.shift();
+            break;
+          }
+          if (option.startsWith('-')) {
+            if (['-e', '-i', '-l', '-s', '-u', '-v', '-x', '-f'].includes(option)) continue;
+            if (['-o', '+o'].includes(option)) {
+              if (words.length === 0) shellError = true;
+              else words.shift();
+              if (shellError) break;
+              continue;
+            }
+            if (
+              option.includes('c') &&
+              [...option.slice(1)].every((char) => ['c', 'e', 'i', 'l', 's', 'u', 'v', 'x', 'f'].includes(char))
+            ) {
+              if (words.length === 0) shellError = true;
+              else payload = words.shift();
+              break;
+            }
+            shellError = true;
+            break;
+          }
+          // A script path is opaque to this command-only parser.
+          words.unshift(option);
+          break;
+        }
+        if (shellError) parsed.push([POLICY_PARSE_ERROR]);
+        else if (payload !== null) parsed.push(...shellSegments(payload, depth + 1));
+        words.length = 0;
+        break;
+      }
+      break;
+    }
+    if (words.length > 0) parsed.push(words);
+  }
+  return parsed;
+}
+
+function isCapabilityOrNetworkMutation(executable, args) {
+  if (executable === 'setcap') return true;
+  if (['ip', 'ip6'].includes(executable)) {
+    return args.includes('netns') || args.some((arg) => NETWORK_MUTATION_VERBS.has(arg));
+  }
+  if (executable === 'sysctl') {
+    return args.some(
+      (arg) =>
+        ['-w', '--write', '-p', '--system'].includes(arg) ||
+        arg.startsWith('--write=') ||
+        arg.includes('='),
+    );
+  }
+  return false;
+}
+
+/** @param {string} command */
 export function isHardDenyCommand(command) {
   const cmd = String(command || '').trim();
   if (!cmd) return false;
   const lower = cmd.toLowerCase();
-  return HARD_DENY_PREFIXES.some((p) => lower.startsWith(p) || cmd.startsWith(p));
+  if (HARD_DENY_PREFIXES.some((p) => lower.startsWith(p) || cmd.startsWith(p))) return true;
+  if (SENSITIVE_HOST_PATHS.some((path) => lower.includes(path))) return true;
+  if (SENSITIVE_PROC_RE.test(lower) || DANGEROUS_DEVICE_REDIRECT_RE.test(cmd)) return true;
+  if (METADATA_DESTINATIONS.some((destination) => lower.includes(destination))) return true;
+
+  for (const words of shellSegments(cmd)) {
+    if (words[0] === POLICY_PARSE_ERROR) return true;
+    const executable = String(words[0]).split('/').pop().toLowerCase();
+    const args = words.slice(1).map((word) => word.toLowerCase());
+    if (PRIVILEGE_COMMANDS.has(executable) || NAMESPACE_COMMANDS.has(executable)) return true;
+    if (DEVICE_COMMANDS.has(executable) || CAPABILITY_COMMANDS.has(executable)) return true;
+    if (isCapabilityOrNetworkMutation(executable, args)) return true;
+    if (executable === 'chmod' && args.includes('777')) return true;
+    if (executable === 'chown') return true;
+    if (executable === 'dd' && args.some((arg) => arg.startsWith('if='))) return true;
+    if (executable === 'mkfs' || executable.startsWith('mkfs.') || ['fdisk', 'parted'].includes(executable)) {
+      return true;
+    }
+    if (executable === 'rm') {
+      const recursive = args.some((arg) => arg.startsWith('-') && arg.includes('r'));
+      const rootTarget = args.some((arg) => ['/', '/*', '--no-preserve-root'].includes(arg));
+      if (recursive && rootTarget) return true;
+    }
+  }
+  return false;
 }
 
 /**
  * @param {string} command
+ * @param {string} [profile]
  * @returns {boolean}
  */
-export function commandRequiresApproval(command) {
+export function commandRequiresApproval(command, profile = resolvePolicyProfile()) {
   const cmd = String(command || '').toLowerCase();
   if (!cmd) return false;
-  return APPROVAL_REQUIRED_SUBSTRINGS.some((s) => cmd.includes(s));
+  const patterns = profile === POLICY_PROFILES.BALANCED
+    ? BALANCED_APPROVAL_SUBSTRINGS
+    : APPROVAL_REQUIRED_SUBSTRINGS;
+  return patterns.some((s) => cmd.includes(s));
+}
+
+/**
+ * @param {unknown} value
+ * @param {string} [toolName]
+ * @returns {boolean}
+ */
+export function isBlockedSandboxPath(value, toolName = '') {
+  const raw = String(value || '').trim().replaceAll('\\', '/');
+  if (!raw || raw.includes('\0') || raw.startsWith('~')) return true;
+  if (/^[A-Za-z]:\//.test(raw) || raw.split('/').includes('..')) return true;
+  if (!raw.startsWith('/')) return false;
+  if (['/home/sandbox/workspace', '/tmp'].some((root) => raw === root || raw.startsWith(`${root}/`))) {
+    return false;
+  }
+  if (
+    ['read', 'read_file', 'list_files', 'preview_file', 'view_file', 'cat', 'head', 'tail'].includes(toolName) &&
+    ['/home/sandbox/skill', '/sandbox/skills', '/app/.pi/skills'].some(
+      (root) => raw === root || raw.startsWith(`${root}/`),
+    )
+  ) {
+    return false;
+  }
+  return true;
 }
 
 /**
@@ -203,8 +620,31 @@ export function evaluateToolPolicy(toolName, params = {}, options = {}) {
   const side_effect = classifyToolSideEffect(name);
   const base = { side_effect, policy_version: POLICY_VERSION };
   const skillRoots = options.skillRoots || DEFAULT_SKILL_ROOTS;
+  const policyEnv = {
+    ...process.env,
+    ...(options.policyEnv || {}),
+  };
+  if (options.policyProfile != null) {
+    policyEnv.SANDBOX_POLICY_PROFILE = String(options.policyProfile);
+  }
+  if (options.isolationBackend != null) {
+    policyEnv.SANDBOX_ISOLATION_BACKEND = String(options.isolationBackend);
+  }
+  if (options.isolationRequired != null) {
+    policyEnv.SANDBOX_ISOLATION_REQUIRED = String(options.isolationRequired);
+  }
 
   try {
+    const policyProfile = resolvePolicyProfile(policyEnv);
+    if (params.path && isBlockedSandboxPath(params.path, name)) {
+      return {
+        ...base,
+        decision: POLICY_DECISION.HARD_DENY,
+        reason: 'blocked path: outside the session sandbox roots',
+        risk_level: 'high',
+      };
+    }
+
     // Skill root path policy: generic tools cannot mutate shared skills
     if (SKILL_ROOT_BLOCKED_TOOLS.has(name)) {
       if (params.path && isUnderSkillRoot(params.path, skillRoots)) {
@@ -258,7 +698,7 @@ export function evaluateToolPolicy(toolName, params = {}, options = {}) {
           risk_level: 'high',
         };
       }
-      if (commandRequiresApproval(params.command)) {
+      if (commandRequiresApproval(params.command, policyProfile)) {
         return {
           ...base,
           decision: POLICY_DECISION.APPROVAL_REQUIRED,

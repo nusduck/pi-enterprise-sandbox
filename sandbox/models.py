@@ -293,7 +293,7 @@ class ToolCallDecision(BaseModel):
     decision: str = "allow"
     reason: str = ""
     risk_level: RiskLevel = RiskLevel.LOW
-    policy_version: str = "2026-07-11.1"
+    policy_version: str = "2026-07-15.1"
 
 
 class ApprovalCheckRequest(BaseModel):

@@ -86,6 +86,40 @@ class TestNetworkMode:
                 allowed_client_cidrs=["127.0.0.1/32"],
             )
 
+    def test_policy_profile_defaults_strict(self):
+        s = Settings(
+            database_url="sqlite:////tmp/profile-default.db",
+            allowed_client_cidrs=["127.0.0.1/32"],
+        )
+        assert s.policy_profile == "strict"
+
+    def test_invalid_policy_profile_fails_validation(self):
+        with pytest.raises(ValueError, match="SANDBOX_POLICY_PROFILE"):
+            Settings(
+                policy_profile="permissive",
+                database_url="sqlite:////tmp/profile-invalid-name.db",
+                allowed_client_cidrs=["127.0.0.1/32"],
+            )
+
+    def test_balanced_policy_is_valid_only_with_required_bubblewrap(self):
+        s = Settings(
+            policy_profile="balanced",
+            isolation_backend="bubblewrap",
+            isolation_required=True,
+            database_url="sqlite:////tmp/profile-balanced.db",
+            allowed_client_cidrs=["127.0.0.1/32"],
+        )
+        assert s.policy_profile == "balanced"
+
+    def test_balanced_policy_fails_production_validation(self):
+        s = Settings(**_production_kwargs(
+            policy_profile="balanced",
+            isolation_backend="bubblewrap",
+            isolation_required=True,
+        ))
+        with pytest.raises(ProductionConfigError, match="POLICY_PROFILE"):
+            validate_production_settings(s)
+
 
 class TestProductionUnsafeMatrix:
     def test_safe_production_config_passes(self):
@@ -200,6 +234,7 @@ class TestEnvCatalogConsistency:
         required = [
             "DEPLOYMENT_ENV=",
             "SANDBOX_NETWORK_MODE=",
+            "SANDBOX_POLICY_PROFILE",
             "SANDBOX_API_TOKEN=",
             "AGENT_INTERNAL_TOKEN",
             "SKILLS_MODE=",
@@ -237,6 +272,16 @@ class TestEnvCatalogConsistency:
         assert "POSTGRES_PASSWORD:?Set" in text
         assert "DEPLOYMENT_ENV: production" in text
         assert "SANDBOX_AUTH_ALLOW_PUBLIC_REGISTER: \"false\"" in text
+        assert "SANDBOX_POLICY_PROFILE: strict" in text
+        assert "SANDBOX_ISOLATION_BACKEND: bubblewrap" in text
+        assert 'SANDBOX_ISOLATION_REQUIRED: "true"' in text
+        agent_start = text.index("\n  agent:\n")
+        agent_block = text[agent_start:]
+        api_start = text.index("\n  api-server:\n")
+        api_block = text[api_start:agent_start]
+        assert "SANDBOX_POLICY_PROFILE: strict" in agent_block
+        assert "SANDBOX_ISOLATION_BACKEND: bubblewrap" in agent_block
+        assert "SANDBOX_POLICY_PROFILE" not in api_block
         # Agent + api-server + sandbox must not publish host ports
         assert text.count("ports: []") >= 3
 

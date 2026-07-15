@@ -69,6 +69,7 @@ services:
       SANDBOX_AUTH_ALLOW_PUBLIC_REGISTER: "false"
       # Outbound: disabled or allowlist only (never unrestricted).
       SANDBOX_NETWORK_MODE: ${SANDBOX_NETWORK_MODE:-disabled}
+      SANDBOX_POLICY_PROFILE: strict
       SANDBOX_ISOLATION_BACKEND: bubblewrap
       SANDBOX_ISOLATION_REQUIRED: "true"
       SANDBOX_CORS_ORIGINS: ${SANDBOX_CORS_ORIGINS:?Set SANDBOX_CORS_ORIGINS for production (no wildcard)}
@@ -132,6 +133,9 @@ services:
       DEPLOYMENT_ENV: production
       SANDBOX_API_TOKEN: ${SANDBOX_API_TOKEN:?Set SANDBOX_API_TOKEN for production}
       AGENT_INTERNAL_TOKEN: ${AGENT_INTERNAL_TOKEN:?Set AGENT_INTERNAL_TOKEN for production}
+      SANDBOX_POLICY_PROFILE: strict
+      SANDBOX_ISOLATION_BACKEND: bubblewrap
+      SANDBOX_ISOLATION_REQUIRED: "true"
       SKILLS_MODE: readonly
       SKILLS_ROOT: /home/sandbox/skill
       # Clear any product prompt file path unless explicitly provided.
