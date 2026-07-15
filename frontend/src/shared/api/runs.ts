@@ -90,7 +90,7 @@ export async function listRunTools(runId: string): Promise<ToolExecutionSnapshot
       );
     }
     const data = await resp.json();
-    const rows = Array.isArray(data)
+    const rows: unknown[] = Array.isArray(data)
       ? data
       : Array.isArray(data?.tools)
         ? data.tools
