@@ -531,6 +531,38 @@ describe('local install + atomic replace', () => {
     assert.ok(audits.some((a) => a.action === 'install' && a.result === 'success'));
     assert.ok(audits.some((a) => a.action === 'reload' && a.result === 'success'));
   });
+
+  it('uses stable sanitized ledger keys when the SDK omits a tool call id', async () => {
+    const prepared = [];
+    const client = {
+      async prepareToolExecution(body) {
+        prepared.push(body);
+        return { status: 'prepared' };
+      },
+      async markToolExecuting() {},
+      async markToolTerminal() {},
+    };
+    const manager = {
+      isDevelopment: () => true,
+      async edit(params) {
+        return { path: params.path, bytes: Buffer.byteLength(params.content) };
+      },
+    };
+    const [edit] = createSkillTools({
+      manager,
+      client,
+      getMeta: () => ({ run_id: 'run_ledger', session_id: 'session_ledger' }),
+    }).filter((tool) => tool.name === 'skill_edit');
+    const params = { path: 'demo-skill/notes.md', content: 'private content' };
+
+    await edit.execute(null, params);
+    await edit.execute(null, params);
+
+    assert.equal(prepared.length, 2);
+    assert.equal(prepared[0].idempotency_key, prepared[1].idempotency_key);
+    assert.match(prepared[0].idempotency_key, /^idem_skill_edit_/);
+    assert.equal(JSON.stringify(prepared[0].arguments).includes('private content'), false);
+  });
 });
 
 describe('git install (local bare repo)', () => {

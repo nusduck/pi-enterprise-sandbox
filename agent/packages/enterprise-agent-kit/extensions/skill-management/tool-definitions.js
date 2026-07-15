@@ -65,9 +65,9 @@ export function createSkillTools(ctx = {}) {
         run_id: meta.run_id || null,
         params: ledgerParams,
       });
-      const idem =
-        `tc_${callId}` ||
-        `idem_${toolName}_${createHash('sha256').update(basis).digest('hex').slice(0, 24)}`;
+      const idem = toolCallId
+        ? `tc_${toolCallId}`
+        : `idem_${toolName}_${createHash('sha256').update(basis).digest('hex').slice(0, 24)}`;
       let active = false;
       try {
         const prepared = await sb.prepareToolExecution({
