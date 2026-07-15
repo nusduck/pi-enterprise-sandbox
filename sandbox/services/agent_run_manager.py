@@ -35,10 +35,26 @@ class AgentRunManager:
         tools: ToolExecutionRepository | None = None,
         conversations: ConversationRepository | None = None,
     ) -> None:
-        self.runs = runs or AgentRunRepository()
-        self.events = events or AgentEventRepository()
-        self.tools = tools or ToolExecutionRepository()
-        self.conversations = conversations or ConversationRepository()
+        provided = [
+            repo
+            for repo in (runs, events, tools, conversations)
+            if repo is not None
+        ]
+        database_urls = {repo.db.url for repo in provided}
+        if len(database_urls) > 1:
+            raise ValueError(
+                "AgentRunManager repositories must use the same database"
+            )
+
+        # Partial dependency injection must still form one transactional
+        # aggregate. Falling back each missing repository to the module-global
+        # database can otherwise create a run in one database and append its
+        # first event to another.
+        shared_db = provided[0].db if provided else None
+        self.runs = runs or AgentRunRepository(shared_db)
+        self.events = events or AgentEventRepository(shared_db)
+        self.tools = tools or ToolExecutionRepository(shared_db)
+        self.conversations = conversations or ConversationRepository(shared_db)
 
     def start_run(
         self,

@@ -28,6 +28,13 @@ def mgr(db):
     )
 
 
+def test_partial_repository_injection_uses_one_database(db, mgr):
+    assert mgr.runs.db is db
+    assert mgr.events.db is db
+    assert mgr.tools.db is db
+    assert mgr.conversations.db is db
+
+
 @pytest.fixture
 def conversation(db):
     repo = ConversationRepository(db)
