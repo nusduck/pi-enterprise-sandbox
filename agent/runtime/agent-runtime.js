@@ -18,6 +18,7 @@ import { createSandboxClient } from '../infrastructure/sandbox-client.js';
 import { config, SKILLS_MODE } from '../config.js';
 import {
   POLICY_VERSION,
+  filterToolResultContent,
 } from '../packages/enterprise-agent-kit/extensions/policy/index.js';
 import {
   extractMessageText,
@@ -66,6 +67,7 @@ import {
   clearPendingInput,
   registerPendingInput,
 } from '../services/interaction-waiter.js';
+import { summarizeToolArguments } from './tool-payload-sanitizer.js';
 import {
   ModelRegistryError,
   aggregateUsageFromMessages,
@@ -355,6 +357,7 @@ export async function resolveAgentSessionManager(client, conversationId, opts = 
  *   onInputSuspend?: (pending: object) => Promise<void>|void,
  *   agent_profile_id?: string,
  *   preApprovedAttempt?: object|null,
+ *   resume_tool_call?: object|null,
  * }} opts
  * @returns {Promise<{ status: TurnStatus, run_id?: string|null, conversation_id?: string|null, model_id?: string|null, usage?: object|null, error?: string, pending_approval?: object|null }>}
  */
@@ -369,6 +372,7 @@ export async function runAgentTurn(opts) {
     onApprovalSuspend = null,
     onInputSuspend = null,
     preApprovedAttempt = null,
+    resume_tool_call = null,
   } = opts;
 
   const budget = opts.budget || createBudgetTracker();
@@ -405,6 +409,8 @@ export async function runAgentTurn(opts) {
   // operation. It is consumed only after Sandbox returns approved, so a
   // changed operation cannot inherit the prior decision.
   let activePreApprovedAttempt = preApprovedAttempt;
+  /** @type {Array<object>|null} */
+  let sandboxToolDefinitions = null;
   const getPreApprovedAttempt = () => activePreApprovedAttempt;
   const claimPreApprovedAttempt = () => {
     const attempt = activePreApprovedAttempt;
@@ -731,6 +737,9 @@ export async function runAgentTurn(opts) {
     claimPreApprovedAttempt,
     releasePreApprovedAttempt,
     consumePreApprovedAttempt,
+    onToolsReady: (definitions) => {
+      sandboxToolDefinitions = definitions;
+    },
     onApprovalSuspend: handleApprovalSuspend,
     approvalNotifier: (ev) => {
       try {
@@ -1077,8 +1086,8 @@ export async function runAgentTurn(opts) {
     }
 
     const allMessages = Array.isArray(messages) ? messages : [];
-    const priorMessages = allMessages.slice(0, -1);
-    const lastMsg = allMessages[allMessages.length - 1];
+    let priorMessages = allMessages.slice(0, -1);
+    let lastMsg = allMessages[allMessages.length - 1];
     // Prefer full SDK session restore over last-40 plain-text injection.
     // Only inject text history for legacy conversations with no agent session yet
     // (first bind after upgrade) or force-inMemory rollback mode.
@@ -1086,7 +1095,9 @@ export async function runAgentTurn(opts) {
       sessionHandle?.restored &&
       (sessionHandle.sessionManager?.getEntries?.()?.length || 0) > 0;
     if (!sdkHasHistory) {
-      const history = toAgentHistoryMessages(priorMessages);
+      const history = toAgentHistoryMessages(
+        resume_tool_call ? allMessages : priorMessages,
+      );
       if (history.length > 0) {
         session.agent.state.messages = history;
         console.log(
@@ -1151,6 +1162,97 @@ export async function runAgentTurn(opts) {
         assistantText += text;
       },
     });
+
+    let resumePromptText = null;
+    if (resume_tool_call?.approval_id) {
+      const replayTool = Array.isArray(sandboxToolDefinitions)
+        ? sandboxToolDefinitions.find(
+            (tool) => tool?.name === resume_tool_call.tool_name,
+          )
+        : null;
+
+      if (replayTool && resume_tool_call.tool_call_id) {
+        const replayId = String(resume_tool_call.tool_call_id);
+        const replayName = String(resume_tool_call.tool_name || 'tool');
+        const replayArgs = summarizeToolArguments(
+          replayName,
+          resume_tool_call.params || {},
+        );
+        let replayResult;
+        const replayStart = {
+          type: 'tool_start',
+          id: replayId,
+          name: replayName,
+          args: replayArgs,
+          approval_replay: true,
+        };
+        emit(replayStart);
+        await persistEvent('tool_start', replayStart);
+        try {
+          // Execute the exact approved operation with the original tool-call
+          // ID. The ledger can then transition the parked row from
+          // waiting_approval → executing → terminal without a new
+          // model-generated attempt.
+          replayResult = await replayTool.execute(
+            replayId,
+            resume_tool_call.params || {},
+            undefined,
+            undefined,
+            undefined,
+          );
+        } catch (err) {
+          if (err instanceof ApprovalSuspendedError || err?.name === 'ApprovalSuspendedError') {
+            throw err;
+          }
+          replayResult = {
+            content: [{ type: 'text', text: `Error: ${err?.message || String(err)}` }],
+            details: { isError: true },
+            isError: true,
+          };
+        }
+        const filtered = filterToolResultContent(replayResult?.content || []);
+        const resultText = filtered.content
+          .filter((part) => part?.type === 'text' && part.text)
+          .map((part) => String(part.text))
+          .join('\n')
+          .slice(0, 20_000);
+        const safeReplayResult = {
+          ...(replayResult || {}),
+          content: filtered.content,
+        };
+        const replayError = Boolean(replayResult?.isError);
+        const replayEnd = {
+          type: 'tool_end',
+          id: replayId,
+          name: replayName,
+          result: safeReplayResult,
+          isError: replayError,
+          approval_replay: true,
+        };
+        emit(replayEnd);
+        await persistEvent('tool_end', replayEnd);
+        resumePromptText =
+          `[system] Approval ${resume_tool_call.approval_id} granted. ` +
+          `The original ${replayName} tool call was executed exactly once with ` +
+          `the approved arguments. Its result${replayError ? ' (error)' : ''} is:\n` +
+          `${resultText || '(no textual output)'}` +
+          '\nContinue the task without reissuing this same tool call.';
+      } else {
+        // MCP/other extension approvals do not expose a local definition;
+        // preserve the model-mediated fallback for those tools.
+        resumePromptText =
+          `[system] Approval ${resume_tool_call.approval_id} granted for tool ` +
+          `\`${resume_tool_call.tool_name}\`. Re-execute that tool with the same arguments and continue.`;
+      }
+    }
+
+    if (resumePromptText) {
+      // Keep the original user turn in legacy text history, but make the
+      // replay result the only new prompt. This prevents the model from
+      // generating another copy of the approved tool call.
+      priorMessages = allMessages;
+      lastMsg = { role: 'user', content: resumePromptText };
+    }
 
     if (lastMsg) {
       // ADR §4.5: explicit current-turn attachment context (no uploads/ scan)
@@ -1614,20 +1716,12 @@ export async function resumeAgentTurnAfterApproval(opts) {
     /* ignore */
   }
 
-  const continueText =
-    `[system] Approval ${pending.approval_id} granted for tool ` +
-    `\`${pending.tool_name}\`. Re-execute that tool with the same arguments and continue.`;
-
   const prior = Array.isArray(messages) ? messages : [];
-  const nextMessages = [
-    ...prior,
-    { role: 'user', content: continueText },
-  ];
 
   return runAgentTurn({
     run_id: opts.sandbox_run_id || undefined,
     resume_existing_run: Boolean(opts.sandbox_run_id),
-    messages: nextMessages,
+    messages: prior,
     conversation_id: conversation_id || pending.conversation_id || null,
     auth,
     trace_id,
@@ -1639,6 +1733,7 @@ export async function resumeAgentTurnAfterApproval(opts) {
     onInputSuspend,
     agent_profile_id: opts.agent_profile_id,
     preApprovedAttempt,
+    resume_tool_call: pending,
   });
 }
 

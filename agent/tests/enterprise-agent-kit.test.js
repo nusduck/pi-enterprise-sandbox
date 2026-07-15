@@ -26,13 +26,18 @@ function loadFactories(factories) {
 
 test('enterprise package registers only profile-allowed Sandbox tools', () => {
   const profile = resolveAgentProfile();
+  const ready = [];
   const tools = [
     { name: 'read', description: 'read', parameters: {}, execute() {} },
     { name: 'bash', description: 'bash', parameters: {}, execute() {} },
     { name: 'not_allowed', description: 'bad', parameters: {}, execute() {} },
   ];
   const loaded = loadFactories(
-    createEnterpriseAgentKit({ profile, sandboxTools: tools }),
+    createEnterpriseAgentKit({
+      profile,
+      sandboxTools: tools,
+      sandboxToolOptions: { onToolsReady: (available) => ready.push(available) },
+    }),
   );
   assert.ok(loaded.tools.has('read'));
   assert.ok(loaded.tools.has('bash'));
@@ -41,6 +46,7 @@ test('enterprise package registers only profile-allowed Sandbox tools', () => {
   assert.ok(loaded.tools.has('context_compact'));
   assert.ok(loaded.tools.has('structured_output'));
   assert.equal(loaded.tools.has('not_allowed'), false);
+  assert.deepEqual(ready[0].map((tool) => tool.name), ['read', 'bash']);
 });
 
 test('dynamic resources are discovered through the Extension lifecycle', async () => {

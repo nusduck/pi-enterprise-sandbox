@@ -7,6 +7,7 @@ export function createSandboxToolsExtension(options = {}) {
   const tools = definitions.filter(
     (tool) => tool?.name && allowed.has(tool.name),
   );
+  options.toolOptions?.onToolsReady?.(tools);
 
   return function sandboxToolsExtension(pi) {
     for (const tool of tools) {
