@@ -11,7 +11,7 @@
  * Security:
  * - preExecuteGate + ensureApproved (fail-closed for write tools)
  * - workspace write mutex for serial side-effect tools
- * - APPROVAL_ENABLED maps approval_required → execute + bypass audit;
+ * - APPROVAL_MODE controls approval_required (ask / auto_approve / deny);
  *   hard_deny is never overridden
  * - Tool Execution Ledger (ADR §4.4): prepare → executing → terminal
  *   with idempotency so lost HTTP responses do not double side-effects
@@ -25,12 +25,13 @@ import * as defaultSb from '../../../../infrastructure/sandbox-client.js';
 import { config } from '../../../../config.js';
 import {
   POLICY_VERSION,
+  APPROVAL_MODE,
   classifyToolSideEffect,
+  normalizeApprovalMode,
   preExecuteGate,
   workspaceWriteMutex,
   emitToolAudit,
   buildToolAuditEvent,
-  POLICY_DECISION,
 } from '../policy/index.js';
 import {
   isUnderSkillRoot,
@@ -45,6 +46,22 @@ import { summarizeToolArguments } from '../../../../runtime/tool-payload-sanitiz
 /** Terminal ledger statuses that must never re-execute side effects. */
 const LEDGER_TERMINAL = new Set(['succeeded', 'failed', 'cancelled', 'unknown']);
 
+function canonicalize(value) {
+  if (Array.isArray(value)) return value.map(canonicalize);
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.keys(value)
+        .sort()
+        .map((key) => [key, canonicalize(value[key])]),
+    );
+  }
+  return value;
+}
+
+function stableSerialize(value) {
+  return JSON.stringify(canonicalize(value));
+}
+
 /**
  * @typedef {object} SandboxToolsContext
  * @property {ReturnType<typeof defaultSb.createSandboxClient> | typeof defaultSb} [client]
@@ -53,11 +70,14 @@ const LEDGER_TERMINAL = new Set(['succeeded', 'failed', 'cancelled', 'unknown'])
  * @property {() => string | null | undefined} [getWorkspaceKey]
  * @property {((ev: object) => void) | null} [approvalNotifier]
  * @property {boolean} [approvalEnabled]
+ * @property {'ask'|'auto_approve'|'deny'} [approvalMode]
  * @property {() => object} [getMeta]
  * @property {((ev: object) => void) | null} [auditSink]
  * @property {(pending: object) => Promise<void> | void} [onApprovalSuspend]
- * @property {() => Set<string>|null|undefined} [getPreApprovedIds]
- * @property {string|null} [toolCallIdHint]
+ * @property {() => object|null|undefined} [getPreApprovedAttempt]
+ * @property {() => object|null|undefined} [claimPreApprovedAttempt]
+ * @property {(attempt: object) => void} [releasePreApprovedAttempt]
+ * @property {() => void} [consumePreApprovedAttempt]
  */
 
 /**
@@ -76,15 +96,29 @@ export function createSandboxTools(ctx = {}) {
       : () => getSessionId() || 'default';
   const approvalNotifier =
     typeof ctx.approvalNotifier === 'function' ? ctx.approvalNotifier : null;
-  const approvalEnabled =
-    ctx.approvalEnabled != null ? Boolean(ctx.approvalEnabled) : config.APPROVAL_ENABLED !== false;
+  const approvalMode = normalizeApprovalMode(
+    ctx.approvalMode ??
+      (ctx.approvalEnabled == null
+        ? config.APPROVAL_MODE || APPROVAL_MODE.ASK
+        : ctx.approvalEnabled),
+  );
   const getMeta = typeof ctx.getMeta === 'function' ? ctx.getMeta : () => ({});
   const auditSink = typeof ctx.auditSink === 'function' ? ctx.auditSink : null;
   const skillRoots = ctx.skillRoots || config.SKILL_ROOTS || DEFAULT_SKILL_ROOTS;
   const onApprovalSuspend =
     typeof ctx.onApprovalSuspend === 'function' ? ctx.onApprovalSuspend : null;
-  const getPreApprovedIds =
-    typeof ctx.getPreApprovedIds === 'function' ? ctx.getPreApprovedIds : () => null;
+  const getPreApprovedAttempt =
+    typeof ctx.getPreApprovedAttempt === 'function' ? ctx.getPreApprovedAttempt : () => null;
+  const claimPreApprovedAttempt =
+    typeof ctx.claimPreApprovedAttempt === 'function'
+      ? ctx.claimPreApprovedAttempt
+      : () => getPreApprovedAttempt();
+  const releasePreApprovedAttempt =
+    typeof ctx.releasePreApprovedAttempt === 'function'
+      ? ctx.releasePreApprovedAttempt
+      : () => {};
+  const consumePreApprovedAttempt =
+    typeof ctx.consumePreApprovedAttempt === 'function' ? ctx.consumePreApprovedAttempt : () => {};
 
   function metaNow() {
     return {
@@ -129,15 +163,20 @@ export function createSandboxTools(ctx = {}) {
    * Run policy check. When pending_approval, park the run via checkpoint +
    * ApprovalSuspendedError (no fixed-time in-tool polling — ADR §4.8).
    * Fail-closed for all write-class tools when the check endpoint errors.
-   * When APPROVAL_ENABLED=false, remote may auto-approve with bypass; local
-   * hard_deny still blocks before this is called.
+   * When APPROVAL_MODE=deny, approval-required tools are rejected
+   * deterministically. Only explicit auto_approve bypasses the gate.
    *
    * @param {string} toolName
    * @param {object} [params]
    * @param {string|null} [toolCallId]
    * @returns {Promise<{ ok: boolean, reason?: string, approval_id?: string, policy_version?: string, approval_bypassed?: boolean }>}
    */
-  async function ensureApproved(toolName, params = {}, toolCallId = null) {
+  async function ensureApproved(
+    toolName,
+    params = {},
+    toolCallId = null,
+    idempotencyKey = null,
+  ) {
     const sessionId = getSessionId();
     if (!sessionId) {
       // No session: fail-closed for write tools (cannot re-check Sandbox)
@@ -152,7 +191,7 @@ export function createSandboxTools(ctx = {}) {
     const local = preExecuteGate({
       toolName,
       params,
-      approvalEnabled,
+      approvalMode,
       meta: metaNow(),
       auditSink,
     });
@@ -164,6 +203,34 @@ export function createSandboxTools(ctx = {}) {
       };
     }
 
+    const meta = metaNow();
+    const operationFingerprint = makeApprovalOperationFingerprint(toolName, params);
+    const preApprovedAttempt = getPreApprovedAttempt();
+    const matchesPreApprovedAttempt =
+      approvalMode === APPROVAL_MODE.ASK &&
+      preApprovedAttempt?.idempotency_key &&
+      preApprovedAttempt?.operation_fingerprint === operationFingerprint &&
+      preApprovedAttempt?.tool_name === toolName &&
+      (!preApprovedAttempt.sandbox_session_id ||
+        preApprovedAttempt.sandbox_session_id === sessionId) &&
+      (!preApprovedAttempt.run_id || preApprovedAttempt.run_id === (meta.run_id || null));
+    const claimedPreApprovedAttempt = matchesPreApprovedAttempt
+      ? claimPreApprovedAttempt()
+      : null;
+    if (matchesPreApprovedAttempt && claimedPreApprovedAttempt !== preApprovedAttempt) {
+      return {
+        ok: false,
+        reason: 'Approval resume authorization is already in use',
+        policy_version: POLICY_VERSION,
+      };
+    }
+    const canUsePreApprovedAttempt = Boolean(
+      preApprovedAttempt && claimedPreApprovedAttempt === preApprovedAttempt,
+    );
+    const approvalKey = canUsePreApprovedAttempt
+      ? claimedPreApprovedAttempt.idempotency_key
+      : idempotencyKey;
+
     // Remote Sandbox re-check is authoritative (dual enforcement). Always call for
     // write-class tools so approval UX / bypass audit stay consistent even when
     // the local catalog would auto-allow.
@@ -174,10 +241,12 @@ export function createSandboxTools(ctx = {}) {
         command: params.command || null,
         path: params.path || null,
         timeout: params.timeout || null,
+        idempotency_key: approvalKey,
       });
     } catch (err) {
       // Fail-closed for write-class tools (includes bash, write, edit, submit_artifact, unknown)
       const side = classifyToolSideEffect(toolName);
+      if (claimedPreApprovedAttempt) releasePreApprovedAttempt(claimedPreApprovedAttempt);
       if (side === 'write') {
         return {
           ok: false,
@@ -189,6 +258,7 @@ export function createSandboxTools(ctx = {}) {
     }
 
     if (check.status === 'approved') {
+      if (canUsePreApprovedAttempt) consumePreApprovedAttempt();
       return {
         ok: true,
         policy_version: check.policy_version || POLICY_VERSION,
@@ -196,6 +266,7 @@ export function createSandboxTools(ctx = {}) {
       };
     }
     if (check.status === 'rejected') {
+      if (canUsePreApprovedAttempt) consumePreApprovedAttempt();
       return {
         ok: false,
         reason: check.reason || 'Rejected by policy',
@@ -203,6 +274,7 @@ export function createSandboxTools(ctx = {}) {
       };
     }
     if (check.status !== 'pending_approval' || !check.approval_id) {
+      if (canUsePreApprovedAttempt) releasePreApprovedAttempt(claimedPreApprovedAttempt);
       return {
         ok: false,
         reason: check.reason || 'Not allowed',
@@ -210,46 +282,10 @@ export function createSandboxTools(ctx = {}) {
       };
     }
 
-    // Pre-approved after resume: skip re-park for the same approval_id
-    const pre = getPreApprovedIds();
-    if (pre && pre.has(check.approval_id)) {
-      return {
-        ok: true,
-        approval_id: check.approval_id,
-        policy_version: check.policy_version || POLICY_VERSION,
-      };
-    }
-
-    // If approvals disabled client-side but sandbox still returned pending,
-    // treat pending as execute (audit was on sandbox when configured consistently).
-    if (!approvalEnabled) {
-      emitToolAudit(
-        buildToolAuditEvent({
-          toolName,
-          params,
-          policy: {
-            decision: POLICY_DECISION.ALLOW,
-            reason: 'approval bypassed client-side (APPROVAL_ENABLED=false)',
-            risk_level: check.risk_level || 'high',
-            policy_version: check.policy_version || POLICY_VERSION,
-            approval_bypassed: true,
-            side_effect: classifyToolSideEffect(toolName),
-          },
-          phase: 'approval_bypass',
-          meta: metaNow(),
-        }),
-        auditSink,
-      );
-      return {
-        ok: true,
-        approval_id: check.approval_id,
-        policy_version: check.policy_version || POLICY_VERSION,
-        approval_bypassed: true,
-      };
-    }
-
     const approvalId = check.approval_id;
-    const meta = metaNow();
+    // A resume token is only valid for the exact normalized operation and one
+    // successful approval-check response. A changed operation gets its own
+    // approval scope instead of inheriting the prior decision.
     const pending = {
       approval_id: approvalId,
       tool_name: toolName,
@@ -261,7 +297,10 @@ export function createSandboxTools(ctx = {}) {
       reason: check.reason,
       risk_level: check.risk_level,
       policy_version: check.policy_version || POLICY_VERSION,
+      idempotency_key: approvalKey,
+      operation_fingerprint: operationFingerprint,
     };
+    if (canUsePreApprovedAttempt) releasePreApprovedAttempt(claimedPreApprovedAttempt);
 
     if (approvalNotifier) {
       approvalNotifier({
@@ -273,6 +312,8 @@ export function createSandboxTools(ctx = {}) {
         reason: check.reason,
         risk_level: check.risk_level,
         policy_version: check.policy_version || POLICY_VERSION,
+        idempotency_key: approvalKey,
+        operation_fingerprint: operationFingerprint,
       });
     }
 
@@ -284,8 +325,8 @@ export function createSandboxTools(ctx = {}) {
   }
 
   /**
-   * Build a stable idempotency key for a tool call.
-   * Prefer toolCallId; fall back to hash of name+args so retries collide.
+   * Build a stable Tool Ledger idempotency key for a tool call.
+   * Prefer an SDK toolCallId; fall back to a hash of name+args so retries collide.
    * @param {string} toolName
    * @param {string|null} toolCallId
    * @param {object} params
@@ -293,13 +334,42 @@ export function createSandboxTools(ctx = {}) {
   function makeIdempotencyKey(toolName, toolCallId, params) {
     if (toolCallId) return `tc_${toolCallId}`;
     const meta = metaNow();
-    const basis = JSON.stringify({
+    const basis = stableSerialize({
       tool: toolName,
       run_id: meta.run_id || null,
       params: params || {},
     });
     const h = createHash('sha256').update(basis).digest('hex').slice(0, 24);
     return `idem_${toolName}_${h}`;
+  }
+
+  /**
+   * Fingerprint the normalized operation separately from the attempt key so
+   * a resume with a new SDK call ID can validate an exact one-shot match.
+   */
+  function makeApprovalOperationFingerprint(toolName, params) {
+    return createHash('sha256')
+      .update(stableSerialize({ tool_name: toolName, params: params || {} }))
+      .digest('hex');
+  }
+
+  /**
+   * Approval scope is per execution attempt. The SDK tool call identity keeps
+   * a retry of one attempt idempotent while allowing a later identical tool
+   * invocation to receive a fresh approval. Resume with a changed SDK ID uses
+   * the one-shot key carried in the pending approval above.
+   */
+  function makeApprovalIdempotencyKey(toolName, toolCallId, params) {
+    const meta = metaNow();
+    const basis = stableSerialize({
+      session_id: meta.session_id || getSessionId() || null,
+      run_id: meta.run_id || null,
+      tool_name: toolName,
+      tool_call_id: toolCallId || null,
+      params: params || {},
+    });
+    const h = createHash('sha256').update(basis).digest('hex').slice(0, 32);
+    return `approval_${h}`;
   }
 
   /**
@@ -348,12 +418,13 @@ export function createSandboxTools(ctx = {}) {
    * @param {string} toolName
    * @param {string|null} toolCallId
    * @param {object} params
-   * @param {(ctx: { callId: string, markWaitingApproval: () => Promise<void>, markExecuting: () => Promise<void> }) => Promise<object>} bodyFn
+   * @param {(ctx: { callId: string, idempotencyKey: string, approvalIdempotencyKey: string, markWaitingApproval: () => Promise<void>, markExecuting: () => Promise<void> }) => Promise<object>} bodyFn
    */
   async function withLedger(toolName, toolCallId, params, bodyFn) {
     const meta = metaNow();
     const callId = toolCallId || `tc_${randomUUID().replace(/-/g, '').slice(0, 16)}`;
-    const idempotencyKey = makeIdempotencyKey(toolName, callId, params);
+    const idempotencyKey = makeIdempotencyKey(toolName, toolCallId, params);
+    const approvalIdempotencyKey = makeApprovalIdempotencyKey(toolName, callId, params);
     const ledgerParams = summarizeToolArguments(toolName, params);
     const runId = meta.run_id || 'run_unknown';
     let ledgerActive = false;
@@ -425,7 +496,13 @@ export function createSandboxTools(ctx = {}) {
     let result;
     let thrown = null;
     try {
-      result = await bodyFn({ callId, markWaitingApproval, markExecuting });
+      result = await bodyFn({
+        callId,
+        idempotencyKey,
+        approvalIdempotencyKey,
+        markWaitingApproval,
+        markExecuting,
+      });
     } catch (err) {
       // Do not terminalize suspended approvals — resume will complete the ledger.
       if (err instanceof ApprovalSuspendedError || err?.name === 'ApprovalSuspendedError') {
@@ -512,7 +589,12 @@ export function createSandboxTools(ctx = {}) {
           if (side === 'write') {
             // Mark waiting before policy gate (resume keeps ledger at waiting_approval)
             await ctx.markWaitingApproval();
-            const gate = await ensureApproved(toolName, normalizedParams, ctx.callId);
+            const gate = await ensureApproved(
+              toolName,
+              normalizedParams,
+              ctx.callId,
+              ctx.approvalIdempotencyKey,
+            );
             if (!gate.ok) {
               return {
                 content: [

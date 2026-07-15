@@ -82,7 +82,11 @@ export function createEnterpriseAgentKit(options) {
         getMeta: options.getMeta,
         createApproval: options.createApproval,
         onApprovalSuspend: options.onApprovalSuspend,
-        getPreApprovedIds: options.getPreApprovedIds,
+        getPreApprovedAttempt: options.getPreApprovedAttempt,
+        claimPreApprovedAttempt: options.claimPreApprovedAttempt,
+        releasePreApprovedAttempt: options.releasePreApprovedAttempt,
+        consumePreApprovedAttempt: options.consumePreApprovedAttempt,
+        approvalMode: options.approvalMode,
       }),
     );
   }

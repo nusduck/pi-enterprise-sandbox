@@ -27,6 +27,7 @@ from sandbox.security.network_policy import (
 _LOCAL_DATA_ROOT = Path.home() / ".pi-enterprise-sandbox"
 
 DeploymentEnv = Literal["development", "production"]
+ApprovalMode = Literal["ask", "auto_approve", "deny"]
 NetworkMode = Literal["disabled", "allowlist", "unrestricted"]
 IsolationBackendName = Literal["direct", "bubblewrap"]
 PolicyProfile = Literal["strict", "balanced"]
@@ -102,6 +103,28 @@ def _normalize_isolation_backend(value: str | None) -> str:
             f"Invalid SANDBOX_ISOLATION_BACKEND={value!r}; expected direct|bubblewrap"
         )
     return raw
+
+
+def _normalize_approval_mode(value: Any) -> str:
+    raw = str(value or "ask").strip().lower().replace("-", "_")
+    if raw not in {"ask", "auto_approve", "deny"}:
+        raise ValueError(
+            f"Invalid APPROVAL_MODE={value!r}; expected ask|auto_approve|deny"
+        )
+    return raw
+
+
+def _parse_approval_enabled(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    raw = str(value).strip().lower()
+    if raw == "true":
+        return True
+    if raw == "false":
+        return False
+    raise ValueError(
+        f"Invalid APPROVAL_ENABLED={value!r}; expected true or false"
+    )
 
 
 def _is_weak_secret(value: str) -> bool:
@@ -235,9 +258,11 @@ class Settings(BaseSettings):
 
     # ── Approval ─────────────────────────────────────────────────────
     approval_timeout_seconds: int = 300
-    # When false, approval_required tools auto-execute with bypass audit;
-    # hard_deny is never overridden. Default true (safe production posture).
-    approval_enabled: bool = True
+    # ask (default) pauses for a human; deny rejects approval-required work;
+    # auto_approve is an explicit development-only bypass. ``approval_enabled``
+    # remains a legacy boolean alias: true → ask, false → deny.
+    approval_mode: ApprovalMode | None = None
+    approval_enabled: bool | None = None
 
     # ── Auth ─────────────────────────────────────────────────────────
     api_token: str = ""  # If set, all endpoints require X-API-Key header
@@ -308,9 +333,42 @@ class Settings(BaseSettings):
     def _validate_deployment_env(cls, value: Any) -> str:
         return _normalize_deployment_env(None if value is None else str(value))
 
+    @field_validator("approval_mode", mode="before")
+    @classmethod
+    def _validate_approval_mode(cls, value: Any) -> str | None:
+        if value is None or (isinstance(value, str) and not value.strip()):
+            return None
+        return _normalize_approval_mode(value)
+
+    @field_validator("approval_enabled", mode="before")
+    @classmethod
+    def _validate_approval_enabled(cls, value: Any) -> bool | None:
+        if value is None or value == "":
+            return None
+        return _parse_approval_enabled(value)
+
     @model_validator(mode="after")
     def _resolve_bind_host_network_and_policy(self) -> Settings:
         """Prefer SANDBOX_BIND_HOST; fall back to SANDBOX_HOST; derive network; validate CIDRs."""
+        # APPROVAL_MODE is the canonical cross-service setting. The prefixed
+        # Sandbox fields win when supplied; legacy booleans map false to the
+        # safe deny mode rather than silently broadening permissions.
+        if "approval_mode" in self.model_fields_set and self.approval_mode is not None:
+            approval_mode = _normalize_approval_mode(self.approval_mode)
+        elif "approval_enabled" in self.model_fields_set and self.approval_enabled is not None:
+            approval_mode = "ask" if self.approval_enabled else "deny"
+        else:
+            env_mode = os.environ.get("APPROVAL_MODE")
+            env_enabled = os.environ.get("APPROVAL_ENABLED")
+            if env_mode is not None and env_mode.strip():
+                approval_mode = _normalize_approval_mode(env_mode)
+            elif env_enabled is not None and env_enabled.strip():
+                approval_mode = "ask" if _parse_approval_enabled(env_enabled) else "deny"
+            else:
+                approval_mode = "ask"
+        object.__setattr__(self, "approval_mode", approval_mode)
+        object.__setattr__(self, "approval_enabled", approval_mode != "deny")
+
         # Unprefixed DEPLOYMENT_ENV (compose/.env) when not set via kwargs /
         # SANDBOX_DEPLOYMENT_ENV. Do not clobber explicit constructor values.
         if "deployment_env" not in self.model_fields_set:
@@ -413,6 +471,12 @@ def validate_production_settings(s: Settings | None = None) -> None:
     if cfg.policy_profile != "strict":
         errors.append(
             "SANDBOX_POLICY_PROFILE=balanced is forbidden in production (use strict)"
+        )
+
+    if cfg.approval_mode == "auto_approve":
+        errors.append(
+            "SANDBOX_APPROVAL_MODE=auto_approve is forbidden in production "
+            "(use ask or deny)"
         )
 
     if cfg.isolation_backend != "bubblewrap":

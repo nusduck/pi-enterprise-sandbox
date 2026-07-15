@@ -586,6 +586,21 @@ TASK_PLAN_PROJECTION_MIGRATION = Migration(
     _TASK_PLAN_PROJECTION_SQL,
 )
 
+# Approval deduplication — one durable approval record per execution attempt.
+# Keep this as a new migration: BASELINE_MIGRATION is immutable after apply.
+_APPROVAL_IDEMPOTENCY_SQL = """
+ALTER TABLE approvals ADD COLUMN idempotency_key TEXT;
+ALTER TABLE approvals ADD COLUMN operation_fingerprint TEXT;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_approvals_session_idempotency_key
+    ON approvals(session_id, idempotency_key);
+"""
+
+APPROVAL_IDEMPOTENCY_MIGRATION = Migration(
+    "0010_approval_idempotency",
+    _APPROVAL_IDEMPOTENCY_SQL,
+    _APPROVAL_IDEMPOTENCY_SQL,
+)
+
 
 MIGRATIONS: tuple[Migration, ...] = (
     BASELINE_MIGRATION,
@@ -597,6 +612,7 @@ MIGRATIONS: tuple[Migration, ...] = (
     AGENT_RUN_USAGE_MIGRATION,
     AGENT_RUN_INPUT_MIGRATION,
     TASK_PLAN_PROJECTION_MIGRATION,
+    APPROVAL_IDEMPOTENCY_MIGRATION,
 )
 
 

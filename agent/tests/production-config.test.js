@@ -14,6 +14,7 @@ import {
   isWeakSecret,
   effectiveConfig,
   resolveProductSystemPrompt,
+  resolveApprovalMode,
 } from '../config.js';
 
 const STRONG = 'a'.repeat(64);
@@ -110,6 +111,41 @@ describe('validateProductionConfig', () => {
         }),
       /SANDBOX_POLICY_PROFILE=balanced is forbidden in production/,
     );
+  });
+
+  it('rejects explicit auto approval in production', () => {
+    assert.throws(
+      () =>
+        validateProductionConfig({
+          DEPLOYMENT_ENV: 'production',
+          AGENT_INTERNAL_TOKEN: STRONG,
+          SANDBOX_API_TOKEN: STRONG,
+          SKILLS_MODE: 'readonly',
+          LLMIO_BASE_URL: 'https://llm.example.com/v1',
+          APPROVAL_MODE: 'auto_approve',
+        }),
+      /APPROVAL_MODE=auto_approve/,
+    );
+  });
+
+  it('accepts explicit ask and deny modes in production', () => {
+    for (const APPROVAL_MODE of ['ask', 'deny']) {
+      assert.doesNotThrow(() =>
+        validateProductionConfig({
+          DEPLOYMENT_ENV: 'production',
+          AGENT_INTERNAL_TOKEN: STRONG,
+          SANDBOX_API_TOKEN: STRONG,
+          SKILLS_MODE: 'readonly',
+          LLMIO_BASE_URL: 'https://llm.example.com/v1',
+          APPROVAL_MODE,
+        }),
+      );
+    }
+  });
+
+  it('resolves the safe default and legacy false mapping', () => {
+    assert.equal(resolveApprovalMode({}), 'ask');
+    assert.equal(resolveApprovalMode({ APPROVAL_ENABLED: 'false' }), 'deny');
   });
 });
 

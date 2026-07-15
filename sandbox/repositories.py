@@ -2485,8 +2485,9 @@ class ApprovalRepository:
                 """
                 INSERT INTO approvals (
                     approval_id, session_id, tool_name, risk_level, reason,
-                    payload, status, created_at, expires_at, decided_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    payload, status, created_at, expires_at, decided_at,
+                    idempotency_key, operation_fingerprint
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(approval_id) DO UPDATE SET
                     session_id=excluded.session_id,
                     tool_name=excluded.tool_name,
@@ -2496,7 +2497,9 @@ class ApprovalRepository:
                     status=excluded.status,
                     created_at=excluded.created_at,
                     expires_at=excluded.expires_at,
-                    decided_at=excluded.decided_at
+                    decided_at=excluded.decided_at,
+                    idempotency_key=excluded.idempotency_key,
+                    operation_fingerprint=excluded.operation_fingerprint
                 """,
                 (
                     entry["approval_id"],
@@ -2509,9 +2512,72 @@ class ApprovalRepository:
                     entry.get("created_at"),
                     entry.get("expires_at"),
                     entry.get("decided_at"),
+                    entry.get("idempotency_key"),
+                    entry.get("operation_fingerprint"),
                 ),
             )
             conn.commit()
+
+    def create_or_get(self, entry: dict[str, Any]) -> dict[str, Any]:
+        """Atomically insert an approval attempt or return its existing row.
+
+        ``idempotency_key`` is unique when present. ``ON CONFLICT DO NOTHING``
+        makes concurrent Sandbox workers converge on the same approval row;
+        the follow-up select returns the winner's ID and current status.
+        """
+        key = entry.get("idempotency_key")
+        if not key:
+            self.upsert(entry)
+            return entry
+
+        risk = entry.get("risk_level")
+        risk_value = risk.value if hasattr(risk, "value") else str(risk or "")
+        with self.db.connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO approvals (
+                    approval_id, session_id, tool_name, risk_level, reason,
+                    payload, status, created_at, expires_at, decided_at,
+                    idempotency_key, operation_fingerprint
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(session_id, idempotency_key) DO NOTHING
+                """,
+                (
+                    entry["approval_id"],
+                    entry["session_id"],
+                    entry["tool_name"],
+                    risk_value,
+                    entry.get("reason", ""),
+                    _json_dumps(entry.get("payload", {})),
+                    entry.get("status", "pending_approval"),
+                    entry.get("created_at"),
+                    entry.get("expires_at"),
+                    entry.get("decided_at"),
+                    key,
+                    entry.get("operation_fingerprint"),
+                ),
+            )
+            row = conn.execute(
+                """
+                SELECT * FROM approvals
+                WHERE session_id = ? AND idempotency_key = ?
+                """,
+                (entry["session_id"], key),
+            ).fetchone()
+            conn.commit()
+        if not row:
+            raise RuntimeError("approval idempotency insert did not return a row")
+        stored = self._row_to_dict(row)
+        expected_fingerprint = entry.get("operation_fingerprint")
+        if (
+            expected_fingerprint
+            and stored.get("operation_fingerprint")
+            and stored["operation_fingerprint"] != expected_fingerprint
+        ):
+            raise ValueError(
+                "idempotency_key is already bound to a different operation"
+            )
+        return stored
 
     def get(self, approval_id: str) -> dict[str, Any] | None:
         with self.db.connect() as conn:
@@ -2522,6 +2588,19 @@ class ApprovalRepository:
         if not row:
             return None
         return self._row_to_dict(row)
+
+    def get_by_idempotency_key(
+        self, session_id: str, idempotency_key: str
+    ) -> dict[str, Any] | None:
+        with self.db.connect() as conn:
+            row = conn.execute(
+                """
+                SELECT * FROM approvals
+                WHERE session_id = ? AND idempotency_key = ?
+                """,
+                (session_id, idempotency_key),
+            ).fetchone()
+        return self._row_to_dict(row) if row else None
 
     def list_by_session(self, session_id: str) -> list[dict[str, Any]]:
         with self.db.connect() as conn:
@@ -2544,6 +2623,8 @@ class ApprovalRepository:
             "created_at": row["created_at"],
             "expires_at": row["expires_at"],
             "decided_at": row["decided_at"],
+            "idempotency_key": row["idempotency_key"],
+            "operation_fingerprint": row["operation_fingerprint"],
         }
 
 

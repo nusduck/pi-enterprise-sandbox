@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import queue
 import threading
@@ -30,6 +31,24 @@ from sandbox.services.policy_checker import policy_checker
 from sandbox.services.session_manager import session_manager
 
 router = APIRouter(prefix="/sessions/{session_id}/executions", tags=["executions"])
+
+
+def _approval_operation_fingerprint(session_id: str, body: ApprovalCheckRequest) -> str:
+    """Hash the server-visible operation, excluding the client key itself."""
+    canonical = json.dumps(
+        {
+            "session_id": session_id,
+            "tool_name": body.tool_name,
+            "command": body.command,
+            "path": body.path,
+            "timeout": body.timeout,
+            "file_size": body.file_size,
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 def _require_active_session(session_id: str):
@@ -79,7 +98,7 @@ def run_command(session_id: str, body: CommandExecutionRequest):
     session = _require_active_session(session_id)
 
     # Independent hard-deny re-check (do not trust Agent/Extension conclusions).
-    # Approval credentials and APPROVAL_ENABLED never override hard_deny.
+    # Approval credentials and the approval mode never override hard_deny.
     if body.command and policy_checker.is_blocked_command(body.command):
         token = body.command.strip().split()[0] if body.command.strip() else "command"
         reason = f"blocked command: {token}"
@@ -199,6 +218,7 @@ def approval_check(session_id: str, body: ApprovalCheckRequest, response: Respon
         )
         return ApprovalResponse(
             status="rejected",
+            idempotency_key=body.idempotency_key,
             risk_level=decision.risk_level,
             reason=decision.reason,
             decision=tier,
@@ -223,6 +243,7 @@ def approval_check(session_id: str, body: ApprovalCheckRequest, response: Respon
         )
         return ApprovalResponse(
             status="approved",
+            idempotency_key=body.idempotency_key,
             risk_level=decision.risk_level,
             reason=decision.reason,
             decision="allow",
@@ -231,9 +252,43 @@ def approval_check(session_id: str, body: ApprovalCheckRequest, response: Respon
         )
 
     # ── approval_required ───────────────────────────────────────
-    approval_enabled = bool(getattr(settings, "approval_enabled", True))
-    if not approval_enabled:
-        bypass_reason = f"{decision.reason} (approval bypassed: APPROVAL_ENABLED=false)"
+    approval_mode = str(getattr(settings, "approval_mode", "ask"))
+    if approval_mode == "deny":
+        deny_reason = (
+            f"{decision.reason} (approval asking disabled: "
+            "APPROVAL_MODE=deny)"
+        )
+        audit_logger.log_tool_call(
+            session_id=session_id,
+            tool_name=body.tool_name,
+            caller_id=session.caller_id,
+            allowed=False,
+            risk_level=decision.risk_level.value,
+            reason=deny_reason,
+            metadata={
+                "approval_check": True,
+                "decision": "approval_required",
+                "policy_version": policy_version,
+                "approval_bypassed": False,
+                "approval_mode": approval_mode,
+                "approval_disabled": True,
+            },
+        )
+        return ApprovalResponse(
+            status="rejected",
+            idempotency_key=body.idempotency_key,
+            risk_level=decision.risk_level,
+            reason=deny_reason,
+            decision="approval_required",
+            policy_version=policy_version,
+            approval_bypassed=False,
+        )
+
+    if approval_mode == "auto_approve":
+        bypass_reason = (
+            f"{decision.reason} (approval auto-approved: "
+            "APPROVAL_MODE=auto_approve)"
+        )
         audit_logger.log_tool_call(
             session_id=session_id,
             tool_name=body.tool_name,
@@ -246,11 +301,12 @@ def approval_check(session_id: str, body: ApprovalCheckRequest, response: Respon
                 "decision": "approval_required",
                 "policy_version": policy_version,
                 "approval_bypassed": True,
-                "approval_enabled": False,
+                "approval_mode": approval_mode,
             },
         )
         return ApprovalResponse(
             status="approved",
+            idempotency_key=body.idempotency_key,
             risk_level=decision.risk_level,
             reason=bypass_reason,
             decision="approval_required",
@@ -259,13 +315,18 @@ def approval_check(session_id: str, body: ApprovalCheckRequest, response: Respon
         )
 
     response.status_code = 202
-    entry = approval_manager.create(
-        session_id=session_id,
-        tool_name=body.tool_name,
-        risk_level=decision.risk_level,
-        reason=decision.reason,
-        payload=body.model_dump(),
-    )
+    try:
+        entry = approval_manager.create(
+            session_id=session_id,
+            tool_name=body.tool_name,
+            risk_level=decision.risk_level,
+            reason=decision.reason,
+            payload=body.model_dump(),
+            idempotency_key=body.idempotency_key,
+            operation_fingerprint=_approval_operation_fingerprint(session_id, body),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     audit_logger.log_tool_call(
         session_id=session_id,
         tool_name=body.tool_name,
@@ -280,11 +341,17 @@ def approval_check(session_id: str, body: ApprovalCheckRequest, response: Respon
             "approval_id": entry["approval_id"],
         },
     )
+    existing_status = entry.get("status")
+    if existing_status == "approved":
+        response.status_code = 200
+    elif existing_status == "rejected":
+        response.status_code = 200
     return ApprovalResponse(
         approval_id=entry["approval_id"],
-        status="pending_approval",
+        idempotency_key=entry.get("idempotency_key"),
+        status=existing_status or "pending_approval",
         risk_level=decision.risk_level,
-        reason=decision.reason,
+        reason=entry.get("reason") or decision.reason,
         decision="approval_required",
         policy_version=policy_version,
         approval_bypassed=False,

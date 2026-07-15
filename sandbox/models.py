@@ -302,6 +302,9 @@ class ApprovalCheckRequest(BaseModel):
     path: str | None = None
     timeout: int | None = None
     file_size: int | None = None
+    # Stable execution-attempt key. Retries with the same key reuse the
+    # durable approval instead of creating another human gate.
+    idempotency_key: str | None = Field(default=None, min_length=1, max_length=255)
 
 
 class ApprovalCreateRequest(BaseModel):
@@ -312,6 +315,7 @@ class ApprovalCreateRequest(BaseModel):
     risk_level: RiskLevel = RiskLevel.HIGH
     reason: str = "approval required"
     payload: dict[str, Any] = Field(default_factory=dict)
+    idempotency_key: str | None = Field(default=None, min_length=1, max_length=255)
 
 
 class ApprovalDecisionRequest(BaseModel):
@@ -321,6 +325,7 @@ class ApprovalDecisionRequest(BaseModel):
 
 class ApprovalResponse(BaseModel):
     approval_id: str | None = None
+    idempotency_key: str | None = None
     status: str
     risk_level: RiskLevel
     reason: str = ""

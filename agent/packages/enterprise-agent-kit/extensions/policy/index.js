@@ -69,6 +69,12 @@ export const POLICY_DECISION = Object.freeze({
   HARD_DENY: 'hard_deny',
 });
 
+export const APPROVAL_MODE = Object.freeze({
+  ASK: 'ask',
+  AUTO_APPROVE: 'auto_approve',
+  DENY: 'deny',
+});
+
 /** Known safe-parallel (read-only) tools. */
 const READ_TOOLS = new Set([
   'read',
@@ -196,7 +202,7 @@ const METADATA_DESTINATIONS = [
 const POLICY_PARSE_ERROR = '__policy_parse_error__';
 const SHELL_WRAPPERS = new Set(['sh', 'bash', 'dash', 'zsh', 'ksh']);
 
-/** Bash substrings that elevate to human approval when APPROVAL_ENABLED. */
+/** Bash substrings that elevate to human approval in ask mode. */
 const APPROVAL_REQUIRED_SUBSTRINGS = [
   'rm -rf',
   'rm -r ',
@@ -770,26 +776,49 @@ export function evaluateToolPolicy(toolName, params = {}, options = {}) {
 }
 
 /**
- * Map policy decision through APPROVAL_ENABLED.
- * When approval is off, approval_required becomes allow + bypass flag.
- * hard_deny is never overridden.
+ * Resolve legacy boolean approval settings to the explicit mode contract.
+ * @param {'ask'|'auto_approve'|'deny'|boolean|undefined} mode
+ */
+export function normalizeApprovalMode(mode = APPROVAL_MODE.ASK) {
+  if (mode === true) return APPROVAL_MODE.ASK;
+  if (mode === false) return APPROVAL_MODE.DENY;
+  const raw = String(mode || APPROVAL_MODE.ASK).trim().toLowerCase().replaceAll('-', '_');
+  if (Object.values(APPROVAL_MODE).includes(raw)) return raw;
+  throw new Error(`Invalid approval mode: ${mode}`);
+}
+
+/**
+ * Map a policy decision through the explicit approval mode.
+ * hard_deny is never overridden. deny remains approval_required so the
+ * execution boundary can reject it deterministically without a bypass.
  *
  * @param {{ decision: string, reason: string, risk_level: string, side_effect?: string, policy_version?: string }} policy
- * @param {boolean} approvalEnabled
+ * @param {'ask'|'auto_approve'|'deny'|boolean} [mode]
  */
-export function applyApprovalSwitch(policy, approvalEnabled = true) {
+export function applyApprovalSwitch(policy, mode = APPROVAL_MODE.ASK) {
+  const approvalMode = normalizeApprovalMode(mode);
   if (policy.decision === POLICY_DECISION.HARD_DENY) {
-    return { ...policy, approval_bypassed: false };
+    return { ...policy, approval_mode: approvalMode, approval_bypassed: false };
   }
-  if (policy.decision === POLICY_DECISION.APPROVAL_REQUIRED && !approvalEnabled) {
+  if (policy.decision === POLICY_DECISION.APPROVAL_REQUIRED && approvalMode === APPROVAL_MODE.AUTO_APPROVE) {
     return {
       ...policy,
       decision: POLICY_DECISION.ALLOW,
-      reason: `${policy.reason} (approval bypassed: APPROVAL_ENABLED=false)`,
+      reason: `${policy.reason} (approval auto-approved: APPROVAL_MODE=auto_approve)`,
+      approval_mode: approvalMode,
       approval_bypassed: true,
     };
   }
-  return { ...policy, approval_bypassed: false };
+  if (policy.decision === POLICY_DECISION.APPROVAL_REQUIRED && approvalMode === APPROVAL_MODE.DENY) {
+    return {
+      ...policy,
+      reason: `${policy.reason} (approval asking disabled: APPROVAL_MODE=deny)`,
+      approval_mode: approvalMode,
+      approval_disabled: true,
+      approval_bypassed: false,
+    };
+  }
+  return { ...policy, approval_mode: approvalMode, approval_bypassed: false };
 }
 
 /**
@@ -949,14 +978,27 @@ export function createWriteMutex() {
 export const workspaceWriteMutex = createWriteMutex();
 
 /**
- * Resolve whether APPROVAL_ENABLED is on (default true).
- * @param {NodeJS.ProcessEnv | { APPROVAL_ENABLED?: string|boolean }} [env]
+ * Resolve the policy mode for standalone extension consumers. Legacy booleans
+ * map true → ask and false → deny.
+ * @param {NodeJS.ProcessEnv | Record<string, string|boolean|undefined>} [env]
  */
+export function resolveApprovalMode(env = process.env) {
+  const explicit = env?.APPROVAL_MODE || env?.SANDBOX_APPROVAL_MODE;
+  if (explicit != null && String(explicit).trim() !== '') {
+    return normalizeApprovalMode(explicit);
+  }
+  const legacy = env?.APPROVAL_ENABLED ?? env?.SANDBOX_APPROVAL_ENABLED;
+  if (legacy == null || String(legacy).trim() === '') return APPROVAL_MODE.ASK;
+  if (typeof legacy === 'boolean') return legacy ? APPROVAL_MODE.ASK : APPROVAL_MODE.DENY;
+  const raw = String(legacy).trim().toLowerCase();
+  if (raw === 'true') return APPROVAL_MODE.ASK;
+  if (raw === 'false') return APPROVAL_MODE.DENY;
+  throw new Error(`Invalid APPROVAL_ENABLED=${legacy}; expected true or false`);
+}
+
+/** @param {NodeJS.ProcessEnv | Record<string, string|boolean|undefined>} [env] */
 export function resolveApprovalEnabled(env = process.env) {
-  const raw = env?.APPROVAL_ENABLED;
-  if (raw == null || String(raw).trim() === '') return true;
-  if (typeof raw === 'boolean') return raw;
-  return String(raw).toLowerCase() !== 'false';
+  return resolveApprovalMode(env) !== APPROVAL_MODE.DENY;
 }
 
 /**
@@ -965,6 +1007,7 @@ export function resolveApprovalEnabled(env = process.env) {
  *
  * @param {{
  *   getMeta?: () => object,
+ *   approvalMode?: string | (() => string),
  *   approvalEnabled?: boolean | (() => boolean),
  *   auditSink?: (ev: object) => void,
  *   onHardDeny?: (info: object) => void,
@@ -981,13 +1024,18 @@ export function createSandboxSecurityExtension(ctx = {}) {
       try {
         const toolName = event.toolName || event.name || 'unknown';
         const input = event.input || event.params || {};
-        const approvalEnabled =
-          typeof ctx.approvalEnabled === 'function'
-            ? Boolean(ctx.approvalEnabled())
-            : ctx.approvalEnabled !== false;
+        const configuredMode =
+          typeof ctx.approvalMode === 'function'
+            ? ctx.approvalMode()
+            : ctx.approvalMode ??
+              (typeof ctx.approvalEnabled === 'function'
+                ? (ctx.approvalEnabled() ? APPROVAL_MODE.ASK : APPROVAL_MODE.DENY)
+                : ctx.approvalEnabled === undefined
+                  ? APPROVAL_MODE.ASK
+                  : (ctx.approvalEnabled ? APPROVAL_MODE.ASK : APPROVAL_MODE.DENY));
 
         let policy = evaluateToolPolicy(toolName, input);
-        policy = applyApprovalSwitch(policy, approvalEnabled);
+        policy = applyApprovalSwitch(policy, configuredMode);
 
         const meta = getMeta() || {};
         emitToolAudit(
@@ -1092,7 +1140,8 @@ export function createSandboxSecurityExtension(ctx = {}) {
  * @param {object} opts
  * @param {string} opts.toolName
  * @param {object} [opts.params]
- * @param {boolean} [opts.approvalEnabled]
+ * @param {'ask'|'auto_approve'|'deny'|boolean} [opts.approvalMode]
+ * @param {boolean} [opts.approvalEnabled] Legacy alias.
  * @param {object} [opts.meta]
  * @param {(ev: object) => void} [opts.auditSink]
  * @returns {{ ok: boolean, reason?: string, policy: object, approval_bypassed?: boolean }}
@@ -1100,13 +1149,17 @@ export function createSandboxSecurityExtension(ctx = {}) {
 export function preExecuteGate({
   toolName,
   params = {},
-  approvalEnabled = true,
+  approvalMode,
+  approvalEnabled,
   meta = {},
   auditSink = null,
 } = {}) {
   try {
     let policy = evaluateToolPolicy(toolName, params);
-    policy = applyApprovalSwitch(policy, approvalEnabled);
+    policy = applyApprovalSwitch(
+      policy,
+      approvalMode ?? (approvalEnabled == null ? APPROVAL_MODE.ASK : approvalEnabled),
+    );
     emitToolAudit(
       buildToolAuditEvent({
         toolName,
@@ -1119,6 +1172,18 @@ export function preExecuteGate({
     );
     if (policy.decision === POLICY_DECISION.HARD_DENY) {
       return { ok: false, reason: policy.reason, policy, approval_bypassed: false };
+    }
+    if (
+      policy.decision === POLICY_DECISION.APPROVAL_REQUIRED &&
+      policy.approval_mode === APPROVAL_MODE.DENY
+    ) {
+      return {
+        ok: false,
+        reason: policy.reason,
+        policy,
+        approval_disabled: true,
+        approval_bypassed: false,
+      };
     }
     return {
       ok: true,

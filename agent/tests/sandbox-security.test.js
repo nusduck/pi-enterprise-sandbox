@@ -7,6 +7,7 @@ import assert from 'node:assert/strict';
 import {
   POLICY_VERSION,
   POLICY_DECISION,
+  APPROVAL_MODE,
   classifyToolSideEffect,
   evaluateToolPolicy,
   applyApprovalSwitch,
@@ -16,12 +17,16 @@ import {
   commandRequiresApproval,
   buildToolAuditEvent,
   createSandboxSecurityExtension,
+  resolveApprovalMode,
   resolveApprovalEnabled,
   filterToolResultContent,
   resolvePolicyProfile,
   isBlockedSandboxPath,
 } from '../packages/enterprise-agent-kit/extensions/policy/index.js';
-import { resolveApprovalEnabled as configResolveApproval } from '../config.js';
+import {
+  resolveApprovalMode as configResolveApprovalMode,
+  resolveApprovalEnabled as configResolveApproval,
+} from '../config.js';
 import {
   DefaultResourceLoader,
   SettingsManager,
@@ -164,9 +169,14 @@ describe('policy matrix allow / approval_required / hard_deny', () => {
     assert.equal(p.decision, POLICY_DECISION.HARD_DENY);
   });
 
-  it('APPROVAL_ENABLED=false maps approval_required → allow + bypass, keeps hard_deny', () => {
+  it('approval modes are explicit, fail closed when deny, and preserve hard_deny', () => {
     const risk = evaluateToolPolicy('bash', { command: 'wget http://x' });
-    const bypassed = applyApprovalSwitch(risk, false);
+    const denied = applyApprovalSwitch(risk, APPROVAL_MODE.DENY);
+    assert.equal(denied.decision, POLICY_DECISION.APPROVAL_REQUIRED);
+    assert.equal(denied.approval_disabled, true);
+    assert.equal(denied.approval_bypassed, false);
+
+    const bypassed = applyApprovalSwitch(risk, APPROVAL_MODE.AUTO_APPROVE);
     assert.equal(bypassed.decision, POLICY_DECISION.ALLOW);
     assert.equal(bypassed.approval_bypassed, true);
 
@@ -339,7 +349,15 @@ describe('audit meta injection', () => {
 });
 
 describe('APPROVAL_ENABLED config', () => {
-  it('defaults true; false only when explicitly false', () => {
+  it('defaults ask; legacy false maps to deny and auto approval is explicit', () => {
+    assert.equal(resolveApprovalMode({}), APPROVAL_MODE.ASK);
+    assert.equal(resolveApprovalMode({ APPROVAL_MODE: 'deny' }), APPROVAL_MODE.DENY);
+    assert.equal(resolveApprovalMode({ APPROVAL_MODE: 'auto-approve' }), APPROVAL_MODE.AUTO_APPROVE);
+    assert.equal(resolveApprovalMode({ APPROVAL_ENABLED: 'false' }), APPROVAL_MODE.DENY);
+    assert.throws(() => resolveApprovalMode({ APPROVAL_MODE: 'invalid' }), /Invalid approval mode/);
+    assert.equal(configResolveApprovalMode({}), 'ask');
+    assert.equal(configResolveApprovalMode({ APPROVAL_MODE: 'deny' }), 'deny');
+    assert.equal(configResolveApprovalMode({ APPROVAL_ENABLED: 'false' }), 'deny');
     assert.equal(resolveApprovalEnabled({}), true);
     assert.equal(resolveApprovalEnabled({ APPROVAL_ENABLED: 'false' }), false);
     assert.equal(resolveApprovalEnabled({ APPROVAL_ENABLED: 'true' }), true);

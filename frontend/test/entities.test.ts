@@ -255,6 +255,7 @@ describe('run event reducer', () => {
         type: 'tool.approval_required',
         payload: {
           approval_id: 'ap1',
+          idempotency_key: 'approval_scope_1',
           tool_call_id: 'tc1',
           reason: 'network',
         },
@@ -296,9 +297,29 @@ describe('run event reducer', () => {
     assert.deepEqual(run.processIds, ['p1']);
     assert.deepEqual(run.artifactIds, ['a1']);
     assert.equal(s.approvalsById.ap1.status, 'pending');
+    assert.equal(s.approvalsById.ap1.idempotencyKey, 'approval_scope_1');
     assert.equal(s.toolExecutionsById.tc1.status, 'completed');
     assert.equal(s.processesById.p1.stdout, 'file.txt\n');
     assert.equal(getRunToolExecutions(s, 'run_t')[0].name, 'bash');
+
+    // A repeated SSE notification for the same durable approval is an update,
+    // not a second UI card (backend idempotency remains authoritative).
+    s = reduceRuntimeEvent(
+      s,
+      ev({
+        event_id: 't8',
+        sequence: 8,
+        run_id: 'run_t',
+        type: 'tool.approval_required',
+        payload: {
+          approval_id: 'ap1',
+          tool_call_id: 'tc2',
+          reason: 'same operation after resume',
+        },
+      }),
+    ).store;
+    assert.deepEqual(s.runsById.run_t.approvalIds, ['ap1']);
+    assert.equal(Object.keys(s.approvalsById).length, 1);
   });
 
   it('updates multiple runs independently', () => {

@@ -11,7 +11,17 @@ function makeLedgerClient() {
   const byId = new Map();
   /** @type {Map<string, string>} */
   const byIdem = new Map();
-  const calls = { prepare: 0, executing: 0, terminal: 0, edit: 0, patch: 0, write: 0 };
+  const calls = {
+    prepare: 0,
+    executing: 0,
+    terminal: 0,
+    edit: 0,
+    patch: 0,
+    write: 0,
+    approvalCheck: 0,
+    approvalCheckBodies: [],
+    approvalCheckResponse: null,
+  };
 
   return {
     calls,
@@ -69,8 +79,10 @@ function makeLedgerClient() {
       row.result_json = body.result_json;
       return row;
     },
-    async approvalCheck() {
-      return { status: 'approved', risk_level: 'low', policy_version: 'test' };
+    async approvalCheck(sessionId, body) {
+      calls.approvalCheck += 1;
+      calls.approvalCheckBodies.push({ sessionId, body });
+      return calls.approvalCheckResponse || { status: 'approved', risk_level: 'low', policy_version: 'test' };
     },
     async writeFile(sessionId, path, content) {
       calls.write += 1;
@@ -129,7 +141,7 @@ describe('tool ledger wrapExecute', () => {
         session_id: 'sess-1',
         workspace_id: 'ws_1',
       }),
-      approvalEnabled: false,
+      approvalMode: 'auto_approve',
     });
     const write = tools.find((t) => t.name === 'write');
     const result = await write.execute('call_w1', {
@@ -153,7 +165,7 @@ describe('tool ledger wrapExecute', () => {
       client,
       sessionId: 'sess-1',
       getMeta: () => ({ run_id: 'run_1', session_id: 'sess-1' }),
-      approvalEnabled: false,
+      approvalMode: 'auto_approve',
     });
     const write = tools.find((t) => t.name === 'write');
     await write.execute('call_idem', { path: 'a.txt', content: 'one' });
@@ -174,7 +186,7 @@ describe('tool ledger wrapExecute', () => {
       client,
       sessionId: 'sess-1',
       getMeta: () => ({ run_id: 'run_1' }),
-      approvalEnabled: false,
+      approvalMode: 'auto_approve',
     });
     const edit = tools.find((t) => t.name === 'edit');
     const result = await edit.execute('call_e1', {
@@ -196,7 +208,7 @@ describe('tool ledger wrapExecute', () => {
       client,
       sessionId: 'sess-1',
       getMeta: () => ({ run_id: 'run_1' }),
-      approvalEnabled: false,
+      approvalMode: 'auto_approve',
     });
     const edit = tools.find((t) => t.name === 'edit');
     const result = await edit.execute('call_e2', {
@@ -226,5 +238,108 @@ describe('tool ledger wrapExecute', () => {
     assert.equal(client.calls.patch, 1);
     assert.match(result.content[0].text, /before_hash=ddd/);
     assert.equal(client.byId.get('call_p1').status, 'succeeded');
+  });
+
+  it('dedupes one attempt, resumes across a changed SDK ID once, then asks again', async () => {
+    const client = makeLedgerClient();
+    client.calls.approvalCheckResponse = {
+      status: 'pending_approval',
+      approval_id: 'approval_attempt_1',
+      risk_level: 'high',
+      policy_version: 'test',
+      reason: 'needs approval',
+    };
+    const tools = createSandboxTools({
+      client,
+      sessionId: 'sess-1',
+      approvalMode: 'ask',
+      getMeta: () => ({ run_id: 'run_stable', session_id: 'sess-1' }),
+    });
+    const write = tools.find((t) => t.name === 'write');
+    const firstParams = {
+      path: 'a.txt',
+      content: 'hello',
+      metadata: { z: 1, nested: { b: 2, a: 1 } },
+    };
+    const reorderedParams = {
+      metadata: { nested: { a: 1, b: 2 }, z: 1 },
+      content: 'hello',
+      path: 'a.txt',
+    };
+
+    let firstPending;
+    await assert.rejects(
+      () => write.execute('sdk_call_1', firstParams),
+      (error) => {
+        firstPending = error?.pending;
+        return error?.name === 'ApprovalSuspendedError';
+      },
+    );
+    assert.equal(firstPending?.approval_id, 'approval_attempt_1');
+    const firstKey = firstPending?.idempotency_key;
+    assert.ok(firstKey);
+
+    // A retry of the same SDK attempt reuses the same durable approval scope.
+    await assert.rejects(
+      () => write.execute('sdk_call_1', reorderedParams),
+      (error) => error?.name === 'ApprovalSuspendedError',
+    );
+    assert.equal(client.calls.approvalCheck, 2);
+    assert.equal(client.calls.approvalCheckBodies[0].body.idempotency_key, firstKey);
+    assert.equal(client.calls.approvalCheckBodies[1].body.idempotency_key, firstKey);
+
+    client.calls.approvalCheckResponse = {
+      status: 'approved',
+      approval_id: 'approval_attempt_1',
+      risk_level: 'high',
+      policy_version: 'test',
+    };
+    let resumeToken = {
+      approval_id: firstPending.approval_id,
+      idempotency_key: firstPending.idempotency_key,
+      operation_fingerprint: firstPending.operation_fingerprint,
+      tool_name: firstPending.tool_name,
+      run_id: firstPending.run_id,
+      sandbox_session_id: firstPending.sandbox_session_id,
+    };
+    let consumed = 0;
+    const resumedTools = createSandboxTools({
+      client,
+      sessionId: 'sess-1',
+      approvalMode: 'ask',
+      getMeta: () => ({ run_id: 'run_stable', session_id: 'sess-1' }),
+      getPreApprovedAttempt: () => resumeToken,
+      consumePreApprovedAttempt: () => {
+        consumed += 1;
+        resumeToken = null;
+      },
+    });
+    const resumedWrite = resumedTools.find((t) => t.name === 'write');
+    const resumed = await resumedWrite.execute('sdk_call_2', reorderedParams);
+    assert.equal(resumed.isError, undefined);
+    assert.equal(client.calls.write, 1);
+    assert.equal(consumed, 1);
+    assert.equal(client.calls.approvalCheck, 3);
+    assert.equal(
+      client.calls.approvalCheckBodies[2].body.idempotency_key,
+      firstKey,
+    );
+
+    // A later identical invocation has a new tool-call identity and therefore
+    // cannot inherit the one-shot approval.
+    client.calls.approvalCheckResponse = {
+      status: 'pending_approval',
+      approval_id: 'approval_attempt_2',
+      risk_level: 'high',
+      policy_version: 'test',
+      reason: 'needs approval again',
+    };
+    await assert.rejects(
+      () => resumedWrite.execute('sdk_call_3', reorderedParams),
+      (error) => error?.name === 'ApprovalSuspendedError',
+    );
+    assert.equal(client.calls.approvalCheck, 4);
+    assert.notEqual(client.calls.approvalCheckBodies[3].body.idempotency_key, firstKey);
+    assert.equal(consumed, 1);
   });
 });

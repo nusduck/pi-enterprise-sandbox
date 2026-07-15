@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
+
+import pytest
 from fastapi.testclient import TestClient
 
 from sandbox.database import Database
@@ -99,3 +102,87 @@ def test_approval_create_and_get_pending_persists(tmp_path):
     assert pending is not None
     assert pending["status"] == "pending_approval"
     assert pending["risk_level"] == "high"
+
+
+def test_same_session_idempotency_reuses_pending_and_terminal_decisions(tmp_path):
+    db = Database(f"sqlite:///{tmp_path / 'approvals.db'}")
+    db.initialize()
+    manager = ApprovalManager(database=db)
+    kwargs = dict(
+        session_id="sandbox_idempotent",
+        tool_name="raw_bash",
+        risk_level=RiskLevel.HIGH,
+        reason="dangerous command",
+        payload={"command": "curl https://example.com"},
+        idempotency_key="approval_attempt_1",
+        operation_fingerprint="fingerprint_1",
+    )
+
+    pending = manager.create(**kwargs)
+    retry = manager.create(**kwargs)
+    assert retry["approval_id"] == pending["approval_id"]
+    assert retry["status"] == "pending_approval"
+
+    approved = manager.decide(pending["approval_id"], "approve")
+    assert approved is not None
+    resumed = manager.create(**kwargs)
+    assert resumed["approval_id"] == pending["approval_id"]
+    assert resumed["status"] == "approved"
+
+    rejected_kwargs = {**kwargs, "idempotency_key": "approval_attempt_2"}
+    rejected = manager.create(**rejected_kwargs)
+    manager.decide(rejected["approval_id"], "reject")
+    rejected_retry = manager.create(**rejected_kwargs)
+    assert rejected_retry["approval_id"] == rejected["approval_id"]
+    assert rejected_retry["status"] == "rejected"
+
+
+def test_same_key_is_scoped_to_session_and_operation(tmp_path):
+    db = Database(f"sqlite:///{tmp_path / 'approvals.db'}")
+    db.initialize()
+    manager = ApprovalManager(database=db)
+    common = dict(
+        tool_name="raw_bash",
+        risk_level=RiskLevel.HIGH,
+        reason="dangerous command",
+        payload={"command": "curl https://example.com"},
+        idempotency_key="same-client-key",
+        operation_fingerprint="fingerprint_1",
+    )
+
+    first = manager.create(session_id="session_a", **common)
+    second = manager.create(session_id="session_b", **common)
+    assert second["approval_id"] != first["approval_id"]
+    assert manager.repository is not None
+    assert manager.repository.get_by_idempotency_key("session_a", "same-client-key")["approval_id"] == first["approval_id"]
+    assert manager.repository.get_by_idempotency_key("session_b", "same-client-key")["approval_id"] == second["approval_id"]
+
+    with pytest.raises(ValueError, match="different operation"):
+        manager.create(
+            session_id="session_a",
+            **{**common, "operation_fingerprint": "fingerprint_2"},
+        )
+
+
+def test_concurrent_managers_with_separate_connections_create_one_approval(tmp_path):
+    db_path = tmp_path / "approvals-concurrent.db"
+    Database(f"sqlite:///{db_path}").initialize()
+
+    def create_from_fresh_manager(_worker: int) -> str:
+        worker_db = Database(f"sqlite:///{db_path}")
+        manager = ApprovalManager(database=worker_db)
+        entry = manager.create(
+            session_id="session_concurrent",
+            tool_name="raw_bash",
+            risk_level=RiskLevel.HIGH,
+            reason="concurrent request",
+            payload={"command": "curl https://example.com"},
+            idempotency_key="concurrent-key",
+            operation_fingerprint="concurrent-fingerprint",
+        )
+        return entry["approval_id"]
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        approval_ids = list(pool.map(create_from_fresh_manager, range(8)))
+
+    assert len(set(approval_ids)) == 1

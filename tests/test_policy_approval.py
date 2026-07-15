@@ -88,9 +88,9 @@ def test_hard_deny_blocks_command_execution_even_with_session():
     assert "blocked" in r.json()["detail"].lower() or "sudo" in r.json()["detail"].lower()
 
 
-def test_approval_disabled_bypasses_risk_but_not_hard_deny(monkeypatch):
-    """APPROVAL_ENABLED=false → risk tools approved+bypassed; hard_deny still rejected."""
-    monkeypatch.setattr(settings, "approval_enabled", False)
+def test_approval_deny_mode_rejects_risk_but_not_hard_deny(monkeypatch):
+    """APPROVAL_MODE=deny rejects approval-required work without broadening access."""
+    monkeypatch.setattr(settings, "approval_mode", "deny")
     s = client.post("/sessions", json={"caller_id": "test"}).json()
     sid = s["session_id"]
 
@@ -100,8 +100,8 @@ def test_approval_disabled_bypasses_risk_but_not_hard_deny(monkeypatch):
     )
     assert risk.status_code == 200
     body = risk.json()
-    assert body["status"] == "approved"
-    assert body.get("approval_bypassed") is True
+    assert body["status"] == "rejected"
+    assert body.get("approval_bypassed") is False
     assert body.get("decision") == "approval_required"
 
     hard = client.post(
@@ -120,3 +120,44 @@ def test_approval_disabled_bypasses_risk_but_not_hard_deny(monkeypatch):
         json={"command": "sudo id"},
     )
     assert exec_r.status_code == 403
+
+
+def test_approval_check_reuses_same_key_after_decision_and_is_session_scoped():
+    s1 = client.post("/sessions", json={"caller_id": "test"}).json()
+    s2 = client.post("/sessions", json={"caller_id": "test"}).json()
+    key = "api-approval-key"
+    body = {"tool_name": "raw_bash", "command": "curl https://example.com", "idempotency_key": key}
+
+    first = client.post(f"/sessions/{s1['session_id']}/executions/approval-check", json=body)
+    retry = client.post(f"/sessions/{s1['session_id']}/executions/approval-check", json=body)
+    other_session = client.post(f"/sessions/{s2['session_id']}/executions/approval-check", json=body)
+    assert first.status_code == 202
+    assert retry.status_code == 202
+    assert retry.json()["approval_id"] == first.json()["approval_id"]
+    assert other_session.json()["approval_id"] != first.json()["approval_id"]
+
+    approved = client.post(
+        "/approve",
+        json={"approval_id": first.json()["approval_id"], "decision": "approve"},
+    )
+    assert approved.status_code == 200
+    resumed = client.post(f"/sessions/{s1['session_id']}/executions/approval-check", json=body)
+    assert resumed.status_code == 200
+    assert resumed.json()["status"] == "approved"
+    assert resumed.json()["approval_id"] == first.json()["approval_id"]
+
+    rejected_key = "api-rejected-key"
+    rejected_request = {**body, "idempotency_key": rejected_key}
+    rejected_pending = client.post(
+        f"/sessions/{s1['session_id']}/executions/approval-check", json=rejected_request
+    ).json()
+    client.post(
+        "/approve",
+        json={"approval_id": rejected_pending["approval_id"], "decision": "reject"},
+    )
+    rejected_retry = client.post(
+        f"/sessions/{s1['session_id']}/executions/approval-check", json=rejected_request
+    )
+    assert rejected_retry.status_code == 200
+    assert rejected_retry.json()["status"] == "rejected"
+    assert rejected_retry.json()["approval_id"] == rejected_pending["approval_id"]

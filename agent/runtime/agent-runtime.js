@@ -354,7 +354,7 @@ export async function resolveAgentSessionManager(client, conversationId, opts = 
  *   onApprovalSuspend?: (pending: object) => Promise<void>|void,
  *   onInputSuspend?: (pending: object) => Promise<void>|void,
  *   agent_profile_id?: string,
- *   preApprovedIds?: Set<string>|null,
+ *   preApprovedAttempt?: object|null,
  * }} opts
  * @returns {Promise<{ status: TurnStatus, run_id?: string|null, conversation_id?: string|null, model_id?: string|null, usage?: object|null, error?: string, pending_approval?: object|null }>}
  */
@@ -368,7 +368,7 @@ export async function runAgentTurn(opts) {
     onSessionReady = null,
     onApprovalSuspend = null,
     onInputSuspend = null,
-    preApprovedIds = null,
+    preApprovedAttempt = null,
   } = opts;
 
   const budget = opts.budget || createBudgetTracker();
@@ -401,8 +401,23 @@ export async function runAgentTurn(opts) {
   let suspendedInput = null;
   /** A single in-flight terminal transition prevents competing cancel/fail paths. */
   let terminalTransition = null;
-  /** @type {Set<string>} */
-  const preApproved = preApprovedIds instanceof Set ? preApprovedIds : new Set();
+  // A resume approval is a one-shot authorization for one exact normalized
+  // operation. It is consumed only after Sandbox returns approved, so a
+  // changed operation cannot inherit the prior decision.
+  let activePreApprovedAttempt = preApprovedAttempt;
+  const getPreApprovedAttempt = () => activePreApprovedAttempt;
+  const claimPreApprovedAttempt = () => {
+    const attempt = activePreApprovedAttempt;
+    if (!attempt || attempt._claimed) return null;
+    attempt._claimed = true;
+    return attempt;
+  };
+  const releasePreApprovedAttempt = (attempt) => {
+    if (activePreApprovedAttempt === attempt) attempt._claimed = false;
+  };
+  const consumePreApprovedAttempt = () => {
+    activePreApprovedAttempt = null;
+  };
 
   const persistEvent = (type, payload = {}, options = {}) => {
     if (!activeRunId) return Promise.resolve(null);
@@ -709,10 +724,13 @@ export async function runAgentTurn(opts) {
     client,
     getSessionId: () => sandboxSessionId,
     getWorkspaceKey: () => activeWorkspaceId || sandboxSessionId || 'default',
-    approvalEnabled: config.APPROVAL_ENABLED,
+    approvalMode: config.APPROVAL_MODE,
     getMeta: securityGetMeta,
     skillRoots: config.SKILL_ROOTS,
-    getPreApprovedIds: () => preApproved,
+    getPreApprovedAttempt,
+    claimPreApprovedAttempt,
+    releasePreApprovedAttempt,
+    consumePreApprovedAttempt,
     onApprovalSuspend: handleApprovalSuspend,
     approvalNotifier: (ev) => {
       try {
@@ -869,7 +887,7 @@ export async function runAgentTurn(opts) {
         thinking_levels: activeModelEntry.thinking_levels,
       },
       policy_version: POLICY_VERSION,
-      approval_enabled: config.APPROVAL_ENABLED,
+      approval_mode: config.APPROVAL_MODE,
       skills_mode: config.SKILLS_MODE,
     });
     if (activeRunId) {
@@ -929,14 +947,18 @@ export async function runAgentTurn(opts) {
         sandboxToolOptions,
         policyOptions: {
           getMeta: securityGetMeta,
-          approvalEnabled: () => config.APPROVAL_ENABLED,
+          approvalMode: () => config.APPROVAL_MODE,
           auditSink: (event) => emitExtensionEvent({ type: 'tool_policy_decision', ...event }),
         },
         extraSkillPaths: [AGENT_SKILL],
         emit: emitExtensionEvent,
         getMeta: securityGetMeta,
         mcpManager,
-        getPreApprovedIds: () => preApproved,
+        approvalMode: config.APPROVAL_MODE,
+        getPreApprovedAttempt,
+        claimPreApprovedAttempt,
+        releasePreApprovedAttempt,
+        consumePreApprovedAttempt,
         onApprovalSuspend: handleApprovalSuspend,
         onInputSuspend: handleInputSuspend,
         createApproval: (request) =>
@@ -1572,7 +1594,17 @@ export async function resumeAgentTurnAfterApproval(opts) {
   }
 
   // Approved: re-run the deferred tool then continue the agent turn.
-  const preApproved = new Set([pending.approval_id]);
+  const preApprovedAttempt =
+    pending.idempotency_key && pending.operation_fingerprint
+      ? {
+          approval_id: pending.approval_id,
+          idempotency_key: pending.idempotency_key,
+          operation_fingerprint: pending.operation_fingerprint,
+          tool_name: pending.tool_name,
+          run_id: pending.run_id || opts.sandbox_run_id || null,
+          sandbox_session_id: pending.sandbox_session_id || null,
+        }
+      : null;
   // Also decide on sandbox if not already (idempotent)
   try {
     if (typeof client.decideApproval === 'function') {
@@ -1606,7 +1638,7 @@ export async function resumeAgentTurnAfterApproval(opts) {
     onApprovalSuspend,
     onInputSuspend,
     agent_profile_id: opts.agent_profile_id,
-    preApprovedIds: preApproved,
+    preApprovedAttempt,
   });
 }
 

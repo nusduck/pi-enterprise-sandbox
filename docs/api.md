@@ -28,7 +28,7 @@ API Server 通过 SSE (`text/event-stream`) 推送以下事件类型：
 | `tool_start` | `{ id, name, args }` | 工具开始执行 |
 | `tool_end` | `{ id, name, result, isError }` | 工具执行完成 |
 | `file_ready` | `{ artifact_id, path, name?, mime_type?, size? }` | 产物可供下载（仅 `submit_artifact` 成功后） |
-| `approval_required` | `{ approval_id, tool_name?, command?, reason?, risk_level? }` | 高风险工具等待人工审批 |
+| `approval_required` | `{ approval_id, idempotency_key?, tool_name?, command?, reason?, risk_level? }` | 高风险工具等待人工审批；同一 key 只产生一个 durable approval |
 | `interaction_requested` | `{ interaction_id, interaction_type, title, options? }` | Agent 等待用户输入 |
 | `task_plan_updated` | `{ tasks }` | 结构化任务计划更新 |
 | `context_warning` | `{ tokens, context_window, percent }` | 上下文使用率预警 |
@@ -186,7 +186,7 @@ Base URL: `http://sandbox:8081`（Docker 内网）
 | `POST` | `/sessions/{id}/executions/python` | 执行 Python 代码 |
 | `POST` | `/sessions/{id}/executions/command` | 执行 Shell 命令 |
 | `POST` | `/sessions/{id}/executions/node` | 执行 Node.js 代码 |
-| `POST` | `/sessions/{id}/executions/approval-check` | 预检工具风险等级 |
+| `POST` | `/sessions/{id}/executions/approval-check` | 预检工具风险等级；传 `idempotency_key` 可复用该 session 的 pending/approved/rejected 结果 |
 | `GET` | `/sessions/{id}/executions/{eid}` | 查询执行结果 |
 | `POST` | `/sessions/{id}/executions/{eid}/cancel` | 取消进行中的执行 |
 
@@ -392,8 +392,17 @@ Agent 工具 `ls` / `find` / `grep` 覆盖 SDK 本地同名工具，全部转发
 
 ### Approvals
 
+审批的 `idempotency_key` 必须由 Agent 根据 durable run、Sandbox session、工具名、稳定的 SDK
+`tool_call_id` 和规范化参数生成，且只在该 session 内生效。相同 `(session_id, idempotency_key)` 的请求
+原子复用同一条 pending、approved 或 rejected 记录；同一执行尝试的重试不会重复弹窗。approval resume
+会携带原审批 key 和 operation fingerprint 作为一次性授权，即使 SDK 产生新的 `tool_call_id` 也只会
+授权完全相同的规范化操作，并在成功使用后失效；之后相同命令的新执行仍会生成新 key。`APPROVAL_MODE=deny`
+对 `approval_required` 明确拒绝且不创建记录；`auto_approve` 是显式的开发旁路，生产配置会拒绝它。
+
 | 方法 | 路径 | 说明 |
 |------|------|------|
+| `POST` | `/approvals` | 创建或复用 durable approval |
+| `GET` | `/approvals/{id}` | 查询审批状态 |
 | `POST` | `/approve` | 审批决策 |
 
 ```json
@@ -401,7 +410,7 @@ Agent 工具 `ls` / `find` / `grep` 覆盖 SDK 本地同名工具，全部转发
 { "approval_id": "approval_abc123", "decision": "approve" }
 
 // Response (200)
-{ "approval_id": "approval_abc123", "status": "approved", "risk_level": "high", "reason": "" }
+{ "approval_id": "approval_abc123", "idempotency_key": "approval_hash", "status": "approved", "risk_level": "high", "reason": "" }
 ```
 
 ---

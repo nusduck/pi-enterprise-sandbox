@@ -202,6 +202,7 @@ export function createApproval(
 ): ApprovalEntity {
   return {
     toolExecutionId: null,
+    idempotencyKey: null,
     status: 'pending',
     reason: '',
     command: null,

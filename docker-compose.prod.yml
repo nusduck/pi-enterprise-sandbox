@@ -67,6 +67,8 @@ services:
       SANDBOX_JWT_ISSUER: ${SANDBOX_JWT_ISSUER:-pi-enterprise-sandbox}
       SANDBOX_JWT_AUDIENCE: ${SANDBOX_JWT_AUDIENCE:-pi-enterprise-sandbox}
       SANDBOX_AUTH_ALLOW_PUBLIC_REGISTER: "false"
+      SANDBOX_APPROVAL_MODE: ${APPROVAL_MODE:-${SANDBOX_APPROVAL_MODE:-}}
+      SANDBOX_APPROVAL_ENABLED: ${APPROVAL_ENABLED:-${SANDBOX_APPROVAL_ENABLED:-}}
       # Outbound: disabled or allowlist only (never unrestricted).
       SANDBOX_NETWORK_MODE: ${SANDBOX_NETWORK_MODE:-disabled}
       SANDBOX_POLICY_PROFILE: strict

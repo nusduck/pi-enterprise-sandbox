@@ -3,9 +3,9 @@
 Three-tier decisions (immutable policy version echoed to callers):
 
 - ``allow`` — safe / constrained medium risk; execute immediately
-- ``approval_required`` — high risk; human gate when APPROVAL_ENABLED
+- ``approval_required`` — high risk; human gate when APPROVAL_MODE=ask
 - ``hard_deny`` — never executable; cannot be approved or bypassed by
-  APPROVAL_ENABLED or approval credentials
+  APPROVAL_MODE or approval credentials
 
 Agent Extension may pre-filter; Sandbox always re-evaluates independently.
 """

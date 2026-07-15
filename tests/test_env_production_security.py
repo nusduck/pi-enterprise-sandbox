@@ -120,11 +120,46 @@ class TestNetworkMode:
         with pytest.raises(ProductionConfigError, match="POLICY_PROFILE"):
             validate_production_settings(s)
 
+    def test_invalid_approval_mode_raises(self):
+        with pytest.raises(ValueError, match="APPROVAL_MODE"):
+            Settings(
+                approval_mode="sometimes",
+                database_url="sqlite:////tmp/approval-mode-bad.db",
+                allowed_client_cidrs=["127.0.0.1/32"],
+            )
+
+    def test_invalid_legacy_approval_enabled_raises(self):
+        with pytest.raises(ValueError, match="APPROVAL_ENABLED"):
+            Settings(
+                approval_enabled="sometimes",
+                database_url="sqlite:////tmp/approval-enabled-bad.db",
+                allowed_client_cidrs=["127.0.0.1/32"],
+            )
+
+    def test_legacy_false_maps_to_deny_without_mode(self):
+        s = Settings(
+            approval_enabled=False,
+            database_url="sqlite:////tmp/approval-legacy-false.db",
+            allowed_client_cidrs=["127.0.0.1/32"],
+        )
+        assert s.approval_mode == "deny"
+        assert s.approval_enabled is False
+
 
 class TestProductionUnsafeMatrix:
     def test_safe_production_config_passes(self):
         s = Settings(**_production_kwargs())
         validate_production_settings(s)  # no raise
+
+    @pytest.mark.parametrize("approval_mode", ["ask", "deny"])
+    def test_safe_approval_modes_pass(self, approval_mode):
+        s = Settings(**_production_kwargs(approval_mode=approval_mode))
+        validate_production_settings(s)
+
+    def test_auto_approve_fails(self):
+        s = Settings(**_production_kwargs(approval_mode="auto_approve"))
+        with pytest.raises(ProductionConfigError, match="auto_approve"):
+            validate_production_settings(s)
 
     def test_empty_api_token_fails(self):
         s = Settings(**_production_kwargs(api_token=""))

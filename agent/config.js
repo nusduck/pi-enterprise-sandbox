@@ -63,20 +63,54 @@ export function resolvePolicyProfile(env = process.env) {
   return requested;
 }
 
+/** Supported approval behavior for approval_required policy results. */
+export const APPROVAL_MODES = Object.freeze({
+  ASK: 'ask',
+  AUTO_APPROVE: 'auto_approve',
+  DENY: 'deny',
+});
+
+function nonEmptyEnv(env, key) {
+  const value = env?.[key];
+  return value != null && String(value).trim() !== '' ? String(value).trim() : null;
+}
+
+function parseLegacyApprovalEnabled(value) {
+  if (typeof value === 'boolean') return value;
+  const raw = String(value).trim().toLowerCase();
+  if (raw === 'true') return true;
+  if (raw === 'false') return false;
+  throw new Error(`Invalid APPROVAL_ENABLED=${value}; expected true or false`);
+}
+
 /**
- * Whether interactive approval is required for high-risk tools.
- * Default true. When false, approval_required tools execute with bypass audit;
- * hard_deny is never overridden. Aligns with SANDBOX_APPROVAL_ENABLED when unset.
- * @param {NodeJS.ProcessEnv} [env]
+ * Resolve the global approval policy. Default is ask. Legacy booleans map
+ * true → ask and false → deny, so disabling the ask switch never broadens
+ * permissions. auto_approve is explicit and intended only for development.
+ * @param {NodeJS.ProcessEnv | Record<string, string|boolean|undefined>} [env]
  */
+export function resolveApprovalMode(env = process.env) {
+  const explicit = nonEmptyEnv(env, 'APPROVAL_MODE') || nonEmptyEnv(env, 'SANDBOX_APPROVAL_MODE');
+  if (explicit) {
+    const mode = explicit.toLowerCase().replaceAll('-', '_');
+    if (Object.values(APPROVAL_MODES).includes(mode)) return mode;
+    throw new Error(
+      `Invalid APPROVAL_MODE=${explicit}; expected ask|auto_approve|deny`,
+    );
+  }
+
+  const legacy = nonEmptyEnv(env, 'APPROVAL_ENABLED') || nonEmptyEnv(env, 'SANDBOX_APPROVAL_ENABLED');
+  if (legacy != null) {
+    return parseLegacyApprovalEnabled(legacy)
+      ? APPROVAL_MODES.ASK
+      : APPROVAL_MODES.DENY;
+  }
+  return APPROVAL_MODES.ASK;
+}
+
+/** @param {NodeJS.ProcessEnv | Record<string, string|boolean|undefined>} [env] */
 export function resolveApprovalEnabled(env = process.env) {
-  if (env.APPROVAL_ENABLED != null && String(env.APPROVAL_ENABLED).trim() !== '') {
-    return String(env.APPROVAL_ENABLED).toLowerCase() !== 'false';
-  }
-  if (env.SANDBOX_APPROVAL_ENABLED != null && String(env.SANDBOX_APPROVAL_ENABLED).trim() !== '') {
-    return String(env.SANDBOX_APPROVAL_ENABLED).toLowerCase() !== 'false';
-  }
-  return true;
+  return resolveApprovalMode(env) !== APPROVAL_MODES.DENY;
 }
 
 /**
@@ -169,6 +203,7 @@ export function validateProductionConfig(env = process.env, opts = {}) {
   const sandboxToken = String(env.SANDBOX_API_TOKEN || '').trim();
   const skillsMode = opts.skillsMode || resolveSkillsMode(env);
   const requestedProfile = requestedPolicyProfile(env);
+  const approvalMode = resolveApprovalMode(env);
 
   if (!internal) {
     errors.push('AGENT_INTERNAL_TOKEN must be non-empty in production');
@@ -197,6 +232,10 @@ export function validateProductionConfig(env = process.env, opts = {}) {
   }
   if (requestedProfile === 'balanced') {
     errors.push('SANDBOX_POLICY_PROFILE=balanced is forbidden in production (use strict)');
+  }
+
+  if (approvalMode === APPROVAL_MODES.AUTO_APPROVE) {
+    errors.push('APPROVAL_MODE=auto_approve is forbidden in production (use ask or deny)');
   }
 
   const baseUrl = String(env.LLMIO_BASE_URL || '').toLowerCase();
@@ -248,6 +287,7 @@ export function effectiveConfig(cfg = config) {
     MODEL_CONTEXT_WINDOW: cfg.MODEL_CONTEXT_WINDOW,
     MODEL_MAX_TOKENS: cfg.MODEL_MAX_TOKENS,
     MODEL_REGISTRY_PATH: cfg.MODEL_REGISTRY_PATH || process.env.MODEL_REGISTRY_PATH || '<default>',
+    APPROVAL_MODE: cfg.APPROVAL_MODE,
     APPROVAL_ENABLED: cfg.APPROVAL_ENABLED,
     POLICY_PROFILE: cfg.POLICY_PROFILE,
     SKILLS_MODE: cfg.SKILLS_MODE,
@@ -322,6 +362,8 @@ export const config = {
   FAKE_LLM_ENABLED: isFakeLlmEnabled(),
   NODE_ENV: process.env.NODE_ENV || 'development',
   DEPLOYMENT_ENV: resolveDeploymentEnv(),
+  APPROVAL_MODE: resolveApprovalMode(),
+  // Legacy projection retained for older status consumers.
   APPROVAL_ENABLED: resolveApprovalEnabled(),
   /** strict by default; balanced only activates with effective required bwrap. */
   POLICY_PROFILE: resolvePolicyProfile(),

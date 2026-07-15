@@ -10,6 +10,7 @@ import {
   effectiveConfig,
   isWeakSecret,
   resolveAuthEnabled,
+  resolveApprovalMode,
 } from '../config.js';
 
 const STRONG = 'b'.repeat(64);
@@ -69,6 +70,34 @@ describe('validateProductionConfig', () => {
     );
   });
 
+  it('rejects explicit auto approval in production', () => {
+    assert.throws(
+      () =>
+        validateProductionConfig({
+          DEPLOYMENT_ENV: 'production',
+          AGENT_INTERNAL_TOKEN: STRONG,
+          SANDBOX_API_TOKEN: STRONG,
+          AUTH_ENABLED: 'true',
+          APPROVAL_MODE: 'auto_approve',
+        }),
+      /APPROVAL_MODE=auto_approve/,
+    );
+  });
+
+  it('accepts explicit ask and deny modes in production', () => {
+    for (const APPROVAL_MODE of ['ask', 'deny']) {
+      assert.doesNotThrow(() =>
+        validateProductionConfig({
+          DEPLOYMENT_ENV: 'production',
+          AGENT_INTERNAL_TOKEN: STRONG,
+          SANDBOX_API_TOKEN: STRONG,
+          AUTH_ENABLED: 'true',
+          APPROVAL_MODE,
+        }),
+      );
+    }
+  });
+
   it('accepts SANDBOX_AUTH_ENABLED as auth signal', () => {
     assert.doesNotThrow(() =>
       validateProductionConfig({
@@ -110,5 +139,7 @@ describe('isWeakSecret + resolveAuthEnabled', () => {
 
   it('resolves auth enabled', () => {
     assert.equal(resolveAuthEnabled({ AUTH_ENABLED: 'true' }), true);
+    assert.equal(resolveApprovalMode({}), 'ask');
+    assert.equal(resolveApprovalMode({ APPROVAL_ENABLED: 'false' }), 'deny');
   });
 });

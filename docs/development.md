@@ -349,16 +349,16 @@ cd frontend && npm run build && ls dist/
 开发时默认开启人审：
 
 ```bash
-# api-server（默认 true；显式关闭仅用于受控环境）
-APPROVAL_ENABLED=true
-
-# sandbox（与上对齐；未设置时默认 true）
-SANDBOX_APPROVAL_ENABLED=true
+# 全局默认：高风险工具暂停，等待人工决定
+APPROVAL_MODE=ask
 ```
 
 - **Agent 层**：`@company/pi-enterprise-agent-kit` 的 Policy 与 Sandbox Tools Extension 在 `bindExtensions()` 后生效；写工具互斥与审批保持 fail-closed。
 - **Sandbox 层**：`policy_checker` 三层决策；`POST .../approval-check` 与 `POST .../executions/command` 独立 hard_deny。
-- **关闭审批**：`APPROVAL_ENABLED=false` 时风险命令可直接跑，但 hard_deny 模式（如 `sudo`、`rm -rf /`）仍 403/拒绝，并写 bypass 审计。
+- **审批模式**：`ask`（默认）创建 durable approval 并暂停；`deny` 明确拒绝
+  `approval_required` 且不创建审批；`auto_approve` 仅用于明确受控的研发旁路并写
+  bypass 审计，生产配置拒绝该模式。旧 `APPROVAL_ENABLED=true|false` 分别映射到
+  `ask|deny`。所有模式都保留 hard_deny（如 `sudo`、`rm -rf /`）。
 - **定向测试**：
 
 ```bash

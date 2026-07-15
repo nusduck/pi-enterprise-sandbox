@@ -251,6 +251,7 @@ export function agentEventToRuntime(
           type: 'tool.approval_required',
           payload: {
             approval_id: approvalId,
+            idempotency_key: ev.idempotency_key != null ? String(ev.idempotency_key) : undefined,
             reason: String(ev.reason || ev.command || ''),
             command: ev.command != null ? String(ev.command) : undefined,
             tool_call_id: ev.tool_call_id != null ? String(ev.tool_call_id) : undefined,

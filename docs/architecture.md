@@ -159,7 +159,7 @@ POST /sessions → CREATE → RUNNING → (TTL 30min 无活动) → EXPIRED → 
 | **Command blocking** | 禁止 `sudo`, `su`, `rm -rf /`, `dd`, `mkfs`, `fdisk`, `chmod 777`（hard_deny） |
 | **Output limits** | stdout/stderr 上限 50K chars |
 | **Audit logging** | 每次执行记录 trace_id |
-| **Approval** | 高风险命令需外部审批（`APPROVAL_ENABLED`，默认 true） |
+| **Approval** | 高风险命令由 `APPROVAL_MODE` 控制（默认 `ask`；`deny` 拒绝，`auto_approve` 仅研发） |
 | **API Key** | 仅存服务端环境变量，浏览器零接触 |
 | **SDK Extension** | Agent 侧统一 `tool_call` 策略入口；异常 fail-closed |
 
@@ -179,15 +179,20 @@ Sandbox (FastAPI)
   path / ownership     → 路径与归属校验
 ```
 
-| 策略结果 | `APPROVAL_ENABLED=true` | `APPROVAL_ENABLED=false` |
-|----------|-------------------------|---------------------------|
-| `allow` | 直接执行 | 直接执行 |
-| `approval_required` | 暂停等人审 | 执行 + bypass 审计 |
-| `hard_deny` | 拒绝 | **仍拒绝**（开关与 approval credential 不可覆盖） |
+| 策略结果 | `APPROVAL_MODE=ask` | `APPROVAL_MODE=deny` | `APPROVAL_MODE=auto_approve` |
+|----------|----------------------|-----------------------|-----------------------------------|
+| `allow` | 直接执行 | 直接执行 | 直接执行 |
+| `approval_required` | 暂停等人审 | **明确拒绝，不创建审批** | 执行 + bypass 审计 |
+| `hard_deny` | 拒绝 | **仍拒绝** | **仍拒绝** |
 
 - 读工具（`read`/`ls`/`find`/`grep`…）可并行；写/副作用工具（`write`/`edit`/`bash`/`submit_artifact`/未知）按 conversation/workspace 串行。
 - 策略版本常量 `POLICY_VERSION`（当前 `2026-07-15.1`）写入审批响应与审计 meta，便于追溯。
 - `SANDBOX_POLICY_PROFILE=strict|balanced` 在 Agent 与 Sandbox 对称生效；`balanced` 仅在 required Bubblewrap 已通过配置校验时激活，并只放行常见包管理命令的审批前置门。`SANDBOX_NETWORK_MODE` 仍是网络权限唯一事实源，生产固定 `strict`。
+- approval-check 要求 Agent 传递由 durable `run_id`、Sandbox session、工具名、稳定 SDK
+  `tool_call_id` 和规范化参数组成的尝试级 `idempotency_key`。Sandbox 对
+  `(session_id, idempotency_key)` 建唯一索引并原子复用 pending/approved/rejected 记录；同一尝试的
+  重试不会生成第二个审批。approval resume 携带原 key 与 operation fingerprint 作为一次性授权，
+  仅完全匹配的规范化操作可消费它；消费后后续相同命令会获得新的审批 key。
 - 实现：`agent/packages/enterprise-agent-kit/extensions/policy/`、`sandbox/services/policy_checker.py`。
 
 ## Technology Stack

@@ -381,6 +381,8 @@ export function reduceRuntimeEvent(
           id: approvalId,
           runId,
           toolExecutionId: toolId,
+          idempotencyKey:
+            payload.idempotency_key != null ? str(payload.idempotency_key) : null,
           status: 'pending',
           reason: str(payload.reason || payload.command),
           command: payload.command != null ? str(payload.command) : null,

@@ -194,6 +194,8 @@ export type ApprovalEntity = {
   id: string;
   runId: string;
   toolExecutionId: string | null;
+  /** Durable Sandbox approval scope; distinct SDK tool_call_ids may share it. */
+  idempotencyKey: string | null;
   status: ApprovalStatus;
   reason: string;
   command: string | null;

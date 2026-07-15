@@ -199,3 +199,107 @@ test('single MCP extension exposes only mcp and defers side effects to durable a
   );
   assert.equal(suspended[0].approval_id, 'approval_1');
 });
+
+test('MCP approval scope follows tool-call attempts and consumes resume approval once', async () => {
+  const registered = [];
+  const suspended = [];
+  const approvalRequests = [];
+  const approvalsByKey = new Map();
+  let resumeToken = null;
+  let consumed = 0;
+  const manager = {
+    invoke: async (_tool, _args, { approved }) => {
+      if (!approved) {
+        return {
+          status: 'approval_required',
+          tool: { key: 'ops:delete', riskLevel: 'high' },
+        };
+      }
+      return {
+        status: 'ok',
+        serverId: 'server-1',
+        tool: { key: 'ops:delete' },
+        result: { deleted: true },
+        resultRef: 'mcp_result_1',
+        timestamp: '2026-07-15T00:00:00Z',
+        truncated: false,
+      };
+    },
+  };
+  const options = {
+    manager,
+    getMeta: () => ({ session_id: 'sess-mcp', run_id: 'run-mcp' }),
+    createApproval: async (request) => {
+      approvalRequests.push(request);
+      const existing = approvalsByKey.get(request.idempotency_key);
+      if (existing) return existing;
+      const created = {
+        approval_id: `approval_mcp_${approvalRequests.length}`,
+        idempotency_key: request.idempotency_key,
+      };
+      approvalsByKey.set(request.idempotency_key, created);
+      return created;
+    },
+    onApprovalSuspend: async (pending) => suspended.push(pending),
+  };
+  createMcpExtension(options)({ registerTool: (tool) => registered.push(tool) });
+  const firstArgs = { nested: { z: 1, a: 2 }, query: 'same' };
+  const reorderedArgs = { query: 'same', nested: { a: 2, z: 1 } };
+
+  await assert.rejects(
+    registered[0].execute('mcp_call_1', {
+      action: 'invoke',
+      tool: 'ops:delete',
+      arguments: firstArgs,
+    }),
+    { name: 'ApprovalSuspendedError' },
+  );
+  await assert.rejects(
+    registered[0].execute('mcp_call_1', {
+      action: 'invoke',
+      tool: 'ops:delete',
+      arguments: reorderedArgs,
+    }),
+    { name: 'ApprovalSuspendedError' },
+  );
+  assert.equal(approvalRequests.length, 2);
+  assert.equal(approvalRequests[0].idempotency_key, approvalRequests[1].idempotency_key);
+  assert.equal(suspended[0].operation_fingerprint, suspended[1].operation_fingerprint);
+
+  resumeToken = {
+    approval_id: suspended[0].approval_id,
+    idempotency_key: suspended[0].idempotency_key,
+    operation_fingerprint: suspended[0].operation_fingerprint,
+    tool_name: suspended[0].tool_name,
+    run_id: 'run-mcp',
+    sandbox_session_id: 'sess-mcp',
+  };
+  const resumedRegistered = [];
+  createMcpExtension({
+    ...options,
+    getPreApprovedAttempt: () => resumeToken,
+    consumePreApprovedAttempt: () => {
+      consumed += 1;
+      resumeToken = null;
+    },
+  })({ registerTool: (tool) => resumedRegistered.push(tool) });
+  const resumed = await resumedRegistered[0].execute('mcp_call_2', {
+    action: 'invoke',
+    tool: 'ops:delete',
+    arguments: reorderedArgs,
+  });
+  assert.equal(resumed.isError, false);
+  assert.equal(consumed, 1);
+
+  await assert.rejects(
+    resumedRegistered[0].execute('mcp_call_3', {
+      action: 'invoke',
+      tool: 'ops:delete',
+      arguments: reorderedArgs,
+    }),
+    { name: 'ApprovalSuspendedError' },
+  );
+  assert.equal(approvalRequests.length, 3);
+  assert.notEqual(approvalRequests[2].idempotency_key, approvalRequests[0].idempotency_key);
+  assert.equal(consumed, 1);
+});

@@ -31,20 +31,54 @@ export function resolveAuthEnabled(env = process.env) {
   return false;
 }
 
+/** Supported approval behavior for approval_required policy results. */
+export const APPROVAL_MODES = Object.freeze({
+  ASK: 'ask',
+  AUTO_APPROVE: 'auto_approve',
+  DENY: 'deny',
+});
+
+function nonEmptyEnv(env, key) {
+  const value = env?.[key];
+  return value != null && String(value).trim() !== '' ? String(value).trim() : null;
+}
+
+function parseLegacyApprovalEnabled(value) {
+  if (typeof value === 'boolean') return value;
+  const raw = String(value).trim().toLowerCase();
+  if (raw === 'true') return true;
+  if (raw === 'false') return false;
+  throw new Error(`Invalid APPROVAL_ENABLED=${value}; expected true or false`);
+}
+
 /**
- * Whether interactive approval is required for high-risk tools.
- * Default true. When false, approval_required tools execute with bypass audit;
- * hard_deny is never overridden. Aligns with SANDBOX_APPROVAL_ENABLED when unset.
- * @param {NodeJS.ProcessEnv} [env]
+ * Resolve the global approval policy. Default is ask. Legacy booleans map
+ * true → ask and false → deny, so disabling the ask switch never broadens
+ * permissions. auto_approve is explicit and intended only for development.
+ * @param {NodeJS.ProcessEnv | Record<string, string|boolean|undefined>} [env]
  */
+export function resolveApprovalMode(env = process.env) {
+  const explicit = nonEmptyEnv(env, 'APPROVAL_MODE') || nonEmptyEnv(env, 'SANDBOX_APPROVAL_MODE');
+  if (explicit) {
+    const mode = explicit.toLowerCase().replaceAll('-', '_');
+    if (Object.values(APPROVAL_MODES).includes(mode)) return mode;
+    throw new Error(
+      `Invalid APPROVAL_MODE=${explicit}; expected ask|auto_approve|deny`,
+    );
+  }
+
+  const legacy = nonEmptyEnv(env, 'APPROVAL_ENABLED') || nonEmptyEnv(env, 'SANDBOX_APPROVAL_ENABLED');
+  if (legacy != null) {
+    return parseLegacyApprovalEnabled(legacy)
+      ? APPROVAL_MODES.ASK
+      : APPROVAL_MODES.DENY;
+  }
+  return APPROVAL_MODES.ASK;
+}
+
+/** @param {NodeJS.ProcessEnv | Record<string, string|boolean|undefined>} [env] */
 export function resolveApprovalEnabled(env = process.env) {
-  if (env.APPROVAL_ENABLED != null && String(env.APPROVAL_ENABLED).trim() !== '') {
-    return String(env.APPROVAL_ENABLED).toLowerCase() !== 'false';
-  }
-  if (env.SANDBOX_APPROVAL_ENABLED != null && String(env.SANDBOX_APPROVAL_ENABLED).trim() !== '') {
-    return String(env.SANDBOX_APPROVAL_ENABLED).toLowerCase() !== 'false';
-  }
-  return true;
+  return resolveApprovalMode(env) !== APPROVAL_MODES.DENY;
 }
 
 /**
@@ -101,6 +135,10 @@ export function validateProductionConfig(env = process.env) {
     errors.push('AUTH_ENABLED (or SANDBOX_AUTH_ENABLED) must be true in production');
   }
 
+  if (resolveApprovalMode(env) === APPROVAL_MODES.AUTO_APPROVE) {
+    errors.push('APPROVAL_MODE=auto_approve is forbidden in production (use ask or deny)');
+  }
+
   if (errors.length) {
     const err = new Error(
       `Production configuration is unsafe (${errors.length} issue(s)): ${errors.join('; ')}`,
@@ -125,6 +163,7 @@ export function effectiveConfig(cfg = config) {
     AGENT_BASE_URL: cfg.AGENT_BASE_URL,
     AGENT_INTERNAL_TOKEN: cfg.AGENT_INTERNAL_TOKEN ? '***' : '<empty>',
     AUTH_ENABLED: cfg.AUTH_ENABLED,
+    APPROVAL_MODE: cfg.APPROVAL_MODE,
     APPROVAL_ENABLED: cfg.APPROVAL_ENABLED,
     JSON_BODY_LIMIT_BYTES: cfg.JSON_BODY_LIMIT_BYTES,
     CORS_ALLOWED_ORIGINS: cfg.CORS_ALLOWED_ORIGINS,
@@ -152,10 +191,11 @@ export const config = {
    */
   AUTH_ENABLED: resolveAuthEnabled(),
   /**
-   * Interactive human approval for high-risk tools. Default true.
-   * false → risk tools execute with bypass audit; hard_deny still blocks.
+   * Approval behavior for high-risk tools. Default ask. Legacy false maps to deny;
+   * auto_approve requires an explicit mode and is rejected in production.
    * Surfaced on status for UI; enforcement lives in Agent + Sandbox.
    */
+  APPROVAL_MODE: resolveApprovalMode(),
   APPROVAL_ENABLED: resolveApprovalEnabled(),
   JSON_BODY_LIMIT_BYTES:
     parseInt(process.env.JSON_BODY_LIMIT_BYTES, 10) || 1024 * 1024,

@@ -15,6 +15,7 @@ def _serialize(entry: dict) -> dict:
     risk_val = risk.value if hasattr(risk, "value") else risk
     return {
         "approval_id": entry["approval_id"],
+        "idempotency_key": entry.get("idempotency_key"),
         "session_id": entry.get("session_id"),
         "tool_name": entry.get("tool_name"),
         "status": entry["status"],
@@ -36,6 +37,7 @@ def create_approval(body: ApprovalCreateRequest):
         risk_level=body.risk_level,
         reason=body.reason,
         payload=body.payload,
+        idempotency_key=body.idempotency_key,
     )
     return _serialize(entry)
 
