@@ -31,7 +31,13 @@ import {
   validateSkillName,
   DEFAULT_SKILL_ROOTS,
 } from '../skills/paths.js';
-import { installSkill, atomicReplaceDir, editSkillFile } from '../skills/install.js';
+import {
+  installSkill,
+  atomicReplaceDir,
+  editSkillFile,
+  _testHelpers,
+  SKILL_EDIT_MAX_BYTES,
+} from '../skills/install.js';
 import {
   createSkillTools,
   SKILL_TOOL_NAMES,
@@ -369,6 +375,16 @@ describe('local install + atomic replace', () => {
     assert.ok(fs.existsSync(path.join(skillRoot, 'demo-skill', 'SKILL.md')));
     assert.ok(result.digest);
     assert.equal(fs.existsSync(path.join(skillRoot, 'demo-skill', '.git')), false);
+
+    const again = await installSkill({
+      name: 'demo-skill',
+      sourceType: 'local',
+      source: src,
+      skillRoot,
+      localAllowlist: [allowDir],
+    });
+    assert.equal(again.idempotent, true);
+    assert.match(again.summary, /already installed/);
   });
 
   it('rejects install when SKILL.md missing', async () => {
@@ -467,6 +483,17 @@ describe('local install + atomic replace', () => {
     );
   });
 
+  it('skill_edit rejects oversized content with an actionable bound', async () => {
+    await assert.rejects(
+      () => editSkillFile({
+        skillRoot,
+        path: 'demo-skill/too-large.md',
+        content: 'x'.repeat(SKILL_EDIT_MAX_BYTES + 1),
+      }),
+      /maximum.*Split the edit/i,
+    );
+  });
+
   it('tool execute install + reload via createSkillTools', async () => {
     const audits = [];
     const src = path.join(allowDir, 'tool-skill');
@@ -507,6 +534,31 @@ describe('local install + atomic replace', () => {
 });
 
 describe('git install (local bare repo)', () => {
+  it('bounds a stalled install command', async () => {
+    const { runCommand, digestDir, copyTree } = _testHelpers();
+    await assert.rejects(
+      () => runCommand(process.execPath, ['-e', 'setTimeout(() => {}, 1000)'], {
+        timeoutMs: 20,
+      }),
+      /timed out/i,
+    );
+
+    const source = await fsp.mkdtemp(path.join(os.tmpdir(), 'skills-deadline-'));
+    try {
+      await fsp.writeFile(path.join(source, 'large.txt'), 'content', 'utf8');
+      assert.throws(
+        () => digestDir(source, { deadlineAt: Date.now() - 1 }),
+        /timed out/i,
+      );
+      await assert.rejects(
+        () => copyTree(source, path.join(source, 'copy'), { deadlineAt: Date.now() - 1 }),
+        /timed out/i,
+      );
+    } finally {
+      await fsp.rm(source, { recursive: true, force: true });
+    }
+  });
+
   it('clones HTTPS-style file path is rejected; real git via file:// also rejected', async () => {
     // file:// must be rejected by validator
     assert.throws(() => validateGitHttpsUrl('file:///tmp/repo.git'), /https/i);

@@ -15,6 +15,9 @@ import { randomUUID } from 'node:crypto';
 import { config, AUTH_HEADER } from '../config.js';
 
 const BASE = config.SANDBOX_BASE_URL;
+const LIFECYCLE_REQUEST_TIMEOUT_MS = 10_000;
+const LEDGER_REQUEST_TIMEOUT_MS = 10_000;
+const REQUEST_GRACE_MS = 5_000;
 
 export class SandboxError extends Error {
   constructor(status, message, path) {
@@ -116,17 +119,50 @@ export function createSandboxClient({ traceId = null, auth = null } = {}) {
 
   async function sbFetch(path, opts = {}) {
     const url = `${BASE}${path}`;
-    const { headers: extraHeaders, ...rest } = opts;
-    const resp = await fetch(url, {
-      ...rest,
-      headers: headers(extraHeaders || {}),
-    });
-    if (!resp.ok) {
-      const detail = await resp.json().catch(() => ({ detail: resp.statusText }));
-      throw new SandboxError(resp.status, detail.detail || resp.statusText, path);
+    const {
+      headers: extraHeaders,
+      signal: externalSignal,
+      timeoutMs = null,
+      ...rest
+    } = opts;
+    const controller = new AbortController();
+    const timer = timeoutMs == null
+      ? null
+      : setTimeout(() => controller.abort(), timeoutMs);
+    const onAbort = () => controller.abort();
+    externalSignal?.addEventListener('abort', onAbort, { once: true });
+    try {
+      const resp = await fetch(url, {
+        ...rest,
+        signal: controller.signal,
+        headers: headers(extraHeaders || {}),
+      });
+      if (!resp.ok) {
+        const detail = await resp.json().catch(() => ({ detail: resp.statusText }));
+        throw new SandboxError(resp.status, detail.detail || resp.statusText, path);
+      }
+      return resp;
+    } catch (err) {
+      if (controller.signal.aborted && !externalSignal?.aborted) {
+        throw new Error(`Sandbox request timed out after ${timeoutMs}ms: ${path}`);
+      }
+      throw err;
+    } finally {
+      if (timer !== null) clearTimeout(timer);
+      externalSignal?.removeEventListener('abort', onAbort);
     }
-    return resp;
   }
+
+  const lifecycleFetch = (path, opts = {}) =>
+    sbFetch(path, { ...opts, timeoutMs: LIFECYCLE_REQUEST_TIMEOUT_MS });
+  const ledgerFetch = (path, opts = {}) =>
+    sbFetch(path, { ...opts, timeoutMs: LEDGER_REQUEST_TIMEOUT_MS });
+  const timeoutForSeconds = (seconds) => {
+    const value = Number(seconds);
+    return Number.isFinite(value) && value >= 0
+      ? value * 1000 + REQUEST_GRACE_MS
+      : null;
+  };
 
   return {
     setTraceId,
@@ -240,7 +276,7 @@ export function createSandboxClient({ traceId = null, auth = null } = {}) {
 
     // ── Agent runs / events (session persistence MVP) ─
     async createAgentRun(body = {}) {
-      const resp = await sbFetch('/agent-runs', {
+      const resp = await lifecycleFetch('/agent-runs', {
         method: 'POST',
         body: JSON.stringify(body),
       });
@@ -248,12 +284,12 @@ export function createSandboxClient({ traceId = null, auth = null } = {}) {
     },
 
     async getAgentRun(runId) {
-      const resp = await sbFetch(`/agent-runs/${encodeURIComponent(runId)}`);
+      const resp = await lifecycleFetch(`/agent-runs/${encodeURIComponent(runId)}`);
       return resp.json();
     },
 
     async appendAgentEvent(runId, event) {
-      const resp = await sbFetch(`/agent-runs/${encodeURIComponent(runId)}/events`, {
+      const resp = await lifecycleFetch(`/agent-runs/${encodeURIComponent(runId)}/events`, {
         method: 'POST',
         body: JSON.stringify(event),
       });
@@ -266,12 +302,12 @@ export function createSandboxClient({ traceId = null, auth = null } = {}) {
       if (limit != null) q.set('limit', String(limit));
       const qs = q.toString();
       const path = `/agent-runs/${encodeURIComponent(runId)}/events${qs ? `?${qs}` : ''}`;
-      const resp = await sbFetch(path);
+      const resp = await lifecycleFetch(path);
       return resp.json();
     },
 
     async interruptAgentRun(runId, body = {}) {
-      const resp = await sbFetch(`/agent-runs/${encodeURIComponent(runId)}/interrupt`, {
+      const resp = await lifecycleFetch(`/agent-runs/${encodeURIComponent(runId)}/interrupt`, {
         method: 'POST',
         body: JSON.stringify(body),
       });
@@ -279,7 +315,7 @@ export function createSandboxClient({ traceId = null, auth = null } = {}) {
     },
 
     async completeAgentRun(runId, body = {}) {
-      const resp = await sbFetch(`/agent-runs/${encodeURIComponent(runId)}/complete`, {
+      const resp = await lifecycleFetch(`/agent-runs/${encodeURIComponent(runId)}/complete`, {
         method: 'POST',
         body: JSON.stringify(body),
       });
@@ -287,7 +323,7 @@ export function createSandboxClient({ traceId = null, auth = null } = {}) {
     },
 
     async failAgentRun(runId, body = {}) {
-      const resp = await sbFetch(`/agent-runs/${encodeURIComponent(runId)}/fail`, {
+      const resp = await lifecycleFetch(`/agent-runs/${encodeURIComponent(runId)}/fail`, {
         method: 'POST',
         body: JSON.stringify(body),
       });
@@ -296,7 +332,7 @@ export function createSandboxClient({ traceId = null, auth = null } = {}) {
 
     /** B6: park run while waiting for human approval (releases lease). */
     async markAgentRunWaitingApproval(runId, body = {}) {
-      const resp = await sbFetch(
+      const resp = await lifecycleFetch(
         `/agent-runs/${encodeURIComponent(runId)}/waiting-approval`,
         { method: 'POST', body: JSON.stringify(body) },
       );
@@ -304,7 +340,7 @@ export function createSandboxClient({ traceId = null, auth = null } = {}) {
     },
 
     async markAgentRunWaitingInput(runId, body = {}) {
-      const resp = await sbFetch(
+      const resp = await lifecycleFetch(
         `/agent-runs/${encodeURIComponent(runId)}/waiting-input`,
         { method: 'POST', body: JSON.stringify(body) },
       );
@@ -312,7 +348,7 @@ export function createSandboxClient({ traceId = null, auth = null } = {}) {
     },
 
     async replaceTaskPlan(runId, projection) {
-      const resp = await sbFetch(`/agent-runs/${encodeURIComponent(runId)}/task-plan`, {
+      const resp = await lifecycleFetch(`/agent-runs/${encodeURIComponent(runId)}/task-plan`, {
         method: 'PUT',
         body: JSON.stringify(projection),
       });
@@ -321,7 +357,7 @@ export function createSandboxClient({ traceId = null, auth = null } = {}) {
 
     /** B6: terminal budget_exceeded. */
     async budgetExceedAgentRun(runId, body = {}) {
-      const resp = await sbFetch(
+      const resp = await lifecycleFetch(
         `/agent-runs/${encodeURIComponent(runId)}/budget-exceeded`,
         { method: 'POST', body: JSON.stringify(body) },
       );
@@ -329,7 +365,7 @@ export function createSandboxClient({ traceId = null, auth = null } = {}) {
     },
 
     async releaseAgentRun(runId, body = {}) {
-      const resp = await sbFetch(`/agent-runs/${encodeURIComponent(runId)}/release`, {
+      const resp = await lifecycleFetch(`/agent-runs/${encodeURIComponent(runId)}/release`, {
         method: 'POST',
         body: JSON.stringify(body),
       });
@@ -337,7 +373,15 @@ export function createSandboxClient({ traceId = null, auth = null } = {}) {
     },
 
     async claimAgentRun(runId, body = {}) {
-      const resp = await sbFetch(`/agent-runs/${encodeURIComponent(runId)}/claim`, {
+      const resp = await lifecycleFetch(`/agent-runs/${encodeURIComponent(runId)}/claim`, {
+        method: 'POST',
+        body: JSON.stringify(body),
+      });
+      return resp.json();
+    },
+
+    async renewAgentRunLease(runId, body = {}) {
+      const resp = await lifecycleFetch(`/agent-runs/${encodeURIComponent(runId)}/renew`, {
         method: 'POST',
         body: JSON.stringify(body),
       });
@@ -345,12 +389,12 @@ export function createSandboxClient({ traceId = null, auth = null } = {}) {
     },
 
     async listWaitingApprovalRuns() {
-      const resp = await sbFetch('/agent-runs?status=waiting_approval');
+      const resp = await lifecycleFetch('/agent-runs?status=waiting_approval');
       return resp.json();
     },
 
     async prepareToolExecution(body) {
-      const resp = await sbFetch('/tool-executions', {
+      const resp = await ledgerFetch('/tool-executions', {
         method: 'POST',
         body: JSON.stringify(body),
       });
@@ -358,7 +402,7 @@ export function createSandboxClient({ traceId = null, auth = null } = {}) {
     },
 
     async getToolExecution(toolCallId) {
-      const resp = await sbFetch(`/tool-executions/${encodeURIComponent(toolCallId)}`);
+      const resp = await ledgerFetch(`/tool-executions/${encodeURIComponent(toolCallId)}`);
       return resp.json();
     },
 
@@ -367,12 +411,12 @@ export function createSandboxClient({ traceId = null, auth = null } = {}) {
       if (runId) q.set('run_id', runId);
       if (idempotencyKey) q.set('idempotency_key', idempotencyKey);
       const qs = q.toString();
-      const resp = await sbFetch(`/tool-executions${qs ? `?${qs}` : ''}`);
+      const resp = await ledgerFetch(`/tool-executions${qs ? `?${qs}` : ''}`);
       return resp.json();
     },
 
     async markToolExecuting(toolCallId) {
-      const resp = await sbFetch(
+      const resp = await ledgerFetch(
         `/tool-executions/${encodeURIComponent(toolCallId)}/executing`,
         { method: 'POST', body: JSON.stringify({}) },
       );
@@ -380,7 +424,7 @@ export function createSandboxClient({ traceId = null, auth = null } = {}) {
     },
 
     async markToolWaitingApproval(toolCallId) {
-      const resp = await sbFetch(
+      const resp = await ledgerFetch(
         `/tool-executions/${encodeURIComponent(toolCallId)}/waiting-approval`,
         { method: 'POST', body: JSON.stringify({}) },
       );
@@ -388,7 +432,7 @@ export function createSandboxClient({ traceId = null, auth = null } = {}) {
     },
 
     async markToolTerminal(toolCallId, body) {
-      const resp = await sbFetch(
+      const resp = await ledgerFetch(
         `/tool-executions/${encodeURIComponent(toolCallId)}/terminal`,
         { method: 'POST', body: JSON.stringify(body) },
       );
@@ -396,7 +440,7 @@ export function createSandboxClient({ traceId = null, auth = null } = {}) {
     },
 
     async toolCanAutoRetry(toolCallId) {
-      const resp = await sbFetch(
+      const resp = await ledgerFetch(
         `/tool-executions/${encodeURIComponent(toolCallId)}/can-auto-retry`,
       );
       return resp.json();
@@ -423,6 +467,7 @@ export function createSandboxClient({ traceId = null, auth = null } = {}) {
       const resp = await sbFetch(`/sessions/${sessionId}/executions/command`, {
         method: 'POST',
         body: JSON.stringify({ command, timeout }),
+        timeoutMs: timeoutForSeconds(timeout),
       });
       return resp.json();
     },
@@ -527,6 +572,7 @@ export function createSandboxClient({ traceId = null, auth = null } = {}) {
       const resp = await sbFetch(`/processes/${encodeURIComponent(processId)}/wait`, {
         method: 'POST',
         body: JSON.stringify({ timeout }),
+        timeoutMs: timeoutForSeconds(timeout),
       });
       return resp.json();
     },

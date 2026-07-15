@@ -6,21 +6,60 @@ import { mapSdkEventToSse } from '../services/sdk-sse-map.js';
  */
 export function createEventBridge(options) {
   const pendingToolArgs = new Map();
+  // A promise tail preserves DB sequence order. A Set would only wait for
+  // completion and could let concurrent appends race for the next sequence.
+  let persistTail = Promise.resolve();
+  let firstPersistError = null;
   let tokenBatch = '';
   let tokenBatchTimer = null;
 
-  const flush = () => {
-    if (!tokenBatch) return;
+  const trackPersist = (type, payload, semantic = false) => {
+    const task = persistTail.then(() =>
+      options.persistEvent(type, payload, { required: semantic }),
+    );
+    const observed = task.catch((err) => {
+      if (semantic && !firstPersistError) firstPersistError = err;
+      // Continue the queue so later terminal reconciliation events can still
+      // be attempted, while flush() exposes the first semantic failure.
+      return null;
+    });
+    persistTail = observed;
+    // Callers inside the synchronous SDK subscription intentionally do not
+    // await this promise; attach an explicit handled observer to every such
+    // task while flush() reports the saved semantic error.
+    void task.catch(() => {});
+    return task;
+  };
+
+  const drain = async (reportError = true) => {
+    await persistTail;
+    if (reportError && firstPersistError) {
+      const error = firstPersistError;
+      firstPersistError = null;
+      throw error;
+    }
+  };
+
+  const flush = async ({ reportError = true } = {}) => {
+    if (!tokenBatch) {
+      await drain(reportError);
+      return;
+    }
     const text = tokenBatch;
     tokenBatch = '';
     if (tokenBatchTimer) clearTimeout(tokenBatchTimer);
     tokenBatchTimer = null;
-    void options.persistEvent('token_batch', { text });
+    trackPersist('token_batch', { text });
+    await drain(reportError);
   };
 
   const scheduleToken = (text) => {
     tokenBatch += text;
-    if (!tokenBatchTimer) tokenBatchTimer = setTimeout(flush, 250);
+    if (!tokenBatchTimer) {
+      tokenBatchTimer = setTimeout(() => {
+        void flush({ reportError: false }).catch(() => {});
+      }, 250);
+    }
   };
 
   const unsubscribe = options.session.subscribe((event) => {
@@ -36,8 +75,11 @@ export function createEventBridge(options) {
         payload.type === 'error' ||
         payload.type === 'file_ready'
       ) {
-        flush();
-        void options.persistEvent(payload.type, payload);
+        // Preserve ordering: token batches are queued before the semantic
+        // boundary, and the caller can await flush()/dispose() before
+        // terminalizing the run.
+        void flush({ reportError: false }).catch(() => {});
+        trackPersist(payload.type, payload, true);
         if (payload.type === 'tool_start') {
           void options.enforceBudgetOrAbort(
             options.budget.recordToolCall({
@@ -62,9 +104,11 @@ export function createEventBridge(options) {
 
   return {
     flush,
-    dispose() {
-      flush();
+    async dispose() {
       if (typeof unsubscribe === 'function') unsubscribe();
+      if (tokenBatchTimer) clearTimeout(tokenBatchTimer);
+      tokenBatchTimer = null;
+      await flush();
     },
   };
 }

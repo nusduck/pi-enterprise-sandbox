@@ -238,6 +238,27 @@ export async function handleGetRun(runId, res, req = null) {
 }
 
 /**
+ * GET /api/runs/:id/tools — authoritative durable tool ledger snapshot.
+ * Used after SSE reconnect exhaustion; unlike a closed stream this endpoint
+ * never infers success from transport state.
+ */
+export async function handleListRunTools(runId, res, req = null) {
+  if (!runId) {
+    json(res, 400, { error: 'run id is required' });
+    return;
+  }
+  try {
+    const { auth } = await authorizeRunRequest(runId, req);
+    const client = createSandboxClient({ auth });
+    const result = await client.listToolExecutions({ runId });
+    json(res, 200, result);
+  } catch (err) {
+    console.error('[runs] list tools:', err.message);
+    sendError(res, err, req?.traceId);
+  }
+}
+
+/**
  * POST /api/runs/:id/resume-approval  body: { decision, reason? }
  * Usually triggered automatically after approve/reject; exposed for recovery.
  */

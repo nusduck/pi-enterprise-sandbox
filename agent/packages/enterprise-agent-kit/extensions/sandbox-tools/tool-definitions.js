@@ -40,6 +40,7 @@ import {
 } from '../../../../skills/paths.js';
 import { ApprovalSuspendedError } from '../../../../services/approval-waiter.js';
 import { normalizeWorkspaceToolParams } from '../../../../workspace-paths.js';
+import { summarizeToolArguments } from '../../../../runtime/tool-payload-sanitizer.js';
 
 /** Terminal ledger statuses that must never re-execute side effects. */
 const LEDGER_TERMINAL = new Set(['succeeded', 'failed', 'cancelled', 'unknown']);
@@ -353,6 +354,7 @@ export function createSandboxTools(ctx = {}) {
     const meta = metaNow();
     const callId = toolCallId || `tc_${randomUUID().replace(/-/g, '').slice(0, 16)}`;
     const idempotencyKey = makeIdempotencyKey(toolName, callId, params);
+    const ledgerParams = summarizeToolArguments(toolName, params);
     const runId = meta.run_id || 'run_unknown';
     let ledgerActive = false;
 
@@ -364,7 +366,7 @@ export function createSandboxTools(ctx = {}) {
           run_id: runId,
           idempotency_key: idempotencyKey,
           tool_name: toolName,
-          arguments: params || {},
+          arguments: ledgerParams,
           session_id: meta.session_id || getSessionId() || null,
           conversation_id: meta.conversation_id || null,
           workspace_id: meta.workspace_id || meta.workspace_key || null,

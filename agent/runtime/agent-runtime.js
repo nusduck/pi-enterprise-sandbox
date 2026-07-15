@@ -385,6 +385,7 @@ export async function runAgentTurn(opts) {
   let activeWorkspaceId = null;
   let activeRunId = null;
   let activeLeaseOwner = null;
+  let leaseHeartbeat = null;
   let activeAgentSessionId = null;
   /** @type {null | { cleanup: () => void, sessionManager: object, agentSessionId: string|null, persistedCount: number, forceInMemory?: boolean, restored?: boolean }} */
   let sessionHandle = null;
@@ -398,55 +399,189 @@ export async function runAgentTurn(opts) {
   /** @type {object|null} */
   let suspendedPending = null;
   let suspendedInput = null;
+  /** A single in-flight terminal transition prevents competing cancel/fail paths. */
+  let terminalTransition = null;
   /** @type {Set<string>} */
   const preApproved = preApprovedIds instanceof Set ? preApprovedIds : new Set();
 
-  const persistEvent = (type, payload = {}) => {
+  const persistEvent = (type, payload = {}, options = {}) => {
     if (!activeRunId) return Promise.resolve(null);
     return client
       .appendAgentEvent(activeRunId, { type, payload })
       .catch((err) => {
         console.warn(`[agent] append event ${type} failed:`, err.message);
+        if (options.required) throw err;
         return null;
       });
   };
 
-  const markRunInterrupted = (reason) => {
-    if (!activeRunId || runTerminal) return Promise.resolve(null);
-    runTerminal = true;
-    return client
-      .interruptAgentRun(activeRunId, {
-        reason,
-        partial_text: assistantText.trim() || null,
-      })
-      .catch((err) => {
-        console.warn('[agent] interrupt run failed:', err.message);
-        return null;
-      });
+  /**
+   * Close any tool whose terminal event was lost before the run boundary.
+   * A normally completed run cannot prove that an executing side effect
+   * succeeded, so those rows are deliberately marked unknown. Error and
+   * cancellation paths use explicit failed/cancelled states instead.
+   */
+  const reconcileToolLedger = async (terminalStatus, reason) => {
+    if (!activeRunId || typeof client.listToolExecutions !== 'function') return;
+    try {
+      const response = await client.listToolExecutions({ runId: activeRunId });
+      const tools = Array.isArray(response)
+        ? response
+        : Array.isArray(response?.tools)
+          ? response.tools
+          : [];
+      const activeTools = tools.filter((tool) =>
+        ['prepared', 'waiting_approval', 'executing'].includes(String(tool?.status)),
+      );
+      if (!activeTools.length || typeof client.markToolTerminal !== 'function') return;
+
+      const status =
+        terminalStatus === 'cancelled'
+          ? 'cancelled'
+          : terminalStatus === 'failed'
+            ? 'failed'
+            : 'unknown';
+      await Promise.all(activeTools.map(async (tool) => {
+        const toolCallId = tool?.tool_call_id || tool?.toolCallId;
+        if (!toolCallId) return;
+        const summary = reason || `Run ended while tool was ${tool.status}`;
+        try {
+          await client.markToolTerminal(toolCallId, {
+            status,
+            summary,
+            error: status === 'unknown' ? summary : null,
+          });
+        } catch (err) {
+          // Unknown is the safest fallback if the first terminal transition
+          // itself was rejected; Sandbox makes terminal transitions sticky.
+          if (status !== 'unknown') {
+            try {
+              await client.markToolTerminal(toolCallId, {
+                status: 'unknown',
+                summary: `${summary}; terminal outcome could not be confirmed`,
+                error: `${err?.message || err}`,
+              });
+            } catch (fallbackErr) {
+              console.warn(
+                `[agent] tool ${toolCallId} reconciliation failed:`,
+                fallbackErr?.message || fallbackErr,
+              );
+            }
+          } else {
+            console.warn(
+              `[agent] tool ${toolCallId} reconciliation failed:`,
+              err?.message || err,
+            );
+          }
+        }
+      }));
+    } catch (err) {
+      // The Sandbox run terminal transition performs the same reconciliation
+      // server-side. This keeps a transient Agent/Sandbox outage observable
+      // without holding the turn open indefinitely here.
+      console.warn('[agent] tool ledger reconciliation unavailable:', err?.message || err);
+    }
   };
+
+  const transitionTerminal = (terminalStatus, transition, reason) => {
+    if (!activeRunId || runTerminal) return Promise.resolve(null);
+    if (terminalTransition) return terminalTransition;
+    terminalTransition = (async () => {
+      try {
+        await sessionEventBridge?.flush();
+      } catch (err) {
+        console.warn('[agent] terminal boundary persistence failed:', err?.message || err);
+      }
+      await reconcileToolLedger(terminalStatus, reason);
+      const result = await transition();
+      // Keep the local guard unset until the durable transition succeeds. If
+      // every bounded completion/failure request fails, the caller can still
+      // attempt the explicit failure path and the lease reaper remains able to
+      // repair the run later.
+      runTerminal = true;
+      return result;
+    })().finally(() => {
+      terminalTransition = null;
+    });
+    return terminalTransition;
+  };
+
+  const markRunInterrupted = (reason) => transitionTerminal(
+    'cancelled',
+    () => client.interruptAgentRun(activeRunId, {
+      reason,
+      partial_text: assistantText.trim() || null,
+      lease_owner: activeLeaseOwner || undefined,
+    }),
+    reason,
+  );
 
   const markBudgetExceeded = async (reason) => {
-    if (!activeRunId || runTerminal) return;
-    runTerminal = true;
     try {
-      if (typeof client.budgetExceedAgentRun === 'function') {
-        await client.budgetExceedAgentRun(activeRunId, {
-          reason,
-          lease_owner: activeLeaseOwner || undefined,
-          usage: budget.snapshot(),
-        });
-      } else {
-        await client.failAgentRun(activeRunId, {
-          error: reason || 'budget_exceeded',
-          lease_owner: activeLeaseOwner || undefined,
-        });
-        await persistEvent('budget_exceeded', {
-          reason,
-          usage: budget.snapshot(),
-        });
-      }
+      await transitionTerminal('failed', async () => {
+        if (typeof client.budgetExceedAgentRun === 'function') {
+          await client.budgetExceedAgentRun(activeRunId, {
+            reason,
+            lease_owner: activeLeaseOwner || undefined,
+            usage: budget.snapshot(),
+          });
+        } else {
+          await client.failAgentRun(activeRunId, {
+            error: reason || 'budget_exceeded',
+            lease_owner: activeLeaseOwner || undefined,
+          });
+          await persistEvent('budget_exceeded', {
+            reason,
+            usage: budget.snapshot(),
+          });
+        }
+      }, reason);
     } catch (err) {
       console.warn('[agent] budget exceed mark failed:', err.message);
+    }
+  };
+
+  /**
+   * Complete the durable run with one bounded retry. If the response was
+   * lost after the first write, the authoritative GET prevents a second
+   * transition. If completion remains unavailable, fail the durable run so a
+   * local ``done`` event can never leave Sandbox in Running indefinitely.
+   */
+  const completeAgentRunWithFallback = async (body) => {
+    let lastError = null;
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      try {
+        return await client.completeAgentRun(activeRunId, body);
+      } catch (err) {
+        lastError = err;
+        try {
+          if (typeof client.getAgentRun === 'function') {
+            const snapshot = await client.getAgentRun(activeRunId);
+            if (['completed', 'failed', 'cancelled', 'interrupted', 'budget_exceeded']
+              .includes(String(snapshot?.status))) {
+              return snapshot;
+            }
+          }
+        } catch {
+          /* Retry/fallback below remains bounded. */
+        }
+        if (attempt === 0) {
+          await new Promise((resolve) => setTimeout(resolve, 100));
+        }
+      }
+    }
+
+    try {
+      return await client.failAgentRun(activeRunId, {
+        error: `run completion failed: ${lastError?.message || 'unknown error'}`,
+        lease_owner: activeLeaseOwner || undefined,
+      });
+    } catch (fallbackError) {
+      const terminalError = new Error(
+        `Unable to persist terminal run state: ${fallbackError?.message || lastError?.message || 'unknown error'}`,
+      );
+      terminalError.cause = fallbackError || lastError;
+      throw terminalError;
     }
   };
 
@@ -698,6 +833,17 @@ export async function runAgentTurn(opts) {
         };
       }
       await opts.onRunReady?.(run);
+      if (typeof client.renewAgentRunLease === 'function') {
+        leaseHeartbeat = setInterval(() => {
+          client.renewAgentRunLease(activeRunId, {
+            lease_owner: activeLeaseOwner,
+            lease_seconds: 300,
+          }).catch((err) => {
+            console.warn('[agent] run lease heartbeat failed:', err?.message || err);
+          });
+        }, 60_000);
+        leaseHeartbeat.unref?.();
+      }
     } catch (err) {
       throw new Error(`Failed to create durable agent run: ${err.message}`, {
         cause: err,
@@ -1035,7 +1181,9 @@ export async function runAgentTurn(opts) {
       }
     }
 
-    sessionEventBridge.flush();
+    // Boundary persistence is drainable: tool_end/token batches must reach
+    // the durable ledger before the run can be completed.
+    await sessionEventBridge.flush();
     // Persist any remaining SDK entries after the turn (assistant/tool/compaction).
     await flushSessionEntries();
 
@@ -1131,16 +1279,57 @@ export async function runAgentTurn(opts) {
     }
 
     if (activeRunId && !runTerminal) {
-      runTerminal = true;
+      let terminalResult = null;
       try {
-        await client.completeAgentRun(activeRunId, {
-          lease_owner: activeLeaseOwner || undefined,
-          model_id: activeModelEntry?.model_id || activeModelId,
-          usage: runUsage || undefined,
-        });
+        terminalResult = await transitionTerminal(
+          'completed',
+          () => completeAgentRunWithFallback({
+            lease_owner: activeLeaseOwner || undefined,
+            model_id: activeModelEntry?.model_id || activeModelId,
+            usage: runUsage || undefined,
+          }),
+          'run completed',
+        );
       } catch (err) {
         console.warn('[agent] complete run failed:', err.message);
-        await persistEvent('done', { status: 'completed' });
+        if (activeRunId && !runTerminal) {
+          try {
+            await transitionTerminal(
+              'failed',
+              () => client.failAgentRun(activeRunId, {
+                error: `terminal completion failed: ${err.message}`,
+                lease_owner: activeLeaseOwner || undefined,
+              }),
+              `terminal completion failed: ${err.message}`,
+            );
+          } catch (fallbackErr) {
+            console.warn('[agent] terminal failure fallback failed:', fallbackErr?.message || fallbackErr);
+          }
+        }
+        await persistEvent('terminal_transition_failed', {
+          status: 'failed',
+          error: err.message,
+        });
+        emit({ type: 'error', message: err.message, code: 'terminal_transition_failed' });
+        emit({ type: 'done', status: 'failed' });
+        emit({ type: 'session_closed', session_id: sandboxSessionId });
+        return {
+          status: 'failed',
+          run_id: activeRunId,
+          conversation_id: activeConversationId,
+          error: err.message,
+        };
+      }
+      const finalStatus = String(terminalResult?.status || 'completed');
+      if (finalStatus !== 'completed') {
+        emit({ type: 'done', status: finalStatus });
+        emit({ type: 'session_closed', session_id: sandboxSessionId });
+        return {
+          status: finalStatus,
+          run_id: activeRunId,
+          conversation_id: activeConversationId,
+          error: terminalResult?.error || 'Run terminalized with a non-success status',
+        };
       }
     }
 
@@ -1221,15 +1410,32 @@ export async function runAgentTurn(opts) {
     } else {
       emit({ type: 'error', message: err.message || String(err) });
     }
+    // An exception can arrive immediately after tool_end. Drain its durable
+    // boundary before marking the run failed so the ledger cannot lag status.
+    try {
+      await sessionEventBridge?.flush();
+    } catch (flushErr) {
+      console.warn('[agent] failed to drain event bridge:', flushErr?.message || flushErr);
+    }
     if (activeRunId && !runTerminal) {
-      runTerminal = true;
       try {
-        await client.failAgentRun(activeRunId, {
-          error: err.message,
-          lease_owner: activeLeaseOwner || undefined,
-        });
+        await transitionTerminal(
+          'failed',
+          () => client.failAgentRun(activeRunId, {
+            error: err.message,
+            lease_owner: activeLeaseOwner || undefined,
+          }),
+          err.message || 'run failed',
+        );
       } catch {
-        await markRunInterrupted('error');
+        try {
+          await markRunInterrupted('error');
+        } catch (interruptErr) {
+          console.warn(
+            '[agent] interrupt fallback failed; periodic lease reaper will reconcile:',
+            interruptErr?.message || interruptErr,
+          );
+        }
       }
     }
     emit({ type: 'done' });
@@ -1241,12 +1447,25 @@ export async function runAgentTurn(opts) {
       error: err.message || String(err),
     };
   } finally {
-    sessionEventBridge?.dispose();
+    if (leaseHeartbeat) clearInterval(leaseHeartbeat);
+    leaseHeartbeat = null;
+    try {
+      await sessionEventBridge?.dispose();
+    } catch (err) {
+      console.warn('[agent] event bridge dispose failed:', err?.message || err);
+    }
     sessionEventBridge = null;
     // Best-effort: cancel in-flight sandbox work if cancelled mid-turn
     if (isCancelled() && sandboxSessionId && !suspendedPending) {
       client.cancelActiveExecution(sandboxSessionId).catch(() => {});
-      await markRunInterrupted('cancelled');
+      try {
+        await markRunInterrupted('cancelled');
+      } catch (err) {
+        console.warn(
+          '[agent] cancellation transition failed; periodic lease reaper will reconcile:',
+          err?.message || err,
+        );
+      }
     }
     // Drop temp JSONL materialization; durable state is in sandbox DB.
     // Always cleanup on suspended states too — resources must be released.

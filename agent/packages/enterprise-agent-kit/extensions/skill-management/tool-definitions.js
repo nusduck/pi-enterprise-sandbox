@@ -8,6 +8,7 @@
 import { Type } from 'typebox';
 import { createHash, randomUUID } from 'node:crypto';
 import { createSkillManager, SKILLS_MODE } from '../../../../skills/manager.js';
+import { summarizeToolArguments } from '../../../../runtime/tool-payload-sanitizer.js';
 
 const LEDGER_TERMINAL = new Set(['succeeded', 'failed', 'cancelled', 'unknown']);
 
@@ -58,10 +59,11 @@ export function createSkillTools(ctx = {}) {
       const meta = getMeta() || {};
       const callId =
         toolCallId || `tc_${randomUUID().replace(/-/g, '').slice(0, 16)}`;
+      const ledgerParams = summarizeToolArguments(toolName, params);
       const basis = JSON.stringify({
         tool: toolName,
         run_id: meta.run_id || null,
-        params: params || {},
+        params: ledgerParams,
       });
       const idem =
         `tc_${callId}` ||
@@ -73,7 +75,9 @@ export function createSkillTools(ctx = {}) {
           run_id: meta.run_id || 'run_unknown',
           idempotency_key: idem,
           tool_name: toolName,
-          arguments: params || {},
+          // Full content stays in the in-process executeFn call. The durable
+          // ledger only needs enough metadata for recovery and auditing.
+          arguments: ledgerParams,
           session_id: meta.session_id || null,
           conversation_id: meta.conversation_id || null,
           workspace_id: meta.workspace_id || meta.workspace_key || null,
@@ -158,8 +162,19 @@ export function createSkillTools(ctx = {}) {
               isError: isErr,
             },
           });
-        } catch {
-          /* ignore */
+        } catch (err) {
+          // A lost terminal response must not leave the UI in Running. If
+          // the intended status cannot be written, record unknown so a later
+          // reconciliation cannot incorrectly replay the side effect.
+          try {
+            await sb.markToolTerminal(callId, {
+              status: 'unknown',
+              summary: `${summary}; terminal outcome could not be confirmed`,
+              error: err?.message || String(err),
+            });
+          } catch {
+            /* Run-boundary reconciliation remains the final safety net. */
+          }
         }
       }
       return result;

@@ -5,15 +5,17 @@
 import {
   CreateRunResponseSchema,
   RunDetailSchema,
+  ToolExecutionSnapshotSchema,
   type CreateRunResponse,
   type RunDetail,
+  type ToolExecutionSnapshot,
 } from '../schemas/events';
 import { parseApiStrict } from '../schemas/api';
 import { authHeaders, ApiError } from './client';
 import type { SSEEvent } from '../sse/parser';
 import { readSSEStream } from '../sse/parser';
 
-export type { CreateRunResponse, RunDetail };
+export type { CreateRunResponse, RunDetail, ToolExecutionSnapshot };
 
 const BASE = '/api';
 
@@ -74,6 +76,34 @@ export async function getRun(runId: string): Promise<RunDetail> {
   }
 }
 
+/** GET /runs/{run_id}/tools — authoritative durable ledger snapshot. */
+export async function listRunTools(runId: string): Promise<ToolExecutionSnapshot[]> {
+  try {
+    const resp = await fetch(`${BASE}/runs/${encodeURIComponent(runId)}/tools`, {
+      headers: authHeaders(),
+    });
+    if (!resp.ok) {
+      const err = await errorBody(resp);
+      throw new ApiError(
+        String(err.error || `List run tools failed: ${resp.status}`),
+        { status: resp.status },
+      );
+    }
+    const data = await resp.json();
+    const rows = Array.isArray(data)
+      ? data
+      : Array.isArray(data?.tools)
+        ? data.tools
+        : [];
+    return rows.map((row) =>
+      parseApiStrict(ToolExecutionSnapshotSchema, row, 'listRunTools'),
+    );
+  } catch (err) {
+    if (err instanceof ApiError) throw err;
+    throw new ApiError((err as Error).message || 'List run tools failed');
+  }
+}
+
 /**
  * POST /runs/{run_id}/cancel — user-initiated stop only.
  */
@@ -112,34 +142,107 @@ export async function streamRunEvents(
     signal?: AbortSignal | null;
     lastEventId?: string | null;
     afterSequence?: number | null;
+    maxRetries?: number;
+    retryBaseMs?: number;
+    retryMaxMs?: number;
   } = {},
 ): Promise<void> {
-  const headers = authHeaders({ Accept: 'text/event-stream' });
-  if (opts.lastEventId) {
-    headers['Last-Event-ID'] = opts.lastEventId;
-  }
+  let cursor = opts.afterSequence ?? 0;
+  let lastEventId = opts.lastEventId || null;
+  let lastError: Error | null = null;
+  const maxRetries = opts.maxRetries ?? 6;
+  const retryBaseMs = opts.retryBaseMs ?? 250;
+  const retryMaxMs = opts.retryMaxMs ?? 2_000;
+  const terminalStatuses = new Set([
+    'completed',
+    'failed',
+    'cancelled',
+    'interrupted',
+    'budget_exceeded',
+    'rejected',
+    'waiting_approval',
+    'waiting_input',
+  ]);
 
-  const qs =
-    opts.afterSequence != null && opts.afterSequence > 0
-      ? `?after_sequence=${encodeURIComponent(String(opts.afterSequence))}`
-      : '';
+  for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
+    if (opts.signal?.aborted) {
+      const abort = new Error('Run event stream aborted');
+      abort.name = 'AbortError';
+      throw abort;
+    }
+    try {
+      const headers = authHeaders({ Accept: 'text/event-stream' });
+      if (lastEventId) headers['Last-Event-ID'] = lastEventId;
+      const qs = cursor > 0
+        ? `?after_sequence=${encodeURIComponent(String(cursor))}`
+        : '';
+      const resp = await fetch(
+        `${BASE}/runs/${encodeURIComponent(runId)}/events${qs}`,
+        {
+          method: 'GET',
+          headers,
+          signal: opts.signal ?? undefined,
+        },
+      );
 
-  const resp = await fetch(
-    `${BASE}/runs/${encodeURIComponent(runId)}/events${qs}`,
-    {
-      method: 'GET',
-      headers,
-      signal: opts.signal ?? undefined,
-    },
-  );
+      if (!resp.ok) {
+        throw new ApiError(`Run events failed: ${resp.status}`, {
+          status: resp.status,
+        });
+      }
 
-  if (!resp.ok) {
-    throw new ApiError(`Run events failed: ${resp.status}`, {
-      status: resp.status,
+      await readSSEStream(resp, (event) => {
+        if (typeof event.sequence === 'number') cursor = Math.max(cursor, event.sequence);
+        if (event.event_id != null) lastEventId = String(event.event_id);
+        onEvent(event);
+      }, opts.signal);
+
+      // A closed stream is not a completion signal. Ask the authoritative
+      // run endpoint before deciding whether to stop or reconnect.
+      const snapshot = await getRun(runId);
+      if (terminalStatuses.has(String(snapshot.status))) return;
+      lastError = new Error('Run event stream ended before terminal state');
+    } catch (err) {
+      const error = err instanceof Error ? err : new Error(String(err));
+      if (error.name === 'AbortError' || opts.signal?.aborted) throw error;
+      lastError = error;
+    }
+
+    if (attempt >= maxRetries) {
+      // One final authoritative read distinguishes a lost SSE completion from
+      // a genuinely unavailable run. Never synthesize success here.
+      try {
+        const snapshot = await getRun(runId);
+        if (terminalStatuses.has(String(snapshot.status))) return;
+      } catch (err) {
+        lastError = err instanceof Error ? err : new Error(String(err));
+      }
+      throw lastError || new Error('Run event stream recovery exhausted');
+    }
+
+    const delay = Math.min(retryMaxMs, retryBaseMs * 2 ** attempt);
+    await new Promise<void>((resolve, reject) => {
+      let timer: ReturnType<typeof setTimeout> | null = null;
+      const signal = opts.signal;
+      let onAbort: (() => void) | null = null;
+      const cleanup = () => {
+        if (timer !== null) clearTimeout(timer);
+        if (signal && onAbort) signal.removeEventListener('abort', onAbort);
+      };
+      timer = setTimeout(() => {
+        cleanup();
+        resolve();
+      }, delay);
+      if (!signal) return;
+      onAbort = () => {
+        cleanup();
+        const abort = new Error('Run event stream aborted');
+        abort.name = 'AbortError';
+        reject(abort);
+      };
+      signal.addEventListener('abort', onAbort, { once: true });
     });
   }
-
-  await readSSEStream(resp, onEvent, opts.signal);
 }
 
 /**

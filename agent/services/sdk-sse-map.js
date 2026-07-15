@@ -4,6 +4,16 @@
  * Pure helpers used by the Agent Run event bridge and sdk-compat suite.
  * No live LLM / network dependency.
  */
+import { summarizeToolArguments } from '../runtime/tool-payload-sanitizer.js';
+
+/**
+ * Keep tool lifecycle events useful without copying large or sensitive
+ * arguments into SSE, the append-only event log, or the UI.
+ * @param {string} toolName
+ * @param {unknown} args
+ * @returns {Record<string, unknown>}
+ */
+export const summarizeToolArgs = summarizeToolArguments;
 
 /**
  * Pull structured fields from a tool result (object, string, or content parts).
@@ -79,7 +89,7 @@ export function mapSdkEventToSse(event, ctx = {}) {
         type: 'tool_start',
         id: event.toolCallId,
         name: event.toolName,
-        args: event.args,
+        args: summarizeToolArgs(String(event.toolName || ''), event.args),
       });
       if (event.args) pendingToolArgs.set(event.toolCallId, event.args);
       break;

@@ -434,6 +434,7 @@ export function listActiveRuns(store: EntityStore): RunEntity[] {
     'cancelled',
     'interrupted',
     'budget_exceeded',
+    'orphaned',
   ]);
   return Object.values(store.runsById).filter((r) => !terminal.has(r.status));
 }
@@ -523,6 +524,7 @@ export function isTerminalRunStatus(status: string): boolean {
     status === 'failed' ||
     status === 'cancelled' ||
     status === 'interrupted' ||
-    status === 'budget_exceeded'
+    status === 'budget_exceeded' ||
+    status === 'orphaned'
   );
 }

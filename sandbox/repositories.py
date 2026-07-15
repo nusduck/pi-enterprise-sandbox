@@ -32,6 +32,17 @@ from sandbox.models import (
 # Bounded retries when concurrent writers race on (run_id, sequence).
 MAX_APPEND_SEQUENCE_RETRIES = 8
 
+AGENT_RUN_TERMINAL_STATUSES = frozenset(
+    {
+        AgentRunStatus.COMPLETED.value,
+        AgentRunStatus.INTERRUPTED.value,
+        AgentRunStatus.FAILED.value,
+        AgentRunStatus.CANCELLED.value,
+        AgentRunStatus.BUDGET_EXCEEDED.value,
+        AgentRunStatus.REJECTED.value,
+    }
+)
+
 
 def _json_dumps(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, default=str)
@@ -1221,10 +1232,12 @@ class AgentRunRepository:
         current = self.get(run_id)
         if current is None:
             return None
+        if current.status in AGENT_RUN_TERMINAL_STATUSES:
+            return None
         new_status = status or current.status
         payload = _json_dumps(pending) if pending is not None else None
         with self.db.connect() as conn:
-            conn.execute(
+            cur = conn.execute(
                 """
                 UPDATE agent_runs
                 SET pending_approval_json = ?,
@@ -1232,10 +1245,19 @@ class AgentRunRepository:
                     version = version + 1,
                     updated_at = ?
                 WHERE run_id = ?
+                  AND status NOT IN (?, ?, ?, ?, ?, ?)
                 """,
-                (payload, new_status, now, run_id),
+                (
+                    payload,
+                    new_status,
+                    now,
+                    run_id,
+                    *AGENT_RUN_TERMINAL_STATUSES,
+                ),
             )
             conn.commit()
+            if cur.rowcount == 0:
+                return None
         return self.get(run_id)
 
     def set_budget_json(
@@ -1268,17 +1290,28 @@ class AgentRunRepository:
         current = self.get(run_id)
         if current is None:
             return None
+        if current.status in AGENT_RUN_TERMINAL_STATUSES:
+            return None
         payload = _json_dumps(pending) if pending is not None else None
         with self.db.connect() as conn:
-            conn.execute(
+            cur = conn.execute(
                 """
                 UPDATE agent_runs
                 SET pending_input_json = ?, status = ?, version = version + 1, updated_at = ?
                 WHERE run_id = ?
+                  AND status NOT IN (?, ?, ?, ?, ?, ?)
                 """,
-                (payload, status or current.status, now, run_id),
+                (
+                    payload,
+                    status or current.status,
+                    now,
+                    run_id,
+                    *AGENT_RUN_TERMINAL_STATUSES,
+                ),
             )
             conn.commit()
+            if cur.rowcount == 0:
+                return None
         return self.get(run_id)
 
     def claim_lease(
@@ -1320,6 +1353,7 @@ class AgentRunRepository:
                     updated_at = ?
                 WHERE run_id = ?
                   AND version = ?
+                  AND status NOT IN (?, ?, ?, ?, ?, ?)
                   AND (
                     lease_owner IS NULL
                     OR lease_owner = ?
@@ -1334,6 +1368,7 @@ class AgentRunRepository:
                     now,
                     run_id,
                     version,
+                    *AGENT_RUN_TERMINAL_STATUSES,
                     lease_owner,
                     now,
                 ),
@@ -1354,11 +1389,13 @@ class AgentRunRepository:
         current = self.get(run_id)
         if current is None:
             return None
-        if current.lease_owner and current.lease_owner != lease_owner:
+        if current.status in AGENT_RUN_TERMINAL_STATUSES:
+            return None
+        if current.lease_owner != lease_owner:
             return None
         new_status = status or current.status
         with self.db.connect() as conn:
-            conn.execute(
+            cur = conn.execute(
                 """
                 UPDATE agent_runs
                 SET lease_owner = NULL,
@@ -1367,25 +1404,106 @@ class AgentRunRepository:
                     status = ?,
                     updated_at = ?
                 WHERE run_id = ?
-                  AND (lease_owner IS NULL OR lease_owner = ?)
+                  AND lease_owner = ?
+                  AND status NOT IN (?, ?, ?, ?, ?, ?)
                 """,
-                (new_status, now, run_id, lease_owner),
+                (
+                    new_status,
+                    now,
+                    run_id,
+                    lease_owner,
+                    *AGENT_RUN_TERMINAL_STATUSES,
+                ),
             )
             conn.commit()
+            if cur.rowcount == 0:
+                return None
+        return self.get(run_id)
+
+    def renew_lease(
+        self,
+        run_id: str,
+        *,
+        lease_owner: str,
+        lease_until: str,
+    ) -> AgentRunResponse | None:
+        """Extend an owned lease without changing run status."""
+        now = datetime.now(timezone.utc).isoformat()
+        with self.db.connect() as conn:
+            cur = conn.execute(
+                """
+                UPDATE agent_runs
+                SET lease_until = ?, version = version + 1, updated_at = ?
+                WHERE run_id = ?
+                  AND lease_owner = ?
+                  AND status IN (?, ?)
+                """,
+                (
+                    lease_until,
+                    now,
+                    run_id,
+                    lease_owner,
+                    AgentRunStatus.PENDING.value,
+                    AgentRunStatus.RUNNING.value,
+                ),
+            )
+            conn.commit()
+            if cur.rowcount == 0:
+                return None
+        return self.get(run_id)
+
+    def expire_lease(
+        self,
+        run_id: str,
+        *,
+        now_iso: str | None = None,
+        status: str = AgentRunStatus.INTERRUPTED.value,
+    ) -> AgentRunResponse | None:
+        """Atomically reap an expired active lease."""
+        now = now_iso or datetime.now(timezone.utc).isoformat()
+        with self.db.connect() as conn:
+            cur = conn.execute(
+                """
+                UPDATE agent_runs
+                SET lease_owner = NULL,
+                    lease_until = NULL,
+                    status = ?,
+                    version = version + 1,
+                    updated_at = ?
+                WHERE run_id = ?
+                  AND status IN (?, ?)
+                  AND lease_until IS NOT NULL
+                  AND lease_until <= ?
+                """,
+                (
+                    status,
+                    now,
+                    run_id,
+                    AgentRunStatus.PENDING.value,
+                    AgentRunStatus.RUNNING.value,
+                    now,
+                ),
+            )
+            conn.commit()
+            if cur.rowcount == 0:
+                return None
         return self.get(run_id)
 
     def update_status(self, run_id: str, status: str) -> AgentRunResponse | None:
         now = datetime.now(timezone.utc).isoformat()
         with self.db.connect() as conn:
-            conn.execute(
+            cur = conn.execute(
                 """
                 UPDATE agent_runs
                 SET status = ?, version = version + 1, updated_at = ?
                 WHERE run_id = ?
+                  AND status NOT IN (?, ?, ?, ?, ?, ?)
                 """,
-                (status, now, run_id),
+                (status, now, run_id, *AGENT_RUN_TERMINAL_STATUSES),
             )
             conn.commit()
+            if cur.rowcount == 0:
+                return None
         return self.get(run_id)
 
     def mark_interrupted(self, run_id: str) -> AgentRunResponse | None:
@@ -2093,7 +2211,7 @@ class ToolExecutionRepository:
         now = datetime.now(timezone.utc).isoformat()
         result_blob = _json_dumps(result_json) if result_json is not None else None
         with self.db.connect() as conn:
-            conn.execute(
+            cur = conn.execute(
                 """
                 UPDATE tool_executions
                 SET status = ?,
@@ -2105,6 +2223,7 @@ class ToolExecutionRepository:
                     finished_at = ?,
                     updated_at = ?
                 WHERE tool_call_id = ?
+                  AND status NOT IN (?, ?, ?, ?)
                 """,
                 (
                     status,
@@ -2116,9 +2235,13 @@ class ToolExecutionRepository:
                     now,
                     now,
                     tool_call_id,
+                    *TOOL_TERMINAL_STATUSES,
                 ),
             )
             conn.commit()
+            # If ``rowcount`` is zero, a competing terminal writer won after
+            # our initial read. The authoritative read below returns its
+            # sticky outcome instead of overwriting it.
         return self.get(tool_call_id)
 
     def can_auto_retry(self, tool_call_id: str) -> bool:

@@ -32,6 +32,8 @@ export type RunSSEManagerOptions = {
   fetchImpl?: typeof fetch;
   /** Optional sleep for tests. */
   sleep?: (ms: number) => Promise<void>;
+  /** Fetch authoritative run/tool state after reconnect exhaustion. */
+  reconcileRun?: (runId: string) => Promise<unknown>;
 };
 
 export type RunSSEManager = {
@@ -176,6 +178,20 @@ export function createRunSSEManager(
    * - SSE with `id:` field already consumed by caller as lastEventId
    */
   function coerceEvent(raw: SSEEvent, runId: string, conn: RunSSEState): RuntimeEvent | null {
+    // BFF relay envelope: { sequence, event, ts }. Preserve the outer
+    // sequence so replay/dedupe remains stable even when Agent event IDs are
+    // absent from the inner legacy payload.
+    if (raw.event && typeof raw.event === 'object') {
+      return coerceEvent(
+        {
+          ...(raw.event as SSEEvent),
+          sequence: raw.sequence,
+          event_id: (raw.event as SSEEvent).event_id || raw.event_id || raw.id,
+        },
+        runId,
+        conn,
+      );
+    }
     // Already a runtime event
     if (raw.event_id && raw.run_id && typeof raw.sequence === 'number') {
       return parseRuntimeEvent(raw);
@@ -316,6 +332,17 @@ export function createRunSSEManager(
 
         conn.retryCount += 1;
         if (conn.retryCount > maxRetries) {
+          try {
+            await options.reconcileRun?.(runId);
+            const recovered = store.runsById[runId];
+            if (recovered && isTerminalRunStatus(recovered.status)) {
+              setStatus(runId, 'closed');
+              return;
+            }
+          } catch {
+            // Keep the connection error visible when authoritative recovery
+            // itself is unavailable; callers can retry from the UI.
+          }
           setStatus(runId, 'error');
           return;
         }

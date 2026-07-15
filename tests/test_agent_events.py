@@ -336,16 +336,213 @@ def test_interrupted_status_dual_write(mgr, conversation, db):
     assert "interrupted" in types
 
 
-def test_complete_run_clears_interrupted(mgr, conversation, db):
+def test_late_complete_does_not_overwrite_interrupted_terminal(
+    mgr, conversation, db
+):
     run = mgr.start_run(conversation_id=conversation.id, lease_owner="w1")
     mgr.mark_interrupted(run.run_id, reason="test")
     completed = mgr.complete_run(run.run_id, lease_owner="w1")
+    assert completed is not None
+    assert completed.status == AgentRunStatus.INTERRUPTED.value
+    conv = ConversationRepository(db).get(conversation.id)
+    assert conv is not None
+    assert conv.interrupted is True
+    assert conv.last_run_id == run.run_id
+
+
+def test_new_completed_run_clears_prior_interrupted_projection(
+    mgr, conversation, db
+):
+    interrupted = mgr.start_run(
+        conversation_id=conversation.id, lease_owner="w1"
+    )
+    mgr.mark_interrupted(interrupted.run_id, reason="test")
+
+    current = mgr.start_run(
+        conversation_id=conversation.id, lease_owner="w2"
+    )
+    completed = mgr.complete_run(current.run_id, lease_owner="w2")
+
     assert completed is not None
     assert completed.status == AgentRunStatus.COMPLETED.value
     conv = ConversationRepository(db).get(conversation.id)
     assert conv is not None
     assert conv.interrupted is False
-    assert conv.last_run_id == run.run_id
+    assert conv.last_run_id == current.run_id
+
+
+def test_terminal_run_reconciles_unfinished_tool_rows(mgr, conversation):
+    run = mgr.start_run(conversation_id=conversation.id, lease_owner="w1")
+    prepared = mgr.prepare_tool(
+        tool_call_id="tc_prepared",
+        run_id=run.run_id,
+        idempotency_key="idem_prepared",
+    )
+    executing = mgr.prepare_tool(
+        tool_call_id="tc_executing",
+        run_id=run.run_id,
+        idempotency_key="idem_executing",
+    )
+    mgr.mark_tool_executing(executing.tool_call_id)
+
+    completed = mgr.complete_run(run.run_id, lease_owner="w1")
+
+    assert completed is not None
+    assert mgr.get_tool(prepared.tool_call_id).status == ToolExecutionStatus.UNKNOWN.value
+    assert mgr.get_tool(executing.tool_call_id).status == ToolExecutionStatus.UNKNOWN.value
+
+
+def test_interrupted_run_cancels_unfinished_tool_rows(mgr, conversation):
+    run = mgr.start_run(conversation_id=conversation.id, lease_owner="w1")
+    tool = mgr.prepare_tool(
+        tool_call_id="tc_cancelled",
+        run_id=run.run_id,
+        idempotency_key="idem_cancelled",
+    )
+    mgr.mark_tool_executing(tool.tool_call_id)
+
+    mgr.mark_interrupted(run.run_id, reason="client_disconnect")
+
+    assert mgr.get_tool(tool.tool_call_id).status == ToolExecutionStatus.CANCELLED.value
+
+
+def test_terminal_snapshot_repairs_missed_tool_terminal_write(mgr, conversation):
+    run = mgr.start_run(conversation_id=conversation.id, lease_owner="w1")
+    tool = mgr.prepare_tool(
+        tool_call_id="tc_repair",
+        run_id=run.run_id,
+        idempotency_key="idem_repair",
+    )
+
+    original_mark_terminal = mgr.tools.mark_terminal
+    attempts = 0
+
+    def fail_once(*args, **kwargs):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise RuntimeError("temporary database error")
+        return original_mark_terminal(*args, **kwargs)
+
+    mgr.tools.mark_terminal = fail_once
+    mgr.complete_run(run.run_id, lease_owner="w1")
+    assert mgr.tools.get(tool.tool_call_id).status == ToolExecutionStatus.PREPARED.value
+
+    repaired = mgr.reconcile_terminal_run(run.run_id)
+
+    assert repaired is not None
+    assert mgr.tools.get(tool.tool_call_id).status == ToolExecutionStatus.UNKNOWN.value
+    assert attempts == 2
+
+
+def test_expired_run_lease_reaper_terminalizes_tools(mgr, conversation, db):
+    run = mgr.start_run(conversation_id=conversation.id, lease_owner="w1")
+    tool = mgr.prepare_tool(
+        tool_call_id="tc_expired",
+        run_id=run.run_id,
+        idempotency_key="idem_expired",
+    )
+    mgr.mark_tool_executing(tool.tool_call_id)
+    expired = (datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat()
+    with db.connect() as conn:
+        conn.execute(
+            "UPDATE agent_runs SET lease_until = ? WHERE run_id = ?",
+            (expired, run.run_id),
+        )
+        conn.commit()
+
+    recovered = mgr.get_run(run.run_id)
+
+    assert recovered is not None
+    assert recovered.status == AgentRunStatus.INTERRUPTED.value
+    assert mgr.get_tool(tool.tool_call_id).status == ToolExecutionStatus.CANCELLED.value
+
+
+def test_expired_run_rejects_late_renew_and_complete(mgr, conversation, db):
+    run = mgr.start_run(conversation_id=conversation.id, lease_owner="w1")
+    tool = mgr.prepare_tool(
+        tool_call_id="tc_late_owner",
+        run_id=run.run_id,
+        idempotency_key="idem_late_owner",
+    )
+    mgr.mark_tool_executing(tool.tool_call_id)
+    expired = (datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat()
+    with db.connect() as conn:
+        conn.execute(
+            "UPDATE agent_runs SET lease_until = ? WHERE run_id = ?",
+            (expired, run.run_id),
+        )
+        conn.commit()
+
+    reaped = mgr.get_run(run.run_id)
+    assert reaped is not None
+    assert reaped.status == AgentRunStatus.INTERRUPTED.value
+    assert mgr.renew_lease(run.run_id, lease_owner="w1", lease_seconds=120) is None
+
+    late_completion = mgr.complete_run(run.run_id, lease_owner="w1")
+    assert late_completion is not None
+    assert late_completion.status == AgentRunStatus.INTERRUPTED.value
+    late_release = mgr.release_lease(run.run_id, lease_owner="w1")
+    assert late_release is not None
+    assert late_release.status == AgentRunStatus.INTERRUPTED.value
+    assert mgr.get_tool(tool.tool_call_id).status == ToolExecutionStatus.CANCELLED.value
+
+
+def test_stale_owner_cannot_terminalize_or_park_active_run(mgr, conversation):
+    operations = (
+        "complete",
+        "fail",
+        "budget",
+        "waiting_approval",
+        "waiting_input",
+        "interrupt",
+    )
+    for operation in operations:
+        run = mgr.start_run(conversation_id=conversation.id, lease_owner="owner_a")
+        tool = mgr.prepare_tool(
+            tool_call_id=f"tc_stale_{operation}",
+            run_id=run.run_id,
+            idempotency_key=f"idem_stale_{operation}",
+        )
+        mgr.mark_tool_executing(tool.tool_call_id)
+
+        if operation == "complete":
+            result = mgr.complete_run(run.run_id, lease_owner="owner_b")
+        elif operation == "fail":
+            result = mgr.fail_run(run.run_id, error="stale", lease_owner="owner_b")
+        elif operation == "budget":
+            result = mgr.mark_budget_exceeded(run.run_id, lease_owner="owner_b")
+        elif operation == "waiting_approval":
+            result = mgr.mark_waiting_approval(
+                run.run_id,
+                approval_id="approval_stale",
+                lease_owner="owner_b",
+            )
+        else:
+            if operation == "waiting_input":
+                result = mgr.mark_waiting_input(
+                    run.run_id,
+                    pending_input={"question": "stale"},
+                    lease_owner="owner_b",
+                )
+            else:
+                result = mgr.mark_interrupted(
+                    run.run_id,
+                    reason="stale",
+                    lease_owner="owner_b",
+                )
+
+        assert result is None
+        assert mgr.runs.get(run.run_id).status == AgentRunStatus.RUNNING.value
+        assert mgr.get_tool(tool.tool_call_id).status == ToolExecutionStatus.EXECUTING.value
+        assert [event.type for event in mgr.list_events(run.run_id)] == ["run_started"]
+
+
+def test_cleanup_loop_wires_server_owned_lease_reaper():
+    main_source = (
+        __import__("pathlib").Path(__file__).parents[1] / "sandbox" / "main.py"
+    ).read_text(encoding="utf-8")
+    assert "agent_run_manager.reap_expired_runs()" in main_source
 
 
 def test_ttl_cleanup_skips_legal_hold_and_deletes_drafts(db):

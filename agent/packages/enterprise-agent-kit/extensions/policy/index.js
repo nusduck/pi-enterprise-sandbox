@@ -17,6 +17,7 @@ import {
   commandTouchesSkillRoot,
   isReadonlySkillExecution,
 } from '../../../../skills/paths.js';
+import { SECRET_PATTERNS } from '../../../../runtime/secret-patterns.js';
 
 /** Immutable policy catalog version echoed in audits and approval responses. */
 export const POLICY_VERSION = '2026-07-15.1';
@@ -878,12 +879,6 @@ export function emitToolAudit(event, sink = null) {
     console.log('[security-audit] <unserializable>');
   }
 }
-
-const SECRET_PATTERNS = [
-  /\bBearer\s+[A-Za-z0-9._~+\/-]+=*/gi,
-  /\b(api[_-]?key|token|secret|password|authorization)\s*[:=]\s*[^\s,;]+/gi,
-  /\b(?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?)?:?\/\/[^\s/@:]+:[^\s/@]+@[^\s]+/gi,
-];
 
 export function filterToolResultContent(content, maxChars = 50_000) {
   let changed = false;

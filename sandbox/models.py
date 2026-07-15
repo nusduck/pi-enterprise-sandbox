@@ -560,6 +560,11 @@ class ClaimLeaseRequest(BaseModel):
     lease_seconds: int = 120
 
 
+class RenewLeaseRequest(BaseModel):
+    lease_owner: str
+    lease_seconds: int = 120
+
+
 # ── Logical Pi SDK Agent Session (ADR 0002 §7) ──────────────────────────
 
 class AgentSessionStatus(str, Enum):

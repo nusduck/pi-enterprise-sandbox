@@ -21,7 +21,7 @@ import {
   upsertRun,
   upsertToolExecution,
 } from '../../entities/store';
-import type { RuntimeEvent } from '../schemas/events';
+import type { RuntimeEvent, ToolExecutionSnapshot } from '../schemas/events';
 import { parseRuntimeEvent } from '../schemas/events';
 
 export type ReduceOutcome =
@@ -771,5 +771,70 @@ export function rehydrateRun(
     next = reduceRuntimeEventBatch(next, missedEvents).store;
   }
 
+  return next;
+}
+
+function ledgerToolStatus(status: string):
+  | 'prepared'
+  | 'waiting_approval'
+  | 'running'
+  | 'completed'
+  | 'failed'
+  | 'cancelled' {
+  switch (status) {
+    case 'prepared':
+      return 'prepared';
+    case 'waiting_approval':
+      return 'waiting_approval';
+    case 'executing':
+      return 'running';
+    case 'succeeded':
+      return 'completed';
+    case 'cancelled':
+      return 'cancelled';
+    default:
+      return 'failed';
+  }
+}
+
+/**
+ * Reconcile tools from the durable ledger after SSE replay/reconnect.
+ * Durable ``unknown`` is intentionally projected as the UI's Failed state;
+ * it must never be presented as a successful tool completion or auto-retry.
+ */
+export function rehydrateToolExecutions(
+  store: EntityStore,
+  runId: string,
+  snapshots: ToolExecutionSnapshot[] = [],
+): EntityStore {
+  let next = store;
+  for (const snapshot of snapshots) {
+    if (!snapshot?.tool_call_id || snapshot.run_id !== runId) continue;
+    const status = ledgerToolStatus(snapshot.status);
+    const isUnknown = snapshot.status === 'unknown';
+    const isError = status === 'failed';
+    const result = snapshot.result_json ?? null;
+    const summary = isUnknown
+      ? 'Outcome unconfirmed; do not retry automatically.'
+      : snapshot.result_summary || snapshot.summary || snapshot.error || null;
+    const existing = next.toolExecutionsById[snapshot.tool_call_id];
+    next = upsertToolExecution(
+      next,
+      createToolExecution({
+        id: snapshot.tool_call_id,
+        runId,
+        name: snapshot.tool_name || existing?.name || 'tool',
+        status,
+        input: snapshot.arguments ?? existing?.input ?? null,
+        result,
+        isError: isError || isUnknown || Boolean(existing?.isError),
+        approvalId: existing?.approvalId ?? null,
+        processId: existing?.processId ?? null,
+        summary,
+        createdAt: snapshot.created_at || existing?.createdAt || null,
+        updatedAt: snapshot.updated_at || snapshot.finished_at || existing?.updatedAt || null,
+      }),
+    );
+  }
   return next;
 }

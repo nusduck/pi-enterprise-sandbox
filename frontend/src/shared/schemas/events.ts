@@ -125,6 +125,24 @@ export const RunDetailSchema = z
   })
   .passthrough();
 
+/** Durable Sandbox tool ledger row used for reconnect/reload reconciliation. */
+export const ToolExecutionSnapshotSchema = z
+  .object({
+    tool_call_id: z.string(),
+    run_id: z.string(),
+    status: z.string(),
+    tool_name: z.string().optional().nullable(),
+    arguments: z.record(z.string(), z.unknown()).optional().nullable(),
+    result_summary: z.string().optional().nullable(),
+    summary: z.string().optional().nullable(),
+    error: z.string().optional().nullable(),
+    result_json: z.unknown().optional().nullable(),
+    created_at: z.string().optional().nullable(),
+    updated_at: z.string().optional().nullable(),
+    finished_at: z.string().optional().nullable(),
+  })
+  .passthrough();
+
 export const PersistedAgentEventSchema = z
   .object({
     run_id: z.string(),
@@ -147,5 +165,6 @@ export const ConversationEventsResponseSchema = z
 
 export type CreateRunResponse = z.infer<typeof CreateRunResponseSchema>;
 export type RunDetail = z.infer<typeof RunDetailSchema>;
+export type ToolExecutionSnapshot = z.infer<typeof ToolExecutionSnapshotSchema>;
 export type PersistedAgentEvent = z.infer<typeof PersistedAgentEventSchema>;
 export type ConversationEventsResponse = z.infer<typeof ConversationEventsResponseSchema>;

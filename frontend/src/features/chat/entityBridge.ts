@@ -26,10 +26,11 @@ import {
   type AgentEventAdapterState,
 } from '../../shared/sse/agentEventAdapter';
 import type { SSEEvent } from '../../shared/sse/parser';
-import { rehydrateRun } from '../../shared/state/runReducer';
+import { rehydrateRun, rehydrateToolExecutions } from '../../shared/state/runReducer';
 import {
   getRun,
   listRuns,
+  listRunTools,
   type RunDetail,
 } from '../../shared/api/runs';
 import { getConversationEvents } from '../../shared/api/client';
@@ -68,6 +69,8 @@ export type EntityBridge = {
   interruptRun: (runId: string, reason?: string) => void;
   /** Mark a transport failure in the same runtime store used by SSE events. */
   failRun: (runId: string, message: string) => void;
+  /** Fetch authoritative run + tool state after transport recovery is exhausted. */
+  reconcileRun: (runId: string) => Promise<RunEntity | null>;
   /** Disconnect all (page unload). */
   dispose: () => void;
   /** Rehydrate in-progress runs after refresh. */
@@ -105,6 +108,7 @@ export function createEntityBridge(
       store = s;
       onStoreChange?.(s);
     },
+    reconcileRun,
   });
 
   function beginRun(
@@ -221,6 +225,24 @@ export function createEntityBridge(
     applyLocalRunEvent(runId, 'run.failed', { message });
   }
 
+  async function reconcileRun(runId: string): Promise<RunEntity | null> {
+    const detail = await getRun(runId);
+    let next = rehydrateRun(manager.getStore(), detail);
+    try {
+      const tools = await listRunTools(runId);
+      next = rehydrateToolExecutions(next, runId, tools);
+    } catch {
+      // Run status remains authoritative even when an older BFF has no tool
+      // snapshot endpoint yet; persisted events can still restore the UI.
+    }
+    store = next;
+    manager.setStore(store);
+
+    store = manager.getStore();
+    onStoreChange?.(store);
+    return store.runsById[runId] || null;
+  }
+
   function dispose(): void {
     for (const controller of transports.values()) controller.abort();
     transports.clear();
@@ -246,6 +268,11 @@ export function createEntityBridge(
       if (full) detail = full;
 
       store = rehydrateRun(manager.getStore(), detail);
+      try {
+        store = rehydrateToolExecutions(store, runId, await listRunTools(runId));
+      } catch {
+        /* Older BFFs may not expose snapshots; event replay remains usable. */
+      }
       manager.setStore(store);
 
       const run = store.runsById[runId];
@@ -324,6 +351,11 @@ export function createEntityBridge(
         const live = await getRun(runId);
         if (live) {
           store = rehydrateRun(manager.getStore(), live);
+          try {
+            store = rehydrateToolExecutions(store, runId, await listRunTools(runId));
+          } catch {
+            /* Event replay below remains the fallback for older deployments. */
+          }
           manager.setStore(store);
         }
         if (live.runtime_available === false) {
@@ -383,7 +415,7 @@ export function createEntityBridge(
           tool.status === 'running' || tool.status === 'waiting_approval'
             ? 'running'
             : 'complete',
-        isError: tool.isError,
+        isError: tool.isError || tool.status === 'failed',
         result: tool.result,
       };
       content.push(part);
@@ -438,7 +470,11 @@ export function createEntityBridge(
       projected.content = content;
       projected._fileLinks = fileLinks;
       projected._runId = runId;
-      if (run.status === 'interrupted' || run.status === 'cancelled') {
+      if (
+        run.status === 'interrupted' ||
+        run.status === 'cancelled' ||
+        run.status === 'orphaned'
+      ) {
         projected.interrupted = true;
         projected.status = 'interrupted';
       }
@@ -474,6 +510,7 @@ export function createEntityBridge(
     stopRun,
     interruptRun,
     failRun,
+    reconcileRun,
     dispose,
     rehydrateInProgress,
     rehydrateConversation,

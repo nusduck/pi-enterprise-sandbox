@@ -53,11 +53,19 @@ def _cors_origins() -> list[str]:
 
 
 async def _cleanup_loop() -> None:
-    """Background task: session TTL then retention (drafts/inactive/audit)."""
+    """Background task: lease reaping, session TTL, then retention."""
     logger = logging.getLogger("sandbox.cleanup")
     while True:
         try:
             await asyncio.sleep(settings.cleanup_interval_minutes * 60)
+            try:
+                from sandbox.services.agent_run_manager import agent_run_manager
+
+                reaped = agent_run_manager.reap_expired_runs()
+                if reaped:
+                    logger.warning("Reaped %d expired agent run lease(s)", reaped)
+            except Exception:
+                logger.exception("Error during expired agent run lease cleanup")
             count = session_manager.cleanup_expired()
             if count:
                 logger.info("Cleaned up %d expired sessions", count)
@@ -146,6 +154,16 @@ async def lifespan(app: FastAPI):
             logger.info("Process Manager marked %d orphaned process(es)", orphaned)
     except Exception:
         logger.exception("Process Manager orphan scan failed at startup")
+
+    # Repair stale Agent leases before serving the first authoritative read.
+    try:
+        from sandbox.services.agent_run_manager import agent_run_manager
+
+        reaped = agent_run_manager.reap_expired_runs()
+        if reaped:
+            logger.warning("Reaped %d expired agent run lease(s) at startup", reaped)
+    except Exception:
+        logger.exception("Agent run lease reaper failed at startup")
 
     # Start session + retention background cleanup task
     cleanup_task = asyncio.create_task(_cleanup_loop())

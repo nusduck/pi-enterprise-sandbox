@@ -473,6 +473,14 @@ export function ChatProvider({ children }: { children: ReactNode }) {
           },
           { signal: abortCtrl.signal },
         );
+        // Refresh the durable ledger even after a clean stream close. The
+        // stream may have omitted a tool_end event, so closure alone is not a
+        // success signal.
+        try {
+          await bridge.reconcileRun(runId);
+        } catch (reconcileErr) {
+          console.warn('[chat] post-stream reconciliation failed:', reconcileErr);
+        }
 
         // Commit this run's assistant projection into ChatState so later turns
         // keep history even if activeRunId moves to another server run.
@@ -518,7 +526,24 @@ export function ChatProvider({ children }: { children: ReactNode }) {
           if (runId) bridge.interruptRun(runId, 'User stopped the run');
         } else {
           console.error('[chat] Error:', error);
-          if (runId) bridge.failRun(runId, error.message || 'Connection error');
+          let authoritative = false;
+          if (runId) {
+            try {
+              const recovered = await bridge.reconcileRun(runId);
+              // Any successfully fetched snapshot is authoritative, even if
+              // it is still running. Transport loss must not rewrite that
+              // durable state into a guessed failed/succeeded event.
+              authoritative = Boolean(recovered);
+            } catch (reconcileErr) {
+              console.warn('[chat] authoritative run recovery failed:', reconcileErr);
+            }
+          }
+          // Do not manufacture a failed/succeeded result from transport
+          // state. Only use a local failure marker when the authoritative
+          // snapshot itself could not be obtained.
+          if (runId && !authoritative) {
+            bridge.failRun(runId, error.message || 'Connection error');
+          }
           const traceId = currentTraceId();
           const trace = traceId ? ` [trace ${traceId.slice(0, 8)}]` : '';
           flashError(`Connection error: ${error.message}${trace}`);

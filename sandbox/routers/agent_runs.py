@@ -11,6 +11,7 @@ from sandbox.models import (
     AgentRunCreate,
     AgentRunResponse,
     ClaimLeaseRequest,
+    RenewLeaseRequest,
     ToolExecutionPrepare,
     ToolExecutionResponse,
     TOOL_TERMINAL_STATUSES,
@@ -31,6 +32,7 @@ task_plan_projection = TaskPlanProjectionRepository()
 class InterruptBody(BaseModel):
     reason: str | None = None
     partial_text: str | None = None
+    lease_owner: str | None = None
 
 
 class ToolTerminalBody(BaseModel):
@@ -151,6 +153,7 @@ def list_agent_runs(
     conversation_id: str | None = Query(default=None),
 ):
     """List visible runs, optionally filtered by conversation and status."""
+    agent_run_manager.reap_expired_runs()
     if conversation_id:
         rows = agent_run_manager.runs.list_by_conversation(conversation_id)
     elif status:
@@ -198,6 +201,18 @@ def claim_agent_run(run_id: str, body: ClaimLeaseRequest):
     if claimed is None:
         raise HTTPException(status_code=409, detail="Lease claim conflict")
     return claimed
+
+
+@router.post("/agent-runs/{run_id}/renew", response_model=AgentRunResponse)
+def renew_agent_run(run_id: str, body: RenewLeaseRequest):
+    renewed = agent_run_manager.renew_lease(
+        run_id,
+        lease_owner=body.lease_owner,
+        lease_seconds=body.lease_seconds,
+    )
+    if renewed is None:
+        raise HTTPException(status_code=409, detail="Lease renewal failed")
+    return renewed
 
 
 @router.post("/agent-runs/{run_id}/release", response_model=AgentRunResponse)
@@ -296,7 +311,10 @@ def fail_agent_run(run_id: str, body: FailBody | None = None):
 def interrupt_agent_run(run_id: str, body: InterruptBody | None = None):
     body = body or InterruptBody()
     updated = agent_run_manager.mark_interrupted(
-        run_id, reason=body.reason, partial_text=body.partial_text
+        run_id,
+        reason=body.reason,
+        partial_text=body.partial_text,
+        lease_owner=body.lease_owner,
     )
     if updated is None:
         raise HTTPException(status_code=404, detail="Agent run not found")

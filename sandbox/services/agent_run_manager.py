@@ -15,6 +15,7 @@ from sandbox.models import (
     AgentEventResponse,
     AgentRunResponse,
     AgentRunStatus,
+    ToolExecutionStatus,
     ToolExecutionResponse,
 )
 from sandbox.repositories import (
@@ -24,6 +25,17 @@ from sandbox.repositories import (
     AgentRunRepository,
     ConversationRepository,
     ToolExecutionRepository,
+)
+
+TERMINAL_RUN_STATUSES = frozenset(
+    {
+        AgentRunStatus.COMPLETED.value,
+        AgentRunStatus.INTERRUPTED.value,
+        AgentRunStatus.CANCELLED.value,
+        AgentRunStatus.FAILED.value,
+        AgentRunStatus.BUDGET_EXCEEDED.value,
+        AgentRunStatus.REJECTED.value,
+    }
 )
 
 
@@ -55,6 +67,52 @@ class AgentRunManager:
         self.events = events or AgentEventRepository(shared_db)
         self.tools = tools or ToolExecutionRepository(shared_db)
         self.conversations = conversations or ConversationRepository(shared_db)
+
+    def _reconcile_tool_ledger(
+        self,
+        run_id: str,
+        *,
+        run_status: str,
+        reason: str,
+    ) -> None:
+        """Make active tool rows terminal when their run closes.
+
+        The Agent normally closes each row from the tool wrapper, but the run
+        boundary is the durable safety net for lost tool_end events, worker
+        crashes, and SSE disconnects. A successful run cannot establish the
+        outcome of a still-executing side effect, so it is recorded as
+        ``unknown`` rather than incorrectly reported as succeeded.
+        """
+        if run_status == AgentRunStatus.COMPLETED.value:
+            terminal_status = ToolExecutionStatus.UNKNOWN.value
+        elif run_status in {
+            AgentRunStatus.INTERRUPTED.value,
+            AgentRunStatus.CANCELLED.value,
+        }:
+            terminal_status = ToolExecutionStatus.CANCELLED.value
+        else:
+            terminal_status = ToolExecutionStatus.FAILED.value
+
+        active_statuses = {
+            ToolExecutionStatus.PREPARED.value,
+            ToolExecutionStatus.WAITING_APPROVAL.value,
+            ToolExecutionStatus.EXECUTING.value,
+        }
+        for tool in self.tools.list_by_run(run_id):
+            if tool.status not in active_statuses:
+                continue
+            summary = reason or f"run ended while tool was {tool.status}"
+            try:
+                self.tools.mark_terminal(
+                    tool.tool_call_id,
+                    terminal_status,
+                    summary=summary,
+                    error=summary if terminal_status != ToolExecutionStatus.CANCELLED.value else None,
+                )
+            except Exception:
+                # Never prevent the run status/event from becoming terminal.
+                # A later reconciliation can retry the sticky terminal write.
+                continue
 
     def start_run(
         self,
@@ -157,6 +215,59 @@ class AgentRunManager:
             now_iso=now.isoformat(),
         )
 
+    def renew_lease(
+        self,
+        run_id: str,
+        *,
+        lease_owner: str,
+        lease_seconds: int = 120,
+    ) -> AgentRunResponse | None:
+        now = datetime.now(timezone.utc)
+        lease_until = (now + timedelta(seconds=lease_seconds)).isoformat()
+        return self.runs.renew_lease(
+            run_id,
+            lease_owner=lease_owner,
+            lease_until=lease_until,
+        )
+
+    def reap_expired_run(self, run_id: str) -> AgentRunResponse | None:
+        """Reap one stale active run and close its unfinished tools."""
+        current = self.runs.get(run_id)
+        if current is None or current.status not in {
+            AgentRunStatus.PENDING.value,
+            AgentRunStatus.RUNNING.value,
+        }:
+            return current
+        now = datetime.now(timezone.utc).isoformat()
+        updated = self.runs.expire_lease(run_id, now_iso=now)
+        if updated is None:
+            return self.runs.get(run_id)
+        self._reconcile_tool_ledger(
+            run_id,
+            run_status=AgentRunStatus.INTERRUPTED.value,
+            reason="run lease expired; execution owner is unavailable",
+        )
+        self.events.append(
+            run_id=run_id,
+            event_type="interrupted",
+            payload={"reason": "lease_expired", "partial_text": None},
+        )
+        self.conversations.set_interrupted(
+            updated.conversation_id, interrupted=True, last_run_id=run_id
+        )
+        return self.runs.get(run_id)
+
+    def reap_expired_runs(self) -> int:
+        count = 0
+        for status in (AgentRunStatus.PENDING.value, AgentRunStatus.RUNNING.value):
+            for run in self.runs.list_by_status(status):
+                before = self.runs.get(run.run_id)
+                self.reap_expired_run(run.run_id)
+                after = self.runs.get(run.run_id)
+                if before and after and before.status != after.status:
+                    count += 1
+        return count
+
     def release_lease(
         self,
         run_id: str,
@@ -164,6 +275,9 @@ class AgentRunManager:
         lease_owner: str,
         status: str = AgentRunStatus.COMPLETED.value,
     ) -> AgentRunResponse | None:
+        current = self.runs.get(run_id)
+        if current is None or current.status in TERMINAL_RUN_STATUSES:
+            return current
         return self.runs.release_lease(run_id, lease_owner=lease_owner, status=status)
 
     def append_event(
@@ -220,12 +334,29 @@ class AgentRunManager:
         *,
         reason: str | None = None,
         partial_text: str | None = None,
+        lease_owner: str | None = None,
     ) -> AgentRunResponse | None:
         """Mark run + conversation interrupted; append interrupt event."""
         run = self.runs.get(run_id)
         if run is None:
             return None
-        updated = self.runs.mark_interrupted(run_id)
+        if run.status in TERMINAL_RUN_STATUSES:
+            return run
+        if lease_owner:
+            updated = self.runs.release_lease(
+                run_id,
+                lease_owner=lease_owner,
+                status=AgentRunStatus.INTERRUPTED.value,
+            )
+        else:
+            updated = self.runs.mark_interrupted(run_id)
+        if updated is None:
+            return None
+        self._reconcile_tool_ledger(
+            run_id,
+            run_status=AgentRunStatus.INTERRUPTED.value,
+            reason=reason or "run interrupted",
+        )
         self.events.append(
             run_id=run_id,
             event_type="interrupted",
@@ -289,9 +420,8 @@ class AgentRunManager:
         run = self.runs.get(run_id)
         if run is None:
             return None
-        # Record actual model + usage before releasing lease (B7).
-        if usage is not None or model_id is not None:
-            self.runs.update_usage(run_id, usage=usage, model_id=model_id)
+        if run.status in TERMINAL_RUN_STATUSES:
+            return run
         if lease_owner:
             updated = self.runs.release_lease(
                 run_id,
@@ -303,9 +433,21 @@ class AgentRunManager:
                 run_id, AgentRunStatus.COMPLETED.value
             )
         if updated is None:
-            # The run disappeared between the initial read and the terminal
-            # update. Do not append a terminal event for a deleted run.
+            # A stale/wrong owner must not append done or reconcile another
+            # worker's active tools. This also covers a run deleted between
+            # the initial read and terminal update.
             return None
+        # Record actual model + usage only after the status/lease transition
+        # succeeds (B7), so a stale worker has no side effects.
+        if usage is not None or model_id is not None:
+            updated = self.runs.update_usage(
+                run_id, usage=usage, model_id=model_id
+            ) or updated
+        self._reconcile_tool_ledger(
+            run_id,
+            run_status=AgentRunStatus.COMPLETED.value,
+            reason="run completed with an unfinished tool execution",
+        )
         done_payload: dict[str, Any] = {"status": AgentRunStatus.COMPLETED.value}
         if model_id is not None:
             done_payload["model_id"] = model_id
@@ -331,6 +473,8 @@ class AgentRunManager:
         run = self.runs.get(run_id)
         if run is None:
             return None
+        if run.status in TERMINAL_RUN_STATUSES:
+            return run
         if lease_owner:
             updated = self.runs.release_lease(
                 run_id,
@@ -339,6 +483,13 @@ class AgentRunManager:
             )
         else:
             updated = self.runs.update_status(run_id, AgentRunStatus.FAILED.value)
+        if updated is None:
+            return None
+        self._reconcile_tool_ledger(
+            run_id,
+            run_status=AgentRunStatus.FAILED.value,
+            reason=error or "run failed with an unfinished tool execution",
+        )
         self.events.append(
             run_id=run_id,
             event_type="error",
@@ -358,20 +509,26 @@ class AgentRunManager:
         run = self.runs.get(run_id)
         if run is None:
             return None
+        if run.status in TERMINAL_RUN_STATUSES:
+            return run
         pending = pending_approval or {}
         if approval_id and "approval_id" not in pending:
             pending = {**pending, "approval_id": approval_id}
         if lease_owner:
-            self.runs.release_lease(
+            released = self.runs.release_lease(
                 run_id,
                 lease_owner=lease_owner,
                 status=AgentRunStatus.WAITING_APPROVAL.value,
             )
+            if released is None:
+                return None
         updated = self.runs.set_pending_approval(
             run_id,
             pending or None,
             status=AgentRunStatus.WAITING_APPROVAL.value,
         )
+        if updated is None:
+            return None
         self.events.append(
             run_id=run_id,
             event_type="waiting_approval",
@@ -394,6 +551,8 @@ class AgentRunManager:
         run = self.runs.get(run_id)
         if run is None:
             return None
+        if run.status in TERMINAL_RUN_STATUSES:
+            return run
         if lease_owner:
             updated = self.runs.release_lease(
                 run_id,
@@ -404,6 +563,13 @@ class AgentRunManager:
             updated = self.runs.update_status(
                 run_id, AgentRunStatus.BUDGET_EXCEEDED.value
             )
+        if updated is None:
+            return None
+        self._reconcile_tool_ledger(
+            run_id,
+            run_status=AgentRunStatus.BUDGET_EXCEEDED.value,
+            reason=reason or "budget exceeded with an unfinished tool execution",
+        )
         self.events.append(
             run_id=run_id,
             event_type="budget_exceeded",
@@ -421,17 +587,24 @@ class AgentRunManager:
         """Park a run for durable user input and release its execution lease."""
         if self.runs.get(run_id) is None:
             return None
+        run = self.runs.get(run_id)
+        if run is not None and run.status in TERMINAL_RUN_STATUSES:
+            return run
         if lease_owner:
-            self.runs.release_lease(
+            released = self.runs.release_lease(
                 run_id,
                 lease_owner=lease_owner,
                 status=AgentRunStatus.WAITING_INPUT.value,
             )
+            if released is None:
+                return None
         updated = self.runs.set_pending_input(
             run_id,
             pending_input,
             status=AgentRunStatus.WAITING_INPUT.value,
         )
+        if updated is None:
+            return None
         self.events.append(
             run_id=run_id,
             event_type="waiting_input",
@@ -518,7 +691,24 @@ class AgentRunManager:
         )
 
     def get_run(self, run_id: str) -> AgentRunResponse | None:
-        return self.runs.get(run_id)
+        run = self.reap_expired_run(run_id)
+        if run is None:
+            return None
+        if run.status in TERMINAL_RUN_STATUSES:
+            # GET is an authoritative recovery seam. If a terminal transition
+            # lost one tool write, a later snapshot repairs it before the
+            # frontend renders the final state.
+            self._reconcile_tool_ledger(
+                run_id,
+                run_status=run.status,
+                reason="terminal run reconciliation",
+            )
+            run = self.runs.get(run_id)
+        return run
+
+    def reconcile_terminal_run(self, run_id: str) -> AgentRunResponse | None:
+        """Explicit idempotent repair hook for workers and recovery jobs."""
+        return self.get_run(run_id)
 
     def get_last_run_for_conversation(
         self, conversation_id: str

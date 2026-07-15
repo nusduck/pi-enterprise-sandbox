@@ -27,6 +27,7 @@ import {
   handleFollowUpRun,
   handleCancelRun,
   handleGetRun,
+  handleListRunTools,
   handleResumeApproval,
   handleInteractionResponse,
   handleCreateRun,
@@ -289,6 +290,11 @@ const server = http.createServer(async (req, res) => {
       const runGet = path.match(/^\/api\/runs\/([^/]+)$/);
       if (req.method === 'GET' && runGet) {
         await handleGetRun(decodeURIComponent(runGet[1]), res, req);
+        return;
+      }
+      const runTools = path.match(/^\/api\/runs\/([^/]+)\/tools$/);
+      if (req.method === 'GET' && runTools) {
+        await handleListRunTools(decodeURIComponent(runTools[1]), res, req);
         return;
       }
     }
