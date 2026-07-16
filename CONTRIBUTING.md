@@ -72,9 +72,12 @@ pi-enterprise-sandbox/
 │   └── tests/         # node:test
 ├── agent/             # Independent pi-coding-agent runtime
 │   ├── server.js      # internal Run API + health
-│   ├── chat-runner.js
-│   ├── sandbox-tools.js
-│   ├── extensions/
+│   ├── config.js
+│   ├── application/   # run registry, profiles, governance
+│   ├── runtime/       # session loop, bootstrap, event bridge, helpers
+│   ├── infrastructure/# sandbox-client, MCP manager
+│   ├── services/      # budget, waiters, model registry, persistence
+│   ├── packages/      # enterprise-agent-kit (customTools / Extensions)
 │   └── tests/         # node:test + sdk-compat
 ├── sandbox/           # FastAPI execution / files / approvals (no agent loop)
 │   ├── main.py
@@ -82,18 +85,19 @@ pi-enterprise-sandbox/
 │   ├── services/
 │   ├── security/      # path_validation, safe_env, public_routes
 │   └── mcp/
-├── skills/            # Built-in skills
+├── skills/            # Skill packages (empty baseline; install in dev)
 ├── tests/             # pytest (unit + FastAPI integration)
-├── docs/              # Active docs (archive/ is historical)
+├── docs/              # Active docs (docs/archive/ is historical only)
 ├── config/            # Runtime config files
 ├── nginx/             # Production Nginx + SSL
-├── scripts/           # Backup/restore utilities
-├── .github/workflows/ # CI matrix: python / node-api / frontend / compose
+├── scripts/           # backup/restore, development reset, cross-service smoke
+├── .github/workflows/ # CI matrix: python / node / frontend / compose
 ├── .trellis/          # Specs + tasks
 └── pyproject.toml
 ```
 
-> `extensions/` 与 `sdk/` 已从仓库移除；勿按历史文档恢复。
+> Root-level `PLAN.md` / `AUDIT.md` / `IMPROVEMENT_PLAN.md` live under `docs/archive/`.  
+> Agent root no longer has `chat-runner.js` / `sandbox-tools.js` facades — import from `runtime/` and `packages/enterprise-agent-kit`.
 
 ## How to Contribute
 

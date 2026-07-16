@@ -14,6 +14,10 @@ import {
   buildAgentSessionOptions,
   createBoundAgentSession,
 } from './agent-session-factory.js';
+import {
+  resolveAgentSessionManager,
+  resolveConversationAndSession,
+} from './session-bootstrap.js';
 import { createSandboxClient } from '../infrastructure/sandbox-client.js';
 import { config, SKILLS_MODE } from '../config.js';
 import {
@@ -24,11 +28,11 @@ import {
   extractMessageText,
   toAgentHistoryMessages,
   toPersistableMessages,
-} from '../message-helpers.js';
+} from './message-helpers.js';
 import {
   extractMessageAttachments,
   injectAttachmentContext,
-} from '../attachment-context.js';
+} from './attachment-context.js';
 import {
   createSkillTools,
   SKILL_TOOL_NAMES,
@@ -50,10 +54,6 @@ import {
 } from '../infrastructure/mcp-connection-manager.js';
 import {
   SessionRestoreError,
-  createInMemorySession,
-  createNewPersistedSession,
-  isForceInMemory,
-  openSessionFromResume,
   persistNewEntries,
 } from '../services/session-persistence.js';
 import { createBudgetTracker } from '../services/budget.js';
@@ -74,6 +74,12 @@ import {
   resolveModel,
   toPiModel,
 } from '../services/model-registry.js';
+
+// Re-export session bootstrap helpers for tests and HTTP orchestration layers.
+export {
+  resolveAgentSessionManager,
+  resolveConversationAndSession,
+} from './session-bootstrap.js';
 
 // Public tool contract remains relative paths + opaque workspace_id. Pi SDK
 // itself receives the stable logical session cwd, never the physical host path.
@@ -150,188 +156,6 @@ export function makeModel(entry) {
  */
 export function buildCreateAgentSessionOptions(opts) {
   return buildAgentSessionOptions(opts);
-}
-
-/**
- * Resolve conversation + sandbox session (reuse when possible).
- * @param {ReturnType<typeof createSandboxClient>} client
- * @param {string | null | undefined} conversation_id
- */
-export async function resolveConversationAndSession(client, conversation_id) {
-  let activeConversationId = conversation_id || null;
-  let sandboxSessionId = null;
-  let workspaceId = null;
-  let reusedSession = false;
-
-  if (activeConversationId) {
-    try {
-      const conv = await client.getConversation(activeConversationId);
-      if (conv.sandbox_session_id) {
-        try {
-          const existing = await client.getSession(conv.sandbox_session_id);
-          if (existing?.status === 'RUNNING' && existing.session_id) {
-            sandboxSessionId = existing.session_id;
-            workspaceId = existing.workspace_id || null;
-            reusedSession = true;
-            console.log(`[agent] Reusing sandbox session ${sandboxSessionId}`);
-          }
-        } catch {
-          // session expired or missing
-        }
-      }
-      console.log(
-        `[agent] Reusing conversation ${activeConversationId} workspace_id=conv_${activeConversationId}`,
-      );
-    } catch {
-      console.log(`[agent] Conversation ${activeConversationId} not found, will create new`);
-      activeConversationId = null;
-    }
-  }
-
-  if (!activeConversationId) {
-    const convResp = await client.createConversation();
-    activeConversationId = convResp.id;
-    console.log(
-      `[agent] Created conversation ${activeConversationId} workspace_id=conv_${activeConversationId}`,
-    );
-  }
-
-  if (!sandboxSessionId) {
-    const sessionData = await client.createSession('pi-coding-agent', {
-      conversation_id: activeConversationId,
-      enterprise_session_id: activeConversationId,
-    });
-    sandboxSessionId = sessionData.session_id;
-    workspaceId = sessionData.workspace_id || null;
-    try {
-      await client.updateConversation(activeConversationId, {
-        sandbox_session_id: sandboxSessionId,
-      });
-    } catch (err) {
-      console.warn('[agent] Failed to bind sandbox_session_id on conversation:', err.message);
-    }
-    console.log(`[agent] Created sandbox session ${sandboxSessionId}`);
-  }
-
-  return {
-    activeConversationId,
-    workspace_id: workspaceId || (activeConversationId ? `conv_${activeConversationId}` : null),
-    sessionCwd: config.SESSION_WORKSPACE_CWD,
-    sandboxSessionId,
-    reusedSession,
-    agentSessionId: null,
-  };
-}
-
-/**
- * Resolve or create the logical Pi SDK agent session for a conversation.
- * Fail-closed when a bound session cannot be restored.
- *
- * @param {ReturnType<typeof createSandboxClient>} client
- * @param {string} conversationId
- * @param {{
- *   sandboxSessionId?: string|null,
- *   workspaceId?: string|null,
- *   sessionCwd?: string|null,
- *   modelId?: string|null,
- *   emit?: (event: object) => void,
- * }} [opts]
- */
-export async function resolveAgentSessionManager(client, conversationId, opts = {}) {
-  const emit = typeof opts.emit === 'function' ? opts.emit : () => {};
-  const sessionCwd = opts.sessionCwd || config.SESSION_WORKSPACE_CWD;
-
-  if (isForceInMemory() || config.AGENT_FORCE_INMEMORY) {
-    console.warn('[agent] AGENT_FORCE_INMEMORY set — using ephemeral SessionManager.inMemory()');
-    return {
-      ...createInMemorySession({ cwd: sessionCwd }),
-      agentSessionId: null,
-      restored: false,
-      forceInMemory: true,
-    };
-  }
-
-  let boundAgentSessionId = null;
-  try {
-    const conv = await client.getConversation(conversationId);
-    boundAgentSessionId = conv?.agent_session_id || null;
-  } catch {
-    boundAgentSessionId = null;
-  }
-
-  if (boundAgentSessionId) {
-    try {
-      const resume = await client.resumeAgentSession(boundAgentSessionId);
-      if (!resume?.session?.id) {
-        throw new SessionRestoreError('Resume returned empty session', {
-          agentSessionId: boundAgentSessionId,
-          conversationId,
-        });
-      }
-      const opened = openSessionFromResume(resume, {
-        conversationId,
-        cwd: sessionCwd,
-      });
-      console.log(
-        `[agent] Restored agent session ${boundAgentSessionId} ` +
-          `(${opened.persistedCount} entries) for conversation ${conversationId}`,
-      );
-      return {
-        ...opened,
-        agentSessionId: boundAgentSessionId,
-        restored: true,
-        forceInMemory: false,
-      };
-    } catch (err) {
-      const message = err?.message || String(err);
-      emit({
-        type: 'session_restore_failed',
-        conversation_id: conversationId,
-        agent_session_id: boundAgentSessionId,
-        error: message,
-      });
-      // Fail closed: never invent a silent empty session when restore fails.
-      throw new SessionRestoreError(message, {
-        agentSessionId: boundAgentSessionId,
-        conversationId,
-        cause: err,
-      });
-    }
-  }
-
-  // First turn: create a file-backed SessionManager and bind a new agent session row.
-  const created = createNewPersistedSession({ cwd: sessionCwd });
-  const header = created.sessionManager.getHeader() || {
-    type: 'session',
-    version: 3,
-    id: created.sessionManager.getSessionId(),
-    timestamp: new Date().toISOString(),
-    cwd: sessionCwd,
-  };
-  try {
-    const row = await client.createAgentSession({
-      conversation_id: conversationId,
-      sdk_session_id: created.sessionManager.getSessionId(),
-      workspace_id: opts.workspaceId || `conv_${conversationId}`,
-      sandbox_session_id: opts.sandboxSessionId || null,
-      model_id: opts.modelId || config.MODEL_ID,
-      session_schema_version: header.version || 3,
-      header_payload: header,
-    });
-    console.log(
-      `[agent] Created agent session ${row.id} (sdk=${row.sdk_session_id}) ` +
-        `for conversation ${conversationId}`,
-    );
-    return {
-      ...created,
-      agentSessionId: row.id,
-      restored: false,
-      forceInMemory: false,
-    };
-  } catch (err) {
-    created.cleanup();
-    throw err;
-  }
 }
 
 /**
@@ -917,11 +741,13 @@ export async function runAgentTurn(opts) {
     }
 
     // Resolve / restore logical Pi SDK session (one per conversation).
+    // Pass the conversation snapshot so we do not re-GET /conversations/:id.
     sessionHandle = await resolveAgentSessionManager(client, activeConversationId, {
       sandboxSessionId,
       workspaceId: resolved.workspace_id || `conv_${activeConversationId}`,
       sessionCwd: resolved.sessionCwd,
       modelId: activeModelId,
+      conversation: resolved.conversation,
       emit,
     });
     activeAgentSessionId = sessionHandle.agentSessionId;
@@ -1486,8 +1312,8 @@ export async function runAgentTurn(opts) {
         status: 'waiting_approval',
         approval_id: p?.approval_id,
       });
-      // Do not emit done — client should keep the run open for resume.
-      emit({ type: 'session_closed', session_id: sandboxSessionId });
+      // Park only — do not emit session_closed/done. UI keeps the run open for
+      // resume (pi permission-gate parks before treating the turn as finished).
       return {
         status: 'waiting_approval',
         run_id: activeRunId,
@@ -1504,7 +1330,6 @@ export async function runAgentTurn(opts) {
         status: 'waiting_input',
         interaction_id: current?.interaction_id,
       });
-      emit({ type: 'session_closed', session_id: sandboxSessionId });
       return {
         status: 'waiting_input',
         run_id: activeRunId,

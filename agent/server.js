@@ -33,7 +33,7 @@ import {
   decideApprovalLocal,
   rehydrateWaitingRun,
   rehydrateWaitingRunFromSandbox,
-} from './run-manager.js';
+} from './application/run-manager.js';
 import { getExtensionDiagnostics } from './application/extension-diagnostics-service.js';
 
 // Production fail-fast before bind.

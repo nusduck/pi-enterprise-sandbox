@@ -582,13 +582,48 @@ export function isHardDenyCommand(command) {
  * @param {string} [profile]
  * @returns {boolean}
  */
+/**
+ * Network verbs elevated only when invoked as a command, not when inspected
+ * via which/type (e.g. ``which curl`` must not require approval).
+ */
+function invokesNetworkTool(command) {
+  const network = new Set(['curl', 'wget', 'nc', 'ncat']);
+  const inspect = new Set(['which', 'type', 'whereis', 'whatis', 'command', 'apropos']);
+  const segments = String(command || '')
+    .toLowerCase()
+    .split(/(?:&&|\|\||;|\n|\|(?!\|))/);
+  for (const segment of segments) {
+    const parts = segment.trim().split(/\s+/).filter(Boolean);
+    if (!parts.length) continue;
+    let i = 0;
+    while (i < parts.length && /^[a-z_][\w]*=/.test(parts[i])) i += 1;
+    if (i >= parts.length) continue;
+    const exe = parts[i].split('/').pop();
+    if (inspect.has(exe)) continue;
+    if (SHELL_WRAPPERS.has(exe)) {
+      const cIdx = parts.indexOf('-c');
+      if (cIdx >= 0 && cIdx + 1 < parts.length) {
+        const payload = parts.slice(cIdx + 1).join(' ').replace(/^['"]|['"]$/g, '');
+        if (invokesNetworkTool(payload)) return true;
+      }
+      continue;
+    }
+    if (network.has(exe)) return true;
+  }
+  return false;
+}
+
 export function commandRequiresApproval(command, profile = resolvePolicyProfile()) {
   const cmd = String(command || '').toLowerCase();
   if (!cmd) return false;
   const patterns = profile === POLICY_PROFILES.BALANCED
     ? BALANCED_APPROVAL_SUBSTRINGS
     : APPROVAL_REQUIRED_SUBSTRINGS;
-  return patterns.some((s) => cmd.includes(s));
+  const nonNetwork = patterns.filter(
+    (s) => !['curl ', 'wget ', 'nc ', 'ncat '].includes(s),
+  );
+  if (nonNetwork.some((s) => cmd.includes(s))) return true;
+  return invokesNetworkTool(cmd);
 }
 
 /**

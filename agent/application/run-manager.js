@@ -13,8 +13,8 @@ import {
   runAgentTurn,
   resumeAgentTurnAfterApproval,
   resumeAgentTurnAfterInput,
-} from './chat-runner.js';
-import { createBudgetTracker, resolveBudgetLimits } from './services/budget.js';
+} from '../runtime/agent-runtime.js';
+import { createBudgetTracker, resolveBudgetLimits } from '../services/budget.js';
 import {
   resolveApproval,
   getPendingApproval,
@@ -22,15 +22,15 @@ import {
   clearPendingApproval,
   clearPendingForRun,
   _resetApprovalWaiters,
-} from './services/approval-waiter.js';
+} from '../services/approval-waiter.js';
 import {
   getPendingInput,
   getPendingInputForRun,
   clearPendingInput,
   registerPendingInput,
-} from './services/interaction-waiter.js';
-import { createSandboxClient } from './infrastructure/sandbox-client.js';
-import { config } from './config.js';
+} from '../services/interaction-waiter.js';
+import { createSandboxClient } from '../infrastructure/sandbox-client.js';
+import { config } from '../config.js';
 
 /**
  * @typedef {'queued'|'running'|'waiting_approval'|'waiting_input'|'completed'|'cancelled'|'failed'|'budget_exceeded'|'rejected'} RunStatus
@@ -286,22 +286,14 @@ export async function createRun(
           run.pending_approval = pending;
           run.status = 'waiting_approval';
           run.updated_at = now();
-          appendEvent(run, {
-            type: 'approval_required',
-            approval_id: pending.approval_id,
-            tool_name: pending.tool_name,
-            command: pending.params?.command,
-            path: pending.params?.path,
-            reason: pending.reason,
-            risk_level: pending.risk_level,
-            policy_version: pending.policy_version,
-            run_id: run.id,
-            conversation_id: run.conversation_id,
-          });
+          // approval_required is emitted once by the tool/MCP path (pi-style:
+          // gate owns the event). Run-manager only parks + status.
           appendEvent(run, {
             type: 'run_status',
             status: 'waiting_approval',
             approval_id: pending.approval_id,
+            tool_name: pending.tool_name,
+            reason: pending.reason,
           });
           // Release live SDK handles so waiting does not pin execution resources.
           run.handles = null;
@@ -783,11 +775,10 @@ export async function resumeRunAfterApproval(runId, body = {}) {
           run.status = 'waiting_approval';
           run.updated_at = now();
           appendEvent(run, {
-            type: 'approval_required',
+            type: 'run_status',
+            status: 'waiting_approval',
             approval_id: nextPending.approval_id,
             tool_name: nextPending.tool_name,
-            run_id: run.id,
-            conversation_id: run.conversation_id,
           });
           run.handles = null;
         },
@@ -898,7 +889,12 @@ export async function resumeRunAfterInput(runId, interactionId, body = {}) {
         onApprovalSuspend: async (nextPending) => {
           run.pending_approval = nextPending;
           run.status = 'waiting_approval';
-          appendEvent(run, { type: 'approval_required', ...nextPending });
+          appendEvent(run, {
+            type: 'run_status',
+            status: 'waiting_approval',
+            approval_id: nextPending.approval_id,
+            tool_name: nextPending.tool_name,
+          });
           run.handles = null;
         },
         onInputSuspend: async (nextInput) => {

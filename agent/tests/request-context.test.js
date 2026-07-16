@@ -9,13 +9,13 @@ import assert from 'node:assert/strict';
 import {
   createSandboxClient,
   ensureTraceId,
-} from '../services/sandbox-client.js';
+} from '../infrastructure/sandbox-client.js';
 import {
   createSandboxTools,
   setSandboxSessionId,
   getSandboxSessionId,
   setApprovalNotifier,
-} from '../sandbox-tools.js';
+} from '../packages/enterprise-agent-kit/extensions/sandbox-tools/tool-definitions.js';
 
 function mockClient(label) {
   const calls = [];

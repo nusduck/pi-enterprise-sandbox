@@ -5,8 +5,8 @@ import {
   normalizeWorkspaceCommand,
   normalizeWorkspacePath,
   normalizeWorkspaceToolParams,
-} from '../workspace-paths.js';
-import { createSandboxTools } from '../sandbox-tools.js';
+} from '../runtime/workspace-paths.js';
+import { createSandboxTools } from '../packages/enterprise-agent-kit/extensions/sandbox-tools/tool-definitions.js';
 
 const ROOT = '/home/sandbox/workspace';
 

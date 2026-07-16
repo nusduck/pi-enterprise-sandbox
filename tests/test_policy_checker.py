@@ -79,9 +79,11 @@ class TestToolPolicyChecker:
         assert checker.is_blocked_command("  sudo id") is True  # strip
 
     def test_approval_pattern_not_hard_deny(self, checker: ToolPolicyChecker):
+        # Use a network fetch — elevated in both strict and balanced profiles.
+        # (pip install is intentionally allowlisted under balanced.)
         decision = checker.check(ToolCallCheck(
             session_id="s1", tool_name="bash",
-            command="pip install requests",
+            command="curl https://example.com",
         ))
         assert decision.decision == PolicyDecision.APPROVAL_REQUIRED.value
         assert decision.allowed is False
@@ -127,6 +129,20 @@ class TestToolPolicyChecker:
             session_id="s1", tool_name="bash", command="rm -r build",
         ))
         assert destructive.decision == PolicyDecision.APPROVAL_REQUIRED.value
+
+    
+    def test_which_curl_is_not_network_approval(self):
+        """which/type of curl must not elevate — only invoking curl does."""
+        checker = ToolPolicyChecker()
+        inspect = checker.check(ToolCallCheck(
+            session_id="s1", tool_name="bash", command="which curl wget node python3",
+        ))
+        assert inspect.decision == PolicyDecision.ALLOW.value, inspect.reason
+
+        fetch = checker.check(ToolCallCheck(
+            session_id="s1", tool_name="bash", command="curl https://example.com",
+        ))
+        assert fetch.decision == PolicyDecision.APPROVAL_REQUIRED.value
 
     def test_balanced_profile_requires_effective_bubblewrap(self, monkeypatch):
         with pytest.raises(ValueError, match="bubblewrap"):

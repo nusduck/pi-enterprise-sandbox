@@ -40,7 +40,7 @@ import {
   DEFAULT_SKILL_ROOTS,
 } from '../../../../skills/paths.js';
 import { ApprovalSuspendedError } from '../../../../services/approval-waiter.js';
-import { normalizeWorkspaceToolParams } from '../../../../workspace-paths.js';
+import { normalizeWorkspaceToolParams } from '../../../../runtime/workspace-paths.js';
 import { summarizeToolArguments } from '../../../../runtime/tool-payload-sanitizer.js';
 
 /** Terminal ledger statuses that must never re-execute side effects. */
@@ -60,6 +60,17 @@ function canonicalize(value) {
 
 function stableSerialize(value) {
   return JSON.stringify(canonicalize(value));
+}
+
+/**
+ * Compact JSON for tool result text shown to the model.
+ * Avoids pretty-print whitespace that bloats context tokens and allocations
+ * on high-frequency tools (ls/find/grep/process_*).
+ * @param {unknown} value
+ * @returns {string}
+ */
+function toolResultJson(value) {
+  return JSON.stringify(value);
 }
 
 /**
@@ -1006,7 +1017,7 @@ export function createSandboxTools(ctx = {}) {
           include_hidden: Boolean(params.include_hidden),
         });
         return {
-          content: [{ type: 'text', text: JSON.stringify(data, null, 2) }],
+          content: [{ type: 'text', text: toolResultJson(data) }],
           details: {
             matched: data.stats?.matched,
             truncated: data.truncated,
@@ -1057,7 +1068,7 @@ export function createSandboxTools(ctx = {}) {
           limit: params.limit,
         });
         return {
-          content: [{ type: 'text', text: JSON.stringify(data, null, 2) }],
+          content: [{ type: 'text', text: toolResultJson(data) }],
           details: {
             matched: data.stats?.matched,
             truncated: data.truncated,
@@ -1121,7 +1132,7 @@ export function createSandboxTools(ctx = {}) {
           limit: params.limit,
         });
         return {
-          content: [{ type: 'text', text: JSON.stringify(data, null, 2) }],
+          content: [{ type: 'text', text: toolResultJson(data) }],
           details: {
             matched: data.stats?.matched,
             truncated: data.truncated,
@@ -1193,15 +1204,11 @@ export function createSandboxTools(ctx = {}) {
           content: [
             {
               type: 'text',
-              text: JSON.stringify(
-                {
+              text: toolResultJson({
                   process_id: r.process_id,
                   status: r.status,
                   started_at: r.started_at,
-                },
-                null,
-                2,
-              ),
+                }),
             },
           ],
           details: {
@@ -1231,7 +1238,7 @@ export function createSandboxTools(ctx = {}) {
       try {
         const r = await sb.getProcess(params.process_id);
         return {
-          content: [{ type: 'text', text: JSON.stringify(r, null, 2) }],
+          content: [{ type: 'text', text: toolResultJson(r) }],
           details: {
             process_id: r.process_id,
             status: r.status,
@@ -1294,7 +1301,9 @@ export function createSandboxTools(ctx = {}) {
   const processWaitTool = {
     name: 'process_wait',
     label: 'Wait Process',
-    description: 'Block until a managed process reaches a terminal state (or timeout).',
+    description:
+      'Block until a managed process reaches a terminal state (or timeout). ' +
+      'process_id MUST be the id returned by process_start — never an approval_id.',
     parameters: Type.Object({
       process_id: Type.String({ description: 'Process id from process_start' }),
       timeout: Type.Optional(
@@ -1308,7 +1317,7 @@ export function createSandboxTools(ctx = {}) {
           params.timeout != null ? params.timeout : null,
         );
         return {
-          content: [{ type: 'text', text: JSON.stringify(r, null, 2) }],
+          content: [{ type: 'text', text: toolResultJson(r) }],
           details: {
             process_id: r.process_id,
             status: r.status,
@@ -1342,7 +1351,7 @@ export function createSandboxTools(ctx = {}) {
           Boolean(params.eof),
         );
         return {
-          content: [{ type: 'text', text: JSON.stringify(r, null, 2) }],
+          content: [{ type: 'text', text: toolResultJson(r) }],
           details: r,
         };
       } catch (err) {
@@ -1369,7 +1378,7 @@ export function createSandboxTools(ctx = {}) {
       try {
         const r = await sb.signalProcess(params.process_id, params.signal || 'SIGTERM');
         return {
-          content: [{ type: 'text', text: JSON.stringify(r, null, 2) }],
+          content: [{ type: 'text', text: toolResultJson(r) }],
           details: r,
         };
       } catch (err) {
@@ -1393,7 +1402,7 @@ export function createSandboxTools(ctx = {}) {
       try {
         const r = await sb.cancelProcess(params.process_id);
         return {
-          content: [{ type: 'text', text: JSON.stringify(r, null, 2) }],
+          content: [{ type: 'text', text: toolResultJson(r) }],
           details: {
             process_id: r.process_id,
             status: r.status,

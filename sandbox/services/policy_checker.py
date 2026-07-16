@@ -482,6 +482,9 @@ class ToolPolicyChecker:
 
         Balanced relaxes only routine package-manager approval. The launcher
         still enforces ``network_mode`` and destructive commands remain gated.
+
+        Network tools (curl/wget/nc) are matched as *invoked commands*, not as
+        bare substrings — so ``which curl`` / ``type wget`` do not elevate.
         """
         cmd = (command or "").lower()
         substrings = (
@@ -489,7 +492,51 @@ class ToolPolicyChecker:
             if self.active_policy_profile == "strict"
             else _BALANCED_APPROVAL_SUBSTRINGS
         )
-        return any(s in cmd for s in substrings)
+        # Multi-word / install patterns stay substring-based.
+        non_network = tuple(
+            s for s in substrings if s not in ("curl ", "wget ", "nc ", "ncat ")
+        )
+        if any(s in cmd for s in non_network):
+            return True
+        return self._invokes_network_tool(cmd)
+
+    @staticmethod
+    def _invokes_network_tool(command: str) -> bool:
+        """True when curl/wget/nc/ncat is used as a command verb in a segment."""
+        import re
+
+        network = {"curl", "wget", "nc", "ncat"}
+        inspect = {"which", "type", "whereis", "whatis", "command", "apropos"}
+        # Split on common shell separators outside a best-effort parse.
+        segments = re.split(r"(?:&&|\|\||;|\n|\|(?!\|))", command or "")
+        for segment in segments:
+            parts = segment.strip().split()
+            if not parts:
+                continue
+            i = 0
+            # Skip leading ENV=value assignments
+            while i < len(parts) and re.match(r"^[A-Za-z_][\w]*=", parts[i]):
+                i += 1
+            if i >= len(parts):
+                continue
+            exe = parts[i].rsplit("/", 1)[-1]
+            if exe in inspect:
+                # ``which curl`` / ``command -v curl`` are not network fetches
+                continue
+            if exe in _SHELL_WRAPPERS:
+                # sh -c 'curl ...' — inspect the -c payload when present
+                try:
+                    c_idx = parts.index("-c")
+                except ValueError:
+                    c_idx = -1
+                if c_idx >= 0 and c_idx + 1 < len(parts):
+                    payload = " ".join(parts[c_idx + 1 :]).strip("'\"")
+                    if ToolPolicyChecker._invokes_network_tool(payload):
+                        return True
+                continue
+            if exe in network:
+                return True
+        return False
 
     def check_network_access(self, host: str) -> bool:
         """Check if outbound network access is permitted for a given host."""

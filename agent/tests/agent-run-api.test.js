@@ -16,7 +16,7 @@ import {
   cancelRun,
   activeRunCount,
   _resetForTests,
-} from '../run-manager.js';
+} from '../application/run-manager.js';
 
 // Protocol harness: local server mirroring agent/server.js SSE envelopes.
 // Full runAgentTurn (LLM/sandbox) is out of scope for this unit suite.

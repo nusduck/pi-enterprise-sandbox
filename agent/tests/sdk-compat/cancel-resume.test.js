@@ -8,11 +8,11 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { toAgentHistoryMessages, toPersistableMessages } from '../../message-helpers.js';
+import { toAgentHistoryMessages, toPersistableMessages } from '../../runtime/message-helpers.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const runnerSrc = readFileSync(join(__dirname, '../../runtime/agent-runtime.js'), 'utf8');
-const managerSrc = readFileSync(join(__dirname, '../../run-manager.js'), 'utf8');
+const managerSrc = readFileSync(join(__dirname, '../../application/run-manager.js'), 'utf8');
 const bffRunSrc = readFileSync(
   join(__dirname, '../../../api-server/routes/runs.js'),
   'utf8',
