@@ -34,6 +34,10 @@ import {
   injectAttachmentContext,
 } from './attachment-context.js';
 import {
+  loadTurnAttachmentImages,
+  modelSupportsVision,
+} from './vision-images.js';
+import {
   createSkillTools,
   SKILL_TOOL_NAMES,
 } from '../packages/enterprise-agent-kit/extensions/skill-management/tool-definitions.js';
@@ -651,6 +655,7 @@ export async function runAgentTurn(opts) {
     approvalMode: config.APPROVAL_MODE,
     getMeta: securityGetMeta,
     skillRoots: config.SKILL_ROOTS,
+    getVisionEnabled: () => modelSupportsVision(activeModelEntry),
     getPreApprovedAttempt,
     claimPreApprovedAttempt,
     releasePreApprovedAttempt,
@@ -1353,17 +1358,58 @@ export async function runAgentTurn(opts) {
       // ADR §4.5: explicit current-turn attachment context (no uploads/ scan)
       const turnAttachments = extractMessageAttachments(lastMsg);
       const rawText = extractMessageText(lastMsg).trim();
-      const text = injectAttachmentContext(rawText, turnAttachments);
+      const visionEnabled = modelSupportsVision(activeModelEntry);
+      // Inline image attachments as multimodal input when the registry model
+      // declares input_modalities includes "image".
+      let visionImages = [];
+      let visionNotes = [];
+      if (visionEnabled && turnAttachments.length && sandboxSessionId) {
+        try {
+          const loaded = await loadTurnAttachmentImages({
+            client,
+            sessionId: sandboxSessionId,
+            attachments: turnAttachments,
+            visionEnabled: true,
+            onWarn: (msg) => console.warn('[agent] vision:', msg),
+          });
+          visionImages = loaded.images || [];
+          visionNotes = loaded.notes || [];
+          if (loaded.loaded || loaded.skipped) {
+            await persistEvent('user_attachments_vision', {
+              loaded: loaded.loaded,
+              skipped: loaded.skipped,
+              notes: visionNotes.slice(0, 20),
+            });
+          }
+        } catch (err) {
+          console.warn(
+            '[agent] vision attachment load failed:',
+            err?.message || err,
+          );
+        }
+      }
+      const text = injectAttachmentContext(rawText, turnAttachments, {
+        visionEnabled,
+        visionImageCount: visionImages.length,
+      });
       if (turnAttachments.length) {
         await persistEvent('user_attachments', {
           attachments: turnAttachments,
           count: turnAttachments.length,
+          vision_inline: visionImages.length,
         });
       }
-      if (text) {
+      // Allow image-only turns (no text) when vision images are present.
+      if (text || visionImages.length) {
+        const promptText =
+          text ||
+          (visionImages.length
+            ? 'Please analyze the attached image(s).'
+            : '');
         await persistEvent('user_message', {
-          text: text.slice(0, 4000),
+          text: promptText.slice(0, 4000),
           attachment_count: turnAttachments.length,
+          vision_image_count: visionImages.length,
         });
         if (isCancelled()) {
           await markRunInterrupted('cancelled');
@@ -1408,7 +1454,11 @@ export async function runAgentTurn(opts) {
             error: dur.reason || 'budget_exceeded',
           };
         }
-        await session.prompt(text);
+        if (visionImages.length) {
+          await session.prompt(promptText, { images: visionImages });
+        } else {
+          await session.prompt(promptText);
+        }
       }
     }
 

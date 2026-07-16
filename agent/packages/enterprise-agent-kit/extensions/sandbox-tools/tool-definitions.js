@@ -46,6 +46,12 @@ import {
 } from '../../../../services/approval-waiter.js';
 import { normalizeWorkspaceToolParams } from '../../../../runtime/workspace-paths.js';
 import { summarizeToolArguments } from '../../../../runtime/tool-payload-sanitizer.js';
+import {
+  isImageAttachment,
+  modelSupportsVision,
+  readImageAsToolResult,
+  resolveImageMime,
+} from '../../../../runtime/vision-images.js';
 
 /** Terminal ledger statuses that must never re-execute side effects. */
 const LEDGER_TERMINAL = new Set(['succeeded', 'failed', 'cancelled', 'unknown']);
@@ -93,6 +99,7 @@ function toolResultJson(value) {
  * @property {() => object|null|undefined} [claimPreApprovedAttempt]
  * @property {(attempt: object) => void} [releasePreApprovedAttempt]
  * @property {() => void} [consumePreApprovedAttempt]
+ * @property {() => boolean} [getVisionEnabled] — model supports image input
  */
 
 /**
@@ -134,6 +141,8 @@ export function createSandboxTools(ctx = {}) {
       : () => {};
   const consumePreApprovedAttempt =
     typeof ctx.consumePreApprovedAttempt === 'function' ? ctx.consumePreApprovedAttempt : () => {};
+  const getVisionEnabled =
+    typeof ctx.getVisionEnabled === 'function' ? ctx.getVisionEnabled : () => false;
 
   function metaNow() {
     return {
@@ -657,6 +666,8 @@ export function createSandboxTools(ctx = {}) {
     label: 'Read File',
     description:
       'Read a workspace or persistent /tmp file (relative or logical path) OR load a Skill package. ' +
+      'Supports text files and images (png/jpg/gif/webp; other formats converted when possible). ' +
+      'Images are returned as vision attachments when the active model supports image input. ' +
       'For skills listed in <available_skills>, pass the absolute <location> ' +
       'path (e.g. /home/sandbox/skill/docx/SKILL.md) — required before specialized document work.',
     parameters: Type.Object({
@@ -667,7 +678,7 @@ export function createSandboxTools(ctx = {}) {
       offset: Type.Optional(Type.Number({ description: 'Start line (1-indexed)' })),
       limit: Type.Optional(Type.Number({ description: 'Max lines' })),
     }),
-    execute: wrapExecute('read', async (_toolCallId, params) => {
+    execute: wrapExecute('read', async (_toolCallId, params, _signal, _onUpdate, toolCtx) => {
       // Skill files: read from Agent local FS (mounted skills), not sandbox workspace
       const p = String(params.path || '');
       if (
@@ -693,10 +704,44 @@ export function createSandboxTools(ctx = {}) {
       }
       try {
         const sessionId = getSessionId();
+        const imageMime = resolveImageMime({ path: params.path, mime_type: '' });
+        // Binary image path: download + multimodal content (not utf-8 text decode)
+        if (imageMime && params.offset == null && params.limit == null) {
+          const visionFromCtx = modelSupportsVision(toolCtx?.model);
+          const visionEnabled = visionFromCtx || Boolean(getVisionEnabled());
+          return await readImageAsToolResult({
+            client: sb,
+            sessionId,
+            path: params.path,
+            mimeType: imageMime,
+            visionEnabled,
+          });
+        }
         const data =
           params.offset != null || params.limit != null
             ? await sb.readFileWithRange(sessionId, params.path, params.offset, params.limit)
             : await sb.readFile(sessionId, params.path);
+        // Sandbox may report image mime even when path lacked a known extension
+        const responseMime = resolveImageMime({
+          path: params.path,
+          mime_type: data.mime_type,
+        });
+        if (
+          responseMime &&
+          params.offset == null &&
+          params.limit == null &&
+          isImageAttachment({ path: params.path, mime_type: responseMime })
+        ) {
+          const visionFromCtx = modelSupportsVision(toolCtx?.model);
+          const visionEnabled = visionFromCtx || Boolean(getVisionEnabled());
+          return await readImageAsToolResult({
+            client: sb,
+            sessionId,
+            path: params.path,
+            mimeType: responseMime,
+            visionEnabled,
+          });
+        }
         return {
           content: [{ type: 'text', text: data.content || '' }],
           details: { size: data.size, truncated: data.truncated },

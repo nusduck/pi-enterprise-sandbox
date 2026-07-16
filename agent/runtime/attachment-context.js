@@ -65,22 +65,44 @@ export function extractMessageAttachments(msg) {
 /**
  * Build the explicit current-turn attachment prompt block.
  * @param {object[] | null | undefined} attachments
+ * @param {{ visionEnabled?: boolean, visionImageCount?: number }} [opts]
  * @returns {string} empty string when no attachments
  */
-export function formatAttachmentPromptBlock(attachments) {
+export function formatAttachmentPromptBlock(attachments, opts = {}) {
   const list = (attachments || [])
     .map((a) => normalizeAttachment(a))
     .filter(Boolean);
   if (!list.length) return '';
 
+  const visionEnabled = Boolean(opts.visionEnabled);
+  const visionImageCount = Number(opts.visionImageCount) || 0;
+
   const lines = [
     '## Current-turn attachments',
     '',
     'The user attached the following file(s) for **this turn only**.',
-    'Use the listed workspace paths with the `read` tool. '
-      + 'Do **not** scan or list the entire `uploads/` directory to guess attachments.',
-    '',
   ];
+  if (visionEnabled && visionImageCount > 0) {
+    lines.push(
+      `${visionImageCount} image attachment(s) are **inlined as vision input** with this message `
+        + '(you can see their pixels directly).',
+      'For non-image files, use the listed workspace paths with the `read` tool. '
+        + 'Do **not** scan or list the entire `uploads/` directory to guess attachments.',
+    );
+  } else if (visionEnabled) {
+    lines.push(
+      'Image paths can be loaded with the `read` tool (returns vision image blocks when supported). '
+        + 'For other files, use `read` on the listed workspace paths. '
+        + 'Do **not** scan or list the entire `uploads/` directory to guess attachments.',
+    );
+  } else {
+    lines.push(
+      'Use the listed workspace paths with the `read` tool. '
+        + 'Do **not** scan or list the entire `uploads/` directory to guess attachments. '
+        + '(Active model is text-only — images are not inlined as vision input.)',
+    );
+  }
+  lines.push('');
   list.forEach((a, i) => {
     lines.push(
       `${i + 1}. **${a.filename}**`
@@ -101,10 +123,11 @@ export function formatAttachmentPromptBlock(attachments) {
  *
  * @param {string} text — user text (may already include a frontend manifest)
  * @param {object[] | null | undefined} attachments
+ * @param {{ visionEnabled?: boolean, visionImageCount?: number }} [opts]
  * @returns {string}
  */
-export function injectAttachmentContext(text, attachments) {
-  const block = formatAttachmentPromptBlock(attachments);
+export function injectAttachmentContext(text, attachments, opts = {}) {
+  const block = formatAttachmentPromptBlock(attachments, opts);
   if (!block) return text || '';
   const base = (text || '').trim();
   // Strip a frontend-injected [Attachments] section so we don't double-list

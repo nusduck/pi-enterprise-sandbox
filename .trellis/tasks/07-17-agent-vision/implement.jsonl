@@ -1,0 +1,5 @@
+{"file": "agent/runtime/vision-images.js", "reason": "image load/normalize helpers"}
+{"file": "agent/runtime/agent-runtime.js", "reason": "session.prompt images injection"}
+{"file": "agent/runtime/attachment-context.js", "reason": "vision prompt wording"}
+{"file": "agent/packages/enterprise-agent-kit/extensions/sandbox-tools/tool-definitions.js", "reason": "read tool image blocks"}
+{"file": "agent/tests/vision-images.test.js", "reason": "unit tests"}

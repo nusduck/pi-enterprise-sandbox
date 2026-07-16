@@ -2,7 +2,9 @@ node_modules/
 dist/
 build/
 workspaces/
+tmp-workspaces/
 .smoke-tmp/
+.pytest_cache/
 *.pyc
 __pycache__/
 *.egg-info/
@@ -10,3 +12,10 @@ __pycache__/
 .venv/
 *.db
 .DS_Store
+.coverage
+htmlcov/
+*.log
+.idea/
+.vscode/
+*.swp
+*~
