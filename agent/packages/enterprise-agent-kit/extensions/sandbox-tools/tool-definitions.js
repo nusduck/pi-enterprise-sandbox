@@ -63,6 +63,17 @@ function stableSerialize(value) {
 }
 
 /**
+ * Compact JSON for tool result text shown to the model.
+ * Avoids pretty-print whitespace that bloats context tokens and allocations
+ * on high-frequency tools (ls/find/grep/process_*).
+ * @param {unknown} value
+ * @returns {string}
+ */
+function toolResultJson(value) {
+  return JSON.stringify(value);
+}
+
+/**
  * @typedef {object} SandboxToolsContext
  * @property {ReturnType<typeof defaultSb.createSandboxClient> | typeof defaultSb} [client]
  * @property {string | null} [sessionId]
@@ -1006,7 +1017,7 @@ export function createSandboxTools(ctx = {}) {
           include_hidden: Boolean(params.include_hidden),
         });
         return {
-          content: [{ type: 'text', text: JSON.stringify(data, null, 2) }],
+          content: [{ type: 'text', text: toolResultJson(data) }],
           details: {
             matched: data.stats?.matched,
             truncated: data.truncated,
@@ -1057,7 +1068,7 @@ export function createSandboxTools(ctx = {}) {
           limit: params.limit,
         });
         return {
-          content: [{ type: 'text', text: JSON.stringify(data, null, 2) }],
+          content: [{ type: 'text', text: toolResultJson(data) }],
           details: {
             matched: data.stats?.matched,
             truncated: data.truncated,
@@ -1121,7 +1132,7 @@ export function createSandboxTools(ctx = {}) {
           limit: params.limit,
         });
         return {
-          content: [{ type: 'text', text: JSON.stringify(data, null, 2) }],
+          content: [{ type: 'text', text: toolResultJson(data) }],
           details: {
             matched: data.stats?.matched,
             truncated: data.truncated,
@@ -1193,15 +1204,11 @@ export function createSandboxTools(ctx = {}) {
           content: [
             {
               type: 'text',
-              text: JSON.stringify(
-                {
+              text: toolResultJson({
                   process_id: r.process_id,
                   status: r.status,
                   started_at: r.started_at,
-                },
-                null,
-                2,
-              ),
+                }),
             },
           ],
           details: {
@@ -1231,7 +1238,7 @@ export function createSandboxTools(ctx = {}) {
       try {
         const r = await sb.getProcess(params.process_id);
         return {
-          content: [{ type: 'text', text: JSON.stringify(r, null, 2) }],
+          content: [{ type: 'text', text: toolResultJson(r) }],
           details: {
             process_id: r.process_id,
             status: r.status,
@@ -1308,7 +1315,7 @@ export function createSandboxTools(ctx = {}) {
           params.timeout != null ? params.timeout : null,
         );
         return {
-          content: [{ type: 'text', text: JSON.stringify(r, null, 2) }],
+          content: [{ type: 'text', text: toolResultJson(r) }],
           details: {
             process_id: r.process_id,
             status: r.status,
@@ -1342,7 +1349,7 @@ export function createSandboxTools(ctx = {}) {
           Boolean(params.eof),
         );
         return {
-          content: [{ type: 'text', text: JSON.stringify(r, null, 2) }],
+          content: [{ type: 'text', text: toolResultJson(r) }],
           details: r,
         };
       } catch (err) {
@@ -1369,7 +1376,7 @@ export function createSandboxTools(ctx = {}) {
       try {
         const r = await sb.signalProcess(params.process_id, params.signal || 'SIGTERM');
         return {
-          content: [{ type: 'text', text: JSON.stringify(r, null, 2) }],
+          content: [{ type: 'text', text: toolResultJson(r) }],
           details: r,
         };
       } catch (err) {
@@ -1393,7 +1400,7 @@ export function createSandboxTools(ctx = {}) {
       try {
         const r = await sb.cancelProcess(params.process_id);
         return {
-          content: [{ type: 'text', text: JSON.stringify(r, null, 2) }],
+          content: [{ type: 'text', text: toolResultJson(r) }],
           details: {
             process_id: r.process_id,
             status: r.status,

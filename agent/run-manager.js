@@ -13,7 +13,7 @@ import {
   runAgentTurn,
   resumeAgentTurnAfterApproval,
   resumeAgentTurnAfterInput,
-} from './chat-runner.js';
+} from './runtime/agent-runtime.js';
 import { createBudgetTracker, resolveBudgetLimits } from './services/budget.js';
 import {
   resolveApproval,

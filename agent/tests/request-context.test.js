@@ -9,7 +9,7 @@ import assert from 'node:assert/strict';
 import {
   createSandboxClient,
   ensureTraceId,
-} from '../services/sandbox-client.js';
+} from '../infrastructure/sandbox-client.js';
 import {
   createSandboxTools,
   setSandboxSessionId,
