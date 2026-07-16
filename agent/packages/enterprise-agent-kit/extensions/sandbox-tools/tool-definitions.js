@@ -1301,7 +1301,9 @@ export function createSandboxTools(ctx = {}) {
   const processWaitTool = {
     name: 'process_wait',
     label: 'Wait Process',
-    description: 'Block until a managed process reaches a terminal state (or timeout).',
+    description:
+      'Block until a managed process reaches a terminal state (or timeout). ' +
+      'process_id MUST be the id returned by process_start — never an approval_id.',
     parameters: Type.Object({
       process_id: Type.String({ description: 'Process id from process_start' }),
       timeout: Type.Optional(

@@ -1312,8 +1312,8 @@ export async function runAgentTurn(opts) {
         status: 'waiting_approval',
         approval_id: p?.approval_id,
       });
-      // Do not emit done — client should keep the run open for resume.
-      emit({ type: 'session_closed', session_id: sandboxSessionId });
+      // Park only — do not emit session_closed/done. UI keeps the run open for
+      // resume (pi permission-gate parks before treating the turn as finished).
       return {
         status: 'waiting_approval',
         run_id: activeRunId,
@@ -1330,7 +1330,6 @@ export async function runAgentTurn(opts) {
         status: 'waiting_input',
         interaction_id: current?.interaction_id,
       });
-      emit({ type: 'session_closed', session_id: sandboxSessionId });
       return {
         status: 'waiting_input',
         run_id: activeRunId,

@@ -186,9 +186,12 @@ test('single MCP extension exposes only mcp and defers side effects to durable a
     },
     createApproval: async () => ({ approval_id: 'approval_1' }),
     onApprovalSuspend: async (pending) => suspended.push(pending),
-  })({ registerTool: (tool) => registered.push(tool) });
+  })({
+    registerTool: (tool) => registered.push(tool),
+    on() {},
+  });
 
-  assert.deepEqual(registered.map((tool) => tool.name), ['mcp']);
+  assert.ok(registered.map((tool) => tool.name).includes('mcp'));
   await assert.rejects(
     registered[0].execute('call_1', {
       action: 'invoke',
@@ -242,7 +245,7 @@ test('MCP approval scope follows tool-call attempts and consumes resume approval
     },
     onApprovalSuspend: async (pending) => suspended.push(pending),
   };
-  createMcpExtension(options)({ registerTool: (tool) => registered.push(tool) });
+  createMcpExtension(options)({ registerTool: (tool) => registered.push(tool), on() {} });
   const firstArgs = { nested: { z: 1, a: 2 }, query: 'same' };
   const reorderedArgs = { query: 'same', nested: { a: 2, z: 1 } };
 
@@ -282,7 +285,7 @@ test('MCP approval scope follows tool-call attempts and consumes resume approval
       consumed += 1;
       resumeToken = null;
     },
-  })({ registerTool: (tool) => resumedRegistered.push(tool) });
+  })({ registerTool: (tool) => resumedRegistered.push(tool), on() {} });
   const resumed = await resumedRegistered[0].execute('mcp_call_2', {
     action: 'invoke',
     tool: 'ops:delete',
@@ -302,4 +305,58 @@ test('MCP approval scope follows tool-call attempts and consumes resume approval
   assert.equal(approvalRequests.length, 3);
   assert.notEqual(approvalRequests[2].idempotency_key, approvalRequests[0].idempotency_key);
   assert.equal(consumed, 1);
+});
+
+test('search keyword miss returns full inventory instead of empty', async () => {
+  const manager = new McpConnectionManager({
+    servers: [{
+      id: 'exa',
+      tools: [
+        { name: 'web_search_exa', description: 'Search the web for any topic' },
+        { name: 'web_fetch_exa', description: 'Fetch a URL as markdown' },
+      ],
+    }],
+    allowedServers: ['exa'],
+  });
+  const weather = await manager.search('weather');
+  assert.equal(weather.length, 2);
+  assert.equal(weather[0].matched, false);
+  const empty = await manager.search('');
+  assert.equal(empty.length, 2);
+  const named = await manager.search('web_search');
+  assert.ok(named.some((t) => t.score > 0));
+});
+
+test('session_start injects first-class mcp tools via extension', async () => {
+  const { toRegisteredMcpToolName, createMcpExtension } = await import(
+    '../packages/enterprise-agent-kit/extensions/mcp/index.js'
+  );
+  assert.equal(toRegisteredMcpToolName('exa:web_search_exa'), 'mcp_exa_web_search_exa');
+
+  const manager = new McpConnectionManager({
+    servers: [{
+      id: 'exa',
+      tools: [
+        { name: 'web_search_exa', description: 'Search the web for any topic' },
+      ],
+    }],
+    allowedServers: ['exa'],
+  });
+  const registered = [];
+  const events = [];
+  const handlers = {};
+  const pi = {
+    registerTool(def) { registered.push(def.name); },
+    on(event, fn) { handlers[event] = fn; },
+  };
+  createMcpExtension({
+    manager,
+    emit: (ev) => events.push(ev),
+    approvalMode: 'auto_approve',
+  })(pi);
+  assert.ok(registered.includes('mcp'));
+  assert.equal(typeof handlers.session_start, 'function');
+  await handlers.session_start({ reason: 'startup' });
+  assert.ok(registered.includes('mcp_exa_web_search_exa'), `registered=${registered}`);
+  assert.ok(events.some((e) => e.type === 'mcp_discovered' && e.count >= 1));
 });

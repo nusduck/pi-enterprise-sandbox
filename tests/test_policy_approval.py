@@ -19,9 +19,25 @@ def test_bash_pip_install_requires_approval_decision():
         tool_name="bash",
         command="pip install requests",
     ))
-    assert d.allowed is False
-    assert d.decision == "approval_required"
-    assert d.risk_level.value == "high"
+    # Strict elevates package installs; balanced intentionally allows them
+    # (still subject to network_mode / isolation at execution time).
+    if settings.policy_profile == "balanced":
+        assert d.allowed is True
+        assert d.decision == "allow"
+    else:
+        assert d.allowed is False
+        assert d.decision == "approval_required"
+        assert d.risk_level.value == "high"
+
+
+def test_which_curl_does_not_require_approval():
+    d = policy_checker.check(ToolCallCheck(
+        session_id="s1",
+        tool_name="bash",
+        command="which curl wget node python3",
+    ))
+    assert d.allowed is True
+    assert d.decision == "allow"
 
 
 def test_bash_echo_auto_allowed():

@@ -15,7 +15,8 @@ export function createPromptExtension(options = {}) {
 ## Enterprise runtime boundaries
 
 - Workspace file, shell, process, and artifact operations must use Sandbox tools with relative paths or the logical cwd \`${options.logicalCwd}\`.
-- External enterprise capabilities must use the single \`mcp\` tool; credentials are injected by the host and must never be requested or printed.
+- External MCP capabilities are injected at session start as first-class \`mcp_*\` tools when available; the meta \`mcp\` tool (search/describe/invoke) remains a fallback. Prefer injected tools. Credentials are host-injected — never request or print secrets.
+- \`process_wait\` only accepts process_id from \`process_start\`. Never pass approval_id to process tools.
 - Skills discovered in \`<available_skills>\` must be loaded from their SKILL.md before specialized work. Shared skills are ${options.skillsMode === 'development' ? 'mutable only through dedicated skill tools' : 'read-only'}.
 - Use \`bash\` only for short synchronous commands; use \`process_*\` for long-running or interactive work.
 - Files are private until \`submit_artifact\` is called. Only submit final or user-requested deliverables.

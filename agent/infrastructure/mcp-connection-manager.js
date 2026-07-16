@@ -254,17 +254,47 @@ export class McpConnectionManager {
   }
 
   async search(query, options = {}) {
-    const words = String(query || '').toLowerCase().split(/\s+/).filter(Boolean);
+    const words = String(query || '')
+      .toLowerCase()
+      .split(/\s+/)
+      .filter(Boolean);
     const tools = await this.discover(options);
-    return tools
-      .map((tool) => {
-        const haystack = `${tool.key} ${tool.description}`.toLowerCase();
-        const score = words.reduce((total, word) => total + (haystack.includes(word) ? 1 : 0), 0);
-        return { tool: tool.key, description: tool.description, risk_level: tool.riskLevel, score };
-      })
-      .filter((item) => words.length === 0 || item.score > 0)
+    const scored = tools.map((tool) => {
+      const haystack = `${tool.key} ${tool.name || ''} ${tool.description || ''}`.toLowerCase();
+      // Prefer token hits on name/key; description is secondary so generic
+      // catalogs (e.g. "search the web for any topic") still surface on
+      // domain queries like "weather" via inventory fallback below.
+      let score = 0;
+      for (const word of words) {
+        if (tool.key.toLowerCase().includes(word) || String(tool.name || '').toLowerCase().includes(word)) {
+          score += 3;
+        } else if (haystack.includes(word)) {
+          score += 1;
+        }
+      }
+      return {
+        tool: tool.key,
+        name: tool.name,
+        description: tool.description,
+        risk_level: tool.riskLevel,
+        side_effect: tool.sideEffect,
+        score,
+      };
+    });
+    const matched = scored.filter((item) => words.length === 0 || item.score > 0);
+    const list = (matched.length ? matched : scored)
       .sort((a, b) => b.score - a.score || a.tool.localeCompare(b.tool))
       .slice(0, 20);
+    // When keywords miss, still return the full allowlisted inventory so the
+    // model is not forced onto bash/network fallbacks.
+    if (!matched.length && words.length > 0) {
+      return list.map((item) => ({
+        ...item,
+        matched: false,
+        note: 'no keyword match; returning full MCP inventory',
+      }));
+    }
+    return list;
   }
 
   async describe(key, options = {}) {
