@@ -11,11 +11,12 @@ sandbox/
 ├── repositories.py        # 按实体组织的同步 SQL 数据访问
 ├── routers/               # HTTP 边界：解析输入、状态码、调用 service
 ├── services/              # session/execution/file/approval/artifact/audit/workspace 逻辑
+├── isolation/             # bubblewrap / direct 执行隔离
 ├── security/              # 路径校验与子进程安全环境
-├── agent/                 # 可选 Python Agent runtime/cutover 路径
-├── mcp/                   # MCP REST/FastMCP 适配
 └── utils/                 # 资源限制和子进程公共能力
 ```
+
+> `sandbox/agent/`（Python Agent Runtime）与空壳 `sandbox/mcp/` 已删除；Agent 编排在独立 Node `agent/` 服务，外部 MCP 在 Agent 侧连接。
 
 新 REST 资源的现有落点顺序：
 
