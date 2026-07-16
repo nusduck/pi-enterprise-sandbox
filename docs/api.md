@@ -9,7 +9,7 @@ Pi Enterprise Sandbox 四服务 API 分层：
 | **Agent** | Node.js 22 (port 4100) | 内部 Run API + pi-coding-agent SDK（浏览器不直连） |
 | **Sandbox** | FastAPI (port 8081) | 会话/执行/文件/产物/审计/审批（Docker 内网） |
 
-无 Python Agent Runtime、无双 Runtime 开关。发行基线 **零内置 Skill package**。
+无 Python Agent Runtime、无双 Runtime 开关。Agent **支持零 Skill 启动**；共享 `skills/` 挂载与 package skills 由 Agent Profile 策略 + session capability registry 控制。
 
 > **Sandbox 端口 8081 仅 Docker 内网可访问**。API Server 自动为所有 Sandbox 请求添加 `X-API-Key` header（如配置 `SANDBOX_API_TOKEN`）。
 > MCP 由 Agent Host 的 MCP Connection Manager 直连企业 MCP Gateway/Server，不经过 Sandbox，也不向浏览器暴露凭据。
@@ -34,6 +34,7 @@ API Server 通过 SSE (`text/event-stream`) 推送以下事件类型：
 | `context_warning` | `{ tokens, context_window, percent }` | 上下文使用率预警 |
 | `compaction_started/completed/failed` | `{ reason }` | 上下文压缩生命周期 |
 | `mcp_discovered/invoked/failed` | `{ server?, tool?, result_ref? }` | MCP 按需发现与调用审计 |
+| `capability_registry_updated` | `{ reason, registry_version, counts?, run_id?, profile_id? }` | Session capability registry 变更（有界、无密钥） |
 | `done` | `{}` | Agent 回合结束 |
 | `session_closed` | `{ session_id }` | 流连接关闭 |
 | `error` | `{ message }` | 错误信息 |
@@ -77,7 +78,18 @@ Base URL: `http://host:4000`
 
 随后调用 `GET /api/runs/:id/events?after_sequence=N` 接收 SSE。可用 `POST /api/runs/:id/cancel|steer|follow-up` 控制；审批恢复使用 `resume-approval`，用户输入使用 `/interactions/:interactionId/respond`。
 
-`GET /api/extensions/diagnostics` 返回 Extension Package、Agent Profile、Tool/MCP allowlist 和供应链审计状态，不含凭据。
+`GET /api/extensions/diagnostics` 返回 Extension Package、Agent Profile、Tool/MCP allowlist 和供应链审计状态，不含凭据。响应在兼容既有 `extensions` / `tools` / `skills` / `mcp_servers` 字段的同时，增加：
+
+| 字段 | 说明 |
+|------|------|
+| `view` | `configured`（尚无会话快照）或 `live`（合并最近兼容 run 的 registry 快照） |
+| `registry` | `live`、`registry_version`、`run_id`、`profile_id`、`counts`、可选 `mcp_tools` |
+| `*.status` | `configured` \| `active` \| `disabled` \| `failed`（不再一律 `enabled: true` 冒充已激活） |
+| `profile.shared_skills` | 共享 skill 挂载策略（`all` \| `allowlist` \| `none`） |
+
+`GET /api/capabilities/{skills,mcp,tools,models}` 仍从 diagnostics 投影列表；字段可附加 `status` / `dynamic`。
+
+Agent 模型侧权威清单工具：`capabilities`（`action=list|search|describe`），只读、有界、不含凭据/完整 schema/技能正文。
 
 ### BFF 健康检查
 
@@ -175,7 +187,7 @@ Base URL: `http://sandbox:8081`（Docker 内网）
 > 公共协议使用 opaque **`workspace_id`**。工具/文件/Artifact 接受 workspace 相对路径、`/home/sandbox/workspace/...` 和 Conversation 私有的持久化 `/tmp/...`；其他绝对路径与路径逃逸 fail-closed。
 > 物理存储根仅存在于服务内部，**不**出现在 API、SSE 或模型上下文。
 > `workspace_id` 由服务端从 `conversation_id` 派生；REST/MCP 都拒绝未绑定 Conversation 的自报 workspace。
-> Skill 根在 workspace 外；发行基线零内置 Skill package，Sandbox 执行侧始终只读。
+> Skill 根在 workspace 外；Agent 可零 Skill 启动。共享/package skills 由 Profile + capability registry 控制；Sandbox 执行侧始终只读。
 
 ---
 

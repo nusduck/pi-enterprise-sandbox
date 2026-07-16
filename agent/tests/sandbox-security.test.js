@@ -74,6 +74,15 @@ describe('tool side-effect classification', () => {
     assert.equal(classifyToolSideEffect('mystery_tool'), 'write');
     assert.equal(classifyToolSideEffect(''), 'write');
   });
+
+  it('classifies capabilities introspection as read-only low risk', () => {
+    assert.equal(classifyToolSideEffect('capabilities'), 'read');
+    const policy = evaluateToolPolicy('capabilities', { action: 'list' });
+    assert.equal(policy.decision, POLICY_DECISION.ALLOW);
+    assert.equal(policy.risk_level, 'low');
+    assert.equal(policy.side_effect, 'read');
+    assert.equal(classifyToolSideEffect('unknown_introspection_tool'), 'write');
+  });
 });
 
 describe('policy matrix allow / approval_required / hard_deny', () => {

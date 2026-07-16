@@ -53,14 +53,28 @@ function EmptyRegistry({
   );
 }
 
+function statusLabel(item: {
+  status?: string | null;
+  enabled?: boolean;
+  connection_status?: string | null;
+}): string {
+  if (item.status) return item.status;
+  if (item.connection_status) return item.connection_status;
+  return item.enabled === false ? 'disabled' : 'configured';
+}
+
 function SkillCards({ items }: { items: SkillItem[] }) {
   return (
     <ul className="mgmt-card-list">
       {items.map((s, i) => {
         const name = s.name || s.id || `skill-${i}`;
+        const status = statusLabel(s);
         return (
           <li key={name} className="mgmt-card">
-            <h3 className="mgmt-card-title">{name}</h3>
+            <header className="mgmt-card-head">
+              <h3 className="mgmt-card-title">{name}</h3>
+              <span className={`mgmt-status status-${status}`}>{status}</span>
+            </header>
             {s.description ? (
               <p className="mgmt-card-reason">{s.description}</p>
             ) : null}
@@ -72,6 +86,10 @@ function SkillCards({ items }: { items: SkillItem[] }) {
               <div>
                 <dt>Enabled</dt>
                 <dd>{s.enabled === false ? 'No' : 'Yes'}</dd>
+              </div>
+              <div>
+                <dt>Dynamic</dt>
+                <dd>{s.dynamic ? 'Yes' : 'No'}</dd>
               </div>
             </dl>
           </li>
@@ -86,7 +104,9 @@ function McpCards({ items }: { items: McpServerItem[] }) {
     <ul className="mgmt-card-list">
       {items.map((s, i) => {
         const id = s.server_id || s.id || s.name || `mcp-${i}`;
-        const status = s.connection_status || s.status || (s.enabled === false ? 'disabled' : 'unknown');
+        const status =
+          s.status ||
+          (s.enabled === false ? 'disabled' : s.connection_status || 'configured');
         const toolsCount = s.tools_count ?? s.tool_count ?? null;
         return (
           <li key={id} className="mgmt-card">
@@ -126,10 +146,12 @@ function ToolCards({ items }: { items: ToolRegistryItem[] }) {
     <ul className="mgmt-card-list">
       {items.map((t, i) => {
         const name = t.name || t.id || `tool-${i}`;
+        const status = statusLabel(t);
         return (
           <li key={name} className="mgmt-card">
             <header className="mgmt-card-head">
               <h3 className="mgmt-card-title">{name}</h3>
+              <span className={`mgmt-status status-${status}`}>{status}</span>
               {t.risk_level ? (
                 <span className="mgmt-risk">risk: {t.risk_level}</span>
               ) : null}
@@ -157,6 +179,10 @@ function ToolCards({ items }: { items: ToolRegistryItem[] }) {
               <div>
                 <dt>Enabled</dt>
                 <dd>{t.enabled === false ? 'No' : 'Yes'}</dd>
+              </div>
+              <div>
+                <dt>Dynamic</dt>
+                <dd>{t.dynamic ? 'Yes' : 'No'}</dd>
               </div>
             </dl>
           </li>
@@ -314,18 +340,100 @@ export function CapabilitiesPage() {
       );
   } else {
     body = diagnostics ? (
-      <div className="mgmt-card">
-        <h3 className="mgmt-card-title">{diagnostics.package.package}@{diagnostics.package.version}</h3>
-        <dl className="mgmt-meta-grid">
-          <div><dt>Profile</dt><dd>{diagnostics.profile.id}@{diagnostics.profile.version}</dd></div>
-          <div><dt>Audit</dt><dd>{diagnostics.package.audit?.status || '—'}</dd></div>
-          <div><dt>Extensions</dt><dd>{diagnostics.profile.extensions.join(', ')}</dd></div>
-          <div><dt>Allowed tools</dt><dd>{diagnostics.profile.allowed_tools.length}</dd></div>
-          <div><dt>MCP servers</dt><dd>{diagnostics.mcp_servers.map((server) => server.server_id).join(', ') || 'None configured'}</dd></div>
-          <div><dt>Generated</dt><dd>{diagnostics.generated_at}</dd></div>
-        </dl>
+      <div className="mgmt-diagnostics">
+        <div className="mgmt-card">
+          <h3 className="mgmt-card-title">
+            {diagnostics.package.package}@{diagnostics.package.version}
+          </h3>
+          <dl className="mgmt-meta-grid">
+            <div>
+              <dt>Profile</dt>
+              <dd>
+                {diagnostics.profile.id}@{diagnostics.profile.version}
+              </dd>
+            </div>
+            <div>
+              <dt>View</dt>
+              <dd>
+                {diagnostics.view || (diagnostics.registry?.live ? 'live' : 'configured')}
+              </dd>
+            </div>
+            <div>
+              <dt>Registry version</dt>
+              <dd>{diagnostics.registry?.registry_version ?? '—'}</dd>
+            </div>
+            <div>
+              <dt>Run</dt>
+              <dd>{diagnostics.registry?.run_id || '—'}</dd>
+            </div>
+            <div>
+              <dt>Conversation</dt>
+              <dd>{diagnostics.registry?.conversation_id || '—'}</dd>
+            </div>
+            <div>
+              <dt>Session</dt>
+              <dd>{diagnostics.registry?.session_id || '—'}</dd>
+            </div>
+            <div>
+              <dt>Audit</dt>
+              <dd>{diagnostics.package.audit?.status || '—'}</dd>
+            </div>
+            <div>
+              <dt>Allowed tools</dt>
+              <dd>{diagnostics.profile.allowed_tools.length}</dd>
+            </div>
+            <div>
+              <dt>Shared skills policy</dt>
+              <dd>{diagnostics.profile.shared_skills?.mode || '—'}</dd>
+            </div>
+            <div>
+              <dt>Generated</dt>
+              <dd>{diagnostics.generated_at}</dd>
+            </div>
+          </dl>
+          {!diagnostics.registry?.live && diagnostics.registry?.note ? (
+            <p className="mgmt-card-reason">{diagnostics.registry.note}</p>
+          ) : null}
+        </div>
+
+        <section className="mgmt-section">
+          <h3 className="mgmt-section-title">Extensions</h3>
+          <ul className="mgmt-card-list">
+            {(diagnostics.extensions ?? []).map((ext) => (
+              <li key={ext.name} className="mgmt-card">
+                <header className="mgmt-card-head">
+                  <h4 className="mgmt-card-title">{ext.name}</h4>
+                  <span className={`mgmt-status status-${statusLabel(ext)}`}>
+                    {statusLabel(ext)}
+                  </span>
+                </header>
+                {ext.reason ? <p className="mgmt-card-reason">{ext.reason}</p> : null}
+                <dl className="mgmt-meta-grid">
+                  <div>
+                    <dt>Source</dt>
+                    <dd>{ext.source || '—'}</dd>
+                  </div>
+                  <div>
+                    <dt>Dynamic</dt>
+                    <dd>{ext.dynamic ? 'Yes' : 'No'}</dd>
+                  </div>
+                  {ext.registry_id ? (
+                    <div>
+                      <dt>Registry ID</dt>
+                      <dd>
+                        <code>{ext.registry_id}</code>
+                      </dd>
+                    </div>
+                  ) : null}
+                </dl>
+              </li>
+            ))}
+          </ul>
+        </section>
       </div>
-    ) : <EmptyRegistry label="extension diagnostics" available={false} />;
+    ) : (
+      <EmptyRegistry label="extension diagnostics" available={false} />
+    );
   }
 
   return (

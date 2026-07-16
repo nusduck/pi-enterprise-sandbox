@@ -85,7 +85,7 @@ pi-enterprise-sandbox/
 │   ├── services/
 │   ├── security/      # path_validation, safe_env, public_routes
 │   └── mcp/
-├── skills/            # Skill packages (empty baseline; install in dev)
+├── skills/            # Optional shared skill packages (profile + registry controlled)
 ├── tests/             # pytest (unit + FastAPI integration)
 ├── docs/              # Active docs (docs/archive/ is historical only)
 ├── config/            # Runtime config files

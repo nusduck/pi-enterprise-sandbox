@@ -3,6 +3,7 @@
  * Soft-fail when BFF has not yet proxied MCP/model/skill registry endpoints.
  */
 import {
+  ExtensionDiagnosticsSchema,
   McpServerListSchema,
   McpServerSchema,
   ModelItemSchema,
@@ -11,6 +12,7 @@ import {
   SkillListSchema,
   ToolRegistryItemSchema,
   ToolRegistrySchema,
+  type ExtensionDiagnostics,
   type McpServerItem,
   type ModelItem,
   type SkillItem,
@@ -19,23 +21,7 @@ import {
 import { parseApi } from '../schemas/api';
 import { authHeaders } from './client';
 
-export type { McpServerItem, ModelItem, SkillItem, ToolRegistryItem };
-
-export type ExtensionDiagnostics = {
-  status: string;
-  generated_at: string;
-  profile: {
-    id: string;
-    version: string;
-    extensions: string[];
-    allowed_tools: string[];
-    allowed_mcp_servers: string[];
-    skills: string[];
-    context_policy: Record<string, unknown>;
-  };
-  package: { package: string; version: string; audit?: { status?: string } };
-  mcp_servers: Array<{ server_id: string; connection_status: string }>;
-};
+export type { ExtensionDiagnostics, McpServerItem, ModelItem, SkillItem, ToolRegistryItem };
 
 const BASE = '/api';
 
@@ -75,7 +61,8 @@ async function softGet(
 
 export async function getExtensionDiagnostics(): Promise<ExtensionDiagnostics | null> {
   const res = await softGet('/extensions/diagnostics');
-  return res.ok ? (res.data as ExtensionDiagnostics) : null;
+  if (!res.ok) return null;
+  return parseApi(ExtensionDiagnosticsSchema, res.data, 'getExtensionDiagnostics');
 }
 
 function unwrapArray(data: unknown, keys: string[]): unknown[] {

@@ -24,7 +24,7 @@ Browser
 | `agent/` | 独立 Agent Runtime：SDK、tools、extensions、内部 Run API | `agent/runtime/agent-runtime.js`、`agent/server.js` |
 | `frontend/` | React + TypeScript Agent Runtime Workbench，Vite 构建，Nginx 托管 | `frontend/src/main.tsx`、`frontend/src/features/chat/ChatContext.tsx`、`frontend/src/entities/store.ts` |
 | `tests/` | 统一 pytest 测试，包括单元、FastAPI 集成、配置/容器契约 | `tests/test_integration.py`、`tests/test_container_startup.py` |
-| `skills/` | 空发行基线；研发环境可通过受审计 install/edit/reload 引入 Skill | 初始无 package |
+| `skills/` | 可选共享 Skill 挂载（非硬依赖）；研发环境可通过受审计 install/edit/reload 引入/更新 | 文档/办公等 package |
 | `config/agent/` | Agent 模型和运行时配置 JSON | `models.json`、`settings.json` |
 | `nginx/` | 生产入口、TLS 与跨服务反向代理 | `nginx/conf.d/sandbox.conf` |
 | `scripts/` | 运维脚本 | `backup.sh`、`restore.sh` |
@@ -86,11 +86,14 @@ Browser
 
 ### Skill 执行与变更边界
 
-- 发行基线：`skills/` 无任何 Skill package；Agent 在零 Skill 下使用基础工具即可运行。
+- Agent 在零 Skill 下使用基础工具即可运行；共享 `skills/` 与 kit package skills 由 Agent Profile 控制。
+- `profile.skills` 约束 package-bundled skills；`sharedSkills.mode`（`all` \| `allowlist` \| `none`）约束共享挂载。默认 `coding-agent` 使用 `sharedSkills.mode=all`。
+- Session-scoped capability registry（`agent/application/capability-registry-service.js`）在 bind/MCP inject/skill_reload 后 reconcile；模型经 `capabilities` 工具做权威 list/search/describe。
 - 默认和生产模式使用 `SKILLS_MODE=readonly`，Agent/Sandbox 的 Skill 挂载保持只读。
 - 通用 `write`、`edit` 和 Bash 不得修改 Skill 根；研发变更只能通过 `skill_install`、`skill_edit`、`skill_reload` 完成。
 - 允许 Python/Shell 解释器直接执行 Skill 根下的单个只读脚本，但命令中出现重定向、管道、命令拼接或子命令替换时仍硬拒绝。
 - 资源受限的 Sandbox pipeline 应优先使用轻量依赖；引入 pandas、NumPy、matplotlib 等原生扩展前，必须在容器内存限制下实际执行验证。
+- 运行时禁止安装任意 Extension package；dynamic registration 仅指允许资源的 reconcile。
 
 ## 安装、开发、构建和验证命令
 

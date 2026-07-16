@@ -24,6 +24,8 @@ const CHAT_TOOL_ALLOWLIST = [
   'edit',
   'write',
   'apply_patch',
+  'run_python',
+  'run_node',
   'submit_artifact',
   'ls',
   'find',

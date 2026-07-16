@@ -41,8 +41,15 @@ import { createSkillManager } from '../skills/manager.js';
 import {
   filterProfileTools,
   resolveAgentProfile,
+  seedConfiguredCapabilities,
 } from '../application/agent-profile-service.js';
 import { applyContextPolicy } from '../application/context-policy-service.js';
+import {
+  createCapabilityRegistry,
+  publishCapabilitySnapshot,
+  reconcileResourceLoaderSkills,
+  reconcileSessionTools,
+} from '../application/capability-registry-service.js';
 import {
   createExtensionPackageLoader,
   inspectExtensionPackage,
@@ -663,6 +670,12 @@ export async function runAgentTurn(opts) {
 
   /** @type {{ reload?: () => Promise<void>, resourceLoader?: object } | null} */
   let liveAgentSession = null;
+  /** @type {ReturnType<typeof createCapabilityRegistry> | null} */
+  let capabilityRegistry = null;
+  /** @type {object | null} */
+  let liveResourceLoader = null;
+
+  const agentProfile = resolveAgentProfile(opts.agent_profile_id || 'coding-agent');
 
   const skillManager = createSkillManager({
     mode: config.SKILLS_MODE,
@@ -671,6 +684,28 @@ export async function runAgentTurn(opts) {
     auditLogPath: config.SKILLS_AUDIT_LOG || null,
     getMeta: securityGetMeta,
     getAgentSession: () => liveAgentSession,
+    onAfterReload: async () => {
+      if (!capabilityRegistry) return;
+      try {
+        reconcileResourceLoaderSkills(capabilityRegistry, liveResourceLoader, {
+          profileId: agentProfile.id,
+        });
+        if (liveAgentSession) {
+          reconcileSessionTools(capabilityRegistry, liveAgentSession, {
+            profileId: agentProfile.id,
+          });
+        }
+        publishCapabilitySnapshot(capabilityRegistry, {
+          emit,
+          reason: 'skill_reload',
+        });
+      } catch (err) {
+        console.warn(
+          '[agent] capability registry reload reconcile failed:',
+          err?.message || err,
+        );
+      }
+    },
   });
 
   const skillTools = createSkillTools({
@@ -680,7 +715,6 @@ export async function runAgentTurn(opts) {
     client,
   });
 
-  const agentProfile = resolveAgentProfile(opts.agent_profile_id || 'coding-agent');
   const packageDiagnostics = inspectExtensionPackage(agentProfile);
   emit({ type: 'extension_package_diagnostics', ...packageDiagnostics });
   const extensionToolNames = [
@@ -689,6 +723,7 @@ export async function runAgentTurn(opts) {
       ? skillTools.map((tool) => tool.name)
       : []),
     'mcp',
+    'capabilities',
     'task_plan',
     'ask_user',
     'context_compact',
@@ -859,6 +894,28 @@ export async function runAgentTurn(opts) {
         });
       }
     };
+
+    capabilityRegistry = createCapabilityRegistry({
+      profileId: agentProfile.id,
+      runId: activeRunId,
+      conversationId: activeConversationId,
+      sessionId: sandboxSessionId,
+      workspaceId: activeWorkspaceId,
+      ownerUserId: auth?.actingUserId || null,
+      organizationId: auth?.actingOrganizationId || null,
+      onChange: (event) => {
+        // Bounded change stream; full snapshot published at lifecycle checkpoints.
+        emitExtensionEvent(event);
+      },
+    });
+    const seeded = seedConfiguredCapabilities(agentProfile, {
+      mcpServers: config.MCP_SERVERS,
+    });
+    capabilityRegistry.reconcile('extension', seeded.extensions, 'profile', 'profile_seed');
+    capabilityRegistry.reconcile('tool', seeded.tools, 'profile', 'profile_seed');
+    capabilityRegistry.reconcile('skill', seeded.skills, 'profile', 'profile_seed');
+    capabilityRegistry.reconcile('mcp_server', seeded.mcp_servers, 'profile', 'profile_seed');
+
     const { resourceLoader } = await createExtensionPackageLoader({
       profile: agentProfile,
       diagnostics: packageDiagnostics,
@@ -894,8 +951,18 @@ export async function runAgentTurn(opts) {
         logicalCwd: config.SESSION_WORKSPACE_CWD,
         skillsMode: config.SKILLS_MODE,
         skillTools,
+        capabilityRegistry,
+        getCapabilityRegistry: () => capabilityRegistry,
+        configuredMcpServers: agentProfile.allowedMcpServers
+          .map((id) => {
+            const server = (config.MCP_SERVERS || []).find((s) => s.id === id);
+            if (!server) return null;
+            return { id, enabled: server.enabled !== false };
+          })
+          .filter(Boolean),
       },
     });
+    liveResourceLoader = resourceLoader;
 
     const piModel = makeModel(activeModelEntry);
     const requestUiInteraction = async (interactionType, payload = {}) => {
@@ -953,6 +1020,27 @@ export async function runAgentTurn(opts) {
     });
     agentSession = session;
     liveAgentSession = session;
+
+    // Final authoritative reconciliation from Pi session + resource loader.
+    // Extension active/failed status is owned by wrapNamedExtensionFactory during
+    // factory execution — do not force every selected extension to active here.
+    try {
+      reconcileResourceLoaderSkills(capabilityRegistry, resourceLoader, {
+        profileId: agentProfile.id,
+      });
+      reconcileSessionTools(capabilityRegistry, session, {
+        profileId: agentProfile.id,
+      });
+      publishCapabilitySnapshot(capabilityRegistry, {
+        emit,
+        reason: 'session_bound',
+      });
+    } catch (err) {
+      console.warn(
+        '[agent] capability registry post-bind reconcile failed:',
+        err?.message || err,
+      );
+    }
 
     // Surface agent session binding on the session event stream.
     if (activeAgentSessionId) {
@@ -1624,6 +1712,8 @@ export async function runAgentTurn(opts) {
     sessionHandle = null;
     agentSession = null;
     liveAgentSession = null;
+    liveResourceLoader = null;
+    capabilityRegistry = null;
   }
 }
 

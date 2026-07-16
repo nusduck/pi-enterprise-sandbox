@@ -84,6 +84,9 @@ export const SkillItemSchema = z
     path: z.string().optional().nullable(),
     enabled: z.boolean().optional(),
     source: z.string().optional().nullable(),
+    status: z.string().optional().nullable(),
+    dynamic: z.boolean().optional(),
+    registry_id: z.string().optional().nullable(),
   })
   .passthrough();
 
@@ -110,6 +113,8 @@ export const McpServerSchema = z
     enabled: z.boolean().optional(),
     last_refresh: z.string().optional().nullable(),
     last_refreshed_at: z.string().optional().nullable(),
+    dynamic: z.boolean().optional(),
+    registry_id: z.string().optional().nullable(),
   })
   .passthrough();
 
@@ -136,6 +141,9 @@ export const ToolRegistryItemSchema = z
     enabled: z.boolean().optional(),
     schema: z.unknown().optional(),
     description: z.string().optional().nullable(),
+    status: z.string().optional().nullable(),
+    dynamic: z.boolean().optional(),
+    registry_id: z.string().optional().nullable(),
   })
   .passthrough();
 
@@ -179,9 +187,92 @@ export const ModelListSchema = z.union([
     .passthrough(),
 ]);
 
+// ── Extension diagnostics (GET /api/extensions/diagnostics) ─
+
+export const ExtensionDiagnosticsEntrySchema = z
+  .object({
+    name: z.string(),
+    status: z.string().optional().nullable(),
+    enabled: z.boolean().optional(),
+    reason: z.string().optional().nullable(),
+    source: z.string().optional().nullable(),
+    dynamic: z.boolean().optional(),
+    registry_id: z.string().optional().nullable(),
+  })
+  .passthrough();
+
+export const ExtensionDiagnosticsSchema = z
+  .object({
+    status: z.string().optional(),
+    generated_at: z.string().optional(),
+    view: z.string().optional(),
+    registry: z
+      .object({
+        live: z.boolean().optional(),
+        registry_version: z.number().optional().nullable(),
+        run_id: z.string().optional().nullable(),
+        conversation_id: z.string().optional().nullable(),
+        session_id: z.string().optional().nullable(),
+        profile_id: z.string().optional().nullable(),
+        generated_at: z.string().optional().nullable(),
+        counts: z.record(z.string(), z.unknown()).optional(),
+        note: z.string().optional(),
+        mcp_tools: z.array(z.record(z.string(), z.unknown())).optional(),
+      })
+      .passthrough()
+      .optional(),
+    profile: z
+      .object({
+        id: z.string(),
+        version: z.string(),
+        extensions: z.array(z.string()),
+        allowed_tools: z.array(z.string()),
+        allowed_mcp_servers: z.array(z.string()),
+        skills: z.array(z.string()),
+        shared_skills: z
+          .object({
+            mode: z.string().optional(),
+            names: z.array(z.string()).optional(),
+          })
+          .passthrough()
+          .optional(),
+        context_policy: z.record(z.string(), z.unknown()),
+      })
+      .passthrough(),
+    package: z
+      .object({
+        package: z.string(),
+        version: z.string(),
+        audit: z
+          .object({
+            status: z.string().optional(),
+          })
+          .passthrough()
+          .optional(),
+      })
+      .passthrough(),
+    mcp_servers: z
+      .array(
+        z
+          .object({
+            server_id: z.string(),
+            connection_status: z.string(),
+            status: z.string().optional(),
+          })
+          .passthrough(),
+      )
+      .optional(),
+    extensions: z.array(ExtensionDiagnosticsEntrySchema).optional(),
+    tools: z.array(ExtensionDiagnosticsEntrySchema).optional(),
+    skills: z.array(ExtensionDiagnosticsEntrySchema).optional(),
+  })
+  .passthrough();
+
 export type RunListItem = z.infer<typeof RunListItemSchema>;
 export type ApprovalListItem = z.infer<typeof ApprovalListItemSchema>;
 export type SkillItem = z.infer<typeof SkillItemSchema>;
 export type McpServerItem = z.infer<typeof McpServerSchema>;
 export type ToolRegistryItem = z.infer<typeof ToolRegistryItemSchema>;
 export type ModelItem = z.infer<typeof ModelItemSchema>;
+export type ExtensionDiagnosticsEntry = z.infer<typeof ExtensionDiagnosticsEntrySchema>;
+export type ExtensionDiagnostics = z.infer<typeof ExtensionDiagnosticsSchema>;

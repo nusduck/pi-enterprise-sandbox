@@ -59,10 +59,13 @@ export async function createAgentRun(body, { auth = null, traceId = null } = {})
   return resp.json();
 }
 
-export async function getAgentExtensionDiagnostics(profileId = 'coding-agent') {
+export async function getAgentExtensionDiagnostics(
+  profileId = 'coding-agent',
+  { auth = null, traceId = null } = {},
+) {
   const url = new URL(`${config.AGENT_BASE_URL}/internal/extensions/diagnostics`);
   url.searchParams.set('profile_id', profileId);
-  const resp = await fetch(url, { headers: internalHeaders() });
+  const resp = await fetch(url, { headers: requestHeaders({ auth, traceId }) });
   if (!resp.ok) {
     const text = await resp.text().catch(() => resp.statusText);
     const error = new Error(`Agent diagnostics failed (${resp.status}): ${text}`);

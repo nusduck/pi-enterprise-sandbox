@@ -92,6 +92,8 @@ const READ_TOOLS = new Set([
   'process_status',
   'process_logs',
   'process_wait',
+  // Capability registry introspection (list/search/describe only)
+  'capabilities',
 ]);
 
 /** Known write / side-effect tools (serial per workspace). */

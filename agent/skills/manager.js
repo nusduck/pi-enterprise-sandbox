@@ -65,6 +65,7 @@ export function resolveSkillRoots(env = process.env) {
  *   auditSink?: ((ev: object) => void) | null,
  *   getMeta?: () => object,
  *   getAgentSession?: () => { reload?: () => Promise<void>, resourceLoader?: { getSkills?: () => { skills: unknown[] }, reload?: () => Promise<void> } } | null,
+ *   onAfterReload?: () => Promise<void>|void,
  * }} [options]
  */
 export function createSkillManager(options = {}) {
@@ -77,6 +78,8 @@ export function createSkillManager(options = {}) {
   const getMeta = typeof options.getMeta === 'function' ? options.getMeta : () => ({});
   const getAgentSession =
     typeof options.getAgentSession === 'function' ? options.getAgentSession : () => null;
+  const onAfterReload =
+    typeof options.onAfterReload === 'function' ? options.onAfterReload : null;
 
   function audit(partial) {
     return emitSkillAudit(
@@ -204,6 +207,16 @@ export function createSkillManager(options = {}) {
           null;
         if (Array.isArray(skills)) skillCount = skills.length;
         const installed = listInstalledSkills(skillRoot);
+        if (onAfterReload) {
+          try {
+            await onAfterReload();
+          } catch (reloadErr) {
+            console.warn(
+              '[skills] onAfterReload failed:',
+              reloadErr?.message || reloadErr,
+            );
+          }
+        }
         const summary =
           skillCount != null
             ? `reloaded loader skills=${skillCount} installed=${installed.length}`

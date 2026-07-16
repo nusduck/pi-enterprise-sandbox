@@ -153,10 +153,14 @@ const server = http.createServer(async (req, res) => {
 
     if (req.method === 'GET' && path === '/internal/extensions/diagnostics') {
       try {
+        const auth = authFromInternalRequest(req);
         json(res, 200, getExtensionDiagnostics({
           profileId: parsedUrl.searchParams.get('profile_id') || 'coding-agent',
+          ownerUserId: auth.actingUserId || null,
+          organizationId: auth.actingOrganizationId || null,
           mcpServers: config.MCP_SERVERS,
           skillRoots: config.SKILL_ROOTS,
+          skillsMode: config.SKILLS_MODE,
         }));
       } catch (error) {
         json(res, 400, { error: error.message });

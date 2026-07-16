@@ -171,13 +171,13 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (req.method === 'GET' && path === '/api/extensions/diagnostics') {
-      await handleExtensionDiagnostics(parsedUrl, res);
+      await handleExtensionDiagnostics(parsedUrl, res, req);
       return;
     }
     {
       const capability = path.match(/^\/api\/capabilities\/(skills|mcp|tools|models)$/);
       if (req.method === 'GET' && capability) {
-        await handleCapabilityRegistry(capability[1], parsedUrl, res);
+        await handleCapabilityRegistry(capability[1], parsedUrl, res, req);
         return;
       }
     }

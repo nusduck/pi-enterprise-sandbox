@@ -185,22 +185,49 @@ describe('management schemas', () => {
     );
     assert.equal(appr.approval_id, 'a1');
 
-    const skill = parseApi(SkillItemSchema, { name: 'docs', enabled: true }, 'skill');
+    const skill = parseApi(
+      SkillItemSchema,
+      {
+        name: 'docs',
+        enabled: true,
+        status: 'active',
+        dynamic: true,
+        registry_id: 'skill:docs',
+      },
+      'skill',
+    );
     assert.equal(skill.name, 'docs');
+    assert.equal(skill.status, 'active');
+    assert.equal(skill.dynamic, true);
 
     const mcp = parseApi(
       McpServerSchema,
-      { server_id: 'sandbox', tools_count: 3, connection_status: 'connected' },
+      {
+        server_id: 'sandbox',
+        tools_count: 3,
+        connection_status: 'connected',
+        status: 'active',
+        dynamic: false,
+      },
       'mcp',
     );
     assert.equal(mcp.server_id, 'sandbox');
+    assert.equal(mcp.status, 'active');
 
     const tool = parseApi(
       ToolRegistryItemSchema,
-      { name: 'bash', category: 'Sandbox', risk_level: 'high' },
+      {
+        name: 'bash',
+        category: 'Sandbox',
+        risk_level: 'high',
+        status: 'active',
+        dynamic: false,
+        registry_id: 'tool:bash',
+      },
       'tool',
     );
     assert.equal(tool.category, 'Sandbox');
+    assert.equal(tool.status, 'active');
 
     const model = parseApi(
       ModelItemSchema,

@@ -1,5 +1,7 @@
 import { randomUUID } from 'node:crypto';
 
+import { sanitizeUntrustedText } from '../lib/text-redaction.js';
+
 function parseJson(value, fallback) {
   if (value == null || value === '') return fallback;
   if (typeof value !== 'string') return value;
@@ -27,7 +29,9 @@ export function createEnvironmentCredentialResolver(env = process.env) {
     resolve(authTokenRef) {
       if (!authTokenRef) return null;
       const value = env[authTokenRef];
-      if (!value) throw new Error(`MCP credential reference is unavailable: ${authTokenRef}`);
+      if (!value) {
+        throw new Error('MCP credential reference is unavailable');
+      }
       return value;
     },
   };
@@ -113,7 +117,7 @@ function normalizeTool(server, tool) {
     key: `${server.id}:${rawName}`,
     serverId: server.id,
     name: rawName,
-    description: tool.description || '',
+    description: sanitizeUntrustedText(tool.description || '', 480) || '',
     inputSchema: tool.inputSchema || tool.input_schema || tool.parameters || { type: 'object' },
     riskLevel: tool.riskLevel || tool.risk_level || (destructive ? 'high' : sideEffect ? 'medium' : 'low'),
     sideEffect,
@@ -161,7 +165,11 @@ export function normalizeMcpResult(value, options = {}) {
 async function readProtocolResponse(response) {
   const contentType = response.headers?.get?.('content-type') || '';
   const text = await response.text();
-  if (!response.ok) throw new Error(`MCP HTTP ${response.status}: ${text.slice(0, 500)}`);
+  if (!response.ok) {
+    throw new Error(
+      `MCP HTTP ${response.status}: ${sanitizeUntrustedText(text.slice(0, 500), 240) || 'request failed'}`,
+    );
+  }
   if (contentType.includes('text/event-stream')) {
     const data = text
       .split(/\r?\n/)
@@ -180,7 +188,9 @@ export class McpConnectionManager {
     this.fetch = options.fetch || globalThis.fetch;
     this.credentialResolver = options.credentialResolver || { resolve: () => null };
     this.allowedServers = new Set(options.allowedServers || []);
-    this.allowedTools = new Set(options.allowedTools || []);
+    const rawAllowed = options.allowedTools || [];
+    this.allowAllTools = rawAllowed.includes('*');
+    this.allowedTools = new Set(rawAllowed.filter((entry) => entry !== '*'));
     this.context = options.context || {};
     this.allowAllServers = options.allowAllServers === true;
     this.maxResultBytes = options.maxResultBytes ?? 64 * 1024;
@@ -192,7 +202,9 @@ export class McpConnectionManager {
   }
 
   isToolAllowed(key, rawName) {
-    return this.allowedTools.size === 0 || this.allowedTools.has(key) || this.allowedTools.has(rawName);
+    if (this.allowAllTools) return true;
+    if (this.allowedTools.size === 0) return false;
+    return this.allowedTools.has(key) || this.allowedTools.has(rawName);
   }
 
   headers(server) {
@@ -236,25 +248,77 @@ export class McpConnectionManager {
     throw lastError;
   }
 
-  async discover({ refresh = false, signal } = {}) {
-    const discovered = [];
-    for (const server of this.servers.values()) {
-      if (server.enabled === false || !this.isServerAllowed(server.id)) continue;
-      let tools = refresh ? null : this.cache.get(server.id);
-      if (!tools) {
-        const raw = Array.isArray(server.tools)
-          ? { tools: server.tools }
-          : await this.request(server, 'tools/list', {}, signal);
-        tools = (raw.tools || []).map((tool) => normalizeTool(server, tool)).filter(Boolean);
-        this.cache.set(server.id, tools);
+  /**
+   * Per-server discovery with partial-failure tolerance.
+   * @param {{ refresh?: boolean, signal?: AbortSignal, serverIds?: string[]|null }} [options]
+   * @returns {Promise<{ tools: object[], servers: Array<{ serverId: string, status: string, toolCount: number, error?: string|null, disabled?: boolean }> }>}
+   */
+  async discoverDetailed({ refresh = false, signal, serverIds = null } = {}) {
+    const tools = [];
+    const servers = [];
+    const ids = Array.isArray(serverIds) && serverIds.length
+      ? [...new Set(serverIds.map(String).filter(Boolean))]
+      : [...this.servers.keys()];
+
+    for (const serverId of ids) {
+      const server = this.servers.get(serverId);
+      if (!server || !this.isServerAllowed(server.id)) continue;
+
+      if (server.enabled === false) {
+        servers.push({
+          serverId: server.id,
+          status: 'disabled',
+          toolCount: 0,
+          error: null,
+          disabled: true,
+        });
+        continue;
       }
-      discovered.push(...tools.filter((tool) => this.isToolAllowed(tool.key, tool.name)));
+
+      try {
+        let serverTools = refresh ? null : this.cache.get(server.id);
+        if (!serverTools) {
+          const raw = Array.isArray(server.tools)
+            ? { tools: server.tools }
+            : await this.request(server, 'tools/list', {}, signal);
+          serverTools = (raw.tools || [])
+            .map((tool) => normalizeTool(server, tool))
+            .filter(Boolean);
+          this.cache.set(server.id, serverTools);
+        }
+        const allowed = serverTools.filter((tool) =>
+          this.isToolAllowed(tool.key, tool.name),
+        );
+        tools.push(...allowed);
+        servers.push({
+          serverId: server.id,
+          status: 'active',
+          toolCount: allowed.length,
+          error: null,
+          disabled: false,
+        });
+      } catch (error) {
+        servers.push({
+          serverId: server.id,
+          status: 'failed',
+          toolCount: 0,
+          error: error?.message || String(error),
+          disabled: false,
+        });
+      }
     }
-    return discovered;
+
+    return { tools, servers };
+  }
+
+  async discover(options = {}) {
+    const detailed = await this.discoverDetailed(options);
+    return detailed.tools;
   }
 
   async search(query, options = {}) {
-    const words = String(query || '')
+    const safeQuery = sanitizeUntrustedText(query || '', 128) || '';
+    const words = safeQuery
       .toLowerCase()
       .split(/\s+/)
       .filter(Boolean);

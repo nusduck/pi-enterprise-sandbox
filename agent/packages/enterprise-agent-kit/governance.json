@@ -15,7 +15,8 @@
     "dynamic-resources",
     "prompt",
     "structured-output",
-    "skill-management"
+    "skill-management",
+    "capability-introspection"
   ],
   "external_packages": [],
   "audit": {

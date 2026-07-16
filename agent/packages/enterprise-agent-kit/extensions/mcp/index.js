@@ -4,7 +4,14 @@ import {
   ApprovalSuspendedError,
   createApprovalPendingToolResult,
 } from '../../../../services/approval-waiter.js';
+import { sanitizeUntrustedText } from '../../../../lib/text-redaction.js';
 import { APPROVAL_MODE, normalizeApprovalMode } from '../policy/index.js';
+
+const MAX_MCP_TEXT = 240;
+const MAX_MCP_EMIT_TOOLS = 20;
+const MAX_QUERY_LEN = 128;
+const MAX_MCP_TOOL_ID = 128;
+const REGISTERED_NAME_MAX = 64;
 
 function result(value, isError = false) {
   return {
@@ -36,16 +43,87 @@ function operationFingerprint(toolName, args) {
     .digest('hex');
 }
 
-/** SDK tool names: [a-z0-9_]+ */
-export function toRegisteredMcpToolName(toolKey) {
+const REGISTERED_HASH_LEN = 8;
+
+function sanitizedRegisteredStem(toolKey) {
   const raw = String(toolKey || '')
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '_')
     .replace(/^_+|_+$/g, '')
     .replace(/_+/g, '_');
   if (!raw) return null;
-  const name = raw.startsWith('mcp_') ? raw : `mcp_${raw}`;
-  return name.slice(0, 64);
+  return raw.startsWith('mcp_') ? raw : `mcp_${raw}`;
+}
+
+function registeredNameSuffix(toolKey) {
+  return createHash('sha256').update(String(toolKey)).digest('hex').slice(0, REGISTERED_HASH_LEN);
+}
+
+/**
+ * Deterministic SDK tool name from the full remote tool key.
+ * Bounded stem + stable key hash suffix — independent of discovery peers/history.
+ * @param {string} toolKey
+ */
+export function toRegisteredMcpToolName(toolKey) {
+  const stem = sanitizedRegisteredStem(toolKey);
+  if (!stem) return null;
+  const suffix = registeredNameSuffix(toolKey);
+  const tag = `_${suffix}`;
+  const stemMax = REGISTERED_NAME_MAX - tag.length;
+  if (stemMax < 4) return `mcp_${suffix}`.slice(0, REGISTERED_NAME_MAX);
+  return `${stem.slice(0, stemMax)}${tag}`;
+}
+
+/**
+ * Map tool keys to registered names (pure function of each key).
+ * @param {Array<{ key?: string }>} tools
+ */
+export function buildRegisteredMcpToolNameMap(tools = []) {
+  const map = new Map();
+  for (const tool of Array.isArray(tools) ? tools : []) {
+    const key = tool?.key;
+    if (!key || map.has(key)) continue;
+    const name = toRegisteredMcpToolName(key);
+    if (name) map.set(key, name);
+  }
+  return map;
+}
+
+function safeMcpText(value, max = MAX_MCP_TEXT) {
+  return sanitizeUntrustedText(value, max) || '';
+}
+
+function safeMcpToolId(value) {
+  if (value == null) return null;
+  if (typeof value === 'object') {
+    const key = value.key || value.tool;
+    return safeMcpText(key, MAX_MCP_TOOL_ID) || null;
+  }
+  return safeMcpText(value, MAX_MCP_TOOL_ID) || null;
+}
+
+function mcpError(messageOrValue, isError = true) {
+  const payload =
+    typeof messageOrValue === 'string'
+      ? { error: safeMcpText(messageOrValue, MAX_MCP_TEXT) }
+      : {
+          ...messageOrValue,
+          error: safeMcpText(messageOrValue?.error || 'MCP operation failed', MAX_MCP_TEXT),
+        };
+  return result(payload, isError);
+}
+
+function boundMcpToolSummaries(tools = []) {
+  return (Array.isArray(tools) ? tools : []).slice(0, MAX_MCP_EMIT_TOOLS).map((tool) => ({
+    tool: safeMcpToolId(tool.tool || tool.key),
+    name: tool.name,
+    description: safeMcpText(tool.description, MAX_MCP_TEXT),
+    risk_level: tool.riskLevel || tool.risk_level,
+    side_effect: tool.sideEffect ?? tool.side_effect,
+    score: tool.score,
+    matched: tool.matched,
+    note: tool.note ? safeMcpText(tool.note, MAX_MCP_TEXT) : undefined,
+  }));
 }
 
 /**
@@ -96,7 +174,7 @@ export function createMcpExtension(options = {}) {
       matchesPreApprovedAttemptForCall &&
       claimedPreApprovedAttempt !== preApprovedAttempt
     ) {
-      return result({ error: 'Approval resume authorization is already in use' }, true);
+      return mcpError('Approval resume authorization is already in use');
     }
     const usePreApprovedAttempt = Boolean(
       preApprovedAttempt && claimedPreApprovedAttempt === preApprovedAttempt,
@@ -110,16 +188,12 @@ export function createMcpExtension(options = {}) {
       });
       if (invoked.status === 'approval_required') {
         if (approvalMode === APPROVAL_MODE.DENY) {
-          return result({
-            error: 'Approval asking is disabled (APPROVAL_MODE=deny)',
-          }, true);
+          return mcpError('Approval asking is disabled (APPROVAL_MODE=deny)');
         }
         if (usePreApprovedAttempt) {
           options.releasePreApprovedAttempt?.(claimedPreApprovedAttempt);
           claimedPreApprovedAttempt = null;
-          return result({
-            error: 'Approved resume operation could not be authorized',
-          }, true);
+          return mcpError('Approved resume operation could not be authorized');
         }
         const invokedToolName = `mcp:${invoked.tool.key || toolKey}`;
         const approvalOperationFingerprint = operationFingerprint(
@@ -163,7 +237,7 @@ export function createMcpExtension(options = {}) {
       options.emit?.({
         type: 'mcp_invoked',
         server: invoked.serverId,
-        tool: invoked.tool,
+        tool: safeMcpToolId(invoked.tool?.key || invoked.tool || toolKey),
         result_ref: invoked.resultRef,
         timestamp: invoked.timestamp,
         truncated: invoked.truncated,
@@ -186,16 +260,17 @@ export function createMcpExtension(options = {}) {
       }
       options.emit?.({
         type: 'mcp_failed',
-        tool: toolKey || null,
-        error: error.message,
+        tool: safeMcpToolId(toolKey),
+        error: safeMcpText(error.message, MAX_MCP_TEXT),
         ...(options.getMeta?.() || {}),
       });
-      return result({ error: error.message }, true);
+      return mcpError(error.message);
     }
   }
 
   return function enterpriseMcpExtension(pi) {
     const registeredRemote = new Map(); // registeredName -> tool.key
+    const ownedMcpRegisteredNames = new Set();
 
     pi.registerTool({
       name: 'mcp',
@@ -215,24 +290,28 @@ export function createMcpExtension(options = {}) {
       async execute(toolCallId, input, signal) {
         try {
           if (input.action === 'search') {
-            const tools = await options.manager.search(input.query || '', { signal });
+            const query = safeMcpText(input.query || '', MAX_QUERY_LEN);
+            const tools = await options.manager.search(query, { signal });
+            const bounded = boundMcpToolSummaries(tools);
             options.emit?.({
               type: 'mcp_discovered',
-              query: input.query || '',
+              query,
               count: tools.length,
+              returned: bounded.length,
+              tools: bounded,
               ...(options.getMeta?.() || {}),
             });
-            return result({ tools });
+            return result({ tools: bounded, total: tools.length, returned: bounded.length });
           }
-          if (!input.tool) return result({ error: 'tool is required' }, true);
+          if (!input.tool) return mcpError('tool is required');
           if (input.action === 'describe') {
             const tool = await options.manager.describe(input.tool, { signal });
             return result({
               tool: tool.key,
-              description: tool.description,
-              input_schema: tool.inputSchema,
+              description: safeMcpText(tool.description, MAX_MCP_TEXT),
               risk_level: tool.riskLevel,
               side_effect: tool.sideEffect,
+              note: 'Full input schema is not exposed; invoke with validated arguments only.',
             });
           }
           return invokeRemote(toolCallId, input.tool, input.arguments || {}, signal);
@@ -240,13 +319,13 @@ export function createMcpExtension(options = {}) {
           if (error instanceof ApprovalSuspendedError || error?.name === 'ApprovalSuspendedError') {
             return createApprovalPendingToolResult(error.pending);
           }
-          options.emit?.({
-            type: 'mcp_failed',
-            tool: input?.tool || null,
-            error: error.message,
-            ...(options.getMeta?.() || {}),
-          });
-          return result({ error: error.message }, true);
+      options.emit?.({
+        type: 'mcp_failed',
+        tool: safeMcpToolId(input?.tool),
+        error: safeMcpText(error.message, MAX_MCP_TEXT),
+        ...(options.getMeta?.() || {}),
+      });
+          return mcpError(error.message);
         }
       },
     });
@@ -255,40 +334,208 @@ export function createMcpExtension(options = {}) {
      * Inject discovered MCP tools as first-class tools (pi dynamic-tools pattern).
      * Runs on session_start so the model sees them in the tool list without search.
      */
-    async function injectDiscoveredTools(reason = 'session_start') {
-      if (!options.manager || typeof options.manager.discover !== 'function') {
+    function getRegistry() {
+      if (typeof options.getCapabilityRegistry === 'function') {
+        return options.getCapabilityRegistry();
+      }
+      return options.capabilityRegistry || null;
+    }
+
+    /**
+     * Configured + allowed MCP server IDs for this session.
+     * Never invent a synthetic "mcp" server name.
+     */
+    function resolveConfiguredServers() {
+      if (Array.isArray(options.configuredMcpServers) && options.configuredMcpServers.length) {
+        return options.configuredMcpServers.map((entry) => ({
+          id: String(entry.id),
+          enabled: entry.enabled !== false,
+        }));
+      }
+      if (Array.isArray(options.configuredServerIds) && options.configuredServerIds.length) {
+        return options.configuredServerIds.map((id) => ({ id: String(id), enabled: true }));
+      }
+      const manager = options.manager;
+      if (!manager?.servers || typeof manager.servers.values !== 'function') {
         return [];
       }
+      const servers = [];
+      for (const server of manager.servers.values()) {
+        if (!server?.id) continue;
+        if (typeof manager.isServerAllowed === 'function' && !manager.isServerAllowed(server.id)) {
+          continue;
+        }
+        servers.push({ id: String(server.id), enabled: server.enabled !== false });
+      }
+      return servers;
+    }
+
+    function reconcileMcpTools(tools, reason, serverStatuses = []) {
+      const registry = getRegistry();
+      if (!registry) return;
+      const configured = resolveConfiguredServers();
+      const statusById = new Map(
+        (Array.isArray(serverStatuses) ? serverStatuses : []).map((row) => [
+          row.serverId,
+          row,
+        ]),
+      );
+      const registeredNames = buildRegisteredMcpToolNameMap(tools || []);
+      const mcpToolEntries = (tools || []).map((tool) => {
+        const registeredName =
+          registeredNames.get(tool.key) || toRegisteredMcpToolName(tool.key);
+        return {
+          kind: 'mcp_tool',
+          name: registeredName || tool.key,
+          status: 'active',
+          source: `mcp:${tool.serverId}`,
+          description: safeMcpText(tool.description, MAX_MCP_TEXT),
+          dynamic: true,
+          metadata: {
+            server_id: tool.serverId,
+            tool_key: tool.key,
+            registered_name: registeredName || undefined,
+            risk_level: tool.riskLevel || undefined,
+            side_effect: Boolean(tool.sideEffect),
+          },
+        };
+      });
+      registry.reconcile('mcp_tool', mcpToolEntries, 'mcp_discovery', reason);
+
+      const serverEntries = configured.map(({ id, enabled }) => {
+        const statusInfo = statusById.get(id);
+        const toolCount = (tools || []).filter((t) => t.serverId === id).length;
+        if (enabled === false) {
+          return {
+            kind: 'mcp_server',
+            name: id,
+            status: 'disabled',
+            source: 'mcp-connection-manager',
+            description: `MCP server ${id} (disabled in configuration)`,
+            dynamic: true,
+            metadata: {
+              server_id: id,
+              connection_status: 'disabled',
+              tool_count: 0,
+              reason: 'server_disabled',
+            },
+          };
+        }
+        if (statusInfo?.status === 'failed') {
+          return {
+            kind: 'mcp_server',
+            name: id,
+            status: 'failed',
+            source: 'mcp-connection-manager',
+            description: `MCP server ${id} discovery failed`,
+            dynamic: true,
+            metadata: {
+              server_id: id,
+              connection_status: 'error',
+              tool_count: 0,
+              error: safeMcpText(statusInfo.error, MAX_MCP_TEXT),
+            },
+          };
+        }
+        return {
+          kind: 'mcp_server',
+          name: id,
+          status: 'active',
+          source: 'mcp-connection-manager',
+          description: `MCP server ${id}`,
+          dynamic: true,
+          metadata: {
+            server_id: id,
+            connection_status: 'connected',
+            tool_count: toolCount,
+          },
+        };
+      });
+      registry.reconcile('mcp_server', serverEntries, 'mcp_discovery', reason);
+    }
+
+    function syncActiveMcpTools(currentMcpNames) {
+      if (
+        typeof pi.getActiveTools !== 'function' ||
+        typeof pi.setActiveTools !== 'function'
+      ) {
+        return;
+      }
+      const active = pi.getActiveTools() || [];
+      const nonMcpActive = active.filter((name) => !ownedMcpRegisteredNames.has(name));
+      const seen = new Set();
+      const nextActive = [];
+      for (const name of [...nonMcpActive, ...currentMcpNames]) {
+        if (!name || seen.has(name)) continue;
+        seen.add(name);
+        nextActive.push(name);
+      }
+      pi.setActiveTools(nextActive);
+    }
+
+    async function injectDiscoveredTools(reason = 'session_start') {
+      if (
+        !options.manager ||
+        typeof options.manager.discoverDetailed !== 'function'
+      ) {
+        return [];
+      }
+      const configured = resolveConfiguredServers();
       let tools = [];
+      let serverStatuses = [];
       try {
-        tools = await options.manager.discover({ refresh: true });
+        const detailed = await options.manager.discoverDetailed({
+          refresh: true,
+          serverIds: configured.map((s) => s.id),
+        });
+        tools = detailed.tools || [];
+        serverStatuses = detailed.servers || [];
       } catch (error) {
+        const message = safeMcpText(error?.message || String(error), MAX_MCP_TEXT);
         options.emit?.({
           type: 'mcp_discover_failed',
           reason,
-          error: error?.message || String(error),
+          error: message,
           ...(options.getMeta?.() || {}),
         });
+        reconcileMcpTools([], reason, configured.map((s) => ({
+          serverId: s.id,
+          status: s.enabled === false ? 'disabled' : 'failed',
+          toolCount: 0,
+          error: s.enabled === false ? null : message,
+          disabled: s.enabled === false,
+        })));
+        syncActiveMcpTools([]);
         return [];
       }
 
+      const registeredNames = buildRegisteredMcpToolNameMap(tools);
+      const currentMcpNames = [];
       const injected = [];
       for (const tool of tools) {
-        const registeredName = toRegisteredMcpToolName(tool.key);
-        if (!registeredName || registeredRemote.has(registeredName)) continue;
+        const registeredName =
+          registeredNames.get(tool.key) || toRegisteredMcpToolName(tool.key);
+        if (!registeredName) continue;
+        ownedMcpRegisteredNames.add(registeredName);
+        currentMcpNames.push(registeredName);
+        if (registeredRemote.has(registeredName)) continue;
         registeredRemote.set(registeredName, tool.key);
-        const description = [
-          tool.description || `Remote MCP tool ${tool.key}`,
-          `Remote key: ${tool.key}.`,
-          tool.sideEffect || tool.riskLevel === 'high'
-            ? 'May have side effects; high-risk calls require approval.'
-            : 'Read-oriented remote capability.',
-        ].join(' ');
+        const safeDescription = safeMcpText(tool.description, MAX_MCP_TEXT);
+        const description = safeMcpText(
+          [
+            safeDescription || `Remote MCP tool ${tool.key}`,
+            `Remote key: ${tool.key}.`,
+            tool.sideEffect || tool.riskLevel === 'high'
+              ? 'May have side effects; high-risk calls require approval.'
+              : 'Read-oriented remote capability.',
+          ].join(' '),
+          480,
+        );
         pi.registerTool({
           name: registeredName,
           label: tool.name || registeredName,
           description,
-          promptSnippet: `MCP ${tool.key}: ${(tool.description || '').slice(0, 120)}`,
+          promptSnippet: safeMcpText(`MCP ${tool.key}: ${tool.description || ''}`, 120),
           parameters: Type.Object({}, { additionalProperties: true }),
           async execute(toolCallId, params, signal) {
             return invokeRemote(toolCallId, tool.key, params || {}, signal);
@@ -296,19 +543,24 @@ export function createMcpExtension(options = {}) {
         });
         injected.push({
           registered_name: registeredName,
-          tool: tool.key,
+          tool: safeMcpToolId(tool.key),
           risk_level: tool.riskLevel,
           side_effect: tool.sideEffect,
-          description: (tool.description || '').slice(0, 240),
+          description: safeMcpText(tool.description, MAX_MCP_TEXT),
         });
       }
 
+      syncActiveMcpTools(currentMcpNames);
+      reconcileMcpTools(tools, reason, serverStatuses);
+
+      const boundedInjected = injected.slice(0, MAX_MCP_EMIT_TOOLS);
       options.emit?.({
         type: 'mcp_discovered',
         query: '',
         reason,
         count: injected.length,
-        tools: injected,
+        returned: boundedInjected.length,
+        tools: boundedInjected,
         ...(options.getMeta?.() || {}),
       });
       return injected;

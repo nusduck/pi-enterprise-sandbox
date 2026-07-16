@@ -58,7 +58,7 @@ pi-sandbox/
 │   ├── routers/          ← sessions, executions, files, artifacts, traces...
 │   ├── services/         ← 会话/执行/文件/审计/审批策略
 │   └── Dockerfile
-├── skills/               ← 空发行基线（无内置 Skill package；loader 保留；研发可 install）
+├── skills/               ← 可选共享 Skill 挂载（非硬依赖；profile + capability registry 控制可见性）
 ├── tests/                ← pytest 测试套件
 ├── scripts/              ← 备份/恢复、development reset、跨服务 smoke
 ├── nginx/                ← 生产 Nginx + SSL
@@ -146,7 +146,7 @@ SANDBOX_BASE_URL=http://localhost:8081
 
 ### Skill
 
-发行基线 **零内置 Skill package**（`skills/` 为空）。Agent 在零 Skill 下可用基础工具（read/write/edit/bash/…）。未来 Skill 仅通过研发 `SKILLS_MODE=development` 的 install/edit/reload 流程引入；生产默认 `readonly`。
+Agent **支持零 Skill 启动**（基础工具 read/write/edit/bash/…）。共享 `skills/` 与 kit package skills 由 Agent Profile（`profile.skills` + `sharedSkills`）与 session capability registry 控制；模型侧权威清单为 `capabilities` 工具。研发可用 `SKILLS_MODE=development` 的 install/edit/reload；生产默认 `readonly`。
 
 ### 其他
 

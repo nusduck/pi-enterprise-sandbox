@@ -102,9 +102,11 @@ SANDBOX_BASE_URL=http://localhost:8081 AGENT_BASE_URL=http://localhost:4100 \
 5. 编写测试 `tests/`
 6. 更新 API 文档 `docs/api.md`
 
-### 新增技能（发行基线为零 Skill）
+### 新增技能（零 Skill 仍可启动）
 
-仓库 `skills/` **不包含任何内置 Skill package**。Agent 在零 Skill 下可启动并使用基础工具（read/write/edit/bash/ls/find/grep/submit_artifact）。未来 Skill 仅通过研发流程引入；loader/install/edit/reload 框架保留在 `agent/skills/`。
+Agent **可以在零 Skill package 下启动**并使用基础工具（read/write/edit/bash/ls/find/grep/submit_artifact 等）。仓库 `skills/` 当前可挂载共享 Skill package（如文档/办公类技能）；它们不是运行时硬依赖。
+
+模型与运营侧的权威清单来自 **session-scoped capability registry** 与模型工具 `capabilities`（list/search/describe），而不是模型对 prompt 的记忆。`coding-agent` 默认 `sharedSkills.mode=all`，在保留 package skill allowlist（`profile.skills`）的同时暴露共享挂载上的全部合法 package。
 
 **方式 A — 手工放置（仍建议只读挂载）**
 
@@ -112,7 +114,8 @@ SANDBOX_BASE_URL=http://localhost:8081 AGENT_BASE_URL=http://localhost:4100 \
 2. 添加 `SKILL.md`（YAML frontmatter：`name` + `description` 必填）
 3. 添加脚本到 `skills/your-skill-name/scripts/`
 4. `skills/` 默认只读挂载到 Agent / Sandbox skill 根
-5. Agent 自动发现技能；工作区始终从空目录起步，技能不复制进 workspace
+5. Agent 经 `dynamic-resources` + profile skill policy 发现技能；工作区始终从空目录起步，技能不复制进 workspace
+6. 安装/编辑后调用 `skill_reload`（development）或新 session 以刷新 registry
 
 **方式 B — 研发对话安装（`SKILLS_MODE=development`）**
 

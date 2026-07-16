@@ -5,7 +5,11 @@ import {
   filterProfileTools,
   resolveAgentProfile,
 } from '../application/agent-profile-service.js';
-import { createEnterpriseAgentKit } from '../packages/enterprise-agent-kit/index.js';
+import { createCapabilityRegistry } from '../application/capability-registry-service.js';
+import {
+  createEnterpriseAgentKit,
+  wrapNamedExtensionFactory,
+} from '../packages/enterprise-agent-kit/index.js';
 
 function loadFactories(factories) {
   const tools = new Map();
@@ -116,4 +120,96 @@ test('Agent Profile can be configured without bypassing immutable defaults', () 
   assert.deepEqual(profile.allowedMcpServers, ['risk-platform']);
   assert.equal(profile.contextPolicy.reserveTokens, 9000);
   assert.equal(profile.contextPolicy.keepRecentTokens, 20000);
+});
+
+test('wrapNamedExtensionFactory records active and failed extension statuses', () => {
+  const registry = createCapabilityRegistry({ profileId: 'coding-agent', runId: 'wrap_test' });
+  const pi = { registerTool() {}, on() {} };
+
+  wrapNamedExtensionFactory(
+    'healthy-ext',
+    () => ({ name: 'healthy-ext' }),
+    { getCapabilityRegistry: () => registry },
+  )(pi);
+  const active = registry.get('extension:healthy-ext');
+  assert.equal(active?.status, 'active');
+  assert.equal(active?.scope, 'extension_factories');
+
+  const failing = wrapNamedExtensionFactory(
+    'broken-ext',
+    () => {
+      throw new Error('factory exploded');
+    },
+    { getCapabilityRegistry: () => registry },
+  );
+  assert.throws(() => failing(pi), /factory exploded/);
+  const failed = registry.get('extension:broken-ext');
+  assert.equal(failed?.status, 'failed');
+  assert.equal(failed?.metadata.reason, 'factory_error');
+  assert.match(String(failed?.metadata.error), /factory exploded/);
+});
+
+test('wrapNamedExtensionFactory async success registers active only after fulfillment', async () => {
+  const registry = createCapabilityRegistry({ profileId: 'coding-agent', runId: 'wrap_async_ok' });
+  const pi = { registerTool() {}, on() {} };
+  let resolveFactory;
+  const tracked = wrapNamedExtensionFactory(
+    'async-ext',
+    () =>
+      new Promise((resolve) => {
+        resolveFactory = resolve;
+      }),
+    { getCapabilityRegistry: () => registry },
+  );
+  const pending = tracked(pi);
+  assert.equal(registry.get('extension:async-ext'), null);
+  resolveFactory({ name: 'async-ext' });
+  const result = await pending;
+  assert.equal(result.name, 'async-ext');
+  assert.equal(registry.get('extension:async-ext')?.status, 'active');
+});
+
+test('wrapNamedExtensionFactory async failure registers failed with sanitized error and rethrows', async () => {
+  const registry = createCapabilityRegistry({ profileId: 'coding-agent', runId: 'wrap_async_fail' });
+  const pi = { registerTool() {}, on() {} };
+  let rejectFactory;
+  const tracked = wrapNamedExtensionFactory(
+    'async-broken-ext',
+    () =>
+      new Promise((_resolve, reject) => {
+        rejectFactory = reject;
+      }),
+    { getCapabilityRegistry: () => registry },
+  );
+  const pending = tracked(pi);
+  assert.equal(registry.get('extension:async-broken-ext'), null);
+  rejectFactory(new Error('Bearer sk-async api_key=live-secret'));
+  await assert.rejects(pending, /Bearer sk-async api_key=live-secret/);
+  const failed = registry.get('extension:async-broken-ext');
+  assert.equal(failed?.status, 'failed');
+  assert.equal(failed?.metadata.reason, 'factory_error');
+  assert.ok(!String(failed?.metadata.error).includes('sk-async'));
+  assert.ok(!String(failed?.metadata.error).includes('live-secret'));
+  assert.match(String(failed?.metadata.error), /\[REDACTED\]/);
+});
+
+test('coding profile registers capabilities introspection tool', () => {
+  const profile = resolveAgentProfile();
+  const registry = createCapabilityRegistry({ profileId: profile.id, runId: 't' });
+  registry.register({
+    kind: 'skill',
+    name: 'code-review',
+    status: 'active',
+    source: 'kit',
+    description: 'review',
+  });
+  const loaded = loadFactories(
+    createEnterpriseAgentKit({
+      profile,
+      sandboxTools: [],
+      getCapabilityRegistry: () => registry,
+    }),
+  );
+  assert.ok(loaded.tools.has('capabilities'));
+  assert.ok(loaded.tools.has('task_plan'));
 });
