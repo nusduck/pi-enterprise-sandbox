@@ -4,8 +4,8 @@
  */
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { createSandboxTools } from '../sandbox-tools.js';
-import { BASE_TOOL_NAMES } from '../chat-runner.js';
+import { createSandboxTools } from '../packages/enterprise-agent-kit/extensions/sandbox-tools/tool-definitions.js';
+import { BASE_TOOL_NAMES } from '../runtime/agent-runtime.js';
 import { classifyToolSideEffect } from '../packages/enterprise-agent-kit/extensions/policy/index.js';
 
 const PROCESS_TOOLS = [

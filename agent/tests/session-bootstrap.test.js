@@ -95,8 +95,8 @@ describe('session bootstrap structure', () => {
     }
   });
 
-  it('keeps public surface available via chat-runner facade', async () => {
-    const facade = await import('../chat-runner.js');
+  it('keeps public surface available via agent-runtime', async () => {
+    const facade = await import('../runtime/agent-runtime.js');
     assert.equal(typeof facade.resolveConversationAndSession, 'function');
     assert.equal(typeof facade.resolveAgentSessionManager, 'function');
     assert.equal(typeof facade.runAgentTurn, 'function');
@@ -105,7 +105,7 @@ describe('session bootstrap structure', () => {
 
 describe('tool result JSON compactness (shipped helper path)', () => {
   it('sandbox tool results use compact JSON without pretty whitespace', async () => {
-    const { createSandboxTools } = await import('../sandbox-tools.js');
+    const { createSandboxTools } = await import('../packages/enterprise-agent-kit/extensions/sandbox-tools/tool-definitions.js');
     const tools = createSandboxTools({
       sessionId: 'sess_1',
       client: {

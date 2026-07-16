@@ -40,7 +40,7 @@ import {
   DEFAULT_SKILL_ROOTS,
 } from '../../../../skills/paths.js';
 import { ApprovalSuspendedError } from '../../../../services/approval-waiter.js';
-import { normalizeWorkspaceToolParams } from '../../../../workspace-paths.js';
+import { normalizeWorkspaceToolParams } from '../../../../runtime/workspace-paths.js';
 import { summarizeToolArguments } from '../../../../runtime/tool-payload-sanitizer.js';
 
 /** Terminal ledger statuses that must never re-execute side effects. */

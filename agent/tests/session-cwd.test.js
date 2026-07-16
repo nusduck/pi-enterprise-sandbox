@@ -4,7 +4,7 @@ import {
   buildCreateAgentSessionOptions,
   resolveAgentSessionManager,
   resolveConversationAndSession,
-} from '../chat-runner.js';
+} from '../runtime/agent-runtime.js';
 import { config } from '../config.js';
 import { createInMemorySession } from '../services/session-persistence.js';
 

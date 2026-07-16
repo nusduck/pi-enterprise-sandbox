@@ -30,7 +30,7 @@ import {
   rehydrateWaitingRun,
   activeRunCount,
   _resetForTests,
-} from '../run-manager.js';
+} from '../application/run-manager.js';
 import { runAgentTurn } from '../runtime/agent-runtime.js';
 
 describe('budget tracker', () => {
@@ -309,7 +309,7 @@ describe('steer / follow-up isolation', () => {
 
   it('steer rejects cross-conversation and wrong-run session', async () => {
     // Manually inject two runs with mock handles
-    const { createRun: _c } = await import('../run-manager.js');
+    const { createRun: _c } = await import('../application/run-manager.js');
 
     // Use rehydrate + synthetic handles via resume path is heavy;
     // exercise steerRun against map by creating parked runs and attaching handles.
@@ -336,7 +336,7 @@ describe('steer / follow-up isolation', () => {
 
     // Cross-talk: conversation_id mismatch
     // Promote run A to running with a mock session
-    const runsMod = await import('../run-manager.js');
+    const runsMod = await import('../application/run-manager.js');
     // Access via follow-up queued path for waiting is ok
     const fu = await followUpRun('arun_conv_a', {
       text: 'later do report',
@@ -482,7 +482,7 @@ describe('ensureApproved no longer polls with fixed timeout', () => {
   });
 
   it('pending approval suspends via onApprovalSuspend (no poll)', async () => {
-    const { createSandboxTools } = await import('../sandbox-tools.js');
+    const { createSandboxTools } = await import('../packages/enterprise-agent-kit/extensions/sandbox-tools/tool-definitions.js');
     const suspends = [];
     const client = {
       async approvalCheck() {

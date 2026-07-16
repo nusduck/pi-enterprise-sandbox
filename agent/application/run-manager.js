@@ -13,8 +13,8 @@ import {
   runAgentTurn,
   resumeAgentTurnAfterApproval,
   resumeAgentTurnAfterInput,
-} from './runtime/agent-runtime.js';
-import { createBudgetTracker, resolveBudgetLimits } from './services/budget.js';
+} from '../runtime/agent-runtime.js';
+import { createBudgetTracker, resolveBudgetLimits } from '../services/budget.js';
 import {
   resolveApproval,
   getPendingApproval,
@@ -22,15 +22,15 @@ import {
   clearPendingApproval,
   clearPendingForRun,
   _resetApprovalWaiters,
-} from './services/approval-waiter.js';
+} from '../services/approval-waiter.js';
 import {
   getPendingInput,
   getPendingInputForRun,
   clearPendingInput,
   registerPendingInput,
-} from './services/interaction-waiter.js';
-import { createSandboxClient } from './infrastructure/sandbox-client.js';
-import { config } from './config.js';
+} from '../services/interaction-waiter.js';
+import { createSandboxClient } from '../infrastructure/sandbox-client.js';
+import { config } from '../config.js';
 
 /**
  * @typedef {'queued'|'running'|'waiting_approval'|'waiting_input'|'completed'|'cancelled'|'failed'|'budget_exceeded'|'rejected'} RunStatus

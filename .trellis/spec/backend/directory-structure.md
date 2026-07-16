@@ -33,21 +33,41 @@ sandbox/
 
 `routers/conversations.py` 目前直接持有 `ConversationRepository`，这是当前例外，不应据此把所有新业务逻辑堆进 Router。
 
-## Node API Server
+## Node API Server (BFF)
 
 ```text
 api-server/
 ├── server.js                    # 原生 HTTP 入口、公共 header、路径分派
-├── config.js                    # 环境变量与 Sandbox auth header
-├── sandbox-tools.js             # Agent 工具定义、审批等待、结果适配
-├── routes/                      # /api 的 handler；chat.js 负责 SSE/Agent 编排
-└── services/sandbox-client.js   # Sandbox REST client、trace、SandboxError
+├── config.js                    # 环境变量与 Sandbox / Agent auth
+├── application/                 # 会话、timeline、approval decision 等应用服务
+├── http/                        # body / cookies / errors / response 小工具
+├── routes/                      # /api handlers（runs SSE relay、files、auth…）
+└── services/                    # sandbox-client.js + agent-client.js
 ```
 
 - 新 `/api` 路由：在 `routes/` 导出 `handleXxx`，由 `server.js` 做 method/path 分派。
-- 新 Sandbox 调用：先加入 `services/sandbox-client.js`，由 route/tool 复用，不在多个 handler 复制 fetch 细节。
+- 新 Sandbox / Agent 调用：先加入 `services/*-client.js`，由 route 复用，不在多个 handler 复制 fetch 细节。
+- **BFF 不 import `pi-coding-agent`**；Agent 工具定义在 `agent/packages/enterprise-agent-kit`。
 - 所有文件使用 ESM 和显式 `.js` 相对导入；`package.json` 已设置 `"type": "module"`。
-- Agent 工具定义集中在 `sandbox-tools.js`，工具名还必须加入 `createAgentSession` 的 allowlist（文件内已有明确注释）。
+
+## Node Agent
+
+```text
+agent/
+├── server.js                    # 内部 Run API / health / ready
+├── config.js                    # LLM、Sandbox、内部令牌、技能模式
+├── application/                 # run-manager、profile、governance、diagnostics
+├── runtime/                     # agent-runtime、session-bootstrap、event-bridge、helpers
+├── infrastructure/              # sandbox-client、mcp-connection-manager
+├── services/                    # budget、waiters、model-registry、session-persistence、sse-map
+├── packages/enterprise-agent-kit/  # customTools + Extension 包
+├── skills/                      # skill manager（install/edit/reload 支撑）
+├── testing/                     # fake OpenAI provider
+└── tests/                       # unit + sdk-compat
+```
+
+- 入口只留 `server.js` + `config.js`；不要在 agent 根目录再堆 facade（已删除 `chat-runner.js` / `sandbox-tools.js`）。
+- SDK 会话循环只在 `runtime/`；企业工具只经 kit Extension / customTools。
 
 ## 命名
 

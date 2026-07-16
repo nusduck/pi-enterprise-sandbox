@@ -21,7 +21,7 @@ Browser
 |---|---|---|
 | `sandbox/` | Python 3.11+ FastAPI 服务及安全执行运行时（无 Agent 主循环） | `sandbox/main.py`、`sandbox/routers/executions.py` |
 | `api-server/` | 薄 BFF：认证、会话/文件边缘、chat SSE relay | `api-server/routes/chat.js`、`api-server/services/agent-client.js` |
-| `agent/` | 独立 Agent Runtime：SDK、tools、extensions、内部 Run API | `agent/chat-runner.js`、`agent/server.js` |
+| `agent/` | 独立 Agent Runtime：SDK、tools、extensions、内部 Run API | `agent/runtime/agent-runtime.js`、`agent/server.js` |
 | `frontend/` | React + TypeScript Agent Runtime Workbench，Vite 构建，Nginx 托管 | `frontend/src/main.tsx`、`frontend/src/features/chat/ChatContext.tsx`、`frontend/src/entities/store.ts` |
 | `tests/` | 统一 pytest 测试，包括单元、FastAPI 集成、配置/容器契约 | `tests/test_integration.py`、`tests/test_container_startup.py` |
 | `skills/` | 空发行基线；研发环境可通过受审计 install/edit/reload 引入 Skill | 初始无 package |
@@ -38,8 +38,8 @@ Browser
 
 1. `frontend/src/shared/api/client.ts` 向 `POST /api/chat` 提交完整消息历史并消费 SSE。
 2. `api-server/routes/chat.js`（BFF）创建 Agent run（`POST /internal/agent-runs`）并 relay 序列化 SSE；**不** import `pi-coding-agent`。
-3. `agent/chat-runner.js` 创建/复用 conversation 与 sandbox session，初始化 `pi-coding-agent`。
-4. `agent/sandbox-tools.js` 将 `read/write/edit/bash/submit_artifact` 转为 Sandbox REST 调用；高风险 bash 先走审批。
+3. `agent/runtime/agent-runtime.js`（经 `application/run-manager.js`）创建/复用 conversation 与 sandbox session，初始化 `pi-coding-agent`。
+4. `enterprise-agent-kit` 的 sandbox-tools Extension 将 `read/write/edit/bash/submit_artifact` 转为 Sandbox REST 调用；高风险 bash 先走审批。
 5. `sandbox/routers/` 校验 HTTP 输入并调用 `sandbox/services/`；需要持久化时再进入 `sandbox/repositories.py`。
 6. `token/tool_start/tool_end/file_ready/done/error` 等事件经 BFF 回到浏览器；legacy adapter 将其转为 RuntimeEvent，run reducer 单次归约到 EntityStore，React 通过 selector/projection 渲染。
 
@@ -66,7 +66,7 @@ Browser
 
 - Python：Router 负责 HTTP 状态和 Pydantic 响应，Service 负责业务/安全，Repository 负责 SQL。例如 `routers/sessions.py` -> `services/session_manager.py` -> `repositories.py`。
 - Node BFF：`server.js` 只分派路径，`routes/*.js` 处理 HTTP/SSE relay，`services/sandbox-client.js` / `agent-client.js` 集中下游 fetch。
-- Node Agent：`server.js` 暴露内部 Run API；`chat-runner.js` 承载 SDK 循环。
+- Node Agent：`server.js` 暴露内部 Run API；`runtime/agent-runtime.js` 承载 SDK 循环；`application/run-manager.js` 管 run 注册表。
 - Frontend：`shared/api/` 管协议，`entities/` + `shared/state/runReducer.ts` 管 runtime 实体，
   `features/chat/ChatContext.tsx` 负责编排，`widgets/` / `pages/` 负责 React 展示。
 

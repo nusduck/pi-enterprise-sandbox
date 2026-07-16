@@ -8,7 +8,7 @@ import {
   extractMessageText,
   toAgentHistoryMessages,
   toPersistableMessages,
-} from '../../message-helpers.js';
+} from '../../runtime/message-helpers.js';
 
 describe('extractMessageText', () => {
   it('handles string content', () => {

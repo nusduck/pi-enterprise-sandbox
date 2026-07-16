@@ -97,7 +97,7 @@ Until those criteria are met, prefer Extension/custom tools, BFF mapping, and ve
 
 ## API surface inventory (this repo)
 
-Authoritative code: `agent/chat-runner.js`, `agent/sandbox-tools.js`, `agent/services/sdk-sse-map.js`, and `agent/tests/sdk-compat/`.
+Authoritative code: `agent/runtime/agent-runtime.js`, `agent/packages/enterprise-agent-kit/extensions/sandbox-tools/`, `agent/services/sdk-sse-map.js`, and `agent/tests/sdk-compat/`.
 
 ### Imports from `@earendil-works/pi-coding-agent`
 
@@ -180,8 +180,9 @@ Location: `agent/tests/sdk-compat/`.
 
 ## References
 
-- `agent/chat-runner.js`
-- `agent/sandbox-tools.js`
+- `agent/runtime/agent-runtime.js`
+- `agent/runtime/session-bootstrap.js`
+- `agent/packages/enterprise-agent-kit/extensions/sandbox-tools/`
 - `agent/services/sdk-sse-map.js`
 - `agent/tests/sdk-compat/`
 - `tests/fixtures/sse_events.json`

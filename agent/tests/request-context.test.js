@@ -15,7 +15,7 @@ import {
   setSandboxSessionId,
   getSandboxSessionId,
   setApprovalNotifier,
-} from '../sandbox-tools.js';
+} from '../packages/enterprise-agent-kit/extensions/sandbox-tools/tool-definitions.js';
 
 function mockClient(label) {
   const calls = [];

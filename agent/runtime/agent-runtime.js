@@ -28,11 +28,11 @@ import {
   extractMessageText,
   toAgentHistoryMessages,
   toPersistableMessages,
-} from '../message-helpers.js';
+} from './message-helpers.js';
 import {
   extractMessageAttachments,
   injectAttachmentContext,
-} from '../attachment-context.js';
+} from './attachment-context.js';
 import {
   createSkillTools,
   SKILL_TOOL_NAMES,
@@ -75,7 +75,7 @@ import {
   toPiModel,
 } from '../services/model-registry.js';
 
-// Re-export session bootstrap helpers so chat-runner / tests keep a stable surface.
+// Re-export session bootstrap helpers for tests and HTTP orchestration layers.
 export {
   resolveAgentSessionManager,
   resolveConversationAndSession,
