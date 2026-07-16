@@ -231,6 +231,9 @@ services:
       # Bubblewrap needs. This repo profile narrowly adds its child/user/mount
       # namespace operations without granting CAP_SYS_ADMIN.
       - seccomp=./sandbox/seccomp-bubblewrap.json
+      # Bubblewrap needs to create mount namespaces inside user namespaces;
+      # docker-default AppArmor denies mount even in new user namespaces.
+      - apparmor=unconfined
       # Allow the unprivileged mount namespace to mount its private /proc.
       - systempaths=unconfined
 
