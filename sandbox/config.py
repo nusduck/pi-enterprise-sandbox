@@ -214,6 +214,14 @@ class Settings(BaseSettings):
     max_attachments_per_turn: int = 10
     max_turn_attachment_mb: int = 200
 
+    # ── Shared execution environment ─────────────────────────────────
+    # Comma-separated process-env key names to inject into every bash/python/
+    # node/process_start child (after base safe_env, before env_overrides).
+    # Values are read from the sandbox service process environment (typically
+    # project .env via compose env_file). Service credentials are hard-denied
+    # even if listed. Prefer SANDBOX_EXEC_ENV_<NAME>=value for explicit opt-in.
+    shared_env_keys: Annotated[list[str], NoDecode] = []
+
     # ── Network (outbound process isolation) ─────────────────────────
     # Single mode drives command policy (default_deny_network) and should
     # match iptables posture set by entrypoint via the same env var.
@@ -295,7 +303,13 @@ class Settings(BaseSettings):
         # Prefer process env over .env file (standard) — already the case.
     )
 
-    @field_validator("allowed_client_cidrs", "trusted_proxy_cidrs", "cors_origins", mode="before")
+    @field_validator(
+        "allowed_client_cidrs",
+        "trusted_proxy_cidrs",
+        "cors_origins",
+        "shared_env_keys",
+        mode="before",
+    )
     @classmethod
     def _split_list_env(cls, value: Any) -> list[str]:
         # Operators pass comma-separated values; JSON arrays also accepted.

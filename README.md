@@ -110,6 +110,10 @@ SANDBOX_BASE_URL=http://localhost:8081
 | `SANDBOX_MAX_FILE_SIZE_MB` | `50` | 单文件大小上限 |
 | `SANDBOX_WORKSPACE_QUOTA_MB` | `500` | 工作区总空间上限 |
 | `SANDBOX_TEMP_QUOTA_MB` | `500` | Conversation 持久化 `/tmp` 空间上限 |
+| `SANDBOX_SHARED_ENV_KEYS` | _(空)_ | 逗号分隔；从 sandbox 进程 env 注入到每次 bash/python/node/process 子进程 |
+| `SANDBOX_EXEC_ENV_<NAME>` | — | 显式 opt-in：子进程得到 `NAME=value`（推荐） |
+
+共享执行 env 不会继承全部服务环境；`SANDBOX_API_TOKEN` / DB 密码等硬拒绝。单次 `env_overrides` 优先。
 
 ### 会话管理
 

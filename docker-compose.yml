@@ -144,6 +144,11 @@ services:
       dockerfile: ${SANDBOX_DOCKERFILE:-sandbox/Dockerfile}
     image: ${SANDBOX_IMAGE:-enterprise-sandbox:latest}
     container_name: ${SANDBOX_CONTAINER:-pi-enterprise-sandbox}
+    # Load project .env so SANDBOX_SHARED_ENV_KEYS / SANDBOX_EXEC_ENV_* values
+    # are present on the service process for child-exec injection (safe_env).
+    # Child processes still never inherit the full env — only allowlisted keys.
+    env_file:
+      - ${SANDBOX_ENV_FILE:-.env}
     volumes:
       # P3 agent path: /home/sandbox/skill; keep /sandbox/skills for legacy tools
       - ${SANDBOX_SKILLS_MOUNT:-./skills:/home/sandbox/skill:ro}
@@ -177,6 +182,9 @@ services:
       SANDBOX_MAX_FILE_SIZE_MB: ${SANDBOX_MAX_FILE_SIZE_MB:-50}
       SANDBOX_WORKSPACE_QUOTA_MB: ${SANDBOX_WORKSPACE_QUOTA_MB:-500}
       SANDBOX_TEMP_QUOTA_MB: ${SANDBOX_TEMP_QUOTA_MB:-500}
+      # Comma-separated keys from process env injected into every execution/process.
+      # Also: SANDBOX_EXEC_ENV_<NAME>=value (from env_file) → NAME in children.
+      SANDBOX_SHARED_ENV_KEYS: ${SANDBOX_SHARED_ENV_KEYS:-}
       SANDBOX_SESSION_TTL_MINUTES: ${SANDBOX_SESSION_TTL_MINUTES:-30}
       SANDBOX_CLEANUP_INTERVAL_MINUTES: ${SANDBOX_CLEANUP_INTERVAL_MINUTES:-5}
       # Single outbound network mode (disabled|allowlist|unrestricted).
