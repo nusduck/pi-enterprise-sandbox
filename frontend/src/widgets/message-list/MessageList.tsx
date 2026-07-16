@@ -25,11 +25,13 @@ export function MessageList() {
     >
       {displayMessages.length === 0 ? (
         <div className="welcome">
-          <div className="icon">π</div>
-          <h2>How can I help?</h2>
+          <div className="icon">
+            <img src="/brand/uprc-icon.svg" alt="" width={56} height={56} />
+          </div>
+          <h2>UPRC Agent</h2>
           <p>
-            A focused sandbox for building, reviewing, and shipping with an
-            agent. Upload files or just start typing.
+            Risk-control AI agent runtime — policy-gated tools, approvals, and
+            audited execution. Upload files or start typing.
           </p>
           <p className="welcome-hints">
             <kbd>Enter</kbd> send · <kbd>Shift+Enter</kbd> newline ·{' '}
@@ -39,7 +41,13 @@ export function MessageList() {
       ) : (
         displayMessages.map((msg, idx) => (
           <MessageBubble
-            key={`${msg.role}-${idx}-${msg.content?.[0] && 'text' in msg.content[0] ? String(msg.content[0].text).slice(0, 24) : idx}`}
+            key={
+              msg._runId
+                ? `${msg.role}-${msg._runId}`
+                : msg._messageId
+                  ? `${msg.role}-${msg._messageId}`
+                  : `${msg.role}-${idx}`
+            }
             msg={msg}
             idx={idx}
           />

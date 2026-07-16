@@ -472,6 +472,37 @@ export function createSandboxClient({ traceId = null, auth = null } = {}) {
       return resp.json();
     },
 
+    /**
+     * Run a Python code string via Sandbox (no shell). Writes temp .py then
+     * `python3 -u <file>` — avoids bash quoting / policy-parser fail-closed.
+     * @param {string} sessionId
+     * @param {string} code
+     * @param {number} [timeout]
+     */
+    async executePython(sessionId, code, timeout = 120) {
+      const resp = await sbFetch(`/sessions/${sessionId}/executions/python`, {
+        method: 'POST',
+        body: JSON.stringify({ code, timeout }),
+        timeoutMs: timeoutForSeconds(timeout),
+      });
+      return resp.json();
+    },
+
+    /**
+     * Run a Node.js code string via Sandbox (no shell).
+     * @param {string} sessionId
+     * @param {string} code
+     * @param {number} [timeout]
+     */
+    async executeNode(sessionId, code, timeout = 120) {
+      const resp = await sbFetch(`/sessions/${sessionId}/executions/node`, {
+        method: 'POST',
+        body: JSON.stringify({ code, timeout }),
+        timeoutMs: timeoutForSeconds(timeout),
+      });
+      return resp.json();
+    },
+
     async cancelExecution(sessionId, executionId) {
       const resp = await sbFetch(
         `/sessions/${sessionId}/executions/${encodeURIComponent(executionId)}/cancel`,

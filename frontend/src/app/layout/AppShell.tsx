@@ -31,7 +31,7 @@ function managementTitle(pathname: string): string {
   if (pathname === '/runs') return 'Active Runs';
   if (pathname === '/approvals') return 'Approvals';
   if (pathname.startsWith('/settings')) return 'Capabilities';
-  return 'Sandbox';
+  return 'UPRC Agent';
 }
 
 export function AppShell({ children }: { children: ReactNode }) {
@@ -102,7 +102,7 @@ export function AppShell({ children }: { children: ReactNode }) {
                 ☰
               </button>
               <div className="logo" aria-hidden="true">
-                π
+                <img src="/brand/uprc-icon.svg" alt="" width={28} height={28} />
               </div>
               <h1>{managementTitle(location.pathname)}</h1>
               <div className="badge" aria-live="polite">

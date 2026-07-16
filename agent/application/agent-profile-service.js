@@ -25,6 +25,8 @@ const CODING_AGENT_PROFILE = Object.freeze({
     'find',
     'grep',
     'bash',
+    'run_python',
+    'run_node',
     'process_start',
     'process_status',
     'process_logs',

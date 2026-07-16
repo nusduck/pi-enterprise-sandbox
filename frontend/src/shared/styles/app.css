@@ -213,15 +213,19 @@ body {
   width: 28px;
   height: 28px;
   border-radius: var(--radius-sm);
-  background: var(--color-primary);
+  background: transparent;
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 13px;
-  font-weight: 700;
-  color: var(--color-text-inverse);
-  letter-spacing: -0.02em;
+  overflow: hidden;
   box-shadow: var(--shadow-sm);
+  flex-shrink: 0;
+}
+.header .logo img {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: cover;
 }
 .header h1 {
   font-size: var(--font-size-lg);
@@ -317,9 +321,19 @@ body {
   text-align: center;
 }
 .welcome .icon {
-  font-size: 40px;
-  opacity: 0.55;
-  margin-bottom: var(--space-2);
+  width: 56px;
+  height: 56px;
+  margin: 0 auto var(--space-3);
+  border-radius: 14px;
+  overflow: hidden;
+  box-shadow: var(--shadow-md);
+  opacity: 1;
+}
+.welcome .icon img {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: cover;
 }
 .welcome h2 {
   font-size: var(--font-size-2xl);
@@ -2110,17 +2124,21 @@ body {
   padding-left: 2px;
 }
 .sidebar-brand-mark {
-  width: 26px;
-  height: 26px;
+  width: 28px;
+  height: 28px;
   border-radius: var(--radius-sm);
-  background: var(--color-primary);
-  color: var(--color-text-inverse);
+  background: transparent;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  font-size: 13px;
-  font-weight: 700;
+  overflow: hidden;
   flex-shrink: 0;
+}
+.sidebar-brand-mark img {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: cover;
 }
 .sidebar-brand-name {
   font-size: var(--font-size-md);

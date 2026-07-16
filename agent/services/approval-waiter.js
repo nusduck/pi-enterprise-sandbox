@@ -134,6 +134,11 @@ export function _resetApprovalWaiters() {
 /**
  * Error thrown to park a run without completing the in-flight tool via poll.
  * Tool ledger stays waiting_approval; resources are released by the runner.
+ *
+ * Prefer {@link createApprovalPendingToolResult} at tool boundaries: pi-agent-core
+ * converts thrown errors into durable error toolResult messages that pollute the
+ * model context after resume. Returning a terminate result stops the loop without
+ * embedding "Approval suspended: …" as the tool's official outcome.
  */
 export class ApprovalSuspendedError extends Error {
   /**
@@ -144,4 +149,50 @@ export class ApprovalSuspendedError extends Error {
     this.name = 'ApprovalSuspendedError';
     this.pending = pending;
   }
+}
+
+/** Marker text stored in the temporary toolResult while approval is pending. */
+export const APPROVAL_PENDING_TOOL_RESULT_TEXT =
+  '[approval_pending] Waiting for operator approval. Do not treat this as a tool failure.';
+
+/**
+ * Tool result returned when an approval gate parks the run.
+ *
+ * - `terminate: true` stops pi-agent-core from starting another LLM turn with
+ *   the placeholder as context (avoids "let me try another way" before approve).
+ * - `isError: false` so the model does not treat the pause as a failed tool.
+ * - `details.approval_suspended` lets resume rewrite this slot with the real result.
+ *
+ * @param {PendingApproval|null|undefined} pending
+ * @returns {{ content: Array<{type:string,text:string}>, details: object, isError: false, terminate: true }}
+ */
+export function createApprovalPendingToolResult(pending) {
+  const approvalId = pending?.approval_id || null;
+  return {
+    content: [{ type: 'text', text: APPROVAL_PENDING_TOOL_RESULT_TEXT }],
+    details: {
+      approval_suspended: true,
+      approval_id: approvalId,
+      tool_call_id: pending?.tool_call_id || null,
+      tool_name: pending?.tool_name || null,
+    },
+    isError: false,
+    terminate: true,
+  };
+}
+
+/**
+ * @param {unknown} result
+ * @returns {boolean}
+ */
+export function isApprovalPendingToolResult(result) {
+  if (!result || typeof result !== 'object') return false;
+  if (result.details?.approval_suspended === true) return true;
+  const text = Array.isArray(result.content)
+    ? result.content
+        .filter((p) => p?.type === 'text' && p.text)
+        .map((p) => String(p.text))
+        .join('\n')
+    : '';
+  return text.includes('[approval_pending]');
 }

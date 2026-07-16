@@ -92,6 +92,8 @@ export const BASE_TOOL_NAMES = [
   'edit',
   'apply_patch',
   'bash',
+  'run_python',
+  'run_node',
   'ls',
   'find',
   'grep',
@@ -163,6 +165,89 @@ export function buildCreateAgentSessionOptions(opts) {
  */
 
 /**
+ * Replace a parked approval placeholder toolResult (or legacy "Approval suspended"
+ * error toolResult) with the real post-approve outcome in both live agent state
+ * and the durable SessionManager branch.
+ *
+ * @param {object|null|undefined} session - AgentSession
+ * @param {{
+ *   toolCallId: string,
+ *   toolName: string,
+ *   content: unknown[],
+ *   details?: object,
+ *   isError?: boolean,
+ * }} replacement
+ * @returns {boolean} true if a matching toolResult slot was rewritten
+ */
+export function replaceSuspendedToolResultInSession(session, replacement) {
+  if (!session || !replacement?.toolCallId) return false;
+  const toolCallId = String(replacement.toolCallId);
+  const content = Array.isArray(replacement.content) ? replacement.content : [];
+  const details =
+    replacement.details && typeof replacement.details === 'object'
+      ? replacement.details
+      : {};
+  const isError = Boolean(replacement.isError);
+  let rewrote = false;
+
+  const messages = session.agent?.state?.messages;
+  if (Array.isArray(messages)) {
+    for (let i = messages.length - 1; i >= 0; i -= 1) {
+      const msg = messages[i];
+      if (msg?.role !== 'toolResult') continue;
+      if (String(msg.toolCallId || '') !== toolCallId) continue;
+      // Resume owns this tool_call_id — replace whatever placeholder or
+      // legacy "Approval suspended" error is sitting in the slot.
+      messages[i] = {
+        ...msg,
+        toolName: replacement.toolName || msg.toolName,
+        content,
+        details: { ...(msg.details || {}), ...details },
+        isError,
+      };
+      rewrote = true;
+      break;
+    }
+  }
+
+  const sm = session.sessionManager;
+  if (sm && typeof sm.getEntries === 'function' && typeof sm.branch === 'function') {
+    try {
+      const entries = sm.getEntries() || [];
+      let suspendedEntry = null;
+      for (let i = entries.length - 1; i >= 0; i -= 1) {
+        const entry = entries[i];
+        const msg = entry?.message;
+        if (entry?.type !== 'message' || msg?.role !== 'toolResult') continue;
+        if (String(msg.toolCallId || '') !== toolCallId) continue;
+        suspendedEntry = entry;
+        break;
+      }
+      if (suspendedEntry?.parentId && typeof sm.appendMessage === 'function') {
+        sm.branch(suspendedEntry.parentId);
+        sm.appendMessage({
+          role: 'toolResult',
+          toolCallId,
+          toolName: replacement.toolName || suspendedEntry.message?.toolName || 'tool',
+          content,
+          details,
+          isError,
+          timestamp: Date.now(),
+        });
+        rewrote = true;
+      }
+    } catch (err) {
+      console.warn(
+        '[agent] failed to branch-replace suspended toolResult:',
+        err?.message || err,
+      );
+    }
+  }
+
+  return rewrote;
+}
+
+/**
  * Run one agent turn.
  *
  * @param {{
@@ -218,6 +303,8 @@ export async function runAgentTurn(opts) {
   /** @type {null | { cleanup: () => void, sessionManager: object, agentSessionId: string|null, persistedCount: number, forceInMemory?: boolean, restored?: boolean }} */
   let sessionHandle = null;
   let assistantText = '';
+  /** @type {(opts?: { interrupted?: boolean, assistantNote?: string|null }) => Promise<void>} */
+  let persistConversationTranscript = async () => {};
   let runTerminal = false;
   /** @type {import('../services/model-registry.js').ModelEntry | null} */
   let activeModelEntry = null;
@@ -939,6 +1026,48 @@ export async function runAgentTurn(opts) {
       );
     }
 
+    /**
+     * Persist the conversation transcript for UI reload.
+     * Must run on *every* terminal path (completed, budget_exceeded, failed,
+     * cancelled) — not only success — otherwise user bubbles vanish after
+     * timeout and only run-projected assistants remain.
+     *
+     * @param {{ interrupted?: boolean, assistantNote?: string|null }} [opts]
+     */
+    persistConversationTranscript = async (opts = {}) => {
+      if (!activeConversationId || typeof client.updateConversation !== 'function') {
+        return;
+      }
+      try {
+        const persisted = toPersistableMessages(allMessages);
+        let assistant = String(assistantText || '').trim();
+        if (opts.assistantNote) {
+          const note = String(opts.assistantNote).trim();
+          if (note) {
+            assistant = assistant ? `${assistant}\n\n${note}` : note;
+          }
+        }
+        if (assistant) {
+          const last = persisted[persisted.length - 1];
+          if (!(last?.role === 'assistant' && last.content === assistant)) {
+            persisted.push({ role: 'assistant', content: assistant });
+          }
+        }
+        await client.updateConversation(activeConversationId, {
+          messages: persisted,
+          sandbox_session_id: sandboxSessionId || undefined,
+          agent_session_id: activeAgentSessionId || undefined,
+          interrupted: Boolean(opts.interrupted),
+          last_run_id: activeRunId || undefined,
+        });
+      } catch (err) {
+        console.warn(
+          '[agent] Failed to persist conversation messages:',
+          err?.message || err,
+        );
+      }
+    };
+
     const enforceBudgetOrAbort = async (checkResult) => {
       if (!checkResult?.exceeded) {
         if (budget.consumeNearWarning()) {
@@ -1057,18 +1186,70 @@ export async function runAgentTurn(opts) {
         };
         emit(replayEnd);
         await persistEvent('tool_end', replayEnd);
-        resumePromptText =
-          `[system] Approval ${resume_tool_call.approval_id} granted. ` +
-          `The original ${replayName} tool call was executed exactly once with ` +
-          `the approved arguments. Its result${replayError ? ' (error)' : ''} is:\n` +
-          `${resultText || '(no textual output)'}` +
-          '\nContinue the task without reissuing this same tool call.';
+
+        // Rewrite the parked [approval_pending] / legacy "Approval suspended"
+        // toolResult so the model sees only the real outcome for this tool_call_id.
+        // Otherwise it treats the pause message as a failed network call and
+        // re-issues bash after already receiving the successful payload.
+        const rewrote = replaceSuspendedToolResultInSession(session, {
+          toolCallId: replayId,
+          toolName: replayName,
+          content: filtered.content,
+          details: {
+            ...(safeReplayResult.details && typeof safeReplayResult.details === 'object'
+              ? safeReplayResult.details
+              : {}),
+            approval_replay: true,
+            approval_id: resume_tool_call.approval_id,
+          },
+          isError: replayError,
+        });
+        if (rewrote) {
+          resumePromptText =
+            `[system] Approval ${resume_tool_call.approval_id} granted. ` +
+            `The original ${replayName} tool call (id=${replayId}) was executed exactly once; ` +
+            `its result${replayError ? ' (error)' : ''} is already recorded as the tool result ` +
+            `for that call. Continue the task using that result. ` +
+            `Do not reissue the same tool call.`;
+        } else {
+          // Fallback when session history has no placeholder to rewrite
+          // (e.g. older checkpoints): keep the result in the continue prompt.
+          resumePromptText =
+            `[system] Approval ${resume_tool_call.approval_id} granted. ` +
+            `The original ${replayName} tool call was executed exactly once with ` +
+            `the approved arguments. Its result${replayError ? ' (error)' : ''} is:\n` +
+            `${resultText || '(no textual output)'}` +
+            '\nContinue the task without reissuing this same tool call.';
+        }
       } else {
         // MCP/other extension approvals do not expose a local definition;
-        // preserve the model-mediated fallback for those tools.
+        // still try to clear any pending placeholder so the model is not told
+        // both "approval suspended" and "please re-execute".
+        if (resume_tool_call.tool_call_id) {
+          replaceSuspendedToolResultInSession(session, {
+            toolCallId: String(resume_tool_call.tool_call_id),
+            toolName: String(resume_tool_call.tool_name || 'tool'),
+            content: [
+              {
+                type: 'text',
+                text:
+                  `[approval_granted] Approval ${resume_tool_call.approval_id} granted. ` +
+                  `Re-execute \`${resume_tool_call.tool_name}\` with the same arguments once, ` +
+                  `then continue. Do not treat any prior approval-pending placeholder as failure.`,
+              },
+            ],
+            details: {
+              approval_replay: true,
+              approval_id: resume_tool_call.approval_id,
+              needs_model_reexecute: true,
+            },
+            isError: false,
+          });
+        }
         resumePromptText =
           `[system] Approval ${resume_tool_call.approval_id} granted for tool ` +
-          `\`${resume_tool_call.tool_name}\`. Re-execute that tool with the same arguments and continue.`;
+          `\`${resume_tool_call.tool_name}\`. Re-execute that tool with the same arguments once ` +
+          `and continue. Ignore any prior [approval_pending] placeholder for this call.`;
       }
     }
 
@@ -1098,14 +1279,22 @@ export async function runAgentTurn(opts) {
         });
         if (isCancelled()) {
           await markRunInterrupted('cancelled');
+          await persistConversationTranscript({ interrupted: true });
           return {
             status: 'cancelled',
             run_id: activeRunId,
             conversation_id: activeConversationId,
           };
         }
+        // Durably store the user turn *before* the long agent loop so a
+        // budget/timeout failure still leaves the user bubble after reload.
+        await persistConversationTranscript();
         const stepCheck = budget.recordStep();
         if (await enforceBudgetOrAbort(stepCheck)) {
+          await persistConversationTranscript({
+            interrupted: true,
+            assistantNote: `[Error: ${stepCheck.reason || 'budget_exceeded'}]`,
+          });
           emit({ type: 'done', status: 'budget_exceeded' });
           emit({ type: 'session_closed', session_id: sandboxSessionId });
           return {
@@ -1118,6 +1307,10 @@ export async function runAgentTurn(opts) {
         // Duration check before prompt
         const dur = budget.check();
         if (await enforceBudgetOrAbort(dur)) {
+          await persistConversationTranscript({
+            interrupted: true,
+            assistantNote: `[Error: ${dur.reason || 'budget_exceeded'}]`,
+          });
           emit({ type: 'done', status: 'budget_exceeded' });
           emit({ type: 'session_closed', session_id: sandboxSessionId });
           return {
@@ -1139,6 +1332,8 @@ export async function runAgentTurn(opts) {
 
     if (suspendedPending) {
       // Resources already released in handleApprovalSuspend; do not complete run.
+      // Still persist user + partial assistant so refresh keeps the turn.
+      await persistConversationTranscript({ interrupted: true });
       emit({
         type: 'run_status',
         status: 'waiting_approval',
@@ -1154,6 +1349,7 @@ export async function runAgentTurn(opts) {
     }
 
     if (suspendedInput) {
+      await persistConversationTranscript({ interrupted: true });
       emit({
         type: 'run_status',
         status: 'waiting_input',
@@ -1170,6 +1366,7 @@ export async function runAgentTurn(opts) {
 
     if (isCancelled()) {
       await markRunInterrupted('cancelled');
+      await persistConversationTranscript({ interrupted: true });
       emit({ type: 'session_closed', session_id: sandboxSessionId });
       return {
         status: 'cancelled',
@@ -1181,6 +1378,10 @@ export async function runAgentTurn(opts) {
     const finalBudget = budget.check();
     if (finalBudget.exceeded) {
       await markBudgetExceeded(finalBudget.reason);
+      await persistConversationTranscript({
+        interrupted: true,
+        assistantNote: `[Error: ${finalBudget.reason || 'budget_exceeded'}]`,
+      });
       emit({
         type: 'budget_exceeded',
         reason: finalBudget.reason,
@@ -1196,21 +1397,7 @@ export async function runAgentTurn(opts) {
       };
     }
 
-    try {
-      const persisted = toPersistableMessages(allMessages);
-      if (assistantText.trim()) {
-        persisted.push({ role: 'assistant', content: assistantText.trim() });
-      }
-      await client.updateConversation(activeConversationId, {
-        messages: persisted,
-        sandbox_session_id: sandboxSessionId,
-        agent_session_id: activeAgentSessionId || undefined,
-        interrupted: false,
-        last_run_id: activeRunId || undefined,
-      });
-    } catch (err) {
-      console.warn('[agent] Failed to persist conversation messages:', err.message);
-    }
+    await persistConversationTranscript({ interrupted: false });
 
     const runUsage = collectRunUsage();
     if (runUsage) {
@@ -1358,6 +1545,15 @@ export async function runAgentTurn(opts) {
       });
     } else {
       emit({ type: 'error', message: err.message || String(err) });
+    }
+    // Keep user + partial assistant on hard failure (reload-safe).
+    try {
+      await persistConversationTranscript({
+        interrupted: true,
+        assistantNote: `[Error: ${err?.message || String(err)}]`,
+      });
+    } catch {
+      /* best-effort */
     }
     // An exception can arrive immediately after tool_end. Drain its durable
     // boundary before marking the run failed so the ledger cannot lag status.

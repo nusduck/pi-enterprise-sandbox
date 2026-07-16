@@ -152,22 +152,18 @@ describe('createSandboxTools concurrent contexts', () => {
     assert.equal(last.sessionId, 'session-a-rotated');
     assert.equal(notifsB.length, 0);
 
-    // Concurrent approval paths (B6): tools suspend with ApprovalSuspendedError
-    // after notifying — no in-tool getApproval polling. Notifiers must not cross-talk.
-    const [errA, errB] = await Promise.all([
-      bashA.execute('tc-a5', { command: 'need-approval-A' }).then(
-        () => null,
-        (e) => e,
-      ),
-      bashB.execute('tc-b5', { command: 'need-approval-B' }).then(
-        () => null,
-        (e) => e,
-      ),
+    // Concurrent approval paths (B6): tools park via terminate placeholder after
+    // notifying — no in-tool getApproval polling. Notifiers must not cross-talk.
+    const [resA, resB] = await Promise.all([
+      bashA.execute('tc-a5', { command: 'need-approval-A' }),
+      bashB.execute('tc-b5', { command: 'need-approval-B' }),
     ]);
-    assert.equal(errA?.name, 'ApprovalSuspendedError', `expected suspend A, got ${errA}`);
-    assert.equal(errB?.name, 'ApprovalSuspendedError', `expected suspend B, got ${errB}`);
-    assert.equal(errA?.pending?.approval_id, 'appr-A');
-    assert.equal(errB?.pending?.approval_id, 'appr-B');
+    assert.equal(resA?.details?.approval_suspended, true, `expected suspend A, got ${JSON.stringify(resA)}`);
+    assert.equal(resB?.details?.approval_suspended, true, `expected suspend B, got ${JSON.stringify(resB)}`);
+    assert.equal(resA?.details?.approval_id, 'appr-A');
+    assert.equal(resB?.details?.approval_id, 'appr-B');
+    assert.equal(resA?.terminate, true);
+    assert.equal(resB?.terminate, true);
     assert.ok(
       notifsA.some((n) => n.type === 'approval_required' && n.approval_id === 'appr-A'),
       `expected notifier A to receive appr-A, got ${JSON.stringify(notifsA)}`,

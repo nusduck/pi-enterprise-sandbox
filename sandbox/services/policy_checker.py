@@ -49,6 +49,7 @@ _TOOL_RISK_MAP: dict[str, RiskLevel] = {
     "apply_patch": RiskLevel.MEDIUM,
     "submit_artifact": RiskLevel.MEDIUM,
     "run_python": RiskLevel.MEDIUM,
+    "run_node": RiskLevel.MEDIUM,
     "bash": RiskLevel.MEDIUM,
     "command": RiskLevel.MEDIUM,
     # High risk

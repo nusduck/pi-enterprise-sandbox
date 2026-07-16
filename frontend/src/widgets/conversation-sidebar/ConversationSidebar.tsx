@@ -107,9 +107,9 @@ export function ConversationSidebar() {
         <div className="sidebar-head">
           <div className="sidebar-brand">
             <span className="sidebar-brand-mark" aria-hidden="true">
-              π
+              <img src="/brand/uprc-icon.svg" alt="" width={28} height={28} />
             </span>
-            <span className="sidebar-brand-name">Sandbox</span>
+            <span className="sidebar-brand-name">UPRC Agent</span>
           </div>
           <button
             type="button"

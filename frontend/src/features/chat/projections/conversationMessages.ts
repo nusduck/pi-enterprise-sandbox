@@ -16,7 +16,13 @@ function hasRuntimeDetail(message: ChatMessage): boolean {
   );
 }
 
-/** Merge server transcript rows with normalized per-Run runtime projections. */
+/**
+ * Merge server transcript rows with live per-Run projections.
+ *
+ * Critical UX: pure text streaming (token deltas) must replace the assistant
+ * slot on every update. Previously we only wrote when tools/artifacts were
+ * present, so the UI stayed blank until the first tool_end / run completion.
+ */
 export function projectConversationMessages(options: {
   serverMessages: ChatMessage[];
   conversationId: string | null;
@@ -61,20 +67,20 @@ export function projectConversationMessages(options: {
     }
 
     const serverMessage = result[slot];
-    if (hasRuntimeDetail(projected)) {
-      // Persisted runtime events may omit text after retention or compaction.
-      // Preserve the durable transcript text while adding tools/artifacts.
-      if (!text && messageText(serverMessage)) {
-        result[slot] = {
-          ...projected,
-          content: [
-            ...serverMessage.content.filter((part) => part.type === 'text'),
-            ...projected.content,
-          ],
-        };
-      } else {
-        result[slot] = projected;
-      }
+    // Always apply live projection when it has text and/or runtime detail.
+    // Token-only streaming has no tool_use yet; skipping it froze the bubble.
+    if (hasRuntimeDetail(projected) && !text && messageText(serverMessage)) {
+      // Persisted runtime may omit text after retention/compaction — keep
+      // durable transcript text while attaching tools/artifacts.
+      result[slot] = {
+        ...projected,
+        content: [
+          ...serverMessage.content.filter((part) => part.type === 'text'),
+          ...projected.content,
+        ],
+      };
+    } else {
+      result[slot] = projected;
     }
   });
 

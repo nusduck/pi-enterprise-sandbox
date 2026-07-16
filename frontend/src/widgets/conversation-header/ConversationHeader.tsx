@@ -136,7 +136,7 @@ export function ConversationHeader() {
               >
                 {agentSession
                   ? `Session ${agentSession.status}`
-                  : `Sandbox …${(activeSessionId || '').slice(-6)}`}
+                  : `UPRC …${(activeSessionId || '').slice(-6)}`}
               </span>
             ) : null}
           </div>

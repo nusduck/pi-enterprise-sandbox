@@ -36,7 +36,12 @@ export function summarizeToolArguments(
       const bytes = byteLength(value);
       const alwaysHash = toolName === 'skill_edit' && key === 'content';
       if (alwaysHash || bytes > maxStringBytes) {
-        if (key === 'content' || key === 'old_string' || key === 'new_string') {
+        if (
+          key === 'content' ||
+          key === 'code' ||
+          key === 'old_string' ||
+          key === 'new_string'
+        ) {
           out[`${key}_bytes`] = bytes;
           out[`${key}_sha256`] = digest(value);
           continue;

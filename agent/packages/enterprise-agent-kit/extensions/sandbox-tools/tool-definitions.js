@@ -2,7 +2,8 @@
  * Sandbox tool definitions for pi-coding-agent.
  * Each tool defers execution to a request-scoped sandbox client.
  *
- * Tools: read, write, edit, apply_patch, bash, submit_artifact, ls, find, grep,
+ * Tools: read, write, edit, apply_patch, bash, run_python, run_node,
+ *        submit_artifact, ls, find, grep,
  *        process_start/status/logs/wait/write_stdin/signal/cancel
  *
  * Prefer createSandboxTools({ client, sessionId|getSessionId, approvalNotifier })
@@ -39,7 +40,10 @@ import {
   isReadonlySkillExecution,
   DEFAULT_SKILL_ROOTS,
 } from '../../../../skills/paths.js';
-import { ApprovalSuspendedError } from '../../../../services/approval-waiter.js';
+import {
+  ApprovalSuspendedError,
+  createApprovalPendingToolResult,
+} from '../../../../services/approval-waiter.js';
 import { normalizeWorkspaceToolParams } from '../../../../runtime/workspace-paths.js';
 import { summarizeToolArguments } from '../../../../runtime/tool-payload-sanitizer.js';
 
@@ -516,9 +520,22 @@ export function createSandboxTools(ctx = {}) {
       });
     } catch (err) {
       // Do not terminalize suspended approvals — resume will complete the ledger.
+      // Return a terminate placeholder instead of rethrowing: pi-agent-core turns
+      // thrown errors into durable isError toolResults ("Approval suspended: …")
+      // that stay in the model context after resume and cause redundant tool calls.
       if (err instanceof ApprovalSuspendedError || err?.name === 'ApprovalSuspendedError') {
         await markWaitingApproval();
-        throw err;
+        result = createApprovalPendingToolResult(
+          err.pending || { tool_call_id: callId },
+        );
+        // Skip terminal mark below — ledger stays waiting_approval for resume.
+        if (result && typeof result === 'object') {
+          result.details = {
+            ...(result.details || {}),
+            tool_call_id: callId,
+          };
+        }
+        return result;
       }
       thrown = err;
       result = {
@@ -898,8 +915,9 @@ export function createSandboxTools(ctx = {}) {
     name: 'bash',
     label: 'Run Command',
     description:
-      'Run a shell command in the sandbox (Python, bash, node). ' +
-      'Destructive or network-related commands may pause for human approval.',
+      'Run a shell command in the sandbox. Prefer run_python / run_node for multi-line ' +
+      'Python or Node code (no shell quoting). Destructive or network-related commands ' +
+      'may pause for human approval.',
     parameters: Type.Object({
       command: Type.String({ description: 'Shell command' }),
       timeout: Type.Optional(Type.Number({ description: 'Seconds (max 300)' })),
@@ -931,6 +949,98 @@ export function createSandboxTools(ctx = {}) {
         return {
           content: [{ type: 'text', text: `Error: ${err.message}` }],
           details: { isError: true },
+        };
+      }
+    }),
+  };
+
+  // ── Tool: run_python ─────────────────────────────
+  // Sandbox writes code to a temp file and runs python3 -u (no bash -c).
+
+  function formatExecutionResult(r) {
+    const isErr = r.exit_code != null && r.exit_code !== 0;
+    const out = [
+      r.stdout_preview ? `STDOUT:\n${r.stdout_preview}` : '',
+      r.stderr_preview ? `STDERR:\n${r.stderr_preview}` : '',
+    ]
+      .filter(Boolean)
+      .join('\n\n') || '(no output)';
+    return {
+      content: [{ type: 'text', text: out }],
+      details: {
+        exit_code: r.exit_code,
+        duration_ms: r.duration_ms,
+        execution_id: r.execution_id,
+        truncated: r.truncated,
+      },
+      isError: isErr,
+    };
+  }
+
+  const runPythonTool = {
+    name: 'run_python',
+    label: 'Run Python',
+    description:
+      'Execute a Python code string in the sandbox (no shell). Prefer this over ' +
+      '`bash python3 -c ...` for multi-line code, quotes, or data processing. ' +
+      'Does not install packages; use bash only when a shell pipeline is required. ' +
+      'For long-running servers prefer process_start.',
+    parameters: Type.Object({
+      code: Type.String({ description: 'Python source to execute' }),
+      timeout: Type.Optional(Type.Number({ description: 'Seconds (max 300)' })),
+    }),
+    execute: wrapExecute('run_python', async (_toolCallId, params) => {
+      const code = String(params.code || '');
+      if (!code.trim()) {
+        return {
+          content: [{ type: 'text', text: 'Error: code is required' }],
+          details: { isError: true },
+          isError: true,
+        };
+      }
+      try {
+        const r = await sb.executePython(getSessionId(), code, params.timeout || 120);
+        return formatExecutionResult(r);
+      } catch (err) {
+        return {
+          content: [{ type: 'text', text: `Error: ${err.message}` }],
+          details: { isError: true },
+          isError: true,
+        };
+      }
+    }),
+  };
+
+  // ── Tool: run_node ───────────────────────────────
+
+  const runNodeTool = {
+    name: 'run_node',
+    label: 'Run Node.js',
+    description:
+      'Execute a Node.js code string in the sandbox (no shell). Prefer this over ' +
+      '`bash node -e ...` for multi-line scripts. Does not install packages; use bash ' +
+      'for npm/shell pipelines. For long-running servers prefer process_start.',
+    parameters: Type.Object({
+      code: Type.String({ description: 'JavaScript source to execute' }),
+      timeout: Type.Optional(Type.Number({ description: 'Seconds (max 300)' })),
+    }),
+    execute: wrapExecute('run_node', async (_toolCallId, params) => {
+      const code = String(params.code || '');
+      if (!code.trim()) {
+        return {
+          content: [{ type: 'text', text: 'Error: code is required' }],
+          details: { isError: true },
+          isError: true,
+        };
+      }
+      try {
+        const r = await sb.executeNode(getSessionId(), code, params.timeout || 120);
+        return formatExecutionResult(r);
+      } catch (err) {
+        return {
+          content: [{ type: 'text', text: `Error: ${err.message}` }],
+          details: { isError: true },
+          isError: true,
         };
       }
     }),
@@ -1425,6 +1535,8 @@ export function createSandboxTools(ctx = {}) {
     editTool,
     applyPatchTool,
     bashTool,
+    runPythonTool,
+    runNodeTool,
     submitArtifactTool,
     lsTool,
     findTool,

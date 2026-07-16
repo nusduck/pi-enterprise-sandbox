@@ -65,7 +65,7 @@ describe('tool side-effect classification', () => {
   });
 
   it('classifies write tools as serial', () => {
-    for (const t of ['write', 'edit', 'bash', 'submit_artifact']) {
+    for (const t of ['write', 'edit', 'bash', 'run_python', 'run_node', 'submit_artifact']) {
       assert.equal(classifyToolSideEffect(t), 'write');
     }
   });

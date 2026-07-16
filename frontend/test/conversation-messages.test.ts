@@ -64,4 +64,50 @@ describe('conversation message projection', () => {
     assert.equal(assistants[0].content.find((part) => part.type === 'tool_use')?.name, 'read');
     assert.equal(assistants[1].content.find((part) => part.type === 'tool_use')?.name, 'bash');
   });
+
+  it('streams pure token text without waiting for tools', () => {
+    let store = createEntityStore();
+    store = upsertRun(store, createRun({
+      id: 'run_stream',
+      conversationId: 'conv_stream',
+      createdAt: '2026-07-16T00:00:01Z',
+    }));
+
+    const serverMessages: ChatMessage[] = [
+      { role: 'user', content: [{ type: 'text', text: 'hi' }] },
+    ];
+
+    // First token chunk: no tools yet
+    let projected = projectConversationMessages({
+      serverMessages,
+      conversationId: 'conv_stream',
+      store,
+      activeRunId: 'run_stream',
+      projectRunMessages: () => [{
+        role: 'assistant',
+        content: [{ type: 'text', text: 'Hel' }],
+        _runId: 'run_stream',
+      }],
+    });
+    assert.equal(projected.length, 2);
+    assert.equal(String((projected[1].content[0] as { text?: string }).text), 'Hel');
+
+    // Second token chunk must replace the same assistant slot (live stream)
+    projected = projectConversationMessages({
+      serverMessages: projected,
+      conversationId: 'conv_stream',
+      store,
+      activeRunId: 'run_stream',
+      projectRunMessages: () => [{
+        role: 'assistant',
+        content: [{ type: 'text', text: 'Hello world' }],
+        _runId: 'run_stream',
+      }],
+    });
+    assert.equal(projected.length, 2);
+    assert.equal(
+      String((projected[1].content[0] as { text?: string }).text),
+      'Hello world',
+    );
+  });
 });

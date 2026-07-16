@@ -113,6 +113,7 @@ const WRITE_TOOLS = new Set([
   'npm_install',
   'kill_process',
   'run_python',
+  'run_node',
   // Process Manager control tools
   'process_start',
   'process_write_stdin',

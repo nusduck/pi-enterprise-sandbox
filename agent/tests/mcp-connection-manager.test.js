@@ -192,14 +192,14 @@ test('single MCP extension exposes only mcp and defers side effects to durable a
   });
 
   assert.ok(registered.map((tool) => tool.name).includes('mcp'));
-  await assert.rejects(
-    registered[0].execute('call_1', {
-      action: 'invoke',
-      tool: 'ops:delete',
-      arguments: {},
-    }),
-    { name: 'ApprovalSuspendedError' },
-  );
+  const pendingResult = await registered[0].execute('call_1', {
+    action: 'invoke',
+    tool: 'ops:delete',
+    arguments: {},
+  });
+  assert.equal(pendingResult?.details?.approval_suspended, true);
+  assert.equal(pendingResult?.terminate, true);
+  assert.equal(pendingResult?.details?.approval_id, 'approval_1');
   assert.equal(suspended[0].approval_id, 'approval_1');
 });
 
@@ -249,22 +249,18 @@ test('MCP approval scope follows tool-call attempts and consumes resume approval
   const firstArgs = { nested: { z: 1, a: 2 }, query: 'same' };
   const reorderedArgs = { query: 'same', nested: { a: 2, z: 1 } };
 
-  await assert.rejects(
-    registered[0].execute('mcp_call_1', {
-      action: 'invoke',
-      tool: 'ops:delete',
-      arguments: firstArgs,
-    }),
-    { name: 'ApprovalSuspendedError' },
-  );
-  await assert.rejects(
-    registered[0].execute('mcp_call_1', {
-      action: 'invoke',
-      tool: 'ops:delete',
-      arguments: reorderedArgs,
-    }),
-    { name: 'ApprovalSuspendedError' },
-  );
+  const firstSuspend = await registered[0].execute('mcp_call_1', {
+    action: 'invoke',
+    tool: 'ops:delete',
+    arguments: firstArgs,
+  });
+  assert.equal(firstSuspend?.details?.approval_suspended, true);
+  const secondSuspend = await registered[0].execute('mcp_call_1', {
+    action: 'invoke',
+    tool: 'ops:delete',
+    arguments: reorderedArgs,
+  });
+  assert.equal(secondSuspend?.details?.approval_suspended, true);
   assert.equal(approvalRequests.length, 2);
   assert.equal(approvalRequests[0].idempotency_key, approvalRequests[1].idempotency_key);
   assert.equal(suspended[0].operation_fingerprint, suspended[1].operation_fingerprint);
@@ -294,14 +290,12 @@ test('MCP approval scope follows tool-call attempts and consumes resume approval
   assert.equal(resumed.isError, false);
   assert.equal(consumed, 1);
 
-  await assert.rejects(
-    resumedRegistered[0].execute('mcp_call_3', {
-      action: 'invoke',
-      tool: 'ops:delete',
-      arguments: reorderedArgs,
-    }),
-    { name: 'ApprovalSuspendedError' },
-  );
+  const thirdSuspend = await resumedRegistered[0].execute('mcp_call_3', {
+    action: 'invoke',
+    tool: 'ops:delete',
+    arguments: reorderedArgs,
+  });
+  assert.equal(thirdSuspend?.details?.approval_suspended, true);
   assert.equal(approvalRequests.length, 3);
   assert.notEqual(approvalRequests[2].idempotency_key, approvalRequests[0].idempotency_key);
   assert.equal(consumed, 1);

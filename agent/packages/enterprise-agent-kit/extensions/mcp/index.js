@@ -1,6 +1,9 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { Type } from 'typebox';
-import { ApprovalSuspendedError } from '../../../../services/approval-waiter.js';
+import {
+  ApprovalSuspendedError,
+  createApprovalPendingToolResult,
+} from '../../../../services/approval-waiter.js';
 import { APPROVAL_MODE, normalizeApprovalMode } from '../policy/index.js';
 
 function result(value, isError = false) {
@@ -152,7 +155,9 @@ export function createMcpExtension(options = {}) {
         // Single emission point — run-manager only updates status, does not re-emit.
         options.emit?.({ type: 'approval_required', ...pending });
         await options.onApprovalSuspend?.(pending);
-        throw new ApprovalSuspendedError(pending);
+        // Terminate placeholder — do not throw ApprovalSuspendedError (that becomes
+        // a durable error toolResult and confuses the model after resume).
+        return createApprovalPendingToolResult(pending);
       }
       if (usePreApprovedAttempt) options.consumePreApprovedAttempt?.();
       options.emit?.({
@@ -173,7 +178,9 @@ export function createMcpExtension(options = {}) {
         truncated: invoked.truncated,
       });
     } catch (error) {
-      if (error instanceof ApprovalSuspendedError) throw error;
+      if (error instanceof ApprovalSuspendedError || error?.name === 'ApprovalSuspendedError') {
+        return createApprovalPendingToolResult(error.pending);
+      }
       if (claimedPreApprovedAttempt) {
         options.releasePreApprovedAttempt?.(claimedPreApprovedAttempt);
       }
@@ -230,7 +237,9 @@ export function createMcpExtension(options = {}) {
           }
           return invokeRemote(toolCallId, input.tool, input.arguments || {}, signal);
         } catch (error) {
-          if (error instanceof ApprovalSuspendedError) throw error;
+          if (error instanceof ApprovalSuspendedError || error?.name === 'ApprovalSuspendedError') {
+            return createApprovalPendingToolResult(error.pending);
+          }
           options.emit?.({
             type: 'mcp_failed',
             tool: input?.tool || null,

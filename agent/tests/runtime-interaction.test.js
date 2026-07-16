@@ -16,6 +16,9 @@ import {
   getPendingApproval,
   clearPendingApproval,
   ApprovalSuspendedError,
+  createApprovalPendingToolResult,
+  isApprovalPendingToolResult,
+  APPROVAL_PENDING_TOOL_RESULT_TEXT,
   _resetApprovalWaiters,
 } from '../services/approval-waiter.js';
 import {
@@ -31,7 +34,10 @@ import {
   activeRunCount,
   _resetForTests,
 } from '../application/run-manager.js';
-import { runAgentTurn } from '../runtime/agent-runtime.js';
+import {
+  runAgentTurn,
+  replaceSuspendedToolResultInSession,
+} from '../runtime/agent-runtime.js';
 
 describe('budget tracker', () => {
   it('resolves defaults and null-as-unlimited', () => {
@@ -125,6 +131,107 @@ describe('approval waiter (no fixed poll)', () => {
     });
     assert.equal(err.name, 'ApprovalSuspendedError');
     assert.equal(err.pending.approval_id, 'a1');
+  });
+
+  it('createApprovalPendingToolResult terminates without isError', () => {
+    const result = createApprovalPendingToolResult({
+      approval_id: 'appr_x',
+      tool_name: 'bash',
+      tool_call_id: 'tc_x',
+    });
+    assert.equal(result.terminate, true);
+    assert.equal(result.isError, false);
+    assert.equal(result.details.approval_suspended, true);
+    assert.equal(result.details.approval_id, 'appr_x');
+    assert.equal(result.content[0].text, APPROVAL_PENDING_TOOL_RESULT_TEXT);
+    assert.equal(isApprovalPendingToolResult(result), true);
+    assert.equal(
+      isApprovalPendingToolResult({
+        content: [{ type: 'text', text: 'Approval suspended: appr_old' }],
+        isError: true,
+      }),
+      false,
+    );
+  });
+});
+
+describe('replaceSuspendedToolResultInSession', () => {
+  it('rewrites live agent toolResult and sessionManager branch', () => {
+    const branchCalls = [];
+    const appended = [];
+    const session = {
+      agent: {
+        state: {
+          messages: [
+            { role: 'user', content: 'weather?' },
+            {
+              role: 'assistant',
+              content: [{ type: 'toolCall', id: 'tc_bash', name: 'bash' }],
+            },
+            {
+              role: 'toolResult',
+              toolCallId: 'tc_bash',
+              toolName: 'bash',
+              content: [{ type: 'text', text: 'Approval suspended: appr_1' }],
+              isError: true,
+              details: {},
+            },
+          ],
+        },
+      },
+      sessionManager: {
+        getEntries() {
+          return [
+            { id: 'e1', type: 'message', parentId: null, message: { role: 'user' } },
+            {
+              id: 'e2',
+              type: 'message',
+              parentId: 'e1',
+              message: {
+                role: 'assistant',
+                content: [{ type: 'toolCall', id: 'tc_bash', name: 'bash' }],
+              },
+            },
+            {
+              id: 'e3',
+              type: 'message',
+              parentId: 'e2',
+              message: {
+                role: 'toolResult',
+                toolCallId: 'tc_bash',
+                toolName: 'bash',
+                content: [{ type: 'text', text: 'Approval suspended: appr_1' }],
+                isError: true,
+              },
+            },
+          ];
+        },
+        branch(id) {
+          branchCalls.push(id);
+        },
+        appendMessage(msg) {
+          appended.push(msg);
+          return 'e4';
+        },
+      },
+    };
+
+    const ok = replaceSuspendedToolResultInSession(session, {
+      toolCallId: 'tc_bash',
+      toolName: 'bash',
+      content: [{ type: 'text', text: 'Shanghai: 22C sunny' }],
+      details: { approval_replay: true },
+      isError: false,
+    });
+    assert.equal(ok, true);
+    const toolResult = session.agent.state.messages.find((m) => m.role === 'toolResult');
+    assert.equal(toolResult.isError, false);
+    assert.equal(toolResult.content[0].text, 'Shanghai: 22C sunny');
+    assert.equal(toolResult.details.approval_replay, true);
+    assert.deepEqual(branchCalls, ['e2']);
+    assert.equal(appended.length, 1);
+    assert.equal(appended[0].content[0].text, 'Shanghai: 22C sunny');
+    assert.equal(appended[0].isError, false);
   });
 });
 
@@ -525,14 +632,14 @@ describe('ensureApproved no longer polls with fixed timeout', () => {
       },
     });
     const write = tools.find((t) => t.name === 'write');
-    await assert.rejects(
-      () => write.execute('tc_s1', { path: 'a.txt', content: 'x' }),
-      (err) => {
-        assert.equal(err.name, 'ApprovalSuspendedError');
-        assert.equal(err.pending.approval_id, 'approval_suspend_1');
-        return true;
-      },
-    );
+    const pendingResult = await write.execute('tc_s1', { path: 'a.txt', content: 'x' });
+    // Suspend must return a terminate placeholder (not throw): pi-agent-core
+    // converts throws into durable error toolResults that pollute resume context.
+    assert.equal(pendingResult.terminate, true);
+    assert.equal(pendingResult.isError, false);
+    assert.equal(pendingResult.details?.approval_suspended, true);
+    assert.equal(pendingResult.details?.approval_id, 'approval_suspend_1');
+    assert.match(String(pendingResult.content?.[0]?.text || ''), /approval_pending/);
     assert.equal(suspends.length, 1);
     assert.equal(suspends[0].tool_name, 'write');
   });

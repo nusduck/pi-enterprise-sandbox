@@ -31,8 +31,10 @@ describe('process tools registration', () => {
     for (const name of PROCESS_TOOLS) {
       assert.ok(names.includes(name), `missing tool ${name}`);
     }
-    // Sync bash remains available
+    // Sync bash and structured code runners remain available
     assert.ok(names.includes('bash'));
+    assert.ok(names.includes('run_python'));
+    assert.ok(names.includes('run_node'));
   });
 
   it('classifies process observe tools as read and control as write', () => {

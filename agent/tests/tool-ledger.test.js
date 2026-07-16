@@ -249,11 +249,15 @@ describe('tool ledger wrapExecute', () => {
       policy_version: 'test',
       reason: 'needs approval',
     };
+    const suspends = [];
     const tools = createSandboxTools({
       client,
       sessionId: 'sess-1',
       approvalMode: 'ask',
       getMeta: () => ({ run_id: 'run_stable', session_id: 'sess-1' }),
+      onApprovalSuspend: async (pending) => {
+        suspends.push(pending);
+      },
     });
     const write = tools.find((t) => t.name === 'write');
     const firstParams = {
@@ -267,23 +271,19 @@ describe('tool ledger wrapExecute', () => {
       path: 'a.txt',
     };
 
-    let firstPending;
-    await assert.rejects(
-      () => write.execute('sdk_call_1', firstParams),
-      (error) => {
-        firstPending = error?.pending;
-        return error?.name === 'ApprovalSuspendedError';
-      },
-    );
+    const firstPendingResult = await write.execute('sdk_call_1', firstParams);
+    assert.equal(firstPendingResult?.details?.approval_suspended, true);
+    assert.equal(firstPendingResult?.details?.approval_id, 'approval_attempt_1');
+    assert.equal(firstPendingResult?.terminate, true);
+    const firstPending = suspends[0];
     assert.equal(firstPending?.approval_id, 'approval_attempt_1');
     const firstKey = firstPending?.idempotency_key;
     assert.ok(firstKey);
+    assert.ok(firstPending?.operation_fingerprint);
 
     // A retry of the same SDK attempt reuses the same durable approval scope.
-    await assert.rejects(
-      () => write.execute('sdk_call_1', reorderedParams),
-      (error) => error?.name === 'ApprovalSuspendedError',
-    );
+    const retryPending = await write.execute('sdk_call_1', reorderedParams);
+    assert.equal(retryPending?.details?.approval_suspended, true);
     assert.equal(client.calls.approvalCheck, 2);
     assert.equal(client.calls.approvalCheckBodies[0].body.idempotency_key, firstKey);
     assert.equal(client.calls.approvalCheckBodies[1].body.idempotency_key, firstKey);
@@ -313,6 +313,9 @@ describe('tool ledger wrapExecute', () => {
         consumed += 1;
         resumeToken = null;
       },
+      onApprovalSuspend: async (pending) => {
+        suspends.push(pending);
+      },
     });
     const resumedWrite = resumedTools.find((t) => t.name === 'write');
     const resumed = await resumedWrite.execute('sdk_call_2', reorderedParams);
@@ -334,10 +337,9 @@ describe('tool ledger wrapExecute', () => {
       policy_version: 'test',
       reason: 'needs approval again',
     };
-    await assert.rejects(
-      () => resumedWrite.execute('sdk_call_3', reorderedParams),
-      (error) => error?.name === 'ApprovalSuspendedError',
-    );
+    const laterPending = await resumedWrite.execute('sdk_call_3', reorderedParams);
+    assert.equal(laterPending?.details?.approval_suspended, true);
+    assert.equal(laterPending?.details?.approval_id, 'approval_attempt_2');
     assert.equal(client.calls.approvalCheck, 4);
     assert.notEqual(client.calls.approvalCheckBodies[3].body.idempotency_key, firstKey);
     assert.equal(consumed, 1);
