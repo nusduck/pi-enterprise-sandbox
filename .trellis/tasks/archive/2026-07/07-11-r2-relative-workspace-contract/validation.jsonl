@@ -1,2 +1,0 @@
-{"command": ".venv/bin/pytest tests/test_paths.py tests/test_path_validation.py tests/test_workspace_manager.py tests/test_isolation_and_delivery.py -q", "commit": "07bcf290", "exit_code": 0, "result": "relative workspace path tests passed", "recorded_at": "2026-07-11T14:54:49+00:00"}
-{"command": ".venv/bin/pytest tests/ -q --tb=line", "commit": "07bcf290", "exit_code": 0, "result": "382 pytest passed with relative workspace contract", "recorded_at": "2026-07-11T14:54:49+00:00"}

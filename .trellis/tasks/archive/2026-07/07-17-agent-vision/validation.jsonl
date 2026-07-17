@@ -1,1 +1,0 @@
-{"command": "cd agent && node --test tests/vision-images.test.js tests/attachment-context.test.js", "commit": "5bfcf798", "exit_code": 0, "result": "12 vision + attachment tests passed", "recorded_at": "2026-07-17T07:45:41+08:00", "scope": "unit"}

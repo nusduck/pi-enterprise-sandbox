@@ -1,3 +1,0 @@
-{"file":".trellis/tasks/07-11-r3-atomic-agent-events/prd.md","reason":"核对原子 sequence、幂等和恢复验收。"}
-{"file":".trellis/spec/backend/database-guidelines.md","reason":"检查事务和并发合同。"}
-{"file":".trellis/spec/backend/quality-guidelines.md","reason":"检查 100 路并发与完整回归。"}

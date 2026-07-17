@@ -1,3 +1,0 @@
-{"command": "node --test agent/tests/listen-smoke.test.js api-server/tests/listen-smoke.test.js agent/tests/fake-openai-provider.test.js", "commit": "07bcf290", "exit_code": 0, "result": "listen smoke + fake provider tests passed", "recorded_at": "2026-07-11T14:54:49+00:00"}
-{"command": "node scripts/smoke-cross-service.mjs", "commit": "07bcf290", "exit_code": 0, "result": "cross-service smoke PASS without real LLM key", "recorded_at": "2026-07-11T14:54:49+00:00"}
-{"command": "grep -R node-version .github/workflows/test.yml frontend/Dockerfile agent/Dockerfile api-server/Dockerfile", "commit": "07bcf290", "exit_code": 0, "result": "Node major version 22 aligned", "recorded_at": "2026-07-11T14:54:49+00:00"}

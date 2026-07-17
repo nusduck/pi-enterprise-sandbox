@@ -1,2 +1,0 @@
-{"file": "agent/runtime/agent-runtime.js", "reason": "replaceSuspendedToolResultInSession + resume rewrite"}
-{"file": "agent/tests/runtime-interaction.test.js", "reason": "suspend/resume toolResult tests"}

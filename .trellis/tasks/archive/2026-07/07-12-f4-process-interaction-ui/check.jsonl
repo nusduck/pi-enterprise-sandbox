@@ -1,3 +1,0 @@
-{"id": "prd", "action": "must_read", "file": ".trellis/tasks/07-12-f4-process-interaction-ui/prd.md", "reason": "Check: requirements"}
-{"id": "design", "action": "must_read", "file": ".trellis/tasks/07-12-f4-process-interaction-ui/design.md", "reason": "Check: design"}
-{"id": "implement-plan", "action": "must_read", "file": ".trellis/tasks/07-12-f4-process-interaction-ui/implement.md", "reason": "Check: plan"}

@@ -1,3 +1,0 @@
-{"id": "prd", "action": "must_read", "file": ".trellis/tasks/07-12-f5-management-pages/prd.md", "reason": "Impl: requirements"}
-{"id": "design", "action": "must_read", "file": ".trellis/tasks/07-12-f5-management-pages/design.md", "reason": "Impl: design"}
-{"id": "implement-plan", "action": "must_read", "file": ".trellis/tasks/07-12-f5-management-pages/implement.md", "reason": "Impl: plan"}

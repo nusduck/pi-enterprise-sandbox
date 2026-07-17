@@ -1,4 +1,0 @@
-{"file": ".trellis/spec/backend/index.md", "reason": "Backend pre-development and quality checks"}
-{"file": ".trellis/spec/backend/error-handling.md", "reason": "HTTP error and boundary conventions"}
-{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "Repository and dual-dialect persistence conventions"}
-{"file": ".trellis/spec/project-architecture.md", "reason": "Cross-service invariants and test commands"}

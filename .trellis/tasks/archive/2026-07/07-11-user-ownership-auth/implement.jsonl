@@ -1,5 +1,0 @@
-{"file": ".trellis/spec/backend/index.md", "reason": "Backend pre-dev checklist"}
-{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "SQLite/PG schema and migration conventions"}
-{"file": ".trellis/spec/backend/error-handling.md", "reason": "404 for unauthorized resource access"}
-{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Auth and ownership tests"}
-{"file": ".trellis/spec/project-architecture.md", "reason": "Cross-service identity and BFF topology"}

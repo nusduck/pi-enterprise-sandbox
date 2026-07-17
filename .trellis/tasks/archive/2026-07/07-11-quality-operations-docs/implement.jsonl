@@ -1,3 +1,0 @@
-{"file": ".trellis/spec/project-architecture.md", "reason": "Commands, services, and ops topology"}
-{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Backend CI expectations"}
-{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "Frontend CI and build expectations"}

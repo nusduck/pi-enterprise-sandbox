@@ -1,2 +1,0 @@
-{"command": ".venv/bin/pytest tests/test_agent_events.py -q", "commit": "07bcf290", "exit_code": 0, "result": "agent event atomic/idempotent tests passed", "recorded_at": "2026-07-11T14:54:49+00:00"}
-{"command": "TEST_POSTGRES_URL=postgresql://… pytest tests/test_agent_events.py::test_postgres_100_concurrent_appends_same_run_no_gaps -q", "commit": "07bcf290", "exit_code": 0, "result": "PostgreSQL 100 concurrent appends passed", "recorded_at": "2026-07-11T14:54:49+00:00"}

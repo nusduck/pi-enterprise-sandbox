@@ -1,4 +1,0 @@
-{"id": "prd", "action": "must_read", "file": ".trellis/tasks/07-12-b2-process-manager/prd.md", "reason": "Impl: requirements and acceptance"}
-{"id": "design", "action": "must_read", "file": ".trellis/tasks/07-12-b2-process-manager/design.md", "reason": "Impl: technical design"}
-{"id": "implement-plan", "action": "must_read", "file": ".trellis/tasks/07-12-b2-process-manager/implement.md", "reason": "Impl: execution checklist"}
-{"id": "adr-source", "action": "should_read", "file": "docs/adr/0002-backend2712.md", "reason": "Impl: source ADR"}

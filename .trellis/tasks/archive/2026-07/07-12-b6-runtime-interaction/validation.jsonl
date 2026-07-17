@@ -1,2 +1,0 @@
-{"command": "uv run pytest tests/test_b6_runtime_interaction.py -q", "commit": "2b18cdf004e8", "exit_code": 0, "result": "runtime interaction tests", "recorded_at": "2026-07-12T04:24:15+00:00"}
-{"command": "node --test agent/tests/runtime-interaction.test.js", "commit": "2b18cdf004e8", "exit_code": 0, "result": "agent steer/budget/approval tests", "recorded_at": "2026-07-12T04:24:15+00:00"}

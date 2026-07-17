@@ -1,3 +1,0 @@
-{"file":".trellis/tasks/07-11-production-boundaries-trellis-gates/research/evidence-audit.md","reason":"加载上午 72 个未勾选项、placeholder manifest 和 journal 缺验证证据。"}
-{"file":".trellis/spec/backend/quality-guidelines.md","reason":"实现 fail-closed、状态和测试门禁。"}
-{"file":".trellis/spec/project-architecture.md","reason":"保持 Trellis task/parent 生命周期与仓库工作流一致。"}

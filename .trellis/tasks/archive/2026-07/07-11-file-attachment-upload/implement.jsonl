@@ -1,5 +1,0 @@
-{"file": ".trellis/spec/frontend/index.md", "reason": "Frontend state and UI conventions"}
-{"file": ".trellis/spec/frontend/state-management.md", "reason": "Attachment draft state transitions"}
-{"file": ".trellis/spec/backend/error-handling.md", "reason": "413 and stable error codes"}
-{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Upload and file tests"}
-{"file": ".trellis/spec/project-architecture.md", "reason": "Artifact-only delivery and workspace paths"}

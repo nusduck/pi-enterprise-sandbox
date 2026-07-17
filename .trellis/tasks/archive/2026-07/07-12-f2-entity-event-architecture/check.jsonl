@@ -1,4 +1,0 @@
-{"id": "prd", "action": "must_read", "file": ".trellis/tasks/07-12-f2-entity-event-architecture/prd.md", "reason": "Check: requirements and acceptance"}
-{"id": "design", "action": "must_read", "file": ".trellis/tasks/07-12-f2-entity-event-architecture/design.md", "reason": "Check: technical design"}
-{"id": "implement-plan", "action": "must_read", "file": ".trellis/tasks/07-12-f2-entity-event-architecture/implement.md", "reason": "Check: execution checklist"}
-{"id": "adr-source", "action": "should_read", "file": "docs/adr/0003-fronted0712.md", "reason": "Check: source ADR"}

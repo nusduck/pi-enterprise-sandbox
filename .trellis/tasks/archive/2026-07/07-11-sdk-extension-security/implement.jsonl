@@ -1,3 +1,0 @@
-{"file": ".trellis/spec/backend/index.md", "reason": "Policy and tool boundaries"}
-{"file": ".trellis/spec/project-architecture.md", "reason": "Agent extension vs sandbox enforcement"}
-{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Approval and concurrency tests"}

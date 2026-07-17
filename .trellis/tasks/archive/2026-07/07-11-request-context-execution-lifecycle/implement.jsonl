@@ -1,4 +1,0 @@
-{"file": ".trellis/spec/backend/index.md", "reason": "Backend pre-dev checklist for Node+Python services"}
-{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Testing and review requirements"}
-{"file": ".trellis/spec/project-architecture.md", "reason": "Cross-service concurrency and lifecycle invariants"}
-{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "Trace/session/approval flow across Node and Python"}

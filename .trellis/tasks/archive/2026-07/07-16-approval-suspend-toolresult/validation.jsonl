@@ -1,1 +1,0 @@
-{"command": "cd agent && node --test tests/runtime-interaction.test.js", "commit": "c65bcf44", "exit_code": 0, "result": "suspend toolResult rewrite tests passed", "recorded_at": "2026-07-17T07:45:20+08:00", "scope": "unit"}

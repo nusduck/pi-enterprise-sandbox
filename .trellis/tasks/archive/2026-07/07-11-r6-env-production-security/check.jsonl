@@ -1,3 +1,0 @@
-{"file":".trellis/tasks/07-11-r6-env-production-security/prd.md","reason":"核对完整 Env catalog、研发 profile 和生产安全验收。"}
-{"file":".trellis/spec/project-architecture.md","reason":"检查配置单一事实源与服务边界。"}
-{"file":".trellis/spec/backend/quality-guidelines.md","reason":"检查矩阵、脱敏和完整回归。"}

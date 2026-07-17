@@ -1,3 +1,0 @@
-{"file": "agent/packages/enterprise-agent-kit/extensions/sandbox-tools/tool-definitions.js", "reason": "run_python/run_node tool defs"}
-{"file": "agent/runtime/agent-runtime.js", "reason": "BASE_TOOL_NAMES includes run_python/run_node"}
-{"file": "agent/tests/process-tools.test.js", "reason": "registration coverage"}

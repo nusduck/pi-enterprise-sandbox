@@ -1,2 +1,0 @@
-{"command": "uv run pytest tests/test_process_manager.py -q", "commit": "2b18cdf004e8", "exit_code": 0, "result": "process manager tests", "recorded_at": "2026-07-12T04:24:15+00:00"}
-{"command": "node --test agent/tests/process-tools.test.js", "commit": "2b18cdf004e8", "exit_code": 0, "result": "process tools registration tests", "recorded_at": "2026-07-12T04:24:15+00:00"}

@@ -1,2 +1,0 @@
-{"command": "uv run pytest tests/test_attachment_context.py tests/test_mcp_registry.py -q", "commit": "2b18cdf004e8", "exit_code": 0, "result": "attachment + MCP registry tests", "recorded_at": "2026-07-12T04:24:15+00:00"}
-{"command": "node --test agent/tests/attachment-context.test.js agent/tests/tool-registry-mcp.test.js", "commit": "2b18cdf004e8", "exit_code": 0, "result": "agent attachment/MCP tests", "recorded_at": "2026-07-12T04:24:15+00:00"}

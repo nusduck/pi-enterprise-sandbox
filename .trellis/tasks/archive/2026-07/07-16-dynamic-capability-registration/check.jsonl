@@ -1,7 +1,0 @@
-{"file": ".trellis/spec/project-architecture.md", "reason": "Review architectural boundaries and capability data flow"}
-{"file": ".trellis/spec/backend/directory-structure.md", "reason": "Review module ownership"}
-{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Review compatibility, security, test, and E2E evidence"}
-{"file": ".trellis/spec/backend/logging-guidelines.md", "reason": "Review event redaction and tracing"}
-{"file": ".trellis/spec/frontend/state-management.md", "reason": "Review frontend projection without duplicate state"}
-{"file": ".trellis/spec/frontend/type-safety.md", "reason": "Review additive API/schema compatibility"}
-{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "Review frontend tests and build"}

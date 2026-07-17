@@ -1,2 +1,0 @@
-{"command": ".venv/bin/pytest tests/test_env_production_security.py tests/test_container_startup.py -q", "commit": "07bcf290", "exit_code": 0, "result": "env production security tests passed", "recorded_at": "2026-07-11T14:54:49+00:00"}
-{"command": "node --test agent/tests/production-config.test.js api-server/tests/production-config.test.js", "commit": "07bcf290", "exit_code": 0, "result": "production config node tests passed", "recorded_at": "2026-07-11T14:54:49+00:00"}

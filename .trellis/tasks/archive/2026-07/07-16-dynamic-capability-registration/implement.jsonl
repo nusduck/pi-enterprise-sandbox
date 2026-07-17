@@ -1,7 +1,0 @@
-{"file": ".trellis/spec/project-architecture.md", "reason": "Architecture boundaries and current service ownership"}
-{"file": ".trellis/spec/backend/directory-structure.md", "reason": "Agent application/runtime/kit module placement"}
-{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Node testing, compatibility, security, and E2E gates"}
-{"file": ".trellis/spec/backend/logging-guidelines.md", "reason": "Safe registry events, trace metadata, and secret redaction"}
-{"file": ".trellis/spec/frontend/state-management.md", "reason": "Frontend source-of-truth and projection constraints"}
-{"file": ".trellis/spec/frontend/type-safety.md", "reason": "Additive protocol field handling and runtime schema rules"}
-{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "Frontend test and build requirements"}

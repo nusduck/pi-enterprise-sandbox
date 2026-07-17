@@ -1,2 +1,0 @@
-{"command": "npm test --prefix frontend", "commit": "2b18cdf004e8", "exit_code": 0, "result": "workbench timeline tests", "recorded_at": "2026-07-12T04:24:15+00:00"}
-{"command": "npm run build --prefix frontend", "commit": "2b18cdf004e8", "exit_code": 0, "result": "frontend build", "recorded_at": "2026-07-12T04:24:15+00:00"}

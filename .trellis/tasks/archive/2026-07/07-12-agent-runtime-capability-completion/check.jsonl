@@ -1,5 +1,0 @@
-{"id": "prd", "action": "must_read", "file": ".trellis/tasks/07-12-agent-runtime-capability-completion/prd.md", "reason": "Parent requirements and cross-child acceptance"}
-{"id": "design", "action": "must_read", "file": ".trellis/tasks/07-12-agent-runtime-capability-completion/design.md", "reason": "Parent design and integration boundaries"}
-{"id": "implement", "action": "must_read", "file": ".trellis/tasks/07-12-agent-runtime-capability-completion/implement.md", "reason": "Integration plan and completion status"}
-{"id": "adr", "action": "should_read", "file": "docs/adr/0002-backend2712.md", "reason": "Source ADR for iteration scope"}
-{"id": "validation", "action": "must_read", "file": ".trellis/tasks/07-12-agent-runtime-capability-completion/validation.jsonl", "reason": "Integration validation evidence"}

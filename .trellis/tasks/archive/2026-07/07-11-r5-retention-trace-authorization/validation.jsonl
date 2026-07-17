@@ -1,1 +1,0 @@
-{"command": ".venv/bin/pytest tests/test_retention_cleanup.py tests/test_trace.py -q", "commit": "07bcf290", "exit_code": 0, "result": "retention legal-hold and trace auth tests passed", "recorded_at": "2026-07-11T14:54:49+00:00"}
