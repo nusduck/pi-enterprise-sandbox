@@ -26,6 +26,8 @@ const installedPkgPath = join(
 );
 
 describe('exact version pin', () => {
+  const pinsPath = join(__dirname, '../../../runtime-versions.json');
+
   it('package.json pins @earendil-works/pi-coding-agent without range operators', () => {
     const pkg = JSON.parse(readFileSync(pkgPath, 'utf8'));
     const spec = pkg.dependencies['@earendil-works/pi-coding-agent'];
@@ -35,6 +37,17 @@ describe('exact version pin', () => {
       true,
       `expected exact version, got ${spec}`,
     );
+  });
+
+  it('package.json SDK pins match runtime-versions.json SSOT', () => {
+    const pkg = JSON.parse(readFileSync(pkgPath, 'utf8'));
+    const pins = JSON.parse(readFileSync(pinsPath, 'utf8'));
+    assert.equal(
+      pkg.dependencies['@earendil-works/pi-coding-agent'],
+      pins.pi_sdk.pi_coding_agent,
+    );
+    assert.equal(pkg.dependencies['@earendil-works/pi-ai'], pins.pi_sdk.pi_ai);
+    assert.equal(pkg.engines?.node, pins.node.engines);
   });
 
   it('installed package VERSION matches package.json pin', () => {

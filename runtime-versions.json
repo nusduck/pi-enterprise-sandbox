@@ -1,0 +1,38 @@
+{
+  "$schema_comment": "Single source of truth for runtime/SDK version pins. Consistency tests in tests/test_runtime_versions.py enforce alignment across package manifests, Dockerfiles, CI, and docs.",
+  "node": {
+    "major": 22,
+    "engines": ">=22.19.0 <23",
+    "docker_image": "node:22-slim",
+    "ci": "22",
+    "file": "22",
+    "notes": "Major pin only in images/CI (no invented patch/digest). engines lower bound matches @earendil-works/pi-coding-agent 0.80.3 engines (>=22.19.0)."
+  },
+  "python": {
+    "major_minor": "3.11",
+    "requires": ">=3.11,<3.12",
+    "docker_image": "python:3.11-slim",
+    "ci": "3.11",
+    "file": "3.11",
+    "notes": "Minor pin only (no invented patch/digest). Sandbox service image and CI install 3.11."
+  },
+  "pi_sdk": {
+    "pi_coding_agent": "0.80.3",
+    "pi_ai": "0.80.3",
+    "package_names": {
+      "pi_coding_agent": "@earendil-works/pi-coding-agent",
+      "pi_ai": "@earendil-works/pi-ai"
+    },
+    "notes": "Exact pins only (no ^/~). BFF (api-server) must not depend on the SDK. Frontend does not pin the coding-agent SDK."
+  },
+  "sandbox_tooling_node": {
+    "major": 22,
+    "nodesource_setup": "setup_22.x",
+    "notes": "Node installed inside the sandbox image for agent-executed Node tooling (not the Agent/BFF service runtime). Aligned to the same major as service Node."
+  },
+  "frontend_dev_types": {
+    "types_node": "22.20.0",
+    "types_node_major": 22,
+    "notes": "frontend must declare @types/node as a direct devDependency (exact). Do not rely on transitive types from pi-web-ui or other packages; vite.config.ts imports node:url."
+  }
+}

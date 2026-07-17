@@ -6,7 +6,7 @@
 | Date | 2026-07-11 |
 | Decision owners | Agent runtime / api-server maintainers |
 | Related | R-01 (field-issues), A-02 Agent Runtime, package `agent` |
-| Pinned version | `0.80.3` (exact; see `agent/package.json`) |
+| Pinned version | `0.80.3` (exact; SSOT `runtime-versions.json` + `agent/package.json`) |
 
 ## Context
 
@@ -61,7 +61,7 @@ Version policy: **exact pin** in `agent/package.json` (no `^` / `~` range). Upgr
 | Maintenance ownership (this repo) | **Agent runtime owners** own pin, upgrade PR, compat suite, and runbook |
 | Upstream maintenance | Earendil / package publishers; we consume releases only |
 
-**Note:** CI, Docker images, and package `engines` are aligned on **Node 22**. Runtime images and any environment that *executes* `createAgentSession` must meet the SDK engine requirement (`>=22.19.0`). Do not silently ignore engine bumps on upgrade.
+**Note:** CI, Docker images, and package `engines` are aligned on **Node 22** via `runtime-versions.json` (`engines`: `>=22.19.0 <23`, images: `node:22-slim`). Runtime images and any environment that *executes* `createAgentSession` must meet the SDK engine requirement (`>=22.19.0`). Do not silently ignore engine bumps on upgrade. Consistency is enforced by `tests/test_runtime_versions.py`.
 
 ## Security boundary
 

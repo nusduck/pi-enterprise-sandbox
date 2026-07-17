@@ -1,4 +1,5 @@
 # ── Sandbox Service (Python FastAPI) ──────────────────────────────
+# Python minor pin: runtime-versions.json → python.docker_image
 FROM python:3.11-slim AS sandbox-base
 
 # System deps: runtime isolation + everyday agent tooling (docs, git, text utils)
@@ -24,7 +25,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     tesseract-ocr-chi-sim \
     ffmpeg \
     build-essential \
-    && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
+    && curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
     && apt-get install -y --no-install-recommends nodejs \
     && ln -sf "$(command -v fdfind || true)" /usr/local/bin/fd || true \
     && rm -rf /var/lib/apt/lists/*

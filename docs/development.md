@@ -4,10 +4,13 @@
 
 ### 前置要求
 
-- **Python 3.11+** + `uv`（推荐）或 pip
-- **Node.js 22+**（与 Docker 镜像 / CI 一致；`engines.node >=22`）
+- **Python 3.11**（次版本固定；`runtime-versions.json` / `.python-version`；`requires-python = ">=3.11,<3.12"`）
+- **Node.js 22**（主版本固定；`runtime-versions.json` / `.node-version`；`engines.node = ">=22.19.0 <23"`，与 Pi SDK `0.80.3` 一致）
+- **Pi SDK** `@earendil-works/pi-coding-agent` / `@earendil-works/pi-ai` **精确** `0.80.3`（仅 `agent/`；禁止 `^`/`~`）
 - **Docker** / Docker Compose
 - **Git**
+
+版本声明的权威源是仓库根目录 `runtime-versions.json`；一致性由 `tests/test_runtime_versions.py` 机器校验。升级 SDK 见 [runbooks/sdk-upgrade.md](./runbooks/sdk-upgrade.md)。
 
 ### 干净安装（CI 同款）
 
@@ -33,8 +36,9 @@ npm ci --prefix frontend
 ### 权威验证命令（与 `.github/workflows/test.yml` 对齐）
 
 ```bash
-# Python
+# Python（含 runtime-versions 一致性）
 uv run pytest tests/ -q --tb=short
+# 仅版本钉：uv run pytest tests/test_runtime_versions.py -q
 
 # Node BFF（含 import/listen smoke）
 node --test api-server/tests/*.test.js
@@ -44,6 +48,7 @@ node --test api-server/tests/*.test.js
 node --test agent/tests/*.test.js agent/tests/sdk-compat/*.test.js
 # SDK 精确版本：npm ls --prefix agent @earendil-works/pi-coding-agent
 # 升级流程：docs/runbooks/sdk-upgrade.md · ADR：docs/adr/0001-pi-coding-agent-sdk.md
+# SSOT：runtime-versions.json
 
 # Frontend
 npm test --prefix frontend

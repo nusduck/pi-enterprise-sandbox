@@ -279,7 +279,7 @@ node scripts/smoke-cross-service.mjs
 5. 生成中点击停止 → 流结束且无悬挂执行
 6. Agent `submit_artifact` 后出现可下载交付物（非 `write` 自动下载）
 
-Node 运行时与 CI 统一 **Node 22**（`api-server` / `agent` / `frontend` 镜像与 `.github/workflows/test.yml`）。
+Node / Python / Pi SDK 版本钉以根目录 `runtime-versions.json` 为准：服务镜像与 CI 统一 **Node 22**（`node:22-slim`、`engines >=22.19.0 <23`）、Sandbox **Python 3.11**（`python:3.11-slim`）、Agent SDK **0.80.3** 精确钉。一致性由 `tests/test_runtime_versions.py` 校验。
 
 ## Backup
 

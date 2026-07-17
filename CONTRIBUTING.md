@@ -10,14 +10,16 @@ Be respectful, constructive, and inclusive. We're all here to build something gr
 
 ### Prerequisites
 
-- Python 3.11+
-- Node.js 20+
+- **Python 3.11** (pinned minor; see `runtime-versions.json` / `.python-version`)
+- **Node.js 22** (pinned major; engines `>=22.19.0 <23`; see `runtime-versions.json` / `.node-version`)
 - Docker & Docker Compose (for container testing)
 - `uv` (recommended) or `pip`
 
+Runtime/SDK pins are machine-checked by `tests/test_runtime_versions.py`.
+
 ### Local Setup
 
-权威干净安装与本地三进程步骤见 [docs/development.md](./docs/development.md)。摘要：
+权威干净安装与本地四进程步骤见 [docs/development.md](./docs/development.md)。摘要：
 
 ```bash
 # Clone and enter
@@ -29,20 +31,25 @@ cp .env.example .env   # fill LLMIO_*; never commit real secrets
 # Python (Sandbox + pytest)
 uv sync --extra test
 
-# Node API Server + Frontend (lockfile present → prefer npm ci)
+# Node API Server + Agent + Frontend (lockfile present → prefer npm ci)
 npm ci --prefix api-server
+npm ci --prefix agent
 npm ci --prefix frontend
 ```
 
 ### Run Tests (aligned with `.github/workflows/test.yml`)
 
 ```bash
-# Python
+# Python (includes runtime version consistency)
 uv run pytest tests/ -q --tb=short
 
-# Node API Server（含 sdk-compat）
-node --test api-server/tests/*.test.js api-server/tests/sdk-compat/*.test.js
+# Node API Server
+node --test api-server/tests/*.test.js
 # or: npm test --prefix api-server
+
+# Node Agent（含 sdk-compat）
+node --test agent/tests/*.test.js agent/tests/sdk-compat/*.test.js
+# or: npm test --prefix agent
 
 # Frontend
 npm test --prefix frontend
@@ -59,7 +66,7 @@ Ruff/Black/Mypy 与覆盖率阈值目前**不是** CI 强制门禁（见 `.trell
 
 ```
 pi-enterprise-sandbox/
-├── frontend/          # Vite SPA → Nginx；src/{main,state,api,render,sse,security}.js
+├── frontend/          # Vite + React SPA → Nginx；src/ (pure UI, no Agent SDK)
 │   ├── test/          # node:test
 │   ├── index.html
 │   ├── Dockerfile
@@ -138,6 +145,7 @@ pi-enterprise-sandbox/
 ## Pull Request Checklist
 
 - [ ] Python tests pass (`uv run pytest tests/ -q --tb=short`)
+- [ ] Runtime pins consistent (`uv run pytest tests/test_runtime_versions.py -q`)
 - [ ] Node BFF tests pass (`npm test --prefix api-server`)
 - [ ] Node Agent tests pass (`npm test --prefix agent`)
 - [ ] Frontend tests + build pass

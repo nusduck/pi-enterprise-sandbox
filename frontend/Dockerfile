@@ -1,8 +1,8 @@
-# Build stage
+# Build stage — Node major pin: runtime-versions.json → node.docker_image
 FROM node:22-slim AS build
 WORKDIR /app
-COPY package.json ./
-RUN npm install
+COPY package.json package-lock.json ./
+RUN npm ci
 COPY . ./
 RUN npm run build
 

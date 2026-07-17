@@ -2,15 +2,15 @@
 
 Use this when bumping the pinned SDK version in `agent/`. Do **not** widen the pin to a semver range (`^` / `~`). The BFF (`api-server/`) must **not** depend on the SDK.
 
-Related: [ADR 0001](../adr/0001-pi-coding-agent-sdk.md), compat suite `agent/tests/sdk-compat/`.
+Related: [ADR 0001](../adr/0001-pi-coding-agent-sdk.md), compat suite `agent/tests/sdk-compat/`, SSOT `runtime-versions.json`.
 
 ## Preconditions
 
 - [ ] Independent task/PR (no mixed feature work).
-- [ ] Note current pin: `npm ls --prefix agent @earendil-works/pi-coding-agent`
+- [ ] Note current pin: `npm ls --prefix agent @earendil-works/pi-coding-agent` (must match `runtime-versions.json` → `pi_sdk`)
 - [ ] Read upstream changelog / release notes for the candidate version.
 - [ ] Confirm license remains MIT (or re-open ADR if not).
-- [ ] Confirm `engines.node` still matches runtime images (SDK currently declares `>=22.19.0`).
+- [ ] Confirm `engines.node` still matches runtime images and `runtime-versions.json` → `node.engines` (SDK 0.80.3 declares `>=22.19.0`; repo engines are `>=22.19.0 <23`).
 
 ## 1. Local matrix (old vs candidate)
 
@@ -87,8 +87,11 @@ If durable SDK session files are introduced later: migrate by **copy-then-valida
 
 ## 4. PR checklist
 
-- [ ] `agent/package.json` has **exact** version (e.g. `"0.81.0"`, not `^0.81.0`)
+- [ ] `runtime-versions.json` `pi_sdk` updated to the new exact versions
+- [ ] `agent/package.json` has **exact** version (e.g. `"0.81.0"`, not `^0.81.0`) for both `pi-coding-agent` and `pi-ai`
+- [ ] `agent/packages/enterprise-agent-kit` peerDependencies match
 - [ ] `agent/package-lock.json` committed and matches (`npm ci --prefix agent`)
+- [ ] `uv run pytest tests/test_runtime_versions.py -q` green
 - [ ] ADR inventory updated if imports/events change (`docs/adr/0001-pi-coding-agent-sdk.md`)
 - [ ] Compat suite green in CI (`node-agent` job)
 - [ ] Staging gray check notes in PR body

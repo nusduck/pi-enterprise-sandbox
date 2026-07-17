@@ -27,17 +27,19 @@ open http://localhost:3000
 
 | 组件 | 技术栈 | host→容器端口 |
 |------|--------|---------------|
-| **Frontend** | Vite + pi-web-ui → Nginx | `3000→80` |
+| **Frontend** | Vite + React → Nginx | `3000→80` |
 | **API Server (BFF)** | Node.js 22 — auth / files / SSE relay | `4000→4000` |
-| **Agent** | Node.js 22 + pi-coding-agent SDK | `4100→4100` |
+| **Agent** | Node.js 22 + pi-coding-agent SDK `0.80.3` | `4100→4100` |
 | **Sandbox API** | Python 3.11 + FastAPI | `8083→8081` |
+
+运行时版本钉（Node 22 / Python 3.11 / Pi SDK 0.80.3）见根目录 `runtime-versions.json`，由 `tests/test_runtime_versions.py` 校验。
 
 ## 目录结构
 
 ```
 pi-sandbox/
-├── frontend/             ← SPA 前端（Vite + @earendil-works/pi-web-ui）
-│   ├── src/main.js       ← 前端入口（纯 UI，零 Agent）
+├── frontend/             ← SPA 前端（Vite + React；纯 UI，零 Agent SDK）
+│   ├── src/main.tsx      ← 前端入口
 │   ├── Dockerfile        ← Nginx 静态服务
 │   └── nginx.conf        ← /api/* 反向代理到 api-server
 ├── api-server/           ← 薄 BFF（auth / files / SSE relay）

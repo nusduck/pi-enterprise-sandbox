@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "engines": {
-    "node": ">=22"
+    "node": ">=22.19.0 <23"
   },
   "scripts": {
     "dev": "vite",
@@ -15,7 +15,6 @@
     "test:e2e": "tsx --test test/e2e-smoke.test.ts test/a11y-responsive.test.ts"
   },
   "dependencies": {
-    "@earendil-works/pi-web-ui": "^0.75.3",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
     "react-markdown": "^10.1.0",
@@ -25,6 +24,7 @@
     "zod": "^4.4.3"
   },
   "devDependencies": {
+    "@types/node": "22.20.0",
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^4.7.0",

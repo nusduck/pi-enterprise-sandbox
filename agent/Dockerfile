@@ -1,3 +1,4 @@
+# Node major pin: runtime-versions.json → node.docker_image
 FROM node:22-slim
 WORKDIR /app
 

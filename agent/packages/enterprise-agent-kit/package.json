@@ -3,6 +3,9 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
+  "engines": {
+    "node": ">=22.19.0 <23"
+  },
   "exports": {
     ".": "./index.js"
   },
