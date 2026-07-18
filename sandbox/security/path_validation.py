@@ -29,6 +29,9 @@ from sandbox.paths import (
 # Conservative conversation identifiers: UUID-friendly, no path separators.
 _CONVERSATION_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
 
+# Formal domain IDs (plan §5 / packages/contracts): ULID, Crockford Base32, CHAR(26).
+_FORMAL_ID_RE = re.compile(r"^[0-9A-HJKMNP-TV-Z]{26}$", re.IGNORECASE)
+
 
 def validate_conversation_id(conversation_id: str) -> str:
     """Validate a client-supplied conversation id used in workspace names.
@@ -45,6 +48,21 @@ def validate_conversation_id(conversation_id: str) -> str:
             "[A-Za-z0-9_-], starting with alphanumeric"
         )
     return conversation_id
+
+
+def validate_formal_id(value: str, field: str = "id") -> str:
+    """Validate a formal domain id (ULID / CHAR(26) Crockford Base32).
+
+    Returns the canonical uppercase form. Rejects empty, wrong length, or
+    characters outside the Crockford alphabet (path-safe by construction).
+    """
+    if not value or not isinstance(value, str):
+        raise ValueError(f"Invalid {field}: expected formal ULID")
+    if not _FORMAL_ID_RE.fullmatch(value):
+        raise ValueError(
+            f"Invalid {field}: expected 26 Crockford Base32 characters"
+        )
+    return value.upper()
 
 
 def parse_sandbox_path(user_path: str) -> SandboxPath:

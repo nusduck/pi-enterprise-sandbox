@@ -137,7 +137,7 @@ async function main() {
       SANDBOX_SKILLS_ROOT: skillsPath,
       SANDBOX_API_TOKEN: '',
       SANDBOX_AUTH_ENABLED: 'false',
-      SANDBOX_IPTABLES_ENABLED: 'false',
+      SANDBOX_NETWORK_MODE: 'disabled',
       SANDBOX_BIND_HOST: '127.0.0.1',
       SANDBOX_ALLOWED_CLIENT_CIDRS: '127.0.0.1/32,::1/128',
       PYTHONPATH: ROOT,

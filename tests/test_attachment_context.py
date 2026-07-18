@@ -15,12 +15,13 @@ from sandbox.services.attachment_manager import (
     normalize_attachment_context,
 )
 from sandbox.services.session_manager import session_manager
+from tests.conftest import session_create_payload
 
 client = TestClient(app)
 
 
 def _create_session(caller: str = "att-ctx") -> dict:
-    resp = client.post("/sessions", json={"caller_id": caller})
+    resp = client.post("/sessions", json=session_create_payload(caller))
     assert resp.status_code == 201, resp.text
     return resp.json()
 

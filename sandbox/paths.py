@@ -44,8 +44,9 @@ AGENT_WORKSPACE_PATH = LEGACY_AGENT_WORKSPACE_PATH  # internal alias
 # the current workspace identity and never appears on public surfaces.
 AGENT_TEMP_PATH = "/tmp"
 
-# Backward-compat alias used only for optional single-session presentation.
-LEGACY_WORKSPACE_LINK = "/sandbox/workspace"
+# PR-13: global presentation symlink /sandbox/workspace was removed.
+# Agent-visible workspace is only the per-execution Bubblewrap bind of
+# LEGACY_AGENT_WORKSPACE_PATH (/home/sandbox/workspace).
 
 # Common physical-root prefixes that must never appear in public text.
 _DEFAULT_PHYSICAL_PREFIXES = (

@@ -327,6 +327,14 @@ function resolveMcpServers(env = process.env) {
 
 export const config = {
   PORT: parseInt(process.env.PORT, 10) || 4100,
+  /** Public https origin for Agent Card / artifact download URLs (no path). */
+  A2A_PUBLIC_BASE_URL: process.env.A2A_PUBLIC_BASE_URL || '',
+  /** HMAC secret for short-lived artifact download tokens (≥32 chars). */
+  A2A_ARTIFACT_DOWNLOAD_SECRET: process.env.A2A_ARTIFACT_DOWNLOAD_SECRET || '',
+  /** Dev-only: allow loopback Host fallback when A2A_PUBLIC_BASE_URL unset. */
+  A2A_ALLOW_DEV_HOST_FALLBACK:
+    String(process.env.A2A_ALLOW_DEV_HOST_FALLBACK || '').toLowerCase() ===
+    'true',
   // Bounded publication barrier for conversation/session/durable-run setup.
   RUN_INITIALIZATION_TIMEOUT_MS: Math.min(
     60_000,

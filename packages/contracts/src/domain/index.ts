@@ -8,9 +8,13 @@ export type {
   AgentVersion,
   Conversation,
   ConversationStatus,
+  Message,
+  MessageRole,
+  MessageType,
   AgentSession,
   AgentSessionStatus,
   Run,
+  RunEvent,
   RunStatus,
   RunTerminalStatus,
   SandboxSession,
@@ -27,6 +31,14 @@ export type {
   A2aTaskStatus,
   Approval,
   ApprovalStatus,
+  OutboxStatus,
+  OutboxStatusConst,
+  DomainOutbox,
 } from './types.ts';
 
-export { RUN_TERMINAL_STATUSES, isRunTerminalStatus } from './types.ts';
+export {
+  RUN_TERMINAL_STATUSES,
+  isRunTerminalStatus,
+  OUTBOX_STATUSES,
+  isOutboxStatus,
+} from './types.ts';

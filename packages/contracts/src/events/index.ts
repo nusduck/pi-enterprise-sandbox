@@ -19,3 +19,10 @@ export type {
   PlatformEventEnvelope,
   ParseEnvelopeResult,
 } from './envelope.ts';
+
+export {
+  formatSseFrame,
+  formatPlatformEventSse,
+  formatSsePing,
+  parseLastEventId,
+} from './sse.ts';

@@ -74,6 +74,7 @@ export function ToolExecutionCard({
       {subtitle ? <p className="rtc-subtitle">{subtitle}</p> : null}
       <p className="rtc-status-line">
         {tool.status}
+        {tool.source && tool.source !== 'unknown' ? ` · ${tool.source}` : ''}
         {tool.isError ? ' · error' : ''}
       </p>
       {open ? (

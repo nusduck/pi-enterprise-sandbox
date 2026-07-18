@@ -10,13 +10,14 @@ from sandbox.auth import create_token
 from sandbox.config import settings
 from sandbox.main import app
 from sandbox.security.ownership import BOOTSTRAP_ORG_ID
+from tests.conftest import session_create_payload
 
 client = TestClient(app)
 
 
 def test_trace_id_header_is_echoed_and_attached_to_execution_and_audit():
     trace_id = "trace_test_001"
-    session = client.post("/sessions", json={"caller_id": "trace-test"}).json()
+    session = client.post("/sessions", json=session_create_payload("trace-test")).json()
     sid = session["session_id"]
 
     resp = client.post(
@@ -51,6 +52,28 @@ def _register(username: str, password: str = "secret123") -> dict:
     return r.json()
 
 
+def _seed_owned_session(*, user_id: str, organization_id: str, caller_id: str = "trace-seed"):
+    """Service-layer seed: formal AgentSession binding with ownership metadata.
+
+    HTTP POST /sessions is fail-closed under auth_enabled (no JWT forge path).
+    """
+    from sandbox.services.session_manager import session_manager
+    from sandbox.services.workspace_manager import workspace_manager
+    from tests.conftest import formal_id
+
+    agent = formal_id("AGT")
+    wsp = formal_id("WSP")
+    session = session_manager.create(
+        agent_session_id=agent,
+        workspace_id=wsp,
+        user_id=user_id,
+        caller_id=caller_id,
+        metadata={"organization_id": organization_id},
+    )
+    workspace_manager.init_workspace(wsp)
+    return session
+
+
 def test_trace_cross_user_returns_404(monkeypatch):
     """Owner can read their trace; another user gets 404 (no existence leak)."""
     monkeypatch.setattr(settings, "auth_enabled", True)
@@ -62,14 +85,13 @@ def test_trace_cross_user_returns_404(monkeypatch):
     headers_b = {"Authorization": f"Bearer {b['token']}"}
 
     trace_id = f"trace_own_{uuid.uuid4().hex[:8]}"
-    session = client.post(
-        "/sessions",
-        json={"caller_id": "trace-auth"},
-        headers=headers_a,
+    seeded = _seed_owned_session(
+        user_id=a["user"]["id"],
+        organization_id=a["user"]["organization_id"],
+        caller_id="trace-auth",
     )
-    assert session.status_code == 201, session.text
-    sid = session.json()["session_id"]
-    assert session.json()["user_id"] == a["user"]["id"]
+    sid = seeded.session_id
+    assert seeded.user_id == a["user"]["id"]
 
     resp = client.post(
         f"/sessions/{sid}/executions/command",
@@ -107,13 +129,12 @@ def test_trace_cross_org_returns_404(monkeypatch):
     headers_other = {"Authorization": f"Bearer {tok_other}"}
 
     trace_id = f"trace_org_{uuid.uuid4().hex[:8]}"
-    session = client.post(
-        "/sessions",
-        json={"caller_id": "trace-org"},
-        headers=headers_a,
+    seeded = _seed_owned_session(
+        user_id=a["user"]["id"],
+        organization_id=a["user"]["organization_id"],
+        caller_id="trace-org",
     )
-    assert session.status_code == 201
-    sid = session.json()["session_id"]
+    sid = seeded.session_id
     client.post(
         f"/sessions/{sid}/executions/command",
         json={"command": "echo org"},
@@ -148,12 +169,12 @@ def test_trace_admin_same_org_only(monkeypatch):
     )
 
     trace_id = f"trace_adm_{uuid.uuid4().hex[:8]}"
-    session = client.post(
-        "/sessions",
-        json={"caller_id": "trace-admin"},
-        headers=headers_owner,
+    seeded = _seed_owned_session(
+        user_id=owner["user"]["id"],
+        organization_id=owner["user"]["organization_id"],
+        caller_id="trace-admin",
     )
-    sid = session.json()["session_id"]
+    sid = seeded.session_id
     client.post(
         f"/sessions/{sid}/executions/command",
         json={"command": "echo admin"},

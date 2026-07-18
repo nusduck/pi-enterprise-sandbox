@@ -47,7 +47,7 @@ import {
   POLICY_DECISION,
 } from '../packages/enterprise-agent-kit/extensions/policy/index.js';
 import { createSandboxTools } from '../packages/enterprise-agent-kit/extensions/sandbox-tools/tool-definitions.js';
-import { resolveToolAllowlist, BASE_TOOL_NAMES } from '../runtime/agent-runtime.js';
+import { resolveToolAllowlist, BASE_TOOL_NAMES } from '../runtime/tool-contract.js';
 
 function makeSkillMd(name, description = 'Test skill') {
   return `---

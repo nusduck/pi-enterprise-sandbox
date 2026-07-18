@@ -111,6 +111,33 @@ class SessionRepository:
     def get_by_enterprise_session_id(self, enterprise_session_id: str) -> SessionResponse | None:
         return self._get_by("enterprise_session_id", enterprise_session_id)
 
+    def get_by_workspace_id(self, workspace_id: str) -> SessionResponse | None:
+        """Any-status lookup by opaque workspace_id (binding occupancy).
+
+        Scans ``workspace_path`` (historical column holding workspace_id) and
+        JSON metadata. Used so retained COMPLETED rows still block reassignment
+        after a failed disk cleanup.
+        """
+        if not workspace_id:
+            return None
+        with self.db.connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM sessions WHERE workspace_path = ? LIMIT 1",
+                (workspace_id,),
+            ).fetchone()
+            if row is None:
+                # Fallback: metadata JSON may carry workspace_id when path column empty
+                rows = conn.execute("SELECT * FROM sessions").fetchall()
+                for candidate in rows:
+                    model = self._row_to_model(candidate)
+                    wid = model.workspace_id or (model.metadata or {}).get(
+                        "workspace_id"
+                    )
+                    if wid == workspace_id:
+                        return model
+                return None
+        return self._row_to_model(row)
+
     def _get_by(self, field: str, value: str) -> SessionResponse | None:
         if field not in {"session_id", "agent_session_id", "enterprise_session_id"}:
             raise ValueError(f"Unsupported session lookup field: {field}")
@@ -125,6 +152,7 @@ class SessionRepository:
             return cur.rowcount > 0
 
     def update_status(self, session_id: str, status: SessionStatus) -> SessionResponse | None:
+        """Set status only — does **not** renew TTL."""
         now = datetime.now(timezone.utc).isoformat()
         with self.db.connect() as conn:
             conn.execute(
@@ -132,6 +160,33 @@ class SessionRepository:
                 (status.value, now, session_id),
             )
             conn.commit()
+        return self.get(session_id)
+
+    def reactivate_for_rebind(
+        self,
+        session_id: str,
+        *,
+        now_iso: str,
+        ttl_until_iso: str,
+    ) -> SessionResponse | None:
+        """Atomic RUNNING + TTL renew for multi-turn AgentSession rebind."""
+        with self.db.connect() as conn:
+            cur = conn.execute(
+                """
+                UPDATE sessions
+                SET status = ?, updated_at = ?, ttl_until = ?
+                WHERE session_id = ?
+                """,
+                (
+                    SessionStatus.RUNNING.value,
+                    now_iso,
+                    ttl_until_iso,
+                    session_id,
+                ),
+            )
+            conn.commit()
+            if cur.rowcount == 0:
+                return None
         return self.get(session_id)
 
     def list_active(self) -> list[SessionResponse]:
@@ -362,6 +417,8 @@ class ArtifactRepository:
 
     @staticmethod
     def _row_to_model(row) -> ArtifactResponse:
+        # sqlite3.Row supports key access; sha256/run_id may be absent on legacy schema
+        keys = row.keys() if hasattr(row, "keys") else []
         return ArtifactResponse(
             artifact_id=row["artifact_id"],
             name=row["name"],
@@ -370,6 +427,9 @@ class ArtifactRepository:
             source_execution_id=row["source_execution_id"],
             size=row["size"] or 0,
             created_at=row["created_at"],
+            sha256=row["sha256"] if "sha256" in keys else None,
+            run_id=row["run_id"] if "run_id" in keys else None,
+            status=row["status"] if "status" in keys and row["status"] else "ready",
         )
 
 
@@ -2761,9 +2821,12 @@ class ProcessRepository:
                     process_id, session_id, run_id, command, cwd, env_json,
                     status, pid, exit_code, background, timeout_seconds, error,
                     stdout_log, stderr_log, log_truncated, log_total,
-                    started_at, finished_at, created_at, updated_at, trace_id
+                    started_at, finished_at, created_at, updated_at, trace_id,
+                    pgid, start_identity, org_id, user_id, sandbox_session_id,
+                    execution_id, conversation_id
                 ) VALUES (
-                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                    ?, ?, ?, ?, ?, ?, ?
                 )
                 ON CONFLICT(process_id) DO UPDATE SET
                     session_id=excluded.session_id,
@@ -2784,7 +2847,14 @@ class ProcessRepository:
                     started_at=excluded.started_at,
                     finished_at=excluded.finished_at,
                     updated_at=excluded.updated_at,
-                    trace_id=excluded.trace_id
+                    trace_id=excluded.trace_id,
+                    pgid=excluded.pgid,
+                    start_identity=excluded.start_identity,
+                    org_id=excluded.org_id,
+                    user_id=excluded.user_id,
+                    sandbox_session_id=excluded.sandbox_session_id,
+                    execution_id=excluded.execution_id,
+                    conversation_id=excluded.conversation_id
                 """,
                 (
                     entry["process_id"],
@@ -2808,6 +2878,13 @@ class ProcessRepository:
                     entry.get("created_at"),
                     entry.get("updated_at"),
                     entry.get("trace_id"),
+                    entry.get("pgid"),
+                    entry.get("start_identity"),
+                    entry.get("org_id"),
+                    entry.get("user_id"),
+                    entry.get("sandbox_session_id") or entry.get("session_id"),
+                    entry.get("execution_id") or entry.get("process_id"),
+                    entry.get("conversation_id"),
                 ),
             )
             conn.commit()
@@ -2873,6 +2950,12 @@ class ProcessRepository:
 
     @staticmethod
     def _row_to_dict(row: Any) -> dict[str, Any]:
+        def _col(name: str, default: Any = None) -> Any:
+            try:
+                return row[name]
+            except (KeyError, IndexError, TypeError):
+                return default
+
         return {
             "process_id": row["process_id"],
             "session_id": row["session_id"],
@@ -2895,4 +2978,11 @@ class ProcessRepository:
             "created_at": row["created_at"],
             "updated_at": row["updated_at"],
             "trace_id": row["trace_id"],
+            "pgid": _col("pgid"),
+            "start_identity": _col("start_identity"),
+            "org_id": _col("org_id"),
+            "user_id": _col("user_id"),
+            "sandbox_session_id": _col("sandbox_session_id") or row["session_id"],
+            "execution_id": _col("execution_id") or row["process_id"],
+            "conversation_id": _col("conversation_id"),
         }

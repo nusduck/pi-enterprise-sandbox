@@ -2,6 +2,7 @@
  * BFF → Agent service HTTP client.
  * Creates runs, streams sequenced SSE events, and cancels.
  */
+import { randomBytes } from 'node:crypto';
 import { config } from '../config.js';
 
 function internalHeaders(extra = {}) {
@@ -15,7 +16,29 @@ function internalHeaders(extra = {}) {
   return h;
 }
 
-function requestHeaders({ auth = null, traceId = null, extra = {} } = {}) {
+/**
+ * Build a W3C traceparent with non-zero random span-id (8 bytes / 16 hex).
+ * All-zero span-id is illegal per W3C Trace Context.
+ * @param {string} traceId32 — lowercase 32-hex non-zero
+ * @returns {string}
+ */
+export function buildTraceparent(traceId32) {
+  const tid = String(traceId32).toLowerCase();
+  if (!/^[0-9a-f]{32}$/.test(tid) || tid === '0'.repeat(32)) {
+    throw new Error('traceId must be 32 non-zero hex chars');
+  }
+  let span = randomBytes(8).toString('hex');
+  // Extremely unlikely all-zero; regenerate once.
+  if (span === '0'.repeat(16)) span = randomBytes(8).toString('hex');
+  return `00-${tid}-${span}-01`;
+}
+
+function requestHeaders({
+  auth = null,
+  traceId = null,
+  idempotencyKey = null,
+  extra = {},
+} = {}) {
   const headers = internalHeaders(extra);
   if (auth?.authorization) headers.Authorization = auth.authorization;
   if (auth?.actingUserId) headers['X-Acting-User-Id'] = auth.actingUserId;
@@ -23,16 +46,35 @@ function requestHeaders({ auth = null, traceId = null, extra = {} } = {}) {
     headers['X-Acting-Organization-Id'] = auth.actingOrganizationId;
   }
   if (auth?.actingRole) headers['X-Acting-Role'] = auth.actingRole;
-  if (traceId) headers['X-Trace-Id'] = traceId;
+  // Prefer W3C traceparent with non-zero span; keep X-Trace-Id for compat.
+  if (traceId && /^[0-9a-fA-F]{32}$/.test(String(traceId))) {
+    const tid = String(traceId).toLowerCase();
+    if (tid !== '0'.repeat(32)) {
+      try {
+        headers.traceparent = buildTraceparent(tid);
+      } catch {
+        // Fall through to X-Trace-Id only.
+      }
+      headers['X-Trace-Id'] = tid;
+    }
+  } else if (traceId) {
+    headers['X-Trace-Id'] = String(traceId);
+  }
+  if (idempotencyKey) {
+    headers['Idempotency-Key'] = String(idempotencyKey);
+  }
   return headers;
 }
 
 /**
  * @param {{ messages: unknown[], conversation_id?: string|null, trace_id?: string|null }} body
- * @param {{ auth?: object|null, traceId?: string|null }} [opts]
+ * @param {{ auth?: object|null, traceId?: string|null, idempotencyKey?: string|null }} [opts]
  */
-export async function createAgentRun(body, { auth = null, traceId = null } = {}) {
-  const headers = requestHeaders({ auth, traceId });
+export async function createAgentRun(
+  body,
+  { auth = null, traceId = null, idempotencyKey = null } = {},
+) {
+  const headers = requestHeaders({ auth, traceId, idempotencyKey });
 
   const resp = await fetch(`${config.AGENT_BASE_URL}/internal/agent-runs`, {
     method: 'POST',
@@ -76,12 +118,46 @@ export async function getAgentExtensionDiagnostics(
 }
 
 /**
- * @param {string} runId
+ * List runs for the trusted acting owner (Agent MySQL owner scope).
+ * @param {{ conversationId?: string, status?: string, limit?: number }} [query]
+ * @param {{ auth?: object|null, traceId?: string|null }} [opts]
  */
-export async function cancelAgentRun(runId, { auth = null, traceId = null } = {}) {
+export async function listAgentRuns(
+  query = {},
+  { auth = null, traceId = null } = {},
+) {
+  const url = new URL(`${config.AGENT_BASE_URL}/internal/agent-runs`);
+  if (query.conversationId) {
+    url.searchParams.set('conversation_id', query.conversationId);
+  }
+  if (query.status) url.searchParams.set('status', query.status);
+  if (query.limit) url.searchParams.set('limit', String(query.limit));
+  const resp = await fetch(url, {
+    headers: requestHeaders({ auth, traceId }),
+  });
+  if (!resp.ok) {
+    const text = await resp.text().catch(() => resp.statusText);
+    const err = new Error(`Agent list runs failed (${resp.status}): ${text}`);
+    err.status = resp.status;
+    throw err;
+  }
+  return resp.json();
+}
+
+/**
+ * @param {string} runId
+ * @param {{ auth?: object|null, traceId?: string|null, idempotencyKey?: string|null }} [opts]
+ */
+export async function cancelAgentRun(
+  runId,
+  { auth = null, traceId = null, idempotencyKey = null } = {},
+) {
   const resp = await fetch(
     `${config.AGENT_BASE_URL}/internal/agent-runs/${encodeURIComponent(runId)}/cancel`,
-    { method: 'POST', headers: requestHeaders({ auth, traceId }) },
+    {
+      method: 'POST',
+      headers: requestHeaders({ auth, traceId, idempotencyKey }),
+    },
   );
   if (!resp.ok) {
     const text = await resp.text().catch(() => resp.statusText);
@@ -237,22 +313,81 @@ export async function getAgentRun(runId, { auth = null, traceId = null } = {}) {
 }
 
 /**
+ * List historical run events as JSON (Agent MySQL authority).
+ * Uses GET .../events?format=json — not Sandbox agent_runs dual path.
+ *
+ * @param {string} runId
+ * @param {{ afterSequence?: number, limit?: number }} [query]
+ * @param {{ auth?: object|null, traceId?: string|null }} [opts]
+ */
+export async function listAgentEvents(
+  runId,
+  query = {},
+  { auth = null, traceId = null } = {},
+) {
+  const url = new URL(
+    `${config.AGENT_BASE_URL}/internal/agent-runs/${encodeURIComponent(runId)}/events`,
+  );
+  url.searchParams.set('format', 'json');
+  const after = Math.max(0, Number(query.afterSequence) || 0);
+  if (after > 0) {
+    url.searchParams.set('after', String(after));
+    url.searchParams.set('afterSequence', String(after));
+  }
+  if (query.limit != null && Number.isFinite(Number(query.limit))) {
+    url.searchParams.set('limit', String(query.limit));
+  }
+  const resp = await fetch(url, { headers: requestHeaders({ auth, traceId }) });
+  if (!resp.ok) {
+    const text = await resp.text().catch(() => resp.statusText);
+    const err = new Error(`Agent list events failed (${resp.status}): ${text}`);
+    err.status = resp.status;
+    throw err;
+  }
+  const page = await resp.json();
+  // Normalize to array for timeline consumers (page.events or raw array).
+  if (Array.isArray(page)) return page;
+  if (Array.isArray(page?.events)) return page.events;
+  return [];
+}
+
+/**
  * Open SSE event stream for a run (sequenced envelopes).
+ * Agent owns MySQL history + Redis live cutover (PR-10). BFF proxies bytes.
+ *
  * @param {string} runId
  * @param {number} [after]
- * @param {{ signal?: AbortSignal }} [opts]
+ * @param {{
+ *   signal?: AbortSignal,
+ *   auth?: object|null,
+ *   traceId?: string|null,
+ *   lastEventId?: string|null,
+ * }} [opts]
  * @returns {Promise<Response>}
  */
 export async function openAgentRunEvents(
   runId,
   after = 0,
-  { signal, auth = null, traceId = null } = {},
+  { signal, auth = null, traceId = null, lastEventId = null } = {},
 ) {
-  const url = `${config.AGENT_BASE_URL}/internal/agent-runs/${encodeURIComponent(runId)}/events?after=${after}`;
+  const qs = new URLSearchParams();
+  const afterSeq = Math.max(0, Number(after) || 0);
+  if (afterSeq > 0) {
+    qs.set('after', String(afterSeq));
+    qs.set('afterSequence', String(afterSeq));
+  }
+  const q = qs.toString();
+  const url =
+    `${config.AGENT_BASE_URL}/internal/agent-runs/${encodeURIComponent(runId)}/events` +
+    (q ? `?${q}` : '');
+  const extra = { Accept: 'text/event-stream' };
+  if (lastEventId && String(lastEventId).trim()) {
+    extra['Last-Event-ID'] = String(lastEventId).trim();
+  }
   const headers = requestHeaders({
     auth,
     traceId,
-    extra: { Accept: 'text/event-stream' },
+    extra,
   });
   const resp = await fetch(url, { headers, signal });
   if (!resp.ok || !resp.body) {

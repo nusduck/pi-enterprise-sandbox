@@ -52,15 +52,17 @@ class ToolExecutionMode(str, Enum):
 # ── Session ────────────────────────────────────────────────────────────
 
 class SessionCreate(BaseModel):
+    # Required for workspace ownership (PR-07A): AgentSession 1:1 Workspace.
     agent_session_id: str | None = None
+    workspace_id: str | None = None
+    # Optional preallocated formal sandbox session id (CHAR(26) ULID).
+    sandbox_session_id: str | None = None
     enterprise_session_id: str | None = None
     user_id: str | None = None
     caller_id: str = "unknown"
     metadata: dict[str, Any] = Field(default_factory=dict)
-    # Public binding source of truth. workspace_id is a compatibility
-    # assertion and is rejected without conversation_id or when mismatched.
+    # Metadata only — never owns or derives workspace_id.
     conversation_id: str | None = None
-    workspace_id: str | None = None
 
 
 class SessionResponse(BaseModel):
@@ -82,6 +84,11 @@ class SessionResponse(BaseModel):
 
 class PythonExecutionRequest(BaseModel):
     code: str = Field(..., description="Python code string to execute")
+    args: list[str] = Field(
+        default_factory=list,
+        description="Optional argv-style arguments (no shell); max 32 items",
+        max_length=32,
+    )
     timeout: int | None = None
     env_overrides: dict[str, str] = Field(default_factory=dict)
 
@@ -108,6 +115,10 @@ class ExecutionResponse(BaseModel):
     duration_ms: float = 0.0
     truncated: bool = False
     trace_id: str | None = None
+    # PR-08 python tool metadata (optional; absent for bash/node).
+    materialized_path: str | None = None
+    python_version: str | None = None
+    python_mode: str | None = None
 
 
 # ── File ───────────────────────────────────────────────────────────────
@@ -249,13 +260,48 @@ class GrepResponse(BaseModel):
     stop_reason: str | None = None
 
 
+# ── Dataset ────────────────────────────────────────────────────────────
+
+class DatasetResponse(BaseModel):
+    dataset_id: str
+    org_id: str | None = None
+    user_id: str | None = None
+    conversation_id: str | None = None
+    agent_session_id: str | None = None
+    sandbox_session_id: str | None = None
+    original_filename: str = ""
+    name: str = ""
+    path: str = ""
+    stored_relative_path: str = ""
+    mime_type: str = "application/octet-stream"
+    size_bytes: int = 0
+    size: int = 0
+    sha256: str | None = None
+    status: str = "uploading"
+    created_at: str = ""
+    completed_at: str | None = None
+
+
+class DatasetListResponse(BaseModel):
+    datasets: list[DatasetResponse] = Field(default_factory=list)
+    total: int = 0
+
+
 # ── Artifact ───────────────────────────────────────────────────────────
 
 class ArtifactRegister(BaseModel):
-    name: str
+    name: str | None = None
     path: str
     mime_type: str = "application/octet-stream"
     source_execution_id: str | None = None
+    # Formal ownership / run binding (PR-09). Optional for legacy session-only.
+    run_id: str | None = None
+    org_id: str | None = None
+    user_id: str | None = None
+    conversation_id: str | None = None
+    agent_session_id: str | None = None
+    expected_sha256: str | None = None
+    description: str | None = None
 
 
 class ArtifactResponse(BaseModel):
@@ -266,6 +312,9 @@ class ArtifactResponse(BaseModel):
     source_execution_id: str | None = None
     size: int = 0
     created_at: str = ""
+    sha256: str | None = None
+    run_id: str | None = None
+    status: str = "ready"
 
 
 class ArtifactListResponse(BaseModel):
@@ -375,6 +424,8 @@ class ConversationCreate(BaseModel):
     title: str | None = None  # None = leave unchanged on PATCH
     sandbox_session_id: str | None = None
     agent_session_id: str | None = None
+    # Optional pointer only — Conversation never invents or owns workspace_id.
+    workspace_id: str | None = None
     # None on PATCH means "do not replace messages"; empty list is a valid clear
     messages: list[dict[str, Any]] | None = None
     owner_user_id: str | None = None
@@ -662,7 +713,7 @@ class AgentSessionResumeResponse(BaseModel):
 # ── Managed process (Process Manager / B2) ──────────────────────────────
 
 class ProcessStatus(str, Enum):
-    """Lifecycle states for managed long-running processes (ADR §8.3)."""
+    """Lifecycle states for managed long-running processes (ADR §8.3 / PR-08)."""
 
     CREATED = "created"
     RUNNING = "running"
@@ -673,6 +724,9 @@ class ProcessStatus(str, Enum):
     CANCELLED = "cancelled"
     TIMEOUT = "timeout"
     ORPHANED = "orphaned"
+    # Runner restart lost Popen handles; OS process may already be dead or was
+    # identity-killed. Never remains RUNNING after recovery scan.
+    LOST = "lost"
 
 
 PROCESS_TERMINAL_STATUSES = frozenset(
@@ -682,11 +736,13 @@ PROCESS_TERMINAL_STATUSES = frozenset(
         ProcessStatus.CANCELLED.value,
         ProcessStatus.TIMEOUT.value,
         ProcessStatus.ORPHANED.value,
+        ProcessStatus.LOST.value,
         ProcessStatus.COMPLETED,
         ProcessStatus.FAILED,
         ProcessStatus.CANCELLED,
         ProcessStatus.TIMEOUT,
         ProcessStatus.ORPHANED,
+        ProcessStatus.LOST,
     }
 )
 
@@ -714,7 +770,12 @@ class ProcessStartRequest(BaseModel):
     env: dict[str, str] = Field(default_factory=dict)
     timeout: int | None = Field(
         default=None,
-        description="Seconds before process is marked timeout and killed; null = no limit",
+        gt=0,
+        description=(
+            "Wall-clock seconds before process is marked timeout and killed. "
+            "Omit/null uses server process_timeout_seconds default. "
+            "0 and values above max_process_timeout_seconds are rejected."
+        ),
     )
     background: bool = Field(
         default=False,
@@ -748,6 +809,9 @@ class ProcessStartResponse(BaseModel):
     process_id: str
     status: str = ProcessStatus.RUNNING.value
     started_at: str = ""
+    # Plan §13.7 cursors (generation-offset); independent stdout/stderr streams.
+    stdout_cursor: str = "0-0"
+    stderr_cursor: str = "0-0"
 
 
 class ProcessLogsResponse(BaseModel):
@@ -759,6 +823,32 @@ class ProcessLogsResponse(BaseModel):
     # When truncated=true, clients can pull full logs from this path (B3).
     full_log_location: str | None = None
     log_total: int = 0
+    stdout_cursor: str | None = None
+    stderr_cursor: str | None = None
+    next_stdout_cursor: str | None = None
+    next_stderr_cursor: str | None = None
+
+
+class ProcessReadRequest(BaseModel):
+    """Incremental stream read by cursor (process_read tool contract)."""
+
+    stream: str = Field(
+        default="stdout",
+        description="stdout | stderr",
+    )
+    cursor: str = Field(default="0-0", max_length=64)
+    limit: int = Field(default=8192, ge=1, le=65536)
+
+
+class ProcessReadResponse(BaseModel):
+    process_id: str
+    stream: str
+    cursor: str
+    next_cursor: str
+    data: str = ""
+    truncated: bool = False
+    completed: bool = False
+    status: str | None = None
 
 
 class ExecutionLogsResponse(BaseModel):

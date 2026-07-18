@@ -3,9 +3,18 @@
 import pytest
 from fastapi.testclient import TestClient
 
+from sandbox.config import settings
 from sandbox.main import app
 from sandbox.services.session_manager import session_manager
 from sandbox.services.workspace_manager import workspace_manager
+from tests.conftest import session_create_payload
+
+
+@pytest.fixture(autouse=True)
+def hermetic_auth(monkeypatch):
+    """Do not silently rely on host SANDBOX_AUTH_ENABLED / API token."""
+    monkeypatch.setattr(settings, "auth_enabled", False)
+    monkeypatch.setattr(settings, "api_token", "")
 
 
 @pytest.fixture(autouse=True)
@@ -13,8 +22,10 @@ def cleanup():
     yield
     # Reset state between tests
     for session in session_manager.list_active():
+        wid = session.workspace_id or (session.metadata or {}).get("workspace_id")
         session_manager.delete(session.session_id)
-        workspace_manager.remove_workspace(session.session_id)
+        if wid:
+            workspace_manager.remove_workspace(wid)
 
 
 client = TestClient(app)
@@ -22,14 +33,14 @@ client = TestClient(app)
 
 class TestSessionIntegration:
     def test_create_session(self):
-        resp = client.post("/sessions", json={"caller_id": "test"})
+        resp = client.post("/sessions", json=session_create_payload("test"))
         assert resp.status_code == 201
         data = resp.json()
         assert data["session_id"].startswith("sandbox_")
         assert data["status"] == "RUNNING"
 
     def test_get_session(self):
-        created = client.post("/sessions", json={}).json()
+        created = client.post("/sessions", json=session_create_payload()).json()
         sid = created["session_id"]
 
         resp = client.get(f"/sessions/{sid}")
@@ -41,15 +52,18 @@ class TestSessionIntegration:
         assert resp.status_code == 404
 
     def test_delete_session(self):
-        created = client.post("/sessions", json={}).json()
+        created = client.post("/sessions", json=session_create_payload()).json()
         sid = created["session_id"]
 
         resp = client.delete(f"/sessions/{sid}")
         assert resp.status_code == 204
 
     def test_create_session_with_metadata(self):
+        agent = "01JTESTAGENT00000000000001"
+        wsp = "01JTESTWRKSP00000000000001"
         resp = client.post("/sessions", json={
-            "agent_session_id": "pi_001",
+            "agent_session_id": agent,
+            "workspace_id": wsp,
             "enterprise_session_id": "ent_001",
             "user_id": "user_abc",
             "caller_id": "pi-agent",
@@ -57,18 +71,22 @@ class TestSessionIntegration:
         })
         assert resp.status_code == 201
         data = resp.json()
-        assert data["agent_session_id"] == "pi_001"
+        assert data["agent_session_id"] == agent
+        assert data["workspace_id"] == wsp
         assert data["enterprise_session_id"] == "ent_001"
         assert data["user_id"] == "user_abc"
 
     def test_get_session_by_external_ids(self):
+        agent = "01JTESTAGENT00000000000002"
+        wsp = "01JTESTWRKSP00000000000002"
         created = client.post("/sessions", json={
-            "agent_session_id": "pi_lookup_001",
+            "agent_session_id": agent,
+            "workspace_id": wsp,
             "enterprise_session_id": "ent_lookup_001",
             "caller_id": "pi-agent",
         }).json()
 
-        by_agent = client.get("/sessions/by-agent/pi_lookup_001")
+        by_agent = client.get(f"/sessions/by-agent/{agent}")
         by_enterprise = client.get("/sessions/by-enterprise/ent_lookup_001")
 
         assert by_agent.status_code == 200
@@ -79,7 +97,7 @@ class TestSessionIntegration:
 
 class TestExecutionIntegration:
     def test_run_python(self):
-        session = client.post("/sessions", json={}).json()
+        session = client.post("/sessions", json=session_create_payload()).json()
         sid = session["session_id"]
 
         resp = client.post(
@@ -92,7 +110,7 @@ class TestExecutionIntegration:
         assert "stdout_preview" in data
 
     def test_run_python_with_error(self):
-        session = client.post("/sessions", json={}).json()
+        session = client.post("/sessions", json=session_create_payload()).json()
         sid = session["session_id"]
 
         resp = client.post(
@@ -104,7 +122,7 @@ class TestExecutionIntegration:
         assert data["status"] == "FAILED"
 
     def test_run_command(self):
-        session = client.post("/sessions", json={}).json()
+        session = client.post("/sessions", json=session_create_payload()).json()
         sid = session["session_id"]
 
         resp = client.post(
@@ -116,7 +134,7 @@ class TestExecutionIntegration:
         assert "command works" in data.get("stdout_preview", "")
 
     def test_run_on_inactive_session(self):
-        session = client.post("/sessions", json={}).json()
+        session = client.post("/sessions", json=session_create_payload()).json()
         sid = session["session_id"]
         client.delete(f"/sessions/{sid}")
 
@@ -129,7 +147,7 @@ class TestExecutionIntegration:
 
 class TestFileIntegration:
     def test_write_and_read(self):
-        session = client.post("/sessions", json={}).json()
+        session = client.post("/sessions", json=session_create_payload()).json()
         sid = session["session_id"]
 
         resp = client.post(
@@ -146,7 +164,7 @@ class TestFileIntegration:
         assert resp.json()["content"] == "hello"
 
     def test_list_files(self):
-        session = client.post("/sessions", json={}).json()
+        session = client.post("/sessions", json=session_create_payload()).json()
         sid = session["session_id"]
 
         client.post(f"/sessions/{sid}/files/write",
@@ -159,7 +177,7 @@ class TestFileIntegration:
         assert resp.json()["total"] >= 2
 
     def test_path_escape_blocked(self):
-        session = client.post("/sessions", json={}).json()
+        session = client.post("/sessions", json=session_create_payload()).json()
         sid = session["session_id"]
 
         resp = client.get(
@@ -171,7 +189,7 @@ class TestFileIntegration:
 
 class TestArtifactIntegration:
     def test_register_and_list(self):
-        session = client.post("/sessions", json={}).json()
+        session = client.post("/sessions", json=session_create_payload()).json()
         sid = session["session_id"]
 
         # Create a file first, then register it as artifact
@@ -196,7 +214,7 @@ class TestArtifactIntegration:
 
     def test_submit_artifact(self):
         """Explicit artifact submission via POST /artifacts/submit."""
-        session = client.post("/sessions", json={}).json()
+        session = client.post("/sessions", json=session_create_payload()).json()
         sid = session["session_id"]
 
         # Create a file via bash

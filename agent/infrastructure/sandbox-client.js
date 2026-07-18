@@ -15,8 +15,6 @@ import { randomUUID } from 'node:crypto';
 import { config, AUTH_HEADER } from '../config.js';
 
 const BASE = config.SANDBOX_BASE_URL;
-const LIFECYCLE_REQUEST_TIMEOUT_MS = 10_000;
-const LEDGER_REQUEST_TIMEOUT_MS = 10_000;
 const REQUEST_GRACE_MS = 5_000;
 
 export class SandboxError extends Error {
@@ -153,10 +151,6 @@ export function createSandboxClient({ traceId = null, auth = null } = {}) {
     }
   }
 
-  const lifecycleFetch = (path, opts = {}) =>
-    sbFetch(path, { ...opts, timeoutMs: LIFECYCLE_REQUEST_TIMEOUT_MS });
-  const ledgerFetch = (path, opts = {}) =>
-    sbFetch(path, { ...opts, timeoutMs: LEDGER_REQUEST_TIMEOUT_MS });
   const timeoutForSeconds = (seconds) => {
     const value = Number(seconds);
     return Number.isFinite(value) && value >= 0
@@ -224,227 +218,8 @@ export function createSandboxClient({ traceId = null, auth = null } = {}) {
       return text ? JSON.parse(text) : { ok: true };
     },
 
-    // ── Logical Pi SDK agent sessions (ADR 0002 §7) ─
-    async createAgentSession(body = {}) {
-      const resp = await sbFetch('/agent-sessions', {
-        method: 'POST',
-        body: JSON.stringify(body),
-      });
-      return resp.json();
-    },
-
-    async getAgentSession(sessionId) {
-      const resp = await sbFetch(`/agent-sessions/${encodeURIComponent(sessionId)}`);
-      return resp.json();
-    },
-
-    async resumeAgentSession(sessionId) {
-      const resp = await sbFetch(
-        `/agent-sessions/${encodeURIComponent(sessionId)}/resume`,
-        { method: 'POST', body: JSON.stringify({}) },
-      );
-      return resp.json();
-    },
-
-    async listAgentSessionEntries(sessionId, { afterSequence = 0, limit } = {}) {
-      const q = new URLSearchParams();
-      if (afterSequence) q.set('after_sequence', String(afterSequence));
-      if (limit != null) q.set('limit', String(limit));
-      const qs = q.toString();
-      const path = `/agent-sessions/${encodeURIComponent(sessionId)}/entries${qs ? `?${qs}` : ''}`;
-      const resp = await sbFetch(path);
-      return resp.json();
-    },
-
-    async appendAgentSessionEntries(sessionId, body = {}) {
-      const resp = await sbFetch(
-        `/agent-sessions/${encodeURIComponent(sessionId)}/entries`,
-        {
-          method: 'POST',
-          body: JSON.stringify(body),
-        },
-      );
-      return resp.json();
-    },
-
-    async getConversationAgentSession(conversationId) {
-      const resp = await sbFetch(
-        `/conversations/${encodeURIComponent(conversationId)}/agent-session`,
-      );
-      return resp.json();
-    },
-
-    // ── Agent runs / events (session persistence MVP) ─
-    async createAgentRun(body = {}) {
-      const resp = await lifecycleFetch('/agent-runs', {
-        method: 'POST',
-        body: JSON.stringify(body),
-      });
-      return resp.json();
-    },
-
-    async getAgentRun(runId) {
-      const resp = await lifecycleFetch(`/agent-runs/${encodeURIComponent(runId)}`);
-      return resp.json();
-    },
-
-    async appendAgentEvent(runId, event) {
-      const resp = await lifecycleFetch(`/agent-runs/${encodeURIComponent(runId)}/events`, {
-        method: 'POST',
-        body: JSON.stringify(event),
-      });
-      return resp.json();
-    },
-
-    async listAgentEvents(runId, { afterSequence = 0, limit } = {}) {
-      const q = new URLSearchParams();
-      if (afterSequence) q.set('after_sequence', String(afterSequence));
-      if (limit != null) q.set('limit', String(limit));
-      const qs = q.toString();
-      const path = `/agent-runs/${encodeURIComponent(runId)}/events${qs ? `?${qs}` : ''}`;
-      const resp = await lifecycleFetch(path);
-      return resp.json();
-    },
-
-    async interruptAgentRun(runId, body = {}) {
-      const resp = await lifecycleFetch(`/agent-runs/${encodeURIComponent(runId)}/interrupt`, {
-        method: 'POST',
-        body: JSON.stringify(body),
-      });
-      return resp.json();
-    },
-
-    async completeAgentRun(runId, body = {}) {
-      const resp = await lifecycleFetch(`/agent-runs/${encodeURIComponent(runId)}/complete`, {
-        method: 'POST',
-        body: JSON.stringify(body),
-      });
-      return resp.json();
-    },
-
-    async failAgentRun(runId, body = {}) {
-      const resp = await lifecycleFetch(`/agent-runs/${encodeURIComponent(runId)}/fail`, {
-        method: 'POST',
-        body: JSON.stringify(body),
-      });
-      return resp.json();
-    },
-
-    /** B6: park run while waiting for human approval (releases lease). */
-    async markAgentRunWaitingApproval(runId, body = {}) {
-      const resp = await lifecycleFetch(
-        `/agent-runs/${encodeURIComponent(runId)}/waiting-approval`,
-        { method: 'POST', body: JSON.stringify(body) },
-      );
-      return resp.json();
-    },
-
-    async markAgentRunWaitingInput(runId, body = {}) {
-      const resp = await lifecycleFetch(
-        `/agent-runs/${encodeURIComponent(runId)}/waiting-input`,
-        { method: 'POST', body: JSON.stringify(body) },
-      );
-      return resp.json();
-    },
-
-    async replaceTaskPlan(runId, projection) {
-      const resp = await lifecycleFetch(`/agent-runs/${encodeURIComponent(runId)}/task-plan`, {
-        method: 'PUT',
-        body: JSON.stringify(projection),
-      });
-      return resp.json();
-    },
-
-    /** B6: terminal budget_exceeded. */
-    async budgetExceedAgentRun(runId, body = {}) {
-      const resp = await lifecycleFetch(
-        `/agent-runs/${encodeURIComponent(runId)}/budget-exceeded`,
-        { method: 'POST', body: JSON.stringify(body) },
-      );
-      return resp.json();
-    },
-
-    async releaseAgentRun(runId, body = {}) {
-      const resp = await lifecycleFetch(`/agent-runs/${encodeURIComponent(runId)}/release`, {
-        method: 'POST',
-        body: JSON.stringify(body),
-      });
-      return resp.json();
-    },
-
-    async claimAgentRun(runId, body = {}) {
-      const resp = await lifecycleFetch(`/agent-runs/${encodeURIComponent(runId)}/claim`, {
-        method: 'POST',
-        body: JSON.stringify(body),
-      });
-      return resp.json();
-    },
-
-    async renewAgentRunLease(runId, body = {}) {
-      const resp = await lifecycleFetch(`/agent-runs/${encodeURIComponent(runId)}/renew`, {
-        method: 'POST',
-        body: JSON.stringify(body),
-      });
-      return resp.json();
-    },
-
-    async listWaitingApprovalRuns() {
-      const resp = await lifecycleFetch('/agent-runs?status=waiting_approval');
-      return resp.json();
-    },
-
-    async prepareToolExecution(body) {
-      const resp = await ledgerFetch('/tool-executions', {
-        method: 'POST',
-        body: JSON.stringify(body),
-      });
-      return resp.json();
-    },
-
-    async getToolExecution(toolCallId) {
-      const resp = await ledgerFetch(`/tool-executions/${encodeURIComponent(toolCallId)}`);
-      return resp.json();
-    },
-
-    async listToolExecutions({ runId, idempotencyKey } = {}) {
-      const q = new URLSearchParams();
-      if (runId) q.set('run_id', runId);
-      if (idempotencyKey) q.set('idempotency_key', idempotencyKey);
-      const qs = q.toString();
-      const resp = await ledgerFetch(`/tool-executions${qs ? `?${qs}` : ''}`);
-      return resp.json();
-    },
-
-    async markToolExecuting(toolCallId) {
-      const resp = await ledgerFetch(
-        `/tool-executions/${encodeURIComponent(toolCallId)}/executing`,
-        { method: 'POST', body: JSON.stringify({}) },
-      );
-      return resp.json();
-    },
-
-    async markToolWaitingApproval(toolCallId) {
-      const resp = await ledgerFetch(
-        `/tool-executions/${encodeURIComponent(toolCallId)}/waiting-approval`,
-        { method: 'POST', body: JSON.stringify({}) },
-      );
-      return resp.json();
-    },
-
-    async markToolTerminal(toolCallId, body) {
-      const resp = await ledgerFetch(
-        `/tool-executions/${encodeURIComponent(toolCallId)}/terminal`,
-        { method: 'POST', body: JSON.stringify(body) },
-      );
-      return resp.json();
-    },
-
-    async toolCanAutoRetry(toolCallId) {
-      const resp = await ledgerFetch(
-        `/tool-executions/${encodeURIComponent(toolCallId)}/can-auto-retry`,
-      );
-      return resp.json();
-    },
+    // PR-13 severe: Sandbox does not expose /agent-runs, /agent-sessions, or
+    // /tool-executions. Run/tool ledger authority is Agent MySQL. Do not re-add.
 
     async editFile(sessionId, body) {
       const resp = await sbFetch(`/sessions/${sessionId}/files/edit`, {
@@ -473,16 +248,22 @@ export function createSandboxClient({ traceId = null, auth = null } = {}) {
     },
 
     /**
-     * Run a Python code string via Sandbox (no shell). Writes temp .py then
-     * `python3 -u <file>` — avoids bash quoting / policy-parser fail-closed.
+     * Run a Python code string via Sandbox (no shell).
+     * Sandbox materializes multiline/long code under workspace `.runtime/python/`;
+     * short single-line may use `python3 -c` (list argv — no shell injection).
      * @param {string} sessionId
      * @param {string} code
      * @param {number} [timeout]
+     * @param {{ args?: string[] }} [opts]
      */
-    async executePython(sessionId, code, timeout = 120) {
+    async executePython(sessionId, code, timeout = 120, opts = {}) {
+      const body = { code, timeout };
+      if (Array.isArray(opts.args) && opts.args.length) {
+        body.args = opts.args.map(String);
+      }
       const resp = await sbFetch(`/sessions/${sessionId}/executions/python`, {
         method: 'POST',
-        body: JSON.stringify({ code, timeout }),
+        body: JSON.stringify(body),
         timeoutMs: timeoutForSeconds(timeout),
       });
       return resp.json();
@@ -538,6 +319,23 @@ export function createSandboxClient({ traceId = null, auth = null } = {}) {
       if (limit != null) q.set('limit', String(limit));
       const resp = await sbFetch(
         `/processes/${encodeURIComponent(processId)}/logs?${q}`,
+      );
+      return resp.json();
+    },
+
+    /**
+     * PR-08 process_read: incremental stream read by generation-offset cursor.
+     * @param {string} processId
+     * @param {{ stream?: 'stdout'|'stderr', cursor?: string, limit?: number }} [opts]
+     */
+    async readProcess(processId, { stream = 'stdout', cursor = '0-0', limit = 8192 } = {}) {
+      const q = new URLSearchParams({
+        stream: stream === 'stderr' ? 'stderr' : 'stdout',
+        cursor: String(cursor ?? '0-0'),
+        limit: String(limit ?? 8192),
+      });
+      const resp = await sbFetch(
+        `/processes/${encodeURIComponent(processId)}/read?${q}`,
       );
       return resp.json();
     },
@@ -722,20 +520,7 @@ export function createSandboxClient({ traceId = null, auth = null } = {}) {
       return sbFetch(`/sessions/${sessionId}/files/download?path=${encodeURIComponent(path)}`);
     },
 
-    // ── Artifacts ───────────────────────────────────
-    async registerArtifact(sessionId, name, path, mimeType, sourceExecutionId) {
-      const resp = await sbFetch(`/sessions/${sessionId}/artifacts/register`, {
-        method: 'POST',
-        body: JSON.stringify({
-          name,
-          path,
-          mime_type: mimeType,
-          source_execution_id: sourceExecutionId,
-        }),
-      });
-      return resp.json();
-    },
-
+    // ── Artifacts (submit only — no metadata-only register) ──
     async submitArtifact(sessionId, name, path, mimeType) {
       const resp = await sbFetch(`/sessions/${sessionId}/artifacts/submit`, {
         method: 'POST',
@@ -955,10 +740,6 @@ export async function grepFiles(sessionId, body = {}) {
 
 export async function downloadFileStream(sessionId, path) {
   return createSandboxClient().downloadFileStream(sessionId, path);
-}
-
-export async function registerArtifact(sessionId, name, path, mimeType, sourceExecutionId) {
-  return createSandboxClient().registerArtifact(sessionId, name, path, mimeType, sourceExecutionId);
 }
 
 export async function submitArtifact(sessionId, name, path, mimeType) {

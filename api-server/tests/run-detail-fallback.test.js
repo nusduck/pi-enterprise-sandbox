@@ -1,3 +1,7 @@
+/**
+ * Run detail presentation + GET /api/runs/:id (Agent authority, PR-04/PR-10).
+ * Sandbox is not consulted for Run status; missing Agent run → 404 fail-closed.
+ */
 import assert from 'node:assert/strict';
 import { after, before, test } from 'node:test';
 
@@ -20,9 +24,12 @@ function responseCapture() {
   return {
     status: 0,
     body: '',
-    writeHead(status) {
+    headers: {},
+    writeHead(status, headers) {
       this.status = status;
+      if (headers) this.headers = headers;
     },
+    setHeader() {},
     end(body = '') {
       this.body = String(body);
     },
@@ -39,57 +46,47 @@ const LIVE_MS = {
   updated_at: Date.parse('2026-07-14T11:30:00.000Z'),
 };
 
+const CONV_ULID = '01K0G2PAV8FPMVC9QHJG7JPN51';
+
 before(() => {
   globalThis.fetch = async (input) => {
     const url = String(input);
+    // Match path only — AGENT_BASE_URL may be cached from sibling suites.
+    const path = url.replace(/^https?:\/\/[^/]+/, '');
 
-    if (url === 'http://sandbox.run-detail.test/agent-runs/run_persisted') {
-      return new Response(JSON.stringify({
-        run_id: 'run_persisted',
-        conversation_id: 'conv_1',
-        status: 'completed',
-        ...PERSISTED_ISO,
-      }), { status: 200 });
-    }
-    if (url === 'http://agent.run-detail.test/internal/agent-runs/run_persisted') {
-      return new Response(JSON.stringify({ error: 'Run not found' }), { status: 404 });
+    if (path === '/internal/agent-runs/run_missing') {
+      return new Response(JSON.stringify({ error: 'Run not found' }), {
+        status: 404,
+      });
     }
 
-    if (url === 'http://sandbox.run-detail.test/agent-runs/run_live') {
-      return new Response(JSON.stringify({
-        run_id: 'run_live',
-        conversation_id: 'conv_2',
-        status: 'running',
-        ...PERSISTED_ISO,
-      }), { status: 200 });
-    }
-    if (url === 'http://agent.run-detail.test/internal/agent-runs/run_live') {
-      return new Response(JSON.stringify({
-        run_id: 'run_live',
-        conversation_id: 'conv_2',
-        status: 'running',
-        event_count: 3,
-        next_sequence: 4,
-        ...LIVE_MS,
-      }), { status: 200 });
+    if (path === '/internal/agent-runs/run_live') {
+      return new Response(
+        JSON.stringify({
+          run_id: 'run_live',
+          conversation_id: CONV_ULID,
+          conversationId: CONV_ULID,
+          status: 'running',
+          event_count: 3,
+          next_sequence: 4,
+          ...LIVE_MS,
+        }),
+        { status: 200 },
+      );
     }
 
-    if (url === 'http://sandbox.run-detail.test/agent-runs/run_bad_live_ts') {
-      return new Response(JSON.stringify({
-        run_id: 'run_bad_live_ts',
-        conversation_id: 'conv_3',
-        status: 'running',
-        ...PERSISTED_ISO,
-      }), { status: 200 });
-    }
-    if (url === 'http://agent.run-detail.test/internal/agent-runs/run_bad_live_ts') {
-      return new Response(JSON.stringify({
-        run_id: 'run_bad_live_ts',
-        conversation_id: 'conv_3',
-        status: 'running',
-        created_at: Number.NaN,
-        updated_at: 'not-a-date',
-      }), { status: 200 });
+    if (path === '/internal/agent-runs/run_bad_live_ts') {
+      return new Response(
+        JSON.stringify({
+          run_id: 'run_bad_live_ts',
+          conversation_id: CONV_ULID,
+          conversationId: CONV_ULID,
+          status: 'running',
+          created_at: Number.NaN,
+          updated_at: 'not-a-date',
+        }),
+        { status: 200 },
+      );
     }
 
     throw new Error(`Unexpected fetch: ${url}`);
@@ -155,23 +152,15 @@ test('presentRunDetail falls back to persisted timestamps when live is invalid',
   assert.equal(detail.updated_at, PERSISTED_ISO.updated_at);
 });
 
-test('GET Run returns persisted detail when the live Agent log is missing', async () => {
+test('GET Run fails closed 404 when Agent has no owner-scoped run', async () => {
   const res = responseCapture();
-  await handleGetRun('run_persisted', res, { headers: {}, traceId: 'trace_1' });
-  assert.equal(res.status, 200);
-  assert.deepEqual(JSON.parse(res.body), {
-    run_id: 'run_persisted',
-    conversation_id: 'conv_1',
-    status: 'completed',
-    created_at: PERSISTED_ISO.created_at,
-    updated_at: PERSISTED_ISO.updated_at,
-    runtime_available: false,
-  });
+  await handleGetRun('run_missing', res, { headers: {}, traceId: 'a'.repeat(32) });
+  assert.equal(res.status, 404);
 });
 
-test('GET Run converts live epoch-ms timestamps to ISO strings', async () => {
+test('GET Run converts Agent epoch-ms timestamps to ISO strings', async () => {
   const res = responseCapture();
-  await handleGetRun('run_live', res, { headers: {}, traceId: 'trace_2' });
+  await handleGetRun('run_live', res, { headers: {}, traceId: 'a'.repeat(32) });
   assert.equal(res.status, 200);
   const body = JSON.parse(res.body);
   assert.equal(body.runtime_available, true);
@@ -183,12 +172,16 @@ test('GET Run converts live epoch-ms timestamps to ISO strings', async () => {
   assert.equal(typeof body.updated_at, 'string');
 });
 
-test('GET Run uses persisted timestamps when live timestamps are invalid', async () => {
+test('GET Run leaves invalid Agent timestamps as null (no Sandbox fill)', async () => {
   const res = responseCapture();
-  await handleGetRun('run_bad_live_ts', res, { headers: {}, traceId: 'trace_3' });
+  await handleGetRun('run_bad_live_ts', res, {
+    headers: {},
+    traceId: 'a'.repeat(32),
+  });
   assert.equal(res.status, 200);
   const body = JSON.parse(res.body);
   assert.equal(body.runtime_available, true);
-  assert.equal(body.created_at, PERSISTED_ISO.created_at);
-  assert.equal(body.updated_at, PERSISTED_ISO.updated_at);
+  // No Sandbox merge: unusable timestamps normalize to null.
+  assert.equal(body.created_at, null);
+  assert.equal(body.updated_at, null);
 });

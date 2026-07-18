@@ -1,11 +1,15 @@
-"""Workspace Manager — initialise and clean up conversation/session workspaces.
+"""Workspace Manager — initialise and clean up AgentSession-owned workspaces.
 
 Physical workspaces live under ``settings.workspaces_path / {workspace_id}``.
 Public contract uses opaque ``workspace_id`` + relative tool paths only
 (see ``sandbox.paths``). Physical roots never leave service/repository layers.
 
-A process-global presentation symlink is **disabled by default** because it
-races under concurrent multi-session load. Execution uses physical cwd.
+Ownership (PR-07A / plan §2.6):
+
+- Exactly one AgentSession owns one Workspace.
+- Lifecycle follows AgentSession / Sandbox Session close — never Conversation.
+- Agent-visible ``/home/sandbox/workspace`` is a per-execution Bubblewrap bind.
+- Global mutable presentation symlinks are forbidden and fully removed.
 """
 
 from __future__ import annotations
@@ -13,155 +17,21 @@ from __future__ import annotations
 import logging
 import os
 import shutil
-import threading
-from collections.abc import Callable
 from pathlib import Path
 
 from sandbox.config import settings
-from sandbox.paths import (
-    LEGACY_AGENT_WORKSPACE_PATH,
-    conversation_workspace_id,
-    temp_id_for_workspace_id,
-)
+from sandbox.paths import temp_id_for_workspace_id
+from sandbox.security.path_validation import validate_formal_id
 
 logger = logging.getLogger("sandbox.workspace")
 
-# Optional presentation link (legacy absolute path). Not used as exec cwd.
-WORKSPACE_LINK = Path(LEGACY_AGENT_WORKSPACE_PATH)
 
-
-class WorkspaceWriteConflict(Exception):
-    """Raised when a second session claims write on a leased workspace."""
-
-    def __init__(self, workspace_id: str, holder_session_id: str) -> None:
-        self.workspace_id = workspace_id
-        self.holder_session_id = holder_session_id
-        super().__init__(
-            f"Workspace write lease held by session {holder_session_id}"
-        )
-
-
-class WorkspaceWriteLease:
-    """In-process single-writer lease per conversation workspace.
-
-    One RUNNING sandbox session may hold the write lease for a given
-    ``workspace_id``. A second concurrent claim raises
-    :class:`WorkspaceWriteConflict` (mapped to HTTP 409 by routers).
-    """
-
-    def __init__(self) -> None:
-        self._lock = threading.RLock()
-        # workspace_id -> session_id
-        self._holders: dict[str, str] = {}
-
-    def claim(self, workspace_id: str, session_id: str) -> None:
-        if not workspace_id or not session_id:
-            raise ValueError("workspace_id and session_id are required")
-        with self._lock:
-            current = self._holders.get(workspace_id)
-            if current is None or current == session_id:
-                self._holders[workspace_id] = session_id
-                return
-            # Another session holds the lease — allow reclaim only if that
-            # session is no longer RUNNING (caller may pass a liveness probe).
-            raise WorkspaceWriteConflict(workspace_id, current)
-
-    def claim_with_liveness(
-        self,
-        workspace_id: str,
-        session_id: str,
-        *,
-        is_holder_alive: Callable[[str], bool] | None = None,
-    ) -> None:
-        """Claim lease; if held, reclaim when holder is not alive."""
-        if not workspace_id or not session_id:
-            raise ValueError("workspace_id and session_id are required")
-        with self._lock:
-            current = self._holders.get(workspace_id)
-            if current is None or current == session_id:
-                self._holders[workspace_id] = session_id
-                return
-            alive = True
-            if is_holder_alive is not None:
-                try:
-                    alive = bool(is_holder_alive(current))
-                except Exception:  # noqa: BLE001 — fail closed to conflict
-                    alive = True
-            if not alive:
-                self._holders[workspace_id] = session_id
-                return
-            raise WorkspaceWriteConflict(workspace_id, current)
-
-    def release(self, workspace_id: str, session_id: str | None = None) -> None:
-        with self._lock:
-            current = self._holders.get(workspace_id)
-            if current is None:
-                return
-            if session_id is None or current == session_id:
-                self._holders.pop(workspace_id, None)
-
-    def holder(self, workspace_id: str) -> str | None:
-        with self._lock:
-            return self._holders.get(workspace_id)
-
-    def clear(self) -> None:
-        """Test helper — drop all leases."""
-        with self._lock:
-            self._holders.clear()
-
-
-# Process-wide lease registry (single sandbox worker process).
-write_lease = WorkspaceWriteLease()
+class WorkspaceCleanupError(OSError):
+    """Raised when workspace/temp tree removal fails (binding must not be freed)."""
 
 
 class WorkspaceManager:
-    """Manage per-session / per-conversation workspace directories on disk."""
-
-    # ── Optional presentation symlink (disabled by default) ──
-
-    def activate_workspace(self, target_dir: str | Path) -> Path:
-        """Best-effort: point agent-visible workspace path → *target_dir*.
-
-        **Disabled by default** (``settings.enable_global_workspace_symlink``).
-        Concurrent multi-session correctness depends on physical paths only —
-        never on the global link. Failures are swallowed so host tests never
-        depend on writing under ``/home/sandbox``.
-        """
-        target = Path(target_dir).resolve()
-        if not target.is_dir():
-            target.mkdir(parents=True, exist_ok=True)
-
-        if not getattr(settings, "enable_global_workspace_symlink", False):
-            return target
-
-        try:
-            if WORKSPACE_LINK.is_symlink():
-                WORKSPACE_LINK.unlink()
-            elif WORKSPACE_LINK.exists():
-                # Only remove empty dirs / non-critical fallbacks
-                if WORKSPACE_LINK.is_dir() and not any(WORKSPACE_LINK.iterdir()):
-                    WORKSPACE_LINK.rmdir()
-                elif WORKSPACE_LINK.is_file():
-                    WORKSPACE_LINK.unlink()
-                else:
-                    return target
-
-            WORKSPACE_LINK.parent.mkdir(parents=True, exist_ok=True)
-            if not WORKSPACE_LINK.exists():
-                WORKSPACE_LINK.symlink_to(target)
-        except OSError as exc:
-            logger.debug("activate_workspace skipped (%s): %s", WORKSPACE_LINK, exc)
-
-        return target
-
-    def get_unified_workspace(self) -> Path:
-        """Return the resolved physical path behind the presentation link if any."""
-        try:
-            if WORKSPACE_LINK.exists() or WORKSPACE_LINK.is_symlink():
-                return WORKSPACE_LINK.resolve()
-        except (OSError, RuntimeError):
-            pass
-        return WORKSPACE_LINK
+    """Manage per-AgentSession workspace directories on disk."""
 
     # ── Physical directory management ────────────────────────────
 
@@ -173,23 +43,31 @@ class WorkspaceManager:
         """Return persistent-temp root paired with *workspace_id*."""
         return settings.temp_path / temp_id_for_workspace_id(workspace_id)
 
-    def init_workspace(self, session_id: str) -> Path:
-        """Create an **empty** workspace directory for a sandbox session (P2).
+    def init_workspace(self, workspace_id: str) -> Path:
+        """Create an **empty** workspace directory for a formal workspace_id.
 
         Does **not** add skills symlinks or seed folders. Skills are only
-        available at the agent skill path. Does **not** activate the global
-        presentation symlink.
+        available at the agent skill path (Bubblewrap read-only bind).
         """
-        ws = settings.workspaces_path / session_id
+        safe_id = validate_formal_id(workspace_id, "workspace_id")
+        root = settings.workspaces_path.resolve()
+        ws = (root / safe_id).resolve()
+        try:
+            if not ws.is_relative_to(root):
+                raise PermissionError("Workspace escapes workspaces root")
+        except AttributeError:  # pragma: no cover - Python < 3.9 fallback
+            if os.path.commonpath([str(root), str(ws)]) != str(root):
+                raise PermissionError("Workspace escapes workspaces root")
         ws.mkdir(parents=True, exist_ok=True)
-        self.init_temp(session_id)
+        self.init_temp(safe_id)
         return ws
 
     def init_temp(self, workspace_id: str) -> Path:
         """Create persistent temp storage for an opaque workspace identity."""
+        safe_id = validate_formal_id(workspace_id, "workspace_id")
         root = settings.temp_path.resolve()
         root.mkdir(parents=True, exist_ok=True)
-        temp = (root / temp_id_for_workspace_id(workspace_id)).resolve()
+        temp = (root / temp_id_for_workspace_id(safe_id)).resolve()
         try:
             if not temp.is_relative_to(root):
                 raise PermissionError("Persistent temp escapes configured temp root")
@@ -203,84 +81,77 @@ class WorkspaceManager:
             pass
         return temp
 
-    def init_conversation_workspace(self, conversation_id: str) -> Path:
-        """Create a persistent workspace directory for a conversation session.
+    def remove_workspace(self, workspace_id: str) -> None:
+        """Remove an AgentSession-owned workspace directory tree + paired temp.
 
-        Physical path: ``<workspaces_root>/conv_<conversation_id>/``.
-        Empty at init (P2). No global symlink activation.
-        Client-supplied ids are validated and the resolved path must stay
-        under ``settings.workspaces_path``.
+        Called on Session / AgentSession close — never Conversation lifecycle.
+
+        Raises :class:`WorkspaceCleanupError` if a tree still exists after the
+        removal attempt. Callers **must not** free AgentSession/workspace
+        bindings when this raises — orphan data + freed binding enables
+        cross-session reuse of residual files.
         """
-        from sandbox.security.path_validation import validate_conversation_id
-
-        safe_id = validate_conversation_id(conversation_id)
-        workspace_id = conversation_workspace_id(safe_id)
-        root = settings.workspaces_path.resolve()
-        ws = (root / workspace_id).resolve()
         try:
-            if not ws.is_relative_to(root):
-                raise PermissionError(
-                    "Conversation workspace escapes workspaces root"
-                )
-        except AttributeError:  # pragma: no cover - Python < 3.9 fallback
-            if os.path.commonpath([str(root), str(ws)]) != str(root):
-                raise PermissionError(
-                    "Conversation workspace escapes workspaces root"
-                )
-        ws.mkdir(parents=True, exist_ok=True)
-        self.init_temp(workspace_id)
-        return ws
-
-    def remove_workspace(self, session_id: str) -> None:
-        """Remove a session's workspace directory tree."""
-        ws = settings.workspaces_path / session_id
-        if ws.exists():
-            shutil.rmtree(str(ws), ignore_errors=True)
-        temp = self.physical_temp_path_for_workspace_id(session_id)
-        if temp.exists():
-            shutil.rmtree(str(temp), ignore_errors=True)
-        write_lease.release(session_id)
-
-    def remove_conversation_workspace(self, conversation_id: str) -> None:
-        """Remove a conversation's persistent workspace."""
-        from sandbox.security.path_validation import validate_conversation_id
-
-        try:
-            safe_id = validate_conversation_id(conversation_id)
+            safe_id = validate_formal_id(workspace_id, "workspace_id")
         except ValueError:
-            return
-        workspace_id = conversation_workspace_id(safe_id)
+            # Legacy/internal non-formal ids (e.g. old sandbox_* private trees).
+            safe_id = workspace_id
+            if not safe_id or "/" in safe_id or "\\" in safe_id or ".." in safe_id:
+                raise WorkspaceCleanupError(
+                    f"Refusing to remove invalid workspace id: {workspace_id!r}"
+                ) from None
+
         root = settings.workspaces_path.resolve()
-        ws = (root / workspace_id).resolve()
+        ws = (root / safe_id).resolve()
         try:
             if not ws.is_relative_to(root):
-                return
+                raise WorkspaceCleanupError(
+                    "Workspace path escapes workspaces root"
+                )
         except AttributeError:  # pragma: no cover
             if os.path.commonpath([str(root), str(ws)]) != str(root):
-                return
-        if ws.exists():
-            shutil.rmtree(str(ws), ignore_errors=True)
-        temp = self.physical_temp_path_for_workspace_id(workspace_id)
-        if temp.exists():
-            shutil.rmtree(str(temp), ignore_errors=True)
-        write_lease.release(workspace_id)
-        # Clean dangling presentation symlink if it pointed at removed path
-        try:
-            if WORKSPACE_LINK.is_symlink() and not WORKSPACE_LINK.exists():
-                WORKSPACE_LINK.unlink()
-        except OSError:
-            pass
+                raise WorkspaceCleanupError(
+                    "Workspace path escapes workspaces root"
+                )
 
-    def get_workspace_path(self, session_id: str) -> Path:
-        """Return the physical workspace path for *session_id* (may not exist yet)."""
-        return settings.workspaces_path / session_id
+        errors: list[str] = []
+        if ws.exists():
+            try:
+                shutil.rmtree(str(ws), ignore_errors=False)
+            except OSError as exc:
+                errors.append(f"workspace: {exc}")
+            if ws.exists():
+                errors.append("workspace tree still present after rmtree")
+
+        try:
+            temp = self.physical_temp_path_for_workspace_id(safe_id)
+        except ValueError as exc:
+            raise WorkspaceCleanupError(str(exc)) from exc
+
+        if temp.exists():
+            try:
+                shutil.rmtree(str(temp), ignore_errors=False)
+            except OSError as exc:
+                errors.append(f"temp: {exc}")
+            if temp.exists():
+                errors.append("temp tree still present after rmtree")
+
+        if errors:
+            raise WorkspaceCleanupError(
+                "Workspace cleanup failed; binding must not be released: "
+                + "; ".join(errors)
+            )
+
+    def get_workspace_path(self, workspace_id: str) -> Path:
+        """Return the physical workspace path for *workspace_id* (may not exist)."""
+        return settings.workspaces_path / workspace_id
 
     def get_temp_path(self, workspace_id: str) -> Path:
         """Return physical persistent-temp path for an opaque workspace id."""
         return self.physical_temp_path_for_workspace_id(workspace_id)
 
-    def workspace_exists(self, session_id: str) -> bool:
-        return (settings.workspaces_path / session_id).exists()
+    def workspace_exists(self, workspace_id: str) -> bool:
+        return (settings.workspaces_path / workspace_id).exists()
 
     def cleanup_stale(self) -> int:
         return 0
@@ -295,11 +166,8 @@ class WorkspaceManager:
 
 workspace_manager = WorkspaceManager()
 
-# Re-export helpers used by routers
 __all__ = [
+    "WorkspaceCleanupError",
     "WorkspaceManager",
-    "WorkspaceWriteConflict",
-    "WorkspaceWriteLease",
     "workspace_manager",
-    "write_lease",
 ]

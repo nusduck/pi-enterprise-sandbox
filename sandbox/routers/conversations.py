@@ -5,6 +5,9 @@ through the sandbox REST API instead of using a local JSON file.
 
 When ``SANDBOX_AUTH_ENABLED`` is true, list/create/get/update/delete are scoped
 to the resolved actor (JWT or service+acting headers). Cross-user access is 404.
+
+PR-07A: Conversation lifecycle does **not** create or delete Workspace.
+Workspace ownership follows AgentSession / Sandbox Session only.
 """
 
 from __future__ import annotations
@@ -13,10 +16,8 @@ from fastapi import APIRouter, HTTPException, Request
 
 from sandbox.config import settings
 from sandbox.models import ConversationCreate, ConversationResponse
-from sandbox.paths import conversation_workspace_id
 from sandbox.repositories import ConversationRepository
 from sandbox.security.ownership import require_actor
-from sandbox.services.workspace_manager import workspace_manager
 
 router = APIRouter(prefix="/conversations", tags=["conversations"])
 repo = ConversationRepository()
@@ -25,8 +26,9 @@ repo = ConversationRepository()
 def _public_conversation(conv: ConversationResponse) -> ConversationResponse:
     """Ensure API responses never expose host physical workspace paths."""
     wid = conv.workspace_id
-    if not wid or str(wid).startswith("/"):
-        wid = conversation_workspace_id(conv.id)
+    # Reject absolute physical paths if they ever leaked into storage.
+    if wid and str(wid).startswith("/"):
+        wid = None
     return ConversationResponse(
         id=conv.id,
         title=conv.title,
@@ -91,8 +93,8 @@ def list_conversations(request: Request):
 def create_conversation(body: ConversationCreate, request: Request):
     """Create a new conversation (or upsert if id is provided).
 
-    Initializes a persistent workspace directory tied to the conversation.
-    Client-supplied ids are validated so they cannot escape workspaces_root.
+    Does **not** create a Workspace. Workspace binding is owned by AgentSession
+    and established when a Sandbox Session is created with preallocated ids.
     Stamps owner_user_id / organization_id from the resolved actor.
     """
     import uuid
@@ -108,16 +110,6 @@ def create_conversation(body: ConversationCreate, request: Request):
             raise HTTPException(status_code=400, detail=str(exc))
     else:
         conv_id = str(uuid.uuid4())
-    # Initialize persistent workspace for this conversation.
-    try:
-        workspace_manager.init_conversation_workspace(conv_id)
-    except (ValueError, PermissionError) as exc:
-        raise HTTPException(
-            status_code=400 if isinstance(exc, ValueError) else 403,
-            detail=str(exc),
-        )
-    # Persist opaque workspace_id (not host absolute path) for rebind.
-    stored_workspace = conversation_workspace_id(conv_id)
 
     owner_user_id = None
     organization_id = None
@@ -131,10 +123,17 @@ def create_conversation(body: ConversationCreate, request: Request):
         owner_user_id = BOOTSTRAP_USER_ID
         organization_id = BOOTSTRAP_ORG_ID
 
+    # Optional client-supplied workspace_id is stored as a pointer only when
+    # provided; Conversation never invents or owns workspace identity.
+    stored_workspace = body.workspace_id if getattr(body, "workspace_id", None) else None
+    if stored_workspace and str(stored_workspace).startswith("/"):
+        stored_workspace = None
+
     entry = {
         "id": conv_id,
         "title": body.title or "New conversation",
         "sandbox_session_id": body.sandbox_session_id,
+        "agent_session_id": body.agent_session_id,
         "workspace_id": stored_workspace,
         "workspace_path": stored_workspace,
         "messages": list(body.messages or []),
@@ -152,8 +151,13 @@ def get_conversation(conversation_id: str, request: Request):
 @router.patch("/{conversation_id}", response_model=ConversationResponse)
 def update_conversation(conversation_id: str, body: ConversationCreate, request: Request):
     existing = _get_owned_or_404(conversation_id, request)
-    # Only replace fields that were explicitly provided (None = leave unchanged)
-    stored_workspace = conversation_workspace_id(conversation_id)
+    # Only replace fields that were explicitly provided (None = leave unchanged).
+    # Never invent conversation-owned workspace ids.
+    next_workspace = existing.workspace_id
+    if body.workspace_id is not None:
+        next_workspace = body.workspace_id
+        if next_workspace and str(next_workspace).startswith("/"):
+            next_workspace = existing.workspace_id
     entry = {
         "id": conversation_id,
         "title": body.title if body.title is not None else existing.title,
@@ -167,9 +171,8 @@ def update_conversation(conversation_id: str, body: ConversationCreate, request:
             if body.agent_session_id is not None
             else existing.agent_session_id
         ),
-        # Always persist the stable workspace_id key (never host absolute paths).
-        "workspace_id": stored_workspace,
-        "workspace_path": stored_workspace,
+        "workspace_id": next_workspace,
+        "workspace_path": next_workspace,
         "messages": (
             list(body.messages)
             if body.messages is not None
@@ -195,52 +198,17 @@ def update_conversation(conversation_id: str, body: ConversationCreate, request:
     return _public_conversation(repo.upsert(entry))
 
 
-def _cleanup_linked_session(sandbox_session_id: str) -> None:
-    """Mark linked sandbox session completed and delete when safe.
-
-    Safe means: no in-flight execution for that session. Session workspace is
-    removed only after a successful delete of the session record.
-    """
-    from sandbox.models import SessionStatus
-    from sandbox.services.execution_manager import execution_manager
-    from sandbox.services.process_manager import process_manager
-    from sandbox.services.session_manager import session_manager
-
-    session = session_manager.get(sandbox_session_id)
-    if session is None:
-        return
-
-    session_manager.update_status(sandbox_session_id, SessionStatus.COMPLETED)
-
-    execution_manager.cancel_active_workspace(session.workspace_id)
-    process_manager.cancel_for_workspace(session.workspace_id)
-
-    if execution_manager.is_session_busy(sandbox_session_id):
-        return
-
-    if session_manager.delete(sandbox_session_id):
-        workspace_manager.remove_workspace(sandbox_session_id)
-
-
 @router.delete("/{conversation_id}", status_code=204)
 def delete_conversation(conversation_id: str, request: Request):
-    conv = _get_owned_or_404(conversation_id, request)
+    """Delete conversation metadata only.
 
-    # If a sandbox session is linked, complete it and delete when idle.
-    if conv.sandbox_session_id:
-        _cleanup_linked_session(conv.sandbox_session_id)
-
-    # A restored conversation may have processes from another session. Stop
-    # every process using its stable workspace before removing either mount.
-    from sandbox.services.execution_manager import execution_manager
-    from sandbox.services.process_manager import process_manager
-
-    workspace_id = conversation_workspace_id(conversation_id)
-    execution_manager.cancel_active_workspace(workspace_id)
-    process_manager.cancel_for_workspace(workspace_id)
-
+    Conversation does **not** own Workspace or SandboxSession (plan §2.6 /
+    PR-07A). Linked sessions, executions, and workspace/temp trees are left
+    intact; lifecycle cleanup remains Session / AgentSession close.
+    """
+    _get_owned_or_404(conversation_id, request)
+    # Conversation repository delete only — no session cancel/close/workspace remove.
     repo.delete(conversation_id)
-    workspace_manager.remove_conversation_workspace(conversation_id)
 
 
 @router.get("/{conversation_id}/messages", response_model=list[dict])
@@ -263,12 +231,15 @@ def update_conversation_title(conversation_id: str, body: dict, request: Request
 
 @router.get("/{conversation_id}/workspace", response_model=dict)
 def get_conversation_workspace(conversation_id: str, request: Request):
-    """Return the opaque workspace identity for a conversation.
+    """Return the opaque workspace identity linked to a conversation, if any.
 
     Public contract: ``workspace_id`` only — never physical host paths.
+    Conversation does not own or invent workspace identity.
     """
-    _get_owned_or_404(conversation_id, request)
+    conv = _get_owned_or_404(conversation_id, request)
     return {
         "conversation_id": conversation_id,
-        "workspace_id": conversation_workspace_id(conversation_id),
+        "workspace_id": conv.workspace_id,
+        "agent_session_id": conv.agent_session_id,
+        "sandbox_session_id": conv.sandbox_session_id,
     }

@@ -14,20 +14,22 @@ from fastapi.responses import JSONResponse
 from sandbox import __version__
 from sandbox.config import effective_config, ensure_safe_to_start, settings
 from sandbox.routers import (
-    agent_runs,
-    agent_sessions,
     approvals,
     artifacts,
     conversations,
+    datasets,
     executions,
     files,
     health,
+    internal_files,
     processes,
     sessions,
     traces,
 )
 from sandbox.routers import auth_router
+from sandbox.security.internal_http_auth import set_replay_store
 from sandbox.security.network_policy import get_network_policy, init_network_policy
+from sandbox.services.files_read_runtime import set_files_read_runtime
 from sandbox.services.session_manager import session_manager
 from sandbox.trace import reset_trace_id, set_trace_id
 
@@ -58,14 +60,8 @@ async def _cleanup_loop() -> None:
     while True:
         try:
             await asyncio.sleep(settings.cleanup_interval_minutes * 60)
-            try:
-                from sandbox.services.agent_run_manager import agent_run_manager
-
-                reaped = agent_run_manager.reap_expired_runs()
-                if reaped:
-                    logger.warning("Reaped %d expired agent run lease(s)", reaped)
-            except Exception:
-                logger.exception("Error during expired agent run lease cleanup")
+            # PR-13: Sandbox no longer hosts agent Run authority (Agent MySQL only).
+            # Do not reap or mutate legacy agent_runs here.
             count = session_manager.cleanup_expired()
             if count:
                 logger.info("Cleaned up %d expired sessions", count)
@@ -97,10 +93,12 @@ async def lifespan(app: FastAPI):
     # Belt-and-suspenders: re-validate production matrix on lifespan start.
     ensure_safe_to_start(settings)
     logger.info(
-        "Sandbox Service v%s starting (deployment_env=%s network_mode=%s)",
+        "Sandbox Service v%s starting (deployment_env=%s network_mode=%s "
+        "internal_plane_enabled=%s)",
         __version__,
         settings.deployment_env,
         settings.network_mode,
+        settings.internal_plane_enabled,
     )
     logger.info("Effective config (redacted): %s", effective_config(settings))
 
@@ -155,15 +153,33 @@ async def lifespan(app: FastAPI):
     except Exception:
         logger.exception("Process Manager orphan scan failed at startup")
 
-    # Repair stale Agent leases before serving the first authoritative read.
-    try:
-        from sandbox.services.agent_run_manager import agent_run_manager
+    # PR-13: no Sandbox agent_run lease reaper — Run authority is Agent MySQL.
 
-        reaped = agent_run_manager.reap_expired_runs()
-        if reaped:
-            logger.warning("Reaped %d expired agent run lease(s) at startup", reaped)
-    except Exception:
-        logger.exception("Agent run lease reaper failed at startup")
+    # Internal control plane (HMAC replay Redis + claim MySQL + files.read).
+    # Production requires enablement (validate_production_settings). Fail closed
+    # on prepare/install errors so the process never accepts traffic half-ready.
+    from sandbox.services.internal_plane_resources import InternalPlaneError
+    from sandbox.services.internal_plane_wiring import (
+        start_internal_plane,
+        stop_internal_plane,
+    )
+
+    plane_bundle = None
+    try:
+        plane_bundle = await start_internal_plane(app, settings)
+    except InternalPlaneError as exc:
+        logger.error(
+            "internal plane startup failed category=%s state=%s — refusing to serve",
+            exc.category,
+            exc.state,
+        )
+        raise
+    except Exception as exc:
+        logger.error(
+            "internal plane startup failed type=%s — refusing to serve",
+            type(exc).__name__,
+        )
+        raise
 
     # Start session + retention background cleanup task
     cleanup_task = asyncio.create_task(_cleanup_loop())
@@ -176,15 +192,24 @@ async def lifespan(app: FastAPI):
         settings.audit_ttl_days,
     )
 
-    yield
-
-    # Shutdown: cancel the cleanup task
-    cleanup_task.cancel()
     try:
-        await cleanup_task
-    except asyncio.CancelledError:
-        pass
-    logger.info("Sandbox Service shutting down")
+        yield
+    finally:
+        # Shutdown order: stop cleanup → plane (slots fail closed → drain → close)
+        # → never leave READY/INSTALLED without live resources.
+        cleanup_task.cancel()
+        try:
+            await cleanup_task
+        except asyncio.CancelledError:
+            pass
+        try:
+            await stop_internal_plane(plane_bundle)
+        except Exception as exc:
+            logger.warning(
+                "internal plane shutdown failed type=%s",
+                type(exc).__name__,
+            )
+        logger.info("Sandbox Service shutting down")
 
 
 app = FastAPI(
@@ -193,6 +218,16 @@ app = FastAPI(
     version=__version__,
     lifespan=lifespan,
 )
+
+# Explicit replay-store slot for internal HMAC auth. Production wiring must
+# inject an authoritative RedisReplayStore; never auto-fallback to memory.
+# Unconfigured → internal requests fail closed (see internal_http_auth).
+set_replay_store(app, None)
+
+# Explicit files.read runtime slot. Import-time is always None — never
+# construct MySQL claim validators / filesystem drivers at module import.
+# Production lifespan/wiring injects FilesReadRuntime; unconfigured → 503.
+set_files_read_runtime(app, None)
 
 # ── Middleware ──────────────────────────────────────────────────────────
 # Starlette runs middleware in reverse registration order on the way in.
@@ -209,11 +244,16 @@ app.add_middleware(
 
 @app.middleware("http")
 async def api_token_auth_middleware(request: Request, call_next):
-    """Require X-API-Key header for all endpoints except health/public, if configured."""
-    if settings.api_token:
-        from sandbox.security.public_routes import is_public_route
+    """Require X-API-Key for non-public, non-internal routes when configured.
 
-        if not is_public_route(request.url.path):
+    ``/internal/v1`` and ``/internal/v1/*`` are excluded so legacy API keys cannot
+    authenticate the Agent internal plane; those paths use HMAC internal auth only.
+    """
+    if settings.api_token:
+        from sandbox.security.public_routes import is_internal_v1_route, is_public_route
+
+        path = request.url.path
+        if not is_public_route(path) and not is_internal_v1_route(path):
             token = request.headers.get(settings.api_token_header, "")
             if token != settings.api_token:
                 return JSONResponse(
@@ -228,21 +268,26 @@ async def jwt_auth_middleware(request: Request, call_next):
     """Optional user JWT when SANDBOX_AUTH_ENABLED=true.
 
     Service-to-service X-API-Key still authenticates the *service* and may reach
-    internal routes (e.g. /sessions). End-user actor identity is resolved from:
+    legacy internal-ish routes (e.g. /sessions). End-user actor identity is
+    resolved from:
 
       1. Authorization: Bearer <user jwt>
       2. Service token + X-Acting-User-Id + X-Acting-Organization-Id
 
     Service token alone is **not** an end-user actor; ownership routes require
     an actor via ``require_actor`` (401). Public: health, auth, docs, metrics.
+
+    The Agent internal plane (``/internal/v1`` …) is bypassed here: user JWT and
+    service API keys must not grant access; only HMAC internal auth does.
     """
     if not settings.auth_enabled:
         return await call_next(request)
 
     from sandbox.security.ownership import apply_actor_to_request_state
-    from sandbox.security.public_routes import is_public_route
+    from sandbox.security.public_routes import is_internal_v1_route, is_public_route
 
-    if is_public_route(request.url.path):
+    path = request.url.path
+    if is_public_route(path) or is_internal_v1_route(path):
         return await call_next(request)
 
     # Always try to attach actor (JWT or service+acting); never trust alone for identity
@@ -364,17 +409,21 @@ async def value_error_handler(request: Request, exc: ValueError):
 # ── Register routers ───────────────────────────────────────────────────
 
 app.include_router(auth_router.router)
-app.include_router(agent_runs.router)
-app.include_router(agent_sessions.router)
+# PR-13 severe: Sandbox must NOT mount /agent-runs or /agent-sessions.
+# Agent service owns /internal/agent-runs; Pi Session recovery is Agent MySQL.
 app.include_router(sessions.router)
 app.include_router(approvals.router)
 app.include_router(conversations.router)
 app.include_router(executions.router)
 app.include_router(processes.router)
 app.include_router(files.router)
+app.include_router(datasets.router)
 app.include_router(artifacts.router)
 app.include_router(traces.router)
 app.include_router(health.router)
+# Agent internal plane (HMAC only). Not public; JWT/API-key middleware skips
+# /internal/v1 but cannot authenticate — require_internal_auth is sole gate.
+app.include_router(internal_files.router)
 
 
 # ── Root ───────────────────────────────────────────────────────────────

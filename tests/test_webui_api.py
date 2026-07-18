@@ -14,6 +14,7 @@ import requests
 from fastapi.testclient import TestClient
 
 from sandbox.main import app
+from tests.conftest import formal_id, session_create_payload
 
 # ── Sandbox Fixture ──────────────────────────────────────────────────────
 
@@ -36,7 +37,7 @@ class TestSandboxSessionAPI:
     """Test the sandbox session API that the WebUI depends on."""
 
     def test_create_session(self):
-        resp = sandbox_client.post("/sessions", json={"caller_id": "webui-test"})
+        resp = sandbox_client.post("/sessions", json=session_create_payload("webui-test"))
         assert resp.status_code == 201
         data = resp.json()
         assert data["session_id"].startswith("sandbox_")
@@ -45,62 +46,65 @@ class TestSandboxSessionAPI:
         sandbox_client.delete(f"/sessions/{data['session_id']}")
 
     def test_create_session_with_enterprise_id(self):
+        agent = formal_id("AGT")
+        wsp = formal_id("WSP")
+        ent = f"ent-{formal_id('ENT')[:12]}"
         resp = sandbox_client.post(
             "/sessions",
-            json={
-                "caller_id": "webui-test",
-                "enterprise_session_id": "ent-test-001",
-                "agent_session_id": "agent-test-001",
-            },
+            json=session_create_payload(
+                "webui-test",
+                agent_session_id=agent,
+                workspace_id=wsp,
+                enterprise_session_id=ent,
+            ),
         )
-        assert resp.status_code == 201
+        assert resp.status_code == 201, resp.text
         data = resp.json()
-        assert data["enterprise_session_id"] == "ent-test-001"
-        assert data["agent_session_id"] == "agent-test-001"
+        assert data["enterprise_session_id"] == ent
+        assert data["agent_session_id"] == agent
+        assert data["workspace_id"] == wsp
         # Cleanup
         sandbox_client.delete(f"/sessions/{data['session_id']}")
 
     def test_lookup_by_agent_id(self):
-        # Clean up any stale session from previous runs
-        stale = sandbox_client.get("/sessions/by-agent/agent-lookup-001")
-        if stale.status_code == 200:
-            sandbox_client.delete(f"/sessions/{stale.json()['session_id']}")
-
+        agent = formal_id("AGT")
         created = sandbox_client.post(
             "/sessions",
-            json={"caller_id": "webui-test", "agent_session_id": "agent-lookup-001"},
+            json=session_create_payload(
+                "webui-test",
+                agent_session_id=agent,
+                workspace_id=formal_id("WSP"),
+            ),
         ).json()
         assert created["session_id"].startswith("sandbox_")
 
-        resp = sandbox_client.get("/sessions/by-agent/agent-lookup-001")
+        resp = sandbox_client.get(f"/sessions/by-agent/{agent}")
         assert resp.status_code == 200
         assert resp.json()["session_id"] == created["session_id"]
         # Cleanup
         sandbox_client.delete(f"/sessions/{created['session_id']}")
 
     def test_lookup_by_enterprise_id(self):
-        # Clean up any stale session from previous runs
-        stale = sandbox_client.get("/sessions/by-enterprise/ent-lookup-001")
-        if stale.status_code == 200:
-            sandbox_client.delete(f"/sessions/{stale.json()['session_id']}")
-
+        ent = f"ent-{formal_id('ENT')[:12]}"
         created = sandbox_client.post(
             "/sessions",
-            json={
-                "caller_id": "webui-test",
-                "enterprise_session_id": "ent-lookup-001",
-            },
+            json=session_create_payload(
+                "webui-test",
+                agent_session_id=formal_id("AGT"),
+                workspace_id=formal_id("WSP"),
+                enterprise_session_id=ent,
+            ),
         ).json()
         assert created["session_id"].startswith("sandbox_")
 
-        resp = sandbox_client.get("/sessions/by-enterprise/ent-lookup-001")
+        resp = sandbox_client.get(f"/sessions/by-enterprise/{ent}")
         assert resp.status_code == 200
         assert resp.json()["session_id"] == created["session_id"]
         # Cleanup
         sandbox_client.delete(f"/sessions/{created['session_id']}")
 
     def test_delete_session(self):
-        resp = sandbox_client.post("/sessions", json={"caller_id": "webui-test"})
+        resp = sandbox_client.post("/sessions", json=session_create_payload("webui-test"))
         assert resp.status_code == 201
         sid = resp.json()["session_id"]
 
@@ -117,8 +121,8 @@ class TestSandboxSessionAPI:
 
     def test_list_sessions(self):
         # Create a couple sessions
-        s1 = sandbox_client.post("/sessions", json={"caller_id": "test-list-1"}).json()
-        s2 = sandbox_client.post("/sessions", json={"caller_id": "test-list-2"}).json()
+        s1 = sandbox_client.post("/sessions", json=session_create_payload("test-list-1")).json()
+        s2 = sandbox_client.post("/sessions", json=session_create_payload("test-list-2")).json()
 
         resp = sandbox_client.get("/sessions")
         assert resp.status_code == 200
@@ -134,7 +138,7 @@ class TestWebUIExecutionAPI:
 
     @pytest.fixture
     def session_id(self):
-        resp = sandbox_client.post("/sessions", json={"caller_id": "exec-test"})
+        resp = sandbox_client.post("/sessions", json=session_create_payload("exec-test"))
         sid = resp.json()["session_id"]
         yield sid
         sandbox_client.delete(f"/sessions/{sid}")
@@ -183,7 +187,7 @@ class TestWebUIFileAPI:
 
     @pytest.fixture
     def session_id(self):
-        resp = sandbox_client.post("/sessions", json={"caller_id": "file-test"})
+        resp = sandbox_client.post("/sessions", json=session_create_payload("file-test"))
         sid = resp.json()["session_id"]
         yield sid
         sandbox_client.delete(f"/sessions/{sid}")
@@ -271,7 +275,7 @@ class TestWebUITraceAPI:
 
     @pytest.fixture
     def session_id(self):
-        resp = sandbox_client.post("/sessions", json={"caller_id": "trace-test"})
+        resp = sandbox_client.post("/sessions", json=session_create_payload("trace-test"))
         sid = resp.json()["session_id"]
         yield sid
         sandbox_client.delete(f"/sessions/{sid}")
@@ -306,7 +310,7 @@ class TestWebUIApprovalAPI:
 
     @pytest.fixture
     def session_id(self):
-        resp = sandbox_client.post("/sessions", json={"caller_id": "approval-webui"})
+        resp = sandbox_client.post("/sessions", json=session_create_payload("approval-webui"))
         sid = resp.json()["session_id"]
         yield sid
         sandbox_client.delete(f"/sessions/{sid}")

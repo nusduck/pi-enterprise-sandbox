@@ -48,6 +48,9 @@ export function ApprovalCard({
       {approval.reason ? (
         <p className="rtc-subtitle">{approval.reason}</p>
       ) : null}
+      {approval.risk ? (
+        <p className="rtc-subtitle rtc-risk">Risk: {approval.risk}</p>
+      ) : null}
       {approval.command ? (
         <pre className="rtc-cmd">{approval.command}</pre>
       ) : null}
@@ -56,6 +59,7 @@ export function ApprovalCard({
         {approval.toolExecutionId
           ? ` · tool ${approval.toolExecutionId}`
           : ''}
+        {approval.expiresAt ? ` · expires ${approval.expiresAt}` : ''}
       </p>
       {pending ? (
         <div className="rtc-actions">

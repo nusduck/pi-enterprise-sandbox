@@ -6,10 +6,12 @@
  * - Owns per-run fetch controllers and durable-history projections
  */
 import {
+  createDataset,
   createEntityStore,
   createRun,
   setActiveConversation,
   upsertApproval,
+  upsertDataset,
   upsertRun,
   type ApprovalStatus,
   type EntityStore,
@@ -27,6 +29,7 @@ import {
 } from '../../shared/sse/agentEventAdapter';
 import type { SSEEvent } from '../../shared/sse/parser';
 import { rehydrateRun, rehydrateToolExecutions } from '../../shared/state/runReducer';
+import { normalizeToRuntimeEvent } from '../../shared/state/platformEventNormalize';
 import {
   getRun,
   listRuns,
@@ -34,11 +37,13 @@ import {
   type RunDetail,
 } from '../../shared/api/runs';
 import { getConversationEvents } from '../../shared/api/client';
+import { listDatasets } from '../../shared/api/datasets';
 import type { PersistedAgentEvent } from '../../shared/schemas/events';
 import type { ChatMessage } from '../../shared/state/types';
 import type { ContentPart, ToolUsePart } from '../../shared/state/types';
-import { getArtifactDownloadUrl, getDownloadUrl } from '../../shared/api/client';
+import { getArtifactDownloadUrl } from '../../shared/api/client';
 import { makeRuntimeEvent } from '../../shared/schemas/events';
+import { isDurableArtifactId } from '../../shared/state/runReducer';
 
 export type EntityBridge = {
   manager: RunSSEManager;
@@ -147,6 +152,29 @@ export function createEntityBridge(
   }
 
   function ingestAgentEvent(runId: string, ev: SSEEvent): void {
+    // Platform envelopes already carry sequence/eventId — feed reducer directly
+    // so replay/live merge stays authoritative (no double sequence synthesis).
+    const asPlatform = normalizeToRuntimeEvent(ev, runId);
+    if (
+      asPlatform &&
+      (ev.eventId != null ||
+        (ev as { event_id?: string }).event_id != null ||
+        (typeof ev.type === 'string' && String(ev.type).includes('.')))
+    ) {
+      // Dotted platform types (tool.execution.started, artifact.ready, …)
+      // or explicit event ids skip the legacy Agent adapter.
+      const type = String(ev.type || asPlatform.type || '');
+      if (
+        type.includes('.') ||
+        ev.eventId != null ||
+        (ev as { event_id?: string }).event_id != null
+      ) {
+        manager.handleRuntimeEvent(asPlatform);
+        store = manager.getStore();
+        return;
+      }
+    }
+
     let adapter = eventAdapters.get(runId);
     if (!adapter) {
       adapter = createAgentEventAdapterState({
@@ -372,6 +400,58 @@ export function createEntityBridge(
       if (run) restored.push(run);
     }
 
+    // Refresh datasets for the conversation session (authoritative list).
+    try {
+      const sessionId =
+        restored.find((r) => r.sandboxSessionId)?.sandboxSessionId ||
+        timeline.runs.find((r) => r.session_id || r.sandbox_session_id)?.session_id ||
+        timeline.runs.find((r) => r.sandbox_session_id)?.sandbox_session_id ||
+        null;
+      const rows = await listDatasets({
+        conversationId,
+        sessionId: sessionId || undefined,
+      });
+      let next = manager.getStore();
+      for (const row of rows) {
+        const id = String(row.dataset_id || row.id || '');
+        if (!id) continue;
+        const statusRaw = String(row.status || 'ready').toLowerCase();
+        const status =
+          statusRaw === 'failed'
+            ? 'failed'
+            : statusRaw === 'uploading' || statusRaw === 'pending'
+              ? 'uploading'
+              : 'ready';
+        next = upsertDataset(
+          next,
+          createDataset({
+            id,
+            conversationId,
+            sessionId:
+              String(row.sandbox_session_id || sessionId || '') || null,
+            name: String(row.name || row.original_filename || id),
+            path: String(row.path || row.stored_relative_path || '') || null,
+            size:
+              typeof row.size === 'number'
+                ? row.size
+                : typeof row.size_bytes === 'number'
+                  ? row.size_bytes
+                  : null,
+            mimeType: row.mime_type != null ? String(row.mime_type) : null,
+            sha256: row.sha256 != null ? String(row.sha256) : null,
+            status,
+            progress: status === 'ready' ? 100 : null,
+            agentVisible: true,
+            createdAt: row.created_at != null ? String(row.created_at) : null,
+          }),
+        );
+      }
+      store = next;
+      manager.setStore(store);
+    } catch {
+      /* Dataset list is best-effort on older BFFs. */
+    }
+
     store = setActiveConversation(manager.getStore(), conversationId);
     manager.setStore(store);
     onStoreChange?.(store);
@@ -433,18 +513,16 @@ export function createEntityBridge(
       content.push({ type: 'text', text: `\n[Error: ${run.error}]` });
     }
 
+    // Deliverables: only durable server artifact_id via artifact-download.
+    // Never fall back to workspace path download (submit_artifact only).
     const fileLinks = run.artifactIds.flatMap((artifactId) => {
       const artifact = s.artifactsById[artifactId];
       if (!artifact) return [];
+      if (!isDurableArtifactId(artifact.id, runId)) return [];
+      if (artifact.source !== 'submit_artifact') return [];
       const sessionId = artifact.sessionId || run.sandboxSessionId;
-      const isServerArtifact = !artifact.id.startsWith(`art_${runId}_`);
-      const url = sessionId
-        ? isServerArtifact
-          ? getArtifactDownloadUrl(sessionId, artifact.id)
-          : artifact.path
-            ? getDownloadUrl(sessionId, artifact.path)
-            : null
-        : null;
+      if (!sessionId) return [];
+      const url = getArtifactDownloadUrl(sessionId, artifact.id);
       if (!url) return [];
       return [{
         name: artifact.name,

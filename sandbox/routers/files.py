@@ -25,7 +25,7 @@ from sandbox.models import (
     LsRequest,
 )
 from sandbox.paths import sanitize_path_error
-from sandbox.security.ownership import assert_session_owner, resolve_actor
+from sandbox.security.ownership import require_owned_session
 from sandbox.services.attachment_manager import (
     AttachmentError,
     attachment_manager,
@@ -36,7 +36,6 @@ from sandbox.services.file_edit import file_edit_service
 from sandbox.services.execution_context import SandboxExecutionContext
 from sandbox.services.file_manager import file_manager
 from sandbox.services.file_search import file_search_service
-from sandbox.services.session_manager import session_manager
 
 router = APIRouter(prefix="/sessions/{session_id}/files", tags=["files"])
 
@@ -48,21 +47,7 @@ def _get_context(
     session_id: str, request: Request | None = None
 ) -> SandboxExecutionContext:
     """Resolve trusted workspace/temp roots and enforce session ownership."""
-    session = session_manager.get(session_id)
-    if session is None:
-        raise HTTPException(status_code=404, detail="Session not found")
-    if settings.auth_enabled and request is not None:
-        actor = resolve_actor(request)
-        # Owned sessions require an end-user actor (JWT or service+acting).
-        if getattr(session, "user_id", None):
-            if actor is None:
-                raise HTTPException(
-                    status_code=401,
-                    detail="Authentication required: user JWT or service token with acting headers",
-                )
-            assert_session_owner(session, actor)
-        elif actor is not None:
-            assert_session_owner(session, actor)
+    session = require_owned_session(session_id, request)
     return SandboxExecutionContext.from_session(session)
 
 

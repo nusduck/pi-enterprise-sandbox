@@ -1,0 +1,94 @@
+{
+  "version": 1,
+  "contract": "agent-sandbox-internal-hmac-hs256-v1",
+  "description": "Cross-language golden vectors for Agent(Node) -> Sandbox(Python) strict HS256 internal tokens. Test key only (bytes 0x00..0x1f). Compact unpadded base64url, exact claims, sub=agent-worker, single-element scope, POST raw path/body hash. Both Node and Python tests consume this same file.",
+  "key": {
+    "kid": "2026-07",
+    "keyBase64url": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
+    "note": "32-byte test key: sequential 0x00..0x1f, base64url unpadded. Not a production secret."
+  },
+  "now": 1700000000,
+  "ttlSeconds": 60,
+  "randomBytesBase64url": "AAECAwQFBgcICQoLDA0ODw",
+  "issuer": "agent-service",
+  "audience": "sandbox-service",
+  "subject": "agent-worker",
+  "valid": [
+    {
+      "id": "deterministic-issue-and-verify",
+      "issueClaims": {
+        "org_id": "01K0G2PAV8FPMVC9QHJG7JPN4Z",
+        "user_id": "01K0G2PAV8FPMVC9QHJG7JPN50",
+        "conversation_id": "01K0G2PAV8FPMVC9QHJG7JPN51",
+        "agent_session_id": "01K0G2PAV8FPMVC9QHJG7JPN52",
+        "sandbox_session_id": "01K0G2PAV8FPMVC9QHJG7JPN5F",
+        "run_id": "01K0G2PAV8FPMVC9QHJG7JPN5H",
+        "tool_execution_id": "01K0G2PAV8FPMVC9QHJG7JPN5K",
+        "tool_call_id": "tool-call-7",
+        "tool_name": "sandbox_bash",
+        "scope": ["execute:command"],
+        "request_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "execution_fence_token": 7,
+        "trace_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "htm": "POST",
+        "htu": "/internal/v1/executions/bash",
+        "body_sha256": "acf96bca764b1ab71fafe1b5c97f729c18f3a9dafb92283cbbefadf6c88fbcd3"
+      },
+      "expectedClaims": {
+        "token_version": 1,
+        "iss": "agent-service",
+        "aud": "sandbox-service",
+        "sub": "agent-worker",
+        "org_id": "01K0G2PAV8FPMVC9QHJG7JPN4Z",
+        "user_id": "01K0G2PAV8FPMVC9QHJG7JPN50",
+        "conversation_id": "01K0G2PAV8FPMVC9QHJG7JPN51",
+        "agent_session_id": "01K0G2PAV8FPMVC9QHJG7JPN52",
+        "sandbox_session_id": "01K0G2PAV8FPMVC9QHJG7JPN5F",
+        "run_id": "01K0G2PAV8FPMVC9QHJG7JPN5H",
+        "tool_execution_id": "01K0G2PAV8FPMVC9QHJG7JPN5K",
+        "tool_call_id": "tool-call-7",
+        "tool_name": "sandbox_bash",
+        "scope": ["execute:command"],
+        "request_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "request_hash_version": 1,
+        "execution_fence_token": 7,
+        "trace_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "htm": "POST",
+        "htu": "/internal/v1/executions/bash",
+        "body_sha256": "acf96bca764b1ab71fafe1b5c97f729c18f3a9dafb92283cbbefadf6c88fbcd3",
+        "iat": 1700000000,
+        "nbf": 1700000000,
+        "exp": 1700000060,
+        "jti": "AAECAwQFBgcICQoLDA0ODw"
+      },
+      "expectedToken": "eyJhbGciOiJIUzI1NiIsImtpZCI6IjIwMjYtMDciLCJ0eXAiOiJzYW5kYm94LWludGVybmFsK2p3dCJ9.eyJ0b2tlbl92ZXJzaW9uIjoxLCJpc3MiOiJhZ2VudC1zZXJ2aWNlIiwiYXVkIjoic2FuZGJveC1zZXJ2aWNlIiwic3ViIjoiYWdlbnQtd29ya2VyIiwib3JnX2lkIjoiMDFLMEcyUEFWOEZQTVZDOVFISkc3SlBONFoiLCJ1c2VyX2lkIjoiMDFLMEcyUEFWOEZQTVZDOVFISkc3SlBONTAiLCJjb252ZXJzYXRpb25faWQiOiIwMUswRzJQQVY4RlBNVkM5UUhKRzdKUE41MSIsImFnZW50X3Nlc3Npb25faWQiOiIwMUswRzJQQVY4RlBNVkM5UUhKRzdKUE41MiIsInNhbmRib3hfc2Vzc2lvbl9pZCI6IjAxSzBHMlBBVjhGUE1WQzlRSEpHN0pQTjVGIiwicnVuX2lkIjoiMDFLMEcyUEFWOEZQTVZDOVFISkc3SlBONUgiLCJ0b29sX2V4ZWN1dGlvbl9pZCI6IjAxSzBHMlBBVjhGUE1WQzlRSEpHN0pQTjVLIiwidG9vbF9jYWxsX2lkIjoidG9vbC1jYWxsLTciLCJ0b29sX25hbWUiOiJzYW5kYm94X2Jhc2giLCJzY29wZSI6WyJleGVjdXRlOmNvbW1hbmQiXSwicmVxdWVzdF9oYXNoIjoiYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYSIsInJlcXVlc3RfaGFzaF92ZXJzaW9uIjoxLCJleGVjdXRpb25fZmVuY2VfdG9rZW4iOjcsInRyYWNlX2lkIjoiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmIiLCJodG0iOiJQT1NUIiwiaHR1IjoiL2ludGVybmFsL3YxL2V4ZWN1dGlvbnMvYmFzaCIsImJvZHlfc2hhMjU2IjoiYWNmOTZiY2E3NjRiMWFiNzFmYWZlMWI1Yzk3ZjcyOWMxOGYzYTlkYWZiOTIyODNjYmJlZmFkZjZjODhmYmNkMyIsImlhdCI6MTcwMDAwMDAwMCwibmJmIjoxNzAwMDAwMDAwLCJleHAiOjE3MDAwMDAwNjAsImp0aSI6IkFBRUNBd1FGQmdjSUNRb0xEQTBPRHcifQ.DIBP-m11UQW8btxqCSbr-WD08LYsgnOfZv7IqrlAIps",
+      "request": {
+        "method": "POST",
+        "rawPath": "/internal/v1/executions/bash",
+        "rawQuery": "",
+        "rawBodyUtf8": "{\"path\":\"report.txt\",\"content\":\"ok\"}",
+        "expectedScope": "execute:command",
+        "expectedToolName": "sandbox_bash",
+        "pathSandboxSessionId": "01K0G2PAV8FPMVC9QHJG7JPN5F"
+      }
+    }
+  ],
+  "invalid": [
+    {
+      "id": "tampered-signature",
+      "note": "Same header/payload as valid vector; last signature character flipped. Both languages must reject signature verification.",
+      "token": "eyJhbGciOiJIUzI1NiIsImtpZCI6IjIwMjYtMDciLCJ0eXAiOiJzYW5kYm94LWludGVybmFsK2p3dCJ9.eyJ0b2tlbl92ZXJzaW9uIjoxLCJpc3MiOiJhZ2VudC1zZXJ2aWNlIiwiYXVkIjoic2FuZGJveC1zZXJ2aWNlIiwic3ViIjoiYWdlbnQtd29ya2VyIiwib3JnX2lkIjoiMDFLMEcyUEFWOEZQTVZDOVFISkc3SlBONFoiLCJ1c2VyX2lkIjoiMDFLMEcyUEFWOEZQTVZDOVFISkc3SlBONTAiLCJjb252ZXJzYXRpb25faWQiOiIwMUswRzJQQVY4RlBNVkM5UUhKRzdKUE41MSIsImFnZW50X3Nlc3Npb25faWQiOiIwMUswRzJQQVY4RlBNVkM5UUhKRzdKUE41MiIsInNhbmRib3hfc2Vzc2lvbl9pZCI6IjAxSzBHMlBBVjhGUE1WQzlRSEpHN0pQTjVGIiwicnVuX2lkIjoiMDFLMEcyUEFWOEZQTVZDOVFISkc3SlBONUgiLCJ0b29sX2V4ZWN1dGlvbl9pZCI6IjAxSzBHMlBBVjhGUE1WQzlRSEpHN0pQTjVLIiwidG9vbF9jYWxsX2lkIjoidG9vbC1jYWxsLTciLCJ0b29sX25hbWUiOiJzYW5kYm94X2Jhc2giLCJzY29wZSI6WyJleGVjdXRlOmNvbW1hbmQiXSwicmVxdWVzdF9oYXNoIjoiYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYSIsInJlcXVlc3RfaGFzaF92ZXJzaW9uIjoxLCJleGVjdXRpb25fZmVuY2VfdG9rZW4iOjcsInRyYWNlX2lkIjoiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmIiLCJodG0iOiJQT1NUIiwiaHR1IjoiL2ludGVybmFsL3YxL2V4ZWN1dGlvbnMvYmFzaCIsImJvZHlfc2hhMjU2IjoiYWNmOTZiY2E3NjRiMWFiNzFmYWZlMWI1Yzk3ZjcyOWMxOGYzYTlkYWZiOTIyODNjYmJlZmFkZjZjODhmYmNkMyIsImlhdCI6MTcwMDAwMDAwMCwibmJmIjoxNzAwMDAwMDAwLCJleHAiOjE3MDAwMDAwNjAsImp0aSI6IkFBRUNBd1FGQmdjSUNRb0xEQTBPRHcifQ.DIBP-m11UQW8btxqCSbr-WD08LYsgnOfZv7IqrlAIpA",
+      "kind": "signature",
+      "nodeErrorCode": "INTERNAL_TOKEN_SIGNATURE_INVALID",
+      "pythonErrorCode": "INTERNAL_TOKEN_SIGNATURE"
+    },
+    {
+      "id": "body-mismatch",
+      "note": "Valid token bound to a different raw body byte sequence (trailing space). Sandbox request binding must fail; Node asserts body_sha256 mismatch.",
+      "tokenRef": "deterministic-issue-and-verify",
+      "kind": "body",
+      "rawBodyUtf8": "{\"path\":\"report.txt\",\"content\":\"ok\"} ",
+      "pythonErrorCode": "INTERNAL_REQUEST_BODY"
+    }
+  ]
+}

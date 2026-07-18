@@ -16,8 +16,6 @@ import { config, AUTH_HEADER } from '../config.js';
 import { readCookie } from '../http/cookies.js';
 
 const BASE = config.SANDBOX_BASE_URL;
-const LIFECYCLE_REQUEST_TIMEOUT_MS = 10_000;
-const LEDGER_REQUEST_TIMEOUT_MS = 10_000;
 const REQUEST_GRACE_MS = 5_000;
 
 export class SandboxError extends Error {
@@ -158,10 +156,6 @@ export function createSandboxClient({ traceId = null, auth = null } = {}) {
     }
   }
 
-  const lifecycleFetch = (path, opts = {}) =>
-    sbFetch(path, { ...opts, timeoutMs: LIFECYCLE_REQUEST_TIMEOUT_MS });
-  const ledgerFetch = (path, opts = {}) =>
-    sbFetch(path, { ...opts, timeoutMs: LEDGER_REQUEST_TIMEOUT_MS });
   const timeoutForSeconds = (seconds) => {
     const value = Number(seconds);
     return Number.isFinite(value) && value >= 0
@@ -229,108 +223,8 @@ export function createSandboxClient({ traceId = null, auth = null } = {}) {
       return text ? JSON.parse(text) : { ok: true };
     },
 
-    // ── Agent runs / events (session persistence MVP) ─
-    async createAgentRun(body = {}) {
-      const resp = await lifecycleFetch('/agent-runs', {
-        method: 'POST',
-        body: JSON.stringify(body),
-      });
-      return resp.json();
-    },
-
-    async listAgentRuns({ conversationId, status } = {}) {
-      const q = new URLSearchParams();
-      if (conversationId) q.set('conversation_id', String(conversationId));
-      if (status) q.set('status', String(status));
-      const qs = q.toString();
-      const resp = await lifecycleFetch(`/agent-runs${qs ? `?${qs}` : ''}`);
-      return resp.json();
-    },
-
-    async getAgentRun(runId) {
-      const resp = await lifecycleFetch(`/agent-runs/${encodeURIComponent(runId)}`);
-      return resp.json();
-    },
-
-    async appendAgentEvent(runId, event) {
-      const resp = await lifecycleFetch(`/agent-runs/${encodeURIComponent(runId)}/events`, {
-        method: 'POST',
-        body: JSON.stringify(event),
-      });
-      return resp.json();
-    },
-
-    async listAgentEvents(runId, { afterSequence = 0, limit } = {}) {
-      const q = new URLSearchParams();
-      if (afterSequence) q.set('after_sequence', String(afterSequence));
-      if (limit != null) q.set('limit', String(limit));
-      const qs = q.toString();
-      const path = `/agent-runs/${encodeURIComponent(runId)}/events${qs ? `?${qs}` : ''}`;
-      const resp = await lifecycleFetch(path);
-      return resp.json();
-    },
-
-    async interruptAgentRun(runId, body = {}) {
-      const resp = await lifecycleFetch(`/agent-runs/${encodeURIComponent(runId)}/interrupt`, {
-        method: 'POST',
-        body: JSON.stringify(body),
-      });
-      return resp.json();
-    },
-
-    async completeAgentRun(runId, body = {}) {
-      const resp = await lifecycleFetch(`/agent-runs/${encodeURIComponent(runId)}/complete`, {
-        method: 'POST',
-        body: JSON.stringify(body),
-      });
-      return resp.json();
-    },
-
-    async failAgentRun(runId, body = {}) {
-      const resp = await lifecycleFetch(`/agent-runs/${encodeURIComponent(runId)}/fail`, {
-        method: 'POST',
-        body: JSON.stringify(body),
-      });
-      return resp.json();
-    },
-
-    async prepareToolExecution(body) {
-      const resp = await ledgerFetch('/tool-executions', {
-        method: 'POST',
-        body: JSON.stringify(body),
-      });
-      return resp.json();
-    },
-
-    async getToolExecution(toolCallId) {
-      const resp = await ledgerFetch(`/tool-executions/${encodeURIComponent(toolCallId)}`);
-      return resp.json();
-    },
-
-    async listToolExecutions({ runId, idempotencyKey } = {}) {
-      const q = new URLSearchParams();
-      if (runId) q.set('run_id', String(runId));
-      if (idempotencyKey) q.set('idempotency_key', String(idempotencyKey));
-      const qs = q.toString();
-      const resp = await ledgerFetch(`/tool-executions${qs ? `?${qs}` : ''}`);
-      return resp.json();
-    },
-
-    async markToolExecuting(toolCallId) {
-      const resp = await ledgerFetch(
-        `/tool-executions/${encodeURIComponent(toolCallId)}/executing`,
-        { method: 'POST', body: JSON.stringify({}) },
-      );
-      return resp.json();
-    },
-
-    async markToolTerminal(toolCallId, body) {
-      const resp = await ledgerFetch(
-        `/tool-executions/${encodeURIComponent(toolCallId)}/terminal`,
-        { method: 'POST', body: JSON.stringify(body) },
-      );
-      return resp.json();
-    },
+    // PR-13 severe: Sandbox does not expose /agent-runs, /agent-sessions, or
+    // /tool-executions. Run/tool ledger authority is Agent MySQL.
 
     // ── Execution ───────────────────────────────────
     async executeCommand(sessionId, command, timeout = 120) {
@@ -438,20 +332,7 @@ export function createSandboxClient({ traceId = null, auth = null } = {}) {
       return sbFetch(`/sessions/${sessionId}/files/download?path=${encodeURIComponent(path)}`);
     },
 
-    // ── Artifacts ───────────────────────────────────
-    async registerArtifact(sessionId, name, path, mimeType, sourceExecutionId) {
-      const resp = await sbFetch(`/sessions/${sessionId}/artifacts/register`, {
-        method: 'POST',
-        body: JSON.stringify({
-          name,
-          path,
-          mime_type: mimeType,
-          source_execution_id: sourceExecutionId,
-        }),
-      });
-      return resp.json();
-    },
-
+    // ── Artifacts (submit only — no metadata-only register) ──
     async submitArtifact(sessionId, name, path, mimeType) {
       const resp = await sbFetch(`/sessions/${sessionId}/artifacts/submit`, {
         method: 'POST',
@@ -475,6 +356,23 @@ export function createSandboxClient({ traceId = null, auth = null } = {}) {
 
     async downloadArtifactStream(sessionId, artifactId) {
       return sbFetch(this.artifactDownloadPath(sessionId, artifactId));
+    },
+
+    // ── Datasets (PR-09) ────────────────────────────
+    async listDatasets(sessionId) {
+      const resp = await sbFetch(`/sessions/${sessionId}/datasets`);
+      return resp.json();
+    },
+
+    async getDataset(sessionId, datasetId) {
+      const resp = await sbFetch(
+        `/sessions/${sessionId}/datasets/${encodeURIComponent(datasetId)}`,
+      );
+      return resp.json();
+    },
+
+    datasetUploadPath(sessionId) {
+      return `/sessions/${encodeURIComponent(sessionId)}/datasets`;
     },
 
     // ── Approvals ───────────────────────────────────
@@ -553,9 +451,6 @@ export async function getSession(sessionId) {
   return createSandboxClient().getSession(sessionId);
 }
 
-export async function listAgentRuns(filters = {}, auth = null) {
-  return createSandboxClient({ auth }).listAgentRuns(filters);
-}
 
 export async function listConversations(auth = null) {
   return createSandboxClient({ auth }).listConversations();
@@ -635,10 +530,6 @@ export async function grepFiles(sessionId, body = {}) {
 
 export async function downloadFileStream(sessionId, path) {
   return createSandboxClient().downloadFileStream(sessionId, path);
-}
-
-export async function registerArtifact(sessionId, name, path, mimeType, sourceExecutionId) {
-  return createSandboxClient().registerArtifact(sessionId, name, path, mimeType, sourceExecutionId);
 }
 
 export async function submitArtifact(sessionId, name, path, mimeType) {

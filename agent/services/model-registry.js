@@ -481,17 +481,20 @@ export function toPiModel(entry, runtime = {}) {
     cacheRead: entry.pricing.cache_read_per_mtok,
     cacheWrite: entry.pricing.cache_write_per_mtok,
   };
+  // pi-ai Model shape (types.d.ts): id, name, api, provider, baseUrl, reasoning,
+  // input, cost, contextWindow, maxTokens, optional headers/compat.
+  // Do NOT set ImagesModel-only `output`.
   return {
     id: entry.model_id,
     name: entry.name || entry.model_id,
     api: entry.api_protocol,
     provider: entry.provider,
     baseUrl: runtime.baseUrl || '',
+    reasoning: Boolean(entry.supports_reasoning),
     headers: runtime.apiKey
       ? { Authorization: `Bearer ${runtime.apiKey}` }
       : undefined,
     input: [...entry.input_modalities],
-    output: ['text'],
     cost,
     contextWindow: entry.context_window,
     maxTokens: entry.max_output_tokens,

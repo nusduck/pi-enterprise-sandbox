@@ -67,16 +67,59 @@ data: {"type":"session_closed","session_id":"sandbox_abc123"}
 
 Base URL: `http://host:4000`
 
-### `POST /api/runs` — 创建 Agent Run
+### `POST /api/runs` — 创建 Agent Run（PR-10 / plan §18.3）
+
+等价路由：`POST /api/conversations/{conversation_id}/runs`（路径上的 conversation 优先）。
+
+**必须**携带 `Idempotency-Key`。相同 key + 相同请求体幂等重放；key 冲突返回 409。
 
 ```json
-// Request
+// Request（legacy messages[] 或 plan message.content[]）
 { "messages": [{ "role": "user", "content": "写一个 Python 脚本" }], "conversation_id": "optional", "agent_profile_id": "coding-agent" }
 ```
 
-响应（201）：`{ "run_id": "arun_...", "status": "running|queued", "conversation_id": "..." }`。只有在对应的 Durable Sandbox run 已创建并可按授权查询后才返回 `run_id`；初始化超过 `AGENT_RUN_INIT_TIMEOUT_MS` 时返回 504（`code=RUN_INITIALIZATION_TIMEOUT`）。
+响应 **202 Accepted**（Run 已写入 MySQL 后才返回；从不使用 201）：
 
-随后调用 `GET /api/runs/:id/events?after_sequence=N` 接收 SSE。可用 `POST /api/runs/:id/cancel|steer|follow-up` 控制；审批恢复使用 `resume-approval`，用户输入使用 `/interactions/:interactionId/respond`。
+```json
+{
+  "runId": "01...",
+  "run_id": "01...",
+  "conversationId": "01...",
+  "agentSessionId": "01...",
+  "status": "ACCEPTED",
+  "eventsUrl": "/api/runs/01.../events"
+}
+```
+
+### `GET /api/runs/{run_id}/events` — SSE Replay（PR-10）
+
+```http
+GET /api/runs/{run_id}/events?afterSequence=17
+Accept: text/event-stream
+Last-Event-ID: 01K...   # 或历史 sequence 数字
+```
+
+连接流程（Agent 权威；BFF 做 ownership + 字节代理）：
+
+1. BFF / Agent 校验 Run ownership（跨用户/跨租户 **404** fail-closed）
+2. MySQL `run_events` 按 sequence 重放 `afterSequence` / Last-Event-ID 之后的历史
+3. 切换 Redis `run:stream:{runId}` 实时加速
+4. watermark + MySQL catch-up 消除订阅建立竞态（禁止跳号）
+5. sequence 单调去重；Redis 故障回退 MySQL poll
+6. Heartbeat：`event: ping` + `{"timestamp":"..."}`
+
+SSE 帧：
+
+```text
+id: 01K...
+event: tool.execution.completed
+data: {"sequence":18,"event":{...},"ts":...,"eventId":"01K..."}
+
+```
+
+浏览器刷新：`GET /api/runs/{id}` + 从 `lastSequence` / `lastEventId` 重建 SSE，不依赖进程内 buffer。
+
+可用 `POST /api/runs/:id/cancel|steer|follow-up` 控制（cancel 亦要求 `Idempotency-Key`）；审批恢复使用 `resume-approval`，用户输入使用 `/interactions/:interactionId/respond`。
 
 `GET /api/extensions/diagnostics` 返回 Extension Package、Agent Profile、Tool/MCP allowlist 和供应链审计状态，不含凭据。响应在兼容既有 `extensions` / `tools` / `skills` / `mcp_servers` 字段的同时，增加：
 

@@ -1,6 +1,7 @@
 import type { ArtifactEntity } from '../../../entities';
-import { getArtifactDownloadUrl, getDownloadUrl } from '../../../shared/api';
+import { getArtifactDownloadUrl } from '../../../shared/api';
 import { safeApiUrl } from '../../../shared/security/url';
+import { isDurableArtifactId } from '../../../shared/state/runReducer';
 
 function formatSize(n?: number | null): string {
   if (n == null || Number.isNaN(Number(n))) return '';
@@ -12,6 +13,7 @@ function formatSize(n?: number | null): string {
 
 /**
  * Artifact card — traces back to run (and tool via run context).
+ * Download only via durable artifact_id (no workspace path fallback).
  */
 export function ArtifactCard({
   artifact,
@@ -25,13 +27,11 @@ export function ArtifactCard({
   onSelect?: (artifactId: string) => void;
 }) {
   const size = formatSize(artifact.size);
-  let url: string | null = null;
   const sid = sessionId || artifact.sessionId;
-  if (sid && artifact.id) {
-    url = getArtifactDownloadUrl(sid, artifact.id);
-  } else if (sid && artifact.path) {
-    url = getDownloadUrl(sid, artifact.path);
-  }
+  const durable =
+    Boolean(artifact.id) && isDurableArtifactId(artifact.id, artifact.runId || '');
+  const url =
+    sid && durable ? getArtifactDownloadUrl(sid, artifact.id) : null;
   const safe = safeApiUrl(url);
 
   return (

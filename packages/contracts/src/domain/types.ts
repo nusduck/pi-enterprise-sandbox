@@ -21,9 +21,13 @@ export type OrganizationStatus = 'active' | 'suspended' | 'deleted';
 /** User identity (may belong to multiple orgs; request always selects one). */
 export interface User {
   userId: Ulid;
-  displayName: string;
-  email: string;
+  /** External IdP subject (plan §8.2). */
+  externalSubject: string;
+  displayName: string | null;
+  email: string | null;
   status: UserStatus;
+  createdAt: Iso8601Utc;
+  updatedAt: Iso8601Utc;
 }
 
 export type UserStatus = 'active' | 'disabled' | 'deleted';
@@ -33,30 +37,30 @@ export interface AgentDefinition {
   agentId: Ulid;
   orgId: Ulid;
   name: string;
-  description: string;
+  description: string | null;
   status: AgentDefinitionStatus;
   activeVersionId: Ulid | null;
+  createdBy: Ulid;
+  createdAt: Iso8601Utc;
+  updatedAt: Iso8601Utc;
 }
 
 export type AgentDefinitionStatus = 'active' | 'archived' | 'draft';
 
 /**
- * Immutable agent configuration snapshot.
+ * Immutable agent configuration snapshot (plan §8.5).
  * A Run binds to a concrete agent_version_id and must not drift.
  */
 export interface AgentVersion {
   agentVersionId: Ulid;
   agentId: Ulid;
-  orgId: Ulid;
-  version: number;
-  modelPolicy: Record<string, unknown>;
-  systemPrompt: string;
-  enabledExtensions: string[];
-  enabledSkills: string[];
-  enabledMcpServers: string[];
-  toolPolicy: Record<string, unknown>;
-  resourcePolicy: Record<string, unknown>;
-  a2aConfiguration: Record<string, unknown>;
+  versionNo: number;
+  /** Full version config blob (modelPolicy, systemPrompt, extensions, …). */
+  configJson: Record<string, unknown>;
+  configHash: string;
+  piSdkVersion: string;
+  status: string;
+  createdBy: Ulid;
   createdAt: Iso8601Utc;
 }
 
@@ -66,13 +70,41 @@ export interface Conversation {
   orgId: Ulid;
   userId: Ulid;
   agentId: Ulid;
-  title: string;
+  title: string | null;
   status: ConversationStatus;
+  currentAgentSessionId: Ulid | null;
   createdAt: Iso8601Utc;
   updatedAt: Iso8601Utc;
+  archivedAt: Iso8601Utc | null;
 }
 
 export type ConversationStatus = 'active' | 'archived' | 'deleted';
+
+/**
+ * Append-only conversation message row (plan §8.7).
+ * Forbidden: storing all history as one Conversation JSON field.
+ */
+export interface Message {
+  messageId: Ulid;
+  conversationId: Ulid;
+  agentSessionId: Ulid | null;
+  runId: Ulid | null;
+  role: MessageRole;
+  messageType: MessageType;
+  contentJson: Record<string, unknown>;
+  sequenceNo: number;
+  createdAt: Iso8601Utc;
+}
+
+export type MessageRole = 'user' | 'assistant' | 'tool' | 'system';
+
+export type MessageType =
+  | 'text'
+  | 'multimodal'
+  | 'tool_call'
+  | 'tool_result'
+  | 'status'
+  | 'error';
 
 /**
  * Pi Runtime + Workspace lifecycle unit.
@@ -84,11 +116,14 @@ export interface AgentSession {
   userId: Ulid;
   conversationId: Ulid;
   agentVersionId: Ulid;
-  sandboxSessionId: Ulid | null;
-  workspaceId: Ulid | null;
+  sandboxSessionId: Ulid;
+  workspaceId: Ulid;
   status: AgentSessionStatus;
+  piSessionVersion: number;
+  lastRunId: Ulid | null;
   createdAt: Iso8601Utc;
   updatedAt: Iso8601Utc;
+  closedAt: Iso8601Utc | null;
 }
 
 /** Agent Session state machine (plan §11). */
@@ -100,20 +135,41 @@ export type AgentSessionStatus =
   | 'CLOSED'
   | 'FAILED';
 
-/** One user-message-triggered execution within an Agent Session. */
+/** One user-message-triggered execution within an Agent Session (plan §8.10). */
 export interface Run {
   runId: Ulid;
-  agentSessionId: Ulid;
   orgId: Ulid;
   userId: Ulid;
   conversationId: Ulid;
-  triggeringMessageId: Ulid | null;
+  agentSessionId: Ulid;
   agentVersionId: Ulid;
+  triggeringMessageId: Ulid;
+  source: string;
   status: RunStatus;
+  statusReason: string | null;
+  queueName: string;
+  attempt: number;
+  traceId: string;
+  /** Monotonic allocator for run_events.sequence_no (not MAX+1). */
+  nextEventSequence: number;
   startedAt: Iso8601Utc | null;
   completedAt: Iso8601Utc | null;
   createdAt: Iso8601Utc;
   updatedAt: Iso8601Utc;
+}
+
+/** Append-only platform run event (plan §8.11). */
+export interface RunEvent {
+  eventId: Ulid;
+  runId: Ulid;
+  orgId: Ulid;
+  sequenceNo: number;
+  eventType: string;
+  eventVersion: number;
+  payloadJson: Record<string, unknown>;
+  traceId: string;
+  spanId: string | null;
+  createdAt: Iso8601Utc;
 }
 
 /** Run state machine (plan §10). Terminal: SUCCEEDED | FAILED | CANCELLED. */
@@ -199,7 +255,10 @@ export type ProcessStatus =
   | 'running'
   | 'completed'
   | 'failed'
-  | 'cancelled';
+  | 'cancelled'
+  | 'timeout'
+  | 'lost'
+  | 'orphaned';
 
 /** User dataset streamed into the session Workspace (not a message attachment blob). */
 export interface Dataset {
@@ -246,6 +305,7 @@ export type A2aTaskStatus =
   | 'submitted'
   | 'working'
   | 'input-required'
+  | 'auth-required'
   | 'completed'
   | 'failed'
   | 'canceled';
@@ -264,3 +324,47 @@ export interface Approval {
 }
 
 export type ApprovalStatus = 'pending' | 'approved' | 'rejected' | 'expired';
+
+/**
+ * Transactional outbox row for durable → Redis Stream delivery (plan §8.17, PR-03).
+ *
+ * Written in the same MySQL transaction as domain facts. A publisher claims
+ * rows, appends to Redis Streams (at-least-once), then marks PUBLISHED.
+ * Redis is never the authority for business state.
+ */
+export type OutboxStatus = 'PENDING' | 'PUBLISHING' | 'PUBLISHED' | 'FAILED';
+
+export const OUTBOX_STATUSES = [
+  'PENDING',
+  'PUBLISHING',
+  'PUBLISHED',
+  'FAILED',
+] as const;
+
+export type OutboxStatusConst = (typeof OUTBOX_STATUSES)[number];
+
+export function isOutboxStatus(value: unknown): value is OutboxStatus {
+  return (
+    typeof value === 'string' &&
+    (OUTBOX_STATUSES as readonly string[]).includes(value)
+  );
+}
+
+export interface DomainOutbox {
+  outboxId: Ulid;
+  aggregateType: string;
+  aggregateId: Ulid;
+  eventType: string;
+  payloadJson: Record<string, unknown>;
+  status: OutboxStatus;
+  attempts: number;
+  /** Present while status is PUBLISHING; used to guard completion updates. */
+  claimToken: string | null;
+  claimedAt: Iso8601Utc | null;
+  /** When PENDING, publisher may claim only if null or <= now. */
+  nextAttemptAt: Iso8601Utc | null;
+  /** Bounded, sanitized error text from last failed publish attempt. */
+  lastError: string | null;
+  createdAt: Iso8601Utc;
+  publishedAt: Iso8601Utc | null;
+}

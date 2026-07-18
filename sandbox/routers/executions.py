@@ -23,12 +23,12 @@ from sandbox.models import (
     PythonExecutionRequest,
     ToolCallCheck,
 )
+from sandbox.security.ownership import require_owned_session
 from sandbox.services.audit_logger import audit_logger
 from sandbox.services.approval_manager import approval_manager
 from sandbox.services.execution_manager import execution_manager
 from sandbox.services.execution_context import SandboxExecutionContext
 from sandbox.services.policy_checker import policy_checker
-from sandbox.services.session_manager import session_manager
 
 router = APIRouter(prefix="/sessions/{session_id}/executions", tags=["executions"])
 
@@ -51,10 +51,8 @@ def _approval_operation_fingerprint(session_id: str, body: ApprovalCheckRequest)
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
-def _require_active_session(session_id: str):
-    session = session_manager.get(session_id)
-    if session is None:
-        raise HTTPException(status_code=404, detail="Session not found")
+def _require_active_session(session_id: str, request: Request | None = None):
+    session = require_owned_session(session_id, request)
     if session.status != "RUNNING":
         raise HTTPException(status_code=400, detail="Session is not active")
     return session
@@ -66,8 +64,8 @@ def _execution_context(session) -> SandboxExecutionContext:
 
 
 @router.post("/python", response_model=ExecutionResponse, status_code=201)
-def run_python(session_id: str, body: PythonExecutionRequest):
-    session = _require_active_session(session_id)
+def run_python(session_id: str, request: Request, body: PythonExecutionRequest):
+    session = _require_active_session(session_id, request)
     context = _execution_context(session)
     result = execution_manager.run_python(
         session_id=session_id,
@@ -75,10 +73,13 @@ def run_python(session_id: str, body: PythonExecutionRequest):
         context=context,
         timeout=body.timeout,
         env_overrides=body.env_overrides if body.env_overrides else None,
+        args=list(body.args or []),
     )
 
     if result.get("status") == "conflict":
         raise HTTPException(status_code=409, detail=result["error"])
+    if result.get("status") == "invalid":
+        raise HTTPException(status_code=400, detail=result.get("error") or "invalid")
 
     audit_logger.log_execution(
         session_id=session_id,
@@ -89,13 +90,26 @@ def run_python(session_id: str, body: PythonExecutionRequest):
         truncated=result.get("truncated", False),
     )
 
-    return ExecutionResponse(**result)
+    return ExecutionResponse(
+        execution_id=result["execution_id"],
+        session_id=result.get("session_id") or session_id,
+        status=result.get("status", "failed"),
+        stdout_preview=result.get("stdout_preview", ""),
+        stderr_preview=result.get("stderr_preview", ""),
+        exit_code=result.get("exit_code"),
+        duration_ms=result.get("duration_ms", 0.0),
+        truncated=result.get("truncated", False),
+        trace_id=result.get("trace_id"),
+        materialized_path=result.get("materialized_path"),
+        python_version=result.get("python_version"),
+        python_mode=result.get("python_mode"),
+    )
 
 
 @router.post("/command", response_model=ExecutionResponse, status_code=201)
-def run_command(session_id: str, body: CommandExecutionRequest):
+def run_command(session_id: str, request: Request, body: CommandExecutionRequest):
     # Session is mandatory — service token alone cannot run without a live session.
-    session = _require_active_session(session_id)
+    session = _require_active_session(session_id, request)
 
     # Independent hard-deny re-check (do not trust Agent/Extension conclusions).
     # Approval credentials and the approval mode never override hard_deny.
@@ -147,8 +161,8 @@ def run_command(session_id: str, body: CommandExecutionRequest):
 
 
 @router.post("/node", response_model=ExecutionResponse, status_code=201)
-def run_node(session_id: str, body: NodeExecutionRequest):
-    session = _require_active_session(session_id)
+def run_node(session_id: str, request: Request, body: NodeExecutionRequest):
+    session = _require_active_session(session_id, request)
     context = _execution_context(session)
     result = execution_manager.run_node(
         session_id=session_id,
@@ -174,13 +188,11 @@ def run_node(session_id: str, body: NodeExecutionRequest):
 
 
 @router.post("/approval-check", response_model=ApprovalResponse, status_code=200)
-def approval_check(session_id: str, body: ApprovalCheckRequest, response: Response):
+def approval_check(session_id: str, request: Request, body: ApprovalCheckRequest, response: Response):
     from sandbox.config import settings
     from sandbox.services.policy_checker import POLICY_VERSION
 
-    session = session_manager.get(session_id)
-    if session is None:
-        raise HTTPException(status_code=404, detail="Session not found")
+    session = require_owned_session(session_id, request)
 
     decision = policy_checker.check(ToolCallCheck(
         session_id=session_id,
@@ -359,7 +371,7 @@ def approval_check(session_id: str, body: ApprovalCheckRequest, response: Respon
 
 
 @router.post("/cancel-active")
-def cancel_active_execution(session_id: str):
+def cancel_active_execution(session_id: str, request: Request):
     """Cancel the session's currently running execution, if any.
 
     Used by chat/SSE disconnect cleanup. Returns 404 when the session is
@@ -367,9 +379,7 @@ def cancel_active_execution(session_id: str):
 
     Also cancels foreground managed processes for the session (B2 cascade).
     """
-    session = session_manager.get(session_id)
-    if session is None:
-        raise HTTPException(status_code=404, detail="Session not found")
+    session = require_owned_session(session_id, request)
 
     # B2: run cancel must stop associated managed processes (foreground).
     process_ids: list[str] = []
@@ -395,10 +405,8 @@ def cancel_active_execution(session_id: str):
 
 
 @router.get("/{execution_id}", response_model=ExecutionResponse)
-def get_execution(session_id: str, execution_id: str):
-    session = session_manager.get(session_id)
-    if session is None:
-        raise HTTPException(status_code=404, detail="Session not found")
+def get_execution(session_id: str, request: Request, execution_id: str):
+    session = require_owned_session(session_id, request)
 
     result = execution_manager.get(execution_id)
     if result is None:
@@ -412,14 +420,13 @@ def get_execution(session_id: str, execution_id: str):
 @router.get("/{execution_id}/logs", response_model=ExecutionLogsResponse)
 def get_execution_logs(
     session_id: str,
+    request: Request,
     execution_id: str,
     offset: int = Query(0, ge=0),
     limit: int | None = Query(None, ge=1, le=500_000),
 ):
     """Pageable execution logs (B3). Supports offset/limit pull after disconnect."""
-    session = session_manager.get(session_id)
-    if session is None:
-        raise HTTPException(status_code=404, detail="Session not found")
+    session = require_owned_session(session_id, request)
 
     result = execution_manager.get(execution_id)
     if result is None:
@@ -439,13 +446,12 @@ def get_execution_logs(
 )
 def list_execution_events(
     session_id: str,
+    request: Request,
     execution_id: str,
     after_sequence: int = Query(0, ge=0),
     limit: int | None = Query(None, ge=1, le=5000),
 ):
-    session = session_manager.get(session_id)
-    if session is None:
-        raise HTTPException(status_code=404, detail="Session not found")
+    session = require_owned_session(session_id, request)
 
     result = execution_manager.get(execution_id)
     if result is None:
@@ -470,9 +476,7 @@ def stream_execution_events(
     last_event_id: str | None = Header(None, alias="Last-Event-ID"),
 ):
     """SSE stream of short-command execution events with sequence resume (B3)."""
-    session = session_manager.get(session_id)
-    if session is None:
-        raise HTTPException(status_code=404, detail="Session not found")
+    session = require_owned_session(session_id, request)
 
     result = execution_manager.get(execution_id)
     if result is None:
@@ -545,10 +549,8 @@ def stream_execution_events(
 
 
 @router.post("/{execution_id}/cancel", response_model=ExecutionResponse)
-def cancel_execution(session_id: str, execution_id: str):
-    session = session_manager.get(session_id)
-    if session is None:
-        raise HTTPException(status_code=404, detail="Session not found")
+def cancel_execution(session_id: str, request: Request, execution_id: str):
+    session = require_owned_session(session_id, request)
 
     result = execution_manager.get(execution_id)
     if result is None:

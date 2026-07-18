@@ -30,6 +30,10 @@ class SandboxExecutionContext:
     physical_temp: Path
     logical_workspace: str = LEGACY_AGENT_WORKSPACE_PATH
     logical_temp: str = AGENT_TEMP_PATH
+    # Authoritative end-user id from the trusted session binding
+    # (``SessionResponse.user_id``). Never taken from process API bodies.
+    # Optional so legacy/unit tests may omit it (workspace fallback for quotas).
+    user_id: str | None = None
 
     @classmethod
     def from_session(cls, session: Any) -> "SandboxExecutionContext":
@@ -39,10 +43,17 @@ class SandboxExecutionContext:
         workspace_id = get_session_workspace_id(session)
         if not session_id or not workspace_id:
             raise ValueError("Session is missing filesystem identity")
+        user_id = getattr(session, "user_id", None)
+        if user_id is None and isinstance(session, dict):
+            user_id = session.get("user_id")
+        if user_id is not None:
+            text = str(user_id).strip()
+            user_id = text or None
         return cls(
             session_id=str(session_id),
             workspace_id=str(workspace_id),
             temp_id=get_session_temp_id(session),
             physical_workspace=ensure_physical_workspace(session).resolve(),
             physical_temp=ensure_physical_temp(session).resolve(),
+            user_id=user_id,
         )

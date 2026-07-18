@@ -6,7 +6,11 @@ describe('conversation history rehydration', () => {
   it('restores completed tool calls from persisted events', async () => {
     const originalFetch = globalThis.fetch;
     globalThis.fetch = (async (input) => {
-      assert.match(String(input), /\/api\/conversations\/conv_history\/events$/);
+      const url = String(input);
+      if (url.includes('/datasets')) {
+        return new Response(JSON.stringify({ datasets: [] }), { status: 200 });
+      }
+      assert.match(url, /\/api\/conversations\/conv_history\/events$/);
       return new Response(
         JSON.stringify({
           runs: [
@@ -120,6 +124,9 @@ describe('conversation history rehydration', () => {
           }),
           { status: 200, headers: { 'Content-Type': 'application/json' } },
         );
+      }
+      if (url.includes('/datasets')) {
+        return new Response(JSON.stringify({ datasets: [] }), { status: 200 });
       }
       throw new Error(`Unexpected fetch: ${url}`);
     }) as typeof fetch;

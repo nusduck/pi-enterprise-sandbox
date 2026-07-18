@@ -65,6 +65,8 @@ export type InspectorTabId =
   | 'processes'
   | 'tools'
   | 'artifacts'
+  | 'datasets'
+  | 'trace'
   | 'session';
 
 /** Parse ISO timestamp → ms; missing/invalid → 0. */

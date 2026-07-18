@@ -26,6 +26,7 @@ from sandbox.services.execution_stream import (
     ExecutionStreamHub,
 )
 from sandbox.services.process_manager import ProcessManager
+from tests.conftest import session_create_payload
 
 
 @pytest.fixture
@@ -277,7 +278,7 @@ class TestProcessManagerStreaming:
         monkeypatch.setattr(proc_router, "process_manager", isolated)
 
         with TestClient(app) as c:
-            resp = c.post("/sessions", json={"caller_id": "stream-test"})
+            resp = c.post("/sessions", json=session_create_payload("stream-test"))
             assert resp.status_code in (200, 201), resp.text
             session_id = resp.json()["session_id"]
 
@@ -399,7 +400,7 @@ class TestBashExecutionStreaming:
         monkeypatch.setattr(exec_router, "execution_manager", isolated)
 
         with TestClient(app) as c:
-            resp = c.post("/sessions", json={"caller_id": "exec-stream"})
+            resp = c.post("/sessions", json=session_create_payload("exec-stream"))
             assert resp.status_code in (200, 201)
             session_id = resp.json()["session_id"]
 

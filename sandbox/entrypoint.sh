@@ -2,8 +2,19 @@
 set -euo pipefail
 
 # ── Sandbox Service Entrypoint ─────────────────────────────────────
-# Runs as root when network isolation is enabled, applies optional
-# iptables policy, then drops privileges to SANDBOX_RUN_AS_USER.
+# Starts as root only to fix storage ownership, then drops privileges
+# to SANDBOX_RUN_AS_USER. Network isolation for untrusted child
+# executions is NOT applied here:
+#   - production / default: SANDBOX_NETWORK_MODE=disabled + Bubblewrap
+#     --unshare-net (empty netns; fail-closed)
+#   - container-wide iptables is intentionally NOT used (no NET_ADMIN,
+#     no fail-open when iptables is missing)
+# Inbound Sandbox HTTP clients are gated separately by
+# SANDBOX_ALLOWED_CLIENT_CIDRS (in-app), not by this script.
+#
+# Hard resource limits (RLIMIT_CPU/AS/FSIZE/NOFILE/NPROC) are applied
+# per untrusted child in Python preexec_fn before exec — NEVER via a
+# global ulimit/setrlimit on this service process (would starve uvicorn).
 
 bool_enabled() {
     case "${1:-}" in
@@ -20,94 +31,24 @@ SANDBOX_APP_MODULE="${SANDBOX_APP_MODULE:-sandbox.main:app}"
 SANDBOX_RUN_AS_USER="${SANDBOX_RUN_AS_USER:-sandbox}"
 SANDBOX_LOG_LEVEL="$(echo "${SANDBOX_LOG_LEVEL:-info}" | tr '[:upper:]' '[:lower:]')"
 SANDBOX_UVICORN_WORKERS="${SANDBOX_UVICORN_WORKERS:-1}"
-# Single network mode drives iptables + (in-app) command policy.
+# Outbound *execution* network policy (not inbound HTTP client CIDRs).
 # disabled | allowlist | unrestricted — must match SANDBOX_NETWORK_MODE in Settings.
+# Production validation rejects anything other than disabled until a real
+# per-child egress proxy exists (no container-wide iptables substitute).
 SANDBOX_NETWORK_MODE="$(echo "${SANDBOX_NETWORK_MODE:-disabled}" | tr '[:upper:]' '[:lower:]')"
 case "$SANDBOX_NETWORK_MODE" in
     unrestricted|open|full)
         SANDBOX_NETWORK_MODE="unrestricted"
-        # Unrestricted: skip iptables isolation (dev only; production rejects this mode).
-        SANDBOX_IPTABLES_ENABLED="${SANDBOX_IPTABLES_ENABLED:-false}"
         ;;
     allowlist|allow|whitelist)
         SANDBOX_NETWORK_MODE="allowlist"
-        SANDBOX_IPTABLES_ENABLED="${SANDBOX_IPTABLES_ENABLED:-true}"
-        SANDBOX_IPTABLES_DEFAULT_POLICY="${SANDBOX_IPTABLES_DEFAULT_POLICY:-DROP}"
         ;;
     disabled|off|none|deny|block|*)
         SANDBOX_NETWORK_MODE="disabled"
-        SANDBOX_IPTABLES_ENABLED="${SANDBOX_IPTABLES_ENABLED:-true}"
-        SANDBOX_IPTABLES_DEFAULT_POLICY="${SANDBOX_IPTABLES_DEFAULT_POLICY:-DROP}"
-        # No outbound destinations beyond DNS unless explicitly set.
         ;;
 esac
 
-SANDBOX_IPTABLES_ENABLED="${SANDBOX_IPTABLES_ENABLED:-true}"
-SANDBOX_IPTABLES_DEFAULT_POLICY="${SANDBOX_IPTABLES_DEFAULT_POLICY:-DROP}"
-SANDBOX_ALLOWED_DNS_PORTS="${SANDBOX_ALLOWED_DNS_PORTS:-53}"
-SANDBOX_ALLOWED_TCP_PORTS="${SANDBOX_ALLOWED_TCP_PORTS:-}"
-SANDBOX_ALLOWED_UDP_PORTS="${SANDBOX_ALLOWED_UDP_PORTS:-}"
-SANDBOX_ALLOWED_CIDRS="${SANDBOX_ALLOWED_CIDRS:-}"
-SANDBOX_ALLOW_LOOPBACK="${SANDBOX_ALLOW_LOOPBACK:-true}"
-SANDBOX_ALLOW_ESTABLISHED="${SANDBOX_ALLOW_ESTABLISHED:-true}"
-
-echo "[entrypoint] SANDBOX_NETWORK_MODE=$SANDBOX_NETWORK_MODE iptables_enabled=$SANDBOX_IPTABLES_ENABLED"
-
-apply_iptables_rules() {
-    if ! bool_enabled "$SANDBOX_IPTABLES_ENABLED"; then
-        echo "[entrypoint] iptables disabled by SANDBOX_IPTABLES_ENABLED=$SANDBOX_IPTABLES_ENABLED (network_mode=$SANDBOX_NETWORK_MODE)"
-        return 0
-    fi
-    if ! command -v iptables &> /dev/null; then
-        echo "[entrypoint] WARNING: iptables not found — skipping network isolation rules."
-        return 0
-    fi
-
-    echo "[entrypoint] Applying iptables isolation: default=$SANDBOX_IPTABLES_DEFAULT_POLICY dns=$SANDBOX_ALLOWED_DNS_PORTS tcp=${SANDBOX_ALLOWED_TCP_PORTS:-none} udp=${SANDBOX_ALLOWED_UDP_PORTS:-none} cidrs=${SANDBOX_ALLOWED_CIDRS:-none}"
-
-    iptables -F OUTPUT 2>/dev/null || true
-
-    if bool_enabled "$SANDBOX_ALLOW_LOOPBACK"; then
-        iptables -A OUTPUT -o lo -j ACCEPT
-    fi
-
-    if bool_enabled "$SANDBOX_ALLOW_ESTABLISHED"; then
-        iptables -A OUTPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
-    fi
-
-    local port cidr
-    IFS=',' read -ra dns_ports <<< "$SANDBOX_ALLOWED_DNS_PORTS"
-    for port in "${dns_ports[@]}"; do
-        port="$(echo "$port" | xargs)"
-        [ -z "$port" ] && continue
-        iptables -A OUTPUT -p udp --dport "$port" -j ACCEPT
-        iptables -A OUTPUT -p tcp --dport "$port" -j ACCEPT
-    done
-
-    IFS=',' read -ra tcp_ports <<< "$SANDBOX_ALLOWED_TCP_PORTS"
-    for port in "${tcp_ports[@]}"; do
-        port="$(echo "$port" | xargs)"
-        [ -z "$port" ] && continue
-        iptables -A OUTPUT -p tcp --dport "$port" -j ACCEPT
-    done
-
-    IFS=',' read -ra udp_ports <<< "$SANDBOX_ALLOWED_UDP_PORTS"
-    for port in "${udp_ports[@]}"; do
-        port="$(echo "$port" | xargs)"
-        [ -z "$port" ] && continue
-        iptables -A OUTPUT -p udp --dport "$port" -j ACCEPT
-    done
-
-    IFS=',' read -ra cidrs <<< "$SANDBOX_ALLOWED_CIDRS"
-    for cidr in "${cidrs[@]}"; do
-        cidr="$(echo "$cidr" | xargs)"
-        [ -z "$cidr" ] && continue
-        iptables -A OUTPUT -d "$cidr" -j ACCEPT
-    done
-
-    iptables -A OUTPUT -j "$SANDBOX_IPTABLES_DEFAULT_POLICY"
-    echo "[entrypoint] iptables rules applied successfully."
-}
+echo "[entrypoint] SANDBOX_NETWORK_MODE=$SANDBOX_NETWORK_MODE (execution policy; no iptables authority)"
 
 build_uvicorn_args() {
     # Listen address only — inbound client allowlist is enforced in-app via
@@ -134,8 +75,6 @@ build_uvicorn_args() {
     echo "$args"
 }
 
-apply_iptables_rules
-
 # ── Prepare private storage roots ──────────────────────────────────
 # Only the trusted Sandbox API can access these parents. Untrusted commands
 # receive only their conversation-specific children through Bubblewrap.
@@ -152,7 +91,21 @@ done
 UVICORN_ARGS="$(build_uvicorn_args)"
 echo "[entrypoint] Starting Sandbox API: uvicorn $UVICORN_ARGS"
 
+# Production Linux: refuse start when critical RLIMIT primitives are missing.
+# (App-level validate_production_settings also checks; this fails earlier.)
+DEPLOYMENT_ENV_NORM="$(echo "${DEPLOYMENT_ENV:-${SANDBOX_DEPLOYMENT_ENV:-development}}" | tr '[:upper:]' '[:lower:]')"
+case "$DEPLOYMENT_ENV_NORM" in
+    production|prod)
+        if [ "$(uname -s 2>/dev/null || echo unknown)" = "Linux" ]; then
+            echo "[entrypoint] Production Linux: verifying resource primitives"
+            /app/.venv/bin/python -c \
+                "from sandbox.utils.resource_limits import assert_production_resource_primitives; assert_production_resource_primitives()"
+        fi
+        ;;
+esac
+
 # ── Drop privileges to the sandbox user and start the app ──────────
+# No global ulimit here — child hard limits are applied in preexec only.
 if [ "$(id -u)" -eq 0 ] && command -v gosu &> /dev/null; then
     exec gosu "$SANDBOX_RUN_AS_USER" bash -c "exec /app/.venv/bin/uvicorn $UVICORN_ARGS"
 elif [ "$(id -u)" -eq 0 ] && command -v su &> /dev/null; then

@@ -1,28 +1,47 @@
 /**
- * Run Event Reducer — applies RuntimeEvents to the normalized EntityStore.
+ * Unified Event Reducer (plan §19.3) — applies RuntimeEvents / platform
+ * envelopes to the normalized EntityStore.
  * Pure: no I/O or DOM mutation (F2 / ADR 0003 §13–15).
+ *
+ * Live SSE and historical replay share this path (reducePlatformEvent alias).
  */
-import type { EntityStore, RunEntity, RunStatus } from '../../entities/types';
+import type {
+  EntityStore,
+  RunEntity,
+  RunStatus,
+  ToolSource,
+} from '../../entities/types';
 import {
   createAgentSession,
   createApproval,
   createArtifact,
+  createDataset,
   createMessage,
   createProcess,
   createRun,
   createToolExecution,
+  createTraceSpan,
   isTerminalRunStatus,
   setActiveConversation,
   upsertApproval,
   upsertAgentSession,
   upsertArtifact,
+  upsertDataset,
   upsertMessage,
   upsertProcess,
   upsertRun,
   upsertToolExecution,
+  upsertTraceSpan,
 } from '../../entities/store';
 import type { RuntimeEvent, ToolExecutionSnapshot } from '../schemas/events';
 import { parseRuntimeEvent } from '../schemas/events';
+import {
+  appendCappedLog,
+  capSeenEventIds,
+  inferToolSource,
+  isExternalRiskApproval,
+  normalizeToRuntimeEvent,
+} from './platformEventNormalize';
 
 export type ReduceOutcome =
   | 'applied'
@@ -96,10 +115,28 @@ function advanceCursor(
 }
 
 /**
+ * Durable submit_artifact id (server-issued). Reject adapter/path synth ids
+ * so missing artifact_id never becomes a downloadable Workspace path card.
+ */
+export function isDurableArtifactId(
+  artifactId: string | null | undefined,
+  runId: string,
+): boolean {
+  if (artifactId == null) return false;
+  const id = String(artifactId).trim();
+  if (!id) return false;
+  // Agent adapter synthesizes art_<runId>_<seq> when file_ready omits artifact_id
+  if (runId && id.startsWith(`art_${runId}_`)) return false;
+  if (id.startsWith('synth_') || id.startsWith('local_')) return false;
+  return true;
+}
+
+/**
  * Check sequence / dedupe before applying.
  * - duplicate: same event_id already applied OR sequence <= lastSequence
  * - out_of_order: sequence < lastSequence (and not same event)
- * - gap: sequence > lastSequence + 1 (still applied; caller may backfill)
+ * - gap: sequence > lastSequence + 1 — must NOT apply (caller re-subscribes)
+ * - new run with sequence > 1 is also a gap (expected first is sequence 1)
  */
 export function classifyEvent(
   store: EntityStore,
@@ -112,19 +149,22 @@ export function classifyEvent(
   if (seenEventIds?.has(ev.event_id)) return 'duplicate';
 
   const run = store.runsById[ev.run_id];
-  if (!run) return 'applied'; // new run — will be created
+  // Virtual cursor 0 when the run entity does not exist yet.
+  const lastSequence = run?.lastSequence ?? 0;
+  const lastEventId = run?.lastEventId ?? null;
 
-  if (run.lastEventId === ev.event_id) return 'duplicate';
-  if (ev.sequence <= run.lastSequence) {
-    // Already past this sequence — treat as duplicate/out-of-order
-    return ev.sequence < run.lastSequence ? 'out_of_order' : 'duplicate';
+  if (lastEventId && lastEventId === ev.event_id) return 'duplicate';
+  if (ev.sequence <= lastSequence) {
+    return ev.sequence < lastSequence ? 'out_of_order' : 'duplicate';
   }
-  if (ev.sequence > run.lastSequence + 1) return 'gap';
+  // Expected next is lastSequence + 1. Jumping ahead is a gap — never apply.
+  // New runs (lastSequence 0) require sequence === 1; sequence > 1 is a gap.
+  if (ev.sequence > lastSequence + 1) return 'gap';
   return 'applied';
 }
 
 /**
- * Apply one RuntimeEvent to the entity store.
+ * Apply one RuntimeEvent (or platform envelope) to the entity store.
  * Does NOT mutate nested message content in place — each delta produces a new MessageEntity snapshot.
  */
 export function reduceRuntimeEvent(
@@ -132,7 +172,12 @@ export function reduceRuntimeEvent(
   raw: RuntimeEvent | unknown,
   opts: { seenEventIds?: Set<string>; applyOutOfOrder?: boolean } = {},
 ): ReduceResult {
-  const ev = parseRuntimeEvent(raw) ?? (raw as RuntimeEvent | null);
+  // Platform envelopes and legacy RuntimeEvents share one normalize path.
+  const normalized = normalizeToRuntimeEvent(raw);
+  const ev =
+    normalized ||
+    parseRuntimeEvent(raw) ||
+    (raw as RuntimeEvent | null);
   if (
     !ev ||
     typeof ev !== 'object' ||
@@ -168,8 +213,18 @@ export function reduceRuntimeEvent(
       eventId: ev.event_id,
     };
   }
+  // Gap: never mutate store, never advance cursor / seen set. Caller must
+  // resubscribe from the previous lastSequence (authoritative replay).
+  if (outcome === 'gap') {
+    return {
+      store,
+      outcome: 'gap',
+      sequenceGap: true,
+      appliedSequence: null,
+      eventId: ev.event_id,
+    };
+  }
 
-  const sequenceGap = outcome === 'gap';
   let next = ensureRun(store, ev.run_id, ev);
   const runId = ev.run_id;
   const payload = ev.payload || {};
@@ -348,23 +403,65 @@ export function reduceRuntimeEvent(
     }
 
     case 'tool.prepared':
-    case 'tool.started': {
+    case 'tool.started':
+    case 'tool.progress': {
       const toolId = str(payload.tool_call_id || payload.id || payload.tool_id);
       if (!toolId) break;
       const existing = next.toolExecutionsById[toolId];
+      const name = str(payload.name || existing?.name, 'tool');
+      const source = (existing?.source && existing.source !== 'unknown'
+        ? existing.source
+        : inferToolSource(name, payload)) as ToolSource;
       next = upsertToolExecution(
         next,
         createToolExecution({
           id: toolId,
           runId,
-          name: str(payload.name || existing?.name, 'tool'),
-          status: ev.type === 'tool.prepared' ? 'prepared' : 'running',
+          name,
+          source,
+          status:
+            ev.type === 'tool.prepared'
+              ? 'prepared'
+              : existing?.status === 'waiting_approval'
+                ? 'waiting_approval'
+                : 'running',
           input: payload.input ?? payload.args ?? existing?.input ?? null,
-          summary: payload.summary != null ? str(payload.summary) : existing?.summary ?? null,
+          summary:
+            payload.summary != null
+              ? str(payload.summary)
+              : existing?.summary ?? null,
+          spanId:
+            payload.span_id != null
+              ? str(payload.span_id)
+              : existing?.spanId ?? null,
+          approvalId: existing?.approvalId ?? null,
+          processId: existing?.processId ?? null,
+          result: existing?.result ?? null,
+          isError: existing?.isError ?? false,
           createdAt: existing?.createdAt || ts,
           updatedAt: ts,
         }),
       );
+      // Trace span for tool
+      if (ev.type === 'tool.started' || ev.type === 'tool.prepared') {
+        const spanId = str(payload.span_id, `toolspan_${toolId}`);
+        next = upsertTraceSpan(
+          next,
+          createTraceSpan({
+            id: spanId,
+            runId,
+            parentId: next.runsById[runId]?.traceId
+              ? `runspan_${runId}`
+              : null,
+            kind: source === 'mcp' ? 'mcp' : source === 'sandbox' ? 'sandbox' : 'tool',
+            name,
+            status: 'running',
+            spanId: payload.span_id != null ? str(payload.span_id) : null,
+            startedAt: existing?.createdAt || ts,
+            metadata: { toolCallId: toolId, source },
+          }),
+        );
+      }
       if (ev.type === 'tool.started') {
         next = touchRun(next, runId, { status: 'running' });
       }
@@ -375,18 +472,45 @@ export function reduceRuntimeEvent(
       const approvalId = str(payload.approval_id || payload.id);
       const toolId = str(payload.tool_call_id || payload.tool_id) || null;
       if (!approvalId) break;
+      const toolName =
+        toolId && next.toolExecutionsById[toolId]
+          ? next.toolExecutionsById[toolId].name
+          : str(payload.tool_name || payload.name);
+      // Plan §19.9: ordinary Bash must not open the approval panel.
+      if (!isExternalRiskApproval(payload, toolName)) {
+        break;
+      }
+      const existingAppr = next.approvalsById[approvalId];
       next = upsertApproval(
         next,
         createApproval({
           id: approvalId,
           runId,
-          toolExecutionId: toolId,
+          toolExecutionId: toolId || existingAppr?.toolExecutionId || null,
           idempotencyKey:
-            payload.idempotency_key != null ? str(payload.idempotency_key) : null,
-          status: 'pending',
-          reason: str(payload.reason || payload.command),
-          command: payload.command != null ? str(payload.command) : null,
-          createdAt: ts,
+            payload.idempotency_key != null
+              ? str(payload.idempotency_key)
+              : existingAppr?.idempotencyKey ?? null,
+          status: existingAppr?.status === 'approved' || existingAppr?.status === 'rejected'
+            ? existingAppr.status
+            : 'pending',
+          reason: str(payload.reason || payload.command || existingAppr?.reason),
+          command:
+            payload.command != null
+              ? str(payload.command)
+              : existingAppr?.command ?? null,
+          risk:
+            payload.risk != null
+              ? str(payload.risk)
+              : payload.risk_level != null
+                ? str(payload.risk_level)
+                : existingAppr?.risk ?? null,
+          expiresAt:
+            payload.expires_at != null
+              ? str(payload.expires_at)
+              : existingAppr?.expiresAt ?? null,
+          createdAt: existingAppr?.createdAt || ts,
+          decidedAt: existingAppr?.decidedAt ?? null,
         }),
       );
       if (toolId) {
@@ -400,7 +524,62 @@ export function reduceRuntimeEvent(
           });
         }
       }
-      next = touchRun(next, runId, { status: 'waiting_approval' });
+      if (!existingAppr || existingAppr.status === 'pending') {
+        next = touchRun(next, runId, { status: 'waiting_approval' });
+      }
+      break;
+    }
+
+    case 'approval.resolved': {
+      const approvalId = str(payload.approval_id || payload.id);
+      if (!approvalId) break;
+      const existing = next.approvalsById[approvalId];
+      if (!existing) {
+        next = upsertApproval(
+          next,
+          createApproval({
+            id: approvalId,
+            runId,
+            toolExecutionId: str(payload.tool_call_id) || null,
+            status: (str(payload.status, 'approved') as 'approved' | 'rejected' | 'expired') || 'approved',
+            reason: str(payload.reason),
+            decidedAt: ts,
+            createdAt: ts,
+          }),
+        );
+      } else {
+        const statusRaw = str(payload.status, 'approved');
+        const status =
+          statusRaw === 'rejected' || statusRaw === 'deny' || statusRaw === 'denied'
+            ? 'rejected'
+            : statusRaw === 'expired'
+              ? 'expired'
+              : 'approved';
+        next = upsertApproval(next, {
+          ...existing,
+          status,
+          decidedAt: ts,
+        });
+      }
+      const toolId =
+        str(payload.tool_call_id) ||
+        next.approvalsById[approvalId]?.toolExecutionId ||
+        null;
+      if (toolId && next.toolExecutionsById[toolId]) {
+        const tool = next.toolExecutionsById[toolId];
+        next = upsertToolExecution(next, {
+          ...tool,
+          status: 'running',
+          updatedAt: ts,
+        });
+      }
+      // Resume run when no other pending approvals
+      const stillPending = Object.values(next.approvalsById).some(
+        (a) => a.runId === runId && a.status === 'pending',
+      );
+      if (!stillPending && next.runsById[runId]?.status === 'waiting_approval') {
+        next = touchRun(next, runId, { status: 'running' });
+      }
       break;
     }
 
@@ -409,59 +588,118 @@ export function reduceRuntimeEvent(
       const toolId = str(payload.tool_call_id || payload.id || payload.tool_id);
       if (!toolId) break;
       const existing = next.toolExecutionsById[toolId];
+      const name = str(payload.name || existing?.name, 'tool');
+      const source = (existing?.source && existing.source !== 'unknown'
+        ? existing.source
+        : inferToolSource(name, payload)) as ToolSource;
+      // Never promote a completed write/edit into an artifact — only
+      // artifact.created / artifact.ready (submit_artifact) does that.
       next = upsertToolExecution(
         next,
         createToolExecution({
           id: toolId,
           runId,
-          name: str(payload.name || existing?.name, 'tool'),
+          name,
+          source,
           status: ev.type === 'tool.failed' ? 'failed' : 'completed',
           input: existing?.input ?? payload.input ?? payload.args ?? null,
           result: payload.result ?? existing?.result ?? null,
           isError: ev.type === 'tool.failed' || Boolean(payload.is_error || payload.isError),
           approvalId: existing?.approvalId ?? null,
           processId: existing?.processId ?? null,
-          summary: existing?.summary ?? null,
+          summary:
+            payload.summary != null
+              ? str(payload.summary)
+              : existing?.summary ?? null,
+          spanId: existing?.spanId ?? (payload.span_id != null ? str(payload.span_id) : null),
           createdAt: existing?.createdAt || ts,
           updatedAt: ts,
         }),
       );
+      const spanKey = existing?.spanId
+        ? Object.keys(next.traceSpansById).find(
+            (id) =>
+              next.traceSpansById[id].runId === runId &&
+              (next.traceSpansById[id].id === existing.spanId ||
+                next.traceSpansById[id].metadata?.toolCallId === toolId),
+          )
+        : Object.keys(next.traceSpansById).find(
+            (id) => next.traceSpansById[id].metadata?.toolCallId === toolId,
+          );
+      if (spanKey) {
+        const span = next.traceSpansById[spanKey];
+        next = upsertTraceSpan(next, {
+          ...span,
+          status: ev.type === 'tool.failed' ? 'error' : 'ok',
+          finishedAt: ts,
+          durationMs:
+            span.startedAt && ts
+              ? Math.max(0, Date.parse(ts) - Date.parse(span.startedAt))
+              : span.durationMs,
+          error:
+            ev.type === 'tool.failed'
+              ? str(payload.message || payload.error, 'tool failed')
+              : null,
+        });
+      }
       break;
     }
 
     case 'process.started': {
       const processId = str(payload.process_id || payload.id);
       if (!processId) break;
+      const toolCallId = str(payload.tool_call_id) || null;
       next = upsertProcess(
         next,
         createProcess({
           id: processId,
           runId,
-          toolExecutionId: str(payload.tool_call_id) || null,
+          toolExecutionId: toolCallId,
           status: 'running',
           command: payload.command != null ? str(payload.command) : null,
+          cursor: typeof payload.cursor === 'number' ? payload.cursor : 0,
           startedAt: ts,
           createdAt: ts,
         }),
       );
+      if (toolCallId && next.toolExecutionsById[toolCallId]) {
+        const tool = next.toolExecutionsById[toolCallId];
+        next = upsertToolExecution(next, {
+          ...tool,
+          processId,
+          updatedAt: ts,
+        });
+      }
       break;
     }
 
     case 'process.stdout':
-    case 'process.stderr': {
+    case 'process.stderr':
+    case 'process.output': {
       const processId = str(payload.process_id || payload.id);
       if (!processId) break;
       const proc =
         next.processesById[processId] ||
         createProcess({ id: processId, runId, status: 'running' });
       const chunk = str(payload.text || payload.chunk || payload.data);
+      const stream = str(payload.stream, 'stdout').toLowerCase();
+      const isStderr =
+        ev.type === 'process.stderr' || stream === 'stderr' || stream === 'err';
+      const out = isStderr
+        ? appendCappedLog(proc.stderr, chunk)
+        : appendCappedLog(proc.stdout, chunk);
       next = upsertProcess(next, {
         ...proc,
         runId,
-        stdout:
-          ev.type === 'process.stdout' ? proc.stdout + chunk : proc.stdout,
-        stderr:
-          ev.type === 'process.stderr' ? proc.stderr + chunk : proc.stderr,
+        stdout: isStderr ? proc.stdout : out.text,
+        stderr: isStderr ? out.text : proc.stderr,
+        logTruncated: proc.logTruncated || out.truncated,
+        cursor:
+          typeof payload.cursor === 'number'
+            ? payload.cursor
+            : proc.cursor != null
+              ? proc.cursor + chunk.length
+              : chunk.length,
         status: 'running',
         updatedAt: ts,
       });
@@ -469,16 +707,23 @@ export function reduceRuntimeEvent(
     }
 
     case 'process.completed':
-    case 'process.failed': {
+    case 'process.failed':
+    case 'process.cancelled': {
       const processId = str(payload.process_id || payload.id);
       if (!processId) break;
       const proc =
         next.processesById[processId] ||
         createProcess({ id: processId, runId });
+      const status =
+        ev.type === 'process.cancelled'
+          ? 'cancelled'
+          : ev.type === 'process.failed'
+            ? 'failed'
+            : 'completed';
       next = upsertProcess(next, {
         ...proc,
         runId,
-        status: ev.type === 'process.failed' ? 'failed' : 'completed',
+        status,
         exitCode:
           typeof payload.exit_code === 'number'
             ? payload.exit_code
@@ -492,10 +737,14 @@ export function reduceRuntimeEvent(
     }
 
     case 'artifact.created': {
-      const artifactId = str(
-        payload.artifact_id || payload.id,
-        `art_${runId}_${ev.sequence}`,
-      );
+      // Only durable server artifact_id from submit_artifact / artifact.ready.
+      // Missing id → still advance event cursor below, but never create a
+      // downloadable Artifact (no workspace path fallback).
+      const artifactId = str(payload.artifact_id || payload.id);
+      if (!isDurableArtifactId(artifactId, runId)) {
+        break;
+      }
+      const existing = next.artifactsById[artifactId];
       next = upsertArtifact(
         next,
         createArtifact({
@@ -505,17 +754,190 @@ export function reduceRuntimeEvent(
             str(ev.session_id) ||
             str(payload.session_id) ||
             next.runsById[runId]?.sandboxSessionId ||
+            existing?.sessionId ||
             null,
-          name: str(payload.name, artifactId),
-          path: payload.path != null ? str(payload.path) : null,
+          name: str(payload.name, existing?.name || artifactId),
+          path:
+            payload.path != null
+              ? str(payload.path)
+              : existing?.path ?? null,
           mimeType:
             payload.mime_type != null
               ? str(payload.mime_type)
               : payload.mimeType != null
                 ? str(payload.mimeType)
-                : null,
-          size: typeof payload.size === 'number' ? payload.size : null,
-          createdAt: ts,
+                : existing?.mimeType ?? null,
+          size:
+            typeof payload.size === 'number'
+              ? payload.size
+              : existing?.size ?? null,
+          sha256:
+            payload.sha256 != null
+              ? str(payload.sha256)
+              : existing?.sha256 ?? null,
+          description:
+            payload.description != null
+              ? str(payload.description)
+              : existing?.description ?? null,
+          source: 'submit_artifact',
+          createdAt: existing?.createdAt || ts,
+        }),
+      );
+      next = upsertTraceSpan(
+        next,
+        createTraceSpan({
+          id: `artspan_${artifactId}`,
+          runId,
+          parentId: null,
+          kind: 'artifact',
+          name: str(payload.name, artifactId),
+          status: 'ok',
+          startedAt: ts,
+          finishedAt: ts,
+          metadata: { artifactId },
+        }),
+      );
+      break;
+    }
+
+    case 'dataset.upload.started':
+    case 'dataset.upload.progress':
+    case 'dataset.ready':
+    case 'dataset.failed': {
+      const datasetId = str(
+        payload.dataset_id || payload.id,
+        `ds_${runId}_${ev.sequence}`,
+      );
+      const existing = next.datasetsById[datasetId];
+      const status =
+        ev.type === 'dataset.ready'
+          ? 'ready'
+          : ev.type === 'dataset.failed'
+            ? 'failed'
+            : 'uploading';
+      const progress =
+        typeof payload.progress === 'number'
+          ? Math.max(0, Math.min(100, payload.progress))
+          : typeof payload.percent === 'number'
+            ? Math.max(0, Math.min(100, payload.percent))
+            : status === 'ready'
+              ? 100
+              : existing?.progress ?? null;
+      next = upsertDataset(
+        next,
+        createDataset({
+          id: datasetId,
+          conversationId:
+            str(payload.conversation_id) ||
+            next.runsById[runId]?.conversationId ||
+            existing?.conversationId ||
+            null,
+          sessionId:
+            str(ev.session_id) ||
+            str(payload.session_id) ||
+            next.runsById[runId]?.sandboxSessionId ||
+            existing?.sessionId ||
+            null,
+          runId,
+          name: str(
+            payload.name || payload.original_filename || existing?.name,
+            datasetId,
+          ),
+          path:
+            payload.path != null
+              ? str(payload.path)
+              : payload.stored_relative_path != null
+                ? str(payload.stored_relative_path)
+                : existing?.path ?? null,
+          size:
+            typeof payload.size === 'number'
+              ? payload.size
+              : typeof payload.size_bytes === 'number'
+                ? payload.size_bytes
+                : existing?.size ?? null,
+          mimeType:
+            payload.mime_type != null
+              ? str(payload.mime_type)
+              : existing?.mimeType ?? null,
+          sha256:
+            payload.sha256 != null ? str(payload.sha256) : existing?.sha256 ?? null,
+          status,
+          progress,
+          agentVisible:
+            payload.agent_visible === false
+              ? false
+              : existing?.agentVisible ?? true,
+          createdAt: existing?.createdAt || ts,
+          updatedAt: ts,
+        }),
+      );
+      break;
+    }
+
+    case 'model.request.started':
+    case 'model.request.completed':
+    case 'model.request.failed': {
+      const spanId = str(
+        payload.span_id || payload.id,
+        `model_${runId}_${ev.sequence}`,
+      );
+      const existing = next.traceSpansById[spanId];
+      const failed = ev.type === 'model.request.failed';
+      const done = ev.type !== 'model.request.started';
+      next = upsertTraceSpan(
+        next,
+        createTraceSpan({
+          id: spanId,
+          runId,
+          parentId: existing?.parentId ?? `runspan_${runId}`,
+          kind: 'model',
+          name: str(payload.model || payload.name, 'model'),
+          status: failed ? 'error' : done ? 'ok' : 'running',
+          spanId: payload.span_id != null ? str(payload.span_id) : existing?.spanId ?? null,
+          tokens:
+            typeof payload.tokens === 'number'
+              ? payload.tokens
+              : typeof payload.total_tokens === 'number'
+                ? payload.total_tokens
+                : existing?.tokens ?? null,
+          cost:
+            typeof payload.cost === 'number' ? payload.cost : existing?.cost ?? null,
+          error: failed
+            ? str(payload.message || payload.error, 'model failed')
+            : null,
+          durationMs:
+            typeof payload.duration_ms === 'number'
+              ? payload.duration_ms
+              : existing?.durationMs ?? null,
+          startedAt: existing?.startedAt || ts,
+          finishedAt: done ? ts : null,
+          metadata: {
+            model: payload.model,
+            provider: payload.provider,
+          },
+        }),
+      );
+      break;
+    }
+
+    case 'error.occurred': {
+      const msg = str(payload.message || payload.error, 'Error');
+      next = touchRun(next, runId, {
+        error: msg,
+        // Non-terminal by default — agent may continue after recoverable errors
+      });
+      next = upsertTraceSpan(
+        next,
+        createTraceSpan({
+          id: `err_${runId}_${ev.sequence}`,
+          runId,
+          parentId: null,
+          kind: 'error',
+          name: 'error',
+          status: 'error',
+          error: msg,
+          startedAt: ts,
+          finishedAt: ts,
         }),
       );
       break;
@@ -650,21 +1072,62 @@ export function reduceRuntimeEvent(
       break;
   }
 
+  // Ensure a root run span exists when we have a trace id
+  const runAfter = next.runsById[runId];
+  if (runAfter?.traceId && !next.traceSpansById[`runspan_${runId}`]) {
+    next = upsertTraceSpan(
+      next,
+      createTraceSpan({
+        id: `runspan_${runId}`,
+        runId,
+        parentId: null,
+        kind: 'run',
+        name: 'run',
+        status: isTerminalRunStatus(runAfter.status)
+          ? runAfter.status === 'failed'
+            ? 'error'
+            : runAfter.status === 'cancelled'
+              ? 'cancelled'
+              : 'ok'
+          : 'running',
+        spanId: null,
+        startedAt: runAfter.startedAt || ts,
+        finishedAt: runAfter.finishedAt,
+      }),
+    );
+  }
+
   next = advanceCursor(next, runId, ev.sequence, ev.event_id);
-  opts.seenEventIds?.add(ev.event_id);
+  if (opts.seenEventIds) {
+    opts.seenEventIds.add(ev.event_id);
+    capSeenEventIds(opts.seenEventIds);
+  }
 
   return {
     store: next,
-    outcome: sequenceGap ? 'gap' : 'applied',
-    sequenceGap,
+    outcome: 'applied',
+    sequenceGap: false,
     appliedSequence: ev.sequence,
     eventId: ev.event_id,
   };
 }
 
 /**
+ * Plan §19.3 public name — live and historical events share this reducer.
+ */
+export function reducePlatformEvent(
+  store: EntityStore,
+  raw: unknown,
+  opts: { seenEventIds?: Set<string>; applyOutOfOrder?: boolean } = {},
+): ReduceResult {
+  return reduceRuntimeEvent(store, raw, opts);
+}
+
+/**
  * Apply a batch of events in sequence order (sorts first).
- * Duplicates / out-of-order are skipped.
+ * Only consecutive events apply: gaps do not advance the cursor, so later
+ * non-contiguous sequences remain skipped until the hole is filled.
+ * Replay + live merge is safe — later duplicates are skipped.
  */
 export function reduceRuntimeEventBatch(
   store: EntityStore,
@@ -672,7 +1135,7 @@ export function reduceRuntimeEventBatch(
   opts: { seenEventIds?: Set<string> } = {},
 ): { store: EntityStore; applied: number; skipped: number; gaps: number } {
   const parsed = events
-    .map((e) => parseRuntimeEvent(e) ?? (e as RuntimeEvent))
+    .map((e) => normalizeToRuntimeEvent(e) ?? parseRuntimeEvent(e) ?? (e as RuntimeEvent))
     .filter((e) => e && e.event_id && typeof e.sequence === 'number')
     .sort((a, b) => a.sequence - b.sequence);
 
@@ -683,17 +1146,20 @@ export function reduceRuntimeEventBatch(
 
   for (const ev of parsed) {
     const result = reduceRuntimeEvent(next, ev, opts);
-    next = result.store;
-    if (result.outcome === 'applied' || result.outcome === 'gap') {
+    // Gap leaves store unchanged; do not treat as applied.
+    if (result.outcome === 'applied') {
+      next = result.store;
       applied += 1;
-      if (result.sequenceGap) gaps += 1;
     } else {
       skipped += 1;
+      if (result.outcome === 'gap') gaps += 1;
     }
   }
 
   return { store: next, applied, skipped, gaps };
 }
+
+export const reducePlatformEventBatch = reduceRuntimeEventBatch;
 
 /**
  * Rehydrate an in-progress run from API detail + optional missed events.
@@ -820,12 +1286,16 @@ export function rehydrateToolExecutions(
       ? 'Outcome unconfirmed; do not retry automatically.'
       : snapshot.result_summary || snapshot.summary || snapshot.error || null;
     const existing = next.toolExecutionsById[snapshot.tool_call_id];
+    const name = snapshot.tool_name || existing?.name || 'tool';
     next = upsertToolExecution(
       next,
       createToolExecution({
         id: snapshot.tool_call_id,
         runId,
-        name: snapshot.tool_name || existing?.name || 'tool',
+        name,
+        source: existing?.source && existing.source !== 'unknown'
+          ? existing.source
+          : inferToolSource(name, (snapshot.arguments as Record<string, unknown>) || {}),
         status,
         input: snapshot.arguments ?? existing?.input ?? null,
         result,
@@ -833,6 +1303,7 @@ export function rehydrateToolExecutions(
         approvalId: existing?.approvalId ?? null,
         processId: existing?.processId ?? null,
         summary,
+        spanId: existing?.spanId ?? null,
         createdAt: snapshot.created_at || existing?.createdAt || null,
         updatedAt: snapshot.updated_at || snapshot.finished_at || existing?.updatedAt || null,
       }),

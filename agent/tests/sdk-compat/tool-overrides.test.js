@@ -8,7 +8,7 @@ import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createSandboxTools } from '../../packages/enterprise-agent-kit/extensions/sandbox-tools/tool-definitions.js';
-import { BASE_TOOL_NAMES, resolveToolAllowlist } from '../../runtime/agent-runtime.js';
+import { BASE_TOOL_NAMES, resolveToolAllowlist } from '../../runtime/tool-contract.js';
 import {
   createSkillTools,
   SKILL_TOOL_NAMES,
@@ -56,15 +56,15 @@ describe('createSandboxTools override contract', () => {
     }
   });
 
-  it('runtime resolveToolAllowlist is base tools + optional skill tools', () => {
+  it('tool-contract resolveToolAllowlist is base tools + optional skill tools', () => {
     assert.deepEqual(resolveToolAllowlist(SKILLS_MODE.READONLY).sort(), [...BASE_TOOL_NAMES].sort());
     assert.deepEqual(
       resolveToolAllowlist(SKILLS_MODE.DEVELOPMENT).sort(),
       [...BASE_TOOL_NAMES, ...SKILL_TOOL_NAMES].sort(),
     );
-    const runnerSrc = readFileSync(join(__dirname, '../../runtime/agent-runtime.js'), 'utf8');
-    assert.match(runnerSrc, /resolveToolAllowlist/);
-    assert.match(runnerSrc, /createSkillTools/);
+    const contractSrc = readFileSync(join(__dirname, '../../runtime/tool-contract.js'), 'utf8');
+    assert.match(contractSrc, /resolveToolAllowlist/);
+    assert.match(contractSrc, /BASE_TOOL_NAMES/);
   });
 
   it('skill tools only appear in development mode', () => {

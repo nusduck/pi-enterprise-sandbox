@@ -8,12 +8,14 @@ import type {
   ArtifactEntity,
   AttachmentEntity,
   ConversationEntity,
+  DatasetEntity,
   EntityMap,
   EntityStore,
   MessageEntity,
   ProcessEntity,
   RunEntity,
   ToolExecutionEntity,
+  TraceSpanEntity,
 } from './types';
 
 export const EMPTY_ENTITY_STORE: Readonly<EntityStore> = Object.freeze({
@@ -25,6 +27,8 @@ export const EMPTY_ENTITY_STORE: Readonly<EntityStore> = Object.freeze({
   processesById: Object.freeze({}),
   approvalsById: Object.freeze({}),
   artifactsById: Object.freeze({}),
+  datasetsById: Object.freeze({}),
+  traceSpansById: Object.freeze({}),
   attachmentsById: Object.freeze({}),
   activeConversationId: null,
   activeRunId: null,
@@ -42,6 +46,8 @@ export function createEntityStore(
     processesById: { ...(initial.processesById || {}) },
     approvalsById: { ...(initial.approvalsById || {}) },
     artifactsById: { ...(initial.artifactsById || {}) },
+    datasetsById: { ...(initial.datasetsById || {}) },
+    traceSpansById: { ...(initial.traceSpansById || {}) },
     attachmentsById: { ...(initial.attachmentsById || {}) },
     activeConversationId:
       initial.activeConversationId !== undefined
@@ -62,6 +68,8 @@ export function cloneEntityStore(store: EntityStore): EntityStore {
     processesById: { ...store.processesById },
     approvalsById: { ...store.approvalsById },
     artifactsById: { ...store.artifactsById },
+    datasetsById: { ...store.datasetsById },
+    traceSpansById: { ...store.traceSpansById },
     attachmentsById: { ...store.attachmentsById },
     activeConversationId: store.activeConversationId,
     activeRunId: store.activeRunId,
@@ -125,7 +133,9 @@ export function createRun(
     processIds: [],
     approvalIds: [],
     artifactIds: [],
+    datasetIds: [],
     attachmentIds: [],
+    traceSpanIds: [],
     lastSequence: 0,
     lastEventId: null,
     traceId: null,
@@ -167,12 +177,14 @@ export function createToolExecution(
   return {
     name: 'tool',
     status: 'prepared',
+    source: 'unknown',
     input: null,
     result: null,
     isError: false,
     approvalId: null,
     processId: null,
     summary: null,
+    spanId: null,
     createdAt: null,
     updatedAt: null,
     ...partial,
@@ -188,6 +200,8 @@ export function createProcess(
     command: null,
     stdout: '',
     stderr: '',
+    cursor: null,
+    logTruncated: false,
     exitCode: null,
     startedAt: null,
     finishedAt: null,
@@ -206,6 +220,8 @@ export function createApproval(
     status: 'pending',
     reason: '',
     command: null,
+    risk: null,
+    expiresAt: null,
     createdAt: null,
     decidedAt: null,
     ...partial,
@@ -222,7 +238,51 @@ export function createArtifact(
     path: null,
     mimeType: null,
     size: null,
+    sha256: null,
+    description: null,
+    source: 'submit_artifact',
     createdAt: null,
+    ...partial,
+  };
+}
+
+export function createDataset(
+  partial: Partial<DatasetEntity> & { id: string },
+): DatasetEntity {
+  return {
+    conversationId: null,
+    sessionId: null,
+    runId: null,
+    name: 'dataset',
+    path: null,
+    size: null,
+    mimeType: null,
+    sha256: null,
+    status: 'uploading',
+    progress: null,
+    agentVisible: true,
+    createdAt: null,
+    updatedAt: null,
+    ...partial,
+  };
+}
+
+export function createTraceSpan(
+  partial: Partial<TraceSpanEntity> & { id: string; runId: string },
+): TraceSpanEntity {
+  return {
+    parentId: null,
+    kind: 'other',
+    name: 'span',
+    status: 'running',
+    spanId: null,
+    durationMs: null,
+    tokens: null,
+    cost: null,
+    error: null,
+    metadata: null,
+    startedAt: null,
+    finishedAt: null,
     ...partial,
   };
 }
@@ -390,6 +450,40 @@ export function upsertArtifact(
   return next;
 }
 
+export function upsertDataset(
+  store: EntityStore,
+  entity: DatasetEntity,
+): EntityStore {
+  const next = cloneEntityStore(store);
+  next.datasetsById = upsert(next.datasetsById, entity);
+  if (entity.runId) {
+    const run = next.runsById[entity.runId];
+    if (run) {
+      next.runsById = upsert(next.runsById, {
+        ...run,
+        datasetIds: appendUnique(run.datasetIds || [], entity.id),
+      });
+    }
+  }
+  return next;
+}
+
+export function upsertTraceSpan(
+  store: EntityStore,
+  entity: TraceSpanEntity,
+): EntityStore {
+  const next = cloneEntityStore(store);
+  next.traceSpansById = upsert(next.traceSpansById, entity);
+  const run = next.runsById[entity.runId];
+  if (run) {
+    next.runsById = upsert(next.runsById, {
+      ...run,
+      traceSpanIds: appendUnique(run.traceSpanIds || [], entity.id),
+    });
+  }
+  return next;
+}
+
 export function upsertAttachment(
   store: EntityStore,
   entity: AttachmentEntity,
@@ -493,6 +587,39 @@ export function getRunArtifacts(
   return run.artifactIds
     .map((id) => store.artifactsById[id])
     .filter((a): a is ArtifactEntity => Boolean(a));
+}
+
+export function getRunDatasets(
+  store: EntityStore,
+  runId: string,
+): DatasetEntity[] {
+  const run = store.runsById[runId];
+  if (!run) return [];
+  return (run.datasetIds || [])
+    .map((id) => store.datasetsById[id])
+    .filter((d): d is DatasetEntity => Boolean(d));
+}
+
+/** Conversation-scoped datasets (upload panel; may outlive a single run). */
+export function listDatasetsForConversation(
+  store: EntityStore,
+  conversationId: string | null | undefined,
+): DatasetEntity[] {
+  if (!conversationId) return Object.values(store.datasetsById);
+  return Object.values(store.datasetsById).filter(
+    (d) => d.conversationId === conversationId,
+  );
+}
+
+export function getRunTraceSpans(
+  store: EntityStore,
+  runId: string,
+): TraceSpanEntity[] {
+  const run = store.runsById[runId];
+  if (!run) return [];
+  return (run.traceSpanIds || [])
+    .map((id) => store.traceSpansById[id])
+    .filter((s): s is TraceSpanEntity => Boolean(s));
 }
 
 /**

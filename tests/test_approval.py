@@ -12,12 +12,13 @@ from sandbox.database import Database
 from sandbox.main import app
 from sandbox.models import RiskLevel
 from sandbox.services.approval_manager import ApprovalManager
+from tests.conftest import session_create_payload
 
 client = TestClient(app)
 
 
 def test_high_risk_tool_returns_pending_approval_and_can_be_rejected():
-    session = client.post("/sessions", json={"caller_id": "approval-test"}).json()
+    session = client.post("/sessions", json=session_create_payload("approval-test")).json()
     sid = session["session_id"]
 
     # Use approval_required (not hard_deny): raw_bash is high-risk; avoid
@@ -42,7 +43,7 @@ def test_high_risk_tool_returns_pending_approval_and_can_be_rejected():
 
 
 def test_medium_risk_tool_is_auto_allowed_by_approval_check():
-    session = client.post("/sessions", json={"caller_id": "approval-test"}).json()
+    session = client.post("/sessions", json=session_create_payload("approval-test")).json()
     sid = session["session_id"]
 
     resp = client.post(

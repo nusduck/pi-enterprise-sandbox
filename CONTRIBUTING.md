@@ -98,10 +98,26 @@ pi-enterprise-sandbox/
 ├── config/            # Runtime config files
 ├── nginx/             # Production Nginx + SSL
 ├── scripts/           # backup/restore, development reset, cross-service smoke
+├── docker-compose.yml # Dev topology: services + MySQL 8 + Redis 7
+├── docker-compose.prod.yml # Prod overlay: MySQL 8 + Redis 7 + Nginx + secrets required
 ├── .github/workflows/ # CI matrix: python / node / frontend / compose
 ├── .trellis/          # Specs + tasks
 └── pyproject.toml
 ```
+
+**Persistence:** MySQL 8 is the sole formal database for development and production
+(`AGENT_DATABASE_URL`, `SANDBOX_DATABASE_URL`, `MYSQL_*`). Do not reintroduce
+Compose PostgreSQL or SQLite defaults. Unit tests may still inject sqlite via
+explicit test configuration until the Sandbox runtime cut-over lands — that path
+is not a production fallback.
+
+**Runtime coordination:** Redis 7 is the Agent-only coordination topology
+(`AGENT_REDIS_URL` / `REDIS_URL`, `REDIS_PASSWORD`, queue/lease/stream settings).
+It holds queues, leases, streams, and cancel signals — never authoritative Run
+facts. Clearing Redis loses only coordination state; MySQL facts + Outbox
+replay recover durable events. BFF and Sandbox must not take Redis authority
+in PR-03. Production fails fast when `REDIS_PASSWORD` is missing.
+
 
 > Root-level `PLAN.md` / `AUDIT.md` / `IMPROVEMENT_PLAN.md` live under `docs/archive/`.  
 > Agent root no longer has `chat-runner.js` / `sandbox-tools.js` facades — import from `runtime/` and `packages/enterprise-agent-kit`.
@@ -161,7 +177,8 @@ See [docs/architecture.md](./docs/architecture.md) and [`.trellis/spec/project-a
 
 - Why service-side Agent runtime (no LLM key in the browser)
 - Four-service architecture (Frontend + BFF + Agent + Sandbox)
-- Why SQLite with WAL for persistence (optional PostgreSQL)
+- Why MySQL 8 is the sole formal persistence topology
+- Why Redis 7 is Agent-only runtime coordination (not fact authority)
 - Why session-per-conversation isolation model
 - Why SSE streaming (not WebSocket)
 - Why approval workflow for high-risk tools

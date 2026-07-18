@@ -29,6 +29,8 @@ html2text
 chardet
 
 # ── Database ───────────────────────────────────────────────────────
+# Formal topology is MySQL 8 (PyMySQL). psycopg2 remains only for any
+# transitional tooling still importing the legacy postgres path.
 psycopg2-binary
 pymysql
 redis

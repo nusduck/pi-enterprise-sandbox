@@ -21,6 +21,10 @@ import {
   handleGetConversationEvents,
 } from './routes/conversations.js';
 import { handleListArtifacts } from './routes/artifacts.js';
+import {
+  handleDatasetUpload,
+  handleListDatasets,
+} from './routes/datasets.js';
 import { handleDecideApproval } from './routes/approvals.js';
 import {
   handleSteerRun,
@@ -88,7 +92,7 @@ function setCommonHeaders(req, res) {
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PATCH, DELETE, OPTIONS');
   res.setHeader(
     'Access-Control-Allow-Headers',
-    'Content-Type, Authorization, X-Trace-Id, Idempotency-Key',
+    'Content-Type, Authorization, X-Trace-Id, Idempotency-Key, Last-Event-ID',
   );
 }
 
@@ -117,7 +121,37 @@ function enforceBffAuth(req, res, path) {
 }
 
 const server = http.createServer(async (req, res) => {
-  const traceId = String(req.headers['x-trace-id'] || `trace_${randomUUID().replaceAll('-', '')}`);
+  // W3C 32-hex trace-id (never legacy trace_*). Strict traceparent validation.
+  const tp = req.headers.traceparent;
+  let traceId = null;
+  if (typeof tp === 'string' && tp.trim()) {
+    const parts = tp.trim().split('-');
+    if (parts.length === 4) {
+      const [ver, tid, sid, flags] = parts;
+      const verOk = /^[0-9a-fA-F]{2}$/.test(ver) && ver.toLowerCase() !== 'ff';
+      const tidOk =
+        /^[0-9a-fA-F]{32}$/.test(tid) && tid.toLowerCase() !== '0'.repeat(32);
+      const sidOk =
+        /^[0-9a-fA-F]{16}$/.test(sid) && sid.toLowerCase() !== '0'.repeat(16);
+      const flagsOk = /^[0-9a-fA-F]{2}$/.test(flags);
+      if (verOk && tidOk && sidOk && flagsOk) {
+        traceId = tid.toLowerCase();
+      }
+    }
+  }
+  if (!traceId) {
+    const xt = req.headers['x-trace-id'];
+    if (
+      typeof xt === 'string' &&
+      /^[0-9a-fA-F]{32}$/.test(xt.trim()) &&
+      xt.trim().toLowerCase() !== '0'.repeat(32)
+    ) {
+      traceId = xt.trim().toLowerCase();
+    }
+  }
+  if (!traceId) {
+    traceId = randomUUID().replaceAll('-', '');
+  }
   req.traceId = traceId;
   res.setHeader('X-Trace-Id', traceId);
   setCommonHeaders(req, res);
@@ -220,6 +254,26 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    // ── Datasets (PR-09 streaming upload / list) ──
+    if (req.method === 'GET' && path === '/api/datasets') {
+      await handleListDatasets(parsedUrl, res, req);
+      return;
+    }
+    {
+      const dsMatch = path.match(/^\/api\/conversations\/([^/]+)\/datasets$/);
+      if (dsMatch) {
+        const conversationId = decodeURIComponent(dsMatch[1]);
+        if (req.method === 'GET') {
+          await handleListDatasets(parsedUrl, res, req);
+          return;
+        }
+        if (req.method === 'POST') {
+          await handleDatasetUpload(conversationId, parsedUrl, req, res);
+          return;
+        }
+      }
+    }
+
     // ── Approvals: POST /api/approvals/:id/decide ──
     {
       const apprMatch = path.match(/^\/api\/approvals\/([^/]+)\/decide$/);
@@ -231,8 +285,16 @@ const server = http.createServer(async (req, res) => {
       }
     }
 
-    // ── Run control (ADR §4.7 / §10) ──
+    // ── Run control (ADR §4.7 / §10 / plan §18 PR-10) ──
     {
+      // plan §18.3 — POST /api/conversations/{id}/runs
+      const convRuns = path.match(/^\/api\/conversations\/([^/]+)\/runs$/);
+      if (req.method === 'POST' && convRuns) {
+        const conversationId = decodeURIComponent(convRuns[1]);
+        const parsed = await readJsonBody(req, { maxBytes: config.JSON_BODY_LIMIT_BYTES });
+        await handleCreateRun(parsed, res, req, { conversationId });
+        return;
+      }
       if (req.method === 'POST' && path === '/api/runs') {
         const parsed = await readJsonBody(req, { maxBytes: config.JSON_BODY_LIMIT_BYTES });
         await handleCreateRun(parsed, res, req);

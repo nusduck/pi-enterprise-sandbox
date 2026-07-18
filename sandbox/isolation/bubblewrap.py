@@ -1,4 +1,10 @@
-"""Bubblewrap mount/user/PID/IPC isolation backend."""
+"""Bubblewrap mount/user/PID/IPC isolation backend.
+
+Hard RLIMIT_* (CPU/AS/FSIZE/NOFILE/NPROC) are **not** set here. Callers apply
+them in the forked child ``preexec_fn`` **before** exec of ``bwrap`` so limits
+inherit across bwrap's final exec into the untrusted command. Do not set
+global ``ulimit`` / ``setrlimit`` on the Sandbox service process.
+"""
 
 from __future__ import annotations
 
@@ -66,8 +72,8 @@ class BubblewrapIsolationBackend:
             "--unshare-uts",
             "--cap-drop",
             "ALL",
-            "--bind",
-            "/proc",
+            # Private procfs for the new PID namespace (not the outer container view).
+            "--proc",
             "/proc",
             "--dev",
             "/dev",
@@ -89,10 +95,12 @@ class BubblewrapIsolationBackend:
             "/app/.pi",
         ]
 
-        # Disabled gets a private network namespace. allowlist/unrestricted
-        # intentionally retain the container network because the entrypoint's
-        # iptables policy is the network authority; no policy profile bypasses
-        # that control.
+        # disabled → empty netns (--unshare-net): real fail-closed isolation.
+        # allowlist/unrestricted → share the container network (command policy
+        # only). There is no per-child controlled egress proxy yet, and
+        # container-wide iptables is intentionally not used. Production
+        # validation rejects allowlist/unrestricted so this branch is
+        # development-only and must not be described as isolated egress.
         if spec.network_mode == "disabled":
             args.append("--unshare-net")
 
@@ -164,8 +172,8 @@ class BubblewrapIsolationBackend:
             "--unshare-pid",
             "--unshare-ipc",
             "--unshare-uts",
-            "--bind",
-            "/proc",
+            # Private procfs for the new PID namespace (not the outer container view).
+            "--proc",
             "/proc",
             "--dev",
             "/dev",

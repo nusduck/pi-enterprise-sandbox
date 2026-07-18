@@ -8,6 +8,7 @@ from sandbox.config import settings
 from sandbox.main import app
 from sandbox.models import ToolCallCheck
 from sandbox.services.policy_checker import POLICY_VERSION, policy_checker
+from tests.conftest import session_create_payload
 
 
 client = TestClient(app)
@@ -51,7 +52,7 @@ def test_bash_echo_auto_allowed():
 
 
 def test_approval_check_creates_pending_for_high_risk():
-    s = client.post("/sessions", json={"caller_id": "test"}).json()
+    s = client.post("/sessions", json=session_create_payload("test")).json()
     sid = s["session_id"]
     r = client.post(
         f"/sessions/{sid}/executions/approval-check",
@@ -78,7 +79,7 @@ def test_approval_check_creates_pending_for_high_risk():
 
 def test_hard_deny_rejected_not_pending():
     """Blocked commands must never enter the approval queue."""
-    s = client.post("/sessions", json={"caller_id": "test"}).json()
+    s = client.post("/sessions", json=session_create_payload("test")).json()
     sid = s["session_id"]
     r = client.post(
         f"/sessions/{sid}/executions/approval-check",
@@ -94,7 +95,7 @@ def test_hard_deny_rejected_not_pending():
 
 def test_hard_deny_blocks_command_execution_even_with_session():
     """Sandbox re-enforces hard_deny on /executions/command (bypass Agent)."""
-    s = client.post("/sessions", json={"caller_id": "test"}).json()
+    s = client.post("/sessions", json=session_create_payload("test")).json()
     sid = s["session_id"]
     r = client.post(
         f"/sessions/{sid}/executions/command",
@@ -107,7 +108,7 @@ def test_hard_deny_blocks_command_execution_even_with_session():
 def test_approval_deny_mode_rejects_risk_but_not_hard_deny(monkeypatch):
     """APPROVAL_MODE=deny rejects approval-required work without broadening access."""
     monkeypatch.setattr(settings, "approval_mode", "deny")
-    s = client.post("/sessions", json={"caller_id": "test"}).json()
+    s = client.post("/sessions", json=session_create_payload("test")).json()
     sid = s["session_id"]
 
     risk = client.post(
@@ -139,8 +140,8 @@ def test_approval_deny_mode_rejects_risk_but_not_hard_deny(monkeypatch):
 
 
 def test_approval_check_reuses_same_key_after_decision_and_is_session_scoped():
-    s1 = client.post("/sessions", json={"caller_id": "test"}).json()
-    s2 = client.post("/sessions", json={"caller_id": "test"}).json()
+    s1 = client.post("/sessions", json=session_create_payload("test")).json()
+    s2 = client.post("/sessions", json=session_create_payload("test")).json()
     key = "api-approval-key"
     body = {"tool_name": "raw_bash", "command": "curl https://example.com", "idempotency_key": key}
 

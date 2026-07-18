@@ -339,11 +339,15 @@ class TestFileSearchRoutes:
     @pytest.fixture
     def client_and_session(self, ws: str):
         from fastapi.testclient import TestClient
+
         from sandbox.main import app
         from sandbox.services.session_manager import session_manager
+        from tests.conftest import formal_id
 
-        # Bind session physical workspace to the temp dir
+        # Bind session physical workspace to the temp dir (formal AgentSession ownership).
         session = session_manager.create(
+            agent_session_id=formal_id("AGT"),
+            workspace_id=formal_id("WSP"),
             caller_id="test-file-search",
             workspace_path_override=ws,
         )

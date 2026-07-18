@@ -124,4 +124,33 @@ describe('platform event envelope (§15.3)', () => {
     assert.deepEqual(ev.data, {});
     assert.equal(ev.eventVersion, 1);
   });
+
+  it('formatPlatformEventSse / parseLastEventId (PR-10)', async () => {
+    const { formatPlatformEventSse, formatSsePing, parseLastEventId } =
+      await import('../src/events/sse.ts');
+    const ev = makePlatformEventEnvelope({
+      eventId: '01K0G2PAV8FPMVC9QHJG7JPN61',
+      sequence: 18,
+      type: 'tool.execution.completed',
+      timestamp: '2026-07-18T04:31:22.417Z',
+      context: {
+        orgId: CONTEXT.orgId,
+        userId: CONTEXT.userId,
+        traceId: CONTEXT.traceId,
+        spanId: CONTEXT.spanId,
+        runId: CONTEXT.runId,
+      },
+      data: { toolName: 'bash' },
+    });
+    const frame = formatPlatformEventSse(ev);
+    assert.match(frame, /^id: 01K0G2PAV8FPMVC9QHJG7JPN61\n/);
+    assert.match(frame, /event: tool\.execution\.completed\n/);
+    assert.match(frame, /"sequence":18/);
+    assert.match(formatSsePing('2026-07-18T00:00:00.000Z'), /event: ping/);
+    assert.deepEqual(parseLastEventId('18'), { sequence: 18, eventId: null });
+    assert.deepEqual(parseLastEventId('01K0G2PAV8FPMVC9QHJG7JPN61'), {
+      sequence: null,
+      eventId: '01K0G2PAV8FPMVC9QHJG7JPN61',
+    });
+  });
 });

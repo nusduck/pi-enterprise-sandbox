@@ -117,6 +117,10 @@ describe('capability switch', () => {
     assert.equal(pi.cost.input, gpt.pricing.input_per_mtok);
     assert.equal(pi.baseUrl, 'https://llm.example');
     assert.ok(pi.headers?.Authorization?.includes('k'));
+    // Required pi-ai Model.reasoning from supports_reasoning
+    assert.equal(pi.reasoning, true);
+    // Must not set ImagesModel-only `output`
+    assert.equal('output' in pi, false);
   });
 
   it('toPiModel uses registry values — not a single hard-coded context/max', () => {
@@ -133,6 +137,34 @@ describe('capability switch', () => {
     assert.equal(piGpt.maxTokens, 16384);
     assert.notEqual(piGemini.contextWindow, piGpt.contextWindow);
     assert.notEqual(piGemini.maxTokens, piGpt.maxTokens);
+    assert.equal(piGemini.reasoning, false);
+    assert.equal(piGpt.reasoning, true);
+  });
+
+  it('toPiModel required Model fields match pi-ai shape', () => {
+    const reg = buildRegistry({ seed: SEED_MODELS, filePath: null });
+    const flash = resolveModel('deepseek-v4-flash', {
+      registry: reg,
+      applyOverrides: false,
+    });
+    const pi = toPiModel(flash, { baseUrl: 'http://x' });
+    for (const field of [
+      'id',
+      'name',
+      'api',
+      'provider',
+      'baseUrl',
+      'reasoning',
+      'input',
+      'cost',
+      'contextWindow',
+      'maxTokens',
+    ]) {
+      assert.ok(field in pi, `missing ${field}`);
+    }
+    assert.equal(typeof pi.reasoning, 'boolean');
+    assert.equal(Array.isArray(pi.input), true);
+    assert.equal(typeof pi.cost.input, 'number');
   });
 });
 

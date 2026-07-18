@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import uuid
-from concurrent.futures import ThreadPoolExecutor
 
 from fastapi.testclient import TestClient
 
@@ -94,15 +93,13 @@ def test_cross_user_conversation_404(monkeypatch):
     assert any(c["id"] == cid for c in listed_a.json())
 
 
-def test_agent_run_endpoints_enforce_conversation_ownership(monkeypatch):
-    """Run history cannot be created, listed, or read across users."""
+def test_legacy_sandbox_agent_run_routes_are_absent(monkeypatch):
+    """PR-13 severe: Sandbox /agent-runs must not be mounted (Agent MySQL only)."""
     monkeypatch.setattr(settings, "auth_enabled", True)
     monkeypatch.setattr(settings, "api_token", "")
 
     a = _register(_unique("run_alice"))
-    b = _register(_unique("run_bob"))
     headers_a = {"Authorization": f"Bearer {a['token']}"}
-    headers_b = {"Authorization": f"Bearer {b['token']}"}
     created = client.post(
         "/conversations",
         json={"title": "Alice run"},
@@ -110,49 +107,56 @@ def test_agent_run_endpoints_enforce_conversation_ownership(monkeypatch):
     )
     assert created.status_code == 201, created.text
     conversation_id = created.json()["id"]
+    run_id = _unique("run_legacy")
 
-    denied = client.post(
-        "/agent-runs",
-        json={"conversation_id": conversation_id},
-        headers=headers_b,
-    )
-    assert denied.status_code == 404
+    for method, path, kwargs in (
+        ("post", "/agent-runs", {"json": {"conversation_id": conversation_id}}),
+        ("get", "/agent-runs", {"params": {"conversation_id": conversation_id}}),
+        ("get", f"/agent-runs/{run_id}", {}),
+        ("get", f"/agent-runs/{run_id}/events", {}),
+        ("post", f"/agent-runs/{run_id}/events", {"json": {"event_type": "x"}}),
+        ("post", "/tool-executions", {"json": {"tool_call_id": "t1", "run_id": run_id}}),
+    ):
+        resp = getattr(client, method)(path, headers=headers_a, **kwargs)
+        assert resp.status_code == 404, f"{method.upper()} {path} → {resp.status_code}"
 
-    run_response = client.post(
-        "/agent-runs",
-        json={"conversation_id": conversation_id},
+
+def test_legacy_sandbox_agent_session_routes_are_absent(monkeypatch):
+    """PR-13 severe: Sandbox /agent-sessions had no ownership — must not be mounted."""
+    monkeypatch.setattr(settings, "auth_enabled", True)
+    monkeypatch.setattr(settings, "api_token", "")
+
+    a = _register(_unique("sess_alice"))
+    headers_a = {"Authorization": f"Bearer {a['token']}"}
+    created = client.post(
+        "/conversations",
+        json={"title": "Alice session"},
         headers=headers_a,
     )
-    assert run_response.status_code == 201, run_response.text
-    run = run_response.json()
-    assert run["owner_user_id"] == a["user"]["id"]
-    run_id = run["run_id"]
+    assert created.status_code == 201, created.text
+    conversation_id = created.json()["id"]
+    sid = _unique("asess")
 
-    assert client.get(f"/agent-runs/{run_id}", headers=headers_a).status_code == 200
-    assert client.get(f"/agent-runs/{run_id}", headers=headers_b).status_code == 404
-    assert client.get(f"/agent-runs/{run_id}/events", headers=headers_b).status_code == 404
-
-    # The row and ownership are committed before POST returns, so concurrent
-    # first reads cannot observe a transient 404 for an accepted run.
-    with ThreadPoolExecutor(max_workers=2) as pool:
-        immediate = list(
-            pool.map(
-                lambda path: client.get(path, headers=headers_a),
-                [f"/agent-runs/{run_id}", f"/agent-runs/{run_id}/events"],
-            )
-        )
-    assert [response.status_code for response in immediate] == [200, 200]
-
-    unknown_id = _unique("run_unknown")
-    assert client.get(f"/agent-runs/{unknown_id}", headers=headers_a).status_code == 404
-    assert client.get(f"/agent-runs/{unknown_id}/events", headers=headers_a).status_code == 404
-    listed_b = client.get(
-        "/agent-runs",
-        params={"conversation_id": conversation_id},
-        headers=headers_b,
-    )
-    assert listed_b.status_code == 200
-    assert listed_b.json() == []
+    for method, path, kwargs in (
+        (
+            "post",
+            "/agent-sessions",
+            {
+                "json": {
+                    "conversation_id": conversation_id,
+                    "sdk_session_id": "sdk_x",
+                    "workspace_id": "ws_x",
+                }
+            },
+        ),
+        ("get", f"/agent-sessions/{sid}", {}),
+        ("post", f"/agent-sessions/{sid}/resume", {"json": {}}),
+        ("get", f"/agent-sessions/{sid}/entries", {}),
+        ("post", f"/agent-sessions/{sid}/entries", {"json": {"entries": []}}),
+        ("get", f"/conversations/{conversation_id}/agent-session", {}),
+    ):
+        resp = getattr(client, method)(path, headers=headers_a, **kwargs)
+        assert resp.status_code == 404, f"{method.upper()} {path} → {resp.status_code}"
 
 
 def test_cross_org_conversation_404(monkeypatch):
@@ -234,9 +238,9 @@ def test_service_token_alone_cannot_list_conversations_as_god(monkeypatch):
     assert client.post("/conversations", json={"title": "god"}, headers=svc).status_code == 401
     assert client.get(f"/conversations/{cid}", headers=svc).status_code == 401
 
-    # Sessions still allowed with service token alone (internal ops)
+    # Sessions: static service token alone is fail closed on public surface
     sessions = client.get("/sessions", headers=svc)
-    assert sessions.status_code != 401
+    assert sessions.status_code == 401
 
     # Service + acting headers works
     acting = {
@@ -295,18 +299,22 @@ def test_auth_off_open_mode_still_works(monkeypatch):
     client.delete(f"/conversations/{conv['id']}")
 
 
-def test_session_create_stamps_actor_user_id(monkeypatch):
+def test_session_create_rejects_jwt_binding_under_auth(monkeypatch):
+    """Auth mode: JWT cannot declare formal AgentSession/Workspace bindings."""
+    from tests.conftest import session_create_payload
+
     monkeypatch.setattr(settings, "auth_enabled", True)
     monkeypatch.setattr(settings, "api_token", "")
     user = _register(_unique("sess_actor"))
     headers = {"Authorization": f"Bearer {user['token']}"}
     r = client.post(
         "/sessions",
-        json={"caller_id": "test", "user_id": "should-be-ignored"},
+        json=session_create_payload("test", user_id="should-be-ignored"),
         headers=headers,
     )
-    assert r.status_code == 201, r.text
-    assert r.json()["user_id"] == user["user"]["id"]
+    assert r.status_code == 503, r.text
+    detail = (r.json().get("detail") or "").lower()
+    assert "binding" in detail or "hmac" in detail or "unavailable" in detail
 
 
 def test_register_ignores_client_organization_id():
@@ -317,6 +325,10 @@ def test_register_ignores_client_organization_id():
 
 def test_cross_user_session_files_404(monkeypatch):
     """User B cannot list/read files in user A's owned session."""
+    from sandbox.services.session_manager import session_manager
+    from sandbox.services.workspace_manager import workspace_manager
+    from tests.conftest import formal_id
+
     monkeypatch.setattr(settings, "auth_enabled", True)
     monkeypatch.setattr(settings, "api_token", "")
 
@@ -325,13 +337,17 @@ def test_cross_user_session_files_404(monkeypatch):
     headers_a = {"Authorization": f"Bearer {a['token']}"}
     headers_b = {"Authorization": f"Bearer {b['token']}"}
 
-    sess = client.post(
-        "/sessions",
-        json={"caller_id": "test"},
-        headers=headers_a,
+    # Seed owned session via service layer (HTTP create is fail-closed under auth).
+    agent, wsp = formal_id("AGT"), formal_id("WSP")
+    seeded = session_manager.create(
+        agent_session_id=agent,
+        workspace_id=wsp,
+        user_id=a["user"]["id"],
+        caller_id="seed-owner",
+        metadata={"organization_id": a["user"]["organization_id"]},
     )
-    assert sess.status_code == 201, sess.text
-    sid = sess.json()["session_id"]
+    workspace_manager.init_workspace(wsp)
+    sid = seeded.session_id
 
     # Owner can list (empty)
     assert client.get(f"/sessions/{sid}/files", headers=headers_a).status_code == 200

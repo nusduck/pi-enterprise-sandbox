@@ -5,21 +5,23 @@ import {
   getRunArtifacts,
   getRunProcesses,
   getRunToolExecutions,
+  getRunTraceSpans,
+  listDatasetsForConversation,
 } from '../../entities';
 import {
   formatDuration,
-  formatPayload,
   formatRunStatusLabel,
   getActiveRunEntity,
   summarizeToolInput,
   type InspectorTabId,
   type SelectedEntity,
 } from '../runtime-timeline/buildTimeline';
-import { safeApiUrl } from '../../shared/security/url';
-import {
-  getArtifactDownloadUrl,
-  getDownloadUrl,
-} from '../../shared/api';
+import { ArtifactPanel } from '../artifact-panel/ArtifactPanel';
+import { DatasetPanel } from '../dataset-panel/DatasetPanel';
+import { TracePanel } from '../trace-panel/TracePanel';
+import { ToolCallPanel } from '../tool-call-panel/ToolCallPanel';
+import { ProcessPanel } from '../process-panel/ProcessPanel';
+import { useWorkbenchSelection } from '../../app/layout/WorkbenchSelectionContext';
 
 const TABS: { id: InspectorTabId; label: string }[] = [
   { id: 'overview', label: 'Overview' },
@@ -27,16 +29,10 @@ const TABS: { id: InspectorTabId; label: string }[] = [
   { id: 'processes', label: 'Processes' },
   { id: 'tools', label: 'Tools' },
   { id: 'artifacts', label: 'Artifacts' },
+  { id: 'datasets', label: 'Datasets' },
+  { id: 'trace', label: 'Trace' },
   { id: 'session', label: 'Session' },
 ];
-
-function formatSize(n?: number | null): string {
-  if (n == null || Number.isNaN(Number(n))) return '';
-  const b = Number(n);
-  if (b < 1024) return `${b} B`;
-  if (b < 1024 * 1024) return `${(b / 1024).toFixed(1)} KB`;
-  return `${(b / (1024 * 1024)).toFixed(1)} MB`;
-}
 
 export function ContextInspector({
   open,
@@ -52,6 +48,7 @@ export function ContextInspector({
   selected: SelectedEntity;
 }) {
   const { entityStore, activeRunId, activeSessionId, activeTraceId, state } = useChat();
+  const { openProcessConsole } = useWorkbenchSelection();
   const runId = activeRunId;
   const run = getActiveRunEntity(entityStore, runId);
 
@@ -69,6 +66,14 @@ export function ContextInspector({
   );
   const artifacts = useMemo(
     () => (runId ? getRunArtifacts(entityStore, runId) : []),
+    [entityStore, runId],
+  );
+  const datasets = useMemo(
+    () => listDatasetsForConversation(entityStore, state.conversationId),
+    [entityStore, state.conversationId],
+  );
+  const traceSpans = useMemo(
+    () => (runId ? getRunTraceSpans(entityStore, runId) : []),
     [entityStore, runId],
   );
 
@@ -151,26 +156,35 @@ export function ContextInspector({
           ) : null}
 
           {tab === 'processes' ? (
-            <ProcessesPanel
+            <ProcessPanel
               processes={processes}
               selectedId={selected?.kind === 'process' ? selected.id : null}
+              onOpenConsole={openProcessConsole}
             />
           ) : null}
 
           {tab === 'tools' ? (
-            <ToolsPanel
+            <ToolCallPanel
               tools={tools}
               selectedId={selected?.kind === 'tool' ? selected.id : null}
             />
           ) : null}
 
           {tab === 'artifacts' ? (
-            <ArtifactsPanel
+            <ArtifactPanel
               artifacts={artifacts}
-              listedArtifacts={listedArtifacts}
               sessionId={activeSessionId}
               selectedId={selected?.kind === 'artifact' ? selected.id : null}
+              submitOnly
             />
+          ) : null}
+
+          {tab === 'datasets' ? (
+            <DatasetPanel datasets={datasets} />
+          ) : null}
+
+          {tab === 'trace' ? (
+            <TracePanel spans={traceSpans} traceId={activeTraceId} />
           ) : null}
 
           {tab === 'session' ? (
@@ -345,178 +359,6 @@ function FilesPanel({
         Full workspace tree / diff viewer ships with later phases.
       </p>
     </div>
-  );
-}
-
-function ProcessesPanel({
-  processes,
-  selectedId,
-}: {
-  processes: {
-    id: string;
-    status: string;
-    command: string | null;
-    exitCode: number | null;
-    startedAt: string | null;
-    finishedAt: string | null;
-  }[];
-  selectedId: string | null;
-}) {
-  if (!processes.length) {
-    return (
-      <p className="inspector-empty">
-        No managed processes. Console live logs land in F4.
-      </p>
-    );
-  }
-  return (
-    <ul className="inspector-list cards">
-      {processes.map((p) => (
-        <li
-          key={p.id}
-          className={`inspector-row${selectedId === p.id ? ' selected' : ''}`}
-        >
-          <div className="row-title mono">{p.command || p.id}</div>
-          <div className="row-meta">
-            {p.status}
-            {p.exitCode != null ? ` · exit ${p.exitCode}` : ''}
-            {' · '}
-            {formatDuration(p.startedAt, p.finishedAt)}
-          </div>
-          <button type="button" className="rtc-link-btn" disabled title="F4">
-            Open Console (soon)
-          </button>
-        </li>
-      ))}
-    </ul>
-  );
-}
-
-function ToolsPanel({
-  tools,
-  selectedId,
-}: {
-  tools: {
-    id: string;
-    name: string;
-    status: string;
-    input: unknown;
-    result: unknown;
-    isError: boolean;
-    summary: string | null;
-    createdAt: string | null;
-    updatedAt: string | null;
-  }[];
-  selectedId: string | null;
-}) {
-  if (!tools.length) {
-    return <p className="inspector-empty">No tool executions for this run.</p>;
-  }
-  return (
-    <ul className="inspector-list cards">
-      {tools.map((t, idx) => (
-        <li
-          key={t.id}
-          className={`inspector-row${selectedId === t.id ? ' selected' : ''}${t.isError ? ' error' : ''}`}
-          data-tool-id={t.id}
-        >
-          <div className="row-title">
-            <span className="step">#{idx + 1}</span> {t.name}
-          </div>
-          <div className="row-meta">
-            {t.status} · {formatDuration(t.createdAt, t.updatedAt)}
-          </div>
-          {summarizeToolInput(t.input) ? (
-            <div className="row-sub mono">{summarizeToolInput(t.input)}</div>
-          ) : null}
-          {selectedId === t.id && t.result != null ? (
-            <pre className="row-pre">{formatPayload(t.result, 1200)}</pre>
-          ) : null}
-        </li>
-      ))}
-    </ul>
-  );
-}
-
-function ArtifactsPanel({
-  artifacts,
-  listedArtifacts,
-  sessionId,
-  selectedId,
-}: {
-  artifacts: {
-    id: string;
-    name: string;
-    path: string | null;
-    size: number | null;
-    runId: string | null;
-    mimeType: string | null;
-  }[];
-  listedArtifacts: {
-    artifact_id?: string;
-    id?: string;
-    name?: string;
-    path?: string;
-    size?: number;
-  }[];
-  sessionId: string | null;
-  selectedId: string | null;
-}) {
-  if (!artifacts.length && !listedArtifacts.length) {
-    return <p className="inspector-empty">No artifacts yet.</p>;
-  }
-
-  return (
-    <ul className="inspector-list cards">
-      {artifacts.map((a) => {
-        let url: string | null = null;
-        if (sessionId) {
-          url = getArtifactDownloadUrl(sessionId, a.id);
-        }
-        const safe = safeApiUrl(url);
-        return (
-          <li
-            key={a.id}
-            className={`inspector-row${selectedId === a.id ? ' selected' : ''}`}
-          >
-            <div className="row-title">{a.name}</div>
-            <div className="row-meta">
-              {a.runId ? `run ${a.runId}` : 'artifact'}
-              {formatSize(a.size) ? ` · ${formatSize(a.size)}` : ''}
-            </div>
-            {safe ? (
-              <a className="rtc-link-btn" href={safe} download="">
-                Download
-              </a>
-            ) : null}
-          </li>
-        );
-      })}
-      {listedArtifacts.map((a) => {
-        const id = a.artifact_id || a.id;
-        const name = a.name || a.path || id || 'file';
-        let url: string | null = null;
-        if (id && sessionId) url = getArtifactDownloadUrl(sessionId, id);
-        else if (a.path && sessionId) url = getDownloadUrl(sessionId, a.path);
-        const safe = safeApiUrl(url);
-        return (
-          <li key={String(id || a.path)} className="inspector-row">
-            <div className="row-title">{String(name)}</div>
-            <div className="row-meta">
-              deliverable
-              {formatSize(a.size as number | undefined)
-                ? ` · ${formatSize(a.size as number | undefined)}`
-                : ''}
-            </div>
-            {safe ? (
-              <a className="rtc-link-btn" href={safe} download="">
-                Download
-              </a>
-            ) : null}
-          </li>
-        );
-      })}
-    </ul>
   );
 }
 

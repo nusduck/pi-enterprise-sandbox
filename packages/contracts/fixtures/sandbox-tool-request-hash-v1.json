@@ -1,0 +1,232 @@
+{
+  "version": 1,
+  "contract": "sandbox-tool-request-hash-v1",
+  "description": "Golden vectors for Sandbox tool request-hash v1. Envelope {v:1,tool,args}; compact UTF-8 JSON; ASCII key byte-sorted; lower SHA-256. Both Node and Python tests consume this same file.",
+  "valid": [
+    {
+      "id": "empty-args",
+      "tool": "bash",
+      "args": {},
+      "canonicalJson": "{\"args\":{},\"tool\":\"bash\",\"v\":1}",
+      "requestHash": "67299dd95ff1e9e856fb845da8ef636af2e7726214ccd61de3f6992ba25064c2",
+      "requestHashVersion": 1
+    },
+    {
+      "id": "key-order",
+      "tool": "bash",
+      "args": {
+        "z": 1,
+        "a": 2,
+        "m": 3
+      },
+      "canonicalJson": "{\"args\":{\"a\":2,\"m\":3,\"z\":1},\"tool\":\"bash\",\"v\":1}",
+      "requestHash": "0c30d7c3316941a7b48a5234311243f7f6679da3def35ce7e003313210b6366f",
+      "requestHashVersion": 1
+    },
+    {
+      "id": "nested",
+      "tool": "python",
+      "args": {
+        "outer": {
+          "b": 1,
+          "a": [
+            null,
+            true,
+            false,
+            "x"
+          ]
+        },
+        "n": 0
+      },
+      "canonicalJson": "{\"args\":{\"n\":0,\"outer\":{\"a\":[null,true,false,\"x\"],\"b\":1}},\"tool\":\"python\",\"v\":1}",
+      "requestHash": "aaa1e7b3b675de7a22a820be554b120f4340c409b6ac16773696038e37b4d6c5",
+      "requestHashVersion": 1
+    },
+    {
+      "id": "chinese",
+      "tool": "echo",
+      "args": {
+        "msg": "你好世界"
+      },
+      "canonicalJson": "{\"args\":{\"msg\":\"你好世界\"},\"tool\":\"echo\",\"v\":1}",
+      "requestHash": "934bb08ac4ceb43ed2eb1d6d9001c15ec8dcf7b9a40446589bd73ffa698dbd56",
+      "requestHashVersion": 1
+    },
+    {
+      "id": "emoji-control",
+      "tool": "echo",
+      "args": {
+        "msg": "hi\n😀\t!"
+      },
+      "canonicalJson": "{\"args\":{\"msg\":\"hi\\n😀\\t!\"},\"tool\":\"echo\",\"v\":1}",
+      "requestHash": "bd560aab2038fbc57faf5fd7797c4361afb223065e32594ab46dd08ac8914f32",
+      "requestHashVersion": 1
+    },
+    {
+      "id": "unicode-composed",
+      "tool": "echo",
+      "args": {
+        "s": "é"
+      },
+      "canonicalJson": "{\"args\":{\"s\":\"é\"},\"tool\":\"echo\",\"v\":1}",
+      "requestHash": "56ec26cf3411a9fd237750adf83d51b5e7d6423c2db1123d48b967ebb2108e40",
+      "requestHashVersion": 1
+    },
+    {
+      "id": "unicode-decomposed",
+      "tool": "echo",
+      "args": {
+        "s": "é"
+      },
+      "canonicalJson": "{\"args\":{\"s\":\"é\"},\"tool\":\"echo\",\"v\":1}",
+      "requestHash": "bbf3b4da117933997182dcd2bb5906cf5a670e84e26aed16ae5428807ac796e4",
+      "requestHashVersion": 1
+    },
+    {
+      "id": "safe-int-max",
+      "tool": "calc",
+      "args": {
+        "n": 9007199254740991
+      },
+      "canonicalJson": "{\"args\":{\"n\":9007199254740991},\"tool\":\"calc\",\"v\":1}",
+      "requestHash": "3c3b1034712f69f88fd1ffe021b822f887567495a55aa0af05ba492d49aeeb5b",
+      "requestHashVersion": 1
+    },
+    {
+      "id": "safe-int-min",
+      "tool": "calc",
+      "args": {
+        "n": -9007199254740991
+      },
+      "canonicalJson": "{\"args\":{\"n\":-9007199254740991},\"tool\":\"calc\",\"v\":1}",
+      "requestHash": "6259d8d8a8db591832cd8743fe5c1916d27ba4cd0f535bfcb9f384ca6073977a",
+      "requestHashVersion": 1
+    },
+    {
+      "id": "null-bool-array",
+      "tool": "t",
+      "args": {
+        "a": null,
+        "b": true,
+        "c": false,
+        "d": [
+          1,
+          2,
+          3
+        ]
+      },
+      "canonicalJson": "{\"args\":{\"a\":null,\"b\":true,\"c\":false,\"d\":[1,2,3]},\"tool\":\"t\",\"v\":1}",
+      "requestHash": "d734ba069c1b8471f6d9b19ddcb1aaaf1e8f87651aeb1ff8a6dc0fb123cfb96e",
+      "requestHashVersion": 1
+    },
+    {
+      "id": "top-level-null-args",
+      "tool": "bash",
+      "args": null,
+      "canonicalJson": "{\"args\":null,\"tool\":\"bash\",\"v\":1}",
+      "requestHash": "64a85af070139b4b469c22f2489bde65f5659f3f7a1c14a4cfb78d3de028c79c",
+      "requestHashVersion": 1,
+      "note": "Explicit top-level args null (not omitted). Omitted args default to {} in both languages."
+    }
+  ],
+  "invalid": [
+    {
+      "id": "float-1.5",
+      "tool": "t",
+      "args": {
+        "x": 1.5
+      },
+      "errorCode": "TOOL_REQUEST_HASH_FLOAT",
+      "note": "Non-integer number rejected by both languages."
+    },
+    {
+      "id": "float-1.0",
+      "tool": "t",
+      "argsConstruct": {
+        "kind": "object",
+        "entries": [
+          {
+            "key": "x",
+            "value": {
+              "kind": "float",
+              "decimal": "1.0"
+            }
+          }
+        ]
+      },
+      "errorCode": "TOOL_REQUEST_HASH_FLOAT",
+      "languages": [
+        "python"
+      ],
+      "note": "Python float('1.0') is rejected. JS Number cannot represent a distinct float 1.0 vs int 1; covered by float-1.5 for Node."
+    },
+    {
+      "id": "unsafe-int",
+      "tool": "t",
+      "argsConstruct": {
+        "kind": "object",
+        "entries": [
+          {
+            "key": "x",
+            "value": {
+              "kind": "intString",
+              "value": "9007199254740992"
+            }
+          }
+        ]
+      },
+      "errorCode": "TOOL_REQUEST_HASH_UNSAFE_INT",
+      "note": "Beyond JS MAX_SAFE_INTEGER; encoded as string to avoid JSON number precision loss."
+    },
+    {
+      "id": "non-ascii-key",
+      "tool": "t",
+      "args": {
+        "中": 1
+      },
+      "errorCode": "TOOL_REQUEST_HASH_NON_ASCII_KEY"
+    },
+    {
+      "id": "lone-surrogate",
+      "tool": "t",
+      "argsConstruct": {
+        "kind": "object",
+        "entries": [
+          {
+            "key": "s",
+            "value": {
+              "kind": "utf16CodeUnits",
+              "units": [
+                55296
+              ]
+            }
+          }
+        ]
+      },
+      "errorCode": "TOOL_REQUEST_HASH_LONE_SURROGATE",
+      "note": "Lone high surrogate U+D800 cannot appear as a JSON string code point; encoded as UTF-16 code units."
+    },
+    {
+      "id": "bad-tool-empty",
+      "tool": "",
+      "args": {},
+      "errorCode": "TOOL_REQUEST_HASH_BAD_TOOL_NAME"
+    },
+    {
+      "id": "bad-tool-untrimmed",
+      "tool": " foo ",
+      "args": {},
+      "errorCode": "TOOL_REQUEST_HASH_BAD_TOOL_NAME"
+    },
+    {
+      "id": "bad-tool-too-long",
+      "toolConstruct": {
+        "kind": "repeat",
+        "char": "a",
+        "count": 256
+      },
+      "args": {},
+      "errorCode": "TOOL_REQUEST_HASH_BAD_TOOL_NAME"
+    }
+  ]
+}

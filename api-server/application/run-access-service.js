@@ -1,7 +1,9 @@
-/** Resolve and authorize trusted browser identity for Run operations. */
+/** Resolve and authorize trusted browser identity for Run operations (PR-04 T4). */
+
 import { config } from '../config.js';
 import { HttpError } from '../http/errors.js';
 import { authFromRequest, createSandboxClient } from '../services/sandbox-client.js';
+import { getAgentRun } from '../services/agent-client.js';
 
 export const DURABLE_RUN_READ_RETRY_DELAYS_MS = Object.freeze([5, 15]);
 
@@ -10,15 +12,22 @@ function wait(ms) {
 }
 
 /**
- * Read the durable run row with a small eventual-consistency cushion.
- * The Agent's create endpoint is the correctness barrier; this retry only
- * protects deployments whose database reads can briefly lag a committed write.
- * A genuinely unknown or foreign ID still returns the original 404.
+ * Read the durable run from **Agent MySQL** (owner-scoped).
+ * Sandbox agent_runs is no longer the status/ownership fact source.
+ *
+ * First arg may be:
+ * - trusted auth context `{ actingUserId, ... }` (production), or
+ * - a client with `getAgentRun(runId)` (unit-test fake / legacy shape).
  */
-export async function getDurableRun(sandbox, runId) {
+export async function getDurableRun(authOrClient, runId, traceId = null) {
+  const load =
+    authOrClient && typeof authOrClient.getAgentRun === 'function'
+      ? () => authOrClient.getAgentRun(runId)
+      : () => getAgentRun(runId, { auth: authOrClient, traceId });
+
   for (let attempt = 0; ; attempt += 1) {
     try {
-      return await sandbox.getAgentRun(runId);
+      return await load();
     } catch (err) {
       if (err?.status !== 404 || attempt >= DURABLE_RUN_READ_RETRY_DELAYS_MS.length) {
         throw err;
@@ -34,12 +43,12 @@ export async function resolveTrustedAuth(req) {
   if (!forwarded.authorization) {
     throw new HttpError(401, 'AUTH_REQUIRED', 'Authentication required');
   }
+  // Still use Sandbox authMe for browser session identity (not Run status).
   const sandbox = createSandboxClient({ auth: forwarded });
   const user = await sandbox.authMe();
   const userId = user?.id != null ? String(user.id) : '';
-  const organizationId = user?.organization_id != null
-    ? String(user.organization_id)
-    : '';
+  const organizationId =
+    user?.organization_id != null ? String(user.organization_id) : '';
   if (!userId || !organizationId) {
     throw new HttpError(
       401,
@@ -55,33 +64,35 @@ export async function resolveTrustedAuth(req) {
   };
 }
 
+/**
+ * Authorize run access via Agent owner-scoped GET (MySQL).
+ *
+ * Defense-in-depth: Agent maps external X-Acting subjects → internal ULIDs and
+ * scopes the load. BFF must **not** compare external UUID/subjects to Agent
+ * response ULID userId/orgId (different ID domains). Foreign/unknown runs are
+ * already 404 from Agent GET.
+ *
+ * Optional Sandbox conversation ACL only when conversation_id is a non-ULID
+ * external id (legacy).
+ */
 export async function authorizeRunRequest(runId, req) {
   const auth = await resolveTrustedAuth(req);
-  // Persisted run ownership is authoritative. The Agent keeps only a bounded
-  // in-memory execution log, so completed or pre-restart runs may no longer be
-  // available there even though their durable history still exists.
-  const sandbox = createSandboxClient({ auth });
-  const run = await getDurableRun(sandbox, runId);
-  if (!config.AUTH_ENABLED) return { auth, run };
+  // Owner scope is enforced inside Agent GetRunService.
+  const run = await getDurableRun(auth, runId, req?.traceId);
 
+  const conversationId = run.conversationId || run.conversation_id;
   if (
-    run.owner_user_id &&
-    String(run.owner_user_id) !== String(auth.actingUserId) &&
-    String(auth.actingRole || '').toLowerCase() !== 'admin'
+    conversationId &&
+    !String(conversationId).match(/^[0-9A-HJKMNP-TV-Z]{26}$/i)
   ) {
-    throw new HttpError(404, 'RUN_NOT_FOUND', 'Run not found');
-  }
-  if (
-    run.organization_id &&
-    String(run.organization_id) !== String(auth.actingOrganizationId)
-  ) {
-    throw new HttpError(404, 'RUN_NOT_FOUND', 'Run not found');
+    // External conversation mapping may still be Sandbox-scoped UUID — optional ACL.
+    try {
+      const sandbox = createSandboxClient({ auth });
+      await sandbox.getConversation(conversationId);
+    } catch {
+      throw new HttpError(404, 'RUN_NOT_FOUND', 'Run not found');
+    }
   }
 
-  if (run.conversation_id) {
-    await sandbox.getConversation(run.conversation_id);
-  } else if (!run.owner_user_id) {
-    throw new HttpError(409, 'RUN_OWNERSHIP_PENDING', 'Run ownership is not ready');
-  }
   return { auth, run };
 }

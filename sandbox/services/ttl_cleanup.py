@@ -74,23 +74,14 @@ def _purge_conversation_children(
 
 
 def _remove_conversation_workspace(conversation_id: str) -> bool:
-    """Best-effort filesystem cleanup; never raises into the batch loop."""
-    try:
-        from sandbox.paths import conversation_workspace_id
-        from sandbox.services.execution_manager import execution_manager
-        from sandbox.services.process_manager import process_manager
-        from sandbox.services.workspace_manager import workspace_manager
+    """No-op: Conversation does not own Workspace (PR-07A).
 
-        workspace_id = conversation_workspace_id(conversation_id)
-        execution_manager.cancel_active_workspace(workspace_id)
-        process_manager.cancel_for_workspace(workspace_id)
-        workspace_manager.remove_conversation_workspace(conversation_id)
-        return True
-    except Exception:  # noqa: BLE001 — retention must continue
-        logger.exception(
-            "Failed to remove workspace for conversation_id=%s", conversation_id
-        )
-        return False
+    Workspace cleanup follows AgentSession / Sandbox Session close only.
+    Kept as a named hook so retention callers do not invent conversation-owned
+    ``conv_*`` trees. Always returns False (nothing removed via this path).
+    """
+    _ = conversation_id
+    return False
 
 
 def cleanup_expired_drafts(

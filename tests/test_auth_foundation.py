@@ -80,12 +80,21 @@ def test_jwt_valid_token_reaches_protected(monkeypatch):
     assert resp.status_code != 401
 
 
-def test_service_api_token_bypasses_jwt(monkeypatch):
-    """Valid X-API-Key still works for BFF→Sandbox when JWT auth is on."""
+def test_service_api_token_reaches_app_but_sessions_need_actor(monkeypatch):
+    """Service X-API-Key passes middleware; public /sessions still requires actor.
+
+    Static service token alone is not a trusted public-plane session face
+    (HMAC internal routes are separate and not implemented yet).
+    """
     monkeypatch.setattr(settings, "auth_enabled", True)
     monkeypatch.setattr(settings, "api_token", "svc-secret")
     resp = client.get("/sessions", headers={"X-API-Key": "svc-secret"})
-    assert resp.status_code != 401
+    # Route-level 401 (acting/JWT required), not middleware "Invalid API token".
+    assert resp.status_code == 401
+    detail = (resp.json().get("detail") or "").lower()
+    assert "acting" in detail or "jwt" in detail or "authentication required" in detail
+    # Health remains public without credentials.
+    assert client.get("/health").status_code == 200
 
 
 def test_jwt_slash_prefix_does_not_expose_all_routes(monkeypatch):

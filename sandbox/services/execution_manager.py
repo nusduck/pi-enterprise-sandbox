@@ -23,7 +23,17 @@ from sandbox.services.execution_stream import (
     full_log_location,
 )
 from sandbox.trace import get_trace_id
-from sandbox.utils.resource_limits import contains_network_command, run_with_timeout, terminate_process_group
+from sandbox.utils.resource_limits import (
+    child_resource_limit_kwargs,
+    contains_network_command,
+    run_with_timeout,
+    terminate_process_group,
+)
+from sandbox.services.child_workspace_quota import (
+    ChildWorkspaceQuotaWatch,
+    assert_child_quota_admit,
+    format_decision_message,
+)
 
 
 _TERMINAL_STATUSES = frozenset({
@@ -260,7 +270,26 @@ class ExecutionManager:
                 self._emit_terminal(entry, finalized)
                 return finalized
 
+        # Child quota monitoring admit (bounded; fail-closed).
+        admit = assert_child_quota_admit(
+            context.physical_workspace,
+            context.physical_temp,
+            workspace_id=context.workspace_id,
+        )
+        if not admit.allow:
+            finalized = self._finalize(
+                session_id,
+                execution_id,
+                entry,
+                error=format_decision_message(admit),
+            )
+            if isinstance(finalized, dict):
+                finalized["code"] = admit.code or "workspace_quota_enforcement_failed"
+            self._emit_terminal(entry, finalized)
+            return finalized
+
         run_id = entry.get("run_id")
+        watch: ChildWorkspaceQuotaWatch | None = None
         try:
             # B3: execution_started before spawn
             try:
@@ -304,18 +333,60 @@ class ExecutionManager:
                 except Exception:
                     pass
 
+            def _on_quota_violation(decision: Any) -> None:
+                with self._lock:
+                    proc = self._active_procs.get(execution_id)
+                if proc is not None:
+                    terminate_process_group(proc, grace_seconds=0.5)
+
+            watch = ChildWorkspaceQuotaWatch(
+                workspace_path=context.physical_workspace,
+                temp_path=context.physical_temp,
+                workspace_id=context.workspace_id,
+                on_violation=_on_quota_violation,
+            )
+            watch.start()
+
+            # Hard RLIMIT_* + setsid only in child preexec (not service process).
             result = run_with_timeout(
                 prepared.argv,
                 timeout=timeout,
                 max_output_chars=settings.max_output_chars,
                 env=prepared.env,
                 cwd=prepared.cwd,
-                max_process_count=settings.max_process_count,
-                max_memory_mb=settings.max_memory_mb,
-                max_cpu_seconds=settings.max_cpu_time_seconds,
                 on_started=_on_started,
                 on_output=_on_output,
+                **child_resource_limit_kwargs(settings),
             )
+            if watch.exceeded:
+                decision = watch.last_decision
+                msg = (
+                    format_decision_message(decision)
+                    if decision is not None
+                    else "workspace quota monitoring failed"
+                )
+                code = (
+                    decision.code
+                    if decision is not None and decision.code
+                    else "workspace_quota_enforcement_failed"
+                )
+                finalized = self._finalize(
+                    session_id,
+                    execution_id,
+                    entry,
+                    error=msg,
+                    result={
+                        "exit_code": -1,
+                        "stdout_preview": (result or {}).get("stdout_preview", ""),
+                        "stderr_preview": msg,
+                        "truncated": bool((result or {}).get("truncated")),
+                        "duration_ms": (result or {}).get("duration_ms", 0.0),
+                    },
+                )
+                if isinstance(finalized, dict):
+                    finalized["code"] = code
+                self._emit_terminal(entry, finalized)
+                return finalized
             finalized = self._finalize(session_id, execution_id, entry, result=result)
             self._emit_terminal(entry, finalized)
             return finalized
@@ -328,6 +399,9 @@ class ExecutionManager:
             )
             self._emit_terminal(entry, finalized)
             return finalized
+        finally:
+            if watch is not None:
+                watch.stop()
 
     def _emit_terminal(self, entry: dict, finalized: dict) -> None:
         try:
@@ -363,46 +437,74 @@ class ExecutionManager:
         timeout: int | None = None,
         env_overrides: dict[str, str] | None = None,
         run_id: str | None = None,
+        args: list[str] | None = None,
         *,
         context: SandboxExecutionContext | None = None,
     ) -> dict[str, Any]:
+        """Run Python via restricted argv list (no shell).
+
+        Short single-line code uses ``python3 -c``; multiline / long code is
+        atomically materialized under session workspace ``.runtime/python/``.
+        """
+        from sandbox.services.python_materialize import (
+            plan_python_launch,
+            resolve_python_version,
+        )
+
         context = self._coerce_context(session_id, workspace_path, context)
         execution_id = f"exec_{uuid.uuid4().hex[:10]}"
         timeout = timeout or settings.execution_timeout_seconds
+
+        try:
+            launch = plan_python_launch(
+                code=code,
+                execution_id=execution_id,
+                context=context,
+                args=args,
+                isolation_backend=self._isolation.name,
+                workspace_quota_mb=int(getattr(settings, "workspace_quota_mb", 0) or 0),
+            )
+        except ValueError as exc:
+            return {
+                "error": str(exc),
+                "status": "invalid",
+                "exit_code": -1,
+                "stderr_preview": str(exc),
+                "stdout_preview": "",
+                "truncated": False,
+                "materialized_path": None,
+                "python_version": None,
+            }
+
         entry = self._new_entry(
             execution_id,
             session_id,
             "python",
             workspace_id=context.workspace_id,
             run_id=run_id,
-            command="python3",
+            command=" ".join(launch.argv[:3]) if launch.mode == "inline" else "python3",
         )
+        entry["materialized_path"] = launch.materialized_path
+        entry["python_version"] = resolve_python_version()
         conflict = self._admit(context.workspace_id, execution_id, entry)
         if conflict is not None:
             return conflict
 
-        code_dir = context.physical_temp / ".pi-executions"
-        code_dir.mkdir(parents=True, exist_ok=True)
-        code_path = code_dir / f"{execution_id}.py"
-        with code_path.open("w", encoding="utf-8") as f:
-            f.write(code)
-        payload_path = (
-            f"/tmp/.pi-executions/{execution_id}.py"
-            if self._isolation.name == "bubblewrap"
-            else str(code_path)
+        result = self._run_body(
+            session_id,
+            execution_id,
+            entry,
+            launch.argv,
+            context,
+            timeout,
+            env_overrides,
         )
-        try:
-            return self._run_body(
-                session_id,
-                execution_id,
-                entry,
-                ["python3", "-u", payload_path],
-                context,
-                timeout,
-                env_overrides,
-            )
-        finally:
-            code_path.unlink(missing_ok=True)
+        # Surface materialization metadata on the public result (audit/trace).
+        if isinstance(result, dict):
+            result.setdefault("materialized_path", launch.materialized_path)
+            result.setdefault("python_version", entry.get("python_version"))
+            result.setdefault("python_mode", launch.mode)
+        return result
 
     # ── Command execution ────────────────────────────────────────
 

@@ -403,7 +403,6 @@ class ExecutionStreamHub:
         # Per-source log offset counters for durable chunks
         self._log_offsets: dict[tuple[str, str], int] = {}
         self._max_durable_log_chars = max_durable_log_chars
-        self._dual_write_agent = True
 
     # ── Emit ─────────────────────────────────────────────────────────
 
@@ -416,7 +415,7 @@ class ExecutionStreamHub:
         payload: dict[str, Any] | None = None,
         run_id: str | None = None,
     ) -> dict[str, Any]:
-        """Persist event, dual-write to agent run if configured, fan out."""
+        """Persist execution-stream event and fan out (no agent_runs dual-write)."""
         body = dict(payload or {})
         body.setdefault("source_type", source_type)
         body.setdefault("source_id", source_id)
@@ -431,8 +430,9 @@ class ExecutionStreamHub:
             run_id=run_id,
         )
 
-        if run_id and self._dual_write_agent:
-            self._dual_write(run_id, event_type, entry)
+        # PR-13: never dual-write to legacy Sandbox agent_runs (Agent MySQL is sole
+        # Run event authority). run_id may still be recorded on execution events
+        # for correlation only.
 
         key = (source_type, source_id)
         if event_type in TERMINAL_EVENTS:
@@ -566,32 +566,6 @@ class ExecutionStreamHub:
             payload=payload,
             run_id=run_id,
         )
-
-    def _dual_write(
-        self, run_id: str, event_type: str, entry: dict[str, Any]
-    ) -> None:
-        try:
-            from sandbox.services.agent_run_manager import agent_run_manager
-
-            agent_run_manager.append_event(
-                run_id,
-                event_type=event_type,
-                payload={
-                    "source_type": entry.get("source_type"),
-                    "source_id": entry.get("source_id"),
-                    "sequence": entry.get("sequence"),
-                    **(entry.get("payload") or {}),
-                },
-                event_id=f"ae_{entry.get('event_id')}",
-            )
-        except Exception:
-            # Dual-write must not break execution streaming.
-            logger.debug(
-                "agent dual-write failed for run %s event %s",
-                run_id,
-                event_type,
-                exc_info=True,
-            )
 
     # ── Query / subscribe ────────────────────────────────────────────
 

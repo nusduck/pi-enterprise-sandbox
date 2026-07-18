@@ -27,23 +27,19 @@ describe('trusted Run request identity', () => {
           username: 'alice',
         }), { status: 200 });
       }
-      if (url === 'http://sandbox.test/agent-runs/run_a') {
+      // PR-13 / PR-04: Run ownership is Agent MySQL owner scope (not Sandbox /agent-runs).
+      if (url === 'http://agent.test/internal/agent-runs/run_a') {
         return new Response(JSON.stringify({
           run_id: 'run_a',
           conversation_id: 'conv_a',
-          owner_user_id: 'user_a',
-          organization_id: 'org_a',
+          user_id: 'user_a',
+          org_id: 'org_a',
           status: 'running',
         }), { status: 200 });
       }
-      if (url === 'http://sandbox.test/agent-runs/run_other') {
-        return new Response(JSON.stringify({
-          run_id: 'run_other',
-          conversation_id: 'conv_other',
-          owner_user_id: 'user_b',
-          organization_id: 'org_a',
-          status: 'running',
-        }), { status: 200 });
+      if (url === 'http://agent.test/internal/agent-runs/run_other') {
+        // Agent maps foreign/unknown runs to 404 (no existence leak).
+        return new Response(JSON.stringify({ error: 'Run not found' }), { status: 404 });
       }
       if (url === 'http://sandbox.test/conversations/conv_a') {
         return new Response(JSON.stringify({ id: 'conv_a' }), { status: 200 });
@@ -68,7 +64,7 @@ describe('trusted Run request identity', () => {
     assert.equal(allowed.run.run_id, 'run_a');
     await assert.rejects(
       authorizeRunRequest('run_other', request()),
-      (error) => error?.status === 404 && error?.message === 'Run not found',
+      (error) => error?.status === 404 && /not found/i.test(String(error?.message || '')),
     );
   });
 });

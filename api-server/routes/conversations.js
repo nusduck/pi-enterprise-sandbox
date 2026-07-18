@@ -1,8 +1,13 @@
 /**
  * Routes: conversation CRUD proxies → sandbox /conversations
+ * Run/event timeline is Agent MySQL (PR-13 — no Sandbox agent_runs dual path).
  */
 import * as sb from '../services/sandbox-client.js';
 import { authFromRequest } from '../services/sandbox-client.js';
+import {
+  listAgentRuns,
+  listAgentEvents,
+} from '../services/agent-client.js';
 import { loadConversationTimeline } from '../application/conversation-timeline-service.js';
 import { sendError, sendJson as json } from '../http/response.js';
 
@@ -62,10 +67,15 @@ export async function handleDeleteConversation(id, res, req) {
   }
 }
 
-/** GET /api/conversations/:id/events — complete persisted run timeline. */
+/** GET /api/conversations/:id/events — complete persisted run timeline (Agent MySQL). */
 export async function handleGetConversationEvents(id, res, req, query = {}) {
   try {
-    const client = sb.createSandboxClient({ auth: authFromRequest(req) });
+    const auth = authFromRequest(req);
+    const traceId = req?.traceId || null;
+    const client = {
+      listAgentRuns: (q) => listAgentRuns(q, { auth, traceId }),
+      listAgentEvents: (runId, q) => listAgentEvents(runId, q, { auth, traceId }),
+    };
     const limit = query.limit != null ? Number(query.limit) : undefined;
     const timeline = await loadConversationTimeline(client, id, {
       limit: Number.isFinite(limit) ? limit : undefined,

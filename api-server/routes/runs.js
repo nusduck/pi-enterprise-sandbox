@@ -1,12 +1,14 @@
 /**
- * Run control routes (ADR §4.7 / §10):
- *   POST /api/runs/:id/steer
- *   POST /api/runs/:id/follow-up
- *   POST /api/runs/:id/cancel  (optional thin wrapper)
+ * Run control routes (ADR §4.7 / §10 / plan §18 PR-10):
+ *   POST /api/runs
+ *   POST /api/conversations/:conversationId/runs
  *   GET  /api/runs/:id
+ *   GET  /api/runs/:id/events  (SSE proxy — Agent MySQL+Redis replay)
+ *   POST /api/runs/:id/steer|follow-up|cancel
  *
- * BFF proxies to Agent internal APIs. Conversation scoping is enforced
- * by the Agent run-manager (rejects mismatched conversation_id).
+ * BFF: auth, ownership, idempotency key passthrough, SSE cursor, DTO.
+ * Agent MySQL is Run/event fact source; Redis is live notify only.
+ * Sandbox is not Run authority.
  */
 import {
   createAgentRun,
@@ -17,9 +19,14 @@ import {
   getAgentRun,
   resumeAgentRunApproval,
   respondAgentInteraction,
+  listAgentRuns,
 } from '../services/agent-client.js';
-import { authFromRequest, createSandboxClient } from '../services/sandbox-client.js';
+import { createSandboxClient } from '../services/sandbox-client.js';
 import { authorizeRunRequest, resolveTrustedAuth } from '../application/run-access-service.js';
+import {
+  parseSseResumeCursor,
+  presentCreateRunAccepted,
+} from '../application/event-replay-service.js';
 import { sendError, sendJson as json } from '../http/response.js';
 
 /**
@@ -69,26 +76,100 @@ export function presentRunDetail(persisted, live, runtimeAvailable) {
   return body;
 }
 
-export async function handleCreateRun(body, res, req = null) {
-  if (!Array.isArray(body?.messages) || body.messages.length === 0) {
-    json(res, 400, { error: 'messages array is required' });
+/**
+ * Read Idempotency-Key from request headers (required for create/cancel).
+ * @param {import('node:http').IncomingMessage | null} req
+ * @returns {string|null}
+ */
+export function readIdempotencyKeyHeader(req) {
+  const h =
+    req?.headers?.['idempotency-key'] ||
+    req?.headers?.['Idempotency-Key'] ||
+    req?.headers?.['x-idempotency-key'] ||
+    null;
+  if (h == null) return null;
+  const s = String(h).trim();
+  return s || null;
+}
+
+/**
+ * Normalize create body. Supports plan §18.3 `message.content[]` and legacy
+ * `messages[]`. Optional conversationId binds the run to a conversation.
+ *
+ * @param {object} body
+ * @param {{ conversationId?: string|null }} [opts]
+ * @returns {{ messages: unknown[], conversation_id: string|null, agent_profile_id?: string, budget?: unknown } | { error: string }}
+ */
+export function normalizeCreateRunBody(body, opts = {}) {
+  let messages = body?.messages;
+  if ((!Array.isArray(messages) || messages.length === 0) && body?.message) {
+    const msg = body.message;
+    if (typeof msg === 'string' && msg.trim()) {
+      messages = [{ role: 'user', content: msg.trim() }];
+    } else if (msg && typeof msg === 'object') {
+      const content = msg.content ?? msg.text;
+      if (typeof content === 'string' && content.trim()) {
+        messages = [{ role: 'user', content: content.trim() }];
+      } else if (Array.isArray(content) && content.length > 0) {
+        const textParts = content
+          .filter((p) => p && (p.type === 'text' || typeof p.text === 'string'))
+          .map((p) => String(p.text || ''))
+          .filter(Boolean);
+        const text = textParts.join('\n').trim();
+        if (text) messages = [{ role: 'user', content: text }];
+      }
+    }
+  }
+  if (!Array.isArray(messages) || messages.length === 0) {
+    return { error: 'messages array is required (or message.content text)' };
+  }
+  const conversationId =
+    opts.conversationId ||
+    body.conversation_id ||
+    body.conversationId ||
+    null;
+  return {
+    messages,
+    conversation_id: conversationId,
+    agent_profile_id: body.agent_profile_id || body.agentProfileId || undefined,
+    budget: body.budget || undefined,
+  };
+}
+
+export async function handleCreateRun(body, res, req = null, routeOpts = {}) {
+  const normalized = normalizeCreateRunBody(body, routeOpts);
+  if (normalized.error) {
+    json(res, 400, { error: normalized.error });
     return;
   }
   const traceId = req?.traceId || null;
+  const idempotencyKey = readIdempotencyKeyHeader(req);
+  if (!idempotencyKey) {
+    json(res, 400, {
+      error: 'Idempotency-Key header is required',
+      code: 'IDEMPOTENCY_KEY_REQUIRED',
+    });
+    return;
+  }
   try {
     const auth = await resolveTrustedAuth(req);
     const result = await createAgentRun(
       {
-        messages: body.messages,
-        conversation_id: body.conversation_id || null,
+        messages: normalized.messages,
+        conversation_id: normalized.conversation_id,
         trace_id: traceId,
-        agent_profile_id: body.agent_profile_id || undefined,
-        budget: body.budget || undefined,
+        agent_profile_id: normalized.agent_profile_id,
+        budget: normalized.budget,
       },
-      { auth, traceId },
+      {
+        auth,
+        traceId,
+        idempotencyKey,
+      },
     );
     if (traceId) res.setHeader('X-Trace-Id', traceId);
-    json(res, 201, result);
+    // Agent persists before 202 — never 201 (run not yet durable). plan §18.3
+    json(res, 202, presentCreateRunAccepted(result));
   } catch (err) {
     sendError(res, err, traceId);
   }
@@ -98,47 +179,181 @@ export async function handleListRuns(parsedUrl, res, req = null) {
   const conversationId = parsedUrl.searchParams.get('conversation_id') || undefined;
   const status = parsedUrl.searchParams.get('status') || undefined;
   try {
-    const client = createSandboxClient({ auth: authFromRequest(req) });
-    const result = await client.listAgentRuns({ conversationId, status });
+    // Agent MySQL owner-scoped list — Sandbox agent_runs is not the fact source.
+    const auth = await resolveTrustedAuth(req);
+    const result = await listAgentRuns(
+      { conversationId, status },
+      { auth, traceId: req?.traceId },
+    );
     json(res, 200, result);
   } catch (err) {
     sendError(res, err, req?.traceId);
   }
 }
 
-export async function handleRunEvents(runId, parsedUrl, res, req = null) {
-  const after = Number.parseInt(
-    parsedUrl.searchParams.get('after_sequence') ||
-      parsedUrl.searchParams.get('after') ||
-      req?.headers?.['last-event-id'] ||
-      '0',
-    10,
-  ) || 0;
-  const controller = new AbortController();
-  req?.on('close', () => controller.abort());
+/**
+ * Abort-aware wait for Node HTTP response drain.
+ * Resolves on drain | close | error | abort; always removes listeners.
+ *
+ * @param {import('node:http').ServerResponse} res
+ * @param {{ signal?: AbortSignal | null, isClosed?: () => boolean }} [opts]
+ * @returns {Promise<'drained' | 'closed' | 'aborted'>}
+ */
+export function waitForResponseDrain(res, opts = {}) {
+  const signal = opts.signal ?? null;
+  const isClosed =
+    opts.isClosed ??
+    (() => Boolean(res.writableEnded || res.destroyed || res.closed));
+
+  if (signal?.aborted) return Promise.resolve('aborted');
+  if (isClosed()) return Promise.resolve('closed');
+
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (result) => {
+      if (settled) return;
+      settled = true;
+      res.off('drain', onDrain);
+      res.off('close', onClose);
+      res.off('error', onError);
+      if (signal) signal.removeEventListener('abort', onAbort);
+      resolve(result);
+    };
+    const onDrain = () => finish('drained');
+    const onClose = () => finish('closed');
+    const onError = () => finish('closed');
+    const onAbort = () => finish('aborted');
+
+    res.once('drain', onDrain);
+    res.once('close', onClose);
+    res.once('error', onError);
+    if (signal) signal.addEventListener('abort', onAbort);
+
+    // Race: already closed / aborted after attach.
+    if (signal?.aborted) finish('aborted');
+    else if (isClosed()) finish('closed');
+  });
+}
+
+/**
+ * Proxy an upstream SSE ReadableStream body onto a Node ServerResponse with
+ * backpressure and disconnect cleanup. Does **not** cancel the Agent Run —
+ * only cancels this HTTP subscription's body reader.
+ *
+ * Exported for unit tests.
+ *
+ * @param {{
+ *   reader: { read: Function, cancel?: Function, releaseLock?: Function },
+ *   res: import('node:http').ServerResponse,
+ *   signal?: AbortSignal | null,
+ * }} opts
+ * @returns {Promise<void>}
+ */
+export async function proxySseUpstream({ reader, res, signal = null }) {
+  const isClosed = () =>
+    Boolean(res.writableEnded || res.destroyed || res.closed || signal?.aborted);
+
   try {
+    while (true) {
+      if (isClosed()) break;
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (isClosed()) break;
+      let ok = true;
+      try {
+        ok = res.write(value);
+      } catch {
+        break;
+      }
+      if (ok === false) {
+        const outcome = await waitForResponseDrain(res, { signal, isClosed });
+        if (outcome !== 'drained' || isClosed()) break;
+      }
+    }
+  } finally {
+    // Cancel upstream body (subscription only — not the Run) and drop lock.
+    try {
+      if (typeof reader.cancel === 'function') {
+        await reader.cancel();
+      }
+    } catch {
+      /* ignore */
+    }
+    try {
+      reader.releaseLock?.();
+    } catch {
+      /* ignore */
+    }
+  }
+}
+
+/**
+ * GET /api/runs/:id/events — ownership check then proxy Agent hybrid SSE.
+ * Cursor: afterSequence / after_sequence / after + Last-Event-ID (seq or ULID).
+ * Disconnect aborts only the proxy — never cancels the Run (plan §12.4).
+ */
+export async function handleRunEvents(runId, parsedUrl, res, req = null) {
+  const cursor = parseSseResumeCursor({
+    searchParams: parsedUrl.searchParams,
+    headers: req?.headers || {},
+  });
+  const controller = new AbortController();
+  const onClose = () => {
+    try {
+      controller.abort();
+    } catch {
+      /* ignore */
+    }
+  };
+  req?.on('close', onClose);
+  res?.on?.('close', onClose);
+  res?.on?.('error', onClose);
+
+  /** @type {{ read: Function, cancel?: Function, releaseLock?: Function } | null} */
+  let reader = null;
+  try {
+    // Fail-closed ownership before any stream headers (403/404 via Agent).
     const { auth } = await authorizeRunRequest(runId, req);
-    const upstream = await openAgentRunEvents(runId, after, {
+    const upstream = await openAgentRunEvents(runId, cursor.afterSequence, {
       signal: controller.signal,
       auth,
       traceId: req?.traceId,
+      lastEventId: cursor.lastEventId,
     });
     res.writeHead(200, {
-      'Content-Type': 'text/event-stream',
-      'Cache-Control': 'no-cache',
+      'Content-Type': 'text/event-stream; charset=utf-8',
+      'Cache-Control': 'no-cache, no-transform',
       Connection: 'keep-alive',
+      'X-Accel-Buffering': 'no',
     });
-    const reader = upstream.body.getReader();
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      if (!res.write(value)) await new Promise((resolve) => res.once('drain', resolve));
-    }
+    reader = upstream.body.getReader();
+    await proxySseUpstream({
+      reader,
+      res,
+      signal: controller.signal,
+    });
+    reader = null; // proxySseUpstream already cancelled/released
     if (!res.writableEnded) res.end();
   } catch (err) {
     if (err?.name === 'AbortError') return;
     if (!res.headersSent) sendError(res, err, req?.traceId);
     else if (!res.writableEnded) res.end();
+  } finally {
+    req?.off?.('close', onClose);
+    res?.off?.('close', onClose);
+    res?.off?.('error', onClose);
+    if (reader) {
+      try {
+        await reader.cancel?.();
+      } catch {
+        /* ignore */
+      }
+      try {
+        reader.releaseLock?.();
+      } catch {
+        /* ignore */
+      }
+    }
   }
 }
 
@@ -202,9 +417,24 @@ export async function handleCancelRun(runId, res, req = null) {
     json(res, 400, { error: 'run id is required' });
     return;
   }
+  // plan §18.5 — Idempotency-Key required on cancel (protocol contract).
+  // Agent CancelRunService is first-writer durable intent; full response replay
+  // via idempotency_records is not claimed here (deferred).
+  const idempotencyKey = readIdempotencyKeyHeader(req);
+  if (!idempotencyKey) {
+    json(res, 400, {
+      error: 'Idempotency-Key header is required',
+      code: 'IDEMPOTENCY_KEY_REQUIRED',
+    });
+    return;
+  }
   try {
     const { auth } = await authorizeRunRequest(runId, req);
-    const result = await cancelAgentRun(runId, { auth, traceId: req?.traceId });
+    const result = await cancelAgentRun(runId, {
+      auth,
+      traceId: req?.traceId,
+      idempotencyKey,
+    });
     json(res, 200, result);
   } catch (err) {
     console.error('[runs] cancel:', err.message);
@@ -214,6 +444,7 @@ export async function handleCancelRun(runId, res, req = null) {
 
 /**
  * GET /api/runs/:id
+ * Agent MySQL is the fact source (owner-scoped). Sandbox is not consulted for status.
  */
 export async function handleGetRun(runId, res, req = null) {
   if (!runId) {
@@ -221,16 +452,9 @@ export async function handleGetRun(runId, res, req = null) {
     return;
   }
   try {
-    const { auth, run } = await authorizeRunRequest(runId, req);
-    try {
-      const live = await getAgentRun(runId, { auth, traceId: req?.traceId });
-      json(res, 200, presentRunDetail(run, live, true));
-    } catch {
-      // A durable run remains inspectable after the Agent evicts its bounded
-      // live log or restarts. Returning the persisted row avoids a false 404;
-      // the frontend then restores tools from the append-only event timeline.
-      json(res, 200, presentRunDetail(run, null, false));
-    }
+    const { auth } = await authorizeRunRequest(runId, req);
+    const live = await getAgentRun(runId, { auth, traceId: req?.traceId });
+    json(res, 200, presentRunDetail(null, live, true));
   } catch (err) {
     console.error('[runs] get:', err.message);
     sendError(res, err, req?.traceId);

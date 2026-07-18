@@ -1284,13 +1284,25 @@ def migrate_agent_session_schema(conn: Any, dialect: str = "sqlite") -> dict[str
     return report
 
 
+_PROCESS_EXPAND_COLUMNS: tuple[tuple[str, str], ...] = (
+    ("pgid", "INTEGER"),
+    ("start_identity", "TEXT"),
+    ("org_id", "TEXT"),
+    ("user_id", "TEXT"),
+    ("sandbox_session_id", "TEXT"),
+    ("execution_id", "TEXT"),
+    ("conversation_id", "TEXT"),
+)
+
+
 def migrate_process_schema(conn: Any, dialect: str = "sqlite") -> dict[str, int]:
     """Ensure process_executions table exists (expand-only, dual dialect).
 
     Safe to run repeatedly. Complements immutable migration
     ``0003_process_executions`` for older DBs that only ran expand migrations.
+    PR-08: durable pid identity + tenant binding columns.
     """
-    report = {"tables_ensured": 0}
+    report = {"tables_ensured": 0, "columns_added": 0}
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS process_executions (
@@ -1314,7 +1326,14 @@ def migrate_process_schema(conn: Any, dialect: str = "sqlite") -> dict[str, int]
             finished_at TEXT,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL,
-            trace_id TEXT
+            trace_id TEXT,
+            pgid INTEGER,
+            start_identity TEXT,
+            org_id TEXT,
+            user_id TEXT,
+            sandbox_session_id TEXT,
+            execution_id TEXT,
+            conversation_id TEXT
         )
         """
     )
@@ -1337,6 +1356,13 @@ def migrate_process_schema(conn: Any, dialect: str = "sqlite") -> dict[str, int]
         """
     )
     report["tables_ensured"] += 1
+    cols = _table_columns(conn, "process_executions", dialect)
+    for col, col_type in _PROCESS_EXPAND_COLUMNS:
+        if col not in cols:
+            conn.execute(
+                f"ALTER TABLE process_executions ADD COLUMN {col} {col_type}"
+            )
+            report["columns_added"] += 1
     return report
 
 

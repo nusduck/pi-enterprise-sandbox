@@ -230,7 +230,11 @@ export async function handleFileDownload(parsedUrl, res, req = null) {
 
 /**
  * GET /api/files/artifact-download?session_id=xxx&artifact_id=yyy
- * Stream a registered artifact (P7 deliverable path).
+ * Stream a registered artifact (P7 / PR-09 deliverable path).
+ *
+ * Ownership is enforced by Sandbox (session + actor). BFF never accepts an
+ * arbitrary workspace path as an artifact — only artifact_id.
+ * Streams with backpressure; client disconnect stops the pipe.
  */
 export async function handleArtifactDownload(parsedUrl, res, req = null) {
   const sessionId = parsedUrl.searchParams.get('session_id');
@@ -254,17 +258,52 @@ export async function handleArtifactDownload(parsedUrl, res, req = null) {
 
   const disposition = sanRes.headers.get('content-disposition')
     || `attachment; filename="${artifactId}"`;
+  const contentType = sanRes.headers.get('content-type') || 'application/octet-stream';
+  // Type safety: never forward HTML/SVG as navigable content
+  const safeType =
+    /^(text\/html|application\/xhtml\+xml|image\/svg\+xml)/i.test(contentType)
+      ? 'application/octet-stream'
+      : contentType;
 
-  res.writeHead(200, {
-    'Content-Type': sanRes.headers.get('content-type') || 'application/octet-stream',
+  const headers = {
+    'Content-Type': safeType,
     'Content-Disposition': disposition,
-    'Content-Length': sanRes.headers.get('content-length') || '',
-  });
+    'X-Content-Type-Options': 'nosniff',
+  };
+  const len = sanRes.headers.get('content-length');
+  if (len) headers['Content-Length'] = len;
+  const sha = sanRes.headers.get('x-artifact-sha256');
+  if (sha) headers['X-Artifact-Sha256'] = sha;
+  const trace = sanRes.headers.get('x-trace-id');
+  if (trace) headers['X-Trace-Id'] = trace;
 
-  for await (const chunk of sanRes.body) {
-    res.write(chunk);
+  res.writeHead(200, headers);
+
+  let aborted = false;
+  const onClose = () => {
+    aborted = true;
+    try {
+      sanRes.body?.cancel?.();
+    } catch { /* ignore */ }
+  };
+  if (req) req.on('close', onClose);
+
+  try {
+    if (!sanRes.body) {
+      res.end();
+      return;
+    }
+    for await (const chunk of sanRes.body) {
+      if (aborted || res.writableEnded || res.destroyed) break;
+      const ok = res.write(chunk);
+      if (!ok) {
+        await new Promise((resolve) => res.once('drain', resolve));
+      }
+    }
+  } finally {
+    if (req) req.off('close', onClose);
+    if (!res.writableEnded) res.end();
   }
-  res.end();
 }
 
 /**

@@ -38,6 +38,24 @@ curl -sf https://localhost/health/ready
 curl -sf https://localhost/nginx/status
 ```
 
+### Workspace / temp disk quota (production)
+
+Positive `SANDBOX_WORKSPACE_QUOTA_MB` / `SANDBOX_TEMP_QUOTA_MB` claim multi-tenant
+disk isolation. Production validation requires **both**:
+
+1. `SANDBOX_WORKSPACE_CHILD_QUOTA_ENFORCEMENT=true` — in-process **monitoring**
+   (bounded fail-closed tree sample; kills children on over-quota or measure failure).
+   This is **not** a hard total: inter-sample races and multi-file writes under
+   `RLIMIT_FSIZE` remain.
+2. `SANDBOX_WORKSPACE_QUOTA_HARD_BACKEND_ASSERTED=true` — **operator assertion**
+   that workspace/temp roots sit on an external hard quota (XFS project quota,
+   volume size, filesystem project, etc.). The process does **not** auto-detect
+   this. Keep `false` in compose defaults until a live gate verifies the backend,
+   then set explicitly.
+
+Child monitor codes: `workspace_quota_exceeded`,
+`workspace_inode_limit_exceeded`, `workspace_quota_enforcement_failed`.
+
 
 
 ### 生产架构
@@ -66,7 +84,13 @@ curl -sf https://localhost/nginx/status
                   ┌───────────────▼──────────────┐
                   │   sandbox (FastAPI:8081)       │
                   │   Execution · Files · Auth     │
-                  │   PostgreSQL (prod required)  │
+                  │   MySQL 8 (formal topology)    │
+                  └──────────────────────────────┘
+                                  │
+                  ┌───────────────▼──────────────┐
+                  │   redis:7.2 (Agent-only)      │
+                  │   Queue · Lease · Stream      │
+                  │   (not fact authority)        │
                   └──────────────────────────────┘
                                   │
                   ┌───────────────▼──────────────┐
@@ -93,9 +117,11 @@ curl -sf https://localhost/nginx/status
 
 `strict` 是代码默认值，也是生产唯一允许的 profile。`balanced` 不放宽 session/path
 归属、Skill 根只读、最小环境、能力丢弃、设备/namespace hard-deny 或审批开关；它只
-减少 `pip/npm/yarn/pnpm install` 等常见开发命令的重复审批。若 `network_mode=disabled`，
-进程启动器仍会拒绝这些需要网络的命令；若使用 `allowlist`，请只配置必要的目的 CIDR
-和端口，并保持 metadata/link-local 目的地阻断。
+减少 `pip/npm/yarn/pnpm install` 等常见开发命令的重复审批。若 `network_mode=disabled`
+（生产唯一允许值），进程启动器拒绝网络类命令，且 Bubblewrap 子进程使用
+`--unshare-net`（空 netns）。`allowlist` / `unrestricted` 仅可在研发显式开启，且
+**不得**当作生产隔离：当前没有 per-child 受控 egress proxy，生产校验 fail-closed。
+metadata/link-local 目的地阻断始终开启。
 
 迁移与回滚：开发环境可先设置 `SANDBOX_POLICY_PROFILE=strict`，验证 `/ready` 和审批
 流后再切换到 `balanced`。出现异常时把该变量改回 `strict` 并重启 Agent/Sandbox；不需要
@@ -128,7 +154,18 @@ SANDBOX_TRUSTED_PROXY_CIDRS=172.16.0.0/12
 
 外部 MCP 由 Agent Runtime 直接连接，不经过 Sandbox。凭据由 `authTokenRef` 指向的环境变量注入。
 
-注意：`SANDBOX_ALLOWED_CIDRS` 是 **出站 iptables** 目的网段，与入站 `SANDBOX_ALLOWED_CLIENT_CIDRS` 无关。
+**命名分离：** `SANDBOX_ALLOWED_CLIENT_CIDRS` 只约束 **入站** HTTP 客户端；
+`SANDBOX_NETWORK_MODE` 只约束 **出站执行** 策略。已移除 container-wide iptables
+与 `SANDBOX_ALLOWED_CIDRS` / 端口 union allowlist 作为隔离权威的设计。
+
+### 出站执行网络（与入站 CIDR 无关）
+
+| 变量 | 开发 | 生产 | 说明 |
+|------|------|------|------|
+| `SANDBOX_NETWORK_MODE` | 可显式 `unrestricted` | 固定 `disabled` | 生产禁止 `allowlist`/`unrestricted` |
+
+Compose 拓扑：`backend_internal`（`internal: true`）供 mysql/redis/sandbox/api/frontend；
+`agent`/`agent-worker` 同时接入 `service_egress` 以访问 LLM；Sandbox 不挂 egress 网。
 
 ### LLM Provider
 
@@ -146,20 +183,71 @@ SANDBOX_TRUSTED_PROXY_CIDRS=172.16.0.0/12
 | `NGINX_HTTP_PORT` | `80` | HTTP 端口 |
 | `NGINX_HTTPS_PORT` | `443` | HTTPS 端口 |
 
-### Database
+### Database（MySQL 8）
 
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
-| `SANDBOX_DATABASE_URL` | `sqlite:////sandbox/data/sandbox.db` | SQLite（仅开发/测试）或 PostgreSQL（生产强制） |
-| `POSTGRES_DB` | `sandbox` | 生产 PostgreSQL database name |
-| `POSTGRES_USER` | `sandbox` | 生产 PostgreSQL user |
-| `POSTGRES_PASSWORD` | 无 | 生产必填 secret；无默认值 |
+| `MYSQL_DATABASE` | `sandbox` | MySQL database name |
+| `MYSQL_USER` | `sandbox` | MySQL application user |
+| `MYSQL_PASSWORD` | 开发占位 `sandbox_dev_only`；生产无默认 | 应用用户密码（生产必填强 secret） |
+| `MYSQL_ROOT_PASSWORD` | 开发占位；生产无默认 | root 密码（生产必填强 secret） |
+| `AGENT_DATABASE_URL` | `mysql://…@mysql:3306/sandbox` | Agent 事实库（仅 `mysql://` / `mysql2://`） |
+| `SANDBOX_DATABASE_URL` | `mysql+pymysql://…@mysql:3306/sandbox` | Sandbox 持久化（`mysql+pymysql://` 或 `mysql://`） |
 
-**开发（SQLite）:** 无需额外配置，自动创建。
+**开发:** `docker compose up` 启动 `mysql:8.0`；DSN 默认指向 compose 网络内 `mysql` 服务。占位密码仅用于本地，勿用于共享/生产环境。
 
-**生产（PostgreSQL）:** `docker-compose.prod.yml` 已内置 PostgreSQL 17、healthcheck、持久 volume 和 Sandbox 依赖。启动前必须设置强 `POSTGRES_PASSWORD`；production overlay 不回退 SQLite。Sandbox 以不可变 `schema_migrations` 初始化空库，checksum 不一致时拒绝启动。
+**生产:** `docker-compose.prod.yml` 内置 MySQL 8、healthcheck、持久 volume，以及 Sandbox/Agent 对 MySQL 的健康依赖。启动前必须设置强 `MYSQL_PASSWORD` 与 `MYSQL_ROOT_PASSWORD`；production overlay **不**回退 SQLite 或 PostgreSQL。Sandbox 生产配置校验拒绝非 MySQL DSN。
+
+**Triggers / binary log (migration gate):** Agent migrations issue `CREATE TRIGGER`
+as the non-SUPER application user. Compose-managed `mysql` services set
+`--log-bin-trust-function-creators=1` (dev + prod overlay). Do **not** grant
+`SUPER` to `MYSQL_USER`. If `AGENT_DATABASE_URL` points at **external/managed**
+MySQL, operators must enable the equivalent platform flag before first migrate;
+the Agent fail-closes with `MYSQL_TRIGGER_BINLOG_BLOCKED` and will **not**
+`SET GLOBAL` on remote hosts. See
+[mysql-partial-migration-recovery.md § Triggers and binary logging](runbooks/mysql-partial-migration-recovery.md#triggers-and-binary-logging).
 
 研发阶段不可逆的空环境切换见 [Development reset runbook](runbooks/development-reset.md)。该流程明确不备份、不迁移、不恢复旧数据。
+
+### Redis 7（Agent-only 运行态协调）
+
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `REDIS_PASSWORD` | 开发占位 `redis_dev_only`；生产无默认 | Redis `requirepass`（生产必填强 secret，fail-fast） |
+| `REDIS_URL` | `redis://:…@redis:6379/0` | 通用 / plan 别名 DSN |
+| `AGENT_REDIS_URL` | 同 `REDIS_URL` 形 | Agent 客户端主 DSN（仅 `redis://` / `rediss://`） |
+| `TEST_REDIS_URL` | _(可选)_ | 集成测试 DSN |
+| `AGENT_RUNS_QUEUE_NAME` | `agent-runs` | BullMQ Run Queue |
+| `AGENT_RUN_LEASE_TTL_MS` | `30000` | Worker lease TTL（ms） |
+| `AGENT_RUN_LEASE_RENEW_INTERVAL_MS` | `10000` | Lease 续约间隔（ms） |
+| `AGENT_RUN_STREAM_MAXLEN` | `10000` | Run stream 近似 `MAXLEN` |
+
+**开发:** `docker compose up` 启动 `redis:7.2`（AOF + `redis_dev_data` volume）。Agent 依赖 Redis health；默认 DSN 指向 compose 网络内 `redis` 服务。占位密码仅用于本地。
+
+**生产:** `docker-compose.prod.yml` 要求 `REDIS_PASSWORD` 已设置（`${REDIS_PASSWORD:?…}` fail-fast），启用 `requirepass`、healthcheck、持久 `redis_data` volume，Agent 对 Redis `service_healthy` 依赖；**不**对外发布 Redis 端口。BFF **不**获得 Redis 权威环境变量。
+
+**Sandbox internal plane（PR-07 replay-only）:**
+
+| 变量 | 说明 |
+| --- | --- |
+| `SANDBOX_INTERNAL_PLANE_ENABLED` | 开发默认 `false`；**生产必须 `true`**（启动 fail-closed） |
+| `SANDBOX_INTERNAL_REDIS_PASSWORD` | **独立** replay 密码；**禁止**等于 `REDIS_PASSWORD` |
+| `SANDBOX_INTERNAL_REDIS_URL` | 指向专用服务 `sandbox-replay-redis:6379/0`（固定 DB0）；仅 jti `SET NX` |
+| `SANDBOX_INTERNAL_HMAC_KEYRING` / `ACTIVE_KID` | Agent→Sandbox HMAC；生产必填 |
+| `SANDBOX_INTERNAL_DRAIN_TIMEOUT_SECONDS` | 必须 **>0**；超时后先 UNKNOWN reconcile，再关 MySQL |
+
+- Compose 使用 **独立** `sandbox-replay-redis` 服务 + 独立 volume/密码；**不是** Agent `redis` 换 DB 索引。
+- 最小权限：键 `sandbox:internal:replay:v1:*`；命令 SET/PING（及握手）；固定 DB0；不授 SELECT。
+- Sandbox **不得**获得 Agent Redis 凭据；Agent **不得**获得 replay secret。
+- 真实 Redis ACL / 连通性为本仓库最终 gate，离线测试只覆盖配置语义。
+
+**清空 Redis 与恢复:**
+
+- Redis 清空 / 丢失只影响运行态协调（queue、lease、live stream、短期 cache）以及 Sandbox internal jti 防重放窗口，**不**删除 MySQL 中的 Conversation / Run / 审计事实。
+- 未成功发布到 Redis Stream 的事件保留在 MySQL `domain_outbox`，Outbox publisher 可在 Redis 恢复后重试。
+- 完整事件历史与 SSE 重放以 MySQL `run_events` 为准；Redis Stream 可按长度裁剪。
+
+已提交文档中的 DSN 示例仅使用开发占位或省略密码（`redis://:…@host:6379/0`）；勿把真实生产密码写进仓库。
 
 ### 资源限制
 
@@ -353,10 +441,10 @@ docker exec pi-enterprise-nginx nginx -s reload
 
 | 场景 | 推荐方案 |
 |------|----------|
-| 单实例开发 | 空库 SQLite + Docker Compose |
-| 生产 | PostgreSQL 17 + Compose prod overlay |
-| 多实例 | PostgreSQL + 共享工作区存储 (NFS/EFS) |
-| 高可用 | 负载均衡器 + PostgreSQL 复制 |
+| 单实例开发 | MySQL 8 + Redis 7 + Docker Compose |
+| 生产 | MySQL 8 + Redis 7 + Compose prod overlay（强制 secrets） |
+| 多实例 | MySQL + Redis + 共享工作区存储 (NFS/EFS) |
+| 高可用 | 负载均衡器 + MySQL 复制 / 托管 MySQL + 托管 Redis |
 
 ## Troubleshooting
 
@@ -396,15 +484,17 @@ curl -H "X-API-Key: ***" http://localhost:8083/sessions
 ### 数据库问题
 
 ```bash
-# 重置数据库（⚠️ 删除所有数据）
+# 重置数据库（⚠️ 删除所有数据，含 MySQL volume）
 docker compose down -v
 docker compose up -d
 
-# 备份数据库
-docker exec pi-enterprise-sandbox cp /sandbox/data/sandbox.db /tmp/sandbox-backup.db
+# 备份 MySQL（示例；生产请用受控备份链路）
+docker exec pi-enterprise-mysql \
+  mysqldump -u"$MYSQL_USER" -p"$MYSQL_PASSWORD" "$MYSQL_DATABASE" > backup.sql
 
-# 运行 SQL 查询
-docker exec -it pi-enterprise-sandbox sqlite3 /sandbox/data/sandbox.db
+# 运行 SQL 查询（交互）
+docker exec -it pi-enterprise-mysql \
+  mysql -u"$MYSQL_USER" -p"$MYSQL_PASSWORD" "$MYSQL_DATABASE"
 ```
 
 ## Docker 命令参考

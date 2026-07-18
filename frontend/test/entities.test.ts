@@ -215,7 +215,7 @@ describe('run event reducer', () => {
     );
     assert.equal(behind, 'out_of_order');
 
-    // Gap (jump ahead)
+    // Gap (jump ahead) — must not apply or advance cursor (PR-11 severe)
     const gap = reduceRuntimeEvent(
       s,
       ev({
@@ -228,8 +228,9 @@ describe('run event reducer', () => {
     );
     assert.equal(gap.outcome, 'gap');
     assert.equal(gap.sequenceGap, true);
-    // Still applied (cursor advances) so resume can continue
-    assert.equal(gap.store.runsById.run_o.lastSequence, 5);
+    assert.equal(gap.appliedSequence, null);
+    // Cursor stays at last contiguous sequence so resume can backfill
+    assert.equal(gap.store.runsById.run_o.lastSequence, 2);
   });
 
   it('tracks tool, approval, process, artifact via IDs on run', () => {

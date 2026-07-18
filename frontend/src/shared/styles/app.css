@@ -1535,6 +1535,44 @@ body {
   font-weight: 600;
   color: var(--color-text-secondary);
 }
+/* PR-11 Trace / Dataset panel accents (reuse inspector tokens) */
+.trace-panel .trace-tree {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.trace-node {
+  margin: 4px 0;
+  padding: 4px 0;
+  border-left: 2px solid var(--color-border, #e2e8f0);
+  padding-left: 8px;
+}
+.trace-node-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.trace-kind {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--color-text-dim, #94a3b8);
+}
+.trace-name {
+  font-weight: 500;
+  color: var(--color-text, #0f172a);
+}
+.trace-children {
+  list-style: none;
+  margin: 2px 0 0;
+  padding: 0;
+}
+.dataset-panel .status-uploading { border-color: var(--color-warning-soft, #fde68a); }
+.dataset-panel .status-ready { border-color: var(--color-success-soft, #bbf7d0); }
+.dataset-panel .status-failed { border-color: var(--color-danger-soft, #fecaca); }
+.rtc-risk { color: var(--color-warning-text, #b45309); }
+
 .inspector-row .row-title .step {
   color: var(--color-text-dim);
   font-weight: 500;

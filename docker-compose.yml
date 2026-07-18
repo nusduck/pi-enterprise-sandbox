@@ -1,29 +1,152 @@
+# Network topology (PR-07 Network Policy):
+#   backend_internal  — internal: true (no container default gateway / external egress)
+#   service_egress    — egress-capable bridge for services that must call the internet
+#
+# Placement by call chain:
+#   mysql, redis, sandbox          → backend_internal only
+#   api-server, frontend           → backend_internal (BFF↔Agent/Sandbox; SPA static)
+#   agent, agent-worker            → backend_internal + service_egress (LLM/MCP egress)
+# Production nginx (overlay)       → both (public edge + upstreams)
+#
+# Execution isolation for untrusted Sandbox children is Bubblewrap --unshare-net
+# when SANDBOX_NETWORK_MODE=disabled (production default). Container-wide iptables
+# is not used; NET_ADMIN/NET_RAW are never granted.
+
 services:
-  # ── PostgreSQL (optional dedicated DB container) ──────────
-  # Default stack still uses SQLite. Start Postgres with:
-  #   docker compose --profile postgres up -d postgres
-  # Point Sandbox at it (host / compose network):
-  #   SANDBOX_DATABASE_URL=postgresql://sandbox:sandbox_dev_only@localhost:5432/sandbox
-  #   SANDBOX_DATABASE_URL=postgresql://sandbox:sandbox_dev_only@postgres:5432/sandbox
-  # Do not use the weak default password outside development.
-  postgres:
-    image: postgres:17-alpine
-    container_name: ${POSTGRES_CONTAINER:-pi-enterprise-postgres}
-    profiles: ["postgres"]
+  # ── MySQL 8 (sole formal DB topology for dev/prod) ────────
+  # Credentials and DSNs come from env (.env / shell). Dev-only
+  # placeholder passwords are intentional non-secrets; never use
+  # them outside local development.
+  # Host process examples:
+  #   AGENT_DATABASE_URL=mysql://sandbox:sandbox_dev_only@127.0.0.1:3306/sandbox
+  #   SANDBOX_DATABASE_URL=mysql+pymysql://sandbox:sandbox_dev_only@127.0.0.1:3306/sandbox
+  # Compose network:
+  #   AGENT_DATABASE_URL=mysql://sandbox:…@mysql:3306/sandbox
+  #   SANDBOX_DATABASE_URL=mysql+pymysql://sandbox:…@mysql:3306/sandbox
+  mysql:
+    image: mysql:8.0
+    container_name: ${MYSQL_CONTAINER:-pi-enterprise-mysql}
+    # Dev-only host publish: loopback only (not 0.0.0.0). Prod overlay uses
+    # ports: !reset [] so these do not survive compose merge.
     ports:
-      - "${POSTGRES_HOST_PORT:-5432}:5432"
+      - "127.0.0.1:${MYSQL_HOST_PORT:-3306}:3306"
     environment:
-      POSTGRES_DB: ${POSTGRES_DB:-sandbox}
-      POSTGRES_USER: ${POSTGRES_USER:-sandbox}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-sandbox_dev_only}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-sandbox}
+      MYSQL_USER: ${MYSQL_USER:-sandbox}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-sandbox_dev_only}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-sandbox_root_dev_only}
+    # Instance flags (mysqld). App MYSQL_USER stays without SUPER privilege.
+    # MySQL 8 images often enable binary logging; CREATE TRIGGER then requires
+    # SUPER *or* log_bin_trust_function_creators=1. We set the latter only —
+    # never elevate the application account. External/managed MySQL
+    # must be configured by operators (Agent preflight fail-closes; no auto-SET).
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+      - --default-authentication-plugin=mysql_native_password
+      - --log-bin-trust-function-creators=1
     volumes:
-      - ${POSTGRES_DATA_VOLUME:-postgres_dev_data}:/var/lib/postgresql/data
+      - ${MYSQL_DATA_VOLUME:-mysql_dev_data}:/var/lib/mysql
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-sandbox} -d ${POSTGRES_DB:-sandbox}"]
+      test:
+        [
+          "CMD",
+          "mysqladmin",
+          "ping",
+          "-h",
+          "127.0.0.1",
+          "-uroot",
+          "-p${MYSQL_ROOT_PASSWORD:-sandbox_root_dev_only}",
+        ]
       interval: 5s
       timeout: 5s
-      retries: 10
+      retries: 20
+      start_period: 20s
     restart: unless-stopped
+    networks:
+      - backend_internal
+
+  # ── Redis 7 (Agent-only runtime coordination) ─────────────
+  # Holds queues, leases, streams, cancel signals, short-lived
+  # cache — never authoritative Run/Conversation facts (those
+  # live in MySQL). Clearing Redis loses only coordination state;
+  # Outbox + MySQL replay recover durable events (plan §7.2, §9).
+  # Credentials from env; dev placeholder is intentional non-secret.
+  # Host process examples:
+  #   AGENT_REDIS_URL=redis://:redis_dev_only@127.0.0.1:6379/0
+  #   TEST_REDIS_URL=redis://:redis_dev_only@127.0.0.1:6379/0
+  # Compose network:
+  #   AGENT_REDIS_URL=redis://:redis_dev_only@redis:6379/0
+  # BFF / Sandbox must not take Redis authority in this topology.
+  # Agent coordination Redis (queue / lease / stream). Not for Sandbox replay.
+  redis:
+    image: redis:7.2
+    container_name: ${REDIS_CONTAINER:-pi-enterprise-redis}
+    ports:
+      - "127.0.0.1:${REDIS_HOST_PORT:-6379}:6379"
+    environment:
+      # Surfaced for operators/health tooling; auth is via --requirepass.
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-redis_dev_only}
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+      - --requirepass
+      - ${REDIS_PASSWORD:-redis_dev_only}
+    volumes:
+      # AOF + named volume: coordination data survives container recreate.
+      # Ephemeral alternative: omit volume and accept empty Redis on recreate
+      # (MySQL facts + Outbox still recover durable events).
+      - ${REDIS_DATA_VOLUME:-redis_dev_data}:/data
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "redis-cli",
+          "-a",
+          "${REDIS_PASSWORD:-redis_dev_only}",
+          "ping",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+    restart: unless-stopped
+    networks:
+      - backend_internal
+
+  # Sandbox internal-replay Redis ONLY (jti SET NX). Independent password + volume.
+  # Never inject AGENT_REDIS_URL / REDIS_PASSWORD here — DB index is not isolation.
+  sandbox-replay-redis:
+    image: redis:7.2
+    container_name: ${SANDBOX_REPLAY_REDIS_CONTAINER:-pi-enterprise-sandbox-replay-redis}
+    # No host publish — Sandbox reaches it on backend_internal only.
+    environment:
+      SANDBOX_INTERNAL_REDIS_PASSWORD: ${SANDBOX_INTERNAL_REDIS_PASSWORD:-sandbox_replay_dev_only}
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+      - --requirepass
+      - ${SANDBOX_INTERNAL_REDIS_PASSWORD:-sandbox_replay_dev_only}
+    volumes:
+      - ${SANDBOX_REPLAY_REDIS_DATA_VOLUME:-sandbox_replay_redis_dev_data}:/data
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "redis-cli",
+          "-a",
+          "${SANDBOX_INTERNAL_REDIS_PASSWORD:-sandbox_replay_dev_only}",
+          "ping",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+    restart: unless-stopped
+    networks:
+      - backend_internal
 
   # ── Frontend — SPA (Nginx) ────────────────────────────────
   frontend:
@@ -33,11 +156,13 @@ services:
     image: ${FRONTEND_IMAGE:-pi-enterprise-frontend:latest}
     container_name: ${FRONTEND_CONTAINER:-pi-enterprise-frontend}
     ports:
-      - "${FRONTEND_PORT:-3000}:80"
+      - "127.0.0.1:${FRONTEND_PORT:-3000}:80"
     restart: unless-stopped
     depends_on:
       api-server:
         condition: service_started
+    networks:
+      - backend_internal
 
   # ── API Server — thin BFF (auth, conversations, files, SSE relay) ─
   api-server:
@@ -47,7 +172,7 @@ services:
     image: ${API_IMAGE:-pi-enterprise-api:latest}
     container_name: ${API_CONTAINER:-pi-enterprise-api}
     ports:
-      - "${API_PORT:-4000}:4000"
+      - "127.0.0.1:${API_PORT:-4000}:4000"
     env_file:
       - ${API_ENV_FILE:-.env}
     environment:
@@ -73,6 +198,8 @@ services:
       timeout: 10s
       retries: 3
       start_period: 15s
+    networks:
+      - backend_internal
 
   # ── Agent — pi-coding-agent orchestration (independent) ──
   # Skills volume: production/default is read-only.
@@ -88,21 +215,39 @@ services:
     image: ${AGENT_IMAGE:-pi-enterprise-agent:latest}
     container_name: ${AGENT_CONTAINER:-pi-enterprise-agent}
     ports:
-      - "${AGENT_PORT:-4100}:4100"
+      - "127.0.0.1:${AGENT_PORT:-4100}:4100"
     env_file:
       - ${API_ENV_FILE:-.env}
     environment:
       DEPLOYMENT_ENV: ${DEPLOYMENT_ENV:-development}
       SANDBOX_BASE_URL: http://sandbox:8081
-      SANDBOX_API_TOKEN: ${SANDBOX_API_TOKEN:-}
+      # Dev-only placeholder; prod overlay forces real strong secret via :?.
+      SANDBOX_API_TOKEN: ${SANDBOX_API_TOKEN:-dev_only_sandbox_api_token_not_for_prod_32b}
       AGENT_INTERNAL_TOKEN: ${AGENT_INTERNAL_TOKEN:-}
       AGENT_RUN_INIT_TIMEOUT_MS: ${AGENT_RUN_INIT_TIMEOUT_MS:-15000}
+      # Agent MySQL fact store (mysql:// | mysql2:// only; see agent mysql client).
+      # Dev default uses non-secret placeholder credentials; override via .env.
+      AGENT_DATABASE_URL: ${AGENT_DATABASE_URL:-mysql://sandbox:sandbox_dev_only@mysql:3306/sandbox}
+      # Single migration owner: HTTP Agent migrates before becoming healthy;
+      # agent-worker starts only after that health gate and never races migrations.
+      AGENT_MIGRATE_ON_START: ${AGENT_MIGRATE_ON_START:-true}
+      # Agent Redis coordination (redis:// | rediss:// only). Agent-only authority.
+      # REDIS_URL is the plan/generic alias; AGENT_REDIS_URL is the Agent client name.
+      REDIS_URL: ${REDIS_URL:-redis://:redis_dev_only@redis:6379/0}
+      AGENT_REDIS_URL: ${AGENT_REDIS_URL:-redis://:redis_dev_only@redis:6379/0}
+      # Queue / lease / stream settings (plan §9 defaults; code may hard-pin until wired).
+      AGENT_RUNS_QUEUE_NAME: ${AGENT_RUNS_QUEUE_NAME:-agent-runs}
+      AGENT_RUN_LEASE_TTL_MS: ${AGENT_RUN_LEASE_TTL_MS:-30000}
+      AGENT_RUN_LEASE_RENEW_INTERVAL_MS: ${AGENT_RUN_LEASE_RENEW_INTERVAL_MS:-10000}
+      AGENT_RUN_STREAM_MAXLEN: ${AGENT_RUN_STREAM_MAXLEN:-10000}
       SANDBOX_POLICY_PROFILE: ${SANDBOX_POLICY_PROFILE:-balanced}
       SANDBOX_ISOLATION_BACKEND: ${SANDBOX_ISOLATION_BACKEND:-bubblewrap}
       SANDBOX_ISOLATION_REQUIRED: ${SANDBOX_ISOLATION_REQUIRED:-true}
       # Pi SDK logical cwd for the workspace created by Sandbox. The Agent does
       # not mount or directly access the physical workspace volume.
       AGENT_SESSION_WORKSPACE_CWD: ${AGENT_SESSION_WORKSPACE_CWD:-/home/sandbox/workspace}
+      # Concrete Pi resource root (PiRuntimeFactory.create requires non-empty agentDir).
+      AGENT_PI_AGENT_DIR: ${AGENT_PI_AGENT_DIR:-/app/pi-agent-home}
       LLMIO_BASE_URL: ${LLMIO_BASE_URL:-}
       LLMIO_API_KEY: ${LLMIO_API_KEY:-}
       MODEL_ID: ${MODEL_ID:-deepseek-v4-flash}
@@ -129,12 +274,74 @@ services:
     depends_on:
       sandbox:
         condition: service_healthy
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "node", "-e", "require('http').get('http://localhost:4100/health',r=>{process.exit(r.statusCode===200?0:1)}).on('error',()=>process.exit(1))"]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 15s
+    # HTTP only — worker is a separate service (PR-04 T4).
+    command: ["node", "server.js"]
+    networks:
+      - backend_internal
+      - service_egress
+
+  # ── Agent Worker — Run queue consumer + recovery + outbox (no public port) ─
+  agent-worker:
+    image: ${AGENT_IMAGE:-pi-enterprise-agent:latest}
+    build:
+      context: ./agent
+      dockerfile: Dockerfile
+    container_name: ${AGENT_WORKER_CONTAINER:-pi-enterprise-agent-worker}
+    env_file:
+      - ${API_ENV_FILE:-.env}
+    environment:
+      DEPLOYMENT_ENV: ${DEPLOYMENT_ENV:-development}
+      SANDBOX_BASE_URL: http://sandbox:8081
+      # Must match sandbox SANDBOX_API_TOKEN (service key + acting headers).
+      SANDBOX_API_TOKEN: ${SANDBOX_API_TOKEN:-dev_only_sandbox_api_token_not_for_prod_32b}
+      AGENT_INTERNAL_TOKEN: ${AGENT_INTERNAL_TOKEN:-}
+      AGENT_DATABASE_URL: ${AGENT_DATABASE_URL:-mysql://sandbox:sandbox_dev_only@mysql:3306/sandbox}
+      REDIS_URL: ${REDIS_URL:-redis://:redis_dev_only@redis:6379/0}
+      AGENT_REDIS_URL: ${AGENT_REDIS_URL:-redis://:redis_dev_only@redis:6379/0}
+      AGENT_RUNS_QUEUE_NAME: ${AGENT_RUNS_QUEUE_NAME:-agent-runs}
+      AGENT_RUN_LEASE_TTL_MS: ${AGENT_RUN_LEASE_TTL_MS:-30000}
+      AGENT_RUN_LEASE_RENEW_INTERVAL_MS: ${AGENT_RUN_LEASE_RENEW_INTERVAL_MS:-10000}
+      AGENT_WORKER_CONCURRENCY: ${AGENT_WORKER_CONCURRENCY:-1}
+      AGENT_RECOVERY_INTERVAL_MS: ${AGENT_RECOVERY_INTERVAL_MS:-60000}
+      AGENT_RECOVERY_SCAN_LIMIT: ${AGENT_RECOVERY_SCAN_LIMIT:-100}
+      AGENT_OUTBOX_IDLE_MS: ${AGENT_OUTBOX_IDLE_MS:-1000}
+      # Pi executor (same logical cwd / agentDir / model knobs as HTTP agent)
+      AGENT_SESSION_WORKSPACE_CWD: ${AGENT_SESSION_WORKSPACE_CWD:-/home/sandbox/workspace}
+      AGENT_PI_AGENT_DIR: ${AGENT_PI_AGENT_DIR:-/app/pi-agent-home}
+      LLMIO_BASE_URL: ${LLMIO_BASE_URL:-}
+      LLMIO_API_KEY: ${LLMIO_API_KEY:-}
+      MODEL_ID: ${MODEL_ID:-deepseek-v4-flash}
+      MODEL_CONTEXT_WINDOW: ${MODEL_CONTEXT_WINDOW:-128000}
+      MODEL_MAX_TOKENS: ${MODEL_MAX_TOKENS:-8192}
+      SKILLS_MODE: ${SKILLS_MODE:-readonly}
+      SKILLS_ROOT: /home/sandbox/skill
+      # Never enable stub executor in shared compose (production fail-closed).
+      # AGENT_ALLOW_STUB_EXECUTOR is intentionally unset.
+    volumes:
+      - ${AGENT_SKILLS_MOUNT:-./skills:/home/sandbox/skill:ro}
+    restart: unless-stopped
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      agent:
+        condition: service_healthy
+    # No ports — worker is not an HTTP public service.
+    command: ["node", "worker.js"]
+    networks:
+      - backend_internal
+      - service_egress
 
   # ── Sandbox — Safe Execution Environment (Python FastAPI) ─
   sandbox:
@@ -156,6 +363,9 @@ services:
       - ${SANDBOX_SKILLS_MOUNT:-./skills:/app/.pi/skills:ro}
       - ${SANDBOX_WORKSPACES_MOUNT:-./workspaces:/var/sandbox/workspaces}
       - ${SANDBOX_TEMP_MOUNT:-./tmp-workspaces:/var/sandbox/tmp}
+      # PR-09 control-plane roots — NOT bound into Bubblewrap workspace/tmp
+      - ${SANDBOX_ARTIFACTS_MOUNT:-./artifacts:/var/sandbox/artifacts}
+      - ${SANDBOX_CONTROL_MOUNT:-./control:/var/sandbox/control}
       - ${SANDBOX_DATA_VOLUME:-sandbox_data}:/sandbox/data
     environment:
       DEPLOYMENT_ENV: ${DEPLOYMENT_ENV:-development}
@@ -164,9 +374,21 @@ services:
       SANDBOX_HOST: ${SANDBOX_BIND_HOST:-0.0.0.0}
       SANDBOX_PORT: 8081
       SANDBOX_LOG_LEVEL: ${SANDBOX_LOG_LEVEL:-INFO}
-      SANDBOX_DATABASE_URL: ${SANDBOX_DATABASE_URL:-sqlite:////sandbox/data/sandbox.db}
+      # Sandbox persistence DSN (formal: MySQL via PyMySQL dialect).
+      # Dev default uses non-secret placeholder credentials; override via .env.
+      SANDBOX_DATABASE_URL: ${SANDBOX_DATABASE_URL:-mysql+pymysql://sandbox:sandbox_dev_only@mysql:3306/sandbox}
+      # Internal plane (Agent HMAC tools): optional in development (default off).
+      # Dedicated sandbox-replay-redis + independent password (DB 0). Never REDIS_PASSWORD.
+      SANDBOX_INTERNAL_PLANE_ENABLED: ${SANDBOX_INTERNAL_PLANE_ENABLED:-false}
+      SANDBOX_INTERNAL_REDIS_URL: ${SANDBOX_INTERNAL_REDIS_URL:-redis://:sandbox_replay_dev_only@sandbox-replay-redis:6379/0}
+      SANDBOX_INTERNAL_HMAC_KEYRING: ${SANDBOX_INTERNAL_HMAC_KEYRING:-}
+      SANDBOX_INTERNAL_HMAC_ACTIVE_KID: ${SANDBOX_INTERNAL_HMAC_ACTIVE_KID:-}
+      SANDBOX_INTERNAL_MAX_CONCURRENCY: ${SANDBOX_INTERNAL_MAX_CONCURRENCY:-64}
+      SANDBOX_INTERNAL_DRAIN_TIMEOUT_SECONDS: ${SANDBOX_INTERNAL_DRAIN_TIMEOUT_SECONDS:-30}
       SANDBOX_WORKSPACES_ROOT: /var/sandbox/workspaces
       SANDBOX_TEMP_ROOT: /var/sandbox/tmp
+      SANDBOX_ARTIFACTS_ROOT: /var/sandbox/artifacts
+      SANDBOX_CONTROL_ROOT: /var/sandbox/control
       SANDBOX_SKILLS_ROOT: /home/sandbox/skill
       SANDBOX_ISOLATION_BACKEND: ${SANDBOX_ISOLATION_BACKEND:-bubblewrap}
       SANDBOX_ISOLATION_REQUIRED: ${SANDBOX_ISOLATION_REQUIRED:-true}
@@ -180,23 +402,26 @@ services:
       SANDBOX_MAX_CPU_TIME_SECONDS: ${SANDBOX_MAX_CPU_TIME_SECONDS:-300}
       SANDBOX_MAX_MEMORY_MB: ${SANDBOX_MAX_MEMORY_MB:-512}
       SANDBOX_MAX_FILE_SIZE_MB: ${SANDBOX_MAX_FILE_SIZE_MB:-50}
+      # Positive quotas require child monitoring + operator hard-backend assertion
+      # in production (see sandbox/config.py validate_production_settings).
+      # Do NOT default HARD_BACKEND_ASSERTED=true here — set only after live volume
+      # project-quota verification.
       SANDBOX_WORKSPACE_QUOTA_MB: ${SANDBOX_WORKSPACE_QUOTA_MB:-500}
       SANDBOX_TEMP_QUOTA_MB: ${SANDBOX_TEMP_QUOTA_MB:-500}
+      SANDBOX_WORKSPACE_CHILD_QUOTA_ENFORCEMENT: ${SANDBOX_WORKSPACE_CHILD_QUOTA_ENFORCEMENT:-true}
+      SANDBOX_WORKSPACE_QUOTA_HARD_BACKEND_ASSERTED: ${SANDBOX_WORKSPACE_QUOTA_HARD_BACKEND_ASSERTED:-false}
       # Comma-separated keys from process env injected into every execution/process.
       # Also: SANDBOX_EXEC_ENV_<NAME>=value (from env_file) → NAME in children.
       SANDBOX_SHARED_ENV_KEYS: ${SANDBOX_SHARED_ENV_KEYS:-}
       SANDBOX_SESSION_TTL_MINUTES: ${SANDBOX_SESSION_TTL_MINUTES:-30}
       SANDBOX_CLEANUP_INTERVAL_MINUTES: ${SANDBOX_CLEANUP_INTERVAL_MINUTES:-5}
-      # Single outbound network mode (disabled|allowlist|unrestricted).
-      # Dev .env.example uses unrestricted; production overlay forces disabled/allowlist.
+      # Outbound *execution* policy (disabled|allowlist|unrestricted).
+      # Default disabled → Bubblewrap --unshare-net (real isolation).
+      # Production forbids allowlist/unrestricted until a per-child egress proxy exists.
+      # Dev may set unrestricted explicitly (.env); never a production default.
+      # Independent of inbound SANDBOX_ALLOWED_CLIENT_CIDRS.
       SANDBOX_NETWORK_MODE: ${SANDBOX_NETWORK_MODE:-disabled}
-      SANDBOX_IPTABLES_ENABLED: ${SANDBOX_IPTABLES_ENABLED:-true}
-      SANDBOX_IPTABLES_DEFAULT_POLICY: ${SANDBOX_IPTABLES_DEFAULT_POLICY:-DROP}
-      SANDBOX_ALLOWED_TCP_PORTS: ${SANDBOX_ALLOWED_TCP_PORTS:-}
-      SANDBOX_ALLOWED_UDP_PORTS: ${SANDBOX_ALLOWED_UDP_PORTS:-}
-      # Outbound iptables destinations (egress) — NOT inbound client allowlist.
-      SANDBOX_ALLOWED_CIDRS: ${SANDBOX_ALLOWED_CIDRS:-}
-      # Inbound client allowlist for the Sandbox HTTP API.
+      # Inbound client allowlist for the Sandbox HTTP API (not execution egress).
       # Empty string denies all clients.
       SANDBOX_ALLOWED_CLIENT_CIDRS: ${SANDBOX_ALLOWED_CLIENT_CIDRS:-127.0.0.1/32,::1/128,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16}
       # Trusted reverse proxies only (default empty → ignore X-Forwarded-For).
@@ -213,19 +438,32 @@ services:
       SANDBOX_APPROVAL_ENABLED: ${APPROVAL_ENABLED:-${SANDBOX_APPROVAL_ENABLED:-}}
       SANDBOX_UVICORN_WORKERS: ${SANDBOX_UVICORN_WORKERS:-1}
       SANDBOX_UVICORN_PROXY_HEADERS: true
-      SANDBOX_API_TOKEN: ${SANDBOX_API_TOKEN:-}
+      # Match agent/agent-worker service key (dev placeholder; prod :? override).
+      SANDBOX_API_TOKEN: ${SANDBOX_API_TOKEN:-dev_only_sandbox_api_token_not_for_prod_32b}
       LANG: C.UTF-8
       LC_ALL: C.UTF-8
     restart: unless-stopped
+    depends_on:
+      mysql:
+        condition: service_healthy
+      # Independent replay Redis (not Agent redis / REDIS_PASSWORD).
+      sandbox-replay-redis:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8081/ready"]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 10s
+    # No NET_ADMIN / NET_RAW. Drop all capabilities; re-add only those required
+    # for entrypoint storage init (chown/chmod) and privilege drop (gosu).
+    cap_drop:
+      - ALL
     cap_add:
-      - NET_ADMIN
-      - NET_RAW
+      - CHOWN
+      - FOWNER
+      - SETUID
+      - SETGID
     security_opt:
       # Docker's default seccomp profile blocks the namespace/mount syscalls
       # Bubblewrap needs. This repo profile narrowly adds its child/user/mount
@@ -236,7 +474,20 @@ services:
       - apparmor=unconfined
       # Allow the unprivileged mount namespace to mount its private /proc.
       - systempaths=unconfined
+    # Sandbox API is reachable only on the internal backend fabric.
+    # Untrusted child processes with network_mode=disabled get --unshare-net.
+    networks:
+      - backend_internal
+
+networks:
+  backend_internal:
+    name: ${COMPOSE_PROJECT_NAME:-pi-enterprise}-backend-internal
+    internal: true
+  service_egress:
+    name: ${COMPOSE_PROJECT_NAME:-pi-enterprise}-service-egress
 
 volumes:
   sandbox_data:
-  postgres_dev_data:
+  mysql_dev_data:
+  redis_dev_data:
+  sandbox_replay_redis_dev_data:

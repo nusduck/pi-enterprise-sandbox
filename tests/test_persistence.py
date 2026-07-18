@@ -6,7 +6,6 @@ import sqlite3
 
 from sandbox.database import Database
 from sandbox.models import SessionStatus
-from sandbox.services.artifact_manager import ArtifactManager
 from sandbox.services.audit_logger import AuditLogger
 from sandbox.services.session_manager import SessionManager
 
@@ -61,8 +60,11 @@ def test_sessions_persist_across_manager_instances(tmp_path):
     db.initialize()
     first = SessionManager(database=db)
 
+    agent = "01JTESTAGENT0000000000000P"
+    wsp = "01JTESTWRKSP0000000000000P"
     session = first.create(
-        agent_session_id="pi_001",
+        agent_session_id=agent,
+        workspace_id=wsp,
         enterprise_session_id="ent_001",
         user_id="u001",
         caller_id="webui",
@@ -72,7 +74,7 @@ def test_sessions_persist_across_manager_instances(tmp_path):
 
     second = SessionManager(database=db)
     restored = second.get(session.session_id)
-    by_agent = second.get_by_agent_session_id("pi_001")
+    by_agent = second.get_by_agent_session_id(agent)
     by_enterprise = second.get_by_enterprise_session_id("ent_001")
 
     assert restored is not None
@@ -83,28 +85,8 @@ def test_sessions_persist_across_manager_instances(tmp_path):
     assert by_enterprise is not None and by_enterprise.session_id == session.session_id
 
 
-def test_artifacts_persist_across_manager_instances(tmp_path):
-    db = Database(f"sqlite:///{tmp_path / 'sandbox.db'}")
-    db.initialize()
-    first = ArtifactManager(database=db)
-
-    artifact = first.register(
-        session_id="sandbox_abc",
-        name="report.txt",
-        path="output/report.txt",
-        mime_type="text/plain",
-        source_execution_id="exec_001",
-        size=42,
-    )
-
-    second = ArtifactManager(database=db)
-    restored = second.get(artifact.artifact_id)
-    listed = second.list_by_session("sandbox_abc")
-
-    assert restored is not None
-    assert restored.name == "report.txt"
-    assert len(listed) == 1
-    assert listed[0].artifact_id == artifact.artifact_id
+# PR-13: ArtifactManager no longer dual-writes SQLite. Formal MySQL + control-plane
+# snapshots are authority (see tests/test_dataset_artifact_pr09.py).
 
 
 def test_audit_log_persists_to_sqlite(tmp_path):

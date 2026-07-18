@@ -80,10 +80,12 @@ def test_draft_ttl_deletes_expired_keeps_fresh_and_legal_hold(repos, monkeypatch
             "legal_hold": False,
         }
     )
-    workspace_manager.init_conversation_workspace("draft_expired")
-    assert workspace_manager.physical_path_for_workspace_id(
-        f"conv_draft_expired"
-    ).exists() or (tmp_path / "ws" / "conv_draft_expired").exists()
+    # PR-07A: Conversation TTL must not create/delete workspaces. Seed a
+    # formal workspace only to assert retention no longer removes it via
+    # conversation identity.
+    draft_wsp = "01JTESTWRKSP00000000000DRF"
+    workspace_manager.init_workspace(draft_wsp)
+    assert workspace_manager.physical_path_for_workspace_id(draft_wsp).exists()
 
     conv.upsert(
         {

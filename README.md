@@ -67,8 +67,8 @@ pi-sandbox/
 ├── docs/                 ← 活跃文档（archive/ 与历史 PLAN 不作现行规范）
 ├── workspaces/           ← 会话工作区（运行时，按 workspace_id 隔离）
 ├── tmp-workspaces/       ← Conversation 持久化 /tmp（按 tmp_{workspace_id} 隔离）
-├── docker-compose.yml           ← 开发 4 服务编排
-├── docker-compose.prod.yml      ← 生产 overlay（PostgreSQL + Nginx + SSL）
+├── docker-compose.yml           ← 开发编排（Frontend + BFF + Agent + Sandbox + MySQL 8 + Redis 7）
+├── docker-compose.prod.yml      ← 生产 overlay（MySQL 8 + Redis 7 + Nginx + SSL）
 └── .env.example          ← 环境变量模板（与部署文档一致）
 ```
 
@@ -127,24 +127,40 @@ SANDBOX_BASE_URL=http://localhost:8081
 | `SANDBOX_SESSION_TTL_MINUTES` | `30` | 会话空闲自动清理时间 |
 | `SANDBOX_CLEANUP_INTERVAL_MINUTES` | `5` | 清理任务运行间隔 |
 
-### 网络隔离
+### 网络策略（入站 vs 出站分离）
 
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
-| `SANDBOX_IPTABLES_ENABLED` | `true` | 启用 iptables 网络隔离 |
-| `SANDBOX_IPTABLES_DEFAULT_POLICY` | `DROP` | 默认出站策略 |
-| `SANDBOX_ALLOWED_TCP_PORTS` | — | 放行 TCP 端口 |
-| `SANDBOX_ALLOWED_UDP_PORTS` | — | 放行 UDP 端口 |
-| `SANDBOX_ALLOWED_CIDRS` | — | 放行 IP 段 |
+| `SANDBOX_NETWORK_MODE` | `disabled` | **出站执行策略**：`disabled`（Bubblewrap `--unshare-net`，生产唯一允许）/ `allowlist`（无受控 egress proxy 时不构成隔离，生产拒绝）/ `unrestricted`（仅研发显式） |
+| `SANDBOX_ALLOWED_CLIENT_CIDRS` | loopback + 私网 | **入站** Sandbox HTTP 来源 CIDR；空 = 拒绝全部 |
+| `SANDBOX_TRUSTED_PROXY_CIDRS` | _(空)_ | 可信反向代理；默认忽略 `X-Forwarded-For` |
 
-### 数据库
+Compose：`backend_internal`（`internal: true`）与 `service_egress`；Sandbox 仅挂 `backend_internal`，无 `NET_ADMIN`/`NET_RAW`，不使用 container-wide iptables。
+
+### 数据库（MySQL 8）
 
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
-| `SANDBOX_DATABASE_URL` | `sqlite:////sandbox/data/sandbox.db` | **开发/测试**空库 SQLite；**生产强制 PostgreSQL**（见 `docker-compose.prod.yml`） |
-| `POSTGRES_PASSWORD` | 无 | 生产必填；无默认值 |
+| `AGENT_DATABASE_URL` | `mysql://sandbox:…@mysql:3306/sandbox` | Agent 事实库 DSN（`mysql://` / `mysql2://`） |
+| `SANDBOX_DATABASE_URL` | `mysql+pymysql://sandbox:…@mysql:3306/sandbox` | Sandbox 持久化 DSN |
+| `MYSQL_PASSWORD` | 开发占位；生产无默认 | 生产必填强 secret |
+| `MYSQL_ROOT_PASSWORD` | 开发占位；生产无默认 | 生产必填强 secret |
 
-发行基线为不可变 `schema_migrations` 空库初始化；不提供旧 schema 自动升级或旧数据迁移。研发清库见 [docs/runbooks/development-reset.md](docs/runbooks/development-reset.md)。
+**dev/prod 唯一正式拓扑为 MySQL 8**；生产配置校验拒绝 SQLite / PostgreSQL。凭据一律来自环境变量，勿硬编码真实密钥。研发清库见 [docs/runbooks/development-reset.md](docs/runbooks/development-reset.md)。
+
+### Redis 7（Agent-only 运行态协调）
+
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `AGENT_REDIS_URL` / `REDIS_URL` | `redis://:…@redis:6379/0` | Agent 协调 DSN（仅 `redis://` / `rediss://`） |
+| `TEST_REDIS_URL` | _(可选)_ | 集成测试用 Redis DSN |
+| `REDIS_PASSWORD` | 开发占位；生产无默认 | 生产必填强 secret（fail-fast） |
+| `AGENT_RUNS_QUEUE_NAME` | `agent-runs` | BullMQ Run Queue 名 |
+| `AGENT_RUN_LEASE_TTL_MS` | `30000` | Worker lease TTL |
+| `AGENT_RUN_LEASE_RENEW_INTERVAL_MS` | `10000` | Lease 续约间隔 |
+| `AGENT_RUN_STREAM_MAXLEN` | `10000` | Run stream 近似保留长度 |
+
+Redis 只保存队列、lease、stream、取消信号等运行态；**不是** Run 事实权威。清空 Redis 不删除 MySQL 中的 Conversation/Run/审计；未发布事件经 Outbox 重试，历史可从 MySQL `run_events` 重放。Agent 依赖 Redis health；BFF / Sandbox 不持有 Redis 权威配置。生产须设置 `REDIS_PASSWORD`。
 
 ### Skill
 
@@ -191,7 +207,7 @@ node scripts/smoke-cross-service.mjs
 | 层级 | 措施 |
 |------|------|
 | 进程 | 每次 Bash/Python/Node/process 经 Bubblewrap；只挂载当前 workspace、持久化 `/tmp` 和只读 Skills |
-| 网络 | iptables 默认 DROP 出站策略 |
+| 网络 | 生产 `network_mode=disabled` + Bubblewrap `--unshare-net`；Compose `backend_internal`；无 iptables/NET_ADMIN fail-open |
 | 用户 | 子进程以非 root `sandbox` 用户运行 |
 | 资源 | ulimit: CPU / 内存 / 进程数 / 文件大小 |
 | 路径 | Conversation 工作区按 opaque `workspace_id` 隔离；接受相对路径、逻辑 workspace 路径和 `/tmp`；物理路径不进入公共协议 |
@@ -207,7 +223,7 @@ node scripts/smoke-cross-service.mjs
 | 文档 | 说明 |
 |------|------|
 | [架构设计](docs/architecture.md) | 四服务架构、设计决策、安全模型、数据流 |
-| [部署指南](docs/deployment.md) | 生产部署（PostgreSQL）、SSL、备份、监控 |
+| [部署指南](docs/deployment.md) | 生产部署（MySQL 8 + Redis 7）、SSL、备份、监控 |
 | [开发指南](docs/development.md) | 本地开发、零 Skill、测试、调试 |
 | [API 参考](docs/api.md) | Sandbox API + MCP + SSE、workspace_id 契约 |
 | [前端指南](docs/webui.md) | 前端 SPA 架构、SSE 消费、扩展 |

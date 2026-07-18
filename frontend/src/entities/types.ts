@@ -107,7 +107,10 @@ export type RunEntity = {
   processIds: string[];
   approvalIds: string[];
   artifactIds: string[];
+  datasetIds: string[];
   attachmentIds: string[];
+  /** Trace span ids under this run (Trace Panel). */
+  traceSpanIds: string[];
   /** Highest applied event sequence for this run. */
   lastSequence: number;
   /** Last applied event_id (for Last-Event-ID resume). */
@@ -160,17 +163,24 @@ export type MessageEntity = {
   updatedAt: string | null;
 };
 
+/** Where a tool call is executed (plan §19.5). */
+export type ToolSource = 'sandbox' | 'mcp' | 'internal' | 'unknown';
+
 export type ToolExecutionEntity = {
   id: string;
   runId: string;
   name: string;
   status: ToolExecutionStatus;
+  /** Sandbox / MCP / Internal — backend-supplied when available. */
+  source: ToolSource;
   input: unknown;
   result: unknown;
   isError: boolean;
   approvalId: string | null;
   processId: string | null;
   summary: string | null;
+  /** Trace span for this tool when present. */
+  spanId: string | null;
   createdAt: string | null;
   updatedAt: string | null;
 };
@@ -183,6 +193,10 @@ export type ProcessEntity = {
   command: string | null;
   stdout: string;
   stderr: string;
+  /** Cursor for log resume / process.output (plan §19.6). */
+  cursor: number | null;
+  /** True when live buffers were truncated to cap memory growth. */
+  logTruncated: boolean;
   exitCode: number | null;
   startedAt: string | null;
   finishedAt: string | null;
@@ -199,10 +213,17 @@ export type ApprovalEntity = {
   status: ApprovalStatus;
   reason: string;
   command: string | null;
+  /** Risk / policy note from backend (plan §19.9). */
+  risk: string | null;
+  expiresAt: string | null;
   createdAt: string | null;
   decidedAt: string | null;
 };
 
+/**
+ * Explicit user-deliverable only (submit_artifact → artifact.ready).
+ * Intermediate workspace writes never become ArtifactEntity rows.
+ */
 export type ArtifactEntity = {
   id: string;
   runId: string | null;
@@ -211,7 +232,64 @@ export type ArtifactEntity = {
   path: string | null;
   mimeType: string | null;
   size: number | null;
+  sha256: string | null;
+  description: string | null;
+  /** Always submit_artifact for platform artifacts. */
+  source: 'submit_artifact';
   createdAt: string | null;
+};
+
+export type DatasetStatus =
+  | 'uploading'
+  | 'ready'
+  | 'failed'
+  | 'removed';
+
+/** User dataset streamed into the session workspace (plan §19.7). */
+export type DatasetEntity = {
+  id: string;
+  conversationId: string | null;
+  sessionId: string | null;
+  runId: string | null;
+  name: string;
+  path: string | null;
+  size: number | null;
+  mimeType: string | null;
+  sha256: string | null;
+  status: DatasetStatus;
+  /** 0–100 when progress events supply it. */
+  progress: number | null;
+  agentVisible: boolean;
+  createdAt: string | null;
+  updatedAt: string | null;
+};
+
+/** Trace span node for the Trace Panel tree (plan §19.10). */
+export type TraceSpanKind =
+  | 'run'
+  | 'model'
+  | 'tool'
+  | 'sandbox'
+  | 'mcp'
+  | 'artifact'
+  | 'error'
+  | 'other';
+
+export type TraceSpanEntity = {
+  id: string;
+  runId: string;
+  parentId: string | null;
+  kind: TraceSpanKind;
+  name: string;
+  status: 'running' | 'ok' | 'error' | 'cancelled';
+  spanId: string | null;
+  durationMs: number | null;
+  tokens: number | null;
+  cost: number | null;
+  error: string | null;
+  metadata: Record<string, unknown> | null;
+  startedAt: string | null;
+  finishedAt: string | null;
 };
 
 export type AttachmentEntity = {
@@ -239,6 +317,8 @@ export type EntityStore = {
   processesById: EntityMap<ProcessEntity>;
   approvalsById: EntityMap<ApprovalEntity>;
   artifactsById: EntityMap<ArtifactEntity>;
+  datasetsById: EntityMap<DatasetEntity>;
+  traceSpansById: EntityMap<TraceSpanEntity>;
   attachmentsById: EntityMap<AttachmentEntity>;
   /** Currently focused conversation in the UI (does not cancel background runs). */
   activeConversationId: string | null;

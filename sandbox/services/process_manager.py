@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import signal
 import subprocess
 import threading
@@ -37,17 +38,46 @@ from sandbox.services.execution_stream import (
 )
 from sandbox.trace import get_trace_id
 from sandbox.utils.resource_limits import (
+    _ORPHAN_GROUP_GRACE_SECONDS,
+    _READER_JOIN_SECONDS,
+    _READER_STOP_JOIN_SECONDS,
+    ResourceLimitError,
     apply_resource_limits,
+    authoritative_pgid,
+    child_resource_limit_kwargs,
     contains_network_command,
+    stop_and_join_readers,
+    StoppableStreamReader,
     terminate_process_group,
+)
+from sandbox.services.process_cursor import (
+    INITIAL_CURSOR,
+    StreamLogBuffer,
+    encode_cursor,
+    parse_cursor,
+)
+from sandbox.services.process_identity import (
+    capture_process_identity,
+    identity_matches,
+    process_alive,
+    safe_signal_identity,
+)
+from sandbox.services.process_handle_store import FormalProcessDualWriter
+from sandbox.services.child_workspace_quota import (
+    ChildQuotaDecision,
+    ChildWorkspaceQuotaWatch,
+    assert_child_quota_admit,
+    format_decision_message,
 )
 
 logger = logging.getLogger("sandbox.process_manager")
 
 # Cap in-memory log buffers so a noisy process cannot OOM the runner.
 _DEFAULT_MAX_LOG_CHARS = 500_000
-_READER_JOIN_SECONDS = 2.0
 _DEFAULT_WAIT_SECONDS = 3600.0
+# Owner user_id must be bounded / path-safe; never free-form client text.
+_MAX_OWNER_USER_ID_LEN = 128
+_OWNER_USER_ID_RE = re.compile(r"^[A-Za-z0-9_.:@\-]{1,128}$")
 
 
 def _now_iso() -> str:
@@ -70,6 +100,70 @@ def _is_active(status: Any) -> bool:
     return status in PROCESS_ACTIVE_STATUSES or _status_value(status) in {
         _status_value(s) for s in PROCESS_ACTIVE_STATUSES if isinstance(s, str) or hasattr(s, "value")
     }
+
+
+def _positive_int(value: Any, default: int) -> int:
+    try:
+        iv = int(value)
+    except (TypeError, ValueError):
+        return default
+    return iv if iv > 0 else default
+
+
+def resolve_process_timeout(timeout: int | None) -> tuple[int | None, str | None]:
+    """Resolve client timeout to a finite positive wall-clock seconds.
+
+    Returns ``(effective_seconds, error_message)``. ``error_message`` is set
+    when the value must be rejected (0 / negative / over absolute max).
+    ``None`` client timeout uses the configured default (never unlimited).
+    """
+    default = _positive_int(
+        getattr(settings, "process_timeout_seconds", None),
+        14_400,
+    )
+    absolute_max = _positive_int(
+        getattr(settings, "max_process_timeout_seconds", None),
+        86_400,
+    )
+    if absolute_max < default:
+        # Misconfiguration: still never unlimited; clamp default to absolute max.
+        default = absolute_max
+
+    if timeout is None:
+        return default, None
+
+    try:
+        requested = int(timeout)
+    except (TypeError, ValueError):
+        return None, "timeout must be a positive integer (seconds)"
+
+    if requested <= 0:
+        return None, (
+            "timeout must be > 0; omit the field to use the server default "
+            f"({default}s). Unlimited processes are not allowed."
+        )
+    if requested > absolute_max:
+        return None, (
+            f"timeout {requested}s exceeds absolute maximum "
+            f"({absolute_max}s)"
+        )
+    return requested, None
+
+
+def normalize_authoritative_user_id(raw: Any) -> str | None:
+    """Return a bounded owner user_id or None if missing/invalid.
+
+    Accepts only the server-side session identity shape (alphanumeric + a small
+    punctuation set, length-capped). Does not accept arbitrary API body text.
+    """
+    if raw is None:
+        return None
+    text = str(raw).strip()
+    if not text or len(text) > _MAX_OWNER_USER_ID_LEN:
+        return None
+    if not _OWNER_USER_ID_RE.fullmatch(text):
+        return None
+    return text
 
 
 class _LogBuffer:
@@ -224,30 +318,231 @@ class ProcessManager:
         *,
         stream_hub: Any | None = None,
         isolation_backend: IsolationBackend | None = None,
+        formal_dual_writer: FormalProcessDualWriter | None = None,
     ) -> None:
         self.repository = ProcessRepository(database)
         self._stream = stream_hub if stream_hub is not None else execution_stream
         self._isolation = isolation_backend or build_isolation_backend()
+        self._formal = formal_dual_writer or FormalProcessDualWriter(None)
         self._lock = threading.RLock()
         self._entries: dict[str, dict[str, Any]] = {}
         self._procs: dict[str, subprocess.Popen[Any]] = {}
         self._logs: dict[str, _LogBuffer] = {}
+        # Independent stream cursors (stdout / stderr) — PR-08 process_read.
+        self._stream_logs: dict[str, dict[str, StreamLogBuffer]] = {}
         self._done_events: dict[str, threading.Event] = {}
+        # Per-process stoppable stdout/stderr readers (poll-based, explicit stop).
+        self._readers: dict[str, tuple[StoppableStreamReader, StoppableStreamReader]] = {}
+        self._reader_done: dict[str, tuple[threading.Event, threading.Event]] = {}
+        # Authoritative process-group id captured at spawn (setsid leader).
+        self._pgids: dict[str, int] = {}
         self._cancel_requested: set[str] = set()
         self._timeout_timers: dict[str, threading.Timer] = {}
+        # Child workspace/temp total-quota samplers (process lifetime).
+        self._quota_watches: dict[str, ChildWorkspaceQuotaWatch] = {}
         self._max_log_chars = max(
             getattr(settings, "max_output_chars", 50_000) * 10,
             _DEFAULT_MAX_LOG_CHARS,
         )
-        self._max_managed = int(getattr(settings, "max_managed_processes", 32) or 32)
+        self._refresh_limits_from_settings()
         self._orphans_marked = 0
-        # Mark any pre-existing active rows as orphaned (runner restart).
+        # Mark any pre-existing active rows as LOST/ORPHANED (runner restart).
         self._mark_orphans_from_db()
+        with self._lock:
+            self._evict_terminal_if_needed()
+
+    def _refresh_limits_from_settings(self) -> None:
+        """Load caps from settings (supports test monkeypatch after construct)."""
+        self._max_managed = _positive_int(
+            getattr(settings, "max_managed_processes", 32), 32
+        )
+        self._max_managed_per_session = _positive_int(
+            getattr(settings, "max_managed_processes_per_session", 8), 8
+        )
+        self._max_managed_per_owner = _positive_int(
+            getattr(settings, "max_managed_processes_per_owner", 16), 16
+        )
+        self._max_terminal = _positive_int(
+            getattr(settings, "max_retained_terminal_processes", 256), 256
+        )
+        self._max_terminal_per_session = _positive_int(
+            getattr(settings, "max_retained_terminal_processes_per_session", 64),
+            64,
+        )
+
+    def _count_active_locked(
+        self,
+        *,
+        session_id: str | None = None,
+        owner_key: str | None = None,
+    ) -> int:
+        """Count non-terminal managed processes occupying a concurrency slot.
+
+        Includes CREATED (admitted, not yet spawned) so concurrent starts cannot
+        overshoot global / session / owner caps.
+        """
+        n = 0
+        for _pid, entry in self._entries.items():
+            if not _is_active(entry.get("status")):
+                continue
+            if session_id is not None and entry.get("session_id") != session_id:
+                continue
+            if owner_key is not None and entry.get("owner_key") != owner_key:
+                continue
+            n += 1
+        return n
+
+    def _owner_key_for(self, context: SandboxExecutionContext, session_id: str) -> str:
+        """Authoritative owner binding for active quotas.
+
+        Prefer non-empty ``context.user_id`` from the trusted session
+        (``SessionResponse.user_id`` via :meth:`SandboxExecutionContext.from_session`).
+        Never take owner identity from process API bodies.
+
+        Legacy/test contexts without ``user_id`` fall back to an explicitly
+        named workspace key (not a silent alias for tenant/user). There is no
+        org-level cap here — context does not carry organization_id.
+        """
+        user_id = normalize_authoritative_user_id(getattr(context, "user_id", None))
+        if user_id:
+            return f"user:{user_id}"
+        workspace_id = (context.workspace_id or "").strip()
+        if workspace_id:
+            return f"workspace:{workspace_id}"
+        return f"session:{session_id}"
+
+    def _clear_reader_handles_locked(self, process_id: str) -> None:
+        """Drop reader thread/event/pgid maps for *process_id* (must hold lock)."""
+        self._readers.pop(process_id, None)
+        self._reader_done.pop(process_id, None)
+        self._pgids.pop(process_id, None)
+
+    def _drop_terminal_memory_locked(self, process_id: str) -> bool:
+        """Drop in-memory structures for a terminal process. Never touches live procs."""
+        if process_id in self._procs:
+            return False
+        # Never drop while reader threads are still live (reaper must join first).
+        readers = self._readers.get(process_id)
+        if readers is not None and any(t.is_alive() for t in readers):
+            return False
+        entry = self._entries.get(process_id)
+        if entry is None:
+            # Still clean dangling maps if any
+            self._logs.pop(process_id, None)
+            self._stream_logs.pop(process_id, None)
+            self._done_events.pop(process_id, None)
+            self._clear_reader_handles_locked(process_id)
+            timer = self._timeout_timers.pop(process_id, None)
+            if timer is not None:
+                timer.cancel()
+            self._cancel_requested.discard(process_id)
+            return False
+        if not _is_terminal(entry.get("status")):
+            return False
+        self._entries.pop(process_id, None)
+        self._logs.pop(process_id, None)
+        self._stream_logs.pop(process_id, None)
+        self._done_events.pop(process_id, None)
+        self._clear_reader_handles_locked(process_id)
+        timer = self._timeout_timers.pop(process_id, None)
+        if timer is not None:
+            timer.cancel()
+        self._cancel_requested.discard(process_id)
+        return True
+
+    def _persist(self, entry: dict[str, Any]) -> None:
+        """Persist runtime ledger + optional formal dual-write."""
+        self.repository.upsert(entry)
+        try:
+            self._formal.upsert_from_runtime(entry)
+        except Exception:
+            logger.debug("formal dual-write wrapper failed", exc_info=True)
+
+    def _stream_buffers_locked(self, process_id: str) -> dict[str, StreamLogBuffer]:
+        bufs = self._stream_logs.get(process_id)
+        if bufs is None:
+            cap = max(self._max_log_chars // 2, 64_000)
+            bufs = {
+                "stdout": StreamLogBuffer(cap),
+                "stderr": StreamLogBuffer(cap),
+            }
+            self._stream_logs[process_id] = bufs
+        return bufs
+
+    def _cursors_for(self, process_id: str) -> tuple[str, str]:
+        with self._lock:
+            bufs = self._stream_logs.get(process_id)
+            if not bufs:
+                return INITIAL_CURSOR, INITIAL_CURSOR
+            out = bufs["stdout"]
+            err = bufs["stderr"]
+            return (
+                encode_cursor(out.generation, out.total),
+                encode_cursor(err.generation, err.total),
+            )
+
+    def _terminal_sort_key(self, entry: dict[str, Any]) -> str:
+        return str(
+            entry.get("finished_at")
+            or entry.get("updated_at")
+            or entry.get("created_at")
+            or ""
+        )
+
+    def _evict_terminal_if_needed(self) -> None:
+        """Bound terminal in-memory maps; active processes are never evicted.
+
+        Must be called with ``self._lock`` held. Terminal status/logs remain in
+        the authoritative DB and can be rehydrated on demand via :meth:`get`.
+        """
+        self._refresh_limits_from_settings()
+
+        def _terminal_candidates() -> list[tuple[str, dict[str, Any]]]:
+            out: list[tuple[str, dict[str, Any]]] = []
+            for pid, entry in self._entries.items():
+                if pid in self._procs:
+                    continue
+                if _is_terminal(entry.get("status")):
+                    out.append((pid, entry))
+            return out
+
+        # Per-session bound first (owner/session protection).
+        if self._max_terminal_per_session > 0:
+            by_session: dict[str, list[tuple[str, dict[str, Any]]]] = {}
+            for pid, entry in _terminal_candidates():
+                sid = str(entry.get("session_id") or "")
+                by_session.setdefault(sid, []).append((pid, entry))
+            for _sid, items in by_session.items():
+                if len(items) <= self._max_terminal_per_session:
+                    continue
+                items.sort(key=lambda pair: self._terminal_sort_key(pair[1]))
+                overflow = len(items) - self._max_terminal_per_session
+                for pid, _entry in items[:overflow]:
+                    self._drop_terminal_memory_locked(pid)
+
+        # Global bound.
+        if self._max_terminal > 0:
+            items = _terminal_candidates()
+            if len(items) > self._max_terminal:
+                items.sort(key=lambda pair: self._terminal_sort_key(pair[1]))
+                overflow = len(items) - self._max_terminal
+                for pid, _entry in items[:overflow]:
+                    self._drop_terminal_memory_locked(pid)
 
     # ── Orphan detection ─────────────────────────────────────────────
 
     def _mark_orphans_from_db(self) -> int:
-        """On startup, non-terminal process rows cannot have live handles."""
+        """On startup, resolve non-terminal rows without live Popen handles.
+
+        After a runner restart we **cannot** reattach stdout/stderr pipes.
+        Using durable ``pid`` + ``start_identity`` (+ pgid):
+
+        - identity still matches a live OS process → TERM/KILL that verified
+          tree, then mark ``LOST`` (control plane recovered, not RUNNING).
+        - identity missing or PID reuse → mark ``LOST`` **without** signaling
+          (never kill a reused PID).
+        - never leaves rows forever RUNNING after recovery.
+        """
         count = 0
         try:
             active = self.repository.list_active()
@@ -257,30 +552,81 @@ class ProcessManager:
             return 0
         now = _now_iso()
         for row in active:
-            pid = row["process_id"]
-            row["status"] = ProcessStatus.ORPHANED.value
+            process_id = row["process_id"]
+            os_pid = row.get("pid")
+            start_identity = row.get("start_identity")
+            pgid = row.get("pgid")
+            try:
+                pgid_i = int(pgid) if pgid is not None else None
+            except (TypeError, ValueError):
+                pgid_i = None
+
+            signaled = False
+            if os_pid is not None and start_identity:
+                # Only signal when durable identity still matches (PID reuse safe).
+                r = safe_signal_identity(
+                    pid=int(os_pid),
+                    pgid=pgid_i,
+                    start_identity=str(start_identity),
+                    signum=signal.SIGTERM,
+                )
+                if r.get("signaled"):
+                    signaled = True
+                    # Escalate if still alive under same identity.
+                    if identity_matches(int(os_pid), str(start_identity)):
+                        safe_signal_identity(
+                            pid=int(os_pid),
+                            pgid=pgid_i,
+                            start_identity=str(start_identity),
+                            signum=signal.SIGKILL,
+                        )
+            elif os_pid is not None and process_alive(os_pid) and not start_identity:
+                # No identity → fail closed: do not kill (possible PID reuse).
+                logger.warning(
+                    "process %s active after restart without start_identity; "
+                    "not signaling pid %s",
+                    process_id,
+                    os_pid,
+                )
+
+            row["status"] = ProcessStatus.LOST.value
             row["finished_at"] = row.get("finished_at") or now
             row["updated_at"] = now
-            row["error"] = row.get("error") or "orphaned: runner restart"
+            note = (
+                "lost: runner restart; identity-signaled"
+                if signaled
+                else "lost: runner restart; control plane cannot reattach"
+            )
+            row["error"] = row.get("error") or note
+            if row.get("exit_code") is None:
+                row["exit_code"] = -signal.SIGTERM if signaled else -1
             try:
-                self.repository.upsert(row)
+                self._persist(row)
             except Exception:
-                logger.exception("failed to mark process %s orphaned", pid)
-                continue
-            self._entries[pid] = row
-            self._logs[pid] = _LogBuffer(self._max_log_chars)
-            # Seed log buffer from persisted snapshots (best-effort).
-            buf = self._logs[pid]
+                try:
+                    self.repository.upsert(row)
+                except Exception:
+                    logger.exception("failed to mark process %s lost", process_id)
+                    continue
+            self._entries[process_id] = row
+            self._logs[process_id] = _LogBuffer(self._max_log_chars)
+            buf = self._logs[process_id]
             if row.get("stdout_log"):
                 buf.append("stdout", row["stdout_log"])
             if row.get("stderr_log"):
                 buf.append("stderr", row["stderr_log"])
-            self._done_events[pid] = threading.Event()
-            self._done_events[pid].set()
+            # Seed independent stream cursors from snapshots (best-effort).
+            streams = self._stream_buffers_locked(process_id)
+            if row.get("stdout_log"):
+                streams["stdout"].append(row["stdout_log"])
+            if row.get("stderr_log"):
+                streams["stderr"].append(row["stderr_log"])
+            self._done_events[process_id] = threading.Event()
+            self._done_events[process_id].set()
             count += 1
         self._orphans_marked = count
         if count:
-            logger.info("Marked %d process execution(s) as orphaned", count)
+            logger.info("Marked %d process execution(s) as LOST after restart", count)
         return count
 
     def mark_orphans(self) -> int:
@@ -314,6 +660,7 @@ class ProcessManager:
             temp_id=temp_id,
             physical_workspace=workspace,
             physical_temp=temp,
+            user_id=None,  # legacy/test path: workspace-scoped owner fallback
         )
 
     # ── Start ────────────────────────────────────────────────────────
@@ -330,8 +677,15 @@ class ProcessManager:
         background: bool = False,
         run_id: str | None = None,
         context: SandboxExecutionContext | None = None,
+        org_id: str | None = None,
+        conversation_id: str | None = None,
+        sandbox_session_id: str | None = None,
+        execution_id: str | None = None,
     ) -> dict[str, Any]:
-        """Spawn a managed process. Returns start payload or error dict."""
+        """Spawn a managed process. Returns start payload or error dict.
+
+        Returns immediately with a process handle (does not wait for exit).
+        """
         if not command or not str(command).strip():
             return {"error": "command is required", "status": "invalid"}
 
@@ -344,28 +698,60 @@ class ProcessManager:
                 "status": "blocked",
             }
 
+        effective_timeout, timeout_error = resolve_process_timeout(timeout)
+        if timeout_error is not None or effective_timeout is None:
+            return {
+                "error": timeout_error or "invalid timeout",
+                "status": "invalid",
+            }
+
         try:
             context = self._coerce_context(session_id, workspace_path, context)
             sandbox_cwd = parse_sandbox_path(cwd or ".")
         except (PermissionError, ValueError) as exc:
             return {"error": str(exc), "status": "invalid"}
         logical_cwd = sandbox_cwd.as_public()
+        owner_key = self._owner_key_for(context, session_id)
+
+        # Child quota monitoring admit (bounded measure; fail-closed).
+        admit = assert_child_quota_admit(
+            context.physical_workspace,
+            context.physical_temp,
+            workspace_id=context.workspace_id,
+        )
+        if not admit.allow:
+            return {
+                "error": format_decision_message(admit),
+                "status": "quota_exceeded",
+                "code": admit.code or "workspace_quota_enforcement_failed",
+            }
 
         process_id = f"proc_{uuid.uuid4().hex[:12]}"
         now = _now_iso()
+        user_id = normalize_authoritative_user_id(
+            getattr(context, "user_id", None)
+        )
         entry: dict[str, Any] = {
             "process_id": process_id,
             "session_id": session_id,
+            "sandbox_session_id": sandbox_session_id or session_id,
             "workspace_id": context.workspace_id,
+            "user_id": user_id,
+            "org_id": (org_id or "").strip() or None,
+            "conversation_id": (conversation_id or "").strip() or None,
+            "execution_id": execution_id or process_id,
+            "owner_key": owner_key,
             "run_id": run_id,
             "command": command,
             "cwd": logical_cwd,
             "env_json": None,
             "status": ProcessStatus.CREATED.value,
             "pid": None,
+            "pgid": None,
+            "start_identity": None,
             "exit_code": None,
             "background": bool(background),
-            "timeout_seconds": timeout,
+            "timeout_seconds": effective_timeout,
             "error": None,
             "stdout_log": "",
             "stderr_log": "",
@@ -384,27 +770,48 @@ class ProcessManager:
             entry["env_json"] = json.dumps(env, ensure_ascii=False)
 
         with self._lock:
-            active_count = sum(
-                1
-                for e in self._entries.values()
-                if _is_active(e.get("status")) and e.get("process_id") in self._procs
-            )
-            if self._max_managed > 0 and active_count >= self._max_managed:
+            self._refresh_limits_from_settings()
+            active_global = self._count_active_locked()
+            if self._max_managed > 0 and active_global >= self._max_managed:
                 return {
                     "error": f"Max managed processes ({self._max_managed}) reached",
                     "status": "conflict",
                 }
+            active_session = self._count_active_locked(session_id=session_id)
+            if (
+                self._max_managed_per_session > 0
+                and active_session >= self._max_managed_per_session
+            ):
+                return {
+                    "error": (
+                        f"Max managed processes for session "
+                        f"({self._max_managed_per_session}) reached"
+                    ),
+                    "status": "conflict",
+                }
+            active_owner = self._count_active_locked(owner_key=owner_key)
+            if (
+                self._max_managed_per_owner > 0
+                and active_owner >= self._max_managed_per_owner
+            ):
+                return {
+                    "error": (
+                        f"Max managed processes for owner "
+                        f"({self._max_managed_per_owner}) reached"
+                    ),
+                    "status": "conflict",
+                }
             self._entries[process_id] = entry
             self._logs[process_id] = _LogBuffer(self._max_log_chars)
+            self._stream_buffers_locked(process_id)
             self._done_events[process_id] = threading.Event()
-            self.repository.upsert(entry)
+            self._persist(entry)
+
+        # Hard RLIMIT_* + setsid only in child preexec (same path as bash/python).
+        _limit_kwargs = child_resource_limit_kwargs(settings)
 
         def _preexec() -> None:
-            apply_resource_limits(
-                max_process_count=settings.max_process_count,
-                max_memory_mb=settings.max_memory_mb,
-                max_cpu_seconds=settings.max_cpu_time_seconds,
-            )
+            apply_resource_limits(**_limit_kwargs)
 
         try:
             prepared = self._isolation.prepare(
@@ -434,34 +841,63 @@ class ProcessManager:
             )
         except FileNotFoundError as exc:
             return self._fail_start(entry, f"Command not found: {exc}")
-        except OSError as exc:
+        except (ResourceLimitError, subprocess.SubprocessError, OSError) as exc:
+            # Fail-closed: child never ran without requested hard limits.
             return self._fail_start(entry, f"Spawn failed: {exc}")
+
+        # Capture pgid while leader pid is still valid (setsid in preexec).
+        pgid = authoritative_pgid(proc)
+        # Retry capture: process table can lag a few ms after spawn (macOS ps).
+        start_identity = None
+        for _attempt in range(10):
+            os_ident = capture_process_identity(proc.pid, pgid=pgid)
+            if os_ident is not None and os_ident.start_identity:
+                start_identity = os_ident.start_identity
+                break
+            time.sleep(0.02)
+        if start_identity is None:
+            logger.warning(
+                "process %s pid=%s: no re-verifiable start_identity; "
+                "cancel/kill without live handle will fail closed "
+                "(live Popen retained for reaper)",
+                process_id,
+                proc.pid,
+            )
 
         started = _now_iso()
         with self._lock:
             # Cancel may have raced before spawn completed
             if process_id in self._cancel_requested:
-                terminate_process_group(proc, grace_seconds=0.5)
+                terminate_process_group(proc, grace_seconds=0.5, pgid=pgid)
                 entry["status"] = ProcessStatus.CANCELLED.value
                 entry["pid"] = proc.pid
+                entry["pgid"] = pgid
+                entry["start_identity"] = start_identity
                 entry["started_at"] = started
                 entry["finished_at"] = _now_iso()
                 entry["exit_code"] = -signal.SIGTERM
                 entry["updated_at"] = entry["finished_at"]
-                self.repository.upsert(entry)
+                self._persist(entry)
                 self._done_events[process_id].set()
+                self._clear_reader_handles_locked(process_id)
+                self._evict_terminal_if_needed()
                 return {
                     "process_id": process_id,
                     "status": ProcessStatus.CANCELLED.value,
                     "started_at": started,
+                    "stdout_cursor": INITIAL_CURSOR,
+                    "stderr_cursor": INITIAL_CURSOR,
                 }
 
             entry["status"] = ProcessStatus.RUNNING.value
             entry["pid"] = proc.pid
+            entry["pgid"] = pgid
+            entry["start_identity"] = start_identity
             entry["started_at"] = started
             entry["updated_at"] = started
             self._procs[process_id] = proc
-            self.repository.upsert(entry)
+            self._pgids[process_id] = pgid
+            self._persist(entry)
 
         # B3: lifecycle start event for Agent / SSE consumers
         try:
@@ -476,19 +912,23 @@ class ProcessManager:
         except Exception:
             logger.debug("execution_started emit failed for %s", process_id, exc_info=True)
 
-        # Reader threads + reaper
-        threading.Thread(
-            target=self._read_stream,
-            args=(process_id, proc.stdout, "stdout", run_id),
-            name=f"proc-stdout-{process_id}",
-            daemon=True,
-        ).start()
-        threading.Thread(
-            target=self._read_stream,
-            args=(process_id, proc.stderr, "stderr", run_id),
-            name=f"proc-stderr-{process_id}",
-            daemon=True,
-        ).start()
+        # Stoppable poll-based readers + reaper. Track handles so reaper can
+        # join (bounded) before snapshot; escaped setsid writers cannot hang.
+        r_out = StoppableStreamReader(
+            proc.stdout,
+            name=f"stdout-{process_id}",
+            on_text=self._make_stream_sink(process_id, "stdout", run_id),
+        )
+        r_err = StoppableStreamReader(
+            proc.stderr,
+            name=f"stderr-{process_id}",
+            on_text=self._make_stream_sink(process_id, "stderr", run_id),
+        )
+        with self._lock:
+            self._readers[process_id] = (r_out, r_err)
+            self._reader_done[process_id] = (r_out.done_event, r_err.done_event)
+        r_out.start()
+        r_err.start()
         threading.Thread(
             target=self._reap,
             args=(process_id, proc),
@@ -496,18 +936,65 @@ class ProcessManager:
             daemon=True,
         ).start()
 
-        if timeout is not None and timeout > 0:
-            timer = threading.Timer(float(timeout), self._on_timeout, args=(process_id,))
-            timer.daemon = True
-            with self._lock:
-                self._timeout_timers[process_id] = timer
-            timer.start()
+        # Always install a finite wall-clock timer (timeout is resolved above).
+        timer = threading.Timer(
+            float(effective_timeout), self._on_timeout, args=(process_id,)
+        )
+        timer.daemon = True
+        with self._lock:
+            self._timeout_timers[process_id] = timer
+        timer.start()
+
+        # Monitor workspace/temp (bounded); kill on over-quota or measure failure.
+        watch = ChildWorkspaceQuotaWatch(
+            workspace_path=context.physical_workspace,
+            temp_path=context.physical_temp,
+            workspace_id=context.workspace_id,
+            on_violation=lambda decision, pid=process_id: self._on_quota_violation(
+                pid, decision
+            ),
+        )
+        with self._lock:
+            self._quota_watches[process_id] = watch
+        watch.start()
 
         return {
             "process_id": process_id,
             "status": ProcessStatus.RUNNING.value,
             "started_at": started,
+            "timeout_seconds": effective_timeout,
+            "stdout_cursor": INITIAL_CURSOR,
+            "stderr_cursor": INITIAL_CURSOR,
         }
+
+    def _stop_quota_watch(self, process_id: str) -> ChildWorkspaceQuotaWatch | None:
+        with self._lock:
+            watch = self._quota_watches.pop(process_id, None)
+        if watch is not None:
+            watch.stop()
+        return watch
+
+    def _on_quota_violation(
+        self, process_id: str, decision: ChildQuotaDecision
+    ) -> None:
+        msg = format_decision_message(decision)
+        code = decision.code or "workspace_quota_enforcement_failed"
+        logger.warning(
+            "process %s child quota violation code=%s: %s", process_id, code, msg
+        )
+        with self._lock:
+            entry = self._entries.get(process_id)
+            if entry is None or _is_terminal(entry.get("status")):
+                return
+            entry["status"] = ProcessStatus.FAILED.value
+            entry["error"] = msg
+            entry["quota_code"] = code
+            entry["updated_at"] = _now_iso()
+            proc = self._procs.get(process_id)
+            pgid = self._pgids.get(process_id)
+            self._persist(entry)
+        if proc is not None:
+            terminate_process_group(proc, grace_seconds=0.5, pgid=pgid)
 
     def _fail_start(self, entry: dict[str, Any], error: str) -> dict[str, Any]:
         now = _now_iso()
@@ -517,10 +1004,11 @@ class ProcessManager:
         entry["updated_at"] = now
         entry["exit_code"] = -1
         with self._lock:
-            self.repository.upsert(entry)
+            self._persist(entry)
             done = self._done_events.get(entry["process_id"])
             if done:
                 done.set()
+            self._evict_terminal_if_needed()
         # B3: surface failed start on the event stream
         try:
             self._stream.emit_started(
@@ -542,43 +1030,101 @@ class ProcessManager:
 
     # ── Stream readers / reaper ──────────────────────────────────────
 
-    def _read_stream(
+    def _make_stream_sink(
         self,
         process_id: str,
-        stream: Any,
         name: str,
-        run_id: str | None = None,
-    ) -> None:
-        try:
-            while True:
-                chunk = stream.read(4096)
-                if not chunk:
-                    break
-                text = chunk.decode("utf-8", errors="replace")
+        run_id: str | None,
+    ) -> Any:
+        """Return ``on_text`` callback for a stoppable stream reader."""
+
+        def _on_text(text: str) -> None:
+            if not text:
+                return
+            with self._lock:
                 buf = self._logs.get(process_id)
                 if buf is not None:
                     buf.append(name, text)
-                # B3: live delta + durable chunk
-                try:
-                    self._stream.emit_delta(
-                        source_type=SOURCE_PROCESS,
-                        source_id=process_id,
-                        stream=name,
-                        text=text,
-                        run_id=run_id,
-                        persist_chunk=True,
-                    )
-                except Exception:
-                    logger.debug(
-                        "delta emit failed %s/%s", process_id, name, exc_info=True
-                    )
-        except Exception:
-            logger.debug("stream reader %s/%s ended with error", process_id, name, exc_info=True)
-        finally:
+                streams = self._stream_logs.get(process_id)
+                if streams is not None and name in streams:
+                    streams[name].append(text)
             try:
-                stream.close()
+                self._stream.emit_delta(
+                    source_type=SOURCE_PROCESS,
+                    source_id=process_id,
+                    stream=name,
+                    text=text,
+                    run_id=run_id,
+                    persist_chunk=True,
+                )
             except Exception:
-                pass
+                logger.debug(
+                    "delta emit failed %s/%s", process_id, name, exc_info=True
+                )
+
+        return _on_text
+
+    def _join_readers(
+        self,
+        process_id: str,
+        proc: subprocess.Popen[Any],
+    ) -> bool:
+        """Join stdout/stderr readers after the leader exits.
+
+        Mirrors ``run_with_timeout``: bounded natural drain → kill saved
+        process group for same-group orphans → explicit ``request_stop`` for
+        escaped ``setsid`` writers. Every join has a hard upper bound; never
+        bare ``Thread.join()``. Returns True when both readers have exited.
+        """
+        with self._lock:
+            readers = list(self._readers.get(process_id) or ())
+            pgid = self._pgids.get(process_id)
+
+        if not readers:
+            return True
+
+        def _bounded_join(window: float) -> None:
+            deadline = time.monotonic() + max(0.0, float(window))
+            for r in readers:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    r.join(timeout=0.0)
+                    continue
+                r.join(timeout=remaining)
+
+        # 1) Natural drain — well-behaved children close pipes on exit.
+        _bounded_join(_READER_JOIN_SECONDS)
+
+        if any(r.is_alive() for r in readers):
+            # 2) Same-group orphans still holding pipes.
+            terminate_process_group(
+                proc,
+                grace_seconds=_ORPHAN_GROUP_GRACE_SECONDS,
+                pgid=pgid,
+            )
+            _bounded_join(_READER_JOIN_SECONDS)
+
+        if any(r.is_alive() for r in readers):
+            terminate_process_group(
+                proc,
+                grace_seconds=0.0,
+                pgid=pgid,
+            )
+            _bounded_join(_READER_JOIN_SECONDS)
+
+        if any(r.is_alive() for r in readers):
+            # 3) Escaped setsid writers: stop readers (poll loop exits promptly).
+            # Never bare-join — that hangs when pipes stay open forever.
+            stop_and_join_readers(readers, timeout=_READER_STOP_JOIN_SECONDS)
+
+        drained = not any(r.is_alive() for r in readers)
+        if not drained:
+            logger.error(
+                "process %s reader threads still alive after drain; "
+                "terminal snapshot may be incomplete",
+                process_id,
+            )
+        return drained
 
     def _emit_terminal_for(self, process_id: str, entry: dict[str, Any]) -> None:
         """Best-effort B3 terminal event (idempotent via separate sequence)."""
@@ -610,12 +1156,14 @@ class ProcessManager:
             logger.exception("wait failed for %s", process_id)
             exit_code = -1
 
-        # Give readers a moment to drain pipes
-        time.sleep(0.05)
+        # Drain stdout/stderr fully before snapshot / DB upsert / eviction.
+        readers_drained = self._join_readers(process_id, proc)
+        quota_watch = self._stop_quota_watch(process_id)
 
         with self._lock:
             entry = self._entries.get(process_id)
             if entry is None:
+                self._clear_reader_handles_locked(process_id)
                 return
             # Cancel timeout timer
             timer = self._timeout_timers.pop(process_id, None)
@@ -625,19 +1173,28 @@ class ProcessManager:
             self._procs.pop(process_id, None)
             current = _status_value(entry.get("status"))
 
-            # Persist log snapshot
+            # Persist log snapshot only after readers finished (or drain failed).
             buf = self._logs.get(process_id)
             if buf is not None:
                 stdout, stderr, total, truncated = buf.snapshot_logs()
                 entry["stdout_log"] = stdout
                 entry["stderr_log"] = stderr
                 entry["log_total"] = total
-                entry["log_truncated"] = truncated
+                entry["log_truncated"] = truncated or (not readers_drained)
+            elif not readers_drained:
+                entry["log_truncated"] = True
+
+            if not readers_drained:
+                # Do not silently present incomplete terminal logs as complete.
+                note = "log drain incomplete: reader threads did not exit"
+                prev_err = entry.get("error")
+                entry["error"] = f"{prev_err}; {note}" if prev_err else note
 
             if current in (
                 ProcessStatus.CANCELLED.value,
                 ProcessStatus.TIMEOUT.value,
                 ProcessStatus.ORPHANED.value,
+                ProcessStatus.LOST.value,
             ):
                 # Already finalized by cancel/timeout/orphan path
                 if entry.get("exit_code") is None:
@@ -645,7 +1202,7 @@ class ProcessManager:
                 entry["updated_at"] = _now_iso()
                 if not entry.get("finished_at"):
                     entry["finished_at"] = entry["updated_at"]
-                self.repository.upsert(entry)
+                self._persist(entry)
                 self._done_events[process_id].set()
                 # Still emit terminal for SSE if not already (timeout/cancel may have)
                 terminal_entry = dict(entry)
@@ -655,17 +1212,33 @@ class ProcessManager:
                 now = _now_iso()
                 entry["finished_at"] = now
                 entry["updated_at"] = now
-                self.repository.upsert(entry)
+                self._persist(entry)
                 self._cancel_requested.discard(process_id)
                 self._done_events[process_id].set()
                 terminal_entry = dict(entry)
-            elif exit_code == 0:
+            elif (
+                exit_code == 0
+                and readers_drained
+                and not (quota_watch is not None and quota_watch.exceeded)
+                and current != ProcessStatus.FAILED.value
+            ):
                 entry["status"] = ProcessStatus.COMPLETED.value
                 entry["exit_code"] = 0
                 now = _now_iso()
                 entry["finished_at"] = now
                 entry["updated_at"] = now
-                self.repository.upsert(entry)
+                self._persist(entry)
+                self._cancel_requested.discard(process_id)
+                self._done_events[process_id].set()
+                terminal_entry = dict(entry)
+            elif exit_code == 0 and not readers_drained:
+                # Exit 0 but incomplete drain → failed, not silent completed.
+                entry["status"] = ProcessStatus.FAILED.value
+                entry["exit_code"] = 0
+                now = _now_iso()
+                entry["finished_at"] = now
+                entry["updated_at"] = now
+                self._persist(entry)
                 self._cancel_requested.discard(process_id)
                 self._done_events[process_id].set()
                 terminal_entry = dict(entry)
@@ -675,14 +1248,19 @@ class ProcessManager:
                 now = _now_iso()
                 entry["finished_at"] = now
                 entry["updated_at"] = now
-                self.repository.upsert(entry)
+                self._persist(entry)
                 self._cancel_requested.discard(process_id)
                 self._done_events[process_id].set()
                 terminal_entry = dict(entry)
 
+            # Readers joined (or marked incomplete); drop handles before eviction.
+            self._clear_reader_handles_locked(process_id)
+            self._evict_terminal_if_needed()
+
         self._emit_terminal_for(process_id, terminal_entry)
 
     def _on_timeout(self, process_id: str) -> None:
+        entry_snap: dict[str, Any] | None = None
         with self._lock:
             entry = self._entries.get(process_id)
             if entry is None or _is_terminal(entry.get("status")):
@@ -690,10 +1268,24 @@ class ProcessManager:
             entry["status"] = ProcessStatus.TIMEOUT.value
             entry["updated_at"] = _now_iso()
             proc = self._procs.get(process_id)
-            self.repository.upsert(entry)
+            pgid = self._pgids.get(process_id)
+            entry_snap = {
+                "pid": entry.get("pid"),
+                "pgid": entry.get("pgid") or pgid,
+                "start_identity": entry.get("start_identity"),
+            }
+            self._persist(entry)
 
         if proc is not None:
-            terminate_process_group(proc, grace_seconds=1.0)
+            terminate_process_group(proc, grace_seconds=1.0, pgid=pgid)
+        elif entry_snap is not None:
+            # No live handle: identity-safe signal only (never blind PID kill).
+            safe_signal_identity(
+                pid=entry_snap.get("pid"),
+                pgid=entry_snap.get("pgid"),
+                start_identity=entry_snap.get("start_identity"),
+                signum=signal.SIGKILL,
+            )
 
         with self._lock:
             entry = self._entries.get(process_id)
@@ -703,7 +1295,7 @@ class ProcessManager:
                 if entry.get("exit_code") is None:
                     entry["exit_code"] = -signal.SIGKILL
                 entry["updated_at"] = entry["finished_at"]
-                self.repository.upsert(entry)
+                self._persist(entry)
 
     # ── Query ────────────────────────────────────────────────────────
 
@@ -715,8 +1307,27 @@ class ProcessManager:
         row = self.repository.get(process_id)
         if row is None:
             return None
+        # Terminal rows: serve from authoritative DB without re-growing memory maps.
+        if _is_terminal(row.get("status")):
+            return self._public_view(row)
         with self._lock:
-            self._entries.setdefault(process_id, row)
+            # Re-check after DB read (spawn race).
+            mem = self._entries.get(process_id)
+            if mem is not None:
+                return self._public_view(mem)
+            if not row.get("owner_key"):
+                uid = normalize_authoritative_user_id(row.get("user_id"))
+                if uid:
+                    row["owner_key"] = f"user:{uid}"
+                else:
+                    wid = (row.get("workspace_id") or "").strip()
+                    if wid:
+                        row["owner_key"] = f"workspace:{wid}"
+                    else:
+                        row["owner_key"] = (
+                            f"session:{row.get('session_id') or ''}"
+                        )
+            self._entries[process_id] = row
             if process_id not in self._logs:
                 buf = _LogBuffer(self._max_log_chars)
                 if row.get("stdout_log"):
@@ -725,13 +1336,22 @@ class ProcessManager:
                     buf.append("stderr", row["stderr_log"])
                 self._logs[process_id] = buf
             if process_id not in self._done_events:
-                ev = threading.Event()
-                if _is_terminal(row.get("status")):
-                    ev.set()
-                self._done_events[process_id] = ev
-        return self._public_view(row)
+                self._done_events[process_id] = threading.Event()
+            return self._public_view(self._entries[process_id])
 
     def _public_view(self, entry: dict[str, Any]) -> dict[str, Any]:
+        process_id = entry["process_id"]
+        stdout_c, stderr_c = self._cursors_for(process_id)
+        started = entry.get("started_at")
+        elapsed = None
+        if started:
+            try:
+                from datetime import datetime as _dt
+
+                t0 = _dt.fromisoformat(str(started).replace("Z", "+00:00"))
+                elapsed = max(0, int((_dt.now(timezone.utc) - t0).total_seconds()))
+            except Exception:
+                elapsed = None
         return {
             "process_id": entry["process_id"],
             "session_id": entry["session_id"],
@@ -743,11 +1363,16 @@ class ProcessManager:
             "background": bool(entry.get("background")),
             "cwd": entry.get("cwd"),
             "error": entry.get("error"),
+            "timeout_seconds": entry.get("timeout_seconds"),
             "started_at": entry.get("started_at"),
             "finished_at": entry.get("finished_at"),
             "created_at": entry.get("created_at", ""),
             "updated_at": entry.get("updated_at", ""),
             "trace_id": entry.get("trace_id"),
+            "stdout_cursor": stdout_c if _is_active(entry.get("status")) else stdout_c,
+            "stderr_cursor": stderr_c,
+            "elapsed_seconds": elapsed,
+            # Do not expose start_identity / org internals on public view.
         }
 
     def logs(
@@ -761,16 +1386,55 @@ class ProcessManager:
         if entry is None:
             return None
         lim = limit if limit is not None else settings.max_output_chars
+        completed = _is_terminal(entry.get("status"))
         with self._lock:
             buf = self._logs.get(process_id)
-            if buf is None:
+            if buf is not None:
+                stdout, stderr, next_offset, truncated = buf.slice(offset, lim)
+                log_total = buf.total
+            else:
                 stdout = ""
                 stderr = ""
                 next_offset = offset
                 truncated = False
-            else:
-                stdout, stderr, next_offset, truncated = buf.slice(offset, lim)
-            completed = _is_terminal(entry.get("status"))
+                log_total = 0
+                buf = None
+
+        # After terminal eviction (or restart), rebuild from DB snapshots.
+        if buf is None:
+            row = self.repository.get(process_id)
+            if row is not None:
+                full_out = row.get("stdout_log") or ""
+                full_err = row.get("stderr_log") or ""
+                log_total = int(row.get("log_total") or 0) or (
+                    len(full_out) + len(full_err)
+                )
+                truncated = bool(row.get("log_truncated"))
+                if offset <= 0:
+                    # Apply limit to combined stdout first, then stderr remainder.
+                    if lim > 0 and len(full_out) > lim:
+                        stdout = full_out[:lim]
+                        stderr = ""
+                        next_offset = lim
+                    elif lim > 0 and len(full_out) + len(full_err) > lim:
+                        stdout = full_out
+                        stderr = full_err[: max(0, lim - len(full_out))]
+                        next_offset = lim
+                    else:
+                        stdout = full_out
+                        stderr = full_err
+                        next_offset = log_total
+                elif offset >= log_total:
+                    stdout = ""
+                    stderr = ""
+                    next_offset = log_total
+                else:
+                    # Offset past interleaved history is not fully recoverable from
+                    # separate snapshots; return empty slice rather than invent data.
+                    stdout = ""
+                    stderr = ""
+                    next_offset = log_total
+                    truncated = True
 
         # Prefer durable chunks when memory buffer missed history (restart / truncate).
         if (not stdout and not stderr) or truncated:
@@ -794,9 +1458,6 @@ class ProcessManager:
         loc = full_log_location(
             SOURCE_PROCESS, process_id, session_id=entry.get("session_id")
         )
-        with self._lock:
-            buf2 = self._logs.get(process_id)
-            log_total = buf2.total if buf2 is not None else 0
         return {
             "stdout": stdout,
             "stderr": stderr,
@@ -845,10 +1506,13 @@ class ProcessManager:
         entry = self.get(process_id)
         if entry is None:
             return None
+        if _is_terminal(entry.get("status")):
+            return entry
         with self._lock:
             done = self._done_events.get(process_id)
         if done is None:
-            return entry
+            # No sync object: re-read (may have become terminal / DB-only).
+            return self.get(process_id)
         wait_s = _DEFAULT_WAIT_SECONDS if timeout is None else max(0.0, float(timeout))
         done.wait(timeout=wait_s)
         return self.get(process_id)
@@ -909,92 +1573,324 @@ class ProcessManager:
                 return {"error": "not found", "status": "not_found"}
             self._entries[process_id] = entry
             if _is_terminal(entry.get("status")):
-                return {"error": "process is not running", "status": "terminal"}
+                # Idempotent: already terminal is not an error for kill semantics.
+                return {
+                    "ok": True,
+                    "status": _status_value(entry.get("status")),
+                    "signal": signum,
+                    "idempotent": True,
+                }
             proc = self._procs.get(process_id)
+            pgid = self._pgids.get(process_id) or entry.get("pgid")
             pid = entry.get("pid") or (proc.pid if proc else None)
+            start_identity = entry.get("start_identity")
 
         if proc is None and pid is None:
             return {"error": "no live process handle", "status": "unavailable"}
 
+        delivered = False
         try:
             if proc is not None:
+                # Live Popen handle: we own the process; signal without identity.
+                # Keep the handle so the reaper can finalize (do not drop it).
                 try:
-                    os.killpg(os.getpgid(proc.pid), signum)
+                    if pgid is not None:
+                        os.killpg(int(pgid), signum)
+                    else:
+                        os.killpg(os.getpgid(proc.pid), signum)
+                    delivered = True
                 except (ProcessLookupError, PermissionError, OSError):
-                    proc.send_signal(signum)
+                    try:
+                        proc.send_signal(signum)
+                        delivered = True
+                    except (ProcessLookupError, PermissionError, OSError) as exc:
+                        return {
+                            "error": f"signal failed: {exc}",
+                            "status": "failed",
+                            "signaled": False,
+                        }
             else:
-                os.kill(int(pid), signum)
+                # No handle: only signal if durable identity still matches.
+                if not process_alive(pid):
+                    # Already gone — ok without signal delivery.
+                    with self._lock:
+                        entry["updated_at"] = _now_iso()
+                        if not _is_terminal(entry.get("status")):
+                            entry["status"] = ProcessStatus.CANCELLED.value
+                            entry["finished_at"] = entry.get("finished_at") or _now_iso()
+                            if entry.get("exit_code") is None:
+                                entry["exit_code"] = -signum
+                            self._persist(entry)
+                            done = self._done_events.get(process_id)
+                            if done:
+                                done.set()
+                    return {
+                        "ok": True,
+                        "status": _status_value(entry.get("status")),
+                        "signal": signum,
+                        "already_dead": True,
+                    }
+                r = safe_signal_identity(
+                    pid=pid,
+                    pgid=int(pgid) if pgid is not None else None,
+                    start_identity=start_identity,
+                    signum=signum,
+                )
+                if not r.get("signaled"):
+                    # Never claim success when identity is unverifiable / mismatch.
+                    return {
+                        "error": "process identity mismatch, missing, or gone",
+                        "status": "unavailable",
+                        "reason": r.get("reason"),
+                        "ok": False,
+                        "signaled": False,
+                    }
+                delivered = True
         except (ProcessLookupError, PermissionError, OSError) as exc:
-            return {"error": f"signal failed: {exc}", "status": "failed"}
+            return {
+                "error": f"signal failed: {exc}",
+                "status": "failed",
+                "ok": False,
+                "signaled": False,
+            }
+
+        if not delivered:
+            return {
+                "error": "signal not delivered",
+                "status": "failed",
+                "ok": False,
+                "signaled": False,
+            }
 
         with self._lock:
             entry["updated_at"] = _now_iso()
-            # SIGTERM/SIGINT via signal API is not full cancel unless SIGKILL
+            # SIGKILL via signal API escalates cancel request.
             if signum == signal.SIGKILL:
                 self._cancel_requested.add(process_id)
-                entry["status"] = ProcessStatus.CANCEL_REQUESTED.value
-            self.repository.upsert(entry)
+                if not _is_terminal(entry.get("status")):
+                    entry["status"] = ProcessStatus.CANCEL_REQUESTED.value
+            self._persist(entry)
 
         return {
             "ok": True,
             "status": _status_value(entry.get("status")),
             "signal": signum,
+            "signaled": True,
         }
 
     def cancel(self, process_id: str) -> bool:
-        """Request cancel: SIGTERM process group, mark cancel_requested → cancelled."""
+        """Request cancel: kill process group, mark cancelled only when safe.
+
+        Idempotent: repeated cancel on terminal process returns True without
+        re-signaling.
+
+        Rules (PR-08 fail-closed):
+        - Live Popen handle → terminate via handle; keep handle for reaper;
+          return True (request delivered). Reaper writes terminal status.
+        - No handle + process dead → write CANCELLED, return True.
+        - No handle + re-verifiable identity match → signal; if still alive
+          after KILL attempt, do **not** write false CANCELLED; return False.
+        - No handle + no identity / mismatch → never signal, never claim
+          CANCELLED while alive; return False.
+        """
         with self._lock:
             entry = self._entries.get(process_id) or self.repository.get(process_id)
             if entry is None:
                 return False
             self._entries[process_id] = entry
             status = entry.get("status")
-            if _is_terminal(status) and process_id not in self._cancel_requested:
-                return False
+            if _is_terminal(status):
+                return True
             if not _is_active(status) and process_id not in self._cancel_requested:
                 return False
 
             self._cancel_requested.add(process_id)
             entry["status"] = ProcessStatus.CANCEL_REQUESTED.value
             entry["updated_at"] = _now_iso()
-            self.repository.upsert(entry)
+            self._persist(entry)
             proc = self._procs.get(process_id)
+            pgid = self._pgids.get(process_id) or entry.get("pgid")
+            start_identity = entry.get("start_identity")
+            pid = entry.get("pid")
             timer = self._timeout_timers.pop(process_id, None)
             if timer is not None:
                 timer.cancel()
 
+        via_handle = False
+        identity_signaled = False
         if proc is not None:
-            terminate_process_group(proc, grace_seconds=2.0)
+            # Own the live handle: terminate group; reaper finalizes terminal.
+            terminate_process_group(proc, grace_seconds=2.0, pgid=pgid)
+            via_handle = True
+        else:
+            if pid is not None and not process_alive(pid):
+                # Already reaped externally.
+                with self._lock:
+                    entry = self._entries.get(process_id) or entry
+                    if not _is_terminal(entry.get("status")):
+                        entry["status"] = ProcessStatus.CANCELLED.value
+                        if entry.get("exit_code") is None:
+                            entry["exit_code"] = -signal.SIGTERM
+                        entry["finished_at"] = entry.get("finished_at") or _now_iso()
+                        entry["updated_at"] = _now_iso()
+                        self._persist(entry)
+                        done = self._done_events.get(process_id)
+                        if done:
+                            done.set()
+                return True
+
+            r = safe_signal_identity(
+                pid=pid,
+                pgid=int(pgid) if pgid is not None else None,
+                start_identity=start_identity,
+                signum=signal.SIGTERM,
+            )
+            if r.get("signaled"):
+                identity_signaled = True
+                # Escalate if still the same process.
+                if identity_matches(pid, start_identity):
+                    safe_signal_identity(
+                        pid=pid,
+                        pgid=int(pgid) if pgid is not None else None,
+                        start_identity=start_identity,
+                        signum=signal.SIGKILL,
+                    )
+            else:
+                # Cannot verify / cannot signal: leave cancel_requested, no fake end.
+                with self._lock:
+                    entry = self._entries.get(process_id) or entry
+                    if not _is_terminal(entry.get("status")):
+                        entry["status"] = ProcessStatus.CANCEL_REQUESTED.value
+                        prev = entry.get("error")
+                        note = (
+                            "cancel not delivered: "
+                            f"{r.get('reason') or 'identity_unverified'}"
+                        )
+                        entry["error"] = f"{prev}; {note}" if prev else note
+                        entry["updated_at"] = _now_iso()
+                        self._persist(entry)
+                return False
 
         with self._lock:
             entry = self._entries.get(process_id) or entry
+            still_have_handle = process_id in self._procs
+
+            if via_handle and still_have_handle:
+                # Reaper will mark CANCELLED; do not invent terminal state.
+                return True
+
+            if still_have_handle:
+                return True
+
+            # No live handle: only write CANCELLED if the OS process is gone
+            # or we successfully identity-signaled and it is no longer alive.
+            alive = process_alive(pid) if pid is not None else False
+            if alive and not identity_signaled:
+                entry["status"] = ProcessStatus.CANCEL_REQUESTED.value
+                note = "cancel incomplete: process still alive"
+                prev = entry.get("error")
+                entry["error"] = f"{prev}; {note}" if prev else note
+                entry["updated_at"] = _now_iso()
+                self._persist(entry)
+                return False
+
+            if alive and identity_signaled:
+                # Brief grace: re-check once more under identity.
+                if identity_matches(pid, start_identity) and process_alive(pid):
+                    entry["status"] = ProcessStatus.CANCEL_REQUESTED.value
+                    note = "cancel signaled but process still alive"
+                    prev = entry.get("error")
+                    entry["error"] = f"{prev}; {note}" if prev else note
+                    entry["updated_at"] = _now_iso()
+                    self._persist(entry)
+                    return False
+
             if not _is_terminal(entry.get("status")) or _status_value(
                 entry.get("status")
             ) == ProcessStatus.CANCEL_REQUESTED.value:
-                # If reaper already finished, ensure terminal cancelled
-                if process_id not in self._procs:
-                    entry["status"] = ProcessStatus.CANCELLED.value
-                    if entry.get("exit_code") is None:
-                        entry["exit_code"] = -signal.SIGTERM
-                    entry["finished_at"] = entry.get("finished_at") or _now_iso()
-                    entry["updated_at"] = _now_iso()
-                    self.repository.upsert(entry)
-                    done = self._done_events.get(process_id)
-                    if done:
-                        done.set()
-                else:
-                    # Still reaping — leave cancel_requested; reaper finalizes
-                    pass
+                entry["status"] = ProcessStatus.CANCELLED.value
+                if entry.get("exit_code") is None:
+                    entry["exit_code"] = -signal.SIGTERM
+                entry["finished_at"] = entry.get("finished_at") or _now_iso()
+                entry["updated_at"] = _now_iso()
+                self._persist(entry)
+                done = self._done_events.get(process_id)
+                if done:
+                    done.set()
             return True
+
+    def read_stream(
+        self,
+        process_id: str,
+        *,
+        stream: str = "stdout",
+        cursor: str | None = INITIAL_CURSOR,
+        limit: int = 8192,
+    ) -> dict[str, Any] | None:
+        """Incremental cursor read for one stream (process_read contract).
+
+        Never loads entire log history into a new buffer beyond retained window.
+        """
+        entry = self.get(process_id)
+        if entry is None:
+            return None
+        stream_name = "stderr" if str(stream).lower() == "stderr" else "stdout"
+        try:
+            cur = parse_cursor(cursor)
+        except ValueError as exc:
+            return {
+                "process_id": process_id,
+                "stream": stream_name,
+                "error": str(exc),
+                "status": "invalid",
+            }
+        lim = max(1, min(int(limit or 8192), 65_536))
+        completed = _is_terminal(entry.get("status"))
+        with self._lock:
+            bufs = self._stream_logs.get(process_id)
+            if bufs is None:
+                # Rebuild stream buffers from durable chunks / snapshots (bounded).
+                bufs = self._stream_buffers_locked(process_id)
+                row = self.repository.get(process_id)
+                if row is not None:
+                    if row.get("stdout_log") and not bufs["stdout"].total:
+                        bufs["stdout"].append(row["stdout_log"])
+                    if row.get("stderr_log") and not bufs["stderr"].total:
+                        bufs["stderr"].append(row["stderr_log"])
+            sbuf = bufs[stream_name]
+            result = sbuf.read(cur, limit=lim)
+
+        return {
+            "process_id": process_id,
+            "stream": stream_name,
+            "cursor": result["cursor"],
+            "next_cursor": result["next_cursor"],
+            "data": result["data"],
+            "truncated": bool(result.get("truncated")),
+            "completed": completed,
+            "status": entry.get("status"),
+            "dropped": bool(result.get("dropped")),
+            "log_total": int(result.get("log_total") or 0),
+        }
 
     def cancel_for_session(
         self,
         session_id: str,
         *,
         foreground_only: bool = False,
-    ) -> list[str]:
-        """Cancel processes owned by a session. Returns cancelled process_ids."""
+        return_details: bool = False,
+    ) -> list[str] | dict[str, list[str]]:
+        """Cancel processes owned by a session.
+
+        Returns only process_ids for which cancel was **delivered** (or already
+        terminal). Undelivered actives are omitted from the success list.
+
+        When ``return_details=True``, returns
+        ``{"cancelled": [...], "failed": [...]}`` so callers can surface partial
+        batch failure without inventing terminal success.
+        """
         cancelled: list[str] = []
+        failed: list[str] = []
         with self._lock:
             candidates = [
                 e
@@ -1013,8 +1909,13 @@ class ProcessManager:
         for entry in candidates:
             if foreground_only and entry.get("background"):
                 continue
-            if self.cancel(entry["process_id"]):
-                cancelled.append(entry["process_id"])
+            pid = entry["process_id"]
+            if self.cancel(pid):
+                cancelled.append(pid)
+            else:
+                failed.append(pid)
+        if return_details:
+            return {"cancelled": cancelled, "failed": failed}
         return cancelled
 
     def cancel_for_workspace(
@@ -1049,9 +1950,18 @@ class ProcessManager:
                 self.wait(process_id, timeout=remaining)
         return cancelled
 
-    def cancel_for_run(self, run_id: str) -> list[str]:
-        """Cancel all processes associated with an agent run."""
+    def cancel_for_run(
+        self,
+        run_id: str,
+        *,
+        return_details: bool = False,
+    ) -> list[str] | dict[str, list[str]]:
+        """Cancel all processes associated with an agent run.
+
+        Success list contains only delivered cancels (see ``cancel_for_session``).
+        """
         cancelled: list[str] = []
+        failed: list[str] = []
         with self._lock:
             candidates = [
                 e
@@ -1067,8 +1977,13 @@ class ProcessManager:
             logger.exception("list_by_run failed during cancel")
 
         for entry in candidates:
-            if self.cancel(entry["process_id"]):
-                cancelled.append(entry["process_id"])
+            pid = entry["process_id"]
+            if self.cancel(pid):
+                cancelled.append(pid)
+            else:
+                failed.append(pid)
+        if return_details:
+            return {"cancelled": cancelled, "failed": failed}
         return cancelled
 
     @property

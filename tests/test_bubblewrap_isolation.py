@@ -75,8 +75,32 @@ def test_bwrap_maps_workspace_temp_and_readonly_skills(tmp_path):
         "--clearenv",
     ):
         assert flag in prepared.argv
+    # Private procfs (not outer --bind /proc /proc).
+    assert "--proc" in prepared.argv
+    proc_idx = prepared.argv.index("--proc")
+    assert prepared.argv[proc_idx + 1] == "/proc"
+    # Must not bind the outer container /proc view.
+    bind_pairs = _pairs(prepared.argv, "--bind")
+    assert ("/proc", "/proc") not in bind_pairs
     assert "VISIBLE" in prepared.argv
     assert prepared.env == {"PATH": "/usr/bin:/bin", "LANG": "C.UTF-8"}
+
+
+def test_bwrap_preflight_uses_private_proc():
+    """Preflight argv must also use private --proc (static contract)."""
+    from pathlib import Path
+
+    source = Path("sandbox/isolation/bubblewrap.py").read_text(encoding="utf-8")
+    assert '"--proc"' in source or "'--proc'" in source
+    # Outer-container proc bind is forbidden in both prepare and preflight.
+    assert '"--bind",\n            "/proc"' not in source
+    assert "'--bind', '/proc'" not in source
+    # Do not claim real process isolation from argv-only unit tests.
+    assert "--unshare-cgroup" not in source  # deferred unless container-proven
+    # RLIMIT is applied by callers' preexec before exec of bwrap — not here.
+    assert "import resource" not in source
+    assert "resource.setrlimit" not in source
+    assert "RLIMIT" in source  # documented inheritance contract
 
 
 def test_bwrap_can_start_process_in_persistent_temp(tmp_path):

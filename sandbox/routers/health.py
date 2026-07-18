@@ -93,7 +93,12 @@ def _workspace_ready() -> tuple[bool, float]:
 
 
 def _database_ready() -> bool:
-    """Ping persistence without returning connection details or URLs."""
+    """Ping legacy persistence without returning connection details or URLs.
+
+    Used only when the internal plane is **disabled** (dev compatibility).
+    When the plane is enabled, readiness must not treat this global DB as a
+    substitute for the plane claim-MySQL bundle.
+    """
     try:
         with database.connect() as conn:
             conn.execute("SELECT 1")
@@ -151,9 +156,36 @@ def ready(response: Response):
             isolation = isolation_preflight.snapshot()
 
     ws_ok, free = _workspace_ready()
-    db_ok = _database_ready()
     isolation_ok = isolation.checked and isolation.passed
-    is_ready = ws_ok and db_ok and isolation_ok
+    plane_enabled = bool(getattr(settings, "internal_plane_enabled", False))
+    # Internal plane: disabled → status quo (legacy global DB ping).
+    # Enabled → INSTALLED bundle is the authority (Redis replay + claim MySQL
+    # already probed at prepare); do not fake READY via legacy global DB alone.
+    try:
+        from sandbox.services.internal_plane_resources import (
+            evaluate_registered_internal_plane_readiness,
+            get_internal_plane_bundle,
+        )
+
+        plane_ok = evaluate_registered_internal_plane_readiness(
+            enabled=plane_enabled
+        )
+        if plane_enabled:
+            bundle = get_internal_plane_bundle()
+            # Defensive: registry present but not INSTALLED → not ready.
+            if bundle is None or not bundle.is_bundle_ready():
+                plane_ok = False
+    except Exception:
+        plane_ok = not plane_enabled
+        if not plane_ok:
+            logger.warning("readiness: internal plane evaluation failed")
+
+    if plane_enabled:
+        db_ok = plane_ok
+    else:
+        db_ok = _database_ready()
+
+    is_ready = ws_ok and db_ok and isolation_ok and plane_ok
     if not is_ready:
         response.status_code = 503
     return HealthResponse(

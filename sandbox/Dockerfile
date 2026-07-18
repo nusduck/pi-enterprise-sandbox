@@ -3,12 +3,13 @@
 FROM python:3.11-slim AS sandbox-base
 
 # System deps: runtime isolation + everyday agent tooling (docs, git, text utils)
+# Intentionally NO iptables: container-wide firewall is not the execution
+# isolation authority (no NET_ADMIN/NET_RAW; missing tools must not fail-open).
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     ca-certificates \
     bubblewrap \
     gosu \
-    iptables \
     git \
     jq \
     unzip \
@@ -69,8 +70,11 @@ COPY sandbox/entrypoint.sh /app/entrypoint.sh
 # Fix ownership
 RUN chown -R sandbox:sandbox /app && chmod +x /app/entrypoint.sh
 
-# NOTE: No USER directive — entrypoint.sh runs as root to apply iptables,
-# then drops privileges to the sandbox user before starting the app.
+# NOTE: No USER directive — entrypoint.sh starts as root only to initialize
+# workdir ownership (CHOWN/FOWNER), then drops to the sandbox user via gosu
+# (SETUID/SETGID). No iptables / NET_ADMIN path remains.
+# Hard RLIMIT_* for untrusted work are applied per-child in Python preexec
+# (not via image-level ulimit, which would starve the API process).
 WORKDIR /app
 
 ENV \
