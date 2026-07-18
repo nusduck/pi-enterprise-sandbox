@@ -19,6 +19,13 @@ export type { CreateRunResponse, RunDetail, ToolExecutionSnapshot };
 
 const BASE = '/api';
 
+function createIdempotencyKey(prefix: string): string {
+  const uuid = globalThis.crypto?.randomUUID?.();
+  return uuid
+    ? `${prefix}_${uuid}`
+    : `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 12)}`;
+}
+
 async function errorBody(resp: Response): Promise<Record<string, unknown>> {
   return (await resp.json().catch(() => ({}))) as Record<string, unknown>;
 }
@@ -32,9 +39,11 @@ export async function createRun(body: {
   messages?: unknown[];
 }): Promise<CreateRunResponse> {
   try {
+    const headers = authHeaders({ 'Content-Type': 'application/json' });
+    headers['Idempotency-Key'] = createIdempotencyKey('run');
     const resp = await fetch(`${BASE}/runs`, {
       method: 'POST',
-      headers: authHeaders({ 'Content-Type': 'application/json' }),
+      headers,
       body: JSON.stringify(body),
     });
     if (!resp.ok) {
@@ -109,11 +118,13 @@ export async function listRunTools(runId: string): Promise<ToolExecutionSnapshot
  */
 export async function cancelRun(runId: string): Promise<boolean> {
   try {
+    const headers = authHeaders({ 'Content-Type': 'application/json' });
+    headers['Idempotency-Key'] = createIdempotencyKey('cancel');
     const resp = await fetch(
       `${BASE}/runs/${encodeURIComponent(runId)}/cancel`,
       {
         method: 'POST',
-        headers: authHeaders({ 'Content-Type': 'application/json' }),
+        headers,
         body: JSON.stringify({}),
       },
     );

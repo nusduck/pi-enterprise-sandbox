@@ -178,7 +178,9 @@ services:
     environment:
       DEPLOYMENT_ENV: ${DEPLOYMENT_ENV:-development}
       SANDBOX_BASE_URL: http://sandbox:8081
-      SANDBOX_API_TOKEN: ${SANDBOX_API_TOKEN:-}
+      # Must match the Sandbox service key in development. Production overlay
+      # requires an explicit strong secret instead of this dev-only fallback.
+      SANDBOX_API_TOKEN: ${SANDBOX_API_TOKEN:-dev_only_sandbox_api_token_not_for_prod_32b}
       AGENT_BASE_URL: http://agent:4100
       AGENT_INTERNAL_TOKEN: ${AGENT_INTERNAL_TOKEN:-}
       AUTH_ENABLED: ${AUTH_ENABLED:-}

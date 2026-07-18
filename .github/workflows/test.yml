@@ -79,8 +79,8 @@ jobs:
       - name: Install Agent dependencies
         run: npm ci --prefix agent
 
-      - name: Run Agent unit tests
-        run: node --test agent/tests/*.test.js agent/tests/sdk-compat/*.test.js
+      - name: Run Agent unit and integration tests
+        run: npm test --prefix agent
 
       - name: Syntax-check Agent sources
         run: |

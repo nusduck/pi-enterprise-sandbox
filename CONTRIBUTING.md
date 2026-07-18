@@ -47,8 +47,8 @@ uv run pytest tests/ -q --tb=short
 node --test api-server/tests/*.test.js
 # or: npm test --prefix api-server
 
-# Node Agent（含 sdk-compat）
-node --test agent/tests/*.test.js agent/tests/sdk-compat/*.test.js
+# Node Agent（全部层级测试）
+node --test agent/tests/*.test.js agent/tests/**/*.test.js
 # or: npm test --prefix agent
 
 # Frontend
@@ -60,7 +60,7 @@ test -f .env || cp .env.example .env
 docker compose config -q
 ```
 
-Ruff/Black/Mypy 与覆盖率阈值目前**不是** CI 强制门禁（见 `.trellis/spec/backend/quality-guidelines.md`）。
+Ruff/Black/Mypy 与覆盖率阈值目前**不是** CI 强制门禁。
 
 ## Project Structure
 
@@ -101,7 +101,7 @@ pi-enterprise-sandbox/
 ├── docker-compose.yml # Dev topology: services + MySQL 8 + Redis 7
 ├── docker-compose.prod.yml # Prod overlay: MySQL 8 + Redis 7 + Nginx + secrets required
 ├── .github/workflows/ # CI matrix: python / node / frontend / compose
-├── .trellis/          # Specs + tasks
+├── plan.md            # Current refactor baseline and acceptance criteria
 └── pyproject.toml
 ```
 
@@ -126,7 +126,7 @@ in PR-03. Production fails fast when `REDIS_PASSWORD` is missing.
 
 1. **Pick an issue** — check open issues or create one
 2. **Fork & branch** — `git checkout -b feat/your-feature`
-3. **Make changes** — follow existing code style and `.trellis/spec/`
+3. **Make changes** — follow `plan.md`, active docs, and existing code style
 4. **Write tests** — cover new functionality at the nearest layer
 5. **Run gates** — Python + Node + frontend + `docker compose config -q` as above
 6. **Lint (optional)** — `ruff check .` / `black --check .` if available locally
@@ -173,7 +173,7 @@ in PR-03. Production fails fast when `REDIS_PASSWORD` is missing.
 
 ## Architecture Decisions
 
-See [docs/architecture.md](./docs/architecture.md) and [`.trellis/spec/project-architecture.md`](./.trellis/spec/project-architecture.md) for:
+See [plan.md](./plan.md) and [docs/architecture.md](./docs/architecture.md) for:
 
 - Why service-side Agent runtime (no LLM key in the browser)
 - Four-service architecture (Frontend + BFF + Agent + Sandbox)

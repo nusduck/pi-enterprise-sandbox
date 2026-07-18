@@ -229,4 +229,4 @@ node scripts/smoke-cross-service.mjs
 | [前端指南](docs/webui.md) | 前端 SPA 架构、SSE 消费、扩展 |
 | [Development reset](docs/runbooks/development-reset.md) | 研发清库停机窗口（不可逆） |
 
-历史资料（`docs/archive/PLAN.md`、`docs/archive/IMPROVEMENT_PLAN.md`、`docs/archive/*`、部分 field-issues 表述）已 **superseded**，不作现行实现规范；以本 README、`docs/*` 活跃页与 `.trellis/spec/` 为准。
+历史资料（`docs/archive/PLAN.md`、`docs/archive/IMPROVEMENT_PLAN.md`、`docs/archive/*`、部分 field-issues 表述）已 **superseded**，不作现行实现规范；以根目录 `plan.md`、本 README、代码和 `docs/*` 活跃页为准。后续未完成项见 `docs/refactor-follow-up.md`。

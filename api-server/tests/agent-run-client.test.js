@@ -97,6 +97,7 @@ describe('thin BFF agent relay', () => {
     assert.match(convSrc, /listAgentRuns/);
     assert.match(convSrc, /listAgentEvents/);
     assert.match(convSrc, /agent-client/);
+    assert.match(convSrc, /resolveTrustedAuth\(req\)/);
     assert.match(timelineSrc, /listAgentRuns/);
     assert.match(timelineSrc, /listAgentEvents/);
     assert.match(timelineSrc, /last_run/);

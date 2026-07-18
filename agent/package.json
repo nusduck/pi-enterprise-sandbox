@@ -12,7 +12,7 @@
     "start:worker": "node worker.js",
     "dev": "node --watch server.js",
     "dev:worker": "node --watch worker.js",
-    "test": "node --test tests/*.test.js tests/sdk-compat/*.test.js",
+    "test": "node --test tests/*.test.js tests/**/*.test.js",
     "test:mysql:unit": "node --test tests/mysql/*.unit.test.js",
     "test:mysql:integration": "node --test tests/mysql/*.integration.test.js",
     "test:mysql": "node --test tests/mysql/**/*.test.js tests/mysql/*.test.js",

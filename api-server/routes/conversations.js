@@ -8,6 +8,7 @@ import {
   listAgentRuns,
   listAgentEvents,
 } from '../services/agent-client.js';
+import { resolveTrustedAuth } from '../application/run-access-service.js';
 import { loadConversationTimeline } from '../application/conversation-timeline-service.js';
 import { sendError, sendJson as json } from '../http/response.js';
 
@@ -70,7 +71,9 @@ export async function handleDeleteConversation(id, res, req) {
 /** GET /api/conversations/:id/events — complete persisted run timeline (Agent MySQL). */
 export async function handleGetConversationEvents(id, res, req, query = {}) {
   try {
-    const auth = authFromRequest(req);
+    // Resolve the browser session into trusted Agent owner headers before
+    // loading the Agent MySQL run/event timeline.
+    const auth = await resolveTrustedAuth(req);
     const traceId = req?.traceId || null;
     const client = {
       listAgentRuns: (q) => listAgentRuns(q, { auth, traceId }),
