@@ -93,14 +93,18 @@ pi-enterprise-sandbox/
 │   └── mcp/
 ├── skills/            # Optional shared skill packages (profile + registry controlled)
 ├── tests/             # pytest (unit + FastAPI integration)
-├── docs/              # Active docs (docs/archive/ is historical only)
+├── docs/              # Active docs — see docs/README.md for authority order
+│   ├── STATUS.md      # Only living gap board vs plan.md §32
+│   ├── PROCESS_LOG.md # Acceptance process log (append-only)
+│   ├── evidence/      # Dated live-gate records
+│   └── archive/       # Historical only (never normative)
 ├── config/            # Runtime config files
 ├── nginx/             # Production Nginx + SSL
 ├── scripts/           # backup/restore, development reset, cross-service smoke
 ├── docker-compose.yml # Dev topology: services + MySQL 8 + Redis 7
 ├── docker-compose.prod.yml # Prod overlay: MySQL 8 + Redis 7 + Nginx + secrets required
 ├── .github/workflows/ # CI matrix: python / node / frontend / compose
-├── plan.md            # Current refactor baseline and acceptance criteria
+├── plan.md            # Frozen refactor baseline and §32 acceptance criteria
 └── pyproject.toml
 ```
 
@@ -126,11 +130,12 @@ in PR-03. Production fails fast when `REDIS_PASSWORD` is missing.
 
 1. **Pick an issue** — check open issues or create one
 2. **Fork & branch** — `git checkout -b feat/your-feature`
-3. **Make changes** — follow `plan.md`, active docs, and existing code style
+3. **Make changes** — follow `plan.md`, `docs/STATUS.md`, and active docs (see `docs/README.md`)
 4. **Write tests** — cover new functionality at the nearest layer
-5. **Run gates** — Python + Node + frontend + `docker compose config -q` as above
-6. **Lint (optional)** — `ruff check .` / `black --check .` if available locally
-7. **Push & PR** — open a pull request with a clear description
+5. **Update STATUS** — if the change affects a `plan.md` §32 row, update `docs/STATUS.md` in the same commit; append `docs/PROCESS_LOG.md` for acceptance-program work
+6. **Run gates** — Python + Node + frontend + `docker compose config -q` as above
+7. **Lint (optional)** — `ruff check .` / `black --check .` if available locally
+8. **Push & PR** — open a pull request with a clear description
 
 ## Code Style
 
@@ -173,7 +178,7 @@ in PR-03. Production fails fast when `REDIS_PASSWORD` is missing.
 
 ## Architecture Decisions
 
-See [plan.md](./plan.md) and [docs/architecture.md](./docs/architecture.md) for:
+See [plan.md](./plan.md), [docs/STATUS.md](./docs/STATUS.md), and [docs/architecture.md](./docs/architecture.md) for:
 
 - Why service-side Agent runtime (no LLM key in the browser)
 - Four-service architecture (Frontend + BFF + Agent + Sandbox)

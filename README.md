@@ -226,11 +226,18 @@ node scripts/smoke-cross-service.mjs
 
 | 文档 | 说明 |
 |------|------|
+| [plan.md](plan.md) | 重构基线与 §32 最终验收（规范源） |
+| [文档地图](docs/README.md) | 权威顺序、文档角色、更新纪律 |
+| [验收状态 STATUS](docs/STATUS.md) | 相对 plan §32 的唯一进度板 |
+| [过程日志](docs/PROCESS_LOG.md) | `codex/plan-acceptance` 过程记录（追加） |
 | [架构设计](docs/architecture.md) | 四服务架构、设计决策、安全模型、数据流 |
 | [部署指南](docs/deployment.md) | 生产部署（MySQL 8 + Redis 7）、SSL、备份、监控 |
 | [开发指南](docs/development.md) | 本地开发、零 Skill、测试、调试 |
 | [API 参考](docs/api.md) | Sandbox API + MCP + SSE、workspace_id 契约 |
 | [前端指南](docs/webui.md) | 前端 SPA 架构、SSE 消费、扩展 |
 | [Development reset](docs/runbooks/development-reset.md) | 研发清库停机窗口（不可逆） |
+| [Gate 证据](docs/evidence/) | 带日期的 live gate 记录 |
+| [非阻塞债](docs/review-deferred-items.md) | 不得隐藏 P0 验收项 |
 
-历史资料（`docs/archive/PLAN.md`、`docs/archive/IMPROVEMENT_PLAN.md`、`docs/archive/*`、部分 field-issues 表述）已 **superseded**，不作现行实现规范；以根目录 `plan.md`、本 README、代码和 `docs/*` 活跃页为准。后续未完成项见 `docs/refactor-follow-up.md`。
+历史资料仅在 `docs/archive/`（含旧 PLAN / field-issues / 过程稿）。**不作现行规范。**  
+以根目录 `plan.md`、`docs/STATUS.md`、活跃 `docs/*` 与代码为准。旧跟踪页 `docs/refactor-follow-up.md` 已废弃，仅保留跳转。

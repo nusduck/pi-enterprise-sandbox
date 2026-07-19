@@ -3,11 +3,14 @@
 Non-severe / non-blocking items only. **Do not** park unresolved severe
 vulnerabilities or unfinished PR-07 security work here.
 
+**Acceptance blockers** belong only in [`STATUS.md`](./STATUS.md) (mapped to
+`plan.md` §32). This file must not be used as a substitute progress board.
+
 ## Closed in the current refactor
 
 | Item | Closure evidence |
 | --- | --- |
-| PR-05 worker-default documentation lag | `docs/pr05-session-recovery.md` now matches `createWorkerServices` → `ensureWorkerRunExecutorFactory`; the stub remains non-production/test-only. |
+| PR-05 worker-default documentation lag | `docs/archive/process/pr05-session-recovery.md` now matches `createWorkerServices` → `ensureWorkerRunExecutorFactory`; the stub remains non-production/test-only. |
 | plan §8.15 artifact unique key lag | The DDL now documents the migration's full-path `relative_path_hash` generated column and `UNIQUE(run_id, relative_path_hash, sha256)`, including the mandatory raw-path comparison. |
 | `SANDBOX_MAX_OPEN_FILES` operator catalog | `.env.example`, base Compose, and the README execution-limit table now expose the implemented default `256`; production validation still enforces `16..65536`. |
 | Agent/worker runtime env parity | Base Compose now gives both services the same model, prompt, MCP/profile, approval, skill, stream, and Sandbox policy knobs. The production overlay explicitly pins worker policy/isolation to the same strict values as the HTTP agent; HTTP-only A2A/listen/migration keys remain intentionally separate. |
@@ -15,7 +18,7 @@ vulnerabilities or unfinished PR-07 security work here.
 | Production Sandbox transport wiring | `ServiceContainer.createPiRunExecutorFactory` now creates a per-Run transport and injects the formal HMAC clients for session provisioning, `files.read`, `files.write/edit`, `bash/python`, all four `process_*` methods, and `submit_artifact`; adapter tests cover Python args and process cursor mappings. |
 | Inflight reconciliation for formal tool runtimes | Internal-plane shutdown now retains and reconciles `FilesReadRuntime`, `FormalExecutionRuntime`, `FilesWriteRuntime`, `FormalProcessRuntime`, and `FormalArtifactRuntime` before MySQL teardown; runtime and lifecycle tests cover UNKNOWN recovery and retained inflight claims. |
 | A2A credential administration API/UI | The Agent exposes internal admin-only issue/rotate/revoke/config routes, the BFF owner-preserving proxy exposes `/api/a2a/*`, and `/settings/a2a` provides credential, endpoint, recent-task, and audit management. `agent/tests/a2a/a2a-admin.unit.test.js` covers tenant/admin boundaries and lifecycle actions. |
-| A2A artifact byte streamer | Agent HTTP startup injects `createA2aArtifactByteStreamer`, which resolves the owner-scoped Run and Agent Session, then streams from Sandbox by opaque `artifact_id` only. Unit tests cover fail-closed missing-session/path-only cases; the live gate in `docs/release-gate-evidence-2026-07-19.md` verifies public 200 bytes/hash equality, cross-client 403, and `a2a.artifact_download` audit correlation. |
+| A2A artifact byte streamer | Agent HTTP startup injects `createA2aArtifactByteStreamer`, which resolves the owner-scoped Run and Agent Session, then streams from Sandbox by opaque `artifact_id` only. Unit tests cover fail-closed missing-session/path-only cases; the live gate in `docs/evidence/release-gate-2026-07-19.md` verifies public 200 bytes/hash equality, cross-client 403, and `a2a.artifact_download` audit correlation. |
 | Public Process status contract | Formal Sandbox responses and both Agent process transports now normalize to the lowercase `packages/contracts` `ProcessStatus` vocabulary. Sandbox-only transient states map at the public boundary, unknown states fail closed, and formal/legacy/tool-result tests cover the contract. |
 | Worker runtime implicit stub | `createRunWorkerRuntime` now requires an injected executor/factory or an explicit `allowStubExecutor: true`; missing production wiring fails with `RUN_EXECUTOR_NOT_CONFIGURED`, while `ServiceContainer` continues to own the environment-gated non-production stub decision. |
 | HealthResponse internal-plane status | `/health` reports enabled planes as `not_checked` (preserving liveness semantics), while `/ready` exposes `internal_plane_status=disabled|ready|not_ready` without connection details or secrets. Integration tests cover disabled and failed enabled-plane states. |

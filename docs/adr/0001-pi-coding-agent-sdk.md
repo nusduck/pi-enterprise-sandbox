@@ -187,4 +187,4 @@ Location: `agent/tests/sdk-compat/`.
 - `agent/tests/pi/`
 - `tests/fixtures/sse_events.json`
 - `docs/runbooks/sdk-upgrade.md`
-- `docs/field-issues-and-evolution-requirements.md` (R-01, A-02, S-03)
+- `docs/archive/field-issues-and-evolution-requirements.md` (R-01, A-02, S-03; historical)

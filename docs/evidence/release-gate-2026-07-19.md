@@ -1,7 +1,11 @@
 # Release Gate Evidence (2026-07-19)
 
+**Location:** `docs/evidence/` (dated proof only; not a progress board).  
+**Acceptance status:** see [`../STATUS.md`](../STATUS.md).
+
 This record covers the live gate batches completed on the stated date. It does
-not close the full P0 release gate in `docs/refactor-follow-up.md`.
+not close the full P0 acceptance board in `docs/STATUS.md` (formerly
+`docs/refactor-follow-up.md`).
 
 ## Environment
 
