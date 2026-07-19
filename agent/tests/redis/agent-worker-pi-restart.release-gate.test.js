@@ -1114,7 +1114,15 @@ describeLive(
         (row) => row?.status === 'UNKNOWN',
         60_000,
       );
-      assert.equal(sandboxUnknown.error_code, 'SHUTDOWN_DRAIN_TIMEOUT');
+      // Graceful drain uses SHUTDOWN_DRAIN_TIMEOUT; hard Docker/OrbStack
+      // restarts may surface CRASH_RECOVERY_UNKNOWN. Both are honest UNKNOWN
+      // with no automatic replay (STATUS G2 / sandbox interruption cell).
+      assert.ok(
+        ['SHUTDOWN_DRAIN_TIMEOUT', 'CRASH_RECOVERY_UNKNOWN'].includes(
+          String(sandboxUnknown.error_code || ''),
+        ),
+        `expected honest UNKNOWN error_code, got ${sandboxUnknown.error_code}`,
+      );
       const agentUnknown = await waitForRow(
         agentKnex,
         'tool_executions',
