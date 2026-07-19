@@ -75,16 +75,23 @@ Each entry should say **what changed**, **why**, and **which STATUS IDs** it aff
 - **STATUS IDs:** G6 → `done`.
 - **Subagent:** `019f7991-286d-7c02-acbc-e045b63e6a26` (G6 durable restart evidence).
 
-## 2026-07-19 — H5/H6 structural secrets + MCP audit (partial)
-
-- **Action:** Fixed `redactSecretText` replace-callback treating match offset as a capture group (DSN → `8=[REDACTED]`); routed `sanitizeStatusReason` / `sanitizeOutboxError` through shared redaction; expanded `secret-and-mcp-policy` structural tests (sanitizers, MCP-only stack, sandbox 10-tool surface, no extension SQL tools). Offline suite 57 pass. Wrote `docs/evidence/h5-h6-secrets-mcp-audit-2026-07-19.md`.
-- **Why:** STATUS **H5/H6** were partial with a real persistence-path redaction gap and weak shared-pattern correctness; strengthen offline proof without claiming production audit `done`.
-- **STATUS IDs:** H5/H6 remain `partial`.
-
 ## 2026-07-19 — A4/G2 restart matrix offline + live (done)
-
 
 - **Action:** Added `agent/tests/run-services/run-recovery-waiting-input.unit.test.js` (PENDING skip / RESOLVED enqueue / missing reconciliation / CLAIMED re-enqueue). Tightened Pi-restart sandbox UNKNOWN assertion to accept `SHUTDOWN_DRAIN_TIMEOUT` or `CRASH_RECOVERY_UNKNOWN`. Parent re-ran full `agent-worker-pi-restart.release-gate.test.js` live **5/5 PASS** (~76s). Wrote/updated `docs/evidence/a4-g2-restart-matrix-2026-07-19.md`. Dual-runtime structural check (B3) green.
 - **Why:** STATUS **A4**/**G2** required consolidated offline matrix plus live multi-case Worker/Session recovery proof.
 - **STATUS IDs:** A4 → `done`, G2 → `done`. Residual non-blocking: dedicated graceful SIGTERM drain and corrupt-journal-under-kill live gates.
 - **Subagent:** `019f7991-286d-7c02-acbc-e0543771a9f8` (A4/G2 restart matrix audit).
+
+## 2026-07-19 — H5/H6 structural secrets + MCP audit (partial)
+
+- **Action:** Fixed `redactSecretText` replace-callback treating match offset as a capture group (DSN → `8=[REDACTED]`); routed `sanitizeStatusReason` / `sanitizeOutboxError` through shared redaction; expanded `secret-and-mcp-policy` structural tests (sanitizers, MCP-only stack, sandbox 10-tool surface, no extension SQL tools). Offline suite 57 pass. Wrote `docs/evidence/h5-h6-secrets-mcp-audit-2026-07-19.md`.
+- **Why:** STATUS **H5/H6** were partial with a real persistence-path redaction gap and weak shared-pattern correctness; strengthen offline proof without claiming production audit `done`.
+- **STATUS IDs:** H5/H6 remain `partial`.
+- **Subagent:** `019f799e-7935-7b11-a5a6-7c822961a9ab` (P1 H5/H6 secrets MCP audit); commit `e7ae8db8`.
+
+## 2026-07-19 — Acceptance session close-out
+
+- **Action:** Parent integrated G7/G6/A4/G2/H5 slices; four P0 STATUS IDs closed with dated evidence; optional P1 H5/H6 structural audit committed. Gate containers torn down. Session summary under implementer scratch.
+- **Why:** plan.md §32 P0 acceptance board for this session.
+- **STATUS IDs:** G6, G7, A4, G2 → `done`; H5/H6 remain `partial` with stronger offline proof.
+- **Subagents:** G7 `019f7991-286c-7ee3-948e-8124c5a29cab`, G6 `019f7991-286d-7c02-acbc-e045b63e6a26`, A4/G2 `019f7991-286d-7c02-acbc-e0543771a9f8`, H5/H6 `019f799e-7935-7b11-a5a6-7c822961a9ab`.
