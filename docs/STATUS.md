@@ -101,7 +101,7 @@ Change this file in the **same commit** as the implementation or evidence that j
 | G4 | Duplicate request no duplicate side effects | `partial` | idempotency tables/claims; full live duplicate matrix TBD |
 | G5 | Create Run then immediate query race-free | `partial` | create-before-return design; live race gate TBD |
 | G6 | Durable WAITING_INPUT / interaction resume | `partial` | **Code present** (MySQL `run_interactions`, services, HTTP wiring). Needs restart/refresh evidence and STATUS-driven verification. Former follow-up claiming blanket `501` is **stale**. |
-| G7 | Hard `SIGKILL` orphan recovery in Bubblewrap | `open` | Explicit open gate in evidence doc |
+| G7 | Hard `SIGKILL` orphan recovery in Bubblewrap | `open` | Explicit open gate in evidence doc. Prerequisite: Linux starttime field-22 index fix + unit test committed on this branch; live gate still required. |
 
 ## H. Security
 

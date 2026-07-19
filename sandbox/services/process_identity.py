@@ -69,9 +69,11 @@ def read_linux_starttime(pid: int) -> str | None:
     if not m:
         return None
     rest = m.group(1).split()
-    if len(rest) < 20:
+    # ``rest`` starts at proc stat field 4 (ppid).  Kernel starttime is
+    # field 22, therefore index 18 after fields 1-3 have been removed.
+    if len(rest) < 19:
         return None
-    starttime = rest[19]
+    starttime = rest[18]
     if not starttime.isdigit():
         return None
     return f"linux-starttime:{starttime}"

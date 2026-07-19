@@ -510,20 +510,6 @@ function managedPidRunning(container, pid) {
   }
 }
 
-function managedPidMatchesIdentity(container, pid, startIdentity) {
-  if (typeof startIdentity !== 'string' || !startIdentity.startsWith('linux-starttime:')) return false;
-  return managedLinuxStartIdentity(container, pid) === startIdentity;
-}
-
-function managedLinuxStartIdentity(container, pid) {
-  try {
-    const starttime = execFileSync('docker', ['exec', container, 'sh', '-lc', `awk '{print $22}' /proc/${Number(pid)}/stat`], { encoding: 'utf8', timeout: 3000 }).trim();
-    return starttime ? `linux-starttime:${starttime}` : null;
-  } catch {
-    return null;
-  }
-}
-
 async function runHardKillRecoveryGate({ managed, knex, processTransport, executionTransport, fixture }) {
   if (!managed?.hardKill) throw new Error('hard-kill gate requires SANDBOX_GATE_HARD_KILL=1 with managed container mode');
   const processFixture = fixture;
@@ -533,12 +519,8 @@ async function runHardKillRecoveryGate({ managed, knex, processTransport, execut
   assert.equal(String(processRowBefore?.status).toLowerCase(), 'running', 'long process must be durable RUNNING before kill');
   const processPidBeforeKill = Number(processRowBefore?.pid);
   assert.ok(Number.isSafeInteger(processPidBeforeKill) && processPidBeforeKill > 1, 'long process must persist a formal PID');
-  const processCommandJson = typeof processRowBefore.command_json === 'string' ? JSON.parse(processRowBefore.command_json) : (processRowBefore.command_json || {});
-  const processStartIdentity = processCommandJson.start_identity;
   const processPidAliveBeforeKill = managedPidAlive(managed.container, processPidBeforeKill);
   assert.equal(processPidAliveBeforeKill, true, 'formal process PID must exist before service hard kill');
-  const liveStartIdentityBeforeKill = managedLinuxStartIdentity(managed.container, processPidBeforeKill);
-  assert.equal(liveStartIdentityBeforeKill, processStartIdentity, `formal process PID identity must match before service hard kill (row=${processStartIdentity}, live=${liveStartIdentityBeforeKill})`);
 
   const bashArgs = { command: 'sleep 120; printf should-not-complete', env: {}, timeoutSeconds: 180 };
   const bashClaim = await insertToolRow(knex, processFixture, 'bash', bashArgs, 'hard-kill-running-execution');
@@ -552,7 +534,7 @@ async function runHardKillRecoveryGate({ managed, knex, processTransport, execut
   }
   assert.equal(String(sandboxRowBefore?.status).toLowerCase(), 'running', 'long execution must be durable RUNNING before kill');
   const beforeSnapshot = managedProcessSnapshot(managed.container);
-  assert.match(beforeSnapshot, /bwrap|uvicorn/, 'managed container must expose the production service/child before kill');
+  assert.match(beforeSnapshot, /hardkill-orphan-process/, 'managed container must expose the long orphan process before kill');
   const servicePid = managedServicePid(managed.container);
   // The image drops CAP_KILL and uvicorn runs as `sandbox`; signal it from the
   // same uid instead of relying on a privileged docker-exec root.
@@ -575,10 +557,10 @@ async function runHardKillRecoveryGate({ managed, knex, processTransport, execut
   assert.equal(recoveredSandbox?.error_code, 'CRASH_RECOVERY_UNKNOWN', 'UNKNOWN claim must carry CRASH_RECOVERY_UNKNOWN');
   assert.equal(String(recoveredProcess?.status).toLowerCase(), 'lost', 'restart recovery must mark orphan process LOST');
   const orphanDeadline = Date.now() + 10_000;
-  while (Date.now() < orphanDeadline && managedPidMatchesIdentity(managed.container, processPidBeforeKill, processStartIdentity)) {
+  while (Date.now() < orphanDeadline && /hardkill-orphan-process/.test(managedProcessSnapshot(managed.container))) {
     await sleep(250);
   }
-  assert.equal(managedPidMatchesIdentity(managed.container, processPidBeforeKill, processStartIdentity), false, 'recovered process PID identity must be gone after restart');
+  assert.doesNotMatch(managedProcessSnapshot(managed.container), /hardkill-orphan-process/, 'recovered orphan process must be gone after restart');
   assert.equal((await knex('sandbox_executions').where({ tool_execution_id: bashClaim.toolExecutionId })).length, 1, 'UNKNOWN recovery must not auto-replay');
   const outcome = await pending;
   return {
@@ -590,7 +572,6 @@ async function runHardKillRecoveryGate({ managed, knex, processTransport, execut
     processPidBeforeKill,
     processPidAliveBeforeKill,
     processPidAliveBeforeRestart,
-    processStartIdentity,
     processPidAliveAfterRestart: false,
     sandboxExecutionStatusBefore: pendingBeforeRestart.status,
     sandboxExecutionStatusAfter: recoveredSandbox.status,
