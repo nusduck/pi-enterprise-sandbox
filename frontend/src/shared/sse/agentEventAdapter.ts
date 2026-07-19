@@ -45,15 +45,17 @@ export function createAgentEventAdapterState(
  * Multi-output wire events (e.g. token → started+delta) pass `ev` only to the
  * first nextSeq call so a single durable sequence is not double-applied.
  */
-function nextSeq(
-  state: AgentEventAdapterState,
-  ev?: { sequence?: unknown; persisted_sequence?: unknown } | null,
-): number {
+/** Wire event bags (SSEEvent / history rows) carry optional durable fields. */
+type WireEventFields = Record<string, unknown> | null | undefined;
+
+function nextSeq(state: AgentEventAdapterState, ev?: WireEventFields): number {
+  const seqRaw = ev?.sequence;
+  const persistedRaw = ev?.persisted_sequence;
   const durable =
-    typeof ev?.sequence === 'number'
-      ? ev.sequence
-      : typeof ev?.persisted_sequence === 'number'
-        ? ev.persisted_sequence
+    typeof seqRaw === 'number'
+      ? seqRaw
+      : typeof persistedRaw === 'number'
+        ? persistedRaw
         : null;
   if (durable != null && Number.isFinite(durable) && durable >= 0) {
     state.sequence = Math.max(state.sequence, durable);
@@ -66,11 +68,7 @@ function nextSeq(
 function durableEventId(
   state: AgentEventAdapterState,
   seq: number,
-  ev?: {
-    event_id?: unknown;
-    eventId?: unknown;
-    persisted_event_id?: unknown;
-  } | null,
+  ev?: WireEventFields,
 ): string {
   for (const candidate of [ev?.event_id, ev?.eventId, ev?.persisted_event_id]) {
     if (candidate != null && String(candidate).length > 0) {
@@ -83,11 +81,7 @@ function durableEventId(
 function eventId(
   state: AgentEventAdapterState,
   seq: number,
-  ev?: {
-    event_id?: unknown;
-    eventId?: unknown;
-    persisted_event_id?: unknown;
-  } | null,
+  ev?: WireEventFields,
 ): string {
   return durableEventId(state, seq, ev);
 }
