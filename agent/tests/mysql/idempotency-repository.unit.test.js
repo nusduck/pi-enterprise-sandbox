@@ -48,7 +48,7 @@ function cmp(left, op, right) {
 
 /**
  * Ownership-aware fake for idempotency_records with CAS filter support.
- * @param {{ concurrentCasBarrier?: boolean }} [opts]
+ * @param {{ concurrentCasBarrier?: boolean, concurrentInsertBarrier?: boolean }} [opts]
  */
 function createIdempotencyFake(opts = {}) {
   /** @type {Record<string, unknown>[]} */
@@ -60,6 +60,14 @@ function createIdempotencyFake(opts = {}) {
   /** @type {Array<{ resolve: (n: number) => void, run: () => number }>} */
   let casBarrier = [];
   const concurrentCasBarrier = opts.concurrentCasBarrier === true;
+
+  /**
+   * When true, first two inserts race: both observe empty table, then the first
+   * insert wins and the second throws ER_DUP_ENTRY (simulates InnoDB unique PK).
+   * @type {Array<{ resolve: () => void, reject: (e: Error) => void, row: Record<string, unknown> }>}
+   */
+  let insertBarrier = [];
+  const concurrentInsertBarrier = opts.concurrentInsertBarrier === true;
 
   function rowMatches(row, filters, nullCols) {
     for (const col of nullCols) {
@@ -120,6 +128,31 @@ function createIdempotencyFake(opts = {}) {
       insert(row) {
         type = 'insert';
         insertRow = row;
+        if (concurrentInsertBarrier) {
+          return new Promise((resolve, reject) => {
+            insertBarrier.push({
+              resolve: () => {
+                rows.push({ ...row });
+                resolve(1);
+              },
+              reject,
+              row: { ...row },
+            });
+            if (insertBarrier.length >= 2) {
+              const batch = insertBarrier.splice(0, insertBarrier.length);
+              // First waiter wins the unique key; others get ER_DUP_ENTRY.
+              batch[0].resolve();
+              for (let i = 1; i < batch.length; i += 1) {
+                const err = new Error('Duplicate entry');
+                // @ts-ignore
+                err.code = 'ER_DUP_ENTRY';
+                // @ts-ignore
+                err.errno = 1062;
+                batch[i].reject(err);
+              }
+            }
+          });
+        }
         return Promise.resolve().then(() => {
           const dup = rows.some(
             (r) =>
@@ -578,5 +611,68 @@ describe('IdempotencyRepository concurrent expired CAS race', () => {
     assert.equal(db.__rows.length, 1);
     assert.equal(db.__rows[0].request_hash, winnerHash);
     assert.notEqual(db.__rows[0].request_hash, HASH_A);
+  });
+});
+
+describe('IdempotencyRepository concurrent first-begin (duplicate PK race)', () => {
+  it('two concurrent same-hash begins: exactly one row, loser reloads FOR UPDATE as in_progress', async () => {
+    const db = createIdempotencyFake({ concurrentInsertBarrier: true });
+    const repo = new IdempotencyRepository(db, { now: () => FIXED_NOW });
+
+    const input = {
+      orgId: ORG,
+      userId: USER,
+      idempotencyKey: 'first-begin-race',
+      operation: 'create_run',
+      requestHash: HASH_A,
+      expiresAt: EXPIRES,
+    };
+
+    const results = await Promise.all([
+      repo.begin(input),
+      repo.begin(input),
+    ]);
+
+    const outcomes = results.map((r) => r.outcome).sort();
+    assert.deepEqual(outcomes, ['begun', 'in_progress']);
+    assert.equal(db.__rows.length, 1, 'unique PK must admit exactly one row');
+    assert.equal(db.__rows[0].request_hash, HASH_A);
+    assert.equal(db.__rows[0].response_status, null);
+    // Loser path must take SELECT … FOR UPDATE after ER_DUP_ENTRY.
+    assert.ok(
+      db.__forUpdateCount() >= 1,
+      'duplicate-PK reload must use FOR UPDATE',
+    );
+  });
+
+  it('two concurrent different hashes on empty key: one begun, other conflicts (no dual begun)', async () => {
+    const db = createIdempotencyFake({ concurrentInsertBarrier: true });
+    const repo = new IdempotencyRepository(db, { now: () => FIXED_NOW });
+
+    const base = {
+      orgId: ORG,
+      userId: USER,
+      idempotencyKey: 'hash-race-empty',
+      operation: 'create_run',
+      expiresAt: EXPIRES,
+    };
+
+    const results = await Promise.allSettled([
+      repo.begin({ ...base, requestHash: HASH_A }),
+      repo.begin({ ...base, requestHash: HASH_B }),
+    ]);
+
+    const fulfilled = results.filter((r) => r.status === 'fulfilled');
+    const rejected = results.filter((r) => r.status === 'rejected');
+    assert.equal(fulfilled.length, 1, `expected 1 begun, got ${JSON.stringify(results)}`);
+    assert.equal(rejected.length, 1);
+    // @ts-ignore
+    assert.equal(fulfilled[0].value.outcome, 'begun');
+    // @ts-ignore
+    assert.ok(rejected[0].reason instanceof ConflictError);
+    assert.equal(db.__rows.length, 1);
+    // @ts-ignore
+    assert.equal(db.__rows[0].request_hash, fulfilled[0].value.record.requestHash);
+    assert.ok(db.__forUpdateCount() >= 1);
   });
 });

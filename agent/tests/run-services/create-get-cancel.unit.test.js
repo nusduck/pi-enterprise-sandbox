@@ -127,6 +127,77 @@ describe('CreateRunService durable path', () => {
     assert.equal(got.status, RUN_STATUS.QUEUED);
   });
 
+  it('G5: create response is only returned after durable commit (GET race-free)', async () => {
+    // Hold the create transaction open past the write set, assert GET still
+    // 404s, then commit and prove immediate GET succeeds with the same runId.
+    let releaseCommit;
+    const commitGate = new Promise((resolve) => {
+      releaseCommit = resolve;
+    });
+    let writesSeen = false;
+    const innerRun = world.transactionManager.run.bind(world.transactionManager);
+    let createTxN = 0;
+    world.transactionManager.run = async (work) => {
+      createTxN += 1;
+      if (createTxN !== 1) {
+        // Projection / later txns run normally.
+        return innerRun(work);
+      }
+      return innerRun(async (trx) => {
+        const result = await work(trx);
+        writesSeen = world.tables.runs.length === 1;
+        // Pause before commit so concurrent GET cannot observe uncommitted work
+        // in a real DB; fake world is not MVCC, so we only assert the service
+        // does not return until after this gate + commit.
+        await commitGate;
+        return result;
+      });
+    };
+
+    const createPromise = svc.create.execute({
+      messages: MESSAGES,
+      auth: FIXED_AUTH,
+      traceId: TRACE,
+      idempotencyKey: 'g5-create-before-return',
+    });
+
+    // Yield until durable writes are staged inside the open transaction.
+    for (let i = 0; i < 50 && !writesSeen; i += 1) {
+      // eslint-disable-next-line no-await-in-loop
+      await new Promise((r) => setTimeout(r, 1));
+    }
+    assert.equal(writesSeen, true, 'create txn must stage Run before returning');
+
+    // Service must not have resolved yet (create-before-return).
+    let settled = false;
+    createPromise.then(
+      () => {
+        settled = true;
+      },
+      () => {
+        settled = true;
+      },
+    );
+    await new Promise((r) => setTimeout(r, 5));
+    assert.equal(settled, false, 'create must not return before durable commit');
+
+    releaseCommit();
+    const created = await createPromise;
+    assert.ok(isUlid(created.runId));
+    assert.equal(settled, true);
+
+    // Immediate query after create returns the durable Run (G5).
+    const got = await svc.get.execute({
+      runId: created.runId,
+      auth: FIXED_AUTH,
+    });
+    assert.equal(got.runId, created.runId);
+    assert.ok(
+      got.status === RUN_STATUS.ACCEPTED || got.status === RUN_STATUS.QUEUED,
+    );
+    assert.equal(world.tables.runs.length, 1);
+  });
+
   it('duplicate same key+body replays without second rows/jobs', async () => {
     const first = await svc.create.execute({
       messages: MESSAGES,
