@@ -9,13 +9,14 @@ Production auto-wires :class:`DatasetRepository` + MySQL when DSN is formal.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import threading
 from dataclasses import dataclass, field
-from typing import Any, Protocol
+from typing import Any, Callable, Protocol
 
 from sandbox.app.domain.types import DatasetRecord, OwnerScope
-from sandbox.app.persistence.errors import NotFoundError
+from sandbox.app.persistence.errors import ConflictError, NotFoundError
 from sandbox.app.persistence.mappers import to_mysql_datetime
 from sandbox.app.persistence.ownership import require_owner_scope
 
@@ -70,12 +71,29 @@ class FormalDatasetRepositoryPort(Protocol):
         scope: OwnerScope | dict[str, str],
     ) -> bool: ...
 
+    def reserve_idempotent_upload(
+        self,
+        conn: Any,
+        input: dict[str, Any],
+    ) -> tuple[str, DatasetRecord]: ...
+
+    def complete_idempotent_upload(
+        self,
+        conn: Any,
+        dataset_id: str,
+        scope: OwnerScope | dict[str, str],
+        **kwargs: Any,
+    ) -> DatasetRecord: ...
+
 
 @dataclass
 class FakeFormalDatasetRepository:
     """In-memory formal datasets — owner fail-closed; delete skips READY."""
 
     rows: dict[str, dict[str, Any]] = field(default_factory=dict)
+    idempotency: dict[tuple[str, str, str, str], dict[str, Any]] = field(
+        default_factory=dict
+    )
     _lock: threading.RLock = field(default_factory=threading.RLock)
     # Simulate unique/pk race for tests
     fail_next_create: Exception | None = None
@@ -201,6 +219,122 @@ class FakeFormalDatasetRepository:
                 return False
             del self.rows[dataset_id]
             return True
+
+    def reserve_idempotent_upload(
+        self,
+        conn: Any,  # noqa: ARG002
+        input: dict[str, Any],
+    ) -> tuple[str, DatasetRecord]:
+        scope = require_owner_scope(input, resource="idempotency_records")
+        key = (
+            scope.org_id,
+            scope.user_id,
+            str(input["idempotency_key"]),
+            str(input["operation"]),
+        )
+        request_hash = str(input["request_hash"])
+        candidate_id = str(input["dataset_id"])
+        with self._lock:
+            idem = self.idempotency.get(key)
+            inserted_idempotency = idem is None
+            if idem is None:
+                idem = {
+                    "request_hash": request_hash,
+                    "resource_id": candidate_id,
+                    "response_status": None,
+                    "response_json": None,
+                }
+                self.idempotency[key] = idem
+            elif idem["request_hash"] != request_hash:
+                raise ConflictError(
+                    "Idempotency key reused with a different Dataset request",
+                    resource="idempotency_records",
+                    id=key[2],
+                )
+
+            resource_id = str(idem["resource_id"])
+            row = self.rows.get(resource_id)
+            if row is None:
+                if resource_id != candidate_id:
+                    raise ConflictError(
+                        "Dataset idempotency resource is missing",
+                        resource="datasets",
+                        id=resource_id,
+                    )
+                try:
+                    record = self.create(conn, input)
+                except Exception:
+                    # Match the real transaction: reservation + Dataset create
+                    # either both commit or both roll back.
+                    if inserted_idempotency:
+                        self.idempotency.pop(key, None)
+                    raise
+                outcome = "begun"
+            else:
+                record = self._to_record(row)
+                if (
+                    record.conversation_id != input["conversation_id"]
+                    or record.agent_session_id != input["agent_session_id"]
+                    or record.original_filename != input["original_filename"]
+                    or record.mime_type != input.get("mime_type")
+                ):
+                    raise ConflictError(
+                        "Dataset idempotency resource binding mismatch",
+                        resource="datasets",
+                        id=resource_id,
+                    )
+                outcome = "resume"
+            if idem["response_status"] is not None:
+                if record.status != "ready":
+                    raise ConflictError(
+                        "Completed Dataset idempotency record is not READY",
+                        resource="datasets",
+                        id=resource_id,
+                    )
+                outcome = "replay"
+            return outcome, record
+
+    def complete_idempotent_upload(
+        self,
+        conn: Any,  # noqa: ARG002
+        dataset_id: str,
+        scope: OwnerScope | dict[str, str],
+        *,
+        idempotency_key: str,
+        operation: str,
+        request_hash: str,
+        size_bytes: int,
+        sha256: str,
+        completed_at: str,
+        response_json: dict[str, Any],
+    ) -> DatasetRecord:
+        s = require_owner_scope(scope, resource="datasets")
+        key = (s.org_id, s.user_id, idempotency_key, operation)
+        with self._lock:
+            idem = self.idempotency.get(key)
+            if (
+                idem is None
+                or idem["request_hash"] != request_hash
+                or idem["resource_id"] != dataset_id
+            ):
+                raise ConflictError(
+                    "Dataset idempotency completion lost its reservation",
+                    resource="idempotency_records",
+                    id=idempotency_key,
+                )
+            row = self.update_status(
+                conn,
+                dataset_id,
+                s,
+                status="ready",
+                size_bytes=size_bytes,
+                sha256=sha256,
+                completed_at=completed_at,
+            )
+            if idem["response_status"] is None:
+                idem["response_status"] = 201
+                idem["response_json"] = dict(response_json)
+            return row
 
     @staticmethod
     def _to_record(row: dict[str, Any]) -> DatasetRecord:
@@ -332,6 +466,229 @@ class FormalDatasetDualWriter:
             logger.debug("dataset formal create failed", exc_info=True)
             return None
 
+    def finish_idempotent_upload(
+        self,
+        entry: dict[str, Any],
+        *,
+        idempotency_key: str,
+        operation: str,
+        request_hash: str,
+        size_bytes: int,
+        sha256: str,
+        completed_at: str,
+        publish: Callable[[DatasetRecord], Any],
+        response_factory: Callable[[DatasetRecord], dict[str, Any]],
+    ) -> tuple[str, DatasetRecord]:
+        """Reserve, publish, and durably complete one idempotent upload.
+
+        A MySQL named lock serializes the same owner/key/operation across
+        processes and is released automatically if the connection dies.
+        Reservation is committed before the potentially large file copy; READY
+        and the replay response are committed together after atomic publish.
+
+        Failure windows are intentional and recoverable: a crash before the
+        reservation can leave only a control-plane ``.part`` orphan; a crash
+        after reservation leaves one ``UPLOADING`` Dataset bound to the key; a
+        crash during or after atomic publish leaves the same target path to be
+        replaced on retry; and an ambiguous final commit is replayed from the
+        completed idempotency row. Retention cleanup owns orphan ``.part`` files.
+        """
+        if self.repo is None:
+            raise FormalDatasetError(
+                "dataset_formal_unavailable",
+                "Formal MySQL dataset plane is required but not available",
+                status=503,
+            )
+        payload = {
+            **entry,
+            "idempotency_key": idempotency_key,
+            "operation": operation,
+            "request_hash": request_hash,
+        }
+        if self.conn_factory is None:
+            try:
+                with self._lock:
+                    outcome, record = self.repo.reserve_idempotent_upload(None, payload)
+                    if outcome != "replay":
+                        publish(record)
+                        record = self.repo.complete_idempotent_upload(
+                            None,
+                            record.dataset_id,
+                            OwnerScope(org_id=record.org_id, user_id=record.user_id),
+                            idempotency_key=idempotency_key,
+                            operation=operation,
+                            request_hash=request_hash,
+                            size_bytes=size_bytes,
+                            sha256=sha256,
+                            completed_at=completed_at,
+                            response_json=response_factory(record),
+                        )
+                    return outcome, record
+            except ConflictError as exc:
+                raise FormalDatasetError(
+                    "dataset_idempotency_conflict", str(exc), status=409
+                ) from exc
+            except FormalDatasetError:
+                raise
+            except Exception as exc:
+                from sandbox.services.control_plane_storage import ControlPlaneError
+                from sandbox.services.workspace_quota_ledger import QuotaExceededError
+
+                if isinstance(exc, (ControlPlaneError, QuotaExceededError)):
+                    raise
+                raise FormalDatasetError(
+                    "dataset_formal_idempotency_failed",
+                    "Formal Dataset idempotency failed",
+                    status=503,
+                ) from exc
+
+        try:
+            maybe = self.conn_factory()
+            if hasattr(maybe, "__enter__"):
+                with maybe as conn:
+                    return self._finish_idempotent_on_connection(
+                        conn,
+                        payload=payload,
+                        idempotency_key=idempotency_key,
+                        operation=operation,
+                        request_hash=request_hash,
+                        size_bytes=size_bytes,
+                        sha256=sha256,
+                        completed_at=completed_at,
+                        publish=publish,
+                        response_factory=response_factory,
+                    )
+            try:
+                return self._finish_idempotent_on_connection(
+                    maybe,
+                    payload=payload,
+                    idempotency_key=idempotency_key,
+                    operation=operation,
+                    request_hash=request_hash,
+                    size_bytes=size_bytes,
+                    sha256=sha256,
+                    completed_at=completed_at,
+                    publish=publish,
+                    response_factory=response_factory,
+                )
+            finally:
+                close = getattr(maybe, "close", None)
+                if callable(close):
+                    try:
+                        close()
+                    except Exception:
+                        logger.warning("Dataset idempotency connection close failed")
+        except FormalDatasetError:
+            raise
+        except Exception as exc:
+            from sandbox.services.control_plane_storage import ControlPlaneError
+            from sandbox.services.workspace_quota_ledger import QuotaExceededError
+
+            if isinstance(exc, (ControlPlaneError, QuotaExceededError)):
+                raise
+            raise FormalDatasetError(
+                "dataset_formal_idempotency_failed",
+                "Formal Dataset idempotency failed",
+                status=503,
+            ) from exc
+
+    def _finish_idempotent_on_connection(
+        self,
+        conn: Any,
+        *,
+        payload: dict[str, Any],
+        idempotency_key: str,
+        operation: str,
+        request_hash: str,
+        size_bytes: int,
+        sha256: str,
+        completed_at: str,
+        publish: Callable[[DatasetRecord], Any],
+        response_factory: Callable[[DatasetRecord], dict[str, Any]],
+    ) -> tuple[str, DatasetRecord]:
+        lock_material = "\x1f".join(
+            (
+                str(payload["org_id"]),
+                str(payload["user_id"]),
+                operation,
+                idempotency_key,
+            )
+        )
+        lock_name = "dataset:" + hashlib.sha256(
+            lock_material.encode("utf-8")
+        ).hexdigest()[:56]
+        acquired = False
+        try:
+            conn.execute("SELECT GET_LOCK(%s, %s) AS acquired", (lock_name, 30))
+            lock_row = conn.fetchone() or {}
+            lock_value = lock_row.get("acquired")
+            if lock_value is None and lock_row:
+                lock_value = next(iter(lock_row.values()))
+            acquired = int(lock_value or 0) == 1
+            if not acquired:
+                raise FormalDatasetError(
+                    "dataset_idempotency_busy",
+                    "Dataset upload with this Idempotency-Key is in progress",
+                    status=409,
+                )
+
+            outcome, record = self.repo.reserve_idempotent_upload(conn, payload)
+            conn.commit()
+            if outcome == "replay":
+                return outcome, record
+
+            publish(record)
+            record = self.repo.complete_idempotent_upload(
+                conn,
+                record.dataset_id,
+                OwnerScope(org_id=record.org_id, user_id=record.user_id),
+                idempotency_key=idempotency_key,
+                operation=operation,
+                request_hash=request_hash,
+                size_bytes=size_bytes,
+                sha256=sha256,
+                completed_at=completed_at,
+                response_json=response_factory(record),
+            )
+            conn.commit()
+            return outcome, record
+        except ConflictError as exc:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+            raise FormalDatasetError(
+                "dataset_idempotency_conflict", str(exc), status=409
+            ) from exc
+        except FormalDatasetError:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+            raise
+        except Exception as exc:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+            from sandbox.services.control_plane_storage import ControlPlaneError
+            from sandbox.services.workspace_quota_ledger import QuotaExceededError
+
+            if isinstance(exc, (ControlPlaneError, QuotaExceededError)):
+                raise
+            raise FormalDatasetError(
+                "dataset_formal_idempotency_failed",
+                "Formal Dataset idempotency failed",
+                status=503,
+            ) from exc
+        finally:
+            if acquired:
+                try:
+                    conn.execute("SELECT RELEASE_LOCK(%s) AS released", (lock_name,))
+                    conn.fetchone()
+                except Exception:
+                    logger.warning("Dataset idempotency lock release failed")
+
     def mark_ready(
         self,
         dataset_id: str,
@@ -419,13 +776,25 @@ class FormalDatasetDualWriter:
         scope: OwnerScope | dict[str, str],
     ) -> DatasetRecord | None:
         if self.repo is None:
+            if self.authoritative:
+                raise FormalDatasetError(
+                    "dataset_formal_unavailable",
+                    "Formal MySQL dataset plane is required but not available",
+                    status=503,
+                )
             return None
         try:
             with self._lock:
                 return self._with_conn(
                     lambda conn: self.repo.get_by_id(conn, dataset_id, scope)
                 )
-        except Exception:
+        except Exception as exc:
+            if self.authoritative:
+                raise FormalDatasetError(
+                    "dataset_formal_read_failed",
+                    "Formal Dataset read failed",
+                    status=503,
+                ) from exc
             return None
 
     def list_for_owner(
@@ -436,6 +805,12 @@ class FormalDatasetDualWriter:
         limit: int = 50,
     ) -> list[DatasetRecord]:
         if self.repo is None:
+            if self.authoritative:
+                raise FormalDatasetError(
+                    "dataset_formal_unavailable",
+                    "Formal MySQL dataset plane is required but not available",
+                    status=503,
+                )
             return []
         try:
             with self._lock:
@@ -450,22 +825,28 @@ class FormalDatasetDualWriter:
                     )
                     or []
                 )
-        except Exception:
+        except Exception as exc:
+            if self.authoritative:
+                raise FormalDatasetError(
+                    "dataset_formal_read_failed",
+                    "Formal Dataset list failed",
+                    status=503,
+                ) from exc
             return []
 
 
 def try_wire_formal_dataset_repository() -> FormalDatasetDualWriter:
     """Wire production MySQL DatasetRepository when DSN is formal MySQL.
 
-    Offline sqlite/test DSNs leave formal disabled (tests inject Fake).
-    Real MySQL connectivity failure is a gate for operators — we raise only
+    Unit tests inject repository fakes explicitly. Real MySQL connectivity
+    failure is a gate for operators — we raise only
     when MySQL is configured and import/connect kwargs parse fails closed
     at call sites that require authoritative writes.
     """
-    from sandbox.config import is_legacy_test_database_url, is_mysql_database_url, settings
+    from sandbox.config import is_mysql_database_url, settings
 
     url = (settings.database_url or "").strip()
-    if not url or is_legacy_test_database_url(url) or not is_mysql_database_url(url):
+    if not url or not is_mysql_database_url(url):
         return FormalDatasetDualWriter(None, authoritative=False)
     try:
         from sandbox.app.persistence.db import create_mysql_database

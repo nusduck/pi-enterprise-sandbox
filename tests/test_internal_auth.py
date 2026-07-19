@@ -147,6 +147,50 @@ def test_good_handcrafted_token_and_request_binding() -> None:
     assert verify_request(value)["tool_execution_id"] == "tool_execution_1"
 
 
+def test_pre_run_session_ensure_is_the_only_null_run_fence_profile() -> None:
+    session_path = b"/internal/v1/sessions/ensure"
+    body = b'{"workspaceId":"01K0G2PAV8FPMVC9QHJG7JPN55"}'
+    base = claims(
+        run_id=None,
+        execution_fence_token=None,
+        tool_name="session.ensure",
+        scope=["sandbox.sessions.ensure"],
+        tool_execution_id="agent_session_1:session.ensure",
+        tool_call_id="agent_session_1:session.ensure",
+        htu=session_path.decode("ascii"),
+        request_hash=hashlib.sha256(body).hexdigest(),
+        body_sha256=hashlib.sha256(body).hexdigest(),
+    )
+    verified = verify_internal_request(
+        token(base),
+        keys=KEYS,
+        expected_issuer="agent-service",
+        expected_audience="sandbox-service",
+        expected_subject="agent-worker",
+        method="POST",
+        raw_path=session_path,
+        raw_query=b"",
+        raw_body=body,
+        expected_scope="sandbox.sessions.ensure",
+        expected_tool_name="session.ensure",
+        now=NOW,
+    )
+    assert verified["run_id"] is None
+    assert verified["execution_fence_token"] is None
+
+    for invalid in (
+        {**base, "tool_name": "write"},
+        {**base, "scope": ["sandbox.files.write"]},
+        {**base, "htu": "/internal/v1/sessions/not-ensure"},
+        {**base, "run_id": "run_1"},
+        {**base, "execution_fence_token": 1},
+    ):
+        assert_code(
+            "INTERNAL_TOKEN_CLAIM_VALUE",
+            lambda invalid=invalid: verify(token(invalid)),
+        )
+
+
 @pytest.mark.parametrize(
     ("header", "code"),
     [

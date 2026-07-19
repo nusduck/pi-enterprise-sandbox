@@ -1,54 +1,101 @@
-# Development reset and empty PostgreSQL cutover
+# Development reset (MySQL-only formal topology)
 
-This runbook is intentionally destructive. It is only for the current development-stage full reset. It does not back up, migrate, snapshot, or restore existing users, conversations, sessions, events, audits, workspaces, or attachments.
+This runbook irreversibly clears the disposable development stack. It is for
+the formal development topology, which uses MySQL 8 for durable state and
+Redis 7 for coordination. It does not migrate, back up, snapshot, or restore
+user data.
+
+SQLite and PostgreSQL are not reset targets. The old SQLite reset helper was
+removed with the compatibility persistence layer; this runbook only resets the
+Compose project's MySQL/Redis volumes and project-owned filesystem roots.
 
 ## Preconditions
 
-1. Stop Frontend, BFF, Agent, and Sandbox. Block new requests.
-2. Confirm the target is the `pi-enterprise-sandbox` development environment.
-3. Set `RESET_ALLOWED_ROOT` to the narrow project-owned state root. It must not be `/` and every file target must resolve below it.
-4. Set `RESET_DATABASE_NAME` to the exact PostgreSQL database name. The reset rejects a different database in the DSN.
-5. Do not run `scripts/backup.sh` or create a snapshot for this cutover.
+1. Stop Frontend, BFF, Agent, Agent Worker, and Sandbox. Block new requests.
+2. Confirm the target is the disposable `pi-enterprise-sandbox` development
+   project. Do not run this procedure against production or a shared MySQL.
+3. Set `RESET_ALLOWED_ROOT` to a narrow, project-owned state root. It must
+   not be `/`, `$HOME`, or a shared parent directory.
+4. Set workspace and attachment roots below that allowed root. The shell guard
+   below refuses to continue when either path escapes it.
+5. Do not run `scripts/backup.sh` or create a snapshot for this empty-state
+   reset unless a separate retention requirement explicitly calls for it.
 
-Required environment:
+Required environment (use absolute paths):
 
 ```bash
 export DEPLOYMENT_ENV=development
 export PROJECT_ID=pi-enterprise-sandbox
 export RESET_ALLOWED_ROOT=/absolute/project-owned/state
-export RESET_DATABASE_NAME=sandbox
-export SANDBOX_DATABASE_URL=sqlite:////absolute/project-owned/state/data/sandbox.db
 export SANDBOX_WORKSPACES_ROOT=/absolute/project-owned/state/workspaces
 export SANDBOX_ATTACHMENTS_ROOT=/absolute/project-owned/state/workspaces
+export MYSQL_DATABASE=sandbox
+export MYSQL_USER=sandbox
 ```
 
-Attachments currently live inside each workspace, so the last two roots may be the same. Both are still listed in the preflight output.
+`AGENT_DATABASE_URL` and `SANDBOX_DATABASE_URL` must both resolve to the
+development MySQL service (for example, `mysql://...@mysql:3306/sandbox` and
+`mysql+pymysql://...@mysql:3306/sandbox`). Do not put a SQLite or PostgreSQL
+DSN in `.env` to make this procedure pass.
 
 ## Preflight and reset
 
-The command defaults to dry-run and prints only the target paths; it never prints the DSN or credentials.
+Review the paths before deleting anything:
 
 ```bash
-.venv/bin/python scripts/reset-development.py \
-  --confirm 'RESET pi-enterprise-sandbox DEVELOPMENT DATA'
+test "$DEPLOYMENT_ENV" = development
+test "$PROJECT_ID" = pi-enterprise-sandbox
+test -d "$RESET_ALLOWED_ROOT"
+case "$SANDBOX_WORKSPACES_ROOT" in
+  "$RESET_ALLOWED_ROOT"/*) ;;
+  *) echo 'workspace root escapes RESET_ALLOWED_ROOT' >&2; exit 1 ;;
+esac
+case "$SANDBOX_ATTACHMENTS_ROOT" in
+  "$RESET_ALLOWED_ROOT"/*) ;;
+  *) echo 'attachment root escapes RESET_ALLOWED_ROOT' >&2; exit 1 ;;
+esac
+printf 'Resetting MySQL database %s and filesystem roots:\n' "$MYSQL_DATABASE"
+printf '  %s\n  %s\n' "$SANDBOX_WORKSPACES_ROOT" "$SANDBOX_ATTACHMENTS_ROOT"
 ```
 
-Review every listed target. Then execute:
+Stop the stack and remove only this Compose project's named volumes. This
+clears MySQL facts and Redis coordination state together; no old Run or
+Conversation state is retained:
 
 ```bash
-.venv/bin/python scripts/reset-development.py \
-  --confirm 'RESET pi-enterprise-sandbox DEVELOPMENT DATA' \
-  --execute
+docker compose down -v --remove-orphans
 ```
 
-SQLite removes the database, WAL, SHM, and contents of the declared state roots. PostgreSQL transactionally recreates the `public` schema in the explicitly named database, then clears the declared filesystem roots. Skill packages are cleared by the R8 zero-Skill cutover, not by this command.
+Clear the project-owned workspace roots after the stack is stopped. The
+`mindepth` guard prevents deleting the allowed root itself:
+
+```bash
+mkdir -p "$SANDBOX_WORKSPACES_ROOT" "$SANDBOX_ATTACHMENTS_ROOT"
+find "$SANDBOX_WORKSPACES_ROOT" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
+if [ "$SANDBOX_ATTACHMENTS_ROOT" != "$SANDBOX_WORKSPACES_ROOT" ]; then
+  find "$SANDBOX_ATTACHMENTS_ROOT" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
+fi
+```
 
 ## Redeploy from empty state
 
-1. Deploy the complete new version; do not start a mixed-version stack.
-2. Set a strong `POSTGRES_PASSWORD` and start the production overlay. PostgreSQL is mandatory there; SQLite remains development/test only.
-3. Sandbox startup applies immutable `schema_migrations`. A repeated initialization must make no schema changes; a checksum mismatch is a release-blocking error.
-4. Provision the first administrator through the R6 admin flow.
-5. Run database, zero-Skill, relative-workspace, event ordering, authorization, and cross-service smoke checks before reopening traffic.
+1. Start a complete, same-version stack; do not mix old Agent, Worker, BFF,
+   or Sandbox images:
 
-If any step fails, keep traffic stopped, fix the cause, and restart from an empty environment. There is no old-data rollback path for this development cutover.
+   ```bash
+   docker compose build agent agent-worker api-server sandbox
+   docker compose up -d
+   ```
+
+2. Agent startup applies the immutable MySQL migrations. Verify the migration
+   table and checksums before accepting traffic; a checksum mismatch is a
+   release-blocking error.
+3. Verify `/health/ready`, Agent/Sandbox readiness, and the formal internal
+   HMAC plane before opening traffic.
+4. Run the zero-Skill, workspace isolation, event ordering, authorization,
+   dataset, artifact, and cross-service smoke gates.
+5. Provision the first administrator through the current admin flow.
+
+If a migration or readiness check fails, keep traffic stopped, fix the cause,
+and repeat from an empty MySQL/Redis volume. There is no old-data rollback
+path for this destructive development reset.

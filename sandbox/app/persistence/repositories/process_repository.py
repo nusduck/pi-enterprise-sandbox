@@ -142,6 +142,7 @@ class ProcessRepository:
         stderr_path: str | None = None,
         started_at: str | None = None,
         ended_at: str | None = None,
+        command_json: dict[str, Any] | None = None,
     ) -> ProcessRecord:
         s = require_owner_scope(scope, resource=TABLE)
         if sandbox_session_id is not None:
@@ -149,6 +150,7 @@ class ProcessRepository:
                 f"""
                 UPDATE {TABLE}
                 SET status = %s,
+                    command_json = COALESCE(%s, command_json),
                     pid = COALESCE(%s, pid),
                     exit_code = COALESCE(%s, exit_code),
                     stdout_path = COALESCE(%s, stdout_path),
@@ -160,6 +162,7 @@ class ProcessRepository:
                 """,
                 (
                     status,
+                    dumps_json(command_json) if command_json is not None else None,
                     pid,
                     exit_code,
                     stdout_path,
@@ -177,6 +180,7 @@ class ProcessRepository:
                 f"""
                 UPDATE {TABLE}
                 SET status = %s,
+                    command_json = COALESCE(%s, command_json),
                     pid = COALESCE(%s, pid),
                     exit_code = COALESCE(%s, exit_code),
                     stdout_path = COALESCE(%s, stdout_path),
@@ -187,6 +191,7 @@ class ProcessRepository:
                 """,
                 (
                     status,
+                    dumps_json(command_json) if command_json is not None else None,
                     pid,
                     exit_code,
                     stdout_path,
@@ -198,15 +203,36 @@ class ProcessRepository:
                     s.user_id,
                 ),
             )
-        if getattr(conn, "rowcount", 1) == 0:
-            raise NotFoundError(
-                "Process not found",
-                resource=TABLE,
-                id=process_id,
-            )
+        # MySQL reports changed rows by default. A valid lifecycle update can
+        # therefore return rowcount=0 when the requested values already match
+        # the durable row (for example, a repeated TERM or status heartbeat).
+        # The owner-scoped read below is the authoritative existence check.
         return self.require_by_id(
             conn, process_id, s, sandbox_session_id=sandbox_session_id
         )
+
+    def list_active_for_recovery(
+        self,
+        conn: SupportsExecute,
+        *,
+        limit: int = 1000,
+    ) -> list[ProcessRecord]:
+        """List non-terminal processes for trusted runner restart recovery.
+
+        This is deliberately an unscoped system operation. It is only called
+        during Sandbox startup before user routes are admitted.
+        """
+        conn.execute(
+            f"""
+            SELECT * FROM {TABLE}
+            WHERE LOWER(status) NOT IN
+              ('completed', 'failed', 'cancelled', 'timeout', 'orphaned', 'lost')
+            ORDER BY created_at ASC
+            LIMIT %s
+            """,
+            (int(limit),),
+        )
+        return [map_process(row) for row in conn.fetchall()]
 
     def list_by_sandbox_session(
         self,

@@ -8,7 +8,7 @@ import { isValidMcpToolName } from '../../infrastructure/mcp/mcp-config-loader.j
 const LOCAL_SET = new Set(SANDBOX_TOOL_NAMES);
 
 /**
- * @typedef {'local_low' | 'external_readonly' | 'external_high' | 'unknown'} ToolRiskClass
+ * @typedef {'local_low' | 'external_readonly' | 'external_high' | 'internal_interaction' | 'unknown'} ToolRiskClass
  */
 
 /**
@@ -21,6 +21,9 @@ const LOCAL_SET = new Set(SANDBOX_TOOL_NAMES);
  */
 export function classifyTool(toolName, opts = {}) {
   const name = String(toolName || '');
+  if (name === 'ask_user') {
+    return { class: 'internal_interaction' };
+  }
   if (LOCAL_SET.has(name)) {
     return { class: 'local_low' };
   }

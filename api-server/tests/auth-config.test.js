@@ -37,7 +37,14 @@ describe('isProtectedApiPath', () => {
     assert.equal(isProtectedApiPath('/api/extensions/diagnostics'), true);
     assert.equal(isProtectedApiPath('/api/capabilities/tools'), true);
     assert.equal(isProtectedApiPath('/api/files/upload'), true);
+    assert.equal(isProtectedApiPath('/api/datasets'), true);
+    assert.equal(
+      isProtectedApiPath('/api/conversations/conversation-id/datasets'),
+      true,
+    );
     assert.equal(isProtectedApiPath('/api/sessions/ensure'), true);
+    assert.equal(isProtectedApiPath('/api/processes'), true);
+    assert.equal(isProtectedApiPath('/api/processes/process-id/logs'), true);
   });
 });
 

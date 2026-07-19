@@ -35,6 +35,9 @@ import {
 } from './event-projector.js';
 import { A2A_RPC_ERROR, JSON_RPC_ERROR } from './json-rpc.js';
 import { deterministicA2aTaskId } from './deterministic-task-id.js';
+import { formatA2aExternalUserId } from './identity.js';
+
+export { formatA2aExternalUserId } from './identity.js';
 
 export class A2aTaskError extends Error {
   /**
@@ -221,6 +224,8 @@ export class A2aTaskService {
    *   agentId: string,
    *   params: Record<string, unknown>,
    *   traceId: string,
+   *   traceState?: string | null,
+   *   spanId?: string | null,
    *   idempotencyKey?: string | null,
    *   method?: string,
    * }} input
@@ -248,15 +253,21 @@ export class A2aTaskService {
         auth: {
           provider: this.defaultProvider,
           externalOrgId: input.principal.orgId,
-          externalUserId: input.principal.clientId,
+          externalUserId: formatA2aExternalUserId(
+            input.principal.orgId,
+            input.principal.clientId,
+          ),
           externalConversationId:
             contextId && isUlid(contextId) ? contextId : null,
           displayName: `a2a:${input.principal.clientId}`,
           orgName: `a2a-org:${input.principal.orgId}`,
         },
         traceId: input.traceId,
+        ...(input.traceState ? { traceState: input.traceState } : {}),
         idempotencyKey,
+        agentId: input.agentId,
         agentProfileId: input.agentId,
+        spanId: input.spanId ?? null,
         budget: metadata?.budget ?? null,
       });
     } catch (err) {
@@ -608,6 +619,39 @@ export class A2aTaskService {
     );
   }
 
+  /**
+   * Record an owner-authorized Artifact byte delivery. Unlike stream-end
+   * telemetry, this is part of the access decision and therefore fails closed
+   * when the durable audit append is unavailable.
+   * @param {{
+   *   principal: object,
+   *   agentId: string,
+   *   taskId: string,
+   *   runId: string,
+   *   artifactId: string,
+   *   traceId?: string | null,
+   * }} input
+   */
+  async auditArtifactDownload(input) {
+    this.#assertScope(input.principal, A2A_SCOPES.ARTIFACT_READ);
+    this.#assertAgentBinding(input.principal, input.agentId);
+    await this.#auditRequired({
+      orgId: input.principal.orgId,
+      clientId: input.principal.clientId,
+      credentialId: input.principal.credentialId,
+      agentId: input.principal.agentId,
+      a2aTaskId: assertUlid(input.taskId, 'taskId'),
+      runId: assertUlid(input.runId, 'runId'),
+      traceId: input.traceId || null,
+      eventType: 'a2a.artifact_download',
+      method: 'ArtifactDownload',
+      payloadJson: {
+        outcome: 'authorized',
+        artifactId: assertUlid(input.artifactId, 'artifactId'),
+      },
+    });
+  }
+
   async resolveOwnedTask(principal, taskId) {
     return this.#loadOwnedTask(principal, taskId);
   }
@@ -641,7 +685,10 @@ export class A2aTaskService {
     return {
       provider: this.defaultProvider,
       externalOrgId: principal.orgId,
-      externalUserId: principal.clientId,
+      externalUserId: formatA2aExternalUserId(
+        principal.orgId,
+        principal.clientId,
+      ),
     };
   }
 
@@ -796,7 +843,11 @@ export class A2aTaskService {
       orgId: principal.orgId,
     });
     if (!repos.organizations?.createUserIfAbsent) return;
-    const encoded = formatUserExternalSubject(provider, principal.clientId);
+    const externalUserId = formatA2aExternalUserId(
+      principal.orgId,
+      principal.clientId,
+    );
+    const encoded = formatUserExternalSubject(provider, externalUserId);
     const bySubject = await repos.organizations.getUserByExternalSubject(
       encoded,
     );

@@ -6,9 +6,11 @@ import {
   CreateRunResponseSchema,
   RunDetailSchema,
   ToolExecutionSnapshotSchema,
+  RunTraceResponseSchema,
   type CreateRunResponse,
   type RunDetail,
   type ToolExecutionSnapshot,
+  type RunTraceResponse,
 } from '../schemas/events';
 import { parseApiStrict } from '../schemas/api';
 import { authHeaders, ApiError } from './client';
@@ -16,6 +18,7 @@ import type { SSEEvent } from '../sse/parser';
 import { readSSEStream } from '../sse/parser';
 
 export type { CreateRunResponse, RunDetail, ToolExecutionSnapshot };
+export type { RunTraceResponse };
 
 const BASE = '/api';
 
@@ -110,6 +113,40 @@ export async function listRunTools(runId: string): Promise<ToolExecutionSnapshot
   } catch (err) {
     if (err instanceof ApiError) throw err;
     throw new ApiError((err as Error).message || 'List run tools failed');
+  }
+}
+
+/** GET /runs/{run_id}/trace — durable owner-scoped trace projection. */
+export async function getRunTraceSpans(
+  runId: string,
+  opts: { limit?: number; cursor?: string | null } = {},
+): Promise<RunTraceResponse> {
+  try {
+    const query = new URLSearchParams();
+    if (opts.limit != null) query.set('limit', String(opts.limit));
+    if (opts.cursor) query.set('cursor', String(opts.cursor));
+    const suffix = query.toString() ? `?${query.toString()}` : '';
+    const resp = await fetch(
+      `${BASE}/runs/${encodeURIComponent(runId)}/trace${suffix}`,
+      {
+        headers: authHeaders(),
+      },
+    );
+    if (!resp.ok) {
+      const err = await errorBody(resp);
+      throw new ApiError(
+        String(err.error || `Get run trace failed: ${resp.status}`),
+        { status: resp.status, traceId: resp.headers.get('x-trace-id') },
+      );
+    }
+    return parseApiStrict(
+      RunTraceResponseSchema,
+      await resp.json(),
+      'getRunTraceSpans',
+    );
+  } catch (err) {
+    if (err instanceof ApiError) throw err;
+    throw new ApiError((err as Error).message || 'Get run trace failed');
   }
 }
 
@@ -295,11 +332,13 @@ export async function steerRun(
   body: { text: string; conversation_id?: string | null },
 ): Promise<{ ok: boolean; data?: unknown; error?: string }> {
   try {
+    const headers = authHeaders({ 'Content-Type': 'application/json' });
+    headers['Idempotency-Key'] = createIdempotencyKey('steer');
     const resp = await fetch(
       `${BASE}/runs/${encodeURIComponent(runId)}/steer`,
       {
         method: 'POST',
-        headers: authHeaders({ 'Content-Type': 'application/json' }),
+        headers,
         body: JSON.stringify({
           text: body.text,
           conversation_id: body.conversation_id ?? null,
@@ -321,22 +360,24 @@ export async function steerRun(
 }
 
 /**
- * POST /api/runs/{run_id}/follow-up — queue text after current run work.
- * Contract failures are surfaced to the caller.
+ * POST /api/conversations/{conversation_id}/follow-ups — create the next Run.
+ * The returned Run is durable and must be tracked through its own SSE stream.
  */
 export async function followUpRun(
-  runId: string,
-  body: { text: string; conversation_id?: string | null },
-): Promise<{ ok: boolean; data?: unknown; error?: string }> {
+  conversationId: string,
+  body: { text: string; agent_id?: string | null },
+): Promise<CreateRunResponse> {
   try {
+    const headers = authHeaders({ 'Content-Type': 'application/json' });
+    headers['Idempotency-Key'] = createIdempotencyKey('follow_up');
     const resp = await fetch(
-      `${BASE}/runs/${encodeURIComponent(runId)}/follow-up`,
+      `${BASE}/conversations/${encodeURIComponent(conversationId)}/follow-ups`,
       {
         method: 'POST',
-        headers: authHeaders({ 'Content-Type': 'application/json' }),
+        headers,
         body: JSON.stringify({
           text: body.text,
-          conversation_id: body.conversation_id ?? null,
+          agent_id: body.agent_id ?? null,
         }),
       },
     );
@@ -347,7 +388,11 @@ export async function followUpRun(
         { status: resp.status },
       );
     }
-    return { ok: true, data: await resp.json().catch(() => ({})) };
+    return parseApiStrict(
+      CreateRunResponseSchema,
+      await resp.json(),
+      'followUpRun',
+    );
   } catch (err) {
     if (err instanceof ApiError) throw err;
     throw new ApiError((err as Error).message || 'Follow-up failed');

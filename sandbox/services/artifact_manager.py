@@ -106,7 +106,7 @@ class ArtifactManager:
         formal: FormalArtifactDualWriter | None = None,
         auto_wire_formal: bool = True,
     ) -> None:
-        # No legacy SQLite dependency for authority.
+        # Artifact authority is supplied by the formal lifecycle runtime.
         if formal is not None:
             self._formal = formal
         elif auto_wire_formal:
@@ -500,7 +500,7 @@ class ArtifactManager:
         conversation_id: str | None = None,
         run_id: str | None = None,
     ) -> ArtifactResponse | None:
-        """Authoritative owner gate — formal plane when enabled (no SQLite).
+        """Authoritative owner gate supplied by the formal runtime.
 
         Bound path (agent_session_id + conversation_id present):
           formal row under org/user, then strict binding compare; run_id if set.
@@ -690,4 +690,4 @@ class ArtifactManager:
         )
 
 
-artifact_manager = ArtifactManager(auto_wire_formal=True)
+artifact_manager = ArtifactManager(auto_wire_formal=False)

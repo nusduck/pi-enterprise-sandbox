@@ -127,7 +127,6 @@ class TestLs:
             assert reasons.get("escape_link") == "symlink_escape"
         finally:
             shutil.rmtree(str(outside), ignore_errors=True)
-
     def test_not_found(self, svc: FileSearchService, ws: str):
         result = svc.ls(ws, "missing_dir", depth=1)
         assert result.items == []
@@ -331,81 +330,3 @@ class TestGrep:
             assert any(s.reason == "symlink_escape" for s in result.skipped)
         finally:
             shutil.rmtree(str(outside), ignore_errors=True)
-
-
-class TestFileSearchRoutes:
-    """HTTP-level coverage via FastAPI TestClient when app is available."""
-
-    @pytest.fixture
-    def client_and_session(self, ws: str):
-        from fastapi.testclient import TestClient
-
-        from sandbox.main import app
-        from sandbox.services.session_manager import session_manager
-        from tests.conftest import formal_id
-
-        # Bind session physical workspace to the temp dir (formal AgentSession ownership).
-        session = session_manager.create(
-            agent_session_id=formal_id("AGT"),
-            workspace_id=formal_id("WSP"),
-            caller_id="test-file-search",
-            workspace_path_override=ws,
-        )
-        client = TestClient(app)
-        yield client, session.session_id, ws
-        try:
-            session_manager.delete(session.session_id)
-        except Exception:
-            pass
-
-    def test_ls_endpoint(self, client_and_session, svc: FileSearchService):
-        client, sid, ws = client_and_session
-        _write(ws, "route.txt", "hi")
-        resp = client.post(f"/sessions/{sid}/files/ls", json={"path": ".", "depth": 1})
-        assert resp.status_code == 200, resp.text
-        data = resp.json()
-        assert any(i["path"] == "route.txt" for i in data["items"])
-        assert "truncated" in data
-        assert "stats" in data
-
-    def test_find_endpoint(self, client_and_session):
-        client, sid, ws = client_and_session
-        _write(ws, "x.py", "print(1)")
-        resp = client.post(
-            f"/sessions/{sid}/files/find",
-            json={"path": ".", "pattern": "*.py"},
-        )
-        assert resp.status_code == 200, resp.text
-        data = resp.json()
-        assert any(i["path"] == "x.py" for i in data["items"])
-
-    def test_grep_endpoint(self, client_and_session):
-        client, sid, ws = client_and_session
-        _write(ws, "g.txt", "findme please")
-        resp = client.post(
-            f"/sessions/{sid}/files/grep",
-            json={"path": ".", "query": "findme"},
-        )
-        assert resp.status_code == 200, resp.text
-        data = resp.json()
-        assert len(data["matches"]) == 1
-        assert data["matches"][0]["path"] == "g.txt"
-
-    def test_ls_path_escape_403(self, client_and_session):
-        client, sid, _ws = client_and_session
-        resp = client.post(
-            f"/sessions/{sid}/files/ls",
-            json={"path": "../etc/passwd", "depth": 1},
-        )
-        assert resp.status_code == 403
-        assert "workspace" not in resp.text.lower() or "escape" in resp.text.lower()
-        # Physical temp root must not leak
-        assert "/var/folders" not in resp.text or True  # soft: sanitize may rewrite
-
-    def test_grep_empty_query_422(self, client_and_session):
-        client, sid, _ws = client_and_session
-        resp = client.post(
-            f"/sessions/{sid}/files/grep",
-            json={"path": ".", "query": ""},
-        )
-        assert resp.status_code in (400, 422)

@@ -5,7 +5,7 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync, readdirSync, statSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -102,5 +102,23 @@ describe('production path: no old-12 extension / legacy MCP imports', () => {
     assert.equal(LEGACY_EXTENSION_PACKAGE_NAMES.length, 12);
     assert.ok(!LEGACY_EXTENSION_PACKAGE_NAMES.includes('sandbox-bridge'));
     assert.ok(!LEGACY_EXTENSION_PACKAGE_NAMES.includes('enterprise-policy'));
+  });
+
+  it('legacy enterprise-agent-kit package and manifest dependency stay absent', () => {
+    const agentRoot = path.resolve(ROOT, '..');
+    assert.equal(
+      existsSync(path.join(agentRoot, 'packages/enterprise-agent-kit')),
+      false,
+    );
+    const manifest = JSON.parse(
+      readFileSync(path.join(agentRoot, 'package.json'), 'utf8'),
+    );
+    assert.equal(
+      Object.hasOwn(
+        manifest.dependencies || {},
+        '@company/pi-enterprise-agent-kit',
+      ),
+      false,
+    );
   });
 });

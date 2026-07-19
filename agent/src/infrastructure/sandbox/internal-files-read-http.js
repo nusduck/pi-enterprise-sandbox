@@ -3,8 +3,8 @@
  *
  * Explicit injection only (base URL, HMAC keyring/active kid or tokenIssuer,
  * fetch, clock, jti/randomBytes, timeouts, maxAttempts). Offline-testable.
- * Not wired into production bootstrap/worker in this batch — no silent
- * fallback to legacy browser-Bearer sandbox-client.
+ * Production bootstrap injects this transport into sandbox-bridge readFile;
+ * no browser Bearer or legacy public route is used for formal reads.
  *
  * Contract: body keys/shape match Python files_read_contract; exact raw
  * body bytes are used for body_sha256 and the fetch body; claims match
@@ -19,6 +19,7 @@ import {
 } from './internal-hmac.js';
 import { computeToolRequestHashV1 } from '../../domain/tool/tool-request-hash.js';
 import { assertUlid } from '../../domain/shared/ulid.js';
+import { createTraceHeaders } from './trace-context.js';
 
 export const FILES_READ_HTU = '/internal/v1/files/read';
 export const FILES_READ_TOOL_NAME = 'read';
@@ -920,6 +921,7 @@ function isRetryableTransportFailure(err) {
  *   maxResponseBytes?: number,
  *   ttlSeconds?: number,
  *   signal?: AbortSignal,
+ *   spanRandomBytes?: (size: number) => Uint8Array,
  * }} options
  */
 export function createInternalFilesReadTransport(options) {
@@ -1154,6 +1156,10 @@ export function createInternalFilesReadTransport(options) {
         const headers = {
           Authorization: `Bearer ${token}`,
           'Content-Type': 'application/json',
+          ...createTraceHeaders(normalized.identity.traceId, {
+            randomBytes: options.spanRandomBytes,
+            traceState: options.traceState,
+          }),
         };
         // Single Authorization only — never X-API-Key / browser bearer.
 

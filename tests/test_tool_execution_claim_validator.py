@@ -432,7 +432,7 @@ def seed_happy(db: ClaimFakeDatabase, **overrides: Any) -> None:
         "user_id": USER,
         "agent_session_id": AGENT,
         "workspace_id": WS,
-        "status": "RUNNING",
+        "status": "ACTIVE",
     }
     te = {
         "tool_execution_id": TE,
@@ -709,6 +709,13 @@ class TestOwnerMaskingAndConflicts:
         seed_happy(db, run={"status": "SUCCEEDED"})
         v = ToolExecutionClaimValidator(db)
         with pytest.raises(ConflictError, match="RUNNING"):
+            v.claim(base_claim())
+
+    def test_sandbox_session_must_use_formal_active_status(self) -> None:
+        db = ClaimFakeDatabase()
+        seed_happy(db, sbx={"status": "RUNNING"})
+        v = ToolExecutionClaimValidator(db)
+        with pytest.raises(ConflictError, match="ACTIVE"):
             v.claim(base_claim())
 
     def test_bidirectional_binding_mismatch_conflict(self) -> None:

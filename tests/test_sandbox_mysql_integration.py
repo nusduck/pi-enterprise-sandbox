@@ -46,6 +46,7 @@ REQUIRED_TABLES = (
     "sandbox_audit_events",
     "datasets",
     "artifacts",
+    "idempotency_records",
 )
 
 
@@ -217,6 +218,126 @@ class TestSandboxMysqlIntegration:
                     "DELETE FROM datasets WHERE dataset_id = %s "
                     "AND org_id = %s AND user_id = %s",
                     (dataset_id, ORG, USER),
+                )
+
+    def test_dataset_idempotency_reservation_and_replay(self, db) -> None:
+        from sandbox.app.persistence.errors import ConflictError
+        from sandbox.app.persistence.repositories.dataset_repository import (
+            DatasetRepository,
+        )
+
+        repo = DatasetRepository(db)
+        dataset_id = _ulid_like()
+        replay_candidate = _ulid_like()
+        conflict_candidate = _ulid_like()
+        key = f"dataset-it-{uuid.uuid4().hex}"
+        operation = f"dataset.upload:{CONV}"
+        request_hash = "a" * 64
+
+        def upload_input(candidate_id: str, hash_value: str) -> dict[str, object]:
+            return {
+                "dataset_id": candidate_id,
+                "org_id": ORG,
+                "user_id": USER,
+                "conversation_id": CONV,
+                "agent_session_id": AGENT_SESS,
+                "original_filename": "idempotent.csv",
+                "stored_relative_path": f"datasets/{candidate_id}/idempotent.csv",
+                "mime_type": "text/csv",
+                "size_bytes": None,
+                "sha256": None,
+                "status": "uploading",
+                "created_at": "2026-07-19 00:00:00.000",
+                "completed_at": None,
+                "expires_at": "2099-01-01 00:00:00.000",
+                "idempotency_key": key,
+                "operation": operation,
+                "request_hash": hash_value,
+            }
+
+        with db.connection() as conn:
+            conn.execute(
+                "SELECT COUNT(*) AS n FROM information_schema.tables "
+                "WHERE table_schema = DATABASE() "
+                "AND table_name = 'idempotency_records'"
+            )
+            row = conn.fetchone()
+            if row is None or int(row["n"]) == 0:
+                pytest.skip("idempotency_records missing; apply Agent migration")
+            conn.execute(
+                "SELECT org_id FROM organizations WHERE org_id = %s",
+                (ORG,),
+            )
+            if conn.fetchone() is None:
+                pytest.skip("seed org not present; not creating Agent-owned rows")
+
+        try:
+            with db.transaction() as conn:
+                outcome, reserved = repo.reserve_idempotent_upload(
+                    conn,
+                    upload_input(dataset_id, request_hash),
+                )
+                assert outcome == "begun"
+                assert reserved.dataset_id == dataset_id
+                assert reserved.status == "uploading"
+
+            with db.transaction() as conn:
+                completed = repo.complete_idempotent_upload(
+                    conn,
+                    dataset_id,
+                    {"org_id": ORG, "user_id": USER},
+                    idempotency_key=key,
+                    operation=operation,
+                    request_hash=request_hash,
+                    size_bytes=4,
+                    sha256="b" * 64,
+                    completed_at="2026-07-19 00:00:01.000",
+                    response_json={"dataset_id": dataset_id, "status": "ready"},
+                )
+                assert completed.status == "ready"
+
+            with db.transaction() as conn:
+                outcome, replayed = repo.reserve_idempotent_upload(
+                    conn,
+                    upload_input(replay_candidate, request_hash),
+                )
+                assert outcome == "replay"
+                assert replayed.dataset_id == dataset_id
+
+            with pytest.raises(ConflictError):
+                with db.transaction() as conn:
+                    repo.reserve_idempotent_upload(
+                        conn,
+                        upload_input(conflict_candidate, "c" * 64),
+                    )
+
+            with db.connection() as conn:
+                conn.execute(
+                    "SELECT COUNT(*) AS n FROM datasets "
+                    "WHERE org_id = %s AND user_id = %s "
+                    "AND dataset_id IN (%s, %s, %s)",
+                    (ORG, USER, dataset_id, replay_candidate, conflict_candidate),
+                )
+                count_row = conn.fetchone()
+                assert count_row is not None
+                assert int(count_row["n"]) == 1
+        except Exception as exc:
+            message = str(exc).lower()
+            if "foreign key" in message or "cannot add or update" in message:
+                pytest.skip(f"FK parents missing for dataset insert: {exc}")
+            raise
+        finally:
+            with db.transaction() as conn:
+                conn.execute(
+                    "DELETE FROM idempotency_records "
+                    "WHERE org_id = %s AND user_id = %s "
+                    "AND idempotency_key = %s AND operation = %s",
+                    (ORG, USER, key, operation),
+                )
+                conn.execute(
+                    "DELETE FROM datasets WHERE org_id = %s AND user_id = %s "
+                    "AND dataset_id IN (%s, %s, %s)",
+                    (ORG, USER, dataset_id, replay_candidate, conflict_candidate),
                 )
 
     def test_sandbox_session_owner_isolation_when_fk_satisfied(self, db) -> None:

@@ -430,10 +430,10 @@ class FormalArtifactDualWriter:
 
 def try_wire_formal_artifact_repository() -> FormalArtifactDualWriter:
     """Wire production MySQL ArtifactRepository when DSN is formal MySQL."""
-    from sandbox.config import is_legacy_test_database_url, is_mysql_database_url, settings
+    from sandbox.config import is_mysql_database_url, settings
 
     url = (settings.database_url or "").strip()
-    if not url or is_legacy_test_database_url(url) or not is_mysql_database_url(url):
+    if not url or not is_mysql_database_url(url):
         return FormalArtifactDualWriter(None, authoritative=False)
     try:
         from sandbox.app.persistence.db import create_mysql_database

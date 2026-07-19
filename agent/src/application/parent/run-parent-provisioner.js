@@ -29,8 +29,16 @@ import {
   DEFAULT_EXTERNAL_PROVIDER,
   requireExternalSubject,
 } from './external-identity-resolver.js';
-import { ParentProvisioningRaceError, ValidationError } from '../errors.js';
-import { assertUlid, isLegacyOrUuidIdentity } from '../../domain/shared/ulid.js';
+import {
+  OwnerScopedNotFoundError,
+  ParentProvisioningRaceError,
+  ValidationError,
+} from '../errors.js';
+import {
+  assertUlid,
+  isLegacyOrUuidIdentity,
+  isUlid,
+} from '../../domain/shared/ulid.js';
 
 /**
  * @typedef {{
@@ -125,9 +133,10 @@ export class RunParentProvisioner {
    *   email?: string | null,
    *   orgName?: string | null,
    * }} auth
+   * @param {{ agentId?: string | null }} [selection]
    * @returns {Promise<ParentGraph>}
    */
-  async provision(auth) {
+  async provision(auth, selection = {}) {
     if (!auth || typeof auth !== 'object') {
       throw new ValidationError('auth context is required for parent provisioning');
     }
@@ -250,18 +259,49 @@ export class RunParentProvisioner {
     });
     created.membership = !membershipBefore;
 
-    // --- Tenant default agent ---
-    const beforeAgent = await this.repos.catalog.getDefinitionByOrgAndName(
-      orgId,
-      'default',
-    );
-    const { definition, version } =
-      await this.repos.catalog.ensureTenantDefaultAgent({
+    // --- Agent definition + immutable version ---
+    // A2A credentials select an explicit Agent. Resolve its active version in
+    // this transaction so a Run can never silently fall back to tenant default.
+    let definition;
+    let version;
+    if (selection.agentId) {
+      const requestedAgentId = assertUlid(selection.agentId, 'agentId');
+      definition = await this.repos.catalog.getDefinitionById(requestedAgentId);
+      if (
+        !definition ||
+        definition.orgId !== orgId ||
+        String(definition.status).toLowerCase() !== 'active'
+      ) {
+        throw new ValidationError(
+          'Selected agent is not active for this organization',
+        );
+      }
+      if (!definition.activeVersionId) {
+        throw new ValidationError('Selected agent has no active version');
+      }
+      version = await this.repos.catalog.getVersionById(
+        assertUlid(definition.activeVersionId, 'activeVersionId'),
+      );
+      if (
+        !version ||
+        version.agentId !== requestedAgentId ||
+        String(version.status).toLowerCase() !== 'active'
+      ) {
+        throw new ValidationError('Selected agent active version is unavailable');
+      }
+    } else {
+      const beforeAgent = await this.repos.catalog.getDefinitionByOrgAndName(
         orgId,
-        createdBy: userId,
-        generateId: () => this.#newUlid(),
-      });
-    created.agent = !beforeAgent;
+        'default',
+      );
+      ({ definition, version } =
+        await this.repos.catalog.ensureTenantDefaultAgent({
+          orgId,
+          createdBy: userId,
+          generateId: () => this.#newUlid(),
+        }));
+      created.agent = !beforeAgent;
+    }
     const agentId = assertUlid(definition.agentId, 'agentId');
     const agentVersionId = assertUlid(version.agentVersionId, 'agentVersionId');
     assertNotExternalInUlidSlot(agentId, 'agentId');
@@ -280,73 +320,107 @@ export class RunParentProvisioner {
         : null;
 
     if (externalConversationId) {
-      let convRef = await this.repos.externalRefs.getConversationRef({
-        orgId,
-        userId,
-        provider,
-        externalSubject: externalConversationId,
-      });
-      if (convRef) {
-        assertNotExternalInUlidSlot(convRef.conversationId, 'conversationId');
-        conversationId = assertUlid(convRef.conversationId, 'conversationId');
+      if (isUlid(externalConversationId)) {
+        conversationId = assertUlid(
+          externalConversationId,
+          'externalConversationId',
+        );
         const locked = await this.repos.conversations.lockById(
           conversationId,
           scope,
         );
-        if (!locked) {
-          throw new ParentProvisioningRaceError(
-            'Conversation ref exists but row missing; retry transaction',
-            { conversationId },
-          );
+        if (
+          !locked ||
+          String(locked.status || '').toLowerCase() === 'archived'
+        ) {
+          throw new OwnerScopedNotFoundError('Conversation not found', {
+            resource: 'conversations',
+            id: conversationId,
+          });
+        }
+        if (locked.agentId !== agentId) {
+          throw new ValidationError('Conversation is bound to a different agent');
         }
       } else {
-        conversationId = this.#newUlid();
-        try {
-          await this.repos.conversations.create({
+        let convRef = await this.repos.externalRefs.getConversationRef({
+          orgId,
+          userId,
+          provider,
+          externalSubject: externalConversationId,
+        });
+        if (convRef) {
+          assertNotExternalInUlidSlot(convRef.conversationId, 'conversationId');
+          conversationId = assertUlid(convRef.conversationId, 'conversationId');
+          const locked = await this.repos.conversations.lockById(
             conversationId,
-            orgId,
-            userId,
-            agentId,
-            title: null,
-            status: 'active',
-          });
-          created.conversation = true;
-        } catch (err) {
-          if (isDup(err) || err instanceof ConflictError) {
+            scope,
+          );
+          if (!locked) {
             throw new ParentProvisioningRaceError(
-              'Conversation create race; retry transaction',
+              'Conversation ref exists but row missing; retry transaction',
               { conversationId },
             );
           }
-          throw err;
-        }
-        try {
-          convRef = await this.repos.externalRefs.getOrCreateConversationRef({
-            orgId,
-            userId,
-            provider,
-            externalSubject: externalConversationId,
-            conversationId,
-          });
-        } catch (err) {
-          if (err instanceof ConflictError) {
-            throw new ParentProvisioningRaceError(
-              'Conversation external ref race; retry transaction',
-              { externalConversationId, provider },
+          if (String(locked.status || '').toLowerCase() === 'archived') {
+            throw new OwnerScopedNotFoundError('Conversation not found', {
+              resource: 'conversations',
+              id: conversationId,
+            });
+          }
+          if (locked.agentId !== agentId) {
+            throw new ValidationError(
+              'Conversation is bound to a different agent',
             );
           }
-          throw err;
+        } else {
+          conversationId = this.#newUlid();
+          try {
+            await this.repos.conversations.create({
+              conversationId,
+              orgId,
+              userId,
+              agentId,
+              title: null,
+              status: 'active',
+            });
+            created.conversation = true;
+          } catch (err) {
+            if (isDup(err) || err instanceof ConflictError) {
+              throw new ParentProvisioningRaceError(
+                'Conversation create race; retry transaction',
+                { conversationId },
+              );
+            }
+            throw err;
+          }
+          try {
+            convRef = await this.repos.externalRefs.getOrCreateConversationRef({
+              orgId,
+              userId,
+              provider,
+              externalSubject: externalConversationId,
+              conversationId,
+            });
+          } catch (err) {
+            if (err instanceof ConflictError) {
+              throw new ParentProvisioningRaceError(
+                'Conversation external ref race; retry transaction',
+                { externalConversationId, provider },
+              );
+            }
+            throw err;
+          }
+          if (convRef.conversationId !== conversationId) {
+            throw new ParentProvisioningRaceError(
+              'Conversation mapped to a different internal id; retry transaction',
+              {
+                expected: conversationId,
+                actual: convRef.conversationId,
+              },
+            );
+          }
+          await this.repos.conversations.lockById(conversationId, scope);
         }
-        if (convRef.conversationId !== conversationId) {
-          throw new ParentProvisioningRaceError(
-            'Conversation mapped to a different internal id; retry transaction',
-            {
-              expected: conversationId,
-              actual: convRef.conversationId,
-            },
-          );
-        }
-        await this.repos.conversations.lockById(conversationId, scope);
       }
     } else {
       // No external conversation id → always create a fresh ULID conversation.
@@ -386,6 +460,14 @@ export class RunParentProvisioner {
         session.agentVersionId,
         'agentVersionId',
       );
+      const sessionVersion = await this.repos.catalog.getVersionById(
+        boundAgentVersionId,
+      );
+      if (!sessionVersion || sessionVersion.agentId !== agentId) {
+        throw new ValidationError(
+          'Agent session version does not match conversation agent',
+        );
+      }
       // Logical ULIDs only — not Sandbox physical session ids.
       assertNotExternalInUlidSlot(sandboxSessionId, 'sandboxSessionId');
       assertNotExternalInUlidSlot(workspaceId, 'workspaceId');

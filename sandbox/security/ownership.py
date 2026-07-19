@@ -251,14 +251,32 @@ def require_owned_session(session_id: str, request: Request | None = None) -> An
       2. Load session (404 if missing)
       3. assert_session_owner (404 if not permitted)
     """
-    from sandbox.services.session_manager import session_manager
+    if request is None:
+        raise HTTPException(status_code=503, detail="Formal session runtime unavailable")
+    from sandbox.services.formal_session_runtime import (
+        SessionProvisioningError,
+        get_formal_session_runtime,
+    )
 
+    runtime = get_formal_session_runtime(request.app)
+    if runtime is None:
+        raise HTTPException(status_code=503, detail="Formal session runtime unavailable")
     actor = require_end_user_actor(request)
-    session = session_manager.get(session_id)
+    if actor is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Formal public session access requires owner authentication",
+        )
+    try:
+        session = runtime.resolve_owned(
+            session_id,
+            org_id=actor.organization_id,
+            user_id=actor.user_id,
+        )
+    except SessionProvisioningError as exc:
+        raise HTTPException(status_code=exc.status, detail=exc.message) from exc
     if session is None:
         raise HTTPException(status_code=404, detail=_SESSION_NOT_FOUND)
-    if actor is not None:
-        assert_session_owner(session, actor)
     return session
 
 

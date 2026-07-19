@@ -116,7 +116,7 @@ describe('capability switch', () => {
     assert.equal(pi.compat.supportsDeveloperRole, true);
     assert.equal(pi.cost.input, gpt.pricing.input_per_mtok);
     assert.equal(pi.baseUrl, 'https://llm.example');
-    assert.ok(pi.headers?.Authorization?.includes('k'));
+    assert.equal(pi.headers, undefined);
     // Required pi-ai Model.reasoning from supports_reasoning
     assert.equal(pi.reasoning, true);
     // Must not set ImagesModel-only `output`

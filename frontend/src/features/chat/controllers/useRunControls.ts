@@ -5,6 +5,7 @@ import {
   respondInteraction as requestInteractionResponse,
   resumeApproval,
   steerRun as requestSteer,
+  type CreateRunResponse,
 } from '../../../shared/api';
 import type { ChatState } from '../../../shared/state';
 import type { EntityBridge } from '../entityBridge';
@@ -16,6 +17,42 @@ type Options = {
   setStatus: (text: string, color?: string) => void;
   flashError: (message: string) => void;
 };
+
+type FollowUpRequest = (
+  conversationId: string,
+  body: { text: string },
+) => Promise<CreateRunResponse>;
+
+/** Register the follow-up as its own Run and tail its durable event stream. */
+export async function queueConversationFollowUp(input: {
+  bridge: EntityBridge;
+  conversationId: string;
+  text: string;
+  sessionId?: string | null;
+  request?: FollowUpRequest;
+}): Promise<string> {
+  const store = input.bridge.getStore();
+  const currentRun = store.activeRunId
+    ? store.runsById[store.activeRunId]
+    : null;
+  const created = await (input.request || requestFollowUp)(
+    input.conversationId,
+    { text: input.text },
+  );
+  const runId = input.bridge.beginRun({
+    runId: created.run_id,
+    conversationId: created.conversation_id || input.conversationId,
+    agentSessionId:
+      created.agent_session_id || currentRun?.agentSessionId || null,
+    sessionId:
+      created.session_id ||
+      currentRun?.sandboxSessionId ||
+      input.sessionId ||
+      null,
+  });
+  input.bridge.manager.connect(runId);
+  return runId;
+}
 
 /** User-initiated Run controls, isolated from conversation/upload orchestration. */
 export function useRunControls({
@@ -66,15 +103,22 @@ export function useRunControls({
   const followUpRun = useCallback(async (text: string): Promise<boolean> => {
     const trimmed = text.trim();
     if (!trimmed) return false;
-    const runId = bridge.getStore().activeRunId;
-    if (!runId) {
-      flashError('No active run for follow-up');
+    const store = bridge.getStore();
+    const activeRun = store.activeRunId
+      ? store.runsById[store.activeRunId]
+      : null;
+    const conversationId =
+      stateRef.current.conversationId || activeRun?.conversationId;
+    if (!conversationId) {
+      flashError('No active conversation for follow-up');
       return false;
     }
     try {
-      await requestFollowUp(runId, {
+      await queueConversationFollowUp({
+        bridge,
+        conversationId,
         text: trimmed,
-        conversation_id: stateRef.current.conversationId,
+        sessionId: stateRef.current.sessionId,
       });
       setDraftText('');
       setStatus('Follow-up queued', '#8b5cf6');

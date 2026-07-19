@@ -981,6 +981,5 @@ class TestInternalPlaneResources:
         text = (ROOT / "docs" / "review-deferred-items.md").read_text()
         assert "lifespan / compose wiring" not in text
         assert "Real redis client factory" not in text
-        # Still non-severe only:
-        assert "HealthResponse plane field" in text
+        assert "HealthResponse plane field" not in text
         assert "Claim capability probe scope" in text

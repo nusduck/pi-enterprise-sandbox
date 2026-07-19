@@ -1,9 +1,9 @@
 """Severe: Compose published-port exposure (dev loopback + prod !reset).
 
-Offline static checks only — does not run Docker. Compose merge of
+The pytest checks are offline and do not run Docker. Compose merge of
 ``ports: []`` does **not** reliably clear base publishes; production must
-use ``ports: !reset []``. Final merge proof still requires the Compose CLI
-gate documented below (not executed in this suite).
+use ``ports: !reset []``. CI executes the Compose CLI merge and the structured
+rendered-config verifier asserted below.
 """
 
 from __future__ import annotations
@@ -13,13 +13,24 @@ from pathlib import Path
 
 import pytest
 
+from scripts.verify_compose_prod_config import verify as verify_rendered_prod_config
+
 ROOT = Path(__file__).resolve().parents[1]
 COMPOSE = ROOT / "docker-compose.yml"
 COMPOSE_PROD = ROOT / "docker-compose.prod.yml"
+CI_WORKFLOW = ROOT / ".github" / "workflows" / "test.yml"
+PROD_CONFIG_VERIFIER = ROOT / "scripts" / "verify_compose_prod_config.py"
+CANONICAL_SKILL_VOLUME = {
+    "type": "bind",
+    "source": str(ROOT / "skills"),
+    "target": "/home/sandbox/skill",
+    "read_only": True,
+}
 
 # Services that must never publish host ports after base+prod merge.
 INTERNAL_NO_HOST_PORTS = (
     "mysql",
+    "agent-migrate",
     "redis",
     "frontend",
     "api-server",
@@ -37,10 +48,65 @@ DEV_PUBLISH_SERVICES = (
     "agent",
 )
 
+# Services published from an otherwise-internal-only network need a second,
+# development-only network on Docker Desktop/OrbStack. Agent already joins
+# service_egress and therefore does not need dev_ingress.
+DEV_INGRESS_SERVICES = (
+    "mysql",
+    "redis",
+    "frontend",
+    "api-server",
+)
+
 # Operator gate — document in compose header and here; suite does not run it.
 COMPOSE_CONFIG_GATE = (
     "docker compose -f docker-compose.yml -f docker-compose.prod.yml config"
 )
+
+
+def _valid_rendered_prod_config() -> dict:
+    migration_dependency = {"condition": "service_completed_successfully"}
+    return {
+        "services": {
+            "nginx": {"ports": [{"target": 80}, {"target": 443}]},
+            "mysql": {},
+            "agent-migrate": {
+                "depends_on": {"mysql": {"condition": "service_healthy"}},
+                "networks": {"backend_internal": None},
+                "restart": "no",
+            },
+            "sandbox": {
+                "depends_on": {"agent-migrate": migration_dependency},
+                "environment": {
+                    "SANDBOX_DATABASE_URL": (
+                        "mysql+pymysql://sandbox:example@mysql:3306/sandbox"
+                    ),
+                    "SANDBOX_INTERNAL_PLANE_ENABLED": "true",
+                    "SANDBOX_INTERNAL_REDIS_URL": (
+                        "redis://:example@sandbox-replay-redis:6379/0"
+                    ),
+                    "SANDBOX_SKILLS_ROOT": "/home/sandbox/skill",
+                },
+                "volumes": [dict(CANONICAL_SKILL_VOLUME)],
+            },
+            "agent": {
+                "depends_on": {"agent-migrate": migration_dependency},
+                "environment": {
+                    "AGENT_MIGRATE_ON_START": "false",
+                    "SKILLS_ROOT": "/home/sandbox/skill",
+                },
+                "volumes": [dict(CANONICAL_SKILL_VOLUME)],
+            },
+            "agent-worker": {
+                "depends_on": {"agent-migrate": migration_dependency},
+                "environment": {
+                    "AGENT_MIGRATE_ON_START": "false",
+                    "SKILLS_ROOT": "/home/sandbox/skill",
+                },
+                "volumes": [dict(CANONICAL_SKILL_VOLUME)],
+            },
+        }
+    }
 
 
 def _service_block(text: str, name: str) -> str:
@@ -141,6 +207,17 @@ class TestDevComposeLoopbackPublish:
             if line is not None:
                 assert "!reset" not in line or "[]" in line
 
+    def test_internal_only_services_join_dev_ingress_for_port_publish(self):
+        text = COMPOSE.read_text(encoding="utf-8")
+        for name in DEV_INGRESS_SERVICES:
+            networks = _networks_in_block(_service_block(text, name))
+            assert networks == {"backend_internal", "dev_ingress"}, name
+
+        assert re.search(
+            r"(?m)^  dev_ingress:\n    name: .*dev-ingress\s*$",
+            text,
+        )
+
 
 class TestProdComposePortReset:
     def test_every_internal_service_uses_reset_empty_ports(self):
@@ -182,6 +259,14 @@ class TestProdComposePortReset:
         assert "ports: []" in header  # documents the anti-pattern
         assert "docker compose" in header
         assert "config" in header
+
+    def test_prod_removes_development_ingress_network(self):
+        text = COMPOSE_PROD.read_text(encoding="utf-8")
+        for name in DEV_INGRESS_SERVICES:
+            block = _service_block(text, name)
+            assert re.search(r"(?m)^    networks: !override\s*$", block), name
+            assert "dev_ingress" not in block, name
+            assert re.search(r"(?m)^      - backend_internal\s*$", block), name
 
 
 class TestOfflineMergeModel:
@@ -264,3 +349,107 @@ class TestComposeConfigGateDocumentation:
         # Gate body lives in this module's constant for CI docs / runbooks.
         assert "config" in COMPOSE_CONFIG_GATE
         assert "docker-compose.prod.yml" in COMPOSE_CONFIG_GATE
+
+    def test_production_merge_gate_is_executed_in_ci(self):
+        workflow = CI_WORKFLOW.read_text(encoding="utf-8")
+        assert "Validate production overlay merge" in workflow
+        assert "-f docker-compose.yml -f docker-compose.prod.yml config" in workflow
+        assert "--format json --output" in workflow
+        assert "scripts/verify_compose_prod_config.py" in workflow
+        for required in (
+            "MYSQL_PASSWORD",
+            "MYSQL_ROOT_PASSWORD",
+            "REDIS_PASSWORD",
+            "SANDBOX_INTERNAL_REDIS_PASSWORD",
+            "SANDBOX_API_TOKEN",
+            "AGENT_INTERNAL_TOKEN",
+            "SANDBOX_JWT_SECRET",
+            "SANDBOX_INTERNAL_HMAC_KEYRING",
+            "A2A_ARTIFACT_DOWNLOAD_SECRET",
+        ):
+            assert f"{required}:" in workflow
+        assert PROD_CONFIG_VERIFIER.is_file()
+
+
+class TestRenderedProductionConfigVerifier:
+    def test_accepts_expected_topology(self):
+        verify_rendered_prod_config(_valid_rendered_prod_config())
+
+    def test_rejects_internal_service_host_publish(self):
+        config = _valid_rendered_prod_config()
+        config["services"]["mysql"]["ports"] = [{"target": 3306}]
+        with pytest.raises(SystemExit, match="unexpected services"):
+            verify_rendered_prod_config(config)
+
+    def test_rejects_migration_dependency_cycle(self):
+        config = _valid_rendered_prod_config()
+        config["services"]["agent-migrate"]["depends_on"]["sandbox"] = {
+            "condition": "service_started"
+        }
+        with pytest.raises(SystemExit, match="depend only on mysql"):
+            verify_rendered_prod_config(config)
+
+    @pytest.mark.parametrize(
+        "dsn",
+        [
+            "sqlite:////sandbox/data/sandbox.db",
+            "postgresql://sandbox:example@postgres:5432/sandbox",
+            "",
+        ],
+    )
+    def test_rejects_non_mysql_sandbox_dsn(self, dsn):
+        config = _valid_rendered_prod_config()
+        config["services"]["sandbox"]["environment"][
+            "SANDBOX_DATABASE_URL"
+        ] = dsn
+        with pytest.raises(SystemExit, match="MySQL SANDBOX_DATABASE_URL|MySQL scheme"):
+            verify_rendered_prod_config(config)
+
+    def test_rejects_disabled_sandbox_internal_plane(self):
+        config = _valid_rendered_prod_config()
+        config["services"]["sandbox"]["environment"][
+            "SANDBOX_INTERNAL_PLANE_ENABLED"
+        ] = "false"
+        with pytest.raises(SystemExit, match="internal plane must be enabled"):
+            verify_rendered_prod_config(config)
+
+    def test_rejects_legacy_sandbox_dsn_leak_to_agent(self):
+        config = _valid_rendered_prod_config()
+        config["services"]["agent"]["environment"]["SANDBOX_DATABASE_URL"] = (
+            "sqlite:////sandbox/data/sandbox.db"
+        )
+        with pytest.raises(SystemExit, match="must not receive SANDBOX_DATABASE_URL"):
+            verify_rendered_prod_config(config)
+
+    @pytest.mark.parametrize("service", ["agent", "agent-worker", "sandbox"])
+    def test_rejects_noncanonical_skill_environment_path(self, service):
+        config = _valid_rendered_prod_config()
+        key = "SANDBOX_SKILLS_ROOT" if service == "sandbox" else "SKILLS_ROOT"
+        config["services"][service]["environment"][key] = "/sandbox/skills"
+        with pytest.raises(SystemExit, match="canonical Skill path"):
+            verify_rendered_prod_config(config)
+
+    @pytest.mark.parametrize("service", ["agent", "agent-worker", "sandbox"])
+    def test_rejects_missing_or_writable_canonical_skill_mount(self, service):
+        missing = _valid_rendered_prod_config()
+        missing["services"][service]["volumes"] = []
+        with pytest.raises(SystemExit, match="mount Skills exactly once"):
+            verify_rendered_prod_config(missing)
+
+        writable = _valid_rendered_prod_config()
+        writable["services"][service]["volumes"][0]["read_only"] = False
+        with pytest.raises(SystemExit, match="must be read-only"):
+            verify_rendered_prod_config(writable)
+
+    def test_rejects_removed_compatibility_skill_mounts(self):
+        config = _valid_rendered_prod_config()
+        config["services"]["sandbox"]["volumes"].append(
+            {
+                "type": "bind",
+                "source": str(ROOT / "skills"),
+                "target": "/sandbox/skills",
+                "read_only": True,
+            }
+        )
+        with pytest.raises(SystemExit, match="compatibility Skill mounts"):
+            verify_rendered_prod_config(config)

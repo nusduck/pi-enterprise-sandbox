@@ -19,3 +19,6 @@ htmlcov/
 .vscode/
 *.swp
 *~
+
+# Local release-gate runtime workspaces (never commit)
+.release-gate-*/

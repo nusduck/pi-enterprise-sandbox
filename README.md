@@ -49,11 +49,10 @@ pi-sandbox/
 │   └── Dockerfile
 ├── agent/                ← 独立 Agent（@earendil-works/pi-coding-agent 0.80.3）
 │   ├── server.js         ← 内部 Run API / health
-│   ├── application/      ← run 注册表、profile、治理
-│   ├── runtime/          ← 会话循环、bootstrap、event bridge、消息/路径 helpers
-│   ├── infrastructure/   ← Sandbox client + MCP Connection Manager
-│   ├── services/         ← budget、waiters、model registry、session persistence
-│   ├── packages/         ← @company/pi-enterprise-agent-kit
+│   ├── src/application/  ← Run、Session、审批、A2A 应用服务
+│   ├── src/extensions/   ← sandbox-bridge、enterprise-policy、observability
+│   ├── src/infrastructure/ ← MySQL、Redis、Pi、MCP 与 Sandbox ports
+│   ├── services/         ← 模型 registry 等平台服务
 │   └── Dockerfile
 ├── sandbox/              ← 安全沙箱（Python FastAPI + 多层防护，无 Agent 主循环）
 │   ├── main.py           ← FastAPI 入口
@@ -65,8 +64,8 @@ pi-sandbox/
 ├── scripts/              ← 备份/恢复、development reset、跨服务 smoke
 ├── nginx/                ← 生产 Nginx + SSL
 ├── docs/                 ← 活跃文档（archive/ 与历史 PLAN 不作现行规范）
-├── workspaces/           ← 会话工作区（运行时，按 workspace_id 隔离）
-├── tmp-workspaces/       ← Conversation 持久化 /tmp（按 tmp_{workspace_id} 隔离）
+├── workspaces/           ← Agent Session 工作区（按 workspace_id 隔离）
+├── tmp-workspaces/       ← Agent Session 私有 /tmp（按 tmp_{workspace_id} 隔离）
 ├── docker-compose.yml           ← 开发编排（Frontend + BFF + Agent + Sandbox + MySQL 8 + Redis 7）
 ├── docker-compose.prod.yml      ← 生产 overlay（MySQL 8 + Redis 7 + Nginx + SSL）
 └── .env.example          ← 环境变量模板（与部署文档一致）
@@ -110,11 +109,12 @@ SANDBOX_BASE_URL=http://localhost:8081
 | `SANDBOX_EXECUTION_TIMEOUT_SECONDS` | `120` | 单次命令超时 |
 | `SANDBOX_MAX_OUTPUT_CHARS` | `50000` | stdout/stderr 上限 |
 | `SANDBOX_MAX_PROCESS_COUNT` | `20` | 最大子进程数 |
+| `SANDBOX_MAX_OPEN_FILES` | `256` | 子进程最大打开文件描述符数（RLIMIT_NOFILE） |
 | `SANDBOX_MAX_CPU_TIME_SECONDS` | `300` | CPU 时间上限 |
 | `SANDBOX_MAX_MEMORY_MB` | `512` | 内存上限 |
 | `SANDBOX_MAX_FILE_SIZE_MB` | `50` | 单文件大小上限 |
 | `SANDBOX_WORKSPACE_QUOTA_MB` | `500` | 工作区总空间上限 |
-| `SANDBOX_TEMP_QUOTA_MB` | `500` | Conversation 持久化 `/tmp` 空间上限 |
+| `SANDBOX_TEMP_QUOTA_MB` | `500` | Agent Session 私有持久化 `/tmp` 空间上限 |
 | `SANDBOX_SHARED_ENV_KEYS` | _(空)_ | 逗号分隔；从 sandbox 进程 env 注入到每次 bash/python/node/process 子进程 |
 | `SANDBOX_EXEC_ENV_<NAME>` | — | 显式 opt-in：子进程得到 `NAME=value`（推荐） |
 
@@ -143,10 +143,14 @@ Compose：`backend_internal`（`internal: true`）与 `service_egress`；Sandbox
 |------|--------|------|
 | `AGENT_DATABASE_URL` | `mysql://sandbox:…@mysql:3306/sandbox` | Agent 事实库 DSN（`mysql://` / `mysql2://`） |
 | `SANDBOX_DATABASE_URL` | `mysql+pymysql://sandbox:…@mysql:3306/sandbox` | Sandbox 持久化 DSN |
+| `SANDBOX_COMPOSE_DATABASE_URL` | 未设置（默认 MySQL compose DSN） | 仅开发 Compose 的显式 Sandbox DSN override；避免旧 `.env` 的 `SANDBOX_DATABASE_URL` 覆盖正式默认 |
 | `MYSQL_PASSWORD` | 开发占位；生产无默认 | 生产必填强 secret |
 | `MYSQL_ROOT_PASSWORD` | 开发占位；生产无默认 | 生产必填强 secret |
 
 **dev/prod 唯一正式拓扑为 MySQL 8**；生产配置校验拒绝 SQLite / PostgreSQL。凭据一律来自环境变量，勿硬编码真实密钥。研发清库见 [docs/runbooks/development-reset.md](docs/runbooks/development-reset.md)。
+
+Compose 由一次性 `agent-migrate` 服务独占 Knex migration；`sandbox`、
+`agent`、`agent-worker` 只在 migration 成功退出后启动，长期进程自身不再执行 migration。
 
 ### Redis 7（Agent-only 运行态协调）
 
@@ -210,7 +214,7 @@ node scripts/smoke-cross-service.mjs
 | 网络 | 生产 `network_mode=disabled` + Bubblewrap `--unshare-net`；Compose `backend_internal`；无 iptables/NET_ADMIN fail-open |
 | 用户 | 子进程以非 root `sandbox` 用户运行 |
 | 资源 | ulimit: CPU / 内存 / 进程数 / 文件大小 |
-| 路径 | Conversation 工作区按 opaque `workspace_id` 隔离；接受相对路径、逻辑 workspace 路径和 `/tmp`；物理路径不进入公共协议 |
+| 路径 | Agent Session 独占 opaque `workspace_id`；接受相对路径、逻辑 workspace 路径和 Session 私有 `/tmp`；物理路径不进入公共协议 |
 | Skill | 发行零内置 package；默认只读；`SKILLS_MODE=development` 时仅专用 skill 工具可写 |
 | 命令 | 禁止 `sudo, su, rm -rf /, dd, mkfs, fdisk, chmod 777` |
 | 输出 | stdout/stderr 上限截断 |

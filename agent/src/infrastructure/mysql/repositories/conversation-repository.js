@@ -91,14 +91,14 @@ export class ConversationRepository {
 
   /**
    * @param {{ orgId: string, userId: string }} scope
-   * @param {{ limit?: number }} [opts]
+   * @param {{ limit?: number, includeArchived?: boolean }} [opts]
    */
   async listForOwner(scope, opts = {}) {
     const s = requireOwnerScope(scope);
     const limit = opts.limit ?? 50;
-    const rows = await applyOwnerScope(this.db('conversations'), s)
-      .orderBy('updated_at', 'desc')
-      .limit(limit);
+    let query = applyOwnerScope(this.db('conversations'), s);
+    if (opts.includeArchived !== true) query = query.whereNull('archived_at');
+    const rows = await query.orderBy('updated_at', 'desc').limit(limit);
     return rows.map(mapConversation);
   }
 
@@ -132,5 +132,18 @@ export class ConversationRepository {
       });
     }
     return this.requireById(conversationId, s);
+  }
+
+  /**
+   * Soft-delete while preserving referenced sessions/messages/runs.
+   * @param {string} conversationId
+   * @param {{ orgId: string, userId: string }} scope
+   * @param {Date | string} archivedAt
+   */
+  async archive(conversationId, scope, archivedAt = new Date()) {
+    return this.updateMeta(conversationId, scope, {
+      status: 'archived',
+      archivedAt,
+    });
   }
 }

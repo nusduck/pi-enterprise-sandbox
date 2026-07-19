@@ -93,18 +93,6 @@ def is_mysql_database_url(url: str | None) -> bool:
     return any(text.startswith(prefix) for prefix in _MYSQL_URL_PREFIXES)
 
 
-def is_legacy_test_database_url(url: str | None) -> bool:
-    """True for sqlite/postgres DSNs used only by temporary unit-test injection.
-
-    TEMPORARY GAP (PR-02 T5 topology/config track): pytest / conftest may still
-    inject ``sqlite://`` (or legacy postgres) because ``sandbox.database`` has
-    not been cut over to MySQL yet. That path is **not** a production fallback
-    and is rejected by :func:`validate_production_settings`.
-    """
-    scheme = database_url_scheme(url)
-    return scheme in ("sqlite", "postgresql", "postgres")
-
-
 class ProductionConfigError(ValueError):
     """Raised when production settings are unsafe; process must exit before listen."""
 
@@ -518,9 +506,6 @@ class Settings(BaseSettings):
     # SANDBOX_DATABASE_URL with credentials from MYSQL_* env — never hardcode
     # live secrets here.
     #
-    # TEMPORARY GAP: non-production unit tests may still pass sqlite:// via
-    # explicit Settings(database_url=...) or SANDBOX_DATABASE_URL from conftest.
-    # That is test-only injection, not a production or compose default.
     database_url: str = _DEFAULT_MYSQL_DATABASE_URL
 
     model_config = SettingsConfigDict(
@@ -943,7 +928,6 @@ class Settings(BaseSettings):
     def is_development(self) -> bool:
         return self.deployment_env == "development"
 
-
 def validate_production_settings(s: Settings | None = None) -> None:
     """Fail fast on unsafe production combinations.
 
@@ -1232,11 +1216,7 @@ def effective_config(s: Settings | None = None) -> dict[str, Any]:
 def _redact_database_url(url: str) -> str:
     if not url:
         return "<empty>"
-    # sqlite:////path → sqlite:///<redacted>
-    if url.startswith("sqlite:"):
-        return "sqlite:///<redacted>"
     # mysql+pymysql://user:pass@host:port/db → mysql+pymysql://***@host:port/<redacted>
-    # postgresql://user:pass@host:port/db → postgresql://***@host:port/<redacted>
     m = re.match(
         r"^(?P<scheme>[a-zA-Z0-9+]+)://(?P<creds>[^@]*)@(?P<host>[^/]+)(?:/(?P<db>.*))?$",
         url,
@@ -1260,9 +1240,20 @@ def _looks_like_embedded_secret(value: str) -> bool:
 
 
 def ensure_safe_to_start(s: Settings | None = None) -> Settings:
-    """Validate production posture; return settings for chaining."""
+    """Validate startup posture; return settings for chaining.
+
+    The Sandbox process is MySQL-only in every deployment environment. Keeping
+    this check outside the production-only validator prevents a stale local
+    ``.env`` from selecting an unsupported backend before listen.
+    """
     cfg = s or settings
     validate_production_settings(cfg)
+    if not is_mysql_database_url(cfg.database_url):
+        scheme = database_url_scheme(cfg.database_url) or "missing"
+        raise ProductionConfigError(
+            "SANDBOX_DATABASE_URL must be MySQL for the formal Sandbox runtime "
+            f"got scheme={scheme}"
+        )
     return cfg
 
 

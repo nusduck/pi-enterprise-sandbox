@@ -80,6 +80,84 @@ describe('startWorkerMain', () => {
     assert.equal(typeof c2.requireWorkerExecutorFactory(), 'function');
   });
 
+  it('forwards isolated BullMQ stall knobs without changing defaults', async () => {
+    const fakeContainer = {
+      async start() {
+        return this;
+      },
+      async createWorkerServices() {
+        return {
+          workerRuntime: {
+            async processJob() {},
+            async start() {},
+            async shutdown() {},
+            isStarted: () => true,
+            isShutdown: () => false,
+          },
+          recoveryService: {
+            async scanAndRequeue() {
+              return { actions: [] };
+            },
+          },
+        };
+      },
+      async createOutboxPublisher() {
+        return { publishOnce: async () => ({}) };
+      },
+      async shutdown() {},
+    };
+    let options;
+    await assert.rejects(
+      () =>
+        startWorkerMain(
+          {
+            AGENT_DATABASE_URL: 'mysql://u:p@h/db',
+            AGENT_REDIS_URL: 'redis://localhost:6379/0',
+            AGENT_ALLOW_STUB_EXECUTOR: 'true',
+            NODE_ENV: 'development',
+            AGENT_BULLMQ_LOCK_DURATION_MS: '3000',
+            AGENT_BULLMQ_STALLED_INTERVAL_MS: '500',
+            AGENT_BULLMQ_MAX_STALLED_COUNT: '2',
+          },
+          {
+            createContainer: () => fakeContainer,
+            createRunWorker: (_url, _processor, workerOptions) => {
+              options = workerOptions;
+              throw new Error('stop after option capture');
+            },
+          },
+        ),
+      /stop after option capture/,
+    );
+    assert.equal(options.lockDuration, 3000);
+    assert.equal(options.stalledInterval, 500);
+    assert.equal(options.maxStalledCount, 2);
+
+    let defaultOptions;
+    await assert.rejects(
+      () =>
+        startWorkerMain(
+          {
+            AGENT_DATABASE_URL: 'mysql://u:p@h/db',
+            AGENT_REDIS_URL: 'redis://localhost:6379/0',
+            AGENT_ALLOW_STUB_EXECUTOR: 'true',
+            NODE_ENV: 'development',
+          },
+          {
+            createContainer: () => fakeContainer,
+            createRunWorker: (_url, _processor, workerOptions) => {
+              defaultOptions = workerOptions;
+              throw new Error('stop after default option capture');
+            },
+          },
+        ),
+      /stop after default option capture/,
+    );
+    assert.equal(defaultOptions.lockDuration, undefined);
+    assert.equal(defaultOptions.stalledInterval, undefined);
+    assert.equal(defaultOptions.maxStalledCount, undefined);
+  });
+
   it('createWorkerServices assembly fails closed without MySQL/Redis start', async () => {
     const { createServiceContainer } = await import(
       '../../src/bootstrap/container.js'

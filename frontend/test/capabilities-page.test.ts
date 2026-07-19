@@ -26,21 +26,20 @@ describe('CapabilitiesPage diagnostics and MCP status contracts', () => {
     );
   });
 
-  it('mentions paginated capability inventory in platform/runtime guidance', () => {
-    const promptSrc = readFileSync(
-      join(__dirname, '../../agent/packages/enterprise-agent-kit/extensions/prompt/index.js'),
+  it('projects configured capabilities from the production three-extension runtime', () => {
+    const diagnosticsSrc = readFileSync(
+      join(__dirname, '../../agent/src/application/extension-diagnostics-service.js'),
       'utf8',
     );
-    const introSrc = readFileSync(
-      join(
-        __dirname,
-        '../../agent/packages/enterprise-agent-kit/extensions/capability-introspection/index.js',
-      ),
+    const extensionSrc = readFileSync(
+      join(__dirname, '../../agent/src/extensions/constants.js'),
       'utf8',
     );
-    assert.match(promptSrc, /next_cursor/);
-    assert.match(introSrc, /paginated/);
-    assert.match(introSrc, /next_cursor/);
+    assert.match(diagnosticsSrc, /Per-Run live authority/);
+    assert.match(extensionSrc, /sandbox-bridge/);
+    assert.match(extensionSrc, /enterprise-policy/);
+    assert.match(extensionSrc, /observability/);
+    assert.doesNotMatch(diagnosticsSrc, /packages\/enterprise-agent-kit/);
   });
 
   it('renders extension statuses and registry session scope on diagnostics tab', () => {

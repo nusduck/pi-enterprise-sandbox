@@ -36,6 +36,7 @@ async function runToolCall(
 ) {
   const handlers = new Map();
   const pi = {
+    registerTool() {},
     on(ev, h) {
       if (!handlers.has(ev)) handlers.set(ev, []);
       handlers.get(ev).push(h);

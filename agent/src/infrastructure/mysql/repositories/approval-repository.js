@@ -32,6 +32,9 @@ const MAX_REQUEST_JSON_BYTES = 64 * 1024;
 /** Child-only select for owner-joined approvals (avoid Run column collisions). */
 export const APPROVAL_CHILD_SELECT = Object.freeze(['a.*']);
 
+export const APPROVAL_LIST_DEFAULT_LIMIT = 50;
+export const APPROVAL_LIST_MAX_LIMIT = 200;
+
 /**
  * @param {unknown} value
  */
@@ -87,6 +90,7 @@ export class ApprovalRepository {
     let q = this.db('approvals as a')
       .join('runs as r', 'a.run_id', 'r.run_id')
       .select(...APPROVAL_CHILD_SELECT)
+      .select('r.conversation_id')
       .where('r.org_id', s.orgId)
       .andWhere('r.user_id', s.userId)
       .andWhere('a.org_id', s.orgId);
@@ -129,6 +133,46 @@ export class ApprovalRepository {
       });
     }
     return mapApproval(row);
+  }
+
+  /**
+   * List approvals visible to an owner. The Run join is intentional: an
+   * approval's org_id alone is not sufficient to prove user ownership.
+   * @param {{ orgId: string, userId: string }} scope
+   * @param {{ status?: string, limit?: number }} [opts]
+   */
+  async listForOwner(scope, opts = {}) {
+    const s = requireOwnerScope(scope);
+    const rawLimit = opts.limit == null ? APPROVAL_LIST_DEFAULT_LIMIT : Number(opts.limit);
+    if (!Number.isInteger(rawLimit) || rawLimit < 1 || rawLimit > APPROVAL_LIST_MAX_LIMIT) {
+      throw new Error(
+        `limit must be an integer between 1 and ${APPROVAL_LIST_MAX_LIMIT}`,
+      );
+    }
+    let query = this.#ownedApprovalQuery(s)
+      .orderBy('a.created_at', 'desc')
+      .limit(rawLimit);
+    if (opts.status != null) {
+      query = query.andWhere('a.status', assertApprovalStatus(String(opts.status).toUpperCase()));
+    }
+    const rows = await query;
+    return (rows || []).map(mapApproval);
+  }
+
+  /**
+   * List every approval for one owned Run in lifecycle order.
+   * @param {string} runId
+   * @param {{ orgId: string, userId: string }} scope
+   * @param {{ forUpdate?: boolean }} [opts]
+   */
+  async listByRunId(runId, scope, opts = {}) {
+    const s = requireOwnerScope(scope);
+    const id = assertUlid(runId, 'runId');
+    await this.requireOwnedRun(id, s, { forUpdate: opts.forUpdate === true });
+    const rows = await this.#ownedApprovalQuery(s, opts)
+      .andWhere('a.run_id', id)
+      .orderBy('a.created_at', 'asc');
+    return (rows || []).map(mapApproval);
   }
 
   /**

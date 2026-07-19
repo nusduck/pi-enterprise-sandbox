@@ -200,6 +200,7 @@ export function assertExactEnterpriseExtensions(extensions) {
  *   approvalCoordinator?: object | null,
  *   rateLimitPort?: object | null,
  *   runSuspensionPort?: object | null,
+ *   isDurableInteractionPending?: (toolCallId: string) => boolean,
  *   mcpReadOnlyTools?: Iterable<string>,
  *   mcpServerPolicies?: object,
  *   agentVersionToolPolicy?: object,
@@ -325,14 +326,30 @@ export function createEnterpriseExtensionBundle(runContext, deps = {}) {
       ...(deps.enterprisePolicy || {}),
     },
   });
+  const observabilityDeps = {
+    recorder: deps.recorder ?? null,
+    governanceRecorder,
+    now: deps.now,
+    ...(deps.observability || {}),
+  };
+  // The executor owns the ephemeral pending-interaction signal. Keep the
+  // predicate on the observability boundary so only the matching ask_user
+  // tool call can avoid ordinary error terminalization.
+  if (typeof deps.isDurableInteractionPending === 'function') {
+    observabilityDeps.isDurableInteractionPending =
+      deps.isDurableInteractionPending;
+  }
+  // Model identity is safe metadata; credentials and full model config stay
+  // outside the extension dependency boundary.
+  if (typeof deps.modelId === 'string' && deps.modelId.trim()) {
+    observabilityDeps.modelId = deps.modelId;
+  }
+  if (typeof deps.provider === 'string' && deps.provider.trim()) {
+    observabilityDeps.provider = deps.provider;
+  }
   const observability = createObservabilityExtension({
     runContext: frozen,
-    deps: {
-      recorder: deps.recorder ?? null,
-      governanceRecorder,
-      now: deps.now,
-      ...(deps.observability || {}),
-    },
+    deps: observabilityDeps,
   });
 
   const factories = Object.freeze([

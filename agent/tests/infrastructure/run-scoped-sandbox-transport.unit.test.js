@@ -67,7 +67,7 @@ describe('createRunScopedSandboxBridgeTransport', () => {
         return { data: '', cursor: '0-0', next_cursor: '0-0' };
       },
       async signalProcess() {
-        return { ok: true, status: 'SIGNALED' };
+        return { ok: true, status: 'running' };
       },
       async submitArtifact() {
         return { artifact_id: 'a1' };
@@ -165,6 +165,37 @@ describe('createRunScopedSandboxBridgeTransport', () => {
     assert.equal(clients[0].opts.traceId, RUN_A.traceId);
     assert.equal(clients[1].opts.traceId, RUN_B.traceId);
     assert.ok(typeof t1.readFile === 'function' && typeof t2.readFile === 'function');
+  });
+
+  it('forwards run-scoped formal read and execution transports to the bridge', () => {
+    const formalRead = { readFile: async () => ({}) };
+    const formalExecution = {
+      bash: async () => ({}),
+      python: async () => ({}),
+    };
+    let transportOptions;
+
+    createRunScopedSandboxBridgeTransport(RUN_A, {
+      createSandboxClient: () => ({}),
+      createInternalReadTransport: (ctx) => {
+        assert.equal(ctx, RUN_A);
+        return formalRead;
+      },
+      createInternalExecutionTransport: (ctx) => {
+        assert.equal(ctx, RUN_A);
+        return formalExecution;
+      },
+      createTransport: (opts) => {
+        transportOptions = opts;
+        return {};
+      },
+    });
+
+    assert.equal(transportOptions.internalReadTransport, formalRead);
+    assert.equal(
+      transportOptions.internalExecutionTransport,
+      formalExecution,
+    );
   });
 });
 

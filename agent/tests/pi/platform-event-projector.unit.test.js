@@ -203,5 +203,6 @@ describe('PlatformEventProjector', () => {
     assert.deepEqual(a, b);
     assert.equal(a.length, 1);
     assert.ok(PROJECTOR_EVENT_TYPES.includes('tool.call.proposed'));
+    assert.ok(PROJECTOR_EVENT_TYPES.includes('artifact.ready'));
   });
 });

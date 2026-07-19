@@ -11,7 +11,6 @@ from sandbox.config import (
     ProductionConfigError,
     Settings,
     effective_config,
-    is_legacy_test_database_url,
     is_mysql_database_url,
     validate_production_settings,
 )
@@ -266,7 +265,7 @@ class TestProductionUnsafeMatrix:
         validate_production_settings(s)
         assert is_mysql_database_url(s.database_url)
 
-    def test_development_skips_matrix(self):
+    def test_development_skips_production_matrix(self):
         s = Settings(
             deployment_env="development",
             api_token="",
@@ -274,12 +273,11 @@ class TestProductionUnsafeMatrix:
             cors_origins=["*"],
             auth_enabled=False,
             auth_allow_public_register=True,
-            # TEMPORARY GAP: unit tests may still inject sqlite outside production.
-            database_url="sqlite:////tmp/dev-ok.db",
+            database_url="mysql+pymysql://sandbox@127.0.0.1:3306/dev",
             allowed_client_cidrs=["127.0.0.1/32"],
         )
         validate_production_settings(s)  # no raise
-        assert is_legacy_test_database_url(s.database_url)
+        assert is_mysql_database_url(s.database_url)
 
     def test_process_timeout_zero_fails_production(self):
         s = Settings(**_production_kwargs(process_timeout_seconds=0))
@@ -406,16 +404,6 @@ class TestEffectiveConfigRedaction:
         assert snap["network_mode"] == "disabled"
         assert snap["block_metadata_ips"] is True
 
-    def test_sqlite_dsn_redacted(self):
-        s = Settings(
-            deployment_env="development",
-            database_url="sqlite:////var/sandbox/data/sandbox.db",
-            allowed_client_cidrs=["127.0.0.1/32"],
-        )
-        snap = effective_config(s)
-        assert snap["database_url"] == "sqlite:///<redacted>"
-        assert "/var/sandbox" not in snap["database_url"]
-
 class TestEnvCatalogConsistency:
     """Catalog surface matches .env.example (no secrets committed)."""
 
@@ -521,7 +509,7 @@ class TestEnvCatalogConsistency:
 
 
 class TestPublicRegisterGate:
-    def test_register_disabled_when_flag_false(self, monkeypatch):
+    def test_legacy_register_route_is_removed(self, monkeypatch):
         from fastapi.testclient import TestClient
 
         from sandbox.config import settings
@@ -533,5 +521,4 @@ class TestPublicRegisterGate:
             "/auth/register",
             json={"username": "blocked_user", "password": "secret123"},
         )
-        assert resp.status_code == 403
-        assert "disabled" in resp.json()["detail"].lower()
+        assert resp.status_code == 404

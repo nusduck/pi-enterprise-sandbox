@@ -127,4 +127,25 @@ export class A2aAuditRepository {
       traceId,
     };
   }
+
+  /**
+   * Organization-wide enumeration is reserved for the internal admin API.
+   *
+   * @param {string} orgId
+   * @param {{ agentId?: string | null, limit?: number }} [opts]
+   */
+  async listForOrgAdmin(orgId, opts = {}) {
+    const oid = assertUlid(orgId, 'orgId');
+    const limit = Math.min(Math.max(Number(opts.limit) || 20, 1), 100);
+    let query = this.db('a2a_audit_events')
+      .where({ org_id: oid })
+      .orderBy('created_at', 'desc');
+    if (opts.agentId) {
+      query = query.andWhere({
+        agent_id: assertUlid(opts.agentId, 'agentId'),
+      });
+    }
+    const rows = await query.limit(limit);
+    return rows.map(mapA2aAuditEvent);
+  }
 }

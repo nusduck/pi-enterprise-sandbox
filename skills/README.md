@@ -1,10 +1,7 @@
 # Agent Skills (curated everyday set)
 
-Shared skill packages mounted into Agent / Sandbox at:
-
-- `/home/sandbox/skill`
-- `/sandbox/skills`
-- `/app/.pi/skills`
+Shared skill packages are mounted into Agent and Sandbox only at
+`/home/sandbox/skill`.
 
 The Agent discovers each `*/SKILL.md` package automatically.
 

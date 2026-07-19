@@ -9,6 +9,7 @@ export {
   createMysqlKnex,
   destroyMysqlKnex,
   assertMysqlConnectionUrl,
+  normalizeMysqlConnectionUrl,
   assertMysql2Installed,
   loadKnexModule,
   migrationsDirectory,
@@ -70,6 +71,8 @@ export {
   RunRepository,
   RunEventRepository,
   parseLastInsertId,
+  TraceSpanRepository,
+  InteractionRepository,
 } from './repositories/index.js';
 
 export {
@@ -77,6 +80,8 @@ export {
   CORE_TABLES_DROP_ORDER,
   SANDBOX_EXECUTION_DOMAIN_TABLES,
   A2A_TABLES,
+  TRACE_TABLES,
+  INTERACTION_TABLES,
 } from './schema-tables.js';
 
 export {

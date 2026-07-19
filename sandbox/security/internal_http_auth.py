@@ -26,6 +26,7 @@ from sandbox.security.replay_store import (
     ReplayStoreUnavailableError,
     ReplayStoreValidationError,
 )
+from sandbox.trace import get_trace_id
 
 logger = logging.getLogger("sandbox.security.internal_auth")
 
@@ -63,8 +64,9 @@ class InternalAuthContext:
         return str(self.claims["sandbox_session_id"])
 
     @property
-    def run_id(self) -> str:
-        return str(self.claims["run_id"])
+    def run_id(self) -> str | None:
+        value = self.claims["run_id"]
+        return None if value is None else str(value)
 
     @property
     def tool_name(self) -> str:
@@ -359,6 +361,14 @@ async def authenticate_internal_request(
         )
     except InternalAuthError as exc:
         _deny(code=exc.code, log_message="token or request binding failed")
+
+    request_trace_id = get_trace_id()
+    claim_trace_id = str(claims["trace_id"]).strip().lower()
+    if request_trace_id is not None and claim_trace_id != request_trace_id:
+        _deny(
+            code="INTERNAL_HTTP_TRACE_MISMATCH",
+            log_message="trace context does not match signed claim",
+        )
 
     try:
         consumed = await store.consume(

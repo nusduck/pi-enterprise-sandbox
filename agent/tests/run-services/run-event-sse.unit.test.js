@@ -16,6 +16,7 @@ import {
   sleepMs,
   waitForWritableResume,
 } from '../../src/application/run-event-sse-service.js';
+import { OwnerScopedNotFoundError } from '../../src/application/errors.js';
 import { projectRunEventToSseEnvelope } from '../../src/application/run-event-query-service.js';
 
 const RUN = '01K0G2PAV8FPMVC9QHJG7JPN53';
@@ -114,6 +115,173 @@ describe('cursor + dedupe helpers', () => {
 });
 
 describe('RunEventSseService hybrid openStream', () => {
+  it('retries a transient initial MySQL history failure without duplicate events', async () => {
+    const transient = new Error('mysql connection reset');
+    let calls = 0;
+    const events = [env(1, 'run.accepted', EVT1), env(2, 'run.completed', EVT2)];
+    const eventQueryService = {
+      async listEvents({ afterSequence = 0 }) {
+        calls += 1;
+        if (calls === 1) throw transient;
+        return {
+          events: events.filter((event) => event.sequence > afterSequence),
+          terminal: true,
+          status: 'SUCCEEDED',
+        };
+      },
+    };
+    const frames = [];
+    const svc = new RunEventSseService({
+      eventQueryService,
+      mysqlOpenRetryMs: 0,
+      sleep: async () => {},
+    });
+
+    const result = await svc.openStream(
+      { runId: RUN, auth: { externalOrgId: 'o', externalUserId: 'u' } },
+      {
+        write: (frame) => {
+          frames.push(frame);
+          return true;
+        },
+        isClosed: () => false,
+      },
+    );
+
+    const joined = frames.join('');
+    assert.equal(calls, 3, 'one failed read, successful history, terminal confirmation');
+    assert.equal(result.lastSequence, 2);
+    assert.equal((joined.match(/"sequence":1/g) || []).length, 1);
+    assert.equal((joined.match(/"sequence":2/g) || []).length, 1);
+    assert.match(joined, /event: end/);
+  });
+
+  it('retries a transient MySQL cutover failure without duplicate events', async () => {
+    let calls = 0;
+    const eventQueryService = {
+      async listEvents({ afterSequence = 0 }) {
+        calls += 1;
+        if (calls === 1) {
+          return { events: [env(1, 'run.accepted', EVT1)], terminal: false, status: 'RUNNING' };
+        }
+        if (calls === 2) throw new Error('mysql cutover timeout');
+        if (afterSequence === 1) {
+          return { events: [env(2, 'run.completed', EVT2)], terminal: true, status: 'SUCCEEDED' };
+        }
+        return { events: [], terminal: true, status: 'SUCCEEDED' };
+      },
+    };
+    const frames = [];
+    const svc = new RunEventSseService({
+      eventQueryService,
+      mysqlOpenRetryMs: 0,
+      sleep: async () => {},
+    });
+
+    const result = await svc.openStream(
+      { runId: RUN, auth: { externalOrgId: 'o', externalUserId: 'u' } },
+      {
+        write: (frame) => {
+          frames.push(frame);
+          return true;
+        },
+        isClosed: () => false,
+      },
+    );
+
+    const joined = frames.join('');
+    assert.equal(calls, 4, 'history, failed cutover, retried cutover, terminal poll');
+    assert.equal(result.lastSequence, 2);
+    assert.equal((joined.match(/"sequence":1/g) || []).length, 1);
+    assert.equal((joined.match(/"sequence":2/g) || []).length, 1);
+    assert.match(joined, /event: end/);
+  });
+
+  it('surfaces a persistent initial MySQL failure after the bounded attempts', async () => {
+    const persistent = new Error('mysql unavailable');
+    let calls = 0;
+    const svc = new RunEventSseService({
+      eventQueryService: {
+        async listEvents() {
+          calls += 1;
+          throw persistent;
+        },
+      },
+      mysqlOpenRetryAttempts: 3,
+      mysqlOpenRetryMs: 0,
+      sleep: async () => {},
+    });
+
+    await assert.rejects(
+      svc.openStream(
+        { runId: RUN, auth: { externalOrgId: 'o', externalUserId: 'u' } },
+        { write: () => true, isClosed: () => false },
+      ),
+      (error) => error === persistent,
+    );
+    assert.equal(calls, 3);
+  });
+
+  it('does not retry owner-scoped failures during initial history validation', async () => {
+    const notFound = new OwnerScopedNotFoundError('Run not found', {
+      resource: 'run',
+      id: RUN,
+    });
+    let calls = 0;
+    const svc = new RunEventSseService({
+      eventQueryService: {
+        async listEvents() {
+          calls += 1;
+          throw notFound;
+        },
+      },
+      mysqlOpenRetryMs: 0,
+      sleep: async () => {},
+    });
+
+    await assert.rejects(
+      svc.openStream(
+        { runId: RUN, auth: { externalOrgId: 'o', externalUserId: 'u' } },
+        { write: () => true, isClosed: () => false },
+      ),
+      (error) => error === notFound,
+    );
+    assert.equal(calls, 1);
+  });
+
+  it('ends cleanly when aborted while waiting to retry initial history', async () => {
+    const controller = new AbortController();
+    let calls = 0;
+    const svc = new RunEventSseService({
+      eventQueryService: {
+        async listEvents() {
+          calls += 1;
+          throw new Error('mysql unavailable');
+        },
+      },
+      sleep: async (_ms, signal) => {
+        controller.abort();
+        assert.equal(signal?.aborted, true);
+        const error = new Error('aborted');
+        error.name = 'AbortError';
+        throw error;
+      },
+    });
+
+    const result = await svc.openStream(
+      { runId: RUN, auth: { externalOrgId: 'o', externalUserId: 'u' } },
+      {
+        write: () => true,
+        isClosed: () => false,
+        signal: controller.signal,
+      },
+    );
+
+    assert.equal(calls, 1);
+    assert.equal(result.lastSequence, 0);
+    assert.equal(result.status, null);
+  });
+
   it('replays MySQL history then ends when terminal with no gap', async () => {
     const events = [
       env(1, 'run.accepted', EVT1),

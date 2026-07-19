@@ -4,6 +4,12 @@
  */
 import { randomBytes } from 'node:crypto';
 import { config } from '../config.js';
+import {
+  boundRequestTraceContext,
+  normalizeTraceId,
+  normalizeTracestate,
+  traceCarrierHeaders,
+} from '../application/trace-context.js';
 
 function internalHeaders(extra = {}) {
   const h = {
@@ -36,6 +42,9 @@ export function buildTraceparent(traceId32) {
 function requestHeaders({
   auth = null,
   traceId = null,
+  traceContext = null,
+  traceparent = null,
+  tracestate = null,
   idempotencyKey = null,
   extra = {},
 } = {}) {
@@ -46,8 +55,29 @@ function requestHeaders({
     headers['X-Acting-Organization-Id'] = auth.actingOrganizationId;
   }
   if (auth?.actingRole) headers['X-Acting-Role'] = auth.actingRole;
-  // Prefer W3C traceparent with non-zero span; keep X-Trace-Id for compat.
-  if (traceId && /^[0-9a-fA-F]{32}$/.test(String(traceId))) {
+  // Prefer the request's bound W3C carrier. This preserves both the parent
+  // span and tracestate across every BFF → Agent call, while retaining the
+  // generated-child fallback for direct unit callers and legacy X-Trace-Id.
+  const bound =
+    traceContext ||
+    (traceparent || tracestate
+      ? { traceId, spanId: null, traceparent, tracestate }
+      : boundRequestTraceContext(auth));
+  if (bound?.traceparent && typeof bound.traceparent === 'string') {
+    const tid = normalizeTraceId(bound.traceId || traceId);
+    if (tid) {
+      headers.traceparent = String(bound.traceparent);
+      headers['X-Trace-Id'] = tid;
+      const state = normalizeTracestate(bound.tracestate || tracestate);
+      if (state) headers.tracestate = state;
+    }
+  } else if (bound?.spanId && bound?.traceId) {
+    try {
+      Object.assign(headers, traceCarrierHeaders(bound));
+    } catch {
+      // Fall through to the generated-child path below.
+    }
+  } else if (traceId && /^[0-9a-fA-F]{32}$/.test(String(traceId))) {
     const tid = String(traceId).toLowerCase();
     if (tid !== '0'.repeat(32)) {
       try {
@@ -117,6 +147,191 @@ export async function getAgentExtensionDiagnostics(
   return resp.json();
 }
 
+async function requestAgentA2aAdmin(
+  path,
+  { method = 'GET', body = null, auth = null, traceId = null } = {},
+) {
+  const resp = await fetch(
+    `${config.AGENT_BASE_URL}/internal/a2a/${path.replace(/^\/+/, '')}`,
+    {
+      method,
+      headers: requestHeaders({ auth, traceId }),
+      body: body == null ? undefined : JSON.stringify(body),
+    },
+  );
+  if (!resp.ok) {
+    const payload = await resp.json().catch(() => ({}));
+    const err = new Error(
+      typeof payload.error === 'string'
+        ? payload.error
+        : `Agent A2A admin request failed (${resp.status})`,
+    );
+    err.status = resp.status;
+    if (typeof payload.code === 'string') err.code = payload.code;
+    throw err;
+  }
+  return resp.json();
+}
+
+export async function getAgentA2aConfig(
+  agentId = null,
+  { auth = null, traceId = null } = {},
+) {
+  const query = agentId
+    ? `config?agent_id=${encodeURIComponent(agentId)}`
+    : 'config';
+  return requestAgentA2aAdmin(query, { auth, traceId });
+}
+
+export async function issueAgentA2aCredential(
+  body,
+  { auth = null, traceId = null } = {},
+) {
+  return requestAgentA2aAdmin('credentials', {
+    method: 'POST',
+    body,
+    auth,
+    traceId,
+  });
+}
+
+export async function rotateAgentA2aCredential(
+  credentialId,
+  body,
+  { auth = null, traceId = null } = {},
+) {
+  return requestAgentA2aAdmin(
+    `credentials/${encodeURIComponent(credentialId)}/rotate`,
+    { method: 'POST', body, auth, traceId },
+  );
+}
+
+export async function revokeAgentA2aCredential(
+  credentialId,
+  { auth = null, traceId = null } = {},
+) {
+  return requestAgentA2aAdmin(
+    `credentials/${encodeURIComponent(credentialId)}/revoke`,
+    { method: 'POST', body: {}, auth, traceId },
+  );
+}
+
+async function requestAgentConversation(
+  path,
+  { method = 'GET', body = null, auth = null, traceId = null } = {},
+) {
+  const resp = await fetch(
+    `${config.AGENT_BASE_URL}/internal/conversations${path}`,
+    {
+      method,
+      headers: requestHeaders({ auth, traceId }),
+      body: body == null ? undefined : JSON.stringify(body),
+    },
+  );
+  if (!resp.ok) {
+    const payload = await resp.json().catch(() => ({}));
+    const err = new Error(
+      typeof payload.error === 'string'
+        ? payload.error
+        : `Agent conversation request failed (${resp.status})`,
+    );
+    err.status = resp.status;
+    if (typeof payload.code === 'string') err.code = payload.code;
+    throw err;
+  }
+  if (resp.status === 204) return null;
+  return resp.json();
+}
+
+export async function listAgentConversations(
+  { auth = null, traceId = null } = {},
+) {
+  return requestAgentConversation('', { auth, traceId });
+}
+
+export async function getAgentConversation(
+  conversationId,
+  { auth = null, traceId = null } = {},
+) {
+  return requestAgentConversation(`/${encodeURIComponent(conversationId)}`, {
+    auth,
+    traceId,
+  });
+}
+
+export async function createAgentConversation(
+  body,
+  { auth = null, traceId = null } = {},
+) {
+  return requestAgentConversation('', {
+    method: 'POST',
+    body,
+    auth,
+    traceId,
+  });
+}
+
+export async function deleteAgentConversation(
+  conversationId,
+  { auth = null, traceId = null } = {},
+) {
+  await requestAgentConversation(`/${encodeURIComponent(conversationId)}`, {
+    method: 'DELETE',
+    auth,
+    traceId,
+  });
+}
+
+export async function ensureAgentSession(
+  conversationId = null,
+  { auth = null, traceId = null } = {},
+) {
+  const body = conversationId ? { conversation_id: conversationId } : {};
+  const resp = await fetch(`${config.AGENT_BASE_URL}/internal/sessions/ensure`, {
+    method: 'POST',
+    headers: requestHeaders({ auth, traceId }),
+    body: JSON.stringify(body),
+  });
+  if (!resp.ok) {
+    const payload = await resp.json().catch(() => ({}));
+    const err = new Error(
+      typeof payload.error === 'string'
+        ? payload.error
+        : `Agent session ensure failed (${resp.status})`,
+    );
+    err.status = resp.status;
+    if (typeof payload.code === 'string') err.code = payload.code;
+    throw err;
+  }
+  return resp.json();
+}
+
+/**
+ * Resolve one SandboxSession through Agent's external-identity mapping.
+ * The response contains internal owner ULIDs and must remain server-side.
+ */
+export async function resolveAgentSandboxSession(
+  sandboxSessionId,
+  { auth = null, traceId = null } = {},
+) {
+  const resp = await fetch(
+    `${config.AGENT_BASE_URL}/internal/sessions/${encodeURIComponent(sandboxSessionId)}`,
+    { headers: requestHeaders({ auth, traceId }) },
+  );
+  if (!resp.ok) {
+    const payload = await resp.json().catch(() => ({}));
+    const err = new Error(
+      typeof payload.error === 'string'
+        ? payload.error
+        : `Agent session access failed (${resp.status})`,
+    );
+    err.status = resp.status;
+    if (typeof payload.code === 'string') err.code = payload.code;
+    throw err;
+  }
+  return resp.json();
+}
+
 /**
  * List runs for the trusted acting owner (Agent MySQL owner scope).
  * @param {{ conversationId?: string, status?: string, limit?: number }} [query]
@@ -173,12 +388,16 @@ export async function cancelAgentRun(
  * @param {string} runId
  * @param {{ text: string, conversation_id?: string|null }} body
  */
-export async function steerAgentRun(runId, body, { auth = null, traceId = null } = {}) {
+export async function steerAgentRun(
+  runId,
+  body,
+  { auth = null, traceId = null, idempotencyKey = null } = {},
+) {
   const resp = await fetch(
     `${config.AGENT_BASE_URL}/internal/agent-runs/${encodeURIComponent(runId)}/steer`,
     {
       method: 'POST',
-      headers: requestHeaders({ auth, traceId }),
+      headers: requestHeaders({ auth, traceId, idempotencyKey }),
       body: JSON.stringify(body),
     },
   );
@@ -196,18 +415,51 @@ export async function steerAgentRun(runId, body, { auth = null, traceId = null }
  * @param {string} runId
  * @param {{ text: string, conversation_id?: string|null }} body
  */
-export async function followUpAgentRun(runId, body, { auth = null, traceId = null } = {}) {
+export async function followUpAgentRun(
+  runId,
+  body,
+  { auth = null, traceId = null, idempotencyKey = null } = {},
+) {
   const resp = await fetch(
     `${config.AGENT_BASE_URL}/internal/agent-runs/${encodeURIComponent(runId)}/follow-up`,
     {
       method: 'POST',
-      headers: requestHeaders({ auth, traceId }),
+      headers: requestHeaders({ auth, traceId, idempotencyKey }),
       body: JSON.stringify(body),
     },
   );
   if (!resp.ok) {
     const text = await resp.text().catch(() => resp.statusText);
     const err = new Error(`Agent follow-up failed (${resp.status}): ${text}`);
+    err.status = resp.status;
+    throw err;
+  }
+  return resp.json();
+}
+
+/**
+ * POST /internal/conversations/:id/follow-ups
+ * @param {string} conversationId
+ * @param {{ text: string, agent_id?: string|null }} body
+ */
+export async function createConversationFollowUp(
+  conversationId,
+  body,
+  { auth = null, traceId = null, idempotencyKey = null } = {},
+) {
+  const resp = await fetch(
+    `${config.AGENT_BASE_URL}/internal/conversations/${encodeURIComponent(conversationId)}/follow-ups`,
+    {
+      method: 'POST',
+      headers: requestHeaders({ auth, traceId, idempotencyKey }),
+      body: JSON.stringify(body),
+    },
+  );
+  if (!resp.ok) {
+    const text = await resp.text().catch(() => resp.statusText);
+    const err = new Error(
+      `Agent conversation follow-up failed (${resp.status}): ${text}`,
+    );
     err.status = resp.status;
     throw err;
   }
@@ -295,6 +547,51 @@ export async function decideAgentApproval(
   return resp.json();
 }
 
+async function requestAgentApproval(
+  path,
+  { auth = null, traceId = null } = {},
+) {
+  const resp = await fetch(
+    `${config.AGENT_BASE_URL}/internal/approvals${path}`,
+    { headers: requestHeaders({ auth, traceId }) },
+  );
+  if (!resp.ok) {
+    const payload = await resp.json().catch(() => ({}));
+    const err = new Error(
+      typeof payload.error === 'string'
+        ? payload.error
+        : `Agent approval request failed (${resp.status})`,
+    );
+    err.status = resp.status;
+    if (typeof payload.code === 'string') err.code = payload.code;
+    throw err;
+  }
+  return resp.json();
+}
+
+/** List owner-scoped durable approvals from Agent MySQL. */
+export async function listAgentApprovals(
+  { status = null, limit = null } = {},
+  { auth = null, traceId = null } = {},
+) {
+  const query = new URLSearchParams();
+  if (status) query.set('status', String(status));
+  if (limit != null) query.set('limit', String(limit));
+  const suffix = query.size ? `?${query}` : '';
+  return requestAgentApproval(suffix, { auth, traceId });
+}
+
+/** Load one owner-scoped durable approval from Agent MySQL. */
+export async function getAgentApproval(
+  approvalId,
+  { auth = null, traceId = null } = {},
+) {
+  return requestAgentApproval(`/${encodeURIComponent(approvalId)}`, {
+    auth,
+    traceId,
+  });
+}
+
 /**
  * @param {string} runId
  */
@@ -310,6 +607,146 @@ export async function getAgentRun(runId, { auth = null, traceId = null } = {}) {
     throw err;
   }
   return resp.json();
+}
+
+/** Load the owner-scoped durable trace projection for one Run. */
+export async function getAgentRunTrace(
+  runId,
+  { auth = null, traceId = null, limit = null, cursor = null } = {},
+) {
+  const url = new URL(
+    `${config.AGENT_BASE_URL}/internal/agent-runs/${encodeURIComponent(runId)}/trace`,
+  );
+  if (limit != null) url.searchParams.set('limit', String(limit));
+  if (cursor != null && String(cursor).trim()) {
+    url.searchParams.set('cursor', String(cursor).trim());
+  }
+  const resp = await fetch(url, {
+    headers: requestHeaders({ auth, traceId }),
+  });
+  if (!resp.ok) {
+    const payload = await resp.json().catch(() => ({}));
+    const err = new Error(
+      typeof payload.error === 'string'
+        ? payload.error
+        : `Agent trace request failed (${resp.status})`,
+    );
+    err.status = resp.status;
+    if (typeof payload.code === 'string') err.code = payload.code;
+    throw err;
+  }
+  return resp.json();
+}
+
+/**
+ * List the owner-scoped durable ToolExecution ledger from Agent MySQL.
+ * @param {string} runId
+ * @param {{ auth?: object|null, traceId?: string|null }} [opts]
+ */
+export async function listAgentToolExecutions(
+  runId,
+  { auth = null, traceId = null } = {},
+) {
+  const resp = await fetch(
+    `${config.AGENT_BASE_URL}/internal/agent-runs/${encodeURIComponent(runId)}/tools`,
+    { headers: requestHeaders({ auth, traceId }) },
+  );
+  if (!resp.ok) {
+    const text = await resp.text().catch(() => resp.statusText);
+    const err = new Error(
+      `Agent list tool executions failed (${resp.status}): ${text}`,
+    );
+    err.status = resp.status;
+    throw err;
+  }
+  return resp.json();
+}
+
+async function requestAgentProcess(
+  path,
+  { method = 'GET', body = null, auth = null, traceId = null } = {},
+) {
+  const resp = await fetch(
+    `${config.AGENT_BASE_URL}/internal/processes${path}`,
+    {
+      method,
+      headers: requestHeaders({ auth, traceId }),
+      body: body == null ? undefined : JSON.stringify(body),
+    },
+  );
+  if (!resp.ok) {
+    const payload = await resp.json().catch(() => ({}));
+    const err = new Error(
+      typeof payload.error === 'string'
+        ? payload.error
+        : `Agent process request failed (${resp.status})`,
+    );
+    err.status = resp.status;
+    if (typeof payload.code === 'string') err.code = payload.code;
+    throw err;
+  }
+  return resp.json();
+}
+
+export async function listAgentProcesses(query = {}, opts = {}) {
+  const params = new URLSearchParams();
+  if (query.runId) params.set('run_id', query.runId);
+  if (query.sessionId) params.set('session_id', query.sessionId);
+  if (query.status) params.set('status', query.status);
+  if (query.limit) params.set('limit', query.limit);
+  const qs = params.toString();
+  return requestAgentProcess(qs ? `?${qs}` : '', opts);
+}
+
+export async function getAgentProcess(processId, opts = {}) {
+  return requestAgentProcess(`/${encodeURIComponent(processId)}`, opts);
+}
+
+export async function getAgentProcessLogs(processId, query = {}, opts = {}) {
+  const params = new URLSearchParams();
+  if (query.offset != null) params.set('offset', query.offset);
+  if (query.limit != null) params.set('limit', query.limit);
+  const qs = params.toString();
+  return requestAgentProcess(
+    `/${encodeURIComponent(processId)}/logs${qs ? `?${qs}` : ''}`,
+    opts,
+  );
+}
+
+export async function readAgentProcess(processId, query = {}, opts = {}) {
+  const params = new URLSearchParams();
+  if (query.stream) params.set('stream', query.stream);
+  if (query.cursor) params.set('cursor', query.cursor);
+  if (query.limit != null) params.set('limit', query.limit);
+  const qs = params.toString();
+  return requestAgentProcess(
+    `/${encodeURIComponent(processId)}/read${qs ? `?${qs}` : ''}`,
+    opts,
+  );
+}
+
+export async function writeAgentProcessStdin(processId, body, opts = {}) {
+  return requestAgentProcess(`/${encodeURIComponent(processId)}/stdin`, {
+    ...opts,
+    method: 'POST',
+    body,
+  });
+}
+
+export async function signalAgentProcess(processId, body, opts = {}) {
+  return requestAgentProcess(`/${encodeURIComponent(processId)}/signal`, {
+    ...opts,
+    method: 'POST',
+    body,
+  });
+}
+
+export async function cancelAgentProcess(processId, opts = {}) {
+  return requestAgentProcess(`/${encodeURIComponent(processId)}/cancel`, {
+    ...opts,
+    method: 'POST',
+    body: {},
+  });
 }
 
 /**

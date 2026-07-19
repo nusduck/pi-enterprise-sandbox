@@ -50,6 +50,7 @@ export const ENVELOPE_KEYS = Object.freeze([
   '$integrity',
   '$payload',
   '$policyFingerprint',
+  '$policyPending',
 ]);
 
 /**
@@ -180,7 +181,7 @@ export function policyDecisionFingerprint(decision) {
  *
  * @param {unknown} original
  * @param {number} maxBytes
- * @param {{ policyFingerprint?: string | null }} [opts]
+ * @param {{ policyFingerprint?: string | null, policyPending?: boolean }} [opts]
  * @returns {string}
  */
 export function packJsonWithIntegrity(original, maxBytes, opts = {}) {
@@ -199,6 +200,9 @@ export function packJsonWithIntegrity(original, maxBytes, opts = {}) {
       throw new Error('policyFingerprint must be 64 hex chars');
     }
     envelope.$policyFingerprint = pf;
+  }
+  if (opts.policyPending === true) {
+    envelope.$policyPending = true;
   }
   const raw = JSON.stringify(envelope);
   if (Buffer.byteLength(raw, 'utf8') > maxBytes) {
@@ -256,6 +260,31 @@ export function extractPolicyFingerprint(stored) {
   return typeof pf === 'string' && /^[0-9a-f]{64}$/i.test(pf)
     ? pf.toLowerCase()
     : null;
+}
+
+/**
+ * Identify the explicit, side-effect-free placeholder written when Pi emits
+ * tool_execution_start before the policy hook.
+ * @param {unknown} stored
+ * @returns {boolean}
+ */
+export function extractPolicyPending(stored) {
+  if (stored == null) return false;
+  let obj = stored;
+  if (typeof stored === 'string') {
+    try {
+      obj = JSON.parse(stored);
+    } catch {
+      return false;
+    }
+  }
+  return Boolean(
+    obj &&
+      typeof obj === 'object' &&
+      !Array.isArray(obj) &&
+      /** @type {any} */ (obj).$v === ENVELOPE_VERSION &&
+      /** @type {any} */ (obj).$policyPending === true,
+  );
 }
 
 /**
@@ -392,6 +421,8 @@ function mapToolExecutionPublic(row) {
     _resultIntegrity: extractIntegrity(rawResult),
     /** @internal hidden policy decision fingerprint (not public) */
     _policyFingerprint: extractPolicyFingerprint(rawArgs),
+    /** @internal explicit Pi pre-policy start placeholder */
+    _policyPending: extractPolicyPending(rawArgs),
   };
 }
 
@@ -537,6 +568,25 @@ export class ToolExecutionRepository {
   }
 
   /**
+   * List the authoritative durable tool ledger for one owned Run.
+   *
+   * The explicit owned-Run read is intentional: an owned run with no tools
+   * returns `[]`, while a foreign or missing run fails closed as NOT_FOUND.
+   * @param {string} runId
+   * @param {{ orgId: string, userId: string }} scope
+   */
+  async listByRun(runId, scope) {
+    const s = requireOwnerScope(scope);
+    const id = assertUlid(runId, 'runId');
+    await this.requireOwnedRun(id, s);
+    const rows = await this.#ownedToolQuery(s)
+      .andWhere('te.run_id', id)
+      .orderBy('te.created_at', 'asc')
+      .orderBy('te.tool_execution_id', 'asc');
+    return rows.map(mapToolExecutionPublic);
+  }
+
+  /**
    * @param {{
    *   toolExecutionId: string,
    *   runId: string,
@@ -549,6 +599,7 @@ export class ToolExecutionRepository {
    *   status?: string,
    *   errorCode?: string | null,
    *   policyFingerprint?: string | null,
+   *   policyPending?: boolean,
    *   traceId: string,
    *   orgId: string,
    *   userId: string,
@@ -576,6 +627,7 @@ export class ToolExecutionRepository {
         : null;
     const argsJson = packJsonWithIntegrity(originalArgs, MAX_ARGS_JSON_BYTES, {
       policyFingerprint,
+      policyPending: input.policyPending === true,
     });
     void integrityFingerprint(originalArgs);
 
@@ -604,14 +656,49 @@ export class ToolExecutionRepository {
       .first();
 
     if (existing) {
-      const mapped = mapToolExecutionPublic(existing);
+      let mapped = mapToolExecutionPublic(existing);
+      // Pi emits tool_execution_start before the beforeToolCall policy hook.
+      // The start observer may therefore create a PROPOSED placeholder without
+      // a fingerprint. The policy hook may adopt that untouched row exactly
+      // once while it is still side-effect free.
+      if (
+        policyFingerprint &&
+        !mapped._policyFingerprint &&
+        mapped._policyPending === true &&
+        mapped.status === TOOL_EXECUTION_STATUS.PROPOSED &&
+        mapped.requestHash == null &&
+        mapped.resultJson == null
+      ) {
+        assertToolExecutionReplayMatch(mapped, {
+          toolName,
+          toolSource,
+          argumentsJson: originalArgs,
+        });
+        await this.db('tool_executions')
+          .where({ tool_execution_id: mapped.toolExecutionId })
+          .update({ arguments_json: argsJson });
+        mapped = mapToolExecutionPublic(
+          await this.db('tool_executions')
+            .where({ tool_execution_id: mapped.toolExecutionId })
+            .first(),
+        );
+        return {
+          created: false,
+          adoptedPolicyFingerprint: true,
+          toolExecution: mapped,
+        };
+      }
       assertToolExecutionReplayMatch(mapped, {
         toolName,
         toolSource,
         argumentsJson: originalArgs,
         policyFingerprint,
       });
-      return { created: false, toolExecution: mapped };
+      return {
+        created: false,
+        adoptedPolicyFingerprint: false,
+        toolExecution: mapped,
+      };
     }
 
     const now = this.now();
@@ -650,7 +737,11 @@ export class ToolExecutionRepository {
           argumentsJson: originalArgs,
           policyFingerprint,
         });
-        return { created: false, toolExecution: mapped };
+        return {
+          created: false,
+          adoptedPolicyFingerprint: false,
+          toolExecution: mapped,
+        };
       }
       throw err;
     }
@@ -675,7 +766,11 @@ export class ToolExecutionRepository {
       toolExecution = tr.toolExecution;
     }
 
-    return { created: true, toolExecution };
+    return {
+      created: true,
+      adoptedPolicyFingerprint: false,
+      toolExecution,
+    };
   }
 
   /**

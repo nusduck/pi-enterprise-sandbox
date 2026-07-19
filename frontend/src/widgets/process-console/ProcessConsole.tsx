@@ -114,10 +114,6 @@ export function ProcessConsole({
         offset: historyOffset,
         limit: 50_000,
       });
-      if (!logs) {
-        flash('History API unavailable — showing live stream only');
-        return;
-      }
       setHistoryStdout((prev) =>
         historyOffset === 0 ? logs.stdout : prev + logs.stdout,
       );

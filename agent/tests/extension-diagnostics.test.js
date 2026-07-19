@@ -4,12 +4,11 @@ import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
+import { getExtensionDiagnostics } from '../src/application/extension-diagnostics-service.js';
 import {
-  createCapabilityRegistry,
-  createLatestCapabilitySnapshotStore,
-  publishCapabilitySnapshot,
-} from '../application/capability-registry-service.js';
-import { getExtensionDiagnostics } from '../application/extension-diagnostics-service.js';
+  ENTERPRISE_DEFAULT_TOOLS,
+  ENTERPRISE_EXTENSION_NAMES,
+} from '../src/extensions/index.js';
 
 let root;
 
@@ -36,148 +35,81 @@ after(async () => {
   await rm(root, { recursive: true, force: true });
 });
 
-test('extension diagnostics includes valid packages from configured skill roots', () => {
+test('diagnostics preserves the UI contract using only production capabilities', () => {
   const diagnostics = getExtensionDiagnostics({
     skillRoots: [root],
-    snapshot: null,
+    models: [{ model_id: 'model-1', enabled: true }],
+    now: () => new Date('2026-07-19T00:00:00.000Z'),
   });
-  const skill = diagnostics.skills.find((item) => item.name === 'workspace-helper');
-  assert.ok(skill);
-  assert.equal(skill.description, 'Helps with workspace files.');
-  // Physical temp roots must never appear verbatim in diagnostics exports.
-  assert.equal(skill.source, 'host-path-redacted');
-  assert.equal(skill.path, null);
+
+  assert.equal(diagnostics.status, 'ok');
+  assert.equal(diagnostics.generated_at, '2026-07-19T00:00:00.000Z');
   assert.equal(diagnostics.view, 'configured');
   assert.equal(diagnostics.registry.live, false);
-  assert.equal(skill.status, 'configured');
-  assert.ok(diagnostics.profile.shared_skills);
-  assert.ok(diagnostics.extensions.every((item) => item.status === 'configured'));
-});
-
-function withAgentProfilesJson(value, fn) {
-  const prev = process.env.AGENT_PROFILES_JSON;
-  process.env.AGENT_PROFILES_JSON = value;
-  try {
-    return fn();
-  } finally {
-    if (prev === undefined) delete process.env.AGENT_PROFILES_JSON;
-    else process.env.AGENT_PROFILES_JSON = prev;
-  }
-}
-
-test('cold diagnostics disables shared skills under none and allowlist policy', () => {
-  withAgentProfilesJson(
-    JSON.stringify({ 'coding-agent': { sharedSkills: { mode: 'none' } } }),
-    () => {
-      const diagnostics = getExtensionDiagnostics({ skillRoots: [root], snapshot: null });
-      const skill = diagnostics.skills.find((item) => item.name === 'workspace-helper');
-      assert.ok(skill);
-      assert.equal(skill.status, 'disabled');
-      assert.equal(skill.reason, 'shared_skills_none');
-      assert.equal(diagnostics.view, 'configured');
-    },
+  assert.deepEqual(
+    diagnostics.extensions.map((extension) => extension.name),
+    [...ENTERPRISE_EXTENSION_NAMES],
   );
-
-  withAgentProfilesJson(
-    JSON.stringify({
-      'coding-agent': { sharedSkills: { mode: 'allowlist', names: ['other-skill'] } },
-    }),
-    () => {
-      const diagnostics = getExtensionDiagnostics({ skillRoots: [root], snapshot: null });
-      const skill = diagnostics.skills.find((item) => item.name === 'workspace-helper');
-      assert.ok(skill);
-      assert.equal(skill.status, 'disabled');
-      assert.equal(skill.reason, 'shared_skill_not_in_allowlist');
-    },
+  assert.deepEqual(
+    diagnostics.tools.map((tool) => tool.name),
+    [...ENTERPRISE_DEFAULT_TOOLS],
   );
+  assert.equal(diagnostics.package.package, 'pi-enterprise-agent');
+  assert.notEqual(
+    diagnostics.package.package,
+    '@company/pi-enterprise-agent-kit',
+  );
+  assert.deepEqual(diagnostics.models, [
+    { model_id: 'model-1', enabled: true },
+  ]);
+
+  const skill = diagnostics.skills.find(
+    (entry) => entry.name === 'workspace-helper',
+  );
+  assert.equal(skill.description, 'Helps with workspace files.');
+  assert.equal(skill.source, 'shared-skill-root');
+  assert.equal(skill.path, null);
+  assert.doesNotMatch(JSON.stringify(diagnostics), new RegExp(root));
 });
 
-test('live snapshot absence marks policy-allowed skills disabled', () => {
-  const store = createLatestCapabilitySnapshotStore();
-  const reg = createCapabilityRegistry({ profileId: 'coding-agent', runId: 'live_absent' });
-  publishCapabilitySnapshot(reg, { store, reason: 'empty-live' });
-
+test('MCP diagnostics expose references as a boolean policy, never endpoints or refs', () => {
   const diagnostics = getExtensionDiagnostics({
-    skillRoots: [root],
-    snapshotStore: store,
+    mcpServers: [
+      {
+        id: 'crm',
+        url: 'https://mcp.example.test/private',
+        authTokenRef: 'CRM_PRODUCTION_TOKEN',
+      },
+      {
+        id: 'disabled',
+        command: 'node',
+        args: ['server.js'],
+        enabled: false,
+      },
+    ],
+    models: [],
   });
-  const skill = diagnostics.skills.find((item) => item.name === 'workspace-helper');
-  assert.equal(diagnostics.view, 'live');
-  assert.ok(skill);
-  assert.equal(skill.status, 'disabled');
-  assert.equal(skill.reason, 'absent_from_live_snapshot');
+
+  const crm = diagnostics.mcp_servers.find(
+    (server) => server.server_id === 'crm',
+  );
+  assert.equal(crm.status, 'configured');
+  assert.equal(crm.connection_status, 'configured');
+  assert.equal(crm.authorization, 'host-injected');
+  assert.deepEqual(diagnostics.profile.allowed_mcp_servers, ['crm']);
+
+  const serialized = JSON.stringify(diagnostics);
+  assert.doesNotMatch(serialized, /mcp\.example\.test/);
+  assert.doesNotMatch(serialized, /CRM_PRODUCTION_TOKEN/);
 });
 
-test('readonly skillsMode marks skill management tools disabled in configured view', () => {
-  const diagnostics = getExtensionDiagnostics({
-    skillRoots: [],
-    mcpServers: [],
-    snapshot: null,
-    skillsMode: 'readonly',
-  });
-  for (const name of ['skill_install', 'skill_edit', 'skill_reload']) {
-    const tool = diagnostics.tools.find((item) => item.name === name);
-    assert.ok(tool, name);
-    assert.equal(tool.status, 'disabled');
-    assert.equal(tool.reason, 'skills_mode_readonly');
-  }
-  assert.equal(diagnostics.view, 'configured');
-});
-
-test('development skillsMode leaves skill management tools configured when cold', () => {
-  const diagnostics = getExtensionDiagnostics({
-    skillRoots: [],
-    mcpServers: [],
-    snapshot: null,
-    skillsMode: 'development',
-  });
-  for (const name of ['skill_install', 'skill_edit', 'skill_reload']) {
-    const tool = diagnostics.tools.find((item) => item.name === name);
-    assert.ok(tool, name);
-    assert.equal(tool.status, 'configured');
-  }
-});
-
-test('diagnostics owner filter prevents cross-user live snapshot bleed', () => {
-  const store = createLatestCapabilitySnapshotStore({ maxSnapshots: 8 });
-  const ownerA = createCapabilityRegistry({
-    profileId: 'coding-agent',
-    runId: 'run_owner_a',
-    conversationId: 'conv_a',
-    sessionId: 'sess_a',
-    ownerUserId: 'user_a',
-    organizationId: 'org_a',
-  });
-  ownerA.register({
-    kind: 'tool',
-    name: 'read',
-    status: 'active',
-    source: 'pi-session',
-  });
-  publishCapabilitySnapshot(ownerA, { store, reason: 'owner_a' });
-
-  const ownerBView = getExtensionDiagnostics({
-    skillRoots: [],
-    mcpServers: [],
-    snapshotStore: store,
-    ownerUserId: 'user_b',
-    organizationId: 'org_a',
-  });
-  assert.equal(ownerBView.view, 'configured');
-  assert.equal(ownerBView.registry.live, false);
-  assert.equal(ownerBView.registry.run_id, undefined);
-
-  const ownerAView = getExtensionDiagnostics({
-    skillRoots: [],
-    mcpServers: [],
-    snapshotStore: store,
-    ownerUserId: 'user_a',
-    organizationId: 'org_a',
-  });
-  assert.equal(ownerAView.view, 'live');
-  assert.equal(ownerAView.registry.live, true);
-  assert.equal(ownerAView.registry.run_id, 'run_owner_a');
-  assert.equal(ownerAView.registry.conversation_id, 'conv_a');
-  assert.equal(ownerAView.registry.session_id, 'sess_a');
-  assert.equal(ownerAView.registry.owner_user_id, undefined);
+test('unknown legacy profile ids fail closed', () => {
+  assert.throws(
+    () =>
+      getExtensionDiagnostics({
+        profileId: 'legacy-package-profile',
+        models: [],
+      }),
+    /Unknown diagnostics profile/,
+  );
 });

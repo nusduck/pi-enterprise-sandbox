@@ -10,7 +10,8 @@ import { ValidationError } from '../errors.js';
 
 /**
  * @param {{
- *   agentId: string,
+ *   agentId?: string,
+ *   rpcPath?: string,
  *   name?: string | null,
  *   description?: string | null,
  *   baseUrl: string,
@@ -21,7 +22,20 @@ import { ValidationError } from '../errors.js';
 export function buildAgentCard(input) {
   const agentId = String(input.agentId || '').trim();
   const base = String(input.baseUrl || '').replace(/\/$/, '');
-  const url = `${base}/a2a/agents/${agentId}`;
+  if (!input.rpcPath && !agentId) {
+    throw new ValidationError('Agent Card requires agentId or rpcPath');
+  }
+  const rpcPath = input.rpcPath || `/a2a/agents/${agentId}`;
+  if (
+    typeof rpcPath !== 'string' ||
+    !/^\/(?!\/)/.test(rpcPath) ||
+    /[?#]/.test(rpcPath)
+  ) {
+    throw new ValidationError(
+      'Agent Card rpcPath must be an origin-relative path without query or fragment',
+    );
+  }
+  const url = `${base}${rpcPath}`;
   return {
     name: input.name || 'Enterprise Analysis Agent',
     description:

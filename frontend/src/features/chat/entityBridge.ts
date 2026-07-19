@@ -9,14 +9,20 @@ import {
   createDataset,
   createEntityStore,
   createRun,
+  createTraceSpan,
+  cloneEntityStore,
   setActiveConversation,
   upsertApproval,
   upsertDataset,
   upsertRun,
+  upsertTraceSpan,
   type ApprovalStatus,
+  type DatasetEntity,
   type EntityStore,
   type MessageEntity,
   type RunEntity,
+  type TraceSpanEntity,
+  type TraceSpanKind,
 } from '../../entities';
 import {
   createRunSSEManager,
@@ -32,18 +38,150 @@ import { rehydrateRun, rehydrateToolExecutions } from '../../shared/state/runRed
 import { normalizeToRuntimeEvent } from '../../shared/state/platformEventNormalize';
 import {
   getRun,
+  getRunTraceSpans as fetchRunTraceSpans,
   listRuns,
   listRunTools,
   type RunDetail,
 } from '../../shared/api/runs';
 import { getConversationEvents } from '../../shared/api/client';
-import { listDatasets } from '../../shared/api/datasets';
+import { listDatasets, type DatasetRow } from '../../shared/api/datasets';
 import type { PersistedAgentEvent } from '../../shared/schemas/events';
 import type { ChatMessage } from '../../shared/state/types';
 import type { ContentPart, ToolUsePart } from '../../shared/state/types';
 import { getArtifactDownloadUrl } from '../../shared/api/client';
 import { makeRuntimeEvent } from '../../shared/schemas/events';
 import { isDurableArtifactId } from '../../shared/state/runReducer';
+import type {
+  RunTraceResponse,
+  TraceSpanWire,
+} from '../../shared/schemas/events';
+
+const TRACE_SPAN_KINDS = new Set<TraceSpanKind>([
+  'run',
+  'queue',
+  'model',
+  'tool',
+  'sandbox',
+  'mcp',
+  'artifact',
+  'session',
+  'a2a',
+  'error',
+  'other',
+]);
+const MAX_TRACE_PAGES = 100;
+
+function sameRunRevision(
+  left: RunEntity | undefined,
+  right: RunEntity | undefined,
+): boolean {
+  return (
+    Boolean(left) === Boolean(right) &&
+    left?.lastSequence === right?.lastSequence &&
+    left?.lastEventId === right?.lastEventId &&
+    left?.status === right?.status &&
+    left?.traceId === right?.traceId
+  );
+}
+
+function finiteNumber(value: unknown): number | null {
+  if (value == null) return null;
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+}
+
+function traceAttributes(span: TraceSpanWire): Record<string, unknown> {
+  if (span.attributes && typeof span.attributes === 'object') {
+    return span.attributes;
+  }
+  if (typeof span.attributes_json === 'string') {
+    try {
+      const parsed = JSON.parse(span.attributes_json) as unknown;
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        return parsed as Record<string, unknown>;
+      }
+    } catch {
+      return {};
+    }
+  }
+  return {};
+}
+
+/**
+ * Apply a durable trace page. Complete responses replace the transient tree;
+ * truncated pages are merged so a partial response cannot erase live spans.
+ */
+export function rehydrateTraceSpans(
+  current: EntityStore,
+  runId: string,
+  response: RunTraceResponse,
+): EntityStore {
+  const run = current.runsById[runId];
+  if (!run) return current;
+  let next = cloneEntityStore(current);
+  const partial =
+    response.truncated === true ||
+    Boolean(response.nextCursor || response.next_cursor);
+  if (!partial) {
+    for (const [id, span] of Object.entries(next.traceSpansById)) {
+      if (span.runId === runId) delete next.traceSpansById[id];
+    }
+  }
+  const responseTraceId = String(response.traceId || response.trace_id || run.traceId || '');
+  next.runsById[runId] = {
+    ...run,
+    traceId: responseTraceId || run.traceId,
+    traceSpanIds: partial ? [...(run.traceSpanIds || [])] : [],
+  };
+
+  for (const wire of response.spans) {
+    const traceId = String(wire.traceId || wire.trace_id || responseTraceId || '');
+    const spanId = String(wire.spanId || wire.span_id || wire.id || '');
+    if (!spanId) continue;
+    const wireRunId = String(wire.runId || wire.run_id || runId);
+    if (wireRunId !== runId) continue;
+    const parentSpanId = wire.parentSpanId ?? wire.parent_span_id ?? null;
+    const id = traceId ? `${traceId}:${spanId}` : spanId;
+    const parentId = parentSpanId
+      ? traceId
+        ? `${traceId}:${String(parentSpanId)}`
+        : String(parentSpanId)
+      : null;
+    const rawKind = String(wire.kind || 'other') as TraceSpanKind;
+    const kind = TRACE_SPAN_KINDS.has(rawKind) ? rawKind : 'other';
+    const rawStatus = String(wire.status || 'running');
+    const status: TraceSpanEntity['status'] =
+      rawStatus === 'ok' || rawStatus === 'error' || rawStatus === 'cancelled'
+        ? rawStatus
+        : 'running';
+    const metadata = traceAttributes(wire);
+    next = upsertTraceSpan(
+      next,
+      createTraceSpan({
+        id,
+        runId,
+        orgId: String(wire.orgId || wire.org_id || '') || null,
+        userId: String(wire.userId || wire.user_id || '') || null,
+        parentId,
+        kind,
+        name: String(wire.name || kind),
+        status,
+        spanId,
+        durationMs: finiteNumber(wire.durationMs ?? wire.duration_ms),
+        tokens: finiteNumber(wire.tokens ?? wire.token_count),
+        cost: finiteNumber(wire.cost),
+        error:
+          status === 'error' && metadata.errorCode != null
+            ? String(metadata.errorCode)
+            : null,
+        metadata: Object.keys(metadata).length ? metadata : null,
+        startedAt: wire.startedAt ?? wire.started_at ?? null,
+        finishedAt: wire.finishedAt ?? wire.finished_at ?? null,
+      }),
+    );
+  }
+  return next;
+}
 
 export type EntityBridge = {
   manager: RunSSEManager;
@@ -55,6 +193,7 @@ export type EntityBridge = {
   beginRun: (opts?: {
     runId?: string;
     conversationId?: string | null;
+    agentSessionId?: string | null;
     sessionId?: string | null;
   }) => string;
   /** Reduce one Agent wire event into the entity store. */
@@ -91,7 +230,50 @@ export type EntityBridge = {
     approvalId: string,
     status: Extract<ApprovalStatus, 'approved' | 'rejected'>,
   ) => void;
+  /** Immediately publish a successful upload into the normalized Dataset store. */
+  recordDataset: (
+    row: DatasetRow,
+    context?: { conversationId?: string | null; sessionId?: string | null },
+  ) => DatasetEntity | null;
 };
+
+/** Convert the Sandbox/BFF Dataset wire row into the single UI entity shape. */
+export function datasetRowToEntity(
+  row: DatasetRow,
+  context: { conversationId?: string | null; sessionId?: string | null } = {},
+): DatasetEntity | null {
+  const id = String(row.dataset_id || row.id || '');
+  if (!id) return null;
+  const statusRaw = String(row.status || 'ready').toLowerCase();
+  const status =
+    statusRaw === 'failed'
+      ? 'failed'
+      : statusRaw === 'uploading' || statusRaw === 'pending'
+        ? 'uploading'
+        : 'ready';
+  return createDataset({
+    id,
+    conversationId:
+      String(row.conversation_id || context.conversationId || '') || null,
+    sessionId:
+      String(row.sandbox_session_id || context.sessionId || '') || null,
+    name: String(row.name || row.original_filename || id),
+    path: String(row.path || row.stored_relative_path || '') || null,
+    size:
+      typeof row.size === 'number'
+        ? row.size
+        : typeof row.size_bytes === 'number'
+          ? row.size_bytes
+          : null,
+    mimeType: row.mime_type != null ? String(row.mime_type) : null,
+    sha256: row.sha256 != null ? String(row.sha256) : null,
+    status,
+    progress: status === 'ready' ? 100 : null,
+    agentVisible: status === 'ready',
+    createdAt: row.created_at != null ? String(row.created_at) : null,
+    updatedAt: row.completed_at != null ? String(row.completed_at) : null,
+  });
+}
 
 /**
  * Create the F2 entity bridge. Safe to construct once per ChatProvider.
@@ -102,6 +284,7 @@ export function createEntityBridge(
   let store = createEntityStore();
   const eventAdapters = new Map<string, AgentEventAdapterState>();
   const transports = new Map<string, AbortController>();
+  const reconcileInFlight = new Map<string, Promise<RunEntity | null>>();
 
   function localRunId(): string {
     const uuid = globalThis.crypto?.randomUUID?.();
@@ -116,10 +299,23 @@ export function createEntityBridge(
     reconcileRun,
   });
 
+  function recordDataset(
+    row: DatasetRow,
+    context: { conversationId?: string | null; sessionId?: string | null } = {},
+  ): DatasetEntity | null {
+    const entity = datasetRowToEntity(row, context);
+    if (!entity) return null;
+    store = upsertDataset(manager.getStore(), entity);
+    manager.setStore(store);
+    onStoreChange?.(store);
+    return entity;
+  }
+
   function beginRun(
     opts: {
       runId?: string;
       conversationId?: string | null;
+      agentSessionId?: string | null;
       sessionId?: string | null;
     } = {},
   ): string {
@@ -129,6 +325,7 @@ export function createEntityBridge(
       createRun({
         id: runId,
         conversationId: opts.conversationId || null,
+        agentSessionId: opts.agentSessionId || null,
         sandboxSessionId: opts.sessionId || null,
         status: 'queued',
       }),
@@ -155,24 +352,14 @@ export function createEntityBridge(
     // Platform envelopes already carry sequence/eventId — feed reducer directly
     // so replay/live merge stays authoritative (no double sequence synthesis).
     const asPlatform = normalizeToRuntimeEvent(ev, runId);
-    if (
-      asPlatform &&
-      (ev.eventId != null ||
-        (ev as { event_id?: string }).event_id != null ||
-        (typeof ev.type === 'string' && String(ev.type).includes('.')))
-    ) {
-      // Dotted platform types (tool.execution.started, artifact.ready, …)
-      // or explicit event ids skip the legacy Agent adapter.
-      const type = String(ev.type || asPlatform.type || '');
-      if (
-        type.includes('.') ||
-        ev.eventId != null ||
-        (ev as { event_id?: string }).event_id != null
-      ) {
-        manager.handleRuntimeEvent(asPlatform);
-        store = manager.getStore();
-        return;
-      }
+    const eventType = String(ev.type || asPlatform?.type || '');
+    if (asPlatform && eventType.includes('.')) {
+      // Formal platform events use dotted names. Legacy Agent events such as
+      // tool_start also carry durable ids after history projection, but still
+      // need the adapter that maps them into normalized reducer events.
+      manager.handleRuntimeEvent(asPlatform);
+      store = manager.getStore();
+      return;
     }
 
     let adapter = eventAdapters.get(runId);
@@ -253,22 +440,141 @@ export function createEntityBridge(
     applyLocalRunEvent(runId, 'run.failed', { message });
   }
 
-  async function reconcileRun(runId: string): Promise<RunEntity | null> {
+  async function fetchDurableTrace(
+    runId: string,
+    expectedTraceId: string | null | undefined,
+  ): Promise<RunTraceResponse | null> {
+    // Older BFFs may omit trace_id from Run detail. Avoid a speculative request
+    // in that compatibility case; live spans remain available from SSE replay.
+    if (!expectedTraceId) return null;
+    let page = await fetchRunTraceSpans(runId);
+    const firstTraceId = page.traceId || page.trace_id || null;
+    if (firstTraceId && firstTraceId !== expectedTraceId) {
+      throw new Error('trace response changed trace id');
+    }
+    const firstRunId = page.runId || page.run_id || null;
+    if (firstRunId && firstRunId !== runId) {
+      throw new Error('trace response changed run id');
+    }
+    const aggregate: RunTraceResponse = {
+      ...page,
+      spans: [...page.spans],
+      truncated: page.truncated === true,
+      nextCursor: page.nextCursor ?? page.next_cursor ?? null,
+      next_cursor: page.next_cursor ?? page.nextCursor ?? null,
+    };
+    const seenCursors = new Set<string>();
+    let pageCount = 1;
+    while (
+      aggregate.truncated === true &&
+      aggregate.nextCursor &&
+      pageCount < MAX_TRACE_PAGES
+    ) {
+      const cursor = String(aggregate.nextCursor);
+      if (seenCursors.has(cursor)) break;
+      seenCursors.add(cursor);
+      page = await fetchRunTraceSpans(runId, { cursor });
+      const pageTraceId = page.traceId || page.trace_id || null;
+      const aggregateTraceId = aggregate.traceId || aggregate.trace_id || null;
+      if (pageTraceId && aggregateTraceId && pageTraceId !== aggregateTraceId) {
+        throw new Error('trace page changed trace id');
+      }
+      const pageRunId = page.runId || page.run_id || null;
+      const aggregateRunId = aggregate.runId || aggregate.run_id || null;
+      if (pageRunId && aggregateRunId && pageRunId !== aggregateRunId) {
+        throw new Error('trace page changed run id');
+      }
+      aggregate.spans.push(...page.spans);
+      aggregate.truncated = page.truncated === true;
+      aggregate.nextCursor = page.nextCursor ?? page.next_cursor ?? null;
+      aggregate.next_cursor = aggregate.nextCursor;
+      pageCount += 1;
+    }
+    // A hard page ceiling is an honest partial result, not permission to clear
+    // the live tree. The response schema exposes this state to the rehydrator.
+    if (aggregate.truncated && pageCount >= MAX_TRACE_PAGES) {
+      aggregate.nextCursor = aggregate.nextCursor || null;
+      aggregate.next_cursor = aggregate.nextCursor;
+    }
+    return aggregate;
+  }
+
+  async function loadDurableTrace(
+    next: EntityStore,
+    runId: string,
+  ): Promise<EntityStore> {
+    const expectedRun = next.runsById[runId];
+    const response = await fetchDurableTrace(
+      runId,
+      expectedRun?.traceId,
+    );
+    const latest = manager.getStore();
+    const currentRun = latest.runsById[runId];
+    if (!sameRunRevision(expectedRun, currentRun)) return latest;
+    // Rebase the target Run's trace projection onto the latest global store so
+    // an unrelated background Run cannot be rolled back by this HTTP request.
+    return response ? rehydrateTraceSpans(latest, runId, response) : latest;
+  }
+
+  async function reconcileRunOnce(runId: string): Promise<RunEntity | null> {
+    const initialSequence = manager.getStore().runsById[runId]?.lastSequence ?? null;
     const detail = await getRun(runId);
-    let next = rehydrateRun(manager.getStore(), detail);
+    let candidate = rehydrateRun(manager.getStore(), detail);
+    let tools: Awaited<ReturnType<typeof listRunTools>> | null = null;
     try {
-      const tools = await listRunTools(runId);
-      next = rehydrateToolExecutions(next, runId, tools);
+      tools = await listRunTools(runId);
+      candidate = rehydrateToolExecutions(candidate, runId, tools);
     } catch {
       // Run status remains authoritative even when an older BFF has no tool
       // snapshot endpoint yet; persisted events can still restore the UI.
     }
+    let trace: RunTraceResponse | null = null;
+    try {
+      trace = await fetchDurableTrace(
+        runId,
+        candidate.runsById[runId]?.traceId,
+      );
+    } catch {
+      // Trace projection is additive observability. Run/tool reconciliation must
+      // still succeed against an older BFF while SSE spans remain usable.
+    }
+    // A live SSE event may have been applied while the authoritative snapshot
+    // was in flight. Never let that older response move the run backwards.
+    const currentRun = manager.getStore().runsById[runId];
+    if (
+      (initialSequence == null && currentRun) ||
+      (initialSequence != null && currentRun?.lastSequence !== initialSequence)
+    ) {
+      return currentRun || null;
+    }
+
+    // Re-apply only this Run's authoritative snapshots onto the latest store.
+    // Another Run may have received SSE while the HTTP reads were in flight;
+    // committing the earlier candidate wholesale would erase that update.
+    let next = rehydrateRun(manager.getStore(), detail);
+    if (tools) next = rehydrateToolExecutions(next, runId, tools);
+    if (trace) next = rehydrateTraceSpans(next, runId, trace);
     store = next;
     manager.setStore(store);
 
     store = manager.getStore();
     onStoreChange?.(store);
     return store.runsById[runId] || null;
+  }
+
+  /** Coalesce reconnect/manual reconciliation calls for one Run. */
+  async function reconcileRun(runId: string): Promise<RunEntity | null> {
+    const pending = reconcileInFlight.get(runId);
+    if (pending) return pending;
+    const current = reconcileRunOnce(runId);
+    reconcileInFlight.set(runId, current);
+    try {
+      return await current;
+    } finally {
+      if (reconcileInFlight.get(runId) === current) {
+        reconcileInFlight.delete(runId);
+      }
+    }
   }
 
   function dispose(): void {
@@ -296,10 +602,21 @@ export function createEntityBridge(
       if (full) detail = full;
 
       store = rehydrateRun(manager.getStore(), detail);
+      manager.setStore(store);
+      const toolsBaseRun = store.runsById[runId];
       try {
-        store = rehydrateToolExecutions(store, runId, await listRunTools(runId));
+        const tools = await listRunTools(runId);
+        const latest = manager.getStore();
+        store = sameRunRevision(toolsBaseRun, latest.runsById[runId])
+          ? rehydrateToolExecutions(latest, runId, tools)
+          : latest;
       } catch {
         /* Older BFFs may not expose snapshots; event replay remains usable. */
+      }
+      try {
+        store = await loadDurableTrace(store, runId);
+      } catch {
+        /* Older BFFs may not expose durable trace snapshots yet. */
       }
       manager.setStore(store);
 
@@ -323,6 +640,9 @@ export function createEntityBridge(
     return {
       ...(event.payload || {}),
       type: persistedType,
+      eventId: event.event_id,
+      event_id: event.event_id,
+      sequence: event.sequence,
       persisted_event_id: event.event_id,
       persisted_sequence: event.sequence,
       timestamp: event.created_at || undefined,
@@ -349,7 +669,7 @@ export function createEntityBridge(
       const persisted = (eventsByRun.get(runId) || [])
         .slice()
         .sort((a, b) => a.sequence - b.sequence);
-      const status = String(detail.status || '');
+      const status = String(manager.getStore().runsById[runId]?.status || '');
       const activelyStreaming = status === 'pending' || status === 'queued' || status === 'running';
       const resumable = status === 'waiting_approval' || status === 'waiting_input';
 
@@ -379,8 +699,14 @@ export function createEntityBridge(
         const live = await getRun(runId);
         if (live) {
           store = rehydrateRun(manager.getStore(), live);
+          manager.setStore(store);
+          const toolsBaseRun = store.runsById[runId];
           try {
-            store = rehydrateToolExecutions(store, runId, await listRunTools(runId));
+            const tools = await listRunTools(runId);
+            const latest = manager.getStore();
+            store = sameRunRevision(toolsBaseRun, latest.runsById[runId])
+              ? rehydrateToolExecutions(latest, runId, tools)
+              : latest;
           } catch {
             /* Event replay below remains the fallback for older deployments. */
           }
@@ -394,6 +720,13 @@ export function createEntityBridge(
             : 0;
           manager.connect(runId, { lastSequence: liveCursor });
         }
+      }
+
+      try {
+        store = await loadDurableTrace(manager.getStore(), runId);
+        manager.setStore(store);
+      } catch {
+        /* Persisted events remain the trace fallback on older deployments. */
       }
 
       const run = manager.getStore().runsById[runId];
@@ -413,38 +746,8 @@ export function createEntityBridge(
       });
       let next = manager.getStore();
       for (const row of rows) {
-        const id = String(row.dataset_id || row.id || '');
-        if (!id) continue;
-        const statusRaw = String(row.status || 'ready').toLowerCase();
-        const status =
-          statusRaw === 'failed'
-            ? 'failed'
-            : statusRaw === 'uploading' || statusRaw === 'pending'
-              ? 'uploading'
-              : 'ready';
-        next = upsertDataset(
-          next,
-          createDataset({
-            id,
-            conversationId,
-            sessionId:
-              String(row.sandbox_session_id || sessionId || '') || null,
-            name: String(row.name || row.original_filename || id),
-            path: String(row.path || row.stored_relative_path || '') || null,
-            size:
-              typeof row.size === 'number'
-                ? row.size
-                : typeof row.size_bytes === 'number'
-                  ? row.size_bytes
-                  : null,
-            mimeType: row.mime_type != null ? String(row.mime_type) : null,
-            sha256: row.sha256 != null ? String(row.sha256) : null,
-            status,
-            progress: status === 'ready' ? 100 : null,
-            agentVisible: true,
-            createdAt: row.created_at != null ? String(row.created_at) : null,
-          }),
-        );
+        const entity = datasetRowToEntity(row, { conversationId, sessionId });
+        if (entity) next = upsertDataset(next, entity);
       }
       store = next;
       manager.setStore(store);
@@ -595,5 +898,6 @@ export function createEntityBridge(
     projectRunMessages,
     getAgentEventAdapter: (runId) => eventAdapters.get(runId) || null,
     markApproval,
+    recordDataset,
   };
 }

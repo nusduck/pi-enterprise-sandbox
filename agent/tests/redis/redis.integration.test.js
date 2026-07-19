@@ -39,6 +39,7 @@ const describeRedis = runIntegration && hasDeps ? describe : describe.skip;
 // Valid Crockford ULIDs (26 chars)
 const RUN = '01K0G2PAV8FPMVC9QHJG7JPN53';
 const ORG = '01K0G2PAV8FPMVC9QHJG7JPN4Z';
+const SESS = '01K0G2PAV8FPMVC9QHJG7JPN52';
 const EVT = '01K0G2PAV8FPMVC9QHJG7JPN58';
 const TRACE = 'c'.repeat(32);
 const WORKER = 'integration-worker-1';
@@ -72,6 +73,7 @@ describeRedis('redis live coordination', () => {
       redisMod.runLeaseKey(RUN),
       redisMod.runCancelKey(RUN),
       redisMod.runStreamKey(RUN),
+      redisMod.sessionLockKey(SESS),
     );
   });
 
@@ -82,6 +84,7 @@ describeRedis('redis live coordination', () => {
           redisMod.runLeaseKey(RUN),
           redisMod.runCancelKey(RUN),
           redisMod.runStreamKey(RUN),
+          redisMod.sessionLockKey(SESS),
         );
       } catch {
         // ignore
@@ -100,6 +103,40 @@ describeRedis('redis live coordination', () => {
     assert.equal(await leases.release(RUN, 'other'), false);
     assert.equal(await leases.release(RUN, WORKER), true);
     assert.equal(await leases.getOwner(RUN), null);
+  });
+
+  it('expired lease can be recovered by another worker', async () => {
+    const leases = new redisMod.LeaseManager(client, { ttlMs: 120 });
+    assert.equal(await leases.acquire(RUN, WORKER), true);
+    assert.equal(await leases.acquire(RUN, 'recovery-worker'), false);
+
+    const deadline = Date.now() + 2_000;
+    while (await leases.getOwner(RUN)) {
+      if (Date.now() >= deadline) {
+        assert.fail('live Redis lease did not expire before recovery deadline');
+      }
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+
+    assert.equal(await leases.acquire(RUN, 'recovery-worker'), true);
+    assert.equal(await leases.getOwner(RUN), 'recovery-worker');
+    assert.equal(await leases.release(RUN, WORKER), false);
+    assert.equal(await leases.release(RUN, 'recovery-worker'), true);
+  });
+
+  it('session lock enforces token-safe acquire, renew, and release', async () => {
+    const locks = new redisMod.SessionLockManager(client, { ttlMs: 30_000 });
+    const ownerA = 'integration-worker-a:00112233445566778899aabbccddeeff';
+    const ownerB = 'integration-worker-b:ffeeddccbbaa99887766554433221100';
+
+    assert.equal(await locks.acquire(SESS, ownerA), true);
+    assert.equal(await locks.acquire(SESS, ownerB), false);
+    assert.equal(await locks.renew(SESS, ownerB), false);
+    assert.equal(await locks.renew(SESS, ownerA), true);
+    assert.equal(await locks.release(SESS, ownerB), false);
+    assert.equal(await locks.getOwner(SESS), ownerA);
+    assert.equal(await locks.release(SESS, ownerA), true);
+    assert.equal(await locks.getOwner(SESS), null);
   });
 
   it('stream append + range + cancel signal', async () => {

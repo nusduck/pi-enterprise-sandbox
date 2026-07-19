@@ -11,6 +11,7 @@ import { fileURLToPath } from 'node:url';
 import {
   createAgentHttpServer,
   resolveRequestTraceId,
+  resolveRequestTraceContext,
   parseTraceparent,
   mapErrorToHttp,
   presentCreateRunResponse,
@@ -24,6 +25,7 @@ import { isTerminalRunStatus } from '../../src/domain/run/run-status.js';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const RUN = '01K0G2PAV8FPMVC9QHJG7JPN53';
 const CONV = '01K0G2PAV8FPMVC9QHJG7JPN51';
+const APPROVAL = '01K0G2PAV8FPMVC9QHJG7JPN55';
 const TRACE = 'a'.repeat(32);
 
 function listen(server) {
@@ -67,12 +69,20 @@ describe('createAgentHttpServer factory', () => {
   /** @type {Map<string, object[]>} */
   let events;
   let cancelCalled;
+  let conversations;
+  let approvalDecisionCalls;
+  let steerCalls;
+  let followUpCalls;
 
   before(async () => {
     created = [];
     runs = new Map();
     events = new Map();
     cancelCalled = 0;
+    conversations = new Map();
+    approvalDecisionCalls = [];
+    steerCalls = [];
+    followUpCalls = [];
 
     const createRunService = {
       async execute(input) {
@@ -151,11 +161,172 @@ describe('createAgentHttpServer factory', () => {
       },
     };
 
+    const conversationService = {
+      async list(auth) {
+        if (auth.externalUserId === 'foreign') return [];
+        return [...conversations.values()];
+      },
+      async create(_auth, body) {
+        const row = {
+          id: CONV,
+          title: body.title || 'New chat',
+          messages: [],
+          created_at: '2026-07-18T06:00:00.000Z',
+          updated_at: '2026-07-18T06:00:00.000Z',
+        };
+        conversations.set(CONV, row);
+        return row;
+      },
+      async get(conversationId, auth) {
+        if (auth.externalUserId === 'foreign' || !conversations.has(conversationId)) {
+          throw new OwnerScopedNotFoundError('Conversation not found');
+        }
+        return conversations.get(conversationId);
+      },
+      async delete(conversationId, auth) {
+        await this.get(conversationId, auth);
+        conversations.delete(conversationId);
+      },
+      async ensureSession(_auth, input) {
+        return {
+          conversation_id: input.conversationId || CONV,
+          session_id: '01K0G2PAV8FPMVC9QHJG7JPN52',
+          workspace_id: '01K0G2PAV8FPMVC9QHJG7JPN54',
+          reused_session: Boolean(input.conversationId),
+          status: 'ACTIVE',
+        };
+      },
+    };
+
+    const approval = {
+      id: APPROVAL,
+      approval_id: APPROVAL,
+      run_id: RUN,
+      conversation_id: CONV,
+      tool_execution_id: '01K0G2PAV8FPMVC9QHJG7JPN56',
+      tool_name: 'bash',
+      status: 'pending',
+      risk_level: 'high',
+      reason: 'EXTERNAL_HIGH_RISK',
+      arguments: { command: 'deploy' },
+      payload: { toolName: 'bash' },
+      user_id: '01K0G2PAV8FPMVC9QHJG7JPN50',
+      created_at: '2026-07-18T06:00:00.000Z',
+      expires_at: null,
+      decided_at: null,
+    };
+    const approvalQueryService = {
+      async list(auth, opts) {
+        if (auth.externalUserId === 'foreign') return [];
+        if (opts.status && opts.status.toLowerCase() !== approval.status) return [];
+        return [approval];
+      },
+      async get(approvalId, auth) {
+        if (auth.externalUserId === 'foreign' || approvalId !== APPROVAL) {
+          throw new OwnerScopedNotFoundError('Approval not found', {
+            resource: 'approvals',
+            id: approvalId,
+          });
+        }
+        return approval;
+      },
+    };
+    const approvalDecisionService = {
+      async resolve(input) {
+        if (input.auth.externalUserId === 'foreign') {
+          throw new OwnerScopedNotFoundError('Approval not found');
+        }
+        approvalDecisionCalls.push({ operation: 'resolve', ...input });
+        return {
+          ok: true,
+          approval_id: input.approvalId,
+          run_id: input.runId || RUN,
+          status: input.decision === 'approve' ? 'approved' : 'rejected',
+          changed: true,
+          queued: true,
+          resumePending: false,
+        };
+      },
+      async resume(input) {
+        if (input.auth.externalUserId === 'foreign') {
+          throw new OwnerScopedNotFoundError('Run not found');
+        }
+        approvalDecisionCalls.push({ operation: 'resume', ...input });
+        return {
+          ok: false,
+          approval_id: input.approvalId,
+          run_id: input.runId,
+          status: 'waiting_approval',
+          queued: false,
+          resumePending: true,
+        };
+      },
+    };
+
+    const steerRunService = {
+      async execute(input) {
+        steerCalls.push(input);
+        return {
+          runId: input.runId,
+          steerId: '01K0G2PAV8FPMVC9QHJG7JPN57',
+          messageId: '01K0G2PAV8FPMVC9QHJG7JPN58',
+          sequence: 2,
+          status: 'ACCEPTED',
+        };
+      },
+    };
+    const followUpService = {
+      async execute(input) {
+        followUpCalls.push(input);
+        return {
+          runId: '01K0G2PAV8FPMVC9QHJG7JPN59',
+          status: 'ACCEPTED',
+          conversationId: input.conversationId,
+          eventsUrl: '/api/runs/01K0G2PAV8FPMVC9QHJG7JPN59/events',
+          agentSessionId: '01K0G2PAV8FPMVC9QHJG7JPN52',
+        };
+      },
+    };
+    const traceQueryService = {
+      async listForRun({ runId, auth }) {
+        if (auth.externalUserId === 'foreign') {
+          throw new OwnerScopedNotFoundError('Trace not found', {
+            resource: 'trace_spans',
+          });
+        }
+        return {
+          traceId: TRACE,
+          trace_id: TRACE,
+          runId,
+          run_id: runId,
+          spans: [
+            {
+              id: 'b'.repeat(16),
+              spanId: 'b'.repeat(16),
+              traceId: TRACE,
+              runId,
+              parentSpanId: null,
+              kind: 'run',
+              name: 'Run',
+              status: 'ok',
+              attributes: { eventType: 'run.completed' },
+            },
+          ],
+        };
+      },
+    };
+
     server = createAgentHttpServer({
       createRunService,
       getRunService,
       cancelRunService,
       eventQueryService,
+      conversationService,
+      approvalQueryService,
+      approvalDecisionService,
+      steerRunService,
+      followUpService,
+      traceQueryService,
       config: { AGENT_INTERNAL_TOKEN: '' },
       eventPollIntervalMs: 50,
       eventHeartbeatMs: 1000,
@@ -169,7 +340,10 @@ describe('createAgentHttpServer factory', () => {
 
   it('create returns 202 after service execute (persist-before-response contract)', async () => {
     const r = await req(port, 'POST', '/internal/agent-runs', {
-      headers: { 'Idempotency-Key': 'k1', 'X-Trace-Id': TRACE },
+      headers: {
+        'Idempotency-Key': 'k1',
+        traceparent: `00-${TRACE}-bbbbbbbbbbbbbbbb-01`,
+      },
       body: { messages: [{ role: 'user', content: 'hi' }] },
     });
     assert.equal(r.status, 202);
@@ -179,6 +353,127 @@ describe('createAgentHttpServer factory', () => {
     assert.equal(created.length, 1);
     assert.equal(created[0].idempotencyKey, 'k1');
     assert.equal(created[0].traceId, TRACE);
+    assert.equal(created[0].spanId, 'bbbbbbbbbbbbbbbb');
+  });
+
+  it('serves durable owner-scoped trace spans after a worker restart', async () => {
+    const requestTrace = 'd'.repeat(32);
+    const r = await req(port, 'GET', `/internal/agent-runs/${RUN}/trace`, {
+      headers: { 'X-Trace-Id': requestTrace },
+    });
+    assert.equal(r.status, 200);
+    assert.equal(r.json.trace_id, TRACE);
+    assert.equal(r.json.spans[0].kind, 'run');
+    assert.equal(r.headers.get('x-trace-id'), requestTrace);
+
+    const foreign = await req(port, 'GET', `/internal/agent-runs/${RUN}/trace`, {
+      headers: {
+        'X-Acting-User-Id': 'foreign',
+        'X-Trace-Id': TRACE,
+      },
+    });
+    assert.equal(foreign.status, 404);
+  });
+
+  it('serves owner-scoped conversation CRUD through the Agent endpoint', async () => {
+    const createdConversation = await req(port, 'POST', '/internal/conversations', {
+      body: { title: 'MySQL chat' },
+    });
+    assert.equal(createdConversation.status, 201);
+    assert.equal(createdConversation.json.id, CONV);
+
+    const listed = await req(port, 'GET', '/internal/conversations');
+    assert.equal(listed.status, 200);
+    assert.deepEqual(listed.json.map((row) => row.id), [CONV]);
+
+    const loaded = await req(port, 'GET', `/internal/conversations/${CONV}`);
+    assert.equal(loaded.status, 200);
+    assert.equal(loaded.json.title, 'MySQL chat');
+
+    const foreign = await req(port, 'GET', `/internal/conversations/${CONV}`, {
+      headers: { 'X-Acting-User-Id': 'foreign' },
+    });
+    assert.equal(foreign.status, 404);
+
+    const removed = await req(port, 'DELETE', `/internal/conversations/${CONV}`);
+    assert.equal(removed.status, 204);
+    const missing = await req(port, 'GET', `/internal/conversations/${CONV}`);
+    assert.equal(missing.status, 404);
+  });
+
+  it('coordinates pre-upload formal session ensure with a W3C trace id', async () => {
+    const ensured = await req(port, 'POST', '/internal/sessions/ensure', {
+      headers: { 'X-Trace-Id': TRACE },
+      body: { conversation_id: CONV },
+    });
+    assert.equal(ensured.status, 200);
+    assert.equal(ensured.json.conversation_id, CONV);
+    assert.equal(ensured.json.status, 'ACTIVE');
+    assert.equal(ensured.json.trace_id, TRACE);
+    assert.equal(ensured.headers.get('x-trace-id'), TRACE);
+  });
+
+  it('serves owner-scoped approval list/detail with status filtering', async () => {
+    const listed = await req(port, 'GET', '/internal/approvals?status=pending&limit=10');
+    assert.equal(listed.status, 200);
+    assert.deepEqual(listed.json.approvals.map((row) => row.approval_id), [APPROVAL]);
+
+    const filtered = await req(port, 'GET', '/internal/approvals?status=approved');
+    assert.equal(filtered.status, 200);
+    assert.deepEqual(filtered.json.approvals, []);
+
+    const detail = await req(port, 'GET', `/internal/approvals/${APPROVAL}`);
+    assert.equal(detail.status, 200);
+    assert.equal(detail.json.tool_name, 'bash');
+
+    const foreign = await req(port, 'GET', `/internal/approvals/${APPROVAL}`, {
+      headers: { 'X-Acting-User-Id': 'foreign' },
+    });
+    assert.equal(foreign.status, 404);
+  });
+
+  it('requires acting owner headers for approval reads', async () => {
+    const missing = await req(port, 'GET', '/internal/approvals', {
+      headers: {
+        'X-Acting-User-Id': '',
+        'X-Acting-Organization-Id': '',
+      },
+    });
+    assert.equal(missing.status, 400);
+    assert.equal(missing.json.code, 'AUTH_CONTEXT_REQUIRED');
+  });
+
+  it('serves owner-scoped approval decide and resume POST endpoints', async () => {
+    const decided = await req(port, 'POST', `/internal/approvals/${APPROVAL}/decide`, {
+      body: { decision: 'approve', run_id: RUN, reason: 'reviewed' },
+    });
+    assert.equal(decided.status, 200);
+    assert.equal(decided.json.status, 'approved');
+    assert.equal(approvalDecisionCalls[0].operation, 'resolve');
+    assert.equal(approvalDecisionCalls[0].approvalId, APPROVAL);
+    assert.equal(approvalDecisionCalls[0].runId, RUN);
+
+    const resumed = await req(
+      port,
+      'POST',
+      `/internal/agent-runs/${RUN}/resume-approval`,
+      { body: { approval_id: APPROVAL } },
+    );
+    assert.equal(resumed.status, 202);
+    assert.equal(resumed.json.resumePending, true);
+    assert.equal(approvalDecisionCalls[1].operation, 'resume');
+    assert.equal(approvalDecisionCalls[1].approvalId, APPROVAL);
+
+    const foreign = await req(
+      port,
+      'POST',
+      `/internal/approvals/${APPROVAL}/decide`,
+      {
+        headers: { 'X-Acting-User-Id': 'foreign' },
+        body: { decision: 'approve' },
+      },
+    );
+    assert.equal(foreign.status, 404);
   });
 
   it('immediate GET after create works', async () => {
@@ -241,11 +536,43 @@ describe('createAgentHttpServer factory', () => {
     assert.equal(r.json.cancelRequested, true);
   });
 
-  it('steer returns 501 without Map fallback', async () => {
-    const r = await req(port, 'POST', `/internal/agent-runs/${RUN}/steer`, {
-      body: { text: 'x' },
-    });
-    assert.equal(r.status, 501);
+  it('persists steer admission and creates conversation-scoped follow-up Runs', async () => {
+    const missing = await req(
+      port,
+      'POST',
+      `/internal/agent-runs/${RUN}/steer`,
+      { body: { text: 'x' } },
+    );
+    assert.equal(missing.status, 400);
+    assert.equal(missing.json.code, 'IDEMPOTENCY_KEY_REQUIRED');
+
+    const steer = await req(
+      port,
+      'POST',
+      `/internal/agent-runs/${RUN}/steer`,
+      {
+        headers: { 'Idempotency-Key': 'steer-1', 'X-Trace-Id': TRACE },
+        body: { text: 'inspect outliers', conversation_id: CONV },
+      },
+    );
+    assert.equal(steer.status, 202);
+    assert.equal(steer.json.status, 'ACCEPTED');
+    assert.equal(steerCalls[0].idempotencyKey, 'steer-1');
+    assert.equal(steerCalls[0].traceId, TRACE);
+
+    const follow = await req(
+      port,
+      'POST',
+      `/internal/conversations/${CONV}/follow-ups`,
+      {
+        headers: { 'Idempotency-Key': 'follow-1', 'X-Trace-Id': TRACE },
+        body: { text: 'summarize' },
+      },
+    );
+    assert.equal(follow.status, 202);
+    assert.equal(follow.json.conversationId, CONV);
+    assert.equal(followUpCalls[0].conversationId, CONV);
+    assert.equal(followUpCalls[0].idempotencyKey, 'follow-1');
   });
 
   it('resolveRequestTraceId prefers valid traceparent and rejects illegal', () => {
@@ -262,6 +589,18 @@ describe('createAgentHttpServer factory', () => {
       },
     });
     assert.equal(id, TRACE);
+    assert.deepEqual(
+      resolveRequestTraceContext({
+        headers: {
+          traceparent: `00-${TRACE}-bbbbbbbbbbbbbbbb-01`,
+        },
+      }),
+      {
+        traceId: TRACE,
+        parentSpanId: 'bbbbbbbbbbbbbbbb',
+        traceFlags: '01',
+      },
+    );
     // All-zero span is illegal → mint new
     const badSpan = resolveRequestTraceId({
       headers: {

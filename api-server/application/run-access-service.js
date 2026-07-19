@@ -3,7 +3,11 @@
 import { config } from '../config.js';
 import { HttpError } from '../http/errors.js';
 import { authFromRequest, createSandboxClient } from '../services/sandbox-client.js';
-import { getAgentRun } from '../services/agent-client.js';
+import {
+  getAgentRun,
+  resolveAgentSandboxSession,
+} from '../services/agent-client.js';
+import { bindRequestTraceContext } from './trace-context.js';
 
 export const DURABLE_RUN_READ_RETRY_DELAYS_MS = Object.freeze([5, 15]);
 
@@ -39,12 +43,21 @@ export async function getDurableRun(authOrClient, runId, traceId = null) {
 
 export async function resolveTrustedAuth(req) {
   const forwarded = authFromRequest(req);
-  if (!config.AUTH_ENABLED) return forwarded;
+  if (!config.AUTH_ENABLED) {
+    return bindRequestTraceContext({
+      ...forwarded,
+      ...config.DEVELOPMENT_ACTING_IDENTITY,
+    }, req?.traceContext);
+  }
   if (!forwarded.authorization) {
     throw new HttpError(401, 'AUTH_REQUIRED', 'Authentication required');
   }
   // Still use Sandbox authMe for browser session identity (not Run status).
-  const sandbox = createSandboxClient({ auth: forwarded });
+  const sandbox = createSandboxClient({
+    auth: bindRequestTraceContext(forwarded, req?.traceContext),
+    traceId: req?.traceId || null,
+    traceContext: req?.traceContext || null,
+  });
   const user = await sandbox.authMe();
   const userId = user?.id != null ? String(user.id) : '';
   const organizationId =
@@ -56,11 +69,64 @@ export async function resolveTrustedAuth(req) {
       'Authenticated user context is incomplete',
     );
   }
-  return {
+  return bindRequestTraceContext({
     ...forwarded,
     actingUserId: userId,
     actingOrganizationId: organizationId,
     actingRole: String(user.role || 'user'),
+  }, req?.traceContext);
+}
+
+/**
+ * Resolve a formal Sandbox session through Agent's owner mapping.
+ *
+ * Browser identities and formal Sandbox owner ids are different domains. The
+ * BFF must resolve the latter before touching any session-owned Sandbox route;
+ * forwarding a browser JWT alone would make Sandbox resolve the external
+ * subject and reject an otherwise valid formal binding. The returned
+ * `sandboxAuth` is intentionally limited to the server-to-server acting
+ * headers and must never be serialized into a public response.
+ *
+ * @param {string} sessionId
+ * @param {import('node:http').IncomingMessage | null | undefined} req
+ * @param {{ conversationId?: string|null, traceId?: string|null }} [opts]
+ */
+export async function authorizeSandboxSession(sessionId, req, opts = {}) {
+  const id = String(sessionId || '').trim();
+  if (!id) {
+    throw new HttpError(400, 'SESSION_REQUIRED', 'session_id required');
+  }
+  const auth = await resolveTrustedAuth(req);
+  const access = await resolveAgentSandboxSession(id, {
+    auth,
+    traceId: opts.traceId || req?.traceId || null,
+  });
+  const expectedConversation = opts.conversationId
+    ? String(opts.conversationId)
+    : null;
+  const actualConversation = String(
+    access?.conversation_id || access?.conversationId || '',
+  );
+  if (expectedConversation && actualConversation !== expectedConversation) {
+    throw new HttpError(404, 'SESSION_NOT_FOUND', 'Session not found');
+  }
+  const actingUserId = String(access?.user_id || access?.userId || '').trim();
+  const actingOrganizationId = String(
+    access?.org_id || access?.orgId || '',
+  ).trim();
+  if (!actingUserId || !actingOrganizationId) {
+    throw new HttpError(503, 'SESSION_OWNER_UNAVAILABLE', 'Session owner unavailable');
+  }
+  return {
+    auth,
+    access,
+    sandboxAuth: {
+      actingUserId,
+      actingOrganizationId,
+      // Agent has already enforced the owner scope. Keep the Sandbox hop at
+      // the least-privileged role even when the BFF caller is an administrator.
+      actingRole: 'user',
+    },
   };
 }
 
@@ -87,7 +153,11 @@ export async function authorizeRunRequest(runId, req) {
   ) {
     // External conversation mapping may still be Sandbox-scoped UUID — optional ACL.
     try {
-      const sandbox = createSandboxClient({ auth });
+      const sandbox = createSandboxClient({
+        auth,
+        traceId: req?.traceId || null,
+        traceContext: req?.traceContext || null,
+      });
       await sandbox.getConversation(conversationId);
     } catch {
       throw new HttpError(404, 'RUN_NOT_FOUND', 'Run not found');

@@ -118,7 +118,10 @@ export function extractUsageSummary(message) {
  *       recordToolUnknown?: Function,
  *       enqueue?: Function,
  *     } | null,
+ *     isDurableInteractionPending?: (toolCallId: string) => boolean,
  *     now?: () => Date,
+ *     modelId?: string | null,
+ *     provider?: string | null,
  *   },
  * }} options
  * @returns {import('@earendil-works/pi-coding-agent').ExtensionFactory}
@@ -127,7 +130,24 @@ export function createObservabilityExtension(options) {
   const runContext = options?.runContext;
   const deps = options?.deps ?? {};
   const recorder = deps.recorder ?? null;
+  const isDurableInteractionPending =
+    typeof deps.isDurableInteractionPending === 'function'
+      ? deps.isDurableInteractionPending
+      : null;
   const now = deps.now ?? (() => new Date());
+  const modelId =
+    typeof deps.modelId === 'string' && deps.modelId.trim()
+      ? deps.modelId.trim().slice(0, 255)
+      : null;
+  const provider =
+    typeof deps.provider === 'string' && deps.provider.trim()
+      ? deps.provider.trim().slice(0, 255)
+      : null;
+
+  const modelMetadata = () => ({
+    ...(modelId ? { modelId } : {}),
+    ...(provider ? { provider } : {}),
+  });
 
   /**
    * Sequential provider correlation stack (one session processes requests
@@ -210,6 +230,7 @@ export function createObservabilityExtension(options) {
         'model.request.started',
         {
           correlationId,
+          ...modelMetadata(),
           // Safe metadata only
         },
         { dedupeKey: `model.request.started:${correlationId}` },
@@ -234,6 +255,7 @@ export function createObservabilityExtension(options) {
           'model.request.completed',
           {
             correlationId,
+            ...modelMetadata(),
             status: Number.isFinite(status) ? status : undefined,
             ...(durationMs != null ? { durationMs } : {}),
           },
@@ -244,6 +266,7 @@ export function createObservabilityExtension(options) {
           'model.request.failed',
           {
             correlationId,
+            ...modelMetadata(),
             status: Number.isFinite(status) ? status : undefined,
             ...(durationMs != null ? { durationMs } : {}),
           },
@@ -345,6 +368,17 @@ export function createObservabilityExtension(options) {
       const toolName = String(event?.toolName ?? '');
       const isError = Boolean(event?.isError);
       const result = event?.result;
+
+      // Pi converts a thrown durable ask_user suspension into an ordinary
+      // error ToolResult and drops custom Error fields before this event. The
+      // executor's per-Run predicate is the authoritative, exact signal that
+      // this particular ask_user call is parked in WAITING_INPUT.
+      if (
+        toolName === 'ask_user' &&
+        isDurableInteractionPending?.(toolCallId) === true
+      ) {
+        return;
+      }
 
       if (governance) {
         // Ambiguous sandbox-bridge outcome only: exact marker + sandbox tool

@@ -28,7 +28,10 @@ import {
 } from '../../src/application/a2a/task-service.js';
 import { A2aStreamService } from '../../src/application/a2a/stream-service.js';
 import { createA2aHttpHandler } from '../../src/presentation/a2a/http-handler.js';
-import { createAgentHttpServer } from '../../src/bootstrap/create-http-server.js';
+import {
+  createAgentHttpServer,
+  resolveRequestTraceContext,
+} from '../../src/bootstrap/create-http-server.js';
 import { projectRunStatusToA2a } from '../../src/domain/a2a/status.js';
 import { OwnerScopedNotFoundError } from '../../src/application/errors.js';
 
@@ -171,6 +174,35 @@ describe('A2A event projector (artifact + status)', () => {
       ctx,
     );
     assert.equal(emptyArtifact, null);
+  });
+
+  it('replays artifact.ready metadata from canonical durable envelope data', () => {
+    const projected = projectEnvelopeToA2aResult(
+      {
+        sequence: 6,
+        eventId: EVT2,
+        event: {
+          type: 'artifact.ready',
+          context: { runId: RUN },
+          data: {
+            artifactId: ART,
+            name: '风险分析报告.pdf',
+            description: '最终分析报告',
+            mimeType: 'application/pdf',
+            size: 1234,
+            sha256: 'a'.repeat(64),
+          },
+        },
+      },
+      ctx,
+    );
+
+    assert.equal(projected.kind, 'artifact-update');
+    assert.equal(projected.result.artifact.artifactId, ART);
+    assert.equal(projected.result.artifact.name, '风险分析报告.pdf');
+    assert.equal(projected.result.artifact.description, '最终分析报告');
+    assert.equal(projected.result.artifact.metadata.mimeType, 'application/pdf');
+    assert.equal(projected.result.artifact.metadata.sizeBytes, 1234);
   });
 
   it('buildA2aTaskObject never invents status independent of run', () => {
@@ -403,6 +435,28 @@ describe('A2aTaskService client isolation + audit', () => {
     assert.equal(canceled.status.state, 'working');
     assert.ok(audits.some((a) => a.eventType === 'a2a.cancel_task'));
   });
+
+  it('Artifact byte delivery records the caller, Run, Artifact, and trace', async () => {
+    const { svc, principalA, audits } = makeWorld();
+    await svc.auditArtifactDownload({
+      principal: principalA,
+      agentId: AGENT,
+      taskId: TASK,
+      runId: RUN,
+      artifactId: ART,
+      traceId: TRACE,
+    });
+    const audit = audits.at(-1);
+    assert.equal(audit.eventType, 'a2a.artifact_download');
+    assert.equal(audit.clientId, principalA.clientId);
+    assert.equal(audit.a2aTaskId, TASK);
+    assert.equal(audit.runId, RUN);
+    assert.equal(audit.traceId, TRACE);
+    assert.deepEqual(audit.payloadJson, {
+      outcome: 'authorized',
+      artifactId: ART,
+    });
+  });
 });
 
 describe('A2aStreamService reconnect + dedupe + disconnect cleanup', () => {
@@ -580,6 +634,82 @@ describe('A2aStreamService reconnect + dedupe + disconnect cleanup', () => {
     assert.ok(statusUpdates.length >= 1);
   });
 
+  it('replays terminal history when reconnecting with an initial snapshot', async () => {
+    const terminalEvents = [
+      {
+        sequence: 1,
+        eventId: EVT1,
+        event: { type: 'run.accepted', status: 'ACCEPTED', eventId: EVT1 },
+      },
+      {
+        sequence: 2,
+        eventId: EVT2,
+        event: { type: 'run.started', status: 'RUNNING', eventId: EVT2 },
+      },
+      {
+        sequence: 3,
+        eventId: '01K0G2PAV8FPMVC9QHJG7JPN5H',
+        event: { type: 'run.succeeded', status: 'SUCCEEDED' },
+      },
+    ];
+    const frames = [];
+    const stream = new A2aStreamService({
+      taskService: {
+        async resolveOwnedTask() {
+          return { a2aTaskId: TASK, runId: RUN, contextId: CONV };
+        },
+        runAuthForPrincipal: () => ({}),
+        async getTask() {
+          return buildA2aTaskObject({
+            a2aTaskId: TASK,
+            runStatus: 'SUCCEEDED',
+            contextId: CONV,
+          });
+        },
+      },
+      eventQueryService: {
+        async listEvents({ afterSequence }) {
+          const events = terminalEvents.filter((e) => e.sequence > afterSequence);
+          return {
+            events,
+            status: 'SUCCEEDED',
+            terminal: events.length === 0,
+          };
+        },
+      },
+      getRunService: { async execute() { return { status: 'SUCCEEDED' }; } },
+      sleep: async () => {},
+    });
+
+    await stream.openTaskStream(
+      {
+        principal: {},
+        agentId: AGENT,
+        taskId: TASK,
+        rpcId: 9,
+        afterSequence: 2,
+        includeInitialTask: true,
+      },
+      {
+        write: (chunk) => {
+          frames.push(chunk);
+          return true;
+        },
+        isClosed: () => false,
+      },
+    );
+
+    const data = frames
+      .join('')
+      .split('\n')
+      .filter((line) => line.startsWith('data: '))
+      .map((line) => JSON.parse(line.slice(6)));
+    const sequences = data
+      .map((entry) => entry.result?.metadata?.sequence)
+      .filter((sequence) => sequence != null);
+    assert.deepEqual(sequences, [3]);
+  });
+
   it('disconnect aborts without requiring cancel', async () => {
     let cancelled = false;
     const ac = new AbortController();
@@ -655,6 +785,7 @@ describe('A2A HTTP Agent Card + JSON-RPC isolation', () => {
 
     /** @type {Map<string, object>} */
     const taskByClient = new Map();
+    let sentMessageInput = null;
     taskByClient.set(`client-a:${TASK}`, {
       id: TASK,
       status: { state: 'working' },
@@ -680,7 +811,8 @@ describe('A2A HTTP Agent Card + JSON-RPC isolation', () => {
         },
       },
       taskService: {
-        async sendMessage() {
+        async sendMessage(input) {
+          sentMessageInput = input;
           return buildA2aTaskObject({ a2aTaskId: TASK, runStatus: 'ACCEPTED' });
         },
         async getTask({ principal, taskId }) {
@@ -712,6 +844,7 @@ describe('A2A HTTP Agent Card + JSON-RPC isolation', () => {
       resolveAgentMeta: async (id) =>
         id === AGENT ? { name: 'Test Agent', description: 'd' } : null,
       resolveTraceId: () => TRACE,
+      resolveTraceContext: resolveRequestTraceContext,
       readBody: async (req) => {
         const chunks = [];
         for await (const c of req) chunks.push(c);
@@ -771,6 +904,33 @@ describe('A2A HTTP Agent Card + JSON-RPC isolation', () => {
       assert.equal(ok.status, 200);
       const okBody = await ok.json();
       assert.equal(okBody.result.id, TASK);
+
+      const sent = await fetch(`http://127.0.0.1:${port}/a2a/agents/${AGENT}`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: 'Bearer good-token',
+          'Idempotency-Key': 'a2a-http-trace-1',
+          traceparent: `00-${TRACE}-${'c'.repeat(16)}-01`,
+          tracestate: 'vendor=value',
+        },
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          id: 4,
+          method: 'SendMessage',
+          params: {
+            message: {
+              messageId: 'a2a-http-trace-1',
+              parts: [{ kind: 'text', text: 'trace me' }],
+            },
+          },
+        }),
+      });
+      assert.equal(sent.status, 200);
+      assert.equal(sent.headers.get('x-trace-id'), TRACE);
+      assert.equal(sentMessageInput.traceId, TRACE);
+      assert.equal(sentMessageInput.spanId, 'c'.repeat(16));
+      assert.equal(sentMessageInput.traceState, 'vendor=value');
 
       // Invalid params
       const badParams = await fetch(`http://127.0.0.1:${port}/a2a/agents/${AGENT}`, {

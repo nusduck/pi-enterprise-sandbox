@@ -271,6 +271,8 @@ export function createTraceSpan(
   partial: Partial<TraceSpanEntity> & { id: string; runId: string },
 ): TraceSpanEntity {
   return {
+    orgId: null,
+    userId: null,
     parentId: null,
     kind: 'other',
     name: 'span',

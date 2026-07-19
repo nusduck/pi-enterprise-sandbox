@@ -18,19 +18,39 @@ export function parseJsonColumn(value) {
 }
 
 /**
+ * Parse a datetime at the MySQL boundary. DATETIME has no timezone, so a
+ * string without an explicit offset is a UTC wall-clock value rather than a
+ * host-local timestamp.
+ *
+ * @param {unknown} value
+ * @returns {Date}
+ */
+function parseDateTimeAsUtc(value) {
+  if (value instanceof Date) return value;
+  if (typeof value !== 'string') {
+    throw new Error(`Unsupported datetime value: ${typeof value}`);
+  }
+  const raw = value.trim().includes('T')
+    ? value.trim()
+    : value.trim().replace(' ', 'T');
+  const withZone =
+    raw.endsWith('Z') || /[+-]\d{2}:\d{2}$/.test(raw)
+      ? raw
+      : `${raw}Z`;
+  const parsed = new Date(withZone);
+  if (Number.isNaN(parsed.getTime())) {
+    throw new Error(`Invalid datetime value: ${value}`);
+  }
+  return parsed;
+}
+
+/**
  * @param {unknown} value
  * @returns {string | null}
  */
 export function formatDateTime(value) {
   if (value == null) return null;
-  if (value instanceof Date) return value.toISOString();
-  if (typeof value === 'string') {
-    // MySQL DATETIME may come without Z; treat as UTC wall clock.
-    const raw = value.includes('T') ? value : value.replace(' ', 'T');
-    if (raw.endsWith('Z') || /[+-]\d{2}:\d{2}$/.test(raw)) return new Date(raw).toISOString();
-    return new Date(`${raw}Z`).toISOString();
-  }
-  throw new Error(`Unsupported datetime value: ${typeof value}`);
+  return parseDateTimeAsUtc(value).toISOString();
 }
 
 /**
@@ -170,6 +190,7 @@ export function mapRun(row) {
     queueName: String(row.queue_name),
     attempt: Number(row.attempt),
     traceId: String(row.trace_id),
+    traceState: row.trace_state == null ? null : String(row.trace_state),
     nextEventSequence: Number(row.next_event_sequence),
     startedAt: formatDateTime(row.started_at),
     completedAt: formatDateTime(row.completed_at),
@@ -238,6 +259,8 @@ export function mapApproval(row) {
     approvalId: String(row.approval_id),
     orgId: String(row.org_id),
     runId: String(row.run_id),
+    conversationId:
+      row.conversation_id == null ? null : String(row.conversation_id),
     toolExecutionId: String(row.tool_execution_id),
     requestedBy: String(row.requested_by),
     decisionBy: row.decision_by == null ? null : String(row.decision_by),
@@ -248,6 +271,33 @@ export function mapApproval(row) {
     expiresAt: formatDateTime(row.expires_at),
     createdAt: formatDateTime(row.created_at),
     decidedAt: formatDateTime(row.decided_at),
+  };
+}
+
+/** Map a durable user interaction row. */
+export function mapInteraction(row) {
+  return {
+    interactionId: String(row.interaction_id),
+    orgId: String(row.org_id),
+    userId: String(row.user_id),
+    runId: String(row.run_id),
+    agentSessionId: String(row.agent_session_id),
+    toolExecutionId: String(row.tool_execution_id),
+    toolCallId: String(row.tool_call_id),
+    interactionType: String(row.interaction_type),
+    requestJson: parseJsonColumn(row.request_json),
+    status: String(row.status),
+    responseJson:
+      row.response_json == null ? null : parseJsonColumn(row.response_json),
+    responseHash: row.response_hash == null ? null : String(row.response_hash),
+    respondedBy: row.responded_by == null ? null : String(row.responded_by),
+    resumePhase:
+      row.resume_phase == null ? 'NONE' : String(row.resume_phase),
+    createdAt: formatDateTime(row.created_at),
+    resolvedAt: formatDateTime(row.resolved_at),
+    resumeClaimedAt: formatDateTime(row.resume_claimed_at),
+    resumeAppliedAt: formatDateTime(row.resume_applied_at),
+    cancelledAt: formatDateTime(row.cancelled_at),
   };
 }
 
@@ -280,8 +330,10 @@ export function mapSandboxAuditEvent(row) {
  * @returns {string}
  */
 export function toMysqlDateTime(value) {
-  const d = value instanceof Date ? value : new Date(value);
-  if (Number.isNaN(d.getTime())) {
+  let d;
+  try {
+    d = parseDateTimeAsUtc(value);
+  } catch {
     throw new Error(`Invalid datetime for MySQL storage: ${String(value)}`);
   }
   // YYYY-MM-DD HH:mm:ss.sss (UTC)

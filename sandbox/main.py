@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
-import uuid
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
@@ -12,30 +10,36 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from sandbox import __version__
-from sandbox.config import effective_config, ensure_safe_to_start, settings
-from sandbox.routers import (
-    approvals,
-    artifacts,
-    conversations,
-    datasets,
-    executions,
-    files,
-    health,
-    internal_files,
-    processes,
-    sessions,
-    traces,
+from sandbox.config import (
+    effective_config,
+    ensure_safe_to_start,
+    settings,
 )
-from sandbox.routers import auth_router
+from sandbox.routers import (
+    health,
+    internal_artifacts,
+    internal_executions,
+    internal_files,
+    internal_processes,
+    internal_sessions,
+)
 from sandbox.security.internal_http_auth import set_replay_store
 from sandbox.security.network_policy import get_network_policy, init_network_policy
 from sandbox.services.files_read_runtime import set_files_read_runtime
-from sandbox.services.session_manager import session_manager
-from sandbox.trace import reset_trace_id, set_trace_id
+from sandbox.services.files_write_runtime import set_files_write_runtime
+from sandbox.services.formal_execution_runtime import set_formal_execution_runtime
+from sandbox.services.formal_artifact_runtime import set_formal_artifact_runtime
+from sandbox.services.formal_process_runtime import set_formal_process_runtime
+from sandbox.services.formal_session_runtime import set_formal_session_runtime
+from sandbox.trace import (
+    format_traceparent,
+    reset_trace_context,
+    resolve_trace_context,
+    set_trace_context,
+)
 
 # Fail-fast before uvicorn binds when import loads this module in production.
 ensure_safe_to_start(settings)
-
 
 def _configure_logging() -> None:
     logging.basicConfig(
@@ -52,37 +56,6 @@ def _cors_origins() -> list[str]:
         cleaned = [o for o in origins if o != "*"]
         return cleaned or ["https://localhost"]
     return origins or ["*"]
-
-
-async def _cleanup_loop() -> None:
-    """Background task: lease reaping, session TTL, then retention."""
-    logger = logging.getLogger("sandbox.cleanup")
-    while True:
-        try:
-            await asyncio.sleep(settings.cleanup_interval_minutes * 60)
-            # PR-13: Sandbox no longer hosts agent Run authority (Agent MySQL only).
-            # Do not reap or mutate legacy agent_runs here.
-            count = session_manager.cleanup_expired()
-            if count:
-                logger.info("Cleaned up %d expired sessions", count)
-            # Retention: 24h drafts, 90d inactive conversations, 180d events/audit.
-            # Logs metrics only (ids/counts); never message bodies.
-            try:
-                from sandbox.services.ttl_cleanup import run_retention_cleanup
-
-                report = run_retention_cleanup(dry_run=False)
-                if report.get("deleted_total"):
-                    logger.info(
-                        "Retention cleanup deleted_total=%s duration_ms=%s",
-                        report.get("deleted_total"),
-                        report.get("duration_ms"),
-                    )
-            except Exception:
-                logger.exception("Error during retention cleanup")
-        except asyncio.CancelledError:
-            break
-        except Exception:
-            logger.exception("Error during session cleanup")
 
 
 @asynccontextmanager
@@ -136,24 +109,8 @@ async def lifespan(app: FastAPI):
 
     logger.info("Workspaces root configured | Skills configured")
 
-    # Process Manager: re-scan orphaned processes after schema is ready
-    try:
-        from sandbox.database import database as _db
-        from sandbox.services.process_manager import process_manager
-
-        _db.migrate_agent_session()
-        _db.migrate_process()
-        _db.migrate_execution_events()
-        _db.migrate_tool_ledger()
-        _db.migrate_b6_runtime()
-        _db.migrate_agent_run_usage()
-        orphaned = process_manager.mark_orphans()
-        if orphaned:
-            logger.info("Process Manager marked %d orphaned process(es)", orphaned)
-    except Exception:
-        logger.exception("Process Manager orphan scan failed at startup")
-
-    # PR-13: no Sandbox agent_run lease reaper — Run authority is Agent MySQL.
+    # Formal MySQL schema is owned by Agent migrations.  Sandbox never performs
+    # DDL or maintains a second session/run/retention store.
 
     # Internal control plane (HMAC replay Redis + claim MySQL + files.read).
     # Production requires enablement (validate_production_settings). Fail closed
@@ -181,27 +138,11 @@ async def lifespan(app: FastAPI):
         )
         raise
 
-    # Start session + retention background cleanup task
-    cleanup_task = asyncio.create_task(_cleanup_loop())
-    logger.info(
-        "Session + retention cleanup every %d minutes "
-        "(drafts=%dh inactive=%dd audit=%dd)",
-        settings.cleanup_interval_minutes,
-        settings.draft_ttl_hours,
-        settings.conversation_ttl_days,
-        settings.audit_ttl_days,
-    )
-
     try:
         yield
     finally:
-        # Shutdown order: stop cleanup → plane (slots fail closed → drain → close)
-        # → never leave READY/INSTALLED without live resources.
-        cleanup_task.cancel()
-        try:
-            await cleanup_task
-        except asyncio.CancelledError:
-            pass
+        # Shutdown order: stop the internal plane (slots fail closed → drain →
+        # close); never leave READY/INSTALLED without live resources.
         try:
             await stop_internal_plane(plane_bundle)
         except Exception as exc:
@@ -228,6 +169,11 @@ set_replay_store(app, None)
 # construct MySQL claim validators / filesystem drivers at module import.
 # Production lifespan/wiring injects FilesReadRuntime; unconfigured → 503.
 set_files_read_runtime(app, None)
+set_files_write_runtime(app, None)
+set_formal_execution_runtime(app, None)
+set_formal_artifact_runtime(app, None)
+set_formal_process_runtime(app, None)
+set_formal_session_runtime(app, None)
 
 # ── Middleware ──────────────────────────────────────────────────────────
 # Starlette runs middleware in reverse registration order on the way in.
@@ -308,15 +254,22 @@ async def jwt_auth_middleware(request: Request, call_next):
 
 @app.middleware("http")
 async def trace_id_middleware(request: Request, call_next):
-    """Attach a trace ID to request context and echo it in responses."""
-    trace_id = request.headers.get("X-Trace-Id") or f"trace_{uuid.uuid4().hex}"
-    token = set_trace_id(trace_id)
+    """Attach a W3C child span to request context and echo correlation headers."""
+    context = resolve_trace_context(
+        request.headers.get("traceparent"),
+        request.headers.get("X-Trace-Id"),
+    )
+    token = set_trace_context(context)
+    request.state.trace_id = context.trace_id
+    request.state.span_id = context.span_id
+    request.state.parent_span_id = context.parent_span_id
     try:
         response = await call_next(request)
-        response.headers["X-Trace-Id"] = trace_id
+        response.headers["X-Trace-Id"] = context.trace_id
+        response.headers["traceparent"] = format_traceparent(context)
         return response
     finally:
-        reset_trace_id(token)
+        reset_trace_context(token)
 
 
 @app.middleware("http")
@@ -408,22 +361,22 @@ async def value_error_handler(request: Request, exc: ValueError):
 
 # ── Register routers ───────────────────────────────────────────────────
 
-app.include_router(auth_router.router)
-# PR-13 severe: Sandbox must NOT mount /agent-runs or /agent-sessions.
-# Agent service owns /internal/agent-runs; Pi Session recovery is Agent MySQL.
-app.include_router(sessions.router)
-app.include_router(approvals.router)
-app.include_router(conversations.router)
-app.include_router(executions.router)
-app.include_router(processes.router)
+# Public file, dataset, and artifact adapters are retained only for the
+# user-facing BFF flows. Session identity and all authority come from the
+# formal AgentSession/SandboxSession binding installed by the internal plane.
+from sandbox.routers import artifacts, datasets, files
+
 app.include_router(files.router)
 app.include_router(datasets.router)
 app.include_router(artifacts.router)
-app.include_router(traces.router)
 app.include_router(health.router)
 # Agent internal plane (HMAC only). Not public; JWT/API-key middleware skips
 # /internal/v1 but cannot authenticate — require_internal_auth is sole gate.
 app.include_router(internal_files.router)
+app.include_router(internal_executions.router)
+app.include_router(internal_artifacts.router)
+app.include_router(internal_sessions.router)
+app.include_router(internal_processes.router)
 
 
 # ── Root ───────────────────────────────────────────────────────────────

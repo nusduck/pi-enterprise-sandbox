@@ -1,7 +1,9 @@
 # PR-05 Session recovery and fencing invariants
 
 Status: slice A foundation + slice B (journal, recovery/checkpoint, PiRunExecutor, unique run lease token).
-`createPiRunExecutorFactory` is explicit only — **not** the worker production default.
+The production worker path (`createWorkerServices`) now installs the real Pi
+executor through `ensureWorkerRunExecutorFactory`; the stub executor remains an
+explicit non-production/test-only opt-in.
 
 ## Formal session statuses (plan §11 exact)
 

@@ -127,9 +127,68 @@ jobs:
           if [ ! -f .env ]; then cp .env.example .env; fi
           docker compose config -q
 
+      - name: Validate production overlay merge
+        env:
+          DEPLOYMENT_ENV: production
+          MYSQL_PASSWORD: ci_mysql_password_0123456789
+          MYSQL_ROOT_PASSWORD: ci_mysql_root_password_0123456789
+          REDIS_PASSWORD: ci_redis_password_0123456789
+          SANDBOX_INTERNAL_REDIS_PASSWORD: ci_replay_password_0123456789
+          SANDBOX_API_TOKEN: ssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssss
+          AGENT_INTERNAL_TOKEN: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+          SANDBOX_JWT_SECRET: jjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjj
+          SANDBOX_CORS_ORIGINS: https://app.example.com
+          SANDBOX_INTERNAL_HMAC_KEYRING: '{"ci-key":"a2tra2tra2tra2tra2tra2tra2tra2tra2tra2tra2s"}'
+          SANDBOX_INTERNAL_HMAC_ACTIVE_KID: ci-key
+          A2A_PUBLIC_BASE_URL: https://agent.example.com
+          A2A_ARTIFACT_DOWNLOAD_SECRET: dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd
+        run: |
+          docker compose -f docker-compose.yml -f docker-compose.prod.yml config \
+            --format json --output "$RUNNER_TEMP/pi-enterprise-prod-compose.json"
+          python3 scripts/verify_compose_prod_config.py \
+            "$RUNNER_TEMP/pi-enterprise-prod-compose.json"
+
   cross-service-smoke:
     name: Cross-service smoke (no real LLM key)
     runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_DATABASE: sandbox
+          MYSQL_USER: sandbox
+          MYSQL_PASSWORD: ci_mysql_password_0123456789
+          MYSQL_ROOT_PASSWORD: ci_mysql_root_password_0123456789
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -usandbox -pci_mysql_password_0123456789"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=30
+          --health-start-period=20s
+      redis:
+        image: redis:7.2
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd="redis-cli ping"
+          --health-interval=5s
+          --health-timeout=3s
+          --health-retries=30
+      sandbox-replay-redis:
+        # Bitnami moved the 7.2 line to its legacy registry; the former
+        # bitnami/redis:7.2 tag no longer has a pullable manifest.
+        image: bitnamilegacy/redis:7.2
+        env:
+          REDIS_PASSWORD: ci_replay_password_0123456789
+        ports:
+          - 6380:6379
+        options: >-
+          --health-cmd="redis-cli -a ci_replay_password_0123456789 ping"
+          --health-interval=5s
+          --health-timeout=3s
+          --health-retries=30
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -160,6 +219,11 @@ jobs:
           npm ci --prefix api-server
 
       - name: Run cross-service smoke (fake OpenAI provider)
+        env:
+          SMOKE_MYSQL_URL: mysql://sandbox:ci_mysql_password_0123456789@127.0.0.1:3306/sandbox
+          SMOKE_REDIS_URL: redis://127.0.0.1:6379/0
+          SMOKE_SANDBOX_REPLAY_REDIS_URL: redis://:ci_replay_password_0123456789@127.0.0.1:6380/0
+          SMOKE_START_WORKER: "true"
         run: |
           mkdir -p .smoke-tmp
           uv run node scripts/smoke-cross-service.mjs

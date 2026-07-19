@@ -19,6 +19,14 @@ import path from 'node:path';
 import { createServiceContainer } from './container.js';
 import { startRunWorkerRuntime } from './run-worker.js';
 
+function optionalSafeInteger(value, minimum) {
+  if (value == null || String(value).trim() === '') return undefined;
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) && parsed >= minimum
+    ? parsed
+    : undefined;
+}
+
 /**
  * @param {NodeJS.ProcessEnv} [env]
  * @param {{
@@ -121,6 +129,21 @@ export async function startWorkerMain(env = process.env, hooks = {}) {
       {
         queueName: env.AGENT_RUNS_QUEUE_NAME || undefined,
         concurrency: Number(env.AGENT_WORKER_CONCURRENCY) || 1,
+        // Keep BullMQ defaults in production. These bounded knobs are useful
+        // for isolated restart gates and controlled staging drills without
+        // changing the normal lock/stall contract.
+        lockDuration: optionalSafeInteger(
+          env.AGENT_BULLMQ_LOCK_DURATION_MS,
+          1,
+        ),
+        stalledInterval: optionalSafeInteger(
+          env.AGENT_BULLMQ_STALLED_INTERVAL_MS,
+          1,
+        ),
+        maxStalledCount: optionalSafeInteger(
+          env.AGENT_BULLMQ_MAX_STALLED_COUNT,
+          0,
+        ),
       },
     );
     console.log(

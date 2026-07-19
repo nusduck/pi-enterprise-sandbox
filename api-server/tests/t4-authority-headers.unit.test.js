@@ -8,7 +8,10 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { buildTraceparent } from '../services/agent-client.js';
-import { authorizeRunRequest } from '../application/run-access-service.js';
+import {
+  authorizeRunRequest,
+  resolveTrustedAuth,
+} from '../application/run-access-service.js';
 import { config } from '../config.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -76,6 +79,17 @@ describe('BFF T4 authority switch', () => {
 });
 
 describe('authorizeRunRequest ID-domain safety', () => {
+  it('uses stable trusted acting subjects when development auth is disabled', async () => {
+    const previous = config.AUTH_ENABLED;
+    config.AUTH_ENABLED = false;
+    try {
+      const auth = await resolveTrustedAuth({ headers: {} });
+      assert.deepEqual(auth, config.DEVELOPMENT_ACTING_IDENTITY);
+    } finally {
+      config.AUTH_ENABLED = previous;
+    }
+  });
+
   it('authorizes when Agent returns internal ULIDs for external UUID auth', async () => {
     const prev = config.AUTH_ENABLED;
     config.AUTH_ENABLED = true;
@@ -102,7 +116,7 @@ describe('authorizeRunRequest ID-domain safety', () => {
           headers: {},
           traceId: TRACE,
         };
-        // AUTH_ENABLED false: resolveTrustedAuth returns forwarded auth without authMe
+        // AUTH_ENABLED false: resolveTrustedAuth uses the stable development owner.
         const { run } = await authorizeRunRequest(
           '01K0G2PAV8FPMVC9QHJG7JPN53',
           req,

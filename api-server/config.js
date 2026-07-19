@@ -4,6 +4,7 @@
  */
 
 const MIN_SECRET_LEN = 32;
+const DEFAULT_DATASET_UPLOAD_MAX_BYTES = 55 * 1024 * 1024;
 const WEAK_SECRET_MARKERS = [
   'change-me',
   'changeme',
@@ -29,6 +30,44 @@ export function resolveAuthEnabled(env = process.env) {
     return String(env.SANDBOX_AUTH_ENABLED).toLowerCase() === 'true';
   }
   return false;
+}
+
+/**
+ * Maximum multipart request size accepted by the Dataset streaming proxy.
+ * Invalid values fail closed to the documented default instead of disabling
+ * the limit through NaN/negative configuration.
+ * @param {NodeJS.ProcessEnv | Record<string, string|undefined>} [env]
+ */
+export function resolveDatasetUploadMaxBytes(env = process.env) {
+  const raw = String(env.DATASET_UPLOAD_MAX_BYTES || '').trim();
+  if (!raw) return DEFAULT_DATASET_UPLOAD_MAX_BYTES;
+  const value = Number(raw);
+  return Number.isSafeInteger(value) && value > 0
+    ? value
+    : DEFAULT_DATASET_UPLOAD_MAX_BYTES;
+}
+
+/**
+ * Stable external subjects used only by the explicit auth-disabled development
+ * mode. Agent maps these subjects to internal ULIDs on first use. Production
+ * rejects AUTH_ENABLED=false before the BFF starts.
+ * @param {NodeJS.ProcessEnv | Record<string, string|undefined>} [env]
+ */
+export function resolveDevelopmentActingIdentity(env = process.env) {
+  const requestedRole = String(env.BFF_DEV_ACTING_ROLE || 'user')
+    .trim()
+    .toLowerCase();
+  // Development-only convenience for exercising the A2A admin surface. The
+  // authenticated production path resolves role from Sandbox instead.
+  const actingRole = requestedRole === 'admin' ? 'admin' : 'user';
+  return Object.freeze({
+    actingUserId:
+      String(env.BFF_DEV_ACTING_USER_ID || '').trim() || 'local-development-user',
+    actingOrganizationId:
+      String(env.BFF_DEV_ACTING_ORGANIZATION_ID || '').trim() ||
+      'local-development-org',
+    actingRole,
+  });
 }
 
 /** Supported approval behavior for approval_required policy results. */
@@ -166,6 +205,7 @@ export function effectiveConfig(cfg = config) {
     APPROVAL_MODE: cfg.APPROVAL_MODE,
     APPROVAL_ENABLED: cfg.APPROVAL_ENABLED,
     JSON_BODY_LIMIT_BYTES: cfg.JSON_BODY_LIMIT_BYTES,
+    DATASET_UPLOAD_MAX_BYTES: cfg.DATASET_UPLOAD_MAX_BYTES,
     CORS_ALLOWED_ORIGINS: cfg.CORS_ALLOWED_ORIGINS,
   };
 }
@@ -190,6 +230,7 @@ export const config = {
    * forward Authorization to sandbox. Default false (open dev mode).
    */
   AUTH_ENABLED: resolveAuthEnabled(),
+  DEVELOPMENT_ACTING_IDENTITY: resolveDevelopmentActingIdentity(),
   /**
    * Approval behavior for high-risk tools. Default ask. Legacy false maps to deny;
    * auto_approve requires an explicit mode and is rejected in production.
@@ -199,6 +240,7 @@ export const config = {
   APPROVAL_ENABLED: resolveApprovalEnabled(),
   JSON_BODY_LIMIT_BYTES:
     parseInt(process.env.JSON_BODY_LIMIT_BYTES, 10) || 1024 * 1024,
+  DATASET_UPLOAD_MAX_BYTES: resolveDatasetUploadMaxBytes(),
   CORS_ALLOWED_ORIGINS: String(process.env.CORS_ALLOWED_ORIGINS || '')
     .split(',')
     .map((value) => value.trim())
@@ -229,12 +271,15 @@ export function isProtectedApiPath(path) {
   if (isPublicApiPath(path)) return false;
   return (
     path.startsWith('/api/conversations') ||
+    path.startsWith('/api/datasets') ||
     path.startsWith('/api/files/') ||
     path.startsWith('/api/sessions') ||
     path.startsWith('/api/artifacts') ||
     path.startsWith('/api/approvals') ||
     path.startsWith('/api/runs') ||
     path.startsWith('/api/extensions') ||
-    path.startsWith('/api/capabilities')
+    path.startsWith('/api/capabilities') ||
+    path.startsWith('/api/a2a') ||
+    path.startsWith('/api/processes')
   );
 }

@@ -1,9 +1,8 @@
-"""Process handle persistence ports (PR-08).
+"""MySQL-backed process handle persistence ports.
 
-Runtime facts stay on the Sandbox process ledger (SQLite-compatible
-``ProcessRepository``). When a formal MySQL-aligned repository is injected,
-lifecycle rows are dual-written with mandatory owner scope. Tests may inject
-``FakeFormalProcessRepository`` without real MySQL.
+Lifecycle rows are written through the formal owner-scoped repository. Tests
+may inject ``FakeFormalProcessRepository`` without introducing another runtime
+fact store.
 """
 
 from __future__ import annotations
@@ -48,7 +47,12 @@ class FormalProcessRepositoryPort(Protocol):
         stderr_path: str | None = None,
         started_at: str | None = None,
         ended_at: str | None = None,
+        command_json: dict[str, Any] | None = None,
     ) -> ProcessRecord: ...
+
+    def list_active_for_recovery(
+        self, conn: Any, *, limit: int = 1000
+    ) -> list[ProcessRecord]: ...
 
     def list_by_sandbox_session(
         self,
@@ -137,6 +141,7 @@ class FakeFormalProcessRepository:
         stderr_path: str | None = None,
         started_at: str | None = None,
         ended_at: str | None = None,
+        command_json: dict[str, Any] | None = None,
     ) -> ProcessRecord:
         from sandbox.app.persistence.ownership import require_owner_scope
 
@@ -159,6 +164,8 @@ class FakeFormalProcessRepository:
                     id=process_id,
                 )
             row["status"] = status
+            if command_json is not None:
+                row["command_json"] = dict(command_json)
             if pid is not None:
                 row["pid"] = pid
             if exit_code is not None:
@@ -194,6 +201,18 @@ class FakeFormalProcessRepository:
             ]
         return out[: int(limit)]
 
+    def list_active_for_recovery(
+        self, conn: Any, *, limit: int = 1000
+    ) -> list[ProcessRecord]:  # noqa: ARG002
+        terminal = {"completed", "failed", "cancelled", "timeout", "orphaned", "lost"}
+        with self._lock:
+            rows = [
+                self._to_record(row)
+                for row in self.rows.values()
+                if str(row.get("status", "")).lower() not in terminal
+            ]
+        return rows[: int(limit)]
+
     @staticmethod
     def _to_record(row: dict[str, Any]) -> ProcessRecord:
         return ProcessRecord(
@@ -216,30 +235,94 @@ class FakeFormalProcessRepository:
 
 
 class FormalProcessDualWriter:
-    """Best-effort dual-write to formal process_executions (never blocks runtime)."""
+    """Write process lifecycle rows to formal ``process_executions``.
+
+    The production lifespan installs this writer with ``authoritative=True``
+    so a missing owner binding or failed transaction prevents an undurable
+    process. Offline service tests may use the fake repository explicitly.
+    """
 
     def __init__(
         self,
         repo: FormalProcessRepositoryPort | None,
         *,
         conn_factory: Any | None = None,
+        authoritative: bool = False,
     ) -> None:
         self.repo = repo
         self.conn_factory = conn_factory
+        self.authoritative = bool(authoritative)
         self._lock = threading.Lock()
 
     @property
     def enabled(self) -> bool:
         return self.repo is not None
 
-    def _conn(self) -> Any:
-        if self.conn_factory is None:
-            return None
-        return self.conn_factory()
-
-    def upsert_from_runtime(self, entry: dict[str, Any]) -> None:
+    def get_owned(
+        self,
+        process_id: str,
+        *,
+        org_id: str,
+        user_id: str,
+        sandbox_session_id: str,
+    ) -> ProcessRecord | None:
+        """Owner/session-scoped formal read used by internal process tools."""
         if self.repo is None:
-            return
+            if self.authoritative:
+                raise RuntimeError("formal process repository is unavailable")
+            return None
+        scope = OwnerScope(org_id=org_id, user_id=user_id)
+        return self._with_conn(
+            lambda conn: self.repo.get_by_id(
+                conn,
+                process_id,
+                scope,
+                sandbox_session_id=sandbox_session_id,
+            )
+        )
+
+    def _with_conn(self, fn: Any) -> Any:
+        if self.repo is None:
+            return None
+        if self.conn_factory is None:
+            return fn(None)
+        maybe = self.conn_factory()
+        if hasattr(maybe, "__enter__"):
+            with maybe as conn:
+                try:
+                    result = fn(conn)
+                    conn.commit()
+                except Exception:
+                    try:
+                        conn.rollback()
+                    except Exception:
+                        pass
+                    raise
+                return result
+        try:
+            result = fn(maybe)
+            if hasattr(maybe, "commit"):
+                maybe.commit()
+            return result
+        except Exception:
+            if hasattr(maybe, "rollback"):
+                try:
+                    maybe.rollback()
+                except Exception:
+                    pass
+            raise
+        finally:
+            if hasattr(maybe, "close"):
+                try:
+                    maybe.close()
+                except Exception:
+                    pass
+
+    def upsert_from_runtime(self, entry: dict[str, Any]) -> bool:
+        if self.repo is None:
+            if self.authoritative:
+                raise RuntimeError("formal process repository is unavailable")
+            return False
         org_id = (entry.get("org_id") or "").strip()
         user_id = (entry.get("user_id") or "").strip()
         sandbox_session_id = (
@@ -249,9 +332,11 @@ class FormalProcessDualWriter:
         execution_id = (entry.get("execution_id") or entry.get("process_id") or "").strip()
         process_id = (entry.get("process_id") or "").strip()
         if not (org_id and user_id and sandbox_session_id and run_id and process_id):
-            # Formal schema requires NOT NULL ownership/run binding; skip dual-write
-            # rather than invent ids.
-            return
+            if self.authoritative:
+                raise ValueError(
+                    "formal process persistence requires owner, session, and run binding"
+                )
+            return False
         scope = OwnerScope(org_id=org_id, user_id=user_id)
         status = entry.get("status")
         if hasattr(status, "value"):
@@ -285,30 +370,48 @@ class FormalProcessDualWriter:
         }
         try:
             with self._lock:
-                conn = self._conn()
-                existing = self.repo.get_by_id(
-                    conn,
-                    process_id,
-                    scope,
-                    sandbox_session_id=sandbox_session_id,
-                )
-                if existing is None:
-                    self.repo.create(conn, payload)
-                else:
-                    self.repo.update_status(
+                def _upsert(conn: Any) -> None:
+                    existing = self.repo.get_by_id(
                         conn,
                         process_id,
                         scope,
-                        status=status_s,
                         sandbox_session_id=sandbox_session_id,
-                        pid=entry.get("pid"),
-                        exit_code=entry.get("exit_code"),
-                        stdout_path=entry.get("stdout_path"),
-                        stderr_path=entry.get("stderr_path"),
-                        started_at=entry.get("started_at"),
-                        ended_at=entry.get("finished_at") or entry.get("ended_at"),
                     )
+                    if existing is None:
+                        self.repo.create(conn, payload)
+                    else:
+                        self.repo.update_status(
+                            conn,
+                            process_id,
+                            scope,
+                            status=status_s,
+                            sandbox_session_id=sandbox_session_id,
+                            pid=entry.get("pid"),
+                            exit_code=entry.get("exit_code"),
+                            stdout_path=entry.get("stdout_path"),
+                            stderr_path=entry.get("stderr_path"),
+                            started_at=entry.get("started_at"),
+                            ended_at=(
+                                entry.get("finished_at") or entry.get("ended_at")
+                            ),
+                            command_json=command_json,
+                        )
+
+                self._with_conn(_upsert)
+            return True
         except Exception:
+            if self.authoritative:
+                raise
             logger.debug(
                 "formal process dual-write failed for %s", process_id, exc_info=True
             )
+            return False
+
+    def list_active_for_recovery(self, *, limit: int = 1000) -> list[ProcessRecord]:
+        if self.repo is None:
+            if self.authoritative:
+                raise RuntimeError("formal process repository is unavailable")
+            return []
+        return self._with_conn(
+            lambda conn: self.repo.list_active_for_recovery(conn, limit=limit)
+        )

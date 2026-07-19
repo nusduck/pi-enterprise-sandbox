@@ -5,6 +5,7 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import http from 'node:http';
 import {
   A2aStreamService,
@@ -48,6 +49,7 @@ import {
 } from '../../src/application/a2a/json-rpc.js';
 import { createA2aHttpHandler } from '../../src/presentation/a2a/http-handler.js';
 import { createAgentHttpServer } from '../../src/bootstrap/create-http-server.js';
+import { createA2aArtifactByteStreamer } from '../../src/bootstrap/http-main.js';
 import { isUlid } from '../../src/domain/shared/ulid.js';
 
 const ORG = '01K0G2PAV8FPMVC9QHJG7JPN4Z';
@@ -58,6 +60,8 @@ const RUN = '01K0G2PAV8FPMVC9QHJG7JPN53';
 const CONV = '01K0G2PAV8FPMVC9QHJG7JPN51';
 const CRED = '01K0G2PAV8FPMVC9QHJG7JPN5C';
 const ART = '01K0G2PAV8FPMVC9QHJG7JPN5F';
+const SESSION = '01K0G2PAV8FPMVC9QHJG7JPN5G';
+const SANDBOX_SESSION = '01K0G2PAV8FPMVC9QHJG7JPN5H';
 const TRACE = 'a'.repeat(32);
 const SECRET = 'x'.repeat(40);
 
@@ -378,11 +382,143 @@ describe('stream contiguous sequence + SSE id + heartbeat', () => {
 });
 
 describe('artifact projector + download token isolation', () => {
+  it('streams by owner-scoped Run and opaque artifact id only', async () => {
+    const calls = [];
+    const streamer = createA2aArtifactByteStreamer({
+      createRepositories() {
+        return {
+          runs: {
+            async getById(runId, scope) {
+              calls.push(['run', runId, scope]);
+              return {
+                runId,
+                agentSessionId: SESSION,
+                conversationId: CONV,
+              };
+            },
+          },
+          sessions: {
+            async getById(sessionId, scope) {
+              calls.push(['session', sessionId, scope]);
+              return {
+                agentSessionId: sessionId,
+                conversationId: CONV,
+                sandboxSessionId: SANDBOX_SESSION,
+                executionFenceToken: 7,
+              };
+            },
+          },
+        };
+      },
+      artifactDownloadTransport: {
+        async downloadArtifact(input, options) {
+          calls.push(['download', input, options]);
+          return {
+            body: new Response(Buffer.from('real-bytes')).body,
+            contentType: 'application/octet-stream',
+            contentDisposition: 'attachment; filename="report.bin"',
+            contentLength: 10,
+            sha256: 'b'.repeat(64),
+          };
+        },
+      },
+    });
+
+    const result = await streamer({
+      principal: { orgId: ORG, serviceUserId: USER },
+      mapping: { runId: RUN },
+      artifact: {
+        artifactId: ART,
+        mimeType: 'application/octet-stream',
+        sizeBytes: 10,
+        sha256: 'b'.repeat(64),
+      },
+      traceId: TRACE,
+      traceState: 'vendor=value',
+      req: { once() {}, off() {} },
+    });
+
+    assert.equal(
+      Buffer.from(await new Response(result.body).arrayBuffer()).toString(),
+      'real-bytes',
+    );
+    assert.deepEqual(calls[0], [
+      'run',
+      RUN,
+      { orgId: ORG, userId: USER },
+    ]);
+    assert.deepEqual(calls[1], [
+      'session',
+      SESSION,
+      { orgId: ORG, userId: USER },
+    ]);
+    const downloadCall = calls.at(-1);
+    assert.deepEqual(downloadCall.slice(0, 2), [
+      'download',
+      {
+        artifactId: ART,
+        identity: {
+          orgId: ORG,
+          userId: USER,
+          conversationId: CONV,
+          agentSessionId: SESSION,
+          runId: RUN,
+          sandboxSessionId: SANDBOX_SESSION,
+          traceId: TRACE,
+          executionFenceToken: 7,
+        },
+        expectedSizeBytes: 10,
+        expectedSha256: 'b'.repeat(64),
+      },
+    ]);
+    assert.equal(downloadCall[2].traceState, 'vendor=value');
+    assert.ok(downloadCall[2].signal instanceof AbortSignal);
+    assert.equal(JSON.stringify(calls).includes('relativePath'), false);
+  });
+
+  it('fails closed when the owner-scoped Agent Session is unavailable', async () => {
+    let downloaded = false;
+    const streamer = createA2aArtifactByteStreamer({
+      createRepositories() {
+        return {
+          runs: {
+            async getById() {
+              return {
+                runId: RUN,
+                agentSessionId: SESSION,
+                conversationId: CONV,
+              };
+            },
+          },
+          sessions: {
+            async getById() {
+              return null;
+            },
+          },
+        };
+      },
+      artifactDownloadTransport: {
+        async downloadArtifact() {
+          downloaded = true;
+        },
+      },
+    });
+    const result = await streamer({
+      principal: { orgId: ORG, serviceUserId: USER },
+      mapping: { runId: RUN },
+      artifact: { artifactId: ART },
+      traceId: TRACE,
+      req: { once() {}, off() {} },
+    });
+    assert.equal(result.body, null);
+    assert.equal(downloaded, false);
+  });
+
   it('rejects path/name-only artifacts; requires durable ULID', () => {
     const ctx = {
       a2aTaskId: TASK,
       principal: { orgId: ORG, clientId: 'c1' },
-      // Production has no byte streamer → no URI mint
+      // No configured byte streamer means no URI mint.
       buildDownloadUri: null,
     };
     assert.equal(
@@ -537,6 +673,158 @@ describe('artifact projector + download token isolation', () => {
     const body = JSON.parse(chunks.join('') || '{}');
     assert.equal(body.code, 'A2A_DOWNLOAD_BYTES_UNAVAILABLE');
     assert.equal(body.artifactId, undefined);
+  });
+
+  it('download route owner-checks task and artifact before streaming bytes', async () => {
+    const bytes = Buffer.from('downloaded-through-a2a', 'utf8');
+    const digest = createHash('sha256').update(bytes).digest('hex');
+    const { token } = mintArtifactDownloadToken({
+      orgId: ORG,
+      clientId: 'client-a',
+      taskId: TASK,
+      artifactId: ART,
+      secret: SECRET,
+      ttlSec: 60,
+    });
+    const calls = [];
+    const audits = [];
+    let auditFails = false;
+    const a2aHandler = createA2aHttpHandler({
+      credentialService: {
+        async authenticate(authorization, options) {
+          calls.push(['authenticate', authorization, options]);
+          return {
+            orgId: ORG,
+            agentId: AGENT,
+            serviceUserId: USER,
+            clientId: 'client-a',
+            credentialId: CRED,
+            scopes: ['artifact.read'],
+          };
+        },
+      },
+      taskService: {
+        async resolveOwnedTask(principal, taskId) {
+          calls.push(['task', principal.clientId, taskId]);
+          return { a2aTaskId: TASK, runId: RUN };
+        },
+        async auditArtifactDownload(input) {
+          audits.push(input);
+          if (auditFails) throw new Error('audit unavailable');
+        },
+      },
+      streamService: { async openTaskStream() {} },
+      createRepositories() {
+        return {
+          artifacts: {
+            async getById(artifactId, scope) {
+              calls.push(['artifact', artifactId, scope]);
+              return {
+                artifactId: ART,
+                runId: RUN,
+                displayName: 'report.bin',
+                mimeType: 'application/octet-stream',
+                sizeBytes: bytes.byteLength,
+                sha256: digest,
+              };
+            },
+          },
+        };
+      },
+      async streamArtifactBytes(context) {
+        calls.push(['stream', context]);
+        assert.equal('relativePath' in context.artifact, false);
+        return {
+          body: new Response(bytes).body,
+          contentType: 'application/octet-stream',
+          contentDisposition: 'attachment; filename="report.bin"',
+          contentLength: bytes.byteLength,
+          sha256: digest,
+        };
+      },
+      artifactDownloadSecret: SECRET,
+      publicBaseUrl: 'https://agent.example.com',
+      deploymentEnv: 'production',
+      resolveTraceId: () => TRACE,
+      resolveTraceContext: () => ({
+        traceId: TRACE,
+        parentSpanId: 'e'.repeat(16),
+        traceFlags: '01',
+        traceState: 'vendor=value',
+      }),
+      readBody: async () => '',
+      json: (res, status, body) => {
+        res.writeHead(status, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(body));
+      },
+    });
+    const server = createAgentHttpServer({
+      createRunService: { async execute() {} },
+      getRunService: { async execute() {} },
+      cancelRunService: { async execute() {} },
+      eventQueryService: { async listEvents() { return { events: [] }; } },
+      a2aHandler,
+    });
+    await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const { port } = server.address();
+    try {
+      const response = await fetch(
+        `http://127.0.0.1:${port}/a2a/artifacts/download?token=${encodeURIComponent(token)}`,
+        { headers: { Authorization: 'Bearer a2a-test' } },
+      );
+      assert.equal(response.status, 200);
+      assert.deepEqual(Buffer.from(await response.arrayBuffer()), bytes);
+      assert.equal(response.headers.get('x-artifact-id'), ART);
+      assert.equal(response.headers.get('x-artifact-sha256'), digest);
+      assert.equal(response.headers.get('x-trace-id'), TRACE);
+      assert.equal(response.headers.get('content-length'), String(bytes.byteLength));
+      assert.deepEqual(calls[2], [
+        'artifact',
+        ART,
+        { orgId: ORG, userId: USER },
+      ]);
+      assert.equal(calls[3][0], 'stream');
+      assert.equal(calls[3][1].mapping.runId, RUN);
+      assert.equal(calls[3][1].principal.serviceUserId, USER);
+      assert.equal(calls[3][1].traceState, 'vendor=value');
+      assert.deepEqual(audits, [
+        {
+          principal: {
+            orgId: ORG,
+            agentId: AGENT,
+            serviceUserId: USER,
+            clientId: 'client-a',
+            credentialId: CRED,
+            scopes: ['artifact.read'],
+          },
+          agentId: AGENT,
+          taskId: TASK,
+          runId: RUN,
+          artifactId: ART,
+          traceId: TRACE,
+        },
+      ]);
+
+      const streamsBeforeAuditFailure = calls.filter(
+        (entry) => entry[0] === 'stream',
+      ).length;
+      auditFails = true;
+      const rejected = await fetch(
+        `http://127.0.0.1:${port}/a2a/artifacts/download?token=${encodeURIComponent(token)}`,
+        { headers: { Authorization: 'Bearer a2a-test' } },
+      );
+      assert.equal(rejected.status, 503);
+      assert.equal(
+        (await rejected.json()).code,
+        'A2A_AUDIT_UNAVAILABLE',
+      );
+      assert.equal(
+        calls.filter((entry) => entry[0] === 'stream').length,
+        streamsBeforeAuditFailure,
+      );
+    } finally {
+      await new Promise((resolve) => server.close(resolve));
+    }
   });
 });
 

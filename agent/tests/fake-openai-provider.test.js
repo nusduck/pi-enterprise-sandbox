@@ -10,6 +10,8 @@ import {
   isFakeLlmEnabled,
   startFakeOpenAIProvider,
   buildChatCompletionResponse,
+  buildChatCompletionToolResponse,
+  buildChatCompletionToolStream,
 } from '../testing/fake-openai-provider.js';
 
 describe('fake OpenAI provider guards', () => {
@@ -80,5 +82,60 @@ describe('fake OpenAI provider HTTP', () => {
     const payload = buildChatCompletionResponse('x');
     assert.equal(payload.object, 'chat.completion');
     assert.equal(payload.choices[0].finish_reason, 'stop');
+  });
+
+  it('serves scripted streaming tool calls followed by text', async () => {
+    let turn = 0;
+    const fake = await startFakeOpenAIProvider({
+      responder: () => {
+        turn += 1;
+        if (turn === 1) {
+          return {
+            toolCalls: [
+              {
+                id: 'call_fake_python_1',
+                name: 'python',
+                arguments: { code: "print('ok')" },
+              },
+            ],
+          };
+        }
+        return { content: 'tool-finished' };
+      },
+    });
+    try {
+      const first = await fetch(`${fake.baseUrl}/chat/completions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model: 'fake', stream: true, messages: [] }),
+      });
+      const firstBody = await first.text();
+      assert.match(firstBody, /call_fake_python_1/);
+      assert.match(firstBody, /"finish_reason":"tool_calls"/);
+
+      const second = await fetch(`${fake.baseUrl}/chat/completions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model: 'fake', stream: false, messages: [] }),
+      });
+      assert.equal((await second.json()).choices[0].message.content, 'tool-finished');
+      assert.equal(fake.requests.length, 2);
+    } finally {
+      await fake.close();
+    }
+  });
+
+  it('tool payload builders preserve exact ids, names, and arguments', () => {
+    const calls = [
+      { id: 'call_1', name: 'submit_artifact', arguments: { path: 'out.txt' } },
+    ];
+    const json = buildChatCompletionToolResponse(calls);
+    assert.equal(json.choices[0].message.tool_calls[0].id, 'call_1');
+    assert.equal(json.choices[0].message.tool_calls[0].function.name, 'submit_artifact');
+    assert.equal(
+      json.choices[0].message.tool_calls[0].function.arguments,
+      '{"path":"out.txt"}',
+    );
+    assert.match(buildChatCompletionToolStream(calls), /submit_artifact/);
   });
 });

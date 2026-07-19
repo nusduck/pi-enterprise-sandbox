@@ -108,6 +108,46 @@ describe('createEnterpriseExtensionBundle', () => {
     assert.notEqual(a[0], b[0]);
     assert.notEqual(a[2], b[2]);
   });
+
+  it('forwards the executor-owned durable interaction predicate to observability', async () => {
+    const pending = new Set(['ask-user-1']);
+    const ended = [];
+    const factories = createEnterpriseExtensionBundle(RUN_CTX, {
+      isDurableInteractionPending: (toolCallId) => pending.has(toolCallId),
+      governanceRecorder: {
+        async recordToolEnded(input) {
+          ended.push(input);
+        },
+      },
+    });
+    const handlers = new Map();
+    await factories[2]({
+      on(event, handler) {
+        if (!handlers.has(event)) handlers.set(event, []);
+        handlers.get(event).push(handler);
+      },
+    });
+
+    for (const handler of handlers.get('tool_execution_end') || []) {
+      await handler({
+        toolCallId: 'ask-user-1',
+        toolName: 'ask_user',
+        isError: true,
+        result: { content: [], details: {} },
+      });
+      await handler({
+        toolCallId: 'ask-user-ordinary',
+        toolName: 'ask_user',
+        isError: true,
+        result: { content: [], details: {} },
+      });
+    }
+
+    assert.deepEqual(
+      ended.map((call) => call.toolCallId),
+      ['ask-user-ordinary'],
+    );
+  });
 });
 
 describe('assertExactEnterpriseExtensions', () => {
@@ -205,7 +245,10 @@ describe('observability provider hooks (unit, fake ExtensionAPI)', () => {
         return { type: input.type };
       },
     };
-    const factories = createEnterpriseExtensionBundle(RUN_CTX, { recorder });
+    const factories = createEnterpriseExtensionBundle(RUN_CTX, {
+      recorder,
+      observability: { modelId: 'test-model', provider: 'test-provider' },
+    });
     const obs = factories[2];
     /** @type {Map<string, Function[]>} */
     const handlers = new Map();
@@ -255,6 +298,8 @@ describe('observability provider hooks (unit, fake ExtensionAPI)', () => {
       assert.equal(e.data.payload, undefined);
       assert.equal(e.data.headers, undefined);
       assert.ok(e.data.correlationId);
+      assert.equal(e.data.modelId, 'test-model');
+      assert.equal(e.data.provider, 'test-provider');
     }
   });
 

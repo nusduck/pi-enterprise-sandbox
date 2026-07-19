@@ -4,8 +4,8 @@
  * without first sending a chat message.
  */
 import { randomUUID } from 'node:crypto';
-import { authFromRequest, createSandboxClient } from '../services/sandbox-client.js';
-import { resolveConversationAndSession } from '../application/conversation-session-service.js';
+import { ensureAgentSession } from '../services/agent-client.js';
+import { resolveTrustedAuth } from '../application/run-access-service.js';
 
 function json(res, status, body, traceId) {
   const headers = { 'Content-Type': 'application/json' };
@@ -21,21 +21,21 @@ function json(res, status, body, traceId) {
  */
 export async function handleEnsureSession(body, res, req = null) {
   const traceId =
-    (req && (req.headers['x-trace-id'] || req.headers['X-Trace-Id'])) || randomUUID();
-  const client = createSandboxClient({
-    traceId,
-    auth: authFromRequest(req),
-  });
-
+    (req && (req.headers['x-trace-id'] || req.headers['X-Trace-Id'])) ||
+    randomUUID().replaceAll('-', '');
   try {
-    const conversationId = body?.conversation_id || null;
-    const resolved = await resolveConversationAndSession(client, conversationId);
+    const auth = await resolveTrustedAuth(req);
+    const conversationId = body?.conversation_id || body?.conversationId || null;
+    const resolved = await ensureAgentSession(conversationId, {
+      auth,
+      traceId,
+    });
     json(res, 200, {
-      conversation_id: resolved.activeConversationId,
-      session_id: resolved.sandboxSessionId,
+      conversation_id: resolved.conversation_id,
+      session_id: resolved.session_id,
       // Opaque workspace id only (never host physical roots or absolute paths)
       workspace_id: resolved.workspace_id,
-      reused_session: resolved.reusedSession,
+      reused_session: resolved.reused_session,
       trace_id: traceId,
     }, traceId);
   } catch (err) {

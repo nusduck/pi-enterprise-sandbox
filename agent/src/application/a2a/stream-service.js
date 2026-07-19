@@ -192,12 +192,6 @@ export class A2aStreamService {
       ) {
         return { lastSequence: lastEmitted, status: task.status?.state ?? null };
       }
-      if (isTerminalA2aTaskStatus(task.status?.state)) {
-        return {
-          lastSequence: lastEmitted,
-          status: task.status.state,
-        };
-      }
     }
 
     let lastHeartbeat = this.now();

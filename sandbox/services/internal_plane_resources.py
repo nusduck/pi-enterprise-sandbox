@@ -41,6 +41,7 @@ CATEGORY_MYSQL_CREATE: Final = "MYSQL_CREATE"
 CATEGORY_MYSQL_PING: Final = "MYSQL_PING"
 CATEGORY_MYSQL_PING_TIMEOUT: Final = "MYSQL_PING_TIMEOUT"
 CATEGORY_CLAIM_PROBE: Final = "CLAIM_PROBE"
+CATEGORY_CLAIM_RECOVERY: Final = "CLAIM_RECOVERY"
 CATEGORY_INSTALL: Final = "INSTALL"
 CATEGORY_CLOSE: Final = "CLOSE"
 CATEGORY_DRAIN_TIMEOUT: Final = "DRAIN_TIMEOUT"
@@ -59,6 +60,7 @@ _SAFE_CATEGORIES: Final = frozenset(
         CATEGORY_MYSQL_PING,
         CATEGORY_MYSQL_PING_TIMEOUT,
         CATEGORY_CLAIM_PROBE,
+        CATEGORY_CLAIM_RECOVERY,
         CATEGORY_INSTALL,
         CATEGORY_CLOSE,
         CATEGORY_DRAIN_TIMEOUT,
@@ -506,6 +508,11 @@ class InternalPlaneResources:
                     raise InternalPlaneError(CATEGORY_CLAIM_PROBE) from exc
 
                 await self._run_claim_probe(claim_validator, mysql_db)
+                # A hard-killed Sandbox loses all in-memory inflight sets.
+                # Reconcile durable RUNNING claims before the bundle can become
+                # READY or any route can be admitted.  The production validator
+                # supplies this method; injected offline fakes may omit it.
+                await self._run_claim_recovery(claim_validator)
 
                 self._prepared = PreparedInternalPlane(
                     redis_client=redis_client,
@@ -599,7 +606,7 @@ class InternalPlaneResources:
             # In-flight tasks keep strong refs to runtime/claim_validator.
             target = self._install_target
             if target is not None:
-                await self._clear_target_slots(target)
+                await self._clear_target_admission_slots(target)
                 self._install_target = None
 
             # 2) Bounded drain (never cancel in-flight finalize work).
@@ -635,7 +642,12 @@ class InternalPlaneResources:
                 except Exception as exc:
                     _log_failure("reconcile", CATEGORY_RECONCILE, exc)
 
-            # 4) Close prepared handles with bound (after reconcile).
+            # 4) Only now detach manager persistence. In-flight process work may
+            # need the formal repository throughout drain and UNKNOWN reconcile.
+            if target is not None:
+                await self._clear_target_persistence(target)
+
+            # 5) Close prepared handles with bound (after reconcile).
             prepared = self._prepared
             self._prepared = None
             if prepared is not None:
@@ -654,6 +666,22 @@ class InternalPlaneResources:
                 await maybe_await(method(None))
             except Exception as exc:
                 _log_failure(f"clear_{setter_name}", CATEGORY_CLOSE, exc)
+
+    async def _clear_target_admission_slots(self, target: InstallTarget) -> None:
+        for setter_name, method in (
+            ("replay_store", target.set_replay_store),
+            ("claim_validator", target.set_claim_validator),
+        ):
+            try:
+                await maybe_await(method(None))
+            except Exception as exc:
+                _log_failure(f"clear_{setter_name}", CATEGORY_CLOSE, exc)
+
+    async def _clear_target_persistence(self, target: InstallTarget) -> None:
+        try:
+            await maybe_await(target.set_mysql_database(None))
+        except Exception as exc:
+            _log_failure("clear_mysql_database", CATEGORY_CLOSE, exc)
 
     async def _ping_redis(self, client: Any) -> None:
         ping = getattr(client, "ping", None)
@@ -751,11 +779,37 @@ class InternalPlaneResources:
         except asyncio.TimeoutError as exc:
             _log_failure("claim_probe", CATEGORY_CLAIM_PROBE, exc)
             raise InternalPlaneError(CATEGORY_CLAIM_PROBE) from exc
+
+    async def _run_claim_recovery(self, claim_validator: Any) -> None:
+        """Run trusted durable claim recovery off the event loop.
+
+        Recovery is deliberately a separate lifecycle step from the schema
+        probe so a database/ledger failure is surfaced as a startup failure,
+        never as a partially ready Sandbox.  The method is optional only for
+        protocol fakes used by offline lifecycle tests; the production
+        ``ToolExecutionClaimValidator`` always implements it.
+        """
+        recover = getattr(claim_validator, "recover_running_executions", None)
+        if not callable(recover):
+            return
+        try:
+            result = await invoke_maybe_async(
+                recover,
+                timeout=self._mysql_ping_timeout,
+                run_sync_in_thread=True,
+            )
+            if type(result) is not int or result < 0:
+                raise ValueError("claim recovery returned an invalid count")
+            if result:
+                logger.info("reconciled %d durable RUNNING Sandbox claim(s)", result)
+        except asyncio.TimeoutError as exc:
+            _log_failure("claim_recovery", CATEGORY_CLAIM_RECOVERY, exc)
+            raise InternalPlaneError(CATEGORY_CLAIM_RECOVERY) from exc
         except InternalPlaneError:
             raise
         except Exception as exc:
-            _log_failure("claim_probe", CATEGORY_CLAIM_PROBE, exc)
-            raise InternalPlaneError(CATEGORY_CLAIM_PROBE) from exc
+            _log_failure("claim_recovery", CATEGORY_CLAIM_RECOVERY, exc)
+            raise InternalPlaneError(CATEGORY_CLAIM_RECOVERY) from exc
 
     async def _safe_close(self, redis_client: Any, mysql_db: Any) -> None:
         if redis_client is not None:

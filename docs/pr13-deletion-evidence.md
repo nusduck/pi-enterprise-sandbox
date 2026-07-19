@@ -59,7 +59,8 @@ artifacts, or Sandbox-mounted `/agent-runs` / `/agent-sessions`.
 | `agent/infrastructure/mcp-connection-manager.js` | agent-runtime only | `pi-mcp-adapter` only |
 | process-local SSE (`sdk-sse-map` / `event-bridge`) | agent-runtime | `RunEventSseService` |
 
-Retained `agent/runtime/tool-contract.js` for kit test allowlists — not a Run path.
+The subsequent dependency-cleanup change deleted
+`agent/runtime/tool-contract.js` together with the kit-only tests that used it.
 
 ## Artifact compatibility removed
 
@@ -76,20 +77,18 @@ Retained `agent/runtime/tool-contract.js` for kit test allowlists — not a Run 
 | Global presentation symlink | Removed (PR-07); `LEGACY_WORKSPACE_LINK` constant deleted |
 | `/home/sandbox/workspace` | Kept as Bubblewrap logical bind — not a dual store |
 
-## SQLite boundary (precise)
+## SQLite compatibility removal
 
-| Layer | Role after PR-13 severe follow-up |
-| --- | --- |
-| Production `SANDBOX_DATABASE_URL` | **MySQL only** (`validate_production_settings` rejects sqlite/postgres) |
-| Offline conftest | May inject `sqlite://` for hermetic **non-Run** subsystems (sessions, executions, processes, approvals, audit, retention child tables) |
-| Sandbox tables `agent_runs` / `agent_sessions` / `tool_executions` in SQLite schema | Schema + `AgentRunRepository` remain for **retention purge** of orphan historical rows only (`ttl_cleanup`). **No public API** creates or reads them as Run/Session authority. |
-| Module-level legacy managers | **Deleted** — production startup no longer imports `agent_run_manager` / `agent_session_manager` |
-
-Do **not** treat residual SQLite table DDL as dual Run authority: authority is absence of HTTP + absence of dual-write + Agent MySQL for runs.
+The Sandbox has no SQLite persistence boundary. `sandbox/database.py`,
+`sandbox/repositories.py`, the legacy managers, cleanup loop, and public
+Session/Run/Approval/Conversation routers are deleted. The formal import test
+asserts that these modules are absent from `sys.modules` and the filesystem.
+Sandbox startup accepts only a MySQL-shaped DSN; tests that exercise rejection
+construct `Settings` explicitly and never activate an SQLite runtime.
 
 ## Intentionally deferred (see review-deferred-items.md)
 
-- Wholesale SQLite backend removal / MySQL-only offline suite
-- Deleting unused Pydantic models / `AgentSessionRepository` class bodies still in `repositories.py` (no production import of manager; hygiene only)
-- Full removal of `enterprise-agent-kit` package (lockfile forbidden this PR)
+- Live MySQL migration/concurrency evidence remains a release gate; it is not
+  replaced by a local SQLite fixture.
+- Full removal of `enterprise-agent-kit` package was deferred in PR-13 and completed in the subsequent dependency-cleanup change.
 - Dockerfile empty `/sandbox/workspace` dir; HTTP artifacts `/register` alias

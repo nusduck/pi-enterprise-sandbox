@@ -1,7 +1,7 @@
 """Pytest bootstrap — host-safe paths before any sandbox imports.
 
-Sets SANDBOX_* env vars at collection time so the Settings singleton and
-module-level database.initialize() never touch /sandbox (read-only on macOS).
+Sets SANDBOX_* env vars at collection time so the Settings singleton uses
+host-safe storage roots and a non-routable formal MySQL test DSN.
 """
 
 from __future__ import annotations
@@ -15,20 +15,20 @@ _TEST_ROOT = Path(tempfile.mkdtemp(prefix="pi_sandbox_pytest_"))
 _WORKSPACES = _TEST_ROOT / "workspaces"
 _TEMPS = _TEST_ROOT / "tmp-workspaces"
 _SKILLS = _TEST_ROOT / "skill"
-_DATA = _TEST_ROOT / "data"
 _ARTIFACTS = _TEST_ROOT / "artifacts"
 _CONTROL = _TEST_ROOT / "control"
 
 _WORKSPACES.mkdir(parents=True, exist_ok=True)
 _TEMPS.mkdir(parents=True, exist_ok=True)
 _SKILLS.mkdir(parents=True, exist_ok=True)
-_DATA.mkdir(parents=True, exist_ok=True)
 _ARTIFACTS.mkdir(parents=True, exist_ok=True)
 _CONTROL.mkdir(parents=True, exist_ok=True)
 
-# Force env BEFORE sandbox.config / sandbox.database are imported by tests.
+# Force env BEFORE sandbox.config is imported by tests.
 # Use assignment (not setdefault) so host/.env values cannot pollute the suite.
-os.environ["SANDBOX_DATABASE_URL"] = f"sqlite:///{_DATA / 'sandbox.db'}"
+os.environ["SANDBOX_DATABASE_URL"] = (
+    "mysql+pymysql://sandbox@127.0.0.1:3306/pi_sandbox_unit_test"
+)
 os.environ["SANDBOX_WORKSPACES_ROOT"] = str(_WORKSPACES)
 os.environ["SANDBOX_TEMP_ROOT"] = str(_TEMPS)
 os.environ["SANDBOX_SKILLS_ROOT"] = str(_SKILLS)
@@ -48,7 +48,9 @@ os.environ.setdefault("SANDBOX_TRUSTED_PROXY_CIDRS", "")
 
 
 def _force_hermetic_sandbox_env() -> None:
-    os.environ["SANDBOX_DATABASE_URL"] = f"sqlite:///{_DATA / 'sandbox.db'}"
+    os.environ["SANDBOX_DATABASE_URL"] = (
+        "mysql+pymysql://sandbox@127.0.0.1:3306/pi_sandbox_unit_test"
+    )
     os.environ["SANDBOX_WORKSPACES_ROOT"] = str(_WORKSPACES)
     os.environ["SANDBOX_TEMP_ROOT"] = str(_TEMPS)
     os.environ["SANDBOX_SKILLS_ROOT"] = str(_SKILLS)
@@ -60,7 +62,6 @@ def _force_hermetic_sandbox_env() -> None:
     _WORKSPACES.mkdir(parents=True, exist_ok=True)
     _TEMPS.mkdir(parents=True, exist_ok=True)
     _SKILLS.mkdir(parents=True, exist_ok=True)
-    _DATA.mkdir(parents=True, exist_ok=True)
     _ARTIFACTS.mkdir(parents=True, exist_ok=True)
     _CONTROL.mkdir(parents=True, exist_ok=True)
 
@@ -112,7 +113,7 @@ def formal_id(kind: str = "X") -> str:
     """Return a unique 26-char Crockford Base32 formal id for tests.
 
     Uses cryptographic randomness so concurrent / cross-module suites never
-    collide on agent_session_id or workspace_id (shared SQLite session table).
+    collide on formal agent_session_id or workspace_id values.
     """
     import secrets
 

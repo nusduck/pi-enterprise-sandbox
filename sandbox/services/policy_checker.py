@@ -22,7 +22,7 @@ from sandbox.models import (
     ToolCallDecision,
 )
 
-# Keep in sync with agent/packages/enterprise-agent-kit/extensions/policy/index.js.
+# Keep shared policy vocabulary aligned with agent/src/extensions/enterprise-policy/.
 POLICY_VERSION = "2026-07-15.1"
 POLICY_PROFILES = frozenset({"strict", "balanced"})
 
@@ -577,9 +577,9 @@ class ToolPolicyChecker:
         roots = ("/home/sandbox/workspace", "/tmp")
         if any(raw == root or raw.startswith(root + "/") for root in roots):
             return False
-        if tool_name in _LOW_TOOLS and any(
-            raw == root or raw.startswith(root + "/")
-            for root in ("/home/sandbox/skill", "/sandbox/skills", "/app/.pi/skills")
+        if tool_name in _LOW_TOOLS and (
+            raw == "/home/sandbox/skill"
+            or raw.startswith("/home/sandbox/skill/")
         ):
             return False
         return True

@@ -202,8 +202,13 @@ export function validateProductionConfig(env = process.env, opts = {}) {
   const internal = String(env.AGENT_INTERNAL_TOKEN || '').trim();
   const sandboxToken = String(env.SANDBOX_API_TOKEN || '').trim();
   const skillsMode = opts.skillsMode || resolveSkillsMode(env);
+  const productionSkillRoots = resolveSkillRoots(env);
   const requestedProfile = requestedPolicyProfile(env);
   const approvalMode = resolveApprovalMode(env);
+  const a2aPublicBaseUrl = String(env.A2A_PUBLIC_BASE_URL || '').trim();
+  const a2aDownloadSecret = String(
+    env.A2A_ARTIFACT_DOWNLOAD_SECRET || '',
+  ).trim();
 
   if (!internal) {
     errors.push('AGENT_INTERNAL_TOKEN must be non-empty in production');
@@ -224,6 +229,14 @@ export function validateProductionConfig(env = process.env, opts = {}) {
   if (skillsMode === SKILLS_MODE.DEVELOPMENT) {
     errors.push('SKILLS_MODE=development is forbidden in production (use readonly)');
   }
+  if (
+    productionSkillRoots.length !== 1 ||
+    productionSkillRoots[0] !== DEFAULT_SKILL_ROOTS[0]
+  ) {
+    errors.push(
+      `SKILLS_ROOT must be the canonical ${DEFAULT_SKILL_ROOTS[0]} path in production`,
+    );
+  }
 
   if (requestedProfile === 'balanced' && !effectiveBubblewrap(env)) {
     errors.push(
@@ -236,6 +249,33 @@ export function validateProductionConfig(env = process.env, opts = {}) {
 
   if (approvalMode === APPROVAL_MODES.AUTO_APPROVE) {
     errors.push('APPROVAL_MODE=auto_approve is forbidden in production (use ask or deny)');
+  }
+
+  if (!a2aPublicBaseUrl) {
+    errors.push('A2A_PUBLIC_BASE_URL must be set in production');
+  } else {
+    try {
+      const parsed = new URL(a2aPublicBaseUrl);
+      if (
+        parsed.protocol !== 'https:' ||
+        parsed.username ||
+        parsed.password ||
+        parsed.search ||
+        parsed.hash ||
+        parsed.pathname !== '/'
+      ) {
+        errors.push(
+          'A2A_PUBLIC_BASE_URL must be an https origin without path, credentials, query, or fragment',
+        );
+      }
+    } catch {
+      errors.push('A2A_PUBLIC_BASE_URL must be a valid https origin');
+    }
+  }
+  if (isWeakSecret(a2aDownloadSecret)) {
+    errors.push(
+      `A2A_ARTIFACT_DOWNLOAD_SECRET is weak or shorter than ${MIN_SECRET_LEN} characters`,
+    );
   }
 
   const baseUrl = String(env.LLMIO_BASE_URL || '').toLowerCase();
@@ -280,6 +320,10 @@ export function effectiveConfig(cfg = config) {
     SANDBOX_BASE_URL: cfg.SANDBOX_BASE_URL,
     SANDBOX_API_TOKEN: cfg.SANDBOX_API_TOKEN ? '***' : '<empty>',
     AGENT_INTERNAL_TOKEN: cfg.AGENT_INTERNAL_TOKEN ? '***' : '<empty>',
+    A2A_PUBLIC_BASE_URL: cfg.A2A_PUBLIC_BASE_URL || '<empty>',
+    A2A_ARTIFACT_DOWNLOAD_SECRET: cfg.A2A_ARTIFACT_DOWNLOAD_SECRET
+      ? '***'
+      : '<empty>',
     LLMIO_BASE_URL: cfg.LLMIO_BASE_URL ? cfg.LLMIO_BASE_URL : '<empty>',
     LLMIO_API_KEY: cfg.LLMIO_API_KEY ? '***' : '<empty>',
     MODEL_ID: cfg.MODEL_ID,
@@ -407,6 +451,12 @@ export const config = {
     String(process.env.AGENT_FORCE_INMEMORY || '').trim() === '1',
 };
 
-export const AUTH_HEADER = config.SANDBOX_API_TOKEN
-  ? { 'X-API-Key': config.SANDBOX_API_TOKEN }
-  : {};
+/** Resolve at request time so an existing client observes in-process rotation. */
+export function resolveSandboxAuthHeader(env = process.env) {
+  const token = String(env?.SANDBOX_API_TOKEN || '').trim();
+  return token ? { 'X-API-Key': token } : {};
+}
+
+// Compatibility snapshot for external imports. Production request paths call
+// resolveSandboxAuthHeader() and do not retain this module-load value.
+export const AUTH_HEADER = resolveSandboxAuthHeader();

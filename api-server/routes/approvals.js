@@ -1,12 +1,46 @@
 /**
- * Route: POST /api/approvals/:id/decide — proxy sandbox approval decision
- * and notify Agent to resume any parked waiting_approval run (B6).
+ * Approval API. Agent MySQL is the only read/write authority.
  */
-import { createSandboxClient } from '../services/sandbox-client.js';
-import { decideAgentApproval } from '../services/agent-client.js';
+import {
+  decideAgentApproval,
+  getAgentApproval,
+  listAgentApprovals,
+} from '../services/agent-client.js';
 import { resolveTrustedAuth } from '../application/run-access-service.js';
-import { decideApprovalAndResume } from '../application/approval-decision-service.js';
 import { sendError, sendJson as json } from '../http/response.js';
+
+/** GET /api/approvals — Agent MySQL is the approval read authority. */
+export async function handleListApprovals(parsedUrl, res, req = null) {
+  try {
+    const auth = await resolveTrustedAuth(req);
+    const result = await listAgentApprovals(
+      {
+        status: parsedUrl.searchParams.get('status') || null,
+        limit: parsedUrl.searchParams.get('limit') || null,
+      },
+      { auth, traceId: req?.traceId },
+    );
+    json(res, 200, result);
+  } catch (err) {
+    console.error('[approvals] list:', err.message);
+    sendError(res, err, req?.traceId);
+  }
+}
+
+/** GET /api/approvals/:id — owner-scoped Agent MySQL detail. */
+export async function handleGetApproval(approvalId, res, req = null) {
+  try {
+    const auth = await resolveTrustedAuth(req);
+    const result = await getAgentApproval(approvalId, {
+      auth,
+      traceId: req?.traceId,
+    });
+    json(res, 200, result);
+  } catch (err) {
+    console.error('[approvals] get:', err.message);
+    sendError(res, err, req?.traceId);
+  }
+}
 
 /**
  * POST /api/approvals/:id/decide  body: { decision: 'approve' | 'reject', run_id? }
@@ -23,36 +57,37 @@ export async function handleDecideApproval(approvalId, body, res, req = null) {
   }
   try {
     const auth = await resolveTrustedAuth(req);
-    const client = createSandboxClient({ auth, traceId: req?.traceId });
-    const outcome = await decideApprovalAndResume({
-      sandbox: client,
-      notifyAgent: (id, payload) =>
-        decideAgentApproval(
-          id,
-          payload,
-          { auth, traceId: req?.traceId },
-        ),
+    const outcome = await decideAgentApproval(
       approvalId,
-      decision,
-      runId: body.run_id || null,
-      reason: body.reason || null,
-    });
+      {
+        decision,
+        run_id: body.run_id || null,
+        reason: body.reason || null,
+      },
+      { auth, traceId: req?.traceId },
+    );
+    const resumePending = Boolean(
+      outcome.resumePending ?? outcome.resume_pending,
+    );
 
-    if (outcome.resumePending) {
-      console.warn('[approvals] decision persisted; Agent resume is pending:', outcome.resumeError);
+    if (resumePending) {
+      console.warn(
+        '[approvals] decision persisted; Agent resume is pending:',
+        outcome.resumeError || outcome.resume_error,
+      );
       json(res, 202, {
-        ...outcome.result,
+        ...outcome,
         agent_resume: null,
         agent_resume_status: 'pending',
-        agent_resume_error: outcome.resumeError,
+        agent_resume_error: outcome.resumeError || outcome.resume_error || null,
       });
       return;
     }
 
     json(res, 200, {
-      ...outcome.result,
-      agent_resume: outcome.agentResume,
-      agent_resume_status: 'resumed',
+      ...outcome,
+      agent_resume: { queued: outcome.queued === true },
+      agent_resume_status: outcome.queued ? 'queued' : 'not_required',
     });
   } catch (err) {
     console.error('[approvals] decide:', err.message);

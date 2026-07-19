@@ -20,21 +20,20 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 from sandbox.config import settings
-from sandbox.database import Database
+from sandbox.app.domain.ulid import new_ulid
 from sandbox.isolation import IsolationBackend, LaunchSpec, build_isolation_backend
 from sandbox.models import (
     PROCESS_ACTIVE_STATUSES,
     PROCESS_TERMINAL_STATUSES,
     ProcessStatus,
 )
-from sandbox.repositories import ProcessRepository
 from sandbox.paths import SandboxPathScope, temp_id_for_workspace_id
 from sandbox.security.path_validation import parse_sandbox_path
 from sandbox.services.execution_context import SandboxExecutionContext
-from sandbox.services.execution_stream import (
+from sandbox.services.transient_execution_stream import (
     SOURCE_PROCESS,
-    execution_stream,
     full_log_location,
+    transient_execution_stream,
 )
 from sandbox.trace import get_trace_id
 from sandbox.utils.resource_limits import (
@@ -164,6 +163,34 @@ def normalize_authoritative_user_id(raw: Any) -> str | None:
     if not _OWNER_USER_ID_RE.fullmatch(text):
         return None
     return text
+
+
+class _UnconfiguredProcessRepository:
+    """Read-empty port used before lifecycle installs formal MySQL authority."""
+
+    db = None
+
+    def upsert(self, entry: dict[str, Any]) -> None:
+        del entry
+        raise RuntimeError("formal process persistence is not installed")
+
+    def get(self, process_id: str) -> None:
+        del process_id
+        return None
+
+    def list_active(self) -> list[dict[str, Any]]:
+        return []
+
+    def list_by_session(self, session_id: str) -> list[dict[str, Any]]:
+        del session_id
+        return []
+
+    def list_by_run(self, run_id: str) -> list[dict[str, Any]]:
+        del run_id
+        return []
+
+    def total_count(self) -> int:
+        return 0
 
 
 class _LogBuffer:
@@ -314,14 +341,15 @@ class ProcessManager:
 
     def __init__(
         self,
-        database: Database | None = None,
         *,
         stream_hub: Any | None = None,
         isolation_backend: IsolationBackend | None = None,
         formal_dual_writer: FormalProcessDualWriter | None = None,
     ) -> None:
-        self.repository = ProcessRepository(database)
-        self._stream = stream_hub if stream_hub is not None else execution_stream
+        self.repository = _UnconfiguredProcessRepository()
+        self._stream = (
+            stream_hub if stream_hub is not None else transient_execution_stream
+        )
         self._isolation = isolation_backend or build_isolation_backend()
         self._formal = formal_dual_writer or FormalProcessDualWriter(None)
         self._lock = threading.RLock()
@@ -346,8 +374,8 @@ class ProcessManager:
         )
         self._refresh_limits_from_settings()
         self._orphans_marked = 0
-        # Mark any pre-existing active rows as LOST/ORPHANED (runner restart).
-        self._mark_orphans_from_db()
+        # Formal MySQL recovery runs after lifecycle composition; never touch
+        # persistence while modules are being imported.
         with self._lock:
             self._evict_terminal_if_needed()
 
@@ -451,12 +479,24 @@ class ProcessManager:
         return True
 
     def _persist(self, entry: dict[str, Any]) -> None:
-        """Persist runtime ledger + optional formal dual-write."""
-        self.repository.upsert(entry)
-        try:
-            self._formal.upsert_from_runtime(entry)
-        except Exception:
-            logger.debug("formal dual-write wrapper failed", exc_info=True)
+        """Persist to the configured authority before exposing runtime state."""
+        if not self._formal.enabled:
+            raise RuntimeError("process persistence is not installed")
+        self._formal.upsert_from_runtime(entry)
+
+    def set_formal_repository(
+        self,
+        repo: Any | None,
+        *,
+        conn_factory: Any | None = None,
+        authoritative: bool = True,
+    ) -> None:
+        """Install or clear the lifespan-owned formal process repository."""
+        self._formal = FormalProcessDualWriter(
+            repo,
+            conn_factory=conn_factory,
+            authoritative=authoritative,
+        )
 
     def _stream_buffers_locked(self, process_id: str) -> dict[str, StreamLogBuffer]:
         bufs = self._stream_logs.get(process_id)
@@ -531,108 +571,87 @@ class ProcessManager:
 
     # ── Orphan detection ─────────────────────────────────────────────
 
-    def _mark_orphans_from_db(self) -> int:
-        """On startup, resolve non-terminal rows without live Popen handles.
+    def mark_orphans(self) -> int:
+        """Reconcile active formal process rows after a worker restart."""
+        with self._lock:
+            return self.recover_formal_orphans()
 
-        After a runner restart we **cannot** reattach stdout/stderr pipes.
-        Using durable ``pid`` + ``start_identity`` (+ pgid):
-
-        - identity still matches a live OS process → TERM/KILL that verified
-          tree, then mark ``LOST`` (control plane recovered, not RUNNING).
-        - identity missing or PID reuse → mark ``LOST`` **without** signaling
-          (never kill a reused PID).
-        - never leaves rows forever RUNNING after recovery.
-        """
-        count = 0
-        try:
-            active = self.repository.list_active()
-        except Exception:
-            # Table may not exist yet during very early import; lifespan re-runs.
-            logger.exception("process orphan scan failed (table may be missing)")
-            return 0
+    def recover_formal_orphans(self) -> int:
+        """Resolve formal MySQL process rows left active by a runner restart."""
+        recovered = 0
         now = _now_iso()
-        for row in active:
-            process_id = row["process_id"]
-            os_pid = row.get("pid")
-            start_identity = row.get("start_identity")
-            pgid = row.get("pgid")
+        for record in self._formal.list_active_for_recovery():
+            command_json = (
+                dict(record.command_json)
+                if isinstance(record.command_json, dict)
+                else {}
+            )
+            start_identity = command_json.get("start_identity")
+            pgid = command_json.get("pgid")
             try:
                 pgid_i = int(pgid) if pgid is not None else None
             except (TypeError, ValueError):
                 pgid_i = None
 
             signaled = False
-            if os_pid is not None and start_identity:
-                # Only signal when durable identity still matches (PID reuse safe).
-                r = safe_signal_identity(
-                    pid=int(os_pid),
+            if record.pid is not None and start_identity:
+                result = safe_signal_identity(
+                    pid=int(record.pid),
                     pgid=pgid_i,
                     start_identity=str(start_identity),
                     signum=signal.SIGTERM,
                 )
-                if r.get("signaled"):
+                if result.get("signaled"):
                     signaled = True
-                    # Escalate if still alive under same identity.
-                    if identity_matches(int(os_pid), str(start_identity)):
+                    if identity_matches(int(record.pid), str(start_identity)):
                         safe_signal_identity(
-                            pid=int(os_pid),
+                            pid=int(record.pid),
                             pgid=pgid_i,
                             start_identity=str(start_identity),
                             signum=signal.SIGKILL,
                         )
-            elif os_pid is not None and process_alive(os_pid) and not start_identity:
-                # No identity → fail closed: do not kill (possible PID reuse).
+            elif record.pid is not None and process_alive(record.pid):
                 logger.warning(
-                    "process %s active after restart without start_identity; "
-                    "not signaling pid %s",
-                    process_id,
-                    os_pid,
+                    "formal process %s active after restart without "
+                    "start_identity; not signaling pid %s",
+                    record.process_id,
+                    record.pid,
                 )
 
-            row["status"] = ProcessStatus.LOST.value
-            row["finished_at"] = row.get("finished_at") or now
-            row["updated_at"] = now
-            note = (
-                "lost: runner restart; identity-signaled"
-                if signaled
-                else "lost: runner restart; control plane cannot reattach"
+            self._formal.upsert_from_runtime(
+                {
+                    "process_id": record.process_id,
+                    "org_id": record.org_id,
+                    "user_id": record.user_id,
+                    "sandbox_session_id": record.sandbox_session_id,
+                    "session_id": record.sandbox_session_id,
+                    "run_id": record.run_id,
+                    "execution_id": record.execution_id,
+                    "command": command_json.get("command") or "",
+                    "cwd": command_json.get("cwd"),
+                    "pgid": pgid_i,
+                    "start_identity": start_identity,
+                    "timeout_seconds": command_json.get("timeout_seconds"),
+                    "background": bool(command_json.get("background")),
+                    "status": ProcessStatus.LOST.value,
+                    "pid": record.pid,
+                    "exit_code": -signal.SIGTERM if signaled else -1,
+                    "stdout_path": record.stdout_path,
+                    "stderr_path": record.stderr_path,
+                    "started_at": record.started_at,
+                    "finished_at": record.ended_at or now,
+                    "created_at": record.created_at,
+                }
             )
-            row["error"] = row.get("error") or note
-            if row.get("exit_code") is None:
-                row["exit_code"] = -signal.SIGTERM if signaled else -1
-            try:
-                self._persist(row)
-            except Exception:
-                try:
-                    self.repository.upsert(row)
-                except Exception:
-                    logger.exception("failed to mark process %s lost", process_id)
-                    continue
-            self._entries[process_id] = row
-            self._logs[process_id] = _LogBuffer(self._max_log_chars)
-            buf = self._logs[process_id]
-            if row.get("stdout_log"):
-                buf.append("stdout", row["stdout_log"])
-            if row.get("stderr_log"):
-                buf.append("stderr", row["stderr_log"])
-            # Seed independent stream cursors from snapshots (best-effort).
-            streams = self._stream_buffers_locked(process_id)
-            if row.get("stdout_log"):
-                streams["stdout"].append(row["stdout_log"])
-            if row.get("stderr_log"):
-                streams["stderr"].append(row["stderr_log"])
-            self._done_events[process_id] = threading.Event()
-            self._done_events[process_id].set()
-            count += 1
-        self._orphans_marked = count
-        if count:
-            logger.info("Marked %d process execution(s) as LOST after restart", count)
-        return count
+            recovered += 1
 
-    def mark_orphans(self) -> int:
-        """Public re-scan (e.g. lifespan). Idempotent for already-orphaned rows."""
-        with self._lock:
-            return self._mark_orphans_from_db()
+        self._orphans_marked += recovered
+        if recovered:
+            logger.info(
+                "Marked %d formal process execution(s) as LOST after restart",
+                recovered,
+            )
+        return recovered
 
     @staticmethod
     def _coerce_context(
@@ -726,7 +745,11 @@ class ProcessManager:
                 "code": admit.code or "workspace_quota_enforcement_failed",
             }
 
-        process_id = f"proc_{uuid.uuid4().hex[:12]}"
+        process_id = (
+            new_ulid()
+            if self._formal.authoritative
+            else f"proc_{uuid.uuid4().hex[:12]}"
+        )
         now = _now_iso()
         user_id = normalize_authoritative_user_id(
             getattr(context, "user_id", None)
@@ -810,9 +833,6 @@ class ProcessManager:
         # Hard RLIMIT_* + setsid only in child preexec (same path as bash/python).
         _limit_kwargs = child_resource_limit_kwargs(settings)
 
-        def _preexec() -> None:
-            apply_resource_limits(**_limit_kwargs)
-
         try:
             prepared = self._isolation.prepare(
                 LaunchSpec(
@@ -822,11 +842,22 @@ class ProcessManager:
                     cwd_scope=sandbox_cwd.scope,
                     env_overrides=env or {},
                     network_mode=settings.network_mode,
+                    # Durable Process Handles persist PID/start identity in
+                    # MySQL. They must survive the API process briefly so
+                    # restart recovery can TERM/KILL the verified orphan and
+                    # mark the formal row LOST.
+                    die_with_parent=False,
+                    max_process_count=_limit_kwargs["max_process_count"],
                 )
             )
             entry["isolation_backend"] = prepared.backend
+            if prepared.nproc_limit_applied_inside_namespace:
+                _limit_kwargs["max_process_count"] = 0
         except (OSError, PermissionError, ValueError) as exc:
             return self._fail_start(entry, f"Isolation preparation failed: {exc}")
+
+        def _preexec() -> None:
+            apply_resource_limits(**_limit_kwargs)
 
         try:
             proc = subprocess.Popen(
@@ -1299,6 +1330,125 @@ class ProcessManager:
 
     # ── Query ────────────────────────────────────────────────────────
 
+    def get_owned(
+        self,
+        process_id: str,
+        *,
+        org_id: str,
+        user_id: str,
+        sandbox_session_id: str,
+    ) -> dict[str, Any] | None:
+        """Read only after formal owner and SandboxSession scope validation."""
+        formal = self._formal.get_owned(
+            process_id,
+            org_id=org_id,
+            user_id=user_id,
+            sandbox_session_id=sandbox_session_id,
+        )
+        if formal is None:
+            return None
+        with self._lock:
+            entry = self._entries.get(process_id)
+            if entry is not None:
+                if (
+                    entry.get("org_id") != org_id
+                    or entry.get("user_id") != user_id
+                    or entry.get("sandbox_session_id") != sandbox_session_id
+                ):
+                    return None
+                return self._public_view(entry)
+        command_json = formal.command_json if isinstance(formal.command_json, dict) else {}
+        return {
+            "process_id": formal.process_id,
+            "session_id": formal.sandbox_session_id,
+            "run_id": formal.run_id,
+            "command": str(command_json.get("command") or ""),
+            "status": formal.status,
+            "pid": formal.pid,
+            "exit_code": formal.exit_code,
+            "background": bool(command_json.get("background")),
+            "cwd": command_json.get("cwd"),
+            "error": None,
+            "timeout_seconds": command_json.get("timeout_seconds"),
+            "started_at": formal.started_at,
+            "finished_at": formal.ended_at,
+            "created_at": formal.created_at,
+            "updated_at": formal.ended_at or formal.started_at or formal.created_at,
+            "trace_id": None,
+            "stdout_cursor": INITIAL_CURSOR,
+            "stderr_cursor": INITIAL_CURSOR,
+            "elapsed_seconds": None,
+        }
+
+    def read_stream_owned(
+        self,
+        process_id: str,
+        *,
+        org_id: str,
+        user_id: str,
+        sandbox_session_id: str,
+        stream: str,
+        cursor: str,
+        limit: int,
+    ) -> dict[str, Any] | None:
+        owned = self.get_owned(
+            process_id,
+            org_id=org_id,
+            user_id=user_id,
+            sandbox_session_id=sandbox_session_id,
+        )
+        if owned is None:
+            return None
+        with self._lock:
+            live = process_id in self._entries
+        if live:
+            return self.read_stream(
+                process_id, stream=stream, cursor=cursor, limit=limit
+            )
+        # Formal schema keeps process metadata, not inline log bodies.  After a
+        # restart/eviction return an explicit bounded empty/truncated slice.
+        try:
+            parsed = parse_cursor(cursor)
+        except ValueError as exc:
+            return {"process_id": process_id, "stream": stream, "error": str(exc), "status": "invalid"}
+        normalized = encode_cursor(parsed.generation, parsed.offset)
+        return {
+            "process_id": process_id,
+            "stream": stream,
+            "cursor": normalized,
+            "next_cursor": normalized,
+            "data": "",
+            "truncated": True,
+            "completed": _is_terminal(owned.get("status")),
+            "status": owned.get("status"),
+            "dropped": True,
+            "log_total": 0,
+        }
+
+    def signal_process_owned(
+        self,
+        process_id: str,
+        sig: str | int,
+        *,
+        org_id: str,
+        user_id: str,
+        sandbox_session_id: str,
+    ) -> dict[str, Any]:
+        owned = self.get_owned(
+            process_id,
+            org_id=org_id,
+            user_id=user_id,
+            sandbox_session_id=sandbox_session_id,
+        )
+        if owned is None:
+            return {"error": "not found", "status": "not_found", "ok": False}
+        with self._lock:
+            if process_id not in self._entries:
+                # No live Popen/start identity is available after restart. Never
+                # signal a PID using processId/formal metadata alone.
+                return {"error": "process control unavailable", "status": "unavailable", "ok": False, "signaled": False}
+        return self.signal_process(process_id, sig)
+
     def get(self, process_id: str) -> dict[str, Any] | None:
         with self._lock:
             mem = self._entries.get(process_id)
@@ -1557,7 +1707,7 @@ class ProcessManager:
             if _status_value(entry.get("status")) == ProcessStatus.WAITING_INPUT.value:
                 entry["status"] = ProcessStatus.RUNNING.value
                 entry["updated_at"] = _now_iso()
-                self.repository.upsert(entry)
+                self._persist(entry)
 
         return {"ok": True, "status": _status_value(entry.get("status"))}
 
@@ -1988,9 +2138,7 @@ class ProcessManager:
 
     @property
     def total_count(self) -> int:
-        try:
-            return self.repository.total_count()
-        except Exception:
+        with self._lock:
             return len(self._entries)
 
     @property

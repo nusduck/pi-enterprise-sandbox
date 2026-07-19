@@ -184,6 +184,27 @@ export class A2aCredentialRepository {
   }
 
   /**
+   * Admin-only caller contract: organization scope is mandatory.
+   *
+   * @param {string} orgId
+   * @param {{ agentId?: string | null, limit?: number }} [opts]
+   */
+  async listByOrg(orgId, opts = {}) {
+    const oid = assertUlid(orgId, 'orgId');
+    const limit = Math.min(Math.max(Number(opts.limit) || 50, 1), 100);
+    let query = this.db('a2a_api_credentials')
+      .where({ org_id: oid })
+      .orderBy('created_at', 'desc');
+    if (opts.agentId) {
+      query = query.andWhere({
+        agent_id: assertUlid(opts.agentId, 'agentId'),
+      });
+    }
+    const rows = await query.limit(limit);
+    return rows.map(mapA2aCredential);
+  }
+
+  /**
    * @param {{
    *   credentialId: string,
    *   orgId: string,

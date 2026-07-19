@@ -488,7 +488,7 @@ class TestSignedFilesRead:
     ) -> None:
         # Real sandbox app: set API token; internal path must not accept it.
         s = Settings(
-            database_url="sqlite:////tmp/files-read-legacy.db",
+            database_url="mysql+pymysql://sandbox@127.0.0.1:3306/files_read_test",
             allowed_client_cidrs=["127.0.0.1/32", "::1/128"],
             internal_hmac_keyring=_keyring_json(),
             internal_hmac_active_kid=KID,

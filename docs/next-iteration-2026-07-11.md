@@ -1,6 +1,6 @@
 # 下一迭代：生产边界闭环与可升级性
 
-> ⚠️ **SUPERSEDED by Trellis R1–R8 (2026-07-11)** — 本文件是进入规划前的问题清单；实现与验收以 `.trellis/tasks/07-11-r*` 与活跃 `docs/*` 为准。  
+> **SUPERSEDED by `plan.md` (2026-07-18)** — 本文件是进入规划前的问题清单，不再定义现行 Workspace 或审批模型。现行基线是 Agent Session 1:1 Workspace，普通 Sandbox bash/python/node 不审批。
 > 目标拓扑：`Frontend → BFF → 独立 Node Agent → Python Sandbox`（无 Python Agent / 双 Runtime）。
 
 **状态：** 已拆分为 R1–R8 任务并实施中/完成中  
@@ -48,7 +48,7 @@
 
 - 从所有外部响应、SSE、模型上下文、审计摘要与活跃文档移除 `_physical_workspace` 和物理根；内部存储改为私有字段或仅由 service 层解析。
 - 选定并实现真正的每执行环境路径映射方案（例如每 Session 隔离运行容器，或经安全评审的 mount namespace runner）；不得恢复全局 workspace symlink。
-- 保持 Conversation workspace 持久化、重绑与单写租约；为 Bash、Python、Node、MCP、文件、Artifact 和错误路径加入实际运行级断言。
+- 保持 Agent Session workspace 持久化、重绑与单写租约；为 Bash、Python、Node、MCP、文件、Artifact 和错误路径加入实际运行级断言。
 - 增加全仓物理路径泄露扫描，覆盖 API body、SSE fixture、日志与文档；扫描命中仅允许内部部署说明中的显式、非 API 示例。
 
 **验收。** 三种运行时的 `pwd` / `os.getcwd()` / `process.cwd()` 都返回 `/home/sandbox/workspace`；并发 conversation 不串目录；外部响应和普通日志不含 `/var/sandbox/workspaces`；session 重绑后文件仍完整。

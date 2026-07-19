@@ -52,10 +52,12 @@ export function parseLastInsertId(rawResult) {
 export class RunEventRepository {
   /**
    * @param {import('knex').Knex | import('knex').Knex.Transaction} db
+   * @param {{ traceSpans?: { projectRunEvent: Function, advanceRunProjectionWatermark?: Function } | null }} [opts]
    */
-  constructor(db) {
+  constructor(db, opts = {}) {
     if (!db) throw new Error('RunEventRepository requires a knex executor');
     this.db = db;
+    this.traceSpans = opts.traceSpans ?? null;
   }
 
   /**
@@ -141,7 +143,23 @@ export class RunEventRepository {
       }
 
       const row = await trx('run_events').where({ event_id: input.eventId }).first();
-      return mapRunEvent(row);
+      const stored = mapRunEvent(row);
+      // Trace projection is part of the same MySQL transaction as the event.
+      // Failure therefore cannot leave a UI-visible span without its source
+      // event (or vice versa). Existing callers may omit the optional projector.
+      if (this.traceSpans?.projectRunEvent) {
+        const projector =
+          typeof this.traceSpans.forExecutor === 'function'
+            ? this.traceSpans.forExecutor(trx)
+            : this.traceSpans;
+        await projector.projectRunEvent(stored, scope);
+        if (typeof projector.advanceRunProjectionWatermark === 'function') {
+          // Timeline-only events intentionally create no span, but still move
+          // the replay cursor so trace GETs never rescan them indefinitely.
+          await projector.advanceRunProjectionWatermark(stored, scope);
+        }
+      }
+      return stored;
     };
 
     if (this.db.isTransaction === true) {

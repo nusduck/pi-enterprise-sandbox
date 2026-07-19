@@ -11,8 +11,9 @@
  * - Never trust browser-supplied X-Acting-* headers (stripped via authFromRequest).
  * - Server code may set acting headers after validating the user.
  */
-import { randomUUID } from 'node:crypto';
-import { config, AUTH_HEADER } from '../config.js';
+import { randomBytes } from 'node:crypto';
+import { config, resolveSandboxAuthHeader } from '../config.js';
+import { createTraceHeaders } from '../src/infrastructure/sandbox/trace-context.js';
 
 const BASE = config.SANDBOX_BASE_URL;
 const REQUEST_GRACE_MS = 5_000;
@@ -47,6 +48,7 @@ export function authFromRequest(req) {
  * Create a request-scoped sandbox client.
  * @param {{
  *   traceId?: string|null,
+ *   traceState?: string|null,
  *   auth?: {
  *     authorization?: string,
  *     actingUserId?: string,
@@ -55,9 +57,13 @@ export function authFromRequest(req) {
  *   } | null,
  * }} [options]
  */
-export function createSandboxClient({ traceId = null, auth = null } = {}) {
+export function createSandboxClient({ traceId = null, traceState = null, auth = null } = {}) {
   let clientTraceId = traceId || null;
   const authCtx = auth || {};
+
+  function newTraceId() {
+    return randomBytes(16).toString('hex');
+  }
 
   function setTraceId(id) {
     clientTraceId = id || null;
@@ -74,7 +80,7 @@ export function createSandboxClient({ traceId = null, auth = null } = {}) {
       return clientTraceId;
     }
     if (!clientTraceId) {
-      clientTraceId = randomUUID();
+      clientTraceId = newTraceId();
     }
     return clientTraceId;
   }
@@ -91,8 +97,9 @@ export function createSandboxClient({ traceId = null, auth = null } = {}) {
 
     const h = {
       'Content-Type': 'application/json',
-      ...AUTH_HEADER,
       ...safeExtra,
+      // Service identity is resolved last and cannot be overridden by extras.
+      ...resolveSandboxAuthHeader(),
     };
     if (authCtx.authorization) {
       h.Authorization = authCtx.authorization;
@@ -105,12 +112,14 @@ export function createSandboxClient({ traceId = null, auth = null } = {}) {
     }
     const tid = clientTraceId || extra['X-Trace-Id'];
     if (tid) {
-      h['X-Trace-Id'] = tid;
+      Object.assign(h, createTraceHeaders(String(tid).toLowerCase(), {
+        traceState,
+      }));
       if (!clientTraceId) clientTraceId = tid;
     } else {
-      const generated = randomUUID();
+      const generated = newTraceId();
       clientTraceId = generated;
-      h['X-Trace-Id'] = generated;
+      Object.assign(h, createTraceHeaders(generated, { traceState }));
     }
     return h;
   }
@@ -542,8 +551,10 @@ export function createSandboxClient({ traceId = null, auth = null } = {}) {
       return `/sessions/${sessionId}/artifacts/${encodeURIComponent(artifactId)}/download`;
     },
 
-    async downloadArtifactStream(sessionId, artifactId) {
-      return sbFetch(this.artifactDownloadPath(sessionId, artifactId));
+    async downloadArtifactStream(sessionId, artifactId, options = {}) {
+      return sbFetch(this.artifactDownloadPath(sessionId, artifactId), {
+        signal: options.signal,
+      });
     },
 
     // ── Approvals ───────────────────────────────────
@@ -601,7 +612,9 @@ export function createSandboxClient({ traceId = null, auth = null } = {}) {
     // ── Health ──────────────────────────────────────
     async checkHealth() {
       try {
-        const resp = await fetch(`${BASE}/health`, { headers: AUTH_HEADER });
+        const resp = await fetch(`${BASE}/health`, {
+          headers: resolveSandboxAuthHeader(),
+        });
         if (!resp.ok) return null;
         return resp.json();
       } catch {
@@ -750,8 +763,12 @@ export async function listArtifacts(sessionId) {
   return createSandboxClient().listArtifacts(sessionId);
 }
 
-export async function downloadArtifactStream(sessionId, artifactId) {
-  return createSandboxClient().downloadArtifactStream(sessionId, artifactId);
+export async function downloadArtifactStream(sessionId, artifactId, options = {}) {
+  return createSandboxClient().downloadArtifactStream(
+    sessionId,
+    artifactId,
+    options,
+  );
 }
 
 export async function approvalCheck(sessionId, body) {

@@ -73,18 +73,18 @@ function createRecordingTransport(calls) {
       if (m === 'processStart') {
         return {
           processId: '01K0G2PAV8FPMVC9QHJG7JPN5C',
-          status: 'RUNNING',
+          status: 'running',
           stdoutCursor: '0-0',
           stderrCursor: '0-0',
         };
       }
       if (m === 'processStatus') {
-        return { processId: payload.processId, status: 'RUNNING' };
+        return { processId: payload.processId, status: 'running' };
       }
       if (m === 'processRead') {
         return { data: 'x', nextCursor: '0-1', stream: 'stdout' };
       }
-      if (m === 'processKill') return { status: 'SIGNALED' };
+      if (m === 'processKill') return { status: 'running' };
       if (m === 'submitArtifact') {
         return {
           artifactId: '01K0G2PAV8FPMVC9QHJG7JPN5D',

@@ -491,9 +491,9 @@ export function toPiModel(entry, runtime = {}) {
     provider: entry.provider,
     baseUrl: runtime.baseUrl || '',
     reasoning: Boolean(entry.supports_reasoning),
-    headers: runtime.apiKey
-      ? { Authorization: `Bearer ${runtime.apiKey}` }
-      : undefined,
+    // Request credentials belong to Pi ModelRegistry/AuthStorage, not the
+    // immutable Model descriptor.
+    headers: runtime.headers,
     input: [...entry.input_modalities],
     cost,
     contextWindow: entry.context_window,

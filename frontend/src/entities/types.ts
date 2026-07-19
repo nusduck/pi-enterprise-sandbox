@@ -267,17 +267,22 @@ export type DatasetEntity = {
 /** Trace span node for the Trace Panel tree (plan §19.10). */
 export type TraceSpanKind =
   | 'run'
+  | 'queue'
   | 'model'
   | 'tool'
   | 'sandbox'
   | 'mcp'
   | 'artifact'
+  | 'session'
+  | 'a2a'
   | 'error'
   | 'other';
 
 export type TraceSpanEntity = {
   id: string;
   runId: string;
+  orgId: string | null;
+  userId: string | null;
   parentId: string | null;
   kind: TraceSpanKind;
   name: string;

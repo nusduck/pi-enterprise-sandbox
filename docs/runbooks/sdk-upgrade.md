@@ -61,7 +61,8 @@ If the candidate breaks only golden SSE mapping, update `agent/tests/sdk-compat/
 3. Smoke (manual or scripted against staging):
    - Multi-turn chat (history restore)
    - `write` + `submit_artifact` → UI `file_ready` + download
-   - High-risk `bash` → `approval_required` → approve/reject
+   - Workspace `bash` 直接执行，不产生 `approval_required`
+   - High-risk external side-effect tool → `approval_required` → approve/reject
    - Client disconnect mid-run → sandbox cancel-active (no orphan runaway)
 4. **Do not** run two agent images against the **same** in-flight conversation/run for migration validation (no dual-exec of one Run). Short-lived parallel images for version smoke are OK on **separate** sessions.
 
@@ -89,7 +90,7 @@ If durable SDK session files are introduced later: migrate by **copy-then-valida
 
 - [ ] `runtime-versions.json` `pi_sdk` updated to the new exact versions
 - [ ] `agent/package.json` has **exact** version (e.g. `"0.81.0"`, not `^0.81.0`) for both `pi-coding-agent` and `pi-ai`
-- [ ] `agent/packages/enterprise-agent-kit` peerDependencies match
+- [ ] `agent/src/extensions` 仍只装配三类正式 Extension，且 production no-legacy guard 通过
 - [ ] `agent/package-lock.json` committed and matches (`npm ci --prefix agent`)
 - [ ] `uv run pytest tests/test_runtime_versions.py -q` green
 - [ ] ADR inventory updated if imports/events change (`docs/adr/0001-pi-coding-agent-sdk.md`)

@@ -6,6 +6,7 @@ and no new runtime dependencies beyond what the existing test env provides.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import pytest
@@ -15,8 +16,8 @@ from sandbox.config import (
     Settings,
     _DEFAULT_MYSQL_DATABASE_URL,
     database_url_scheme,
-    is_legacy_test_database_url,
     is_mysql_database_url,
+    ensure_safe_to_start,
     validate_production_settings,
 )
 
@@ -26,6 +27,23 @@ COMPOSE_PROD = ROOT / "docker-compose.prod.yml"
 ENV_EXAMPLE = ROOT / ".env.example"
 PYPROJECT = ROOT / "pyproject.toml"
 REQUIREMENTS = ROOT / "sandbox" / "requirements.txt"
+
+
+def _service_block(text: str, name: str) -> str:
+    marker = f"\n  {name}:\n"
+    start = text.index(marker) + len(marker)
+    remainder = text[start:]
+    next_section = re.search(r"\n  [A-Za-z][A-Za-z0-9_-]*:\n", remainder)
+    return remainder if next_section is None else remainder[: next_section.start()]
+
+
+def _service_mapping_keys(block: str, field: str) -> set[str]:
+    marker = f"    {field}:\n"
+    start = block.index(marker) + len(marker)
+    remainder = block[start:]
+    end = re.search(r"^    \S", remainder, re.MULTILINE)
+    mapping = remainder if end is None else remainder[: end.start()]
+    return set(re.findall(r"^      ([A-Za-z][A-Za-z0-9_-]*):", mapping, re.MULTILINE))
 
 
 def _strong_secret(seed: str = "a") -> str:
@@ -86,12 +104,9 @@ class TestMysqlUrlHelpers:
     def test_is_mysql_database_url(self, url, expected):
         assert is_mysql_database_url(url) is expected
 
-    def test_scheme_and_legacy_classification(self):
+    def test_scheme_classification(self):
         assert database_url_scheme("mysql+pymysql://x") == "mysql+pymysql"
         assert database_url_scheme("sqlite:////tmp/a.db") == "sqlite"
-        assert is_legacy_test_database_url("sqlite:////tmp/a.db")
-        assert is_legacy_test_database_url("postgresql://u@h/db")
-        assert not is_legacy_test_database_url("mysql://u@h/db")
 
 
 class TestFormalSettingsDefault:
@@ -102,36 +117,84 @@ class TestFormalSettingsDefault:
         field_default = Settings.model_fields["database_url"].default
         assert is_mysql_database_url(str(field_default))
 
-    def test_explicit_sqlite_injection_allowed_only_outside_production(self):
-        """TEMPORARY GAP: tests may inject sqlite via kwargs; not a prod fallback."""
-        s = Settings(
+    @pytest.mark.parametrize(
+        "database_url",
+        [
+            "sqlite:////tmp/unmarked-legacy.db",
+            "postgresql://sandbox@postgres:5432/sandbox",
+        ],
+    )
+    def test_startup_rejects_non_mysql_even_in_development(self, database_url):
+        settings = Settings(
             deployment_env="development",
-            database_url="sqlite:////tmp/legacy-test.db",
+            database_url=database_url,
             allowed_client_cidrs=["127.0.0.1/32"],
         )
-        assert is_legacy_test_database_url(s.database_url)
-        validate_production_settings(s)  # development is a no-op
-
-        prod = Settings(
-            **_production_kwargs(database_url="sqlite:////tmp/legacy-test.db")
-        )
-        with pytest.raises(ProductionConfigError, match="MySQL"):
-            validate_production_settings(prod)
+        with pytest.raises(ProductionConfigError, match="formal Sandbox runtime"):
+            ensure_safe_to_start(settings)
 
 
 class TestComposeMysqlTopology:
+    def test_compose_uses_one_shot_migration_owner_without_dependency_cycle(self):
+        text = COMPOSE.read_text()
+        migrate = _service_block(text, "agent-migrate")
+        assert 'restart: "no"' in migrate
+        assert 'command: ["node", "src/infrastructure/mysql/cli-migrate.js", "latest"]' in migrate
+        assert "mysql:" in migrate
+        assert "condition: service_healthy" in migrate
+        assert "backend_internal" in migrate
+        assert _service_mapping_keys(migrate, "depends_on") == {"mysql"}
+
+        for service in ("sandbox", "agent", "agent-worker"):
+            block = _service_block(text, service)
+            assert "agent-migrate:" in block, service
+            assert "condition: service_completed_successfully" in block, service
+
+        for service in ("agent", "agent-worker"):
+            block = _service_block(text, service)
+            assert 'AGENT_MIGRATE_ON_START: "false"' in block, service
+
+    def test_prod_overlay_preserves_one_shot_owner_and_disables_runtime_migrate(self):
+        text = COMPOSE_PROD.read_text()
+        migrate = _service_block(text, "agent-migrate")
+        assert "MYSQL_PASSWORD:?Set MYSQL_PASSWORD for production" in migrate
+        assert 'restart: "no"' in migrate
+        assert "ports: !reset []" in migrate
+        assert "backend_internal" in migrate
+        assert _service_mapping_keys(migrate, "depends_on") == {"mysql"}
+        for service in ("sandbox", "agent", "agent-worker"):
+            block = _service_block(text, service)
+            assert "agent-migrate:" in block, service
+            assert "condition: service_completed_successfully" in block, service
+        for service in ("agent", "agent-worker"):
+            assert 'AGENT_MIGRATE_ON_START: "false"' in _service_block(
+                text, service
+            )
+
     def test_dev_compose_mysql_only_formal_db(self):
         text = COMPOSE.read_text()
         assert "image: mysql:8.0" in text
         assert "  mysql:" in text
         assert "AGENT_DATABASE_URL:" in text
         assert "SANDBOX_DATABASE_URL:" in text
+        sandbox = _service_block(text, "sandbox")
+        # Compose must not interpolate the canonical variable loaded from
+        # env_file may contain an obsolete or service-inappropriate DSN.
+        assert "SANDBOX_COMPOSE_DATABASE_URL" in sandbox
+        assert "${SANDBOX_DATABASE_URL:-" not in sandbox
+        # Services that load the shared env file but do not own Sandbox
+        # persistence explicitly clear this authority.
+        for service in ("agent-migrate", "api-server", "agent", "agent-worker"):
+            assert 'SANDBOX_DATABASE_URL: ""' in _service_block(text, service)
+        assert "SANDBOX_LEGACY_TEST_RUNTIME" not in text
         assert "mysql+pymysql://sandbox:sandbox_dev_only@mysql:3306/sandbox" in text
         assert "mysql://sandbox:sandbox_dev_only@mysql:3306/sandbox" in text
         # Removed formal topologies
         assert "image: postgres" not in text
         assert "profiles: [\"postgres\"]" not in text
         assert "sqlite:////sandbox/data/sandbox.db" not in text
+        assert "sandbox_data" not in text
+        assert ":/sandbox/data" not in text
         # Sandbox and agent depend on healthy mysql
         assert "condition: service_healthy" in text
 
@@ -165,6 +228,8 @@ class TestComposeMysqlTopology:
         assert "MYSQL_DATABASE=" in text
         assert "MYSQL_PASSWORD=" in text
         assert "mysql+pymysql://" in text
+        assert "SANDBOX_COMPOSE_DATABASE_URL" in text
+        assert "SANDBOX_LEGACY_TEST_RUNTIME" not in text
         assert "sqlite:////sandbox/data/sandbox.db" not in text
         assert "POSTGRES_PASSWORD" not in text
 

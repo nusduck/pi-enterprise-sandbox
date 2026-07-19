@@ -77,7 +77,7 @@ Browser → api-server (BFF / Run API / SSE relay) → agent (pi-coding-agent)
 2. **Built-in host tools must not execute user work on the Agent host.** `createAgentSession` is given:
    - `tools: ['read', 'bash', 'edit', 'write', 'submit_artifact']` (allowlist)
    - `customTools: createSandboxTools(...)` implementing those names via Sandbox HTTP
-3. **Approvals** for high-risk bash stay on Sandbox (`approvalCheck` / operator decision); BFF may emit `approval_required` SSE only as a UI signal.
+3. **Approvals** are reserved for external side effects. Ordinary Workspace bash/python/node execution is not approval-gated; BFF emits `approval_required` only for enterprise tools whose policy requires an operator decision.
 4. **Secrets** (LLM keys, sandbox tokens) stay server-side (`AuthStorage`, env); never forwarded to the browser.
 5. **Artifacts** become user-visible only after `submit_artifact` → Sandbox registry → `file_ready` SSE.
 
@@ -97,7 +97,7 @@ Until those criteria are met, prefer Extension/custom tools, BFF mapping, and ve
 
 ## API surface inventory (this repo)
 
-Authoritative code: `agent/runtime/agent-runtime.js`, `agent/packages/enterprise-agent-kit/extensions/sandbox-tools/`, `agent/services/sdk-sse-map.js`, and `agent/tests/sdk-compat/`.
+Authoritative code: `agent/src/infrastructure/pi/pi-runtime-factory.js`, `agent/src/application/pi-run-executor.js`, `agent/src/extensions/`, and `agent/tests/pi/`.
 
 ### Imports from `@earendil-works/pi-coding-agent`
 
@@ -126,7 +126,7 @@ Not imported by the BFF today (available upstream, out of scope unless a task ad
 
 - Multi-turn: prior UI messages → `toAgentHistoryMessages` → `session.agent.state.messages`
 - System prompt append for artifact-only delivery policy
-- Skills: `additionalSkillPaths` include `/home/sandbox/skill` and `/sandbox/skills`
+- Skills: `additionalSkillPaths` uses only `/home/sandbox/skill`
 - Session JSONL on disk is **not** the enterprise source of truth today; conversation messages + sandbox session id live in Sandbox DB. `CURRENT_SESSION_VERSION` (SDK) is asserted in compat tests for awareness.
 
 ### SDK events subscribed → BFF SSE
@@ -151,7 +151,7 @@ Shared fixture: `tests/fixtures/sse_events.json`. Mapper: `agent/services/sdk-ss
 | `read` | `readFile` / `readFileWithRange` (skill paths may read local skill files) |
 | `write` | `writeFile` private workspace |
 | `edit` | read → replace → write |
-| `bash` | approval gate + `executeCommand` |
+| `bash` | Sandbox-isolated `executeCommand` without ordinary approval |
 | `submit_artifact` | `submitArtifact` → drives `file_ready` |
 
 Tool result shape expected by the Agent runtime: `{ content: [{ type: 'text', text }], details?, isError? }`.
@@ -180,11 +180,11 @@ Location: `agent/tests/sdk-compat/`.
 
 ## References
 
-- `agent/runtime/agent-runtime.js`
-- `agent/runtime/session-bootstrap.js`
-- `agent/packages/enterprise-agent-kit/extensions/sandbox-tools/`
-- `agent/services/sdk-sse-map.js`
-- `agent/tests/sdk-compat/`
+- `agent/src/infrastructure/pi/pi-runtime-factory.js`
+- `agent/src/infrastructure/pi/pi-session-adapter.js`
+- `agent/src/application/pi-run-executor.js`
+- `agent/src/extensions/`
+- `agent/tests/pi/`
 - `tests/fixtures/sse_events.json`
 - `docs/runbooks/sdk-upgrade.md`
 - `docs/field-issues-and-evolution-requirements.md` (R-01, A-02, S-03)

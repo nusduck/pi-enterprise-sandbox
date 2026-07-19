@@ -444,4 +444,59 @@ describe('ServiceContainer', () => {
       'exact same extensionBundleFactory function must reach PiRunExecutor',
     );
   });
+
+  it('mints A2A artifact URIs only when the internal byte transport is configured', async () => {
+    const key = Buffer.alloc(32, 1).toString('base64url');
+    const baseEnv = {
+      AGENT_DATABASE_URL: 'mysql://u:p@h/db',
+      AGENT_REDIS_URL: 'redis://localhost:6379/0',
+      DEPLOYMENT_ENV: 'development',
+      A2A_PUBLIC_BASE_URL: 'https://agent.example.com',
+      A2A_ARTIFACT_DOWNLOAD_SECRET: 'x'.repeat(40),
+    };
+
+    async function createBuilder(extraEnv) {
+      const knex = {
+        raw: async () => [[{}]],
+        transaction: async (fn) => fn({}),
+      };
+      const container = createServiceContainer(
+        { ...baseEnv, ...extraEnv },
+        {
+          createMysqlKnex: () => knex,
+          createRedisClient: () => ({ status: 'ready' }),
+          createRunQueue: () => ({ queue: { add: async () => ({}) } }),
+          destroyMysqlKnex: async () => {},
+          destroyRedisClient: async () => {},
+          destroyRunQueue: async () => {},
+        },
+      );
+      await container.start();
+      container.createCancelSignal = async () => ({
+        request: async () => {},
+        isRequested: async () => false,
+      });
+      try {
+        const services = await container.createHttpServices();
+        return services.a2aTaskService.buildArtifactDownloadUri;
+      } finally {
+        await container.shutdown();
+      }
+    }
+
+    assert.equal(await createBuilder({}), null);
+    const builder = await createBuilder({
+      SANDBOX_INTERNAL_HMAC_KEYRING: JSON.stringify({ current: key }),
+      SANDBOX_INTERNAL_HMAC_ACTIVE_KID: 'current',
+    });
+    assert.equal(typeof builder, 'function');
+    const uri = builder({
+      orgId: '01K0G2PAV8FPMVC9QHJG7JPN4Z',
+      clientId: 'client-a',
+      taskId: '01K0G2PAV8FPMVC9QHJG7JPN5E',
+      artifactId: '01K0G2PAV8FPMVC9QHJG7JPN5F',
+    });
+    assert.match(uri, /^https:\/\/agent\.example\.com\/a2a\/artifacts\/download\?token=/);
+    assert.doesNotMatch(uri, /workspace|relativePath/);
+  });
 });

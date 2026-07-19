@@ -532,6 +532,15 @@ export function validateInternalTokenClaims(input) {
     fail('INTERNAL_TOKEN_CLAIM_INVALID', 'sub is invalid');
   }
 
+  const toolName = assertAsciiIdentifier(claims.tool_name, 'tool_name');
+  const scope = assertScope(claims.scope);
+  const isPreRunSessionEnsure =
+    toolName === 'session.ensure' &&
+    scope[0] === 'sandbox.sessions.ensure' &&
+    claims.htu === '/internal/v1/sessions/ensure' &&
+    claims.run_id === null &&
+    claims.execution_fence_token === null;
+
   const normalized = {
     token_version: INTERNAL_TOKEN_VERSION,
     iss: INTERNAL_TOKEN_ISSUER,
@@ -551,20 +560,24 @@ export function validateInternalTokenClaims(input) {
       claims.sandbox_session_id,
       'sandbox_session_id',
     ),
-    run_id: assertAsciiIdentifier(claims.run_id, 'run_id'),
+    run_id: isPreRunSessionEnsure
+      ? null
+      : assertAsciiIdentifier(claims.run_id, 'run_id'),
     tool_execution_id: assertAsciiIdentifier(
       claims.tool_execution_id,
       'tool_execution_id',
     ),
     tool_call_id: assertAsciiIdentifier(claims.tool_call_id, 'tool_call_id'),
-    tool_name: assertAsciiIdentifier(claims.tool_name, 'tool_name'),
-    scope: assertScope(claims.scope),
+    tool_name: toolName,
+    scope,
     request_hash: assertSha256(claims.request_hash, 'request_hash'),
     request_hash_version: 1,
-    execution_fence_token: assertPositiveSafeInteger(
-      claims.execution_fence_token,
-      'execution_fence_token',
-    ),
+    execution_fence_token: isPreRunSessionEnsure
+      ? null
+      : assertPositiveSafeInteger(
+          claims.execution_fence_token,
+          'execution_fence_token',
+        ),
     trace_id: assertAsciiIdentifier(claims.trace_id, 'trace_id'),
     htm: claims.htm,
     htu: assertHtu(claims.htu),
@@ -608,6 +621,14 @@ function validateIssueClaims(input) {
     INTERNAL_TOKEN_ISSUE_CLAIM_KEYS,
     'issue claims',
   );
+  const toolName = assertAsciiIdentifier(claims.tool_name, 'tool_name');
+  const scope = assertScope(claims.scope);
+  const isPreRunSessionEnsure =
+    toolName === 'session.ensure' &&
+    scope[0] === 'sandbox.sessions.ensure' &&
+    claims.htu === '/internal/v1/sessions/ensure' &&
+    claims.run_id === null &&
+    claims.execution_fence_token === null;
   return Object.freeze({
     org_id: assertAsciiIdentifier(claims.org_id, 'org_id'),
     user_id: assertAsciiIdentifier(claims.user_id, 'user_id'),
@@ -623,19 +644,23 @@ function validateIssueClaims(input) {
       claims.sandbox_session_id,
       'sandbox_session_id',
     ),
-    run_id: assertAsciiIdentifier(claims.run_id, 'run_id'),
+    run_id: isPreRunSessionEnsure
+      ? null
+      : assertAsciiIdentifier(claims.run_id, 'run_id'),
     tool_execution_id: assertAsciiIdentifier(
       claims.tool_execution_id,
       'tool_execution_id',
     ),
     tool_call_id: assertAsciiIdentifier(claims.tool_call_id, 'tool_call_id'),
-    tool_name: assertAsciiIdentifier(claims.tool_name, 'tool_name'),
-    scope: assertScope(claims.scope),
+    tool_name: toolName,
+    scope,
     request_hash: assertSha256(claims.request_hash, 'request_hash'),
-    execution_fence_token: assertPositiveSafeInteger(
-      claims.execution_fence_token,
-      'execution_fence_token',
-    ),
+    execution_fence_token: isPreRunSessionEnsure
+      ? null
+      : assertPositiveSafeInteger(
+          claims.execution_fence_token,
+          'execution_fence_token',
+        ),
     trace_id: assertAsciiIdentifier(claims.trace_id, 'trace_id'),
     htm: claims.htm === 'POST' ? 'POST' : fail(
       'INTERNAL_TOKEN_CLAIM_INVALID',

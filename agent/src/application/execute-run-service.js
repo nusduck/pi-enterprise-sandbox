@@ -34,6 +34,15 @@ import { applyRunTransitionInTxn } from './run-transition.js';
 import { sanitizeStatusReason } from './sanitize-status-reason.js';
 import { ValidationError } from './errors.js';
 import { normalizeTraceId } from './create-run-service.js';
+import {
+  APPROVAL_STATUS,
+  isTerminalApprovalStatus,
+} from '../domain/tool/approval-status.js';
+import { TOOL_EXECUTION_STATUS } from '../domain/tool/tool-execution-status.js';
+import {
+  INTERACTION_STATUS,
+  INTERACTION_RESUME_PHASE,
+} from '../domain/interaction/interaction-status.js';
 
 /** Default cancel poll interval while executor runs (injectable). */
 export const DEFAULT_CANCEL_POLL_INTERVAL_MS = 100;
@@ -486,16 +495,52 @@ export class ExecuteRunService {
     if (run.status === RUN_STATUS.CANCELLING) {
       return this.#finishCancelled(run, scope, traceId);
     }
-    if (
-      run.status === RUN_STATUS.WAITING_APPROVAL ||
-      run.status === RUN_STATUS.WAITING_INPUT
-    ) {
-      return {
-        status: run.status,
-        runId,
-        outcome: run.status,
-        error: null,
+    if (run.status === RUN_STATUS.WAITING_APPROVAL) {
+      const resumed = await this.#resumeApprovalIfResolved(run, scope, traceId);
+      if (!resumed.ok) {
+        return {
+          status: run.status,
+          runId,
+          outcome: resumed.pending ? run.status : null,
+          needsReconciliation: !resumed.pending,
+          error: resumed.pending ? null : resumed.reason,
+        };
+      }
+      run = {
+        ...resumed.run,
+        // Ephemeral worker-to-executor context only; Redis jobs remain ref-only.
+        approvalResume: resumed.approvalResume,
       };
+    }
+    if (run.status === RUN_STATUS.WAITING_INPUT) {
+      const resumed = await this.#resumeInputIfResolved(run, scope, traceId);
+      if (!resumed.ok) {
+        return {
+          status: run.status,
+          runId,
+          outcome: resumed.pending ? run.status : null,
+          needsReconciliation: !resumed.pending,
+          error: resumed.pending ? null : resumed.reason,
+        };
+      }
+      run = {
+        ...resumed.run,
+        // Ephemeral continuation; BullMQ payload remains ref-only.
+        interactionResume: resumed.interactionResume,
+      };
+    }
+
+    if (entryStatus === RUN_STATUS.RUNNING) {
+      const resumed = await this.#resumeClaimedInput(run, scope);
+      if (resumed.applied) {
+        return this.#finishRecoveredInput(run, scope, traceId, resumed.interactionId);
+      }
+      if (resumed.ok) {
+        run = {
+          ...run,
+          interactionResume: resumed.interactionResume,
+        };
+      }
     }
 
     if (isLeaseLost() || signal.aborted) {
@@ -513,7 +558,7 @@ export class ExecuteRunService {
     // Recovery scan fail-closes lease-free STARTING/RUNNING → FAILED.
     if (
       entryStatus === RUN_STATUS.STARTING ||
-      entryStatus === RUN_STATUS.RUNNING
+      (entryStatus === RUN_STATUS.RUNNING && !run.interactionResume)
     ) {
       if (await this.#isCancelRequested(runId, run)) {
         return this.#cancelBeforeRuntime(run, scope, traceId);
@@ -820,6 +865,331 @@ export class ExecuteRunService {
   }
 
   /**
+   * Claim a resolved approval pause for runtime re-entry. The Run stays parked
+   * until a worker owns the lease; Redis failure therefore cannot create a
+   * phantom RUNNING state.
+   */
+  async #resumeApprovalIfResolved(run, scope, traceId) {
+    this.stateMachine.assertTransition(
+      RUN_STATUS.WAITING_APPROVAL,
+      RUN_STATUS.RUNNING,
+    );
+    return this.tx.run(async (trx) => {
+      const repos = this.createRepositories(trx);
+      const current = await repos.runs.getById(run.runId, scope, {
+        forUpdate: true,
+      });
+      if (!current) {
+        return { ok: false, pending: false, reason: 'Run not found' };
+      }
+      if (current.status === RUN_STATUS.RUNNING) {
+        return {
+          ok: false,
+          pending: false,
+          reason: 'approval resume was already claimed by another worker',
+        };
+      }
+      if (current.status !== RUN_STATUS.WAITING_APPROVAL) {
+        return {
+          ok: false,
+          pending: false,
+          reason: `Run is ${current.status}, expected WAITING_APPROVAL`,
+        };
+      }
+      const approvals = await repos.approvals.listByRunId(run.runId, scope, {
+        forUpdate: true,
+      });
+      if (
+        approvals.length === 0 ||
+        approvals.some(
+          (approval) => approval.status === APPROVAL_STATUS.PENDING,
+        )
+      ) {
+        return { ok: false, pending: true, reason: null };
+      }
+      const approval = [...approvals]
+        .reverse()
+        .find((candidate) => isTerminalApprovalStatus(candidate.status));
+      if (!approval) {
+        return {
+          ok: false,
+          pending: false,
+          reason: 'Run has no terminal approval',
+        };
+      }
+      const toolExecution = await repos.toolExecutions.getById(
+        approval.toolExecutionId,
+        scope,
+        { forUpdate: true },
+      );
+      const resumable =
+        (approval.status === APPROVAL_STATUS.APPROVED &&
+          toolExecution.status === TOOL_EXECUTION_STATUS.WAITING_APPROVAL) ||
+        (approval.status === APPROVAL_STATUS.REJECTED &&
+          toolExecution.status === TOOL_EXECUTION_STATUS.FAILED);
+      if (!resumable) {
+        return {
+          ok: false,
+          pending: false,
+          reason: sanitizeStatusReason(
+            `approval/tool state is not resumable (${approval.status}/${toolExecution.status})`,
+          ),
+        };
+      }
+
+      const transitioned = await applyRunTransitionInTxn({
+        repos,
+        runId: run.runId,
+        scope,
+        from: RUN_STATUS.WAITING_APPROVAL,
+        to: RUN_STATUS.RUNNING,
+        traceId,
+        generateId: this.generateId,
+        eventType: 'run.status.changed',
+        statusReason: null,
+        payloadExtra: {
+          approvalId: approval.approvalId,
+          approvalStatus: approval.status,
+          toolExecutionId: toolExecution.toolExecutionId,
+        },
+      });
+      if (!transitioned.ok) {
+        return {
+          ok: false,
+          pending: false,
+          reason: 'approval resume transition conflict',
+        };
+      }
+      return {
+        ok: true,
+        run: transitioned.run,
+        approvalResume: {
+          approvalId: approval.approvalId,
+          status: approval.status,
+          toolExecutionId: toolExecution.toolExecutionId,
+          toolCallId: toolExecution.toolCallId,
+          toolName: toolExecution.toolName,
+          arguments: toolExecution.argumentsJson ?? {},
+        },
+      };
+    });
+  }
+
+  /** Claim a resolved WAITING_INPUT interaction under the Run lease. */
+  async #resumeInputIfResolved(run, scope, traceId) {
+    this.stateMachine.assertTransition(
+      RUN_STATUS.WAITING_INPUT,
+      RUN_STATUS.RUNNING,
+    );
+    return this.tx.run(async (trx) => {
+      const repos = this.createRepositories(trx);
+      if (!repos.interactions) {
+        return {
+          ok: false,
+          pending: false,
+          reason: 'interaction repository unavailable',
+        };
+      }
+      const current = await repos.runs.getById(run.runId, scope, {
+        forUpdate: true,
+      });
+      if (!current) return { ok: false, pending: false, reason: 'Run not found' };
+      if (current.status !== RUN_STATUS.WAITING_INPUT) {
+        return {
+          ok: false,
+          pending: false,
+          reason: `Run is ${current.status}, expected WAITING_INPUT`,
+        };
+      }
+      const interactions = await repos.interactions.listByRunId(
+        run.runId,
+        scope,
+        { forUpdate: true },
+      );
+      if (
+        interactions.length === 0 ||
+        interactions.some((item) => item.status === INTERACTION_STATUS.PENDING)
+      ) {
+        return { ok: false, pending: true, reason: null };
+      }
+      const interaction = [...interactions]
+        .reverse()
+        .find((item) => item.status === INTERACTION_STATUS.RESOLVED);
+      if (!interaction) {
+        return {
+          ok: false,
+          pending: false,
+          reason: 'Run has no resolved interaction',
+        };
+      }
+      const toolExecution = await repos.toolExecutions.getById(
+        interaction.toolExecutionId,
+        scope,
+        { forUpdate: true },
+      );
+      if (
+        toolExecution.runId !== run.runId ||
+        toolExecution.toolCallId !== interaction.toolCallId ||
+        toolExecution.status !== TOOL_EXECUTION_STATUS.SUCCEEDED
+      ) {
+        return {
+          ok: false,
+          pending: false,
+          reason: sanitizeStatusReason(
+            `interaction/tool state is not resumable (${interaction.status}/${toolExecution.status})`,
+          ),
+        };
+      }
+      const claimed = await repos.interactions.claimResumeIfReady(
+        interaction.interactionId,
+        scope,
+      );
+      if (
+        !claimed.changed &&
+        claimed.interaction.resumePhase !== INTERACTION_RESUME_PHASE.CLAIMED
+      ) {
+        return {
+          ok: false,
+          pending: false,
+          reason:
+            `interaction resume phase is ${claimed.interaction.resumePhase}; ` +
+            'expected READY',
+        };
+      }
+      const transitioned = await applyRunTransitionInTxn({
+        repos,
+        runId: run.runId,
+        scope,
+        from: RUN_STATUS.WAITING_INPUT,
+        to: RUN_STATUS.RUNNING,
+        traceId,
+        generateId: this.generateId,
+        eventType: 'run.status.changed',
+        statusReason: null,
+        payloadExtra: {
+          interactionId: interaction.interactionId,
+          interactionStatus: interaction.status,
+          resumePhase: INTERACTION_RESUME_PHASE.CLAIMED,
+          toolExecutionId: toolExecution.toolExecutionId,
+        },
+      });
+      if (!transitioned.ok) {
+        return {
+          ok: false,
+          pending: false,
+          reason: 'interaction resume transition conflict',
+        };
+      }
+      return {
+        ok: true,
+        run: transitioned.run,
+        interactionResume: {
+          interactionId: interaction.interactionId,
+          status: interaction.status,
+          interactionType: interaction.interactionType,
+          response: interaction.responseJson,
+          responseHash: interaction.responseHash,
+          resumePhase: INTERACTION_RESUME_PHASE.CLAIMED,
+          toolExecutionId: toolExecution.toolExecutionId,
+          toolCallId: toolExecution.toolCallId,
+          toolName: toolExecution.toolName,
+        },
+      };
+    });
+  }
+
+  /**
+   * Crash recovery after the durable claim committed but before Pi checkpointed
+   * the answered tool-result. The CLAIMED phase is the explicit replay fence;
+   * ordinary RUNNING jobs still fail closed above.
+   */
+  async #resumeClaimedInput(run, scope) {
+    return this.tx.run(async (trx) => {
+      const repos = this.createRepositories(trx);
+      if (!repos.interactions) return { ok: false };
+      const interactions = await repos.interactions.listByRunId(
+        run.runId,
+        scope,
+        { forUpdate: true },
+      );
+      const interaction = [...interactions].reverse().find(
+        (item) =>
+          item.status === INTERACTION_STATUS.RESOLVED &&
+          [
+            INTERACTION_RESUME_PHASE.CLAIMED,
+            INTERACTION_RESUME_PHASE.APPLIED,
+          ].includes(item.resumePhase),
+      );
+      if (!interaction) return { ok: false };
+      if (interaction.resumePhase === INTERACTION_RESUME_PHASE.APPLIED) {
+        return {
+          applied: true,
+          interactionId: interaction.interactionId,
+        };
+      }
+      if (interaction.resumePhase !== INTERACTION_RESUME_PHASE.CLAIMED) {
+        return { ok: false };
+      }
+      const toolExecution = await repos.toolExecutions.getById(
+        interaction.toolExecutionId,
+        scope,
+        { forUpdate: true },
+      );
+      if (
+        toolExecution.runId !== run.runId ||
+        toolExecution.agentSessionId !== run.agentSessionId ||
+        toolExecution.toolCallId !== interaction.toolCallId ||
+        toolExecution.status !== TOOL_EXECUTION_STATUS.SUCCEEDED
+      ) {
+        return { ok: false };
+      }
+      return {
+        ok: true,
+        interactionResume: {
+          interactionId: interaction.interactionId,
+          status: interaction.status,
+          interactionType: interaction.interactionType,
+          response: interaction.responseJson,
+          responseHash: interaction.responseHash,
+          resumePhase: interaction.resumePhase,
+          toolExecutionId: toolExecution.toolExecutionId,
+          toolCallId: toolExecution.toolCallId,
+          toolName: toolExecution.toolName,
+        },
+      };
+    });
+  }
+
+  async #finishRecoveredInput(run, scope, traceId, interactionId) {
+    const transitioned = await this.#transition(run.runId, scope, traceId, {
+      from: RUN_STATUS.RUNNING,
+      to: RUN_STATUS.SUCCEEDED,
+      eventType: 'run.completed',
+      completedAt: this.now(),
+      statusReason: null,
+      payloadExtra: {
+        recoveredInteractionId: interactionId,
+        continuationCheckpointed: true,
+      },
+    });
+    if (transitioned.ok) {
+      return {
+        status: RUN_STATUS.SUCCEEDED,
+        runId: run.runId,
+        outcome: RUN_STATUS.SUCCEEDED,
+        error: null,
+      };
+    }
+    return {
+      status: transitioned.current?.status ?? run.status,
+      runId: run.runId,
+      outcome: null,
+      needsReconciliation: true,
+      error: 'recovered interaction terminal transition conflict',
+    };
+  }
+
+  /**
    * @param {string} runId
    * @param {{ orgId: string, userId: string }} scope
    * @param {string} traceId
@@ -949,6 +1319,17 @@ export class ExecuteRunService {
     let currentFrom = run.status;
 
     if (isTerminalRunStatus(currentFrom)) {
+      return {
+        status: currentFrom,
+        runId: run.runId,
+        outcome: currentFrom,
+        error: null,
+      };
+    }
+
+    // requestApproval may already have atomically persisted the waiting state
+    // before PiRunExecutor returns the same outcome.
+    if (currentFrom === outcome) {
       return {
         status: currentFrom,
         runId: run.runId,

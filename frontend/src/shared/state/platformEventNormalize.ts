@@ -62,6 +62,20 @@ function pickStr(...vals: unknown[]): string {
   return '';
 }
 
+function messageText(value: unknown): string {
+  if (typeof value === 'string') return value;
+  if (!isPlainObject(value)) return '';
+  if (typeof value.text === 'string') return value.text;
+  if (!Array.isArray(value.content)) return '';
+  return value.content
+    .map((part) => {
+      if (typeof part === 'string') return part;
+      return isPlainObject(part) && typeof part.text === 'string' ? part.text : '';
+    })
+    .filter(Boolean)
+    .join('');
+}
+
 /**
  * Map platform type string to internal reducer type.
  */
@@ -202,7 +216,11 @@ export function normalizeToRuntimeEvent(
     return {
       ...direct,
       type: mapPlatformEventType(String(direct.type)),
-      payload: normalizePayload(mapPlatformEventType(String(direct.type)), direct.payload || {}),
+      payload: normalizePayload(
+        mapPlatformEventType(String(direct.type)),
+        direct.payload || {},
+        direct.event_id,
+      ),
     };
   }
 
@@ -248,7 +266,7 @@ export function normalizeToRuntimeEvent(
           type: undefined,
           event_id: undefined,
           sequence: undefined,
-        }),
+        }, eventId),
       });
     }
     return null;
@@ -272,7 +290,7 @@ export function normalizeToRuntimeEvent(
     span_id: data.span_id ?? data.spanId ?? context.spanId ?? context.span_id,
     org_id: data.org_id ?? data.orgId ?? context.orgId ?? context.org_id,
     user_id: data.user_id ?? data.userId ?? context.userId ?? context.user_id,
-  });
+  }, eventId);
 
   return makeRuntimeEvent({
     event_id: eventId,
@@ -298,6 +316,7 @@ export function normalizeToRuntimeEvent(
 function normalizePayload(
   type: string,
   data: Record<string, unknown>,
+  eventId?: string,
 ): Record<string, unknown> {
   const p: Record<string, unknown> = { ...data };
 
@@ -312,6 +331,7 @@ function normalizePayload(
     ['datasetId', 'dataset_id'],
     ['messageId', 'message_id'],
     ['interactionId', 'interaction_id'],
+    ['interactionType', 'interaction_type'],
     ['idempotencyKey', 'idempotency_key'],
     ['exitCode', 'exit_code'],
     ['mimeType', 'mime_type'],
@@ -328,6 +348,39 @@ function normalizePayload(
   ];
   for (const [from, to] of aliases) {
     if (p[to] == null && p[from] != null) p[to] = p[from];
+  }
+
+  if (type.startsWith('message.')) {
+    const message = isPlainObject(p.message) ? p.message : null;
+    if (p.role == null && message?.role != null) p.role = message.role;
+    if (p.text == null) {
+      const inferredText =
+        typeof p.delta === 'string'
+          ? p.delta
+          : messageText(message ?? p.content);
+      // A completion event commonly carries only the message id. Keep the
+      // field absent in that case so the reducer preserves accumulated deltas.
+      // Explicit `text: ''` remains an intentional empty completion.
+      if (inferredText || type !== 'message.completed') {
+        p.text = inferredText;
+      }
+    }
+    // User messages have no preceding delta from which the reducer could infer
+    // identity. The durable event id is a stable, replay-safe fallback.
+    if (
+      p.message_id == null &&
+      eventId &&
+      String(p.role || '').toLowerCase() === 'user'
+    ) {
+      p.message_id = eventId;
+    }
+  }
+
+  // Agent persists Run state-machine values in uppercase; the UI entity
+  // contract is lowercase and uses the same normalization for live/replayed
+  // events.
+  if (type === 'run.status_changed' && p.status != null) {
+    p.status = String(p.status).toLowerCase();
   }
 
   // process.output → stream-aware text

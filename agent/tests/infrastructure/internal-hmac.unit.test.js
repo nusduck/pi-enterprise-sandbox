@@ -283,6 +283,35 @@ describe('strict Agent -> Sandbox HS256 internal token', () => {
     }
   });
 
+  it('allows null Run/fence only for the exact pre-run session ensure profile', () => {
+    const preRun = {
+      run_id: null,
+      execution_fence_token: null,
+      tool_name: 'session.ensure',
+      scope: ['sandbox.sessions.ensure'],
+      htu: '/internal/v1/sessions/ensure',
+    };
+    const verified = verifyInternalToken(issue(preRun), {
+      keyring: KEYRING,
+      clock: () => NOW,
+    });
+    assert.equal(verified.run_id, null);
+    assert.equal(verified.execution_fence_token, null);
+
+    for (const overrides of [
+      { ...preRun, tool_name: 'write' },
+      { ...preRun, scope: ['sandbox.files.write'] },
+      { ...preRun, htu: '/internal/v1/sessions/not-ensure' },
+      { ...preRun, run_id: ISSUE_CLAIMS.run_id },
+      { ...preRun, execution_fence_token: 1 },
+    ]) {
+      expectCode(
+        () => issue(overrides),
+        'INTERNAL_TOKEN_CLAIM_INVALID',
+      );
+    }
+  });
+
   it('enforces POST and an ASCII absolute query-free fragment-free path', () => {
     expectCode(
       () => issue({ htm: 'GET' }),

@@ -372,10 +372,10 @@ class FilesReadRuntime:
 
         # created is True: track until terminal finalize for shutdown recovery.
         self._register_inflight(command, execution)
-        try:
-            return await self._run_created(command, execution, workspace_id)
-        finally:
-            self._clear_inflight(execution.execution_id)
+        response = await self._run_created(command, execution, workspace_id)
+        # Only a confirmed terminal finalize may leave the recovery set.
+        self._clear_inflight(execution.execution_id)
+        return response
 
     def _register_inflight(
         self, command: ReadCommand, execution: ExecutionRecord

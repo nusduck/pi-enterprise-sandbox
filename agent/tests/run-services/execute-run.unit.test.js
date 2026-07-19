@@ -767,6 +767,26 @@ describe('RunRecoveryService', () => {
 });
 
 describe('run worker bootstrap', () => {
+  it('fails closed without an executor unless stub use is explicit', () => {
+    const world = createFakeRunWorld();
+    const lease = createFakeLease();
+    const deps = {
+      transactionManager: world.transactionManager,
+      createRepositories: world.createRepositories,
+      leaseManager: lease,
+      runQueue: world.runQueue,
+      generateId: world.generateId,
+    };
+
+    assert.throws(
+      () => createRunWorkerRuntime(deps),
+      (err) => err?.code === 'RUN_EXECUTOR_NOT_CONFIGURED',
+    );
+    assert.doesNotThrow(() =>
+      createRunWorkerRuntime({ ...deps, allowStubExecutor: true }),
+    );
+  });
+
   it('does not start on import; shutdown exactly once', async () => {
     const world = createFakeRunWorld();
     const lease = createFakeLease();
@@ -779,6 +799,7 @@ describe('run worker bootstrap', () => {
       runQueue: world.runQueue,
       cancelSignal: world.cancelSignal,
       generateId: world.generateId,
+      allowStubExecutor: true,
       workerId: 'bootstrap-w',
       onStart: async () => {
         starts += 1;
@@ -806,6 +827,7 @@ describe('run worker bootstrap', () => {
       leaseManager: lease,
       runQueue: world.runQueue,
       generateId: world.generateId,
+      allowStubExecutor: true,
       onStart: async () => {
         starts += 1;
         await new Promise((r) => setTimeout(r, 30));
@@ -826,6 +848,7 @@ describe('run worker bootstrap', () => {
       leaseManager: lease,
       runQueue: world.runQueue,
       generateId: world.generateId,
+      allowStubExecutor: true,
       onStart: async () => {
         attempts += 1;
         if (attempts === 1) throw new Error('connect failed');
@@ -855,6 +878,7 @@ describe('run worker bootstrap', () => {
       leaseManager: lease,
       runQueue: world.runQueue,
       generateId: world.generateId,
+      allowStubExecutor: true,
       workerId: 'boot-w',
     });
     const result = await runtime.processJob({
@@ -883,6 +907,7 @@ describe('run worker bootstrap', () => {
       leaseManager: lease,
       runQueue: world.runQueue,
       generateId: world.generateId,
+      allowStubExecutor: true,
       workerId: 'boot-busy-w',
     });
     await assert.rejects(
@@ -916,6 +941,7 @@ describe('run worker bootstrap', () => {
       leaseManager: lease,
       runQueue: world.runQueue,
       generateId: world.generateId,
+      allowStubExecutor: true,
       workerId: 'boot-recon-w',
     });
     await assert.rejects(
@@ -1005,7 +1031,7 @@ describe('ExecuteRunService severe re-entry / recovery', () => {
     assert.equal(world.tables.runs[0].status, RUN_STATUS.CANCELLED);
   });
 
-  it('recovery fail-closes lease-free RUNNING → FAILED without enqueue', async () => {
+  it('recovery requeues lease-free RUNNING when the durable tool ledger is replay-safe', async () => {
     const created = await create.execute({
       messages: MESSAGES,
       auth: FIXED_AUTH,
@@ -1026,8 +1052,86 @@ describe('ExecuteRunService severe re-entry / recovery', () => {
       runId: created.runId,
       orgId: String(world.tables.runs[0].org_id),
     });
-    assert.equal(action.action, 'terminalized');
-    assert.equal(world.tables.runs[0].status, RUN_STATUS.FAILED);
+    assert.equal(
+      action.action,
+      'projected_and_enqueued',
+      JSON.stringify(action),
+    );
+    assert.equal(action.status, RUN_STATUS.QUEUED);
+    assert.equal(world.tables.runs[0].status, RUN_STATUS.QUEUED);
+    assert.equal(world.enqueuedJobs.length, jobsBefore + 1);
+    assert.ok(
+      world.tables.run_events.some(
+        (event) => event.event_type === 'run.retrying',
+      ),
+    );
+  });
+
+  it('recovery does not re-prompt when the durable checkpoint already references the Run', async () => {
+    const created = await create.execute({
+      messages: MESSAGES,
+      auth: FIXED_AUTH,
+      traceId: TRACE,
+      idempotencyKey: 'ex-rec-current-checkpoint',
+    });
+    world.tables.runs[0].status = RUN_STATUS.RUNNING;
+    world.tables.agent_sessions[0].pi_session_version = 1;
+    world.tables.agent_sessions[0].last_run_id = created.runId;
+    const jobsBefore = world.enqueuedJobs.length;
+
+    const recovery = new RunRecoveryService({
+      transactionManager: world.transactionManager,
+      createRepositories: world.createRepositories,
+      runQueue: world.runQueue,
+      generateId: world.generateId,
+      leaseManager: lease,
+    });
+    const action = await recovery.recoverOneRef({
+      runId: created.runId,
+      orgId: String(world.tables.runs[0].org_id),
+    });
+
+    assert.equal(action.action, 'needsReconciliation');
+    assert.match(String(action.reason), /checkpoint.*this Run.*manual/i);
+    assert.equal(world.tables.runs[0].status, RUN_STATUS.RUNNING);
+    assert.equal(world.enqueuedJobs.length, jobsBefore);
+  });
+
+  it('recovery requires manual reconciliation for an unresolved tool outcome', async () => {
+    const created = await create.execute({
+      messages: MESSAGES,
+      auth: FIXED_AUTH,
+      traceId: TRACE,
+      idempotencyKey: 'ex-rec-tool-unknown',
+    });
+    world.tables.runs[0].status = RUN_STATUS.RUNNING;
+    world.tables.tool_executions.push({
+      tool_execution_id: world.generateId(),
+      run_id: created.runId,
+      status: 'RUNNING',
+    });
+    world.tables.tool_executions.push({
+      tool_execution_id: world.generateId(),
+      run_id: created.runId,
+      status: 'UNKNOWN',
+    });
+    const jobsBefore = world.enqueuedJobs.length;
+
+    const recovery = new RunRecoveryService({
+      transactionManager: world.transactionManager,
+      createRepositories: world.createRepositories,
+      runQueue: world.runQueue,
+      generateId: world.generateId,
+      leaseManager: lease,
+    });
+    const action = await recovery.recoverOneRef({
+      runId: created.runId,
+      orgId: String(world.tables.runs[0].org_id),
+    });
+
+    assert.equal(action.action, 'needsReconciliation');
+    assert.match(String(action.reason), /UNKNOWN.*manual recovery/i);
+    assert.equal(world.tables.runs[0].status, RUN_STATUS.RUNNING);
     assert.equal(world.enqueuedJobs.length, jobsBefore);
   });
 

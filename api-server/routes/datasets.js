@@ -3,23 +3,19 @@
  *
  * POST /api/conversations/:conversationId/datasets?session_id=
  *   Streams multipart body to Sandbox without holding the full file in the
- *   Node heap (temp spill with backpressure, then stream to Sandbox).
+ *   Node heap or writing a BFF-side temp file.
  *
  * GET  /api/conversations/:conversationId/datasets?session_id=
  * GET  /api/datasets?session_id=
  */
-import { createReadStream } from 'node:fs';
-import { rm, stat } from 'node:fs/promises';
+import { Transform } from 'node:stream';
 import { config } from '../config.js';
-import * as sb from '../services/sandbox-client.js';
-import { authFromRequest } from '../services/sandbox-client.js';
-import { resolveTrustedAuth } from '../application/run-access-service.js';
+import { authorizeSandboxSession } from '../application/run-access-service.js';
 import {
   discardRequestBody,
   mapUploadErrorBody,
   resolveUploadTraceId,
   sandboxProxyHeaders,
-  spillRequestToTempFile,
 } from './files.js';
 
 function writeJson(res, status, body, traceId) {
@@ -54,6 +50,49 @@ export function datasetOwnershipHeaders(req, ctx = {}) {
 }
 
 /**
+ * Bound an inbound upload without buffering it. `IncomingMessage.pipe()` and
+ * this Transform's high-water marks propagate downstream fetch backpressure
+ * to the browser socket.
+ *
+ * @param {import('node:stream').Readable} req
+ * @param {number} maxBytes
+ */
+export function createBoundedDatasetUploadBody(req, maxBytes) {
+  let bytesRead = 0;
+  let limitError = null;
+  const stream = new Transform({
+    readableHighWaterMark: 64 * 1024,
+    writableHighWaterMark: 64 * 1024,
+    transform(chunk, encoding, callback) {
+      const chunkBytes = Buffer.isBuffer(chunk)
+        ? chunk.length
+        : Buffer.byteLength(chunk, encoding);
+      bytesRead += chunkBytes;
+      if (bytesRead > maxBytes) {
+        limitError = Object.assign(new Error('Payload too large'), {
+          code: 'dataset_too_large',
+          status: 413,
+          maxBytes,
+        });
+        callback(limitError);
+        return;
+      }
+      callback(null, chunk);
+    },
+  });
+  req.pipe(stream);
+  return {
+    stream,
+    get bytesRead() {
+      return bytesRead;
+    },
+    get limitError() {
+      return limitError;
+    },
+  };
+}
+
+/**
  * POST dataset upload — stream to sandbox /sessions/:id/datasets
  *
  * @param {string} conversationId
@@ -81,10 +120,26 @@ export async function handleDatasetUpload(conversationId, parsedUrl, req, res) {
     return;
   }
 
+  // Validate the durable-write contract before piping any request bytes.
+  const idempotencyKey = String(req.headers['idempotency-key'] || '').trim();
+  if (!idempotencyKey) {
+    discardRequestBody(req);
+    writeJson(
+      res,
+      400,
+      {
+        error: 'Idempotency-Key header is required',
+        code: 'dataset_idempotency_key_required',
+      },
+      traceId,
+    );
+    return;
+  }
+
   const contentType = req.headers['content-type'] || 'application/octet-stream';
-  // Same envelope as attachment proxy (~50MB file + multipart overhead)
-  const maxBytes = 55 * 1024 * 1024;
-  const declared = parseInt(req.headers['content-length'] || '0', 10);
+  const maxBytes = config.DATASET_UPLOAD_MAX_BYTES;
+  const declaredRaw = req.headers['content-length'];
+  const declared = declaredRaw == null ? null : Number(declaredRaw);
   if (declared > maxBytes) {
     discardRequestBody(req);
     writeJson(
@@ -96,59 +151,67 @@ export async function handleDatasetUpload(conversationId, parsedUrl, req, res) {
     return;
   }
 
-  let spill = null;
+  let sessionAccess;
   try {
-    // Stream inbound body to temp file (not heap Buffer.concat)
-    spill = await spillRequestToTempFile(req, maxBytes);
+    // Resolve the formal owner before any byte is read or forwarded to
+    // Sandbox. Agent maps the external browser subject to internal ULIDs.
+    sessionAccess = await authorizeSandboxSession(sessionId, req, {
+      conversationId,
+      traceId,
+    });
   } catch (err) {
-    if (err && (err.status === 413 || err.code === 'attachment_too_large' || err.code === 'dataset_too_large')) {
-      writeJson(
-        res,
-        413,
-        {
-          error: err.message || 'Payload too large',
-          code: 'dataset_too_large',
-        },
-        traceId,
-      );
-      return;
-    }
-    console.error('[datasets] spill failed:', err);
-    writeJson(res, 500, { error: 'Upload failed' }, traceId);
+    discardRequestBody(req);
+    const status = Number(err?.status) || 500;
+    const message =
+      status >= 500
+        ? 'Authentication failed'
+        : err?.message || 'Authentication required';
+    writeJson(
+      res,
+      status,
+      { error: message, code: err?.code || 'dataset_auth_failed' },
+      traceId,
+    );
     return;
   }
 
-  try {
-    const size = spill.size || (await stat(spill.filePath)).size;
-    let ownerCtx = { conversationId };
-    try {
-      const auth = await resolveTrustedAuth(req);
-      if (auth?.actingOrganizationId) {
-        ownerCtx = {
-          ...ownerCtx,
-          orgId: auth.actingOrganizationId,
-          userId: auth.actingUserId,
-        };
-      }
-    } catch {
-      // resolveTrustedAuth may 401 when auth required; sandbox will enforce.
-    }
-    const headers = sandboxProxyHeaders(req, {
-      'Content-Type': contentType,
-      'Content-Length': String(size),
-      'X-Trace-Id': traceId,
-      ...datasetOwnershipHeaders(req, ownerCtx),
-    });
+  const headers = sandboxProxyHeaders(req, {
+    'Content-Type': contentType,
+    'X-Trace-Id': traceId,
+    ...datasetOwnershipHeaders(req, { conversationId }),
+  }, sessionAccess.sandboxAuth);
+  if (declared != null && Number.isSafeInteger(declared) && declared >= 0) {
+    headers['Content-Length'] = String(declared);
+  }
+  headers['Idempotency-Key'] = idempotencyKey;
 
-    // Pipe spill → sandbox with duplex stream (no full-buffer re-read into heap)
-    const bodyStream = createReadStream(spill.filePath);
+  const upstreamAbort = new AbortController();
+  let clientDisconnected = false;
+  const abortUpstream = () => {
+    clientDisconnected = true;
+    if (!upstreamAbort.signal.aborted) upstreamAbort.abort();
+  };
+  const onRequestAborted = () => abortUpstream();
+  const onRequestClose = () => {
+    if (req.aborted || req.complete === false) abortUpstream();
+  };
+  const onResponseClose = () => {
+    if (!res.writableEnded) abortUpstream();
+  };
+  req.once?.('aborted', onRequestAborted);
+  req.once?.('close', onRequestClose);
+  res.once?.('close', onResponseClose);
+
+  const bounded = createBoundedDatasetUploadBody(req, maxBytes);
+  try {
     const sanRes = await fetch(
       `${config.SANDBOX_BASE_URL}/sessions/${encodeURIComponent(sessionId)}/datasets`,
       {
         method: 'POST',
         headers,
-        body: bodyStream,
+        body: bounded.stream,
         duplex: 'half',
+        signal: upstreamAbort.signal,
       },
     );
 
@@ -184,16 +247,44 @@ export async function handleDatasetUpload(conversationId, parsedUrl, req, res) {
 
     const successBody =
       data && typeof data === 'object'
-        ? { ...data, conversation_id: data.conversation_id || conversationId, trace_id: data.trace_id || sandboxTrace }
+        ? {
+            ...data,
+            conversation_id: data.conversation_id || conversationId,
+            trace_id: data.trace_id || sandboxTrace,
+          }
         : data;
-    writeJson(res, sanRes.status === 200 ? 201 : sanRes.status || 201, successBody, sandboxTrace);
+    writeJson(
+      res,
+      sanRes.status === 200 ? 201 : sanRes.status || 201,
+      successBody,
+      sandboxTrace,
+    );
   } catch (err) {
-    console.error('[datasets] upload proxy failed:', err);
-    writeJson(res, 500, { error: err.message || 'Upload failed' }, traceId);
-  } finally {
-    if (spill?.dir) {
-      rm(spill.dir, { recursive: true, force: true }).catch(() => {});
+    if (bounded.limitError || err?.cause?.code === 'dataset_too_large') {
+      req.unpipe?.(bounded.stream);
+      req.resume?.();
+      if (!res.destroyed && !res.writableEnded) {
+        writeJson(
+          res,
+          413,
+          { error: 'Payload too large', code: 'dataset_too_large' },
+          traceId,
+        );
+      }
+      return;
     }
+    if (clientDisconnected || upstreamAbort.signal.aborted) return;
+    console.error('[datasets] upload proxy failed:', err);
+    if (!res.destroyed && !res.writableEnded) {
+      writeJson(res, 500, { error: err.message || 'Upload failed' }, traceId);
+    }
+  } finally {
+    req.off?.('aborted', onRequestAborted);
+    req.off?.('close', onRequestClose);
+    res.off?.('close', onResponseClose);
+    req.unpipe?.(bounded.stream);
+    bounded.stream.destroy();
+    if (!clientDisconnected && req.complete === false) req.resume?.();
   }
 }
 
@@ -203,7 +294,12 @@ export async function handleDatasetUpload(conversationId, parsedUrl, req, res) {
  * @param {import('node:http').ServerResponse} res
  * @param {import('node:http').IncomingMessage} [req]
  */
-export async function handleListDatasets(parsedUrl, res, req = null) {
+export async function handleListDatasets(
+  parsedUrl,
+  res,
+  req = null,
+  conversationId = null,
+) {
   const sessionId = parsedUrl.searchParams.get('session_id');
   const traceId = resolveUploadTraceId(req);
   if (!sessionId) {
@@ -211,7 +307,18 @@ export async function handleListDatasets(parsedUrl, res, req = null) {
     return;
   }
   try {
-    const headers = sandboxProxyHeaders(req, datasetOwnershipHeaders(req));
+    const sessionAccess = await authorizeSandboxSession(sessionId, req, {
+      conversationId,
+      traceId,
+    });
+    const headers = sandboxProxyHeaders(
+      req,
+      {
+        'X-Trace-Id': traceId,
+        ...datasetOwnershipHeaders(req, { conversationId }),
+      },
+      sessionAccess.sandboxAuth,
+    );
     const sanRes = await fetch(
       `${config.SANDBOX_BASE_URL}/sessions/${encodeURIComponent(sessionId)}/datasets`,
       { headers },
@@ -226,7 +333,19 @@ export async function handleListDatasets(parsedUrl, res, req = null) {
     writeJson(res, sanRes.status, data, sanRes.headers.get('x-trace-id') || traceId);
   } catch (err) {
     console.error('[datasets] list:', err.message);
-    writeJson(res, err.status || 500, { error: err.message || 'Failed to list datasets' }, traceId);
+    const status = Number(err?.status) || 500;
+    writeJson(
+      res,
+      status,
+      {
+        error:
+          status >= 500
+            ? 'Dataset list unavailable'
+            : err.message || 'Failed to list datasets',
+        code: err.code,
+      },
+      traceId,
+    );
   }
 }
 

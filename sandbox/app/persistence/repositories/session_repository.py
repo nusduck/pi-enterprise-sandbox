@@ -98,6 +98,40 @@ class SessionRepository:
             )
         return row
 
+    def get_by_agent_session_id(
+        self,
+        conn: SupportsExecute,
+        agent_session_id: str,
+        scope: OwnerScope | dict[str, str],
+    ) -> SandboxSessionRecord | None:
+        s = require_owner_scope(scope, resource=TABLE)
+        conn.execute(
+            f"""
+            SELECT * FROM {TABLE}
+            WHERE agent_session_id = %s AND org_id = %s AND user_id = %s
+            """,
+            (agent_session_id, s.org_id, s.user_id),
+        )
+        row = conn.fetchone()
+        return map_sandbox_session(row) if row else None
+
+    def get_by_workspace_id(
+        self,
+        conn: SupportsExecute,
+        workspace_id: str,
+        scope: OwnerScope | dict[str, str],
+    ) -> SandboxSessionRecord | None:
+        s = require_owner_scope(scope, resource=TABLE)
+        conn.execute(
+            f"""
+            SELECT * FROM {TABLE}
+            WHERE workspace_id = %s AND org_id = %s AND user_id = %s
+            """,
+            (workspace_id, s.org_id, s.user_id),
+        )
+        row = conn.fetchone()
+        return map_sandbox_session(row) if row else None
+
     def update_status(
         self,
         conn: SupportsExecute,

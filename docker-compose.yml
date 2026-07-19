@@ -65,6 +65,35 @@ services:
     restart: unless-stopped
     networks:
       - backend_internal
+      # Docker Desktop/OrbStack do not reliably publish ports from a container
+      # attached only to an internal network. This network exists solely for
+      # loopback-bound development access; production removes it per service.
+      - dev_ingress
+
+  # ── Agent schema migration — one-shot owner ─────────────────
+  # Empty-database startup must complete Agent Knex migrations before Sandbox
+  # probes the formal schema or long-running Agent processes open DB pools.
+  agent-migrate:
+    build:
+      context: ./agent
+      dockerfile: Dockerfile
+    image: ${AGENT_IMAGE:-pi-enterprise-agent:latest}
+    container_name: ${AGENT_MIGRATE_CONTAINER:-pi-enterprise-agent-migrate}
+    env_file:
+      - ${API_ENV_FILE:-.env}
+    environment:
+      DEPLOYMENT_ENV: ${DEPLOYMENT_ENV:-development}
+      # This one-shot Node service owns only the Agent schema; never inherit
+      # a stale Sandbox DSN from env_file.
+      SANDBOX_DATABASE_URL: ""
+      AGENT_DATABASE_URL: ${AGENT_DATABASE_URL:-mysql://sandbox:sandbox_dev_only@mysql:3306/sandbox}
+    depends_on:
+      mysql:
+        condition: service_healthy
+    restart: "no"
+    command: ["node", "src/infrastructure/mysql/cli-migrate.js", "latest"]
+    networks:
+      - backend_internal
 
   # ── Redis 7 (Agent-only runtime coordination) ─────────────
   # Holds queues, leases, streams, cancel signals, short-lived
@@ -114,6 +143,7 @@ services:
     restart: unless-stopped
     networks:
       - backend_internal
+      - dev_ingress
 
   # Sandbox internal-replay Redis ONLY (jti SET NX). Independent password + volume.
   # Never inject AGENT_REDIS_URL / REDIS_PASSWORD here — DB index is not isolation.
@@ -163,6 +193,7 @@ services:
         condition: service_started
     networks:
       - backend_internal
+      - dev_ingress
 
   # ── API Server — thin BFF (auth, conversations, files, SSE relay) ─
   api-server:
@@ -178,12 +209,20 @@ services:
     environment:
       DEPLOYMENT_ENV: ${DEPLOYMENT_ENV:-development}
       SANDBOX_BASE_URL: http://sandbox:8081
+      # BFF has no Sandbox persistence authority; do not inherit a DSN from
+      # env_file.
+      SANDBOX_DATABASE_URL: ""
       # Must match the Sandbox service key in development. Production overlay
       # requires an explicit strong secret instead of this dev-only fallback.
       SANDBOX_API_TOKEN: ${SANDBOX_API_TOKEN:-dev_only_sandbox_api_token_not_for_prod_32b}
       AGENT_BASE_URL: http://agent:4100
       AGENT_INTERNAL_TOKEN: ${AGENT_INTERNAL_TOKEN:-}
       AUTH_ENABLED: ${AUTH_ENABLED:-}
+      # Stable external subjects for explicit auth-disabled local development.
+      # Agent provisions owner-scoped internal ULIDs from these values.
+      BFF_DEV_ACTING_USER_ID: ${BFF_DEV_ACTING_USER_ID:-local-development-user}
+      BFF_DEV_ACTING_ORGANIZATION_ID: ${BFF_DEV_ACTING_ORGANIZATION_ID:-local-development-org}
+      BFF_DEV_ACTING_ROLE: ${BFF_DEV_ACTING_ROLE:-user}
       APPROVAL_MODE: ${APPROVAL_MODE:-${SANDBOX_APPROVAL_MODE:-}}
       CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-}
       APPROVAL_ENABLED: ${APPROVAL_ENABLED:-${SANDBOX_APPROVAL_ENABLED:-}}
@@ -202,6 +241,7 @@ services:
       start_period: 15s
     networks:
       - backend_internal
+      - dev_ingress
 
   # ── Agent — pi-coding-agent orchestration (independent) ──
   # Skills volume: production/default is read-only.
@@ -223,16 +263,23 @@ services:
     environment:
       DEPLOYMENT_ENV: ${DEPLOYMENT_ENV:-development}
       SANDBOX_BASE_URL: http://sandbox:8081
+      # Agent persistence is separate; never inherit Sandbox's DSN from
+      # env_file.
+      SANDBOX_DATABASE_URL: ""
       # Dev-only placeholder; prod overlay forces real strong secret via :?.
       SANDBOX_API_TOKEN: ${SANDBOX_API_TOKEN:-dev_only_sandbox_api_token_not_for_prod_32b}
+      SANDBOX_INTERNAL_HMAC_KEYRING: ${SANDBOX_INTERNAL_HMAC_KEYRING:-}
+      SANDBOX_INTERNAL_HMAC_ACTIVE_KID: ${SANDBOX_INTERNAL_HMAC_ACTIVE_KID:-}
       AGENT_INTERNAL_TOKEN: ${AGENT_INTERNAL_TOKEN:-}
+      A2A_PUBLIC_BASE_URL: ${A2A_PUBLIC_BASE_URL:-http://127.0.0.1:${AGENT_PORT:-4100}}
+      A2A_ARTIFACT_DOWNLOAD_SECRET: ${A2A_ARTIFACT_DOWNLOAD_SECRET:-dev_only_a2a_artifact_download_secret_32b}
+      A2A_ALLOW_DEV_HOST_FALLBACK: ${A2A_ALLOW_DEV_HOST_FALLBACK:-true}
       AGENT_RUN_INIT_TIMEOUT_MS: ${AGENT_RUN_INIT_TIMEOUT_MS:-15000}
       # Agent MySQL fact store (mysql:// | mysql2:// only; see agent mysql client).
       # Dev default uses non-secret placeholder credentials; override via .env.
       AGENT_DATABASE_URL: ${AGENT_DATABASE_URL:-mysql://sandbox:sandbox_dev_only@mysql:3306/sandbox}
-      # Single migration owner: HTTP Agent migrates before becoming healthy;
-      # agent-worker starts only after that health gate and never races migrations.
-      AGENT_MIGRATE_ON_START: ${AGENT_MIGRATE_ON_START:-true}
+      # Compose migration ownership belongs exclusively to agent-migrate.
+      AGENT_MIGRATE_ON_START: "false"
       # Agent Redis coordination (redis:// | rediss:// only). Agent-only authority.
       # REDIS_URL is the plan/generic alias; AGENT_REDIS_URL is the Agent client name.
       REDIS_URL: ${REDIS_URL:-redis://:redis_dev_only@redis:6379/0}
@@ -250,6 +297,9 @@ services:
       AGENT_SESSION_WORKSPACE_CWD: ${AGENT_SESSION_WORKSPACE_CWD:-/home/sandbox/workspace}
       # Concrete Pi resource root (PiRuntimeFactory.create requires non-empty agentDir).
       AGENT_PI_AGENT_DIR: ${AGENT_PI_AGENT_DIR:-/app/pi-agent-home}
+      # pi-mcp-adapter state follows the same process-owned resource root.
+      PI_CODING_AGENT_DIR: ${AGENT_PI_AGENT_DIR:-/app/pi-agent-home}
+      AGENT_MCP_RUNTIME_ROOT: ${AGENT_MCP_RUNTIME_ROOT:-/tmp/pi-enterprise-mcp-runtime}
       LLMIO_BASE_URL: ${LLMIO_BASE_URL:-}
       LLMIO_API_KEY: ${LLMIO_API_KEY:-}
       MODEL_ID: ${MODEL_ID:-deepseek-v4-flash}
@@ -270,14 +320,14 @@ services:
     volumes:
       # Default :ro. For SKILLS_MODE=development set AGENT_SKILLS_MOUNT=./skills:/home/sandbox/skill:rw
       - ${AGENT_SKILLS_MOUNT:-./skills:/home/sandbox/skill:ro}
-      - ./skills:/sandbox/skills:ro
-      - ./skills:/app/.pi/skills:ro
     restart: unless-stopped
     depends_on:
       sandbox:
         condition: service_healthy
       mysql:
         condition: service_healthy
+      agent-migrate:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
     healthcheck:
@@ -304,29 +354,49 @@ services:
     environment:
       DEPLOYMENT_ENV: ${DEPLOYMENT_ENV:-development}
       SANDBOX_BASE_URL: http://sandbox:8081
+      # Worker persistence is separate; never inherit Sandbox's DSN from
+      # env_file.
+      SANDBOX_DATABASE_URL: ""
       # Must match sandbox SANDBOX_API_TOKEN (service key + acting headers).
       SANDBOX_API_TOKEN: ${SANDBOX_API_TOKEN:-dev_only_sandbox_api_token_not_for_prod_32b}
+      SANDBOX_INTERNAL_HMAC_KEYRING: ${SANDBOX_INTERNAL_HMAC_KEYRING:-}
+      SANDBOX_INTERNAL_HMAC_ACTIVE_KID: ${SANDBOX_INTERNAL_HMAC_ACTIVE_KID:-}
       AGENT_INTERNAL_TOKEN: ${AGENT_INTERNAL_TOKEN:-}
       AGENT_DATABASE_URL: ${AGENT_DATABASE_URL:-mysql://sandbox:sandbox_dev_only@mysql:3306/sandbox}
+      AGENT_MIGRATE_ON_START: "false"
       REDIS_URL: ${REDIS_URL:-redis://:redis_dev_only@redis:6379/0}
       AGENT_REDIS_URL: ${AGENT_REDIS_URL:-redis://:redis_dev_only@redis:6379/0}
       AGENT_RUNS_QUEUE_NAME: ${AGENT_RUNS_QUEUE_NAME:-agent-runs}
       AGENT_RUN_LEASE_TTL_MS: ${AGENT_RUN_LEASE_TTL_MS:-30000}
       AGENT_RUN_LEASE_RENEW_INTERVAL_MS: ${AGENT_RUN_LEASE_RENEW_INTERVAL_MS:-10000}
+      AGENT_RUN_STREAM_MAXLEN: ${AGENT_RUN_STREAM_MAXLEN:-10000}
       AGENT_WORKER_CONCURRENCY: ${AGENT_WORKER_CONCURRENCY:-1}
       AGENT_RECOVERY_INTERVAL_MS: ${AGENT_RECOVERY_INTERVAL_MS:-60000}
       AGENT_RECOVERY_SCAN_LIMIT: ${AGENT_RECOVERY_SCAN_LIMIT:-100}
       AGENT_OUTBOX_IDLE_MS: ${AGENT_OUTBOX_IDLE_MS:-1000}
+      SANDBOX_POLICY_PROFILE: ${SANDBOX_POLICY_PROFILE:-balanced}
+      SANDBOX_ISOLATION_BACKEND: ${SANDBOX_ISOLATION_BACKEND:-bubblewrap}
+      SANDBOX_ISOLATION_REQUIRED: ${SANDBOX_ISOLATION_REQUIRED:-true}
       # Pi executor (same logical cwd / agentDir / model knobs as HTTP agent)
       AGENT_SESSION_WORKSPACE_CWD: ${AGENT_SESSION_WORKSPACE_CWD:-/home/sandbox/workspace}
       AGENT_PI_AGENT_DIR: ${AGENT_PI_AGENT_DIR:-/app/pi-agent-home}
+      PI_CODING_AGENT_DIR: ${AGENT_PI_AGENT_DIR:-/app/pi-agent-home}
+      AGENT_MCP_RUNTIME_ROOT: ${AGENT_MCP_RUNTIME_ROOT:-/tmp/pi-enterprise-mcp-runtime}
       LLMIO_BASE_URL: ${LLMIO_BASE_URL:-}
       LLMIO_API_KEY: ${LLMIO_API_KEY:-}
       MODEL_ID: ${MODEL_ID:-deepseek-v4-flash}
       MODEL_CONTEXT_WINDOW: ${MODEL_CONTEXT_WINDOW:-128000}
       MODEL_MAX_TOKENS: ${MODEL_MAX_TOKENS:-8192}
+      AGENT_SYSTEM_PROMPT: ${AGENT_SYSTEM_PROMPT:-}
+      AGENT_SYSTEM_PROMPT_FILE: ${AGENT_SYSTEM_PROMPT_FILE:-}
+      MCP_SERVERS_JSON: ${MCP_SERVERS_JSON:-[]}
+      AGENT_PROFILES_JSON: ${AGENT_PROFILES_JSON:-}
+      APPROVAL_MODE: ${APPROVAL_MODE:-${SANDBOX_APPROVAL_MODE:-}}
+      APPROVAL_ENABLED: ${APPROVAL_ENABLED:-${SANDBOX_APPROVAL_ENABLED:-}}
       SKILLS_MODE: ${SKILLS_MODE:-readonly}
       SKILLS_ROOT: /home/sandbox/skill
+      SKILLS_INSTALL_LOCAL_ALLOWLIST: ${SKILLS_INSTALL_LOCAL_ALLOWLIST:-}
+      SKILLS_AUDIT_LOG: ${SKILLS_AUDIT_LOG:-}
       # Never enable stub executor in shared compose (production fail-closed).
       # AGENT_ALLOW_STUB_EXECUTOR is intentionally unset.
     volumes:
@@ -335,6 +405,8 @@ services:
     depends_on:
       mysql:
         condition: service_healthy
+      agent-migrate:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
       agent:
@@ -359,16 +431,13 @@ services:
     env_file:
       - ${SANDBOX_ENV_FILE:-.env}
     volumes:
-      # P3 agent path: /home/sandbox/skill; keep /sandbox/skills for legacy tools
-      - ${SANDBOX_SKILLS_MOUNT:-./skills:/home/sandbox/skill:ro}
-      - ${SANDBOX_SKILLS_MOUNT:-./skills:/sandbox/skills:ro}
-      - ${SANDBOX_SKILLS_MOUNT:-./skills:/app/.pi/skills:ro}
+      # Sandbox and Bubblewrap expose Skills only through the canonical R/O path.
+      - ./skills:/home/sandbox/skill:ro
       - ${SANDBOX_WORKSPACES_MOUNT:-./workspaces:/var/sandbox/workspaces}
       - ${SANDBOX_TEMP_MOUNT:-./tmp-workspaces:/var/sandbox/tmp}
       # PR-09 control-plane roots — NOT bound into Bubblewrap workspace/tmp
       - ${SANDBOX_ARTIFACTS_MOUNT:-./artifacts:/var/sandbox/artifacts}
       - ${SANDBOX_CONTROL_MOUNT:-./control:/var/sandbox/control}
-      - ${SANDBOX_DATA_VOLUME:-sandbox_data}:/sandbox/data
     environment:
       DEPLOYMENT_ENV: ${DEPLOYMENT_ENV:-development}
       # Listen address only — does NOT authorize clients. See ALLOWED_CLIENT_CIDRS.
@@ -377,8 +446,12 @@ services:
       SANDBOX_PORT: 8081
       SANDBOX_LOG_LEVEL: ${SANDBOX_LOG_LEVEL:-INFO}
       # Sandbox persistence DSN (formal: MySQL via PyMySQL dialect).
-      # Dev default uses non-secret placeholder credentials; override via .env.
-      SANDBOX_DATABASE_URL: ${SANDBOX_DATABASE_URL:-mysql+pymysql://sandbox:sandbox_dev_only@mysql:3306/sandbox}
+      # Keep the Compose interpolation variable separate from the canonical
+      # SANDBOX_DATABASE_URL loaded by env_file. A stale host/.env value must
+      # never override the formal MySQL default. Set
+      # SANDBOX_COMPOSE_DATABASE_URL for a deliberate dev override; production
+      # overlay supplies SANDBOX_DATABASE_URL explicitly.
+      SANDBOX_DATABASE_URL: ${SANDBOX_COMPOSE_DATABASE_URL:-mysql+pymysql://sandbox:sandbox_dev_only@mysql:3306/sandbox}
       # Internal plane (Agent HMAC tools): optional in development (default off).
       # Dedicated sandbox-replay-redis + independent password (DB 0). Never REDIS_PASSWORD.
       SANDBOX_INTERNAL_PLANE_ENABLED: ${SANDBOX_INTERNAL_PLANE_ENABLED:-false}
@@ -401,6 +474,7 @@ services:
       SANDBOX_EXECUTION_TIMEOUT_SECONDS: ${SANDBOX_EXECUTION_TIMEOUT_SECONDS:-120}
       SANDBOX_MAX_OUTPUT_CHARS: ${SANDBOX_MAX_OUTPUT_CHARS:-50000}
       SANDBOX_MAX_PROCESS_COUNT: ${SANDBOX_MAX_PROCESS_COUNT:-20}
+      SANDBOX_MAX_OPEN_FILES: ${SANDBOX_MAX_OPEN_FILES:-256}
       SANDBOX_MAX_CPU_TIME_SECONDS: ${SANDBOX_MAX_CPU_TIME_SECONDS:-300}
       SANDBOX_MAX_MEMORY_MB: ${SANDBOX_MAX_MEMORY_MB:-512}
       SANDBOX_MAX_FILE_SIZE_MB: ${SANDBOX_MAX_FILE_SIZE_MB:-50}
@@ -448,6 +522,8 @@ services:
     depends_on:
       mysql:
         condition: service_healthy
+      agent-migrate:
+        condition: service_completed_successfully
       # Independent replay Redis (not Agent redis / REDIS_PASSWORD).
       sandbox-replay-redis:
         condition: service_healthy
@@ -487,9 +563,10 @@ networks:
     internal: true
   service_egress:
     name: ${COMPOSE_PROJECT_NAME:-pi-enterprise}-service-egress
+  dev_ingress:
+    name: ${COMPOSE_PROJECT_NAME:-pi-enterprise}-dev-ingress
 
 volumes:
-  sandbox_data:
   mysql_dev_data:
   redis_dev_data:
   sandbox_replay_redis_dev_data:

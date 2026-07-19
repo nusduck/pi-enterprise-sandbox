@@ -16,7 +16,7 @@
  * Approval resolution/resume is NOT claimed (PR-09).
  */
 
-import { assertUlid } from '../domain/shared/ulid.js';
+import { assertUlid, normalizeUlid } from '../domain/shared/ulid.js';
 import { SessionFenceConflictError } from '../domain/session/errors.js';
 import { ConflictError } from '../infrastructure/mysql/errors.js';
 import { AGGREGATE_TYPE_RUN } from '../infrastructure/outbox/outbox-status.js';
@@ -42,6 +42,71 @@ import {
   assertToolExecutionReplayMatch,
   policyDecisionFingerprint,
 } from '../infrastructure/mysql/repositories/tool-execution-repository.js';
+import { RUN_STATUS, runStateMachine } from '../domain/run/index.js';
+import {
+  DURABLE_INTERACTION_PENDING,
+  INTERACTION_STATUS,
+} from '../domain/interaction/interaction-status.js';
+
+const SHA256_PATTERN = /^[0-9a-f]{64}$/;
+const CONTROL_CHARACTER_PATTERN = /[\u0000-\u001f\u007f]/u;
+
+/**
+ * Extract only the structured result produced by the formal submit_artifact
+ * bridge. Never inspect tool text, which is model-visible and not a durable
+ * artifact contract.
+ *
+ * @param {unknown} result
+ * @returns {{ artifactId: string, name: string, mimeType: string, size: number, sha256: string, description: string | null } | null}
+ */
+function extractSubmittedArtifact(result) {
+  if (!result || typeof result !== 'object' || Array.isArray(result)) return null;
+  const details = /** @type {Record<string, unknown>} */ (result).details;
+  if (!details || typeof details !== 'object' || Array.isArray(details)) return null;
+
+  const metadata = /** @type {Record<string, unknown>} */ (details);
+  const artifactId = normalizeUlid(metadata.artifactId);
+  const rawName = metadata.displayName ?? metadata.name;
+  const name = typeof rawName === 'string' ? rawName : '';
+  const mimeType =
+    typeof metadata.mimeType === 'string' ? metadata.mimeType : '';
+  const size = metadata.size;
+  const sha256 = metadata.sha256;
+  const rawDescription = metadata.description;
+
+  if (
+    !artifactId ||
+    !name ||
+    name !== name.trim() ||
+    name.length > 256 ||
+    CONTROL_CHARACTER_PATTERN.test(name) ||
+    !mimeType ||
+    mimeType !== mimeType.trim() ||
+    mimeType.length > 255 ||
+    CONTROL_CHARACTER_PATTERN.test(mimeType) ||
+    !Number.isSafeInteger(size) ||
+    Number(size) < 0 ||
+    typeof sha256 !== 'string' ||
+    !SHA256_PATTERN.test(sha256) ||
+    (rawDescription != null &&
+      (typeof rawDescription !== 'string' ||
+        !rawDescription ||
+        rawDescription !== rawDescription.trim() ||
+        rawDescription.length > 1024 ||
+        CONTROL_CHARACTER_PATTERN.test(rawDescription)))
+  ) {
+    return null;
+  }
+
+  return {
+    artifactId,
+    name,
+    mimeType,
+    size: Number(size),
+    sha256,
+    description: rawDescription == null ? null : rawDescription,
+  };
+}
 
 /**
  * Durable policy state conflict — enterprise-policy maps to block.
@@ -270,8 +335,6 @@ export class FencedToolGovernanceRecorder {
       if (decision.decision === 'deny') {
         desiredStatus = TOOL_EXECUTION_STATUS.FAILED;
         errorCode = decision.reasonCode || 'POLICY_DENIED';
-      } else if (decision.decision === 'require_approval') {
-        desiredStatus = TOOL_EXECUTION_STATUS.WAITING_APPROVAL;
       }
 
       /** @type {any} */
@@ -279,12 +342,13 @@ export class FencedToolGovernanceRecorder {
 
       await this.tx.run(async (trx) => {
         const repos = this.createRepositories(trx);
+        const scope = {
+          orgId: this.context.orgId,
+          userId: this.context.userId,
+        };
         await repos.sessions.assertExecutionFence(
           this.context.agentSessionId,
-          {
-            orgId: this.context.orgId,
-            userId: this.context.userId,
-          },
+          scope,
           this.executionFenceToken,
           { forUpdate: true, requireActive: true },
         );
@@ -295,8 +359,9 @@ export class FencedToolGovernanceRecorder {
           );
         }
 
-        // Always PROPOSED first; getOrCreate transitions for deny/waiting with timestamps.
-        // policyFingerprint is stored in hidden envelope metadata.
+        // Approval requests remain PROPOSED until requestApproval atomically
+        // creates the Approval and pauses the Run. policyFingerprint is stored
+        // in hidden envelope metadata.
         const proposed = await repos.toolExecutions.getOrCreate({
           toolExecutionId: assertUlid(this.generateId(), 'toolExecutionId'),
           runId: this.context.runId,
@@ -316,10 +381,13 @@ export class FencedToolGovernanceRecorder {
 
         let toolExecution = proposed.toolExecution;
 
+        const firstPolicyDecision =
+          proposed.created || proposed.adoptedPolicyFingerprint;
+
         // Fail-closed durable policy state on replay.
         // - exact fingerprint only
         // - allow only for PROPOSED (never re-execute RUNNING/SUCCEEDED/…)
-        if (!proposed.created) {
+        if (!firstPolicyDecision) {
           assertCompatiblePolicyReplay(toolExecution, {
             decision: decision.decision,
             desiredStatus,
@@ -346,9 +414,40 @@ export class FencedToolGovernanceRecorder {
           toolExecution = tr.toolExecution;
         }
 
+        // Pi's start event precedes beforeToolCall. Only an allowed policy
+        // decision may move the side-effect-free PROPOSED row into RUNNING.
+        let startedEnvelope = null;
+        if (
+          decision.decision === 'allow' &&
+          proposed.adoptedPolicyFingerprint &&
+          toolExecution.status === TOOL_EXECUTION_STATUS.PROPOSED
+        ) {
+          const tr = await repos.toolExecutions.transitionStatus({
+            toolExecutionId: toolExecution.toolExecutionId,
+            orgId: this.context.orgId,
+            userId: this.context.userId,
+            fromStatus: TOOL_EXECUTION_STATUS.PROPOSED,
+            toStatus: TOOL_EXECUTION_STATUS.RUNNING,
+            setStartedAt: true,
+          });
+          toolExecution = tr.toolExecution;
+          if (tr.changed) {
+            startedEnvelope = await this.#appendEventInTrx(repos, {
+              type: 'tool.execution.started',
+              timestamp: this.now(),
+              data: {
+                toolCallId,
+                toolName,
+                toolExecutionId: toolExecution.toolExecutionId,
+                args: redactPayload(input.args ?? {}),
+              },
+            });
+          }
+        }
+
         // Exactly-once audit per ToolExecution proposal across restarts.
         let audit = null;
-        if (proposed.created) {
+        if (firstPolicyDecision) {
           audit = await repos.sandboxAudit.append({
             auditId: assertUlid(this.generateId(), 'auditId'),
             orgId: this.context.orgId,
@@ -392,10 +491,18 @@ export class FencedToolGovernanceRecorder {
         result = {
           toolExecution,
           audit,
-          created: proposed.created,
-          envelopes: /** @type {CanonicalRunEventEnvelope[]} */ ([]),
+          created: firstPolicyDecision,
+          envelopes: /** @type {CanonicalRunEventEnvelope[]} */ (
+            startedEnvelope ? [startedEnvelope] : []
+          ),
         };
       });
+
+      if (this.emit) {
+        for (const envelope of result?.envelopes || []) {
+          await this.emit(envelope);
+        }
+      }
 
       return result;
     });
@@ -425,15 +532,36 @@ export class FencedToolGovernanceRecorder {
 
       await this.tx.run(async (trx) => {
         const repos = this.createRepositories(trx);
+        const scope = {
+          orgId: this.context.orgId,
+          userId: this.context.userId,
+        };
         await repos.sessions.assertExecutionFence(
           this.context.agentSessionId,
-          {
-            orgId: this.context.orgId,
-            userId: this.context.userId,
-          },
+          scope,
           this.executionFenceToken,
           { forUpdate: true, requireActive: true },
         );
+
+        // Serialize approval creation and resolution on the owned parent Run.
+        const run = await repos.runs.getById(this.context.runId, scope, {
+          forUpdate: true,
+        });
+        if (!run) {
+          throw new ConflictError('approval Run is not owned by this context', {
+            resource: 'runs',
+            id: this.context.runId,
+          });
+        }
+        if (
+          run.status !== RUN_STATUS.RUNNING &&
+          run.status !== RUN_STATUS.WAITING_APPROVAL
+        ) {
+          throw new ConflictError(
+            `cannot request approval while Run is ${run.status}`,
+            { resource: 'runs', id: this.context.runId },
+          );
+        }
 
         let toolExecution;
         const expectedSource = this.#resolveToolSource(toolName);
@@ -475,7 +603,7 @@ export class FencedToolGovernanceRecorder {
             toolSource: expectedSource,
             riskLevel: input.decision?.riskLevel || 'high',
             argumentsJson: input.args ?? {},
-            status: TOOL_EXECUTION_STATUS.WAITING_APPROVAL,
+            status: TOOL_EXECUTION_STATUS.PROPOSED,
             traceId: this.context.traceId,
             orgId: this.context.orgId,
             userId: this.context.userId,
@@ -513,6 +641,22 @@ export class FencedToolGovernanceRecorder {
           },
         });
 
+        if (approval.status !== APPROVAL_STATUS.PENDING) {
+          throw new DurablePolicyConflictError(
+            `approval ${approval.approvalId} is already ${approval.status}`,
+            {
+              reasonCode: 'POLICY_DURABLE_APPROVAL_RESOLVED',
+              toolExecution,
+            },
+          );
+        }
+        if (created && run.status === RUN_STATUS.WAITING_APPROVAL) {
+          throw new ConflictError(
+            'Run is already waiting on a different approval',
+            { resource: 'runs', id: this.context.runId },
+          );
+        }
+
         /** @type {CanonicalRunEventEnvelope | null} */
         let envelope = null;
         // MySQL-authoritative: event only when Approval row is newly created.
@@ -532,10 +676,37 @@ export class FencedToolGovernanceRecorder {
           });
         }
 
+        /** @type {CanonicalRunEventEnvelope | null} */
+        let statusEnvelope = null;
+        if (run.status === RUN_STATUS.RUNNING) {
+          runStateMachine.assertTransition(
+            RUN_STATUS.RUNNING,
+            RUN_STATUS.WAITING_APPROVAL,
+          );
+          await repos.runs.updateStatusIf(this.context.runId, scope, {
+            expectedStatus: RUN_STATUS.RUNNING,
+            status: RUN_STATUS.WAITING_APPROVAL,
+            statusReason: 'approval pending',
+          });
+          statusEnvelope = await this.#appendEventInTrx(repos, {
+            type: 'run.status.changed',
+            timestamp,
+            data: {
+              from: RUN_STATUS.RUNNING,
+              to: RUN_STATUS.WAITING_APPROVAL,
+              status: RUN_STATUS.WAITING_APPROVAL,
+              approvalId: approval.approvalId,
+              toolExecutionId: toolExecution.toolExecutionId,
+            },
+          });
+        }
+
         out = {
           approval,
           toolExecution,
           envelope,
+          statusEnvelope,
+          envelopes: [envelope, statusEnvelope].filter(Boolean),
           created,
           durablePending: Object.freeze({
             kind: DURABLE_APPROVAL_PENDING,
@@ -549,8 +720,206 @@ export class FencedToolGovernanceRecorder {
         };
       });
 
-      if (out?.envelope && this.emit) {
-        await this.emit(out.envelope);
+      if (this.emit) {
+        for (const envelope of out?.envelopes || []) {
+          await this.emit(envelope);
+        }
+      }
+      return out;
+    });
+  }
+
+  /**
+   * Create a durable ask_user request and park the Run in WAITING_INPUT.
+   * The request, interaction.requested event, Run transition, and outbox row
+   * share one transaction; the returned suspension signal is ephemeral.
+   * @param {{toolCallId:string,toolName?:string,args?:object,interactionType:string,title:string,message?:string|null,options?:string[],placeholder?:string|null,toolExecutionId?:string}} input
+   */
+  async requestInteraction(input) {
+    this.#assertLock();
+    const toolCallId = String(input?.toolCallId || '').trim();
+    if (!toolCallId) throw new Error('requestInteraction requires toolCallId');
+    const interactionType = String(input?.interactionType || '').trim().toLowerCase();
+    if (!['input', 'select', 'confirm'].includes(interactionType)) {
+      throw new Error('interactionType must be input, select, or confirm');
+    }
+    const title = String(input?.title || '').trim();
+    if (!title || title.length > 512) throw new Error('interaction title is required and must be <= 512 characters');
+    const message = input?.message == null ? null : String(input.message);
+    const options = Array.isArray(input?.options)
+      ? input.options.map((value) => String(value)).slice(0, 20)
+      : [];
+    if (interactionType === 'select' && options.length < 2) {
+      throw new Error('select interaction requires at least two options');
+    }
+
+    return this.#withInflight(`interaction.requested:${toolCallId}`, async () => {
+      /** @type {any} */
+      let out = null;
+      await this.tx.run(async (trx) => {
+        const repos = this.createRepositories(trx);
+        const scope = { orgId: this.context.orgId, userId: this.context.userId };
+        await repos.sessions.assertExecutionFence(
+          this.context.agentSessionId,
+          scope,
+          this.executionFenceToken,
+          { forUpdate: true, requireActive: true },
+        );
+        if (!repos.interactions) {
+          throw new Error('createRepositories must wire interactions');
+        }
+        const run = await repos.runs.getById(this.context.runId, scope, {
+          forUpdate: true,
+        });
+        if (!run) throw new ConflictError('interaction Run is not owned by this context', { resource: 'runs', id: this.context.runId });
+        if (run.status !== RUN_STATUS.RUNNING && run.status !== RUN_STATUS.WAITING_INPUT) {
+          throw new ConflictError(`cannot request interaction while Run is ${run.status}`, { resource: 'runs', id: run.runId });
+        }
+
+        let toolExecution;
+        if (input.toolExecutionId) {
+          toolExecution = await repos.toolExecutions.getById(input.toolExecutionId, scope, { forUpdate: true });
+          if (
+            toolExecution.runId !== run.runId ||
+            toolExecution.agentSessionId !== this.context.agentSessionId ||
+            toolExecution.toolCallId !== toolCallId
+          ) {
+            throw new ConflictError('interaction tool execution binding mismatch', { resource: 'tool_executions', id: toolExecution.toolExecutionId });
+          }
+        } else {
+          toolExecution = await repos.toolExecutions.getByRunAndToolCallId(
+            run.runId,
+            toolCallId,
+            scope,
+            { forUpdate: true },
+          );
+        }
+        if (!toolExecution) {
+          const created = await repos.toolExecutions.getOrCreate({
+            toolExecutionId: assertUlid(this.generateId(), 'toolExecutionId'),
+            runId: run.runId,
+            agentSessionId: this.context.agentSessionId,
+            toolCallId,
+            toolName: String(input.toolName || 'ask_user'),
+            toolSource: 'internal',
+            riskLevel: 'low',
+            argumentsJson: input.args ?? {},
+            status: TOOL_EXECUTION_STATUS.PROPOSED,
+            traceId: this.context.traceId,
+            orgId: this.context.orgId,
+            userId: this.context.userId,
+          });
+          toolExecution = created.toolExecution;
+        }
+        if (toolExecution.status === TOOL_EXECUTION_STATUS.PROPOSED) {
+          const started = await repos.toolExecutions.transitionStatus({
+            toolExecutionId: toolExecution.toolExecutionId,
+            orgId: this.context.orgId,
+            userId: this.context.userId,
+            fromStatus: TOOL_EXECUTION_STATUS.PROPOSED,
+            toStatus: TOOL_EXECUTION_STATUS.RUNNING,
+            setStartedAt: true,
+          });
+          toolExecution = started.toolExecution;
+        }
+        if (toolExecution.status !== TOOL_EXECUTION_STATUS.RUNNING) {
+          throw new ConflictError(`interaction tool execution is ${toolExecution.status}`, { resource: 'tool_executions', id: toolExecution.toolExecutionId });
+        }
+
+        const requestJson = {
+          interactionId: input.interactionId || null,
+          interactionType,
+          title,
+          message,
+          options,
+          placeholder: input.placeholder == null ? null : String(input.placeholder),
+          toolName: String(input.toolName || 'ask_user'),
+          toolCallId,
+          toolExecutionId: toolExecution.toolExecutionId,
+          runId: run.runId,
+          agentSessionId: this.context.agentSessionId,
+          traceId: this.context.traceId,
+        };
+        const pending = await repos.interactions.getOrCreatePending({
+          interactionId: assertUlid(input.interactionId || this.generateId(), 'interactionId'),
+          orgId: this.context.orgId,
+          userId: this.context.userId,
+          runId: run.runId,
+          agentSessionId: this.context.agentSessionId,
+          toolExecutionId: toolExecution.toolExecutionId,
+          toolCallId,
+          interactionType,
+          requestJson,
+        });
+        const interaction = pending.interaction;
+        if (interaction.status !== INTERACTION_STATUS.PENDING) {
+          throw new ConflictError(
+            `interaction ${interaction.interactionId} is already ${interaction.status}`,
+            { resource: 'interactions', id: interaction.interactionId },
+          );
+        }
+        /** @type {any[]} */
+        const envelopes = [];
+        if (pending.created) {
+          await this.#appendEventInTrx(repos, {
+            type: 'interaction.requested',
+            timestamp: this.now(),
+            data: {
+              interactionId: interaction.interactionId,
+              interactionType,
+              title,
+              message,
+              options,
+              placeholder: requestJson.placeholder,
+              toolCallId,
+              toolExecutionId: toolExecution.toolExecutionId,
+              status: INTERACTION_STATUS.PENDING,
+            },
+          }).then((envelope) => envelopes.push(envelope));
+        }
+        if (run.status === RUN_STATUS.RUNNING && pending.created) {
+          runStateMachine.assertTransition(RUN_STATUS.RUNNING, RUN_STATUS.WAITING_INPUT);
+          await repos.runs.updateStatusIf(run.runId, scope, {
+            expectedStatus: RUN_STATUS.RUNNING,
+            status: RUN_STATUS.WAITING_INPUT,
+            statusReason: 'user interaction pending',
+          });
+          await this.#appendEventInTrx(repos, {
+            type: 'run.status.changed',
+            timestamp: this.now(),
+            data: {
+              from: RUN_STATUS.RUNNING,
+              to: RUN_STATUS.WAITING_INPUT,
+              status: RUN_STATUS.WAITING_INPUT,
+              interactionId: interaction.interactionId,
+              interactionType,
+              title,
+              message,
+              options,
+            },
+          }).then((envelope) => envelopes.push(envelope));
+        }
+        out = {
+          interaction,
+          toolExecution,
+          created: pending.created,
+          envelopes,
+          durablePending: Object.freeze({
+            kind: DURABLE_INTERACTION_PENDING,
+            interactionId: interaction.interactionId,
+            interactionType,
+            title,
+            message,
+            options,
+            toolCallId,
+            toolExecutionId: toolExecution.toolExecutionId,
+            runId: run.runId,
+            status: INTERACTION_STATUS.PENDING,
+          }),
+        };
+      });
+      if (this.emit) {
+        for (const envelope of out?.envelopes || []) await this.emit(envelope);
       }
       return out;
     });
@@ -559,7 +928,7 @@ export class FencedToolGovernanceRecorder {
   /**
    * tool.execution.started only when ledger transitions into RUNNING.
    *
-   * @param {{ toolCallId: string, toolName: string, args?: unknown }} input
+   * @param {{ toolCallId: string, toolName: string, args?: unknown, toolSource?: string, approvalId?: string }} input
    */
   async recordToolStarted(input) {
     this.#assertLock();
@@ -609,13 +978,33 @@ export class FencedToolGovernanceRecorder {
             argumentsJson: input.args ?? {},
           });
           if (existing.status === TOOL_EXECUTION_STATUS.WAITING_APPROVAL) {
-            throw new ConflictError(
-              'TOOL_WAITING_APPROVAL: cannot start tool execution while approval is pending',
+            if (!input.approvalId) {
+              throw new ConflictError(
+                'TOOL_WAITING_APPROVAL: cannot start tool execution while approval is pending',
+                {
+                  resource: 'tool_executions',
+                  id: existing.toolExecutionId,
+                },
+              );
+            }
+            const approval = await repos.approvals.getById(
+              input.approvalId,
               {
-                resource: 'tool_executions',
-                id: existing.toolExecutionId,
+                orgId: this.context.orgId,
+                userId: this.context.userId,
               },
+              { forUpdate: true },
             );
+            if (
+              approval.runId !== this.context.runId ||
+              approval.toolExecutionId !== existing.toolExecutionId ||
+              approval.status !== APPROVAL_STATUS.APPROVED
+            ) {
+              throw new ConflictError(
+                'approved replay does not match the waiting tool execution',
+                { resource: 'approvals', id: approval.approvalId },
+              );
+            }
           }
           if (isTerminalToolExecutionStatus(existing.status)) {
             // Already finished — no start event on restart.
@@ -634,6 +1023,7 @@ export class FencedToolGovernanceRecorder {
             riskLevel: 'low',
             argumentsJson: input.args ?? {},
             status: TOOL_EXECUTION_STATUS.PROPOSED,
+            policyPending: true,
             traceId: this.context.traceId,
             orgId: this.context.orgId,
             userId: this.context.userId,
@@ -641,17 +1031,30 @@ export class FencedToolGovernanceRecorder {
           toolExecution = got.toolExecution;
         }
 
-        if (toolExecution.status === TOOL_EXECUTION_STATUS.PROPOSED) {
-          const tr = await repos.toolExecutions.transitionStatus({
-            toolExecutionId: toolExecution.toolExecutionId,
-            orgId: this.context.orgId,
-            userId: this.context.userId,
-            fromStatus: TOOL_EXECUTION_STATUS.PROPOSED,
-            toStatus: TOOL_EXECUTION_STATUS.RUNNING,
-            setStartedAt: true,
-          });
-          toolExecution = tr.toolExecution;
-          statusChanged = tr.changed;
+        if (
+          toolExecution.status === TOOL_EXECUTION_STATUS.PROPOSED ||
+          toolExecution.status === TOOL_EXECUTION_STATUS.WAITING_APPROVAL
+        ) {
+          if (
+            toolExecution.status === TOOL_EXECUTION_STATUS.PROPOSED &&
+            !toolExecution._policyFingerprint
+          ) {
+            // Pi emits this notification before beforeToolCall. Leave a
+            // side-effect-free placeholder for policy to adopt.
+            statusChanged = false;
+          } else {
+            const fromStatus = toolExecution.status;
+            const tr = await repos.toolExecutions.transitionStatus({
+              toolExecutionId: toolExecution.toolExecutionId,
+              orgId: this.context.orgId,
+              userId: this.context.userId,
+              fromStatus,
+              toStatus: TOOL_EXECUTION_STATUS.RUNNING,
+              setStartedAt: true,
+            });
+            toolExecution = tr.toolExecution;
+            statusChanged = tr.changed;
+          }
         } else if (toolExecution.status === TOOL_EXECUTION_STATUS.RUNNING) {
           statusChanged = false;
         } else {
@@ -674,6 +1077,9 @@ export class FencedToolGovernanceRecorder {
               toolName,
               toolExecutionId: toolExecution.toolExecutionId,
               args: redactPayload(input.args ?? {}),
+              ...(input.approvalId
+                ? { approvalId: input.approvalId, approvalReplay: true }
+                : {}),
             },
           });
         }
@@ -713,6 +1119,8 @@ export class FencedToolGovernanceRecorder {
       const timestamp = this.now();
       /** @type {CanonicalRunEventEnvelope | null} */
       let envelope = null;
+      /** @type {CanonicalRunEventEnvelope | null} */
+      let artifactEnvelope = null;
       /** @type {any} */
       let toolExecution = null;
       let statusChanged = false;
@@ -858,11 +1266,39 @@ export class FencedToolGovernanceRecorder {
               result: redactPayload(input.result ?? null),
             },
           });
+
+          const artifact =
+            !isError && toolName === 'submit_artifact'
+              ? extractSubmittedArtifact(input.result)
+              : null;
+          if (artifact) {
+            artifactEnvelope = await this.#appendEventInTrx(repos, {
+              type: 'artifact.ready',
+              timestamp,
+              data: {
+                artifactId: artifact.artifactId,
+                name: artifact.name,
+                mimeType: artifact.mimeType,
+                size: artifact.size,
+                sha256: artifact.sha256,
+                description: artifact.description,
+                toolCallId,
+                toolExecutionId: toolExecution.toolExecutionId,
+              },
+            });
+          }
         }
       });
 
       if (envelope && this.emit) await this.emit(envelope);
-      return { envelope, toolExecution, statusChanged };
+      if (artifactEnvelope && this.emit) await this.emit(artifactEnvelope);
+      return {
+        envelope,
+        artifactEnvelope,
+        envelopes: [envelope, artifactEnvelope].filter(Boolean),
+        toolExecution,
+        statusChanged,
+      };
     });
   }
 
@@ -1155,9 +1591,8 @@ export class FencedToolGovernanceRecorder {
  * Enforce durable prior policy state vs a freshly evaluated decision.
  *
  * Exact policy fingerprint required (no broad POLICY/DENIED matching).
- * Fresh `allow` may proceed only when durable status is still PROPOSED.
- * RUNNING / SUCCEEDED / FAILED / WAITING_APPROVAL must not re-enter execute
- * (tool_call gate returns block via DurablePolicyConflictError).
+ * Fresh `allow` may proceed while PROPOSED. RUNNING is replay-compatible only
+ * before a Sandbox request claim exists; claimed/terminal states cannot re-enter.
  *
  * @param {object} toolExecution
  * @param {{
@@ -1199,8 +1634,15 @@ export function assertCompatiblePolicyReplay(toolExecution, next) {
 
   // Fingerprints match — status-specific compatibility for tool_call gate.
   if (decision === 'allow') {
-    // Only exact-policy PROPOSED may return allow (tool not yet started).
+    // Exact-policy PROPOSED, or the brief pre-claim RUNNING window, is safe to
+    // replay. The toolCall id remains unique and transport binding is atomic.
     if (status === TOOL_EXECUTION_STATUS.PROPOSED) {
+      return;
+    }
+    if (
+      status === TOOL_EXECUTION_STATUS.RUNNING &&
+      !toolExecution.requestHash
+    ) {
       return;
     }
     if (

@@ -81,6 +81,7 @@ export function createFakeRunWorld(opts = {}) {
     messages: [],
     runs: [],
     run_events: [],
+    tool_executions: [],
     idempotency_records: [],
     domain_outbox: [],
   };
@@ -508,6 +509,26 @@ export function createFakeRunWorld(opts = {}) {
       messages: new MessageRepository(db),
       runs: new RunRepository(db, { now }),
       runEvents: new RunEventRepository(db),
+      toolExecutions: {
+        async listByRun(runId, scope) {
+          const ownedRun = tables.runs.find(
+            (row) =>
+              row.run_id === runId &&
+              row.org_id === scope.orgId &&
+              row.user_id === scope.userId,
+          );
+          if (!ownedRun) {
+            throw new Error('Run not found for tool execution scope');
+          }
+          return tables.tool_executions
+            .filter((row) => row.run_id === runId)
+            .map((row) => ({
+              toolExecutionId: row.tool_execution_id,
+              runId: row.run_id,
+              status: row.status,
+            }));
+        },
+      },
       idempotency: new IdempotencyRepository(db, { now }),
       outbox: new OutboxRepository(db, { now }),
     };

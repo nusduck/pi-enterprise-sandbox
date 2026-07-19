@@ -6,7 +6,11 @@
  */
 
 import { MysqlOrphanSchemaError } from './errors.js';
-import { CORE_TABLES_CREATE_ORDER, A2A_TABLES } from './schema-tables.js';
+import {
+  CORE_TABLES_CREATE_ORDER,
+  A2A_TABLES,
+  TRACE_TABLES,
+} from './schema-tables.js';
 
 /** Filename stem recorded by knex for the core platform migration. */
 export const CORE_MIGRATION_NAME = '20260718000001_core_platform_schema.js';
@@ -23,6 +27,14 @@ export const CREATE_TABLE_MIGRATION_SENTINELS = Object.freeze([
   {
     migrationName: '20260718000009_a2a_protocol.js',
     tables: A2A_TABLES,
+  },
+  {
+    migrationName: '20260719000001_trace_spans.js',
+    tables: TRACE_TABLES,
+  },
+  {
+    migrationName: '20260719000003_run_interactions.js',
+    tables: Object.freeze(['run_interactions']),
   },
 ]);
 

@@ -6,7 +6,7 @@
  *
  * require_approval: creates durable PENDING approval + returns block.
  * Tool MUST NOT execute. Does not use in-process waiters.
- * Does not transition Run → WAITING_APPROVAL (resume is PR-09).
+ * Approval creation and Run → WAITING_APPROVAL are one durable transaction.
  */
 
 import {
@@ -15,6 +15,7 @@ import {
 } from './policy-decision.js';
 import { createPolicyEngine } from './policy-engine.js';
 import { DURABLE_APPROVAL_PENDING } from '../../domain/tool/approval-status.js';
+import { Type } from 'typebox';
 
 export {
   validatePolicyDecision,
@@ -58,6 +59,7 @@ function blockResult(reasonCode, reason, extra = {}) {
  *     } | null,
  *     runSuspensionPort?: {
  *       onDurableApprovalPending?: (signal: object) => Promise<void> | void,
+ *       onDurableInteractionPending?: (signal: object) => Promise<void> | void,
  *     } | null,
  *     onSessionStart?: Function,
  *   },
@@ -102,6 +104,73 @@ export function createEnterprisePolicyExtension(options) {
    * @param {import('@earendil-works/pi-coding-agent').ExtensionAPI} pi
    */
   function enterprisePolicyExtension(pi) {
+    // ask_user lives inside enterprise-policy so the production bundle remains
+    // exactly three extensions. Its execute path persists before suspending.
+    pi.registerTool({
+      name: 'ask_user',
+      label: 'Ask user',
+      description:
+        'Pause the current run and request required input, confirmation, or a selection from the user.',
+      promptSnippet: 'Request user input durably when the task cannot continue without it',
+      promptGuidelines: [
+        'Use ask_user only when the task genuinely requires information or a choice that is not already available.',
+      ],
+      parameters: Type.Object({
+        interaction_type: Type.Union([
+          Type.Literal('input'),
+          Type.Literal('select'),
+          Type.Literal('confirm'),
+        ]),
+        title: Type.String({ minLength: 1, maxLength: 512 }),
+        message: Type.Optional(Type.String({ maxLength: 4000 })),
+        options: Type.Optional(
+          Type.Array(Type.String({ minLength: 1, maxLength: 512 }), {
+            maxItems: 20,
+          }),
+        ),
+        placeholder: Type.Optional(Type.String({ maxLength: 512 })),
+      }),
+      async execute(toolCallId, input) {
+        if (!governance || typeof governance.requestInteraction !== 'function') {
+          throw Object.assign(
+            new Error('INTERACTION_DATA_PLANE_UNAVAILABLE: durable interaction recorder is required'),
+            { code: 'INTERACTION_DATA_PLANE_UNAVAILABLE' },
+          );
+        }
+        const pending = await governance.requestInteraction({
+          toolCallId,
+          toolName: 'ask_user',
+          args: input,
+          interactionType: input.interaction_type,
+          title: input.title,
+          message: input.message ?? null,
+          options: input.options ?? [],
+          placeholder: input.placeholder ?? null,
+        });
+        const durablePending = pending?.durablePending;
+        if (!durablePending) {
+          throw Object.assign(
+            new Error('INTERACTION_PERSIST_FAILED: no durable interaction signal'),
+            { code: 'INTERACTION_PERSIST_FAILED' },
+          );
+        }
+        try {
+          await suspension?.onDurableInteractionPending?.(durablePending);
+        } finally {
+          // Reject the active Pi turn after the transaction commits. The
+          // executor recognizes the captured durable signal and checkpoints
+          // the resulting tool placeholder before returning WAITING_INPUT.
+          throw Object.assign(
+            new Error(`User interaction pending: ${durablePending.interactionId}`),
+            {
+              code: 'DURABLE_INTERACTION_PENDING',
+              durablePending,
+            },
+          );
+        }
+      },
+    });
+
     pi.on('session_start', async (event, ctx) => {
       if (typeof deps.onSessionStart === 'function') {
         await deps.onSessionStart(event, ctx);
@@ -225,7 +294,7 @@ export function createEnterprisePolicyExtension(options) {
                           ?.toolExecutionId,
                     }
                   : null,
-              runStatusHint: null,
+              runStatusHint: 'WAITING_APPROVAL',
             },
           );
         }
@@ -292,8 +361,7 @@ export function createEnterprisePolicyExtension(options) {
                   runId: runContext?.runId,
                   status: 'PENDING',
                 },
-                // Explicit: B2 does not auto-transition Run to WAITING_APPROVAL.
-                runStatusHint: null,
+                runStatusHint: 'WAITING_APPROVAL',
               },
             );
           } catch (err) {
@@ -340,7 +408,7 @@ export function createEnterprisePolicyExtension(options) {
               : 'approval not granted',
             {
               durablePending: approval?.durablePending ?? null,
-              runStatusHint: null,
+              runStatusHint: 'WAITING_APPROVAL',
             },
           );
         }
@@ -366,8 +434,7 @@ export function createEnterprisePolicyExtension(options) {
     failClosed: true,
     toolsRegistered: false,
     durableApprovalPending: true,
-    // B2: does not transition Run to WAITING_APPROVAL; PR-09 resolves.
-    claimsRunWaitingApproval: false,
+    claimsRunWaitingApproval: true,
   });
   return enterprisePolicyExtension;
 }

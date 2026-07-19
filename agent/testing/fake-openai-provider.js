@@ -68,6 +68,45 @@ export function buildChatCompletionResponse(content, model = 'fake-model') {
 }
 
 /**
+ * Build a deterministic tool-call response accepted by OpenAI-compatible
+ * providers. This stays in the guarded test helper; production never loads a
+ * synthetic model response path.
+ *
+ * @param {{ id: string, name: string, arguments: object|string }[]} toolCalls
+ * @param {string} [model]
+ */
+export function buildChatCompletionToolResponse(toolCalls, model = 'fake-model') {
+  return {
+    id: 'chatcmpl-fake-tool',
+    object: 'chat.completion',
+    created: Math.floor(Date.now() / 1000),
+    model,
+    choices: [
+      {
+        index: 0,
+        message: {
+          role: 'assistant',
+          content: null,
+          tool_calls: toolCalls.map((call) => ({
+            id: call.id,
+            type: 'function',
+            function: {
+              name: call.name,
+              arguments:
+                typeof call.arguments === 'string'
+                  ? call.arguments
+                  : JSON.stringify(call.arguments ?? {}),
+            },
+          })),
+        },
+        finish_reason: 'tool_calls',
+      },
+    ],
+    usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+  };
+}
+
+/**
  * SSE stream chunks for OpenAI chat.completions stream=true.
  * @param {string} content
  * @param {string} [model]
@@ -101,13 +140,95 @@ export function buildChatCompletionStream(content, model = 'fake-model') {
 }
 
 /**
+ * SSE equivalent of {@link buildChatCompletionToolResponse}.
+ * @param {{ id: string, name: string, arguments: object|string }[]} toolCalls
+ * @param {string} [model]
+ */
+export function buildChatCompletionToolStream(toolCalls, model = 'fake-model') {
+  const id = 'chatcmpl-fake-tool-stream';
+  const created = Math.floor(Date.now() / 1000);
+  const chunks = [
+    {
+      id,
+      object: 'chat.completion.chunk',
+      created,
+      model,
+      choices: [
+        { index: 0, delta: { role: 'assistant', content: '' }, finish_reason: null },
+      ],
+    },
+    ...toolCalls.map((call, index) => ({
+      id,
+      object: 'chat.completion.chunk',
+      created,
+      model,
+      choices: [
+        {
+          index: 0,
+          delta: {
+            tool_calls: [
+              {
+                index,
+                id: call.id,
+                type: 'function',
+                function: {
+                  name: call.name,
+                  arguments:
+                    typeof call.arguments === 'string'
+                      ? call.arguments
+                      : JSON.stringify(call.arguments ?? {}),
+                },
+              },
+            ],
+          },
+          finish_reason: null,
+        },
+      ],
+    })),
+    {
+      id,
+      object: 'chat.completion.chunk',
+      created,
+      model,
+      choices: [{ index: 0, delta: {}, finish_reason: 'tool_calls' }],
+    },
+  ];
+  return chunks.map((chunk) => `data: ${JSON.stringify(chunk)}\n\n`).join('') + 'data: [DONE]\n\n';
+}
+
+function normalizeScriptedResponse(value, fallback) {
+  if (typeof value === 'string') return { content: value, toolCalls: null };
+  if (value && typeof value === 'object') {
+    const toolCalls = Array.isArray(value.toolCalls) ? value.toolCalls : null;
+    if (toolCalls?.length) return { content: null, toolCalls };
+    if (typeof value.content === 'string') {
+      return { content: value.content, toolCalls: null };
+    }
+  }
+  return { content: fallback, toolCalls: null };
+}
+
+/**
  * Start a local OpenAI-compatible HTTP server.
- * @param {{ reply?: string, port?: number }} [options]
- * @returns {Promise<{ baseUrl: string, port: number, requests: object[], close: () => Promise<void> }>}
+ * @param {{
+ *   reply?: string,
+ *   port?: number,
+ *   responder?: (input: { body: any, requestIndex: number, requests: object[] }) =>
+ *     (string|{ content?: string, toolCalls?: { id: string, name: string, arguments: object|string }[] })|
+ *     Promise<string|{ content?: string, toolCalls?: { id: string, name: string, arguments: object|string }[] }>,
+ * }} [options]
+ * @returns {Promise<{
+ *   baseUrl: string,
+ *   port: number,
+ *   requests: object[],
+ *   setResponder: (next: Function|null) => void,
+ *   close: () => Promise<void>,
+ * }>}
  */
 export function startFakeOpenAIProvider(options = {}) {
   const reply = options.reply ?? 'fake-llm-ok';
   const requests = [];
+  let responder = typeof options.responder === 'function' ? options.responder : null;
 
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url || '/', 'http://127.0.0.1');
@@ -140,17 +261,49 @@ export function startFakeOpenAIProvider(options = {}) {
         url.pathname.endsWith('/chat/completions'))
     ) {
       const stream = Boolean(body && body.stream);
+      const scripted = normalizeScriptedResponse(
+        responder
+          ? await responder({
+              body,
+              requestIndex: requests.length - 1,
+              requests,
+            })
+          : reply,
+        reply,
+      );
       if (stream) {
         res.writeHead(200, {
           'Content-Type': 'text/event-stream',
           'Cache-Control': 'no-cache',
           Connection: 'keep-alive',
         });
-        res.end(buildChatCompletionStream(reply, body?.model || 'fake-model'));
+        res.end(
+          scripted.toolCalls
+            ? buildChatCompletionToolStream(
+                scripted.toolCalls,
+                body?.model || 'fake-model',
+              )
+            : buildChatCompletionStream(
+                scripted.content,
+                body?.model || 'fake-model',
+              ),
+        );
         return;
       }
       res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify(buildChatCompletionResponse(reply, body?.model || 'fake-model')));
+      res.end(
+        JSON.stringify(
+          scripted.toolCalls
+            ? buildChatCompletionToolResponse(
+                scripted.toolCalls,
+                body?.model || 'fake-model',
+              )
+            : buildChatCompletionResponse(
+                scripted.content,
+                body?.model || 'fake-model',
+              ),
+        ),
+      );
       return;
     }
 
@@ -167,8 +320,16 @@ export function startFakeOpenAIProvider(options = {}) {
         baseUrl: `http://127.0.0.1:${port}/v1`,
         port,
         requests,
+        setResponder(next) {
+          responder = typeof next === 'function' ? next : null;
+        },
         close: () =>
           new Promise((resClose, rejClose) => {
+            // A release-gate responder may intentionally hold a model request
+            // across a Worker SIGKILL. Close active sockets first so cleanup
+            // cannot wait forever on a deliberately unresolved responder.
+            server.closeAllConnections?.();
+            server.closeIdleConnections?.();
             server.close((err) => (err ? rejClose(err) : resClose()));
           }),
       });

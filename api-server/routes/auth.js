@@ -21,7 +21,10 @@ function establishSession(res, data) {
  */
 export async function handleRegister(body, res, req = null) {
   try {
-    const data = await sb.authRegister(body || {});
+    const data = await sb.authRegister(body || {}, {
+      traceId: req?.traceId || null,
+      traceContext: req?.traceContext || null,
+    });
     json(res, 200, establishSession(res, data));
   } catch (err) {
     console.error('[auth] register:', err.message);
@@ -34,7 +37,10 @@ export async function handleRegister(body, res, req = null) {
  */
 export async function handleLogin(body, res, req = null) {
   try {
-    const data = await sb.authLogin(body || {});
+    const data = await sb.authLogin(body || {}, {
+      traceId: req?.traceId || null,
+      traceContext: req?.traceContext || null,
+    });
     json(res, 200, establishSession(res, data));
   } catch (err) {
     console.error('[auth] login:', err.message);
@@ -57,7 +63,10 @@ export function handleLogout(res) {
  */
 export async function handleMe(res, req) {
   try {
-    const data = await sb.authMe(authFromRequest(req));
+    const data = await sb.authMe(authFromRequest(req), {
+      traceId: req?.traceId || null,
+      traceContext: req?.traceContext || null,
+    });
     json(res, 200, data);
   } catch (err) {
     console.error('[auth] me:', err.message);

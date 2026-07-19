@@ -19,6 +19,7 @@ export const PROJECTOR_EVENT_TYPES = Object.freeze([
   'tool.execution.progress',
   'tool.execution.completed',
   'tool.execution.failed',
+  'artifact.ready',
   'session.compacted',
   // model.request.* reserved for PR-06 provider lifecycle — not mapped from agent_* here
   'model.request.started',

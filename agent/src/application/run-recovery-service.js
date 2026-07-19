@@ -9,8 +9,9 @@
  *  - QUEUED: job may be lost → re-enqueue (deterministic jobId=runId)
  *  - RETRYING: SM edge RETRYING→QUEUED then enqueue
  *  - CANCELLING: no live lease → durable CANCELLING→CANCELLED (no re-exec)
- *  - STARTING / RUNNING: if lease free → fail-closed FAILED (no blind re-prompt);
- *    if lease held → skip (worker still owns the run)
+ *  - STARTING / RUNNING: if lease free, replay only when the durable tool
+ *    ledger proves there is no unresolved or ambiguous tool call; otherwise
+ *    leave the run non-terminal for manual reconciliation.
  *
  * Duplicate enqueue is safe via BullMQ jobId = runId.
  */
@@ -21,8 +22,20 @@ import {
   runStateMachine,
 } from '../domain/run/index.js';
 import { assertUlid } from '../domain/shared/ulid.js';
+import { TOOL_EXECUTION_STATUS } from '../domain/tool/tool-execution-status.js';
+import { SESSION_STATUS } from '../domain/session/session-status.js';
+import {
+  INTERACTION_STATUS,
+  INTERACTION_RESUME_PHASE,
+} from '../domain/interaction/interaction-status.js';
 import { applyRunTransitionInTxn } from './run-transition.js';
 import { sanitizeStatusReason } from './sanitize-status-reason.js';
+
+const REPLAY_SAFE_TOOL_STATUSES = new Set([
+  TOOL_EXECUTION_STATUS.SUCCEEDED,
+  TOOL_EXECUTION_STATUS.FAILED,
+  TOOL_EXECUTION_STATUS.CANCELLED,
+]);
 
 /** Statuses that recovery will re-enqueue. */
 export const RECOVERY_ENQUEUE_STATUSES = Object.freeze([
@@ -31,7 +44,7 @@ export const RECOVERY_ENQUEUE_STATUSES = Object.freeze([
   RUN_STATUS.RETRYING,
 ]);
 
-/** Statuses that fail-close when lease is free (no blind re-exec). */
+/** Statuses that require lease + durable tool-ledger reconciliation. */
 export const RECOVERY_RECONCILE_STATUSES = Object.freeze([
   RUN_STATUS.STARTING,
   RUN_STATUS.RUNNING,
@@ -59,7 +72,7 @@ export class RunRecoveryService {
    * @param {{
    *   transactionManager: { run: (fn: (trx: any) => Promise<any>) => Promise<any> },
    *   createRepositories: (db: any) => { runs: any, runEvents: any, outbox: any },
-   *   runQueue: { enqueue: (ref: { runId: string, orgId: string, traceId: string }) => Promise<unknown> },
+   *   runQueue: { enqueue: (ref: { runId: string, orgId: string, traceId: string }, options?: object) => Promise<unknown> },
    *   generateId: () => string,
    *   runStateMachine?: import('../domain/run/run-state-machine.js').RunStateMachine,
    *   now?: () => Date,
@@ -167,13 +180,14 @@ export class RunRecoveryService {
     }
 
     if (RECOVERY_RECONCILE_STATUSES.includes(status)) {
-      return this.#failClosedOrphanRuntime(run, base);
+      return this.#reconcileOrphanRuntime(run, base);
     }
 
-    if (
-      status === RUN_STATUS.WAITING_APPROVAL ||
-      status === RUN_STATUS.WAITING_INPUT
-    ) {
+    if (status === RUN_STATUS.WAITING_INPUT) {
+      return this.#recoverWaitingInput(run, base);
+    }
+
+    if (status === RUN_STATUS.WAITING_APPROVAL) {
       return {
         ...base,
         action: 'skipped',
@@ -230,6 +244,72 @@ export class RunRecoveryService {
       // QUEUED: re-enqueue only
       await this.runQueue.enqueue({ runId, orgId, traceId });
       return { ...base, action: 'enqueued' };
+    } catch (err) {
+      return {
+        ...base,
+        action: 'error',
+        reason: sanitizeStatusReason(err),
+      };
+    }
+  }
+
+  /**
+   * PENDING input remains parked. A durable RESOLVED answer is a resume intent
+   * and gets its own BullMQ job id, so the original active job cannot absorb it.
+   */
+  async #recoverWaitingInput(run, base) {
+    try {
+      const scope = { orgId: run.orgId, userId: run.userId };
+      const interaction = await this.tx.run(async (trx) => {
+        const repos = this.createRepositories(trx);
+        if (!repos.interactions) return null;
+        const current = await repos.runs.getById(run.runId, scope, {
+          forUpdate: true,
+        });
+        if (!current || current.status !== RUN_STATUS.WAITING_INPUT) return null;
+        const interactions = await repos.interactions.listByRunId(
+          run.runId,
+          scope,
+          { forUpdate: true },
+        );
+        const active = [...interactions].reverse().find((candidate) =>
+          [INTERACTION_STATUS.PENDING, INTERACTION_STATUS.RESOLVED].includes(
+            candidate.status,
+          ),
+        );
+        return active ? { current, interaction: active } : null;
+      });
+
+      if (!interaction) {
+        return {
+          ...base,
+          action: 'needsReconciliation',
+          reason: 'WAITING_INPUT has no durable interaction',
+        };
+      }
+      if (interaction.interaction.status === INTERACTION_STATUS.PENDING) {
+        return {
+          ...base,
+          action: 'skipped',
+          reason: 'durable interaction is still PENDING',
+        };
+      }
+
+      await this.runQueue.enqueue(
+        { runId: base.runId, orgId: base.orgId, traceId: base.traceId },
+        {
+          jobId:
+            `${base.runId}-interaction-` +
+            interaction.interaction.interactionId,
+          attempts: 8,
+          backoff: { type: 'exponential', delay: 250 },
+        },
+      );
+      return {
+        ...base,
+        action: 'enqueued',
+        reason: 'durable interaction is RESOLVED',
+      };
     } catch (err) {
       return {
         ...base,
@@ -311,12 +391,17 @@ export class RunRecoveryService {
   }
 
   /**
-   * STARTING/RUNNING with no live lease → FAILED (fail-closed, no re-prompt).
+   * STARTING/RUNNING with no live lease.
+   *
+   * A restart is replay-safe only when every durable tool execution is an
+   * ordinary terminal outcome. PROPOSED/WAITING_APPROVAL/RUNNING and UNKNOWN
+   * all represent an unresolved side-effect boundary, so the Run remains
+   * non-terminal and an operator must reconcile it explicitly.
    * @param {object} run
    * @param {object} base
    * @returns {Promise<RecoveryAction>}
    */
-  async #failClosedOrphanRuntime(run, base) {
+  async #reconcileOrphanRuntime(run, base) {
     const leaseHeld = await this.#isLeaseHeld(run.runId);
     if (leaseHeld === true) {
       return {
@@ -331,10 +416,11 @@ export class RunRecoveryService {
         ...base,
         action: 'needsReconciliation',
         reason:
-          'STARTING/RUNNING lease-loss recovery requires leaseManager to fail-close; no side-effect re-exec',
+          'STARTING/RUNNING lease-loss recovery requires leaseManager; no replay attempted',
       };
     }
-    // lease free → durable FAILED
+    // lease free → inspect the authoritative, owner-scoped tool ledger and
+    // transition to RETRYING only when no unresolved/ambiguous call exists.
     try {
       const scope = { orgId: run.orgId, userId: run.userId };
       const from = String(run.status);
@@ -366,7 +452,7 @@ export class RunRecoveryService {
             reason: `status advanced to ${current.status}`,
           };
         }
-        // Cancel intent wins over FAILED when legal.
+        // Cancel intent wins over replay when legal.
         if (current.cancelRequestedAt) {
           if (current.status === RUN_STATUS.STARTING) {
             const toRunning = await applyRunTransitionInTxn({
@@ -415,35 +501,238 @@ export class RunRecoveryService {
             ? { ok: true, status: RUN_STATUS.CANCELLED }
             : { ok: false, reason: 'CANCELLING→CANCELLED failed' };
         }
+
+        // A resolved interaction has its own durable continuation fence. A
+        // CLAIMED row is a recoverable wake, while APPLIED proves that Pi
+        // checkpointed the answer and only the Run terminal projection is
+        // missing. Both cases must bypass ordinary RUNNING replay rules.
+        if (typeof repos.interactions?.listByRunId === 'function') {
+          const interactions = await repos.interactions.listByRunId(
+            run.runId,
+            scope,
+            { forUpdate: true },
+          );
+          const continuation = [...interactions].reverse().find(
+            (item) =>
+              item.status === INTERACTION_STATUS.RESOLVED &&
+              [
+                INTERACTION_RESUME_PHASE.CLAIMED,
+                INTERACTION_RESUME_PHASE.APPLIED,
+              ].includes(item.resumePhase),
+          );
+          if (continuation) {
+            const tool = await repos.toolExecutions.getById(
+              continuation.toolExecutionId,
+              scope,
+              { forUpdate: true },
+            );
+            if (
+              tool.runId !== run.runId ||
+              tool.agentSessionId !== run.agentSessionId ||
+              tool.toolCallId !== continuation.toolCallId ||
+              tool.status !== TOOL_EXECUTION_STATUS.SUCCEEDED
+            ) {
+              return {
+                ok: true,
+                recoveryRequired: true,
+                status: current.status,
+                reason:
+                  'interaction continuation binding/outcome is not resumable; manual recovery required',
+              };
+            }
+            if (continuation.resumePhase === INTERACTION_RESUME_PHASE.CLAIMED) {
+              return {
+                ok: true,
+                resumePending: true,
+                status: current.status,
+                interactionId: continuation.interactionId,
+              };
+            }
+            const applied = await applyRunTransitionInTxn({
+              repos,
+              runId: run.runId,
+              scope,
+              from: RUN_STATUS.RUNNING,
+              to: RUN_STATUS.SUCCEEDED,
+              traceId: String(run.traceId || ''),
+              generateId: this.generateId,
+              eventType: 'run.completed',
+              completedAt: this.now(),
+              statusReason: null,
+              payloadExtra: {
+                recoveredInteractionId: continuation.interactionId,
+                continuationCheckpointed: true,
+              },
+            });
+            return applied.ok
+              ? { ok: true, status: RUN_STATUS.SUCCEEDED, resumeApplied: true }
+              : { ok: false, reason: 'interaction continuation terminalization conflict' };
+          }
+        }
+
+        const toolExecutions =
+          typeof repos.toolExecutions?.listByRun === 'function'
+            ? await repos.toolExecutions.listByRun(run.runId, scope)
+            : null;
+        if (!Array.isArray(toolExecutions)) {
+          return {
+            ok: true,
+            recoveryRequired: true,
+            status: current.status,
+            reason:
+              'durable tool ledger is unavailable; manual recovery required before replay',
+          };
+        }
+
+        const unresolved = toolExecutions.filter((tool) => {
+          const toolStatus = String(tool?.status || '');
+          return !REPLAY_SAFE_TOOL_STATUSES.has(toolStatus);
+        });
+        if (unresolved.length > 0) {
+          const statuses = [...new Set(
+            unresolved.map((tool) =>
+              String(tool?.status || 'UNKNOWN') === TOOL_EXECUTION_STATUS.RUNNING
+                ? TOOL_EXECUTION_STATUS.UNKNOWN
+                : String(tool?.status || 'UNKNOWN'),
+            ),
+          )].join(',');
+          return {
+            ok: true,
+            recoveryRequired: true,
+            status: current.status,
+            reason:
+              `durable tool execution outcome is unresolved (${statuses}); manual recovery required`,
+          };
+        }
+
+        // A checkpoint committed for this exact Run means the prompt may
+        // already have completed before the process died. Re-prompting it
+        // would duplicate model/tool work, so leave that boundary explicit.
+        const session =
+          typeof repos.sessions?.getById === 'function'
+            ? await repos.sessions.getById(run.agentSessionId, scope)
+            : null;
+        if (!session) {
+          return {
+            ok: true,
+            recoveryRequired: true,
+            status: current.status,
+            reason:
+              'durable session checkpoint metadata is unavailable; manual recovery required before replay',
+          };
+        }
+        if (String(session.status) !== SESSION_STATUS.ACTIVE) {
+          return {
+            ok: true,
+            recoveryRequired: true,
+            status: current.status,
+            reason:
+              `agent session is ${String(session.status)}; manual recovery required before replay`,
+          };
+        }
+        if (String(session.lastRunId || '') === run.runId) {
+          return {
+            ok: true,
+            recoveryRequired: true,
+            status: current.status,
+            reason:
+              'durable checkpoint already references this Run; manual recovery required instead of re-prompt',
+          };
+        }
+
         return applyRunTransitionInTxn({
           repos,
           runId: run.runId,
           scope,
           from: current.status,
-          to: RUN_STATUS.FAILED,
+          to: RUN_STATUS.RETRYING,
           traceId: String(run.traceId || ''),
           generateId: this.generateId,
-          eventType: 'run.failed',
-          completedAt: this.now(),
+          eventType: 'run.retrying',
           statusReason:
-            'recovered: STARTING/RUNNING with no live lease (refused re-prompt)',
+            'recovered: lease-free STARTING/RUNNING replayed from durable session state',
         });
       });
-      if (result.ok) {
+      if (result.recoveryRequired) {
         return {
           ...base,
-          status: result.status || RUN_STATUS.FAILED,
-          action: 'terminalized',
-          reason:
-            result.already
-              ? `already ${result.status}`
-              : 'lease-free STARTING/RUNNING terminalized (no re-prompt)',
+          action: 'needsReconciliation',
+          reason: result.reason,
+        };
+      }
+      if (result.resumePending) {
+        try {
+          await this.runQueue.enqueue(
+            {
+              runId: String(run.runId),
+              orgId: String(run.orgId),
+              traceId: String(run.traceId || ''),
+            },
+            {
+              jobId: `${run.runId}-interaction-${result.interactionId}`,
+              attempts: 8,
+              backoff: { type: 'exponential', delay: 250 },
+            },
+          );
+        } catch (err) {
+          return {
+            ...base,
+            action: 'error',
+            reason: sanitizeStatusReason(err),
+          };
+        }
+        return {
+          ...base,
+          status: RUN_STATUS.RUNNING,
+          action: 'enqueued',
+          reason: 'claimed interaction continuation re-enqueued',
+        };
+      }
+      if (result.ok) {
+        if (result.already && result.status) {
+          return {
+            ...base,
+            status: result.status,
+            action: 'skipped',
+            reason: `already ${result.status}`,
+          };
+        }
+        if (result.status === RUN_STATUS.CANCELLED) {
+          return {
+            ...base,
+            status: RUN_STATUS.CANCELLED,
+            action: 'terminalized',
+            reason: 'cancel intent with no live lease',
+          };
+        }
+        const projected = await this.#projectRetryingToQueued({
+          ...run,
+          status: RUN_STATUS.RETRYING,
+        });
+        if (!projected.ok && !projected.alreadyAdvanced) {
+          return {
+            ...base,
+            status: RUN_STATUS.RETRYING,
+            action: 'error',
+            reason: projected.reason ?? 'RETRYING→QUEUED failed',
+          };
+        }
+        await this.runQueue.enqueue({
+          runId: String(run.runId),
+          orgId: String(run.orgId),
+          traceId: String(run.traceId || ''),
+        });
+        return {
+          ...base,
+          status: RUN_STATUS.QUEUED,
+          action: 'projected_and_enqueued',
+          reason: 'lease-free run replayed from durable session state',
         };
       }
       return {
         ...base,
         action: 'error',
-        reason: result.reason ?? 'orphan runtime terminalize failed',
+        reason: result.reason ?? 'orphan runtime recovery failed',
       };
     } catch (err) {
       return {

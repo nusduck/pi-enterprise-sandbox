@@ -184,6 +184,27 @@ export class AgentSessionRepository {
   }
 
   /**
+   * Resolve the Sandbox-facing session id under the same owner scope used by
+   * every other AgentSession read. This is the narrow bridge used by the BFF
+   * Dataset/Artifact upload path; it never exposes an unscoped session lookup.
+   *
+   * @param {string} sandboxSessionId
+   * @param {{ orgId: string, userId: string }} scope
+   * @param {{ forUpdate?: boolean }} [opts]
+   */
+  async getBySandboxSessionId(sandboxSessionId, scope, opts = {}) {
+    const s = requireOwnerUlids(scope);
+    const id = assertUlid(sandboxSessionId, 'sandboxSessionId');
+    let q = applyOwnerScope(
+      this.db('agent_sessions').where({ sandbox_session_id: id }),
+      s,
+    );
+    if (opts.forUpdate) q = q.forUpdate();
+    const row = await q.first();
+    return row ? mapAgentSession(row) : null;
+  }
+
+  /**
    * @param {string} conversationId
    * @param {{ orgId: string, userId: string }} scope
    * @param {{ status?: string }} [opts]

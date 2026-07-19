@@ -43,6 +43,19 @@ router = APIRouter(prefix="/sessions/{session_id}/files", tags=["files"])
 _CHUNK_SIZE = 64 * 1024
 
 
+def _audit_scope(request: Request) -> dict[str, str]:
+    """Return the authenticated actor scope for formal audit writes."""
+    from sandbox.security.ownership import resolve_actor
+
+    actor = resolve_actor(request)
+    if actor is None:
+        return {}
+    return {
+        "org_id": actor.organization_id,
+        "user_id": actor.user_id,
+    }
+
+
 def _get_context(
     session_id: str, request: Request | None = None
 ) -> SandboxExecutionContext:
@@ -111,6 +124,7 @@ def ls_files(session_id: str, body: LsRequest, request: Request):
             "truncated": result.truncated,
             "stop_reason": result.stop_reason,
         },
+        **_audit_scope(request),
     )
     return result
 
@@ -146,6 +160,7 @@ def find_files(session_id: str, body: FindRequest, request: Request):
             "truncated": result.truncated,
             "stop_reason": result.stop_reason,
         },
+        **_audit_scope(request),
     )
     return result
 
@@ -183,6 +198,7 @@ def grep_files(session_id: str, body: GrepRequest, request: Request):
             "truncated": result.truncated,
             "stop_reason": result.stop_reason,
         },
+        **_audit_scope(request),
     )
     return result
 
@@ -276,6 +292,7 @@ def edit_file(session_id: str, body: FileEditRequest, request: Request):
             "after_hash": result.after_hash,
             "changed_lines": result.changed_lines,
         },
+        **_audit_scope(request),
     )
     return result
 
@@ -308,6 +325,7 @@ def apply_patch_file(session_id: str, body: FileApplyPatchRequest, request: Requ
             "after_hash": result.after_hash,
             "changed_lines": result.changed_lines,
         },
+        **_audit_scope(request),
     )
     return result
 

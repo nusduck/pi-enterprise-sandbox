@@ -270,6 +270,22 @@ def _validate_claims(
     _require_version(claims["token_version"], name="token_version")
     _require_version(claims["request_hash_version"], name="request_hash_version")
 
+    tool_name = _require_visible_ascii(claims["tool_name"], name="tool_name")
+    scope = claims["scope"]
+    if type(scope) is not list or len(scope) != 1:
+        _fail(
+            "INTERNAL_TOKEN_CLAIM_VALUE",
+            "scope must be an array containing exactly one string",
+        )
+    scope_name = _require_visible_ascii(scope[0], name="scope[0]")
+    is_pre_run_session_ensure = (
+        tool_name == "session.ensure"
+        and scope_name == "sandbox.sessions.ensure"
+        and claims["htu"] == "/internal/v1/sessions/ensure"
+        and claims["run_id"] is None
+        and claims["execution_fence_token"] is None
+    )
+
     string_claims = (
         "iss",
         "aud",
@@ -279,28 +295,22 @@ def _validate_claims(
         "conversation_id",
         "agent_session_id",
         "sandbox_session_id",
-        "run_id",
         "tool_execution_id",
         "tool_call_id",
-        "tool_name",
         "trace_id",
         "jti",
     )
     for name in string_claims:
         _require_visible_ascii(claims[name], name=name)
-    scope = claims["scope"]
-    if type(scope) is not list or len(scope) != 1:
-        _fail(
-            "INTERNAL_TOKEN_CLAIM_VALUE",
-            "scope must be an array containing exactly one string",
-        )
-    _require_visible_ascii(scope[0], name="scope[0]")
+    if not is_pre_run_session_ensure:
+        _require_visible_ascii(claims["run_id"], name="run_id")
 
     _require_lower_sha256(claims["request_hash"], name="request_hash")
     _require_lower_sha256(claims["body_sha256"], name="body_sha256")
-    _require_positive_safe_int(
-        claims["execution_fence_token"], name="execution_fence_token"
-    )
+    if not is_pre_run_session_ensure:
+        _require_positive_safe_int(
+            claims["execution_fence_token"], name="execution_fence_token"
+        )
     iat = _require_positive_safe_int(claims["iat"], name="iat")
     nbf = _require_positive_safe_int(claims["nbf"], name="nbf")
     exp = _require_positive_safe_int(claims["exp"], name="exp")

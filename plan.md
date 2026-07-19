@@ -1146,19 +1146,26 @@ CREATE TABLE artifacts (
   agent_session_id CHAR(26) NOT NULL,
   run_id CHAR(26) NOT NULL,
   relative_path VARCHAR(1024) NOT NULL,
+  relative_path_hash CHAR(64) CHARACTER SET ascii COLLATE ascii_bin
+    GENERATED ALWAYS AS (LOWER(SHA2(relative_path, 256))) STORED NOT NULL,
   display_name VARCHAR(1024) NOT NULL,
   mime_type VARCHAR(255),
   size_bytes BIGINT NOT NULL,
-  sha256 CHAR(64) NOT NULL,
+  sha256 CHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
   status VARCHAR(32) NOT NULL,
   created_at DATETIME(3) NOT NULL,
   UNIQUE KEY uk_artifact_file (
     run_id,
-    relative_path,
+    relative_path_hash,
     sha256
   )
 );
 ```
+
+`relative_path_hash` 是完整 `relative_path` 的 SHA-256（不是前缀索引）。
+它保留完整路径幂等语义，同时避免 `utf8mb4 VARCHAR(1024)` 与其他列组成
+唯一键时超过 InnoDB 3072-byte 索引上限；读取或去重时仍须同时核对原始
+`relative_path`，不能仅依赖哈希值。
 
 ## 8.16 approvals
 
@@ -1773,7 +1780,7 @@ exit_code
 ```json
 {
   "processId": "01...",
-  "status": "RUNNING",
+  "status": "running",
   "stdoutCursor": "0-0",
   "stderrCursor": "0-0"
 }
@@ -1786,7 +1793,7 @@ exit_code
 ```json
 {
   "processId": "01...",
-  "status": "RUNNING",
+  "status": "running",
   "exitCode": null,
   "startedAt": "...",
   "elapsedSeconds": 351

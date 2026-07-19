@@ -479,6 +479,68 @@ class TestFastApiTargetAtomicRuntime:
 
 class TestShutdownReconcile:
     @pytest.mark.asyncio
+    async def test_process_persistence_stays_installed_until_after_drain(self) -> None:
+        from sandbox.services.internal_plane_resources import (
+            InternalPlaneConfigView,
+            InternalPlaneResources,
+        )
+
+        events: list[str] = []
+        redis_c = _AsyncRedis("redis://x")
+        mysql = _SlowSyncMysql("mysql://x")
+
+        class Target:
+            def __init__(self) -> None:
+                self.mysql_database: Any | None = None
+                self.claim_validator: Any | None = None
+                self.replay_store: Any | None = None
+
+            def set_mysql_database(self, value: Any | None) -> None:
+                self.mysql_database = value
+                events.append("mysql:set" if value is not None else "mysql:clear")
+
+            def set_claim_validator(self, value: Any | None) -> None:
+                self.claim_validator = value
+                events.append("claim:set" if value is not None else "claim:clear")
+
+            def set_replay_store(self, value: Any | None) -> None:
+                self.replay_store = value
+                events.append("replay:set" if value is not None else "replay:clear")
+
+        target = Target()
+
+        async def drain_fn() -> bool:
+            events.append("drain")
+            assert target.claim_validator is None
+            assert target.replay_store is None
+            assert target.mysql_database is mysql
+            return True
+
+        cfg = InternalPlaneConfigView(
+            enabled=True,
+            internal_redis_url="redis://:pw@sandbox-replay-redis:6379/0",
+            database_url="mysql+pymysql://u@h/db",
+            internal_drain_timeout_seconds=1.0,
+        )
+        bundle = InternalPlaneResources(
+            cfg,
+            redis_factory=lambda _url: redis_c,
+            replay_store_factory=lambda client: SimpleNamespace(client=client),
+            mysql_factory=lambda _url, **_kwargs: mysql,
+            claim_validator_factory=lambda _db: object(),
+            close_redis=lambda _client: events.append("redis:close"),
+            close_mysql=lambda _db: events.append("mysql:close"),
+            drain_fn=drain_fn,
+        )
+        await bundle.prepare()
+        await bundle.install(target)
+        await bundle.uninstall()
+
+        assert events.index("claim:clear") < events.index("drain")
+        assert events.index("drain") < events.index("mysql:clear")
+        assert events.index("mysql:clear") < events.index("mysql:close")
+
+    @pytest.mark.asyncio
     async def test_drain_timeout_reconciles_unknown_before_close(self) -> None:
         """Incomplete drain must mark inflight UNKNOWN while MySQL still open."""
         from sandbox.services.files_read_runtime import FilesReadRuntime

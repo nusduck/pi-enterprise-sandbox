@@ -81,9 +81,7 @@ export function runningActionHint(action: RunningAction): string {
 
 /** True when the run can accept steer (must be actively running). */
 export function canSteer(mode: ComposerMode, runStatus?: string | null): boolean {
-  if (mode !== 'running') return false;
-  // cancel_requested still streaming but steer is usually rejected server-side
-  return runStatus !== 'cancel_requested';
+  return mode === 'running' && runStatus === 'running';
 }
 
 /** True when follow-up is allowed (running or waiting_approval). */

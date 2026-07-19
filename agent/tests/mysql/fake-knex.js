@@ -29,11 +29,12 @@ export function createFakeState() {
  * @param {{ isTransaction?: boolean }} [opts]
  */
 function createQuery(state, tableName, opts = {}) {
-  /** @type {{ type: string, filters: Array<[string, unknown]>, inFilters: Array<[string, unknown[]]>, order?: { col: string, dir: string }, limitN?: number, forUpdateFlag?: boolean, forShareFlag?: boolean, join?: { table: string, left: string, right: string }, selectCols?: string[], maxCol?: string, updates?: Record<string, unknown>, insertRow?: Record<string, unknown> }} */
+  /** @type {{ type: string, filters: Array<[string, unknown]>, inFilters: Array<[string, unknown[]]>, notInFilters: Array<[string, unknown[]]>, order?: { col: string, dir: string }, limitN?: number, forUpdateFlag?: boolean, forShareFlag?: boolean, join?: { table: string, left: string, right: string }, selectCols?: string[], maxCol?: string, updates?: Record<string, unknown>, insertRow?: Record<string, unknown> }} */
   const ctx = {
     type: 'select',
     filters: [],
     inFilters: [],
+    notInFilters: [],
   };
 
   const ensureTable = (name) => {
@@ -75,9 +76,14 @@ function createQuery(state, tableName, opts = {}) {
       return row[col] === val;
     });
     if (!eqOk) return false;
-    return ctx.inFilters.every(([col, vals]) => {
+    const inOk = ctx.inFilters.every(([col, vals]) => {
       const key = col.includes('.') ? col.split('.').pop() : col;
       return vals.includes(row[key]);
+    });
+    if (!inOk) return false;
+    return ctx.notInFilters.every(([col, vals]) => {
+      const key = col.includes('.') ? col.split('.').pop() : col;
+      return !vals.includes(row[key]);
     });
   };
 
@@ -110,6 +116,10 @@ function createQuery(state, tableName, opts = {}) {
     },
     whereIn(col, vals) {
       ctx.inFilters.push([String(col), [...vals]]);
+      return api;
+    },
+    whereNotIn(col, vals) {
+      ctx.notInFilters.push([String(col), [...vals]]);
       return api;
     },
     whereNotNull(col) {
@@ -295,10 +305,38 @@ function createQuery(state, tableName, opts = {}) {
           throw err;
         }
       }
+      if (bareTable === 'run_interactions') {
+        const dup = table.some(
+          (r) =>
+            r.interaction_id === row.interaction_id ||
+            (r.run_id === row.run_id && r.tool_call_id === row.tool_call_id),
+        );
+        if (dup) {
+          const err = new Error('Duplicate entry for run_interactions');
+          // @ts-ignore
+          err.code = 'ER_DUP_ENTRY';
+          // @ts-ignore
+          err.errno = 1062;
+          throw err;
+        }
+      }
       if (bareTable === 'sandbox_audit_events' && row.audit_id != null) {
         const dup = table.some((r) => r.audit_id === row.audit_id);
         if (dup) {
           const err = new Error('Duplicate entry for sandbox_audit_events.PRIMARY');
+          // @ts-ignore
+          err.code = 'ER_DUP_ENTRY';
+          // @ts-ignore
+          err.errno = 1062;
+          throw err;
+        }
+      }
+      if (bareTable === 'trace_spans') {
+        const dup = table.some(
+          (r) => r.trace_id === row.trace_id && r.span_id === row.span_id,
+        );
+        if (dup) {
+          const err = new Error('Duplicate entry for trace_spans.PRIMARY');
           // @ts-ignore
           err.code = 'ER_DUP_ENTRY';
           // @ts-ignore
@@ -407,9 +445,10 @@ function createQuery(state, tableName, opts = {}) {
 
     if (ctx.order) {
       const { col, dir } = ctx.order;
+      const orderKey = col.includes('.') ? col.split('.').pop() : col;
       rows = [...rows].sort((a, b) => {
-        const av = a[col];
-        const bv = b[col];
+        const av = a[orderKey];
+        const bv = b[orderKey];
         if (av === bv) return 0;
         if (av > bv) return dir === 'desc' ? -1 : 1;
         return dir === 'desc' ? 1 : -1;

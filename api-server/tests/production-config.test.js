@@ -11,6 +11,8 @@ import {
   isWeakSecret,
   resolveAuthEnabled,
   resolveApprovalMode,
+  resolveDevelopmentActingIdentity,
+  resolveDatasetUploadMaxBytes,
 } from '../config.js';
 
 const STRONG = 'b'.repeat(64);
@@ -137,9 +139,49 @@ describe('isWeakSecret + resolveAuthEnabled', () => {
     assert.equal(isWeakSecret(STRONG), false);
   });
 
+  it('resolves a stable auth-disabled development owner', () => {
+    assert.deepEqual(resolveDevelopmentActingIdentity({}), {
+      actingUserId: 'local-development-user',
+      actingOrganizationId: 'local-development-org',
+      actingRole: 'user',
+    });
+    assert.deepEqual(
+      resolveDevelopmentActingIdentity({
+        BFF_DEV_ACTING_USER_ID: 'dev-user-a',
+        BFF_DEV_ACTING_ORGANIZATION_ID: 'dev-org-a',
+        BFF_DEV_ACTING_ROLE: 'admin',
+      }),
+      {
+        actingUserId: 'dev-user-a',
+        actingOrganizationId: 'dev-org-a',
+        actingRole: 'admin',
+      },
+    );
+    assert.equal(
+      resolveDevelopmentActingIdentity({ BFF_DEV_ACTING_ROLE: 'operator' })
+        .actingRole,
+      'user',
+    );
+  });
+
   it('resolves auth enabled', () => {
     assert.equal(resolveAuthEnabled({ AUTH_ENABLED: 'true' }), true);
     assert.equal(resolveApprovalMode({}), 'ask');
     assert.equal(resolveApprovalMode({ APPROVAL_ENABLED: 'false' }), 'deny');
+  });
+
+  it('resolves a positive configurable Dataset upload byte limit', () => {
+    assert.equal(
+      resolveDatasetUploadMaxBytes({ DATASET_UPLOAD_MAX_BYTES: '12345' }),
+      12345,
+    );
+    assert.equal(
+      resolveDatasetUploadMaxBytes({ DATASET_UPLOAD_MAX_BYTES: '-1' }),
+      55 * 1024 * 1024,
+    );
+    assert.equal(
+      resolveDatasetUploadMaxBytes({ DATASET_UPLOAD_MAX_BYTES: 'invalid' }),
+      55 * 1024 * 1024,
+    );
   });
 });

@@ -24,7 +24,13 @@ import {
   hasScope,
 } from '../../domain/a2a/scopes.js';
 import { assertUlid } from '../../domain/shared/ulid.js';
+import { formatUserExternalSubject } from '../../infrastructure/mysql/repositories/organization-repository.js';
 import { OwnerScopedNotFoundError, ValidationError } from '../errors.js';
+import {
+  A2A_IDENTITY_PROVIDER,
+  formatA2aExternalUserId,
+  normalizeA2aClientId,
+} from './identity.js';
 
 /** Dummy hash for constant-time path when credential missing. */
 const DUMMY_SECRET_HASH =
@@ -105,7 +111,7 @@ export class A2aCredentialService {
    * @param {{
    *   orgId: string,
    *   agentId: string,
-   *   serviceUserId: string,
+   *   serviceUserId?: string,
    *   clientId: string,
    *   scopes?: string[],
    *   expiresAt?: Date | string | null,
@@ -115,13 +121,10 @@ export class A2aCredentialService {
   async issue(input) {
     const orgId = assertUlid(input.orgId, 'orgId');
     const agentId = assertUlid(input.agentId, 'agentId');
-    const serviceUserId = assertUlid(input.serviceUserId, 'serviceUserId');
-    if (typeof input.clientId !== 'string' || !input.clientId.trim()) {
-      throw new ValidationError('clientId is required');
-    }
-    if (input.clientId.trim().length > 128) {
-      throw new ValidationError('clientId exceeds max length 128');
-    }
+    const explicitServiceUserId = input.serviceUserId == null
+      ? null
+      : assertUlid(input.serviceUserId, 'serviceUserId');
+    const clientId = normalizeA2aClientId(input.clientId);
     const scopes = normalizeScopes(input.scopes ?? DEFAULT_A2A_SCOPES);
     const expiresAt = normalizeFutureExpiresAt(input.expiresAt, this.now);
     const keyId = mintKeyId();
@@ -132,12 +135,14 @@ export class A2aCredentialService {
 
     const write = async (db) => {
       const repos = this.createRepositories(db);
+      const serviceUserId = explicitServiceUserId ??
+        await this.#resolveServiceUser(repos, { orgId, clientId });
       return repos.a2aCredentials.insert({
         credentialId,
         orgId,
         agentId,
         serviceUserId,
-        clientId: input.clientId.trim(),
+        clientId,
         keyId,
         secretHash,
         scopes,
@@ -147,7 +152,12 @@ export class A2aCredentialService {
       });
     };
 
-    const record = this.tx
+    if (!explicitServiceUserId && !this.tx?.run) {
+      throw new ValidationError(
+        'Automatic A2A service user provisioning requires a transaction manager',
+      );
+    }
+    const record = this.tx?.run
       ? await this.tx.run(write)
       : await write(this.db);
 
@@ -156,6 +166,61 @@ export class A2aCredentialService {
       token,
       bearerToken: token,
     };
+  }
+
+  /**
+   * Resolve the stable service user for one Organization + A2A client. This is
+   * called inside the same transaction that inserts the credential so a
+   * credential can never commit without its user and membership.
+   *
+   * @param {object} repos
+   * @param {{ orgId: string, clientId: string }} input
+   * @returns {Promise<string>}
+   */
+  async #resolveServiceUser(repos, input) {
+    const organizations = repos?.organizations;
+    if (
+      !organizations?.getUserByExternalSubject ||
+      !organizations?.createUserIfAbsent ||
+      !organizations?.addMembershipIfAbsent
+    ) {
+      throw new Error(
+        'Automatic A2A service user provisioning requires organization repositories',
+      );
+    }
+
+    const externalUserId = formatA2aExternalUserId(
+      input.orgId,
+      input.clientId,
+    );
+    const externalSubject = formatUserExternalSubject(
+      A2A_IDENTITY_PROVIDER,
+      externalUserId,
+    );
+    let user = await organizations.getUserByExternalSubject(externalSubject);
+    if (!user) {
+      user = await organizations.createUserIfAbsent({
+        userId: this.generateId(),
+        externalSubject,
+        displayName: `${A2A_IDENTITY_PROVIDER}:${input.clientId}`,
+        status: 'active',
+      });
+    }
+    if (user.status && user.status !== 'active') {
+      throw new ValidationError('A2A service user is not active');
+    }
+
+    const serviceUserId = assertUlid(user.userId, 'serviceUserId');
+    const membership = await organizations.addMembershipIfAbsent({
+      orgId: input.orgId,
+      userId: serviceUserId,
+      role: 'member',
+      status: 'active',
+    });
+    if (membership?.status && membership.status !== 'active') {
+      throw new ValidationError('A2A service user membership is not active');
+    }
+    return serviceUserId;
   }
 
   /**

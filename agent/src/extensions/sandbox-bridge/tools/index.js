@@ -54,6 +54,18 @@ import {
   ToolRequestHashError,
 } from '../../../domain/tool/tool-request-hash.js';
 import { assertUlid } from '../../../domain/shared/ulid.js';
+import { normalizeProcessStatus } from '../../../domain/process-status.js';
+
+function normalizeProcessTransportResult(toolName, data) {
+  if (!toolName.startsWith('process_') || !data || typeof data !== 'object') {
+    return data;
+  }
+  if (toolName === 'process_read' && data.status == null) return data;
+  const fallback = toolName === 'process_start' || toolName === 'process_kill'
+    ? 'running'
+    : null;
+  return { ...data, status: normalizeProcessStatus(data.status, fallback) };
+}
 
 /**
  * @param {object} runContext
@@ -190,7 +202,7 @@ export function createSandboxBridgeToolDefinitions(
           claim,
         ),
       );
-      return { ok: true, data };
+      return { ok: true, data: normalizeProcessTransportResult(toolName, data) };
     } catch (err) {
       return { ok: false, result: mapTransportError(err) };
     }
@@ -544,7 +556,7 @@ export function createSandboxBridgeToolDefinitions(
         return toolOk(
           toolResultJson({
             processId: data?.processId ?? null,
-            status: data?.status ?? 'RUNNING',
+            status: data?.status ?? 'running',
             stdoutCursor: data?.stdoutCursor ?? '0-0',
             stderrCursor: data?.stderrCursor ?? '0-0',
           }),
@@ -626,6 +638,8 @@ export function createSandboxBridgeToolDefinitions(
             nextCursor: data?.nextCursor ?? null,
             data: chunk.text,
             truncated: chunk.truncated,
+            completed: Boolean(data?.completed),
+            status: data?.status ?? null,
           }),
         );
       },
@@ -669,7 +683,7 @@ export function createSandboxBridgeToolDefinitions(
           toolResultJson({
             processId,
             signal,
-            status: data?.status ?? 'SIGNALED',
+            status: data?.status ?? 'running',
           }),
         );
       },
@@ -709,15 +723,22 @@ export function createSandboxBridgeToolDefinitions(
         );
         if (!inv.ok) return inv.result;
         const data = inv.data;
+        const artifact = {
+          artifactId: data?.artifactId ?? null,
+          displayName:
+            data?.displayName ?? data?.name ?? params.displayName ?? null,
+          description: normalizedParams.description ?? null,
+          sha256: data?.sha256 ?? null,
+          size: data?.size ?? null,
+          mimeType: data?.mimeType ?? null,
+        };
         return toolOk(
           toolResultJson({
-            artifactId: data?.artifactId ?? null,
+            ...artifact,
             path: norm.path,
-            displayName: data?.displayName ?? params.displayName ?? null,
-            sha256: data?.sha256 ?? null,
-            size: data?.size ?? null,
-            mimeType: data?.mimeType ?? null,
           }),
+          artifact,
+          { maxDetailString: 1024 },
         );
       },
     },

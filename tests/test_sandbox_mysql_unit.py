@@ -799,10 +799,17 @@ class TestProcessRepository:
                 status="completed",
                 exit_code=0,
                 sandbox_session_id=SBX,
+                command_json={
+                    "argv": ["python", "job.py"],
+                    "pgid": 4242,
+                    "start_identity": "4242:trusted-start",
+                },
             )
             done = repo.require_by_id(conn, PROC, scope, sandbox_session_id=SBX)
             assert done.status == "completed"
             assert done.exit_code == 0
+            assert done.command_json["pgid"] == 4242
+            assert done.command_json["start_identity"] == "4242:trusted-start"
             with pytest.raises(OwnershipError):
                 repo.create(
                     conn,
@@ -815,6 +822,43 @@ class TestProcessRepository:
                         "status": "running",
                     },
                 )
+
+    def test_update_accepts_mysql_changed_rows_zero_when_owner_row_exists(self) -> None:
+        db = FakeDatabase()
+        repo = ProcessRepository(db)
+        scope = OwnerScope(org_id=ORG, user_id=USER)
+        with db.connection() as conn:
+            repo.create(
+                conn,
+                {
+                    "process_id": PROC,
+                    "org_id": ORG,
+                    "user_id": USER,
+                    "sandbox_session_id": SBX,
+                    "run_id": RUN,
+                    "execution_id": EXEC,
+                    "command_json": {"command": "sleep 1"},
+                    "status": "running",
+                },
+            )
+            original_execute = conn.execute
+
+            def execute_with_changed_rows_semantics(sql, params=None):
+                result = original_execute(sql, params)
+                if sql.lstrip().upper().startswith("UPDATE"):
+                    conn.rowcount = 0
+                return result
+
+            conn.execute = execute_with_changed_rows_semantics  # type: ignore[method-assign]
+            updated = repo.update_status(
+                conn,
+                PROC,
+                scope,
+                status="running",
+                sandbox_session_id=SBX,
+            )
+            assert updated.process_id == PROC
+            assert updated.status == "running"
 
 
 class TestSessionExecutionAuditRepos:

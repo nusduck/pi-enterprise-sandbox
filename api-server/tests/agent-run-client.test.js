@@ -8,7 +8,12 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
-import { createAgentRun } from '../services/agent-client.js';
+import {
+  createAgentRun,
+  createConversationFollowUp,
+  steerAgentRun,
+  getAgentRunTrace,
+} from '../services/agent-client.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const clientSrc = readFileSync(join(__dirname, '../services/sandbox-client.js'), 'utf8');
@@ -59,9 +64,71 @@ describe('thin BFF agent relay', () => {
   });
 
   it('agent-client exposes create / events / cancel', () => {
-    for (const name of ['createAgentRun', 'openAgentRunEvents', 'cancelAgentRun', 'checkAgentHealth']) {
+    for (const name of ['createAgentRun', 'openAgentRunEvents', 'cancelAgentRun', 'getAgentRunTrace', 'checkAgentHealth']) {
       assert.match(agentClientSrc, new RegExp(`export async function ${name}\\(`));
     }
+  });
+
+  it('getAgentRunTrace uses the owner-scoped Agent trace endpoint', async () => {
+    const originalFetch = globalThis.fetch;
+    let call = null;
+    globalThis.fetch = async (url, init) => {
+      call = { url: String(url), init };
+      return new Response(
+        JSON.stringify({ traceId: 'a'.repeat(32), spans: [] }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      );
+    };
+    try {
+      const result = await getAgentRunTrace(
+        '01K0G2PAV8FPMVC9QHJG7JPN53',
+        { traceId: 'a'.repeat(32), limit: 10, cursor: 'b'.repeat(16) },
+      );
+      assert.equal(result.spans.length, 0);
+      assert.match(
+        call.url,
+        /\/internal\/agent-runs\/.*\/trace\?limit=10&cursor=b{16}$/,
+      );
+      assert.match(call.init.headers.traceparent, /^00-a{32}-[0-9a-f]{16}-01$/);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it('forwards durable idempotency to steer and conversation follow-up', async () => {
+    const originalFetch = globalThis.fetch;
+    const calls = [];
+    globalThis.fetch = async (url, init) => {
+      calls.push({ url: String(url), init });
+      return new Response(JSON.stringify({ status: 'ACCEPTED' }), {
+        status: 202,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    };
+    try {
+      await steerAgentRun(
+        '01K0G2PAV8FPMVC9QHJG7JPN53',
+        { text: 'steer' },
+        { idempotencyKey: 'steer-key' },
+      );
+      await createConversationFollowUp(
+        '01K0G2PAV8FPMVC9QHJG7JPN51',
+        { text: 'follow' },
+        { idempotencyKey: 'follow-key' },
+      );
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    assert.match(calls[0].url, /\/internal\/agent-runs\/.*\/steer$/);
+    assert.equal(calls[0].init.headers['Idempotency-Key'], 'steer-key');
+    assert.match(
+      calls[1].url,
+      /\/internal\/conversations\/.*\/follow-ups$/,
+    );
+    assert.equal(calls[1].init.headers['Idempotency-Key'], 'follow-key');
+    assert.match(serverSrc, /handleConversationFollowUp/);
+    assert.match(serverSrc, /follow-ups/);
   });
 
   it('Run API creates runs and streams sequenced events', () => {
@@ -102,6 +169,21 @@ describe('thin BFF agent relay', () => {
     assert.match(timelineSrc, /listAgentEvents/);
     assert.match(timelineSrc, /last_run/);
     assert.doesNotMatch(convSrc, /createSandboxClient.*listAgentRuns|listAgentRuns.*sandbox/i);
+  });
+
+  it('routes conversation CRUD to Agent MySQL instead of Sandbox legacy storage', () => {
+    for (const name of [
+      'listAgentConversations',
+      'getAgentConversation',
+      'createAgentConversation',
+      'deleteAgentConversation',
+    ]) {
+      assert.match(agentClientSrc, new RegExp(`export async function ${name}\\(`));
+      assert.match(convSrc, new RegExp(`${name}\\(`));
+    }
+    assert.match(convSrc, /resolveTrustedAuth\(req\)/);
+    assert.doesNotMatch(convSrc, /sandbox-client/);
+    assert.doesNotMatch(convSrc, /sb\.(list|get|create|delete)Conversation/);
   });
 
   it('server exposes the Run list contract used by refresh recovery', () => {

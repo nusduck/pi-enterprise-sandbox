@@ -210,11 +210,33 @@ describe('FencedToolGovernanceRecorder', () => {
     const emitted = [];
     const gov = new FencedToolGovernanceRecorder({
       transactionManager: { run: (fn) => knex.transaction(fn) },
-      createRepositories: (db) =>
-        createRepositoryBundle(db, {
+      createRepositories: (db) => {
+        const bundle = createRepositoryBundle(db, {
           now: () => new Date(),
           generateId: nextId,
-        }),
+        });
+        if (opts.failArtifactOutbox || opts.failApprovalStatusOutbox) {
+          const insert = bundle.outbox.insert.bind(bundle.outbox);
+          return {
+            ...bundle,
+            outbox: {
+              async insert(input) {
+                if (input.eventType === 'artifact.ready') {
+                  throw new Error('injected artifact outbox failure');
+                }
+                if (
+                  opts.failApprovalStatusOutbox &&
+                  input.eventType === 'run.status.changed'
+                ) {
+                  throw new Error('injected approval status outbox failure');
+                }
+                return insert(input);
+              },
+            },
+          };
+        }
+        return bundle;
+      },
       generateId: nextId,
       context: RUN_CTX,
       executionFenceToken: 3,
@@ -225,6 +247,21 @@ describe('FencedToolGovernanceRecorder', () => {
       },
     });
     return { gov, emitted };
+  }
+
+  function artifactResult(overrides = {}) {
+    return {
+      content: [{ type: 'text', text: '{"artifactId":"opaque"}' }],
+      details: {
+        artifactId: '01K0G2PAV8FPMVC9QHJG7JPN5D',
+        displayName: '风险分析报告.pdf',
+        description: '最终分析报告',
+        mimeType: 'application/pdf',
+        size: 1234,
+        sha256: 'a'.repeat(64),
+        ...overrides,
+      },
+    };
   }
 
   it('local bash: ToolExecution + audit, zero approvals', async () => {
@@ -251,6 +288,51 @@ describe('FencedToolGovernanceRecorder', () => {
       'policy.decision',
     );
     void emitted;
+  });
+
+  it('adopts the early Pi start placeholder before binding a sandbox request', async () => {
+    const { gov } = makeGov();
+    const args = { command: 'echo hi' };
+
+    const earlyStart = await gov.recordToolStarted({
+      toolCallId: 'tc-pi-order',
+      toolName: 'bash',
+      args,
+    });
+    assert.equal(earlyStart.toolExecution.status, TOOL_EXECUTION_STATUS.PROPOSED);
+    assert.equal(state.tables.run_events.length, 0);
+
+    const policy = await gov.recordPolicyDecision({
+      toolCallId: 'tc-pi-order',
+      toolName: 'bash',
+      args,
+      decision: {
+        decision: 'allow',
+        reasonCode: 'LOCAL_SANDBOX_ALLOW',
+        reason: 'local allow',
+        policyId: 'platform:local-low',
+        riskLevel: 'low',
+      },
+    });
+    assert.match(policy.toolExecution._policyFingerprint, /^[0-9a-f]{64}$/);
+    assert.equal(policy.toolExecution.status, TOOL_EXECUTION_STATUS.RUNNING);
+    assert.equal(
+      state.tables.run_events.filter(
+        (event) => event.event_type === 'tool.execution.started',
+      ).length,
+      1,
+    );
+
+    const bound = await gov.bindSandboxRequest({
+      toolCallId: 'tc-pi-order',
+      toolName: 'bash',
+      requestHash: 'a'.repeat(64),
+      requestHashVersion: 1,
+    });
+    assert.equal(bound.bound, true);
+    assert.equal(bound.toolExecution.status, TOOL_EXECUTION_STATUS.RUNNING);
+    assert.equal(state.tables.tool_executions[0].request_hash, 'a'.repeat(64));
+    assert.equal(state.tables.tool_executions[0].execution_fence_token, 3);
   });
 
   it('external high risk: pending approval + approval.requested + outbox; block path', async () => {
@@ -282,13 +364,48 @@ describe('FencedToolGovernanceRecorder', () => {
     assert.equal(pending.approval.status, APPROVAL_STATUS.PENDING);
     assert.equal(pending.durablePending.kind, DURABLE_APPROVAL_PENDING);
     assert.equal(pending.toolExecution.status, TOOL_EXECUTION_STATUS.WAITING_APPROVAL);
+    assert.equal(state.tables.runs[0].status, 'WAITING_APPROVAL');
     assert.ok(
       state.tables.run_events.some((e) => e.event_type === 'approval.requested'),
     );
     assert.ok(
+      state.tables.run_events.some((e) => e.event_type === 'run.status.changed'),
+    );
+    assert.ok(
       state.tables.domain_outbox.some((e) => e.event_type === 'approval.requested'),
     );
+    assert.ok(
+      state.tables.domain_outbox.some((e) => e.event_type === 'run.status.changed'),
+    );
     assert.ok(emitted.some((e) => e.type === 'approval.requested'));
+    assert.ok(emitted.some((e) => e.type === 'run.status.changed'));
+  });
+
+  it('rolls back approval, parked tool, Run pause, events, and outbox together', async () => {
+    const { gov, emitted } = makeGov({ failApprovalStatusOutbox: true });
+
+    await assert.rejects(
+      () =>
+        gov.requestApproval({
+          toolCallId: 'tc-approval-rollback',
+          toolName: 'mcp__crm__delete',
+          args: { id: '1' },
+          decision: {
+            decision: 'require_approval',
+            reasonCode: 'EXTERNAL_HIGH_RISK',
+            riskLevel: 'high',
+          },
+        }),
+      /injected approval status outbox failure/,
+    );
+
+    assert.equal(state.tables.runs[0].status, 'RUNNING');
+    assert.equal(state.tables.tool_executions.length, 0);
+    assert.equal(state.tables.approvals.length, 0);
+    assert.equal(state.tables.run_events.length, 0);
+    assert.equal(state.tables.domain_outbox.length, 0);
+    assert.equal(state.tables.runs[0].next_event_sequence, 0);
+    assert.equal(emitted.length, 0);
   });
 
   it('tool start/end transitions idempotently; conflict on different end result', async () => {
@@ -349,6 +466,126 @@ describe('FencedToolGovernanceRecorder', () => {
         }),
       /conflict|Conflict|CONFLICT|terminal/i,
     );
+  });
+
+  it('successful submit_artifact atomically appends one artifact.ready and replays idempotently', async () => {
+    const { gov, emitted } = makeGov();
+    const result = artifactResult();
+
+    const first = await gov.recordToolEnded({
+      toolCallId: 'tc-artifact-ready',
+      toolName: 'submit_artifact',
+      isError: false,
+      result,
+    });
+    const replay = await gov.recordToolEnded({
+      toolCallId: 'tc-artifact-ready',
+      toolName: 'submit_artifact',
+      isError: false,
+      result,
+    });
+
+    assert.equal(first.statusChanged, true);
+    assert.deepEqual(
+      first.envelopes.map((event) => event.type),
+      ['tool.execution.completed', 'artifact.ready'],
+    );
+    assert.equal(first.artifactEnvelope.data.artifactId, result.details.artifactId);
+    assert.equal(first.artifactEnvelope.data.description, '最终分析报告');
+    assert.equal(first.artifactEnvelope.data.name, '风险分析报告.pdf');
+    assert.equal(first.artifactEnvelope.data.toolCallId, 'tc-artifact-ready');
+    assert.equal(first.artifactEnvelope.data.toolExecutionId, first.toolExecution.toolExecutionId);
+    assert.equal(replay.statusChanged, false);
+    assert.equal(replay.envelope, null);
+    assert.equal(replay.artifactEnvelope, null);
+    assert.deepEqual(replay.envelopes, []);
+
+    assert.deepEqual(
+      state.tables.run_events.map((row) => row.event_type),
+      ['tool.execution.completed', 'artifact.ready'],
+    );
+    assert.deepEqual(
+      state.tables.domain_outbox.map((row) => row.event_type),
+      ['tool.execution.completed', 'artifact.ready'],
+    );
+    assert.deepEqual(
+      emitted.map((event) => event.type),
+      ['tool.execution.completed', 'artifact.ready'],
+    );
+    const durable = JSON.parse(state.tables.run_events[1].payload_json);
+    assert.equal(durable.data.description, '最终分析报告');
+    assert.equal(durable.data.artifactId, result.details.artifactId);
+    assert.equal(Object.hasOwn(durable.data, 'path'), false);
+  });
+
+  it('never synthesizes artifact.ready from other, failed, text-only, or invalid results', async () => {
+    const { gov } = makeGov();
+    const valid = artifactResult();
+    const cases = [
+      { toolCallId: 'tc-write-spoof', toolName: 'write', isError: false, result: valid },
+      {
+        toolCallId: 'tc-submit-failed',
+        toolName: 'submit_artifact',
+        isError: true,
+        result: valid,
+      },
+      {
+        toolCallId: 'tc-submit-text-only',
+        toolName: 'submit_artifact',
+        isError: false,
+        result: {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify(valid.details),
+            },
+          ],
+        },
+      },
+      {
+        toolCallId: 'tc-submit-bad-id',
+        toolName: 'submit_artifact',
+        isError: false,
+        result: artifactResult({ artifactId: 'art_not_durable' }),
+      },
+    ];
+
+    for (const input of cases) {
+      // eslint-disable-next-line no-await-in-loop
+      await gov.recordToolEnded(input);
+    }
+
+    assert.equal(
+      state.tables.run_events.filter((row) => row.event_type === 'artifact.ready')
+        .length,
+      0,
+    );
+    assert.equal(
+      state.tables.domain_outbox.filter((row) => row.event_type === 'artifact.ready')
+        .length,
+      0,
+    );
+  });
+
+  it('rolls back tool completion when artifact.ready outbox append fails', async () => {
+    const { gov, emitted } = makeGov({ failArtifactOutbox: true });
+
+    await assert.rejects(
+      () =>
+        gov.recordToolEnded({
+          toolCallId: 'tc-artifact-rollback',
+          toolName: 'submit_artifact',
+          isError: false,
+          result: artifactResult(),
+        }),
+      /injected artifact outbox failure/,
+    );
+
+    assert.equal(state.tables.tool_executions.length, 0);
+    assert.equal(state.tables.run_events.length, 0);
+    assert.equal(state.tables.domain_outbox.length, 0);
+    assert.equal(state.tables.runs[0].next_event_sequence, 0);
+    assert.equal(emitted.length, 0);
   });
 
   it('fence mismatch rolls back tool/audit/event/outbox; no emit', async () => {
@@ -542,7 +779,7 @@ describe('enterprise-policy + governance integration', () => {
     });
     assert.equal(r.block, true);
     assert.equal(r.durablePending?.kind, DURABLE_APPROVAL_PENDING);
-    assert.equal(r.runStatusHint, null);
+    assert.equal(r.runStatusHint, 'WAITING_APPROVAL');
     assert.equal(transportCalls.length, 0);
     assert.equal(state.tables.approvals.length, 1);
     assert.ok(

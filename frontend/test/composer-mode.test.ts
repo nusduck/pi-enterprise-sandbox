@@ -82,6 +82,7 @@ describe('composer mode helpers', () => {
 
   it('capability flags for modes', () => {
     assert.equal(canSteer('running', 'running'), true);
+    assert.equal(canSteer('running', 'queued'), false);
     assert.equal(canSteer('running', 'cancel_requested'), false);
     assert.equal(canSteer('idle'), false);
     assert.equal(canFollowUp('running'), true);

@@ -6,10 +6,13 @@
  *
  * Endpoints (compatible paths):
  *   POST/GET /internal/agent-runs
+ *   POST/GET /internal/conversations
+ *   GET/DELETE /internal/conversations/:id
+ *   POST /internal/sessions/ensure
  *   GET  /internal/agent-runs/:id
  *   GET  /internal/agent-runs/:id/events  (MySQL history + Redis live SSE, PR-10)
  *   POST /internal/agent-runs/:id/cancel
- *   steer/follow-up/resume → 501 (PR-05)
+ *   durable steer and conversation-scoped follow-up
  */
 
 import http from 'node:http';
@@ -28,9 +31,9 @@ import {
  * Strict W3C traceparent parse.
  * version ≠ ff, 32-hex non-zero trace, 16-hex non-zero span, 2-hex flags.
  * @param {unknown} value
- * @returns {string | null} lowercase trace id or null if invalid
+ * @returns {{ traceId: string, parentSpanId: string, traceFlags: string } | null}
  */
-export function parseTraceparent(value) {
+export function parseTraceparentContext(value) {
   if (typeof value !== 'string' || !value.trim()) return null;
   const parts = value.trim().split('-');
   if (parts.length !== 4) return null;
@@ -43,22 +46,75 @@ export function parseTraceparent(value) {
     return null;
   }
   if (!/^[0-9a-fA-F]{2}$/.test(flags)) return null;
-  return tid.toLowerCase();
+  return {
+    traceId: tid.toLowerCase(),
+    parentSpanId: sid.toLowerCase(),
+    traceFlags: flags.toLowerCase(),
+  };
+}
+
+/** Keep the vendor list opaque while rejecting header injection and malformed members. */
+export function parseTracestate(value) {
+  if (typeof value !== 'string') return null;
+  const raw = value.trim();
+  if (!raw || raw.length > 512 || /[^\x20-\x7e]/.test(raw)) return null;
+  const members = raw.split(',');
+  if (members.length > 32) return null;
+  const keys = new Set();
+  for (const part of members) {
+    const member = part.trim();
+    const eq = member.indexOf('=');
+    const key = eq > 0 ? member.slice(0, eq) : '';
+    const valuePart = eq > 0 ? member.slice(eq + 1) : '';
+    if (
+      !/^[a-z][a-z0-9_*/-]{0,255}$/.test(key) ||
+      !valuePart ||
+      valuePart.length > 256 ||
+      /[,=]/.test(valuePart) ||
+      valuePart.startsWith(' ') ||
+      valuePart.endsWith(' ') ||
+      keys.has(key)
+    ) return null;
+    keys.add(key);
+  }
+  return members.map((part) => part.trim()).join(',');
 }
 
 /**
- * Parse W3C traceparent / X-Trace-Id into 32-hex non-zero lowercase trace id.
- * Invalid headers are ignored; mints a fresh id.
+ * Backward-compatible trace-id-only parser.
+ * @param {unknown} value
+ * @returns {string | null}
+ */
+export function parseTraceparent(value) {
+  return parseTraceparentContext(value)?.traceId ?? null;
+}
+
+/**
+ * Parse the incoming W3C parent context. X-Trace-Id/body fallback carries no
+ * parent span because it is only a trace correlation compatibility field.
  * @param {import('node:http').IncomingMessage} req
  * @param {unknown} [bodyTrace]
- * @returns {string}
+ * @returns {{ traceId: string, parentSpanId: string | null, traceFlags: string | null, traceState: string | null }}
  */
-export function resolveRequestTraceId(req, bodyTrace) {
+export function resolveRequestTraceContext(req, bodyTrace) {
   const headers = req.headers || {};
-  const fromTp = parseTraceparent(
+  const fromTp = parseTraceparentContext(
     headers.traceparent || headers.Traceparent,
   );
-  if (fromTp) return fromTp;
+  if (fromTp) {
+    return {
+      ...fromTp,
+      ...(parseTracestate(
+        headers.tracestate || headers.Tracestate || headers.TraceState,
+      )
+        ? {
+            traceState: parseTracestate(
+              headers.tracestate || headers.Tracestate || headers.TraceState,
+            ),
+          }
+        : {}),
+    };
+  }
 
   const xt =
     headers['x-trace-id'] ||
@@ -66,15 +122,35 @@ export function resolveRequestTraceId(req, bodyTrace) {
     (typeof bodyTrace === 'string' ? bodyTrace : null);
   if (typeof xt === 'string' && /^[0-9a-fA-F]{32}$/.test(xt.trim())) {
     const id = xt.trim().toLowerCase();
-    if (id !== '0'.repeat(32)) return id;
+    if (id !== '0'.repeat(32)) {
+      return {
+        traceId: id,
+        parentSpanId: null,
+        traceFlags: null,
+      };
+    }
   }
   // Reject legacy trace_* / UUID shapes — mint a fresh W3C id.
-  return randomBytes(16).toString('hex');
+  return {
+    traceId: randomBytes(16).toString('hex'),
+    parentSpanId: null,
+    traceFlags: null,
+  };
+}
+
+/**
+ * Parse W3C traceparent / X-Trace-Id into a trace id for legacy callers.
+ * @param {import('node:http').IncomingMessage} req
+ * @param {unknown} [bodyTrace]
+ * @returns {string}
+ */
+export function resolveRequestTraceId(req, bodyTrace) {
+  return resolveRequestTraceContext(req, bodyTrace).traceId;
 }
 
 /**
  * @param {import('node:http').IncomingMessage} req
- * @returns {{ provider: string, externalOrgId: string, externalUserId: string, displayName?: string|null } | null}
+ * @returns {{ provider: string, externalOrgId: string, externalUserId: string, role?: string|null, displayName?: string|null } | null}
  */
 export function authSubjectsFromRequest(req) {
   const uid = req.headers['x-acting-user-id'];
@@ -85,6 +161,10 @@ export function authSubjectsFromRequest(req) {
     provider: 'bff',
     externalOrgId: oid.trim(),
     externalUserId: uid.trim(),
+    role:
+      typeof req.headers['x-acting-role'] === 'string'
+        ? req.headers['x-acting-role'].trim()
+        : null,
   };
 }
 
@@ -135,7 +215,20 @@ export function mapErrorToHttp(err) {
     return { status: 400, body: { error: err.message, code: err.code } };
   }
   if (err instanceof OwnerScopedNotFoundError) {
-    return { status: 404, body: { error: 'Run not found', code: 'NOT_FOUND' } };
+    const resource = err.details?.resource;
+    const noun =
+      resource === 'conversations'
+        ? 'Conversation'
+        : resource === 'approvals'
+          ? 'Approval'
+        : resource === 'process_executions'
+          ? 'Process'
+        : resource === 'trace_spans'
+          ? 'Trace'
+        : resource === 'interactions'
+          ? 'Interaction'
+          : 'Run';
+    return { status: 404, body: { error: `${noun} not found`, code: 'NOT_FOUND' } };
   }
   if (err instanceof IdempotencyInProgressError) {
     return {
@@ -154,6 +247,12 @@ export function mapErrorToHttp(err) {
   }
   const code = /** @type {{ code?: string, name?: string }} */ (err)?.code;
   const name = /** @type {{ name?: string }} */ (err)?.name;
+  if (code === 'INTERACTION_RESPONSE_INVALID') {
+    return {
+      status: 400,
+      body: { error: 'Invalid interaction response', code },
+    };
+  }
   // Repository / infra typed errors (safe messages only).
   if (code === 'NOT_FOUND' || name === 'NotFoundError') {
     return { status: 404, body: { error: 'Not found', code: 'NOT_FOUND' } };
@@ -175,6 +274,7 @@ export function mapErrorToHttp(err) {
   if (
     code === 'MYSQL_DEPENDENCY_ERROR' ||
     code === 'REDIS_DEPENDENCY_ERROR' ||
+    code === 'SANDBOX_SESSION_PROVISION_FAILED' ||
     name === 'MysqlDependencyError' ||
     name === 'RedisDependencyError'
   ) {
@@ -241,19 +341,104 @@ export function presentGetRunResponse(run) {
   };
 }
 
+const PUBLIC_TOOL_STATUS = Object.freeze({
+  PROPOSED: 'prepared',
+  WAITING_APPROVAL: 'waiting_approval',
+  RUNNING: 'executing',
+  SUCCEEDED: 'succeeded',
+  FAILED: 'failed',
+  CANCELLED: 'cancelled',
+  UNKNOWN: 'unknown',
+});
+
+/**
+ * Public reconnect snapshot. Integrity metadata and request claims remain
+ * internal to the Agent ledger and are deliberately omitted.
+ * @param {object} tool
+ */
+export function presentToolExecutionResponse(tool) {
+  const status = PUBLIC_TOOL_STATUS[String(tool.status)] || 'unknown';
+  return {
+    tool_execution_id: tool.toolExecutionId,
+    tool_call_id: tool.toolCallId,
+    run_id: tool.runId,
+    agent_session_id: tool.agentSessionId,
+    tool_name: tool.toolName,
+    tool_source: tool.toolSource,
+    risk_level: tool.riskLevel,
+    arguments: tool.argumentsJson ?? {},
+    result_json: tool.resultJson ?? null,
+    status,
+    error_code: tool.errorCode ?? null,
+    error: tool.errorCode ?? null,
+    started_at: tool.startedAt ?? null,
+    completed_at: tool.completedAt ?? null,
+    finished_at: tool.completedAt ?? null,
+    created_at: tool.createdAt ?? null,
+    updated_at: tool.completedAt ?? tool.startedAt ?? tool.createdAt ?? null,
+  };
+}
+
+/** @param {object} process */
+export function presentProcessResponse(process) {
+  return {
+    process_id: process.processId,
+    session_id: process.sandboxSessionId,
+    sandbox_session_id: process.sandboxSessionId,
+    run_id: process.runId,
+    execution_id: process.executionId,
+    command: process.command || '',
+    status: process.status,
+    pid: process.pid ?? null,
+    exit_code: process.exitCode ?? null,
+    started_at: process.startedAt ?? null,
+    finished_at: process.endedAt ?? null,
+    created_at: process.createdAt ?? null,
+  };
+}
+
+function mapProcessErrorToHttp(err) {
+  const mapped = mapErrorToHttp(err);
+  if (mapped.status !== 500) return mapped;
+  const status = Number(err?.status ?? err?.httpStatus);
+  if (status === 400 || status === 422) {
+    return { status: 400, body: { error: 'Invalid process request', code: 'INVALID_PROCESS_REQUEST' } };
+  }
+  if (status === 404) {
+    return { status: 404, body: { error: 'Process not found', code: 'NOT_FOUND' } };
+  }
+  if (status === 409) {
+    return { status: 409, body: { error: 'Process operation conflict', code: 'PROCESS_CONFLICT' } };
+  }
+  if (status === 503) {
+    return { status: 503, body: { error: 'Process service unavailable', code: 'DEPENDENCY' } };
+  }
+  return mapped;
+}
+
 /**
  * @param {{
  *   createRunService: { execute: Function },
  *   getRunService: { execute: Function },
  *   cancelRunService: { execute: Function },
  *   eventQueryService: { listEvents: Function, resolveEventSequence?: Function },
+ *   traceQueryService?: { listForRun: Function, listByTrace?: Function } | null,
  *   eventSseService?: { openStream: Function } | null,
  *   a2aHandler?: { handle: Function } | null,
+ *   a2aAdminHandler?: { handle: Function } | null,
  *   config?: { AGENT_INTERNAL_TOKEN?: string, PORT?: number, A2A_PUBLIC_BASE_URL?: string },
  *   sandboxHealthCheck?: () => Promise<{ status?: string } | null>,
  *   dataPlaneReady?: boolean | (() => boolean | Promise<boolean>),
  *   getExtensionDiagnostics?: Function | null,
  *   listRuns?: Function | null,
+ *   conversationService?: { list: Function, get: Function, create: Function, delete: Function, ensureSession: Function } | null,
+ *   approvalQueryService?: { list: Function, get: Function } | null,
+ *   approvalDecisionService?: { resolve: Function, resume: Function } | null,
+ *   interactionResponseService?: { respond: Function, rehydrateWaiting: Function } | null,
+ *   steerRunService?: { execute: Function } | null,
+ *   followUpService?: { execute: Function } | null,
+ *   listToolExecutions?: Function | null,
+ *   processAccessService?: object | null,
  *   activeRunHint?: () => number,
  *   eventPollIntervalMs?: number,
  *   eventHeartbeatMs?: number,
@@ -272,6 +457,13 @@ export function createAgentHttpServer(deps) {
   const heartbeatMs = deps.eventHeartbeatMs ?? 15_000;
   const eventSseService = deps.eventSseService || null;
   const a2aHandler = deps.a2aHandler || null;
+  const a2aAdminHandler = deps.a2aAdminHandler || null;
+  const conversationService = deps.conversationService || null;
+  const approvalQueryService = deps.approvalQueryService || null;
+  const approvalDecisionService = deps.approvalDecisionService || null;
+  const interactionResponseService = deps.interactionResponseService || null;
+  const processAccessService = deps.processAccessService || null;
+  const traceQueryService = deps.traceQueryService || null;
 
   /**
    * @param {import('node:http').IncomingMessage} req
@@ -301,6 +493,7 @@ export function createAgentHttpServer(deps) {
         a2aHandler &&
         typeof a2aHandler.handle === 'function' &&
         (path === '/.well-known/agent-card.json' ||
+          path === '/a2a' ||
           path.startsWith('/a2a/'))
       ) {
         const handled = await a2aHandler.handle(req, res, parsedUrl);
@@ -356,6 +549,15 @@ export function createAgentHttpServer(deps) {
         if (!enforceInternalAuth(req, res)) return;
       }
 
+      if (
+        a2aAdminHandler &&
+        typeof a2aAdminHandler.handle === 'function' &&
+        path.startsWith('/internal/a2a/')
+      ) {
+        const handled = await a2aAdminHandler.handle(req, res, parsedUrl);
+        if (handled) return;
+      }
+
       if (req.method === 'GET' && path === '/internal/extensions/diagnostics') {
         if (typeof deps.getExtensionDiagnostics !== 'function') {
           json(res, 501, {
@@ -382,6 +584,506 @@ export function createAgentHttpServer(deps) {
           });
         }
         return;
+      }
+
+      if (path === '/internal/conversations') {
+        if (!conversationService) {
+          json(res, 503, {
+            error: 'Conversation data plane unavailable',
+            code: 'DEPENDENCY',
+          });
+          return;
+        }
+        const auth = authSubjectsFromRequest(req);
+        if (!auth) {
+          json(res, 400, {
+            error: 'X-Acting-User-Id and X-Acting-Organization-Id are required',
+            code: 'AUTH_CONTEXT_REQUIRED',
+          });
+          return;
+        }
+        try {
+          if (req.method === 'GET') {
+            const requestedLimit = Number(parsedUrl.searchParams.get('limit')) || 200;
+            const limit = Math.min(200, Math.max(1, requestedLimit));
+            json(res, 200, await conversationService.list(auth, { limit }));
+            return;
+          }
+          if (req.method === 'POST') {
+            const raw = await readBody(req);
+            let body = {};
+            try {
+              body = raw ? JSON.parse(raw) : {};
+            } catch {
+              json(res, 400, { error: 'Invalid JSON body' });
+              return;
+            }
+            json(res, 201, await conversationService.create(auth, body));
+            return;
+          }
+        } catch (err) {
+          const mapped = mapErrorToHttp(err);
+          json(res, mapped.status, mapped.body);
+          return;
+        }
+      }
+
+      if (req.method === 'POST' && path === '/internal/sessions/ensure') {
+        if (!conversationService) {
+          json(res, 503, {
+            error: 'Conversation data plane unavailable',
+            code: 'DEPENDENCY',
+          });
+          return;
+        }
+        const auth = authSubjectsFromRequest(req);
+        if (!auth) {
+          json(res, 400, {
+            error: 'X-Acting-User-Id and X-Acting-Organization-Id are required',
+            code: 'AUTH_CONTEXT_REQUIRED',
+          });
+          return;
+        }
+        const raw = await readBody(req);
+        let body = {};
+        try {
+          body = raw ? JSON.parse(raw) : {};
+        } catch {
+          json(res, 400, { error: 'Invalid JSON body' });
+          return;
+        }
+        const traceId = resolveRequestTraceId(
+          req,
+          body.trace_id || body.traceId,
+        );
+        try {
+          const result = await conversationService.ensureSession(auth, {
+            conversationId:
+              body.conversation_id || body.conversationId || null,
+            traceId,
+          });
+          res.setHeader('X-Trace-Id', traceId);
+          json(res, 200, { ...result, trace_id: traceId });
+        } catch (err) {
+          const mapped = mapErrorToHttp(err);
+          json(res, mapped.status, mapped.body);
+        }
+        return;
+      }
+
+      {
+        const sessionAccess = path.match(/^\/internal\/sessions\/([^/]+)$/);
+        if (req.method === 'GET' && sessionAccess) {
+          if (!conversationService?.resolveSandboxSession) {
+            json(res, 503, {
+              error: 'Conversation data plane unavailable',
+              code: 'DEPENDENCY',
+            });
+            return;
+          }
+          const auth = authSubjectsFromRequest(req);
+          if (!auth) {
+            json(res, 400, {
+              error: 'X-Acting-User-Id and X-Acting-Organization-Id are required',
+              code: 'AUTH_CONTEXT_REQUIRED',
+            });
+            return;
+          }
+          try {
+            json(
+              res,
+              200,
+              await conversationService.resolveSandboxSession(
+                auth,
+                decodeURIComponent(sessionAccess[1]),
+              ),
+            );
+          } catch (err) {
+            const mapped = mapErrorToHttp(err);
+            json(res, mapped.status, mapped.body);
+          }
+          return;
+        }
+      }
+
+      {
+        const m = path.match(/^\/internal\/conversations\/([^/]+)$/);
+        if (m && (req.method === 'GET' || req.method === 'DELETE')) {
+          if (!conversationService) {
+            json(res, 503, {
+              error: 'Conversation data plane unavailable',
+              code: 'DEPENDENCY',
+            });
+            return;
+          }
+          const auth = authSubjectsFromRequest(req);
+          if (!auth) {
+            json(res, 400, {
+              error: 'X-Acting-User-Id and X-Acting-Organization-Id are required',
+              code: 'AUTH_CONTEXT_REQUIRED',
+            });
+            return;
+          }
+          const conversationId = decodeURIComponent(m[1]);
+          try {
+            if (req.method === 'GET') {
+              json(res, 200, await conversationService.get(conversationId, auth));
+            } else {
+              await conversationService.delete(conversationId, auth);
+              res.writeHead(204);
+              res.end();
+            }
+          } catch (err) {
+            const mapped = mapErrorToHttp(err);
+            json(res, mapped.status, mapped.body);
+          }
+          return;
+        }
+      }
+
+      // Follow-up is a separate durable Run in the same Conversation/Session.
+      {
+        const m = path.match(
+          /^\/internal\/conversations\/([^/]+)\/follow-ups$/,
+        );
+        if (m && req.method === 'POST') {
+          if (!deps.followUpService?.execute) {
+            json(res, 503, {
+              error: 'Follow-up service unavailable',
+              code: 'DEPENDENCY',
+            });
+            return;
+          }
+          const auth = authSubjectsFromRequest(req);
+          if (!auth) {
+            json(res, 400, {
+              error:
+                'X-Acting-User-Id and X-Acting-Organization-Id are required',
+              code: 'AUTH_CONTEXT_REQUIRED',
+            });
+            return;
+          }
+          const idempotencyKey = readIdempotencyKey(req);
+          if (!idempotencyKey) {
+            json(res, 400, {
+              error: 'Idempotency-Key header is required',
+              code: 'IDEMPOTENCY_KEY_REQUIRED',
+            });
+            return;
+          }
+          let body;
+          try {
+            const raw = await readBody(req);
+            body = raw ? JSON.parse(raw) : {};
+          } catch {
+            json(res, 400, { error: 'Invalid JSON body' });
+            return;
+          }
+          const traceContext = resolveRequestTraceContext(
+            req,
+            body.trace_id || body.traceId,
+          );
+          const traceId = traceContext.traceId;
+          try {
+            const result = await deps.followUpService.execute({
+              conversationId: decodeURIComponent(m[1]),
+              text: body.text,
+              auth,
+              traceId,
+              ...(traceContext.traceState
+                ? { traceState: traceContext.traceState }
+                : {}),
+              idempotencyKey,
+              agentId: body.agent_id || body.agentId || null,
+              spanId: traceContext.parentSpanId,
+            });
+            res.setHeader('X-Trace-Id', traceId);
+            json(res, 202, presentCreateRunResponse(result));
+          } catch (err) {
+            const mapped = mapErrorToHttp(err);
+            json(res, mapped.status, mapped.body);
+          }
+          return;
+        }
+      }
+
+      if (path === '/internal/processes' && req.method === 'GET') {
+        if (!processAccessService) {
+          json(res, 503, { error: 'Process data plane unavailable', code: 'DEPENDENCY' });
+          return;
+        }
+        const auth = authSubjectsFromRequest(req);
+        if (!auth) {
+          json(res, 400, {
+            error: 'X-Acting-User-Id and X-Acting-Organization-Id are required',
+            code: 'AUTH_CONTEXT_REQUIRED',
+          });
+          return;
+        }
+        try {
+          const rows = await processAccessService.list({
+            auth,
+            runId: parsedUrl.searchParams.get('run_id'),
+            sandboxSessionId: parsedUrl.searchParams.get('session_id'),
+            status: parsedUrl.searchParams.get('status'),
+            limit: parsedUrl.searchParams.get('limit') || 100,
+          });
+          const processes = rows.map(presentProcessResponse);
+          json(res, 200, { processes, items: processes });
+        } catch (err) {
+          const mapped = mapProcessErrorToHttp(err);
+          json(res, mapped.status, mapped.body);
+        }
+        return;
+      }
+
+      {
+        const m = path.match(
+          /^\/internal\/processes\/([^/]+)(?:\/(logs|read|stdin|signal|cancel|kill))?$/,
+        );
+        if (m) {
+          if (!processAccessService) {
+            json(res, 503, { error: 'Process data plane unavailable', code: 'DEPENDENCY' });
+            return;
+          }
+          const auth = authSubjectsFromRequest(req);
+          if (!auth) {
+            json(res, 400, {
+              error: 'X-Acting-User-Id and X-Acting-Organization-Id are required',
+              code: 'AUTH_CONTEXT_REQUIRED',
+            });
+            return;
+          }
+          const processId = decodeURIComponent(m[1]);
+          const action = m[2] || 'status';
+          try {
+            if (req.method === 'GET' && action === 'status') {
+              json(
+                res,
+                200,
+                presentProcessResponse(
+                  await processAccessService.get({ processId, auth }),
+                ),
+              );
+              return;
+            }
+            if (req.method === 'GET' && action === 'logs') {
+              json(
+                res,
+                200,
+                await processAccessService.logs({
+                  processId,
+                  auth,
+                  offset: parsedUrl.searchParams.get('offset') || 0,
+                  limit: parsedUrl.searchParams.get('limit'),
+                }),
+              );
+              return;
+            }
+            if (req.method === 'GET' && action === 'read') {
+              json(
+                res,
+                200,
+                await processAccessService.read({
+                  processId,
+                  auth,
+                  stream: parsedUrl.searchParams.get('stream') || 'stdout',
+                  cursor: parsedUrl.searchParams.get('cursor') || '0-0',
+                  limit: parsedUrl.searchParams.get('limit') || 8192,
+                }),
+              );
+              return;
+            }
+            if (
+              req.method === 'POST' &&
+              (action === 'stdin' || action === 'signal' || action === 'kill')
+            ) {
+              const raw = await readBody(req);
+              let body = {};
+              try {
+                body = raw ? JSON.parse(raw) : {};
+              } catch {
+                json(res, 400, { error: 'Invalid JSON body' });
+                return;
+              }
+              const result =
+                action === 'stdin'
+                  ? await processAccessService.stdin({
+                      processId,
+                      auth,
+                      data: body.data,
+                      eof: body.eof,
+                    })
+                  : await processAccessService.signal({
+                      processId,
+                      auth,
+                      signal: body.signal || 'SIGTERM',
+                    });
+              json(res, 200, result);
+              return;
+            }
+            if (req.method === 'POST' && action === 'cancel') {
+              json(
+                res,
+                200,
+                await processAccessService.cancel({ processId, auth }),
+              );
+              return;
+            }
+            json(res, 405, { error: 'Method not allowed' });
+          } catch (err) {
+            const mapped = mapProcessErrorToHttp(err);
+            json(res, mapped.status, mapped.body);
+          }
+          return;
+        }
+      }
+
+      if (req.method === 'GET' && path === '/internal/approvals') {
+        if (!approvalQueryService) {
+          json(res, 503, {
+            error: 'Approval data plane unavailable',
+            code: 'DEPENDENCY',
+          });
+          return;
+        }
+        const auth = authSubjectsFromRequest(req);
+        if (!auth) {
+          json(res, 400, {
+            error: 'X-Acting-User-Id and X-Acting-Organization-Id are required',
+            code: 'AUTH_CONTEXT_REQUIRED',
+          });
+          return;
+        }
+        try {
+          const approvals = await approvalQueryService.list(auth, {
+            status: parsedUrl.searchParams.get('status') || undefined,
+            limit: parsedUrl.searchParams.get('limit') || undefined,
+          });
+          json(res, 200, { approvals, items: approvals });
+        } catch (err) {
+          const mapped = mapErrorToHttp(err);
+          json(res, mapped.status, mapped.body);
+        }
+        return;
+      }
+
+      {
+        const m = path.match(/^\/internal\/approvals\/([^/]+)$/);
+        if (m && req.method === 'GET') {
+          if (!approvalQueryService) {
+            json(res, 503, {
+              error: 'Approval data plane unavailable',
+              code: 'DEPENDENCY',
+            });
+            return;
+          }
+          const auth = authSubjectsFromRequest(req);
+          if (!auth) {
+            json(res, 400, {
+              error: 'X-Acting-User-Id and X-Acting-Organization-Id are required',
+              code: 'AUTH_CONTEXT_REQUIRED',
+            });
+            return;
+          }
+          try {
+            json(
+              res,
+              200,
+              await approvalQueryService.get(decodeURIComponent(m[1]), auth),
+            );
+          } catch (err) {
+            const mapped = mapErrorToHttp(err);
+            json(res, mapped.status, mapped.body);
+          }
+          return;
+        }
+      }
+
+      {
+        const m = path.match(/^\/internal\/approvals\/([^/]+)\/decide$/);
+        if (m && req.method === 'POST') {
+          if (!approvalDecisionService) {
+            json(res, 503, {
+              error: 'Approval decision plane unavailable',
+              code: 'DEPENDENCY',
+            });
+            return;
+          }
+          const auth = authSubjectsFromRequest(req);
+          if (!auth) {
+            json(res, 400, {
+              error: 'X-Acting-User-Id and X-Acting-Organization-Id are required',
+              code: 'AUTH_CONTEXT_REQUIRED',
+            });
+            return;
+          }
+          let body;
+          try {
+            const raw = await readBody(req);
+            body = raw ? JSON.parse(raw) : {};
+          } catch {
+            json(res, 400, { error: 'Invalid JSON body' });
+            return;
+          }
+          try {
+            const result = await approvalDecisionService.resolve({
+              approvalId: decodeURIComponent(m[1]),
+              decision: body.decision,
+              reason: body.reason ?? null,
+              runId: body.run_id ?? body.runId ?? null,
+              auth,
+            });
+            json(res, result.resumePending ? 202 : 200, result);
+          } catch (err) {
+            const mapped = mapErrorToHttp(err);
+            json(res, mapped.status, mapped.body);
+          }
+          return;
+        }
+      }
+
+      {
+        const m = path.match(
+          /^\/internal\/agent-runs\/([^/]+)\/resume-approval$/,
+        );
+        if (m && req.method === 'POST') {
+          if (!approvalDecisionService) {
+            json(res, 503, {
+              error: 'Approval decision plane unavailable',
+              code: 'DEPENDENCY',
+            });
+            return;
+          }
+          const auth = authSubjectsFromRequest(req);
+          if (!auth) {
+            json(res, 400, {
+              error: 'X-Acting-User-Id and X-Acting-Organization-Id are required',
+              code: 'AUTH_CONTEXT_REQUIRED',
+            });
+            return;
+          }
+          let body;
+          try {
+            const raw = await readBody(req);
+            body = raw ? JSON.parse(raw) : {};
+          } catch {
+            json(res, 400, { error: 'Invalid JSON body' });
+            return;
+          }
+          try {
+            const result = await approvalDecisionService.resume({
+              runId: decodeURIComponent(m[1]),
+              approvalId: body.approval_id ?? body.approvalId ?? null,
+              auth,
+            });
+            json(res, result.resumePending ? 202 : 200, result);
+          } catch (err) {
+            const mapped = mapErrorToHttp(err);
+            json(res, mapped.status, mapped.body);
+          }
+          return;
+        }
       }
 
       // POST create
@@ -416,7 +1118,11 @@ export function createAgentHttpServer(deps) {
           });
           return;
         }
-        const traceId = resolveRequestTraceId(req, body.trace_id || body.traceId);
+        const traceContext = resolveRequestTraceContext(
+          req,
+          body.trace_id || body.traceId,
+        );
+        const traceId = traceContext.traceId;
         try {
           const result = await deps.createRunService.execute({
             messages,
@@ -426,9 +1132,13 @@ export function createAgentHttpServer(deps) {
                 body.conversation_id || body.conversationId || null,
             },
             traceId,
+            ...(traceContext.traceState
+              ? { traceState: traceContext.traceState }
+              : {}),
             idempotencyKey,
             agentProfileId: body.agent_profile_id || body.agentProfileId || null,
             budget: body.budget || null,
+            spanId: traceContext.parentSpanId,
           });
           res.setHeader('X-Trace-Id', traceId);
           json(res, 202, presentCreateRunResponse(result));
@@ -476,6 +1186,42 @@ export function createAgentHttpServer(deps) {
 
       // GET one
       {
+        const traceRun = path.match(/^\/internal\/agent-runs\/([^/]+)\/trace$/);
+        if (traceRun && req.method === 'GET') {
+          if (!traceQueryService?.listForRun) {
+            json(res, 503, { error: 'Trace data plane unavailable', code: 'DEPENDENCY' });
+            return;
+          }
+          const auth = authSubjectsFromRequest(req);
+          if (!auth) {
+            json(res, 400, {
+              error: 'X-Acting-User-Id and X-Acting-Organization-Id are required',
+              code: 'AUTH_CONTEXT_REQUIRED',
+            });
+            return;
+          }
+          try {
+            const requestTraceId = resolveRequestTraceId(req);
+            // The response header identifies this HTTP call. The historical
+            // Run trace remains in the JSON body and must not replace it.
+            res.setHeader('X-Trace-Id', requestTraceId);
+            const result = await traceQueryService.listForRun({
+              runId: decodeURIComponent(traceRun[1]),
+              auth,
+              limit: Number(parsedUrl.searchParams.get('limit')) || 500,
+              cursor: parsedUrl.searchParams.get('cursor') || null,
+            });
+            json(res, 200, result);
+          } catch (err) {
+            const mapped = mapErrorToHttp(err);
+            json(res, mapped.status, mapped.body);
+          }
+          return;
+        }
+      }
+
+      // GET one
+      {
         const m = path.match(/^\/internal\/agent-runs\/([^/]+)$/);
         if (m && req.method === 'GET') {
           const runId = decodeURIComponent(m[1]);
@@ -490,6 +1236,39 @@ export function createAgentHttpServer(deps) {
           try {
             const run = await deps.getRunService.execute({ runId, auth });
             json(res, 200, presentGetRunResponse(run));
+          } catch (err) {
+            const mapped = mapErrorToHttp(err);
+            json(res, mapped.status, mapped.body);
+          }
+          return;
+        }
+      }
+
+      // GET authoritative ToolExecution ledger snapshot for one owned Run.
+      {
+        const m = path.match(/^\/internal\/agent-runs\/([^/]+)\/tools$/);
+        if (m && req.method === 'GET') {
+          if (typeof deps.listToolExecutions !== 'function') {
+            json(res, 501, {
+              error: 'Tool ledger query not implemented on this node',
+              code: 'NOT_IMPLEMENTED',
+            });
+            return;
+          }
+          const runId = decodeURIComponent(m[1]);
+          const auth = authSubjectsFromRequest(req);
+          if (!auth) {
+            json(res, 400, {
+              error:
+                'X-Acting-User-Id and X-Acting-Organization-Id are required',
+            });
+            return;
+          }
+          try {
+            const rows = await deps.listToolExecutions({ runId, auth });
+            json(res, 200, {
+              tools: rows.map(presentToolExecutionResponse),
+            });
           } catch (err) {
             const mapped = mapErrorToHttp(err);
             json(res, mapped.status, mapped.body);
@@ -725,6 +1504,146 @@ export function createAgentHttpServer(deps) {
         }
       }
 
+      // POST durable steer. Admission and idempotency are committed before 202.
+      {
+        const m = path.match(/^\/internal\/agent-runs\/([^/]+)\/steer$/);
+        if (m && req.method === 'POST') {
+          if (!deps.steerRunService?.execute) {
+            json(res, 503, {
+              error: 'Steer service unavailable',
+              code: 'DEPENDENCY',
+            });
+            return;
+          }
+          const auth = authSubjectsFromRequest(req);
+          if (!auth) {
+            json(res, 400, {
+              error:
+                'X-Acting-User-Id and X-Acting-Organization-Id are required',
+              code: 'AUTH_CONTEXT_REQUIRED',
+            });
+            return;
+          }
+          const idempotencyKey = readIdempotencyKey(req);
+          if (!idempotencyKey) {
+            json(res, 400, {
+              error: 'Idempotency-Key header is required',
+              code: 'IDEMPOTENCY_KEY_REQUIRED',
+            });
+            return;
+          }
+          let body;
+          try {
+            const raw = await readBody(req);
+            body = raw ? JSON.parse(raw) : {};
+          } catch {
+            json(res, 400, { error: 'Invalid JSON body' });
+            return;
+          }
+          const traceContext = resolveRequestTraceContext(
+            req,
+            body.trace_id || body.traceId,
+          );
+          const traceId = traceContext.traceId;
+          try {
+            const result = await deps.steerRunService.execute({
+              runId: decodeURIComponent(m[1]),
+              text: body.text,
+              conversationId:
+                body.conversation_id || body.conversationId || null,
+              auth,
+              traceId,
+              ...(traceContext.traceState
+                ? { traceState: traceContext.traceState }
+                : {}),
+              idempotencyKey,
+              spanId: traceContext.parentSpanId,
+            });
+            res.setHeader('X-Trace-Id', traceId);
+            json(res, 202, {
+              ...result,
+              run_id: result.runId,
+              steer_id: result.steerId,
+              message_id: result.messageId,
+            });
+          } catch (err) {
+            const mapped = mapErrorToHttp(err);
+            json(res, mapped.status, mapped.body);
+          }
+          return;
+        }
+      }
+
+      // Compatibility path: resolve the owned source Run, then create a new
+      // follow-up Run. The canonical public API is Conversation-scoped.
+      {
+        const m = path.match(
+          /^\/internal\/agent-runs\/([^/]+)\/follow-up$/,
+        );
+        if (m && req.method === 'POST') {
+          if (!deps.followUpService?.execute) {
+            json(res, 503, {
+              error: 'Follow-up service unavailable',
+              code: 'DEPENDENCY',
+            });
+            return;
+          }
+          const auth = authSubjectsFromRequest(req);
+          if (!auth) {
+            json(res, 400, {
+              error:
+                'X-Acting-User-Id and X-Acting-Organization-Id are required',
+              code: 'AUTH_CONTEXT_REQUIRED',
+            });
+            return;
+          }
+          const idempotencyKey = readIdempotencyKey(req);
+          if (!idempotencyKey) {
+            json(res, 400, {
+              error: 'Idempotency-Key header is required',
+              code: 'IDEMPOTENCY_KEY_REQUIRED',
+            });
+            return;
+          }
+          let body;
+          try {
+            const raw = await readBody(req);
+            body = raw ? JSON.parse(raw) : {};
+          } catch {
+            json(res, 400, { error: 'Invalid JSON body' });
+            return;
+          }
+          const traceContext = resolveRequestTraceContext(
+            req,
+            body.trace_id || body.traceId,
+          );
+          const traceId = traceContext.traceId;
+          try {
+            const sourceRun = await deps.getRunService.execute({
+              runId: decodeURIComponent(m[1]),
+              auth,
+            });
+            const result = await deps.followUpService.execute({
+              conversationId: sourceRun.conversationId,
+              text: body.text,
+              auth,
+              traceId,
+              ...(traceContext.traceState
+                ? { traceState: traceContext.traceState }
+                : {}),
+              idempotencyKey,
+              spanId: traceContext.parentSpanId,
+            });
+            res.setHeader('X-Trace-Id', traceId);
+            json(res, 202, presentCreateRunResponse(result));
+          } catch (err) {
+            const mapped = mapErrorToHttp(err);
+            json(res, mapped.status, mapped.body);
+          }
+          return;
+        }
+      }
+
       // POST cancel (plan §18.5 — Idempotency-Key required)
       {
         const m = path.match(/^\/internal\/agent-runs\/([^/]+)\/cancel$/);
@@ -781,22 +1700,94 @@ export function createAgentHttpServer(deps) {
         }
       }
 
-      // PR-05 durable paths — explicit not implemented (no Map fallback)
-      if (
-        path.match(
-          /^\/internal\/agent-runs\/[^/]+\/(steer|follow-up|resume-approval)$/,
-        ) ||
-        path.match(
-          /^\/internal\/agent-runs\/[^/]+\/interactions\/[^/]+\/respond$/,
-        ) ||
-        path === '/internal/agent-runs/rehydrate-waiting' ||
-        path.match(/^\/internal\/approvals\/[^/]+\/decide$/)
-      ) {
-        json(res, 501, {
-          error:
-            'Steer/follow-up/resume/approval durable path requires PR-05 Pi session recovery',
-          code: 'NOT_IMPLEMENTED',
-        });
+      // Durable user interaction response. MySQL owns the request/response
+      // CAS; Redis enqueue is acceleration only and may be retried later.
+      {
+        const m = path.match(
+          /^\/internal\/agent-runs\/([^/]+)\/interactions\/([^/]+)\/respond$/,
+        );
+        if (m && req.method === 'POST') {
+          if (!interactionResponseService?.respond) {
+            json(res, 503, {
+              error: 'Interaction data plane unavailable',
+              code: 'DEPENDENCY',
+            });
+            return;
+          }
+          const auth = authSubjectsFromRequest(req);
+          if (!auth) {
+            json(res, 400, {
+              error: 'X-Acting-User-Id and X-Acting-Organization-Id are required',
+              code: 'AUTH_CONTEXT_REQUIRED',
+            });
+            return;
+          }
+          let body;
+          try {
+            const raw = await readBody(req);
+            body = raw ? JSON.parse(raw) : {};
+          } catch {
+            json(res, 400, { error: 'Invalid JSON body' });
+            return;
+          }
+          if (!Object.prototype.hasOwnProperty.call(body || {}, 'response')) {
+            json(res, 400, { error: 'response is required', code: 'VALIDATION' });
+            return;
+          }
+          try {
+            const result = await interactionResponseService.respond({
+              runId: decodeURIComponent(m[1]),
+              interactionId: decodeURIComponent(m[2]),
+              response: body.response,
+              auth,
+              traceId: resolveRequestTraceId(req),
+            });
+            json(res, result.resumePending ? 202 : 200, result);
+          } catch (err) {
+            const mapped = mapErrorToHttp(err);
+            json(res, mapped.status, mapped.body);
+          }
+          return;
+        }
+      }
+
+      // Restart/refresh rehydration enumerates durable WAITING_INPUT facts and
+      // wakes only interactions that already have a resolved response.
+      if (req.method === 'POST' && path === '/internal/agent-runs/rehydrate-waiting') {
+        if (!interactionResponseService?.rehydrateWaiting) {
+          json(res, 503, {
+            error: 'Interaction data plane unavailable',
+            code: 'DEPENDENCY',
+          });
+          return;
+        }
+        const auth = authSubjectsFromRequest(req);
+        if (!auth) {
+          json(res, 400, {
+            error: 'X-Acting-User-Id and X-Acting-Organization-Id are required',
+            code: 'AUTH_CONTEXT_REQUIRED',
+          });
+          return;
+        }
+        let body;
+        try {
+          const raw = await readBody(req);
+          body = raw ? JSON.parse(raw) : {};
+        } catch {
+          json(res, 400, { error: 'Invalid JSON body' });
+          return;
+        }
+        try {
+          const result = await interactionResponseService.rehydrateWaiting({
+            ...body,
+            runId: body.run_id ?? body.runId ?? null,
+            auth,
+          });
+          json(res, 200, result);
+        } catch (err) {
+          const mapped = mapErrorToHttp(err);
+          json(res, mapped.status, mapped.body);
+        }
         return;
       }
 

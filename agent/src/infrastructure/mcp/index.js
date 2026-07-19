@@ -16,6 +16,13 @@ export {
 export {
   PiMcpAdapterError,
   PI_MCP_ADAPTER_PACKAGE,
+  PINNED_PI_MCP_ADAPTER_VERSION,
+  loadMcpServerRegistry,
+  createEnvironmentSecretResolver,
+  resolvePiMcpAdapterPackage,
+  createMcpExtensionsOverride,
   createPiMcpAdapter,
+  createPiMcpResolver,
+  buildMcpPolicyBindings,
   resolveMcpBinding,
 } from './pi-mcp-adapter-factory.js';

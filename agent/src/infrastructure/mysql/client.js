@@ -4,7 +4,7 @@
 
 import { createRequire } from 'node:module';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, URL } from 'node:url';
 import { MysqlConfigError, MysqlDependencyError } from './errors.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -57,6 +57,35 @@ export function assertMysqlConnectionUrl(url) {
 }
 
 /**
+ * Normalize an Agent MySQL DSN for deterministic DATETIME handling.
+ *
+ * MySQL DATETIME values have no timezone on the wire.  mysql2 otherwise
+ * interprets them in the host's local timezone and returns shifted `Date`
+ * objects.  Keep all caller-supplied connection options, but make the two
+ * options that control this boundary explicit and non-overridable.
+ *
+ * @param {string} connectionUrl
+ * @returns {string} mysql:// URL with UTC/string date options
+ */
+export function normalizeMysqlConnectionUrl(connectionUrl) {
+  const url = assertMysqlConnectionUrl(connectionUrl);
+  let parsed;
+  try {
+    parsed = new URL(url);
+  } catch {
+    // Do not include the URL: it may contain credentials.
+    throw new MysqlConfigError('Invalid MySQL connection URL.');
+  }
+
+  // Knex's mysql2 dialect consumes a mysql:// URL.  mysql2:// is accepted at
+  // the public boundary for compatibility, then normalized here.
+  parsed.protocol = 'mysql:';
+  parsed.searchParams.set('timezone', 'Z');
+  parsed.searchParams.set('dateStrings', 'true');
+  return parsed.toString();
+}
+
+/**
  * Load knex at runtime so unit tests that only inject fakes need not install knex.
  * @returns {typeof import('knex')}
  */
@@ -100,12 +129,9 @@ export function migrationsDirectory() {
  * @returns {import('knex').Knex}
  */
 export function createMysqlKnex(connectionUrl, options = {}) {
-  const url = assertMysqlConnectionUrl(connectionUrl);
+  const connection = normalizeMysqlConnectionUrl(connectionUrl);
   assertMysql2Installed();
   const knex = loadKnexModule();
-
-  // knex mysql2 accepts mysql:// URLs; normalize mysql2:// → mysql://
-  const connection = url.replace(/^mysql2:\/\//i, 'mysql://');
 
   return knex({
     client: 'mysql2',

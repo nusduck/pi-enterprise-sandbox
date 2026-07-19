@@ -7,11 +7,11 @@ Pi Enterprise Sandbox 四服务 API 分层：
 | **Public** | Frontend Nginx | `/api/*` 反向代理到 API Server |
 | **API Server (BFF)** | Node.js 22 (port 4000) | Run API/SSE relay、`/api/status`、文件上传/下载代理 |
 | **Agent** | Node.js 22 (port 4100) | 内部 Run API + pi-coding-agent SDK（浏览器不直连） |
-| **Sandbox** | FastAPI (port 8081) | 会话/执行/文件/产物/审计/审批（Docker 内网） |
+| **Sandbox** | FastAPI (port 8081) | Agent 专用内部执行平面（HMAC `/internal/v1/*`）；文件/执行/进程/数据集/产物（Docker 内网） |
 
 无 Python Agent Runtime、无双 Runtime 开关。Agent **支持零 Skill 启动**；共享 `skills/` 挂载与 package skills 由 Agent Profile 策略 + session capability registry 控制。
 
-> **Sandbox 端口 8081 仅 Docker 内网可访问**。API Server 自动为所有 Sandbox 请求添加 `X-API-Key` header（如配置 `SANDBOX_API_TOKEN`）。
+> **Sandbox 端口 8081 仅 Docker 内网可访问，生产不发布宿主端口**。Agent 调用正式执行能力使用 HMAC-authenticated `/internal/v1/*`；浏览器不能直连 Sandbox，也不能提供 Sandbox service credential。BFF `/api/*` 是唯一浏览器 API 边界。
 > MCP 由 Agent Host 的 MCP Connection Manager 直连企业 MCP Gateway/Server，不经过 Sandbox，也不向浏览器暴露凭据。
 
 ---
@@ -167,22 +167,32 @@ Agent 模型侧权威清单工具：`capabilities`（`action=list|search|describ
 
 ---
 
-## 三、Sandbox API
+## 三、Sandbox 内部兼容适配层（非公共 API）
 
 Base URL: `http://sandbox:8081`（Docker 内网）
+
+本节列出的 `/sessions/*`、`/executions/*`、`/files/*`、`/artifacts/*`
+路径是旧适配器和 BFF 上游代理的兼容说明，不是浏览器或第三方可依赖的
+公共 API。正式 Agent 工具调用走带 scope、claim 和 replay protection 的
+`/internal/v1/*` HMAC 平面；生产环境不发布 Sandbox 宿主端口。新的集成
+必须添加对应的 `/api/*` BFF 路由或 Agent internal contract，不能把
+`X-API-Key` 当作终端用户身份。
 
 ### 通用约定
 
 - 所有请求/响应为 JSON
 - 错误返回 `{ "detail": "message" }`
 - `X-Trace-Id` header 回显 + 关联审计日志
-- 认证: `X-API-Key` header（如配置 `SANDBOX_API_TOKEN`）
+- 兼容适配器认证: 仅受控 BFF/测试环境可使用 `X-API-Key`；正式 Agent
+  internal plane 使用短期 HMAC claim（scope、owner、run/session、body
+  digest），不接受一个永不过期的全局 token 作为执行授权
 - Public 端点豁免认证: `/health`, `/ready`, `/metrics`, `/docs`, `/openapi`, `/redoc`, `/auth/*`
 - **可选用户归属**（`SANDBOX_AUTH_ENABLED=true`）:
   - 浏览器终端用户：`POST /api/auth/register|login` 后由 BFF 写入 `HttpOnly; SameSite=Lax` 会话 Cookie；JWT 不暴露给前端 JavaScript。`POST /api/auth/logout` 清理会话。
   - 非浏览器 API 客户端仍可使用 `Authorization: Bearer <jwt>`；BFF 验证后转发可信用户上下文。
-  - BFF→Sandbox: 服务 `X-API-Key` + 用户 JWT；或服务 key + `X-Acting-User-Id` / `X-Acting-Organization-Id` / `X-Acting-Role`
-  - **服务 Token alone 不是终端用户**：可访问内部 `/sessions` 等，但 `/conversations` 与已归属 session 的 files/artifacts 需 actor，否则 401
+  - 兼容 BFF→Sandbox adapters: 服务 `X-API-Key` + 用户 JWT；或服务 key + `X-Acting-User-Id` / `X-Acting-Organization-Id` / `X-Acting-Role`
+  - 正式 Agent→Sandbox execution: `/internal/v1/*` HMAC claim（scope + owner + run/session + body digest + replay jti）；不接受浏览器 JWT 或裸 service key 作为执行授权
+  - **服务 Token alone 不是终端用户**：不能替代 BFF/Agent 注入的 actor；跨用户/跨组织资源统一 fail-closed
   - 跨用户/跨组织访问 Conversation 返回 **404**（不泄露资源是否存在）
   - 旧数据迁移绑定 `user_bootstrap` / `org_bootstrap`；新用户默认加入 bootstrap org
   - BFF `AUTH_ENABLED`（默认同 `SANDBOX_AUTH_ENABLED`）保护 `/api/conversations`、`/api/runs`、Extension diagnostics、文件/产物路由；`/api/status` 与 `/api/auth/*` 保持公开
@@ -194,7 +204,7 @@ Base URL: `http://sandbox:8081`（Docker 内网）
 | `POST` | `/sessions` | 创建会话 |
 | `GET` | `/sessions` | 列出所有活跃会话 |
 | `GET` | `/sessions/{id}` | 获取会话详情 |
-| `DELETE` | `/sessions/{id}` | 关闭会话；仅清理 Session-private 存储，Conversation-owned 存储保留 |
+| `DELETE` | `/sessions/{id}` | 关闭会话并按保留策略清理该 Agent Session 的私有存储 |
 | `GET` | `/sessions/by-agent/{aid}` | 按 agent session ID 查询 |
 | `GET` | `/sessions/by-enterprise/{eid}` | 按 enterprise session ID 查询 |
 
@@ -209,7 +219,7 @@ Base URL: `http://sandbox:8081`（Docker 内网）
   "user_id": "...",
   "metadata": {},
   "conversation_id": "conversation_uuid",
-  "workspace_id": "conv_conversation_uuid"  // 可选校验值；不能脱离 conversation_id 自报
+  "workspace_id": "01K0G2PAV8FPMVC9QHJG7JPN4Z"
 }
 
 // Response (201)
@@ -227,9 +237,9 @@ Base URL: `http://sandbox:8081`（Docker 内网）
 }
 ```
 
-> 公共协议使用 opaque **`workspace_id`**。工具/文件/Artifact 接受 workspace 相对路径、`/home/sandbox/workspace/...` 和 Conversation 私有的持久化 `/tmp/...`；其他绝对路径与路径逃逸 fail-closed。
+> 公共协议使用 opaque **`workspace_id`**。工具/文件/Artifact 接受 workspace 相对路径、`/home/sandbox/workspace/...` 和当前 Agent Session 私有的持久化 `/tmp/...`；其他绝对路径与路径逃逸 fail-closed。
 > 物理存储根仅存在于服务内部，**不**出现在 API、SSE 或模型上下文。
-> `workspace_id` 由服务端从 `conversation_id` 派生；REST/MCP 都拒绝未绑定 Conversation 的自报 workspace。
+> `workspace_id` 由受信任的 Agent Session provisioner 预分配，并与 `agent_session_id` 形成不可变的一对一绑定；它不从 `conversation_id` 派生。Sandbox 拒绝缺失绑定证明或与既有绑定冲突的请求。
 > Skill 根在 workspace 外；Agent 可零 Skill 启动。共享/package skills 由 Profile + capability registry 控制；Sandbox 执行侧始终只读。
 
 ---
@@ -241,7 +251,7 @@ Base URL: `http://sandbox:8081`（Docker 内网）
 | `POST` | `/sessions/{id}/executions/python` | 执行 Python 代码 |
 | `POST` | `/sessions/{id}/executions/command` | 执行 Shell 命令 |
 | `POST` | `/sessions/{id}/executions/node` | 执行 Node.js 代码 |
-| `POST` | `/sessions/{id}/executions/approval-check` | 预检工具风险等级；传 `idempotency_key` 可复用该 session 的 pending/approved/rejected 结果 |
+| `POST` | `/sessions/{id}/executions/approval-check` | 外部副作用工具的审批预检；普通 workspace bash/python/node 不调用此端点 |
 | `GET` | `/sessions/{id}/executions/{eid}` | 查询执行结果 |
 | `POST` | `/sessions/{id}/executions/{eid}/cancel` | 取消进行中的执行 |
 
@@ -478,8 +488,7 @@ Agent 工具 `ls` / `find` / `grep` 覆盖 SDK 本地同名工具，全部转发
 | `POST` | `/conversations` | 创建对话 |
 | `GET` | `/conversations/{id}` | 获取对话详情 |
 | `PATCH` | `/conversations/{id}` | 更新对话 |
-| `DELETE` | `/conversations/{id}` | 删除对话 + 清理工作区 |
-| `GET` | `/conversations/{id}/workspace` | 获取对话 opaque workspace_id |
+| `DELETE` | `/conversations/{id}` | 删除对话元数据；Workspace 生命周期由 Agent Session 决定 |
 | `GET` | `/conversations/{id}/messages` | 获取消息列表 |
 | `PATCH` | `/conversations/{id}/title` | 重命名对话 |
 
@@ -491,14 +500,13 @@ Agent 工具 `ls` / `find` / `grep` 覆盖 SDK 本地同名工具，全部转发
 {
   "id": "conv_uuid",
   "title": "My Conversation",
-  "workspace_id": "ws_conv_uuid",
   "messages": [],
   "created_at": "...",
   "updated_at": "..."
 }
 ```
 
-对话绑定 opaque `workspace_id`，后续 `POST /sessions` 携带 `conversation_id`，由服务端恢复该 workspace 与 `tmp_{workspace_id}`。客户端可回传 `workspace_id` 作为一致性校验，但不能单独指定它。公共响应不返回物理路径。
+Conversation 只组织消息，不拥有 Workspace。一个 Conversation 一期默认对应一个活跃 Agent Session；由该 Agent Session 绑定并复用 opaque `workspace_id` 与 `tmp_{workspace_id}`。公共响应不返回物理路径。
 
 ---
 
@@ -506,17 +514,31 @@ Agent 工具 `ls` / `find` / `grep` 覆盖 SDK 本地同名工具，全部转发
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| `GET` | `/traces/{trace_id}` | 获取完整追踪链 |
+| `GET` | `/api/runs/{run_id}/trace` | 获取 owner-scoped durable Run trace tree |
 
 ```json
 // Response (200)
 {
-  "trace_id": "trace_xyz",
-  "session": { ... },
-  "executions": [ ... ],
-  "audit_logs": [ ... ]
+  "traceId": "0123456789abcdef0123456789abcdef",
+  "runId": "01...",
+  "spans": [
+    {
+      "spanId": "0123456789abcdef",
+      "parentSpanId": null,
+      "name": "run.execute",
+      "kind": "internal",
+      "status": "ok",
+      "startTime": "2026-07-19T00:00:00.000Z",
+      "endTime": "2026-07-19T00:00:00.100Z",
+      "attributes": {}
+    }
+  ]
 }
 ```
+
+查询按已认证用户的 organization/user 与 Run 做归属校验；跨租户或
+不存在的 Run 返回相同的 not-found 语义。Trace ID 是查询结果中的字段，
+不是未授权的全局索引。
 
 ---
 
@@ -546,7 +568,8 @@ Sandbox 不再暴露或代理 MCP 路由。Agent 仅向模型注册单一 `mcp` 
   "executions_total": 42,
   "workspace_available": true,
   "disk_free_mb": 15200.5,
-  "runtimes": { "python": true, "bash": true, "node": true }
+  "runtimes": { "python": true, "bash": true, "node": true },
+  "internal_plane_status": "ready"
 }
 ```
 
@@ -556,6 +579,7 @@ Sandbox 不再暴露或代理 MCP 路由。Agent 仅向模型注册单一 `mcp` 
 | HTTP | 200 | 200 就绪 / **503** 未就绪 |
 | `workspace_available` | 尽力探测；失败不影响 liveness 状态码 | 工作区根目录存在且可写 |
 | 数据库 | 不检查 | 必须 `SELECT 1` 成功 |
+| `internal_plane_status` | `disabled` 或 `not_checked` | `disabled`、`ready` 或 `not_ready` |
 
 #### Prometheus Metrics
 

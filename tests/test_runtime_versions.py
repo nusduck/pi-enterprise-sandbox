@@ -12,6 +12,7 @@ import re
 from pathlib import Path
 
 import pytest
+from packaging.specifiers import SpecifierSet
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 PINS_PATH = REPO_ROOT / "runtime-versions.json"
@@ -64,7 +65,6 @@ def test_version_files_match_pins(pins: dict) -> None:
         "agent/package.json",
         "api-server/package.json",
         "frontend/package.json",
-        "agent/packages/enterprise-agent-kit/package.json",
     ],
 )
 def test_package_engines_match_pins(pins: dict, rel: str) -> None:
@@ -84,15 +84,6 @@ def test_agent_sdk_exact_pins(pins: dict) -> None:
     for name in (coding, ai):
         spec = deps[name]
         assert re.fullmatch(r"\d+\.\d+\.\d+", spec), f"{name} must be exact x.y.z, got {spec}"
-
-
-def test_enterprise_kit_peer_pins(pins: dict) -> None:
-    pkg = _read_json("agent/packages/enterprise-agent-kit/package.json")
-    peers = pkg.get("peerDependencies") or {}
-    coding = pins["pi_sdk"]["package_names"]["pi_coding_agent"]
-    ai = pins["pi_sdk"]["package_names"]["pi_ai"]
-    assert peers.get(coding) == pins["pi_sdk"]["pi_coding_agent"]
-    assert peers.get(ai) == pins["pi_sdk"]["pi_ai"]
 
 
 def test_api_server_does_not_depend_on_sdk(pins: dict) -> None:
@@ -172,7 +163,30 @@ def test_uv_lock_requires_python(pins: dict) -> None:
     text = _read("uv.lock")
     m = re.search(r'(?m)^requires-python\s*=\s*"([^"]+)"\s*$', text)
     assert m, "requires-python missing in uv.lock"
-    assert m.group(1) == pins["python"]["requires"]
+    # uv canonicalizes a closed minor range such as >=3.11,<3.12 to
+    # ==3.11.* in the generated lockfile. Compare the specifiers' accepted
+    # versions rather than requiring a generator-specific spelling.
+    expected = SpecifierSet(pins["python"]["requires"])
+    actual = SpecifierSet(m.group(1))
+    probes = (
+        "3.10",
+        "3.10.99",
+        "3.11",
+        "3.11.0",
+        "3.11.15",
+        "3.11.999",
+        "3.12",
+        "3.12.0",
+        "3.13",
+    )
+    for version in probes:
+        assert actual.contains(version) == expected.contains(version), (
+            f"uv.lock requires-python {m.group(1)!r} disagrees with "
+            f"SSOT {pins['python']['requires']!r} at Python {version}"
+        )
+    assert actual.contains("3.11.15")
+    assert not actual.contains("3.10.99")
+    assert not actual.contains("3.12.0")
 
 
 def test_pyproject_has_no_unused_service_deps() -> None:

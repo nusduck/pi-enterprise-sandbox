@@ -22,6 +22,7 @@
  */
 
 import { isUlid } from '../domain/shared/ulid.js';
+import { OwnerScopedNotFoundError, ValidationError } from './errors.js';
 import {
   projectRunEventToSseEnvelope,
   RunEventQueryService,
@@ -35,6 +36,8 @@ export const DEFAULT_SSE_HEARTBEAT_MS = 15_000;
 export const DEFAULT_MYSQL_CATCHUP_MS = 2_000;
 /** Max events per MySQL page. */
 export const DEFAULT_HISTORY_PAGE = 100;
+/** Total attempts for MySQL reads while opening/cutting over an SSE stream. */
+export const DEFAULT_MYSQL_OPEN_RETRY_ATTEMPTS = 3;
 
 /**
  * Abort-safe sleep. Always removes the abort listener on normal timeout or abort.
@@ -310,6 +313,8 @@ export class RunEventSseService {
    *   pollMs?: number,
    *   heartbeatMs?: number,
    *   mysqlCatchupMs?: number,
+   *   mysqlOpenRetryAttempts?: number,
+   *   mysqlOpenRetryMs?: number,
    *   historyPageSize?: number,
    *   now?: () => number,
    *   sleep?: (ms: number, signal?: AbortSignal) => Promise<void>,
@@ -324,6 +329,14 @@ export class RunEventSseService {
     this.pollMs = deps.pollMs ?? DEFAULT_SSE_POLL_MS;
     this.heartbeatMs = deps.heartbeatMs ?? DEFAULT_SSE_HEARTBEAT_MS;
     this.mysqlCatchupMs = deps.mysqlCatchupMs ?? DEFAULT_MYSQL_CATCHUP_MS;
+    this.mysqlOpenRetryAttempts =
+      Number.isSafeInteger(deps.mysqlOpenRetryAttempts) && deps.mysqlOpenRetryAttempts > 0
+        ? deps.mysqlOpenRetryAttempts
+        : DEFAULT_MYSQL_OPEN_RETRY_ATTEMPTS;
+    this.mysqlOpenRetryMs =
+      Number.isFinite(deps.mysqlOpenRetryMs) && deps.mysqlOpenRetryMs >= 0
+        ? deps.mysqlOpenRetryMs
+        : this.pollMs;
     this.historyPageSize = deps.historyPageSize ?? DEFAULT_HISTORY_PAGE;
     this.now = deps.now ?? (() => Date.now());
     this.sleep = deps.sleep ?? sleepMs;
@@ -477,6 +490,43 @@ export class RunEventSseService {
     };
 
     /**
+     * Opening and history/live cutover must tolerate brief MySQL outages, but
+     * ownership and input failures are authoritative and must fail immediately.
+     *
+     * @param {object} query
+     * @returns {Promise<{ page: object|null, aborted: boolean }>}
+     */
+    const queryMysqlWithOpenRetry = async (query) => {
+      for (let attempt = 1; attempt <= this.mysqlOpenRetryAttempts; attempt += 1) {
+        if (stopped()) return { page: null, aborted: true };
+        try {
+          return {
+            page: await this.eventQuery.listEvents(query),
+            aborted: false,
+          };
+        } catch (err) {
+          if (
+            err instanceof OwnerScopedNotFoundError ||
+            err instanceof ValidationError ||
+            attempt === this.mysqlOpenRetryAttempts
+          ) {
+            throw err;
+          }
+          if (stopped()) return { page: null, aborted: true };
+          try {
+            await this.sleep(this.mysqlOpenRetryMs, signal);
+          } catch (sleepErr) {
+            if (sleepErr?.name === 'AbortError') {
+              return { page: null, aborted: true };
+            }
+            throw sleepErr;
+          }
+        }
+      }
+      return { page: null, aborted: true };
+    };
+
+    /**
      * Drain MySQL page(s) after lastEmitted. Awaits backpressure per event.
      * @param {{ maxPages?: number }} [opts]
      */
@@ -486,12 +536,16 @@ export class RunEventSseService {
       let terminal = false;
       while (!stopped() && pages < maxPages) {
         pages += 1;
-        const page = await this.eventQuery.listEvents({
+        const queryResult = await queryMysqlWithOpenRetry({
           runId: input.runId,
           auth: input.auth,
           afterSequence: lastEmitted,
           limit: this.historyPageSize,
         });
+        if (queryResult.aborted) {
+          return { terminal, drained: true, aborted: true };
+        }
+        const page = queryResult.page;
         status = page.status ?? status;
         terminal = Boolean(page.terminal);
         if (!page.events?.length) break;
@@ -515,12 +569,16 @@ export class RunEventSseService {
         return { lastSequence: lastEmitted, status, mode };
       }
       if (hist.terminal) {
-        const confirm = await this.eventQuery.listEvents({
+        const confirmResult = await queryMysqlWithOpenRetry({
           runId: input.runId,
           auth: input.auth,
           afterSequence: lastEmitted,
           limit: 1,
         });
+        if (confirmResult.aborted || stopped()) {
+          return { lastSequence: lastEmitted, status, mode };
+        }
+        const confirm = confirmResult.page;
         status = confirm.status ?? status;
         if (confirm.terminal && (!confirm.events || confirm.events.length === 0)) {
           await pushFrame(formatSseEndFrame(status || 'COMPLETED'));

@@ -3,6 +3,100 @@ import assert from 'node:assert/strict';
 import { createEntityBridge } from '../src/features/chat/entityBridge.ts';
 
 describe('conversation history rehydration', () => {
+  it('restores the real flattened platform-event contract after refresh', async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (input) => {
+      const url = String(input);
+      if (url.includes('/datasets')) {
+        return new Response(JSON.stringify({ datasets: [] }), { status: 200 });
+      }
+      assert.match(url, /\/api\/conversations\/conv_platform\/events$/);
+      const context = { runId: 'run_platform', conversationId: 'conv_platform' };
+      return new Response(
+        JSON.stringify({
+          runs: [{
+            run_id: 'run_platform',
+            conversation_id: 'conv_platform',
+            status: 'SUCCEEDED',
+          }],
+          events: [
+            {
+              run_id: 'run_platform',
+              sequence: 1,
+              event_id: 'evt-1',
+              type: 'run.accepted',
+              payload: { status: 'ACCEPTED' },
+            },
+            {
+              run_id: 'run_platform',
+              sequence: 2,
+              event_id: 'evt-2',
+              type: 'message.completed',
+              payload: {
+                data: {
+                  role: 'user',
+                  message: { role: 'user', content: [{ type: 'text', text: 'hello' }] },
+                },
+                context,
+              },
+            },
+            {
+              run_id: 'run_platform',
+              sequence: 3,
+              event_id: 'evt-3',
+              type: 'message.delta',
+              payload: { data: { role: 'assistant', delta: 'hello back' }, context },
+            },
+            {
+              run_id: 'run_platform',
+              sequence: 4,
+              event_id: 'evt-4',
+              type: 'message.completed',
+              payload: {
+                data: {
+                  role: 'assistant',
+                  message: {
+                    role: 'assistant',
+                    content: [{ type: 'text', text: 'hello back' }],
+                  },
+                },
+                context,
+              },
+            },
+            {
+              run_id: 'run_platform',
+              sequence: 5,
+              event_id: 'evt-5',
+              type: 'run.completed',
+              payload: { status: 'SUCCEEDED' },
+            },
+          ],
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      );
+    }) as typeof fetch;
+
+    try {
+      const bridge = createEntityBridge();
+      await bridge.rehydrateConversation('conv_platform');
+      const store = bridge.getStore();
+      const messages = store.runsById.run_platform.messageIds.map(
+        (id) => store.messagesById[id],
+      );
+      assert.deepEqual(
+        messages.map((message) => [message.role, message.text, message.status]),
+        [
+          ['user', 'hello', 'complete'],
+          ['assistant', 'hello back', 'complete'],
+        ],
+      );
+      assert.equal(store.runsById.run_platform.lastSequence, 5);
+      assert.equal(store.runsById.run_platform.status, 'succeeded');
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   it('restores completed tool calls from persisted events', async () => {
     const originalFetch = globalThis.fetch;
     globalThis.fetch = (async (input) => {

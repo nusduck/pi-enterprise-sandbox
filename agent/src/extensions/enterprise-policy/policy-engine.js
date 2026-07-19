@@ -108,7 +108,17 @@ export function createPolicyEngine(options = {}) {
       mcpServerPolicies: options.mcpServerPolicies,
     });
 
-    if (cls.class === 'local_low') {
+    if (cls.class === 'internal_interaction') {
+      stack.push(
+        makePolicyDecision({
+          decision: 'allow',
+          reasonCode: 'INTERNAL_INTERACTION_ALLOW',
+          reason: 'ask_user is a durable user interaction, not an external side effect',
+          policyId: 'platform:interaction',
+          riskLevel: 'low',
+        }),
+      );
+    } else if (cls.class === 'local_low') {
       const guard = evaluateLocalArgGuards(toolName, args);
       if (guard) {
         stack.push(guard);

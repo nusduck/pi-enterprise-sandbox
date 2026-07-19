@@ -74,6 +74,7 @@ describe('normalizeToRuntimeEvent', () => {
     assert.ok(art);
     assert.equal(art!.type, 'artifact.created');
     assert.equal(art!.payload.source, 'submit_artifact');
+    assert.equal(art!.payload.artifact_id, 'art1');
   });
 
   it('unwraps BFF relay { sequence, event }', () => {
@@ -188,6 +189,7 @@ describe('unified platform reducer', () => {
     assert.equal(store.datasetsById.ds1.path, 'datasets/sales.csv');
     assert.equal(store.artifactsById.art1.source, 'submit_artifact');
     assert.equal(store.artifactsById.art1.sha256, 'deadbeef');
+    assert.equal(store.artifactsById.art1.description, 'Q1 report');
     assert.ok(store.runsById[runId].traceSpanIds.length >= 1);
   });
 
@@ -586,6 +588,36 @@ describe('refresh recovery', () => {
     assert.equal(s.runsById.run_rh.lastSequence, 3);
     assert.equal(s.toolExecutionsById.tc.status, 'running');
     assert.equal(s.toolExecutionsById.tc.source, 'sandbox');
+  });
+
+  it('replays WAITING_INPUT details after refresh with camelCase payload fields', () => {
+    const runId = 'run_waiting_input';
+    const result = reducePlatformEvent(
+      createEntityStore(),
+      platform({
+        eventId: 'evt_waiting_input',
+        sequence: 1,
+        runId,
+        type: 'run.status.changed',
+        data: {
+          status: 'WAITING_INPUT',
+          interactionId: 'interaction_1',
+          interactionType: 'select',
+          title: 'Choose a region',
+          message: 'Deployment target',
+          options: ['eu', 'us'],
+        },
+      }),
+    );
+
+    assert.equal(result.store.runsById[runId].status, 'waiting_input');
+    assert.deepEqual(result.store.runsById[runId].pendingInput, {
+      interactionId: 'interaction_1',
+      interactionType: 'select',
+      title: 'Choose a region',
+      message: 'Deployment target',
+      options: ['eu', 'us'],
+    });
   });
 
   it('rehydrateConversation restores tools after refresh', async () => {

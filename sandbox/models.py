@@ -44,6 +44,13 @@ class PolicyDecision(str, Enum):
     HARD_DENY = "hard_deny"
 
 
+class InternalPlaneHealthStatus(str, Enum):
+    DISABLED = "disabled"
+    NOT_CHECKED = "not_checked"
+    READY = "ready"
+    NOT_READY = "not_ready"
+
+
 class ToolExecutionMode(str, Enum):
     DIRECT = "direct"  # sandbox runtime via subprocess
     HTTP_API = "http_api"  # sandbox HTTP API
@@ -397,6 +404,7 @@ class HealthResponse(BaseModel):
     isolation_required: bool = False
     isolation_preflight_passed: bool = False
     isolation_policy_version: str = ""
+    internal_plane_status: InternalPlaneHealthStatus = InternalPlaneHealthStatus.DISABLED
 
 
 # ── Conversation ────────────────────────────────────────────────────────

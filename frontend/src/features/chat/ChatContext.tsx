@@ -39,7 +39,7 @@ import {
 import {
   createRun as apiCreateRun,
   streamRunEvents,
-  uploadFile,
+  uploadDataset,
   ensureSession,
   listConversations,
   getConversation,
@@ -462,6 +462,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         runId = bridge.beginRun({
           runId: created.run_id,
           conversationId: created.conversation_id || cur.conversationId,
+          agentSessionId: created.agent_session_id || null,
           sessionId: created.session_id || currentSessionId(),
         });
         bridge.attachTransport(runId, abortCtrl);
@@ -638,7 +639,6 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       // Capture file + key now — do not depend on a later ref lookup for the blob.
       const file = draft.file as File;
       const idempotencyKey = draft.idempotencyKey;
-      const sizeHint = draft.size;
 
       const abortCtrl = new AbortController();
       setState((s) => {
@@ -655,18 +655,27 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       });
 
       try {
-        const { sessionId } = await ensureConversationSession();
+        const { sessionId, conversationId } = await ensureConversationSession();
         if (!sessionId) throw new Error('No sandbox session');
+        if (!conversationId) throw new Error('No conversation');
 
         const current = (stateRef.current.attachments || []).find(
           (a) => a.localId === localId,
         );
         if (current?.status === 'removed') return;
 
-        const result = await uploadFile(sessionId, file, abortCtrl.signal, {
+        const result = await uploadDataset({
+          sessionId,
+          conversationId,
+          file,
+          signal: abortCtrl.signal,
           idempotencyKey,
           traceId: stateRef.current.traceId || undefined,
         });
+
+        // Dataset Panel and composer share the same successful server result:
+        // publish the formal row immediately while retaining a sendable draft.
+        bridge.recordDataset(result, { conversationId, sessionId });
 
         const still = (stateRef.current.attachments || []).find(
           (a) => a.localId === localId,
@@ -677,10 +686,9 @@ export function ChatProvider({ children }: { children: ReactNode }) {
           const next = update(s, {
             attachments: patchAttachment(s.attachments, localId, {
               status: 'uploaded',
-              attachmentId:
-                result.attachment_id || result.attachmentId || null,
-              path: result.path || null,
-              size: result.size != null ? result.size : sizeHint,
+              attachmentId: result.dataset_id,
+              path: result.path,
+              size: result.size,
               progress: 100,
               error: null,
               errorCode: null,
@@ -724,7 +732,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         flashError(`Upload error: ${error.message || 'failed'}${t}`);
       }
     },
-    [ensureConversationSession, flashError],
+    [ensureConversationSession, flashError, bridge],
   );
 
   const handleFilesSelected = useCallback(

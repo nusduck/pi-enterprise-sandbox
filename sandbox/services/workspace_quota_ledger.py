@@ -49,6 +49,9 @@ def _sum_disk_reservations(workspace_id: str) -> int:
     total = 0
     try:
         for p in root.iterdir():
+            if p.name.startswith("."):
+                # Atomic-write scratch files are never active reservations.
+                continue
             try:
                 st = p.lstat()
             except OSError:
@@ -69,6 +72,79 @@ def stat_is_reg(st: os.stat_result) -> bool:
     import stat as statmod
 
     return statmod.S_ISREG(st.st_mode) and not statmod.S_ISLNK(st.st_mode)
+
+
+def _validate_reservation_id(value: str) -> str:
+    reservation_id = str(value or "").strip()
+    if (
+        not reservation_id
+        or len(reservation_id) > 128
+        or any(
+            ch not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_"
+            for ch in reservation_id
+        )
+    ):
+        raise ValueError("reservation_id must be 1..128 opaque ASCII characters")
+    return reservation_id
+
+
+def _read_reservation_bytes(path: Path) -> int:
+    try:
+        st = path.lstat()
+        if not stat_is_reg(st):
+            return 0
+        return max(0, int(path.read_text(encoding="utf-8").strip()))
+    except (OSError, ValueError):
+        return 0
+
+
+def _unlink_reservation(path: Path) -> None:
+    try:
+        st = path.lstat()
+        import stat as statmod
+
+        if statmod.S_ISREG(st.st_mode) or statmod.S_ISLNK(st.st_mode):
+            path.unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
+def _write_reservation_atomic(root: Path, reservation_id: str, nbytes: int) -> None:
+    """Durably replace one trusted control-plane reservation value."""
+    path = root / reservation_id
+    temp = root / f".{reservation_id}.tmp"
+    _unlink_reservation(temp)
+    fd = -1
+    try:
+        fd = os.open(
+            str(temp),
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+            0o600,
+        )
+        payload = str(int(nbytes)).encode("ascii")
+        offset = 0
+        while offset < len(payload):
+            written = os.write(fd, payload[offset:])
+            if written <= 0:
+                raise OSError("failed to write quota reservation")
+            offset += written
+        os.fsync(fd)
+        os.close(fd)
+        fd = -1
+        os.replace(str(temp), str(path))
+        dir_fd = os.open(str(root), os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(dir_fd)
+        finally:
+            os.close(dir_fd)
+    except Exception:
+        if fd >= 0:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+        _unlink_reservation(temp)
+        raise
 
 
 @contextmanager
@@ -180,20 +256,95 @@ class WorkspaceQuotaLedger:
                     _ledger=self,
                 )
 
+    def reserve_replacement(
+        self,
+        workspace_path: str,
+        workspace_key: str,
+        nbytes: int,
+        *,
+        existing_bytes: int = 0,
+        reservation_id: str | None = None,
+        quota_mb: int | None = None,
+    ) -> QuotaReservation:
+        """Reserve only the net growth of an atomic file replacement.
+
+        ``existing_bytes`` must come from a no-follow open of the exact target
+        leaf. The workspace scan already includes those bytes, so charging the
+        full replacement again would make crash recovery spuriously exceed
+        quota.
+        """
+        if nbytes < 0 or existing_bytes < 0:
+            raise ValueError("replacement sizes must be >= 0")
+        workspace_id = (workspace_key or "").strip()
+        if not workspace_id or "/" in workspace_id or "\\" in workspace_id:
+            raise ValueError("workspace_key must be an opaque workspace id")
+        net_growth = max(0, int(nbytes) - int(existing_bytes))
+        if reservation_id is None:
+            durable_id = False
+            res_id = uuid.uuid4().hex
+        else:
+            durable_id = True
+            res_id = _validate_reservation_id(reservation_id)
+        if net_growth == 0 and not durable_id:
+            return QuotaReservation(
+                workspace_id=workspace_id,
+                workspace_path=workspace_path,
+                bytes=0,
+                reservation_id=res_id,
+                _ledger=self,
+            )
+        quota = self.quota_bytes(quota_mb=quota_mb)
+        with self._lock:
+            with _exclusive_quota_lock(workspace_id):
+                used = workspace_size_bytes(workspace_path)
+                reserved = _sum_disk_reservations(workspace_id)
+                res_root = _res_dir(workspace_id)
+                res_root.mkdir(parents=True, exist_ok=True)
+                res_path = res_root / res_id
+                prior_reservation = _read_reservation_bytes(res_path)
+                active_reserved = max(0, reserved - prior_reservation)
+                projected = used + active_reserved + net_growth
+                if projected > quota:
+                    raise QuotaExceededError(
+                        "workspace_quota_exceeded",
+                        (
+                            f"Workspace quota exceeded: usage {used} + reserved "
+                            f"{active_reserved} + net replacement {net_growth} = "
+                            f"{projected} bytes, quota {quota} bytes"
+                        ),
+                        status=413,
+                    )
+                if net_growth == 0:
+                    _unlink_reservation(res_path)
+                else:
+                    _write_reservation_atomic(res_root, res_id, net_growth)
+                return QuotaReservation(
+                    workspace_id=workspace_id,
+                    workspace_path=workspace_path,
+                    bytes=net_growth,
+                    reservation_id=res_id,
+                    _ledger=self,
+                )
+
+    def release_reservation(self, workspace_key: str, reservation_id: str) -> None:
+        """Idempotently clear a durable reservation after completion/replay."""
+        workspace_id = (workspace_key or "").strip()
+        if not workspace_id or "/" in workspace_id or "\\" in workspace_id:
+            raise ValueError("workspace_key must be an opaque workspace id")
+        res_id = _validate_reservation_id(reservation_id)
+        with self._lock:
+            with _exclusive_quota_lock(workspace_id):
+                root = _res_dir(workspace_id)
+                _unlink_reservation(root / res_id)
+                _unlink_reservation(root / f".{res_id}.tmp")
+
     def _release(self, reservation: QuotaReservation) -> None:
         if reservation.bytes <= 0 and not reservation.reservation_id:
             return
-        path = _res_dir(reservation.workspace_id) / reservation.reservation_id
-        with self._lock:
-            with _exclusive_quota_lock(reservation.workspace_id):
-                try:
-                    st = path.lstat()
-                    import stat as statmod
-
-                    if statmod.S_ISREG(st.st_mode) or statmod.S_ISLNK(st.st_mode):
-                        path.unlink(missing_ok=True)
-                except OSError:
-                    pass
+        self.release_reservation(
+            reservation.workspace_id,
+            reservation.reservation_id,
+        )
 
     def try_grow(
         self,

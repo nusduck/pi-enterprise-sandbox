@@ -125,6 +125,20 @@ export class AgentCatalogRepository {
   }
 
   /**
+   * @param {string} orgId
+   * @param {{ limit?: number }} [opts]
+   */
+  async listDefinitionsByOrg(orgId, opts = {}) {
+    const oid = assertUlid(orgId, 'orgId');
+    const limit = Math.min(Math.max(Number(opts.limit) || 50, 1), 100);
+    const rows = await this.db('agent_definitions')
+      .where({ org_id: oid })
+      .orderBy('created_at', 'desc')
+      .limit(limit);
+    return rows.map(mapAgentDefinition);
+  }
+
+  /**
    * @param {{
    *   agentId: string,
    *   orgId: string,

@@ -419,6 +419,11 @@ describe('createInternalFilesReadTransport.readFile', () => {
     assert.match(headers.Authorization, /^Bearer\s+\S+$/);
     assert.equal(headers['X-API-Key'], undefined);
     assert.equal(headers['Content-Type'], 'application/json');
+    assert.equal(headers['X-Trace-Id'], TRACE);
+    assert.match(
+      headers.traceparent,
+      new RegExp(`^00-${TRACE}-[0-9a-f]{16}-01$`),
+    );
 
     const bodyBuf = Buffer.from(calls[0].init.body);
     const expected = buildFilesReadBodyBytes(basePayload());

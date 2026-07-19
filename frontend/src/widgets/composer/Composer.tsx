@@ -96,10 +96,14 @@ export function Composer() {
     isStreaming: state.isStreaming,
   });
 
-  // Reset to steer when leaving running mode
+  // Queued/restoring runs cannot accept steer; keep the available action active.
   useEffect(() => {
-    if (mode !== 'running') setRunningAction('steer');
-  }, [mode]);
+    if (mode !== 'running') {
+      setRunningAction('steer');
+    } else if (!canSteer(mode, run?.status)) {
+      setRunningAction('follow_up');
+    }
+  }, [mode, run?.status]);
 
   const attachments = activeAttachments(state.attachments);
   const gateOk = canSendAttachments(state.attachments);
@@ -138,6 +142,7 @@ export function Composer() {
     }
 
     if (mode === 'waiting_input') {
+      if (run?.pendingInput?.interactionType === 'confirm') return;
       const text = draftText.trim();
       if (!text) return;
       setSubmitting(true);
@@ -290,6 +295,24 @@ export function Composer() {
                     {option}
                   </button>
                 ))}
+              </span>
+            ) : null}
+            {run.pendingInput.interactionType === 'confirm' ? (
+              <span className="composer-banner-actions">
+                <button
+                  type="button"
+                  className="composer-banner-btn approve"
+                  onClick={() => void respondInteraction(true)}
+                >
+                  Confirm
+                </button>
+                <button
+                  type="button"
+                  className="composer-banner-btn reject"
+                  onClick={() => void respondInteraction(false)}
+                >
+                  Decline
+                </button>
               </span>
             ) : null}
           </div>

@@ -58,7 +58,7 @@ def test_compose_parameterizes_runtime_defaults() -> None:
     text = COMPOSE.read_text()
     expected_fragments = [
         "MCP_SERVERS_JSON: ${MCP_SERVERS_JSON:-[]}",
-        "SANDBOX_DATABASE_URL: ${SANDBOX_DATABASE_URL:-mysql+pymysql://sandbox:sandbox_dev_only@mysql:3306/sandbox}",
+        "SANDBOX_DATABASE_URL: ${SANDBOX_COMPOSE_DATABASE_URL:-mysql+pymysql://sandbox:sandbox_dev_only@mysql:3306/sandbox}",
         "AGENT_DATABASE_URL: ${AGENT_DATABASE_URL:-mysql://sandbox:sandbox_dev_only@mysql:3306/sandbox}",
         "image: mysql:8.0",
         "image: redis:7.2",
@@ -68,6 +68,7 @@ def test_compose_parameterizes_runtime_defaults() -> None:
         "AGENT_RUN_LEASE_TTL_MS: ${AGENT_RUN_LEASE_TTL_MS:-30000}",
         "AGENT_RUN_LEASE_RENEW_INTERVAL_MS: ${AGENT_RUN_LEASE_RENEW_INTERVAL_MS:-10000}",
         "AGENT_RUN_STREAM_MAXLEN: ${AGENT_RUN_STREAM_MAXLEN:-10000}",
+        "BFF_DEV_ACTING_ROLE: ${BFF_DEV_ACTING_ROLE:-user}",
         "SANDBOX_MAX_MEMORY_MB: ${SANDBOX_MAX_MEMORY_MB:-512}",
         "SANDBOX_NETWORK_MODE:",
         "SANDBOX_POLICY_PROFILE: ${SANDBOX_POLICY_PROFILE:-balanced}",
@@ -84,6 +85,12 @@ def test_compose_parameterizes_runtime_defaults() -> None:
     ]
     for fragment in expected_fragments:
         assert fragment in text
+    # A stale canonical SANDBOX_DATABASE_URL in .env must not override the
+    # formal MySQL default used by the Compose service environment.
+    sandbox_start = text.index("\n  sandbox:\n")
+    sandbox_block = text[sandbox_start:]
+    assert "SANDBOX_COMPOSE_DATABASE_URL" in sandbox_block
+    assert "${SANDBOX_DATABASE_URL:-" not in sandbox_block
     # No container-wide iptables isolation knobs or granted NET caps.
     assert "SANDBOX_IPTABLES_ENABLED" not in text
     granted_caps = re.findall(
@@ -93,6 +100,8 @@ def test_compose_parameterizes_runtime_defaults() -> None:
     # PostgreSQL and SQLite are no longer formal compose defaults.
     assert "image: postgres" not in text
     assert "sqlite:////sandbox/data/sandbox.db" not in text
+    assert "sandbox_data" not in text
+    assert ":/sandbox/data" not in text
     # Agent depends on healthy Redis; BFF/Sandbox do not take Redis authority.
     agent_start = text.index("\n  agent:\n")
     agent_end = text.index("\n  agent-worker:\n")
@@ -137,7 +146,6 @@ def test_sandbox_requirements_cover_plan_dependency_buckets() -> None:
         "pdfplumber",
         "python-docx",
         "markitdown",
-        "psycopg2-binary",
         "pymysql",
         "redis",
         "requests",

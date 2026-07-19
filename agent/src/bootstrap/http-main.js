@@ -12,6 +12,83 @@ import {
 } from '../../config.js';
 import { createServiceContainer } from './container.js';
 import { createAgentHttpServer } from './create-http-server.js';
+import { ProcessAccessService } from '../application/process-access-service.js';
+import { getExtensionDiagnostics as projectExtensionDiagnostics } from '../application/extension-diagnostics-service.js';
+
+/**
+ * Build the A2A artifact byte authority. It resolves the task's durable Run
+ * and Agent Session under the credential owner before asking Sandbox for an
+ * artifact by opaque id. Filesystem paths are never accepted or forwarded.
+ *
+ * @param {{
+ *   createRepositories: (db?: any) => any,
+ *   db?: any,
+ *   artifactDownloadTransport: { downloadArtifact: Function },
+ * }} deps
+ */
+export function createA2aArtifactByteStreamer(deps) {
+  if (typeof deps?.createRepositories !== 'function') {
+    throw new Error('createA2aArtifactByteStreamer requires repositories');
+  }
+  if (typeof deps?.artifactDownloadTransport?.downloadArtifact !== 'function') {
+    throw new Error(
+      'createA2aArtifactByteStreamer requires internal artifact transport',
+    );
+  }
+
+  return async ({ principal, mapping, artifact, traceId, traceState, req }) => {
+    const scope = {
+      orgId: principal.orgId,
+      userId: principal.serviceUserId,
+    };
+    const repos = deps.createRepositories(deps.db);
+    const run = await repos.runs.getById(mapping.runId, scope);
+    if (!run) {
+      return { body: null };
+    }
+    const session = await repos.sessions.getById(run.agentSessionId, scope);
+    if (
+      !session?.sandboxSessionId ||
+      session.agentSessionId !== run.agentSessionId ||
+      session.conversationId !== run.conversationId ||
+      !Number.isSafeInteger(session.executionFenceToken) ||
+      session.executionFenceToken <= 0 ||
+      typeof traceId !== 'string' ||
+      !/^[0-9a-f]{32}$/.test(traceId)
+    ) {
+      return { body: null };
+    }
+
+    const abort = new AbortController();
+    const onClose = () => abort.abort();
+    req?.once?.('close', onClose);
+    try {
+      return await deps.artifactDownloadTransport.downloadArtifact(
+        {
+          artifactId: artifact.artifactId,
+          identity: {
+            orgId: principal.orgId,
+            userId: principal.serviceUserId,
+            conversationId: run.conversationId,
+            agentSessionId: run.agentSessionId,
+            runId: run.runId,
+            sandboxSessionId: session.sandboxSessionId,
+            traceId,
+            executionFenceToken: session.executionFenceToken,
+          },
+          expectedSizeBytes: artifact.sizeBytes ?? null,
+          expectedSha256: artifact.sha256,
+        },
+        {
+          signal: abort.signal,
+          ...(traceState ? { traceState } : {}),
+        },
+      );
+    } finally {
+      req?.off?.('close', onClose);
+    }
+  };
+}
 
 /**
  * @param {NodeJS.ProcessEnv} [env]
@@ -54,15 +131,12 @@ export async function startHttpMain(env = process.env) {
     sandboxHealthCheck = null;
   }
 
-  let getExtensionDiagnostics = null;
-  try {
-    const mod = await import(
-      '../../application/extension-diagnostics-service.js'
-    );
-    getExtensionDiagnostics = mod.getExtensionDiagnostics;
-  } catch {
-    getExtensionDiagnostics = null;
-  }
+  const getExtensionDiagnostics = (options = {}) =>
+    projectExtensionDiagnostics({
+      ...options,
+      skillRoots: config.SKILL_ROOTS,
+      mcpServers: config.MCP_SERVERS,
+    });
 
   const notReady = async () => {
     const err = new Error('Agent data plane not started');
@@ -93,15 +167,77 @@ export async function startHttpMain(env = process.env) {
       }
     : null;
 
+  const listToolExecutions = httpServices
+    ? async ({ runId, auth }) => {
+        const { ExternalIdentityResolver } = await import(
+          '../application/parent/external-identity-resolver.js'
+        );
+        const repos = httpServices.createRepositories(httpServices.knex);
+        const resolver = new ExternalIdentityResolver({
+          organizations: repos.organizations,
+          externalRefs: repos.externalRefs,
+        });
+        const owner = await resolver.resolveOwner(auth);
+        return repos.toolExecutions.listByRun(runId, {
+          orgId: owner.orgId,
+          userId: owner.userId,
+        });
+      }
+    : null;
+
+  let processAccessService = null;
+  if (httpServices) {
+    const { createSandboxClient } = await import(
+      '../../infrastructure/sandbox-client.js'
+    );
+    processAccessService = new ProcessAccessService({
+      createRepositories: httpServices.createRepositories,
+      db: httpServices.knex,
+      createSandboxClient,
+    });
+  }
+
   /** @type {{ handle: Function } | null} */
   let a2aHandler = null;
+  /** @type {{ handle: Function } | null} */
+  let a2aAdminHandler = null;
   if (httpServices?.a2aCredentialService && httpServices?.a2aTaskService) {
     const { createA2aHttpHandler } = await import(
       '../presentation/a2a/http-handler.js'
     );
-    const { resolveRequestTraceId, readBody, json } = await import(
+    const {
+      authSubjectsFromRequest,
+      resolveRequestTraceId,
+      resolveRequestTraceContext,
+      readBody,
+      json,
+    } = await import(
       './create-http-server.js'
     );
+    const internalKeyring = String(
+      env.SANDBOX_INTERNAL_HMAC_KEYRING || '',
+    ).trim();
+    const internalActiveKid = String(
+      env.SANDBOX_INTERNAL_HMAC_ACTIVE_KID || '',
+    ).trim();
+    let streamArtifactBytes = null;
+    if (internalKeyring && internalActiveKid) {
+      const { createInternalArtifactDownloadTransport } = await import(
+        '../infrastructure/sandbox/internal-artifact-download-http.js'
+      );
+      const artifactDownloadTransport =
+        createInternalArtifactDownloadTransport({
+          baseUrl: env.SANDBOX_BASE_URL || config.SANDBOX_BASE_URL,
+          keyring: internalKeyring,
+          activeKid: internalActiveKid,
+          allowInsecureHttp: true,
+        });
+      streamArtifactBytes = createA2aArtifactByteStreamer({
+        createRepositories: httpServices.createRepositories,
+        db: httpServices.knex,
+        artifactDownloadTransport,
+      });
+    }
     a2aHandler = createA2aHttpHandler({
       credentialService: httpServices.a2aCredentialService,
       taskService: httpServices.a2aTaskService,
@@ -115,11 +251,11 @@ export async function startHttpMain(env = process.env) {
         env.A2A_ARTIFACT_DOWNLOAD_SECRET ||
         config.A2A_ARTIFACT_DOWNLOAD_SECRET ||
         '',
-      // No safe byte streamer in Agent plane — download route fail-closed (503).
-      streamArtifactBytes: null,
+      streamArtifactBytes,
       createRepositories: httpServices.createRepositories,
       db: httpServices.knex,
       resolveTraceId: resolveRequestTraceId,
+      resolveTraceContext: resolveRequestTraceContext,
       readBody,
       json,
       resolveAgentMeta: async (agentId) => {
@@ -133,6 +269,21 @@ export async function startHttpMain(env = process.env) {
         }
       },
     });
+    const { createA2aAdminHttpHandler } = await import(
+      '../presentation/a2a/admin-http-handler.js'
+    );
+    a2aAdminHandler = createA2aAdminHttpHandler({
+      credentialService: httpServices.a2aCredentialService,
+      createRepositories: httpServices.createRepositories,
+      db: httpServices.knex,
+      generateId: container.generateId,
+      publicBaseUrl:
+        env.A2A_PUBLIC_BASE_URL || config.A2A_PUBLIC_BASE_URL || '',
+      authSubjectsFromRequest,
+      resolveTraceId: resolveRequestTraceId,
+      readBody,
+      json,
+    });
   }
 
   const server = createAgentHttpServer({
@@ -143,12 +294,22 @@ export async function startHttpMain(env = process.env) {
     cancelRunService: httpServices?.cancelRunService ?? {
       execute: notReady,
     },
+    steerRunService: httpServices?.steerRunService ?? { execute: notReady },
+    followUpService: httpServices?.followUpService ?? { execute: notReady },
     eventQueryService: httpServices?.eventQueryService ?? {
       listEvents: notReady,
     },
+    traceQueryService: httpServices?.traceQueryService ?? null,
     eventSseService: httpServices?.eventSseService ?? null,
     a2aHandler,
+    a2aAdminHandler,
+    conversationService: httpServices?.conversationService ?? null,
+    approvalQueryService: httpServices?.approvalQueryService ?? null,
+    approvalDecisionService: httpServices?.approvalDecisionService ?? null,
+    interactionResponseService: httpServices?.interactionResponseService ?? null,
     listRuns,
+    listToolExecutions,
+    processAccessService,
     config,
     sandboxHealthCheck: sandboxHealthCheck || undefined,
     // /ready requires data plane (MySQL+Redis started). Health-only mode → 503.
@@ -171,7 +332,9 @@ export async function startHttpMain(env = process.env) {
     '[agent-server] Effective config:',
     JSON.stringify(effectiveConfig()),
   );
-  console.log('[agent-server] Run authority: MySQL Create/Get/Cancel services');
+  console.log(
+    '[agent-server] Run authority: MySQL Create/Get/Cancel/Steer/Follow-up services',
+  );
 
   if (sandboxHealthCheck) {
     try {

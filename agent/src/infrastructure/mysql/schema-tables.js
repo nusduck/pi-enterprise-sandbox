@@ -37,6 +37,12 @@ export const A2A_TABLES = Object.freeze([
   'a2a_audit_events',
 ]);
 
+/** Durable observability tables (created by the trace projection migration). */
+export const TRACE_TABLES = Object.freeze(['trace_spans']);
+
+/** Durable WAITING_INPUT interaction facts. */
+export const INTERACTION_TABLES = Object.freeze(['run_interactions']);
+
 export const CORE_TABLES_DROP_ORDER = Object.freeze(
   [...CORE_TABLES_CREATE_ORDER].reverse(),
 );

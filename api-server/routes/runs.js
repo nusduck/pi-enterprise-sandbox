@@ -15,13 +15,15 @@ import {
   openAgentRunEvents,
   steerAgentRun,
   followUpAgentRun,
+  createConversationFollowUp,
   cancelAgentRun,
   getAgentRun,
+  getAgentRunTrace,
   resumeAgentRunApproval,
   respondAgentInteraction,
   listAgentRuns,
+  listAgentToolExecutions,
 } from '../services/agent-client.js';
-import { createSandboxClient } from '../services/sandbox-client.js';
 import { authorizeRunRequest, resolveTrustedAuth } from '../application/run-access-service.js';
 import {
   parseSseResumeCursor,
@@ -370,13 +372,21 @@ export async function handleSteerRun(runId, body, res, req = null) {
     json(res, 400, { error: 'text is required' });
     return;
   }
+  const idempotencyKey = readIdempotencyKeyHeader(req);
+  if (!idempotencyKey) {
+    json(res, 400, {
+      error: 'Idempotency-Key header is required',
+      code: 'IDEMPOTENCY_KEY_REQUIRED',
+    });
+    return;
+  }
   try {
     const { auth } = await authorizeRunRequest(runId, req);
     const result = await steerAgentRun(runId, {
       text: text.trim(),
       conversation_id: body.conversation_id || null,
-    }, { auth, traceId: req?.traceId });
-    json(res, 200, result);
+    }, { auth, traceId: req?.traceId, idempotencyKey });
+    json(res, 202, result);
   } catch (err) {
     console.error('[runs] steer:', err.message);
     sendError(res, err, req?.traceId);
@@ -396,15 +406,65 @@ export async function handleFollowUpRun(runId, body, res, req = null) {
     json(res, 400, { error: 'text is required' });
     return;
   }
+  const idempotencyKey = readIdempotencyKeyHeader(req);
+  if (!idempotencyKey) {
+    json(res, 400, {
+      error: 'Idempotency-Key header is required',
+      code: 'IDEMPOTENCY_KEY_REQUIRED',
+    });
+    return;
+  }
   try {
     const { auth } = await authorizeRunRequest(runId, req);
     const result = await followUpAgentRun(runId, {
       text: text.trim(),
       conversation_id: body.conversation_id || null,
-    }, { auth, traceId: req?.traceId });
-    json(res, 200, result);
+    }, { auth, traceId: req?.traceId, idempotencyKey });
+    json(res, 202, result);
   } catch (err) {
     console.error('[runs] follow-up:', err.message);
+    sendError(res, err, req?.traceId);
+  }
+}
+
+/** POST /api/conversations/:id/follow-ups — canonical plan §18.7 path. */
+export async function handleConversationFollowUp(
+  conversationId,
+  body,
+  res,
+  req = null,
+) {
+  const text = body?.text;
+  if (!conversationId) {
+    json(res, 400, { error: 'conversation id is required' });
+    return;
+  }
+  if (typeof text !== 'string' || !text.trim()) {
+    json(res, 400, { error: 'text is required' });
+    return;
+  }
+  const idempotencyKey = readIdempotencyKeyHeader(req);
+  if (!idempotencyKey) {
+    json(res, 400, {
+      error: 'Idempotency-Key header is required',
+      code: 'IDEMPOTENCY_KEY_REQUIRED',
+    });
+    return;
+  }
+  try {
+    const auth = await resolveTrustedAuth(req);
+    const result = await createConversationFollowUp(
+      conversationId,
+      { text: text.trim(), agent_id: body.agent_id || null },
+      {
+        auth,
+        traceId: req?.traceId,
+        idempotencyKey,
+      },
+    );
+    json(res, 202, result);
+  } catch (err) {
+    console.error('[runs] conversation follow-up:', err.message);
     sendError(res, err, req?.traceId);
   }
 }
@@ -462,6 +522,41 @@ export async function handleGetRun(runId, res, req = null) {
 }
 
 /**
+ * GET /api/runs/:id/trace — owner-scoped durable trace tree.
+ * Agent MySQL materializes the projection from restart-safe Run facts.
+ */
+export async function handleGetRunTrace(runId, res, req = null) {
+  if (!runId) {
+    json(res, 400, { error: 'run id is required' });
+    return;
+  }
+  if (req?.traceId) res.setHeader('X-Trace-Id', String(req.traceId));
+  try {
+    const { auth } = await authorizeRunRequest(runId, req);
+    let limit = 1000;
+    let cursor = null;
+    if (req?.url) {
+      const query = new URL(req.url, 'http://bff.invalid').searchParams;
+      const requestedLimit = Number(query.get('limit'));
+      if (Number.isFinite(requestedLimit) && requestedLimit > 0) {
+        limit = Math.min(1000, Math.trunc(requestedLimit));
+      }
+      cursor = query.get('cursor') || null;
+    }
+    const result = await getAgentRunTrace(runId, {
+      auth,
+      traceId: req?.traceId,
+      limit,
+      cursor,
+    });
+    json(res, 200, result);
+  } catch (err) {
+    console.error('[runs] trace:', err.message);
+    sendError(res, err, req?.traceId);
+  }
+}
+
+/**
  * GET /api/runs/:id/tools — authoritative durable tool ledger snapshot.
  * Used after SSE reconnect exhaustion; unlike a closed stream this endpoint
  * never infers success from transport state.
@@ -473,8 +568,10 @@ export async function handleListRunTools(runId, res, req = null) {
   }
   try {
     const { auth } = await authorizeRunRequest(runId, req);
-    const client = createSandboxClient({ auth });
-    const result = await client.listToolExecutions({ runId });
+    const result = await listAgentToolExecutions(runId, {
+      auth,
+      traceId: req?.traceId,
+    });
     json(res, 200, result);
   } catch (err) {
     console.error('[runs] list tools:', err.message);

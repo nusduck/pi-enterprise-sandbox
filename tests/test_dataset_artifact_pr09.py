@@ -12,11 +12,9 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 import pytest
-from fastapi.testclient import TestClient
 
 from sandbox.app.domain.types import OwnerScope
 from sandbox.config import settings
-from sandbox.main import app
 from sandbox.services.artifact_manager import (
     ArtifactError,
     ArtifactManager,
@@ -50,69 +48,17 @@ from sandbox.services.dataset_store import (
     FakeFormalDatasetRepository,
     FormalDatasetDualWriter,
 )
-from sandbox.services.session_manager import session_manager
 from sandbox.services.workspace_quota_ledger import (
     QuotaExceededError,
     WorkspaceQuotaLedger,
 )
-from tests.conftest import formal_id, session_create_payload
-
-client = TestClient(app)
+from tests.conftest import formal_id
 
 ORG = "01K0G2PAV8FPMVC9QHJG7JPN4Z"
 USER = "01K0G2PAV8FPMVC9QHJG7JPN50"
 USER2 = "01K0G2PAV8FPMVC9QHJG7JPN5A"
 CONV = "01K0G2PAV8FPMVC9QHJG7JPN51"
 RUN = "01K0G2PAV8FPMVC9QHJG7JPN53"
-
-
-@pytest.fixture(autouse=True)
-def _hermetic_auth(monkeypatch):
-    monkeypatch.setattr(settings, "auth_enabled", False)
-
-
-def _create_session(**extra) -> dict:
-    conv_resp = client.post(
-        "/conversations",
-        json={"id": extra.pop("conversation_id", None) or formal_id(), "title": "ds-test"},
-    )
-    if conv_resp.status_code == 201:
-        conv_id = conv_resp.json()["id"]
-    else:
-        conv_resp = client.post("/conversations", json={"title": "ds-test"})
-        assert conv_resp.status_code == 201, conv_resp.text
-        conv_id = conv_resp.json()["id"]
-
-    body = session_create_payload(**extra)
-    body.setdefault("user_id", USER)
-    body.setdefault("conversation_id", conv_id)
-    body.setdefault(
-        "metadata",
-        {"org_id": ORG, "conversation_id": conv_id, "user_id": USER},
-    )
-    resp = client.post("/sessions", json=body)
-    assert resp.status_code == 201, resp.text
-    data = resp.json()
-    data["_test_conversation_id"] = conv_id
-    return data
-
-
-def _physical(session_id: str) -> Path:
-    from sandbox.paths import get_session_physical_workspace
-
-    s = session_manager.get(session_id)
-    assert s is not None
-    return Path(get_session_physical_workspace(s))
-
-
-def _ownership_headers(conversation_id: str | None = None, **extra) -> dict[str, str]:
-    h = {
-        "X-Org-Id": ORG,
-        "X-User-Id": USER,
-        "X-Conversation-Id": conversation_id or CONV,
-    }
-    h.update(extra)
-    return h
 
 
 # ── Filename ────────────────────────────────────────────────────────────────
@@ -126,6 +72,23 @@ class TestDatasetFilename:
         with pytest.raises(DatasetError) as ei:
             sanitize_dataset_filename("/etc/passwd")
         assert ei.value.code == "dataset_filename_invalid"
+
+    def test_windows_traversal_is_not_persisted_as_original_name(self, tmp_path):
+        manager = DatasetManager(auto_wire_formal=False)
+        entry = manager.stream_from_iterator(
+            workspace_path=str(tmp_path),
+            workspace_key=formal_id(),
+            sandbox_session_id="filename-session",
+            org_id=ORG,
+            user_id=USER,
+            conversation_id=CONV,
+            agent_session_id=formal_id(),
+            original_filename=r"..\..\private\report.csv",
+            chunks=iter((b"x",)),
+        )
+
+        assert entry.original_filename == "report.csv"
+        assert entry.stored_relative_path.endswith("/report.csv")
 
 
 # ── Quota control-plane ─────────────────────────────────────────────────────
@@ -262,6 +225,438 @@ class TestDatasetManagerStream:
                 chunks=iter([b"abc"]),
             )
         assert ei.value.code == "dataset_formal_ready_failed"
+
+
+class TestDatasetDurableIdempotency:
+    @staticmethod
+    def _upload(
+        manager: DatasetManager,
+        workspace: Path,
+        *,
+        workspace_id: str,
+        agent_session_id: str,
+        key: str,
+        payload: bytes,
+        sandbox_session_id: str = "sess-idem",
+        filename: str = "data.bin",
+    ):
+        return manager.stream_from_iterator(
+            workspace_path=str(workspace),
+            workspace_key=workspace_id,
+            sandbox_session_id=sandbox_session_id,
+            org_id=ORG,
+            user_id=USER,
+            conversation_id=CONV,
+            agent_session_id=agent_session_id,
+            original_filename=filename,
+            mime_type="application/octet-stream",
+            chunks=iter((payload[:3], payload[3:])),
+            idempotency_key=key,
+        )
+
+    def test_same_key_same_request_replays_one_dataset(self, tmp_path):
+        fake = FakeFormalDatasetRepository()
+        manager = DatasetManager(
+            formal=FormalDatasetDualWriter(fake, authoritative=True),
+            quota=WorkspaceQuotaLedger(),
+            auto_wire_formal=False,
+        )
+        workspace_id = formal_id()
+        agent_session_id = formal_id()
+        payload = b"durable-dataset"
+
+        first = self._upload(
+            manager,
+            tmp_path,
+            workspace_id=workspace_id,
+            agent_session_id=agent_session_id,
+            key="dataset-replay-key",
+            payload=payload,
+        )
+        replay = self._upload(
+            manager,
+            tmp_path,
+            workspace_id=workspace_id,
+            agent_session_id=agent_session_id,
+            key="dataset-replay-key",
+            payload=payload,
+        )
+
+        assert replay.dataset_id == first.dataset_id
+        assert len(fake.rows) == 1
+        assert len(fake.idempotency) == 1
+        published = [path for path in (tmp_path / "datasets").rglob("*") if path.is_file()]
+        assert published == [tmp_path / first.stored_relative_path]
+        assert published[0].read_bytes() == payload
+
+    def test_same_key_different_request_conflicts(self, tmp_path):
+        fake = FakeFormalDatasetRepository()
+        manager = DatasetManager(
+            formal=FormalDatasetDualWriter(fake, authoritative=True),
+            auto_wire_formal=False,
+        )
+        workspace_id = formal_id()
+        agent_session_id = formal_id()
+        first = self._upload(
+            manager,
+            tmp_path,
+            workspace_id=workspace_id,
+            agent_session_id=agent_session_id,
+            key="dataset-conflict-key",
+            payload=b"first-body",
+        )
+
+        with pytest.raises(DatasetError) as exc_info:
+            self._upload(
+                manager,
+                tmp_path,
+                workspace_id=workspace_id,
+                agent_session_id=agent_session_id,
+                key="dataset-conflict-key",
+                payload=b"second-body",
+            )
+
+        assert exc_info.value.code == "dataset_idempotency_conflict"
+        assert exc_info.value.status == 409
+        assert list(fake.rows) == [first.dataset_id]
+        assert set(manager._entries) == {first.dataset_id}
+        assert (tmp_path / first.stored_relative_path).read_bytes() == b"first-body"
+
+    def test_abort_before_reservation_removes_local_candidate(self, tmp_path):
+        fake = FakeFormalDatasetRepository()
+        manager = DatasetManager(
+            formal=FormalDatasetDualWriter(fake, authoritative=True),
+            auto_wire_formal=False,
+        )
+        workspace_id = formal_id()
+        entry = manager.begin_upload(
+            workspace_path=str(tmp_path),
+            workspace_key=workspace_id,
+            sandbox_session_id="sandbox-abort-idem",
+            org_id=ORG,
+            user_id=USER,
+            conversation_id=CONV,
+            agent_session_id=formal_id(),
+            original_filename="aborted.bin",
+            idempotency_key="abort-before-reservation",
+        )
+        manager.write_chunk(entry.dataset_id, b"partial")
+
+        manager.abort_upload(entry.dataset_id)
+
+        assert entry.dataset_id not in manager._entries
+        assert "sandbox-abort-idem" not in manager._by_session
+        assert fake.rows == {}
+        assert fake.idempotency == {}
+        assert not dataset_staging_path(
+            workspace_id, entry.dataset_id, "aborted.bin"
+        ).exists()
+
+    def test_fake_reservation_rolls_back_when_dataset_create_fails(self, tmp_path):
+        fake = FakeFormalDatasetRepository()
+        fake.fail_next_create = RuntimeError("insert failed")
+        manager = DatasetManager(
+            formal=FormalDatasetDualWriter(fake, authoritative=True),
+            auto_wire_formal=False,
+        )
+        upload_kwargs = {
+            "workspace_id": formal_id(),
+            "agent_session_id": formal_id(),
+            "key": "reservation-rollback-key",
+            "payload": b"retryable",
+        }
+
+        with pytest.raises(DatasetError):
+            self._upload(manager, tmp_path, **upload_kwargs)
+        assert fake.idempotency == {}
+        assert fake.rows == {}
+
+        recovered = self._upload(manager, tmp_path, **upload_kwargs)
+        assert recovered.status == DATASET_STATUS_READY
+        assert list(fake.rows) == [recovered.dataset_id]
+
+    def test_fresh_manager_recovers_get_and_list_from_formal(self, tmp_path):
+        fake = FakeFormalDatasetRepository()
+        workspace_id = formal_id()
+        agent_session_id = formal_id()
+        first_manager = DatasetManager(
+            formal=FormalDatasetDualWriter(fake, authoritative=True),
+            auto_wire_formal=False,
+        )
+        created = self._upload(
+            first_manager,
+            tmp_path,
+            workspace_id=workspace_id,
+            agent_session_id=agent_session_id,
+            key="dataset-restart-key",
+            payload=b"persist-me",
+            sandbox_session_id="sandbox-before-restart",
+        )
+
+        fresh_manager = DatasetManager(
+            formal=FormalDatasetDualWriter(fake, authoritative=True),
+            auto_wire_formal=False,
+        )
+        recovered = fresh_manager.get(
+            created.dataset_id,
+            org_id=ORG,
+            user_id=USER,
+            sandbox_session_id="sandbox-after-restart",
+            agent_session_id=agent_session_id,
+        )
+        listed = fresh_manager.list_for_session(
+            "sandbox-after-restart",
+            org_id=ORG,
+            user_id=USER,
+            agent_session_id=agent_session_id,
+            ready_only=True,
+        )
+
+        assert recovered is not None
+        assert recovered.dataset_id == created.dataset_id
+        assert recovered.sandbox_session_id == "sandbox-after-restart"
+        assert [entry.dataset_id for entry in listed] == [created.dataset_id]
+
+    def test_retry_after_reservation_reuses_original_dataset(self, tmp_path, monkeypatch):
+        from sandbox.services import dataset_manager as dataset_manager_module
+
+        fake = FakeFormalDatasetRepository()
+        workspace_id = formal_id()
+        agent_session_id = formal_id()
+        payload = b"retry-after-reservation"
+        real_publish = dataset_manager_module.secure_publish_to_workspace
+        publish_calls = 0
+
+        def crash_once(**kwargs):
+            nonlocal publish_calls
+            publish_calls += 1
+            if publish_calls == 1:
+                raise ControlPlaneError(
+                    "PUBLISH_FAILED",
+                    "simulated crash after durable reservation",
+                    status=500,
+                )
+            return real_publish(**kwargs)
+
+        monkeypatch.setattr(
+            dataset_manager_module,
+            "secure_publish_to_workspace",
+            crash_once,
+        )
+        first_manager = DatasetManager(
+            formal=FormalDatasetDualWriter(fake, authoritative=True),
+            auto_wire_formal=False,
+        )
+        with pytest.raises(DatasetError) as exc_info:
+            self._upload(
+                first_manager,
+                tmp_path,
+                workspace_id=workspace_id,
+                agent_session_id=agent_session_id,
+                key="reservation-crash-key",
+                payload=payload,
+            )
+        assert exc_info.value.code == "publish_failed"
+        assert len(fake.rows) == 1
+        reserved_id = next(iter(fake.rows))
+        assert fake.rows[reserved_id]["status"] == DATASET_STATUS_UPLOADING
+
+        fresh_manager = DatasetManager(
+            formal=FormalDatasetDualWriter(fake, authoritative=True),
+            auto_wire_formal=False,
+        )
+        recovered = self._upload(
+            fresh_manager,
+            tmp_path,
+            workspace_id=workspace_id,
+            agent_session_id=agent_session_id,
+            key="reservation-crash-key",
+            payload=payload,
+        )
+
+        assert recovered.dataset_id == reserved_id
+        assert len(fake.rows) == 1
+        assert (tmp_path / recovered.stored_relative_path).read_bytes() == payload
+
+    def test_retry_reuses_quota_reservation_left_by_process_death(
+        self, tmp_path, monkeypatch
+    ):
+        from sandbox.services import dataset_manager as dataset_manager_module
+
+        class ExactQuotaLedger(WorkspaceQuotaLedger):
+            def __init__(self, quota_bytes: int) -> None:
+                super().__init__()
+                self._quota_bytes = quota_bytes
+
+            def quota_bytes(self, *, quota_mb=None):  # noqa: ARG002
+                return self._quota_bytes
+
+        fake = FakeFormalDatasetRepository()
+        workspace_id = formal_id()
+        agent_session_id = formal_id()
+        payload = b"crash-reservation"
+        real_publish = dataset_manager_module.secure_publish_to_workspace
+        publish_calls = 0
+
+        def process_dies_once(**kwargs):
+            nonlocal publish_calls
+            publish_calls += 1
+            if publish_calls == 1:
+                # BaseException deliberately bypasses request cleanup, matching
+                # a killed worker after quota reserve but before atomic publish.
+                raise SystemExit("simulated process death")
+            return real_publish(**kwargs)
+
+        monkeypatch.setattr(
+            dataset_manager_module,
+            "secure_publish_to_workspace",
+            process_dies_once,
+        )
+        first_manager = DatasetManager(
+            formal=FormalDatasetDualWriter(fake, authoritative=True),
+            quota=ExactQuotaLedger(len(payload)),
+            auto_wire_formal=False,
+        )
+        with pytest.raises(SystemExit):
+            self._upload(
+                first_manager,
+                tmp_path,
+                workspace_id=workspace_id,
+                agent_session_id=agent_session_id,
+                key="quota-crash-key",
+                payload=payload,
+            )
+
+        reserved_id = next(iter(fake.rows))
+        reservation_path = (
+            control_root()
+            / "quota"
+            / workspace_id
+            / "res"
+            / f"dataset-{reserved_id}"
+        )
+        assert reservation_path.read_text(encoding="utf-8") == str(len(payload))
+        assert not (tmp_path / fake.rows[reserved_id]["stored_relative_path"]).exists()
+
+        fresh_manager = DatasetManager(
+            formal=FormalDatasetDualWriter(fake, authoritative=True),
+            quota=ExactQuotaLedger(len(payload)),
+            auto_wire_formal=False,
+        )
+        recovered = self._upload(
+            fresh_manager,
+            tmp_path,
+            workspace_id=workspace_id,
+            agent_session_id=agent_session_id,
+            key="quota-crash-key",
+            payload=payload,
+        )
+
+        assert recovered.dataset_id == reserved_id
+        assert len(fake.rows) == 1
+        assert (tmp_path / recovered.stored_relative_path).read_bytes() == payload
+        assert not reservation_path.exists()
+
+    def test_retry_after_publish_credits_existing_file_quota(self, tmp_path):
+        class ExactQuotaLedger(WorkspaceQuotaLedger):
+            def __init__(self, quota_bytes: int) -> None:
+                super().__init__()
+                self._quota_bytes = quota_bytes
+
+            def quota_bytes(self, *, quota_mb=None):  # noqa: ARG002
+                return self._quota_bytes
+
+        fake = FakeFormalDatasetRepository()
+        workspace_id = formal_id()
+        agent_session_id = formal_id()
+        payload = b"one-file-quota"
+        fake.fail_next_update = RuntimeError("crash before READY commit")
+        first_manager = DatasetManager(
+            formal=FormalDatasetDualWriter(fake, authoritative=True),
+            quota=ExactQuotaLedger(len(payload)),
+            auto_wire_formal=False,
+        )
+        with pytest.raises(DatasetError) as exc_info:
+            self._upload(
+                first_manager,
+                tmp_path,
+                workspace_id=workspace_id,
+                agent_session_id=agent_session_id,
+                key="publish-crash-key",
+                payload=payload,
+            )
+        assert exc_info.value.code == "dataset_formal_idempotency_failed"
+        original_id = next(iter(fake.rows))
+        original_path = Path(fake.rows[original_id]["stored_relative_path"])
+        assert fake.rows[original_id]["status"] == DATASET_STATUS_UPLOADING
+        assert (tmp_path / original_path).read_bytes() == payload
+
+        # A full second reservation would exceed quota. Recovery reserves only
+        # the replacement's net growth, then republishes to the same target.
+        with pytest.raises(QuotaExceededError):
+            ExactQuotaLedger(len(payload)).reserve(
+                str(tmp_path), workspace_id, len(payload)
+            )
+        fresh_manager = DatasetManager(
+            formal=FormalDatasetDualWriter(fake, authoritative=True),
+            quota=ExactQuotaLedger(len(payload)),
+            auto_wire_formal=False,
+        )
+        recovered = self._upload(
+            fresh_manager,
+            tmp_path,
+            workspace_id=workspace_id,
+            agent_session_id=agent_session_id,
+            key="publish-crash-key",
+            payload=payload,
+        )
+
+        assert recovered.dataset_id == original_id
+        assert fake.rows[original_id]["status"] == DATASET_STATUS_READY
+        assert len(fake.rows) == 1
+        assert (tmp_path / recovered.stored_relative_path).read_bytes() == payload
+
+    def test_authoritative_formal_read_failure_is_503(self, tmp_path):
+        class ReadFailureRepository(FakeFormalDatasetRepository):
+            def get_by_id(self, conn, dataset_id, scope):  # noqa: ARG002
+                raise RuntimeError("mysql unavailable")
+
+            def list_for_owner(self, conn, scope, **kwargs):  # noqa: ARG002
+                raise RuntimeError("mysql unavailable")
+
+        manager = DatasetManager(
+            formal=FormalDatasetDualWriter(
+                ReadFailureRepository(),
+                authoritative=True,
+            ),
+            auto_wire_formal=False,
+        )
+        agent_session_id = formal_id()
+
+        with pytest.raises(DatasetError) as get_error:
+            manager.get(
+                formal_id(),
+                org_id=ORG,
+                user_id=USER,
+                sandbox_session_id="sandbox-read-fail",
+                agent_session_id=agent_session_id,
+            )
+        with pytest.raises(DatasetError) as list_error:
+            manager.list_for_session(
+                "sandbox-read-fail",
+                org_id=ORG,
+                user_id=USER,
+                agent_session_id=agent_session_id,
+            )
+
+        assert (get_error.value.code, get_error.value.status) == (
+            "dataset_formal_read_failed",
+            503,
+        )
+        assert (list_error.value.code, list_error.value.status) == (
+            "dataset_formal_read_failed",
+            503,
+        )
 
 
 # ── Artifact immutable snapshot ─────────────────────────────────────────────
@@ -875,123 +1270,6 @@ class TestArtifactSnapshot:
             monkeypatch.setattr(os, "read", real_read)
         # No final blob left (tmp cleaned)
         assert not dest.exists()
-
-
-# ── HTTP ────────────────────────────────────────────────────────────────────
-
-
-class TestDatasetHttp:
-    def test_upload_stream_e2e(self):
-        sess = _create_session()
-        sid = sess["session_id"]
-        body = b"csv,data\n1,2\n"
-        resp = client.post(
-            f"/sessions/{sid}/datasets",
-            files={"file": ("data.csv", body, "text/csv")},
-            headers=_ownership_headers(sess["_test_conversation_id"]),
-        )
-        assert resp.status_code == 201, resp.text
-        data = resp.json()
-        assert data["status"] == "ready"
-        assert data["path"].startswith("datasets/")
-        physical = _physical(sid)
-        assert (physical / data["path"]).read_bytes() == body
-        arts = client.get(f"/sessions/{sid}/artifacts").json()
-        assert arts["total"] == 0
-
-
-class TestArtifactHttp:
-    def test_write_does_not_create_artifact(self):
-        sess = _create_session()
-        sid = sess["session_id"]
-        client.post(
-            f"/sessions/{sid}/files/write",
-            json={"path": "out/report.txt", "content": "not an artifact"},
-        )
-        arts = client.get(f"/sessions/{sid}/artifacts").json()
-        assert arts["total"] == 0
-
-    def test_submit_and_download_stream(self):
-        sess = _create_session()
-        sid = sess["session_id"]
-        content = b"chart-png-bytes"
-        client.post(
-            f"/sessions/{sid}/files/write",
-            json={"path": "chart.png", "content": content.decode("latin-1")},
-        )
-        sub = client.post(
-            f"/sessions/{sid}/artifacts/submit",
-            json={"name": "chart.png", "path": "chart.png", "mime_type": "image/png"},
-            headers=_ownership_headers(sess["_test_conversation_id"]),
-        )
-        assert sub.status_code == 201, sub.text
-        art_id = sub.json()["artifact_id"]
-        dl = client.get(f"/sessions/{sid}/artifacts/{art_id}/download")
-        assert dl.status_code == 200
-        assert dl.content == content
-        assert "attachment" in (dl.headers.get("content-disposition") or "")
-        assert dl.headers.get("x-content-type-options") == "nosniff"
-
-    def test_symlink_rejected_on_submit(self):
-        sess = _create_session()
-        sid = sess["session_id"]
-        physical = _physical(sid)
-        target = physical / "real.txt"
-        target.write_text("secret")
-        link = physical / "link.txt"
-        link.symlink_to(target)
-        resp = client.post(
-            f"/sessions/{sid}/artifacts/submit",
-            json={"name": "link.txt", "path": "link.txt"},
-            headers=_ownership_headers(sess["_test_conversation_id"]),
-        )
-        assert resp.status_code in (400, 403)
-
-    def test_path_traversal_rejected(self):
-        sess = _create_session()
-        sid = sess["session_id"]
-        resp = client.post(
-            f"/sessions/{sid}/artifacts/submit",
-            json={"name": "x", "path": "../../etc/passwd"},
-            headers=_ownership_headers(sess["_test_conversation_id"]),
-        )
-        assert resp.status_code in (400, 403)
-
-    def test_hash_mismatch_on_submit(self):
-        sess = _create_session()
-        sid = sess["session_id"]
-        client.post(
-            f"/sessions/{sid}/files/write",
-            json={"path": "h.txt", "content": "abc"},
-        )
-        resp = client.post(
-            f"/sessions/{sid}/artifacts/submit",
-            json={
-                "name": "h.txt",
-                "path": "h.txt",
-                "expected_sha256": "0" * 64,
-            },
-            headers=_ownership_headers(sess["_test_conversation_id"], **{"X-Run-Id": RUN}),
-        )
-        assert resp.status_code == 409
-
-    def test_cross_session_download_denied(self):
-        a = _create_session(caller_id="a")
-        b = _create_session(caller_id="b")
-        sa, sb = a["session_id"], b["session_id"]
-        client.post(
-            f"/sessions/{sa}/files/write",
-            json={"path": "secret.txt", "content": "nope"},
-        )
-        sub = client.post(
-            f"/sessions/{sa}/artifacts/submit",
-            json={"name": "secret.txt", "path": "secret.txt"},
-            headers=_ownership_headers(a["_test_conversation_id"]),
-        )
-        assert sub.status_code == 201
-        art_id = sub.json()["artifact_id"]
-        dl = client.get(f"/sessions/{sb}/artifacts/{art_id}/download")
-        assert dl.status_code == 404
 
 
 class TestArtifactDisposition:

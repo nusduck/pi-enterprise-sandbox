@@ -25,6 +25,8 @@ const ORG = '01K0G2PAV8FPMVC9QHJG7JPN4Z';
 const AGENT = '01K0G2PAV8FPMVC9QHJG7JPN4A';
 const USER = '01K0G2PAV8FPMVC9QHJG7JPN50';
 const CRED = '01K0G2PAV8FPMVC9QHJG7JPN5C';
+const SERVICE_USER = '01K0G2PAV8FPMVC9QHJG7JPN5D';
+const CRED_2 = '01K0G2PAV8FPMVC9QHJG7JPN5E';
 
 describe('token crypto helpers', () => {
   it('formats and parses bearer tokens', () => {
@@ -167,6 +169,111 @@ describe('A2aCredentialService issue / authenticate / rotate', () => {
       () => svc.authenticate('Bearer a2a_ffffffffffffffff_' + '0'.repeat(64)),
       (e) => e instanceof A2aAuthError,
     );
+  });
+
+  it('provisions and reuses an org-scoped client service user transactionally', async () => {
+    const users = new Map();
+    const memberships = new Map();
+    const credentials = [];
+    const transactionExecutor = { transaction: true };
+    const repositoryExecutors = [];
+    let userCreateCalls = 0;
+    let transactionCalls = 0;
+    let idIndex = 0;
+    const ids = [CRED, SERVICE_USER, CRED_2];
+
+    const svc = new A2aCredentialService({
+      transactionManager: {
+        async run(work) {
+          transactionCalls += 1;
+          return work(transactionExecutor);
+        },
+      },
+      createRepositories(db) {
+        repositoryExecutors.push(db);
+        return {
+          organizations: {
+            async getUserByExternalSubject(subject) {
+              return users.get(subject) || null;
+            },
+            async createUserIfAbsent(input) {
+              userCreateCalls += 1;
+              const user = {
+                userId: input.userId,
+                externalSubject: input.externalSubject,
+                status: input.status,
+              };
+              users.set(input.externalSubject, user);
+              return user;
+            },
+            async addMembershipIfAbsent(input) {
+              const key = `${input.orgId}:${input.userId}`;
+              const membership = memberships.get(key) || { ...input };
+              memberships.set(key, membership);
+              return membership;
+            },
+          },
+          a2aCredentials: {
+            async insert(input) {
+              const row = {
+                ...input,
+                expiresAt: null,
+                lastUsedAt: null,
+                createdAt: '2026-07-18T00:00:00.000Z',
+                updatedAt: '2026-07-18T00:00:00.000Z',
+              };
+              credentials.push(row);
+              return row;
+            },
+          },
+        };
+      },
+      generateId: () => ids[idIndex++],
+      now: () => new Date('2026-07-18T00:00:00.000Z'),
+    });
+
+    const first = await svc.issue({
+      orgId: ORG,
+      agentId: AGENT,
+      clientId: ' client-a ',
+    });
+    const second = await svc.issue({
+      orgId: ORG,
+      agentId: AGENT,
+      clientId: 'client-a',
+    });
+
+    assert.equal(first.credential.serviceUserId, SERVICE_USER);
+    assert.equal(second.credential.serviceUserId, SERVICE_USER);
+    assert.equal(first.credential.clientId, 'client-a');
+    assert.equal(credentials[0].serviceUserId, SERVICE_USER);
+    assert.equal(credentials[1].serviceUserId, SERVICE_USER);
+    assert.deepEqual([...users.keys()], [`a2a:${ORG}:client-a`]);
+    assert.deepEqual([...memberships.keys()], [`${ORG}:${SERVICE_USER}`]);
+    assert.equal(userCreateCalls, 1);
+    assert.equal(transactionCalls, 2);
+    assert.deepEqual(repositoryExecutors, [
+      transactionExecutor,
+      transactionExecutor,
+    ]);
+  });
+
+  it('requires a transaction for automatic service user provisioning', async () => {
+    let repositoryCalls = 0;
+    const svc = new A2aCredentialService({
+      createRepositories() {
+        repositoryCalls += 1;
+        return {};
+      },
+      generateId: () => CRED,
+    });
+
+    await assert.rejects(
+      () => svc.issue({ orgId: ORG, agentId: AGENT, clientId: 'client-a' }),
+      (error) =>
+        error instanceof ValidationError && /transaction manager/.test(error.message),
+    );
+    assert.equal(repositoryCalls, 0);
   });
 
   it('rotation invalidates old token and issues a new one', async () => {

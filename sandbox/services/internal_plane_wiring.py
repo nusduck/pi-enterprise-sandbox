@@ -31,6 +31,19 @@ from sandbox.services.files_read_runtime import (
     FilesReadRuntime,
     set_files_read_runtime,
 )
+from sandbox.services.files_write_runtime import FilesWriteRuntime, set_files_write_runtime
+from sandbox.services.formal_execution_runtime import (
+    FormalExecutionRuntime,
+    set_formal_execution_runtime,
+)
+from sandbox.services.formal_artifact_runtime import (
+    FormalArtifactRuntime,
+    set_formal_artifact_runtime,
+)
+from sandbox.services.formal_process_runtime import (
+    FormalProcessRuntime,
+    set_formal_process_runtime,
+)
 from sandbox.services.internal_execution_supervisor import InternalExecutionSupervisor
 from sandbox.services.internal_file_reader import InternalFileReader
 from sandbox.services.internal_plane_resources import (
@@ -126,7 +139,7 @@ def close_mysql_database(db: Any) -> None:
 
 
 class FastApiInternalPlaneTarget:
-    """Atomic install target for FastAPI app.state slots + files.read runtime.
+    """Atomic install target for FastAPI app.state slots + formal file runtimes.
 
     Install order (resources.install): mysql → claim_validator → replay_store.
     On claim_validator set, builds FilesReadRuntime and installs it.
@@ -148,15 +161,36 @@ class FastApiInternalPlaneTarget:
         self.mysql_database: Any | None = None
         self.claim_validator: Any | None = None
         self.files_read_runtime: FilesReadRuntime | None = None
+        self.formal_execution_runtime: FormalExecutionRuntime | None = None
+        self.formal_artifact_runtime: FormalArtifactRuntime | None = None
+        self.files_write_runtime: FilesWriteRuntime | None = None
+        self.formal_process_runtime: FormalProcessRuntime | None = None
 
     def set_mysql_database(self, db: Any | None) -> None:
+        from sandbox.services.formal_session_runtime import (
+            set_formal_session_runtime,
+        )
+        from sandbox.services.runtime_persistence import (
+            install_formal_runtime_persistence,
+        )
+
+        runtime = install_formal_runtime_persistence(db)
+        set_formal_session_runtime(self.app, runtime)
         self.mysql_database = db
 
     def set_claim_validator(self, validator: Any | None) -> None:
         self.claim_validator = validator
         if validator is None:
             self.files_read_runtime = None
+            self.formal_execution_runtime = None
+            self.formal_artifact_runtime = None
+            self.files_write_runtime = None
+            self.formal_process_runtime = None
             set_files_read_runtime(self.app, None)
+            set_formal_execution_runtime(self.app, None)
+            set_formal_artifact_runtime(self.app, None)
+            set_files_write_runtime(self.app, None)
+            set_formal_process_runtime(self.app, None)
             return
         runtime = FilesReadRuntime(
             claim_validator=validator,
@@ -166,6 +200,32 @@ class FastApiInternalPlaneTarget:
         )
         self.files_read_runtime = runtime
         set_files_read_runtime(self.app, runtime)
+        execution_runtime = FormalExecutionRuntime(
+            claim_validator=validator,
+            supervisor=self.supervisor,
+            id_factory=self.id_factory,
+        )
+        self.formal_execution_runtime = execution_runtime
+        set_formal_execution_runtime(self.app, execution_runtime)
+        artifact_runtime = FormalArtifactRuntime(
+            claim_validator=validator,
+            supervisor=self.supervisor,
+            id_factory=self.id_factory,
+        )
+        self.formal_artifact_runtime = artifact_runtime
+        set_formal_artifact_runtime(self.app, artifact_runtime)
+        self.files_write_runtime = FilesWriteRuntime(
+            claim_validator=validator,
+            id_factory=self.id_factory,
+            supervisor=self.supervisor,
+        )
+        set_files_write_runtime(self.app, self.files_write_runtime)
+        self.formal_process_runtime = FormalProcessRuntime(
+            claim_validator=validator,
+            supervisor=self.supervisor,
+            id_factory=self.id_factory,
+        )
+        set_formal_process_runtime(self.app, self.formal_process_runtime)
 
     def set_replay_store(self, store: Any | None) -> None:
         set_replay_store(self.app, store)
@@ -224,13 +284,21 @@ async def start_internal_plane(
         id_factory=id_factory,
     )
     # Strong ref for shutdown reconcile after app.state slots are cleared.
-    runtime_box: list[FilesReadRuntime | None] = [None]
+    runtime_box: list[tuple[FilesReadRuntime | None, FormalExecutionRuntime | None, FilesWriteRuntime | None, FormalProcessRuntime | None, FormalArtifactRuntime | None]] = [
+        (None, None, None, None, None)
+    ]
     _orig_set_claim = target.set_claim_validator
 
     def _set_claim_and_track(validator: Any | None) -> None:
         _orig_set_claim(validator)
         if validator is not None:
-            runtime_box[0] = target.files_read_runtime
+            runtime_box[0] = (
+                target.files_read_runtime,
+                target.formal_execution_runtime,
+                target.files_write_runtime,
+                target.formal_process_runtime,
+                target.formal_artifact_runtime,
+            )
         # On clear, keep last runtime for reconcile (do not null runtime_box).
 
     target.set_claim_validator = _set_claim_and_track  # type: ignore[method-assign]
@@ -245,10 +313,11 @@ async def start_internal_plane(
         """Mark remaining claimed work UNKNOWN while MySQL is still open."""
         import asyncio
 
-        rt = runtime_box[0]
-        if rt is None:
-            return 0
-        return await asyncio.to_thread(rt.reconcile_inflight_as_unknown)
+        runtimes = [runtime for runtime in runtime_box[0] if runtime is not None]
+        total = 0
+        for runtime in runtimes:
+            total += await asyncio.to_thread(runtime.reconcile_inflight_as_unknown)
+        return total
 
     drain_timeout = float(settings.internal_drain_timeout_seconds)
     bundle = InternalPlaneResources(

@@ -19,14 +19,17 @@ import { MessageRepository } from '../infrastructure/mysql/repositories/message-
 import { PiSessionJournalRepository } from '../infrastructure/mysql/repositories/pi-session-journal-repository.js';
 import { RunRepository } from '../infrastructure/mysql/repositories/run-repository.js';
 import { RunEventRepository } from '../infrastructure/mysql/repositories/run-event-repository.js';
+import { TraceSpanRepository } from '../infrastructure/mysql/repositories/trace-span-repository.js';
 import { IdempotencyRepository } from '../infrastructure/mysql/repositories/idempotency-repository.js';
 import { ToolExecutionRepository } from '../infrastructure/mysql/repositories/tool-execution-repository.js';
 import { ApprovalRepository } from '../infrastructure/mysql/repositories/approval-repository.js';
+import { InteractionRepository } from '../infrastructure/mysql/repositories/interaction-repository.js';
 import { SandboxAuditEventRepository } from '../infrastructure/mysql/repositories/sandbox-audit-event-repository.js';
 import { A2aCredentialRepository } from '../infrastructure/mysql/repositories/a2a-credential-repository.js';
 import { A2aTaskRepository } from '../infrastructure/mysql/repositories/a2a-task-repository.js';
 import { A2aAuditRepository } from '../infrastructure/mysql/repositories/a2a-audit-repository.js';
 import { ArtifactRepository } from '../infrastructure/mysql/repositories/artifact-repository.js';
+import { ProcessExecutionRepository } from '../infrastructure/mysql/repositories/process-execution-repository.js';
 import { OutboxRepository } from '../infrastructure/outbox/outbox-repository.js';
 import { CreateRunService } from '../application/create-run-service.js';
 import { GetRunService } from '../application/get-run-service.js';
@@ -37,10 +40,18 @@ import { createStubRunExecutor } from '../application/run-executor.js';
 import { createPiRunExecutorFactory } from '../application/pi-run-executor.js';
 import { SessionRecoveryService } from '../application/session-recovery-service.js';
 import { RunEventQueryService } from '../application/run-event-query-service.js';
+import { TraceQueryService } from '../application/trace-query-service.js';
 import { RunEventSseService } from '../application/run-event-sse-service.js';
+import { ConversationService } from '../application/conversation-service.js';
+import { ApprovalQueryService } from '../application/approval-query-service.js';
+import { ApprovalDecisionService } from '../application/approval-decision-service.js';
+import { InteractionResponseService } from '../application/interaction-response-service.js';
+import { SteerRunService } from '../application/steer-run-service.js';
+import { FollowUpService } from '../application/follow-up-service.js';
 import { A2aCredentialService } from '../application/a2a/credential-service.js';
 import { A2aTaskService } from '../application/a2a/task-service.js';
 import { A2aStreamService } from '../application/a2a/stream-service.js';
+import { buildArtifactDownloadUri as mintArtifactDownloadUri } from '../application/a2a/artifact-download.js';
 import { ulid } from '../domain/shared/ulid.js';
 import { createRunWorkerRuntime } from './run-worker.js';
 import { PINNED_PI_SDK_VERSION } from '../infrastructure/pi/pi-runtime-factory.js';
@@ -138,6 +149,7 @@ export function resolveRedisUrlFromEnv(env = process.env) {
  */
 export function createRepositoryBundle(db, opts = {}) {
   const now = opts.now ?? (() => new Date());
+  const traceSpans = new TraceSpanRepository(db, { now });
   return {
     organizations: new OrganizationRepository(db, { now }),
     externalRefs: new ExternalReferenceRepository(db, { now }),
@@ -156,11 +168,13 @@ export function createRepositoryBundle(db, opts = {}) {
       generateId: opts.generateId,
     }),
     runs: new RunRepository(db, { now }),
-    runEvents: new RunEventRepository(db),
+    runEvents: new RunEventRepository(db, { traceSpans }),
+    traceSpans,
     idempotency: new IdempotencyRepository(db, { now }),
     /** PR-06 B2: durable tool ledger + policy audit + approvals. */
     toolExecutions: new ToolExecutionRepository(db, { now }),
     approvals: new ApprovalRepository(db, { now }),
+    interactions: new InteractionRepository(db, { now }),
     sandboxAudit: new SandboxAuditEventRepository(db, { now }),
     outbox: new OutboxRepository(db, { now }),
     /** PR-12 A2A protocol. */
@@ -168,6 +182,7 @@ export function createRepositoryBundle(db, opts = {}) {
     a2aTasks: new A2aTaskRepository(db, { now }),
     a2aAudit: new A2aAuditRepository(db, { now }),
     artifacts: new ArtifactRepository(db),
+    processExecutions: new ProcessExecutionRepository(db),
   };
 }
 
@@ -425,10 +440,8 @@ export class ServiceContainer {
         'deepseek-v4-flash';
       const entry = resolveModel(modelId, { env });
       const baseUrl = String(env.LLMIO_BASE_URL || '').trim();
-      const apiKey = String(env.LLMIO_API_KEY || '').trim();
       const piModel = toPiModel(entry, {
         baseUrl,
-        apiKey: apiKey || undefined,
       });
       return resolveConcreteModel(bound, piModel);
     };
@@ -520,12 +533,13 @@ export class ServiceContainer {
     return {
       /**
        * @param {{ runId: string, orgId: string, traceId: string }} ref
+       * @param {import('bullmq').JobsOptions} [options]
        */
-      enqueue: async (ref) => {
+      enqueue: async (ref, options) => {
         const { enqueueRunJob } = await import(
           '../infrastructure/redis/run-queue.js'
         );
-        return enqueueRunJob(queue, ref);
+        return enqueueRunJob(queue, ref, options);
       },
     };
   }
@@ -575,6 +589,9 @@ export class ServiceContainer {
    *   sessionAdapter?: import('../infrastructure/pi/pi-session-adapter.js').PiSessionAdapter,
    *   extensionFactories?: unknown[],
    *   loadSdk?: () => Promise<any>,
+   *   mcpResolver?: Function | object | null,
+   *   mcpSecretResolver?: Function,
+   *   mcpRuntimeRoot?: string,
    * }} [opts]
    */
   createPiRuntimeFactory(opts = {}) {
@@ -585,17 +602,34 @@ export class ServiceContainer {
         ? path.resolve(String(opts.agentDir).trim())
         : ensureAgentPiAgentDir(this.env);
     return import('../infrastructure/pi/pi-runtime-factory.js').then(
-      ({ PiRuntimeFactory }) =>
-        new PiRuntimeFactory({
+      async ({ PiRuntimeFactory }) => {
+        let mcpResolver = opts.mcpResolver;
+        if (mcpResolver === undefined) {
+          const {
+            createEnvironmentSecretResolver,
+            createPiMcpResolver,
+          } = await import('../infrastructure/mcp/pi-mcp-adapter-factory.js');
+          mcpResolver = createPiMcpResolver({
+            serverRegistry: this.env.MCP_SERVERS_JSON || '[]',
+            secretResolver:
+              opts.mcpSecretResolver ??
+              createEnvironmentSecretResolver(this.env),
+            runtimeRoot:
+              opts.mcpRuntimeRoot || this.env.AGENT_MCP_RUNTIME_ROOT || undefined,
+          });
+        }
+        return new PiRuntimeFactory({
           sessionAdapter: opts.sessionAdapter,
           extensionFactories: opts.extensionFactories,
           loadSdk: opts.loadSdk,
+          mcpResolver,
           defaultCwd:
             this.env.AGENT_PI_DEFAULT_CWD ||
             this.env.AGENT_SESSION_WORKSPACE_CWD ||
             undefined,
           agentDir,
-        }),
+        });
+      },
     );
   }
 
@@ -616,6 +650,42 @@ export class ServiceContainer {
     return import('../infrastructure/pi/platform-event-projector.js').then(
       ({ PlatformEventProjector }) => new PlatformEventProjector(),
     );
+  }
+
+  /**
+   * Formal Agent -> Sandbox session provisioning transport shared by the HTTP
+   * pre-upload path and the worker pre-runtime path.
+   */
+  async createSandboxSessionProvisioner() {
+    const keyring = String(
+      this.env.SANDBOX_INTERNAL_HMAC_KEYRING || '',
+    ).trim();
+    const activeKid = String(
+      this.env.SANDBOX_INTERNAL_HMAC_ACTIVE_KID || '',
+    ).trim();
+    const deployment = String(
+      this.env.DEPLOYMENT_ENV || this.env.NODE_ENV || '',
+    ).toLowerCase();
+    if (!keyring || !activeKid) {
+      if (deployment === 'production') {
+        const error = new Error(
+          'SANDBOX_INTERNAL_HMAC_KEYRING and SANDBOX_INTERNAL_HMAC_ACTIVE_KID ' +
+            'are required for production SandboxSession provisioning',
+        );
+        error.code = 'SANDBOX_INTERNAL_HMAC_REQUIRED';
+        throw error;
+      }
+      return null;
+    }
+    const { createInternalSessionProvisioner } = await import(
+      '../infrastructure/sandbox/internal-session-http.js'
+    );
+    return createInternalSessionProvisioner({
+      baseUrl: this.env.SANDBOX_BASE_URL || 'http://sandbox:8081',
+      keyring,
+      activeKid,
+      allowInsecureHttp: true,
+    });
   }
 
   /**
@@ -660,7 +730,12 @@ export class ServiceContainer {
    *   sessionAdapter?: any,
    *   projector?: any,
    *   recoveryService?: SessionRecoveryService,
+   *   sandboxSessionProvisioner?: any,
    *   sessionLockRenewIntervalMs?: number,
+   *   steerPollIntervalMs?: number,
+   *   mcpResolver?: Function | object | null,
+   *   mcpSecretResolver?: Function,
+   *   mcpRuntimeRoot?: string,
    * }} opts
    * @returns {Promise<import('../application/run-executor.js').RunExecutorFactory>}
    */
@@ -705,12 +780,18 @@ export class ServiceContainer {
       (await this.createPiRuntimeFactory({
         sessionAdapter,
         extensionFactories: opts.extensionFactories,
+        mcpResolver: opts.mcpResolver,
+        mcpSecretResolver: opts.mcpSecretResolver,
+        mcpRuntimeRoot: opts.mcpRuntimeRoot,
         agentDir,
       }));
     const projector =
       opts.projector ?? (await this.createPlatformEventProjector());
     const recoveryService =
       opts.recoveryService ?? this.createSessionRecoveryService();
+    const sandboxSessionProvisioner =
+      opts.sandboxSessionProvisioner ??
+      (await this.createSandboxSessionProvisioner());
 
     // PR-08: per-run sandbox-bridge transport from durable runContext
     // (orgId/userId/traceId). Never process-global client with null auth/trace.
@@ -732,11 +813,86 @@ export class ServiceContainer {
         const { createSandboxClient } = await import(
           '../../infrastructure/sandbox-client.js'
         );
+        const internalKeyring = String(
+          this.env.SANDBOX_INTERNAL_HMAC_KEYRING || '',
+        ).trim();
+        const internalActiveKid = String(
+          this.env.SANDBOX_INTERNAL_HMAC_ACTIVE_KID || '',
+        ).trim();
+        let createInternalReadTransport = null;
+        let createInternalExecutionTransport = null;
+        let createInternalFilesWriteTransport = null;
+        let createInternalArtifactTransport = null;
+        let createInternalProcessTransport = null;
+        if (internalKeyring && internalActiveKid) {
+          const { createInternalFilesReadTransport } = await import(
+            '../infrastructure/sandbox/internal-files-read-http.js'
+          );
+          createInternalReadTransport = (runContext) =>
+            createInternalFilesReadTransport({
+              baseUrl: this.env.SANDBOX_BASE_URL || 'http://sandbox:8081',
+              keyring: internalKeyring,
+              activeKid: internalActiveKid,
+              allowInsecureHttp: true,
+              traceState: runContext?.traceState,
+            });
+          const { createInternalExecutionTransport: createExecutionTransport } =
+            await import(
+              '../infrastructure/sandbox/internal-execution-http.js'
+            );
+          createInternalExecutionTransport = (runContext) =>
+            createExecutionTransport({
+              baseUrl: this.env.SANDBOX_BASE_URL || 'http://sandbox:8081',
+              keyring: internalKeyring,
+              activeKid: internalActiveKid,
+              allowInsecureHttp: true,
+              traceState: runContext?.traceState,
+            });
+          const { createInternalFilesWriteTransport: createFilesWriteTransport } = await import(
+            '../infrastructure/sandbox/internal-files-write-http.js'
+          );
+          createInternalFilesWriteTransport = (runContext) =>
+            createFilesWriteTransport({
+              baseUrl: this.env.SANDBOX_BASE_URL || 'http://sandbox:8081',
+              keyring: internalKeyring,
+              activeKid: internalActiveKid,
+              allowInsecureHttp: true,
+              traceState: runContext?.traceState,
+            });
+          const { createInternalArtifactSubmitTransport } = await import(
+            '../infrastructure/sandbox/internal-artifact-submit-http.js'
+          );
+          createInternalArtifactTransport = (runContext) =>
+            createInternalArtifactSubmitTransport({
+              baseUrl: this.env.SANDBOX_BASE_URL || 'http://sandbox:8081',
+              keyring: internalKeyring,
+              activeKid: internalActiveKid,
+              allowInsecureHttp: true,
+              traceState: runContext?.traceState,
+            });
+          const { createInternalProcessTransport: createProcessTransport } =
+            await import(
+              '../infrastructure/sandbox/internal-process-http.js'
+            );
+          createInternalProcessTransport = (runContext) =>
+            createProcessTransport({
+              baseUrl: this.env.SANDBOX_BASE_URL || 'http://sandbox:8081',
+              keyring: internalKeyring,
+              activeKid: internalActiveKid,
+              allowInsecureHttp: true,
+              traceState: runContext?.traceState,
+            });
+        }
         extensionBundleFactory = createSandboxBridgeExtensionBundleFactory({
           createTransportForRun: (runContext) =>
             createRunScopedSandboxBridgeTransport(runContext, {
               createSandboxClient,
               createTransport: createSandboxBridgeHttpTransport,
+              createInternalReadTransport,
+              createInternalExecutionTransport,
+              createInternalFilesWriteTransport,
+              createInternalArtifactTransport,
+              createInternalProcessTransport,
             }),
         });
       }
@@ -750,12 +906,24 @@ export class ServiceContainer {
       sessionAdapter,
       modelResolver: opts.modelResolver,
       workspaceResolver: opts.workspaceResolver,
+      requestAuthResolver:
+        opts.requestAuthResolver ??
+        (String(this.env.LLMIO_API_KEY || '').trim()
+          ? async (model) => ({
+              provider: model.provider,
+              apiKey: String(this.env.LLMIO_API_KEY).trim(),
+            })
+          : undefined),
       generateId: this.generateId,
       now: this.now,
       projector,
       recoveryService,
+      sandboxSessionProvisioner,
       agentDir,
       sessionLockRenewIntervalMs: opts.sessionLockRenewIntervalMs,
+      steerPollIntervalMs:
+        opts.steerPollIntervalMs ??
+        (Number(this.env.AGENT_STEER_POLL_INTERVAL_MS) || undefined),
       extensionBundleFactory,
       eventProjectionMode: opts.eventProjectionMode,
     });
@@ -790,9 +958,47 @@ export class ServiceContainer {
       now: this.now,
       cancelSignal,
     });
+    const steerRunService = new SteerRunService({
+      transactionManager: tx,
+      createRepositories,
+      generateId: this.generateId,
+      now: this.now,
+    });
+    const followUpService = new FollowUpService({ createRunService });
     const eventQueryService = new RunEventQueryService({
       createRepositories,
       db: this.knex,
+    });
+    const traceQueryService = new TraceQueryService({
+      createRepositories,
+      db: this.knex,
+    });
+    const sessionProvisioner = await this.createSandboxSessionProvisioner();
+    const conversationService = new ConversationService({
+      transactionManager: tx,
+      createRepositories,
+      db: this.knex,
+      generateId: this.generateId,
+      now: this.now,
+      sessionProvisioner,
+    });
+    const approvalQueryService = new ApprovalQueryService({
+      createRepositories,
+      db: this.knex,
+    });
+    const approvalDecisionService = new ApprovalDecisionService({
+      transactionManager: tx,
+      createRepositories,
+      runQueue,
+      generateId: this.generateId,
+      now: this.now,
+    });
+    const interactionResponseService = new InteractionResponseService({
+      transactionManager: tx,
+      createRepositories,
+      runQueue,
+      generateId: this.generateId,
+      now: this.now,
     });
 
     // Redis stream is optional acceleration; MySQL remains history authority.
@@ -813,13 +1019,32 @@ export class ServiceContainer {
       runEventStream,
     });
 
-    // PR-12 A2A services (credential + task mapping + SSE projection).
-    // Artifact file.uri: fail closed — Agent has no owner-scoped Sandbox
-    // artifact-id byte transport wired. Never mint download URLs that serve
-    // metadata JSON or trust MySQL relative_path for filesystem reads.
-    // When a safe streamer is later injected, URI minting can be re-enabled
-    // only alongside streamArtifactBytes.
-    const buildArtifactDownloadUri = null;
+    // Mint only capability URLs backed by the HTTP process' owner-scoped
+    // Sandbox byte streamer. Missing any required value keeps file.uri disabled.
+    const a2aPublicBaseUrl = String(
+      this.env.A2A_PUBLIC_BASE_URL || '',
+    ).trim();
+    const a2aArtifactDownloadSecret = String(
+      this.env.A2A_ARTIFACT_DOWNLOAD_SECRET || '',
+    ).trim();
+    const sandboxInternalHmacKeyring = String(
+      this.env.SANDBOX_INTERNAL_HMAC_KEYRING || '',
+    ).trim();
+    const sandboxInternalHmacActiveKid = String(
+      this.env.SANDBOX_INTERNAL_HMAC_ACTIVE_KID || '',
+    ).trim();
+    const buildArtifactDownloadUri =
+      a2aPublicBaseUrl &&
+      a2aArtifactDownloadSecret &&
+      sandboxInternalHmacKeyring &&
+      sandboxInternalHmacActiveKid
+        ? (input) =>
+            mintArtifactDownloadUri({
+              ...input,
+              baseUrl: a2aPublicBaseUrl,
+              secret: a2aArtifactDownloadSecret,
+            })
+        : null;
 
     const a2aCredentialService = new A2aCredentialService({
       createRepositories,
@@ -832,6 +1057,8 @@ export class ServiceContainer {
       createRunService,
       getRunService,
       cancelRunService,
+      steerRunService,
+      followUpService,
       eventQueryService,
       createRepositories,
       transactionManager: tx,
@@ -855,6 +1082,11 @@ export class ServiceContainer {
       getRunService,
       cancelRunService,
       eventQueryService,
+      traceQueryService,
+      conversationService,
+      approvalQueryService,
+      approvalDecisionService,
+      interactionResponseService,
       eventSseService,
       runEventStream,
       a2aCredentialService,

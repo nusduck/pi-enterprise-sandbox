@@ -556,6 +556,17 @@ export function assertExtensionsLoadedClean(services, session) {
       { code: 'PI_EXTENSION_LOAD_FAILED' },
     );
   }
+  const diagnostics = Array.isArray(services?.diagnostics)
+    ? services.diagnostics.filter((item) => item?.type === 'error')
+    : [];
+  if (diagnostics.length > 0) {
+    throw new PiRuntimeFactoryError(
+      `Extension service initialization failed (fail-closed): ${diagnostics
+        .map((item) => String(item.message || 'error'))
+        .join('; ')}`,
+      { code: 'PI_EXTENSION_LOAD_FAILED' },
+    );
+  }
   // If factories were requested, ensure runner exists after bind path.
   void session;
 }
@@ -611,6 +622,7 @@ export class PiRuntimeFactory {
    *   cwd?: string,
    *   agentDir?: string,
    *   model?: object | null,
+   *   requestAuth?: { provider?: string, apiKey?: string } | null,
    *   sessionManager?: any,
    *   services?: any,
    *   extensionFactories?: unknown[],
@@ -648,17 +660,6 @@ export class PiRuntimeFactory {
         : this.extensionFactories;
 
     const bound = bindAgentVersionConfig(input.agentVersion);
-    const bindings = resolveAgentVersionBindings(bound, {
-      extensionFactories: resolvedExtensionFactories,
-      skillsOverride: input.skillsOverride ?? this.skillsOverride ?? undefined,
-      customTools: input.customTools ?? this.customTools ?? undefined,
-      tools: input.tools ?? this.tools ?? undefined,
-      mcpResolver: input.mcpResolver ?? this.mcpResolver,
-      toolPolicyBinding: input.toolPolicyBinding ?? this.toolPolicyBinding,
-      sandboxPolicyBinding:
-        input.sandboxPolicyBinding ?? this.sandboxPolicyBinding,
-    });
-
     const cwd = input.cwd || this.defaultCwd;
     const agentSessionId = String(input.agentSession.agentSessionId);
 
@@ -670,11 +671,23 @@ export class PiRuntimeFactory {
     let ownedSessionDir = null;
     /** @type {any} */
     let runtime = null;
+    /** @type {any} */
+    let mcpBinding = null;
+    /** @type {ReturnType<typeof resolveAgentVersionBindings> | null} */
+    let bindings = null;
     let disposed = false;
     /** @type {number} */
     let bindCount = 0;
 
     const cleanupOwned = async () => {
+      if (mcpBinding && typeof mcpBinding.cleanup === 'function') {
+        try {
+          await mcpBinding.cleanup();
+        } catch {
+          /* best-effort */
+        }
+        mcpBinding = null;
+      }
       if (ownedSessionDir) {
         try {
           await this.sessionAdapter.dispose({ paths: [ownedSessionDir] });
@@ -695,10 +708,7 @@ export class PiRuntimeFactory {
       }
     };
 
-    const shouldBind =
-      (input.bindExtensions ?? this.bindExtensionsEnabled) !== false &&
-      Array.isArray(bindings.extensionFactories) &&
-      bindings.extensionFactories.length > 0;
+    let shouldBind = false;
 
     /**
      * bindExtensions exactly once per session instance; re-invoked on rebind.
@@ -755,6 +765,59 @@ export class PiRuntimeFactory {
     };
 
     try {
+      const configuredMcpResolver = input.mcpResolver ?? this.mcpResolver;
+      if (bound.mcpServers.length > 0) {
+        try {
+          mcpBinding =
+            typeof configuredMcpResolver === 'function'
+              ? await configuredMcpResolver({
+                  mcpServers: bound.mcpServers,
+                  agentVersion: input.agentVersion,
+                  agentSession: input.agentSession,
+                  cwd,
+                  agentDir,
+                  context: input.context ?? null,
+                })
+              : configuredMcpResolver;
+        } catch (error) {
+          throw new PiRuntimeFactoryError(
+            error instanceof Error
+              ? `MCP runtime binding failed: ${error.message}`
+              : 'MCP runtime binding failed',
+            { code: /** @type {any} */ (error)?.code ?? 'PI_MCP_BIND_FAILED' },
+          );
+        }
+        if (
+          !mcpBinding ||
+          mcpBinding.enabled !== true ||
+          typeof mcpBinding.extensionPath !== 'string' ||
+          !mcpBinding.extensionPath ||
+          !(mcpBinding.extensionFlagValues instanceof Map) ||
+          typeof mcpBinding.extensionsOverride !== 'function'
+        ) {
+          throw new PiRuntimeFactoryError(
+            'MCP resolver must return an enabled vendor extension binding',
+            { code: 'PI_MCP_BIND_FAILED' },
+          );
+        }
+      }
+
+      bindings = resolveAgentVersionBindings(bound, {
+        extensionFactories: resolvedExtensionFactories,
+        skillsOverride: input.skillsOverride ?? this.skillsOverride ?? undefined,
+        customTools: input.customTools ?? this.customTools ?? undefined,
+        tools: input.tools ?? this.tools ?? undefined,
+        mcpResolver: mcpBinding,
+        toolPolicyBinding: input.toolPolicyBinding ?? this.toolPolicyBinding,
+        sandboxPolicyBinding:
+          input.sandboxPolicyBinding ?? this.sandboxPolicyBinding,
+      });
+      shouldBind =
+        (input.bindExtensions ?? this.bindExtensionsEnabled) !== false &&
+        ((Array.isArray(bindings.extensionFactories) &&
+          bindings.extensionFactories.length > 0) ||
+          mcpBinding?.enabled === true);
+
       if (!sessionManager) {
         if (input.piSnapshot?.snapshotJson) {
           const opened = await this.sessionAdapter.openFromSnapshot({
@@ -778,6 +841,37 @@ export class PiRuntimeFactory {
       const sdk = await this.loadSdk();
       assertSdkVersionPinned(sdk);
 
+      // Pi resolves provider credentials through ModelRegistry. Keep the key in
+      // request-owned in-memory AuthStorage, never in the model descriptor.
+      let authStorage = input.authStorage ?? null;
+      const requestAuth = input.requestAuth;
+      if (!authStorage && requestAuth?.apiKey) {
+        const provider = String(
+          requestAuth.provider || model?.provider || '',
+        ).trim();
+        if (!provider) {
+          throw new PiRuntimeFactoryError(
+            'requestAuth.provider is required when an API key is supplied',
+            { code: 'PI_REQUEST_AUTH_INVALID' },
+          );
+        }
+        if (model?.provider && provider !== String(model.provider)) {
+          throw new PiRuntimeFactoryError(
+            'requestAuth.provider must match model.provider',
+            { code: 'PI_REQUEST_AUTH_INVALID' },
+          );
+        }
+        if (typeof sdk.AuthStorage?.inMemory !== 'function') {
+          throw new PiRuntimeFactoryError(
+            'SDK AuthStorage.inMemory is required for request-scoped provider auth',
+            { code: 'PI_REQUEST_AUTH_UNAVAILABLE' },
+          );
+        }
+        authStorage = sdk.AuthStorage.inMemory({
+          [provider]: { type: 'api_key', key: String(requestAuth.apiKey) },
+        });
+      }
+
       const createServices = this.createServices ?? sdk.createAgentSessionServices;
       const createFromServices =
         this.createFromServices ?? sdk.createAgentSessionFromServices;
@@ -798,14 +892,34 @@ export class PiRuntimeFactory {
       const injectedServices = input.services ?? null;
 
       const createRuntime = async (opts) => {
+        const resourceLoaderOptions = {
+          ...bindings.resourceLoaderOptions,
+        };
+        if (mcpBinding?.enabled) {
+          resourceLoaderOptions.additionalExtensionPaths = [
+            ...(Array.isArray(resourceLoaderOptions.additionalExtensionPaths)
+              ? resourceLoaderOptions.additionalExtensionPaths
+              : []),
+            mcpBinding.extensionPath,
+          ];
+          const existingOverride = resourceLoaderOptions.extensionsOverride;
+          resourceLoaderOptions.extensionsOverride = (base) =>
+            mcpBinding.extensionsOverride(
+              typeof existingOverride === 'function'
+                ? existingOverride(base)
+                : base,
+            );
+        }
         const services =
           injectedServices ??
           (await createServices({
             cwd: opts.cwd,
             agentDir: opts.agentDir,
-            resourceLoaderOptions: {
-              ...bindings.resourceLoaderOptions,
-            },
+            ...(authStorage ? { authStorage } : {}),
+            resourceLoaderOptions,
+            ...(mcpBinding?.enabled
+              ? { extensionFlagValues: mcpBinding.extensionFlagValues }
+              : {}),
           }));
 
         // Fail-closed on extension load errors before session create.
@@ -899,6 +1013,7 @@ export class PiRuntimeFactory {
         agentVersionId: bound.agentVersionId,
         bindings,
         bound,
+        mcpBinding,
         model,
         bindCount,
         dispose,

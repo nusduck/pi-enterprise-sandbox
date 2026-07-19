@@ -36,14 +36,9 @@ RUN groupadd -g 10001 sandbox && \
         /home/sandbox/workspace \
         /home/sandbox/skill \
         /var/sandbox/workspaces \
-        /var/sandbox/tmp \
-        /sandbox/workspace \
-        /sandbox/skills \
-        /sandbox/data && \
-    # Keep legacy /sandbox/* paths as compatibility pointers into the P3 layout
-    ln -sfn /home/sandbox/skill /sandbox/skills-link || true && \
+        /var/sandbox/tmp && \
     chmod 0700 /var/sandbox/workspaces /var/sandbox/tmp && \
-    chown -R sandbox:sandbox /home/sandbox /sandbox /var/sandbox
+    chown -R sandbox:sandbox /home/sandbox /var/sandbox
 
 WORKDIR /app
 

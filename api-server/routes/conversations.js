@@ -1,10 +1,11 @@
 /**
- * Routes: conversation CRUD proxies → sandbox /conversations
- * Run/event timeline is Agent MySQL (PR-13 — no Sandbox agent_runs dual path).
+ * Conversation CRUD and run/event timeline are both Agent MySQL authority.
  */
-import * as sb from '../services/sandbox-client.js';
-import { authFromRequest } from '../services/sandbox-client.js';
 import {
+  createAgentConversation,
+  deleteAgentConversation,
+  getAgentConversation,
+  listAgentConversations,
   listAgentRuns,
   listAgentEvents,
 } from '../services/agent-client.js';
@@ -19,7 +20,8 @@ import { sendError, sendJson as json } from '../http/response.js';
  */
 export async function handleListConversations(res, req) {
   try {
-    const list = await sb.listConversations(authFromRequest(req));
+    const auth = await resolveTrustedAuth(req);
+    const list = await listAgentConversations({ auth, traceId: req?.traceId });
     json(res, 200, list);
   } catch (err) {
     console.error('[conversations] list:', err.message);
@@ -32,7 +34,11 @@ export async function handleListConversations(res, req) {
  */
 export async function handleGetConversation(id, res, req) {
   try {
-    const conv = await sb.getConversation(id, authFromRequest(req));
+    const auth = await resolveTrustedAuth(req);
+    const conv = await getAgentConversation(id, {
+      auth,
+      traceId: req?.traceId,
+    });
     json(res, 200, conv);
   } catch (err) {
     console.error('[conversations] get:', err.message);
@@ -46,7 +52,11 @@ export async function handleGetConversation(id, res, req) {
 export async function handleCreateConversation(body, res, req) {
   try {
     const title = body?.title || 'New chat';
-    const conv = await sb.createConversation(title, authFromRequest(req));
+    const auth = await resolveTrustedAuth(req);
+    const conv = await createAgentConversation(
+      { title },
+      { auth, traceId: req?.traceId },
+    );
     json(res, 201, conv);
   } catch (err) {
     console.error('[conversations] create:', err.message);
@@ -59,7 +69,8 @@ export async function handleCreateConversation(body, res, req) {
  */
 export async function handleDeleteConversation(id, res, req) {
   try {
-    await sb.deleteConversation(id, authFromRequest(req));
+    const auth = await resolveTrustedAuth(req);
+    await deleteAgentConversation(id, { auth, traceId: req?.traceId });
     res.writeHead(204);
     res.end();
   } catch (err) {

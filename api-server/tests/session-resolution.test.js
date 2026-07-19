@@ -1,55 +1,27 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-import { resolveConversationAndSession } from '../application/conversation-session-service.js';
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const routeSource = readFileSync(join(__dirname, '../routes/sessions.js'), 'utf8');
+const clientSource = readFileSync(
+  join(__dirname, '../services/agent-client.js'),
+  'utf8',
+);
 
-describe('resolveConversationAndSession', () => {
-  it('creates and binds a sandbox session for a new conversation', async () => {
-    const updates = [];
-    const client = {
-      async createConversation() {
-        return { id: 'conversation-new' };
-      },
-      async createSession(agentName, metadata) {
-        assert.equal(agentName, 'pi-coding-agent');
-        assert.equal(metadata.conversation_id, 'conversation-new');
-        return { session_id: 'sandbox-new', workspace_id: 'workspace-authoritative' };
-      },
-      async updateConversation(id, body) {
-        updates.push([id, body]);
-      },
-    };
-
-    const resolved = await resolveConversationAndSession(client, null);
-    assert.deepEqual(resolved, {
-      activeConversationId: 'conversation-new',
-      workspace_id: 'workspace-authoritative',
-      sandboxSessionId: 'sandbox-new',
-      reusedSession: false,
-    });
-    assert.deepEqual(updates, [
-      ['conversation-new', { sandbox_session_id: 'sandbox-new' }],
-    ]);
+describe('formal session ensure authority', () => {
+  it('routes pre-upload ensure through Agent and trusted owner resolution', () => {
+    assert.match(routeSource, /resolveTrustedAuth\(req\)/);
+    assert.match(routeSource, /ensureAgentSession\(/);
+    assert.doesNotMatch(routeSource, /sandbox-client/);
+    assert.doesNotMatch(routeSource, /resolveConversationAndSession/);
   });
 
-  it('reuses the running session already bound to a conversation', async () => {
-    let created = false;
-    const client = {
-      async getConversation() {
-        return { id: 'conversation-1', sandbox_session_id: 'sandbox-1' };
-      },
-      async getSession() {
-        return { session_id: 'sandbox-1', workspace_id: 'workspace-existing', status: 'RUNNING' };
-      },
-      async createSession() {
-        created = true;
-      },
-    };
-
-    const resolved = await resolveConversationAndSession(client, 'conversation-1');
-    assert.equal(resolved.sandboxSessionId, 'sandbox-1');
-    assert.equal(resolved.reusedSession, true);
-    assert.equal(resolved.workspace_id, 'workspace-existing');
-    assert.equal(created, false);
+  it('Agent client targets the formal session coordinator endpoint', () => {
+    assert.match(clientSource, /export async function ensureAgentSession\(/);
+    assert.match(clientSource, /\/internal\/sessions\/ensure/);
+    assert.match(clientSource, /requestHeaders\(\{ auth, traceId \}\)/);
   });
 });

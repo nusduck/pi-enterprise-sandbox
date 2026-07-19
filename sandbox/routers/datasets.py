@@ -99,15 +99,19 @@ def _dataset_http_error(exc: DatasetError) -> HTTPException:
 @router.get("", response_model=DatasetListResponse)
 def list_datasets(session_id: str, request: Request, ready_only: bool = False):
     session = _require_session(session_id, request)
-    actor = resolve_actor(request)
-    org = actor.organization_id if actor else None
-    uid = actor.user_id if actor else getattr(session, "user_id", None)
-    rows = dataset_manager.list_for_session(
-        session_id,
-        org_id=org,
-        user_id=uid,
-        ready_only=ready_only,
+    org, uid, _conversation_id, agent_session_id = _ownership_from_request(
+        session, request
     )
+    try:
+        rows = dataset_manager.list_for_session(
+            session_id,
+            org_id=org,
+            user_id=uid,
+            agent_session_id=agent_session_id,
+            ready_only=ready_only,
+        )
+    except DatasetError as exc:
+        raise _dataset_http_error(exc) from exc
     datasets = [_entry_to_response(e) for e in rows]
     return DatasetListResponse(datasets=datasets, total=len(datasets))
 
@@ -115,15 +119,19 @@ def list_datasets(session_id: str, request: Request, ready_only: bool = False):
 @router.get("/{dataset_id}", response_model=DatasetResponse)
 def get_dataset(session_id: str, dataset_id: str, request: Request):
     session = _require_session(session_id, request)
-    actor = resolve_actor(request)
-    org = actor.organization_id if actor else None
-    uid = actor.user_id if actor else getattr(session, "user_id", None)
-    entry = dataset_manager.get(
-        dataset_id,
-        org_id=org,
-        user_id=uid,
-        sandbox_session_id=session_id,
+    org, uid, _conversation_id, agent_session_id = _ownership_from_request(
+        session, request
     )
+    try:
+        entry = dataset_manager.get(
+            dataset_id,
+            org_id=org,
+            user_id=uid,
+            sandbox_session_id=session_id,
+            agent_session_id=agent_session_id,
+        )
+    except DatasetError as exc:
+        raise _dataset_http_error(exc) from exc
     if entry is None:
         raise HTTPException(status_code=404, detail="Dataset not found")
     return _entry_to_response(entry)
@@ -138,6 +146,8 @@ async def upload_dataset(
     user_id: str | None = Header(default=None, alias="X-User-Id"),
     conversation_id: str | None = Header(default=None, alias="X-Conversation-Id"),
     content_length: str | None = Header(default=None, alias="Content-Length"),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    x_idempotency_key: str | None = Header(default=None, alias="X-Idempotency-Key"),
 ):
     """Stream multipart file into ``datasets/{id}/{safe_name}``.
 
@@ -148,6 +158,23 @@ async def upload_dataset(
     - Disconnect / error aborts temp + incomplete metadata (never READY)
     """
     session = _require_session(session_id, request)
+    if idempotency_key and x_idempotency_key and idempotency_key != x_idempotency_key:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": "dataset_idempotency_key_invalid",
+                "message": "Idempotency-Key headers disagree",
+            },
+        )
+    idem_key = idempotency_key or x_idempotency_key
+    if dataset_manager.formal.authoritative and not str(idem_key or "").strip():
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": "dataset_idempotency_key_required",
+                "message": "Idempotency-Key is required for Dataset creation",
+            },
+        )
     context = SandboxExecutionContext.from_session(session)
     org, uid, conv, agent_sess = _ownership_from_request(
         session,
@@ -178,6 +205,7 @@ async def upload_dataset(
             original_filename=filename,
             mime_type=file.content_type,
             declared_size=declared,
+            idempotency_key=idem_key,
         )
         while True:
             chunk = await file.read(_CHUNK_SIZE)
@@ -210,8 +238,20 @@ def abort_dataset(session_id: str, dataset_id: str, request: Request):
     """Cancel an in-flight upload; cleans temp and incomplete metadata."""
     from fastapi.responses import Response
 
-    _require_session(session_id, request)
-    entry = dataset_manager.get(dataset_id, sandbox_session_id=session_id)
+    session = _require_session(session_id, request)
+    org, uid, _conversation_id, agent_session_id = _ownership_from_request(
+        session, request
+    )
+    try:
+        entry = dataset_manager.get(
+            dataset_id,
+            org_id=org,
+            user_id=uid,
+            sandbox_session_id=session_id,
+            agent_session_id=agent_session_id,
+        )
+    except DatasetError as exc:
+        raise _dataset_http_error(exc) from exc
     if entry is None:
         raise HTTPException(status_code=404, detail="Dataset not found")
     dataset_manager.abort_upload(dataset_id, reason="client_abort")

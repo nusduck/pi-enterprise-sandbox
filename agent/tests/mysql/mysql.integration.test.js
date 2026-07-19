@@ -14,6 +14,8 @@ import { createRequire } from 'node:module';
 import {
   CORE_TABLES_CREATE_ORDER,
   SANDBOX_EXECUTION_DOMAIN_TABLES,
+  TRACE_TABLES,
+  INTERACTION_TABLES,
 } from '../../src/infrastructure/mysql/schema-tables.js';
 
 const TEST_URL = process.env.TEST_MYSQL_URL || '';
@@ -49,6 +51,8 @@ const TRACE = 'c'.repeat(32);
 
 /** Child → parent truncate order (FK-safe with checks off; TRUNCATE skips row DELETE triggers). */
 const TRUNCATE_ORDER = Object.freeze([
+  ...TRACE_TABLES,
+  ...INTERACTION_TABLES,
   'idempotency_records',
   'domain_outbox',
   'approvals',
@@ -186,6 +190,12 @@ describeMysql('mysql integration (TEST_MYSQL_URL)', () => {
 
     for (const t of SANDBOX_EXECUTION_DOMAIN_TABLES) {
       assert.ok(names.has(t), `missing sandbox domain table ${t}`);
+    }
+    for (const t of TRACE_TABLES) {
+      assert.ok(names.has(t), `missing trace table ${t}`);
+    }
+    for (const t of INTERACTION_TABLES) {
+      assert.ok(names.has(t), `missing interaction table ${t}`);
     }
 
     // process_executions tenant ownership columns
@@ -469,5 +479,120 @@ describeMysql('mysql integration (TEST_MYSQL_URL)', () => {
 
     const listed = await events.listByRun(RUN, { orgId: ORG, userId: USER });
     assert.equal(listed.length, N);
+  });
+
+  it('persists and owner-queries durable trace spans with formal indexes/FKs', async () => {
+    await clearAllData();
+    await seedGraph();
+
+    const [indexRows] = await knex.raw('SHOW INDEX FROM `trace_spans`');
+    const indexNames = new Set(
+      indexRows.map((row) => String(row.Key_name ?? row.KEY_NAME ?? '')),
+    );
+    // MySQL normalizes a named primary key to PRIMARY in SHOW INDEX output.
+    assert.ok(indexNames.has('PRIMARY') || indexNames.has('pk_trace_spans'));
+    assert.ok(indexNames.has('idx_trace_spans_owner'));
+    assert.ok(indexNames.has('idx_trace_spans_run'));
+    assert.ok(indexNames.has('idx_trace_spans_parent'));
+
+    const [foreignKeys] = await knex.raw(
+      `SELECT COLUMN_NAME AS column_name, REFERENCED_TABLE_NAME AS referenced_table
+       FROM information_schema.KEY_COLUMN_USAGE
+       WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'trace_spans'
+         AND REFERENCED_TABLE_NAME IS NOT NULL`,
+    );
+    const fkMap = new Map(
+      foreignKeys.map((row) => [
+        String(row.column_name ?? row.COLUMN_NAME),
+        String(row.referenced_table ?? row.REFERENCED_TABLE_NAME),
+      ]),
+    );
+    assert.equal(fkMap.get('org_id'), 'organizations');
+    assert.equal(fkMap.get('user_id'), 'users');
+    assert.equal(fkMap.get('run_id'), 'runs');
+
+    const spans = new mysql.TraceSpanRepository(knex, {
+      now: () => new Date('2026-07-19T00:00:00.000Z'),
+    });
+    const root = await spans.upsert({
+      orgId: ORG,
+      userId: USER,
+      traceId: TRACE,
+      spanId: '1'.repeat(16),
+      runId: RUN,
+      conversationId: CONV,
+      agentSessionId: SESS,
+      kind: 'run',
+      name: 'Run',
+      status: 'running',
+      attributes: { source: 'integration', prompt: 'must not persist' },
+    });
+    await spans.upsert({
+      orgId: ORG,
+      userId: USER,
+      traceId: TRACE,
+      spanId: '2'.repeat(16),
+      parentSpanId: root.spanId,
+      runId: RUN,
+      conversationId: CONV,
+      agentSessionId: SESS,
+      kind: 'tool',
+      name: 'Tool call',
+      status: 'ok',
+      startedAt: new Date('2026-07-19T00:00:00.000Z'),
+      finishedAt: new Date('2026-07-19T00:00:00.010Z'),
+      attributes: { toolName: 'echo', arguments: { secret: 'omit' } },
+    });
+
+    const listed = await spans.listByRun(
+      RUN,
+      TRACE,
+      { orgId: ORG, userId: USER },
+    );
+    assert.equal(listed.length, 2);
+    assert.equal(listed[1].parentSpanId, root.spanId);
+    assert.deepEqual(listed[0].attributes, { source: 'integration' });
+    assert.equal(listed[1].durationMs, 10);
+  });
+
+  it('does not shift DATETIME values when trace facts are materialized repeatedly', async () => {
+    const originalTz = process.env.TZ;
+    process.env.TZ = 'Asia/Shanghai';
+    try {
+      await clearAllData();
+      await seedGraph();
+      await knex('runs').where({ run_id: RUN }).update({
+        created_at: '2026-07-18 19:36:59.479',
+        updated_at: '2026-07-18 19:36:59.479',
+      });
+
+      const scope = { orgId: ORG, userId: USER };
+      const runs = new mysql.RunRepository(knex);
+      const run = await runs.requireById(RUN, scope);
+      assert.equal(run.createdAt, '2026-07-18T19:36:59.479Z');
+
+      const spans = new mysql.TraceSpanRepository(knex, {
+        now: () => new Date('2026-07-18T19:37:00.000Z'),
+      });
+      await spans.materializeRunFacts(run, scope);
+      const first = await knex('trace_spans')
+        .where({ run_id: RUN })
+        .select('span_id', 'started_at', 'finished_at', 'duration_ms')
+        .orderBy('span_id', 'asc');
+
+      await spans.materializeRunFacts(run, scope);
+      const second = await knex('trace_spans')
+        .where({ run_id: RUN })
+        .select('span_id', 'started_at', 'finished_at', 'duration_ms')
+        .orderBy('span_id', 'asc');
+
+      assert.equal(first.length, 1);
+      assert.equal(typeof first[0].started_at, 'string');
+      assert.equal(first[0].started_at, '2026-07-18 19:36:59.479');
+      assert.deepEqual(second, first);
+    } finally {
+      if (originalTz == null) delete process.env.TZ;
+      else process.env.TZ = originalTz;
+    }
   });
 });

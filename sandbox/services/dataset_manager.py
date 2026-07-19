@@ -10,13 +10,14 @@ PR-09:
 from __future__ import annotations
 
 import hashlib
+import json
 import mimetypes
 import os
 import re
 import stat
 import threading
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, BinaryIO, Iterator
 
@@ -29,6 +30,7 @@ from sandbox.services.control_plane_storage import (
     dataset_staging_path,
     ensure_control_roots,
     ensure_dataset_staging_parent,
+    open_workspace_leaf_nofollow,
     secure_publish_to_workspace,
     unlink_control_file,
     unlink_workspace_leaf_if_matches,
@@ -51,6 +53,7 @@ DATASET_STATUS_READY = "ready"
 DATASET_STATUS_FAILED = "failed"
 
 _COMPOUND_SUFFIXES = (".tar.gz", ".tar.bz2", ".tar.xz")
+_IDEMPOTENCY_OPERATION_PREFIX = "dataset.upload:"
 
 
 class DatasetError(Exception):
@@ -109,6 +112,50 @@ def staging_relative_path(dataset_id: str, safe_filename: str) -> str:
     return f".dataset-staging/{dataset_id}/{safe_filename}.part"
 
 
+def normalize_dataset_idempotency_key(value: str | None) -> str | None:
+    if value is None:
+        return None
+    key = str(value).strip()
+    if not key:
+        return None
+    if len(key) > 255 or any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in key):
+        raise DatasetError(
+            "dataset_idempotency_key_invalid",
+            "Idempotency-Key must be 1..255 printable characters",
+            status=400,
+        )
+    return key
+
+
+def dataset_upload_request_hash(
+    entry: "DatasetEntry",
+    *,
+    content_sha256: str,
+    size_bytes: int,
+) -> str:
+    """Hash the logical file request, independent of multipart boundaries."""
+    canonical = {
+        "v": 1,
+        "org_id": entry.org_id,
+        "user_id": entry.user_id,
+        "conversation_id": entry.conversation_id,
+        "agent_session_id": entry.agent_session_id,
+        "sandbox_session_id": entry.sandbox_session_id,
+        "workspace_id": entry.workspace_id,
+        "filename": entry.original_filename,
+        "mime_type": entry.mime_type or "application/octet-stream",
+        "size_bytes": int(size_bytes),
+        "content_sha256": str(content_sha256).lower(),
+    }
+    encoded = json.dumps(
+        canonical,
+        ensure_ascii=True,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
 @dataclass
 class DatasetEntry:
     dataset_id: str
@@ -126,6 +173,7 @@ class DatasetEntry:
     sha256: str | None = None
     completed_at: str | None = None
     workspace_id: str | None = None
+    idempotency_key: str | None = None
 
     def to_public(self) -> dict[str, Any]:
         path = (
@@ -166,6 +214,7 @@ class _InFlight:
     workspace_id: str
     formal_path: str
     safe_name: str
+    idempotency_key: str | None
 
 
 class DatasetManager:
@@ -221,6 +270,7 @@ class DatasetManager:
         mime_type: str | None = None,
         declared_size: int | None = None,
         dataset_id: str | None = None,
+        idempotency_key: str | None = None,
     ) -> DatasetEntry:
         if getattr(self._formal, "_wire_error", None) is not None and self._formal.authoritative:
             raise DatasetError(
@@ -240,6 +290,8 @@ class DatasetManager:
         conversation_id = (conversation_id or "").strip()
         agent_session_id = (agent_session_id or "").strip()
         workspace_id = (workspace_key or "").strip()
+        idem_key = normalize_dataset_idempotency_key(idempotency_key)
+        idempotent_formal = bool(idem_key and self._formal.enabled)
         if not (org_id and user_id and conversation_id and agent_session_id):
             raise DatasetError(
                 "dataset_ownership_required",
@@ -258,6 +310,12 @@ class DatasetManager:
         formal_rel = logical_dataset_path(did, safe_name)
 
         max_bytes = self.max_file_bytes()
+        if declared_size is not None and declared_size < 0:
+            raise DatasetError(
+                "dataset_size_invalid",
+                "Declared file size must be non-negative",
+                status=400,
+            )
         if declared_size is not None and declared_size > max_bytes:
             raise DatasetError(
                 "dataset_too_large",
@@ -265,7 +323,10 @@ class DatasetManager:
                 status=413,
             )
 
-        reserve_n = int(declared_size or 0)
+        # Durable idempotent uploads cannot know the final resource path until
+        # their content hash is computed and the formal reservation is loaded.
+        # Defer quota charging so crash recovery can credit an existing target.
+        reserve_n = 0 if idempotent_formal else int(declared_size or 0)
         try:
             reservation = self._quota.reserve(
                 workspace_path, workspace_id, reserve_n
@@ -303,41 +364,42 @@ class DatasetManager:
             conversation_id=conversation_id,
             agent_session_id=agent_session_id,
             sandbox_session_id=sandbox_session_id,
-            original_filename=Path(original_filename).name or safe_name,
+            original_filename=safe_name,
             stored_relative_path=formal_rel,
             status=DATASET_STATUS_UPLOADING,
             created_at=now,
             mime_type=mime,
             workspace_id=workspace_id,
+            idempotency_key=idem_key,
         )
 
-        scope = OwnerScope(org_id=org_id, user_id=user_id)
-        try:
-            self._formal.create_uploading(
-                {
-                    "dataset_id": did,
-                    "org_id": org_id,
-                    "user_id": user_id,
-                    "conversation_id": conversation_id,
-                    "agent_session_id": agent_session_id,
-                    "original_filename": entry.original_filename,
-                    "stored_relative_path": formal_rel,
-                    "mime_type": mime,
-                    "size_bytes": None,
-                    "sha256": None,
-                    "status": DATASET_STATUS_UPLOADING,
-                    "created_at": to_mysql_datetime(),
-                    "completed_at": None,
-                }
-            )
-        except FormalDatasetError as exc:
+        if not idempotent_formal:
             try:
-                handle.close()
-            except OSError:
-                pass
-            unlink_control_file(temp)
-            reservation.release()
-            raise DatasetError(exc.code, exc.message, status=exc.status) from exc
+                self._formal.create_uploading(
+                    {
+                        "dataset_id": did,
+                        "org_id": org_id,
+                        "user_id": user_id,
+                        "conversation_id": conversation_id,
+                        "agent_session_id": agent_session_id,
+                        "original_filename": entry.original_filename,
+                        "stored_relative_path": formal_rel,
+                        "mime_type": mime,
+                        "size_bytes": None,
+                        "sha256": None,
+                        "status": DATASET_STATUS_UPLOADING,
+                        "created_at": to_mysql_datetime(),
+                        "completed_at": None,
+                    }
+                )
+            except FormalDatasetError as exc:
+                try:
+                    handle.close()
+                except OSError:
+                    pass
+                unlink_control_file(temp)
+                reservation.release()
+                raise DatasetError(exc.code, exc.message, status=exc.status) from exc
 
         with self._lock:
             self._entries[did] = entry
@@ -353,6 +415,7 @@ class DatasetManager:
                 workspace_id=workspace_id,
                 formal_path=formal_rel,
                 safe_name=safe_name,
+                idempotency_key=idem_key if idempotent_formal else None,
             )
         return entry
 
@@ -374,7 +437,9 @@ class DatasetManager:
             else:
                 res = inflight.reservation
                 try:
-                    if res is not None and new_size > res.bytes:
+                    if inflight.idempotency_key is not None:
+                        pass
+                    elif res is not None and new_size > res.bytes:
                         self._quota.try_grow(
                             inflight.workspace_path, res, new_size
                         )
@@ -438,6 +503,13 @@ class DatasetManager:
             ) from exc
 
         digest = hasher.hexdigest()
+        if inflight.idempotency_key is not None:
+            return self._finish_idempotent_upload(
+                dataset_id,
+                inflight=inflight,
+                content_sha256=digest,
+            )
+
         parts = tuple(p for p in Path(formal_rel).parts if p not in ("", "."))
         published_identity = None
         try:
@@ -495,6 +567,208 @@ class DatasetManager:
             res.commit()
         return entry
 
+    def _finish_idempotent_upload(
+        self,
+        candidate_id: str,
+        *,
+        inflight: _InFlight,
+        content_sha256: str,
+    ) -> DatasetEntry:
+        entry = inflight.entry
+        temp = inflight.temp_path
+        size = inflight.size
+        workspace_path = inflight.workspace_path
+        workspace_id = inflight.workspace_id
+        key = inflight.idempotency_key
+        if key is None:
+            raise DatasetError(
+                "dataset_idempotency_key_invalid",
+                "Idempotency-Key is required",
+                status=400,
+            )
+        operation = f"{_IDEMPOTENCY_OPERATION_PREFIX}{entry.conversation_id}"
+        request_hash = dataset_upload_request_hash(
+            entry,
+            content_sha256=content_sha256,
+            size_bytes=size,
+        )
+        completed_at = to_mysql_datetime()
+        quota_box: list[QuotaReservation | None] = [inflight.reservation]
+
+        def durable_quota_id(resource_id: str) -> str:
+            return f"dataset-{resource_id}"
+
+        def publish(record: Any) -> None:
+            parts = tuple(
+                p
+                for p in Path(record.stored_relative_path).parts
+                if p not in ("", ".")
+            )
+            existing_bytes = self._existing_target_size(
+                workspace_path=workspace_path,
+                relative_parts=parts,
+            )
+            if quota_box[0] is not None:
+                quota_box[0].release()
+            quota_box[0] = self._quota.reserve_replacement(
+                workspace_path,
+                workspace_id,
+                size,
+                existing_bytes=existing_bytes,
+                reservation_id=durable_quota_id(record.dataset_id),
+            )
+            inflight.reservation = quota_box[0]
+            secure_publish_to_workspace(
+                src_control_path=temp,
+                workspace_path=Path(workspace_path),
+                relative_parts=parts,
+                max_bytes=self.max_file_bytes(),
+            )
+
+        def response_factory(record: Any) -> dict[str, Any]:
+            response = self._entry_from_formal(
+                record,
+                sandbox_session_id=entry.sandbox_session_id,
+                workspace_id=workspace_id,
+            )
+            response.status = DATASET_STATUS_READY
+            response.size_bytes = size
+            response.sha256 = content_sha256
+            response.completed_at = completed_at
+            return response.to_public()
+
+        formal_input = {
+            "dataset_id": candidate_id,
+            "org_id": entry.org_id,
+            "user_id": entry.user_id,
+            "conversation_id": entry.conversation_id,
+            "agent_session_id": entry.agent_session_id,
+            "original_filename": entry.original_filename,
+            "stored_relative_path": entry.stored_relative_path,
+            "mime_type": entry.mime_type,
+            "size_bytes": None,
+            "sha256": None,
+            "status": DATASET_STATUS_UPLOADING,
+            "created_at": to_mysql_datetime(),
+            "completed_at": None,
+            "expires_at": to_mysql_datetime(
+                datetime.now(timezone.utc) + timedelta(days=30)
+            ),
+        }
+        try:
+            _outcome, record = self._formal.finish_idempotent_upload(
+                formal_input,
+                idempotency_key=key,
+                operation=operation,
+                request_hash=request_hash,
+                size_bytes=size,
+                sha256=content_sha256,
+                completed_at=completed_at,
+                publish=publish,
+                response_factory=response_factory,
+            )
+        except DatasetError:
+            self._fail_idempotent_candidate(candidate_id, inflight)
+            raise
+        except QuotaExceededError as exc:
+            self._fail_idempotent_candidate(candidate_id, inflight)
+            raise DatasetError(exc.code, exc.message, status=exc.status) from exc
+        except ControlPlaneError as exc:
+            self._fail_idempotent_candidate(candidate_id, inflight)
+            raise DatasetError(exc.code.lower(), exc.message, status=exc.status) from exc
+        except FormalDatasetError as exc:
+            self._fail_idempotent_candidate(candidate_id, inflight)
+            raise DatasetError(exc.code, exc.message, status=exc.status) from exc
+
+        unlink_control_file(temp)
+        reservation = quota_box[0]
+        if reservation is not None:
+            reservation.commit()
+        # A process may have died after creating the durable quota reservation
+        # or after MySQL completion but before local cleanup. Replay reaches
+        # this path without invoking publish, so clear the stable id explicitly.
+        self._quota.release_reservation(
+            workspace_id,
+            durable_quota_id(record.dataset_id),
+        )
+        final = self._entry_from_formal(
+            record,
+            sandbox_session_id=entry.sandbox_session_id,
+            workspace_id=workspace_id,
+        )
+        with self._lock:
+            self._inflight.pop(candidate_id, None)
+            self._entries.pop(candidate_id, None)
+            ids = self._by_session.setdefault(entry.sandbox_session_id, [])
+            ids[:] = [did for did in ids if did != candidate_id]
+            self._entries[final.dataset_id] = final
+            if final.dataset_id not in ids:
+                ids.append(final.dataset_id)
+        return final
+
+    def _fail_idempotent_candidate(
+        self,
+        candidate_id: str,
+        inflight: _InFlight,
+    ) -> None:
+        unlink_control_file(inflight.temp_path)
+        if inflight.reservation is not None:
+            inflight.reservation.release()
+        with self._lock:
+            self._inflight.pop(candidate_id, None)
+            inflight.entry.status = DATASET_STATUS_FAILED
+            inflight.entry.completed_at = _now_iso()
+            self._entries.pop(candidate_id, None)
+            ids = self._by_session.get(inflight.entry.sandbox_session_id)
+            if ids is not None:
+                ids[:] = [did for did in ids if did != candidate_id]
+                if not ids:
+                    self._by_session.pop(inflight.entry.sandbox_session_id, None)
+
+    @staticmethod
+    def _existing_target_size(
+        *,
+        workspace_path: str,
+        relative_parts: tuple[str, ...],
+    ) -> int:
+        try:
+            fd, stat_result = open_workspace_leaf_nofollow(
+                Path(workspace_path), relative_parts
+            )
+        except ControlPlaneError as exc:
+            if exc.code in {"FILE_NOT_FOUND", "PATH_INVALID"}:
+                return 0
+            raise
+        try:
+            return int(stat_result.st_size)
+        finally:
+            os.close(fd)
+
+    @staticmethod
+    def _entry_from_formal(
+        row: Any,
+        *,
+        sandbox_session_id: str,
+        workspace_id: str | None = None,
+    ) -> DatasetEntry:
+        return DatasetEntry(
+            dataset_id=row.dataset_id,
+            org_id=row.org_id,
+            user_id=row.user_id,
+            conversation_id=row.conversation_id,
+            agent_session_id=row.agent_session_id,
+            sandbox_session_id=sandbox_session_id,
+            original_filename=row.original_filename,
+            stored_relative_path=row.stored_relative_path,
+            status=row.status,
+            created_at=row.created_at,
+            mime_type=row.mime_type,
+            size_bytes=row.size_bytes,
+            sha256=row.sha256,
+            completed_at=row.completed_at,
+            workspace_id=workspace_id,
+        )
+
     def abort_upload(self, dataset_id: str, *, reason: str = "aborted") -> None:
         with self._lock:
             inflight = self._inflight.pop(dataset_id, None)
@@ -516,9 +790,21 @@ class DatasetManager:
         if entry is not None:
             entry.status = DATASET_STATUS_FAILED
             entry.completed_at = _now_iso()
-            scope = OwnerScope(org_id=entry.org_id, user_id=entry.user_id)
-            self._formal.mark_failed(dataset_id, scope)
-            self._formal.delete(dataset_id, scope)
+            if entry.idempotency_key and self._formal.enabled:
+                # No formal reservation exists until finish_upload. If finish
+                # already reserved one, it must remain durable for retry; this
+                # local candidate is never the source of truth.
+                with self._lock:
+                    self._entries.pop(dataset_id, None)
+                    ids = self._by_session.get(entry.sandbox_session_id)
+                    if ids is not None:
+                        ids[:] = [did for did in ids if did != dataset_id]
+                        if not ids:
+                            self._by_session.pop(entry.sandbox_session_id, None)
+            else:
+                scope = OwnerScope(org_id=entry.org_id, user_id=entry.user_id)
+                self._formal.mark_failed(dataset_id, scope)
+                self._formal.delete(dataset_id, scope)
         _ = reason
 
     def stream_from_iterator(
@@ -535,6 +821,7 @@ class DatasetManager:
         chunks: Iterator[bytes],
         mime_type: str | None = None,
         declared_size: int | None = None,
+        idempotency_key: str | None = None,
     ) -> DatasetEntry:
         entry = self.begin_upload(
             workspace_path=workspace_path,
@@ -547,6 +834,7 @@ class DatasetManager:
             original_filename=original_filename,
             mime_type=mime_type,
             declared_size=declared_size,
+            idempotency_key=idempotency_key,
         )
         try:
             for chunk in chunks:
@@ -567,7 +855,42 @@ class DatasetManager:
         org_id: str | None = None,
         user_id: str | None = None,
         sandbox_session_id: str | None = None,
+        agent_session_id: str | None = None,
     ) -> DatasetEntry | None:
+        if self._formal.authoritative:
+            if getattr(self._formal, "_wire_error", None) is not None or not self._formal.enabled:
+                raise DatasetError(
+                    "dataset_formal_unavailable",
+                    "Formal MySQL dataset plane is required but not available",
+                    status=503,
+                )
+            if not (org_id and user_id and agent_session_id):
+                raise DatasetError(
+                    "dataset_ownership_required",
+                    "org_id, user_id, and agent_session_id are required",
+                    status=400,
+                )
+        if self._formal.enabled and org_id and user_id and agent_session_id:
+            try:
+                row = self._formal.get(
+                    dataset_id,
+                    OwnerScope(org_id=org_id, user_id=user_id),
+                )
+            except FormalDatasetError as exc:
+                raise DatasetError(exc.code, exc.message, status=exc.status) from exc
+            if row is None or row.agent_session_id != agent_session_id:
+                return None
+            recovered = self._entry_from_formal(
+                row,
+                sandbox_session_id=sandbox_session_id or "",
+            )
+            with self._lock:
+                self._entries[recovered.dataset_id] = recovered
+                if sandbox_session_id:
+                    ids = self._by_session.setdefault(sandbox_session_id, [])
+                    if recovered.dataset_id not in ids:
+                        ids.append(recovered.dataset_id)
+            return recovered
         with self._lock:
             entry = self._entries.get(dataset_id)
             if entry is None:
@@ -589,8 +912,46 @@ class DatasetManager:
         *,
         org_id: str | None = None,
         user_id: str | None = None,
+        agent_session_id: str | None = None,
         ready_only: bool = False,
     ) -> list[DatasetEntry]:
+        if self._formal.authoritative:
+            if getattr(self._formal, "_wire_error", None) is not None or not self._formal.enabled:
+                raise DatasetError(
+                    "dataset_formal_unavailable",
+                    "Formal MySQL dataset plane is required but not available",
+                    status=503,
+                )
+            if not (org_id and user_id and agent_session_id):
+                raise DatasetError(
+                    "dataset_ownership_required",
+                    "org_id, user_id, and agent_session_id are required",
+                    status=400,
+                )
+        if self._formal.enabled and org_id and user_id and agent_session_id:
+            try:
+                rows = self._formal.list_for_owner(
+                    OwnerScope(org_id=org_id, user_id=user_id),
+                    agent_session_id=agent_session_id,
+                    limit=200,
+                )
+            except FormalDatasetError as exc:
+                raise DatasetError(exc.code, exc.message, status=exc.status) from exc
+            recovered = [
+                self._entry_from_formal(
+                    row,
+                    sandbox_session_id=sandbox_session_id,
+                )
+                for row in rows
+                if not ready_only or row.status == DATASET_STATUS_READY
+            ]
+            with self._lock:
+                ids = self._by_session.setdefault(sandbox_session_id, [])
+                for entry in recovered:
+                    self._entries[entry.dataset_id] = entry
+                    if entry.dataset_id not in ids:
+                        ids.append(entry.dataset_id)
+            return recovered
         with self._lock:
             ids = list(self._by_session.get(sandbox_session_id, []))
             out: list[DatasetEntry] = []
@@ -612,4 +973,4 @@ class DatasetManager:
         return e is not None and e.status == DATASET_STATUS_READY
 
 
-dataset_manager = DatasetManager(auto_wire_formal=True)
+dataset_manager = DatasetManager(auto_wire_formal=False)

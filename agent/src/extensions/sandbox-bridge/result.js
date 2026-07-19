@@ -7,14 +7,17 @@ import { redactInlineSecrets, redactPayload } from '../../infrastructure/pi/plat
 /**
  * @param {string} text
  * @param {object} [details]
+ * @param {{ maxDetailString?: number }} [opts]
  * @returns {{ content: Array<{ type: 'text', text: string }>, details?: object }}
  */
-export function toolOk(text, details) {
+export function toolOk(text, details, opts = {}) {
   const out = {
     content: [{ type: 'text', text: redactInlineSecrets(String(text ?? '')) }],
   };
   if (details != null) {
-    out.details = /** @type {object} */ (redactPayload(details));
+    out.details = /** @type {object} */ (
+      redactPayload(details, { maxString: opts.maxDetailString ?? 512 })
+    );
   }
   return out;
 }

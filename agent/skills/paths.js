@@ -4,12 +4,8 @@
 import path from 'node:path';
 import fs from 'node:fs';
 
-/** Canonical agent-visible skill roots (logical mounts). */
-export const DEFAULT_SKILL_ROOTS = Object.freeze([
-  '/home/sandbox/skill',
-  '/sandbox/skills',
-  '/app/.pi/skills',
-]);
+/** Canonical agent-visible skill root (logical read-only mount). */
+export const DEFAULT_SKILL_ROOTS = Object.freeze(['/home/sandbox/skill']);
 
 /** Valid skill directory / package name. */
 export const SKILL_NAME_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/;
@@ -38,14 +34,22 @@ export function validateSkillName(name) {
  */
 export function normalizeSkillRoots(roots = DEFAULT_SKILL_ROOTS) {
   const out = [];
+  const seen = new Set();
   for (const r of roots || []) {
     if (!r || typeof r !== 'string') continue;
     const trimmed = r.trim();
     if (!trimmed) continue;
     try {
-      out.push(path.resolve(trimmed));
+      const resolved = path.resolve(trimmed);
+      if (!seen.has(resolved)) {
+        seen.add(resolved);
+        out.push(resolved);
+      }
     } catch {
-      out.push(trimmed);
+      if (!seen.has(trimmed)) {
+        seen.add(trimmed);
+        out.push(trimmed);
+      }
     }
   }
   return out.length ? out : [...DEFAULT_SKILL_ROOTS];
@@ -120,18 +124,6 @@ export function commandTouchesSkillRoot(command, skillRoots = DEFAULT_SKILL_ROOT
   for (const root of roots) {
     const rootNorm = root.replace(/\\/g, '/');
     if (cmd.includes(rootNorm) || cmd.includes(rootNorm.slice(1))) {
-      return true;
-    }
-  }
-  // Common legacy / relative skill path markers
-  if (/(?:^|[\s"'`])(?:\.pi\/skills|skills\/)/.test(cmd)) {
-    // Only flag when clearly targeting shared skill trees, not workspace "skills/"
-    if (
-      cmd.includes('/home/sandbox/skill') ||
-      cmd.includes('/sandbox/skills') ||
-      cmd.includes('/app/.pi/skills') ||
-      cmd.includes('.pi/skills')
-    ) {
       return true;
     }
   }

@@ -15,12 +15,20 @@ import {
 } from '../../src/infrastructure/mcp/mcp-config-loader.js';
 import {
   createPiMcpAdapter,
+  createEnvironmentSecretResolver,
+  loadMcpServerRegistry,
   PiMcpAdapterError,
   PI_MCP_ADAPTER_PACKAGE,
+  PINNED_PI_MCP_ADAPTER_VERSION,
+  resolvePiMcpAdapterPackage,
 } from '../../src/infrastructure/mcp/pi-mcp-adapter-factory.js';
-import { readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, statSync } from 'node:fs';
+import { promises as fs } from 'node:fs';
+import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
+
+const TRACE_ID = '0123456789abcdef0123456789abcdef';
 
 describe('mcp-config-loader', () => {
   it('accepts logical refs with secretRef, tools, policy, timeout', () => {
@@ -115,72 +123,185 @@ describe('mcp-config-loader', () => {
 });
 
 describe('pi-mcp-adapter-factory', () => {
-  it('zero MCP config does not load adapter', async () => {
-    let loads = 0;
+  it('zero MCP config does not resolve or materialize the adapter', async () => {
+    let packageResolves = 0;
     const result = await createPiMcpAdapter({
       mcpServers: [],
-      loadAdapter: async () => {
-        loads += 1;
-        return {};
+      packageResolver: async () => {
+        packageResolves += 1;
+        throw new Error('must not run');
       },
     });
     assert.equal(result.enabled, false);
-    assert.equal(loads, 0);
-    assert.equal(result.module, null);
+    assert.equal(packageResolves, 0);
+    assert.equal(result.extensionPath, null);
+    assert.equal(result.configPath, null);
   });
 
-  it('missing adapter fail-fast with PI_MCP_ADAPTER_UNAVAILABLE', async () => {
+  it('missing pinned adapter fails closed', async () => {
     await assert.rejects(
       () =>
         createPiMcpAdapter({
-          mcpServers: [{ serverId: 'db', secretRef: 's1' }],
-          loadAdapter: async () => {
+          agentSessionId: '01K0G2PAV8FPMVC9QHJG7JPN52',
+          context: { traceId: TRACE_ID },
+          mcpServers: [{ serverId: 'db', enabledTools: ['query'] }],
+          serverRegistry: [{ id: 'db', command: 'mock-mcp' }],
+          packageResolver: async () => {
             throw new Error('Cannot find package');
           },
         }),
       (err) =>
-        err instanceof PiMcpAdapterError &&
-        err.code === 'PI_MCP_ADAPTER_UNAVAILABLE',
+        err instanceof Error && /Cannot find package/.test(err.message),
     );
   });
 
-  it('module present without adapterBinder → PI_MCP_ADAPTER_API_UNVERIFIED', async () => {
+  it('validates deployment registry and environment secret refs', async () => {
+    assert.throws(
+      () => loadMcpServerRegistry([{ id: 'db', url: 'https://mcp.test', token: 'plain' }]),
+      (err) => err.code === 'MCP_PLAINTEXT_SECRET_FORBIDDEN',
+    );
+    assert.throws(
+      () => loadMcpServerRegistry([{ id: 'db', url: 'https://mcp.test', command: 'x' }]),
+      (err) => err.code === 'MCP_SERVER_REGISTRY_INVALID',
+    );
+    const resolveSecret = createEnvironmentSecretResolver({ MCP_DB_TOKEN: 'secret-value' });
+    assert.equal(await resolveSecret('MCP_DB_TOKEN'), 'secret-value');
     await assert.rejects(
-      () =>
-        createPiMcpAdapter({
-          mcpServers: [{ serverId: 'db', enabledTools: ['query'] }],
-          loadAdapter: async () => ({
-            // Even with tempting exports, production must not guess them.
-            createPiMcpAdapter: () => ({}),
-            createAdapter: () => ({}),
-            default: () => ({}),
-          }),
-        }),
-      (err) =>
-        err instanceof PiMcpAdapterError &&
-        err.code === 'PI_MCP_ADAPTER_API_UNVERIFIED',
+      () => resolveSecret('vault://not-supported'),
+      (err) => err.code === 'MCP_SECRET_REF_UNSUPPORTED',
     );
   });
 
-  it('injected adapterBinder verifies project port contract', async () => {
-    const result = await createPiMcpAdapter({
-      mcpServers: [{ serverId: 'db', enabledTools: ['query'] }],
-      loadAdapter: async () => ({ vendorMarker: true }),
-      adapterBinder: async ({ module, config }) => {
-        assert.equal(module.vendorMarker, true);
-        assert.equal(config[0].serverId, 'db');
-        return {
-          tools: [
-            { name: mcpToolName(config[0].serverId, config[0].enabledTools[0]) },
-          ],
-          mcpResolver: { kind: 'project-port' },
-          binding: { ok: true },
-        };
-      },
+  it('materializes 0600 config, registers exact wrappers, and cleans secrets', async () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), 'mcp-binding-test-'));
+    const extensionPath = path.join(root, 'index.ts');
+    await fs.writeFile(extensionPath, 'export default () => {}', 'utf8');
+    const binding = await createPiMcpAdapter({
+      agentSessionId: '01K0G2PAV8FPMVC9QHJG7JPN52',
+      runtimeRoot: path.join(root, 'runtime'),
+      mcpServers: [
+        {
+          serverId: 'db',
+          enabledTools: ['query'],
+          secretRef: 'MCP_DB_TOKEN',
+        },
+      ],
+      serverRegistry: [
+        {
+          id: 'db',
+          url: 'https://mcp.test/rpc',
+          authTokenRef: 'MCP_DB_TOKEN',
+        },
+      ],
+      secretResolver: createEnvironmentSecretResolver({
+        MCP_DB_TOKEN: 'resolved-secret-value',
+      }),
+      context: { traceId: TRACE_ID },
+      spanRandomBytes: () => Uint8Array.from([1, 2, 3, 4, 5, 6, 7, 8]),
+      packageResolver: async () => ({
+        version: PINNED_PI_MCP_ADAPTER_VERSION,
+        extensionPath,
+      }),
     });
-    assert.equal(result.enabled, true);
-    assert.equal(result.tools[0].name, 'mcp__db__query');
-    assert.equal(result.mcpResolver.kind, 'project-port');
+
+    assert.equal(binding.enabled, true);
+    assert.equal(binding.tools[0].name, 'mcp__db__query');
+    assert.equal(statSync(binding.configPath).mode & 0o777, 0o600);
+    const materialized = readFileSync(binding.configPath, 'utf8');
+    assert.match(materialized, /resolved-secret-value/);
+    assert.match(materialized, new RegExp(`00-${TRACE_ID}-0102030405060708-01`));
+    assert.match(materialized, /X-Trace-Id/);
+    assert.equal(JSON.stringify(binding.config).includes('resolved-secret-value'), false);
+
+    let proxyParams = null;
+    const extension = {
+      resolvedPath: extensionPath,
+      sourceInfo: { source: 'test' },
+      tools: new Map([
+        [
+          'mcp',
+          {
+            definition: {
+              name: 'mcp',
+              execute: async (_id, params) => {
+                proxyParams = params;
+                return { content: [{ type: 'text', text: 'ok' }] };
+              },
+            },
+            sourceInfo: { source: 'vendor' },
+          },
+        ],
+        ['ambient_direct_tool', { definition: { name: 'ambient_direct_tool' } }],
+      ]),
+    };
+    binding.extensionsOverride({ extensions: [extension], errors: [] });
+    assert.deepEqual([...extension.tools.keys()], ['mcp__db__query']);
+    const result = await extension.tools
+      .get('mcp__db__query')
+      .definition.execute('tc-1', { sql: 'select 1' });
+    assert.equal(result.content[0].text, 'ok');
+    assert.deepEqual(proxyParams, {
+      server: 'db',
+      tool: 'query',
+      args: '{"sql":"select 1"}',
+    });
+
+    const configPath = binding.configPath;
+    await binding.cleanup();
+    await assert.rejects(() => fs.access(configPath));
+    await fs.rm(root, { recursive: true, force: true });
+  });
+
+  it('rejects registry attempts to override runtime trace propagation', async () => {
+    await assert.rejects(
+      () => createPiMcpAdapter({
+        agentSessionId: '01K0G2PAV8FPMVC9QHJG7JPN52',
+        context: { traceId: TRACE_ID },
+        mcpServers: [{ serverId: 'db', enabledTools: ['query'] }],
+        serverRegistry: [
+          { id: 'db', url: 'https://mcp.test', headerRefs: { Traceparent: 'TOKEN_REF' } },
+        ],
+        secretResolver: async () => 'should-not-resolve',
+        packageResolver: async () => ({
+          version: PINNED_PI_MCP_ADAPTER_VERSION,
+          extensionPath: '/tmp/index.ts',
+        }),
+      }),
+      (error) => error.code === 'MCP_TRACE_BINDING_RESERVED',
+    );
+  });
+
+  it('propagates a run-scoped trace to stdio MCP children through controlled env', async () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), 'mcp-stdio-trace-test-'));
+    const extensionPath = path.join(root, 'index.ts');
+    await fs.writeFile(extensionPath, 'export default () => {}', 'utf8');
+    const binding = await createPiMcpAdapter({
+      agentSessionId: '01K0G2PAV8FPMVC9QHJG7JPN52',
+      runtimeRoot: path.join(root, 'runtime'),
+      context: { traceId: TRACE_ID },
+      spanRandomBytes: () => Uint8Array.from([8, 7, 6, 5, 4, 3, 2, 1]),
+      mcpServers: [{ serverId: 'mock', enabledTools: ['echo'] }],
+      serverRegistry: [{ id: 'mock', command: 'mock-server' }],
+      packageResolver: async () => ({
+        version: PINNED_PI_MCP_ADAPTER_VERSION,
+        extensionPath,
+      }),
+    });
+    try {
+      const materialized = JSON.parse(readFileSync(binding.configPath, 'utf8'));
+      const env = materialized.mcpServers.mock.env;
+      assert.equal(env.TRACE_ID, TRACE_ID);
+      assert.equal(env.TRACEPARENT, `00-${TRACE_ID}-0807060504030201-01`);
+    } finally {
+      await binding.cleanup();
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('verifies the installed package pin and declared Pi extension', async () => {
+    const resolved = await resolvePiMcpAdapterPackage();
+    assert.equal(resolved.version, PINNED_PI_MCP_ADAPTER_VERSION);
+    assert.match(resolved.extensionPath, /pi-mcp-adapter\/index\.ts$/);
   });
 
   it('new MCP modules do not import legacy McpConnectionManager or call fetch', () => {

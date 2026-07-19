@@ -439,6 +439,8 @@ async def test_finalize_error_read_still_one_ledger_running() -> None:
     assert rt.finalize_calls == 1  # attempted once
     # No second read on finalize failure
     assert reader.calls == 1
+    # Keep the claimed RUNNING row registered for shutdown UNKNOWN recovery.
+    assert rt.inflight_claim_count() == 1
 
 
 @pytest.mark.asyncio

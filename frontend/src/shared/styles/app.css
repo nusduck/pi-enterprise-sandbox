@@ -1553,10 +1553,15 @@ body {
   gap: 6px;
   flex-wrap: wrap;
 }
+.trace-status {
+  color: var(--color-text-muted, #64748b);
+  font-size: 11px;
+  text-transform: lowercase;
+}
 .trace-kind {
   font-size: 10px;
   text-transform: uppercase;
-  letter-spacing: 0.04em;
+  letter-spacing: 0;
   color: var(--color-text-dim, #94a3b8);
 }
 .trace-name {
@@ -1567,6 +1572,27 @@ body {
   list-style: none;
   margin: 2px 0 0;
   padding: 0;
+}
+.trace-metadata {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px 12px;
+  margin: 4px 0 0;
+  font-size: 11px;
+  color: var(--color-text-muted);
+}
+.trace-metadata > div {
+  display: flex;
+  min-width: 0;
+  gap: 4px;
+}
+.trace-metadata dt {
+  color: var(--color-text-dim);
+}
+.trace-metadata dd {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
 }
 .dataset-panel .status-uploading { border-color: var(--color-warning-soft, #fde68a); }
 .dataset-panel .status-ready { border-color: var(--color-success-soft, #bbf7d0); }
@@ -2606,4 +2632,85 @@ body {
 .mgmt-meta-grid code {
   font-family: var(--font-mono, ui-monospace, monospace);
   font-size: 11.5px;
+}
+.mgmt-section {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.mgmt-section-title {
+  margin: 0;
+  font-size: var(--font-size-base);
+  color: var(--color-text);
+}
+.mgmt-field-row,
+.mgmt-form {
+  display: flex;
+  align-items: end;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.mgmt-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: min(240px, 100%);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+}
+.mgmt-field input,
+.mgmt-field select {
+  min-height: 38px;
+  padding: 8px 10px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-elevated);
+  color: var(--color-text);
+  font: inherit;
+}
+.mgmt-scope-field {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  margin: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+}
+.mgmt-scope-field legend {
+  padding: 0 4px;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+}
+.mgmt-scope-field label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+}
+.mgmt-a2a-summary {
+  padding: 14px;
+  border: 1px solid var(--color-hairline);
+  border-radius: var(--radius-lg);
+  background: var(--color-bg-elevated);
+}
+.mgmt-secret {
+  display: grid;
+  gap: 8px;
+  padding: 12px 14px;
+  border: 1px solid var(--color-warning-border);
+  border-radius: var(--radius-lg);
+  background: var(--color-warning-soft);
+}
+.mgmt-secret code {
+  padding: 8px;
+  overflow-wrap: anywhere;
+  background: var(--color-bg-elevated);
+  border-radius: var(--radius-md);
+}
+.mgmt-secret p {
+  margin: 0;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
 }

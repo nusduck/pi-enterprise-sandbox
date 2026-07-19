@@ -10,6 +10,7 @@
 import { createSandboxClient } from '../../../infrastructure/sandbox-client.js';
 import { createEnterpriseExtensionBundle } from '../../extensions/index.js';
 import { SANDBOX_TRANSPORT_METHODS } from '../../extensions/sandbox-bridge/transport.js';
+import { normalizeProcessStatus } from '../../domain/process-status.js';
 
 /**
  * @param {Record<string, unknown>} payload
@@ -36,14 +37,6 @@ function requireSessionId(payload) {
 }
 
 /**
- * @param {unknown} status
- * @returns {string}
- */
-function upperStatus(status) {
-  return String(status ?? '').toUpperCase() || 'UNKNOWN';
-}
-
-/**
  * Map TERM|KILL|INT / SIG* → sandbox signal API names.
  * @param {unknown} signal
  * @returns {string}
@@ -65,7 +58,14 @@ function rethrowTransport(err) {
   const code = err?.code || (err?.status === 404 ? 'NOT_FOUND' : 'SANDBOX_ERROR');
   const e = new Error(err?.message || String(err));
   /** @type {any} */ (e).code = code;
-  /** @type {any} */ (e).status = err?.status;
+  /** @type {any} */ (e).status = err?.status ?? err?.httpStatus;
+  /** @type {any} */ (e).httpStatus = err?.httpStatus ?? err?.status;
+  if (err?.outcomeUnknown === true) {
+    /** @type {any} */ (e).outcomeUnknown = true;
+  }
+  if (err?.cause != null) {
+    /** @type {any} */ (e).cause = err.cause;
+  }
   throw e;
 }
 
@@ -77,6 +77,19 @@ function rethrowTransport(err) {
  *   createClient?: () => any,
  *   traceId?: string | null,
  *   auth?: object | null,
+ *   internalReadTransport?: { readFile: (payload: object) => Promise<object> } | null,
+ *   internalExecutionTransport?: {
+ *     bash: (payload: object) => Promise<object>,
+ *     python: (payload: object) => Promise<object>,
+ *   } | null,
+ *   internalProcessTransport?: {
+ *     processStart: (payload: object) => Promise<object>,
+ *     processStatus: (payload: object) => Promise<object>,
+ *     processRead: (payload: object) => Promise<object>,
+ *     processKill: (payload: object) => Promise<object>,
+ *   } | null,
+ *   internalFilesWriteTransport?: { writeFile: Function, editFile: Function } | null,
+ *   internalArtifactTransport?: { submitArtifact: Function } | null,
  * }} [opts]
  * @returns {Record<string, Function>}
  */
@@ -89,11 +102,19 @@ export function createSandboxBridgeHttpTransport(opts = {}) {
           traceId: opts.traceId ?? null,
           auth: opts.auth ?? null,
         }));
+  const internalReadTransport = opts.internalReadTransport ?? null;
+  const internalExecutionTransport = opts.internalExecutionTransport ?? null;
+  const internalProcessTransport = opts.internalProcessTransport ?? null;
+  const internalFilesWriteTransport = opts.internalFilesWriteTransport ?? null;
+  const internalArtifactTransport = opts.internalArtifactTransport ?? null;
 
   /** @type {Record<string, Function>} */
   const transport = {
     async readFile(payload) {
       try {
+        if (internalReadTransport) {
+          return await internalReadTransport.readFile(payload);
+        }
         const sessionId = requireSessionId(payload);
         const path = String(payload?.path ?? '');
         const offset = payload?.offset != null ? Number(payload.offset) : 0;
@@ -122,6 +143,9 @@ export function createSandboxBridgeHttpTransport(opts = {}) {
 
     async writeFile(payload) {
       try {
+        if (internalFilesWriteTransport) {
+          return await internalFilesWriteTransport.writeFile(payload);
+        }
         const sessionId = requireSessionId(payload);
         const path = String(payload?.path ?? '');
         const content = String(payload?.content ?? '');
@@ -137,6 +161,9 @@ export function createSandboxBridgeHttpTransport(opts = {}) {
 
     async editFile(payload) {
       try {
+        if (internalFilesWriteTransport) {
+          return await internalFilesWriteTransport.editFile(payload);
+        }
         const sessionId = requireSessionId(payload);
         const body = {
           path: String(payload?.path ?? ''),
@@ -158,6 +185,9 @@ export function createSandboxBridgeHttpTransport(opts = {}) {
 
     async bash(payload) {
       try {
+        if (internalExecutionTransport) {
+          return await internalExecutionTransport.bash(payload);
+        }
         const sessionId = requireSessionId(payload);
         const command = String(payload?.command ?? '');
         const timeout = Number(
@@ -178,6 +208,9 @@ export function createSandboxBridgeHttpTransport(opts = {}) {
 
     async python(payload) {
       try {
+        if (internalExecutionTransport) {
+          return await internalExecutionTransport.python(payload);
+        }
         const sessionId = requireSessionId(payload);
         const code = String(payload?.code ?? '');
         const timeout = Number(
@@ -204,6 +237,16 @@ export function createSandboxBridgeHttpTransport(opts = {}) {
 
     async processStart(payload) {
       try {
+        if (internalProcessTransport) {
+          const data = await internalProcessTransport.processStart(payload);
+          return {
+            processId: data?.processId ?? data?.process_id ?? null,
+            status: normalizeProcessStatus(data?.status, 'running'),
+            stdoutCursor: data?.stdoutCursor ?? data?.stdout_cursor ?? '0-0',
+            stderrCursor: data?.stderrCursor ?? data?.stderr_cursor ?? '0-0',
+            startedAt: data?.startedAt ?? data?.started_at ?? null,
+          };
+        }
         const sessionId = requireSessionId(payload);
         const body = {
           session_id: sessionId,
@@ -225,7 +268,7 @@ export function createSandboxBridgeHttpTransport(opts = {}) {
         const data = await client.startProcess(body);
         return {
           processId: data?.process_id ?? data?.processId ?? null,
-          status: upperStatus(data?.status ?? 'running'),
+          status: normalizeProcessStatus(data?.status, 'running'),
           stdoutCursor: data?.stdout_cursor ?? data?.stdoutCursor ?? '0-0',
           stderrCursor: data?.stderr_cursor ?? data?.stderrCursor ?? '0-0',
           startedAt: data?.started_at ?? data?.startedAt ?? null,
@@ -237,11 +280,22 @@ export function createSandboxBridgeHttpTransport(opts = {}) {
 
     async processStatus(payload) {
       try {
+        if (internalProcessTransport) {
+          const data = await internalProcessTransport.processStatus(payload);
+          return {
+            processId: data?.processId ?? data?.process_id ?? payload?.processId,
+            status: normalizeProcessStatus(data?.status), exitCode: data?.exitCode ?? data?.exit_code ?? null,
+            startedAt: data?.startedAt ?? data?.started_at ?? null,
+            elapsedSeconds: data?.elapsedSeconds ?? data?.elapsed_seconds ?? null,
+            pid: data?.pid ?? null, stdoutCursor: data?.stdoutCursor ?? data?.stdout_cursor ?? '0-0',
+            stderrCursor: data?.stderrCursor ?? data?.stderr_cursor ?? '0-0',
+          };
+        }
         const processId = String(payload?.processId ?? '').trim();
         const data = await client.getProcess(processId);
         return {
           processId: data?.process_id ?? processId,
-          status: upperStatus(data?.status),
+          status: normalizeProcessStatus(data?.status),
           exitCode: data?.exit_code ?? data?.exitCode ?? null,
           startedAt: data?.started_at ?? data?.startedAt ?? null,
           elapsedSeconds:
@@ -255,6 +309,17 @@ export function createSandboxBridgeHttpTransport(opts = {}) {
 
     async processRead(payload) {
       try {
+        if (internalProcessTransport) {
+          const data = await internalProcessTransport.processRead(payload);
+          return {
+            processId: data?.processId ?? data?.process_id ?? payload?.processId,
+            stream: data?.stream ?? payload?.stream ?? 'stdout',
+            cursor: data?.cursor ?? payload?.cursor ?? '0-0',
+            nextCursor: data?.nextCursor ?? data?.next_cursor ?? payload?.cursor ?? '0-0',
+            data: data?.data ?? '', truncated: Boolean(data?.truncated), completed: Boolean(data?.completed),
+            status: data?.status != null ? normalizeProcessStatus(data.status) : null,
+          };
+        }
         const processId = String(payload?.processId ?? '').trim();
         const stream = payload?.stream === 'stderr' ? 'stderr' : 'stdout';
         const cursor = String(payload?.cursor ?? '0-0');
@@ -272,7 +337,7 @@ export function createSandboxBridgeHttpTransport(opts = {}) {
           data: data?.data ?? '',
           truncated: Boolean(data?.truncated),
           completed: Boolean(data?.completed),
-          status: data?.status != null ? upperStatus(data.status) : null,
+          status: data?.status != null ? normalizeProcessStatus(data.status) : null,
         };
       } catch (err) {
         rethrowTransport(err);
@@ -281,6 +346,16 @@ export function createSandboxBridgeHttpTransport(opts = {}) {
 
     async processKill(payload) {
       try {
+        if (internalProcessTransport) {
+          const data = await internalProcessTransport.processKill(payload);
+          if (data?.ok === false || data?.signaled === false) {
+            const err = new Error(data?.error || 'Process signal not delivered');
+            /** @type {any} */ (err).code = 'PROCESS_SIGNAL_NOT_DELIVERED';
+            /** @type {any} */ (err).status = 409;
+            throw err;
+          }
+          return { processId: data?.processId ?? data?.process_id ?? payload?.processId, signal: data?.signal ?? payload?.signal ?? 'TERM', status: normalizeProcessStatus(data?.status, 'running'), signaled: data?.signaled !== false };
+        }
         const processId = String(payload?.processId ?? '').trim();
         const signal = mapSignal(payload?.signal);
         // signalProcess / cancelProcess throw SandboxError on non-2xx (409 when
@@ -297,7 +372,7 @@ export function createSandboxBridgeHttpTransport(opts = {}) {
         return {
           processId,
           signal: payload?.signal ?? 'TERM',
-          status: upperStatus(data?.status ?? 'SIGNALED'),
+          status: normalizeProcessStatus(data?.status, 'running'),
           signaled: true,
         };
       } catch (err) {
@@ -307,6 +382,9 @@ export function createSandboxBridgeHttpTransport(opts = {}) {
 
     async submitArtifact(payload) {
       try {
+        if (internalArtifactTransport) {
+          return await internalArtifactTransport.submitArtifact(payload);
+        }
         const sessionId = requireSessionId(payload);
         const path = String(payload?.path ?? '');
         const name =
@@ -355,6 +433,11 @@ export function createSandboxBridgeHttpTransport(opts = {}) {
  * @param {{
  *   createSandboxClient?: typeof createSandboxClient,
  *   createTransport?: typeof createSandboxBridgeHttpTransport,
+ *   createInternalReadTransport?: (runContext: object) => object,
+ *   createInternalExecutionTransport?: (runContext: object) => object,
+ *   createInternalProcessTransport?: (runContext: object) => object,
+ *   createInternalFilesWriteTransport?: (runContext: object) => object,
+ *   createInternalArtifactTransport?: (runContext: object) => object,
  *   serviceApiTokenPresent?: boolean,
  * }} [opts]
  * @returns {Record<string, Function>}
@@ -390,18 +473,52 @@ export function createRunScopedSandboxBridgeTransport(runContext, opts = {}) {
     traceRaw != null && String(traceRaw).trim() && String(traceRaw).trim() !== 'null'
       ? String(traceRaw).trim()
       : null;
+  const traceState =
+    ctx.traceState == null ? null : String(ctx.traceState).trim() || null;
 
   const makeClient = opts.createSandboxClient ?? createSandboxClient;
   const makeTransport = opts.createTransport ?? createSandboxBridgeHttpTransport;
-  const client = makeClient({
+  const clientOptions = {
     traceId,
     auth: {
       actingUserId: userId,
       actingOrganizationId: orgId,
       actingRole: 'user',
     },
+  };
+  if (traceState) clientOptions.traceState = traceState;
+  const client = makeClient(clientOptions);
+  const internalReadTransport =
+    typeof opts.createInternalReadTransport === 'function'
+      ? opts.createInternalReadTransport(runContext)
+      : null;
+  const internalExecutionTransport =
+    typeof opts.createInternalExecutionTransport === 'function'
+      ? opts.createInternalExecutionTransport(runContext)
+      : null;
+  const internalProcessTransport =
+    typeof opts.createInternalProcessTransport === 'function'
+      ? opts.createInternalProcessTransport(runContext)
+      : null;
+  const internalFilesWriteTransport =
+    typeof opts.createInternalFilesWriteTransport === 'function'
+      ? opts.createInternalFilesWriteTransport(runContext)
+      : null;
+  const internalArtifactTransport =
+    typeof opts.createInternalArtifactTransport === 'function'
+      ? opts.createInternalArtifactTransport(runContext)
+      : null;
+  return makeTransport({
+    client,
+    traceId,
+    traceState,
+    auth: null,
+    internalReadTransport,
+    internalExecutionTransport,
+    internalProcessTransport,
+    internalFilesWriteTransport,
+    internalArtifactTransport,
   });
-  return makeTransport({ client, traceId, auth: null });
 }
 
 /**

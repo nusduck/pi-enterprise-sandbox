@@ -169,6 +169,63 @@ describe('PiRuntimeFactory canonical create path', () => {
     await managed.dispose(); // idempotent
   });
 
+  it('injects request-scoped provider auth through SDK AuthStorage', async () => {
+    let seenAuthStorage = null;
+    let seededCredentials = null;
+    const fakeSession = { dispose: async () => {} };
+    const model = fullModel({ provider: 'llmio' });
+    const factory = new PiRuntimeFactory({
+      agentDir: '/tmp/agent-dir',
+      sessionAdapter: {
+        createNew: async () => ({ sessionManager: {}, sessionDir: null }),
+        dispose: async () => {},
+      },
+      loadSdk: async () => ({
+        VERSION: PINNED_PI_SDK_VERSION,
+        AuthStorage: {
+          inMemory(credentials) {
+            seededCredentials = credentials;
+            return { kind: 'request-auth' };
+          },
+        },
+        createAgentSessionServices: async (opts) => {
+          seenAuthStorage = opts.authStorage;
+          return { diagnostics: [] };
+        },
+        createAgentSessionFromServices: async () => ({ session: fakeSession }),
+        createAgentSessionRuntime: async (createRuntime, opts) => {
+          const built = await createRuntime(opts);
+          return {
+            session: built.session,
+            services: built.services,
+            dispose: async () => {},
+          };
+        },
+      }),
+    });
+
+    const managed = await factory.create({
+      agentDir: '/tmp/agent-dir',
+      agentVersion: {
+        agentVersionId: VER,
+        piSdkVersion: PINNED_PI_SDK_VERSION,
+        configJson: {},
+      },
+      model,
+      requestAuth: { provider: 'llmio', apiKey: 'request-secret' },
+      agentSession: { agentSessionId: SESS },
+      cwd: '/ws',
+      sessionManager: {},
+    });
+
+    assert.deepEqual(seededCredentials, {
+      llmio: { type: 'api_key', key: 'request-secret' },
+    });
+    assert.deepEqual(seenAuthStorage, { kind: 'request-auth' });
+    assert.equal(model.headers, undefined);
+    await managed.dispose();
+  });
+
   it('reuses injected services inside createRuntime (no direct bypass path)', async () => {
     let fromServicesCalls = 0;
     let runtimeCalls = 0;

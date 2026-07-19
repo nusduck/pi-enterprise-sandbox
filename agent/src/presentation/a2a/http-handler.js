@@ -3,6 +3,7 @@
  *
  * Routes:
  *   GET  /.well-known/agent-card.json
+ *   POST /a2a  (credential-routed endpoint advertised by the root card)
  *   GET  /a2a/agents/{agentId}/.well-known/agent-card.json  (404 if agent meta missing)
  *   POST /a2a/agents/{agentId}   JSON-RPC 2.0
  *   GET  /a2a/artifacts/download?token=…  (bytes only when streamArtifactBytes injected)
@@ -46,6 +47,7 @@ import { waitForWritableResume } from '../../application/run-event-sse-service.j
  *     cancelTask: Function,
  *     beginSubscribe?: Function,
  *     auditStreamEnd?: Function,
+ *     auditArtifactDownload?: Function,
  *     resolveOwnedTask?: Function,
  *   },
  *   streamService: { openTaskStream: Function },
@@ -64,6 +66,7 @@ import { waitForWritableResume } from '../../application/run-event-sse-service.j
  *   createRepositories?: (db?: any) => any,
  *   db?: any,
  *   resolveTraceId: Function,
+ *   resolveTraceContext?: Function,
  *   readBody: Function,
  *   json: Function,
  * }} deps
@@ -77,6 +80,45 @@ export function createA2aHttpHandler(deps) {
   }
   if (!deps?.streamService?.openTaskStream) {
     throw new Error('createA2aHttpHandler requires streamService');
+  }
+
+  /**
+   * Resolve the full inbound W3C carrier when the Agent bootstrap provides
+   * it. Keep the trace-id-only injection as a compatibility fallback for
+   * isolated consumers and older tests.
+   *
+   * @param {import('node:http').IncomingMessage} req
+   * @param {unknown} [bodyTrace]
+   * @returns {{ traceId: string, parentSpanId: string|null, traceFlags: string|null, traceState: string|null }}
+   */
+  function resolveTraceContext(req, bodyTrace) {
+    if (typeof deps.resolveTraceContext === 'function') {
+      const resolved = deps.resolveTraceContext(req, bodyTrace);
+      if (resolved && typeof resolved.traceId === 'string') {
+        return {
+          traceId: resolved.traceId,
+          parentSpanId:
+            typeof resolved.parentSpanId === 'string'
+              ? resolved.parentSpanId
+              : null,
+          traceFlags:
+            typeof resolved.traceFlags === 'string'
+              ? resolved.traceFlags
+              : null,
+          traceState:
+            typeof resolved.traceState === 'string'
+              ? resolved.traceState
+              : null,
+        };
+      }
+    }
+    const traceId = deps.resolveTraceId(req, bodyTrace);
+    return {
+      traceId,
+      parentSpanId: null,
+      traceFlags: null,
+      traceState: null,
+    };
   }
 
   /**
@@ -106,7 +148,7 @@ export function createA2aHttpHandler(deps) {
           res,
           200,
           buildAgentCard({
-            agentId: 'default',
+            rpcPath: '/a2a',
             baseUrl: base,
             name: 'Pi Enterprise Agent',
             description:
@@ -120,6 +162,13 @@ export function createA2aHttpHandler(deps) {
             : 'Agent card base URL misconfigured';
         deps.json(res, 503, { error: msg, code: 'A2A_BASE_URL' });
       }
+      return true;
+    }
+
+    // The root Agent Card describes a credential-routed gateway. The
+    // authenticated credential supplies the concrete tenant Agent id.
+    if (req.method === 'POST' && (path === '/a2a' || path === '/a2a/')) {
+      await handleJsonRpc(req, res, null);
       return true;
     }
 
@@ -197,8 +246,7 @@ export function createA2aHttpHandler(deps) {
    */
   async function handleArtifactDownload(req, res, parsedUrl) {
     // Fail closed: never advertise/serve a "download" that returns metadata JSON.
-    // Byte streaming is only available when an owner-scoped streamer is injected
-    // (Agent currently has no safe Sandbox artifact-id byte transport wired).
+    // Byte streaming is available only through the owner-scoped internal path.
     const streamer = deps.streamArtifactBytes;
     if (typeof streamer !== 'function') {
       deps.json(res, 503, {
@@ -287,6 +335,32 @@ export function createA2aHttpHandler(deps) {
       return;
     }
 
+    const traceContext = resolveTraceContext(req);
+    const traceId = traceContext.traceId;
+    res.setHeader('X-Trace-Id', traceId);
+
+    // Artifact byte access is an auditable A2A operation. Keep this check
+    // before sending headers or bytes so an unavailable audit store fails
+    // closed instead of producing an untraceable delivery.
+    if (typeof deps.taskService.auditArtifactDownload === 'function') {
+      try {
+        await deps.taskService.auditArtifactDownload({
+          principal,
+          agentId: principal.agentId,
+          taskId: mapping.a2aTaskId,
+          runId: mapping.runId,
+          artifactId: art.artifactId,
+          traceId,
+        });
+      } catch {
+        deps.json(res, 503, {
+          error: 'Artifact download audit unavailable',
+          code: 'A2A_AUDIT_UNAVAILABLE',
+        });
+        return;
+      }
+    }
+
     // Stream real bytes only — never relativePath on the wire.
     let streamResult;
     try {
@@ -294,6 +368,8 @@ export function createA2aHttpHandler(deps) {
         principal,
         claims,
         mapping,
+        traceId,
+        traceState: traceContext.traceState,
         artifact: {
           artifactId: art.artifactId,
           mimeType: art.mimeType,
@@ -392,9 +468,9 @@ export function createA2aHttpHandler(deps) {
   /**
    * @param {import('node:http').IncomingMessage} req
    * @param {import('node:http').ServerResponse} res
-   * @param {string} agentId
+   * @param {string | null} requestedAgentId
    */
-  async function handleJsonRpc(req, res, agentId) {
+  async function handleJsonRpc(req, res, requestedAgentId) {
     const raw = await deps.readBody(req);
     let body;
     try {
@@ -418,7 +494,7 @@ export function createA2aHttpHandler(deps) {
     let principal;
     try {
       principal = await deps.credentialService.authenticate(authHeader, {
-        agentId,
+        agentId: requestedAgentId,
         requiredScope: requiredScopeForMethod(method),
       });
     } catch (err) {
@@ -442,11 +518,18 @@ export function createA2aHttpHandler(deps) {
       return;
     }
 
+    const agentId = requestedAgentId || principal.agentId;
+    if (!isUlid(agentId)) {
+      deps.json(res, 200, jsonRpcError(rpcId, { ...JSON_RPC_ERROR.INTERNAL }));
+      return;
+    }
+
     const bodyTrace =
       params?.metadata &&
       typeof params.metadata === 'object' &&
       /** @type {any} */ (params.metadata).traceId;
-    const traceId = deps.resolveTraceId(req, bodyTrace);
+    const traceContext = resolveTraceContext(req, bodyTrace);
+    const traceId = traceContext.traceId;
 
     res.setHeader('X-Trace-Id', traceId);
     res.setHeader('X-Caller-Type', 'a2a');
@@ -487,6 +570,8 @@ export function createA2aHttpHandler(deps) {
             agentId,
             params,
             traceId,
+            traceState: traceContext.traceState,
+            spanId: traceContext.parentSpanId,
             method: 'SendMessage',
             idempotencyKey:
               req.headers['idempotency-key'] ||
@@ -505,6 +590,8 @@ export function createA2aHttpHandler(deps) {
             historyLength: params.historyLength,
             method: 'GetTask',
             traceId,
+            traceState: traceContext.traceState,
+            spanId: traceContext.parentSpanId,
           });
           deps.json(res, 200, jsonRpcSuccess(rpcId, task));
           return;
@@ -518,6 +605,8 @@ export function createA2aHttpHandler(deps) {
             reason: typeof params.reason === 'string' ? params.reason : null,
             method: 'CancelTask',
             traceId,
+            traceState: traceContext.traceState,
+            spanId: traceContext.parentSpanId,
           });
           deps.json(res, 200, jsonRpcSuccess(rpcId, task));
           return;
@@ -554,6 +643,8 @@ export function createA2aHttpHandler(deps) {
             agentId,
             params,
             traceId,
+            traceState: traceContext.traceState,
+            spanId: traceContext.parentSpanId,
             method: 'SendStreamingMessage',
             idempotencyKey:
               req.headers['idempotency-key'] ||
@@ -567,6 +658,8 @@ export function createA2aHttpHandler(deps) {
               taskId: task.id,
               method: 'SendStreamingMessage',
               traceId,
+              traceState: traceContext.traceState,
+              spanId: traceContext.parentSpanId,
             });
           }
           await openSseStream(req, res, {
@@ -578,6 +671,8 @@ export function createA2aHttpHandler(deps) {
             includeInitialTask: true,
             method: 'SendStreamingMessage',
             traceId,
+            traceState: traceContext.traceState,
+            spanId: traceContext.parentSpanId,
           });
           return;
         }
@@ -590,6 +685,8 @@ export function createA2aHttpHandler(deps) {
               taskId,
               method: 'SubscribeToTask',
               traceId,
+              traceState: traceContext.traceState,
+              spanId: traceContext.parentSpanId,
             });
           } else {
             await deps.taskService.getTask({
@@ -598,6 +695,8 @@ export function createA2aHttpHandler(deps) {
               taskId,
               method: 'SubscribeToTask',
               traceId,
+              traceState: traceContext.traceState,
+              spanId: traceContext.parentSpanId,
             });
           }
           const afterSequence = Math.max(
@@ -621,6 +720,8 @@ export function createA2aHttpHandler(deps) {
             includeInitialTask: true,
             method: 'SubscribeToTask',
             traceId,
+            traceState: traceContext.traceState,
+            spanId: traceContext.parentSpanId,
           });
           return;
         }
@@ -713,6 +814,8 @@ export function createA2aHttpHandler(deps) {
             taskId: streamInput.taskId,
             method: streamInput.method,
             traceId: streamInput.traceId,
+            traceState: streamInput.traceState,
+            spanId: streamInput.spanId,
             outcome,
           });
         } catch {

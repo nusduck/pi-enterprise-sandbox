@@ -1,71 +1,79 @@
-#!/bin/bash
-# ═══════════════════════════════════════════════════════════════════
-# Pi Enterprise Sandbox — Restore Script
-# ═══════════════════════════════════════════════════════════════════
+#!/usr/bin/env bash
+# Restore a backup produced by scripts/backup.sh into the configured MySQL DB.
 set -euo pipefail
 
-if [ $# -lt 1 ]; then
-    echo "Usage: $0 <backup_path>"
-    echo "Example: $0 ./backups/sandbox-backup-20260401_120000"
-    exit 1
+umask 077
+
+if [ "$#" -ne 1 ]; then
+    echo "Usage: RESTORE_CONFIRM=restore $0 <backup_prefix>" >&2
+    exit 64
 fi
 
-BACKUP_PATH="${1}"
-BACKUP_DIR="$(dirname "$BACKUP_PATH")"
-BACKUP_NAME="$(basename "$BACKUP_PATH")"
+if [ "${RESTORE_CONFIRM:-}" != "restore" ]; then
+    echo "Refusing destructive restore: set RESTORE_CONFIRM=restore" >&2
+    exit 64
+fi
+
+BACKUP_PATH="$1"
+MYSQL_ARCHIVE="${BACKUP_PATH}.mysql.sql.gz"
+RUNTIME_ARCHIVE="${BACKUP_PATH}-runtime-files.tar.gz"
+MANIFEST="${BACKUP_PATH}.manifest"
+
+for required in "$MYSQL_ARCHIVE" "$RUNTIME_ARCHIVE" "$MANIFEST"; do
+    if [ ! -f "$required" ]; then
+        echo "Missing backup component: $required" >&2
+        exit 66
+    fi
+done
+
+if ! grep -qx 'format=pi-enterprise-backup-v1' "$MANIFEST"; then
+    echo "Unsupported or invalid backup manifest" >&2
+    exit 65
+fi
+
+gzip -t "$MYSQL_ARCHIVE"
+tar -tzf "$RUNTIME_ARCHIVE" | while IFS= read -r entry; do
+    case "$entry" in
+        var/sandbox/workspaces/*|var/sandbox/tmp/*|var/sandbox/artifacts/*|var/sandbox/control/*|var/sandbox/workspaces|var/sandbox/tmp|var/sandbox/artifacts|var/sandbox/control)
+            ;;
+        *)
+            echo "Unsafe runtime archive entry: $entry" >&2
+            exit 65
+            ;;
+    esac
+done
+
+docker compose ps mysql >/dev/null
 
 echo "=== Pi Enterprise Sandbox Restore ==="
-echo "Restoring from: $BACKUP_PATH"
-echo ""
+echo "Restore prefix: $BACKUP_PATH"
+echo "Stopping data-plane writers..."
+docker compose stop api-server agent agent-worker sandbox
 
-# Check Docker is running
-docker compose ps &>/dev/null || {
-    echo "ERROR: Docker Compose services not running. Start them first."
-    exit 1
+restart_data_plane() {
+    docker compose up -d sandbox agent agent-worker api-server frontend >/dev/null
 }
+trap restart_data_plane EXIT INT TERM
 
-# ── 1. Restore SQLite database ───────────────────────────────────────
-if [ -f "${BACKUP_PATH}.db" ]; then
-    echo "[1/4] Restoring SQLite database..."
-    docker compose cp "${BACKUP_PATH}.db" sandbox:/tmp/restore.db
-    docker compose exec sandbox sh -c '
-        cp /sandbox/data/sandbox.db /sandbox/data/sandbox.db.bak
-        cp /tmp/restore.db /sandbox/data/sandbox.db
-        rm /tmp/restore.db
-        echo "      Restored. Backup saved as sandbox.db.bak"
-    '
-fi
+echo "[1/3] Restoring the MySQL control plane..."
+gzip -dc "$MYSQL_ARCHIVE" | docker compose exec -T mysql sh -c '
+    exec mysql -u"$MYSQL_USER" -p"$MYSQL_PASSWORD" "$MYSQL_DATABASE"
+'
 
-# ── 2. Restore PostgreSQL database ───────────────────────────────────
-if [ -f "${BACKUP_PATH}.sql" ] || [ -f "${BACKUP_PATH}.sql.gz" ]; then
-    echo "[2/4] Restoring PostgreSQL database..."
-    DB_URL=$(docker compose exec -T sandbox env | grep SANDBOX_DATABASE_URL | cut -d= -f2-)
-    if [ -n "$DB_URL" ]; then
-        if [ -f "${BACKUP_PATH}.sql.gz" ]; then
-            gunzip -c "${BACKUP_PATH}.sql.gz" | psql "$DB_URL"
-        else
-            psql "$DB_URL" < "${BACKUP_PATH}.sql"
-        fi
-        echo "      Restored"
-    fi
-fi
+echo "[2/3] Restoring Session runtime files..."
+gzip -dc "$RUNTIME_ARCHIVE" | docker compose run \
+    --rm \
+    --no-deps \
+    -T \
+    --entrypoint sh \
+    sandbox \
+    -c 'exec tar -C / -xzf - --no-same-owner --no-same-permissions'
 
-# ── 3. Restore workspaces ────────────────────────────────────────────
-if [ -f "${BACKUP_PATH}-workspaces.tar.gz" ]; then
-    echo "[3/4] Restoring workspaces..."
-    tar -xzf "${BACKUP_PATH}-workspaces.tar.gz" -C .
-    echo "      Restored"
-fi
+echo "[3/3] Applying any forward-compatible Agent migrations..."
+docker compose run --rm --no-deps -T agent-migrate
 
-# ── 4. Restore config ────────────────────────────────────────────────
-if [ -f "${BACKUP_PATH}.env" ]; then
-    echo "[4/4] Restoring config..."
-    cp "${BACKUP_PATH}.env" .env.restored
-    echo "      .env.restored created (not overwriting current .env)"
-fi
+trap - EXIT INT TERM
+restart_data_plane
 
-# ── Summary ──────────────────────────────────────────────────────────
-echo ""
 echo "=== Restore complete ==="
-echo "Restart services: docker compose restart"
-echo "Or full rebuild:  docker compose up -d --build"
+echo "Verify readiness before returning traffic: docker compose ps"

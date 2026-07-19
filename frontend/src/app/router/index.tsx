@@ -4,6 +4,7 @@ import { WorkbenchPage } from '../../pages/workbench/WorkbenchPage';
 import { RunsPage } from '../../pages/runs/RunsPage';
 import { ApprovalsPage } from '../../pages/approvals/ApprovalsPage';
 import { CapabilitiesPage } from '../../pages/settings/CapabilitiesPage';
+import { A2aPage } from '../../pages/settings/A2aPage';
 
 export function AppRouter() {
   return (
@@ -38,6 +39,14 @@ export function AppRouter() {
           element={
             <AppShell>
               <CapabilitiesPage />
+            </AppShell>
+          }
+        />
+        <Route
+          path="/settings/a2a"
+          element={
+            <AppShell>
+              <A2aPage />
             </AppShell>
           }
         />

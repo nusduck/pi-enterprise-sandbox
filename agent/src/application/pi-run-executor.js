@@ -35,9 +35,11 @@ import {
 } from '../infrastructure/redis/session-lock-manager.js';
 import { SessionLockError } from '../infrastructure/redis/errors.js';
 import { PINNED_PI_SDK_VERSION } from '../infrastructure/pi/pi-runtime-factory.js';
+import { buildMcpPolicyBindings } from '../infrastructure/mcp/pi-mcp-adapter-factory.js';
 import {
   PlatformEventProjector,
   extractAssistantTextForUi,
+  redactPayload,
 } from '../infrastructure/pi/platform-event-projector.js';
 import { normalizeExecutorResult } from './run-executor.js';
 import { sanitizeStatusReason } from './sanitize-status-reason.js';
@@ -49,6 +51,13 @@ import { ConflictError } from '../infrastructure/mysql/errors.js';
 import { FencedRunEventRecorder } from './fenced-run-event-recorder.js';
 import { FencedToolGovernanceRecorder } from './fenced-tool-governance-recorder.js';
 import { createPromiseTail } from './promise-tail.js';
+import { APPROVAL_STATUS } from '../domain/tool/approval-status.js';
+import { TOOL_EXECUTION_STATUS } from '../domain/tool/tool-execution-status.js';
+import { DurableSteerController } from './durable-steer-controller.js';
+import {
+  DURABLE_INTERACTION_PENDING,
+  INTERACTION_STATUS,
+} from '../domain/interaction/interaction-status.js';
 
 export { createPromiseTail } from './promise-tail.js';
 export {
@@ -129,6 +138,127 @@ export function derivePromptFromTriggeringMessage(message) {
   return JSON.stringify(content);
 }
 
+/**
+ * Adapt durable text/image parts to AgentSession.prompt(text, { images }).
+ * Pi 0.80.3 always requires the first argument to be a string.
+ *
+ * @param {string | Array<{ type: string, text?: string, [k: string]: unknown }>} prompt
+ * @returns {{ text: string, options?: { images: object[] } }}
+ */
+export function toPiPromptInvocation(prompt) {
+  if (typeof prompt === 'string') return { text: prompt };
+
+  const text = prompt
+    .filter((part) => part?.type === 'text')
+    .map((part) => String(part.text ?? ''))
+    .join('\n');
+  const images = prompt
+    .filter((part) => part?.type === 'image')
+    .map((part) => ({ ...part }));
+
+  return images.length > 0 ? { text, options: { images } } : { text };
+}
+
+/**
+ * Replace a parked approval/interaction placeholder in live state and the
+ * durable branch. `appendIfMissing` is reserved for interaction recovery from
+ * an older snapshot that was checkpointed before Pi emitted a toolResult slot.
+ */
+export function replaceSuspendedToolResultInSession(session, replacement) {
+  if (!session || !replacement?.toolCallId) return false;
+  const toolCallId = String(replacement.toolCallId);
+  const content = Array.isArray(replacement.content)
+    ? replacement.content
+    : [];
+  const details =
+    replacement.details && typeof replacement.details === 'object'
+      ? replacement.details
+      : {};
+  const isError = Boolean(replacement.isError);
+  let rewrote = false;
+  const appendIfMissing = replacement.appendIfMissing === true;
+
+  const messages = session.agent?.state?.messages;
+  if (Array.isArray(messages)) {
+    for (let i = messages.length - 1; i >= 0; i -= 1) {
+      const message = messages[i];
+      if (
+        message?.role !== 'toolResult' ||
+        String(message.toolCallId || '') !== toolCallId
+      ) {
+        continue;
+      }
+      messages[i] = {
+        ...message,
+        toolName: replacement.toolName || message.toolName,
+        content,
+        details: { ...(message.details || {}), ...details },
+        isError,
+      };
+      rewrote = true;
+      break;
+    }
+  }
+
+  const manager = session.sessionManager;
+  if (
+    manager &&
+    typeof manager.getEntries === 'function' &&
+    typeof manager.branch === 'function' &&
+    typeof manager.appendMessage === 'function'
+  ) {
+    const entries = manager.getEntries() || [];
+    const parked = [...entries].reverse().find(
+      (entry) =>
+        entry?.type === 'message' &&
+        entry.message?.role === 'toolResult' &&
+        String(entry.message.toolCallId || '') === toolCallId,
+    );
+    if (parked?.parentId) {
+      manager.branch(parked.parentId);
+      manager.appendMessage({
+        role: 'toolResult',
+        toolCallId,
+        toolName:
+          replacement.toolName || parked.message?.toolName || 'tool',
+        content,
+        details,
+        isError,
+        timestamp: Date.now(),
+      });
+      rewrote = true;
+    }
+  }
+  if (!rewrote && appendIfMissing) {
+    if (
+      manager &&
+      typeof manager.appendMessage === 'function'
+    ) {
+      manager.appendMessage({
+        role: 'toolResult',
+        toolCallId,
+        toolName: replacement.toolName || 'tool',
+        content,
+        details,
+        isError,
+        timestamp: Date.now(),
+      });
+      rewrote = true;
+    } else if (Array.isArray(messages)) {
+      messages.push({
+        role: 'toolResult',
+        toolCallId,
+        toolName: replacement.toolName || 'tool',
+        content,
+        details,
+        isError,
+      });
+      rewrote = true;
+    }
+  }
+  return rewrote;
+}
+
 export class PiRunExecutor {
   /**
    * @param {{
@@ -143,7 +273,9 @@ export class PiRunExecutor {
    *   piRuntimeFactory: { create: (input: object) => Promise<any> },
    *   sessionAdapter?: { captureSnapshotPayload: Function, dispose?: Function },
    *   modelResolver: (agentVersion: object) => object | Promise<object>,
+   *   requestAuthResolver?: (model: object, agentVersion: object) => object | Promise<object>,
    *   workspaceResolver: (agentSession: object) => string | Promise<string>,
+   *   sandboxSessionProvisioner?: { ensure: (input: object) => Promise<object> },
    *   generateId: () => string,
    *   now?: () => Date,
    *   projector?: PlatformEventProjector,
@@ -152,6 +284,7 @@ export class PiRunExecutor {
    *   agentDir?: string,
    *   extensionBundleFactory?: (runContext: object, deps: object) => unknown[],
    *   eventProjectionMode?: 'session-subscribe' | 'observability' | 'both',
+   *   steerPollIntervalMs?: number,
    * }} deps
    */
   constructor(deps) {
@@ -183,7 +316,9 @@ export class PiRunExecutor {
     this.piRuntimeFactory = deps.piRuntimeFactory;
     this.sessionAdapter = deps.sessionAdapter ?? null;
     this.modelResolver = deps.modelResolver;
+    this.requestAuthResolver = deps.requestAuthResolver ?? null;
     this.workspaceResolver = deps.workspaceResolver;
+    this.sandboxSessionProvisioner = deps.sandboxSessionProvisioner ?? null;
     this.generateId = deps.generateId;
     this.now = deps.now ?? (() => new Date());
     this.projector = deps.projector ?? new PlatformEventProjector();
@@ -207,6 +342,7 @@ export class PiRunExecutor {
      * tests green when no observability bundle is wired.
      */
     this.eventProjectionMode = deps.eventProjectionMode ?? 'session-subscribe';
+    this.steerPollIntervalMs = deps.steerPollIntervalMs;
 
     /** @type {string | null} */
     this._lockToken = null;
@@ -226,6 +362,10 @@ export class PiRunExecutor {
     this._eventRecorder = null;
     /** @type {FencedToolGovernanceRecorder | null} */
     this._governanceRecorder = null;
+    /** @type {Set<string>} */
+    this._pendingInteractionToolCallIds = new Set();
+    /** @type {DurableSteerController | null} */
+    this._steerController = null;
     /** @type {boolean} */
     this._disposed = false;
     /** @type {boolean} */
@@ -246,6 +386,11 @@ export class PiRunExecutor {
       };
     }
 
+    // A PiRunExecutor is normally single-use, but clear this ephemeral signal
+    // before every attempt so a reused test/worker instance cannot carry a
+    // prior Run's ask_user marker into a later execution.
+    this._pendingInteractionToolCallIds.clear();
+
     const scope = {
       orgId: assertUlid(ctx.scope.orgId, 'orgId'),
       userId: assertUlid(ctx.scope.userId, 'userId'),
@@ -254,6 +399,8 @@ export class PiRunExecutor {
     const workerId = String(ctx.workerId || 'worker').trim();
     const signal = ctx.signal;
     const externalEmit = typeof ctx.emit === 'function' ? ctx.emit : null;
+    const approvalResume = ctx.run?.approvalResume ?? null;
+    const interactionResume = ctx.run?.interactionResume ?? null;
 
     // 1) Verify run + scope from durable row (not job-supplied session data).
     const run = await this.tx.run(async (trx) => {
@@ -265,6 +412,7 @@ export class PiRunExecutor {
     const conversationId = assertUlid(run.conversationId, 'conversationId');
     const agentVersionId = assertUlid(run.agentVersionId, 'agentVersionId');
     const traceId = String(run.traceId || '');
+    const traceState = run.traceState == null ? null : String(run.traceState);
 
     // 2) Unique SessionLock owner token + serial renew
     const lockToken = generateSessionLockOwnerToken(workerId);
@@ -342,6 +490,33 @@ export class PiRunExecutor {
         };
       }
 
+      // SandboxSession + Workspace must exist before recovery/runtime/tools.
+      // The HMAC endpoint verifies this exact tuple against the ACTIVE
+      // AgentSession row under the freshly acquired execution fence.
+      if (this.sandboxSessionProvisioner) {
+        try {
+          await this.sandboxSessionProvisioner.ensure({
+            orgId: scope.orgId,
+            userId: scope.userId,
+            conversationId,
+            agentSessionId,
+            sandboxSessionId: session.sandboxSessionId,
+            runId,
+            workspaceId: session.workspaceId,
+            executionFenceToken: fenceToken,
+            traceId,
+            ...(traceState ? { traceState } : {}),
+          });
+        } catch (error) {
+          return {
+            outcome: RUN_STATUS.FAILED,
+            statusReason:
+              sanitizeStatusReason(error) ??
+              'sandbox session provisioning failed',
+          };
+        }
+      }
+
       // 4) Exact AgentVersion + full model via resolver (exact 0.80.3)
       const agentVersion = await this.tx.run(async (trx) => {
         const repos = this.createRepositories(trx);
@@ -375,6 +550,9 @@ export class PiRunExecutor {
           statusReason: 'modelResolver returned no model',
         };
       }
+      const requestAuth = this.requestAuthResolver
+        ? await this.requestAuthResolver(model, agentVersion)
+        : null;
 
       // 5) Recover snapshot/journal
       const recovered = await this.recoveryService.recover({
@@ -408,6 +586,12 @@ export class PiRunExecutor {
       let extensionFactories;
       let projectionMode = this.eventProjectionMode;
       let sandboxSessionIdForCtx = session.sandboxSessionId ?? null;
+      /** @type {any} */
+      let runtimeSession = null;
+      /** @type {object | null} */
+      let pendingApproval = null;
+      /** @type {object | null} */
+      let pendingInteraction = null;
 
       if (typeof this.extensionBundleFactory === 'function') {
         // plan: runtime sandboxSessionId must exist when enterprise extensions run.
@@ -434,6 +618,7 @@ export class PiRunExecutor {
         runId,
         sandboxSessionId: sandboxSessionIdForCtx,
         traceId,
+        ...(traceState ? { traceState } : {}),
         executionFenceToken: fenceToken,
       };
 
@@ -478,9 +663,63 @@ export class PiRunExecutor {
       });
 
       if (typeof this.extensionBundleFactory === 'function') {
-        extensionFactories = this.extensionBundleFactory(eventContext, {
-          recorder: this._eventRecorder,
-          governanceRecorder: this._governanceRecorder,
+        const mcpPolicyBindings = buildMcpPolicyBindings(agentVersion);
+          extensionFactories = this.extensionBundleFactory(eventContext, {
+            recorder: this._eventRecorder,
+            governanceRecorder: this._governanceRecorder,
+            observability: {
+              modelId:
+                typeof model.id === 'string'
+                  ? model.id
+                  : typeof model.modelId === 'string'
+                    ? model.modelId
+                    : null,
+              provider: typeof model.provider === 'string' ? model.provider : null,
+            },
+            ...mcpPolicyBindings,
+            isDurableInteractionPending: (toolCallId) => {
+              const normalized = String(toolCallId ?? '').trim();
+              return (
+                normalized.length > 0 &&
+                this._pendingInteractionToolCallIds.has(normalized)
+              );
+            },
+          runSuspensionPort: {
+            onDurableApprovalPending: (pending) => {
+              if (
+                !pending ||
+                pending.kind !== 'DURABLE_APPROVAL_PENDING' ||
+                pending.runId !== runId
+              ) {
+                throw new Error('durable approval signal does not match Run');
+              }
+              pendingApproval = Object.freeze({ ...pending });
+              try {
+                runtimeSession?.abort?.();
+              } catch {
+                // Run is already durably parked; prompt teardown is best-effort.
+              }
+            },
+            onDurableInteractionPending: (pending) => {
+              const toolCallId = String(pending?.toolCallId ?? '').trim();
+              if (
+                !pending ||
+                pending.kind !== DURABLE_INTERACTION_PENDING ||
+                pending.runId !== runId ||
+                !toolCallId ||
+                pending.status !== INTERACTION_STATUS.PENDING
+              ) {
+                throw new Error('durable interaction signal does not match Run');
+              }
+              this._pendingInteractionToolCallIds.add(toolCallId);
+              pendingInteraction = Object.freeze({ ...pending });
+              try {
+                runtimeSession?.abort?.();
+              } catch {
+                // Run is already durably parked; prompt teardown is best-effort.
+              }
+            },
+          },
           // Callers may merge sandboxTransport / policy config in their factory.
         });
         // Observability bundle owns message/tool/compaction/model events.
@@ -504,13 +743,14 @@ export class PiRunExecutor {
         piSnapshot,
         cwd,
         model,
+        requestAuth,
         agentDir: this.agentDir ?? undefined,
         context: eventContext,
         extensionFactories,
         runEventRecorder: this._eventRecorder,
       });
 
-      const runtimeSession = this._runtime?.session;
+      runtimeSession = this._runtime?.session;
       if (!runtimeSession) {
         return {
           outcome: RUN_STATUS.FAILED,
@@ -589,13 +829,40 @@ export class PiRunExecutor {
         else signal.addEventListener('abort', onAbort, { once: true });
       }
 
-      // 10) Prompt from durable triggering user message only (strict run binding)
-      const triggering = await this.tx.run(async (trx) => {
-        const repos = this.createRepositories(trx);
-        return repos.messages.getById(run.triggeringMessageId, scope);
-      });
-      this.#assertTriggeringMessageBinding(triggering, run);
-      const prompt = derivePromptFromTriggeringMessage(triggering);
+      // 10) A resumed approval executes the exact durable tool call first and
+      // prompts only with its resolution. Ordinary runs use the triggering user
+      // message and never dump accumulated history into a fresh prompt.
+      let prompt;
+      if (interactionResume) {
+        prompt = toPiPromptInvocation(
+          await this.#prepareInteractionResume({
+            interactionResume,
+            runtimeSession,
+            run,
+            scope,
+            signal,
+          }),
+        );
+      } else if (approvalResume) {
+        prompt = toPiPromptInvocation(
+          await this.#prepareApprovalResume({
+            approvalResume,
+            runtimeSession,
+            run,
+            scope,
+            signal,
+          }),
+        );
+      } else {
+        const triggering = await this.tx.run(async (trx) => {
+          const repos = this.createRepositories(trx);
+          return repos.messages.getById(run.triggeringMessageId, scope);
+        });
+        this.#assertTriggeringMessageBinding(triggering, run);
+        prompt = toPiPromptInvocation(
+          derivePromptFromTriggeringMessage(triggering),
+        );
+      }
 
       if (this._lockLost || signal?.aborted) {
         return {
@@ -604,19 +871,54 @@ export class PiRunExecutor {
         };
       }
 
-      // 11) Await prompt
+      // 11) Await prompt while consuming durable steer requests. HTTP and
+      // Worker are separate processes; MySQL events are the hand-off channel.
       let promptError = null;
+      let promptPromise = null;
       try {
         if (typeof runtimeSession.prompt === 'function') {
-          await runtimeSession.prompt(prompt);
+          promptPromise = runtimeSession.prompt(prompt.text, prompt.options);
         } else if (typeof runtimeSession.prompt === 'undefined') {
           // Test fakes may use run/complete
           if (typeof runtimeSession.run === 'function') {
-            await runtimeSession.run(prompt);
+            promptPromise = runtimeSession.run(prompt.text, prompt.options);
           }
         }
+
+        this._steerController = new DurableSteerController({
+          transactionManager: this.tx,
+          createRepositories: this.createRepositories,
+          runtimeSession: {
+            steer: async (text) => {
+              if (typeof runtimeSession.steer !== 'function') {
+                throw new Error('Pi runtime session.steer() is unavailable');
+              }
+              await runtimeSession.steer(text);
+            },
+          },
+          eventRecorder: this._eventRecorder,
+          runId,
+          conversationId,
+          agentSessionId,
+          scope,
+          pollIntervalMs: this.steerPollIntervalMs,
+          onError: () => {
+            try {
+              runtimeSession.abort?.();
+            } catch {
+              // The controller error remains authoritative.
+            }
+          },
+        });
+        this._steerController.start();
+        await promptPromise;
       } catch (err) {
         promptError = err;
+      } finally {
+        await this._steerController?.stop();
+        if (!promptError && this._steerController?.error) {
+          promptError = this._steerController.error;
+        }
       }
 
       // 12) Flush event tail (message_end may precede SessionManager append)
@@ -656,7 +958,7 @@ export class PiRunExecutor {
         };
       }
 
-      if (promptError) {
+      if (promptError && !pendingApproval && !pendingInteraction) {
         const msg = sanitizeStatusReason(promptError);
         // Uncertain side effects → recovery-required, not silent success
         if (this.#looksLikeUncertainSideEffect(promptError)) {
@@ -768,12 +1070,27 @@ export class PiRunExecutor {
         configHash,
         workspaceId: session.workspaceId,
         piSdkVersion: PINNED_PI_SDK_VERSION,
+        interactionResumeId: interactionResume?.interactionId ?? null,
       });
 
       if (this._lockLost) {
         return {
           outcome: RUN_STATUS.FAILED,
           statusReason: 'session lock lost after prompt; no success',
+        };
+      }
+
+      if (pendingApproval) {
+        return {
+          outcome: RUN_STATUS.WAITING_APPROVAL,
+          statusReason: 'approval pending',
+        };
+      }
+
+      if (pendingInteraction) {
+        return {
+          outcome: RUN_STATUS.WAITING_INPUT,
+          statusReason: 'user interaction pending',
         };
       }
 
@@ -811,6 +1128,279 @@ export class PiRunExecutor {
   }
 
   /**
+   * Verify the worker-provided resume context against MySQL. Approved tools are
+   * claimed and executed once with their original toolCallId and arguments;
+   * rejected tools only add a continuation result.
+   */
+  async #prepareApprovalResume({
+    approvalResume,
+    runtimeSession,
+    run,
+    scope,
+    signal,
+  }) {
+    const approvalId = assertUlid(
+      approvalResume.approvalId,
+      'approvalId',
+    );
+    const durable = await this.tx.run(async (trx) => {
+      const repos = this.createRepositories(trx);
+      const approval = await repos.approvals.getById(approvalId, scope);
+      const toolExecution = await repos.toolExecutions.getById(
+        approval.toolExecutionId,
+        scope,
+      );
+      return { approval, toolExecution };
+    });
+    const { approval, toolExecution } = durable;
+    if (
+      approval.runId !== run.runId ||
+      toolExecution.runId !== run.runId ||
+      approval.toolExecutionId !== toolExecution.toolExecutionId ||
+      approvalResume.toolExecutionId !== toolExecution.toolExecutionId
+    ) {
+      throw new ConflictError('approval resume parent binding mismatch', {
+        resource: 'approvals',
+        id: approvalId,
+      });
+    }
+    if (
+      approvalResume.status &&
+      approvalResume.status !== approval.status
+    ) {
+      throw new ConflictError('approval resume status changed', {
+        resource: 'approvals',
+        id: approvalId,
+      });
+    }
+
+    const replaySession = {
+      agent: runtimeSession.agent,
+      sessionManager:
+        this._runtime?.sessionManager ?? runtimeSession.sessionManager,
+    };
+
+    if (approval.status === APPROVAL_STATUS.REJECTED) {
+      if (toolExecution.status !== TOOL_EXECUTION_STATUS.FAILED) {
+        throw new ConflictError(
+          `rejected approval has non-terminal tool ${toolExecution.status}`,
+          { resource: 'tool_executions', id: toolExecution.toolExecutionId },
+        );
+      }
+      const content = [
+        {
+          type: 'text',
+          text: `Approval ${approvalId} was rejected. The tool was not executed.`,
+        },
+      ];
+      replaceSuspendedToolResultInSession(replaySession, {
+        toolCallId: toolExecution.toolCallId,
+        toolName: toolExecution.toolName,
+        content,
+        details: {
+          approvalId,
+          approvalRejected: true,
+        },
+        isError: true,
+      });
+      return (
+        `[Approval resolution] Approval ${approvalId} for ` +
+        `${toolExecution.toolName} was rejected. The tool was not executed. ` +
+        'Continue the task without retrying or bypassing the rejected operation.'
+      );
+    }
+
+    if (approval.status !== APPROVAL_STATUS.APPROVED) {
+      throw new ConflictError(`approval is not resolved: ${approval.status}`, {
+        resource: 'approvals',
+        id: approvalId,
+      });
+    }
+    if (toolExecution.status !== TOOL_EXECUTION_STATUS.WAITING_APPROVAL) {
+      throw new ConflictError(
+        `approved tool is ${toolExecution.status}, expected WAITING_APPROVAL`,
+        { resource: 'tool_executions', id: toolExecution.toolExecutionId },
+      );
+    }
+    if (typeof runtimeSession.getToolDefinition !== 'function') {
+      throw new Error(
+        'Pi runtime cannot replay approved tool: getToolDefinition unavailable',
+      );
+    }
+    const definition = runtimeSession.getToolDefinition(toolExecution.toolName);
+    if (!definition || typeof definition.execute !== 'function') {
+      throw new Error(
+        `approved tool definition is unavailable: ${toolExecution.toolName}`,
+      );
+    }
+
+    await this._governanceRecorder.recordToolStarted({
+      toolCallId: toolExecution.toolCallId,
+      toolName: toolExecution.toolName,
+      args: toolExecution.argumentsJson ?? {},
+      approvalId,
+    });
+
+    let result;
+    try {
+      result = await definition.execute(
+        toolExecution.toolCallId,
+        toolExecution.argumentsJson ?? {},
+        signal,
+        undefined,
+        undefined,
+      );
+    } catch (err) {
+      await this._governanceRecorder.recordToolUnknown({
+        toolCallId: toolExecution.toolCallId,
+        toolName: toolExecution.toolName,
+        args: toolExecution.argumentsJson ?? {},
+        errorCode: 'APPROVED_TOOL_REPLAY_UNCERTAIN',
+        result: {
+          unknown: true,
+          approvalId,
+          reason: sanitizeStatusReason(err),
+        },
+      });
+      const failure = new Error(
+        `approved tool replay outcome is uncertain: ${sanitizeStatusReason(err) || 'unknown error'}`,
+      );
+      failure.code = 'APPROVED_TOOL_REPLAY_UNCERTAIN';
+      throw failure;
+    }
+
+    const isError = Boolean(result?.isError);
+    await this._governanceRecorder.recordToolEnded({
+      toolCallId: toolExecution.toolCallId,
+      toolName: toolExecution.toolName,
+      args: toolExecution.argumentsJson ?? {},
+      isError,
+      result: result ?? null,
+    });
+
+    const safeResult = redactPayload(result ?? null);
+    const fallbackText = JSON.stringify(safeResult ?? null).slice(0, 20_000);
+    const content = Array.isArray(result?.content)
+      ? result.content
+      : [{ type: 'text', text: fallbackText }];
+    const rewrote = replaceSuspendedToolResultInSession(replaySession, {
+      toolCallId: toolExecution.toolCallId,
+      toolName: toolExecution.toolName,
+      content,
+      details: {
+        ...(result?.details && typeof result.details === 'object'
+          ? result.details
+          : {}),
+        approvalId,
+        approvalReplay: true,
+      },
+      isError,
+    });
+    return (
+      `[Approval resolution] Approval ${approvalId} was granted. ` +
+      `The original ${toolExecution.toolName} call ` +
+      `(toolCallId=${toolExecution.toolCallId}) was executed exactly once with ` +
+      `its approved arguments${isError ? ' and returned an error' : ''}. ` +
+      (rewrote
+        ? 'Its result is recorded in the tool result slot. '
+        : `Its redacted result is: ${fallbackText || '(empty)'}. `) +
+      'Continue from that result without issuing the same operation again.'
+    );
+  }
+
+  /**
+   * Recover a durable ask_user answer into the parked tool-result slot, then
+   * continue the existing Pi session with a short continuation prompt.
+   */
+  async #prepareInteractionResume({
+    interactionResume,
+    runtimeSession,
+    run,
+    scope,
+    signal,
+  }) {
+    const interactionId = assertUlid(
+      interactionResume.interactionId,
+      'interactionId',
+    );
+    const durable = await this.tx.run(async (trx) => {
+      const repos = this.createRepositories(trx);
+      const interaction = await repos.interactions.getById(interactionId, scope);
+      const toolExecution = await repos.toolExecutions.getById(
+        interaction.toolExecutionId,
+        scope,
+      );
+      return { interaction, toolExecution };
+    });
+    const { interaction, toolExecution } = durable;
+    if (
+      interaction.runId !== run.runId ||
+      interaction.agentSessionId !== run.agentSessionId ||
+      interaction.toolCallId !== toolExecution.toolCallId ||
+      interactionResume.toolExecutionId !== toolExecution.toolExecutionId ||
+      interactionResume.toolCallId !== toolExecution.toolCallId
+    ) {
+      throw new ConflictError('interaction resume parent binding mismatch', {
+        resource: 'interactions',
+        id: interactionId,
+      });
+    }
+    if (
+      interaction.status !== INTERACTION_STATUS.RESOLVED ||
+      interactionResume.status !== interaction.status
+    ) {
+      throw new ConflictError('interaction is not durably resolved', {
+        resource: 'interactions',
+        id: interactionId,
+      });
+    }
+    if (
+      interactionResume.responseHash &&
+      interaction.responseHash !== interactionResume.responseHash
+    ) {
+      throw new ConflictError('interaction response hash changed', {
+        resource: 'interactions',
+        id: interactionId,
+      });
+    }
+    if (signal?.aborted) throw new Error('interaction resume aborted');
+
+    const response = interaction.responseJson;
+    const responseText =
+      typeof response === 'string' ? response : JSON.stringify(response);
+    const content = [
+      {
+        type: 'text',
+        text: `User response: ${responseText}`,
+      },
+    ];
+    replaceSuspendedToolResultInSession(
+      {
+        agent: runtimeSession.agent,
+        sessionManager:
+          this._runtime?.sessionManager ?? runtimeSession.sessionManager,
+      },
+      {
+        toolCallId: toolExecution.toolCallId,
+        toolName: toolExecution.toolName,
+        content,
+        details: {
+          interactionId,
+          interactionType: interaction.interactionType,
+          responseHash: interaction.responseHash,
+        },
+        isError: false,
+        appendIfMissing: true,
+      },
+    );
+    return (
+      `[User interaction resolved] The user answered the ${interaction.interactionType} ` +
+      `request ${interactionId}. Continue the task using the answer already ` +
+      'recorded in the tool result; do not ask the same question again.'
+    );
+  }
+
+  /**
    * dispose order: unsubscribe → abort if needed → flush → runtime.dispose →
    * stop renew → token-safe release. Idempotent; aggregates cleanup errors.
    */
@@ -824,8 +1414,18 @@ export class PiRunExecutor {
       return;
     }
     this._disposed = true;
+    this._pendingInteractionToolCallIds.clear();
     /** @type {unknown[]} */
     const errors = [];
+
+    if (this._steerController) {
+      try {
+        await this._steerController.stop();
+      } catch (err) {
+        errors.push(err);
+      }
+      this._steerController = null;
+    }
 
     if (this._unsubscribe) {
       try {
@@ -1096,7 +1696,9 @@ export class PiRunExecutor {
  *   sessionLockManager: any,
  *   piRuntimeFactory: any,
  *   modelResolver: (agentVersion: object) => object | Promise<object>,
+ *   requestAuthResolver?: (model: object, agentVersion: object) => object | Promise<object>,
  *   workspaceResolver: (agentSession: object) => string | Promise<string>,
+ *   sandboxSessionProvisioner?: { ensure: (input: object) => Promise<object> },
  *   generateId: () => string,
  *   now?: () => Date,
  *   sessionAdapter?: any,
@@ -1107,6 +1709,7 @@ export class PiRunExecutor {
  *   eventProjectionMode?: 'session-subscribe' | 'observability' | 'both',
  *   agentDir?: string,
  *   sessionLockRenewIntervalMs?: number,
+ *   steerPollIntervalMs?: number,
  * }} opts
  * @returns {import('./run-executor.js').RunExecutorFactory}
  */
@@ -1142,7 +1745,9 @@ export function createPiRunExecutorFactory(opts) {
       sessionLockManager: opts.sessionLockManager,
       piRuntimeFactory: opts.piRuntimeFactory,
       modelResolver: opts.modelResolver,
+      requestAuthResolver: opts.requestAuthResolver,
       workspaceResolver: opts.workspaceResolver,
+      sandboxSessionProvisioner: opts.sandboxSessionProvisioner,
       generateId: opts.generateId,
       now: opts.now,
       sessionAdapter: opts.sessionAdapter,
@@ -1150,6 +1755,7 @@ export function createPiRunExecutorFactory(opts) {
       recoveryService: opts.recoveryService,
       agentDir: opts.agentDir,
       sessionLockRenewIntervalMs: opts.sessionLockRenewIntervalMs,
+      steerPollIntervalMs: opts.steerPollIntervalMs,
       extensionBundleFactory: opts.extensionBundleFactory,
       eventProjectionMode: opts.eventProjectionMode,
     });

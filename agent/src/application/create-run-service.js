@@ -36,6 +36,7 @@ import {
   ValidationError,
 } from './errors.js';
 import { RunParentProvisioner } from './parent/run-parent-provisioner.js';
+import { normalizeW3cTracestate } from '../infrastructure/sandbox/trace-context.js';
 
 export const CREATE_RUN_OPERATION = 'create_run';
 export const DEFAULT_IDEMPOTENCY_TTL_MS = 24 * 60 * 60 * 1000;
@@ -97,6 +98,17 @@ export function normalizeTraceId(traceId) {
     );
   }
   return normalized;
+}
+
+/** @param {unknown} traceState @returns {string | null} */
+export function normalizeTraceState(traceState) {
+  try {
+    return normalizeW3cTracestate(traceState);
+  } catch (error) {
+    throw new ValidationError(
+      error instanceof Error ? error.message : 'traceState is invalid',
+    );
+  }
 }
 
 /**
@@ -178,7 +190,9 @@ export class CreateRunService {
    *     orgName?: string | null,
    *   },
    *   traceId: string,
+   *   traceState?: string | null,
    *   idempotencyKey: string,
+   *   agentId?: string | null,
    *   agentProfileId?: string | null,
    *   budget?: unknown,
    *   spanId?: string | null,
@@ -191,6 +205,7 @@ export class CreateRunService {
     }
     const messages = requireMessages(input.messages);
     const traceId = normalizeTraceId(input.traceId);
+    const traceState = normalizeTraceState(input.traceState);
     if (
       typeof input.idempotencyKey !== 'string' ||
       !input.idempotencyKey.trim()
@@ -201,11 +216,21 @@ export class CreateRunService {
     if (!input.auth) {
       throw new ValidationError('auth (trusted external subjects) is required');
     }
+    const agentId =
+      input.agentId == null || input.agentId === ''
+        ? null
+        : assertUlid(input.agentId, 'agentId');
 
     const requestHash = hashCreateRunRequest({
       messages,
       externalConversationId: input.auth.externalConversationId ?? null,
-      agentProfileId: input.agentProfileId ?? null,
+      // A2A already used the bound Agent ULID as agentProfileId. Preserve that
+      // hash shape across deploys while giving CreateRun an explicit selector.
+      agentProfileId: input.agentProfileId ?? agentId,
+      agentId:
+        agentId && input.agentProfileId && input.agentProfileId !== agentId
+          ? agentId
+          : null,
       budget: input.budget ?? null,
     });
 
@@ -216,9 +241,11 @@ export class CreateRunService {
           messages,
           auth: input.auth,
           traceId,
+          traceState,
           idempotencyKey,
           requestHash,
           spanId: input.spanId ?? null,
+          agentId,
           agentProfileId: input.agentProfileId ?? null,
         });
       } catch (err) {
@@ -242,9 +269,11 @@ export class CreateRunService {
    *   messages: unknown[],
    *   auth: object,
    *   traceId: string,
+   *   traceState: string | null,
    *   idempotencyKey: string,
    *   requestHash: string,
    *   spanId: string | null,
+   *   agentId: string | null,
    *   agentProfileId: string | null,
    * }} ctx
    */
@@ -267,10 +296,13 @@ export class CreateRunService {
         },
       );
 
-      const parents = await provisioner.provision({
-        ...ctx.auth,
-        externalConversationId: ctx.auth.externalConversationId ?? null,
-      });
+      const parents = await provisioner.provision(
+        {
+          ...ctx.auth,
+          externalConversationId: ctx.auth.externalConversationId ?? null,
+        },
+        { agentId: ctx.agentId },
+      );
 
       const scope = { orgId: parents.orgId, userId: parents.userId };
       const expiresAt = new Date(
@@ -357,6 +389,7 @@ export class CreateRunService {
 
       const contentJson = {
         messages: ctx.messages,
+        agentId: ctx.agentId,
         agentProfileId: ctx.agentProfileId,
       };
 
@@ -384,6 +417,7 @@ export class CreateRunService {
         status: RUN_STATUS.ACCEPTED,
         queueName: this.queueName,
         traceId: ctx.traceId,
+        traceState: ctx.traceState,
         nextEventSequence: 0,
       });
 
@@ -400,7 +434,8 @@ export class CreateRunService {
           agentSessionId: parents.agentSessionId,
           triggeringMessageId: messageId,
         },
-        traceId: ctx.traceId,
+          traceId: ctx.traceId,
+          traceState: ctx.traceState,
         spanId: ctx.spanId,
       });
 

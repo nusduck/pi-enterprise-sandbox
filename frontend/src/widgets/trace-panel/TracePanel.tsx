@@ -10,6 +10,35 @@ export type TraceTreeNode = {
   children: TraceTreeNode[];
 };
 
+const TRACE_METADATA_LABELS: Readonly<Record<string, string>> = Object.freeze({
+  modelId: 'Model',
+  provider: 'Provider',
+  toolName: 'Tool',
+  source: 'Source',
+  riskLevel: 'Risk',
+  exitCode: 'Exit',
+  artifactId: 'Artifact',
+  taskId: 'A2A task',
+  clientId: 'Client',
+  agentId: 'Agent',
+  errorCode: 'Error code',
+});
+
+/** Metadata is already allowlisted/redacted by the Agent trace projection. */
+export function traceMetadataEntries(
+  metadata: TraceSpanEntity['metadata'],
+): Array<{ key: string; label: string; value: string }> {
+  if (!metadata) return [];
+  const entries: Array<{ key: string; label: string; value: string }> = [];
+  for (const [key, label] of Object.entries(TRACE_METADATA_LABELS)) {
+    const raw = metadata[key];
+    if (raw == null || raw === '') continue;
+    if (!['string', 'number', 'boolean'].includes(typeof raw)) continue;
+    entries.push({ key, label, value: String(raw) });
+  }
+  return entries;
+}
+
 /** Build a parent→children tree from flat span entities. */
 export function buildTraceTree(spans: TraceSpanEntity[]): TraceTreeNode[] {
   const byId = new Map<string, TraceTreeNode>();
@@ -52,6 +81,21 @@ function statusGlyph(status: TraceSpanEntity['status']): string {
   }
 }
 
+function statusLabel(status: TraceSpanEntity['status']): string {
+  switch (status) {
+    case 'ok':
+      return 'ok';
+    case 'error':
+      return 'error';
+    case 'cancelled':
+      return 'cancelled';
+    case 'running':
+      return 'running';
+    default:
+      return status;
+  }
+}
+
 function TraceNodeView({
   node,
   depth,
@@ -62,6 +106,7 @@ function TraceNodeView({
   traceId: string | null;
 }) {
   const { span } = node;
+  const metadata = traceMetadataEntries(span.metadata);
   const duration =
     span.durationMs != null
       ? span.durationMs < 1000
@@ -77,19 +122,34 @@ function TraceNodeView({
       style={{ marginLeft: depth * 12 }}
     >
       <div className="trace-node-head">
-        <span className="rtc-icon" aria-hidden="true">
+        <span
+          className="rtc-icon"
+          aria-label={`Status: ${statusLabel(span.status)}`}
+          title={`Status: ${statusLabel(span.status)}`}
+        >
           {statusGlyph(span.status)}
         </span>
+        <span className="trace-status">{statusLabel(span.status)}</span>
         <span className="trace-kind">{span.kind}</span>
         <span className="trace-name">{span.name}</span>
         <span className="rtc-meta">{duration}</span>
       </div>
       <div className="row-meta mono">
-        {span.spanId ? `span ${span.spanId.slice(0, 12)}` : span.id}
+        {span.spanId ? `span ${span.spanId}` : span.id}
         {span.tokens != null ? ` · ${span.tokens} tok` : ''}
         {span.cost != null ? ` · $${Number(span.cost).toFixed(4)}` : ''}
         {depth === 0 && traceId ? ` · trace ${traceId.slice(0, 12)}…` : ''}
       </div>
+      {metadata.length > 0 ? (
+        <dl className="trace-metadata">
+          {metadata.map((entry) => (
+            <div key={entry.key}>
+              <dt>{entry.label}</dt>
+              <dd className="mono">{entry.value}</dd>
+            </div>
+          ))}
+        </dl>
+      ) : null}
       {span.error ? <div className="row-sub danger">{span.error}</div> : null}
       {node.children.length > 0 ? (
         <ul className="trace-children">
@@ -117,6 +177,7 @@ export function TracePanel({
   emptyHint?: string;
 }) {
   const tree = useMemo(() => buildTraceTree(spans), [spans]);
+  const owner = spans.find((span) => span.orgId || span.userId) ?? null;
 
   if (!spans.length) {
     return <p className="inspector-empty">{emptyHint}</p>;
@@ -128,6 +189,18 @@ export function TracePanel({
         <dl className="inspector-dl">
           <dt>Trace ID</dt>
           <dd className="mono">{traceId}</dd>
+          {owner?.orgId ? (
+            <>
+              <dt>Organization</dt>
+              <dd className="mono">{owner.orgId}</dd>
+            </>
+          ) : null}
+          {owner?.userId ? (
+            <>
+              <dt>User</dt>
+              <dd className="mono">{owner.userId}</dd>
+            </>
+          ) : null}
         </dl>
       ) : null}
       <ul className="trace-tree inspector-list">

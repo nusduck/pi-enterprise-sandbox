@@ -161,6 +161,131 @@ describe('createSandboxBridgeHttpTransport', () => {
     assert.equal(out.pythonVersion, '3.11.0');
   });
 
+  it('readFile uses the formal internal transport without touching legacy reads', async () => {
+    const legacyCalls = [];
+    const internalCalls = [];
+    const client = createFakeClient(legacyCalls);
+    client.readFile = async () => {
+      throw new Error('legacy readFile must not be called');
+    };
+    const internalReadTransport = {
+      async readFile(input) {
+        internalCalls.push(input);
+        return {
+          content: 'formal',
+          path: input.path,
+          offset: input.offset,
+          bytesRead: 6,
+          eof: true,
+        };
+      },
+    };
+    const t = createSandboxBridgeHttpTransport({
+      client,
+      internalReadTransport,
+    });
+    const input = payload({
+      path: '/home/sandbox/workspace/report.txt',
+      offset: 2,
+      limit: 64,
+    });
+
+    const out = await t.readFile(input);
+
+    assert.equal(internalCalls.length, 1);
+    assert.equal(internalCalls[0], input);
+    assert.equal(out.content, 'formal');
+    assert.equal(legacyCalls.some((call) => call.m === 'readFile'), false);
+
+    await t.writeFile(
+      payload({
+        path: '/home/sandbox/workspace/next.txt',
+        content: 'legacy-for-now',
+      }),
+    );
+    assert.equal(legacyCalls.some((call) => call.m === 'writeFile'), true);
+  });
+
+  it('write/edit use injected formal transport and never call legacy client', async () => {
+    const legacyCalls = [];
+    const internalCalls = [];
+    const client = createFakeClient(legacyCalls);
+    const internalFilesWriteTransport = {
+      async writeFile(input) { internalCalls.push(['write', input]); return { path: input.path, size: 3, hash: 'a'.repeat(64), version: 'a'.repeat(64) }; },
+      async editFile(input) { internalCalls.push(['edit', input]); return { path: input.path, hash: 'b'.repeat(64), version: 'b'.repeat(64), beforeHash: 'a'.repeat(64) }; },
+    };
+    const t = createSandboxBridgeHttpTransport({ client, internalFilesWriteTransport });
+    const w = payload({ path:'/home/sandbox/workspace/a.txt', content:'new' });
+    const e = payload({ path:'/home/sandbox/workspace/a.txt', oldString:'old', newString:'new', expectedHash:'a'.repeat(64) });
+    await t.writeFile(w);
+    await t.editFile(e);
+    assert.deepEqual(internalCalls.map((x) => x[0]), ['write', 'edit']);
+    assert.equal(internalCalls[0][1], w);
+    assert.equal(internalCalls[1][1], e);
+    assert.equal(legacyCalls.some((call) => call.m === 'writeFile' || call.m === 'editFile'), false);
+  });
+
+  it('submitArtifact uses injected formal transport and never calls legacy client', async () => {
+    let internalCalls = 0;
+    let legacyCalls = 0;
+    const client = {
+      async submitArtifact() { legacyCalls += 1; throw new Error('legacy route used'); },
+    };
+    const internalArtifactTransport = {
+      async submitArtifact(payload) {
+        internalCalls += 1;
+        return { artifactId: '01K0G2PAV8FPMVC9QHJG7JPN56', path: payload.path };
+      },
+    };
+    const t = createSandboxBridgeHttpTransport({ client, internalArtifactTransport });
+    const result = await t.submitArtifact({ identity: { sandboxSessionId: 's1' }, path: '/home/sandbox/workspace/out.pdf' });
+    assert.equal(result.artifactId, '01K0G2PAV8FPMVC9QHJG7JPN56');
+    assert.equal(internalCalls, 1);
+    assert.equal(legacyCalls, 0);
+  });
+
+  it('bash/python use formal execution transport and leave other methods legacy', async () => {
+    const legacyCalls = [];
+    const internalCalls = [];
+    const client = createFakeClient(legacyCalls);
+    const internalExecutionTransport = {
+      async bash(input) {
+        internalCalls.push({ method: 'bash', input });
+        return { exitCode: 0, stdout: 'formal-bash', stderr: '' };
+      },
+      async python(input) {
+        internalCalls.push({ method: 'python', input });
+        return { exitCode: 0, stdout: 'formal-python', stderr: '' };
+      },
+    };
+    const t = createSandboxBridgeHttpTransport({
+      client,
+      internalExecutionTransport,
+    });
+    const bashInput = payload({
+      command: 'printf formal',
+      timeoutSeconds: 10,
+      env: {},
+    });
+    const pythonInput = payload({
+      code: 'print("formal")',
+      args: [],
+      timeoutSeconds: 10,
+    });
+
+    assert.equal((await t.bash(bashInput)).stdout, 'formal-bash');
+    assert.equal((await t.python(pythonInput)).stdout, 'formal-python');
+    assert.equal(internalCalls[0].input, bashInput);
+    assert.equal(internalCalls[1].input, pythonInput);
+    assert.equal(legacyCalls.some((call) => call.m === 'executeCommand'), false);
+    assert.equal(legacyCalls.some((call) => call.m === 'executePython'), false);
+
+    await t.writeFile(
+      payload({ path: '/home/sandbox/workspace/still-legacy.txt', content: 'x' }),
+    );
+    assert.equal(legacyCalls.some((call) => call.m === 'writeFile'), true);
+  });
+
   it('processStart/Status/Read/Kill chain uses client process APIs', async () => {
     const calls = [];
     const t = createSandboxBridgeHttpTransport({
@@ -170,13 +295,13 @@ describe('createSandboxBridgeHttpTransport', () => {
       payload({ command: 'sleep 1', timeoutSeconds: 60 }),
     );
     assert.equal(started.processId, 'proc_abc');
-    assert.equal(started.status, 'RUNNING');
+    assert.equal(started.status, 'running');
     assert.equal(started.stdoutCursor, '0-0');
     assert.equal(calls[0].body.session_id, SID);
     assert.equal(calls[0].body.command, 'sleep 1');
 
     const st = await t.processStatus(payload({ processId: 'proc_abc' }));
-    assert.equal(st.status, 'RUNNING');
+    assert.equal(st.status, 'running');
     assert.equal(st.elapsedSeconds, 12);
 
     const rd = await t.processRead(
@@ -190,8 +315,39 @@ describe('createSandboxBridgeHttpTransport', () => {
       payload({ processId: 'proc_abc', signal: 'TERM' }),
     );
     assert.equal(calls.find((c) => c.m === 'signalProcess').signal, 'SIGTERM');
-    assert.ok(kill.status);
+    assert.equal(kill.status, 'running');
     assert.equal(kill.signaled, true);
+  });
+
+  it('normalizes formal process statuses to the shared lowercase contract', async () => {
+    const internalProcessTransport = {
+      async processStart() { return { processId: 'p1', status: 'RUNNING' }; },
+      async processStatus() { return { processId: 'p1', status: 'WAITING_INPUT' }; },
+      async processRead() { return { processId: 'p1', status: 'COMPLETED', data: '' }; },
+      async processKill() { return { processId: 'p1', status: 'CANCEL_REQUESTED', signaled: true }; },
+    };
+    const t = createSandboxBridgeHttpTransport({
+      client: createFakeClient([]),
+      internalProcessTransport,
+    });
+
+    assert.equal((await t.processStart(payload({ command: 'sleep 1' }))).status, 'running');
+    assert.equal((await t.processStatus(payload({ processId: 'p1' }))).status, 'running');
+    assert.equal((await t.processRead(payload({ processId: 'p1' }))).status, 'completed');
+    assert.equal((await t.processKill(payload({ processId: 'p1' }))).status, 'running');
+  });
+
+  it('fails closed on an unknown process status', async () => {
+    const t = createSandboxBridgeHttpTransport({
+      client: createFakeClient([]),
+      internalProcessTransport: {
+        async processStart() { return { processId: 'p1', status: 'mystery' }; },
+      },
+    });
+    await assert.rejects(
+      () => t.processStart(payload({ command: 'sleep 1' })),
+      /Invalid process status/,
+    );
   });
 
   it('processKill does not fabricate SIGNALED on undelivered kill', async () => {

@@ -163,11 +163,23 @@ export function buildA2aTaskObject(input) {
  * @returns {object | null}
  */
 function projectArtifactEvent(event, ctx) {
+  const data =
+    event.data && typeof event.data === 'object' && !Array.isArray(event.data)
+      ? event.data
+      : {};
+  const payload =
+    event.payload &&
+    typeof event.payload === 'object' &&
+    !Array.isArray(event.payload)
+      ? event.payload
+      : {};
   const rawId =
     event.artifactId ||
     event.artifact_id ||
-    event.payload?.artifactId ||
-    event.payload?.artifact_id ||
+    data.artifactId ||
+    data.artifact_id ||
+    payload.artifactId ||
+    payload.artifact_id ||
     null;
   if (typeof rawId !== 'string' || !isUlid(rawId)) {
     // Fail closed: no durable id → no A2A artifact event (no path-only fallthrough).
@@ -181,8 +193,10 @@ function projectArtifactEvent(event, ctx) {
     event.file_name ||
     event.displayName ||
     event.display_name ||
-    event.payload?.name ||
-    event.payload?.displayName ||
+    data.name ||
+    data.displayName ||
+    payload.name ||
+    payload.displayName ||
     null;
   const name =
     typeof nameRaw === 'string' && nameRaw.trim()
@@ -192,15 +206,22 @@ function projectArtifactEvent(event, ctx) {
   const mimeType =
     event.mimeType ||
     event.mime_type ||
-    event.payload?.mimeType ||
-    event.payload?.mime_type ||
+    data.mimeType ||
+    data.mime_type ||
+    payload.mimeType ||
+    payload.mime_type ||
     'application/octet-stream';
 
   const sizeBytes =
     event.sizeBytes ??
     event.size_bytes ??
-    event.payload?.sizeBytes ??
-    event.payload?.size_bytes ??
+    event.size ??
+    data.sizeBytes ??
+    data.size_bytes ??
+    data.size ??
+    payload.sizeBytes ??
+    payload.size_bytes ??
+    payload.size ??
     null;
 
   /** @type {object[]} */
@@ -259,7 +280,11 @@ function projectArtifactEvent(event, ctx) {
     description:
       typeof event.description === 'string'
         ? event.description.slice(0, 512)
-        : null,
+        : typeof data.description === 'string'
+          ? data.description.slice(0, 512)
+          : typeof payload.description === 'string'
+            ? payload.description.slice(0, 512)
+            : null,
     parts,
     metadata: {
       mimeType: typeof mimeType === 'string' ? mimeType : 'application/octet-stream',

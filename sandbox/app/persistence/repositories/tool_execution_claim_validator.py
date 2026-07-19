@@ -50,7 +50,15 @@ REQUEST_HASH_RE_LEN = 64
 TOOL_SOURCE_SANDBOX = "sandbox"
 AGENT_SESSION_ACTIVE = "ACTIVE"
 RUN_STATUS_RUNNING = "RUNNING"
-SANDBOX_SESSION_RUNNING = "RUNNING"
+SANDBOX_SESSION_ACTIVE = "ACTIVE"
+
+# Startup recovery is intentionally bounded.  A production Sandbox is a
+# single active instance (the entrypoint defaults to one Uvicorn worker); a
+# second instance must not be used as a live scale-out mechanism until an
+# execution-owner lease is added to the schema.  The limits keep a corrupt or
+# unexpectedly large ledger from turning startup into an unbounded transaction.
+DEFAULT_RECOVERY_BATCH_SIZE = 100
+DEFAULT_RECOVERY_MAX_ROWS = 10_000
 
 # PR-07B claim capability (migration 20260718000008) — readonly probe targets.
 CLAIM_REQUIRED_COLUMNS: dict[str, tuple[str, ...]] = {
@@ -227,8 +235,14 @@ class ToolExecutionClaimValidator:
             # Ensure tool_execution_id from locked row is authoritative.
             claim["tool_execution_id"] = str(tool_row["tool_execution_id"])
 
+            # Do not lock a missing row before INSERT. Under MySQL's default
+            # REPEATABLE READ, SELECT ... FOR UPDATE on an absent unique key
+            # takes a next-key/gap lock; concurrent first claims then deadlock
+            # while each waits on the other's insert intention. The unique
+            # constraints remain the race authority, and the duplicate path
+            # below reloads the winner under FOR UPDATE before replay checks.
             existing = self._lock_sandbox_execution_by_run_tool_call(
-                conn, claim["run_id"], claim["tool_call_id"], for_update=True
+                conn, claim["run_id"], claim["tool_call_id"], for_update=False
             )
             if existing is not None:
                 return self._replay_or_conflict(existing, claim, scope)
@@ -387,6 +401,144 @@ class ToolExecutionClaimValidator:
         if "error_code" not in payload:
             payload["error_code"] = "CRASH_RECOVERY_UNKNOWN"
         return self.finalize(payload)
+
+    def recover_running_executions(
+        self,
+        *,
+        batch_size: int = DEFAULT_RECOVERY_BATCH_SIZE,
+        max_rows: int = DEFAULT_RECOVERY_MAX_ROWS,
+    ) -> int:
+        """Reconcile durable ``RUNNING`` rows left by a hard process kill.
+
+        This is a trusted startup-only operation.  It never has enough
+        information to safely replay a child process, so every eligible row is
+        moved to sticky ``UNKNOWN`` by a conditional CAS.  The query is
+        paginated and each page has its own short transaction; a concurrent
+        finalizer can win the CAS and is left untouched.  Rows with missing
+        owner/fence identity fail closed because they cannot be safely
+        attributed to this recovery operation.
+
+        ``max_rows`` is a safety ceiling, not a silent truncation point.  If
+        more rows remain after the ceiling, recovery raises and startup does
+        not admit routes.
+        """
+        if type(batch_size) is not int or isinstance(batch_size, bool) or batch_size <= 0:
+            raise ValueError("batch_size must be a positive integer")
+        if type(max_rows) is not int or isinstance(max_rows, bool) or max_rows <= 0:
+            raise ValueError("max_rows must be a positive integer")
+        if batch_size > max_rows:
+            batch_size = max_rows
+
+        recovered = 0
+        inspected = 0
+        while True:
+            with self.db.transaction() as conn:
+                self.ensure_claim_schema_capability(conn)
+                conn.execute(
+                    """
+                    SELECT execution_id, org_id, user_id,
+                           execution_fence_token
+                    FROM sandbox_executions
+                    WHERE status = %s
+                    ORDER BY created_at ASC, execution_id ASC
+                    LIMIT %s
+                    """,
+                    (SANDBOX_EXECUTION_STATUS_RUNNING, batch_size),
+                )
+                rows = conn.fetchall()
+                if not rows:
+                    return recovered
+                if inspected + len(rows) > max_rows:
+                    raise ConflictError(
+                        "startup recovery row limit exceeded; refusing to "
+                        "admit Sandbox routes",
+                        resource="sandbox_executions",
+                    )
+                inspected += len(rows)
+
+                for row in rows:
+                    execution_id = row.get("execution_id")
+                    org_id = row.get("org_id")
+                    user_id = row.get("user_id")
+                    fence = row.get("execution_fence_token")
+                    if (
+                        execution_id is None
+                        or str(execution_id).strip() == ""
+                        or org_id is None
+                        or str(org_id).strip() == ""
+                        or user_id is None
+                        or str(user_id).strip() == ""
+                    ):
+                        raise ConflictError(
+                            "RUNNING sandbox execution has incomplete owner "
+                            "identity; startup recovery is fail-closed",
+                            resource="sandbox_executions",
+                            id=str(execution_id or ""),
+                        )
+                    try:
+                        fence_i = _require_positive_int(
+                            fence, "execution_fence_token"
+                        )
+                    except ConflictError as exc:
+                        raise ConflictError(
+                            "RUNNING sandbox execution has invalid fence; "
+                            "startup recovery is fail-closed",
+                            resource="sandbox_executions",
+                            id=str(execution_id),
+                        ) from exc
+
+                    conn.execute(
+                        """
+                        UPDATE sandbox_executions
+                        SET status = %s,
+                            result_json = %s,
+                            error_code = %s,
+                            completed_at = %s
+                        WHERE execution_id = %s
+                          AND org_id = %s
+                          AND user_id = %s
+                          AND status = %s
+                          AND execution_fence_token = %s
+                        """,
+                        (
+                            SANDBOX_EXECUTION_STATUS_UNKNOWN,
+                            dumps_json(
+                                {
+                                    "unknown": True,
+                                    "reason": "CRASH_RECOVERY_UNKNOWN",
+                                }
+                            ),
+                            "CRASH_RECOVERY_UNKNOWN",
+                            to_mysql_datetime(),
+                            str(execution_id),
+                            str(org_id),
+                            str(user_id),
+                            SANDBOX_EXECUTION_STATUS_RUNNING,
+                            fence_i,
+                        ),
+                    )
+                    # A finalizer that won the race is authoritative; do not
+                    # count or overwrite it.  The next page query will skip it.
+                    if getattr(conn, "rowcount", 0) == 1:
+                        recovered += 1
+
+            # A short page proves there are no more rows at this snapshot.
+            # With a single active instance no new claims can be admitted
+            # during startup; a full page loops to check the next page.
+            if len(rows) < batch_size:
+                return recovered
+
+    # Descriptive alias for callers/tests that use the orphan terminology.
+    def recover_orphaned_running_executions(
+        self,
+        *,
+        batch_size: int = DEFAULT_RECOVERY_BATCH_SIZE,
+        max_rows: int = DEFAULT_RECOVERY_MAX_ROWS,
+    ) -> int:
+        return self.recover_running_executions(
+            batch_size=batch_size,
+            max_rows=max_rows,
+        )
 
     # ── claim helpers ───────────────────────────────────────────────────
 
@@ -553,9 +705,9 @@ class ToolExecutionClaimValidator:
                 resource="sandbox_sessions",
                 id=claim["sandbox_session_id"],
             )
-        if str(sbx.get("status")) != SANDBOX_SESSION_RUNNING:
+        if str(sbx.get("status")) != SANDBOX_SESSION_ACTIVE:
             raise ConflictError(
-                f"sandbox session must be RUNNING (got {sbx.get('status')})",
+                f"sandbox session must be ACTIVE (got {sbx.get('status')})",
                 resource="sandbox_sessions",
                 id=claim["sandbox_session_id"],
             )

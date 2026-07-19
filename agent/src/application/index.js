@@ -45,7 +45,34 @@ export {
 
 export { GetRunService } from './get-run-service.js';
 
+export {
+  ApprovalQueryService,
+  presentApproval,
+} from './approval-query-service.js';
+
+export { ApprovalDecisionService } from './approval-decision-service.js';
+
+export { InteractionResponseService } from './interaction-response-service.js';
+
 export { CancelRunService } from './cancel-run-service.js';
+
+export {
+  SteerRunService,
+  STEER_RUN_OPERATION,
+  STEER_REQUESTED_EVENT,
+  STEER_DELIVERED_EVENT,
+  DEFAULT_STEER_IDEMPOTENCY_TTL_MS,
+  MAX_STEER_TEXT_CHARS,
+} from './steer-run-service.js';
+
+export { FollowUpService } from './follow-up-service.js';
+
+export {
+  DurableSteerController,
+  DEFAULT_STEER_POLL_INTERVAL_MS,
+  STEER_EVENT_PAGE_SIZE,
+  steerTextFromMessage,
+} from './durable-steer-controller.js';
 
 export {
   ExecuteRunService,
@@ -120,6 +147,7 @@ export {
   DEFAULT_SSE_POLL_MS,
   DEFAULT_SSE_HEARTBEAT_MS,
   DEFAULT_MYSQL_CATCHUP_MS,
+  DEFAULT_MYSQL_OPEN_RETRY_ATTEMPTS,
   DEFAULT_HISTORY_PAGE,
 } from './run-event-sse-service.js';
 

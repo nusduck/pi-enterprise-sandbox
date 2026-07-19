@@ -322,7 +322,7 @@ describe('no re-execution of durable RUNNING/SUCCEEDED/FAILED', () => {
     );
   }
 
-  it('allow→RUNNING then replay allow is blocked; no new audit', async () => {
+  it('allows exact pre-claim RUNNING replay, then blocks after claim', async () => {
     const gov = makeGov(knex, nextId);
     const engine = {
       evaluateToolCall: async () => ALLOW,
@@ -348,12 +348,23 @@ describe('no re-execution of durable RUNNING/SUCCEEDED/FAILED', () => {
       TOOL_EXECUTION_STATUS.RUNNING,
     );
 
-    const r2 = await invoke(factories[1], 'tc-run', 'bash', {
+    const preClaimReplay = await invoke(factories[1], 'tc-run', 'bash', {
       command: 'echo hi',
     });
-    assert.equal(r2.block, true);
-    assert.equal(r2.reasonCode, 'POLICY_DURABLE_ALREADY_EXECUTED');
+    assert.equal(preClaimReplay, undefined);
     assert.equal(state.tables.sandbox_audit_events.length, 1);
+
+    await gov.bindSandboxRequest({
+      toolCallId: 'tc-run',
+      toolName: 'bash',
+      requestHash: 'a'.repeat(64),
+      requestHashVersion: 1,
+    });
+    const claimedReplay = await invoke(factories[1], 'tc-run', 'bash', {
+      command: 'echo hi',
+    });
+    assert.equal(claimedReplay.block, true);
+    assert.equal(claimedReplay.reasonCode, 'POLICY_DURABLE_ALREADY_EXECUTED');
   });
 
   it('allow→SUCCEEDED replay allow is blocked', async () => {
@@ -420,7 +431,7 @@ describe('no re-execution of durable RUNNING/SUCCEEDED/FAILED', () => {
     assert.equal(state.tables.sandbox_audit_events.length, 1);
   });
 
-  it('assertCompatiblePolicyReplay: only PROPOSED allow; fingerprint exact', () => {
+  it('assertCompatiblePolicyReplay: allows only PROPOSED or unclaimed RUNNING', () => {
     const fp = policyDecisionFingerprint(ALLOW);
     assert.doesNotThrow(() =>
       assertCompatiblePolicyReplay(
@@ -435,12 +446,27 @@ describe('no re-execution of durable RUNNING/SUCCEEDED/FAILED', () => {
         },
       ),
     );
+    assert.doesNotThrow(() =>
+      assertCompatiblePolicyReplay(
+        {
+          status: TOOL_EXECUTION_STATUS.RUNNING,
+          _policyFingerprint: fp,
+          requestHash: null,
+        },
+        {
+          decision: 'allow',
+          desiredStatus: TOOL_EXECUTION_STATUS.PROPOSED,
+          policyFingerprint: fp,
+        },
+      ),
+    );
     assert.throws(
       () =>
         assertCompatiblePolicyReplay(
           {
             status: TOOL_EXECUTION_STATUS.RUNNING,
             _policyFingerprint: fp,
+            requestHash: 'a'.repeat(64),
           },
           {
             decision: 'allow',

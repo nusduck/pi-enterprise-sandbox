@@ -98,7 +98,7 @@ function createFakeTransport(calls) {
       if (m === 'processRead') {
         return { data: 'line\n', nextCursor: '0-1', stream: 'stdout' };
       }
-      if (m === 'processKill') return { status: 'SIGNALED' };
+      if (m === 'processKill') return { status: 'CANCEL_REQUESTED' };
       if (m === 'submitArtifact') {
         return {
           artifactId: '01K0G2PAV8FPMVC9QHJG7JPN5D',
@@ -112,6 +112,32 @@ function createFakeTransport(calls) {
   }
   return t;
 }
+
+describe('process result status contract', () => {
+  it('normalizes process tool results to lowercase ProcessStatus values', async () => {
+    const defs = createSandboxBridgeToolDefinitions(
+      RUN_A,
+      createFakeTransport([]),
+      { sandboxRequestBinder: createFakeBinder() },
+    );
+    const start = defs.find((tool) => tool.name === 'process_start');
+    const status = defs.find((tool) => tool.name === 'process_status');
+    const killed = defs.find((tool) => tool.name === 'process_kill');
+
+    const startedResult = await start.execute('tc-process-start-status', { command: 'sleep 1' });
+    const statusResult = await status.execute('tc-process-status-status', {
+      processId: '01K0G2PAV8FPMVC9QHJG7JPN5C',
+    });
+    const killedResult = await killed.execute('tc-process-kill-status', {
+      processId: '01K0G2PAV8FPMVC9QHJG7JPN5C',
+      signal: 'TERM',
+    });
+
+    assert.equal(JSON.parse(startedResult.content[0].text).status, 'running');
+    assert.equal(JSON.parse(statusResult.content[0].text).status, 'running');
+    assert.equal(JSON.parse(killedResult.content[0].text).status, 'running');
+  });
+});
 
 function capturePiApi() {
   /** @type {Array<object>} */
@@ -323,6 +349,49 @@ describe('sandbox-bridge registration', () => {
     assert.equal(calls[0].payload.requestHashVersion, 1);
     assert.notEqual(calls[0].payload.toolExecutionId, 'spoofed-te');
     assert.notEqual(calls[0].payload.requestHash, 'f'.repeat(64));
+  });
+
+  it('submit_artifact returns bounded durable metadata in details', async () => {
+    const calls = [];
+    const defs = createSandboxBridgeToolDefinitions(
+      RUN_A,
+      createFakeTransport(calls),
+      { sandboxRequestBinder: createFakeBinder() },
+    );
+    const tool = defs.find((definition) => definition.name === 'submit_artifact');
+    const result = await tool.execute('tc-submit-details', {
+      path: 'out/report.pdf',
+      displayName: '风险分析报告.pdf',
+      description: '最终分析报告',
+    });
+
+    assert.deepEqual(result.details, {
+      artifactId: '01K0G2PAV8FPMVC9QHJG7JPN5D',
+      displayName: '风险分析报告.pdf',
+      description: '最终分析报告',
+      sha256: 'a'.repeat(64),
+      size: 10,
+      mimeType: 'text/plain',
+    });
+    assert.equal(Object.hasOwn(result.details, 'path'), false);
+    assert.equal(calls[0].payload.description, '最终分析报告');
+  });
+
+  it('submit_artifact preserves a 1024-character description in durable details', async () => {
+    const description = '描'.repeat(1024);
+    const defs = createSandboxBridgeToolDefinitions(
+      RUN_A,
+      createFakeTransport([]),
+      { sandboxRequestBinder: createFakeBinder() },
+    );
+    const tool = defs.find((definition) => definition.name === 'submit_artifact');
+    const result = await tool.execute('tc-submit-long-description', {
+      path: 'out/report.pdf',
+      description,
+    });
+
+    assert.equal(result.details.description, description);
+    assert.equal(Object.hasOwn(result.details, 'description_truncated'), false);
   });
 
   it('rejects invalid toolCallId before transport (all 10 tools, zero calls)', async () => {

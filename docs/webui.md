@@ -168,16 +168,16 @@ render → security.isAllowedApiUrl 校验后生成 <a class="dl" href="/api/...
 
 ## 渲染机制
 
-- `render(state)` — 消息列表与流式气泡
-- `incBubble` — 高频 token 增量更新最后一条 assistant
-- `rerenderLast` — 工具卡片状态变化时重绘最后一条
-- `renderConversationList` / `renderDeliverables` / `showApprovalBanner` — 侧栏与审批
-- 文本经 `esc()` 转义；下载链接经 `isAllowedApiUrl` 过滤
+- React 组件通过 `ChatContext` 订阅规范化 `EntityStore` 与 UI snapshot
+- `agentEventAdapter -> runReducer` 是 RuntimeEvent 的唯一写入路径
+- `projectRunMessages` 从 Run/Message/Tool/Artifact 实体生成聊天投影
+- Timeline、Context Inspector、Approval 与 Deliverables widgets 按实体 id 更新，不维护第二份 runtime state
+- Markdown 通过 `react-markdown` + `rehype-sanitize` 渲染；下载链接仍经 URL allowlist 过滤
 
 ## 测试
 
 ```bash
-npm test --prefix frontend          # node:test — test/*.test.js
+npm test --prefix frontend          # node:test + tsx — test/**/*.test.ts
 npm run build --prefix frontend     # 生产构建（CI 同款）
 ```
 

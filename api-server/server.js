@@ -4,7 +4,6 @@
  * Chat orchestration is delegated to the independent Agent service.
  */
 import http from 'node:http';
-import { randomUUID } from 'node:crypto';
 import {
   config,
   isProtectedApiPath,
@@ -25,12 +24,18 @@ import {
   handleDatasetUpload,
   handleListDatasets,
 } from './routes/datasets.js';
-import { handleDecideApproval } from './routes/approvals.js';
+import {
+  handleDecideApproval,
+  handleGetApproval,
+  handleListApprovals,
+} from './routes/approvals.js';
 import {
   handleSteerRun,
   handleFollowUpRun,
+  handleConversationFollowUp,
   handleCancelRun,
   handleGetRun,
+  handleGetRunTrace,
   handleListRunTools,
   handleResumeApproval,
   handleInteractionResponse,
@@ -41,13 +46,31 @@ import {
 import { handleRegister, handleLogin, handleLogout, handleMe } from './routes/auth.js';
 import { handleEnsureSession } from './routes/sessions.js';
 import {
+  handleGetProcess,
+  handleGetProcessLogs,
+  handleListProcesses,
+  handleProcessAction,
+  handleReadProcess,
+} from './routes/processes.js';
+import {
   handleCapabilityRegistry,
   handleExtensionDiagnostics,
 } from './routes/capabilities.js';
+import {
+  handleGetA2aConfig,
+  handleIssueA2aCredential,
+  handleRotateA2aCredential,
+  handleRevokeA2aCredential,
+} from './routes/a2a.js';
 import { authFromRequest, checkHealth } from './services/sandbox-client.js';
 import { checkAgentHealth } from './services/agent-client.js';
 import { readJsonBody } from './http/body.js';
 import { sendError } from './http/response.js';
+import {
+  formatTraceparent,
+  resolveRequestTraceContext,
+  bindRequestTraceContext,
+} from './application/trace-context.js';
 
 // Production fail-fast before bind.
 try {
@@ -92,7 +115,11 @@ function setCommonHeaders(req, res) {
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PATCH, DELETE, OPTIONS');
   res.setHeader(
     'Access-Control-Allow-Headers',
-    'Content-Type, Authorization, X-Trace-Id, Idempotency-Key, Last-Event-ID',
+    'Content-Type, Authorization, X-Trace-Id, traceparent, tracestate, Idempotency-Key, Last-Event-ID',
+  );
+  res.setHeader(
+    'Access-Control-Expose-Headers',
+    'X-Trace-Id, traceparent, tracestate',
   );
 }
 
@@ -121,39 +148,21 @@ function enforceBffAuth(req, res, path) {
 }
 
 const server = http.createServer(async (req, res) => {
-  // W3C 32-hex trace-id (never legacy trace_*). Strict traceparent validation.
-  const tp = req.headers.traceparent;
-  let traceId = null;
-  if (typeof tp === 'string' && tp.trim()) {
-    const parts = tp.trim().split('-');
-    if (parts.length === 4) {
-      const [ver, tid, sid, flags] = parts;
-      const verOk = /^[0-9a-fA-F]{2}$/.test(ver) && ver.toLowerCase() !== 'ff';
-      const tidOk =
-        /^[0-9a-fA-F]{32}$/.test(tid) && tid.toLowerCase() !== '0'.repeat(32);
-      const sidOk =
-        /^[0-9a-fA-F]{16}$/.test(sid) && sid.toLowerCase() !== '0'.repeat(16);
-      const flagsOk = /^[0-9a-fA-F]{2}$/.test(flags);
-      if (verOk && tidOk && sidOk && flagsOk) {
-        traceId = tid.toLowerCase();
-      }
-    }
-  }
-  if (!traceId) {
-    const xt = req.headers['x-trace-id'];
-    if (
-      typeof xt === 'string' &&
-      /^[0-9a-fA-F]{32}$/.test(xt.trim()) &&
-      xt.trim().toLowerCase() !== '0'.repeat(32)
-    ) {
-      traceId = xt.trim().toLowerCase();
-    }
-  }
-  if (!traceId) {
-    traceId = randomUUID().replaceAll('-', '');
-  }
+  const traceContext = resolveRequestTraceContext(req.headers);
+  bindRequestTraceContext(req, traceContext);
+  req.traceContext = traceContext;
+  // Keep the public compatibility header in compact 32-hex form. The
+  // resolver already rejects UUID/legacy values, so this is normalization
+  // rather than a second trace-id source.
+  const traceId = String(traceContext.traceId).replaceAll('-', '');
   req.traceId = traceId;
+  req.traceparent = formatTraceparent(traceContext);
+  req.tracestate = traceContext.tracestate;
   res.setHeader('X-Trace-Id', traceId);
+  res.setHeader('traceparent', req.traceparent);
+  if (traceContext.tracestate) {
+    res.setHeader('tracestate', traceContext.tracestate);
+  }
   setCommonHeaders(req, res);
 
   if (req.method === 'OPTIONS') {
@@ -216,6 +225,35 @@ const server = http.createServer(async (req, res) => {
       }
     }
 
+    if (req.method === 'GET' && path === '/api/a2a/config') {
+      await handleGetA2aConfig(parsedUrl, res, req);
+      return;
+    }
+    if (req.method === 'POST' && path === '/api/a2a/credentials') {
+      const parsed = await readJsonBody(req, {
+        maxBytes: config.JSON_BODY_LIMIT_BYTES,
+      });
+      await handleIssueA2aCredential(parsed, res, req);
+      return;
+    }
+    {
+      const credentialAction = path.match(
+        /^\/api\/a2a\/credentials\/([^/]+)\/(rotate|revoke)$/,
+      );
+      if (req.method === 'POST' && credentialAction) {
+        const id = decodeURIComponent(credentialAction[1]);
+        if (credentialAction[2] === 'rotate') {
+          const parsed = await readJsonBody(req, {
+            maxBytes: config.JSON_BODY_LIMIT_BYTES,
+          });
+          await handleRotateA2aCredential(id, parsed, res, req);
+        } else {
+          await handleRevokeA2aCredential(id, res, req);
+        }
+        return;
+      }
+    }
+
     // ── Conversations ──
     if (req.method === 'GET' && path === '/api/conversations') {
       await handleListConversations(res, req);
@@ -264,7 +302,7 @@ const server = http.createServer(async (req, res) => {
       if (dsMatch) {
         const conversationId = decodeURIComponent(dsMatch[1]);
         if (req.method === 'GET') {
-          await handleListDatasets(parsedUrl, res, req);
+          await handleListDatasets(parsedUrl, res, req, conversationId);
           return;
         }
         if (req.method === 'POST') {
@@ -274,13 +312,26 @@ const server = http.createServer(async (req, res) => {
       }
     }
 
-    // ── Approvals: POST /api/approvals/:id/decide ──
+    // ── Approvals ──
+    if (req.method === 'GET' && path === '/api/approvals') {
+      await handleListApprovals(parsedUrl, res, req);
+      return;
+    }
     {
       const apprMatch = path.match(/^\/api\/approvals\/([^/]+)\/decide$/);
       if (req.method === 'POST' && apprMatch) {
         const approvalId = decodeURIComponent(apprMatch[1]);
         const parsed = await readJsonBody(req, { maxBytes: config.JSON_BODY_LIMIT_BYTES });
         await handleDecideApproval(approvalId, parsed, res, req);
+        return;
+      }
+      const apprDetailMatch = path.match(/^\/api\/approvals\/([^/]+)$/);
+      if (req.method === 'GET' && apprDetailMatch) {
+        await handleGetApproval(
+          decodeURIComponent(apprDetailMatch[1]),
+          res,
+          req,
+        );
         return;
       }
     }
@@ -295,6 +346,22 @@ const server = http.createServer(async (req, res) => {
         await handleCreateRun(parsed, res, req, { conversationId });
         return;
       }
+      const convFollowUps = path.match(
+        /^\/api\/conversations\/([^/]+)\/follow-ups$/,
+      );
+      if (req.method === 'POST' && convFollowUps) {
+        const conversationId = decodeURIComponent(convFollowUps[1]);
+        const parsed = await readJsonBody(req, {
+          maxBytes: config.JSON_BODY_LIMIT_BYTES,
+        });
+        await handleConversationFollowUp(
+          conversationId,
+          parsed,
+          res,
+          req,
+        );
+        return;
+      }
       if (req.method === 'POST' && path === '/api/runs') {
         const parsed = await readJsonBody(req, { maxBytes: config.JSON_BODY_LIMIT_BYTES });
         await handleCreateRun(parsed, res, req);
@@ -307,6 +374,11 @@ const server = http.createServer(async (req, res) => {
       const runEvents = path.match(/^\/api\/runs\/([^/]+)\/events$/);
       if (req.method === 'GET' && runEvents) {
         await handleRunEvents(decodeURIComponent(runEvents[1]), parsedUrl, res, req);
+        return;
+      }
+      const runTrace = path.match(/^\/api\/runs\/([^/]+)\/trace$/);
+      if (req.method === 'GET' && runTrace) {
+        await handleGetRunTrace(decodeURIComponent(runTrace[1]), res, req);
         return;
       }
       const runSteer = path.match(/^\/api\/runs\/([^/]+)\/steer$/);
@@ -358,6 +430,43 @@ const server = http.createServer(async (req, res) => {
       if (req.method === 'GET' && runTools) {
         await handleListRunTools(decodeURIComponent(runTools[1]), res, req);
         return;
+      }
+    }
+
+    // ── Managed process history and control ──
+    if (req.method === 'GET' && path === '/api/processes') {
+      await handleListProcesses(parsedUrl, res, req);
+      return;
+    }
+    {
+      const processMatch = path.match(
+        /^\/api\/processes\/([^/]+)(?:\/(logs|read|stdin|signal|cancel|kill))?$/,
+      );
+      if (processMatch) {
+        const processId = decodeURIComponent(processMatch[1]);
+        const action = processMatch[2] || 'status';
+        if (req.method === 'GET' && action === 'status') {
+          await handleGetProcess(processId, res, req);
+          return;
+        }
+        if (req.method === 'GET' && action === 'logs') {
+          await handleGetProcessLogs(processId, parsedUrl, res, req);
+          return;
+        }
+        if (req.method === 'GET' && action === 'read') {
+          await handleReadProcess(processId, parsedUrl, res, req);
+          return;
+        }
+        if (
+          req.method === 'POST' &&
+          (action === 'stdin' || action === 'signal' || action === 'cancel' || action === 'kill')
+        ) {
+          const parsed = await readJsonBody(req, {
+            maxBytes: config.JSON_BODY_LIMIT_BYTES,
+          });
+          await handleProcessAction(processId, action, parsed, res, req);
+          return;
+        }
       }
     }
 

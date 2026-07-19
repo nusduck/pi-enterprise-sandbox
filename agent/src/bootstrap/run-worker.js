@@ -70,6 +70,7 @@ export class NeedsReconciliationError extends Error {
  *   cancelSignal?: object | null,
  *   runExecutor?: object,
  *   runExecutorFactory?: Function,
+ *   allowStubExecutor?: boolean,
  *   generateId: () => string,
  *   workerId?: string,
  *   now?: () => Date,
@@ -102,8 +103,15 @@ export function createRunWorkerRuntime(deps) {
     runExecutorFactory = undefined; // use shared instance
   }
   if (!runExecutorFactory && !deps.runExecutor) {
-    // Dev/test convenience only when explicitly allowed by caller injecting stub.
-    runExecutorFactory = () => createStubRunExecutor();
+    if (deps.allowStubExecutor === true) {
+      runExecutorFactory = () => createStubRunExecutor();
+    } else {
+      const err = new Error(
+        'createRunWorkerRuntime requires runExecutor or runExecutorFactory; set allowStubExecutor=true only in explicit test/dev wiring',
+      );
+      err.code = 'RUN_EXECUTOR_NOT_CONFIGURED';
+      throw err;
+    }
   }
 
   const executeRunService = new ExecuteRunService({

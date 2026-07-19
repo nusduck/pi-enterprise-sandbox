@@ -12,6 +12,7 @@ import {
   createPiRunExecutorFactory,
   generateRunLeaseOwnerToken,
   derivePromptFromTriggeringMessage,
+  toPiPromptInvocation,
 } from '../../src/application/pi-run-executor.js';
 import { SessionLockManager } from '../../src/infrastructure/redis/session-lock-manager.js';
 import { LeaseManager } from '../../src/infrastructure/redis/lease-manager.js';
@@ -155,6 +156,7 @@ function seedExecutorWorld(state) {
  * Minimal fake Pi runtime factory for offline tests.
  * @param {{
  *   onPrompt?: Function,
+ *   onSteer?: Function,
  *   entries?: object[],
  *   failPrompt?: Error,
  *   lockLossOnEvent?: boolean,
@@ -216,6 +218,9 @@ function createFakePiRuntimeFactory(opts = {}) {
         abort() {
           aborted = true;
         },
+        async steer(text) {
+          if (typeof opts.onSteer === 'function') await opts.onSteer(text);
+        },
         async prompt(p) {
           if (opts.failPrompt) throw opts.failPrompt;
           if (typeof opts.onPrompt === 'function') await opts.onPrompt(p, { aborted });
@@ -259,6 +264,35 @@ describe('derivePromptFromTriggeringMessage', () => {
     });
     assert.equal(prompt.length, 2);
     assert.equal(prompt[1].type, 'image');
+  });
+
+  it('adapts stored content parts to the Pi prompt(text, { images }) API', () => {
+    const invocation = toPiPromptInvocation([
+      { type: 'text', text: 'first' },
+      { type: 'text', text: 'second' },
+      { type: 'image', data: 'base64-data', mimeType: 'image/png' },
+    ]);
+
+    assert.equal(invocation.text, 'first\nsecond');
+    assert.deepEqual(invocation.options, {
+      images: [
+        { type: 'image', data: 'base64-data', mimeType: 'image/png' },
+      ],
+    });
+  });
+
+  it('adapts browser text-part messages to a string prompt', () => {
+    const durable = derivePromptFromTriggeringMessage({
+      contentJson: {
+        messages: [
+          { role: 'user', content: [{ type: 'text', text: 'browser prompt' }] },
+        ],
+      },
+    });
+
+    assert.deepEqual(toPiPromptInvocation(durable), {
+      text: 'browser prompt',
+    });
   });
 });
 
@@ -350,6 +384,92 @@ describe('PiRunExecutor', () => {
     );
     assert.ok(uiAssistant, 'UI assistant message persisted for history');
     assert.notEqual(uiAssistant.message_type, 'pi_journal_entry');
+    await exec.dispose();
+  });
+
+  it('delivers a durable steer request through native session.steer while prompt runs', async () => {
+    const steerId = '01K0G2PAV8FPMVC9QHJG7JPN5K';
+    const steerMessageId = '01K0G2PAV8FPMVC9QHJG7JPN5M';
+    state.tables.messages.push({
+      message_id: steerMessageId,
+      conversation_id: CONV,
+      agent_session_id: SESS,
+      run_id: RUN,
+      role: 'user',
+      message_type: 'steer_instruction',
+      content_json: JSON.stringify({ text: 'inspect the outliers first' }),
+      sequence_no: 2,
+      pi_entry_id: null,
+      pi_entry_kind: null,
+      created_at: '2026-07-18 00:00:01.000',
+    });
+    state.tables.run_events.push({
+      event_id: steerId,
+      run_id: RUN,
+      org_id: ORG,
+      sequence_no: 1,
+      event_type: 'run.steer.requested',
+      event_version: 1,
+      payload_json: JSON.stringify({
+        steerId,
+        messageId: steerMessageId,
+      }),
+      trace_id: 'b'.repeat(32),
+      span_id: null,
+      created_at: '2026-07-18 00:00:01.000',
+    });
+    state.tables.runs[0].next_event_sequence = 1;
+
+    const delivered = [];
+    const exec = makeExecutor({
+      onSteer: async (text) => delivered.push(text),
+      onPrompt: async () =>
+        new Promise((resolve) => setTimeout(resolve, 30)),
+    });
+    exec.steerPollIntervalMs = 5;
+    const result = await exec.execute({
+      run: { runId: RUN },
+      scope,
+      workerId: 'w-steer',
+      signal: new AbortController().signal,
+    });
+
+    assert.equal(result.outcome, RUN_STATUS.SUCCEEDED);
+    assert.deepEqual(delivered, ['inspect the outliers first']);
+    const acknowledged = state.tables.run_events.find(
+      (event) => event.event_type === 'run.steer.delivered',
+    );
+    assert.ok(acknowledged);
+    assert.equal(JSON.parse(acknowledged.payload_json).data.steerId, steerId);
+    await exec.dispose();
+  });
+
+  it('provisions the exact SandboxSession binding before Pi runtime work', async () => {
+    const calls = [];
+    const exec = makeExecutor();
+    exec.sandboxSessionProvisioner = {
+      ensure: async (input) => calls.push(input),
+    };
+    const result = await exec.execute({
+      run: { runId: RUN },
+      scope,
+      workerId: 'w-provision',
+      signal: new AbortController().signal,
+    });
+
+    assert.equal(result.outcome, RUN_STATUS.SUCCEEDED);
+    assert.equal(calls.length, 1);
+    assert.deepEqual(calls[0], {
+      orgId: ORG,
+      userId: USER,
+      conversationId: CONV,
+      agentSessionId: SESS,
+      sandboxSessionId: SBX,
+      runId: RUN,
+      workspaceId: WSP,
+      executionFenceToken: 1,
+      traceId: 'b'.repeat(32),
+    });
     await exec.dispose();
   });
 
@@ -480,6 +600,8 @@ describe('PiRunExecutor', () => {
     /** @type {object[]} */
     const bundleContexts = [];
     /** @type {object[]} */
+    const bundleDeps = [];
+    /** @type {object[]} */
     const runtimeContexts = [];
     const generateIdFn = generateId;
     const exec = new PiRunExecutor({
@@ -505,8 +627,9 @@ describe('PiRunExecutor', () => {
       generateId: generateIdFn,
       agentDir: '/tmp/agent-dir',
       sessionLockRenewIntervalMs: 60_000,
-      extensionBundleFactory: (eventContext) => {
+      extensionBundleFactory: (eventContext, deps) => {
         bundleContexts.push(eventContext);
+        bundleDeps.push(deps);
         return [];
       },
       sessionAdapter: {
@@ -537,7 +660,38 @@ describe('PiRunExecutor', () => {
     assert.equal(runtimeContexts[0].executionFenceToken, 1);
     assert.equal(runtimeContexts[0].runId, RUN);
     assert.equal(runtimeContexts[0].sandboxSessionId, SBX);
+    assert.equal(bundleDeps[0].observability.modelId, fullModel.id);
+    assert.equal(bundleDeps[0].observability.provider, fullModel.provider);
+    assert.equal(
+      typeof bundleDeps[0].isDurableInteractionPending,
+      'function',
+    );
+    assert.equal(
+      bundleDeps[0].isDurableInteractionPending('ask-user-pending-1'),
+      false,
+    );
+    bundleDeps[0].runSuspensionPort.onDurableInteractionPending({
+      kind: 'DURABLE_INTERACTION_PENDING',
+      interactionId: '01K0G2PAV8FPMVC9QHJG7JPN61',
+      toolExecutionId: '01K0G2PAV8FPMVC9QHJG7JPN62',
+      toolCallId: 'ask-user-pending-1',
+      runId: RUN,
+      status: 'PENDING',
+    });
+    assert.equal(
+      bundleDeps[0].isDurableInteractionPending('ask-user-pending-1'),
+      true,
+    );
+    assert.equal(
+      bundleDeps[0].isDurableInteractionPending('ask-user-ordinary-1'),
+      false,
+    );
     await exec.dispose();
+    assert.equal(
+      bundleDeps[0].isDurableInteractionPending('ask-user-pending-1'),
+      false,
+      'dispose must clear the ephemeral pending marker',
+    );
   });
 
   it('fails closed on invalid acquired fence before extension/runtime', async () => {

@@ -194,7 +194,7 @@ export function unwrapJournalContent(msg) {
     if (typeof c.payloadHash === 'string' && c.payloadHash.length > 0) {
       if (c.payloadHash.toLowerCase() !== recomputed.toLowerCase()) {
         throw new SessionJournalError(
-          'stored journal payloadHash does not match recomputed header hash',
+          `stored journal payloadHash does not match recomputed header hash (pi_entry_id=${String(msg.piEntryId || '')}, stored=${c.payloadHash}, recomputed=${recomputed})`,
           {
             code: 'JOURNAL_HASH_MISMATCH',
             agentSessionId: msg.agentSessionId ?? undefined,
@@ -220,7 +220,7 @@ export function unwrapJournalContent(msg) {
   if (typeof c.payloadHash === 'string' && c.payloadHash.length > 0) {
     if (c.payloadHash.toLowerCase() !== recomputed.toLowerCase()) {
       throw new SessionJournalError(
-        'stored journal payloadHash does not match recomputed entry hash',
+        `stored journal payloadHash does not match recomputed entry hash (pi_entry_id=${String(msg.piEntryId || '')}, stored=${c.payloadHash}, recomputed=${recomputed})`,
         {
           code: 'JOURNAL_HASH_MISMATCH',
           agentSessionId: msg.agentSessionId ?? undefined,

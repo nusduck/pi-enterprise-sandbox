@@ -1,7 +1,8 @@
-"""Sandbox MySQL-only execution-domain persistence (PR-02 T3).
+"""Sandbox MySQL-only execution-domain persistence.
 
-New layer only — does not replace sandbox.database / sandbox.repositories.
-Does not own Conversation / Message / Run authority (Agent Service).
+This package owns SandboxSession, Execution, Process, Dataset, Artifact, and
+Sandbox audit persistence. Conversation, Message, Run, Tool, and Approval
+authority remains in the Agent service.
 """
 
 from sandbox.app.persistence.db import (

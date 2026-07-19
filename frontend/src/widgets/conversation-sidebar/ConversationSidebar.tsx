@@ -252,6 +252,16 @@ export function ConversationSidebar() {
             >
               Settings
             </NavLink>
+            {String(state.authUser?.role || '').toLowerCase() === 'admin' ? (
+              <NavLink
+                to="/settings/a2a"
+                className={({ isActive }) =>
+                  `sidebar-nav-link${isActive ? ' active' : ''}`
+                }
+              >
+                A2A
+              </NavLink>
+            ) : null}
           </nav>
 
           <div className="sidebar-auth" id="auth-panel">

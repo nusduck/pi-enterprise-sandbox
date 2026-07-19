@@ -21,6 +21,7 @@ import {
   TERMINAL_RUN_STATUSES,
 } from '../../../domain/run/run-status.js';
 import { InvalidRunStatusError } from '../../../domain/run/errors.js';
+import { normalizeW3cTracestate } from '../../sandbox/trace-context.js';
 
 /** Default / max page size for list helpers. */
 export const RUN_LIST_DEFAULT_LIMIT = 50;
@@ -85,6 +86,17 @@ export function assertTraceId(traceId) {
     throw new Error('traceId must not be the all-zero W3C invalid id');
   }
   return normalized;
+}
+
+/** @param {unknown} traceState @returns {string | null} */
+export function assertTraceState(traceState) {
+  try {
+    return normalizeW3cTracestate(traceState);
+  } catch (error) {
+    throw new Error(
+      error instanceof Error ? error.message : 'traceState is invalid',
+    );
+  }
 }
 
 /**
@@ -204,6 +216,7 @@ export class RunRepository {
     );
     const status = assertRunStatus(input.status);
     const traceId = assertTraceId(input.traceId);
+    const traceState = assertTraceState(input.traceState);
 
     const now = toMysqlDateTime(input.createdAt || this.now());
     await this.db('runs').insert({
@@ -220,6 +233,7 @@ export class RunRepository {
       queue_name: input.queueName,
       attempt: input.attempt ?? 0,
       trace_id: traceId,
+      trace_state: traceState,
       next_event_sequence: input.nextEventSequence ?? 0,
       started_at: input.startedAt ? toMysqlDateTime(input.startedAt) : null,
       completed_at: input.completedAt ? toMysqlDateTime(input.completedAt) : null,
@@ -350,6 +364,20 @@ export class RunRepository {
     if (opts.status) q = q.andWhere({ status: assertRunStatus(opts.status) });
     q = q.limit(limit);
     const rows = await q;
+    return rows.map(mapRunRow);
+  }
+
+  /** Owner-scoped lookup used by the durable Trace query endpoint. */
+  async listByTraceId(traceId, scope, opts = {}) {
+    const s = requireOwnerUlids(scope);
+    const trace = assertTraceId(traceId);
+    const limit = resolveRunListLimit(opts.limit, RUN_LIST_DEFAULT_LIMIT);
+    const rows = await applyOwnerScope(
+      this.db('runs').where({ trace_id: trace }),
+      s,
+    )
+      .orderBy('created_at', 'asc')
+      .limit(limit);
     return rows.map(mapRunRow);
   }
 

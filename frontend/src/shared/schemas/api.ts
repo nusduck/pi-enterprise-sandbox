@@ -74,6 +74,30 @@ export const UploadResponseSchema = z
   })
   .passthrough();
 
+/** Successful Dataset creation is a formal READY row, not a loose file DTO. */
+export const DatasetUploadResponseSchema = z
+  .object({
+    dataset_id: z.string().min(1),
+    org_id: z.string().min(1),
+    user_id: z.string().min(1),
+    conversation_id: z.string().min(1),
+    agent_session_id: z.string().min(1),
+    sandbox_session_id: z.string().min(1),
+    original_filename: z.string().min(1),
+    name: z.string().min(1),
+    path: z.string().min(1),
+    stored_relative_path: z.string().min(1),
+    mime_type: z.string().min(1),
+    size_bytes: z.number().int().nonnegative(),
+    size: z.number().int().nonnegative(),
+    sha256: z.string().regex(/^[0-9a-f]{64}$/i),
+    status: z.literal('ready'),
+    created_at: z.string().min(1),
+    completed_at: z.string().min(1),
+    trace_id: z.string().optional().nullable(),
+  })
+  .passthrough();
+
 export const ApprovalDecisionSchema = z
   .object({
     ok: z.boolean().optional(),
@@ -120,6 +144,7 @@ export type Conversation = z.infer<typeof ConversationSchema>;
 export type EnsureSession = z.infer<typeof EnsureSessionSchema>;
 export type Artifact = z.infer<typeof ArtifactSchema>;
 export type UploadResponse = z.infer<typeof UploadResponseSchema>;
+export type DatasetUploadResponse = z.infer<typeof DatasetUploadResponseSchema>;
 
 /**
  * Parse with Zod; on failure return fallback / throw controlled error.

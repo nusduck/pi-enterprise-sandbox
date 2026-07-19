@@ -73,10 +73,10 @@ def test_http_legacy_paths_return_404():
         assert resp.status_code == 404, f"{method} {path} → {resp.status_code}"
 
 
-def test_execution_stream_has_no_agent_run_dual_write():
-    src = (ROOT / "sandbox" / "services" / "execution_stream.py").read_text(
-        encoding="utf-8"
-    )
-    assert "agent_run_manager" not in src
-    assert "_dual_write_agent" not in src
-    assert "def _dual_write" not in src
+def test_legacy_execution_stream_module_is_removed():
+    assert not (ROOT / "sandbox" / "services" / "execution_stream.py").exists()
+    transient = (
+        ROOT / "sandbox" / "services" / "transient_execution_stream.py"
+    ).read_text(encoding="utf-8")
+    assert "agent_run_manager" not in transient
+    assert "_dual_write_agent" not in transient

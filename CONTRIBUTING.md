@@ -80,13 +80,12 @@ pi-enterprise-sandbox/
 ├── agent/             # Independent pi-coding-agent runtime
 │   ├── server.js      # internal Run API + health
 │   ├── config.js
-│   ├── application/   # run registry, profiles, governance
-│   ├── runtime/       # session loop, bootstrap, event bridge, helpers
-│   ├── infrastructure/# sandbox-client, MCP manager
-│   ├── services/      # budget, waiters, model registry, persistence
-│   ├── packages/      # enterprise-agent-kit (customTools / Extensions)
+│   ├── src/application/ # Run, Session, approval, A2A services
+│   ├── src/extensions/  # sandbox-bridge, enterprise-policy, observability
+│   ├── src/infrastructure/ # MySQL, Redis, Pi, MCP, Sandbox ports
+│   ├── services/      # model registry and platform services
 │   └── tests/         # node:test + sdk-compat
-├── sandbox/           # FastAPI execution / files / approvals (no agent loop)
+├── sandbox/           # FastAPI execution / files / datasets / artifacts (no agent loop)
 │   ├── main.py
 │   ├── routers/       # incl. health.py (/health liveness, /ready readiness)
 │   ├── services/
@@ -105,11 +104,12 @@ pi-enterprise-sandbox/
 └── pyproject.toml
 ```
 
-**Persistence:** MySQL 8 is the sole formal database for development and production
-(`AGENT_DATABASE_URL`, `SANDBOX_DATABASE_URL`, `MYSQL_*`). Do not reintroduce
-Compose PostgreSQL or SQLite defaults. Unit tests may still inject sqlite via
-explicit test configuration until the Sandbox runtime cut-over lands — that path
-is not a production fallback.
+**Persistence:** MySQL 8 is the sole database topology for development and
+production (`AGENT_DATABASE_URL`, `SANDBOX_DATABASE_URL`, `MYSQL_*`). Do not
+reintroduce Compose PostgreSQL or SQLite defaults. The Sandbox test suite uses
+connection-free fakes and an unreachable MySQL-shaped DSN; it does not install a
+SQLite compatibility runtime. Tests that construct a SQLite `Settings` value do
+so only to verify the startup rejection path.
 
 **Runtime coordination:** Redis 7 is the Agent-only coordination topology
 (`AGENT_REDIS_URL` / `REDIS_URL`, `REDIS_PASSWORD`, queue/lease/stream settings).
@@ -120,7 +120,7 @@ in PR-03. Production fails fast when `REDIS_PASSWORD` is missing.
 
 
 > Root-level `PLAN.md` / `AUDIT.md` / `IMPROVEMENT_PLAN.md` live under `docs/archive/`.  
-> Agent root no longer has `chat-runner.js` / `sandbox-tools.js` facades — import from `runtime/` and `packages/enterprise-agent-kit`.
+> Production Agent code imports from `agent/src`; the legacy `enterprise-agent-kit` package and root runtime facades have been removed.
 
 ## How to Contribute
 
@@ -179,7 +179,7 @@ See [plan.md](./plan.md) and [docs/architecture.md](./docs/architecture.md) for:
 - Four-service architecture (Frontend + BFF + Agent + Sandbox)
 - Why MySQL 8 is the sole formal persistence topology
 - Why Redis 7 is Agent-only runtime coordination (not fact authority)
-- Why session-per-conversation isolation model
+- Why Agent Session-owned Workspace isolation (one active Agent Session per Conversation by default)
 - Why SSE streaming (not WebSocket)
 - Why approval workflow for high-risk tools
 - Independent Node Agent service (Python agent runtime removed)

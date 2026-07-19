@@ -98,6 +98,7 @@ export const CreateRunResponseSchema = z
   .object({
     run_id: z.string(),
     session_id: z.string().optional().nullable(),
+    agent_session_id: z.string().optional().nullable(),
     conversation_id: z.string().optional().nullable(),
     status: z.string().optional(),
   })
@@ -108,6 +109,7 @@ export const RunDetailSchema = z
     id: z.string().optional(),
     run_id: z.string(),
     conversation_id: z.string().optional().nullable(),
+    trace_id: z.string().optional().nullable(),
     session_id: z.string().optional().nullable(),
     sandbox_session_id: z.string().optional().nullable(),
     agent_session_id: z.string().optional().nullable(),
@@ -166,5 +168,54 @@ export const ConversationEventsResponseSchema = z
 export type CreateRunResponse = z.infer<typeof CreateRunResponseSchema>;
 export type RunDetail = z.infer<typeof RunDetailSchema>;
 export type ToolExecutionSnapshot = z.infer<typeof ToolExecutionSnapshotSchema>;
+
+/** Durable Agent trace projection returned after refresh/reconnect. */
+export const TraceSpanWireSchema = z
+  .object({
+    id: z.string().optional(),
+    traceId: z.string().optional(),
+    trace_id: z.string().optional(),
+    spanId: z.string().optional(),
+    span_id: z.string().optional(),
+    parentSpanId: z.string().nullable().optional(),
+    parent_span_id: z.string().nullable().optional(),
+    runId: z.string().optional(),
+    run_id: z.string().optional(),
+    orgId: z.string().optional(),
+    org_id: z.string().optional(),
+    userId: z.string().optional(),
+    user_id: z.string().optional(),
+    kind: z.string().optional(),
+    name: z.string().optional(),
+    status: z.string().optional(),
+    startedAt: z.string().nullable().optional(),
+    started_at: z.string().nullable().optional(),
+    finishedAt: z.string().nullable().optional(),
+    finished_at: z.string().nullable().optional(),
+    durationMs: z.number().nullable().optional(),
+    duration_ms: z.number().nullable().optional(),
+    tokens: z.number().nullable().optional(),
+    token_count: z.number().nullable().optional(),
+    cost: z.number().nullable().optional(),
+    attributes: z.record(z.string(), z.unknown()).optional(),
+    attributes_json: z.unknown().optional(),
+  })
+  .passthrough();
+
+export const RunTraceResponseSchema = z
+  .object({
+    traceId: z.string().optional(),
+    trace_id: z.string().optional(),
+    runId: z.string().optional(),
+    run_id: z.string().optional(),
+    spans: z.array(TraceSpanWireSchema).default([]),
+    /** True when another cursor page is available. */
+    truncated: z.boolean().optional().default(false),
+    nextCursor: z.string().nullable().optional(),
+    next_cursor: z.string().nullable().optional(),
+  })
+  .passthrough();
 export type PersistedAgentEvent = z.infer<typeof PersistedAgentEventSchema>;
 export type ConversationEventsResponse = z.infer<typeof ConversationEventsResponseSchema>;
+export type TraceSpanWire = z.infer<typeof TraceSpanWireSchema>;
+export type RunTraceResponse = z.infer<typeof RunTraceResponseSchema>;

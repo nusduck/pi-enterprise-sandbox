@@ -11,16 +11,14 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 from sandbox.config import settings
-from sandbox.database import Database
 from sandbox.isolation import IsolationBackend, LaunchSpec, build_isolation_backend
 from sandbox.models import ExecutionStatus
 from sandbox.paths import temp_id_for_workspace_id
-from sandbox.repositories import ExecutionRepository
 from sandbox.services.execution_context import SandboxExecutionContext
-from sandbox.services.execution_stream import (
+from sandbox.services.transient_execution_stream import (
     SOURCE_EXECUTION,
-    execution_stream,
     full_log_location,
+    transient_execution_stream,
 )
 from sandbox.trace import get_trace_id
 from sandbox.utils.resource_limits import (
@@ -65,13 +63,13 @@ class ExecutionManager:
 
     def __init__(
         self,
-        database: Database | None = None,
         *,
         stream_hub: Any | None = None,
         isolation_backend: IsolationBackend | None = None,
     ) -> None:
-        self.repository = ExecutionRepository(database)
-        self._stream = stream_hub if stream_hub is not None else execution_stream
+        self._stream = (
+            stream_hub if stream_hub is not None else transient_execution_stream
+        )
         self._isolation = isolation_backend or build_isolation_backend()
         self._executions: dict[str, dict] = {}
         # workspace_id -> current running execution_id or None
@@ -82,7 +80,9 @@ class ExecutionManager:
         self._cancel_requested: set[str] = set()
         # execution_ids whose run_* body has not yet finalized (owns lock release)
         self._runner_active: set[str] = set()
-        self._total_count = self.repository.total_count()
+        # Durable state is owned by FormalExecutionRuntime/claim persistence.
+        # This manager keeps only active process handles and bounded live output.
+        self._total_count = 0
 
     def is_session_busy(self, session_id: str) -> bool:
         with self._lock:
@@ -121,7 +121,6 @@ class ExecutionManager:
                     "status": "conflict",
                 }
             self._executions[execution_id] = entry
-            self.repository.upsert(entry)
             self._session_locks[workspace_id] = execution_id
             self._runner_active.add(execution_id)
             self._total_count += 1
@@ -193,7 +192,6 @@ class ExecutionManager:
                     "truncated": result.get("truncated", False),
                 })
 
-            self.repository.upsert(entry)
             workspace_id = entry.get("workspace_id") or session_id
             if self._session_locks.get(workspace_id) == execution_id:
                 self._session_locks[workspace_id] = None
@@ -306,6 +304,7 @@ class ExecutionManager:
 
             env_overrides = env_overrides or {}
 
+            limit_kwargs = child_resource_limit_kwargs(settings)
             prepared = self._isolation.prepare(
                 LaunchSpec(
                     context=context,
@@ -313,9 +312,16 @@ class ExecutionManager:
                     relative_cwd=PurePosixPath("."),
                     env_overrides=env_overrides,
                     network_mode=settings.network_mode,
+                    max_process_count=limit_kwargs["max_process_count"],
                 )
             )
             entry["isolation_backend"] = prepared.backend
+            if prepared.nproc_limit_applied_inside_namespace:
+                # Bubblewrap's command wrapper applies NPROC after entering
+                # its private user namespace.  Keeping the host/container
+                # preexec limit at zero lets bwrap create that namespace even
+                # when the shared UID already has many processes.
+                limit_kwargs["max_process_count"] = 0
 
             def _on_started(proc: Any) -> None:
                 self._register_proc(execution_id, proc)
@@ -356,7 +362,7 @@ class ExecutionManager:
                 cwd=prepared.cwd,
                 on_started=_on_started,
                 on_output=_on_output,
-                **child_resource_limit_kwargs(settings),
+                **limit_kwargs,
             )
             if watch.exceeded:
                 decision = watch.last_decision
@@ -440,6 +446,8 @@ class ExecutionManager:
         args: list[str] | None = None,
         *,
         context: SandboxExecutionContext | None = None,
+        execution_id: str | None = None,
+        formal_claimed: bool = False,
     ) -> dict[str, Any]:
         """Run Python via restricted argv list (no shell).
 
@@ -452,7 +460,12 @@ class ExecutionManager:
         )
 
         context = self._coerce_context(session_id, workspace_path, context)
-        execution_id = f"exec_{uuid.uuid4().hex[:10]}"
+        if formal_claimed:
+            from sandbox.security.path_validation import validate_formal_id
+
+            execution_id = validate_formal_id(execution_id, "execution_id")
+        else:
+            execution_id = execution_id or f"exec_{uuid.uuid4().hex[:10]}"
         timeout = timeout or settings.execution_timeout_seconds
 
         try:
@@ -486,6 +499,8 @@ class ExecutionManager:
         )
         entry["materialized_path"] = launch.materialized_path
         entry["python_version"] = resolve_python_version()
+        if formal_claimed:
+            entry["_formal_claimed"] = True
         conflict = self._admit(context.workspace_id, execution_id, entry)
         if conflict is not None:
             return conflict
@@ -518,6 +533,8 @@ class ExecutionManager:
         run_id: str | None = None,
         *,
         context: SandboxExecutionContext | None = None,
+        execution_id: str | None = None,
+        formal_claimed: bool = False,
     ) -> dict[str, Any]:
         # Network check before admission so blocked commands never hold the lock
         if settings.default_deny_network and contains_network_command(command):
@@ -531,7 +548,12 @@ class ExecutionManager:
             }
 
         context = self._coerce_context(session_id, workspace_path, context)
-        execution_id = f"exec_{uuid.uuid4().hex[:10]}"
+        if formal_claimed:
+            from sandbox.security.path_validation import validate_formal_id
+
+            execution_id = validate_formal_id(execution_id, "execution_id")
+        else:
+            execution_id = execution_id or f"exec_{uuid.uuid4().hex[:10]}"
         timeout = timeout or settings.execution_timeout_seconds
         entry = self._new_entry(
             execution_id,
@@ -541,6 +563,8 @@ class ExecutionManager:
             run_id=run_id,
             command=command,
         )
+        if formal_claimed:
+            entry["_formal_claimed"] = True
         conflict = self._admit(context.workspace_id, execution_id, entry)
         if conflict is not None:
             return conflict
@@ -613,7 +637,7 @@ class ExecutionManager:
             mem = self._executions.get(execution_id)
             if mem is not None:
                 return mem
-        return self.repository.get(execution_id)
+        return None
 
     def logs(
         self,
@@ -688,7 +712,7 @@ class ExecutionManager:
         already finished without clearing a stale lock.
         """
         with self._lock:
-            entry = self._executions.get(execution_id) or self.repository.get(execution_id)
+            entry = self._executions.get(execution_id)
             if entry is None:
                 return False
             self._executions[execution_id] = entry
@@ -712,7 +736,6 @@ class ExecutionManager:
                 entry["status"] = ExecutionStatus.CANCELLED
                 if entry.get("exit_code") is None:
                     entry["exit_code"] = -signal.SIGTERM
-                self.repository.upsert(entry)
 
             # If the runner is still active it owns lock release via _finalize.
             # Only release here when there is no active runner (orphan / race).

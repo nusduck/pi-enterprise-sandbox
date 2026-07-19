@@ -20,8 +20,10 @@
 #   SANDBOX_API_TOKEN, AGENT_INTERNAL_TOKEN, SANDBOX_JWT_SECRET
 # Optional but recommended:
 #   SANDBOX_CORS_ORIGINS, DOMAIN
-# Optional DSN overrides (otherwise built from MYSQL_* / REDIS_PASSWORD):
-#   AGENT_DATABASE_URL, SANDBOX_DATABASE_URL, AGENT_REDIS_URL, REDIS_URL
+# Optional Agent DSN/Redis overrides (otherwise built from MYSQL_* /
+# REDIS_PASSWORD): AGENT_DATABASE_URL, AGENT_REDIS_URL, REDIS_URL.
+# Sandbox production DSN is always built from MYSQL_* below so a stale
+# SANDBOX_DATABASE_URL in a host .env cannot select a legacy backend.
 
 services:
   mysql:
@@ -60,6 +62,27 @@ services:
     restart: always
     # Clear base dev host publish (loopback 3306). Internal: backend_internal only.
     ports: !reset []
+    # Drop the base development-only ingress network. Database access remains
+    # exclusively on the internal backend fabric in production.
+    networks: !override
+      - backend_internal
+
+  agent-migrate:
+    environment:
+      DEPLOYMENT_ENV: production
+      AGENT_DATABASE_URL: mysql://${MYSQL_USER:-sandbox}:${MYSQL_PASSWORD:?Set MYSQL_PASSWORD for production}@mysql:3306/${MYSQL_DATABASE:-sandbox}
+    depends_on:
+      mysql:
+        condition: service_healthy
+    restart: "no"
+    ports: !reset []
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    networks:
+      - backend_internal
 
   redis:
     image: redis:7.2
@@ -89,6 +112,8 @@ services:
     restart: always
     # Clear base dev host publish. Agent reaches Redis on backend_internal.
     ports: !reset []
+    networks: !override
+      - backend_internal
 
   # Sandbox jti-replay only — independent secret + volume (never REDIS_PASSWORD).
   sandbox-replay-redis:
@@ -118,10 +143,14 @@ services:
       start_period: 15s
     restart: always
     ports: !reset []
+    networks:
+      - backend_internal
 
   frontend:
     # SPA is only reached via nginx on the compose networks — never host-published.
     ports: !reset []
+    networks: !override
+      - backend_internal
 
   nginx:
     build:
@@ -144,6 +173,8 @@ services:
       frontend:
         condition: service_started
       api-server:
+        condition: service_started
+      agent:
         condition: service_started
     restart: always
     healthcheck:
@@ -197,6 +228,8 @@ services:
     depends_on:
       mysql:
         condition: service_healthy
+      agent-migrate:
+        condition: service_completed_successfully
       sandbox-replay-redis:
         condition: service_healthy
     # No host port publish — Sandbox API only on backend_internal.
@@ -250,16 +283,23 @@ services:
     restart: always
     # No host ports — BFF only on backend_internal; clients hit nginx.
     ports: !reset []
+    networks: !override
+      - backend_internal
 
   agent:
     # Production: skills stay read-only; skill management tools disabled.
     environment:
       DEPLOYMENT_ENV: production
       SANDBOX_API_TOKEN: ${SANDBOX_API_TOKEN:?Set SANDBOX_API_TOKEN for production}
+      SANDBOX_INTERNAL_HMAC_KEYRING: ${SANDBOX_INTERNAL_HMAC_KEYRING:?Set SANDBOX_INTERNAL_HMAC_KEYRING for production}
+      SANDBOX_INTERNAL_HMAC_ACTIVE_KID: ${SANDBOX_INTERNAL_HMAC_ACTIVE_KID:?Set SANDBOX_INTERNAL_HMAC_ACTIVE_KID for production}
       AGENT_INTERNAL_TOKEN: ${AGENT_INTERNAL_TOKEN:?Set AGENT_INTERNAL_TOKEN for production}
+      A2A_PUBLIC_BASE_URL: ${A2A_PUBLIC_BASE_URL:?Set A2A_PUBLIC_BASE_URL for production}
+      A2A_ARTIFACT_DOWNLOAD_SECRET: ${A2A_ARTIFACT_DOWNLOAD_SECRET:?Set A2A_ARTIFACT_DOWNLOAD_SECRET for production}
+      A2A_ALLOW_DEV_HOST_FALLBACK: "false"
       AGENT_DATABASE_URL: mysql://${MYSQL_USER:-sandbox}:${MYSQL_PASSWORD:?Set MYSQL_PASSWORD for production}@mysql:3306/${MYSQL_DATABASE:-sandbox}
-      # HTTP Agent is the sole migration owner; worker depends on Agent health.
-      AGENT_MIGRATE_ON_START: ${AGENT_MIGRATE_ON_START:-true}
+      # The one-shot agent-migrate service is the sole migration owner.
+      AGENT_MIGRATE_ON_START: "false"
       # Built from REDIS_PASSWORD; do not embed live passwords in compose files.
       # Fail-fast when REDIS_PASSWORD is unset (no empty/auth-less production Redis).
       REDIS_URL: redis://:${REDIS_PASSWORD:?Set REDIS_PASSWORD for production}@redis:6379/0
@@ -279,11 +319,11 @@ services:
     volumes:
       # Force read-only skill mounts in production (override any RW dev mount)
       - ./skills:/home/sandbox/skill:ro
-      - ./skills:/sandbox/skills:ro
-      - ./skills:/app/.pi/skills:ro
     depends_on:
       mysql:
         condition: service_healthy
+      agent-migrate:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
     deploy:
@@ -308,20 +348,28 @@ services:
     environment:
       DEPLOYMENT_ENV: production
       SANDBOX_API_TOKEN: ${SANDBOX_API_TOKEN:?Set SANDBOX_API_TOKEN for production}
+      SANDBOX_INTERNAL_HMAC_KEYRING: ${SANDBOX_INTERNAL_HMAC_KEYRING:?Set SANDBOX_INTERNAL_HMAC_KEYRING for production}
+      SANDBOX_INTERNAL_HMAC_ACTIVE_KID: ${SANDBOX_INTERNAL_HMAC_ACTIVE_KID:?Set SANDBOX_INTERNAL_HMAC_ACTIVE_KID for production}
       AGENT_INTERNAL_TOKEN: ${AGENT_INTERNAL_TOKEN:?Set AGENT_INTERNAL_TOKEN for production}
       AGENT_DATABASE_URL: mysql://${MYSQL_USER:-sandbox}:${MYSQL_PASSWORD:?Set MYSQL_PASSWORD for production}@mysql:3306/${MYSQL_DATABASE:-sandbox}
+      AGENT_MIGRATE_ON_START: "false"
       REDIS_URL: redis://:${REDIS_PASSWORD:?Set REDIS_PASSWORD for production}@redis:6379/0
       AGENT_REDIS_URL: redis://:${REDIS_PASSWORD:?Set REDIS_PASSWORD for production}@redis:6379/0
       AGENT_RUNS_QUEUE_NAME: ${AGENT_RUNS_QUEUE_NAME:-agent-runs}
       AGENT_WORKER_CONCURRENCY: ${AGENT_WORKER_CONCURRENCY:-1}
       AGENT_SESSION_WORKSPACE_CWD: ${AGENT_SESSION_WORKSPACE_CWD:-/home/sandbox/workspace}
       AGENT_PI_AGENT_DIR: ${AGENT_PI_AGENT_DIR:-/app/pi-agent-home}
+      SANDBOX_POLICY_PROFILE: strict
+      SANDBOX_ISOLATION_BACKEND: bubblewrap
+      SANDBOX_ISOLATION_REQUIRED: "true"
       SKILLS_MODE: readonly
     volumes:
       - ./skills:/home/sandbox/skill:ro
     depends_on:
       mysql:
         condition: service_healthy
+      agent-migrate:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
     restart: always

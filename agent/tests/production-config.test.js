@@ -18,6 +18,10 @@ import {
 } from '../config.js';
 
 const STRONG = 'a'.repeat(64);
+const A2A_PROD = Object.freeze({
+  A2A_PUBLIC_BASE_URL: 'https://agent.example.com',
+  A2A_ARTIFACT_DOWNLOAD_SECRET: STRONG,
+});
 
 describe('resolveDeploymentEnv', () => {
   it('defaults to development', () => {
@@ -65,8 +69,25 @@ describe('validateProductionConfig', () => {
           SANDBOX_API_TOKEN: STRONG,
           SKILLS_MODE: 'development',
           LLMIO_BASE_URL: 'https://llm.example.com',
+          ...A2A_PROD,
         }),
       /SKILLS_MODE/,
+    );
+  });
+
+  it('rejects non-canonical skill roots in production', () => {
+    assert.throws(
+      () =>
+        validateProductionConfig({
+          DEPLOYMENT_ENV: 'production',
+          AGENT_INTERNAL_TOKEN: STRONG,
+          SANDBOX_API_TOKEN: STRONG,
+          SKILLS_MODE: 'readonly',
+          SKILLS_ROOT: '/opt/company/skills',
+          LLMIO_BASE_URL: 'https://llm.example.com/v1',
+          ...A2A_PROD,
+        }),
+      /SKILLS_ROOT must be the canonical \/home\/sandbox\/skill/,
     );
   });
 
@@ -79,6 +100,7 @@ describe('validateProductionConfig', () => {
           SANDBOX_API_TOKEN: STRONG,
           SKILLS_MODE: 'readonly',
           LLMIO_BASE_URL: 'http://127.0.0.1:9999/fake',
+          ...A2A_PROD,
         }),
       /Fake|localhost/,
     );
@@ -92,6 +114,7 @@ describe('validateProductionConfig', () => {
         SANDBOX_API_TOKEN: STRONG,
         SKILLS_MODE: 'readonly',
         LLMIO_BASE_URL: 'https://llm.example.com/v1',
+        ...A2A_PROD,
       }),
     );
   });
@@ -108,6 +131,7 @@ describe('validateProductionConfig', () => {
           SANDBOX_POLICY_PROFILE: 'balanced',
           SANDBOX_ISOLATION_BACKEND: 'bubblewrap',
           SANDBOX_ISOLATION_REQUIRED: 'true',
+          ...A2A_PROD,
         }),
       /SANDBOX_POLICY_PROFILE=balanced is forbidden in production/,
     );
@@ -123,6 +147,7 @@ describe('validateProductionConfig', () => {
           SKILLS_MODE: 'readonly',
           LLMIO_BASE_URL: 'https://llm.example.com/v1',
           APPROVAL_MODE: 'auto_approve',
+          ...A2A_PROD,
         }),
       /APPROVAL_MODE=auto_approve/,
     );
@@ -138,9 +163,54 @@ describe('validateProductionConfig', () => {
           SKILLS_MODE: 'readonly',
           LLMIO_BASE_URL: 'https://llm.example.com/v1',
           APPROVAL_MODE,
+          ...A2A_PROD,
         }),
       );
     }
+  });
+
+  it('requires a safe A2A origin and artifact secret in production', () => {
+    assert.throws(
+      () =>
+        validateProductionConfig({
+          DEPLOYMENT_ENV: 'production',
+          AGENT_INTERNAL_TOKEN: STRONG,
+          SANDBOX_API_TOKEN: STRONG,
+          SKILLS_MODE: 'readonly',
+          LLMIO_BASE_URL: 'https://llm.example.com/v1',
+        }),
+      /A2A_PUBLIC_BASE_URL|A2A_ARTIFACT_DOWNLOAD_SECRET/,
+    );
+    assert.throws(
+      () =>
+        validateProductionConfig({
+          DEPLOYMENT_ENV: 'production',
+          AGENT_INTERNAL_TOKEN: STRONG,
+          SANDBOX_API_TOKEN: STRONG,
+          SKILLS_MODE: 'readonly',
+          LLMIO_BASE_URL: 'https://llm.example.com/v1',
+          A2A_PUBLIC_BASE_URL: 'https://agent.example.com/path',
+          A2A_ARTIFACT_DOWNLOAD_SECRET: 'short',
+        }),
+      /https origin|at least 32/,
+    );
+  });
+
+  it('rejects a development-marker A2A artifact secret in production', () => {
+    assert.throws(
+      () =>
+        validateProductionConfig({
+          DEPLOYMENT_ENV: 'production',
+          AGENT_INTERNAL_TOKEN: STRONG,
+          SANDBOX_API_TOKEN: STRONG,
+          SKILLS_MODE: 'readonly',
+          LLMIO_BASE_URL: 'https://llm.example.com/v1',
+          ...A2A_PROD,
+          A2A_ARTIFACT_DOWNLOAD_SECRET:
+            'dev_only_a2a_artifact_download_secret_012345678901234567890123',
+        }),
+      /A2A_ARTIFACT_DOWNLOAD_SECRET is weak/,
+    );
   });
 
   it('resolves the safe default and legacy false mapping', () => {

@@ -55,6 +55,7 @@ export {
   normalizeExpectedStatuses,
   assertRunStatus,
   assertTraceId,
+  assertTraceState,
   RUN_LIST_DEFAULT_LIMIT,
   RUN_LIST_MAX_LIMIT,
   TRACE_ID_PATTERN,
@@ -125,3 +126,14 @@ export {
   ArtifactRepository,
   mapArtifact,
 } from './artifact-repository.js';
+export {
+  TraceSpanRepository,
+  mapTraceSpan,
+  normalizeTraceId,
+  normalizeSpanId,
+  deriveSpanId,
+  runRootSpanId,
+  serializeTraceAttributes,
+} from './trace-span-repository.js';
+export { InteractionRepository } from './interaction-repository.js';
+export { mapInteraction } from '../row-mappers.js';

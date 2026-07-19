@@ -169,6 +169,7 @@ export function hashCanonical(value, opts = {}) {
  *   messages?: unknown,
  *   externalConversationId?: string | null,
  *   agentProfileId?: string | null,
+ *   agentId?: string | null,
  *   budget?: unknown,
  * }} input
  * @param {{
@@ -223,6 +224,9 @@ export function hashCreateRunRequest(input, opts = {}) {
   }
   if (input.agentProfileId != null && input.agentProfileId !== '') {
     body.agentProfileId = String(input.agentProfileId);
+  }
+  if (input.agentId != null && input.agentId !== '') {
+    body.agentId = String(input.agentId);
   }
   if (input.budget != null) {
     body.budget = input.budget;

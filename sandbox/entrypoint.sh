@@ -91,6 +91,36 @@ done
 UVICORN_ARGS="$(build_uvicorn_args)"
 echo "[entrypoint] Starting Sandbox API: uvicorn $UVICORN_ARGS"
 
+# Release-gate only supervisor mode.  The normal production path below uses
+# exec so the API remains the container's direct service process.  The live
+# hard-kill gate needs to kill only uvicorn while retaining a container
+# supervisor long enough to inspect durable RUNNING rows before restarting the
+# service.  This is never enabled by the normal Compose configuration.
+if bool_enabled "${SANDBOX_GATE_SERVICE_SUPERVISOR:-false}"; then
+    echo "[entrypoint] release-gate service supervisor enabled"
+    restart_delay="${SANDBOX_GATE_RESTART_DELAY_SECONDS:-5}"
+    case "$restart_delay" in
+        ''|*[!0-9]*) restart_delay=5 ;;
+    esac
+    while :; do
+        if [ "$(id -u)" -eq 0 ] && command -v gosu &> /dev/null; then
+            gosu "$SANDBOX_RUN_AS_USER" bash -c "exec /app/.venv/bin/uvicorn $UVICORN_ARGS" &
+        elif [ "$(id -u)" -eq 0 ] && command -v su &> /dev/null; then
+            su -s /bin/bash "$SANDBOX_RUN_AS_USER" -c "exec /app/.venv/bin/uvicorn $UVICORN_ARGS" &
+        else
+            /app/.venv/bin/uvicorn $UVICORN_ARGS &
+        fi
+        service_pid=$!
+        echo "[entrypoint] release-gate service pid=$service_pid"
+        set +e
+        wait "$service_pid"
+        service_status=$?
+        set -e
+        echo "[entrypoint] release-gate service exited status=$service_status; restarting in ${restart_delay}s"
+        sleep "$restart_delay"
+    done
+fi
+
 # Production Linux: refuse start when critical RLIMIT primitives are missing.
 # (App-level validate_production_settings also checks; this fails earlier.)
 DEPLOYMENT_ENV_NORM="$(echo "${DEPLOYMENT_ENV:-${SANDBOX_DEPLOYMENT_ENV:-development}}" | tr '[:upper:]' '[:lower:]')"

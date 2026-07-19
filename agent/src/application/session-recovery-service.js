@@ -389,6 +389,7 @@ export class SessionRecoveryService {
    *   configHash: string,
    *   workspaceId: string,
    *   piSdkVersion?: string,
+   *   interactionResumeId?: string | null,
    * }} input
    */
   async checkpoint(input) {
@@ -536,6 +537,13 @@ export class SessionRecoveryService {
         expectedFenceToken: fence,
         lastRunId: runId,
       });
+
+      if (input.interactionResumeId && repos.interactions) {
+        await repos.interactions.markResumeAppliedIfClaimed(
+          input.interactionResumeId,
+          scope,
+        );
+      }
 
       // session.snapshot.saved RunEvent + Outbox
       if (repos.runEvents && repos.outbox) {

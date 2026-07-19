@@ -387,7 +387,17 @@ export function reduceRuntimeEvent(
     }
 
     case 'message.completed': {
-      const messageId = str(payload.message_id || payload.id);
+      let messageId = str(payload.message_id || payload.id);
+      if (!messageId) {
+        const run = next.runsById[runId];
+        for (const id of [...(run?.messageIds || [])].reverse()) {
+          const candidate = next.messagesById[id];
+          if (candidate?.role === 'assistant' && candidate.status === 'streaming') {
+            messageId = id;
+            break;
+          }
+        }
+      }
       if (messageId && next.messagesById[messageId]) {
         const msg = next.messagesById[messageId];
         const finalText =
@@ -398,6 +408,24 @@ export function reduceRuntimeEvent(
           status: 'complete',
           updatedAt: ts,
         });
+      } else {
+        const text = str(payload.text);
+        const role = str(payload.role, 'assistant') === 'user' ? 'user' : 'assistant';
+        if (text || role === 'user') {
+          next = upsertMessage(
+            next,
+            createMessage({
+              id: messageId || `msg_${runId}_${ev.sequence}`,
+              runId,
+              conversationId: next.runsById[runId]?.conversationId || null,
+              role,
+              text,
+              status: 'complete',
+              createdAt: ts,
+              updatedAt: ts,
+            }),
+          );
+        }
       }
       break;
     }
@@ -1171,6 +1199,7 @@ export function rehydrateRun(
     id?: string;
     run_id?: string;
     conversation_id?: string | null;
+    trace_id?: string | null;
     session_id?: string | null;
     sandbox_session_id?: string | null;
     agent_session_id?: string | null;
@@ -1192,15 +1221,43 @@ export function rehydrateRun(
   const existing = store.runsById[runId];
 
   const status = (() => {
-    switch (detail.status) {
+    const raw = String(detail.status || '').trim().toLowerCase();
+    switch (raw) {
+      case 'accepted':
       case 'pending':
+      case 'queued':
+      case 'starting':
+      case 'retrying':
         return 'queued';
+      case 'restoring_session':
+        return 'restoring_session';
+      case 'running':
+        return 'running';
+      case 'waiting_approval':
+        return 'waiting_approval';
+      case 'waiting_input':
+        return 'waiting_input';
+      case 'cancel_requested':
+      case 'cancelling':
+        return 'cancel_requested';
+      case 'cancelled':
+        return 'cancelled';
       case 'completed':
+      case 'succeeded':
+      case 'success':
         return 'succeeded';
       case 'rejected':
+      case 'failed':
+      case 'error':
         return 'failed';
+      case 'interrupted':
+        return 'interrupted';
+      case 'budget_exceeded':
+        return 'budget_exceeded';
+      case 'orphaned':
+        return 'orphaned';
       default:
-        return detail.status || existing?.status || 'running';
+        return existing?.status || 'running';
     }
   })() as RunStatus;
 
@@ -1219,6 +1276,7 @@ export function rehydrateRun(
       ...existing,
       id: runId,
       conversationId: detail.conversation_id ?? existing?.conversationId ?? null,
+      traceId: detail.trace_id ?? existing?.traceId ?? null,
       agentSessionId: detail.agent_session_id ?? existing?.agentSessionId ?? null,
       sandboxSessionId:
         detail.session_id ?? detail.sandbox_session_id ?? existing?.sandboxSessionId ?? null,

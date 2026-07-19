@@ -8,31 +8,63 @@ import { createReadStream, createWriteStream } from 'node:fs';
 import { mkdtemp, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { randomUUID } from 'node:crypto';
 import * as sb from '../services/sandbox-client.js';
 import { authFromRequest } from '../services/sandbox-client.js';
 import { config, AUTH_HEADER } from '../config.js';
+import { authorizeSandboxSession } from '../application/run-access-service.js';
+import {
+  boundRequestTraceContext,
+  createTraceId,
+  resolveRequestTraceContext,
+  traceCarrierHeaders,
+} from '../application/trace-context.js';
 
 /**
  * Headers for sandbox file proxies: service key + browser Bearer (never acting*).
  * @param {import('node:http').IncomingMessage | null | undefined} req
  * @param {Record<string, string>} [extra]
+ * @param {{ actingUserId?: string, actingOrganizationId?: string, actingRole?: string } | null} [trustedAuth]
  */
-export function sandboxProxyHeaders(req, extra = {}) {
-  const h = { ...AUTH_HEADER, ...extra };
+export function sandboxProxyHeaders(req, extra = {}, trustedAuth = null) {
+  // Never copy acting headers from the browser. The optional third argument is
+  // populated only after BFF-side identity resolution and is therefore safe to
+  // use for Sandbox's owner-scoped public adapters.
+  const safeExtra = { ...extra };
+  for (const key of [
+    'X-Acting-User-Id',
+    'X-Acting-Organization-Id',
+    'X-Acting-Role',
+    'x-acting-user-id',
+    'x-acting-organization-id',
+    'x-acting-role',
+  ]) {
+    delete safeExtra[key];
+  }
+  const h = { ...AUTH_HEADER, ...safeExtra };
+  if (trustedAuth?.actingUserId && trustedAuth?.actingOrganizationId) {
+    h['X-Acting-User-Id'] = String(trustedAuth.actingUserId);
+    h['X-Acting-Organization-Id'] = String(trustedAuth.actingOrganizationId);
+    if (trustedAuth.actingRole) h['X-Acting-Role'] = String(trustedAuth.actingRole);
+  }
   const auth = authFromRequest(req);
-  if (auth.authorization) {
+  // Once Agent has resolved the formal owner, use only the service token plus
+  // acting headers. Forwarding a browser JWT here would take precedence in
+  // Sandbox actor resolution and reintroduce the external/internal ID-domain
+  // mismatch this hop is responsible for avoiding.
+  if (!trustedAuth && auth.authorization) {
     h.Authorization = auth.authorization;
   }
-  // Forward trace when present so browser/BFF/sandbox share one id
-  const trace =
-    (req && (req.headers['x-trace-id'] || req.headers['X-Trace-Id'])) || null;
-  if (trace && !h['X-Trace-Id']) {
-    h['X-Trace-Id'] = String(trace);
-  }
-  if (!h['X-Trace-Id']) {
-    h['X-Trace-Id'] = randomUUID();
-  }
+  // Forward the BFF's current W3C span, including opaque tracestate. Direct
+  // route-unit callers get a fresh valid context instead of a UUID-shaped id.
+  const context =
+    req?.traceContext ||
+    boundRequestTraceContext(trustedAuth) ||
+    resolveRequestTraceContext(req?.headers || {
+      'X-Trace-Id': safeExtra['X-Trace-Id'],
+      traceparent: safeExtra.traceparent,
+      tracestate: safeExtra.tracestate,
+    });
+  Object.assign(h, traceCarrierHeaders(context));
   return h;
 }
 
@@ -46,7 +78,7 @@ export function resolveUploadTraceId(req, fallback) {
     (req && (req.headers['x-trace-id'] || req.headers['X-Trace-Id'])) || null;
   if (fromReq) return String(fromReq);
   if (fallback) return String(fallback);
-  return randomUUID();
+  return createTraceId();
 }
 
 /**
@@ -203,8 +235,25 @@ export async function handleFileDownload(parsedUrl, res, req = null) {
     return;
   }
 
-  const sanUrl = `${config.SANDBOX_BASE_URL}/sessions/${sessionId}/files/download?path=${encodeURIComponent(filePath)}`;
-  const sanRes = await fetch(sanUrl, { headers: sandboxProxyHeaders(req) });
+  let sessionAccess;
+  try {
+    sessionAccess = await authorizeSandboxSession(sessionId, req, {
+      traceId: req?.traceId || null,
+    });
+  } catch (err) {
+    const status = Number(err?.status) || 500;
+    res.writeHead(status, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({
+      error: status >= 500 ? 'File service unavailable' : err.message,
+      code: err?.code,
+    }));
+    return;
+  }
+
+  const sanUrl = `${config.SANDBOX_BASE_URL}/sessions/${encodeURIComponent(sessionId)}/files/download?path=${encodeURIComponent(filePath)}`;
+  const sanRes = await fetch(sanUrl, {
+    headers: sandboxProxyHeaders(req, {}, sessionAccess.sandboxAuth),
+  });
 
   if (!sanRes.ok) {
     res.writeHead(sanRes.status, { 'Content-Type': 'application/json' });
@@ -246,9 +295,26 @@ export async function handleArtifactDownload(parsedUrl, res, req = null) {
     return;
   }
 
+  let sessionAccess;
+  try {
+    sessionAccess = await authorizeSandboxSession(sessionId, req, {
+      traceId: req?.traceId || null,
+    });
+  } catch (err) {
+    const status = Number(err?.status) || 500;
+    res.writeHead(status, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({
+      error: status >= 500 ? 'Artifact service unavailable' : err.message,
+      code: err?.code,
+    }));
+    return;
+  }
+
   const sanPath = sb.artifactDownloadPath(sessionId, artifactId);
   const sanUrl = `${config.SANDBOX_BASE_URL}${sanPath}`;
-  const sanRes = await fetch(sanUrl, { headers: sandboxProxyHeaders(req) });
+  const sanRes = await fetch(sanUrl, {
+    headers: sandboxProxyHeaders(req, {}, sessionAccess.sandboxAuth),
+  });
 
   if (!sanRes.ok) {
     res.writeHead(sanRes.status, { 'Content-Type': 'application/json' });
@@ -343,6 +409,24 @@ export async function handleFileUpload(parsedUrl, req, res) {
     return;
   }
 
+  let sessionAccess;
+  try {
+    sessionAccess = await authorizeSandboxSession(sessionId, req, { traceId });
+  } catch (err) {
+    discardRequestBody(req);
+    const status = Number(err?.status) || 500;
+    writeUploadJson(
+      res,
+      status,
+      {
+        error: status >= 500 ? 'File service unavailable' : err.message,
+        code: err?.code,
+      },
+      traceId,
+    );
+    return;
+  }
+
   let spill = null;
   try {
     // Stream inbound body to temp file (not heap Buffer.concat)
@@ -368,11 +452,15 @@ export async function handleFileUpload(parsedUrl, req, res) {
   try {
     const size = spill.size || (await stat(spill.filePath)).size;
     // Propagate the same trace id so browser/BFF/sandbox share one id
-    const headers = sandboxProxyHeaders(req, {
-      'Content-Type': contentType,
-      'Content-Length': String(size),
-      'X-Trace-Id': traceId,
-    });
+    const headers = sandboxProxyHeaders(
+      req,
+      {
+        'Content-Type': contentType,
+        'Content-Length': String(size),
+        'X-Trace-Id': traceId,
+      },
+      sessionAccess.sandboxAuth,
+    );
     if (idem) {
       headers['Idempotency-Key'] = String(idem);
     }

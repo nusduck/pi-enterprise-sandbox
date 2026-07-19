@@ -98,7 +98,8 @@ export const TOOL_EXECUTION_TRANSITIONS = Object.freeze({
     TOOL_EXECUTION_STATUS.CANCELLED,
   ]),
   [TOOL_EXECUTION_STATUS.WAITING_APPROVAL]: Object.freeze([
-    // Resolution/resume is PR-09 — only cancel or fail-closed from here in B2.
+    // Approval replay claims the exact durable tool call before executing it.
+    TOOL_EXECUTION_STATUS.RUNNING,
     TOOL_EXECUTION_STATUS.CANCELLED,
     TOOL_EXECUTION_STATUS.FAILED,
   ]),

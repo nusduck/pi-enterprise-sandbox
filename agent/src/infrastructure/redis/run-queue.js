@@ -133,11 +133,23 @@ export async function enqueueRunJob(queue, ref, jobOptions = {}) {
     throw new Error('enqueueRunJob requires a BullMQ Queue');
   }
   const jobRef = assertRunJobRef(ref);
+  const requestedJobId =
+    jobOptions.jobId == null ? jobRef.runId : String(jobOptions.jobId);
+  if (
+    !requestedJobId ||
+    requestedJobId.length > 256 ||
+    /[\u0000-\u001f\u007f]/u.test(requestedJobId)
+  ) {
+    throw new RedisValidationError(
+      'Run job options.jobId must be a non-empty string of at most 256 characters',
+      { field: 'jobId' },
+    );
+  }
   // Deterministic jobId=runId: a prior completed/failed job with the same id
   // blocks legitimate recovery re-enqueue forever. Remove terminal jobs first.
   if (typeof queue.getJob === 'function') {
     try {
-      const existing = await queue.getJob(jobRef.runId);
+      const existing = await queue.getJob(requestedJobId);
       if (existing && typeof existing.getState === 'function') {
         const state = await existing.getState();
         if (state === 'completed' || state === 'failed') {
@@ -152,7 +164,10 @@ export async function enqueueRunJob(queue, ref, jobOptions = {}) {
     removeOnComplete: true,
     removeOnFail: 100,
     ...jobOptions,
-    jobId: jobRef.runId,
+    // The default remains runId for ordinary creation/recovery. Resume callers
+    // may supply a durable interaction/approval suffix so an active original
+    // job cannot swallow the wake-up enqueue through BullMQ job-id dedupe.
+    jobId: requestedJobId,
   });
 }
 
@@ -165,7 +180,7 @@ export async function enqueueRunJob(queue, ref, jobOptions = {}) {
  *
  * @param {string} connectionUrl
  * @param {RunJobProcessor} processor
- * @param {{ queueName?: string, prefix?: string, concurrency?: number }} [options]
+ * @param {{ queueName?: string, prefix?: string, concurrency?: number, lockDuration?: number, stalledInterval?: number, maxStalledCount?: number }} [options]
  * @returns {{ worker: import('bullmq').Worker, connection: import('ioredis').default, queueName: string }}
  */
 export function createRunWorker(connectionUrl, processor, options = {}) {
@@ -186,6 +201,18 @@ export function createRunWorker(connectionUrl, processor, options = {}) {
     connection,
     concurrency: options.concurrency ?? 1,
   };
+  if (Number.isFinite(options.lockDuration) && options.lockDuration > 0) {
+    workerOpts.lockDuration = options.lockDuration;
+  }
+  if (Number.isFinite(options.stalledInterval) && options.stalledInterval > 0) {
+    workerOpts.stalledInterval = options.stalledInterval;
+  }
+  if (
+    Number.isFinite(options.maxStalledCount) &&
+    options.maxStalledCount >= 0
+  ) {
+    workerOpts.maxStalledCount = options.maxStalledCount;
+  }
   if (options.prefix != null) {
     workerOpts.prefix = options.prefix;
   }

@@ -84,7 +84,7 @@ def _networks_in_block(block: str) -> set[str]:
     nets: set[str] = set()
     in_networks = False
     for line in block.splitlines():
-        if re.match(r"^\s+networks:\s*$", line):
+        if re.match(r"^\s+networks:\s*(?:!override\s*)?$", line):
             in_networks = True
             continue
         if in_networks:
@@ -127,11 +127,17 @@ class TestComposeNetworkTopology:
         assert nets == {"backend_internal"}
         assert "service_egress" not in nets
 
-    def test_mysql_redis_only_backend_internal(self):
+    def test_mysql_redis_use_dev_ingress_only_in_base_compose(self):
         text = COMPOSE.read_text(encoding="utf-8")
         for name in ("mysql", "redis"):
             nets = _networks_in_block(_service_block(text, name))
-            assert nets == {"backend_internal"}, name
+            assert nets == {"backend_internal", "dev_ingress"}, name
+
+        prod = COMPOSE_PROD.read_text(encoding="utf-8")
+        for name in ("mysql", "redis"):
+            block = _service_block(prod, name)
+            assert "networks: !override" in block, name
+            assert _networks_in_block(block) == {"backend_internal"}, name
 
     def test_agent_and_worker_on_internal_and_egress(self):
         text = COMPOSE.read_text(encoding="utf-8")

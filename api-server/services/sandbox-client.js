@@ -1,7 +1,7 @@
 /**
  * Sandbox HTTP Client — typed wrapper around fetch to the sandbox FastAPI service.
  *
- * Prefer `createSandboxClient({ traceId, auth })` for request-scoped usage (chat turns).
+ * Prefer `createSandboxClient({ traceId, traceContext, auth })` for request-scoped usage.
  * Module-level helpers use ephemeral clients so concurrent requests never share
  * mutable trace state.
  *
@@ -11,12 +11,28 @@
  * - Never trust browser-supplied X-Acting-* headers (stripped via authFromRequest).
  * - Server code may set acting headers after validating the user.
  */
-import { randomUUID } from 'node:crypto';
 import { config, AUTH_HEADER } from '../config.js';
 import { readCookie } from '../http/cookies.js';
+import {
+  boundRequestTraceContext,
+  createTraceId,
+  normalizeTracestate,
+  resolveRequestTraceContext,
+  traceCarrierHeaders,
+} from '../application/trace-context.js';
 
 const BASE = config.SANDBOX_BASE_URL;
 const REQUEST_GRACE_MS = 5_000;
+
+function createClientTraceContext(traceId, traceState) {
+  const context = resolveRequestTraceContext({
+    'X-Trace-Id': String(traceId),
+  });
+  return Object.freeze({
+    ...context,
+    tracestate: normalizeTracestate(traceState),
+  });
+}
 
 export class SandboxError extends Error {
   constructor(status, message, path) {
@@ -52,6 +68,8 @@ export function authFromRequest(req) {
  * Create a request-scoped sandbox client.
  * @param {{
  *   traceId?: string|null,
+ *   traceState?: string|null,
+ *   traceContext?: object|null,
  *   auth?: {
  *     authorization?: string,
  *     actingUserId?: string,
@@ -60,12 +78,25 @@ export function authFromRequest(req) {
  *   } | null,
  * }} [options]
  */
-export function createSandboxClient({ traceId = null, auth = null } = {}) {
+export function createSandboxClient({
+  traceId = null,
+  traceState = null,
+  traceContext = null,
+  auth = null,
+} = {}) {
   let clientTraceId = traceId || null;
   const authCtx = auth || {};
+  let clientTraceContext =
+    traceContext || boundRequestTraceContext(authCtx) || null;
+  if (!clientTraceContext && traceId) {
+    clientTraceContext = createClientTraceContext(traceId, traceState);
+  }
 
   function setTraceId(id) {
     clientTraceId = id || null;
+    if (clientTraceId) {
+      clientTraceContext = createClientTraceContext(clientTraceId, traceState);
+    }
     return clientTraceId;
   }
 
@@ -76,10 +107,12 @@ export function createSandboxClient({ traceId = null, auth = null } = {}) {
   function ensureTraceId(preferred) {
     if (preferred) {
       clientTraceId = preferred;
+      clientTraceContext = createClientTraceContext(preferred, traceState);
       return clientTraceId;
     }
     if (!clientTraceId) {
-      clientTraceId = randomUUID();
+      clientTraceId = createTraceId();
+      clientTraceContext = createClientTraceContext(clientTraceId, traceState);
     }
     return clientTraceId;
   }
@@ -108,14 +141,19 @@ export function createSandboxClient({ traceId = null, auth = null } = {}) {
       h['X-Acting-Organization-Id'] = authCtx.actingOrganizationId;
       if (authCtx.actingRole) h['X-Acting-Role'] = authCtx.actingRole;
     }
-    const tid = clientTraceId || extra['X-Trace-Id'];
+    const tid =
+      clientTraceContext?.traceId || clientTraceId || extra['X-Trace-Id'];
     if (tid) {
       h['X-Trace-Id'] = tid;
       if (!clientTraceId) clientTraceId = tid;
+      if (clientTraceContext?.traceId) {
+        Object.assign(h, traceCarrierHeaders(clientTraceContext));
+      }
     } else {
-      const generated = randomUUID();
+      const generated = createTraceId();
       clientTraceId = generated;
-      h['X-Trace-Id'] = generated;
+      clientTraceContext = createClientTraceContext(generated, traceState);
+      Object.assign(h, traceCarrierHeaders(clientTraceContext));
     }
     return h;
   }
@@ -436,7 +474,7 @@ export function createSandboxClient({ traceId = null, auth = null } = {}) {
 
 /** Generate or return a preferred trace id without mutating shared state. */
 export function ensureTraceId(preferred) {
-  return preferred || randomUUID();
+  return preferred || createTraceId();
 }
 
 export function artifactDownloadPath(sessionId, artifactId) {
@@ -476,16 +514,16 @@ export async function deleteConversation(conversationId, auth = null) {
   return createSandboxClient({ auth }).deleteConversation(conversationId);
 }
 
-export async function authRegister(body) {
-  return createSandboxClient().authRegister(body);
+export async function authRegister(body, options = {}) {
+  return createSandboxClient(options).authRegister(body);
 }
 
-export async function authLogin(body) {
-  return createSandboxClient().authLogin(body);
+export async function authLogin(body, options = {}) {
+  return createSandboxClient(options).authLogin(body);
 }
 
-export async function authMe(auth = null) {
-  return createSandboxClient({ auth }).authMe();
+export async function authMe(auth = null, options = {}) {
+  return createSandboxClient({ ...options, auth }).authMe();
 }
 
 export async function executeCommand(sessionId, command, timeout = 120) {

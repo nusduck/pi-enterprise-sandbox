@@ -53,8 +53,9 @@ export function isTerminalApprovalStatus(status) {
 
 /**
  * Typed durable pending signal for PiRunExecutor (not an in-process waiter).
- * B2: policy returns block + this signal; does NOT transition Run to
- * WAITING_APPROVAL (resume/checkpoint is PR-09).
+ * Policy returns block + this signal after the same transaction has moved the
+ * Run to WAITING_APPROVAL. PiRunExecutor uses it to stop the current model loop
+ * only after the durable pause exists.
  *
  * @typedef {{
  *   kind: 'DURABLE_APPROVAL_PENDING',
