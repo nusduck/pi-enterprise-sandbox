@@ -32,7 +32,7 @@ Change this file in the **same commit** as the implementation or evidence that j
 | A1 | Use Pi native Agent Loop | `done` | `agent/src/infrastructure/pi/*`, executor path; no second ReAct loop |
 | A2 | Three enterprise extensions load | `done` | `sandbox-bridge`, `enterprise-policy`, `observability`; kit removed |
 | A3 | MCP via `pi-mcp-adapter` | `done` | exact pin + `agent/tests/pi/mcp-adapter.integration.test.js` |
-| A4 | Multi-turn Session recoverable | `partial` | journal/snapshot/recovery services present; hard restart live proof incomplete |
+| A4 | Multi-turn Session recoverable | `done` | Offline: session-recovery + journal units + WAITING_INPUT recovery matrix. **Live 2026-07-19:** full `agent-worker-pi-restart.release-gate.test.js` **5/5 PASS** (model SIGKILL replay, durable interaction, tool boundary, sandbox UNKNOWN) on isolated MySQL/Redis/Sandbox — Pi Session checkpoint path only. Evidence: `evidence/a4-g2-restart-matrix-2026-07-19.md`, `evidence/g6-interaction-worker-restart-2026-07-19.md`. Residual non-blocking: dedicated corrupt-journal-under-kill live gate not separate. |
 | A5 | Agent Version pinned | `done` | credential/version binding tests under `agent/tests/a2a/` |
 
 ## B. State
@@ -96,12 +96,12 @@ Change this file in the **same commit** as the implementation or evidence that j
 | ID | Criterion | Status | Evidence / notes |
 |----|-----------|--------|------------------|
 | G1 | Browser disconnect: Run continues | `done` | SSE relay design; worker ownership |
-| G2 | Agent Worker restart recoverable | `partial` | graceful/Pi recovery evidenced; full matrix open |
+| G2 | Agent Worker restart recoverable | `done` | Offline classification covers lease-free replay, mid-tool UNKNOWN, WAITING_INPUT PENDING/RESOLVED/CLAIMED. **Live 2026-07-19:** full real-Pi Worker restart suite **5/5 PASS** (`agent-worker-pi-restart.release-gate.test.js`) + prior checkpoint/BullMQ gates in `evidence/release-gate-2026-07-19.md`. Evidence: `evidence/a4-g2-restart-matrix-2026-07-19.md`. Residual non-blocking: dedicated graceful SIGTERM mid-run drain gate not separate. |
 | G3 | Redis blip does not lose fact events | `done` | Outbox + Redis gate evidence |
 | G4 | Duplicate request no duplicate side effects | `partial` | Idempotency reload uses `FOR UPDATE` under CAS; MySQL client forces `jsonStrings=true` so JSON scalar responses stay wire-stable. Unit tests updated. Full live concurrent-create matrix still TBD. |
 | G5 | Create Run then immediate query race-free | `partial` | create-before-return design; live race gate TBD |
-| G6 | Durable WAITING_INPUT / interaction resume | `partial` | **Shipped path proven in-tree:** interaction HTTP respond/rehydrate, GET `pending_input`, execute-run resume, FE rehydrateInProgress WAITING_INPUT. **Worker-restart class test added:** `agent/tests/redis/agent-worker-pi-restart.release-gate.test.js` (`continues one durable interaction after Worker restart…`, `describeLive`). Still `partial` until that live gate is executed and dated under `docs/evidence/`. |
-| G7 | Hard `SIGKILL` orphan recovery in Bubblewrap | `open` | **Unit path advanced:** PID-namespace init capture (`find_pid_namespace_init` / `read_pid_namespace_id`), durable handles use `--as-pid-1`, recovery TERMs namespace init then outer wrapper, CAP_KILL retained via setpriv + compose; formal orphan recovery tests (`tests/test_formal_orphan_recovery.py`) + bubblewrap/identity unit coverage. **Still `open`:** live hard-kill Bubblewrap gate not yet re-run with dated evidence on this branch. |
+| G6 | Durable WAITING_INPUT / interaction resume | `done` | **Unit:** interaction HTTP respond/rehydrate, GET `pending_input`, execute-run resume, cancel races (17 pass). **Live:** `agent-worker-pi-restart.release-gate.test.js` case *continues one durable interaction after Worker restart…* PASS on isolated MySQL/Redis/Sandbox (`pi_gate_20260719_g6int`, 2026-07-19): park → SIGKILL Worker A → rehydrateWaiting+respond → Worker B SUCCEEDED / APPLIED / 2 provider calls. Evidence: `evidence/g6-interaction-worker-restart-2026-07-19.md`. |
+| G7 | Hard `SIGKILL` orphan recovery in Bubblewrap | `done` | **Unit:** PID-namespace init, `--as-pid-1`, CAP_KILL, `tests/test_formal_orphan_recovery.py` + identity/bubblewrap (19 pass). **Live:** `scripts/release-gates/sandbox-live-gate.mjs` with `SANDBOX_GATE_HARD_KILL=1` + managed non-privileged Bubblewrap container PASS (`2026-07-19T08:54:17Z`): orphan survived service SIGKILL; after restart process → `lost` (OS orphan gone), claim → `UNKNOWN`/`CRASH_RECOVERY_UNKNOWN`, no auto-replay. Evidence: `evidence/g7-hard-kill-orphan-2026-07-19.md`. |
 
 ## H. Security
 
@@ -122,9 +122,9 @@ Derived from open/partial rows that block “refactor complete”:
 
 | Priority | Item | STATUS IDs | Next proof |
 |----------|------|------------|------------|
-| P0 | Finish durable interaction end-to-end + restart/refresh evidence | G6 | Integration/release-gate: respond → resume → worker restart |
-| P0 | Hard SIGKILL orphan recovery in production Bubblewrap | G7 | Live kill during tool; no orphan; honest LOST |
-| P0 | Worker/model restart matrix completeness | A4, G2 | Consolidate existing restart tests + missing hard cases |
+| P0 | ~~Finish durable interaction end-to-end + restart/refresh evidence~~ | G6 | **done** — live worker-restart gate + evidence 2026-07-19 |
+| P0 | ~~Hard SIGKILL orphan recovery in production Bubblewrap~~ | G7 | **done** — live hard-kill managed gate + evidence 2026-07-19 |
+| P0 | ~~Worker/model restart matrix completeness~~ | A4, G2 | **done** — full real-Pi restart suite 5/5 live + offline matrix 2026-07-19 |
 | P1 | Trace tree completeness (backend + frontend) | D7, F6 | Trace query + UI verification |
 | P1 | Frontend refresh matrix sign-off | D1, D5, D6 | Scripted refresh scenarios |
 | P1 | Idempotency / create-race live gates | G4, G5 | Live MySQL concurrent create |

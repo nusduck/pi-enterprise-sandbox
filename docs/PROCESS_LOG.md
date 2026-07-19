@@ -60,3 +60,24 @@ Each entry should say **what changed**, **why**, and **which STATUS IDs** it aff
 - **Action:** Removed `docs/archive/` (superseded designs, old PLAN/AUDIT/IMPROVEMENT, process notes), deleted stub `docs/refactor-follow-up.md`, and removed pseudo-ADRs `0002-backend2712.md` / `0003-fronted0712.md` (task drafts, not ADRs). Updated active doc links in README, CONTRIBUTING, architecture, ADR 0001, evidence, and review-deferred.
 - **Why:** Keep only normative + operational docs; historical drafts were confusing the acceptance surface.
 - **STATUS:** Documentation only; no §32 row status change.
+
+## 2026-07-19 — G7 live hard-kill orphan recovery (done)
+
+- **Action:** Ran formal orphan unit suite (19 pass) and live `sandbox-live-gate.mjs` with `SANDBOX_GATE_HARD_KILL=1` + managed non-privileged Bubblewrap container. No production code change required. Wrote `docs/evidence/g7-hard-kill-orphan-2026-07-19.md`.
+- **Why:** STATUS **G7** required live proof that durable bwrap orphans are reclaimed after service SIGKILL with honest LOST/UNKNOWN and no auto-replay.
+- **STATUS IDs:** G7 → `done`.
+- **Subagent:** `019f7991-286c-7ee3-948e-8124c5a29cab` (G7 orphan hard-kill path).
+
+## 2026-07-19 — G6 live durable interaction Worker restart (done)
+
+- **Action:** Ran offline interaction unit suite (17 pass) and live `agent-worker-pi-restart.release-gate.test.js` case *continues one durable interaction after Worker restart…* on isolated MySQL/Redis/Sandbox. Parent re-ran the isolated case PASS. Wrote `docs/evidence/g6-interaction-worker-restart-2026-07-19.md`. Note: `TEST_SANDBOX_MYSQL_URL` must be `mysql://` for this Node gate.
+- **Why:** STATUS **G6** required respond → rehydrate → Worker B continuation across SIGKILL, not only unit/fake-knex coverage.
+- **STATUS IDs:** G6 → `done`.
+- **Subagent:** `019f7991-286d-7c02-acbc-e045b63e6a26` (G6 durable restart evidence).
+
+## 2026-07-19 — A4/G2 restart matrix offline + live (done)
+
+- **Action:** Added `agent/tests/run-services/run-recovery-waiting-input.unit.test.js` (PENDING skip / RESOLVED enqueue / missing reconciliation / CLAIMED re-enqueue). Tightened Pi-restart sandbox UNKNOWN assertion to accept `SHUTDOWN_DRAIN_TIMEOUT` or `CRASH_RECOVERY_UNKNOWN`. Parent re-ran full `agent-worker-pi-restart.release-gate.test.js` live **5/5 PASS** (~76s). Wrote/updated `docs/evidence/a4-g2-restart-matrix-2026-07-19.md`. Dual-runtime structural check (B3) green.
+- **Why:** STATUS **A4**/**G2** required consolidated offline matrix plus live multi-case Worker/Session recovery proof.
+- **STATUS IDs:** A4 → `done`, G2 → `done`. Residual non-blocking: dedicated graceful SIGTERM drain and corrupt-journal-under-kill live gates.
+- **Subagent:** `019f7991-286d-7c02-acbc-e0543771a9f8` (A4/G2 restart matrix audit).
