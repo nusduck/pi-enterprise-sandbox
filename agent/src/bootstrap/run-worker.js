@@ -21,6 +21,11 @@ import { RunRecoveryService } from '../application/run-recovery-service.js';
 import { createStubRunExecutor } from '../application/run-executor.js';
 import { isTerminalRunStatus } from '../domain/run/run-status.js';
 import { assertRunJobRef } from '../infrastructure/redis/run-queue.js';
+import {
+  SpanKind,
+  startSpan,
+  withActiveContext,
+} from '../infrastructure/telemetry.js';
 
 /**
  * Non-terminal needsReconciliation must not complete BullMQ jobs
@@ -159,28 +164,44 @@ export function createRunWorkerRuntime(deps) {
         throw new Error('Run worker is shut down');
       }
       const ref = assertRunJobRef(jobData);
-      const result = await executeRunService.execute({
-        runId: ref.runId,
-        orgId: ref.orgId,
-        traceId: ref.traceId,
-        workerId,
+      const runSpan = startSpan('agent.run.execute', {
+        kind: SpanKind.INTERNAL,
+        attributes: {
+          'app.run_id': ref.runId,
+          'app.org_id': ref.orgId,
+          'app.worker_id': workerId,
+        },
       });
-      if (result?.leaseBusy) {
-        throw new LeaseBusyError(ref.runId, { delayMs: 5_000 });
-      }
-      // Lease-lost / re-entry refuse / unknown infrastructure: keep job active
-      // so recovery can terminalize and a later attempt can observe terminal.
-      if (
-        result?.needsReconciliation &&
-        !isTerminalRunStatus(result.status)
-      ) {
-        throw new NeedsReconciliationError(
-          ref.runId,
-          String(result.status || 'UNKNOWN'),
-          result.error ? String(result.error) : '',
-        );
-      }
-      return result;
+      return withActiveContext(runSpan.activeContext, async () => {
+        try {
+          const result = await executeRunService.execute({
+            runId: ref.runId,
+            orgId: ref.orgId,
+            traceId: ref.traceId,
+            workerId,
+          });
+          if (result?.leaseBusy) {
+            throw new LeaseBusyError(ref.runId, { delayMs: 5_000 });
+          }
+          // Lease-lost / re-entry refuse / unknown infrastructure: keep job active
+          // so recovery can terminalize and a later attempt can observe terminal.
+          if (
+            result?.needsReconciliation &&
+            !isTerminalRunStatus(result.status)
+          ) {
+            throw new NeedsReconciliationError(
+              ref.runId,
+              String(result.status || 'UNKNOWN'),
+              result.error ? String(result.error) : '',
+            );
+          }
+          runSpan.end(null, 200);
+          return result;
+        } catch (error) {
+          runSpan.end(error, 500);
+          throw error;
+        }
+      });
     },
 
     /**

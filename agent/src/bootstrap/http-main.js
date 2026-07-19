@@ -14,6 +14,7 @@ import { createServiceContainer } from './container.js';
 import { createAgentHttpServer } from './create-http-server.js';
 import { ProcessAccessService } from '../application/process-access-service.js';
 import { getExtensionDiagnostics as projectExtensionDiagnostics } from '../application/extension-diagnostics-service.js';
+import { startTelemetry } from '../infrastructure/telemetry.js';
 
 /**
  * Build the A2A artifact byte authority. It resolves the task's durable Run
@@ -100,6 +101,10 @@ export async function startHttpMain(env = process.env) {
     console.error(`[agent-server] ${err instanceof Error ? err.message : err}`);
     process.exit(1);
   }
+
+  const telemetry = await startTelemetry(env, {
+    serviceName: 'pi-enterprise-agent-http',
+  });
 
   const container = createServiceContainer(env);
   const requireDataPlane =
@@ -359,6 +364,11 @@ export async function startHttpMain(env = process.env) {
       await container.shutdown();
     } catch (err) {
       console.error('[agent-server] container shutdown error');
+    }
+    try {
+      await telemetry.shutdown();
+    } catch {
+      console.error('[agent-server] telemetry shutdown error');
     }
     process.exit(0);
   };

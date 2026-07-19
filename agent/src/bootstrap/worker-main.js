@@ -18,6 +18,7 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { createServiceContainer } from './container.js';
 import { startRunWorkerRuntime } from './run-worker.js';
+import { startTelemetry } from '../infrastructure/telemetry.js';
 
 function optionalSafeInteger(value, minimum) {
   if (value == null || String(value).trim() === '') return undefined;
@@ -35,6 +36,9 @@ function optionalSafeInteger(value, minimum) {
  * }} [hooks] — DI seams for tests
  */
 export async function startWorkerMain(env = process.env, hooks = {}) {
+  const telemetry = await startTelemetry(env, {
+    serviceName: 'pi-enterprise-agent-worker',
+  });
   const createContainer = hooks.createContainer || createServiceContainer;
   const container = createContainer(env);
   await container.start({
@@ -195,6 +199,11 @@ export async function startWorkerMain(env = process.env, hooks = {}) {
     }
     try {
       await container.shutdown();
+    } catch {
+      /* ignore */
+    }
+    try {
+      await telemetry.shutdown();
     } catch {
       /* ignore */
     }

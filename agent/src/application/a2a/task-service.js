@@ -264,6 +264,7 @@ export class A2aTaskService {
         },
         traceId: input.traceId,
         ...(input.traceState ? { traceState: input.traceState } : {}),
+        traceFlags: input.traceFlags,
         idempotencyKey,
         agentId: input.agentId,
         agentProfileId: input.agentId,

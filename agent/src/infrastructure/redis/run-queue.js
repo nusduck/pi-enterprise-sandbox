@@ -9,6 +9,7 @@
 import {
   AGENT_RUNS_QUEUE_NAME,
   RUN_JOB_REF_FIELDS,
+  RUN_JOB_TRACE_FIELDS,
 } from './constants.js';
 import {
   assertBullmqInstalled,
@@ -23,6 +24,13 @@ import {
 } from './redis-connection-error-guard.js';
 import { RedisValidationError } from './errors.js';
 import { assertOrgId, assertRunId, assertTraceId } from './validation.js';
+import {
+  contextFromRunJob,
+  injectTraceCarrier,
+  startSpan,
+  withActiveContext,
+  SpanKind,
+} from '../telemetry.js';
 
 /**
  * BullMQ re-emits connection failures on Queue/Worker. Without an `error`
@@ -44,6 +52,8 @@ function disposeBullmqErrorGuard(target) {
  * @property {string} runId
  * @property {string} orgId
  * @property {string} traceId
+ * @property {string} [traceparent]
+ * @property {string} [tracestate]
  */
 
 /**
@@ -62,18 +72,18 @@ export function assertRunJobRef(payload) {
   /** @type {Record<string, unknown>} */
   const obj = /** @type {Record<string, unknown>} */ (payload);
   const keys = Object.keys(obj);
-  const allowed = new Set(RUN_JOB_REF_FIELDS);
+  const allowed = new Set([...RUN_JOB_REF_FIELDS, ...RUN_JOB_TRACE_FIELDS]);
 
   for (const k of keys) {
     if (!allowed.has(k)) {
       throw new RedisValidationError(
-        `Run job payload rejects extra field "${k}"; only runId, orgId, traceId are allowed`,
+        `Run job payload rejects extra field "${k}"; only reference and W3C carrier fields are allowed`,
         { field: k },
       );
     }
   }
 
-  for (const field of RUN_JOB_REF_FIELDS) {
+  for (const field of ['runId', 'orgId', 'traceId']) {
     if (!(field in obj)) {
       throw new RedisValidationError(
         `Run job payload.${field} is required and must be a non-empty string`,
@@ -82,11 +92,35 @@ export function assertRunJobRef(payload) {
     }
   }
 
-  return {
+  const result = {
     runId: assertRunId(obj.runId),
     orgId: assertOrgId(obj.orgId),
     traceId: assertTraceId(obj.traceId),
   };
+  if (obj.traceparent != null || obj.tracestate != null) {
+    const traceparent = String(obj.traceparent || '').trim().toLowerCase();
+    if (!/^00-[0-9a-f]{32}-[0-9a-f]{16}-[0-9a-f]{2}$/.test(traceparent)) {
+      throw new RedisValidationError('Run job traceparent is invalid', {
+        field: 'traceparent',
+      });
+    }
+    if (traceparent.slice(3, 35) !== result.traceId) {
+      throw new RedisValidationError('Run job traceparent trace id must match traceId', {
+        field: 'traceparent',
+      });
+    }
+    result.traceparent = traceparent;
+    if (obj.tracestate != null) {
+      const tracestate = String(obj.tracestate).trim();
+      if (!tracestate || tracestate.length > 512 || /[^\x20-\x7e]/.test(tracestate)) {
+        throw new RedisValidationError('Run job tracestate is invalid', {
+          field: 'tracestate',
+        });
+      }
+      result.tracestate = tracestate;
+    }
+  }
+  return result;
 }
 
 /**
@@ -133,7 +167,29 @@ export async function enqueueRunJob(queue, ref, jobOptions = {}) {
     throw new Error('enqueueRunJob requires a BullMQ Queue');
   }
   const jobRef = assertRunJobRef(ref);
-  const requestedJobId =
+  const enqueueSpan = startSpan(
+    'agent.queue.enqueue',
+    {
+      kind: SpanKind.PRODUCER,
+      attributes: {
+        'messaging.system': 'bullmq',
+        'messaging.destination.name': AGENT_RUNS_QUEUE_NAME,
+        'app.run_id': jobRef.runId,
+      },
+    },
+  );
+  return withActiveContext(enqueueSpan.activeContext, async () => {
+    if (!jobRef.traceparent) {
+      injectTraceCarrier(jobRef);
+      // The active span may be absent in a unit-test/dev process. In that
+      // case keep the compact reference payload; a later recovery span will
+      // create a fresh carrier.
+      if (jobRef.traceparent && jobRef.traceparent.slice(3, 35) !== jobRef.traceId) {
+        delete jobRef.traceparent;
+        delete jobRef.tracestate;
+      }
+    }
+    const requestedJobId =
     jobOptions.jobId == null ? jobRef.runId : String(jobOptions.jobId);
   if (
     !requestedJobId ||
@@ -160,7 +216,7 @@ export async function enqueueRunJob(queue, ref, jobOptions = {}) {
       // Best-effort; add may still succeed or surface a clear error.
     }
   }
-  return queue.add('execute', jobRef, {
+    const job = await queue.add('execute', jobRef, {
     removeOnComplete: true,
     removeOnFail: 100,
     ...jobOptions,
@@ -168,6 +224,12 @@ export async function enqueueRunJob(queue, ref, jobOptions = {}) {
     // may supply a durable interaction/approval suffix so an active original
     // job cannot swallow the wake-up enqueue through BullMQ job-id dedupe.
     jobId: requestedJobId,
+  });
+    enqueueSpan.end(null, 200);
+    return job;
+  }).catch((error) => {
+    enqueueSpan.end(error, 500);
+    throw error;
   });
 }
 
@@ -221,8 +283,29 @@ export function createRunWorker(connectionUrl, processor, options = {}) {
     queueName,
     async (job) => {
       const ref = assertRunJobRef(job.data);
-      // Processor owns MySQL load / Run state transitions — not this factory.
-      return processor(ref, job);
+      const receiveSpan = startSpan(
+        'agent.queue.process',
+        {
+          kind: SpanKind.CONSUMER,
+          attributes: {
+            'messaging.system': 'bullmq',
+            'messaging.destination.name': queueName,
+            'app.run_id': ref.runId,
+          },
+        },
+        contextFromRunJob(ref),
+      );
+      return withActiveContext(receiveSpan.activeContext, async () => {
+        try {
+          // Processor owns MySQL load / Run state transitions — not this factory.
+          const result = await processor(ref, job);
+          receiveSpan.end(null, 200);
+          return result;
+        } catch (error) {
+          receiveSpan.end(error, 500);
+          throw error;
+        }
+      });
     },
     workerOpts,
   );

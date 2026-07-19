@@ -191,6 +191,11 @@ export function mapRun(row) {
     attempt: Number(row.attempt),
     traceId: String(row.trace_id),
     traceState: row.trace_state == null ? null : String(row.trace_state),
+    traceFlags: row.trace_flags == null ? '01' : String(row.trace_flags),
+    traceParentSpanId:
+      row.trace_parent_span_id == null
+        ? null
+        : String(row.trace_parent_span_id),
     nextEventSequence: Number(row.next_event_sequence),
     startedAt: formatDateTime(row.started_at),
     completedAt: formatDateTime(row.completed_at),

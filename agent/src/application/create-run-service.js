@@ -37,6 +37,7 @@ import {
 } from './errors.js';
 import { RunParentProvisioner } from './parent/run-parent-provisioner.js';
 import { normalizeW3cTracestate } from '../infrastructure/sandbox/trace-context.js';
+import { formatStoredTraceCarrier } from '../infrastructure/telemetry.js';
 
 export const CREATE_RUN_OPERATION = 'create_run';
 export const DEFAULT_IDEMPOTENCY_TTL_MS = 24 * 60 * 60 * 1000;
@@ -191,6 +192,7 @@ export class CreateRunService {
    *   },
    *   traceId: string,
    *   traceState?: string | null,
+   *   traceFlags?: string | null,
    *   idempotencyKey: string,
    *   agentId?: string | null,
    *   agentProfileId?: string | null,
@@ -206,6 +208,13 @@ export class CreateRunService {
     const messages = requireMessages(input.messages);
     const traceId = normalizeTraceId(input.traceId);
     const traceState = normalizeTraceState(input.traceState);
+    const rawTraceFlags = String(input.traceFlags ?? '01').trim();
+    if (!/^[0-9a-fA-F]{2}$/.test(rawTraceFlags)) {
+      throw new ValidationError(
+        'traceFlags must be exactly two hexadecimal characters',
+      );
+    }
+    const traceFlags = rawTraceFlags.toLowerCase();
     if (
       typeof input.idempotencyKey !== 'string' ||
       !input.idempotencyKey.trim()
@@ -242,6 +251,7 @@ export class CreateRunService {
           auth: input.auth,
           traceId,
           traceState,
+          traceFlags,
           idempotencyKey,
           requestHash,
           spanId: input.spanId ?? null,
@@ -270,6 +280,7 @@ export class CreateRunService {
    *   auth: object,
    *   traceId: string,
    *   traceState: string | null,
+   *   traceFlags: string,
    *   idempotencyKey: string,
    *   requestHash: string,
    *   spanId: string | null,
@@ -418,6 +429,8 @@ export class CreateRunService {
         queueName: this.queueName,
         traceId: ctx.traceId,
         traceState: ctx.traceState,
+        traceFlags: ctx.traceFlags,
+        traceParentSpanId: ctx.spanId,
         nextEventSequence: 0,
       });
 
@@ -488,6 +501,9 @@ export class CreateRunService {
         userId: scope.userId,
         runId,
         traceId: ctx.traceId,
+        traceState: ctx.traceState,
+        traceFlags: ctx.traceFlags,
+        traceParentSpanId: ctx.spanId,
       };
     });
 
@@ -515,6 +531,8 @@ export class CreateRunService {
    *   userId: string,
    *   runId: string,
    *   traceId: string,
+   *   traceState?: string | null,
+   *   traceFlags?: string,
    * }} committed
    */
   async #afterCreateEnqueue(committed) {
@@ -526,6 +544,7 @@ export class CreateRunService {
         runId: committed.runId,
         orgId: committed.orgId,
         traceId: committed.traceId,
+        ...formatStoredTraceCarrier(committed),
       });
     } catch {
       response.queueWarning = QUEUE_WARNING.ENQUEUE_FAILED;
@@ -600,6 +619,7 @@ export class CreateRunService {
         runId: committed.runId,
         orgId: committed.orgId,
         traceId,
+        ...formatStoredTraceCarrier(run),
       });
     } catch {
       response.queueWarning = QUEUE_WARNING.ENQUEUE_FAILED;

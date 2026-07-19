@@ -32,7 +32,14 @@ export const OUTBOX_WAKEUP_KEY = 'outbox:wakeup';
  * Job payload must be a pure reference — no conversation/dataset blobs.
  * @type {readonly string[]}
  */
-export const RUN_JOB_REF_FIELDS = Object.freeze(['runId', 'orgId', 'traceId']);
+export const RUN_JOB_REF_FIELDS = Object.freeze([
+  'runId',
+  'orgId',
+  'traceId',
+]);
+
+/** Optional W3C carrier fields persisted with a BullMQ reference. */
+export const RUN_JOB_TRACE_FIELDS = Object.freeze(['traceparent', 'tracestate']);
 
 /**
  * @param {string} runId Crockford ULID

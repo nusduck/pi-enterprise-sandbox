@@ -571,6 +571,7 @@ export function createA2aHttpHandler(deps) {
             params,
             traceId,
             traceState: traceContext.traceState,
+            traceFlags: traceContext.traceFlags,
             spanId: traceContext.parentSpanId,
             method: 'SendMessage',
             idempotencyKey:
@@ -591,6 +592,7 @@ export function createA2aHttpHandler(deps) {
             method: 'GetTask',
             traceId,
             traceState: traceContext.traceState,
+            traceFlags: traceContext.traceFlags,
             spanId: traceContext.parentSpanId,
           });
           deps.json(res, 200, jsonRpcSuccess(rpcId, task));
@@ -644,6 +646,7 @@ export function createA2aHttpHandler(deps) {
             params,
             traceId,
             traceState: traceContext.traceState,
+            traceFlags: traceContext.traceFlags,
             spanId: traceContext.parentSpanId,
             method: 'SendStreamingMessage',
             idempotencyKey:

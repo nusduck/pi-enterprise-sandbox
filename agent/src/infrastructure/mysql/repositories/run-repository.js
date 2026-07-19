@@ -99,6 +99,25 @@ export function assertTraceState(traceState) {
   }
 }
 
+/** @param {unknown} traceFlags @returns {string} */
+export function assertTraceFlags(traceFlags) {
+  const normalized = String(traceFlags ?? '01').trim().toLowerCase();
+  if (!/^[0-9a-f]{2}$/.test(normalized)) {
+    throw new Error('traceFlags must be exactly two hexadecimal characters');
+  }
+  return normalized;
+}
+
+/** @param {unknown} spanId @returns {string | null} */
+export function assertTraceParentSpanId(spanId) {
+  if (spanId == null || spanId === '') return null;
+  const normalized = String(spanId).trim().toLowerCase();
+  if (!/^[0-9a-f]{16}$/.test(normalized) || normalized === '0'.repeat(16)) {
+    throw new Error('traceParentSpanId must be a non-zero W3C span id');
+  }
+  return normalized;
+}
+
 /**
  * Normalize expected status(es) for conditional update.
  * @param {string | string[]} expected
@@ -217,6 +236,8 @@ export class RunRepository {
     const status = assertRunStatus(input.status);
     const traceId = assertTraceId(input.traceId);
     const traceState = assertTraceState(input.traceState);
+    const traceFlags = assertTraceFlags(input.traceFlags);
+    const traceParentSpanId = assertTraceParentSpanId(input.traceParentSpanId);
 
     const now = toMysqlDateTime(input.createdAt || this.now());
     await this.db('runs').insert({
@@ -234,6 +255,8 @@ export class RunRepository {
       attempt: input.attempt ?? 0,
       trace_id: traceId,
       trace_state: traceState,
+      trace_flags: traceFlags,
+      trace_parent_span_id: traceParentSpanId,
       next_event_sequence: input.nextEventSequence ?? 0,
       started_at: input.startedAt ? toMysqlDateTime(input.startedAt) : null,
       completed_at: input.completedAt ? toMysqlDateTime(input.completedAt) : null,

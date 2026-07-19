@@ -4,6 +4,7 @@
  * Chat orchestration is delegated to the independent Agent service.
  */
 import http from 'node:http';
+import { randomBytes } from 'node:crypto';
 import {
   config,
   isProtectedApiPath,
@@ -71,6 +72,11 @@ import {
   resolveRequestTraceContext,
   bindRequestTraceContext,
 } from './application/trace-context.js';
+import {
+  startHttpServerSpan,
+  startTelemetry,
+  withActiveContext,
+} from './application/telemetry.js';
 
 // Production fail-fast before bind.
 try {
@@ -115,11 +121,11 @@ function setCommonHeaders(req, res) {
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PATCH, DELETE, OPTIONS');
   res.setHeader(
     'Access-Control-Allow-Headers',
-    'Content-Type, Authorization, X-Trace-Id, traceparent, tracestate, Idempotency-Key, Last-Event-ID',
+    'Content-Type, Authorization, X-Trace-Id, X-Request-Id, traceparent, tracestate, Idempotency-Key, Last-Event-ID',
   );
   res.setHeader(
     'Access-Control-Expose-Headers',
-    'X-Trace-Id, traceparent, tracestate',
+    'X-Trace-Id, X-Request-Id, traceparent, tracestate',
   );
 }
 
@@ -147,21 +153,43 @@ function enforceBffAuth(req, res, path) {
   return true;
 }
 
+await startTelemetry(process.env);
+
 const server = http.createServer(async (req, res) => {
   const traceContext = resolveRequestTraceContext(req.headers);
-  bindRequestTraceContext(req, traceContext);
-  req.traceContext = traceContext;
+  const requestSpan = startHttpServerSpan(req, traceContext);
+  const spanContext = requestSpan.span.spanContext();
+  const activeTraceContext = spanContext?.traceId
+    ? Object.freeze({
+        traceId: spanContext.traceId,
+        spanId: spanContext.spanId,
+        parentSpanId: traceContext.parentSpanId,
+        traceFlags: spanContext.traceFlags.toString(16).padStart(2, '0'),
+        tracestate: spanContext.traceState?.serialize?.() || traceContext.tracestate,
+      })
+    : traceContext;
+  const incomingRequestId = String(req.headers['x-request-id'] || '').trim();
+  const requestId = /^[A-Za-z0-9._:-]{8,128}$/.test(incomingRequestId)
+    ? incomingRequestId
+    : randomBytes(16).toString('hex');
+  res.once('finish', () => requestSpan.end(null, res.statusCode));
+  res.once('close', () => requestSpan.end(null, res.statusCode));
+  return withActiveContext(requestSpan.activeContext, async () => {
+  bindRequestTraceContext(req, activeTraceContext);
+  req.traceContext = activeTraceContext;
+  req.requestId = requestId;
   // Keep the public compatibility header in compact 32-hex form. The
   // resolver already rejects UUID/legacy values, so this is normalization
   // rather than a second trace-id source.
-  const traceId = String(traceContext.traceId).replaceAll('-', '');
+  const traceId = String(activeTraceContext.traceId).replaceAll('-', '');
   req.traceId = traceId;
-  req.traceparent = formatTraceparent(traceContext);
-  req.tracestate = traceContext.tracestate;
+  req.traceparent = formatTraceparent(activeTraceContext);
+  req.tracestate = activeTraceContext.tracestate;
   res.setHeader('X-Trace-Id', traceId);
+  res.setHeader('X-Request-Id', requestId);
   res.setHeader('traceparent', req.traceparent);
-  if (traceContext.tracestate) {
-    res.setHeader('tracestate', traceContext.tracestate);
+  if (activeTraceContext.tracestate) {
+    res.setHeader('tracestate', activeTraceContext.tracestate);
   }
   setCommonHeaders(req, res);
 
@@ -497,10 +525,12 @@ const server = http.createServer(async (req, res) => {
 
     jsonError(res, 404, 'Not found');
   } catch (err) {
+    requestSpan.end(err, res.statusCode || 500);
     console.error('[server] Unhandled:', err);
     if (!res.headersSent) sendError(res, err, traceId);
     else if (!res.writableEnded) res.end();
   }
+  });
 });
 
 // ── Start ───────────────────────────────────────
@@ -516,3 +546,22 @@ server.listen(config.PORT, async () => {
   }
   await startupCheck();
 });
+
+let shuttingDown = false;
+async function shutdown(signal) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.log(`[server] ${signal} — shutting down`);
+  await new Promise((resolve) => server.close(() => resolve(undefined)));
+  try {
+    const telemetry = await startTelemetry(process.env);
+    await telemetry.shutdown();
+  } catch (error) {
+    console.error(
+      '[server] telemetry shutdown failed:',
+      error instanceof Error ? error.message : 'error',
+    );
+  }
+}
+process.once('SIGTERM', () => void shutdown('SIGTERM'));
+process.once('SIGINT', () => void shutdown('SIGINT'));

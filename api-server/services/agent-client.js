@@ -55,6 +55,11 @@ function requestHeaders({
     headers['X-Acting-Organization-Id'] = auth.actingOrganizationId;
   }
   if (auth?.actingRole) headers['X-Acting-Role'] = auth.actingRole;
+  const requestId =
+    typeof auth?.requestId === 'string' && auth.requestId.trim()
+      ? auth.requestId.trim()
+      : null;
+  if (requestId) headers['X-Request-Id'] = requestId;
   // Prefer the request's bound W3C carrier. This preserves both the parent
   // span and tracestate across every BFF → Agent call, while retaining the
   // generated-child fallback for direct unit callers and legacy X-Trace-Id.

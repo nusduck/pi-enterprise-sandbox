@@ -161,11 +161,23 @@ export function authSubjectsFromRequest(req) {
     provider: 'bff',
     externalOrgId: oid.trim(),
     externalUserId: uid.trim(),
+    requestId: req?.requestId || null,
+    callerType: 'web',
     role:
       typeof req.headers['x-acting-role'] === 'string'
         ? req.headers['x-acting-role'].trim()
         : null,
   };
+}
+
+/** Resolve a bounded request id for internal correlation. */
+export function resolveRequestId(req) {
+  const incoming = String(
+    req?.headers?.['x-request-id'] || req?.headers?.['X-Request-Id'] || '',
+  ).trim();
+  return /^[A-Za-z0-9._:-]{8,128}$/.test(incoming)
+    ? incoming
+    : randomBytes(16).toString('hex');
 }
 
 /**
@@ -498,6 +510,9 @@ export function createAgentHttpServer(deps) {
   }
 
   const server = http.createServer(async (req, res) => {
+    const requestId = resolveRequestId(req);
+    req.requestId = requestId;
+    res.setHeader('X-Request-Id', requestId);
     try {
       const parsedUrl = new URL(
         req.url || '/',

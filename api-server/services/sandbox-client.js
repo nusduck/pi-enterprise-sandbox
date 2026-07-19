@@ -141,6 +141,7 @@ export function createSandboxClient({
       h['X-Acting-Organization-Id'] = authCtx.actingOrganizationId;
       if (authCtx.actingRole) h['X-Acting-Role'] = authCtx.actingRole;
     }
+    if (authCtx.requestId) h['X-Request-Id'] = String(authCtx.requestId);
     const tid =
       clientTraceContext?.traceId || clientTraceId || extra['X-Trace-Id'];
     if (tid) {

@@ -30,6 +30,7 @@ import {
 } from '../domain/interaction/interaction-status.js';
 import { applyRunTransitionInTxn } from './run-transition.js';
 import { sanitizeStatusReason } from './sanitize-status-reason.js';
+import { formatStoredTraceCarrier } from '../infrastructure/telemetry.js';
 
 const REPLAY_SAFE_TOOL_STATUSES = new Set([
   TOOL_EXECUTION_STATUS.SUCCEEDED,
@@ -218,7 +219,12 @@ export class RunRecoveryService {
 
       // ACCEPTED → project QUEUED after enqueue (same as create path)
       if (status === RUN_STATUS.ACCEPTED || status === RUN_STATUS.RETRYING) {
-        await this.runQueue.enqueue({ runId, orgId, traceId });
+        await this.runQueue.enqueue({
+          runId,
+          orgId,
+          traceId,
+          ...formatStoredTraceCarrier(run),
+        });
         if (status === RUN_STATUS.ACCEPTED) {
           const proj = await this.#projectAcceptedToQueued(run);
           if (!proj.ok && !proj.alreadyAdvanced) {
@@ -242,7 +248,12 @@ export class RunRecoveryService {
       }
 
       // QUEUED: re-enqueue only
-      await this.runQueue.enqueue({ runId, orgId, traceId });
+      await this.runQueue.enqueue({
+        runId,
+        orgId,
+        traceId,
+        ...formatStoredTraceCarrier(run),
+      });
       return { ...base, action: 'enqueued' };
     } catch (err) {
       return {
@@ -296,7 +307,12 @@ export class RunRecoveryService {
       }
 
       await this.runQueue.enqueue(
-        { runId: base.runId, orgId: base.orgId, traceId: base.traceId },
+        {
+          runId: base.runId,
+          orgId: base.orgId,
+          traceId: base.traceId,
+          ...formatStoredTraceCarrier(run),
+        },
         {
           jobId:
             `${base.runId}-interaction-` +
@@ -667,6 +683,7 @@ export class RunRecoveryService {
               runId: String(run.runId),
               orgId: String(run.orgId),
               traceId: String(run.traceId || ''),
+              ...formatStoredTraceCarrier(run),
             },
             {
               jobId: `${run.runId}-interaction-${result.interactionId}`,
@@ -721,6 +738,7 @@ export class RunRecoveryService {
           runId: String(run.runId),
           orgId: String(run.orgId),
           traceId: String(run.traceId || ''),
+          ...formatStoredTraceCarrier(run),
         });
         return {
           ...base,

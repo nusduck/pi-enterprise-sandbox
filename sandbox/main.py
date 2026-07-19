@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import logging
+import re
+import secrets
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
@@ -37,6 +39,14 @@ from sandbox.trace import (
     resolve_trace_context,
     set_trace_context,
 )
+from sandbox.telemetry import (
+    extracted_parent,
+    finish_server_span,
+    shutdown_telemetry,
+    start_telemetry,
+    synthetic_trace_parent,
+    server_span,
+)
 
 # Fail-fast before uvicorn binds when import loads this module in production.
 ensure_safe_to_start(settings)
@@ -65,6 +75,7 @@ async def lifespan(app: FastAPI):
     logger = logging.getLogger("sandbox")
     # Belt-and-suspenders: re-validate production matrix on lifespan start.
     ensure_safe_to_start(settings)
+    start_telemetry("pi-enterprise-sandbox")
     logger.info(
         "Sandbox Service v%s starting (deployment_env=%s network_mode=%s "
         "internal_plane_enabled=%s)",
@@ -151,6 +162,7 @@ async def lifespan(app: FastAPI):
                 type(exc).__name__,
             )
         logger.info("Sandbox Service shutting down")
+        shutdown_telemetry()
 
 
 app = FastAPI(
@@ -259,17 +271,38 @@ async def trace_id_middleware(request: Request, call_next):
         request.headers.get("traceparent"),
         request.headers.get("X-Trace-Id"),
     )
-    token = set_trace_context(context)
-    request.state.trace_id = context.trace_id
-    request.state.span_id = context.span_id
-    request.state.parent_span_id = context.parent_span_id
-    try:
-        response = await call_next(request)
-        response.headers["X-Trace-Id"] = context.trace_id
-        response.headers["traceparent"] = format_traceparent(context)
-        return response
-    finally:
-        reset_trace_context(token)
+    parent = extracted_parent(request.headers)
+    if context.parent_span_id is None:
+        parent = synthetic_trace_parent(context.trace_id, context.span_id) or parent
+    with server_span(request.method, request.url.path, parent) as span:
+        span_context = span.get_span_context()
+        if span_context.is_valid:
+            context = type(context)(
+                trace_id=f"{span_context.trace_id:032x}",
+                span_id=f"{span_context.span_id:016x}",
+                parent_span_id=context.parent_span_id,
+                trace_flags=f"{int(span_context.trace_flags):02x}",
+            )
+        token = set_trace_context(context)
+        incoming_request_id = request.headers.get("X-Request-Id", "").strip()
+        request_id = (
+            incoming_request_id
+            if re.fullmatch(r"[A-Za-z0-9._:-]{8,128}", incoming_request_id)
+            else secrets.token_hex(16)
+        )
+        request.state.request_id = request_id
+        request.state.trace_id = context.trace_id
+        request.state.span_id = context.span_id
+        request.state.parent_span_id = context.parent_span_id
+        try:
+            response = await call_next(request)
+            finish_server_span(span, response.status_code)
+            response.headers["X-Trace-Id"] = context.trace_id
+            response.headers["X-Request-Id"] = request_id
+            response.headers["traceparent"] = format_traceparent(context)
+            return response
+        finally:
+            reset_trace_context(token)
 
 
 @app.middleware("http")

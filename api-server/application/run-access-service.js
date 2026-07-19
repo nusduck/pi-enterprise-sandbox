@@ -47,6 +47,8 @@ export async function resolveTrustedAuth(req) {
     return bindRequestTraceContext({
       ...forwarded,
       ...config.DEVELOPMENT_ACTING_IDENTITY,
+      requestId: req?.requestId || null,
+      callerType: 'web',
     }, req?.traceContext);
   }
   if (!forwarded.authorization) {
@@ -74,6 +76,8 @@ export async function resolveTrustedAuth(req) {
     actingUserId: userId,
     actingOrganizationId: organizationId,
     actingRole: String(user.role || 'user'),
+    requestId: req?.requestId || null,
+    callerType: 'web',
   }, req?.traceContext);
 }
 
