@@ -397,8 +397,9 @@ async def value_error_handler(request: Request, exc: ValueError):
 # Public file, dataset, and artifact adapters are retained only for the
 # user-facing BFF flows. Session identity and all authority come from the
 # formal AgentSession/SandboxSession binding installed by the internal plane.
-from sandbox.routers import artifacts, datasets, files
+from sandbox.routers import artifacts, auth_router, datasets, files
 
+app.include_router(auth_router.router)
 app.include_router(files.router)
 app.include_router(datasets.router)
 app.include_router(artifacts.router)
