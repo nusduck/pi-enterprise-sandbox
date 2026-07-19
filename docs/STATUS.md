@@ -100,7 +100,7 @@ Change this file in the **same commit** as the implementation or evidence that j
 | G3 | Redis blip does not lose fact events | `done` | Outbox + Redis gate evidence |
 | G4 | Duplicate request no duplicate side effects | `partial` | idempotency tables/claims; full live duplicate matrix TBD |
 | G5 | Create Run then immediate query race-free | `partial` | create-before-return design; live race gate TBD |
-| G6 | Durable WAITING_INPUT / interaction resume | `partial` | **Shipped path proven in-tree:** `InteractionResponseService` + HTTP respond/rehydrate (`agent/tests/http/interaction-http.unit.test.js`), GET `pending_input` projection (`get-run-pending-input`), execute-run resume, frontend `rehydrateRun`/`rehydrateInProgress` for WAITING_INPUT (`frontend/test/conversation-rehydration.test.ts`). Still `partial` until a live/worker-restart gate is dated under `docs/evidence/` (unit + fake-knex restart-class coverage exists; compose hard restart not yet re-run on this branch). |
+| G6 | Durable WAITING_INPUT / interaction resume | `partial` | **Shipped path proven in-tree:** interaction HTTP respond/rehydrate, GET `pending_input`, execute-run resume, FE rehydrateInProgress WAITING_INPUT. **Worker-restart class test added:** `agent/tests/redis/agent-worker-pi-restart.release-gate.test.js` (`continues one durable interaction after Worker restart…`, `describeLive`). Still `partial` until that live gate is executed and dated under `docs/evidence/`. |
 | G7 | Hard `SIGKILL` orphan recovery in Bubblewrap | `open` | Explicit open gate in evidence doc. Prerequisite: Linux starttime field-22 index fix + unit test committed on this branch; live gate still required. |
 
 ## H. Security

@@ -7,7 +7,7 @@
  * caller must provide isolated MySQL/Redis/Sandbox resources.
  */
 
-import { after, before, describe, it } from 'node:test';
+import { after, afterEach, before, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { mkdtempSync } from 'node:fs';
@@ -30,6 +30,11 @@ import { ConversationRepository } from '../../src/infrastructure/mysql/repositor
 import { AgentSessionRepository } from '../../src/infrastructure/mysql/repositories/agent-session-repository.js';
 import { MessageRepository } from '../../src/infrastructure/mysql/repositories/message-repository.js';
 import { RunRepository } from '../../src/infrastructure/mysql/repositories/run-repository.js';
+import { ExternalReferenceRepository } from '../../src/infrastructure/mysql/repositories/external-reference-repository.js';
+import { createRepositoryBundle } from '../../src/bootstrap/container.js';
+import { TransactionManager } from '../../src/infrastructure/mysql/transaction-manager.js';
+import { InteractionResponseService } from '../../src/application/interaction-response-service.js';
+import { createUlidGenerator } from '../../src/domain/shared/ulid.js';
 import { enqueueRunJob, createRunQueue, destroyRunQueue } from '../../src/infrastructure/redis/run-queue.js';
 import { runLeaseKey } from '../../src/infrastructure/redis/constants.js';
 import { startFakeOpenAIProvider } from '../../testing/fake-openai-provider.js';
@@ -114,6 +119,9 @@ const QUEUE = 'release-gate-agent-pi-restart';
 const TRACE_MODEL = '11111111111111111111111111111111';
 const TRACE_TOOL = '22222222222222222222222222222222';
 const TRACE_SANDBOX = '33333333333333333333333333333333';
+const TRACE_INTERACTION = '44444444444444444444444444444444';
+const EXTERNAL_ORG = 'real-pi-restart-gate-org';
+const EXTERNAL_USER = 'real-pi-restart-gate-user';
 
 const MODEL_IDS = Object.freeze({
   conversationId: '01K0G2PAV8FPMVC9QHJG7JPN71',
@@ -138,6 +146,14 @@ const SANDBOX_IDS = Object.freeze({
   messageId: '01K0G2PAV8FPMVC9QHJG7JPN97',
   sandboxSessionId: '01K0G2PAV8FPMVC9QHJG7JPN95',
   workspaceId: '01K0G2PAV8FPMVC9QHJG7JPN96',
+});
+const INTERACTION_IDS = Object.freeze({
+  conversationId: '01K0G2PAV8FPMVC9QHJG7JPNA1',
+  sessionId: '01K0G2PAV8FPMVC9QHJG7JPNA2',
+  runId: '01K0G2PAV8FPMVC9QHJG7JPNA3',
+  messageId: '01K0G2PAV8FPMVC9QHJG7JPNA7',
+  sandboxSessionId: '01K0G2PAV8FPMVC9QHJG7JPNA5',
+  workspaceId: '01K0G2PAV8FPMVC9QHJG7JPNA6',
 });
 
 const modelConfig = (baseUrl) => ({
@@ -206,11 +222,11 @@ function createWorkerHarness(workerLabel, ids) {
       AGENT_RECOVERY_SCAN_LIMIT: '20',
       AGENT_RECOVERY_INTERVAL_MS: '200',
       AGENT_OUTBOX_IDLE_MS: '50',
-      AGENT_RUN_LEASE_TTL_MS: '2500',
-      AGENT_RUN_LEASE_RENEW_INTERVAL_MS: '400',
-      AGENT_SESSION_LOCK_TTL_MS: '1000',
-      AGENT_SESSION_LOCK_RENEW_INTERVAL_MS: '200',
-      AGENT_BULLMQ_LOCK_DURATION_MS: '3000',
+      AGENT_RUN_LEASE_TTL_MS: '6000',
+      AGENT_RUN_LEASE_RENEW_INTERVAL_MS: '1000',
+      AGENT_SESSION_LOCK_TTL_MS: '6000',
+      AGENT_SESSION_LOCK_RENEW_INTERVAL_MS: '1000',
+      AGENT_BULLMQ_LOCK_DURATION_MS: '8000',
       AGENT_BULLMQ_STALLED_INTERVAL_MS: '500',
       AGENT_BULLMQ_MAX_STALLED_COUNT: '2',
       AGENT_PI_AGENT_DIR: path.join(tempRoot, `pi-${workerLabel}`),
@@ -340,7 +356,7 @@ async function seedRun(knex, ids, traceId, content, baseUrl) {
     });
     await organizations.createUser({
       userId: USER,
-      externalSubject: `release-gate-${USER}`,
+      externalSubject: `bff:${EXTERNAL_USER}`,
       displayName: 'Release Gate',
       status: 'active',
     });
@@ -349,6 +365,12 @@ async function seedRun(knex, ids, traceId, content, baseUrl) {
       userId: USER,
       role: 'member',
       status: 'active',
+    });
+    const externalRefs = new ExternalReferenceRepository(knex);
+    await externalRefs.createOrganizationRef({
+      provider: 'bff',
+      externalSubject: EXTERNAL_ORG,
+      orgId: ORG,
     });
     await knex('agent_definitions').insert({
       agent_id: AGENT,
@@ -609,6 +631,27 @@ describeLive('real Pi model/tool/Sandbox interruption behavior', () => {
     if (errors.length > 1) throw new AggregateError(errors, 'real Pi gate cleanup failed');
   });
 
+  afterEach(async () => {
+    const errors = [];
+    for (const worker of workers.splice(0).reverse()) {
+      await worker.terminate('SIGKILL').catch((error) => errors.push(error));
+    }
+    if (sandboxProxy) {
+      await sandboxProxy.close().catch((error) => errors.push(error));
+      sandboxProxy = null;
+    }
+    currentSandboxBaseUrl = TEST_SANDBOX_URL;
+    if (queueHandles) {
+      await queueHandles.queue
+        .obliterate({ force: true })
+        .catch((error) => errors.push(error));
+    }
+    if (errors.length === 1) throw errors[0];
+    if (errors.length > 1) {
+      throw new AggregateError(errors, 'real Pi gate test cleanup failed');
+    }
+  });
+
   it('replays a real Pi model call after Worker SIGKILL with no side-effect ledger', async () => {
     const entered = deferred();
     const releaseInterruptedRequest = deferred();
@@ -695,6 +738,197 @@ describeLive('real Pi model/tool/Sandbox interruption behavior', () => {
     assert.equal(retryEvents.length, 1);
     const toolRows = await agentKnex('tool_executions').where({ run_id: MODEL_IDS.runId });
     assert.equal(toolRows.length, 0, 'model-only interruption must have no tool ledger');
+    await workerB.terminate('SIGTERM');
+  });
+
+  it('continues one durable interaction after Worker restart and checkpoints the answer', async () => {
+    const toolCallId = 'call-real-pi-interaction-restart-gate';
+    let providerCalls = 0;
+    fakeProvider.setResponder(async ({ body }) => {
+      const text = JSON.stringify(body?.messages || []);
+      if (!text.includes('INTERACTION_RESTART_GATE')) return 'unused';
+      providerCalls += 1;
+      if (providerCalls === 1) {
+        return {
+          toolCalls: [
+            {
+              id: toolCallId,
+              name: 'ask_user',
+              arguments: {
+                interaction_type: 'select',
+                title: 'Choose the deployment region',
+                message: 'Which region should the gate use?',
+                options: ['eu', 'us'],
+              },
+            },
+          ],
+        };
+      }
+      return 'INTERACTION_RESTART_CONTINUED_EU';
+    });
+
+    currentSandboxBaseUrl = TEST_SANDBOX_URL;
+    await seedRun(
+      agentKnex,
+      INTERACTION_IDS,
+      TRACE_INTERACTION,
+      'INTERACTION_RESTART_GATE: ask once for the region, then continue from the durable answer.',
+      fakeProvider.baseUrl,
+    );
+    const workerA = createWorkerHarness('interaction-worker-a', INTERACTION_IDS);
+    workers.push(workerA);
+    await workerA.waitFor((message) => message.type === 'ready');
+    await enqueueRunJob(queueHandles.queue, {
+      runId: INTERACTION_IDS.runId,
+      orgId: ORG,
+      traceId: TRACE_INTERACTION,
+    });
+
+    const pending = await waitForRow(
+      agentKnex,
+      'run_interactions',
+      { run_id: INTERACTION_IDS.runId, tool_call_id: toolCallId },
+      (row) => row?.status === 'PENDING' && row?.resume_phase === 'NONE',
+      30_000,
+    );
+    const parked = await waitForRow(
+      agentKnex,
+      'runs',
+      { run_id: INTERACTION_IDS.runId },
+      (row) => row?.status === 'WAITING_INPUT',
+      30_000,
+    );
+    assert.equal(parked.status, 'WAITING_INPUT');
+    await waitForRow(
+      agentKnex,
+      'agent_sessions',
+      { agent_session_id: INTERACTION_IDS.sessionId },
+      (row) => Number(row?.pi_session_version || 0) > 0,
+      30_000,
+    );
+    const parkedCompletion = await workerA.waitFor(
+      (message) =>
+        message.type === 'completed' && message.jobId === INTERACTION_IDS.runId,
+      30_000,
+    );
+    assert.equal(parkedCompletion.result.status, 'WAITING_INPUT');
+    assert.equal(providerCalls, 1, 'the first Worker must ask exactly once');
+    assert.equal(
+      (await agentKnex('run_interactions').where({ run_id: INTERACTION_IDS.runId })).length,
+      1,
+      'parking must create exactly one durable interaction',
+    );
+    assert.equal(
+      (await agentKnex('tool_executions').where({ run_id: INTERACTION_IDS.runId })).length,
+      1,
+      'parking must create exactly one tool ledger row',
+    );
+
+    assert.equal(
+      await queueHandles.connection.get(runLeaseKey(INTERACTION_IDS.runId)),
+      null,
+      'the parked Run must release its execution lease',
+    );
+    const stopped = await workerA.terminate('SIGKILL');
+    assert.equal(stopped.signal, 'SIGKILL');
+
+    const generateId = createUlidGenerator();
+    const service = new InteractionResponseService({
+      transactionManager: new TransactionManager(agentKnex),
+      createRepositories: (db) => createRepositoryBundle(db, { generateId }),
+      runQueue: {
+        enqueue(ref, options) {
+          return enqueueRunJob(queueHandles.queue, ref, options);
+        },
+      },
+      generateId,
+    });
+    const rehydrated = await service.rehydrateWaiting({
+      auth: {
+        provider: 'bff',
+        externalOrgId: EXTERNAL_ORG,
+        externalUserId: EXTERNAL_USER,
+      },
+      runId: INTERACTION_IDS.runId,
+    });
+    assert.equal(rehydrated.count, 1);
+    assert.equal(rehydrated.items[0].interaction_id, pending.interaction_id);
+    assert.equal(rehydrated.items[0].resolved, false);
+    assert.equal(rehydrated.items[0].queued, false);
+    const answered = await service.respond({
+      auth: {
+        provider: 'bff',
+        externalOrgId: EXTERNAL_ORG,
+        externalUserId: EXTERNAL_USER,
+      },
+      runId: INTERACTION_IDS.runId,
+      interactionId: String(pending.interaction_id),
+      response: 'eu',
+    });
+    assert.equal(answered.changed, true);
+    assert.equal(answered.queued, true);
+
+    const workerB = createWorkerHarness('interaction-worker-b', INTERACTION_IDS);
+    workers.push(workerB);
+    await workerB.waitFor((message) => message.type === 'ready');
+    const resumeJobId = `${INTERACTION_IDS.runId}-interaction-${pending.interaction_id}`;
+    const completed = await workerB.waitFor(
+      (message) =>
+        message.type === 'completed' && message.jobId === resumeJobId,
+      30_000,
+    );
+    assert.equal(completed.result.status, 'SUCCEEDED');
+    const succeeded = await waitForRow(
+      agentKnex,
+      'runs',
+      { run_id: INTERACTION_IDS.runId },
+      (row) => row?.status === 'SUCCEEDED',
+      30_000,
+    );
+    assert.equal(succeeded.status, 'SUCCEEDED');
+    const applied = await waitForRow(
+      agentKnex,
+      'run_interactions',
+      { interaction_id: pending.interaction_id },
+      (row) => row?.status === 'RESOLVED' && row?.resume_phase === 'APPLIED',
+      30_000,
+    );
+    assert.ok(applied.resume_claimed_at);
+    assert.ok(applied.resume_applied_at);
+    const session = await agentKnex('agent_sessions')
+      .where({ agent_session_id: INTERACTION_IDS.sessionId })
+      .first();
+    assert.equal(session.last_run_id, INTERACTION_IDS.runId);
+    assert.ok(Number(session.pi_session_version) >= 2);
+    const latestSnapshot = await agentKnex('agent_session_snapshots')
+      .where({ agent_session_id: INTERACTION_IDS.sessionId })
+      .orderBy('snapshot_version', 'desc')
+      .first();
+    assert.ok(latestSnapshot);
+    assert.match(
+      typeof latestSnapshot.snapshot_json === 'string'
+        ? latestSnapshot.snapshot_json
+        : JSON.stringify(latestSnapshot.snapshot_json),
+      /INTERACTION_RESTART_CONTINUED_EU|User response: eu/,
+      'the APPLIED continuation must be present in the durable Pi checkpoint',
+    );
+    assert.equal(providerCalls, 2, 'continuation must make one and only one follow-up model call');
+    assert.equal(
+      (await agentKnex('run_interactions').where({ run_id: INTERACTION_IDS.runId })).length,
+      1,
+    );
+    const tools = await agentKnex('tool_executions').where({ run_id: INTERACTION_IDS.runId });
+    assert.equal(tools.length, 1);
+    assert.equal(tools[0].status, 'SUCCEEDED');
+    assert.equal(
+      (
+        await agentKnex('run_events').where({
+          run_id: INTERACTION_IDS.runId,
+          event_type: 'interaction.resolved',
+        })
+      ).length,
+      1,
+    );
     await workerB.terminate('SIGTERM');
   });
 
