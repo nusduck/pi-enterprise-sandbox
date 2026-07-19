@@ -19,19 +19,20 @@ const SESS = '01K0G2PAV8FPMVC9QHJG7JPN52';
 const RUN = '01K0G2PAV8FPMVC9QHJG7JPN53';
 const TRACE = 'a'.repeat(32);
 
-describe('mysql client datetime boundary', () => {
-  it('forces UTC string dates while preserving other DSN query options', () => {
+describe('mysql client value boundary', () => {
+  it('forces UTC dates and raw JSON strings while preserving other DSN options', () => {
     const normalized = normalizeMysqlConnectionUrl(
       'mysql2://user:p%40ss@db.example:3307/agent' +
         '?charset=utf8mb4&connectTimeout=5000' +
         '&ssl=%7B%22rejectUnauthorized%22%3Atrue%7D' +
-        '&timezone=local&dateStrings=false',
+        '&timezone=local&dateStrings=false&jsonStrings=false',
     );
     const parsed = new URL(normalized);
 
     assert.equal(parsed.protocol, 'mysql:');
     assert.equal(parsed.searchParams.get('timezone'), 'Z');
     assert.equal(parsed.searchParams.get('dateStrings'), 'true');
+    assert.equal(parsed.searchParams.get('jsonStrings'), 'true');
     assert.equal(parsed.searchParams.get('charset'), 'utf8mb4');
     assert.equal(parsed.searchParams.get('connectTimeout'), '5000');
     assert.deepEqual(JSON.parse(parsed.searchParams.get('ssl')), {
@@ -47,6 +48,7 @@ describe('mysql client datetime boundary', () => {
     try {
       assert.equal(knex.client.config.connection.timezone, 'Z');
       assert.equal(knex.client.config.connection.dateStrings, true);
+      assert.equal(knex.client.config.connection.jsonStrings, true);
       assert.equal(knex.client.config.connection.connectTimeout, 17);
       assert.equal(knex.client.config.connection.decimalNumbers, true);
     } finally {

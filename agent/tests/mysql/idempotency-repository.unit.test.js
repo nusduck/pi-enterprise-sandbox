@@ -55,6 +55,7 @@ function createIdempotencyFake(opts = {}) {
   const rows = [];
   /** @type {Array<{ filters: unknown[], nullCols: string[], patch: Record<string, unknown> }>} */
   const updateLog = [];
+  let forUpdateCount = 0;
 
   /** @type {Array<{ resolve: (n: number) => void, run: () => number }>} */
   let casBarrier = [];
@@ -110,6 +111,10 @@ function createIdempotencyFake(opts = {}) {
       },
       whereNull(col) {
         nullCols.push(String(col));
+        return api;
+      },
+      forUpdate() {
+        forUpdateCount += 1;
         return api;
       },
       insert(row) {
@@ -207,6 +212,7 @@ function createIdempotencyFake(opts = {}) {
   };
   db.__rows = rows;
   db.__updateLog = updateLog;
+  db.__forUpdateCount = () => forUpdateCount;
   return db;
 }
 
@@ -255,6 +261,7 @@ describe('IdempotencyRepository begin/complete/replay', () => {
       expiresAt: EXPIRES,
     });
     assert.equal(again.outcome, 'in_progress');
+    assert.equal(db.__forUpdateCount(), 1);
   });
 
   it('detects request hash conflict on same key+operation', async () => {

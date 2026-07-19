@@ -62,7 +62,11 @@ export function assertMysqlConnectionUrl(url) {
  * MySQL DATETIME values have no timezone on the wire.  mysql2 otherwise
  * interprets them in the host's local timezone and returns shifted `Date`
  * objects.  Keep all caller-supplied connection options, but make the two
- * options that control this boundary explicit and non-overridable.
+ * options that control this boundary explicit and non-overridable. JSON
+ * columns must also remain wire-format strings: mysql2 otherwise eagerly
+ * decodes a JSON string scalar (for example `"eu"`) to the plain string
+ * `eu`, which is indistinguishable from unparsed JSON text at repository
+ * boundaries.
  *
  * @param {string} connectionUrl
  * @returns {string} mysql:// URL with UTC/string date options
@@ -82,6 +86,7 @@ export function normalizeMysqlConnectionUrl(connectionUrl) {
   parsed.protocol = 'mysql:';
   parsed.searchParams.set('timezone', 'Z');
   parsed.searchParams.set('dateStrings', 'true');
+  parsed.searchParams.set('jsonStrings', 'true');
   return parsed.toString();
 }
 

@@ -564,7 +564,10 @@ describe('real Pi Agent/Sandbox restart release gate', () => {
   });
 });
 
-describeLive('real Pi model/tool/Sandbox interruption behavior', () => {
+describeLive(
+  'real Pi model/tool/Sandbox interruption behavior',
+  { concurrency: false },
+  () => {
   before(async () => {
     const inspected = await docker(
       'inspect',
@@ -1167,4 +1170,5 @@ describeLive('real Pi model/tool/Sandbox interruption behavior', () => {
       await workerB.terminate('SIGTERM');
     },
   );
-});
+  },
+);

@@ -141,16 +141,18 @@ export class IdempotencyRepository {
   /**
    * Owner-scoped load. Never returns a row for another tenant.
    * @param {{ orgId: string, userId: string, idempotencyKey: string, operation: string }} key
+   * @param {{ forUpdate?: boolean }} [opts]
    * @returns {Promise<IdempotencyRecord | null>}
    */
-  async get(key) {
+  async get(key, opts = {}) {
     const { scope, idempotencyKey, operation } = this.#validateKeyParts(key);
-    const row = await applyOwnerScope(this.db('idempotency_records'), scope)
+    let query = applyOwnerScope(this.db('idempotency_records'), scope)
       .where({
         idempotency_key: idempotencyKey,
         operation,
-      })
-      .first();
+      });
+    if (opts.forUpdate) query = query.forUpdate();
+    const row = await query.first();
     return row ? mapIdempotencyRecord(row) : null;
   }
 
@@ -248,12 +250,15 @@ export class IdempotencyRepository {
     }
 
     // CAS lost — reload under owner scope; never assume we overwrote.
-    const reloaded = await this.get({
-      orgId: ctx.scope.orgId,
-      userId: ctx.scope.userId,
-      idempotencyKey: ctx.idempotencyKey,
-      operation: ctx.operation,
-    });
+    const reloaded = await this.get(
+      {
+        orgId: ctx.scope.orgId,
+        userId: ctx.scope.userId,
+        idempotencyKey: ctx.idempotencyKey,
+        operation: ctx.operation,
+      },
+      { forUpdate: true },
+    );
     if (!reloaded) {
       throw new ConflictError('Idempotency key conflict without readable row', {
         resource: 'idempotency_records',
@@ -336,12 +341,15 @@ export class IdempotencyRepository {
     }
 
     // Duplicate PK: reload under owner scope and compare / CAS-replace if expired.
-    const existing = await this.get({
-      orgId: scope.orgId,
-      userId: scope.userId,
-      idempotencyKey,
-      operation,
-    });
+    const existing = await this.get(
+      {
+        orgId: scope.orgId,
+        userId: scope.userId,
+        idempotencyKey,
+        operation,
+      },
+      { forUpdate: true },
+    );
     if (!existing) {
       throw new ConflictError('Idempotency key conflict without readable row', {
         resource: 'idempotency_records',

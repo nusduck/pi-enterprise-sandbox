@@ -11,6 +11,12 @@
 import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
+import { CreateRunService } from '../../src/application/create-run-service.js';
+import { GetRunService } from '../../src/application/get-run-service.js';
+import { RunParentProvisioner } from '../../src/application/parent/run-parent-provisioner.js';
+import { createRepositoryBundle } from '../../src/bootstrap/container.js';
+import { ulid } from '../../src/domain/shared/ulid.js';
+import { TransactionManager } from '../../src/infrastructure/mysql/transaction-manager.js';
 import {
   CORE_TABLES_CREATE_ORDER,
   SANDBOX_EXECUTION_DOMAIN_TABLES,
@@ -479,6 +485,110 @@ describeMysql('mysql integration (TEST_MYSQL_URL)', () => {
 
     const listed = await events.listByRun(RUN, { orgId: ORG, userId: USER });
     assert.equal(listed.length, N);
+  });
+
+  it('concurrent same-key CreateRun commits one run and every response is immediately queryable', async () => {
+    await clearAllData();
+
+    const auth = {
+      provider: 'bff',
+      externalOrgId: 'mysql-create-run-gate-org',
+      externalUserId: 'mysql-create-run-gate-user',
+      externalConversationId: 'mysql-create-run-gate-conversation',
+    };
+    const now = () => new Date();
+    const tx = new TransactionManager(knex);
+    const createRepositories = (db = knex) =>
+      createRepositoryBundle(db, { now, generateId: ulid });
+
+    await tx.run(async (trx) => {
+      const repos = createRepositories(trx);
+      const provisioner = new RunParentProvisioner(
+        {
+          organizations: repos.organizations,
+          externalRefs: repos.externalRefs,
+          catalog: repos.catalog,
+          conversations: repos.conversations,
+          sessions: repos.sessions,
+        },
+        { db: trx, generateId: ulid, now },
+      );
+      await provisioner.provision(auth);
+    });
+
+    const enqueuedRunIds = [];
+    const createRun = new CreateRunService({
+      transactionManager: tx,
+      createRepositories,
+      generateId: ulid,
+      now,
+      runQueue: {
+        async enqueue(ref) {
+          enqueuedRunIds.push(ref.runId);
+        },
+      },
+    });
+    const getRun = new GetRunService({
+      createRepositories,
+      db: knex,
+    });
+    const request = {
+      auth,
+      idempotencyKey: 'mysql-concurrent-create-run-key',
+      messages: [{ role: 'user', content: 'create exactly one run' }],
+      traceId: 'd'.repeat(32),
+    };
+
+    const attempts = 20;
+    const results = await Promise.all(
+      Array.from({ length: attempts }, async () => {
+        const response = await createRun.execute(request);
+        const queried = await getRun.execute({
+          runId: response.runId,
+          auth,
+        });
+        return { response, queried };
+      }),
+    );
+
+    const runIds = new Set(results.map(({ response }) => response.runId));
+    assert.equal(runIds.size, 1, 'all duplicate requests must return one runId');
+    const [runId] = runIds;
+    for (const { response, queried } of results) {
+      assert.equal(queried.runId, response.runId);
+      assert.ok(
+        queried.status === 'ACCEPTED' || queried.status === 'QUEUED',
+        `immediate query returned unexpected status ${queried.status}`,
+      );
+    }
+
+    const [runs, messages, acceptedEvents, acceptedOutbox, records] =
+      await Promise.all([
+        knex('runs').where({ run_id: runId }),
+        knex('messages').where({ run_id: runId }),
+        knex('run_events').where({
+          run_id: runId,
+          event_type: 'run.accepted',
+        }),
+        knex('domain_outbox').where({
+          aggregate_id: runId,
+          event_type: 'run.accepted',
+        }),
+        knex('idempotency_records').where({
+          idempotency_key: request.idempotencyKey,
+          operation: 'create_run',
+        }),
+      ]);
+
+    assert.equal(runs.length, 1);
+    assert.equal(messages.length, 1);
+    assert.equal(acceptedEvents.length, 1);
+    assert.equal(acceptedOutbox.length, 1);
+    assert.equal(records.length, 1);
+    assert.equal(Number(records[0].response_status), 202);
+    assert.equal(records[0].resource_id, runId);
+    assert.equal(new Set(enqueuedRunIds).size, 1);
+    assert.ok(enqueuedRunIds.length >= 1);
   });
 
   it('persists and owner-queries durable trace spans with formal indexes/FKs', async () => {
