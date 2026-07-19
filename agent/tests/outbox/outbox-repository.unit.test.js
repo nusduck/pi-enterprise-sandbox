@@ -41,7 +41,10 @@ describe('outbox helpers', () => {
       'connect mysql://admin:SuperSecret@db/prod failed',
     );
     assert.doesNotMatch(redacted, /SuperSecret/);
-    assert.match(redacted, /mysql:\/\/\*\*\*/);
+    // Shared secret redaction replaces credential-bearing URIs with [REDACTED]
+    // (or a collapsed mysql://*** form when only the scheme remains).
+    assert.match(redacted, /\[REDACTED\]|mysql:\/\/\*\*\*/);
+    assert.doesNotMatch(redacted, /admin:|@db\/prod/);
   });
 
   it('computes exponential bounded retry delay', () => {

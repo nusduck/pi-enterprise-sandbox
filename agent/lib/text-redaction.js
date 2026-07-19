@@ -11,8 +11,10 @@ export const SECRET_PATTERNS = Object.freeze([
 export function redactSecretText(value) {
   let text = String(value);
   for (const pattern of SECRET_PATTERNS) {
+    // Patterns without a capture group pass the match offset as the 2nd
+    // callback arg (a number). Only treat a string capture as a field name.
     text = text.replace(pattern, (match, key) =>
-      key ? `${key}=[REDACTED]` : '[REDACTED]',
+      typeof key === 'string' ? `${key}=[REDACTED]` : '[REDACTED]',
     );
   }
   return text;

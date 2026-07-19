@@ -3,6 +3,7 @@
  * Never store secrets, full DSNs, or unbounded stacks.
  */
 
+import { redactSecretText } from '../../../lib/text-redaction.js';
 import { LAST_ERROR_MAX_LEN } from './outbox-status.js';
 
 /**
@@ -28,12 +29,13 @@ export function sanitizeOutboxError(err, maxLen = LAST_ERROR_MAX_LEN) {
   // Collapse whitespace / newlines from stacks accidentally passed as message.
   text = text.replace(/\s+/g, ' ').trim();
 
-  // Strip common credential-like substrings without echoing them back.
+  // Shared secret patterns first (Bearer, token=, password=, URI userinfo).
+  text = redactSecretText(text);
+  // Extra DSN collapse for common connection-string schemes.
   text = text
     .replace(/mysql2?:\/\/[^\s]+/gi, 'mysql://***')
     .replace(/redis:\/\/[^\s]+/gi, 'redis://***')
-    .replace(/password=[^\s&]+/gi, 'password=***')
-    .replace(/:[^:@/\s]+@/g, ':***@');
+    .replace(/rediss:\/\/[^\s]+/gi, 'rediss://***');
 
   if (!text) text = 'unknown error';
   if (text.length > limit) {

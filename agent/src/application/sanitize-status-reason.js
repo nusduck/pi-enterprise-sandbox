@@ -3,6 +3,8 @@
  * Never store secrets, DSNs, or raw stacks.
  */
 
+import { redactSecretText } from '../../lib/text-redaction.js';
+
 export const STATUS_REASON_MAX_LEN = 255;
 
 /**
@@ -28,12 +30,14 @@ export function sanitizeStatusReason(err, maxLen = STATUS_REASON_MAX_LEN) {
   }
 
   text = text.replace(/[\u0000-\u001F\u007F]/g, ' ').replace(/\s+/g, ' ').trim();
+  // Shared secret patterns first (Bearer, token=, password=, URI userinfo).
+  text = redactSecretText(text);
+  // Extra DSN collapse for common connection-string schemes (password already
+  // stripped by redactSecretText when present as userinfo).
   text = text
     .replace(/mysql2?:\/\/[^\s]+/gi, 'mysql://***')
     .replace(/redis:\/\/[^\s]+/gi, 'redis://***')
-    .replace(/bearer\s+[a-z0-9._\-]+/gi, 'bearer ***')
-    .replace(/password=[^\s&]+/gi, 'password=***')
-    .replace(/:[^:@/\s]+@/g, ':***@');
+    .replace(/rediss:\/\/[^\s]+/gi, 'rediss://***');
 
   if (!text) return null;
   if (text.length > limit) {

@@ -111,8 +111,8 @@ Change this file in the **same commit** as the implementation or evidence that j
 | H2 | Workspace path escape blocked | `done` | path validation + bwrap |
 | H3 | Skill tree not writable (exec side) | `done` | canonical RO `/home/sandbox/skill` |
 | H4 | Sandbox non-privileged | `done` | compose/prod constraints + gates |
-| H5 | Secrets not in model/logs/events | `partial` | MCP results/progress redacted before Pi (`pi-mcp-adapter-factory` + projector); broader URI userinfo redaction; unit tests in mcp-seam + platform-event-projector + secret-and-mcp-policy. Full log/event production audit still open. |
-| H6 | Business DB only via controlled MCP | `partial` | Structural: MCP via `pi-mcp-adapter` only; secret-and-mcp-policy + mcp-seam tests assert no direct business DSN tools / sandbox-bridge SQL client. Deployment policy audit still open. |
+| H5 | Secrets not in model/logs/events | `partial` | Offline 2026-07-19: MCP/projector/bridge/ledger redaction; `status_reason` + outbox `last_error` use shared `redactSecretText` (fixed offset-as-capture bug); secret-and-mcp-policy + mcp-seam + projector + outbox units **57 pass**. Evidence: `evidence/h5-h6-secrets-mcp-audit-2026-07-19.md`. **Still open:** production log + durable event sampling. |
+| H6 | Business DB only via controlled MCP | `partial` | Offline structural 2026-07-19: MCP via `pi-mcp-adapter` only; sandbox-bridge exact 10 non-SQL tools; no extension SQL/DSN clients; plaintext MCP secrets forbidden. Same evidence doc. **Still open:** deployment allowlist audit + live no-business-SQL-tool gate. |
 
 ---
 
@@ -128,7 +128,7 @@ Derived from open/partial rows that block “refactor complete”:
 | P1 | Trace tree completeness (backend + frontend) | D7, F6 | Trace query + UI verification |
 | P1 | Frontend refresh matrix sign-off | D1, D5, D6 | Scripted refresh scenarios |
 | P1 | Idempotency / create-race live gates | G4, G5 | Live MySQL concurrent create |
-| P1 | Secrets & MCP data-plane audit | H5, H6 | Checklist + greps / policy docs |
+| P1 | Secrets & MCP data-plane audit | H5, H6 | Structural offline audit + unit green 2026-07-19 (`evidence/h5-h6-secrets-mcp-audit-2026-07-19.md`); production sampling + deploy allowlist still open |
 | P1 | Split future work into reviewable commits | n/a | Process: no more mega-commits on this branch |
 
 Non-blocking debt remains in [`review-deferred-items.md`](./review-deferred-items.md).
