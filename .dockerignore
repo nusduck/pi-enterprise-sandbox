@@ -1,5 +1,16 @@
-workspaces/
+# Never send runtime data or local env into image builds
+.git/
 .venv/
 node_modules/
 *.egg-info/
-.git/
+.pytest_cache/
+.smoke-tmp/
+.release-gate-*/
+workspaces/
+tmp-workspaces/
+artifacts/
+control/
+pi-agent-home/
+.env
+*.db
+*.log

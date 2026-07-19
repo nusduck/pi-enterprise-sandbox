@@ -1,15 +1,17 @@
+# Dependencies & build outputs
 node_modules/
 dist/
 build/
-workspaces/
-tmp-workspaces/
-.smoke-tmp/
+.venv/
+*.egg-info/
+
+# Local secrets / env
+.env
+
+# Python / editor noise
 .pytest_cache/
 *.pyc
 __pycache__/
-*.egg-info/
-.env
-.venv/
 *.db
 .DS_Store
 .coverage
@@ -20,5 +22,18 @@ htmlcov/
 *.swp
 *~
 
-# Local release-gate runtime workspaces (never commit)
+# ── Runtime data (created by compose / local runs; never commit) ──────────
+# Sandbox host bind mounts (docker-compose.yml):
+workspaces/
+tmp-workspaces/
+artifacts/
+control/
+# Cross-service smoke temp root
+.smoke-tmp/
+# Live release-gate workspaces (scripts/release-gates/*)
 .release-gate-*/
+# Local / host-side Pi resource roots (container uses /app/pi-agent-home)
+pi-agent-home/
+agent/pi-agent-home/
+agent/.a2a-live-agent-home/
+agent/.a2a-live-agent-workspace/
