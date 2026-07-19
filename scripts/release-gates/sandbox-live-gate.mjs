@@ -12,6 +12,7 @@
  *   SANDBOX_GATE_BASE_URL=http://127.0.0.1:<sandbox-port>
  *   SANDBOX_GATE_HMAC_KEYRING='{"gate-v1":"<base64url key>"}'
  *   SANDBOX_GATE_HMAC_ACTIVE_KID=gate-v1
+ *   SANDBOX_GATE_INTERNAL_TOKEN_LEEWAY_SECONDS=5  # bounded clock skew only
  *
  * The optional managed-container mode is useful for a repeatable Linux gate:
  *   SANDBOX_GATE_MANAGED_CONTAINER=1
@@ -204,6 +205,10 @@ function startManagedSandbox({ mysql, keyring, activeKid, hardKill = false }) {
   const network = process.env.SANDBOX_GATE_DOCKER_NETWORK || 'pi-refactor-gate-backend-internal';
   const ingressNetwork = process.env.SANDBOX_GATE_DOCKER_INGRESS_NETWORK || network.replace(/backend-internal$/, 'dev-ingress');
   const image = process.env.SANDBOX_GATE_IMAGE || 'enterprise-sandbox:latest';
+  const tokenLeeway = String(process.env.SANDBOX_GATE_INTERNAL_TOKEN_LEEWAY_SECONDS || '5').trim();
+  if (!/^\d+$/.test(tokenLeeway) || Number(tokenLeeway) > 5) {
+    throw new Error('SANDBOX_GATE_INTERNAL_TOKEN_LEEWAY_SECONDS must be an integer from 0 through 5');
+  }
   const maxProcessCount = String(process.env.SANDBOX_GATE_MAX_PROCESS_COUNT || '20').trim();
   if (!/^\d+$/.test(maxProcessCount) || Number(maxProcessCount) < 1) {
     throw new Error('SANDBOX_GATE_MAX_PROCESS_COUNT must be a positive integer');
@@ -240,6 +245,9 @@ function startManagedSandbox({ mysql, keyring, activeKid, hardKill = false }) {
     '--cap-add', 'FOWNER',
     '--cap-add', 'SETUID',
     '--cap-add', 'SETGID',
+    // CAP_KILL: restart recovery must signal Bubblewrap orphans created by a
+    // previous service process (foreign user namespace). Matches compose sandbox.
+    '--cap-add', 'KILL',
     '-p', '127.0.0.1::8081',
     '-v', `${dirs[0]}:/var/sandbox/workspaces`,
     '-v', `${dirs[1]}:/var/sandbox/tmp`,
@@ -260,6 +268,7 @@ function startManagedSandbox({ mysql, keyring, activeKid, hardKill = false }) {
     '-e', `SANDBOX_INTERNAL_REDIS_URL=${replayUrl}`,
     '-e', `SANDBOX_INTERNAL_HMAC_KEYRING=${keyring}`,
     '-e', `SANDBOX_INTERNAL_HMAC_ACTIVE_KID=${activeKid}`,
+    '-e', `SANDBOX_INTERNAL_TOKEN_LEEWAY_SECONDS=${tokenLeeway}`,
     '-e', 'SANDBOX_INTERNAL_MAX_CONCURRENCY=64',
     '-e', 'SANDBOX_INTERNAL_DRAIN_TIMEOUT_SECONDS=30',
     '-e', 'SANDBOX_WORKSPACES_ROOT=/var/sandbox/workspaces',
@@ -309,6 +318,7 @@ function startManagedSandbox({ mysql, keyring, activeKid, hardKill = false }) {
       workspaceQuotaMb: Number(workspaceQuotaMb),
       tempQuotaMb: Number(tempQuotaMb),
       hardKill,
+      tokenLeewaySeconds: Number(tokenLeeway),
     };
   } catch (error) {
     if (created) {
@@ -513,7 +523,10 @@ function managedPidRunning(container, pid) {
 async function runHardKillRecoveryGate({ managed, knex, processTransport, executionTransport, fixture }) {
   if (!managed?.hardKill) throw new Error('hard-kill gate requires SANDBOX_GATE_HARD_KILL=1 with managed container mode');
   const processFixture = fixture;
-  const started = await startProcessWithClaim(processTransport, knex, processFixture, 'sleep 120; printf should-not-complete', 'hard-kill-orphan-process', 180);
+  // Embed a stable argv marker the host can observe in `ps` after service death
+  // (tool labels alone do not appear in process command lines).
+  const orphanCommand = 'sleep 120 # hardkill-orphan-process; printf should-not-complete';
+  const started = await startProcessWithClaim(processTransport, knex, processFixture, orphanCommand, 'hard-kill-orphan-process', 180);
   const processId = started.processId;
   const processRowBefore = await knex('process_executions').where({ process_id: processId }).first();
   assert.equal(String(processRowBefore?.status).toLowerCase(), 'running', 'long process must be durable RUNNING before kill');
@@ -889,6 +902,7 @@ async function main() {
           workspaceQuotaMb: managed.workspaceQuotaMb,
           tempQuotaMb: managed.tempQuotaMb,
           hardKill: managed.hardKill,
+          tokenLeewaySeconds: managed.tokenLeewaySeconds,
         }
       : null,
     isolation,

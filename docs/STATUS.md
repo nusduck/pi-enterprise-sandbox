@@ -101,7 +101,7 @@ Change this file in the **same commit** as the implementation or evidence that j
 | G4 | Duplicate request no duplicate side effects | `partial` | idempotency tables/claims; full live duplicate matrix TBD |
 | G5 | Create Run then immediate query race-free | `partial` | create-before-return design; live race gate TBD |
 | G6 | Durable WAITING_INPUT / interaction resume | `partial` | **Shipped path proven in-tree:** interaction HTTP respond/rehydrate, GET `pending_input`, execute-run resume, FE rehydrateInProgress WAITING_INPUT. **Worker-restart class test added:** `agent/tests/redis/agent-worker-pi-restart.release-gate.test.js` (`continues one durable interaction after Worker restart…`, `describeLive`). Still `partial` until that live gate is executed and dated under `docs/evidence/`. |
-| G7 | Hard `SIGKILL` orphan recovery in Bubblewrap | `open` | Explicit open gate in evidence doc. Prerequisite: Linux starttime field-22 index fix + unit test committed on this branch; live gate still required. |
+| G7 | Hard `SIGKILL` orphan recovery in Bubblewrap | `open` | **Unit path advanced:** PID-namespace init capture (`find_pid_namespace_init` / `read_pid_namespace_id`), durable handles use `--as-pid-1`, recovery TERMs namespace init then outer wrapper, CAP_KILL retained via setpriv + compose; formal orphan recovery tests (`tests/test_formal_orphan_recovery.py`) + bubblewrap/identity unit coverage. **Still `open`:** live hard-kill Bubblewrap gate not yet re-run with dated evidence on this branch. |
 
 ## H. Security
 

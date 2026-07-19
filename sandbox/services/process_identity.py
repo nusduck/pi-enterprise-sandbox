@@ -45,6 +45,7 @@ _PS_CANDIDATES = (
     "/bin/ps",
     "/usr/bin/ps",
 )
+_PID_NAMESPACE_RE = re.compile(r"^pid:\[(\d+)\]$")
 
 
 @dataclass(frozen=True, slots=True)
@@ -77,6 +78,65 @@ def read_linux_starttime(pid: int) -> str | None:
     if not starttime.isdigit():
         return None
     return f"linux-starttime:{starttime}"
+
+
+def read_pid_namespace_id(pid: int) -> str | None:
+    """Return the Linux PID-namespace inode for *pid*, when observable."""
+    try:
+        pid_i = int(pid)
+    except (TypeError, ValueError):
+        return None
+    if pid_i <= 0 or not sys.platform.startswith("linux"):
+        return None
+    try:
+        target = os.readlink(f"/proc/{pid_i}/ns/pid")
+    except (FileNotFoundError, PermissionError, OSError, TypeError, ValueError):
+        return None
+    match = _PID_NAMESPACE_RE.fullmatch(target)
+    return f"pid:{match.group(1)}" if match else None
+
+
+def _read_nspid_values(pid: int) -> list[int]:
+    try:
+        with open(f"/proc/{int(pid)}/status", "r", encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                if line.startswith("NSpid:"):
+                    values = []
+                    for token in line.split()[1:]:
+                        if token.isdigit():
+                            values.append(int(token))
+                    return values
+    except (FileNotFoundError, PermissionError, OSError, TypeError, ValueError):
+        return []
+    return []
+
+
+def find_pid_namespace_init(wrapper_pid: int, *, attempts: int = 20, delay_seconds: float = 0.01) -> int | None:
+    """Find the outer PID corresponding to a Bubblewrap PID-namespace init.
+
+    Bubblewrap's outer wrapper remains the direct parent in the host PID
+    namespace. The first child whose ``NSpid`` ends in ``1`` is the namespace
+    init and is therefore the safe recovery control point.
+    """
+    try:
+        wrapper = int(wrapper_pid)
+    except (TypeError, ValueError):
+        return None
+    if wrapper <= 0 or not sys.platform.startswith("linux"):
+        return None
+    for attempt in range(max(1, int(attempts))):
+        try:
+            with open(f"/proc/{wrapper}/task/{wrapper}/children", "r", encoding="ascii") as fh:
+                children = [int(token) for token in fh.read().split() if token.isdigit()]
+        except (FileNotFoundError, PermissionError, OSError, ValueError):
+            children = []
+        for child_pid in children:
+            nspids = _read_nspid_values(child_pid)
+            if nspids and nspids[-1] == 1:
+                return child_pid
+        if attempt + 1 < max(1, int(attempts)):
+            time.sleep(max(0.0, float(delay_seconds)))
+    return None
 
 
 def _load_libproc() -> Any | None:

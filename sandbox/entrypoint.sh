@@ -91,6 +91,31 @@ done
 UVICORN_ARGS="$(build_uvicorn_args)"
 echo "[entrypoint] Starting Sandbox API: uvicorn $UVICORN_ARGS"
 
+# Drop root while retaining CAP_KILL so restart recovery can signal Bubblewrap
+# Process-Handle orphans that outlived the previous API process (foreign user
+# namespaces). Plain gosu/su clear ambient caps and leave EPERM on identity
+# kills. setpriv keeps +kill in inheritable/ambient when the container was
+# granted CAP_KILL (compose + release-gate).
+run_as_sandbox() {
+    # $@ = command to exec as SANDBOX_RUN_AS_USER
+    if [ "$(id -u)" -eq 0 ] && command -v setpriv >/dev/null 2>&1; then
+        exec setpriv \
+            --reuid="$SANDBOX_RUN_AS_USER" \
+            --regid="$SANDBOX_RUN_AS_USER" \
+            --init-groups \
+            --inh-caps=+kill \
+            --ambient-caps=+kill \
+            -- "$@"
+    fi
+    if [ "$(id -u)" -eq 0 ] && command -v gosu >/dev/null 2>&1; then
+        exec gosu "$SANDBOX_RUN_AS_USER" "$@"
+    fi
+    if [ "$(id -u)" -eq 0 ] && command -v su >/dev/null 2>&1; then
+        exec su -s /bin/bash "$SANDBOX_RUN_AS_USER" -c "exec $(printf '%q ' "$@")"
+    fi
+    exec "$@"
+}
+
 # Release-gate only supervisor mode.  The normal production path below uses
 # exec so the API remains the container's direct service process.  The live
 # hard-kill gate needs to kill only uvicorn while retaining a container
@@ -103,7 +128,15 @@ if bool_enabled "${SANDBOX_GATE_SERVICE_SUPERVISOR:-false}"; then
         ''|*[!0-9]*) restart_delay=5 ;;
     esac
     while :; do
-        if [ "$(id -u)" -eq 0 ] && command -v gosu &> /dev/null; then
+        if [ "$(id -u)" -eq 0 ] && command -v setpriv >/dev/null 2>&1; then
+            setpriv \
+                --reuid="$SANDBOX_RUN_AS_USER" \
+                --regid="$SANDBOX_RUN_AS_USER" \
+                --init-groups \
+                --inh-caps=+kill \
+                --ambient-caps=+kill \
+                -- bash -c "exec /app/.venv/bin/uvicorn $UVICORN_ARGS" &
+        elif [ "$(id -u)" -eq 0 ] && command -v gosu &> /dev/null; then
             gosu "$SANDBOX_RUN_AS_USER" bash -c "exec /app/.venv/bin/uvicorn $UVICORN_ARGS" &
         elif [ "$(id -u)" -eq 0 ] && command -v su &> /dev/null; then
             su -s /bin/bash "$SANDBOX_RUN_AS_USER" -c "exec /app/.venv/bin/uvicorn $UVICORN_ARGS" &
@@ -136,7 +169,16 @@ esac
 
 # ── Drop privileges to the sandbox user and start the app ──────────
 # No global ulimit here — child hard limits are applied in preexec only.
-if [ "$(id -u)" -eq 0 ] && command -v gosu &> /dev/null; then
+# Prefer setpriv so CAP_KILL survives the uid drop (orphan recovery).
+if [ "$(id -u)" -eq 0 ] && command -v setpriv >/dev/null 2>&1; then
+    exec setpriv \
+        --reuid="$SANDBOX_RUN_AS_USER" \
+        --regid="$SANDBOX_RUN_AS_USER" \
+        --init-groups \
+        --inh-caps=+kill \
+        --ambient-caps=+kill \
+        -- bash -c "exec /app/.venv/bin/uvicorn $UVICORN_ARGS"
+elif [ "$(id -u)" -eq 0 ] && command -v gosu &> /dev/null; then
     exec gosu "$SANDBOX_RUN_AS_USER" bash -c "exec /app/.venv/bin/uvicorn $UVICORN_ARGS"
 elif [ "$(id -u)" -eq 0 ] && command -v su &> /dev/null; then
     exec su -s /bin/bash "$SANDBOX_RUN_AS_USER" -c "exec /app/.venv/bin/uvicorn $UVICORN_ARGS"

@@ -57,7 +57,9 @@ from sandbox.services.process_cursor import (
 )
 from sandbox.services.process_identity import (
     capture_process_identity,
+    find_pid_namespace_init,
     identity_matches,
+    read_pid_namespace_id,
     process_alive,
     safe_signal_identity,
 )
@@ -588,12 +590,42 @@ class ProcessManager:
             )
             start_identity = command_json.get("start_identity")
             pgid = command_json.get("pgid")
+            namespace_pid = command_json.get("namespace_pid")
+            namespace_start_identity = command_json.get("namespace_start_identity")
+            namespace_pgid = command_json.get("namespace_pgid")
             try:
                 pgid_i = int(pgid) if pgid is not None else None
             except (TypeError, ValueError):
                 pgid_i = None
+            try:
+                namespace_pid_i = int(namespace_pid) if namespace_pid is not None else None
+            except (TypeError, ValueError):
+                namespace_pid_i = None
+            try:
+                namespace_pgid_i = int(namespace_pgid) if namespace_pgid is not None else None
+            except (TypeError, ValueError):
+                namespace_pgid_i = None
 
             signaled = False
+            # The namespace init is the recovery authority. Killing it (rather
+            # than its process group) makes Linux tear down every descendant,
+            # including descendants that called setsid().
+            if namespace_pid_i is not None and namespace_start_identity:
+                result = safe_signal_identity(
+                    pid=namespace_pid_i,
+                    pgid=None,
+                    start_identity=str(namespace_start_identity),
+                    signum=signal.SIGTERM,
+                )
+                if result.get("signaled"):
+                    signaled = True
+                    if identity_matches(namespace_pid_i, str(namespace_start_identity)):
+                        safe_signal_identity(
+                            pid=namespace_pid_i,
+                            pgid=None,
+                            start_identity=str(namespace_start_identity),
+                            signum=signal.SIGKILL,
+                        )
             if record.pid is not None and start_identity:
                 result = safe_signal_identity(
                     pid=int(record.pid),
@@ -631,6 +663,10 @@ class ProcessManager:
                     "cwd": command_json.get("cwd"),
                     "pgid": pgid_i,
                     "start_identity": start_identity,
+                    "namespace_pid": namespace_pid_i,
+                    "namespace_pgid": namespace_pgid_i,
+                    "namespace_start_identity": namespace_start_identity,
+                    "pid_namespace": command_json.get("pid_namespace"),
                     "timeout_seconds": command_json.get("timeout_seconds"),
                     "background": bool(command_json.get("background")),
                     "status": ProcessStatus.LOST.value,
@@ -772,6 +808,10 @@ class ProcessManager:
             "pid": None,
             "pgid": None,
             "start_identity": None,
+            "namespace_pid": None,
+            "namespace_pgid": None,
+            "namespace_start_identity": None,
+            "pid_namespace": None,
             "exit_code": None,
             "background": bool(background),
             "timeout_seconds": effective_timeout,
@@ -847,6 +887,7 @@ class ProcessManager:
                     # restart recovery can TERM/KILL the verified orphan and
                     # mark the formal row LOST.
                     die_with_parent=False,
+                    as_pid_1=True,
                     max_process_count=_limit_kwargs["max_process_count"],
                 )
             )
@@ -895,6 +936,31 @@ class ProcessManager:
                 proc.pid,
             )
 
+        namespace_pid = None
+        namespace_pgid = None
+        namespace_start_identity = None
+        pid_namespace = None
+        if prepared.backend == "bubblewrap":
+            namespace_pid = find_pid_namespace_init(proc.pid)
+            if namespace_pid is not None:
+                try:
+                    namespace_pgid = os.getpgid(namespace_pid)
+                except (ProcessLookupError, PermissionError, OSError):
+                    namespace_pgid = None
+                namespace_start_identity = capture_process_identity(
+                    namespace_pid,
+                    pgid=namespace_pgid,
+                )
+                if namespace_start_identity is not None:
+                    namespace_start_identity = namespace_start_identity.start_identity
+                pid_namespace = read_pid_namespace_id(namespace_pid)
+            if namespace_pid is None or namespace_start_identity is None:
+                logger.warning(
+                    "process %s pid=%s: unable to capture PID-namespace init identity",
+                    process_id,
+                    proc.pid,
+                )
+
         started = _now_iso()
         with self._lock:
             # Cancel may have raced before spawn completed
@@ -904,6 +970,10 @@ class ProcessManager:
                 entry["pid"] = proc.pid
                 entry["pgid"] = pgid
                 entry["start_identity"] = start_identity
+                entry["namespace_pid"] = namespace_pid
+                entry["namespace_pgid"] = namespace_pgid
+                entry["namespace_start_identity"] = namespace_start_identity
+                entry["pid_namespace"] = pid_namespace
                 entry["started_at"] = started
                 entry["finished_at"] = _now_iso()
                 entry["exit_code"] = -signal.SIGTERM
@@ -924,10 +994,14 @@ class ProcessManager:
             entry["pid"] = proc.pid
             entry["pgid"] = pgid
             entry["start_identity"] = start_identity
+            entry["namespace_pid"] = namespace_pid
+            entry["namespace_pgid"] = namespace_pgid
+            entry["namespace_start_identity"] = namespace_start_identity
+            entry["pid_namespace"] = pid_namespace
             entry["started_at"] = started
             entry["updated_at"] = started
             self._procs[process_id] = proc
-            self._pgids[process_id] = pgid
+            self._pgids[process_id] = namespace_pgid or pgid
             self._persist(entry)
 
         # B3: lifecycle start event for Agent / SSE consumers

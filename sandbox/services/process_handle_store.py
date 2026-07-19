@@ -350,6 +350,10 @@ class FormalProcessDualWriter:
             "start_identity": entry.get("start_identity"),
             "timeout_seconds": entry.get("timeout_seconds"),
             "background": bool(entry.get("background")),
+            "namespace_pid": entry.get("namespace_pid"),
+            "namespace_pgid": entry.get("namespace_pgid"),
+            "namespace_start_identity": entry.get("namespace_start_identity"),
+            "pid_namespace": entry.get("pid_namespace"),
         }
         payload = {
             "process_id": process_id,

@@ -27,6 +27,10 @@ class LaunchSpec:
     # exception: ProcessManager disables this flag so startup recovery can
     # observe and terminate the orphan safely after a service restart.
     die_with_parent: bool = True
+    # Durable Process Handles make the command the PID-namespace init. If the
+    # service restarts, killing that init causes the kernel to terminate every
+    # remaining descendant in the private PID namespace.
+    as_pid_1: bool = False
     # RLIMIT_NPROC cannot be installed before Bubblewrap creates its user
     # namespace: the wrapper otherwise counts every process for the shared
     # container UID and may prevent Bubblewrap itself from starting.  The

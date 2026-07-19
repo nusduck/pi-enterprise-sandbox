@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import os
 import re
+import shutil
 import subprocess
 from pathlib import Path, PurePosixPath
 
@@ -26,6 +27,41 @@ from sandbox.paths import AGENT_SKILL_PATH, SandboxPathScope
 from sandbox.security.safe_env import safe_env
 
 _ENV_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
+def _inherited_capabilities() -> bool:
+    """Whether the trusted service has Linux capabilities to strip at exec."""
+    if not os.path.exists("/proc/self/status"):
+        return False
+    try:
+        with open("/proc/self/status", "r", encoding="ascii", errors="replace") as fh:
+            for line in fh:
+                if line.startswith(("CapEff:", "CapInh:", "CapAmb:")):
+                    value = line.split(":", 1)[1].strip()
+                    if value and int(value, 16):
+                        return True
+    except (OSError, ValueError):
+        return False
+    return False
+
+
+def _capability_drop_prefix() -> list[str]:
+    """Clear service capabilities before executing Bubblewrap.
+
+    The service may retain CAP_KILL so restart recovery can signal a verified
+    orphan. Bubblewrap rejects inherited capabilities before it creates its
+    user namespace, and an untrusted child must never inherit that capability.
+    ``setpriv`` is part of the Linux runtime image; fail closed if it is absent
+    in a capability-bearing environment.
+    """
+    if not _inherited_capabilities():
+        return []
+    setpriv = shutil.which("setpriv")
+    if not setpriv:
+        raise IsolationUnavailable(
+            "setpriv is required to drop service capabilities before Bubblewrap"
+        )
+    return [setpriv, "--inh-caps=-all", "--ambient-caps=-all", "--"]
 
 
 class BubblewrapIsolationBackend:
@@ -62,7 +98,7 @@ class BubblewrapIsolationBackend:
         temp = spec.context.physical_temp.resolve(strict=True)
         logical_cwd = self._logical_cwd(spec.relative_cwd, spec.cwd_scope)
 
-        args = [self.executable]
+        args = [*_capability_drop_prefix(), self.executable]
         if spec.die_with_parent:
             args.append("--die-with-parent")
         args.extend(
@@ -99,6 +135,8 @@ class BubblewrapIsolationBackend:
                 "/app",
             ]
         )
+        if spec.as_pid_1:
+            args.append("--as-pid-1")
 
         # disabled → empty netns (--unshare-net): real fail-closed isolation.
         # allowlist/unrestricted → share the container network (command policy
@@ -184,6 +222,7 @@ class BubblewrapIsolationBackend:
         if not os.path.isfile(self.executable) or not os.access(self.executable, os.X_OK):
             raise IsolationUnavailable(f"Bubblewrap executable unavailable: {self.executable}")
         cmd = [
+            *_capability_drop_prefix(),
             self.executable,
             "--die-with-parent",
             "--new-session",

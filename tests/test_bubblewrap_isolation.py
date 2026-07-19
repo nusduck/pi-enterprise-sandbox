@@ -9,6 +9,7 @@ import pytest
 
 from sandbox.isolation import LaunchSpec
 from sandbox.isolation.bubblewrap import BubblewrapIsolationBackend
+from sandbox.isolation import bubblewrap as bubblewrap_module
 from sandbox.paths import SandboxPathScope
 from sandbox.services.execution_context import SandboxExecutionContext
 from sandbox.services.process_handle_store import (
@@ -110,6 +111,52 @@ def test_bwrap_durable_process_can_outlive_api_parent(tmp_path):
     assert "--new-session" in prepared.argv
 
 
+def test_bwrap_durable_process_can_make_command_pid_namespace_init(tmp_path):
+    context = _context(tmp_path)
+    skills = tmp_path / "skills"
+    skills.mkdir()
+    backend = BubblewrapIsolationBackend(
+        executable="/usr/bin/bwrap",
+        skills_root=skills,
+    )
+
+    prepared = backend.prepare(
+        LaunchSpec(
+            context=context,
+            argv=["bash", "-c", "sleep 120"],
+            network_mode="disabled",
+            die_with_parent=False,
+            as_pid_1=True,
+        )
+    )
+
+    assert "--as-pid-1" in prepared.argv
+
+
+def test_bwrap_drops_trusted_service_capabilities_before_exec(tmp_path, monkeypatch):
+    context = _context(tmp_path)
+    skills = tmp_path / "skills"
+    skills.mkdir()
+    backend = BubblewrapIsolationBackend(
+        executable="/usr/bin/bwrap",
+        skills_root=skills,
+    )
+    monkeypatch.setattr(bubblewrap_module, "_inherited_capabilities", lambda: True)
+    monkeypatch.setattr(bubblewrap_module.shutil, "which", lambda name: "/usr/bin/setpriv")
+
+    prepared = backend.prepare(
+        LaunchSpec(context=context, argv=["true"], network_mode="disabled")
+    )
+
+    assert prepared.argv[:5] == [
+        "/usr/bin/setpriv",
+        "--inh-caps=-all",
+        "--ambient-caps=-all",
+        "--",
+        "/usr/bin/bwrap",
+    ]
+
+
 def test_process_manager_disables_die_with_parent_for_durable_handle(
     tmp_path, monkeypatch
 ):
@@ -153,6 +200,7 @@ def test_process_manager_disables_die_with_parent_for_durable_handle(
     assert result["status"] == "failed"
     assert isolation.spec is not None
     assert isolation.spec.die_with_parent is False
+    assert isolation.spec.as_pid_1 is True
 
 
 def test_bwrap_defers_nproc_until_after_user_namespace(tmp_path):

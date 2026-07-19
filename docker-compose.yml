@@ -542,6 +542,11 @@ services:
       - FOWNER
       - SETUID
       - SETGID
+      # Required so a restarted Sandbox process can TERM/KILL Bubblewrap orphans
+      # that outlived the previous API process (die_with_parent=false Process
+      # Handles). Without CAP_KILL, identity-matched signals into a foreign
+      # user namespace return EPERM and leave OS orphans after LOST recovery.
+      - KILL
     security_opt:
       # Docker's default seccomp profile blocks the namespace/mount syscalls
       # Bubblewrap needs. This repo profile narrowly adds its child/user/mount
