@@ -9,7 +9,7 @@ import {
   resolveUploadTraceId,
   discardRequestBody,
   spillRequestToTempFile,
-} from '../routes/files.js';
+} from '../src/routes/files.js';
 import { readFile, rm } from 'node:fs/promises';
 
 describe('mapUploadErrorBody', () => {

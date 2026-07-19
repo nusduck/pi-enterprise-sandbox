@@ -10,26 +10,26 @@ import {
   isProtectedApiPath,
   validateProductionConfig,
   effectiveConfig,
-} from './config.js';
-import { handleLiveness, handleReadiness, handleStatus } from './routes/status.js';
-import { handleFileDownload, handleFileUpload, handleArtifactDownload } from './routes/files.js';
+} from './src/config.js';
+import { handleLiveness, handleReadiness, handleStatus } from './src/routes/status.js';
+import { handleFileDownload, handleFileUpload, handleArtifactDownload } from './src/routes/files.js';
 import {
   handleListConversations,
   handleGetConversation,
   handleCreateConversation,
   handleDeleteConversation,
   handleGetConversationEvents,
-} from './routes/conversations.js';
-import { handleListArtifacts } from './routes/artifacts.js';
+} from './src/routes/conversations.js';
+import { handleListArtifacts } from './src/routes/artifacts.js';
 import {
   handleDatasetUpload,
   handleListDatasets,
-} from './routes/datasets.js';
+} from './src/routes/datasets.js';
 import {
   handleDecideApproval,
   handleGetApproval,
   handleListApprovals,
-} from './routes/approvals.js';
+} from './src/routes/approvals.js';
 import {
   handleSteerRun,
   handleFollowUpRun,
@@ -43,40 +43,40 @@ import {
   handleCreateRun,
   handleListRuns,
   handleRunEvents,
-} from './routes/runs.js';
-import { handleRegister, handleLogin, handleLogout, handleMe } from './routes/auth.js';
-import { handleEnsureSession } from './routes/sessions.js';
+} from './src/routes/runs.js';
+import { handleRegister, handleLogin, handleLogout, handleMe } from './src/routes/auth.js';
+import { handleEnsureSession } from './src/routes/sessions.js';
 import {
   handleGetProcess,
   handleGetProcessLogs,
   handleListProcesses,
   handleProcessAction,
   handleReadProcess,
-} from './routes/processes.js';
+} from './src/routes/processes.js';
 import {
   handleCapabilityRegistry,
   handleExtensionDiagnostics,
-} from './routes/capabilities.js';
+} from './src/routes/capabilities.js';
 import {
   handleGetA2aConfig,
   handleIssueA2aCredential,
   handleRotateA2aCredential,
   handleRevokeA2aCredential,
-} from './routes/a2a.js';
-import { authFromRequest, checkHealth } from './services/sandbox-client.js';
-import { checkAgentHealth } from './services/agent-client.js';
-import { readJsonBody } from './http/body.js';
-import { sendError } from './http/response.js';
+} from './src/routes/a2a.js';
+import { authFromRequest, checkHealth } from './src/services/sandbox-client.js';
+import { checkAgentHealth } from './src/services/agent-client.js';
+import { readJsonBody } from './src/http/body.js';
+import { sendError } from './src/http/response.js';
 import {
   formatTraceparent,
   resolveRequestTraceContext,
   bindRequestTraceContext,
-} from './application/trace-context.js';
+} from './src/application/trace-context.js';
 import {
   startHttpServerSpan,
   startTelemetry,
   withActiveContext,
-} from './application/telemetry.js';
+} from './src/application/telemetry.js';
 
 // Production fail-fast before bind.
 try {

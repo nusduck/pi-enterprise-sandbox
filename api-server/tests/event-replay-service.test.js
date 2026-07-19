@@ -11,11 +11,11 @@ import {
   buildAgentEventsQuery,
   dedupeBySequence,
   presentCreateRunAccepted,
-} from '../application/event-replay-service.js';
+} from '../src/application/event-replay-service.js';
 import {
   normalizeCreateRunBody,
   readIdempotencyKeyHeader,
-} from '../routes/runs.js';
+} from '../src/routes/runs.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const root = join(__dirname, '..');
@@ -143,7 +143,7 @@ describe('BFF PR-10 wiring (source contracts)', () => {
   });
 
   it('handleRunEvents uses parseSseResumeCursor and ownership first', () => {
-    const runsSrc = readFileSync(join(root, 'routes/runs.js'), 'utf8');
+    const runsSrc = readFileSync(join(root, 'src/routes/runs.js'), 'utf8');
     assert.match(runsSrc, /parseSseResumeCursor/);
     assert.match(runsSrc, /authorizeRunRequest/);
     assert.match(runsSrc, /openAgentRunEvents/);
@@ -153,14 +153,14 @@ describe('BFF PR-10 wiring (source contracts)', () => {
   });
 
   it('agent-client forwards Last-Event-ID', () => {
-    const client = readFileSync(join(root, 'services/agent-client.js'), 'utf8');
+    const client = readFileSync(join(root, 'src/services/agent-client.js'), 'utf8');
     assert.match(client, /Last-Event-ID/);
     assert.match(client, /afterSequence/);
   });
 
   it('event-replay-service forbids in-process buffer as authority', () => {
     const src = readFileSync(
-      join(root, 'application/event-replay-service.js'),
+      join(root, 'src/application/event-replay-service.js'),
       'utf8',
     );
     assert.match(src, /Forbidden: process-local event buffer/);

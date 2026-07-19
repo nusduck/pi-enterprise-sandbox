@@ -13,7 +13,7 @@ const {
   handleListProcesses,
   handleProcessAction,
   handleReadProcess,
-} = await import(`../routes/processes.js?test=${Date.now()}`);
+} = await import(`../src/routes/processes.js?test=${Date.now()}`);
 
 const PROCESS = '01K0G2PAV8FPMVC9QHJG7JPN5P';
 const calls = [];

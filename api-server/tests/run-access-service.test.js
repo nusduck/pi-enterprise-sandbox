@@ -4,7 +4,7 @@ import { test } from 'node:test';
 import {
   DURABLE_RUN_READ_RETRY_DELAYS_MS,
   getDurableRun,
-} from '../application/run-access-service.js';
+} from '../src/application/run-access-service.js';
 
 test('durable run read defense-in-depth retry is capped at 20ms', () => {
   assert.equal(

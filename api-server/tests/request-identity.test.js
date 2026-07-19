@@ -8,7 +8,7 @@ process.env.SANDBOX_BASE_URL = 'http://sandbox.test';
 process.env.AGENT_BASE_URL = 'http://agent.test';
 
 const { authorizeRunRequest, resolveTrustedAuth } = await import(
-  `../application/run-access-service.js?test=${Date.now()}`
+  `../src/application/run-access-service.js?test=${Date.now()}`
 );
 
 function request(token = 'valid-user-token') {

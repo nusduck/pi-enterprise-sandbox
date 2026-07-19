@@ -13,16 +13,16 @@ import {
   createConversationFollowUp,
   steerAgentRun,
   getAgentRunTrace,
-} from '../services/agent-client.js';
+} from '../src/services/agent-client.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const clientSrc = readFileSync(join(__dirname, '../services/sandbox-client.js'), 'utf8');
-const agentClientSrc = readFileSync(join(__dirname, '../services/agent-client.js'), 'utf8');
-const runsSrc = readFileSync(join(__dirname, '../routes/runs.js'), 'utf8');
+const clientSrc = readFileSync(join(__dirname, '../src/services/sandbox-client.js'), 'utf8');
+const agentClientSrc = readFileSync(join(__dirname, '../src/services/agent-client.js'), 'utf8');
+const runsSrc = readFileSync(join(__dirname, '../src/routes/runs.js'), 'utf8');
 const serverSrc = readFileSync(join(__dirname, '../server.js'), 'utf8');
-const convSrc = readFileSync(join(__dirname, '../routes/conversations.js'), 'utf8');
+const convSrc = readFileSync(join(__dirname, '../src/routes/conversations.js'), 'utf8');
 const timelineSrc = readFileSync(
-  join(__dirname, '../application/conversation-timeline-service.js'),
+  join(__dirname, '../src/application/conversation-timeline-service.js'),
   'utf8',
 );
 const pkg = JSON.parse(readFileSync(join(__dirname, '../package.json'), 'utf8'));

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {
   loadConversationTimeline,
   presentPersistedTimelineEvent,
-} from '../application/conversation-timeline-service.js';
+} from '../src/application/conversation-timeline-service.js';
 
 describe('conversation timeline', () => {
   it('loads every run in chronological order with all persisted events', async () => {

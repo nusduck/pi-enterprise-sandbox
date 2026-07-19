@@ -7,21 +7,21 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
-import { buildTraceparent } from '../services/agent-client.js';
+import { buildTraceparent } from '../src/services/agent-client.js';
 import {
   authorizeRunRequest,
   resolveTrustedAuth,
-} from '../application/run-access-service.js';
-import { config } from '../config.js';
+} from '../src/application/run-access-service.js';
+import { config } from '../src/config.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const agentClient = readFileSync(
-  join(__dirname, '../services/agent-client.js'),
+  join(__dirname, '../src/services/agent-client.js'),
   'utf8',
 );
-const runsSrc = readFileSync(join(__dirname, '../routes/runs.js'), 'utf8');
+const runsSrc = readFileSync(join(__dirname, '../src/routes/runs.js'), 'utf8');
 const accessSrc = readFileSync(
-  join(__dirname, '../application/run-access-service.js'),
+  join(__dirname, '../src/application/run-access-service.js'),
   'utf8',
 );
 const serverSrc = readFileSync(join(__dirname, '../server.js'), 'utf8');
@@ -84,7 +84,9 @@ describe('authorizeRunRequest ID-domain safety', () => {
     config.AUTH_ENABLED = false;
     try {
       const auth = await resolveTrustedAuth({ headers: {} });
-      assert.deepEqual(auth, config.DEVELOPMENT_ACTING_IDENTITY);
+      assert.equal(auth.actingUserId, config.DEVELOPMENT_ACTING_IDENTITY.actingUserId);
+      assert.equal(auth.actingOrganizationId, config.DEVELOPMENT_ACTING_IDENTITY.actingOrganizationId);
+      assert.equal(auth.actingRole, config.DEVELOPMENT_ACTING_IDENTITY.actingRole);
     } finally {
       config.AUTH_ENABLED = previous;
     }

@@ -5,15 +5,15 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { PassThrough, Readable } from 'node:stream';
-import { mapUploadErrorBody } from '../routes/files.js';
+import { mapUploadErrorBody } from '../src/routes/files.js';
 import {
   createBoundedDatasetUploadBody,
   datasetOwnershipHeaders,
   handleDatasetUpload,
   pipeWithBackpressure,
-} from '../routes/datasets.js';
-import { sandboxProxyHeaders } from '../routes/files.js';
-import { config } from '../config.js';
+} from '../src/routes/datasets.js';
+import { sandboxProxyHeaders } from '../src/routes/files.js';
+import { config } from '../src/config.js';
 
 class MockResponse extends EventEmitter {
   writableEnded = false;

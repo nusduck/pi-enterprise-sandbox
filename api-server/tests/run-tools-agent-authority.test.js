@@ -8,7 +8,7 @@ const originalAuthEnabled = process.env.AUTH_ENABLED;
 process.env.AGENT_BASE_URL = 'http://agent.run-tools.test';
 process.env.AUTH_ENABLED = 'false';
 
-const { handleListRunTools } = await import(`../routes/runs.js?test=${Date.now()}`);
+const { handleListRunTools } = await import(`../src/routes/runs.js?test=${Date.now()}`);
 
 const RUN = '01K0G2PAV8FPMVC9QHJG7JPN5H';
 const CONV = '01K0G2PAV8FPMVC9QHJG7JPN51';

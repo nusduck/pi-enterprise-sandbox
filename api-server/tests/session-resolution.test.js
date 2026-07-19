@@ -5,9 +5,9 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const routeSource = readFileSync(join(__dirname, '../routes/sessions.js'), 'utf8');
+const routeSource = readFileSync(join(__dirname, '../src/routes/sessions.js'), 'utf8');
 const clientSource = readFileSync(
-  join(__dirname, '../services/agent-client.js'),
+  join(__dirname, '../src/services/agent-client.js'),
   'utf8',
 );
 

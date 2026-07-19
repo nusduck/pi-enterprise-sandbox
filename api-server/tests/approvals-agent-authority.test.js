@@ -12,7 +12,7 @@ const {
   handleDecideApproval,
   handleGetApproval,
   handleListApprovals,
-} = await import(`../routes/approvals.js?test=${Date.now()}`);
+} = await import(`../src/routes/approvals.js?test=${Date.now()}`);
 
 const APPROVAL = '01K0G2PAV8FPMVC9QHJG7JPN55';
 const calls = [];

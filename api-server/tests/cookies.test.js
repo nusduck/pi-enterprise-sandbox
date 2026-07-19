@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { expiredSessionCookie, readCookie, sessionCookie } from '../http/cookies.js';
+import { expiredSessionCookie, readCookie, sessionCookie } from '../src/http/cookies.js';
 
 describe('BFF session cookie', () => {
   it('round-trips an encoded token and ignores unrelated cookies', () => {

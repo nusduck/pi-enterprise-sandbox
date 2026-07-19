@@ -7,7 +7,7 @@ const originalAuthEnabled = process.env.AUTH_ENABLED;
 process.env.AGENT_BASE_URL = 'http://agent.run-trace.test';
 process.env.AUTH_ENABLED = 'false';
 
-const { handleGetRunTrace } = await import(`../routes/runs.js?trace=${Date.now()}`);
+const { handleGetRunTrace } = await import(`../src/routes/runs.js?trace=${Date.now()}`);
 const RUN = '01K0G2PAV8FPMVC9QHJG7JPN53';
 const TRACE = 'a'.repeat(32);
 const REQUEST_TRACE = 'd'.repeat(32);

@@ -13,7 +13,7 @@ const root = join(__dirname, '../..');
 
 describe('config exposes Agent base URL', () => {
   it('has AGENT_BASE_URL and no AGENT_RUNTIME', async () => {
-    const { config } = await import('../config.js');
+    const { config } = await import('../src/config.js');
     assert.equal(typeof config.AGENT_BASE_URL, 'string');
     assert.ok(config.AGENT_BASE_URL.length > 0);
     assert.equal(config.AGENT_RUNTIME, undefined);
@@ -43,7 +43,7 @@ describe('shared SSE fixture is readable from Node', () => {
 
 describe('python agent path is gone', () => {
   it('BFF has no Python Agent proxy', async () => {
-    const runs = await import('../routes/runs.js');
+    const runs = await import('../src/routes/runs.js');
     assert.equal(typeof runs.handleCreateRun, 'function');
     assert.equal(typeof runs.handleRunEvents, 'function');
   });

@@ -13,7 +13,7 @@ import {
   resolveApprovalMode,
   resolveDevelopmentActingIdentity,
   resolveDatasetUploadMaxBytes,
-} from '../config.js';
+} from '../src/config.js';
 
 const STRONG = 'b'.repeat(64);
 

@@ -1,7 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { Readable } from 'node:stream';
-import { readJsonBody } from '../http/body.js';
+import { readJsonBody } from '../src/http/body.js';
 
 function request(chunks, headers = {}) {
   const stream = Readable.from(chunks);

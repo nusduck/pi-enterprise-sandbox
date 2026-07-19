@@ -9,16 +9,16 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const capabilitiesSrc = readFileSync(join(__dirname, '../routes/capabilities.js'), 'utf8');
+const capabilitiesSrc = readFileSync(join(__dirname, '../src/routes/capabilities.js'), 'utf8');
 const serverSrc = readFileSync(join(__dirname, '../server.js'), 'utf8');
-const agentClientSrc = readFileSync(join(__dirname, '../services/agent-client.js'), 'utf8');
+const agentClientSrc = readFileSync(join(__dirname, '../src/services/agent-client.js'), 'utf8');
 
 const originalFetch = globalThis.fetch;
 process.env.AUTH_ENABLED = 'false';
 process.env.AGENT_BASE_URL = 'http://agent.test';
 
 const { getAgentExtensionDiagnostics } = await import(
-  `../services/agent-client.js?test=${Date.now()}`
+  `../src/services/agent-client.js?test=${Date.now()}`
 );
 
 describe('capability diagnostics identity forwarding', () => {

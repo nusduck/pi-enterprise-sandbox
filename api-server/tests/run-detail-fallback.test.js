@@ -18,7 +18,7 @@ const {
   handleGetRun,
   presentRunDetail,
   toIsoTimestamp,
-} = await import(`../routes/runs.js?test=${Date.now()}`);
+} = await import(`../src/routes/runs.js?test=${Date.now()}`);
 
 function responseCapture() {
   return {

@@ -30,7 +30,7 @@ async function waitForStatus(port, timeoutMs = 15000) {
 
 describe('api-server import/listen smoke', () => {
   it('imports config module', async () => {
-    const mod = await import('../config.js');
+    const mod = await import('../src/config.js');
     assert.ok(mod.config);
     assert.equal(typeof mod.config.PORT, 'number');
   });

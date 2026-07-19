@@ -8,8 +8,8 @@ import {
   resolveAuthEnabled,
   isPublicApiPath,
   isProtectedApiPath,
-} from '../config.js';
-import { authFromRequest } from '../services/sandbox-client.js';
+} from '../src/config.js';
+import { authFromRequest } from '../src/services/sandbox-client.js';
 
 describe('resolveAuthEnabled', () => {
   it('defaults to false', () => {
