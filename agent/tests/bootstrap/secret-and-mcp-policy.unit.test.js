@@ -77,20 +77,34 @@ describe('secret redaction (H5)', () => {
       'mysql://user:SuperSecretPassw0rd@db:3306/prod connection refused',
       'redis://:redis-password@cache/0 down',
       'password=hunter2 in config',
+      // Compound forms previously only covered by projector INLINE patterns.
+      'access_token=opaque-access-token boom',
+      'refresh_token=opaque-refresh-token boom',
+      'client_secret=supersecretvalue boom',
+      'found sk-liveabcdefghi in logs',
+      'Cookie: session=sess-abc123; path=/',
     ];
+    const leak =
+      /sk-abc1234567890secret|opaque-result-token|SuperSecretPassw0rd|redis-password|hunter2|opaque-access-token|opaque-refresh-token|supersecretvalue|sk-liveabcdefghi|sess-abc123/;
     for (const sample of samples) {
       const status = sanitizeStatusReason(sample);
       const outbox = sanitizeOutboxError(sample);
       assert.ok(status, `status must not be null for: ${sample}`);
       assert.doesNotMatch(
         status,
-        /sk-abc1234567890secret|opaque-result-token|SuperSecretPassw0rd|redis-password|hunter2/,
+        leak,
         `status_reason leaked secret for: ${sample} → ${status}`,
       );
       assert.doesNotMatch(
         outbox,
-        /sk-abc1234567890secret|opaque-result-token|SuperSecretPassw0rd|redis-password|hunter2/,
+        leak,
         `outbox last_error leaked secret for: ${sample} → ${outbox}`,
+      );
+      // Shared base must also redact without the durable-only DSN collapse.
+      assert.doesNotMatch(
+        redactSecretText(sample),
+        leak,
+        `redactSecretText leaked secret for: ${sample}`,
       );
     }
     // Both paths must import shared redaction (structural).
@@ -104,6 +118,22 @@ describe('secret redaction (H5)', () => {
     );
     assert.match(statusSrc, /redactSecretText/);
     assert.match(outboxSrc, /redactSecretText/);
+  });
+
+  it('shared SECRET_PATTERNS cover compound forms projector already redacted', () => {
+    // Dual-pattern drift guard: durable status/outbox use redactSecretText only;
+    // projector INLINE is a style layer that ends with the same shared base.
+    const projectorSrc = fs.readFileSync(
+      path.join(root, 'src/infrastructure/pi/platform-event-projector.js'),
+      'utf8',
+    );
+    assert.match(projectorSrc, /redactSecretText/);
+    assert.match(projectorSrc, /INLINE_SECRET_PATTERNS/);
+
+    const shared = redactSecretText(
+      'access_token=a refresh_token=b client_secret=c sk-abcdefghij Cookie: sid=1',
+    );
+    assert.doesNotMatch(shared, /\b[abc]\b|sk-abcdefghij|sid=1/);
   });
 
   it('MCP factory and event recorders redact before model/persistence', () => {

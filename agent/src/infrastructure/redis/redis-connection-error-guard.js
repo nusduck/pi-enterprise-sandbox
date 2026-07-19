@@ -18,6 +18,8 @@
  * - Never log DSNs or password material.
  */
 
+import { redactSecretText } from '../../../lib/text-redaction.js';
+
 /** @type {WeakSet<object>} */
 const attachedClients = new WeakSet();
 
@@ -67,12 +69,13 @@ export function classifyRedisConnectionError(err) {
  * @returns {string}
  */
 export function sanitizeRedisLogText(text) {
-  let s = String(text);
-  // redis://user:pass@host → redis://***
+  // Shared secret patterns first (Bearer, access_token=, sk-*, URI userinfo).
+  let s = redactSecretText(String(text));
+  // Collapse any remaining redis URLs (including non-credential forms).
   s = s.replace(/rediss?:\/\/[^\s"'`]+/gi, 'redis://***');
   // leftover :password@host forms
   s = s.replace(/:([^@/\s"'`]{1,200})@/g, ':***@');
-  // AUTH / password= fragments
+  // AUTH / password= / passwd= fragments (passwd not in shared patterns)
   s = s.replace(
     /(password|passwd|auth)\s*[=:]\s*\S+/gi,
     '$1=***',

@@ -2,7 +2,14 @@
 
 export const SECRET_PATTERNS = Object.freeze([
   /\bBearer\s+[A-Za-z0-9._~+\/-]+=*/gi,
-  /\b(api[_-]?key|token|secret|password|authorization)\s*[:=]\s*[^\s,;]+/gi,
+  // Field-style secrets. Keep compound forms (access_token, client_secret,
+  // x-api-key) ahead of bare `token`/`secret` so durable paths match the
+  // projector INLINE set rather than leaking through the shorter alternation.
+  /\b(api[_-]?key|x-api-key|x-auth-token|access[_-]?token|refresh[_-]?token|client[_-]?secret|token|secret|password|authorization)\s*[:=]\s*[^\s,;]+/gi,
+  // Cookie headers often embed session tokens.
+  /\bCookie\s*:\s*[^\n\r]+/gi,
+  // Provider-style live keys (OpenAI sk-…).
+  /\bsk-[A-Za-z0-9]{10,}\b/g,
   // Any URI userinfo may carry credentials. Include empty usernames for
   // password-only Redis URLs such as redis://:password@host/0.
   /\b[a-z][a-z0-9+.-]*:\/\/[^\s/@:]*:[^\s/@]+@[^\s]+/gi,

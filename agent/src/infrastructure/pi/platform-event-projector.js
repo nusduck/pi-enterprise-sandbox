@@ -37,7 +37,10 @@ const DEFAULT_MAX_STRING = 512;
 const DEFAULT_MAX_RESULT_CHARS = 2048;
 
 /**
- * Inline secret value patterns — replace the secret substring, keep surrounding text.
+ * Projector-first inline patterns that produce a uniform `[redacted]` token
+ * (nicer for model/event payloads than key=[REDACTED]). Shared durable coverage
+ * lives in `SECRET_PATTERNS` / `redactSecretText` — keep these as a superset
+ * only for replacement style, not for unique secret classes.
  * Avoid matching the bare English word "token" in harmless prose.
  */
 const INLINE_SECRET_PATTERNS = [
@@ -45,14 +48,10 @@ const INLINE_SECRET_PATTERNS = [
   /\bAuthorization\s*:\s*Bearer\s+[A-Za-z0-9\-._~+/]+=*/gi,
   // Bearer <token> standalone
   /\bBearer\s+[A-Za-z0-9\-._~+/]{8,}=*/gi,
-  // api_key / api-key / apikey = value
-  /\b(?:api[_-]?key|access[_-]?token|refresh[_-]?token|client[_-]?secret)\s*[:=]\s*['"]?[^\s'"]{6,}['"]?/gi,
-  // password= / password:
-  /\bpassword\s*[:=]\s*['"]?[^\s'"]{3,}['"]?/gi,
+  // Field-style secrets (same classes as SECRET_PATTERNS field alternation)
+  /\b(?:api[_-]?key|x-api-key|x-auth-token|access[_-]?token|refresh[_-]?token|client[_-]?secret|token|secret|password|authorization)\s*[:=]\s*['"]?[^\s'"]{3,}['"]?/gi,
   // cookie: name=value
   /\bCookie\s*:\s*[^\n\r]+/gi,
-  // x-api-key style headers
-  /\b(?:x-api-key|x-auth-token)\s*[:=]\s*['"]?[^\s'"]{6,}['"]?/gi,
   // sk- live keys
   /\bsk-[A-Za-z0-9]{10,}\b/g,
 ];

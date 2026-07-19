@@ -5,6 +5,9 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { EventEmitter } from 'node:events';
 import {
   attachRedisConnectionErrorGuard,
@@ -19,14 +22,32 @@ import {
   destroyRedisClient,
 } from '../../src/infrastructure/redis/client.js';
 
+const guardSrcPath = path.join(
+  path.dirname(fileURLToPath(import.meta.url)),
+  '../../src/infrastructure/redis/redis-connection-error-guard.js',
+);
+function readGuardSrc() {
+  return fs.readFileSync(guardSrcPath, 'utf8');
+}
+
 describe('sanitizeRedisLogText / classifyRedisConnectionError', () => {
   it('redacts redis DSN and password material', () => {
     const s = sanitizeRedisLogText(
       'connect ECONNREFUSED redis://sandbox:s3cret@mysql:6379/0 password=s3cret',
     );
-    assert.doesNotMatch(s, /s3cret/);
-    assert.match(s, /redis:\/\/\*\*\*/);
+    assert.doesNotMatch(s, /s3cret|sandbox:/);
+    // Shared redactSecretText replaces credential URIs with [REDACTED];
+    // non-credential redis URLs still collapse to redis://***.
+    assert.match(s, /\[REDACTED\]|redis:\/\/\*\*\*/);
     assert.match(s, /password=\*\*\*/);
+  });
+
+  it('routes compound secrets through shared redactSecretText', () => {
+    const s = sanitizeRedisLogText(
+      'AUTH failed access_token=opaque-access Bearer sk-liveabcdefghij',
+    );
+    assert.doesNotMatch(s, /opaque-access|sk-liveabcdefghij/);
+    assert.match(readGuardSrc(), /redactSecretText/);
   });
 
   it('classifies error code and redacts message/stack', () => {
