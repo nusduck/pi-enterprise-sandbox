@@ -231,14 +231,53 @@ export function normalizeToRuntimeEvent(
       ? obj.sequence
       : typeof obj.sequenceNo === 'number'
         ? obj.sequenceNo
-        : null;
+        : typeof obj.persisted_sequence === 'number'
+          ? obj.persisted_sequence
+          : null;
   const typeRaw = pickStr(obj.type, obj.eventType, obj.event_type);
   const context = isPlainObject(obj.context) ? obj.context : {};
-  const data = isPlainObject(obj.data)
+  // Prefer explicit data/payload bags. When history replay flattens the durable
+  // payload onto the event root (entityBridge.persistedEventPayload), promote
+  // non-envelope fields so process/artifact ids are not dropped.
+  const nestedData = isPlainObject(obj.data)
     ? obj.data
     : isPlainObject(obj.payload)
       ? obj.payload
-      : {};
+      : null;
+  const envelopeKeys = new Set([
+    'eventId',
+    'event_id',
+    'id',
+    'sequence',
+    'sequenceNo',
+    'persisted_sequence',
+    'persisted_event_id',
+    'type',
+    'eventType',
+    'event_type',
+    'timestamp',
+    'ts',
+    'context',
+    'data',
+    'payload',
+    'run_id',
+    'runId',
+    'session_id',
+    'sessionId',
+  ]);
+  let data: Record<string, unknown> = nestedData ? { ...nestedData } : {};
+  if (!nestedData || Object.keys(data).length === 0) {
+    for (const [key, value] of Object.entries(obj)) {
+      if (envelopeKeys.has(key) || value === undefined) continue;
+      data[key] = value;
+    }
+  } else {
+    // Nested bag may still omit fields that were flattened beside it.
+    for (const [key, value] of Object.entries(obj)) {
+      if (envelopeKeys.has(key) || value === undefined) continue;
+      if (data[key] == null) data[key] = value;
+    }
+  }
 
   const runId = pickStr(
     obj.run_id,
@@ -261,7 +300,6 @@ export function normalizeToRuntimeEvent(
         type: mapped,
         timestamp: pickStr(obj.timestamp, obj.ts) || null,
         payload: normalizePayload(mapped, {
-          ...obj,
           ...data,
           type: undefined,
           event_id: undefined,

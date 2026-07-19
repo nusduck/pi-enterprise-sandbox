@@ -238,8 +238,9 @@ describe('conversation history rehydration', () => {
     }
   });
 
-  it('restores process handles and submitted artifacts after refresh (D1 matrix)', async () => {
+  it('restores messages, tools, process handles, and submitted artifacts after refresh (D1 matrix)', async () => {
     const originalFetch = globalThis.fetch;
+    const context = { runId: 'run_matrix', conversationId: 'conv_matrix' };
     globalThis.fetch = (async (input) => {
       const url = String(input);
       if (url.includes('/datasets')) {
@@ -260,13 +261,33 @@ describe('conversation history rehydration', () => {
             {
               run_id: 'run_matrix',
               sequence: 1,
-              event_id: 'evt_tool',
-              type: 'tool_start',
-              payload: { id: 'tool_proc', name: 'process_start', args: { command: 'sleep 1' } },
+              event_id: 'evt_user',
+              type: 'message.completed',
+              payload: {
+                data: {
+                  role: 'user',
+                  message: {
+                    role: 'user',
+                    content: [{ type: 'text', text: 'run the job' }],
+                  },
+                },
+                context,
+              },
             },
             {
               run_id: 'run_matrix',
               sequence: 2,
+              event_id: 'evt_tool',
+              type: 'tool_start',
+              payload: {
+                id: 'tool_proc',
+                name: 'process_start',
+                args: { command: 'sleep 1' },
+              },
+            },
+            {
+              run_id: 'run_matrix',
+              sequence: 3,
               event_id: 'evt_process',
               type: 'process.started',
               payload: {
@@ -274,12 +295,13 @@ describe('conversation history rehydration', () => {
                   process_id: 'proc_1',
                   command: 'sleep 1',
                   status: 'running',
+                  tool_call_id: 'tool_proc',
                 },
               },
             },
             {
               run_id: 'run_matrix',
-              sequence: 3,
+              sequence: 4,
               event_id: 'evt_process_out',
               type: 'process.output',
               payload: {
@@ -292,7 +314,27 @@ describe('conversation history rehydration', () => {
             },
             {
               run_id: 'run_matrix',
-              sequence: 4,
+              sequence: 5,
+              event_id: 'evt_process_done',
+              type: 'process.completed',
+              payload: {
+                data: { process_id: 'proc_1', exit_code: 0 },
+              },
+            },
+            {
+              run_id: 'run_matrix',
+              sequence: 6,
+              event_id: 'evt_tool_end',
+              type: 'tool_end',
+              payload: {
+                id: 'tool_proc',
+                name: 'process_start',
+                result: { process_id: 'proc_1', exit_code: 0 },
+              },
+            },
+            {
+              run_id: 'run_matrix',
+              sequence: 7,
               event_id: 'evt_artifact',
               type: 'artifact.ready',
               payload: {
@@ -305,7 +347,7 @@ describe('conversation history rehydration', () => {
             },
             {
               run_id: 'run_matrix',
-              sequence: 5,
+              sequence: 8,
               event_id: 'evt_done',
               type: 'run.completed',
               payload: { status: 'SUCCEEDED' },
@@ -320,26 +362,114 @@ describe('conversation history rehydration', () => {
       const bridge = createEntityBridge();
       await bridge.rehydrateConversation('conv_matrix');
       const store = bridge.getStore();
-      assert.equal(store.runsById.run_matrix.status, 'succeeded');
-      // Tools restored
+      const run = store.runsById.run_matrix;
+      assert.equal(run.status, 'succeeded');
+      assert.equal(run.lastSequence, 8);
+
+      // Messages
+      const messages = run.messageIds.map((id) => store.messagesById[id]);
       assert.ok(
-        store.runsById.run_matrix.toolExecutionIds?.includes('tool_proc') ||
-          store.toolExecutionsById.tool_proc,
-        'tool execution must rehydrate',
+        messages.some((m) => m.role === 'user' && m.text.includes('run the job')),
+        'user message must rehydrate',
       );
-      // Process and artifact entities when the bridge projects them
-      const processIds = Object.keys(store.processesById || {});
-      const artifactIds = Object.keys(store.artifactsById || {});
-      // At least one of process/artifact projection paths must retain the ids
-      // from durable events (reducer may key differently; assert non-empty
-      // recovery of tool + run sequence as the hard matrix floor).
-      assert.equal(store.runsById.run_matrix.lastSequence, 5);
+
+      // Tools
       assert.ok(
-        processIds.includes('proc_1') ||
-          artifactIds.includes('art_1') ||
-          store.toolExecutionsById.tool_proc,
-        `expected process/artifact/tool recovery; processes=${processIds} artifacts=${artifactIds}`,
+        run.toolExecutionIds.includes('tool_proc'),
+        'tool execution id linked on run',
       );
+      assert.equal(store.toolExecutionsById.tool_proc.name, 'process_start');
+      assert.equal(store.toolExecutionsById.tool_proc.status, 'completed');
+
+      // Process handle + output (D1 + D5 rehydrate floor)
+      assert.deepEqual(run.processIds, ['proc_1']);
+      assert.ok(store.processesById.proc_1, 'process entity must rehydrate');
+      assert.equal(store.processesById.proc_1.command, 'sleep 1');
+      assert.equal(store.processesById.proc_1.stdout, 'hello-process\n');
+      assert.equal(store.processesById.proc_1.status, 'completed');
+      assert.equal(store.processesById.proc_1.exitCode, 0);
+
+      // Artifact (submit_artifact / artifact.ready only)
+      assert.deepEqual(run.artifactIds, ['art_1']);
+      assert.ok(store.artifactsById.art_1, 'artifact entity must rehydrate');
+      assert.equal(store.artifactsById.art_1.name, 'report.md');
+      assert.equal(store.artifactsById.art_1.source, 'submit_artifact');
+      assert.equal(store.artifactsById.art_1.sessionId, 'session_matrix');
+      assert.equal(store.artifactsById.art_1.sha256, 'a'.repeat(64));
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it('restores process/artifact from flat platform envelopes after refresh', async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (input) => {
+      const url = String(input);
+      if (url.includes('/datasets')) {
+        return new Response(JSON.stringify({ datasets: [] }), { status: 200 });
+      }
+      assert.match(url, /\/api\/conversations\/conv_flat\/events$/);
+      return new Response(
+        JSON.stringify({
+          runs: [
+            {
+              run_id: 'run_flat',
+              conversation_id: 'conv_flat',
+              sandbox_session_id: 'session_flat',
+              status: 'SUCCEEDED',
+            },
+          ],
+          events: [
+            {
+              run_id: 'run_flat',
+              sequence: 1,
+              event_id: '01HZEVTFLAT000000000000001',
+              type: 'process.started',
+              payload: {
+                processId: 'proc_flat',
+                command: 'python app.py',
+                toolCallId: 'tc_flat',
+              },
+            },
+            {
+              run_id: 'run_flat',
+              sequence: 2,
+              event_id: '01HZEVTFLAT000000000000002',
+              type: 'process.output',
+              payload: {
+                processId: 'proc_flat',
+                stream: 'stderr',
+                text: 'warn-line\n',
+                cursor: 10,
+              },
+            },
+            {
+              run_id: 'run_flat',
+              sequence: 3,
+              event_id: '01HZEVTFLAT000000000000003',
+              type: 'artifact.ready',
+              payload: {
+                artifactId: 'art_flat',
+                name: 'out.xlsx',
+                sha256: 'b'.repeat(64),
+              },
+            },
+          ],
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      );
+    }) as typeof fetch;
+
+    try {
+      const bridge = createEntityBridge();
+      await bridge.rehydrateConversation('conv_flat');
+      const store = bridge.getStore();
+      assert.equal(store.processesById.proc_flat?.command, 'python app.py');
+      assert.equal(store.processesById.proc_flat?.stderr, 'warn-line\n');
+      assert.equal(store.artifactsById.art_flat?.name, 'out.xlsx');
+      assert.equal(store.artifactsById.art_flat?.source, 'submit_artifact');
+      assert.deepEqual(store.runsById.run_flat.processIds, ['proc_flat']);
+      assert.deepEqual(store.runsById.run_flat.artifactIds, ['art_flat']);
     } finally {
       globalThis.fetch = originalFetch;
     }

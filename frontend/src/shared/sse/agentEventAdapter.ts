@@ -39,13 +39,57 @@ export function createAgentEventAdapterState(
   };
 }
 
-function nextSeq(state: AgentEventAdapterState): number {
+/**
+ * Prefer durable history sequence when present (conversation event projection
+ * after refresh). Synthesize only for live Agent streams that omit sequence.
+ * Multi-output wire events (e.g. token → started+delta) pass `ev` only to the
+ * first nextSeq call so a single durable sequence is not double-applied.
+ */
+function nextSeq(
+  state: AgentEventAdapterState,
+  ev?: { sequence?: unknown; persisted_sequence?: unknown } | null,
+): number {
+  const durable =
+    typeof ev?.sequence === 'number'
+      ? ev.sequence
+      : typeof ev?.persisted_sequence === 'number'
+        ? ev.persisted_sequence
+        : null;
+  if (durable != null && Number.isFinite(durable) && durable >= 0) {
+    state.sequence = Math.max(state.sequence, durable);
+    return durable;
+  }
   state.sequence += 1;
   return state.sequence;
 }
 
-function eventId(state: AgentEventAdapterState, seq: number): string {
+function durableEventId(
+  state: AgentEventAdapterState,
+  seq: number,
+  ev?: {
+    event_id?: unknown;
+    eventId?: unknown;
+    persisted_event_id?: unknown;
+  } | null,
+): string {
+  for (const candidate of [ev?.event_id, ev?.eventId, ev?.persisted_event_id]) {
+    if (candidate != null && String(candidate).length > 0) {
+      return String(candidate);
+    }
+  }
   return `agent_${state.runId}_${seq}`;
+}
+
+function eventId(
+  state: AgentEventAdapterState,
+  seq: number,
+  ev?: {
+    event_id?: unknown;
+    eventId?: unknown;
+    persisted_event_id?: unknown;
+  } | null,
+): string {
+  return durableEventId(state, seq, ev);
 }
 
 /**
@@ -66,11 +110,11 @@ export function agentEventToRuntime(
   switch (type) {
     case 'trace': {
       if (!ev.trace_id) break;
-      const seq = nextSeq(state);
+      const seq = nextSeq(state, ev);
       out.push(
         makeRuntimeEvent({
           ...base,
-          event_id: eventId(state, seq),
+          event_id: eventId(state, seq, ev),
           sequence: seq,
           type: 'run.trace',
           payload: { trace_id: String(ev.trace_id) },
@@ -84,11 +128,11 @@ export function agentEventToRuntime(
       if (ev.conversation_id) state.conversationId = String(ev.conversation_id);
       if (ev.workspace_id) state.workspaceId = String(ev.workspace_id);
       if (ev.model_id) state.modelId = String(ev.model_id);
-      const seq = nextSeq(state);
+      const seq = nextSeq(state, ev);
       out.push(
         makeRuntimeEvent({
           ...base,
-          event_id: eventId(state, seq),
+          event_id: eventId(state, seq, ev),
           sequence: seq,
           session_id: state.sessionId,
           type: 'run.started',
@@ -108,11 +152,11 @@ export function agentEventToRuntime(
       const agentSessionId = String(ev.agent_session_id || '');
       if (!agentSessionId) break;
       if (ev.conversation_id) state.conversationId = String(ev.conversation_id);
-      const seq = nextSeq(state);
+      const seq = nextSeq(state, ev);
       out.push(
         makeRuntimeEvent({
           ...base,
-          event_id: eventId(state, seq),
+          event_id: eventId(state, seq, ev),
           sequence: seq,
           session_id: state.sessionId,
           type: 'session.restored',
@@ -170,11 +214,11 @@ export function agentEventToRuntime(
       const toolId =
         ev.id != null ? String(ev.id) : `tool_${state.runId}_${state.toolIds.length}`;
       state.toolIds.push(toolId);
-      const seq = nextSeq(state);
+      const seq = nextSeq(state, ev);
       out.push(
         makeRuntimeEvent({
           ...base,
-          event_id: eventId(state, seq),
+          event_id: eventId(state, seq, ev),
           sequence: seq,
           session_id: state.sessionId,
           type: 'tool.started',
@@ -193,12 +237,12 @@ export function agentEventToRuntime(
         ev.id != null
           ? String(ev.id)
           : state.toolIds[state.toolIds.length - 1] || `tool_${state.runId}_end`;
-      const seq = nextSeq(state);
+      const seq = nextSeq(state, ev);
       const failed = Boolean(ev.isError);
       out.push(
         makeRuntimeEvent({
           ...base,
-          event_id: eventId(state, seq),
+          event_id: eventId(state, seq, ev),
           sequence: seq,
           session_id: state.sessionId,
           type: failed ? 'tool.failed' : 'tool.completed',
@@ -213,7 +257,7 @@ export function agentEventToRuntime(
     }
 
     case 'file_ready': {
-      const seq = nextSeq(state);
+      const seq = nextSeq(state, ev);
       const artifactId =
         ev.artifact_id != null
           ? String(ev.artifact_id)
@@ -221,7 +265,7 @@ export function agentEventToRuntime(
       out.push(
         makeRuntimeEvent({
           ...base,
-          event_id: eventId(state, seq),
+          event_id: eventId(state, seq, ev),
           sequence: seq,
           session_id: state.sessionId,
           type: 'artifact.created',
@@ -241,11 +285,11 @@ export function agentEventToRuntime(
     case 'approval_required': {
       const approvalId = String(ev.approval_id || ev.id || '');
       if (!approvalId) break;
-      const seq = nextSeq(state);
+      const seq = nextSeq(state, ev);
       out.push(
         makeRuntimeEvent({
           ...base,
-          event_id: eventId(state, seq),
+          event_id: eventId(state, seq, ev),
           sequence: seq,
           session_id: state.sessionId,
           type: 'tool.approval_required',
@@ -264,11 +308,11 @@ export function agentEventToRuntime(
 
     case 'interaction_requested': {
       state.suspendedStatus = 'waiting_input';
-      const seq = nextSeq(state);
+      const seq = nextSeq(state, ev);
       out.push(
         makeRuntimeEvent({
           ...base,
-          event_id: eventId(state, seq),
+          event_id: eventId(state, seq, ev),
           sequence: seq,
           session_id: state.sessionId,
           type: 'run.status_changed',
@@ -287,10 +331,10 @@ export function agentEventToRuntime(
 
     case 'interaction_resolved': {
       state.suspendedStatus = null;
-      const seq = nextSeq(state);
+      const seq = nextSeq(state, ev);
       out.push(makeRuntimeEvent({
         ...base,
-        event_id: eventId(state, seq),
+        event_id: eventId(state, seq, ev),
         sequence: seq,
         session_id: state.sessionId,
         type: 'run.status_changed',
@@ -301,10 +345,10 @@ export function agentEventToRuntime(
 
     case 'context_stats':
     case 'context_warning': {
-      const seq = nextSeq(state);
+      const seq = nextSeq(state, ev);
       out.push(makeRuntimeEvent({
         ...base,
-        event_id: eventId(state, seq),
+        event_id: eventId(state, seq, ev),
         sequence: seq,
         session_id: state.sessionId,
         type: 'run.context_updated',
@@ -314,10 +358,10 @@ export function agentEventToRuntime(
     }
 
     case 'task_plan_updated': {
-      const seq = nextSeq(state);
+      const seq = nextSeq(state, ev);
       out.push(makeRuntimeEvent({
         ...base,
-        event_id: eventId(state, seq),
+        event_id: eventId(state, seq, ev),
         sequence: seq,
         session_id: state.sessionId,
         type: 'run.task_plan_updated',
@@ -329,10 +373,10 @@ export function agentEventToRuntime(
     case 'compaction_started':
     case 'compaction_completed':
     case 'compaction_failed': {
-      const seq = nextSeq(state);
+      const seq = nextSeq(state, ev);
       out.push(makeRuntimeEvent({
         ...base,
-        event_id: eventId(state, seq),
+        event_id: eventId(state, seq, ev),
         sequence: seq,
         session_id: state.sessionId,
         type: 'run.compaction_updated',
@@ -356,11 +400,11 @@ export function agentEventToRuntime(
       } else if (status === 'running') {
         state.suspendedStatus = null;
       }
-      const seq = nextSeq(state);
+      const seq = nextSeq(state, ev);
       out.push(
         makeRuntimeEvent({
           ...base,
-          event_id: eventId(state, seq),
+          event_id: eventId(state, seq, ev),
           sequence: seq,
           session_id: state.sessionId,
           type: 'run.status_changed',
@@ -371,11 +415,11 @@ export function agentEventToRuntime(
     }
 
     case 'error': {
-      const seq = nextSeq(state);
+      const seq = nextSeq(state, ev);
       out.push(
         makeRuntimeEvent({
           ...base,
-          event_id: eventId(state, seq),
+          event_id: eventId(state, seq, ev),
           sequence: seq,
           session_id: state.sessionId,
           type: 'run.failed',
@@ -389,12 +433,21 @@ export function agentEventToRuntime(
     }
 
     case 'done': {
+      // Durable history sequences apply only to the first synthetic emit.
+      let durableConsumed = false;
+      const takeSeq = () => {
+        if (!durableConsumed) {
+          durableConsumed = true;
+          return nextSeq(state, ev);
+        }
+        return nextSeq(state);
+      };
       if (state.messageId) {
-        const doneMsgSeq = nextSeq(state);
+        const doneMsgSeq = takeSeq();
         out.push(
           makeRuntimeEvent({
             ...base,
-            event_id: eventId(state, doneMsgSeq),
+            event_id: eventId(state, doneMsgSeq, durableConsumed ? null : ev),
             sequence: doneMsgSeq,
             session_id: state.sessionId,
             type: 'message.completed',
@@ -403,7 +456,7 @@ export function agentEventToRuntime(
         );
       }
       if (!state.terminalStatus) {
-        const seq = nextSeq(state);
+        const seq = takeSeq();
         const rawStatus = String(ev.status || '');
         const status =
           rawStatus === 'cancelled'
@@ -416,7 +469,7 @@ export function agentEventToRuntime(
         out.push(
           makeRuntimeEvent({
             ...base,
-            event_id: eventId(state, seq),
+            event_id: eventId(state, seq, state.messageId ? null : ev),
             sequence: seq,
             session_id: state.sessionId,
             type: status === 'succeeded' ? 'run.completed' : 'run.status_changed',
@@ -433,11 +486,11 @@ export function agentEventToRuntime(
       // tail overwrite an already terminal run (especially succeeded → cancelled).
       if (state.terminalStatus) break;
       if (state.suspendedStatus) break;
-      const seq = nextSeq(state);
+      const seq = nextSeq(state, ev);
       out.push(
         makeRuntimeEvent({
           ...base,
-          event_id: eventId(state, seq),
+          event_id: eventId(state, seq, ev),
           sequence: seq,
           session_id: state.sessionId,
           type: 'run.status_changed',
@@ -449,11 +502,11 @@ export function agentEventToRuntime(
     }
 
     case 'budget_warning': {
-      const seq = nextSeq(state);
+      const seq = nextSeq(state, ev);
       out.push(
         makeRuntimeEvent({
           ...base,
-          event_id: eventId(state, seq),
+          event_id: eventId(state, seq, ev),
           sequence: seq,
           session_id: state.sessionId,
           type: 'budget.warning',
@@ -468,11 +521,11 @@ export function agentEventToRuntime(
     }
 
     case 'budget_exceeded': {
-      const seq = nextSeq(state);
+      const seq = nextSeq(state, ev);
       out.push(
         makeRuntimeEvent({
           ...base,
-          event_id: eventId(state, seq),
+          event_id: eventId(state, seq, ev),
           sequence: seq,
           session_id: state.sessionId,
           type: 'budget.exceeded',
