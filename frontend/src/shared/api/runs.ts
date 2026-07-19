@@ -201,16 +201,22 @@ export async function streamRunEvents(
   const maxRetries = opts.maxRetries ?? 6;
   const retryBaseMs = opts.retryBaseMs ?? 250;
   const retryMaxMs = opts.retryMaxMs ?? 2_000;
+  // Agent MySQL authority uses SUCCEEDED (uppercase). UI/entity layer uses
+  // lowercase "succeeded". Accept both, plus BFF/legacy aliases.
   const terminalStatuses = new Set([
     'completed',
+    'succeeded',
     'failed',
     'cancelled',
+    'canceled',
     'interrupted',
     'budget_exceeded',
     'rejected',
     'waiting_approval',
     'waiting_input',
   ]);
+  const isTerminalRunStatus = (status: unknown): boolean =>
+    terminalStatuses.has(String(status ?? '').trim().toLowerCase());
 
   for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
     if (opts.signal?.aborted) {
@@ -248,7 +254,7 @@ export async function streamRunEvents(
       // A closed stream is not a completion signal. Ask the authoritative
       // run endpoint before deciding whether to stop or reconnect.
       const snapshot = await getRun(runId);
-      if (terminalStatuses.has(String(snapshot.status))) return;
+      if (isTerminalRunStatus(snapshot.status)) return;
       lastError = new Error('Run event stream ended before terminal state');
     } catch (err) {
       const error = err instanceof Error ? err : new Error(String(err));
@@ -261,7 +267,7 @@ export async function streamRunEvents(
       // a genuinely unavailable run. Never synthesize success here.
       try {
         const snapshot = await getRun(runId);
-        if (terminalStatuses.has(String(snapshot.status))) return;
+        if (isTerminalRunStatus(snapshot.status)) return;
       } catch (err) {
         lastError = err instanceof Error ? err : new Error(String(err));
       }
