@@ -10,6 +10,7 @@
  */
 
 import { createHash } from 'node:crypto';
+import { redactSecretText } from '../../../lib/text-redaction.js';
 
 export const PROJECTOR_EVENT_TYPES = Object.freeze([
   'message.delta',
@@ -30,7 +31,7 @@ export const PROJECTOR_EVENT_TYPES = Object.freeze([
 
 /** Object-key redaction (credential field names). */
 const SENSITIVE_KEY =
-  /(?:^|_)(?:api[_-]?key|secret|password|authorization|cookie|access[_-]?token|refresh[_-]?token|bearer)(?:$|_)/i;
+  /(?:^|_)(?:api[_-]?key|secret|password|authorization|cookie|token|access[_-]?token|refresh[_-]?token|bearer)(?:$|_)/i;
 
 const DEFAULT_MAX_STRING = 512;
 const DEFAULT_MAX_RESULT_CHARS = 2048;
@@ -87,7 +88,7 @@ export function redactInlineSecrets(text) {
     re.lastIndex = 0;
     out = out.replace(re, '[redacted]');
   }
-  return out;
+  return redactSecretText(out);
 }
 
 /**

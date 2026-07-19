@@ -3,7 +3,9 @@
 export const SECRET_PATTERNS = Object.freeze([
   /\bBearer\s+[A-Za-z0-9._~+\/-]+=*/gi,
   /\b(api[_-]?key|token|secret|password|authorization)\s*[:=]\s*[^\s,;]+/gi,
-  /\b(?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?)?:?\/\/[^\s/@:]+:[^\s/@]+@[^\s]+/gi,
+  // Any URI userinfo may carry credentials. Include empty usernames for
+  // password-only Redis URLs such as redis://:password@host/0.
+  /\b[a-z][a-z0-9+.-]*:\/\/[^\s/@:]*:[^\s/@]+@[^\s]+/gi,
 ]);
 
 export function redactSecretText(value) {

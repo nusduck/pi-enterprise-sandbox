@@ -57,6 +57,7 @@ import type { SSEEvent } from '../../shared/sse/parser';
 import { projectConversationMessages } from './projections/conversationMessages';
 import { runUploadQueue } from './uploads/runUploadQueue';
 import { useRunControls } from './controllers/useRunControls';
+import { resolveApprovalDecision } from './approvalDecision';
 
 export type ChatController = {
   state: ChatState;
@@ -93,7 +94,7 @@ export type ChatController = {
   resolveApproval: (
     approvalId: string,
     decision: 'approve' | 'reject',
-  ) => Promise<void>;
+  ) => Promise<boolean>;
   // Auth
   login: (username: string, password: string) => Promise<void>;
   register: (username: string, password: string) => Promise<void>;
@@ -810,23 +811,12 @@ export function ChatProvider({ children }: { children: ReactNode }) {
 
   const resolveApproval = useCallback(
     async (approvalId: string, decision: 'approve' | 'reject') => {
-      if (!approvalId) return;
-      try {
-        const result = await decideApproval(approvalId, decision);
-        bridge.markApproval(
-          approvalId,
-          decision === 'approve' ? 'approved' : 'rejected',
-        );
-        setStatus(
-          decision === 'approve' ? 'Approved' : 'Rejected',
-          decision === 'approve' ? '#22c55e' : '#ef4444',
-        );
-        if (result.agent_resume_status === 'pending') {
-          flashError('Decision saved; Agent resume is pending. Use Resume to retry.');
-        }
-      } catch (err) {
-        flashError((err as Error).message);
-      }
+      return resolveApprovalDecision(approvalId, decision, {
+        decide: decideApproval,
+        markApproval: (id, status) => bridge.markApproval(id, status),
+        setStatus,
+        flashError,
+      });
     },
     [bridge, setStatus, flashError],
   );

@@ -59,7 +59,11 @@ export function ApprovalsPage() {
     if (!canDecideApproval(row.status)) return;
     setBusyId(row.id);
     try {
-      await resolveApproval(row.id, decision);
+      const applied = await resolveApproval(row.id, decision);
+      if (!applied) {
+        setBanner('Decision failed. The approval remains pending.');
+        return;
+      }
       setBanner(
         decision === 'approve'
           ? `Approved ${shortId(row.id)}`

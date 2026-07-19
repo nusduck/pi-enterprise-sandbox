@@ -41,7 +41,7 @@ Change this file in the **same commit** as the implementation or evidence that j
 |----|-----------|--------|------------------|
 | B1 | MySQL sole fact authority | `done` | Knex schema + repos; Sandbox SQLite stack removed |
 | B2 | Redis runtime-only | `done` | architecture + compose; Outbox for durable events |
-| B3 | No in-process authoritative Run Map | `partial` | core path MySQL; audit residual caches if any |
+| B3 | No in-process authoritative Run Map | `partial` | Structural grep test (`no-authoritative-run-map.unit.test.js`) asserts no process-global RunManager/runs Map authority under agent/src. Residual transient Maps allowed; full residual-cache audit still light. |
 | B4 | No whole-Conversation messages JSON blob | `done` | append-only `messages` rows + triggers |
 | B5 | No dual Run state sources | `done` | Agent MySQL authority design |
 | B6 | Run Events ordered replay | `done` | `next_event_sequence` + MySQL gate in evidence |
@@ -68,7 +68,7 @@ Change this file in the **same commit** as the implementation or evidence that j
 | D3 | Cancel Run | `done` | controls + API |
 | D4 | Upload Dataset | `done` | upload tests + BFF proxy |
 | D5 | View Process output | `partial` | Process console + process routes; authority tests added |
-| D6 | Enterprise approval UX | `partial` | approvals authority moved to Agent; end-to-end UX audit pending |
+| D6 | Enterprise approval UX | `partial` | Extracted `resolveApprovalDecision` with unit tests; ApprovalsPage surfaces failed decisions without clearing pending. End-to-end browser UX audit still open. |
 | D7 | View Trace | `partial` | Trace panel + MySQL spans migrations; full distributed backend still light |
 | D8 | View Agent A2A config | `done` | `A2aPage` + BFF `/api/a2a` |
 
@@ -111,8 +111,8 @@ Change this file in the **same commit** as the implementation or evidence that j
 | H2 | Workspace path escape blocked | `done` | path validation + bwrap |
 | H3 | Skill tree not writable (exec side) | `done` | canonical RO `/home/sandbox/skill` |
 | H4 | Sandbox non-privileged | `done` | compose/prod constraints + gates |
-| H5 | Secrets not in model/logs/events | `partial` | redaction helpers; full audit pending |
-| H6 | Business DB only via controlled MCP | `partial` | adapter path; deployment policy audit pending |
+| H5 | Secrets not in model/logs/events | `partial` | MCP results/progress redacted before Pi (`pi-mcp-adapter-factory` + projector); broader URI userinfo redaction; unit tests in mcp-seam + platform-event-projector + secret-and-mcp-policy. Full log/event production audit still open. |
+| H6 | Business DB only via controlled MCP | `partial` | Structural: MCP via `pi-mcp-adapter` only; secret-and-mcp-policy + mcp-seam tests assert no direct business DSN tools / sandbox-bridge SQL client. Deployment policy audit still open. |
 
 ---
 

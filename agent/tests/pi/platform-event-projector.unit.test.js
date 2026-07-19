@@ -189,6 +189,32 @@ describe('PlatformEventProjector', () => {
     assert.match(String(ev.payload.result.text), /keep me/);
   });
 
+  it('redacts credential-bearing URLs and generic token fields', () => {
+    for (const value of [
+      'mysql://reporter:SuperSecretPassw0rd@db.internal:3306/prod',
+      'redis://:redis-password@cache.internal:6379/0',
+      'https://svc-user:basic-password@example.test/private',
+    ]) {
+      const redacted = redactInlineSecrets(value);
+      assert.equal(redacted.includes('password'), false);
+      assert.equal(redacted.includes('SuperSecretPassw0rd'), false);
+      assert.match(redacted, /REDACTED/i);
+    }
+
+    const [ev] = new PlatformEventProjector().project({
+      type: 'tool_execution_end',
+      toolCallId: 't-url-secret',
+      toolName: 'mcp__db__query',
+      isError: false,
+      result: {
+        token: 'opaque-secret-value',
+        text: 'mysql://user:dsn-password@db.internal/prod',
+      },
+    });
+    const encoded = JSON.stringify(ev);
+    assert.doesNotMatch(encoded, /opaque-secret-value|dsn-password/);
+  });
+
   it('unknown → [] and is deterministic', () => {
     assert.deepEqual(projectPiEvent({ type: 'totally_unknown', secret: 'x' }), []);
     const events = [

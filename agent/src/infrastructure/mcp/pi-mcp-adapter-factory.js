@@ -24,6 +24,7 @@ import {
   createTraceHeaders,
   normalizeW3cTracestate,
 } from '../sandbox/trace-context.js';
+import { redactPayload } from '../pi/platform-event-projector.js';
 
 export class PiMcpAdapterError extends Error {
   /**
@@ -629,7 +630,12 @@ export function createMcpExtensionsOverride(binding) {
               cause: error,
             });
           }
-          return proxy.execute(
+          const safeUpdate =
+            typeof onUpdate === 'function'
+              ? (update) =>
+                  onUpdate(redactPayload(update, { maxString: 32_768 }))
+              : onUpdate;
+          const result = await proxy.execute(
             toolCallId,
             {
               server: mapping.serverId,
@@ -637,9 +643,13 @@ export function createMcpExtensionsOverride(binding) {
               args,
             },
             signal,
-            onUpdate,
+            safeUpdate,
             context,
           );
+          // MCP is outside the trust boundary. Its result is model-visible, so
+          // sanitize both structured credential fields and credentials embedded
+          // in free text before Pi receives it.
+          return redactPayload(result, { maxString: 32_768 });
         },
       };
       extension.tools.set(mapping.name, {

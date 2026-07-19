@@ -15,6 +15,7 @@ import {
 } from '../../src/infrastructure/mcp/mcp-config-loader.js';
 import {
   createPiMcpAdapter,
+  createMcpExtensionsOverride,
   createEnvironmentSecretResolver,
   loadMcpServerRegistry,
   PiMcpAdapterError,
@@ -250,6 +251,73 @@ describe('pi-mcp-adapter-factory', () => {
     await binding.cleanup();
     await assert.rejects(() => fs.access(configPath));
     await fs.rm(root, { recursive: true, force: true });
+  });
+
+  it('redacts untrusted MCP results and progress before Pi sees them', async () => {
+    const extensionPath = '/tmp/pi-enterprise-mcp-redaction/index.ts';
+    let projectedUpdate = null;
+    const extension = {
+      resolvedPath: extensionPath,
+      sourceInfo: { source: 'test' },
+      tools: new Map([
+        [
+          'mcp',
+          {
+            definition: {
+              name: 'mcp',
+              async execute(_id, _params, _signal, onUpdate) {
+                onUpdate?.({
+                  content: [
+                    {
+                      type: 'text',
+                      text: 'redis://:progress-password@cache.internal/0',
+                    },
+                  ],
+                });
+                return {
+                  content: [
+                    {
+                      type: 'text',
+                      text: 'mysql://reader:result-password@db.internal/prod',
+                    },
+                  ],
+                  details: { token: 'opaque-result-token' },
+                };
+              },
+            },
+            sourceInfo: { source: 'vendor' },
+          },
+        ],
+      ]),
+    };
+    const override = createMcpExtensionsOverride({
+      extensionPath,
+      tools: [
+        {
+          serverId: 'db',
+          toolName: 'query',
+          name: 'mcp__db__query',
+        },
+      ],
+    });
+    override({ extensions: [extension], errors: [] });
+
+    const result = await extension.tools
+      .get('mcp__db__query')
+      .definition.execute(
+        'tc-secret',
+        { sql: 'select 1' },
+        new AbortController().signal,
+        (update) => {
+          projectedUpdate = update;
+        },
+      );
+
+    assert.doesNotMatch(
+      JSON.stringify({ result, projectedUpdate }),
+      /progress-password|result-password|opaque-result-token/,
+    );
+    assert.equal(result.details.token, '[redacted]');
   });
 
   it('rejects registry attempts to override runtime trace propagation', async () => {
