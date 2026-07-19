@@ -4,11 +4,16 @@
  * Resolves trusted external auth → internal owner ULIDs, then loads the Run
  * from MySQL. Unknown/foreign runs return owner-scoped not found (no leak).
  * Immediate GET after Create works without process Map / Sandbox.
+ *
+ * When the Run is WAITING_INPUT, attaches the oldest pending interaction so
+ * browser refresh / GET can rebuild the Composer without relying on SSE alone.
  */
 
 import { ExternalIdentityResolver } from './parent/external-identity-resolver.js';
 import { OwnerScopedNotFoundError, ValidationError } from './errors.js';
 import { assertUlid, isLegacyOrUuidIdentity } from '../domain/shared/ulid.js';
+import { RUN_STATUS } from '../domain/run/run-status.js';
+import { INTERACTION_STATUS } from '../domain/interaction/interaction-status.js';
 
 export class GetRunService {
   /**
@@ -104,6 +109,47 @@ export class GetRunService {
           id: runId,
         });
       }
+
+      if (
+        run.status === RUN_STATUS.WAITING_INPUT &&
+        repos.interactions?.getPendingForRun
+      ) {
+        try {
+          const pending = await repos.interactions.getPendingForRun(runId, {
+            orgId: owner.orgId,
+            userId: owner.userId,
+          });
+          if (pending && pending.status === INTERACTION_STATUS.PENDING) {
+            const request =
+              pending.requestJson && typeof pending.requestJson === 'object'
+                ? pending.requestJson
+                : {};
+            run.pendingInput = {
+              interactionId: pending.interactionId,
+              interactionType: pending.interactionType,
+              title:
+                request.title != null
+                  ? String(request.title)
+                  : request.prompt != null
+                    ? String(request.prompt)
+                    : 'Input required',
+              message:
+                request.message != null
+                  ? String(request.message)
+                  : request.prompt != null
+                    ? String(request.prompt)
+                    : null,
+              options: Array.isArray(request.options)
+                ? request.options.map((item) => String(item)).filter(Boolean)
+                : [],
+              status: pending.status,
+            };
+          }
+        } catch {
+          // Fail open on projection: Run status remains authoritative.
+        }
+      }
+
       return run;
     };
 

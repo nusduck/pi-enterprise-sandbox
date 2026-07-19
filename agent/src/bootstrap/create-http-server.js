@@ -311,6 +311,21 @@ export function presentCreateRunResponse(result) {
  * @param {object} run — domain run row
  */
 export function presentGetRunResponse(run) {
+  const pending = run.pendingInput || run.pending_input || null;
+  const pendingInput = pending
+    ? {
+        interactionId: pending.interactionId || pending.interaction_id || null,
+        interaction_id: pending.interactionId || pending.interaction_id || null,
+        interactionType:
+          pending.interactionType || pending.interaction_type || 'input',
+        interaction_type:
+          pending.interactionType || pending.interaction_type || 'input',
+        title: pending.title ?? 'Input required',
+        message: pending.message ?? null,
+        options: Array.isArray(pending.options) ? pending.options : [],
+        status: pending.status || 'PENDING',
+      }
+    : null;
   return {
     runId: run.runId,
     run_id: run.runId,
@@ -338,6 +353,8 @@ export function presentGetRunResponse(run) {
     started_at: run.startedAt,
     completedAt: run.completedAt,
     completed_at: run.completedAt,
+    pendingInput,
+    pending_input: pendingInput,
   };
 }
 

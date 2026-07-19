@@ -586,10 +586,35 @@ export function createEntityBridge(
   async function rehydrateInProgress(
     conversationId?: string | null,
   ): Promise<RunEntity[]> {
-    const details = await listRuns({
+    // List without a single-status filter so WAITING_INPUT / WAITING_APPROVAL
+    // runs are rediscovered after refresh (plan §32 / STATUS G6 + D1).
+    const listed = await listRuns({
       conversation_id: conversationId || undefined,
-      status: 'running',
     });
+    const activeStatuses = new Set([
+      'running',
+      'queued',
+      'accepted',
+      'starting',
+      'retrying',
+      'waiting_input',
+      'waiting_approval',
+      'cancelling',
+      'cancel_requested',
+      'restoring_session',
+      // Agent MySQL stores plan §10 uppercase statuses; accept both shapes.
+      'RUNNING',
+      'QUEUED',
+      'ACCEPTED',
+      'STARTING',
+      'RETRYING',
+      'WAITING_INPUT',
+      'WAITING_APPROVAL',
+      'CANCELLING',
+    ]);
+    const details = listed.filter((d) =>
+      activeStatuses.has(String(d.status || '').trim()),
+    );
     const rehydrated: RunEntity[] = [];
 
     for (const d of details) {

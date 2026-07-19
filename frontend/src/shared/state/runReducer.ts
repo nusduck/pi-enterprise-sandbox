@@ -1213,6 +1213,24 @@ export function rehydrateRun(
     updated_at?: string | null;
     budget?: unknown;
     budget_limits?: unknown;
+    pending_input?: {
+      interaction_id?: string;
+      interactionId?: string;
+      interaction_type?: string;
+      interactionType?: string;
+      title?: string;
+      message?: string | null;
+      options?: unknown[];
+    } | null;
+    pendingInput?: {
+      interactionId?: string;
+      interaction_id?: string;
+      interactionType?: string;
+      interaction_type?: string;
+      title?: string;
+      message?: string | null;
+      options?: unknown[];
+    } | null;
   },
   missedEvents: unknown[] = [],
 ): EntityStore {
@@ -1270,6 +1288,29 @@ export function rehydrateRun(
       ? (detail.budget_limits as RunEntity['budgetLimits'])
       : null;
 
+  const rawPending = detail.pending_input ?? detail.pendingInput ?? null;
+  const pendingInput =
+    status === 'waiting_input' && rawPending
+      ? {
+          interactionId: String(
+            rawPending.interactionId || rawPending.interaction_id || '',
+          ),
+          interactionType: String(
+            rawPending.interactionType ||
+              rawPending.interaction_type ||
+              'input',
+          ),
+          title: String(rawPending.title || 'Input required'),
+          message:
+            rawPending.message != null ? String(rawPending.message) : null,
+          options: Array.isArray(rawPending.options)
+            ? rawPending.options.map((item) => String(item)).filter(Boolean)
+            : [],
+        }
+      : status === 'waiting_input'
+        ? existing?.pendingInput ?? null
+        : null;
+
   let next = upsertRun(
     store,
     createRun({
@@ -1281,6 +1322,7 @@ export function rehydrateRun(
       sandboxSessionId:
         detail.session_id ?? detail.sandbox_session_id ?? existing?.sandboxSessionId ?? null,
       status,
+      pendingInput,
       lastSequence: detail.last_sequence ?? existing?.lastSequence ?? 0,
       lastEventId: detail.last_event_id ?? existing?.lastEventId ?? null,
       error: detail.error ?? existing?.error ?? null,

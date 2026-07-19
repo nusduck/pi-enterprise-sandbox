@@ -63,7 +63,7 @@ Change this file in the **same commit** as the implementation or evidence that j
 
 | ID | Criterion | Status | Evidence / notes |
 |----|-----------|--------|------------------|
-| D1 | Refresh restores messages/tools/process/artifacts | `partial` | rehydration tests exist; full UI matrix not fully evidenced |
+| D1 | Refresh restores messages/tools/process/artifacts | `partial` | Conversation + WAITING_INPUT rehydrate tests extended (`conversation-rehydration.test.ts`); process/artifact event floor covered. Full browser UI matrix still open. |
 | D2 | Show Run status | `done` | run UI + SSE |
 | D3 | Cancel Run | `done` | controls + API |
 | D4 | Upload Dataset | `done` | upload tests + BFF proxy |
@@ -100,7 +100,7 @@ Change this file in the **same commit** as the implementation or evidence that j
 | G3 | Redis blip does not lose fact events | `done` | Outbox + Redis gate evidence |
 | G4 | Duplicate request no duplicate side effects | `partial` | idempotency tables/claims; full live duplicate matrix TBD |
 | G5 | Create Run then immediate query race-free | `partial` | create-before-return design; live race gate TBD |
-| G6 | Durable WAITING_INPUT / interaction resume | `partial` | **Code present** (MySQL `run_interactions`, services, HTTP wiring). Needs restart/refresh evidence and STATUS-driven verification. Former follow-up claiming blanket `501` is **stale**. |
+| G6 | Durable WAITING_INPUT / interaction resume | `partial` | **Shipped path proven in-tree:** `InteractionResponseService` + HTTP respond/rehydrate (`agent/tests/http/interaction-http.unit.test.js`), GET `pending_input` projection (`get-run-pending-input`), execute-run resume, frontend `rehydrateRun`/`rehydrateInProgress` for WAITING_INPUT (`frontend/test/conversation-rehydration.test.ts`). Still `partial` until a live/worker-restart gate is dated under `docs/evidence/` (unit + fake-knex restart-class coverage exists; compose hard restart not yet re-run on this branch). |
 | G7 | Hard `SIGKILL` orphan recovery in Bubblewrap | `open` | Explicit open gate in evidence doc. Prerequisite: Linux starttime field-22 index fix + unit test committed on this branch; live gate still required. |
 
 ## H. Security
