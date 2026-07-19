@@ -246,8 +246,72 @@ describe('MCP data-plane policy (H6)', () => {
       // Tool names that would look like direct DB access.
       assert.doesNotMatch(
         src,
-        /name:\s*['"](?:sql|query_sql|execute_sql|mysql_query|run_query)['"]/,
+        /name:\s*['"](?:sql|query_sql|execute_sql|mysql_query|run_query|db_query|postgres|psql)['"]/,
         `${path.relative(root, file)} must not register direct SQL tools`,
+      );
+    }
+  });
+
+  it('enterprise tool plane is sandbox-bridge + ask_user only; business DB is MCP-only', () => {
+    // Offline H6 contract: non-MCP tools never include SQL/DSN clients.
+    // Business data access must arrive only as mcp__* tools from the
+    // deployment allowlist (ops checklist — not claimable offline).
+    const extIndex = fs.readFileSync(
+      path.join(root, 'src/extensions/index.js'),
+      'utf8',
+    );
+    const constantsSrc = fs.readFileSync(
+      path.join(root, 'src/extensions/constants.js'),
+      'utf8',
+    );
+    assert.match(extIndex, /ENTERPRISE_DEFAULT_TOOLS\s*=\s*SANDBOX_TOOL_NAMES/);
+    assert.doesNotMatch(extIndex, /createPool|mysql2|knex\(/);
+    assert.match(
+      constantsSrc,
+      /ENTERPRISE_EXTENSION_NAMES\s*=\s*Object\.freeze\(\[\s*['"]sandbox-bridge['"]\s*,\s*['"]enterprise-policy['"]\s*,\s*['"]observability['"]/,
+    );
+
+    // Only sandbox tools + ask_user are registered via pi.registerTool.
+    const toolsSrc = fs.readFileSync(
+      path.join(root, 'src/extensions/sandbox-bridge/tools/index.js'),
+      'utf8',
+    );
+    const policySrc = fs.readFileSync(
+      path.join(root, 'src/extensions/enterprise-policy/index.js'),
+      'utf8',
+    );
+    for (const name of SANDBOX_TOOL_NAMES) {
+      assert.match(
+        toolsSrc,
+        new RegExp(`name:\\s*['"]${name}['"]`),
+        `sandbox-bridge must define tool ${name}`,
+      );
+      assert.doesNotMatch(name, /sql|mysql|postgres|query|dsn|database/i);
+    }
+    assert.match(policySrc, /name:\s*['"]ask_user['"]/);
+    assert.match(policySrc, /registerTool/);
+
+    // MCP module set is closed: config loader + adapter factory + index.
+    const mcpFiles = listJsFiles(path.join(root, 'src/infrastructure/mcp'))
+      .map((f) => path.basename(f))
+      .sort();
+    assert.deepEqual(mcpFiles, [
+      'index.js',
+      'mcp-config-loader.js',
+      'pi-mcp-adapter-factory.js',
+    ]);
+
+    // Platform MySQL (Run authority) must not appear on the model tool plane.
+    assert.ok(
+      fs.existsSync(path.join(root, 'src/infrastructure/mysql')),
+      'platform MySQL client must exist for Run authority',
+    );
+    for (const file of listJsFiles(path.join(root, 'src/application'))) {
+      const src = fs.readFileSync(file, 'utf8');
+      assert.doesNotMatch(
+        src,
+        /name:\s*['"](?:sql|query_sql|execute_sql|mysql_query|run_query|db_query)['"]/,
+        `${path.relative(root, file)} must not expose SQL tools to the model`,
       );
     }
   });
