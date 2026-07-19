@@ -143,3 +143,10 @@ Each entry should say **what changed**, **why**, and **which STATUS IDs** it aff
 - **Action:** Re-ran H5/H6 suite green; tightened secret-and-mcp-policy enterprise-tool-plane structural test; committed ops sampling + MCP allowlist checklist as `partial-h5-h6-ops-checklist-2026-07-19.md`. No production samples invented.
 - **STATUS IDs:** H5/H6 remain `partial`.
 - **Subagent:** `019f79ce-471a-7f41-849d-3c380e81c76b`.
+
+## 2026-07-19 — Module layout reorganization
+
+- **Action:** Collapsed agent dual tree into `agent/src/**` (lib, skills, runtime, sandbox-client, model-registry, context-policy); parked approval-waiter under `agent/legacy/`. Moved api-server production modules under `api-server/src/**` with thin `server.js`. Documented sandbox FastAPI hybrid package layout in `docs/module-layout.md`. Added layout structural unit tests.
+- **Why:** Package-root parallel trees (agent application/runtime/services/lib vs src; api-server flat routes/application) made ownership unclear and violated conventional single-root layout.
+- **STATUS IDs:** documentation / structure only; no §32 row change.
+- **Tests:** agent layout + moved-module suites; api-server unit suite (excl. listen-smoke hang); sandbox pytest subset + package imports.
