@@ -54,3 +54,9 @@ Each entry should say **what changed**, **why**, and **which STATUS IDs** it aff
 - **Action:** IdempotencyRepository reloads under `FOR UPDATE` on CAS/duplicate-PK paths; normalize MySQL DSN with `jsonStrings=true` so JSON string scalars are not eagerly decoded; unit tests assert both. G6 restart describeLive set `concurrency: false`.
 - **Why:** STATUS **G4** correctness under concurrent begin; JSON boundary stability for interaction responses stored as JSON.
 - **STATUS IDs:** G4 remains `partial` (unit path strengthened; live concurrent-create matrix still open).
+
+## 2026-07-19 — Documentation cleanup
+
+- **Action:** Removed `docs/archive/` (superseded designs, old PLAN/AUDIT/IMPROVEMENT, process notes), deleted stub `docs/refactor-follow-up.md`, and removed pseudo-ADRs `0002-backend2712.md` / `0003-fronted0712.md` (task drafts, not ADRs). Updated active doc links in README, CONTRIBUTING, architecture, ADR 0001, evidence, and review-deferred.
+- **Why:** Keep only normative + operational docs; historical drafts were confusing the acceptance surface.
+- **STATUS:** Documentation only; no §32 row status change.

@@ -5,7 +5,7 @@
 | Status | Accepted |
 | Date | 2026-07-11 |
 | Decision owners | Agent runtime / api-server maintainers |
-| Related | R-01 (field-issues), A-02 Agent Runtime, package `agent` |
+| Related | Agent Runtime, package `agent` |
 | Pinned version | `0.80.3` (exact; SSOT `runtime-versions.json` + `agent/package.json`) |
 
 ## Context
@@ -187,4 +187,3 @@ Location: `agent/tests/sdk-compat/`.
 - `agent/tests/pi/`
 - `tests/fixtures/sse_events.json`
 - `docs/runbooks/sdk-upgrade.md`
-- `docs/archive/field-issues-and-evolution-requirements.md` (R-01, A-02, S-03; historical)

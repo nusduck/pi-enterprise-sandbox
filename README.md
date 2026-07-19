@@ -63,7 +63,7 @@ pi-sandbox/
 ├── tests/                ← pytest 测试套件
 ├── scripts/              ← 备份/恢复、development reset、跨服务 smoke
 ├── nginx/                ← 生产 Nginx + SSL
-├── docs/                 ← 活跃文档（archive/ 与历史 PLAN 不作现行规范）
+├── docs/                 ← 活跃文档（见 docs/README.md 权威顺序）
 ├── workspaces/           ← Agent Session 工作区（按 workspace_id 隔离）
 ├── tmp-workspaces/       ← Agent Session 私有 /tmp（按 tmp_{workspace_id} 隔离）
 ├── docker-compose.yml           ← 开发编排（Frontend + BFF + Agent + Sandbox + MySQL 8 + Redis 7）
@@ -239,5 +239,4 @@ node scripts/smoke-cross-service.mjs
 | [Gate 证据](docs/evidence/) | 带日期的 live gate 记录 |
 | [非阻塞债](docs/review-deferred-items.md) | 不得隐藏 P0 验收项 |
 
-历史资料仅在 `docs/archive/`（含旧 PLAN / field-issues / 过程稿）。**不作现行规范。**  
-以根目录 `plan.md`、`docs/STATUS.md`、活跃 `docs/*` 与代码为准。旧跟踪页 `docs/refactor-follow-up.md` 已废弃，仅保留跳转。
+以根目录 `plan.md`、`docs/STATUS.md`、活跃 `docs/*` 与代码为准。

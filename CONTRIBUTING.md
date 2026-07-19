@@ -96,8 +96,7 @@ pi-enterprise-sandbox/
 ├── docs/              # Active docs — see docs/README.md for authority order
 │   ├── STATUS.md      # Only living gap board vs plan.md §32
 │   ├── PROCESS_LOG.md # Acceptance process log (append-only)
-│   ├── evidence/      # Dated live-gate records
-│   └── archive/       # Historical only (never normative)
+│   └── evidence/      # Dated live-gate records
 ├── config/            # Runtime config files
 ├── nginx/             # Production Nginx + SSL
 ├── scripts/           # backup/restore, development reset, cross-service smoke
@@ -123,7 +122,6 @@ replay recover durable events. BFF and Sandbox must not take Redis authority
 in PR-03. Production fails fast when `REDIS_PASSWORD` is missing.
 
 
-> Root-level `PLAN.md` / `AUDIT.md` / `IMPROVEMENT_PLAN.md` live under `docs/archive/`.  
 > Production Agent code imports from `agent/src`; the legacy `enterprise-agent-kit` package and root runtime facades have been removed.
 
 ## How to Contribute

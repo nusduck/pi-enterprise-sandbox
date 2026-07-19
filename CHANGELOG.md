@@ -20,7 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
-- **旧文档归档**: `docs/system-design-v2.md` 和 `docs/system-design-v3.md` 移至 `docs/archive/`，保留 v4 作为当前设计文档
+- **旧设计文档移除**: 早期 system-design 草稿不再保留；以 `plan.md` 与活跃 `docs/*` 为准
 
 ## [0.2.0] — 2026-07-03
 

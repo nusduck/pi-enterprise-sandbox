@@ -61,7 +61,7 @@ Browser → Frontend → BFF (Node:4000) → Agent (Node:4100) → Sandbox (Fast
 
 ## Key Design Decisions
 
-Sub-Agent 暂不进入运行时；启用门槛与安全边界见 [Sub-Agent 评估结论](archive/sub-agent-assessment.md)（历史评估，非现行实现清单）。
+Sub-Agent 暂不进入运行时。启用门槛与安全边界以 `plan.md` 与代码为准（当前无 Sub-Agent 运行时路径）。
 
 ### 1. 独立 Node Agent 服务
 

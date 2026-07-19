@@ -13,7 +13,6 @@ When documents disagree, use this order:
 4. **`docs/STATUS.md`** — living gap board vs `plan.md` §32 (must match code reality).
 5. **`docs/evidence/`** — dated gate runs; evidence supports STATUS, never replaces it.
 6. **Code** — if STATUS and code diverge, code wins and STATUS must be fixed in the same change set.
-7. **`docs/archive/`** — historical only; never normative.
 
 `docs/review-deferred-items.md` is a **non-blocking debt** board. It must not hide open P0 acceptance items (those belong in STATUS only).
 
@@ -30,17 +29,13 @@ When documents disagree, use this order:
 | `review-deferred-items.md` | Non-blocking follow-ups | Never park severe P0 here |
 | `adr/*` | Architecture Decision Records | New ADR when a plan-compatible decision is locked |
 | `runbooks/*` | Operational procedures | Update when ops steps change |
-| `archive/*` | Superseded designs, process notes, old field lists | Read-only history |
 
-## Superseded trackers
+## Active ADRs
 
-| Former path | Status |
-|-------------|--------|
-| `docs/refactor-follow-up.md` | **Superseded by `STATUS.md`**. Kept as a stub pointer. |
-| `docs/field-issues-and-evolution-requirements.md` | Archived |
-| `docs/next-iteration-2026-07-11.md` | Archived (pre-plan) |
-| `docs/sub-agent-assessment.md` | Archived (referenced from architecture if needed) |
-| `docs/pr05-session-recovery.md`, `docs/pr13-deletion-evidence.md` | Archived under `archive/process/` |
+| ADR | Topic |
+|-----|-------|
+| [0001](./adr/0001-pi-coding-agent-sdk.md) | Adopt upstream `pi-coding-agent` SDK |
+| [0004](./adr/0004-session-persistent-tmp.md) | Agent Session–private persistent `/tmp` |
 
 ## How to close an acceptance item
 

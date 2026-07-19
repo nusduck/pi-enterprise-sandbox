@@ -10,7 +10,7 @@ vulnerabilities or unfinished PR-07 security work here.
 
 | Item | Closure evidence |
 | --- | --- |
-| PR-05 worker-default documentation lag | `docs/archive/process/pr05-session-recovery.md` now matches `createWorkerServices` → `ensureWorkerRunExecutorFactory`; the stub remains non-production/test-only. |
+| PR-05 worker-default documentation lag | `createWorkerServices` → `ensureWorkerRunExecutorFactory`; the stub remains non-production/test-only. |
 | plan §8.15 artifact unique key lag | The DDL now documents the migration's full-path `relative_path_hash` generated column and `UNIQUE(run_id, relative_path_hash, sha256)`, including the mandatory raw-path comparison. |
 | `SANDBOX_MAX_OPEN_FILES` operator catalog | `.env.example`, base Compose, and the README execution-limit table now expose the implemented default `256`; production validation still enforces `16..65536`. |
 | Agent/worker runtime env parity | Base Compose now gives both services the same model, prompt, MCP/profile, approval, skill, stream, and Sandbox policy knobs. The production overlay explicitly pins worker policy/isolation to the same strict values as the HTTP agent; HTTP-only A2A/listen/migration keys remain intentionally separate. |
@@ -50,7 +50,6 @@ vulnerabilities or unfinished PR-07 security work here.
 | Per-child controlled egress proxy | Production rejects `allowlist`; no netns+proxy path yet | None while production is `disabled` only | Safe package installs / selective egress without container-wide firewall | Design + implement proxy; then re-enable production allowlist |
 | Dev allowlist/unrestricted peer reachability | Dev modes share container net on `backend_internal`; children can reach peer service IPs | Dev-only | Convenience for local tooling | Keep prod disabled; optional stricter dev unshare |
 | Remove legacy iptables env from local `.env` | Operators may still have `SANDBOX_IPTABLES_*` / `SANDBOX_ALLOWED_CIDRS` in private `.env` (ignored) | None | Cleaner operator env | Manual cleanup; not committed |
-| Archive / field docs still mention iptables | `docs/archive/*`, some field-issue rows | None (archive) | Historical accuracy | Optional archive note; no code path |
 | README/deployment long-form network runbook | Core tables updated; deeper diagrams may lag | Low | Operator education | Follow-up docs PR |
 | Live MySQL dual-write for process_executions | ProcessManager dual-writes via injected formal port; offline uses FakeFormalProcessRepository | Medium until staging MySQL plane proves create/update under owner scope | Full multi-tenant process ledger in shared MySQL | Staging gate with real MySQL + sandbox plane enabled |
 | Process stream logs on durable disk (not only memory + snapshot columns) | Cursor reads use StreamLogBuffer + DB snapshot/chunk fallback; no separate rotating files yet | Low while log caps are enforced | Cheaper huge-output retention | Optional stdout_path/stderr_path file sinks under session temp |
