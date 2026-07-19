@@ -210,18 +210,32 @@ export function normalizeToRuntimeEvent(
     };
   }
 
-  // Already a RuntimeEvent
+  // Already a RuntimeEvent — but only if payload is real. History/SSE often
+  // carry the same envelope keys with message content still in `data` / nested
+  // `message`. An empty default payload must not short-circuit that path.
   const direct = parseRuntimeEvent(obj);
   if (direct && direct.event_id && direct.run_id && typeof direct.sequence === 'number') {
-    return {
-      ...direct,
-      type: mapPlatformEventType(String(direct.type)),
-      payload: normalizePayload(
-        mapPlatformEventType(String(direct.type)),
-        direct.payload || {},
-        direct.event_id,
-      ),
-    };
+    const hasNestedContent =
+      isPlainObject(obj.data) ||
+      isPlainObject(obj.payload) ||
+      isPlainObject(obj.message) ||
+      obj.delta != null ||
+      obj.text != null ||
+      obj.role != null ||
+      obj.status != null;
+    const directPayload = direct.payload || {};
+    if (!hasNestedContent || Object.keys(directPayload).length > 0) {
+      return {
+        ...direct,
+        type: mapPlatformEventType(String(direct.type)),
+        payload: normalizePayload(
+          mapPlatformEventType(String(direct.type)),
+          directPayload,
+          direct.event_id,
+        ),
+      };
+    }
+    // Fall through to platform envelope extraction using data/message bags.
   }
 
   // Platform envelope (camelCase)

@@ -470,8 +470,11 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         await streamRunEvents(
           runId,
           (envelope) => {
-            const event = (envelope as unknown as { event?: SSEEvent }).event || envelope;
-            applySSE(event, generation, runId as string);
+            // Keep the BFF relay envelope `{ sequence, event, ts }` intact.
+            // Stripping to `envelope.event` drops sequence/event_id and the
+            // reducer then treats every frame as sequence 0 (duplicate) so the
+            // assistant bubble never updates during a live run.
+            applySSE(envelope, generation, runId as string);
           },
           { signal: abortCtrl.signal },
         );

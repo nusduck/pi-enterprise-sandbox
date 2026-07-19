@@ -32,14 +32,78 @@ function isArchived(row) {
   return row?.archivedAt != null || String(row?.status || '').toLowerCase() === 'archived';
 }
 
-export function presentConversation(row) {
+/**
+ * Extract display text from messages.content_json for browser transcript.
+ * Skips pi_journal_* system rows; surfaces user turns and assistant text.
+ */
+export function presentTranscriptMessage(msg) {
+  if (!msg || typeof msg !== 'object') return null;
+  const role = String(msg.role || '').toLowerCase();
+  if (role !== 'user' && role !== 'assistant') return null;
+  const messageType = String(msg.messageType || msg.message_type || '').toLowerCase();
+  if (messageType.startsWith('pi_journal')) return null;
+
+  const content = msg.contentJson ?? msg.content_json ?? {};
+  let text = '';
+  if (typeof content === 'string') {
+    text = content;
+  } else if (content && typeof content === 'object') {
+    if (typeof content.text === 'string') {
+      text = content.text;
+    } else if (Array.isArray(content.messages)) {
+      // Create-run user row stores { messages: [{ role, content }] }
+      const first = content.messages.find((m) => m && typeof m === 'object') || content.messages[0];
+      if (first) {
+        if (typeof first.content === 'string') text = first.content;
+        else if (Array.isArray(first.content)) {
+          text = first.content
+            .map((p) =>
+              typeof p === 'string'
+                ? p
+                : p && typeof p === 'object' && typeof p.text === 'string'
+                  ? p.text
+                  : '',
+            )
+            .filter(Boolean)
+            .join('');
+        }
+      }
+    } else if (Array.isArray(content.content)) {
+      text = content.content
+        .map((p) =>
+          typeof p === 'string'
+            ? p
+            : p && typeof p === 'object' && typeof p.text === 'string'
+              ? p.text
+              : '',
+        )
+        .filter(Boolean)
+        .join('');
+    }
+  }
+  // Empty assistant placeholders (tool-only turns) still surface as empty bubbles
+  // only when we have no text; skip pure empty assistant rows without content.
+  if (role === 'assistant' && !String(text || '').trim()) return null;
+
+  return {
+    id: msg.messageId || msg.message_id || null,
+    role,
+    content: [{ type: 'text', text: String(text || '') }],
+    created_at: msg.createdAt || msg.created_at || null,
+  };
+}
+
+export function presentConversation(row, messages = []) {
+  const transcript = Array.isArray(messages)
+    ? messages.map(presentTranscriptMessage).filter(Boolean)
+    : [];
   return {
     id: row.conversationId,
     title: row.title || 'New chat',
     sandbox_session_id: null,
     agent_session_id: row.currentAgentSessionId ?? null,
     workspace_id: null,
-    messages: [],
+    messages: transcript,
     created_at: row.createdAt,
     updated_at: row.updatedAt,
     status: row.status,
@@ -114,7 +178,19 @@ export class ConversationService {
         id,
       });
     }
-    return presentConversation(row);
+    // Browser refresh uses GET conversation.messages as the durable transcript
+    // floor (event rehydrate still supplies tools/process/artifacts).
+    let messages = [];
+    try {
+      if (typeof repos.messages?.listByConversation === 'function') {
+        messages = await repos.messages.listByConversation(id, owner, {
+          limit: 500,
+        });
+      }
+    } catch {
+      messages = [];
+    }
+    return presentConversation(row, messages);
   }
 
   async create(auth, input = {}) {
