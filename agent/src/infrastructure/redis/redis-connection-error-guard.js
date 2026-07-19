@@ -18,7 +18,7 @@
  * - Never log DSNs or password material.
  */
 
-import { redactSecretText } from '../../../lib/text-redaction.js';
+import { redactSecretText } from '../../lib/text-redaction.js';
 
 /** @type {WeakSet<object>} */
 const attachedClients = new WeakSet();

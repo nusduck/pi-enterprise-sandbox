@@ -319,7 +319,7 @@ export function resolveRegistryPath(env = process.env) {
   }
   // Prefer repo config when running from source tree.
   const candidates = [
-    join(__dirname, '../../config/agent/model-registry.json'),
+    join(__dirname, '../../../config/agent/model-registry.json'),
     join(process.cwd(), 'config/agent/model-registry.json'),
     join(process.cwd(), '../config/agent/model-registry.json'),
   ];

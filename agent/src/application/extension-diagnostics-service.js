@@ -5,9 +5,9 @@
 
 import path from 'node:path';
 
-import { listInstalledSkills } from '../../skills/install.js';
-import { validateSkillPackage } from '../../skills/validator.js';
-import { buildRegistry } from '../../services/model-registry.js';
+import { listInstalledSkills } from '../skills/install.js';
+import { validateSkillPackage } from '../skills/validator.js';
+import { buildRegistry } from '../infrastructure/model-registry.js';
 import {
   ENTERPRISE_DEFAULT_TOOLS,
   ENTERPRISE_EXTENSION_NAMES,

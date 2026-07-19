@@ -418,7 +418,7 @@ export class ServiceContainer {
         '../infrastructure/pi/pi-runtime-factory.js'
       );
       const { resolveModel, toPiModel } = await import(
-        '../../services/model-registry.js'
+        '../infrastructure/model-registry.js'
       );
       const bound = bindAgentVersionConfig(agentVersion);
       if (bound.model) {
@@ -811,7 +811,7 @@ export class ServiceContainer {
         });
       } else {
         const { createSandboxClient } = await import(
-          '../../infrastructure/sandbox-client.js'
+          '../infrastructure/sandbox/sandbox-client.js'
         );
         const internalKeyring = String(
           this.env.SANDBOX_INTERNAL_HMAC_KEYRING || '',

@@ -7,7 +7,7 @@
  * Session binding: payload.identity.sandboxSessionId (required by bridge).
  */
 
-import { createSandboxClient } from '../../../infrastructure/sandbox-client.js';
+import { createSandboxClient } from './sandbox-client.js';
 import { createEnterpriseExtensionBundle } from '../../extensions/index.js';
 import { SANDBOX_TRANSPORT_METHODS } from '../../extensions/sandbox-bridge/transport.js';
 import { normalizeProcessStatus } from '../../domain/process-status.js';

@@ -7,12 +7,12 @@ import {
   isUnderSkillRoot,
   normalizeSkillRoots,
   resolveSkillPath,
-} from '../skills/paths.js';
-import { resolveSkillRoots } from '../skills/manager.js';
+} from '../src/skills/paths.js';
+import { resolveSkillRoots } from '../src/skills/manager.js';
 import {
   LOGICAL_SKILL_ROOTS,
   redactEmbeddedHostPaths,
-} from '../lib/text-redaction.js';
+} from '../src/lib/text-redaction.js';
 
 const CANONICAL_SKILL_ROOT = '/home/sandbox/skill';
 const REMOVED_COMPATIBILITY_ROOTS = ['/sandbox/skills', '/app/.pi/skills'];

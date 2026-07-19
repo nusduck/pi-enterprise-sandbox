@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { summarizeToolArguments } from '../runtime/tool-payload-sanitizer.js';
+import { summarizeToolArguments } from '../src/runtime/tool-payload-sanitizer.js';
 
 test('bounds generic tool ledger arguments without retaining content or secrets', () => {
   const summary = summarizeToolArguments('write', {

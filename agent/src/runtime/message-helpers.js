@@ -1,7 +1,7 @@
 /**
  * Message extract / history helpers for multi-turn agent transcript restore.
  */
-import { config } from '../config.js';
+import { config } from '../../config.js';
 import { extractMessageAttachments } from './attachment-context.js';
 
 /** Cap restored turns to keep context bounded. */

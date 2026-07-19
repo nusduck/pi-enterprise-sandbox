@@ -3,7 +3,7 @@
  * Never store secrets, full DSNs, or unbounded stacks.
  */
 
-import { redactSecretText } from '../../../lib/text-redaction.js';
+import { redactSecretText } from '../../lib/text-redaction.js';
 import { LAST_ERROR_MAX_LEN } from './outbox-status.js';
 
 /**

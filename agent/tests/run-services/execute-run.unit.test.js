@@ -397,7 +397,10 @@ describe('ExecuteRunService', () => {
       workerId: 'w1',
     });
     assert.equal(result.status, RUN_STATUS.FAILED);
-    assert.match(String(world.tables.runs[0].status_reason), /password=\*\*\*/);
+    assert.match(
+      String(world.tables.runs[0].status_reason),
+      /password=(?:\*\*\*|\[REDACTED\])/,
+    );
   });
 
   it('waiting outcome transitions to WAITING_APPROVAL', async () => {

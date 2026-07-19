@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createSandboxClient } from '../infrastructure/sandbox-client.js';
+import { createSandboxClient } from '../src/infrastructure/sandbox/sandbox-client.js';
 
 test('command and process wait HTTP bounds follow the declared operation timeout', async () => {
   const originalFetch = globalThis.fetch;

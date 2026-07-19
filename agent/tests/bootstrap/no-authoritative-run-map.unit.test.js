@@ -105,6 +105,13 @@ const TRANSIENT_MAP_WHITELIST = Object.freeze([
       'Function-local HMAC keyring decode (kid → key bytes); auth material, not Run state',
     scope: 'local',
   },
+  {
+    rel: 'infrastructure/model-registry.js',
+    match: /const\s+map\s*=\s*new\s+Map\s*\(/,
+    purpose:
+      'Function-local model id → entry index while building registry snapshot; not Run authority',
+    scope: 'local',
+  },
 ]);
 
 function walkJs(dir, acc = []) {
@@ -285,10 +292,10 @@ describe('no authoritative in-process Run Map (B3)', () => {
       `stale whitelist entries (Map removed/renamed — update inventory):\n${stale.join('\n')}`,
     );
 
-    // Inventory size sanity: known audit at B3 closeout is 11 residual Maps.
+    // Inventory size sanity: B3 closeout 11 + model-registry relocated under src.
     assert.equal(
       TRANSIENT_MAP_WHITELIST.length,
-      11,
+      12,
       'whitelist size drift — update STATUS B3 inventory evidence if intentional',
     );
   });
@@ -320,11 +327,11 @@ describe('no authoritative in-process Run Map (B3)', () => {
     }
   });
 
-  it('legacy agent/services/approval-waiter Maps stay outside agent/src production graph', () => {
+  it('legacy agent/legacy/approval-waiter Maps stay outside agent/src production graph', () => {
     // Documented residual outside shipped agent/src: module-level Maps in the
     // legacy services tree. Production bootstrap must not import them (covered
     // above). This assertion pins the file still exists as legacy-only.
-    const legacy = path.join(root, 'services/approval-waiter.js');
+    const legacy = path.join(root, 'legacy/approval-waiter.js');
     if (!fs.existsSync(legacy)) {
       // If removed entirely, B3 is strictly stronger — pass.
       return;

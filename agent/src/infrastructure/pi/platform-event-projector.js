@@ -10,7 +10,7 @@
  */
 
 import { createHash } from 'node:crypto';
-import { redactSecretText } from '../../../lib/text-redaction.js';
+import { redactSecretText } from '../../lib/text-redaction.js';
 
 export const PROJECTOR_EVENT_TYPES = Object.freeze([
   'message.delta',

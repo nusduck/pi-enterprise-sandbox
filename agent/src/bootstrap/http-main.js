@@ -130,7 +130,7 @@ export async function startHttpMain(env = process.env) {
 
   let sandboxHealthCheck = null;
   try {
-    const mod = await import('../../infrastructure/sandbox-client.js');
+    const mod = await import('../infrastructure/sandbox/sandbox-client.js');
     sandboxHealthCheck = () => mod.checkHealth();
   } catch {
     sandboxHealthCheck = null;
@@ -193,7 +193,7 @@ export async function startHttpMain(env = process.env) {
   let processAccessService = null;
   if (httpServices) {
     const { createSandboxClient } = await import(
-      '../../infrastructure/sandbox-client.js'
+      '../infrastructure/sandbox/sandbox-client.js'
     );
     processAccessService = new ProcessAccessService({
       createRepositories: httpServices.createRepositories,

@@ -11,11 +11,11 @@ import {
   modelSupportsVision,
   prepareImageContent,
   resolveImageMime,
-} from '../runtime/vision-images.js';
+} from '../src/runtime/vision-images.js';
 import {
   formatAttachmentPromptBlock,
   injectAttachmentContext,
-} from '../runtime/attachment-context.js';
+} from '../src/runtime/attachment-context.js';
 
 describe('vision-images', () => {
   it('modelSupportsVision reads registry input_modalities and pi input', () => {

@@ -21,7 +21,7 @@ import {
   resolveModel,
   toPiModel,
   usageFromProviderResponse,
-} from '../services/model-registry.js';
+} from '../src/infrastructure/model-registry.js';
 
 describe('normalizeModelEntry', () => {
   it('accepts full ADR field set', () => {

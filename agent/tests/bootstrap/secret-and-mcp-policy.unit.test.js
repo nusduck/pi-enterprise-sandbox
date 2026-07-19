@@ -12,7 +12,7 @@ import {
   redactInlineSecrets,
   projectPiEvent,
 } from '../../src/infrastructure/pi/platform-event-projector.js';
-import { redactSecretText } from '../../lib/text-redaction.js';
+import { redactSecretText } from '../../src/lib/text-redaction.js';
 import { sanitizeStatusReason } from '../../src/application/sanitize-status-reason.js';
 import { sanitizeOutboxError } from '../../src/infrastructure/outbox/sanitize-error.js';
 import { SANDBOX_TOOL_NAMES } from '../../src/extensions/sandbox-bridge/constants.js';

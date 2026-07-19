@@ -3,7 +3,7 @@
  * Never store secrets, DSNs, or raw stacks.
  */
 
-import { redactSecretText } from '../../lib/text-redaction.js';
+import { redactSecretText } from '../lib/text-redaction.js';
 
 export const STATUS_REASON_MAX_LEN = 255;
 

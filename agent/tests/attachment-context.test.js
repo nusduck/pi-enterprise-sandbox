@@ -8,8 +8,8 @@ import {
   extractMessageAttachments,
   formatAttachmentPromptBlock,
   injectAttachmentContext,
-} from '../runtime/attachment-context.js';
-import { toPersistableMessages } from '../runtime/message-helpers.js';
+} from '../src/runtime/attachment-context.js';
+import { toPersistableMessages } from '../src/runtime/message-helpers.js';
 
 describe('attachment context (B5)', () => {
   it('normalizeAttachment maps full ADR §4.5 fields', () => {

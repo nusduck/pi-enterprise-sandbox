@@ -12,8 +12,8 @@
  * - Server code may set acting headers after validating the user.
  */
 import { randomBytes } from 'node:crypto';
-import { config, resolveSandboxAuthHeader } from '../config.js';
-import { createTraceHeaders } from '../src/infrastructure/sandbox/trace-context.js';
+import { config, resolveSandboxAuthHeader } from '../../../config.js';
+import { createTraceHeaders } from './trace-context.js';
 
 const BASE = config.SANDBOX_BASE_URL;
 const REQUEST_GRACE_MS = 5_000;

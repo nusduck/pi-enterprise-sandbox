@@ -1,6 +1,6 @@
 import path from 'node:path';
 
-import { config } from '../config.js';
+import { config } from '../../config.js';
 
 const WINDOWS_ABSOLUTE_PATH = /^[A-Za-z]:[\\/]/;
 
