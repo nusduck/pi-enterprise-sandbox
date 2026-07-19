@@ -41,7 +41,7 @@ Change this file in the **same commit** as the implementation or evidence that j
 |----|-----------|--------|------------------|
 | B1 | MySQL sole fact authority | `done` | Knex schema + repos; Sandbox SQLite stack removed |
 | B2 | Redis runtime-only | `done` | architecture + compose; Outbox for durable events |
-| B3 | No in-process authoritative Run Map | `partial` | Structural grep test (`no-authoritative-run-map.unit.test.js`) asserts no process-global RunManager/runs Map authority under agent/src. Residual transient Maps allowed; full residual-cache audit still light. |
+| B3 | No in-process authoritative Run Map | `done` | Structural walk of `agent/src` (`no-authoritative-run-map.unit.test.js`): no RunManager / process-global runs Map; **11 residual `new Map(` inventoried** as instance/local/literal transient-only (dedupe, steer, MCP registry, codec, trace materialize, HMAC). Fail-closed whitelist. Legacy approval-waiter outside production graph. Evidence: `evidence/partial-b3-run-map-audit-2026-07-19.md`. |
 | B4 | No whole-Conversation messages JSON blob | `done` | append-only `messages` rows + triggers |
 | B5 | No dual Run state sources | `done` | Agent MySQL authority design |
 | B6 | Run Events ordered replay | `done` | `next_event_sequence` + MySQL gate in evidence |
@@ -56,7 +56,7 @@ Change this file in the **same commit** as the implementation or evidence that j
 | C4 | Concurrent session isolation | `done` | live sandbox gate in `evidence/release-gate-2026-07-19.md` |
 | C5 | Ordinary commands no approval | `done` | policy defaults; enterprise tools only |
 | C6 | Python multi-line auto-materialize | `done` | formal execution path + tests |
-| C7 | Long tasks via Process Handle | `partial` | formal process runtime present; live multi-host reclaim deferred |
+| C7 | Long tasks via Process Handle | `done` | Single-instance formal path: ProcessManager start/status/read/kill + dual-write + durable `die_with_parent=False`/`as_pid_1=True` (`tests/test_formal_process_handle.py` + orphan/identity/bwrap). Evidence: `evidence/partial-c7-process-handle-2026-07-19.md`. **Residual (non-blocking):** multi-host reclaim review-deferred — honest LOST on this host only. |
 | C8 | Dataset streams into Workspace | `done` | PR-09 path + live 5GiB gate evidence |
 
 ## D. Frontend
@@ -111,8 +111,8 @@ Change this file in the **same commit** as the implementation or evidence that j
 | H2 | Workspace path escape blocked | `done` | path validation + bwrap |
 | H3 | Skill tree not writable (exec side) | `done` | canonical RO `/home/sandbox/skill` |
 | H4 | Sandbox non-privileged | `done` | compose/prod constraints + gates |
-| H5 | Secrets not in model/logs/events | `partial` | Offline dual-path closed: shared `SECRET_PATTERNS` cover access/refresh/client_secret/Cookie/sk-*; durable status/outbox + Redis logs use `redactSecretText`. Evidence: `evidence/h5-h6-secrets-mcp-audit-2026-07-19.md`, `evidence/p1-h5-h6-offline-closeout-2026-07-19.md`. **Still open:** production/staging log + durable-row sampling. |
-| H6 | Business DB only via controlled MCP | `partial` | Offline structural: MCP via `pi-mcp-adapter` only; sandbox-bridge non-SQL tools; no extension SQL/DSN clients. Same evidence. **Still open:** deployment MCP allowlist audit + live no-business-SQL-tool gate. |
+| H5 | Secrets not in model/logs/events | `partial` | Offline dual-path closed (redaction + suite green). Ops residual checklist: `evidence/partial-h5-h6-ops-checklist-2026-07-19.md` (+ prior h5-h6 evidence). **Still open:** production/staging log + durable-row sampling under secret-bearing MCP load — no invented samples. |
+| H6 | Business DB only via controlled MCP | `partial` | Offline structural closed: MCP-only module set; enterprise tools = sandbox-bridge 10 + ask_user; tightened secret-and-mcp-policy. Same ops checklist. **Still open:** deployment `MCP_SERVERS_JSON` allowlist audit + live no-business-SQL-tool snapshot. |
 
 ---
 
@@ -128,10 +128,12 @@ Derived from open/partial rows that block “refactor complete”:
 | P1 | ~~Trace tree completeness (backend + frontend)~~ | D7, F6 | **done** — durable query + A2A audit correlation 2026-07-19 |
 | P1 | ~~Frontend refresh matrix sign-off~~ | D1, D5, D6 | **done** offline — durable-seq fix + rehydrate/process/approval matrix 2026-07-19 |
 | P1 | ~~Idempotency / create-race live gates~~ | G4, G5 | **done** — live 20-way CreateRun concurrent 2026-07-19 |
-| P1 | Secrets & MCP data-plane audit | H5, H6 | Offline dual-path redaction closed; **production sampling + deploy allowlist still open** |
+| P1 | Secrets & MCP data-plane audit | H5, H6 | Offline closed; ops checklist `evidence/partial-h5-h6-ops-checklist-2026-07-19.md`; **production sampling + deploy allowlist still open** |
 | P1 | ~~Split future work into reviewable commits~~ | n/a | **done** this session — STATUS-family commits on `codex/plan-acceptance` |
+| residual | ~~B3 residual Run Map audit~~ | B3 | **done** — fail-closed Map whitelist 2026-07-19 |
+| residual | ~~C7 single-instance Process Handle~~ | C7 | **done** — formal handle lifecycle offline; multi-host deferred |
 
-Non-blocking debt remains in [`review-deferred-items.md`](./review-deferred-items.md).
+Non-blocking debt remains in [`review-deferred-items.md`](./review-deferred-items.md). Remaining STATUS `partial`: **H5, H6** only (ops sampling).
 
 ---
 

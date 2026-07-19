@@ -125,3 +125,21 @@ Each entry should say **what changed**, **why**, and **which STATUS IDs** it aff
 - **Action:** Parent integrated four P1 subagent slices; STATUS board updated; additive evidence files; small commits by STATUS family.
 - **STATUS IDs:** D1/D5/D6/D7/F6/G4/G5 → `done`; H5/H6 → `partial` (honest residual).
 - **Subagents:** FE `019f79b3-0d3f-7e61-b219-d5d4536f2156`, Trace `019f79b3-0d44-7931-970c-40d6e2a049ad`, G4/G5 `019f79b3-0d44-7931-970c-40ea8cca7ed3`, H5/H6 `019f79b3-0d44-7931-970c-40f61649bd3b`.
+
+## 2026-07-19 — Partial closeout B3 residual Run Map (done)
+
+- **Action:** Expanded `no-authoritative-run-map.unit.test.js` to inventory every residual `new Map(` under `agent/src` with fail-closed whitelist (5 pass). Evidence `partial-b3-run-map-audit-2026-07-19.md`.
+- **STATUS IDs:** B3 → `done`.
+- **Subagent:** `019f79ce-4719-7dd1-8444-b22af9d390d1`.
+
+## 2026-07-19 — Partial closeout C7 Process Handle (done)
+
+- **Action:** Added `tests/test_formal_process_handle.py` driving real ProcessManager start/status/read/kill + formal dual-write + durable launch flags; offline suite 30 pass. Evidence `partial-c7-process-handle-2026-07-19.md`. Multi-host reclaim remains review-deferred residual.
+- **STATUS IDs:** C7 → `done`.
+- **Subagent:** `019f79ce-471a-7f41-849d-3c22b0bfffbc`.
+
+## 2026-07-19 — Partial residual H5/H6 ops checklist (partial)
+
+- **Action:** Re-ran H5/H6 suite green; tightened secret-and-mcp-policy enterprise-tool-plane structural test; committed ops sampling + MCP allowlist checklist as `partial-h5-h6-ops-checklist-2026-07-19.md`. No production samples invented.
+- **STATUS IDs:** H5/H6 remain `partial`.
+- **Subagent:** `019f79ce-471a-7f41-849d-3c380e81c76b`.
