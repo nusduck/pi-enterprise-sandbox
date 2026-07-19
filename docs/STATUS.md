@@ -63,13 +63,13 @@ Change this file in the **same commit** as the implementation or evidence that j
 
 | ID | Criterion | Status | Evidence / notes |
 |----|-----------|--------|------------------|
-| D1 | Refresh restores messages/tools/process/artifacts | `partial` | Conversation + WAITING_INPUT rehydrate tests extended (`conversation-rehydration.test.ts`); process/artifact event floor covered. Full browser UI matrix still open. |
+| D1 | Refresh restores messages/tools/process/artifacts | `done` | **2026-07-19 offline matrix:** rehydrateConversation restores messages/tools/process/artifacts; WAITING_INPUT via rehydrateInProgress. Fixed durable history seq + flat platform payloads (`agentEventAdapter`, `platformEventNormalize`). FE suite 200 pass. Evidence: `evidence/p1-fe-refresh-matrix-2026-07-19.md`. Residual non-blocking: browser F5 harness absent. |
 | D2 | Show Run status | `done` | run UI + SSE |
 | D3 | Cancel Run | `done` | controls + API |
 | D4 | Upload Dataset | `done` | upload tests + BFF proxy |
-| D5 | View Process output | `partial` | Process console + process routes; authority tests added |
-| D6 | Enterprise approval UX | `partial` | Extracted `resolveApprovalDecision` with unit tests; ApprovalsPage surfaces failed decisions without clearing pending. End-to-end browser UX audit still open. |
-| D7 | View Trace | `partial` | Trace panel + MySQL spans migrations; full distributed backend still light |
+| D5 | View Process output | `done` | Process entity→console logs; owner-scoped process API client paths; ProcessConsole structural UI. Evidence: `evidence/p1-fe-refresh-matrix-2026-07-19.md`. Residual: live open-console click. |
+| D6 | Enterprise approval UX | `done` | `resolveApprovalDecision` never marks on failed decide; pending remains decidable; ApprovalsPage failure banner contract. Evidence: `evidence/p1-fe-refresh-matrix-2026-07-19.md`. Residual: browser Approval Center audit. |
+| D7 | View Trace | `done` | Durable MySQL span projection + `TraceQueryService.listForRun` + BFF `/trace` authority + FE TracePanel rehydrate. Evidence: `evidence/p1-trace-audit-2026-07-19.md`. Residual: full OTEL backend productization out of scope. |
 | D8 | View Agent A2A config | `done` | `A2aPage` + BFF `/api/a2a` |
 
 ## E. Artifact
@@ -89,7 +89,7 @@ Change this file in the **same commit** as the implementation or evidence that j
 | F3 | Task query / cancel / resubscribe | `done` | live gate |
 | F4 | A2A Task ↔ Run mapping | `done` | task service + repos |
 | F5 | A2A SSE disconnect does not cancel Run | `done` | protocol design + gate notes |
-| F6 | org/client/trace auditable | `partial` | audit events present; trace correlation completeness TBD |
+| F6 | org/client/trace auditable | `done` | A2A audit append carries **org_id + client_id + trace_id** on send_message / cancel_task / artifact_download via real `A2aAuditRepository` (`a2a-audit-correlation.unit.test.js`). Evidence: `evidence/p1-trace-audit-2026-07-19.md`. |
 
 ## G. Reliability
 
@@ -98,8 +98,8 @@ Change this file in the **same commit** as the implementation or evidence that j
 | G1 | Browser disconnect: Run continues | `done` | SSE relay design; worker ownership |
 | G2 | Agent Worker restart recoverable | `done` | Offline classification covers lease-free replay, mid-tool UNKNOWN, WAITING_INPUT PENDING/RESOLVED/CLAIMED. **Live 2026-07-19:** full real-Pi Worker restart suite **5/5 PASS** (`agent-worker-pi-restart.release-gate.test.js`) + prior checkpoint/BullMQ gates in `evidence/release-gate-2026-07-19.md`. Evidence: `evidence/a4-g2-restart-matrix-2026-07-19.md`. Residual non-blocking: dedicated graceful SIGTERM mid-run drain gate not separate. |
 | G3 | Redis blip does not lose fact events | `done` | Outbox + Redis gate evidence |
-| G4 | Duplicate request no duplicate side effects | `partial` | Idempotency reload uses `FOR UPDATE` under CAS; MySQL client forces `jsonStrings=true` so JSON scalar responses stay wire-stable. Unit tests updated. Full live concurrent-create matrix still TBD. |
-| G5 | Create Run then immediate query race-free | `partial` | create-before-return design; live race gate TBD |
+| G4 | Duplicate request no duplicate side effects | `done` | Offline concurrent begin (same/different hash) + FOR UPDATE. **Live 2026-07-19:** 20-way same-key CreateRun on `pi_gate_20260719_g4g5` → 1 run / 1 message / 1 accepted / 1 outbox / 1 idempotency. Evidence: `evidence/p1-g4-g5-idempotency-2026-07-19.md`. |
+| G5 | Create Run then immediate query race-free | `done` | Offline: create txn held open until commit before return + immediate GET. **Live:** every concurrent response immediately GET-able ACCEPTED\|QUEUED. Same evidence doc. |
 | G6 | Durable WAITING_INPUT / interaction resume | `done` | **Unit:** interaction HTTP respond/rehydrate, GET `pending_input`, execute-run resume, cancel races (17 pass). **Live:** `agent-worker-pi-restart.release-gate.test.js` case *continues one durable interaction after Worker restart…* PASS on isolated MySQL/Redis/Sandbox (`pi_gate_20260719_g6int`, 2026-07-19): park → SIGKILL Worker A → rehydrateWaiting+respond → Worker B SUCCEEDED / APPLIED / 2 provider calls. Evidence: `evidence/g6-interaction-worker-restart-2026-07-19.md`. |
 | G7 | Hard `SIGKILL` orphan recovery in Bubblewrap | `done` | **Unit:** PID-namespace init, `--as-pid-1`, CAP_KILL, `tests/test_formal_orphan_recovery.py` + identity/bubblewrap (19 pass). **Live:** `scripts/release-gates/sandbox-live-gate.mjs` with `SANDBOX_GATE_HARD_KILL=1` + managed non-privileged Bubblewrap container PASS (`2026-07-19T08:54:17Z`): orphan survived service SIGKILL; after restart process → `lost` (OS orphan gone), claim → `UNKNOWN`/`CRASH_RECOVERY_UNKNOWN`, no auto-replay. Evidence: `evidence/g7-hard-kill-orphan-2026-07-19.md`. |
 
@@ -111,8 +111,8 @@ Change this file in the **same commit** as the implementation or evidence that j
 | H2 | Workspace path escape blocked | `done` | path validation + bwrap |
 | H3 | Skill tree not writable (exec side) | `done` | canonical RO `/home/sandbox/skill` |
 | H4 | Sandbox non-privileged | `done` | compose/prod constraints + gates |
-| H5 | Secrets not in model/logs/events | `partial` | Offline 2026-07-19: MCP/projector/bridge/ledger redaction; `status_reason` + outbox `last_error` use shared `redactSecretText` (fixed offset-as-capture bug); secret-and-mcp-policy + mcp-seam + projector + outbox units **57 pass**. Evidence: `evidence/h5-h6-secrets-mcp-audit-2026-07-19.md`. **Still open:** production log + durable event sampling. |
-| H6 | Business DB only via controlled MCP | `partial` | Offline structural 2026-07-19: MCP via `pi-mcp-adapter` only; sandbox-bridge exact 10 non-SQL tools; no extension SQL/DSN clients; plaintext MCP secrets forbidden. Same evidence doc. **Still open:** deployment allowlist audit + live no-business-SQL-tool gate. |
+| H5 | Secrets not in model/logs/events | `partial` | Offline dual-path closed: shared `SECRET_PATTERNS` cover access/refresh/client_secret/Cookie/sk-*; durable status/outbox + Redis logs use `redactSecretText`. Evidence: `evidence/h5-h6-secrets-mcp-audit-2026-07-19.md`, `evidence/p1-h5-h6-offline-closeout-2026-07-19.md`. **Still open:** production/staging log + durable-row sampling. |
+| H6 | Business DB only via controlled MCP | `partial` | Offline structural: MCP via `pi-mcp-adapter` only; sandbox-bridge non-SQL tools; no extension SQL/DSN clients. Same evidence. **Still open:** deployment MCP allowlist audit + live no-business-SQL-tool gate. |
 
 ---
 
@@ -125,11 +125,11 @@ Derived from open/partial rows that block “refactor complete”:
 | P0 | ~~Finish durable interaction end-to-end + restart/refresh evidence~~ | G6 | **done** — live worker-restart gate + evidence 2026-07-19 |
 | P0 | ~~Hard SIGKILL orphan recovery in production Bubblewrap~~ | G7 | **done** — live hard-kill managed gate + evidence 2026-07-19 |
 | P0 | ~~Worker/model restart matrix completeness~~ | A4, G2 | **done** — full real-Pi restart suite 5/5 live + offline matrix 2026-07-19 |
-| P1 | Trace tree completeness (backend + frontend) | D7, F6 | Trace query + UI verification |
-| P1 | Frontend refresh matrix sign-off | D1, D5, D6 | Scripted refresh scenarios |
-| P1 | Idempotency / create-race live gates | G4, G5 | Live MySQL concurrent create |
-| P1 | Secrets & MCP data-plane audit | H5, H6 | Structural offline audit + unit green 2026-07-19 (`evidence/h5-h6-secrets-mcp-audit-2026-07-19.md`); production sampling + deploy allowlist still open |
-| P1 | Split future work into reviewable commits | n/a | Process: no more mega-commits on this branch |
+| P1 | ~~Trace tree completeness (backend + frontend)~~ | D7, F6 | **done** — durable query + A2A audit correlation 2026-07-19 |
+| P1 | ~~Frontend refresh matrix sign-off~~ | D1, D5, D6 | **done** offline — durable-seq fix + rehydrate/process/approval matrix 2026-07-19 |
+| P1 | ~~Idempotency / create-race live gates~~ | G4, G5 | **done** — live 20-way CreateRun concurrent 2026-07-19 |
+| P1 | Secrets & MCP data-plane audit | H5, H6 | Offline dual-path redaction closed; **production sampling + deploy allowlist still open** |
+| P1 | ~~Split future work into reviewable commits~~ | n/a | **done** this session — STATUS-family commits on `codex/plan-acceptance` |
 
 Non-blocking debt remains in [`review-deferred-items.md`](./review-deferred-items.md).
 

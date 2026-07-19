@@ -95,3 +95,33 @@ Each entry should say **what changed**, **why**, and **which STATUS IDs** it aff
 - **Why:** plan.md §32 P0 acceptance board for this session.
 - **STATUS IDs:** G6, G7, A4, G2 → `done`; H5/H6 remain `partial` with stronger offline proof.
 - **Subagents:** G7 `019f7991-286c-7ee3-948e-8124c5a29cab`, G6 `019f7991-286d-7c02-acbc-e045b63e6a26`, A4/G2 `019f7991-286d-7c02-acbc-e0543771a9f8`, H5/H6 `019f799e-7935-7b11-a5a6-7c822961a9ab`.
+
+## 2026-07-19 — P1 D1/D5/D6 FE refresh matrix (done)
+
+- **Action:** Fixed history replay durable sequence + flat platform payload promotion; extended rehydrate/process/approval tests. FE suite 200 pass. Evidence `p1-fe-refresh-matrix-2026-07-19.md`.
+- **STATUS IDs:** D1/D5/D6 → `done`. Residual: browser F5 harness absent.
+- **Subagent:** `019f79b3-0d3f-7e61-b219-d5d4536f2156`.
+
+## 2026-07-19 — P1 D7/F6 trace + A2A audit (done)
+
+- **Action:** Added `trace-query.unit.test.js` + `a2a-audit-correlation.unit.test.js`; extended FE TracePanel projected-span render. Evidence `p1-trace-audit-2026-07-19.md`.
+- **STATUS IDs:** D7/F6 → `done`.
+- **Subagent:** `019f79b3-0d44-7931-970c-40d6e2a049ad`.
+
+## 2026-07-19 — P1 G4/G5 live concurrent CreateRun (done)
+
+- **Action:** Strengthened offline concurrent begin + G5 hold-txn tests; live 20-way same-key CreateRun on `pi_gate_20260719_g4g5` PASS. Evidence `p1-g4-g5-idempotency-2026-07-19.md`.
+- **STATUS IDs:** G4/G5 → `done`.
+- **Subagent:** `019f79b3-0d44-7931-970c-40ea8cca7ed3`.
+
+## 2026-07-19 — P1 H5/H6 offline dual-path redaction (partial)
+
+- **Action:** Expanded shared SECRET_PATTERNS (compound tokens/Cookie/sk-*); Redis log sanitizer routes through redactSecretText; extended units. Evidence `p1-h5-h6-offline-closeout-2026-07-19.md`.
+- **STATUS IDs:** H5/H6 remain `partial` (production sampling + deploy allowlist open).
+- **Subagent:** `019f79b3-0d44-7931-970c-40f61649bd3b`.
+
+## 2026-07-19 — P1 session close-out
+
+- **Action:** Parent integrated four P1 subagent slices; STATUS board updated; additive evidence files; small commits by STATUS family.
+- **STATUS IDs:** D1/D5/D6/D7/F6/G4/G5 → `done`; H5/H6 → `partial` (honest residual).
+- **Subagents:** FE `019f79b3-0d3f-7e61-b219-d5d4536f2156`, Trace `019f79b3-0d44-7931-970c-40d6e2a049ad`, G4/G5 `019f79b3-0d44-7931-970c-40ea8cca7ed3`, H5/H6 `019f79b3-0d44-7931-970c-40f61649bd3b`.
