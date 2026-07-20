@@ -105,6 +105,11 @@ describe('createInternalExecutionTransport', () => {
     assert.equal(calls.length, 1);
     assert.equal(calls[0].url, `http://127.0.0.1:8081${BASH_EXECUTION_HTU}`);
     assert.equal(calls[0].init.method, 'POST');
+    assert.equal(
+      calls[0].init.headers['content-length'],
+      undefined,
+      'undici derives Content-Length from the Buffer body',
+    );
     assert.deepEqual(JSON.parse(Buffer.from(calls[0].init.body).toString()), input);
     const bodySha256 = createHash('sha256')
       .update(calls[0].init.body)

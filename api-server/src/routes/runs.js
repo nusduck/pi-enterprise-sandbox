@@ -75,6 +75,16 @@ export function presentRunDetail(persisted, live, runtimeAvailable) {
     toIsoTimestamp(liveObj?.created_at) ?? toIsoTimestamp(base.created_at);
   body.updated_at =
     toIsoTimestamp(liveObj?.updated_at) ?? toIsoTimestamp(base.updated_at);
+  // Agent's durable failure reason is exposed as status_reason/statusReason.
+  // The frontend Run detail contract uses `error`, so preserve the reason
+  // rather than replacing a real provider/runtime failure with "Run failed".
+  body.error =
+    body.error ??
+    liveObj?.status_reason ??
+    liveObj?.statusReason ??
+    base.status_reason ??
+    base.statusReason ??
+    null;
   return body;
 }
 

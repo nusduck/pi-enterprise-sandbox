@@ -206,6 +206,33 @@ describe('createSandboxBridgeHttpTransport', () => {
     assert.equal(legacyCalls.some((call) => call.m === 'writeFile'), true);
   });
 
+  it('readSkill uses the signed internal skill transport', async () => {
+    const internalCalls = [];
+    const t = createSandboxBridgeHttpTransport({
+      client: createFakeClient([]),
+      internalReadTransport: {
+        async readFile() {
+          throw new Error('workspace read must not be used for a skill');
+        },
+        async readSkill(input) {
+          internalCalls.push(input);
+          return { content: '# Skill', path: input.path, binary: false };
+        },
+      },
+    });
+    const input = payload({
+      path: '/home/sandbox/skill/baoyu-format-markdown/SKILL.md',
+      offset: 0,
+      limit: 512,
+    });
+
+    const out = await t.readSkill(input);
+
+    assert.equal(internalCalls.length, 1);
+    assert.equal(internalCalls[0], input);
+    assert.equal(out.content, '# Skill');
+  });
+
   it('write/edit use injected formal transport and never call legacy client', async () => {
     const legacyCalls = [];
     const internalCalls = [];

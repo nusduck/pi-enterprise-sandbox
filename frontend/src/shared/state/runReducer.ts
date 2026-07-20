@@ -364,6 +364,16 @@ export function reduceRuntimeEvent(
       break;
     }
 
+    case 'run.cancelled': {
+      next = touchRun(next, runId, {
+        status: 'cancelled',
+        error: str(payload.message || payload.error) || null,
+        finishedAt: ts,
+        pendingInput: null,
+      });
+      break;
+    }
+
     case 'message.started': {
       // Default assistant only when role is omitted; never mint chat rows for toolResult.
       const startedRole = normalizeChatMessageRole(

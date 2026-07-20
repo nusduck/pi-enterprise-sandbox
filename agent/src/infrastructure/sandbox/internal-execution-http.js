@@ -483,7 +483,6 @@ export function createInternalExecutionTransport(options) {
         headers: {
           Authorization: `Bearer ${token}`,
           'content-type': 'application/json',
-          'content-length': String(bodyBytes.byteLength),
           ...createTraceHeaders(normalized.identity.traceId, {
             randomBytes: options.spanRandomBytes,
             traceState: options.traceState,

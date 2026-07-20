@@ -112,7 +112,9 @@ export function createInternalSessionProvisioner(options) {
       const headers = {
         authorization: `Bearer ${token}`,
         'content-type': 'application/json',
-        'content-length': String(body.byteLength),
+        // Let undici derive this from the Buffer. Explicit Content-Length can
+        // be rejected with UND_ERR_INVALID_ARG on certain Node/undici paths;
+        // body_sha256 above still binds the exact bytes sent to Sandbox.
         ...createTraceHeaders(identity.traceId, {
           randomBytes: options.spanRandomBytes,
           traceState: identity.traceState,

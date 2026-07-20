@@ -54,6 +54,11 @@ describe('internal session HTTP transport', () => {
       captured.init.body.toString('utf8'),
       JSON.stringify({ workspaceId: INPUT.workspaceId }),
     );
+    assert.equal(
+      captured.init.headers['content-length'],
+      undefined,
+      'undici derives Content-Length from the Buffer body',
+    );
     const token = captured.init.headers.authorization.slice('Bearer '.length);
     const claims = verifyInternalToken(token, {
       keyring: KEYRING,

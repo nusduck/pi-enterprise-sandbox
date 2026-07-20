@@ -152,6 +152,19 @@ test('presentRunDetail falls back to persisted timestamps when live is invalid',
   assert.equal(detail.updated_at, PERSISTED_ISO.updated_at);
 });
 
+test('presentRunDetail maps the durable Agent failure reason to the public error field', () => {
+  const detail = presentRunDetail(
+    { run_id: 'r3', status: 'failed' },
+    {
+      run_id: 'r3',
+      status: 'failed',
+      status_reason: 'Pi runtime completed with assistant stopReason=error: quota exhausted',
+    },
+    true,
+  );
+  assert.equal(detail.error, 'Pi runtime completed with assistant stopReason=error: quota exhausted');
+});
+
 test('GET Run fails closed 404 when Agent has no owner-scoped run', async () => {
   const res = responseCapture();
   await handleGetRun('run_missing', res, { headers: {}, traceId: 'a'.repeat(32) });

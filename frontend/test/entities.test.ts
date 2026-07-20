@@ -156,6 +156,39 @@ describe('run event reducer', () => {
     assert.ok(isTerminalRunStatus(s.runsById.run_a.status));
   });
 
+  it('projects the durable run.cancelled event as a terminal cancelled run', () => {
+    let s = createEntityStore();
+    s = reduceRuntimeEvent(
+      s,
+      ev({
+        event_id: 'cancel-1',
+        sequence: 1,
+        run_id: 'run_cancelled',
+        type: 'run.started',
+      }),
+    ).store;
+
+    s = reduceRuntimeEvent(
+      s,
+      ev({
+        event_id: 'cancel-2',
+        sequence: 2,
+        run_id: 'run_cancelled',
+        type: 'run.cancelled',
+        timestamp: '2026-07-20T15:03:01.117Z',
+        payload: { message: 'Stopped by user' },
+      }),
+    ).store;
+
+    assert.equal(s.runsById.run_cancelled.status, 'cancelled');
+    assert.equal(s.runsById.run_cancelled.error, 'Stopped by user');
+    assert.equal(
+      s.runsById.run_cancelled.finishedAt,
+      '2026-07-20T15:03:01.117Z',
+    );
+    assert.ok(isTerminalRunStatus(s.runsById.run_cancelled.status));
+  });
+
   it('dedupes by event_id and sequence', () => {
     let s = createEntityStore();
     const event = ev({

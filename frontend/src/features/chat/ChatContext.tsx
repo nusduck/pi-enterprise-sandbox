@@ -473,6 +473,34 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         });
         if (!created.run_id) throw new Error('Run response is missing run_id');
         runId = created.run_id;
+
+        // A first turn has no client-side conversation/session yet. The create
+        // response is therefore authoritative for the identity that subsequent
+        // turns must reuse. Relying on a legacy `session` SSE event left these
+        // fields null when the durable run stream only emitted platform events,
+        // so every send after the first silently created a new conversation.
+        const createdConversationId = created.conversation_id || cur.conversationId;
+        const createdSessionId = created.session_id || currentSessionId();
+        if (createdConversationId || createdSessionId) {
+          setState((s) => {
+            // A user may have detached to another conversation while this
+            // asynchronous create request was in flight. Do not steal focus
+            // back from that newer UI generation.
+            if (!isActiveGeneration(s, generation)) return s;
+            const next = update(s, {
+              ...(createdConversationId
+                ? { conversationId: createdConversationId }
+                : {}),
+              ...(createdSessionId ? { sessionId: createdSessionId } : {}),
+            });
+            stateRef.current = next;
+            return next;
+          });
+          if (createdConversationId) {
+            persistConversationId(createdConversationId);
+            bridge.focusConversation(createdConversationId);
+          }
+        }
         // Stamp the optimistic user message with run id for stable ordering.
         setState((s) => {
           const messages = [...s.messages];
@@ -486,9 +514,9 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         });
         bridge.beginRun({
           runId: created.run_id,
-          conversationId: created.conversation_id || cur.conversationId,
+          conversationId: createdConversationId,
           agentSessionId: created.agent_session_id || null,
-          sessionId: created.session_id || currentSessionId(),
+          sessionId: createdSessionId,
         });
         bridge.attachTransport(runId, abortCtrl);
         await streamRunEvents(

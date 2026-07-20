@@ -1094,6 +1094,18 @@ export class PiRunExecutor {
         };
       }
 
+      // `AgentSession.prompt()` can resolve even when the provider/runtime
+      // records a terminal assistant message with `stopReason: "error"`.
+      // Treating that state as a normal completion caused the durable Run to
+      // be marked SUCCEEDED with no assistant answer. Inspect only entries
+      // created by this prompt so an error in recovered history cannot poison
+      // a later successful turn.
+      const runtimeTerminal = this.#terminalOutcomeFromNewAssistantEntries(
+        payload,
+        priorEntryIds,
+      );
+      if (runtimeTerminal) return runtimeTerminal;
+
       return { outcome: RUN_STATUS.SUCCEEDED, statusReason: null };
     } catch (err) {
       if (err instanceof SessionRecoveryRequiredError) {
@@ -1495,6 +1507,58 @@ export class PiRunExecutor {
   #looksLikeUncertainSideEffect(err) {
     const msg = String(/** @type {Error} */ (err)?.message || err || '');
     return /side.?effect|tool.*uncertain|partial.*tool|mid-tool/i.test(msg);
+  }
+
+  /**
+   * Pi reports some terminal runtime failures in an assistant entry instead
+   * of rejecting `session.prompt()`. Convert those terminal markers into the
+   * RunExecutor contract before ExecuteRunService commits the Run status.
+   *
+   * @param {{ entries?: object[] }} payload
+   * @param {Set<string>} priorEntryIds
+   * @returns {{ outcome: string, statusReason: string } | null}
+   */
+  #terminalOutcomeFromNewAssistantEntries(payload, priorEntryIds) {
+    const prior = priorEntryIds instanceof Set ? priorEntryIds : new Set();
+    const entries = Array.isArray(payload?.entries) ? payload.entries : [];
+
+    for (let index = entries.length - 1; index >= 0; index -= 1) {
+      const entry = entries[index];
+      if (!entry || entry.type !== 'message') continue;
+      if (typeof entry.id !== 'string' || !entry.id || prior.has(entry.id)) {
+        continue;
+      }
+      const message = entry.message;
+      if (!message || message.role !== 'assistant') continue;
+
+      const stopReason = String(message.stopReason ?? '')
+        .trim()
+        .toLowerCase();
+      if (stopReason === 'error') {
+        const runtimeDetail = sanitizeStatusReason(
+          message.errorMessage ?? message.error?.message ?? message.error,
+        );
+        return {
+          outcome: RUN_STATUS.FAILED,
+          statusReason: runtimeDetail
+            ? `Pi runtime completed with assistant stopReason=error: ${runtimeDetail}`
+            : 'Pi runtime completed with assistant stopReason=error',
+        };
+      }
+      if (
+        stopReason === 'aborted' ||
+        stopReason === 'interrupted' ||
+        stopReason === 'cancelled' ||
+        stopReason === 'canceled'
+      ) {
+        return {
+          outcome: RUN_STATUS.CANCELLED,
+          statusReason: `Pi runtime completed with assistant stopReason=${stopReason}`,
+        };
+      }
+    }
+
+    return null;
   }
 
   /**

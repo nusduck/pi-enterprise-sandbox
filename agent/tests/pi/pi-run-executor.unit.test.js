@@ -387,6 +387,98 @@ describe('PiRunExecutor', () => {
     await exec.dispose();
   });
 
+  it('returns FAILED when Pi resolves with a terminal assistant stopReason=error', async () => {
+    const exec = makeExecutor({
+      entries: [
+        {
+          type: 'message',
+          id: 'assistant-error',
+          parentId: null,
+          timestamp: '2026-07-18T00:00:01.000Z',
+          message: {
+            role: 'assistant',
+            content: [],
+            stopReason: 'error',
+            errorMessage: 'Provider quota exhausted',
+          },
+        },
+      ],
+      messageEnds: [
+        {
+          type: 'message_end',
+          message: {
+            role: 'assistant',
+            content: [],
+            stopReason: 'error',
+          },
+        },
+      ],
+    });
+    const result = await exec.execute({
+      run: {
+        runId: RUN,
+        agentSessionId: SESS,
+        conversationId: CONV,
+        agentVersionId: VER,
+        triggeringMessageId: TRIG,
+        traceId: 'b'.repeat(32),
+      },
+      scope,
+      workerId: 'w-stop-reason-error',
+      signal: new AbortController().signal,
+    });
+
+    assert.equal(result.outcome, RUN_STATUS.FAILED);
+    assert.match(String(result.statusReason), /stopReason=error/);
+    assert.match(String(result.statusReason), /Provider quota exhausted/);
+    await exec.dispose();
+  });
+
+  it('returns CANCELLED when Pi resolves with a terminal assistant stopReason=aborted', async () => {
+    const exec = makeExecutor({
+      entries: [
+        {
+          type: 'message',
+          id: 'assistant-aborted',
+          parentId: null,
+          timestamp: '2026-07-18T00:00:01.000Z',
+          message: {
+            role: 'assistant',
+            content: [],
+            stopReason: 'aborted',
+          },
+        },
+      ],
+      messageEnds: [
+        {
+          type: 'message_end',
+          message: {
+            role: 'assistant',
+            content: [],
+            stopReason: 'aborted',
+          },
+        },
+      ],
+    });
+    const result = await exec.execute({
+      run: {
+        runId: RUN,
+        agentSessionId: SESS,
+        conversationId: CONV,
+        agentVersionId: VER,
+        triggeringMessageId: TRIG,
+        traceId: 'b'.repeat(32),
+      },
+      scope,
+      workerId: 'w-stop-reason-aborted',
+      signal: new AbortController().signal,
+    });
+
+    assert.equal(result.outcome, RUN_STATUS.CANCELLED);
+    assert.match(String(result.statusReason), /stopReason=aborted/);
+    await exec.dispose();
+  });
+
   it('delivers a durable steer request through native session.steer while prompt runs', async () => {
     const steerId = '01K0G2PAV8FPMVC9QHJG7JPN5K';
     const steerMessageId = '01K0G2PAV8FPMVC9QHJG7JPN5M';
