@@ -77,7 +77,10 @@ function rethrowTransport(err) {
  *   createClient?: () => any,
  *   traceId?: string | null,
  *   auth?: object | null,
- *   internalReadTransport?: { readFile: (payload: object) => Promise<object> } | null,
+ *   internalReadTransport?: {
+ *     readFile: (payload: object) => Promise<object>,
+ *     readSkill?: (payload: object) => Promise<object>,
+ *   } | null,
  *   internalExecutionTransport?: {
  *     bash: (payload: object) => Promise<object>,
  *     python: (payload: object) => Promise<object>,
@@ -136,6 +139,19 @@ export function createSandboxBridgeHttpTransport(opts = {}) {
           size: data?.size ?? null,
           mimeType: data?.mime_type ?? data?.mimeType ?? null,
         };
+      } catch (err) {
+        rethrowTransport(err);
+      }
+    },
+
+    async readSkill(payload) {
+      try {
+        if (!internalReadTransport || typeof internalReadTransport.readSkill !== 'function') {
+          const err = new Error('SKILL_READ_UNSUPPORTED: signed Skill read transport is unavailable');
+          /** @type {any} */ (err).code = 'SKILL_READ_UNSUPPORTED';
+          throw err;
+        }
+        return await internalReadTransport.readSkill(payload);
       } catch (err) {
         rethrowTransport(err);
       }

@@ -160,6 +160,66 @@ def _safe_os_error(exc: OSError, *, workspaces_path: str) -> SecureWorkspaceFile
 
 
 @contextmanager
+def open_trusted_root_regular_file(
+    root_path: str | Path,
+    relative_parts: Sequence[str],
+) -> Iterator[int]:
+    """Open a regular file under a trusted root with an fd-relative walk.
+
+    Unlike a workspace, the Skill root has no user-controlled identifier. It
+    still receives the same O_NOFOLLOW traversal so a malicious package cannot
+    use a symlink to read outside the read-only mount.
+    """
+    if root_path is None or str(root_path).strip() == "":
+        raise SecureWorkspaceFileError("PATH_INVALID", "trusted root is required")
+    root = str(root_path)
+    parts = validate_relative_parts(relative_parts)
+    root_fd = -1
+    leaf_fd = -1
+    opened_dirs: list[int] = []
+    try:
+        try:
+            root_fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
+        except OSError as exc:
+            raise _safe_os_error(exc, workspaces_path=root) from exc
+        dir_fd = root_fd
+        for seg in parts[:-1]:
+            try:
+                next_fd = os.open(seg, _DIR_FLAGS, dir_fd=dir_fd)
+            except OSError as exc:
+                raise _safe_os_error(exc, workspaces_path=root) from exc
+            opened_dirs.append(next_fd)
+            dir_fd = next_fd
+        try:
+            leaf_fd = os.open(parts[-1], _LEAF_FLAGS, dir_fd=dir_fd)
+        except OSError as exc:
+            raise _safe_os_error(exc, workspaces_path=root) from exc
+        try:
+            st = os.fstat(leaf_fd)
+        except OSError as exc:
+            raise _safe_os_error(exc, workspaces_path=root) from exc
+        if not stat.S_ISREG(st.st_mode):
+            raise SecureWorkspaceFileError("NOT_REGULAR_FILE", "not a regular file")
+        yield leaf_fd
+    finally:
+        if leaf_fd >= 0:
+            try:
+                os.close(leaf_fd)
+            except OSError:
+                pass
+        for d in reversed(opened_dirs):
+            try:
+                os.close(d)
+            except OSError:
+                pass
+        if root_fd >= 0:
+            try:
+                os.close(root_fd)
+            except OSError:
+                pass
+
+
+@contextmanager
 def open_workspace_regular_file(
     workspaces_path: str | Path,
     workspace_id: str,

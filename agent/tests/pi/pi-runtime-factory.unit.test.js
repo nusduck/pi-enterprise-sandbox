@@ -563,20 +563,23 @@ describe('immutable AgentVersion model + bindings', () => {
       skillsOverride: () => ({ skills: [], diagnostics: [] }),
       mcpResolver: () => ({}),
     });
-    // empty systemPrompt when not set in config is exact ''
-    assert.equal(ok.resourceLoaderOptions.systemPrompt, '');
+    // Every runtime gets the enterprise path/tool prompt; this prevents Pi's
+    // SDK default from advertising host/node_modules skill locations.
+    assert.match(ok.resourceLoaderOptions.systemPrompt, /## Skills \(progressive disclosure\)/);
+    assert.match(ok.resourceLoaderOptions.systemPrompt, /\/home\/sandbox\/skill/);
+    assert.deepEqual(ok.additionalSkillPaths, ['/home/sandbox/skill']);
     assert.equal(ok.resourceLoaderOptions.noExtensions, true);
   });
 
-  it('passes empty-string systemPrompt exactly (no SDK default fallback)', () => {
+  it('uses the enterprise prompt when AgentVersion systemPrompt is empty', () => {
     const bound = bindAgentVersionConfig({
       agentVersionId: VER,
       piSdkVersion: '0.80.3',
       configJson: { systemPrompt: '' },
     });
     const ok = resolveAgentVersionBindings(bound, {});
-    assert.equal(ok.systemPrompt, '');
-    assert.equal(ok.resourceLoaderOptions.systemPrompt, '');
+    assert.match(ok.systemPrompt, /enterprise coding assistant/);
+    assert.equal(ok.resourceLoaderOptions.systemPrompt, ok.systemPrompt);
     assert.ok(Object.prototype.hasOwnProperty.call(ok.resourceLoaderOptions, 'systemPrompt'));
   });
 
@@ -632,7 +635,8 @@ describe('immutable AgentVersion model + bindings', () => {
       cwd: '/ws',
       sessionManager: {},
     });
-    assert.equal(seenRlo.systemPrompt, 'immutable system');
+    assert.ok(seenRlo.systemPrompt.startsWith('immutable system\n\n---\n\n'));
+    assert.match(seenRlo.systemPrompt, /## Skills \(progressive disclosure\)/);
     assert.equal(seenModel.id, 'session-pinned');
     assert.equal(managed.agentVersionId, VER);
     assert.equal(managed.bound.configHash, 'c'.repeat(64));

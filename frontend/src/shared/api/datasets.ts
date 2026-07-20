@@ -127,15 +127,22 @@ export async function listDatasets(opts: {
   conversationId?: string | null;
 } = {}): Promise<DatasetRow[]> {
   try {
-    const q = new URLSearchParams();
-    if (opts.sessionId) q.set('session_id', opts.sessionId);
+    const sessionId = String(opts.sessionId || '').trim();
+    // BFF requires session_id for both /api/datasets and conversation-scoped
+    // list. Calling without it returns 400 (session_id required) which used to
+    // surface as a hard "not found" in the browser network panel.
+    if (!sessionId) return [];
+    const q = new URLSearchParams({ session_id: sessionId });
     let url = `${BASE}/datasets`;
     if (opts.conversationId) {
       url = `${BASE}/conversations/${encodeURIComponent(opts.conversationId)}/datasets`;
     }
-    const qs = q.toString() ? `?${q}` : '';
-    const resp = await fetch(`${url}${qs}`, { headers: authHeaders() });
+    const resp = await fetch(`${url}?${q}`, { headers: authHeaders() });
     if (resp.status === 404 || resp.status === 501) return [];
+    if (resp.status === 400) {
+      // Missing/invalid session is not a fatal UI error for the datasets panel.
+      return [];
+    }
     if (!resp.ok) {
       const err = await errorBody(resp);
       throw new ApiError(

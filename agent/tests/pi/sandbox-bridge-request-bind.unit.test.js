@@ -315,7 +315,6 @@ describe('PR-07B batch 2B: all 10 tools bind before transport', () => {
       offset: 2,
       limit: DEFAULT_READ_LIMIT,
       maxBytes: MAX_READ_BYTES,
-      area: 'skill',
     };
     const expectedHash = computeToolRequestHashV1({
       toolName: 'read',

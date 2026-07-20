@@ -116,6 +116,21 @@ export function MessageBubble({
   let hasContent = false;
 
   const body: ReactNode[] = [];
+  // Tools first (compact rail), then prose — avoids interleaved "tool ✓" noise
+  // inside markdown tables when many tools fire in one turn.
+  if (!isUser) {
+    const tools = parts.filter((p) => p.type === 'tool_use') as ToolUsePart[];
+    if (tools.length) {
+      body.push(
+        <div key="tools" className="bubble-tools">
+          {tools.map((p, i) => (
+            <ToolPill key={`tool-${i}`} part={p} />
+          ))}
+        </div>,
+      );
+      hasContent = true;
+    }
+  }
   parts.forEach((p: ContentPart, i) => {
     if (p.type === 'text' && 'text' in p && typeof p.text === 'string' && p.text) {
       if (isUser) {
@@ -126,10 +141,14 @@ export function MessageBubble({
           </span>,
         );
       } else {
-        body.push(<MarkdownBody key={`t-${i}`} text={p.text} />);
+        // Light stream repair: lone dangling ** from partial markdown tokens
+        let text = p.text;
+        const stars = (text.match(/\*\*/g) || []).length;
+        if (stars % 2 === 1) text = `${text}**`;
+        body.push(<MarkdownBody key={`t-${i}`} text={text} />);
       }
       hasContent = true;
-    } else if (p.type === 'tool_use') {
+    } else if (p.type === 'tool_use' && isUser) {
       body.push(<ToolPill key={`tool-${i}`} part={p as ToolUsePart} />);
       body.push(' ');
       hasContent = true;

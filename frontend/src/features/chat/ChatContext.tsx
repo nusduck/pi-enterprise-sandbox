@@ -436,11 +436,24 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       const trimmed = (text ?? draftText).trim();
       if (!trimmed && uploaded.length === 0) return;
 
-      const userMsg = buildUserTurnWithAttachments(trimmed, cur.attachments);
+      // Keep a local identity through the asynchronous create-run round trip.
+      // Selecting the "latest untagged user" races when two send attempts
+      // overlap: the first response can otherwise tag the second bubble and
+      // invert the two turns.
+      const localMessageId =
+        globalThis.crypto?.randomUUID?.() ??
+        `local_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+      const userMsg = {
+        ...buildUserTurnWithAttachments(trimmed, cur.attachments),
+        _messageId: localMessageId,
+      };
       setDraftText('');
 
       const abortCtrl = new AbortController();
       let generation = 0;
+      // runId assigned after create; tag user bubble once we have it so order
+      // merge can place the assistant after this user even if a later turn starts.
+      let runId: string | null = null;
       setState((s) => {
         let n = update(s, {
           messages: [...s.messages, userMsg],
@@ -452,7 +465,6 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         return n;
       });
 
-      let runId: string | null = null;
       try {
         const created = await apiCreateRun({
           conversation_id: cur.conversationId,
@@ -460,7 +472,19 @@ export function ChatProvider({ children }: { children: ReactNode }) {
           messages: [...cur.messages, userMsg],
         });
         if (!created.run_id) throw new Error('Run response is missing run_id');
-        runId = bridge.beginRun({
+        runId = created.run_id;
+        // Stamp the optimistic user message with run id for stable ordering.
+        setState((s) => {
+          const messages = [...s.messages];
+          for (let i = messages.length - 1; i >= 0; i -= 1) {
+            if (messages[i]._messageId === localMessageId) {
+              messages[i] = { ...messages[i], _runId: runId as string };
+              break;
+            }
+          }
+          return update(s, { messages });
+        });
+        bridge.beginRun({
           runId: created.run_id,
           conversationId: created.conversation_id || cur.conversationId,
           agentSessionId: created.agent_session_id || null,
@@ -508,13 +532,31 @@ export function ChatProvider({ children }: { children: ReactNode }) {
           if (assistantCommitted.length) {
             messages = [...messages];
             for (const msg of assistantCommitted) {
-              const exists = messages.some(
+              const existingIdx = messages.findIndex(
                 (message) =>
                   message.role === 'assistant' &&
                   message._runId != null &&
                   message._runId === runId,
               );
-              if (!exists) messages.push(msg);
+              const rid = String(runId);
+              if (existingIdx >= 0) {
+                messages[existingIdx] = { ...msg, _runId: rid };
+                continue;
+              }
+              // Insert after this run's user turn — never blind-append after a
+              // newer user message that was already sent while we streamed.
+              const userIdx = messages.findIndex(
+                (message) =>
+                  message.role === 'user' &&
+                  message._runId != null &&
+                  message._runId === rid,
+              );
+              const tagged = { ...msg, _runId: rid };
+              if (userIdx >= 0) {
+                messages.splice(userIdx + 1, 0, tagged);
+              } else {
+                messages.push(tagged);
+              }
             }
           }
           return update(s, {

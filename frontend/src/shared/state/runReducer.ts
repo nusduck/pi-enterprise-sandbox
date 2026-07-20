@@ -65,6 +65,33 @@ function str(v: unknown, fallback = ''): string {
   return String(v);
 }
 
+/**
+ * Roles that belong in the chat transcript EntityStore.
+ * Pi emits `toolResult` / `tool` as message.completed after sandbox tools;
+ * those must never become assistant bubbles (raw exitCode/stdout JSON).
+ */
+function normalizeChatMessageRole(
+  raw: unknown,
+): 'user' | 'assistant' | null {
+  const role = String(raw ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/[_-]/g, '');
+  if (!role || role === 'assistant') return 'assistant';
+  if (role === 'user') return 'user';
+  // toolResult, tool, function, system, etc. — not chat transcript rows
+  if (
+    role === 'toolresult' ||
+    role === 'tool' ||
+    role === 'function' ||
+    role === 'system' ||
+    role === 'toolcall'
+  ) {
+    return null;
+  }
+  return null;
+}
+
 function ensureRun(
   store: EntityStore,
   runId: string,
@@ -338,6 +365,11 @@ export function reduceRuntimeEvent(
     }
 
     case 'message.started': {
+      // Default assistant only when role is omitted; never mint chat rows for toolResult.
+      const startedRole = normalizeChatMessageRole(
+        payload.role == null || payload.role === '' ? 'assistant' : payload.role,
+      );
+      if (!startedRole) break;
       const messageId = str(payload.message_id || payload.id, `msg_${runId}_${ev.sequence}`);
       next = upsertMessage(
         next,
@@ -345,7 +377,7 @@ export function reduceRuntimeEvent(
           id: messageId,
           runId,
           conversationId: next.runsById[runId]?.conversationId || null,
-          role: (str(payload.role, 'assistant') as 'assistant') || 'assistant',
+          role: startedRole,
           text: str(payload.text),
           status: 'streaming',
           createdAt: ts,
@@ -355,6 +387,12 @@ export function reduceRuntimeEvent(
     }
 
     case 'message.delta': {
+      // Deltas are model tokens only. toolResult never streams deltas, but if a
+      // bad envelope appears, do not append tool JSON onto an assistant bubble.
+      const deltaRole = normalizeChatMessageRole(
+        payload.role == null || payload.role === '' ? 'assistant' : payload.role,
+      );
+      if (!deltaRole || deltaRole === 'user') break;
       const messageId = str(payload.message_id || payload.id);
       const delta = str(payload.text || payload.delta);
       if (messageId && next.messagesById[messageId]) {
@@ -387,8 +425,14 @@ export function reduceRuntimeEvent(
     }
 
     case 'message.completed': {
+      const completedRole = normalizeChatMessageRole(
+        payload.role == null || payload.role === '' ? 'assistant' : payload.role,
+      );
+      // Pi toolResult / tool messages: handled via tool.* events only.
+      if (!completedRole) break;
+
       let messageId = str(payload.message_id || payload.id);
-      if (!messageId) {
+      if (!messageId && completedRole === 'assistant') {
         const run = next.runsById[runId];
         for (const id of [...(run?.messageIds || [])].reverse()) {
           const candidate = next.messagesById[id];
@@ -400,6 +444,10 @@ export function reduceRuntimeEvent(
       }
       if (messageId && next.messagesById[messageId]) {
         const msg = next.messagesById[messageId];
+        // Never overwrite a real assistant bubble with a mismatched role payload.
+        if (msg.role !== completedRole && completedRole !== 'assistant') {
+          break;
+        }
         const finalText =
           payload.text != null ? str(payload.text) : msg.text;
         next = upsertMessage(next, {
@@ -410,15 +458,14 @@ export function reduceRuntimeEvent(
         });
       } else {
         const text = str(payload.text);
-        const role = str(payload.role, 'assistant') === 'user' ? 'user' : 'assistant';
-        if (text || role === 'user') {
+        if (text || completedRole === 'user') {
           next = upsertMessage(
             next,
             createMessage({
               id: messageId || `msg_${runId}_${ev.sequence}`,
               runId,
               conversationId: next.runsById[runId]?.conversationId || null,
-              role,
+              role: completedRole,
               text,
               status: 'complete',
               createdAt: ts,

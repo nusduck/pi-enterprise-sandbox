@@ -27,7 +27,10 @@ from sandbox.routers import (
 )
 from sandbox.security.internal_http_auth import set_replay_store
 from sandbox.security.network_policy import get_network_policy, init_network_policy
-from sandbox.services.files_read_runtime import set_files_read_runtime
+from sandbox.services.files_read_runtime import (
+    set_files_read_runtime,
+    set_skills_read_runtime,
+)
 from sandbox.services.files_write_runtime import set_files_write_runtime
 from sandbox.services.formal_execution_runtime import set_formal_execution_runtime
 from sandbox.services.formal_artifact_runtime import set_formal_artifact_runtime
@@ -181,6 +184,7 @@ set_replay_store(app, None)
 # construct MySQL claim validators / filesystem drivers at module import.
 # Production lifespan/wiring injects FilesReadRuntime; unconfigured → 503.
 set_files_read_runtime(app, None)
+set_skills_read_runtime(app, None)
 set_files_write_runtime(app, None)
 set_formal_execution_runtime(app, None)
 set_formal_artifact_runtime(app, None)

@@ -30,7 +30,9 @@ from sandbox.security.replay_store import RedisReplayStore
 from sandbox.services.files_read_runtime import (
     FilesReadRuntime,
     set_files_read_runtime,
+    set_skills_read_runtime,
 )
+from sandbox.app.domain.files_read_contract import parse_and_bind_skills_read
 from sandbox.services.files_write_runtime import FilesWriteRuntime, set_files_write_runtime
 from sandbox.services.formal_execution_runtime import (
     FormalExecutionRuntime,
@@ -45,7 +47,7 @@ from sandbox.services.formal_process_runtime import (
     set_formal_process_runtime,
 )
 from sandbox.services.internal_execution_supervisor import InternalExecutionSupervisor
-from sandbox.services.internal_file_reader import InternalFileReader
+from sandbox.services.internal_file_reader import InternalFileReader, InternalSkillReader
 from sandbox.services.internal_plane_resources import (
     CATEGORY_CONFIG,
     CATEGORY_REDIS_CREATE,
@@ -161,6 +163,7 @@ class FastApiInternalPlaneTarget:
         self.mysql_database: Any | None = None
         self.claim_validator: Any | None = None
         self.files_read_runtime: FilesReadRuntime | None = None
+        self.skills_read_runtime: FilesReadRuntime | None = None
         self.formal_execution_runtime: FormalExecutionRuntime | None = None
         self.formal_artifact_runtime: FormalArtifactRuntime | None = None
         self.files_write_runtime: FilesWriteRuntime | None = None
@@ -182,11 +185,13 @@ class FastApiInternalPlaneTarget:
         self.claim_validator = validator
         if validator is None:
             self.files_read_runtime = None
+            self.skills_read_runtime = None
             self.formal_execution_runtime = None
             self.formal_artifact_runtime = None
             self.files_write_runtime = None
             self.formal_process_runtime = None
             set_files_read_runtime(self.app, None)
+            set_skills_read_runtime(self.app, None)
             set_formal_execution_runtime(self.app, None)
             set_formal_artifact_runtime(self.app, None)
             set_files_write_runtime(self.app, None)
@@ -200,6 +205,14 @@ class FastApiInternalPlaneTarget:
         )
         self.files_read_runtime = runtime
         set_files_read_runtime(self.app, runtime)
+        self.skills_read_runtime = FilesReadRuntime(
+            claim_validator=validator,
+            reader=InternalSkillReader(),
+            id_factory=self.id_factory,
+            supervisor=self.supervisor,
+            parse_command=parse_and_bind_skills_read,
+        )
+        set_skills_read_runtime(self.app, self.skills_read_runtime)
         execution_runtime = FormalExecutionRuntime(
             claim_validator=validator,
             supervisor=self.supervisor,

@@ -70,7 +70,17 @@ export function canonicalizeForJsonl(value, stack = new WeakSet()) {
         code: 'PI_JSONL_CANONICALIZE_ERROR',
       });
     }
-    return Object.is(value, -0) ? 0 : value;
+    if (Object.is(value, -0)) return 0;
+    // MySQL JSON columns re-parse doubles with a slightly different binary
+    // representation for some fractional values (e.g. cost floats from model
+    // usage). Journal payloadHash is SHA-256 over this canonical form, so a
+    // one-ULP drift after insert→select fails checkpoint with
+    // JOURNAL_HASH_MISMATCH. Round non-integers through toPrecision(15) so
+    // the stored hash matches the post-MySQL reparse (integers unchanged).
+    if (!Number.isInteger(value)) {
+      return Number.parseFloat(value.toPrecision(15));
+    }
+    return value;
   }
   if (t !== 'object') {
     throw new PiSessionAdapterError(`unsupported JSONL value type: ${t}`, {

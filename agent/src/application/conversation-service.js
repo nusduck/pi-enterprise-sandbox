@@ -93,16 +93,36 @@ export function presentTranscriptMessage(msg) {
   };
 }
 
-export function presentConversation(row, messages = []) {
+/**
+ * Present a conversation row for browser/BFF consumption.
+ *
+ * `session` is the current AgentSession when known. Browsers need
+ * sandbox_session_id for dataset/artifact list/upload; leaving it null
+ * forces every `/api/conversations/:id/datasets` call to 400/404.
+ *
+ * @param {object} row
+ * @param {object[]} [messages]
+ * @param {{ sandboxSessionId?: string|null, workspaceId?: string|null, agentSessionId?: string|null } | null} [session]
+ */
+export function presentConversation(row, messages = [], session = null) {
   const transcript = Array.isArray(messages)
     ? messages.map(presentTranscriptMessage).filter(Boolean)
     : [];
+  const agentSessionId =
+    session?.agentSessionId ?? row.currentAgentSessionId ?? null;
+  const sandboxSessionId =
+    session?.sandboxSessionId ??
+    row.sandboxSessionId ??
+    row.sandbox_session_id ??
+    null;
+  const workspaceId =
+    session?.workspaceId ?? row.workspaceId ?? row.workspace_id ?? null;
   return {
     id: row.conversationId,
     title: row.title || 'New chat',
-    sandbox_session_id: null,
-    agent_session_id: row.currentAgentSessionId ?? null,
-    workspace_id: null,
+    sandbox_session_id: sandboxSessionId,
+    agent_session_id: agentSessionId,
+    workspace_id: workspaceId,
     messages: transcript,
     created_at: row.createdAt,
     updated_at: row.updatedAt,
@@ -147,6 +167,26 @@ export class ConversationService {
     return resolver.resolveOwner(auth);
   }
 
+  /**
+   * Resolve the current AgentSession for a conversation when the pointer is set.
+   * Best-effort: list/get still succeed if the session row is missing.
+   *
+   * @param {object} repos
+   * @param {object} row conversation row
+   * @param {{ orgId: string, userId: string }} owner
+   */
+  async #sessionForConversation(repos, row, owner) {
+    const agentSessionId = row?.currentAgentSessionId ?? null;
+    if (!agentSessionId || typeof repos.sessions?.getById !== 'function') {
+      return null;
+    }
+    try {
+      return await repos.sessions.getById(agentSessionId, owner);
+    } catch {
+      return null;
+    }
+  }
+
   async list(auth, opts = {}) {
     const repos = this.createRepositories(this.db);
     let owner;
@@ -161,7 +201,12 @@ export class ConversationService {
       limit: opts.limit ?? 200,
       includeArchived: false,
     });
-    return rows.map(presentConversation);
+    const presented = [];
+    for (const row of rows) {
+      const session = await this.#sessionForConversation(repos, row, owner);
+      presented.push(presentConversation(row, [], session));
+    }
+    return presented;
   }
 
   async get(conversationId, auth) {
@@ -190,7 +235,8 @@ export class ConversationService {
     } catch {
       messages = [];
     }
-    return presentConversation(row, messages);
+    const session = await this.#sessionForConversation(repos, row, owner);
+    return presentConversation(row, messages, session);
   }
 
   async create(auth, input = {}) {
@@ -237,7 +283,15 @@ export class ConversationService {
             externalSubject: parents.conversationId,
             conversationId: parents.conversationId,
           });
-          return presentConversation(row);
+          // Provisioner allocates logical sandbox/workspace ULIDs with the
+          // AgentSession; surface them so FE dataset/artifact paths work
+          // immediately after create (not only after refresh + ensure).
+          return presentConversation(row, [], {
+            agentSessionId:
+              parents.agentSessionId ?? row.currentAgentSessionId ?? null,
+            sandboxSessionId: parents.sandboxSessionId ?? null,
+            workspaceId: parents.workspaceId ?? null,
+          });
         });
       } catch (err) {
         if (!(err instanceof ParentProvisioningRaceError)) throw err;

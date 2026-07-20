@@ -35,6 +35,7 @@ TRACE_ID_MAX_LEN = 255
 
 _TOOL_NAME_READ = "read"
 _SCOPE_FILES_READ = "sandbox.files.read"
+_SCOPE_SKILLS_READ = "sandbox.skills.read"
 
 _ROOT_KEYS = frozenset(
     {
@@ -180,8 +181,8 @@ def _require_lower_sha256(value: Any, *, name: str) -> str:
     return value
 
 
-def _validate_canonical_workspace_path(path: Any) -> str:
-    """Path must already be Agent-canonical under /home/sandbox/workspace/<rel>."""
+def _validate_canonical_path(path: Any, *, root: str, root_label: str) -> str:
+    """Path must already be canonical beneath one trusted logical root."""
     if type(path) is not str:  # noqa: E721
         _fail("FILES_READ_PATH", "path must be a string")
     if not path or len(path) > READ_PATH_MAX_LEN:
@@ -197,17 +198,11 @@ def _validate_canonical_workspace_path(path: Any) -> str:
     if path != path.strip():
         _fail("FILES_READ_PATH", "path must not have surrounding whitespace")
 
-    root = AGENT_WORKSPACE_PATH  # /home/sandbox/workspace
     if path == root or path == root + "/":
-        _fail("FILES_READ_PATH", "workspace root is not a file path")
+        _fail("FILES_READ_PATH", f"{root_label} root is not a file path")
     prefix = root + "/"
     if not path.startswith(prefix):
-        # Explicit skill / tmp denials for clear codes.
-        if path == AGENT_SKILL_PATH or path.startswith(AGENT_SKILL_PATH + "/"):
-            _fail("FILES_READ_PATH", "skill paths rejected on files.read")
-        if path == AGENT_TEMP_PATH or path.startswith(AGENT_TEMP_PATH + "/"):
-            _fail("FILES_READ_PATH", "tmp paths rejected on files.read")
-        _fail("FILES_READ_PATH", "path must be under /home/sandbox/workspace/<relative>")
+        _fail("FILES_READ_PATH", f"path must be under {root}/<relative>")
 
     relative = path[len(prefix) :]
     if relative == "":
@@ -232,6 +227,26 @@ def _validate_canonical_workspace_path(path: Any) -> str:
     if canonical != path:
         _fail("FILES_READ_PATH", "path is not canonical")
     return path
+
+
+def _validate_canonical_workspace_path(path: Any) -> str:
+    if path == AGENT_SKILL_PATH or (
+        isinstance(path, str) and path.startswith(AGENT_SKILL_PATH + "/")
+    ):
+        _fail("FILES_READ_PATH", "skill paths rejected on files.read")
+    if path == AGENT_TEMP_PATH or (
+        isinstance(path, str) and path.startswith(AGENT_TEMP_PATH + "/")
+    ):
+        _fail("FILES_READ_PATH", "tmp paths rejected on files.read")
+    return _validate_canonical_path(
+        path, root=AGENT_WORKSPACE_PATH, root_label="workspace"
+    )
+
+
+def _validate_canonical_skill_path(path: Any) -> str:
+    return _validate_canonical_path(
+        path, root=AGENT_SKILL_PATH, root_label="skill"
+    )
 
 
 def _claim_str(claims: Mapping[str, Any], key: str) -> str:
@@ -286,9 +301,12 @@ class ReadCommand:
     request_hash_version: int
 
 
-def parse_and_bind_files_read(
+def _parse_and_bind_read(
     raw_body: bytes,
     claims: Mapping[str, Any],
+    *,
+    scope_expected: str,
+    validate_path: Any,
 ) -> ReadCommand:
     """Parse exact raw body, bind 1:1 to verified claims, recompute request-hash.
 
@@ -302,8 +320,8 @@ def parse_and_bind_files_read(
     scope = claims.get("scope")
     if type(scope) is not list or len(scope) != 1 or type(scope[0]) is not str:
         _fail("FILES_READ_CLAIM", "claim scope invalid")
-    if not hmac.compare_digest(scope[0], _SCOPE_FILES_READ):
-        _fail("FILES_READ_CLAIM", "claim scope is not sandbox.files.read")
+    if not hmac.compare_digest(scope[0], scope_expected):
+        _fail("FILES_READ_CLAIM", "claim scope is not valid for this read route")
     tool_name = _claim_str(claims, "tool_name")
     if not hmac.compare_digest(tool_name, _TOOL_NAME_READ):
         _fail("FILES_READ_CLAIM", "claim tool_name is not read")
@@ -316,7 +334,7 @@ def parse_and_bind_files_read(
         _fail("FILES_READ_SCHEMA", "identity must be a JSON object")
     _require_exact_keys(identity, _IDENTITY_KEYS, label="identity")
 
-    path = _validate_canonical_workspace_path(root["path"])
+    path = validate_path(root["path"])
     offset = _require_strict_int(
         root["offset"],
         name="offset",
@@ -468,9 +486,36 @@ def parse_and_bind_files_read(
     )
 
 
+def parse_and_bind_files_read(
+    raw_body: bytes,
+    claims: Mapping[str, Any],
+) -> ReadCommand:
+    """Parse a signed workspace read request."""
+    return _parse_and_bind_read(
+        raw_body,
+        claims,
+        scope_expected=_SCOPE_FILES_READ,
+        validate_path=_validate_canonical_workspace_path,
+    )
+
+
+def parse_and_bind_skills_read(
+    raw_body: bytes,
+    claims: Mapping[str, Any],
+) -> ReadCommand:
+    """Parse a signed read-only Skill mount request."""
+    return _parse_and_bind_read(
+        raw_body,
+        claims,
+        scope_expected=_SCOPE_SKILLS_READ,
+        validate_path=_validate_canonical_skill_path,
+    )
+
+
 __all__ = [
     "READ_MAX_BYTES_FIXED",
     "FilesReadContractError",
     "ReadCommand",
     "parse_and_bind_files_read",
+    "parse_and_bind_skills_read",
 ]

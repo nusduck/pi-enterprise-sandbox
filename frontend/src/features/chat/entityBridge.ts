@@ -803,13 +803,28 @@ export function createEntityBridge(
           : {}),
       }));
     const content: ContentPart[] = [];
+    /** Skip assistant rows that are leaked tool envelopes (pre-fix clients). */
+    const looksLikeToolEnvelope = (text: string): boolean => {
+      const t = text.trim();
+      if (!t.startsWith('{')) return false;
+      return (
+        t.includes('"exitCode"') ||
+        t.includes('"stdout"') ||
+        t.includes('"stdoutTruncated"')
+      );
+    };
     let assistant: ChatMessage | undefined;
     for (let i = messages.length - 1; i >= 0; i -= 1) {
-      if (messages[i].role === 'assistant') {
-        assistant = messages[i];
-        break;
-      }
+      if (messages[i].role !== 'assistant') continue;
+      const text = messages[i].content
+        .filter((p) => p.type === 'text' && 'text' in p)
+        .map((p) => String((p as { text?: unknown }).text || ''))
+        .join('');
+      if (looksLikeToolEnvelope(text)) continue;
+      assistant = messages[i];
+      break;
     }
+    // If every assistant row was a tool leak, still attach tools below with empty text.
     if (assistant) content.push(...assistant.content);
 
     for (const toolId of run.toolExecutionIds) {

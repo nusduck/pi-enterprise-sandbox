@@ -256,7 +256,6 @@ export function createSandboxBridgeToolDefinitions(
             offset,
             limit,
             maxBytes: MAX_READ_BYTES,
-            area: 'skill',
           };
           const inv = await invoke(
             toolCallId,

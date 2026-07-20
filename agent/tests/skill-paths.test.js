@@ -5,6 +5,7 @@ import {
   DEFAULT_SKILL_ROOTS,
   commandTouchesSkillRoot,
   isUnderSkillRoot,
+  isReadonlySkillExecution,
   normalizeSkillRoots,
   resolveSkillPath,
 } from '../src/skills/paths.js';
@@ -39,6 +40,15 @@ test('Skill path policy exposes only the canonical logical root', () => {
       /outside skill root/,
     );
   }
+});
+
+test('only simple Skill scripts are executable through bash/process tools', () => {
+  const script = `${CANONICAL_SKILL_ROOT}/pdf/scripts/render.py`;
+  assert.equal(isReadonlySkillExecution(`python3 ${script} --input report.md`), true);
+  assert.equal(isReadonlySkillExecution(`bash ${CANONICAL_SKILL_ROOT}/pdf/scripts/render.sh`), true);
+  assert.equal(isReadonlySkillExecution(`python3 ${CANONICAL_SKILL_ROOT}/pdf/render.py`), false);
+  assert.equal(isReadonlySkillExecution(`python3 ${script}; rm -rf /tmp/x`), false);
+  assert.equal(isReadonlySkillExecution(`python3 ${script} $(whoami)`), false);
 });
 
 test('host-path redaction preserves only the canonical Skill root', () => {

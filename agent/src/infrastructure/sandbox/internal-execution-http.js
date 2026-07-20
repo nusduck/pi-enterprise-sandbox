@@ -353,19 +353,39 @@ function validateSuccessResponse(toolName, payload) {
 
 function errorFromResponse(payload, status) {
   const nested = isPlainObject(payload.error) ? payload.error : null;
+  // FastAPI detail may be a string ("Conflict") or structured {code,message}.
+  const detail = payload.detail;
+  const detailObj = isPlainObject(detail) ? detail : null;
+  const detailCode =
+    detailObj && typeof detailObj.code === 'string' ? detailObj.code : null;
+  const detailMessage =
+    detailObj && typeof detailObj.message === 'string'
+      ? detailObj.message
+      : typeof detail === 'string'
+        ? detail
+        : null;
   const code =
     nested && typeof nested.code === 'string' && nested.code
       ? nested.code
-      : status === 409
-        ? 'SANDBOX_CONFLICT'
-        : 'SANDBOX_ERROR';
+      : detailCode
+        ? detailCode
+        : status === 409
+          ? 'SANDBOX_CONFLICT'
+          : status === 404
+            ? 'NOT_FOUND'
+            : 'SANDBOX_ERROR';
   const message =
     nested && typeof nested.message === 'string' && nested.message
       ? nested.message.slice(0, 512)
-      : `Sandbox execution failed (status=${status})`;
+      : detailMessage
+        ? String(detailMessage).slice(0, 512)
+        : `Sandbox execution failed (status=${status})`;
   return new InternalExecutionTransportError(code, message, {
     httpStatus: status,
     retryable: false,
+    // Only true ambiguous outcomes are UNKNOWN. Deterministic 4xx (claim
+    // conflict, not found, validation) must surface as explicit tool errors
+    // so the model can stop retrying and the UI does not show "unknown".
     outcomeUnknown: code === 'TOOL_OUTCOME_UNKNOWN',
   });
 }
@@ -451,13 +471,19 @@ export function createInternalExecutionTransport(options) {
     options.signal?.addEventListener('abort', onAbort, { once: true });
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     let response;
+    const url = `${baseUrl}${htu}`;
     try {
-      response = await fetchImpl(`${baseUrl}${htu}`, {
+      // Node undici rejects explicit `Content-Length` on some Buffer body
+      // paths with UND_ERR_INVALID_ARG ("invalid content-length header").
+      // Session ensure already omits a forced length / uses lowercase headers;
+      // let fetch derive Content-Length from the Buffer. HMAC body_sha256 still
+      // covers the exact bodyBytes we send.
+      response = await fetchImpl(url, {
         method: 'POST',
         headers: {
           Authorization: `Bearer ${token}`,
-          'Content-Type': 'application/json',
-          'Content-Length': String(bodyBytes.byteLength),
+          'content-type': 'application/json',
+          'content-length': String(bodyBytes.byteLength),
           ...createTraceHeaders(normalized.identity.traceId, {
             randomBytes: options.spanRandomBytes,
             traceState: options.traceState,

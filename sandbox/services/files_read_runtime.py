@@ -64,6 +64,7 @@ _DETAIL_CONFLICT = "Conflict"
 
 # app.state slot — production injects a real runtime; import-time is None.
 FILES_READ_RUNTIME_STATE_KEY = "files_read_runtime"
+SKILLS_READ_RUNTIME_STATE_KEY = "skills_read_runtime"
 
 # Success result keys allowed on the wire / in ledger (no physical paths).
 _SUCCESS_TEXT_KEYS = frozenset(
@@ -277,11 +278,13 @@ class FilesReadRuntime:
         reader: InternalFileReader | Any,
         id_factory: Callable[[], str],
         supervisor: InternalExecutionSupervisor | None = None,
+        parse_command: Callable[[bytes, Mapping[str, Any]], ReadCommand] = parse_and_bind_files_read,
     ) -> None:
         self.claim_validator = claim_validator
         self.reader = reader
         self.id_factory = id_factory
         self.supervisor = supervisor or InternalExecutionSupervisor()
+        self.parse_command = parse_command
         # Test counters (also useful for orchestration assertions).
         self.read_calls = 0
         self.finalize_calls = 0
@@ -305,7 +308,7 @@ class FilesReadRuntime:
         disconnect cannot drop a created claim without finalize.
         """
         try:
-            command = parse_and_bind_files_read(raw_body, claims)
+            command = self.parse_command(raw_body, claims)
         except FilesReadContractError as exc:
             logger.warning(
                 "files.read contract rejected code=%s",
@@ -619,11 +622,22 @@ def set_files_read_runtime(app: Any, runtime: FilesReadRuntime | None) -> None:
     setattr(app.state, FILES_READ_RUNTIME_STATE_KEY, runtime)
 
 
+def get_skills_read_runtime(app: Any) -> FilesReadRuntime | None:
+    return getattr(app.state, SKILLS_READ_RUNTIME_STATE_KEY, None)
+
+
+def set_skills_read_runtime(app: Any, runtime: FilesReadRuntime | None) -> None:
+    setattr(app.state, SKILLS_READ_RUNTIME_STATE_KEY, runtime)
+
+
 __all__ = [
     "FILES_READ_RUNTIME_STATE_KEY",
+    "SKILLS_READ_RUNTIME_STATE_KEY",
     "FilesReadRuntime",
     "filter_success_result",
     "get_files_read_runtime",
+    "get_skills_read_runtime",
     "parse_failed_envelope",
     "set_files_read_runtime",
+    "set_skills_read_runtime",
 ]

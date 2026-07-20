@@ -20,6 +20,12 @@ import {
   ENTERPRISE_EXTENSION_NAMES,
   assertExactEnterpriseExtensions,
 } from '../../extensions/index.js';
+import { resolveEnterpriseSystemPrompt } from './enterprise-system-prompt.js';
+import {
+  LOGICAL_SKILL_ROOT,
+  LOGICAL_WORKSPACE_ROOT,
+} from '../../extensions/sandbox-bridge/constants.js';
+import { primarySkillRoot, normalizeSkillRoots } from '../../skills/paths.js';
 
 /** Exact SDK pin for this factory revision. */
 export const PINNED_PI_SDK_VERSION = '0.80.3';
@@ -353,6 +359,9 @@ export function resolveConcreteModel(bound, inputModel) {
  *   mcpResolver?: Function | object | null,
  *   toolPolicyBinding?: object | null,
  *   sandboxPolicyBinding?: object | null,
+ *   additionalSkillPaths?: string[],
+ *   workspaceRoot?: string,
+ *   skillRoot?: string,
  * }} [options]
  */
 export function resolveAgentVersionBindings(bound, options = {}) {
@@ -445,15 +454,44 @@ export function resolveAgentVersionBindings(bound, options = {}) {
     }
   }
 
+  // Enterprise system prompt (mirrors pi buildSystemPrompt shape) so we never
+  // fall through to the SDK default that points at node_modules docs paths.
+  // Skills progressive disclosure: additionalSkillPaths → ResourceLoader →
+  // formatSkillsForPrompt when `read` is available.
+  const skillPathsRaw = Array.isArray(options.additionalSkillPaths)
+    ? options.additionalSkillPaths.filter(
+        (p) => typeof p === 'string' && String(p).trim(),
+      )
+    : [];
+  // Default formal skill mount so progressive disclosure works without
+  // every caller remembering to pass additionalSkillPaths.
+  const skillPaths =
+    skillPathsRaw.length > 0
+      ? skillPathsRaw
+      : normalizeSkillRoots([
+          options.skillRoot || LOGICAL_SKILL_ROOT,
+        ]);
+  const enterpriseSystemPrompt = resolveEnterpriseSystemPrompt(
+    typeof bound.systemPrompt === 'string' ? bound.systemPrompt : '',
+    {
+      workspaceRoot: options.workspaceRoot || LOGICAL_WORKSPACE_ROOT,
+      skillRoot:
+        options.skillRoot || primarySkillRoot(skillPaths) || LOGICAL_SKILL_ROOT,
+      extensionNames: [...ENTERPRISE_EXTENSION_NAMES],
+    },
+  );
+
   // Exact AgentVersion string, including '' — never collapse empty to SDK defaults.
   // noExtensions: true prevents agentDir auto-discovery of legacy package extensions.
   // Only explicit extensionFactories (resolved enterprise three) are loaded.
   /** @type {Record<string, unknown>} */
   const resourceLoaderOptions = {
-    systemPrompt:
-      typeof bound.systemPrompt === 'string' ? bound.systemPrompt : '',
+    systemPrompt: enterpriseSystemPrompt,
     noExtensions: true,
   };
+  if (skillPaths.length) {
+    resourceLoaderOptions.additionalSkillPaths = Object.freeze([...skillPaths]);
+  }
   if (Array.isArray(extensionFactories) && extensionFactories.length) {
     resourceLoaderOptions.extensionFactories = extensionFactories;
   }
@@ -462,13 +500,13 @@ export function resolveAgentVersionBindings(bound, options = {}) {
   }
 
   return Object.freeze({
-    systemPrompt:
-      typeof bound.systemPrompt === 'string' ? bound.systemPrompt : '',
+    systemPrompt: enterpriseSystemPrompt,
     resourceLoaderOptions: Object.freeze({ ...resourceLoaderOptions }),
     extensionFactories: Object.freeze(
       Array.isArray(extensionFactories) ? [...extensionFactories] : [],
     ),
     skillsOverride: typeof skillsOverride === 'function' ? skillsOverride : null,
+    additionalSkillPaths: Object.freeze([...skillPaths]),
     customTools: Array.isArray(customTools)
       ? Object.freeze([...customTools])
       : null,
@@ -588,6 +626,9 @@ export class PiRuntimeFactory {
    *   sandboxPolicyBinding?: object | null,
    *   defaultCwd?: string,
    *   agentDir?: string,
+   *   additionalSkillPaths?: string[],
+   *   skillRoot?: string,
+   *   workspaceRoot?: string,
    *   bindExtensions?: boolean,
    *   extensionMode?: string,
    * }} [deps]
@@ -609,6 +650,11 @@ export class PiRuntimeFactory {
     this.sandboxPolicyBinding = deps.sandboxPolicyBinding ?? null;
     this.defaultCwd = deps.defaultCwd ?? process.cwd();
     this.agentDir = deps.agentDir ?? null;
+    this.additionalSkillPaths = Array.isArray(deps.additionalSkillPaths)
+      ? [...deps.additionalSkillPaths]
+      : [];
+    this.skillRoot = deps.skillRoot ?? null;
+    this.workspaceRoot = deps.workspaceRoot ?? LOGICAL_WORKSPACE_ROOT;
     this.bindExtensionsEnabled = deps.bindExtensions !== false;
     this.extensionMode = deps.extensionMode ?? 'rpc';
   }
@@ -802,6 +848,11 @@ export class PiRuntimeFactory {
         }
       }
 
+      const skillPaths =
+        Array.isArray(input.additionalSkillPaths) &&
+        input.additionalSkillPaths.length
+          ? input.additionalSkillPaths
+          : this.additionalSkillPaths;
       bindings = resolveAgentVersionBindings(bound, {
         extensionFactories: resolvedExtensionFactories,
         skillsOverride: input.skillsOverride ?? this.skillsOverride ?? undefined,
@@ -811,6 +862,10 @@ export class PiRuntimeFactory {
         toolPolicyBinding: input.toolPolicyBinding ?? this.toolPolicyBinding,
         sandboxPolicyBinding:
           input.sandboxPolicyBinding ?? this.sandboxPolicyBinding,
+        additionalSkillPaths: skillPaths,
+        skillRoot: input.skillRoot ?? this.skillRoot ?? undefined,
+        workspaceRoot:
+          input.workspaceRoot ?? this.workspaceRoot ?? LOGICAL_WORKSPACE_ROOT,
       });
       shouldBind =
         (input.bindExtensions ?? this.bindExtensionsEnabled) !== false &&

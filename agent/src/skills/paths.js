@@ -140,7 +140,7 @@ export function commandTouchesSkillRoot(command, skillRoots = DEFAULT_SKILL_ROOT
  */
 export function isReadonlySkillExecution(command, skillRoots = DEFAULT_SKILL_ROOTS) {
   if (!command || typeof command !== 'string') return false;
-  if (/[;&|<>`\n\r]/.test(command) || command.includes('$(')) return false;
+  if (/[;&|<>`\n\r$*?{}\[\]!]/.test(command) || command.includes('$(')) return false;
 
   const match = command.match(
     /^\s*(python3?|\/usr\/bin\/python3?|bash|sh)\s+(?:"([^"]+)"|'([^']+)'|([^\s]+))(?:\s+.*)?\s*$/,
@@ -150,6 +150,9 @@ export function isReadonlySkillExecution(command, skillRoots = DEFAULT_SKILL_ROO
   const interpreter = match[1];
   const scriptPath = match[2] || match[3] || match[4] || '';
   if (!isUnderSkillRoot(scriptPath, skillRoots)) return false;
+  // A package's executable assets live under scripts/.  Do not treat an
+  // arbitrary .py/.sh file beside SKILL.md as an entrypoint.
+  if (!/\/scripts\/[^/]+$/.test(scriptPath.replace(/\\/g, '/'))) return false;
   if (interpreter === 'bash' || interpreter === 'sh') return scriptPath.endsWith('.sh');
   return scriptPath.endsWith('.py');
 }

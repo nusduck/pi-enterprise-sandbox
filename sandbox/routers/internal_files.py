@@ -16,7 +16,10 @@ from sandbox.security.internal_http_auth import (
     InternalAuthContext,
     require_internal_auth,
 )
-from sandbox.services.files_read_runtime import get_files_read_runtime
+from sandbox.services.files_read_runtime import (
+    get_files_read_runtime,
+    get_skills_read_runtime,
+)
 from sandbox.services.files_write_runtime import get_files_write_runtime
 
 logger = logging.getLogger("sandbox.routers.internal_files")
@@ -24,6 +27,7 @@ logger = logging.getLogger("sandbox.routers.internal_files")
 router = APIRouter(tags=["internal-files"])
 
 _INTERNAL_SCOPE = "sandbox.files.read"
+_INTERNAL_SKILLS_SCOPE = "sandbox.skills.read"
 _INTERNAL_TOOL = "read"
 _DETAIL_UNAVAILABLE = "Service temporarily unavailable"
 
@@ -39,6 +43,11 @@ FILES_EDIT_MAX_BODY_BYTES = 34 * 1024 * 1024
 
 _auth_dep = require_internal_auth(
     expected_scope=_INTERNAL_SCOPE,
+    expected_tool_name=_INTERNAL_TOOL,
+    max_body_bytes=FILES_READ_MAX_BODY_BYTES,
+)
+_skills_read_auth_dep = require_internal_auth(
+    expected_scope=_INTERNAL_SKILLS_SCOPE,
     expected_tool_name=_INTERNAL_TOOL,
     max_body_bytes=FILES_READ_MAX_BODY_BYTES,
 )
@@ -75,6 +84,22 @@ async def internal_files_read(
     if type(raw_body) is not bytes:  # noqa: E721
         raise HTTPException(status_code=400, detail="Invalid request")
 
+    return await runtime.handle(claims=ctx.claims, raw_body=raw_body)
+
+
+@router.post("/internal/v1/skills/read")
+async def internal_skills_read(
+    request: Request,
+    ctx: InternalAuthContext = Depends(_skills_read_auth_dep),
+) -> JSONResponse:
+    """Signed, ledger-bound read of the immutable shared Skill mount."""
+    runtime = get_skills_read_runtime(request.app)
+    if runtime is None:
+        logger.warning("skills.read runtime unconfigured")
+        raise HTTPException(status_code=503, detail=_DETAIL_UNAVAILABLE)
+    raw_body = await request.body()
+    if type(raw_body) is not bytes:  # noqa: E721
+        raise HTTPException(status_code=400, detail="Invalid request")
     return await runtime.handle(claims=ctx.claims, raw_body=raw_body)
 
 

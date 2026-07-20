@@ -31,12 +31,13 @@ from pathlib import PurePosixPath
 from typing import Any, Callable
 
 from sandbox.config import settings
-from sandbox.paths import AGENT_WORKSPACE_PATH, sanitize_path_error
+from sandbox.paths import AGENT_SKILL_PATH, AGENT_WORKSPACE_PATH, sanitize_path_error
 from sandbox.security.path_validation import validate_formal_id
 from sandbox.security.secure_workspace_file import (
     SecureWorkspaceFileError,
     fstat_identity,
     identities_equal,
+    open_trusted_root_regular_file,
     open_workspace_regular_file,
 )
 
@@ -89,7 +90,9 @@ def _require_strict_int(
     return value
 
 
-def _parse_workspace_logical_path(path: Any) -> tuple[str, tuple[str, ...]]:
+def _parse_logical_path(
+    path: Any, *, root: str, root_label: str
+) -> tuple[str, tuple[str, ...]]:
     """Require ``/home/sandbox/workspace/<relative>`` with non-empty relative."""
     if not isinstance(path, str) or path == "":
         raise InternalFileReadError(
@@ -104,19 +107,18 @@ def _parse_workspace_logical_path(path: Any) -> tuple[str, tuple[str, ...]]:
     if not path.startswith("/"):
         raise InternalFileReadError(
             "PATH_INVALID",
-            "path must be absolute under /home/sandbox/workspace",
+            f"path must be absolute under {root}",
         )
-    root = AGENT_WORKSPACE_PATH  # /home/sandbox/workspace
     if path == root or path == root + "/":
         raise InternalFileReadError(
             "PATH_INVALID",
-            "workspace root itself is not a readable file path",
+            f"{root_label} root itself is not a readable file path",
         )
     prefix = root + "/"
     if not path.startswith(prefix):
         raise InternalFileReadError(
             "PATH_INVALID",
-            "path must be under /home/sandbox/workspace/<relative>",
+            f"path must be under {root}/<relative>",
         )
     relative = path[len(prefix) :]
     if relative == "" or relative.endswith("/"):
@@ -147,6 +149,16 @@ def _parse_workspace_logical_path(path: Any) -> tuple[str, tuple[str, ...]]:
         )
     logical = f"{root}/{'/'.join(parts)}"
     return logical, tuple(parts)
+
+
+def _parse_workspace_logical_path(path: Any) -> tuple[str, tuple[str, ...]]:
+    return _parse_logical_path(
+        path, root=AGENT_WORKSPACE_PATH, root_label="workspace"
+    )
+
+
+def _parse_skill_logical_path(path: Any) -> tuple[str, tuple[str, ...]]:
+    return _parse_logical_path(path, root=AGENT_SKILL_PATH, root_label="skill")
 
 
 def _validate_input(
@@ -562,7 +574,7 @@ class InternalFileReader:
         ``Path.read_bytes`` / full-file join. Optional *read_chunk_size* /
         *read_fn* are test injection points for request-size assertions.
         """
-        inp = _validate_input(
+        inp = self._validate(
             workspace_id=workspace_id,
             path=path,
             offset=offset,
@@ -573,11 +585,7 @@ class InternalFileReader:
             _READ_CHUNK_SIZE if read_chunk_size is None else read_chunk_size
         )
         try:
-            with open_workspace_regular_file(
-                self._workspaces_path,
-                inp.workspace_id,
-                inp.relative_parts,
-            ) as fd:
+            with self._open(inp) as fd:
                 if after_open is not None:
                     after_open(fd)
 
@@ -637,6 +645,58 @@ class InternalFileReader:
             "nextOffset": outcome.next_offset,
             "mimeType": text_mime,
         }
+
+    def _validate(
+        self, *, workspace_id: Any, path: Any, offset: Any, limit: Any, max_bytes: Any
+    ) -> _ValidatedReadInput:
+        return _validate_input(
+            workspace_id=workspace_id,
+            path=path,
+            offset=offset,
+            limit=limit,
+            max_bytes=max_bytes,
+        )
+
+    def _open(self, inp: _ValidatedReadInput) -> Any:
+        return open_workspace_regular_file(
+            self._workspaces_path, inp.workspace_id, inp.relative_parts
+        )
+
+
+class InternalSkillReader(InternalFileReader):
+    """Reader for the immutable shared Skill tree.
+
+    ``workspace_id`` remains part of the tool ledger/claim contract, but the
+    physical Skill root is global and never derived from it.
+    """
+
+    def __init__(
+        self,
+        *,
+        skills_path: str | os.PathLike[str] = AGENT_SKILL_PATH,
+        max_file_size_mb: int | None = None,
+    ) -> None:
+        super().__init__(max_file_size_mb=max_file_size_mb)
+        self._skills_path = str(skills_path)
+
+    def _validate(
+        self, *, workspace_id: Any, path: Any, offset: Any, limit: Any, max_bytes: Any
+    ) -> _ValidatedReadInput:
+        _ = workspace_id
+        logical, parts = _parse_skill_logical_path(path)
+        return _ValidatedReadInput(
+            workspace_id="",
+            logical_path=logical,
+            relative_parts=parts,
+            offset=_require_strict_int(offset, "offset", min_v=0, max_v=_MAX_OFFSET),
+            limit=_require_strict_int(limit, "limit", min_v=_MIN_POSITIVE, max_v=_MAX_LIMIT),
+            max_bytes=_require_strict_int(
+                max_bytes, "max_bytes", min_v=_MIN_POSITIVE, max_v=_MAX_BYTES_CAP
+            ),
+        )
+
+    def _open(self, inp: _ValidatedReadInput) -> Any:
+        return open_trusted_root_regular_file(self._skills_path, inp.relative_parts)
 
 
 def read_workspace_file(

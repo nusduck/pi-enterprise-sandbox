@@ -1,18 +1,24 @@
 import { useState } from 'react';
 import type { ToolUsePart } from '../../shared/state';
+import {
+  formatToolInputDisplay,
+  formatToolResultDisplay,
+} from './formatToolDisplay';
 
 export function ToolPill({ part }: { part: ToolUsePart }) {
   const [open, setOpen] = useState(false);
   const st =
     part.isError ? 'tp-e' : part.status === 'running' ? 'tp-r' : 'tp-d';
   const icon = part.isError ? '✕' : part.status === 'running' ? '' : '✓';
-  const args = part.input ? JSON.stringify(part.input, null, 2) : '';
-  const res = part.result
-    ? typeof part.result === 'string'
-      ? part.result
-      : JSON.stringify(part.result, null, 2)
-    : '';
-  const popText = args || res || '(no data)';
+  const args = formatToolInputDisplay(part.input);
+  const res = formatToolResultDisplay(part.result);
+  // Always prefer showing result when complete — previously `args || res`
+  // hid successful stdout whenever input was present (every bash call).
+  const sections: string[] = [];
+  if (args) sections.push(args);
+  if (res) sections.push(res);
+  if (part.status === 'running' && !res) sections.push('(running…)');
+  const popText = sections.length ? sections.join('\n\n') : '(no data)';
 
   return (
     <span

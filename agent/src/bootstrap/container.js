@@ -618,6 +618,15 @@ export class ServiceContainer {
               opts.mcpRuntimeRoot || this.env.AGENT_MCP_RUNTIME_ROOT || undefined,
           });
         }
+        const {
+          normalizeSkillRoots,
+          primarySkillRoot,
+        } = await import('../skills/paths.js');
+        const skillRoots = normalizeSkillRoots(
+          this.env.SKILLS_ROOT || this.env.AGENT_SKILLS_ROOT
+            ? [String(this.env.SKILLS_ROOT || this.env.AGENT_SKILLS_ROOT).trim()]
+            : undefined,
+        );
         return new PiRuntimeFactory({
           sessionAdapter: opts.sessionAdapter,
           extensionFactories: opts.extensionFactories,
@@ -628,6 +637,14 @@ export class ServiceContainer {
             this.env.AGENT_SESSION_WORKSPACE_CWD ||
             undefined,
           agentDir,
+          // Progressive skill disclosure: scan formal skill mount into loader
+          // → formatSkillsForPrompt (not Pi product docs under node_modules).
+          additionalSkillPaths: skillRoots,
+          skillRoot: primarySkillRoot(skillRoots),
+          workspaceRoot:
+            this.env.AGENT_SESSION_WORKSPACE_CWD ||
+            this.env.AGENT_PI_DEFAULT_CWD ||
+            '/home/sandbox/workspace',
         });
       },
     );
@@ -825,17 +842,25 @@ export class ServiceContainer {
         let createInternalArtifactTransport = null;
         let createInternalProcessTransport = null;
         if (internalKeyring && internalActiveKid) {
-          const { createInternalFilesReadTransport } = await import(
+          const {
+            createInternalFilesReadTransport,
+            createInternalSkillsReadTransport,
+          } = await import(
             '../infrastructure/sandbox/internal-files-read-http.js'
           );
           createInternalReadTransport = (runContext) =>
-            createInternalFilesReadTransport({
+            {
+              const readOptions = {
               baseUrl: this.env.SANDBOX_BASE_URL || 'http://sandbox:8081',
               keyring: internalKeyring,
               activeKid: internalActiveKid,
               allowInsecureHttp: true,
               traceState: runContext?.traceState,
-            });
+              };
+              const files = createInternalFilesReadTransport(readOptions);
+              const skills = createInternalSkillsReadTransport(readOptions);
+              return { ...files, readSkill: skills.readFile };
+            };
           const { createInternalExecutionTransport: createExecutionTransport } =
             await import(
               '../infrastructure/sandbox/internal-execution-http.js'

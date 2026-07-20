@@ -24,6 +24,8 @@ import { createTraceHeaders } from './trace-context.js';
 export const FILES_READ_HTU = '/internal/v1/files/read';
 export const FILES_READ_TOOL_NAME = 'read';
 export const FILES_READ_SCOPE = 'sandbox.files.read';
+export const SKILLS_READ_HTU = '/internal/v1/skills/read';
+export const SKILLS_READ_SCOPE = 'sandbox.skills.read';
 export const READ_MAX_BYTES_FIXED = 262_144;
 export const READ_LIMIT_MIN = 1;
 export const READ_LIMIT_MAX = 50_000;
@@ -43,6 +45,7 @@ export const DEFAULT_MAX_RESPONSE_BYTES = 512 * 1024;
 export const DEFAULT_RETRYABLE_HTTP_STATUSES = Object.freeze([502, 503, 504]);
 
 export const LOGICAL_WORKSPACE_ROOT = '/home/sandbox/workspace';
+export const LOGICAL_SKILL_ROOT = '/home/sandbox/skill';
 
 const SHA256_HEX_RE = /^[0-9a-f]{64}$/;
 const PRINTABLE_ASCII_RE = /^[\x21-\x7e]+$/;
@@ -225,7 +228,7 @@ function requireStrictInt(value, field, min, max) {
  * @param {unknown} path
  * @returns {string}
  */
-function validateCanonicalWorkspacePath(path) {
+function validateCanonicalPath(path, root, rootLabel) {
   if (typeof path !== 'string') {
     fail('FILES_READ_PATH', 'path must be a string');
   }
@@ -240,15 +243,14 @@ function validateCanonicalWorkspacePath(path) {
     fail('FILES_READ_PATH', 'path must not have surrounding whitespace');
   }
 
-  const root = LOGICAL_WORKSPACE_ROOT;
   if (path === root || path === `${root}/`) {
-    fail('FILES_READ_PATH', 'workspace root is not a file path');
+    fail('FILES_READ_PATH', `${rootLabel} root is not a file path`);
   }
   const prefix = `${root}/`;
   if (!path.startsWith(prefix)) {
     fail(
       'FILES_READ_PATH',
-      'path must be under /home/sandbox/workspace/<relative>',
+      `path must be under ${root}/<relative>`,
     );
   }
   const relative = path.slice(prefix.length);
@@ -266,6 +268,14 @@ function validateCanonicalWorkspacePath(path) {
   const canonical = `${root}/${parts.join('/')}`;
   if (canonical !== path) fail('FILES_READ_PATH', 'path is not canonical');
   return path;
+}
+
+function validateCanonicalWorkspacePath(path) {
+  return validateCanonicalPath(path, LOGICAL_WORKSPACE_ROOT, 'workspace');
+}
+
+function validateCanonicalSkillPath(path) {
+  return validateCanonicalPath(path, LOGICAL_SKILL_ROOT, 'skill');
 }
 
 /**
@@ -294,7 +304,7 @@ function validateCanonicalWorkspacePath(path) {
  *   requestHashVersion: number,
  * }}
  */
-export function validateAndNormalizeReadFilePayload(payload) {
+function validateAndNormalizeReadPayload(payload, validatePath) {
   if (!isPlainObject(payload)) {
     fail('FILES_READ_PAYLOAD_INVALID', 'payload must be a plain object');
   }
@@ -360,7 +370,7 @@ export function validateAndNormalizeReadFilePayload(payload) {
     1,
   );
 
-  const path = validateCanonicalWorkspacePath(p.path);
+  const path = validatePath(p.path);
   const offset = requireStrictInt(
     p.offset,
     'offset',
@@ -413,6 +423,14 @@ export function validateAndNormalizeReadFilePayload(payload) {
   };
 }
 
+export function validateAndNormalizeReadFilePayload(payload) {
+  return validateAndNormalizeReadPayload(payload, validateCanonicalWorkspacePath);
+}
+
+export function validateAndNormalizeReadSkillPayload(payload) {
+  return validateAndNormalizeReadPayload(payload, validateCanonicalSkillPath);
+}
+
 /**
  * Build exact raw body bytes (compact JSON, deterministic key order).
  * Same bytes are used for body_sha256 and the HTTP body.
@@ -420,8 +438,8 @@ export function validateAndNormalizeReadFilePayload(payload) {
  * @param {unknown} payload
  * @returns {{ bodyBytes: Buffer, bodySha256: string, normalized: ReturnType<typeof validateAndNormalizeReadFilePayload> }}
  */
-export function buildFilesReadBodyBytes(payload) {
-  const normalized = validateAndNormalizeReadFilePayload(payload);
+function buildReadBodyBytes(payload, validatePayload) {
+  const normalized = validatePayload(payload);
   // Exact root key order matching Python contract tests / wire shape.
   const bodyObj = {
     path: normalized.path,
@@ -457,6 +475,14 @@ export function buildFilesReadBodyBytes(payload) {
   const bodyBytes = Buffer.from(JSON.stringify(bodyObj), 'utf8');
   const bodySha256 = createHash('sha256').update(bodyBytes).digest('hex');
   return { bodyBytes, bodySha256, normalized };
+}
+
+export function buildFilesReadBodyBytes(payload) {
+  return buildReadBodyBytes(payload, validateAndNormalizeReadFilePayload);
+}
+
+export function buildSkillsReadBodyBytes(payload) {
+  return buildReadBodyBytes(payload, validateAndNormalizeReadSkillPayload);
 }
 
 /**
@@ -925,6 +951,23 @@ function isRetryableTransportFailure(err) {
  * }} options
  */
 export function createInternalFilesReadTransport(options) {
+  return createInternalReadTransport(options, {
+    htu: FILES_READ_HTU,
+    scope: FILES_READ_SCOPE,
+    buildBody: buildFilesReadBodyBytes,
+  });
+}
+
+/** Same signed/ledger-bound read protocol, scoped to the read-only Skill mount. */
+export function createInternalSkillsReadTransport(options) {
+  return createInternalReadTransport(options, {
+    htu: SKILLS_READ_HTU,
+    scope: SKILLS_READ_SCOPE,
+    buildBody: buildSkillsReadBodyBytes,
+  });
+}
+
+function createInternalReadTransport(options, target) {
   if (!options || typeof options !== 'object') {
     fail('SANDBOX_TRANSPORT_CONFIG', 'options object is required');
   }
@@ -932,7 +975,7 @@ export function createInternalFilesReadTransport(options) {
   const baseUrl = normalizeBaseUrl(options.baseUrl, {
     allowInsecureHttp: options.allowInsecureHttp === true,
   });
-  const url = `${baseUrl}${FILES_READ_HTU}`;
+  const url = `${baseUrl}${target.htu}`;
   const fetchImpl = options.fetchImpl ?? globalThis.fetch;
   if (typeof fetchImpl !== 'function') {
     fail('SANDBOX_TRANSPORT_CONFIG', 'fetchImpl must be a function');
@@ -1043,12 +1086,12 @@ export function createInternalFilesReadTransport(options) {
       tool_execution_id: normalized.toolExecutionId,
       tool_call_id: normalized.toolCallId,
       tool_name: FILES_READ_TOOL_NAME,
-      scope: [FILES_READ_SCOPE],
+      scope: [target.scope],
       request_hash: normalized.requestHash,
       execution_fence_token: normalized.identity.executionFenceToken,
       trace_id: normalized.identity.traceId,
       htm: 'POST',
-      htu: FILES_READ_HTU,
+      htu: target.htu,
       body_sha256: bodySha256,
     };
 
@@ -1088,7 +1131,7 @@ export function createInternalFilesReadTransport(options) {
   async function readFile(payload) {
     // Body + hash fixed for the entire readFile call (including retries).
     const { bodyBytes, bodySha256, normalized } =
-      buildFilesReadBodyBytes(payload);
+      target.buildBody(payload);
 
     if (externalSignal?.aborted) {
       fail('SANDBOX_CANCELLED', 'request was cancelled before send', {

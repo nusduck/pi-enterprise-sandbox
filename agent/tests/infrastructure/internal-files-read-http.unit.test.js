@@ -11,9 +11,12 @@ import {
   FILES_READ_HTU,
   FILES_READ_SCOPE,
   FILES_READ_TOOL_NAME,
+  SKILLS_READ_HTU,
+  SKILLS_READ_SCOPE,
   READ_MAX_BYTES_FIXED,
   buildFilesReadBodyBytes,
   createInternalFilesReadTransport,
+  createInternalSkillsReadTransport,
   extractCompactJwtPayloadJti,
   filterFilesReadSuccessResult,
   InternalSandboxTransportError,
@@ -944,6 +947,35 @@ describe('createInternalFilesReadTransport.readFile', () => {
         ),
       (e) => e.code === 'FILES_READ_PAYLOAD_INVALID',
     );
+  });
+});
+
+describe('createInternalSkillsReadTransport.readFile', () => {
+  it('uses the Skill route and scope while preserving the read ledger contract', async () => {
+    const calls = [];
+    const skillPath = '/home/sandbox/skill/pdf/SKILL.md';
+    const payload = basePayload({
+      path: skillPath,
+      requestHash: requestHash({ path: skillPath }),
+    });
+    const transport = createInternalSkillsReadTransport({
+      baseUrl: BASE,
+      keyring: KEYRING,
+      activeKid: '2026-07',
+      clock: () => NOW,
+      fetchImpl: async (url, init) => {
+        calls.push({ url, init });
+        return mockResponse({ body: successBody({ path: skillPath }) });
+      },
+    });
+
+    await transport.readFile(payload);
+    assert.equal(calls[0].url, `${BASE}${SKILLS_READ_HTU}`);
+    const claims = verifyInternalToken(calls[0].init.headers.Authorization.slice(7), {
+      keyring: KEYRING,
+      clock: () => NOW,
+    });
+    assert.deepEqual(claims.scope, [SKILLS_READ_SCOPE]);
   });
 });
 

@@ -184,6 +184,55 @@ export function summarizeToolInput(input: unknown): string {
 /** Pretty-print unknown payload for expanded card body. */
 export function formatPayload(value: unknown, maxLen = 4000): string {
   if (value == null) return '';
+  // Prefer human tool result unwrapping (bash stdout nested in content[].text).
+  try {
+    // Lazy import avoided to keep this module free of circular deps — inline
+    // a light unwrap for the common Pi toolResult envelope.
+    if (typeof value === 'object' && value !== null && !Array.isArray(value)) {
+      const obj = value as Record<string, unknown>;
+      const content = obj.content;
+      if (Array.isArray(content)) {
+        const text = content
+          .map((part) =>
+            typeof part === 'string'
+              ? part
+              : part &&
+                  typeof part === 'object' &&
+                  typeof (part as { text?: unknown }).text === 'string'
+                ? String((part as { text: string }).text)
+                : '',
+          )
+          .filter(Boolean)
+          .join('\n');
+        if (text) {
+          try {
+            const nested = JSON.parse(text) as Record<string, unknown>;
+            if (nested && typeof nested === 'object' && 'stdout' in nested) {
+              const exit = nested.exitCode ?? nested.exit_code;
+              const stdout = String(nested.stdout ?? '').replace(/\n$/, '');
+              const stderr = String(nested.stderr ?? '').trim();
+              let s = exit != null ? `exit ${exit}\n${stdout}` : stdout;
+              if (stderr) s += `\nstderr:\n${stderr}`;
+              return s.length > maxLen ? `${s.slice(0, maxLen)}…` : s;
+            }
+          } catch {
+            return text.length > maxLen ? `${text.slice(0, maxLen)}…` : text;
+          }
+          return text.length > maxLen ? `${text.slice(0, maxLen)}…` : text;
+        }
+      }
+      if ('stdout' in obj) {
+        const exit = obj.exitCode ?? obj.exit_code;
+        const stdout = String(obj.stdout ?? '').replace(/\n$/, '');
+        const stderr = String(obj.stderr ?? '').trim();
+        let s = exit != null ? `exit ${exit}\n${stdout}` : stdout;
+        if (stderr) s += `\nstderr:\n${stderr}`;
+        return s.length > maxLen ? `${s.slice(0, maxLen)}…` : s;
+      }
+    }
+  } catch {
+    /* fall through */
+  }
   if (typeof value === 'string') {
     return value.length > maxLen ? `${value.slice(0, maxLen)}…` : value;
   }

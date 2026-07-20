@@ -519,22 +519,44 @@ body {
 }
 .md-table-wrap {
   overflow-x: auto;
-  margin: 0.55em 0;
+  margin: 0.75em 0;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--color-hairline);
+  background: var(--color-bg);
 }
 .md-body table {
   border-collapse: collapse;
   width: 100%;
-  font-size: 0.92em;
+  min-width: 280px;
+  font-size: 0.9em;
+  line-height: 1.45;
 }
 .md-body th,
 .md-body td {
-  border: 1px solid var(--color-hairline);
-  padding: 6px 10px;
+  border-bottom: 1px solid var(--color-hairline);
+  border-right: 1px solid var(--color-hairline);
+  padding: 8px 12px;
   text-align: left;
+  vertical-align: top;
+}
+.md-body th:last-child,
+.md-body td:last-child {
+  border-right: none;
+}
+.md-body tr:last-child td {
+  border-bottom: none;
 }
 .md-body th {
   background: var(--material-fill-tertiary);
   font-weight: 600;
+  color: var(--color-text);
+  white-space: nowrap;
+}
+.md-body td {
+  color: var(--color-text-secondary, var(--color-text));
+}
+.md-body td code {
+  font-size: 0.92em;
 }
 .md-body img {
   max-width: 100%;
@@ -561,12 +583,31 @@ body {
 .mw .time { font-size: 10px; color: var(--color-text-dim); padding: 0 4px; }
 .mw.user .time { text-align: right; }
 
+/* Tool pills row — keep tools above prose when many fire */
+.bubble-tools {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 0 0 8px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--color-hairline);
+}
+.mw .bubble .tp {
+  margin-bottom: 0;
+}
 /* Tool pill — compact inline badge */
 .tp {
   display: inline-flex; align-items: center; gap: 3px;
-  padding: 1px 6px; border-radius: 4px; font-size: 11px;
+  padding: 2px 8px; border-radius: 6px; font-size: 11px;
   line-height: 1.4; cursor: pointer; vertical-align: middle;
-  margin: 0 1px; position: relative;
+  margin: 0 2px 4px 0; position: relative;
+  max-width: 100%;
+}
+.tp-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 14rem;
 }
 .tp-r { border: 1px solid var(--color-primary-border); color: var(--color-primary-hover); background: var(--color-primary-soft); }
 .tp-r .tpd { width: 4px; height: 4px; border-radius: 50%; background: var(--color-primary-hover); animation: tppulse 1s infinite; }
@@ -577,11 +618,11 @@ body {
 .tp-e:hover { background: var(--color-danger-soft); }
 .tp-pop {
   position: absolute; z-index: 10; top: calc(100% + 4px); left: 0;
-  min-width: 280px; max-width: 480px; max-height: 240px; overflow: auto;
+  min-width: 280px; max-width: min(480px, 80vw); max-height: 240px; overflow: auto;
   background: var(--color-bg-elevated); border: 1px solid var(--color-text-dim); border-radius: 6px;
-  padding: 6px 8px; font-family: 'SF Mono', 'Fira Code', monospace;
+  padding: 6px 8px; font-family: var(--font-mono), 'SF Mono', 'Fira Code', monospace;
   font-size: 11px; color: var(--color-text-secondary); white-space: pre-wrap;
-  box-shadow: var(--shadow-md); word-break: break-all;
+  box-shadow: var(--shadow-md); word-break: break-word;
 }
 .tp-pop.hide { display: none; }
 

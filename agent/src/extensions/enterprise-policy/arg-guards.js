@@ -8,6 +8,10 @@ import {
   normalizeLogicalPath,
   normalizeWritePath,
 } from '../sandbox-bridge/path-guards.js';
+import {
+  commandTouchesSkillRoot,
+  isReadonlySkillExecution,
+} from '../../skills/paths.js';
 import { makePolicyDecision } from './policy-decision.js';
 
 /**
@@ -57,12 +61,20 @@ export function evaluateLocalArgGuards(toolName, args) {
         riskLevel: 'critical',
       });
     }
-    // skill write via shell
-    if (/\/home\/sandbox\/skill\//.test(command) && /\b(?:rm|mv|cp|tee|dd|install|chmod|chown|:\s*>|>>)\b/.test(command)) {
+    // A Skill mount is executable only through its declared script entrypoint.
+    // This deliberately rejects `cat`, shell redirects, chaining and arbitrary
+    // interpreters whenever a command touches the Skill tree.  The script is
+    // still constrained by the Sandbox process boundary; the mount itself is
+    // read-only in both dev's default mode and production.
+    if (
+      commandTouchesSkillRoot(command) &&
+      !isReadonlySkillExecution(command)
+    ) {
       return makePolicyDecision({
         decision: 'deny',
-        reasonCode: 'PATH_SKILL_WRITE_DENIED',
-        reason: 'shell mutation of skill directory denied',
+        reasonCode: 'SKILL_SCRIPT_COMMAND_DENIED',
+        reason:
+          'Skill paths may only be executed as python/python3 *.py or sh/bash *.sh without shell operators',
         policyId: 'platform:path-guard',
         riskLevel: 'high',
       });

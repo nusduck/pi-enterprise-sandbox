@@ -109,31 +109,60 @@ export function createInternalSessionProvisioner(options) {
         },
       });
 
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), timeoutMs);
+      const headers = {
+        authorization: `Bearer ${token}`,
+        'content-type': 'application/json',
+        'content-length': String(body.byteLength),
+        ...createTraceHeaders(identity.traceId, {
+          randomBytes: options.spanRandomBytes,
+          traceState: identity.traceState,
+        }),
+      };
+
       let response;
-      try {
-        response = await fetchImpl(`${baseUrl}${SESSION_ENSURE_HTU}`, {
-          method: 'POST',
-          headers: {
-            authorization: `Bearer ${token}`,
-            'content-type': 'application/json',
-            'content-length': String(body.byteLength),
-            ...createTraceHeaders(identity.traceId, {
-              randomBytes: options.spanRandomBytes,
-              traceState: identity.traceState,
-            }),
-          },
-          body,
-          signal: controller.signal,
-        });
-      } catch (error) {
-        const wrapped = new Error('Sandbox session provisioning unavailable');
+      let lastError = null;
+      // One retry for transient client/network failures (DNS blip, undici
+      // connect reset). Deterministic 4xx from Sandbox is not retried.
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), timeoutMs);
+        try {
+          response = await fetchImpl(`${baseUrl}${SESSION_ENSURE_HTU}`, {
+            method: 'POST',
+            headers,
+            body,
+            signal: controller.signal,
+          });
+          lastError = null;
+          break;
+        } catch (error) {
+          lastError = error;
+          if (attempt === 0) {
+            await new Promise((r) => setTimeout(r, 50));
+            continue;
+          }
+        } finally {
+          clearTimeout(timer);
+        }
+      }
+      if (lastError) {
+        const cause =
+          lastError instanceof Error
+            ? lastError.cause instanceof Error
+              ? lastError.cause
+              : lastError
+            : null;
+        const detail = cause
+          ? `${cause.name || 'Error'}: ${cause.message || String(cause)}`
+          : lastError instanceof Error
+            ? lastError.message
+            : String(lastError);
+        const wrapped = new Error(
+          `Sandbox session provisioning unavailable (${String(detail).slice(0, 160)})`,
+        );
         wrapped.code = 'SANDBOX_SESSION_PROVISION_FAILED';
-        wrapped.cause = error;
+        wrapped.cause = lastError;
         throw wrapped;
-      } finally {
-        clearTimeout(timer);
       }
       const text = await response.text();
       if (!response.ok) {
