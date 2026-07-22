@@ -31,7 +31,7 @@ Change this file in the **same commit** as the implementation or evidence that j
 |----|-----------|--------|------------------|
 | A1 | Use Pi native Agent Loop | `done` | `agent/src/infrastructure/pi/*`, executor path; no second ReAct loop |
 | A2 | Three enterprise extensions load | `done` | `sandbox-bridge`, `enterprise-policy`, `observability`; kit removed |
-| A3 | MCP via `pi-mcp-adapter` | `done` | exact pin + `agent/tests/pi/mcp-adapter.integration.test.js` |
+| A3 | MCP via `pi-mcp-adapter` | `done` | exact pin + 启动期 `tools/list` 发现/ready fail-closed（`agent/tests/pi/mcp-adapter.integration.test.js`） |
 | A4 | Multi-turn Session recoverable | `done` | Offline: session-recovery + journal units + WAITING_INPUT recovery matrix. **Live 2026-07-19:** full `agent-worker-pi-restart.release-gate.test.js` **5/5 PASS** (model SIGKILL replay, durable interaction, tool boundary, sandbox UNKNOWN) on isolated MySQL/Redis/Sandbox — Pi Session checkpoint path only. Evidence: `evidence/a4-g2-restart-matrix-2026-07-19.md`, `evidence/g6-interaction-worker-restart-2026-07-19.md`. Residual non-blocking: dedicated corrupt-journal-under-kill live gate not separate. |
 | A5 | Agent Version pinned | `done` | credential/version binding tests under `agent/tests/a2a/` |
 

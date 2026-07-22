@@ -5,6 +5,12 @@ Each entry should say **what changed**, **why**, and **which STATUS IDs** it aff
 
 ---
 
+## 2026-07-22 — MCP startup discovery, Run convergence, and durable UI projections
+
+- **Action:** Added per-Run model/tool/repeated-call budgets; MCP now discovers enabled Servers at Agent startup and exposes named `mcp__{serverId}__{toolName}` tools with readiness fail-closed; durable Run list/detail gains model, token usage, lifecycle timestamps and event cursor; conversation projections retain durable message ordering and the current user turn. Artifact download headers now safely support non-ASCII filenames. Updated deployment, API, architecture, status, and changelog documentation to match these contracts.
+- **Why:** A worker Run needs a finite execution boundary, MCP availability must be observable rather than silently empty, and browser refresh must be built from durable identities and event cursors rather than process-local inference.
+- **STATUS IDs:** A3 remains `done` with updated startup-discovery evidence; D1 remains `done`; no previously partial or open acceptance item is claimed closed by this change.
+
 ## 2026-07-19 — Branch fork and WIP checkpoint
 
 - **Action:** Created branch `codex/plan-acceptance` from `codex/pi-enterprise-refactor` (`8d0dad41`) and committed the full uncommitted working tree as `6d25783c`.
