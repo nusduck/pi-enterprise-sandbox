@@ -446,6 +446,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       const userMsg = {
         ...buildUserTurnWithAttachments(trimmed, cur.attachments),
         _messageId: localMessageId,
+        createdAt: new Date().toISOString(),
       };
       setDraftText('');
 

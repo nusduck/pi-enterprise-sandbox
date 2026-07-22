@@ -106,6 +106,8 @@ describe('CreateRunService durable path', () => {
     );
 
     assert.equal(world.tables.messages.length, 1);
+    const storedUserMessage = JSON.parse(world.tables.messages[0].content_json);
+    assert.equal(storedUserMessage.text, 'hello');
     assert.equal(world.tables.run_events.length, 2); // accepted + queued
     assert.equal(world.tables.domain_outbox.length, 2);
     assert.equal(world.enqueuedJobs.length, 1);
@@ -125,6 +127,23 @@ describe('CreateRunService durable path', () => {
     });
     assert.equal(got.runId, created.runId);
     assert.equal(got.status, RUN_STATUS.QUEUED);
+  });
+
+  it('stores the latest user turn separately from accumulated prompt context', async () => {
+    await svc.create.execute({
+      messages: [
+        { role: 'user', content: [{ type: 'text', text: '你好呀' }] },
+        { role: 'assistant', content: [{ type: 'text', text: '你好！' }] },
+        { role: 'user', content: [{ type: 'text', text: '总结这个文档' }] },
+      ],
+      auth: FIXED_AUTH,
+      traceId: TRACE,
+      idempotencyKey: 'latest-user-turn',
+    });
+
+    const stored = JSON.parse(world.tables.messages[0].content_json);
+    assert.equal(stored.text, '总结这个文档');
+    assert.equal(stored.messages.length, 3);
   });
 
   it('G5: create response is only returned after durable commit (GET race-free)', async () => {

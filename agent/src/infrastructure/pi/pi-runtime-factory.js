@@ -812,12 +812,20 @@ export class PiRuntimeFactory {
 
     try {
       const configuredMcpResolver = input.mcpResolver ?? this.mcpResolver;
-      if (bound.mcpServers.length > 0) {
+      const defaultMcpServers =
+        configuredMcpResolver &&
+        typeof configuredMcpResolver === 'function' &&
+        Array.isArray(configuredMcpResolver.defaultMcpServers)
+          ? configuredMcpResolver.defaultMcpServers
+          : [];
+      const requestedMcpServers =
+        defaultMcpServers.length > 0 ? defaultMcpServers : bound.mcpServers;
+      if (requestedMcpServers.length > 0) {
         try {
           mcpBinding =
             typeof configuredMcpResolver === 'function'
               ? await configuredMcpResolver({
-                  mcpServers: bound.mcpServers,
+                  mcpServers: requestedMcpServers,
                   agentVersion: input.agentVersion,
                   agentSession: input.agentSession,
                   cwd,

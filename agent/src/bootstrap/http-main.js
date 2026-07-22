@@ -17,6 +17,64 @@ import { getExtensionDiagnostics as projectExtensionDiagnostics } from '../appli
 import { startTelemetry } from '../infrastructure/telemetry.js';
 
 /**
+ * Build the lightweight observability columns for the operator Run list.
+ * Model identity is emitted by model.request.* events, while token usage is
+ * emitted by assistant message.completed events. Neither belongs on the Run
+ * state row itself, so this projection deliberately reads only durable events.
+ *
+ * @param {Array<{ eventType?: string, payloadJson?: unknown }>} events
+ */
+export function summarizeRunObservability(events) {
+  let modelId = null;
+  let inputTokens = 0;
+  let outputTokens = 0;
+  let totalTokens = 0;
+  let hasUsage = false;
+
+  for (const event of events || []) {
+    const data = event?.payloadJson;
+    if (!data || typeof data !== 'object' || Array.isArray(data)) continue;
+    const payload = /** @type {Record<string, unknown>} */ (data);
+    if (String(event.eventType || '').toLowerCase().startsWith('model.request.')) {
+      const model = payload.model;
+      const candidate =
+        payload.modelId ??
+        payload.model_id ??
+        (model && typeof model === 'object' && !Array.isArray(model)
+          ? /** @type {Record<string, unknown>} */ (model).id
+          : null);
+      if (typeof candidate === 'string' && candidate.trim()) {
+        modelId = candidate.trim();
+      }
+    }
+    const usage = payload.usage;
+    if (!usage || typeof usage !== 'object' || Array.isArray(usage)) continue;
+    const u = /** @type {Record<string, unknown>} */ (usage);
+    const input = Number(u.inputTokens ?? u.input_tokens ?? u.input ?? 0);
+    const output = Number(u.outputTokens ?? u.output_tokens ?? u.output ?? 0);
+    const total = Number(u.totalTokens ?? u.total_tokens ?? u.total ?? 0);
+    if (!Number.isFinite(input) || !Number.isFinite(output) || !Number.isFinite(total)) {
+      continue;
+    }
+    hasUsage = true;
+    inputTokens += Math.max(0, input);
+    outputTokens += Math.max(0, output);
+    totalTokens += total > 0 ? total : Math.max(0, input) + Math.max(0, output);
+  }
+
+  return {
+    modelId,
+    usage: hasUsage
+      ? {
+          input_tokens: inputTokens,
+          output_tokens: outputTokens,
+          total_tokens: totalTokens,
+        }
+      : null,
+  };
+}
+
+/**
  * Build the A2A artifact byte authority. It resolves the task's durable Run
  * and Agent Session under the credential owner before asking Sandbox for an
  * artifact by opaque id. Filesystem paths are never accepted or forwarded.
@@ -107,6 +165,7 @@ export async function startHttpMain(env = process.env) {
   });
 
   const container = createServiceContainer(env);
+  await container.preflightMcpServers();
   const requireDataPlane =
     String(env.DEPLOYMENT_ENV || env.NODE_ENV || '').toLowerCase() ===
       'production' ||
@@ -141,6 +200,7 @@ export async function startHttpMain(env = process.env) {
       ...options,
       skillRoots: config.SKILL_ROOTS,
       mcpServers: config.MCP_SERVERS,
+      mcpDiscovery: container.getMcpReadiness(),
     });
 
   const notReady = async () => {
@@ -161,13 +221,22 @@ export async function startHttpMain(env = process.env) {
           externalRefs: repos.externalRefs,
         });
         const owner = await resolver.resolveOwner(auth);
-        return repos.runs.list(
+        const runs = await repos.runs.list(
           { orgId: owner.orgId, userId: owner.userId },
           {
             conversationId: conversationId || undefined,
             status: status || undefined,
             limit: limit || 50,
           },
+        );
+        const scope = { orgId: owner.orgId, userId: owner.userId };
+        return Promise.all(
+          runs.map(async (run) => {
+            const events = await repos.runEvents.listByRun(run.runId, scope, {
+              limit: 500,
+            });
+            return { ...run, ...summarizeRunObservability(events) };
+          }),
         );
       }
     : null;
@@ -319,6 +388,7 @@ export async function startHttpMain(env = process.env) {
     sandboxHealthCheck: sandboxHealthCheck || undefined,
     // /ready requires data plane (MySQL+Redis started). Health-only mode → 503.
     dataPlaneReady: () => container.isDataPlaneReady(),
+    mcpReadiness: () => container.getMcpReadiness(),
     getExtensionDiagnostics,
     activeRunHint: () => 0,
   });

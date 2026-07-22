@@ -5,17 +5,19 @@
 
 import {
   LOGICAL_SKILL_ROOT,
+  LOGICAL_TEMP_ROOT,
   LOGICAL_WORKSPACE_ROOT,
   MAX_PATH_LEN,
 } from './constants.js';
 
 /**
  * Normalize a model-supplied path to a logical sandbox path.
- * Relative paths → under workspace. Absolute must be under workspace or skill.
+ * Relative paths → under workspace. Absolute paths may be under workspace,
+ * skill, or the session-scoped temporary directory.
  *
  * @param {unknown} raw
  * @param {{ allowSkillRead?: boolean }} [opts]
- * @returns {{ ok: true, path: string, area: 'workspace' | 'skill' } | { ok: false, code: string, reason: string }}
+ * @returns {{ ok: true, path: string, area: 'workspace' | 'skill' | 'temp' } | { ok: false, code: string, reason: string }}
  */
 export function normalizeLogicalPath(raw, opts = {}) {
   if (raw == null || typeof raw !== 'string') {
@@ -93,6 +95,10 @@ export function normalizeLogicalPath(raw, opts = {}) {
     return { ok: true, path: logical, area: 'skill' };
   }
 
+  if (logical === LOGICAL_TEMP_ROOT || logical.startsWith(`${LOGICAL_TEMP_ROOT}/`)) {
+    return { ok: true, path: logical, area: 'temp' };
+  }
+
   if (
     logical === LOGICAL_WORKSPACE_ROOT ||
     logical.startsWith(`${LOGICAL_WORKSPACE_ROOT}/`)
@@ -108,10 +114,12 @@ export function normalizeLogicalPath(raw, opts = {}) {
 }
 
 /**
- * Write targets: workspace only, never skill.
+ * Write targets are workspace-only unless the caller explicitly opts into the
+ * session temporary directory. Skill paths are never writable.
  * @param {unknown} raw
+ * @param {{ allowTemp?: boolean }} [opts]
  */
-export function normalizeWritePath(raw) {
+export function normalizeWritePath(raw, opts = {}) {
   const n = normalizeLogicalPath(raw, { allowSkillRead: false });
   if (!n.ok) {
     // Remap skill read-only to write denied when path looked like skill
@@ -134,6 +142,13 @@ export function normalizeWritePath(raw) {
       ok: false,
       code: 'PATH_SKILL_WRITE_DENIED',
       reason: 'writes to skill directory are denied',
+    };
+  }
+  if (n.area === 'temp' && opts.allowTemp !== true) {
+    return {
+      ok: false,
+      code: 'PATH_OUTSIDE_WORKSPACE',
+      reason: 'path must be under workspace for writes',
     };
   }
   return n;

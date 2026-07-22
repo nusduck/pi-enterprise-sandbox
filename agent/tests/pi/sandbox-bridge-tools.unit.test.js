@@ -553,6 +553,41 @@ describe('sandbox-bridge registration', () => {
     assert.match(r.content[0].text, /PATH_SKILL_WRITE_DENIED|skill/i);
   });
 
+  it('allows file work in /tmp but keeps artifact submission in workspace', async () => {
+    const calls = [];
+    const defs = createSandboxBridgeToolDefinitions(
+      RUN_A,
+      createFakeTransport(calls),
+      { sandboxRequestBinder: createFakeBinder() },
+    );
+    const read = defs.find((tool) => tool.name === 'read');
+    const write = defs.find((tool) => tool.name === 'write');
+    const edit = defs.find((tool) => tool.name === 'edit');
+    const submitArtifact = defs.find((tool) => tool.name === 'submit_artifact');
+
+    await read.execute('tmp-read', { path: '/tmp/report.txt' });
+    await write.execute('tmp-write', { path: '/tmp/report.txt', content: 'draft' });
+    await edit.execute('tmp-edit', {
+      path: '/tmp/report.txt',
+      oldText: 'draft',
+      newText: 'revised',
+      expectedVersion: '1',
+    });
+    const artifact = await submitArtifact.execute('tmp-artifact', {
+      path: '/tmp/report.txt',
+    });
+
+    assert.deepEqual(
+      calls.map((call) => [call.method, call.payload.path]),
+      [
+        ['readFile', '/tmp/report.txt'],
+        ['writeFile', '/tmp/report.txt'],
+        ['editFile', '/tmp/report.txt'],
+      ],
+    );
+    assert.match(artifact.content[0].text, /PATH_OUTSIDE_WORKSPACE/);
+  });
+
   it('missing transport fails at extension load (not deferred to execute)', async () => {
     const factories = createEnterpriseExtensionBundle(RUN_A, {
       sandboxTransport: null,
@@ -626,5 +661,54 @@ describe('sandbox-bridge registration', () => {
     assert.match(r.content[0].text, /Error/);
     assert.equal(r.content[0].text.includes('/Users/eddie'), false);
     assert.equal(r.content[0].text.includes('tok_abc'), false);
+  });
+
+  it('read returns a valid bounded result with a continuation offset', async () => {
+    const transport = createFakeTransport([]);
+    transport.readFile = async () => ({
+      content: Array.from({ length: 3_000 }, () => 'x'.repeat(20)).join('\n'),
+      offset: 7,
+      size: 3_000 * 21,
+      // This is the cursor from the sandbox's larger page. The bridge must
+      // not use it after applying its own smaller output limit.
+      nextOffset: 3_007,
+    });
+    const defs = createSandboxBridgeToolDefinitions(RUN_A, transport, {
+      sandboxRequestBinder: createFakeBinder(),
+    });
+
+    const result = await defs.find((t) => t.name === 'read').execute('read-large', {
+      path: 'large.txt',
+    });
+    const payload = JSON.parse(result.content[0].text);
+
+    assert.equal(payload.truncated, true);
+    assert.equal(payload.truncatedBy, 'lines');
+    assert.equal(payload.nextOffset, 2_007);
+    assert.match(payload.continuation, /offset=/);
+    assert.ok(Buffer.byteLength(payload.content, 'utf8') <= 50 * 1024);
+  });
+
+  it('bash bounds both streams without falling back to a malformed result', async () => {
+    const transport = createFakeTransport([]);
+    transport.bash = async () => ({
+      exitCode: 0,
+      stdout: 'o'.repeat(40 * 1024),
+      stderr: 'e'.repeat(40 * 1024),
+    });
+    const defs = createSandboxBridgeToolDefinitions(RUN_A, transport, {
+      sandboxRequestBinder: createFakeBinder(),
+    });
+
+    const result = await defs.find((t) => t.name === 'bash').execute('bash-large', {
+      command: 'true',
+    });
+    const payload = JSON.parse(result.content[0].text);
+
+    assert.equal(payload.exitCode, 0);
+    assert.equal(payload.stdoutTruncated, true);
+    assert.equal(payload.stderrTruncated, true);
+    assert.equal(payload.stdoutTruncatedBy, 'bytes');
+    assert.equal(payload.stderrTruncatedBy, 'bytes');
   });
 });

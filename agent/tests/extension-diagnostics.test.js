@@ -103,6 +103,30 @@ test('MCP diagnostics expose references as a boolean policy, never endpoints or 
   assert.doesNotMatch(serialized, /CRM_PRODUCTION_TOKEN/);
 });
 
+test('MCP diagnostics expose startup-discovered mcp__ tools with approval defaults', () => {
+  const diagnostics = getExtensionDiagnostics({
+    mcpServers: [{ id: 'crm', command: 'node', args: ['server.js'] }],
+    mcpDiscovery: {
+      ready: true,
+      servers: [
+        {
+          serverId: 'crm',
+          status: 'connected',
+          toolCount: 1,
+          toolNames: ['search'],
+        },
+      ],
+    },
+    models: [],
+  });
+  const tool = diagnostics.tools.find((entry) => entry.name === 'mcp__crm__search');
+  assert.equal(tool?.source, 'mcp');
+  assert.equal(tool?.approval_policy, 'require_approval');
+  assert.deepEqual(diagnostics.profile.allowed_mcp_tools, ['mcp__crm__search']);
+  assert.equal(diagnostics.mcp_servers[0].tool_count, 1);
+  assert.equal(diagnostics.mcp_servers[0].connection_status, 'connected');
+});
+
 test('unknown legacy profile ids fail closed', () => {
   assert.throws(
     () =>

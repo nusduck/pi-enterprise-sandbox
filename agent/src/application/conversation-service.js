@@ -51,12 +51,16 @@ export function presentTranscriptMessage(msg) {
     if (typeof content.text === 'string') {
       text = content.text;
     } else if (Array.isArray(content.messages)) {
-      // Create-run user row stores { messages: [{ role, content }] }
-      const first = content.messages.find((m) => m && typeof m === 'object') || content.messages[0];
-      if (first) {
-        if (typeof first.content === 'string') text = first.content;
-        else if (Array.isArray(first.content)) {
-          text = first.content
+      // Legacy create-run rows only have the full prompt context. The current
+      // turn is its last user item, not the first historic item.
+      const current = [...content.messages]
+        .reverse()
+        .find((m) => m && typeof m === 'object' &&
+          (m.role === 'user' || m.role == null));
+      if (current) {
+        if (typeof current.content === 'string') text = current.content;
+        else if (Array.isArray(current.content)) {
+          text = current.content
             .map((p) =>
               typeof p === 'string'
                 ? p
@@ -85,10 +89,19 @@ export function presentTranscriptMessage(msg) {
   // only when we have no text; skip pure empty assistant rows without content.
   if (role === 'assistant' && !String(text || '').trim()) return null;
 
+  const sequenceNo = msg.sequenceNo ?? msg.sequence_no;
   return {
+    // Keep the durable message identity and ordering fields intact.  The
+    // browser transcript is a projection of the append-only messages table,
+    // not a new source of ordering truth.
     id: msg.messageId || msg.message_id || null,
+    message_id: msg.messageId || msg.message_id || null,
+    run_id: msg.runId || msg.run_id || null,
     role,
     content: [{ type: 'text', text: String(text || '') }],
+    sequence_no: sequenceNo != null && Number.isFinite(Number(sequenceNo))
+      ? Number(sequenceNo)
+      : null,
     created_at: msg.createdAt || msg.created_at || null,
   };
 }

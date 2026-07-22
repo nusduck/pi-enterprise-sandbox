@@ -25,6 +25,22 @@ describe('interrupted status', () => {
     assert.equal(msgs[1].content[0] && 'text' in msgs[1].content[0] ? msgs[1].content[0].text : '', 'partial');
   });
 
+  it('normalizeServerMessages retains durable message ordering metadata', () => {
+    const [message] = normalizeServerMessages([{
+      role: 'assistant',
+      content: 'durable answer',
+      message_id: 'msg_01',
+      run_id: 'run_01',
+      sequence_no: 42,
+      created_at: '2026-07-18T06:00:00.123Z',
+    }]);
+
+    assert.equal(message._messageId, 'msg_01');
+    assert.equal(message._runId, 'run_01');
+    assert.equal(message.sequenceNo, 42);
+    assert.equal(message.createdAt, '2026-07-18T06:00:00.123Z');
+  });
+
   it('isInterruptedMessage true for interrupted assistant', () => {
     assert.equal(
       isInterruptedMessage({

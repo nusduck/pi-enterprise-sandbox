@@ -165,6 +165,22 @@ test('presentRunDetail maps the durable Agent failure reason to the public error
   assert.equal(detail.error, 'Pi runtime completed with assistant stopReason=error: quota exhausted');
 });
 
+test('presentRunDetail exposes a completed Agent Run as finished_at', () => {
+  const detail = presentRunDetail(
+    { run_id: 'r4', status: 'SUCCEEDED' },
+    {
+      run_id: 'r4',
+      status: 'SUCCEEDED',
+      started_at: '2026-07-14T10:00:00.000Z',
+      completed_at: '2026-07-14T10:01:05.000Z',
+    },
+    true,
+  );
+  assert.equal(detail.started_at, '2026-07-14T10:00:00.000Z');
+  assert.equal(detail.completed_at, '2026-07-14T10:01:05.000Z');
+  assert.equal(detail.finished_at, '2026-07-14T10:01:05.000Z');
+});
+
 test('GET Run fails closed 404 when Agent has no owner-scoped run', async () => {
   const res = responseCapture();
   await handleGetRun('run_missing', res, { headers: {}, traceId: 'a'.repeat(32) });

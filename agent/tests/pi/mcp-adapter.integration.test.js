@@ -17,6 +17,7 @@ import {
 import { PiSessionAdapter } from '../../src/infrastructure/pi/pi-session-adapter.js';
 import {
   createPiMcpResolver,
+  discoverEnabledMcpServers,
 } from '../../src/infrastructure/mcp/pi-mcp-adapter-factory.js';
 
 const SESSION_ID = '01K0G2PAV8FPMVC9QHJG7JPN52';
@@ -126,6 +127,60 @@ describe('real pi-mcp-adapter runtime', () => {
     } finally {
       await managed.dispose();
       await assert.rejects(() => fs.access(privateConfigPath));
+      await sessionAdapter.dispose();
+    }
+  });
+
+  it('discovers enabled registry tools and injects them without AgentVersion MCP config', async () => {
+    const agentDir = path.join(root, 'agent-home-default-registry');
+    const workspace = path.join(root, 'workspace-default-registry');
+    await fs.mkdir(workspace, { recursive: true });
+    const registry = [
+      { id: 'mock', command: process.execPath, args: [fixture] },
+    ];
+    const discovery = await discoverEnabledMcpServers({
+      serverRegistry: registry,
+      cwd: workspace,
+    });
+    assert.equal(discovery.ready, true);
+    assert.equal(discovery.toolCount, 1);
+    assert.deepEqual(discovery.servers[0].toolNames, ['echo']);
+
+    const sessionAdapter = new PiSessionAdapter({
+      runtimeRoot: path.join(root, 'sessions-default-registry'),
+    });
+    const factory = new PiRuntimeFactory({
+      agentDir,
+      sessionAdapter,
+      mcpResolver: createPiMcpResolver({
+        runtimeRoot: path.join(root, 'mcp-runtime-default-registry'),
+        serverRegistry: registry,
+        defaultMcpServers: discovery.mcpServers,
+      }),
+    });
+    const managed = await factory.create({
+      agentVersion: {
+        agentVersionId: VERSION_ID,
+        piSdkVersion: PINNED_PI_SDK_VERSION,
+        configJson: { systemPrompt: '' },
+      },
+      agentSession: { agentSessionId: SESSION_ID },
+      cwd: workspace,
+      model: testModel(),
+      context: { traceId: '0123456789abcdef0123456789abcdef' },
+    });
+    try {
+      const tool = managed.session.getToolDefinition('mcp__mock__echo');
+      assert.equal(typeof tool?.execute, 'function');
+      const result = await tool.execute(
+        'mcp-default-registry-1',
+        { value: 'default-registry' },
+        new AbortController().signal,
+        () => {},
+      );
+      assert.equal(result.content[0].text, 'mock:default-registry');
+    } finally {
+      await managed.dispose();
       await sessionAdapter.dispose();
     }
   });

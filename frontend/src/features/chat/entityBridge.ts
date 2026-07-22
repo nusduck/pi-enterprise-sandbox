@@ -798,6 +798,7 @@ export function createEntityBridge(
         content: [{ type: 'text' as const, text: m.text }],
         _runId: runId,
         _messageId: m.id,
+        createdAt: m.createdAt || undefined,
         ...(m.status === 'interrupted'
           ? { interrupted: true, status: 'interrupted' as const }
           : {}),

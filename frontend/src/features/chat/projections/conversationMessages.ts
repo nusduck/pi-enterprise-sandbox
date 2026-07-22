@@ -26,24 +26,44 @@ function looksLikeToolEnvelopeText(text: string): boolean {
   );
 }
 
+const LEGACY_HISTORY_BUCKET = Number.MAX_SAFE_INTEGER;
+
 /**
- * Stable chat order key: prefer run timeline, then role (user before assistant).
+ * Stable chat order key. Persisted rows use their database sequence only;
+ * unsequenced legacy and live rows retain the order in which the merge put
+ * them. In particular, no role is ever used as a cross-message sort key.
  */
 function messageOrderKey(
   message: ChatMessage,
-  runOrder: Map<string, number>,
+  originalIndex: number,
 ): [number, number, string] {
+  const sequence = Number(message.sequenceNo);
+  if (Number.isFinite(sequence)) {
+    return [sequence, 0, String(message._messageId || '')];
+  }
+
   const runId = message._runId != null ? String(message._runId) : '';
-  const runIdx =
-    runId && runOrder.has(runId)
-      ? (runOrder.get(runId) as number)
-      : runId
-        ? 1_000_000
-        : -1; // committed history without run id stays first in relative order
-  const roleRank =
-    message.role === 'user' ? 0 : message.role === 'assistant' ? 1 : 2;
-  const id = String(message._messageId || runId || messageText(message).slice(0, 32));
-  return [runIdx, roleRank, id];
+  if (!runId) {
+    // Legacy history has no durable run or sequence linkage. Preserve the API
+    // array order instead of reconstructing turns from user/assistant roles.
+    return [LEGACY_HISTORY_BUCKET, originalIndex, ''];
+  }
+  return [LEGACY_HISTORY_BUCKET, originalIndex, String(message._messageId || '')];
+}
+
+function sortServerMessages(messages: ChatMessage[]): ChatMessage[] {
+  return messages
+    .map((message, index) => ({ message, index }))
+    .sort((a, b) => {
+      const ka = messageOrderKey(a.message, a.index);
+      const kb = messageOrderKey(b.message, b.index);
+      for (let i = 0; i < ka.length; i += 1) {
+        if (ka[i] < kb[i]) return -1;
+        if (ka[i] > kb[i]) return 1;
+      }
+      return a.index - b.index;
+    })
+    .map(({ message }) => message);
 }
 
 /**
@@ -85,9 +105,9 @@ function tagExactTranscriptTurns(
 /**
  * Merge server transcript rows with live per-Run projections.
  *
- * Ordering: runs by startedAt/createdAt/id; within a run user then assistant.
- * Late-finishing runs never append after a newer user turn via blind push —
- * they re-slot by `_runId`.
+ * Persisted history remains ordered by `sequenceNo`; live projections are
+ * inserted beside their matching `_runId` user turn. Late-finishing runs never
+ * append after a newer user turn via blind push — they re-slot by `_runId`.
  */
 export function projectConversationMessages(options: {
   serverMessages: ChatMessage[];
@@ -115,10 +135,12 @@ export function projectConversationMessages(options: {
   runs.forEach((run, i) => runOrder.set(run.id, i));
 
   // Start from server/chat history but drop leaked tool-envelope assistant rows.
-  const result: ChatMessage[] = tagExactTranscriptTurns(serverMessages, runs).filter((m) => {
-    if (m.role !== 'assistant') return true;
-    return !looksLikeToolEnvelopeText(messageText(m));
-  });
+  const result: ChatMessage[] = sortServerMessages(
+    tagExactTranscriptTurns(serverMessages, runs).filter((m) => {
+      if (m.role !== 'assistant') return true;
+      return !looksLikeToolEnvelopeText(messageText(m));
+    }),
+  );
 
   for (const run of runs) {
     const projectedAll = projectRunMessages(run.id);
@@ -174,64 +196,92 @@ export function projectConversationMessages(options: {
       result.splice(insertAt, 0, { ...userMsg, _runId: run.id });
     }
 
-    const projected = projectedAll.find((message) => message.role === 'assistant');
-    if (!projected) continue;
-    const text = messageText(projected);
-    if (!text && !hasRuntimeDetail(projected)) continue;
-    if (looksLikeToolEnvelopeText(text) && !hasRuntimeDetail(projected)) continue;
-
-    const tagged = { ...projected, _runId: run.id };
-    const stableSlot = result.findIndex(
-      (message) => message.role === 'assistant' && message._runId === run.id,
+    const assistants = projectedAll.filter(
+      (message) => message.role === 'assistant',
     );
+    for (
+      let assistantIndex = 0;
+      assistantIndex < assistants.length;
+      assistantIndex += 1
+    ) {
+      const projected = assistants[assistantIndex];
+      const text = messageText(projected);
+      if (!text && !hasRuntimeDetail(projected)) continue;
+      if (looksLikeToolEnvelopeText(text) && !hasRuntimeDetail(projected)) continue;
 
-    if (stableSlot >= 0) {
-      const serverMessage = result[stableSlot];
-      if (hasRuntimeDetail(tagged) && !text && messageText(serverMessage)) {
-        result[stableSlot] = {
-          ...tagged,
-          content: [
-            ...serverMessage.content.filter((part) => part.type === 'text'),
-            ...tagged.content,
-          ],
-        };
-      } else {
-        result[stableSlot] = tagged;
+      const tagged = { ...projected, _runId: run.id };
+      const serverAssistantSlots = result.flatMap((message, index) =>
+        message.role === 'assistant' && message._runId === run.id ? [index] : [],
+      );
+      const stableSlot =
+        tagged._messageId == null || tagged._messageId === ''
+          ? serverAssistantSlots[assistantIndex] ?? -1
+          : result.findIndex(
+              (message) =>
+                message.role === 'assistant' &&
+                message._runId === run.id &&
+                message._messageId === tagged._messageId,
+            );
+      const matchedSlot =
+        stableSlot >= 0 ? stableSlot : (serverAssistantSlots[assistantIndex] ?? -1);
+
+      if (matchedSlot >= 0) {
+        const serverMessage = result[matchedSlot];
+        const serverText = messageText(serverMessage);
+        if (hasRuntimeDetail(tagged) && serverText) {
+          result[matchedSlot] = {
+            ...serverMessage,
+            ...tagged,
+            content: [
+              ...serverMessage.content.filter((part) => part.type === 'text'),
+              ...tagged.content.filter((part) => part.type !== 'text'),
+            ],
+            sequenceNo: serverMessage.sequenceNo,
+            createdAt: serverMessage.createdAt || tagged.createdAt,
+          };
+        } else {
+          // The live projection adds transient tool/stream detail, but a
+          // committed row keeps its database-assigned placement and timestamp.
+          result[matchedSlot] = {
+            ...serverMessage,
+            ...tagged,
+            sequenceNo: serverMessage.sequenceNo,
+            createdAt: serverMessage.createdAt || tagged.createdAt,
+          };
+        }
+        continue;
       }
-      continue;
-    }
 
-    // Insert assistant after this run's user message, else after earlier runs.
-    const userSlot = result.findIndex(
-      (m) => m.role === 'user' && m._runId === run.id,
-    );
-    if (userSlot >= 0) {
-      result.splice(userSlot + 1, 0, tagged);
-      continue;
-    }
+      // Insert assistant after the prior assistant in the same run, then its
+      // user message, else before later runs. This preserves multi-message
+      // assistant turns while they stream and after a refresh.
+      const lastAssistantSlot = serverAssistantSlots.at(-1);
+      if (lastAssistantSlot != null) {
+        result.splice(lastAssistantSlot + 1, 0, tagged);
+        continue;
+      }
+      const userSlot = result.findIndex(
+        (m) => m.role === 'user' && m._runId === run.id,
+      );
+      if (userSlot >= 0) {
+        result.splice(userSlot + 1, 0, tagged);
+        continue;
+      }
 
-    let insertAt = result.length;
-    const firstLater = result.findIndex((m) => {
-      const rid = m._runId;
-      if (rid == null) return false;
-      const oi = runOrder.get(String(rid));
-      return oi != null && oi > runIdx;
-    });
-    if (firstLater >= 0) insertAt = firstLater;
-    result.splice(insertAt, 0, tagged);
+      let insertAt = result.length;
+      const firstLater = result.findIndex((m) => {
+        const rid = m._runId;
+        if (rid == null) return false;
+        const oi = runOrder.get(String(rid));
+        return oi != null && oi > runIdx;
+      });
+      if (firstLater >= 0) insertAt = firstLater;
+      result.splice(insertAt, 0, tagged);
+    }
   }
 
-  // Final stable sort for mixed committed + projected rows.
-  return result
-    .map((m, index) => ({ m, index }))
-    .sort((a, b) => {
-      const ka = messageOrderKey(a.m, runOrder);
-      const kb = messageOrderKey(b.m, runOrder);
-      for (let i = 0; i < ka.length; i += 1) {
-        if (ka[i] < kb[i]) return -1;
-        if (ka[i] > kb[i]) return 1;
-      }
-      return a.index - b.index;
-    })
-    .map(({ m }) => m);
+  // Server history was sorted before live rows were inserted. Do not sort the
+  // combined list again: an uncommitted projection deliberately occupies the
+  // slot immediately after its matching user turn.
+  return result;
 }

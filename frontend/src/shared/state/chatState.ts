@@ -275,9 +275,17 @@ export function normalizeServerMessages(messages: unknown): ChatMessage[] {
           .filter(Boolean)
           .join('\n');
       }
+      const rawSequence = m.sequenceNo ?? m.sequence_no;
       const out: ChatMessage = {
         role: m.role as string,
         content: [{ type: 'text', text }],
+        _messageId: String(m.messageId ?? m.message_id ?? m.id ?? ''),
+        _runId:
+          m.runId != null || m.run_id != null
+            ? String(m.runId ?? m.run_id)
+            : undefined,
+        sequenceNo: rawSequence == null ? Number.NaN : Number(rawSequence),
+        createdAt: String(m.createdAt ?? m.created_at ?? ''),
       };
       // Preserve interrupted status from server persistence / recovery
       if (m.interrupted === true || m.status === 'interrupted') {

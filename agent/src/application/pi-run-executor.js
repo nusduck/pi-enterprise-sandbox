@@ -54,6 +54,7 @@ import { createPromiseTail } from './promise-tail.js';
 import { APPROVAL_STATUS } from '../domain/tool/approval-status.js';
 import { TOOL_EXECUTION_STATUS } from '../domain/tool/tool-execution-status.js';
 import { DurableSteerController } from './durable-steer-controller.js';
+import { installPiRunToolBudget } from './pi-run-tool-budget.js';
 import {
   DURABLE_INTERACTION_PENDING,
   INTERACTION_STATUS,
@@ -285,6 +286,7 @@ export class PiRunExecutor {
    *   extensionBundleFactory?: (runContext: object, deps: object) => unknown[],
    *   eventProjectionMode?: 'session-subscribe' | 'observability' | 'both',
    *   steerPollIntervalMs?: number,
+   *   toolBudget?: { maxToolCalls?: number, maxIdenticalToolCalls?: number, maxModelTurns?: number },
    * }} deps
    */
   constructor(deps) {
@@ -343,6 +345,7 @@ export class PiRunExecutor {
      */
     this.eventProjectionMode = deps.eventProjectionMode ?? 'session-subscribe';
     this.steerPollIntervalMs = deps.steerPollIntervalMs;
+    this.toolBudget = deps.toolBudget ?? null;
 
     /** @type {string | null} */
     this._lockToken = null;
@@ -875,6 +878,13 @@ export class PiRunExecutor {
       // Worker are separate processes; MySQL events are the hand-off channel.
       let promptError = null;
       let promptPromise = null;
+      // Pi's native loop deliberately has no Run-level tool budget. This
+      // temporary guard keeps the normal governance hooks intact and restores
+      // the session after this Run completes.
+      const toolBudgetGuard = installPiRunToolBudget(
+        runtimeSession,
+        this.toolBudget ?? undefined,
+      );
       try {
         if (typeof runtimeSession.prompt === 'function') {
           promptPromise = runtimeSession.prompt(prompt.text, prompt.options);
@@ -916,6 +926,7 @@ export class PiRunExecutor {
         promptError = err;
       } finally {
         await this._steerController?.stop();
+        toolBudgetGuard.dispose();
         if (!promptError && this._steerController?.error) {
           promptError = this._steerController.error;
         }
@@ -1774,6 +1785,7 @@ export class PiRunExecutor {
  *   agentDir?: string,
  *   sessionLockRenewIntervalMs?: number,
  *   steerPollIntervalMs?: number,
+ *   toolBudget?: { maxToolCalls?: number, maxIdenticalToolCalls?: number, maxModelTurns?: number },
  * }} opts
  * @returns {import('./run-executor.js').RunExecutorFactory}
  */
@@ -1820,6 +1832,7 @@ export function createPiRunExecutorFactory(opts) {
       agentDir: opts.agentDir,
       sessionLockRenewIntervalMs: opts.sessionLockRenewIntervalMs,
       steerPollIntervalMs: opts.steerPollIntervalMs,
+      toolBudget: opts.toolBudget,
       extensionBundleFactory: opts.extensionBundleFactory,
       eventProjectionMode: opts.eventProjectionMode,
     });

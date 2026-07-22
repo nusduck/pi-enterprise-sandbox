@@ -478,6 +478,8 @@ describe('ServiceContainer', () => {
       });
       try {
         const services = await container.createHttpServices();
+        assert.equal(typeof services.steerRunService?.execute, 'function');
+        assert.equal(typeof services.followUpService?.execute, 'function');
         return services.a2aTaskService.buildArtifactDownloadUri;
       } finally {
         await container.shutdown();

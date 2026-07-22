@@ -19,6 +19,26 @@ export const AuthResponseSchema = z
 
 export const MeResponseSchema = AuthUserSchema;
 
+/**
+ * Durable transcript row. Keep both wire naming conventions while the Agent
+ * boundary migrates, and retain unknown fields for forward compatibility.
+ */
+export const ConversationMessageSchema = z
+  .object({
+    id: z.union([z.string(), z.number()]).optional().nullable(),
+    message_id: z.union([z.string(), z.number()]).optional().nullable(),
+    messageId: z.union([z.string(), z.number()]).optional().nullable(),
+    run_id: z.union([z.string(), z.number()]).optional().nullable(),
+    runId: z.union([z.string(), z.number()]).optional().nullable(),
+    role: z.string().optional(),
+    content: z.unknown().optional(),
+    sequence_no: z.union([z.number(), z.string()]).optional().nullable(),
+    sequenceNo: z.union([z.number(), z.string()]).optional().nullable(),
+    created_at: z.string().optional().nullable(),
+    createdAt: z.string().optional().nullable(),
+  })
+  .passthrough();
+
 export const ConversationSchema = z
   .object({
     id: z.string(),
@@ -26,7 +46,7 @@ export const ConversationSchema = z
     created_at: z.string().optional().nullable(),
     updated_at: z.string().optional().nullable(),
     sandbox_session_id: z.string().optional().nullable(),
-    messages: z.array(z.unknown()).optional(),
+    messages: z.array(ConversationMessageSchema).optional(),
   })
   .passthrough();
 

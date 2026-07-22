@@ -42,10 +42,10 @@ export function MessageList() {
         displayMessages.map((msg, idx) => (
           <MessageBubble
             key={
-              msg._runId
-                ? `${msg.role}-${msg._runId}`
-                : msg._messageId
-                  ? `${msg.role}-${msg._messageId}`
+              msg._messageId
+                ? `${msg.role}-${msg._messageId}`
+                : msg._runId
+                  ? `${msg.role}-${msg._runId}`
                   : `${msg.role}-${idx}`
             }
             msg={msg}

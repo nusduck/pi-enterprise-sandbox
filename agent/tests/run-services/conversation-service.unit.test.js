@@ -1,7 +1,10 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { ConversationService } from '../../src/application/conversation-service.js';
+import {
+  ConversationService,
+  presentTranscriptMessage,
+} from '../../src/application/conversation-service.js';
 import { CreateRunService } from '../../src/application/create-run-service.js';
 import { OwnerScopedNotFoundError } from '../../src/application/errors.js';
 import {
@@ -21,6 +24,45 @@ function createService(world, sessionProvisioner = null) {
 }
 
 describe('ConversationService MySQL authority', () => {
+  it('preserves durable message metadata in the browser transcript', () => {
+    const message = presentTranscriptMessage({
+      messageId: 'msg_01',
+      runId: 'run_01',
+      role: 'assistant',
+      messageType: 'chat',
+      sequenceNo: 42,
+      contentJson: { text: 'durable answer' },
+      createdAt: '2026-07-18T06:00:00.123Z',
+    });
+
+    assert.deepEqual(message, {
+      id: 'msg_01',
+      message_id: 'msg_01',
+      run_id: 'run_01',
+      role: 'assistant',
+      content: [{ type: 'text', text: 'durable answer' }],
+      sequence_no: 42,
+      created_at: '2026-07-18T06:00:00.123Z',
+    });
+  });
+
+  it('renders the current user turn from legacy full-context rows', () => {
+    const message = presentTranscriptMessage({
+      messageId: 'msg_legacy',
+      role: 'user',
+      messageType: 'text',
+      contentJson: {
+        messages: [
+          { role: 'user', content: [{ type: 'text', text: '你好呀' }] },
+          { role: 'assistant', content: [{ type: 'text', text: '你好！' }] },
+          { role: 'user', content: [{ type: 'text', text: '总结这个文档' }] },
+        ],
+      },
+    });
+
+    assert.equal(message.content[0].text, '总结这个文档');
+  });
+
   it('returns an empty list for a trusted owner that has not been provisioned', async () => {
     const service = createService(createFakeRunWorld());
     assert.deepEqual(await service.list(FIXED_AUTH), []);

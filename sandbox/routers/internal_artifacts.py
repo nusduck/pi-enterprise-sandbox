@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import re
-from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -18,9 +17,9 @@ from sandbox.app.domain.internal_artifact_download_contract import (
 from sandbox.security.internal_http_auth import InternalAuthContext, require_internal_auth
 from sandbox.services.artifact_manager import (
     ArtifactError,
+    artifact_content_disposition,
     artifact_manager,
     iter_snapshot_chunks,
-    safe_content_disposition_filename,
 )
 from sandbox.services.formal_artifact_runtime import get_formal_artifact_runtime
 
@@ -85,11 +84,7 @@ async def internal_artifact_download(
         }[status]
         raise HTTPException(status_code=status, detail=detail) from None
 
-    filename = safe_content_disposition_filename(artifact.name)
-    disposition = (
-        f'attachment; filename="{filename}"; '
-        f"filename*=UTF-8''{quote(filename, safe='')}"
-    )
+    disposition = artifact_content_disposition(artifact.name)
     media_type = str(artifact.mime_type or "application/octet-stream").strip()
     if (
         _SAFE_MEDIA_TYPE_RE.fullmatch(media_type) is None

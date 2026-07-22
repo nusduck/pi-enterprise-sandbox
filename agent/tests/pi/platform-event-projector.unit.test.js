@@ -66,6 +66,20 @@ describe('PlatformEventProjector', () => {
     assert.equal(events[2].payload.toolCallId, 'tc2');
   });
 
+  it('marks a bounded assistant text projection as truncated', () => {
+    const [event] = new PlatformEventProjector().project({
+      type: 'message_end',
+      message: {
+        role: 'assistant',
+        content: [{ type: 'text', text: 'x'.repeat(513) }],
+      },
+    }, CTX);
+
+    assert.equal(event.type, 'message.completed');
+    assert.equal(event.payload.message.textTruncated, true);
+    assert.equal(event.payload.message.content[0].truncated, true);
+  });
+
   it('maps tool start/update/end using event fields (stateless)', () => {
     const p = new PlatformEventProjector();
     const events = p.projectMany(

@@ -637,6 +637,43 @@ describe('createAgentHttpServer factory', () => {
     }
   });
 
+  it('/ready reports MCP discovery counts and fails when an enabled server is unreachable', async () => {
+    const srv = createAgentHttpServer({
+      createRunService: { execute: async () => ({}) },
+      getRunService: { execute: async () => ({}) },
+      cancelRunService: { execute: async () => ({}) },
+      eventQueryService: { listEvents: async () => ({ events: [] }) },
+      dataPlaneReady: true,
+      sandboxHealthCheck: async () => ({ status: 'ok' }),
+      mcpReadiness: () => ({
+        ready: false,
+        serverCount: 1,
+        toolCount: 0,
+        servers: [
+          {
+            serverId: 'crm',
+            status: 'unreachable',
+            toolCount: 0,
+            error: 'connect ECONNREFUSED',
+          },
+        ],
+      }),
+      config: {},
+    });
+    const p = await listen(srv);
+    try {
+      const res = await fetch(`http://127.0.0.1:${p}/ready`);
+      assert.equal(res.status, 503);
+      const body = await res.json();
+      assert.equal(body.mcp.status, 'unreachable');
+      assert.equal(body.mcp.server_count, 1);
+      assert.equal(body.mcp.servers[0].id, 'crm');
+      assert.match(body.mcp.servers[0].error, /ECONNREFUSED/);
+    } finally {
+      await new Promise((r) => srv.close(() => r()));
+    }
+  });
+
   it('mapErrorToHttp never embeds DSN secrets', () => {
     const err = new ValidationError('bad');
     assert.equal(mapErrorToHttp(err).status, 400);

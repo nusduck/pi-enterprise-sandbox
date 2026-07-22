@@ -158,6 +158,27 @@ export function createObservabilityExtension(options) {
   let providerSeq = 0;
   /** Per-session monotonic sequence for stable message identities. */
   let messageSeq = 0;
+  /** Separate assistant stream identity; one model turn can emit many messages. */
+  let assistantMessageSeq = 0;
+  let activeAssistantMessageId = null;
+
+  function nextAssistantMessageId() {
+    assistantMessageSeq += 1;
+    return `assistant:${runContext.runId}:seq${assistantMessageSeq}`;
+  }
+
+  function activeAssistantMessage() {
+    if (!activeAssistantMessageId) {
+      activeAssistantMessageId = nextAssistantMessageId();
+    }
+    return activeAssistantMessageId;
+  }
+
+  function finishAssistantMessage() {
+    const messageId = activeAssistantMessageId || nextAssistantMessageId();
+    activeAssistantMessageId = null;
+    return messageId;
+  }
 
   /**
    * @param {string} type
@@ -284,6 +305,7 @@ export function createObservabilityExtension(options) {
         const delta = redactInlineSecrets(String(ame.delta ?? ''));
         await emit('message.delta', {
           role: 'assistant',
+          messageId: activeAssistantMessage(),
           delta: delta.slice(0, 512),
           delta_truncated: delta.length > 512,
         });
@@ -295,10 +317,12 @@ export function createObservabilityExtension(options) {
       const role = message?.role ?? 'unknown';
       const usage = extractUsageSummary(message);
       const dedupeKey = messageDedupeKey(message, role);
+      const messageId = role === 'assistant' ? finishAssistantMessage() : null;
       await emit(
         'message.completed',
         {
           role,
+          ...(messageId ? { messageId } : {}),
           message: summarizeAssistantMessage(message),
           ...(usage ? { usage } : {}),
           _obsSeq: messageSeq,

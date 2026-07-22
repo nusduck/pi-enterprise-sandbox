@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-from urllib.parse import quote
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
@@ -12,9 +11,9 @@ from sandbox.models import ArtifactListResponse, ArtifactRegister, ArtifactRespo
 from sandbox.security.ownership import require_owned_session, resolve_actor
 from sandbox.services.artifact_manager import (
     ArtifactError,
+    artifact_content_disposition,
     artifact_manager,
     iter_snapshot_chunks,
-    safe_content_disposition_filename,
 )
 from sandbox.services.control_plane_storage import FileIdentity
 from sandbox.services.execution_context import SandboxExecutionContext
@@ -222,11 +221,7 @@ async def download_artifact(session_id: str, artifact_id: str, request: Request)
     except ArtifactError as exc:
         raise _artifact_http_error(exc) from exc
 
-    filename = safe_content_disposition_filename(art.name)
-    disposition = (
-        f'attachment; filename="{filename}"; '
-        f"filename*=UTF-8''{quote(filename)}"
-    )
+    disposition = artifact_content_disposition(art.name)
     media = art.mime_type or "application/octet-stream"
     if media.lower() in {"text/html", "application/xhtml+xml", "image/svg+xml"}:
         media = "application/octet-stream"

@@ -23,6 +23,7 @@ export {
   createMcpExtensionsOverride,
   createPiMcpAdapter,
   createPiMcpResolver,
+  discoverEnabledMcpServers,
   buildMcpPolicyBindings,
   resolveMcpBinding,
 } from './pi-mcp-adapter-factory.js';

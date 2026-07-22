@@ -15,6 +15,7 @@ import {
   filterRunsByStatus,
   formatRunDuration,
   mergeRunRows,
+  normalizeRunStatus,
   runRowFromApi,
   runRowFromEntity,
   shortId,
@@ -50,6 +51,18 @@ describe('run helpers', () => {
     assert.equal(filterRunsByStatus(rows, 'completed').length, 1);
     assert.equal(filterRunsByStatus(rows, 'failed')[0]?.id, 'r4');
     assert.equal(filterRunsByStatus(rows, 'all').length, 4);
+  });
+
+  it('normalizes durable Agent status values before filtering', () => {
+    const rows = [
+      runRowFromApi({ run_id: 'r1', status: 'RUNNING' }),
+      runRowFromApi({ run_id: 'r2', status: 'SUCCEEDED' }),
+      runRowFromApi({ run_id: 'r3', status: 'WAITING_INPUT' }),
+    ].filter(Boolean);
+    assert.equal(normalizeRunStatus('WAITING_APPROVAL'), 'waiting_approval');
+    assert.equal(filterRunsByStatus(rows, 'running').length, 1);
+    assert.equal(filterRunsByStatus(rows, 'completed').length, 1);
+    assert.equal(filterRunsByStatus(rows, 'waiting_input').length, 1);
   });
 
   it('merges API rows with entity store without dropping either', () => {
@@ -98,6 +111,19 @@ describe('run helpers', () => {
     assert.equal(canCancelRun('running'), true);
     assert.equal(canCancelRun('succeeded'), false);
     assert.equal(shortId('abcdefghijklmnop', 8), 'abcdefgh…');
+  });
+
+  it('uses Agent completed_at as the terminal duration timestamp', () => {
+    const row = runRowFromApi({
+      run_id: 'abc1234567890',
+      status: 'SUCCEEDED',
+      started_at: '2026-07-12T00:00:00.000Z',
+      completed_at: '2026-07-12T00:01:05.000Z',
+    });
+    assert.ok(row);
+    assert.equal(row.finishedAt, '2026-07-12T00:01:05.000Z');
+    assert.equal(formatRunDuration(row.startedAt, row.finishedAt), '01:05');
+    assert.equal(canCancelRun('RUNNING'), true);
   });
 
   it('formats duration', () => {

@@ -210,6 +210,22 @@ def test_download_streams_snapshot_bytes_and_bound_headers(download_case) -> Non
     assert response.headers["x-content-type-options"] == "nosniff"
 
 
+def test_download_accepts_unicode_artifact_name(download_case) -> None:
+    app, artifact = download_case
+    manager = internal_artifacts.artifact_manager
+    manager.formal.repo.rows[artifact.artifact_id]["display_name"] = "π 自我介绍演示文稿.bin"
+    body = _body(artifact.artifact_id)
+    token = _token(artifact.artifact_id, body, jti="artifact-download-unicode-name")
+
+    with TestClient(app) as client:
+        response = _post(client, body, token)
+
+    assert response.status_code == 200, response.text
+    assert response.content == CONTENT
+    assert response.headers["content-disposition"].encode("latin-1")
+    assert "filename*=UTF-8''%CF%80%20" in response.headers["content-disposition"]
+
+
 def test_download_is_owner_scoped_and_never_accepts_a_path(download_case) -> None:
     app, artifact = download_case
     foreign_body = _body(artifact.artifact_id, user_id=OTHER_USER)

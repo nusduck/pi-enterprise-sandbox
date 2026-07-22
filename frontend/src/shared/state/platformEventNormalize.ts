@@ -76,6 +76,19 @@ function messageText(value: unknown): string {
     .join('');
 }
 
+/** Whether a bounded event message contains only a text preview. */
+function messageTextWasTruncated(value: unknown): boolean {
+  if (!isPlainObject(value)) return false;
+  if (value.textTruncated === true || value.text_truncated === true) return true;
+  if (!Array.isArray(value.content)) return false;
+  return value.content.some(
+    (part) =>
+      isPlainObject(part) &&
+      String(part.type || '') === 'text' &&
+      part.truncated === true,
+  );
+}
+
 /**
  * Map platform type string to internal reducer type.
  */
@@ -375,6 +388,8 @@ function normalizePayload(
   // Common camelCase → snake_case promotions
   const aliases: Array<[string, string]> = [
     ['toolCallId', 'tool_call_id'],
+    ['toolName', 'name'],
+    ['tool_name', 'name'],
     ['tool_id', 'tool_call_id'],
     ['toolId', 'tool_call_id'],
     ['approvalId', 'approval_id'],
@@ -397,6 +412,7 @@ function normalizePayload(
     ['riskLevel', 'risk_level'],
     ['expiresAt', 'expires_at'],
     ['parentSpanId', 'parent_span_id'],
+    ['textTruncated', 'text_truncated'],
   ];
   for (const [from, to] of aliases) {
     if (p[to] == null && p[from] != null) p[to] = p[from];
@@ -405,6 +421,9 @@ function normalizePayload(
   if (type.startsWith('message.')) {
     const message = isPlainObject(p.message) ? p.message : null;
     if (p.role == null && message?.role != null) p.role = message.role;
+    if (p.text_truncated == null && messageTextWasTruncated(message)) {
+      p.text_truncated = true;
+    }
     if (p.text == null) {
       const inferredText =
         typeof p.delta === 'string'

@@ -11,7 +11,7 @@ export const RUN_STATUS_FILTERS = [
   { id: 'all', label: 'All' },
   { id: 'running', label: 'Running' },
   { id: 'waiting_approval', label: 'Waiting Approval' },
-  { id: 'interrupted', label: 'Interrupted' },
+  { id: 'waiting_input', label: 'Waiting Input' },
   { id: 'failed', label: 'Failed' },
   { id: 'completed', label: 'Completed' },
 ] as const;
@@ -38,6 +38,15 @@ export type RunRow = {
 /** Map "completed" filter to terminal success statuses. */
 const COMPLETED_STATUSES = new Set(['succeeded', 'completed', 'cancelled']);
 
+/**
+ * The durable Agent API uses uppercase plan §10 statuses, while the browser
+ * entity store predates it and uses lowercase statuses. Keep that transport
+ * detail at this boundary so filtering, labels, and cancel affordances agree.
+ */
+export function normalizeRunStatus(status: string | null | undefined): string {
+  return String(status || 'unknown').trim().toLowerCase();
+}
+
 /** Map filter chip → matching status set. */
 export function statusesForFilter(filter: RunStatusFilterId): Set<string> | null {
   if (filter === 'all') return null;
@@ -51,7 +60,7 @@ export function filterRunsByStatus(
 ): RunRow[] {
   const set = statusesForFilter(filter);
   if (!set) return rows;
-  return rows.filter((r) => set.has(r.status));
+  return rows.filter((r) => set.has(normalizeRunStatus(r.status)));
 }
 
 function shortUsage(usage: unknown): string | null {
@@ -78,7 +87,7 @@ export function runRowFromApi(item: ApiRunItem | RunDetail): RunRow | null {
     id,
     conversationId:
       (any.conversation_id as string | null | undefined) ?? null,
-    status: String(any.status || 'unknown'),
+    status: normalizeRunStatus(any.status as string | null | undefined),
     currentStep:
       any.current_step != null ? String(any.current_step) : null,
     currentTool: (any.current_tool as string | null | undefined) ?? null,
@@ -89,7 +98,13 @@ export function runRowFromApi(item: ApiRunItem | RunDetail): RunRow | null {
     runner: (any.runner as string | null | undefined) ?? null,
     error: (any.error as string | null | undefined) ?? null,
     startedAt: (any.started_at as string | null | undefined) ?? null,
-    finishedAt: (any.finished_at as string | null | undefined) ?? null,
+    // Agent Run authority calls this completed_at. finished_at is retained for
+    // compatibility with the browser entity store and older BFF responses.
+    finishedAt:
+      (any.finished_at as string | null | undefined) ??
+      (any.completed_at as string | null | undefined) ??
+      (any.completedAt as string | null | undefined) ??
+      null,
     createdAt: (any.created_at as string | null | undefined) ?? null,
     tokenUsage: shortUsage(any.usage || any.token_usage),
     source: 'api',
@@ -109,7 +124,7 @@ export function runRowFromEntity(
   return {
     id: run.id,
     conversationId: run.conversationId,
-    status: run.status,
+    status: normalizeRunStatus(run.status),
     currentStep:
       tools.length > 0 ? `Tool ${tools.length}` : null,
     currentTool,
@@ -174,7 +189,7 @@ export function canCancelRun(status: string): boolean {
     'waiting_approval',
     'waiting_input',
     'cancel_requested',
-  ].includes(status);
+  ].includes(normalizeRunStatus(status));
 }
 
 export function formatRunDuration(

@@ -18,6 +18,7 @@ from sandbox.config import settings
 from sandbox.services.artifact_manager import (
     ArtifactError,
     ArtifactManager,
+    artifact_content_disposition,
     safe_content_disposition_filename,
 )
 from sandbox.services.artifact_store import (
@@ -1276,3 +1277,10 @@ class TestArtifactDisposition:
     def test_safe_filename(self):
         assert "\r" not in safe_content_disposition_filename('a\r\nb.txt')
         assert '"' not in safe_content_disposition_filename('a"b.txt')
+
+    def test_unicode_filename_uses_ascii_fallback_and_utf8_extended_value(self):
+        header = artifact_content_disposition("π 自我介绍演示文稿.pptx")
+        assert header.encode("latin-1")
+        assert 'filename="_' in header
+        assert 'π' not in header.split("filename*=", maxsplit=1)[0]
+        assert "filename*=UTF-8''%CF%80%20%E8%87%AA%E6%88%91" in header

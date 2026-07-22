@@ -403,8 +403,18 @@ export function reduceRuntimeEvent(
         payload.role == null || payload.role === '' ? 'assistant' : payload.role,
       );
       if (!deltaRole || deltaRole === 'user') break;
-      const messageId = str(payload.message_id || payload.id);
+      let messageId = str(payload.message_id || payload.id);
       const delta = str(payload.text || payload.delta);
+      if (!messageId) {
+        const run = next.runsById[runId];
+        for (const id of [...(run?.messageIds || [])].reverse()) {
+          const candidate = next.messagesById[id];
+          if (candidate?.role === 'assistant' && candidate.status === 'streaming') {
+            messageId = id;
+            break;
+          }
+        }
+      }
       if (messageId && next.messagesById[messageId]) {
         const msg = next.messagesById[messageId];
         next = upsertMessage(next, {
@@ -415,7 +425,7 @@ export function reduceRuntimeEvent(
         });
       } else {
         // Implicit start: create streaming message if missing
-        const id = messageId || `msg_${runId}_stream`;
+        const id = messageId || `msg_${runId}_stream_${ev.sequence}`;
         const existing = next.messagesById[id];
         next = upsertMessage(
           next,
@@ -458,8 +468,13 @@ export function reduceRuntimeEvent(
         if (msg.role !== completedRole && completedRole !== 'assistant') {
           break;
         }
+        // A message.completed event is a bounded, redacted observability
+        // projection. It must not replace a complete live token buffer with
+        // its shortened preview.
         const finalText =
-          payload.text != null ? str(payload.text) : msg.text;
+          payload.text != null && payload.text_truncated !== true
+            ? str(payload.text)
+            : msg.text;
         next = upsertMessage(next, {
           ...msg,
           text: finalText,

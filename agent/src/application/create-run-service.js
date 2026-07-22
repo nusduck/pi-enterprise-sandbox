@@ -123,6 +123,34 @@ function requireMessages(messages) {
   return messages;
 }
 
+/**
+ * Persist the current user turn separately from the full prompt context.
+ * The latter is needed by Pi, but it must never be used as the browser's
+ * transcript body: its first item belongs to an older turn after turn one.
+ *
+ * @param {unknown[]} messages
+ * @returns {string}
+ */
+function currentUserTurnText(messages) {
+  const current = [...messages]
+    .reverse()
+    .find((message) => message && typeof message === 'object' &&
+      (message.role === 'user' || message.role == null));
+  if (!current || typeof current !== 'object') return '';
+  const raw = current.content ?? current.text ?? '';
+  if (typeof raw === 'string') return raw;
+  if (!Array.isArray(raw)) return '';
+  return raw
+    .map((part) => {
+      if (typeof part === 'string') return part;
+      return part && typeof part === 'object' && typeof part.text === 'string'
+        ? part.text
+        : '';
+    })
+    .filter(Boolean)
+    .join('');
+}
+
 export class CreateRunService {
   /**
    * @param {{
@@ -399,6 +427,10 @@ export class CreateRunService {
       const outboxId = assertUlid(this.generateId(), 'outboxId');
 
       const contentJson = {
+        // Canonical browser transcript text for this Message row. Keep the
+        // complete context below for the executor, but never render it as one
+        // user bubble.
+        text: currentUserTurnText(ctx.messages),
         messages: ctx.messages,
         agentId: ctx.agentId,
         agentProfileId: ctx.agentProfileId,

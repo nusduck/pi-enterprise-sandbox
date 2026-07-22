@@ -57,11 +57,17 @@ function discoverSkills(skillRoots) {
   );
 }
 
-function projectMcpServers(rawServers) {
+function projectMcpServers(rawServers, discovery = null) {
   const registry = loadMcpServerRegistry(rawServers || []);
+  const discovered = new Map(
+    Array.isArray(discovery?.servers)
+      ? discovery.servers.map((server) => [server.serverId, server])
+      : [],
+  );
   return [...registry.values()]
     .map((server) => {
       const enabled = server.enabled !== false;
+      const result = discovered.get(server.serverId);
       const hasCredentialReference = Boolean(
         server.authTokenRef ||
           Object.keys(server.envRefs || {}).length > 0 ||
@@ -72,11 +78,12 @@ function projectMcpServers(rawServers) {
         id: server.serverId,
         name: server.serverId,
         enabled,
-        status: enabled ? 'configured' : 'disabled',
-        connection_status: enabled ? 'configured' : 'disabled',
+        status: enabled ? result?.status ?? 'configured' : 'disabled',
+        connection_status: enabled ? result?.status ?? 'configured' : 'disabled',
         transport: server.command ? 'stdio' : 'streamable-http',
         authorization: hasCredentialReference ? 'host-injected' : 'none',
-        tool_count: null,
+        tool_count: result?.toolCount ?? null,
+        tools: result?.toolNames ?? [],
         dynamic: false,
       };
     })
@@ -92,6 +99,7 @@ function projectMcpServers(rawServers) {
  *   profileId?: string,
  *   skillRoots?: string[],
  *   mcpServers?: object[] | string,
+ *   mcpDiscovery?: { servers?: object[], ready?: boolean, toolCount?: number },
  *   models?: Iterable<object>,
  *   now?: () => Date,
  * }} [options]
@@ -105,7 +113,10 @@ export function getExtensionDiagnostics(options = {}) {
   }
 
   const skills = discoverSkills(options.skillRoots || []);
-  const mcpServers = projectMcpServers(options.mcpServers || []);
+  const mcpServers = projectMcpServers(
+    options.mcpServers || [],
+    options.mcpDiscovery,
+  );
   const models = options.models
     ? [...options.models]
     : [...buildRegistry().values()];
@@ -118,7 +129,20 @@ export function getExtensionDiagnostics(options = {}) {
     risk_level: 'low',
     approval_policy: 'external-side-effects-only',
     dynamic: false,
-  }));
+  })).concat(
+    mcpServers.flatMap((server) =>
+      (server.tools || []).map((toolName) => ({
+        name: `mcp__${server.server_id}__${toolName}`,
+        enabled: server.connection_status === 'connected',
+        status: server.connection_status,
+        category: 'execution',
+        source: 'mcp',
+        risk_level: 'high',
+        approval_policy: 'require_approval',
+        dynamic: false,
+      })),
+    ),
+  );
   const extensions = ENTERPRISE_EXTENSION_NAMES.map((name) => ({
     name,
     enabled: true,
@@ -140,7 +164,7 @@ export function getExtensionDiagnostics(options = {}) {
       profile_id: profileId,
       note:
         'Configured platform inventory. Per-Run live authority is the immutable AgentVersion and durable runtime ledger.',
-      mcp_tools: [],
+      mcp_tools: tools.filter((tool) => tool.name.startsWith('mcp__')),
     },
     profile: {
       id: profileId,
@@ -150,7 +174,9 @@ export function getExtensionDiagnostics(options = {}) {
       allowed_mcp_servers: mcpServers
         .filter((server) => server.enabled)
         .map((server) => server.server_id),
-      allowed_mcp_tools: [],
+      allowed_mcp_tools: tools
+        .filter((tool) => tool.name.startsWith('mcp__'))
+        .map((tool) => tool.name),
       skills: skills.map((skill) => skill.name),
       shared_skills: { mode: 'all', names: [] },
       context_policy: { authority: 'agent-version' },
@@ -169,4 +195,3 @@ export function getExtensionDiagnostics(options = {}) {
     models,
   };
 }
-

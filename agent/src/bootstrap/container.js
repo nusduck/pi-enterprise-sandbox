@@ -38,6 +38,7 @@ import { ExecuteRunService } from '../application/execute-run-service.js';
 import { RunRecoveryService } from '../application/run-recovery-service.js';
 import { createStubRunExecutor } from '../application/run-executor.js';
 import { createPiRunExecutorFactory } from '../application/pi-run-executor.js';
+import { resolvePiRunToolBudget } from '../application/pi-run-tool-budget.js';
 import { SessionRecoveryService } from '../application/session-recovery-service.js';
 import { RunEventQueryService } from '../application/run-event-query-service.js';
 import { TraceQueryService } from '../application/trace-query-service.js';
@@ -250,6 +251,62 @@ export class ServiceContainer {
     this.startPromise = null;
     /** @type {Promise<void> | null} */
     this.shutdownPromise = null;
+    /** Immutable per-process MCP startup discovery snapshot. */
+    this.mcpDiscovery = null;
+    /** @type {Promise<object> | null} */
+    this.mcpDiscoveryPromise = null;
+  }
+
+  /**
+   * Connect enabled MCP_SERVERS_JSON entries and run adapter-owned tools/list
+   * discovery once per Agent process. Failures are retained for /ready rather
+   * than being silently converted into an empty tool list.
+   */
+  async preflightMcpServers() {
+    if (this.mcpDiscovery) return this.mcpDiscovery;
+    if (this.mcpDiscoveryPromise) return this.mcpDiscoveryPromise;
+    this.mcpDiscoveryPromise = import(
+      '../infrastructure/mcp/pi-mcp-adapter-factory.js'
+    )
+      .then(async ({ createEnvironmentSecretResolver, discoverEnabledMcpServers }) => {
+        const snapshot = await discoverEnabledMcpServers({
+          serverRegistry: this.env.MCP_SERVERS_JSON || '[]',
+          secretResolver: createEnvironmentSecretResolver(this.env),
+          cwd:
+            this.env.AGENT_PI_DEFAULT_CWD ||
+            this.env.AGENT_SESSION_WORKSPACE_CWD ||
+            undefined,
+        });
+        this.mcpDiscovery = snapshot;
+        for (const server of snapshot.servers) {
+          if (server.status === 'connected') {
+            console.log(
+              `[agent-mcp] MCP Server connected id=${server.serverId} tools=${server.toolCount}`,
+            );
+          } else {
+            console.error(
+              `[agent-mcp] MCP readiness error id=${server.serverId}: ${server.error}`,
+            );
+          }
+        }
+        return snapshot;
+      })
+      .finally(() => {
+        this.mcpDiscoveryPromise = null;
+      });
+    return this.mcpDiscoveryPromise;
+  }
+
+  getMcpReadiness() {
+    return (
+      this.mcpDiscovery ?? {
+        ready: false,
+        serverCount: 0,
+        toolCount: 0,
+        servers: [],
+        mcpServers: [],
+      }
+    );
   }
 
   /**
@@ -609,6 +666,7 @@ export class ServiceContainer {
             createEnvironmentSecretResolver,
             createPiMcpResolver,
           } = await import('../infrastructure/mcp/pi-mcp-adapter-factory.js');
+          const mcpDiscovery = await this.preflightMcpServers();
           mcpResolver = createPiMcpResolver({
             serverRegistry: this.env.MCP_SERVERS_JSON || '[]',
             secretResolver:
@@ -616,6 +674,7 @@ export class ServiceContainer {
               createEnvironmentSecretResolver(this.env),
             runtimeRoot:
               opts.mcpRuntimeRoot || this.env.AGENT_MCP_RUNTIME_ROOT || undefined,
+            defaultMcpServers: mcpDiscovery.mcpServers,
           });
         }
         const {
@@ -949,6 +1008,7 @@ export class ServiceContainer {
       steerPollIntervalMs:
         opts.steerPollIntervalMs ??
         (Number(this.env.AGENT_STEER_POLL_INTERVAL_MS) || undefined),
+      toolBudget: resolvePiRunToolBudget(this.env),
       extensionBundleFactory,
       eventProjectionMode: opts.eventProjectionMode,
     });
@@ -1106,6 +1166,8 @@ export class ServiceContainer {
       createRunService,
       getRunService,
       cancelRunService,
+      steerRunService,
+      followUpService,
       eventQueryService,
       traceQueryService,
       conversationService,

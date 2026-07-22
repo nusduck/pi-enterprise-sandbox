@@ -165,4 +165,29 @@ describe('GetRunService pending_input projection (G6)', () => {
     const body = presentGetRunResponse(run);
     assert.equal(body.pending_input, null);
   });
+
+  it('projects completed_at into the browser finished_at field', () => {
+    const body = presentGetRunResponse({
+      runId: RUN,
+      status: 'SUCCEEDED',
+      conversationId: 'conversation',
+      agentSessionId: 'session',
+      orgId: 'org',
+      userId: 'user',
+      traceId: 'trace',
+      attempt: 1,
+      createdAt: '2026-07-20T10:00:00.000Z',
+      updatedAt: '2026-07-20T10:01:05.000Z',
+      startedAt: '2026-07-20T10:00:00.000Z',
+      completedAt: '2026-07-20T10:01:05.000Z',
+      nextEventSequence: 4,
+      modelId: 'gpt-5.6',
+      usage: { total_tokens: 42 },
+    });
+    assert.equal(body.finished_at, '2026-07-20T10:01:05.000Z');
+    assert.equal(body.completed_at, '2026-07-20T10:01:05.000Z');
+    assert.equal(body.last_sequence, 3);
+    assert.equal(body.model_id, 'gpt-5.6');
+    assert.deepEqual(body.usage, { total_tokens: 42 });
+  });
 });

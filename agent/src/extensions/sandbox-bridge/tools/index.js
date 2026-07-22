@@ -31,7 +31,6 @@ import {
   MAX_PYTHON_TIMEOUT_SEC,
   MAX_READ_BYTES,
   MAX_READ_LIMIT,
-  MAX_STDOUT_CAPTURE,
   MAX_WRITE_BYTES,
   PARALLEL_TOOLS,
   PROCESS_SIGNALS,
@@ -42,7 +41,14 @@ import {
   normalizeLogicalPath,
   normalizeWritePath,
 } from '../path-guards.js';
-import { toolErr, toolOk, toolResultJson, truncateText } from '../result.js';
+import {
+  DEFAULT_TOOL_OUTPUT_BYTES,
+  DEFAULT_TOOL_OUTPUT_LINES,
+  toolErr,
+  toolOk,
+  toolResultJson,
+  truncateToolOutput,
+} from '../result.js';
 import {
   buildTransportCallPayload,
   buildTransportIdentity,
@@ -55,6 +61,13 @@ import {
 } from '../../../domain/tool/tool-request-hash.js';
 import { assertUlid } from '../../../domain/shared/ulid.js';
 import { normalizeProcessStatus } from '../../../domain/process-status.js';
+
+// Keep enough room for the sibling stream and JSON metadata. Otherwise a
+// command with both stdout and stderr near their individual limits would make
+// the enclosing result hit toolResultJson's safety fallback.
+const MAX_STREAM_OUTPUT_BYTES = Math.floor(DEFAULT_TOOL_OUTPUT_BYTES / 3);
+const MAX_STREAM_OUTPUT_LINES = Math.floor(DEFAULT_TOOL_OUTPUT_LINES / 3);
+const MAX_SINGLE_OUTPUT_BYTES = DEFAULT_TOOL_OUTPUT_BYTES - (2 * 1024);
 
 function normalizeProcessTransportResult(toolName, data) {
   if (!toolName.startsWith('process_') || !data || typeof data !== 'object') {
@@ -215,8 +228,12 @@ export function createSandboxBridgeToolDefinitions(
       name: 'read',
       label: 'Read file',
       description:
-        'Read a file from the sandbox workspace (or skill read-only root). Supports offset/limit pagination.',
-      promptSnippet: 'Read workspace or skill files with pagination',
+        `Read a file from the sandbox workspace, session temporary directory, or skill read-only root. Supports offset/limit pagination. Output is capped at ${DEFAULT_TOOL_OUTPUT_LINES} lines or ${DEFAULT_TOOL_OUTPUT_BYTES / 1024}KB; when truncated, use nextOffset to continue.`,
+      promptSnippet: 'Read workspace, temporary, or skill files with pagination',
+      promptGuidelines: [
+        'Use read to inspect files instead of cat or sed.',
+        'For large files, keep following nextOffset until the needed range is complete.',
+      ],
       parameters: Type.Object({
         path: Type.String({ maxLength: MAX_PATH_LEN }),
         offset: Type.Optional(Type.Integer({ minimum: 0 })),
@@ -288,8 +305,12 @@ export function createSandboxBridgeToolDefinitions(
       name: 'write',
       label: 'Write file',
       description:
-        'Atomically write a file under the sandbox workspace (utf-8 or base64). Does not create artifacts.',
-      promptSnippet: 'Write files to workspace',
+        'Atomically create or fully replace a file in the sandbox workspace or session temporary directory (utf-8 or base64). Does not create artifacts.',
+      promptSnippet: 'Write workspace or temporary files',
+      promptGuidelines: [
+        'Use write for new files or deliberate complete rewrites.',
+        'Use edit for a targeted change to an existing file.',
+      ],
       parameters: Type.Object({
         path: Type.String({ maxLength: MAX_PATH_LEN }),
         content: Type.String({ maxLength: MAX_WRITE_BYTES }),
@@ -299,7 +320,7 @@ export function createSandboxBridgeToolDefinitions(
       }),
       executionMode: modeFor('write'),
       async execute(toolCallId, params) {
-        const norm = normalizeWritePath(params.path);
+        const norm = normalizeWritePath(params.path, { allowTemp: true });
         if (!norm.ok) return toolErr(norm.code, norm.reason);
         const encoding = params.encoding === 'base64' ? 'base64' : 'utf-8';
         const content = String(params.content ?? '');
@@ -336,8 +357,12 @@ export function createSandboxBridgeToolDefinitions(
       name: 'edit',
       label: 'Edit file',
       description:
-        'Edit a workspace file with expected content hash/version (optimistic concurrency).',
-      promptSnippet: 'Edit workspace files with version precondition',
+        'Edit a workspace or session temporary file using an exact targeted replacement and an expected content hash/version (optimistic concurrency).',
+      promptSnippet: 'Edit workspace or temporary files with a version precondition',
+      promptGuidelines: [
+        'Read the file first and pass its expected hash or version.',
+        'Keep oldText small but unique; use write only for complete rewrites.',
+      ],
       parameters: Type.Object({
         path: Type.String({ maxLength: MAX_PATH_LEN }),
         oldText: Type.Optional(Type.String({ maxLength: MAX_WRITE_BYTES })),
@@ -347,7 +372,7 @@ export function createSandboxBridgeToolDefinitions(
       }),
       executionMode: modeFor('edit'),
       async execute(toolCallId, params) {
-        const norm = normalizeWritePath(params.path);
+        const norm = normalizeWritePath(params.path, { allowTemp: true });
         if (!norm.ok) return toolErr(norm.code, norm.reason);
         const expectedHash =
           params.expectedHash != null ? String(params.expectedHash).trim() : '';
@@ -393,8 +418,12 @@ export function createSandboxBridgeToolDefinitions(
       name: 'bash',
       label: 'Bash',
       description:
-        'Run a shell command in the sandbox workspace. Ordinary commands do not require approval.',
+        `Run a shell command in the sandbox workspace. stdout and stderr are each capped at about ${Math.floor(MAX_STREAM_OUTPUT_BYTES / 1024)}KB; inspect a narrower range when either stream is truncated.`,
       promptSnippet: 'Run sandbox bash commands',
+      promptGuidelines: [
+        'Use read for file inspection; use bash for commands and narrow diagnostics.',
+        'Prefer bounded output such as head, tail, or focused filters.',
+      ],
       parameters: Type.Object({
         command: Type.String({ maxLength: MAX_BASH_COMMAND_LEN }),
         timeoutSeconds: Type.Optional(
@@ -433,8 +462,14 @@ export function createSandboxBridgeToolDefinitions(
         );
         if (!inv.ok) return inv.result;
         const data = inv.data;
-        const stdout = truncateText(data?.stdout ?? '', MAX_STDOUT_CAPTURE);
-        const stderr = truncateText(data?.stderr ?? '', MAX_STDOUT_CAPTURE);
+        const stdout = truncateToolOutput(data?.stdout ?? '', {
+          maxBytes: MAX_STREAM_OUTPUT_BYTES,
+          maxLines: MAX_STREAM_OUTPUT_LINES,
+        });
+        const stderr = truncateToolOutput(data?.stderr ?? '', {
+          maxBytes: MAX_STREAM_OUTPUT_BYTES,
+          maxLines: MAX_STREAM_OUTPUT_LINES,
+        });
         return toolOk(
           toolResultJson({
             exitCode: data?.exitCode ?? null,
@@ -442,6 +477,12 @@ export function createSandboxBridgeToolDefinitions(
             stderr: stderr.text,
             stdoutTruncated: stdout.truncated,
             stderrTruncated: stderr.truncated,
+            stdoutTruncatedBy: stdout.truncatedBy,
+            stderrTruncatedBy: stderr.truncatedBy,
+            stdoutTotalBytes: stdout.totalBytes,
+            stderrTotalBytes: stderr.totalBytes,
+            stdoutTotalLines: stdout.totalLines,
+            stderrTotalLines: stderr.totalLines,
           }),
         );
       },
@@ -452,8 +493,12 @@ export function createSandboxBridgeToolDefinitions(
       name: 'python',
       label: 'Python',
       description:
-        'Execute Python code in the sandbox. Long/multiline code is materialized by Sandbox (not shell heredoc).',
+        `Execute Python code in the sandbox. Long/multiline code is materialized by Sandbox (not shell heredoc); stdout and stderr are each capped at about ${Math.floor(MAX_STREAM_OUTPUT_BYTES / 1024)}KB.`,
       promptSnippet: 'Run Python in sandbox',
+      promptGuidelines: [
+        'Use Python for structured computation or focused file analysis, not as an unbounded file dump.',
+        'Print summaries or selected ranges so results remain actionable.',
+      ],
       parameters: Type.Object({
         code: Type.String({ maxLength: MAX_PYTHON_CODE_BYTES }),
         args: Type.Optional(
@@ -497,13 +542,25 @@ export function createSandboxBridgeToolDefinitions(
         );
         if (!inv.ok) return inv.result;
         const data = inv.data;
-        const stdout = truncateText(data?.stdout ?? '', MAX_STDOUT_CAPTURE);
-        const stderr = truncateText(data?.stderr ?? '', MAX_STDOUT_CAPTURE);
+        const stdout = truncateToolOutput(data?.stdout ?? '', {
+          maxBytes: MAX_STREAM_OUTPUT_BYTES,
+          maxLines: MAX_STREAM_OUTPUT_LINES,
+        });
+        const stderr = truncateToolOutput(data?.stderr ?? '', {
+          maxBytes: MAX_STREAM_OUTPUT_BYTES,
+          maxLines: MAX_STREAM_OUTPUT_LINES,
+        });
         return toolOk(
           toolResultJson({
             exitCode: data?.exitCode ?? null,
             stdout: stdout.text,
             stderr: stderr.text,
+            stdoutTruncated: stdout.truncated,
+            stderrTruncated: stderr.truncated,
+            stdoutTruncatedBy: stdout.truncatedBy,
+            stderrTruncatedBy: stderr.truncatedBy,
+            stdoutTotalBytes: stdout.totalBytes,
+            stderrTotalBytes: stderr.totalBytes,
             materializedPath: data?.materializedPath ?? null,
             pythonVersion: data?.pythonVersion ?? null,
           }),
@@ -628,7 +685,10 @@ export function createSandboxBridgeToolDefinitions(
         );
         if (!inv.ok) return inv.result;
         const data = inv.data;
-        const chunk = truncateText(data?.data ?? data?.chunk ?? '', MAX_STDOUT_CAPTURE);
+        const chunk = truncateToolOutput(data?.data ?? data?.chunk ?? '', {
+          maxBytes: MAX_SINGLE_OUTPUT_BYTES,
+          maxLines: DEFAULT_TOOL_OUTPUT_LINES,
+        });
         return toolOk(
           toolResultJson({
             processId,
@@ -636,7 +696,10 @@ export function createSandboxBridgeToolDefinitions(
             cursor: data?.cursor ?? cursor,
             nextCursor: data?.nextCursor ?? null,
             data: chunk.text,
-            truncated: chunk.truncated,
+            truncated: chunk.truncated || Boolean(data?.truncated),
+            truncatedBy: chunk.truncatedBy,
+            totalBytes: chunk.totalBytes,
+            totalLines: chunk.totalLines,
             completed: Boolean(data?.completed),
             status: data?.status ?? null,
           }),
@@ -775,15 +838,42 @@ function formatReadResult(data, path) {
       }),
     );
   }
-  const body = truncateText(data?.content ?? data?.text ?? '', MAX_READ_BYTES);
+  const source = data?.content ?? data?.text ?? '';
+  const body = truncateToolOutput(source, {
+    // Reserve room for JSON keys plus the continuation metadata so the outer
+    // model-facing result stays under its 50KB budget.
+    maxBytes: MAX_SINGLE_OUTPUT_BYTES,
+    maxLines: DEFAULT_TOOL_OUTPUT_LINES,
+  });
+  const offset = Number(data?.offset ?? 0);
+  const truncated = body.truncated || Boolean(data?.truncated);
+  const nextOffset =
+    // The sandbox cursor is line-oriented. If the bridge itself had to bound
+    // output, advance only through lines actually shown; the sandbox's cursor
+    // would otherwise skip hidden lines from the same response.
+    body.truncated
+      ? offset + body.completedLines
+      : data?.nextOffset ??
+        data?.next_offset ??
+        (data?.truncated ? offset + body.completedLines : null);
+  const continuation = body.truncated && body.completedLines === 0
+    ? 'Read output is truncated inside the first line; use a narrower command or Python to inspect that line.'
+    : `Read output is truncated; continue with offset=${nextOffset}.`;
   return toolOk(
     toolResultJson({
       path,
       content: body.text,
-      truncated: body.truncated || Boolean(data?.truncated),
-      offset: data?.offset ?? 0,
+      truncated,
+      truncatedBy: body.truncatedBy,
+      totalBytes: body.totalBytes,
+      totalLines: body.totalLines,
+      offset,
       limit: data?.limit ?? null,
       size: data?.size ?? null,
+      nextOffset,
+      ...(truncated
+        ? { continuation }
+        : {}),
     }),
   );
 }

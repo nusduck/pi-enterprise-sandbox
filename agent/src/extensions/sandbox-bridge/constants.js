@@ -59,6 +59,8 @@ export const MAX_STDOUT_CAPTURE = 64 * 1024;
 /** Logical workspace root (plan). Never a host physical path. */
 export const LOGICAL_WORKSPACE_ROOT = '/home/sandbox/workspace';
 export const LOGICAL_SKILL_ROOT = '/home/sandbox/skill';
+/** Per-session sandbox temporary directory. Read-only through the file tool. */
+export const LOGICAL_TEMP_ROOT = '/tmp';
 
 export const PROCESS_SIGNALS = Object.freeze(['TERM', 'KILL', 'INT']);
 

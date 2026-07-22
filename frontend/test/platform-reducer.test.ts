@@ -56,12 +56,13 @@ describe('normalizeToRuntimeEvent', () => {
         eventId: '01HZEVT0000000000000000001',
         sequence: 3,
         type: 'tool.execution.started',
-        data: { toolCallId: 'tc1', name: 'bash', args: { command: 'ls' } },
+        data: { toolCallId: 'tc1', toolName: 'bash', args: { command: 'ls' } },
       }),
     );
     assert.ok(ev);
     assert.equal(ev!.type, 'tool.started');
     assert.equal(ev!.payload.tool_call_id, 'tc1');
+    assert.equal(ev!.payload.name, 'bash');
 
     const art = normalizeToRuntimeEvent(
       platform({
@@ -90,6 +91,46 @@ describe('normalizeToRuntimeEvent', () => {
     assert.ok(ev);
     assert.equal(ev!.sequence, 9);
     assert.equal(ev!.event_id, 'relay_9');
+  });
+
+  it('does not replace streamed assistant text with a truncated completion preview', () => {
+    const runId = 'run_truncated_preview';
+    const fullText = 'a'.repeat(900);
+    const { store } = reducePlatformEventBatch(createEntityStore(), [
+      platform({ eventId: 'preview_1', sequence: 1, type: 'run.started', runId }),
+      platform({
+        eventId: 'preview_2',
+        sequence: 2,
+        type: 'message.created',
+        runId,
+        data: { messageId: 'msg_preview', role: 'assistant' },
+      }),
+      platform({
+        eventId: 'preview_3',
+        sequence: 3,
+        type: 'message.delta',
+        runId,
+        data: { messageId: 'msg_preview', delta: fullText },
+      }),
+      platform({
+        eventId: 'preview_4',
+        sequence: 4,
+        type: 'message.completed',
+        runId,
+        data: {
+          messageId: 'msg_preview',
+          role: 'assistant',
+          message: {
+            role: 'assistant',
+            textTruncated: true,
+            content: [{ type: 'text', text: `${'a'.repeat(512)}…`, truncated: true }],
+          },
+        },
+      }),
+    ]);
+
+    assert.equal(store.messagesById.msg_preview.text, fullText);
+    assert.equal(store.messagesById.msg_preview.status, 'complete');
   });
 });
 

@@ -33,6 +33,10 @@ export type ChatMessage = {
   /** Runtime identity used for stable merge/dedupe; never used as display text. */
   _runId?: string;
   _messageId?: string;
+  /** Durable conversation-message order from the server append-only ledger. */
+  sequenceNo?: number;
+  /** ISO 8601 UTC timestamp supplied by the server. */
+  createdAt?: string;
 };
 
 export type AttachmentStatus =
@@ -77,7 +81,19 @@ export type ConversationSummary = {
   updated_at?: string;
   created_at?: string;
   sandbox_session_id?: string | null;
-  messages?: Array<{ role?: string; content?: unknown }>;
+  messages?: Array<{
+    role?: string;
+    content?: unknown;
+    message_id?: string | number | null;
+    messageId?: string | number | null;
+    run_id?: string | number | null;
+    runId?: string | number | null;
+    sequence_no?: string | number | null;
+    sequenceNo?: string | number | null;
+    created_at?: string | null;
+    createdAt?: string | null;
+    [k: string]: unknown;
+  }>;
   [k: string]: unknown;
 };
 

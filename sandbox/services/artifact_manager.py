@@ -18,6 +18,7 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator
+from urllib.parse import quote
 
 from sandbox.app.domain.types import OwnerScope
 from sandbox.app.domain.ulid import new_ulid
@@ -69,6 +70,25 @@ def safe_content_disposition_filename(name: str) -> str:
     base = re.sub(r'["\\;]', "_", base)
     base = re.sub(r"[\x00-\x1f\x7f]", "", base).strip() or "artifact"
     return base[:200]
+
+
+def artifact_content_disposition(name: str) -> str:
+    """Build an ASCII-safe attachment header with an RFC 5987 UTF-8 name.
+
+    HTTP header values sent by Starlette must be latin-1 encodable.  The
+    user-facing artifact name can legitimately contain Chinese, Greek, etc.,
+    so it must never be placed verbatim in the legacy ``filename`` parameter.
+    Keep that parameter as a conservative ASCII fallback and put the original
+    sanitized filename in ``filename*`` for clients that support UTF-8.
+    """
+    filename = safe_content_disposition_filename(name)
+    ascii_fallback = "".join(
+        char if 0x20 <= ord(char) <= 0x7E else "_" for char in filename
+    ).strip() or "artifact"
+    return (
+        f'attachment; filename="{ascii_fallback}"; '
+        f"filename*=UTF-8''{quote(filename, safe='')}"
+    )
 
 
 def iter_snapshot_chunks(

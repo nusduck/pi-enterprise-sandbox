@@ -66,6 +66,15 @@ export function ConversationSidebar() {
   );
 
   const signedIn = Boolean(state.authUser?.username);
+  const conversations = useMemo(
+    () => [...(state.conversations || [])].sort((a, b) => {
+      const ta = Date.parse(a.updated_at || a.created_at || '');
+      const tb = Date.parse(b.updated_at || b.created_at || '');
+      if (ta !== tb) return tb - ta;
+      return String(a.id).localeCompare(String(b.id));
+    }),
+    [state.conversations],
+  );
 
   const sidebarClass = [
     'sidebar',
@@ -136,14 +145,14 @@ export function ConversationSidebar() {
         <div className="sidebar-section-label">Conversations</div>
 
         <div className="sidebar-list" role="list">
-          {(state.conversations || []).length === 0 ? (
+          {conversations.length === 0 ? (
             <div className="sidebar-empty">
               No conversations yet.
               <br />
               Start a new one above.
             </div>
           ) : (
-            state.conversations.map((conv) => {
+            conversations.map((conv) => {
               const marker = markers[conv.id];
               const hasRun = Boolean(marker?.runStatus);
               const hasApproval = Boolean(marker?.hasPendingApproval);

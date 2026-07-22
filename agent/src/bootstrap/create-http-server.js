@@ -338,6 +338,16 @@ export function presentGetRunResponse(run) {
         status: pending.status || 'PENDING',
       }
     : null;
+  const completedAt = run.completedAt ?? run.completed_at ?? null;
+  const nextEventSequence = Number(
+    run.nextEventSequence ?? run.next_event_sequence,
+  );
+  const lastSequence =
+    Number.isFinite(nextEventSequence) && nextEventSequence > 0
+      ? nextEventSequence - 1
+      : null;
+  const modelId = run.modelId ?? run.model_id ?? null;
+  const usage = run.usage ?? run.tokenUsage ?? run.token_usage ?? null;
   return {
     runId: run.runId,
     run_id: run.runId,
@@ -363,8 +373,21 @@ export function presentGetRunResponse(run) {
     updated_at: run.updatedAt,
     startedAt: run.startedAt,
     started_at: run.startedAt,
-    completedAt: run.completedAt,
-    completed_at: run.completedAt,
+    completedAt,
+    completed_at: completedAt,
+    // `finished_at` is the browser Run DTO name. Publish both names until the
+    // browser store and durable Agent authority share a single vocabulary.
+    finishedAt: completedAt,
+    finished_at: completedAt,
+    lastSequence,
+    last_sequence: lastSequence,
+    lastEventId: run.lastEventId ?? run.last_event_id ?? null,
+    last_event_id: run.lastEventId ?? run.last_event_id ?? null,
+    modelId,
+    model_id: modelId,
+    model: modelId,
+    usage,
+    token_usage: usage,
     pendingInput,
     pending_input: pendingInput,
   };
@@ -458,6 +481,7 @@ function mapProcessErrorToHttp(err) {
  *   config?: { AGENT_INTERNAL_TOKEN?: string, PORT?: number, A2A_PUBLIC_BASE_URL?: string },
  *   sandboxHealthCheck?: () => Promise<{ status?: string } | null>,
  *   dataPlaneReady?: boolean | (() => boolean | Promise<boolean>),
+ *   mcpReadiness?: () => { ready?: boolean, serverCount?: number, toolCount?: number, servers?: object[] },
  *   getExtensionDiagnostics?: Function | null,
  *   listRuns?: Function | null,
  *   conversationService?: { list: Function, get: Function, create: Function, delete: Function, ensureSession: Function } | null,
@@ -568,11 +592,34 @@ export function createAgentHttpServer(deps) {
           }
         }
 
-        const ready = dataPlaneOk && sandboxOk;
+        let mcp = { ready: true, serverCount: 0, toolCount: 0, servers: [] };
+        if (typeof deps.mcpReadiness === 'function') {
+          try {
+            mcp = deps.mcpReadiness() || mcp;
+          } catch {
+            mcp = { ...mcp, ready: false };
+          }
+        }
+        const mcpOk = mcp.ready !== false;
+
+        const ready = dataPlaneOk && sandboxOk && mcpOk;
         json(res, ready ? 200 : 503, {
           status: ready ? 'ready' : 'not_ready',
           data_plane: dataPlaneOk ? 'ok' : 'unavailable',
           sandbox: sandboxOk ? 'ok' : 'unreachable',
+          mcp: {
+            status: mcpOk ? 'ok' : 'unreachable',
+            server_count: Number(mcp.serverCount) || 0,
+            tool_count: Number(mcp.toolCount) || 0,
+            servers: Array.isArray(mcp.servers)
+              ? mcp.servers.map((server) => ({
+                  id: server.serverId,
+                  status: server.status,
+                  tool_count: Number(server.toolCount) || 0,
+                  ...(server.error ? { error: String(server.error) } : {}),
+                }))
+              : [],
+          },
         });
         return;
       }
@@ -1267,7 +1314,27 @@ export function createAgentHttpServer(deps) {
           }
           try {
             const run = await deps.getRunService.execute({ runId, auth });
-            json(res, 200, presentGetRunResponse(run));
+            const body = presentGetRunResponse(run);
+            // Run keeps the next sequence but not the event ULID. Resolve the
+            // final event from the durable ledger only for detail reads; list
+            // reads stay bounded and avoid an N+1 event query.
+            if (body.last_sequence != null) {
+              try {
+                const page = await deps.eventQueryService.listEvents({
+                  runId,
+                  auth,
+                  afterSequence: Math.max(0, body.last_sequence - 1),
+                  limit: 1,
+                });
+                const event = Array.isArray(page?.events) ? page.events[0] : null;
+                body.lastEventId = event?.eventId ?? event?.event_id ?? null;
+                body.last_event_id = body.lastEventId;
+              } catch {
+                // The Run record is still authoritative. A diagnostics-only
+                // event lookup must not turn an otherwise valid GET into 500.
+              }
+            }
+            json(res, 200, body);
           } catch (err) {
             const mapped = mapErrorToHttp(err);
             json(res, mapped.status, mapped.body);

@@ -208,6 +208,7 @@ export function summarizeAssistantMessage(message) {
   const out = {
     role: m.role ?? 'assistant',
   };
+  let textTruncated = false;
   if (typeof m.stopReason === 'string') out.stopReason = m.stopReason;
   if (Array.isArray(m.content)) {
     out.content = m.content.map((part) => {
@@ -215,13 +216,15 @@ export function summarizeAssistantMessage(message) {
       const p = /** @type {Record<string, unknown>} */ (part);
       if (p.type === 'text') {
         const text = redactInlineSecrets(String(p.text ?? ''));
+        const truncated = text.length > DEFAULT_MAX_STRING;
+        if (truncated) textTruncated = true;
         return {
           type: 'text',
           text:
-            text.length > DEFAULT_MAX_STRING
+            truncated
               ? `${text.slice(0, DEFAULT_MAX_STRING)}…`
               : text,
-          truncated: text.length > DEFAULT_MAX_STRING,
+          truncated,
         };
       }
       if (p.type === 'toolCall') {
@@ -236,11 +239,16 @@ export function summarizeAssistantMessage(message) {
     });
   } else if (typeof m.content === 'string') {
     const text = redactInlineSecrets(m.content);
+    textTruncated = text.length > DEFAULT_MAX_STRING;
     out.content =
-      text.length > DEFAULT_MAX_STRING
+      textTruncated
         ? `${text.slice(0, DEFAULT_MAX_STRING)}…`
         : text;
   }
+  // The text body is intentionally a bounded event projection. Make that
+  // status explicit at the message level so consumers never overwrite a full
+  // streamed or durable transcript with this preview.
+  if (textTruncated) out.textTruncated = true;
   return out;
 }
 

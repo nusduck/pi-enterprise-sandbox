@@ -75,6 +75,18 @@ export function presentRunDetail(persisted, live, runtimeAvailable) {
     toIsoTimestamp(liveObj?.created_at) ?? toIsoTimestamp(base.created_at);
   body.updated_at =
     toIsoTimestamp(liveObj?.updated_at) ?? toIsoTimestamp(base.updated_at);
+  body.started_at =
+    toIsoTimestamp(liveObj?.started_at) ??
+    toIsoTimestamp(liveObj?.startedAt) ??
+    toIsoTimestamp(base.started_at);
+  const completedAt =
+    toIsoTimestamp(liveObj?.completed_at) ??
+    toIsoTimestamp(liveObj?.completedAt) ??
+    toIsoTimestamp(liveObj?.finished_at) ??
+    toIsoTimestamp(base.completed_at) ??
+    toIsoTimestamp(base.finished_at);
+  body.completed_at = completedAt;
+  body.finished_at = completedAt;
   // Agent's durable failure reason is exposed as status_reason/statusReason.
   // The frontend Run detail contract uses `error`, so preserve the reason
   // rather than replacing a real provider/runtime failure with "Run failed".

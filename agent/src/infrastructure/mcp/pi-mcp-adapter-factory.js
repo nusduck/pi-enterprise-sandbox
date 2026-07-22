@@ -60,6 +60,47 @@ const RESERVED_TRACE_ENV_NAMES = new Set([
   'trace_state',
 ]);
 
+const MCP_TOOL_NAME_PATTERN = /^[A-Za-z0-9._-]+$/;
+
+/**
+ * Load the connection manager shipped by the pinned adapter.  The adapter is
+ * the sole MCP protocol implementation in this product; this preflight only
+ * asks it to connect and run its built-in tools/list discovery before a Pi
+ * session is created.  The adapter is TypeScript-only, so reuse the Jiti
+ * loader that is pinned with our Pi SDK rather than adding another MCP client.
+ */
+function loadPinnedAdapterConnectionManager() {
+  let adapterPackageJson;
+  try {
+    adapterPackageJson = require.resolve(`${PI_MCP_ADAPTER_PACKAGE}/package.json`);
+    const adapterRoot = path.dirname(adapterPackageJson);
+    const jitiPath = path.join(
+      path.dirname(adapterRoot),
+      '@earendil-works',
+      'pi-coding-agent',
+      'node_modules',
+      'jiti',
+    );
+    // Jiti is part of the exact Pi SDK installation.  Resolve it by absolute
+    // path because the SDK deliberately does not export package internals.
+    const { createJiti } = require(jitiPath);
+    if (typeof createJiti !== 'function') throw new Error('createJiti unavailable');
+    const jiti = createJiti(path.join(adapterRoot, 'index.ts'), {
+      interopDefault: true,
+    });
+    const mod = jiti(path.join(adapterRoot, 'server-manager.ts'));
+    if (typeof mod?.McpServerManager !== 'function') {
+      throw new Error('McpServerManager unavailable');
+    }
+    return mod.McpServerManager;
+  } catch (cause) {
+    throw new PiMcpAdapterError(
+      'Pinned pi-mcp-adapter discovery implementation is unavailable',
+      { code: 'PI_MCP_ADAPTER_API_UNVERIFIED', cause },
+    );
+  }
+}
+
 /** @param {unknown} value */
 function cloneJson(value) {
   return value == null ? value : JSON.parse(JSON.stringify(value));
@@ -275,6 +316,145 @@ export function createEnvironmentSecretResolver(env = process.env) {
     }
     return value;
   };
+}
+
+/**
+ * Discover tools for every enabled deployment server once during process
+ * startup.  The returned logical config is deliberately process-scoped: a
+ * changed MCP_SERVERS_JSON requires an Agent restart and is never hot-loaded.
+ *
+ * @param {{
+ *   serverRegistry?: unknown,
+ *   secretResolver?: (ref: string) => unknown | Promise<unknown>,
+ *   cwd?: string,
+ * }} [options]
+ */
+export async function discoverEnabledMcpServers(options = {}) {
+  const registry = loadMcpServerRegistry(options.serverRegistry ?? []);
+  const enabled = [...registry.values()].filter((server) => server.enabled !== false);
+  if (enabled.length === 0) {
+    return Object.freeze({
+      ready: true,
+      serverCount: 0,
+      toolCount: 0,
+      servers: Object.freeze([]),
+      mcpServers: Object.freeze([]),
+    });
+  }
+
+  const McpServerManager = loadPinnedAdapterConnectionManager();
+  const manager = new McpServerManager(options.cwd);
+  const secretResolver =
+    options.secretResolver ?? createEnvironmentSecretResolver(process.env);
+  const servers = [];
+
+  try {
+    for (const server of enabled) {
+      try {
+        /** @type {Record<string, unknown>} */
+        const definition = {
+          ...(server.url ? { url: server.url } : {}),
+          ...(server.command
+            ? {
+                command: server.command,
+                args: [...server.args],
+                ...(server.cwd ? { cwd: server.cwd } : {}),
+              }
+            : {}),
+          lifecycle: 'eager',
+          directTools: false,
+          exposeResources: false,
+          requestTimeoutMs: server.timeoutMs ?? 60_000,
+          debug: false,
+        };
+        const env = {};
+        for (const [name, ref] of Object.entries(server.envRefs)) {
+          env[name] = await resolveSecretValue(ref, secretResolver);
+        }
+        if (Object.keys(env).length > 0) definition.env = env;
+        const headers = {};
+        for (const [name, ref] of Object.entries(server.headerRefs)) {
+          headers[name] = await resolveSecretValue(ref, secretResolver);
+        }
+        if (Object.keys(headers).length > 0) definition.headers = headers;
+        if (server.authTokenRef) {
+          definition.auth = 'bearer';
+          definition.bearerToken = await resolveSecretValue(
+            server.authTokenRef,
+            secretResolver,
+          );
+        } else {
+          definition.auth = false;
+        }
+
+        // McpServerManager.connect performs MCP initialization and tools/list
+        // (including pagination) before it resolves successfully.
+        const connection = await manager.connect(server.serverId, definition);
+        if (connection.status !== 'connected') {
+          throw new PiMcpAdapterError(
+            `MCP server ${server.serverId} requires interactive authentication`,
+            { code: 'MCP_SERVER_AUTH_REQUIRED' },
+          );
+        }
+        const toolNames = [...new Set(
+          (connection.tools ?? [])
+            .map((tool) => String(tool?.name ?? '').trim())
+            .filter((name) => MCP_TOOL_NAME_PATTERN.test(name) && !name.startsWith('mcp__')),
+        )].sort();
+        const rejectedToolCount = (connection.tools ?? []).length - toolNames.length;
+        servers.push(
+          Object.freeze({
+            serverId: server.serverId,
+            status: 'connected',
+            toolNames: Object.freeze(toolNames),
+            toolCount: toolNames.length,
+            rejectedToolCount,
+            error: null,
+          }),
+        );
+      } catch (error) {
+        const rawMessage =
+          error instanceof Error ? error.message : 'MCP discovery failed';
+        const safeMessage = redactPayload(
+          { message: rawMessage.slice(0, 512) },
+          { maxString: 512 },
+        ).message;
+        servers.push(
+          Object.freeze({
+            serverId: server.serverId,
+            status: 'unreachable',
+            toolNames: Object.freeze([]),
+            toolCount: 0,
+            rejectedToolCount: 0,
+            error: typeof safeMessage === 'string' ? safeMessage : 'MCP discovery failed',
+          }),
+        );
+      }
+    }
+  } finally {
+    await manager.closeAll().catch(() => {});
+  }
+
+  const connected = servers.filter((server) => server.status === 'connected');
+  const mcpServers = connected.map((server) =>
+    Object.freeze({
+      serverId: server.serverId,
+      enabledTools: server.toolNames,
+      toolPolicy: Object.freeze({ default: 'require_approval' }),
+      timeoutSec: Math.max(
+        1,
+        Math.min(300, Math.ceil((registry.get(server.serverId)?.timeoutMs ?? 60_000) / 1000)),
+      ),
+      secretRef: registry.get(server.serverId)?.authTokenRef ?? null,
+    }),
+  );
+  return Object.freeze({
+    ready: connected.length === enabled.length,
+    serverCount: enabled.length,
+    toolCount: connected.reduce((total, server) => total + server.toolCount, 0),
+    servers: Object.freeze(servers),
+    mcpServers: Object.freeze(mcpServers),
+  });
 }
 
 /** @param {string} ref @param {(ref: string) => unknown | Promise<unknown>} resolver */
@@ -780,14 +960,19 @@ export async function resolveMcpBinding(mcpServers, options = {}) {
  *   runtimeRoot?: string,
  *   spanRandomBytes?: (size: number) => Uint8Array,
  *   packageResolver?: typeof resolvePiMcpAdapterPackage,
+ *   defaultMcpServers?: unknown,
  * }} [options]
  */
 export function createPiMcpResolver(options = {}) {
   // Validate deployment config during assembly, before the first model request.
   const registry = loadMcpServerRegistry(options.serverRegistry ?? []);
-  return async function resolveForRuntime(input) {
+  const defaultMcpServers = loadMcpConfig(options.defaultMcpServers ?? []);
+  const resolver = async function resolveForRuntime(input) {
     return createPiMcpAdapter({
-      mcpServers: input.mcpServers,
+      // Phase 1 deployment registry is the default MCP authority.  When it
+      // has discovered enabled servers, AgentVersion need not repeat them.
+      mcpServers:
+        defaultMcpServers.length > 0 ? defaultMcpServers : input.mcpServers,
       serverRegistry: [...registry.values()].map((entry) => ({
         id: entry.serverId,
         enabled: entry.enabled,
@@ -811,6 +996,10 @@ export function createPiMcpResolver(options = {}) {
       spanRandomBytes: options.spanRandomBytes,
     });
   };
+  // PiRuntimeFactory reads this immutable hint before it decides whether to
+  // materialize the extension. It is populated only by bootstrap discovery.
+  resolver.defaultMcpServers = defaultMcpServers;
+  return resolver;
 }
 
 /**

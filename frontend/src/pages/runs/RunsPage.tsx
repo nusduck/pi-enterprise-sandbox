@@ -34,11 +34,11 @@ export function RunsPage() {
   const refresh = useCallback(async () => {
     setLoading(true);
     try {
-      const list = await listRuns(
-        filter === 'all' || filter === 'completed'
-          ? {}
-          : { status: filter },
-      );
+      // The durable Agent API uses uppercase plan §10 status values and has no
+      // "completed" aggregate. Fetch the authoritative page once and apply the
+      // UI's aggregate filters locally, rather than sending stale UI labels
+      // such as `completed` or `interrupted` to the API.
+      const list = await listRuns();
       setApiRows(list);
       // Heuristic: empty + no store data later → may be unavailable; we still mark tried
       setApiAvailable(true);
@@ -48,7 +48,7 @@ export function RunsPage() {
     } finally {
       setLoading(false);
     }
-  }, [filter]);
+  }, []);
 
   useEffect(() => {
     void refresh();
