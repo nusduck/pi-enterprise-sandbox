@@ -17,13 +17,12 @@ def test_import_sandbox_main_with_mysql_dsn_is_connection_free() -> None:
         "sandbox/services/session_manager.py",
         "sandbox/services/approval_manager.py",
         "sandbox/services/ttl_cleanup.py",
-        "sandbox/routers/sessions.py",
-        "sandbox/routers/conversations.py",
-        "sandbox/routers/approvals.py",
-        "sandbox/routers/executions.py",
-        "sandbox/routers/processes.py",
-        "sandbox/routers/traces.py",
-        "sandbox/routers/auth_router.py",
+            "sandbox/routers/sessions.py",
+            "sandbox/routers/conversations.py",
+            "sandbox/routers/approvals.py",
+            "sandbox/routers/executions.py",
+            "sandbox/routers/processes.py",
+            "sandbox/routers/traces.py",
     )
     for relative in removed_modules:
         assert not (repo_root / relative).exists(), relative
@@ -65,7 +64,6 @@ assert "/sessions/{session_id}/files" in paths
 assert "/sessions/{session_id}/datasets" in paths
 assert "/sessions/{session_id}/artifacts" in paths
 assert "/sessions" not in paths
-assert "/auth/me" not in paths
 """
     result = subprocess.run(
         [sys.executable, "-c", script],
@@ -116,6 +114,32 @@ else:
     assert "sandbox.database" not in result.stderr
 
 
+def test_sandbox_models_exclude_retired_agent_authority_schemas() -> None:
+    """Agent authority is represented by Agent MySQL repositories, not Sandbox DTOs."""
+    repo_root = Path(__file__).resolve().parents[1]
+    source = (repo_root / "sandbox" / "models.py").read_text(encoding="utf-8")
+    retired = (
+        "AgentRunCreate",
+        "AgentRunResponse",
+        "AgentEventAppend",
+        "AgentEventResponse",
+        "AgentSessionCreate",
+        "AgentSessionResponse",
+        "AgentSessionEntryAppend",
+        "AgentSessionEntriesAppend",
+        "AgentSessionEntryResponse",
+        "AgentSessionResumeResponse",
+        "ApprovalCheckRequest",
+        "ApprovalCreateRequest",
+        "ApprovalDecisionRequest",
+        "ApprovalResponse",
+        "ConversationCreate",
+        "ConversationResponse",
+    )
+    for model_name in retired:
+        assert f"class {model_name}(" not in source, model_name
+
+
 def test_formal_mysql_public_resource_routes_fail_closed_without_runtime() -> None:
     repo_root = Path(__file__).resolve().parents[1]
     env = os.environ.copy()
@@ -133,7 +157,6 @@ from fastapi.testclient import TestClient
 from sandbox.main import app
 
 client = TestClient(app, client=("127.0.0.1", 50000))
-assert client.get("/auth/me").status_code == 404
 assert client.get("/sessions").status_code == 404
 assert client.get("/sessions/missing/files").status_code == 503
 assert client.get("/sessions/missing/datasets").status_code == 503

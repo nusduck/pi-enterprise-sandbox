@@ -509,7 +509,7 @@ class TestEnvCatalogConsistency:
 
 
 class TestPublicRegisterGate:
-    def test_legacy_register_route_is_removed(self, monkeypatch):
+    def test_public_register_route_fails_closed(self, monkeypatch):
         from fastapi.testclient import TestClient
 
         from sandbox.config import settings
@@ -521,4 +521,4 @@ class TestPublicRegisterGate:
             "/auth/register",
             json={"username": "blocked_user", "password": "secret123"},
         )
-        assert resp.status_code == 404
+        assert resp.status_code == 403

@@ -39,6 +39,10 @@ os.environ["SANDBOX_CONTROL_ROOT"] = str(_CONTROL)
 os.environ["SANDBOX_AUTH_ENABLED"] = "false"
 os.environ["SANDBOX_EXECUTION_TIMEOUT_SECONDS"] = "120"
 os.environ["SANDBOX_MAX_OUTPUT_CHARS"] = "50000"
+os.environ["SANDBOX_INTERNAL_PLANE_ENABLED"] = "false"
+os.environ["SANDBOX_INTERNAL_REDIS_URL"] = ""
+os.environ["SANDBOX_INTERNAL_HMAC_KEYRING"] = ""
+os.environ["SANDBOX_INTERNAL_HMAC_ACTIVE_KID"] = ""
 # Default allowlist includes loopback; pair with TestClient client=127.0.0.1 below.
 os.environ.setdefault(
     "SANDBOX_ALLOWED_CLIENT_CIDRS",
@@ -59,6 +63,10 @@ def _force_hermetic_sandbox_env() -> None:
     os.environ["SANDBOX_AUTH_ENABLED"] = "false"
     os.environ["SANDBOX_EXECUTION_TIMEOUT_SECONDS"] = "120"
     os.environ["SANDBOX_MAX_OUTPUT_CHARS"] = "50000"
+    os.environ["SANDBOX_INTERNAL_PLANE_ENABLED"] = "false"
+    os.environ["SANDBOX_INTERNAL_REDIS_URL"] = ""
+    os.environ["SANDBOX_INTERNAL_HMAC_KEYRING"] = ""
+    os.environ["SANDBOX_INTERNAL_HMAC_ACTIVE_KID"] = ""
     _WORKSPACES.mkdir(parents=True, exist_ok=True)
     _TEMPS.mkdir(parents=True, exist_ok=True)
     _SKILLS.mkdir(parents=True, exist_ok=True)

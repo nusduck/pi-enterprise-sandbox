@@ -156,3 +156,9 @@ Each entry should say **what changed**, **why**, and **which STATUS IDs** it aff
 - **Why:** Package-root parallel trees (agent application/runtime/services/lib vs src; api-server flat routes/application) made ownership unclear and violated conventional single-root layout.
 - **STATUS IDs:** documentation / structure only; no §32 row change.
 - **Tests:** agent layout + moved-module suites; api-server unit suite (excl. listen-smoke hang); sandbox pytest subset + package imports.
+
+## 2026-07-23 — Code and documentation cleanup
+
+- **Action:** Removed the now-unused Agent approval waiter, unreferenced TypeScript contracts package, and obsolete Sandbox Agent/approval DTOs. Moved the two retained cross-language golden fixtures to `tests/fixtures/contracts/`.
+- **Documentation:** Corrected stale source-root paths and SDK persistence/upgrade guidance; removed references to deleted compat fixtures and legacy modules.
+- **Tests:** Added a Sandbox model regression check; retained cross-language fixture consumers under their new shared location.

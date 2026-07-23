@@ -36,14 +36,13 @@ agent/
     runtime/             # message/attachment/vision helpers
     skills/              # skill install/validate/paths
   testing/               # non-production harness (fake OpenAI provider)
-  legacy/                # deliberately non-production (e.g. approval-waiter)
   tests/
 ```
 
 **Rules**
 
 - New production modules land under `src/` only.
-- `legacy/` is not part of the production graph (asserted by B3 structural tests for approval-waiter).
+- Obsolete approval-waiter code is deleted; do not add a package-root `legacy/` tree.
 - `testing/` is for gates and local fakes; do not import from production request paths except config-gated dev hooks.
 
 ---
@@ -61,7 +60,6 @@ api-server/
     http/
     routes/
     services/
-    ARCHITECTURE.ts      # optional contract notes
   tests/
 ```
 
@@ -116,4 +114,4 @@ Unchanged: feature-sliced style under `frontend/src/` (`pages/`, `widgets/`, `fe
 
 1. Production helpers at `agent/lib` or `agent/services` while the same role also lives under `agent/src`.
 2. BFF routes at `api-server/routes` after this layout — always `api-server/src/routes`.
-3. Importing `agent/legacy/*` from `agent/src`.
+3. Reintroducing a package-root `agent/legacy/` source tree.

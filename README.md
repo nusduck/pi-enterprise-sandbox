@@ -44,15 +44,14 @@ pi-sandbox/
 │   └── nginx.conf        ← /api/* 反向代理到 api-server
 ├── api-server/           ← 薄 BFF（auth / files / SSE relay）
 │   ├── server.js         ← HTTP 入口（Run API、SSE、health）
-│   ├── routes/           ← runs, files, status, conversations, capabilities...
-│   ├── services/         ← sandbox-client + agent-client
+│   ├── src/routes/       ← runs, files, status, conversations, capabilities...
+│   ├── src/services/     ← sandbox-client + agent-client
 │   └── Dockerfile
 ├── agent/                ← 独立 Agent（@earendil-works/pi-coding-agent 0.80.3）
 │   ├── server.js         ← 内部 Run API / health
 │   ├── src/application/  ← Run、Session、审批、A2A 应用服务
 │   ├── src/extensions/   ← sandbox-bridge、enterprise-policy、observability
 │   ├── src/infrastructure/ ← MySQL、Redis、Pi、MCP 与 Sandbox ports
-│   ├── services/         ← 模型 registry 等平台服务
 │   └── Dockerfile
 ├── sandbox/              ← 安全沙箱（Python FastAPI + 多层防护，无 Agent 主循环）
 │   ├── main.py           ← FastAPI 入口

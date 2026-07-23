@@ -57,6 +57,13 @@ const TRANSIENT_MAP_WHITELIST = Object.freeze([
     scope: 'local',
   },
   {
+    rel: 'application/pi-run-tool-budget.js',
+    match: /const\s+seen\s*=\s*new\s+Map\s*\(/,
+    purpose:
+      'Per-run tool-and-argument call counter for convergence limits; discarded with the live SDK session and not durable authority',
+    scope: 'local',
+  },
+  {
     rel: 'infrastructure/pi/pi-jsonl-codec.js',
     match: /const\s+parentOf\s*=\s*new\s+Map\s*\(/,
     purpose:
@@ -292,10 +299,10 @@ describe('no authoritative in-process Run Map (B3)', () => {
       `stale whitelist entries (Map removed/renamed — update inventory):\n${stale.join('\n')}`,
     );
 
-    // Inventory size sanity: B3 closeout 11 + model-registry relocated under src.
+    // Inventory size sanity: every residual Map is explicitly classified.
     assert.equal(
       TRANSIENT_MAP_WHITELIST.length,
-      12,
+      13,
       'whitelist size drift — update STATUS B3 inventory evidence if intentional',
     );
   });
@@ -327,28 +334,8 @@ describe('no authoritative in-process Run Map (B3)', () => {
     }
   });
 
-  it('legacy agent/legacy/approval-waiter Maps stay outside agent/src production graph', () => {
-    // Documented residual outside shipped agent/src: module-level Maps in the
-    // legacy services tree. Production bootstrap must not import them (covered
-    // above). This assertion pins the file still exists as legacy-only.
-    const legacy = path.join(root, 'legacy/approval-waiter.js');
-    if (!fs.existsSync(legacy)) {
-      // If removed entirely, B3 is strictly stronger — pass.
-      return;
-    }
-    const src = fs.readFileSync(legacy, 'utf8');
-    assert.match(src, /const\s+waiters\s*=\s*new\s+Map\s*\(/);
-    assert.match(src, /const\s+pendingByApproval\s*=\s*new\s+Map\s*\(/);
-    assert.match(src, /const\s+runToApproval\s*=\s*new\s+Map\s*\(/);
-    // Ensure nothing under agent/src re-exports or soft-requires it.
-    const srcFiles = walkJs(SRC_ROOT);
-    for (const file of srcFiles) {
-      const body = fs.readFileSync(file, 'utf8');
-      assert.equal(
-        /services\/approval-waiter|from\s+['"].*approval-waiter/.test(body),
-        false,
-        `${relFromSrc(file)} must not reach legacy approval-waiter`,
-      );
-    }
+  it('does not retain the obsolete approval-waiter module', () => {
+    assert.equal(fs.existsSync(path.join(root, 'legacy')), false);
+    assert.equal(fs.existsSync(path.join(root, 'services/approval-waiter.js')), false);
   });
 });

@@ -41,7 +41,7 @@ Change this file in the **same commit** as the implementation or evidence that j
 |----|-----------|--------|------------------|
 | B1 | MySQL sole fact authority | `done` | Knex schema + repos; Sandbox SQLite stack removed |
 | B2 | Redis runtime-only | `done` | architecture + compose; Outbox for durable events |
-| B3 | No in-process authoritative Run Map | `done` | Structural walk of `agent/src` (`no-authoritative-run-map.unit.test.js`): no RunManager / process-global runs Map; **11 residual `new Map(` inventoried** as instance/local/literal transient-only (dedupe, steer, MCP registry, codec, trace materialize, HMAC). Fail-closed whitelist. Legacy approval-waiter outside production graph. Evidence: `evidence/partial-b3-run-map-audit-2026-07-19.md`. |
+| B3 | No in-process authoritative Run Map | `done` | Structural walk of `agent/src` (`no-authoritative-run-map.unit.test.js`): no RunManager / process-global runs Map; **13 residual `new Map(` inventoried** as instance/local/literal transient-only (dedupe, steer, run-budget, MCP registry, codec, trace materialize, HMAC, model registry). Fail-closed whitelist. Obsolete approval-waiter code has been removed. Evidence: `evidence/partial-b3-run-map-audit-2026-07-19.md`. |
 | B4 | No whole-Conversation messages JSON blob | `done` | append-only `messages` rows + triggers |
 | B5 | No dual Run state sources | `done` | Agent MySQL authority design |
 | B6 | Run Events ordered replay | `done` | `next_event_sequence` + MySQL gate in evidence |

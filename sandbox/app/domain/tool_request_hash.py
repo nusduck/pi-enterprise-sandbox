@@ -2,7 +2,7 @@
 
 Strict cross-language contract shared with Node
 ``agent/src/domain/tool/tool-request-hash.js`` and golden fixture
-``packages/contracts/fixtures/sandbox-tool-request-hash-v1.json``.
+``tests/fixtures/contracts/sandbox-tool-request-hash-v1.json``.
 
 Envelope: ``{"v": 1, "tool": <toolName>, "args": <normalized args>}``
 Hash: SHA-256 lowercase hex of compact UTF-8 JSON with ASCII key byte-order sort.

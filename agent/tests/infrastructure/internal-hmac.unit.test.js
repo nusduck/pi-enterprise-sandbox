@@ -25,7 +25,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // agent/tests/infrastructure → repo root is ../../../
 const GOLDEN_FIXTURE_PATH = path.join(
   __dirname,
-  '../../../packages/contracts/fixtures/agent-sandbox-internal-hmac-hs256-v1.json',
+  '../../../tests/fixtures/contracts/agent-sandbox-internal-hmac-hs256-v1.json',
 );
 
 const KEY_BYTES = Buffer.from(Array.from({ length: 32 }, (_, index) => index));

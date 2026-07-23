@@ -45,14 +45,12 @@ Optional: stash `sdk-compat` failure output as PR artifacts for diff review.
 | Check | File |
 |-------|------|
 | Message extract / history helpers | `message-helpers.test.js` |
-| Sandbox tool names vs chat allowlist | `tool-overrides.test.js` |
 | SessionManager branch/custom + auth shape | `session-api.test.js` |
 | Extension tool_call block / tool_result | `extension-failsafe.test.js` |
-| Cancel-on-disconnect + multi-turn resume | `cancel-resume.test.js` |
 | SDK pin + VERSION export | `sdk-surface.test.js` |
-| SDK event → BFF SSE golden vectors | `sse-event-map.test.js` |
+| Pi event → durable platform-event projection | `agent/tests/pi/platform-event-projector.unit.test.js` |
 
-If the candidate breaks only golden SSE mapping, update `agent/tests/sdk-compat/fixtures/sdk-to-sse-golden.json` **only after** confirming intentional upstream event changes and BFF still matches `tests/fixtures/sse_events.json`.
+If an SDK event shape changes, update the projector and its unit tests only after confirming that the durable platform-event and BFF SSE contracts remain compatible with `tests/fixtures/sse_events.json`.
 
 ## 2. Gray check (staging)
 
@@ -70,21 +68,23 @@ If the candidate breaks only golden SSE mapping, update `agent/tests/sdk-compat/
 
 Current enterprise persistence:
 
-- Conversation messages + `sandbox_session_id` → Sandbox DB
-- SDK `SessionManager.inMemory()` → **not** durable across agent restarts
+- Conversation messages, Agent-session bindings, and Pi JSONL snapshots → Agent-owned MySQL
+- A live SDK session is process-local, but recovery reconstructs it from the durable Agent-session journal after a worker restart
 
-Therefore most SDK bumps need **no conversation schema migration**.
+Most SDK bumps therefore need no SQL schema migration, but they must retain
+compatibility with already-persisted session entries.
 
 When upstream changes matter:
 
 | Change | Action |
 |--------|--------|
-| `CURRENT_SESSION_VERSION` or JSONL entry shapes (if you start persisting SDK sessions) | Copy sample sessions; run `parseSessionEntries` / open-migrate offline; keep rollback image |
-| Tool result / event field renames | Update `agent/services/sdk-sse-map.js` + golden fixtures; keep BFF SSE types stable for frontend |
+| `CURRENT_SESSION_VERSION` or JSONL entry shapes | Copy representative persisted entries; run `parseSessionEntries` / `migrateSessionEntries` offline and prove the new image restores pre-upgrade sessions |
+| Tool result / event field renames | Update `agent/src/infrastructure/pi/platform-event-projector.js` and its unit tests; keep durable platform events and BFF SSE types stable for frontend |
 | Default built-in tools reintroduced | **Block release** until allowlist + customTools still override host I/O |
 | Model / auth storage format | Verify `AuthStorage` + `ModelRegistry` still accept LLMIO key path |
 
-If durable SDK session files are introduced later: migrate by **copy-then-validate**, keep previous Agent image for rollback, and never dual-write the same session from two versions.
+For a session-entry migration, use **copy-then-validate**, keep the previous
+Agent image for rollback, and never dual-write one session from two versions.
 
 ## 4. PR checklist
 
@@ -104,8 +104,8 @@ If production misbehaves after release:
 
 1. **Roll back the Agent image** to the previous digest/tag (compose/k8s).
 2. Confirm `npm ls` inside the rolled-back image shows the previous pin.
-3. Leave Sandbox DB as-is (conversation text remains valid).
-4. Do **not** delete sandbox sessions solely because of an Agent rollback; multi-turn reuse still applies.
+3. Leave Agent MySQL records and Sandbox sessions intact.
+4. Do **not** delete session snapshots solely because of an Agent rollback; multi-turn reuse still applies.
 5. File a follow-up with compat suite gaps that missed the regression.
 
 Rollback does not require re-running LLM evaluation if the previous image was known-good; prioritize restore of SSE/tool path.

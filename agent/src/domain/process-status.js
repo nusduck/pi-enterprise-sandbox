@@ -1,5 +1,5 @@
 /**
- * Public ProcessHandle status vocabulary from packages/contracts.
+ * Public ProcessHandle status vocabulary.
  * Sandbox has a few finer-grained internal states; collapse those only at the
  * public boundary so Run and ToolExecution status vocabularies stay separate.
  */

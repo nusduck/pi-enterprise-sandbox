@@ -44,8 +44,8 @@ describe('agent single production source root', () => {
     }
   });
 
-  it('parks approval-waiter under legacy/ only', () => {
-    assert.ok(fs.existsSync(path.join(root, 'legacy/approval-waiter.js')));
+  it('does not retain the obsolete approval-waiter implementation', () => {
+    assert.equal(fs.existsSync(path.join(root, 'legacy')), false);
     assert.equal(fs.existsSync(path.join(root, 'services/approval-waiter.js')), false);
   });
 });

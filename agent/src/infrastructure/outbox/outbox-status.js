@@ -1,6 +1,6 @@
 /**
  * Outbox status constants (plan §8.17 / PR-03 delivery).
- * Mirror packages/contracts DomainOutbox / OutboxStatus.
+ * Shared with the durable MySQL outbox schema.
  */
 
 export const OUTBOX_STATUS = Object.freeze({

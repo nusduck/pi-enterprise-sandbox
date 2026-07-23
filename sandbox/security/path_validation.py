@@ -29,7 +29,7 @@ from sandbox.paths import (
 # Conservative conversation identifiers: UUID-friendly, no path separators.
 _CONVERSATION_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
 
-# Formal domain IDs (plan §5 / packages/contracts): ULID, Crockford Base32, CHAR(26).
+# Formal domain IDs (plan §5): ULID, Crockford Base32, CHAR(26).
 _FORMAL_ID_RE = re.compile(r"^[0-9A-HJKMNP-TV-Z]{26}$", re.IGNORECASE)
 
 

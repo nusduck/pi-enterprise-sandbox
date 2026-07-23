@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **代码与文档整理**: 删除未接入的 TypeScript contracts 包、历史 approval waiter 与 Sandbox 中未使用的 Agent/审批 DTO；跨语言 golden fixture 统一到 `tests/fixtures/contracts/`，开发与 SDK 升级文档按当前 `src/` 布局和持久化模型修订。
 - **Run 与对话投影**: Run 列表/详情补充模型、token usage、规范化生命周期时间及最新 durable event ID；对话历史保留 durable message ID、Run ID 与顺序，且只显示当前用户回合而非整个历史 prompt。
 - **运行管理界面**: 按 Agent 的权威状态过滤 Run，支持 `WAITING_INPUT`，并兼容 `completed_at` 与历史 `finished_at` 字段。
 - **Artifact 下载**: 对非 ASCII 文件名使用 RFC 5987 `filename*`，同时提供 ASCII fallback，避免下载响应因 HTTP header 编码失败。

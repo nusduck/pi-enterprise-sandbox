@@ -25,9 +25,9 @@ from sandbox.security.internal_auth import (
 REPO_ROOT = Path(__file__).resolve().parents[1]
 GOLDEN_FIXTURE_PATH = (
     REPO_ROOT
-    / "packages"
-    / "contracts"
+    / "tests"
     / "fixtures"
+    / "contracts"
     / "agent-sandbox-internal-hmac-hs256-v1.json"
 )
 

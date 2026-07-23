@@ -25,8 +25,8 @@ REQUIRED_SKILLS = {
     "xlsx",
 }
 RUNTIME_SKILL_PATH_FILES = (
-    ROOT / "agent" / "skills" / "paths.js",
-    ROOT / "agent" / "lib" / "text-redaction.js",
+    ROOT / "agent" / "src" / "skills" / "paths.js",
+    ROOT / "agent" / "src" / "lib" / "text-redaction.js",
     ROOT / "sandbox" / "isolation" / "bubblewrap.py",
     ROOT / "sandbox" / "services" / "policy_checker.py",
     ROOT / "sandbox" / "Dockerfile",
@@ -57,7 +57,7 @@ def _parse_frontmatter(text: str) -> dict[str, str]:
 
 
 def test_skill_framework_remains_available() -> None:
-    names = {path.name for path in (ROOT / "agent" / "skills").iterdir()}
+    names = {path.name for path in (ROOT / "agent" / "src" / "skills").iterdir()}
     assert FRAMEWORK <= names
     assert "tools.js" not in names
     assert not (ROOT / "agent" / "packages" / "enterprise-agent-kit").exists()

@@ -127,7 +127,7 @@ Not imported by the BFF today (available upstream, out of scope unless a task ad
 - Multi-turn: prior UI messages → `toAgentHistoryMessages` → `session.agent.state.messages`
 - System prompt append for artifact-only delivery policy
 - Skills: `additionalSkillPaths` uses only `/home/sandbox/skill`
-- Session JSONL on disk is **not** the enterprise source of truth today; conversation messages + sandbox session id live in Sandbox DB. `CURRENT_SESSION_VERSION` (SDK) is asserted in compat tests for awareness.
+- Agent-owned MySQL is the enterprise source of truth for conversation messages, Agent-session bindings, and Pi JSONL snapshots. The live SDK session is process-local and is reconstructed from that journal on recovery. `CURRENT_SESSION_VERSION` is asserted in compat tests for upgrade awareness.
 
 ### SDK events subscribed → BFF SSE
 
@@ -142,7 +142,7 @@ Not imported by the BFF today (available upstream, out of scope unless a task ad
 
 `trace`, `session`, `approval_required` (from tool approval notifier), `error`, `done`, `session_closed`.
 
-Shared fixture: `tests/fixtures/sse_events.json`. Mapper: `agent/services/sdk-sse-map.js`.
+Shared browser/BFF SSE fixture: `tests/fixtures/sse_events.json`. Pi event projection: `agent/src/infrastructure/pi/platform-event-projector.js`.
 
 ### Sandbox tool contract
 
@@ -161,7 +161,7 @@ Tool result shape expected by the Agent runtime: `{ content: [{ type: 'text', te
 Location: `agent/tests/sdk-compat/`.
 
 - Runs under `node:test` **without live LLM calls**.
-- Asserts message helpers, tool allowlist/override names, SessionManager branch/custom entries, Extension `tool_call` fail-safe + `tool_result` rewrite, cancel-on-disconnect / multi-turn resume contracts, SDK version pin, and SDK→SSE golden mapping.
+- Asserts message helpers, SessionManager branch/custom entries, Extension `tool_call` fail-safe + `tool_result` rewrite, and SDK version pin. Pi event projection is covered by `agent/tests/pi/platform-event-projector.unit.test.js`.
 - How to run against a candidate version: see [docs/runbooks/sdk-upgrade.md](../runbooks/sdk-upgrade.md).
 
 ## Consequences
@@ -176,7 +176,7 @@ Location: `agent/tests/sdk-compat/`.
 
 - Coupled to upstream event names and `createAgentSession` option semantics.
 - SDK engine (`>=22.19`) may diverge from older CI Node images — track in upgrade PRs.
-- In-memory SessionManager means process restart does not restore SDK-native session tree (enterprise persistence is conversation DB + sandbox session).
+- SDK session objects are process-local; restart recovery depends on compatibility with the Agent-owned durable Pi session journal.
 
 ## References
 

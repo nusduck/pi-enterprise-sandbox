@@ -1,7 +1,7 @@
 """PR-07B batch 2A1: Python tool request-hash v1 tests.
 
 Consumes the same golden fixture as Node:
-``packages/contracts/fixtures/sandbox-tool-request-hash-v1.json``.
+``tests/fixtures/contracts/sandbox-tool-request-hash-v1.json``.
 """
 
 from __future__ import annotations
@@ -23,7 +23,7 @@ from sandbox.app.domain.tool_request_hash import (
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 FIXTURE_PATH = (
-    REPO_ROOT / "packages" / "contracts" / "fixtures" / "sandbox-tool-request-hash-v1.json"
+    REPO_ROOT / "tests" / "fixtures" / "contracts" / "sandbox-tool-request-hash-v1.json"
 )
 
 

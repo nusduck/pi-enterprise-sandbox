@@ -1,6 +1,6 @@
 /**
  * PR-07B batch 2A1: Node unit tests for tool request-hash v1.
- * Consumes shared golden fixture packages/contracts/fixtures/sandbox-tool-request-hash-v1.json.
+ * Consumes the shared golden fixture under tests/fixtures/contracts/.
  */
 
 import { describe, it } from 'node:test';
@@ -21,7 +21,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // agent/tests/domain → repo root is ../../../
 const FIXTURE_PATH = path.join(
   __dirname,
-  '../../../packages/contracts/fixtures/sandbox-tool-request-hash-v1.json',
+  '../../../tests/fixtures/contracts/sandbox-tool-request-hash-v1.json',
 );
 
 /**
