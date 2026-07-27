@@ -598,6 +598,139 @@ describe('process log memory cap', () => {
   });
 });
 
+describe('approval.resolved tool/run status', () => {
+  it('reject marks tool failed and keeps run waiting_approval', () => {
+    const runId = 'run_appr_reject';
+    let store = createEntityStore();
+    store = reducePlatformEvent(
+      store,
+      platform({
+        eventId: 'e1',
+        sequence: 1,
+        runId,
+        type: 'run.status.changed',
+        data: { status: 'WAITING_APPROVAL' },
+      }),
+    ).store;
+    store = reducePlatformEvent(
+      store,
+      platform({
+        eventId: 'e2',
+        sequence: 2,
+        runId,
+        type: 'tool.execution.started',
+        data: {
+          toolCallId: 'tc_risk',
+          toolName: 'bash',
+          args: { command: 'curl https://evil.example' },
+        },
+      }),
+    ).store;
+    store = reducePlatformEvent(
+      store,
+      platform({
+        eventId: 'e3',
+        sequence: 3,
+        runId,
+        type: 'approval.requested',
+        data: {
+          approvalId: 'ap1',
+          toolCallId: 'tc_risk',
+          reason: 'external network',
+          command: 'curl https://evil.example',
+          risk: 'high',
+        },
+      }),
+    ).store;
+    assert.equal(store.runsById[runId].status, 'waiting_approval');
+    assert.equal(store.approvalsById.ap1.status, 'pending');
+    assert.equal(store.toolExecutionsById.tc_risk.status, 'waiting_approval');
+
+    store = reducePlatformEvent(
+      store,
+      platform({
+        eventId: 'e4',
+        sequence: 4,
+        runId,
+        type: 'approval.resolved',
+        data: {
+          approvalId: 'ap1',
+          toolCallId: 'tc_risk',
+          decision: 'reject',
+          status: 'rejected',
+        },
+      }),
+    ).store;
+
+    assert.equal(store.approvalsById.ap1.status, 'rejected');
+    assert.equal(store.toolExecutionsById.tc_risk.status, 'failed');
+    assert.equal(store.toolExecutionsById.tc_risk.isError, true);
+    // Do not optimistically set running on reject — wait for durable status events.
+    assert.equal(store.runsById[runId].status, 'waiting_approval');
+  });
+
+  it('approve marks tool running and resumes run when no other pending', () => {
+    const runId = 'run_appr_ok';
+    let store = createEntityStore();
+    store = reducePlatformEvent(
+      store,
+      platform({
+        eventId: 'a1',
+        sequence: 1,
+        runId,
+        type: 'run.status.changed',
+        data: { status: 'WAITING_APPROVAL' },
+      }),
+    ).store;
+    store = reducePlatformEvent(
+      store,
+      platform({
+        eventId: 'a2',
+        sequence: 2,
+        runId,
+        type: 'tool.execution.started',
+        data: { toolCallId: 'tc_ok', toolName: 'bash', args: { command: 'ls' } },
+      }),
+    ).store;
+    store = reducePlatformEvent(
+      store,
+      platform({
+        eventId: 'a3',
+        sequence: 3,
+        runId,
+        type: 'approval.requested',
+        data: {
+          approvalId: 'ap_ok',
+          toolCallId: 'tc_ok',
+          reason: 'policy',
+          command: 'ls',
+          risk: 'medium',
+        },
+      }),
+    ).store;
+    store = reducePlatformEvent(
+      store,
+      platform({
+        eventId: 'a4',
+        sequence: 4,
+        runId,
+        type: 'approval.resolved',
+        data: {
+          approvalId: 'ap_ok',
+          toolCallId: 'tc_ok',
+          decision: 'approve',
+          status: 'approved',
+        },
+      }),
+    ).store;
+
+    assert.equal(store.approvalsById.ap_ok.status, 'approved');
+    assert.equal(store.toolExecutionsById.tc_ok.status, 'running');
+    assert.equal(store.toolExecutionsById.tc_ok.isError, false);
+    assert.equal(store.runsById[runId].status, 'running');
+  });
+});
+
 describe('refresh recovery', () => {
   it('rehydrateRun + missed events restore tools and resume sequence', () => {
     let s = rehydrateRun(createEntityStore(), {

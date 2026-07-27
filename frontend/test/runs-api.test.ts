@@ -5,6 +5,7 @@ import {
   cancelRun,
   createRun,
   followUpRun,
+  isStreamTerminalRunStatus,
   steerRun,
 } from '../src/shared/api/runs.ts';
 
@@ -12,6 +13,32 @@ const originalFetch = globalThis.fetch;
 
 afterEach(() => {
   globalThis.fetch = originalFetch;
+});
+
+describe('streamRunEvents terminal detection', () => {
+  it('treats true terminal statuses (and wire aliases) as terminal', () => {
+    assert.equal(isStreamTerminalRunStatus('SUCCEEDED'), true);
+    assert.equal(isStreamTerminalRunStatus('succeeded'), true);
+    assert.equal(isStreamTerminalRunStatus('completed'), true);
+    assert.equal(isStreamTerminalRunStatus('failed'), true);
+    assert.equal(isStreamTerminalRunStatus('FAILED'), true);
+    assert.equal(isStreamTerminalRunStatus('cancelled'), true);
+    assert.equal(isStreamTerminalRunStatus('canceled'), true);
+    assert.equal(isStreamTerminalRunStatus('interrupted'), true);
+    assert.equal(isStreamTerminalRunStatus('budget_exceeded'), true);
+    assert.equal(isStreamTerminalRunStatus('orphaned'), true);
+  });
+
+  it('does not treat parked waiting_* statuses as terminal', () => {
+    // SSE must reconnect while the run is parked for human approval/input.
+    assert.equal(isStreamTerminalRunStatus('waiting_approval'), false);
+    assert.equal(isStreamTerminalRunStatus('WAITING_APPROVAL'), false);
+    assert.equal(isStreamTerminalRunStatus('waiting_input'), false);
+    assert.equal(isStreamTerminalRunStatus('WAITING_INPUT'), false);
+    assert.equal(isStreamTerminalRunStatus('running'), false);
+    assert.equal(isStreamTerminalRunStatus('queued'), false);
+    assert.equal(isStreamTerminalRunStatus('rejected'), false);
+  });
 });
 
 describe('Run API idempotency headers', () => {

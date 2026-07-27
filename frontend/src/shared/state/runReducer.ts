@@ -633,52 +633,71 @@ export function reduceRuntimeEvent(
     case 'approval.resolved': {
       const approvalId = str(payload.approval_id || payload.id);
       if (!approvalId) break;
+      // Normalize decision vocabulary (approve/deny aliases → entity statuses).
+      const statusRaw = str(payload.status, 'approved').toLowerCase();
+      const decision: 'approved' | 'rejected' | 'expired' =
+        statusRaw === 'rejected' ||
+        statusRaw === 'deny' ||
+        statusRaw === 'denied' ||
+        statusRaw === 'reject'
+          ? 'rejected'
+          : statusRaw === 'expired'
+            ? 'expired'
+            : 'approved';
       const existing = next.approvalsById[approvalId];
+      const toolCallFromPayload = str(payload.tool_call_id) || null;
       if (!existing) {
         next = upsertApproval(
           next,
           createApproval({
             id: approvalId,
             runId,
-            toolExecutionId: str(payload.tool_call_id) || null,
-            status: (str(payload.status, 'approved') as 'approved' | 'rejected' | 'expired') || 'approved',
+            toolExecutionId: toolCallFromPayload,
+            status: decision,
             reason: str(payload.reason),
             decidedAt: ts,
             createdAt: ts,
           }),
         );
       } else {
-        const statusRaw = str(payload.status, 'approved');
-        const status =
-          statusRaw === 'rejected' || statusRaw === 'deny' || statusRaw === 'denied'
-            ? 'rejected'
-            : statusRaw === 'expired'
-              ? 'expired'
-              : 'approved';
         next = upsertApproval(next, {
           ...existing,
-          status,
+          status: decision,
           decidedAt: ts,
         });
       }
       const toolId =
-        str(payload.tool_call_id) ||
+        toolCallFromPayload ||
         next.approvalsById[approvalId]?.toolExecutionId ||
         null;
       if (toolId && next.toolExecutionsById[toolId]) {
         const tool = next.toolExecutionsById[toolId];
+        // Approve: worker will claim/replay → show running.
+        // Reject/expire: backend terminalizes tool (FAILED); do not flash running.
+        const toolStatus =
+          decision === 'approved'
+            ? 'running'
+            : decision === 'expired'
+              ? 'cancelled'
+              : 'failed';
         next = upsertToolExecution(next, {
           ...tool,
-          status: 'running',
+          status: toolStatus,
+          isError: decision !== 'approved',
           updatedAt: ts,
         });
       }
-      // Resume run when no other pending approvals
-      const stillPending = Object.values(next.approvalsById).some(
-        (a) => a.runId === runId && a.status === 'pending',
-      );
-      if (!stillPending && next.runsById[runId]?.status === 'waiting_approval') {
-        next = touchRun(next, runId, { status: 'running' });
+      // Only optimistically leave waiting_approval when an approval was granted
+      // and no other approvals remain pending. Reject/expire keep the run parked
+      // until durable run.status_changed (worker may re-enter RUNNING with a
+      // failed tool result).
+      if (decision === 'approved') {
+        const stillPending = Object.values(next.approvalsById).some(
+          (a) => a.runId === runId && a.status === 'pending',
+        );
+        if (!stillPending && next.runsById[runId]?.status === 'waiting_approval') {
+          next = touchRun(next, runId, { status: 'running' });
+        }
       }
       break;
     }

@@ -16,11 +16,32 @@ import { parseApiStrict } from '../schemas/api';
 import { authHeaders, ApiError } from './client';
 import type { SSEEvent } from '../sse/parser';
 import { readSSEStream } from '../sse/parser';
+import { isTerminalRunStatus as isTerminalEntityRunStatus } from '../../entities/store';
 
 export type { CreateRunResponse, RunDetail, ToolExecutionSnapshot };
 export type { RunTraceResponse };
 
 const BASE = '/api';
+
+/**
+ * Whether a durable run snapshot means streamRunEvents should stop reconnecting.
+ * Must match entity-layer terminal set — parked WAITING_APPROVAL / WAITING_INPUT
+ * are non-terminal (human still in the loop; SSE should resume after blips).
+ *
+ * Accepts Agent uppercase (SUCCEEDED) and BFF/legacy aliases (completed/canceled).
+ */
+export function isStreamTerminalRunStatus(status: unknown): boolean {
+  const raw = String(status ?? '').trim().toLowerCase();
+  if (!raw) return false;
+  // Wire aliases → entity vocabulary
+  if (raw === 'completed' || raw === 'success') {
+    return isTerminalEntityRunStatus('succeeded');
+  }
+  if (raw === 'canceled') {
+    return isTerminalEntityRunStatus('cancelled');
+  }
+  return isTerminalEntityRunStatus(raw);
+}
 
 function createIdempotencyKey(prefix: string): string {
   const uuid = globalThis.crypto?.randomUUID?.();
@@ -201,22 +222,6 @@ export async function streamRunEvents(
   const maxRetries = opts.maxRetries ?? 6;
   const retryBaseMs = opts.retryBaseMs ?? 250;
   const retryMaxMs = opts.retryMaxMs ?? 2_000;
-  // Agent MySQL authority uses SUCCEEDED (uppercase). UI/entity layer uses
-  // lowercase "succeeded". Accept both, plus BFF/legacy aliases.
-  const terminalStatuses = new Set([
-    'completed',
-    'succeeded',
-    'failed',
-    'cancelled',
-    'canceled',
-    'interrupted',
-    'budget_exceeded',
-    'rejected',
-    'waiting_approval',
-    'waiting_input',
-  ]);
-  const isTerminalRunStatus = (status: unknown): boolean =>
-    terminalStatuses.has(String(status ?? '').trim().toLowerCase());
 
   for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
     if (opts.signal?.aborted) {
@@ -253,8 +258,9 @@ export async function streamRunEvents(
 
       // A closed stream is not a completion signal. Ask the authoritative
       // run endpoint before deciding whether to stop or reconnect.
+      // Parked waiting_* statuses are non-terminal — keep reconnecting.
       const snapshot = await getRun(runId);
-      if (isTerminalRunStatus(snapshot.status)) return;
+      if (isStreamTerminalRunStatus(snapshot.status)) return;
       lastError = new Error('Run event stream ended before terminal state');
     } catch (err) {
       const error = err instanceof Error ? err : new Error(String(err));
@@ -267,7 +273,7 @@ export async function streamRunEvents(
       // a genuinely unavailable run. Never synthesize success here.
       try {
         const snapshot = await getRun(runId);
-        if (isTerminalRunStatus(snapshot.status)) return;
+        if (isStreamTerminalRunStatus(snapshot.status)) return;
       } catch (err) {
         lastError = err instanceof Error ? err : new Error(String(err));
       }
