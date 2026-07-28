@@ -161,6 +161,7 @@ Agent 模型侧权威清单工具：`capabilities`（`action=list|search|describ
 | `GET /api/files/download?session_id=xxx&path=yyy` | 按路径下载 workspace 文件（上传文件等非交付物场景） |
 | `POST /api/files/upload?session_id=xxx` | 上传附件 (multipart，流式代理) |
 | `POST /api/sessions/ensure` | 创建/复用 Conversation + Sandbox Session（供上传前准备，不发消息） |
+| `POST /api/conversations/{id}/artifact-imports` | 将当前用户已有 Artifact 导入目标会话 workspace；不创建新 Artifact |
 
 - Artifact 下载代理到 `GET /sessions/{id}/artifacts/{aid}/download`
 - 路径下载 / 上传代理到 `/sessions/{id}/files/download` 与 `/sessions/{id}/files/upload`
@@ -416,9 +417,15 @@ Agent 工具 `ls` / `find` / `grep` 覆盖 SDK 本地同名工具，全部转发
 | `GET` | `/sessions/{id}/artifacts` | 列出已注册的产物 |
 | `POST` | `/sessions/{id}/artifacts/register` | 注册产物（旧端点） |
 | **`POST`** | **`/sessions/{id}/artifacts/submit`** | **显式提交产物（推荐）** |
+| `POST` | `/sessions/{id}/artifacts/imports` | 将 owner-scoped Artifact 导入本 Session workspace（BFF 上游兼容端点） |
 | `GET` | `/sessions/{id}/artifacts/{aid}/download` | 下载产物 |
 
 > **核心设计（P7）**：系统**不会自动扫描** workspace。`write` / `edit` / `bash` 只改私有工作区，**不会**注册 artifact，也**不会**触发 `file_ready`。只有通过 `submit_artifact`（或等价 `POST .../artifacts/submit`）显式提交的文件才会出现在 artifact 列表并可供用户下载。
+
+`artifacts/imports` 只把 owner-scoped 不可变 snapshot 复制成目标 workspace
+输入文件。它不复用源 `artifact_id` 作为目标会话交付记录，不写 Artifact
+metadata，也不触发 `artifact.ready/file_ready`。目标会话如需正式交付，
+仍须再次调用 `submit_artifact`。
 
 #### `POST /sessions/{id}/artifacts/submit` — 显式提交产物（推荐）
 

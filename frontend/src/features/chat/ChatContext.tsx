@@ -45,6 +45,7 @@ import {
   getConversation,
   deleteConversation,
   listArtifacts,
+  importArtifact as apiImportArtifact,
   decideApproval,
   login as apiLogin,
   register as apiRegister,
@@ -68,6 +69,11 @@ export type ChatController = {
   selectConversation: (id: string) => Promise<void>;
   startNewChat: () => Promise<void>;
   removeConversation: (id: string) => Promise<void>;
+  importArtifactToConversation: (
+    artifactId: string,
+    targetConversationId: string,
+    targetFilename?: string | null,
+  ) => Promise<void>;
   toggleSidebar: () => void;
   closeSidebar: () => void;
   // Messaging
@@ -341,6 +347,73 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       }
     },
     [setStatus, flashError, refreshArtifacts, bridge],
+  );
+
+  const importArtifactToConversation = useCallback(
+    async (
+      artifactId: string,
+      targetConversationId: string,
+      targetFilename?: string | null,
+    ) => {
+      try {
+        setStatus('Importing artifact…', '#94a3b8');
+        const result = await apiImportArtifact({
+          artifactId,
+          targetConversationId,
+          targetFilename,
+        });
+
+        if (stateRef.current.conversationId !== targetConversationId) {
+          await selectConversation(targetConversationId);
+        }
+        if (stateRef.current.conversationId !== targetConversationId) {
+          setStatus(`Imported ${result.workspace_file.name}`);
+          flashError(
+            `Imported ${result.workspace_file.name}, but the target conversation could not be opened. The file is available at ${result.workspace_file.path}.`,
+          );
+          return;
+        }
+
+        const file = result.workspace_file;
+        const localId =
+          globalThis.crypto?.randomUUID?.() ??
+          `import_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+        setState((s) => {
+          const next = update(s, {
+            attachments: [
+              ...(s.attachments || []),
+              {
+                localId,
+                status: 'uploaded',
+                name: file.name,
+                size: file.size,
+                mimeType: file.mime_type,
+                file: null,
+                attachmentId: result.import_id,
+                path: file.path,
+                idempotencyKey: `artifact_import_${result.import_id}`,
+                error: null,
+                errorCode: null,
+                traceId: null,
+                progress: 100,
+                abortCtrl: null,
+              },
+            ],
+          });
+          stateRef.current = next;
+          return next;
+        });
+        setStatus(`Imported ${file.name}`);
+        flashError(
+          `Imported ${file.name} into this conversation. It is ready in the composer.`,
+        );
+      } catch (err) {
+        setStatus('Artifact import failed', '#ef4444');
+        flashError(`Import failed: ${(err as Error).message}`);
+        throw err;
+      }
+    },
+    [flashError, selectConversation, setStatus],
   );
 
   const startNewChat = useCallback(async () => {
@@ -1081,6 +1154,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     selectConversation,
     startNewChat,
     removeConversation,
+    importArtifactToConversation,
     toggleSidebar,
     closeSidebar,
     sendMessage,

@@ -16,7 +16,7 @@ def install_formal_runtime_persistence(
     recover_processes: bool = True,
 ) -> Any | None:
     """Install/clear formal manager slots and return session runtime."""
-    from sandbox.services.artifact_manager import artifact_manager
+    from sandbox.artifact.infrastructure.manager import artifact_manager
     from sandbox.services.audit_logger import audit_logger
     from sandbox.services.dataset_manager import dataset_manager
     from sandbox.services.process_manager import process_manager
@@ -45,7 +45,7 @@ def install_formal_runtime_persistence(
     if not isinstance(db, MysqlDatabase):
         return None
 
-    from sandbox.app.persistence.repositories.artifact_repository import (
+    from sandbox.artifact.infrastructure.repository import (
         ArtifactRepository,
     )
     from sandbox.app.persistence.repositories.audit_repository import AuditRepository

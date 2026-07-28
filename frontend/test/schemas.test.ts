@@ -7,6 +7,7 @@ import {
   ConversationListSchema,
   EnsureSessionSchema,
   AuthResponseSchema,
+  ArtifactImportResponseSchema,
   ArtifactListSchema,
   parseApi,
   SSEEventSchema,
@@ -57,6 +58,23 @@ describe('API schemas', () => {
     );
     assert.ok(!Array.isArray(obj));
     assert.equal(obj.total, 1);
+  });
+
+  it('parses an Artifact import workspace input', () => {
+    const parsed = ArtifactImportResponseSchema.parse({
+      import_id: 'import_1',
+      artifact_id: 'artifact_1',
+      target_session_id: 'session_2',
+      target_conversation_id: 'conversation_2',
+      workspace_file: {
+        name: 'report.pdf',
+        path: 'imports/import_1/report.pdf',
+        mime_type: 'application/pdf',
+        size: 42,
+        sha256: 'a'.repeat(64),
+      },
+    });
+    assert.equal(parsed.workspace_file.path, 'imports/import_1/report.pdf');
   });
 
   it('SSE event schema requires type', () => {

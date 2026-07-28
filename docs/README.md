@@ -4,6 +4,7 @@ This directory is the **active** documentation set for Pi Enterprise Sandbox.
 Root `plan.md` is the frozen refactor baseline and final acceptance criteria.
 
 - [`module-layout.md`](./module-layout.md) — conventional source roots per service (agent/api-server/sandbox/frontend)
+- [`artifact-module.md`](./artifact-module.md) — Artifact domain boundary, frozen contracts, and cross-conversation Import MVP
 
 ## Authority order
 

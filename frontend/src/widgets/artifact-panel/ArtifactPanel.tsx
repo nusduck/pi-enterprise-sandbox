@@ -3,6 +3,7 @@
  * Downloads use getArtifactDownloadUrl(sessionId, artifactId) only —
  * never workspace path getDownloadUrl.
  */
+import { useMemo, useState } from 'react';
 import type { ArtifactEntity } from '../../entities';
 import { getArtifactDownloadUrl } from '../../shared/api';
 import { safeApiUrl } from '../../shared/security/url';
@@ -24,6 +25,9 @@ export function ArtifactPanel({
   /** When true, hide path-only workspace leftovers (default true). */
   submitOnly = true,
   emptyHint = 'No submitted artifacts yet. Only submit_artifact deliverables appear here.',
+  conversations = [],
+  currentConversationId = null,
+  onImport,
 }: {
   artifacts: ArtifactEntity[];
   sessionId?: string | null;
@@ -31,7 +35,21 @@ export function ArtifactPanel({
   onSelect?: (artifactId: string) => void;
   submitOnly?: boolean;
   emptyHint?: string;
+  conversations?: Array<{ id: string; title?: string | null }>;
+  currentConversationId?: string | null;
+  onImport?: (
+    artifactId: string,
+    targetConversationId: string,
+    targetFilename?: string | null,
+  ) => Promise<void>;
 }) {
+  const [targets, setTargets] = useState<Record<string, string>>({});
+  const [importingId, setImportingId] = useState<string | null>(null);
+  const [importError, setImportError] = useState<Record<string, string>>({});
+  const importTargets = useMemo(
+    () => conversations.filter((c) => c.id !== currentConversationId),
+    [conversations, currentConversationId],
+  );
   const rows = (submitOnly
     ? artifacts.filter((a) => a.source === 'submit_artifact')
     : artifacts
@@ -95,6 +113,61 @@ export function ArtifactPanel({
             ) : (
               <span className="rtc-muted">No download URL</span>
             )}
+            {onImport && importTargets.length ? (
+              <div
+                className="artifact-import-controls"
+                onClick={(e) => e.stopPropagation()}
+                onKeyDown={(e) => e.stopPropagation()}
+              >
+                <select
+                  aria-label={`Target conversation for ${a.name}`}
+                  value={targets[a.id] || ''}
+                  disabled={importingId === a.id}
+                  onChange={(e) =>
+                    setTargets((current) => ({
+                      ...current,
+                      [a.id]: e.target.value,
+                    }))
+                  }
+                >
+                  <option value="">Import to conversation…</option>
+                  {importTargets.map((conversation) => (
+                    <option key={conversation.id} value={conversation.id}>
+                      {conversation.title?.trim() ||
+                        `Conversation ${conversation.id.slice(0, 10)}…`}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  type="button"
+                  className="rtc-link-btn"
+                  disabled={!targets[a.id] || importingId === a.id}
+                  onClick={async () => {
+                    const target = targets[a.id];
+                    if (!target) return;
+                    setImportingId(a.id);
+                    setImportError((current) => ({ ...current, [a.id]: '' }));
+                    try {
+                      await onImport(a.id, target, a.name);
+                    } catch (err) {
+                      setImportError((current) => ({
+                        ...current,
+                        [a.id]: (err as Error).message || 'Import failed',
+                      }));
+                    } finally {
+                      setImportingId(null);
+                    }
+                  }}
+                >
+                  {importingId === a.id ? 'Importing…' : 'Import'}
+                </button>
+              </div>
+            ) : null}
+            {importError[a.id] ? (
+              <div className="row-sub danger" role="alert">
+                {importError[a.id]}
+              </div>
+            ) : null}
           </li>
         );
       })}

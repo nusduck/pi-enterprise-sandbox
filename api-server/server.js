@@ -20,7 +20,10 @@ import {
   handleDeleteConversation,
   handleGetConversationEvents,
 } from './src/routes/conversations.js';
-import { handleListArtifacts } from './src/routes/artifacts.js';
+import {
+  handleImportArtifact,
+  handleListArtifacts,
+} from './src/routes/artifacts.js';
 import {
   handleDatasetUpload,
   handleListDatasets,
@@ -298,6 +301,17 @@ const server = http.createServer(async (req, res) => {
         const id = decodeURIComponent(convEventsMatch[1]);
         const query = Object.fromEntries(parsedUrl.searchParams.entries());
         await handleGetConversationEvents(id, res, req, query);
+        return;
+      }
+      const artifactImportsMatch = path.match(
+        /^\/api\/conversations\/([^/]+)\/artifact-imports$/,
+      );
+      if (artifactImportsMatch && req.method === 'POST') {
+        const id = decodeURIComponent(artifactImportsMatch[1]);
+        const parsed = await readJsonBody(req, {
+          maxBytes: config.JSON_BODY_LIMIT_BYTES,
+        });
+        await handleImportArtifact(id, parsed, res, req);
         return;
       }
       const convMatch = path.match(/^\/api\/conversations\/([^/]+)$/);

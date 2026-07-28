@@ -63,6 +63,7 @@ assert "/internal/v1/executions/bash" in paths
 assert "/sessions/{session_id}/files" in paths
 assert "/sessions/{session_id}/datasets" in paths
 assert "/sessions/{session_id}/artifacts" in paths
+assert "/sessions/{session_id}/artifacts/imports" in paths
 assert "/sessions" not in paths
 """
     result = subprocess.run(

@@ -38,7 +38,7 @@ from sandbox.services.formal_execution_runtime import (
     FormalExecutionRuntime,
     set_formal_execution_runtime,
 )
-from sandbox.services.formal_artifact_runtime import (
+from sandbox.artifact.application.runtime import (
     FormalArtifactRuntime,
     set_formal_artifact_runtime,
 )

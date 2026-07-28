@@ -84,6 +84,24 @@ export const ArtifactListSchema = z.union([
     .passthrough(),
 ]);
 
+export const ArtifactImportResponseSchema = z
+  .object({
+    import_id: z.string().min(1),
+    artifact_id: z.string().min(1),
+    target_session_id: z.string().min(1),
+    target_conversation_id: z.string().optional().nullable(),
+    workspace_file: z
+      .object({
+        name: z.string().min(1),
+        path: z.string().min(1),
+        mime_type: z.string().min(1),
+        size: z.number().int().nonnegative(),
+        sha256: z.string().optional().nullable(),
+      })
+      .passthrough(),
+  })
+  .passthrough();
+
 export const UploadResponseSchema = z
   .object({
     attachment_id: z.string().optional(),
@@ -163,6 +181,7 @@ export type AuthResponse = z.infer<typeof AuthResponseSchema>;
 export type Conversation = z.infer<typeof ConversationSchema>;
 export type EnsureSession = z.infer<typeof EnsureSessionSchema>;
 export type Artifact = z.infer<typeof ArtifactSchema>;
+export type ArtifactImportResponse = z.infer<typeof ArtifactImportResponseSchema>;
 export type UploadResponse = z.infer<typeof UploadResponseSchema>;
 export type DatasetUploadResponse = z.infer<typeof DatasetUploadResponseSchema>;
 

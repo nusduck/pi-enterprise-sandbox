@@ -35,11 +35,13 @@ function createClientTraceContext(traceId, traceState) {
 }
 
 export class SandboxError extends Error {
-  constructor(status, message, path) {
+  constructor(status, message, path, { code = null, detail = null } = {}) {
     super(message);
     this.name = 'SandboxError';
     this.status = status;
     this.path = path;
+    this.code = code;
+    this.detail = detail;
   }
 }
 
@@ -181,7 +183,19 @@ export function createSandboxClient({
       });
       if (!resp.ok) {
         const detail = await resp.json().catch(() => ({ detail: resp.statusText }));
-        throw new SandboxError(resp.status, detail.detail || resp.statusText, path);
+        const raw = detail?.detail ?? detail?.error ?? resp.statusText;
+        const message =
+          typeof raw === 'string'
+            ? raw
+            : typeof raw?.message === 'string'
+              ? raw.message
+              : resp.statusText;
+        const code =
+          (raw && typeof raw === 'object' && typeof raw.code === 'string'
+            ? raw.code
+            : null) ||
+          (typeof detail?.code === 'string' ? detail.code : null);
+        throw new SandboxError(resp.status, message, path, { code, detail });
       }
       return resp;
     } catch (err) {
@@ -389,6 +403,16 @@ export function createSandboxClient({
       return resp.json();
     },
 
+    async importArtifact(sessionId, artifactId, targetFilename = null) {
+      const payload = { artifact_id: artifactId };
+      if (targetFilename) payload.target_filename = targetFilename;
+      const resp = await sbFetch(`/sessions/${sessionId}/artifacts/imports`, {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      });
+      return resp.json();
+    },
+
     artifactDownloadPath(sessionId, artifactId) {
       return `/sessions/${sessionId}/artifacts/${encodeURIComponent(artifactId)}/download`;
     },
@@ -577,6 +601,14 @@ export async function submitArtifact(sessionId, name, path, mimeType) {
 
 export async function listArtifacts(sessionId) {
   return createSandboxClient().listArtifacts(sessionId);
+}
+
+export async function importArtifact(sessionId, artifactId, targetFilename = null) {
+  return createSandboxClient().importArtifact(
+    sessionId,
+    artifactId,
+    targetFilename,
+  );
 }
 
 export async function downloadArtifactStream(sessionId, artifactId) {

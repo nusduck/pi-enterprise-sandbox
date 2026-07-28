@@ -5,6 +5,7 @@
 import { isAllowedApiUrl, safeApiUrl } from '../security/url';
 import {
   ApprovalDecisionSchema,
+  ArtifactImportResponseSchema,
   ArtifactListSchema,
   AuthResponseSchema,
   ConversationDetailSchema,
@@ -18,6 +19,7 @@ import {
   parseApiStrict,
   type AuthResponse,
   type AuthUser,
+  type ArtifactImportResponse,
   type Conversation,
   type ConversationEventsResponse,
   type EnsureSession,
@@ -212,6 +214,43 @@ export async function listArtifacts(
     artifacts: (data.artifacts || []) as Artifact[],
     total: data.total,
   };
+}
+
+export async function importArtifact(input: {
+  artifactId: string;
+  targetConversationId: string;
+  targetFilename?: string | null;
+}): Promise<ArtifactImportResponse> {
+  const resp = await fetch(
+    `${BASE}/conversations/${encodeURIComponent(input.targetConversationId)}/artifact-imports`,
+    {
+      method: 'POST',
+      headers: authHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({
+        artifact_id: input.artifactId,
+        ...(input.targetFilename
+          ? { target_filename: input.targetFilename }
+          : {}),
+      }),
+    },
+  );
+  if (!resp.ok) {
+    const err = await errorBody(resp);
+    throw new ApiError(
+      String(err.error || err.detail || `Artifact import failed: ${resp.status}`),
+      {
+        status: resp.status,
+        code: typeof err.code === 'string' ? err.code : null,
+        traceId: resp.headers.get('x-trace-id'),
+        detail: err,
+      },
+    );
+  }
+  return parseApiStrict(
+    ArtifactImportResponseSchema,
+    await resp.json(),
+    'artifact import',
+  );
 }
 
 export async function decideApproval(

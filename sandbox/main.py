@@ -19,12 +19,12 @@ from sandbox.config import (
 )
 from sandbox.routers import (
     health,
-    internal_artifacts,
     internal_executions,
     internal_files,
     internal_processes,
     internal_sessions,
 )
+from sandbox.artifact.api import internal as internal_artifacts
 from sandbox.security.internal_http_auth import set_replay_store
 from sandbox.security.network_policy import get_network_policy, init_network_policy
 from sandbox.services.files_read_runtime import (
@@ -33,7 +33,7 @@ from sandbox.services.files_read_runtime import (
 )
 from sandbox.services.files_write_runtime import set_files_write_runtime
 from sandbox.services.formal_execution_runtime import set_formal_execution_runtime
-from sandbox.services.formal_artifact_runtime import set_formal_artifact_runtime
+from sandbox.artifact.application.runtime import set_formal_artifact_runtime
 from sandbox.services.formal_process_runtime import set_formal_process_runtime
 from sandbox.services.formal_session_runtime import set_formal_session_runtime
 from sandbox.trace import (
@@ -401,7 +401,8 @@ async def value_error_handler(request: Request, exc: ValueError):
 # Public file, dataset, and artifact adapters are retained only for the
 # user-facing BFF flows. Session identity and all authority come from the
 # formal AgentSession/SandboxSession binding installed by the internal plane.
-from sandbox.routers import artifacts, auth_router, datasets, files
+from sandbox.artifact.api import public as artifacts
+from sandbox.routers import auth_router, datasets, files
 
 app.include_router(auth_router.router)
 app.include_router(files.router)

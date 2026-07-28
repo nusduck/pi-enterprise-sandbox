@@ -58,6 +58,10 @@ Browser → Frontend → BFF (Node:4000) → Agent (Node:4100) → Sandbox (Fast
 - **Agent → LLM**: HTTPS 直连，API Key 仅存 Agent 服务环境变量
 - **Browser ← API Server**: SSE (`text/event-stream`)，事件驱动渲染
 - **Artifact 下载**: 仅 `artifact_id` → control-plane snapshot；禁止 workspace path 作为交付 fallback
+- **Artifact 模块**: Sandbox 内由 `sandbox/artifact/` 聚合，通过
+  `ArtifactFacade` 暴露 submit/list/download/import；旧 service/router 路径仅兼容
+- **跨会话 Import**: 以 `org_id + user_id` 校验源 Artifact，将不可变 snapshot
+  原子复制为目标 workspace 输入；不创建 Artifact、不发交付事件
 
 ## Key Design Decisions
 

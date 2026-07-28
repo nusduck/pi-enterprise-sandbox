@@ -1378,6 +1378,23 @@ body {
   cursor: default;
 }
 
+.artifact-import-controls {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.artifact-import-controls select {
+  min-width: 0;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  background: var(--color-surface);
+  color: var(--color-text);
+  padding: 5px 7px;
+  font: inherit;
+}
+
 /* Tool status tones */
 .rtc-tool-running .rtc-icon { color: var(--color-primary-hover); }
 .rtc-tool-done .rtc-icon { color: var(--color-success-text); }

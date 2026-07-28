@@ -47,7 +47,14 @@ export function ContextInspector({
   onTabChange: (t: InspectorTabId) => void;
   selected: SelectedEntity;
 }) {
-  const { entityStore, activeRunId, activeSessionId, activeTraceId, state } = useChat();
+  const {
+    entityStore,
+    activeRunId,
+    activeSessionId,
+    activeTraceId,
+    state,
+    importArtifactToConversation,
+  } = useChat();
   const { openProcessConsole } = useWorkbenchSelection();
   const runId = activeRunId;
   const run = getActiveRunEntity(entityStore, runId);
@@ -176,6 +183,9 @@ export function ContextInspector({
               sessionId={activeSessionId}
               selectedId={selected?.kind === 'artifact' ? selected.id : null}
               submitOnly
+              conversations={state.conversations}
+              currentConversationId={state.conversationId}
+              onImport={importArtifactToConversation}
             />
           ) : null}
 
