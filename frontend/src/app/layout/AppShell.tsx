@@ -23,6 +23,7 @@ function isManagementPath(pathname: string): boolean {
   return (
     pathname === '/runs' ||
     pathname === '/approvals' ||
+    pathname === '/schedules' ||
     pathname.startsWith('/settings')
   );
 }
@@ -30,6 +31,7 @@ function isManagementPath(pathname: string): boolean {
 function managementTitle(pathname: string): string {
   if (pathname === '/runs') return 'Active Runs';
   if (pathname === '/approvals') return 'Approvals';
+  if (pathname === '/schedules') return 'Scheduled Runs';
   if (pathname.startsWith('/settings')) return 'Capabilities';
   return 'UPRC Agent';
 }

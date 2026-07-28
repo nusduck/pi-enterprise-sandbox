@@ -30,6 +30,7 @@ import { A2aTaskRepository } from '../infrastructure/mysql/repositories/a2a-task
 import { A2aAuditRepository } from '../infrastructure/mysql/repositories/a2a-audit-repository.js';
 import { ArtifactRepository } from '../infrastructure/mysql/repositories/artifact-repository.js';
 import { ProcessExecutionRepository } from '../infrastructure/mysql/repositories/process-execution-repository.js';
+import { CronJobRepository } from '../infrastructure/mysql/repositories/cron-job-repository.js';
 import { OutboxRepository } from '../infrastructure/outbox/outbox-repository.js';
 import { CreateRunService } from '../application/create-run-service.js';
 import { GetRunService } from '../application/get-run-service.js';
@@ -49,6 +50,7 @@ import { ApprovalDecisionService } from '../application/approval-decision-servic
 import { InteractionResponseService } from '../application/interaction-response-service.js';
 import { SteerRunService } from '../application/steer-run-service.js';
 import { FollowUpService } from '../application/follow-up-service.js';
+import { CronJobService } from '../application/cron-job-service.js';
 import { A2aCredentialService } from '../application/a2a/credential-service.js';
 import { A2aTaskService } from '../application/a2a/task-service.js';
 import { A2aStreamService } from '../application/a2a/stream-service.js';
@@ -184,6 +186,7 @@ export function createRepositoryBundle(db, opts = {}) {
     a2aAudit: new A2aAuditRepository(db, { now }),
     artifacts: new ArtifactRepository(db),
     processExecutions: new ProcessExecutionRepository(db),
+    cronJobs: new CronJobRepository(db, { now }),
   };
 }
 
@@ -1031,6 +1034,24 @@ export class ServiceContainer {
       now: this.now,
       runQueue,
     });
+    // Cron keeps the same durable CreateRun flow but is explicitly labelled in
+    // the Run fact table so trace/audit/UI can distinguish unattended work.
+    const cronCreateRunService = new CreateRunService({
+      transactionManager: tx,
+      createRepositories,
+      generateId: this.generateId,
+      now: this.now,
+      runQueue,
+      source: 'cron',
+    });
+    const cronJobService = new CronJobService({
+      transactionManager: tx,
+      createRepositories,
+      db: this.knex,
+      createRunService: cronCreateRunService,
+      generateId: this.generateId,
+      now: this.now,
+    });
     const getRunService = new GetRunService({
       createRepositories,
       db: this.knex,
@@ -1164,6 +1185,7 @@ export class ServiceContainer {
 
     return {
       createRunService,
+      cronJobService,
       getRunService,
       cancelRunService,
       steerRunService,
@@ -1235,6 +1257,23 @@ export class ServiceContainer {
         Number(this.env.AGENT_RUN_LEASE_RENEW_INTERVAL_MS) || undefined,
     });
 
+    const cronCreateRunService = new CreateRunService({
+      transactionManager: tx,
+      createRepositories,
+      generateId: this.generateId,
+      now: this.now,
+      runQueue,
+      source: 'cron',
+    });
+    const cronJobService = new CronJobService({
+      transactionManager: tx,
+      createRepositories,
+      db: this.knex,
+      createRunService: cronCreateRunService,
+      generateId: this.generateId,
+      now: this.now,
+    });
+
     return {
       executeRunService,
       recoveryService,
@@ -1243,6 +1282,7 @@ export class ServiceContainer {
       cancelSignal,
       leaseManager,
       runExecutorFactory,
+      cronJobService,
       createRepositories,
       transactionManager: tx,
     };

@@ -381,6 +381,7 @@ export async function startHttpMain(env = process.env) {
     approvalQueryService: httpServices?.approvalQueryService ?? null,
     approvalDecisionService: httpServices?.approvalDecisionService ?? null,
     interactionResponseService: httpServices?.interactionResponseService ?? null,
+    cronJobService: httpServices?.cronJobService ?? null,
     listRuns,
     listToolExecutions,
     processAccessService,

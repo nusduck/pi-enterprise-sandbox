@@ -137,3 +137,11 @@ export {
 } from './trace-span-repository.js';
 export { InteractionRepository } from './interaction-repository.js';
 export { mapInteraction } from '../row-mappers.js';
+export {
+  CronJobRepository,
+  mapCronJob,
+  mapCronJobRun,
+  CRON_JOB_LIST_DEFAULT_LIMIT,
+  CRON_JOB_RUN_LIST_DEFAULT_LIMIT,
+  CRON_JOB_LIST_MAX_LIMIT,
+} from './cron-job-repository.js';

@@ -34,6 +34,7 @@ describe('isProtectedApiPath', () => {
     assert.equal(isProtectedApiPath('/api/auth/login'), false);
     assert.equal(isProtectedApiPath('/api/conversations'), true);
     assert.equal(isProtectedApiPath('/api/runs'), true);
+    assert.equal(isProtectedApiPath('/api/cron-jobs'), true);
     assert.equal(isProtectedApiPath('/api/extensions/diagnostics'), true);
     assert.equal(isProtectedApiPath('/api/capabilities/tools'), true);
     assert.equal(isProtectedApiPath('/api/files/upload'), true);

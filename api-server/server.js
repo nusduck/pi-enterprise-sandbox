@@ -66,6 +66,15 @@ import {
   handleRotateA2aCredential,
   handleRevokeA2aCredential,
 } from './src/routes/a2a.js';
+import {
+  handleCreateCronJob,
+  handleDeleteCronJob,
+  handleGetCronJob,
+  handleListCronJobRuns,
+  handleListCronJobs,
+  handleRunCronJob,
+  handleUpdateCronJob,
+} from './src/routes/cron-jobs.js';
 import { authFromRequest, checkHealth } from './src/services/sandbox-client.js';
 import { checkAgentHealth } from './src/services/agent-client.js';
 import { readJsonBody } from './src/http/body.js';
@@ -282,6 +291,48 @@ const server = http.createServer(async (req, res) => {
           await handleRevokeA2aCredential(id, res, req);
         }
         return;
+      }
+    }
+
+    // ── Cron job control plane ──
+    if (req.method === 'GET' && path === '/api/cron-jobs') {
+      await handleListCronJobs(parsedUrl, res, req);
+      return;
+    }
+    if (req.method === 'POST' && path === '/api/cron-jobs') {
+      const parsed = await readJsonBody(req, { maxBytes: config.JSON_BODY_LIMIT_BYTES });
+      await handleCreateCronJob(parsed, res, req);
+      return;
+    }
+    {
+      const cronJobRuns = path.match(/^\/api\/cron-jobs\/([^/]+)\/runs$/);
+      if (req.method === 'GET' && cronJobRuns) {
+        await handleListCronJobRuns(
+          decodeURIComponent(cronJobRuns[1]), parsedUrl, res, req,
+        );
+        return;
+      }
+      const cronJobRun = path.match(/^\/api\/cron-jobs\/([^/]+)\/run$/);
+      if (req.method === 'POST' && cronJobRun) {
+        await handleRunCronJob(decodeURIComponent(cronJobRun[1]), res, req);
+        return;
+      }
+      const cronJob = path.match(/^\/api\/cron-jobs\/([^/]+)$/);
+      if (cronJob) {
+        const id = decodeURIComponent(cronJob[1]);
+        if (req.method === 'GET') {
+          await handleGetCronJob(id, res, req);
+          return;
+        }
+        if (req.method === 'PATCH') {
+          const parsed = await readJsonBody(req, { maxBytes: config.JSON_BODY_LIMIT_BYTES });
+          await handleUpdateCronJob(id, parsed, res, req);
+          return;
+        }
+        if (req.method === 'DELETE') {
+          await handleDeleteCronJob(id, res, req);
+          return;
+        }
       }
     }
 

@@ -254,6 +254,14 @@ export function ConversationSidebar() {
               ) : null}
             </NavLink>
             <NavLink
+              to="/schedules"
+              className={({ isActive }) =>
+                `sidebar-nav-link${isActive ? ' active' : ''}`
+              }
+            >
+              Scheduled Runs
+            </NavLink>
+            <NavLink
               to="/settings/capabilities"
               className={({ isActive }) =>
                 `sidebar-nav-link${isActive ? ' active' : ''}`

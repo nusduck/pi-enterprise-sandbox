@@ -2717,7 +2717,8 @@ body {
   color: var(--color-text-muted);
 }
 .mgmt-field input,
-.mgmt-field select {
+.mgmt-field select,
+.mgmt-field textarea {
   min-height: 38px;
   padding: 8px 10px;
   border: 1px solid var(--color-border);
@@ -2725,6 +2726,33 @@ body {
   background: var(--color-bg-elevated);
   color: var(--color-text);
   font: inherit;
+}
+.mgmt-field textarea {
+  min-height: 84px;
+  resize: vertical;
+  line-height: 1.45;
+}
+.mgmt-field small {
+  color: var(--color-text-dim);
+  line-height: 1.35;
+}
+.mgmt-field-wide { flex: 1 1 420px; }
+.mgmt-schedule-form {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 16px;
+  border: 1px solid var(--color-hairline);
+  border-radius: var(--radius-lg);
+  background: var(--color-bg-elevated);
+}
+.mgmt-form-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.mgmt-prompt-preview {
+  max-width: 260px;
+  margin-top: 4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .mgmt-scope-field {
   display: flex;

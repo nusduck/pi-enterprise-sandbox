@@ -19,6 +19,7 @@ import path from 'node:path';
 import { createServiceContainer } from './container.js';
 import { startRunWorkerRuntime } from './run-worker.js';
 import { startTelemetry } from '../infrastructure/telemetry.js';
+import { CronScheduler } from '../application/cron-job-service.js';
 
 function optionalSafeInteger(value, minimum) {
   if (value == null || String(value).trim() === '') return undefined;
@@ -49,14 +50,30 @@ export async function startWorkerMain(env = process.env, hooks = {}) {
 
   let workerRuntime;
   let recoveryService;
+  let cronJobService;
   try {
-    ({ workerRuntime, recoveryService } = await container.createWorkerServices());
+    ({ workerRuntime, recoveryService, cronJobService } = await container.createWorkerServices());
   } catch (err) {
     await container.shutdown().catch(() => {});
     throw err;
   }
 
   await startRunWorkerRuntime(workerRuntime);
+
+  // Cron is intentionally co-located with the durable Agent worker. It only
+  // creates standard Run records; it never executes tools or Pi sessions.
+  // Older isolated bootstrap fakes do not expose the optional control-plane
+  // service. Real ServiceContainer wiring always does; retaining this guard
+  // keeps the Run worker's failure semantics independently testable.
+  const cronScheduler = cronJobService
+    ? new CronScheduler({
+        cronJobService,
+        intervalMs: Number(env.AGENT_CRON_SCHEDULER_INTERVAL_MS) || 30_000,
+        claimRetryMs: Number(env.AGENT_CRON_CLAIM_RETRY_MS) || 120_000,
+        batchSize: Number(env.AGENT_CRON_BATCH_SIZE) || 25,
+      })
+    : null;
+  await cronScheduler?.start();
 
   // Bounded recovery scan before accepting jobs. Failure is observable but
   // does not hard-crash when the consumer is up (periodic scan retries).
@@ -97,6 +114,7 @@ export async function startWorkerMain(env = process.env, hooks = {}) {
     publisher = await container.createOutboxPublisher();
   } catch (err) {
     clearInterval(recoveryTimer);
+    await cronScheduler?.shutdown().catch(() => {});
     await workerRuntime.shutdown().catch(() => {});
     await container.shutdown().catch(() => {});
     throw err;
@@ -159,6 +177,7 @@ export async function startWorkerMain(env = process.env, hooks = {}) {
       err instanceof Error ? err.message : 'error',
     );
     clearInterval(recoveryTimer);
+    await cronScheduler?.shutdown().catch(() => {});
     outboxAbort.abort();
     try {
       await outboxLoop;
@@ -176,6 +195,7 @@ export async function startWorkerMain(env = process.env, hooks = {}) {
     shuttingDown = true;
     console.log(`[agent-worker] ${signal} — shutting down`);
     clearInterval(recoveryTimer);
+    await cronScheduler?.shutdown().catch(() => {});
     outboxAbort.abort();
     try {
       await outboxLoop;
@@ -212,7 +232,7 @@ export async function startWorkerMain(env = process.env, hooks = {}) {
   process.once('SIGTERM', () => void shutdown('SIGTERM'));
   process.once('SIGINT', () => void shutdown('SIGINT'));
 
-  return { container, workerRuntime, recoveryService, workerHandle };
+  return { container, workerRuntime, recoveryService, cronScheduler, workerHandle };
 }
 
 const isMain =

@@ -239,6 +239,10 @@ export function mapErrorToHttp(err) {
           ? 'Trace'
         : resource === 'interactions'
           ? 'Interaction'
+          : resource === 'cron_jobs'
+            ? 'Cron job'
+            : resource === 'cron_job_runs'
+              ? 'Cron job run'
           : 'Run';
     return { status: 404, body: { error: `${noun} not found`, code: 'NOT_FOUND' } };
   }
@@ -492,6 +496,7 @@ function mapProcessErrorToHttp(err) {
  *   followUpService?: { execute: Function } | null,
  *   listToolExecutions?: Function | null,
  *   processAccessService?: object | null,
+ *   cronJobService?: { list: Function, get: Function, create: Function, update: Function, delete: Function, listRuns: Function, runManual: Function } | null,
  *   activeRunHint?: () => number,
  *   eventPollIntervalMs?: number,
  *   eventHeartbeatMs?: number,
@@ -517,6 +522,7 @@ export function createAgentHttpServer(deps) {
   const interactionResponseService = deps.interactionResponseService || null;
   const processAccessService = deps.processAccessService || null;
   const traceQueryService = deps.traceQueryService || null;
+  const cronJobService = deps.cronJobService || null;
 
   /**
    * @param {import('node:http').IncomingMessage} req
@@ -663,6 +669,134 @@ export function createAgentHttpServer(deps) {
           });
         }
         return;
+      }
+
+      // Cron is a control-plane API. It has no browser timer semantics: the
+      // worker later turns each claimed schedule into a normal durable Run.
+      if (path === '/internal/cron-jobs') {
+        if (!cronJobService) {
+          json(res, 503, { error: 'Cron scheduler unavailable', code: 'DEPENDENCY' });
+          return;
+        }
+        const auth = authSubjectsFromRequest(req);
+        if (!auth) {
+          json(res, 400, {
+            error: 'X-Acting-User-Id and X-Acting-Organization-Id are required',
+            code: 'AUTH_CONTEXT_REQUIRED',
+          });
+          return;
+        }
+        try {
+          if (req.method === 'GET') {
+            const limit = Number(parsedUrl.searchParams.get('limit')) || undefined;
+            json(res, 200, { cron_jobs: await cronJobService.list(auth, { limit }) });
+            return;
+          }
+          if (req.method === 'POST') {
+            const raw = await readBody(req);
+            let body;
+            try {
+              body = raw ? JSON.parse(raw) : {};
+            } catch {
+              json(res, 400, { error: 'Invalid JSON body', code: 'VALIDATION' });
+              return;
+            }
+            json(res, 201, await cronJobService.create(auth, body));
+            return;
+          }
+        } catch (err) {
+          const mapped = mapErrorToHttp(err);
+          json(res, mapped.status, mapped.body);
+          return;
+        }
+      }
+
+      {
+        const cronRuns = path.match(/^\/internal\/cron-jobs\/([^/]+)\/runs$/);
+        if (cronRuns && req.method === 'GET') {
+          if (!cronJobService) {
+            json(res, 503, { error: 'Cron scheduler unavailable', code: 'DEPENDENCY' });
+            return;
+          }
+          const auth = authSubjectsFromRequest(req);
+          if (!auth) {
+            json(res, 400, { error: 'X-Acting-User-Id and X-Acting-Organization-Id are required', code: 'AUTH_CONTEXT_REQUIRED' });
+            return;
+          }
+          try {
+            const limit = Number(parsedUrl.searchParams.get('limit')) || undefined;
+            json(res, 200, {
+              cron_job_runs: await cronJobService.listRuns(
+                decodeURIComponent(cronRuns[1]), auth, { limit },
+              ),
+            });
+          } catch (err) {
+            const mapped = mapErrorToHttp(err);
+            json(res, mapped.status, mapped.body);
+          }
+          return;
+        }
+      }
+
+      {
+        const cronManual = path.match(/^\/internal\/cron-jobs\/([^/]+)\/run$/);
+        if (cronManual && req.method === 'POST') {
+          if (!cronJobService) {
+            json(res, 503, { error: 'Cron scheduler unavailable', code: 'DEPENDENCY' });
+            return;
+          }
+          const auth = authSubjectsFromRequest(req);
+          if (!auth) {
+            json(res, 400, { error: 'X-Acting-User-Id and X-Acting-Organization-Id are required', code: 'AUTH_CONTEXT_REQUIRED' });
+            return;
+          }
+          try {
+            json(res, 202, await cronJobService.runManual(decodeURIComponent(cronManual[1]), auth));
+          } catch (err) {
+            const mapped = mapErrorToHttp(err);
+            json(res, mapped.status, mapped.body);
+          }
+          return;
+        }
+      }
+
+      {
+        const cronJob = path.match(/^\/internal\/cron-jobs\/([^/]+)$/);
+        if (cronJob && ['GET', 'PATCH', 'DELETE'].includes(req.method || '')) {
+          if (!cronJobService) {
+            json(res, 503, { error: 'Cron scheduler unavailable', code: 'DEPENDENCY' });
+            return;
+          }
+          const auth = authSubjectsFromRequest(req);
+          if (!auth) {
+            json(res, 400, { error: 'X-Acting-User-Id and X-Acting-Organization-Id are required', code: 'AUTH_CONTEXT_REQUIRED' });
+            return;
+          }
+          const cronJobId = decodeURIComponent(cronJob[1]);
+          try {
+            if (req.method === 'GET') {
+              json(res, 200, await cronJobService.get(cronJobId, auth));
+            } else if (req.method === 'PATCH') {
+              const raw = await readBody(req);
+              let body;
+              try {
+                body = raw ? JSON.parse(raw) : {};
+              } catch {
+                json(res, 400, { error: 'Invalid JSON body', code: 'VALIDATION' });
+                return;
+              }
+              json(res, 200, await cronJobService.update(cronJobId, auth, body));
+            } else {
+              await cronJobService.delete(cronJobId, auth);
+              res.writeHead(204);
+              res.end();
+            }
+          } catch (err) {
+            const mapped = mapErrorToHttp(err);
+            json(res, mapped.status, mapped.body);
+          }
+          return;
+        }
       }
 
       if (path === '/internal/conversations') {

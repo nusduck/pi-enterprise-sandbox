@@ -26,6 +26,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const RUN = '01K0G2PAV8FPMVC9QHJG7JPN53';
 const CONV = '01K0G2PAV8FPMVC9QHJG7JPN51';
 const APPROVAL = '01K0G2PAV8FPMVC9QHJG7JPN55';
+const CRON = '01K0G2PAV8FPMVC9QHJG7JPN5A';
 const TRACE = 'a'.repeat(32);
 
 function listen(server) {
@@ -73,6 +74,7 @@ describe('createAgentHttpServer factory', () => {
   let approvalDecisionCalls;
   let steerCalls;
   let followUpCalls;
+  let cronCalls;
 
   before(async () => {
     created = [];
@@ -83,6 +85,7 @@ describe('createAgentHttpServer factory', () => {
     approvalDecisionCalls = [];
     steerCalls = [];
     followUpCalls = [];
+    cronCalls = [];
 
     const createRunService = {
       async execute(input) {
@@ -316,6 +319,36 @@ describe('createAgentHttpServer factory', () => {
       },
     };
 
+    const cronJobService = {
+      async list(auth) {
+        cronCalls.push({ operation: 'list', auth });
+        return [{ cron_job_id: CRON, name: 'Daily report', enabled: true }];
+      },
+      async get(cronJobId, auth) {
+        cronCalls.push({ operation: 'get', cronJobId, auth });
+        return { cron_job_id: cronJobId, name: 'Daily report', enabled: true };
+      },
+      async create(auth, body) {
+        cronCalls.push({ operation: 'create', auth, body });
+        return { cron_job_id: CRON, ...body, enabled: true };
+      },
+      async update(cronJobId, auth, body) {
+        cronCalls.push({ operation: 'update', cronJobId, auth, body });
+        return { cron_job_id: cronJobId, ...body, enabled: false };
+      },
+      async delete(cronJobId, auth) {
+        cronCalls.push({ operation: 'delete', cronJobId, auth });
+      },
+      async listRuns(cronJobId, auth) {
+        cronCalls.push({ operation: 'listRuns', cronJobId, auth });
+        return [{ cron_job_run_id: '01K0G2PAV8FPMVC9QHJG7JPN5B', status: 'QUEUED' }];
+      },
+      async runManual(cronJobId, auth) {
+        cronCalls.push({ operation: 'runManual', cronJobId, auth });
+        return { cron_job_run_id: '01K0G2PAV8FPMVC9QHJG7JPN5B', status: 'QUEUED' };
+      },
+    };
+
     server = createAgentHttpServer({
       createRunService,
       getRunService,
@@ -327,6 +360,7 @@ describe('createAgentHttpServer factory', () => {
       steerRunService,
       followUpService,
       traceQueryService,
+      cronJobService,
       config: { AGENT_INTERNAL_TOKEN: '' },
       eventPollIntervalMs: 50,
       eventHeartbeatMs: 1000,
@@ -399,6 +433,41 @@ describe('createAgentHttpServer factory', () => {
     assert.equal(removed.status, 204);
     const missing = await req(port, 'GET', `/internal/conversations/${CONV}`);
     assert.equal(missing.status, 404);
+  });
+
+  it('serves the durable Cron control plane with trusted ownership', async () => {
+    const listed = await req(port, 'GET', '/internal/cron-jobs');
+    assert.equal(listed.status, 200);
+    assert.equal(listed.json.cron_jobs[0].cron_job_id, CRON);
+
+    const createdCron = await req(port, 'POST', '/internal/cron-jobs', {
+      body: {
+        name: 'Daily report',
+        prompt: 'Prepare the report',
+        schedule_type: 'cron',
+        cron_expression: '0 9 * * 1-5',
+        timezone: 'Asia/Shanghai',
+      },
+    });
+    assert.equal(createdCron.status, 201);
+    assert.equal(cronCalls.at(-1).operation, 'create');
+    assert.equal(cronCalls.at(-1).auth.externalUserId, 'user-ext-1');
+
+    const paused = await req(port, 'PATCH', `/internal/cron-jobs/${CRON}`, {
+      body: { enabled: false },
+    });
+    assert.equal(paused.status, 200);
+    assert.equal(cronCalls.at(-1).operation, 'update');
+
+    const manual = await req(port, 'POST', `/internal/cron-jobs/${CRON}/run`, {
+      body: {},
+    });
+    assert.equal(manual.status, 202);
+    assert.equal(manual.json.status, 'QUEUED');
+
+    const history = await req(port, 'GET', `/internal/cron-jobs/${CRON}/runs`);
+    assert.equal(history.status, 200);
+    assert.equal(history.json.cron_job_runs[0].status, 'QUEUED');
   });
 
   it('coordinates pre-upload formal session ensure with a W3C trace id', async () => {

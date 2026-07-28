@@ -5,6 +5,7 @@ import { RunsPage } from '../../pages/runs/RunsPage';
 import { ApprovalsPage } from '../../pages/approvals/ApprovalsPage';
 import { CapabilitiesPage } from '../../pages/settings/CapabilitiesPage';
 import { A2aPage } from '../../pages/settings/A2aPage';
+import { SchedulesPage } from '../../pages/schedules/SchedulesPage';
 
 export function AppRouter() {
   return (
@@ -31,6 +32,14 @@ export function AppRouter() {
           element={
             <AppShell>
               <ApprovalsPage />
+            </AppShell>
+          }
+        />
+        <Route
+          path="/schedules"
+          element={
+            <AppShell>
+              <SchedulesPage />
             </AppShell>
           }
         />

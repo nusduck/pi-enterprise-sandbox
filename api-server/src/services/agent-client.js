@@ -364,6 +364,78 @@ export async function listAgentRuns(
   return resp.json();
 }
 
+async function requestAgentCron(
+  path,
+  { method = 'GET', body = null, auth = null, traceId = null } = {},
+) {
+  const resp = await fetch(
+    `${config.AGENT_BASE_URL}/internal/cron-jobs${path}`,
+    {
+      method,
+      headers: requestHeaders({ auth, traceId }),
+      body: body == null ? undefined : JSON.stringify(body),
+    },
+  );
+  if (!resp.ok) {
+    const payload = await resp.json().catch(() => ({}));
+    const error = new Error(
+      typeof payload.error === 'string'
+        ? payload.error
+        : `Agent cron request failed (${resp.status})`,
+    );
+    error.status = resp.status;
+    if (typeof payload.code === 'string') error.code = payload.code;
+    throw error;
+  }
+  if (resp.status === 204) return null;
+  return resp.json();
+}
+
+export async function listAgentCronJobs(
+  { limit } = {},
+  { auth = null, traceId = null } = {},
+) {
+  const query = limit ? `?limit=${encodeURIComponent(String(limit))}` : '';
+  return requestAgentCron(query, { auth, traceId });
+}
+
+export async function createAgentCronJob(body, { auth = null, traceId = null } = {}) {
+  return requestAgentCron('', { method: 'POST', body, auth, traceId });
+}
+
+export async function getAgentCronJob(cronJobId, { auth = null, traceId = null } = {}) {
+  return requestAgentCron(`/${encodeURIComponent(cronJobId)}`, { auth, traceId });
+}
+
+export async function updateAgentCronJob(cronJobId, body, { auth = null, traceId = null } = {}) {
+  return requestAgentCron(`/${encodeURIComponent(cronJobId)}`, {
+    method: 'PATCH', body, auth, traceId,
+  });
+}
+
+export async function deleteAgentCronJob(cronJobId, { auth = null, traceId = null } = {}) {
+  await requestAgentCron(`/${encodeURIComponent(cronJobId)}`, {
+    method: 'DELETE', auth, traceId,
+  });
+}
+
+export async function runAgentCronJob(cronJobId, { auth = null, traceId = null } = {}) {
+  return requestAgentCron(`/${encodeURIComponent(cronJobId)}/run`, {
+    method: 'POST', body: {}, auth, traceId,
+  });
+}
+
+export async function listAgentCronJobRuns(
+  cronJobId,
+  { limit } = {},
+  { auth = null, traceId = null } = {},
+) {
+  const query = limit ? `?limit=${encodeURIComponent(String(limit))}` : '';
+  return requestAgentCron(`/${encodeURIComponent(cronJobId)}/runs${query}`, {
+    auth, traceId,
+  });
+}
+
 /**
  * @param {string} runId
  * @param {{ auth?: object|null, traceId?: string|null, idempotencyKey?: string|null }} [opts]

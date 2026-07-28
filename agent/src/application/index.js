@@ -68,6 +68,22 @@ export {
 export { FollowUpService } from './follow-up-service.js';
 
 export {
+  CronJobService,
+  CronScheduler,
+  presentCronJob,
+  presentCronJobRun,
+  CRON_MISFIRE_POLICIES,
+  CRON_CONCURRENCY_POLICIES,
+} from './cron-job-service.js';
+export {
+  assertTimeZone,
+  parseCronExpression,
+  cronMatches,
+  nextCronOccurrence,
+  parseRunAt,
+} from './cron-schedule.js';
+
+export {
   DurableSteerController,
   DEFAULT_STEER_POLL_INTERVAL_MS,
   STEER_EVENT_PAGE_SIZE,

@@ -162,8 +162,15 @@ Compose 由一次性 `agent-migrate` 服务独占 Knex migration；`sandbox`、
 | `AGENT_RUN_LEASE_TTL_MS` | `30000` | Worker lease TTL |
 | `AGENT_RUN_LEASE_RENEW_INTERVAL_MS` | `10000` | Lease 续约间隔 |
 | `AGENT_RUN_STREAM_MAXLEN` | `10000` | Run stream 近似保留长度 |
+| `AGENT_CRON_SCHEDULER_INTERVAL_MS` | `30000` | Agent Worker 扫描到期 Cron Job 的间隔（最低 10 秒） |
+| `AGENT_CRON_CLAIM_RETRY_MS` | `120000` | 崩溃后重新处理已认领但未创建 Run 的任务等待时间 |
+| `AGENT_CRON_BATCH_SIZE` | `25` | 每个调度周期最多认领的任务数（1–200） |
 
 Redis 只保存队列、lease、stream、取消信号等运行态；**不是** Run 事实权威。清空 Redis 不删除 MySQL 中的 Conversation/Run/审计；未发布事件经 Outbox 重试，历史可从 MySQL `run_events` 重放。Agent 依赖 Redis health；BFF / Sandbox 不持有 Redis 权威配置。生产须设置 `REDIS_PASSWORD`。
+
+### Cron Job
+
+`/schedules` 用于创建、启停、编辑、立即执行和查看历史。Cron 定义与执行记录存放在 Agent MySQL；`agent-worker` 扫描到期记录并以 `source=cron` 创建标准 Agent Run。浏览器只负责控制面，关闭页面不会影响任务。表达式使用五字段 Cron（最小一分钟），时区必须为 IANA 名称；每个计划时间以 `cron:{job_id}:{scheduled_at}` 幂等键去重。
 
 ### Skill
 
