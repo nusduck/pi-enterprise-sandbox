@@ -434,11 +434,13 @@ class Settings(BaseSettings):
     # Audit / agent_events retention: 180 days
     audit_ttl_days: int = 180
 
-    # ── Approval ─────────────────────────────────────────────────────
-    approval_timeout_seconds: int = 300
-    # ask (default) pauses for a human; deny rejects approval-required work;
-    # auto_approve is an explicit development-only bypass. ``approval_enabled``
-    # remains a legacy boolean alias: true → ask, false → deny.
+    # ── Approval (legacy Sandbox HITL — no longer enforced in formal runtime) ──
+    # Agent durable approval is the product gate. These knobs remain so existing
+    # .env / production validators do not break; they do not pause bash/tools
+    # inside Sandbox (approval_manager was removed).
+    approval_timeout_seconds: int = 300  # unused: no sandbox HITL waiter
+    # ask|deny|auto_approve — only used for production guardrails / env compat.
+    # ``approval_enabled`` is a legacy boolean alias: true → ask, false → deny.
     approval_mode: ApprovalMode | None = None
     approval_enabled: bool | None = None
 

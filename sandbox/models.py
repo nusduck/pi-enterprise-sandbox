@@ -17,6 +17,8 @@ class ExecutionStatus(str, Enum):
     FAILED = "FAILED"
     TIMEOUT = "TIMEOUT"
     CANCELLED = "CANCELLED"
+    # Legacy sandbox HITL statuses — no longer written by formal runtime
+    # (Agent durable approval owns WAITING_APPROVAL). Kept for wire/DB compat.
     PENDING_APPROVAL = "PENDING_APPROVAL"
     APPROVED = "APPROVED"
     REJECTED = "REJECTED"
@@ -29,11 +31,18 @@ class RiskLevel(str, Enum):
 
 
 class PolicyDecision(str, Enum):
-    """Three-tier tool policy outcome (Agent + Sandbox dual enforcement)."""
+    """Sandbox tool policy outcome.
+
+    Product model: allow | hard_deny only at the sandbox boundary.
+    ``approval_required`` is a deprecated legacy value (never emitted); Agent
+    durable approval is the product HITL gate.
+    """
 
     ALLOW = "allow"
-    APPROVAL_REQUIRED = "approval_required"
     HARD_DENY = "hard_deny"
+    # Deprecated — retained so older tests/logs that mention the string still
+    # parse. policy_checker.check() never returns this after HITL removal.
+    APPROVAL_REQUIRED = "approval_required"
 
 
 class InternalPlaneHealthStatus(str, Enum):

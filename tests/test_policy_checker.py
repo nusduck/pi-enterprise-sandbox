@@ -23,12 +23,14 @@ class TestToolPolicyChecker:
         assert decision.risk_level == RiskLevel.LOW
         assert decision.policy_version == POLICY_VERSION
 
-    def test_high_risk_approval_required(self, checker: ToolPolicyChecker):
+    def test_high_risk_is_hard_deny_without_sandbox_hitl(self, checker: ToolPolicyChecker):
+        # Sandbox no longer pauses for approval_manager; high risk hard-denies
+        # at this boundary. Agent durable approval remains the product gate.
         decision = checker.check(ToolCallCheck(
             session_id="s1", tool_name="raw_bash",
         ))
         assert decision.allowed is False
-        assert decision.decision == PolicyDecision.APPROVAL_REQUIRED.value
+        assert decision.decision == PolicyDecision.HARD_DENY.value
         assert decision.risk_level == RiskLevel.HIGH
 
     def test_medium_risk_allowed(self, checker: ToolPolicyChecker):
@@ -78,14 +80,14 @@ class TestToolPolicyChecker:
         assert checker.is_blocked_command("ls -la") is False
         assert checker.is_blocked_command("  sudo id") is True  # strip
 
-    def test_approval_pattern_not_hard_deny(self, checker: ToolPolicyChecker):
+    def test_elevated_network_command_is_hard_deny(self, checker: ToolPolicyChecker):
         # Use a network fetch — elevated in both strict and balanced profiles.
         # (pip install is intentionally allowlisted under balanced.)
         decision = checker.check(ToolCallCheck(
             session_id="s1", tool_name="bash",
             command="curl https://example.com",
         ))
-        assert decision.decision == PolicyDecision.APPROVAL_REQUIRED.value
+        assert decision.decision == PolicyDecision.HARD_DENY.value
         assert decision.allowed is False
 
     def test_balanced_allows_package_manager_but_keeps_network_and_destructive_gates(
@@ -106,7 +108,7 @@ class TestToolPolicyChecker:
         network = checker.check(ToolCallCheck(
             session_id="s1", tool_name="bash", command="curl https://example.com",
         ))
-        assert network.decision == PolicyDecision.APPROVAL_REQUIRED.value
+        assert network.decision == PolicyDecision.HARD_DENY.value
 
         for command in (
             "wget https://example.com/file",
@@ -115,7 +117,7 @@ class TestToolPolicyChecker:
         ):
             assert checker.check(ToolCallCheck(
                 session_id="s1", tool_name="bash", command=command,
-            )).decision == PolicyDecision.APPROVAL_REQUIRED.value
+            )).decision == PolicyDecision.HARD_DENY.value
 
         assert checker.check(ToolCallCheck(
             session_id="s1", tool_name="bash", command="timeout 10 npm install marked",
@@ -128,10 +130,9 @@ class TestToolPolicyChecker:
         destructive = checker.check(ToolCallCheck(
             session_id="s1", tool_name="bash", command="rm -r build",
         ))
-        assert destructive.decision == PolicyDecision.APPROVAL_REQUIRED.value
+        assert destructive.decision == PolicyDecision.HARD_DENY.value
 
-    
-    def test_which_curl_is_not_network_approval(self):
+    def test_which_curl_is_not_network_elevation(self):
         """which/type of curl must not elevate — only invoking curl does."""
         checker = ToolPolicyChecker()
         inspect = checker.check(ToolCallCheck(
@@ -142,7 +143,7 @@ class TestToolPolicyChecker:
         fetch = checker.check(ToolCallCheck(
             session_id="s1", tool_name="bash", command="curl https://example.com",
         ))
-        assert fetch.decision == PolicyDecision.APPROVAL_REQUIRED.value
+        assert fetch.decision == PolicyDecision.HARD_DENY.value
 
     def test_balanced_profile_requires_effective_bubblewrap(self, monkeypatch):
         with pytest.raises(ValueError, match="bubblewrap"):

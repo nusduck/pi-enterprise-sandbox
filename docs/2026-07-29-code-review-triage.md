@@ -47,7 +47,7 @@
 |--|--|
 | **Re-verify** | Formal path only `is_blocked_command`. Sandbox approval manager gone. Agent durable approval remains for external tools. |
 | **Verdict** | **NO_FIX (product)** |
-| **Optional CLEANUP** | Remove/mark dead Sandbox `APPROVAL_REQUIRED` / unused approval timeout surface |
+| **Optional CLEANUP** | **Done (2026-07-29):** Sandbox `check()` maps former `approval_required` → `hard_deny`; `approval_timeout` documented unused; enum/status leftovers marked legacy. Agent durable approval unchanged. |
 | **Priority** | Cleanup only |
 
 ### #2 Dead `self.repository` + terminal eviction

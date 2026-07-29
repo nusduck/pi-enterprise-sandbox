@@ -1,13 +1,17 @@
 """Tool Policy Checker — risk-based decision before tool execution.
 
-Three-tier decisions (immutable policy version echoed to callers):
+Product model (2026-07-29 triage): **Sandbox no longer hosts HITL approval.**
+Agent durable approval is the product gate for external side effects. Formal
+execution only calls :meth:`is_blocked_command` (hard deny). The three-tier
+:meth:`check` surface is retained for tests / defensive dual-eval and now
+maps former ``approval_required`` outcomes to ``hard_deny`` so a re-enabled
+caller cannot pause on a deleted ``approval_manager``.
 
-- ``allow`` — safe / constrained medium risk; execute immediately
-- ``approval_required`` — high risk; human gate when APPROVAL_MODE=ask
-- ``hard_deny`` — never executable; cannot be approved or bypassed by
-  APPROVAL_MODE or approval credentials
+Decisions:
 
-Agent Extension may pre-filter; Sandbox always re-evaluates independently.
+- ``allow`` — safe / constrained medium risk
+- ``hard_deny`` — never executable at the sandbox boundary
+- ``approval_required`` — **deprecated enum only**; never emitted
 """
 
 from __future__ import annotations
@@ -119,8 +123,9 @@ _METADATA_DESTINATIONS = (
 _POLICY_PARSE_ERROR = "__policy_parse_error__"
 _SHELL_WRAPPERS = frozenset({"sh", "bash", "dash", "zsh", "ksh"})
 
-# Bash command substrings that elevate bash/command to approval_required
-_APPROVAL_REQUIRED_SUBSTRINGS = (
+# Bash command substrings that elevate bash/command to high risk (hard deny
+# in :meth:`check`; formal runtime still uses is_blocked_command only).
+_ELEVATED_COMMAND_SUBSTRINGS = (
     "rm -rf", "rm -r ", "mkfs", "dd if=",
     "curl ", "wget ", "nc ", "ncat ",
     "pip install", "pip3 install", "python -m pip install", "python3 -m pip install",
@@ -129,7 +134,7 @@ _APPROVAL_REQUIRED_SUBSTRINGS = (
     "eval ", "base64 -d",
 )
 
-_BALANCED_APPROVAL_SUBSTRINGS = (
+_BALANCED_ELEVATED_SUBSTRINGS = (
     "rm -rf", "rm -r ", "mkfs", "dd if=", "chmod ", "chown ",
     "kill ", "pkill ", "eval ", "base64 -d",
     "curl ", "wget ", "nc ", "ncat ",
@@ -411,7 +416,11 @@ class ToolPolicyChecker:
         return settings.policy_profile
 
     def check(self, request: ToolCallCheck) -> ToolCallDecision:
-        """Check if a tool call is allowed. Returns three-tier decision."""
+        """Check if a tool call is allowed (allow | hard_deny).
+
+        Former ``approval_required`` outcomes are hard-denied: Sandbox has no
+        HITL manager. Agent durable approval remains the product gate.
+        """
         risk = self._get_risk_level(request.tool_name)
 
         if request.path and self.is_blocked_path(request.path, request.tool_name):
@@ -421,7 +430,7 @@ class ToolPolicyChecker:
                 reason="blocked path: outside the session sandbox roots",
             )
 
-        # Bash/command family: hard deny first, then approval elevation
+        # Bash/command family: hard deny first, then elevate risk for gated cmds
         if request.command and request.tool_name in {"bash", "command", "raw_bash", "raw_shell"}:
             if self.is_blocked_command(request.command):
                 token = (request.command or "").strip().split()[0] if request.command else "command"
@@ -430,7 +439,7 @@ class ToolPolicyChecker:
                     risk_level=RiskLevel.HIGH,
                     reason=f"blocked command: {token}",
                 )
-            if self.command_requires_approval(request.command):
+            if self.command_is_elevated(request.command):
                 risk = RiskLevel.HIGH
 
         # ── Low risk: always allow ──────────────────────────────
@@ -441,12 +450,16 @@ class ToolPolicyChecker:
                 reason="low risk tool, auto-allowed",
             )
 
-        # ── High risk: approval required (not hard deny) ────────
+        # ── High risk: hard deny at sandbox (no local HITL pause) ──
         if risk == RiskLevel.HIGH:
             return _decision(
-                decision=PolicyDecision.APPROVAL_REQUIRED,
+                decision=PolicyDecision.HARD_DENY,
                 risk_level=risk,
-                reason="high risk tool/command, requires human approval",
+                reason=(
+                    "high risk tool/command blocked at sandbox boundary "
+                    "(Agent durable approval is the product HITL gate; "
+                    "sandbox no longer hosts pending_approval)"
+                ),
             )
 
         # ── Medium risk: hard constraints, else allow ───────────
@@ -478,20 +491,18 @@ class ToolPolicyChecker:
             reason="medium risk tool, allowed with constraints",
         )
 
-    def command_requires_approval(self, command: str) -> bool:
-        """True when a bash command body should pause for human approval.
+    def command_is_elevated(self, command: str) -> bool:
+        """True when a bash command body is high-risk under the active profile.
 
-        Balanced relaxes only routine package-manager approval. The launcher
-        still enforces ``network_mode`` and destructive commands remain gated.
-
-        Network tools (curl/wget/nc) are matched as *invoked commands*, not as
-        bare substrings — so ``which curl`` / ``type wget`` do not elevate.
+        Balanced relaxes only routine package-manager elevation. Network tools
+        (curl/wget/nc) are matched as *invoked commands*, not bare substrings —
+        so ``which curl`` / ``type wget`` do not elevate.
         """
         cmd = (command or "").lower()
         substrings = (
-            _APPROVAL_REQUIRED_SUBSTRINGS
+            _ELEVATED_COMMAND_SUBSTRINGS
             if self.active_policy_profile == "strict"
-            else _BALANCED_APPROVAL_SUBSTRINGS
+            else _BALANCED_ELEVATED_SUBSTRINGS
         )
         # Multi-word / install patterns stay substring-based.
         non_network = tuple(
@@ -500,6 +511,10 @@ class ToolPolicyChecker:
         if any(s in cmd for s in non_network):
             return True
         return self._invokes_network_tool(cmd)
+
+    # Back-compat alias (legacy name from sandbox HITL era).
+    def command_requires_approval(self, command: str) -> bool:
+        return self.command_is_elevated(command)
 
     @staticmethod
     def _invokes_network_tool(command: str) -> bool:
