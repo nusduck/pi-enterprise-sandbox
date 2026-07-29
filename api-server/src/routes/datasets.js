@@ -349,31 +349,3 @@ export async function handleListDatasets(
   }
 }
 
-/**
- * Improve artifact download with client disconnect abort + backpressure.
- * Re-exported behaviour used by files.js handleArtifactDownload — kept here
- * for dataset/artifact PR cohesion tests.
- *
- * @param {import('node:http').IncomingMessage} req
- * @param {import('node:http').ServerResponse} res
- * @param {ReadableStream|AsyncIterable} body
- */
-export async function pipeWithBackpressure(req, res, body) {
-  let aborted = false;
-  const onClose = () => {
-    aborted = true;
-  };
-  req.on('close', onClose);
-  try {
-    for await (const chunk of body) {
-      if (aborted || res.writableEnded || res.destroyed) break;
-      const ok = res.write(chunk);
-      if (!ok) {
-        await new Promise((resolve) => res.once('drain', resolve));
-      }
-    }
-  } finally {
-    req.off('close', onClose);
-    if (!res.writableEnded) res.end();
-  }
-}

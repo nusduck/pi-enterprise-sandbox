@@ -506,8 +506,6 @@ services:
       # Comma-separated keys from process env injected into every execution/process.
       # Also: SANDBOX_EXEC_ENV_<NAME>=value (from env_file) → NAME in children.
       SANDBOX_SHARED_ENV_KEYS: ${SANDBOX_SHARED_ENV_KEYS:-}
-      SANDBOX_SESSION_TTL_MINUTES: ${SANDBOX_SESSION_TTL_MINUTES:-30}
-      SANDBOX_CLEANUP_INTERVAL_MINUTES: ${SANDBOX_CLEANUP_INTERVAL_MINUTES:-5}
       # Outbound *execution* policy (disabled|allowlist|unrestricted).
       # Default disabled → Bubblewrap --unshare-net (real isolation).
       # Production forbids allowlist/unrestricted until a per-child egress proxy exists.

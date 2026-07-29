@@ -143,14 +143,6 @@ export function integrityFingerprint(value) {
 }
 
 /**
- * @deprecated use integrityFingerprint
- * @param {unknown} args
- */
-export function fingerprintToolArgs(args) {
-  return integrityFingerprint(args);
-}
-
-/**
  * Normalized policy decision fingerprint (exact field set, no extra secrets).
  * @param {{
  *   decision: string,

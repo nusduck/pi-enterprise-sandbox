@@ -282,13 +282,15 @@ describe('effectiveConfig redaction', () => {
       SKILLS_INSTALL_LOCAL_ALLOWLIST: [],
       SKILLS_AUDIT_LOG: '',
       PRODUCT_SYSTEM_PROMPT: 'FULL SECRET PROMPT WITH CONFIDENTIAL',
-      SYSTEM_PROMPT: 'FULL SECRET PROMPT WITH CONFIDENTIAL + platform',
     });
     const text = JSON.stringify(snap);
     assert.equal(snap.SANDBOX_API_TOKEN, '***');
     assert.equal(snap.AGENT_INTERNAL_TOKEN, '***');
     assert.equal(snap.LLMIO_API_KEY, '***');
-    assert.equal(snap.SYSTEM_PROMPT, '<redacted>');
+    assert.equal(
+      snap.PRODUCT_SYSTEM_PROMPT,
+      `<set:${'FULL SECRET PROMPT WITH CONFIDENTIAL'.length} chars>`,
+    );
     assert.ok(!text.includes('super-secret'));
     assert.ok(!text.includes('FULL SECRET PROMPT'));
     assert.ok(!text.includes('sk-real-key'));

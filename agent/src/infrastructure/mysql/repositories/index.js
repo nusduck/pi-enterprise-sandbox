@@ -79,7 +79,6 @@ export {
 } from './external-reference-repository.js';
 export {
   ToolExecutionRepository,
-  fingerprintToolArgs,
   integrityFingerprint,
   stableCanonicalStringify,
   extractIntegrity,

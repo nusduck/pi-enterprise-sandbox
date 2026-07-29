@@ -26,6 +26,7 @@ import {
   LOGICAL_WORKSPACE_ROOT,
 } from '../../extensions/sandbox-bridge/constants.js';
 import { primarySkillRoot, normalizeSkillRoots } from '../../skills/paths.js';
+import { config as defaultAgentConfig } from '../../../config.js';
 
 /** Exact SDK pin for this factory revision. */
 export const PINNED_PI_SDK_VERSION = '0.80.3';
@@ -350,6 +351,7 @@ export function resolveConcreteModel(bound, inputModel) {
  *   additionalSkillPaths?: string[],
  *   workspaceRoot?: string,
  *   skillRoot?: string,
+ *   productSystemPrompt?: string,
  * }} [options]
  */
 export function resolveAgentVersionBindings(bound, options = {}) {
@@ -459,9 +461,16 @@ export function resolveAgentVersionBindings(bound, options = {}) {
       : normalizeSkillRoots([
           options.skillRoot || LOGICAL_SKILL_ROOT,
         ]);
+  const productSystemPrompt =
+    typeof options.productSystemPrompt === 'string'
+      ? options.productSystemPrompt
+      : typeof defaultAgentConfig?.PRODUCT_SYSTEM_PROMPT === 'string'
+        ? defaultAgentConfig.PRODUCT_SYSTEM_PROMPT
+        : '';
   const enterpriseSystemPrompt = resolveEnterpriseSystemPrompt(
     typeof bound.systemPrompt === 'string' ? bound.systemPrompt : '',
     {
+      productSystemPrompt,
       workspaceRoot: options.workspaceRoot || LOGICAL_WORKSPACE_ROOT,
       skillRoot:
         options.skillRoot || primarySkillRoot(skillPaths) || LOGICAL_SKILL_ROOT,

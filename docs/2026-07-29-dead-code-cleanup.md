@@ -59,6 +59,62 @@ pure code cleanup.
 | Possibly-redundant direct dependency pin | `agent/package.json: @earendil-works/pi-ai` | No direct static import found; already a transitive dependency of `@earendil-works/pi-coding-agent` at the same pinned version. Could be an intentional explicit pin — needs confirmation before removal. |
 | `.sr-only` CSS utility | `frontend/src/shared/styles/app.css` | Not currently applied by any component, but is a common a11y infra hook kept in reserve. Left in place rather than removed. |
 
+## Deep investigation (confirmed 2026-07-29)
+
+Whole-repo re-verification of every deferred row that was marked “needs
+confirmation” or was otherwise ambiguous. Method: full-tree ripgrep + call-site
+reads; no production code changed in this pass.
+
+### Confirmed dead / misleading (safe cleanup candidates)
+
+| Item | Verdict | Evidence | Recommended action |
+| --- | --- | --- | --- |
+| `draft_ttl_hours` / `conversation_ttl_days` / `audit_ttl_days` | **Dead settings** | Zero `settings.<field>` reads outside `sandbox/config.py`. Consumers lived in deleted `ttl_cleanup.py`. Still listed in `.env.example` (`SANDBOX_DRAFT_TTL_HOURS` etc.). Conversation disk GC is now **delete-on-delete** via Agent → `DELETE /sessions/{id}` (see `conversation-service.js` + `formal_session_runtime.remove_owned`). | Coordinated removal: config fields + `.env.example` + any ops docs that claim background retention. Do **not** reintroduce TTL unless product asks for it. |
+| `session_ttl_minutes` / `cleanup_interval_minutes` | **Dead + operator-misleading** | Zero Python readers. Still injected in `docker-compose.yml` (`SANDBOX_SESSION_TTL_MINUTES`, `SANDBOX_CLEANUP_INTERVAL_MINUTES`) and documented in `README.md` as “会话空闲自动清理 / 清理任务运行间隔”. | Same coordinated pass: drop compose env, README rows, config fields. Current real GC is conversation delete/archive only (fail-soft). |
+| `approval_timeout_seconds` | **Dead compat knob** | Comment accurate; no HITL waiter. Only present so pydantic/env accept the key. | Keep unless doing a deliberate env-schema break; low cost. |
+| `to_public_workspace_path()` | **Test-only dead API** | Sole non-definition refs: `tests/test_paths.py`. Always returns `PUBLIC_WORKSPACE_TOKEN`. | Safe to delete fn + test in a hygiene PR. |
+| `fingerprintToolArgs` | **Deprecated alias, zero prod callers** | Only defined in `tool-execution-repository.js`, re-exported from `repositories/index.js`. Production and tests call `integrityFingerprint` directly. | Delete export + barrel re-export; no call-site migrations needed. |
+| `ExecutionStatus.PENDING_APPROVAL/APPROVED/REJECTED` | **Never written by formal path** | `execution_manager` / `formal_execution_runtime` only use PENDING/RUNNING/SUCCESS/FAILED/TIMEOUT/CANCELLED. Authoritative formal statuses in `sandbox/app/domain/types.py` are RUNNING→SUCCESS\|FAILED\|TIMEOUT\|CANCELLED\|UNKNOWN — **no approval trio**. Status columns are free-form strings (no MySQL ENUM of these values in migrations). Agent HITL uses a **different** vocabulary (`APPROVAL_STATUS` on Agent MySQL approvals). | Safe to remove from the Python enum for new code; residual historical rows (if any pre-formal DB) would still deserialize as plain strings if code reads `str` not `ExecutionStatus`. Prefer: delete members + grep any remaining switch arms; optional one-off SQL audit on prod `sandbox_executions.status`. |
+| `PolicyDecision.APPROVAL_REQUIRED` | **Never emitted** | `policy_checker.check()` only returns ALLOW / HARD_DENY; former approval outcomes map to hard_deny. Enum retained so old strings still parse. Fixture `tests/fixtures/sse_events.json` still documents event type `approval_required` (Agent SSE product event — **not** this enum). | Enum member can go after confirming no JSON/API response still serializes `PolicyDecision` with that value. SSE fixture is unrelated and must stay if Agent still emits the event. |
+
+### Confirmed live-but-narrow (not pure dead code)
+
+| Item | Verdict | Evidence | Recommended action |
+| --- | --- | --- | --- |
+| Agent `APPROVAL_MODE` / `APPROVAL_ENABLED` | **Not only logged** — also **startup validation** | `validateProductionConfig` forbids `auto_approve` in production; `resolveApprovalMode` maps legacy boolean. **No** branch in `agent/src/` (policy/HITL) reads `config.APPROVAL_MODE` for tool gating — Agent durable approval is independent. Sandbox side: `settings.approval_mode` only used in the same production forbid path (`sandbox/config.py:1013`), not in `policy_checker`. | Treat as **ops/env surface + prod guardrail**, not runtime policy. Removing changes startup log **and** removes the auto_approve production hard-fail unless re-homed. Confirm with ops before dropping from `effectiveConfig()`. |
+| Agent `SYSTEM_PROMPT` / `PRODUCT_SYSTEM_PROMPT` | **Config object values unused for LLM** | Built from `AGENT_SYSTEM_PROMPT` / `_FILE` via `composeSystemPrompt`, placed on `config`, appear only in `effectiveConfig()` (redacted). Runtime prompts come from **AgentVersion.systemPrompt** + `enterprise-system-prompt.js` / `pi-runtime-factory.js`. Zero `config.SYSTEM_PROMPT` / `config.PRODUCT_SYSTEM_PROMPT` reads in `agent/src/`. | **Stronger than original note:** env `AGENT_SYSTEM_PROMPT` is currently a **no-op for agent behavior**. Product risk if operators believe it sets the model prompt. Either wire it into enterprise prompt composition or document as deprecated and remove. |
+| `AGENT_FORCE_INMEMORY` | **Fully dead flag** | Only set on `config` and logged by `effectiveConfig()`. MySQL client explicitly never falls back to in-memory. | Safe to remove from config + log + compose if present; no behavior change. |
+| `@earendil-works/pi-ai` direct pin | **Intentional SSOT pin — keep** | No app static `import` from `@earendil-works/pi-ai`. Direct dep is required by: (1) `runtime-versions.json` + `docs/runbooks/sdk-upgrade.md` dual-pin checklist, (2) `agent/tests/sdk-compat/sdk-surface.test.js` asserts exact pin match, (3) pins top-level install to **0.80.3** while `pi-mcp-adapter` still pulls nested **0.74.2** — without the direct pin, resolution is less controlled. | **Do not remove.** Explicit pin is policy, not dead weight. |
+| Test-only barrels (`application/index.js`, `a2a/index.js`, `domain/session/index.js`, `outbox/index.js`) | **Prod `src/` does not import them** (except `application/index.js` re-exports `a2a/index.js` for the barrel itself) | Tests import barrels (`load-concurrency`, `approval-mysql-fail-closed`, session-state-machine, outbox tests, etc.). | Hygiene: point tests at leaf modules, then drop barrels — optional. |
+| `.sr-only` | **Unused class, intentional reserve** | Only definition in `app.css`; no TSX/HTML className. | Keep as a11y utility; zero risk. |
+
+### Confirmed refactor / duplicate (not dead; leave or schedule dedicated PR)
+
+| Item | Verdict | Evidence | Recommended action |
+| --- | --- | --- | --- |
+| `pipeWithBackpressure` vs `handleArtifactDownload` | **Doc lie + unused helper from prod path** | Comment claims “used by files.js”; `files.js` has an **independent** for-await + drain loop (also cancels `sanRes.body` on client close — slightly richer). `pipeWithBackpressure` is only referenced by its unit test; **datasets upload path does not call it either**. | Decision: (A) delete helper + test, or (B) wire `files.js` to shared helper and preserve cancel semantics. Prefer B only with a focused streaming regression test. |
+| `relative_path_sha256_hex` vs `_path_hash_hex` | **Duplicate, semantically identical** | Both `sha256(utf-8 path).hexdigest().lower()`. Repo path is production MySQL-aligned; store path is FakeFormalArtifactRepository. | Low-risk: have fake import the real helper. Not urgent. |
+| `McpBearerAuth` vs `require_mcp_internal_auth` | **Adjacent trust boundaries, similar code** | MCP public app (`sandbox/mcp/app.py`) vs Sandbox→MCP internal bridge (`mcp_internal_auth.py`). Internal path is stricter on header shape / whitespace. | **Do not casually unify** without a security review; different deployables and token settings (`settings.token` vs `settings.mcp_internal_token`). |
+| Quota `reserve` / `reserve_replacement` / `try_grow` | **Live triplication** | Three methods ~lines 200 / 259 / 349 with shared measure→project→raise shape. | Dedicated refactor PR only; add property tests around reserved-term math first. |
+| Seven single-field validators in `config.py` | **Live boilerplate** | Lines ~759–824 each wrap `_nonneg_int_field` with different defaults/maxima. | Pure style refactor; optional. |
+| Wide exports (`requestCarrier`, `contextFromTraceContext`, `parseTraceparent`, `SESSION_COOKIE`) | **Internally used; export unused for some** | `requestCarrier` / `contextFromTraceContext`: only inside `telemetry.js`. `parseTraceparent`: only inside `trace-context.js` (module imported widely). `SESSION_COOKIE`: **exported but no external importer** — only used inside `cookies.js` via default param. | Can un-export `SESSION_COOKIE` / carrier helpers without behavior change; cosmetic. |
+
+### Doc drift note (related)
+
+Earlier `docs/2026-07-29-code-review.md` claimed `WorkspaceManager.remove_workspace()` had zero call sites. **That is stale:** `FormalSessionRuntime.remove_owned` → `remove_workspace`, exposed as `DELETE /sessions/{session_id}`, triggered by conversation delete. TTL subsystem remains absent; delete-on-delete GC is implemented.
+
+## Follow-up implementation (2026-07-29)
+
+Acted on investigation priorities (P0→P2):
+
+| Priority | Change |
+| --- | --- |
+| P0 | Removed dead TTL/cleanup settings from `sandbox/config.py`; dropped compose inject + README/`.env.example` claims of idle/session TTL. Documented delete-on-delete GC. |
+| P1 | Wired `AGENT_SYSTEM_PROMPT` / `PRODUCT_SYSTEM_PROMPT` into `resolveEnterpriseSystemPrompt` via `pi-runtime-factory` (AgentVersion wins; env product layer is fallback). |
+| P2 | Removed `to_public_workspace_path`, `fingerprintToolArgs`, `pipeWithBackpressure` (+ dedicated tests), `AGENT_FORCE_INMEMORY`, legacy `ExecutionStatus` HITL members, `PolicyDecision.APPROVAL_REQUIRED`. Kept `approval_timeout_seconds` + `APPROVAL_MODE` prod guardrails. Kept `@earendil-works/pi-ai` pin. |
+
+Not done (still deferred by design): MCP bearer dual impl, quota reserve collapse, validator collapse, test-only barrels, `.sr-only`, wide export surface cosmetics.
+
 ## Verification
 
 - `agent/`: `npm test` → 1125 tests, 1124 pass / 1 fail both before and after
@@ -73,3 +129,5 @@ pure code cleanup.
   branch).
 - `frontend/`: `npm test` → 217/217 pass; `npm run typecheck` and `npm run
   build` (tsc + vite) both clean.
+- Follow-up (this pass): re-run targeted suites after P0–P2 (see command output
+  in the implementing session).

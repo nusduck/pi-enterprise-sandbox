@@ -340,12 +340,10 @@ export function effectiveConfig(cfg = config) {
     SKILLS_AUDIT_LOG: cfg.SKILLS_AUDIT_LOG ? '<set>' : '<empty>',
     MCP_SERVERS: Array.isArray(cfg.MCP_SERVERS) ? cfg.MCP_SERVERS.map((server) => server.id) : [],
     SESSION_WORKSPACE_CWD: cfg.SESSION_WORKSPACE_CWD,
+    // Product layer only (length); never dump full prompt text.
     PRODUCT_SYSTEM_PROMPT: cfg.PRODUCT_SYSTEM_PROMPT
       ? `<set:${cfg.PRODUCT_SYSTEM_PROMPT.length} chars>`
       : '<empty>',
-    // Full composed prompt never dumped.
-    SYSTEM_PROMPT: '<redacted>',
-    AGENT_FORCE_INMEMORY: Boolean(cfg.AGENT_FORCE_INMEMORY),
   };
 }
 
@@ -436,19 +434,13 @@ export const config = {
   /** Optional file path for skill change audit lines (also always console). */
   SKILLS_AUDIT_LOG: process.env.SKILLS_AUDIT_LOG || '',
   DEFAULT_SKILL_ROOTS,
-  /** Env-controlled product/role layer only (no secrets). */
-  PRODUCT_SYSTEM_PROMPT: productSystemPrompt,
-  /** Legacy composed prompt export; runtime composition is owned by Prompt Extension. */
-  SYSTEM_PROMPT: composeSystemPrompt(productSystemPrompt),
   /**
-   * Rollback flag: force SessionManager.inMemory() and skip DB session restore.
-   * Default false — production uses durable agent_sessions + JSONL materialize.
+   * Env-controlled product/role layer (AGENT_SYSTEM_PROMPT / _FILE).
+   * Applied by pi-runtime-factory when AgentVersion.systemPrompt is empty.
+   * Non-empty AgentVersion.systemPrompt wins; enterprise path/tool contract
+   * is always appended via resolveEnterpriseSystemPrompt.
    */
-  AGENT_FORCE_INMEMORY:
-    String(process.env.AGENT_FORCE_INMEMORY || '')
-      .trim()
-      .toLowerCase() === 'true' ||
-    String(process.env.AGENT_FORCE_INMEMORY || '').trim() === '1',
+  PRODUCT_SYSTEM_PROMPT: productSystemPrompt,
 };
 
 /** Resolve at request time so an existing client observes in-process rotation. */

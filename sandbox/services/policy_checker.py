@@ -2,16 +2,15 @@
 
 Product model (2026-07-29 triage): **Sandbox no longer hosts HITL approval.**
 Agent durable approval is the product gate for external side effects. Formal
-execution only calls :meth:`is_blocked_command` (hard deny). The three-tier
-:meth:`check` surface is retained for tests / defensive dual-eval and now
-maps former ``approval_required`` outcomes to ``hard_deny`` so a re-enabled
-caller cannot pause on a deleted ``approval_manager``.
+execution only calls :meth:`is_blocked_command` (hard deny). :meth:`check` is
+retained for tests / defensive dual-eval; former ``approval_required`` outcomes
+map to ``hard_deny`` so a re-enabled caller cannot pause on a deleted
+``approval_manager``.
 
 Decisions:
 
 - ``allow`` — safe / constrained medium risk
 - ``hard_deny`` — never executable at the sandbox boundary
-- ``approval_required`` — **deprecated enum only**; never emitted
 """
 
 from __future__ import annotations

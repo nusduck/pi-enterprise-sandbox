@@ -144,16 +144,6 @@ def get_session_workspace_id(session: Any) -> str | None:
     return str(session_id) if session_id else None
 
 
-def to_public_workspace_path(path: str | None) -> str:
-    """Deprecated: public surfaces no longer expose a workspace path.
-
-    Returns the redaction token. Prefer :func:`get_session_workspace_id` /
-    ``workspace_id`` fields on API models.
-    """
-    _ = path
-    return PUBLIC_WORKSPACE_TOKEN
-
-
 def get_session_physical_workspace(session: Any) -> str:
     """Return the physical on-disk workspace root for a session (internal).
 

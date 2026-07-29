@@ -122,18 +122,28 @@ If no skills section is listed, you may list \`${skillRoot}\` with tools only wh
 
 /**
  * Decide the effective custom system prompt string for ResourceLoader.
- * Empty AgentVersion.systemPrompt → full enterprise template (avoids Pi default
- * docs paths under node_modules). Non-empty → author prompt + enterprise trailer.
+ *
+ * Lead voice precedence:
+ * 1. Non-empty AgentVersion.systemPrompt
+ * 2. Else product layer from env (`opts.productSystemPrompt` /
+ *    AGENT_SYSTEM_PROMPT)
+ * 3. Else empty → full enterprise template only (avoids Pi default docs paths)
+ *
+ * Non-empty lead → author/product prompt + enterprise trailer.
  *
  * @param {string | null | undefined} agentVersionSystemPrompt
- * @param {Parameters<typeof buildEnterpriseSystemPrompt>[0]} [opts]
+ * @param {Parameters<typeof buildEnterpriseSystemPrompt>[0] & {
+ *   productSystemPrompt?: string | null,
+ * }} [opts]
  */
 export function resolveEnterpriseSystemPrompt(
   agentVersionSystemPrompt,
   opts = {},
 ) {
+  const agentLead = String(agentVersionSystemPrompt || '').trim();
+  const productLead = String(opts.productSystemPrompt || '').trim();
   return buildEnterpriseSystemPrompt({
     ...opts,
-    systemPrompt: agentVersionSystemPrompt,
+    systemPrompt: agentLead || productLead,
   });
 }

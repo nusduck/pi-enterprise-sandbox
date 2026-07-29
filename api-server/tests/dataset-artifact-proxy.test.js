@@ -10,7 +10,6 @@ import {
   createBoundedDatasetUploadBody,
   datasetOwnershipHeaders,
   handleDatasetUpload,
-  pipeWithBackpressure,
 } from '../src/routes/datasets.js';
 import { sandboxProxyHeaders } from '../src/routes/files.js';
 import { config } from '../src/config.js';
@@ -300,58 +299,3 @@ describe('mapUploadErrorBody dataset codes', () => {
   });
 });
 
-describe('pipeWithBackpressure', () => {
-  it('writes all chunks and ends', async () => {
-    const chunks = [Buffer.from('a'), Buffer.from('b'), Buffer.from('c')];
-    const written = [];
-    const res = {
-      writableEnded: false,
-      destroyed: false,
-      write(c) {
-        written.push(Buffer.from(c).toString());
-        return true;
-      },
-      end() {
-        this.writableEnded = true;
-      },
-      once() {},
-    };
-    const req = { on() {}, off() {} };
-    await pipeWithBackpressure(req, res, (async function* () {
-      for (const c of chunks) yield c;
-    })());
-    assert.deepEqual(written, ['a', 'b', 'c']);
-    assert.equal(res.writableEnded, true);
-  });
-
-  it('stops when client aborts (close)', async () => {
-    let closeHandler = null;
-    const req = {
-      on(ev, fn) {
-        if (ev === 'close') closeHandler = fn;
-      },
-      off() {},
-    };
-    const written = [];
-    const res = {
-      writableEnded: false,
-      destroyed: false,
-      write(c) {
-        written.push(Buffer.from(c).toString());
-        if (written.length === 1 && closeHandler) closeHandler();
-        return true;
-      },
-      end() {
-        this.writableEnded = true;
-      },
-      once() {},
-    };
-    await pipeWithBackpressure(req, res, (async function* () {
-      yield Buffer.from('1');
-      yield Buffer.from('2');
-      yield Buffer.from('3');
-    })());
-    assert.equal(written.length, 1);
-    assert.equal(res.writableEnded, true);
-  });
-});

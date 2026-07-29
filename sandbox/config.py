@@ -422,17 +422,11 @@ class Settings(BaseSettings):
     cors_origins: Annotated[list[str], NoDecode] = ["*"]
     cors_allow_credentials: bool = True
 
-    # ── Session TTL ──────────────────────────────────────────────────
-    session_ttl_minutes: int = 30
-    cleanup_interval_minutes: int = 5
-
-    # ── Conversation / audit retention (agent session persistence) ───
-    # Draft (empty / never continued) conversations: 24h
-    draft_ttl_hours: int = 24
-    # Active conversations without activity: 90 days
-    conversation_ttl_days: int = 90
-    # Audit / agent_events retention: 180 days
-    audit_ttl_days: int = 180
+    # Session/conversation/audit TTL and background cleanup jobs were removed
+    # with ttl_cleanup.py. Disk GC is delete-on-delete: Agent conversation
+    # archive → DELETE /sessions/{id} → workspace_manager.remove_workspace.
+    # Extra SANDBOX_* TTL env vars are ignored (extra="ignore") so old .env
+    # files keep loading without error.
 
     # ── Approval (legacy Sandbox HITL — no longer enforced in formal runtime) ──
     # Agent durable approval is the product gate. These knobs remain so existing

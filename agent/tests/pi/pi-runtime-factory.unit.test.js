@@ -577,10 +577,40 @@ describe('immutable AgentVersion model + bindings', () => {
       piSdkVersion: '0.80.3',
       configJson: { systemPrompt: '' },
     });
-    const ok = resolveAgentVersionBindings(bound, {});
+    // Explicit empty product layer so this test is env-independent
+    // (AGENT_SYSTEM_PROMPT may be set in local .env).
+    const ok = resolveAgentVersionBindings(bound, { productSystemPrompt: '' });
     assert.match(ok.systemPrompt, /enterprise coding assistant/);
+    assert.doesNotMatch(ok.systemPrompt, /^You are a helpful/);
     assert.equal(ok.resourceLoaderOptions.systemPrompt, ok.systemPrompt);
     assert.ok(Object.prototype.hasOwnProperty.call(ok.resourceLoaderOptions, 'systemPrompt'));
+  });
+
+  it('applies productSystemPrompt when AgentVersion systemPrompt is empty', () => {
+    const bound = bindAgentVersionConfig({
+      agentVersionId: VER,
+      piSdkVersion: '0.80.3',
+      configJson: { systemPrompt: '' },
+    });
+    const ok = resolveAgentVersionBindings(bound, {
+      productSystemPrompt: 'You are Acme Corp enterprise assistant.',
+    });
+    assert.match(ok.systemPrompt, /^You are Acme Corp enterprise assistant\./);
+    assert.match(ok.systemPrompt, /enterprise coding assistant/);
+    assert.match(ok.systemPrompt, /---/);
+  });
+
+  it('AgentVersion systemPrompt wins over productSystemPrompt', () => {
+    const bound = bindAgentVersionConfig({
+      agentVersionId: VER,
+      piSdkVersion: '0.80.3',
+      configJson: { systemPrompt: 'Version-owned voice' },
+    });
+    const ok = resolveAgentVersionBindings(bound, {
+      productSystemPrompt: 'Env product voice must not lead',
+    });
+    assert.match(ok.systemPrompt, /^Version-owned voice/);
+    assert.doesNotMatch(ok.systemPrompt, /Env product voice must not lead/);
   });
 
   it('passes systemPrompt via resourceLoaderOptions and uses session agentVersionId only', async () => {

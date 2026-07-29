@@ -16,7 +16,7 @@ from sandbox.paths import (
     sanitize_path_error,
     sanitize_physical_paths,
     temp_id_for_workspace_id,
-    to_public_workspace_path,
+
 )
 
 
@@ -60,10 +60,6 @@ def test_get_session_physical_temp_from_workspace_id(tmp_path, monkeypatch):
     assert temp_id_for_workspace_id("conv_abc") == "tmp_conv_abc"
 
 
-def test_to_public_workspace_path_redacts():
-    assert to_public_workspace_path(None) == PUBLIC_WORKSPACE_TOKEN
-    assert to_public_workspace_path("/var/sandbox/workspaces/conv_x") == PUBLIC_WORKSPACE_TOKEN
-    assert to_public_workspace_path("conv_x") == PUBLIC_WORKSPACE_TOKEN
 
 
 def test_public_metadata_strips_internal_keys():

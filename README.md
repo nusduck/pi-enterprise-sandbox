@@ -119,12 +119,13 @@ SANDBOX_BASE_URL=http://localhost:8081
 
 共享执行 env 不会继承全部服务环境；`SANDBOX_API_TOKEN` / DB 密码等硬拒绝。单次 `env_overrides` 优先。
 
-### 会话管理
+### 会话与工作区清理
 
-| 变量 | 默认值 | 说明 |
-|------|--------|------|
-| `SANDBOX_SESSION_TTL_MINUTES` | `30` | 会话空闲自动清理时间 |
-| `SANDBOX_CLEANUP_INTERVAL_MINUTES` | `5` | 清理任务运行间隔 |
+Sandbox **不再**按空闲 TTL 后台清会话/工作区（旧 `SANDBOX_SESSION_TTL_*` /
+`SANDBOX_CLEANUP_INTERVAL_*` / draft·conversation·audit TTL 配置已移除，设置了也会被忽略）。
+
+工作区磁盘回收路径：用户删除/归档 **conversation** → Agent fail-soft 调用
+`DELETE /sessions/{sandbox_session_id}` → 删除物理 workspace + 配对 temp。
 
 ### 网络策略（入站 vs 出站分离）
 

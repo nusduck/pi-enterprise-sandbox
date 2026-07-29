@@ -11,17 +11,20 @@ from pydantic import BaseModel, Field
 # ── Enums ──────────────────────────────────────────────────────────────
 
 class ExecutionStatus(str, Enum):
+    """In-memory / API execution status for legacy execution_manager paths.
+
+    Formal MySQL lifecycle uses SANDBOX_EXECUTION_STATUS_* in
+    ``sandbox.app.domain.types`` (RUNNING → SUCCESS|FAILED|TIMEOUT|CANCELLED|UNKNOWN).
+    Sandbox HITL statuses (PENDING_APPROVAL/APPROVED/REJECTED) are gone — Agent
+    durable approval owns product HITL.
+    """
+
     PENDING = "PENDING"
     RUNNING = "RUNNING"
     SUCCESS = "SUCCESS"
     FAILED = "FAILED"
     TIMEOUT = "TIMEOUT"
     CANCELLED = "CANCELLED"
-    # Legacy sandbox HITL statuses — no longer written by formal runtime
-    # (Agent durable approval owns WAITING_APPROVAL). Kept for wire/DB compat.
-    PENDING_APPROVAL = "PENDING_APPROVAL"
-    APPROVED = "APPROVED"
-    REJECTED = "REJECTED"
 
 
 class RiskLevel(str, Enum):
@@ -34,15 +37,11 @@ class PolicyDecision(str, Enum):
     """Sandbox tool policy outcome.
 
     Product model: allow | hard_deny only at the sandbox boundary.
-    ``approval_required`` is a deprecated legacy value (never emitted); Agent
-    durable approval is the product HITL gate.
+    Agent durable approval is the product HITL gate (not this enum).
     """
 
     ALLOW = "allow"
     HARD_DENY = "hard_deny"
-    # Deprecated — retained so older tests/logs that mention the string still
-    # parse. policy_checker.check() never returns this after HITL removal.
-    APPROVAL_REQUIRED = "approval_required"
 
 
 class InternalPlaneHealthStatus(str, Enum):
@@ -269,7 +268,7 @@ class ToolCallCheck(BaseModel):
 
 class ToolCallDecision(BaseModel):
     allowed: bool = True
-    # Three-tier: allow | approval_required | hard_deny
+    # Two-tier at sandbox boundary: allow | hard_deny
     decision: str = "allow"
     reason: str = ""
     risk_level: RiskLevel = RiskLevel.LOW
