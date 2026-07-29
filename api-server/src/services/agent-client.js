@@ -848,9 +848,13 @@ export async function listAgentEvents(
     url.searchParams.set('after', String(after));
     url.searchParams.set('afterSequence', String(after));
   }
-  if (query.limit != null && Number.isFinite(Number(query.limit))) {
-    url.searchParams.set('limit', String(query.limit));
-  }
+  // Default page size matches Agent query-service max so a single page covers
+  // more history; conversation-timeline still paginates when needed.
+  const limit =
+    query.limit != null && Number.isFinite(Number(query.limit))
+      ? Number(query.limit)
+      : 500;
+  url.searchParams.set('limit', String(limit));
   const resp = await fetch(url, { headers: requestHeaders({ auth, traceId }) });
   if (!resp.ok) {
     const text = await resp.text().catch(() => resp.statusText);

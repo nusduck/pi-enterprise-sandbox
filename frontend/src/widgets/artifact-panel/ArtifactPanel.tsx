@@ -113,54 +113,62 @@ export function ArtifactPanel({
             ) : (
               <span className="rtc-muted">No download URL</span>
             )}
-            {onImport && importTargets.length ? (
+            {onImport ? (
               <div
                 className="artifact-import-controls"
                 onClick={(e) => e.stopPropagation()}
                 onKeyDown={(e) => e.stopPropagation()}
               >
-                <select
-                  aria-label={`Target conversation for ${a.name}`}
-                  value={targets[a.id] || ''}
-                  disabled={importingId === a.id}
-                  onChange={(e) =>
-                    setTargets((current) => ({
-                      ...current,
-                      [a.id]: e.target.value,
-                    }))
-                  }
-                >
-                  <option value="">Import to conversation…</option>
-                  {importTargets.map((conversation) => (
-                    <option key={conversation.id} value={conversation.id}>
-                      {conversation.title?.trim() ||
-                        `Conversation ${conversation.id.slice(0, 10)}…`}
-                    </option>
-                  ))}
-                </select>
-                <button
-                  type="button"
-                  className="rtc-link-btn"
-                  disabled={!targets[a.id] || importingId === a.id}
-                  onClick={async () => {
-                    const target = targets[a.id];
-                    if (!target) return;
-                    setImportingId(a.id);
-                    setImportError((current) => ({ ...current, [a.id]: '' }));
-                    try {
-                      await onImport(a.id, target, a.name);
-                    } catch (err) {
-                      setImportError((current) => ({
-                        ...current,
-                        [a.id]: (err as Error).message || 'Import failed',
-                      }));
-                    } finally {
-                      setImportingId(null);
-                    }
-                  }}
-                >
-                  {importingId === a.id ? 'Importing…' : 'Import'}
-                </button>
+                {importTargets.length ? (
+                  <>
+                    <select
+                      aria-label={`Target conversation for ${a.name}`}
+                      value={targets[a.id] || ''}
+                      disabled={importingId === a.id}
+                      onChange={(e) =>
+                        setTargets((current) => ({
+                          ...current,
+                          [a.id]: e.target.value,
+                        }))
+                      }
+                    >
+                      <option value="">Import to conversation…</option>
+                      {importTargets.map((conversation) => (
+                        <option key={conversation.id} value={conversation.id}>
+                          {conversation.title?.trim() ||
+                            `Conversation ${conversation.id.slice(0, 10)}…`}
+                        </option>
+                      ))}
+                    </select>
+                    <button
+                      type="button"
+                      className="rtc-link-btn"
+                      disabled={!targets[a.id] || importingId === a.id}
+                      onClick={async () => {
+                        const target = targets[a.id];
+                        if (!target) return;
+                        setImportingId(a.id);
+                        setImportError((current) => ({ ...current, [a.id]: '' }));
+                        try {
+                          await onImport(a.id, target, a.name);
+                        } catch (err) {
+                          setImportError((current) => ({
+                            ...current,
+                            [a.id]: (err as Error).message || 'Import failed',
+                          }));
+                        } finally {
+                          setImportingId(null);
+                        }
+                      }}
+                    >
+                      {importingId === a.id ? 'Importing…' : 'Import'}
+                    </button>
+                  </>
+                ) : (
+                  <div className="row-sub muted">
+                    Open or create another conversation to import this artifact.
+                  </div>
+                )}
               </div>
             ) : null}
             {importError[a.id] ? (

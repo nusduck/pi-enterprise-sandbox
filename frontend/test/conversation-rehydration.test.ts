@@ -97,6 +97,73 @@ describe('conversation history rehydration', () => {
     }
   });
 
+  it('loads durable tool ledger for terminal runs even when events omit tools', async () => {
+    const originalFetch = globalThis.fetch;
+    const toolUrls: string[] = [];
+    globalThis.fetch = (async (input) => {
+      const url = String(input);
+      if (url.includes('/datasets')) {
+        return new Response(JSON.stringify({ datasets: [] }), { status: 200 });
+      }
+      if (url.includes('/conversations/conv_ledger/events')) {
+        return new Response(
+          JSON.stringify({
+            runs: [
+              {
+                run_id: 'run_ledger',
+                conversation_id: 'conv_ledger',
+                status: 'SUCCEEDED',
+              },
+            ],
+            // Intentionally no tool.execution.* events — simulates a truncated
+            // history page that previously left the chat without tools.
+            events: [
+              {
+                run_id: 'run_ledger',
+                sequence: 1,
+                event_id: 'evt_done',
+                type: 'run.completed',
+                payload: { status: 'SUCCEEDED' },
+              },
+            ],
+          }),
+          { status: 200 },
+        );
+      }
+      if (url.includes('/runs/run_ledger/tools')) {
+        toolUrls.push(url);
+        return new Response(
+          JSON.stringify({
+            tools: [
+              {
+                tool_call_id: 'tc_ledger',
+                run_id: 'run_ledger',
+                tool_name: 'bash',
+                status: 'succeeded',
+                arguments: { command: 'echo hi' },
+                result_json: { exitCode: 0, stdout: 'hi\n' },
+              },
+            ],
+          }),
+          { status: 200 },
+        );
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    }) as typeof fetch;
+
+    try {
+      const bridge = createEntityBridge();
+      await bridge.rehydrateConversation('conv_ledger');
+      assert.ok(toolUrls.length >= 1, 'must fetch /tools for terminal runs');
+      const store = bridge.getStore();
+      assert.deepEqual(store.runsById.run_ledger.toolExecutionIds, ['tc_ledger']);
+      assert.equal(store.toolExecutionsById.tc_ledger.name, 'bash');
+      assert.equal(store.toolExecutionsById.tc_ledger.status, 'completed');
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   it('restores completed tool calls from persisted events', async () => {
     const originalFetch = globalThis.fetch;
     globalThis.fetch = (async (input) => {

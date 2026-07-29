@@ -109,6 +109,32 @@ export async function getRun(runId: string): Promise<RunDetail> {
   }
 }
 
+/** Coerce ledger rows so optional `arguments` never fail the whole list. */
+function normalizeToolSnapshotRow(row: unknown): unknown {
+  if (!row || typeof row !== 'object' || Array.isArray(row)) return row;
+  const r = row as Record<string, unknown>;
+  let args = r.arguments ?? r.arguments_json ?? r.args ?? null;
+  if (typeof args === 'string') {
+    try {
+      args = JSON.parse(args);
+    } catch {
+      args = { raw: args };
+    }
+  }
+  if (args != null && (typeof args !== 'object' || Array.isArray(args))) {
+    args = { value: args };
+  }
+  return {
+    ...r,
+    tool_call_id: r.tool_call_id ?? r.toolCallId,
+    run_id: r.run_id ?? r.runId,
+    tool_name: r.tool_name ?? r.toolName ?? r.name,
+    arguments: args,
+    result_json: r.result_json ?? r.resultJson ?? r.result ?? null,
+    status: r.status,
+  };
+}
+
 /** GET /runs/{run_id}/tools — authoritative durable ledger snapshot. */
 export async function listRunTools(runId: string): Promise<ToolExecutionSnapshot[]> {
   try {
@@ -128,9 +154,22 @@ export async function listRunTools(runId: string): Promise<ToolExecutionSnapshot
       : Array.isArray(data?.tools)
         ? data.tools
         : [];
-    return rows.map((row) =>
-      parseApiStrict(ToolExecutionSnapshotSchema, row, 'listRunTools'),
-    );
+    // Soft-parse: one bad row must not wipe the whole tool panel on refresh.
+    const out: ToolExecutionSnapshot[] = [];
+    for (const row of rows) {
+      try {
+        out.push(
+          parseApiStrict(
+            ToolExecutionSnapshotSchema,
+            normalizeToolSnapshotRow(row),
+            'listRunTools',
+          ),
+        );
+      } catch (err) {
+        console.warn('[listRunTools] skip invalid row:', (err as Error).message);
+      }
+    }
+    return out;
   } catch (err) {
     if (err instanceof ApiError) throw err;
     throw new ApiError((err as Error).message || 'List run tools failed');

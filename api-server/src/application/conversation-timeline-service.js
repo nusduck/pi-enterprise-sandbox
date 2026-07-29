@@ -115,17 +115,40 @@ export async function loadConversationTimeline(client, conversationId, { limit }
       String(b.created_at || b.createdAt || ''),
     ),
   );
+  const pageSize = Math.min(
+    500,
+    Math.max(1, Number.isFinite(limit) ? Number(limit) : 500),
+  );
   const eventGroups = await Promise.all(
     chronologicalRuns.map(async (run) => {
       const runId = run.run_id || run.runId || run.id;
-      const events = runId
-        ? await client.listAgentEvents(runId, { limit })
-        : [];
+      if (!runId) return { run, events: [] };
+      // Page through history until a short page — tools often land after many
+      // message.delta frames, so a single 200-event page is not enough.
+      /** @type {object[]} */
+      const collected = [];
+      let afterSequence = 0;
+      for (let page = 0; page < 20; page += 1) {
+        const batch = await client.listAgentEvents(runId, {
+          limit: pageSize,
+          afterSequence,
+        });
+        const rows = Array.isArray(batch) ? batch : [];
+        if (rows.length === 0) break;
+        collected.push(...rows);
+        const last = rows[rows.length - 1];
+        const lastSeq = Number(
+          last?.sequence ?? last?.sequenceNo ?? last?.sequence_no,
+        );
+        if (!Number.isFinite(lastSeq) || lastSeq <= afterSequence) break;
+        afterSequence = lastSeq;
+        if (rows.length < pageSize) break;
+      }
       return {
         run,
-        events: Array.isArray(events)
-          ? events.map((event) => presentPersistedTimelineEvent(event, runId))
-          : [],
+        events: collected.map((event) =>
+          presentPersistedTimelineEvent(event, runId),
+        ),
       };
     }),
   );

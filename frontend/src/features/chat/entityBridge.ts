@@ -786,11 +786,30 @@ export function createEntityBridge(
         replayPersisted();
       }
 
+      // Always rehydrate the durable tool ledger for every run — including
+      // terminal SUCCEEDED/FAILED/CANCELLED. Event replay alone is not enough:
+      // history is page-capped (default 200) and may omit tool.execution.*
+      // rows after many message.delta frames, so tools vanish on refresh.
+      {
+        const toolsBaseRun = manager.getStore().runsById[runId];
+        try {
+          const tools = await listRunTools(runId);
+          const latest = manager.getStore();
+          store = sameRunRevision(toolsBaseRun, latest.runsById[runId])
+            ? rehydrateToolExecutions(latest, runId, tools)
+            : latest;
+          manager.setStore(store);
+        } catch {
+          /* Event replay above remains the fallback when /tools is unavailable. */
+        }
+      }
+
       if (activelyStreaming || resumable) {
         const live = await getRun(runId);
         if (live) {
           store = rehydrateRun(manager.getStore(), live);
           manager.setStore(store);
+          // Refresh tools again after live detail in case ledger advanced.
           const toolsBaseRun = store.runsById[runId];
           try {
             const tools = await listRunTools(runId);
@@ -799,13 +818,13 @@ export function createEntityBridge(
               ? rehydrateToolExecutions(latest, runId, tools)
               : latest;
           } catch {
-            /* Event replay below remains the fallback for older deployments. */
+            /* Event replay remains the fallback for older deployments. */
           }
           manager.setStore(store);
         }
-        if (live.runtime_available === false) {
+        if (live?.runtime_available === false) {
           if (activelyStreaming) replayPersisted();
-        } else {
+        } else if (live) {
           const liveCursor = resumable && live?.next_sequence
             ? Math.max(0, live.next_sequence - 1)
             : 0;

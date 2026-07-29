@@ -7,7 +7,9 @@ import {
   getRunToolExecutions,
   getRunTraceSpans,
   listDatasetsForConversation,
+  type ArtifactEntity,
 } from '../../entities';
+import { isDurableArtifactId } from '../../shared/state/runReducer';
 import {
   formatDuration,
   formatRunStatusLabel,
@@ -86,6 +88,91 @@ export function ContextInspector({
 
   // Merge server-listed deliverables when entity artifacts empty
   const listedArtifacts = state.artifacts || [];
+
+  /**
+   * Artifacts available for cross-conversation Import.
+   * Prefer EntityStore rows for this conversation (all runs), then session
+   * list API rows. The previous run-only list made Import disappear whenever
+   * the active Run had no submit_artifact of its own.
+   */
+  const importableArtifacts = useMemo((): ArtifactEntity[] => {
+    const convId = state.conversationId;
+    const runIds = new Set<string>();
+    if (runId) runIds.add(runId);
+    if (convId) {
+      for (const run of Object.values(entityStore.runsById)) {
+        if (run.conversationId === convId) runIds.add(run.id);
+      }
+    }
+
+    const seen = new Set<string>();
+    const out: ArtifactEntity[] = [];
+
+    for (const art of Object.values(entityStore.artifactsById)) {
+      if (art.source !== 'submit_artifact') continue;
+      if (!isDurableArtifactId(art.id, art.runId || '')) continue;
+      if (art.runId && runIds.size > 0 && !runIds.has(art.runId)) continue;
+      if (seen.has(art.id)) continue;
+      seen.add(art.id);
+      out.push(art);
+    }
+
+    // Also include active-run artifacts even if conversationId was not set yet.
+    for (const art of artifacts) {
+      if (art.source !== 'submit_artifact') continue;
+      if (!isDurableArtifactId(art.id, art.runId || '')) continue;
+      if (seen.has(art.id)) continue;
+      seen.add(art.id);
+      out.push(art);
+    }
+
+    for (const listed of listedArtifacts) {
+      const id = String(listed.artifact_id || listed.id || '').trim();
+      if (!id || seen.has(id)) continue;
+      if (!isDurableArtifactId(id, runId || '')) continue;
+      seen.add(id);
+      out.push({
+        id,
+        runId: runId,
+        sessionId: activeSessionId,
+        name: String(listed.name || listed.path || id),
+        path: listed.path != null ? String(listed.path) : null,
+        mimeType:
+          listed.mime_type != null
+            ? String(listed.mime_type)
+            : listed.mimeType != null
+              ? String(listed.mimeType)
+              : null,
+        size:
+          typeof listed.size === 'number' && Number.isFinite(listed.size)
+            ? listed.size
+            : null,
+        sha256:
+          listed.sha256 != null
+            ? String(listed.sha256)
+            : listed.sha_256 != null
+              ? String(listed.sha_256)
+              : null,
+        description: null,
+        source: 'submit_artifact',
+        createdAt:
+          listed.created_at != null
+            ? String(listed.created_at)
+            : listed.createdAt != null
+              ? String(listed.createdAt)
+              : null,
+      });
+    }
+
+    return out;
+  }, [
+    entityStore,
+    runId,
+    state.conversationId,
+    artifacts,
+    listedArtifacts,
+    activeSessionId,
+  ]);
 
   const agentSession =
     (run?.agentSessionId &&
@@ -179,7 +266,7 @@ export function ContextInspector({
 
           {tab === 'artifacts' ? (
             <ArtifactPanel
-              artifacts={artifacts}
+              artifacts={importableArtifacts}
               sessionId={activeSessionId}
               selectedId={selected?.kind === 'artifact' ? selected.id : null}
               submitOnly

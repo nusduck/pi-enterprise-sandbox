@@ -1552,11 +1552,18 @@ export function createAgentHttpServer(deps) {
           // JSON list helper for tests / clients that prefer non-SSE
           if (parsedUrl.searchParams.get('format') === 'json') {
             try {
+              // Honor ?limit= up to the query-service cap (500). Default 500 so
+              // conversation rehydrate is less likely to drop late tool events
+              // after many message.delta frames (previous hard-coded 200).
+              const requestedLimit = Number(parsedUrl.searchParams.get('limit'));
+              const limit = Number.isFinite(requestedLimit)
+                ? Math.min(500, Math.max(1, requestedLimit))
+                : 500;
               const page = await deps.eventQueryService.listEvents({
                 runId,
                 auth,
                 afterSequence: after,
-                limit: 200,
+                limit,
               });
               json(res, 200, page);
             } catch (err) {
