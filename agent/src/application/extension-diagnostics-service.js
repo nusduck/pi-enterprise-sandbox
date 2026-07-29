@@ -1,6 +1,6 @@
 /**
- * Operator-facing capability projection for the production three-extension
- * runtime. This is configured inventory, not a second runtime authority.
+ * Operator-facing capability projection for the production extension
+ * registry. This is configured inventory, not a second runtime authority.
  */
 
 import path from 'node:path';
@@ -10,7 +10,8 @@ import { validateSkillPackage } from '../skills/validator.js';
 import { buildRegistry } from '../infrastructure/model-registry.js';
 import {
   ENTERPRISE_DEFAULT_TOOLS,
-  ENTERPRISE_EXTENSION_NAMES,
+  REGISTERED_EXTENSION_NAMES,
+  REQUIRED_EXTENSION_NAMES,
 } from '../extensions/index.js';
 import { loadMcpServerRegistry } from '../infrastructure/mcp/pi-mcp-adapter-factory.js';
 
@@ -143,9 +144,13 @@ export function getExtensionDiagnostics(options = {}) {
       })),
     ),
   );
-  const extensions = ENTERPRISE_EXTENSION_NAMES.map((name) => ({
+  const requiredExtensions = new Set(REQUIRED_EXTENSION_NAMES);
+  const extensions = REGISTERED_EXTENSION_NAMES.map((name) => ({
     name,
-    enabled: true,
+    // Required extensions always load with the bundle; optional first-party
+    // extensions load only when the AgentVersion lists them.
+    enabled: requiredExtensions.has(name),
+    required: requiredExtensions.has(name),
     status: 'configured',
     source: 'agent/src/extensions',
     dynamic: false,
@@ -169,7 +174,7 @@ export function getExtensionDiagnostics(options = {}) {
     profile: {
       id: profileId,
       version: PRODUCT_VERSION,
-      extensions: [...ENTERPRISE_EXTENSION_NAMES],
+      extensions: [...REQUIRED_EXTENSION_NAMES],
       allowed_tools: [...ENTERPRISE_DEFAULT_TOOLS],
       allowed_mcp_servers: mcpServers
         .filter((server) => server.enabled)
@@ -185,7 +190,7 @@ export function getExtensionDiagnostics(options = {}) {
       package: PRODUCT_PACKAGE,
       version: PRODUCT_VERSION,
       profile_id: profileId,
-      extensions: [...ENTERPRISE_EXTENSION_NAMES],
+      extensions: [...REQUIRED_EXTENSION_NAMES],
       audit: { status: 'built-in' },
     },
     extensions,

@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import { getExtensionDiagnostics } from '../src/application/extension-diagnostics-service.js';
 import {
   ENTERPRISE_DEFAULT_TOOLS,
-  ENTERPRISE_EXTENSION_NAMES,
+  REGISTERED_EXTENSION_NAMES,
 } from '../src/extensions/index.js';
 
 let root;
@@ -48,7 +48,7 @@ test('diagnostics preserves the UI contract using only production capabilities',
   assert.equal(diagnostics.registry.live, false);
   assert.deepEqual(
     diagnostics.extensions.map((extension) => extension.name),
-    [...ENTERPRISE_EXTENSION_NAMES],
+    [...REGISTERED_EXTENSION_NAMES],
   );
   assert.deepEqual(
     diagnostics.tools.map((tool) => tool.name),

@@ -5,10 +5,10 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  ENTERPRISE_EXTENSION_NAMES,
+  REQUIRED_EXTENSION_NAMES,
   createEnterpriseExtensionBundle,
   assertEnterpriseRunContext,
-  assertExactEnterpriseExtensions,
+  assertEnterpriseExtensions,
   extensionFactoryNames,
 } from '../../src/extensions/index.js';
 import { extractUsageSummary } from '../../src/extensions/observability/index.js';
@@ -25,17 +25,44 @@ const RUN_CTX = Object.freeze({
 });
 
 describe('createEnterpriseExtensionBundle', () => {
-  it('returns exactly three factories in fixed order with metadata', () => {
+  it('returns every required factory in fixed load order with metadata', () => {
     const factories = createEnterpriseExtensionBundle(RUN_CTX);
-    assert.equal(factories.length, 3);
+    assert.equal(factories.length, REQUIRED_EXTENSION_NAMES.length);
     assert.deepEqual(extensionFactoryNames(factories), [
-      ...ENTERPRISE_EXTENSION_NAMES,
+      ...REQUIRED_EXTENSION_NAMES,
     ]);
+    // Core pipeline holds positions 0..2 so added extensions never reshuffle it.
     assert.equal(factories[0].extensionMetadata.name, 'sandbox-bridge');
     assert.equal(factories[0].extensionMetadata.toolsRegistered, true);
     assert.equal(factories[1].extensionMetadata.name, 'enterprise-policy');
     assert.equal(factories[2].extensionMetadata.name, 'observability');
     assert.equal(factories[2].extensionMetadata.ownsModelRequestEvents, true);
+  });
+
+  it('loads user-interaction so ask_user survives the policy split', () => {
+    const names = extensionFactoryNames(
+      createEnterpriseExtensionBundle(RUN_CTX),
+    );
+    assert.ok(names.includes('user-interaction'));
+  });
+
+  it('an AgentVersion listing the legacy three still gets user-interaction', () => {
+    const names = extensionFactoryNames(
+      createEnterpriseExtensionBundle(RUN_CTX, {
+        extensions: ['sandbox-bridge', 'enterprise-policy', 'observability'],
+      }),
+    );
+    assert.deepEqual(names, [...REQUIRED_EXTENSION_NAMES]);
+  });
+
+  it('rejects selecting an unregistered extension', () => {
+    assert.throws(
+      () =>
+        createEnterpriseExtensionBundle(RUN_CTX, {
+          extensions: [...REQUIRED_EXTENSION_NAMES, 'attacker-supplied'],
+        }),
+      /unregistered extension/,
+    );
   });
 
   it('rejects missing required context fields', () => {
@@ -86,14 +113,19 @@ describe('createEnterpriseExtensionBundle', () => {
     );
   });
 
-  it('rejects any fourth extension factory injection', () => {
-    assert.throws(
-      () =>
-        createEnterpriseExtensionBundle(RUN_CTX, {
-          extraFactories: [() => {}],
-        }),
-      /fourth/,
-    );
+  it('rejects caller-supplied extension factories', () => {
+    // Extensions run inside the trust boundary, so callers may only select
+    // registered names — never hand in a factory function.
+    for (const key of ['extraFactories', 'factories']) {
+      assert.throws(
+        () =>
+          createEnterpriseExtensionBundle(RUN_CTX, {
+            [key]: [() => {}],
+          }),
+        /caller-supplied extension factories/,
+        `deps.${key} must be refused`,
+      );
+    }
   });
 
   it('isolates run context per bundle (no shared mutable process state)', () => {
@@ -150,33 +182,58 @@ describe('createEnterpriseExtensionBundle', () => {
   });
 });
 
-describe('assertExactEnterpriseExtensions', () => {
-  it('accepts empty and exact three (any order)', () => {
-    assert.equal(assertExactEnterpriseExtensions([]).empty, true);
-    const r = assertExactEnterpriseExtensions([
+describe('assertEnterpriseExtensions', () => {
+  it('accepts empty, and the required set in any order', () => {
+    assert.equal(assertEnterpriseExtensions([]).empty, true);
+    const r = assertEnterpriseExtensions([...REQUIRED_EXTENSION_NAMES].reverse());
+    // Always returned in deterministic load order, not caller order.
+    assert.deepEqual([...r.names], [...REQUIRED_EXTENSION_NAMES]);
+  });
+
+  it('accepts the legacy required three and implies user-interaction', () => {
+    const r = assertEnterpriseExtensions([
       'observability',
       'sandbox-bridge',
       'enterprise-policy',
     ]);
-    assert.deepEqual([...r.names], [...ENTERPRISE_EXTENSION_NAMES]);
+    assert.deepEqual([...r.names], [...REQUIRED_EXTENSION_NAMES]);
   });
 
-  it('rejects legacy 12 names and partial sets', () => {
+  it('rejects legacy 12 names, unregistered names, and partial sets', () => {
     assert.throws(
-      () => assertExactEnterpriseExtensions(['sandbox-tools']),
-      /legacy|exactly/,
+      () => assertEnterpriseExtensions(['sandbox-tools']),
+      /legacy|unregistered/,
     );
     assert.throws(
-      () => assertExactEnterpriseExtensions(['sandbox-bridge']),
-      /exactly/,
+      () => assertEnterpriseExtensions(['sandbox-bridge']),
+      /must include every required extension/,
+    );
+    assert.throws(
+      () => assertEnterpriseExtensions([...REQUIRED_EXTENSION_NAMES, 'mcp']),
+      /legacy/,
     );
     assert.throws(
       () =>
-        assertExactEnterpriseExtensions([
-          ...ENTERPRISE_EXTENSION_NAMES,
-          'mcp',
+        assertEnterpriseExtensions([
+          ...REQUIRED_EXTENSION_NAMES,
+          'not-a-real-extension',
         ]),
-      /exactly|legacy/,
+      /unregistered extension/,
+    );
+  });
+
+  it('rejects duplicates and non-array input', () => {
+    assert.throws(
+      () =>
+        assertEnterpriseExtensions([
+          ...REQUIRED_EXTENSION_NAMES,
+          'sandbox-bridge',
+        ]),
+      /duplicates/,
+    );
+    assert.throws(
+      () => assertEnterpriseExtensions('sandbox-bridge'),
+      /must be an array/,
     );
   });
 });

@@ -93,15 +93,35 @@ describe('production path: no old-12 extension / legacy MCP imports', () => {
     );
   });
 
-  it('enterprise extensions are exactly three logical names', async () => {
+  it('enterprise extensions resolve only to first-party registry names', async () => {
     const {
-      ENTERPRISE_EXTENSION_NAMES,
+      REQUIRED_EXTENSION_NAMES,
+      REGISTERED_EXTENSION_NAMES,
       LEGACY_EXTENSION_PACKAGE_NAMES,
     } = await import('../../src/extensions/index.js');
-    assert.equal(ENTERPRISE_EXTENSION_NAMES.length, 3);
+    // The original core pipeline keeps positions 0..2 so later additions
+    // never reshuffle it.
+    assert.deepEqual(REQUIRED_EXTENSION_NAMES.slice(0, 3), [
+      'sandbox-bridge',
+      'enterprise-policy',
+      'observability',
+    ]);
+    // Every required extension must be registered/constructible.
+    for (const name of REQUIRED_EXTENSION_NAMES) {
+      assert.ok(
+        REGISTERED_EXTENSION_NAMES.includes(name),
+        `${name} must be in the registry`,
+      );
+    }
+    // The registry must never re-open the legacy 12-package surface.
     assert.equal(LEGACY_EXTENSION_PACKAGE_NAMES.length, 12);
-    assert.ok(!LEGACY_EXTENSION_PACKAGE_NAMES.includes('sandbox-bridge'));
-    assert.ok(!LEGACY_EXTENSION_PACKAGE_NAMES.includes('enterprise-policy'));
+    for (const legacy of LEGACY_EXTENSION_PACKAGE_NAMES) {
+      if (legacy === 'observability') continue;
+      assert.ok(
+        !REGISTERED_EXTENSION_NAMES.includes(legacy),
+        `registry must not adopt legacy package name ${legacy}`,
+      );
+    }
   });
 
   it('legacy enterprise-agent-kit package and manifest dependency stay absent', () => {

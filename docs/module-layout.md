@@ -30,7 +30,7 @@ agent/
     application/         # use-cases / services
     domain/              # pure domain
     infrastructure/      # mysql, redis, pi, mcp, sandbox transports, model-registry
-    extensions/          # sandbox-bridge, enterprise-policy, observability
+    extensions/          # first-party Pi extension registry (constants.js)
     presentation/        # a2a HTTP handlers
     lib/                 # shared pure helpers (text-redaction)
     runtime/             # message/attachment/vision helpers

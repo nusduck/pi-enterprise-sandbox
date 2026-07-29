@@ -9,7 +9,10 @@ import {
   PINNED_PI_SDK_VERSION,
   buildExtensionBindings,
 } from '../../src/infrastructure/pi/pi-runtime-factory.js';
-import { createEnterpriseExtensionBundle } from '../../src/extensions/index.js';
+import {
+  REQUIRED_EXTENSION_NAMES,
+  createEnterpriseExtensionBundle,
+} from '../../src/extensions/index.js';
 
 const SESS = '01K0G2PAV8FPMVC9QHJG7JPN52';
 const VER = '01K0G2PAV8FPMVC9QHJG7JPN5C';
@@ -130,7 +133,13 @@ describe('PiRuntimeFactory bindExtensions', () => {
     assert.equal(managed.bindCount, 1);
     assert.equal(rebindInstalled, true);
     assert.equal(seenRlo.noExtensions, true);
-    assert.equal(seenRlo.extensionFactories.length, 3);
+    // The AgentVersion above lists the legacy required three; that resolves to
+    // the full required set (user-interaction implied) and must match the
+    // factories the bundle built.
+    assert.equal(
+      seenRlo.extensionFactories.length,
+      REQUIRED_EXTENSION_NAMES.length,
+    );
     await managed.dispose();
   });
 

@@ -266,7 +266,7 @@ describe('MCP data-plane policy (H6)', () => {
     assert.doesNotMatch(extIndex, /createPool|mysql2|knex\(/);
     assert.match(
       constantsSrc,
-      /ENTERPRISE_EXTENSION_NAMES\s*=\s*Object\.freeze\(\[\s*['"]sandbox-bridge['"]\s*,\s*['"]enterprise-policy['"]\s*,\s*['"]observability['"]/,
+      /REQUIRED_EXTENSION_NAMES\s*=\s*Object\.freeze\(\[\s*['"]sandbox-bridge['"]\s*,\s*['"]enterprise-policy['"]\s*,\s*['"]observability['"]/,
     );
 
     // Only sandbox tools + ask_user are registered via pi.registerTool.
@@ -278,6 +278,10 @@ describe('MCP data-plane policy (H6)', () => {
       path.join(root, 'src/extensions/enterprise-policy/index.js'),
       'utf8',
     );
+    const interactionSrc = fs.readFileSync(
+      path.join(root, 'src/extensions/user-interaction/index.js'),
+      'utf8',
+    );
     for (const name of SANDBOX_TOOL_NAMES) {
       assert.match(
         toolsSrc,
@@ -286,8 +290,11 @@ describe('MCP data-plane policy (H6)', () => {
       );
       assert.doesNotMatch(name, /sql|mysql|postgres|query|dsn|database/i);
     }
-    assert.match(policySrc, /name:\s*['"]ask_user['"]/);
-    assert.match(policySrc, /registerTool/);
+    // ask_user moved out of enterprise-policy into its own extension; policy
+    // must stay a pure interceptor that registers no tools of its own.
+    assert.match(interactionSrc, /name:\s*['"]ask_user['"]/);
+    assert.match(interactionSrc, /registerTool/);
+    assert.doesNotMatch(policySrc, /registerTool/);
 
     // MCP module set is closed: config loader + adapter factory only.
     const mcpFiles = listJsFiles(path.join(root, 'src/infrastructure/mcp'))

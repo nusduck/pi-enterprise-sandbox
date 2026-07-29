@@ -17,8 +17,8 @@
 import { PiRuntimeFactoryError } from './errors.js';
 import { PiSessionAdapter } from './pi-session-adapter.js';
 import {
-  ENTERPRISE_EXTENSION_NAMES,
-  assertExactEnterpriseExtensions,
+  REQUIRED_EXTENSION_NAMES,
+  assertEnterpriseExtensions,
 } from '../../extensions/index.js';
 import { resolveEnterpriseSystemPrompt } from './enterprise-system-prompt.js';
 import {
@@ -363,10 +363,16 @@ export function resolveAgentVersionBindings(bound, options = {}) {
   const toolPolicyBinding = options.toolPolicyBinding;
   const sandboxPolicyBinding = options.sandboxPolicyBinding;
 
+  /** @type {readonly string[]} Extensions actually loaded for this binding. */
+  let resolvedExtensionNames = Object.freeze([]);
+
   if (bound.extensions.length > 0) {
-    // Non-empty must be exactly the three enterprise logical names (not legacy 12).
+    // Non-empty must resolve against the first-party registry (not legacy 12).
+    /** @type {{ names: readonly string[] }} */
+    let resolved;
     try {
-      assertExactEnterpriseExtensions(bound.extensions);
+      resolved = assertEnterpriseExtensions(bound.extensions);
+      resolvedExtensionNames = resolved.names;
     } catch (err) {
       throw new PiRuntimeFactoryError(
         err instanceof Error ? err.message : String(err),
@@ -379,16 +385,16 @@ export function resolveAgentVersionBindings(bound, options = {}) {
         { code: 'PI_BINDING_REQUIRED' },
       );
     }
-    if (extensionFactories.length !== ENTERPRISE_EXTENSION_NAMES.length) {
+    if (extensionFactories.length !== resolved.names.length) {
       throw new PiRuntimeFactoryError(
-        `extensionFactories must be exactly ${ENTERPRISE_EXTENSION_NAMES.length} (sandbox-bridge, enterprise-policy, observability); got ${extensionFactories.length}`,
+        `extensionFactories must match resolved AgentVersion.extensions (${resolved.names.join(', ')}); got ${extensionFactories.length} factories`,
         { code: 'PI_EXTENSIONS_COUNT' },
       );
     }
-    // Each factory must carry extensionName in fixed enterprise order.
-    for (let i = 0; i < ENTERPRISE_EXTENSION_NAMES.length; i += 1) {
+    // Each factory must carry extensionName in resolved load order.
+    for (let i = 0; i < resolved.names.length; i += 1) {
       const factory = extensionFactories[i];
-      const expected = ENTERPRISE_EXTENSION_NAMES[i];
+      const expected = resolved.names[i];
       if (typeof factory !== 'function') {
         throw new PiRuntimeFactoryError(
           `extensionFactories[${i}] must be a function (${expected})`,
@@ -474,7 +480,11 @@ export function resolveAgentVersionBindings(bound, options = {}) {
       workspaceRoot: options.workspaceRoot || LOGICAL_WORKSPACE_ROOT,
       skillRoot:
         options.skillRoot || primarySkillRoot(skillPaths) || LOGICAL_SKILL_ROOT,
-      extensionNames: [...ENTERPRISE_EXTENSION_NAMES],
+      extensionNames: [
+        ...(resolvedExtensionNames.length > 0
+          ? resolvedExtensionNames
+          : REQUIRED_EXTENSION_NAMES),
+      ],
     },
   );
 

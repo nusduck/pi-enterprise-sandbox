@@ -14,6 +14,7 @@ import {
   resolveAgentVersionBindings,
 } from '../../src/infrastructure/pi/pi-runtime-factory.js';
 import { PiRuntimeFactoryError } from '../../src/infrastructure/pi/errors.js';
+import { REQUIRED_EXTENSION_NAMES } from '../../src/extensions/index.js';
 
 const SESS = '01K0G2PAV8FPMVC9QHJG7JPN52';
 const VER = '01K0G2PAV8FPMVC9QHJG7JPN5C';
@@ -524,21 +525,27 @@ describe('immutable AgentVersion model + bindings', () => {
         ),
       (err) => err.code === 'PI_EXTENSIONS_INVALID',
     );
-    // Anonymous factories (no extensionName) fail closed
+    // A factory count that does not match the resolved extension set fails closed.
     assert.throws(
       () =>
         resolveAgentVersionBindings(bound, {
           extensionFactories: [() => {}, () => {}, () => {}],
         }),
+      (err) => err.code === 'PI_EXTENSIONS_COUNT',
+    );
+    // Anonymous factories (no extensionName) fail closed
+    assert.throws(
+      () =>
+        resolveAgentVersionBindings(bound, {
+          extensionFactories: REQUIRED_EXTENSION_NAMES.map(() => () => {}),
+        }),
       (err) => err.code === 'PI_EXTENSIONS_NAME_MISMATCH',
     );
-    const named = ['sandbox-bridge', 'enterprise-policy', 'observability'].map(
-      (name) => {
-        const f = () => {};
-        f.extensionName = name;
-        return f;
-      },
-    );
+    const named = REQUIRED_EXTENSION_NAMES.map((name) => {
+      const f = () => {};
+      f.extensionName = name;
+      return f;
+    });
     // Named factories but missing skills/mcp bindings
     assert.throws(
       () =>

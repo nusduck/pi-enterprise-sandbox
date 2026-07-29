@@ -1,16 +1,22 @@
 /**
  * Enterprise Extension Bundle (plan §2.2 / PR-06 B1).
  *
- * Exactly three factories, fixed order, single-run closure context.
- * sandbox-bridge registers tools; enterprise-policy intercepts all tool_call.
+ * Registry-driven: every required extension plus any AgentVersion-enabled
+ * optional first-party extension, in fixed load order, sharing one per-Run
+ * closure context. sandbox-bridge and user-interaction register tools;
+ * enterprise-policy intercepts all tool_call; observability records outcomes.
  */
 
 import {
-  ENTERPRISE_EXTENSION_NAMES,
-  ENTERPRISE_EXTENSION_ORDER,
+  EXTENSION_LOAD_ORDER,
   LEGACY_EXTENSION_PACKAGE_NAMES,
+  LEGACY_REQUIRED_EXTENSION_NAMES,
+  OPTIONAL_EXTENSION_NAMES,
+  REGISTERED_EXTENSION_NAMES,
+  REQUIRED_EXTENSION_NAMES,
 } from './constants.js';
 import { createSandboxBridgeExtension } from './sandbox-bridge/index.js';
+import { createUserInteractionExtension } from './user-interaction/index.js';
 import { createEnterprisePolicyExtension } from './enterprise-policy/index.js';
 import { createObservabilityExtension } from './observability/index.js';
 import { SANDBOX_TOOL_NAMES } from './sandbox-bridge/constants.js';
@@ -19,10 +25,14 @@ import { createPolicyEngine } from './enterprise-policy/policy-engine.js';
 export { FencedToolGovernanceRecorder } from '../application/fenced-tool-governance-recorder.js';
 
 export {
-  ENTERPRISE_EXTENSION_NAMES,
-  ENTERPRISE_EXTENSION_ORDER,
+  EXTENSION_LOAD_ORDER,
   LEGACY_EXTENSION_PACKAGE_NAMES,
+  LEGACY_REQUIRED_EXTENSION_NAMES,
+  OPTIONAL_EXTENSION_NAMES,
+  REGISTERED_EXTENSION_NAMES,
+  REQUIRED_EXTENSION_NAMES,
 };
+export { createUserInteractionExtension } from './user-interaction/index.js';
 export {
   createSandboxBridgeExtension,
   SANDBOX_TOOL_NAMES,
@@ -134,9 +144,22 @@ export function assertEnterpriseRunContext(runContext) {
 }
 
 /**
+ * Resolve AgentVersion.extensions against the first-party registry.
+ *
+ * - empty / null  → enterprise bundle off
+ * - non-empty     → every name must be registered; every required name must
+ *                   be present; optional names may be added.
+ *
+ * A list holding exactly the pre-`user-interaction` required three is
+ * accepted and implies `user-interaction`, so ask_user does not silently
+ * disappear from AgentVersions authored before the split.
+ *
+ * Returns the resolved names in deterministic load order.
+ *
  * @param {unknown} extensions
+ * @returns {{ names: readonly string[], empty: boolean }}
  */
-export function assertExactEnterpriseExtensions(extensions) {
+export function assertEnterpriseExtensions(extensions) {
   if (extensions == null) {
     return { names: Object.freeze([]), empty: true };
   }
@@ -164,32 +187,56 @@ export function assertExactEnterpriseExtensions(extensions) {
     throw new Error('AgentVersion.extensions must not contain duplicates');
   }
 
+  const registered = new Set(REGISTERED_EXTENSION_NAMES);
   for (const n of names) {
-    if (LEGACY_EXTENSION_PACKAGE_NAMES.includes(n) && n !== 'observability') {
+    if (registered.has(n)) continue;
+    if (LEGACY_EXTENSION_PACKAGE_NAMES.includes(n)) {
       throw new Error(
-        `AgentVersion.extensions rejects legacy package name "${n}" (use sandbox-bridge / enterprise-policy / observability only)`,
+        `AgentVersion.extensions rejects legacy package name "${n}" (registered first-party extensions: ${REGISTERED_EXTENSION_NAMES.join(', ')})`,
+      );
+    }
+    throw new Error(
+      `AgentVersion.extensions contains unregistered extension "${n}"; only first-party extensions compiled into this image may load (${REGISTERED_EXTENSION_NAMES.join(', ')})`,
+    );
+  }
+
+  // Legacy required-three list predates the user-interaction split.
+  const isLegacyRequiredSet =
+    unique.size === LEGACY_REQUIRED_EXTENSION_NAMES.length &&
+    LEGACY_REQUIRED_EXTENSION_NAMES.every((n) => unique.has(n));
+
+  if (!isLegacyRequiredSet) {
+    const missing = REQUIRED_EXTENSION_NAMES.filter((n) => !unique.has(n));
+    if (missing.length > 0) {
+      throw new Error(
+        `AgentVersion.extensions when non-empty must include every required extension; missing [${missing.join(', ')}]`,
       );
     }
   }
 
-  const expected = new Set(ENTERPRISE_EXTENSION_NAMES);
-  if (unique.size !== expected.size || ![...unique].every((n) => expected.has(n))) {
-    throw new Error(
-      `AgentVersion.extensions when non-empty must be exactly [${ENTERPRISE_EXTENSION_NAMES.join(', ')}]; got [${names.join(', ')}]`,
-    );
-  }
+  const resolved = new Set(
+    isLegacyRequiredSet ? REQUIRED_EXTENSION_NAMES : [...unique],
+  );
+  for (const n of REQUIRED_EXTENSION_NAMES) resolved.add(n);
 
   return {
-    names: ENTERPRISE_EXTENSION_ORDER,
+    names: Object.freeze(EXTENSION_LOAD_ORDER.filter((n) => resolved.has(n))),
     empty: false,
   };
 }
 
+
 /**
- * Build the exact three ExtensionFactory functions for one Run.
+ * Build the ExtensionFactory functions for one Run, in fixed load order.
+ *
+ * Factories are constructed here from the compiled-in registry only. Callers
+ * select *which* registered extensions load (`deps.extensions`); they can
+ * never supply a factory function, so no caller can inject code into the
+ * extension trust boundary.
  *
  * @param {object} runContext
  * @param {{
+ *   extensions?: readonly string[] | null,
  *   recorder?: object | null,
  *   governanceRecorder?: object | null,
  *   sandboxTransport?: object | null,
@@ -236,26 +283,28 @@ export function createEnterpriseExtensionBundle(runContext, deps = {}) {
     );
   }
 
-  if (
-    deps &&
-    typeof deps === 'object' &&
-    Array.isArray(/** @type {any} */ (deps).extraFactories) &&
-    /** @type {any} */ (deps).extraFactories.length > 0
-  ) {
-    throw new Error(
-      'createEnterpriseExtensionBundle rejects any fourth extension factory (extraFactories forbidden)',
-    );
+  // Callers select registered extensions by name; they never supply factory
+  // functions. Extensions run inside the trust boundary (sandbox transport,
+  // governance recorder, run context), so caller-provided code stays refused.
+  for (const forbidden of ['extraFactories', 'factories']) {
+    if (
+      deps &&
+      typeof deps === 'object' &&
+      Array.isArray(/** @type {any} */ (deps)[forbidden]) &&
+      /** @type {any} */ (deps)[forbidden].length > 0
+    ) {
+      throw new Error(
+        `createEnterpriseExtensionBundle rejects caller-supplied extension factories (deps.${forbidden}); select registered extensions by name via deps.extensions`,
+      );
+    }
   }
-  if (
-    deps &&
-    typeof deps === 'object' &&
-    Array.isArray(/** @type {any} */ (deps).factories) &&
-    /** @type {any} */ (deps).factories.length > 3
-  ) {
-    throw new Error(
-      'createEnterpriseExtensionBundle rejects more than three factories',
-    );
-  }
+
+  const selected = new Set(
+    Array.isArray(deps.extensions) && deps.extensions.length > 0
+      ? assertEnterpriseExtensions([...deps.extensions]).names
+      : REQUIRED_EXTENSION_NAMES,
+  );
+  for (const name of REQUIRED_EXTENSION_NAMES) selected.add(name);
 
   // Explicit port only — no sandboxClient fallback.
   const sandboxTransport = deps.sandboxTransport ?? null;
@@ -352,14 +401,41 @@ export function createEnterpriseExtensionBundle(runContext, deps = {}) {
     deps: observabilityDeps,
   });
 
-  const factories = Object.freeze([
-    sandboxBridge,
-    enterprisePolicy,
-    observability,
-  ]);
+  const userInteraction = createUserInteractionExtension({
+    runContext: frozen,
+    deps: {
+      governanceRecorder,
+      runSuspensionPort: deps.runSuspensionPort ?? null,
+      ...(deps.userInteraction || {}),
+    },
+  });
 
-  if (factories.length !== 3) {
-    throw new Error('createEnterpriseExtensionBundle must return exactly 3 factories');
+  /** @type {Record<string, Function>} */
+  const built = {
+    'sandbox-bridge': sandboxBridge,
+    'user-interaction': userInteraction,
+    'enterprise-policy': enterprisePolicy,
+    observability,
+  };
+
+  const factories = Object.freeze(
+    EXTENSION_LOAD_ORDER.filter((name) => selected.has(name)).map((name) => {
+      const factory = built[name];
+      if (typeof factory !== 'function') {
+        throw new Error(
+          `createEnterpriseExtensionBundle has no factory for registered extension "${name}"`,
+        );
+      }
+      return factory;
+    }),
+  );
+
+  for (const name of REQUIRED_EXTENSION_NAMES) {
+    if (!factories.some((f) => f.extensionName === name)) {
+      throw new Error(
+        `createEnterpriseExtensionBundle must include required extension "${name}"`,
+      );
+    }
   }
 
   return factories;
@@ -374,6 +450,6 @@ export function extensionFactoryNames(factories) {
     if (typeof f === 'function' && typeof f.extensionName === 'string') {
       return f.extensionName;
     }
-    return ENTERPRISE_EXTENSION_ORDER[i] ?? `unknown:${i}`;
+    return EXTENSION_LOAD_ORDER[i] ?? `unknown:${i}`;
   });
 }

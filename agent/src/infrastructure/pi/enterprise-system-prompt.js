@@ -13,7 +13,7 @@ import {
   LOGICAL_WORKSPACE_ROOT,
   SANDBOX_TOOL_NAMES,
 } from '../../extensions/sandbox-bridge/constants.js';
-import { ENTERPRISE_EXTENSION_ORDER } from '../../extensions/constants.js';
+import { EXTENSION_LOAD_ORDER } from '../../extensions/constants.js';
 
 /** One-line tool snippets for the default sandbox-bridge surface (plan §13). */
 export const ENTERPRISE_TOOL_SNIPPETS = Object.freeze({
@@ -76,7 +76,7 @@ export function buildEnterpriseSystemPrompt(options = {}) {
   const snippets = options.toolSnippets || ENTERPRISE_TOOL_SNIPPETS;
   const extensionNames = Array.isArray(options.extensionNames)
     ? options.extensionNames
-    : [...ENTERPRISE_EXTENSION_ORDER];
+    : [...EXTENSION_LOAD_ORDER];
 
   const toolsList = formatEnterpriseToolsSection(toolNames, snippets);
   const extensionsList = extensionNames.map((n) => `- ${n}`).join('\n');

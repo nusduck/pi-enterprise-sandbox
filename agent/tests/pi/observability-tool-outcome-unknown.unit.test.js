@@ -10,7 +10,7 @@ import {
   createObservabilityExtension,
   isSandboxBridgeOutcomeUnknown,
 } from '../../src/extensions/observability/index.js';
-import { createEnterprisePolicyExtension } from '../../src/extensions/enterprise-policy/index.js';
+import { createUserInteractionExtension } from '../../src/extensions/user-interaction/index.js';
 
 const RUN_CTX = Object.freeze({
   orgId: '01K0G2PAV8FPMVC9QHJG7JPN4Z',
@@ -190,7 +190,9 @@ describe('observability tool_execution_end governance routing', () => {
       };
     };
 
-    const policy = createEnterprisePolicyExtension({
+    // ask_user is registered by the user-interaction extension; enterprise-policy
+    // remains a pure interceptor that registers no tools.
+    const interaction = createUserInteractionExtension({
       runContext: RUN_CTX,
       deps: {
         governanceRecorder: gov,
@@ -208,7 +210,7 @@ describe('observability tool_execution_end governance routing', () => {
         isDurableInteractionPending: (toolCallId) => pending.has(toolCallId),
       },
     });
-    await policy(pi);
+    await interaction(pi);
     await obs(pi);
     const askUser = pi.tools.get('ask_user');
     assert.ok(askUser);

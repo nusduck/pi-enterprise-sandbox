@@ -9,6 +9,7 @@ import {
   createSandboxBridgeExtensionBundleFactory,
 } from '../../src/infrastructure/sandbox/sandbox-bridge-http-transport.js';
 import { SANDBOX_TRANSPORT_METHODS } from '../../src/extensions/sandbox-bridge/transport.js';
+import { REQUIRED_EXTENSION_NAMES } from '../../src/extensions/index.js';
 
 const SID = '01K0G2PAV8FPMVC9QHJG7JPN5F';
 const RUN = Object.freeze({
@@ -418,7 +419,7 @@ describe('createSandboxBridgeHttpTransport', () => {
 });
 
 describe('createSandboxBridgeExtensionBundleFactory', () => {
-  it('returns 3 factories and sandbox-bridge loads with transport', async () => {
+  it('returns the required factories and sandbox-bridge loads with transport', async () => {
     const calls = [];
     const transport = createSandboxBridgeHttpTransport({
       client: createFakeClient(calls),
@@ -438,7 +439,8 @@ describe('createSandboxBridgeExtensionBundleFactory', () => {
         },
       },
     });
-    assert.equal(factories.length, 3);
+    assert.equal(factories.length, REQUIRED_EXTENSION_NAMES.length);
+    assert.equal(factories[0].extensionName, 'sandbox-bridge');
 
     /** @type {any[]} */
     const tools = [];
