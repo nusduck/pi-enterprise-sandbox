@@ -216,6 +216,7 @@ services:
       SANDBOX_INTERNAL_MAX_CONCURRENCY: ${SANDBOX_INTERNAL_MAX_CONCURRENCY:-64}
       # Must be > 0 so drain+UNKNOWN reconcile can run before resource close.
       SANDBOX_INTERNAL_DRAIN_TIMEOUT_SECONDS: ${SANDBOX_INTERNAL_DRAIN_TIMEOUT_SECONDS:-30}
+      SANDBOX_MCP_INTERNAL_TOKEN: ${SANDBOX_MCP_INTERNAL_TOKEN:?Set SANDBOX_MCP_INTERNAL_TOKEN for production}
       # Execution policy: disabled only (Bubblewrap --unshare-net). allowlist is
       # fail-closed in production until a real per-child egress proxy exists.
       SANDBOX_NETWORK_MODE: disabled
@@ -257,6 +258,26 @@ services:
     restart: always
     # Reinforce base topology: Sandbox never joins service_egress.
     networks:
+      - backend_internal
+
+  # MCP stays independent of Agent, but production traffic must enter through
+  # an operator-managed authenticated edge; never publish this service directly.
+  sandbox-mcp:
+    environment:
+      SANDBOX_MCP_TOKEN: ${SANDBOX_MCP_TOKEN:?Set SANDBOX_MCP_TOKEN for production}
+      SANDBOX_MCP_INTERNAL_TOKEN: ${SANDBOX_MCP_INTERNAL_TOKEN:?Set SANDBOX_MCP_INTERNAL_TOKEN for production}
+      SANDBOX_MCP_DOWNLOAD_SECRET: ${SANDBOX_MCP_DOWNLOAD_SECRET:?Set SANDBOX_MCP_DOWNLOAD_SECRET for production}
+      SANDBOX_MCP_SANDBOX_BASE_URL: http://sandbox:8081
+      SANDBOX_MCP_PUBLIC_BASE_URL: ${SANDBOX_MCP_PUBLIC_BASE_URL:?Set SANDBOX_MCP_PUBLIC_BASE_URL for production}
+      SANDBOX_MCP_REDIS_URL: redis://:${REDIS_PASSWORD:?Set REDIS_PASSWORD for production}@redis:6379/0
+    depends_on:
+      redis:
+        condition: service_healthy
+      sandbox:
+        condition: service_healthy
+    ports: !reset []
+    restart: always
+    networks: !override
       - backend_internal
 
   api-server:

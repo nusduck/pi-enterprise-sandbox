@@ -30,6 +30,8 @@ PUBLIC_PREFIXES: tuple[str, ...] = (
 _INTERNAL_V1_EXACT = "/internal/v1"
 # Strict prefix for all internal plane routes (trailing slash required for prefix).
 _INTERNAL_V1_PREFIX = "/internal/v1/"
+_MCP_INTERNAL_V1_EXACT = "/internal/mcp/v1"
+_MCP_INTERNAL_V1_PREFIX = "/internal/mcp/v1/"
 
 
 def is_public_route(path: str) -> bool:
@@ -40,12 +42,13 @@ def is_public_route(path: str) -> bool:
 
 
 def is_internal_v1_route(path: str) -> bool:
-    """Return True only for the Agent -> Sandbox internal plane path boundary.
+    """Return True only for a dedicated Sandbox internal plane path boundary.
 
-    Matches ``/internal/v1`` exactly and paths under ``/internal/v1/``.
-    Does **not** match ``/internal``, ``/internal/v10``, or other near-misses.
+    Matches Agent ``/internal/v1`` and MCP ``/internal/mcp/v1`` exactly plus
+    their respective trailing-slash subtrees. Does **not** match ``/internal``,
+    ``/internal/v10``, or other near-misses.
     Legacy API-key / user JWT must not authenticate these paths.
     """
-    if path == _INTERNAL_V1_EXACT:
+    if path == _INTERNAL_V1_EXACT or path == _MCP_INTERNAL_V1_EXACT:
         return True
-    return path.startswith(_INTERNAL_V1_PREFIX)
+    return path.startswith(_INTERNAL_V1_PREFIX) or path.startswith(_MCP_INTERNAL_V1_PREFIX)

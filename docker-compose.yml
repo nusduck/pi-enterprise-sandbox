@@ -470,6 +470,13 @@ services:
       SANDBOX_INTERNAL_HMAC_ACTIVE_KID: ${SANDBOX_INTERNAL_HMAC_ACTIVE_KID:-}
       SANDBOX_INTERNAL_MAX_CONCURRENCY: ${SANDBOX_INTERNAL_MAX_CONCURRENCY:-64}
       SANDBOX_INTERNAL_DRAIN_TIMEOUT_SECONDS: ${SANDBOX_INTERNAL_DRAIN_TIMEOUT_SECONDS:-30}
+      # Narrow bridge used only by the separately deployed sandbox-mcp facade.
+      # It is intentionally neither SANDBOX_API_TOKEN nor Agent HMAC material.
+      SANDBOX_MCP_INTERNAL_TOKEN: ${SANDBOX_MCP_INTERNAL_TOKEN:-dev_only_sandbox_mcp_internal_token_not_for_prod_32b}
+      SANDBOX_MCP_MAX_TIMEOUT_SECONDS: ${SANDBOX_MCP_MAX_TIMEOUT_SECONDS:-300}
+      SANDBOX_MCP_MAX_CODE_LENGTH: ${SANDBOX_MCP_MAX_CODE_LENGTH:-200000}
+      SANDBOX_MCP_MAX_FILE_SIZE_BYTES: ${SANDBOX_MCP_MAX_FILE_SIZE_BYTES:-10485760}
+      SANDBOX_MCP_ARTIFACT_TTL_SECONDS: ${SANDBOX_MCP_ARTIFACT_TTL_SECONDS:-86400}
       SANDBOX_WORKSPACES_ROOT: /var/sandbox/workspaces
       SANDBOX_TEMP_ROOT: /var/sandbox/tmp
       SANDBOX_ARTIFACTS_ROOT: /var/sandbox/artifacts
@@ -571,6 +578,65 @@ services:
     # Untrusted child processes with network_mode=disabled get --unshare-net.
     networks:
       - backend_internal
+
+  # ── Sandbox MCP facade — separate process, no workspace/artifact mounts ──
+  sandbox-mcp:
+    build:
+      context: .
+      dockerfile: ${SANDBOX_DOCKERFILE:-sandbox/Dockerfile}
+    image: ${SANDBOX_IMAGE:-enterprise-sandbox:latest}
+    container_name: ${SANDBOX_MCP_CONTAINER:-pi-enterprise-sandbox-mcp}
+    # Do not use sandbox/entrypoint.sh: this process needs neither privileged
+    # storage setup nor Bubblewrap. It has no storage volumes by design.
+    entrypoint: ["/app/.venv/bin/uvicorn"]
+    command: ["sandbox.mcp.app:app", "--host", "0.0.0.0", "--port", "8082"]
+    user: "10001:10001"
+    env_file:
+      - ${SANDBOX_ENV_FILE:-.env}
+    environment:
+      SANDBOX_MCP_TOKEN: ${SANDBOX_MCP_TOKEN:-dev_only_sandbox_mcp_token_not_for_prod_32b}
+      SANDBOX_MCP_INTERNAL_TOKEN: ${SANDBOX_MCP_INTERNAL_TOKEN:-dev_only_sandbox_mcp_internal_token_not_for_prod_32b}
+      SANDBOX_MCP_DOWNLOAD_SECRET: ${SANDBOX_MCP_DOWNLOAD_SECRET:-dev_only_sandbox_mcp_download_secret_not_for_prod_32b}
+      SANDBOX_MCP_SANDBOX_BASE_URL: http://sandbox:8081
+      SANDBOX_MCP_PUBLIC_BASE_URL: ${SANDBOX_MCP_PUBLIC_BASE_URL:-http://127.0.0.1:${SANDBOX_MCP_HOST_PORT:-8082}}
+      # Context/artifact metadata uses the existing durable service Redis, not
+      # the Agent runtime and not the Sandbox HMAC replay Redis.
+      SANDBOX_MCP_REDIS_URL: ${SANDBOX_MCP_REDIS_URL:-redis://:redis_dev_only@redis:6379/0}
+      SANDBOX_MCP_CLIENT_ID: ${SANDBOX_MCP_CLIENT_ID:-upagent}
+      SANDBOX_MCP_TENANT_ID: ${SANDBOX_MCP_TENANT_ID:-default}
+      SANDBOX_MCP_CONTEXT_TTL_SECONDS: ${SANDBOX_MCP_CONTEXT_TTL_SECONDS:-604800}
+      SANDBOX_MCP_LOCK_TTL_SECONDS: ${SANDBOX_MCP_LOCK_TTL_SECONDS:-15}
+      SANDBOX_MCP_ARTIFACT_TTL_SECONDS: ${SANDBOX_MCP_ARTIFACT_TTL_SECONDS:-86400}
+      SANDBOX_MCP_MAX_TIMEOUT_SECONDS: ${SANDBOX_MCP_MAX_TIMEOUT_SECONDS:-300}
+      SANDBOX_MCP_MAX_CODE_LENGTH: ${SANDBOX_MCP_MAX_CODE_LENGTH:-200000}
+      SANDBOX_MCP_MAX_FILE_SIZE_BYTES: ${SANDBOX_MCP_MAX_FILE_SIZE_BYTES:-10485760}
+    # Development only: loopback lets a local UPAgent connect without exposing
+    # the executor. Production overlay resets this and puts an edge in front.
+    ports:
+      - "${SANDBOX_MCP_HOST_BIND:-127.0.0.1}:${SANDBOX_MCP_HOST_PORT:-8082}:8082"
+    expose:
+      - "8082"
+    depends_on:
+      redis:
+        condition: service_healthy
+      sandbox:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8082/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+    networks:
+      - backend_internal
+      # Required for the development-only loopback port publish above. The
+      # production overlay replaces this list with backend_internal only.
+      - dev_ingress
 
 networks:
   backend_internal:

@@ -21,6 +21,7 @@ from sandbox.routers import (
     health,
     internal_executions,
     internal_files,
+    mcp_internal,
     internal_processes,
     internal_sessions,
 )
@@ -416,6 +417,7 @@ app.include_router(internal_executions.router)
 app.include_router(internal_artifacts.router)
 app.include_router(internal_sessions.router)
 app.include_router(internal_processes.router)
+app.include_router(mcp_internal.router)
 
 
 # ── Root ───────────────────────────────────────────────────────────────

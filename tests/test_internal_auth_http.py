@@ -325,8 +325,11 @@ class TestInternalRouteBoundary:
         assert is_internal_v1_route("/internal/v1") is True
         assert is_internal_v1_route("/internal/v1/") is True
         assert is_internal_v1_route("/internal/v1/sessions/x") is True
+        assert is_internal_v1_route("/internal/mcp/v1") is True
+        assert is_internal_v1_route("/internal/mcp/v1/files/write") is True
         assert is_internal_v1_route("/internal") is False
         assert is_internal_v1_route("/internal/v10/x") is False
+        assert is_internal_v1_route("/internal/mcp/v10/x") is False
         assert is_internal_v1_route("/internal/v1x") is False
         assert is_internal_v1_route("/sessions") is False
         # Must not be treated as public.

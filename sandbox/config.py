@@ -491,6 +491,18 @@ class Settings(BaseSettings):
     internal_max_concurrency: int = 64
     internal_drain_timeout_seconds: float = 30.0
 
+    # ── MCP internal bridge (sandbox-mcp -> Sandbox only) ────────────
+    # This is deliberately separate from the Agent HMAC plane.  The companion
+    # sandbox-mcp process is independently deployable, but it must use this
+    # narrow authenticated bridge so it never mounts workspace/artifact roots.
+    # Empty token leaves the bridge fail-closed (503) rather than accepting an
+    # accidental unauthenticated deployment.
+    mcp_internal_token: str = ""
+    mcp_max_timeout_seconds: int = 300
+    mcp_max_code_length: int = 200_000
+    mcp_max_file_size_bytes: int = 10 * 1024 * 1024
+    mcp_artifact_ttl_seconds: int = 24 * 3600
+
     # Parsed kid -> key bytes (never logged; not a public settings field).
     _internal_hmac_keys: dict[str, bytes] = PrivateAttr(default_factory=dict)
 
@@ -693,6 +705,29 @@ class Settings(BaseSettings):
             return 64
         return _positive_int_field(
             value, name="SANDBOX_INTERNAL_MAX_CONCURRENCY", minimum=1, maximum=10_000
+        )
+
+    @field_validator(
+        "mcp_max_timeout_seconds",
+        "mcp_max_code_length",
+        "mcp_max_file_size_bytes",
+        "mcp_artifact_ttl_seconds",
+        mode="before",
+    )
+    @classmethod
+    def _validate_mcp_positive_limits(cls, value: Any, info: Any) -> int:
+        maxima = {
+            "mcp_max_timeout_seconds": 3_600,
+            "mcp_max_code_length": 2_000_000,
+            "mcp_max_file_size_bytes": 100 * 1024 * 1024,
+            "mcp_artifact_ttl_seconds": 30 * 24 * 3600,
+        }
+        name = f"SANDBOX_{str(info.field_name).upper()}"
+        return _positive_int_field(
+            value,
+            name=name,
+            minimum=1,
+            maximum=maxima[str(info.field_name)],
         )
 
     @field_validator("internal_drain_timeout_seconds", mode="before")

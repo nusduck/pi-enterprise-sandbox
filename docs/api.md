@@ -553,7 +553,9 @@ Conversation 只组织消息，不拥有 Workspace。一个 Conversation 一期�
 
 ### MCP (Model Context Protocol)
 
-Sandbox 不再暴露或代理 MCP 路由。Agent Runtime 的 MCP Connection Manager 直接连接外部 MCP Gateway/Server，并在进程启动时对每个 `enabled=true` 的 `MCP_SERVERS_JSON` 条目执行 `tools/list`。发现的工具直接注册为 `mcp__{serverId}__{toolName}`，并默认走 approval；配置不支持热加载。任一启用 Server 不可连接时，Agent `GET /ready` 返回 503，避免将故障静默降级为没有 MCP 工具。
+Agent Runtime 的 MCP Connection Manager 仍直接连接外部 MCP Gateway/Server，并在进程启动时对每个 `enabled=true` 的 `MCP_SERVERS_JSON` 条目执行 `tools/list`。发现的工具直接注册为 `mcp__{serverId}__{toolName}`，并默认走 approval；配置不支持热加载。任一启用 Server 不可连接时，Agent `GET /ready` 返回 503，避免将故障静默降级为没有 MCP 工具。
+
+另外，Sandbox 模块提供独立部署的 `sandbox-mcp` Streamable HTTP 服务（`/mcp`），用于不经过 Agent 的受限 Python、文件和 Artifact 工作流。它不是 Sandbox API 的公开路由，且 MCP 进程不挂载任何 Sandbox 存储卷；详细部署与认证边界见 [`sandbox-mcp.md`](./sandbox-mcp.md)。
 
 ---
 

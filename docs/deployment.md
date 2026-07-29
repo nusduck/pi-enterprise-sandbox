@@ -106,6 +106,9 @@ Child monitor codes: `workspace_quota_exceeded`,
 图中 Redis 连接属于 Agent 的队列/lease/stream 协调；Sandbox 只使用独立
 的 replay Redis 保存 internal HMAC jti。外部 MCP 由 Agent 的
 pi-mcp-adapter 直连，不经过 Sandbox，也不与 Sandbox replay Redis 共用凭据。
+若部署独立的 `sandbox-mcp`，它同样不经过 Agent：只使用服务 Redis 的专用
+key 前缀保存 `context_id` 映射，并通过 Sandbox 私有桥接执行。见
+[`sandbox-mcp.md`](./sandbox-mcp.md)。
 
 ## 环境变量
 
