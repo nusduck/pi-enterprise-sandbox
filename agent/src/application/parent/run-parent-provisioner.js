@@ -92,12 +92,20 @@ export class RunParentProvisioner {
     if (typeof opts?.generateId !== 'function') {
       throw new Error('RunParentProvisioner requires generateId()');
     }
+    // Parent row locks (FOR UPDATE) and concurrent default-agent creation both
+    // require a knex transaction/executor. Silently skipping the lock is a
+    // landmine (triage A3); fail closed at construction instead.
+    if (!opts?.db || typeof opts.db !== 'function') {
+      throw new Error(
+        'RunParentProvisioner requires db (knex transaction or connection) for parent row locks',
+      );
+    }
     this.repos = repos;
     this.generateId = opts.generateId;
     this.now = opts.now ?? (() => new Date());
     this.defaultProvider = opts.defaultProvider ?? DEFAULT_EXTERNAL_PROVIDER;
-    /** Optional knex executor for parent row locks. */
-    this.db = opts.db ?? null;
+    /** Knex executor for parent row locks (required). */
+    this.db = opts.db;
   }
 
   /**
@@ -115,11 +123,10 @@ export class RunParentProvisioner {
   }
 
   /**
-   * Lock organization row when an executor is available.
+   * Lock organization row (required for concurrent default-agent creation).
    * @param {string} orgId
    */
   async #lockOrganization(orgId) {
-    if (!this.db || typeof this.db !== 'function') return;
     await this.db('organizations').where({ org_id: orgId }).forUpdate().first();
   }
 

@@ -13,6 +13,10 @@ from sandbox.app.domain.tool_request_hash import (
     ToolRequestHashError,
     compute_tool_request_hash_v1,
 )
+from sandbox.security.internal_auth import (
+    InternalAuthError,
+    assert_request_hash_matches_claim,
+)
 from sandbox.security.path_validation import validate_formal_id
 
 JS_MAX_SAFE_INTEGER = 9_007_199_254_740_991
@@ -227,14 +231,20 @@ def parse_and_bind_internal_execution(
         (trace_id, "trace_id"),
         (tool_execution_id, "tool_execution_id"),
         (tool_call_id, "tool_call_id"),
-        (request_hash, "request_hash"),
     )
     for body_value, claim_key in claim_pairs:
         _exact_str(body_value, claims, claim_key)
     if claims.get("execution_fence_token") != fence:
         _fail("EXECUTION_CLAIM_MISMATCH", "execution_fence_token mismatch")
-    if claims.get("request_hash_version") != request_hash_version:
-        _fail("EXECUTION_CLAIM_MISMATCH", "request_hash_version mismatch")
+    # JWT request_hash is format-only at the HTTP layer; bind + recompute here.
+    try:
+        assert_request_hash_matches_claim(
+            claims,
+            request_hash,
+            body_request_hash_version=request_hash_version,
+        )
+    except InternalAuthError as exc:
+        _fail("EXECUTION_CLAIM_MISMATCH", str(exc) or "request_hash mismatch")
 
     if tool_name == "bash":
         command = root["command"]

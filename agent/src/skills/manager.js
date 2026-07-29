@@ -9,6 +9,7 @@ import {
 } from './paths.js';
 import { installSkill, editSkillFile, listInstalledSkills } from './install.js';
 import { emitSkillAudit } from './audit.js';
+import { assertExtensionsLoadedClean } from '../infrastructure/pi/pi-runtime-factory.js';
 
 export const SKILLS_MODE = Object.freeze({
   READONLY: 'readonly',
@@ -200,6 +201,14 @@ export function createSkillManager(options = {}) {
           await session.reload();
         } else if (session?.resourceLoader && typeof session.resourceLoader.reload === 'function') {
           await session.resourceLoader.reload();
+        }
+        // Fail-closed: session.reload()/resourceLoader.reload() rebuild the
+        // extension runtime in place without going through PiRuntimeFactory's
+        // bind path, so re-run the same fail-closed assertion here. If the
+        // enterprise-policy (or any other) extension factory errored during
+        // this reload, surface it as a failure instead of reporting success.
+        if (session?.resourceLoader) {
+          assertExtensionsLoadedClean({ resourceLoader: session.resourceLoader }, session);
         }
         const skills =
           session?.resourceLoader?.getSkills?.()?.skills ||

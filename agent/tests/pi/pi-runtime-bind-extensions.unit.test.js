@@ -200,6 +200,94 @@ describe('PiRuntimeFactory bindExtensions', () => {
     assert.equal(disposed, 1);
   });
 
+  it('fails closed on rebind (fork/newSession/switchSession) when extension load errors appear', async () => {
+    let bindCalls = 0;
+    const fakeSession = {
+      bindExtensions: async () => {
+        bindCalls += 1;
+      },
+      abort: () => {},
+    };
+
+    const factory = new PiRuntimeFactory({
+      agentDir: '/tmp/agent-dir',
+      sessionAdapter: {
+        createNew: async () => ({ sessionManager: {}, sessionDir: null }),
+        dispose: async () => {},
+      },
+      loadSdk: async () => ({
+        VERSION: PINNED_PI_SDK_VERSION,
+        createAgentSessionServices: async () => ({
+          diagnostics: [],
+          resourceLoader: {
+            getExtensions: () => ({ extensions: [], errors: [] }),
+          },
+        }),
+        createAgentSessionFromServices: async () => ({ session: fakeSession }),
+        createAgentSessionRuntime: async (createRuntime, opts) => {
+          const built = await createRuntime({
+            cwd: opts.cwd,
+            agentDir: opts.agentDir,
+            sessionManager: opts.sessionManager,
+          });
+          return {
+            session: built.session,
+            services: built.services,
+            setRebindSession(fn) {
+              this._rebind = fn;
+            },
+            dispose: async () => {},
+          };
+        },
+      }),
+    });
+
+    const managed = await factory.create({
+      agentDir: '/tmp/agent-dir',
+      agentVersion: {
+        agentVersionId: VER,
+        piSdkVersion: PINNED_PI_SDK_VERSION,
+        configJson: {
+          extensions: [
+            'sandbox-bridge',
+            'enterprise-policy',
+            'observability',
+          ],
+        },
+      },
+      model: fullModel(),
+      agentSession: { agentSessionId: SESS },
+      cwd: '/ws',
+      sessionManager: {},
+      extensionFactories: createEnterpriseExtensionBundle(RUN_CTX),
+    });
+
+    assert.equal(bindCalls, 1);
+
+    // Simulate what AgentSessionRuntime.apply() does internally on
+    // fork()/newSession()/switchSession(): swap in a fresh `services` whose
+    // resource loader now reports an extension load error, then invoke the
+    // rebind hook the vendor SDK calls afterward (finishSessionReplacement).
+    managed.runtime.services = {
+      diagnostics: [],
+      resourceLoader: {
+        getExtensions: () => ({
+          extensions: [],
+          errors: [{ path: 'enterprise-policy', error: 'boom' }],
+        }),
+      },
+    };
+
+    await assert.rejects(
+      () => managed.runtime._rebind(),
+      /fail-closed|PI_EXTENSION_LOAD_FAILED/,
+    );
+    // The policy gate must not silently rebind once load errors are present.
+    assert.equal(bindCalls, 1);
+
+    await managed.dispose();
+  });
+
   it('per-create extensionFactories do not leak across creates', async () => {
     /** @type {unknown[][]} */
     const seen = [];

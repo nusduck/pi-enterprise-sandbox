@@ -168,7 +168,17 @@ def normalize_authoritative_user_id(raw: Any) -> str | None:
 
 
 class _UnconfiguredProcessRepository:
-    """Read-empty port used before lifecycle installs formal MySQL authority."""
+    """Permanent read-empty stub for ``ProcessManager.repository``.
+
+    NOTE: unlike ``_formal`` (installed via :meth:`ProcessManager.set_formal_repository`
+    during lifespan startup), nothing ever replaces this object — it is not a
+    temporary bootstrap placeholder. Terminal process rows/logs evicted from
+    the in-memory maps are gone for good from this manager's read paths
+    (``get`` / ``logs`` / ``list_by_session`` / ``list_by_run``); there is no
+    durable process log store to rehydrate from. This is a deliberate product
+    decision (live-only is sufficient for chat UX), not a pending wiring gap —
+    do not "fix" it by building a new persistence store.
+    """
 
     db = None
 
@@ -348,6 +358,8 @@ class ProcessManager:
         isolation_backend: IsolationBackend | None = None,
         formal_dual_writer: FormalProcessDualWriter | None = None,
     ) -> None:
+        # Intentionally never reassigned (see _UnconfiguredProcessRepository
+        # docstring): reads for evicted terminal processes are always empty.
         self.repository = _UnconfiguredProcessRepository()
         self._stream = (
             stream_hub if stream_hub is not None else transient_execution_stream
@@ -486,6 +498,25 @@ class ProcessManager:
             raise RuntimeError("process persistence is not installed")
         self._formal.upsert_from_runtime(entry)
 
+    def _persist_reap_soft(self, process_id: str, entry: dict[str, Any]) -> None:
+        """Best-effort persist from the reaper thread — must never block completion.
+
+        By the time the reaper runs, the OS-level process has already exited;
+        there is nothing left to fail closed on. Unlike :meth:`_persist` on the
+        start/cancel paths, a persistence error here must not stop the terminal
+        state from finalizing in memory or the matching ``_done_events`` entry
+        from being set — otherwise callers blocked in :meth:`wait` hang for the
+        full wait timeout even though the process is already done. Log and
+        swallow instead.
+        """
+        try:
+            self._persist(entry)
+        except Exception:
+            logger.exception(
+                "reap: persist failed for %s; finalizing in-memory only",
+                process_id,
+            )
+
     def set_formal_repository(
         self,
         repo: Any | None,
@@ -534,8 +565,11 @@ class ProcessManager:
     def _evict_terminal_if_needed(self) -> None:
         """Bound terminal in-memory maps; active processes are never evicted.
 
-        Must be called with ``self._lock`` held. Terminal status/logs remain in
-        the authoritative DB and can be rehydrated on demand via :meth:`get`.
+        Must be called with ``self._lock`` held. Live-only by design: a
+        formal store may have durably recorded the terminal write, but
+        ``self.repository`` (used by :meth:`get` / :meth:`logs` for reads) is
+        a permanent no-op, so once an entry is dropped here it cannot be
+        rehydrated — callers will see it as not found.
         """
         self._refresh_limits_from_settings()
 
@@ -1307,7 +1341,7 @@ class ProcessManager:
                 entry["updated_at"] = _now_iso()
                 if not entry.get("finished_at"):
                     entry["finished_at"] = entry["updated_at"]
-                self._persist(entry)
+                self._persist_reap_soft(process_id, entry)
                 self._done_events[process_id].set()
                 # Still emit terminal for SSE if not already (timeout/cancel may have)
                 terminal_entry = dict(entry)
@@ -1317,7 +1351,7 @@ class ProcessManager:
                 now = _now_iso()
                 entry["finished_at"] = now
                 entry["updated_at"] = now
-                self._persist(entry)
+                self._persist_reap_soft(process_id, entry)
                 self._cancel_requested.discard(process_id)
                 self._done_events[process_id].set()
                 terminal_entry = dict(entry)
@@ -1332,7 +1366,7 @@ class ProcessManager:
                 now = _now_iso()
                 entry["finished_at"] = now
                 entry["updated_at"] = now
-                self._persist(entry)
+                self._persist_reap_soft(process_id, entry)
                 self._cancel_requested.discard(process_id)
                 self._done_events[process_id].set()
                 terminal_entry = dict(entry)
@@ -1343,7 +1377,7 @@ class ProcessManager:
                 now = _now_iso()
                 entry["finished_at"] = now
                 entry["updated_at"] = now
-                self._persist(entry)
+                self._persist_reap_soft(process_id, entry)
                 self._cancel_requested.discard(process_id)
                 self._done_events[process_id].set()
                 terminal_entry = dict(entry)
@@ -1353,7 +1387,7 @@ class ProcessManager:
                 now = _now_iso()
                 entry["finished_at"] = now
                 entry["updated_at"] = now
-                self._persist(entry)
+                self._persist_reap_soft(process_id, entry)
                 self._cancel_requested.discard(process_id)
                 self._done_events[process_id].set()
                 terminal_entry = dict(entry)
@@ -1528,10 +1562,12 @@ class ProcessManager:
             mem = self._entries.get(process_id)
             if mem is not None:
                 return self._public_view(mem)
+        # self.repository is a permanent no-op (see _UnconfiguredProcessRepository);
+        # this always returns None, so the process is reported not-found below.
+        # Retained for interface symmetry, not as a functioning DB fallback.
         row = self.repository.get(process_id)
         if row is None:
             return None
-        # Terminal rows: serve from authoritative DB without re-growing memory maps.
         if _is_terminal(row.get("status")):
             return self._public_view(row)
         with self._lock:
@@ -1624,7 +1660,9 @@ class ProcessManager:
                 log_total = 0
                 buf = None
 
-        # After terminal eviction (or restart), rebuild from DB snapshots.
+        # self.repository is a permanent no-op, so this never actually finds a
+        # row after eviction (live-only by design) — retained dead branch, not
+        # a functioning DB snapshot rebuild. See _UnconfiguredProcessRepository.
         if buf is None:
             row = self.repository.get(process_id)
             if row is not None:
@@ -2121,7 +2159,9 @@ class ProcessManager:
                 for e in self._entries.values()
                 if e.get("session_id") == session_id and _is_active(e.get("status"))
             ]
-        # Also pull from DB in case entries were not in memory
+        # self.repository is a permanent no-op (always []), so this never adds
+        # anything beyond in-memory candidates. Retained dead branch, not a
+        # functioning DB fallback — see _UnconfiguredProcessRepository.
         try:
             for row in self.repository.list_by_session(session_id):
                 if _is_active(row.get("status")):

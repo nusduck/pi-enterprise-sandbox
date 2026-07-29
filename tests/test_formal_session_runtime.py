@@ -5,14 +5,18 @@ from __future__ import annotations
 from contextlib import contextmanager
 from typing import Any
 
+import dataclasses
+
 import pytest
 
 from sandbox.app.domain.types import SandboxSessionRecord
+from sandbox.app.persistence.errors import NotFoundError
 from sandbox.services.formal_session_runtime import (
     FormalSessionRuntime,
     SessionProvisioningError,
     parse_session_ensure_body,
 )
+from sandbox.services.workspace_manager import WorkspaceCleanupError
 
 ORG = "01K0G2PAV8FPMVC9QHJG7JPN50"
 USER = "01K0G2PAV8FPMVC9QHJG7JPN52"
@@ -99,6 +103,27 @@ class OwnerRepo(Repo):
             return None
         if scope.org_id != self.record.org_id or scope.user_id != self.record.user_id:
             return None
+        return self.record
+
+    def update_status(
+        self,
+        _conn: Any,
+        session_id: str,
+        scope: Any,
+        *,
+        status: str,
+        closed_at: Any = None,
+    ) -> SandboxSessionRecord:
+        if (
+            self.record is None
+            or self.record.sandbox_session_id != session_id
+            or scope.org_id != self.record.org_id
+            or scope.user_id != self.record.user_id
+        ):
+            raise NotFoundError("Sandbox session not found")
+        self.record = dataclasses.replace(
+            self.record, status=status, closed_at=str(closed_at)
+        )
         return self.record
 
 
@@ -225,3 +250,102 @@ def test_body_parser_rejects_non_exact_objects(raw: bytes) -> None:
     with pytest.raises(SessionProvisioningError) as exc:
         parse_session_ensure_body(raw)
     assert exc.value.code == "SESSION_BODY_INVALID"
+
+
+class _ResolveConn(Conn):
+    """Conn whose fetchone() satisfies resolve_owned's parent-binding read."""
+
+    def fetchone(self) -> dict[str, str] | None:
+        return {"conversation_id": CONV, "last_run_id": None}
+
+
+def _owned_repo() -> OwnerRepo:
+    repo = OwnerRepo()
+    repo.record = SandboxSessionRecord(
+        sandbox_session_id=SANDBOX_SESSION,
+        org_id=ORG,
+        user_id=USER,
+        agent_session_id=AGENT_SESSION,
+        workspace_id=WORKSPACE,
+        status="ACTIVE",
+        created_at="2026-07-18T00:00:00Z",
+        updated_at="2026-07-18T00:00:00Z",
+    )
+    return repo
+
+
+# ── remove_owned (D2 triage: conversation delete triggers workspace GC) ────
+
+
+def test_remove_owned_removes_workspace_and_closes_session(monkeypatch) -> None:
+    repo = _owned_repo()
+    conn = _ResolveConn()
+    runtime = FormalSessionRuntime(db=Db(conn), repository=repo)  # type: ignore[arg-type]
+    removed: list[str] = []
+    monkeypatch.setattr(
+        "sandbox.services.formal_session_runtime.workspace_manager.remove_workspace",
+        removed.append,
+    )
+
+    result = runtime.remove_owned(SANDBOX_SESSION, org_id=ORG, user_id=USER)
+
+    assert result is True
+    assert removed == [WORKSPACE]
+    assert repo.record.status == "CLOSED"
+    assert repo.record.closed_at is not None
+
+
+def test_remove_owned_is_idempotent_when_nothing_owned(monkeypatch) -> None:
+    repo = OwnerRepo()  # no record — never provisioned / already removed
+    conn = Conn()
+    runtime = FormalSessionRuntime(db=Db(conn), repository=repo)  # type: ignore[arg-type]
+    removed: list[str] = []
+    monkeypatch.setattr(
+        "sandbox.services.formal_session_runtime.workspace_manager.remove_workspace",
+        removed.append,
+    )
+
+    result = runtime.remove_owned(SANDBOX_SESSION, org_id=ORG, user_id=USER)
+
+    assert result is False
+    # Never owned under this scope: must not touch the filesystem, and must
+    # not leak existence via a different outcome than "nothing to remove".
+    assert removed == []
+
+
+def test_remove_owned_hides_cross_tenant_session(monkeypatch) -> None:
+    repo = _owned_repo()
+    conn = _ResolveConn()
+    runtime = FormalSessionRuntime(db=Db(conn), repository=repo)  # type: ignore[arg-type]
+    removed: list[str] = []
+    monkeypatch.setattr(
+        "sandbox.services.formal_session_runtime.workspace_manager.remove_workspace",
+        removed.append,
+    )
+
+    result = runtime.remove_owned(SANDBOX_SESSION, org_id=ORG, user_id=USER_2)
+
+    assert result is False
+    assert removed == []
+    assert repo.record.status == "ACTIVE"  # untouched
+
+
+def test_remove_owned_leaves_binding_open_when_cleanup_fails(monkeypatch) -> None:
+    repo = _owned_repo()
+    conn = _ResolveConn()
+    runtime = FormalSessionRuntime(db=Db(conn), repository=repo)  # type: ignore[arg-type]
+
+    def _fail(_workspace_id: str) -> None:
+        raise WorkspaceCleanupError("rmtree failed")
+
+    monkeypatch.setattr(
+        "sandbox.services.formal_session_runtime.workspace_manager.remove_workspace",
+        _fail,
+    )
+
+    with pytest.raises(WorkspaceCleanupError):
+        runtime.remove_owned(SANDBOX_SESSION, org_id=ORG, user_id=USER)
+
+    # Binding must not be closed when physical cleanup failed — a retry needs
+    # to find it still ACTIVE so it can repair the directory.
+    assert repo.record.status == "ACTIVE"

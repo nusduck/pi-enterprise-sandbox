@@ -186,6 +186,21 @@ export function createSandboxClient({ traceId = null, traceState = null, auth = 
       return resp.json();
     },
 
+    /**
+     * Remove a SandboxSession's physical workspace (idempotent GC).
+     * Triggered by Agent conversation delete/archive (D2 triage: no
+     * separate legal-hold requirement — Sandbox disk is deleted when its
+     * owning conversation is deleted). A session that was never provisioned
+     * or already removed is not an error — Sandbox reports `removed: false`.
+     * @param {string} sessionId sandbox_session_id (AgentSession-bound)
+     */
+    async removeSessionWorkspace(sessionId) {
+      const resp = await sbFetch(`/sessions/${encodeURIComponent(sessionId)}`, {
+        method: 'DELETE',
+      });
+      return resp.json();
+    },
+
     // ── Conversation ───────────────────────────────
     async listConversations() {
       const resp = await sbFetch('/conversations');
@@ -641,6 +656,10 @@ export async function createSession(callerId = 'pi-coding-agent', extra = {}) {
 
 export async function getSession(sessionId) {
   return createSandboxClient().getSession(sessionId);
+}
+
+export async function removeSessionWorkspace(sessionId, auth = null) {
+  return createSandboxClient({ auth }).removeSessionWorkspace(sessionId);
 }
 
 export async function listConversations(auth = null) {

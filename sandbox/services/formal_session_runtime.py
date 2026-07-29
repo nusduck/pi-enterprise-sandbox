@@ -5,9 +5,11 @@ from __future__ import annotations
 import json
 from collections.abc import Mapping
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Any
 
 from sandbox.app.domain.types import OwnerScope, SandboxSessionRecord
+from sandbox.app.persistence.errors import NotFoundError
 from sandbox.app.persistence.repositories.session_repository import SessionRepository
 from sandbox.security.path_validation import validate_formal_id
 from sandbox.services.workspace_manager import workspace_manager
@@ -244,6 +246,60 @@ class FormalSessionRuntime:
                 status=503,
             ) from exc
         return record
+
+    def remove_owned(
+        self,
+        sandbox_session_id: str,
+        *,
+        org_id: str,
+        user_id: str,
+    ) -> bool:
+        """Idempotently remove an owned SandboxSession's physical workspace.
+
+        Triggered by Agent conversation delete/archive (D2 triage: no
+        separate legal-hold requirement — delete-on-delete). Also reachable
+        from AgentSession/SandboxSession close.
+
+        Returns ``False`` when there was nothing owned to remove — missing,
+        already removed, or belonging to another tenant (no existence leak,
+        mirrors :meth:`resolve_owned`). That is success, not error: repeated
+        or late-arriving cleanup calls must never fail the caller.
+
+        ``WorkspaceCleanupError`` propagates uncaught — the SandboxSession
+        binding is intentionally left open (not marked CLOSED) so a retry
+        can repair the physical directory before anything reuses the id.
+        """
+        session = self.resolve_owned(
+            sandbox_session_id, org_id=org_id, user_id=user_id
+        )
+        if session is None:
+            return False
+
+        # Propagates WorkspaceCleanupError untouched — binding stays open.
+        workspace_manager.remove_workspace(session.workspace_id)
+
+        scope = OwnerScope(org_id=org_id, user_id=user_id)
+        try:
+            with self.db.connection() as conn:
+                self.repository.update_status(
+                    conn,
+                    session.session_id,
+                    scope,
+                    status="CLOSED",
+                    closed_at=datetime.now(timezone.utc),
+                )
+                conn.commit()
+        except NotFoundError:
+            # Removed/closed concurrently between resolve_owned() and here —
+            # the workspace is already gone, which is the goal either way.
+            pass
+        except Exception as exc:
+            raise SessionProvisioningError(
+                "SESSION_PERSISTENCE_FAILED",
+                "Session persistence unavailable",
+                status=503,
+            ) from exc
+        return True
 
     @staticmethod
     def _same_binding(

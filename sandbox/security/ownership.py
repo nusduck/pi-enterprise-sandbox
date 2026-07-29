@@ -11,6 +11,7 @@ Cross-user / cross-org access returns 404 (no existence leak).
 
 from __future__ import annotations
 
+import hmac
 from dataclasses import dataclass
 from typing import Any
 
@@ -49,7 +50,7 @@ def _service_token_valid(request: Request) -> bool:
     if not settings.api_token:
         return False
     token = request.headers.get(settings.api_token_header, "")
-    return bool(token) and token == settings.api_token
+    return bool(token) and hmac.compare_digest(token, settings.api_token)
 
 
 def _actor_from_jwt(request: Request) -> Actor | None:
@@ -250,6 +251,10 @@ def require_owned_session(session_id: str, request: Request | None = None) -> An
       1. Require end-user actor (401 if missing)
       2. Load session (404 if missing)
       3. assert_session_owner (404 if not permitted)
+
+    Auth-off (``SANDBOX_AUTH_ENABLED=false``) is **not supported** for formal
+    public session routes: ``require_end_user_actor`` returns None and this
+    helper fails with 503. Deployments must keep owner auth on for these paths.
     """
     if request is None:
         raise HTTPException(status_code=503, detail="Formal session runtime unavailable")
@@ -263,6 +268,7 @@ def require_owned_session(session_id: str, request: Request | None = None) -> An
         raise HTTPException(status_code=503, detail="Formal session runtime unavailable")
     actor = require_end_user_actor(request)
     if actor is None:
+        # Auth-off is unsupported for formal public session routes (triage D3).
         raise HTTPException(
             status_code=503,
             detail="Formal public session access requires owner authentication",

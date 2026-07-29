@@ -12,7 +12,7 @@ import {
   FIXED_AUTH,
 } from './helpers/fake-run-world.js';
 
-function createService(world, sessionProvisioner = null) {
+function createService(world, sessionProvisioner = null, extraDeps = {}) {
   return new ConversationService({
     transactionManager: world.transactionManager,
     createRepositories: world.createRepositories,
@@ -20,6 +20,7 @@ function createService(world, sessionProvisioner = null) {
     generateId: world.generateId,
     now: () => new Date('2026-07-18T06:00:00.000Z'),
     sessionProvisioner,
+    ...extraDeps,
   });
 }
 
@@ -134,6 +135,69 @@ describe('ConversationService MySQL authority', () => {
       }),
       OwnerScopedNotFoundError,
     );
+  });
+
+  it('cleans up bound Sandbox workspaces on delete (D2: conversation delete triggers Sandbox GC)', async () => {
+    const world = createFakeRunWorld();
+    const removeCalls = [];
+    const clientCalls = [];
+    const createSandboxClient = (opts) => {
+      clientCalls.push(opts);
+      return {
+        async removeSessionWorkspace(sessionId) {
+          removeCalls.push(sessionId);
+          return { sessionId, removed: true };
+        },
+      };
+    };
+    const service = createService(world, null, { createSandboxClient });
+
+    const created = await service.create(FIXED_AUTH, { title: 'to delete' });
+    const boundAgentSession = world.tables.agent_sessions.find(
+      (row) => row.conversation_id === created.id,
+    );
+    assert.ok(boundAgentSession, 'conversation must have a bound AgentSession');
+
+    await service.delete(created.id, FIXED_AUTH);
+
+    assert.deepEqual(removeCalls, [boundAgentSession.sandbox_session_id]);
+    assert.equal(clientCalls.length, 1);
+    assert.equal(clientCalls[0].auth.actingRole, 'user');
+    assert.ok(clientCalls[0].auth.actingUserId);
+    assert.ok(clientCalls[0].auth.actingOrganizationId);
+    // Never forward the browser-supplied JWT as Sandbox ownership — only the
+    // internal owner-scoped org/user ids resolved for this conversation.
+    assert.equal(clientCalls[0].auth.authorization, undefined);
+  });
+
+  it('archives the conversation even when Sandbox workspace cleanup fails (fail-soft)', async () => {
+    const world = createFakeRunWorld();
+    const errors = [];
+    const createSandboxClient = () => ({
+      async removeSessionWorkspace() {
+        throw new Error('sandbox unreachable');
+      },
+    });
+    const logger = { error: (...args) => errors.push(args.join(' ')) };
+    const service = createService(world, null, { createSandboxClient, logger });
+
+    const created = await service.create(FIXED_AUTH, { title: 'flaky cleanup' });
+
+    await service.delete(created.id, FIXED_AUTH);
+
+    assert.equal(world.tables.conversations[0].status, 'archived');
+    assert.equal(errors.length, 1);
+    assert.match(errors[0], /Sandbox workspace cleanup failed/);
+  });
+
+  it('skips Sandbox cleanup silently when no client is configured (dev/test default)', async () => {
+    const world = createFakeRunWorld();
+    const service = createService(world); // no createSandboxClient dep
+
+    const created = await service.create(FIXED_AUTH, { title: 'no sandbox client' });
+    await service.delete(created.id, FIXED_AUTH);
+
+    assert.equal(world.tables.conversations[0].status, 'archived');
   });
 
   it('rejects titles outside the schema limit before writing', async () => {

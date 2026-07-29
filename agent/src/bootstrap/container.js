@@ -1080,6 +1080,12 @@ export class ServiceContainer {
       db: this.knex,
     });
     const sessionProvisioner = await this.createSandboxSessionProvisioner();
+    // Owner-scoped Sandbox HTTP client factory (X-API-Key + X-Acting-*), same
+    // transport ProcessAccessService already uses — not the internal HMAC
+    // plane (that's run-fenced; conversation delete has no run/fence token).
+    const { createSandboxClient } = await import(
+      '../infrastructure/sandbox/sandbox-client.js'
+    );
     const conversationService = new ConversationService({
       transactionManager: tx,
       createRepositories,
@@ -1087,6 +1093,7 @@ export class ServiceContainer {
       generateId: this.generateId,
       now: this.now,
       sessionProvisioner,
+      createSandboxClient,
     });
     const approvalQueryService = new ApprovalQueryService({
       createRepositories,

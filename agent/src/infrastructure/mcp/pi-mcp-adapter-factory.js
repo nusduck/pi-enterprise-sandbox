@@ -42,6 +42,17 @@ export class PiMcpAdapterError extends Error {
 export const PI_MCP_ADAPTER_PACKAGE = 'pi-mcp-adapter';
 export const PINNED_PI_MCP_ADAPTER_VERSION = '2.11.0';
 
+/** Parallel discovery workers (A5): avoid one hung server blocking all others. */
+export const MCP_DISCOVERY_DEFAULT_CONCURRENCY = 4;
+/** Overall discovery budget for process readiness (A5). */
+export const MCP_DISCOVERY_DEFAULT_OVERALL_TIMEOUT_MS = 60_000;
+/** Per-server discovery hard cap (A5); min()'d with server requestTimeoutMs. */
+export const MCP_DISCOVERY_DEFAULT_PER_SERVER_TIMEOUT_MS = 15_000;
+/** Bound args JSON size before MCP dispatch (A4). */
+export const MCP_TOOL_ARGS_MAX_JSON_BYTES = 256 * 1024;
+/** Bound result JSON size after await, before deep redact (A4). */
+export const MCP_TOOL_RESULT_MAX_JSON_BYTES = 1024 * 1024;
+
 const require = createRequire(import.meta.url);
 const SECRET_REF_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const SERVER_ID_PATTERN = /^[A-Za-z0-9._-]+$/;
@@ -319,14 +330,154 @@ export function createEnvironmentSecretResolver(env = process.env) {
 }
 
 /**
+ * Race a promise against a hard timeout (clears timer on settle).
+ * @template T
+ * @param {Promise<T>} promise
+ * @param {number} timeoutMs
+ * @param {string} label
+ * @returns {Promise<T>}
+ */
+function withTimeout(promise, timeoutMs, label) {
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) return promise;
+  let timer;
+  return new Promise((resolve, reject) => {
+    timer = setTimeout(() => {
+      reject(
+        new PiMcpAdapterError(`${label} timed out after ${timeoutMs}ms`, {
+          code: 'MCP_DISCOVERY_TIMEOUT',
+        }),
+      );
+    }, timeoutMs);
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error) => {
+        clearTimeout(timer);
+        reject(error);
+      },
+    );
+  });
+}
+
+/**
+ * Bounded parallel map (fixed worker pool).
+ * @template T, R
+ * @param {readonly T[]} items
+ * @param {number} concurrency
+ * @param {(item: T, index: number) => Promise<R>} fn
+ * @returns {Promise<R[]>}
+ */
+async function mapPool(items, concurrency, fn) {
+  /** @type {R[]} */
+  const results = new Array(items.length);
+  let next = 0;
+  const workers = Math.max(1, Math.min(concurrency, items.length));
+  await Promise.all(
+    Array.from({ length: workers }, async () => {
+      while (true) {
+        const index = next;
+        next += 1;
+        if (index >= items.length) return;
+        results[index] = await fn(items[index], index);
+      }
+    }),
+  );
+  return results;
+}
+
+/**
+ * Lightweight JSON Schema subset validation for MCP tool args (A4).
+ * Supports type, required, properties, additionalProperties:false, enum,
+ * and nested object/array. Intentionally small — no $ref / allOf.
+ *
+ * @param {unknown} schema
+ * @param {unknown} value
+ * @param {string} [path]
+ */
+export function assertMcpToolArgsAgainstSchema(schema, value, path = 'args') {
+  if (schema == null || typeof schema !== 'object' || Array.isArray(schema)) {
+    return;
+  }
+  const s = /** @type {Record<string, unknown>} */ (schema);
+  const types = s.type == null ? null : Array.isArray(s.type) ? s.type : [s.type];
+  if (types) {
+    const ok = types.some((t) => {
+      if (t === 'object') return value != null && typeof value === 'object' && !Array.isArray(value);
+      if (t === 'array') return Array.isArray(value);
+      if (t === 'string') return typeof value === 'string';
+      if (t === 'number') return typeof value === 'number' && Number.isFinite(value);
+      if (t === 'integer') return typeof value === 'number' && Number.isInteger(value);
+      if (t === 'boolean') return typeof value === 'boolean';
+      if (t === 'null') return value === null;
+      return true;
+    });
+    if (!ok) {
+      throw new PiMcpAdapterError(`${path} does not match inputSchema type`, {
+        code: 'MCP_TOOL_ARGUMENTS_INVALID',
+      });
+    }
+  }
+  if (Array.isArray(s.enum) && !s.enum.includes(value)) {
+    throw new PiMcpAdapterError(`${path} is not an allowed enum value`, {
+      code: 'MCP_TOOL_ARGUMENTS_INVALID',
+    });
+  }
+  if (value != null && typeof value === 'object' && !Array.isArray(value)) {
+    const obj = /** @type {Record<string, unknown>} */ (value);
+    const required = Array.isArray(s.required) ? s.required : [];
+    for (const key of required) {
+      if (!(String(key) in obj)) {
+        throw new PiMcpAdapterError(`${path}.${key} is required`, {
+          code: 'MCP_TOOL_ARGUMENTS_INVALID',
+        });
+      }
+    }
+    const properties =
+      s.properties != null && typeof s.properties === 'object' && !Array.isArray(s.properties)
+        ? /** @type {Record<string, unknown>} */ (s.properties)
+        : null;
+    if (properties) {
+      for (const [key, child] of Object.entries(properties)) {
+        if (key in obj) {
+          assertMcpToolArgsAgainstSchema(child, obj[key], `${path}.${key}`);
+        }
+      }
+      if (s.additionalProperties === false) {
+        for (const key of Object.keys(obj)) {
+          if (!(key in properties)) {
+            throw new PiMcpAdapterError(`${path}.${key} is not allowed`, {
+              code: 'MCP_TOOL_ARGUMENTS_INVALID',
+            });
+          }
+        }
+      }
+    }
+  }
+  if (Array.isArray(value) && s.items != null) {
+    for (let i = 0; i < value.length; i += 1) {
+      assertMcpToolArgsAgainstSchema(s.items, value[i], `${path}[${i}]`);
+    }
+  }
+}
+
+/**
  * Discover tools for every enabled deployment server once during process
  * startup.  The returned logical config is deliberately process-scoped: a
  * changed MCP_SERVERS_JSON requires an Agent restart and is never hot-loaded.
+ *
+ * Discovery is parallel with a bounded concurrency and hard overall timeout
+ * so one hung command-based server cannot block Agent readiness for minutes
+ * (triage A5).
  *
  * @param {{
  *   serverRegistry?: unknown,
  *   secretResolver?: (ref: string) => unknown | Promise<unknown>,
  *   cwd?: string,
+ *   concurrency?: number,
+ *   overallTimeoutMs?: number,
+ *   perServerTimeoutMs?: number,
  * }} [options]
  */
 export async function discoverEnabledMcpServers(options = {}) {
@@ -342,95 +493,159 @@ export async function discoverEnabledMcpServers(options = {}) {
     });
   }
 
+  const concurrency = Math.max(
+    1,
+    Math.min(
+      16,
+      Number.isFinite(options.concurrency)
+        ? Number(options.concurrency)
+        : MCP_DISCOVERY_DEFAULT_CONCURRENCY,
+    ),
+  );
+  const overallTimeoutMs = Math.max(
+    1_000,
+    Number.isFinite(options.overallTimeoutMs)
+      ? Number(options.overallTimeoutMs)
+      : MCP_DISCOVERY_DEFAULT_OVERALL_TIMEOUT_MS,
+  );
+  const perServerTimeoutMs = Math.max(
+    500,
+    Number.isFinite(options.perServerTimeoutMs)
+      ? Number(options.perServerTimeoutMs)
+      : MCP_DISCOVERY_DEFAULT_PER_SERVER_TIMEOUT_MS,
+  );
+
   const McpServerManager = loadPinnedAdapterConnectionManager();
   const manager = new McpServerManager(options.cwd);
   const secretResolver =
     options.secretResolver ?? createEnvironmentSecretResolver(process.env);
-  const servers = [];
 
-  try {
-    for (const server of enabled) {
-      try {
-        /** @type {Record<string, unknown>} */
-        const definition = {
-          ...(server.url ? { url: server.url } : {}),
-          ...(server.command
-            ? {
-                command: server.command,
-                args: [...server.args],
-                ...(server.cwd ? { cwd: server.cwd } : {}),
-              }
-            : {}),
-          lifecycle: 'eager',
-          directTools: false,
-          exposeResources: false,
-          requestTimeoutMs: server.timeoutMs ?? 60_000,
-          debug: false,
-        };
-        const env = {};
-        for (const [name, ref] of Object.entries(server.envRefs)) {
-          env[name] = await resolveSecretValue(ref, secretResolver);
-        }
-        if (Object.keys(env).length > 0) definition.env = env;
-        const headers = {};
-        for (const [name, ref] of Object.entries(server.headerRefs)) {
-          headers[name] = await resolveSecretValue(ref, secretResolver);
-        }
-        if (Object.keys(headers).length > 0) definition.headers = headers;
-        if (server.authTokenRef) {
-          definition.auth = 'bearer';
-          definition.bearerToken = await resolveSecretValue(
-            server.authTokenRef,
-            secretResolver,
-          );
-        } else {
-          definition.auth = false;
-        }
-
-        // McpServerManager.connect performs MCP initialization and tools/list
-        // (including pagination) before it resolves successfully.
-        const connection = await manager.connect(server.serverId, definition);
-        if (connection.status !== 'connected') {
-          throw new PiMcpAdapterError(
-            `MCP server ${server.serverId} requires interactive authentication`,
-            { code: 'MCP_SERVER_AUTH_REQUIRED' },
-          );
-        }
-        const toolNames = [...new Set(
-          (connection.tools ?? [])
-            .map((tool) => String(tool?.name ?? '').trim())
-            .filter((name) => MCP_TOOL_NAME_PATTERN.test(name) && !name.startsWith('mcp__')),
-        )].sort();
-        const rejectedToolCount = (connection.tools ?? []).length - toolNames.length;
-        servers.push(
-          Object.freeze({
-            serverId: server.serverId,
-            status: 'connected',
-            toolNames: Object.freeze(toolNames),
-            toolCount: toolNames.length,
-            rejectedToolCount,
-            error: null,
-          }),
+  /**
+   * @param {ReturnType<typeof loadMcpServerRegistry> extends Map<string, infer V> ? V : never} server
+   */
+  async function discoverOne(server) {
+    try {
+      /** @type {Record<string, unknown>} */
+      const definition = {
+        ...(server.url ? { url: server.url } : {}),
+        ...(server.command
+          ? {
+              command: server.command,
+              args: [...server.args],
+              ...(server.cwd ? { cwd: server.cwd } : {}),
+            }
+          : {}),
+        lifecycle: 'eager',
+        directTools: false,
+        exposeResources: false,
+        requestTimeoutMs: Math.min(server.timeoutMs ?? 60_000, perServerTimeoutMs),
+        debug: false,
+      };
+      const env = {};
+      for (const [name, ref] of Object.entries(server.envRefs)) {
+        env[name] = await resolveSecretValue(ref, secretResolver);
+      }
+      if (Object.keys(env).length > 0) definition.env = env;
+      const headers = {};
+      for (const [name, ref] of Object.entries(server.headerRefs)) {
+        headers[name] = await resolveSecretValue(ref, secretResolver);
+      }
+      if (Object.keys(headers).length > 0) definition.headers = headers;
+      if (server.authTokenRef) {
+        definition.auth = 'bearer';
+        definition.bearerToken = await resolveSecretValue(
+          server.authTokenRef,
+          secretResolver,
         );
-      } catch (error) {
-        const rawMessage =
-          error instanceof Error ? error.message : 'MCP discovery failed';
-        const safeMessage = redactPayload(
-          { message: rawMessage.slice(0, 512) },
-          { maxString: 512 },
-        ).message;
-        servers.push(
-          Object.freeze({
-            serverId: server.serverId,
-            status: 'unreachable',
-            toolNames: Object.freeze([]),
-            toolCount: 0,
-            rejectedToolCount: 0,
-            error: typeof safeMessage === 'string' ? safeMessage : 'MCP discovery failed',
-          }),
+      } else {
+        definition.auth = false;
+      }
+
+      // McpServerManager.connect performs MCP initialization and tools/list
+      // (including pagination) before it resolves successfully.
+      const connection = await withTimeout(
+        manager.connect(server.serverId, definition),
+        Math.min(server.timeoutMs ?? 60_000, perServerTimeoutMs),
+        `MCP discovery ${server.serverId}`,
+      );
+      if (connection.status !== 'connected') {
+        throw new PiMcpAdapterError(
+          `MCP server ${server.serverId} requires interactive authentication`,
+          { code: 'MCP_SERVER_AUTH_REQUIRED' },
         );
       }
+      /** @type {Record<string, unknown>} */
+      const toolInputSchemas = {};
+      const toolNames = [];
+      for (const tool of connection.tools ?? []) {
+        const name = String(tool?.name ?? '').trim();
+        if (!MCP_TOOL_NAME_PATTERN.test(name) || name.startsWith('mcp__')) continue;
+        toolNames.push(name);
+        if (tool?.inputSchema != null && typeof tool.inputSchema === 'object') {
+          toolInputSchemas[name] = tool.inputSchema;
+        }
+      }
+      const uniqueNames = [...new Set(toolNames)].sort();
+      const rejectedToolCount = (connection.tools ?? []).length - uniqueNames.length;
+      return Object.freeze({
+        serverId: server.serverId,
+        status: 'connected',
+        toolNames: Object.freeze(uniqueNames),
+        toolInputSchemas: Object.freeze(toolInputSchemas),
+        toolCount: uniqueNames.length,
+        rejectedToolCount,
+        error: null,
+      });
+    } catch (error) {
+      const rawMessage =
+        error instanceof Error ? error.message : 'MCP discovery failed';
+      const safeMessage = redactPayload(
+        { message: rawMessage.slice(0, 512) },
+        { maxString: 512 },
+      ).message;
+      return Object.freeze({
+        serverId: server.serverId,
+        status: 'unreachable',
+        toolNames: Object.freeze([]),
+        toolInputSchemas: Object.freeze({}),
+        toolCount: 0,
+        rejectedToolCount: 0,
+        error: typeof safeMessage === 'string' ? safeMessage : 'MCP discovery failed',
+      });
     }
+  }
+
+  /** @type {Awaited<ReturnType<typeof discoverOne>>[]} */
+  let servers = [];
+  /** Partial results if overall budget expires mid-flight. */
+  const partialById = new Map();
+  try {
+    servers = await withTimeout(
+      mapPool(enabled, concurrency, async (server) => {
+        const result = await discoverOne(server);
+        partialById.set(server.serverId, result);
+        return result;
+      }),
+      overallTimeoutMs,
+      'MCP discovery overall',
+    );
+  } catch (error) {
+    // Overall budget exceeded: keep whatever finished, mark the rest unreachable.
+    const msg =
+      error instanceof Error ? error.message.slice(0, 512) : 'MCP discovery timed out';
+    servers = enabled.map((server) => {
+      const done = partialById.get(server.serverId);
+      if (done) return done;
+      return Object.freeze({
+        serverId: server.serverId,
+        status: 'unreachable',
+        toolNames: Object.freeze(/** @type {string[]} */ ([])),
+        toolInputSchemas: Object.freeze({}),
+        toolCount: 0,
+        rejectedToolCount: 0,
+        error: msg,
+      });
+    });
   } finally {
     await manager.closeAll().catch(() => {});
   }
@@ -440,6 +655,7 @@ export async function discoverEnabledMcpServers(options = {}) {
     Object.freeze({
       serverId: server.serverId,
       enabledTools: server.toolNames,
+      toolInputSchemas: server.toolInputSchemas,
       toolPolicy: Object.freeze({ default: 'require_approval' }),
       timeoutSec: Math.max(
         1,
@@ -641,12 +857,19 @@ async function buildVendorConfig(
     }
 
     mcpServers[logical.serverId] = vendor;
+    const schemas =
+      logical.toolInputSchemas != null &&
+      typeof logical.toolInputSchemas === 'object' &&
+      !Array.isArray(logical.toolInputSchemas)
+        ? /** @type {Record<string, unknown>} */ (logical.toolInputSchemas)
+        : null;
     for (const toolName of logical.enabledTools) {
       tools.push(
         Object.freeze({
           serverId: logical.serverId,
           toolName,
           name: mcpToolName(logical.serverId, toolName),
+          inputSchema: schemas?.[toolName] ?? null,
         }),
       );
     }
@@ -801,6 +1024,15 @@ export function createMcpExtensionsOverride(binding) {
         promptSnippet: `MCP tool ${mapping.name}`,
         parameters: Type.Object({}, { additionalProperties: true }),
         async execute(toolCallId, params, signal, onUpdate, context) {
+          // A4: reject non-object args early; optional JSON Schema when known.
+          if (params != null && (typeof params !== 'object' || Array.isArray(params))) {
+            throw new PiMcpAdapterError('MCP tool arguments must be a plain object', {
+              code: 'MCP_TOOL_ARGUMENTS_INVALID',
+            });
+          }
+          if (mapping.inputSchema) {
+            assertMcpToolArgsAgainstSchema(mapping.inputSchema, params ?? {});
+          }
           let args;
           try {
             args = JSON.stringify(params ?? {});
@@ -808,6 +1040,11 @@ export function createMcpExtensionsOverride(binding) {
             throw new PiMcpAdapterError('MCP tool arguments are not JSON serializable', {
               code: 'MCP_TOOL_ARGUMENTS_INVALID',
               cause: error,
+            });
+          }
+          if (Buffer.byteLength(args, 'utf8') > MCP_TOOL_ARGS_MAX_JSON_BYTES) {
+            throw new PiMcpAdapterError('MCP tool arguments exceed size limit', {
+              code: 'MCP_TOOL_ARGUMENTS_TOO_LARGE',
             });
           }
           const safeUpdate =
@@ -826,6 +1063,25 @@ export function createMcpExtensionsOverride(binding) {
             safeUpdate,
             context,
           );
+          // Bound result size before deep redact (A4): still fully buffered by
+          // the vendor proxy, but reject multi-megabyte payloads early.
+          let serialized;
+          try {
+            serialized = JSON.stringify(result);
+          } catch (error) {
+            throw new PiMcpAdapterError('MCP tool result is not JSON serializable', {
+              code: 'MCP_TOOL_RESULT_INVALID',
+              cause: error,
+            });
+          }
+          if (
+            typeof serialized === 'string' &&
+            Buffer.byteLength(serialized, 'utf8') > MCP_TOOL_RESULT_MAX_JSON_BYTES
+          ) {
+            throw new PiMcpAdapterError('MCP tool result exceeds size limit', {
+              code: 'MCP_TOOL_RESULT_TOO_LARGE',
+            });
+          }
           // MCP is outside the trust boundary. Its result is model-visible, so
           // sanitize both structured credential fields and credentials embedded
           // in free text before Pi receives it.
@@ -952,6 +1208,61 @@ export async function resolveMcpBinding(mcpServers, options = {}) {
 }
 
 /**
+ * Restrict an AgentVersion's declared mcpServers/enabledTools to the
+ * intersection with the deployment registry's discovered surface. The
+ * registry is the connectivity catalog (what CAN be reached); the
+ * AgentVersion's declaration can only narrow that surface, never widen it.
+ * Servers the AgentVersion references that are absent from the registry
+ * surface are dropped rather than granted.
+ *
+ * @param {ReadonlyArray<ReturnType<typeof loadMcpConfig>[number]>} declared
+ * @param {ReadonlyArray<ReturnType<typeof loadMcpConfig>[number]>} registrySurface
+ */
+function intersectMcpConfigWithRegistry(declared, registrySurface) {
+  const bySurfaceId = new Map(
+    registrySurface.map((server) => [server.serverId, server]),
+  );
+  const out = [];
+  for (const server of declared) {
+    const surfaced = bySurfaceId.get(server.serverId);
+    if (!surfaced) continue;
+    const allowedTools = new Set(surfaced.enabledTools);
+    const enabledTools = Object.freeze(
+      server.enabledTools.filter((tool) => allowedTools.has(tool)),
+    );
+    // Prefer discovery schemas (registry surface) for allowed tools.
+    const surfaceSchemas =
+      surfaced.toolInputSchemas != null &&
+      typeof surfaced.toolInputSchemas === 'object'
+        ? /** @type {Record<string, unknown>} */ (surfaced.toolInputSchemas)
+        : null;
+    const declaredSchemas =
+      server.toolInputSchemas != null && typeof server.toolInputSchemas === 'object'
+        ? /** @type {Record<string, unknown>} */ (server.toolInputSchemas)
+        : null;
+    /** @type {Record<string, unknown> | null} */
+    let toolInputSchemas = null;
+    if (surfaceSchemas || declaredSchemas) {
+      /** @type {Record<string, unknown>} */
+      const merged = {};
+      for (const tool of enabledTools) {
+        if (surfaceSchemas?.[tool] != null) merged[tool] = surfaceSchemas[tool];
+        else if (declaredSchemas?.[tool] != null) merged[tool] = declaredSchemas[tool];
+      }
+      toolInputSchemas = Object.freeze(merged);
+    }
+    out.push(
+      Object.freeze({
+        ...server,
+        enabledTools,
+        toolInputSchemas,
+      }),
+    );
+  }
+  return Object.freeze(out);
+}
+
+/**
  * Build the per-create resolver consumed by PiRuntimeFactory.
  *
  * @param {{
@@ -968,11 +1279,27 @@ export function createPiMcpResolver(options = {}) {
   const registry = loadMcpServerRegistry(options.serverRegistry ?? []);
   const defaultMcpServers = loadMcpConfig(options.defaultMcpServers ?? []);
   const resolver = async function resolveForRuntime(input) {
+    // The deployment registry's discovered surface (defaultMcpServers) is the
+    // connectivity catalog. When it is empty (no discovery wired), defer to
+    // whatever the caller requested, unchanged. When it is populated: an
+    // AgentVersion that declares its own mcpServers/enabledTools allowlist is
+    // ALWAYS intersected with that surface -- it must never inherit the full
+    // registry just because the registry happens to be non-empty. Re-derive
+    // the declaration from the raw AgentVersion (not `input.mcpServers`,
+    // which the caller may have already collapsed to the registry default)
+    // so an absent/null declaration -- nothing to restrict to -- still
+    // inherits the full surface.
+    const declaredMcpServers = loadMcpConfigFromAgentVersion(
+      input.agentVersion ?? null,
+    );
+    const mcpServers =
+      defaultMcpServers.length === 0
+        ? input.mcpServers
+        : declaredMcpServers.length > 0
+          ? intersectMcpConfigWithRegistry(declaredMcpServers, defaultMcpServers)
+          : defaultMcpServers;
     return createPiMcpAdapter({
-      // Phase 1 deployment registry is the default MCP authority.  When it
-      // has discovered enabled servers, AgentVersion need not repeat them.
-      mcpServers:
-        defaultMcpServers.length > 0 ? defaultMcpServers : input.mcpServers,
+      mcpServers,
       serverRegistry: [...registry.values()].map((entry) => ({
         id: entry.serverId,
         enabled: entry.enabled,

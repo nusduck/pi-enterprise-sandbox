@@ -7,7 +7,12 @@ Public contract uses opaque ``workspace_id`` + relative tool paths only
 Ownership (PR-07A / plan §2.6):
 
 - Exactly one AgentSession owns one Workspace.
-- Lifecycle follows AgentSession / Sandbox Session close — never Conversation.
+- Physical removal (``remove_workspace``) is triggered by AgentSession /
+  Sandbox Session close **and** by Agent conversation delete/archive (D2
+  triage decision: conversation delete is the disk-GC trigger; there is no
+  separate legal-hold requirement). See
+  ``sandbox.services.formal_session_runtime.FormalSessionRuntime.remove_owned``
+  and ``DELETE /sessions/{session_id}`` (``sandbox.routers.session_workspace``).
 - Agent-visible ``/home/sandbox/workspace`` is a per-execution Bubblewrap bind.
 - Global mutable presentation symlinks are forbidden and fully removed.
 """

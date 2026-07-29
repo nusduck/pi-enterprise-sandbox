@@ -162,11 +162,12 @@ export class AgentCatalogRepository {
     const updated = toMysqlDateTime(
       input.updatedAt || input.createdAt || this.now(),
     );
+    const name = input.name.trim();
     try {
       await this.db('agent_definitions').insert({
         agent_id: agentId,
         org_id: orgId,
-        name: input.name.trim(),
+        name,
         description: input.description ?? null,
         status: input.status ?? 'active',
         active_version_id: input.activeVersionId
@@ -178,6 +179,18 @@ export class AgentCatalogRepository {
       });
     } catch (err) {
       if (isDuplicateKeyError(err)) {
+        // uk_agent_definitions_org_name (org_id, name) or primary key collision.
+        const msg = String(/** @type {{ message?: string }} */ (err)?.message || '');
+        if (
+          msg.includes('uk_agent_definitions_org_name') ||
+          msg.includes("for key 'org_id'") ||
+          msg.includes('org_id_name')
+        ) {
+          throw new ConflictError('Agent definition name conflict', {
+            resource: 'agent_definitions',
+            id: `${orgId}:${name}`,
+          });
+        }
         throw new ConflictError('Agent definition id conflict', {
           resource: 'agent_definitions',
           id: agentId,

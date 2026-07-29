@@ -18,6 +18,7 @@ from sandbox.security.internal_auth import (
     SIGNATURE_SEGMENT_MAX_BYTES,
     TOKEN_MAX_BYTES,
     InternalAuthError,
+    assert_request_hash_matches_claim,
     verify_internal_request,
     verify_internal_token,
 )
@@ -145,6 +146,38 @@ def test_good_handcrafted_token_and_request_binding() -> None:
     value = token()
     assert verify(value)["run_id"] == "run_1"
     assert verify_request(value)["tool_execution_id"] == "tool_execution_1"
+
+
+def test_assert_request_hash_matches_claim_constant_time_bind() -> None:
+    """request_hash is format-only at JWT verify; domain contracts bind it."""
+    good = claims()
+    assert_request_hash_matches_claim(
+        good,
+        good["request_hash"],
+        body_request_hash_version=1,
+    )
+    with pytest.raises(InternalAuthError) as err:
+        assert_request_hash_matches_claim(good, "b" * 64)
+    assert err.value.code == "INTERNAL_REQUEST_HASH"
+    with pytest.raises(InternalAuthError) as err:
+        assert_request_hash_matches_claim(
+            good,
+            good["request_hash"],
+            body_request_hash_version=2,
+        )
+    assert err.value.code == "INTERNAL_REQUEST_HASH"
+
+
+def test_verify_internal_request_accepts_mismatched_request_hash_claim() -> None:
+    """HTTP layer binds body_sha256 only; request_hash is deferred to contracts.
+
+    A well-formed but wrong request_hash must still pass verify_internal_request
+    when body_sha256 matches — domain parsers are responsible for binding it.
+    """
+    wrong_rh = claims(request_hash="c" * 64)
+    verified = verify_request(token(wrong_rh))
+    assert verified["request_hash"] == "c" * 64
+    assert verified["body_sha256"] == hashlib.sha256(BODY).hexdigest()
 
 
 def test_pre_run_session_ensure_is_the_only_null_run_fence_profile() -> None:

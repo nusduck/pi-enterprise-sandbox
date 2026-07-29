@@ -769,6 +769,11 @@ export class PiRuntimeFactory {
           { code: 'PI_BIND_EXTENSIONS_MISSING' },
         );
       }
+      // Fail-closed on every (re)bind, not just initial creation: fork()/
+      // newSession()/switchSession() rebind through this same helper via
+      // runtime.setRebindSession(), and must not silently continue if the
+      // resource loader recorded extension load errors.
+      assertExtensionsLoadedClean(runtimeHost?.services, session);
       const extensionBindings = buildExtensionBindings({
         mode: this.extensionMode,
         abortHandler:

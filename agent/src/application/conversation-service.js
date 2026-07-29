@@ -16,6 +16,11 @@ import { assertUlid, isUlid } from '../domain/shared/ulid.js';
 
 const MAX_CREATE_ATTEMPTS = 3;
 
+function sanitizeError(error) {
+  const message = error instanceof Error ? error.message : String(error || 'Unknown error');
+  return message.replace(/[\x00-\x1F\x7F]/g, ' ').slice(0, 1000) || 'Unknown error';
+}
+
 function normalizeTitle(value) {
   if (value != null && typeof value !== 'string') {
     throw new ValidationError('title must be a string');
@@ -152,6 +157,8 @@ export class ConversationService {
  *   generateId: () => string,
  *   now?: () => Date,
  *   sessionProvisioner?: { ensure: Function } | null,
+ *   createSandboxClient?: (opts: { auth?: object }) => { removeSessionWorkspace: Function } | null,
+ *   logger?: { error: Function },
  * }} deps
    */
   constructor(deps) {
@@ -170,6 +177,11 @@ export class ConversationService {
     this.generateId = deps.generateId;
     this.now = deps.now ?? (() => new Date());
     this.sessionProvisioner = deps.sessionProvisioner ?? null;
+    // Owner-scoped Sandbox HTTP client factory (D2: conversation delete
+    // triggers Sandbox workspace GC). Optional — delete() still archives
+    // the conversation when unset (dev/test), it just skips Sandbox cleanup.
+    this.createSandboxClient = deps.createSandboxClient ?? null;
+    this.logger = deps.logger ?? console;
   }
 
   async #resolveOwner(auth, repos = this.createRepositories(this.db)) {
@@ -319,9 +331,11 @@ export class ConversationService {
       throw new ValidationError('conversationId must be a ULID');
     }
     const id = assertUlid(conversationId, 'conversationId');
-    return this.tx.run(async (trx) => {
+    let owner = null;
+    let boundSessions = [];
+    await this.tx.run(async (trx) => {
       const repos = this.createRepositories(trx);
-      const owner = await this.#resolveOwner(auth, repos);
+      owner = await this.#resolveOwner(auth, repos);
       const current = await repos.conversations.getById(id, owner, {
         forUpdate: true,
       });
@@ -332,7 +346,52 @@ export class ConversationService {
         });
       }
       await repos.conversations.archive(id, owner, this.now());
+      // Snapshot every Sandbox session ever bound to this conversation while
+      // still inside the owner-scoped transaction. The actual Sandbox HTTP
+      // cleanup happens after commit — never hold a DB transaction open
+      // across an outbound network call.
+      boundSessions =
+        typeof repos.sessions?.listByConversation === 'function'
+          ? await repos.sessions.listByConversation(id, owner)
+          : [];
     });
+    // D2 triage: conversation delete/archive triggers Sandbox workspace GC.
+    // Fail-soft by design — the conversation is already archived above, so a
+    // Sandbox outage must never turn into a failed user-facing delete.
+    await this.#cleanupSandboxWorkspaces(auth, owner, boundSessions);
+  }
+
+  /**
+   * Best-effort Sandbox workspace removal for every AgentSession ever bound
+   * to a just-archived conversation. Never throws: logs and continues so one
+   * unreachable/failing session never blocks cleanup of the others, and
+   * Sandbox being down never surfaces as a failed conversation delete.
+   * @param {object} auth
+   * @param {{ orgId: string, userId: string } | null} owner
+   * @param {Array<{ sandboxSessionId: string }>} sessions
+   */
+  async #cleanupSandboxWorkspaces(auth, owner, sessions) {
+    if (!owner || !sessions?.length || typeof this.createSandboxClient !== 'function') {
+      return;
+    }
+    const sandbox = this.createSandboxClient({
+      auth: {
+        actingUserId: owner.userId,
+        actingOrganizationId: owner.orgId,
+        actingRole: auth?.role || 'user',
+      },
+    });
+    if (!sandbox || typeof sandbox.removeSessionWorkspace !== 'function') return;
+    for (const session of sessions) {
+      try {
+        await sandbox.removeSessionWorkspace(session.sandboxSessionId);
+      } catch (err) {
+        this.logger.error(
+          `[conversation-service] Sandbox workspace cleanup failed for ` +
+            `sandboxSessionId=${session.sandboxSessionId}: ${sanitizeError(err)}`,
+        );
+      }
+    }
   }
 
   async ensureSession(auth, input = {}) {

@@ -10,6 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from sandbox.config import settings
 from sandbox.mcp.runtime import ControlPlaneError, mcp_sandbox_runtime
+from sandbox.security.internal_http_auth import read_bounded_raw_body
 from sandbox.security.mcp_internal_auth import require_mcp_internal_auth
 
 router = APIRouter(prefix="/internal/mcp/v1", tags=["mcp-internal"])
@@ -73,26 +74,14 @@ async def _parse_payload(
 ) -> _RequestModel:
     """Read exactly one bounded JSON body before Pydantic touches it.
 
-    FastAPI's normal body model parsing buffers an entire request first.  These
-    private routes accept caller-sized text/code, so enforce the cap while
-    streaming rather than trusting Content-Length (which may be missing/false).
+    Reuses the shared internal-plane body reader so MCP-internal routes get the
+    same fail-closed Content-Length / stream caps as HMAC internal routes
+    (duplicate CL rejection, strict ASCII-decimal CL, body longer than CL, etc.).
+    Shared helper raises HTTPException 400/413 with compact public details.
     """
-    content_length = request.headers.get("content-length")
-    if content_length:
-        try:
-            if int(content_length) > max_bytes:
-                raise HTTPException(status_code=413, detail="Request body too large")
-        except ValueError:
-            raise HTTPException(status_code=400, detail="Invalid request") from None
-    chunks: list[bytes] = []
-    total = 0
-    async for chunk in request.stream():
-        total += len(chunk)
-        if total > max_bytes:
-            raise HTTPException(status_code=413, detail="Request body too large")
-        chunks.append(chunk)
+    raw = await read_bounded_raw_body(request, max_bytes=max_bytes)
     try:
-        return model_type.model_validate_json(b"".join(chunks))
+        return model_type.model_validate_json(raw)
     except ValidationError as exc:
         raise HTTPException(status_code=400, detail="Invalid request") from exc
 

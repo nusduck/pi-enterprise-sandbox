@@ -17,10 +17,13 @@ import {
   createPiMcpAdapter,
   createMcpExtensionsOverride,
   createEnvironmentSecretResolver,
+  createPiMcpResolver,
   loadMcpServerRegistry,
+  assertMcpToolArgsAgainstSchema,
   PiMcpAdapterError,
   PI_MCP_ADAPTER_PACKAGE,
   PINNED_PI_MCP_ADAPTER_VERSION,
+  MCP_TOOL_ARGS_MAX_JSON_BYTES,
   resolvePiMcpAdapterPackage,
 } from '../../src/infrastructure/mcp/pi-mcp-adapter-factory.js';
 import { mkdtempSync, readFileSync, statSync } from 'node:fs';
@@ -372,6 +375,109 @@ describe('pi-mcp-adapter-factory', () => {
     assert.match(resolved.extensionPath, /pi-mcp-adapter\/index\.ts$/);
   });
 
+  it('intersects an AgentVersion allowlist with a populated registry surface (never inherits the full surface)', async () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), 'mcp-intersect-test-'));
+    try {
+      const resolver = createPiMcpResolver({
+        serverRegistry: [
+          { id: 'db', command: 'mock-mcp' },
+          { id: 'other', command: 'mock-mcp' },
+        ],
+        // Discovered deployment surface: db has 3 tools, other has 1.
+        defaultMcpServers: [
+          { serverId: 'db', enabledTools: ['query', 'describe_table', 'admin_drop'] },
+          { serverId: 'other', enabledTools: ['x'] },
+        ],
+        runtimeRoot: path.join(root, 'runtime'),
+        packageResolver: async () => ({
+          version: PINNED_PI_MCP_ADAPTER_VERSION,
+          extensionPath: path.join(root, 'index.ts'),
+        }),
+      });
+
+      const binding = await resolver({
+        agentVersion: {
+          configJson: {
+            mcpServers: [
+              // Narrower than the registry surface for `db`.
+              { serverId: 'db', enabledTools: ['query'] },
+              // Not part of the registry surface at all; must be dropped, not
+              // trusted.
+              { serverId: 'not_in_registry', enabledTools: ['whatever'] },
+            ],
+          },
+        },
+        // Whatever the caller resolved upstream must be ignored once the
+        // AgentVersion has its own declaration.
+        mcpServers: [
+          { serverId: 'db', enabledTools: ['query', 'describe_table', 'admin_drop'] },
+          { serverId: 'other', enabledTools: ['x'] },
+        ],
+        agentSession: { agentSessionId: '01K0G2PAV8FPMVC9QHJG7JPN52' },
+        cwd: root,
+        context: { traceId: TRACE_ID },
+      });
+
+      try {
+        assert.equal(binding.enabled, true);
+        assert.deepEqual(
+          binding.config.map((s) => s.serverId),
+          ['db'],
+        );
+        assert.deepEqual([...binding.config[0].enabledTools], ['query']);
+        assert.deepEqual(
+          binding.tools.map((t) => t.name),
+          ['mcp__db__query'],
+        );
+      } finally {
+        await binding.cleanup();
+      }
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('preserves full registry inheritance when AgentVersion declares no allowlist at all', async () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), 'mcp-no-allowlist-test-'));
+    try {
+      const resolver = createPiMcpResolver({
+        serverRegistry: [{ id: 'db', command: 'mock-mcp' }],
+        defaultMcpServers: [
+          { serverId: 'db', enabledTools: ['query', 'describe_table'] },
+        ],
+        runtimeRoot: path.join(root, 'runtime'),
+        packageResolver: async () => ({
+          version: PINNED_PI_MCP_ADAPTER_VERSION,
+          extensionPath: path.join(root, 'index.ts'),
+        }),
+      });
+
+      const binding = await resolver({
+        // No agentVersion.configJson.mcpServers at all: nothing to restrict
+        // to, so the full discovered registry surface applies.
+        agentVersion: { configJson: { systemPrompt: '' } },
+        mcpServers: [
+          { serverId: 'db', enabledTools: ['query', 'describe_table'] },
+        ],
+        agentSession: { agentSessionId: '01K0G2PAV8FPMVC9QHJG7JPN52' },
+        cwd: root,
+        context: { traceId: TRACE_ID },
+      });
+
+      try {
+        assert.equal(binding.enabled, true);
+        assert.deepEqual([...binding.config[0].enabledTools], [
+          'query',
+          'describe_table',
+        ]);
+      } finally {
+        await binding.cleanup();
+      }
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it('new MCP modules do not import legacy McpConnectionManager or call fetch', () => {
     const root = path.resolve(
       path.dirname(fileURLToPath(import.meta.url)),
@@ -407,5 +513,92 @@ describe('pi-mcp-adapter-factory', () => {
       }
     }
     assert.equal(PI_MCP_ADAPTER_PACKAGE, 'pi-mcp-adapter');
+  });
+
+  it('assertMcpToolArgsAgainstSchema validates required/type/enum (A4)', () => {
+    const schema = {
+      type: 'object',
+      required: ['q'],
+      properties: {
+        q: { type: 'string' },
+        limit: { type: 'integer' },
+        mode: { type: 'string', enum: ['a', 'b'] },
+      },
+      additionalProperties: false,
+    };
+    assertMcpToolArgsAgainstSchema(schema, { q: 'ok', limit: 1, mode: 'a' });
+    assert.throws(
+      () => assertMcpToolArgsAgainstSchema(schema, {}),
+      (e) => e instanceof PiMcpAdapterError && e.code === 'MCP_TOOL_ARGUMENTS_INVALID',
+    );
+    assert.throws(
+      () => assertMcpToolArgsAgainstSchema(schema, { q: 1 }),
+      (e) => e.code === 'MCP_TOOL_ARGUMENTS_INVALID',
+    );
+    assert.throws(
+      () => assertMcpToolArgsAgainstSchema(schema, { q: 'ok', extra: true }),
+      (e) => e.code === 'MCP_TOOL_ARGUMENTS_INVALID',
+    );
+    assert.throws(
+      () => assertMcpToolArgsAgainstSchema(schema, { q: 'ok', mode: 'z' }),
+      (e) => e.code === 'MCP_TOOL_ARGUMENTS_INVALID',
+    );
+  });
+
+  it('createMcpExtensionsOverride rejects oversized args before MCP dispatch (A4)', async () => {
+    const extensionPath = path.join(os.tmpdir(), 'mcp-ext-a4.ts');
+    let proxyCalled = false;
+    const base = {
+      extensions: [
+        {
+          resolvedPath: extensionPath,
+          sourceInfo: { path: extensionPath },
+          tools: new Map([
+            [
+              'mcp',
+              {
+                definition: {
+                  async execute() {
+                    proxyCalled = true;
+                    return { content: [{ type: 'text', text: 'ok' }] };
+                  },
+                },
+                sourceInfo: { path: extensionPath },
+              },
+            ],
+          ]),
+        },
+      ],
+    };
+    const override = createMcpExtensionsOverride({
+      extensionPath,
+      tools: [
+        {
+          serverId: 'db',
+          toolName: 'query',
+          name: 'mcp__db__query',
+          inputSchema: {
+            type: 'object',
+            required: ['q'],
+            properties: { q: { type: 'string' } },
+          },
+        },
+      ],
+    });
+    const projected = override(base);
+    const tool = projected.extensions[0].tools.get('mcp__db__query').definition;
+    await assert.rejects(
+      () => tool.execute('tc1', { q: 123 }),
+      (e) => e.code === 'MCP_TOOL_ARGUMENTS_INVALID',
+    );
+    assert.equal(proxyCalled, false);
+    await assert.rejects(
+      () => tool.execute('tc1', { q: 'x'.repeat(MCP_TOOL_ARGS_MAX_JSON_BYTES) }),
+      (e) => e.code === 'MCP_TOOL_ARGUMENTS_TOO_LARGE',
+    );
+    assert.equal(proxyCalled, false);
+    const ok = await tool.execute('tc1', { q: 'hello' });
+    assert.equal(proxyCalled, true);
+    assert.ok(ok);
   });
 });

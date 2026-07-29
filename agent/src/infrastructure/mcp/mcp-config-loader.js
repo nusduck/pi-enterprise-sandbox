@@ -263,6 +263,22 @@ export function loadMcpConfig(raw) {
       }
     }
 
+    /** Optional per-tool JSON Schema from discovery (not AgentVersion config). */
+    let toolInputSchemas = null;
+    if (e.toolInputSchemas != null) {
+      if (
+        typeof e.toolInputSchemas !== 'object' ||
+        Array.isArray(e.toolInputSchemas)
+      ) {
+        throw new McpConfigError(`${path}.toolInputSchemas must be an object map`, {
+          code: 'MCP_CONFIG_SHAPE',
+        });
+      }
+      toolInputSchemas = Object.freeze({
+        .../** @type {Record<string, unknown>} */ (e.toolInputSchemas),
+      });
+    }
+
     out.push(
       Object.freeze({
         serverId,
@@ -270,6 +286,7 @@ export function loadMcpConfig(raw) {
         toolPolicy: Object.freeze({ ...toolPolicy }),
         timeoutSec,
         secretRef,
+        toolInputSchemas,
       }),
     );
   }

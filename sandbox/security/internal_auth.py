@@ -13,8 +13,20 @@ The verifier is intentionally fail-closed:
 * JSON duplicate keys and non-finite numbers are rejected;
 * the header and claims use exact schemas;
 * a ``kid`` selects exactly one injected key; there is no fallback key;
-* the signature, time window, request method/path/body, tool, and scope are
-  all bound before a caller may dispatch work.
+* the signature, time window, HTTP method/path (``htm``/``htu``), raw-body
+  digest (``body_sha256``), tool name, and scope are bound before a caller
+  may dispatch work.
+
+Two digests exist on purpose and must not be conflated:
+
+* ``body_sha256`` — SHA-256 of the exact raw HTTP body bytes. Verified here
+  in :func:`verify_internal_request` against ``raw_body``.
+* ``request_hash`` (v1) — application-level tool-args digest
+  (:mod:`sandbox.app.domain.tool_request_hash`). Format-checked here only;
+  domain contracts recompute it after tool-specific arg normalization and
+  must constant-time-compare the body field + JWT claim (see
+  :func:`assert_request_hash_matches_claim`). This layer never parses JSON,
+  so it cannot honestly recompute ``request_hash``.
 
 Routes and replay protection are separate concerns and are not implemented
 here.
@@ -425,6 +437,38 @@ def verify_internal_token(
     return claims
 
 
+def assert_request_hash_matches_claim(
+    claims: Mapping[str, Any],
+    body_request_hash: str,
+    *,
+    body_request_hash_version: int | None = None,
+) -> None:
+    """Constant-time-bind a domain-parsed body ``requestHash`` to JWT claims.
+
+    Call this from tool contracts after JSON parse / arg normalization. This
+    module never recomputes ``request_hash`` itself (that requires tool-specific
+    canonicalization); domain code must also recompute via
+    :func:`sandbox.app.domain.tool_request_hash.compute_tool_request_hash_v1`
+    when applicable.
+    """
+    if type(body_request_hash) is not str or not _LOWER_SHA256_RE.fullmatch(
+        body_request_hash
+    ):
+        _fail("INTERNAL_REQUEST_HASH", "body request_hash must be lowercase sha256")
+    claim_hash = claims.get("request_hash")
+    if type(claim_hash) is not str or not hmac.compare_digest(
+        body_request_hash, claim_hash
+    ):
+        _fail("INTERNAL_REQUEST_HASH", "body request_hash does not match token")
+    if body_request_hash_version is not None:
+        claim_ver = claims.get("request_hash_version")
+        if claim_ver != body_request_hash_version:
+            _fail(
+                "INTERNAL_REQUEST_HASH",
+                "body request_hash_version does not match token",
+            )
+
+
 def verify_internal_request(
     token: str,
     *,
@@ -444,9 +488,14 @@ def verify_internal_request(
 ) -> dict[str, Any]:
     """Verify a token and bind it to the exact incoming HTTP request.
 
-    Body verification hashes the exact bytes supplied by the HTTP server.  It
-    never parses or reserializes JSON.  ``raw_path`` is compared byte-for-byte
-    as an ASCII string and a non-empty raw query is always rejected.
+    Body verification hashes the exact bytes supplied by the HTTP server
+    (``body_sha256``).  It never parses or reserializes JSON.  ``raw_path`` is
+    compared byte-for-byte as an ASCII string and a non-empty raw query is
+    always rejected.
+
+    ``request_hash`` is intentionally *not* recomputed here: it is the
+    application tool-args digest and is verified by domain contracts after
+    body parse (see :func:`assert_request_hash_matches_claim`).
     """
 
     claims = verify_internal_token(
@@ -517,6 +566,7 @@ __all__ = [
     "PAYLOAD_SEGMENT_MAX_BYTES",
     "REQUEST_HASH_VERSION",
     "SIGNATURE_SEGMENT_MAX_BYTES",
+    "assert_request_hash_matches_claim",
     "TOKEN_MAX_BYTES",
     "verify_internal_request",
     "verify_internal_token",

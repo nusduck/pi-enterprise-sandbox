@@ -85,6 +85,13 @@ const TRANSIENT_MAP_WHITELIST = Object.freeze([
     scope: 'literal',
   },
   {
+    rel: 'infrastructure/mcp/pi-mcp-adapter-factory.js',
+    match: /const\s+bySurfaceId\s*=\s*new\s+Map\s*\(/,
+    purpose:
+      'Function-local serverId index while intersecting an AgentVersion allowlist with the discovered registry surface; per-call, not Run state',
+    scope: 'local',
+  },
+  {
     rel: 'infrastructure/mysql/repositories/trace-span-repository.js',
     match: /const\s+artifactParentRefs\s*=\s*new\s+Map\s*\(/,
     purpose:
@@ -302,7 +309,7 @@ describe('no authoritative in-process Run Map (B3)', () => {
     // Inventory size sanity: every residual Map is explicitly classified.
     assert.equal(
       TRANSIENT_MAP_WHITELIST.length,
-      13,
+      14,
       'whitelist size drift — update STATUS B3 inventory evidence if intentional',
     );
   });
