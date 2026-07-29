@@ -627,22 +627,3 @@ export function listEnabledModels(registry) {
   return [...map.values()].filter((m) => m.enabled);
 }
 
-/** Module-level default registry (lazy, reloaded only on process restart). */
-let _defaultRegistry = null;
-
-/**
- * @param {{ force?: boolean, env?: NodeJS.ProcessEnv | Record<string, string|undefined> }} [opts]
- */
-export function getDefaultRegistry(opts = {}) {
-  if (!_defaultRegistry || opts.force) {
-    _defaultRegistry = buildRegistry({ env: opts.env || process.env });
-  }
-  return _defaultRegistry;
-}
-
-/**
- * Reset cached default registry (tests).
- */
-export function resetDefaultRegistry() {
-  _defaultRegistry = null;
-}

@@ -21,19 +21,6 @@ export const PARALLEL_TOOLS = Object.freeze(
   new Set(['read', 'process_status', 'process_read']),
 );
 
-/** Tools that must run sequentially. */
-export const SEQUENTIAL_TOOLS = Object.freeze(
-  new Set([
-    'write',
-    'edit',
-    'bash',
-    'python',
-    'process_start',
-    'process_kill',
-    'submit_artifact',
-  ]),
-);
-
 export const DEFAULT_READ_LIMIT = 20_000;
 export const MAX_READ_LIMIT = 50_000;
 export const MAX_READ_BYTES = 256 * 1024;
@@ -51,10 +38,8 @@ export const MAX_ENV_KEYS = 32;
 export const MAX_ENV_KEY_LEN = 64;
 export const MAX_ENV_VALUE_LEN = 1_024;
 export const MAX_PATH_LEN = 512;
-export const MAX_ARTIFACT_DESC_LEN = 1_024;
 export const MAX_PROCESS_ID_LEN = 64;
 export const MAX_CURSOR_LEN = 64;
-export const MAX_STDOUT_CAPTURE = 64 * 1024;
 
 /** Logical workspace root (plan). Never a host physical path. */
 export const LOGICAL_WORKSPACE_ROOT = '/home/sandbox/workspace';

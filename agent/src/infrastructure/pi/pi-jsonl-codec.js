@@ -132,14 +132,6 @@ export function serializeJsonlLine(value) {
 }
 
 /**
- * @param {{ header: object, entries: object[] }} payload
- * @returns {{ header: object, entries: object[] }}
- */
-export function normalizePayload(payload) {
-  return validateSnapshotPayload(payload);
-}
-
-/**
  * Fail-closed validation of logical snapshot payload (header + entries).
  * @param {unknown} payload
  * @returns {{ header: Record<string, unknown>, entries: Record<string, unknown>[] }}

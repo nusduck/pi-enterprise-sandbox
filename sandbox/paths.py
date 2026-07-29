@@ -109,9 +109,6 @@ def is_legacy_logical_workspace_path(path: str | None) -> bool:
     )
 
 
-# Backward-compat name used by older call sites during the cutover.
-is_logical_workspace_path = is_legacy_logical_workspace_path
-
 
 def is_logical_skill_path(path: str | None) -> bool:
     if not path:

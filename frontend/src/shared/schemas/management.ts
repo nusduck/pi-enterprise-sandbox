@@ -28,16 +28,6 @@ export const RunListItemSchema = z
   })
   .passthrough();
 
-export const RunListSchema = z.union([
-  z.array(RunListItemSchema),
-  z
-    .object({
-      runs: z.array(RunListItemSchema).optional(),
-      total: z.number().optional(),
-    })
-    .passthrough(),
-]);
-
 // ── Approvals list (GET /api/approvals) ─────────
 
 export const ApprovalListItemSchema = z

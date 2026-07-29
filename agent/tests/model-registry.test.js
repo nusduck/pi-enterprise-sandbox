@@ -2,7 +2,7 @@
  * B7 Model Registry — capability switch, disabled model, usage/cost recording.
  * Run: node --test agent/tests/model-registry.test.js
  */
-import { describe, it, beforeEach } from 'node:test';
+import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { writeFileSync, mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
@@ -17,7 +17,6 @@ import {
   listEnabledModels,
   loadModelsFromFile,
   normalizeModelEntry,
-  resetDefaultRegistry,
   resolveModel,
   toPiModel,
   usageFromProviderResponse,
@@ -63,10 +62,6 @@ describe('normalizeModelEntry', () => {
 });
 
 describe('capability switch', () => {
-  beforeEach(() => {
-    resetDefaultRegistry();
-  });
-
   it('different models expose different context windows and max output', () => {
     const flash = resolveModel('deepseek-v4-flash', {
       registry: buildRegistry({ seed: SEED_MODELS, filePath: null }),

@@ -87,14 +87,6 @@ export function makeRuntimeEvent(
 
 // ── Create-run / rehydrate API shapes ──
 
-export const CreateRunRequestSchema = z
-  .object({
-    conversation_id: z.string().optional().nullable(),
-    session_id: z.string().optional().nullable(),
-    messages: z.array(z.unknown()).optional(),
-  })
-  .passthrough();
-
 export const CreateRunResponseSchema = z
   .object({
     run_id: z.string(),

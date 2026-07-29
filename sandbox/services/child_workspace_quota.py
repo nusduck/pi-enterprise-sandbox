@@ -26,7 +26,6 @@ import threading
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
 
 from sandbox.config import settings
 
@@ -296,15 +295,12 @@ class ChildWorkspaceQuotaWatch:
         temp_path: str | Path | None,
         workspace_id: str | None,
         on_violation: Callable[[ChildQuotaDecision], None] | None = None,
-        on_exceed: Callable[[Any], None] | None = None,
         sample_interval_s: float | None = None,
     ) -> None:
         self._workspace_path = str(workspace_path)
         self._temp_path = str(temp_path) if temp_path else None
         self._workspace_id = (workspace_id or "").strip() or None
-        # Prefer on_violation; on_exceed kept for brief compatibility (usage only).
         self._on_violation = on_violation
-        self._on_exceed = on_exceed
         interval = (
             float(sample_interval_s)
             if sample_interval_s is not None
@@ -372,11 +368,6 @@ class ChildWorkspaceQuotaWatch:
             try:
                 if self._on_violation is not None:
                     self._on_violation(decision)
-                elif self._on_exceed is not None and decision.usage is not None:
-                    self._on_exceed(decision.usage)
-                elif self._on_exceed is not None:
-                    # Enforcement failure: still invoke with a sentinel usage-less path
-                    self._on_exceed(decision)
             except Exception:
                 logger.exception("child quota on_violation failed")
             return

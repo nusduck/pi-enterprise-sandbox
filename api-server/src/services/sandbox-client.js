@@ -94,31 +94,6 @@ export function createSandboxClient({
     clientTraceContext = createClientTraceContext(traceId, traceState);
   }
 
-  function setTraceId(id) {
-    clientTraceId = id || null;
-    if (clientTraceId) {
-      clientTraceContext = createClientTraceContext(clientTraceId, traceState);
-    }
-    return clientTraceId;
-  }
-
-  function getTraceId() {
-    return clientTraceId;
-  }
-
-  function ensureTraceId(preferred) {
-    if (preferred) {
-      clientTraceId = preferred;
-      clientTraceContext = createClientTraceContext(preferred, traceState);
-      return clientTraceId;
-    }
-    if (!clientTraceId) {
-      clientTraceId = createTraceId();
-      clientTraceContext = createClientTraceContext(clientTraceId, traceState);
-    }
-    return clientTraceId;
-  }
-
   function headers(extra = {}) {
     // Drop any client-supplied acting headers from extra (defense in depth)
     const safeExtra = { ...extra };
@@ -217,186 +192,13 @@ export function createSandboxClient({
   };
 
   return {
-    setTraceId,
-    getTraceId,
-    ensureTraceId,
-
-    // ── Session ─────────────────────────────────────
-    async createSession(callerId = 'pi-coding-agent', extra = {}) {
-      const resp = await sbFetch('/sessions', {
-        method: 'POST',
-        body: JSON.stringify({ caller_id: callerId, ...extra }),
-      });
-      return resp.json();
-    },
-
-    async getSession(sessionId) {
-      const resp = await sbFetch(`/sessions/${sessionId}`);
-      return resp.json();
-    },
-
-    // ── Conversation ───────────────────────────────
-    async listConversations() {
-      const resp = await sbFetch('/conversations');
-      return resp.json();
-    },
-
-    async createConversation(title = 'New chat') {
-      const resp = await sbFetch('/conversations', {
-        method: 'POST',
-        body: JSON.stringify({ title }),
-      });
-      return resp.json();
-    },
-
     async getConversation(conversationId) {
       const resp = await sbFetch(`/conversations/${conversationId}`);
       return resp.json();
     },
 
-    async getConversationWorkspace(conversationId) {
-      const resp = await sbFetch(`/conversations/${conversationId}/workspace`);
-      return resp.json();
-    },
-
-    async updateConversation(conversationId, patch = {}) {
-      const resp = await sbFetch(`/conversations/${conversationId}`, {
-        method: 'PATCH',
-        body: JSON.stringify(patch),
-      });
-      return resp.json();
-    },
-
-    async deleteConversation(conversationId) {
-      const resp = await sbFetch(`/conversations/${conversationId}`, {
-        method: 'DELETE',
-      });
-      if (resp.status === 204) return { ok: true };
-      const text = await resp.text();
-      return text ? JSON.parse(text) : { ok: true };
-    },
-
     // PR-13 severe: Sandbox does not expose /agent-runs, /agent-sessions, or
     // /tool-executions. Run/tool ledger authority is Agent MySQL.
-
-    // ── Execution ───────────────────────────────────
-    async executeCommand(sessionId, command, timeout = 120) {
-      const resp = await sbFetch(`/sessions/${sessionId}/executions/command`, {
-        method: 'POST',
-        body: JSON.stringify({ command, timeout }),
-        timeoutMs: timeoutForSeconds(timeout),
-      });
-      return resp.json();
-    },
-
-    async cancelExecution(sessionId, executionId) {
-      const resp = await sbFetch(
-        `/sessions/${sessionId}/executions/${encodeURIComponent(executionId)}/cancel`,
-        { method: 'POST' },
-      );
-      return resp.json();
-    },
-
-    /** Cancel the active running execution for a session (if any). */
-    async cancelActiveExecution(sessionId) {
-      const resp = await sbFetch(`/sessions/${sessionId}/executions/cancel-active`, {
-        method: 'POST',
-      });
-      return resp.json();
-    },
-
-    // ── Files ───────────────────────────────────────
-    async readFile(sessionId, path) {
-      const q = new URLSearchParams({ path });
-      const resp = await sbFetch(`/sessions/${sessionId}/files/read?${q}`);
-      return resp.json();
-    },
-
-    async readFileWithRange(sessionId, path, offset, limit) {
-      const q = new URLSearchParams({ path });
-      if (offset != null) q.set('offset', '' + offset);
-      if (limit != null) q.set('limit', '' + limit);
-      const resp = await sbFetch(`/sessions/${sessionId}/files/read?${q}`);
-      return resp.json();
-    },
-
-    async writeFile(sessionId, path, content) {
-      const resp = await sbFetch(`/sessions/${sessionId}/files/write`, {
-        method: 'POST',
-        body: JSON.stringify({ path, content }),
-      });
-      return resp.json();
-    },
-
-    async listFiles(sessionId, dir = '.') {
-      const q = new URLSearchParams({ path: dir });
-      const resp = await sbFetch(`/sessions/${sessionId}/files?${q}`);
-      return resp.json();
-    },
-
-    /** Structured ls — POST /sessions/{id}/files/ls */
-    async lsFiles(sessionId, body = {}) {
-      const resp = await sbFetch(`/sessions/${sessionId}/files/ls`, {
-        method: 'POST',
-        body: JSON.stringify({
-          path: body.path ?? '.',
-          depth: body.depth ?? 1,
-          include_hidden: Boolean(body.include_hidden),
-        }),
-      });
-      return resp.json();
-    },
-
-    /** Structured find — POST /sessions/{id}/files/find */
-    async findFiles(sessionId, body = {}) {
-      const payload = {
-        path: body.path ?? '.',
-        pattern: body.pattern ?? '*',
-      };
-      if (body.type != null) payload.type = body.type;
-      if (body.max_depth != null) payload.max_depth = body.max_depth;
-      if (body.limit != null) payload.limit = body.limit;
-      const resp = await sbFetch(`/sessions/${sessionId}/files/find`, {
-        method: 'POST',
-        body: JSON.stringify(payload),
-      });
-      return resp.json();
-    },
-
-    /** Structured grep — POST /sessions/{id}/files/grep */
-    async grepFiles(sessionId, body = {}) {
-      const payload = {
-        path: body.path ?? '.',
-        query: body.query,
-        regex: Boolean(body.regex),
-        case_sensitive: body.case_sensitive !== false,
-      };
-      if (body.glob != null) payload.glob = body.glob;
-      if (body.context != null) payload.context = body.context;
-      if (body.limit != null) payload.limit = body.limit;
-      const resp = await sbFetch(`/sessions/${sessionId}/files/grep`, {
-        method: 'POST',
-        body: JSON.stringify(payload),
-      });
-      return resp.json();
-    },
-
-    async downloadFileStream(sessionId, path) {
-      return sbFetch(`/sessions/${sessionId}/files/download?path=${encodeURIComponent(path)}`);
-    },
-
-    // ── Artifacts (submit only — no metadata-only register) ──
-    async submitArtifact(sessionId, name, path, mimeType) {
-      const resp = await sbFetch(`/sessions/${sessionId}/artifacts/submit`, {
-        method: 'POST',
-        body: JSON.stringify({
-          name,
-          path,
-          mime_type: mimeType || 'application/octet-stream',
-        }),
-      });
-      return resp.json();
-    },
 
     async listArtifacts(sessionId) {
       const resp = await sbFetch(`/sessions/${sessionId}/artifacts`);
@@ -409,53 +211,6 @@ export function createSandboxClient({
       const resp = await sbFetch(`/sessions/${sessionId}/artifacts/imports`, {
         method: 'POST',
         body: JSON.stringify(payload),
-      });
-      return resp.json();
-    },
-
-    artifactDownloadPath(sessionId, artifactId) {
-      return `/sessions/${sessionId}/artifacts/${encodeURIComponent(artifactId)}/download`;
-    },
-
-    async downloadArtifactStream(sessionId, artifactId) {
-      return sbFetch(this.artifactDownloadPath(sessionId, artifactId));
-    },
-
-    // ── Datasets (PR-09) ────────────────────────────
-    async listDatasets(sessionId) {
-      const resp = await sbFetch(`/sessions/${sessionId}/datasets`);
-      return resp.json();
-    },
-
-    async getDataset(sessionId, datasetId) {
-      const resp = await sbFetch(
-        `/sessions/${sessionId}/datasets/${encodeURIComponent(datasetId)}`,
-      );
-      return resp.json();
-    },
-
-    datasetUploadPath(sessionId) {
-      return `/sessions/${encodeURIComponent(sessionId)}/datasets`;
-    },
-
-    // ── Approvals ───────────────────────────────────
-    async approvalCheck(sessionId, body) {
-      const resp = await sbFetch(`/sessions/${sessionId}/executions/approval-check`, {
-        method: 'POST',
-        body: JSON.stringify(body),
-      });
-      return resp.json();
-    },
-
-    async getApproval(approvalId) {
-      const resp = await sbFetch(`/approvals/${encodeURIComponent(approvalId)}`);
-      return resp.json();
-    },
-
-    async decideApproval(approvalId, decision) {
-      const resp = await sbFetch('/approve', {
-        method: 'POST',
-        body: JSON.stringify({ approval_id: approvalId, decision }),
       });
       return resp.json();
     },
@@ -497,46 +252,8 @@ export function createSandboxClient({
 
 // ── Module-level helpers (ephemeral client per call — no shared request state) ──
 
-/** Generate or return a preferred trace id without mutating shared state. */
-export function ensureTraceId(preferred) {
-  return preferred || createTraceId();
-}
-
 export function artifactDownloadPath(sessionId, artifactId) {
   return `/sessions/${sessionId}/artifacts/${encodeURIComponent(artifactId)}/download`;
-}
-
-export async function createSession(callerId = 'pi-coding-agent', extra = {}) {
-  return createSandboxClient().createSession(callerId, extra);
-}
-
-export async function getSession(sessionId) {
-  return createSandboxClient().getSession(sessionId);
-}
-
-
-export async function listConversations(auth = null) {
-  return createSandboxClient({ auth }).listConversations();
-}
-
-export async function createConversation(title = 'New chat', auth = null) {
-  return createSandboxClient({ auth }).createConversation(title);
-}
-
-export async function getConversation(conversationId, auth = null) {
-  return createSandboxClient({ auth }).getConversation(conversationId);
-}
-
-export async function getConversationWorkspace(conversationId, auth = null) {
-  return createSandboxClient({ auth }).getConversationWorkspace(conversationId);
-}
-
-export async function updateConversation(conversationId, patch = {}, auth = null) {
-  return createSandboxClient({ auth }).updateConversation(conversationId, patch);
-}
-
-export async function deleteConversation(conversationId, auth = null) {
-  return createSandboxClient({ auth }).deleteConversation(conversationId);
 }
 
 export async function authRegister(body, options = {}) {
@@ -549,82 +266,6 @@ export async function authLogin(body, options = {}) {
 
 export async function authMe(auth = null, options = {}) {
   return createSandboxClient({ ...options, auth }).authMe();
-}
-
-export async function executeCommand(sessionId, command, timeout = 120) {
-  return createSandboxClient().executeCommand(sessionId, command, timeout);
-}
-
-export async function cancelExecution(sessionId, executionId) {
-  return createSandboxClient().cancelExecution(sessionId, executionId);
-}
-
-export async function cancelActiveExecution(sessionId) {
-  return createSandboxClient().cancelActiveExecution(sessionId);
-}
-
-export async function readFile(sessionId, path) {
-  return createSandboxClient().readFile(sessionId, path);
-}
-
-export async function readFileWithRange(sessionId, path, offset, limit) {
-  return createSandboxClient().readFileWithRange(sessionId, path, offset, limit);
-}
-
-export async function writeFile(sessionId, path, content) {
-  return createSandboxClient().writeFile(sessionId, path, content);
-}
-
-export async function listFiles(sessionId, dir = '.') {
-  return createSandboxClient().listFiles(sessionId, dir);
-}
-
-export async function lsFiles(sessionId, body = {}) {
-  return createSandboxClient().lsFiles(sessionId, body);
-}
-
-export async function findFiles(sessionId, body = {}) {
-  return createSandboxClient().findFiles(sessionId, body);
-}
-
-export async function grepFiles(sessionId, body = {}) {
-  return createSandboxClient().grepFiles(sessionId, body);
-}
-
-export async function downloadFileStream(sessionId, path) {
-  return createSandboxClient().downloadFileStream(sessionId, path);
-}
-
-export async function submitArtifact(sessionId, name, path, mimeType) {
-  return createSandboxClient().submitArtifact(sessionId, name, path, mimeType);
-}
-
-export async function listArtifacts(sessionId) {
-  return createSandboxClient().listArtifacts(sessionId);
-}
-
-export async function importArtifact(sessionId, artifactId, targetFilename = null) {
-  return createSandboxClient().importArtifact(
-    sessionId,
-    artifactId,
-    targetFilename,
-  );
-}
-
-export async function downloadArtifactStream(sessionId, artifactId) {
-  return createSandboxClient().downloadArtifactStream(sessionId, artifactId);
-}
-
-export async function approvalCheck(sessionId, body) {
-  return createSandboxClient().approvalCheck(sessionId, body);
-}
-
-export async function getApproval(approvalId) {
-  return createSandboxClient().getApproval(approvalId);
-}
-
-export async function decideApproval(approvalId, decision) {
-  return createSandboxClient().decideApproval(approvalId, decision);
 }
 
 export async function checkHealth() {

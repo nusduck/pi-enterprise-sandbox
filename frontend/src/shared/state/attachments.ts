@@ -5,15 +5,6 @@ import type {
   ChatMessage,
 } from './types';
 
-/** Attachment draft statuses (composer, pre-send). */
-export const ATTACHMENT_STATUSES = Object.freeze([
-  'queued',
-  'uploading',
-  'uploaded',
-  'failed',
-  'removed',
-] as const);
-
 /** Defaults aligned with parent task P-00F1. */
 export const ATTACHMENT_LIMITS: AttachmentLimits = Object.freeze({
   maxCount: 10,

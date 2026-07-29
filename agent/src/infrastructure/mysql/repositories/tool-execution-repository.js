@@ -393,11 +393,6 @@ export function assertPositiveSafeInt(value, field) {
   return value;
 }
 
-/** @deprecated use assertPositiveSafeInt */
-function assertPositiveInt(value, field) {
-  return assertPositiveSafeInt(value, field);
-}
-
 /**
  * @param {Record<string, unknown>} row
  */

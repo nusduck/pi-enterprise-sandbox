@@ -24,9 +24,6 @@ export const SANDBOX_TRANSPORT_METHODS = Object.freeze([
   'submitArtifact',
 ]);
 
-/** Optional methods (skill read). Absence → skill read returns unsupported. */
-export const SANDBOX_TRANSPORT_OPTIONAL = Object.freeze(['readSkill']);
-
 /** String identity fields required on every transport call. */
 export const RUN_TRANSPORT_STRING_IDENTITY_KEYS = Object.freeze([
   'orgId',

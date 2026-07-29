@@ -2,12 +2,8 @@
  * Programmatic Knex migration runner (ESM) — up / down for Agent MySQL schema.
  */
 
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { createMysqlKnex, destroyMysqlKnex, migrationsDirectory } from './client.js';
 import { MysqlConfigError } from './errors.js';
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 /**
  * @param {import('knex').Knex} knex
@@ -136,4 +132,4 @@ export function resolveMysqlUrl(env = process.env) {
   return url;
 }
 
-export { migrationsDirectory, __dirname as mysqlInfrastructureDir };
+export { migrationsDirectory };

@@ -50,20 +50,6 @@ export function toolErr(code, message, details = {}) {
 }
 
 /**
- * @param {unknown} value
- * @param {number} max
- */
-export function truncateText(value, max) {
-  const s = redactInlineSecrets(String(value ?? ''));
-  if (s.length <= max) return { text: s, truncated: false };
-  return {
-    text: `${s.slice(0, max)}…`,
-    truncated: true,
-    bytes: Buffer.byteLength(s, 'utf8'),
-  };
-}
-
-/**
  * Pi-style bounded text output. Unlike the former JSON-string truncation,
  * this always returns valid text plus enough metadata for the model to
  * continue with an offset/cursor or choose a narrower query.

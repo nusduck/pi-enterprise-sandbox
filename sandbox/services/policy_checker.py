@@ -512,10 +512,6 @@ class ToolPolicyChecker:
             return True
         return self._invokes_network_tool(cmd)
 
-    # Back-compat alias (legacy name from sandbox HITL era).
-    def command_requires_approval(self, command: str) -> bool:
-        return self.command_is_elevated(command)
-
     @staticmethod
     def _invokes_network_tool(command: str) -> bool:
         """True when curl/wget/nc/ncat is used as a command verb in a segment."""

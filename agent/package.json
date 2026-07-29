@@ -36,7 +36,6 @@
     "@opentelemetry/core": "^2.9.0",
     "@opentelemetry/exporter-trace-otlp-proto": "^0.220.0",
     "@opentelemetry/instrumentation-undici": "^0.30.0",
-    "@opentelemetry/propagator-b3": "^2.9.0",
     "@opentelemetry/resources": "^2.9.0",
     "@opentelemetry/sdk-node": "^0.220.0",
     "@opentelemetry/sdk-trace-base": "^2.9.0",

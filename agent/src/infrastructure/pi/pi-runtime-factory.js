@@ -30,9 +30,6 @@ import { primarySkillRoot, normalizeSkillRoots } from '../../skills/paths.js';
 /** Exact SDK pin for this factory revision. */
 export const PINNED_PI_SDK_VERSION = '0.80.3';
 
-/** @type {readonly string[]} */
-export const REQUIRED_ENTERPRISE_EXTENSIONS = ENTERPRISE_EXTENSION_NAMES;
-
 /**
  * Deep-clone then freeze plain JSON-compatible structures.
  * @param {unknown} value
@@ -133,15 +130,6 @@ export function assertModelShape(model) {
       { code: 'PI_MODEL_SHAPE_INVALID' },
     );
   }
-}
-
-/**
- * Optional model: null/undefined allowed; if present must be full shape.
- * @param {unknown} model
- */
-export function assertOptionalModelShape(model) {
-  if (model == null) return;
-  assertModelShape(model);
 }
 
 /**

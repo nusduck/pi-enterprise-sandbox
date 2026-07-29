@@ -151,32 +151,6 @@ export function contextFromTraceFields(value, options = {}) {
   });
 }
 
-export function activeTraceFields() {
-  const spanContext = trace.getSpanContext(context.active());
-  if (!spanContext?.traceId || !spanContext?.spanId) return null;
-  return {
-    traceId: spanContext.traceId,
-    spanId: spanContext.spanId,
-    traceFlags: Number(spanContext.traceFlags || 0)
-      .toString(16)
-      .padStart(2, '0'),
-    traceState: spanContext.traceState?.serialize?.() || null,
-  };
-}
-
-export function startHttpServerSpan(req, resolved) {
-  let parent = propagation.extract(ROOT_CONTEXT, {
-    traceparent: req?.headers?.traceparent,
-    tracestate: req?.headers?.tracestate,
-  });
-  if (!trace.getSpanContext(parent)) parent = contextFromTraceFields(resolved);
-  return startSpan(
-    `${String(req?.method || 'HTTP')} ${String(req?.url || '/').split('?')[0]}`,
-    { kind: SpanKind.SERVER },
-    parent,
-  );
-}
-
 export function startSpan(name, options = {}, parent = context.active()) {
   const tracer = trace.getTracer(INSTRUMENTATION_NAME, '4.0.0');
   const span = tracer.startSpan(name, options, parent);

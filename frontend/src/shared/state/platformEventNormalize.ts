@@ -479,8 +479,3 @@ function normalizePayload(
 
   return p;
 }
-
-/** Plan-facing alias used by docs / tests. */
-export function reducePlatformEventInput(raw: unknown, fallbackRunId?: string | null): RuntimeEvent | null {
-  return normalizeToRuntimeEvent(raw, fallbackRunId);
-}

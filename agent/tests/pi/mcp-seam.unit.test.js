@@ -486,7 +486,6 @@ describe('pi-mcp-adapter-factory', () => {
     for (const file of [
       'mcp-config-loader.js',
       'pi-mcp-adapter-factory.js',
-      'index.js',
     ]) {
       const src = readFileSync(path.join(root, file), 'utf8');
       assert.equal(

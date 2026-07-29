@@ -36,13 +36,6 @@ export function assertInteractionStatus(value) {
   return status;
 }
 
-export function isTerminalInteractionStatus(value) {
-  return [
-    INTERACTION_STATUS.RESOLVED,
-    INTERACTION_STATUS.CANCELLED,
-  ].includes(String(value || '').toUpperCase());
-}
-
 export const INTERACTION_TYPES = Object.freeze(['input', 'select', 'confirm']);
 
 export function assertInteractionType(value) {

@@ -1182,13 +1182,6 @@ body {
 .run-status-bar .rsb-detail { color: var(--color-text-muted); }
 .run-status-bar .rsb-detail.mono,
 .run-status-bar .mono { font-family: var(--font-mono, monospace); }
-.run-status-bar .rsb-error {
-  color: var(--color-danger-text);
-  max-width: 240px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
 .run-status-bar .rsb-trace {
   margin-left: auto;
   font-size: 10px;
@@ -1324,8 +1317,7 @@ body {
 }
 .rtc-expand-body section + section { margin-top: 8px; }
 .rtc-expand-body pre,
-.rtc-cmd,
-.row-pre {
+.rtc-cmd {
   font-family: var(--font-mono, monospace);
   font-size: 11px;
   color: var(--color-text-secondary);
@@ -1675,7 +1667,6 @@ body {
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.inspector-row .row-pre { margin-top: 6px; max-height: 160px; }
 .inspector-details {
   margin-top: 12px;
   font-size: 12px;
@@ -1689,27 +1680,6 @@ body {
   display: none;
 }
 
-/* Sidebar runtime hints + markers */
-.sidebar-runtime-hints {
-  padding: 6px 12px 8px;
-  border-bottom: 1px solid var(--color-bg-elevated);
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-.sidebar-runtime-hints .hint-row {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 11px;
-  color: var(--color-text-muted);
-}
-.sidebar-runtime-hints .hint-row.warn { color: var(--color-warning); }
-.hint-dot {
-  width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0;
-}
-.hint-dot.active { background: var(--color-primary); }
-.hint-dot.warn { background: var(--color-warning); }
 .conv-item.needs-approval {
   border-color: var(--color-warning-border);
 }
@@ -2223,7 +2193,6 @@ body {
   font-size: 11px;
   color: var(--color-text-muted);
 }
-.rtc-log-preview { font-size: 10px; }
 
 @media (max-width: 768px) {
   .process-console-sheet {

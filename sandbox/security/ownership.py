@@ -147,39 +147,6 @@ def require_actor(request: Request) -> Actor:
     return actor
 
 
-def assert_resource_owner(
-    resource: Any,
-    actor: Actor,
-    *,
-    owner_attr: str = "owner_user_id",
-    org_attr: str = "organization_id",
-    not_found_detail: str = "Not found",
-) -> None:
-    """Raise 404 if *actor* may not access *resource* (no existence leak).
-
-    Admin role may access any resource in the same organization only.
-    Missing org ownership under auth is fail-closed.
-    """
-    if not settings.auth_enabled:
-        return
-
-    owner = getattr(resource, owner_attr, None)
-    if owner is None and isinstance(resource, dict):
-        owner = resource.get(owner_attr)
-    org = getattr(resource, org_attr, None)
-    if org is None and isinstance(resource, dict):
-        org = resource.get(org_attr)
-
-    if not org:
-        raise HTTPException(status_code=404, detail=not_found_detail)
-    if str(org) != str(actor.organization_id):
-        raise HTTPException(status_code=404, detail=not_found_detail)
-    if actor.is_admin:
-        return
-    if not owner or str(owner) != str(actor.user_id):
-        raise HTTPException(status_code=404, detail=not_found_detail)
-
-
 def session_organization_id(session: Any) -> str | None:
     """Organization ownership for a session (metadata.organization_id)."""
     metadata = getattr(session, "metadata", None)
@@ -197,35 +164,6 @@ def session_owner_user_id(session: Any) -> str | None:
     if user_id is None and isinstance(session, dict):
         user_id = session.get("user_id")
     return str(user_id) if user_id else None
-
-
-def assert_session_owner(session: Any, actor: Actor | None) -> None:
-    """Enforce session ownership for legacy public session-owned routes.
-
-    Under ``auth_enabled``:
-
-    - ``actor is None`` (static service token alone) → **401 fail closed**.
-      HMAC internal routes do not use this function.
-    - Session must carry both ``user_id`` and ``metadata.organization_id``;
-      missing either → **404** (no legacy unowned bypass).
-    - Admin: same organization only.
-    - User: same organization **and** same user_id.
-    """
-    if not settings.auth_enabled:
-        return
-    if actor is None:
-        raise HTTPException(status_code=401, detail=_AUTH_REQUIRED_DETAIL)
-
-    org = session_organization_id(session)
-    user_id = session_owner_user_id(session)
-    if not org or not user_id:
-        raise HTTPException(status_code=404, detail=_SESSION_NOT_FOUND)
-    if str(org) != str(actor.organization_id):
-        raise HTTPException(status_code=404, detail=_SESSION_NOT_FOUND)
-    if actor.is_admin:
-        return
-    if str(user_id) != str(actor.user_id):
-        raise HTTPException(status_code=404, detail=_SESSION_NOT_FOUND)
 
 
 def require_end_user_actor(request: Request | None) -> Actor | None:
@@ -249,8 +187,7 @@ def require_owned_session(session_id: str, request: Request | None = None) -> An
 
     Order under auth_enabled (no existence leak to service-token-alone):
       1. Require end-user actor (401 if missing)
-      2. Load session (404 if missing)
-      3. assert_session_owner (404 if not permitted)
+      2. Load session scoped to actor org/user (404 if not permitted)
 
     Auth-off (``SANDBOX_AUTH_ENABLED=false``) is **not supported** for formal
     public session routes: ``require_end_user_actor`` returns None and this
@@ -285,47 +222,3 @@ def require_owned_session(session_id: str, request: Request | None = None) -> An
         raise HTTPException(status_code=404, detail=_SESSION_NOT_FOUND)
     return session
 
-
-def assert_legacy_session_binding_create_allowed() -> None:
-    """Gate POST /sessions formal AgentSession/Workspace binding create.
-
-    Formal ``agent_session_id`` / ``workspace_id`` / ``sandbox_session_id`` are
-    Agent-preallocated identities. Until PR-07B HMAC/fence transport exists,
-    **no** present credential can prove that binding:
-
-    - end-user JWT
-    - service token + acting headers
-    - static ``X-API-Key`` alone
-
-    Therefore when ``auth_enabled`` (production multi-user / service auth mode)
-    create is fail-closed. Dev/test with ``auth_enabled=false`` remains open for
-    offline local suites only.
-    """
-    if settings.auth_enabled:
-        raise HTTPException(
-            status_code=503,
-            detail=(
-                "Formal AgentSession/Workspace binding create is unavailable: "
-                "trusted binding proof (HMAC/fence) is not configured. "
-                "User JWT, acting headers, and static API keys cannot declare "
-                "preallocated workspace bindings."
-            ),
-        )
-
-
-def session_visible_to_actor(session: Any, actor: Actor) -> bool:
-    """Return True if *actor* may see *session* in list results (auth on).
-
-    Missing org/user ownership → not visible (fail closed).
-    Admin → same organization only.
-    User → same organization and same user_id.
-    """
-    org = session_organization_id(session)
-    user_id = session_owner_user_id(session)
-    if not org or not user_id:
-        return False
-    if str(org) != str(actor.organization_id):
-        return False
-    if actor.is_admin:
-        return True
-    return str(user_id) == str(actor.user_id)

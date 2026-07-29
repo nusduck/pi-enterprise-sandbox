@@ -102,16 +102,6 @@ export const ArtifactImportResponseSchema = z
   })
   .passthrough();
 
-export const UploadResponseSchema = z
-  .object({
-    attachment_id: z.string().optional(),
-    attachmentId: z.string().optional(),
-    path: z.string().optional().nullable(),
-    size: z.number().optional().nullable(),
-    trace_id: z.string().optional().nullable(),
-  })
-  .passthrough();
-
 /** Successful Dataset creation is a formal READY row, not a loose file DTO. */
 export const DatasetUploadResponseSchema = z
   .object({
@@ -140,13 +130,6 @@ export const ApprovalDecisionSchema = z
   .object({
     ok: z.boolean().optional(),
     status: z.string().optional(),
-  })
-  .passthrough();
-
-export const StatusSchema = z
-  .object({
-    status: z.string().optional(),
-    ok: z.boolean().optional(),
   })
   .passthrough();
 
@@ -182,7 +165,6 @@ export type Conversation = z.infer<typeof ConversationSchema>;
 export type EnsureSession = z.infer<typeof EnsureSessionSchema>;
 export type Artifact = z.infer<typeof ArtifactSchema>;
 export type ArtifactImportResponse = z.infer<typeof ArtifactImportResponseSchema>;
-export type UploadResponse = z.infer<typeof UploadResponseSchema>;
 export type DatasetUploadResponse = z.infer<typeof DatasetUploadResponseSchema>;
 
 /**

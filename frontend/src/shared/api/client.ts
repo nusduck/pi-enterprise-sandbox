@@ -13,8 +13,6 @@ import {
   ConversationListSchema,
   EnsureSessionSchema,
   MeResponseSchema,
-  StatusSchema,
-  UploadResponseSchema,
   parseApi,
   parseApiStrict,
   type AuthResponse,
@@ -23,7 +21,6 @@ import {
   type Conversation,
   type ConversationEventsResponse,
   type EnsureSession,
-  type UploadResponse,
 } from '../schemas/api';
 import type { Artifact } from '../state/types';
 
@@ -31,7 +28,6 @@ export { readSSEStream } from '../sse/parser';
 export { isAllowedApiUrl, safeApiUrl } from '../security/url';
 
 const BASE = '/api';
-const MAX_RETRIES = 3;
 
 /** Browser authentication is carried by the BFF-owned HttpOnly session cookie. */
 export function authHeaders(extra: Record<string, string> = {}): Record<string, string> {
@@ -53,13 +49,6 @@ export class ApiError extends Error {
 
 async function errorBody(resp: Response): Promise<Record<string, unknown>> {
   return (await resp.json().catch(() => ({}))) as Record<string, unknown>;
-}
-
-/** Get API Server status. */
-export async function getStatus(): Promise<Record<string, unknown>> {
-  const resp = await fetch(`${BASE}/status`);
-  if (!resp.ok) throw new Error(`Status check failed: ${resp.status}`);
-  return parseApi(StatusSchema, await resp.json(), 'status');
 }
 
 // ── Auth ────────────────────────────────────────
@@ -293,84 +282,6 @@ export async function ensureSession(
   return parseApi(EnsureSessionSchema, await resp.json(), 'ensureSession');
 }
 
-// ── Files ───────────────────────────────────────
-
-async function uploadErrorFromResponse(resp: Response): Promise<ApiError> {
-  const err = await errorBody(resp);
-  const detail = err.detail;
-  let code: string | null = (err.code as string) || null;
-  let message: string | null = (err.error as string) || null;
-  if (detail && typeof detail === 'object') {
-    const d = detail as { code?: string; message?: string };
-    code = d.code || code;
-    message = d.message || message;
-  } else if (typeof detail === 'string') {
-    message = message || detail;
-  }
-  if (!message) message = `Upload failed (HTTP ${resp.status})`;
-  return new ApiError(message, {
-    status: resp.status,
-    code,
-    traceId: (err.trace_id as string) || resp.headers.get('x-trace-id') || null,
-    detail,
-  });
-}
-
-export async function uploadFile(
-  sessionId: string,
-  file: File | Blob,
-  signal?: AbortSignal | null,
-  opts: { idempotencyKey?: string; traceId?: string } = {},
-): Promise<UploadResponse> {
-  const fd = new FormData();
-  fd.append('file', file);
-
-  let lastErr: Error | undefined;
-  for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
-    try {
-      const headers = authHeaders();
-      if (opts.idempotencyKey) {
-        headers['Idempotency-Key'] = opts.idempotencyKey;
-      }
-      if (opts.traceId) {
-        headers['X-Trace-Id'] = opts.traceId;
-      }
-
-      const resp = await fetch(
-        `${BASE}/files/upload?session_id=${encodeURIComponent(sessionId)}`,
-        {
-          method: 'POST',
-          headers,
-          body: fd,
-          signal: signal ?? undefined,
-        },
-      );
-
-      if (!resp.ok) {
-        const e = await uploadErrorFromResponse(resp);
-        throw e;
-      }
-      const data = parseApi(UploadResponseSchema, await resp.json(), 'upload');
-      data.trace_id = data.trace_id || resp.headers.get('x-trace-id') || null;
-      return data;
-    } catch (err) {
-      const error = err as ApiError & { name?: string };
-      if (error.name === 'AbortError') throw err;
-      if (
-        error.code === 'attachment_too_large' ||
-        error.code === 'attachment_type_denied' ||
-        error.code === 'workspace_quota_exceeded' ||
-        error.code === 'turn_attachment_limit'
-      ) {
-        throw err;
-      }
-      if (attempt === MAX_RETRIES - 1) throw err;
-      lastErr = error;
-      await new Promise((r) => setTimeout(r, 1000 * (attempt + 1)));
-    }
-  }
-  throw lastErr || new Error('Upload failed after retries');
-}
 
 /**
  * Build a download URL for a raw workspace file.

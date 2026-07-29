@@ -14,9 +14,6 @@ const ROUTES = Object.freeze({
 });
 const PROCESS_SIGNALS = new Set(['TERM', 'KILL', 'INT']);
 export const PROCESS_START_HTU = ROUTES.process_start[0];
-export const PROCESS_STATUS_HTU = ROUTES.process_status[0];
-export const PROCESS_READ_HTU = ROUTES.process_read[0];
-export const PROCESS_KILL_HTU = ROUTES.process_kill[0];
 export const DEFAULT_PROCESS_TIMEOUT_MS = 30_000;
 
 class InternalProcessTransportError extends Error {

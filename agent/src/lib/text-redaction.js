@@ -103,18 +103,3 @@ export function redactEmbeddedHostPaths(value) {
 
   return text;
 }
-
-/**
- * Apply secret + host-path redaction, then optional length clamp.
- * @param {unknown} value
- * @param {number} [max]
- */
-export function sanitizeUntrustedText(value, max) {
-  if (value == null) return undefined;
-  let text = redactSecretText(redactEmbeddedHostPaths(String(value))).trim();
-  if (!text) return undefined;
-  if (max != null && Number.isFinite(max) && max > 0 && text.length > max) {
-    return `${text.slice(0, max - 1)}…`;
-  }
-  return text;
-}

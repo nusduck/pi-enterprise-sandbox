@@ -230,8 +230,6 @@ describe('MCP data-plane policy (H6)', () => {
         `${path.relative(root, file)} must not call fetch() as an MCP transport`,
       );
     }
-    const indexSrc = fs.readFileSync(path.join(mcpDir, 'index.js'), 'utf8');
-    assert.match(indexSrc, /pi-mcp-adapter/);
   });
 
   it('extensions do not register business SQL tools or open DSN clients', () => {
@@ -291,12 +289,11 @@ describe('MCP data-plane policy (H6)', () => {
     assert.match(policySrc, /name:\s*['"]ask_user['"]/);
     assert.match(policySrc, /registerTool/);
 
-    // MCP module set is closed: config loader + adapter factory + index.
+    // MCP module set is closed: config loader + adapter factory only.
     const mcpFiles = listJsFiles(path.join(root, 'src/infrastructure/mcp'))
       .map((f) => path.basename(f))
       .sort();
     assert.deepEqual(mcpFiles, [
-      'index.js',
       'mcp-config-loader.js',
       'pi-mcp-adapter-factory.js',
     ]);

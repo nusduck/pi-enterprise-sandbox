@@ -51,13 +51,6 @@ const SHA256_HEX_RE = /^[0-9a-f]{64}$/;
 const PRINTABLE_ASCII_RE = /^[\x21-\x7e]+$/;
 const JS_MAX_SAFE_INTEGER = Number.MAX_SAFE_INTEGER;
 
-/** Terminal / ledger codes that must never be remapped or auto-retried. */
-export const PRESERVED_SANDBOX_ERROR_CODES = Object.freeze([
-  'IN_PROGRESS',
-  'TOOL_OUTCOME_UNKNOWN',
-  'CANCELLED',
-]);
-
 const SUCCESS_TEXT_KEYS = Object.freeze([
   'path',
   'binary',
@@ -100,12 +93,6 @@ const IDENTITY_KEYS = Object.freeze([
   'traceId',
   'executionFenceToken',
 ]);
-
-/**
- * Stable marker key on tool result details / transport errors.
- * Observability only treats exact `outcomeUnknown: true` + code as UNKNOWN.
- */
-export const OUTCOME_UNKNOWN_MARKER_KEY = 'outcomeUnknown';
 
 /**
  * Typed transport error with stable `.code` for mapTransportError / callers.

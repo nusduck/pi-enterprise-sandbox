@@ -31,17 +31,6 @@ export type ManagedProcess = {
   created_at?: string | null;
 };
 
-export type ProcessRead = {
-  process_id: string;
-  stream: 'stdout' | 'stderr';
-  cursor: string;
-  next_cursor: string;
-  data: string;
-  truncated: boolean;
-  completed: boolean;
-  status?: string | null;
-};
-
 export type ProcessActionResult = {
   ok: boolean;
   status?: number;
@@ -81,31 +70,6 @@ export async function listProcesses(
     items?: ManagedProcess[];
   };
   return body.processes || body.items || [];
-}
-
-export async function getProcess(processId: string): Promise<ManagedProcess> {
-  const resp = await fetch(`${BASE}/processes/${encodeURIComponent(processId)}`, {
-    headers: authHeaders(),
-  });
-  await requireOk(resp, 'Get process failed');
-  return (await resp.json()) as ManagedProcess;
-}
-
-export async function readProcess(
-  processId: string,
-  opts: { stream?: 'stdout' | 'stderr'; cursor?: string; limit?: number } = {},
-): Promise<ProcessRead> {
-  const q = new URLSearchParams();
-  if (opts.stream) q.set('stream', opts.stream);
-  if (opts.cursor) q.set('cursor', opts.cursor);
-  if (opts.limit != null) q.set('limit', String(opts.limit));
-  const qs = q.toString() ? `?${q}` : '';
-  const resp = await fetch(
-    `${BASE}/processes/${encodeURIComponent(processId)}/read${qs}`,
-    { headers: authHeaders() },
-  );
-  await requireOk(resp, 'Read process failed');
-  return (await resp.json()) as ProcessRead;
 }
 
 /**

@@ -6,7 +6,6 @@ import type {
   AgentSessionEntity,
   ApprovalEntity,
   ArtifactEntity,
-  AttachmentEntity,
   ConversationEntity,
   DatasetEntity,
   EntityMap,
@@ -17,22 +16,6 @@ import type {
   ToolExecutionEntity,
   TraceSpanEntity,
 } from './types';
-
-export const EMPTY_ENTITY_STORE: Readonly<EntityStore> = Object.freeze({
-  conversationsById: Object.freeze({}),
-  agentSessionsById: Object.freeze({}),
-  runsById: Object.freeze({}),
-  messagesById: Object.freeze({}),
-  toolExecutionsById: Object.freeze({}),
-  processesById: Object.freeze({}),
-  approvalsById: Object.freeze({}),
-  artifactsById: Object.freeze({}),
-  datasetsById: Object.freeze({}),
-  traceSpansById: Object.freeze({}),
-  attachmentsById: Object.freeze({}),
-  activeConversationId: null,
-  activeRunId: null,
-});
 
 export function createEntityStore(
   initial: Partial<EntityStore> = {},
@@ -289,22 +272,6 @@ export function createTraceSpan(
   };
 }
 
-export function createAttachment(
-  partial: Partial<AttachmentEntity> & { id: string },
-): AttachmentEntity {
-  return {
-    conversationId: null,
-    runId: null,
-    name: 'file',
-    path: null,
-    size: 0,
-    mimeType: null,
-    status: 'queued',
-    createdAt: null,
-    ...partial,
-  };
-}
-
 // ── Upsert helpers (return new store) ───────────
 
 export function upsertConversation(
@@ -486,33 +453,10 @@ export function upsertTraceSpan(
   return next;
 }
 
-export function upsertAttachment(
-  store: EntityStore,
-  entity: AttachmentEntity,
-): EntityStore {
-  const next = cloneEntityStore(store);
-  next.attachmentsById = upsert(next.attachmentsById, entity);
-  if (entity.runId) {
-    const run = next.runsById[entity.runId];
-    if (run) {
-      next.runsById = upsert(next.runsById, {
-        ...run,
-        attachmentIds: appendUnique(run.attachmentIds, entity.id),
-      });
-    }
-  }
-  return next;
-}
-
 // ── Selectors ───────────────────────────────────
 
 export function getRun(store: EntityStore, runId: string): RunEntity | null {
   return store.runsById[runId] || null;
-}
-
-export function getActiveRun(store: EntityStore): RunEntity | null {
-  if (!store.activeRunId) return null;
-  return store.runsById[store.activeRunId] || null;
 }
 
 export function listRunsForConversation(
@@ -589,17 +533,6 @@ export function getRunArtifacts(
   return run.artifactIds
     .map((id) => store.artifactsById[id])
     .filter((a): a is ArtifactEntity => Boolean(a));
-}
-
-export function getRunDatasets(
-  store: EntityStore,
-  runId: string,
-): DatasetEntity[] {
-  const run = store.runsById[runId];
-  if (!run) return [];
-  return (run.datasetIds || [])
-    .map((id) => store.datasetsById[id])
-    .filter((d): d is DatasetEntity => Boolean(d));
 }
 
 /** Conversation-scoped datasets (upload panel; may outlive a single run). */
