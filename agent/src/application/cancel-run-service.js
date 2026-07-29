@@ -8,15 +8,15 @@
  *    NO Redis cancel signal.
  * 4. Non-terminal: persist cancel intent (first-writer wins). If sole
  *    RunStateMachine permits current → CANCELLING, CAS + durable status
- *    event + Outbox. A parked WAITING_INPUT Run has no Worker to finish the
- *    cancellation, so the same transaction first closes its interaction/tool
- *    ledger and then commits CANCELLING→CANCELLED.
- *    Otherwise intent alone. Never invent edges.
+ *    event + Outbox. A parked WAITING_INPUT / WAITING_APPROVAL Run has no
+ *    Worker to finish the cancellation, so the same transaction first closes
+ *    its interaction/approval/tool ledger and then commits
+ *    CANCELLING→CANCELLED. Otherwise intent alone. Never invent edges.
  * 5. COMMIT, then set Redis CancelSignal (non-terminal only).
  *
  * Redis failure must not erase MySQL intent; response indicates signal pending.
- * Only a parked WAITING_INPUT Run is terminalized by the API transaction;
- * active/queued Runs are still terminalized by the Worker.
+ * Parked WAITING_INPUT / WAITING_APPROVAL Runs are terminalized by the API
+ * transaction; active/queued Runs are still terminalized by the Worker.
  */
 
 import { ConflictError } from '../infrastructure/mysql/errors.js';
@@ -31,6 +31,7 @@ import {
   redactEventData,
 } from './fenced-run-event-recorder.js';
 import { applyRunTransitionInTxn } from './run-transition.js';
+import { terminalizeParkedWaitingApprovalInTxn } from './parked-approval-cancel.js';
 import {
   OwnerScopedNotFoundError,
   ValidationError,
@@ -427,8 +428,23 @@ export class CancelRunService {
         transitionedToCancelling = true;
       }
 
+      if (withIntent.status === RUN_STATUS.WAITING_APPROVAL) {
+        const parked = await terminalizeParkedWaitingApprovalInTxn({
+          repos,
+          run: withIntent,
+          scope,
+          decidedBy: owner.userId,
+          generateId: this.generateId,
+          now: this.now,
+          stateMachine: this.stateMachine,
+        });
+        status = parked.status;
+        transitionedToCancelling = true;
+      }
+
       if (
         withIntent.status !== RUN_STATUS.WAITING_INPUT &&
+        withIntent.status !== RUN_STATUS.WAITING_APPROVAL &&
         this.stateMachine.canTransition(withIntent.status, RUN_STATUS.CANCELLING)
       ) {
         this.stateMachine.assertTransition(

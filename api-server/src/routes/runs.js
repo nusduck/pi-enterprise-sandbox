@@ -87,16 +87,32 @@ export function presentRunDetail(persisted, live, runtimeAvailable) {
     toIsoTimestamp(base.finished_at);
   body.completed_at = completedAt;
   body.finished_at = completedAt;
-  // Agent's durable failure reason is exposed as status_reason/statusReason.
-  // The frontend Run detail contract uses `error`, so preserve the reason
-  // rather than replacing a real provider/runtime failure with "Run failed".
-  body.error =
-    body.error ??
-    liveObj?.status_reason ??
-    liveObj?.statusReason ??
-    base.status_reason ??
-    base.statusReason ??
-    null;
+  // Map status_reason → error only for terminal failed-like outcomes.
+  // Parked waits (WAITING_APPROVAL / WAITING_INPUT) carry reasons like
+  // "approval pending" that must NOT become chat `[Error: …]` text.
+  const statusRaw = String(body.status ?? liveObj?.status ?? base.status ?? '')
+    .trim()
+    .toUpperCase();
+  const terminalFailedLike = new Set([
+    'FAILED',
+    'CANCELLED',
+    'ERROR',
+    'REJECTED',
+  ]);
+  const explicitError =
+    body.error ?? liveObj?.error ?? base.error ?? null;
+  if (explicitError != null && String(explicitError).trim() !== '') {
+    body.error = explicitError;
+  } else if (terminalFailedLike.has(statusRaw)) {
+    body.error =
+      liveObj?.status_reason ??
+      liveObj?.statusReason ??
+      base.status_reason ??
+      base.statusReason ??
+      null;
+  } else {
+    body.error = null;
+  }
   return body;
 }
 

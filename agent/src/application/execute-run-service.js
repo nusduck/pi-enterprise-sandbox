@@ -43,6 +43,7 @@ import {
   INTERACTION_STATUS,
   INTERACTION_RESUME_PHASE,
 } from '../domain/interaction/interaction-status.js';
+import { terminalizeParkedWaitingApprovalInTxn } from './parked-approval-cancel.js';
 
 /** Default cancel poll interval while executor runs (injectable). */
 export const DEFAULT_CANCEL_POLL_INTERVAL_MS = 100;
@@ -779,6 +780,75 @@ export class ExecuteRunService {
         cancelled: run.status === RUN_STATUS.CANCELLED,
         error: null,
       };
+    }
+
+    // Parked WAITING_APPROVAL: no live runtime owns the lease, so finish the
+    // cancel in-transaction instead of NeedsReconciliation forever (incident A).
+    if (run.status === RUN_STATUS.WAITING_APPROVAL) {
+      try {
+        const parked = await this.tx.run(async (trx) => {
+          const repos = this.createRepositories(trx);
+          const current = await repos.runs.getById(run.runId, scope, {
+            forUpdate: true,
+          });
+          if (!current) {
+            return { status: run.status, missing: true };
+          }
+          if (isTerminalRunStatus(current.status)) {
+            return { status: current.status, alreadyTerminal: true };
+          }
+          if (current.status !== RUN_STATUS.WAITING_APPROVAL) {
+            return { status: current.status, advanced: true, run: current };
+          }
+          // Ensure durable cancel intent is present for status_reason/events.
+          const withIntent =
+            current.cancelRequestedAt != null
+              ? current
+              : await repos.runs.setCancelIntent(run.runId, scope, {
+                  reason: current.cancelReason ?? 'cancelled while waiting approval',
+                  requestedBy: current.userId,
+                  requestedAt: this.now(),
+                });
+          return terminalizeParkedWaitingApprovalInTxn({
+            repos,
+            run: withIntent,
+            scope,
+            decidedBy: withIntent.cancelRequestedBy || withIntent.userId,
+            generateId: this.generateId,
+            now: this.now,
+            stateMachine: this.stateMachine,
+          });
+        });
+        if (parked.missing) {
+          return {
+            status: run.status,
+            runId: run.runId,
+            outcome: null,
+            needsReconciliation: true,
+            error: 'Run not found during parked cancel',
+          };
+        }
+        if (parked.advanced) {
+          run = parked.run;
+          // Fall through to normal cancel path for the advanced status.
+        } else {
+          return {
+            status: parked.status,
+            runId: run.runId,
+            outcome: parked.status === RUN_STATUS.CANCELLED ? RUN_STATUS.CANCELLED : null,
+            cancelled: parked.status === RUN_STATUS.CANCELLED,
+            error: null,
+          };
+        }
+      } catch (err) {
+        return {
+          status: run.status,
+          runId: run.runId,
+          outcome: null,
+          needsReconciliation: true,
+          error: sanitizeStatusReason(err),
+        };
+      }
     }
 
     // ACCEPTED → QUEUED if needed

@@ -38,7 +38,12 @@ export type ProcessStatus =
   | 'timeout'
   | 'orphaned';
 
-export type ApprovalStatus = 'pending' | 'approved' | 'rejected' | 'expired';
+export type ApprovalStatus =
+  | 'pending'
+  | 'approved'
+  | 'rejected'
+  | 'expired'
+  | 'cancelled';
 
 export type AgentSessionStatus = 'active' | 'compacted' | 'failed' | 'archived';
 

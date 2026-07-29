@@ -165,6 +165,20 @@ test('presentRunDetail maps the durable Agent failure reason to the public error
   assert.equal(detail.error, 'Pi runtime completed with assistant stopReason=error: quota exhausted');
 });
 
+test('presentRunDetail does not map parked wait status_reason to error', () => {
+  const detail = presentRunDetail(
+    { run_id: 'r-wait', status: 'WAITING_APPROVAL' },
+    {
+      run_id: 'r-wait',
+      status: 'WAITING_APPROVAL',
+      status_reason: 'approval pending',
+    },
+    true,
+  );
+  assert.equal(detail.error, null);
+  assert.equal(detail.status, 'WAITING_APPROVAL');
+});
+
 test('presentRunDetail exposes a completed Agent Run as finished_at', () => {
   const detail = presentRunDetail(
     { run_id: 'r4', status: 'SUCCEEDED' },

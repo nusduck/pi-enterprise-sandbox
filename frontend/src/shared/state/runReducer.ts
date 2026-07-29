@@ -1416,7 +1416,11 @@ export function rehydrateRun(
       pendingInput,
       lastSequence: detail.last_sequence ?? existing?.lastSequence ?? 0,
       lastEventId: detail.last_event_id ?? existing?.lastEventId ?? null,
-      error: detail.error ?? existing?.error ?? null,
+      // Drop parked wait reasons that BFF may still send as `error`.
+      error:
+        status === 'waiting_approval' || status === 'waiting_input'
+          ? null
+          : detail.error ?? existing?.error ?? null,
       budgetUsage: budgetUsage ?? existing?.budgetUsage ?? null,
       budgetLimits: budgetLimits ?? existing?.budgetLimits ?? null,
       startedAt: detail.started_at ?? existing?.startedAt ?? null,

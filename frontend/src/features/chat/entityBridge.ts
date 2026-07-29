@@ -6,6 +6,7 @@
  * - Owns per-run fetch controllers and durable-history projections
  */
 import {
+  createApproval,
   createDataset,
   createEntityStore,
   createRun,
@@ -43,6 +44,7 @@ import {
   listRunTools,
   type RunDetail,
 } from '../../shared/api/runs';
+import { listApprovals, type ApprovalListItem } from '../../shared/api/approvals';
 import { getConversationEvents } from '../../shared/api/client';
 import { listDatasets, type DatasetRow } from '../../shared/api/datasets';
 import type { PersistedAgentEvent } from '../../shared/schemas/events';
@@ -516,6 +518,58 @@ export function createEntityBridge(
     return response ? rehydrateTraceSpans(latest, runId, response) : latest;
   }
 
+  function mapApprovalStatus(raw: unknown): ApprovalStatus {
+    const s = String(raw || '')
+      .trim()
+      .toLowerCase();
+    if (s === 'approved') return 'approved';
+    if (s === 'rejected') return 'rejected';
+    if (s === 'expired') return 'expired';
+    if (s === 'cancelled' || s === 'canceled') return 'cancelled';
+    return 'pending';
+  }
+
+  /**
+   * Best-effort: load pending approvals into the entity store so chat Approve
+   * is not a silent no-op after refresh/cron open (banner only needs run.status).
+   */
+  async function rehydratePendingApprovals(
+    next: EntityStore,
+    runId: string,
+  ): Promise<EntityStore> {
+    let list: ApprovalListItem[] = [];
+    try {
+      list = await listApprovals({ status: 'pending' });
+    } catch {
+      return next;
+    }
+    let store = next;
+    for (const item of list) {
+      const id = String(item.approval_id || item.id || '').trim();
+      const itemRunId = String(item.run_id || '').trim();
+      if (!id || !itemRunId || itemRunId !== runId) continue;
+      store = upsertApproval(
+        store,
+        createApproval({
+          id,
+          runId: itemRunId,
+          toolExecutionId:
+            item.tool_name != null
+              ? store.runsById[runId]?.toolExecutionIds?.[0] ?? null
+              : null,
+          status: mapApprovalStatus(item.status),
+          reason: String(item.reason || item.tool_name || item.tool || ''),
+          command: item.command != null ? String(item.command) : null,
+          risk: item.risk_level != null ? String(item.risk_level) : null,
+          expiresAt: item.expires_at != null ? String(item.expires_at) : null,
+          createdAt: item.created_at != null ? String(item.created_at) : null,
+          decidedAt: item.decided_at != null ? String(item.decided_at) : null,
+        }),
+      );
+    }
+    return store;
+  }
+
   async function reconcileRunOnce(runId: string): Promise<RunEntity | null> {
     const initialSequence = manager.getStore().runsById[runId]?.lastSequence ?? null;
     const detail = await getRun(runId);
@@ -553,6 +607,10 @@ export function createEntityBridge(
     // committing the earlier candidate wholesale would erase that update.
     let next = rehydrateRun(manager.getStore(), detail);
     if (tools) next = rehydrateToolExecutions(next, runId, tools);
+    const waitStatus = String(next.runsById[runId]?.status || '');
+    if (waitStatus === 'waiting_approval') {
+      next = await rehydratePendingApprovals(next, runId);
+    }
     if (trace) next = rehydrateTraceSpans(next, runId, trace);
     store = next;
     manager.setStore(store);
@@ -642,6 +700,14 @@ export function createEntityBridge(
         store = await loadDurableTrace(store, runId);
       } catch {
         /* Older BFFs may not expose durable trace snapshots yet. */
+      }
+      const status = String(store.runsById[runId]?.status || '');
+      if (status === 'waiting_approval') {
+        try {
+          store = await rehydratePendingApprovals(store, runId);
+        } catch {
+          /* Approval list is best-effort; banner still works from run.status. */
+        }
       }
       manager.setStore(store);
 
@@ -845,7 +911,17 @@ export function createEntityBridge(
       content.push(part);
     }
 
+    // Only surface run.error as a chat failure for terminal failed-like
+    // outcomes. Parked waits may still carry a status_reason like
+    // "approval pending" which must not render as `[Error: …]`.
+    const failedLike =
+      run.status === 'failed' ||
+      run.status === 'cancelled' ||
+      run.status === 'interrupted' ||
+      run.status === 'budget_exceeded' ||
+      run.status === 'orphaned';
     if (
+      failedLike &&
       run.error &&
       !content.some(
         (part) =>

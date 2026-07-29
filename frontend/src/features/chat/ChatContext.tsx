@@ -974,9 +974,23 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     const approval = Object.values(store.approvalsById).find(
       (item) => item.runId === runId && item.status === 'pending',
     );
-    if (!approval?.id) return;
+    if (!approval?.id) {
+      // Never silent no-op: banner can show waiting_approval from run.status alone
+      // while the approval entity was never rehydrated into the store.
+      flashError(
+        'No pending approval loaded for this run. Open Approval Center or refresh the conversation.',
+      );
+      if (runId) {
+        try {
+          await bridge.reconcileRun(runId);
+        } catch {
+          /* reconcile is best-effort */
+        }
+      }
+      return;
+    }
     await resolveApproval(approval.id, 'approve');
-  }, [bridge, resolveApproval]);
+  }, [bridge, resolveApproval, flashError]);
 
   const rejectPending = useCallback(async () => {
     const store = bridge.getStore();
@@ -984,9 +998,21 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     const approval = Object.values(store.approvalsById).find(
       (item) => item.runId === runId && item.status === 'pending',
     );
-    if (!approval?.id) return;
+    if (!approval?.id) {
+      flashError(
+        'No pending approval loaded for this run. Open Approval Center or refresh the conversation.',
+      );
+      if (runId) {
+        try {
+          await bridge.reconcileRun(runId);
+        } catch {
+          /* reconcile is best-effort */
+        }
+      }
+      return;
+    }
     await resolveApproval(approval.id, 'reject');
-  }, [bridge, resolveApproval]);
+  }, [bridge, resolveApproval, flashError]);
 
   const toggleInspector = useCallback(() => {
     setInspectorOpen((v) => !v);

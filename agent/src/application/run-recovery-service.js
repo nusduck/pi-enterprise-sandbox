@@ -31,6 +31,11 @@ import {
 import { applyRunTransitionInTxn } from './run-transition.js';
 import { sanitizeStatusReason } from './sanitize-status-reason.js';
 import { formatStoredTraceCarrier } from '../infrastructure/telemetry.js';
+import { terminalizeParkedWaitingApprovalInTxn } from './parked-approval-cancel.js';
+import {
+  APPROVAL_STATUS,
+  isTerminalApprovalStatus,
+} from '../domain/tool/approval-status.js';
 
 const REPLAY_SAFE_TOOL_STATUSES = new Set([
   TOOL_EXECUTION_STATUS.SUCCEEDED,
@@ -189,11 +194,7 @@ export class RunRecoveryService {
     }
 
     if (status === RUN_STATUS.WAITING_APPROVAL) {
-      return {
-        ...base,
-        action: 'skipped',
-        reason: `status ${status} is not enqueue-recovered by T3`,
-      };
+      return this.#recoverWaitingApproval(run, base);
     }
 
     if (!RECOVERY_ENQUEUE_STATUSES.includes(status)) {
@@ -325,6 +326,120 @@ export class RunRecoveryService {
         ...base,
         action: 'enqueued',
         reason: 'durable interaction is RESOLVED',
+      };
+    } catch (err) {
+      return {
+        ...base,
+        action: 'error',
+        reason: sanitizeStatusReason(err),
+      };
+    }
+  }
+
+  /**
+   * WAITING_APPROVAL recovery:
+   * - cancel intent present → parked terminalize (no infinite NeedsReconciliation)
+   * - terminal approval present → enqueue approval-resume job
+   * - still PENDING → leave parked (user must decide)
+   *
+   * @param {object} run
+   * @param {object} base
+   * @returns {Promise<RecoveryAction>}
+   */
+  async #recoverWaitingApproval(run, base) {
+    const scope = { orgId: run.orgId, userId: run.userId };
+    if (run.cancelRequestedAt) {
+      try {
+        const result = await this.tx.run(async (trx) => {
+          const repos = this.createRepositories(trx);
+          const current = await repos.runs.getById(run.runId, scope, {
+            forUpdate: true,
+          });
+          if (!current) return { ok: false, reason: 'missing' };
+          if (isTerminalRunStatus(current.status)) {
+            return { ok: true, status: current.status, already: true };
+          }
+          if (current.status !== RUN_STATUS.WAITING_APPROVAL) {
+            return {
+              ok: false,
+              reason: `status advanced to ${current.status}`,
+            };
+          }
+          const parked = await terminalizeParkedWaitingApprovalInTxn({
+            repos,
+            run: current,
+            scope,
+            decidedBy: current.cancelRequestedBy || current.userId,
+            generateId: this.generateId,
+            now: this.now,
+            stateMachine: this.stateMachine,
+          });
+          return { ok: true, status: parked.status };
+        });
+        if (result.ok) {
+          return {
+            ...base,
+            status: result.status,
+            action: 'terminalized',
+            reason: result.already
+              ? 'already terminal'
+              : 'WAITING_APPROVAL parked cancel (cancel intent)',
+          };
+        }
+        return {
+          ...base,
+          action: 'error',
+          reason: result.reason ?? 'parked approval cancel failed',
+        };
+      } catch (err) {
+        return {
+          ...base,
+          action: 'error',
+          reason: sanitizeStatusReason(err),
+        };
+      }
+    }
+
+    try {
+      const approvals = await this.tx.run(async (trx) => {
+        const repos = this.createRepositories(trx);
+        if (!repos.approvals) return [];
+        return repos.approvals.listByRunId(run.runId, scope);
+      });
+      if (approvals.some((a) => a.status === APPROVAL_STATUS.PENDING)) {
+        return {
+          ...base,
+          action: 'skipped',
+          reason: 'WAITING_APPROVAL still has PENDING approval',
+        };
+      }
+      const resume = [...approvals]
+        .reverse()
+        .find((a) => isTerminalApprovalStatus(a.status));
+      if (!resume) {
+        return {
+          ...base,
+          action: 'needsReconciliation',
+          reason: 'WAITING_APPROVAL has no durable approval to resume',
+        };
+      }
+      await this.runQueue.enqueue(
+        {
+          runId: base.runId,
+          orgId: base.orgId,
+          traceId: base.traceId,
+          ...formatStoredTraceCarrier(run),
+        },
+        {
+          jobId: `${base.runId}-approval-${resume.approvalId}`,
+          attempts: 8,
+          backoff: { type: 'exponential', delay: 250 },
+        },
+      );
+      return {
+        ...base,
+        action: 'enqueued',
+        reason: `durable approval is ${resume.status}`,
       };
     } catch (err) {
       return {
