@@ -85,11 +85,15 @@ docker compose up -d agent
 
 | 方式 | 做法 | 何时用 |
 |------|------|--------|
-| **A. 手工放入** | 在 `skills/<name>/` 放 `SKILL.md`（frontmatter 必须有 `name` + `description`，且 `name` = 目录名） | 从别处拷贝现成 package |
-| **B. 对话安装** | 对 Agent 说「安装 skill…」→ 走 `skill_install`（本地白名单路径或 HTTPS Git + ref） | 研发对话里热装 |
-| **C. Git 安装（工具）** | Agent 调用 `skill_install`：`source_type=git`，`source=https://…`，**必须带 ref**（branch/tag/sha） | 从 GitHub 拉官方 skill |
+| **A. 手工放入** | 在 `skills/<name>/` 放 `SKILL.md`（frontmatter 必须有 `name` + `description`，且 `name` = 目录名） | 从别处拷贝现成 package；**当前唯一可靠路径** |
+| **B. 对话安装** | 对 Agent 说「安装 skill…」→ 走 `skill_install`（本地白名单路径或 HTTPS Git + ref） | 研发对话里热装（**TODO：runtime 未接线**） |
+| **C. Git 安装（工具）** | Agent 调用 `skill_install`：`source_type=git`，`source=https://…`，**必须带 ref**（branch/tag/sha） | 从 GitHub 拉官方 skill（同上，依赖 B） |
 
-示例（对话里让 Agent 执行的语义）：
+> **TODO（2026-07-29）：** `skill_install` / `skill_edit` / `skill_reload` 库代码在
+> `agent/src/skills/`，但**尚未**挂到 Agent Run 的 custom tools 表面；对话安装目前
+> 不可用。跟踪：[`docs/review-deferred-items.md`](../docs/review-deferred-items.md)。
+
+示例（对话里让 Agent 执行的语义 — **接线完成后**）：
 
 ```
 请 skill_install：

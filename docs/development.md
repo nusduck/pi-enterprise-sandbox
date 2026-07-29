@@ -124,7 +124,16 @@ Agent **可以在零 Skill package 下启动**并使用基础工具（read/write
 
 **方式 B — 研发对话安装（`SKILLS_MODE=development`）**
 
-单用户可信研发环境可通过 Agent 专用工具安装/修改共享 Skill（不建设 overlay / 审批流）：
+> **TODO（未接线）— 2026-07-29：**  
+> `skill_install` / `skill_edit` / `skill_reload` 的**库与文档已存在**
+>（`agent/src/skills/manager.js`、`install.js`），但**尚未**注册为运行时可调用
+> 的 Pi custom tools（bootstrap / extensions / executor 未装配 `createSkillManager`）。  
+> **当前可靠做法请用方式 A（手工放入 `skills/`）**。  
+> 跟踪项见 [`review-deferred-items.md`](./review-deferred-items.md)
+> （Wire `skill_install` / `skill_edit` / `skill_reload` into Agent runtime）。
+
+设计目标（接线后生效）：单用户可信研发环境可通过 Agent 专用工具安装/修改共享
+Skill（不建设 overlay / 审批流）：
 
 ```bash
 # .env
