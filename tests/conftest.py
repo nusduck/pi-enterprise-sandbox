@@ -37,6 +37,23 @@ os.environ["SANDBOX_CONTROL_ROOT"] = str(_CONTROL)
 # Hermetic suite defaults (production still uses repo .env / compose).
 # Security tests monkeypatch auth_enabled=True explicitly.
 os.environ["SANDBOX_AUTH_ENABLED"] = "false"
+# Policy knobs a developer routinely relaxes in their own .env. Without these
+# assignments the production-config matrix asserts against the developer's
+# machine instead of the documented defaults, so a local `.env` with
+# balanced/unrestricted/ask turns ~10 tests red for reasons unrelated to the
+# code under test.
+os.environ["SANDBOX_POLICY_PROFILE"] = "strict"
+os.environ["SANDBOX_NETWORK_MODE"] = "disabled"
+# Match the Settings default. Tests that need real Bubblewrap construct the
+# backend explicitly; inheriting SANDBOX_ISOLATION_BACKEND=bubblewrap from a
+# developer's .env instead makes every process-executing test shell out to
+# /usr/bin/bwrap, which does not exist off Linux.
+os.environ["SANDBOX_ISOLATION_BACKEND"] = "direct"
+os.environ["SANDBOX_ISOLATION_REQUIRED"] = "false"
+os.environ["SANDBOX_APPROVAL_MODE"] = ""
+os.environ["APPROVAL_MODE"] = ""
+os.environ["SANDBOX_APPROVAL_ENABLED"] = ""
+os.environ["APPROVAL_ENABLED"] = ""
 os.environ["SANDBOX_EXECUTION_TIMEOUT_SECONDS"] = "120"
 os.environ["SANDBOX_MAX_OUTPUT_CHARS"] = "50000"
 os.environ["SANDBOX_INTERNAL_PLANE_ENABLED"] = "false"
