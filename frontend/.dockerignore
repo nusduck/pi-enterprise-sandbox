@@ -1,0 +1,7 @@
+# Build context is ./frontend, so the repository-root .dockerignore does not
+# apply here. The build stage runs its own `npm ci` and `npm run build`; the
+# host's node_modules and dist/ only bloat the context and risk staleness.
+node_modules/
+dist/
+.env
+*.log

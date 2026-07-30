@@ -1,0 +1,7 @@
+# Build context is ./agent, so the repository-root .dockerignore does not
+# apply here. Without this file `COPY . .` overwrites the Linux `npm ci`
+# result with the host's (macOS-resolved) node_modules.
+node_modules/
+pi-agent-home/
+.env
+*.log
