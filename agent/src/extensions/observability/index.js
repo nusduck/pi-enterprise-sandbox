@@ -450,15 +450,29 @@ export function createObservabilityExtension(options) {
 
     // ── Compaction ──────────────────────────────────────────────────────
     pi.on('session_compact', async (event) => {
+      // SessionCompactEvent has no `timestamp`; the compaction entry's id is
+      // the stable unique key. Keying on reason alone silently dropped a second
+      // threshold compaction in the same Run.
+      const entry = event?.compactionEntry ?? null;
+      const compactionId = entry?.id != null ? String(entry.id) : '';
       await emit(
         'session.compacted',
         {
           reason: event?.reason != null ? String(event.reason) : '',
           willRetry: Boolean(event?.willRetry),
           fromExtension: Boolean(event?.fromExtension),
+          compactionId: compactionId || null,
+          firstKeptEntryId:
+            entry?.firstKeptEntryId != null ? String(entry.firstKeptEntryId) : null,
+          tokensBefore:
+            Number.isFinite(entry?.tokensBefore) ? Number(entry.tokensBefore) : null,
         },
         {
-          dedupeKey: `session.compacted:${event?.reason ?? ''}:${event?.timestamp ?? ''}`,
+          dedupeKey: compactionId
+            ? `session.compacted:${compactionId}`
+            : // No entry id: fall back to a per-emit unique key so the event is
+              // recorded rather than deduped against an unrelated compaction.
+              `session.compacted:${event?.reason ?? ''}:${now().toISOString()}`,
         },
       );
     });

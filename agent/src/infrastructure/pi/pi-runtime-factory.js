@@ -21,6 +21,7 @@ import {
   assertEnterpriseExtensions,
 } from '../../extensions/index.js';
 import { resolveEnterpriseSystemPrompt } from './enterprise-system-prompt.js';
+import { applyContextPolicy } from '../../application/context-policy-service.js';
 import {
   LOGICAL_SKILL_ROOT,
   LOGICAL_WORKSPACE_ROOT,
@@ -219,6 +220,12 @@ export function bindAgentVersionConfig(agentVersion) {
     configJson.sandboxPolicy && typeof configJson.sandboxPolicy === 'object'
       ? /** @type {Record<string, unknown>} */ (configJson.sandboxPolicy)
       : {};
+  // Compaction policy. Absent → Pi SDK defaults (auto-compact on, 16k reserve,
+  // 20k kept recent), which is what production has always run with.
+  const contextPolicy =
+    configJson.contextPolicy && typeof configJson.contextPolicy === 'object'
+      ? /** @type {Record<string, unknown>} */ (configJson.contextPolicy)
+      : {};
 
   return Object.freeze({
     agentVersionId,
@@ -245,6 +252,7 @@ export function bindAgentVersionConfig(agentVersion) {
       : Object.freeze([]),
     toolPolicy: Object.freeze({ ...toolPolicy }),
     sandboxPolicy: Object.freeze({ ...sandboxPolicy }),
+    contextPolicy: Object.freeze({ ...contextPolicy }),
   });
 }
 
@@ -521,6 +529,9 @@ export function resolveAgentVersionBindings(bound, options = {}) {
     mcpResolver: mcpResolver ?? null,
     toolPolicyBinding: toolPolicyBinding ?? null,
     sandboxPolicyBinding: sandboxPolicyBinding ?? null,
+    // Compaction policy is applied to the run's settings manager, so unlike
+    // toolPolicy/sandboxPolicy it needs no separate caller-supplied binding.
+    contextPolicy: Object.freeze({ ...(bound.contextPolicy || {}) }),
   });
 }
 
@@ -999,6 +1010,13 @@ export class PiRuntimeFactory {
 
         // Fail-closed on extension load errors before session create.
         assertExtensionsLoadedClean(services, null);
+
+        // AgentVersion owns compaction policy. Applied to this run's settings
+        // manager in memory — never written back to a settings file, which is
+        // shared across tenants. Absent policy keeps the SDK defaults.
+        if (services?.settingsManager) {
+          applyContextPolicy(services.settingsManager, bindings.contextPolicy);
+        }
 
         /** @type {Record<string, unknown>} */
         const fromServicesOpts = {

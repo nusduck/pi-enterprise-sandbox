@@ -85,6 +85,9 @@ export function defaultAgentConfigJson() {
     mcpServers: [],
     toolPolicy: {},
     sandboxPolicy: {},
+    // Empty → Pi SDK compaction defaults (auto-compact on, 16k reserve,
+    // 20k kept recent). See applyContextPolicy.
+    contextPolicy: {},
     a2a: {},
   };
 }
