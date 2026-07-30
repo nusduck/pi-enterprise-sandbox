@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useMemo, type ReactNode } from 'react';
 import { useChat } from '../../features/chat/ChatContext';
 import {
   getRunApprovals,
@@ -14,6 +14,7 @@ import {
   formatDuration,
   formatRunStatusLabel,
   getActiveRunEntity,
+  runStatusTone,
   summarizeToolInput,
   type InspectorTabId,
   type SelectedEntity,
@@ -25,16 +26,88 @@ import { ToolCallPanel } from '../tool-call-panel/ToolCallPanel';
 import { ProcessPanel } from '../process-panel/ProcessPanel';
 import { useWorkbenchSelection } from '../../app/layout/WorkbenchSelectionContext';
 
-const TABS: { id: InspectorTabId; label: string }[] = [
-  { id: 'overview', label: 'Overview' },
-  { id: 'files', label: 'Files' },
-  { id: 'processes', label: 'Processes' },
-  { id: 'tools', label: 'Tools' },
-  { id: 'artifacts', label: 'Artifacts' },
-  { id: 'datasets', label: 'Datasets' },
-  { id: 'trace', label: 'Trace' },
-  { id: 'session', label: 'Session' },
-];
+type TabDef = {
+  id: InspectorTabId;
+  label: string;
+  count?: number;
+};
+
+function shortId(id: string | null | undefined, keep = 10): string {
+  if (!id) return '—';
+  if (id.length <= keep + 1) return id;
+  return `${id.slice(0, keep)}…`;
+}
+
+function MetaRow({
+  label,
+  value,
+  mono,
+  danger,
+  copyable,
+}: {
+  label: string;
+  value: ReactNode;
+  mono?: boolean;
+  danger?: boolean;
+  copyable?: string | null;
+}) {
+  return (
+    <div className="insp-meta-row">
+      <span className="insp-meta-label">{label}</span>
+      <span
+        className={`insp-meta-value${mono ? ' mono' : ''}${danger ? ' danger' : ''}`}
+        title={typeof value === 'string' ? value : undefined}
+      >
+        {value}
+        {copyable ? (
+          <button
+            type="button"
+            className="insp-copy"
+            title="Copy"
+            aria-label={`Copy ${label}`}
+            onClick={() => {
+              void navigator.clipboard?.writeText(copyable);
+            }}
+          >
+            copy
+          </button>
+        ) : null}
+      </span>
+    </div>
+  );
+}
+
+function StatPill({
+  label,
+  value,
+  tone,
+}: {
+  label: string;
+  value: string | number;
+  tone?: 'default' | 'active' | 'warn' | 'danger' | 'success';
+}) {
+  return (
+    <div className={`insp-stat tone-${tone || 'default'}`}>
+      <span className="insp-stat-value">{value}</span>
+      <span className="insp-stat-label">{label}</span>
+    </div>
+  );
+}
+
+function EmptyState({
+  title,
+  body,
+}: {
+  title: string;
+  body?: string;
+}) {
+  return (
+    <div className="insp-empty">
+      <p className="insp-empty-title">{title}</p>
+      {body ? <p className="insp-empty-body">{body}</p> : null}
+    </div>
+  );
+}
 
 export function ContextInspector({
   open,
@@ -86,22 +159,15 @@ export function ContextInspector({
     [entityStore, runId],
   );
 
-  // Merge server-listed deliverables when entity artifacts empty
   const listedArtifacts = state.artifacts || [];
 
-  /**
-   * Artifacts available for cross-conversation Import.
-   * Prefer EntityStore rows for this conversation (all runs), then session
-   * list API rows. The previous run-only list made Import disappear whenever
-   * the active Run had no submit_artifact of its own.
-   */
   const importableArtifacts = useMemo((): ArtifactEntity[] => {
     const convId = state.conversationId;
     const runIds = new Set<string>();
     if (runId) runIds.add(runId);
     if (convId) {
-      for (const run of Object.values(entityStore.runsById)) {
-        if (run.conversationId === convId) runIds.add(run.id);
+      for (const r of Object.values(entityStore.runsById)) {
+        if (r.conversationId === convId) runIds.add(r.id);
       }
     }
 
@@ -117,7 +183,6 @@ export function ContextInspector({
       out.push(art);
     }
 
-    // Also include active-run artifacts even if conversationId was not set yet.
     for (const art of artifacts) {
       if (art.source !== 'submit_artifact') continue;
       if (!isDurableArtifactId(art.id, art.runId || '')) continue;
@@ -183,6 +248,23 @@ export function ContextInspector({
       )) ||
     null;
 
+  const pendingCount = approvals.filter((a) => a.status === 'pending').length;
+
+  const tabs: TabDef[] = [
+    { id: 'overview', label: 'Overview' },
+    { id: 'tools', label: 'Tools', count: tools.length || undefined },
+    { id: 'processes', label: 'Processes', count: processes.length || undefined },
+    { id: 'files', label: 'Files' },
+    {
+      id: 'artifacts',
+      label: 'Artifacts',
+      count: importableArtifacts.length || undefined,
+    },
+    { id: 'datasets', label: 'Datasets', count: datasets.length || undefined },
+    { id: 'trace', label: 'Trace', count: traceSpans.length || undefined },
+    { id: 'session', label: 'Session' },
+  ];
+
   const panelClass = [
     'context-inspector',
     open ? 'open' : 'closed',
@@ -190,29 +272,67 @@ export function ContextInspector({
     .filter(Boolean)
     .join(' ');
 
+  const tone = run ? runStatusTone(run.status) : 'idle';
+  const statusLabel = run ? formatRunStatusLabel(run.status) : 'Idle';
+
   return (
     <>
       <aside
         id="context-inspector"
         className={panelClass}
-        aria-label="Context inspector"
+        aria-label="Details"
         aria-hidden={!open}
       >
         <div className="inspector-head">
-          <h2 className="inspector-title">Inspector</h2>
+          <div className="inspector-head-text">
+            <h2 className="inspector-title">Details</h2>
+            <p className="inspector-subtitle">
+              {run
+                ? `Run · ${statusLabel}`
+                : state.conversationId
+                  ? 'Conversation context'
+                  : 'No active run'}
+            </p>
+          </div>
+          <button
+            type="button"
+            className="btn-icon inspector-close-desktop"
+            title="Close details"
+            aria-label="Close details"
+            onClick={onClose}
+          >
+            ✕
+          </button>
           <button
             type="button"
             className="btn-icon inspector-close"
-            title="Close inspector"
-            aria-label="Close inspector"
+            title="Close details"
+            aria-label="Close details"
             onClick={onClose}
           >
             ✕
           </button>
         </div>
 
-        <div className="inspector-tabs" role="tablist">
-          {TABS.map((t) => (
+        {run || tools.length || processes.length ? (
+          <div className={`inspector-status-bar tone-${tone}`}>
+            <span className="inspector-status-dot" aria-hidden="true" />
+            <span className="inspector-status-label">{statusLabel}</span>
+            {run ? (
+              <span className="inspector-status-meta mono">
+                {formatDuration(run.startedAt || run.createdAt, run.finishedAt)}
+              </span>
+            ) : null}
+            {pendingCount > 0 ? (
+              <span className="inspector-status-chip warn">
+                {pendingCount} approval{pendingCount === 1 ? '' : 's'}
+              </span>
+            ) : null}
+          </div>
+        ) : null}
+
+        <div className="inspector-tabs" role="tablist" aria-label="Detail sections">
+          {tabs.map((t) => (
             <button
               key={t.id}
               type="button"
@@ -221,7 +341,10 @@ export function ContextInspector({
               className={`inspector-tab${tab === t.id ? ' active' : ''}`}
               onClick={() => onTabChange(t.id)}
             >
-              {t.label}
+              <span>{t.label}</span>
+              {t.count != null && t.count > 0 ? (
+                <span className="inspector-tab-count">{t.count}</span>
+              ) : null}
             </button>
           ))}
         </div>
@@ -233,7 +356,8 @@ export function ContextInspector({
               agentSession={agentSession}
               toolsCount={tools.length}
               processesCount={processes.length}
-              approvals={approvals}
+              artifactsCount={artifacts.length}
+              pendingApprovals={pendingCount}
               sessionId={activeSessionId}
               conversationId={state.conversationId}
               traceId={activeTraceId}
@@ -310,79 +434,178 @@ function OverviewPanel({
   agentSession,
   toolsCount,
   processesCount,
-  approvals,
+  artifactsCount,
+  pendingApprovals,
   sessionId,
   conversationId,
   traceId,
 }: {
   run: ReturnType<typeof getActiveRunEntity>;
-  agentSession: { id: string; status: string; modelId: string | null; workspaceId: string | null } | null;
+  agentSession: {
+    id: string;
+    status: string;
+    modelId: string | null;
+    workspaceId: string | null;
+  } | null;
   toolsCount: number;
   processesCount: number;
-  approvals: { id: string; status: string; reason: string }[];
+  artifactsCount: number;
+  pendingApprovals: number;
   sessionId: string | null;
   conversationId: string | null;
   traceId: string | null;
 }) {
-  const pending = approvals.filter((a) => a.status === 'pending');
+  if (!run && !agentSession && !conversationId) {
+    return (
+      <EmptyState
+        title="Nothing selected"
+        body="Start a chat or open a run to inspect runtime context."
+      />
+    );
+  }
+
+  const ctx = run?.contextUsage;
+  const ctxLabel = ctx
+    ? `${ctx.tokens ?? '—'} / ${ctx.contextWindow ?? '—'}${
+        ctx.percent != null
+          ? ` · ${typeof ctx.percent === 'number' && ctx.percent <= 1 ? Math.round(ctx.percent * 100) : ctx.percent}%`
+          : ''
+      }`
+    : '—';
+
   return (
-    <div className="inspector-section">
-      <dl className="inspector-dl">
-        <dt>Run status</dt>
-        <dd>{run ? formatRunStatusLabel(run.status) : 'Idle'}</dd>
-        <dt>Run ID</dt>
-        <dd className="mono">{run?.id || '—'}</dd>
-        <dt>Agent session</dt>
-        <dd className="mono">
-          {agentSession
-            ? `${agentSession.id.slice(0, 12)}… (${agentSession.status})`
-            : '—'}
-        </dd>
-        <dt>Model</dt>
-        <dd>{agentSession?.modelId || '—'}</dd>
-        <dt>Workspace</dt>
-        <dd className="mono">{agentSession?.workspaceId || sessionId || '—'}</dd>
-        <dt>Conversation</dt>
-        <dd className="mono">{conversationId || '—'}</dd>
-        <dt>Started</dt>
-        <dd>{run?.startedAt || run?.createdAt || '—'}</dd>
-        <dt>Duration</dt>
-        <dd>
-          {run
-            ? formatDuration(run.startedAt || run.createdAt, run.finishedAt)
-            : '—'}
-        </dd>
-        <dt>Tool calls</dt>
-        <dd>{toolsCount}</dd>
-        <dt>Processes</dt>
-        <dd>{processesCount}</dd>
-        <dt>Pending approvals</dt>
-        <dd>{pending.length}</dd>
-        <dt>Context usage</dt>
-        <dd>
-          {run?.contextUsage
-            ? `${run.contextUsage.tokens ?? '—'} / ${run.contextUsage.contextWindow ?? '—'} (${run.contextUsage.percent ?? '—'}${typeof run.contextUsage.percent === 'number' && run.contextUsage.percent <= 1 ? '' : '%'})${run.contextUsage.warning ? ' ⚠' : ''}`
-            : '—'}
-        </dd>
-        <dt>Compaction</dt>
-        <dd className={run?.compactionStatus === 'failed' ? 'danger' : undefined}>
-          {run?.compactionStatus || 'idle'}{run?.compactionError ? `: ${run.compactionError}` : ''}
-        </dd>
-        <dt>Task plan</dt>
-        <dd>
-          {run?.taskPlan.length
-            ? run.taskPlan.map((task) => `${task.taskId}: ${task.status}`).join(', ')
-            : '—'}
-        </dd>
-        <dt>Trace ID</dt>
-        <dd className="mono">{traceId || '—'}</dd>
-        {run?.error ? (
-          <>
-            <dt>Error</dt>
-            <dd className="danger">{run.error}</dd>
-          </>
-        ) : null}
-      </dl>
+    <div className="insp-stack">
+      <section className="insp-card">
+        <div className="insp-card-head">
+          <h3 className="insp-card-title">Snapshot</h3>
+        </div>
+        <div className="insp-stat-grid">
+          <StatPill
+            label="Tools"
+            value={toolsCount}
+            tone={toolsCount ? 'active' : 'default'}
+          />
+          <StatPill
+            label="Processes"
+            value={processesCount}
+            tone={processesCount ? 'active' : 'default'}
+          />
+          <StatPill
+            label="Artifacts"
+            value={artifactsCount}
+            tone={artifactsCount ? 'success' : 'default'}
+          />
+          <StatPill
+            label="Approvals"
+            value={pendingApprovals}
+            tone={pendingApprovals ? 'warn' : 'default'}
+          />
+        </div>
+      </section>
+
+      <section className="insp-card">
+        <div className="insp-card-head">
+          <h3 className="insp-card-title">Run</h3>
+        </div>
+        <div className="insp-meta-list">
+          <MetaRow
+            label="Status"
+            value={run ? formatRunStatusLabel(run.status) : 'Idle'}
+          />
+          <MetaRow
+            label="Run ID"
+            value={shortId(run?.id, 14)}
+            mono
+            copyable={run?.id || null}
+          />
+          <MetaRow
+            label="Started"
+            value={run?.startedAt || run?.createdAt || '—'}
+            mono
+          />
+          <MetaRow
+            label="Duration"
+            value={
+              run
+                ? formatDuration(run.startedAt || run.createdAt, run.finishedAt)
+                : '—'
+            }
+            mono
+          />
+          <MetaRow label="Context" value={ctxLabel} mono />
+          <MetaRow
+            label="Compaction"
+            value={
+              run?.compactionStatus
+                ? `${run.compactionStatus}${run.compactionError ? `: ${run.compactionError}` : ''}`
+                : 'idle'
+            }
+            danger={run?.compactionStatus === 'failed'}
+          />
+          {run?.error ? (
+            <MetaRow label="Error" value={run.error} danger />
+          ) : null}
+        </div>
+      </section>
+
+      <section className="insp-card">
+        <div className="insp-card-head">
+          <h3 className="insp-card-title">Identity</h3>
+        </div>
+        <div className="insp-meta-list">
+          <MetaRow
+            label="Model"
+            value={agentSession?.modelId || '—'}
+          />
+          <MetaRow
+            label="Agent session"
+            value={
+              agentSession
+                ? `${shortId(agentSession.id, 12)} · ${agentSession.status}`
+                : '—'
+            }
+            mono
+            copyable={agentSession?.id || null}
+          />
+          <MetaRow
+            label="Workspace"
+            value={shortId(agentSession?.workspaceId || sessionId, 14)}
+            mono
+            copyable={agentSession?.workspaceId || sessionId}
+          />
+          <MetaRow
+            label="Conversation"
+            value={shortId(conversationId, 14)}
+            mono
+            copyable={conversationId}
+          />
+          <MetaRow
+            label="Trace"
+            value={shortId(traceId, 14)}
+            mono
+            copyable={traceId}
+          />
+        </div>
+      </section>
+
+      {run?.taskPlan?.length ? (
+        <section className="insp-card">
+          <div className="insp-card-head">
+            <h3 className="insp-card-title">Task plan</h3>
+            <span className="insp-card-count">{run.taskPlan.length}</span>
+          </div>
+          <ul className="insp-task-list">
+            {run.taskPlan.map((task) => (
+              <li key={task.taskId} className="insp-task-item">
+                <span className={`insp-task-status status-${task.status}`}>
+                  {task.status}
+                </span>
+                <span className="insp-task-id mono">{task.taskId}</span>
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
     </div>
   );
 }
@@ -394,11 +617,16 @@ function FilesPanel({
   tools,
 }: {
   artifacts: { id: string; name: string; path: string | null; size: number | null }[];
-  listedArtifacts: { artifact_id?: string; id?: string; name?: string; path?: string; size?: number }[];
+  listedArtifacts: {
+    artifact_id?: string;
+    id?: string;
+    name?: string;
+    path?: string;
+    size?: number;
+  }[];
   sessionId: string | null;
   tools: { id: string; name: string; input: unknown }[];
 }) {
-  // Paths referenced by tools (read/edit etc.) — lightweight file references
   const toolPaths = tools
     .map((t) => {
       const s = summarizeToolInput(t.input);
@@ -409,52 +637,62 @@ function FilesPanel({
   const uniquePaths = [...new Set(toolPaths)];
 
   if (!artifacts.length && !listedArtifacts.length && !uniquePaths.length) {
-    return <p className="inspector-empty">No files for this run yet.</p>;
+    return (
+      <EmptyState
+        title="No files yet"
+        body="Paths and artifacts from this run will appear here."
+      />
+    );
   }
 
   return (
-    <div className="inspector-section">
+    <div className="insp-stack">
       {uniquePaths.length > 0 ? (
-        <>
-          <h3 className="inspector-subhead">Referenced paths</h3>
-          <ul className="inspector-list">
+        <section className="insp-card">
+          <div className="insp-card-head">
+            <h3 className="insp-card-title">Referenced paths</h3>
+            <span className="insp-card-count">{uniquePaths.length}</span>
+          </div>
+          <ul className="insp-chip-list">
             {uniquePaths.map((p) => (
-              <li key={p} className="mono">
+              <li key={p} className="insp-path-chip mono" title={p}>
                 {p}
               </li>
             ))}
           </ul>
-        </>
+        </section>
       ) : null}
+
       {artifacts.length > 0 || listedArtifacts.length > 0 ? (
-        <>
-          <h3 className="inspector-subhead">Artifacts</h3>
-          <ul className="inspector-list">
+        <section className="insp-card">
+          <div className="insp-card-head">
+            <h3 className="insp-card-title">Artifacts</h3>
+          </div>
+          <ul className="insp-file-list">
             {artifacts.map((a) => (
-              <li key={a.id}>
-                {a.name}
+              <li key={a.id} className="insp-file-row">
+                <span className="insp-file-name">{a.name}</span>
                 {a.path ? (
-                  <span className="muted mono"> · {a.path}</span>
+                  <span className="insp-file-path mono">{a.path}</span>
                 ) : null}
               </li>
             ))}
             {listedArtifacts.map((a) => {
               const id = a.artifact_id || a.id || a.path || a.name;
               return (
-                <li key={String(id)}>
-                  {a.name || a.path || id}
+                <li key={String(id)} className="insp-file-row">
+                  <span className="insp-file-name">
+                    {a.name || a.path || id}
+                  </span>
                   {sessionId ? (
-                    <span className="muted"> · session</span>
+                    <span className="insp-file-path">session-linked</span>
                   ) : null}
                 </li>
               );
             })}
           </ul>
-        </>
+        </section>
       ) : null}
-      <p className="inspector-hint">
-        Full workspace tree / diff viewer ships with later phases.
-      </p>
     </div>
   );
 }
@@ -480,37 +718,85 @@ function SessionPanel({
   conversationId: string | null;
   traceId: string | null;
 }) {
+  if (!run && !agentSession && !sessionId && !conversationId) {
+    return (
+      <EmptyState
+        title="No session"
+        body="Session identity appears after the first run starts."
+      />
+    );
+  }
+
   return (
-    <div className="inspector-section">
-      <dl className="inspector-dl">
-        <dt>SDK / Agent session</dt>
-        <dd className="mono">{agentSession?.id || '—'}</dd>
-        <dt>Sandbox session</dt>
-        <dd className="mono">
-          {agentSession?.sandboxSessionId || sessionId || '—'}
-        </dd>
-        <dt>Workspace</dt>
-        <dd className="mono">{agentSession?.workspaceId || '—'}</dd>
-        <dt>Conversation</dt>
-        <dd className="mono">{conversationId || '—'}</dd>
-        <dt>Session status</dt>
-        <dd>{agentSession?.status || '—'}</dd>
-        <dt>Created</dt>
-        <dd>{agentSession?.createdAt || '—'}</dd>
-        <dt>Updated</dt>
-        <dd>{agentSession?.updatedAt || '—'}</dd>
-        <dt>Active run</dt>
-        <dd className="mono">{run?.id || '—'}</dd>
-        <dt>Trace</dt>
-        <dd className="mono">{traceId || '—'}</dd>
-      </dl>
-      <details className="inspector-details">
-        <summary>Session entry timeline (technical)</summary>
-        <p className="inspector-hint">
-          Compaction, model history, and branch details appear here when the
-          session API exposes them.
-        </p>
-      </details>
+    <div className="insp-stack">
+      <section className="insp-card">
+        <div className="insp-card-head">
+          <h3 className="insp-card-title">Agent session</h3>
+          {agentSession?.status ? (
+            <span className="insp-pill">{agentSession.status}</span>
+          ) : null}
+        </div>
+        <div className="insp-meta-list">
+          <MetaRow
+            label="Session ID"
+            value={shortId(agentSession?.id, 16)}
+            mono
+            copyable={agentSession?.id || null}
+          />
+          <MetaRow label="Model" value={agentSession?.modelId || '—'} />
+          <MetaRow
+            label="Created"
+            value={agentSession?.createdAt || '—'}
+            mono
+          />
+          <MetaRow
+            label="Updated"
+            value={agentSession?.updatedAt || '—'}
+            mono
+          />
+        </div>
+      </section>
+
+      <section className="insp-card">
+        <div className="insp-card-head">
+          <h3 className="insp-card-title">Sandbox</h3>
+        </div>
+        <div className="insp-meta-list">
+          <MetaRow
+            label="Sandbox session"
+            value={shortId(
+              agentSession?.sandboxSessionId || sessionId,
+              16,
+            )}
+            mono
+            copyable={agentSession?.sandboxSessionId || sessionId}
+          />
+          <MetaRow
+            label="Workspace"
+            value={shortId(agentSession?.workspaceId, 16)}
+            mono
+            copyable={agentSession?.workspaceId}
+          />
+          <MetaRow
+            label="Conversation"
+            value={shortId(conversationId, 16)}
+            mono
+            copyable={conversationId}
+          />
+          <MetaRow
+            label="Active run"
+            value={shortId(run?.id, 16)}
+            mono
+            copyable={run?.id || null}
+          />
+          <MetaRow
+            label="Trace"
+            value={shortId(traceId, 16)}
+            mono
+            copyable={traceId}
+          />
+        </div>
+      </section>
     </div>
   );
 }

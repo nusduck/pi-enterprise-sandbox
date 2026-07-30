@@ -1,75 +1,86 @@
-/* Design tokens — Apple-inspired materials, type, depth
+/* Design tokens — Grok-inspired cosmic monochrome
    Dark default · Light via [data-theme="light"]
-   Principles: simplicity, restraint, system type, translucent chrome
+   Principles: pure black canvas, restrained chrome, floating surfaces,
+   generous whitespace, white primary actions, quiet hierarchy
 */
 
 :root {
   color-scheme: dark;
 
-  /* ── Surfaces (iOS system-like neutrals) ── */
+  /* ── Surfaces (deep black stack) ── */
   --color-bg: #000000;
-  --color-bg-elevated: #1c1c1e;
-  --color-bg-sidebar: #1c1c1e;
-  --color-bg-panel: #1c1c1e;
-  --color-bg-input: #2c2c2e;
-  --color-bg-hover: rgba(255, 255, 255, 0.06);
-  --color-bg-active: rgba(255, 255, 255, 0.1);
-  --color-bg-scrim: rgba(0, 0, 0, 0.45);
+  --color-bg-elevated: #111113;
+  --color-bg-sidebar: #0a0a0b;
+  --color-bg-panel: #111113;
+  --color-bg-input: #161618;
+  --color-bg-hover: rgba(255, 255, 255, 0.045);
+  --color-bg-active: rgba(255, 255, 255, 0.08);
+  --color-bg-scrim: rgba(0, 0, 0, 0.62);
 
-  /* Translucent materials */
-  --material-chrome: rgba(28, 28, 30, 0.72);
-  --material-chrome-heavy: rgba(28, 28, 30, 0.88);
-  --material-sidebar: rgba(28, 28, 30, 0.92);
-  --material-fill: rgba(118, 118, 128, 0.24);
-  --material-fill-secondary: rgba(118, 118, 128, 0.18);
-  --material-fill-tertiary: rgba(118, 118, 128, 0.12);
+  /* Quiet materials — solid over glass */
+  --material-chrome: rgba(0, 0, 0, 0.78);
+  --material-chrome-heavy: rgba(10, 10, 11, 0.94);
+  --material-sidebar: #0a0a0b;
+  --material-fill: rgba(255, 255, 255, 0.08);
+  --material-fill-secondary: rgba(255, 255, 255, 0.055);
+  --material-fill-tertiary: rgba(255, 255, 255, 0.035);
 
-  /* Text hierarchy */
-  --color-text: rgba(255, 255, 255, 0.92);
-  --color-text-secondary: rgba(235, 235, 245, 0.6);
-  --color-text-muted: rgba(235, 235, 245, 0.4);
-  --color-text-dim: rgba(235, 235, 245, 0.28);
-  --color-text-inverse: #ffffff;
+  /* Ambient (cosmic wash — empty states / hero) */
+  --glow-ambient:
+    radial-gradient(ellipse 80% 55% at 50% -10%, rgba(120, 140, 255, 0.09), transparent 55%),
+    radial-gradient(ellipse 50% 40% at 80% 100%, rgba(255, 255, 255, 0.03), transparent 50%);
+  --glow-composer: 0 0 0 1px rgba(255, 255, 255, 0.08), 0 12px 40px rgba(0, 0, 0, 0.45);
 
-  /* Separators — soft edges, not hard borders */
-  --color-border: rgba(84, 84, 88, 0.65);
-  --color-border-subtle: rgba(84, 84, 88, 0.4);
-  --color-separator: rgba(84, 84, 88, 0.55);
-  --color-hairline: rgba(255, 255, 255, 0.08);
+  /* Text hierarchy — bright, airy */
+  --color-text: rgba(255, 255, 255, 0.94);
+  --color-text-secondary: rgba(255, 255, 255, 0.55);
+  --color-text-muted: rgba(255, 255, 255, 0.38);
+  --color-text-dim: rgba(255, 255, 255, 0.24);
+  --color-text-inverse: #0a0a0b;
 
-  /* Brand — system blue */
-  --color-primary: #0a84ff;
-  --color-primary-hover: #409cff;
-  --color-primary-soft: rgba(10, 132, 255, 0.14);
-  --color-primary-border: rgba(10, 132, 255, 0.35);
-  --color-primary-tint: #64d2ff;
+  /* Separators — whisper edges */
+  --color-border: rgba(255, 255, 255, 0.1);
+  --color-border-subtle: rgba(255, 255, 255, 0.06);
+  --color-separator: rgba(255, 255, 255, 0.08);
+  --color-hairline: rgba(255, 255, 255, 0.06);
 
-  /* Semantic (iOS system colors) */
-  --color-success: #30d158;
-  --color-success-soft: rgba(48, 209, 88, 0.12);
-  --color-success-text: #30d158;
-  --color-danger: #ff453a;
-  --color-danger-soft: rgba(255, 69, 58, 0.12);
-  --color-danger-text: #ff6961;
-  --color-warning: #ffd60a;
-  --color-warning-soft: rgba(255, 214, 10, 0.12);
-  --color-warning-border: rgba(255, 214, 10, 0.35);
-  --color-warning-text: #ffd60a;
+  /* Brand — white primary (Grok CTA) + cool accent */
+  --color-primary: #f2f2f2;
+  --color-primary-hover: #ffffff;
+  --color-primary-soft: rgba(255, 255, 255, 0.08);
+  --color-primary-border: rgba(255, 255, 255, 0.18);
+  --color-primary-tint: #e8e8ec;
+  --color-accent: #9aa8ff;
+  --color-accent-soft: rgba(154, 168, 255, 0.12);
+  --color-accent-border: rgba(154, 168, 255, 0.32);
+
+  /* Semantic */
+  --color-success: #3dd68c;
+  --color-success-soft: rgba(61, 214, 140, 0.12);
+  --color-success-text: #3dd68c;
+  --color-danger: #ff5c5c;
+  --color-danger-soft: rgba(255, 92, 92, 0.12);
+  --color-danger-text: #ff7a7a;
+  --color-warning: #f5c542;
+  --color-warning-soft: rgba(245, 197, 66, 0.12);
+  --color-warning-border: rgba(245, 197, 66, 0.32);
+  --color-warning-text: #f5c542;
 
   /* Layout */
-  --sidebar-width: 272px;
+  --sidebar-width: 280px;
   --sidebar-width-mobile: min(300px, 88vw);
-  --inspector-width: 340px;
-  --inspector-width-mobile: min(360px, 92vw);
-  --content-max: min(860px, 100%);
+  --inspector-width: 400px;
+  --inspector-width-mobile: min(400px, 94vw);
+  --content-max: min(760px, 100%);
   --header-height: 52px;
 
-  /* Radii — continuous curve feel */
+  /* Radii — soft, continuous */
   --radius-xs: 6px;
-  --radius-sm: 8px;
-  --radius-md: 12px;
-  --radius-lg: 16px;
-  --radius-xl: 20px;
+  --radius-sm: 10px;
+  --radius-md: 14px;
+  --radius-lg: 18px;
+  --radius-xl: 24px;
+  --radius-2xl: 28px;
   --radius-pill: 999px;
 
   /* Spacing scale (4pt grid) */
@@ -80,41 +91,44 @@
   --space-5: 20px;
   --space-6: 24px;
   --space-8: 32px;
+  --space-10: 40px;
+  --space-12: 48px;
 
-  /* Typography — system UI with optical sizing */
-  --font-sans: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'SF Pro Display',
-    'Segoe UI', system-ui, 'Helvetica Neue', 'Noto Sans SC', sans-serif;
-  --font-mono: 'SF Mono', ui-monospace, 'Menlo', 'Cascadia Code', monospace;
+  /* Typography — Inter-like system stack, display scale */
+  --font-sans: 'Inter', ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+    'Segoe UI', 'Helvetica Neue', 'Noto Sans SC', sans-serif;
+  --font-mono: ui-monospace, 'SF Mono', 'Menlo', 'Cascadia Code', 'Consolas', monospace;
   --font-size-xs: 11px;
-  --font-size-sm: 12px;
-  --font-size-md: 14px;
-  --font-size-lg: 15px;
-  --font-size-xl: 17px;
-  --font-size-2xl: 22px;
-  --font-size-display: 28px;
-  --leading-tight: 1.15;
+  --font-size-sm: 13px;
+  --font-size-md: 15px;
+  --font-size-lg: 16px;
+  --font-size-xl: 18px;
+  --font-size-2xl: 24px;
+  --font-size-display: 36px;
+  --font-size-hero: 42px;
+  --leading-tight: 1.12;
   --leading-snug: 1.35;
-  --leading-body: 1.5;
-  --tracking-display: -0.022em;
-  --tracking-title: -0.015em;
-  --tracking-label: 0.01em;
+  --leading-body: 1.55;
+  --tracking-display: -0.03em;
+  --tracking-title: -0.02em;
+  --tracking-label: 0.02em;
 
-  /* Elevation / shadow */
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.28);
-  --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.32);
-  --shadow-lg: 0 12px 40px rgba(0, 0, 0, 0.45);
-  --shadow-sheet: 0 24px 80px rgba(0, 0, 0, 0.55);
+  /* Elevation */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-md: 0 8px 24px rgba(0, 0, 0, 0.45);
+  --shadow-lg: 0 16px 48px rgba(0, 0, 0, 0.55);
+  --shadow-sheet: 0 24px 80px rgba(0, 0, 0, 0.65);
 
-  /* Motion — critically damped defaults */
-  --ease-out: cubic-bezier(0.25, 0.1, 0.25, 1);
+  /* Motion — soft, quick */
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
   --ease-spring: cubic-bezier(0.32, 0.72, 0, 1);
-  --duration-fast: 120ms;
-  --duration-normal: 220ms;
-  --duration-slow: 360ms;
+  --duration-fast: 140ms;
+  --duration-normal: 240ms;
+  --duration-slow: 380ms;
 
-  /* Blur */
-  --blur-chrome: 20px;
-  --blur-heavy: 40px;
+  /* Blur (used sparingly) */
+  --blur-chrome: 16px;
+  --blur-heavy: 28px;
 
   /* Z-index */
   --z-sidebar: 40;
@@ -127,60 +141,68 @@
 [data-theme='light'] {
   color-scheme: light;
 
-  --color-bg: #f5f5f7;
+  --color-bg: #f7f7f8;
   --color-bg-elevated: #ffffff;
-  --color-bg-sidebar: #f5f5f7;
+  --color-bg-sidebar: #efeff1;
   --color-bg-panel: #ffffff;
   --color-bg-input: #ffffff;
   --color-bg-hover: rgba(0, 0, 0, 0.04);
-  --color-bg-active: rgba(0, 0, 0, 0.08);
-  --color-bg-scrim: rgba(0, 0, 0, 0.28);
+  --color-bg-active: rgba(0, 0, 0, 0.07);
+  --color-bg-scrim: rgba(0, 0, 0, 0.32);
 
-  --material-chrome: rgba(255, 255, 255, 0.72);
-  --material-chrome-heavy: rgba(255, 255, 255, 0.88);
-  --material-sidebar: rgba(245, 245, 247, 0.92);
-  --material-fill: rgba(120, 120, 128, 0.16);
-  --material-fill-secondary: rgba(120, 120, 128, 0.12);
-  --material-fill-tertiary: rgba(120, 120, 128, 0.08);
+  --material-chrome: rgba(247, 247, 248, 0.86);
+  --material-chrome-heavy: rgba(255, 255, 255, 0.94);
+  --material-sidebar: #efeff1;
+  --material-fill: rgba(0, 0, 0, 0.06);
+  --material-fill-secondary: rgba(0, 0, 0, 0.045);
+  --material-fill-tertiary: rgba(0, 0, 0, 0.03);
 
-  --color-text: rgba(0, 0, 0, 0.88);
-  --color-text-secondary: rgba(60, 60, 67, 0.6);
-  --color-text-muted: rgba(60, 60, 67, 0.4);
-  --color-text-dim: rgba(60, 60, 67, 0.28);
+  --glow-ambient:
+    radial-gradient(ellipse 80% 55% at 50% -10%, rgba(100, 120, 255, 0.08), transparent 55%),
+    radial-gradient(ellipse 50% 40% at 80% 100%, rgba(0, 0, 0, 0.02), transparent 50%);
+  --glow-composer: 0 0 0 1px rgba(0, 0, 0, 0.08), 0 12px 32px rgba(0, 0, 0, 0.08);
+
+  --color-text: rgba(0, 0, 0, 0.9);
+  --color-text-secondary: rgba(0, 0, 0, 0.55);
+  --color-text-muted: rgba(0, 0, 0, 0.4);
+  --color-text-dim: rgba(0, 0, 0, 0.28);
   --color-text-inverse: #ffffff;
 
-  --color-border: rgba(60, 60, 67, 0.18);
-  --color-border-subtle: rgba(60, 60, 67, 0.12);
-  --color-separator: rgba(60, 60, 67, 0.18);
+  --color-border: rgba(0, 0, 0, 0.1);
+  --color-border-subtle: rgba(0, 0, 0, 0.06);
+  --color-separator: rgba(0, 0, 0, 0.08);
   --color-hairline: rgba(0, 0, 0, 0.06);
 
-  --color-primary: #007aff;
-  --color-primary-hover: #0071e3;
-  --color-primary-soft: rgba(0, 122, 255, 0.1);
-  --color-primary-border: rgba(0, 122, 255, 0.28);
-  --color-primary-tint: #2997ff;
+  --color-primary: #111113;
+  --color-primary-hover: #000000;
+  --color-primary-soft: rgba(0, 0, 0, 0.06);
+  --color-primary-border: rgba(0, 0, 0, 0.14);
+  --color-primary-tint: #222226;
+  --color-accent: #4f5fd6;
+  --color-accent-soft: rgba(79, 95, 214, 0.1);
+  --color-accent-border: rgba(79, 95, 214, 0.28);
 
-  --color-success: #34c759;
-  --color-success-soft: rgba(52, 199, 89, 0.12);
-  --color-success-text: #248a3d;
-  --color-danger: #ff3b30;
-  --color-danger-soft: rgba(255, 59, 48, 0.1);
-  --color-danger-text: #d70015;
-  --color-warning: #ff9f0a;
-  --color-warning-soft: rgba(255, 159, 10, 0.12);
-  --color-warning-border: rgba(255, 159, 10, 0.35);
-  --color-warning-text: #c93400;
+  --color-success: #1f9d5c;
+  --color-success-soft: rgba(31, 157, 92, 0.1);
+  --color-success-text: #17804a;
+  --color-danger: #e03e3e;
+  --color-danger-soft: rgba(224, 62, 62, 0.1);
+  --color-danger-text: #c62828;
+  --color-warning: #c98500;
+  --color-warning-soft: rgba(201, 133, 0, 0.1);
+  --color-warning-border: rgba(201, 133, 0, 0.28);
+  --color-warning-text: #a56d00;
 
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.06);
-  --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.08);
-  --shadow-lg: 0 12px 40px rgba(0, 0, 0, 0.12);
-  --shadow-sheet: 0 24px 80px rgba(0, 0, 0, 0.2);
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.05);
+  --shadow-md: 0 8px 24px rgba(0, 0, 0, 0.08);
+  --shadow-lg: 0 16px 48px rgba(0, 0, 0, 0.1);
+  --shadow-sheet: 0 24px 80px rgba(0, 0, 0, 0.14);
 }
 
 @media (prefers-reduced-transparency: reduce) {
   :root,
   [data-theme='light'] {
-    --material-chrome: var(--color-bg-elevated);
+    --material-chrome: var(--color-bg);
     --material-chrome-heavy: var(--color-bg-elevated);
     --material-sidebar: var(--color-bg-sidebar);
     --blur-chrome: 0px;
@@ -200,9 +222,11 @@
   :root {
     --color-border: rgba(255, 255, 255, 0.35);
     --color-text-secondary: rgba(255, 255, 255, 0.78);
+    --color-hairline: rgba(255, 255, 255, 0.18);
   }
   [data-theme='light'] {
     --color-border: rgba(0, 0, 0, 0.35);
     --color-text-secondary: rgba(0, 0, 0, 0.72);
+    --color-hairline: rgba(0, 0, 0, 0.16);
   }
 }

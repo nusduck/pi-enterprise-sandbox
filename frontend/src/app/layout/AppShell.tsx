@@ -1,4 +1,4 @@
-import { useCallback, useState, type ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
 import { useLocation } from 'react-router-dom';
 import { ConversationSidebar } from '../../widgets/conversation-sidebar/ConversationSidebar';
 import { ContextInspector } from '../../widgets/context-inspector/ContextInspector';
@@ -44,11 +44,6 @@ export function AppShell({ children }: { children: ReactNode }) {
   const [inspectorTab, setInspectorTab] = useState<InspectorTabId>('overview');
   const [selected, setSelected] = useState<SelectedEntity>(null);
   const [consoleProcessId, setConsoleProcessId] = useState<string | null>(null);
-  const [activityOpen, setActivityOpen] = useState(false);
-
-  const toggleActivity = useCallback(() => {
-    setActivityOpen((v) => !v);
-  }, []);
 
   function handleSelect(sel: SelectedEntity) {
     setSelected(sel);
@@ -79,9 +74,6 @@ export function AppShell({ children }: { children: ReactNode }) {
         consoleProcessId,
         openProcessConsole,
         closeProcessConsole,
-        activityOpen,
-        setActivityOpen,
-        toggleActivity,
       }}
     >
       <div

@@ -59,6 +59,10 @@ describe('F6 a11y attributes on key surfaces', () => {
   it('ConversationSidebar: primary nav + list semantics', () => {
     const side = readSrc('widgets', 'conversation-sidebar', 'ConversationSidebar.tsx');
     assert.match(side, /aria-label=["']Primary["']/);
+    assert.match(side, /aria-label=["']Account["']/);
+    assert.match(side, /sidebar-nav-primary/);
+    assert.match(side, /sidebar-nav-footer/);
+    assert.match(side, /Settings/);
     assert.match(side, /role=["']list["']/);
     assert.match(side, /role=["']listitem["']/);
     assert.match(side, /aria-label=["']Close sidebar["']/);
@@ -72,26 +76,18 @@ describe('F6 a11y attributes on key surfaces', () => {
     assert.match(composer, /aria-label=["']Running action["']/);
   });
 
-  it('RuntimeTimeline + cards: regions and expand controls', () => {
-    const timeline = readSrc('widgets', 'runtime-timeline', 'RuntimeTimeline.tsx');
-    assert.match(timeline, /aria-label=["']Runtime activity["']/);
+  it('Inline runtime steps: list region and expandable rows', () => {
+    const steps = readSrc('widgets', 'runtime-steps', 'InlineRuntimeSteps.tsx');
+    assert.match(steps, /aria-label=["']Runtime steps["']/);
+    assert.match(steps, /role=["']list["']/);
+    assert.match(steps, /aria-expanded=\{expandable \? open : undefined\}/);
+    assert.match(steps, /Approve/);
+    assert.match(steps, /Console/);
 
-    const tool = readSrc(
-      'widgets',
-      'runtime-timeline',
-      'cards',
-      'ToolExecutionCard.tsx',
-    );
-    assert.match(tool, /aria-expanded=\{open\}/);
-    assert.match(tool, /aria-label=\{open \? 'Collapse tool details'/);
-
-    const approval = readSrc(
-      'widgets',
-      'runtime-timeline',
-      'cards',
-      'ApprovalCard.tsx',
-    );
-    assert.match(approval, /role=["']button["']/);
+    // Workbench no longer mounts the bottom Activity drawer.
+    const workbench = readSrc('pages', 'workbench', 'WorkbenchPage.tsx');
+    assert.doesNotMatch(workbench, /activity-drawer|Activity/);
+    assert.match(workbench, /MessageList/);
   });
 
   it('Management pages: tablist filters with aria-selected', () => {

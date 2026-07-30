@@ -5,6 +5,11 @@ import rehypeSanitize from 'rehype-sanitize';
 import type { ChatMessage, ContentPart, ToolUsePart } from '../../shared/state';
 import { isInterruptedMessage } from '../../shared/state';
 import { safeApiUrl } from '../../shared/security/url';
+import { useChat } from '../../features/chat/ChatContext';
+import {
+  InlineRuntimeSteps,
+  runHasEntitySteps,
+} from '../runtime-steps/InlineRuntimeSteps';
 import { ToolPill } from './ToolPill';
 
 function SafeDownloadLink({
@@ -111,24 +116,37 @@ function MarkdownBody({ text }: { text: string }) {
 export function MessageBubble({
   msg,
   idx,
+  showRuntimeSteps = false,
 }: {
   msg: ChatMessage;
   idx: number;
+  /** When true, render entity-backed tool/MCP/process steps for this turn. */
+  showRuntimeSteps?: boolean;
 }) {
+  const { entityStore } = useChat();
   const role = msg.role || 'assistant';
   const isUser = role === 'user';
   const interrupted = isInterruptedMessage(msg);
   const parts = msg.content || [];
-  let hasContent = false;
+  const runId = msg._runId || null;
+  const useEntitySteps =
+    Boolean(showRuntimeSteps) &&
+    !isUser &&
+    runHasEntitySteps(entityStore, runId);
 
+  let hasContent = false;
   const body: ReactNode[] = [];
-  // Tools first (compact rail), then prose — avoids interleaved "tool ✓" noise
-  // inside markdown tables when many tools fire in one turn.
-  if (!isUser) {
+
+  // Prefer rich entity-backed steps (tools / process / approval / artifact).
+  // Fall back to legacy ToolPill rail when history has only tool_use parts.
+  if (!isUser && useEntitySteps && runId) {
+    body.push(<InlineRuntimeSteps key="runtime-steps" runId={runId} />);
+    hasContent = true;
+  } else if (!isUser) {
     const tools = parts.filter((p) => p.type === 'tool_use') as ToolUsePart[];
     if (tools.length) {
       body.push(
-        <div key="tools" className="bubble-tools">
+        <div key="tools" className="bubble-tools runtime-steps-fallback">
           {tools.map((p, i) => (
             <ToolPill key={`tool-${i}`} part={p} />
           ))}
@@ -137,17 +155,16 @@ export function MessageBubble({
       hasContent = true;
     }
   }
+
   parts.forEach((p: ContentPart, i) => {
     if (p.type === 'text' && 'text' in p && typeof p.text === 'string' && p.text) {
       if (isUser) {
-        // User text stays plain (preserve exact input, including newlines)
         body.push(
           <span key={`t-${i}`} className="user-plain">
             {p.text}
           </span>,
         );
       } else {
-        // Light stream repair: lone dangling ** from partial markdown tokens
         let text = p.text;
         const stars = (text.match(/\*\*/g) || []).length;
         if (stars % 2 === 1) text = `${text}**`;
@@ -174,15 +191,23 @@ export function MessageBubble({
     }
   }
 
+  // Assistant turns that only exist as entity steps (no text yet) should still render.
+  if (!hasContent && !isUser && useEntitySteps && runId) {
+    body.push(<InlineRuntimeSteps key="runtime-steps-empty" runId={runId} />);
+    hasContent = true;
+  }
+
   return (
     <div
       className={`mw ${role}`}
-      style={{ animationDelay: `${idx * 40}ms` }}
+      style={{ animationDelay: `${Math.min(idx, 8) * 30}ms` }}
     >
-      <div className="av" aria-hidden="true">
-        {isUser ? '🧑' : '●'}
-      </div>
       <div className="body">
+        {!isUser ? (
+          <div className="msg-role-label" aria-hidden="true">
+            UPRC
+          </div>
+        ) : null}
         <div className={`bubble${isUser ? '' : ' bubble-md'}`}>
           {hasContent ? body : <em className="bubble-empty">(empty)</em>}
           {!isUser && interrupted ? (

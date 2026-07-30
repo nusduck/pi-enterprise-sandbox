@@ -27,10 +27,9 @@ function runMarkerLabel(status: string | null, hasApproval: boolean): string {
 }
 
 /**
- * Sidebar hierarchy (top → bottom):
- * 1. Brand + new conversation
- * 2. Conversation list (primary content)
- * 3. Footer: app sections + compact auth
+ * Grok-style sidebar:
+ * Top — brand, new chat, primary destinations, recent conversations
+ * Bottom — settings + account only
  */
 export function ConversationSidebar() {
   const {
@@ -66,13 +65,16 @@ export function ConversationSidebar() {
   );
 
   const signedIn = Boolean(state.authUser?.username);
+  const isAdmin =
+    String(state.authUser?.role || '').toLowerCase() === 'admin';
   const conversations = useMemo(
-    () => [...(state.conversations || [])].sort((a, b) => {
-      const ta = Date.parse(a.updated_at || a.created_at || '');
-      const tb = Date.parse(b.updated_at || b.created_at || '');
-      if (ta !== tb) return tb - ta;
-      return String(a.id).localeCompare(String(b.id));
-    }),
+    () =>
+      [...(state.conversations || [])].sort((a, b) => {
+        const ta = Date.parse(a.updated_at || a.created_at || '');
+        const tb = Date.parse(b.updated_at || b.created_at || '');
+        if (ta !== tb) return tb - ta;
+        return String(a.id).localeCompare(String(b.id));
+      }),
     [state.conversations],
   );
 
@@ -138,11 +140,87 @@ export function ConversationSidebar() {
             title="New conversation"
             onClick={() => void startNewChat()}
           >
-            New Conversation
+            + New chat
           </button>
         </div>
 
-        <div className="sidebar-section-label">Conversations</div>
+        <nav className="sidebar-nav sidebar-nav-primary" aria-label="Primary">
+          <NavLink
+            to="/"
+            end
+            className={({ isActive }) =>
+              `sidebar-nav-link${isActive ? ' active' : ''}`
+            }
+            onClick={() => {
+              if (isMobile) closeSidebar();
+            }}
+          >
+            <span className="sidebar-nav-icon" aria-hidden="true">
+              ⌂
+            </span>
+            <span className="sidebar-nav-text">Chat</span>
+          </NavLink>
+          <NavLink
+            to="/runs"
+            className={({ isActive }) =>
+              `sidebar-nav-link${isActive ? ' active' : ''}`
+            }
+            onClick={() => {
+              if (isMobile) closeSidebar();
+            }}
+          >
+            <span className="sidebar-nav-icon" aria-hidden="true">
+              ◎
+            </span>
+            <span className="sidebar-nav-text">Runs</span>
+            {activeRuns.length > 0 ? (
+              <span
+                className="sidebar-nav-badge"
+                aria-label={`${activeRuns.length} active`}
+              >
+                {activeRuns.length}
+              </span>
+            ) : null}
+          </NavLink>
+          <NavLink
+            to="/approvals"
+            className={({ isActive }) =>
+              `sidebar-nav-link${isActive ? ' active' : ''}`
+            }
+            onClick={() => {
+              if (isMobile) closeSidebar();
+            }}
+          >
+            <span className="sidebar-nav-icon" aria-hidden="true">
+              ⚑
+            </span>
+            <span className="sidebar-nav-text">Approvals</span>
+            {pendingApprovals.length > 0 ? (
+              <span
+                className="sidebar-nav-badge warn"
+                aria-label={`${pendingApprovals.length} pending`}
+              >
+                {pendingApprovals.length}
+              </span>
+            ) : null}
+          </NavLink>
+          <NavLink
+            to="/schedules"
+            className={({ isActive }) =>
+              `sidebar-nav-link${isActive ? ' active' : ''}`
+            }
+            onClick={() => {
+              if (isMobile) closeSidebar();
+            }}
+          >
+            <span className="sidebar-nav-icon" aria-hidden="true">
+              ⏱
+            </span>
+            <span className="sidebar-nav-text">Schedules</span>
+          </NavLink>
+        </nav>
+
+        <div className="sidebar-section-label">Recent</div>
 
         <div className="sidebar-list" role="list">
           {conversations.length === 0 ? (
@@ -211,72 +289,35 @@ export function ConversationSidebar() {
         </div>
 
         <div className="sidebar-footer">
-          <nav className="sidebar-nav" aria-label="Primary">
-            <NavLink
-              to="/"
-              end
-              className={({ isActive }) =>
-                `sidebar-nav-link${isActive ? ' active' : ''}`
-              }
-            >
-              Chat
-            </NavLink>
-            <NavLink
-              to="/runs"
-              className={({ isActive }) =>
-                `sidebar-nav-link${isActive ? ' active' : ''}`
-              }
-            >
-              <span>Runs</span>
-              {activeRuns.length > 0 ? (
-                <span
-                  className="sidebar-nav-badge"
-                  aria-label={`${activeRuns.length} active`}
-                >
-                  {activeRuns.length}
-                </span>
-              ) : null}
-            </NavLink>
-            <NavLink
-              to="/approvals"
-              className={({ isActive }) =>
-                `sidebar-nav-link${isActive ? ' active' : ''}`
-              }
-            >
-              <span>Approvals</span>
-              {pendingApprovals.length > 0 ? (
-                <span
-                  className="sidebar-nav-badge warn"
-                  aria-label={`${pendingApprovals.length} pending`}
-                >
-                  {pendingApprovals.length}
-                </span>
-              ) : null}
-            </NavLink>
-            <NavLink
-              to="/schedules"
-              className={({ isActive }) =>
-                `sidebar-nav-link${isActive ? ' active' : ''}`
-              }
-            >
-              Scheduled Runs
-            </NavLink>
+          <nav className="sidebar-nav sidebar-nav-footer" aria-label="Account">
             <NavLink
               to="/settings/capabilities"
               className={({ isActive }) =>
                 `sidebar-nav-link${isActive ? ' active' : ''}`
               }
+              onClick={() => {
+                if (isMobile) closeSidebar();
+              }}
             >
-              Settings
+              <span className="sidebar-nav-icon" aria-hidden="true">
+                ⚙
+              </span>
+              <span className="sidebar-nav-text">Settings</span>
             </NavLink>
-            {String(state.authUser?.role || '').toLowerCase() === 'admin' ? (
+            {isAdmin ? (
               <NavLink
                 to="/settings/a2a"
                 className={({ isActive }) =>
                   `sidebar-nav-link${isActive ? ' active' : ''}`
                 }
+                onClick={() => {
+                  if (isMobile) closeSidebar();
+                }}
               >
-                A2A
+                <span className="sidebar-nav-icon" aria-hidden="true">
+                  ⇄
+                </span>
+                <span className="sidebar-nav-text">A2A</span>
               </NavLink>
             ) : null}
           </nav>
@@ -290,9 +331,16 @@ export function ConversationSidebar() {
                 onDoubleClick={() => void logout()}
                 onClick={() => setAuthOpen((v) => !v)}
               >
-                <span className="sidebar-user-dot" aria-hidden="true" />
-                <span className="sidebar-user-name">
-                  {state.authUser?.username}
+                <span className="sidebar-user-avatar" aria-hidden="true">
+                  {(state.authUser?.username || '?').slice(0, 1).toUpperCase()}
+                </span>
+                <span className="sidebar-user-meta">
+                  <span className="sidebar-user-name">
+                    {state.authUser?.username}
+                  </span>
+                  <span className="sidebar-user-role">
+                    {String(state.authUser?.role || 'user')}
+                  </span>
                 </span>
               </button>
             ) : (
@@ -352,7 +400,7 @@ export function ConversationSidebar() {
             {authOpen && signedIn ? (
               <button
                 type="button"
-                className="btn-auth secondary"
+                className="btn-auth secondary sidebar-logout"
                 onClick={() => void logout()}
               >
                 Log out

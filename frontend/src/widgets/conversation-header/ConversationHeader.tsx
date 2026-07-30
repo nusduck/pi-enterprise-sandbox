@@ -1,8 +1,7 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useChat } from '../../features/chat/ChatContext';
 import { conversationTitle, isInterruptedMessage } from '../../shared/state';
 import {
-  buildRunTimeline,
   countRunTools,
   formatDuration,
   formatRunStatusLabel,
@@ -11,11 +10,10 @@ import {
 } from '../runtime-timeline/buildTimeline';
 import { BudgetBar } from '../budget-bar/BudgetBar';
 import { shouldShowResumeEntry } from '../composer/composerMode';
-import { useWorkbenchSelection } from '../../app/layout/WorkbenchSelectionContext';
 
 /**
- * Single workbench toolbar — conversation title + live run chips + panel toggles.
- * Replaces the old stacked App header / conversation header / idle run-status bar.
+ * Single workbench toolbar — conversation title + live run chips + Details.
+ * Runtime tool/MCP steps live inline in the chat stream (not a separate drawer).
  */
 export function ConversationHeader() {
   const {
@@ -30,7 +28,6 @@ export function ConversationHeader() {
     inspectorOpen,
     toggleInspector,
   } = useChat();
-  const { activityOpen, toggleActivity } = useWorkbenchSelection();
 
   const conv = (state.conversations || []).find(
     (c) => c.id === state.conversationId,
@@ -59,11 +56,6 @@ export function ConversationHeader() {
     const id = window.setInterval(() => setTick((n) => n + 1), 1000);
     return () => window.clearInterval(id);
   }, [run?.id, run?.status, run?.finishedAt]);
-
-  const timelineCount = useMemo(
-    () => buildRunTimeline(entityStore, activeRunId).length,
-    [entityStore, activeRunId],
-  );
 
   const showRun = Boolean(run || state.isStreaming);
   const status = run?.status || (state.isStreaming ? 'running' : null);
@@ -199,19 +191,6 @@ export function ConversationHeader() {
       </div>
 
       <div className="wb-toolbar-right">
-        <button
-          type="button"
-          className={`btn-toolbar${activityOpen ? ' active' : ''}`}
-          title="Runtime activity"
-          aria-label="Toggle runtime activity"
-          aria-pressed={activityOpen}
-          onClick={toggleActivity}
-        >
-          Activity
-          {timelineCount > 0 ? (
-            <span className="btn-toolbar-badge">{timelineCount}</span>
-          ) : null}
-        </button>
         <button
           type="button"
           className={`btn-toolbar${inspectorOpen ? ' active' : ''}`}
