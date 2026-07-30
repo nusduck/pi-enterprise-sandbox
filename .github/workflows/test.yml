@@ -218,6 +218,27 @@ jobs:
           npm ci --prefix agent
           npm ci --prefix api-server
 
+      # docker-compose.yml gives its MySQL `--log-bin-trust-function-creators=1`
+      # because Agent migrations create triggers as a non-SUPER application
+      # user. A GitHub Actions service container cannot take a command, so do
+      # it the other documented way: the platform sets it as root, once, before
+      # migrations. Never granted to the app account.
+      - name: Allow non-SUPER trigger creation (matches compose mysqld flag)
+        run: |
+          # Run the client from the same image as the service: the runner image
+          # does not reliably ship a mysql client.
+          for i in $(seq 1 30); do
+            if docker run --rm --network host mysql:8.0 \
+                 mysql -h 127.0.0.1 -P 3306 -uroot -pci_mysql_root_password_0123456789 \
+                 -e "SET GLOBAL log_bin_trust_function_creators = 1;" 2>/dev/null; then
+              echo "log_bin_trust_function_creators=1 set"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "could not reach MySQL to set log_bin_trust_function_creators" >&2
+          exit 1
+
       - name: Run cross-service smoke (fake OpenAI provider)
         env:
           SMOKE_MYSQL_URL: mysql://sandbox:ci_mysql_password_0123456789@127.0.0.1:3306/sandbox
