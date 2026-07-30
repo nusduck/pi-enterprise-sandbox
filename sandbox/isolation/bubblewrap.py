@@ -17,13 +17,18 @@ import re
 import shutil
 import subprocess
 from pathlib import Path, PurePosixPath
+from typing import Any
 
 from sandbox.isolation.base import (
     IsolationUnavailable,
     LaunchSpec,
     PreparedLaunch,
 )
-from sandbox.paths import AGENT_SKILL_PATH, SandboxPathScope
+from sandbox.paths import (
+    AGENT_SKILL_PATH,
+    AGENT_USER_SKILL_PATH,
+    SandboxPathScope,
+)
 from sandbox.security.safe_env import safe_env
 
 _ENV_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
@@ -72,13 +77,53 @@ class BubblewrapIsolationBackend:
         *,
         executable: str,
         skills_root: Path,
+        user_skills_root: Path | None = None,
         uid: int = 10001,
         gid: int = 10001,
     ) -> None:
         self.executable = executable
         self.skills_root = skills_root.resolve()
+        # Second (user) skill tier. Optional so single-tier deployments and
+        # existing tests keep working; bound read-only exactly like the first.
+        self.user_skills_root = (
+            user_skills_root.resolve() if user_skills_root is not None else None
+        )
         self.uid = uid
         self.gid = gid
+
+    def _skill_binds(self, context: Any = None) -> list[str]:
+        """Read-only binds for the skill tiers this execution may see.
+
+        The system tier is a hard bind: a missing bundled skill root is a
+        deployment fault and bwrap should fail loudly.
+
+        The user tier binds **only the caller's own** ``<org>/<user>``
+        directory, never the whole base — otherwise a bash tool could read
+        every other tenant's installed skills. The bind target keeps the same
+        absolute path the Agent scanned, so ``<location>`` paths the model was
+        given in its prompt resolve identically inside the sandbox.
+        ``--ro-bind-try`` because an absent directory is normal (nothing
+        installed yet).
+        """
+        args = ["--ro-bind", str(self.skills_root), AGENT_SKILL_PATH]
+        if self.user_skills_root is None:
+            return args
+        user_dir = getattr(context, "user_skill_dir", None) if context else None
+        if user_dir is None:
+            # Unknown identity → system tier only. Never fall back to the base.
+            return args
+        try:
+            relative = Path(user_dir).resolve().relative_to(self.user_skills_root)
+        except (ValueError, OSError):
+            return args
+        args.extend(
+            [
+                "--ro-bind-try",
+                str(Path(self.user_skills_root) / relative),
+                f"{AGENT_USER_SKILL_PATH}/{relative.as_posix()}",
+            ]
+        )
+        return args
 
     def _logical_cwd(
         self,
@@ -164,9 +209,9 @@ class BubblewrapIsolationBackend:
         ):
             args.extend(["--ro-bind-try", path, path])
 
-        # Tool processes see the shared Skill tree only at the canonical path,
-        # always read-only even when the Agent has an RW development mount.
-        args.extend(["--ro-bind", str(self.skills_root), AGENT_SKILL_PATH])
+        # Tool processes see the shared Skill trees only at their canonical
+        # paths, always read-only even when the Agent has an RW mount.
+        args.extend(self._skill_binds(spec.context))
 
         args.extend(
             [
@@ -261,9 +306,7 @@ class BubblewrapIsolationBackend:
             "--ro-bind-try",
             "/usr/local",
             "/usr/local",
-            "--ro-bind",
-            str(self.skills_root),
-            AGENT_SKILL_PATH,
+            *self._skill_binds(),  # probe: system tier only
             "--clearenv",
             "--setenv",
             "PATH",

@@ -103,6 +103,12 @@ async def lifespan(app: FastAPI):
     settings.workspaces_path.mkdir(parents=True, exist_ok=True)
     settings.temp_path.mkdir(parents=True, exist_ok=True)
     settings.skills_path.mkdir(parents=True, exist_ok=True)
+    # User skill tier: created eagerly so the Bubblewrap bind and skill reads
+    # do not have to special-case "nothing installed yet".
+    try:
+        settings.user_skills_path.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        pass  # read-only mount in production is fine; nothing to create
 
     # Fail closed when isolation is required. Development direct mode still
     # runs this check so readiness truthfully reports the selected backend.
@@ -114,9 +120,17 @@ async def lifespan(app: FastAPI):
     # identity is opaque workspace_id + relative paths; no public absolute cwd.
     from pathlib import Path
 
-    from sandbox.paths import AGENT_SKILL_PATH, LEGACY_AGENT_WORKSPACE_PATH
+    from sandbox.paths import (
+        AGENT_SKILL_PATH,
+        AGENT_USER_SKILL_PATH,
+        LEGACY_AGENT_WORKSPACE_PATH,
+    )
 
-    for agent_path in (LEGACY_AGENT_WORKSPACE_PATH, AGENT_SKILL_PATH):
+    for agent_path in (
+        LEGACY_AGENT_WORKSPACE_PATH,
+        AGENT_SKILL_PATH,
+        AGENT_USER_SKILL_PATH,
+    ):
         try:
             Path(agent_path).mkdir(parents=True, exist_ok=True)
         except OSError:

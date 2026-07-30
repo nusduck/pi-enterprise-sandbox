@@ -28,6 +28,10 @@ const MAX_TIMEOUT_SEC = 300;
 const SENSITIVE_KEY =
   /(?:^|_)(?:api[_-]?key|secret|password|authorization|bearer|access[_-]?token|refresh[_-]?token)(?:$|_)/i;
 
+/** Mirrors enterprise-policy RISK_LEVELS; duplicated to keep this loader
+ * dependency-free (it is imported by the risk classifier). */
+const MCP_RISK_LEVELS = Object.freeze(['low', 'medium', 'high', 'critical']);
+
 /**
  * Final tool name pattern after adapter registration (plan §21.1).
  * @param {string} serverName
@@ -231,6 +235,52 @@ export function loadMcpConfig(raw) {
         );
       }
       toolPolicy.default = d;
+
+      // Risk levels are validated here so a bad value fails at config load
+      // rather than at the first tool call. The risk table itself is built by
+      // buildMcpRiskBindings.
+      if (toolPolicy.riskLevel != null) {
+        const level = String(toolPolicy.riskLevel).trim().toLowerCase();
+        if (!MCP_RISK_LEVELS.includes(level)) {
+          throw new McpConfigError(
+            `${path}.toolPolicy.riskLevel must be ${MCP_RISK_LEVELS.join('|')}`,
+            { code: 'MCP_TOOL_POLICY_INVALID' },
+          );
+        }
+        toolPolicy.riskLevel = level;
+      }
+      if (toolPolicy.toolRiskLevels != null) {
+        if (
+          typeof toolPolicy.toolRiskLevels !== 'object' ||
+          Array.isArray(toolPolicy.toolRiskLevels)
+        ) {
+          throw new McpConfigError(
+            `${path}.toolPolicy.toolRiskLevels must be an object map`,
+            { code: 'MCP_TOOL_POLICY_INVALID' },
+          );
+        }
+        /** @type {Record<string, string>} */
+        const normalizedRisk = {};
+        for (const [toolName, raw] of Object.entries(
+          /** @type {Record<string, unknown>} */ (toolPolicy.toolRiskLevels),
+        )) {
+          if (!/^[A-Za-z0-9._-]+$/.test(toolName)) {
+            throw new McpConfigError(
+              `${path}.toolPolicy.toolRiskLevels key "${toolName}" must be a bare tool name`,
+              { code: 'MCP_TOOL_POLICY_INVALID' },
+            );
+          }
+          const level = String(raw ?? '').trim().toLowerCase();
+          if (!MCP_RISK_LEVELS.includes(level)) {
+            throw new McpConfigError(
+              `${path}.toolPolicy.toolRiskLevels.${toolName} must be ${MCP_RISK_LEVELS.join('|')}`,
+              { code: 'MCP_TOOL_POLICY_INVALID' },
+            );
+          }
+          normalizedRisk[toolName] = level;
+        }
+        toolPolicy.toolRiskLevels = normalizedRisk;
+      }
     }
 
     const timeoutSec = parseTimeoutSec(

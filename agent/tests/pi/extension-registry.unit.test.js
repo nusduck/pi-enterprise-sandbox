@@ -65,8 +65,18 @@ function collectRegisteredToolNames(dir) {
 }
 
 describe('extension registry', () => {
-  it('load order is exactly the registered required set', () => {
-    assert.deepEqual([...EXTENSION_LOAD_ORDER], [...REQUIRED_EXTENSION_NAMES]);
+  it('load order covers every registered extension, required ones first', () => {
+    // Adding an extension must never reshuffle the core pipeline: the required
+    // set keeps its leading positions and optional extensions append.
+    assert.deepEqual(
+      EXTENSION_LOAD_ORDER.slice(0, REQUIRED_EXTENSION_NAMES.length),
+      [...REQUIRED_EXTENSION_NAMES],
+    );
+    assert.deepEqual(
+      [...EXTENSION_LOAD_ORDER].sort(),
+      [...REGISTERED_EXTENSION_NAMES].sort(),
+      'every registered extension needs a load-order position',
+    );
     for (const name of REQUIRED_EXTENSION_NAMES) {
       assert.ok(
         REGISTERED_EXTENSION_NAMES.includes(name),

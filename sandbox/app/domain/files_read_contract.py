@@ -19,7 +19,13 @@ from sandbox.app.domain.tool_request_hash import (
     ToolRequestHashError,
     compute_tool_request_hash_v1,
 )
-from sandbox.paths import AGENT_SKILL_PATH, AGENT_TEMP_PATH, AGENT_WORKSPACE_PATH
+from sandbox.paths import (
+    AGENT_SKILL_PATHS,
+    AGENT_TEMP_PATH,
+    AGENT_WORKSPACE_PATH,
+    is_logical_skill_path,
+    logical_skill_root,
+)
 from sandbox.security.internal_auth import JS_MAX_SAFE_INTEGER
 from sandbox.security.path_validation import validate_formal_id
 
@@ -230,9 +236,7 @@ def _validate_canonical_path(path: Any, *, root: str, root_label: str) -> str:
 
 
 def _validate_canonical_workspace_path(path: Any) -> str:
-    if path == AGENT_SKILL_PATH or (
-        isinstance(path, str) and path.startswith(AGENT_SKILL_PATH + "/")
-    ):
+    if isinstance(path, str) and is_logical_skill_path(path):
         _fail("FILES_READ_PATH", "skill paths rejected on files.read")
     if path == AGENT_TEMP_PATH or (
         isinstance(path, str) and path.startswith(AGENT_TEMP_PATH + "/")
@@ -244,9 +248,15 @@ def _validate_canonical_workspace_path(path: Any) -> str:
 
 
 def _validate_canonical_skill_path(path: Any) -> str:
-    return _validate_canonical_path(
-        path, root=AGENT_SKILL_PATH, root_label="skill"
-    )
+    """Accept either skill tier; the longest matching root wins so a
+    /home/sandbox/skill-user path is not read as a child of the system root."""
+    root = logical_skill_root(path) if isinstance(path, str) else None
+    if root is None:
+        _fail(
+            "FILES_READ_PATH",
+            f"path must be under one of {', '.join(AGENT_SKILL_PATHS)}",
+        )
+    return _validate_canonical_path(path, root=root, root_label="skill")
 
 
 def _claim_str(claims: Mapping[str, Any], key: str) -> str:

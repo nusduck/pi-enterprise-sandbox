@@ -125,6 +125,8 @@ export const ToolRegistryItemSchema = z
     category: z.string().optional().nullable(),
     source: z.string().optional().nullable(),
     risk_level: z.string().optional().nullable(),
+    /** Which risk-table entry priced this tool (e.g. `tool:bash`, `mcpServer:github`). */
+    risk_source: z.string().optional().nullable(),
     approval_policy: z.string().optional().nullable(),
     timeout: z.union([z.number(), z.string()]).optional().nullable(),
     retry_policy: z.unknown().optional().nullable(),

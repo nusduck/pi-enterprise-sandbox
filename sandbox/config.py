@@ -15,7 +15,11 @@ from typing import Annotated, Any, Literal
 from pydantic import Field, PrivateAttr, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
-from sandbox.paths import AGENT_SKILL_PATH, AGENT_WORKSPACE_PATH
+from sandbox.paths import (
+    AGENT_SKILL_PATH,
+    AGENT_USER_SKILL_PATH,
+    AGENT_WORKSPACE_PATH,
+)
 from sandbox.security.network_policy import (
     DEFAULT_ALLOWED_CLIENT_CIDRS,
     DEFAULT_TRUSTED_PROXY_CIDRS,
@@ -306,8 +310,10 @@ class Settings(BaseSettings):
     # Persistent per-workspace temp trees live under temp_root/tmp_{workspace_id}.
     # Untrusted executions see the selected tree as /tmp.
     temp_root: str = str(_LOCAL_DATA_ROOT / "tmp-workspaces")
-    # Shared skills tree (read-only in containers).
+    # Shared skills trees (read-only in containers): bundled system packages,
+    # plus packages the Agent installed on behalf of the user.
     skills_root: str = str(_LOCAL_DATA_ROOT / "skill")
+    user_skills_root: str = str(_LOCAL_DATA_ROOT / "skill-user")
     # PR-09 control-plane roots — NEVER Bubblewrap-bound into workspace/tmp.
     # Immutable artifact snapshots (download source of truth).
     artifacts_root: str = str(_LOCAL_DATA_ROOT / "artifacts")
@@ -319,6 +325,7 @@ class Settings(BaseSettings):
     # never a process-global mutable symlink.
     agent_workspace_path: str = AGENT_WORKSPACE_PATH
     agent_skill_path: str = AGENT_SKILL_PATH
+    agent_user_skill_path: str = AGENT_USER_SKILL_PATH
 
     # ── Process isolation ────────────────────────────────────────────
     # Host tests/local Python default to direct. Compose explicitly enables
@@ -942,6 +949,18 @@ class Settings(BaseSettings):
     @property
     def skills_path(self) -> Path:
         return Path(self.skills_root)
+
+    @property
+    def user_skills_path(self) -> Path:
+        return Path(self.user_skills_root)
+
+    @property
+    def skill_mounts(self) -> tuple[tuple[Path, str], ...]:
+        """(physical, logical) skill binds, in read-precedence order."""
+        return (
+            (self.skills_path, self.agent_skill_path),
+            (self.user_skills_path, self.agent_user_skill_path),
+        )
 
     @property
     def artifacts_path(self) -> Path:

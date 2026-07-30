@@ -1,7 +1,8 @@
 # Agent Skills (curated everyday set)
 
-Shared skill packages are mounted into Agent and Sandbox only at
-`/home/sandbox/skill`.
+Bundled skill packages are mounted into Agent and Sandbox at
+`/home/sandbox/skill` (read-only). User-installed packages live separately
+under `/home/sandbox/skill-user/<orgId>/<userId>` — see 两层 Skill below.
 
 The Agent discovers each `*/SKILL.md` package automatically.
 
@@ -52,82 +53,116 @@ In chat, name the skill or describe the task, e.g.:
 ## Notes
 
 - Upstream licenses remain those of the source repos (see each package).
-- Production default is `SKILLS_MODE=readonly` (skills readable/executable, not installable).
-- Development install/edit: set `SKILLS_MODE=development` and a writable `AGENT_SKILLS_MOUNT` (see below).
+- This directory is the **system tier**: bundled with the image and read-only in
+  every mode. User installs land in a separate per-user tier.
 
 ---
 
-## 研发模式：如何给 Agent 安装 Skill
+## 两层 Skill
 
-### 1. 打开 development 模式
+| 层 | 路径 | 内容 | 可见范围 | 可写 |
+|----|------|------|----------|------|
+| 系统 | `/home/sandbox/skill` | 本仓库 `./skills` 自带的 package | 所有人 | 否（任何模式） |
+| 用户 | `/home/sandbox/skill-user/<orgId>/<userId>` | 该用户 `skill_install` 装的 package | **仅该用户本人** | 是 |
 
-编辑仓库根目录 `.env`：
+每个 Run 扫描 `[系统层, 自己的用户目录]`，**系统层优先**：同名 package 以系统层为准，
+因此装一个与自带 package 同名的 skill 会被直接拒绝（否则装了也不会生效）。
+
+用户目录是一个 named volume（`agent_user_skills`）下的子目录，所以装过的 skill：
+
+- **跨对话**：不绑定任何 conversation / session，下次新开对话照样在
+- **跨容器重建**：volume 持久化
+- **不跨用户**：A 用户装的 skill 不会出现在 B 用户（哪怕同组织）的 agent 上下文里；
+  Sandbox 执行时也只 bind 调用者本人的目录，别人的 package 在沙箱里根本不存在
+
+---
+
+## 安装 Skill
+
+### 1. 默认就能装
+
+**不需要开发模式**。`SKILLS_MODE` 默认 `enabled`，生产环境同样可用。安全性来自两点：
+
+1. 写入范围被限制在调用者自己的 `<orgId>/<userId>` 目录
+2. `skill_install` 在风险表里是 `high`，走审批
+
+要彻底关掉安装能力：`SKILLS_MODE=readonly`（skill 生命周期工具不再注册）。
+
+可选配置：
 
 ```bash
-SKILLS_MODE=development
-# 可写挂载：宿主机 ./skills → 容器 /home/sandbox/skill
-AGENT_SKILLS_MOUNT=./skills:/home/sandbox/skill:rw
-# 可选：允许 skill_install 从白名单本地路径拷贝
+# .env
+# 允许 skill_install 从这些容器内绝对路径拷贝（git 源不需要）
 SKILLS_INSTALL_LOCAL_ALLOWLIST=/tmp/skill-src
 # 可选审计
 # SKILLS_AUDIT_LOG=/tmp/skill-audit.jsonl
 ```
 
-然后重启 agent（skill 卷变更需要 recreate）：
+工具：`skill_list` / `skill_install` / `skill_uninstall` / `skill_edit` / `skill_reload`。
 
-```bash
-docker compose up -d agent
-# 或本地进程：
-# SKILLS_MODE=development npm run dev --prefix agent
-```
+### 2. 安装体验
 
-### 2. 三种安装方式
+`skill_install` **只需要 `source`**：
 
-| 方式 | 做法 | 何时用 |
-|------|------|--------|
-| **A. 手工放入** | 在 `skills/<name>/` 放 `SKILL.md`（frontmatter 必须有 `name` + `description`，且 `name` = 目录名） | 从别处拷贝现成 package；**当前唯一可靠路径** |
-| **B. 对话安装** | 对 Agent 说「安装 skill…」→ 走 `skill_install`（本地白名单路径或 HTTPS Git + ref） | 研发对话里热装（**TODO：runtime 未接线**） |
-| **C. Git 安装（工具）** | Agent 调用 `skill_install`：`source_type=git`，`source=https://…`，**必须带 ref**（branch/tag/sha） | 从 GitHub 拉官方 skill（同上，依赖 B） |
+- 源类型自动判断（`https://…` → git；其它 → 本地路径）
+- git ref 默认 `HEAD`
+- 包目录自动发现：SKILL.md 在仓库根或 `skills/<name>/` 都能找到，找到多个会报错
+  并列出候选让你用 `subpath` 指定
+- package 名取自 SKILL.md 的 `name`，不用重复写；写了就必须一致
+- 装完自动 `skill_reload`，当前回合即可使用
 
-> **TODO（2026-07-29）：** `skill_install` / `skill_edit` / `skill_reload` 库代码在
-> `agent/src/skills/`，但**尚未**挂到 Agent Run 的 custom tools 表面；对话安装目前
-> 不可用。跟踪：[`docs/review-deferred-items.md`](../docs/review-deferred-items.md)。
-
-示例（对话里让 Agent 执行的语义 — **接线完成后**）：
+对话里直接说即可：
 
 ```
-请 skill_install：
-- name: skill-creator
-- source_type: git
+装一下 https://github.com/anthropics/skills 里的 skill-creator
+```
+
+Agent 会调用：
+
+```
+skill_install:
 - source: https://github.com/anthropics/skills
-- ref: main
-- subpath: skills/skill-creator
+- subpath: skills/skill-creator     # 仓库里有多个 package 时才需要
 ```
 
 本地目录：
 
 ```
-请 skill_install：
-- name: my-skill
-- source_type: local
+skill_install:
 - source: /tmp/skill-src/my-skill   # 必须在 SKILLS_INSTALL_LOCAL_ALLOWLIST 下
 ```
 
-装完后可用 `skill_reload` 立即重新扫描；下一回合通常也会自动扫。
+内容相同的重复安装是显式 no-op（返回 `idempotent: true`），不会反复覆盖。
+`skill_uninstall` 只能删自己装的 package。
 
-### 3. 约束（安全）
+### 3. 审批
+
+Skill 工具和其它工具一样走风险表（`config/agent/tool-risk.json`）。默认：
+
+| 工具 | 风险 | 结果 |
+|------|------|------|
+| `skill_list` / `skill_reload` | low | 直接放行 |
+| `skill_edit` | medium | 直接放行 |
+| `skill_install` / `skill_uninstall` | high | 需要审批 |
+
+安装意味着下一回合会执行第三方代码，所以默认要审批。要免审批就把
+`tool-risk.json` 里 `skill_install` 调成 `low`/`medium`。
+
+### 4. 约束（安全）
 
 - **拒绝**：`git@` / SSH、URL 内凭证、npm/OCI、任意压缩包脚本
-- 通用 `write` / `edit` / `bash` **不能**写 skill 根；只有 `skill_install` / `skill_edit` 可以
-- Sandbox 侧 skill 挂载始终 **只读**（执行用）；写入只在 Agent 可写卷
-- 生产 / `docker-compose.prod.yml` 强制 `readonly` + `:ro`
+- 通用 `write` / `edit` / `bash` **不能**写任何 skill 根；只有 `skill_install` /
+  `skill_edit` / `skill_uninstall` 可以，且只能写调用者自己的目录
+- 系统层在所有模式下只读，安装无法覆盖自带 package
+- Sandbox 侧两层 skill 都是**只读**挂载（执行用），且只 bind 调用者本人的用户目录
+- orgId / userId 作为路径段会被严格校验，无法用 `../` 逃逸
 
-### 4. 校验格式
+### 5. 校验格式
 
 每个 package：
 
 ```
-skills/my-skill/
+my-skill/
   SKILL.md          # --- name: my-skill\ndescription: ...\n---\n body
   scripts/          # 可选
 ```

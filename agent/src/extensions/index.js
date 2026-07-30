@@ -19,8 +19,13 @@ import { createSandboxBridgeExtension } from './sandbox-bridge/index.js';
 import { createUserInteractionExtension } from './user-interaction/index.js';
 import { createEnterprisePolicyExtension } from './enterprise-policy/index.js';
 import { createObservabilityExtension } from './observability/index.js';
+import { createSkillLifecycleExtension } from './skill-lifecycle/index.js';
 import { SANDBOX_TOOL_NAMES } from './sandbox-bridge/constants.js';
 import { createPolicyEngine } from './enterprise-policy/policy-engine.js';
+import {
+  coerceToolRiskPolicy,
+  mergeToolRiskPolicies,
+} from './enterprise-policy/tool-risk-policy.js';
 
 export { FencedToolGovernanceRecorder } from '../application/fenced-tool-governance-recorder.js';
 
@@ -57,12 +62,26 @@ export {
   classifyTool,
   isLocalSandboxTool,
   evaluateLocalArgGuards,
+  DEFAULT_CLASS_RISK_LEVELS,
+  DEFAULT_RISK_APPROVAL,
+  RISK_CLASSES,
+  ToolRiskPolicyError,
+  coerceToolRiskPolicy,
+  decisionForRiskLevel,
+  defaultToolRiskPolicy,
+  loadToolRiskPolicy,
+  mergeToolRiskPolicies,
+  resolveToolRiskLevel,
 } from './enterprise-policy/index.js';
 export {
   createObservabilityExtension,
   extractUsageSummary,
   isSandboxBridgeOutcomeUnknown,
 } from './observability/index.js';
+export {
+  createSkillLifecycleExtension,
+  SKILL_LIFECYCLE_TOOL_NAMES,
+} from './skill-lifecycle/index.js';
 
 /**
  * Exact tool allowlist for Pi createFromServices({ tools }).
@@ -251,9 +270,14 @@ export function assertEnterpriseExtensions(extensions) {
  *   mcpReadOnlyTools?: Iterable<string>,
  *   mcpServerPolicies?: object,
  *   agentVersionToolPolicy?: object,
+ *   toolRiskPolicy?: object,
+ *   agentVersionToolRiskPolicy?: object,
+ *   skillManager?: object | null,
+ *   skillManagerFactory?: (runContext: object) => object | null,
  *   sandboxBridge?: object,
  *   enterprisePolicy?: object,
  *   observability?: object,
+ *   skillLifecycle?: object,
  *   now?: () => Date,
  * }} [deps]
  */
@@ -306,6 +330,37 @@ export function createEnterpriseExtensionBundle(runContext, deps = {}) {
   );
   for (const name of REQUIRED_EXTENSION_NAMES) selected.add(name);
 
+  // The SkillManager is per-Run because the writable skill directory is
+  // per-user: `skillManagerFactory(runContext)` binds it to this Run's
+  // orgId/userId. A pre-built `deps.skillManager` is accepted for tests only.
+  let skillManager = deps.skillManager ?? null;
+  if (!skillManager && typeof deps.skillManagerFactory === 'function') {
+    skillManager = deps.skillManagerFactory(frozen);
+  }
+  const skillManagerReady = Boolean(
+    skillManager &&
+      typeof skillManager.isEnabled === 'function' &&
+      skillManager.isEnabled() &&
+      skillManager.userSkillRoot,
+  );
+
+  // When the AgentVersion did not spell out an extension list, skill-lifecycle
+  // loads wherever installation is enabled. An explicit non-empty list stays
+  // authoritative — pi-runtime-factory validates the factories against it
+  // exactly, so silently appending would turn a valid AgentVersion into a
+  // PI_EXTENSIONS_COUNT error.
+  if (
+    skillManagerReady &&
+    !(Array.isArray(deps.extensions) && deps.extensions.length > 0)
+  ) {
+    selected.add('skill-lifecycle');
+  }
+  if (selected.has('skill-lifecycle') && !skillManagerReady) {
+    throw new Error(
+      'SKILL_MANAGER_REQUIRED: AgentVersion enables skill-lifecycle but no enabled SkillManager with a per-user skill directory was injected',
+    );
+  }
+
   // Explicit port only — no sandboxClient fallback.
   const sandboxTransport = deps.sandboxTransport ?? null;
 
@@ -326,6 +381,16 @@ export function createEnterpriseExtensionBundle(runContext, deps = {}) {
     };
   }
 
+  // Risk table: platform layer first, AgentVersion layer may only tighten it.
+  const toolRiskPolicy = mergeToolRiskPolicies(
+    coerceToolRiskPolicy(deps.toolRiskPolicy, { field: 'platform.toolRiskPolicy' }),
+    deps.agentVersionToolRiskPolicy
+      ? coerceToolRiskPolicy(deps.agentVersionToolRiskPolicy, {
+          field: 'agentVersion.toolRiskPolicy',
+        })
+      : null,
+  );
+
   let policyEngine = deps.policyEngine ?? null;
   if (
     !policyEngine &&
@@ -334,6 +399,8 @@ export function createEnterpriseExtensionBundle(runContext, deps = {}) {
       deps.agentVersionToolPolicy ||
       deps.mcpReadOnlyTools ||
       deps.mcpServerPolicies ||
+      deps.toolRiskPolicy ||
+      deps.agentVersionToolRiskPolicy ||
       governanceRecorder)
   ) {
     policyEngine = createPolicyEngine({
@@ -348,6 +415,7 @@ export function createEnterpriseExtensionBundle(runContext, deps = {}) {
       mcpReadOnlyTools: deps.mcpReadOnlyTools,
       mcpServerPolicies: deps.mcpServerPolicies,
       agentVersionToolPolicy: deps.agentVersionToolPolicy,
+      toolRiskPolicy,
     });
   }
 
@@ -370,6 +438,7 @@ export function createEnterpriseExtensionBundle(runContext, deps = {}) {
       mcpReadOnlyTools: deps.mcpReadOnlyTools,
       mcpServerPolicies: deps.mcpServerPolicies,
       agentVersionToolPolicy: deps.agentVersionToolPolicy,
+      toolRiskPolicy,
       governanceRecorder,
       runSuspensionPort: deps.runSuspensionPort ?? null,
       ...(deps.enterprisePolicy || {}),
@@ -417,6 +486,13 @@ export function createEnterpriseExtensionBundle(runContext, deps = {}) {
     'enterprise-policy': enterprisePolicy,
     observability,
   };
+
+  if (selected.has('skill-lifecycle')) {
+    built['skill-lifecycle'] = createSkillLifecycleExtension({
+      runContext: frozen,
+      deps: { skillManager, ...(deps.skillLifecycle || {}) },
+    });
+  }
 
   const factories = Object.freeze(
     EXTENSION_LOAD_ORDER.filter((name) => selected.has(name)).map((name) => {

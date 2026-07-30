@@ -1,35 +1,82 @@
 /**
- * SkillManager — mode-gated install / edit / reload API.
+ * SkillManager — install / edit / uninstall / reload over the two-tier skill
+ * tree, scoped to one caller.
+ *
+ * Reads see the union of the bundled system tier and the caller's own
+ * `<orgId>/<userId>` directory, system first. Writes only ever land in that one
+ * directory, so a manager built for user A can never touch user B's skills —
+ * that per-user scoping is what makes installs safe to allow in every
+ * environment instead of behind a deployment-wide mode flag.
  */
 import {
   DEFAULT_SKILL_ROOTS,
+  SYSTEM_SKILL_ROOT,
+  USER_SKILL_ROOT,
   normalizeSkillRoots,
   primarySkillRoot,
+  skillRootsForIdentity,
+  userSkillRootFor,
+  writableSkillRoot,
   isUnderSkillRoot,
 } from './paths.js';
-import { installSkill, editSkillFile, listInstalledSkills } from './install.js';
-import { emitSkillAudit } from './audit.js';
-import { assertExtensionsLoadedClean } from '../infrastructure/pi/pi-runtime-factory.js';
+import {
+  installSkill,
+  uninstallSkill,
+  editSkillFile,
+  listInstalledSkills,
+  describeInstalledSkills,
+} from './install.js';
+import fs from 'node:fs';
 
+import { emitSkillAudit } from './audit.js';
+
+/**
+ * Skill modes.
+ *
+ * `enabled` (default) lets a user install into their own per-user directory in
+ * any environment, production included. That is safe without a deployment-wide
+ * flag for two reasons: the directory is scoped to `<orgId>/<userId>` so an
+ * install can never enter another user's agent context, and `skill_install`
+ * carries `high` risk in the tool-risk table, so it goes through approval.
+ *
+ * `readonly` is the kill switch for deployments that want no skill
+ * installation at all; the skill-lifecycle tools are then not registered.
+ *
+ * `development` is a legacy alias for `enabled`, kept so existing `.env` files
+ * and compose overlays keep working.
+ */
 export const SKILLS_MODE = Object.freeze({
   READONLY: 'readonly',
-  DEVELOPMENT: 'development',
+  ENABLED: 'enabled',
+  /** @deprecated alias for ENABLED */
+  DEVELOPMENT: 'enabled',
 });
 
 /**
  * Resolve SKILLS_MODE from env-like object.
  * @param {NodeJS.ProcessEnv | Record<string, string|undefined>} [env]
- * @returns {'readonly' | 'development'}
+ * @returns {'readonly' | 'enabled'}
  */
 export function resolveSkillsMode(env = process.env) {
   const raw = env?.SKILLS_MODE;
-  if (raw == null || String(raw).trim() === '') return SKILLS_MODE.READONLY;
+  if (raw == null || String(raw).trim() === '') return SKILLS_MODE.ENABLED;
   const v = String(raw).trim().toLowerCase();
-  if (v === 'development' || v === 'dev') return SKILLS_MODE.DEVELOPMENT;
-  if (v === 'readonly' || v === 'ro' || v === 'production' || v === 'prod') {
+  // `production`/`prod` keep meaning the locked-down thing: an operator who
+  // wrote that word wants installs off, not on.
+  if (
+    v === 'readonly' ||
+    v === 'ro' ||
+    v === 'off' ||
+    v === 'disabled' ||
+    v === 'production' ||
+    v === 'prod'
+  ) {
     return SKILLS_MODE.READONLY;
   }
-  // Unknown values fail closed to readonly
+  if (v === 'enabled' || v === 'on' || v === 'development' || v === 'dev') {
+    return SKILLS_MODE.ENABLED;
+  }
+  // Unknown values fail closed to readonly.
   return SKILLS_MODE.READONLY;
 }
 
@@ -47,20 +94,50 @@ export function resolveLocalAllowlist(env = process.env) {
 }
 
 /**
+ * The two configured *mount* roots: system tier, and the base of the per-user
+ * tier. `SKILLS_ROOT` / `SKILLS_USER_ROOT` relocate them independently, so the
+ * two can never collapse into one.
+ *
  * @param {NodeJS.ProcessEnv | Record<string, string|undefined>} [env]
+ * @returns {{ systemRoot: string, userRootBase: string }}
  */
-export function resolveSkillRoots(env = process.env) {
-  const raw = env?.SKILLS_ROOT || env?.AGENT_SKILLS_ROOT;
-  if (raw && String(raw).trim()) {
-    return normalizeSkillRoots([String(raw).trim(), ...DEFAULT_SKILL_ROOTS]);
+export function resolveSkillMountRoots(env = process.env) {
+  const system = String(
+    env?.SKILLS_ROOT || env?.AGENT_SKILLS_ROOT || SYSTEM_SKILL_ROOT,
+  ).trim();
+  const userBase = String(
+    env?.SKILLS_USER_ROOT || env?.AGENT_SKILLS_USER_ROOT || USER_SKILL_ROOT,
+  ).trim();
+  return {
+    systemRoot: system || SYSTEM_SKILL_ROOT,
+    userRootBase: userBase || USER_SKILL_ROOT,
+  };
+}
+
+/**
+ * Skill roots for one caller, in read-precedence order.
+ *
+ * With an identity: `[systemRoot, <userBase>/<orgId>/<userId>]`.
+ * Without one (operator diagnostics, tests): the mount roots, so inventory
+ * tooling can still see the tree without impersonating a user.
+ *
+ * @param {NodeJS.ProcessEnv | Record<string, string|undefined>} [env]
+ * @param {{ orgId?: unknown, userId?: unknown } | null} [identity]
+ */
+export function resolveSkillRoots(env = process.env, identity = null) {
+  const { systemRoot, userRootBase } = resolveSkillMountRoots(env);
+  if (identity?.orgId != null && identity?.userId != null) {
+    return skillRootsForIdentity(identity, { systemRoot, userRootBase });
   }
-  return normalizeSkillRoots([...DEFAULT_SKILL_ROOTS]);
+  return normalizeSkillRoots([systemRoot, userRootBase]);
 }
 
 /**
  * @param {{
- *   mode?: 'readonly' | 'development',
+ *   mode?: 'readonly' | 'enabled',
+ *   identity?: { orgId: unknown, userId: unknown } | null,
  *   skillRoots?: string[],
+ *   userSkillRoot?: string | null,
  *   localAllowlist?: string[],
  *   auditLogPath?: string | null,
  *   auditSink?: ((ev: object) => void) | null,
@@ -71,8 +148,14 @@ export function resolveSkillRoots(env = process.env) {
  */
 export function createSkillManager(options = {}) {
   const mode = options.mode || resolveSkillsMode();
-  const skillRoots = normalizeSkillRoots(options.skillRoots || resolveSkillRoots());
+  const identity = options.identity ?? null;
+  const skillRoots = normalizeSkillRoots(
+    options.skillRoots || resolveSkillRoots(process.env, identity),
+  );
   const skillRoot = primarySkillRoot(skillRoots);
+  const userRoot = options.userSkillRoot
+    ? normalizeSkillRoots([options.userSkillRoot])[0]
+    : writableSkillRoot(skillRoots);
   const localAllowlist = options.localAllowlist || resolveLocalAllowlist();
   const auditLogPath = options.auditLogPath ?? process.env.SKILLS_AUDIT_LOG ?? null;
   const auditSink = options.auditSink || null;
@@ -96,34 +179,63 @@ export function createSkillManager(options = {}) {
     );
   }
 
-  function assertDevelopment(action) {
-    if (mode !== SKILLS_MODE.DEVELOPMENT) {
+  function assertWritable(action) {
+    if (mode !== SKILLS_MODE.ENABLED) {
       const err = new Error(
-        `Skill ${action} denied: SKILLS_MODE=${mode} (requires development)`,
+        `Skill ${action} denied: SKILLS_MODE=${mode} disables skill installation`,
       );
-      audit({
-        action,
-        result: 'denied',
-        error: err.message,
-      });
+      audit({ action, result: 'denied', error: err.message });
       throw err;
     }
+    if (!userRoot) {
+      const err = new Error(
+        `Skill ${action} denied: no per-user skill directory resolved ` +
+          '(needs orgId + userId, and a read-write SKILLS_USER_ROOT mount)',
+      );
+      audit({ action, result: 'denied', error: err.message });
+      throw err;
+    }
+    // The per-user directory is created on first write, not at startup: there
+    // is no list of users to pre-create it for.
+    fs.mkdirSync(userRoot, { recursive: true });
+  }
+
+  /** Names the bundled system tier owns; an install must not shadow them. */
+  function systemSkillNames() {
+    const names = new Set();
+    for (const root of skillRoots) {
+      if (userRoot && root === userRoot) continue;
+      for (const name of listInstalledSkills(root)) names.add(name);
+    }
+    return names;
   }
 
   return {
     mode,
     skillRoot,
     skillRoots,
+    userSkillRoot: userRoot,
     localAllowlist,
-    isDevelopment: () => mode === SKILLS_MODE.DEVELOPMENT,
+    identity,
+    isEnabled: () => mode === SKILLS_MODE.ENABLED,
+    /** @deprecated renamed to isEnabled */
+    isDevelopment: () => mode === SKILLS_MODE.ENABLED,
     isUnderSkillRoot: (p) => isUnderSkillRoot(p, skillRoots),
-    listInstalled: () => listInstalledSkills(skillRoot),
+    /** Names only, across both tiers (system shadows user). */
+    listInstalled: () =>
+      describeInstalledSkills(skillRoots, { writableRoot: userRoot }).map(
+        (s) => s.name,
+      ),
+    /** Full records with tier + description, for the skill_list tool. */
+    describeInstalled: () =>
+      describeInstalledSkills(skillRoots, { writableRoot: userRoot }),
 
     /**
-     * @param {{ name: string, sourceType: string, source: string, ref?: string, subpath?: string }} params
+     * `sourceType`, `name`, `ref` and `subpath` are optional — see installSkill.
+     * @param {{ name?: string, sourceType?: string, source: string, ref?: string, subpath?: string }} params
      */
     async install(params) {
-      assertDevelopment('install');
+      assertWritable('install');
       try {
         const result = await installSkill({
           name: params.name,
@@ -131,8 +243,9 @@ export function createSkillManager(options = {}) {
           source: params.source,
           ref: params.ref,
           subpath: params.subpath,
-          skillRoot,
+          skillRoot: userRoot,
           localAllowlist,
+          systemSkillNames: systemSkillNames(),
         });
         audit({
           action: 'install',
@@ -160,13 +273,41 @@ export function createSkillManager(options = {}) {
     },
 
     /**
+     * @param {{ name: string }} params
+     */
+    async uninstall(params) {
+      assertWritable('uninstall');
+      try {
+        const result = await uninstallSkill({
+          name: params.name,
+          skillRoot: userRoot,
+        });
+        audit({
+          action: 'uninstall',
+          result: 'success',
+          skill_name: result.name,
+          summary: result.summary,
+        });
+        return result;
+      } catch (err) {
+        audit({
+          action: 'uninstall',
+          result: 'failure',
+          skill_name: params?.name,
+          error: err?.message || String(err),
+        });
+        throw err;
+      }
+    },
+
+    /**
      * @param {{ path: string, content: string }} params
      */
     async edit(params) {
-      assertDevelopment('edit');
+      assertWritable('edit');
       try {
         const result = await editSkillFile({
-          skillRoot,
+          skillRoot: userRoot,
           path: params.path,
           content: params.content,
         });
@@ -208,6 +349,12 @@ export function createSkillManager(options = {}) {
         // enterprise-policy (or any other) extension factory errored during
         // this reload, surface it as a failure instead of reporting success.
         if (session?.resourceLoader) {
+          // Imported lazily: pi-runtime-factory reads config.js, which reads
+          // this module, and a static edge would leave SKILLS_MODE in TDZ for
+          // anything that loads config.js first.
+          const { assertExtensionsLoadedClean } = await import(
+            '../infrastructure/pi/pi-runtime-factory.js'
+          );
           assertExtensionsLoadedClean({ resourceLoader: session.resourceLoader }, session);
         }
         const skills =
@@ -215,7 +362,9 @@ export function createSkillManager(options = {}) {
           session?.getSkills?.()?.skills ||
           null;
         if (Array.isArray(skills)) skillCount = skills.length;
-        const installed = listInstalledSkills(skillRoot);
+        const installed = describeInstalledSkills(skillRoots, {
+          writableRoot: userRoot,
+        }).map((s) => s.name);
         if (onAfterReload) {
           try {
             await onAfterReload();
@@ -252,3 +401,11 @@ export function createSkillManager(options = {}) {
     },
   };
 }
+
+export {
+  DEFAULT_SKILL_ROOTS,
+  SYSTEM_SKILL_ROOT,
+  USER_SKILL_ROOT,
+  skillRootsForIdentity,
+  userSkillRootFor,
+};

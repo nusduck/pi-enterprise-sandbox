@@ -24,6 +24,18 @@ export {
 export { createPolicyEngine } from './policy-engine.js';
 export { classifyTool, isLocalSandboxTool } from './tool-risk-classifier.js';
 export { evaluateLocalArgGuards } from './arg-guards.js';
+export {
+  DEFAULT_CLASS_RISK_LEVELS,
+  DEFAULT_RISK_APPROVAL,
+  RISK_CLASSES,
+  ToolRiskPolicyError,
+  coerceToolRiskPolicy,
+  decisionForRiskLevel,
+  defaultToolRiskPolicy,
+  loadToolRiskPolicy,
+  mergeToolRiskPolicies,
+  resolveToolRiskLevel,
+} from './tool-risk-policy.js';
 
 /**
  * @param {string} reasonCode
@@ -51,6 +63,7 @@ function blockResult(reasonCode, reason, extra = {}) {
  *     mcpReadOnlyTools?: Iterable<string>,
  *     mcpServerPolicies?: object,
  *     agentVersionToolPolicy?: object,
+ *     toolRiskPolicy?: object,
  *     governanceRecorder?: {
  *       recordPolicyDecision?: Function,
  *       requestApproval?: Function,
@@ -75,7 +88,8 @@ export function createEnterprisePolicyExtension(options) {
       deps.agentVersionToolPolicy ||
       deps.governanceRecorder ||
       deps.mcpReadOnlyTools ||
-      deps.mcpServerPolicies)
+      deps.mcpServerPolicies ||
+      deps.toolRiskPolicy)
   ) {
     // Durable audit is owned by governanceRecorder when present; engine still
     // needs a successful auditSink for allow (in-memory no-op). Fail-closed if neither.
@@ -92,6 +106,7 @@ export function createEnterprisePolicyExtension(options) {
       mcpReadOnlyTools: deps.mcpReadOnlyTools,
       mcpServerPolicies: deps.mcpServerPolicies,
       agentVersionToolPolicy: deps.agentVersionToolPolicy,
+      toolRiskPolicy: deps.toolRiskPolicy,
     });
   }
 

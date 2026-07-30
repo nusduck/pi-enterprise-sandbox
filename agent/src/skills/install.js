@@ -9,7 +9,7 @@ import { createHash } from 'node:crypto';
 import {
   skillPackageDir,
   validateSkillName,
-  primarySkillRoot,
+  writableSkillRoot,
 } from './paths.js';
 import {
   assertLocalSourceAllowlisted,
@@ -18,6 +18,7 @@ import {
   validateSkillPackage,
   validateSourceType,
 } from './validator.js';
+import { parseSkillMdFrontmatter } from './validator.js';
 
 /** Explicit bounds keep large skill edits from hanging a tool turn or
  * flooding the event/ledger persistence path. */
@@ -25,6 +26,110 @@ export const SKILL_EDIT_MAX_BYTES = 16 * 1024 * 1024;
 export const SKILL_EDIT_TIMEOUT_MS = 30_000;
 export const SKILL_INSTALL_TIMEOUT_MS = 90_000;
 export const SKILL_COMMAND_TIMEOUT_MS = 30_000;
+
+/** Default git ref when the caller does not pin one. */
+export const DEFAULT_GIT_REF = 'HEAD';
+
+/** How deep subpath auto-discovery looks for a SKILL.md. */
+const SUBPATH_SCAN_MAX_DEPTH = 3;
+const SUBPATH_SCAN_MAX_CANDIDATES = 25;
+
+/**
+ * Infer the source type so callers can pass one `source` string instead of
+ * having to say `sourceType: 'git'` alongside an obviously-git URL.
+ *
+ * @param {string} source
+ * @returns {'git' | 'local'}
+ */
+export function detectSourceType(source) {
+  const raw = String(source ?? '').trim();
+  if (!raw) throw new Error('source is required');
+  if (/^https?:\/\//i.test(raw)) return 'git';
+  // git@, ssh://, git:// are rejected by the validator, but classify them as
+  // git so the caller gets the real "HTTPS only" message instead of
+  // "local source is not a directory".
+  if (/^(?:git@|ssh:\/\/|git:\/\/)/i.test(raw)) return 'git';
+  return 'local';
+}
+
+/**
+ * Find the package directory inside a source tree.
+ *
+ * A repo may hold the SKILL.md at its root, or nest packages under
+ * `skills/<name>/`. Rather than making the caller guess the subpath, search a
+ * bounded depth: one candidate is used automatically, several are reported so
+ * the caller can pick, none is an error naming what was searched.
+ *
+ * @param {string} root
+ * @param {{ deadlineAt?: number }} [opts]
+ * @returns {{ dir: string, subpath: string, candidates: string[] }}
+ */
+export function discoverSkillPackageDir(root, opts = {}) {
+  const base = path.resolve(root);
+  if (fs.existsSync(path.join(base, 'SKILL.md'))) {
+    return { dir: base, subpath: '', candidates: [''] };
+  }
+
+  /** @type {string[]} */
+  const candidates = [];
+  /** @param {string} dir @param {number} depth */
+  function walk(dir, depth) {
+    if (depth > SUBPATH_SCAN_MAX_DEPTH) return;
+    if (candidates.length >= SUBPATH_SCAN_MAX_CANDIDATES) return;
+    assertBeforeDeadline(opts.deadlineAt);
+    let entries;
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const ent of entries) {
+      if (!ent.isDirectory()) continue;
+      if (ent.name.startsWith('.') || ent.name === 'node_modules') continue;
+      const full = path.join(dir, ent.name);
+      if (fs.existsSync(path.join(full, 'SKILL.md'))) {
+        candidates.push(path.relative(base, full).replace(/\\/g, '/'));
+        // A package's own subdirectories are not separate packages.
+        continue;
+      }
+      walk(full, depth + 1);
+    }
+  }
+  walk(base, 1);
+
+  if (candidates.length === 1) {
+    return {
+      dir: path.join(base, candidates[0]),
+      subpath: candidates[0],
+      candidates,
+    };
+  }
+  if (candidates.length === 0) {
+    throw new Error(
+      `No SKILL.md found at the source root or within ${SUBPATH_SCAN_MAX_DEPTH} levels. ` +
+        'Point source at the package directory, or pass subpath.',
+    );
+  }
+  throw new Error(
+    `Source contains ${candidates.length} skill packages; pass subpath to choose one: ` +
+      `${candidates.slice(0, 10).join(', ')}${candidates.length > 10 ? ', …' : ''}`,
+  );
+}
+
+/**
+ * Read the package's declared name from SKILL.md so the caller does not have
+ * to repeat it (and cannot get it subtly wrong).
+ *
+ * @param {string} packageDir
+ * @returns {string}
+ */
+export function readSkillPackageName(packageDir) {
+  const skillMd = path.join(path.resolve(packageDir), 'SKILL.md');
+  if (!fs.existsSync(skillMd)) {
+    throw new Error('Missing SKILL.md in skill package');
+  }
+  return parseSkillMdFrontmatter(fs.readFileSync(skillMd, 'utf8')).name;
+}
 
 /**
  * @param {string} command
@@ -332,40 +437,63 @@ async function gitCloneAtRef(url, ref, targetDir, opts = {}) {
 }
 
 /**
- * Install a skill package.
+ * Install a skill package into the writable (user) skill root.
+ *
+ * `sourceType`, `name`, `ref` and `subpath` are all optional: the source type
+ * is inferred from the source string, the package directory is discovered
+ * inside the fetched tree, and the name comes from the package's own SKILL.md.
+ * Supplying any of them pins it and turns a mismatch into an error.
  *
  * @param {{
- *   name: string,
- *   sourceType: string,
+ *   name?: string,
+ *   sourceType?: string,
  *   source: string,
  *   ref?: string,
  *   skillRoot: string,
  *   localAllowlist?: string[],
  *   subpath?: string,
  *   timeoutMs?: number,
+ *   systemSkillNames?: Iterable<string>,
  * }} opts
  */
 export async function installSkill(opts) {
-  const name = validateSkillName(opts.name);
-  const sourceType = validateSourceType(opts.sourceType);
-  const skillRoot = path.resolve(opts.skillRoot || primarySkillRoot());
-  const dest = skillPackageDir(skillRoot, name);
+  const sourceType = opts.sourceType
+    ? validateSourceType(opts.sourceType)
+    : detectSourceType(opts.source);
+  const requestedName = opts.name ? validateSkillName(opts.name) : null;
+  const skillRoot = path.resolve(opts.skillRoot || writableSkillRoot() || '');
+  if (!skillRoot || skillRoot === path.resolve('')) {
+    throw new Error(
+      'No writable skill root is configured; installs require a user skill root',
+    );
+  }
   const installTimeoutMs = Number.isFinite(opts.timeoutMs)
     ? Math.max(1, Number(opts.timeoutMs))
     : SKILL_INSTALL_TIMEOUT_MS;
   const deadlineAt = Date.now() + installTimeoutMs;
 
-  // Staging under skill root parent so rename is atomic on same FS when possible
+  // Staging inside the skill root so the final rename stays on one filesystem.
   const token = `${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   const stagingRoot = path.join(skillRoot, `.tmp-install-${token}`);
-  const stagingPkg = path.join(stagingRoot, name);
+  const stagingPkg = path.join(stagingRoot, '_pkg');
 
   let resolvedCommit = null;
   let sourceSummary = opts.source;
+  const ref = sourceType === 'git' ? validateGitRef(opts.ref || DEFAULT_GIT_REF) : null;
+
+  /** @param {string} sub */
+  const assertSubpath = (sub) => {
+    if (sub.includes('..') || path.isAbsolute(sub)) {
+      throw new Error('Invalid subpath');
+    }
+    return sub;
+  };
 
   try {
     await fsp.mkdir(stagingRoot, { recursive: true });
 
+    /** Tree the package is copied out of, plus the subpath actually used. */
+    let sourceTree;
     if (sourceType === 'local') {
       const allowed = assertLocalSourceAllowlisted(
         opts.source,
@@ -374,61 +502,67 @@ export async function installSkill(opts) {
       if (!fs.existsSync(allowed) || !fs.statSync(allowed).isDirectory()) {
         throw new Error('Local source is not a directory');
       }
-      const sourceDigest = digestDir(allowed, { deadlineAt });
-      assertBeforeDeadline(deadlineAt);
-      if (fs.existsSync(dest)) {
-        try {
-          const existingMeta = validateSkillPackage(dest, { expectedName: name });
-          const existingDigest = digestDir(dest, { deadlineAt });
-          if (existingDigest === sourceDigest) {
-            await rmrf(stagingRoot);
-            return {
-              name: existingMeta.name,
-              description: existingMeta.description,
-              path: dest,
-              source_type: sourceType,
-              source: allowed,
-              ref: null,
-              resolved_commit: null,
-              digest: existingDigest,
-              idempotent: true,
-              summary: `already installed ${existingMeta.name} digest=${existingDigest}`,
-            };
-          }
-        } catch {
-          // Invalid or changed destinations are replaced atomically below.
-        }
-      }
-      await copyTree(allowed, stagingPkg, { deadlineAt });
+      sourceTree = allowed;
       sourceSummary = allowed;
     } else {
       const url = validateGitHttpsUrl(opts.source);
-      const ref = validateGitRef(opts.ref);
       const cloneDir = path.join(stagingRoot, '_clone');
       resolvedCommit = await gitCloneAtRef(url, ref, cloneDir, { deadlineAt });
-
-      const sub = opts.subpath ? String(opts.subpath).replace(/^\/+/, '') : '';
-      if (sub.includes('..') || path.isAbsolute(sub)) {
-        throw new Error('Invalid git subpath');
-      }
-      const packageSrc = sub ? path.join(cloneDir, sub) : cloneDir;
-      if (!fs.existsSync(packageSrc)) {
-        throw new Error(`Git subpath not found: ${sub || '(root)'}`);
-      }
-      await copyTree(packageSrc, stagingPkg, { deadlineAt });
-      // Drop .git if copy included it
-      await rmrf(path.join(stagingPkg, '.git'));
+      sourceTree = cloneDir;
       sourceSummary = url;
     }
+
+    const explicitSub = opts.subpath
+      ? assertSubpath(String(opts.subpath).replace(/^\/+/, ''))
+      : '';
+    let packageSrc;
+    let usedSubpath;
+    if (explicitSub) {
+      packageSrc = path.join(sourceTree, explicitSub);
+      if (!fs.existsSync(packageSrc)) {
+        throw new Error(`Subpath not found in source: ${explicitSub}`);
+      }
+      usedSubpath = explicitSub;
+    } else {
+      const discovered = discoverSkillPackageDir(sourceTree, { deadlineAt });
+      packageSrc = discovered.dir;
+      usedSubpath = discovered.subpath;
+    }
+    assertBeforeDeadline(deadlineAt);
+
+    // The package's own SKILL.md is authoritative for the name; an explicit
+    // name is a pin that must agree with it.
+    const declaredName = readSkillPackageName(packageSrc);
+    const name = requestedName ?? declaredName;
+    if (requestedName && requestedName !== declaredName) {
+      throw new Error(
+        `SKILL.md name "${declaredName}" does not match requested name "${requestedName}"`,
+      );
+    }
+
+    // A user package must not shadow a bundled system package: discovery reads
+    // the system root first, so the install would silently have no effect.
+    const systemNames = new Set(
+      opts.systemSkillNames ? [...opts.systemSkillNames].map(String) : [],
+    );
+    if (systemNames.has(name)) {
+      throw new Error(
+        `"${name}" is a bundled system skill and cannot be replaced by an install. ` +
+          'Choose a different name in SKILL.md.',
+      );
+    }
+
+    const dest = skillPackageDir(skillRoot, name);
+    await copyTree(packageSrc, stagingPkg, { deadlineAt });
+    await rmrf(path.join(stagingPkg, '.git'));
 
     const meta = validateSkillPackage(stagingPkg, { expectedName: name });
     const digest = digestDir(stagingPkg, { deadlineAt });
     assertBeforeDeadline(deadlineAt);
 
-    // Git installs still do the bounded fetch/validation above, then use the
-    // same content comparison as local installs. This makes reinstalling a
-    // resolved commit an explicit no-op instead of replacing the package.
-    if (sourceType === 'git' && fs.existsSync(dest)) {
+    // Reinstalling identical content is an explicit no-op rather than a
+    // replace, so repeated installs do not churn the skill tree.
+    if (fs.existsSync(dest)) {
       try {
         const existingMeta = validateSkillPackage(dest, { expectedName: name });
         const existingDigest = digestDir(dest, { deadlineAt });
@@ -440,7 +574,8 @@ export async function installSkill(opts) {
             path: dest,
             source_type: sourceType,
             source: sourceSummary,
-            ref: String(opts.ref).trim(),
+            ref,
+            subpath: usedSubpath || null,
             resolved_commit: resolvedCommit,
             digest: existingDigest,
             idempotent: true,
@@ -462,7 +597,8 @@ export async function installSkill(opts) {
       path: dest,
       source_type: sourceType,
       source: sourceSummary,
-      ref: sourceType === 'git' ? String(opts.ref).trim() : null,
+      ref,
+      subpath: usedSubpath || null,
       resolved_commit: resolvedCommit,
       digest,
       summary: `installed ${meta.name} digest=${digest}` +
@@ -473,6 +609,24 @@ export async function installSkill(opts) {
     // Do not leave partial dest from failed rename — atomicReplaceDir handles dest
     throw err;
   }
+}
+
+/**
+ * Remove an installed package from the writable skill root.
+ *
+ * @param {{ name: string, skillRoot: string }} opts
+ */
+export async function uninstallSkill(opts) {
+  const name = validateSkillName(opts.name);
+  const skillRoot = path.resolve(opts.skillRoot || writableSkillRoot() || '');
+  const dest = skillPackageDir(skillRoot, name);
+  if (!fs.existsSync(dest)) {
+    throw new Error(
+      `"${name}" is not installed in the user skill root (bundled system skills cannot be uninstalled)`,
+    );
+  }
+  await rmrf(dest);
+  return { name, path: dest, summary: `uninstalled ${name}` };
 }
 
 /**
@@ -557,6 +711,55 @@ export function listInstalledSkills(skillRoot) {
         return false;
       }
     });
+}
+
+/**
+ * Describe the installed packages across every root, tagging which tier each
+ * came from. System packages shadow user packages of the same name because
+ * discovery reads the roots in order.
+ *
+ * @param {string[]} skillRoots - in read-precedence order (system first)
+ * @param {{ writableRoot?: string | null }} [opts]
+ * @returns {Array<{
+ *   name: string,
+ *   description: string | null,
+ *   tier: 'system' | 'user',
+ *   root: string,
+ *   path: string,
+ *   editable: boolean,
+ *   invalid?: string,
+ * }>}
+ */
+export function describeInstalledSkills(skillRoots, opts = {}) {
+  const writable = opts.writableRoot ? path.resolve(opts.writableRoot) : null;
+  /** @type {Map<string, object>} */
+  const byName = new Map();
+  for (const rawRoot of skillRoots || []) {
+    const root = path.resolve(String(rawRoot));
+    const tier = writable && root === writable ? 'user' : 'system';
+    for (const name of listInstalledSkills(root)) {
+      // First root wins: a later root cannot shadow an earlier one.
+      if (byName.has(name)) continue;
+      const dir = path.join(root, name);
+      let description = null;
+      let invalid;
+      try {
+        description = validateSkillPackage(dir, { expectedName: name }).description;
+      } catch (err) {
+        invalid = err instanceof Error ? err.message : String(err);
+      }
+      byName.set(name, {
+        name,
+        description,
+        tier,
+        root,
+        path: dir,
+        editable: tier === 'user',
+        ...(invalid ? { invalid } : {}),
+      });
+    }
+  }
+  return [...byName.values()].sort((a, b) => a.name.localeCompare(b.name));
 }
 
 /** @deprecated test helper */

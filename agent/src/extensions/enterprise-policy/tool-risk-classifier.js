@@ -3,9 +3,19 @@
  */
 
 import { SANDBOX_TOOL_NAMES } from '../sandbox-bridge/constants.js';
+import { SKILL_LIFECYCLE_TOOL_NAMES } from '../skill-lifecycle/constants.js';
 import { isValidMcpToolName } from '../../infrastructure/mcp/mcp-config-loader.js';
 
-const LOCAL_SET = new Set(SANDBOX_TOOL_NAMES);
+/**
+ * Tools that execute inside the platform's own trust boundary rather than
+ * against an external system. Skill management writes to the agent's own skill
+ * volume, so it is `local_low` by classification — the risk table is what
+ * decides whether an install needs approval (it defaults to `high`).
+ */
+const LOCAL_SET = new Set([
+  ...SANDBOX_TOOL_NAMES,
+  ...SKILL_LIFECYCLE_TOOL_NAMES,
+]);
 
 /**
  * @typedef {'local_low' | 'external_readonly' | 'external_high' | 'internal_interaction' | 'unknown'} ToolRiskClass

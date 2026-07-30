@@ -201,6 +201,7 @@ export async function startHttpMain(env = process.env) {
       skillRoots: config.SKILL_ROOTS,
       mcpServers: config.MCP_SERVERS,
       mcpDiscovery: container.getMcpReadiness(),
+      toolRiskPolicy: config.TOOL_RISK_POLICY,
     });
 
   const notReady = async () => {

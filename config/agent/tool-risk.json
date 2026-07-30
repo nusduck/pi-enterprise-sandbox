@@ -1,0 +1,62 @@
+{
+  "_comment": [
+    "Platform tool risk table. This is the top policy layer: an AgentVersion",
+    "may raise a tool's risk or tighten what a risk level costs, never lower",
+    "either. Edit this file (or set TOOL_RISK_POLICY_JSON / point",
+    "TOOL_RISK_POLICY_PATH elsewhere) to change which tools need approval.",
+    "",
+    "riskApproval maps each risk level to what it costs. Approval decisions are",
+    "derived from risk only — there is no separate approval switch per tool.",
+    "",
+    "classRiskLevels is the fallback risk for tools with no explicit entry:",
+    "  local_low            sandbox-bridge tools running inside the sandbox",
+    "  external_readonly    MCP tools explicitly marked read-only",
+    "  external_high        every other MCP tool (external side effects)",
+    "  internal_interaction ask_user",
+    "",
+    "tools keys accept a projected tool name (read, mcp__github__create_pr),",
+    "the server::tool form (github::create_pr), or a trailing-* prefix",
+    "(mcp__github__*). Longest matching prefix wins; exact keys beat patterns.",
+    "",
+    "mcpServers sets a default risk for a whole MCP server plus per-tool",
+    "overrides, so a new tool appearing on a server inherits the server's risk",
+    "instead of silently defaulting to external_high."
+  ],
+
+  "riskApproval": {
+    "low": "allow",
+    "medium": "allow",
+    "high": "require_approval",
+    "critical": "deny"
+  },
+
+  "classRiskLevels": {
+    "internal_interaction": "low",
+    "local_low": "low",
+    "external_readonly": "medium",
+    "external_high": "high"
+  },
+
+  "tools": {
+    "read": "low",
+    "write": "low",
+    "edit": "low",
+    "bash": "low",
+    "python": "low",
+    "process_start": "low",
+    "process_status": "low",
+    "process_read": "low",
+    "process_kill": "low",
+    "submit_artifact": "low",
+    "ask_user": "low",
+
+    "_skill_lifecycle": "Development-only tools (SKILLS_MODE=development). Installing runs third-party code on the next turn, so it needs approval by default.",
+    "skill_list": "low",
+    "skill_reload": "low",
+    "skill_edit": "medium",
+    "skill_install": "high",
+    "skill_uninstall": "high"
+  },
+
+  "mcpServers": {}
+}

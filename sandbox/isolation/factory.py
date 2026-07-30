@@ -15,6 +15,7 @@ def build_isolation_backend(config: Settings | None = None) -> IsolationBackend:
         return BubblewrapIsolationBackend(
             executable=cfg.bwrap_path,
             skills_root=cfg.skills_path,
+            user_skills_root=cfg.user_skills_path,
             uid=cfg.bwrap_uid,
             gid=cfg.bwrap_gid,
         )

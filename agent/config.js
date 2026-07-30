@@ -3,6 +3,8 @@
  * All environment variable reads are centralized here.
  */
 import { readFileSync, existsSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { loadToolRiskPolicy } from './src/extensions/enterprise-policy/tool-risk-policy.js';
 import {
   resolveSkillsMode,
   resolveLocalAllowlist,
@@ -226,15 +228,23 @@ export function validateProductionConfig(env = process.env, opts = {}) {
     );
   }
 
-  if (skillsMode === SKILLS_MODE.DEVELOPMENT) {
-    errors.push('SKILLS_MODE=development is forbidden in production (use readonly)');
-  }
+  // Skill installation is allowed in production. It is confined to the
+  // caller's own `<orgId>/<userId>` directory, and `skill_install` carries
+  // `high` risk in the tool-risk table, so every install goes through
+  // approval. Deployments that want none of it set SKILLS_MODE=readonly.
+  void skillsMode;
+
+  // The canonical system root and the canonical user-tier base are the only
+  // skill mounts production may expose. Any other path is a mount the sandbox
+  // policy and Bubblewrap profile do not know about.
+  const canonicalRoots = new Set(DEFAULT_SKILL_ROOTS);
   if (
-    productionSkillRoots.length !== 1 ||
-    productionSkillRoots[0] !== DEFAULT_SKILL_ROOTS[0]
+    productionSkillRoots.length === 0 ||
+    productionSkillRoots[0] !== DEFAULT_SKILL_ROOTS[0] ||
+    productionSkillRoots.some((root) => !canonicalRoots.has(root))
   ) {
     errors.push(
-      `SKILLS_ROOT must be the canonical ${DEFAULT_SKILL_ROOTS[0]} path in production`,
+      `SKILLS_ROOT/SKILLS_USER_ROOT must be the canonical ${DEFAULT_SKILL_ROOTS.join(', ')} paths in production`,
     );
   }
 
@@ -367,6 +377,46 @@ function resolveMcpServers(env = process.env) {
   }
 }
 
+/** Repo default; overridable with TOOL_RISK_POLICY_PATH. */
+export const DEFAULT_TOOL_RISK_POLICY_PATH = fileURLToPath(
+  new URL('../config/agent/tool-risk.json', import.meta.url),
+);
+
+/**
+ * Platform tool risk table (top policy layer).
+ *
+ * Resolution order: TOOL_RISK_POLICY_JSON (inline) > TOOL_RISK_POLICY_PATH >
+ * config/agent/tool-risk.json. A configured source that is invalid or missing
+ * throws at startup — a silently empty risk table would downgrade every
+ * configured approval gate to its built-in default.
+ *
+ * @param {NodeJS.ProcessEnv | Record<string, string|undefined>} [env]
+ */
+export function resolveToolRiskPolicy(env = process.env) {
+  const inline = env.TOOL_RISK_POLICY_JSON;
+  if (inline != null && String(inline).trim() !== '') {
+    try {
+      return loadToolRiskPolicy(String(inline), { field: 'TOOL_RISK_POLICY_JSON' });
+    } catch (error) {
+      throw new Error(`Invalid TOOL_RISK_POLICY_JSON: ${error.message}`);
+    }
+  }
+
+  const explicitPath = String(env.TOOL_RISK_POLICY_PATH || '').trim();
+  const filePath = explicitPath || DEFAULT_TOOL_RISK_POLICY_PATH;
+  if (!existsSync(filePath)) {
+    if (explicitPath) {
+      throw new Error(`TOOL_RISK_POLICY_PATH not found: ${filePath}`);
+    }
+    return loadToolRiskPolicy(null);
+  }
+  try {
+    return loadToolRiskPolicy(readFileSync(filePath, 'utf8'), { field: filePath });
+  } catch (error) {
+    throw new Error(`Invalid tool risk policy at ${filePath}: ${error.message}`);
+  }
+}
+
 export const config = {
   PORT: parseInt(process.env.PORT, 10) || 4100,
   /** Public https origin for Agent Card / artifact download URLs (no path). */
@@ -419,6 +469,12 @@ export const config = {
   POLICY_PROFILE: resolvePolicyProfile(),
   /** External MCP servers owned by Agent Runtime/MCP Gateway, never Sandbox. */
   MCP_SERVERS: resolveMcpServers(),
+  /**
+   * Platform tool risk table. Approval decisions derive from risk, so this is
+   * the knob for "which tools need approval". AgentVersion config may tighten
+   * it per agent; it can never relax it.
+   */
+  TOOL_RISK_POLICY: resolveToolRiskPolicy(),
   /**
    * Skill management mode.
    * - readonly (default): production-safe; skill_install/edit absent; skill tree R/O policy

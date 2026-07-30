@@ -16,6 +16,8 @@ from sandbox.services.process_handle_store import (
     FakeFormalProcessRepository,
     FormalProcessDualWriter,
 )
+from dataclasses import replace
+
 from sandbox.services.process_manager import ProcessManager
 
 
@@ -369,3 +371,83 @@ def test_bwrap_never_inherits_host_secret_environment(tmp_path, monkeypatch):
 
     assert "host-secret-that-must-not-cross" not in prepared.argv
     assert "SANDBOX_API_TOKEN" not in prepared.argv
+
+
+def test_bwrap_binds_only_the_callers_own_user_skill_dir(tmp_path, monkeypatch):
+    """Installed skills are executable, read-only, and never cross-tenant."""
+    from sandbox.config import settings
+
+    context = _context(tmp_path)
+    skills = tmp_path / "skills"
+    skills.mkdir()
+    user_base = tmp_path / "skills-user"
+    org, user, other_user = "org1", "user1", "user2"
+    mine = user_base / org / user
+    mine.mkdir(parents=True)
+    (user_base / org / other_user).mkdir(parents=True)
+
+    monkeypatch.setattr(settings, "user_skills_root", str(user_base))
+    owned = replace(context, org_id=org, user_id=user)
+
+    backend = BubblewrapIsolationBackend(
+        executable="/usr/bin/bwrap",
+        skills_root=skills,
+        user_skills_root=user_base,
+    )
+    prepared = backend.prepare(
+        LaunchSpec(
+            context=owned,
+            argv=["bash", "-c", "pwd"],
+            env_overrides={},
+            network_mode="disabled",
+        )
+    )
+
+    # System tier: hard bind at its canonical path.
+    assert (str(skills.resolve()), "/home/sandbox/skill") in _pairs(
+        prepared.argv, "--ro-bind"
+    )
+    # User tier: only this caller's directory, at the same absolute path the
+    # Agent scanned, so prompt <location> paths resolve identically.
+    assert (
+        str(mine.resolve()),
+        f"/home/sandbox/skill-user/{org}/{user}",
+    ) in _pairs(prepared.argv, "--ro-bind-try")
+
+    # The shared base and the sibling user are never bound.
+    argv = " ".join(prepared.argv)
+    assert str(user_base.resolve()) + " " not in argv
+    assert other_user not in argv
+
+    # Neither tier is ever writable.
+    writable = _pairs(prepared.argv, "--bind")
+    assert (str(mine.resolve()), f"/home/sandbox/skill-user/{org}/{user}") not in writable
+    assert (str(skills.resolve()), "/home/sandbox/skill") not in writable
+
+
+def test_bwrap_omits_user_skill_tier_without_identity(tmp_path):
+    """Unknown owner falls back to the system tier, never the shared base."""
+    context = _context(tmp_path)
+    skills = tmp_path / "skills"
+    skills.mkdir()
+    user_base = tmp_path / "skills-user"
+    user_base.mkdir()
+
+    backend = BubblewrapIsolationBackend(
+        executable="/usr/bin/bwrap",
+        skills_root=skills,
+        user_skills_root=user_base,
+    )
+    prepared = backend.prepare(
+        LaunchSpec(
+            context=context,  # no org_id / user_id
+            argv=["bash", "-c", "pwd"],
+            env_overrides={},
+            network_mode="disabled",
+        )
+    )
+
+    assert (str(skills.resolve()), "/home/sandbox/skill") in _pairs(
+        prepared.argv, "--ro-bind"
+    )
+    assert "/home/sandbox/skill-user" not in " ".join(prepared.argv)

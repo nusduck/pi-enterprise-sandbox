@@ -122,38 +122,122 @@ Agent **可以在零 Skill package 下启动**并使用基础工具（read/write
 5. Agent 经 `dynamic-resources` + profile skill policy 发现技能；工作区始终从空目录起步，技能不复制进 workspace
 6. 安装/编辑后调用 `skill_reload`（development）或新 session 以刷新 registry
 
-**方式 B — 研发对话安装（`SKILLS_MODE=development`）**
+**方式 B — 对话里安装（默认可用）**
 
-> **TODO（未接线）— 2026-07-29：**  
-> `skill_install` / `skill_edit` / `skill_reload` 的**库与文档已存在**
->（`agent/src/skills/manager.js`、`install.js`），但**尚未**注册为运行时可调用
-> 的 Pi custom tools（bootstrap / extensions / executor 未装配 `createSkillManager`）。  
-> **当前可靠做法请用方式 A（手工放入 `skills/`）**。  
-> 跟踪项见 [`review-deferred-items.md`](./review-deferred-items.md)
-> （Wire `skill_install` / `skill_edit` / `skill_reload` into Agent runtime）。
+Skill 分两层：
 
-设计目标（接线后生效）：单用户可信研发环境可通过 Agent 专用工具安装/修改共享
-Skill（不建设 overlay / 审批流）：
+| 层 | 路径 | 可见范围 | 可写 |
+|----|------|----------|------|
+| 系统 | `/home/sandbox/skill`（仓库 `./skills`） | 所有人 | 否 |
+| 用户 | `/home/sandbox/skill-user/<orgId>/<userId>` | 仅该用户 | 是 |
+
+每个 Run 只扫描 `[系统层, 自己的用户目录]`，系统层优先。用户目录在 named volume
+上，所以装过的 skill **跨对话、跨容器重建都在**，但**不跨用户** —— 别人（哪怕同组织）
+的 agent 上下文里看不到，Sandbox 执行时也只 bind 调用者本人的目录。
+
+**不需要开发模式**：`SKILLS_MODE` 默认 `enabled`，生产同样可用。安全性来自写入范围
+被限制在自己的 `<orgId>/<userId>` 目录 + `skill_install` 走审批（见下节）。
+`SKILLS_MODE=readonly` 是彻底关掉安装能力的开关。
 
 ```bash
 # .env
-SKILLS_MODE=development
-AGENT_SKILLS_MOUNT=./skills:/home/sandbox/skill:rw
-# 本地安装源白名单（容器内绝对路径，逗号分隔）
+SKILLS_ROOT=/home/sandbox/skill
+SKILLS_USER_ROOT=/home/sandbox/skill-user
+# 本地安装源白名单（容器内绝对路径，逗号分隔）；git 源不需要
 SKILLS_INSTALL_LOCAL_ALLOWLIST=/tmp/skill-src
 # 可选审计文件
 # SKILLS_AUDIT_LOG=/tmp/skill-audit.jsonl
 ```
 
+注册的工具（`skill-lifecycle` 扩展，per-Run 绑定调用者身份）：
+
 | 工具 | 作用 |
 |------|------|
-| `skill_install` | 从**白名单本地目录**或 **HTTPS Git（必须指定 ref）** 安装；记录 resolved commit；临时目录 + 原子替换 |
-| `skill_edit` | 写 skill 根下文件（校验路径不逃逸；`SKILL.md` 格式校验） |
+| `skill_list` | 列出两层可见 package（含 tier / description / 是否可编辑） |
+| `skill_install` | 从**白名单本地目录**或 **HTTPS Git** 安装到自己的目录；装完自动 reload |
+| `skill_uninstall` | 删除自己装的 package（系统层不可删） |
+| `skill_edit` | 写自己 package 内的文件（路径不逃逸；`SKILL.md` 格式校验） |
 | `skill_reload` | 显式 reload loader；下一回合也会重新扫描 |
 
-**拒绝**：`git@` / SSH、URL 内嵌凭证、任意压缩包/安装脚本、npm/OCI。  
-**路径策略**：通用 `write` / `edit` / `bash` **不能**写 skill 根；生产 `SKILLS_MODE=readonly` 时上述工具不注册。  
-Sandbox 始终只读挂载 skill（仅执行）；写操作只发生在 Agent 侧可写卷。
+`skill_install` 只需要 `source`：源类型自动判断（`https://…` → git，其余按本地路径），
+git ref 默认 `HEAD`，包目录在源码树里自动发现（根目录或 `skills/<name>/`，多个候选会报错
+并列出让你用 `subpath` 指定），package 名取自 SKILL.md 的 `name`。内容相同的重复安装返回
+`idempotent: true`，不会反复覆盖。装同名于系统层 package 会被拒绝（否则装了也不生效）。
+
+**拒绝**：`git@` / SSH、URL 内嵌凭证、任意压缩包/安装脚本、npm/OCI。
+**路径策略**：通用 `write` / `edit` / `bash` **不能**写任一 skill 根；orgId/userId 作为
+路径段会被严格校验，无法 `../` 逃逸。Sandbox 始终只读挂载 skill（仅执行）。
+
+### 配置工具风险等级与审批
+
+审批**只由风险等级决定**——没有单独的「这个工具要不要审批」开关。风险表分两层，
+下层只能收紧、不能放宽：
+
+| 层 | 来源 |
+|----|------|
+| 平台 | `config/agent/tool-risk.json`（或 `TOOL_RISK_POLICY_PATH` / `TOOL_RISK_POLICY_JSON`） |
+| AgentVersion | `configJson.toolPolicy` + `configJson.mcpServers[].toolPolicy` |
+
+平台表结构：
+
+```jsonc
+{
+  // 每个风险等级要付出的代价
+  "riskApproval": {
+    "low": "allow", "medium": "allow",
+    "high": "require_approval", "critical": "deny"
+  },
+  // 没有显式条目时按分类兜底
+  "classRiskLevels": {
+    "local_low": "low",           // sandbox-bridge 工具
+    "external_readonly": "medium", // 显式标记只读的 MCP 工具
+    "external_high": "high",       // 其它 MCP 工具（有外部副作用）
+    "internal_interaction": "low"  // ask_user
+  },
+  // 单个工具：完整名、server::tool，或以 * 结尾的前缀（最长前缀优先）
+  "tools": { "bash": "low", "mcp__github__delete_*": "critical" },
+  // 整个 MCP server 的默认风险 + 单工具覆盖
+  "mcpServers": { "github": { "riskLevel": "high", "tools": { "search": "low" } } }
+}
+```
+
+AgentVersion 侧（同一份语义，只能收紧）：
+
+```jsonc
+{
+  "toolPolicy": {
+    "riskLevels": { "bash": "high" },
+    "riskApproval": { "medium": "require_approval" },
+    "tools": { "mcp__github__merge": "deny" }   // 显式决定，覆盖该工具的风险映射
+  },
+  "mcpServers": [
+    { "serverId": "github",
+      "toolPolicy": { "riskLevel": "high", "toolRiskLevels": { "search": "low" } } }
+  ]
+}
+```
+
+配置文件写错会在启动时抛错（不会静默退回默认值）。每条策略审计记录里带
+`riskLevel` 和 `riskSource`（例如 `tool:bash`、`mcpServer:github`），
+可以直接定位是哪一行配置生效的。`/settings/capabilities` 页面展示的
+`risk_level` / `Approval` / `Risk from` 就是这张表的回读。
+
+未被分类器识别的工具始终 `UNKNOWN_TOOL_DENIED`，把它配成 `low` 也不会放行；
+参数守卫（路径逃逸、敏感环境变量等）同样不受风险等级影响。
+
+### 上下文压缩（compaction）
+
+自动压缩由 Pi SDK 负责，默认开启：上下文 token 超过
+`contextWindow - reserveTokens` 时触发。默认 `reserveTokens=16384`、
+`keepRecentTokens=20000`。每次压缩会产生一条 `session.compacted` 事件。
+
+按 AgentVersion 覆盖：
+
+```jsonc
+{ "contextPolicy": { "autoCompact": true, "reserveTokens": 16384, "keepRecentTokens": 20000 } }
+```
+
+`autoCompact: false` 关闭自动压缩（上下文溢出时会直接失败，而不是压缩后重试）。
 
 ### 修改前端
 

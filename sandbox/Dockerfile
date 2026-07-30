@@ -36,6 +36,7 @@ RUN groupadd -g 10001 sandbox && \
     mkdir -p \
         /home/sandbox/workspace \
         /home/sandbox/skill \
+        /home/sandbox/skill-user \
         /var/sandbox/workspaces \
         /var/sandbox/tmp && \
     chmod 0700 /var/sandbox/workspaces /var/sandbox/tmp && \

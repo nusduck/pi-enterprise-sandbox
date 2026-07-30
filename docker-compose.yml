@@ -244,12 +244,18 @@ services:
       - dev_ingress
 
   # ── Agent — pi-coding-agent orchestration (independent) ──
-  # Skills volume: production/default is read-only.
-  # Development skill install/edit:
-  #   SKILLS_MODE=development
-  #   AGENT_SKILLS_MOUNT=./skills:/home/sandbox/skill:rw
-  #   SKILLS_INSTALL_LOCAL_ALLOWLIST=/path/inside/container
-  # Sandbox keeps skills mounted read-only (execute only).
+  # Skills come in two tiers on two mounts:
+  #   /home/sandbox/skill        bundled ./skills — always read-only
+  #   /home/sandbox/skill-user   installed packages, one dir per user:
+  #                              <orgId>/<userId>/<package>/
+  # Installs are on by default in every environment: a user only ever writes
+  # their own subtree, and skill_install is high risk so it needs approval.
+  #   SKILLS_MODE=readonly              turns skill installation off entirely
+  #   SKILLS_INSTALL_LOCAL_ALLOWLIST=/path/inside/container   (local sources)
+  # The user tier is a named volume, so installs survive a container rebuild
+  # and follow the user across conversations.
+  # Sandbox mounts both tiers read-only, and binds only the calling user's own
+  # directory into each execution.
   agent:
     build:
       context: ./agent
@@ -315,14 +321,20 @@ services:
       APPROVAL_MODE: ${APPROVAL_MODE:-${SANDBOX_APPROVAL_MODE:-}}
       APPROVAL_ENABLED: ${APPROVAL_ENABLED:-${SANDBOX_APPROVAL_ENABLED:-}}
       # readonly (default) | development — skill_install/edit/reload only in development
-      SKILLS_MODE: ${SKILLS_MODE:-readonly}
+      SKILLS_MODE: ${SKILLS_MODE:-enabled}
       SKILLS_ROOT: /home/sandbox/skill
+      SKILLS_USER_ROOT: /home/sandbox/skill-user
       SKILLS_INSTALL_LOCAL_ALLOWLIST: ${SKILLS_INSTALL_LOCAL_ALLOWLIST:-}
       SKILLS_AUDIT_LOG: ${SKILLS_AUDIT_LOG:-}
+      # Platform tool risk table → which tools require approval.
+      TOOL_RISK_POLICY_PATH: ${TOOL_RISK_POLICY_PATH:-/app/config/agent/tool-risk.json}
       PORT: 4100
     volumes:
-      # Default :ro. For SKILLS_MODE=development set AGENT_SKILLS_MOUNT=./skills:/home/sandbox/skill:rw
-      - ${AGENT_SKILLS_MOUNT:-./skills:/home/sandbox/skill:ro}
+      # Bundled system skills: read-only in every mode.
+      - ./skills:/home/sandbox/skill:ro
+      # User-installed skills: writable so skill_install has a target.
+      - agent_user_skills:/home/sandbox/skill-user
+      - ./config/agent:/app/config/agent:ro
     restart: unless-stopped
     depends_on:
       sandbox:
@@ -403,14 +415,19 @@ services:
       AGENT_PROFILES_JSON: ${AGENT_PROFILES_JSON:-}
       APPROVAL_MODE: ${APPROVAL_MODE:-${SANDBOX_APPROVAL_MODE:-}}
       APPROVAL_ENABLED: ${APPROVAL_ENABLED:-${SANDBOX_APPROVAL_ENABLED:-}}
-      SKILLS_MODE: ${SKILLS_MODE:-readonly}
+      SKILLS_MODE: ${SKILLS_MODE:-enabled}
       SKILLS_ROOT: /home/sandbox/skill
+      SKILLS_USER_ROOT: /home/sandbox/skill-user
       SKILLS_INSTALL_LOCAL_ALLOWLIST: ${SKILLS_INSTALL_LOCAL_ALLOWLIST:-}
       SKILLS_AUDIT_LOG: ${SKILLS_AUDIT_LOG:-}
+      # Platform tool risk table → which tools require approval.
+      TOOL_RISK_POLICY_PATH: ${TOOL_RISK_POLICY_PATH:-/app/config/agent/tool-risk.json}
       # Never enable stub executor in shared compose (production fail-closed).
       # AGENT_ALLOW_STUB_EXECUTOR is intentionally unset.
     volumes:
-      - ${AGENT_SKILLS_MOUNT:-./skills:/home/sandbox/skill:ro}
+      - ./skills:/home/sandbox/skill:ro
+      - agent_user_skills:/home/sandbox/skill-user
+      - ./config/agent:/app/config/agent:ro
     restart: unless-stopped
     depends_on:
       mysql:
@@ -441,8 +458,9 @@ services:
     env_file:
       - ${SANDBOX_ENV_FILE:-.env}
     volumes:
-      # Sandbox and Bubblewrap expose Skills only through the canonical R/O path.
+      # Sandbox and Bubblewrap expose Skills only through canonical R/O paths.
       - ./skills:/home/sandbox/skill:ro
+      - agent_user_skills:/home/sandbox/skill-user:ro
       - ${SANDBOX_WORKSPACES_MOUNT:-./workspaces:/var/sandbox/workspaces}
       - ${SANDBOX_TEMP_MOUNT:-./tmp-workspaces:/var/sandbox/tmp}
       # PR-09 control-plane roots — NOT bound into Bubblewrap workspace/tmp
@@ -482,6 +500,9 @@ services:
       SANDBOX_ARTIFACTS_ROOT: /var/sandbox/artifacts
       SANDBOX_CONTROL_ROOT: /var/sandbox/control
       SANDBOX_SKILLS_ROOT: /home/sandbox/skill
+      # Per-user installed skills; Sandbox binds only the calling
+      # user's own <orgId>/<userId> subtree into each execution.
+      SANDBOX_USER_SKILLS_ROOT: /home/sandbox/skill-user
       SANDBOX_ISOLATION_BACKEND: ${SANDBOX_ISOLATION_BACKEND:-bubblewrap}
       SANDBOX_ISOLATION_REQUIRED: ${SANDBOX_ISOLATION_REQUIRED:-true}
       SANDBOX_BWRAP_PATH: ${SANDBOX_BWRAP_PATH:-/usr/bin/bwrap}
@@ -646,6 +667,7 @@ networks:
     name: ${COMPOSE_PROJECT_NAME:-pi-enterprise}-dev-ingress
 
 volumes:
+  agent_user_skills:
   mysql_dev_data:
   redis_dev_data:
   sandbox_replay_redis_dev_data:

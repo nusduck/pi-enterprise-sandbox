@@ -29,13 +29,18 @@ export const REQUIRED_EXTENSION_NAMES = Object.freeze([
 
 /**
  * Additional first-party extensions an AgentVersion may enable on top of the
- * required set. Empty today. A new entry must also add a
- * tool-risk-classifier entry for every tool it registers, otherwise those
- * tools are denied as UNKNOWN_TOOL_DENIED (enforced by a guard test).
+ * required set. A new entry must also add a tool-risk-classifier entry for
+ * every tool it registers, otherwise those tools are denied as
+ * UNKNOWN_TOOL_DENIED (enforced by a guard test).
+ *
+ * `skill-lifecycle` is development-only: its factory refuses to construct
+ * unless SKILLS_MODE=development and a writable user skill root exists. It is
+ * deliberately not named `skill-management` — that is a legacy
+ * enterprise-agent-kit package name the registry must keep refusing.
  *
  * @type {readonly string[]}
  */
-export const OPTIONAL_EXTENSION_NAMES = Object.freeze([]);
+export const OPTIONAL_EXTENSION_NAMES = Object.freeze(['skill-lifecycle']);
 
 /** Every extension name this build knows how to construct. */
 export const REGISTERED_EXTENSION_NAMES = Object.freeze([
@@ -61,7 +66,10 @@ export const REGISTERED_EXTENSION_NAMES = Object.freeze([
  *
  * @type {readonly string[]}
  */
-export const EXTENSION_LOAD_ORDER = REQUIRED_EXTENSION_NAMES;
+export const EXTENSION_LOAD_ORDER = Object.freeze([
+  ...REQUIRED_EXTENSION_NAMES,
+  ...OPTIONAL_EXTENSION_NAMES,
+]);
 
 /**
  * Pre-`user-interaction` required set. An AgentVersion authored before

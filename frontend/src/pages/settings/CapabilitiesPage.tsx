@@ -173,6 +173,10 @@ function ToolCards({ items }: { items: ToolRegistryItem[] }) {
                 <dd>{t.approval_policy || '—'}</dd>
               </div>
               <div>
+                <dt>Risk from</dt>
+                <dd>{t.risk_source || '—'}</dd>
+              </div>
+              <div>
                 <dt>Timeout</dt>
                 <dd>{t.timeout != null ? String(t.timeout) : '—'}</dd>
               </div>

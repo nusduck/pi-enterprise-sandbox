@@ -37,6 +37,10 @@ import { SessionLockError } from '../infrastructure/redis/errors.js';
 import { PINNED_PI_SDK_VERSION } from '../infrastructure/pi/pi-runtime-factory.js';
 import { buildMcpPolicyBindings } from '../infrastructure/mcp/pi-mcp-adapter-factory.js';
 import {
+  buildAgentVersionToolRiskBindings,
+  readAgentVersionExtensions,
+} from './tool-risk-bindings.js';
+import {
   PlatformEventProjector,
   extractAssistantTextForUi,
   redactPayload,
@@ -337,6 +341,12 @@ export class PiRunExecutor {
       deps.sessionLockManager.renewIntervalMs ??
       10_000;
     this.agentDir = deps.agentDir ?? null;
+    /**
+     * Per-Run skill roots: `(identity) => string[]`. The user tier is scoped to
+     * `<orgId>/<userId>`, so this cannot be resolved once per process.
+     */
+    this.skillRootsForRun =
+      typeof deps.skillRootsForRun === 'function' ? deps.skillRootsForRun : null;
     this.extensionBundleFactory = deps.extensionBundleFactory ?? null;
     /**
      * When 'observability', session.subscribe projector is disabled (Extension owns
@@ -666,7 +676,13 @@ export class PiRunExecutor {
       });
 
       if (typeof this.extensionBundleFactory === 'function') {
-        const mcpPolicyBindings = buildMcpPolicyBindings(agentVersion);
+        const { mcpServerPolicies, mcpToolRiskPolicy } =
+          buildMcpPolicyBindings(agentVersion);
+        // AgentVersion is the lower policy layer: it may raise a tool's risk or
+        // tighten what a risk level costs, never the reverse.
+        const { agentVersionToolPolicy, agentVersionToolRiskPolicy } =
+          buildAgentVersionToolRiskBindings(agentVersion, { mcpToolRiskPolicy });
+        const agentVersionExtensions = readAgentVersionExtensions(agentVersion);
           extensionFactories = this.extensionBundleFactory(eventContext, {
             recorder: this._eventRecorder,
             governanceRecorder: this._governanceRecorder,
@@ -679,7 +695,15 @@ export class PiRunExecutor {
                     : null,
               provider: typeof model.provider === 'string' ? model.provider : null,
             },
-            ...mcpPolicyBindings,
+            mcpServerPolicies,
+            ...(agentVersionToolPolicy ? { agentVersionToolPolicy } : {}),
+            ...(agentVersionToolRiskPolicy ? { agentVersionToolRiskPolicy } : {}),
+            // pi-runtime-factory validates the factory list against
+            // AgentVersion.extensions exactly, so the bundle must build the
+            // same set the AgentVersion asks for.
+            ...(agentVersionExtensions.length > 0
+              ? { extensions: agentVersionExtensions }
+              : {}),
             isDurableInteractionPending: (toolCallId) => {
               const normalized = String(toolCallId ?? '').trim();
               return (
@@ -740,6 +764,16 @@ export class PiRunExecutor {
             }
           : null;
 
+      // Skill discovery is per-caller: the system tier plus this user's own
+      // directory. Resolved here (not at factory construction) so one Run's
+      // prompt can never list another tenant's installed skills.
+      const runSkillPaths = this.skillRootsForRun
+        ? this.skillRootsForRun({
+            orgId: eventContext.orgId,
+            userId: eventContext.userId,
+          })
+        : null;
+
       this._runtime = await this.piRuntimeFactory.create({
         agentVersion,
         agentSession: session,
@@ -751,6 +785,7 @@ export class PiRunExecutor {
         context: eventContext,
         extensionFactories,
         runEventRecorder: this._eventRecorder,
+        ...(runSkillPaths?.length ? { additionalSkillPaths: runSkillPaths } : {}),
       });
 
       runtimeSession = this._runtime?.session;

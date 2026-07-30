@@ -4,8 +4,90 @@
 import path from 'node:path';
 import fs from 'node:fs';
 
-/** Canonical agent-visible skill root (logical read-only mount). */
-export const DEFAULT_SKILL_ROOTS = Object.freeze(['/home/sandbox/skill']);
+/**
+ * Skills come in two tiers, on two separate logical mounts:
+ *
+ *   SYSTEM_SKILL_ROOT  bundled first-party packages shipped in the image
+ *                      (repo `skills/`). Always read-only, in every mode —
+ *                      an installed skill must never be able to shadow or
+ *                      overwrite one the platform vouches for.
+ *   USER_SKILL_ROOT    base of the per-user tier. Nothing is installed at the
+ *                      base itself; each user gets `<base>/<orgId>/<userId>`.
+ *
+ * The per-user layout is what makes installs safe to allow without a
+ * deployment-wide mode flag: this is a multi-tenant server, so one user's
+ * install must never enter another user's (or another org's) agent context.
+ *
+ * A Run reads the union of the system tier and its own user directory, system
+ * first. Installs and edits only ever target that one user directory.
+ */
+export const SYSTEM_SKILL_ROOT = '/home/sandbox/skill';
+export const USER_SKILL_ROOT = '/home/sandbox/skill-user';
+
+/**
+ * Canonical *mount* roots, system first. These are the volumes; the per-user
+ * directory beneath USER_SKILL_ROOT is resolved per Run.
+ */
+export const DEFAULT_SKILL_ROOTS = Object.freeze([
+  SYSTEM_SKILL_ROOT,
+  USER_SKILL_ROOT,
+]);
+
+/** Identity segment: ULID-shaped ids only, so no segment can traverse. */
+const IDENTITY_SEGMENT_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
+
+/**
+ * @param {unknown} value
+ * @param {string} field
+ * @returns {string}
+ */
+function assertIdentitySegment(value, field) {
+  const segment = String(value ?? '').trim();
+  if (!IDENTITY_SEGMENT_RE.test(segment)) {
+    throw new Error(
+      `Invalid ${field} for skill path: must match /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/`,
+    );
+  }
+  return segment;
+}
+
+/**
+ * The one directory a given user's installs live in.
+ *
+ * Org is included so the path is unique even if user ids were ever reissued
+ * per org, and so an operator can wipe a whole tenant's skills as one subtree.
+ *
+ * @param {{ orgId: unknown, userId: unknown }} identity
+ * @param {string} [base]
+ * @returns {string}
+ */
+export function userSkillRootFor(identity, base = USER_SKILL_ROOT) {
+  const orgId = assertIdentitySegment(identity?.orgId, 'orgId');
+  const userId = assertIdentitySegment(identity?.userId, 'userId');
+  return path.join(path.resolve(base), orgId, userId);
+}
+
+/**
+ * Skill roots one Run may read, in precedence order.
+ * Without an identity there is no user tier — the caller sees system only.
+ *
+ * @param {{ orgId?: unknown, userId?: unknown } | null | undefined} identity
+ * @param {{ systemRoot?: string, userRootBase?: string }} [opts]
+ * @returns {string[]}
+ */
+export function skillRootsForIdentity(identity, opts = {}) {
+  const systemRoot = opts.systemRoot || SYSTEM_SKILL_ROOT;
+  if (identity?.orgId == null || identity?.userId == null) {
+    return normalizeSkillRoots([systemRoot]);
+  }
+  return normalizeSkillRoots([
+    systemRoot,
+    userSkillRootFor(
+      { orgId: identity.orgId, userId: identity.userId },
+      opts.userRootBase || USER_SKILL_ROOT,
+    ),
+  ]);
+}
 
 /** Valid skill directory / package name. */
 export const SKILL_NAME_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/;
@@ -56,11 +138,33 @@ export function normalizeSkillRoots(roots = DEFAULT_SKILL_ROOTS) {
 }
 
 /**
- * Primary (first) skill root used for installs.
+ * Primary (first) skill root — read precedence, and the root whose logical
+ * path appears in prompts and redaction.
  * @param {string[]} roots
  */
 export function primarySkillRoot(roots = DEFAULT_SKILL_ROOTS) {
   return normalizeSkillRoots(roots)[0];
+}
+
+/**
+ * The one root installs and edits may write to.
+ *
+ * Never the system root (bundled packages are part of the image), and never
+ * the user *base* — the base only holds per-user directories, so a package
+ * written there would belong to nobody. Returns null when neither applies, so
+ * the caller refuses the write instead of falling back to a read-only mount.
+ *
+ * @param {string[]} roots
+ */
+export function writableSkillRoot(roots = DEFAULT_SKILL_ROOTS) {
+  const normalized = normalizeSkillRoots(roots);
+  const systemResolved = path.resolve(SYSTEM_SKILL_ROOT);
+  const userBaseResolved = path.resolve(USER_SKILL_ROOT);
+
+  const writable = normalized.filter(
+    (r) => r !== systemResolved && r !== userBaseResolved,
+  );
+  return writable.length > 0 ? writable[writable.length - 1] : null;
 }
 
 /**

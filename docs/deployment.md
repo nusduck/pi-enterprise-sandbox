@@ -352,12 +352,34 @@ curl -f http://localhost:4000/health/ready
 
 ### Skill 挂载与 SKILLS_MODE
 
-| 环境 | `SKILLS_MODE` | Agent 挂载 | Sandbox 挂载 | 说明 |
-|------|---------------|------------|--------------|------|
-| 生产 | `readonly`（默认） | `:ro` | `:ro` | 无 `skill_install` / `skill_edit`；通用工具硬拒绝写 skill 根 |
-| 研发 | `development` | `AGENT_SKILLS_MOUNT=...:rw` | `:ro` | 仅 Agent 可写；Sandbox 只执行 |
+Skill 分两层，挂在两个 canonical 路径：
 
-生产 overlay（`docker-compose.prod.yml`）强制 Agent skill 卷为 `:ro`。
+| 层 | 路径 | 来源 | 可见范围 | 卷 |
+|----|------|------|----------|----|
+| 系统 | `/home/sandbox/skill` | 仓库 `./skills` | 所有人 | 任何模式 `:ro` |
+| 用户 | `/home/sandbox/skill-user/<orgId>/<userId>` | `skill_install` 装的 | 仅该用户 | named volume `agent_user_skills` |
+
+| `SKILLS_MODE` | Agent/Worker 用户层 | Sandbox | 说明 |
+|---------------|---------------------|---------|------|
+| `enabled`（默认） | 可写 | `:ro`，且只 bind 调用者本人的目录 | 生产同样可用；每次安装走审批 |
+| `readonly` | 只读 | `:ro` | 完全关掉 skill 安装能力 |
+
+安装在生产可用，安全性来自两点：写入范围被限制在调用者自己的 `<orgId>/<userId>`
+子树，且 `skill_install` 在风险表里是 `high` → 必须审批。系统层在任何模式下只读，
+安装无法覆盖自带 package。Sandbox 只 bind 调用者本人的用户目录，别的租户的 package
+在沙箱里根本不存在。
+
+`validateProductionConfig` 仍然拒绝任何非 canonical 的
+`SKILLS_ROOT` / `SKILLS_USER_ROOT`（这些是 Bubblewrap profile 认识的挂载点）。
+
+### 工具风险等级与审批
+
+审批由风险等级驱动。平台风险表默认从 `config/agent/tool-risk.json` 读取
+（`TOOL_RISK_POLICY_PATH` 可改路径，`TOOL_RISK_POLICY_JSON` 可整表内联覆盖）；
+Compose 已把 `./config/agent` 以 `:ro` 挂进 Agent 与 Worker。
+AgentVersion 的 `configJson.toolPolicy` 是下层，**只能收紧**。
+配置无效时进程启动即失败，不会静默退回默认值。格式见
+[`docs/development.md`](./development.md#配置工具风险等级与审批)。
 
 ## Health Checks
 

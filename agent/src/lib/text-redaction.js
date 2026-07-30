@@ -27,8 +27,15 @@ export function redactSecretText(value) {
   return text;
 }
 
-/** Canonical logical skill root that must survive host-path redaction. */
-export const LOGICAL_SKILL_ROOTS = Object.freeze(['/home/sandbox/skill']);
+/**
+ * Canonical logical skill roots that must survive host-path redaction.
+ * Longest first at use sites, so `/home/sandbox/skill-user` is not truncated
+ * by the `/home/sandbox/skill` prefix.
+ */
+export const LOGICAL_SKILL_ROOTS = Object.freeze([
+  '/home/sandbox/skill',
+  '/home/sandbox/skill-user',
+]);
 
 const PLACEHOLDER = Object.freeze({
   url: '\uE000U',

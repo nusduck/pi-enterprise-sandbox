@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import pytest
+
 from sandbox.config import settings
 from sandbox.paths import (
     AGENT_SKILL_PATH,
@@ -88,3 +90,75 @@ def test_sanitize_path_error_redacts_defaults():
 
 def test_conversation_workspace_id():
     assert conversation_workspace_id("abc") == "conv_abc"
+
+
+def test_logical_skill_paths_cover_both_tiers():
+    """The user tier must not be mistaken for a child of the system tier."""
+    from sandbox.paths import (
+        AGENT_SKILL_PATH,
+        AGENT_USER_SKILL_PATH,
+        is_logical_skill_path,
+        logical_skill_root,
+    )
+
+    assert is_logical_skill_path(f"{AGENT_SKILL_PATH}/pdf/SKILL.md")
+    assert is_logical_skill_path(f"{AGENT_USER_SKILL_PATH}/mine/SKILL.md")
+    assert not is_logical_skill_path("/home/sandbox/workspace/a.txt")
+    assert not is_logical_skill_path(None)
+
+    # Longest root wins, so a user path resolves to the user tier and not to
+    # "skill" plus a "-user/..." remainder.
+    assert (
+        logical_skill_root(f"{AGENT_USER_SKILL_PATH}/mine/SKILL.md")
+        == AGENT_USER_SKILL_PATH
+    )
+    assert (
+        logical_skill_root(f"{AGENT_SKILL_PATH}/pdf/SKILL.md") == AGENT_SKILL_PATH
+    )
+    assert logical_skill_root("/etc/passwd") is None
+
+
+def test_files_read_accepts_both_skill_tiers_and_rejects_them_on_workspace():
+    from sandbox.app.domain.files_read_contract import (
+        _validate_canonical_skill_path,
+        _validate_canonical_workspace_path,
+    )
+
+    for root in ("/home/sandbox/skill", "/home/sandbox/skill-user"):
+        path = f"{root}/pkg/SKILL.md"
+        assert _validate_canonical_skill_path(path) == path
+        with pytest.raises(Exception):
+            _validate_canonical_workspace_path(path)
+
+    with pytest.raises(Exception):
+        _validate_canonical_skill_path("/home/sandbox/workspace/a.txt")
+
+
+def test_execution_context_resolves_only_its_own_user_skill_dir(monkeypatch, tmp_path):
+    """The per-user skill dir is derived from the trusted session binding."""
+    from dataclasses import replace
+
+    from sandbox.config import settings
+    from sandbox.services.execution_context import SandboxExecutionContext
+
+    monkeypatch.setattr(settings, "user_skills_root", str(tmp_path))
+    base = SandboxExecutionContext(
+        session_id="s",
+        workspace_id="w",
+        temp_id="t",
+        physical_workspace=tmp_path,
+        physical_temp=tmp_path,
+    )
+
+    # No identity → no user tier at all (never the shared base).
+    assert base.user_skill_dir is None
+    assert replace(base, org_id="org1").user_skill_dir is None
+    assert replace(base, user_id="user1").user_skill_dir is None
+
+    owned = replace(base, org_id="org1", user_id="user1")
+    assert owned.user_skill_dir == tmp_path / "org1" / "user1"
+
+    # Identity segments become path components, so traversal must be refused.
+    for bad in ("../..", "a/b", "", "."):
+        assert replace(base, org_id="org1", user_id=bad).user_skill_dir is None
+        assert replace(base, org_id=bad, user_id="user1").user_skill_dir is None

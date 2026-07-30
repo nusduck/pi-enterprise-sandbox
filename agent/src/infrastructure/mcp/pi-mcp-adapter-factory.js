@@ -1333,6 +1333,10 @@ export function createPiMcpResolver(options = {}) {
  * Convert AgentVersion server policies into the existing enterprise-policy
  * input shape. Only enabled tools are projected.
  *
+ * Also projects `toolPolicy.riskLevel` / `toolPolicy.toolRiskLevels` into the
+ * AgentVersion risk-table layer, so an MCP server's risk is configured next to
+ * the rest of its policy instead of in a second unrelated file.
+ *
  * @param {unknown} raw
  */
 export function buildMcpPolicyBindings(raw) {
@@ -1345,6 +1349,8 @@ export function buildMcpPolicyBindings(raw) {
       : loadMcpConfig(raw ?? []);
   /** @type {Record<string, Record<string, unknown>>} */
   const mcpServerPolicies = {};
+  /** @type {Record<string, { riskLevel?: string, tools?: Record<string, string> }>} */
+  const riskServers = {};
   for (const server of logical) {
     mcpServerPolicies[server.serverId] = {
       ...server.toolPolicy,
@@ -1353,6 +1359,24 @@ export function buildMcpPolicyBindings(raw) {
           ? { ...server.toolPolicy.tools }
           : undefined,
     };
+
+    const riskLevel = server.toolPolicy.riskLevel;
+    const toolRiskLevels = server.toolPolicy.toolRiskLevels;
+    if (riskLevel || toolRiskLevels) {
+      riskServers[server.serverId] = {
+        ...(riskLevel ? { riskLevel: String(riskLevel) } : {}),
+        ...(toolRiskLevels && typeof toolRiskLevels === 'object'
+          ? { tools: { .../** @type {object} */ (toolRiskLevels) } }
+          : {}),
+      };
+    }
   }
-  return Object.freeze({ mcpServerPolicies: Object.freeze(mcpServerPolicies) });
+  return Object.freeze({
+    mcpServerPolicies: Object.freeze(mcpServerPolicies),
+    mcpToolRiskPolicy: Object.freeze(
+      Object.keys(riskServers).length > 0
+        ? { mcpServers: Object.freeze(riskServers) }
+        : {},
+    ),
+  });
 }

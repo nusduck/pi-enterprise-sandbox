@@ -308,7 +308,11 @@ services:
       - backend_internal
 
   agent:
-    # Production: skills stay read-only; skill management tools disabled.
+    # Production: the bundled system tier stays read-only. The user tier is
+    # writable because installs are a normal user action here — each user only
+    # ever writes their own <orgId>/<userId> subtree, and skill_install is
+    # high risk so every install goes through approval. Set SKILLS_MODE=readonly
+    # to turn skill installation off entirely.
     environment:
       DEPLOYMENT_ENV: production
       SANDBOX_API_TOKEN: ${SANDBOX_API_TOKEN:?Set SANDBOX_API_TOKEN for production}
@@ -335,14 +339,18 @@ services:
       SANDBOX_POLICY_PROFILE: strict
       SANDBOX_ISOLATION_BACKEND: bubblewrap
       SANDBOX_ISOLATION_REQUIRED: "true"
-      SKILLS_MODE: readonly
+      SKILLS_MODE: ${SKILLS_MODE:-enabled}
       SKILLS_ROOT: /home/sandbox/skill
+      SKILLS_USER_ROOT: /home/sandbox/skill-user
+      TOOL_RISK_POLICY_PATH: ${TOOL_RISK_POLICY_PATH:-/app/config/agent/tool-risk.json}
       # Clear any product prompt file path unless explicitly provided.
       AGENT_SYSTEM_PROMPT: ${AGENT_SYSTEM_PROMPT:-}
       AGENT_SYSTEM_PROMPT_FILE: ${AGENT_SYSTEM_PROMPT_FILE:-}
     volumes:
       # Force read-only skill mounts in production (override any RW dev mount)
       - ./skills:/home/sandbox/skill:ro
+      - agent_user_skills:/home/sandbox/skill-user
+      - ./config/agent:/app/config/agent:ro
     depends_on:
       mysql:
         condition: service_healthy
@@ -389,9 +397,14 @@ services:
       SANDBOX_POLICY_PROFILE: strict
       SANDBOX_ISOLATION_BACKEND: bubblewrap
       SANDBOX_ISOLATION_REQUIRED: "true"
-      SKILLS_MODE: readonly
+      SKILLS_MODE: ${SKILLS_MODE:-enabled}
+      SKILLS_ROOT: /home/sandbox/skill
+      SKILLS_USER_ROOT: /home/sandbox/skill-user
+      TOOL_RISK_POLICY_PATH: ${TOOL_RISK_POLICY_PATH:-/app/config/agent/tool-risk.json}
     volumes:
       - ./skills:/home/sandbox/skill:ro
+      - agent_user_skills:/home/sandbox/skill-user
+      - ./config/agent:/app/config/agent:ro
     depends_on:
       mysql:
         condition: service_healthy

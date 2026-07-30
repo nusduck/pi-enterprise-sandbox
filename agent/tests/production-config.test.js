@@ -60,18 +60,18 @@ describe('validateProductionConfig', () => {
     );
   });
 
-  it('rejects skill development mode in production', () => {
-    assert.throws(
-      () =>
-        validateProductionConfig({
-          DEPLOYMENT_ENV: 'production',
-          AGENT_INTERNAL_TOKEN: STRONG,
-          SANDBOX_API_TOKEN: STRONG,
-          SKILLS_MODE: 'development',
-          LLMIO_BASE_URL: 'https://llm.example.com',
-          ...A2A_PROD,
-        }),
-      /SKILLS_MODE/,
+  it('allows skill installation in production (per-user dir + approval gate)', () => {
+    // Installs are confined to the caller's own <orgId>/<userId> directory and
+    // skill_install is high risk, so production no longer needs a mode flag.
+    assert.doesNotThrow(() =>
+      validateProductionConfig({
+        DEPLOYMENT_ENV: 'production',
+        AGENT_INTERNAL_TOKEN: STRONG,
+        SANDBOX_API_TOKEN: STRONG,
+        SKILLS_MODE: 'enabled',
+        LLMIO_BASE_URL: 'https://llm.example.com/v1',
+        ...A2A_PROD,
+      }),
     );
   });
 
@@ -87,7 +87,38 @@ describe('validateProductionConfig', () => {
           LLMIO_BASE_URL: 'https://llm.example.com/v1',
           ...A2A_PROD,
         }),
-      /SKILLS_ROOT must be the canonical \/home\/sandbox\/skill/,
+      /must be the canonical \/home\/sandbox\/skill/,
+    );
+  });
+
+  it('rejects a non-canonical user skill root in production', () => {
+    assert.throws(
+      () =>
+        validateProductionConfig({
+          DEPLOYMENT_ENV: 'production',
+          AGENT_INTERNAL_TOKEN: STRONG,
+          SANDBOX_API_TOKEN: STRONG,
+          SKILLS_MODE: 'readonly',
+          SKILLS_USER_ROOT: '/tmp/company/skills',
+          LLMIO_BASE_URL: 'https://llm.example.com/v1',
+          ...A2A_PROD,
+        }),
+      /must be the canonical \/home\/sandbox\/skill/,
+    );
+  });
+
+  it('accepts the canonical system + user skill roots in production', () => {
+    assert.doesNotThrow(() =>
+      validateProductionConfig({
+        DEPLOYMENT_ENV: 'production',
+        AGENT_INTERNAL_TOKEN: STRONG,
+        SANDBOX_API_TOKEN: STRONG,
+        SKILLS_MODE: 'readonly',
+        SKILLS_ROOT: '/home/sandbox/skill',
+        SKILLS_USER_ROOT: '/home/sandbox/skill-user',
+        LLMIO_BASE_URL: 'https://llm.example.com/v1',
+        ...A2A_PROD,
+      }),
     );
   });
 

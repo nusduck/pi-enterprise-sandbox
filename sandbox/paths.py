@@ -31,9 +31,15 @@ from typing import Any
 # Opaque stand-in for any physical workspace root in errors, logs, and docs.
 PUBLIC_WORKSPACE_TOKEN = "<workspace>"
 
-# Agent-visible skill tree (shared, not session workspace). Skill tools may
-# still use this absolute root; session file tools do not.
+# Agent-visible skill trees (shared, not session workspace). Skill tools may
+# still use these absolute roots; session file tools do not.
+#
+# Two tiers: bundled first-party packages, and packages the user installed.
+# Both are read-only to tool processes — the Agent owns installation, and a
+# skill script must never be able to rewrite its own package mid-execution.
 AGENT_SKILL_PATH = "/home/sandbox/skill"
+AGENT_USER_SKILL_PATH = "/home/sandbox/skill-user"
+AGENT_SKILL_PATHS = (AGENT_SKILL_PATH, AGENT_USER_SKILL_PATH)
 
 # Stable Agent-visible logical workspace path. The historical constant name is
 # retained because several integrations already import it.
@@ -114,7 +120,23 @@ def is_logical_skill_path(path: str | None) -> bool:
     if not path:
         return False
     p = path.rstrip("/")
-    return p == AGENT_SKILL_PATH or p.startswith(AGENT_SKILL_PATH + "/")
+    # Longest root first: /home/sandbox/skill-user must not be matched as a
+    # child of /home/sandbox/skill.
+    for root in sorted(AGENT_SKILL_PATHS, key=len, reverse=True):
+        if p == root or p.startswith(root + "/"):
+            return True
+    return False
+
+
+def logical_skill_root(path: str | None) -> str | None:
+    """Which skill tier ``path`` belongs to, or None."""
+    if not path:
+        return None
+    p = path.rstrip("/")
+    for root in sorted(AGENT_SKILL_PATHS, key=len, reverse=True):
+        if p == root or p.startswith(root + "/"):
+            return root
+    return None
 
 
 def public_metadata(metadata: dict[str, Any] | None) -> dict[str, Any]:

@@ -12,6 +12,9 @@ import {
   ENTERPRISE_DEFAULT_TOOLS,
   REGISTERED_EXTENSION_NAMES,
   REQUIRED_EXTENSION_NAMES,
+  coerceToolRiskPolicy,
+  decisionForRiskLevel,
+  resolveToolRiskLevel,
 } from '../extensions/index.js';
 import { loadMcpServerRegistry } from '../infrastructure/mcp/pi-mcp-adapter-factory.js';
 
@@ -102,6 +105,7 @@ function projectMcpServers(rawServers, discovery = null) {
  *   mcpServers?: object[] | string,
  *   mcpDiscovery?: { servers?: object[], ready?: boolean, toolCount?: number },
  *   models?: Iterable<object>,
+ *   toolRiskPolicy?: object,
  *   now?: () => Date,
  * }} [options]
  */
@@ -121,14 +125,26 @@ export function getExtensionDiagnostics(options = {}) {
   const models = options.models
     ? [...options.models]
     : [...buildRegistry().values()];
+  // Report the risk level and approval outcome the policy engine will actually
+  // produce, so the capabilities view is a readback of the configured risk
+  // table rather than a second hardcoded opinion.
+  const riskPolicy = coerceToolRiskPolicy(options.toolRiskPolicy);
+  const describeRisk = (name, cls) => {
+    const { riskLevel, source } = resolveToolRiskLevel(name, cls, riskPolicy);
+    return {
+      risk_level: riskLevel,
+      risk_source: source,
+      approval_policy: decisionForRiskLevel(riskLevel, riskPolicy),
+    };
+  };
+
   const tools = ENTERPRISE_DEFAULT_TOOLS.map((name) => ({
     name,
     enabled: true,
     status: 'configured',
     category: toolCategory(name),
     source: 'sandbox-bridge',
-    risk_level: 'low',
-    approval_policy: 'external-side-effects-only',
+    ...describeRisk(name, { class: 'local_low' }),
     dynamic: false,
   })).concat(
     mcpServers.flatMap((server) =>
@@ -138,8 +154,11 @@ export function getExtensionDiagnostics(options = {}) {
         status: server.connection_status,
         category: 'execution',
         source: 'mcp',
-        risk_level: 'high',
-        approval_policy: 'require_approval',
+        ...describeRisk(`mcp__${server.server_id}__${toolName}`, {
+          class: 'external_high',
+          serverId: server.server_id,
+          tool: toolName,
+        }),
         dynamic: false,
       })),
     ),

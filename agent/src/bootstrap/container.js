@@ -60,6 +60,9 @@ import { createRunWorkerRuntime } from './run-worker.js';
 import { PINNED_PI_SDK_VERSION } from '../infrastructure/pi/pi-runtime-factory.js';
 import { mkdirSync } from 'node:fs';
 import path from 'node:path';
+// Static: skill path policy is pure path math with no SDK side effects, and
+// resolveSkillRootsForRun runs on the per-Run hot path.
+import * as skillPathsModule from '../skills/paths.js';
 
 /**
  * Resolve concrete AGENT_PI_AGENT_DIR for PiRuntimeFactory.create().
@@ -121,6 +124,37 @@ export function assertWorkerSandboxServiceToken(env = process.env) {
     throw e;
   }
   return '';
+}
+
+/**
+ * Skill roots one Run may read: the bundled system tier plus that caller's own
+ * `<orgId>/<userId>` directory.
+ *
+ * Resolved per Run rather than once per process — the user tier is per-user, so
+ * a process-wide list would put every tenant's installed skills into every
+ * prompt. A malformed identity degrades to system-only instead of throwing.
+ *
+ * @param {NodeJS.ProcessEnv | Record<string, string|undefined>} env
+ * @param {{ orgId?: unknown, userId?: unknown } | null} identity
+ * @returns {string[]}
+ */
+export function resolveSkillRootsForRun(env, identity) {
+  const {
+    SYSTEM_SKILL_ROOT,
+    USER_SKILL_ROOT,
+    skillRootsForIdentity,
+  } = skillPathsModule;
+  const systemRoot = String(
+    env?.SKILLS_ROOT || env?.AGENT_SKILLS_ROOT || SYSTEM_SKILL_ROOT,
+  ).trim();
+  const userRootBase = String(
+    env?.SKILLS_USER_ROOT || env?.AGENT_SKILLS_USER_ROOT || USER_SKILL_ROOT,
+  ).trim();
+  try {
+    return skillRootsForIdentity(identity, { systemRoot, userRootBase });
+  } catch {
+    return [systemRoot];
+  }
 }
 
 /**
@@ -654,6 +688,51 @@ export class ServiceContainer {
    *   mcpRuntimeRoot?: string,
    * }} [opts]
    */
+  /**
+   * Build a per-Run SkillManager factory for the skill-lifecycle extension.
+   *
+   * The manager must be per-Run because the writable skill directory is
+   * per-user (`<base>/<orgId>/<userId>`): one process-wide manager would give
+   * every tenant the same install target. Returns null when SKILLS_MODE
+   * disables installation, so the extension is simply not loaded rather than
+   * presenting write tools that fail on every call.
+   *
+   * @returns {Promise<((runContext: object) => object | null) | null>}
+   */
+  async createSkillManagerFactory() {
+    const {
+      createSkillManager,
+      resolveSkillsMode,
+      resolveSkillRoots,
+      SKILLS_MODE,
+    } = await import('../skills/manager.js');
+    const mode = resolveSkillsMode(this.env);
+    if (mode !== SKILLS_MODE.ENABLED) return null;
+
+    return (runContext) => {
+      const orgId = runContext?.orgId;
+      const userId = runContext?.userId;
+      if (orgId == null || userId == null) return null;
+      let manager;
+      try {
+        manager = createSkillManager({
+          mode,
+          identity: { orgId, userId },
+          skillRoots: resolveSkillRoots(this.env, { orgId, userId }),
+        });
+      } catch (err) {
+        // A malformed identity must not take the whole Run down; the Run just
+        // runs without skill lifecycle tools.
+        console.warn(
+          '[skills] could not resolve per-user skill directory:',
+          err?.message || err,
+        );
+        return null;
+      }
+      return manager.userSkillRoot ? manager : null;
+    };
+  }
+
   createPiRuntimeFactory(opts = {}) {
     // Lazy class load so import of container stays free of SDK side effects.
     // agentDir must be concrete before PiRuntimeFactory.create() (fail at assembly).
@@ -680,15 +759,14 @@ export class ServiceContainer {
             defaultMcpServers: mcpDiscovery.mcpServers,
           });
         }
-        const {
-          normalizeSkillRoots,
-          primarySkillRoot,
-        } = await import('../skills/paths.js');
-        const skillRoots = normalizeSkillRoots(
-          this.env.SKILLS_ROOT || this.env.AGENT_SKILLS_ROOT
-            ? [String(this.env.SKILLS_ROOT || this.env.AGENT_SKILLS_ROOT).trim()]
-            : undefined,
-        );
+        const { primarySkillRoot } = await import('../skills/paths.js');
+        const { resolveSkillMountRoots } = await import('../skills/manager.js');
+        // Process-wide default: the system tier only. The user tier is
+        // per-caller, so the executor passes `additionalSkillPaths` per Run —
+        // scanning the whole user base here would put every tenant's skills
+        // into every prompt.
+        const { systemRoot } = resolveSkillMountRoots(this.env);
+        const skillRoots = [systemRoot];
         return new PiRuntimeFactory({
           sessionAdapter: opts.sessionAdapter,
           extensionFactories: opts.extensionFactories,
@@ -876,6 +954,16 @@ export class ServiceContainer {
     // (orgId/userId/traceId). Never process-global client with null auth/trace.
     let extensionBundleFactory = opts.extensionBundleFactory;
     if (typeof extensionBundleFactory !== 'function') {
+      // Platform risk table: resolved once per factory, not per run, so a bad
+      // config file fails at startup instead of mid-conversation.
+      const { resolveToolRiskPolicy } = await import('../../config.js');
+      const toolRiskPolicy =
+        opts.toolRiskPolicy ?? resolveToolRiskPolicy(this.env);
+      // Null when SKILLS_MODE disables installation → skill-lifecycle unloaded.
+      const skillManagerFactory =
+        opts.skillManagerFactory !== undefined
+          ? opts.skillManagerFactory
+          : await this.createSkillManagerFactory();
       const {
         createSandboxBridgeExtensionBundleFactory,
         createRunScopedSandboxBridgeTransport,
@@ -887,6 +975,7 @@ export class ServiceContainer {
         // Explicit static transport (tests / advanced inject only).
         extensionBundleFactory = createSandboxBridgeExtensionBundleFactory({
           sandboxTransport: opts.sandboxTransport,
+          extraDeps: { toolRiskPolicy, skillManagerFactory },
         });
       } else {
         const { createSandboxClient } = await import(
@@ -971,6 +1060,7 @@ export class ServiceContainer {
             });
         }
         extensionBundleFactory = createSandboxBridgeExtensionBundleFactory({
+          extraDeps: { toolRiskPolicy, skillManagerFactory },
           createTransportForRun: (runContext) =>
             createRunScopedSandboxBridgeTransport(runContext, {
               createSandboxClient,
@@ -1001,6 +1091,10 @@ export class ServiceContainer {
               apiKey: String(this.env.LLMIO_API_KEY).trim(),
             })
           : undefined),
+      // Per-Run skill roots: system tier + this caller's own directory.
+      skillRootsForRun:
+        opts.skillRootsForRun ??
+        ((identity) => resolveSkillRootsForRun(this.env, identity)),
       generateId: this.generateId,
       now: this.now,
       projector,

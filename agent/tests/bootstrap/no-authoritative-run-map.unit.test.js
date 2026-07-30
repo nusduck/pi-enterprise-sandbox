@@ -57,6 +57,27 @@ const TRANSIENT_MAP_WHITELIST = Object.freeze([
     scope: 'local',
   },
   {
+    rel: 'infrastructure/mcp/pi-mcp-adapter-factory.js',
+    match: /const\s+partialById\s*=\s*new\s+Map\s*\(/,
+    purpose:
+      'Function-local buffer of finished MCP discovery probes so an expired overall budget can keep them and mark only the rest unreachable; discarded when discovery returns',
+    scope: 'local',
+  },
+  {
+    rel: 'skills/install.js',
+    match: /const\s+byName\s*=\s*new\s+Map\s*\(/,
+    purpose:
+      'Function-local skill-name de-dupe while projecting the two-tier skill inventory from disk; disk is the authority',
+    scope: 'local',
+  },
+  {
+    rel: 'extensions/enterprise-policy/tool-risk-policy.js',
+    match: /const\s+patterns\s*=\s*new\s+Map\s*\(/,
+    purpose:
+      'Function-local wildcard-prefix de-dupe while merging two risk policy layers; config projection, not Run state',
+    scope: 'local',
+  },
+  {
     rel: 'application/pi-run-tool-budget.js',
     match: /const\s+seen\s*=\s*new\s+Map\s*\(/,
     purpose:
@@ -307,9 +328,12 @@ describe('no authoritative in-process Run Map (B3)', () => {
     );
 
     // Inventory size sanity: every residual Map is explicitly classified.
+    // 14 → 17: pi-mcp-adapter-factory partial discovery results (added by
+    // f9105b90 without an inventory update), the two-tier skill listing, and
+    // the tool-risk-policy layer merge. All function-local, none Run authority.
     assert.equal(
       TRANSIENT_MAP_WHITELIST.length,
-      14,
+      17,
       'whitelist size drift — update STATUS B3 inventory evidence if intentional',
     );
   });
