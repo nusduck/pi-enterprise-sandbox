@@ -68,6 +68,7 @@ const REPLAY_ENQUEUE_STATUSES = new Set([
  *   conversationId: string,
  *   eventsUrl: string,
  *   agentSessionId?: string,
+ *   sandboxSessionId?: string,
  *   queueWarning?: string | null,
  *   replayed?: boolean,
  * }} CreateRunResponse
@@ -409,6 +410,11 @@ export class CreateRunService {
             agentSessionId: stored.agentSessionId
               ? String(stored.agentSessionId)
               : undefined,
+            sandboxSessionId: stored.sandboxSessionId
+              ? String(stored.sandboxSessionId)
+              : parents.sandboxSessionId
+                ? String(parents.sandboxSessionId)
+                : undefined,
             replayed: true,
           },
         };
@@ -508,6 +514,7 @@ export class CreateRunService {
         conversationId: parents.conversationId,
         eventsUrl: buildEventsUrl(runId),
         agentSessionId: parents.agentSessionId,
+        sandboxSessionId: parents.sandboxSessionId,
       };
 
       await repos.idempotency.complete({
@@ -522,6 +529,7 @@ export class CreateRunService {
           conversationId: response.conversationId,
           eventsUrl: response.eventsUrl,
           agentSessionId: response.agentSessionId,
+          sandboxSessionId: response.sandboxSessionId,
         },
         resourceId: runId,
       });

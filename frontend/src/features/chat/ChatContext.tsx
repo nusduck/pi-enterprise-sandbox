@@ -262,7 +262,10 @@ export function ChatProvider({ children }: { children: ReactNode }) {
           setStatus(`Session ${sessionId.slice(-8)}`);
           void refreshArtifacts(sessionId);
         }
-      } else if (type === 'file_ready') {
+      } else if (type === 'file_ready' || type === 'artifact.ready') {
+        // submit_artifact → artifact.ready is the only durable deliverable path.
+        // Refresh the session artifact list so export chips appear without waiting
+        // for a conversation reload.
         const sessionId = currentSessionId();
         if (sessionId) void refreshArtifacts(sessionId);
       } else if (type === 'error') {

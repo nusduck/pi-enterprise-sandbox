@@ -231,12 +231,44 @@ export async function startHttpMain(env = process.env) {
           },
         );
         const scope = { orgId: owner.orgId, userId: owner.userId };
+        // Batch-load AgentSessions so each run can carry sandbox_session_id for
+        // browser artifact download/export/upload rehydration.
+        const sessionByAgentId = new Map();
+        if (repos.sessions?.getById) {
+          const uniqueAgentSessionIds = [
+            ...new Set(
+              runs
+                .map((run) => run.agentSessionId)
+                .filter((id) => typeof id === 'string' && id),
+            ),
+          ];
+          await Promise.all(
+            uniqueAgentSessionIds.map(async (agentSessionId) => {
+              try {
+                const session = await repos.sessions.getById(
+                  agentSessionId,
+                  scope,
+                );
+                if (session) sessionByAgentId.set(agentSessionId, session);
+              } catch {
+                /* leave missing; presentGetRunResponse emits null session_id */
+              }
+            }),
+          );
+        }
         return Promise.all(
           runs.map(async (run) => {
             const events = await repos.runEvents.listByRun(run.runId, scope, {
               limit: 500,
             });
-            return { ...run, ...summarizeRunObservability(events) };
+            const session = sessionByAgentId.get(run.agentSessionId) || null;
+            return {
+              ...run,
+              sandboxSessionId:
+                session?.sandboxSessionId ?? run.sandboxSessionId ?? null,
+              workspaceId: session?.workspaceId ?? run.workspaceId ?? null,
+              ...summarizeRunObservability(events),
+            };
           }),
         );
       }

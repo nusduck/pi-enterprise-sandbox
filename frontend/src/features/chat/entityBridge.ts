@@ -14,6 +14,7 @@ import {
   cloneEntityStore,
   setActiveConversation,
   upsertApproval,
+  upsertArtifact,
   upsertDataset,
   upsertRun,
   upsertTraceSpan,
@@ -90,6 +91,24 @@ function finiteNumber(value: unknown): number | null {
   if (value == null) return null;
   const number = Number(value);
   return Number.isFinite(number) ? number : null;
+}
+
+/**
+ * Backfill artifact.sessionId from the parent run's sandbox session.
+ * Historical artifact.ready events may omit sandboxSessionId in context;
+ * after Run DTO rehydrate supplies sandbox_session_id, chips still need it.
+ */
+export function backfillArtifactSessionIds(store: EntityStore): EntityStore {
+  let next = store;
+  for (const art of Object.values(store.artifactsById)) {
+    if (art.sessionId) continue;
+    if (art.source !== 'submit_artifact') continue;
+    const run = art.runId ? store.runsById[art.runId] : null;
+    const sessionId = run?.sandboxSessionId || null;
+    if (!sessionId) continue;
+    next = upsertArtifact(next, { ...art, sessionId });
+  }
+  return next;
 }
 
 function traceAttributes(span: TraceSpanWire): Record<string, unknown> {
@@ -864,6 +883,11 @@ export function createEntityBridge(
     } catch {
       /* Dataset list is best-effort on older BFFs. */
     }
+
+    // After runs carry sandbox_session_id (Agent DTO), fill any artifacts that
+    // rehydrated from older artifact.ready events without context.sandboxSessionId.
+    store = backfillArtifactSessionIds(manager.getStore());
+    manager.setStore(store);
 
     store = setActiveConversation(manager.getStore(), conversationId);
     manager.setStore(store);

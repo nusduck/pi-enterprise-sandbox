@@ -78,6 +78,21 @@ describe('presentCreateRunAccepted', () => {
     assert.equal(p.eventsUrl, `/api/runs/${RUN}/events`);
     assert.equal(p.status, 'ACCEPTED');
   });
+
+  it('surfaces sandbox session for upload and artifact download', () => {
+    const sandbox = '01K0G2PAV8FPMVC9QHJG7JPN5F';
+    const p = presentCreateRunAccepted({
+      runId: RUN,
+      conversationId: 'c1',
+      agentSessionId: '01K0G2PAV8FPMVC9QHJG7JPN52',
+      sandboxSessionId: sandbox,
+      status: 'ACCEPTED',
+    });
+    assert.equal(p.session_id, sandbox);
+    assert.equal(p.sandbox_session_id, sandbox);
+    assert.equal(p.sandboxSessionId, sandbox);
+    assert.equal(p.agent_session_id, '01K0G2PAV8FPMVC9QHJG7JPN52');
+  });
 });
 
 describe('normalizeCreateRunBody', () => {

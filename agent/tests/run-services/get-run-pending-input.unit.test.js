@@ -13,6 +13,8 @@ const ORG = '01K0G2PAV8FPMVC9QHJG7JPN4Z';
 const USER = '01K0G2PAV8FPMVC9QHJG7JPN50';
 const CONV = '01K0G2PAV8FPMVC9QHJG7JPN51';
 const SESSION = '01K0G2PAV8FPMVC9QHJG7JPN52';
+const SANDBOX_SESSION = '01K0G2PAV8FPMVC9QHJG7JPN5F';
+const WORKSPACE = '01K0G2PAV8FPMVC9QHJG7JPN5G';
 const RUN = '01K0G2PAV8FPMVC9QHJG7JPN53';
 const VERSION = '01K0G2PAV8FPMVC9QHJG7JPN54';
 const TRIGGER = '01K0G2PAV8FPMVC9QHJG7JPN55';
@@ -49,6 +51,25 @@ function seed(state, status = 'WAITING_INPUT') {
   ];
   state.tables.user_external_refs = [
     { provider: 'bff', external_subject: 'user-ext-1', user_id: USER, created_at: NOW },
+  ];
+  state.tables.agent_sessions = [
+    {
+      agent_session_id: SESSION,
+      org_id: ORG,
+      user_id: USER,
+      conversation_id: CONV,
+      agent_version_id: VERSION,
+      sandbox_session_id: SANDBOX_SESSION,
+      workspace_id: WORKSPACE,
+      status: 'ACTIVE',
+      pi_session_version: 0,
+      last_run_id: RUN,
+      execution_fence_token: 1,
+      recovery_reason_code: null,
+      created_at: NOW,
+      updated_at: NOW,
+      closed_at: null,
+    },
   ];
   state.tables.runs = [
     {
@@ -156,6 +177,10 @@ describe('GetRunService pending_input projection (G6)', () => {
     assert.equal(body.pending_input.interaction_id, INTERACTION);
     assert.equal(body.pendingInput.interactionId, INTERACTION);
     assert.equal(body.pending_input.title, 'Choose a region');
+    assert.equal(run.sandboxSessionId, SANDBOX_SESSION);
+    assert.equal(body.session_id, SANDBOX_SESSION);
+    assert.equal(body.sandbox_session_id, SANDBOX_SESSION);
+    assert.equal(body.agent_session_id, SESSION);
   });
 
   it('omits pending_input when Run is not waiting', async () => {
@@ -172,6 +197,7 @@ describe('GetRunService pending_input projection (G6)', () => {
       status: 'SUCCEEDED',
       conversationId: 'conversation',
       agentSessionId: 'session',
+      sandboxSessionId: '01K0G2PAV8FPMVC9QHJG7JPN5F',
       orgId: 'org',
       userId: 'user',
       traceId: 'trace',
@@ -187,6 +213,10 @@ describe('GetRunService pending_input projection (G6)', () => {
     assert.equal(body.finished_at, '2026-07-20T10:01:05.000Z');
     assert.equal(body.completed_at, '2026-07-20T10:01:05.000Z');
     assert.equal(body.last_sequence, 3);
+    assert.equal(body.session_id, '01K0G2PAV8FPMVC9QHJG7JPN5F');
+    assert.equal(body.sandbox_session_id, '01K0G2PAV8FPMVC9QHJG7JPN5F');
+    assert.equal(body.sandboxSessionId, '01K0G2PAV8FPMVC9QHJG7JPN5F');
+    assert.equal(body.agent_session_id, 'session');
     assert.equal(body.model_id, 'gpt-5.6');
     assert.deepEqual(body.usage, { total_tokens: 42 });
   });
