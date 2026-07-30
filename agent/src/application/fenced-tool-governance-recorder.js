@@ -230,6 +230,11 @@ export class FencedToolGovernanceRecorder {
     const outboxId = assertUlid(this.generateId(), 'outboxId');
     const data = redactEventData(input.data ?? {});
     const spanId = input.spanId ?? null;
+    const sandboxSessionId =
+      this.context.sandboxSessionId != null &&
+      String(this.context.sandboxSessionId).trim()
+        ? String(this.context.sandboxSessionId)
+        : null;
     const stored = await repos.runEvents.append({
       eventId,
       runId: this.context.runId,
@@ -246,6 +251,7 @@ export class FencedToolGovernanceRecorder {
           runId: this.context.runId,
           traceId: this.context.traceId,
           spanId,
+          ...(sandboxSessionId ? { sandboxSessionId } : {}),
         },
         data,
       },

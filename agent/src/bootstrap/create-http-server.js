@@ -307,6 +307,8 @@ export function mapErrorToHttp(err) {
  * @param {object} result
  */
 export function presentCreateRunResponse(result) {
+  const sandboxSessionId =
+    result.sandboxSessionId ?? result.sandbox_session_id ?? result.session_id ?? null;
   return {
     runId: result.runId,
     run_id: result.runId,
@@ -317,6 +319,11 @@ export function presentCreateRunResponse(result) {
     events_url: result.eventsUrl,
     agentSessionId: result.agentSessionId ?? null,
     agent_session_id: result.agentSessionId ?? null,
+    // Sandbox session ULID — required for upload / artifact-download / export.
+    // Dual-key: browsers historically read session_id; plan also uses sandbox_session_id.
+    session_id: sandboxSessionId,
+    sandboxSessionId,
+    sandbox_session_id: sandboxSessionId,
     queueWarning: result.queueWarning ?? null,
     queue_warning: result.queueWarning ?? null,
     replayed: result.replayed === true,
@@ -352,6 +359,11 @@ export function presentGetRunResponse(run) {
       : null;
   const modelId = run.modelId ?? run.model_id ?? null;
   const usage = run.usage ?? run.tokenUsage ?? run.token_usage ?? null;
+  // Prefer explicit sandbox session on the run projection (GetRun/list attach
+  // it from agent_sessions). Never fall back to agentSessionId — that ULID is
+  // a different resource and breaks artifact-download / upload.
+  const sandboxSessionId =
+    run.sandboxSessionId ?? run.sandbox_session_id ?? run.session_id ?? null;
   return {
     runId: run.runId,
     run_id: run.runId,
@@ -360,6 +372,9 @@ export function presentGetRunResponse(run) {
     conversation_id: run.conversationId,
     agentSessionId: run.agentSessionId,
     agent_session_id: run.agentSessionId,
+    session_id: sandboxSessionId,
+    sandboxSessionId,
+    sandbox_session_id: sandboxSessionId,
     orgId: run.orgId,
     org_id: run.orgId,
     userId: run.userId,

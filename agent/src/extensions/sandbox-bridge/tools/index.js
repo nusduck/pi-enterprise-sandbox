@@ -785,14 +785,27 @@ export function createSandboxBridgeToolDefinitions(
         );
         if (!inv.ok) return inv.result;
         const data = inv.data;
+        const artifactId = data?.artifactId ?? null;
+        // Browser-relative download path (BFF). Prefer this over inventing a
+        // sandbox-local HTTP server. session_id MUST be the sandbox session
+        // ULID — never agentSessionId.
+        const sandboxSessionId =
+          identity?.sandboxSessionId != null
+            ? String(identity.sandboxSessionId)
+            : null;
+        const downloadPath =
+          artifactId && sandboxSessionId
+            ? `/api/files/artifact-download?session_id=${encodeURIComponent(sandboxSessionId)}&artifact_id=${encodeURIComponent(String(artifactId))}`
+            : null;
         const artifact = {
-          artifactId: data?.artifactId ?? null,
+          artifactId,
           displayName:
             data?.displayName ?? data?.name ?? params.displayName ?? null,
           description: normalizedParams.description ?? null,
           sha256: data?.sha256 ?? null,
           size: data?.size ?? null,
           mimeType: data?.mimeType ?? null,
+          downloadPath,
         };
         return toolOk(
           toolResultJson({

@@ -535,8 +535,79 @@ describe('conversation history rehydration', () => {
       assert.equal(store.processesById.proc_flat?.stderr, 'warn-line\n');
       assert.equal(store.artifactsById.art_flat?.name, 'out.xlsx');
       assert.equal(store.artifactsById.art_flat?.source, 'submit_artifact');
+      assert.equal(store.artifactsById.art_flat?.sessionId, 'session_flat');
       assert.deepEqual(store.runsById.run_flat.processIds, ['proc_flat']);
       assert.deepEqual(store.runsById.run_flat.artifactIds, ['art_flat']);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it('backfills artifact.sessionId from run sandbox_session_id after rehydrate', async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (input) => {
+      const url = String(input);
+      if (url.includes('/datasets')) {
+        return new Response(JSON.stringify({ datasets: [] }), { status: 200 });
+      }
+      assert.match(url, /\/api\/conversations\/conv_backfill\/events$/);
+      return new Response(
+        JSON.stringify({
+          runs: [
+            {
+              run_id: 'run_backfill',
+              conversation_id: 'conv_backfill',
+              // Agent list/get now expose dual-key sandbox session
+              session_id: '01KYSS035W4W13DRHP740371M6',
+              sandbox_session_id: '01KYSS035W4W13DRHP740371M6',
+              agent_session_id: '01KYSS035W4W13DRHP740371M5',
+              status: 'SUCCEEDED',
+            },
+          ],
+          events: [
+            {
+              run_id: 'run_backfill',
+              sequence: 1,
+              event_id: '01HZEVTBACK00000000000001',
+              type: 'artifact.ready',
+              // Historical shape: no sandboxSessionId in context
+              payload: {
+                data: {
+                  artifactId: '01KYSS20HQK6DQ2SBF7ZXHTZ92',
+                  name: 'introduction.html',
+                  sha256: 'c'.repeat(64),
+                  size: 100,
+                  mimeType: 'text/html',
+                },
+                context: {
+                  runId: 'run_backfill',
+                  agentSessionId: '01KYSS035W4W13DRHP740371M5',
+                  conversationId: 'conv_backfill',
+                },
+              },
+            },
+          ],
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      );
+    }) as typeof fetch;
+
+    try {
+      const bridge = createEntityBridge();
+      await bridge.rehydrateConversation('conv_backfill');
+      const store = bridge.getStore();
+      const art = store.artifactsById['01KYSS20HQK6DQ2SBF7ZXHTZ92'];
+      assert.ok(art, 'artifact must rehydrate');
+      assert.equal(art.source, 'submit_artifact');
+      assert.equal(
+        art.sessionId,
+        '01KYSS035W4W13DRHP740371M6',
+        'artifact.sessionId must backfill from run sandbox session',
+      );
+      assert.equal(
+        store.runsById.run_backfill?.sandboxSessionId,
+        '01KYSS035W4W13DRHP740371M6',
+      );
     } finally {
       globalThis.fetch = originalFetch;
     }

@@ -99,10 +99,8 @@ export class GetRunService {
         throw err;
       }
 
-      const run = await repos.runs.getById(runId, {
-        orgId: owner.orgId,
-        userId: owner.userId,
-      });
+      const scope = { orgId: owner.orgId, userId: owner.userId };
+      const run = await repos.runs.getById(runId, scope);
       if (!run) {
         throw new OwnerScopedNotFoundError('Run not found', {
           resource: 'runs',
@@ -110,15 +108,29 @@ export class GetRunService {
         });
       }
 
+      // Attach sandbox_session_id from AgentSession so browser download/export
+      // /upload can rehydrate without a separate conversation GET.
+      if (run.agentSessionId && repos.sessions?.getById) {
+        try {
+          const session = await repos.sessions.getById(run.agentSessionId, scope);
+          if (session?.sandboxSessionId) {
+            run.sandboxSessionId = session.sandboxSessionId;
+          }
+          if (session?.workspaceId) {
+            run.workspaceId = session.workspaceId;
+          }
+        } catch {
+          // Fail open: Run status remains authoritative; FE may fall back to
+          // conversation.sandbox_session_id.
+        }
+      }
+
       if (
         run.status === RUN_STATUS.WAITING_INPUT &&
         repos.interactions?.getPendingForRun
       ) {
         try {
-          const pending = await repos.interactions.getPendingForRun(runId, {
-            orgId: owner.orgId,
-            userId: owner.userId,
-          });
+          const pending = await repos.interactions.getPendingForRun(runId, scope);
           if (pending && pending.status === INTERACTION_STATUS.PENDING) {
             const request =
               pending.requestJson && typeof pending.requestJson === 'object'

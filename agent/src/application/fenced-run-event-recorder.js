@@ -48,6 +48,7 @@ import { createPromiseTail } from './promise-tail.js';
  *     runId: string,
  *     traceId: string,
  *     spanId: string | null,
+ *     sandboxSessionId?: string | null,
  *   },
  *   data: Record<string, unknown>,
  * }} CanonicalRunEventEnvelope
@@ -73,6 +74,10 @@ export function buildCanonicalEnvelope(input) {
       ? input.timestamp.toISOString()
       : String(input.timestamp);
   const ctx = input.context;
+  const sandboxSessionId =
+    ctx.sandboxSessionId != null && String(ctx.sandboxSessionId).trim()
+      ? String(ctx.sandboxSessionId)
+      : null;
   return Object.freeze({
     eventId: String(input.eventId),
     eventVersion: input.eventVersion ?? 1,
@@ -87,6 +92,9 @@ export function buildCanonicalEnvelope(input) {
       runId: String(ctx.runId),
       traceId: String(ctx.traceId ?? ''),
       spanId: ctx.spanId != null ? String(ctx.spanId) : null,
+      // Browser download/upload/list need the sandbox session ULID. Agent
+      // session alone cannot build /api/files/artifact-download URLs.
+      ...(sandboxSessionId ? { sandboxSessionId } : {}),
     }),
     data: Object.freeze(
       input.data && typeof input.data === 'object' && !Array.isArray(input.data)
@@ -284,6 +292,11 @@ export class FencedRunEventRecorder {
           { forUpdate: true, requireActive: true },
         );
 
+        const sandboxSessionId =
+          this.context.sandboxSessionId != null &&
+          String(this.context.sandboxSessionId).trim()
+            ? String(this.context.sandboxSessionId)
+            : null;
         const stored = await repos.runEvents.append({
           eventId,
           runId: this.context.runId,
@@ -300,6 +313,7 @@ export class FencedRunEventRecorder {
               runId: this.context.runId,
               traceId: this.context.traceId,
               spanId,
+              ...(sandboxSessionId ? { sandboxSessionId } : {}),
             },
             data,
           },

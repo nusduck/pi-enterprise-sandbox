@@ -44,8 +44,32 @@ describe('buildCanonicalEnvelope / redactEventData', () => {
     assert.equal(env.type, 'tool.execution.completed');
     assert.equal(env.context.orgId, ORG);
     assert.equal(env.context.spanId, '91');
+    assert.equal(env.context.sandboxSessionId, undefined);
     assert.equal(env.data.toolName, 'bash');
     assert.ok(Object.isFrozen(env));
+  });
+
+  it('includes sandboxSessionId on envelope context when present', () => {
+    const sandboxSessionId = '01K0G2PAV8FPMVC9QHJG7JPN5F';
+    const env = buildCanonicalEnvelope({
+      eventId: '01K0G2PAV8FPMVC9QHJG7JPN5A',
+      sequence: 12,
+      type: 'artifact.ready',
+      timestamp: new Date('2026-07-18T04:31:22.417Z'),
+      context: {
+        orgId: ORG,
+        userId: USER,
+        conversationId: CONV,
+        agentSessionId: SESS,
+        sandboxSessionId,
+        runId: RUN,
+        traceId: TRACE,
+        spanId: null,
+      },
+      data: { artifactId: '01K0G2PAV8FPMVC9QHJG7JPN5G' },
+    });
+    assert.equal(env.context.sandboxSessionId, sandboxSessionId);
+    assert.equal(env.context.agentSessionId, SESS);
   });
 
   it('redacts secret-looking fields', () => {

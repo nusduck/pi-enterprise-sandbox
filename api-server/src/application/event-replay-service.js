@@ -117,6 +117,11 @@ export function presentCreateRunAccepted(result) {
     result?.conversationId || result?.conversation_id || null;
   const agentSessionId =
     result?.agentSessionId || result?.agent_session_id || null;
+  const sandboxSessionId =
+    result?.sandboxSessionId ||
+    result?.sandbox_session_id ||
+    result?.session_id ||
+    null;
   const status = result?.status || 'ACCEPTED';
   const eventsUrl =
     result?.eventsUrl ||
@@ -131,6 +136,10 @@ export function presentCreateRunAccepted(result) {
     conversation_id: conversationId,
     agentSessionId,
     agent_session_id: agentSessionId,
+    // Dual-key sandbox session for upload / artifact-download / export.
+    session_id: sandboxSessionId,
+    sandboxSessionId,
+    sandbox_session_id: sandboxSessionId,
     status,
     eventsUrl,
     events_url: eventsUrl,
