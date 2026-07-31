@@ -33,6 +33,7 @@ import {
   uploadedAttachments,
   buildUserTurnWithAttachments,
   activeAttachments,
+  conversationTitleFromUserText,
   type ChatState,
   type ChatMessage,
 } from '../../shared/state';
@@ -564,11 +565,45 @@ export function ChatProvider({ children }: { children: ReactNode }) {
             // asynchronous create request was in flight. Do not steal focus
             // back from that newer UI generation.
             if (!isActiveGeneration(s, generation)) return s;
+            const existingConversation = (s.conversations || []).find(
+              (conversation) => conversation.id === createdConversationId,
+            );
+            const hasPriorUserMessage = cur.messages.some(
+              (message) => message.role === 'user',
+            );
+            const existingTitle = String(existingConversation?.title || '')
+              .trim()
+              .toLowerCase();
+            const hasPlaceholderTitle =
+              !existingTitle ||
+              existingTitle === 'new chat' ||
+              existingTitle === 'new conversation';
+            const shouldSetInitialTitle =
+              Boolean(createdConversationId) &&
+              (!cur.conversationId ||
+                (!hasPriorUserMessage && hasPlaceholderTitle));
+            const now = new Date().toISOString();
+            const conversations = shouldSetInitialTitle
+              ? [
+                  {
+                    ...existingConversation,
+                    id: createdConversationId as string,
+                    title: conversationTitleFromUserText(trimmed),
+                    created_at: existingConversation?.created_at || now,
+                    updated_at: now,
+                  },
+                  ...(s.conversations || []).filter(
+                    (conversation) =>
+                      conversation.id !== createdConversationId,
+                  ),
+                ]
+              : s.conversations;
             const next = update(s, {
               ...(createdConversationId
                 ? { conversationId: createdConversationId }
                 : {}),
               ...(createdSessionId ? { sessionId: createdSessionId } : {}),
+              ...(shouldSetInitialTitle ? { conversations } : {}),
             });
             stateRef.current = next;
             return next;

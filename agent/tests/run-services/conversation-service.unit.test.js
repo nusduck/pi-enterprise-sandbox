@@ -69,6 +69,55 @@ describe('ConversationService MySQL authority', () => {
     assert.deepEqual(await service.list(FIXED_AUTH), []);
   });
 
+  it('derives legacy placeholder titles from the first durable user message', async () => {
+    const world = createFakeRunWorld();
+    const createRun = new CreateRunService({
+      transactionManager: world.transactionManager,
+      createRepositories: world.createRepositories,
+      generateId: world.generateId,
+      now: () => new Date('2026-07-18T06:00:00.000Z'),
+      runQueue: world.runQueue,
+    });
+    const created = await createRun.execute({
+      messages: [{ role: 'user', content: '分析一下这个问题' }],
+      auth: FIXED_AUTH,
+      traceId: 'a'.repeat(32),
+      idempotencyKey: 'legacy-title',
+    });
+    world.tables.conversations[0].title = 'New chat';
+
+    const service = createService(world);
+    const listed = await service.list(FIXED_AUTH);
+    assert.equal(listed[0].title, '分析一下这个问题');
+    assert.equal(
+      (await service.get(created.conversationId, FIXED_AUTH)).title,
+      '分析一下这个问题',
+    );
+  });
+
+  it('replaces a pre-created placeholder title on the first run', async () => {
+    const world = createFakeRunWorld();
+    const service = createService(world);
+    const blank = await service.create(FIXED_AUTH);
+    assert.equal(blank.title, 'New chat');
+
+    const createRun = new CreateRunService({
+      transactionManager: world.transactionManager,
+      createRepositories: world.createRepositories,
+      generateId: world.generateId,
+      now: () => new Date('2026-07-18T06:00:00.000Z'),
+      runQueue: world.runQueue,
+    });
+    await createRun.execute({
+      messages: [{ role: 'user', content: '总结刚刚上传的文件' }],
+      auth: { ...FIXED_AUTH, externalConversationId: blank.id },
+      traceId: 'a'.repeat(32),
+      idempotencyKey: 'precreated-title',
+    });
+
+    assert.equal(world.tables.conversations[0].title, '总结刚刚上传的文件');
+  });
+
   it('creates, lists, gets, and archives an owner-scoped conversation', async () => {
     const world = createFakeRunWorld();
     const service = createService(world);

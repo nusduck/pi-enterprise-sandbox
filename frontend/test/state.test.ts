@@ -14,6 +14,7 @@ import {
   clearEphemeral,
   switchConversation,
   isActiveGeneration,
+  conversationTitleFromUserText,
 } from '../src/shared/state/index.ts';
 
 describe('createState / update', () => {
@@ -32,6 +33,17 @@ describe('createState / update', () => {
     s = update(s, { sessionId: 'abc' });
     assert.equal(s.sessionId, 'abc');
     assert.equal(s.isStreaming, false);
+  });
+});
+
+describe('conversation titles', () => {
+  it('uses normalized user input and respects the server title limit', () => {
+    assert.equal(
+      conversationTitleFromUserText('  帮我\n总结一下这份报告  '),
+      '帮我 总结一下这份报告',
+    );
+    assert.equal(conversationTitleFromUserText('   '), 'New chat');
+    assert.equal(conversationTitleFromUserText('x'.repeat(501)).length, 500);
   });
 });
 

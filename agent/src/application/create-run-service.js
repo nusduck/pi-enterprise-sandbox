@@ -38,6 +38,10 @@ import {
 import { RunParentProvisioner } from './parent/run-parent-provisioner.js';
 import { normalizeW3cTracestate } from '../infrastructure/sandbox/trace-context.js';
 import { formatStoredTraceCarrier } from '../infrastructure/telemetry.js';
+import {
+  conversationTitleFromMessages,
+  isPlaceholderConversationTitle,
+} from './conversation-title.js';
 
 export const CREATE_RUN_OPERATION = 'create_run';
 export const DEFAULT_IDEMPOTENCY_TTL_MS = 24 * 60 * 60 * 1000;
@@ -424,6 +428,21 @@ export class CreateRunService {
         throw new IdempotencyInProgressError(undefined, {
           idempotencyKey: ctx.idempotencyKey,
         });
+      }
+
+      const conversation = await repos.conversations.getById(
+        parents.conversationId,
+        scope,
+      );
+      if (
+        parents.created.conversation ||
+        isPlaceholderConversationTitle(conversation?.title)
+      ) {
+        await repos.conversations.updateMeta(
+          parents.conversationId,
+          scope,
+          { title: conversationTitleFromMessages(ctx.messages) },
+        );
       }
 
       // begun — allocate IDs then persist message → run → event → outbox

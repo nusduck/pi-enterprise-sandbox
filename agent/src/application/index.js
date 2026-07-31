@@ -43,6 +43,11 @@ export {
   normalizeTraceId,
 } from './create-run-service.js';
 
+export {
+  conversationTitleFromMessages,
+  isPlaceholderConversationTitle,
+} from './conversation-title.js';
+
 export { GetRunService } from './get-run-service.js';
 
 export {

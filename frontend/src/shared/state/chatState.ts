@@ -309,6 +309,16 @@ export function isInterruptedMessage(msg: ChatMessage | null | undefined): boole
 }
 
 /**
+ * Build the persisted/sidebar title for a new conversation from the user's
+ * first typed message. Keep the server's 500-character title limit here too so
+ * the optimistic UI and durable value agree.
+ */
+export function conversationTitleFromUserText(text: string): string {
+  const normalized = String(text || '').trim().replace(/\s+/g, ' ');
+  return normalized ? normalized.slice(0, 500) : 'New chat';
+}
+
+/**
  * Title helper for sidebar entries.
  */
 export function conversationTitle(conv: ConversationSummary | null | undefined): string {
@@ -327,8 +337,10 @@ export function conversationTitle(conv: ConversationSummary | null | undefined):
               .map((p) => (typeof p === 'object' && p && 'text' in p ? String((p as { text?: string }).text || '') : ''))
               .join('')
           : '';
-    const trimmed = (t || '').trim().replace(/\s+/g, ' ');
-    if (trimmed) return trimmed.length > 40 ? trimmed.slice(0, 40) + '…' : trimmed;
+    const trimmed = conversationTitleFromUserText(t);
+    if (trimmed !== 'New chat') {
+      return trimmed.length > 40 ? trimmed.slice(0, 40) + '…' : trimmed;
+    }
   }
   return conv.title || 'New chat';
 }

@@ -14,6 +14,7 @@ import {
   OwnerScopedNotFoundError,
   ValidationError,
   buildEventsUrl,
+  conversationTitleFromMessages,
   normalizeTraceId,
   QUEUE_WARNING,
   RunParentProvisioner,
@@ -108,6 +109,7 @@ describe('CreateRunService durable path', () => {
     assert.equal(world.tables.messages.length, 1);
     const storedUserMessage = JSON.parse(world.tables.messages[0].content_json);
     assert.equal(storedUserMessage.text, 'hello');
+    assert.equal(world.tables.conversations[0].title, 'hello');
     assert.equal(world.tables.run_events.length, 2); // accepted + queued
     assert.equal(world.tables.domain_outbox.length, 2);
     assert.equal(world.enqueuedJobs.length, 1);
@@ -144,6 +146,36 @@ describe('CreateRunService durable path', () => {
     const stored = JSON.parse(world.tables.messages[0].content_json);
     assert.equal(stored.text, '总结这个文档');
     assert.equal(stored.messages.length, 3);
+  });
+
+  it('titles a fresh conversation from the first user input', async () => {
+    const title = conversationTitleFromMessages([
+      {
+        role: 'user',
+        content: [
+          {
+            type: 'text',
+            text:
+              '  帮我总结这份报告  \n\n[Attachments]\n' +
+              '- report.pdf → /workspace/report.pdf (application/pdf)',
+          },
+        ],
+      },
+      { role: 'assistant', content: '好的' },
+      { role: 'user', content: '再补充风险分析' },
+    ]);
+
+    assert.equal(title, '帮我总结这份报告');
+    assert.equal(
+      conversationTitleFromMessages([
+        {
+          role: 'user',
+          content:
+            '[Attachments]\n- report.pdf → /workspace/report.pdf (application/pdf)',
+        },
+      ]),
+      'New chat',
+    );
   });
 
   it('G5: create response is only returned after durable commit (GET race-free)', async () => {
@@ -511,6 +543,7 @@ describe('CreateRunService durable path', () => {
     assert.equal(world.tables.organizations.length, 1);
     assert.equal(world.tables.users.length, 1);
     assert.equal(world.tables.agent_definitions.length, 1);
+    assert.equal(world.tables.conversations[0].title, 'hello');
     // Active session reused
     assert.equal(world.tables.agent_sessions.length, 1);
   });
