@@ -287,6 +287,29 @@ export function normalizeServerMessages(messages: unknown): ChatMessage[] {
         sequenceNo: rawSequence == null ? Number.NaN : Number(rawSequence),
         createdAt: String(m.createdAt ?? m.created_at ?? ''),
       };
+      if (Array.isArray(m.attachments)) {
+        out.attachments = m.attachments.flatMap((raw) => {
+          if (!raw || typeof raw !== 'object') return [];
+          const a = raw as Record<string, unknown>;
+          const name = String(a.filename ?? a.name ?? '').trim();
+          const path = a.path ?? a.workspace_path ?? null;
+          if (!name && path == null) return [];
+          return [{
+            attachment_id:
+              a.attachment_id == null ? null : String(a.attachment_id),
+            filename: name || String(path),
+            name: name || String(path),
+            path: path == null ? null : String(path),
+            workspace_path: path == null ? null : String(path),
+            mime_type: String(a.mime_type ?? a.mimeType ?? 'application/octet-stream'),
+            size: Number.isFinite(Number(a.size)) ? Number(a.size) : 0,
+            upload_time:
+              a.upload_time == null && a.uploadTime == null
+                ? null
+                : String(a.upload_time ?? a.uploadTime),
+          }];
+        });
+      }
       // Preserve interrupted status from server persistence / recovery
       if (m.interrupted === true || m.status === 'interrupted') {
         out.interrupted = true;

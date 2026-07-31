@@ -41,6 +41,23 @@ describe('interrupted status', () => {
     assert.equal(message.createdAt, '2026-07-18T06:00:00.123Z');
   });
 
+  it('normalizeServerMessages preserves structured attachment metadata', () => {
+    const [message] = normalizeServerMessages([{
+      role: 'user',
+      content: 'review this',
+      attachments: [{
+        attachment_id: 'att_1',
+        filename: 'brief.pdf',
+        path: 'uploads/att_1/brief.pdf',
+        mime_type: 'application/pdf',
+        size: 2048,
+      }],
+    }]);
+    assert.equal(message.attachments?.length, 1);
+    assert.equal(message.attachments?.[0].name, 'brief.pdf');
+    assert.equal(message.attachments?.[0].size, 2048);
+  });
+
   it('isInterruptedMessage true for interrupted assistant', () => {
     assert.equal(
       isInterruptedMessage({

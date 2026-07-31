@@ -10,6 +10,7 @@ import { useChat } from '../../features/chat/ChatContext';
 import {
   activeAttachments,
   canSendAttachments,
+  fileTypeLabel,
   hasUploadingAttachments,
   isInterruptedMessage,
   uploadedAttachments,
@@ -386,20 +387,18 @@ export function Composer() {
               className={`att-chip att-${a.status}`}
               data-local-id={a.localId}
             >
-              <span className="att-icon" aria-hidden="true">
-                {a.status === 'uploading' || a.status === 'queued'
-                  ? '⏳'
-                  : a.status === 'failed'
-                    ? '⚠'
-                    : '📎'}
+              <span
+                className={`file-type-tile${a.status === 'uploading' || a.status === 'queued' ? ' is-loading' : ''}${a.status === 'failed' ? ' is-error' : ''}`}
+                aria-hidden="true"
+              >
+                {a.status === 'failed'
+                  ? '!'
+                  : fileTypeLabel(a.name, a.mimeType)}
               </span>
               <span className="att-meta">
                 <span className="att-name" title={a.path || a.name || ''}>
                   {a.name || 'file'}
                 </span>
-                {formatSize(a.size) ? (
-                  <span className="att-size">{formatSize(a.size)}</span>
-                ) : null}
                 {a.status === 'failed' && a.error ? (
                   <span
                     className="att-error"
@@ -412,9 +411,13 @@ export function Composer() {
                   </span>
                 ) : a.status === 'uploading' || a.status === 'queued' ? (
                   <span className="att-status">
-                    {a.status === 'queued' ? 'queued' : 'uploading…'}
+                    {a.status === 'queued' ? 'Waiting to upload' : 'Uploading…'}
                   </span>
-                ) : null}
+                ) : (
+                  <span className="att-size">
+                    {[formatSize(a.size), 'Ready'].filter(Boolean).join(' · ')}
+                  </span>
+                )}
               </span>
               <span className="att-actions">
                 {a.status === 'failed' ? (

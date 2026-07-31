@@ -2,8 +2,17 @@ import type { ReactNode } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeSanitize from 'rehype-sanitize';
-import type { ChatMessage, ContentPart, ToolUsePart } from '../../shared/state';
-import { isInterruptedMessage } from '../../shared/state';
+import type {
+  AttachmentManifestItem,
+  ChatMessage,
+  ContentPart,
+  ToolUsePart,
+} from '../../shared/state';
+import {
+  fileTypeLabel,
+  isInterruptedMessage,
+  splitAttachmentDisplay,
+} from '../../shared/state';
 import { safeApiUrl } from '../../shared/security/url';
 import { useChat } from '../../features/chat/ChatContext';
 import {
@@ -39,6 +48,51 @@ function formatTime(createdAt?: string): string {
     hour: '2-digit',
     minute: '2-digit',
   }).format(new Date(createdAt));
+}
+
+function formatFileSize(n?: number | null): string {
+  if (n == null || !Number.isFinite(Number(n)) || Number(n) <= 0) return '';
+  const bytes = Number(n);
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function AttachmentCards({
+  attachments,
+}: {
+  attachments: AttachmentManifestItem[];
+}) {
+  if (!attachments.length) return null;
+  return (
+    <div
+      className="message-attachments"
+      aria-label={`${attachments.length} attached file${attachments.length === 1 ? '' : 's'}`}
+    >
+      {attachments.map((attachment, index) => {
+        const name =
+          attachment.filename || attachment.name || attachment.path || 'File';
+        const size = formatFileSize(attachment.size);
+        return (
+          <div
+            className="message-attachment"
+            key={String(attachment.attachment_id || attachment.path || `${name}-${index}`)}
+            title={name}
+          >
+            <span className="file-type-tile" aria-hidden="true">
+              {fileTypeLabel(name, attachment.mime_type)}
+            </span>
+            <span className="message-attachment-copy">
+              <span className="message-attachment-name">{name}</span>
+              <span className="message-attachment-meta">
+                {size || 'Attached file'}
+              </span>
+            </span>
+          </div>
+        );
+      })}
+    </div>
+  );
 }
 
 function MarkdownBody({ text }: { text: string }) {
@@ -136,6 +190,7 @@ export function MessageBubble({
 
   let hasContent = false;
   const body: ReactNode[] = [];
+  let visibleAttachments = msg.attachments || [];
 
   // Prefer rich entity-backed steps (tools / process / approval / artifact).
   // Fall back to legacy ToolPill rail when history has only tool_use parts.
@@ -159,11 +214,15 @@ export function MessageBubble({
   parts.forEach((p: ContentPart, i) => {
     if (p.type === 'text' && 'text' in p && typeof p.text === 'string' && p.text) {
       if (isUser) {
-        body.push(
-          <span key={`t-${i}`} className="user-plain">
-            {p.text}
-          </span>,
-        );
+        const display = splitAttachmentDisplay(p.text, visibleAttachments);
+        visibleAttachments = display.attachments;
+        if (display.text) {
+          body.push(
+            <span key={`t-${i}`} className="user-plain">
+              {display.text}
+            </span>,
+          );
+        }
       } else {
         let text = p.text;
         const stars = (text.match(/\*\*/g) || []).length;
@@ -177,6 +236,16 @@ export function MessageBubble({
       hasContent = true;
     }
   });
+
+  if (isUser && visibleAttachments.length) {
+    body.push(
+      <AttachmentCards
+        key="message-attachments"
+        attachments={visibleAttachments}
+      />,
+    );
+    hasContent = true;
+  }
 
   if (msg._fileLinks) {
     for (const fl of msg._fileLinks) {

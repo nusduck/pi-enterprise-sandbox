@@ -9,13 +9,13 @@ import {
   listDatasetsForConversation,
   type ArtifactEntity,
 } from '../../entities';
+import { fileTypeLabel } from '../../shared/state';
 import { isDurableArtifactId } from '../../shared/state/runReducer';
 import {
   formatDuration,
   formatRunStatusLabel,
   getActiveRunEntity,
   runStatusTone,
-  summarizeToolInput,
   type InspectorTabId,
   type SelectedEntity,
 } from '../runtime-timeline/buildTimeline';
@@ -31,6 +31,90 @@ type TabDef = {
   label: string;
   count?: number;
 };
+
+type ReferencedFile = {
+  path: string;
+  name: string;
+  toolName: string;
+};
+
+const FILE_INPUT_KEYS = new Set([
+  'path',
+  'file',
+  'file_path',
+  'filepath',
+  'source_path',
+  'target_path',
+  'destination_path',
+  'paths',
+  'files',
+]);
+
+function basename(path: string): string {
+  const normalized = path.replace(/\\/g, '/').replace(/\/+$/, '');
+  return normalized.split('/').pop() || normalized;
+}
+
+function pathLike(value: string): boolean {
+  const clean = value.trim();
+  return (
+    clean.startsWith('/') ||
+    clean.startsWith('./') ||
+    clean.startsWith('../') ||
+    clean.includes('/workspace/') ||
+    /^[^/\s]+\.[a-z0-9]{1,8}$/i.test(clean)
+  );
+}
+
+function pathsFromInput(input: unknown): string[] {
+  if (!input || typeof input !== 'object') return [];
+  const found: string[] = [];
+  const visit = (value: unknown, key = '') => {
+    if (typeof value === 'string') {
+      if (FILE_INPUT_KEYS.has(key.toLowerCase()) && pathLike(value)) {
+        found.push(value.trim());
+      }
+      return;
+    }
+    if (Array.isArray(value)) {
+      if (FILE_INPUT_KEYS.has(key.toLowerCase())) {
+        for (const item of value) {
+          if (typeof item === 'string' && pathLike(item)) found.push(item.trim());
+        }
+      }
+      return;
+    }
+    if (value && typeof value === 'object') {
+      for (const [childKey, child] of Object.entries(value)) {
+        visit(child, childKey);
+      }
+    }
+  };
+  visit(input);
+  return found;
+}
+
+export function collectReferencedFiles(
+  tools: Array<{ name: string; input: unknown }>,
+  excludedPaths: Array<string | null | undefined> = [],
+): ReferencedFile[] {
+  const excluded = new Set(
+    excludedPaths
+      .filter((path): path is string => Boolean(path))
+      .map((path) => path.replace(/\\/g, '/')),
+  );
+  const seen = new Set<string>();
+  const files: ReferencedFile[] = [];
+  for (const tool of tools) {
+    for (const rawPath of pathsFromInput(tool.input)) {
+      const path = rawPath.replace(/\\/g, '/');
+      if (excluded.has(path) || seen.has(path)) continue;
+      seen.add(path);
+      files.push({ path, name: basename(path), toolName: tool.name });
+    }
+  }
+  return files;
+}
 
 function shortId(id: string | null | undefined, keep = 10): string {
   if (!id) return '—';
@@ -164,8 +248,9 @@ export function ContextInspector({
   const importableArtifacts = useMemo((): ArtifactEntity[] => {
     const convId = state.conversationId;
     const runIds = new Set<string>();
-    if (runId) runIds.add(runId);
-    if (convId) {
+    if (runId) {
+      runIds.add(runId);
+    } else if (convId) {
       for (const r of Object.values(entityStore.runsById)) {
         if (r.conversationId === convId) runIds.add(r.id);
       }
@@ -194,6 +279,12 @@ export function ContextInspector({
     for (const listed of listedArtifacts) {
       const id = String(listed.artifact_id || listed.id || '').trim();
       if (!id || seen.has(id)) continue;
+      const listedRunId = String(
+        listed.run_id || listed.runId || '',
+      ).trim();
+      // Session artifact lists can span multiple runs. In an active Run view,
+      // only accept API fallback rows that carry matching run ownership.
+      if (runId && listedRunId !== runId) continue;
       if (!isDurableArtifactId(id, runId || '')) continue;
       seen.add(id);
       out.push({
@@ -249,12 +340,26 @@ export function ContextInspector({
     null;
 
   const pendingCount = approvals.filter((a) => a.status === 'pending').length;
+  const referencedFiles = useMemo(
+    () =>
+      collectReferencedFiles(tools, [
+        ...artifacts.map((artifact) => artifact.path),
+        ...listedArtifacts.map((artifact) =>
+          artifact.path == null ? null : String(artifact.path),
+        ),
+      ]),
+    [tools, artifacts, listedArtifacts],
+  );
 
   const tabs: TabDef[] = [
     { id: 'overview', label: 'Overview' },
     { id: 'tools', label: 'Tools', count: tools.length || undefined },
     { id: 'processes', label: 'Processes', count: processes.length || undefined },
-    { id: 'files', label: 'Files' },
+    {
+      id: 'files',
+      label: 'Files',
+      count: referencedFiles.length || undefined,
+    },
     {
       id: 'artifacts',
       label: 'Artifacts',
@@ -365,12 +470,7 @@ export function ContextInspector({
           ) : null}
 
           {tab === 'files' ? (
-            <FilesPanel
-              artifacts={artifacts}
-              listedArtifacts={listedArtifacts}
-              sessionId={activeSessionId}
-              tools={tools}
-            />
+            <FilesPanel files={referencedFiles} />
           ) : null}
 
           {tab === 'processes' ? (
@@ -611,88 +711,43 @@ function OverviewPanel({
 }
 
 function FilesPanel({
-  artifacts,
-  listedArtifacts,
-  sessionId,
-  tools,
+  files,
 }: {
-  artifacts: { id: string; name: string; path: string | null; size: number | null }[];
-  listedArtifacts: {
-    artifact_id?: string;
-    id?: string;
-    name?: string;
-    path?: string;
-    size?: number;
-  }[];
-  sessionId: string | null;
-  tools: { id: string; name: string; input: unknown }[];
+  files: ReferencedFile[];
 }) {
-  const toolPaths = tools
-    .map((t) => {
-      const s = summarizeToolInput(t.input);
-      return s && (s.includes('/') || s.includes('.')) ? s : null;
-    })
-    .filter((p): p is string => Boolean(p));
-
-  const uniquePaths = [...new Set(toolPaths)];
-
-  if (!artifacts.length && !listedArtifacts.length && !uniquePaths.length) {
+  if (!files.length) {
     return (
       <EmptyState
-        title="No files yet"
-        body="Paths and artifacts from this run will appear here."
+        title="No referenced files"
+        body="Files read or written by tools in this run will appear here. Submitted deliverables stay in Artifacts."
       />
     );
   }
 
   return (
     <div className="insp-stack">
-      {uniquePaths.length > 0 ? (
-        <section className="insp-card">
-          <div className="insp-card-head">
-            <h3 className="insp-card-title">Referenced paths</h3>
-            <span className="insp-card-count">{uniquePaths.length}</span>
-          </div>
-          <ul className="insp-chip-list">
-            {uniquePaths.map((p) => (
-              <li key={p} className="insp-path-chip mono" title={p}>
-                {p}
-              </li>
-            ))}
-          </ul>
-        </section>
-      ) : null}
-
-      {artifacts.length > 0 || listedArtifacts.length > 0 ? (
-        <section className="insp-card">
-          <div className="insp-card-head">
-            <h3 className="insp-card-title">Artifacts</h3>
-          </div>
-          <ul className="insp-file-list">
-            {artifacts.map((a) => (
-              <li key={a.id} className="insp-file-row">
-                <span className="insp-file-name">{a.name}</span>
-                {a.path ? (
-                  <span className="insp-file-path mono">{a.path}</span>
-                ) : null}
-              </li>
-            ))}
-            {listedArtifacts.map((a) => {
-              const id = a.artifact_id || a.id || a.path || a.name;
-              return (
-                <li key={String(id)} className="insp-file-row">
-                  <span className="insp-file-name">
-                    {a.name || a.path || id}
-                  </span>
-                  {sessionId ? (
-                    <span className="insp-file-path">session-linked</span>
-                  ) : null}
-                </li>
-              );
-            })}
-          </ul>
-        </section>
-      ) : null}
+      <div className="insp-section-intro">
+        <span>Workspace references</span>
+        <span>{files.length}</span>
+      </div>
+      <ul className="insp-file-list">
+        {files.map((file) => (
+          <li key={file.path} className="insp-file-row">
+            <span className="file-type-tile" aria-hidden="true">
+              {fileTypeLabel(file.name)}
+            </span>
+            <span className="insp-file-copy">
+              <span className="insp-file-name">{file.name}</span>
+              <span className="insp-file-path mono" title={file.path}>
+                {file.path}
+              </span>
+            </span>
+            <span className="insp-file-source" title={`Referenced by ${file.toolName}`}>
+              {file.toolName}
+            </span>
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }

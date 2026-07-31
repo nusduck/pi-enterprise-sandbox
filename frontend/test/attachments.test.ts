@@ -20,6 +20,8 @@ import {
   switchConversation,
   isAllowedAttachmentName,
   extensionOf,
+  fileTypeLabel,
+  splitAttachmentDisplay,
 } from '../src/shared/state/index.ts';
 
 function fakeFile(name: string, size = 10) {
@@ -184,6 +186,28 @@ describe('attachment drafts', () => {
     const msg = buildUserTurnWithAttachments('   ', drafts);
     assert.match(msg.content[0] && 'text' in msg.content[0] ? msg.content[0].text : '', /^\[Attachments\]/);
     assert.equal(msg.attachments.length, 1);
+  });
+
+  it('hides the agent-facing manifest while preserving attachment cards', () => {
+    const display = splitAttachmentDisplay(
+      'Please review\n\n[Attachments]\n- notes.md → uploads/att_1/notes.md (text/markdown)',
+      [],
+    );
+    assert.equal(display.text, 'Please review');
+    assert.equal(display.attachments.length, 1);
+    assert.equal(display.attachments[0].name, 'notes.md');
+    assert.equal(display.attachments[0].path, 'uploads/att_1/notes.md');
+    assert.equal(display.attachments[0].mime_type, 'text/markdown');
+  });
+
+  it('keeps ordinary prose containing the Attachments label intact', () => {
+    const text = 'Use this heading:\n[Attachments]\nNo manifest here.';
+    assert.equal(splitAttachmentDisplay(text, []).text, text);
+  });
+
+  it('derives compact file type labels without exposing raw MIME types', () => {
+    assert.equal(fileTypeLabel('report.PDF'), 'PDF');
+    assert.equal(fileTypeLabel('no-extension', 'image/webp'), 'IMG');
   });
 
   it('switchConversation clears attachment drafts', () => {

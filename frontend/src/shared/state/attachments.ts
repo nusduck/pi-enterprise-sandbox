@@ -5,6 +5,8 @@ import type {
   ChatMessage,
 } from './types';
 
+const ATTACHMENT_TEXT_HEADER = '[Attachments]';
+
 /** Defaults aligned with parent task P-00F1. */
 export const ATTACHMENT_LIMITS: AttachmentLimits = Object.freeze({
   maxCount: 10,
@@ -242,4 +244,74 @@ export function buildUserTurnWithAttachments(
     content: [{ type: 'text', text: body }],
     attachments: manifest,
   };
+}
+
+/**
+ * Split the agent-facing inline attachment manifest from user-visible text.
+ *
+ * The inline block remains in the message sent to the runtime for backwards
+ * compatibility. The conversation UI renders the same information as file
+ * cards instead of exposing workspace paths and MIME internals as prose.
+ * Legacy persisted turns may only have the inline block, so it is parsed as a
+ * display fallback when structured `message.attachments` is unavailable.
+ */
+export function splitAttachmentDisplay(
+  text: string,
+  structured: AttachmentManifestItem[] | null | undefined,
+): { text: string; attachments: AttachmentManifestItem[] } {
+  const source = String(text || '');
+  const marker = source.lastIndexOf(ATTACHMENT_TEXT_HEADER);
+  if (marker < 0) {
+    return { text: source, attachments: structured || [] };
+  }
+
+  const prefix = source.slice(0, marker);
+  const block = source.slice(marker + ATTACHMENT_TEXT_HEADER.length);
+  const manifestLines = block
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const isTrailingManifest =
+    manifestLines.length > 0 &&
+    manifestLines.every((line) => line.startsWith('- ') && line.includes(' → '));
+
+  if (!isTrailingManifest) {
+    return { text: source, attachments: structured || [] };
+  }
+
+  const parsed = manifestLines.flatMap((line): AttachmentManifestItem[] => {
+      const match = /^-\s+(.+?)\s+→\s+(.+?)(?:\s+\(([^()]*)\))?$/.exec(line);
+      if (!match) return [];
+      return [{
+        attachment_id: null,
+        filename: match[1],
+        name: match[1],
+        path: match[2],
+        workspace_path: match[2],
+        mime_type: match[3] || 'application/octet-stream',
+        size: 0,
+        upload_time: null,
+      }];
+    });
+
+  return {
+    text: prefix.trimEnd(),
+    attachments: structured?.length ? structured : parsed,
+  };
+}
+
+/** Short, stable label used by attachment and file tiles. */
+export function fileTypeLabel(
+  name: string | null | undefined,
+  mimeType?: string | null,
+): string {
+  const ext = extensionOf(String(name || '')).replace(/^\./, '');
+  if (ext && ext.length <= 5) return ext.toUpperCase();
+  const mime = String(mimeType || '').toLowerCase();
+  if (mime.startsWith('image/')) return 'IMG';
+  if (mime.includes('pdf')) return 'PDF';
+  if (mime.startsWith('text/')) return 'TXT';
+  if (mime.includes('spreadsheet') || mime.includes('excel')) return 'XLS';
+  if (mime.includes('presentation') || mime.includes('powerpoint')) return 'PPT';
+  return 'FILE';
 }
