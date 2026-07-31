@@ -14,7 +14,6 @@ import {
   createAgentRun,
   openAgentRunEvents,
   steerAgentRun,
-  followUpAgentRun,
   createConversationFollowUp,
   cancelAgentRun,
   getAgentRun,
@@ -33,8 +32,8 @@ import { sendError, sendJson as json } from '../http/response.js';
 
 /**
  * Coerce a timestamp to an ISO 8601 string for the public wire contract.
- * Accepts epoch milliseconds (Agent live runs), ISO strings (Sandbox rows),
- * or Date. Returns null when the value is missing or unusable.
+ * Accepts epoch milliseconds (Agent live runs), ISO strings, or Date.
+ * Returns null when the value is missing or unusable.
  * @param {unknown} value
  * @returns {string|null}
  */
@@ -58,58 +57,39 @@ export function toIsoTimestamp(value) {
 }
 
 /**
- * Merge persisted Sandbox run detail with optional Agent live snapshot.
+ * Present the Agent live Run snapshot on the public wire contract.
  * Ensures created_at / updated_at are always ISO strings or null so the
  * frontend RunDetailSchema never sees Agent epoch-ms numbers.
- * @param {object|null|undefined} persisted
  * @param {object|null|undefined} live
  * @param {boolean} runtimeAvailable
  */
-export function presentRunDetail(persisted, live, runtimeAvailable) {
-  const base = persisted && typeof persisted === 'object' ? persisted : {};
+export function presentRunDetail(live, runtimeAvailable) {
   const liveObj = live && typeof live === 'object' ? live : null;
   const body = liveObj
-    ? { ...base, ...liveObj, runtime_available: runtimeAvailable }
-    : { ...base, runtime_available: runtimeAvailable };
-  body.created_at =
-    toIsoTimestamp(liveObj?.created_at) ?? toIsoTimestamp(base.created_at);
-  body.updated_at =
-    toIsoTimestamp(liveObj?.updated_at) ?? toIsoTimestamp(base.updated_at);
-  body.started_at =
-    toIsoTimestamp(liveObj?.started_at) ??
-    toIsoTimestamp(liveObj?.startedAt) ??
-    toIsoTimestamp(base.started_at);
+    ? { ...liveObj, runtime_available: runtimeAvailable }
+    : { runtime_available: runtimeAvailable };
+  body.created_at = toIsoTimestamp(liveObj?.created_at);
+  body.updated_at = toIsoTimestamp(liveObj?.updated_at);
+  body.started_at = toIsoTimestamp(liveObj?.started_at);
   const completedAt =
-    toIsoTimestamp(liveObj?.completed_at) ??
-    toIsoTimestamp(liveObj?.completedAt) ??
-    toIsoTimestamp(liveObj?.finished_at) ??
-    toIsoTimestamp(base.completed_at) ??
-    toIsoTimestamp(base.finished_at);
+    toIsoTimestamp(liveObj?.completed_at) ?? toIsoTimestamp(liveObj?.finished_at);
   body.completed_at = completedAt;
   body.finished_at = completedAt;
   // Map status_reason → error only for terminal failed-like outcomes.
   // Parked waits (WAITING_APPROVAL / WAITING_INPUT) carry reasons like
   // "approval pending" that must NOT become chat `[Error: …]` text.
-  const statusRaw = String(body.status ?? liveObj?.status ?? base.status ?? '')
-    .trim()
-    .toUpperCase();
+  const statusRaw = String(body.status ?? '').trim().toUpperCase();
   const terminalFailedLike = new Set([
     'FAILED',
     'CANCELLED',
     'ERROR',
     'REJECTED',
   ]);
-  const explicitError =
-    body.error ?? liveObj?.error ?? base.error ?? null;
+  const explicitError = body.error ?? null;
   if (explicitError != null && String(explicitError).trim() !== '') {
     body.error = explicitError;
   } else if (terminalFailedLike.has(statusRaw)) {
-    body.error =
-      liveObj?.status_reason ??
-      liveObj?.statusReason ??
-      base.status_reason ??
-      base.statusReason ??
-      null;
+    body.error = liveObj?.status_reason ?? null;
   } else {
     body.error = null;
   }
@@ -122,11 +102,9 @@ export function presentRunDetail(persisted, live, runtimeAvailable) {
  * @returns {string|null}
  */
 export function readIdempotencyKeyHeader(req) {
-  const h =
-    req?.headers?.['idempotency-key'] ||
-    req?.headers?.['Idempotency-Key'] ||
-    req?.headers?.['x-idempotency-key'] ||
-    null;
+  // Node lowercases inbound header names, so the lowercase key is the only
+  // reachable spelling regardless of how the client cased it.
+  const h = req?.headers?.['idempotency-key'] ?? null;
   if (h == null) return null;
   const s = String(h).trim();
   return s || null;
@@ -163,15 +141,11 @@ export function normalizeCreateRunBody(body, opts = {}) {
   if (!Array.isArray(messages) || messages.length === 0) {
     return { error: 'messages array is required (or message.content text)' };
   }
-  const conversationId =
-    opts.conversationId ||
-    body.conversation_id ||
-    body.conversationId ||
-    null;
+  const conversationId = opts.conversationId || body.conversation_id || null;
   return {
     messages,
     conversation_id: conversationId,
-    agent_profile_id: body.agent_profile_id || body.agentProfileId || undefined,
+    agent_profile_id: body.agent_profile_id || undefined,
     budget: body.budget || undefined,
   };
 }
@@ -431,40 +405,6 @@ export async function handleSteerRun(runId, body, res, req = null) {
   }
 }
 
-/**
- * POST /api/runs/:id/follow-up  body: { text, conversation_id? }
- */
-export async function handleFollowUpRun(runId, body, res, req = null) {
-  const text = body?.text;
-  if (!runId) {
-    json(res, 400, { error: 'run id is required' });
-    return;
-  }
-  if (typeof text !== 'string' || !text.trim()) {
-    json(res, 400, { error: 'text is required' });
-    return;
-  }
-  const idempotencyKey = readIdempotencyKeyHeader(req);
-  if (!idempotencyKey) {
-    json(res, 400, {
-      error: 'Idempotency-Key header is required',
-      code: 'IDEMPOTENCY_KEY_REQUIRED',
-    });
-    return;
-  }
-  try {
-    const { auth } = await authorizeRunRequest(runId, req);
-    const result = await followUpAgentRun(runId, {
-      text: text.trim(),
-      conversation_id: body.conversation_id || null,
-    }, { auth, traceId: req?.traceId, idempotencyKey });
-    json(res, 202, result);
-  } catch (err) {
-    console.error('[runs] follow-up:', err.message);
-    sendError(res, err, req?.traceId);
-  }
-}
-
 /** POST /api/conversations/:id/follow-ups — canonical plan §18.7 path. */
 export async function handleConversationFollowUp(
   conversationId,
@@ -552,7 +492,7 @@ export async function handleGetRun(runId, res, req = null) {
   try {
     const { auth } = await authorizeRunRequest(runId, req);
     const live = await getAgentRun(runId, { auth, traceId: req?.traceId });
-    json(res, 200, presentRunDetail(null, live, true));
+    json(res, 200, presentRunDetail(live, true));
   } catch (err) {
     console.error('[runs] get:', err.message);
     sendError(res, err, req?.traceId);

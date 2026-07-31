@@ -518,6 +518,58 @@ describe('FencedToolGovernanceRecorder', () => {
     assert.equal(Object.hasOwn(durable.data, 'path'), false);
   });
 
+  it('puts the process handle on tool.execution.completed for process_start', async () => {
+    const { gov } = makeGov();
+    const processId = '01K0G2PAV8FPMVC9QHJG7JPN5E';
+    const started = await gov.recordToolEnded({
+      toolCallId: 'tc-process-start',
+      toolName: 'process_start',
+      isError: false,
+      result: {
+        content: [{ type: 'text', text: `{"processId":"${processId}"}` }],
+        details: { processId, status: 'running' },
+      },
+    });
+    // The console link is only reachable if the durable event carries the id.
+    assert.equal(started.envelope.data.processId, processId);
+    const durable = JSON.parse(state.tables.run_events[0].payload_json);
+    assert.equal(durable.data.processId, processId);
+  });
+
+  it('omits processId for other, failed, text-only or non-ULID process results', async () => {
+    const { gov } = makeGov();
+    const processId = '01K0G2PAV8FPMVC9QHJG7JPN5F';
+    const valid = {
+      content: [{ type: 'text', text: '{}' }],
+      details: { processId, status: 'running' },
+    };
+    const cases = [
+      // A different tool must never claim a process handle.
+      { toolCallId: 'tc-bash-spoof', toolName: 'bash', isError: false, result: valid },
+      { toolCallId: 'tc-ps-failed', toolName: 'process_start', isError: true, result: valid },
+      {
+        toolCallId: 'tc-ps-text-only',
+        toolName: 'process_start',
+        isError: false,
+        result: { content: [{ type: 'text', text: `{"processId":"${processId}"}` }] },
+      },
+      {
+        toolCallId: 'tc-ps-bad-id',
+        toolName: 'process_start',
+        isError: false,
+        result: { content: [], details: { processId: 'not-a-ulid' } },
+      },
+    ];
+    for (const input of cases) {
+      const res = await gov.recordToolEnded(input);
+      assert.equal(
+        Object.hasOwn(res.envelope.data, 'processId'),
+        false,
+        `${input.toolCallId} must not carry processId`,
+      );
+    }
+  });
+
   it('never synthesizes artifact.ready from other, failed, text-only, or invalid results', async () => {
     const { gov } = makeGov();
     const valid = artifactResult();

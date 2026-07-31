@@ -29,6 +29,8 @@ const BASE = '/api';
  * are non-terminal (human still in the loop; SSE should resume after blips).
  *
  * Accepts Agent uppercase (SUCCEEDED) and BFF/legacy aliases (completed/canceled).
+ * The aliases are deliberately kept: mis-reading a terminal status leaves the SSE
+ * stream open forever, so tolerance here is cheaper than the failure it prevents.
  */
 export function isStreamTerminalRunStatus(status: unknown): boolean {
   const raw = String(status ?? '').trim().toLowerCase();

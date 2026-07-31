@@ -36,11 +36,6 @@ function responseCapture() {
   };
 }
 
-const PERSISTED_ISO = {
-  created_at: '2026-07-14T10:00:00.000Z',
-  updated_at: '2026-07-14T10:05:00.000Z',
-};
-
 const LIVE_MS = {
   created_at: Date.parse('2026-07-14T11:00:00.000Z'),
   updated_at: Date.parse('2026-07-14T11:30:00.000Z'),
@@ -111,13 +106,8 @@ test('toIsoTimestamp converts epoch ms and ISO strings', () => {
   assert.equal(toIsoTimestamp(Number.NaN), null);
 });
 
-test('presentRunDetail prefers converted live timestamps over persisted', () => {
+test('presentRunDetail converts Agent epoch-ms timestamps to ISO strings', () => {
   const detail = presentRunDetail(
-    {
-      run_id: 'r1',
-      status: 'running',
-      ...PERSISTED_ISO,
-    },
     {
       run_id: 'r1',
       status: 'running',
@@ -132,13 +122,11 @@ test('presentRunDetail prefers converted live timestamps over persisted', () => 
   assert.equal(typeof detail.updated_at, 'string');
 });
 
-test('presentRunDetail falls back to persisted timestamps when live is invalid', () => {
+// The Agent Run row is the sole authority; there is no second (Sandbox) record
+// to fall back to, so an unparseable timestamp must surface as null rather than
+// as a bogus value the frontend RunDetailSchema would have to defend against.
+test('presentRunDetail nulls unparseable live timestamps', () => {
   const detail = presentRunDetail(
-    {
-      run_id: 'r2',
-      status: 'running',
-      ...PERSISTED_ISO,
-    },
     {
       run_id: 'r2',
       status: 'running',
@@ -148,13 +136,12 @@ test('presentRunDetail falls back to persisted timestamps when live is invalid',
     true,
   );
   assert.equal(detail.runtime_available, true);
-  assert.equal(detail.created_at, PERSISTED_ISO.created_at);
-  assert.equal(detail.updated_at, PERSISTED_ISO.updated_at);
+  assert.equal(detail.created_at, null);
+  assert.equal(detail.updated_at, null);
 });
 
 test('presentRunDetail maps the durable Agent failure reason to the public error field', () => {
   const detail = presentRunDetail(
-    { run_id: 'r3', status: 'failed' },
     {
       run_id: 'r3',
       status: 'failed',
@@ -167,7 +154,6 @@ test('presentRunDetail maps the durable Agent failure reason to the public error
 
 test('presentRunDetail does not map parked wait status_reason to error', () => {
   const detail = presentRunDetail(
-    { run_id: 'r-wait', status: 'WAITING_APPROVAL' },
     {
       run_id: 'r-wait',
       status: 'WAITING_APPROVAL',
@@ -181,7 +167,6 @@ test('presentRunDetail does not map parked wait status_reason to error', () => {
 
 test('presentRunDetail exposes a completed Agent Run as finished_at', () => {
   const detail = presentRunDetail(
-    { run_id: 'r4', status: 'SUCCEEDED' },
     {
       run_id: 'r4',
       status: 'SUCCEEDED',

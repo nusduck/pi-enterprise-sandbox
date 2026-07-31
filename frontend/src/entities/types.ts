@@ -122,6 +122,8 @@ export type RunEntity = {
   lastEventId: string | null;
   /** End-to-end request trace carried by this run. */
   traceId: string | null;
+  /** Model that served this run, from the Agent Run row (`model_id`). */
+  modelId: string | null;
   error: string | null;
   /** Live budget usage when backend/SSE provides it (F4). */
   budgetUsage: RunBudgetUsage | null;
@@ -193,6 +195,11 @@ export type ToolExecutionEntity = {
 export type ProcessEntity = {
   id: string;
   runId: string;
+  /**
+   * Sandbox session that owns the process. Managed processes outlive the run
+   * that started them, so the authoritative list is fetched per session.
+   */
+  sessionId: string | null;
   toolExecutionId: string | null;
   status: ProcessStatus;
   command: string | null;
@@ -302,18 +309,6 @@ export type TraceSpanEntity = {
   finishedAt: string | null;
 };
 
-export type AttachmentEntity = {
-  id: string;
-  conversationId: string | null;
-  runId: string | null;
-  name: string;
-  path: string | null;
-  size: number;
-  mimeType: string | null;
-  status: 'queued' | 'uploading' | 'uploaded' | 'failed' | 'removed';
-  createdAt: string | null;
-};
-
 // ── Normalized store shape ──────────────────────
 
 export type EntityMap<T> = Record<string, T>;
@@ -329,7 +324,6 @@ export type EntityStore = {
   artifactsById: EntityMap<ArtifactEntity>;
   datasetsById: EntityMap<DatasetEntity>;
   traceSpansById: EntityMap<TraceSpanEntity>;
-  attachmentsById: EntityMap<AttachmentEntity>;
   /** Currently focused conversation in the UI (does not cancel background runs). */
   activeConversationId: string | null;
   /** Currently focused run for the active conversation timeline. */

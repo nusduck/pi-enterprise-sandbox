@@ -287,6 +287,41 @@ describe('ServiceContainer', () => {
     rmSync(agentDir, { recursive: true, force: true });
   });
 
+  it('refuses to build a runtime without an HMAC keyring', async () => {
+    // The signed internal plane is the only route to Sandbox. Booting without
+    // it would produce a runtime whose every sandbox tool dies at call time.
+    const knex = { raw: async () => [[{}]], transaction: async (fn) => fn({}) };
+    const agentDir = mkdtempSync(path.join(tmpdir(), 'pi-agent-nokey-'));
+    const c = createServiceContainer(
+      {
+        AGENT_DATABASE_URL: 'mysql://u:p@h/db',
+        AGENT_REDIS_URL: 'redis://localhost:6379/0',
+        AGENT_PI_AGENT_DIR: agentDir,
+        SANDBOX_API_TOKEN: 'dev_only_sandbox_api_token_not_for_prod_32b',
+        DEPLOYMENT_ENV: 'development',
+      },
+      {
+        createMysqlKnex: () => knex,
+        createRedisClient: () => ({ status: 'ready' }),
+        createRunQueue: () => ({ queue: { add: async () => ({}) } }),
+        destroyMysqlKnex: async () => {},
+        destroyRedisClient: async () => {},
+        destroyRunQueue: async () => {},
+      },
+    );
+    await c.start();
+    await assert.rejects(
+      () =>
+        c.createPiRunExecutorFactory({
+          modelResolver: () => ({ id: 'm', name: 'm', api: 'openai-completions', provider: 'x', baseUrl: 'http://x', reasoning: false, input: ['text'], cost: {}, contextWindow: 1, maxTokens: 1 }),
+          workspaceResolver: () => '/home/sandbox/workspace',
+          sessionLockManager: { acquire: async () => true, renew: async () => true, release: async () => true },
+          piRuntimeFactory: { agentDir, create: async () => ({ session: {} }) },
+        }),
+      /SANDBOX_INTERNAL_HMAC_KEYRING/,
+    );
+  });
+
   it('createPiRunExecutorFactory assembly requires agentDir and refuses null-auth transport', async () => {
     const knex = { raw: async () => [[{}]], transaction: async (fn) => fn({}) };
     const redis = { status: 'ready' };
@@ -297,6 +332,8 @@ describe('ServiceContainer', () => {
         AGENT_REDIS_URL: 'redis://localhost:6379/0',
         AGENT_PI_AGENT_DIR: agentDir,
         SANDBOX_API_TOKEN: 'dev_only_sandbox_api_token_not_for_prod_32b',
+        SANDBOX_INTERNAL_HMAC_KEYRING: '{"test-v1":"dGVzdC1rZXktbWF0ZXJpYWwtMzItYnl0ZXMtbG9uZy0x"}',
+        SANDBOX_INTERNAL_HMAC_ACTIVE_KID: 'test-v1',
         DEPLOYMENT_ENV: 'development',
       },
       {

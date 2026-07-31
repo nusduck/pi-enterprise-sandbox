@@ -147,7 +147,6 @@ async def upload_dataset(
     conversation_id: str | None = Header(default=None, alias="X-Conversation-Id"),
     content_length: str | None = Header(default=None, alias="Content-Length"),
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
-    x_idempotency_key: str | None = Header(default=None, alias="X-Idempotency-Key"),
 ):
     """Stream multipart file into ``datasets/{id}/{safe_name}``.
 
@@ -158,16 +157,9 @@ async def upload_dataset(
     - Disconnect / error aborts temp + incomplete metadata (never READY)
     """
     session = _require_session(session_id, request)
-    if idempotency_key and x_idempotency_key and idempotency_key != x_idempotency_key:
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "code": "dataset_idempotency_key_invalid",
-                "message": "Idempotency-Key headers disagree",
-            },
-        )
-    idem_key = idempotency_key or x_idempotency_key
-    if dataset_manager.formal.authoritative and not str(idem_key or "").strip():
+    # Idempotency is mandatory only when MySQL is the authority: the dedupe is
+    # enforced by a unique index there, not by the in-memory test store.
+    if dataset_manager.formal.authoritative and not str(idempotency_key or "").strip():
         raise HTTPException(
             status_code=400,
             detail={
@@ -205,7 +197,7 @@ async def upload_dataset(
             original_filename=filename,
             mime_type=file.content_type,
             declared_size=declared,
-            idempotency_key=idem_key,
+            idempotency_key=idempotency_key,
         )
         while True:
             chunk = await file.read(_CHUNK_SIZE)

@@ -659,11 +659,11 @@ export function ChatProvider({ children }: { children: ReactNode }) {
             m.role === 'assistant' &&
             (m.content.some(
               (p) =>
-                (p.type === 'text' &&
-                  'text' in p &&
-                  String((p as { text?: unknown }).text || '').trim()) ||
-                p.type === 'tool_use',
+                p.type === 'text' &&
+                'text' in p &&
+                String((p as { text?: unknown }).text || '').trim(),
             ) ||
+              Boolean(m._hasRuntimeSteps) ||
               Boolean(m._fileLinks?.length)),
         );
         setState((s) => {

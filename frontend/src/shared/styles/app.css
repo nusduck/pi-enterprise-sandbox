@@ -261,8 +261,7 @@ body {
 @media (prefers-reduced-motion: reduce) {
   .header .badge .dot,
   .run-status-bar.tone-active .rsb-dot,
-  .rtc-dot-active,
-  .tp-r .tpd {
+  .rtc-dot-active {
     animation: none !important;
   }
 }
@@ -673,48 +672,6 @@ body {
 }
 /* time styles defined with .mw above */
 
-/* Tool pills row — keep tools above prose when many fire */
-.bubble-tools {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-  margin: 0 0 8px;
-  padding-bottom: 6px;
-  border-bottom: 1px solid var(--color-hairline);
-}
-.mw .bubble .tp {
-  margin-bottom: 0;
-}
-/* Tool pill — compact inline badge */
-.tp {
-  display: inline-flex; align-items: center; gap: 3px;
-  padding: 2px 8px; border-radius: 6px; font-size: 11px;
-  line-height: 1.4; cursor: pointer; vertical-align: middle;
-  margin: 0 2px 4px 0; position: relative;
-  max-width: 100%;
-}
-.tp-label {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  max-width: 14rem;
-}
-.tp-r { border: 1px solid var(--color-accent-border); color: var(--color-accent); background: var(--color-accent-soft); }
-.tp-r .tpd { width: 4px; height: 4px; border-radius: 50%; background: var(--color-accent); animation: tppulse 1s infinite; }
-@keyframes tppulse { 0%, 100% { opacity: 1; } 50% { opacity: .3; } }
-.tp-d { border: 1px solid var(--color-success-soft); color: var(--color-success-text); background: var(--color-success-soft); }
-.tp-d:hover { background: var(--color-success-soft); }
-.tp-e { border: 1px solid var(--color-danger-soft); color: var(--color-danger-text); background: var(--color-danger-soft); }
-.tp-e:hover { background: var(--color-danger-soft); }
-.tp-pop {
-  position: absolute; z-index: 10; top: calc(100% + 4px); left: 0;
-  min-width: 280px; max-width: min(480px, 80vw); max-height: 240px; overflow: auto;
-  background: var(--color-bg-elevated); border: 1px solid var(--color-text-dim); border-radius: 6px;
-  padding: 6px 8px; font-family: var(--font-mono), 'SF Mono', 'Fira Code', monospace;
-  font-size: 11px; color: var(--color-text-secondary); white-space: pre-wrap;
-  box-shadow: var(--shadow-md); word-break: break-word;
-}
-.tp-pop.hide { display: none; }
 
 /* Download link */
 .dl {
@@ -1195,9 +1152,6 @@ body {
   margin: 0 0 14px;
   width: 100%;
 }
-.runtime-steps-fallback {
-  margin-bottom: 10px;
-}
 .rs-step {
   border: 1px solid var(--color-hairline);
   border-radius: var(--radius-md);
@@ -1390,8 +1344,7 @@ body {
   font-size: 12px;
   color: var(--color-text-dim);
 }
-.mw.assistant .bubble > .runtime-steps + .md-body,
-.mw.assistant .bubble > .runtime-steps-fallback + .md-body {
+.mw.assistant .bubble > .runtime-steps + .md-body {
   margin-top: 2px;
 }
 

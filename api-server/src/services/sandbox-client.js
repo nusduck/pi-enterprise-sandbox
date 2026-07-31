@@ -192,11 +192,6 @@ export function createSandboxClient({
   };
 
   return {
-    async getConversation(conversationId) {
-      const resp = await sbFetch(`/conversations/${conversationId}`);
-      return resp.json();
-    },
-
     // PR-13 severe: Sandbox does not expose /agent-runs, /agent-sessions, or
     // /tool-executions. Run/tool ledger authority is Agent MySQL.
 

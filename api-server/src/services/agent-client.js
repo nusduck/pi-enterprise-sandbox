@@ -488,33 +488,6 @@ export async function steerAgentRun(
 }
 
 /**
- * POST /internal/agent-runs/:id/follow-up
- * @param {string} runId
- * @param {{ text: string, conversation_id?: string|null }} body
- */
-export async function followUpAgentRun(
-  runId,
-  body,
-  { auth = null, traceId = null, idempotencyKey = null } = {},
-) {
-  const resp = await fetch(
-    `${config.AGENT_BASE_URL}/internal/agent-runs/${encodeURIComponent(runId)}/follow-up`,
-    {
-      method: 'POST',
-      headers: requestHeaders({ auth, traceId, idempotencyKey }),
-      body: JSON.stringify(body),
-    },
-  );
-  if (!resp.ok) {
-    const text = await resp.text().catch(() => resp.statusText);
-    const err = new Error(`Agent follow-up failed (${resp.status}): ${text}`);
-    err.status = resp.status;
-    throw err;
-  }
-  return resp.json();
-}
-
-/**
  * POST /internal/conversations/:id/follow-ups
  * @param {string} conversationId
  * @param {{ text: string, agent_id?: string|null }} body

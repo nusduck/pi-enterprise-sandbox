@@ -252,11 +252,10 @@ export const AUTH_HEADER = config.SANDBOX_API_TOKEN
   : {};
 
 /**
- * Paths that remain public when AUTH_ENABLED (status + auth proxy).
+ * Paths that remain public when AUTH_ENABLED (health probes + auth proxy).
  * @param {string} path
  */
 export function isPublicApiPath(path) {
-  if (path === '/api/status') return true;
   if (path === '/health/live' || path === '/health/ready') return true;
   if (path.startsWith('/api/auth/')) return true;
   return false;

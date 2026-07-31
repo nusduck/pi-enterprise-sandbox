@@ -402,7 +402,7 @@ curl -f http://localhost:3000/
 
 # API Server（仅 node-agent；无 Python/双 Runtime）
 curl -f http://localhost:4000/health/ready
-# {"status":"ok","version":"4.0.0","agent_runtime":"node-agent"}
+# {"status":"ok","version":"4.0.0","agent":{"status":"ok"},"sandbox":{"status":"ok"}}
 
 # Sandbox liveness（进程存活；公开路由，无需 API key）
 curl -f http://localhost:8083/health

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from enum import Enum
-from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -99,18 +98,6 @@ class AttachmentUploadResponse(BaseModel):
     # Backward-compatible FileResponse-ish fields
     content: str = ""
     truncated: bool = False
-
-
-class AttachmentContext(BaseModel):
-    """ADR §4.5 structured attachment metadata on an agent message."""
-
-    attachment_id: str | None = None
-    filename: str
-    path: str | None = None
-    workspace_path: str | None = None
-    mime_type: str = "application/octet-stream"
-    size: int = 0
-    upload_time: str | None = None
 
 
 # ── Structured file search (ls / find / grep) ──────────────────────────
@@ -377,138 +364,3 @@ PROCESS_ACTIVE_STATUSES = frozenset(
         ProcessStatus.CANCEL_REQUESTED,
     }
 )
-
-
-class ProcessStartRequest(BaseModel):
-    session_id: str = Field(..., description="Sandbox session that owns the process")
-    command: str = Field(..., description="Shell command to run under managed process")
-    cwd: str | None = Field(
-        default=None,
-        description="Workspace-relative working directory (default: workspace root)",
-    )
-    env: dict[str, str] = Field(default_factory=dict)
-    timeout: int | None = Field(
-        default=None,
-        gt=0,
-        description=(
-            "Wall-clock seconds before process is marked timeout and killed. "
-            "Omit/null uses server process_timeout_seconds default. "
-            "0 and values above max_process_timeout_seconds are rejected."
-        ),
-    )
-    background: bool = Field(
-        default=False,
-        description="If false (foreground), process is stopped when the run/session ends",
-    )
-    run_id: str | None = Field(
-        default=None,
-        description="Optional agent run id for cancel cascade",
-    )
-
-
-class ProcessResponse(BaseModel):
-    process_id: str
-    session_id: str
-    run_id: str | None = None
-    command: str = ""
-    status: str = ProcessStatus.CREATED.value
-    pid: int | None = None
-    exit_code: int | None = None
-    background: bool = False
-    cwd: str | None = None
-    error: str | None = None
-    started_at: str | None = None
-    finished_at: str | None = None
-    created_at: str = ""
-    updated_at: str = ""
-    trace_id: str | None = None
-
-
-class ProcessStartResponse(BaseModel):
-    process_id: str
-    status: str = ProcessStatus.RUNNING.value
-    started_at: str = ""
-    # Plan §13.7 cursors (generation-offset); independent stdout/stderr streams.
-    stdout_cursor: str = "0-0"
-    stderr_cursor: str = "0-0"
-
-
-class ProcessLogsResponse(BaseModel):
-    stdout: str = ""
-    stderr: str = ""
-    next_offset: int = 0
-    completed: bool = False
-    truncated: bool = False
-    # When truncated=true, clients can pull full logs from this path (B3).
-    full_log_location: str | None = None
-    log_total: int = 0
-    stdout_cursor: str | None = None
-    stderr_cursor: str | None = None
-    next_stdout_cursor: str | None = None
-    next_stderr_cursor: str | None = None
-
-
-class ProcessReadRequest(BaseModel):
-    """Incremental stream read by cursor (process_read tool contract)."""
-
-    stream: str = Field(
-        default="stdout",
-        description="stdout | stderr",
-    )
-    cursor: str = Field(default="0-0", max_length=64)
-    limit: int = Field(default=8192, ge=1, le=65536)
-
-
-class ProcessReadResponse(BaseModel):
-    process_id: str
-    stream: str
-    cursor: str
-    next_cursor: str
-    data: str = ""
-    truncated: bool = False
-    completed: bool = False
-    status: str | None = None
-
-
-class ExecutionLogsResponse(BaseModel):
-    """Pageable logs for short bash/python/node executions (B3)."""
-
-    stdout: str = ""
-    stderr: str = ""
-    next_offset: int = 0
-    completed: bool = False
-    truncated: bool = False
-    full_log_location: str | None = None
-    log_total: int = 0
-
-
-class ExecutionEventResponse(BaseModel):
-    """Sequenced execution lifecycle / delta event (B3)."""
-
-    event_id: str
-    source_type: str
-    source_id: str
-    sequence: int
-    type: str
-    payload: dict[str, Any] = Field(default_factory=dict)
-    run_id: str | None = None
-    created_at: str = ""
-
-
-class ProcessStdinRequest(BaseModel):
-    data: str = Field(..., description="Text to write to process stdin")
-    eof: bool = Field(default=False, description="Close stdin after write")
-
-
-class ProcessSignalRequest(BaseModel):
-    signal: str = Field(
-        default="SIGTERM",
-        description="POSIX signal name or number (SIGTERM, SIGINT, SIGKILL, …)",
-    )
-
-
-class ProcessWaitRequest(BaseModel):
-    timeout: float | None = Field(
-        default=None,
-        description="Seconds to wait; null waits until terminal (or server default)",
-    )

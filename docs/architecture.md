@@ -258,6 +258,5 @@ Sandbox internal plane (FastAPI)
 | `GET /ready` | 工作区可写 + DB 可 ping（readiness） | **HTTP 503** `status=not_ready` |
 | `GET /health/live` | API Server BFF 进程存活 | 非 200 |
 | `GET /health/ready` | BFF、Agent、Sandbox 均可用 | 503 |
-| `GET /api/status` | UI 兼容状态视图；含 `agent_runtime` | body.status=degraded |
 
 探针响应不包含密钥、连接串或环境 dump。

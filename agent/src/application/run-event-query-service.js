@@ -26,26 +26,23 @@ export function projectRunEventToSseEnvelope(row) {
       ? { ...row.payloadJson }
       : {};
   const eventId = row.eventId ? String(row.eventId) : null;
+  // One spelling per field on the wire: `type` + snake_case `event_id`, matching
+  // the rest of the public contract (run_id, session_id, created_at).
   const event = {
     type: row.eventType,
-    event_type: row.eventType,
-    ...(eventId ? { eventId, event_id: eventId } : {}),
+    ...(eventId ? { event_id: eventId } : {}),
     ...payload,
   };
   // Prefer durable row type over any payload collision.
   event.type = row.eventType;
-  event.event_type = row.eventType;
-  if (eventId) {
-    event.eventId = eventId;
-    event.event_id = eventId;
-  }
+  if (eventId) event.event_id = eventId;
   // Do not re-run a status machine here — payload status is already durable.
   const ts = row.createdAt ? Date.parse(row.createdAt) : Date.now();
   return {
     sequence,
     event,
     ts: Number.isFinite(ts) ? ts : Date.now(),
-    ...(eventId ? { eventId, event_id: eventId } : {}),
+    ...(eventId ? { event_id: eventId } : {}),
   };
 }
 

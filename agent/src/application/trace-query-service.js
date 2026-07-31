@@ -96,11 +96,11 @@ export class TraceQueryService {
       scope,
       { limit, cursor: normalizedCursor, includePageInfo: true },
     );
-    // Keep compatibility with an older injected repository while making the
-    // HTTP contract explicit for the current implementation.
-    const spans = Array.isArray(page) ? page : page.spans;
-    const truncated = Array.isArray(page) ? false : page.truncated === true;
-    const nextCursor = Array.isArray(page) ? null : page.nextCursor ?? null;
+    // includePageInfo above is unconditional, so listByRun always returns the
+    // page object ({ spans, truncated, nextCursor }), never a bare array.
+    const spans = page.spans;
+    const truncated = page.truncated === true;
+    const nextCursor = page.nextCursor ?? null;
     return {
       traceId: normalizeTraceId(run.traceId),
       trace_id: normalizeTraceId(run.traceId),

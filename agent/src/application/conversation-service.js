@@ -49,10 +49,10 @@ export function presentTranscriptMessage(msg) {
   if (!msg || typeof msg !== 'object') return null;
   const role = String(msg.role || '').toLowerCase();
   if (role !== 'user' && role !== 'assistant') return null;
-  const messageType = String(msg.messageType || msg.message_type || '').toLowerCase();
+  const messageType = String(msg.messageType || '').toLowerCase();
   if (messageType.startsWith('pi_journal')) return null;
 
-  const content = msg.contentJson ?? msg.content_json ?? {};
+  const content = msg.contentJson ?? {};
   let text = '';
   if (typeof content === 'string') {
     text = content;
@@ -98,20 +98,22 @@ export function presentTranscriptMessage(msg) {
   // only when we have no text; skip pure empty assistant rows without content.
   if (role === 'assistant' && !String(text || '').trim()) return null;
 
-  const sequenceNo = msg.sequenceNo ?? msg.sequence_no;
+  const sequenceNo = msg.sequenceNo;
   return {
     // Keep the durable message identity and ordering fields intact.  The
     // browser transcript is a projection of the append-only messages table,
-    // not a new source of ordering truth.
-    id: msg.messageId || msg.message_id || null,
-    message_id: msg.messageId || msg.message_id || null,
-    run_id: msg.runId || msg.run_id || null,
+    // not a new source of ordering truth.  Input rows are always camelCase
+    // (mapMessage); the response deliberately emits both `id` and
+    // `message_id` because BFF/browser consumers read either one.
+    id: msg.messageId || null,
+    message_id: msg.messageId || null,
+    run_id: msg.runId || null,
     role,
     content: [{ type: 'text', text: String(text || '') }],
     sequence_no: sequenceNo != null && Number.isFinite(Number(sequenceNo))
       ? Number(sequenceNo)
       : null,
-    created_at: msg.createdAt || msg.created_at || null,
+    created_at: msg.createdAt || null,
   };
 }
 

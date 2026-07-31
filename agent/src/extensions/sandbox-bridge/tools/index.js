@@ -609,14 +609,16 @@ export function createSandboxBridgeToolDefinitions(
         );
         if (!inv.ok) return inv.result;
         const data = inv.data;
-        return toolOk(
-          toolResultJson({
-            processId: data?.processId ?? null,
-            status: data?.status ?? 'running',
-            stdoutCursor: data?.stdoutCursor ?? '0-0',
-            stderrCursor: data?.stderrCursor ?? '0-0',
-          }),
-        );
+        const handle = {
+          processId: data?.processId ?? null,
+          status: data?.status ?? 'running',
+          stdoutCursor: data?.stdoutCursor ?? '0-0',
+          stderrCursor: data?.stderrCursor ?? '0-0',
+        };
+        // `details` carries the handle out of the model-facing text so the
+        // governance recorder can put processId on tool.execution.completed —
+        // that is what links a tool step to its process console.
+        return toolOk(toolResultJson(handle), handle);
       },
     },
 

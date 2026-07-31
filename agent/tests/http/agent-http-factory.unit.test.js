@@ -381,7 +381,6 @@ describe('createAgentHttpServer factory', () => {
       body: { messages: [{ role: 'user', content: 'hi' }] },
     });
     assert.equal(r.status, 202);
-    assert.equal(r.json.runId, RUN);
     assert.equal(r.json.run_id, RUN);
     assert.equal(r.json.status, 'ACCEPTED');
     assert.equal(created.length, 1);
@@ -639,7 +638,7 @@ describe('createAgentHttpServer factory', () => {
       },
     );
     assert.equal(follow.status, 202);
-    assert.equal(follow.json.conversationId, CONV);
+    assert.equal(follow.json.conversation_id, CONV);
     assert.equal(followUpCalls[0].conversationId, CONV);
     assert.equal(followUpCalls[0].idempotencyKey, 'follow-1');
   });
@@ -755,7 +754,7 @@ describe('createAgentHttpServer factory', () => {
     assert.doesNotMatch(JSON.stringify(m.body), /mysql:\/\//);
   });
 
-  it('presentCreateRunResponse dual keys', () => {
+  it('presentCreateRunResponse emits one spelling per field', () => {
     const p = presentCreateRunResponse({
       runId: RUN,
       status: 'ACCEPTED',
@@ -763,7 +762,11 @@ describe('createAgentHttpServer factory', () => {
       eventsUrl: '/e',
     });
     assert.equal(p.run_id, RUN);
-    assert.equal(p.runId, RUN);
+    assert.equal(p.conversation_id, CONV);
+    assert.equal(p.events_url, '/e');
+    assert.equal(Object.hasOwn(p, 'runId'), false);
+    assert.equal(Object.hasOwn(p, 'conversationId'), false);
+    assert.equal(Object.hasOwn(p, 'eventsUrl'), false);
   });
 });
 

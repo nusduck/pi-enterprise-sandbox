@@ -31,7 +31,6 @@ export function createEntityStore(
     artifactsById: { ...(initial.artifactsById || {}) },
     datasetsById: { ...(initial.datasetsById || {}) },
     traceSpansById: { ...(initial.traceSpansById || {}) },
-    attachmentsById: { ...(initial.attachmentsById || {}) },
     activeConversationId:
       initial.activeConversationId !== undefined
         ? initial.activeConversationId
@@ -53,7 +52,6 @@ export function cloneEntityStore(store: EntityStore): EntityStore {
     artifactsById: { ...store.artifactsById },
     datasetsById: { ...store.datasetsById },
     traceSpansById: { ...store.traceSpansById },
-    attachmentsById: { ...store.attachmentsById },
     activeConversationId: store.activeConversationId,
     activeRunId: store.activeRunId,
   };
@@ -122,6 +120,7 @@ export function createRun(
     lastSequence: 0,
     lastEventId: null,
     traceId: null,
+    modelId: null,
     error: null,
     budgetUsage: null,
     budgetLimits: null,
@@ -178,6 +177,7 @@ export function createProcess(
   partial: Partial<ProcessEntity> & { id: string; runId: string },
 ): ProcessEntity {
   return {
+    sessionId: null,
     toolExecutionId: null,
     status: 'created',
     command: null,
@@ -536,6 +536,20 @@ export function getRunArtifacts(
 }
 
 /** Conversation-scoped datasets (upload panel; may outlive a single run). */
+/**
+ * Managed processes for a sandbox session. Processes survive the run that
+ * started them, so the session — not the run — is the natural list scope.
+ */
+export function listProcessesForSession(
+  store: EntityStore,
+  sessionId: string | null | undefined,
+): ProcessEntity[] {
+  if (!sessionId) return [];
+  return Object.values(store.processesById).filter(
+    (p) => p.sessionId === sessionId,
+  );
+}
+
 export function listDatasetsForConversation(
   store: EntityStore,
   conversationId: string | null | undefined,

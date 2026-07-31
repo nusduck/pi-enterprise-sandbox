@@ -89,7 +89,10 @@ export function ConversationHeader() {
       )) ||
     null;
 
+  // The Agent Run row carries model_id on the wire; the agent-session entity
+  // and the conversation row are older, currently unpopulated sources.
   const model =
+    run?.modelId ||
     agentSession?.modelId ||
     (typeof conv?.model === 'string' ? conv.model : null) ||
     null;

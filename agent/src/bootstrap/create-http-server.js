@@ -933,8 +933,7 @@ export function createAgentHttpServer(deps) {
                   limit: 1,
                 });
                 const event = Array.isArray(page?.events) ? page.events[0] : null;
-                body.lastEventId = event?.eventId ?? event?.event_id ?? null;
-                body.last_event_id = body.lastEventId;
+                body.last_event_id = event?.eventId ?? event?.event_id ?? null;
               } catch {
                 // The Run record is still authoritative. A diagnostics-only
                 // event lookup must not turn an otherwise valid GET into 500.
@@ -1278,76 +1277,6 @@ export function createAgentHttpServer(deps) {
               steer_id: result.steerId,
               message_id: result.messageId,
             });
-          } catch (err) {
-            const mapped = mapErrorToHttp(err);
-            json(res, mapped.status, mapped.body);
-          }
-          return;
-        }
-      }
-
-      // Compatibility path: resolve the owned source Run, then create a new
-      // follow-up Run. The canonical public API is Conversation-scoped.
-      {
-        const m = path.match(
-          /^\/internal\/agent-runs\/([^/]+)\/follow-up$/,
-        );
-        if (m && req.method === 'POST') {
-          if (!deps.followUpService?.execute) {
-            json(res, 503, {
-              error: 'Follow-up service unavailable',
-              code: 'DEPENDENCY',
-            });
-            return;
-          }
-          const auth = authSubjectsFromRequest(req);
-          if (!auth) {
-            json(res, 400, {
-              error:
-                'X-Acting-User-Id and X-Acting-Organization-Id are required',
-              code: 'AUTH_CONTEXT_REQUIRED',
-            });
-            return;
-          }
-          const idempotencyKey = readIdempotencyKey(req);
-          if (!idempotencyKey) {
-            json(res, 400, {
-              error: 'Idempotency-Key header is required',
-              code: 'IDEMPOTENCY_KEY_REQUIRED',
-            });
-            return;
-          }
-          let body;
-          try {
-            const raw = await readBody(req);
-            body = raw ? JSON.parse(raw) : {};
-          } catch {
-            json(res, 400, { error: 'Invalid JSON body' });
-            return;
-          }
-          const traceContext = resolveRequestTraceContext(
-            req,
-            body.trace_id || body.traceId,
-          );
-          const traceId = traceContext.traceId;
-          try {
-            const sourceRun = await deps.getRunService.execute({
-              runId: decodeURIComponent(m[1]),
-              auth,
-            });
-            const result = await deps.followUpService.execute({
-              conversationId: sourceRun.conversationId,
-              text: body.text,
-              auth,
-              traceId,
-              ...(traceContext.traceState
-                ? { traceState: traceContext.traceState }
-                : {}),
-              idempotencyKey,
-              spanId: traceContext.parentSpanId,
-            });
-            res.setHeader('X-Trace-Id', traceId);
-            json(res, 202, presentCreateRunResponse(result));
           } catch (err) {
             const mapped = mapErrorToHttp(err);
             json(res, mapped.status, mapped.body);

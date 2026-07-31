@@ -4,7 +4,6 @@
 
 import { SANDBOX_TOOL_NAMES } from '../sandbox-bridge/constants.js';
 import { SKILL_LIFECYCLE_TOOL_NAMES } from '../skill-lifecycle/constants.js';
-import { isValidMcpToolName } from '../../infrastructure/mcp/mcp-config-loader.js';
 
 /**
  * Tools that execute inside the platform's own trust boundary rather than
@@ -38,7 +37,9 @@ export function classifyTool(toolName, opts = {}) {
     return { class: 'local_low' };
   }
 
-  if (isValidMcpToolName(name) || name.startsWith('mcp__')) {
+  if (name.startsWith('mcp__')) {
+    // An `mcp__`-prefixed name that does not parse into server+tool is not
+    // classifiable — fail to `unknown` rather than guessing a server id.
     const m = /^mcp__([A-Za-z0-9._-]+)__([A-Za-z0-9._-]+)$/.exec(name);
     if (!m) {
       return { class: 'unknown' };

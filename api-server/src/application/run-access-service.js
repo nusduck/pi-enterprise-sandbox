@@ -141,32 +141,10 @@ export async function authorizeSandboxSession(sessionId, req, opts = {}) {
  * scopes the load. BFF must **not** compare external UUID/subjects to Agent
  * response ULID userId/orgId (different ID domains). Foreign/unknown runs are
  * already 404 from Agent GET.
- *
- * Optional Sandbox conversation ACL only when conversation_id is a non-ULID
- * external id (legacy).
  */
 export async function authorizeRunRequest(runId, req) {
   const auth = await resolveTrustedAuth(req);
   // Owner scope is enforced inside Agent GetRunService.
   const run = await getDurableRun(auth, runId, req?.traceId);
-
-  const conversationId = run.conversationId || run.conversation_id;
-  if (
-    conversationId &&
-    !String(conversationId).match(/^[0-9A-HJKMNP-TV-Z]{26}$/i)
-  ) {
-    // External conversation mapping may still be Sandbox-scoped UUID — optional ACL.
-    try {
-      const sandbox = createSandboxClient({
-        auth,
-        traceId: req?.traceId || null,
-        traceContext: req?.traceContext || null,
-      });
-      await sandbox.getConversation(conversationId);
-    } catch {
-      throw new HttpError(404, 'RUN_NOT_FOUND', 'Run not found');
-    }
-  }
-
   return { auth, run };
 }

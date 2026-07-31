@@ -68,7 +68,7 @@ export function A2aPage() {
         scopes,
         expiresAt: expiresAt ? new Date(expiresAt).toISOString() : null,
       });
-      setOneTimeToken(result.token || result.bearerToken || '');
+      setOneTimeToken(result.token || '');
       setClientId('');
       await refresh(selectedAgentId);
     } catch (err) {
@@ -84,7 +84,7 @@ export function A2aPage() {
     setOneTimeToken('');
     try {
       const result = await rotateA2aCredential(credentialId);
-      setOneTimeToken(result.token || result.bearerToken || '');
+      setOneTimeToken(result.token || '');
       await refresh(selectedAgentId);
     } catch (err) {
       setError((err as Error).message || 'Credential rotation failed');

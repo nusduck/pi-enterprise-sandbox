@@ -8,8 +8,6 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import {
   parseSseResumeCursor,
-  buildAgentEventsQuery,
-  dedupeBySequence,
   presentCreateRunAccepted,
 } from '../src/application/event-replay-service.js';
 import {
@@ -40,10 +38,12 @@ describe('parseSseResumeCursor', () => {
     assert.equal(c.lastEventId, null);
   });
 
+  // Node lowercases inbound header names, so a real request always presents
+  // `last-event-id` regardless of how the browser cased it.
   it('ULID Last-Event-ID is forwarded separately', () => {
     const c = parseSseResumeCursor({
       searchParams: new URLSearchParams('afterSequence=4'),
-      headers: { 'Last-Event-ID': EVT },
+      headers: { 'last-event-id': EVT },
     });
     assert.equal(c.afterSequence, 4);
     assert.equal(c.lastEventId, EVT);
@@ -58,40 +58,36 @@ describe('parseSseResumeCursor', () => {
   });
 });
 
-describe('dedupeBySequence', () => {
-  it('skips duplicates and advances cursor', () => {
-    assert.deepEqual(dedupeBySequence(5, { sequence: 5 }), { emit: false, next: 5 });
-    assert.deepEqual(dedupeBySequence(5, { sequence: 6 }), { emit: true, next: 6 });
-    assert.deepEqual(dedupeBySequence(5, { sequence: 'x' }), { emit: false, next: 5 });
-  });
-});
-
 describe('presentCreateRunAccepted', () => {
-  it('fills dual keys and eventsUrl', () => {
+  it('fills events_url and emits one spelling per field', () => {
     const p = presentCreateRunAccepted({
       run_id: RUN,
       conversation_id: 'c1',
       status: 'ACCEPTED',
     });
-    assert.equal(p.runId, RUN);
     assert.equal(p.run_id, RUN);
-    assert.equal(p.eventsUrl, `/api/runs/${RUN}/events`);
+    assert.equal(p.conversation_id, 'c1');
+    assert.equal(p.events_url, `/api/runs/${RUN}/events`);
     assert.equal(p.status, 'ACCEPTED');
+    assert.equal(Object.hasOwn(p, 'runId'), false);
+    assert.equal(Object.hasOwn(p, 'eventsUrl'), false);
   });
 
   it('surfaces sandbox session for upload and artifact download', () => {
     const sandbox = '01K0G2PAV8FPMVC9QHJG7JPN5F';
     const p = presentCreateRunAccepted({
-      runId: RUN,
-      conversationId: 'c1',
-      agentSessionId: '01K0G2PAV8FPMVC9QHJG7JPN52',
-      sandboxSessionId: sandbox,
+      run_id: RUN,
+      conversation_id: 'c1',
+      agent_session_id: '01K0G2PAV8FPMVC9QHJG7JPN52',
+      sandbox_session_id: sandbox,
       status: 'ACCEPTED',
     });
+    // Both names survive: uploads read session_id, run-scoped callers read
+    // sandbox_session_id.
     assert.equal(p.session_id, sandbox);
     assert.equal(p.sandbox_session_id, sandbox);
-    assert.equal(p.sandboxSessionId, sandbox);
     assert.equal(p.agent_session_id, '01K0G2PAV8FPMVC9QHJG7JPN52');
+    assert.equal(Object.hasOwn(p, 'sandboxSessionId'), false);
   });
 });
 
@@ -136,17 +132,6 @@ describe('readIdempotencyKeyHeader', () => {
       'k1',
     );
     assert.equal(readIdempotencyKeyHeader({ headers: {} }), null);
-  });
-});
-
-describe('buildAgentEventsQuery', () => {
-  it('omits empty after', () => {
-    assert.equal(buildAgentEventsQuery({ afterSequence: 0 }), '');
-  });
-  it('includes after + afterSequence', () => {
-    const q = buildAgentEventsQuery({ afterSequence: 7 });
-    assert.match(q, /after=7/);
-    assert.match(q, /afterSequence=7/);
   });
 });
 

@@ -5,7 +5,7 @@ Pi Enterprise Sandbox 四服务 API 分层：
 | 层 | 组件 | 说明 |
 |----|------|------|
 | **Public** | Frontend Nginx | `/api/*` 反向代理到 API Server |
-| **API Server (BFF)** | Node.js 22 (port 4000) | Run API/SSE relay、`/api/status`、文件上传/下载代理 |
+| **API Server (BFF)** | Node.js 22 (port 4000) | Run API/SSE relay、健康探针、文件上传/下载代理 |
 | **Agent** | Node.js 22 (port 4100) | 内部 Run API + pi-coding-agent SDK（浏览器不直连） |
 | **Sandbox** | FastAPI (port 8081) | Agent 专用内部执行平面（HMAC `/internal/v1/*`）；文件/执行/进程/数据集/产物（Docker 内网） |
 
@@ -118,7 +118,7 @@ data: {"sequence":18,"event":{...},"ts":...,"eventId":"01K..."}
 
 浏览器刷新：`GET /api/runs/{id}` + 从 `lastSequence` / `lastEventId` 重建 SSE，不依赖进程内 buffer。
 
-可用 `POST /api/runs/:id/cancel|steer|follow-up` 控制（cancel 亦要求 `Idempotency-Key`）；审批恢复使用 `resume-approval`，用户输入使用 `/interactions/:interactionId/respond`。
+可用 `POST /api/runs/:id/cancel|steer` 控制（cancel 亦要求 `Idempotency-Key`）；追问使用 Conversation 维度的 `POST /api/conversations/:id/follow-ups`；审批恢复使用 `resume-approval`，用户输入使用 `/interactions/:interactionId/respond`。
 
 `GET /api/runs/{id}` 还返回 `started_at`、`completed_at`（兼容字段
 `finished_at`）、`error`、`last_event_id` 与可用时的 `model_id` / `usage`；时间字段统一为 ISO 8601。Run 列表同样可包含模型与 token usage 的轻量投影，来源是 durable 事件，不是进程内计数器。
@@ -140,14 +140,12 @@ Agent 模型侧权威清单工具：`capabilities`（`action=list|search|describ
 
 - `GET /health/live`：仅检查 BFF 进程，正常返回 200。
 - `GET /health/ready`：检查 Agent 与 Sandbox，任一不可用返回 503。
-- `GET /api/status`：兼容 UI 的依赖状态视图，始终返回 200。
 
 ```json
-// Response (HTTP 200；依赖不可达时 status 可为 "degraded"，不含密钥)
+// Response (HTTP 200；依赖不可达时 503 且 status 为 "degraded"，不含密钥)
 {
   "status": "ok",
   "version": "4.0.0",
-  "agent_runtime": "node-agent",
   "agent": { "status": "ok" },
   "sandbox": { "status": "ok" }
 }
@@ -198,7 +196,7 @@ Base URL: `http://sandbox:8081`（Docker 内网）
   - **服务 Token alone 不是终端用户**：不能替代 BFF/Agent 注入的 actor；跨用户/跨组织资源统一 fail-closed
   - 跨用户/跨组织访问 Conversation 返回 **404**（不泄露资源是否存在）
   - 旧数据迁移绑定 `user_bootstrap` / `org_bootstrap`；新用户默认加入 bootstrap org
-  - BFF `AUTH_ENABLED`（默认同 `SANDBOX_AUTH_ENABLED`）保护 `/api/conversations`、`/api/runs`、Extension diagnostics、文件/产物路由；`/api/status` 与 `/api/auth/*` 保持公开
+  - BFF `AUTH_ENABLED`（默认同 `SANDBOX_AUTH_ENABLED`）保护 `/api/conversations`、`/api/runs`、Extension diagnostics、文件/产物路由；`/health/*` 与 `/api/auth/*` 保持公开
 
 ### Sessions
 

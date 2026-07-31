@@ -8,9 +8,10 @@ export function messageText(message: ChatMessage): string {
     .join('');
 }
 
+/** The turn did more than emit text: runtime steps, deliverables or an abort. */
 function hasRuntimeDetail(message: ChatMessage): boolean {
   return (
-    message.content.some((part) => part.type === 'tool_use') ||
+    Boolean(message._hasRuntimeSteps) ||
     Boolean(message._fileLinks?.length) ||
     Boolean(message.interrupted)
   );
@@ -229,13 +230,13 @@ export function projectConversationMessages(options: {
         const serverMessage = result[matchedSlot];
         const serverText = messageText(serverMessage);
         if (hasRuntimeDetail(tagged) && serverText) {
+          // A turn that already did runtime work is no longer streaming, so the
+          // committed row holds the authoritative text — a rehydrated live
+          // projection may only carry a truncated preview of it.
           result[matchedSlot] = {
             ...serverMessage,
             ...tagged,
-            content: [
-              ...serverMessage.content.filter((part) => part.type === 'text'),
-              ...tagged.content.filter((part) => part.type !== 'text'),
-            ],
+            content: serverMessage.content,
             sequenceNo: serverMessage.sequenceNo,
             createdAt: serverMessage.createdAt || tagged.createdAt,
           };

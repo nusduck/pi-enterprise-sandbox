@@ -218,8 +218,6 @@ export function createSkillManager(options = {}) {
     localAllowlist,
     identity,
     isEnabled: () => mode === SKILLS_MODE.ENABLED,
-    /** @deprecated renamed to isEnabled */
-    isDevelopment: () => mode === SKILLS_MODE.ENABLED,
     isUnderSkillRoot: (p) => isUnderSkillRoot(p, skillRoots),
     /** Names only, across both tiers (system shadows user). */
     listInstalled: () =>

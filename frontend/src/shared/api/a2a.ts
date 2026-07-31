@@ -43,8 +43,9 @@ const A2aConfigSchema = z
 const CredentialMutationSchema = z
   .object({
     credential: A2aCredentialSchema,
+    // The Agent emits `token` and a `bearerToken` duplicate of the same value;
+    // `token` is the canonical key.
     token: z.string().optional(),
-    bearerToken: z.string().optional(),
   })
   .passthrough();
 

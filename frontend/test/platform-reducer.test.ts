@@ -135,7 +135,7 @@ describe('normalizeToRuntimeEvent', () => {
 });
 
 describe('unified platform reducer', () => {
-  it('applies platform tool/process/approval/dataset/artifact chain', () => {
+  it('applies platform tool/process/approval/artifact chain', () => {
     const runId = '01HZRUN0000000000000000001';
     const { store, applied } = reducePlatformEventBatch(createEntityStore(), [
       platform({
@@ -194,20 +194,8 @@ describe('unified platform reducer', () => {
         },
       }),
       platform({
-        eventId: '01HZEVT0000000000000000017',
-        sequence: 8,
-        type: 'dataset.ready',
-        runId,
-        data: {
-          datasetId: 'ds1',
-          name: 'sales.csv',
-          path: 'datasets/sales.csv',
-          sizeBytes: 1200,
-        },
-      }),
-      platform({
         eventId: '01HZEVT0000000000000000018',
-        sequence: 9,
+        sequence: 8,
         type: 'artifact.ready',
         runId,
         data: {
@@ -219,15 +207,13 @@ describe('unified platform reducer', () => {
       }),
     ]);
 
-    assert.ok(applied >= 9);
+    assert.ok(applied >= 8);
     assert.equal(store.toolExecutionsById.tc_bash.status, 'completed');
     assert.equal(store.toolExecutionsById.tc_bash.source, 'sandbox');
     assert.equal(store.processesById.p1.stdout, '/workspace\n');
     assert.equal(store.processesById.p1.status, 'completed');
     assert.equal(store.approvalsById.ap_net.status, 'pending');
     assert.equal(store.approvalsById.ap_net.risk, 'high');
-    assert.equal(store.datasetsById.ds1.status, 'ready');
-    assert.equal(store.datasetsById.ds1.path, 'datasets/sales.csv');
     assert.equal(store.artifactsById.art1.source, 'submit_artifact');
     assert.equal(store.artifactsById.art1.sha256, 'deadbeef');
     assert.equal(store.artifactsById.art1.description, 'Q1 report');
@@ -852,5 +838,153 @@ describe('refresh recovery', () => {
     } finally {
       globalThis.fetch = originalFetch;
     }
+  });
+});
+
+describe('process handle on tool completion', () => {
+  const runId = '01HZRUN0000000000000000000';
+
+  it('links a completed process_start to its console via process_id', () => {
+    const { store } = reducePlatformEventBatch(createEntityStore(), [
+      platform({
+        eventId: '01HZPROC000000000000000001',
+        sequence: 1,
+        type: 'tool.execution.started',
+        runId,
+        data: { toolCallId: 'tc_ps', toolName: 'process_start' },
+      }),
+      platform({
+        eventId: '01HZPROC000000000000000002',
+        sequence: 2,
+        type: 'tool.execution.completed',
+        runId,
+        data: {
+          toolCallId: 'tc_ps',
+          toolName: 'process_start',
+          processId: '01HZPROCESS0000000000000AA',
+        },
+      }),
+    ]);
+    assert.equal(
+      store.toolExecutionsById.tc_ps.processId,
+      '01HZPROCESS0000000000000AA',
+    );
+  });
+
+  it('does not clear a known process id when a later event omits it', () => {
+    let store = createEntityStore();
+    ({ store } = reducePlatformEventBatch(store, [
+      platform({
+        eventId: '01HZPROC000000000000000003',
+        sequence: 1,
+        type: 'tool.execution.completed',
+        runId,
+        data: {
+          toolCallId: 'tc_keep',
+          toolName: 'process_start',
+          processId: '01HZPROCESS0000000000000BB',
+        },
+      }),
+    ]));
+    ({ store } = reducePlatformEventBatch(store, [
+      platform({
+        eventId: '01HZPROC000000000000000004',
+        sequence: 2,
+        type: 'tool.execution.failed',
+        runId,
+        data: { toolCallId: 'tc_keep', toolName: 'process_start' },
+      }),
+    ]));
+    assert.equal(
+      store.toolExecutionsById.tc_keep.processId,
+      '01HZPROCESS0000000000000BB',
+    );
+  });
+
+  it('leaves an ordinary tool without a process id', () => {
+    const { store } = reducePlatformEventBatch(createEntityStore(), [
+      platform({
+        eventId: '01HZPROC000000000000000005',
+        sequence: 1,
+        type: 'tool.execution.completed',
+        runId,
+        data: { toolCallId: 'tc_bash', toolName: 'bash', result: 'ok' },
+      }),
+    ]);
+    assert.equal(store.toolExecutionsById.tc_bash.processId, null);
+  });
+});
+
+describe('event id spelling across inbound shapes', () => {
+  const runId = '01HZRUN0000000000000000000';
+
+  // The SSE wire was collapsed to snake_case `event_id`, but a raw platform
+  // event still spells it `eventId`. Losing that read silently downgrades a
+  // durable id to a synthesized one and breaks Last-Event-ID resume.
+  it('keeps the durable id from a raw platform event (camelCase)', () => {
+    const ev = normalizeToRuntimeEvent(
+      platform({
+        eventId: '01HZEVT0000000000000000031',
+        sequence: 1,
+        type: 'run.started',
+        runId,
+      }),
+    );
+    assert.equal(ev?.event_id, '01HZEVT0000000000000000031');
+  });
+
+  it('keeps the durable id from a BFF relay envelope (snake_case)', () => {
+    const ev = normalizeToRuntimeEvent({
+      sequence: 4,
+      ts: 1,
+      event_id: '01HZEVT0000000000000000032',
+      event: {
+        type: 'run.started',
+        event_id: '01HZEVT0000000000000000032',
+        run_id: runId,
+      },
+    });
+    assert.equal(ev?.event_id, '01HZEVT0000000000000000032');
+    assert.equal(ev?.sequence, 4);
+    assert.equal(ev?.type, 'run.started');
+  });
+});
+
+describe('model identity on the run', () => {
+  const runId = '01HZRUN0000000000000000000';
+
+  // The runs table has no model column, so the provider call event is the only
+  // statement of which model served the turn.
+  it('records the model id from a provider call', () => {
+    const { store } = reducePlatformEventBatch(createEntityStore(), [
+      platform({
+        eventId: '01HZMODEL00000000000000001',
+        sequence: 1,
+        type: 'model.request.started',
+        runId,
+        data: { modelId: 'deepseek-v4-flash', provider: 'llmio' },
+      }),
+    ]);
+    assert.equal(store.runsById[runId].modelId, 'deepseek-v4-flash');
+  });
+
+  it('does not clear the model when a later event omits it', () => {
+    const { store } = reducePlatformEventBatch(createEntityStore(), [
+      platform({
+        eventId: '01HZMODEL00000000000000002',
+        sequence: 1,
+        type: 'model.request.started',
+        runId,
+        data: { modelId: 'deepseek-v4-flash' },
+      }),
+      platform({
+        eventId: '01HZMODEL00000000000000003',
+        sequence: 2,
+        type: 'model.request.completed',
+        runId,
+        data: { status: 200, durationMs: 12 },
+      }),
+    ]);
+    assert.equal(store.runsById[runId].modelId, 'deepseek-v4-flash');
   });
 });

@@ -15,7 +15,10 @@ import {
   getRunMessages,
   getRunToolExecutions,
   isTerminalRunStatus,
+  listProcessesForSession,
+  upsertProcess,
 } from '../src/entities/index.ts';
+import { processRowToEntity } from '../src/features/chat/entityBridge.ts';
 import {
   reduceRuntimeEvent,
   reduceRuntimeEventBatch,
@@ -401,6 +404,27 @@ describe('run event reducer', () => {
     assert.equal(s.runsById.run_y.lastSequence, 2);
   });
 
+  it('carries the Agent model_id onto the run entity', () => {
+    // The model chip and the inspector read run.modelId; the agent-session
+    // entity it used to read is never populated.
+    let s = createEntityStore();
+    s = rehydrateRun(s, {
+      run_id: 'run_model',
+      conversation_id: 'c_model',
+      status: 'succeeded',
+      model_id: 'claude-opus-5',
+    });
+    assert.equal(s.runsById.run_model.modelId, 'claude-opus-5');
+
+    // A later snapshot without the field must not erase it.
+    s = rehydrateRun(s, {
+      run_id: 'run_model',
+      conversation_id: 'c_model',
+      status: 'succeeded',
+    });
+    assert.equal(s.runsById.run_model.modelId, 'claude-opus-5');
+  });
+
   it('rehydrates in-progress run and resumes sequence', () => {
     let s = createEntityStore();
     s = rehydrateRun(s, {
@@ -440,5 +464,73 @@ describe('run event reducer', () => {
     assert.equal(next.outcome, 'applied');
     assert.equal(next.store.runsById.run_rh.lastSequence, 11);
     assert.equal(next.store.messagesById.m_rh.text, 'resumed');
+  });
+});
+
+describe('managed processes (session scope)', () => {
+  it('projects a BFF process row and lists it by session', () => {
+    let s = createEntityStore();
+    const entity = processRowToEntity(
+      {
+        process_id: 'p_1',
+        run_id: 'run_a',
+        sandbox_session_id: 'sess_1',
+        command: 'npm run dev',
+        status: 'running',
+        started_at: '2026-08-01T10:00:00.000Z',
+      },
+      { sessionId: 'sess_1' },
+    );
+    assert.ok(entity);
+    s = upsertProcess(s, entity);
+
+    assert.deepEqual(
+      listProcessesForSession(s, 'sess_1').map((p) => p.id),
+      ['p_1'],
+    );
+    assert.deepEqual(listProcessesForSession(s, 'other'), []);
+    assert.deepEqual(listProcessesForSession(s, null), []);
+  });
+
+  it('keeps a process from an earlier run visible in the session list', () => {
+    // Managed processes outlive the run that started them, which is why the
+    // list is fetched and rendered per session rather than per run.
+    let s = createEntityStore();
+    for (const [id, runId] of [
+      ['p_old', 'run_1'],
+      ['p_new', 'run_2'],
+    ]) {
+      const entity = processRowToEntity(
+        {
+          process_id: id,
+          run_id: runId,
+          sandbox_session_id: 'sess_1',
+          command: 'tail -f log',
+          status: 'running',
+        },
+        { sessionId: 'sess_1' },
+      );
+      if (entity) s = upsertProcess(s, entity);
+    }
+    assert.deepEqual(
+      listProcessesForSession(s, 'sess_1')
+        .map((p) => p.id)
+        .sort(),
+      ['p_new', 'p_old'],
+    );
+  });
+
+  it('falls back to created for a status this client does not know', () => {
+    const entity = processRowToEntity({
+      process_id: 'p_2',
+      run_id: 'run_a',
+      command: 'sleep 1',
+      status: 'some_future_status',
+    });
+    assert.equal(entity?.status, 'created');
+  });
+
+  it('drops a row without a process id', () => {
+    assert.equal(processRowToEntity({ process_id: '', command: 'x', status: 'running' }), null);
   });
 });
