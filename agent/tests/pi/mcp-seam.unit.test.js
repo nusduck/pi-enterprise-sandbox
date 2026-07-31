@@ -168,6 +168,22 @@ describe('pi-mcp-adapter-factory', () => {
       () => loadMcpServerRegistry([{ id: 'db', url: 'https://mcp.test', command: 'x' }]),
       (err) => err.code === 'MCP_SERVER_REGISTRY_INVALID',
     );
+    const withTransport = loadMcpServerRegistry([
+      {
+        id: 'exa',
+        url: 'https://mcp.exa.ai/mcp',
+        transport: 'streamable-http',
+        enabled: true,
+      },
+    ]);
+    assert.equal(withTransport.get('exa')?.transport, 'streamable-http');
+    assert.throws(
+      () =>
+        loadMcpServerRegistry([
+          { id: 'bad', url: 'https://mcp.test', transport: 'websocket' },
+        ]),
+      (err) => err.code === 'MCP_SERVER_REGISTRY_INVALID',
+    );
     const resolveSecret = createEnvironmentSecretResolver({ MCP_DB_TOKEN: 'secret-value' });
     assert.equal(await resolveSecret('MCP_DB_TOKEN'), 'secret-value');
     await assert.rejects(

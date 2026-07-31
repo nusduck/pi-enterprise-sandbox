@@ -19,9 +19,97 @@
 
 import { Type } from 'typebox';
 
+import {
+  toolOk,
+  toolResultJson,
+} from '../sandbox-bridge/result.js';
 import { SKILL_LIFECYCLE_TOOL_NAMES } from './constants.js';
 
 export { SKILL_LIFECYCLE_TOOL_NAMES };
+
+/**
+ * Pi custom tools must return AgentToolResult: `{ content: [{type:'text',...}] }`.
+ * Returning a bare object (e.g. `{ skills: [...] }`) makes the next model turn
+ * fail with `content is not iterable`.
+ *
+ * @param {unknown} value
+ * @param {{ maxDetailString?: number }} [opts]
+ */
+function skillToolResult(value, opts = {}) {
+  // Model-facing text uses toolResultJson's 50KB budget. Keep details
+  // compact for event projection (redactPayload caps array length).
+  return toolOk(toolResultJson(value), value, {
+    maxDetailString: opts.maxDetailString ?? 2_048,
+  });
+}
+
+/**
+ * Compact skill records for the model: keep tier/editable so system
+ * (bundled `./skills` → SKILLS_ROOT) vs user (`skill-user/<org>/<user>`)
+ * stay distinguishable, and bound description length so a large system
+ * catalog still fits the tool-result budget.
+ *
+ * @param {unknown} skills
+ * @returns {object[]}
+ */
+function compactSkillRecords(skills) {
+  if (!Array.isArray(skills)) return [];
+  return skills.map((raw) => {
+    if (!raw || typeof raw !== 'object') {
+      return { name: String(raw ?? ''), tier: 'unknown', editable: false };
+    }
+    const s = /** @type {Record<string, unknown>} */ (raw);
+    const tier = s.tier === 'user' ? 'user' : s.tier === 'system' ? 'system' : 'unknown';
+    const description =
+      typeof s.description === 'string'
+        ? s.description.length > 400
+          ? `${s.description.slice(0, 400)}…`
+          : s.description
+        : undefined;
+    return {
+      name: String(s.name ?? ''),
+      tier,
+      editable: tier === 'user' || s.editable === true,
+      path: s.path != null ? String(s.path) : undefined,
+      root: s.root != null ? String(s.root) : undefined,
+      ...(description !== undefined ? { description } : {}),
+    };
+  });
+}
+
+/**
+ * Two-tier list payload: system (bundled, read-only) + user (installable).
+ * @param {{
+ *   skills: unknown,
+ *   userSkillRoot?: string | null,
+ *   skillRoots?: unknown,
+ * }} input
+ */
+function buildSkillListPayload(input) {
+  const skills = compactSkillRecords(input.skills);
+  const system = skills.filter((s) => s.tier === 'system');
+  const user = skills.filter((s) => s.tier === 'user');
+  return {
+    // Full union, system first (SkillManager already orders that way).
+    skills,
+    counts: {
+      total: skills.length,
+      system: system.length,
+      user: user.length,
+    },
+    // Explicit split so the model does not treat system packages as editable.
+    system_skills: system,
+    user_skills: user,
+    user_skill_root: input.userSkillRoot ?? null,
+    skill_roots: Array.isArray(input.skillRoots) ? input.skillRoots : [],
+    tiers: {
+      system:
+        'Bundled/read-only skills from SKILLS_ROOT (repo ./skills mounted at /home/sandbox/skill). Cannot install/edit/uninstall.',
+      user:
+        'Per-user skills under skill-user/<orgId>/<userId>. skill_install / skill_edit / skill_uninstall only affect this tier.',
+    },
+  };
+}
 
 /**
  * @param {unknown} err
@@ -70,20 +158,29 @@ export function createSkillLifecycleExtension(options) {
       name: 'skill_list',
       label: 'List skills',
       description:
-        'List installed skill packages with their tier (system = bundled and read-only, user = installed and editable).',
-      promptSnippet: 'Inspect which skill packages are installed and editable',
+        'List skill packages in both tiers: system (bundled from ./skills / SKILLS_ROOT, read-only) and user (per-org/user installs, editable). Returns counts plus system_skills and user_skills.',
+      promptSnippet:
+        'Inspect system (bundled) and user-installed skill packages',
       parameters: Type.Object({}),
       async execute() {
         try {
           const skills =
             typeof manager.describeInstalled === 'function'
               ? manager.describeInstalled()
-              : manager.listInstalled();
-          return {
-            skills,
-            user_skill_root: manager.userSkillRoot ?? null,
-            skill_roots: manager.skillRoots ?? [],
-          };
+              : // Fallback: names only — still mark as unknown tier rather than
+                // inventing "user" and implying they are editable.
+                (manager.listInstalled?.() ?? []).map((name) => ({
+                  name,
+                  tier: 'unknown',
+                  editable: false,
+                }));
+          return skillToolResult(
+            buildSkillListPayload({
+              skills,
+              userSkillRoot: manager.userSkillRoot ?? null,
+              skillRoots: manager.skillRoots ?? [],
+            }),
+          );
         } catch (err) {
           throw toolError(err, 'list');
         }
@@ -133,7 +230,7 @@ export function createSkillLifecycleExtension(options) {
             error: err instanceof Error ? err.message : String(err),
           };
         }
-        return { ...result, reload };
+        return skillToolResult({ ...result, reload });
       },
     });
 
@@ -162,7 +259,7 @@ export function createSkillLifecycleExtension(options) {
             error: err instanceof Error ? err.message : String(err),
           };
         }
-        return { ...result, reload };
+        return skillToolResult({ ...result, reload });
       },
     });
 
@@ -178,7 +275,9 @@ export function createSkillLifecycleExtension(options) {
       }),
       async execute(_toolCallId, input) {
         try {
-          return await manager.edit({ path: input.path, content: input.content });
+          return skillToolResult(
+            await manager.edit({ path: input.path, content: input.content }),
+          );
         } catch (err) {
           throw toolError(err, 'edit');
         }
@@ -194,7 +293,7 @@ export function createSkillLifecycleExtension(options) {
       parameters: Type.Object({}),
       async execute() {
         try {
-          return await manager.reload();
+          return skillToolResult(await manager.reload());
         } catch (err) {
           throw toolError(err, 'reload');
         }

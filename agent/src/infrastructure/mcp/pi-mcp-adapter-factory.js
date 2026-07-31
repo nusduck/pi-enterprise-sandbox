@@ -48,10 +48,25 @@ export const MCP_DISCOVERY_DEFAULT_CONCURRENCY = 4;
 export const MCP_DISCOVERY_DEFAULT_OVERALL_TIMEOUT_MS = 60_000;
 /** Per-server discovery hard cap (A5); min()'d with server requestTimeoutMs. */
 export const MCP_DISCOVERY_DEFAULT_PER_SERVER_TIMEOUT_MS = 15_000;
+/**
+ * Per-server connect attempts during discovery. Streamable-HTTP servers that
+ * briefly fail probe then fall through to SSE (405) need a second chance —
+ * cold start / DNS / concurrent probe races are common at worker boot.
+ */
+export const MCP_DISCOVERY_DEFAULT_PER_SERVER_ATTEMPTS = 3;
+/** Delay between per-server discovery attempts (ms), multiplied by attempt index. */
+export const MCP_DISCOVERY_DEFAULT_RETRY_BACKOFF_MS = 750;
 /** Bound args JSON size before MCP dispatch (A4). */
 export const MCP_TOOL_ARGS_MAX_JSON_BYTES = 256 * 1024;
 /** Bound result JSON size after await, before deep redact (A4). */
 export const MCP_TOOL_RESULT_MAX_JSON_BYTES = 1024 * 1024;
+
+/** Allowed values for MCP_SERVERS_JSON[].transport (url servers only). */
+export const MCP_TRANSPORT_VALUES = Object.freeze([
+  'streamable-http',
+  'sse',
+  'auto',
+]);
 
 const require = createRequire(import.meta.url);
 const SECRET_REF_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
@@ -280,6 +295,29 @@ export function loadMcpServerRegistry(raw) {
       );
     }
 
+    // transport is advisory for http(s) servers. Vendor adapter probes
+    // streamable-http first then SSE; we retain the declared preference so
+    // discovery retries can prefer re-probing streamable over caching a
+    // transient SSE 405 as a permanent failure.
+    let transport = null;
+    if (value.transport != null && String(value.transport).trim() !== '') {
+      transport = String(value.transport).trim().toLowerCase();
+      if (!MCP_TRANSPORT_VALUES.includes(transport)) {
+        throw new PiMcpAdapterError(
+          `MCP server ${serverId}.transport must be one of ${MCP_TRANSPORT_VALUES.join(', ')}`,
+          { code: 'MCP_SERVER_REGISTRY_INVALID' },
+        );
+      }
+      if (!url && transport) {
+        throw new PiMcpAdapterError(
+          `MCP server ${serverId}.transport is only valid for url servers`,
+          { code: 'MCP_SERVER_REGISTRY_INVALID' },
+        );
+      }
+    } else if (url) {
+      transport = 'auto';
+    }
+
     registry.set(
       serverId,
       Object.freeze({
@@ -298,10 +336,21 @@ export function loadMcpServerRegistry(raw) {
           HEADER_NAME_PATTERN,
         ),
         timeoutMs,
+        transport,
       }),
     );
   }
   return registry;
+}
+
+/**
+ * @param {number} ms
+ * @returns {Promise<void>}
+ */
+function sleep(ms) {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }
 
 /**
@@ -514,6 +563,21 @@ export async function discoverEnabledMcpServers(options = {}) {
       ? Number(options.perServerTimeoutMs)
       : MCP_DISCOVERY_DEFAULT_PER_SERVER_TIMEOUT_MS,
   );
+  const perServerAttempts = Math.max(
+    1,
+    Math.min(
+      5,
+      Number.isFinite(options.perServerAttempts)
+        ? Number(options.perServerAttempts)
+        : MCP_DISCOVERY_DEFAULT_PER_SERVER_ATTEMPTS,
+    ),
+  );
+  const retryBackoffMs = Math.max(
+    0,
+    Number.isFinite(options.retryBackoffMs)
+      ? Number(options.retryBackoffMs)
+      : MCP_DISCOVERY_DEFAULT_RETRY_BACKOFF_MS,
+  );
 
   const McpServerManager = loadPinnedAdapterConnectionManager();
   const manager = new McpServerManager(options.cwd);
@@ -523,51 +587,57 @@ export async function discoverEnabledMcpServers(options = {}) {
   /**
    * @param {ReturnType<typeof loadMcpServerRegistry> extends Map<string, infer V> ? V : never} server
    */
-  async function discoverOne(server) {
-    try {
-      /** @type {Record<string, unknown>} */
-      const definition = {
-        ...(server.url ? { url: server.url } : {}),
-        ...(server.command
-          ? {
-              command: server.command,
-              args: [...server.args],
-              ...(server.cwd ? { cwd: server.cwd } : {}),
-            }
-          : {}),
-        lifecycle: 'eager',
-        directTools: false,
-        exposeResources: false,
-        requestTimeoutMs: Math.min(server.timeoutMs ?? 60_000, perServerTimeoutMs),
-        debug: false,
-      };
-      const env = {};
-      for (const [name, ref] of Object.entries(server.envRefs)) {
-        env[name] = await resolveSecretValue(ref, secretResolver);
-      }
-      if (Object.keys(env).length > 0) definition.env = env;
-      const headers = {};
-      for (const [name, ref] of Object.entries(server.headerRefs)) {
-        headers[name] = await resolveSecretValue(ref, secretResolver);
-      }
-      if (Object.keys(headers).length > 0) definition.headers = headers;
-      if (server.authTokenRef) {
-        definition.auth = 'bearer';
-        definition.bearerToken = await resolveSecretValue(
-          server.authTokenRef,
-          secretResolver,
-        );
-      } else {
-        definition.auth = false;
-      }
-
-      // McpServerManager.connect performs MCP initialization and tools/list
-      // (including pagination) before it resolves successfully.
-      const connection = await withTimeout(
-        manager.connect(server.serverId, definition),
-        Math.min(server.timeoutMs ?? 60_000, perServerTimeoutMs),
-        `MCP discovery ${server.serverId}`,
+  async function discoverOneAttempt(server) {
+    /** @type {Record<string, unknown>} */
+    const definition = {
+      ...(server.url ? { url: server.url } : {}),
+      ...(server.command
+        ? {
+            command: server.command,
+            args: [...server.args],
+            ...(server.cwd ? { cwd: server.cwd } : {}),
+          }
+        : {}),
+      lifecycle: 'eager',
+      directTools: false,
+      exposeResources: false,
+      requestTimeoutMs: Math.min(server.timeoutMs ?? 60_000, perServerTimeoutMs),
+      debug: false,
+    };
+    const env = {};
+    for (const [name, ref] of Object.entries(server.envRefs)) {
+      env[name] = await resolveSecretValue(ref, secretResolver);
+    }
+    if (Object.keys(env).length > 0) definition.env = env;
+    const headers = {};
+    for (const [name, ref] of Object.entries(server.headerRefs)) {
+      headers[name] = await resolveSecretValue(ref, secretResolver);
+    }
+    if (Object.keys(headers).length > 0) definition.headers = headers;
+    if (server.authTokenRef) {
+      definition.auth = 'bearer';
+      definition.bearerToken = await resolveSecretValue(
+        server.authTokenRef,
+        secretResolver,
       );
+    } else {
+      definition.auth = false;
+    }
+
+    // Use a distinct manager name per attempt so a failed connect (SSE 405
+    // after streamable probe) does not poison reuse of a half-open entry.
+    const attemptName = `${server.serverId}__discover_${Date.now()}_${Math.random()
+      .toString(36)
+      .slice(2, 8)}`;
+
+    // McpServerManager.connect performs MCP initialization and tools/list
+    // (including pagination) before it resolves successfully.
+    const connection = await withTimeout(
+      manager.connect(attemptName, definition),
+      Math.min(server.timeoutMs ?? 60_000, perServerTimeoutMs),
+      `MCP discovery ${server.serverId}`,
+    );
+    try {
       if (connection.status !== 'connected') {
         throw new PiMcpAdapterError(
           `MCP server ${server.serverId} requires interactive authentication`,
@@ -595,24 +665,48 @@ export async function discoverEnabledMcpServers(options = {}) {
         toolCount: uniqueNames.length,
         rejectedToolCount,
         error: null,
+        transport: server.transport ?? null,
       });
-    } catch (error) {
-      const rawMessage =
-        error instanceof Error ? error.message : 'MCP discovery failed';
-      const safeMessage = redactPayload(
-        { message: rawMessage.slice(0, 512) },
-        { maxString: 512 },
-      ).message;
-      return Object.freeze({
-        serverId: server.serverId,
-        status: 'unreachable',
-        toolNames: Object.freeze([]),
-        toolInputSchemas: Object.freeze({}),
-        toolCount: 0,
-        rejectedToolCount: 0,
-        error: typeof safeMessage === 'string' ? safeMessage : 'MCP discovery failed',
-      });
+    } finally {
+      // Drop the probe connection; runtime binding opens a fresh one.
+      if (typeof manager.close === 'function') {
+        await manager.close(attemptName).catch(() => {});
+      }
     }
+  }
+
+  /**
+   * @param {ReturnType<typeof loadMcpServerRegistry> extends Map<string, infer V> ? V : never} server
+   */
+  async function discoverOne(server) {
+    /** @type {unknown} */
+    let lastError = null;
+    for (let attempt = 1; attempt <= perServerAttempts; attempt += 1) {
+      try {
+        return await discoverOneAttempt(server);
+      } catch (error) {
+        lastError = error;
+        if (attempt < perServerAttempts) {
+          await sleep(retryBackoffMs * attempt);
+        }
+      }
+    }
+    const rawMessage =
+      lastError instanceof Error ? lastError.message : 'MCP discovery failed';
+    const safeMessage = redactPayload(
+      { message: rawMessage.slice(0, 512) },
+      { maxString: 512 },
+    ).message;
+    return Object.freeze({
+      serverId: server.serverId,
+      status: 'unreachable',
+      toolNames: Object.freeze([]),
+      toolInputSchemas: Object.freeze({}),
+      toolCount: 0,
+      rejectedToolCount: 0,
+      error: typeof safeMessage === 'string' ? safeMessage : 'MCP discovery failed',
+      transport: server.transport ?? null,
+    });
   }
 
   /** @type {Awaited<ReturnType<typeof discoverOne>>[]} */
@@ -1277,7 +1371,20 @@ function intersectMcpConfigWithRegistry(declared, registrySurface) {
 export function createPiMcpResolver(options = {}) {
   // Validate deployment config during assembly, before the first model request.
   const registry = loadMcpServerRegistry(options.serverRegistry ?? []);
-  const defaultMcpServers = loadMcpConfig(options.defaultMcpServers ?? []);
+  /**
+   * Live catalog of discovered MCP servers. Prefer a getter so a later
+   * rediscovery (worker recovered after a cold-start SSE 405) is visible to
+   * every subsequent run without rebuilding the Pi runtime factory.
+   * @returns {unknown}
+   */
+  const readDefaultMcpServers = () => {
+    if (typeof options.getDefaultMcpServers === 'function') {
+      return options.getDefaultMcpServers();
+    }
+    return options.defaultMcpServers ?? [];
+  };
+  const resolveDefaultMcpServers = () => loadMcpConfig(readDefaultMcpServers() ?? []);
+
   const resolver = async function resolveForRuntime(input) {
     // The deployment registry's discovered surface (defaultMcpServers) is the
     // connectivity catalog. When it is empty (no discovery wired), defer to
@@ -1289,6 +1396,7 @@ export function createPiMcpResolver(options = {}) {
     // which the caller may have already collapsed to the registry default)
     // so an absent/null declaration -- nothing to restrict to -- still
     // inherits the full surface.
+    const defaultMcpServers = resolveDefaultMcpServers();
     const declaredMcpServers = loadMcpConfigFromAgentVersion(
       input.agentVersion ?? null,
     );
@@ -1312,6 +1420,7 @@ export function createPiMcpResolver(options = {}) {
         envRefs: cloneJson(entry.envRefs),
         headerRefs: cloneJson(entry.headerRefs),
         timeoutMs: entry.timeoutMs,
+        transport: entry.transport,
       })),
       secretResolver: options.secretResolver,
       runtimeRoot: options.runtimeRoot,
@@ -1323,9 +1432,13 @@ export function createPiMcpResolver(options = {}) {
       spanRandomBytes: options.spanRandomBytes,
     });
   };
-  // PiRuntimeFactory reads this immutable hint before it decides whether to
-  // materialize the extension. It is populated only by bootstrap discovery.
-  resolver.defaultMcpServers = defaultMcpServers;
+  // PiRuntimeFactory reads this before it decides whether to materialize the
+  // extension. Use a live getter so rediscovery can unlock MCP mid-process.
+  Object.defineProperty(resolver, 'defaultMcpServers', {
+    enumerable: true,
+    configurable: true,
+    get: () => resolveDefaultMcpServers(),
+  });
   return resolver;
 }
 

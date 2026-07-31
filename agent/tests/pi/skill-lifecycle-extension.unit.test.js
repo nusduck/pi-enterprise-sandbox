@@ -121,9 +121,13 @@ describe('skill-lifecycle extension', () => {
     const result = await tools.get('skill_install').execute('call-1', {
       source: 'https://example.com/org/repo',
     });
-    assert.equal(result.name, 'inferred');
+    // Pi AgentToolResult shape — bare objects break the next model turn.
+    assert.ok(Array.isArray(result.content));
+    assert.equal(result.content[0]?.type, 'text');
+    assert.match(result.content[0]?.text ?? '', /inferred/);
+    assert.equal(result.details?.name, 'inferred');
     assert.equal(reloaded, true);
-    assert.equal(result.reload.reloaded, true);
+    assert.equal(result.details?.reload?.reloaded, true);
   });
 
   it('a failed reload does not lose the successful install', async () => {
@@ -142,9 +146,56 @@ describe('skill-lifecycle extension', () => {
     const result = await tools.get('skill_install').execute('call-1', {
       source: '/srv/src',
     });
-    assert.equal(result.name, 'x');
-    assert.equal(result.reload.reloaded, false);
-    assert.match(result.reload.error, /loader exploded/);
+    assert.ok(Array.isArray(result.content));
+    assert.equal(result.details?.name, 'x');
+    assert.equal(result.details?.reload?.reloaded, false);
+    assert.match(result.details?.reload?.error ?? '', /loader exploded/);
+  });
+
+  it('skill_list returns AgentToolResult with system + user tiers', async () => {
+    const tools = collectTools(
+      createSkillLifecycleExtension({
+        runContext: RUN_CTX,
+        deps: {
+          skillManager: fakeSkillManager({
+            describeInstalled: () => [
+              {
+                name: 'pdf',
+                tier: 'system',
+                editable: false,
+                path: '/home/sandbox/skill/pdf',
+                root: '/home/sandbox/skill',
+                description: 'System bundled PDF skill',
+              },
+              {
+                name: 'my-team-skill',
+                tier: 'user',
+                editable: true,
+                path: `/home/sandbox/skill-user/${RUN_CTX.orgId}/${RUN_CTX.userId}/my-team-skill`,
+                root: `/home/sandbox/skill-user/${RUN_CTX.orgId}/${RUN_CTX.userId}`,
+                description: 'User-installed skill',
+              },
+            ],
+          }),
+        },
+      }),
+    );
+    const result = await tools.get('skill_list').execute('call-list', {});
+    // Pi AgentToolResult shape — bare objects break the next model turn.
+    assert.ok(Array.isArray(result.content), 'content must be iterable');
+    assert.equal(result.content[0]?.type, 'text');
+    const text = result.content[0]?.text ?? '';
+    assert.match(text, /"tier":"system"/);
+    assert.match(text, /"tier":"user"/);
+    assert.match(text, /system_skills/);
+    assert.match(text, /user_skills/);
+    const body = JSON.parse(text);
+    assert.equal(body.counts.system, 1);
+    assert.equal(body.counts.user, 1);
+    assert.equal(body.system_skills[0].name, 'pdf');
+    assert.equal(body.system_skills[0].editable, false);
+    assert.equal(body.user_skills[0].name, 'my-team-skill');
+    assert.equal(body.user_skills[0].editable, true);
   });
 
   it('loads in the bundle when an enabled manager is injected', () => {

@@ -434,6 +434,138 @@ describe('PiRunExecutor', () => {
     await exec.dispose();
   });
 
+  it('ignores intermediate Connection error when the final assistant stopReason is stop', async () => {
+    // Provider/network flakes record stopReason=error mid-prompt; Pi may retry
+    // and finish successfully. Only the last new assistant entry is terminal.
+    const exec = makeExecutor({
+      entries: [
+        {
+          type: 'message',
+          id: 'assistant-conn-1',
+          parentId: null,
+          timestamp: '2026-07-18T00:00:01.000Z',
+          message: {
+            role: 'assistant',
+            content: [],
+            stopReason: 'error',
+            errorMessage: 'Connection error.',
+            provider: 'llmio',
+          },
+        },
+        {
+          type: 'message',
+          id: 'assistant-conn-2',
+          parentId: 'assistant-conn-1',
+          timestamp: '2026-07-18T00:00:02.000Z',
+          message: {
+            role: 'assistant',
+            content: [],
+            stopReason: 'error',
+            errorMessage: 'Connection error.',
+            provider: 'llmio',
+          },
+        },
+        {
+          type: 'message',
+          id: 'assistant-ok',
+          parentId: 'assistant-conn-2',
+          timestamp: '2026-07-18T00:00:03.000Z',
+          message: {
+            role: 'assistant',
+            content: [{ type: 'text', text: 'Here is your plan.' }],
+            stopReason: 'stop',
+            provider: 'llmio',
+          },
+        },
+      ],
+      messageEnds: [
+        {
+          type: 'message_end',
+          message: {
+            role: 'assistant',
+            content: [{ type: 'text', text: 'Here is your plan.' }],
+            stopReason: 'stop',
+          },
+        },
+      ],
+    });
+    const result = await exec.execute({
+      run: {
+        runId: RUN,
+        agentSessionId: SESS,
+        conversationId: CONV,
+        agentVersionId: VER,
+        triggeringMessageId: TRIG,
+        traceId: 'b'.repeat(32),
+      },
+      scope,
+      workerId: 'w-conn-retry-ok',
+      signal: new AbortController().signal,
+    });
+
+    assert.equal(result.outcome, RUN_STATUS.SUCCEEDED);
+    assert.equal(result.statusReason, null);
+    await exec.dispose();
+  });
+
+  it('still FAILED when the final assistant is stopReason=error after intermediate retries', async () => {
+    const exec = makeExecutor({
+      entries: [
+        {
+          type: 'message',
+          id: 'assistant-conn-1',
+          parentId: null,
+          timestamp: '2026-07-18T00:00:01.000Z',
+          message: {
+            role: 'assistant',
+            content: [],
+            stopReason: 'error',
+            errorMessage: 'Connection error.',
+          },
+        },
+        {
+          type: 'message',
+          id: 'assistant-final-error',
+          parentId: 'assistant-conn-1',
+          timestamp: '2026-07-18T00:00:02.000Z',
+          message: {
+            role: 'assistant',
+            content: [],
+            stopReason: 'error',
+            errorMessage: 'Connection error.',
+          },
+        },
+      ],
+      messageEnds: [
+        {
+          type: 'message_end',
+          message: {
+            role: 'assistant',
+            content: [],
+            stopReason: 'error',
+          },
+        },
+      ],
+    });
+    const result = await exec.execute({
+      run: {
+        runId: RUN,
+        agentSessionId: SESS,
+        conversationId: CONV,
+        agentVersionId: VER,
+        triggeringMessageId: TRIG,
+        traceId: 'b'.repeat(32),
+      },
+      scope,
+      workerId: 'w-conn-retry-fail',
+      signal: new AbortController().signal,
+    });
+
+    assert.equal(result.outcome, RUN_STATUS.FAILED);
+    assert.match(String(result.statusReason), /Connection error/);
+    await exec.dispose();
+  });
+
   it('returns CANCELLED when Pi resolves with a terminal assistant stopReason=aborted', async () => {
     const exec = makeExecutor({
       entries: [

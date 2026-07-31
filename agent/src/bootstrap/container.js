@@ -289,34 +289,92 @@ export class ServiceContainer {
     this.startPromise = null;
     /** @type {Promise<void> | null} */
     this.shutdownPromise = null;
-    /** Immutable per-process MCP startup discovery snapshot. */
+    /**
+     * Latest MCP discovery snapshot (may be incomplete after a cold-start
+     * failure). Refreshed by {@link preflightMcpServers}; incomplete results
+     * are not permanent — later force/cooldown refreshes can recover tools.
+     */
     this.mcpDiscovery = null;
+    /** @type {number} epoch ms of last discovery attempt */
+    this.mcpDiscoveryAt = 0;
     /** @type {Promise<object> | null} */
     this.mcpDiscoveryPromise = null;
+    /** @type {ReturnType<typeof setInterval> | null} */
+    this.mcpRediscoveryTimer = null;
   }
 
   /**
    * Connect enabled MCP_SERVERS_JSON entries and run adapter-owned tools/list
-   * discovery once per Agent process. Failures are retained for /ready rather
-   * than being silently converted into an empty tool list.
+   * discovery. Retries transient Streamable-HTTP → SSE 405 races at worker
+   * boot. Incomplete snapshots are retained for /ready diagnostics but can be
+   * refreshed (force or cooldown) so runs are not stuck without MCP forever.
+   *
+   * @param {{
+   *   force?: boolean,
+   *   maxAttempts?: number,
+   *   retryCooldownMs?: number,
+   * }} [opts]
    */
-  async preflightMcpServers() {
-    if (this.mcpDiscovery) return this.mcpDiscovery;
+  async preflightMcpServers(opts = {}) {
+    const force = opts.force === true;
+    const retryCooldownMs = Number.isFinite(opts.retryCooldownMs)
+      ? Math.max(0, Number(opts.retryCooldownMs))
+      : 30_000;
+    const maxAttempts = Math.max(
+      1,
+      Math.min(5, Number.isFinite(opts.maxAttempts) ? Number(opts.maxAttempts) : 3),
+    );
+
+    if (this.mcpDiscovery && !force) {
+      const complete =
+        this.mcpDiscovery.ready === true ||
+        Number(this.mcpDiscovery.serverCount ?? 0) === 0 ||
+        Number(this.mcpDiscovery.toolCount ?? 0) > 0;
+      if (complete) return this.mcpDiscovery;
+      const age = Date.now() - (this.mcpDiscoveryAt || 0);
+      if (age < retryCooldownMs) return this.mcpDiscovery;
+      // Incomplete and cooldown elapsed → fall through to rediscover.
+    }
     if (this.mcpDiscoveryPromise) return this.mcpDiscoveryPromise;
+
     this.mcpDiscoveryPromise = import(
       '../infrastructure/mcp/pi-mcp-adapter-factory.js'
     )
       .then(async ({ createEnvironmentSecretResolver, discoverEnabledMcpServers }) => {
-        const snapshot = await discoverEnabledMcpServers({
-          serverRegistry: this.env.MCP_SERVERS_JSON || '[]',
-          secretResolver: createEnvironmentSecretResolver(this.env),
-          cwd:
-            this.env.AGENT_PI_DEFAULT_CWD ||
-            this.env.AGENT_SESSION_WORKSPACE_CWD ||
-            undefined,
-        });
+        const secretResolver = createEnvironmentSecretResolver(this.env);
+        const cwd =
+          this.env.AGENT_PI_DEFAULT_CWD ||
+          this.env.AGENT_SESSION_WORKSPACE_CWD ||
+          undefined;
+        const serverRegistry = this.env.MCP_SERVERS_JSON || '[]';
+
+        /** @type {object | null} */
+        let snapshot = null;
+        for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+          snapshot = await discoverEnabledMcpServers({
+            serverRegistry,
+            secretResolver,
+            cwd,
+          });
+          if (
+            snapshot.ready === true ||
+            Number(snapshot.serverCount ?? 0) === 0 ||
+            Number(snapshot.toolCount ?? 0) > 0
+          ) {
+            break;
+          }
+          if (attempt < maxAttempts) {
+            const delayMs = 750 * attempt;
+            console.warn(
+              `[agent-mcp] discovery incomplete (attempt ${attempt}/${maxAttempts}); retrying in ${delayMs}ms`,
+            );
+            await new Promise((resolve) => setTimeout(resolve, delayMs));
+          }
+        }
+
         this.mcpDiscovery = snapshot;
-        for (const server of snapshot.servers) {
+        this.mcpDiscoveryAt = Date.now();
+        for (const server of snapshot?.servers ?? []) {
           if (server.status === 'connected') {
             console.log(
               `[agent-mcp] MCP Server connected id=${server.serverId} tools=${server.toolCount}`,
@@ -327,12 +385,43 @@ export class ServiceContainer {
             );
           }
         }
+        // Background rediscovery if still incomplete so a later run can pick
+        // up tools without a process restart.
+        this.#ensureMcpRediscoveryLoop();
         return snapshot;
       })
       .finally(() => {
         this.mcpDiscoveryPromise = null;
       });
     return this.mcpDiscoveryPromise;
+  }
+
+  /**
+   * When bootstrap discovery left servers unreachable, periodically re-probe
+   * so worker runs can gain MCP tools without a restart.
+   */
+  #ensureMcpRediscoveryLoop() {
+    if (this.mcpRediscoveryTimer) return;
+    if (this.mcpDiscovery?.ready === true) return;
+    if (Number(this.mcpDiscovery?.serverCount ?? 0) === 0) return;
+    this.mcpRediscoveryTimer = setInterval(() => {
+      if (this.mcpDiscovery?.ready === true || Number(this.mcpDiscovery?.toolCount ?? 0) > 0) {
+        if (this.mcpRediscoveryTimer) {
+          clearInterval(this.mcpRediscoveryTimer);
+          this.mcpRediscoveryTimer = null;
+        }
+        return;
+      }
+      void this.preflightMcpServers({ force: true, maxAttempts: 2 }).catch((err) => {
+        console.error(
+          '[agent-mcp] background rediscovery failed:',
+          err instanceof Error ? err.message : err,
+        );
+      });
+    }, 30_000);
+    if (typeof this.mcpRediscoveryTimer.unref === 'function') {
+      this.mcpRediscoveryTimer.unref();
+    }
   }
 
   getMcpReadiness() {
@@ -749,7 +838,9 @@ export class ServiceContainer {
             createEnvironmentSecretResolver,
             createPiMcpResolver,
           } = await import('../infrastructure/mcp/pi-mcp-adapter-factory.js');
-          const mcpDiscovery = await this.preflightMcpServers();
+          await this.preflightMcpServers();
+          // Live getter: background rediscovery updates mcpDiscovery and the
+          // next run sees newly connected tools without rebuilding the factory.
           mcpResolver = createPiMcpResolver({
             serverRegistry: this.env.MCP_SERVERS_JSON || '[]',
             secretResolver:
@@ -757,7 +848,7 @@ export class ServiceContainer {
               createEnvironmentSecretResolver(this.env),
             runtimeRoot:
               opts.mcpRuntimeRoot || this.env.AGENT_MCP_RUNTIME_ROOT || undefined,
-            defaultMcpServers: mcpDiscovery.mcpServers,
+            getDefaultMcpServers: () => this.getMcpReadiness().mcpServers ?? [],
           });
         }
         const { primarySkillRoot } = await import('../skills/paths.js');
@@ -1422,6 +1513,11 @@ export class ServiceContainer {
     this.shutdownDone = true;
     /** @type {unknown[]} */
     const errors = [];
+
+    if (this.mcpRediscoveryTimer) {
+      clearInterval(this.mcpRediscoveryTimer);
+      this.mcpRediscoveryTimer = null;
+    }
 
     if (this.runQueueHandle) {
       try {

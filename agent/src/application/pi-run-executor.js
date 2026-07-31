@@ -1387,6 +1387,12 @@ export class PiRunExecutor {
    * of rejecting `session.prompt()`. Convert those terminal markers into the
    * RunExecutor contract before ExecuteRunService commits the Run status.
    *
+   * Only the **last** new assistant message for this prompt decides the
+   * outcome. Intermediate `stopReason=error` entries are common when the
+   * provider hits a transient "Connection error" and Pi retries within the
+   * same prompt — those must not poison a later successful turn that ends
+   * with `stop` / `toolUse` / etc.
+   *
    * @param {{ entries?: object[] }} payload
    * @param {Set<string>} priorEntryIds
    * @returns {{ outcome: string, statusReason: string } | null}
@@ -1395,6 +1401,8 @@ export class PiRunExecutor {
     const prior = priorEntryIds instanceof Set ? priorEntryIds : new Set();
     const entries = Array.isArray(payload?.entries) ? payload.entries : [];
 
+    /** @type {{ stopReason: string, message: Record<string, unknown> } | null} */
+    let lastNewAssistant = null;
     for (let index = entries.length - 1; index >= 0; index -= 1) {
       const entry = entries[index];
       if (!entry || entry.type !== 'message') continue;
@@ -1404,31 +1412,40 @@ export class PiRunExecutor {
       const message = entry.message;
       if (!message || message.role !== 'assistant') continue;
 
-      const stopReason = String(message.stopReason ?? '')
-        .trim()
-        .toLowerCase();
-      if (stopReason === 'error') {
-        const runtimeDetail = sanitizeStatusReason(
-          message.errorMessage ?? message.error?.message ?? message.error,
-        );
-        return {
-          outcome: RUN_STATUS.FAILED,
-          statusReason: runtimeDetail
-            ? `Pi runtime completed with assistant stopReason=error: ${runtimeDetail}`
-            : 'Pi runtime completed with assistant stopReason=error',
-        };
-      }
-      if (
-        stopReason === 'aborted' ||
-        stopReason === 'interrupted' ||
-        stopReason === 'cancelled' ||
-        stopReason === 'canceled'
-      ) {
-        return {
-          outcome: RUN_STATUS.CANCELLED,
-          statusReason: `Pi runtime completed with assistant stopReason=${stopReason}`,
-        };
-      }
+      lastNewAssistant = {
+        stopReason: String(message.stopReason ?? '')
+          .trim()
+          .toLowerCase(),
+        message: /** @type {Record<string, unknown>} */ (message),
+      };
+      // First hit walking reverse = latest new assistant for this prompt.
+      break;
+    }
+
+    if (!lastNewAssistant) return null;
+
+    const { stopReason, message } = lastNewAssistant;
+    if (stopReason === 'error') {
+      const runtimeDetail = sanitizeStatusReason(
+        message.errorMessage ?? message.error?.message ?? message.error,
+      );
+      return {
+        outcome: RUN_STATUS.FAILED,
+        statusReason: runtimeDetail
+          ? `Pi runtime completed with assistant stopReason=error: ${runtimeDetail}`
+          : 'Pi runtime completed with assistant stopReason=error',
+      };
+    }
+    if (
+      stopReason === 'aborted' ||
+      stopReason === 'interrupted' ||
+      stopReason === 'cancelled' ||
+      stopReason === 'canceled'
+    ) {
+      return {
+        outcome: RUN_STATUS.CANCELLED,
+        statusReason: `Pi runtime completed with assistant stopReason=${stopReason}`,
+      };
     }
 
     return null;
