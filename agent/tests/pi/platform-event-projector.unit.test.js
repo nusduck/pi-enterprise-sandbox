@@ -31,6 +31,34 @@ describe('PlatformEventProjector', () => {
     assert.equal(ev.payload.delta, 'hello');
   });
 
+  it('maps provider thinking events and redacts secrets', () => {
+    const p = new PlatformEventProjector();
+    const events = p.projectMany([
+      {
+        type: 'message_update',
+        assistantMessageEvent: { type: 'thinking_start' },
+      },
+      {
+        type: 'message_update',
+        assistantMessageEvent: {
+          type: 'thinking_delta',
+          delta: 'inspect Authorization: Bearer secret-token-value',
+        },
+      },
+      {
+        type: 'message_update',
+        assistantMessageEvent: { type: 'thinking_end', content: 'safe result' },
+      },
+    ], CTX);
+    assert.deepEqual(events.map((event) => event.type), [
+      'thinking.started',
+      'thinking.delta',
+      'thinking.completed',
+    ]);
+    assert.doesNotMatch(String(events[1].payload.delta), /secret-token-value/);
+    assert.equal(events[2].payload.text, 'safe result');
+  });
+
   it('message_end → message.completed + tool.call.proposed for toolCall blocks', () => {
     const p = new PlatformEventProjector();
     const events = p.project(

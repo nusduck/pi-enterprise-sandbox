@@ -12,6 +12,8 @@ import {
   createPiRunExecutorFactory,
   generateRunLeaseOwnerToken,
   derivePromptFromTriggeringMessage,
+  imageAttachmentsFromTriggeringMessage,
+  requestedModelIdFromTriggeringMessage,
   toPiPromptInvocation,
 } from '../../src/application/pi-run-executor.js';
 import { SessionLockManager } from '../../src/infrastructure/redis/session-lock-manager.js';
@@ -221,9 +223,11 @@ function createFakePiRuntimeFactory(opts = {}) {
         async steer(text) {
           if (typeof opts.onSteer === 'function') await opts.onSteer(text);
         },
-        async prompt(p) {
+        async prompt(p, promptOptions) {
           if (opts.failPrompt) throw opts.failPrompt;
-          if (typeof opts.onPrompt === 'function') await opts.onPrompt(p, { aborted });
+          if (typeof opts.onPrompt === 'function') {
+            await opts.onPrompt(p, { aborted, options: promptOptions });
+          }
           for (const ev of messageEnds) {
             for (const fn of subs) fn(ev);
           }
@@ -294,6 +298,35 @@ describe('derivePromptFromTriggeringMessage', () => {
       text: 'browser prompt',
     });
   });
+
+  it('extracts model and image attachment ids without trusting browser paths', () => {
+    const message = {
+      contentJson: {
+        modelId: 'gpt-5.5',
+        messages: [{
+          role: 'user',
+          content: 'look',
+          attachments: [{
+            attachment_id: 'dataset-1',
+            workspace_path: '../../outside.png',
+            mime_type: 'image/png',
+            size: 123,
+          }],
+        }],
+      },
+    };
+    assert.equal(requestedModelIdFromTriggeringMessage(message), 'gpt-5.5');
+    assert.deepEqual(imageAttachmentsFromTriggeringMessage(message), [{
+      attachmentId: 'dataset-1',
+      mimeType: 'image/png',
+      name: 'image',
+      size: 123,
+    }]);
+    assert.equal(
+      'workspacePath' in imageAttachmentsFromTriggeringMessage(message)[0],
+      false,
+    );
+  });
 });
 
 describe('generateRunLeaseOwnerToken', () => {
@@ -333,7 +366,8 @@ describe('PiRunExecutor', () => {
         renewIntervalMs: 60_000,
       }),
       piRuntimeFactory: createFakePiRuntimeFactory(factoryOpts),
-      modelResolver: async () => fullModel,
+      modelResolver: async () => factoryOpts.model ?? fullModel,
+      promptImageLoader: factoryOpts.promptImageLoader,
       workspaceResolver: async (sess) => `/workspace/${sess.workspaceId}`,
       generateId,
       now: () => new Date(),
@@ -384,6 +418,60 @@ describe('PiRunExecutor', () => {
     );
     assert.ok(uiAssistant, 'UI assistant message persisted for history');
     assert.notEqual(uiAssistant.message_type, 'pi_journal_entry');
+    await exec.dispose();
+  });
+
+  it('loads current-turn image ids and passes Pi prompt image content directly', async () => {
+    state.tables.messages[0].content_json = JSON.stringify({
+      modelId: 'gpt-5.5',
+      messages: [{
+        role: 'user',
+        content: 'describe image',
+        attachments: [{
+          attachment_id: 'dataset-1',
+          mime_type: 'image/png',
+          size: 8,
+        }],
+      }],
+    });
+    let loaderInput;
+    let promptInput;
+    const image = {
+      type: 'image',
+      data: 'iVBORw0KGgo=',
+      mimeType: 'image/png',
+    };
+    const exec = makeExecutor({
+      model: { ...fullModel, id: 'gpt-5.5', input: ['text', 'image'] },
+      promptImageLoader: async (input) => {
+        loaderInput = input;
+        return [image];
+      },
+      onPrompt: async (text, state) => {
+        promptInput = { text, options: state.options };
+      },
+    });
+    const result = await exec.execute({
+      run: {
+        runId: RUN,
+        agentSessionId: SESS,
+        conversationId: CONV,
+        agentVersionId: VER,
+        triggeringMessageId: TRIG,
+        traceId: 'b'.repeat(32),
+      },
+      scope,
+      workerId: 'w-image',
+      signal: new AbortController().signal,
+    });
+
+    assert.equal(result.outcome, RUN_STATUS.SUCCEEDED);
+    assert.equal(loaderInput.attachments[0].attachmentId, 'dataset-1');
+    assert.equal(loaderInput.sandboxSessionId, SBX);
+    assert.deepEqual(promptInput, {
+      text: 'describe image',
+      options: { images: [image] },
+    });
     await exec.dispose();
   });
 

@@ -52,13 +52,20 @@ describe('Run API idempotency headers', () => {
       });
     };
 
-    await createRun({ messages: [{ role: 'user', content: 'hello' }] });
+    await createRun({
+      model_id: 'gpt-5.5',
+      messages: [{ role: 'user', content: 'hello' }],
+    });
 
     assert.equal(requests.length, 1);
     assert.equal(requests[0].url, '/api/runs');
     assert.equal(requests[0].init?.method, 'POST');
     const headers = requests[0].init?.headers as Record<string, string>;
     assert.match(headers['Idempotency-Key'], /^run_[A-Za-z0-9_-]+$/);
+    assert.equal(
+      JSON.parse(String(requests[0].init?.body)).model_id,
+      'gpt-5.5',
+    );
   });
 
   it('adds a cancel-specific idempotency key', async () => {

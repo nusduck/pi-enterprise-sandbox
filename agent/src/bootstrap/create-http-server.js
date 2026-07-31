@@ -822,6 +822,7 @@ export function createAgentHttpServer(deps) {
               : {}),
             idempotencyKey,
             agentProfileId: body.agent_profile_id || body.agentProfileId || null,
+            modelId: body.model_id || body.modelId || null,
             budget: body.budget || null,
             spanId: traceContext.parentSpanId,
           });

@@ -540,8 +540,18 @@ export function createSandboxClient({ traceId = null, traceState = null, auth = 
       return resp.json();
     },
 
-    async downloadFileStream(sessionId, path) {
-      return sbFetch(`/sessions/${sessionId}/files/download?path=${encodeURIComponent(path)}`);
+    async downloadFileStream(sessionId, path, options = {}) {
+      return sbFetch(
+        `/sessions/${sessionId}/files/download?path=${encodeURIComponent(path)}`,
+        { signal: options.signal },
+      );
+    },
+
+    async downloadDatasetContent(sessionId, datasetId, options = {}) {
+      return sbFetch(
+        `/sessions/${encodeURIComponent(sessionId)}/datasets/${encodeURIComponent(datasetId)}/content`,
+        { signal: options.signal },
+      );
     },
 
     // ── Artifacts (submit only — no metadata-only register) ──

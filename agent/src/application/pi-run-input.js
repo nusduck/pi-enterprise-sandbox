@@ -64,6 +64,44 @@ export function derivePromptFromTriggeringMessage(message) {
   return JSON.stringify(content);
 }
 
+/** Resolve the explicit per-Run model selection persisted by CreateRun. */
+export function requestedModelIdFromTriggeringMessage(message) {
+  const value = message?.contentJson?.modelId ?? message?.contentJson?.model_id;
+  return typeof value === 'string' && value.trim() ? value.trim() : null;
+}
+
+/**
+ * Extract current-turn image attachment references without trusting a browser
+ * path as bytes. The worker later resolves each id through the owner-scoped
+ * attachment store and converts the exact bytes to Pi ImageContent.
+ */
+export function imageAttachmentsFromTriggeringMessage(message) {
+  const content = message?.contentJson;
+  if (!content || typeof content !== 'object') return [];
+  const messages = Array.isArray(content.messages) ? content.messages : [];
+  const current = [...messages]
+    .reverse()
+    .find((item) => item && typeof item === 'object' &&
+      (item.role === 'user' || item.role == null));
+  const attachments = Array.isArray(current?.attachments)
+    ? current.attachments
+    : Array.isArray(content.attachments)
+      ? content.attachments
+      : [];
+  return attachments.flatMap((item) => {
+    if (!item || typeof item !== 'object') return [];
+    const mimeType = String(item.mime_type ?? item.mimeType ?? '').trim().toLowerCase();
+    const attachmentId = String(item.attachment_id ?? item.attachmentId ?? '').trim();
+    if (!mimeType.startsWith('image/') || !attachmentId) return [];
+    return [{
+      attachmentId,
+      mimeType,
+      name: String(item.filename ?? item.name ?? 'image'),
+      size: Number(item.size) || null,
+    }];
+  });
+}
+
 /**
  * Adapt durable text/image parts to AgentSession.prompt(text, { images }).
  * Pi 0.80.3 always requires the first argument to be a string.

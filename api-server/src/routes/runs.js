@@ -138,7 +138,7 @@ export function readIdempotencyKeyHeader(req) {
  *
  * @param {object} body
  * @param {{ conversationId?: string|null }} [opts]
- * @returns {{ messages: unknown[], conversation_id: string|null, agent_profile_id?: string, budget?: unknown } | { error: string }}
+ * @returns {{ messages: unknown[], conversation_id: string|null, agent_profile_id?: string, model_id?: string, budget?: unknown } | { error: string }}
  */
 export function normalizeCreateRunBody(body, opts = {}) {
   let messages = body?.messages;
@@ -172,6 +172,7 @@ export function normalizeCreateRunBody(body, opts = {}) {
     messages,
     conversation_id: conversationId,
     agent_profile_id: body.agent_profile_id || body.agentProfileId || undefined,
+    model_id: body.model_id || body.modelId || undefined,
     budget: body.budget || undefined,
   };
 }
@@ -199,6 +200,7 @@ export async function handleCreateRun(body, res, req = null, routeOpts = {}) {
         conversation_id: normalized.conversation_id,
         trace_id: traceId,
         agent_profile_id: normalized.agent_profile_id,
+        model_id: normalized.model_id,
         budget: normalized.budget,
       },
       {

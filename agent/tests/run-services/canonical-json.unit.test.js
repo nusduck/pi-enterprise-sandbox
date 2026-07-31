@@ -70,6 +70,16 @@ describe('canonical-json', () => {
     assert.notEqual(h1, h3);
   });
 
+  it('treats model selection as part of the idempotent request body', () => {
+    const messages = [{ role: 'user', content: 'hi' }];
+    const flash = hashCreateRunRequest({
+      messages,
+      modelId: 'deepseek-v4-flash',
+    });
+    const vision = hashCreateRunRequest({ messages, modelId: 'gpt-5.5' });
+    assert.notEqual(flash, vision);
+  });
+
   it('hashCreateRunRequest bounds empty/missing messages', () => {
     assert.throws(() => hashCreateRunRequest({ messages: [] }), CanonicalJsonError);
     assert.throws(

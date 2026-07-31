@@ -62,6 +62,9 @@ export function Composer() {
     resolveApproval,
     respondInteraction,
     displayMessages,
+    models,
+    selectedModelId,
+    setSelectedModelId,
   } = useChat();
 
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -443,6 +446,48 @@ export function Composer() {
               </span>
             </div>
           ))}
+        </div>
+
+        <div className="composer-model-row">
+          <label htmlFor="composer-model">Model</label>
+          <select
+            id="composer-model"
+            value={selectedModelId || ''}
+            onChange={(event) => setSelectedModelId(event.target.value)}
+            disabled={mode !== 'idle' || models.length === 0}
+            aria-label="Select model"
+          >
+            <option value="">Default model</option>
+            {models.map((model) => {
+              const id = String(model.model_id || model.id || '');
+              const name = String(model.name || id);
+              const modalities = Array.isArray(model.input_modalities)
+                ? model.input_modalities.map(String)
+                : [];
+              return (
+                <option key={id} value={id}>
+                  {name}{modalities.includes('image') ? ' · Vision' : ''}
+                  {model.supports_reasoning ? ' · Thinking' : ''}
+                </option>
+              );
+            })}
+          </select>
+          {selectedModelId ? (
+            <span className="composer-model-limits">
+              {(() => {
+                const selected = models.find(
+                  (model) => (model.model_id || model.id) === selectedModelId,
+                );
+                if (!selected) return '';
+                const context = Number(selected.context_window || 0);
+                const output = Number(selected.max_output_tokens || 0);
+                return [
+                  context ? `${Math.round(context / 1024)}k context` : '',
+                  output ? `${Math.round(output / 1024)}k output` : '',
+                ].filter(Boolean).join(' · ');
+              })()}
+            </span>
+          ) : null}
         </div>
 
         <div className="input-inner">

@@ -454,8 +454,8 @@ export const config = {
    * entry for the active MODEL_ID. Registry is the sole capability source on
    * the session-create hot path (see src/infrastructure/model-registry.js).
    */
-  MODEL_CONTEXT_WINDOW: parseInt(process.env.MODEL_CONTEXT_WINDOW, 10) || 128000,
-  MODEL_MAX_TOKENS: parseInt(process.env.MODEL_MAX_TOKENS, 10) || 8192,
+  MODEL_CONTEXT_WINDOW: parseInt(process.env.MODEL_CONTEXT_WINDOW, 10) || 262144,
+  MODEL_MAX_TOKENS: parseInt(process.env.MODEL_MAX_TOKENS, 10) || 65536,
   /** Optional path to enterprise model-registry.json (overrides seed). */
   MODEL_REGISTRY_PATH: process.env.MODEL_REGISTRY_PATH || '',
   /** True only when AGENT_ENABLE_FAKE_LLM is set and production guards pass. */

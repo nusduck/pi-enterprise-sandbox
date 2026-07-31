@@ -905,6 +905,8 @@ export function createEntityBridge(
       .map((m) => ({
         role: m.role,
         content: [{ type: 'text' as const, text: m.text }],
+        thinking: m.thinking,
+        thinkingStatus: m.thinkingStatus,
         _runId: runId,
         _messageId: m.id,
         createdAt: m.createdAt || undefined,

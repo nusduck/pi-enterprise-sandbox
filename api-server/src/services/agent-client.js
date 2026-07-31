@@ -102,7 +102,7 @@ function requestHeaders({
 }
 
 /**
- * @param {{ messages: unknown[], conversation_id?: string|null, trace_id?: string|null }} body
+ * @param {{ messages: unknown[], conversation_id?: string|null, trace_id?: string|null, model_id?: string|null }} body
  * @param {{ auth?: object|null, traceId?: string|null, idempotencyKey?: string|null }} [opts]
  */
 export async function createAgentRun(

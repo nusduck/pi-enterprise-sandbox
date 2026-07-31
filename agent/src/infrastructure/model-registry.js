@@ -16,6 +16,10 @@ import { fileURLToPath } from 'node:url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
+/** Platform defaults for models whose registry does not declare larger limits. */
+export const DEFAULT_CONTEXT_WINDOW = 262144;
+export const DEFAULT_MAX_OUTPUT_TOKENS = 65536;
+
 /** Default pricing when a model omits rates (cost reported as 0). */
 export const ZERO_PRICING = Object.freeze({
   input_per_mtok: 0,
@@ -36,8 +40,8 @@ export const SEED_MODELS = Object.freeze([
     name: 'DeepSeek V4 Flash',
     api_protocol: 'openai-completions',
     input_modalities: Object.freeze(['text']),
-    context_window: 128000,
-    max_output_tokens: 8192,
+    context_window: DEFAULT_CONTEXT_WINDOW,
+    max_output_tokens: DEFAULT_MAX_OUTPUT_TOKENS,
     supports_tool_call: true,
     supports_developer_role: false,
     supports_reasoning: false,
@@ -56,8 +60,8 @@ export const SEED_MODELS = Object.freeze([
     name: 'DeepSeek V4 Pro',
     api_protocol: 'openai-completions',
     input_modalities: Object.freeze(['text']),
-    context_window: 128000,
-    max_output_tokens: 8192,
+    context_window: DEFAULT_CONTEXT_WINDOW,
+    max_output_tokens: DEFAULT_MAX_OUTPUT_TOKENS,
     supports_tool_call: true,
     supports_developer_role: false,
     supports_reasoning: true,
@@ -78,7 +82,7 @@ export const SEED_MODELS = Object.freeze([
     // LLMIO gateway currently strips/ignores image_url for this model id.
     input_modalities: Object.freeze(['text']),
     context_window: 1048576,
-    max_output_tokens: 8192,
+    max_output_tokens: DEFAULT_MAX_OUTPUT_TOKENS,
     supports_tool_call: true,
     supports_developer_role: false,
     supports_reasoning: false,
@@ -97,8 +101,8 @@ export const SEED_MODELS = Object.freeze([
     name: 'GPT 5.5',
     api_protocol: 'openai-completions',
     input_modalities: Object.freeze(['text', 'image']),
-    context_window: 128000,
-    max_output_tokens: 16384,
+    context_window: DEFAULT_CONTEXT_WINDOW,
+    max_output_tokens: DEFAULT_MAX_OUTPUT_TOKENS,
     supports_tool_call: true,
     supports_developer_role: true,
     supports_reasoning: true,
@@ -118,8 +122,8 @@ export const SEED_MODELS = Object.freeze([
     api_protocol: 'openai-completions',
     // Verified vision via LLMIO OpenAI image_url (image_tokens in usage).
     input_modalities: Object.freeze(['text', 'image']),
-    context_window: 128000,
-    max_output_tokens: 8192,
+    context_window: DEFAULT_CONTEXT_WINDOW,
+    max_output_tokens: DEFAULT_MAX_OUTPUT_TOKENS,
     supports_tool_call: true,
     supports_developer_role: false,
     supports_reasoning: true,
@@ -138,8 +142,8 @@ export const SEED_MODELS = Object.freeze([
     name: 'MiMo v2.5 Pro',
     api_protocol: 'openai-completions',
     input_modalities: Object.freeze(['text']),
-    context_window: 128000,
-    max_output_tokens: 8192,
+    context_window: DEFAULT_CONTEXT_WINDOW,
+    max_output_tokens: DEFAULT_MAX_OUTPUT_TOKENS,
     supports_tool_call: true,
     supports_developer_role: false,
     supports_reasoning: false,
@@ -263,10 +267,16 @@ export function normalizeModelEntry(raw) {
       raw.api_protocol || raw.api || 'openai-completions',
     ),
     input_modalities: modalities,
-    context_window: Math.max(1, int(raw.context_window ?? raw.contextWindow, 128000)),
+    context_window: Math.max(
+      1,
+      int(raw.context_window ?? raw.contextWindow, DEFAULT_CONTEXT_WINDOW),
+    ),
     max_output_tokens: Math.max(
       1,
-      int(raw.max_output_tokens ?? raw.maxTokens, 8192),
+      int(
+        raw.max_output_tokens ?? raw.maxTokens,
+        DEFAULT_MAX_OUTPUT_TOKENS,
+      ),
     ),
     supports_tool_call: bool(raw.supports_tool_call, true),
     supports_developer_role: bool(raw.supports_developer_role, false),
@@ -626,4 +636,3 @@ export function listEnabledModels(registry) {
   const map = registry || buildRegistry();
   return [...map.values()].filter((m) => m.enabled);
 }
-

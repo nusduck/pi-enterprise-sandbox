@@ -25,6 +25,9 @@ export type FileLink = {
 export type ChatMessage = {
   role: 'user' | 'assistant' | string;
   content: ContentPart[];
+  /** Provider-emitted reasoning/thinking, shown collapsed by default. */
+  thinking?: string;
+  thinkingStatus?: 'idle' | 'streaming' | 'complete';
   attachments?: AttachmentManifestItem[];
   interrupted?: boolean;
   status?: string;

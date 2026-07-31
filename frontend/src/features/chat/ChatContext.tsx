@@ -46,6 +46,7 @@ import {
   getConversation,
   deleteConversation,
   listArtifacts,
+  listModels,
   importArtifact as apiImportArtifact,
   decideApproval,
   login as apiLogin,
@@ -53,6 +54,7 @@ import {
   logout as apiLogout,
   me as apiMe,
 } from '../../shared/api';
+import type { ModelItem } from '../../shared/api';
 import { createEntityBridge, type EntityBridge } from './entityBridge';
 import type { EntityStore } from '../../entities';
 import type { SSEEvent } from '../../shared/sse/parser';
@@ -66,6 +68,9 @@ export type ChatController = {
   draftText: string;
   setDraftText: (t: string) => void;
   dropzoneVisible: boolean;
+  models: ModelItem[];
+  selectedModelId: string | null;
+  setSelectedModelId: (modelId: string | null) => void;
   // Conversations
   selectConversation: (id: string) => Promise<void>;
   startNewChat: () => Promise<void>;
@@ -149,6 +154,11 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   });
   const [draftText, setDraftText] = useState('');
   const [dropzoneVisible, setDropzoneVisible] = useState(false);
+  const [models, setModels] = useState<ModelItem[]>([]);
+  const [selectedModelId, setSelectedModelIdState] = useState<string | null>(() => {
+    if (typeof window === 'undefined') return null;
+    return window.localStorage.getItem('pi.selectedModelId');
+  });
   const [entityStore, setEntityStore] = useState<EntityStore>(() =>
     createEntityBridge().getStore(),
   );
@@ -202,6 +212,32 @@ export function ChatProvider({ children }: { children: ReactNode }) {
 
   const clearFlash = useCallback(() => {
     setState((s) => update(s, { flashMessage: null }));
+  }, []);
+
+  const setSelectedModelId = useCallback((modelId: string | null) => {
+    const normalized = String(modelId || '').trim();
+    setSelectedModelIdState(normalized || null);
+    if (normalized) window.localStorage.setItem('pi.selectedModelId', normalized);
+    else window.localStorage.removeItem('pi.selectedModelId');
+  }, []);
+
+  const refreshModels = useCallback(async () => {
+    const result = await listModels();
+    const enabled = result.items.filter(
+      (model) => model.enabled !== false && Boolean(model.model_id || model.id),
+    );
+    setModels(enabled);
+    setSelectedModelIdState((current) => {
+      const valid = enabled.some(
+        (model) => (model.model_id || model.id) === current,
+      );
+      // No explicit choice means "use the AgentVersion/default policy". Do not
+      // silently override an immutable pinned model with the first catalog row.
+      const next = valid ? current : null;
+      if (next) window.localStorage.setItem('pi.selectedModelId', next);
+      else window.localStorage.removeItem('pi.selectedModelId');
+      return next;
+    });
   }, []);
 
   const refreshConversations = useCallback(async () => {
@@ -512,6 +548,19 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       const uploaded = uploadedAttachments(cur.attachments);
       const trimmed = (text ?? draftText).trim();
       if (!trimmed && uploaded.length === 0) return;
+      const selectedModel = models.find(
+        (model) => (model.model_id || model.id) === selectedModelId,
+      );
+      const hasImage = uploaded.some((attachment) =>
+        String(attachment.mimeType || '').toLowerCase().startsWith('image/'),
+      );
+      const modalities = Array.isArray(selectedModel?.input_modalities)
+        ? selectedModel.input_modalities.map(String)
+        : [];
+      if (hasImage && (!selectedModel || !modalities.includes('image'))) {
+        flashError('Choose a vision-capable model before sending image attachments');
+        return;
+      }
 
       // Keep a local identity through the asynchronous create-run round trip.
       // Selecting the "latest untagged user" races when two send attempts
@@ -547,6 +596,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         const created = await apiCreateRun({
           conversation_id: cur.conversationId,
           session_id: currentSessionId(),
+          model_id: selectedModelId,
           messages: [...cur.messages, userMsg],
         });
         if (!created.run_id) throw new Error('Run response is missing run_id');
@@ -664,6 +714,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
                   String((p as { text?: unknown }).text || '').trim()) ||
                 p.type === 'tool_use',
             ) ||
+              Boolean(m.thinking) ||
               Boolean(m._fileLinks?.length)),
         );
         setState((s) => {
@@ -763,6 +814,8 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       bridge,
       currentSessionId,
       currentTraceId,
+      models,
+      selectedModelId,
     ],
   );
 
@@ -1157,6 +1210,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       }
 
       await refreshConversations();
+      await refreshModels();
       if (cancelled) return;
 
       // UI preference only: restore last conversation id, then load messages
@@ -1204,7 +1258,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     return () => {
       cancelled = true;
     };
-  }, [refreshConversations, refreshArtifacts, setStatus, flashError, bridge]);
+  }, [refreshConversations, refreshArtifacts, refreshModels, setStatus, flashError, bridge]);
 
   // Dispose entity SSE managers on unmount (page unload)
   useEffect(() => {
@@ -1254,6 +1308,9 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     draftText,
     setDraftText,
     dropzoneVisible,
+    models,
+    selectedModelId,
+    setSelectedModelId,
     selectConversation,
     startNewChat,
     removeConversation,

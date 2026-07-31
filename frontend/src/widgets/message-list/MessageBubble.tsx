@@ -192,6 +192,18 @@ export function MessageBubble({
   const body: ReactNode[] = [];
   let visibleAttachments = msg.attachments || [];
 
+  if (!isUser && msg.thinking) {
+    body.push(
+      <details key="thinking" className="message-thinking">
+        <summary>
+          Thinking{msg.thinkingStatus === 'streaming' ? '…' : ''}
+        </summary>
+        <div className="message-thinking-body">{msg.thinking}</div>
+      </details>,
+    );
+    hasContent = true;
+  }
+
   // Prefer rich entity-backed steps (tools / process / approval / artifact).
   // Fall back to legacy ToolPill rail when history has only tool_use parts.
   if (!isUser && useEntitySteps && runId) {

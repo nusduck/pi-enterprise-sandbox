@@ -60,6 +60,7 @@ async function errorBody(resp: Response): Promise<Record<string, unknown>> {
 export async function createRun(body: {
   conversation_id?: string | null;
   session_id?: string | null;
+  model_id?: string | null;
   messages?: unknown[];
 }): Promise<CreateRunResponse> {
   try {

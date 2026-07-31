@@ -15,6 +15,9 @@ import { redactSecretText } from '../../lib/text-redaction.js';
 export const PROJECTOR_EVENT_TYPES = Object.freeze([
   'message.delta',
   'message.completed',
+  'thinking.started',
+  'thinking.delta',
+  'thinking.completed',
   'tool.call.proposed',
   'tool.execution.started',
   'tool.execution.progress',
@@ -342,6 +345,42 @@ export class PlatformEventProjector {
                 role: 'assistant',
                 delta: delta.slice(0, this.maxString),
                 delta_truncated: delta.length > this.maxString,
+              },
+            },
+          ];
+        }
+        if (ame?.type === 'thinking_start') {
+          return [
+            {
+              type: 'thinking.started',
+              payload: { ...base, role: 'assistant' },
+            },
+          ];
+        }
+        if (ame?.type === 'thinking_delta') {
+          const delta = redactInlineSecrets(String(ame.delta ?? ''));
+          return [
+            {
+              type: 'thinking.delta',
+              payload: {
+                ...base,
+                role: 'assistant',
+                delta: delta.slice(0, this.maxString),
+                delta_truncated: delta.length > this.maxString,
+              },
+            },
+          ];
+        }
+        if (ame?.type === 'thinking_end') {
+          const thinking = redactInlineSecrets(String(ame.content ?? ''));
+          return [
+            {
+              type: 'thinking.completed',
+              payload: {
+                ...base,
+                role: 'assistant',
+                text: thinking.slice(0, DEFAULT_MAX_RESULT_CHARS),
+                text_truncated: thinking.length > DEFAULT_MAX_RESULT_CHARS,
               },
             },
           ];

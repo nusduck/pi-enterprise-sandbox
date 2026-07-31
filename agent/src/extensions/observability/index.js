@@ -309,6 +309,27 @@ export function createObservabilityExtension(options) {
           delta: delta.slice(0, 512),
           delta_truncated: delta.length > 512,
         });
+      } else if (ame?.type === 'thinking_start') {
+        await emit('thinking.started', {
+          role: 'assistant',
+          messageId: activeAssistantMessage(),
+        });
+      } else if (ame?.type === 'thinking_delta') {
+        const delta = redactInlineSecrets(String(ame.delta ?? ''));
+        await emit('thinking.delta', {
+          role: 'assistant',
+          messageId: activeAssistantMessage(),
+          delta: delta.slice(0, 512),
+          delta_truncated: delta.length > 512,
+        });
+      } else if (ame?.type === 'thinking_end') {
+        const thinking = redactInlineSecrets(String(ame.content ?? ''));
+        await emit('thinking.completed', {
+          role: 'assistant',
+          messageId: activeAssistantMessage(),
+          text: thinking.slice(0, 2048),
+          text_truncated: thinking.length > 2048,
+        });
       }
     });
 

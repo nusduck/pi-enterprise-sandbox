@@ -7,6 +7,7 @@ Never buffers the full body in memory. Logical path:
 from __future__ import annotations
 
 from fastapi import APIRouter, File, Header, HTTPException, Request, UploadFile
+from fastapi.responses import FileResponse as FastAPIFileResponse
 
 from sandbox.models import DatasetListResponse, DatasetResponse
 from sandbox.security.ownership import require_owned_session, resolve_actor
@@ -135,6 +136,58 @@ def get_dataset(session_id: str, dataset_id: str, request: Request):
     if entry is None:
         raise HTTPException(status_code=404, detail="Dataset not found")
     return _entry_to_response(entry)
+
+
+@router.get("/{dataset_id}/content")
+def get_dataset_content(session_id: str, dataset_id: str, request: Request):
+    """Resolve an immutable attachment id to bytes under the owned session.
+
+    Browser-provided workspace paths are never accepted. The content hash is
+    returned so the Agent can reject a workspace file changed after upload.
+    """
+    session = _require_session(session_id, request)
+    context = SandboxExecutionContext.from_session(session)
+    org, uid, _conversation_id, agent_session_id = _ownership_from_request(
+        session, request
+    )
+    try:
+        entry = dataset_manager.get(
+            dataset_id,
+            org_id=org,
+            user_id=uid,
+            sandbox_session_id=session_id,
+            agent_session_id=agent_session_id,
+        )
+    except DatasetError as exc:
+        raise _dataset_http_error(exc) from exc
+    if entry is None or entry.status != "ready":
+        raise HTTPException(status_code=404, detail="Dataset not found")
+
+    from sandbox.services.file_manager import file_manager
+
+    try:
+        safe = file_manager.get_binary_path(
+            str(context.physical_workspace),
+            entry.stored_relative_path,
+            temp_path=str(context.physical_temp),
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    if not safe.is_file():
+        raise HTTPException(status_code=404, detail="Dataset content not found")
+
+    mime = entry.mime_type or "application/octet-stream"
+    if mime.lower() in {"text/html", "application/xhtml+xml", "image/svg+xml"}:
+        mime = "application/octet-stream"
+    return FastAPIFileResponse(
+        path=str(safe),
+        filename=entry.original_filename,
+        media_type=mime,
+        headers={
+            "X-Content-Type-Options": "nosniff",
+            "X-Dataset-Sha256": entry.sha256 or "",
+        },
+    )
 
 
 @router.post("", status_code=201, response_model=DatasetResponse)

@@ -158,12 +158,16 @@ export const ModelItemSchema = z
   .object({
     model_id: z.string().optional(),
     id: z.string().optional(),
+    name: z.string().optional().nullable(),
     provider: z.string().optional().nullable(),
     api_protocol: z.string().optional().nullable(),
     context_window: z.number().optional().nullable(),
     max_output_tokens: z.number().optional().nullable(),
     supports_tool_call: z.boolean().optional(),
     supports_reasoning: z.boolean().optional(),
+    input_modalities: z.array(z.string()).optional(),
+    output_modalities: z.array(z.string()).optional(),
+    thinking_levels: z.array(z.string()).optional(),
     enabled: z.boolean().optional(),
     pricing: z.record(z.string(), z.unknown()).optional().nullable(),
   })

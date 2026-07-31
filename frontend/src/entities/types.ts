@@ -163,6 +163,9 @@ export type MessageEntity = {
   role: MessageRole;
   /** Accumulated text body (deltas append here). */
   text: string;
+  /** Provider-emitted reasoning/thinking content (never synthesized). */
+  thinking: string;
+  thinkingStatus: 'idle' | 'streaming' | 'complete';
   status: MessageStatus;
   createdAt: string | null;
   updatedAt: string | null;
