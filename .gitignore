@@ -23,16 +23,12 @@ htmlcov/
 *~
 
 # ── Runtime data (created by compose / local runs; never commit) ──────────
-# Sandbox host bind mounts (docker-compose.yml):
+.runtime/
+# Legacy pre-.runtime locations remain ignored for non-destructive upgrades.
 workspaces/
 tmp-workspaces/
 artifacts/
 control/
-# Cross-service smoke temp root
-.smoke-tmp/
-# Live release-gate workspaces (scripts/release-gates/*)
-.release-gate-*/
-# Local / host-side Pi resource roots (container uses /app/pi-agent-home)
 pi-agent-home/
 agent/pi-agent-home/
 agent/.a2a-live-agent-home/

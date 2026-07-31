@@ -62,6 +62,26 @@ docker compose config -q
 node scripts/smoke-cross-service.mjs
 ```
 
+### 本地运行态目录
+
+宿主机生成的运行态统一位于 `.runtime/`，不得再在仓库根目录新增
+`workspaces/`、`tmp-workspaces/`、`artifacts/`、`control/` 或散落的
+smoke/gate 临时目录。
+
+```text
+.runtime/
+  sandbox/{workspaces,tmp,artifacts,control}
+  agent/pi-agent-home
+  smoke/
+  release-gates/
+  pytest-cache/
+  worktrees/
+```
+
+`.runtime/` 由 Git 和 Docker build context 共同忽略。容器内路径仍为
+`/var/sandbox/*` 与 `/app/pi-agent-home`，因此这一整理不改变运行协议。
+旧目录只为无损升级继续保持忽略；确认数据已迁移后可由维护者手动清理。
+
 ### 运行（本地四进程）
 
 ```bash

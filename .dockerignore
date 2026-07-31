@@ -1,6 +1,7 @@
 # Never send runtime data or local env into image builds
 .git/
 .venv/
+.runtime/
 node_modules/
 *.egg-info/
 .pytest_cache/

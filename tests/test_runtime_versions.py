@@ -259,7 +259,7 @@ def test_github_actions_versions(pins: dict) -> None:
 
 def test_active_docs_mention_pinned_majors(pins: dict) -> None:
     """Active developer-facing docs must not advertise stale Node 20 / open-ended pins only."""
-    contributing = _read("CONTRIBUTING.md")
+    contributing = _read("docs/CONTRIBUTING.md")
     development = _read("docs/development.md")
     # CONTRIBUTING previously said Node.js 20+
     assert "Node.js 20+" not in contributing

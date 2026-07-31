@@ -1,5 +1,6 @@
 /**
- * Parked WAITING_APPROVAL cancel (docs/2026-07-29-waiting-approval-bugs.md).
+ * Parked WAITING_APPROVAL cancel
+ * (docs/archive/reviews/2026-07-29-waiting-approval-bugs.md).
  */
 import { beforeEach, describe, it } from 'node:test';
 import assert from 'node:assert/strict';

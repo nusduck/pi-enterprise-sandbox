@@ -1,7 +1,7 @@
 # Documentation map
 
 This directory is the **active** documentation set for Pi Enterprise Sandbox.
-Root `plan.md` is the frozen refactor baseline and final acceptance criteria.
+`plan.md` is the frozen refactor baseline and final acceptance criteria.
 
 - [`module-layout.md`](./module-layout.md) — conventional source roots per service (agent/api-server/sandbox/frontend)
 - [`artifact-module.md`](./artifact-module.md) — Artifact domain boundary, frozen contracts, and cross-conversation Import MVP
@@ -11,20 +11,21 @@ Root `plan.md` is the frozen refactor baseline and final acceptance criteria.
 
 When documents disagree, use this order:
 
-1. **`plan.md` (repo root)** — locked architecture decisions + §32 final acceptance.
-2. **ADRs in `docs/adr/`** — recorded decisions that refine plan without contradicting it.
+1. **`plan.md`** — locked architecture decisions + §32 final acceptance.
+2. **ADRs in `adr/`** — recorded decisions that refine plan without contradicting it.
 3. **Descriptive active docs** — `architecture.md`, `api.md`, `deployment.md`, `development.md`, `webui.md`.
-4. **`docs/STATUS.md`** — living gap board vs `plan.md` §32 (must match code reality).
-5. **`docs/evidence/`** — dated gate runs; evidence supports STATUS, never replaces it.
+4. **`STATUS.md`** — living gap board vs `plan.md` §32 (must match code reality).
+5. **`evidence/`** — dated gate runs; evidence supports STATUS, never replaces it.
 6. **Code** — if STATUS and code diverge, code wins and STATUS must be fixed in the same change set.
 
-`docs/review-deferred-items.md` is a **non-blocking debt** board. It must not hide open P0 acceptance items (those belong in STATUS only).
+`review-deferred-items.md` is a **non-blocking debt** board. It must not hide open P0 acceptance items (those belong in STATUS only).
 
 ## Document roles
 
 | Path | Role | Update rule |
 |------|------|-------------|
-| `../plan.md` | Normative baseline + §32 acceptance | Rare; treat as frozen unless product re-scopes |
+| `plan.md` | Normative baseline + §32 acceptance | Rare; treat as frozen unless product re-scopes |
+| `CHANGELOG.md` / `CONTRIBUTING.md` | Project history and contribution guide | Keep links aligned with the active tree |
 | `architecture.md` | Current system description | Update when merged behavior changes |
 | `api.md` / `webui.md` / `deployment.md` / `development.md` | Operator & developer guides | Same PR as the behavior they describe |
 | `STATUS.md` | **Only** progress board vs plan §32 | Same commit as the work that changes open/done |
@@ -33,6 +34,8 @@ When documents disagree, use this order:
 | `review-deferred-items.md` | Non-blocking follow-ups | Never park severe P0 here |
 | `adr/*` | Architecture Decision Records | New ADR when a plan-compatible decision is locked |
 | `runbooks/*` | Operational procedures | Update when ops steps change |
+| `security/*` | Security profile provenance and operator notes | Update with the related runtime profile |
+| `archive/reviews/*` / `archive/discussions/*` | Historical reviews and unapproved design discussions | Never cite as current state without re-verification |
 
 ## Active ADRs
 

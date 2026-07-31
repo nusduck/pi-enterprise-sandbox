@@ -29,6 +29,13 @@ const SRC_ROOT = path.join(root, 'src');
  */
 const TRANSIENT_MAP_WHITELIST = Object.freeze([
   {
+    rel: 'bootstrap/http-main.js',
+    match: /const\s+sessionByAgentId\s*=\s*new\s+Map\s*\(/,
+    purpose:
+      'Function-local AgentSession batch lookup while presenting one owned Run list; MySQL remains authoritative',
+    scope: 'local',
+  },
+  {
     rel: 'application/fenced-run-event-recorder.js',
     match: /this\._pendingDedupe\s*=\s*new\s+Map\s*\(/,
     purpose:
@@ -331,9 +338,10 @@ describe('no authoritative in-process Run Map (B3)', () => {
     // 14 → 17: pi-mcp-adapter-factory partial discovery results (added by
     // f9105b90 without an inventory update), the two-tier skill listing, and
     // the tool-risk-policy layer merge. All function-local, none Run authority.
+    // 17 → 18: owner-scoped Run-list AgentSession batch lookup.
     assert.equal(
       TRANSIENT_MAP_WHITELIST.length,
-      17,
+      18,
       'whitelist size drift — update STATUS B3 inventory evidence if intentional',
     );
   });

@@ -5,45 +5,13 @@
  * and point LLMIO_BASE_URL at the returned base URL. Guards reject production.
  *
  * Usage (tests):
- *   const { startFakeOpenAIProvider, assertFakeLlmAllowed } = await import('./fake-openai-provider.js');
- *   assertFakeLlmAllowed(process.env);
+ *   const { startFakeOpenAIProvider } = await import('./fake-openai-provider.js');
  *   const fake = await startFakeOpenAIProvider();
  *   process.env.LLMIO_BASE_URL = fake.baseUrl;
  *   ...
  *   await fake.close();
  */
 import http from 'node:http';
-
-/** Env flag that enables the test-only fake provider. */
-export const FAKE_LLM_ENV = 'AGENT_ENABLE_FAKE_LLM';
-
-/**
- * True when the fake provider flag is set.
- * @param {NodeJS.ProcessEnv} [env]
- */
-export function isFakeLlmEnabled(env = process.env) {
-  const raw = env[FAKE_LLM_ENV];
-  if (raw == null || String(raw).trim() === '') return false;
-  const v = String(raw).toLowerCase();
-  return v === '1' || v === 'true' || v === 'yes' || v === 'on';
-}
-
-/**
- * Fail-closed production guard. Throws if fake LLM is requested under production.
- * @param {NodeJS.ProcessEnv} [env]
- * @returns {boolean} whether fake LLM is enabled (and allowed)
- */
-export function assertFakeLlmAllowed(env = process.env) {
-  if (!isFakeLlmEnabled(env)) return false;
-  const nodeEnv = String(env.NODE_ENV || '').toLowerCase();
-  const deployEnv = String(env.DEPLOYMENT_ENV || '').toLowerCase();
-  if (nodeEnv === 'production' || deployEnv === 'production') {
-    throw new Error(
-      `${FAKE_LLM_ENV} is forbidden when NODE_ENV or DEPLOYMENT_ENV is production`,
-    );
-  }
-  return true;
-}
 
 /**
  * Build a non-streaming OpenAI chat.completions payload.

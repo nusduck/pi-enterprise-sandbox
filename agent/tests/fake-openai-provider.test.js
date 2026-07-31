@@ -5,14 +5,16 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  FAKE_LLM_ENV,
-  assertFakeLlmAllowed,
-  isFakeLlmEnabled,
   startFakeOpenAIProvider,
   buildChatCompletionResponse,
   buildChatCompletionToolResponse,
   buildChatCompletionToolStream,
-} from '../testing/fake-openai-provider.js';
+} from './support/fake-openai-provider.js';
+import {
+  FAKE_LLM_ENV,
+  assertFakeLlmAllowed,
+  isFakeLlmEnabled,
+} from '../src/config/fake-llm-policy.js';
 
 describe('fake OpenAI provider guards', () => {
   it('is disabled by default', () => {

@@ -16,476 +16,49 @@
  */
 
 import http from 'node:http';
-import { randomBytes } from 'node:crypto';
 import {
-  OwnerScopedNotFoundError,
-  IdempotencyInProgressError,
-  IdempotencyConflictError,
-  ValidationError,
-  CanonicalJsonError,
-  ParentProvisioningRaceError,
-} from '../application/errors.js';
+  parseTraceparentContext,
+  parseTracestate,
+  parseTraceparent,
+  resolveRequestTraceContext,
+  resolveRequestTraceId,
+} from '../presentation/http/trace-context.js';
+import {
+  authSubjectsFromRequest,
+  resolveRequestId,
+  readIdempotencyKey,
+  readBody,
+  json,
+} from '../presentation/http/request-response.js';
+import {
+  mapErrorToHttp,
+  mapProcessErrorToHttp,
+} from '../presentation/http/error-mapper.js';
+import {
+  presentCreateRunResponse,
+  presentGetRunResponse,
+  presentToolExecutionResponse,
+  presentProcessResponse,
+} from '../presentation/http/run-presenters.js';
+import { handleCronRoute } from '../presentation/http/cron-routes.js';
 
-
-/**
- * Strict W3C traceparent parse.
- * version ≠ ff, 32-hex non-zero trace, 16-hex non-zero span, 2-hex flags.
- * @param {unknown} value
- * @returns {{ traceId: string, parentSpanId: string, traceFlags: string } | null}
- */
-export function parseTraceparentContext(value) {
-  if (typeof value !== 'string' || !value.trim()) return null;
-  const parts = value.trim().split('-');
-  if (parts.length !== 4) return null;
-  const [ver, tid, sid, flags] = parts;
-  if (!/^[0-9a-fA-F]{2}$/.test(ver) || ver.toLowerCase() === 'ff') return null;
-  if (!/^[0-9a-fA-F]{32}$/.test(tid) || tid.toLowerCase() === '0'.repeat(32)) {
-    return null;
-  }
-  if (!/^[0-9a-fA-F]{16}$/.test(sid) || sid.toLowerCase() === '0'.repeat(16)) {
-    return null;
-  }
-  if (!/^[0-9a-fA-F]{2}$/.test(flags)) return null;
-  return {
-    traceId: tid.toLowerCase(),
-    parentSpanId: sid.toLowerCase(),
-    traceFlags: flags.toLowerCase(),
-  };
-}
-
-/** Keep the vendor list opaque while rejecting header injection and malformed members. */
-export function parseTracestate(value) {
-  if (typeof value !== 'string') return null;
-  const raw = value.trim();
-  if (!raw || raw.length > 512 || /[^\x20-\x7e]/.test(raw)) return null;
-  const members = raw.split(',');
-  if (members.length > 32) return null;
-  const keys = new Set();
-  for (const part of members) {
-    const member = part.trim();
-    const eq = member.indexOf('=');
-    const key = eq > 0 ? member.slice(0, eq) : '';
-    const valuePart = eq > 0 ? member.slice(eq + 1) : '';
-    if (
-      !/^[a-z][a-z0-9_*/-]{0,255}$/.test(key) ||
-      !valuePart ||
-      valuePart.length > 256 ||
-      /[,=]/.test(valuePart) ||
-      valuePart.startsWith(' ') ||
-      valuePart.endsWith(' ') ||
-      keys.has(key)
-    ) return null;
-    keys.add(key);
-  }
-  return members.map((part) => part.trim()).join(',');
-}
-
-/**
- * Backward-compatible trace-id-only parser.
- * @param {unknown} value
- * @returns {string | null}
- */
-export function parseTraceparent(value) {
-  return parseTraceparentContext(value)?.traceId ?? null;
-}
-
-/**
- * Parse the incoming W3C parent context. X-Trace-Id/body fallback carries no
- * parent span because it is only a trace correlation compatibility field.
- * @param {import('node:http').IncomingMessage} req
- * @param {unknown} [bodyTrace]
- * @returns {{ traceId: string, parentSpanId: string | null, traceFlags: string | null, traceState: string | null }}
- */
-export function resolveRequestTraceContext(req, bodyTrace) {
-  const headers = req.headers || {};
-  const fromTp = parseTraceparentContext(
-    headers.traceparent || headers.Traceparent,
-  );
-  if (fromTp) {
-    return {
-      ...fromTp,
-      ...(parseTracestate(
-        headers.tracestate || headers.Tracestate || headers.TraceState,
-      )
-        ? {
-            traceState: parseTracestate(
-              headers.tracestate || headers.Tracestate || headers.TraceState,
-            ),
-          }
-        : {}),
-    };
-  }
-
-  const xt =
-    headers['x-trace-id'] ||
-    headers['X-Trace-Id'] ||
-    (typeof bodyTrace === 'string' ? bodyTrace : null);
-  if (typeof xt === 'string' && /^[0-9a-fA-F]{32}$/.test(xt.trim())) {
-    const id = xt.trim().toLowerCase();
-    if (id !== '0'.repeat(32)) {
-      return {
-        traceId: id,
-        parentSpanId: null,
-        traceFlags: null,
-      };
-    }
-  }
-  // Reject legacy trace_* / UUID shapes — mint a fresh W3C id.
-  return {
-    traceId: randomBytes(16).toString('hex'),
-    parentSpanId: null,
-    traceFlags: null,
-  };
-}
-
-/**
- * Parse W3C traceparent / X-Trace-Id into a trace id for legacy callers.
- * @param {import('node:http').IncomingMessage} req
- * @param {unknown} [bodyTrace]
- * @returns {string}
- */
-export function resolveRequestTraceId(req, bodyTrace) {
-  return resolveRequestTraceContext(req, bodyTrace).traceId;
-}
-
-/**
- * @param {import('node:http').IncomingMessage} req
- * @returns {{ provider: string, externalOrgId: string, externalUserId: string, role?: string|null, displayName?: string|null } | null}
- */
-export function authSubjectsFromRequest(req) {
-  const uid = req.headers['x-acting-user-id'];
-  const oid = req.headers['x-acting-organization-id'];
-  if (typeof uid !== 'string' || !uid.trim()) return null;
-  if (typeof oid !== 'string' || !oid.trim()) return null;
-  return {
-    provider: 'bff',
-    externalOrgId: oid.trim(),
-    externalUserId: uid.trim(),
-    requestId: req?.requestId || null,
-    callerType: 'web',
-    role:
-      typeof req.headers['x-acting-role'] === 'string'
-        ? req.headers['x-acting-role'].trim()
-        : null,
-  };
-}
-
-/** Resolve a bounded request id for internal correlation. */
-export function resolveRequestId(req) {
-  const incoming = String(
-    req?.headers?.['x-request-id'] || req?.headers?.['X-Request-Id'] || '',
-  ).trim();
-  return /^[A-Za-z0-9._:-]{8,128}$/.test(incoming)
-    ? incoming
-    : randomBytes(16).toString('hex');
-}
-
-/**
- * @param {import('node:http').IncomingMessage} req
- */
-export function readIdempotencyKey(req) {
-  const h =
-    req.headers['idempotency-key'] ||
-    req.headers['Idempotency-Key'] ||
-    req.headers['x-idempotency-key'] ||
-    req.headers['X-Idempotency-Key'];
-  if (typeof h === 'string' && h.trim()) return h.trim();
-  return null;
-}
-
-/**
- * @param {import('node:http').IncomingMessage} req
- * @returns {Promise<string>}
- */
-export function readBody(req) {
-  return new Promise((resolve, reject) => {
-    const chunks = [];
-    req.on('data', (c) => chunks.push(c));
-    req.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
-    req.on('error', reject);
-  });
-}
-
-/**
- * @param {import('node:http').ServerResponse} res
- * @param {number} status
- * @param {object} body
- */
-export function json(res, status, body) {
-  if (res.headersSent) return;
-  res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' });
-  res.end(JSON.stringify(body));
-}
-
-/**
- * Map application errors to HTTP without leaking DSN/secrets.
- * @param {unknown} err
- * @returns {{ status: number, body: object }}
- */
-export function mapErrorToHttp(err) {
-  if (err instanceof ValidationError || err instanceof CanonicalJsonError) {
-    return { status: 400, body: { error: err.message, code: err.code } };
-  }
-  if (err instanceof OwnerScopedNotFoundError) {
-    const resource = err.details?.resource;
-    const noun =
-      resource === 'conversations'
-        ? 'Conversation'
-        : resource === 'approvals'
-          ? 'Approval'
-        : resource === 'process_executions'
-          ? 'Process'
-        : resource === 'trace_spans'
-          ? 'Trace'
-        : resource === 'interactions'
-          ? 'Interaction'
-          : resource === 'cron_jobs'
-            ? 'Cron job'
-            : resource === 'cron_job_runs'
-              ? 'Cron job run'
-          : 'Run';
-    return { status: 404, body: { error: `${noun} not found`, code: 'NOT_FOUND' } };
-  }
-  if (err instanceof IdempotencyInProgressError) {
-    return {
-      status: 409,
-      body: { error: err.message, code: err.code, retryable: true },
-    };
-  }
-  if (err instanceof IdempotencyConflictError) {
-    return { status: 409, body: { error: err.message, code: err.code } };
-  }
-  if (err instanceof ParentProvisioningRaceError) {
-    return {
-      status: 409,
-      body: { error: 'Conflict; retry', code: err.code, retryable: true },
-    };
-  }
-  const code = /** @type {{ code?: string, name?: string }} */ (err)?.code;
-  const name = /** @type {{ name?: string }} */ (err)?.name;
-  if (code === 'INTERACTION_RESPONSE_INVALID') {
-    return {
-      status: 400,
-      body: { error: 'Invalid interaction response', code },
-    };
-  }
-  // Repository / infra typed errors (safe messages only).
-  if (code === 'NOT_FOUND' || name === 'NotFoundError') {
-    return { status: 404, body: { error: 'Not found', code: 'NOT_FOUND' } };
-  }
-  if (code === 'CONFLICT' || name === 'ConflictError') {
-    return { status: 409, body: { error: 'Conflict', code: 'CONFLICT' } };
-  }
-  if (
-    code === 'MYSQL_CONFIG_ERROR' ||
-    code === 'REDIS_CONFIG_ERROR' ||
-    name === 'MysqlConfigError' ||
-    name === 'RedisConfigError'
-  ) {
-    return {
-      status: 503,
-      body: { error: 'Service configuration unavailable', code: 'CONFIG' },
-    };
-  }
-  if (
-    code === 'MYSQL_DEPENDENCY_ERROR' ||
-    code === 'REDIS_DEPENDENCY_ERROR' ||
-    code === 'SANDBOX_SESSION_PROVISION_FAILED' ||
-    name === 'MysqlDependencyError' ||
-    name === 'RedisDependencyError'
-  ) {
-    return {
-      status: 503,
-      body: { error: 'Service dependency unavailable', code: 'DEPENDENCY' },
-    };
-  }
-  return { status: 500, body: { error: 'Internal server error' } };
-}
-
-/**
- * Dual-key public create/get DTO (camelCase plan + legacy snake_case).
- * @param {object} result
- */
-export function presentCreateRunResponse(result) {
-  const sandboxSessionId =
-    result.sandboxSessionId ?? result.sandbox_session_id ?? result.session_id ?? null;
-  return {
-    runId: result.runId,
-    run_id: result.runId,
-    status: result.status,
-    conversationId: result.conversationId,
-    conversation_id: result.conversationId,
-    eventsUrl: result.eventsUrl,
-    events_url: result.eventsUrl,
-    agentSessionId: result.agentSessionId ?? null,
-    agent_session_id: result.agentSessionId ?? null,
-    // Sandbox session ULID — required for upload / artifact-download / export.
-    // Dual-key: browsers historically read session_id; plan also uses sandbox_session_id.
-    session_id: sandboxSessionId,
-    sandboxSessionId,
-    sandbox_session_id: sandboxSessionId,
-    queueWarning: result.queueWarning ?? null,
-    queue_warning: result.queueWarning ?? null,
-    replayed: result.replayed === true,
-  };
-}
-
-/**
- * @param {object} run — domain run row
- */
-export function presentGetRunResponse(run) {
-  const pending = run.pendingInput || run.pending_input || null;
-  const pendingInput = pending
-    ? {
-        interactionId: pending.interactionId || pending.interaction_id || null,
-        interaction_id: pending.interactionId || pending.interaction_id || null,
-        interactionType:
-          pending.interactionType || pending.interaction_type || 'input',
-        interaction_type:
-          pending.interactionType || pending.interaction_type || 'input',
-        title: pending.title ?? 'Input required',
-        message: pending.message ?? null,
-        options: Array.isArray(pending.options) ? pending.options : [],
-        status: pending.status || 'PENDING',
-      }
-    : null;
-  const completedAt = run.completedAt ?? run.completed_at ?? null;
-  const nextEventSequence = Number(
-    run.nextEventSequence ?? run.next_event_sequence,
-  );
-  const lastSequence =
-    Number.isFinite(nextEventSequence) && nextEventSequence > 0
-      ? nextEventSequence - 1
-      : null;
-  const modelId = run.modelId ?? run.model_id ?? null;
-  const usage = run.usage ?? run.tokenUsage ?? run.token_usage ?? null;
-  // Prefer explicit sandbox session on the run projection (GetRun/list attach
-  // it from agent_sessions). Never fall back to agentSessionId — that ULID is
-  // a different resource and breaks artifact-download / upload.
-  const sandboxSessionId =
-    run.sandboxSessionId ?? run.sandbox_session_id ?? run.session_id ?? null;
-  return {
-    runId: run.runId,
-    run_id: run.runId,
-    status: run.status,
-    conversationId: run.conversationId,
-    conversation_id: run.conversationId,
-    agentSessionId: run.agentSessionId,
-    agent_session_id: run.agentSessionId,
-    session_id: sandboxSessionId,
-    sandboxSessionId,
-    sandbox_session_id: sandboxSessionId,
-    orgId: run.orgId,
-    org_id: run.orgId,
-    userId: run.userId,
-    user_id: run.userId,
-    traceId: run.traceId,
-    trace_id: run.traceId,
-    attempt: run.attempt,
-    statusReason: run.statusReason,
-    status_reason: run.statusReason,
-    cancelRequestedAt: run.cancelRequestedAt,
-    cancel_requested_at: run.cancelRequestedAt,
-    createdAt: run.createdAt,
-    created_at: run.createdAt,
-    updatedAt: run.updatedAt,
-    updated_at: run.updatedAt,
-    startedAt: run.startedAt,
-    started_at: run.startedAt,
-    completedAt,
-    completed_at: completedAt,
-    // `finished_at` is the browser Run DTO name. Publish both names until the
-    // browser store and durable Agent authority share a single vocabulary.
-    finishedAt: completedAt,
-    finished_at: completedAt,
-    lastSequence,
-    last_sequence: lastSequence,
-    lastEventId: run.lastEventId ?? run.last_event_id ?? null,
-    last_event_id: run.lastEventId ?? run.last_event_id ?? null,
-    modelId,
-    model_id: modelId,
-    model: modelId,
-    usage,
-    token_usage: usage,
-    pendingInput,
-    pending_input: pendingInput,
-  };
-}
-
-const PUBLIC_TOOL_STATUS = Object.freeze({
-  PROPOSED: 'prepared',
-  WAITING_APPROVAL: 'waiting_approval',
-  RUNNING: 'executing',
-  SUCCEEDED: 'succeeded',
-  FAILED: 'failed',
-  CANCELLED: 'cancelled',
-  UNKNOWN: 'unknown',
-});
-
-/**
- * Public reconnect snapshot. Integrity metadata and request claims remain
- * internal to the Agent ledger and are deliberately omitted.
- * @param {object} tool
- */
-export function presentToolExecutionResponse(tool) {
-  const status = PUBLIC_TOOL_STATUS[String(tool.status)] || 'unknown';
-  return {
-    tool_execution_id: tool.toolExecutionId,
-    tool_call_id: tool.toolCallId,
-    run_id: tool.runId,
-    agent_session_id: tool.agentSessionId,
-    tool_name: tool.toolName,
-    tool_source: tool.toolSource,
-    risk_level: tool.riskLevel,
-    arguments: tool.argumentsJson ?? {},
-    result_json: tool.resultJson ?? null,
-    status,
-    error_code: tool.errorCode ?? null,
-    error: tool.errorCode ?? null,
-    started_at: tool.startedAt ?? null,
-    completed_at: tool.completedAt ?? null,
-    finished_at: tool.completedAt ?? null,
-    created_at: tool.createdAt ?? null,
-    updated_at: tool.completedAt ?? tool.startedAt ?? tool.createdAt ?? null,
-  };
-}
-
-/** @param {object} process */
-export function presentProcessResponse(process) {
-  return {
-    process_id: process.processId,
-    session_id: process.sandboxSessionId,
-    sandbox_session_id: process.sandboxSessionId,
-    run_id: process.runId,
-    execution_id: process.executionId,
-    command: process.command || '',
-    status: process.status,
-    pid: process.pid ?? null,
-    exit_code: process.exitCode ?? null,
-    started_at: process.startedAt ?? null,
-    finished_at: process.endedAt ?? null,
-    created_at: process.createdAt ?? null,
-  };
-}
-
-function mapProcessErrorToHttp(err) {
-  const mapped = mapErrorToHttp(err);
-  if (mapped.status !== 500) return mapped;
-  const status = Number(err?.status ?? err?.httpStatus);
-  if (status === 400 || status === 422) {
-    return { status: 400, body: { error: 'Invalid process request', code: 'INVALID_PROCESS_REQUEST' } };
-  }
-  if (status === 404) {
-    return { status: 404, body: { error: 'Process not found', code: 'NOT_FOUND' } };
-  }
-  if (status === 409) {
-    return { status: 409, body: { error: 'Process operation conflict', code: 'PROCESS_CONFLICT' } };
-  }
-  if (status === 503) {
-    return { status: 503, body: { error: 'Process service unavailable', code: 'DEPENDENCY' } };
-  }
-  return mapped;
-}
+export {
+  parseTraceparentContext,
+  parseTracestate,
+  parseTraceparent,
+  resolveRequestTraceContext,
+  resolveRequestTraceId,
+  authSubjectsFromRequest,
+  resolveRequestId,
+  readIdempotencyKey,
+  readBody,
+  json,
+  mapErrorToHttp,
+  presentCreateRunResponse,
+  presentGetRunResponse,
+  presentToolExecutionResponse,
+  presentProcessResponse,
+};
 
 /**
  * @param {{
@@ -686,132 +259,16 @@ export function createAgentHttpServer(deps) {
         return;
       }
 
-      // Cron is a control-plane API. It has no browser timer semantics: the
-      // worker later turns each claimed schedule into a normal durable Run.
-      if (path === '/internal/cron-jobs') {
-        if (!cronJobService) {
-          json(res, 503, { error: 'Cron scheduler unavailable', code: 'DEPENDENCY' });
-          return;
-        }
-        const auth = authSubjectsFromRequest(req);
-        if (!auth) {
-          json(res, 400, {
-            error: 'X-Acting-User-Id and X-Acting-Organization-Id are required',
-            code: 'AUTH_CONTEXT_REQUIRED',
-          });
-          return;
-        }
-        try {
-          if (req.method === 'GET') {
-            const limit = Number(parsedUrl.searchParams.get('limit')) || undefined;
-            json(res, 200, { cron_jobs: await cronJobService.list(auth, { limit }) });
-            return;
-          }
-          if (req.method === 'POST') {
-            const raw = await readBody(req);
-            let body;
-            try {
-              body = raw ? JSON.parse(raw) : {};
-            } catch {
-              json(res, 400, { error: 'Invalid JSON body', code: 'VALIDATION' });
-              return;
-            }
-            json(res, 201, await cronJobService.create(auth, body));
-            return;
-          }
-        } catch (err) {
-          const mapped = mapErrorToHttp(err);
-          json(res, mapped.status, mapped.body);
-          return;
-        }
-      }
-
-      {
-        const cronRuns = path.match(/^\/internal\/cron-jobs\/([^/]+)\/runs$/);
-        if (cronRuns && req.method === 'GET') {
-          if (!cronJobService) {
-            json(res, 503, { error: 'Cron scheduler unavailable', code: 'DEPENDENCY' });
-            return;
-          }
-          const auth = authSubjectsFromRequest(req);
-          if (!auth) {
-            json(res, 400, { error: 'X-Acting-User-Id and X-Acting-Organization-Id are required', code: 'AUTH_CONTEXT_REQUIRED' });
-            return;
-          }
-          try {
-            const limit = Number(parsedUrl.searchParams.get('limit')) || undefined;
-            json(res, 200, {
-              cron_job_runs: await cronJobService.listRuns(
-                decodeURIComponent(cronRuns[1]), auth, { limit },
-              ),
-            });
-          } catch (err) {
-            const mapped = mapErrorToHttp(err);
-            json(res, mapped.status, mapped.body);
-          }
-          return;
-        }
-      }
-
-      {
-        const cronManual = path.match(/^\/internal\/cron-jobs\/([^/]+)\/run$/);
-        if (cronManual && req.method === 'POST') {
-          if (!cronJobService) {
-            json(res, 503, { error: 'Cron scheduler unavailable', code: 'DEPENDENCY' });
-            return;
-          }
-          const auth = authSubjectsFromRequest(req);
-          if (!auth) {
-            json(res, 400, { error: 'X-Acting-User-Id and X-Acting-Organization-Id are required', code: 'AUTH_CONTEXT_REQUIRED' });
-            return;
-          }
-          try {
-            json(res, 202, await cronJobService.runManual(decodeURIComponent(cronManual[1]), auth));
-          } catch (err) {
-            const mapped = mapErrorToHttp(err);
-            json(res, mapped.status, mapped.body);
-          }
-          return;
-        }
-      }
-
-      {
-        const cronJob = path.match(/^\/internal\/cron-jobs\/([^/]+)$/);
-        if (cronJob && ['GET', 'PATCH', 'DELETE'].includes(req.method || '')) {
-          if (!cronJobService) {
-            json(res, 503, { error: 'Cron scheduler unavailable', code: 'DEPENDENCY' });
-            return;
-          }
-          const auth = authSubjectsFromRequest(req);
-          if (!auth) {
-            json(res, 400, { error: 'X-Acting-User-Id and X-Acting-Organization-Id are required', code: 'AUTH_CONTEXT_REQUIRED' });
-            return;
-          }
-          const cronJobId = decodeURIComponent(cronJob[1]);
-          try {
-            if (req.method === 'GET') {
-              json(res, 200, await cronJobService.get(cronJobId, auth));
-            } else if (req.method === 'PATCH') {
-              const raw = await readBody(req);
-              let body;
-              try {
-                body = raw ? JSON.parse(raw) : {};
-              } catch {
-                json(res, 400, { error: 'Invalid JSON body', code: 'VALIDATION' });
-                return;
-              }
-              json(res, 200, await cronJobService.update(cronJobId, auth, body));
-            } else {
-              await cronJobService.delete(cronJobId, auth);
-              res.writeHead(204);
-              res.end();
-            }
-          } catch (err) {
-            const mapped = mapErrorToHttp(err);
-            json(res, mapped.status, mapped.body);
-          }
-          return;
-        }
+      if (
+        await handleCronRoute({
+          req,
+          res,
+          parsedUrl,
+          path,
+          cronJobService,
+        })
+      ) {
+        return;
       }
 
       if (path === '/internal/conversations') {

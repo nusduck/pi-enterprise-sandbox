@@ -37,7 +37,7 @@ import { InteractionResponseService } from '../../src/application/interaction-re
 import { createUlidGenerator } from '../../src/domain/shared/ulid.js';
 import { enqueueRunJob, createRunQueue, destroyRunQueue } from '../../src/infrastructure/redis/run-queue.js';
 import { runLeaseKey } from '../../src/infrastructure/redis/constants.js';
-import { startFakeOpenAIProvider } from '../../testing/fake-openai-provider.js';
+import { startFakeOpenAIProvider } from '../support/fake-openai-provider.js';
 
 const execFileAsync = promisify(execFile);
 const FIXTURE = fileURLToPath(

@@ -372,6 +372,8 @@ describe('sandbox-bridge registration', () => {
       sha256: 'a'.repeat(64),
       size: 10,
       mimeType: 'text/plain',
+      downloadPath:
+        '/api/files/artifact-download?session_id=01K0G2PAV8FPMVC9QHJG7JPN5F&artifact_id=01K0G2PAV8FPMVC9QHJG7JPN5D',
     });
     assert.equal(Object.hasOwn(result.details, 'path'), false);
     assert.equal(calls[0].payload.description, '最终分析报告');

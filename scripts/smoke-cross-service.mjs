@@ -27,7 +27,8 @@ import { once } from 'node:events';
 import { createServer } from 'node:net';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { startFakeOpenAIProvider, assertFakeLlmAllowed } from '../agent/testing/fake-openai-provider.js';
+import { startFakeOpenAIProvider } from '../agent/tests/support/fake-openai-provider.js';
+import { assertFakeLlmAllowed } from '../agent/src/config/fake-llm-policy.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
@@ -395,7 +396,7 @@ async function main() {
     .trim()
     .toLowerCase() !== 'false';
 
-  const smokeDir = path.join(ROOT, '.smoke-tmp');
+  const smokeDir = path.join(ROOT, '.runtime', 'smoke');
   const wsPath = path.join(smokeDir, `ws-${process.pid}`);
   const skillsPath = path.join(smokeDir, `skills-${process.pid}`);
   const agentDir = path.join(smokeDir, `agent-${process.pid}`);

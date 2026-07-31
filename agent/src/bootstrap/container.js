@@ -66,7 +66,8 @@ import * as skillPathsModule from '../skills/paths.js';
 
 /**
  * Resolve concrete AGENT_PI_AGENT_DIR for PiRuntimeFactory.create().
- * Default: `{cwd}/pi-agent-home` (Docker WORKDIR /app → /app/pi-agent-home).
+ * Local default: `{cwd}/.runtime/agent/pi-agent-home`.
+ * Containers set AGENT_PI_AGENT_DIR explicitly to `/app/pi-agent-home`.
  * Empty/missing env is OK only when the default path can be ensured on disk.
  *
  * @param {NodeJS.ProcessEnv | Record<string, string|undefined>} [env]
@@ -75,7 +76,7 @@ import * as skillPathsModule from '../skills/paths.js';
 export function resolveAgentPiAgentDir(env = process.env) {
   const raw = String(env.AGENT_PI_AGENT_DIR || '').trim();
   if (raw) return path.resolve(raw);
-  return path.resolve(process.cwd(), 'pi-agent-home');
+  return path.resolve(process.cwd(), '.runtime', 'agent', 'pi-agent-home');
 }
 
 /**

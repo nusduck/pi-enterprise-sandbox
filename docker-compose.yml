@@ -461,11 +461,11 @@ services:
       # Sandbox and Bubblewrap expose Skills only through canonical R/O paths.
       - ./skills:/home/sandbox/skill:ro
       - agent_user_skills:/home/sandbox/skill-user:ro
-      - ${SANDBOX_WORKSPACES_MOUNT:-./workspaces:/var/sandbox/workspaces}
-      - ${SANDBOX_TEMP_MOUNT:-./tmp-workspaces:/var/sandbox/tmp}
+      - ${SANDBOX_WORKSPACES_MOUNT:-./.runtime/sandbox/workspaces:/var/sandbox/workspaces}
+      - ${SANDBOX_TEMP_MOUNT:-./.runtime/sandbox/tmp:/var/sandbox/tmp}
       # PR-09 control-plane roots — NOT bound into Bubblewrap workspace/tmp
-      - ${SANDBOX_ARTIFACTS_MOUNT:-./artifacts:/var/sandbox/artifacts}
-      - ${SANDBOX_CONTROL_MOUNT:-./control:/var/sandbox/control}
+      - ${SANDBOX_ARTIFACTS_MOUNT:-./.runtime/sandbox/artifacts:/var/sandbox/artifacts}
+      - ${SANDBOX_CONTROL_MOUNT:-./.runtime/sandbox/control:/var/sandbox/control}
     environment:
       DEPLOYMENT_ENV: ${DEPLOYMENT_ENV:-development}
       # Listen address only — does NOT authorize clients. See ALLOWED_CLIENT_CIDRS.

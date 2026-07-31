@@ -347,8 +347,10 @@ curl -f http://localhost:4000/health/ready
 | `nginx_ssl` | `/etc/nginx/ssl` | SSL 证书（生产） |
 | `nginx_certbot` | `/var/www/certbot` | Let's Encrypt ACME challenge（生产） |
 | `./skills` | Agent `/home/sandbox/skill`（默认 `:ro`；研发可 `:rw`）+ Sandbox `:ro` | 共享技能；生产只读 |
-| `./workspaces` | `/var/sandbox/workspaces` | Agent Session 物理工作区 |
-| `./tmp-workspaces` | `/var/sandbox/tmp` | Agent Session 私有持久化 `/tmp`（`tmp_{workspace_id}`） |
+| `./.runtime/sandbox/workspaces` | `/var/sandbox/workspaces` | Agent Session 物理工作区 |
+| `./.runtime/sandbox/tmp` | `/var/sandbox/tmp` | Agent Session 私有持久化 `/tmp`（`tmp_{workspace_id}`） |
+| `./.runtime/sandbox/artifacts` | `/var/sandbox/artifacts` | 显式提交的 Artifact blob |
+| `./.runtime/sandbox/control` | `/var/sandbox/control` | Dataset staging 与控制面状态 |
 
 ### Skill 挂载与 SKILLS_MODE
 

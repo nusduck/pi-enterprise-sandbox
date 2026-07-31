@@ -16,7 +16,7 @@ import {
   assertFakeLlmAllowed,
   isFakeLlmEnabled,
   FAKE_LLM_ENV,
-} from './testing/fake-openai-provider.js';
+} from './src/config/fake-llm-policy.js';
 
 const MIN_SECRET_LEN = 32;
 const WEAK_SECRET_MARKERS = [

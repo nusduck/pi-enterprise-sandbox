@@ -9,24 +9,19 @@ from __future__ import annotations
 
 import logging
 import os
-import re
 import signal
 import subprocess
 import threading
 import time
 import uuid
-from datetime import datetime, timezone
+from datetime import timezone
 from pathlib import Path, PurePosixPath
 from typing import Any
 
 from sandbox.config import settings
 from sandbox.app.domain.ulid import new_ulid
 from sandbox.isolation import IsolationBackend, LaunchSpec, build_isolation_backend
-from sandbox.models import (
-    PROCESS_ACTIVE_STATUSES,
-    PROCESS_TERMINAL_STATUSES,
-    ProcessStatus,
-)
+from sandbox.models import ProcessStatus
 from sandbox.paths import SandboxPathScope, temp_id_for_workspace_id
 from sandbox.security.path_validation import parse_sandbox_path
 from sandbox.services.execution_context import SandboxExecutionContext
@@ -70,282 +65,21 @@ from sandbox.services.child_workspace_quota import (
     assert_child_quota_admit,
     format_decision_message,
 )
+from sandbox.services.process_runtime_support import (
+    DEFAULT_MAX_LOG_CHARS as _DEFAULT_MAX_LOG_CHARS,
+    DEFAULT_WAIT_SECONDS as _DEFAULT_WAIT_SECONDS,
+    LogBuffer as _LogBuffer,
+    is_active as _is_active,
+    is_terminal as _is_terminal,
+    normalize_authoritative_user_id,
+    now_iso as _now_iso,
+    positive_int as _positive_int,
+    resolve_process_timeout,
+    resolve_signal as _resolve_signal,
+    status_value as _status_value,
+)
 
 logger = logging.getLogger("sandbox.process_manager")
-
-# Cap in-memory log buffers so a noisy process cannot OOM the runner.
-_DEFAULT_MAX_LOG_CHARS = 500_000
-_DEFAULT_WAIT_SECONDS = 3600.0
-# Owner user_id must be bounded / path-safe; never free-form client text.
-_MAX_OWNER_USER_ID_LEN = 128
-_OWNER_USER_ID_RE = re.compile(r"^[A-Za-z0-9_.:@\-]{1,128}$")
-
-
-def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
-
-
-def _status_value(status: Any) -> str:
-    if hasattr(status, "value"):
-        return str(status.value)
-    return str(status)
-
-
-def _is_terminal(status: Any) -> bool:
-    return status in PROCESS_TERMINAL_STATUSES or _status_value(status) in {
-        _status_value(s) for s in PROCESS_TERMINAL_STATUSES if isinstance(s, str) or hasattr(s, "value")
-    }
-
-
-def _is_active(status: Any) -> bool:
-    return status in PROCESS_ACTIVE_STATUSES or _status_value(status) in {
-        _status_value(s) for s in PROCESS_ACTIVE_STATUSES if isinstance(s, str) or hasattr(s, "value")
-    }
-
-
-def _positive_int(value: Any, default: int) -> int:
-    try:
-        iv = int(value)
-    except (TypeError, ValueError):
-        return default
-    return iv if iv > 0 else default
-
-
-def resolve_process_timeout(timeout: int | None) -> tuple[int | None, str | None]:
-    """Resolve client timeout to a finite positive wall-clock seconds.
-
-    Returns ``(effective_seconds, error_message)``. ``error_message`` is set
-    when the value must be rejected (0 / negative / over absolute max).
-    ``None`` client timeout uses the configured default (never unlimited).
-    """
-    default = _positive_int(
-        getattr(settings, "process_timeout_seconds", None),
-        14_400,
-    )
-    absolute_max = _positive_int(
-        getattr(settings, "max_process_timeout_seconds", None),
-        86_400,
-    )
-    if absolute_max < default:
-        # Misconfiguration: still never unlimited; clamp default to absolute max.
-        default = absolute_max
-
-    if timeout is None:
-        return default, None
-
-    try:
-        requested = int(timeout)
-    except (TypeError, ValueError):
-        return None, "timeout must be a positive integer (seconds)"
-
-    if requested <= 0:
-        return None, (
-            "timeout must be > 0; omit the field to use the server default "
-            f"({default}s). Unlimited processes are not allowed."
-        )
-    if requested > absolute_max:
-        return None, (
-            f"timeout {requested}s exceeds absolute maximum "
-            f"({absolute_max}s)"
-        )
-    return requested, None
-
-
-def normalize_authoritative_user_id(raw: Any) -> str | None:
-    """Return a bounded owner user_id or None if missing/invalid.
-
-    Accepts only the server-side session identity shape (alphanumeric + a small
-    punctuation set, length-capped). Does not accept arbitrary API body text.
-    """
-    if raw is None:
-        return None
-    text = str(raw).strip()
-    if not text or len(text) > _MAX_OWNER_USER_ID_LEN:
-        return None
-    if not _OWNER_USER_ID_RE.fullmatch(text):
-        return None
-    return text
-
-
-class _UnconfiguredProcessRepository:
-    """Permanent read-empty stub for ``ProcessManager.repository``.
-
-    NOTE: unlike ``_formal`` (installed via :meth:`ProcessManager.set_formal_repository`
-    during lifespan startup), nothing ever replaces this object — it is not a
-    temporary bootstrap placeholder. Terminal process rows/logs evicted from
-    the in-memory maps are gone for good from this manager's read paths
-    (``get`` / ``logs`` / ``list_by_session`` / ``list_by_run``); there is no
-    durable process log store to rehydrate from. This is a deliberate product
-    decision (live-only is sufficient for chat UX), not a pending wiring gap —
-    do not "fix" it by building a new persistence store.
-    """
-
-    db = None
-
-    def upsert(self, entry: dict[str, Any]) -> None:
-        del entry
-        raise RuntimeError("formal process persistence is not installed")
-
-    def get(self, process_id: str) -> None:
-        del process_id
-        return None
-
-    def list_active(self) -> list[dict[str, Any]]:
-        return []
-
-    def list_by_session(self, session_id: str) -> list[dict[str, Any]]:
-        del session_id
-        return []
-
-    def list_by_run(self, run_id: str) -> list[dict[str, Any]]:
-        del run_id
-        return []
-
-    def total_count(self) -> int:
-        return 0
-
-
-class _LogBuffer:
-    """Interleaved stdout/stderr buffer with offset-based slice reads."""
-
-    def __init__(self, max_chars: int = _DEFAULT_MAX_LOG_CHARS) -> None:
-        self._lock = threading.Lock()
-        self.max_chars = max_chars
-        self.stdout = ""
-        self.stderr = ""
-        # (global_start_offset, stream, text)
-        self._events: list[tuple[int, str, str]] = []
-        self.total = 0
-        self.truncated = False
-        self._buffer_start = 0  # global offset of first retained event
-
-    def append(self, stream: str, text: str) -> None:
-        if not text:
-            return
-        with self._lock:
-            # Oversized single chunk: keep only the tail within max_chars.
-            if len(text) > self.max_chars:
-                self.truncated = True
-                text = text[-self.max_chars :]
-            start = self.total
-            self._events.append((start, stream, text))
-            self.total += len(text)
-            if stream == "stdout":
-                self.stdout += text
-            else:
-                self.stderr += text
-            self._trim_if_needed()
-
-    def _trim_if_needed(self) -> None:
-        retained = self.total - self._buffer_start
-        if retained <= self.max_chars:
-            return
-        # Drop oldest events until under budget.
-        self.truncated = True
-        target_start = self.total - self.max_chars
-        drop_idx = 0
-        for i, (start, _stream, text) in enumerate(self._events):
-            if start + len(text) <= target_start:
-                drop_idx = i + 1
-            else:
-                # Partially drop within this event
-                keep_from = target_start - start
-                if keep_from > 0 and keep_from < len(text):
-                    stream = _stream
-                    new_text = text[keep_from:]
-                    self._events[i] = (target_start, stream, new_text)
-                    drop_idx = i
-                else:
-                    drop_idx = i
-                break
-        if drop_idx:
-            self._events = self._events[drop_idx:]
-        if self._events:
-            self._buffer_start = self._events[0][0]
-        else:
-            self._buffer_start = self.total
-        # Rebuild stream views from retained events
-        stdout_parts: list[str] = []
-        stderr_parts: list[str] = []
-        for _start, stream, text in self._events:
-            if stream == "stdout":
-                stdout_parts.append(text)
-            else:
-                stderr_parts.append(text)
-        self.stdout = "".join(stdout_parts)
-        self.stderr = "".join(stderr_parts)
-
-    def slice(self, offset: int, limit: int) -> tuple[str, str, int, bool]:
-        """Return (stdout, stderr, next_offset, truncated) for [offset, offset+limit)."""
-        with self._lock:
-            if offset < 0:
-                offset = 0
-            if limit <= 0:
-                limit = self.max_chars
-            truncated = self.truncated or offset < self._buffer_start
-            effective_offset = max(offset, self._buffer_start)
-            stdout_parts: list[str] = []
-            stderr_parts: list[str] = []
-            consumed = 0
-            next_off = effective_offset
-            for start, stream, text in self._events:
-                end = start + len(text)
-                if end <= effective_offset:
-                    continue
-                local_start = max(0, effective_offset - start)
-                chunk = text[local_start:]
-                if consumed + len(chunk) > limit:
-                    chunk = chunk[: limit - consumed]
-                if not chunk:
-                    break
-                if stream == "stdout":
-                    stdout_parts.append(chunk)
-                else:
-                    stderr_parts.append(chunk)
-                consumed += len(chunk)
-                next_off = start + local_start + len(chunk)
-                if consumed >= limit:
-                    break
-            else:
-                next_off = self.total
-            return (
-                "".join(stdout_parts),
-                "".join(stderr_parts),
-                next_off,
-                truncated,
-            )
-
-    def snapshot_logs(self) -> tuple[str, str, int, bool]:
-        with self._lock:
-            return self.stdout, self.stderr, self.total, self.truncated
-
-
-_SIGNAL_MAP: dict[str, int] = {
-    "SIGTERM": signal.SIGTERM,
-    "SIGINT": signal.SIGINT,
-    "SIGKILL": signal.SIGKILL,
-    "SIGHUP": signal.SIGHUP,
-    "SIGUSR1": getattr(signal, "SIGUSR1", signal.SIGTERM),
-    "SIGUSR2": getattr(signal, "SIGUSR2", signal.SIGTERM),
-    "15": signal.SIGTERM,
-    "2": signal.SIGINT,
-    "9": signal.SIGKILL,
-}
-
-
-def _resolve_signal(sig: str | int) -> int:
-    if isinstance(sig, int):
-        return sig
-    raw = str(sig or "SIGTERM").strip().upper()
-    if raw in _SIGNAL_MAP:
-        return _SIGNAL_MAP[raw]
-    if raw.isdigit():
-        return int(raw)
-    # Allow "TERM" / "INT" short forms
-    long_name = raw if raw.startswith("SIG") else f"SIG{raw}"
-    if long_name in _SIGNAL_MAP:
-        return _SIGNAL_MAP[long_name]
-    raise ValueError(f"Unknown signal: {sig}")
 
 
 class ProcessManager:
@@ -358,9 +92,6 @@ class ProcessManager:
         isolation_backend: IsolationBackend | None = None,
         formal_dual_writer: FormalProcessDualWriter | None = None,
     ) -> None:
-        # Intentionally never reassigned (see _UnconfiguredProcessRepository
-        # docstring): reads for evicted terminal processes are always empty.
-        self.repository = _UnconfiguredProcessRepository()
         self._stream = (
             stream_hub if stream_hub is not None else transient_execution_stream
         )
@@ -565,11 +296,8 @@ class ProcessManager:
     def _evict_terminal_if_needed(self) -> None:
         """Bound terminal in-memory maps; active processes are never evicted.
 
-        Must be called with ``self._lock`` held. Live-only by design: a
-        formal store may have durably recorded the terminal write, but
-        ``self.repository`` (used by :meth:`get` / :meth:`logs` for reads) is
-        a permanent no-op, so once an entry is dropped here it cannot be
-        rehydrated — callers will see it as not found.
+        Must be called with ``self._lock`` held. Process logs are live-only by
+        design, so an evicted entry cannot be rehydrated through this manager.
         """
         self._refresh_limits_from_settings()
 
@@ -1560,44 +1288,7 @@ class ProcessManager:
     def get(self, process_id: str) -> dict[str, Any] | None:
         with self._lock:
             mem = self._entries.get(process_id)
-            if mem is not None:
-                return self._public_view(mem)
-        # self.repository is a permanent no-op (see _UnconfiguredProcessRepository);
-        # this always returns None, so the process is reported not-found below.
-        # Retained for interface symmetry, not as a functioning DB fallback.
-        row = self.repository.get(process_id)
-        if row is None:
-            return None
-        if _is_terminal(row.get("status")):
-            return self._public_view(row)
-        with self._lock:
-            # Re-check after DB read (spawn race).
-            mem = self._entries.get(process_id)
-            if mem is not None:
-                return self._public_view(mem)
-            if not row.get("owner_key"):
-                uid = normalize_authoritative_user_id(row.get("user_id"))
-                if uid:
-                    row["owner_key"] = f"user:{uid}"
-                else:
-                    wid = (row.get("workspace_id") or "").strip()
-                    if wid:
-                        row["owner_key"] = f"workspace:{wid}"
-                    else:
-                        row["owner_key"] = (
-                            f"session:{row.get('session_id') or ''}"
-                        )
-            self._entries[process_id] = row
-            if process_id not in self._logs:
-                buf = _LogBuffer(self._max_log_chars)
-                if row.get("stdout_log"):
-                    buf.append("stdout", row["stdout_log"])
-                if row.get("stderr_log"):
-                    buf.append("stderr", row["stderr_log"])
-                self._logs[process_id] = buf
-            if process_id not in self._done_events:
-                self._done_events[process_id] = threading.Event()
-            return self._public_view(self._entries[process_id])
+            return self._public_view(mem) if mem is not None else None
 
     def _public_view(self, entry: dict[str, Any]) -> dict[str, Any]:
         process_id = entry["process_id"]
@@ -1659,44 +1350,6 @@ class ProcessManager:
                 truncated = False
                 log_total = 0
                 buf = None
-
-        # self.repository is a permanent no-op, so this never actually finds a
-        # row after eviction (live-only by design) — retained dead branch, not
-        # a functioning DB snapshot rebuild. See _UnconfiguredProcessRepository.
-        if buf is None:
-            row = self.repository.get(process_id)
-            if row is not None:
-                full_out = row.get("stdout_log") or ""
-                full_err = row.get("stderr_log") or ""
-                log_total = int(row.get("log_total") or 0) or (
-                    len(full_out) + len(full_err)
-                )
-                truncated = bool(row.get("log_truncated"))
-                if offset <= 0:
-                    # Apply limit to combined stdout first, then stderr remainder.
-                    if lim > 0 and len(full_out) > lim:
-                        stdout = full_out[:lim]
-                        stderr = ""
-                        next_offset = lim
-                    elif lim > 0 and len(full_out) + len(full_err) > lim:
-                        stdout = full_out
-                        stderr = full_err[: max(0, lim - len(full_out))]
-                        next_offset = lim
-                    else:
-                        stdout = full_out
-                        stderr = full_err
-                        next_offset = log_total
-                elif offset >= log_total:
-                    stdout = ""
-                    stderr = ""
-                    next_offset = log_total
-                else:
-                    # Offset past interleaved history is not fully recoverable from
-                    # separate snapshots; return empty slice rather than invent data.
-                    stdout = ""
-                    stderr = ""
-                    next_offset = log_total
-                    truncated = True
 
         # Prefer durable chunks when memory buffer missed history (restart / truncate).
         if (not stdout and not stderr) or truncated:
@@ -1789,10 +1442,9 @@ class ProcessManager:
         eof: bool = False,
     ) -> dict[str, Any]:
         with self._lock:
-            entry = self._entries.get(process_id) or self.repository.get(process_id)
+            entry = self._entries.get(process_id)
             if entry is None:
                 return {"error": "not found", "status": "not_found"}
-            self._entries[process_id] = entry
             if _is_terminal(entry.get("status")):
                 return {"error": "process is not running", "status": "terminal"}
             proc = self._procs.get(process_id)
@@ -1830,10 +1482,9 @@ class ProcessManager:
             return {"error": str(exc), "status": "invalid"}
 
         with self._lock:
-            entry = self._entries.get(process_id) or self.repository.get(process_id)
+            entry = self._entries.get(process_id)
             if entry is None:
                 return {"error": "not found", "status": "not_found"}
-            self._entries[process_id] = entry
             if _is_terminal(entry.get("status")):
                 # Idempotent: already terminal is not an error for kill semantics.
                 return {
@@ -1956,10 +1607,9 @@ class ProcessManager:
           CANCELLED while alive; return False.
         """
         with self._lock:
-            entry = self._entries.get(process_id) or self.repository.get(process_id)
+            entry = self._entries.get(process_id)
             if entry is None:
                 return False
-            self._entries[process_id] = entry
             status = entry.get("status")
             if _is_terminal(status):
                 return True
@@ -2111,14 +1761,7 @@ class ProcessManager:
         with self._lock:
             bufs = self._stream_logs.get(process_id)
             if bufs is None:
-                # Rebuild stream buffers from durable chunks / snapshots (bounded).
                 bufs = self._stream_buffers_locked(process_id)
-                row = self.repository.get(process_id)
-                if row is not None:
-                    if row.get("stdout_log") and not bufs["stdout"].total:
-                        bufs["stdout"].append(row["stdout_log"])
-                    if row.get("stderr_log") and not bufs["stderr"].total:
-                        bufs["stderr"].append(row["stderr_log"])
             sbuf = bufs[stream_name]
             result = sbuf.read(cur, limit=lim)
 
@@ -2159,17 +1802,6 @@ class ProcessManager:
                 for e in self._entries.values()
                 if e.get("session_id") == session_id and _is_active(e.get("status"))
             ]
-        # self.repository is a permanent no-op (always []), so this never adds
-        # anything beyond in-memory candidates. Retained dead branch, not a
-        # functioning DB fallback — see _UnconfiguredProcessRepository.
-        try:
-            for row in self.repository.list_by_session(session_id):
-                if _is_active(row.get("status")):
-                    if not any(c["process_id"] == row["process_id"] for c in candidates):
-                        candidates.append(row)
-        except Exception:
-            logger.exception("list_by_session failed during cancel")
-
         for entry in candidates:
             if foreground_only and entry.get("background"):
                 continue
@@ -2232,14 +1864,6 @@ class ProcessManager:
                 for e in self._entries.values()
                 if e.get("run_id") == run_id and _is_active(e.get("status"))
             ]
-        try:
-            for row in self.repository.list_by_run(run_id):
-                if _is_active(row.get("status")):
-                    if not any(c["process_id"] == row["process_id"] for c in candidates):
-                        candidates.append(row)
-        except Exception:
-            logger.exception("list_by_run failed during cancel")
-
         for entry in candidates:
             pid = entry["process_id"]
             if self.cancel(pid):

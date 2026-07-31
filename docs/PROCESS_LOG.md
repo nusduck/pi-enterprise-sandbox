@@ -15,7 +15,7 @@ Each entry should say **what changed**, **why**, and **which STATUS IDs** it aff
 
 - **Action:** Created branch `codex/plan-acceptance` from `codex/pi-enterprise-refactor` (`8d0dad41`) and committed the full uncommitted working tree as `6d25783c`.
 - **Why:** Preserve refactor follow-up work, then accept against `plan.md` with reviewable process commits instead of continuing on a dirty tree.
-- **Excluded:** `.env`, local `.release-gate-*` runtime directories (gitignored).
+- **Excluded:** `.env` and local `.runtime/` state (gitignored).
 - **STATUS:** No §32 row closed; baseline recorded in `STATUS.md`.
 
 ## 2026-07-19 — Documentation authority rebuild

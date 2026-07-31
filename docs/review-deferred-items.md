@@ -4,7 +4,7 @@ Non-severe / non-blocking items only. **Do not** park unresolved severe
 vulnerabilities or unfinished PR-07 security work here.
 
 **Acceptance blockers** belong only in [`STATUS.md`](./STATUS.md) (mapped to
-`plan.md` §32). This file must not be used as a substitute progress board.
+[`plan.md`](./plan.md) §32). This file must not be used as a substitute progress board.
 
 ## Closed in the current refactor
 

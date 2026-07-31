@@ -1,7 +1,19 @@
 # Module layout conventions
 
-**Branch:** `codex/plan-acceptance`  
 **Purpose:** One production source root per deployable service so dual-tree leftovers do not return.
+
+## Repository structure rules
+
+- Production source files default to at most 1,000 lines. The structural test
+  in `tests/test_repository_layout.py` records remaining legacy hotspots as
+  non-increasing budgets; reduce the budget whenever a hotspot is split.
+- Runtime code belongs under the service's `src/` or package tree. Test helpers
+  belong under `tests/support`; do not recreate a parallel `testing/` root.
+- Project documentation belongs under `docs/`, except `README.md` files that
+  introduce the repository or a self-contained package.
+- Prefer cohesive modules named after one responsibility. Entry points compose
+  modules; they should not own protocol parsing, DTO presentation, persistence,
+  and orchestration in the same file.
 
 ## Monorepo packages
 
@@ -35,15 +47,16 @@ agent/
     lib/                 # shared pure helpers (text-redaction)
     runtime/             # message/attachment/vision helpers
     skills/              # skill install/validate/paths
-  testing/               # non-production harness (fake OpenAI provider)
   tests/
+    support/             # non-production harnesses and fakes
 ```
 
 **Rules**
 
 - New production modules land under `src/` only.
 - Obsolete approval-waiter code is deleted; do not add a package-root `legacy/` tree.
-- `testing/` is for gates and local fakes; do not import from production request paths except config-gated dev hooks.
+- `tests/support/` is the only home for gates and local fakes. Production code
+  may import a runtime policy, but never a test harness.
 
 ---
 

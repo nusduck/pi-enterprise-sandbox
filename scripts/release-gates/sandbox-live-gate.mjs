@@ -224,7 +224,7 @@ function startManagedSandbox({ mysql, keyring, activeKid, hardKill = false }) {
   for (const [name, value] of [['SANDBOX_GATE_MAX_FILE_SIZE_MB', maxFileSizeMb], ['SANDBOX_GATE_WORKSPACE_QUOTA_MB', workspaceQuotaMb], ['SANDBOX_GATE_TEMP_QUOTA_MB', tempQuotaMb]]) {
     if (!/^\d+$/.test(value) || Number(value) < 1) throw new Error(`${name} must be a positive integer`);
   }
-  const root = `${ROOT}/.release-gate-${process.pid}`;
+  const root = `${ROOT}/.runtime/release-gates/sandbox-${process.pid}`;
   const dirs = ['workspaces', 'tmp', 'artifacts', 'control'].map((name) => `${root}/${name}`);
   for (const dir of dirs) execFileSync('mkdir', ['-p', dir]);
 

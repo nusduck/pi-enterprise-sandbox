@@ -19,7 +19,7 @@ Runtime/SDK pins are machine-checked by `tests/test_runtime_versions.py`.
 
 ### Local Setup
 
-权威干净安装与本地四进程步骤见 [docs/development.md](./docs/development.md)。摘要：
+权威干净安装与本地四进程步骤见 [development.md](./development.md)。摘要：
 
 ```bash
 # Clone and enter
@@ -94,6 +94,7 @@ pi-enterprise-sandbox/
 ├── skills/            # Optional shared skill packages (profile + registry controlled)
 ├── tests/             # pytest (unit + FastAPI integration)
 ├── docs/              # Active docs — see docs/README.md for authority order
+│   ├── plan.md        # Frozen refactor baseline and §32 acceptance criteria
 │   ├── STATUS.md      # Only living gap board vs plan.md §32
 │   ├── PROCESS_LOG.md # Acceptance process log (append-only)
 │   └── evidence/      # Dated live-gate records
@@ -103,7 +104,6 @@ pi-enterprise-sandbox/
 ├── docker-compose.yml # Dev topology: services + MySQL 8 + Redis 7
 ├── docker-compose.prod.yml # Prod overlay: MySQL 8 + Redis 7 + Nginx + secrets required
 ├── .github/workflows/ # CI matrix: python / node / frontend / compose
-├── plan.md            # Frozen refactor baseline and §32 acceptance criteria
 └── pyproject.toml
 ```
 
@@ -128,9 +128,9 @@ in PR-03. Production fails fast when `REDIS_PASSWORD` is missing.
 
 1. **Pick an issue** — check open issues or create one
 2. **Fork & branch** — `git checkout -b feat/your-feature`
-3. **Make changes** — follow `plan.md`, `docs/STATUS.md`, and active docs (see `docs/README.md`)
+3. **Make changes** — follow `docs/plan.md`, `docs/STATUS.md`, and active docs (see `docs/README.md`)
 4. **Write tests** — cover new functionality at the nearest layer
-5. **Update STATUS** — if the change affects a `plan.md` §32 row, update `docs/STATUS.md` in the same commit; append `docs/PROCESS_LOG.md` for acceptance-program work
+5. **Update STATUS** — if the change affects a `docs/plan.md` §32 row, update `docs/STATUS.md` in the same commit; append `docs/PROCESS_LOG.md` for acceptance-program work
 6. **Run gates** — Python + Node + frontend + `docker compose config -q` as above
 7. **Lint (optional)** — `ruff check .` / `black --check .` if available locally
 8. **Push & PR** — open a pull request with a clear description
@@ -176,7 +176,7 @@ in PR-03. Production fails fast when `REDIS_PASSWORD` is missing.
 
 ## Architecture Decisions
 
-See [plan.md](./plan.md), [docs/STATUS.md](./docs/STATUS.md), and [docs/architecture.md](./docs/architecture.md) for:
+See [plan.md](./plan.md), [STATUS.md](./STATUS.md), and [architecture.md](./architecture.md) for:
 
 - Why service-side Agent runtime (no LLM key in the browser)
 - Four-service architecture (Frontend + BFF + Agent + Sandbox)
@@ -190,4 +190,4 @@ See [plan.md](./plan.md), [docs/STATUS.md](./docs/STATUS.md), and [docs/architec
 ## Getting Help
 
 - Open a GitHub issue for questions
-- Check [docs/](./docs/) for detailed guides
+- Check the [documentation map](./README.md) for detailed guides

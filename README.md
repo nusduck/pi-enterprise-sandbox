@@ -63,8 +63,11 @@ pi-sandbox/
 ├── scripts/              ← 备份/恢复、development reset、跨服务 smoke
 ├── nginx/                ← 生产 Nginx + SSL
 ├── docs/                 ← 活跃文档（见 docs/README.md 权威顺序）
-├── workspaces/           ← Agent Session 工作区（按 workspace_id 隔离）
-├── tmp-workspaces/       ← Agent Session 私有 /tmp（按 tmp_{workspace_id} 隔离）
+├── .runtime/             ← 全部宿主机运行态（Git/Docker build 均忽略）
+│   ├── sandbox/          ← workspaces、tmp、artifacts、control
+│   ├── agent/            ← 本地 Pi Agent 资源目录
+│   ├── smoke/            ← 跨服务 smoke 临时状态
+│   └── release-gates/    ← live gate 临时状态
 ├── docker-compose.yml           ← 开发编排（Frontend + BFF + Agent + Sandbox + MySQL 8 + Redis 7）
 ├── docker-compose.prod.yml      ← 生产 overlay（MySQL 8 + Redis 7 + Nginx + SSL）
 └── .env.example          ← 环境变量模板（与部署文档一致）
@@ -233,7 +236,7 @@ node scripts/smoke-cross-service.mjs
 
 | 文档 | 说明 |
 |------|------|
-| [plan.md](plan.md) | 重构基线与 §32 最终验收（规范源） |
+| [重构基线](docs/plan.md) | §32 最终验收的规范源 |
 | [文档地图](docs/README.md) | 权威顺序、文档角色、更新纪律 |
 | [验收状态 STATUS](docs/STATUS.md) | 相对 plan §32 的唯一进度板 |
 | [过程日志](docs/PROCESS_LOG.md) | `codex/plan-acceptance` 过程记录（追加） |
@@ -244,6 +247,7 @@ node scripts/smoke-cross-service.mjs
 | [前端指南](docs/webui.md) | 前端 SPA 架构、SSE 消费、扩展 |
 | [Development reset](docs/runbooks/development-reset.md) | 研发清库停机窗口（不可逆） |
 | [Gate 证据](docs/evidence/) | 带日期的 live gate 记录 |
+| [历史评审](docs/archive/reviews/) | 已归档的时点审计，不代表当前实现状态 |
 | [非阻塞债](docs/review-deferred-items.md) | 不得隐藏 P0 验收项 |
 
-以根目录 `plan.md`、`docs/STATUS.md`、活跃 `docs/*` 与代码为准。
+以 `docs/plan.md`、`docs/STATUS.md`、活跃文档与代码为准；归档评审仅作历史参考。
