@@ -7,6 +7,20 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_SOURCE_LINE_LIMIT = 1_000
+LOCAL_GENERATED_DIRECTORIES = frozenset(
+    {
+        ".runtime",
+        ".venv",
+        ".pytest_cache",
+        "__pycache__",
+        "node_modules",
+        "workspaces",
+        "tmp-workspaces",
+        "artifacts",
+        "control",
+        "pi-agent-home",
+    }
+)
 
 # Existing hotspots are explicit debt, not a silent exception. Budgets are at
 # or below the 2026-07-30 baseline so these files can shrink but cannot grow.
@@ -85,8 +99,7 @@ def test_project_markdown_lives_under_docs_except_readmes() -> None:
         if (
             path.name == "README.md"
             or relative.parts[0] in {"docs", "skills"}
-            or ".runtime" in relative.parts
-            or "node_modules" in relative.parts
+            or any(part in LOCAL_GENERATED_DIRECTORIES for part in relative.parts)
         ):
             continue
         misplaced.append(relative.as_posix())
