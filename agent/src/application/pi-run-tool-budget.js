@@ -7,9 +7,9 @@
  * not patch Pi's installed source or bypass its policy hooks.
  */
 
-export const DEFAULT_MAX_TOOL_CALLS_PER_RUN = 12;
-export const DEFAULT_MAX_IDENTICAL_TOOL_CALLS = 2;
-export const DEFAULT_MAX_MODEL_TURNS_PER_RUN = 14;
+export const DEFAULT_MAX_TOOL_CALLS_PER_RUN = 200;
+export const DEFAULT_MAX_IDENTICAL_TOOL_CALLS = 6;
+export const DEFAULT_MAX_MODEL_TURNS_PER_RUN = 120;
 
 function positiveInt(value, name, fallback) {
   if (value == null || value === '') return fallback;

@@ -260,9 +260,9 @@ the Agent fail-closes with `MYSQL_TRIGGER_BINLOG_BLOCKED` and will **not**
 | `AGENT_RUN_LEASE_TTL_MS` | `30000` | Worker lease TTL（ms） |
 | `AGENT_RUN_LEASE_RENEW_INTERVAL_MS` | `10000` | Lease 续约间隔（ms） |
 | `AGENT_RUN_STREAM_MAXLEN` | `10000` | Run stream 近似 `MAXLEN` |
-| `AGENT_RUN_MAX_TOOL_CALLS` | `12` | 单个 Run 最多执行的工具调用数；达到后下一轮只能基于已有结果作答 |
-| `AGENT_RUN_MAX_IDENTICAL_TOOL_CALLS` | `2` | 同一工具与规范化参数组合的最多执行次数 |
-| `AGENT_RUN_MAX_MODEL_TURNS` | `14` | 单个 Run 最多模型回合数；达到后下一轮禁用工具并要求作答 |
+| `AGENT_RUN_MAX_TOOL_CALLS` | `200` | 单个 Run 最多执行的工具调用数；达到后下一轮只能基于已有结果作答 |
+| `AGENT_RUN_MAX_IDENTICAL_TOOL_CALLS` | `6` | 同一工具与规范化参数组合的最多执行次数 |
+| `AGENT_RUN_MAX_MODEL_TURNS` | `120` | 单个 Run 最多模型回合数；达到后下一轮禁用工具并要求作答 |
 
 **开发:** `docker compose up` 启动 `redis:7.2`（AOF + `redis_dev_data` volume）。Agent 依赖 Redis health；默认 DSN 指向 compose 网络内 `redis` 服务。占位密码仅用于本地。
 

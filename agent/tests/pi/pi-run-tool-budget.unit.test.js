@@ -107,9 +107,9 @@ describe('Pi Run tool budget', () => {
 
   it('uses safe defaults and rejects invalid deployment configuration', () => {
     assert.deepEqual(resolvePiRunToolBudget({}), {
-      maxToolCalls: 12,
-      maxIdenticalToolCalls: 2,
-      maxModelTurns: 14,
+      maxToolCalls: 200,
+      maxIdenticalToolCalls: 6,
+      maxModelTurns: 120,
     });
     assert.throws(
       () => resolvePiRunToolBudget({ AGENT_RUN_MAX_TOOL_CALLS: '0' }),

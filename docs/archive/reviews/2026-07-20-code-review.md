@@ -37,7 +37,9 @@
 
 ### MCP 配置现状
 
-`.env` 可提供全局服务器注册表 `MCP_SERVERS_JSON`（当前包含 Exa 的远程 MCP 定义），但它不是自动启用开关。每个 AgentVersion 仍必须在 `configJson.mcpServers` 显式引用允许的 server id；若该数组为空，运行时按设计不加载任何 MCP。`AGENT_PROFILES_JSON` 是额外的 allowlist/策略层，不能替代 AgentVersion 引用。
+`.env` 可提供全局服务器注册表 `MCP_SERVERS_JSON`（当前包含 Exa 的远程 MCP 定义），但它不是自动启用开关。每个 AgentVersion 仍必须在 `configJson.mcpServers` 显式引用允许的 server id；若该数组为空，运行时按设计不加载任何 MCP。
+
+> 更新（2026-07-31）：审查中提到的 `AGENT_PROFILES_JSON` 从未接入实际代码（`agent/src`、`api-server/src` 均无消费方），已从 `.env.example` 与 `docker-compose.yml` 中移除。当前唯一生效的 allowlist 机制是 `AgentVersion.configJson.mcpServers`。
 
 目前 registry loader 实际消费 `id`、`url` 或 `command`、`timeoutMs`、`authTokenRef`、`envRefs`、`headerRefs` 等字段。现有 `.env` 中的 `transport`、`retries`、展示 `name` 不会改变当前适配器连接行为；应避免据此误判远程 MCP 已被启用或会自动重试。
 
