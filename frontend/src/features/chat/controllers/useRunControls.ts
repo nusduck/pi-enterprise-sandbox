@@ -7,7 +7,7 @@ import {
   steerRun as requestSteer,
   type CreateRunResponse,
 } from '../../../shared/api';
-import type { ChatState } from '../../../shared/state';
+import type { ChatMessage, ChatState } from '../../../shared/state';
 import type { EntityBridge } from '../entityBridge';
 
 type Options = {
@@ -16,12 +16,45 @@ type Options = {
   setDraftText: (value: string) => void;
   setStatus: (text: string, color?: string) => void;
   flashError: (message: string) => void;
+  /**
+   * Immediately surface a user turn in the chat transcript (optimistic).
+   * Steer / follow-up previously only hit the network, so the bubble only
+   * appeared after a full conversation rehydrate.
+   */
+  appendUserMessage: (message: ChatMessage) => void;
+  /** Remove a failed optimistic bubble by `_messageId`. */
+  removeUserMessage: (messageId: string) => void;
+  /** Patch fields on an optimistic bubble (e.g. stamp durable ids). */
+  patchUserMessage: (
+    messageId: string,
+    patch: Partial<ChatMessage>,
+  ) => void;
 };
 
 type FollowUpRequest = (
   conversationId: string,
   body: { text: string },
 ) => Promise<CreateRunResponse>;
+
+function newLocalMessageId(): string {
+  return (
+    globalThis.crypto?.randomUUID?.() ??
+    `local_${Date.now()}_${Math.random().toString(36).slice(2)}`
+  );
+}
+
+function buildOptimisticUserMessage(
+  text: string,
+  opts: { runId?: string | null; messageId?: string } = {},
+): ChatMessage {
+  return {
+    role: 'user',
+    content: [{ type: 'text', text }],
+    _messageId: opts.messageId || newLocalMessageId(),
+    ...(opts.runId ? { _runId: opts.runId } : {}),
+    createdAt: new Date().toISOString(),
+  };
+}
 
 /** Register the follow-up as its own Run and tail its durable event stream. */
 export async function queueConversationFollowUp(input: {
@@ -30,7 +63,9 @@ export async function queueConversationFollowUp(input: {
   text: string;
   sessionId?: string | null;
   request?: FollowUpRequest;
-}): Promise<string> {
+  /** Local optimistic message id so callers can stamp `_runId` after create. */
+  localMessageId?: string;
+}): Promise<{ runId: string; localMessageId?: string }> {
   const store = input.bridge.getStore();
   const currentRun = store.activeRunId
     ? store.runsById[store.activeRunId]
@@ -51,7 +86,7 @@ export async function queueConversationFollowUp(input: {
       null,
   });
   input.bridge.manager.connect(runId);
-  return runId;
+  return { runId, localMessageId: input.localMessageId };
 }
 
 /** User-initiated Run controls, isolated from conversation/upload orchestration. */
@@ -61,6 +96,9 @@ export function useRunControls({
   setDraftText,
   setStatus,
   flashError,
+  appendUserMessage,
+  removeUserMessage,
+  patchUserMessage,
 }: Options) {
   const cancelStream = useCallback(() => {
     const runId = bridge.getStore().activeRunId;
@@ -86,19 +124,42 @@ export function useRunControls({
       flashError('No active run to steer');
       return false;
     }
+    const optimistic = buildOptimisticUserMessage(trimmed, { runId });
+    const localId = String(optimistic._messageId);
+    appendUserMessage(optimistic);
+    setDraftText('');
     try {
-      await requestSteer(runId, {
+      const result = await requestSteer(runId, {
         text: trimmed,
         conversation_id: stateRef.current.conversationId,
       });
-      setDraftText('');
+      const data =
+        result?.data && typeof result.data === 'object'
+          ? (result.data as Record<string, unknown>)
+          : null;
+      const durableId = data
+        ? String(data.messageId || data.message_id || '').trim()
+        : '';
+      if (durableId) {
+        patchUserMessage(localId, { _messageId: durableId, _runId: runId });
+      }
       setStatus('Steered', '#3b82f6');
       return true;
     } catch (error) {
+      removeUserMessage(localId);
       flashError((error as Error).message || 'Steer failed');
       return false;
     }
-  }, [bridge, flashError, setDraftText, setStatus, stateRef]);
+  }, [
+    appendUserMessage,
+    bridge,
+    flashError,
+    patchUserMessage,
+    removeUserMessage,
+    setDraftText,
+    setStatus,
+    stateRef,
+  ]);
 
   const followUpRun = useCallback(async (text: string): Promise<boolean> => {
     const trimmed = text.trim();
@@ -113,21 +174,36 @@ export function useRunControls({
       flashError('No active conversation for follow-up');
       return false;
     }
+    const optimistic = buildOptimisticUserMessage(trimmed);
+    const localId = String(optimistic._messageId);
+    appendUserMessage(optimistic);
+    setDraftText('');
     try {
-      await queueConversationFollowUp({
+      const { runId } = await queueConversationFollowUp({
         bridge,
         conversationId,
         text: trimmed,
         sessionId: stateRef.current.sessionId,
+        localMessageId: localId,
       });
-      setDraftText('');
+      patchUserMessage(localId, { _runId: runId });
       setStatus('Follow-up queued', '#8b5cf6');
       return true;
     } catch (error) {
+      removeUserMessage(localId);
       flashError((error as Error).message || 'Follow-up failed');
       return false;
     }
-  }, [bridge, flashError, setDraftText, setStatus, stateRef]);
+  }, [
+    appendUserMessage,
+    bridge,
+    flashError,
+    patchUserMessage,
+    removeUserMessage,
+    setDraftText,
+    setStatus,
+    stateRef,
+  ]);
 
   const resumeInterrupted = useCallback(async () => {
     const store = bridge.getStore();

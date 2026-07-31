@@ -1,7 +1,7 @@
 import type { ApprovalEntity } from '../../../entities';
 
 /**
- * Approval card — persists from entity store (not SSE-only).
+ * Approval card — Codex-style inline prompt (entity store, not SSE-only).
  * Approve / Reject wire through ChatController.
  */
 export function ApprovalCard({
@@ -20,10 +20,18 @@ export function ApprovalCard({
   busy?: boolean;
 }) {
   const pending = approval.status === 'pending';
+  const title =
+    approval.command ||
+    approval.reason ||
+    (pending ? 'Tool call requires approval' : `Approval ${approval.status}`);
 
   return (
     <article
-      className={`rtc-card rtc-approval status-${approval.status}${selected ? ' selected' : ''}`}
+      className={`ix-card ix-approval${pending ? ' ix-waiting' : ''}${
+        approval.status === 'approved' ? ' ix-approved' : ''
+      }${approval.status === 'rejected' ? ' ix-rejected' : ''}${
+        selected ? ' selected' : ''
+      }`}
       data-approval-id={approval.id}
       data-status={approval.status}
       onClick={() => onSelect?.(approval.id)}
@@ -36,47 +44,35 @@ export function ApprovalCard({
       role="button"
       tabIndex={0}
     >
-      <header className="rtc-card-head">
-        <span className="rtc-icon" aria-hidden="true">
-          ⚠
+      <header className="ix-head">
+        <span className="ix-icon" aria-hidden="true">
+          {pending ? '⚠' : approval.status === 'approved' ? '✓' : '✕'}
         </span>
-        <span className="rtc-title">
-          {pending ? 'Approval required' : `Approval ${approval.status}`}
-        </span>
-        <span className="rtc-meta">{approval.status}</span>
+        <div className="ix-head-text">
+          <span className="ix-kicker">
+            {pending
+              ? 'Needs your approval'
+              : approval.status === 'approved'
+                ? 'Approved'
+                : approval.status === 'rejected'
+                  ? 'Rejected'
+                  : approval.status}
+            {approval.risk ? ` · ${approval.risk}` : ''}
+          </span>
+          <h3 className="ix-title">{title}</h3>
+        </div>
       </header>
-      {approval.reason ? (
-        <p className="rtc-subtitle">{approval.reason}</p>
+      {approval.reason && approval.reason !== title ? (
+        <p className="ix-message">{approval.reason}</p>
       ) : null}
-      {approval.risk ? (
-        <p className="rtc-subtitle rtc-risk">Risk: {approval.risk}</p>
+      {approval.command && approval.command !== title ? (
+        <pre className="ix-pre">{approval.command}</pre>
       ) : null}
-      {approval.command ? (
-        <pre className="rtc-cmd">{approval.command}</pre>
-      ) : null}
-      <p className="rtc-status-line">
-        run {approval.runId}
-        {approval.toolExecutionId
-          ? ` · tool ${approval.toolExecutionId}`
-          : ''}
-        {approval.expiresAt ? ` · expires ${approval.expiresAt}` : ''}
-      </p>
       {pending ? (
-        <div className="rtc-actions">
+        <div className="ix-actions">
           <button
             type="button"
-            className="btn-approve"
-            disabled={busy}
-            onClick={(e) => {
-              e.stopPropagation();
-              onApprove?.(approval.id);
-            }}
-          >
-            Approve
-          </button>
-          <button
-            type="button"
-            className="btn-reject"
+            className="ix-btn secondary"
             disabled={busy}
             onClick={(e) => {
               e.stopPropagation();
@@ -84,6 +80,17 @@ export function ApprovalCard({
             }}
           >
             Reject
+          </button>
+          <button
+            type="button"
+            className="ix-btn primary"
+            disabled={busy}
+            onClick={(e) => {
+              e.stopPropagation();
+              onApprove?.(approval.id);
+            }}
+          >
+            Approve
           </button>
         </div>
       ) : null}

@@ -731,6 +731,42 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     ],
   );
 
+  const appendUserMessage = useCallback((message: ChatMessage) => {
+    setState((s) => {
+      const next = update(s, { messages: [...s.messages, message] });
+      stateRef.current = next;
+      return next;
+    });
+  }, []);
+
+  const removeUserMessage = useCallback((messageId: string) => {
+    const id = String(messageId || '').trim();
+    if (!id) return;
+    setState((s) => {
+      const next = update(s, {
+        messages: s.messages.filter((m) => m._messageId !== id),
+      });
+      stateRef.current = next;
+      return next;
+    });
+  }, []);
+
+  const patchUserMessage = useCallback(
+    (messageId: string, patch: Partial<ChatMessage>) => {
+      const id = String(messageId || '').trim();
+      if (!id) return;
+      setState((s) => {
+        const messages = s.messages.map((m) =>
+          m._messageId === id ? { ...m, ...patch } : m,
+        );
+        const next = update(s, { messages });
+        stateRef.current = next;
+        return next;
+      });
+    },
+    [],
+  );
+
   const {
     cancelStream,
     stopRun,
@@ -744,6 +780,9 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     setDraftText,
     setStatus,
     flashError,
+    appendUserMessage,
+    removeUserMessage,
+    patchUserMessage,
   });
 
   const ensureConversationSession = useCallback(async () => {

@@ -27,10 +27,11 @@ describe('follow-up Run controller', () => {
       },
     } as unknown as EntityBridge;
 
-    const runId = await queueConversationFollowUp({
+    const result = await queueConversationFollowUp({
       bridge,
       conversationId: 'conversation-current',
       text: 'continue with the report',
+      localMessageId: 'local-follow-1',
       request: async (conversationId, body) => {
         assert.equal(conversationId, 'conversation-current');
         assert.deepEqual(body, { text: 'continue with the report' });
@@ -43,7 +44,8 @@ describe('follow-up Run controller', () => {
       },
     });
 
-    assert.equal(runId, 'run-next');
+    assert.equal(result.runId, 'run-next');
+    assert.equal(result.localMessageId, 'local-follow-1');
     assert.deepEqual(beginCalls, [{
       runId: 'run-next',
       conversationId: 'conversation-current',

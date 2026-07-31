@@ -278,10 +278,12 @@ export function Composer() {
         ) : null}
 
         {mode === 'waiting_input' && run?.pendingInput ? (
-          <div className="composer-banner waiting" role="status">
+          <div className="composer-banner waiting ix-composer-hint" role="status">
             <span className="composer-banner-text">
-              {run.pendingInput.title}
-              {run.pendingInput.message ? `: ${run.pendingInput.message}` : ''}
+              <strong>{run.pendingInput.title}</strong>
+              {run.pendingInput.message
+                ? ` — reply in the card above or type here`
+                : ' — reply in the card above or type here'}
             </span>
             {run.pendingInput.options.length ? (
               <span className="composer-banner-actions">

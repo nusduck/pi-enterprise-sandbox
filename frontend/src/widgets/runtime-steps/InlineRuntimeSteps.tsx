@@ -4,6 +4,7 @@ import { useWorkbenchSelection } from '../../app/layout/WorkbenchSelectionContex
 import { getArtifactDownloadUrl } from '../../shared/api';
 import { safeApiUrl } from '../../shared/security/url';
 import { isDurableArtifactId } from '../../shared/state/runReducer';
+import type { ApprovalEntity, ToolExecutionEntity } from '../../entities';
 import {
   buildRunTimeline,
   formatDuration,
@@ -15,13 +16,17 @@ import {
   formatToolInputDisplay,
   formatToolResultDisplay,
 } from '../message-list/formatToolDisplay';
+import {
+  isAskUserToolName,
+  parseAskUserFields,
+  summarizeInteractionResult,
+} from './interactionFields';
 
 function isActiveStatus(status: string | null | undefined): boolean {
   return (
     status === 'running' ||
     status === 'prepared' ||
     status === 'waiting_approval' ||
-    status === 'waiting_input' ||
     status === 'queued'
   );
 }
@@ -122,18 +127,195 @@ function StepShell({
   );
 }
 
+function InteractionStep({
+  tool,
+  pending,
+  onRespond,
+  selected,
+  onSelect,
+}: {
+  tool: ToolExecutionEntity;
+  pending: {
+    interactionId: string;
+    interactionType: string;
+    title: string;
+    message: string | null;
+    options: string[];
+  } | null;
+  onRespond: (response: unknown) => Promise<boolean>;
+  selected?: boolean;
+  onSelect?: () => void;
+}) {
+  const fields = parseAskUserFields(tool.input, pending);
+  const waiting =
+    Boolean(pending) ||
+    tool.status === 'running' ||
+    tool.status === 'prepared';
+  const resolved =
+    !waiting &&
+    (tool.status === 'completed' || tool.result != null) &&
+    !tool.isError;
+  const answer = summarizeInteractionResult(tool.result);
+  const [draft, setDraft] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  async function submit(value: unknown) {
+    if (busy) return;
+    setBusy(true);
+    try {
+      await onRespond(value);
+      setDraft('');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div
+      className={`ix-card${waiting ? ' ix-waiting' : ''}${selected ? ' selected' : ''}`}
+      data-tool-id={tool.id}
+      onClick={() => onSelect?.()}
+      role="group"
+      aria-label={fields.title}
+    >
+      <header className="ix-head">
+        <span className="ix-icon" aria-hidden="true">
+          {waiting ? '💬' : resolved ? '✓' : '○'}
+        </span>
+        <div className="ix-head-text">
+          <span className="ix-kicker">
+            {waiting ? 'Waiting for you' : resolved ? 'Answered' : 'Ask user'}
+          </span>
+          <h3 className="ix-title">{fields.title}</h3>
+        </div>
+      </header>
+      {fields.message ? <p className="ix-message">{fields.message}</p> : null}
+
+      {waiting && fields.interactionType === 'confirm' ? (
+        <div className="ix-actions">
+          <button
+            type="button"
+            className="ix-btn secondary"
+            disabled={busy}
+            onClick={(e) => {
+              e.stopPropagation();
+              void submit(false);
+            }}
+          >
+            Decline
+          </button>
+          <button
+            type="button"
+            className="ix-btn primary"
+            disabled={busy}
+            onClick={(e) => {
+              e.stopPropagation();
+              void submit(true);
+            }}
+          >
+            Confirm
+          </button>
+        </div>
+      ) : null}
+
+      {waiting && fields.interactionType === 'select' && fields.options.length ? (
+        <div className="ix-options" role="group" aria-label="Choices">
+          {fields.options.map((option) => (
+            <button
+              key={option}
+              type="button"
+              className="ix-chip"
+              disabled={busy}
+              onClick={(e) => {
+                e.stopPropagation();
+                void submit(option);
+              }}
+            >
+              {option}
+            </button>
+          ))}
+        </div>
+      ) : null}
+
+      {waiting &&
+      (fields.interactionType === 'input' ||
+        (fields.interactionType !== 'confirm' &&
+          fields.interactionType !== 'select')) ? (
+        <div
+          className="ix-input-row"
+          onClick={(e) => e.stopPropagation()}
+          onKeyDown={(e) => e.stopPropagation()}
+        >
+          <input
+            className="ix-input"
+            type="text"
+            value={draft}
+            placeholder={fields.placeholder || 'Type your response…'}
+            disabled={busy}
+            onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && draft.trim()) {
+                e.preventDefault();
+                void submit(draft.trim());
+              }
+            }}
+          />
+          <button
+            type="button"
+            className="ix-btn primary"
+            disabled={busy || !draft.trim()}
+            onClick={() => void submit(draft.trim())}
+          >
+            Submit
+          </button>
+        </div>
+      ) : null}
+
+      {!waiting && answer ? (
+        <p className="ix-answer">
+          <span className="ix-answer-label">Your reply</span>
+          {answer}
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
 function ToolStep({
   item,
   selected,
   onSelect,
   onOpenConsole,
+  pendingInput,
+  onRespond,
 }: {
   item: Extract<TimelineItem, { kind: 'tool' }>;
   selected?: boolean;
   onSelect?: () => void;
   onOpenConsole?: (processId: string) => void;
+  pendingInput?: {
+    interactionId: string;
+    interactionType: string;
+    title: string;
+    message: string | null;
+    options: string[];
+  } | null;
+  onRespond?: (response: unknown) => Promise<boolean>;
 }) {
   const tool = item.tool;
+
+  if (isAskUserToolName(tool.name) && onRespond) {
+    return (
+      <InteractionStep
+        tool={tool}
+        pending={pendingInput ?? null}
+        onRespond={onRespond}
+        selected={selected}
+        onSelect={onSelect}
+      />
+    );
+  }
+
   const tone = toolTone(tool.status, tool.isError);
   const title = formatToolName(tool.name, tool.source);
   const subtitle = tool.summary || summarizeToolInput(tool.input);
@@ -259,6 +441,7 @@ function ApprovalStep({
   onApprove,
   onReject,
   busy,
+  tool,
 }: {
   item: Extract<TimelineItem, { kind: 'approval' }>;
   selected?: boolean;
@@ -266,69 +449,84 @@ function ApprovalStep({
   onApprove?: (id: string) => void;
   onReject?: (id: string) => void;
   busy?: boolean;
+  tool?: ToolExecutionEntity | null;
 }) {
   const approval = item.approval;
   const pending = approval.status === 'pending';
-  const tone = pending
-    ? 'wait'
-    : approval.status === 'rejected'
-      ? 'error'
-      : approval.status === 'approved'
-        ? 'done'
-        : 'muted';
+  const toolName = tool?.name
+    ? formatToolName(tool.name, tool.source)
+    : approval.command || 'Tool call';
+  const detail =
+    approval.reason ||
+    (tool ? summarizeToolInput(tool.input) || formatToolInputDisplay(tool.input) : '') ||
+    approval.command ||
+    '';
+  const argsPreview =
+    tool != null
+      ? formatToolInputDisplay(tool.input) || formatPayload(tool.input) || ''
+      : approval.command || '';
 
   return (
-    <StepShell
-      tone={tone}
-      title={pending ? 'Approval required' : `Approval ${approval.status}`}
-      subtitle={approval.reason || approval.command || null}
-      meta={approval.risk || approval.status}
-      defaultOpen={pending}
-      selected={selected}
-      onSelect={onSelect}
-      actions={
-        pending ? (
-          <>
-            <button
-              type="button"
-              className="rs-btn approve"
-              disabled={busy}
-              onClick={(e) => {
-                e.stopPropagation();
-                onApprove?.(approval.id);
-              }}
-            >
-              Approve
-            </button>
-            <button
-              type="button"
-              className="rs-btn reject"
-              disabled={busy}
-              onClick={(e) => {
-                e.stopPropagation();
-                onReject?.(approval.id);
-              }}
-            >
-              Reject
-            </button>
-          </>
-        ) : null
-      }
+    <div
+      className={`ix-card ix-approval${pending ? ' ix-waiting' : ''}${
+        approval.status === 'approved' ? ' ix-approved' : ''
+      }${approval.status === 'rejected' ? ' ix-rejected' : ''}${
+        selected ? ' selected' : ''
+      }`}
+      data-approval-id={approval.id}
+      onClick={() => onSelect?.()}
+      role="group"
+      aria-label={pending ? 'Approval required' : `Approval ${approval.status}`}
     >
-      {approval.command ? (
-        <section>
-          <h4>Command</h4>
-          <pre>{approval.command}</pre>
-        </section>
+      <header className="ix-head">
+        <span className="ix-icon" aria-hidden="true">
+          {pending ? '⚠' : approval.status === 'approved' ? '✓' : '✕'}
+        </span>
+        <div className="ix-head-text">
+          <span className="ix-kicker">
+            {pending
+              ? 'Needs your approval'
+              : approval.status === 'approved'
+                ? 'Approved'
+                : approval.status === 'rejected'
+                  ? 'Rejected'
+                  : `Approval · ${approval.status}`}
+            {approval.risk ? ` · ${approval.risk}` : ''}
+          </span>
+          <h3 className="ix-title">{toolName}</h3>
+        </div>
+      </header>
+      {detail ? <p className="ix-message">{detail}</p> : null}
+      {argsPreview && argsPreview !== detail ? (
+        <pre className="ix-pre">{argsPreview}</pre>
       ) : null}
-      {approval.reason ? (
-        <section>
-          <h4>Reason</h4>
-          <p>{approval.reason}</p>
-        </section>
+      {pending ? (
+        <div className="ix-actions">
+          <button
+            type="button"
+            className="ix-btn secondary"
+            disabled={busy}
+            onClick={(e) => {
+              e.stopPropagation();
+              onReject?.(approval.id);
+            }}
+          >
+            Reject
+          </button>
+          <button
+            type="button"
+            className="ix-btn primary"
+            disabled={busy}
+            onClick={(e) => {
+              e.stopPropagation();
+              onApprove?.(approval.id);
+            }}
+          >
+            Approve
+          </button>
+        </div>
       ) : null}
-      {approval.risk ? <p className="rs-muted">Risk · {approval.risk}</p> : null}
-    </StepShell>
+    </div>
   );
 }
 
@@ -390,9 +588,17 @@ function ArtifactStep({
  * into the tool step (Console action) to avoid double-listing.
  */
 export function InlineRuntimeSteps({ runId }: { runId: string }) {
-  const { entityStore, resolveApproval, activeSessionId } = useChat();
+  const {
+    entityStore,
+    resolveApproval,
+    activeSessionId,
+    respondInteraction,
+  } = useChat();
   const { selected, setSelected, openProcessConsole } = useWorkbenchSelection();
   const [busyApproval, setBusyApproval] = useState<string | null>(null);
+
+  const run = entityStore.runsById[runId];
+  const pendingInput = run?.pendingInput ?? null;
 
   const items = useMemo(() => {
     const all = buildRunTimeline(entityStore, runId);
@@ -411,6 +617,8 @@ export function InlineRuntimeSteps({ runId }: { runId: string }) {
       return true;
     });
   }, [entityStore, runId]);
+
+  const toolsById = entityStore.toolExecutionsById;
 
   if (!items.length) return null;
 
@@ -449,6 +657,21 @@ export function InlineRuntimeSteps({ runId }: { runId: string }) {
     }
   }
 
+  function toolForApproval(approval: ApprovalEntity): ToolExecutionEntity | null {
+    if (approval.toolExecutionId && toolsById[approval.toolExecutionId]) {
+      return toolsById[approval.toolExecutionId];
+    }
+    // Fall back: pending tool on this run waiting on this approval.
+    for (const id of run?.toolExecutionIds || []) {
+      const t = toolsById[id];
+      if (t && t.approvalId === approval.id) return t;
+      if (t && t.status === 'waiting_approval' && !approval.toolExecutionId) {
+        return t;
+      }
+    }
+    return null;
+  }
+
   return (
     <div className="runtime-steps" role="list" aria-label="Runtime steps">
       {items.map((item) => {
@@ -461,6 +684,10 @@ export function InlineRuntimeSteps({ runId }: { runId: string }) {
                 selected={selectedRow}
                 onSelect={() => setSelected({ kind: 'tool', id: item.tool.id })}
                 onOpenConsole={openProcessConsole}
+                pendingInput={
+                  isAskUserToolName(item.tool.name) ? pendingInput : null
+                }
+                onRespond={respondInteraction}
               />
             </div>
           );
@@ -484,6 +711,7 @@ export function InlineRuntimeSteps({ runId }: { runId: string }) {
             <div key={item.id} role="listitem">
               <ApprovalStep
                 item={item}
+                tool={toolForApproval(item.approval)}
                 selected={selectedRow}
                 onSelect={() =>
                   setSelected({ kind: 'approval', id: item.approval.id })

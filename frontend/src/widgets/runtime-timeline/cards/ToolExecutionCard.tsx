@@ -5,6 +5,11 @@ import {
   formatPayload,
   summarizeToolInput,
 } from '../buildTimeline';
+import {
+  isAskUserToolName,
+  parseAskUserFields,
+  summarizeInteractionResult,
+} from '../../runtime-steps/interactionFields';
 
 function statusIcon(tool: ToolExecutionEntity): string {
   if (tool.isError || tool.status === 'failed') return '✗';
@@ -32,6 +37,52 @@ export function ToolExecutionCard({
   onSelect?: (toolId: string) => void;
 }) {
   const [open, setOpen] = useState(false);
+
+  // ask_user: human-readable card instead of raw JSON dump.
+  if (isAskUserToolName(tool.name)) {
+    const fields = parseAskUserFields(tool.input);
+    const waiting =
+      tool.status === 'running' || tool.status === 'prepared';
+    const answer = summarizeInteractionResult(tool.result);
+    return (
+      <article
+        className={`ix-card${waiting ? ' ix-waiting' : ''}${selected ? ' selected' : ''}`}
+        data-tool-id={tool.id}
+        data-status={tool.status}
+        onClick={() => onSelect?.(tool.id)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            onSelect?.(tool.id);
+          }
+        }}
+        role="button"
+        tabIndex={0}
+      >
+        <header className="ix-head">
+          <span className="ix-icon" aria-hidden="true">
+            {waiting ? '💬' : '✓'}
+          </span>
+          <div className="ix-head-text">
+            <span className="ix-kicker">
+              {waiting ? 'Waiting for you' : 'Ask user'}
+            </span>
+            <h3 className="ix-title">{fields.title}</h3>
+          </div>
+        </header>
+        {fields.message ? <p className="ix-message">{fields.message}</p> : null}
+        {answer ? (
+          <p className="ix-answer">
+            <span className="ix-answer-label">Reply</span>
+            {answer}
+          </p>
+        ) : waiting ? (
+          <p className="ix-message ix-muted">Respond in the chat composer below.</p>
+        ) : null}
+      </article>
+    );
+  }
+
   const subtitle = tool.summary || summarizeToolInput(tool.input);
   const duration = formatDuration(tool.createdAt, tool.updatedAt);
   const args = formatPayload(tool.input);
