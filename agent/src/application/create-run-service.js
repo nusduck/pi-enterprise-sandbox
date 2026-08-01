@@ -42,6 +42,10 @@ import {
   conversationTitleFromMessages,
   isPlaceholderConversationTitle,
 } from './conversation-title.js';
+import {
+  ModelRegistryError,
+  resolveModel,
+} from '../infrastructure/model-registry.js';
 
 export const CREATE_RUN_OPERATION = 'create_run';
 export const DEFAULT_IDEMPOTENCY_TTL_MS = 24 * 60 * 60 * 1000;
@@ -156,6 +160,55 @@ function currentUserTurnText(messages) {
     .join('');
 }
 
+/** Return true when the current user turn carries an image input. */
+function currentUserTurnHasImage(messages) {
+  const current = [...messages]
+    .reverse()
+    .find((message) => message && typeof message === 'object' &&
+      (message.role === 'user' || message.role == null));
+  if (!current || typeof current !== 'object') return false;
+  const attachments = Array.isArray(current.attachments)
+    ? current.attachments
+    : [];
+  if (attachments.some((item) =>
+    item && typeof item === 'object' &&
+    String(item.mime_type ?? item.mimeType ?? '').toLowerCase().startsWith('image/'),
+  )) {
+    return true;
+  }
+  const content = current.content ?? current.text;
+  return Array.isArray(content) && content.some((part) =>
+    part && typeof part === 'object' && String(part.type || '') === 'image',
+  );
+}
+
+function normalizeRequestedModel(modelId, messages) {
+  if (modelId == null || String(modelId).trim() === '') return null;
+  const id = String(modelId).trim();
+  let entry;
+  try {
+    entry = resolveModel(id);
+  } catch (error) {
+    if (error instanceof ModelRegistryError) {
+      throw new ValidationError(error.message, {
+        code: error.code,
+        modelId: error.modelId,
+      });
+    }
+    throw error;
+  }
+  if (
+    currentUserTurnHasImage(messages) &&
+    !entry.input_modalities.includes('image')
+  ) {
+    throw new ValidationError(
+      `Model "${id}" does not support image input`,
+      { code: 'model_vision_unsupported', modelId: id },
+    );
+  }
+  return id;
+}
+
 export class CreateRunService {
   /**
    * @param {{
@@ -229,6 +282,7 @@ export class CreateRunService {
    *   idempotencyKey: string,
    *   agentId?: string | null,
    *   agentProfileId?: string | null,
+   *   modelId?: string | null,
    *   budget?: unknown,
    *   spanId?: string | null,
    * }} input
@@ -239,6 +293,7 @@ export class CreateRunService {
       throw new ValidationError('CreateRun input is required');
     }
     const messages = requireMessages(input.messages);
+    const modelId = normalizeRequestedModel(input.modelId, messages);
     const traceId = normalizeTraceId(input.traceId);
     const traceState = normalizeTraceState(input.traceState);
     const rawTraceFlags = String(input.traceFlags ?? '01').trim();
@@ -274,6 +329,7 @@ export class CreateRunService {
           ? agentId
           : null,
       budget: input.budget ?? null,
+      modelId,
     });
 
     let lastRace = null;
@@ -290,6 +346,7 @@ export class CreateRunService {
           spanId: input.spanId ?? null,
           agentId,
           agentProfileId: input.agentProfileId ?? null,
+          modelId,
         });
       } catch (err) {
         if (err instanceof ParentProvisioningRaceError) {
@@ -319,6 +376,7 @@ export class CreateRunService {
    *   spanId: string | null,
    *   agentId: string | null,
    *   agentProfileId: string | null,
+   *   modelId: string | null,
    * }} ctx
    */
   async #createOnce(ctx) {
@@ -459,6 +517,7 @@ export class CreateRunService {
         messages: ctx.messages,
         agentId: ctx.agentId,
         agentProfileId: ctx.agentProfileId,
+        modelId: ctx.modelId,
       };
 
       await repos.messages.append({

@@ -92,6 +92,13 @@ const TRANSIENT_MAP_WHITELIST = Object.freeze([
     scope: 'local',
   },
   {
+    rel: 'extensions/sandbox-bridge/tools/index.js',
+    match: /const\s+readDedup\s*=\s*new\s+Map\s*\(/,
+    purpose:
+      'Function-local repeated-read convergence guard; discarded with the tool bundle and not durable Run state',
+    scope: 'local',
+  },
+  {
     rel: 'infrastructure/pi/pi-jsonl-codec.js',
     match: /const\s+parentOf\s*=\s*new\s+Map\s*\(/,
     purpose:
@@ -339,9 +346,10 @@ describe('no authoritative in-process Run Map (B3)', () => {
     // f9105b90 without an inventory update), the two-tier skill listing, and
     // the tool-risk-policy layer merge. All function-local, none Run authority.
     // 17 → 18: owner-scoped Run-list AgentSession batch lookup.
+    // 18 → 19: function-local sandbox read deduplication guard.
     assert.equal(
       TRANSIENT_MAP_WHITELIST.length,
-      18,
+      19,
       'whitelist size drift — update STATUS B3 inventory evidence if intentional',
     );
   });

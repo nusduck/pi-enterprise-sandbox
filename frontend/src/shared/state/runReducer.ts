@@ -442,6 +442,51 @@ export function reduceRuntimeEvent(
       break;
     }
 
+    case 'thinking.started':
+    case 'thinking.delta':
+    case 'thinking.completed': {
+      let messageId = str(payload.message_id || payload.id);
+      if (!messageId) {
+        const run = next.runsById[runId];
+        for (const id of [...(run?.messageIds || [])].reverse()) {
+          const candidate = next.messagesById[id];
+          if (candidate?.role === 'assistant' && candidate.status === 'streaming') {
+            messageId = id;
+            break;
+          }
+        }
+      }
+      const id = messageId || `msg_${runId}_thinking_${ev.sequence}`;
+      const existing = next.messagesById[id];
+      const delta = str(payload.text || payload.delta);
+      const completed = ev.type === 'thinking.completed';
+      const thinking = completed
+        ? payload.text != null && payload.text_truncated !== true
+          ? str(payload.text)
+          : existing?.thinking || delta
+        : ev.type === 'thinking.delta'
+          ? (existing?.thinking || '') + delta
+          : existing?.thinking || '';
+      next = upsertMessage(
+        next,
+        createMessage({
+          ...existing,
+          id,
+          runId,
+          conversationId:
+            existing?.conversationId || next.runsById[runId]?.conversationId || null,
+          role: 'assistant',
+          text: existing?.text || '',
+          thinking,
+          thinkingStatus: completed ? 'complete' : 'streaming',
+          status: existing?.status || 'streaming',
+          createdAt: existing?.createdAt || ts,
+          updatedAt: ts,
+        }),
+      );
+      break;
+    }
+
     case 'message.completed': {
       const completedRole = normalizeChatMessageRole(
         payload.role == null || payload.role === '' ? 'assistant' : payload.role,

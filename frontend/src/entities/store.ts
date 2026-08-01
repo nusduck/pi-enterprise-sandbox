@@ -146,6 +146,8 @@ export function createMessage(
     conversationId: null,
     role: 'assistant',
     text: '',
+    thinking: '',
+    thinkingStatus: 'idle',
     status: 'streaming',
     createdAt: null,
     updatedAt: null,

@@ -279,6 +279,14 @@ export function normalizeServerMessages(messages: unknown): ChatMessage[] {
       const out: ChatMessage = {
         role: m.role as string,
         content: [{ type: 'text', text }],
+        thinking:
+          typeof m.thinking === 'string' ? m.thinking : undefined,
+        thinkingStatus:
+          m.thinking_status === 'streaming' || m.thinkingStatus === 'streaming'
+            ? 'streaming'
+            : typeof m.thinking === 'string' && m.thinking
+              ? 'complete'
+              : undefined,
         _messageId: String(m.messageId ?? m.message_id ?? m.id ?? ''),
         _runId:
           m.runId != null || m.run_id != null

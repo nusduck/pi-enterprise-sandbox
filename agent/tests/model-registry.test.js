@@ -62,7 +62,7 @@ describe('normalizeModelEntry', () => {
 });
 
 describe('capability switch', () => {
-  it('different models expose different context windows and max output', () => {
+  it('enforces a 256 Ki-token platform floor while preserving larger contexts', () => {
     const flash = resolveModel('deepseek-v4-flash', {
       registry: buildRegistry({ seed: SEED_MODELS, filePath: null }),
       applyOverrides: false,
@@ -76,10 +76,10 @@ describe('capability switch', () => {
       applyOverrides: false,
     });
 
-    assert.equal(flash.context_window, 128000);
-    assert.equal(flash.max_output_tokens, 8192);
+    assert.equal(flash.context_window, 262144);
+    assert.equal(flash.max_output_tokens, 65536);
     assert.equal(gemini.context_window, 1048576);
-    assert.equal(gpt.max_output_tokens, 16384);
+    assert.equal(gpt.max_output_tokens, 65536);
     assert.notEqual(flash.context_window, gemini.context_window);
   });
 
@@ -106,8 +106,8 @@ describe('capability switch', () => {
     const pi = toPiModel(gpt, { baseUrl: 'https://llm.example', apiKey: 'k' });
 
     assert.equal(pi.id, 'gpt-5.5');
-    assert.equal(pi.contextWindow, 128000);
-    assert.equal(pi.maxTokens, 16384);
+    assert.equal(pi.contextWindow, 262144);
+    assert.equal(pi.maxTokens, 65536);
     assert.equal(pi.compat.supportsDeveloperRole, true);
     assert.equal(pi.cost.input, gpt.pricing.input_per_mtok);
     assert.equal(pi.baseUrl, 'https://llm.example');
@@ -119,7 +119,7 @@ describe('capability switch', () => {
   });
 
   it('toPiModel uses registry values — not a single hard-coded context/max', () => {
-    // gemini has a non-default context window; gpt has a different max output.
+    // Gemini keeps its larger context while sharing the platform output cap.
     const reg = buildRegistry({ seed: SEED_MODELS, filePath: null });
     const gemini = resolveModel('gemini-3.5-flash', {
       registry: reg,
@@ -129,9 +129,9 @@ describe('capability switch', () => {
     const piGemini = toPiModel(gemini, { baseUrl: 'http://x' });
     const piGpt = toPiModel(gpt, { baseUrl: 'http://x' });
     assert.equal(piGemini.contextWindow, 1048576);
-    assert.equal(piGpt.maxTokens, 16384);
+    assert.equal(piGpt.maxTokens, 65536);
     assert.notEqual(piGemini.contextWindow, piGpt.contextWindow);
-    assert.notEqual(piGemini.maxTokens, piGpt.maxTokens);
+    assert.equal(piGemini.maxTokens, piGpt.maxTokens);
     assert.equal(piGemini.reasoning, false);
     assert.equal(piGpt.reasoning, true);
   });

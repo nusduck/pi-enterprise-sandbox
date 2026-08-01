@@ -190,6 +190,18 @@ export function MessageBubble({
   const body: ReactNode[] = [];
   let visibleAttachments = msg.attachments || [];
 
+  if (!isUser && msg.thinking) {
+    body.push(
+      <details key="thinking" className="message-thinking">
+        <summary>
+          Thinking{msg.thinkingStatus === 'streaming' ? '…' : ''}
+        </summary>
+        <div className="message-thinking-body">{msg.thinking}</div>
+      </details>,
+    );
+    hasContent = true;
+  }
+
   // Tools / processes / approvals / artifacts are rendered only here, from the
   // EntityStore, and only once per run (MessageList picks the host bubble).
   if (useEntitySteps && runId) {

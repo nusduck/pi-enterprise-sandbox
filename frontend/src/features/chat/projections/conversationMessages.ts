@@ -12,6 +12,8 @@ export function messageText(message: ChatMessage): string {
 function hasRuntimeDetail(message: ChatMessage): boolean {
   return (
     Boolean(message._hasRuntimeSteps) ||
+    message.content.some((part) => part.type === 'tool_use') ||
+    Boolean(message.thinking) ||
     Boolean(message._fileLinks?.length) ||
     Boolean(message.interrupted)
   );

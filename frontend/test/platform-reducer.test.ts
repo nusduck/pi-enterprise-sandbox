@@ -132,6 +132,55 @@ describe('normalizeToRuntimeEvent', () => {
     assert.equal(store.messagesById.msg_preview.text, fullText);
     assert.equal(store.messagesById.msg_preview.status, 'complete');
   });
+
+  it('streams provider thinking separately from final answer text', () => {
+    const runId = 'run_thinking';
+    const { store } = reducePlatformEventBatch(createEntityStore(), [
+      platform({ eventId: 'think_1', sequence: 1, type: 'run.started', runId }),
+      platform({
+        eventId: 'think_2',
+        sequence: 2,
+        type: 'thinking.started',
+        runId,
+        data: { messageId: 'msg_thinking' },
+      }),
+      platform({
+        eventId: 'think_3',
+        sequence: 3,
+        type: 'thinking.delta',
+        runId,
+        data: { messageId: 'msg_thinking', delta: 'first ' },
+      }),
+      platform({
+        eventId: 'think_4',
+        sequence: 4,
+        type: 'thinking.delta',
+        runId,
+        data: { messageId: 'msg_thinking', delta: 'second' },
+      }),
+      platform({
+        eventId: 'think_5',
+        sequence: 5,
+        type: 'thinking.completed',
+        runId,
+        data: {
+          messageId: 'msg_thinking',
+          text: 'bounded preview',
+          text_truncated: true,
+        },
+      }),
+      platform({
+        eventId: 'think_6',
+        sequence: 6,
+        type: 'message.delta',
+        runId,
+        data: { messageId: 'msg_thinking', delta: 'final answer' },
+      }),
+    ]);
+    assert.equal(store.messagesById.msg_thinking.thinking, 'first second');
+    assert.equal(store.messagesById.msg_thinking.thinkingStatus, 'complete');
+    assert.equal(store.messagesById.msg_thinking.text, 'final answer');
+  });
 });
 
 describe('unified platform reducer', () => {

@@ -183,6 +183,21 @@ function makeDeps(observed) {
       },
     },
     messages: {
+      async getById(messageId) {
+        assert.equal(messageId, durableRun.triggeringMessageId);
+        return {
+          messageId,
+          orgId: ORG,
+          userId: USER,
+          conversationId: CONV,
+          agentSessionId: SESSION,
+          runId: RUN,
+          role: 'USER',
+          contentJson: {
+            messages: [{ role: 'user', content: 'hello world' }],
+          },
+        };
+      },
       async append() {},
     },
     runEvents: {

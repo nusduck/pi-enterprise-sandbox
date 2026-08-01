@@ -404,8 +404,71 @@ export function createSandboxClient({ traceId = null, traceState = null, auth = 
       return resp.json();
     },
 
-    async downloadFileStream(sessionId, path) {
-      return sbFetch(`/sessions/${sessionId}/files/download?path=${encodeURIComponent(path)}`);
+    async listFiles(sessionId, dir = '.') {
+      const q = new URLSearchParams({ path: dir });
+      const resp = await sbFetch(`/sessions/${sessionId}/files?${q}`);
+      return resp.json();
+    },
+
+    /** Structured ls — POST /sessions/{id}/files/ls */
+    async lsFiles(sessionId, body = {}) {
+      const resp = await sbFetch(`/sessions/${sessionId}/files/ls`, {
+        method: 'POST',
+        body: JSON.stringify({
+          path: body.path ?? '.',
+          depth: body.depth ?? 1,
+          include_hidden: Boolean(body.include_hidden),
+        }),
+      });
+      return resp.json();
+    },
+
+    /** Structured find — POST /sessions/{id}/files/find */
+    async findFiles(sessionId, body = {}) {
+      const payload = {
+        path: body.path ?? '.',
+        pattern: body.pattern ?? '*',
+      };
+      if (body.type != null) payload.type = body.type;
+      if (body.max_depth != null) payload.max_depth = body.max_depth;
+      if (body.limit != null) payload.limit = body.limit;
+      const resp = await sbFetch(`/sessions/${sessionId}/files/find`, {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      });
+      return resp.json();
+    },
+
+    /** Structured grep — POST /sessions/{id}/files/grep */
+    async grepFiles(sessionId, body = {}) {
+      const payload = {
+        path: body.path ?? '.',
+        query: body.query,
+        regex: Boolean(body.regex),
+        case_sensitive: body.case_sensitive !== false,
+      };
+      if (body.glob != null) payload.glob = body.glob;
+      if (body.context != null) payload.context = body.context;
+      if (body.limit != null) payload.limit = body.limit;
+      const resp = await sbFetch(`/sessions/${sessionId}/files/grep`, {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      });
+      return resp.json();
+    },
+
+    async downloadFileStream(sessionId, path, options = {}) {
+      return sbFetch(
+        `/sessions/${sessionId}/files/download?path=${encodeURIComponent(path)}`,
+        { signal: options.signal },
+      );
+    },
+
+    async downloadDatasetContent(sessionId, datasetId, options = {}) {
+      return sbFetch(
+        `/sessions/${encodeURIComponent(sessionId)}/datasets/${encodeURIComponent(datasetId)}/content`,
+        { signal: options.signal },
+      );
     },
 
     // ── Artifacts (submit only — no metadata-only register) ──

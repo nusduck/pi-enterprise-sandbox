@@ -51,4 +51,48 @@ describe('observability assistant message identities', () => {
       `assistant:${RUN_CONTEXT.runId}:seq2`,
     ]);
   });
+
+  it('binds thinking and answer events to the same assistant message', async () => {
+    const records = [];
+    const handlers = new Map();
+    const extension = createObservabilityExtension({
+      runContext: RUN_CONTEXT,
+      deps: { recorder: { record: async (record) => records.push(record) } },
+    });
+    await extension({
+      on(event, handler) {
+        if (!handlers.has(event)) handlers.set(event, []);
+        handlers.get(event).push(handler);
+      },
+    });
+    const emit = async (event, payload) => {
+      for (const handler of handlers.get(event) || []) await handler(payload);
+    };
+    await emit('message_update', {
+      assistantMessageEvent: { type: 'thinking_start' },
+    });
+    await emit('message_update', {
+      assistantMessageEvent: { type: 'thinking_delta', delta: 'reason' },
+    });
+    await emit('message_update', {
+      assistantMessageEvent: { type: 'thinking_end', content: 'reason' },
+    });
+    await emit('message_update', {
+      assistantMessageEvent: { type: 'text_delta', delta: 'answer' },
+    });
+    await emit('message_end', {
+      message: { role: 'assistant', content: [{ type: 'text', text: 'answer' }] },
+    });
+
+    const events = records.filter((record) =>
+      record.type.startsWith('thinking.') || record.type.startsWith('message.'),
+    );
+    assert.deepEqual(events.map((record) => record.data.messageId), [
+      `assistant:${RUN_CONTEXT.runId}:seq1`,
+      `assistant:${RUN_CONTEXT.runId}:seq1`,
+      `assistant:${RUN_CONTEXT.runId}:seq1`,
+      `assistant:${RUN_CONTEXT.runId}:seq1`,
+      `assistant:${RUN_CONTEXT.runId}:seq1`,
+    ]);
+  });
 });

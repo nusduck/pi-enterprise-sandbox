@@ -593,11 +593,11 @@ export class ServiceContainer {
   /**
    * Default modelResolver: AgentVersion embedded model, else modelPolicy id /
    * MODEL_ID registry entry → pi-ai Model (LLMIO baseUrl/apiKey from env).
-   * @returns {(agentVersion: object) => Promise<object>}
+   * @returns {(agentVersion: object, selection?: { modelId?: string|null }) => Promise<object>}
    */
   createDefaultModelResolver() {
     const env = this.env;
-    return async (agentVersion) => {
+    return async (agentVersion, selection = {}) => {
       const { bindAgentVersionConfig, resolveConcreteModel } = await import(
         '../infrastructure/pi/pi-runtime-factory.js'
       );
@@ -606,6 +606,14 @@ export class ServiceContainer {
       );
       const bound = bindAgentVersionConfig(agentVersion);
       if (bound.model) {
+        if (selection.modelId && String(bound.model.id) !== selection.modelId) {
+          return resolveConcreteModel(
+            bound,
+            toPiModel(resolveModel(selection.modelId, { env }), {
+              baseUrl: String(env.LLMIO_BASE_URL || '').trim(),
+            }),
+          );
+        }
         return resolveConcreteModel(bound, null);
       }
       const policy = bound.modelPolicy || {};
@@ -616,6 +624,7 @@ export class ServiceContainer {
             ? /** @type {Record<string, unknown>} */ (policy.modelRef)
             : {};
       const modelId =
+        (typeof selection.modelId === 'string' && selection.modelId.trim()) ||
         (typeof policy.modelId === 'string' && policy.modelId.trim()) ||
         (typeof policy.id === 'string' && policy.id.trim()) ||
         (typeof ref.modelId === 'string' && String(ref.modelId).trim()) ||
@@ -980,6 +989,7 @@ export class ServiceContainer {
    *   projector?: any,
    *   recoveryService?: SessionRecoveryService,
    *   sandboxSessionProvisioner?: any,
+   *   promptImageLoader?: Function,
    *   sessionLockRenewIntervalMs?: number,
    *   steerPollIntervalMs?: number,
    *   mcpResolver?: Function | object | null,
@@ -1170,6 +1180,37 @@ export class ServiceContainer {
       }
     }
 
+    const promptImageLoader =
+      opts.promptImageLoader ??
+      (async (input) => {
+        const [{ createSandboxClient }, { loadPromptImagesFromAttachmentStore }] =
+          await Promise.all([
+            import('../infrastructure/sandbox/sandbox-client.js'),
+            import('../infrastructure/pi/prompt-image-loader.js'),
+          ]);
+        const sandboxClient = createSandboxClient({
+          traceId: input.traceId,
+          traceState: input.traceState,
+          auth: {
+            actingUserId: input.scope.userId,
+            actingOrganizationId: input.scope.orgId,
+          },
+        });
+        return loadPromptImagesFromAttachmentStore({
+          attachmentStore: {
+            download: ({ attachmentId, sandboxSessionId, signal }) =>
+              sandboxClient.downloadDatasetContent(
+                sandboxSessionId,
+                attachmentId,
+                { signal },
+              ),
+          },
+          sandboxSessionId: input.sandboxSessionId,
+          attachments: input.attachments,
+          signal: input.signal,
+        });
+      });
+
     return createPiRunExecutorFactory({
       transactionManager: this.getTransactionManager(),
       createRepositories: (db) => this.createRepositories(db),
@@ -1177,6 +1218,7 @@ export class ServiceContainer {
       piRuntimeFactory,
       sessionAdapter,
       modelResolver: opts.modelResolver,
+      promptImageLoader,
       workspaceResolver: opts.workspaceResolver,
       requestAuthResolver:
         opts.requestAuthResolver ??

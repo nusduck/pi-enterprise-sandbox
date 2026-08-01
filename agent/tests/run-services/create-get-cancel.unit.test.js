@@ -148,6 +148,43 @@ describe('CreateRunService durable path', () => {
     assert.equal(stored.messages.length, 3);
   });
 
+  it('persists an explicit model selection on the triggering message', async () => {
+    await svc.create.execute({
+      messages: MESSAGES,
+      modelId: 'gpt-5.5',
+      auth: FIXED_AUTH,
+      traceId: TRACE,
+      idempotencyKey: 'selected-model',
+    });
+    const stored = JSON.parse(world.tables.messages[0].content_json);
+    assert.equal(stored.modelId, 'gpt-5.5');
+  });
+
+  it('rejects image turns for a text-only selected model', async () => {
+    const imageTurn = [{
+      role: 'user',
+      content: 'describe this',
+      attachments: [{
+        attachment_id: 'dataset-1',
+        mime_type: 'image/png',
+        size: 4,
+      }],
+    }];
+    await assert.rejects(
+      () => svc.create.execute({
+        messages: imageTurn,
+        modelId: 'deepseek-v4-flash',
+        auth: FIXED_AUTH,
+        traceId: TRACE,
+        idempotencyKey: 'text-model-image',
+      }),
+      (error) =>
+        error instanceof ValidationError &&
+        /does not support image input/.test(error.message),
+    );
+    assert.equal(world.tables.runs.length, 0);
+  });
+
   it('titles a fresh conversation from the first user input', async () => {
     const title = conversationTitleFromMessages([
       {

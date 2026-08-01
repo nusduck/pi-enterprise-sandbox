@@ -65,6 +65,8 @@ import {
 import {
   derivePromptFromTriggeringMessage,
   generateRunLeaseOwnerToken,
+  imageAttachmentsFromTriggeringMessage,
+  requestedModelIdFromTriggeringMessage,
   replaceSuspendedToolResultInSession,
   toPiPromptInvocation,
 } from './pi-run-input.js';
@@ -83,6 +85,8 @@ export {
 export {
   derivePromptFromTriggeringMessage,
   generateRunLeaseOwnerToken,
+  imageAttachmentsFromTriggeringMessage,
+  requestedModelIdFromTriggeringMessage,
   replaceSuspendedToolResultInSession,
   toPiPromptInvocation,
 } from './pi-run-input.js';
@@ -104,7 +108,8 @@ export class PiRunExecutor {
    *   },
    *   piRuntimeFactory: { create: (input: object) => Promise<any> },
    *   sessionAdapter?: { captureSnapshotPayload: Function, dispose?: Function },
-   *   modelResolver: (agentVersion: object) => object | Promise<object>,
+   *   modelResolver: (agentVersion: object, selection?: { modelId?: string|null }) => object | Promise<object>,
+   *   promptImageLoader?: (input: object) => Promise<Array<{ type: 'image', data: string, mimeType: string }>>,
    *   requestAuthResolver?: (model: object, agentVersion: object) => object | Promise<object>,
    *   workspaceResolver: (agentSession: object) => string | Promise<string>,
    *   sandboxSessionProvisioner?: { ensure: (input: object) => Promise<object> },
@@ -149,6 +154,7 @@ export class PiRunExecutor {
     this.piRuntimeFactory = deps.piRuntimeFactory;
     this.sessionAdapter = deps.sessionAdapter ?? null;
     this.modelResolver = deps.modelResolver;
+    this.promptImageLoader = deps.promptImageLoader ?? null;
     this.requestAuthResolver = deps.requestAuthResolver ?? null;
     this.workspaceResolver = deps.workspaceResolver;
     this.sandboxSessionProvisioner = deps.sandboxSessionProvisioner ?? null;
@@ -383,11 +389,30 @@ export class PiRunExecutor {
         };
       }
 
-      const model = await this.modelResolver(agentVersion);
+      const triggering = await this.tx.run(async (trx) => {
+        const repos = this.createRepositories(trx);
+        return repos.messages.getById(run.triggeringMessageId, scope);
+      });
+      this.#assertTriggeringMessageBinding(triggering, run);
+      const requestedModelId = requestedModelIdFromTriggeringMessage(triggering);
+      const imageAttachments = imageAttachmentsFromTriggeringMessage(triggering);
+
+      const model = await this.modelResolver(agentVersion, {
+        modelId: requestedModelId,
+      });
       if (!model) {
         return {
           outcome: RUN_STATUS.FAILED,
           statusReason: 'modelResolver returned no model',
+        };
+      }
+      if (
+        imageAttachments.length > 0 &&
+        (!Array.isArray(model.input) || !model.input.includes('image'))
+      ) {
+        return {
+          outcome: RUN_STATUS.FAILED,
+          statusReason: `selected model ${String(model.id || '')} does not support image input`,
         };
       }
       const requestAuth = this.requestAuthResolver
@@ -719,14 +744,35 @@ export class PiRunExecutor {
           }),
         );
       } else {
-        const triggering = await this.tx.run(async (trx) => {
-          const repos = this.createRepositories(trx);
-          return repos.messages.getById(run.triggeringMessageId, scope);
-        });
-        this.#assertTriggeringMessageBinding(triggering, run);
-        prompt = toPiPromptInvocation(
-          derivePromptFromTriggeringMessage(triggering),
-        );
+        prompt = toPiPromptInvocation(derivePromptFromTriggeringMessage(triggering));
+        if (imageAttachments.length > 0) {
+          if (!this.promptImageLoader) {
+            return {
+              outcome: RUN_STATUS.FAILED,
+              statusReason: 'image attachments require a configured attachment store',
+            };
+          }
+          let images;
+          try {
+            images = await this.promptImageLoader({
+              attachments: imageAttachments,
+              sandboxSessionId: session.sandboxSessionId,
+              scope,
+              traceId,
+              traceState,
+              signal,
+            });
+          } catch (error) {
+            return {
+              outcome: RUN_STATUS.FAILED,
+              statusReason:
+                sanitizeStatusReason(error) ?? 'image attachment resolution failed',
+            };
+          }
+          if (images.length > 0) {
+            prompt.options = { ...(prompt.options || {}), images };
+          }
+        }
       }
 
       if (this._lockLost || signal?.aborted) {
@@ -1649,7 +1695,8 @@ export class PiRunExecutor {
  *   createRepositories: (db: any) => any,
  *   sessionLockManager: any,
  *   piRuntimeFactory: any,
- *   modelResolver: (agentVersion: object) => object | Promise<object>,
+ *   modelResolver: (agentVersion: object, selection?: { modelId?: string|null }) => object | Promise<object>,
+ *   promptImageLoader?: (input: object) => Promise<Array<{ type: 'image', data: string, mimeType: string }>>,
  *   requestAuthResolver?: (model: object, agentVersion: object) => object | Promise<object>,
  *   workspaceResolver: (agentSession: object) => string | Promise<string>,
  *   sandboxSessionProvisioner?: { ensure: (input: object) => Promise<object> },
@@ -1700,6 +1747,7 @@ export function createPiRunExecutorFactory(opts) {
       sessionLockManager: opts.sessionLockManager,
       piRuntimeFactory: opts.piRuntimeFactory,
       modelResolver: opts.modelResolver,
+      promptImageLoader: opts.promptImageLoader,
       requestAuthResolver: opts.requestAuthResolver,
       workspaceResolver: opts.workspaceResolver,
       sandboxSessionProvisioner: opts.sandboxSessionProvisioner,
