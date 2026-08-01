@@ -123,16 +123,74 @@ export function truncateToolOutput(value, opts = {}) {
 }
 
 /**
+ * Hermes-style character budget: keep whole lines that fit under maxChars.
+ * Unlike {@link truncateToolOutput}, this counts JS string length (code units)
+ * as a token proxy rather than UTF-8 bytes.
+ *
+ * @param {string} content
+ * @param {number} maxChars
+ * @returns {{ text: string, linesKept: number, truncated: boolean, partialLine: boolean }}
+ */
+export function truncateToCharBudget(content, maxChars) {
+  const source = String(content ?? '');
+  if (!Number.isFinite(maxChars) || maxChars <= 0) {
+    return { text: '', linesKept: 0, truncated: true, partialLine: false };
+  }
+  if (source.length <= maxChars) {
+    return {
+      text: source,
+      linesKept: source ? source.split('\n').length : 0,
+      truncated: false,
+      partialLine: false,
+    };
+  }
+
+  const lines = source.split('\n');
+  /** @type {string[]} */
+  const kept = [];
+  let running = 0;
+  for (const line of lines) {
+    const addition = line.length + (kept.length ? 1 : 0);
+    if (running + addition > maxChars) break;
+    kept.push(line);
+    running += addition;
+  }
+
+  if (kept.length === 0) {
+    // First line alone exceeds the budget — clamp on a code-unit boundary so
+    // the read never returns empty and the caller can still advance.
+    return {
+      text: lines[0].slice(0, maxChars),
+      linesKept: 0,
+      truncated: true,
+      partialLine: true,
+    };
+  }
+
+  return {
+    text: kept.join('\n'),
+    linesKept: kept.length,
+    truncated: true,
+    partialLine: false,
+  };
+}
+
+/**
  * Bound JSON for tool text output.
+ * Callers with large payload fields should pre-bound those fields (e.g. read
+ * content via {@link truncateToCharBudget}) so this fallback is exceptional.
+ *
  * @param {unknown} value
- * @param {number} [maxChars]
+ * @param {number} [maxBytes]
  */
 export function toolResultJson(value, maxBytes = DEFAULT_TOOL_OUTPUT_BYTES) {
   // The projector's default 512-character cap is right for durable event
   // summaries, but wrong for model-facing tool output: it silently turns a
   // paginated read into a 512-character response before this function can
   // report a useful continuation. Bound the whole JSON document below instead.
-  const raw = JSON.stringify(redactPayload(value, { maxString: maxBytes }) ?? null);
+  // Do not re-truncate large string fields here with redactPayload maxString —
+  // that would silently destroy pre-bounded content into 50KB-ish fragments.
+  const raw = JSON.stringify(redactPayload(value, { maxString: Math.max(maxBytes, 1) }) ?? null);
   if (Buffer.byteLength(raw, 'utf8') <= maxBytes) return raw;
   const preview = truncateToolOutput(raw, { maxBytes: Math.max(1, maxBytes - 512) });
   // Never return a sliced JSON document: malformed JSON makes models retry

@@ -688,15 +688,75 @@ describe('sandbox-bridge registration', () => {
     assert.equal(payload.truncatedBy, 'lines');
     assert.equal(payload.nextOffset, 2_007);
     assert.match(payload.continuation, /offset=/);
-    assert.ok(Buffer.byteLength(payload.content, 'utf8') <= 50 * 1024);
+    // Hermes-style gutter: first displayed line is 1-based (offset 7 → line 8).
+    assert.match(payload.content, /^8\|x{20}/);
+    // Model-facing body stays within the read char budget.
+    assert.ok(payload.content.length <= 100_000);
+  });
+
+  it('read dedups identical path/offset/limit pages within a run', async () => {
+    const transport = createFakeTransport([]);
+    let calls = 0;
+    transport.readFile = async () => {
+      calls += 1;
+      return { content: 'same-page\n', offset: 0, size: 10, nextOffset: null };
+    };
+    const defs = createSandboxBridgeToolDefinitions(RUN_A, transport, {
+      sandboxRequestBinder: createFakeBinder(),
+    });
+    const read = defs.find((t) => t.name === 'read');
+
+    const first = JSON.parse(
+      (await read.execute('read-a', { path: 'dup.txt', offset: 0, limit: 50 }))
+        .content[0].text,
+    );
+    assert.equal(first.content.includes('same-page'), true);
+    assert.equal(first.dedup, undefined);
+
+    const second = JSON.parse(
+      (await read.execute('read-b', { path: 'dup.txt', offset: 0, limit: 50 }))
+        .content[0].text,
+    );
+    assert.equal(second.status, 'unchanged');
+    assert.equal(second.dedup, true);
+    assert.equal(second.content_returned, false);
+
+    const third = await read.execute('read-c', {
+      path: 'dup.txt',
+      offset: 0,
+      limit: 50,
+    });
+    assert.match(third.content[0].text, /READ_DEDUP_BLOCKED|re-read/i);
+    assert.equal(calls, 3);
+  });
+
+  it('read clamps limit to Hermes-aligned max and defaults to 500', async () => {
+    const transport = createFakeTransport([]);
+    /** @type {object | null} */
+    let seen = null;
+    transport.readFile = async (payload) => {
+      seen = payload;
+      return { content: 'ok', offset: payload.offset, size: 2 };
+    };
+    const defs = createSandboxBridgeToolDefinitions(RUN_A, transport, {
+      sandboxRequestBinder: createFakeBinder(),
+    });
+    const read = defs.find((t) => t.name === 'read');
+
+    await read.execute('read-default', { path: 'a.txt' });
+    assert.equal(seen.limit, 500);
+    assert.equal(seen.offset, 0);
+
+    await read.execute('read-max', { path: 'a.txt', limit: 99_999 });
+    assert.equal(seen.limit, 2_000);
   });
 
   it('bash bounds both streams without falling back to a malformed result', async () => {
     const transport = createFakeTransport([]);
     transport.bash = async () => ({
       exitCode: 0,
-      stdout: 'o'.repeat(40 * 1024),
-      stderr: 'e'.repeat(40 * 1024),
+      stdout: 'o'.repeat(80 * 1024),
+      stderr: 'e'.repeat(80 * 1024),
     });
     const defs = createSandboxBridgeToolDefinitions(RUN_A, transport, {
       sandboxRequestBinder: createFakeBinder(),
@@ -712,5 +772,114 @@ describe('sandbox-bridge registration', () => {
     assert.equal(payload.stderrTruncated, true);
     assert.equal(payload.stdoutTruncatedBy, 'bytes');
     assert.equal(payload.stderrTruncatedBy, 'bytes');
+    assert.match(payload.stdoutContinuation, /narrower command/);
+    // Dual-stream envelope must stay valid JSON (not result_bytes fallback).
+    assert.equal(payload.truncatedBy, undefined);
+    assert.ok(Buffer.byteLength(payload.stdout, 'utf8') <= 50 * 1024);
+  });
+
+  it('write refuses read-tool gutter content and returns bytesWritten', async () => {
+    const transport = createFakeTransport([]);
+    transport.writeFile = async () => ({ size: 11, hash: 'h1' });
+    const defs = createSandboxBridgeToolDefinitions(RUN_A, transport, {
+      sandboxRequestBinder: createFakeBinder(),
+    });
+    const write = defs.find((t) => t.name === 'write');
+
+    const bad = await write.execute('w-bad', {
+      path: 'out.txt',
+      content: '1|hello\n2|world\n3|again\n',
+    });
+    assert.match(bad.content[0].text, /WRITE_LOOKS_LIKE_READ_OUTPUT/);
+
+    const ok = JSON.parse(
+      (
+        await write.execute('w-ok', {
+          path: 'out.txt',
+          content: 'hello world',
+        })
+      ).content[0].text,
+    );
+    assert.equal(ok.ok, true);
+    assert.equal(ok.bytesWritten, 11);
+    assert.equal(ok.path.includes('out.txt'), true);
+  });
+
+  it('edit requires oldText/newText and rejects gutter text', async () => {
+    const transport = createFakeTransport([]);
+    transport.editFile = async () => ({ hash: 'h2', version: '3' });
+    const defs = createSandboxBridgeToolDefinitions(RUN_A, transport, {
+      sandboxRequestBinder: createFakeBinder(),
+    });
+    const edit = defs.find((t) => t.name === 'edit');
+
+    const missing = await edit.execute('e-missing', {
+      path: 'a.txt',
+      expectedHash: 'abc',
+    });
+    assert.match(missing.content[0].text, /OLD_TEXT_REQUIRED/);
+
+    const gutter = await edit.execute('e-gutter', {
+      path: 'a.txt',
+      expectedHash: 'abc',
+      oldText: '1|foo\n2|bar\n3|baz',
+      newText: 'x',
+    });
+    assert.match(gutter.content[0].text, /EDIT_LOOKS_LIKE_READ_OUTPUT/);
+
+    const ok = JSON.parse(
+      (
+        await edit.execute('e-ok', {
+          path: 'a.txt',
+          expectedHash: 'abc',
+          oldText: 'foo',
+          newText: 'bar',
+        })
+      ).content[0].text,
+    );
+    assert.equal(ok.ok, true);
+    assert.equal(ok.hash, 'h2');
+    assert.match(ok.message, /Successfully replaced/);
+  });
+
+  it('write invalidates read dedup for the same path', async () => {
+    const transport = createFakeTransport([]);
+    let body = 'v1\n';
+    transport.readFile = async () => ({
+      content: body,
+      offset: 0,
+      size: body.length,
+    });
+    transport.writeFile = async () => {
+      body = 'v2\n';
+      return { size: body.length };
+    };
+    const defs = createSandboxBridgeToolDefinitions(RUN_A, transport, {
+      sandboxRequestBinder: createFakeBinder(),
+    });
+    const read = defs.find((t) => t.name === 'read');
+    const write = defs.find((t) => t.name === 'write');
+
+    const r1 = JSON.parse(
+      (await read.execute('r1', { path: 'x.txt', offset: 0, limit: 50 }))
+        .content[0].text,
+    );
+    assert.match(r1.content, /v1/);
+
+    // Same page would dedup without write:
+    const dedup = JSON.parse(
+      (await read.execute('r2', { path: 'x.txt', offset: 0, limit: 50 }))
+        .content[0].text,
+    );
+    assert.equal(dedup.dedup, true);
+
+    await write.execute('w1', { path: 'x.txt', content: 'v2\n' });
+
+    const r3 = JSON.parse(
+      (await read.execute('r3', { path: 'x.txt', offset: 0, limit: 50 }))
+        .content[0].text,
+    );
+    assert.match(r3.content, /v2/);
+    assert.equal(r3.dedup, undefined);
   });
 });
