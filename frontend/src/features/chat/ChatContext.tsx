@@ -53,6 +53,7 @@ import {
   register as apiRegister,
   logout as apiLogout,
   me as apiMe,
+  ApiError,
 } from '../../shared/api';
 import type { ModelItem } from '../../shared/api';
 import { createEntityBridge, type EntityBridge } from './entityBridge';
@@ -170,6 +171,8 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   stateRef.current = state;
   const activeStreamGenRef = useRef(0);
   const conversationLoadGenerationRef = useRef(0);
+  /** Invalidates account-scoped requests when login/logout changes identity. */
+  const sessionGenerationRef = useRef(0);
   /** F2 entity bridge — multi-run SSE + normalized stores. */
   const bridgeRef = useRef<EntityBridge | null>(null);
   if (!bridgeRef.current) {
@@ -241,8 +244,10 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const refreshConversations = useCallback(async () => {
+    const generation = sessionGenerationRef.current;
     try {
       const list = await listConversations();
+      if (generation !== sessionGenerationRef.current) return;
       const conversations = (Array.isArray(list) ? list : []).map((c) => ({
         ...c,
         title: c.title ?? undefined,
@@ -257,6 +262,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const refreshArtifacts = useCallback(async (sessionId?: string | null) => {
+    const generation = sessionGenerationRef.current;
     const sid = sessionId || currentSessionId();
     if (!sid) {
       setState((s) => update(s, { artifacts: [] }));
@@ -264,6 +270,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     }
     try {
       const data = await listArtifacts(sid);
+      if (generation !== sessionGenerationRef.current) return;
       setState((s) => update(s, { artifacts: data.artifacts || [] }));
     } catch (err) {
       console.warn('[artifacts] list failed:', (err as Error).message);
@@ -722,17 +729,29 @@ export function ChatProvider({ children }: { children: ReactNode }) {
           let messages = s.messages;
           if (assistantCommitted.length) {
             messages = [...messages];
-            for (const msg of assistantCommitted) {
-              const existingIdx = messages.findIndex(
-                (message) =>
-                  message.role === 'assistant' &&
-                  message._runId != null &&
-                  message._runId === runId,
-              );
+            assistantCommitted.forEach((msg, assistantIndex) => {
               const rid = String(runId);
+              const runAssistantIndexes = messages.flatMap((message, index) =>
+                message.role === 'assistant' && message._runId === rid
+                  ? [index]
+                  : [],
+              );
+              const durableMatch =
+                msg._messageId && msg._messageId !== ''
+                  ? messages.findIndex(
+                      (message) =>
+                        message.role === 'assistant' &&
+                        message._runId === rid &&
+                        message._messageId === msg._messageId,
+                    )
+                  : -1;
+              const existingIdx =
+                durableMatch >= 0
+                  ? durableMatch
+                  : (runAssistantIndexes[assistantIndex] ?? -1);
               if (existingIdx >= 0) {
                 messages[existingIdx] = { ...msg, _runId: rid };
-                continue;
+                return;
               }
               // Insert after this run's user turn — never blind-append after a
               // newer user message that was already sent while we streamed.
@@ -743,12 +762,15 @@ export function ChatProvider({ children }: { children: ReactNode }) {
                   message._runId === rid,
               );
               const tagged = { ...msg, _runId: rid };
-              if (userIdx >= 0) {
+              const lastAssistantIdx = runAssistantIndexes.at(-1);
+              if (lastAssistantIdx != null) {
+                messages.splice(lastAssistantIdx + 1, 0, tagged);
+              } else if (userIdx >= 0) {
                 messages.splice(userIdx + 1, 0, tagged);
               } else {
                 messages.push(tagged);
               }
-            }
+            });
           }
           return update(s, {
             isStreaming: false,
@@ -1150,33 +1172,68 @@ export function ChatProvider({ children }: { children: ReactNode }) {
 
   const login = useCallback(
     async (username: string, password: string) => {
+      sessionGenerationRef.current += 1;
       const data = await apiLogin({ username, password });
-      setState((s) => update(s, { authUser: data.user || { username } }));
+      setState((s) =>
+        update(s, { authReady: true, authUser: data.user || { username } }),
+      );
       setStatus(`Logged in as ${data.user?.username || username}`);
       await refreshConversations();
+      await refreshModels();
     },
-    [setStatus, refreshConversations],
+    [setStatus, refreshConversations, refreshModels],
   );
 
   const register = useCallback(
     async (username: string, password: string) => {
+      sessionGenerationRef.current += 1;
       const data = await apiRegister({ username, password });
-      setState((s) => update(s, { authUser: data.user || { username } }));
+      setState((s) =>
+        update(s, { authReady: true, authUser: data.user || { username } }),
+      );
       setStatus(`Registered as ${data.user?.username || username}`);
       await refreshConversations();
+      await refreshModels();
     },
-    [setStatus, refreshConversations],
+    [setStatus, refreshConversations, refreshModels],
   );
 
   const logout = useCallback(async () => {
     try {
       await apiLogout();
-      setState((s) => update(s, { authUser: null }));
-      setStatus('Logged out');
+      sessionGenerationRef.current += 1;
+      conversationLoadGenerationRef.current += 1;
+
+      const previous = stateRef.current;
+      previous.abortCtrl?.abort();
+      for (const attachment of previous.attachments) {
+        attachment.abortCtrl?.abort();
+      }
+
+      // A logout is an identity boundary. Disconnect and discard all runtime
+      // entities before the next account can render this provider.
+      bridge.reset();
+      clearPersistedChat();
+      setDraftText('');
+      setDropzoneVisible(false);
+      setModels([]);
+      setInspectorOpen(false);
+      setState(() => {
+        const next = createState({
+          ...INITIAL,
+          sidebarOpen: previous.sidebarOpen,
+          statusLabel: 'Logged out',
+          statusColor: '#22c55e',
+          authReady: true,
+        });
+        stateRef.current = next;
+        activeStreamGenRef.current = next.streamGeneration;
+        return next;
+      });
     } catch (err) {
       flashError((err as Error).message || 'Logout failed');
     }
-  }, [flashError, setStatus]);
+  }, [bridge, flashError]);
 
   const toggleSidebar = useCallback(() => {
     setState((s) => {
@@ -1203,14 +1260,31 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       try {
         const user = await apiMe();
         if (!cancelled) {
-          setState((s) => update(s, { authUser: user }));
+          setState((s) => update(s, { authReady: true, authUser: user }));
         }
-      } catch {
-        /* no active BFF session */
+      } catch (error) {
+        // Remove a stale/expired BFF cookie so the next login starts from a
+        // clean session instead of repeatedly surfacing the same token error.
+        if (error instanceof ApiError && error.status === 401) {
+          try {
+            await apiLogout();
+          } catch {
+            /* Anonymous logout is best-effort. */
+          }
+        }
+        if (!cancelled) {
+          // A missing/expired cookie is an anonymous session, not a reason to
+          // expose a transient signed-out shell while the check is pending.
+          setState((s) => update(s, { authReady: true, authUser: null }));
+        }
       }
 
-      await refreshConversations();
-      await refreshModels();
+      try {
+        await refreshConversations();
+        await refreshModels();
+      } catch (error) {
+        console.warn('[boot] catalog restore failed:', (error as Error).message);
+      }
       if (cancelled) return;
 
       // UI preference only: restore last conversation id, then load messages
