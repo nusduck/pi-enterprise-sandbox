@@ -28,6 +28,33 @@ export function redactSecretText(value) {
 }
 
 /**
+ * Truncate to at most `maxLength` Unicode code points. Plain `String#slice`
+ * counts UTF-16 code units and can split a surrogate pair (e.g. an emoji),
+ * producing an unpaired surrogate in the output. Iterating `for...of` walks
+ * code points instead, so the cut always lands on a character boundary.
+ *
+ * @param {string} value
+ * @param {number} maxLength
+ * @returns {{ text: string, truncated: boolean }}
+ */
+export function safeSlice(value, maxLength) {
+  const source = String(value ?? '');
+  if (source.length <= maxLength) {
+    return { text: source, truncated: false };
+  }
+  let result = '';
+  let count = 0;
+  for (const ch of source) {
+    if (count >= maxLength) {
+      return { text: result, truncated: true };
+    }
+    result += ch;
+    count += 1;
+  }
+  return { text: result, truncated: false };
+}
+
+/**
  * Canonical logical skill roots that must survive host-path redaction.
  * Longest first at use sites, so `/home/sandbox/skill-user` is not truncated
  * by the `/home/sandbox/skill` prefix.

@@ -10,7 +10,7 @@
  */
 
 import { createHash } from 'node:crypto';
-import { redactSecretText } from '../../lib/text-redaction.js';
+import { redactSecretText, safeSlice } from '../../lib/text-redaction.js';
 
 export const PROJECTOR_EVENT_TYPES = Object.freeze([
   'message.delta',
@@ -104,11 +104,9 @@ export function redactPayload(value, opts = {}) {
   if (depth > 6) return '[omitted]';
   if (value == null) return value;
   if (typeof value === 'string') {
-    let s = redactInlineSecrets(value);
-    if (s.length > maxString) {
-      return `${s.slice(0, maxString)}…`;
-    }
-    return s;
+    const s = redactInlineSecrets(value);
+    const sliced = safeSlice(s, maxString);
+    return sliced.truncated ? `${sliced.text}…` : sliced.text;
   }
   if (typeof value === 'number' || typeof value === 'boolean') return value;
   if (Array.isArray(value)) {
@@ -146,14 +144,15 @@ export function redactPayload(value, opts = {}) {
       continue;
     }
     if (typeof v === 'string') {
-      let s = redactInlineSecrets(v);
-      if (s.length > maxString) {
-        out[k] = `${s.slice(0, maxString)}…`;
+      const s = redactInlineSecrets(v);
+      const sliced = safeSlice(s, maxString);
+      if (sliced.truncated) {
+        out[k] = `${sliced.text}…`;
         out[`${k}_bytes`] = Buffer.byteLength(v, 'utf8');
         out[`${k}_sha256`] = digest(v);
         out[`${k}_truncated`] = true;
       } else {
-        out[k] = s;
+        out[k] = sliced.text;
       }
       continue;
     }
@@ -170,7 +169,7 @@ export function summarizeToolArgs(toolName, args) {
   void toolName;
   if (!args || typeof args !== 'object' || Array.isArray(args)) {
     const s = redactInlineSecrets(String(args ?? ''));
-    return { value: s.slice(0, DEFAULT_MAX_STRING) };
+    return { value: safeSlice(s, DEFAULT_MAX_STRING).text };
   }
   return /** @type {Record<string, unknown>} */ (
     redactPayload(args, { maxString: DEFAULT_MAX_STRING })
@@ -184,12 +183,13 @@ export function summarizeToolResult(result) {
   if (result == null) return null;
   if (typeof result === 'string') {
     const redacted = redactInlineSecrets(result);
-    if (redacted.length > DEFAULT_MAX_RESULT_CHARS) {
+    const sliced = safeSlice(redacted, DEFAULT_MAX_RESULT_CHARS);
+    if (sliced.truncated) {
       return {
         text_truncated: true,
         text_bytes: Buffer.byteLength(result, 'utf8'),
         text_sha256: digest(result),
-        preview: redacted.slice(0, DEFAULT_MAX_RESULT_CHARS),
+        preview: sliced.text,
       };
     }
     return { text: redacted };
@@ -219,15 +219,12 @@ export function summarizeAssistantMessage(message) {
       const p = /** @type {Record<string, unknown>} */ (part);
       if (p.type === 'text') {
         const text = redactInlineSecrets(String(p.text ?? ''));
-        const truncated = text.length > DEFAULT_MAX_STRING;
-        if (truncated) textTruncated = true;
+        const sliced = safeSlice(text, DEFAULT_MAX_STRING);
+        if (sliced.truncated) textTruncated = true;
         return {
           type: 'text',
-          text:
-            truncated
-              ? `${text.slice(0, DEFAULT_MAX_STRING)}…`
-              : text,
-          truncated,
+          text: sliced.truncated ? `${sliced.text}…` : sliced.text,
+          truncated: sliced.truncated,
         };
       }
       if (p.type === 'toolCall') {
@@ -242,11 +239,9 @@ export function summarizeAssistantMessage(message) {
     });
   } else if (typeof m.content === 'string') {
     const text = redactInlineSecrets(m.content);
-    textTruncated = text.length > DEFAULT_MAX_STRING;
-    out.content =
-      textTruncated
-        ? `${text.slice(0, DEFAULT_MAX_STRING)}…`
-        : text;
+    const sliced = safeSlice(text, DEFAULT_MAX_STRING);
+    textTruncated = sliced.truncated;
+    out.content = sliced.truncated ? `${sliced.text}…` : sliced.text;
   }
   // The text body is intentionally a bounded event projection. Make that
   // status explicit at the message level so consumers never overwrite a full

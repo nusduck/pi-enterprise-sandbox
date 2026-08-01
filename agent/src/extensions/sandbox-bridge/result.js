@@ -3,6 +3,7 @@
  */
 
 import { redactInlineSecrets, redactPayload } from '../../infrastructure/pi/platform-event-projector.js';
+import { safeSlice } from '../../lib/text-redaction.js';
 
 /** Match Pi's model-facing tool-output budget: bounded and explicit. */
 export const DEFAULT_TOOL_OUTPUT_BYTES = 50 * 1024;
@@ -157,10 +158,11 @@ export function truncateToCharBudget(content, maxChars) {
   }
 
   if (kept.length === 0) {
-    // First line alone exceeds the budget — clamp on a code-unit boundary so
-    // the read never returns empty and the caller can still advance.
+    // First line alone exceeds the budget — clamp on a code-point boundary
+    // (never split a surrogate pair) so the read never returns empty and the
+    // caller can still advance.
     return {
-      text: lines[0].slice(0, maxChars),
+      text: safeSlice(lines[0], maxChars).text,
       linesKept: 0,
       truncated: true,
       partialLine: true,

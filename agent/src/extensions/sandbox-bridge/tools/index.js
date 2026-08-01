@@ -1331,8 +1331,16 @@ function mapTransportError(err) {
     : codeStr === 'UNKNOWN'
       ? 'SANDBOX_ERROR'
       : codeStr;
+  // read/readSkill hit a single line wider than the sandbox's max_bytes cap.
+  // Unlike every other read-truncation path, this one has no partial content
+  // or nextOffset to offer — give the model a way forward instead of a bare
+  // "line too large" dead end.
+  const safeMsg =
+    safeCode === 'FILE_LINE_TOO_LARGE'
+      ? `${msg}. This line has no newline within the read byte budget (e.g. minified or single-line data). Use bash with grep/head/cut, or python, to inspect it in byte ranges instead of read.`
+      : msg;
   // No extra details object — avoid leaking transport internals.
-  return toolErr(safeCode, msg);
+  return toolErr(safeCode, safeMsg);
 }
 
 export { SANDBOX_TOOL_NAMES };
