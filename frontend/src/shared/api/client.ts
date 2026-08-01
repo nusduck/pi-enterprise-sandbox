@@ -60,6 +60,7 @@ export async function register(body: {
 }): Promise<AuthResponse> {
   const resp = await fetch(`${BASE}/auth/register`, {
     method: 'POST',
+    credentials: 'include',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   });
@@ -79,6 +80,7 @@ export async function login(body: {
 }): Promise<AuthResponse> {
   const resp = await fetch(`${BASE}/auth/login`, {
     method: 'POST',
+    credentials: 'include',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   });
@@ -91,7 +93,10 @@ export async function login(body: {
 }
 
 export async function logout(): Promise<void> {
-  const resp = await fetch(`${BASE}/auth/logout`, { method: 'POST' });
+  const resp = await fetch(`${BASE}/auth/logout`, {
+    method: 'POST',
+    credentials: 'include',
+  });
   if (!resp.ok) {
     const err = await errorBody(resp);
     throw new Error(String(err.error || `Logout failed: ${resp.status}`));
@@ -100,11 +105,15 @@ export async function logout(): Promise<void> {
 
 export async function me(): Promise<AuthUser> {
   const resp = await fetch(`${BASE}/auth/me`, {
+    credentials: 'include',
     headers: authHeaders(),
   });
   if (!resp.ok) {
     const err = await errorBody(resp);
-    throw new Error(String(err.error || err.detail || `Me failed: ${resp.status}`));
+    throw new ApiError(
+      String(err.error || err.detail || `Me failed: ${resp.status}`),
+      { status: resp.status },
+    );
   }
   return parseApi(MeResponseSchema, await resp.json(), 'me');
 }

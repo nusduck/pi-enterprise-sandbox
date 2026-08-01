@@ -1,5 +1,5 @@
 import { useMemo, useState, type FormEvent } from 'react';
-import { NavLink } from 'react-router-dom';
+import { NavLink, useNavigate } from 'react-router-dom';
 import { useChat } from '../../features/chat/ChatContext';
 import { conversationTitle } from '../../shared/state';
 import {
@@ -32,6 +32,7 @@ function runMarkerLabel(status: string | null, hasApproval: boolean): string {
  * Bottom — settings + account only
  */
 export function ConversationSidebar() {
+  const navigate = useNavigate();
   const {
     state,
     entityStore,
@@ -112,6 +113,22 @@ export function ConversationSidebar() {
     }
   }
 
+  async function onLogout() {
+    setUsername('');
+    setPassword('');
+    setAuthError('');
+    setAuthOpen(false);
+    await logout();
+  }
+
+  function onNewChat() {
+    // Route immediately; conversation reset is synchronous in the controller
+    // and should not make a management page look unresponsive.
+    void startNewChat();
+    navigate('/');
+    if (isMobile) closeSidebar();
+  }
+
   return (
     <>
       <aside id="sidebar" className={sidebarClass}>
@@ -138,7 +155,7 @@ export function ConversationSidebar() {
             type="button"
             className="btn-new-chat"
             title="New conversation"
-            onClick={() => void startNewChat()}
+            onClick={onNewChat}
           >
             + New chat
           </button>
@@ -328,7 +345,7 @@ export function ConversationSidebar() {
                 type="button"
                 className="sidebar-user"
                 title="Double-click to log out"
-                onDoubleClick={() => void logout()}
+                onDoubleClick={() => void onLogout()}
                 onClick={() => setAuthOpen((v) => !v)}
               >
                 <span className="sidebar-user-avatar" aria-hidden="true">
@@ -401,7 +418,7 @@ export function ConversationSidebar() {
               <button
                 type="button"
                 className="btn-auth secondary sidebar-logout"
-                onClick={() => void logout()}
+                onClick={() => void onLogout()}
               >
                 Log out
               </button>

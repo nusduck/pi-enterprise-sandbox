@@ -124,6 +124,8 @@ export type ChatState = {
   statusColor: string;
   /** Ephemeral flash errors */
   flashMessage: string | null;
+  /** True once the initial browser session check has completed. */
+  authReady: boolean;
   /** Auth user label */
   authUser: { username?: string; [k: string]: unknown } | null;
 };

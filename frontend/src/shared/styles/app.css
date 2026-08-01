@@ -48,6 +48,13 @@ body {
   background: var(--color-bg);
 }
 
+.session-bootstrap {
+  align-items: center;
+  justify-content: center;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+}
+
 .main-col {
   flex: 1 1 auto;
   min-width: 0;

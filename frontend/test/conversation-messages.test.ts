@@ -109,6 +109,37 @@ describe('conversation message projection', () => {
     );
   });
 
+  it('merges a matching unlinked durable assistant row instead of duplicating it', () => {
+    let store = createEntityStore();
+    store = upsertRun(store, createRun({
+      id: 'run_attachment_read',
+      conversationId: 'conv_attachment_read',
+      createdAt: '2026-07-16T00:00:01Z',
+    }));
+
+    const projected = projectConversationMessages({
+      // Partial/legacy history has no linkage, so ordinal tagging is not safe.
+      serverMessages: [{
+        role: 'assistant',
+        content: [{ type: 'text', text: 'The attached file says hello.' }],
+      }],
+      conversationId: 'conv_attachment_read',
+      store,
+      activeRunId: 'run_attachment_read',
+      projectRunMessages: () => [{
+        role: 'assistant',
+        content: [{ type: 'text', text: 'The attached file says hello.' }],
+        _runId: 'run_attachment_read',
+        _messageId: 'local_projection_message',
+        _hasRuntimeSteps: true,
+      }],
+    });
+
+    assert.equal(projected.filter((message) => message.role === 'assistant').length, 1);
+    assert.equal(projected[0]._runId, 'run_attachment_read');
+    assert.equal(projected[0]._hasRuntimeSteps, true);
+  });
+
   it('keeps every assistant message in a run and marks runtime steps on its final message', () => {
     let store = createEntityStore();
     store = upsertRun(store, createRun({

@@ -1,12 +1,14 @@
 import { useCallback, type RefObject } from 'react';
 import {
   cancelRun,
+  getRun,
   followUpRun as requestFollowUp,
   respondInteraction as requestInteractionResponse,
   resumeApproval,
   steerRun as requestSteer,
   type CreateRunResponse,
 } from '../../../shared/api';
+import { isTerminalRunStatus } from '../../../entities';
 import type { ChatMessage, ChatState } from '../../../shared/state';
 import type { EntityBridge } from '../entityBridge';
 
@@ -54,6 +56,70 @@ function buildOptimisticUserMessage(
     ...(opts.runId ? { _runId: opts.runId } : {}),
     createdAt: new Date().toISOString(),
   };
+}
+
+// A sandbox tool may finish its current process before the Agent terminalizes
+// the Run. Keep this asynchronous poll independent from the UI stream for up
+// to a minute, while using the cheap Run detail endpoint between final reads.
+const CANCEL_RECONCILE_ATTEMPTS = 120;
+const CANCEL_RECONCILE_DELAY_MS = 500;
+
+function waitForCancelRetry(): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, CANCEL_RECONCILE_DELAY_MS);
+  });
+}
+
+/**
+ * Reconcile a user-cancelled run until the Agent publishes a terminal state.
+ * Kept separate from the React hook so the asynchronous cancellation contract
+ * is testable without mounting the whole workbench.
+ */
+export async function reconcileCancelledRun(input: {
+  bridge: Pick<EntityBridge, 'reconcileRun'>;
+  runId: string;
+  maxAttempts?: number;
+  wait?: () => Promise<void>;
+  readStatus?: () => Promise<unknown>;
+}): Promise<Awaited<ReturnType<EntityBridge['reconcileRun']>>> {
+  const maxAttempts = input.maxAttempts ?? CANCEL_RECONCILE_ATTEMPTS;
+  const wait = input.wait || waitForCancelRetry;
+  let latest: Awaited<ReturnType<EntityBridge['reconcileRun']>> = null;
+  let latestStatus: unknown = null;
+  const readStatus = input.readStatus || (async () => {
+    latest = await input.bridge.reconcileRun(input.runId);
+    return latest?.status;
+  });
+
+  for (
+    let attempt = 0;
+    attempt <= maxAttempts;
+    attempt += 1
+  ) {
+    try {
+      latestStatus = await readStatus();
+    } catch {
+      // A transient status read should not strand the local UI in Running.
+      latestStatus = null;
+    }
+    const normalizedStatus = String(latestStatus ?? '').trim().toLowerCase();
+    if (
+      isTerminalRunStatus(
+        normalizedStatus === 'canceled' ? 'cancelled' : normalizedStatus,
+      )
+    ) {
+      return input.readStatus
+        ? input.bridge.reconcileRun(input.runId)
+        : latest;
+    }
+    if (attempt === maxAttempts) break;
+    await wait();
+  }
+
+  // One final authoritative entity read lets the caller render the latest
+  // non-terminal state even if the bounded poll exhausted while the Agent was
+  // still draining a long-running tool.
+  return input.bridge.reconcileRun(input.runId);
 }
 
 /** Register the follow-up as its own Run and tail its durable event stream. */
@@ -107,13 +173,41 @@ export function useRunControls({
 
   const stopRun = useCallback(() => {
     const runId = bridge.getStore().activeRunId;
-    cancelStream();
-    if (runId) {
-      void cancelRun(runId).catch((error) => {
-        flashError((error as Error).message || 'Failed to cancel run');
-      });
-    }
+    if (!runId) return;
+
     setStatus('Stopping…', '#f59e0b');
+    cancelStream();
+    void (async () => {
+      try {
+        await cancelRun(runId);
+
+        // Cancelling is asynchronous on the Agent. The user stop also closes
+        // SSE, so no terminal event is guaranteed to reach this tab. Re-read
+        // the durable Run until it is terminal and let EntityBridge publish
+        // that authoritative state to every run consumer.
+        const latest = await reconcileCancelledRun({
+          bridge,
+          runId,
+          readStatus: async () => (await getRun(runId)).status,
+        });
+
+        if (latest?.status === 'cancelled') {
+          setStatus('Cancelled', '#64748b');
+        } else if (latest && isTerminalRunStatus(latest.status)) {
+          setStatus(`Run ${latest.status}`, '#64748b');
+        }
+      } catch (error) {
+        flashError((error as Error).message || 'Failed to cancel run');
+        // The cancel request may have succeeded before its response was lost.
+        // One best-effort read avoids leaving a stale Running badge when that
+        // is the only failure.
+        try {
+          await bridge.reconcileRun(runId);
+        } catch {
+          /* The next page refresh can still recover the durable state. */
+        }
+      }
+    })();
   }, [bridge, cancelStream, flashError, setStatus]);
 
   const steerRun = useCallback(async (text: string): Promise<boolean> => {

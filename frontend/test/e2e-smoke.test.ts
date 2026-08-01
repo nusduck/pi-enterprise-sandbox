@@ -359,6 +359,22 @@ describe('F6 E2E smoke — core flows (mock backend)', () => {
     bridge.dispose();
   });
 
+  it('logout boundary: entity bridge reset removes runtime data and focus', () => {
+    const bridge = createEntityBridge();
+    const runId = bridge.beginRun({ conversationId: 'private-conversation' });
+    bridge.ingestAgentEvent(runId, { type: 'token', text: 'private answer' });
+    assert.ok(Object.keys(bridge.getStore().runsById).length > 0);
+
+    bridge.reset();
+
+    const empty = bridge.getStore();
+    assert.deepEqual(empty.runsById, {});
+    assert.deepEqual(empty.messagesById, {});
+    assert.equal(empty.activeConversationId, null);
+    assert.equal(empty.activeRunId, null);
+    bridge.dispose();
+  });
+
   // ── 7. Reconnect ────────────────────────────────────────────
 
   it('reconnect: Last-Event-ID sent on resume; duplicates dropped', async () => {

@@ -241,6 +241,8 @@ export type EntityBridge = {
   failRun: (runId: string, message: string) => void;
   /** Fetch authoritative run + tool state after transport recovery is exhausted. */
   reconcileRun: (runId: string) => Promise<RunEntity | null>;
+  /** Cancel all client-side runtime state at an account boundary. */
+  reset: () => void;
   /** Disconnect all (page unload). */
   dispose: () => void;
   /** Rehydrate in-progress runs after refresh. */
@@ -354,6 +356,8 @@ export function createEntityBridge(
   const eventAdapters = new Map<string, AgentEventAdapterState>();
   const transports = new Map<string, AbortController>();
   const reconcileInFlight = new Map<string, Promise<RunEntity | null>>();
+  /** Invalidates late HTTP reconciliation results after logout/reset. */
+  let storeGeneration = 0;
 
   function localRunId(): string {
     const uuid = globalThis.crypto?.randomUUID?.();
@@ -375,10 +379,12 @@ export function createEntityBridge(
    */
   async function refreshSessionProcesses(
     sessionId: string | null | undefined,
+    expectedGeneration = storeGeneration,
   ): Promise<void> {
     if (!sessionId) return;
     try {
       const rows = await listProcesses({ sessionId });
+      if (expectedGeneration !== storeGeneration) return;
       let next = manager.getStore();
       for (const row of rows) {
         const entity = processRowToEntity(row, { sessionId });
@@ -661,12 +667,15 @@ export function createEntityBridge(
   }
 
   async function reconcileRunOnce(runId: string): Promise<RunEntity | null> {
+    const expectedGeneration = storeGeneration;
     const initialSequence = manager.getStore().runsById[runId]?.lastSequence ?? null;
     const detail = await getRun(runId);
+    if (expectedGeneration !== storeGeneration) return null;
     let candidate = rehydrateRun(manager.getStore(), detail);
     let tools: Awaited<ReturnType<typeof listRunTools>> | null = null;
     try {
       tools = await listRunTools(runId);
+      if (expectedGeneration !== storeGeneration) return null;
       candidate = rehydrateToolExecutions(candidate, runId, tools);
     } catch {
       // Run status remains authoritative even when an older BFF has no tool
@@ -678,6 +687,7 @@ export function createEntityBridge(
         runId,
         candidate.runsById[runId]?.traceId,
       );
+      if (expectedGeneration !== storeGeneration) return null;
     } catch {
       // Trace projection is additive observability. Run/tool reconciliation must
       // still succeed against an older BFF while SSE spans remain usable.
@@ -686,6 +696,7 @@ export function createEntityBridge(
     // was in flight. Never let that older response move the run backwards.
     const currentRun = manager.getStore().runsById[runId];
     if (
+      expectedGeneration !== storeGeneration ||
       (initialSequence == null && currentRun) ||
       (initialSequence != null && currentRun?.lastSequence !== initialSequence)
     ) {
@@ -702,10 +713,15 @@ export function createEntityBridge(
       next = await rehydratePendingApprovals(next, runId);
     }
     if (trace) next = rehydrateTraceSpans(next, runId, trace);
+    if (expectedGeneration !== storeGeneration) return null;
     store = next;
     manager.setStore(store);
 
-    await refreshSessionProcesses(store.runsById[runId]?.sandboxSessionId);
+    await refreshSessionProcesses(
+      store.runsById[runId]?.sandboxSessionId,
+      expectedGeneration,
+    );
+    if (expectedGeneration !== storeGeneration) return null;
 
     store = manager.getStore();
     onStoreChange?.(store);
@@ -733,14 +749,28 @@ export function createEntityBridge(
     manager.disconnectAll();
   }
 
+  function reset(): void {
+    storeGeneration += 1;
+    for (const controller of transports.values()) controller.abort();
+    transports.clear();
+    manager.disconnectAll();
+    eventAdapters.clear();
+    reconcileInFlight.clear();
+    store = createEntityStore();
+    manager.setStore(store);
+    onStoreChange?.(store);
+  }
+
   async function rehydrateInProgress(
     conversationId?: string | null,
   ): Promise<RunEntity[]> {
+    const expectedGeneration = storeGeneration;
     // List without a single-status filter so WAITING_INPUT / WAITING_APPROVAL
     // runs are rediscovered after refresh (plan §32 / STATUS G6 + D1).
     const listed = await listRuns({
       conversation_id: conversationId || undefined,
     });
+    if (expectedGeneration !== storeGeneration) return [];
     // Agent MySQL stores plan §10 uppercase statuses; compare case-folded so
     // the set stays a single source of truth.
     const activeStatuses = new Set([
@@ -759,12 +789,14 @@ export function createEntityBridge(
     const rehydrated: RunEntity[] = [];
 
     for (const d of details) {
+      if (expectedGeneration !== storeGeneration) return rehydrated;
       const runId = d.run_id || d.id;
       if (!runId) continue;
 
       // Prefer full detail when available
       let detail: RunDetail | null = d;
       const full = await getRun(runId);
+      if (expectedGeneration !== storeGeneration) return rehydrated;
       if (full) detail = full;
 
       store = rehydrateRun(manager.getStore(), detail);
@@ -772,6 +804,7 @@ export function createEntityBridge(
       const toolsBaseRun = store.runsById[runId];
       try {
         const tools = await listRunTools(runId);
+        if (expectedGeneration !== storeGeneration) return rehydrated;
         const latest = manager.getStore();
         store = sameRunRevision(toolsBaseRun, latest.runsById[runId])
           ? rehydrateToolExecutions(latest, runId, tools)
@@ -781,6 +814,7 @@ export function createEntityBridge(
       }
       try {
         store = await loadDurableTrace(store, runId);
+        if (expectedGeneration !== storeGeneration) return rehydrated;
       } catch {
         /* Older BFFs may not expose durable trace snapshots yet. */
       }
@@ -788,10 +822,12 @@ export function createEntityBridge(
       if (status === 'waiting_approval') {
         try {
           store = await rehydratePendingApprovals(store, runId);
+          if (expectedGeneration !== storeGeneration) return rehydrated;
         } catch {
           /* Approval list is best-effort; banner still works from run.status. */
         }
       }
+      if (expectedGeneration !== storeGeneration) return rehydrated;
       manager.setStore(store);
 
       const run = store.runsById[runId];
@@ -823,7 +859,9 @@ export function createEntityBridge(
   }
 
   async function rehydrateConversation(conversationId: string): Promise<RunEntity[]> {
+    const expectedGeneration = storeGeneration;
     const timeline = await getConversationEvents(conversationId);
+    if (expectedGeneration !== storeGeneration) return [];
     const eventsByRun = new Map<string, PersistedAgentEvent[]>();
     for (const event of timeline.events) {
       const list = eventsByRun.get(event.run_id) || [];
@@ -833,6 +871,7 @@ export function createEntityBridge(
 
     const restored: RunEntity[] = [];
     for (const detail of timeline.runs) {
+      if (expectedGeneration !== storeGeneration) return restored;
       const runId = detail.run_id || detail.id;
       if (!runId) continue;
 
@@ -876,6 +915,7 @@ export function createEntityBridge(
         const toolsBaseRun = manager.getStore().runsById[runId];
         try {
           const tools = await listRunTools(runId);
+          if (expectedGeneration !== storeGeneration) return restored;
           const latest = manager.getStore();
           store = sameRunRevision(toolsBaseRun, latest.runsById[runId])
             ? rehydrateToolExecutions(latest, runId, tools)
@@ -888,6 +928,7 @@ export function createEntityBridge(
 
       if (activelyStreaming || resumable) {
         const live = await getRun(runId);
+        if (expectedGeneration !== storeGeneration) return restored;
         if (live) {
           store = rehydrateRun(manager.getStore(), live);
           manager.setStore(store);
@@ -895,6 +936,7 @@ export function createEntityBridge(
           const toolsBaseRun = store.runsById[runId];
           try {
             const tools = await listRunTools(runId);
+            if (expectedGeneration !== storeGeneration) return restored;
             const latest = manager.getStore();
             store = sameRunRevision(toolsBaseRun, latest.runsById[runId])
               ? rehydrateToolExecutions(latest, runId, tools)
@@ -916,6 +958,7 @@ export function createEntityBridge(
 
       try {
         store = await loadDurableTrace(manager.getStore(), runId);
+        if (expectedGeneration !== storeGeneration) return restored;
         manager.setStore(store);
       } catch {
         /* Persisted events remain the trace fallback on older deployments. */
@@ -932,11 +975,13 @@ export function createEntityBridge(
         timeline.runs.find((r) => r.session_id || r.sandbox_session_id)?.session_id ||
         timeline.runs.find((r) => r.sandbox_session_id)?.sandbox_session_id ||
         null;
-      await refreshSessionProcesses(sessionId);
+      await refreshSessionProcesses(sessionId, expectedGeneration);
+      if (expectedGeneration !== storeGeneration) return restored;
       const rows = await listDatasets({
         conversationId,
         sessionId: sessionId || undefined,
       });
+      if (expectedGeneration !== storeGeneration) return restored;
       let next = manager.getStore();
       for (const row of rows) {
         const entity = datasetRowToEntity(row, { conversationId, sessionId });
@@ -950,6 +995,7 @@ export function createEntityBridge(
 
     // After runs carry sandbox_session_id (Agent DTO), fill any artifacts that
     // rehydrated from older artifact.ready events without context.sandboxSessionId.
+    if (expectedGeneration !== storeGeneration) return restored;
     store = backfillArtifactSessionIds(manager.getStore());
     manager.setStore(store);
 
@@ -1114,6 +1160,7 @@ export function createEntityBridge(
     interruptRun,
     failRun,
     reconcileRun,
+    reset,
     dispose,
     rehydrateInProgress,
     rehydrateConversation,

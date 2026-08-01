@@ -225,8 +225,28 @@ export function projectConversationMessages(options: {
                 message._runId === run.id &&
                 message._messageId === tagged._messageId,
             );
+      // Older conversation rows may not carry run/message linkage. If there is
+      // exactly one unlinked assistant row with the same text, treat it as the
+      // durable copy of this projection instead of appending a second bubble.
+      // Requiring uniqueness avoids attaching identical replies from distinct
+      // runs to the wrong turn.
+      const equivalentUnlinkedSlots = result.flatMap((message, index) =>
+        message.role === 'assistant' &&
+        message._runId == null &&
+        messageText(message) === text
+          ? [index]
+          : [],
+      );
+      const equivalentUnlinkedSlot =
+        equivalentUnlinkedSlots.length === 1
+          ? equivalentUnlinkedSlots[0]
+          : -1;
       const matchedSlot =
-        stableSlot >= 0 ? stableSlot : (serverAssistantSlots[assistantIndex] ?? -1);
+        stableSlot >= 0
+          ? stableSlot
+          : equivalentUnlinkedSlot >= 0
+            ? equivalentUnlinkedSlot
+            : (serverAssistantSlots[assistantIndex] ?? -1);
 
       if (matchedSlot >= 0) {
         const serverMessage = result[matchedSlot];
@@ -286,5 +306,18 @@ export function projectConversationMessages(options: {
   // Server history was sorted before live rows were inserted. Do not sort the
   // combined list again: an uncommitted projection deliberately occupies the
   // slot immediately after its matching user turn.
-  return result;
+  // A replay and a local optimistic projection can still converge on the same
+  // durable message id through different event paths. Durable ids are the only
+  // safe identity key here; identical text alone is intentionally not enough
+  // because a run may legitimately emit two different assistant messages.
+  const seenAssistantIds = new Set<string>();
+  return result.filter((message) => {
+    if (message.role !== 'assistant' || !message._runId || !message._messageId) {
+      return true;
+    }
+    const key = `${message._runId}:${message._messageId}`;
+    if (seenAssistantIds.has(key)) return false;
+    seenAssistantIds.add(key);
+    return true;
+  });
 }

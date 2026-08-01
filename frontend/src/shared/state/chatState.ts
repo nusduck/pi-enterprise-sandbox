@@ -15,6 +15,9 @@ export const INITIAL: Readonly<ChatState> = Object.freeze({
   statusLabel: 'Agent Ready',
   statusColor: '#22c55e',
   flashMessage: null,
+  // The shell must not render signed-out UI until the HttpOnly session cookie
+  // has been checked after a hard refresh.
+  authReady: false,
   authUser: null,
 });
 

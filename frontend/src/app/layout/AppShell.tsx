@@ -45,6 +45,14 @@ export function AppShell({ children }: { children: ReactNode }) {
   const [selected, setSelected] = useState<SelectedEntity>(null);
   const [consoleProcessId, setConsoleProcessId] = useState<string | null>(null);
 
+  if (!state.authReady) {
+    return (
+      <div id="app" className="app-shell session-bootstrap" role="status" aria-live="polite">
+        Restoring session…
+      </div>
+    );
+  }
+
   function handleSelect(sel: SelectedEntity) {
     setSelected(sel);
     if (sel) {
