@@ -52,9 +52,6 @@ export const A2A_METHOD_ALIASES = Object.freeze({
   'tasks/cancel': A2A_METHODS.CANCEL_TASK,
   'tasks/resubscribe': A2A_METHODS.SUBSCRIBE_TO_TASK,
   'tasks/subscribe': A2A_METHODS.SUBSCRIBE_TO_TASK,
-  // Older aliases
-  'tasks/send': A2A_METHODS.SEND_MESSAGE,
-  'tasks/sendSubscribe': A2A_METHODS.SEND_STREAMING_MESSAGE,
 });
 
 /**

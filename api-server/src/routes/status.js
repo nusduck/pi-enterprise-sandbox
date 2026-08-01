@@ -1,5 +1,7 @@
 /**
- * Route: GET /api/status — aggregated health check.
+ * Routes: GET /health/live and GET /health/ready — liveness and aggregated
+ * dependency readiness. Readiness answers 503 when a dependency is down, which
+ * is what container health checks and the cross-service smoke test rely on.
  */
 import { checkHealth } from '../services/sandbox-client.js';
 import { checkAgentHealth } from '../services/agent-client.js';
@@ -39,8 +41,6 @@ async function dependencyHealth() {
   return {
     status: ok ? 'ok' : 'degraded',
     version: '4.0.0',
-    /** Chat orchestration is always the independent Node Agent service. */
-    agent_runtime: 'node-agent',
     agent: { status: agentStatus, ...agentInfo },
     sandbox: { status: sandboxStatus, ...sandboxInfo },
   };
@@ -53,9 +53,4 @@ export function handleLiveness(res) {
 export async function handleReadiness(res) {
   const body = await dependencyHealth();
   sendJson(res, body.status === 'ok' ? 200 : 503, body);
-}
-
-/** Compatibility endpoint for clients that still display dependency status. */
-export async function handleStatus(res) {
-  sendJson(res, 200, await dependencyHealth());
 }

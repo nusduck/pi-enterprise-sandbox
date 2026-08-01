@@ -29,7 +29,6 @@ import { sanitizeStatusReason } from './sanitize-status-reason.js';
  * @typedef {{
  *   outcome: RunExecutorOutcomeStatus,
  *   statusReason?: string | null,
- *   legacyOutcome?: string | null,
  * }} RunExecutorResult
  */
 
@@ -61,8 +60,8 @@ import { sanitizeStatusReason } from './sanitize-status-reason.js';
  */
 
 /**
- * Normalize an executor result (legacy outcome → plan §10 via sole mapper).
- * @param {RunExecutorResult | { outcome?: unknown, legacyOutcome?: string, statusReason?: unknown }} result
+ * Normalize an executor result to a plan §10 status.
+ * @param {RunExecutorResult | { outcome?: unknown, statusReason?: unknown }} result
  * @returns {RunExecutorResult}
  */
 export function normalizeExecutorResult(result) {
@@ -71,10 +70,11 @@ export function normalizeExecutorResult(result) {
   }
 
   let outcome;
-  if (typeof result.legacyOutcome === 'string' && result.legacyOutcome) {
-    outcome = mapLegacyRuntimeOutcome(result.legacyOutcome);
-  } else if (typeof result.outcome === 'string') {
-    // Accept plan §10 or legacy via mapper when needed.
+  if (typeof result.outcome === 'string') {
+    // mapLegacyRuntimeOutcome is the sole outcome vocabulary gate: it maps
+    // known lowercase runtime strings and passes plan §10 statuses through.
+    // An unmapped value must stay unmapped so the allowed-set check below
+    // fails closed to FAILED instead of writing an unknown status.
     try {
       outcome = mapLegacyRuntimeOutcome(result.outcome);
     } catch {

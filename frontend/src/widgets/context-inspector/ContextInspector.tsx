@@ -3,10 +3,10 @@ import { useChat } from '../../features/chat/ChatContext';
 import {
   getRunApprovals,
   getRunArtifacts,
-  getRunProcesses,
   getRunToolExecutions,
   getRunTraceSpans,
   listDatasetsForConversation,
+  listProcessesForSession,
   type ArtifactEntity,
 } from '../../entities';
 import { fileTypeLabel } from '../../shared/state';
@@ -222,9 +222,11 @@ export function ContextInspector({
     () => (runId ? getRunToolExecutions(entityStore, runId) : []),
     [entityStore, runId],
   );
+  // Managed processes are session-scoped: a background process started by an
+  // earlier run is still alive and still belongs in this conversation's list.
   const processes = useMemo(
-    () => (runId ? getRunProcesses(entityStore, runId) : []),
-    [entityStore, runId],
+    () => listProcessesForSession(entityStore, activeSessionId),
+    [entityStore, activeSessionId],
   );
   const approvals = useMemo(
     () => (runId ? getRunApprovals(entityStore, runId) : []),
@@ -263,14 +265,6 @@ export function ContextInspector({
       if (art.source !== 'submit_artifact') continue;
       if (!isDurableArtifactId(art.id, art.runId || '')) continue;
       if (art.runId && runIds.size > 0 && !runIds.has(art.runId)) continue;
-      if (seen.has(art.id)) continue;
-      seen.add(art.id);
-      out.push(art);
-    }
-
-    for (const art of artifacts) {
-      if (art.source !== 'submit_artifact') continue;
-      if (!isDurableArtifactId(art.id, art.runId || '')) continue;
       if (seen.has(art.id)) continue;
       seen.add(art.id);
       out.push(art);
@@ -478,6 +472,7 @@ export function ContextInspector({
               processes={processes}
               selectedId={selected?.kind === 'process' ? selected.id : null}
               onOpenConsole={openProcessConsole}
+              emptyHint="No managed processes in this session."
             />
           ) : null}
 
@@ -655,7 +650,7 @@ function OverviewPanel({
         <div className="insp-meta-list">
           <MetaRow
             label="Model"
-            value={agentSession?.modelId || '—'}
+            value={run?.modelId || agentSession?.modelId || '—'}
           />
           <MetaRow
             label="Agent session"
@@ -798,7 +793,10 @@ function SessionPanel({
             mono
             copyable={agentSession?.id || null}
           />
-          <MetaRow label="Model" value={agentSession?.modelId || '—'} />
+          <MetaRow
+            label="Model"
+            value={run?.modelId || agentSession?.modelId || '—'}
+          />
           <MetaRow
             label="Created"
             value={agentSession?.createdAt || '—'}

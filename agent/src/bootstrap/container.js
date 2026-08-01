@@ -1070,21 +1070,25 @@ export class ServiceContainer {
           extraDeps: { toolRiskPolicy, skillManagerFactory },
         });
       } else {
-        const { createSandboxClient } = await import(
-          '../infrastructure/sandbox/sandbox-client.js'
-        );
         const internalKeyring = String(
           this.env.SANDBOX_INTERNAL_HMAC_KEYRING || '',
         ).trim();
         const internalActiveKid = String(
           this.env.SANDBOX_INTERNAL_HMAC_ACTIVE_KID || '',
         ).trim();
+        // Signed internal plane is the only route to Sandbox: fail fast rather
+        // than boot a runtime whose every sandbox tool dies at call time.
+        if (!internalKeyring || !internalActiveKid) {
+          throw new Error(
+            'SANDBOX_INTERNAL_HMAC_KEYRING and SANDBOX_INTERNAL_HMAC_ACTIVE_KID are required (see .env.example)',
+          );
+        }
         let createInternalReadTransport = null;
         let createInternalExecutionTransport = null;
         let createInternalFilesWriteTransport = null;
         let createInternalArtifactTransport = null;
         let createInternalProcessTransport = null;
-        if (internalKeyring && internalActiveKid) {
+        {
           const {
             createInternalFilesReadTransport,
             createInternalSkillsReadTransport,
@@ -1155,7 +1159,6 @@ export class ServiceContainer {
           extraDeps: { toolRiskPolicy, skillManagerFactory },
           createTransportForRun: (runContext) =>
             createRunScopedSandboxBridgeTransport(runContext, {
-              createSandboxClient,
               createTransport: createSandboxBridgeHttpTransport,
               createInternalReadTransport,
               createInternalExecutionTransport,

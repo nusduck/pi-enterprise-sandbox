@@ -1,20 +1,15 @@
 export function presentCreateRunResponse(result) {
   const sandboxSessionId =
     result.sandboxSessionId ?? result.sandbox_session_id ?? result.session_id ?? null;
+  // One spelling per field: snake_case, matching the rest of the public wire.
   return {
-    runId: result.runId,
     run_id: result.runId,
     status: result.status,
-    conversationId: result.conversationId,
     conversation_id: result.conversationId,
-    eventsUrl: result.eventsUrl,
     events_url: result.eventsUrl,
-    agentSessionId: result.agentSessionId ?? null,
     agent_session_id: result.agentSessionId ?? null,
     session_id: sandboxSessionId,
-    sandboxSessionId,
     sandbox_session_id: sandboxSessionId,
-    queueWarning: result.queueWarning ?? null,
     queue_warning: result.queueWarning ?? null,
     replayed: result.replayed === true,
   };
@@ -24,10 +19,7 @@ export function presentGetRunResponse(run) {
   const pending = run.pendingInput || run.pending_input || null;
   const pendingInput = pending
     ? {
-        interactionId: pending.interactionId || pending.interaction_id || null,
         interaction_id: pending.interactionId || pending.interaction_id || null,
-        interactionType:
-          pending.interactionType || pending.interaction_type || 'input',
         interaction_type:
           pending.interactionType || pending.interaction_type || 'input',
         title: pending.title ?? 'Input required',
@@ -48,48 +40,33 @@ export function presentGetRunResponse(run) {
   const usage = run.usage ?? run.tokenUsage ?? run.token_usage ?? null;
   const sandboxSessionId =
     run.sandboxSessionId ?? run.sandbox_session_id ?? run.session_id ?? null;
+  // One spelling per field: snake_case. `completed_at` and `finished_at` are
+  // deliberately both kept — two documented names for the same instant.
   return {
-    runId: run.runId,
     run_id: run.runId,
     status: run.status,
-    conversationId: run.conversationId,
     conversation_id: run.conversationId,
-    agentSessionId: run.agentSessionId,
     agent_session_id: run.agentSessionId,
     session_id: sandboxSessionId,
-    sandboxSessionId,
     sandbox_session_id: sandboxSessionId,
-    orgId: run.orgId,
     org_id: run.orgId,
-    userId: run.userId,
     user_id: run.userId,
-    traceId: run.traceId,
     trace_id: run.traceId,
     attempt: run.attempt,
-    statusReason: run.statusReason,
     status_reason: run.statusReason,
-    cancelRequestedAt: run.cancelRequestedAt,
     cancel_requested_at: run.cancelRequestedAt,
-    createdAt: run.createdAt,
     created_at: run.createdAt,
-    updatedAt: run.updatedAt,
     updated_at: run.updatedAt,
-    startedAt: run.startedAt,
     started_at: run.startedAt,
-    completedAt,
     completed_at: completedAt,
-    finishedAt: completedAt,
     finished_at: completedAt,
-    lastSequence,
     last_sequence: lastSequence,
-    lastEventId: run.lastEventId ?? run.last_event_id ?? null,
     last_event_id: run.lastEventId ?? run.last_event_id ?? null,
-    modelId,
     model_id: modelId,
-    model: modelId,
+    // `usage` and `token_usage` are two documented names for one value, like
+    // completed_at/finished_at — kept as-is; only camelCase twins were dropped.
     usage,
     token_usage: usage,
-    pendingInput,
     pending_input: pendingInput,
   };
 }

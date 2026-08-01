@@ -28,11 +28,9 @@ export function resolveRequestId(req) {
 }
 
 export function readIdempotencyKey(req) {
-  const value =
-    req.headers['idempotency-key'] ||
-    req.headers['Idempotency-Key'] ||
-    req.headers['x-idempotency-key'] ||
-    req.headers['X-Idempotency-Key'];
+  // Node lowercases every inbound header name, so the canonical lowercase key
+  // matches callers that send `Idempotency-Key` on the wire.
+  const value = req.headers['idempotency-key'];
   return typeof value === 'string' && value.trim() ? value.trim() : null;
 }
 

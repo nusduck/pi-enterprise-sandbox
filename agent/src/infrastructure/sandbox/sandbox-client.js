@@ -253,14 +253,6 @@ export function createSandboxClient({ traceId = null, traceState = null, auth = 
       return resp.json();
     },
 
-    async applyPatch(sessionId, body) {
-      const resp = await sbFetch(`/sessions/${sessionId}/files/apply_patch`, {
-        method: 'POST',
-        body: JSON.stringify(body),
-      });
-      return resp.json();
-    },
-
     // ── Execution ───────────────────────────────────
     async executeCommand(sessionId, command, timeout = 120) {
       const resp = await sbFetch(`/sessions/${sessionId}/executions/command`, {
@@ -268,73 +260,6 @@ export function createSandboxClient({ traceId = null, traceState = null, auth = 
         body: JSON.stringify({ command, timeout }),
         timeoutMs: timeoutForSeconds(timeout),
       });
-      return resp.json();
-    },
-
-    /**
-     * Run a Python code string via Sandbox (no shell).
-     * Sandbox materializes multiline/long code under workspace `.runtime/python/`;
-     * short single-line may use `python3 -c` (list argv — no shell injection).
-     * @param {string} sessionId
-     * @param {string} code
-     * @param {number} [timeout]
-     * @param {{ args?: string[] }} [opts]
-     */
-    async executePython(sessionId, code, timeout = 120, opts = {}) {
-      const body = { code, timeout };
-      if (Array.isArray(opts.args) && opts.args.length) {
-        body.args = opts.args.map(String);
-      }
-      const resp = await sbFetch(`/sessions/${sessionId}/executions/python`, {
-        method: 'POST',
-        body: JSON.stringify(body),
-        timeoutMs: timeoutForSeconds(timeout),
-      });
-      return resp.json();
-    },
-
-    /**
-     * Run a Node.js code string via Sandbox (no shell).
-     * @param {string} sessionId
-     * @param {string} code
-     * @param {number} [timeout]
-     */
-    async executeNode(sessionId, code, timeout = 120) {
-      const resp = await sbFetch(`/sessions/${sessionId}/executions/node`, {
-        method: 'POST',
-        body: JSON.stringify({ code, timeout }),
-        timeoutMs: timeoutForSeconds(timeout),
-      });
-      return resp.json();
-    },
-
-    async cancelExecution(sessionId, executionId) {
-      const resp = await sbFetch(
-        `/sessions/${sessionId}/executions/${encodeURIComponent(executionId)}/cancel`,
-        { method: 'POST' },
-      );
-      return resp.json();
-    },
-
-    /** Cancel the active running execution for a session (if any). */
-    async cancelActiveExecution(sessionId) {
-      const resp = await sbFetch(`/sessions/${sessionId}/executions/cancel-active`, {
-        method: 'POST',
-      });
-      return resp.json();
-    },
-
-    // ── Managed processes (B2 Process Manager) ──────
-    async startProcess(body) {
-      const resp = await sbFetch('/processes', {
-        method: 'POST',
-        body: JSON.stringify(body),
-      });
-      return resp.json();
-    },
-
-    async getProcess(processId) {
-      const resp = await sbFetch(`/processes/${encodeURIComponent(processId)}`);
       return resp.json();
     },
 
@@ -471,71 +396,10 @@ export function createSandboxClient({ traceId = null, traceState = null, auth = 
       return resp.json();
     },
 
-    async readFileWithRange(sessionId, path, offset, limit) {
-      const q = new URLSearchParams({ path });
-      if (offset != null) q.set('offset', '' + offset);
-      if (limit != null) q.set('limit', '' + limit);
-      const resp = await sbFetch(`/sessions/${sessionId}/files/read?${q}`);
-      return resp.json();
-    },
-
     async writeFile(sessionId, path, content) {
       const resp = await sbFetch(`/sessions/${sessionId}/files/write`, {
         method: 'POST',
         body: JSON.stringify({ path, content }),
-      });
-      return resp.json();
-    },
-
-    async listFiles(sessionId, dir = '.') {
-      const q = new URLSearchParams({ path: dir });
-      const resp = await sbFetch(`/sessions/${sessionId}/files?${q}`);
-      return resp.json();
-    },
-
-    /** Structured ls — POST /sessions/{id}/files/ls */
-    async lsFiles(sessionId, body = {}) {
-      const resp = await sbFetch(`/sessions/${sessionId}/files/ls`, {
-        method: 'POST',
-        body: JSON.stringify({
-          path: body.path ?? '.',
-          depth: body.depth ?? 1,
-          include_hidden: Boolean(body.include_hidden),
-        }),
-      });
-      return resp.json();
-    },
-
-    /** Structured find — POST /sessions/{id}/files/find */
-    async findFiles(sessionId, body = {}) {
-      const payload = {
-        path: body.path ?? '.',
-        pattern: body.pattern ?? '*',
-      };
-      if (body.type != null) payload.type = body.type;
-      if (body.max_depth != null) payload.max_depth = body.max_depth;
-      if (body.limit != null) payload.limit = body.limit;
-      const resp = await sbFetch(`/sessions/${sessionId}/files/find`, {
-        method: 'POST',
-        body: JSON.stringify(payload),
-      });
-      return resp.json();
-    },
-
-    /** Structured grep — POST /sessions/{id}/files/grep */
-    async grepFiles(sessionId, body = {}) {
-      const payload = {
-        path: body.path ?? '.',
-        query: body.query,
-        regex: Boolean(body.regex),
-        case_sensitive: body.case_sensitive !== false,
-      };
-      if (body.glob != null) payload.glob = body.glob;
-      if (body.context != null) payload.context = body.context;
-      if (body.limit != null) payload.limit = body.limit;
-      const resp = await sbFetch(`/sessions/${sessionId}/files/grep`, {
-        method: 'POST',
-        body: JSON.stringify(payload),
       });
       return resp.json();
     },

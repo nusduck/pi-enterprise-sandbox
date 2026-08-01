@@ -56,14 +56,9 @@ export function projectEnvelopeToA2aResult(envelope, ctx) {
     envelope.event && typeof envelope.event === 'object'
       ? envelope.event
       : envelope;
-  const type = String(event.type || event.event_type || '');
+  const type = String(event.type || '');
   const sequence = Number(envelope.sequence);
-  const eventId =
-    envelope.eventId ||
-    envelope.event_id ||
-    event.eventId ||
-    event.event_id ||
-    null;
+  const eventId = envelope.event_id || event.event_id || null;
 
   if (ARTIFACT_EVENT_TYPES.has(type)) {
     const artifact = projectArtifactEvent(event, ctx);
@@ -329,7 +324,7 @@ function resolveStatusFromEvent(event, fallbackRunStatus) {
   if (fallbackRunStatus && isRunStatus(fallbackRunStatus)) {
     return projectRunStatusToA2a(fallbackRunStatus);
   }
-  const type = String(event.type || event.event_type || '');
+  const type = String(event.type || '');
   const map = {
     'run.accepted': A2A_TASK_STATUS.SUBMITTED,
     'run.queued': A2A_TASK_STATUS.SUBMITTED,

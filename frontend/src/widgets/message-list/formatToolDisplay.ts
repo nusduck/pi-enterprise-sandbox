@@ -1,5 +1,5 @@
 /**
- * Human-readable formatting for tool input/result in chat ToolPill popovers.
+ * Human-readable formatting for tool input/result in runtime step cards.
  * Sandbox bash/python results often arrive as a JSON string nested inside
  * `{ content: [{ type: 'text', text: '{"stdout":...}' }] }` — surface stdout
  * instead of raw wire JSON so tools look successful in the UI.

@@ -9,6 +9,7 @@ import {
   createApproval,
   createDataset,
   createEntityStore,
+  createProcess,
   createRun,
   createTraceSpan,
   cloneEntityStore,
@@ -16,12 +17,15 @@ import {
   upsertApproval,
   upsertArtifact,
   upsertDataset,
+  upsertProcess,
   upsertRun,
   upsertTraceSpan,
   type ApprovalStatus,
   type DatasetEntity,
   type EntityStore,
   type MessageEntity,
+  type ProcessEntity,
+  type ProcessStatus,
   type RunEntity,
   type TraceSpanEntity,
   type TraceSpanKind,
@@ -48,9 +52,10 @@ import {
 import { listApprovals, type ApprovalListItem } from '../../shared/api/approvals';
 import { getConversationEvents } from '../../shared/api/client';
 import { listDatasets, type DatasetRow } from '../../shared/api/datasets';
+import { listProcesses, type ManagedProcess } from '../../shared/api/processes';
 import type { PersistedAgentEvent } from '../../shared/schemas/events';
 import type { ChatMessage } from '../../shared/state/types';
-import type { ContentPart, ToolUsePart } from '../../shared/state/types';
+import type { ContentPart } from '../../shared/state/types';
 import { getArtifactDownloadUrl } from '../../shared/api/client';
 import { makeRuntimeEvent } from '../../shared/schemas/events';
 import { isDurableArtifactId } from '../../shared/state/runReducer';
@@ -296,6 +301,49 @@ export function datasetRowToEntity(
   });
 }
 
+const PROCESS_STATUSES = new Set<ProcessStatus>([
+  'created',
+  'running',
+  'waiting_input',
+  'completed',
+  'failed',
+  'cancel_requested',
+  'cancelled',
+  'timeout',
+  'orphaned',
+]);
+
+/**
+ * Project a BFF managed-process row onto the entity shape. Sandbox and the
+ * entity layer share one status vocabulary, so an unknown value means a newer
+ * Sandbox — fall back to `created` rather than dropping the row.
+ */
+export function processRowToEntity(
+  row: ManagedProcess,
+  context: { sessionId?: string | null } = {},
+): ProcessEntity | null {
+  const id = String(row.process_id || '');
+  if (!id) return null;
+  const rawStatus = String(row.status || '').trim().toLowerCase();
+  const status = PROCESS_STATUSES.has(rawStatus as ProcessStatus)
+    ? (rawStatus as ProcessStatus)
+    : 'created';
+  return createProcess({
+    id,
+    runId: String(row.run_id || ''),
+    sessionId:
+      String(row.sandbox_session_id || row.session_id || context.sessionId || '') ||
+      null,
+    toolExecutionId: row.execution_id != null ? String(row.execution_id) : null,
+    status,
+    command: row.command != null ? String(row.command) : null,
+    exitCode: typeof row.exit_code === 'number' ? row.exit_code : null,
+    startedAt: row.started_at != null ? String(row.started_at) : null,
+    finishedAt: row.finished_at != null ? String(row.finished_at) : null,
+    createdAt: row.created_at != null ? String(row.created_at) : null,
+  });
+}
+
 /**
  * Create the F2 entity bridge. Safe to construct once per ChatProvider.
  */
@@ -319,6 +367,29 @@ export function createEntityBridge(
     },
     reconcileRun,
   });
+
+  /**
+   * Refresh managed processes for a sandbox session. Processes outlive the run
+   * that started them, so the session is the list scope; the run link comes
+   * from each row's own run_id.
+   */
+  async function refreshSessionProcesses(
+    sessionId: string | null | undefined,
+  ): Promise<void> {
+    if (!sessionId) return;
+    try {
+      const rows = await listProcesses({ sessionId });
+      let next = manager.getStore();
+      for (const row of rows) {
+        const entity = processRowToEntity(row, { sessionId });
+        if (entity) next = upsertProcess(next, entity);
+      }
+      store = next;
+      manager.setStore(store);
+    } catch {
+      /* Process list is best-effort: never block run reconciliation on it. */
+    }
+  }
 
   function recordDataset(
     row: DatasetRow,
@@ -634,6 +705,8 @@ export function createEntityBridge(
     store = next;
     manager.setStore(store);
 
+    await refreshSessionProcesses(store.runsById[runId]?.sandboxSessionId);
+
     store = manager.getStore();
     onStoreChange?.(store);
     return store.runsById[runId] || null;
@@ -668,6 +741,8 @@ export function createEntityBridge(
     const listed = await listRuns({
       conversation_id: conversationId || undefined,
     });
+    // Agent MySQL stores plan §10 uppercase statuses; compare case-folded so
+    // the set stays a single source of truth.
     const activeStatuses = new Set([
       'running',
       'queued',
@@ -677,20 +752,9 @@ export function createEntityBridge(
       'waiting_input',
       'waiting_approval',
       'cancelling',
-      'cancel_requested',
-      'restoring_session',
-      // Agent MySQL stores plan §10 uppercase statuses; accept both shapes.
-      'RUNNING',
-      'QUEUED',
-      'ACCEPTED',
-      'STARTING',
-      'RETRYING',
-      'WAITING_INPUT',
-      'WAITING_APPROVAL',
-      'CANCELLING',
     ]);
     const details = listed.filter((d) =>
-      activeStatuses.has(String(d.status || '').trim()),
+      activeStatuses.has(String(d.status || '').trim().toLowerCase()),
     );
     const rehydrated: RunEntity[] = [];
 
@@ -746,10 +810,9 @@ export function createEntityBridge(
   }
 
   function persistedEventPayload(event: PersistedAgentEvent): SSEEvent {
-    const persistedType = event.type === 'token_batch' ? 'token' : event.type;
     return {
       ...(event.payload || {}),
-      type: persistedType,
+      type: event.type,
       eventId: event.event_id,
       event_id: event.event_id,
       sequence: event.sequence,
@@ -869,6 +932,7 @@ export function createEntityBridge(
         timeline.runs.find((r) => r.session_id || r.sandbox_session_id)?.session_id ||
         timeline.runs.find((r) => r.sandbox_session_id)?.sandbox_session_id ||
         null;
+      await refreshSessionProcesses(sessionId);
       const rows = await listDatasets({
         conversationId,
         sessionId: sessionId || undefined,
@@ -934,25 +998,20 @@ export function createEntityBridge(
       assistant = messages[i];
       break;
     }
-    // If every assistant row was a tool leak, still attach tools below with empty text.
+    // If every assistant row was a tool leak, still keep an empty-text bubble
+    // so the run's timeline has a host.
     if (assistant) content.push(...assistant.content);
 
-    for (const toolId of run.toolExecutionIds) {
-      const tool = s.toolExecutionsById[toolId];
-      if (!tool) continue;
-      const part: ToolUsePart = {
-        type: 'tool_use',
-        name: tool.name,
-        input: tool.input,
-        status:
-          tool.status === 'running' || tool.status === 'waiting_approval'
-            ? 'running'
-            : 'complete',
-        isError: tool.isError || tool.status === 'failed',
-        result: tool.result,
-      };
-      content.push(part);
-    }
+    // Tool / process / approval / artifact rows are never copied into chat
+    // content: `InlineRuntimeSteps` renders them straight from the EntityStore.
+    // Duplicating them here would render the same run twice whenever a turn
+    // produced more than one assistant message.
+    const hasRuntimeSteps = Boolean(
+      run.toolExecutionIds.length ||
+        run.processIds.length ||
+        run.approvalIds.length ||
+        run.artifactIds.length,
+    );
 
     // Only surface run.error as a chat failure for terminal failed-like
     // outcomes. Parked waits may still carry a status_reason like
@@ -997,7 +1056,7 @@ export function createEntityBridge(
       }];
     });
 
-    if (!assistant && (content.length || fileLinks.length)) {
+    if (!assistant && (content.length || fileLinks.length || hasRuntimeSteps)) {
       messages.push({ role: 'assistant', content: [], _runId: runId });
     }
     let projected: ChatMessage | undefined;
@@ -1011,6 +1070,7 @@ export function createEntityBridge(
       projected.content = content;
       projected._fileLinks = fileLinks;
       projected._runId = runId;
+      projected._hasRuntimeSteps = hasRuntimeSteps;
       if (
         run.status === 'interrupted' ||
         run.status === 'cancelled' ||

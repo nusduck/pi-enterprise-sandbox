@@ -36,11 +36,6 @@ const PLATFORM_TYPE_ALIASES: Record<string, string> = {
   // Approval
   'approval.requested': 'tool.approval_required',
   'approval.resolved': 'approval.resolved',
-  // Dataset
-  'dataset.upload.started': 'dataset.upload.started',
-  'dataset.upload.progress': 'dataset.upload.progress',
-  'dataset.ready': 'dataset.ready',
-  'dataset.failed': 'dataset.failed',
   // Artifact — only explicit submit path
   'artifact.ready': 'artifact.created',
   // Errors
@@ -212,13 +207,14 @@ export function normalizeToRuntimeEvent(
   if (raw == null || typeof raw !== 'object') return null;
   let obj = raw as Record<string, unknown>;
 
-  // BFF relay: { sequence, event, ts }
-  if (isPlainObject(obj.event) && (obj.sequence != null || obj.event_id != null)) {
+  // BFF relay: { sequence, event, ts, event_id }. The Agent always stamps
+  // `sequence`, so its presence alone identifies a relay envelope.
+  if (isPlainObject(obj.event) && obj.sequence != null) {
     const inner = obj.event as Record<string, unknown>;
     obj = {
       ...inner,
       sequence: obj.sequence ?? inner.sequence,
-      event_id: inner.event_id || inner.eventId || obj.event_id || obj.id,
+      event_id: inner.event_id || obj.event_id || obj.id,
       timestamp: inner.timestamp || obj.ts || obj.timestamp,
     };
   }
@@ -252,6 +248,10 @@ export function normalizeToRuntimeEvent(
   }
 
   // Platform envelope (camelCase)
+  // `eventId` stays: this normalizer also accepts a raw platform event, whose
+  // canonical spelling is camelCase. Only the SSE wire was collapsed to
+  // `event_id`; dropping the camel read here would silently downgrade a real
+  // event id to a synthesized one and break Last-Event-ID resume.
   const eventId = pickStr(obj.eventId, obj.event_id, obj.id);
   const sequence =
     typeof obj.sequence === 'number'
@@ -261,7 +261,7 @@ export function normalizeToRuntimeEvent(
         : typeof obj.persisted_sequence === 'number'
           ? obj.persisted_sequence
           : null;
-  const typeRaw = pickStr(obj.type, obj.eventType, obj.event_type);
+  const typeRaw = pickStr(obj.type);
   const context = isPlainObject(obj.context) ? obj.context : {};
   // Prefer explicit data/payload bags. When history replay flattens the durable
   // payload onto the event root (entityBridge.persistedEventPayload), promote
@@ -395,7 +395,7 @@ function normalizePayload(
     ['approvalId', 'approval_id'],
     ['processId', 'process_id'],
     ['artifactId', 'artifact_id'],
-    ['datasetId', 'dataset_id'],
+    ['modelId', 'model_id'],
     ['messageId', 'message_id'],
     ['interactionId', 'interaction_id'],
     ['interactionType', 'interaction_type'],

@@ -110,11 +110,6 @@ export function resolveApprovalMode(env = process.env) {
   return APPROVAL_MODES.ASK;
 }
 
-/** @param {NodeJS.ProcessEnv | Record<string, string|boolean|undefined>} [env] */
-export function resolveApprovalEnabled(env = process.env) {
-  return resolveApprovalMode(env) !== APPROVAL_MODES.DENY;
-}
-
 /**
  * @param {NodeJS.ProcessEnv | Record<string, string|undefined>} [env]
  * @returns {'development' | 'production'}
@@ -342,7 +337,6 @@ export function effectiveConfig(cfg = config) {
     MODEL_MAX_TOKENS: cfg.MODEL_MAX_TOKENS,
     MODEL_REGISTRY_PATH: cfg.MODEL_REGISTRY_PATH || process.env.MODEL_REGISTRY_PATH || '<default>',
     APPROVAL_MODE: cfg.APPROVAL_MODE,
-    APPROVAL_ENABLED: cfg.APPROVAL_ENABLED,
     POLICY_PROFILE: cfg.POLICY_PROFILE,
     SKILLS_MODE: cfg.SKILLS_MODE,
     SKILLS_ROOT: cfg.SKILLS_ROOT,
@@ -463,8 +457,6 @@ export const config = {
   NODE_ENV: process.env.NODE_ENV || 'development',
   DEPLOYMENT_ENV: resolveDeploymentEnv(),
   APPROVAL_MODE: resolveApprovalMode(),
-  // Legacy projection retained for older status consumers.
-  APPROVAL_ENABLED: resolveApprovalEnabled(),
   /** strict by default; balanced only activates with effective required bwrap. */
   POLICY_PROFILE: resolvePolicyProfile(),
   /** External MCP servers owned by Agent Runtime/MCP Gateway, never Sandbox. */
@@ -504,7 +496,3 @@ export function resolveSandboxAuthHeader(env = process.env) {
   const token = String(env?.SANDBOX_API_TOKEN || '').trim();
   return token ? { 'X-API-Key': token } : {};
 }
-
-// Compatibility snapshot for external imports. Production request paths call
-// resolveSandboxAuthHeader() and do not retain this module-load value.
-export const AUTH_HEADER = resolveSandboxAuthHeader();

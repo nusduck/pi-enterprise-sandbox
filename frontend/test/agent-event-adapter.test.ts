@@ -102,6 +102,40 @@ describe('Agent event adapter', () => {
     bridge.dispose();
   });
 
+  it('projects tool rows as a marker only, never as chat content', () => {
+    const bridge = createEntityBridge();
+    const runId = bridge.beginRun({ conversationId: 'c-tools' });
+    // Text → tool → text: the turn the duplicate-rendering bug came from.
+    bridge.ingestAgentEvent(runId, { type: 'token', text: 'Let me search.' });
+    bridge.ingestAgentEvent(runId, { type: 'tool_start', id: 't1', name: 'web_search' });
+    bridge.ingestAgentEvent(runId, { type: 'tool_end', id: 't1', result: 'ok' });
+    bridge.ingestAgentEvent(runId, { type: 'done' });
+
+    const msgs = bridge.projectRunMessages(runId);
+    const assistants = msgs.filter((m) => m.role === 'assistant');
+    assert.ok(assistants.length >= 1);
+    // Tools live in the EntityStore; the timeline is their only renderer.
+    for (const message of assistants) {
+      assert.equal(message.content.some((part) => part.type === 'tool_use'), false);
+    }
+    assert.equal(assistants.at(-1)?._hasRuntimeSteps, true);
+    bridge.dispose();
+  });
+
+  it('keeps a host bubble for a run that only ran tools', () => {
+    const bridge = createEntityBridge();
+    const runId = bridge.beginRun({ conversationId: 'c-tool-only' });
+    bridge.ingestAgentEvent(runId, { type: 'tool_start', id: 't1', name: 'bash' });
+    bridge.ingestAgentEvent(runId, { type: 'tool_end', id: 't1', result: 'ok' });
+
+    const assistants = bridge
+      .projectRunMessages(runId)
+      .filter((m) => m.role === 'assistant');
+    assert.equal(assistants.length, 1);
+    assert.equal(assistants[0]._hasRuntimeSteps, true);
+    bridge.dispose();
+  });
+
   it('keeps fetch controllers isolated per background run', () => {
     const bridge = createEntityBridge();
     const r1 = bridge.beginRun({ conversationId: 'c1' });

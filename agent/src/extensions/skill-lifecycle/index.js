@@ -164,16 +164,7 @@ export function createSkillLifecycleExtension(options) {
       parameters: Type.Object({}),
       async execute() {
         try {
-          const skills =
-            typeof manager.describeInstalled === 'function'
-              ? manager.describeInstalled()
-              : // Fallback: names only — still mark as unknown tier rather than
-                // inventing "user" and implying they are editable.
-                (manager.listInstalled?.() ?? []).map((name) => ({
-                  name,
-                  tier: 'unknown',
-                  editable: false,
-                }));
+          const skills = manager.describeInstalled();
           return skillToolResult(
             buildSkillListPayload({
               skills,

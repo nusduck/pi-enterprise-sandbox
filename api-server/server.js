@@ -11,7 +11,7 @@ import {
   validateProductionConfig,
   effectiveConfig,
 } from './src/config.js';
-import { handleLiveness, handleReadiness, handleStatus } from './src/routes/status.js';
+import { handleLiveness, handleReadiness } from './src/routes/status.js';
 import { handleFileDownload, handleFileUpload, handleArtifactDownload } from './src/routes/files.js';
 import {
   handleListConversations,
@@ -35,7 +35,6 @@ import {
 } from './src/routes/approvals.js';
 import {
   handleSteerRun,
-  handleFollowUpRun,
   handleConversationFollowUp,
   handleCancelRun,
   handleGetRun,
@@ -239,11 +238,7 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
-    // ── GET /api/status — health check ──
-    if (req.method === 'GET' && path === '/api/status') {
-      await handleStatus(res);
-      return;
-    }
+    // ── health probes ──
     if (req.method === 'GET' && path === '/health/live') {
       handleLiveness(res);
       return;
@@ -479,13 +474,6 @@ const server = http.createServer(async (req, res) => {
         const runId = decodeURIComponent(runSteer[1]);
         const parsed = await readJsonBody(req, { maxBytes: config.JSON_BODY_LIMIT_BYTES });
         await handleSteerRun(runId, parsed, res, req);
-        return;
-      }
-      const runFollow = path.match(/^\/api\/runs\/([^/]+)\/follow-up$/);
-      if (req.method === 'POST' && runFollow) {
-        const runId = decodeURIComponent(runFollow[1]);
-        const parsed = await readJsonBody(req, { maxBytes: config.JSON_BODY_LIMIT_BYTES });
-        await handleFollowUpRun(runId, parsed, res, req);
         return;
       }
       const runCancel = path.match(/^\/api\/runs\/([^/]+)\/cancel$/);

@@ -414,7 +414,7 @@ describe('ExecuteRunService', () => {
     const exec = buildExecute(world, lease, {
       runExecutorFactory: () =>
         createStubRunExecutor({
-          onExecute: async () => ({ legacyOutcome: 'waiting_approval' }),
+          onExecute: async () => ({ outcome: 'waiting_approval' }),
         }),
     });
     const result = await exec.execute({

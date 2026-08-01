@@ -28,9 +28,8 @@ const EVT4 = '01K0G2PAV8FPMVC9QHJG7JPN5B';
 function env(seq, type, eventId) {
   return {
     sequence: seq,
-    event: { type, event_type: type, eventId, event_id: eventId },
+    event: { type, event_id: eventId },
     ts: 1_000 + seq,
-    eventId,
     event_id: eventId,
   };
 }
@@ -97,10 +96,10 @@ describe('cursor + dedupe helpers', () => {
     });
     assert.equal(e.sequence, 4);
     assert.equal(e.event.type, 'run.started');
-    assert.equal(e.eventId, EVT1);
+    assert.equal(e.event_id, EVT1);
   });
 
-  it('projectRunEventToSseEnvelope exposes top-level eventId', () => {
+  it('projectRunEventToSseEnvelope exposes top-level event_id', () => {
     const e = projectRunEventToSseEnvelope({
       sequenceNo: 2,
       eventType: 'run.queued',
@@ -109,8 +108,12 @@ describe('cursor + dedupe helpers', () => {
       createdAt: '2026-07-18T00:00:00.000Z',
     });
     assert.equal(e.sequence, 2);
-    assert.equal(e.eventId, EVT1);
+    assert.equal(e.event_id, EVT1);
+    assert.equal(e.event.event_id, EVT1);
     assert.equal(e.event.type, 'run.queued');
+    // One spelling per field on the wire.
+    assert.equal(Object.hasOwn(e, 'eventId'), false);
+    assert.equal(Object.hasOwn(e.event, 'event_type'), false);
   });
 });
 

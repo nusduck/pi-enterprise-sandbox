@@ -6,7 +6,6 @@ import type {
   AttachmentManifestItem,
   ChatMessage,
   ContentPart,
-  ToolUsePart,
 } from '../../shared/state';
 import {
   fileTypeLabel,
@@ -19,7 +18,6 @@ import {
   InlineRuntimeSteps,
   runHasEntitySteps,
 } from '../runtime-steps/InlineRuntimeSteps';
-import { ToolPill } from './ToolPill';
 
 function SafeDownloadLink({
   url,
@@ -192,23 +190,11 @@ export function MessageBubble({
   const body: ReactNode[] = [];
   let visibleAttachments = msg.attachments || [];
 
-  // Prefer rich entity-backed steps (tools / process / approval / artifact).
-  // Fall back to legacy ToolPill rail when history has only tool_use parts.
-  if (!isUser && useEntitySteps && runId) {
+  // Tools / processes / approvals / artifacts are rendered only here, from the
+  // EntityStore, and only once per run (MessageList picks the host bubble).
+  if (useEntitySteps && runId) {
     body.push(<InlineRuntimeSteps key="runtime-steps" runId={runId} />);
     hasContent = true;
-  } else if (!isUser) {
-    const tools = parts.filter((p) => p.type === 'tool_use') as ToolUsePart[];
-    if (tools.length) {
-      body.push(
-        <div key="tools" className="bubble-tools runtime-steps-fallback">
-          {tools.map((p, i) => (
-            <ToolPill key={`tool-${i}`} part={p} />
-          ))}
-        </div>,
-      );
-      hasContent = true;
-    }
   }
 
   parts.forEach((p: ContentPart, i) => {
@@ -229,10 +215,6 @@ export function MessageBubble({
         if (stars % 2 === 1) text = `${text}**`;
         body.push(<MarkdownBody key={`t-${i}`} text={text} />);
       }
-      hasContent = true;
-    } else if (p.type === 'tool_use' && isUser) {
-      body.push(<ToolPill key={`tool-${i}`} part={p as ToolUsePart} />);
-      body.push(' ');
       hasContent = true;
     }
   });
@@ -258,12 +240,6 @@ export function MessageBubble({
       );
       hasContent = true;
     }
-  }
-
-  // Assistant turns that only exist as entity steps (no text yet) should still render.
-  if (!hasContent && !isUser && useEntitySteps && runId) {
-    body.push(<InlineRuntimeSteps key="runtime-steps-empty" runId={runId} />);
-    hasContent = true;
   }
 
   return (

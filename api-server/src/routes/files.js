@@ -41,19 +41,19 @@ export function sandboxProxyHeaders(req, extra = {}, trustedAuth = null) {
     delete safeExtra[key];
   }
   const h = { ...AUTH_HEADER, ...safeExtra };
-  if (trustedAuth?.actingUserId && trustedAuth?.actingOrganizationId) {
-    h['X-Acting-User-Id'] = String(trustedAuth.actingUserId);
-    h['X-Acting-Organization-Id'] = String(trustedAuth.actingOrganizationId);
-    if (trustedAuth.actingRole) h['X-Acting-Role'] = String(trustedAuth.actingRole);
-  }
-  const auth = authFromRequest(req);
   // Once Agent has resolved the formal owner, use only the service token plus
   // acting headers. Forwarding a browser JWT here would take precedence in
   // Sandbox actor resolution and reintroduce the external/internal ID-domain
-  // mismatch this hop is responsible for avoiding.
-  if (!trustedAuth && auth.authorization) {
-    h.Authorization = auth.authorization;
+  // mismatch this hop is responsible for avoiding — so a missing trustedAuth
+  // is a programming error, never a reason to fall back to the browser token.
+  if (!trustedAuth?.actingUserId || !trustedAuth?.actingOrganizationId) {
+    throw new Error(
+      'sandboxProxyHeaders requires a resolved trustedAuth (actingUserId + actingOrganizationId)',
+    );
   }
+  h['X-Acting-User-Id'] = String(trustedAuth.actingUserId);
+  h['X-Acting-Organization-Id'] = String(trustedAuth.actingOrganizationId);
+  if (trustedAuth.actingRole) h['X-Acting-Role'] = String(trustedAuth.actingRole);
   // Forward the BFF's current W3C span, including opaque tracestate. Direct
   // route-unit callers get a fresh valid context instead of a UUID-shaped id.
   const context =

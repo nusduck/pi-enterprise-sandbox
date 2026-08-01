@@ -178,17 +178,8 @@ export function waitForWritableResume(opts = {}) {
  * @returns {string}
  */
 export function formatSseDataFrame(envelope) {
-  const eventId =
-    envelope.eventId ||
-    envelope.event_id ||
-    envelope.event?.eventId ||
-    envelope.event?.event_id ||
-    null;
-  const type =
-    envelope.event?.type ||
-    envelope.event?.event_type ||
-    envelope.type ||
-    'message';
+  const eventId = envelope.event_id || envelope.event?.event_id || null;
+  const type = envelope.event?.type || 'message';
   const id = eventId != null && String(eventId) ? String(eventId) : String(envelope.sequence);
   const data = JSON.stringify(envelope);
   return `id: ${id}\nevent: ${type}\ndata: ${data}\n\n`;
@@ -217,7 +208,7 @@ export function formatSseEndFrame(status) {
  * Sequence/type/payload come from stream fields; Redis is never status authority.
  *
  * @param {{ eventId?: string, sequence?: string|number, type?: string, payload?: string, createdAt?: string }} entry
- * @returns {{ sequence: number, event: object, ts: number, eventId?: string, event_id?: string } | null}
+ * @returns {{ sequence: number, event: object, ts: number, event_id?: string } | null}
  */
 export function projectRedisStreamToSseEnvelope(entry) {
   const sequence = Number(entry?.sequence);
@@ -237,28 +228,22 @@ export function projectRedisStreamToSseEnvelope(entry) {
     payload = { ...entry.payload };
   }
 
-  const eventId = entry.eventId || payload.eventId || payload.event_id || null;
-  const type = entry.type || payload.type || payload.event_type || 'message';
+  const eventId = entry.eventId || null;
+  const type = entry.type || 'message';
   const event = {
     type,
-    event_type: type,
-    ...(eventId
-      ? { eventId: String(eventId), event_id: String(eventId) }
-      : {}),
+    ...(eventId ? { event_id: String(eventId) } : {}),
     ...payload,
   };
   // Prefer stream type over any payload collision.
   event.type = type;
-  event.event_type = type;
 
   const ts = entry.createdAt ? Date.parse(entry.createdAt) : Date.now();
   return {
     sequence,
     event,
     ts: Number.isFinite(ts) ? ts : Date.now(),
-    ...(eventId
-      ? { eventId: String(eventId), event_id: String(eventId) }
-      : {}),
+    ...(eventId ? { event_id: String(eventId) } : {}),
   };
 }
 

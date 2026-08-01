@@ -98,12 +98,12 @@ export function runRowFromApi(item: ApiRunItem | RunDetail): RunRow | null {
     runner: (any.runner as string | null | undefined) ?? null,
     error: (any.error as string | null | undefined) ?? null,
     startedAt: (any.started_at as string | null | undefined) ?? null,
-    // Agent Run authority calls this completed_at. finished_at is retained for
-    // compatibility with the browser entity store and older BFF responses.
+    // The Agent Run authority calls this completed_at and emits finished_at
+    // alongside it; both spellings stay readable so a single-key response
+    // (or a direct Agent call that skips the BFF) still yields a duration.
     finishedAt:
       (any.finished_at as string | null | undefined) ??
       (any.completed_at as string | null | undefined) ??
-      (any.completedAt as string | null | undefined) ??
       null,
     createdAt: (any.created_at as string | null | undefined) ?? null,
     tokenUsage: shortUsage(any.usage || any.token_usage),

@@ -175,7 +175,8 @@ describe('GetRunService pending_input projection (G6)', () => {
 
     const body = presentGetRunResponse(run);
     assert.equal(body.pending_input.interaction_id, INTERACTION);
-    assert.equal(body.pendingInput.interactionId, INTERACTION);
+    assert.equal(body.pending_input.interaction_type, 'select');
+    assert.equal(Object.hasOwn(body, 'pendingInput'), false);
     assert.equal(body.pending_input.title, 'Choose a region');
     assert.equal(run.sandboxSessionId, SANDBOX_SESSION);
     assert.equal(body.session_id, SANDBOX_SESSION);
@@ -215,7 +216,7 @@ describe('GetRunService pending_input projection (G6)', () => {
     assert.equal(body.last_sequence, 3);
     assert.equal(body.session_id, '01K0G2PAV8FPMVC9QHJG7JPN5F');
     assert.equal(body.sandbox_session_id, '01K0G2PAV8FPMVC9QHJG7JPN5F');
-    assert.equal(body.sandboxSessionId, '01K0G2PAV8FPMVC9QHJG7JPN5F');
+    assert.equal(Object.hasOwn(body, 'sandboxSessionId'), false);
     assert.equal(body.agent_session_id, 'session');
     assert.equal(body.model_id, 'gpt-5.6');
     assert.deepEqual(body.usage, { total_tokens: 42 });

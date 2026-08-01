@@ -114,6 +114,7 @@ export const RunDetailSchema = z
     finished_at: z.string().optional().nullable(),
     created_at: z.string().optional().nullable(),
     updated_at: z.string().optional().nullable(),
+    model_id: z.string().optional().nullable(),
     event_count: z.number().int().nonnegative().optional(),
     next_sequence: z.number().int().nonnegative().optional(),
     runtime_available: z.boolean().optional(),

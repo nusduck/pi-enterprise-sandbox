@@ -16,7 +16,11 @@
  * Approval resolution/resume is NOT claimed (PR-09).
  */
 
-import { assertUlid, normalizeUlid } from '../domain/shared/ulid.js';
+import { assertUlid } from '../domain/shared/ulid.js';
+import {
+  extractStartedProcessId,
+  extractSubmittedArtifact,
+} from './tool-result-projections.js';
 import { SessionFenceConflictError } from '../domain/session/errors.js';
 import { ConflictError } from '../infrastructure/mysql/errors.js';
 import { AGGREGATE_TYPE_RUN } from '../infrastructure/outbox/outbox-status.js';
@@ -48,65 +52,6 @@ import {
   INTERACTION_STATUS,
 } from '../domain/interaction/interaction-status.js';
 
-const SHA256_PATTERN = /^[0-9a-f]{64}$/;
-const CONTROL_CHARACTER_PATTERN = /[\u0000-\u001f\u007f]/u;
-
-/**
- * Extract only the structured result produced by the formal submit_artifact
- * bridge. Never inspect tool text, which is model-visible and not a durable
- * artifact contract.
- *
- * @param {unknown} result
- * @returns {{ artifactId: string, name: string, mimeType: string, size: number, sha256: string, description: string | null } | null}
- */
-function extractSubmittedArtifact(result) {
-  if (!result || typeof result !== 'object' || Array.isArray(result)) return null;
-  const details = /** @type {Record<string, unknown>} */ (result).details;
-  if (!details || typeof details !== 'object' || Array.isArray(details)) return null;
-
-  const metadata = /** @type {Record<string, unknown>} */ (details);
-  const artifactId = normalizeUlid(metadata.artifactId);
-  const rawName = metadata.displayName ?? metadata.name;
-  const name = typeof rawName === 'string' ? rawName : '';
-  const mimeType =
-    typeof metadata.mimeType === 'string' ? metadata.mimeType : '';
-  const size = metadata.size;
-  const sha256 = metadata.sha256;
-  const rawDescription = metadata.description;
-
-  if (
-    !artifactId ||
-    !name ||
-    name !== name.trim() ||
-    name.length > 256 ||
-    CONTROL_CHARACTER_PATTERN.test(name) ||
-    !mimeType ||
-    mimeType !== mimeType.trim() ||
-    mimeType.length > 255 ||
-    CONTROL_CHARACTER_PATTERN.test(mimeType) ||
-    !Number.isSafeInteger(size) ||
-    Number(size) < 0 ||
-    typeof sha256 !== 'string' ||
-    !SHA256_PATTERN.test(sha256) ||
-    (rawDescription != null &&
-      (typeof rawDescription !== 'string' ||
-        !rawDescription ||
-        rawDescription !== rawDescription.trim() ||
-        rawDescription.length > 1024 ||
-        CONTROL_CHARACTER_PATTERN.test(rawDescription)))
-  ) {
-    return null;
-  }
-
-  return {
-    artifactId,
-    name,
-    mimeType,
-    size: Number(size),
-    sha256,
-    description: rawDescription == null ? null : rawDescription,
-  };
-}
 
 /**
  * Durable policy state conflict — enterprise-policy maps to block.
@@ -1261,6 +1206,10 @@ export class FencedToolGovernanceRecorder {
         }
 
         if (statusChanged) {
+          const processId =
+            !isError && toolName === 'process_start'
+              ? extractStartedProcessId(input.result)
+              : null;
           envelope = await this.#appendEventInTrx(repos, {
             type: eventType,
             timestamp,
@@ -1269,6 +1218,7 @@ export class FencedToolGovernanceRecorder {
               toolName,
               toolExecutionId: toolExecution.toolExecutionId,
               isError,
+              ...(processId ? { processId } : {}),
               result: redactPayload(input.result ?? null),
             },
           });

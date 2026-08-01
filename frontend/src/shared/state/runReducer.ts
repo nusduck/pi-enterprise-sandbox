@@ -15,7 +15,6 @@ import {
   createAgentSession,
   createApproval,
   createArtifact,
-  createDataset,
   createMessage,
   createProcess,
   createRun,
@@ -26,7 +25,6 @@ import {
   upsertApproval,
   upsertAgentSession,
   upsertArtifact,
-  upsertDataset,
   upsertMessage,
   upsertProcess,
   upsertRun,
@@ -725,7 +723,9 @@ export function reduceRuntimeEvent(
           result: payload.result ?? existing?.result ?? null,
           isError: ev.type === 'tool.failed' || Boolean(payload.is_error || payload.isError),
           approvalId: existing?.approvalId ?? null,
-          processId: existing?.processId ?? null,
+          // process_start returns its handle on completion — this is what links
+          // the tool step to its process console.
+          processId: str(payload.process_id) || existing?.processId || null,
           summary:
             payload.summary != null
               ? str(payload.summary)
@@ -919,80 +919,6 @@ export function reduceRuntimeEvent(
       break;
     }
 
-    case 'dataset.upload.started':
-    case 'dataset.upload.progress':
-    case 'dataset.ready':
-    case 'dataset.failed': {
-      const datasetId = str(
-        payload.dataset_id || payload.id,
-        `ds_${runId}_${ev.sequence}`,
-      );
-      const existing = next.datasetsById[datasetId];
-      const status =
-        ev.type === 'dataset.ready'
-          ? 'ready'
-          : ev.type === 'dataset.failed'
-            ? 'failed'
-            : 'uploading';
-      const progress =
-        typeof payload.progress === 'number'
-          ? Math.max(0, Math.min(100, payload.progress))
-          : typeof payload.percent === 'number'
-            ? Math.max(0, Math.min(100, payload.percent))
-            : status === 'ready'
-              ? 100
-              : existing?.progress ?? null;
-      next = upsertDataset(
-        next,
-        createDataset({
-          id: datasetId,
-          conversationId:
-            str(payload.conversation_id) ||
-            next.runsById[runId]?.conversationId ||
-            existing?.conversationId ||
-            null,
-          sessionId:
-            str(ev.session_id) ||
-            str(payload.session_id) ||
-            next.runsById[runId]?.sandboxSessionId ||
-            existing?.sessionId ||
-            null,
-          runId,
-          name: str(
-            payload.name || payload.original_filename || existing?.name,
-            datasetId,
-          ),
-          path:
-            payload.path != null
-              ? str(payload.path)
-              : payload.stored_relative_path != null
-                ? str(payload.stored_relative_path)
-                : existing?.path ?? null,
-          size:
-            typeof payload.size === 'number'
-              ? payload.size
-              : typeof payload.size_bytes === 'number'
-                ? payload.size_bytes
-                : existing?.size ?? null,
-          mimeType:
-            payload.mime_type != null
-              ? str(payload.mime_type)
-              : existing?.mimeType ?? null,
-          sha256:
-            payload.sha256 != null ? str(payload.sha256) : existing?.sha256 ?? null,
-          status,
-          progress,
-          agentVisible:
-            payload.agent_visible === false
-              ? false
-              : existing?.agentVisible ?? true,
-          createdAt: existing?.createdAt || ts,
-          updatedAt: ts,
-        }),
-      );
-      break;
-    }
-
     case 'model.request.started':
     case 'model.request.completed':
     case 'model.request.failed': {
@@ -1003,6 +929,12 @@ export function reduceRuntimeEvent(
       const existing = next.traceSpansById[spanId];
       const failed = ev.type === 'model.request.failed';
       const done = ev.type !== 'model.request.started';
+      // The Run row carries no model column, so the provider call is the only
+      // place the served model is stated. Record it on the run for the header.
+      const eventModelId = str(payload.model_id);
+      if (eventModelId && next.runsById[runId]?.modelId !== eventModelId) {
+        next = touchRun(next, runId, { modelId: eventModelId });
+      }
       next = upsertTraceSpan(
         next,
         createTraceSpan({
@@ -1302,6 +1234,7 @@ export function rehydrateRun(
     finished_at?: string | null;
     created_at?: string | null;
     updated_at?: string | null;
+    model_id?: string | null;
     budget?: unknown;
     budget_limits?: unknown;
     pending_input?: {
@@ -1414,6 +1347,8 @@ export function rehydrateRun(
         detail.session_id ?? detail.sandbox_session_id ?? existing?.sandboxSessionId ?? null,
       status,
       pendingInput,
+      // The Agent Run row is the authority for which model served the turn.
+      modelId: detail.model_id ?? existing?.modelId ?? null,
       lastSequence: detail.last_sequence ?? existing?.lastSequence ?? 0,
       lastEventId: detail.last_event_id ?? existing?.lastEventId ?? null,
       // Drop parked wait reasons that BFF may still send as `error`.

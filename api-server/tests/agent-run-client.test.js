@@ -194,7 +194,7 @@ describe('thin BFF agent relay', () => {
 
   it('GET Run uses Agent owner scope (no Sandbox status fallback)', () => {
     // PR-04/PR-10: Agent MySQL is fact source; presentRunDetail formats Agent DTO only.
-    assert.match(runsSrc, /presentRunDetail\(null, live, true\)/);
+    assert.match(runsSrc, /presentRunDetail\(live, true\)/);
     assert.match(runsSrc, /authorizeRunRequest/);
     assert.match(runsSrc, /getAgentRun/);
     assert.doesNotMatch(runsSrc, /listAgentRuns\(\s*\{\s*runId/);

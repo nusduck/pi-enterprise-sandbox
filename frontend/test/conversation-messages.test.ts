@@ -52,17 +52,15 @@ describe('conversation message projection', () => {
       activeRunId: 'run_2',
       projectRunMessages: (runId) => [{
         role: 'assistant',
-        content: [
-          { type: 'text', text: 'same answer' },
-          { type: 'tool_use', name: runId === 'run_1' ? 'read' : 'bash' },
-        ],
+        content: [{ type: 'text', text: 'same answer' }],
+        _runId: runId,
+        _hasRuntimeSteps: true,
       }],
     });
 
     const assistants = projected.filter((message) => message.role === 'assistant');
     assert.equal(assistants.length, 2);
-    assert.equal(assistants[0].content.find((part) => part.type === 'tool_use')?.name, 'read');
-    assert.equal(assistants[1].content.find((part) => part.type === 'tool_use')?.name, 'bash');
+    assert.deepEqual(assistants.map((message) => message._runId), ['run_1', 'run_2']);
   });
 
   it('streams pure token text without waiting for tools', () => {
@@ -111,7 +109,7 @@ describe('conversation message projection', () => {
     );
   });
 
-  it('keeps every assistant message in a run and attaches tools to its final message', () => {
+  it('keeps every assistant message in a run and marks runtime steps on its final message', () => {
     let store = createEntityStore();
     store = upsertRun(store, createRun({
       id: 'run_multi_assistant',
@@ -157,12 +155,10 @@ describe('conversation message projection', () => {
         },
         {
           role: 'assistant',
-          content: [
-            { type: 'text', text: 'You can download it from Artifacts.' },
-            { type: 'tool_use', name: 'bash' },
-          ],
+          content: [{ type: 'text', text: 'You can download it from Artifacts.' }],
           _runId: 'run_multi_assistant',
           _messageId: 'assistant:run_multi_assistant:seq2',
+          _hasRuntimeSteps: true,
         },
       ],
     });
@@ -171,8 +167,10 @@ describe('conversation message projection', () => {
     assert.equal(assistants.length, 2);
     assert.equal((assistants[0].content[0] as { text: string }).text, 'The artifact has been submitted.');
     assert.equal((assistants[1].content[0] as { text: string }).text, 'You can download it from Artifacts.');
-    assert.equal(assistants[0].content.find((part) => part.type === 'tool_use'), undefined);
-    assert.equal(assistants[1].content.find((part) => part.type === 'tool_use')?.name, 'bash');
+    // Only one bubble per run may claim the steps, otherwise the runtime
+    // timeline renders the same tools twice.
+    assert.equal(assistants[0]._hasRuntimeSteps, undefined);
+    assert.equal(assistants[1]._hasRuntimeSteps, true);
   });
 
   it('keeps the full persisted assistant text while adding runtime tool details', () => {
@@ -194,18 +192,16 @@ describe('conversation message projection', () => {
       activeRunId: 'run_full_text',
       projectRunMessages: () => [{
         role: 'assistant',
-        content: [
-          { type: 'text', text: `${'A'.repeat(512)}…` },
-          { type: 'tool_use', name: 'read' },
-        ],
+        content: [{ type: 'text', text: `${'A'.repeat(512)}…` }],
         _runId: 'run_full_text',
+        _hasRuntimeSteps: true,
       }],
     });
 
     const assistant = projected.find((message) => message.role === 'assistant');
     assert.ok(assistant);
     assert.equal((assistant.content[0] as { text: string }).text, fullText);
-    assert.equal(assistant.content.find((part) => part.type === 'tool_use')?.name, 'read');
+    assert.equal(assistant._hasRuntimeSteps, true);
   });
 
   it('orders persisted history by sequence number, never by role', () => {

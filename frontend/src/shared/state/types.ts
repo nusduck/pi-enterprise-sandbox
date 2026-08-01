@@ -2,16 +2,7 @@
 
 export type TextPart = { type: 'text'; text: string };
 
-export type ToolUsePart = {
-  type: 'tool_use';
-  name: string;
-  input?: unknown;
-  status?: 'running' | 'complete' | string;
-  isError?: boolean;
-  result?: unknown;
-};
-
-export type ContentPart = TextPart | ToolUsePart | { type: string; [k: string]: unknown };
+export type ContentPart = TextPart | { type: string; [k: string]: unknown };
 
 export type FileLink = {
   name: string;
@@ -30,6 +21,13 @@ export type ChatMessage = {
   status?: string;
   stopReason?: string;
   _fileLinks?: FileLink[];
+  /**
+   * This turn owns tool / process / approval / artifact rows in the EntityStore.
+   * The runtime timeline renders them from those entities — the chat message
+   * only carries the marker so merge and commit logic can tell a text-only turn
+   * from one that did runtime work.
+   */
+  _hasRuntimeSteps?: boolean;
   /** Runtime identity used for stable merge/dedupe; never used as display text. */
   _runId?: string;
   _messageId?: string;

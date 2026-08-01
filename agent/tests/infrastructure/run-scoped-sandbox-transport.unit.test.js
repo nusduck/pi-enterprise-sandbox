@@ -1,5 +1,5 @@
 /**
- * Per-run Sandbox transport: durable acting headers + isolated clients.
+ * Per-run Sandbox transport: durable identity + isolated signed transports.
  */
 
 import { describe, it } from 'node:test';
@@ -32,61 +32,23 @@ const RUN_B = Object.freeze({
 });
 
 describe('createRunScopedSandboxBridgeTransport', () => {
-  it('injects durable acting org/user + trace; never fabricates identity', () => {
-    /** @type {any[]} */
-    const clientOpts = [];
-    const fakeClient = {
-      async readFile() {
-        return { content: '' };
-      },
-      async writeFile() {
-        return {};
-      },
-      async editFile() {
-        return {};
-      },
-      async listFiles() {
-        return { entries: [] };
-      },
-      async runPython() {
-        return { exit_code: 0 };
-      },
-      async runCommand() {
-        return { exit_code: 0 };
-      },
-      async runNode() {
-        return { exit_code: 0 };
-      },
-      async startProcess() {
-        return { process_id: 'p1', status: 'running' };
-      },
-      async getProcess() {
-        return { status: 'running' };
-      },
-      async readProcess() {
-        return { data: '', cursor: '0-0', next_cursor: '0-0' };
-      },
-      async signalProcess() {
-        return { ok: true, status: 'running' };
-      },
-      async submitArtifact() {
-        return { artifact_id: 'a1' };
-      },
-    };
+  it('builds each signed transport from the frozen runContext', () => {
+    // Acting identity now travels inside the signed request payload (see
+    // internal-files-read-http.js) rather than as mutable client headers, so
+    // the run context must reach every per-run transport factory unchanged.
+    const seen = [];
     createRunScopedSandboxBridgeTransport(RUN_A, {
-      createSandboxClient: (opts) => {
-        clientOpts.push(opts);
-        return fakeClient;
-      },
+      createInternalReadTransport: (ctx) => { seen.push(['read', ctx]); return { readFile: async () => ({}) }; },
+      createInternalExecutionTransport: (ctx) => { seen.push(['exec', ctx]); return { bash: async () => ({}), python: async () => ({}) }; },
+      createInternalProcessTransport: (ctx) => { seen.push(['process', ctx]); return {}; },
+      createInternalFilesWriteTransport: (ctx) => { seen.push(['write', ctx]); return {}; },
+      createInternalArtifactTransport: (ctx) => { seen.push(['artifact', ctx]); return {}; },
     });
-    assert.equal(clientOpts.length, 1);
-    assert.equal(clientOpts[0].traceId, RUN_A.traceId);
-    assert.equal(clientOpts[0].auth.actingUserId, RUN_A.userId);
-    assert.equal(clientOpts[0].auth.actingOrganizationId, RUN_A.orgId);
-    assert.equal(clientOpts[0].auth.actingRole, 'user');
+    assert.deepEqual(seen.map((x) => x[0]), ['read', 'exec', 'process', 'write', 'artifact']);
+    for (const [, ctx] of seen) assert.equal(ctx, RUN_A);
   });
 
-  it('fails closed without durable org/user (no anonymous Sandbox client)', () => {
+  it('fails closed without durable org/user (no anonymous Sandbox access)', () => {
     assert.throws(
       () =>
         createRunScopedSandboxBridgeTransport({
@@ -105,65 +67,23 @@ describe('createRunScopedSandboxBridgeTransport', () => {
     );
   });
 
-  it('isolates concurrent runs (separate clients per runContext)', () => {
-    /** @type {any[]} */
-    const clients = [];
-    const makeClient = (opts) => {
-      const c = {
-        opts,
-        id: clients.length,
-        async readFile() {
-          return { content: String(this.id) };
-        },
-        async writeFile() {
-          return {};
-        },
-        async editFile() {
-          return {};
-        },
-        async listFiles() {
-          return { entries: [] };
-        },
-        async runPython() {
-          return { exit_code: 0 };
-        },
-        async runCommand() {
-          return { exit_code: 0 };
-        },
-        async runNode() {
-          return { exit_code: 0 };
-        },
-        async startProcess() {
-          return { process_id: 'p', status: 'running' };
-        },
-        async getProcess() {
-          return { status: 'running' };
-        },
-        async readProcess() {
-          return { data: '', cursor: '0-0', next_cursor: '0-0' };
-        },
-        async signalProcess() {
-          return { ok: true };
-        },
-        async submitArtifact() {
-          return {};
-        },
-      };
-      clients.push(c);
-      return c;
+  it('isolates concurrent runs (separate transports per runContext)', () => {
+    const built = [];
+    const make = (ctx) => {
+      const t = { ctx, id: built.length, readFile: async () => ({}) };
+      built.push(t);
+      return t;
     };
     const t1 = createRunScopedSandboxBridgeTransport(RUN_A, {
-      createSandboxClient: makeClient,
+      createInternalReadTransport: make,
     });
     const t2 = createRunScopedSandboxBridgeTransport(RUN_B, {
-      createSandboxClient: makeClient,
+      createInternalReadTransport: make,
     });
-    assert.equal(clients.length, 2);
-    assert.notEqual(clients[0], clients[1]);
-    assert.equal(clients[0].opts.auth.actingUserId, RUN_A.userId);
-    assert.equal(clients[1].opts.auth.actingUserId, RUN_B.userId);
-    assert.equal(clients[0].opts.traceId, RUN_A.traceId);
-    assert.equal(clients[1].opts.traceId, RUN_B.traceId);
+    assert.equal(built.length, 2);
+    assert.notEqual(built[0], built[1]);
+    assert.equal(built[0].ctx.runId, RUN_A.runId);
+    assert.equal(built[1].ctx.runId, RUN_B.runId);
     assert.ok(typeof t1.readFile === 'function' && typeof t2.readFile === 'function');
   });
 
@@ -176,7 +96,6 @@ describe('createRunScopedSandboxBridgeTransport', () => {
     let transportOptions;
 
     createRunScopedSandboxBridgeTransport(RUN_A, {
-      createSandboxClient: () => ({}),
       createInternalReadTransport: (ctx) => {
         assert.equal(ctx, RUN_A);
         return formalRead;
