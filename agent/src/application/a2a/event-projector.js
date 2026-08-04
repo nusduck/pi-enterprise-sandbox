@@ -63,6 +63,10 @@ export function projectEnvelopeToA2aResult(envelope, ctx) {
   if (ARTIFACT_EVENT_TYPES.has(type)) {
     const artifact = projectArtifactEvent(event, ctx);
     if (!artifact) return null;
+    const contextId =
+      typeof ctx.contextId === 'string' && ctx.contextId.trim()
+        ? ctx.contextId.trim()
+        : ctx.a2aTaskId;
     return {
       kind: 'artifact-update',
       sequence,
@@ -70,7 +74,7 @@ export function projectEnvelopeToA2aResult(envelope, ctx) {
       result: {
         kind: 'artifact-update',
         taskId: ctx.a2aTaskId,
-        contextId: ctx.contextId ?? null,
+        contextId,
         artifact,
         append: false,
         lastChunk: true,
@@ -87,6 +91,30 @@ export function projectEnvelopeToA2aResult(envelope, ctx) {
     const status = resolveStatusFromEvent(event, ctx.runStatus);
     if (!status) return null;
     const final = isTerminalA2aTaskStatus(status);
+    // A2A TaskStatusUpdateEvent.contextId is required (string). Fall back to
+    // taskId so strict SDK validators never receive null/undefined.
+    const contextId =
+      typeof ctx.contextId === 'string' && ctx.contextId.trim()
+        ? ctx.contextId.trim()
+        : ctx.a2aTaskId;
+    const statusBody = {
+      state: status,
+      timestamp: envelope.ts
+        ? new Date(envelope.ts).toISOString()
+        : new Date().toISOString(),
+    };
+    // Message is optional on TaskStatus. When present it MUST include
+    // messageId (A2A Message required field) — Python a2a-sdk / Pydantic
+    // rejects incomplete Message objects during SendStreamingMessage parse.
+    const message = statusMessage(event, status, {
+      a2aTaskId: ctx.a2aTaskId,
+      contextId,
+      sequence,
+      eventId,
+    });
+    if (message) {
+      statusBody.message = message;
+    }
     return {
       kind: 'status-update',
       sequence,
@@ -94,14 +122,8 @@ export function projectEnvelopeToA2aResult(envelope, ctx) {
       result: {
         kind: 'status-update',
         taskId: ctx.a2aTaskId,
-        contextId: ctx.contextId ?? null,
-        status: {
-          state: status,
-          timestamp: envelope.ts
-            ? new Date(envelope.ts).toISOString()
-            : new Date().toISOString(),
-          message: statusMessage(event, status),
-        },
+        contextId,
+        status: statusBody,
         final,
         metadata: {
           sequence,
@@ -129,9 +151,13 @@ export function projectEnvelopeToA2aResult(envelope, ctx) {
  */
 export function buildA2aTaskObject(input) {
   const state = projectRunStatusToA2a(input.runStatus);
+  const contextId =
+    typeof input.contextId === 'string' && input.contextId.trim()
+      ? input.contextId.trim()
+      : input.a2aTaskId;
   return {
     id: input.a2aTaskId,
-    contextId: input.contextId ?? null,
+    contextId,
     status: {
       state,
       timestamp: input.updatedAt || input.createdAt || new Date().toISOString(),
@@ -356,25 +382,57 @@ function extractRunStatus(event) {
   return null;
 }
 
-function statusMessage(event, a2aStatus) {
+/**
+ * Build a protocol-valid A2A Message for TaskStatus.message, or null to omit.
+ *
+ * Spec: Message.messageId is REQUIRED when a Message object is present.
+ * Synthetic "Task state: …" messages are omitted so strict clients (e.g.
+ * a2a-python Pydantic) never reject status-update frames; real reasons keep
+ * a stable, deterministic messageId for stream replay.
+ *
+ * @param {object} event
+ * @param {string} a2aStatus
+ * @param {{
+ *   a2aTaskId?: string,
+ *   contextId?: string | null,
+ *   sequence?: number,
+ *   eventId?: string | null,
+ * }} [ctx]
+ * @returns {object | null}
+ */
+function statusMessage(event, a2aStatus, ctx = {}) {
   const reason =
     event.statusReason ||
     event.status_reason ||
     event.reason ||
     event.payload?.statusReason ||
     null;
-  if (typeof reason === 'string' && reason.trim()) {
-    return {
-      role: 'agent',
-      parts: [{ kind: 'text', text: reason.trim().slice(0, 500) }],
-      kind: 'message',
-    };
+  if (typeof reason !== 'string' || !reason.trim()) {
+    return null;
   }
-  return {
+  const seq =
+    Number.isFinite(Number(ctx.sequence)) && Number(ctx.sequence) >= 0
+      ? Number(ctx.sequence)
+      : 0;
+  const messageId =
+    (typeof event.messageId === 'string' && event.messageId.trim()) ||
+    (typeof event.message_id === 'string' && event.message_id.trim()) ||
+    (typeof ctx.eventId === 'string' && ctx.eventId.trim()) ||
+    `a2a-status-${ctx.a2aTaskId || 'task'}-${seq}-${a2aStatus}`;
+  /** @type {Record<string, unknown>} */
+  const msg = {
+    messageId,
     role: 'agent',
-    parts: [{ kind: 'text', text: `Task state: ${a2aStatus}` }],
+    parts: [{ kind: 'text', text: reason.trim().slice(0, 500) }],
     kind: 'message',
   };
+  if (typeof ctx.a2aTaskId === 'string' && ctx.a2aTaskId) {
+    msg.taskId = ctx.a2aTaskId;
+  }
+  if (typeof ctx.contextId === 'string' && ctx.contextId) {
+    msg.contextId = ctx.contextId;
+  }
+  return msg;
 }
 
 /**

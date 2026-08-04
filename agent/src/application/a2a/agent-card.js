@@ -6,7 +6,195 @@
  * arbitrary Host / X-Forwarded-Host for credential targets.
  */
 
+import fs from 'node:fs';
+import path from 'node:path';
 import { ValidationError } from '../errors.js';
+
+/** Cap skill discovery so Agent Card stays lightweight for registry crawlers. */
+const MAX_CARD_SKILLS = 64;
+const SKILL_MD_READ_BYTES = 4096;
+
+/**
+ * Normalize loose skill descriptors into A2A AgentSkill objects.
+ * Required fields: id, name, description.
+ *
+ * @param {unknown} skills
+ * @returns {object[]}
+ */
+export function normalizeAgentSkills(skills) {
+  if (!Array.isArray(skills)) return [];
+  /** @type {object[]} */
+  const out = [];
+  const seen = new Set();
+  for (const raw of skills) {
+    if (out.length >= MAX_CARD_SKILLS) break;
+    if (typeof raw === 'string' && raw.trim()) {
+      const id = raw.trim().slice(0, 128);
+      if (seen.has(id)) continue;
+      seen.add(id);
+      out.push({
+        id,
+        name: id,
+        description: `Skill package: ${id}`,
+        tags: ['skill'],
+      });
+      continue;
+    }
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) continue;
+    const r = /** @type {Record<string, unknown>} */ (raw);
+    const idRaw = r.id ?? r.skillId ?? r.name;
+    if (typeof idRaw !== 'string' || !idRaw.trim()) continue;
+    const id = idRaw.trim().slice(0, 128);
+    if (seen.has(id)) continue;
+    seen.add(id);
+    const name =
+      typeof r.name === 'string' && r.name.trim()
+        ? r.name.trim().slice(0, 256)
+        : id;
+    const description =
+      typeof r.description === 'string' && r.description.trim()
+        ? r.description.trim().slice(0, 1024)
+        : `Skill: ${name}`;
+    /** @type {Record<string, unknown>} */
+    const skill = { id, name, description };
+    if (Array.isArray(r.tags)) {
+      skill.tags = r.tags
+        .filter((t) => typeof t === 'string' && t.trim())
+        .map((t) => String(t).trim().slice(0, 64))
+        .slice(0, 16);
+    }
+    if (Array.isArray(r.examples)) {
+      skill.examples = r.examples
+        .filter((e) => typeof e === 'string' && e.trim())
+        .map((e) => String(e).trim().slice(0, 256))
+        .slice(0, 8);
+    }
+    out.push(skill);
+  }
+  return out;
+}
+
+/**
+ * Baseline skills advertised when catalog/version does not list any.
+ * Keeps discovery UIs from showing an empty capability list.
+ * @returns {object[]}
+ */
+export function defaultAgentSkills() {
+  return [
+    {
+      id: 'enterprise-analysis',
+      name: 'Enterprise analysis',
+      description:
+        'Analyze data, answer questions, and produce reports using sandboxed tools and enterprise skills (documents, spreadsheets, code execution).',
+      tags: ['analysis', 'enterprise', 'default'],
+      examples: [
+        'Summarize this dataset and highlight anomalies',
+        'Generate a quarterly report with charts',
+      ],
+    },
+  ];
+}
+
+/**
+ * Parse YAML-like frontmatter from a SKILL.md (name / description only).
+ * Intentionally minimal — avoids pulling a YAML dependency for Agent Card.
+ *
+ * @param {string} text
+ * @returns {{ name?: string, description?: string }}
+ */
+export function parseSkillMdFrontmatter(text) {
+  const src = String(text || '');
+  if (!src.startsWith('---')) return {};
+  const end = src.indexOf('\n---', 3);
+  if (end < 0) return {};
+  const block = src.slice(3, end).replace(/^\r?\n/, '');
+  /** @type {{ name?: string, description?: string }} */
+  const out = {};
+  for (const line of block.split(/\r?\n/)) {
+    const m = line.match(/^(name|description)\s*:\s*(.*)$/i);
+    if (!m) continue;
+    let val = m[2].trim();
+    if (
+      (val.startsWith('"') && val.endsWith('"')) ||
+      (val.startsWith("'") && val.endsWith("'"))
+    ) {
+      val = val.slice(1, -1);
+    }
+    if (!val) continue;
+    if (m[1].toLowerCase() === 'name') out.name = val.slice(0, 256);
+    else out.description = val.slice(0, 1024);
+  }
+  return out;
+}
+
+/**
+ * List AgentSkill entries from a bundled skill root (directories with SKILL.md).
+ * Fail-soft: missing root or unreadable packages are skipped.
+ *
+ * @param {string | null | undefined} skillRoot
+ * @returns {object[]}
+ */
+export function listSkillsFromRoot(skillRoot) {
+  if (typeof skillRoot !== 'string' || !skillRoot.trim()) return [];
+  const root = path.resolve(skillRoot.trim());
+  let entries;
+  try {
+    entries = fs.readdirSync(root, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  /** @type {object[]} */
+  const skills = [];
+  for (const ent of entries) {
+    if (skills.length >= MAX_CARD_SKILLS) break;
+    if (!ent.isDirectory() || ent.name.startsWith('.')) continue;
+    const skillMd = path.join(root, ent.name, 'SKILL.md');
+    let text = '';
+    try {
+      const fd = fs.openSync(skillMd, 'r');
+      try {
+        const buf = Buffer.alloc(SKILL_MD_READ_BYTES);
+        const n = fs.readSync(fd, buf, 0, SKILL_MD_READ_BYTES, 0);
+        text = buf.subarray(0, n).toString('utf8');
+      } finally {
+        fs.closeSync(fd);
+      }
+    } catch {
+      continue;
+    }
+    const meta = parseSkillMdFrontmatter(text);
+    const id = (meta.name || ent.name).trim().slice(0, 128);
+    skills.push({
+      id,
+      name: (meta.name || ent.name).trim().slice(0, 256),
+      description:
+        (meta.description || `Bundled skill package: ${ent.name}`).slice(
+          0,
+          1024,
+        ),
+      tags: ['skill', 'bundled'],
+    });
+  }
+  return skills;
+}
+
+/**
+ * Merge catalog/config skills with bundled packages; ensure non-empty card.
+ *
+ * @param {{
+ *   configured?: unknown,
+ *   skillRoot?: string | null,
+ * }} [opts]
+ * @returns {object[]}
+ */
+export function resolveAgentCardSkills(opts = {}) {
+  const configured = normalizeAgentSkills(opts.configured);
+  const bundled = listSkillsFromRoot(opts.skillRoot);
+  if (configured.length === 0 && bundled.length === 0) {
+    return defaultAgentSkills();
+  }
+  return normalizeAgentSkills([...configured, ...bundled]);
+}
 
 /**
  * @param {{
@@ -17,6 +205,7 @@ import { ValidationError } from '../errors.js';
  *   baseUrl: string,
  *   version?: string,
  *   skills?: object[],
+ *   skillRoot?: string | null,
  * }} input
  */
 export function buildAgentCard(input) {
@@ -36,14 +225,31 @@ export function buildAgentCard(input) {
     );
   }
   const url = `${base}${rpcPath}`;
+  const description =
+    (typeof input.description === 'string' && input.description.trim()) ||
+    'Enterprise data analysis agent (Pi Enterprise Sandbox)';
+  const skills = resolveAgentCardSkills({
+    configured: input.skills,
+    skillRoot: input.skillRoot,
+  });
   return {
-    name: input.name || 'Enterprise Analysis Agent',
-    description:
-      input.description ||
-      'Enterprise data analysis agent (Pi Enterprise Sandbox)',
+    name:
+      (typeof input.name === 'string' && input.name.trim()) ||
+      'Enterprise Analysis Agent',
+    description,
     url,
     version: input.version || '1.0.0',
+    // Advertise both legacy top-level url + 1.x supportedInterfaces so
+    // company registries on either card shape can discover the RPC endpoint.
     protocolVersion: '0.3',
+    preferredTransport: 'JSONRPC',
+    supportedInterfaces: [
+      {
+        url,
+        protocolBinding: 'JSONRPC',
+        protocolVersion: '0.3',
+      },
+    ],
     capabilities: {
       streaming: true,
       pushNotifications: false,
@@ -55,7 +261,7 @@ export function buildAgentCard(input) {
       'application/pdf',
       'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
     ],
-    skills: Array.isArray(input.skills) ? input.skills : [],
+    skills,
     securitySchemes: {
       bearer: {
         type: 'http',

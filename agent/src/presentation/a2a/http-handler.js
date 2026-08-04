@@ -51,7 +51,12 @@ import { waitForWritableResume } from '../../application/run-event-sse-service.j
  *     resolveOwnedTask?: Function,
  *   },
  *   streamService: { openTaskStream: Function },
- *   resolveAgentMeta?: (agentId: string) => Promise<{ name?: string, description?: string } | null>,
+ *   resolveAgentMeta?: (agentId: string) => Promise<{
+ *     name?: string,
+ *     description?: string,
+ *     skills?: object[],
+ *   } | null>,
+ *   skillRoot?: string | null,
  *   publicBaseUrl?: string | null,
  *   deploymentEnv?: string,
  *   allowDevHostFallback?: boolean,
@@ -153,6 +158,7 @@ export function createA2aHttpHandler(deps) {
             name: 'Pi Enterprise Agent',
             description:
               'Discover agent-specific cards at /a2a/agents/{agent_id}/.well-known/agent-card.json',
+            skillRoot: deps.skillRoot ?? null,
           }),
         );
       } catch (err) {
@@ -209,6 +215,8 @@ export function createA2aHttpHandler(deps) {
               baseUrl: base,
               name: meta.name,
               description: meta.description,
+              skills: Array.isArray(meta.skills) ? meta.skills : undefined,
+              skillRoot: deps.skillRoot ?? null,
             }),
           );
         } catch (err) {

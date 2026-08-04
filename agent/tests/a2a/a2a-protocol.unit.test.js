@@ -122,6 +122,38 @@ describe('A2A event projector (artifact + status)', () => {
     assert.equal(out.result.status.state, 'working');
     assert.equal(out.result.final, false);
     assert.equal(out.result.taskId, TASK);
+    // Strict A2A SDKs (a2a-python) require Message.messageId when message is set.
+    // Synthetic status text is omitted so incomplete Message objects never ship.
+    assert.equal(out.result.status.message, undefined);
+    assert.equal(typeof out.result.contextId, 'string');
+    assert.ok(out.result.contextId);
+  });
+
+  it('includes protocol-valid status.message with messageId when reason present', () => {
+    const out = projectEnvelopeToA2aResult(
+      {
+        sequence: 3,
+        eventId: EVT1,
+        event: {
+          type: 'run.failed',
+          status: 'FAILED',
+          statusReason: 'tool timeout',
+        },
+        ts: Date.now(),
+      },
+      ctx,
+    );
+    assert.equal(out.kind, 'status-update');
+    assert.equal(out.result.status.state, 'failed');
+    const msg = out.result.status.message;
+    assert.ok(msg);
+    assert.equal(msg.kind, 'message');
+    assert.equal(msg.role, 'agent');
+    assert.equal(typeof msg.messageId, 'string');
+    assert.ok(msg.messageId.length > 0);
+    assert.equal(msg.parts[0].text, 'tool timeout');
+    assert.equal(msg.taskId, TASK);
+    assert.equal(msg.contextId, CONV);
   });
 
   it('projects only explicit artifact.ready with durable ULID (not workspace noise)', () => {

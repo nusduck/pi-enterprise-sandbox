@@ -365,12 +365,39 @@ export async function startHttpMain(env = process.env) {
       resolveTraceContext: resolveRequestTraceContext,
       readBody,
       json,
+      // Bundled skill packages (repo skills/ or container /home/sandbox/skill).
+      skillRoot:
+        env.SKILLS_ROOT ||
+        env.SYSTEM_SKILL_ROOT ||
+        config.SKILLS_ROOT ||
+        config.SYSTEM_SKILL_ROOT ||
+        '',
       resolveAgentMeta: async (agentId) => {
         try {
           const repos = httpServices.createRepositories(httpServices.knex);
           const def = await repos.catalog.getDefinitionById(agentId);
           if (!def) return null;
-          return { name: def.name, description: def.description };
+          /** @type {unknown[]} */
+          let skills = [];
+          if (def.activeVersionId) {
+            try {
+              const ver = await repos.catalog.getVersionById(def.activeVersionId);
+              const cfg = ver?.configJson;
+              if (cfg && typeof cfg === 'object' && Array.isArray(cfg.skills)) {
+                skills = cfg.skills;
+              }
+            } catch {
+              skills = [];
+            }
+          }
+          const description =
+            (typeof def.description === 'string' && def.description.trim()) ||
+            `Enterprise agent "${def.name}" (Pi Enterprise Sandbox)`;
+          return {
+            name: def.name,
+            description,
+            skills,
+          };
         } catch {
           return null;
         }

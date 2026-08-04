@@ -51,6 +51,11 @@ export {
   buildAgentCard,
   resolvePublicBaseUrl,
   assertPublicBaseUrl,
+  normalizeAgentSkills,
+  defaultAgentSkills,
+  resolveAgentCardSkills,
+  listSkillsFromRoot,
+  parseSkillMdFrontmatter,
 } from './agent-card.js';
 
 export {
