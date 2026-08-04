@@ -10,9 +10,81 @@ import httpx
 
 from sandbox.mcp.settings import McpSettings
 
+# Bridge ControlPlaneError codes → safe, operator/LLM-visible messages.
+# Keep this list closed: never forward raw exception text from the bridge.
+_BRIDGE_ERROR_MESSAGES: dict[str, str] = {
+    "FILE_NOT_FOUND": (
+        "Workspace file not found for artifact submit. "
+        "Use the same context_id as the write/execute call, and a relative source_path "
+        "that exists in that workspace."
+    ),
+    "TOO_LARGE": "File exceeds MCP max size for artifact submit",
+    "ARTIFACT_EXISTS": "Artifact already exists",
+    "NOT_REGULAR_FILE": "Artifact source must be a regular file",
+    "SYMLINK_REJECTED": "Symlinks are not allowed as artifact sources",
+    "PATH_INVALID": "Invalid artifact source_path",
+    "SOURCE_OPEN_FAILED": "Unable to open artifact source file",
+    "SIZE_MISMATCH": "Artifact snapshot failed integrity check",
+}
+
 
 class SandboxBridgeError(RuntimeError):
     """A safe error from the bridge; upstream transport details stay private."""
+
+    def __init__(self, message: str, *, code: str | None = None) -> None:
+        super().__init__(message)
+        self.code = code
+
+
+def _safe_bridge_error(response: httpx.Response) -> SandboxBridgeError:
+    """Map bridge HTTP failures to stable, non-leaky client messages.
+
+    Historically every 4xx/5xx became \"Sandbox rejected the request\", which
+    low-code clients (Dify etc.) surface as an opaque internal error—especially
+    when context_id mismatched or source_path was missing after a successful write.
+    """
+    if response.status_code == 503:
+        return SandboxBridgeError("Sandbox is temporarily unavailable", code="UNAVAILABLE")
+
+    code: str | None = None
+    message: str | None = None
+    try:
+        body = response.json()
+    except ValueError:
+        body = None
+    if isinstance(body, dict):
+        detail = body.get("detail")
+        if isinstance(detail, dict):
+            raw_code = detail.get("code")
+            raw_message = detail.get("message")
+            if isinstance(raw_code, str) and raw_code in _BRIDGE_ERROR_MESSAGES:
+                code = raw_code
+                message = _BRIDGE_ERROR_MESSAGES[raw_code]
+            elif isinstance(raw_code, str) and raw_code.isascii() and raw_code.isupper() and len(raw_code) <= 64:
+                # Unknown but well-formed control-plane code: keep code, generic text.
+                code = raw_code
+                message = "Sandbox rejected the request"
+            elif isinstance(raw_message, str) and raw_message in _BRIDGE_ERROR_MESSAGES.values():
+                message = raw_message
+        elif isinstance(detail, str) and detail in {
+            "Invalid request",
+            "Sandbox operation failed",
+        }:
+            message = detail
+
+    if message is None:
+        if response.status_code == 404:
+            message = _BRIDGE_ERROR_MESSAGES["FILE_NOT_FOUND"]
+            code = code or "FILE_NOT_FOUND"
+        elif response.status_code == 413:
+            message = _BRIDGE_ERROR_MESSAGES["TOO_LARGE"]
+            code = code or "TOO_LARGE"
+        elif response.status_code == 400:
+            message = "Invalid request"
+        else:
+            message = "Sandbox rejected the request"
+
+    return SandboxBridgeError(message, code=code)
 
 
 class SandboxBridgeClient:
@@ -44,9 +116,7 @@ class SandboxBridgeClient:
         except httpx.HTTPError as exc:
             raise SandboxBridgeError("Sandbox bridge is unavailable") from exc
         if response.status_code >= 400:
-            if response.status_code == 503:
-                raise SandboxBridgeError("Sandbox is temporarily unavailable")
-            raise SandboxBridgeError("Sandbox rejected the request")
+            raise _safe_bridge_error(response)
         try:
             data = response.json()
         except ValueError as exc:

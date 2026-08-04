@@ -78,15 +78,29 @@ build_uvicorn_args() {
 # ── Prepare private storage roots ──────────────────────────────────
 # Only the trusted Sandbox API can access these parents. Untrusted commands
 # receive only their conversation-specific children through Bubblewrap.
+# control/artifacts are API-only (quota locks, dataset staging, immutable
+# snapshots) and must also be owned by SANDBOX_RUN_AS_USER: the process
+# drops root before uvicorn, so host-created bind mounts left as root:0700
+# cause [Errno 13] on upload / quota paths under /var/sandbox/control.
 WORKSPACES_DIR="${SANDBOX_WORKSPACES_ROOT:-/var/sandbox/workspaces}"
 TEMP_DIR="${SANDBOX_TEMP_ROOT:-/var/sandbox/tmp}"
-for storage_dir in "$WORKSPACES_DIR" "$TEMP_DIR"; do
+ARTIFACTS_DIR="${SANDBOX_ARTIFACTS_ROOT:-/var/sandbox/artifacts}"
+CONTROL_DIR="${SANDBOX_CONTROL_ROOT:-/var/sandbox/control}"
+for storage_dir in "$WORKSPACES_DIR" "$TEMP_DIR" "$ARTIFACTS_DIR" "$CONTROL_DIR"; do
     mkdir -p "$storage_dir"
     if [ "$(id -u)" -eq 0 ]; then
-        chown "$SANDBOX_RUN_AS_USER" "$storage_dir"
+        # Recursive: host/volume roots and previously root-created subdirs
+        # (quota/, datasets/) must be writable after privilege drop.
+        chown -R "$SANDBOX_RUN_AS_USER" "$storage_dir"
     fi
     chmod 0700 "$storage_dir"
 done
+# Ensure control-plane subtrees exist with correct owner before drop.
+if [ "$(id -u)" -eq 0 ]; then
+    mkdir -p "$CONTROL_DIR/quota" "$CONTROL_DIR/datasets"
+    chown -R "$SANDBOX_RUN_AS_USER" "$CONTROL_DIR"
+    chmod 0700 "$CONTROL_DIR" "$CONTROL_DIR/quota" "$CONTROL_DIR/datasets"
+fi
 
 UVICORN_ARGS="$(build_uvicorn_args)"
 echo "[entrypoint] Starting Sandbox API: uvicorn $UVICORN_ARGS"

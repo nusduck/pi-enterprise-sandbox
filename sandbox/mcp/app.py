@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-import json
+import re
 import secrets
 from contextlib import asynccontextmanager
+from pathlib import PurePosixPath
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 
 from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
@@ -18,6 +19,26 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 
 from sandbox.mcp.service import McpFacadeError, McpFacadeService
 from sandbox.mcp.settings import settings
+
+
+def content_disposition_attachment(name: str) -> str:
+    """ASCII-safe Content-Disposition (RFC 5987) for MCP artifact downloads.
+
+    Starlette encodes response headers as latin-1. Putting CJK / other non-ASCII
+    characters in ``filename="..."`` raises UnicodeEncodeError → HTTP 500.
+    """
+    base = PurePosixPath(str(name or "artifact")).name
+    base = base.replace("\r", "").replace("\n", "")
+    base = re.sub(r'["\\;]', "_", base)
+    base = re.sub(r"[\x00-\x1f\x7f]", "", base).strip() or "artifact"
+    base = base[:200]
+    ascii_fallback = "".join(
+        char if 0x20 <= ord(char) <= 0x7E else "_" for char in base
+    ).strip() or "artifact"
+    return (
+        f'attachment; filename="{ascii_fallback}"; '
+        f"filename*=UTF-8''{quote(base, safe='')}"
+    )
 
 
 class McpBearerAuth:
@@ -129,7 +150,15 @@ async def sandbox_file_list(
     return await service.file_list(context_id=context_id, path=path, depth=depth)
 
 
-@mcp.tool(name="sandbox_artifact_submit", description="Snapshot a generated workspace file and return a temporary download URL.")
+@mcp.tool(
+    name="sandbox_artifact_submit",
+    description=(
+        "Snapshot a generated workspace file and return a temporary download URL. "
+        "source_path must be a relative path that already exists in the workspace. "
+        "Pass the same context_id used by prior sandbox_file_write / sandbox_python_execute "
+        "calls; omitting it creates a new empty workspace and will fail with FILE_NOT_FOUND."
+    ),
+)
 async def sandbox_artifact_submit(
     source_path: str,
     context_id: str | None = None,
@@ -148,12 +177,31 @@ async def health(_request: Request) -> Response:
     return JSONResponse({"status": "ok", "service": "sandbox-mcp"})
 
 
+async def mcp_root_hint(_request: Request) -> Response:
+    """Operators often point clients at http://host:8082/ — MCP is at /mcp."""
+    return JSONResponse(
+        {
+            "detail": (
+                "MCP Streamable HTTP endpoint is POST /mcp "
+                "(Authorization: Bearer <SANDBOX_MCP_TOKEN>). "
+                "Use http://<host>:8082/mcp — not the service root."
+            ),
+            "health": "/health",
+            "mcp": "/mcp",
+        },
+        status_code=404,
+    )
+
+
 async def artifact_download(request: Request) -> Response:
     artifact_id = request.path_params["artifact_id"]
     token = request.query_params.get("token", "")
     try:
         metadata = await service.get_artifact(artifact_id, token)
     except McpFacadeError:
+        return JSONResponse({"detail": "Artifact unavailable"}, status_code=503)
+    except Exception:
+        # Redis/network failures must not become opaque ASGI 500s for clients.
         return JSONResponse({"detail": "Artifact unavailable"}, status_code=503)
     if metadata is None:
         return JSONResponse({"detail": "Artifact not found"}, status_code=404)
@@ -165,13 +213,16 @@ async def artifact_download(request: Request) -> Response:
                     yield chunk
         except McpFacadeError:
             return
+        except Exception:
+            # After headers are sent Starlette cannot change status; end stream.
+            return
 
     filename = str(metadata.get("name", "artifact"))
-    safe_filename = filename.replace('"', "")
+    media_type = str(metadata.get("mime_type") or "application/octet-stream")
     return StreamingResponse(
         body(),
-        media_type=str(metadata.get("mime_type", "application/octet-stream")),
-        headers={"Content-Disposition": f'attachment; filename="{safe_filename}"'},
+        media_type=media_type,
+        headers={"Content-Disposition": content_disposition_attachment(filename)},
     )
 
 
@@ -192,6 +243,7 @@ async def lifespan(_app: Starlette):
 app = Starlette(
     routes=[
         Route("/health", health, methods=["GET"]),
+        Route("/", mcp_root_hint, methods=["GET", "POST", "HEAD"]),
         Route("/artifacts/{artifact_id}", artifact_download, methods=["GET"]),
         Mount("/", app=McpBearerAuth(mcp_http_app)),
     ],

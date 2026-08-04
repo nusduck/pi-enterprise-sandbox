@@ -20,6 +20,12 @@ def test_mcp_endpoint_requires_bearer_and_accepts_initialize(monkeypatch):
     monkeypatch.setattr(mcp_app, "service", _Service())
     monkeypatch.setattr(mcp_app.settings, "token", "outer-test-token")
     with TestClient(mcp_app.app, base_url="http://localhost") as client:
+        # Service root is not the MCP protocol path (common operator misconfig).
+        root = client.post("/")
+        assert root.status_code == 404
+        assert root.json()["mcp"] == "/mcp"
+        assert "/mcp" in root.json()["detail"]
+
         assert client.post("/mcp", json={}).status_code == 401
         response = client.post(
             "/mcp",

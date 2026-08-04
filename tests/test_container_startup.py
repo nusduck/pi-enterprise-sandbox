@@ -38,9 +38,15 @@ def test_entrypoint_exposes_startup_network_and_uvicorn_parameters() -> None:
         "SANDBOX_UVICORN_PROXY_HEADERS",
         "SANDBOX_UVICORN_FORWARDED_ALLOW_IPS",
         "SANDBOX_UVICORN_EXTRA_ARGS",
+        # Control-plane roots (quota / dataset staging / artifacts) must be
+        # prepared before privilege drop — otherwise uploads fail with EACCES.
+        "SANDBOX_ARTIFACTS_ROOT",
+        "SANDBOX_CONTROL_ROOT",
     ]
     for var in expected_vars:
         assert var in text
+    assert "chown -R" in text
+    assert "$CONTROL_DIR/quota" in text or '"$CONTROL_DIR/quota"' in text
     # iptables / port+CIDR union allowlist removed as isolation authority.
     for removed in (
         "SANDBOX_IPTABLES_ENABLED",
