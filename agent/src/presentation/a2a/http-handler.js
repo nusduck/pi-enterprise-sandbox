@@ -23,6 +23,7 @@ import {
 import {
   A2A_METHODS,
   A2A_RPC_ERROR,
+  A2A_PROTOCOL_VERSION,
   JSON_RPC_ERROR,
   parseJsonRpcRequest,
   jsonRpcSuccess,
@@ -479,6 +480,30 @@ export function createA2aHttpHandler(deps) {
    * @param {string | null} requestedAgentId
    */
   async function handleJsonRpc(req, res, requestedAgentId) {
+    // Advertise the single supported protocol version (no dual-compat shims).
+    res.setHeader('A2A-Version', A2A_PROTOCOL_VERSION);
+
+    const requestedVersion = readA2aVersionHeader(req);
+    if (
+      requestedVersion &&
+      requestedVersion !== A2A_PROTOCOL_VERSION &&
+      !requestedVersion.startsWith(`${A2A_PROTOCOL_VERSION}.`)
+    ) {
+      deps.json(
+        res,
+        200,
+        jsonRpcError(null, {
+          ...A2A_RPC_ERROR.UNSUPPORTED,
+          data: {
+            reason: 'unsupported_a2a_version',
+            requested: requestedVersion,
+            supported: [A2A_PROTOCOL_VERSION],
+          },
+        }),
+      );
+      return;
+    }
+
     const raw = await deps.readBody(req);
     let body;
     try {
@@ -511,6 +536,7 @@ export function createA2aHttpHandler(deps) {
         res.writeHead(status, {
           'Content-Type': 'application/json; charset=utf-8',
           'WWW-Authenticate': 'Bearer',
+          'A2A-Version': A2A_PROTOCOL_VERSION,
         });
         res.end(
           JSON.stringify(
@@ -619,6 +645,36 @@ export function createA2aHttpHandler(deps) {
             spanId: traceContext.parentSpanId,
           });
           deps.json(res, 200, jsonRpcSuccess(rpcId, task));
+          return;
+        }
+        case A2A_METHODS.LIST_TASKS: {
+          if (typeof deps.taskService.listTasks !== 'function') {
+            deps.json(
+              res,
+              200,
+              jsonRpcError(rpcId, { ...A2A_RPC_ERROR.UNSUPPORTED }),
+            );
+            return;
+          }
+          const listed = await deps.taskService.listTasks({
+            principal,
+            agentId,
+            contextId:
+              typeof params.contextId === 'string'
+                ? params.contextId
+                : typeof params.context_id === 'string'
+                  ? params.context_id
+                  : null,
+            limit:
+              params.pageSize != null
+                ? Number(params.pageSize)
+                : params.limit != null
+                  ? Number(params.limit)
+                  : undefined,
+            method: 'ListTasks',
+            traceId,
+          });
+          deps.json(res, 200, jsonRpcSuccess(rpcId, listed));
           return;
         }
         case A2A_METHODS.SEND_STREAMING_MESSAGE: {
@@ -856,12 +912,27 @@ function requiredScopeForMethod(method) {
       return A2A_SCOPES.INVOKE;
     case A2A_METHODS.GET_TASK:
     case A2A_METHODS.SUBSCRIBE_TO_TASK:
+    case A2A_METHODS.LIST_TASKS:
       return A2A_SCOPES.READ;
     case A2A_METHODS.CANCEL_TASK:
       return A2A_SCOPES.CANCEL;
     default:
       return A2A_SCOPES.READ;
   }
+}
+
+/**
+ * @param {import('node:http').IncomingMessage} req
+ * @returns {string | null}
+ */
+function readA2aVersionHeader(req) {
+  const raw =
+    req.headers['a2a-version'] ||
+    req.headers['A2A-Version'] ||
+    req.headers['A2A-VERSION'];
+  if (typeof raw !== 'string' || !raw.trim()) return null;
+  // Take first token if comma-separated negotiation list.
+  return raw.split(',')[0].trim();
 }
 
 function extractTaskId(params) {

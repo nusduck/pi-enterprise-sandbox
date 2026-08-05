@@ -10,6 +10,26 @@ import { toMysqlDateTime, formatDateTime } from '../row-mappers.js';
 import { ConflictError } from '../errors.js';
 import { assertUlid } from '../../../domain/shared/ulid.js';
 
+/** Opaque A2A context_id max length (VARCHAR(255)). */
+export const A2A_CONTEXT_ID_MAX_LEN = 255;
+
+/**
+ * @param {unknown} value
+ * @returns {string | null}
+ */
+export function normalizeOpaqueContextId(value) {
+  if (value == null) return null;
+  if (typeof value !== 'string') return null;
+  const s = value.trim();
+  if (!s) return null;
+  if (s.length > A2A_CONTEXT_ID_MAX_LEN) {
+    throw new Error(
+      `contextId exceeds max length ${A2A_CONTEXT_ID_MAX_LEN}`,
+    );
+  }
+  return s;
+}
+
 /**
  * @param {Record<string, unknown>} row
  */
@@ -101,10 +121,8 @@ export class A2aTaskRepository {
     ) {
       throw new Error('traceId must be 32 hex chars');
     }
-    const contextId =
-      input.contextId != null && String(input.contextId).trim()
-        ? assertUlid(input.contextId, 'contextId')
-        : null;
+    // Opaque A2A context id (any non-empty string ≤ 255). Not an internal ULID.
+    const contextId = normalizeOpaqueContextId(input.contextId);
     const now = toMysqlDateTime(this.now());
 
     try {
@@ -171,7 +189,12 @@ export class A2aTaskRepository {
    * List tasks for one client only (never org-wide enumeration).
    *
    * @param {A2aClientScope} scope
-   * @param {{ agentId?: string, limit?: number, afterCreatedAt?: string }} [opts]
+   * @param {{
+   *   agentId?: string,
+   *   contextId?: string | null,
+   *   limit?: number,
+   *   afterCreatedAt?: string,
+   * }} [opts]
    */
   async listForClient(scope, opts = {}) {
     const s = requireA2aClientScope(scope);
@@ -182,6 +205,10 @@ export class A2aTaskRepository {
     );
     if (opts.agentId) {
       q = q.andWhere('agent_id', assertUlid(opts.agentId, 'agentId'));
+    }
+    const contextId = normalizeOpaqueContextId(opts.contextId);
+    if (contextId) {
+      q = q.andWhere('context_id', contextId);
     }
     const rows = await q.limit(limit);
     return rows.map(mapA2aTask);

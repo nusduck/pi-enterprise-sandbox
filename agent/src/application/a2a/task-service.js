@@ -19,9 +19,16 @@ import {
   projectRunStatusToA2a,
   isTerminalA2aTaskStatus,
 } from '../../domain/a2a/status.js';
-import { isTerminalRunStatus } from '../../domain/run/run-status.js';
-import { assertUlid, isUlid } from '../../domain/shared/ulid.js';
+import {
+  isTerminalRunStatus,
+  RUN_STATUS,
+} from '../../domain/run/run-status.js';
+import { assertUlid } from '../../domain/shared/ulid.js';
 import { formatUserExternalSubject } from '../../infrastructure/mysql/repositories/organization-repository.js';
+import {
+  normalizeOpaqueContextId,
+  A2A_CONTEXT_ID_MAX_LEN,
+} from '../../infrastructure/mysql/repositories/a2a-task-repository.js';
 import {
   OwnerScopedNotFoundError,
   ValidationError,
@@ -30,14 +37,28 @@ import {
   buildA2aTaskObject,
   collectArtifactsFromEnvelopes,
   projectArtifactRowsToA2a,
+  projectMessagesToA2aHistory,
   GET_TASK_EVENT_SCAN_MAX,
   GET_TASK_ARTIFACT_MAX,
 } from './event-projector.js';
 import { A2A_RPC_ERROR, JSON_RPC_ERROR } from './json-rpc.js';
+import {
+  A2A_SUPPORTED_OUTPUT_MODES,
+  A2A_ENTERPRISE_EXTENSION_URI,
+} from './agent-card.js';
 import { deterministicA2aTaskId } from './deterministic-task-id.js';
 import { formatA2aExternalUserId } from './identity.js';
 
 export { formatA2aExternalUserId } from './identity.js';
+
+/** Run statuses that accept a follow-up message on the same task conversation. */
+const CONTINUABLE_RUN_STATUSES = new Set([
+  RUN_STATUS.SUCCEEDED,
+  RUN_STATUS.FAILED,
+  RUN_STATUS.WAITING_INPUT,
+  RUN_STATUS.WAITING_APPROVAL,
+  RUN_STATUS.CANCELLED,
+]);
 
 export class A2aTaskError extends Error {
   /**
@@ -103,7 +124,14 @@ export function extractTextFromA2aMessage(message) {
 
 /**
  * @param {unknown} params
- * @returns {{ message: object, messageId: string | null, contextId: string | null, metadata: object }}
+ * @returns {{
+ *   message: object,
+ *   messageId: string | null,
+ *   taskId: string | null,
+ *   contextId: string | null,
+ *   configuration: Record<string, unknown> | null,
+ *   metadata: object,
+ * }}
  */
 export function parseSendParams(params) {
   if (!params || typeof params !== 'object') {
@@ -114,11 +142,12 @@ export function parseSendParams(params) {
   if (!message || typeof message !== 'object') {
     throw new ValidationError('params.message is required');
   }
+  const msg = /** @type {Record<string, unknown>} */ (message);
   const messageIdRaw =
-    typeof /** @type {any} */ (message).messageId === 'string'
-      ? /** @type {any} */ (message).messageId
-      : typeof /** @type {any} */ (message).message_id === 'string'
-        ? /** @type {any} */ (message).message_id
+    typeof msg.messageId === 'string'
+      ? msg.messageId
+      : typeof msg.message_id === 'string'
+        ? msg.message_id
         : typeof p.messageId === 'string'
           ? p.messageId
           : typeof p.message_id === 'string'
@@ -128,20 +157,104 @@ export function parseSendParams(params) {
     messageIdRaw && String(messageIdRaw).trim()
       ? String(messageIdRaw).trim()
       : null;
-  let contextId = null;
-  if (typeof p.contextId === 'string' && p.contextId.trim()) {
-    contextId = p.contextId.trim();
-  } else if (
-    typeof /** @type {any} */ (message).contextId === 'string' &&
-    /** @type {any} */ (message).contextId.trim()
-  ) {
-    contextId = /** @type {any} */ (message).contextId.trim();
+
+  let taskId = null;
+  if (typeof msg.taskId === 'string' && msg.taskId.trim()) {
+    taskId = msg.taskId.trim();
+  } else if (typeof msg.task_id === 'string' && msg.task_id.trim()) {
+    taskId = msg.task_id.trim();
+  } else if (typeof p.taskId === 'string' && p.taskId.trim()) {
+    taskId = p.taskId.trim();
   }
+
+  let contextId = null;
+  try {
+    if (typeof p.contextId === 'string' && p.contextId.trim()) {
+      contextId = normalizeOpaqueContextId(p.contextId);
+    } else if (typeof msg.contextId === 'string' && msg.contextId.trim()) {
+      contextId = normalizeOpaqueContextId(msg.contextId);
+    } else if (typeof msg.context_id === 'string' && msg.context_id.trim()) {
+      contextId = normalizeOpaqueContextId(msg.context_id);
+    }
+  } catch {
+    throw new ValidationError(
+      `contextId exceeds max length ${A2A_CONTEXT_ID_MAX_LEN}`,
+    );
+  }
+
+  const configuration =
+    p.configuration &&
+    typeof p.configuration === 'object' &&
+    !Array.isArray(p.configuration)
+      ? /** @type {Record<string, unknown>} */ (p.configuration)
+      : msg.configuration &&
+          typeof msg.configuration === 'object' &&
+          !Array.isArray(msg.configuration)
+        ? /** @type {Record<string, unknown>} */ (msg.configuration)
+        : null;
+
   const metadata =
     p.metadata && typeof p.metadata === 'object' && !Array.isArray(p.metadata)
       ? /** @type {object} */ (p.metadata)
       : {};
-  return { message: /** @type {object} */ (message), messageId, contextId, metadata };
+  return {
+    message: /** @type {object} */ (message),
+    messageId,
+    taskId,
+    contextId,
+    configuration,
+    metadata,
+  };
+}
+
+/**
+ * Fail closed on unsupported push / output-mode negotiation (A2A v0.3).
+ * @param {Record<string, unknown> | null | undefined} configuration
+ */
+export function assertSendConfiguration(configuration) {
+  if (!configuration) return;
+
+  if (
+    configuration.pushNotificationConfig != null ||
+    configuration.pushNotificationsConfig != null ||
+    configuration.push_notification_config != null
+  ) {
+    throw new A2aTaskError('Push Notification is not supported', {
+      code: 'PUSH_NOT_SUPPORTED',
+      rpc: A2A_RPC_ERROR.PUSH_NOT_SUPPORTED,
+    });
+  }
+
+  const modes = configuration.acceptedOutputModes ?? configuration.accepted_output_modes;
+  if (modes == null) return;
+  if (!Array.isArray(modes) || modes.length === 0) {
+    throw new A2aTaskError('Content type not supported', {
+      code: 'CONTENT_TYPE_NOT_SUPPORTED',
+      rpc: A2A_RPC_ERROR.CONTENT_TYPE,
+      details: { reason: 'acceptedOutputModes must be a non-empty array' },
+    });
+  }
+  const supported = new Set(A2A_SUPPORTED_OUTPUT_MODES);
+  const requested = modes
+    .filter((m) => typeof m === 'string' && m.trim())
+    .map((m) => String(m).trim());
+  if (requested.length === 0) {
+    throw new A2aTaskError('Content type not supported', {
+      code: 'CONTENT_TYPE_NOT_SUPPORTED',
+      rpc: A2A_RPC_ERROR.CONTENT_TYPE,
+    });
+  }
+  const anySupported = requested.some((m) => supported.has(m));
+  if (!anySupported) {
+    throw new A2aTaskError('Content type not supported', {
+      code: 'CONTENT_TYPE_NOT_SUPPORTED',
+      rpc: A2A_RPC_ERROR.CONTENT_TYPE,
+      details: {
+        acceptedOutputModes: requested,
+        supportedOutputModes: [...A2A_SUPPORTED_OUTPUT_MODES],
+      },
+    });
+  }
 }
 
 /**
@@ -234,9 +347,10 @@ export class A2aTaskService {
     this.#assertScope(input.principal, A2A_SCOPES.INVOKE);
     this.#assertAgentBinding(input.principal, input.agentId);
 
-    const { message, messageId, contextId, metadata } = parseSendParams(
-      input.params,
-    );
+    const { message, messageId, taskId, contextId, configuration, metadata } =
+      parseSendParams(input.params);
+    assertSendConfiguration(configuration);
+
     const text = extractTextFromA2aMessage(message);
     const idempotencyKey = requireStableIdempotencyKey({
       messageId,
@@ -245,6 +359,44 @@ export class A2aTaskService {
     const method = input.method || 'SendMessage';
 
     await this.#ensureA2aIdentityBindings(input.principal);
+
+    /** @type {{ conversationId: string | null, parentTask: object | null, wireContextId: string | null }} */
+    let continueFrom = {
+      conversationId: null,
+      parentTask: null,
+      wireContextId: contextId,
+    };
+
+    if (taskId) {
+      const parent = await this.#loadOwnedTask(input.principal, taskId);
+      const parentRun = await this.#loadOwnedRun(input.principal, parent.runId);
+      // In-flight tasks cannot accept a parallel follow-up message.
+      if (!CONTINUABLE_RUN_STATUSES.has(parentRun.status)) {
+        throw new A2aTaskError('Unsupported operation', {
+          code: 'TASK_BUSY',
+          rpc: A2A_RPC_ERROR.UNSUPPORTED,
+          details: {
+            reason: 'task_busy',
+            runStatus: parentRun.status,
+          },
+        });
+      }
+      // Continue the same conversation; wire context prefers explicit request,
+      // then the parent task's opaque context, then conversation ULID.
+      continueFrom = {
+        conversationId: parent.conversationId,
+        parentTask: parent,
+        wireContextId:
+          contextId || parent.contextId || parent.conversationId,
+      };
+    }
+
+    // Opaque external contextId → internal conversation via provider mapping
+    // (RunParentProvisioner / conversation_external_refs). Never require ULID.
+    const externalConversationId =
+      continueFrom.conversationId ||
+      continueFrom.wireContextId ||
+      null;
 
     let createResult;
     try {
@@ -257,8 +409,7 @@ export class A2aTaskService {
             input.principal.orgId,
             input.principal.clientId,
           ),
-          externalConversationId:
-            contextId && isUlid(contextId) ? contextId : null,
+          externalConversationId,
           displayName: `a2a:${input.principal.clientId}`,
           orgName: `a2a-org:${input.principal.orgId}`,
         },
@@ -281,7 +432,11 @@ export class A2aTaskService {
           traceId: input.traceId,
           eventType: 'a2a.send_message.error',
           method,
-          payloadJson: { outcome: 'create_run_failed', code: err?.code || null },
+          payloadJson: {
+            outcome: 'create_run_failed',
+            code: err?.code || null,
+            continuedTaskId: taskId,
+          },
         },
         { failClosed: false },
       );
@@ -293,8 +448,10 @@ export class A2aTaskService {
       input.principal.clientId,
       createResult.runId,
     );
+    // Protocol wire contextId: caller-supplied opaque string, parent task, or
+    // the internal conversation id when the client did not send one.
     const resolvedContextId =
-      contextId && isUlid(contextId) ? contextId : createResult.conversationId;
+      continueFrom.wireContextId || createResult.conversationId;
 
     const repos = this.createRepositories(this.db);
 
@@ -408,6 +565,8 @@ export class A2aTaskService {
       payloadJson: {
         outcome: 'ok',
         conversationId: createResult.conversationId,
+        contextId: resolvedContextId,
+        continuedFromTaskId: taskId || null,
         queueWarning: createResult.queueWarning ?? null,
         replayed: createResult.replayed === true,
       },
@@ -424,6 +583,11 @@ export class A2aTaskService {
       metadata: {
         callerType: 'a2a',
         clientId: input.principal.clientId,
+        orgId: input.principal.orgId,
+        [A2A_ENTERPRISE_EXTENSION_URI]: {
+          orgId: input.principal.orgId,
+          clientId: input.principal.clientId,
+        },
       },
     });
   }
@@ -446,6 +610,11 @@ export class A2aTaskService {
     const run = await this.#loadOwnedRun(input.principal, mapping.runId);
 
     const artifacts = await this.#loadArtifactsComplete(input.principal, mapping);
+    const history = await this.#loadMessageHistory(
+      input.principal,
+      mapping,
+      input.historyLength,
+    );
 
     await this.#auditRequired({
       orgId: input.principal.orgId,
@@ -457,7 +626,11 @@ export class A2aTaskService {
       traceId: input.traceId || mapping.traceId,
       eventType: 'a2a.get_task',
       method: input.method || 'GetTask',
-      payloadJson: { outcome: 'ok', artifactCount: artifacts.length },
+      payloadJson: {
+        outcome: 'ok',
+        artifactCount: artifacts.length,
+        historyLength: history.length,
+      },
     });
 
     return buildA2aTaskObject({
@@ -467,11 +640,94 @@ export class A2aTaskService {
       createdAt: mapping.createdAt,
       updatedAt: run.updatedAt || mapping.updatedAt,
       artifacts,
+      history,
       metadata: {
         callerType: 'a2a',
         clientId: input.principal.clientId,
+        orgId: input.principal.orgId,
+        [A2A_ENTERPRISE_EXTENSION_URI]: {
+          orgId: input.principal.orgId,
+          clientId: input.principal.clientId,
+        },
       },
     });
+  }
+
+  /**
+   * List client-scoped tasks (A2A tasks/list).
+   * @param {{
+   *   principal: object,
+   *   agentId: string,
+   *   contextId?: string | null,
+   *   limit?: number,
+   *   method?: string,
+   *   traceId?: string | null,
+   * }} input
+   */
+  async listTasks(input) {
+    this.#assertScope(input.principal, A2A_SCOPES.READ);
+    this.#assertAgentBinding(input.principal, input.agentId);
+
+    let contextId = null;
+    try {
+      contextId = normalizeOpaqueContextId(input.contextId ?? null);
+    } catch {
+      throw new ValidationError(
+        `contextId exceeds max length ${A2A_CONTEXT_ID_MAX_LEN}`,
+      );
+    }
+
+    const repos = this.createRepositories(this.db);
+    const mappings = await repos.a2aTasks.listForClient(
+      {
+        orgId: input.principal.orgId,
+        clientId: input.principal.clientId,
+      },
+      {
+        agentId: input.agentId,
+        contextId,
+        limit: input.limit,
+      },
+    );
+
+    /** @type {object[]} */
+    const tasks = [];
+    for (const mapping of mappings) {
+      // eslint-disable-next-line no-await-in-loop
+      const run = await this.#loadOwnedRun(input.principal, mapping.runId);
+      tasks.push(
+        buildA2aTaskObject({
+          a2aTaskId: mapping.a2aTaskId,
+          contextId: mapping.contextId,
+          runStatus: run.status,
+          createdAt: mapping.createdAt,
+          updatedAt: run.updatedAt || mapping.updatedAt,
+          artifacts: [],
+          metadata: {
+            callerType: 'a2a',
+            clientId: input.principal.clientId,
+            orgId: input.principal.orgId,
+          },
+        }),
+      );
+    }
+
+    await this.#auditRequired({
+      orgId: input.principal.orgId,
+      clientId: input.principal.clientId,
+      credentialId: input.principal.credentialId,
+      agentId: input.principal.agentId,
+      traceId: input.traceId || null,
+      eventType: 'a2a.list_tasks',
+      method: input.method || 'ListTasks',
+      payloadJson: {
+        outcome: 'ok',
+        count: tasks.length,
+        contextId: contextId || null,
+      },
+    });
+
+    return { tasks };
   }
 
   /**
@@ -770,7 +1026,7 @@ export class A2aTaskService {
           'Artifact list exceeds safety limit; refine query or raise limit',
           {
             code: 'A2A_ARTIFACT_LIST_LIMIT',
-            rpc: { code: -32008, message: 'Resource limit exceeded' },
+            rpc: A2A_RPC_ERROR.RESOURCE_LIMIT,
           },
         );
       }
@@ -808,7 +1064,7 @@ export class A2aTaskService {
           'Run event history exceeds safety scan limit for artifact collection',
           {
             code: 'A2A_EVENT_SCAN_LIMIT',
-            rpc: { code: -32008, message: 'Resource limit exceeded' },
+            rpc: A2A_RPC_ERROR.RESOURCE_LIMIT,
           },
         );
       }
@@ -819,6 +1075,36 @@ export class A2aTaskService {
       ...ctx,
       buildDownloadUri: canReadArtifacts ? this.buildArtifactDownloadUri : null,
     });
+  }
+
+  /**
+   * Load A2A Message history for GetTask when historyLength > 0.
+   * @param {object} principal
+   * @param {object} mapping
+   * @param {unknown} historyLengthRaw
+   * @returns {Promise<object[]>}
+   */
+  async #loadMessageHistory(principal, mapping, historyLengthRaw) {
+    const n = Number(historyLengthRaw);
+    if (!Number.isFinite(n) || n <= 0) return [];
+    const limit = Math.min(Math.max(Math.trunc(n), 1), 200);
+    const repos = this.createRepositories(this.db);
+    if (!repos.messages?.listByConversation) return [];
+    try {
+      const rows = await repos.messages.listByConversation(
+        mapping.conversationId,
+        { orgId: principal.orgId, userId: principal.serviceUserId },
+        { afterSequence: 0, limit: 500 },
+      );
+      // Return the last `limit` messages in chronological order.
+      const slice = rows.length > limit ? rows.slice(rows.length - limit) : rows;
+      return projectMessagesToA2aHistory(slice, {
+        a2aTaskId: mapping.a2aTaskId,
+        contextId: mapping.contextId,
+      });
+    } catch {
+      return [];
+    }
   }
 
   async #compensateOrphanRun(principal, runId, meta) {
