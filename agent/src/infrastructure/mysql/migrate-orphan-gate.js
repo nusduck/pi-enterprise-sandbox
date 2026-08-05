@@ -10,6 +10,7 @@ import {
   CORE_TABLES_CREATE_ORDER,
   A2A_TABLES,
   TRACE_TABLES,
+  PLACEMENT_TABLES,
 } from './schema-tables.js';
 
 /** Filename stem recorded by knex for the core platform migration. */
@@ -35,6 +36,10 @@ export const CREATE_TABLE_MIGRATION_SENTINELS = Object.freeze([
   {
     migrationName: '20260719000003_run_interactions.js',
     tables: Object.freeze(['run_interactions']),
+  },
+  {
+    migrationName: '20260805000001_sandbox_node_placement.js',
+    tables: PLACEMENT_TABLES,
   },
 ]);
 

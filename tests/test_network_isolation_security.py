@@ -64,6 +64,9 @@ def _production_kwargs(**overrides):
         "internal_drain_timeout_seconds": 30.0,
         "workspace_child_quota_enforcement": True,
         "workspace_quota_hard_backend_asserted": True,
+        # Production requires an explicit replica identity.
+        "node_id": "sandbox-0",
+        "node_address": "sandbox-0.sandbox-headless.pi.svc.cluster.local:8081",
     }
     base.update(overrides)
     return base

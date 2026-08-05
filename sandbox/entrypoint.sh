@@ -30,7 +30,16 @@ SANDBOX_PORT="${SANDBOX_PORT:-8081}"
 SANDBOX_APP_MODULE="${SANDBOX_APP_MODULE:-sandbox.main:app}"
 SANDBOX_RUN_AS_USER="${SANDBOX_RUN_AS_USER:-sandbox}"
 SANDBOX_LOG_LEVEL="$(echo "${SANDBOX_LOG_LEVEL:-info}" | tr '[:upper:]' '[:lower:]')"
+# Pinned to 1. Scale out with more Sandbox replicas, never with more workers:
+# the execution admission lock and the managed-process table live in one
+# process, so a second worker would serve the same workspace without seeing
+# them. Settings rejects any other value too; this fails earlier and louder.
 SANDBOX_UVICORN_WORKERS="${SANDBOX_UVICORN_WORKERS:-1}"
+if [ "${SANDBOX_UVICORN_WORKERS}" != "1" ]; then
+    echo "[entrypoint] FATAL: SANDBOX_UVICORN_WORKERS must be 1 (got ${SANDBOX_UVICORN_WORKERS})." >&2
+    echo "[entrypoint] Increase Sandbox replica count instead; each replica owns its own workspaces." >&2
+    exit 78  # EX_CONFIG
+fi
 # Outbound *execution* network policy (not inbound HTTP client CIDRs).
 # disabled | allowlist | unrestricted — must match SANDBOX_NETWORK_MODE in Settings.
 # Production validation rejects anything other than disabled until a real
@@ -55,9 +64,7 @@ build_uvicorn_args() {
     # SANDBOX_ALLOWED_CLIENT_CIDRS (0.0.0.0 bind ≠ allow any client).
     local args="$(printf '%q' "$SANDBOX_APP_MODULE") --host $(printf '%q' "$SANDBOX_BIND_HOST") --port $(printf '%q' "$SANDBOX_PORT") --log-level $(printf '%q' "$SANDBOX_LOG_LEVEL")"
 
-    if [ "${SANDBOX_UVICORN_WORKERS}" != "1" ]; then
-        args="$args --workers $(printf '%q' "$SANDBOX_UVICORN_WORKERS")"
-    fi
+    # No --workers flag: the count is pinned to 1 above.
     if bool_enabled "${SANDBOX_UVICORN_RELOAD:-false}"; then
         args="$args --reload"
     fi

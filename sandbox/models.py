@@ -277,6 +277,13 @@ class HealthResponse(BaseModel):
     isolation_preflight_passed: bool = False
     isolation_policy_version: str = ""
     internal_plane_status: InternalPlaneHealthStatus = InternalPlaneHealthStatus.DISABLED
+    # Replica identity. Every workspace is bound to exactly one node, so knowing
+    # which replica answered a probe is the difference between "the service is
+    # broken" and "one shard is broken". Generation 0 means the node has not
+    # registered (internal plane disabled — single-process development).
+    node_id: str = ""
+    node_generation: int = 0
+    node_draining: bool = False
 
 
 class FileEditRequest(BaseModel):

@@ -3,6 +3,10 @@
 All repositories share the already prepared and pinged ``MysqlDatabase``
 owned by ``InternalPlaneResources``. Managers never parse a DSN or create an
 independent database handle at module import time.
+
+Node registration happens here too, and it happens **before** orphan recovery:
+recovery reaps rows tagged with this node's *previous* generation, so the
+current generation has to exist first.
 """
 
 from __future__ import annotations
@@ -19,6 +23,7 @@ def install_formal_runtime_persistence(
     from sandbox.artifact.infrastructure.manager import artifact_manager
     from sandbox.services.audit_logger import audit_logger
     from sandbox.services.dataset_manager import dataset_manager
+    from sandbox.services.node_registry import node_registry
     from sandbox.services.process_manager import process_manager
 
     if db is None:
@@ -35,6 +40,7 @@ def install_formal_runtime_persistence(
             None, authoritative=formal_required
         )
         audit_logger.reset_for_config(authoritative=formal_required)
+        node_registry.set_repository(None)
         return None
 
     # Internal-plane lifecycle tests may inject protocol fakes that only
@@ -55,9 +61,13 @@ def install_formal_runtime_persistence(
     from sandbox.app.persistence.repositories.process_repository import (
         ProcessRepository,
     )
+    from sandbox.app.persistence.repositories.node_repository import (
+        NodeRepository,
+    )
     from sandbox.app.persistence.repositories.session_repository import (
         SessionRepository,
     )
+    from sandbox.config import settings
     from sandbox.services.formal_session_runtime import FormalSessionRuntime
 
     connection = getattr(db, "connection", None)
@@ -84,6 +94,15 @@ def install_formal_runtime_persistence(
             conn_factory=connection,
             authoritative=True,
         )
+        node_registry.set_repository(
+            NodeRepository(db),
+            conn_factory=connection,
+        )
+        # Claim this replica's generation before anything reaps by generation.
+        node_registry.register(
+            node_id=settings.node_id,
+            address=settings.node_address or f"{settings.node_id}:{settings.port}",
+        )
         if recover_processes:
             process_manager.recover_formal_orphans()
     except Exception:
@@ -91,6 +110,7 @@ def install_formal_runtime_persistence(
         dataset_manager.set_formal_repository(None, authoritative=True)
         process_manager.set_formal_repository(None, authoritative=True)
         audit_logger.set_formal_repository(None, authoritative=True)
+        node_registry.set_repository(None)
         raise
     return FormalSessionRuntime(db=db, repository=SessionRepository(db))
 

@@ -63,6 +63,10 @@ def _production_kwargs(**overrides):
         # Positive default quotas require monitoring + operator hard-backend assert.
         "workspace_child_quota_enforcement": True,
         "workspace_quota_hard_backend_asserted": True,
+        # Production requires an explicit replica identity — two replicas
+        # inheriting the same default node id would reap each other's processes.
+        "node_id": "sandbox-0",
+        "node_address": "sandbox-0.sandbox-headless.pi.svc.cluster.local:8081",
     }
     base.update(overrides)
     return base
@@ -179,6 +183,25 @@ class TestProductionUnsafeMatrix:
     def test_auto_approve_fails(self):
         s = Settings(**_production_kwargs(approval_mode="auto_approve"))
         with pytest.raises(ProductionConfigError, match="auto_approve"):
+            validate_production_settings(s)
+
+    def test_inherited_default_node_id_fails(self):
+        """Two replicas silently sharing ``sandbox-0`` is the worst failure mode.
+
+        Each would treat the other's live processes as its own stale rows and
+        reap them during orphan recovery, so production must name every replica
+        explicitly rather than inherit the single-shard default.
+        """
+        kwargs = _production_kwargs()
+        kwargs.pop("node_id")
+        s = Settings(**kwargs)
+        assert s.node_id == "sandbox-0"  # default still applied
+        with pytest.raises(ProductionConfigError, match="SANDBOX_NODE_ID"):
+            validate_production_settings(s)
+
+    def test_missing_node_address_fails(self):
+        s = Settings(**_production_kwargs(node_address=""))
+        with pytest.raises(ProductionConfigError, match="SANDBOX_NODE_ADDRESS"):
             validate_production_settings(s)
 
     def test_empty_api_token_fails(self):

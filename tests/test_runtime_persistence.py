@@ -12,10 +12,63 @@ from sandbox.services.process_handle_store import FormalProcessDualWriter
 from sandbox.services.runtime_persistence import install_formal_runtime_persistence
 
 
+class _FakeCursor:
+    """Enough DictCursor surface for node registration during install."""
+
+    def __init__(self, node_rows: list[dict[str, Any]]) -> None:
+        self._node_rows = node_rows
+        self.rowcount = 1
+        self._rows: list[dict[str, Any]] = []
+
+    def execute(self, sql: str, params: Any = None) -> None:
+        normalized = " ".join(sql.split())
+        self._rows = (
+            list(self._node_rows)
+            if normalized.startswith("SELECT * FROM sandbox_nodes")
+            else []
+        )
+
+    def fetchone(self) -> dict[str, Any] | None:
+        return self._rows[0] if self._rows else None
+
+    def fetchall(self) -> list[dict[str, Any]]:
+        return list(self._rows)
+
+    def close(self) -> None:
+        pass
+
+
+class _FakeRawConnection:
+    def __init__(self, node_rows: list[dict[str, Any]]) -> None:
+        self._node_rows = node_rows
+        self.commits = 0
+
+    def cursor(self, _cursor_class: Any = None) -> _FakeCursor:
+        return _FakeCursor(self._node_rows)
+
+    def commit(self) -> None:
+        self.commits += 1
+
+    def rollback(self) -> None:
+        pass
+
+    def close(self) -> None:
+        pass
+
+
 def _mysql() -> MysqlDatabase:
+    """A handle that can serve node registration, which install now performs."""
+    node_rows = [
+        {
+            "node_id": "sandbox-0",
+            "address": "sandbox:8081",
+            "status": "ACTIVE",
+            "generation": 1,
+        }
+    ]
     return MysqlDatabase(
         "mysql+pymysql://sandbox:test@127.0.0.1:3306/sandbox",
-        connect_fn=lambda **_kwargs: object(),
+        connect_fn=lambda **_kwargs: _FakeRawConnection(node_rows),
     )
 
 
@@ -44,6 +97,47 @@ def test_installs_one_prepared_mysql_handle_into_runtime_managers() -> None:
         assert audit_logger.repository.db is db
     finally:
         install_formal_runtime_persistence(None)
+
+
+def test_install_claims_node_identity_before_orphan_recovery() -> None:
+    """Recovery reaps by generation, so the generation must already exist.
+
+    If recovery ran first it would compare live rows against a stale or absent
+    generation and could reap processes belonging to another replica.
+    """
+    from sandbox.services.node_registry import node_registry
+    from sandbox.services.process_manager import process_manager
+
+    order: list[str] = []
+    original = process_manager.recover_formal_orphans
+
+    def _record_recovery(*args: Any, **kwargs: Any) -> Any:
+        order.append(f"recover(identity={node_registry.identity is not None})")
+        return None
+
+    process_manager.recover_formal_orphans = _record_recovery  # type: ignore[method-assign]
+    db = _mysql()
+    try:
+        install_formal_runtime_persistence(db)
+
+        assert node_registry.identity is not None
+        assert node_registry.identity.node_id == "sandbox-0"
+        assert order == ["recover(identity=True)"]
+    finally:
+        process_manager.recover_formal_orphans = original  # type: ignore[method-assign]
+        install_formal_runtime_persistence(None)
+
+
+def test_clearing_persistence_drops_node_identity() -> None:
+    from sandbox.services.node_registry import node_registry
+
+    install_formal_runtime_persistence(_mysql(), recover_processes=False)
+    assert node_registry.identity is not None
+
+    install_formal_runtime_persistence(None)
+
+    assert node_registry.identity is None
+    assert node_registry.installed is False
 
 
 def test_recovery_failure_rolls_back_all_runtime_manager_slots(monkeypatch) -> None:

@@ -60,6 +60,25 @@ EXECUTION_DOMAIN_TABLES: tuple[str, ...] = (
 # Backward-compatible alias used by older imports/tests.
 EXECUTION_DOMAIN_TABLES_PRESENT: tuple[str, ...] = EXECUTION_DOMAIN_TABLES
 
+# Placement domain — Sandbox replica registry backing multi-pod scale-out.
+# Kept separate from the execution domain because it arrives in a later Agent
+# migration (20260805000001) and is not part of the PR-02 capability report.
+PLACEMENT_MIGRATION_FILE = (
+    "agent/src/infrastructure/mysql/migrations/"
+    "20260805000001_sandbox_node_placement.js"
+)
+
+PLACEMENT_DOMAIN_TABLES: tuple[str, ...] = ("sandbox_nodes",)
+
+# Placement columns added to existing execution-domain tables by the same
+# migration. Listed here so repository modules have one place to check against.
+PLACEMENT_EXPAND_COLUMNS: dict[str, tuple[str, ...]] = {
+    "sandbox_sessions": ("node_id",),
+    "process_executions": ("node_id", "node_generation"),
+    "artifacts": ("storage_node_id",),
+    "tool_executions": ("owner_node_id", "lease_expires_at"),
+}
+
 # Agent-owned tables — Sandbox must NOT re-author Conversation/Message/Run here.
 AGENT_AUTHORITY_TABLES: tuple[str, ...] = (
     "conversations",
@@ -289,7 +308,7 @@ def report_schema_gap() -> dict[str, Any]:
 
 
 def is_table_present(table: str) -> bool:
-    return table in EXECUTION_DOMAIN_TABLES
+    return table in EXECUTION_DOMAIN_TABLES or table in PLACEMENT_DOMAIN_TABLES
 
 
 def is_table_schema_gap(table: str) -> bool:

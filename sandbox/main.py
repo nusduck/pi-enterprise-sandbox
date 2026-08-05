@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 import secrets
@@ -167,11 +168,40 @@ async def lifespan(app: FastAPI):
         )
         raise
 
+    # Node liveness. Registration already happened inside the plane install
+    # (it has to precede orphan recovery); only the refresh loop belongs to the
+    # event loop. A registry without an identity means the internal plane is
+    # disabled, which is the single-process development shape.
+    from sandbox.services.node_registry import node_registry
+
+    if node_registry.identity is not None:
+        await node_registry.start_heartbeat(
+            interval_seconds=settings.node_heartbeat_interval_seconds
+        )
+        logger.info(
+            "Node identity: %s @ %s (generation=%s)",
+            node_registry.identity.node_id,
+            node_registry.identity.address,
+            node_registry.identity.generation,
+        )
+
     try:
         yield
     finally:
-        # Shutdown order: stop the internal plane (slots fail closed → drain →
-        # close); never leave READY/INSTALLED without live resources.
+        # Shutdown order: stop attracting new workspaces → stop heartbeating →
+        # stop the internal plane (slots fail closed → drain → close). Draining
+        # first means a rolling restart stops placing work here before we start
+        # refusing it.
+        if node_registry.identity is not None:
+            try:
+                await asyncio.to_thread(node_registry.set_draining)
+            except Exception as exc:
+                logger.warning(
+                    "node drain marking failed type=%s",
+                    type(exc).__name__,
+                )
+            await node_registry.stop_heartbeat()
+
         try:
             await stop_internal_plane(plane_bundle)
         except Exception as exc:

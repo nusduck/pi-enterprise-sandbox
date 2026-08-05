@@ -4,6 +4,10 @@ from sandbox.app.persistence.repositories.artifact_repository import ArtifactRep
 from sandbox.app.persistence.repositories.audit_repository import AuditRepository
 from sandbox.app.persistence.repositories.dataset_repository import DatasetRepository
 from sandbox.app.persistence.repositories.execution_repository import ExecutionRepository
+from sandbox.app.persistence.repositories.node_repository import (
+    NodeRecord,
+    NodeRepository,
+)
 from sandbox.app.persistence.repositories.process_repository import ProcessRepository
 from sandbox.app.persistence.repositories.session_repository import SessionRepository
 from sandbox.app.persistence.repositories.tool_execution_claim_validator import (
@@ -15,6 +19,8 @@ __all__ = [
     "AuditRepository",
     "DatasetRepository",
     "ExecutionRepository",
+    "NodeRecord",
+    "NodeRepository",
     "ProcessRepository",
     "SessionRepository",
     "ToolExecutionClaimValidator",

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import logging
 import shutil
+from typing import Any
 
 from fastapi import APIRouter, Response
 from prometheus_client import Counter, Gauge, generate_latest
@@ -89,6 +90,28 @@ def _workspace_ready() -> tuple[bool, float]:
         return False, 0.0
 
 
+def _node_fields() -> dict[str, Any]:
+    """Replica identity for probe responses.
+
+    Reads the registry rather than settings so the reported generation is the
+    one actually claimed in MySQL, not merely the one configured.
+    """
+    from sandbox.services.node_registry import node_registry
+
+    identity = node_registry.identity
+    if identity is None:
+        return {
+            "node_id": str(getattr(settings, "node_id", "") or ""),
+            "node_generation": 0,
+            "node_draining": False,
+        }
+    return {
+        "node_id": identity.node_id,
+        "node_generation": identity.generation,
+        "node_draining": node_registry.draining,
+    }
+
+
 def _runtime_counts() -> tuple[int, int]:
     """Return process-local gauges without treating them as authority.
 
@@ -128,6 +151,7 @@ def health():
             if plane_enabled
             else InternalPlaneHealthStatus.DISABLED
         ),
+        **_node_fields(),
     )
 
 
@@ -203,6 +227,7 @@ def ready(response: Response):
         isolation_preflight_passed=isolation.passed,
         isolation_policy_version=isolation.policy_version,
         internal_plane_status=plane_status,
+        **_node_fields(),
     )
 
 

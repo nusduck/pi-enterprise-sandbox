@@ -82,6 +82,7 @@ export {
   A2A_TABLES,
   TRACE_TABLES,
   INTERACTION_TABLES,
+  PLACEMENT_TABLES,
 } from './schema-tables.js';
 
 export {

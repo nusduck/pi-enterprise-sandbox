@@ -15,6 +15,8 @@ from typing import Annotated, Any, Literal
 from pydantic import Field, PrivateAttr, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
+from sandbox import config_redaction, node_config
+
 from sandbox.paths import (
     AGENT_SKILL_PATH,
     AGENT_USER_SKILL_PATH,
@@ -42,6 +44,7 @@ _HARD_MAX_INTERNAL_MAX_REQUEST_BODY_BYTES = 512 * 1024 * 1024  # 512 MiB
 
 # Host-safe local defaults (container/compose override via SANDBOX_* env vars).
 _LOCAL_DATA_ROOT = Path.home() / ".pi-enterprise-sandbox"
+
 
 DeploymentEnv = Literal["development", "test", "production"]
 ApprovalMode = Literal["ask", "auto_approve", "deny"]
@@ -208,28 +211,6 @@ def _is_weak_secret(value: str) -> bool:
     return any(marker in lower for marker in _WEAK_SECRET_MARKERS)
 
 
-def _looks_like_secret_key(name: str) -> bool:
-    lower = name.lower()
-    return any(
-        token in lower
-        for token in (
-            "token",
-            "secret",
-            "password",
-            "api_key",
-            "apikey",
-            "authorization",
-            "credential",
-            "dsn",
-            "database_url",
-            "redis_url",
-            "private",
-            "keyring",
-            "hmac",
-        )
-    )
-
-
 def _positive_int_field(value: Any, *, name: str, minimum: int = 1, maximum: int) -> int:
     """Strict positive int for internal-plane / MySQL bound settings."""
     if type(value) is bool or type(value) is float:
@@ -301,6 +282,19 @@ class Settings(BaseSettings):
     host: str = "0.0.0.0"
     port: int = 8081
     debug: bool = False
+
+    # ── Node identity (horizontal scale-out) ─────────────────────────
+    # Every workspace is bound to exactly one replica for its whole life; see
+    # sandbox/node_config.py for why, and sandbox/services/node_registry.py for
+    # how. Env: SANDBOX_NODE_ID / _ADDRESS / _HEARTBEAT_INTERVAL_SECONDS /
+    # _LIVENESS_MULTIPLIER, SANDBOX_UVICORN_WORKERS.
+    node_id: str = node_config.DEFAULT_NODE_ID
+    node_address: str = ""
+    node_heartbeat_interval_seconds: float = (
+        node_config.DEFAULT_HEARTBEAT_INTERVAL_SECONDS
+    )
+    node_liveness_multiplier: int = node_config.DEFAULT_LIVENESS_MULTIPLIER
+    uvicorn_workers: int = node_config.REQUIRED_UVICORN_WORKERS
 
     # ── Paths (physical storage) ─────────────────────────────────────
     # Physical per-session workspaces live under workspaces_root/{workspace_id}.
@@ -708,6 +702,44 @@ class Settings(BaseSettings):
             return 64
         return _positive_int_field(
             value, name="SANDBOX_INTERNAL_MAX_CONCURRENCY", minimum=1, maximum=10_000
+        )
+
+    @field_validator("node_id", mode="before")
+    @classmethod
+    def _validate_node_id(cls, value: Any) -> str:
+        return node_config.parse_node_id(value)
+
+    @field_validator("node_address", mode="before")
+    @classmethod
+    def _validate_node_address(cls, value: Any) -> str:
+        return node_config.parse_node_address(value)
+
+    @field_validator("node_heartbeat_interval_seconds", mode="before")
+    @classmethod
+    def _validate_node_heartbeat_interval(cls, value: Any) -> float:
+        return node_config.parse_heartbeat_interval(value)
+
+    @field_validator("node_liveness_multiplier", mode="before")
+    @classmethod
+    def _validate_node_liveness_multiplier(cls, value: Any) -> int:
+        if value is None or value == "":
+            return node_config.DEFAULT_LIVENESS_MULTIPLIER
+        return _positive_int_field(
+            value,
+            name=node_config.ENV_LIVENESS_MULTIPLIER,
+            minimum=node_config.MIN_LIVENESS_MULTIPLIER,
+            maximum=node_config.MAX_LIVENESS_MULTIPLIER,
+        )
+
+    @field_validator("uvicorn_workers", mode="before")
+    @classmethod
+    def _validate_uvicorn_workers(cls, value: Any) -> int:
+        if value is None or value == "":
+            return node_config.REQUIRED_UVICORN_WORKERS
+        return node_config.check_uvicorn_workers(
+            _positive_int_field(
+                value, name=node_config.ENV_UVICORN_WORKERS, minimum=1, maximum=64
+            )
         )
 
     @field_validator(
@@ -1209,6 +1241,15 @@ def validate_production_settings(s: Settings | None = None) -> None:
                 "0/unlimited is forbidden"
             )
 
+    errors.extend(
+        node_config.production_identity_errors(
+            # `model_fields_set` distinguishes "operator configured this" from
+            # "pydantic supplied the default", for env vars as well as kwargs.
+            node_id_explicit="node_id" in cfg.model_fields_set,
+            node_address=cfg.node_address,
+        )
+    )
+
     # Production Linux: refuse start when critical resource module primitives
     # are missing (cannot enforce hard limits). Offline macOS is a no-op.
     try:
@@ -1233,60 +1274,16 @@ def validate_production_settings(s: Settings | None = None) -> None:
 def effective_config(s: Settings | None = None) -> dict[str, Any]:
     """Return a redacted snapshot of effective settings for logs/diagnostics.
 
-    Never includes tokens, secrets, full DSNs, or any value whose key looks
-    sensitive. Database URLs are reduced to scheme + host-ish markers only.
+    Redaction rules live in :mod:`sandbox.config_redaction`; this only adds the
+    derived invariants operators look for first.
     """
     cfg = s or settings
-    data = cfg.model_dump()
-    redacted: dict[str, Any] = {}
-    for key, value in data.items():
-        if _looks_like_secret_key(key):
-            if key == "database_url":
-                redacted[key] = _redact_database_url(str(value or ""))
-            elif key == "internal_redis_url" or key.endswith("redis_url"):
-                redacted[key] = _redact_redis_url(str(value or ""))
-            elif isinstance(value, list):
-                redacted[key] = ["***"] if value else []
-            elif value in (None, "", [], {}):
-                redacted[key] = "<empty>"
-            else:
-                redacted[key] = "***"
-            continue
-        if isinstance(value, str) and _looks_like_embedded_secret(value):
-            redacted[key] = "***"
-            continue
-        redacted[key] = value
+    redacted = config_redaction.redact_settings_dump(cfg.model_dump())
     redacted["is_production"] = cfg.is_production
     redacted["network_mode"] = cfg.network_mode
     redacted["default_deny_network"] = cfg.default_deny_network
     redacted["block_metadata_ips"] = True  # invariant
     return redacted
-
-
-def _redact_database_url(url: str) -> str:
-    if not url:
-        return "<empty>"
-    # mysql+pymysql://user:pass@host:port/db → mysql+pymysql://***@host:port/<redacted>
-    m = re.match(
-        r"^(?P<scheme>[a-zA-Z0-9+]+)://(?P<creds>[^@]*)@(?P<host>[^/]+)(?:/(?P<db>.*))?$",
-        url,
-    )
-    if m:
-        host = m.group("host")
-        return f"{m.group('scheme')}://***@{host}/<redacted>"
-    m2 = re.match(r"^(?P<scheme>[a-zA-Z0-9+]+)://(?P<rest>.*)$", url)
-    if m2:
-        return f"{m2.group('scheme')}://<redacted>"
-    return "<redacted>"
-
-
-def _looks_like_embedded_secret(value: str) -> bool:
-    lower = value.lower()
-    if "://" in lower and any(
-        p in lower for p in ("postgres", "mysql", "mongodb", "redis")
-    ):
-        return True
-    return False
 
 
 def ensure_safe_to_start(s: Settings | None = None) -> Settings:
@@ -1448,22 +1445,6 @@ def validate_internal_plane_config(
             "Internal plane configuration is unsafe "
             f"({len(errors)} issue(s)): " + "; ".join(errors)
         )
-
-
-def _redact_redis_url(url: str) -> str:
-    if not url:
-        return "<empty>"
-    m = re.match(
-        r"^(?P<scheme>rediss?)://(?P<creds>[^@]*)@(?P<host>[^/]+)(?:/(?P<db>.*))?$",
-        url,
-        flags=re.IGNORECASE,
-    )
-    if m:
-        return f"{m.group('scheme').lower()}://***@{m.group('host')}/<redacted>"
-    m2 = re.match(r"^(?P<scheme>rediss?)://(?P<rest>.*)$", url, flags=re.IGNORECASE)
-    if m2:
-        return f"{m2.group('scheme').lower()}://<redacted>"
-    return "<redacted>"
 
 
 settings = Settings()

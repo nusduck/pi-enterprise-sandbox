@@ -22,6 +22,7 @@ import {
   SANDBOX_EXECUTION_DOMAIN_TABLES,
   TRACE_TABLES,
   INTERACTION_TABLES,
+  PLACEMENT_TABLES,
 } from '../../src/infrastructure/mysql/schema-tables.js';
 
 const TEST_URL = process.env.TEST_MYSQL_URL || '';
@@ -59,6 +60,8 @@ const TRACE = 'c'.repeat(32);
 const TRUNCATE_ORDER = Object.freeze([
   ...TRACE_TABLES,
   ...INTERACTION_TABLES,
+  // No FK from placement columns, so node rows truncate independently.
+  ...PLACEMENT_TABLES,
   'idempotency_records',
   'domain_outbox',
   'approvals',
