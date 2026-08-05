@@ -178,7 +178,7 @@ Redis 只保存队列、lease、stream、取消信号等运行态；**不是** R
 
 ### Skill
 
-Agent **支持零 Skill 启动**（基础工具 read/write/edit/bash/…）。共享 `skills/` 与 kit package skills 由 Agent Profile（`profile.skills` + `sharedSkills`）与 session capability registry 控制；模型侧权威清单为 `capabilities` 工具。研发可用 `SKILLS_MODE=development` 的 install/edit/reload；生产默认 `readonly`。
+Agent **支持零 Skill 启动**（基础工具 read/write/edit/bash/…）。共享 `skills/` 与 kit package skills 由 Agent Profile（`profile.skills` + `sharedSkills`）与 session capability registry 控制；模型侧权威清单为 `capabilities` 工具。用户可以上传当前回合的 Skill ZIP，或与 Agent 交互生成 Skill；安装、生成、编辑和卸载统一经过高风险工具审批，完成后自动刷新能力清单。
 
 ### 其他
 
@@ -225,7 +225,7 @@ node scripts/smoke-cross-service.mjs
 | 用户 | 子进程以非 root `sandbox` 用户运行 |
 | 资源 | ulimit: CPU / 内存 / 进程数 / 文件大小 |
 | 路径 | Agent Session 独占 opaque `workspace_id`；接受相对路径、逻辑 workspace 路径和 Session 私有 `/tmp`；物理路径不进入公共协议 |
-| Skill | 发行零内置 package；默认只读；`SKILLS_MODE=development` 时仅专用 skill 工具可写 |
+| Skill | Sandbox 始终只读；仅 Agent 的审批型生命周期工具可原子写入用户 Skill 目录 |
 | 命令 | 禁止 `sudo, su, rm -rf /, dd, mkfs, fdisk, chmod 777` |
 | 输出 | stdout/stderr 上限截断 |
 | 交付 | 仅 Artifact API / `submit_artifact` 向用户分享文件（`write` 不自动下载） |

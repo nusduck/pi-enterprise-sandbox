@@ -87,7 +87,7 @@ Agent（`pi-coding-agent` SDK）运行在独立 `agent/` 服务中，而非浏�
 - 相对路径与 `/home/sandbox/workspace/...` 都指向当前 workspace；`/tmp/...` 指向同一 Agent Session 的持久化临时树
 - 每次不可信进程通过 Bubblewrap 创建 mount/PID/IPC/user namespace，仅挂载当前 workspace、当前 `/tmp` 与只读 Skills
 - 内部物理根仅存于 service/repository，不进入 API、SSE、模型上下文或活跃文档示例
-- Skills：共享 skill 根在 workspace 外；Agent 的 `read/load` 保持可用。`SKILLS_MODE=development` 时仅 Agent 侧 `skill_install` / `skill_edit` / `skill_reload` 可写，Sandbox 执行侧始终只读
+- Skills：共享系统根在 workspace 外并始终只读；用户根按 org/user 隔离。新建只允许当前回合 ZIP attachment 或 Agent 结构化生成，所有变更走审批并由 Agent 原子落盘，Sandbox 执行侧始终只读
 - 副作用执行按 `workspace_id` 串行，避免同一 Session 的并发写竞态
 - Conversation 不拥有或派生 Workspace；Workspace 的保留与清理由 Agent Session 生命周期决定
 

@@ -81,7 +81,7 @@ pi-enterprise-sandbox/
 │   ├── server.js      # internal Run API + health
 │   ├── config.js
 │   ├── src/application/ # Run, Session, approval, A2A services
-│   ├── src/extensions/  # sandbox-bridge, enterprise-policy, observability
+│   ├── src/extensions/  # first-party sandbox, policy, observability, interaction, Skill lifecycle
 │   ├── src/infrastructure/ # MySQL, Redis, Pi, MCP, Sandbox ports
 │   ├── services/      # model registry and platform services
 │   └── tests/         # node:test + sdk-compat

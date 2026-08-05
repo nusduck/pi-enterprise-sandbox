@@ -238,7 +238,6 @@ function createWorkerHarness(workerLabel, ids) {
       SANDBOX_INTERNAL_HMAC_ACTIVE_KID: TEST_HMAC_ACTIVE_KID,
       LLMIO_BASE_URL: fakeProvider.baseUrl,
       LLMIO_API_KEY: 'release-gate-fake-key',
-      SKILLS_MODE: 'readonly',
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   });

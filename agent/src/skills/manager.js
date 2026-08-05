@@ -1,13 +1,12 @@
 /**
- * SkillManager — install / edit / uninstall / reload over the two-tier skill
- * tree, scoped to one caller.
+ * Per-user Skill lifecycle manager.
  *
- * Reads see the union of the bundled system tier and the caller's own
- * `<orgId>/<userId>` directory, system first. Writes only ever land in that one
- * directory, so a manager built for user A can never touch user B's skills —
- * that per-user scoping is what makes installs safe to allow in every
- * environment instead of behind a deployment-wide mode flag.
+ * System packages are read-only. Every mutation is confined to the calling
+ * user's `<orgId>/<userId>` directory and is exposed only through governed
+ * Agent tools. There is no development/production mode branch.
  */
+import fs from 'node:fs';
+import { createHash } from 'node:crypto';
 import {
   DEFAULT_SKILL_ROOTS,
   SYSTEM_SKILL_ROOT,
@@ -20,86 +19,20 @@ import {
   isUnderSkillRoot,
 } from './paths.js';
 import {
-  installSkill,
+  createGeneratedSkill,
+  installSkillArchive,
   uninstallSkill,
   editSkillFile,
   listInstalledSkills,
   describeInstalledSkills,
+  SKILL_INSTALL_TIMEOUT_MS,
 } from './install.js';
-import fs from 'node:fs';
-
+import { SKILL_ARCHIVE_MAX_BYTES } from './archive.js';
 import { emitSkillAudit } from './audit.js';
 
 /**
- * Skill modes.
- *
- * `enabled` (default) lets a user install into their own per-user directory in
- * any environment, production included. That is safe without a deployment-wide
- * flag for two reasons: the directory is scoped to `<orgId>/<userId>` so an
- * install can never enter another user's agent context, and `skill_install`
- * carries `high` risk in the tool-risk table, so it goes through approval.
- *
- * `readonly` is the kill switch for deployments that want no skill
- * installation at all; the skill-lifecycle tools are then not registered.
- *
- * `development` is a legacy alias for `enabled`, kept so existing `.env` files
- * and compose overlays keep working.
- */
-export const SKILLS_MODE = Object.freeze({
-  READONLY: 'readonly',
-  ENABLED: 'enabled',
-  /** @deprecated alias for ENABLED */
-  DEVELOPMENT: 'enabled',
-});
-
-/**
- * Resolve SKILLS_MODE from env-like object.
- * @param {NodeJS.ProcessEnv | Record<string, string|undefined>} [env]
- * @returns {'readonly' | 'enabled'}
- */
-export function resolveSkillsMode(env = process.env) {
-  const raw = env?.SKILLS_MODE;
-  if (raw == null || String(raw).trim() === '') return SKILLS_MODE.ENABLED;
-  const v = String(raw).trim().toLowerCase();
-  // `production`/`prod` keep meaning the locked-down thing: an operator who
-  // wrote that word wants installs off, not on.
-  if (
-    v === 'readonly' ||
-    v === 'ro' ||
-    v === 'off' ||
-    v === 'disabled' ||
-    v === 'production' ||
-    v === 'prod'
-  ) {
-    return SKILLS_MODE.READONLY;
-  }
-  if (v === 'enabled' || v === 'on' || v === 'development' || v === 'dev') {
-    return SKILLS_MODE.ENABLED;
-  }
-  // Unknown values fail closed to readonly.
-  return SKILLS_MODE.READONLY;
-}
-
-/**
- * Parse comma-separated local install allowlist.
- * @param {NodeJS.ProcessEnv | Record<string, string|undefined>} [env]
- * @returns {string[]}
- */
-export function resolveLocalAllowlist(env = process.env) {
-  const raw = env?.SKILLS_INSTALL_LOCAL_ALLOWLIST || '';
-  return String(raw)
-    .split(',')
-    .map((s) => s.trim())
-    .filter(Boolean);
-}
-
-/**
- * The two configured *mount* roots: system tier, and the base of the per-user
- * tier. `SKILLS_ROOT` / `SKILLS_USER_ROOT` relocate them independently, so the
- * two can never collapse into one.
- *
- * @param {NodeJS.ProcessEnv | Record<string, string|undefined>} [env]
- * @returns {{ systemRoot: string, userRootBase: string }}
+ * Resolve system and user-base mounts. These paths describe storage, not an
+ * install source; callers can never submit either path to a lifecycle tool.
  */
 export function resolveSkillMountRoots(env = process.env) {
   const system = String(
@@ -114,16 +47,7 @@ export function resolveSkillMountRoots(env = process.env) {
   };
 }
 
-/**
- * Skill roots for one caller, in read-precedence order.
- *
- * With an identity: `[systemRoot, <userBase>/<orgId>/<userId>]`.
- * Without one (operator diagnostics, tests): the mount roots, so inventory
- * tooling can still see the tree without impersonating a user.
- *
- * @param {NodeJS.ProcessEnv | Record<string, string|undefined>} [env]
- * @param {{ orgId?: unknown, userId?: unknown } | null} [identity]
- */
+/** Skill roots for one caller, in system-then-user precedence order. */
 export function resolveSkillRoots(env = process.env, identity = null) {
   const { systemRoot, userRootBase } = resolveSkillMountRoots(env);
   if (identity?.orgId != null && identity?.userId != null) {
@@ -132,22 +56,85 @@ export function resolveSkillRoots(env = process.env, identity = null) {
   return normalizeSkillRoots([systemRoot, userRootBase]);
 }
 
+function responseHeader(response, name) {
+  return String(response?.headers?.get?.(name) || '').trim();
+}
+
+/**
+ * Read an owner-scoped Sandbox attachment response with a hard byte limit and
+ * verify the dataset hash when Sandbox provides it.
+ *
+ * @param {unknown} response
+ * @returns {Promise<{ bytes: Buffer, sha256: string }>}
+ */
+export async function readSkillArchiveDownload(response) {
+  if (!response || typeof response !== 'object') {
+    throw new Error('Skill archive download returned no response');
+  }
+  if ('ok' in response && response.ok === false) {
+    throw new Error(`Skill archive download failed with status ${response.status || 'unknown'}`);
+  }
+  const contentType = responseHeader(response, 'content-type')
+    .split(';', 1)[0]
+    .toLowerCase();
+  if (
+    contentType &&
+    !['application/zip', 'application/x-zip-compressed', 'application/octet-stream'].includes(
+      contentType,
+    )
+  ) {
+    throw new Error(`Skill archive response has unsupported content type: ${contentType}`);
+  }
+  const declared = Number(responseHeader(response, 'content-length'));
+  if (Number.isFinite(declared) && declared > SKILL_ARCHIVE_MAX_BYTES) {
+    throw new Error(`Skill archive exceeds ${SKILL_ARCHIVE_MAX_BYTES} bytes`);
+  }
+
+  const chunks = [];
+  let total = 0;
+  if (response.body && Symbol.asyncIterator in Object(response.body)) {
+    for await (const raw of response.body) {
+      const chunk = Buffer.from(raw);
+      total += chunk.length;
+      if (total > SKILL_ARCHIVE_MAX_BYTES) {
+        throw new Error(`Skill archive exceeds ${SKILL_ARCHIVE_MAX_BYTES} bytes`);
+      }
+      chunks.push(chunk);
+    }
+  } else if (typeof response.arrayBuffer === 'function') {
+    const bytes = Buffer.from(await response.arrayBuffer());
+    total = bytes.length;
+    if (total > SKILL_ARCHIVE_MAX_BYTES) {
+      throw new Error(`Skill archive exceeds ${SKILL_ARCHIVE_MAX_BYTES} bytes`);
+    }
+    chunks.push(bytes);
+  } else {
+    throw new Error('Skill archive response body is unreadable');
+  }
+
+  const bytes = Buffer.concat(chunks, total);
+  const sha256 = createHash('sha256').update(bytes).digest('hex');
+  const expected = responseHeader(response, 'x-dataset-sha256').toLowerCase();
+  if (expected && expected !== sha256) {
+    throw new Error('Skill archive content hash no longer matches its attachment id');
+  }
+  return { bytes, sha256 };
+}
+
 /**
  * @param {{
- *   mode?: 'readonly' | 'enabled',
  *   identity?: { orgId: unknown, userId: unknown } | null,
  *   skillRoots?: string[],
  *   userSkillRoot?: string | null,
- *   localAllowlist?: string[],
+ *   downloadArchive?: ((input: { attachmentId: string }) => Promise<unknown>) | null,
  *   auditLogPath?: string | null,
- *   auditSink?: ((ev: object) => void) | null,
+ *   auditSink?: ((event: object) => void) | null,
  *   getMeta?: () => object,
  *   getAgentSession?: () => { reload?: () => Promise<void>, resourceLoader?: { getSkills?: () => { skills: unknown[] }, reload?: () => Promise<void> } } | null,
  *   onAfterReload?: () => Promise<void>|void,
  * }} [options]
  */
 export function createSkillManager(options = {}) {
-  const mode = options.mode || resolveSkillsMode();
   const identity = options.identity ?? null;
   const skillRoots = normalizeSkillRoots(
     options.skillRoots || resolveSkillRoots(process.env, identity),
@@ -156,7 +143,8 @@ export function createSkillManager(options = {}) {
   const userRoot = options.userSkillRoot
     ? normalizeSkillRoots([options.userSkillRoot])[0]
     : writableSkillRoot(skillRoots);
-  const localAllowlist = options.localAllowlist || resolveLocalAllowlist();
+  const downloadArchive =
+    typeof options.downloadArchive === 'function' ? options.downloadArchive : null;
   const auditLogPath = options.auditLogPath ?? process.env.SKILLS_AUDIT_LOG ?? null;
   const auditSink = options.auditSink || null;
   const getMeta = typeof options.getMeta === 'function' ? options.getMeta : () => ({});
@@ -170,8 +158,9 @@ export function createSkillManager(options = {}) {
       {
         ...partial,
         meta: {
+          orgId: identity?.orgId ?? null,
+          userId: identity?.userId ?? null,
           ...getMeta(),
-          skills_mode: mode,
           ...(partial.meta || {}),
         },
       },
@@ -180,27 +169,17 @@ export function createSkillManager(options = {}) {
   }
 
   function assertWritable(action) {
-    if (mode !== SKILLS_MODE.ENABLED) {
-      const err = new Error(
-        `Skill ${action} denied: SKILLS_MODE=${mode} disables skill installation`,
-      );
-      audit({ action, result: 'denied', error: err.message });
-      throw err;
-    }
     if (!userRoot) {
-      const err = new Error(
-        `Skill ${action} denied: no per-user skill directory resolved ` +
-          '(needs orgId + userId, and a read-write SKILLS_USER_ROOT mount)',
+      const error = new Error(
+        `Skill ${action} denied: no per-user Skill directory resolved ` +
+          '(requires orgId, userId and a writable SKILLS_USER_ROOT mount)',
       );
-      audit({ action, result: 'denied', error: err.message });
-      throw err;
+      audit({ action, result: 'denied', error: error.message });
+      throw error;
     }
-    // The per-user directory is created on first write, not at startup: there
-    // is no list of users to pre-create it for.
-    fs.mkdirSync(userRoot, { recursive: true });
+    fs.mkdirSync(userRoot, { recursive: true, mode: 0o700 });
   }
 
-  /** Names the bundled system tier owns; an install must not shadow them. */
   function systemSkillNames() {
     const names = new Set();
     for (const root of skillRoots) {
@@ -210,76 +189,125 @@ export function createSkillManager(options = {}) {
     return names;
   }
 
-  return {
-    mode,
+  const manager = {
     skillRoot,
     skillRoots,
     userSkillRoot: userRoot,
-    localAllowlist,
     identity,
-    isEnabled: () => mode === SKILLS_MODE.ENABLED,
-    isUnderSkillRoot: (p) => isUnderSkillRoot(p, skillRoots),
-    /** Names only, across both tiers (system shadows user). */
+    isUnderSkillRoot: (candidate) => isUnderSkillRoot(candidate, skillRoots),
     listInstalled: () =>
       describeInstalledSkills(skillRoots, { writableRoot: userRoot }).map(
-        (s) => s.name,
+        (skill) => skill.name,
       ),
-    /** Full records with tier + description, for the skill_list tool. */
     describeInstalled: () =>
       describeInstalledSkills(skillRoots, { writableRoot: userRoot }),
 
-    /**
-     * `sourceType`, `name`, `ref` and `subpath` are optional — see installSkill.
-     * @param {{ name?: string, sourceType?: string, source: string, ref?: string, subpath?: string }} params
-     */
+    /** Install a ZIP attachment. The extension verifies current-turn binding. */
     async install(params) {
       assertWritable('install');
+      const attachmentId = String(params?.attachmentId || '').trim();
       try {
-        const result = await installSkill({
-          name: params.name,
-          sourceType: params.sourceType,
-          source: params.source,
-          ref: params.ref,
-          subpath: params.subpath,
+        if (!downloadArchive) {
+          throw new Error('Skill archive download is not configured');
+        }
+        if (!attachmentId) {
+          throw new Error('Skill archive attachment_id is required');
+        }
+        if (!String(params?.archiveName || '').trim().toLowerCase().endsWith('.zip')) {
+          throw new Error('Skill installation accepts ZIP attachments only');
+        }
+        if (Number(params?.declaredSize) > SKILL_ARCHIVE_MAX_BYTES) {
+          throw new Error(`Skill archive exceeds ${SKILL_ARCHIVE_MAX_BYTES} bytes`);
+        }
+        const controller = new AbortController();
+        let timedOut = false;
+        const timer = setTimeout(() => {
+          timedOut = true;
+          controller.abort();
+        }, SKILL_INSTALL_TIMEOUT_MS);
+        let downloaded;
+        try {
+          const response = await downloadArchive({
+            attachmentId,
+            signal: controller.signal,
+          });
+          downloaded = await readSkillArchiveDownload(response);
+        } catch (error) {
+          if (timedOut || error?.name === 'AbortError') {
+            throw new Error(
+              `Skill archive download timed out after ${SKILL_INSTALL_TIMEOUT_MS}ms`,
+            );
+          }
+          throw error;
+        } finally {
+          clearTimeout(timer);
+        }
+        const result = await installSkillArchive({
+          archiveBytes: downloaded.bytes,
+          archiveName: params.archiveName,
+          attachmentId,
           skillRoot: userRoot,
-          localAllowlist,
           systemSkillNames: systemSkillNames(),
         });
         audit({
           action: 'install',
           result: 'success',
           skill_name: result.name,
-          source_type: result.source_type,
-          source: result.source,
-          ref: result.ref,
-          resolved_commit: result.resolved_commit,
-          summary: result.summary,
+          source_type: 'upload',
+          source: `attachment:${attachmentId}`,
+          summary: `${result.summary} archive_sha256=${downloaded.sha256}`,
         });
-        return result;
-      } catch (err) {
+        return { ...result, archive_sha256: downloaded.sha256 };
+      } catch (error) {
         audit({
           action: 'install',
           result: 'failure',
-          skill_name: params?.name,
-          source_type: params?.sourceType,
-          source: params?.source,
-          ref: params?.ref,
-          error: err?.message || String(err),
+          source_type: 'upload',
+          source: attachmentId ? `attachment:${attachmentId}` : null,
+          error: error?.message || String(error),
         });
-        throw err;
+        throw error;
       }
     },
 
-    /**
-     * @param {{ name: string }} params
-     */
+    /** Create a package generated by the Agent; this is an install operation. */
+    async create(params) {
+      assertWritable('create');
+      try {
+        const result = await createGeneratedSkill({
+          name: params.name,
+          description: params.description,
+          instructions: params.instructions,
+          files: params.files,
+          skillRoot: userRoot,
+          systemSkillNames: systemSkillNames(),
+        });
+        audit({
+          action: 'create',
+          result: 'success',
+          skill_name: result.name,
+          source_type: 'agent_generated',
+          source: 'agent',
+          summary: result.summary,
+        });
+        return result;
+      } catch (error) {
+        audit({
+          action: 'create',
+          result: 'failure',
+          skill_name: params?.name,
+          source_type: 'agent_generated',
+          source: 'agent',
+          error: error?.message || String(error),
+        });
+        throw error;
+      }
+    },
+
     async uninstall(params) {
       assertWritable('uninstall');
       try {
-        const result = await uninstallSkill({
-          name: params.name,
-          skillRoot: userRoot,
-        });
+        const result = await uninstallSkill({ name: params.name, skillRoot: userRoot });
         audit({
           action: 'uninstall',
           result: 'success',
@@ -287,20 +315,17 @@ export function createSkillManager(options = {}) {
           summary: result.summary,
         });
         return result;
-      } catch (err) {
+      } catch (error) {
         audit({
           action: 'uninstall',
           result: 'failure',
           skill_name: params?.name,
-          error: err?.message || String(err),
+          error: error?.message || String(error),
         });
-        throw err;
+        throw error;
       }
     },
 
-    /**
-     * @param {{ path: string, content: string }} params
-     */
     async edit(params) {
       assertWritable('edit');
       try {
@@ -316,88 +341,69 @@ export function createSkillManager(options = {}) {
           summary: `edited ${result.path} (${result.bytes} bytes)`,
         });
         return result;
-      } catch (err) {
+      } catch (error) {
         audit({
           action: 'edit',
           result: 'failure',
-          error: err?.message || String(err),
+          error: error?.message || String(error),
           summary: params?.path,
         });
-        throw err;
+        throw error;
       }
     },
 
-    /**
-     * Reload skill loader for the active agent session (if any).
-     * Next turn always reloads via DefaultResourceLoader; this is explicit.
-     */
+    /** Internal post-mutation reload; not exposed as a user tool. */
     async reload() {
-      // reload is allowed in readonly for re-scan, but no-op write; always ok
       try {
         const session = getAgentSession();
         let skillCount = null;
         if (session && typeof session.reload === 'function') {
           await session.reload();
-        } else if (session?.resourceLoader && typeof session.resourceLoader.reload === 'function') {
+        } else if (session?.resourceLoader?.reload) {
           await session.resourceLoader.reload();
         }
-        // Fail-closed: session.reload()/resourceLoader.reload() rebuild the
-        // extension runtime in place without going through PiRuntimeFactory's
-        // bind path, so re-run the same fail-closed assertion here. If the
-        // enterprise-policy (or any other) extension factory errored during
-        // this reload, surface it as a failure instead of reporting success.
         if (session?.resourceLoader) {
-          // Imported lazily: pi-runtime-factory reads config.js, which reads
-          // this module, and a static edge would leave SKILLS_MODE in TDZ for
-          // anything that loads config.js first.
           const { assertExtensionsLoadedClean } = await import(
             '../infrastructure/pi/pi-runtime-factory.js'
           );
           assertExtensionsLoadedClean({ resourceLoader: session.resourceLoader }, session);
         }
-        const skills =
+        const loaded =
           session?.resourceLoader?.getSkills?.()?.skills ||
           session?.getSkills?.()?.skills ||
           null;
-        if (Array.isArray(skills)) skillCount = skills.length;
+        if (Array.isArray(loaded)) skillCount = loaded.length;
         const installed = describeInstalledSkills(skillRoots, {
           writableRoot: userRoot,
-        }).map((s) => s.name);
+        }).map((skill) => skill.name);
         if (onAfterReload) {
           try {
             await onAfterReload();
-          } catch (reloadErr) {
-            console.warn(
-              '[skills] onAfterReload failed:',
-              reloadErr?.message || reloadErr,
-            );
+          } catch (error) {
+            console.warn('[skills] onAfterReload failed:', error?.message || error);
           }
         }
-        const summary =
-          skillCount != null
-            ? `reloaded loader skills=${skillCount} installed=${installed.length}`
-            : `reload marked; installed=${installed.length} (next turn will pick up changes)`;
-        audit({
-          action: 'reload',
-          result: 'success',
-          summary,
-        });
+        const summary = skillCount != null
+          ? `reloaded loader skills=${skillCount} installed=${installed.length}`
+          : `reload marked; installed=${installed.length}`;
+        audit({ action: 'reload', result: 'success', summary });
         return {
           reloaded: Boolean(session),
           installed,
           skill_count: skillCount,
           summary,
         };
-      } catch (err) {
+      } catch (error) {
         audit({
           action: 'reload',
           result: 'failure',
-          error: err?.message || String(err),
+          error: error?.message || String(error),
         });
-        throw err;
+        throw error;
       }
     },
   };
+  return manager;
 }
 
 export {

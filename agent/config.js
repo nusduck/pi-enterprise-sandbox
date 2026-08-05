@@ -5,12 +5,7 @@
 import { readFileSync, existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { loadToolRiskPolicy } from './src/extensions/enterprise-policy/tool-risk-policy.js';
-import {
-  resolveSkillsMode,
-  resolveLocalAllowlist,
-  resolveSkillRoots,
-  SKILLS_MODE,
-} from './src/skills/manager.js';
+import { resolveSkillRoots } from './src/skills/manager.js';
 import { primarySkillRoot, DEFAULT_SKILL_ROOTS } from './src/skills/paths.js';
 import {
   assertFakeLlmAllowed,
@@ -190,15 +185,13 @@ export function composeSystemPrompt(
 /**
  * Production fail-fast for Agent service. Call before listen.
  * @param {NodeJS.ProcessEnv | Record<string, string|undefined>} [env]
- * @param {{ skillsMode?: string }} [opts]
  */
-export function validateProductionConfig(env = process.env, opts = {}) {
+export function validateProductionConfig(env = process.env) {
   if (resolveDeploymentEnv(env) !== 'production') return;
 
   const errors = [];
   const internal = String(env.AGENT_INTERNAL_TOKEN || '').trim();
   const sandboxToken = String(env.SANDBOX_API_TOKEN || '').trim();
-  const skillsMode = opts.skillsMode || resolveSkillsMode(env);
   const productionSkillRoots = resolveSkillRoots(env);
   const requestedProfile = requestedPolicyProfile(env);
   const approvalMode = resolveApprovalMode(env);
@@ -222,12 +215,6 @@ export function validateProductionConfig(env = process.env, opts = {}) {
       `SANDBOX_API_TOKEN is weak or shorter than ${MIN_SECRET_LEN} characters`,
     );
   }
-
-  // Skill installation is allowed in production. It is confined to the
-  // caller's own `<orgId>/<userId>` directory, and `skill_install` carries
-  // `high` risk in the tool-risk table, so every install goes through
-  // approval. Deployments that want none of it set SKILLS_MODE=readonly.
-  void skillsMode;
 
   // The canonical system root and the canonical user-tier base are the only
   // skill mounts production may expose. Any other path is a mount the sandbox
@@ -338,9 +325,7 @@ export function effectiveConfig(cfg = config) {
     MODEL_REGISTRY_PATH: cfg.MODEL_REGISTRY_PATH || process.env.MODEL_REGISTRY_PATH || '<default>',
     APPROVAL_MODE: cfg.APPROVAL_MODE,
     POLICY_PROFILE: cfg.POLICY_PROFILE,
-    SKILLS_MODE: cfg.SKILLS_MODE,
     SKILLS_ROOT: cfg.SKILLS_ROOT,
-    SKILLS_INSTALL_LOCAL_ALLOWLIST: cfg.SKILLS_INSTALL_LOCAL_ALLOWLIST,
     SKILLS_AUDIT_LOG: cfg.SKILLS_AUDIT_LOG ? '<set>' : '<empty>',
     MCP_SERVERS: Array.isArray(cfg.MCP_SERVERS) ? cfg.MCP_SERVERS.map((server) => server.id) : [],
     SESSION_WORKSPACE_CWD: cfg.SESSION_WORKSPACE_CWD,
@@ -351,7 +336,7 @@ export function effectiveConfig(cfg = config) {
   };
 }
 
-export { resolveSkillsMode, SKILLS_MODE, resolveLocalAllowlist, resolveSkillRoots };
+export { resolveSkillRoots };
 export { assertFakeLlmAllowed, isFakeLlmEnabled, FAKE_LLM_ENV };
 
 // Fail closed at import when production tries to enable the test-only fake LLM.
@@ -467,18 +452,9 @@ export const config = {
    * it per agent; it can never relax it.
    */
   TOOL_RISK_POLICY: resolveToolRiskPolicy(),
-  /**
-   * Skill management mode.
-   * - readonly (default): production-safe; skill_install/edit absent; skill tree R/O policy
-   * - development: dedicated skill_install / skill_edit / skill_reload tools enabled
-   * Requires a writable skills volume mount when development (see AGENT_SKILLS_MOUNT).
-   */
-  SKILLS_MODE: resolveSkillsMode(),
   /** Primary skill root on the agent (shared volume). */
   SKILLS_ROOT: primarySkillRoot(skillRoots),
   SKILL_ROOTS: skillRoots,
-  /** Comma-separated allowlisted absolute dirs for local skill_install sources. */
-  SKILLS_INSTALL_LOCAL_ALLOWLIST: resolveLocalAllowlist(),
   /** Optional file path for skill change audit lines (also always console). */
   SKILLS_AUDIT_LOG: process.env.SKILLS_AUDIT_LOG || '',
   DEFAULT_SKILL_ROOTS,

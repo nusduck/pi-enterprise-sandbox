@@ -1,33 +1,24 @@
-/**
- * Two-tier skill roots + low-friction install.
- *
- * Everything here uses local (allowlisted) sources so the suite stays offline;
- * the git path shares the same discovery/naming code after the clone.
- */
+/** User-uploaded and Agent-generated Skill lifecycle tests. */
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { createHash } from 'node:crypto';
 
 import {
-  detectSourceType,
-  discoverSkillPackageDir,
+  createGeneratedSkill,
   describeInstalledSkills,
-  installSkill,
-  readSkillPackageName,
+  editSkillFile,
+  installSkillArchive,
   uninstallSkill,
 } from '../src/skills/install.js';
-import {
-  createSkillManager,
-  skillRootsForIdentity,
-  SKILLS_MODE,
-} from '../src/skills/manager.js';
+import { createSkillManager, skillRootsForIdentity } from '../src/skills/manager.js';
+import { extractSkillArchive } from '../src/skills/archive.js';
+import { createStoredZip } from './support/stored-zip.js';
 
-/** @type {string[]} */
 const tempDirs = [];
-
 async function tmpdir(prefix) {
   const dir = await fsp.mkdtemp(path.join(os.tmpdir(), `${prefix}-`));
   tempDirs.push(dir);
@@ -40,282 +31,314 @@ test.after(async () => {
   }
 });
 
-/**
- * @param {string} dir
- * @param {string} name
- * @param {string} [description]
- */
-function writeSkillPackage(dir, name, description = 'Test skill package.') {
-  fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(
-    path.join(dir, 'SKILL.md'),
-    `---\nname: ${name}\ndescription: ${description}\n---\n\nBody for ${name}.\n`,
-    'utf8',
-  );
-  return dir;
+function skillMd(name, description = 'Test Skill package.') {
+  return `---\nname: ${name}\ndescription: ${description}\n---\n\nInstructions for ${name}.\n`;
 }
 
-test('source type is inferred from the source string', () => {
-  assert.equal(detectSourceType('https://example.com/org/repo'), 'git');
-  assert.equal(detectSourceType('/srv/sources/my-skill'), 'local');
-  // Classified as git so the caller gets the real "HTTPS only" rejection.
-  assert.equal(detectSourceType('git@example.com:org/repo.git'), 'git');
-  assert.throws(() => detectSourceType('  '), /source is required/);
-});
+function writeSkillPackage(dir, name, description = 'Test Skill package.') {
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'SKILL.md'), skillMd(name, description));
+}
 
-test('package directory is discovered inside a source tree', async () => {
-  const root = await tmpdir('skill-src');
-
-  // Package at the root.
-  writeSkillPackage(root, 'flat-skill');
-  assert.deepEqual(discoverSkillPackageDir(root), {
-    dir: path.resolve(root),
-    subpath: '',
-    candidates: [''],
-  });
-
-  // Package nested one level down (the common repo layout).
-  const nested = await tmpdir('skill-src-nested');
-  writeSkillPackage(path.join(nested, 'skills', 'nested-skill'), 'nested-skill');
-  const found = discoverSkillPackageDir(nested);
-  assert.equal(found.subpath, 'skills/nested-skill');
-  assert.equal(readSkillPackageName(found.dir), 'nested-skill');
-
-  // Ambiguity is an error that names the candidates rather than a silent pick.
-  const many = await tmpdir('skill-src-many');
-  writeSkillPackage(path.join(many, 'skills', 'a-skill'), 'a-skill');
-  writeSkillPackage(path.join(many, 'skills', 'b-skill'), 'b-skill');
-  assert.throws(
-    () => discoverSkillPackageDir(many),
-    /2 skill packages; pass subpath/,
-  );
-
-  const none = await tmpdir('skill-src-none');
-  fs.mkdirSync(path.join(none, 'docs'), { recursive: true });
-  assert.throws(() => discoverSkillPackageDir(none), /No SKILL\.md found/);
-});
-
-test('install needs only a source: name and subpath are inferred', async () => {
-  const src = await tmpdir('skill-src');
+test('installs one Skill from a current-turn ZIP archive', async () => {
   const userRoot = await tmpdir('skill-user');
-  writeSkillPackage(path.join(src, 'packages', 'inferred'), 'inferred', 'Inferred.');
-
-  const result = await installSkill({
-    source: src,
+  const zip = createStoredZip([
+    { name: 'uploaded-skill/SKILL.md', content: skillMd('uploaded-skill', 'Uploaded.') },
+    { name: 'uploaded-skill/references/guide.md', content: '# Guide\n' },
+  ]);
+  const result = await installSkillArchive({
+    archiveBytes: zip,
+    archiveName: 'uploaded-skill.zip',
+    attachmentId: 'dataset-1',
     skillRoot: userRoot,
-    localAllowlist: [src],
   });
 
-  assert.equal(result.name, 'inferred');
-  assert.equal(result.description, 'Inferred.');
-  assert.equal(result.source_type, 'local');
-  assert.equal(result.subpath, 'packages/inferred');
-  assert.ok(fs.existsSync(path.join(userRoot, 'inferred', 'SKILL.md')));
+  assert.equal(result.name, 'uploaded-skill');
+  assert.equal(result.source_type, 'upload');
+  assert.equal(result.attachment_id, 'dataset-1');
+  assert.equal(result.package_subpath, 'uploaded-skill');
+  assert.ok(fs.existsSync(path.join(userRoot, 'uploaded-skill', 'SKILL.md')));
+  assert.ok(fs.existsSync(path.join(userRoot, 'uploaded-skill', 'references', 'guide.md')));
 });
 
-test('reinstalling identical content is an explicit no-op', async () => {
-  const src = await tmpdir('skill-src');
+test('reinstalling identical archive content is an explicit no-op', async () => {
   const userRoot = await tmpdir('skill-user');
-  writeSkillPackage(src, 'idem');
-
-  const first = await installSkill({
-    source: src,
+  const zip = createStoredZip([{ name: 'SKILL.md', content: skillMd('idem') }]);
+  const input = {
+    archiveBytes: zip,
+    archiveName: 'idem.zip',
+    attachmentId: 'dataset-idem',
     skillRoot: userRoot,
-    localAllowlist: [src],
-  });
+  };
+  const first = await installSkillArchive(input);
+  const second = await installSkillArchive(input);
   assert.notEqual(first.idempotent, true);
-
-  const second = await installSkill({
-    source: src,
-    skillRoot: userRoot,
-    localAllowlist: [src],
-  });
   assert.equal(second.idempotent, true);
   assert.equal(second.digest, first.digest);
 });
 
-test('an explicit name must agree with the package SKILL.md', async () => {
-  const src = await tmpdir('skill-src');
+test('archive must contain exactly one Skill package', async () => {
   const userRoot = await tmpdir('skill-user');
-  writeSkillPackage(src, 'real-name');
-
+  const zip = createStoredZip([
+    { name: 'one/SKILL.md', content: skillMd('one') },
+    { name: 'two/SKILL.md', content: skillMd('two') },
+  ]);
   await assert.rejects(
-    installSkill({
-      source: src,
-      name: 'wrong-name',
+    installSkillArchive({
+      archiveBytes: zip,
+      archiveName: 'many.zip',
+      attachmentId: 'dataset-many',
       skillRoot: userRoot,
-      localAllowlist: [src],
     }),
-    /does not match requested name/,
+    /exactly one package/,
+  );
+
+  const rootAndNested = createStoredZip([
+    { name: 'SKILL.md', content: skillMd('root-skill') },
+    { name: 'nested/SKILL.md', content: skillMd('nested-skill') },
+  ]);
+  await assert.rejects(
+    installSkillArchive({
+      archiveBytes: rootAndNested,
+      archiveName: 'root-and-nested.zip',
+      attachmentId: 'dataset-root-and-nested',
+      skillRoot: userRoot,
+    }),
+    /exactly one package.*archive-root.*nested/,
   );
 });
 
-test('an install cannot shadow a bundled system skill', async () => {
-  const src = await tmpdir('skill-src');
-  const userRoot = await tmpdir('skill-user');
-  writeSkillPackage(src, 'pdf');
-
+test('archive extraction rejects traversal, links and VCS metadata', async () => {
+  const traversalRoot = path.join(await tmpdir('skill-archive'), 'out');
   await assert.rejects(
-    installSkill({
-      source: src,
+    extractSkillArchive(
+      createStoredZip([{ name: '../escape.txt', content: 'no' }]),
+      traversalRoot,
+    ),
+    /invalid relative path|unsafe path|escape/i,
+  );
+
+  const linkRoot = path.join(await tmpdir('skill-archive-link'), 'out');
+  await assert.rejects(
+    extractSkillArchive(
+      createStoredZip([{ name: 'link', content: '/etc/passwd', mode: 0o120777 }]),
+      linkRoot,
+    ),
+    /symbolic links/i,
+  );
+
+  const vcsRoot = path.join(await tmpdir('skill-archive-vcs'), 'out');
+  await assert.rejects(
+    extractSkillArchive(
+      createStoredZip([{ name: 'package/.GIT/config', content: 'no' }]),
+      vcsRoot,
+    ),
+    /VCS metadata/i,
+  );
+});
+
+test('uploaded and generated Skills cannot shadow bundled Skills', async () => {
+  const userRoot = await tmpdir('skill-user');
+  const zip = createStoredZip([{ name: 'SKILL.md', content: skillMd('pdf') }]);
+  await assert.rejects(
+    installSkillArchive({
+      archiveBytes: zip,
+      archiveName: 'pdf.zip',
+      attachmentId: 'dataset-pdf',
       skillRoot: userRoot,
-      localAllowlist: [src],
       systemSkillNames: ['pdf'],
     }),
-    /bundled system skill and cannot be replaced/,
+    /bundled system Skill/,
   );
-});
-
-test('uninstall removes user packages and refuses unknown ones', async () => {
-  const src = await tmpdir('skill-src');
-  const userRoot = await tmpdir('skill-user');
-  writeSkillPackage(src, 'removable');
-  await installSkill({ source: src, skillRoot: userRoot, localAllowlist: [src] });
-
-  const removed = await uninstallSkill({ name: 'removable', skillRoot: userRoot });
-  assert.equal(removed.name, 'removable');
-  assert.equal(fs.existsSync(path.join(userRoot, 'removable')), false);
-
   await assert.rejects(
-    uninstallSkill({ name: 'removable', skillRoot: userRoot }),
-    /is not installed in the user skill root/,
+    createGeneratedSkill({
+      name: 'pdf',
+      description: 'Generated.',
+      instructions: 'Do a thing.',
+      skillRoot: userRoot,
+      systemSkillNames: ['pdf'],
+    }),
+    /bundled system Skill/,
   );
 });
 
-test('listing tags each package with its tier, system shadowing user', async () => {
+test('creates an Agent-generated Skill atomically with optional files', async () => {
+  const userRoot = await tmpdir('skill-user');
+  const result = await createGeneratedSkill({
+    name: 'generated-skill',
+    description: 'Generated through conversation.',
+    instructions: '# Workflow\n\nAsk for the target, then execute.',
+    files: [{ path: 'references/checklist.md', content: '# Checklist\n' }],
+    skillRoot: userRoot,
+  });
+  assert.equal(result.name, 'generated-skill');
+  assert.equal(result.source_type, 'agent_generated');
+  assert.equal(result.generated_files, 2);
+  assert.match(
+    fs.readFileSync(path.join(userRoot, 'generated-skill', 'SKILL.md'), 'utf8'),
+    /Generated through conversation/,
+  );
+});
+
+test('generated package rejects unsafe or duplicate file paths', async () => {
+  const userRoot = await tmpdir('skill-user');
+  const base = {
+    name: 'generated-skill',
+    description: 'Generated.',
+    instructions: 'Instructions.',
+    skillRoot: userRoot,
+  };
+  await assert.rejects(
+    createGeneratedSkill({ ...base, files: [{ path: '../escape', content: 'x' }] }),
+    /unsafe/,
+  );
+  await assert.rejects(
+    createGeneratedSkill({
+      ...base,
+      files: [
+        { path: 'notes.md', content: 'a' },
+        { path: 'NOTES.md', content: 'b' },
+      ],
+    }),
+    /duplicate/,
+  );
+  await assert.rejects(
+    createGeneratedSkill({ ...base, files: [{ path: 'SKILL.md', content: 'x' }] }),
+    /generated from name/,
+  );
+  await assert.rejects(
+    createGeneratedSkill({ ...base, files: [{ path: '.GIT/config', content: 'x' }] }),
+    /must not contain \.git/i,
+  );
+});
+
+test('skill_edit only changes an existing user package and cannot install one', async () => {
+  const userRoot = await tmpdir('skill-user');
+  await assert.rejects(
+    editSkillFile({
+      skillRoot: userRoot,
+      path: 'new-skill/SKILL.md',
+      content: skillMd('new-skill'),
+    }),
+    /not found|not a directory/,
+  );
+
+  writeSkillPackage(path.join(userRoot, 'existing'), 'existing');
+  await editSkillFile({
+    skillRoot: userRoot,
+    path: 'existing/notes.md',
+    content: '# Updated\n',
+  });
+  assert.equal(
+    fs.readFileSync(path.join(userRoot, 'existing', 'notes.md'), 'utf8'),
+    '# Updated\n',
+  );
+  await assert.rejects(
+    editSkillFile({
+      skillRoot: userRoot,
+      path: 'existing/SKILL.md',
+      content: skillMd('renamed'),
+    }),
+    /must match installed package/,
+  );
+  await assert.rejects(
+    editSkillFile({
+      skillRoot: userRoot,
+      path: 'existing/.GIT/config',
+      content: 'no',
+    }),
+    /cannot write VCS metadata/,
+  );
+});
+
+test('uninstall and two-tier listing remain user-scoped', async () => {
   const systemRoot = await tmpdir('skill-system');
   const userRoot = await tmpdir('skill-user');
-  writeSkillPackage(path.join(systemRoot, 'bundled'), 'bundled', 'From the image.');
-  writeSkillPackage(path.join(userRoot, 'installed'), 'installed', 'From an install.');
-  // Same name in both tiers: the system copy is what actually loads.
-  writeSkillPackage(path.join(systemRoot, 'shared'), 'shared', 'System copy.');
-  writeSkillPackage(path.join(userRoot, 'shared'), 'shared', 'User copy.');
-
+  writeSkillPackage(path.join(systemRoot, 'bundled'), 'bundled', 'System.');
+  writeSkillPackage(path.join(userRoot, 'installed'), 'installed', 'User.');
   const listed = describeInstalledSkills([systemRoot, userRoot], {
     writableRoot: userRoot,
   });
-  const byName = Object.fromEntries(listed.map((s) => [s.name, s]));
+  assert.equal(listed.find((skill) => skill.name === 'bundled')?.tier, 'system');
+  assert.equal(listed.find((skill) => skill.name === 'installed')?.tier, 'user');
 
-  assert.equal(byName.bundled.tier, 'system');
-  assert.equal(byName.bundled.editable, false);
-  assert.equal(byName.installed.tier, 'user');
-  assert.equal(byName.installed.editable, true);
-  assert.equal(byName.shared.tier, 'system');
-  assert.equal(byName.shared.description, 'System copy.');
-  assert.equal(listed.length, 3, 'shadowed duplicate is reported once');
+  await uninstallSkill({ name: 'installed', skillRoot: userRoot });
+  assert.equal(fs.existsSync(path.join(userRoot, 'installed')), false);
+  assert.ok(fs.existsSync(path.join(systemRoot, 'bundled')));
 });
 
-test('SkillManager writes only to the caller\'s own directory', async () => {
-  const systemRoot = await tmpdir('skill-system');
-  const userRoot = await tmpdir('skill-user');
-  const src = await tmpdir('skill-src');
-  writeSkillPackage(path.join(systemRoot, 'bundled'), 'bundled');
-  writeSkillPackage(src, 'from-manager');
-
-  // readonly is the kill switch, not the default.
-  const readonly = createSkillManager({
-    mode: SKILLS_MODE.READONLY,
-    skillRoots: [systemRoot, userRoot],
-    localAllowlist: [src],
-  });
-  await assert.rejects(
-    readonly.install({ source: src }),
-    /disables skill installation/,
-  );
-
-  const dev = createSkillManager({
-    mode: SKILLS_MODE.ENABLED,
-    skillRoots: [systemRoot, userRoot],
-    localAllowlist: [src],
-  });
-  assert.equal(dev.userSkillRoot, path.resolve(userRoot));
-
-  const installed = await dev.install({ source: src });
-  assert.equal(installed.name, 'from-manager');
-  assert.ok(fs.existsSync(path.join(userRoot, 'from-manager', 'SKILL.md')));
-  assert.equal(
-    fs.existsSync(path.join(systemRoot, 'from-manager')),
-    false,
-    'system root must stay untouched',
-  );
-
-  // A bundled package cannot be replaced through the manager either.
-  const shadow = await tmpdir('skill-src-shadow');
-  writeSkillPackage(shadow, 'bundled');
-  const devShadow = createSkillManager({
-    mode: SKILLS_MODE.ENABLED,
-    skillRoots: [systemRoot, userRoot],
-    localAllowlist: [shadow],
-  });
-  await assert.rejects(
-    devShadow.install({ source: shadow }),
-    /bundled system skill/,
-  );
-
-  // Edits resolve under the user root, so a system path is out of bounds.
-  await dev.edit({
-    path: 'from-manager/notes.md',
-    content: '# notes\n',
-  });
-  assert.ok(fs.existsSync(path.join(userRoot, 'from-manager', 'notes.md')));
-  await assert.rejects(
-    dev.edit({ path: path.join(systemRoot, 'bundled', 'SKILL.md'), content: 'x' }),
-    /escape|outside/i,
-  );
-});
-
-test('no resolvable per-user directory refuses writes instead of using a shared root', async () => {
-  const systemRoot = await tmpdir('skill-system');
-  for (const roots of [
-    // Only the canonical system root.
-    ['/home/sandbox/skill'],
-    // Only the shared user *base* — a package there would belong to nobody.
-    ['/home/sandbox/skill', '/home/sandbox/skill-user'],
-  ]) {
-    const manager = createSkillManager({ mode: SKILLS_MODE.ENABLED, skillRoots: roots });
-    assert.equal(manager.userSkillRoot, null, roots.join());
-    await assert.rejects(
-      manager.install({ source: systemRoot }),
-      /no per-user skill directory resolved/,
-    );
-  }
-});
-
-test('an identity gives each user their own directory, and only their own', async () => {
+test('SkillManager downloads only the requested attachment id and isolates users', async () => {
   const systemRoot = await tmpdir('skill-system');
   const userBase = await tmpdir('skill-user-base');
-  const src = await tmpdir('skill-src');
-  writeSkillPackage(src, 'mine');
-
-  const alice = { orgId: '01K0G2PAV8FPMVC9QHJG7JPN4Z', userId: '01K0G2PAV8FPMVC9QHJG7JPN50' };
-  const bob = { orgId: '01K0G2PAV8FPMVC9QHJG7JPN4Z', userId: '01K0G2PAV8FPMVC9QHJG7JPN51' };
-
-  const managerFor = (identity) =>
+  const alice = {
+    orgId: '01K0G2PAV8FPMVC9QHJG7JPN4Z',
+    userId: '01K0G2PAV8FPMVC9QHJG7JPN50',
+  };
+  const bob = {
+    orgId: alice.orgId,
+    userId: '01K0G2PAV8FPMVC9QHJG7JPN51',
+  };
+  const zip = createStoredZip([{ name: 'SKILL.md', content: skillMd('mine') }]);
+  const sha256 = createHash('sha256').update(zip).digest('hex');
+  const seen = [];
+  const auditEvents = [];
+  const managerFor = (identity, withDownload = false) =>
     createSkillManager({
-      mode: SKILLS_MODE.ENABLED,
       identity,
-      skillRoots: skillRootsForIdentity(identity, {
-        systemRoot,
-        userRootBase: userBase,
-      }),
-      localAllowlist: [src],
+      skillRoots: skillRootsForIdentity(identity, { systemRoot, userRootBase: userBase }),
+      auditSink: (event) => auditEvents.push(event),
+      getMeta: () => ({ runId: 'run-skill-test', sessionId: 'session-skill-test' }),
+      ...(withDownload
+        ? {
+            downloadArchive: async ({ attachmentId, signal }) => {
+              seen.push(attachmentId);
+              assert.equal(signal instanceof AbortSignal, true);
+              return new Response(zip, {
+                headers: {
+                  'content-type': 'application/zip',
+                  'content-length': String(zip.length),
+                  'x-dataset-sha256': sha256,
+                },
+              });
+            },
+          }
+        : {}),
     });
 
-  const aliceManager = managerFor(alice);
-  await aliceManager.install({ source: src });
+  const aliceManager = managerFor(alice, true);
+  await aliceManager.install({
+    attachmentId: 'dataset-mine',
+    archiveName: 'mine.zip',
+    declaredSize: zip.length,
+  });
+  assert.deepEqual(seen, ['dataset-mine']);
+  assert.deepEqual(aliceManager.listInstalled(), ['mine']);
+  assert.deepEqual(managerFor(bob).listInstalled(), []);
+  assert.equal(auditEvents[0].meta.organization_id, alice.orgId);
+  assert.equal(auditEvents[0].meta.user_id, alice.userId);
+  assert.equal(auditEvents[0].meta.run_id, 'run-skill-test');
+  assert.equal(auditEvents[0].meta.session_id, 'session-skill-test');
+});
 
-  assert.ok(
-    fs.existsSync(path.join(userBase, alice.orgId, alice.userId, 'mine', 'SKILL.md')),
+test('SkillManager rejects malformed install inputs before downloading bytes', async () => {
+  const userRoot = await tmpdir('skill-user');
+  let downloads = 0;
+  const manager = createSkillManager({
+    identity: { orgId: 'org-1', userId: 'user-1' },
+    skillRoots: ['/system-skills', userRoot],
+    userSkillRoot: userRoot,
+    downloadArchive: async () => {
+      downloads += 1;
+      throw new Error('must not run');
+    },
+  });
+  await assert.rejects(
+    manager.install({ attachmentId: '', archiveName: 'skill.zip' }),
+    /attachment_id is required/,
   );
-  assert.deepEqual(
-    aliceManager.describeInstalled().map((s) => s.name),
-    ['mine'],
+  await assert.rejects(
+    manager.install({ attachmentId: 'dataset-1', archiveName: 'skill.tar.gz' }),
+    /ZIP attachments only/,
   );
-
-  // Bob shares the org but sees none of Alice's packages.
-  assert.deepEqual(managerFor(bob).describeInstalled(), []);
-  assert.equal(
-    fs.existsSync(path.join(userBase, bob.orgId, bob.userId, 'mine')),
-    false,
-  );
+  assert.equal(downloads, 0);
 });

@@ -69,6 +69,7 @@ export function Composer() {
   } = useChat();
 
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const skillFileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const [runningAction, setRunningAction] = useState<RunningAction>('steer');
   const [submitting, setSubmitting] = useState(false);
@@ -134,6 +135,10 @@ export function Composer() {
 
   function openFilePicker() {
     fileInputRef.current?.click();
+  }
+
+  function openSkillPicker() {
+    skillFileInputRef.current?.click();
   }
 
   async function onPrimaryAction() {
@@ -459,6 +464,32 @@ export function Composer() {
         </div>
 
         <div className="input-inner">
+          <button
+            className="btn btn-upload"
+            id="btn-install-skill"
+            title="Install a Skill ZIP"
+            aria-label="Install a Skill ZIP"
+            type="button"
+            onClick={openSkillPicker}
+            disabled={mode !== 'idle'}
+          >
+            🧩
+          </button>
+          <input
+            ref={skillFileInputRef}
+            type="file"
+            accept=".zip,application/zip"
+            hidden
+            onChange={(e) => {
+              if (e.target.files?.length) {
+                void handleFilesSelected(e.target.files);
+                if (!draftText.trim()) {
+                  setDraftText('Install the attached Skill ZIP for my account.');
+                }
+                e.target.value = '';
+              }
+            }}
+          />
           <button
             className="btn btn-upload"
             id="btn-upload"

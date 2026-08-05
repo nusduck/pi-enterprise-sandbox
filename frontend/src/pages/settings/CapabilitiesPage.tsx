@@ -447,8 +447,8 @@ export function CapabilitiesPage() {
           <h2 className="mgmt-title">Capabilities</h2>
           <p className="mgmt-subtitle">
             Skills, MCP servers, tools, and models from the enterprise registry.
-            Ordinary users see available tools; admin edit requires backend
-            support.
+            Users can install a Skill ZIP from chat or ask the Agent to generate
+            one; every Skill mutation is submitted for approval.
           </p>
         </div>
         <button

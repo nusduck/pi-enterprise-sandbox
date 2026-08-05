@@ -9,6 +9,8 @@ import { createFakeRedis } from '../redis/fake-redis.js';
 import { createRepositoryBundle } from '../../src/bootstrap/container.js';
 import {
   PiRunExecutor,
+  appendCurrentTurnAttachmentContext,
+  attachmentsFromTriggeringMessage,
   createPiRunExecutorFactory,
   generateRunLeaseOwnerToken,
   derivePromptFromTriggeringMessage,
@@ -326,6 +328,18 @@ describe('derivePromptFromTriggeringMessage', () => {
       'workspacePath' in imageAttachmentsFromTriggeringMessage(message)[0],
       false,
     );
+    assert.deepEqual(attachmentsFromTriggeringMessage(message), [{
+      attachmentId: 'dataset-1',
+      filename: 'image',
+      mimeType: 'image/png',
+      size: 123,
+    }]);
+    const prompt = appendCurrentTurnAttachmentContext(
+      'look',
+      attachmentsFromTriggeringMessage(message),
+    );
+    assert.match(prompt, /attachment_id="dataset-1"/);
+    assert.doesNotMatch(prompt, /\.\.\/\.\.\/outside\.png/);
   });
 });
 
@@ -468,10 +482,9 @@ describe('PiRunExecutor', () => {
     assert.equal(result.outcome, RUN_STATUS.SUCCEEDED);
     assert.equal(loaderInput.attachments[0].attachmentId, 'dataset-1');
     assert.equal(loaderInput.sandboxSessionId, SBX);
-    assert.deepEqual(promptInput, {
-      text: 'describe image',
-      options: { images: [image] },
-    });
+    assert.match(promptInput.text, /^describe image/);
+    assert.match(promptInput.text, /attachment_id="dataset-1"/);
+    assert.deepEqual(promptInput.options, { images: [image] });
     await exec.dispose();
   });
 
@@ -974,6 +987,8 @@ describe('PiRunExecutor', () => {
     assert.equal(runtimeContexts[0].sandboxSessionId, SBX);
     assert.equal(bundleDeps[0].observability.modelId, fullModel.id);
     assert.equal(bundleDeps[0].observability.provider, fullModel.provider);
+    assert.equal(typeof bundleDeps[0].getAgentSession, 'function');
+    assert.ok(bundleDeps[0].getAgentSession(), 'runtime Session is available lazily');
     assert.equal(
       typeof bundleDeps[0].isDurableInteractionPending,
       'function',

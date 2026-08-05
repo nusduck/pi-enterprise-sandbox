@@ -71,11 +71,10 @@ export function requestedModelIdFromTriggeringMessage(message) {
 }
 
 /**
- * Extract current-turn image attachment references without trusting a browser
- * path as bytes. The worker later resolves each id through the owner-scoped
- * attachment store and converts the exact bytes to Pi ImageContent.
+ * Extract current-turn attachment identities without trusting client-provided
+ * workspace paths. Sandbox re-checks session and owner when bytes are fetched.
  */
-export function imageAttachmentsFromTriggeringMessage(message) {
+export function attachmentsFromTriggeringMessage(message) {
   const content = message?.contentJson;
   if (!content || typeof content !== 'object') return [];
   const messages = Array.isArray(content.messages) ? content.messages : [];
@@ -90,14 +89,59 @@ export function imageAttachmentsFromTriggeringMessage(message) {
       : [];
   return attachments.flatMap((item) => {
     if (!item || typeof item !== 'object') return [];
-    const mimeType = String(item.mime_type ?? item.mimeType ?? '').trim().toLowerCase();
     const attachmentId = String(item.attachment_id ?? item.attachmentId ?? '').trim();
-    if (!mimeType.startsWith('image/') || !attachmentId) return [];
+    if (!attachmentId) return [];
+    const mimeType = String(item.mime_type ?? item.mimeType ?? '')
+      .trim()
+      .toLowerCase();
     return [{
       attachmentId,
+      filename: String(
+        item.filename ?? item.name ?? (mimeType.startsWith('image/') ? 'image' : 'attachment'),
+      ),
       mimeType,
-      name: String(item.filename ?? item.name ?? 'image'),
-      size: Number(item.size) || null,
+      size: Number(item.size) || 0,
+    }];
+  });
+}
+
+/** Add authoritative attachment ids to the model prompt for attachment tools. */
+export function appendCurrentTurnAttachmentContext(prompt, attachments) {
+  if (!Array.isArray(attachments) || attachments.length === 0) return prompt;
+  const lines = [
+    '## Current-turn attachment identifiers',
+    '',
+    'These ids are valid only for files attached in this user turn.',
+    'Use attachment_id for attachment-aware tools; never treat workspace paths as install sources.',
+    '',
+    ...attachments.map((attachment, index) =>
+      `${index + 1}. filename=${JSON.stringify(attachment.filename)}` +
+      ` attachment_id=${JSON.stringify(attachment.attachmentId)}` +
+      ` mime=${JSON.stringify(attachment.mimeType || 'application/octet-stream')}` +
+      ` size=${Number(attachment.size) || 0}`,
+    ),
+  ];
+  const block = lines.join('\n');
+  if (typeof prompt === 'string') return `${prompt}\n\n${block}`;
+  if (Array.isArray(prompt)) {
+    return [...prompt, { type: 'text', text: block }];
+  }
+  return block;
+}
+
+/**
+ * Extract current-turn image attachment references without trusting a browser
+ * path as bytes. The worker later resolves each id through the owner-scoped
+ * attachment store and converts the exact bytes to Pi ImageContent.
+ */
+export function imageAttachmentsFromTriggeringMessage(message) {
+  return attachmentsFromTriggeringMessage(message).flatMap((item) => {
+    if (!item.mimeType.startsWith('image/')) return [];
+    return [{
+      attachmentId: item.attachmentId,
+      mimeType: item.mimeType,
+      name: item.filename,
+      size: item.size || null,
     }];
   });
 }

@@ -1,7 +1,4 @@
-/**
- * skill-lifecycle registers the skill tools that SKILLS_MODE=development has
- * always been documented to provide, and only then.
- */
+/** Governed uploaded/generated Skill lifecycle tools. */
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
@@ -26,18 +23,23 @@ const RUN_CTX = Object.freeze({
   executionFenceToken: 3,
 });
 
-/** Minimal SkillManager double. */
+const ZIP_ATTACHMENT = Object.freeze({
+  attachmentId: 'dataset-skill-1',
+  filename: 'uploaded-skill.zip',
+  mimeType: 'application/zip',
+  size: 123,
+});
+
 function fakeSkillManager(overrides = {}) {
   return {
-    mode: 'enabled',
     identity: { orgId: RUN_CTX.orgId, userId: RUN_CTX.userId },
     userSkillRoot: `/home/sandbox/skill-user/${RUN_CTX.orgId}/${RUN_CTX.userId}`,
     skillRoots: [
       '/home/sandbox/skill',
       `/home/sandbox/skill-user/${RUN_CTX.orgId}/${RUN_CTX.userId}`,
     ],
-    isEnabled: () => true,
-    install: async () => ({ name: 'x', summary: 'installed x' }),
+    install: async () => ({ name: 'uploaded', summary: 'installed uploaded' }),
+    create: async () => ({ name: 'generated', summary: 'installed generated' }),
     uninstall: async () => ({ name: 'x', summary: 'uninstalled x' }),
     edit: async () => ({ path: 'x/SKILL.md', bytes: 1 }),
     reload: async () => ({ reloaded: true, installed: ['x'] }),
@@ -47,263 +49,249 @@ function fakeSkillManager(overrides = {}) {
   };
 }
 
-/** Capture pi.registerTool calls. */
 function collectTools(factory) {
   const tools = new Map();
   factory({
-    registerTool: (def) => tools.set(def.name, def),
+    registerTool: (definition) => tools.set(definition.name, definition),
     on: () => {},
   });
   return tools;
 }
 
+function extension(manager = fakeSkillManager(), attachments = [ZIP_ATTACHMENT]) {
+  return createSkillLifecycleExtension({
+    runContext: RUN_CTX,
+    deps: { skillManager: manager, currentTurnAttachments: attachments },
+  });
+}
+
 describe('skill-lifecycle extension', () => {
-  it('registers the documented skill tools', () => {
-    const tools = collectTools(
-      createSkillLifecycleExtension({
-        runContext: RUN_CTX,
-        deps: { skillManager: fakeSkillManager() },
-      }),
-    );
-    assert.deepEqual(
-      [...tools.keys()].sort(),
-      [...SKILL_LIFECYCLE_TOOL_NAMES].sort(),
-    );
+  it('registers only the supported user lifecycle tools', () => {
+    const tools = collectTools(extension());
+    assert.deepEqual([...tools.keys()].sort(), [...SKILL_LIFECYCLE_TOOL_NAMES].sort());
   });
 
-  it('refuses to construct without a manager, when disabled, or with no user dir', () => {
+  it('requires a complete manager and per-user directory', () => {
     assert.throws(
       () => createSkillLifecycleExtension({ runContext: RUN_CTX, deps: {} }),
       /SKILL_MANAGER_REQUIRED/,
     );
     assert.throws(
-      () =>
-        createSkillLifecycleExtension({
-          runContext: RUN_CTX,
-          deps: {
-            skillManager: fakeSkillManager({
-              mode: 'readonly',
-              isEnabled: () => false,
-            }),
-          },
-        }),
-      /SKILLS_MODE_REQUIRED/,
+      () => extension(fakeSkillManager({ create: undefined })),
+      /SKILL_MANAGER_REQUIRED/,
     );
     assert.throws(
-      () =>
-        createSkillLifecycleExtension({
-          runContext: RUN_CTX,
-          deps: { skillManager: fakeSkillManager({ userSkillRoot: null }) },
-        }),
+      () => extension(fakeSkillManager({ userSkillRoot: null })),
       /SKILL_USER_ROOT_REQUIRED/,
     );
   });
 
-  it('install reloads so the skill is usable in the same turn', async () => {
-    let reloaded = false;
+  it('installs only a ZIP attached in the current turn and reloads', async () => {
+    let installed;
+    let reloads = 0;
     const tools = collectTools(
-      createSkillLifecycleExtension({
-        runContext: RUN_CTX,
-        deps: {
-          skillManager: fakeSkillManager({
-            reload: async () => {
-              reloaded = true;
-              return { reloaded: true, installed: ['inferred'] };
-            },
-            install: async (params) => {
-              assert.equal(params.source, 'https://example.com/org/repo');
-              return { name: 'inferred', summary: 'installed inferred' };
-            },
-          }),
+      extension(fakeSkillManager({
+        install: async (input) => {
+          installed = input;
+          return { name: 'uploaded-skill', summary: 'installed uploaded-skill' };
         },
-      }),
+        reload: async () => {
+          reloads += 1;
+          return { reloaded: true, installed: ['uploaded-skill'] };
+        },
+      })),
     );
-    const result = await tools.get('skill_install').execute('call-1', {
-      source: 'https://example.com/org/repo',
+    const result = await tools.get('skill_install').execute('call-install', {
+      attachment_id: ZIP_ATTACHMENT.attachmentId,
+      filename: ZIP_ATTACHMENT.filename,
     });
-    // Pi AgentToolResult shape — bare objects break the next model turn.
-    assert.ok(Array.isArray(result.content));
-    assert.equal(result.content[0]?.type, 'text');
-    assert.match(result.content[0]?.text ?? '', /inferred/);
-    assert.equal(result.details?.name, 'inferred');
-    assert.equal(reloaded, true);
+    assert.deepEqual(installed, {
+      attachmentId: ZIP_ATTACHMENT.attachmentId,
+      archiveName: ZIP_ATTACHMENT.filename,
+      declaredSize: ZIP_ATTACHMENT.size,
+    });
+    assert.equal(reloads, 1);
+    assert.equal(result.details?.name, 'uploaded-skill');
     assert.equal(result.details?.reload?.reloaded, true);
   });
 
-  it('a failed reload does not lose the successful install', async () => {
-    const tools = collectTools(
-      createSkillLifecycleExtension({
-        runContext: RUN_CTX,
-        deps: {
-          skillManager: fakeSkillManager({
-            reload: async () => {
-              throw new Error('loader exploded');
-            },
-          }),
-        },
+  it('rejects non-current, renamed and non-ZIP attachment inputs', async () => {
+    const tools = collectTools(extension());
+    await assert.rejects(
+      tools.get('skill_install').execute('call-install', {
+        attachment_id: 'older-dataset',
+        filename: 'uploaded-skill.zip',
       }),
+      /current user turn/,
     );
-    const result = await tools.get('skill_install').execute('call-1', {
-      source: '/srv/src',
+    await assert.rejects(
+      tools.get('skill_install').execute('call-install', {
+        attachment_id: ZIP_ATTACHMENT.attachmentId,
+        filename: 'renamed.zip',
+      }),
+      /does not match/,
+    );
+    const textTools = collectTools(extension(fakeSkillManager(), [{
+      attachmentId: 'dataset-text',
+      filename: 'notes.txt',
+      mimeType: 'text/plain',
+      size: 5,
+    }]));
+    await assert.rejects(
+      textTools.get('skill_install').execute('call-install', {
+        attachment_id: 'dataset-text',
+        filename: 'notes.txt',
+      }),
+      /\.zip attachments only/,
+    );
+  });
+
+  it('creates an Agent-generated Skill as one approved atomic mutation', async () => {
+    let generated;
+    const tools = collectTools(extension(fakeSkillManager({
+      create: async (input) => {
+        generated = input;
+        return { name: input.name, summary: `installed ${input.name}` };
+      },
+    })));
+    const input = {
+      name: 'generated-skill',
+      description: 'Generated with the user.',
+      instructions: '# Workflow\n\nDo the work.',
+      files: [{ path: 'references/guide.md', content: '# Guide' }],
+    };
+    const result = await tools.get('skill_create').execute('call-create', input);
+    assert.deepEqual(generated, input);
+    assert.equal(result.details?.name, 'generated-skill');
+    assert.equal(result.details?.reload?.reloaded, true);
+  });
+
+  it('preserves a successful mutation when reload reports an error', async () => {
+    const tools = collectTools(extension(fakeSkillManager({
+      reload: async () => {
+        throw new Error('loader exploded');
+      },
+    })));
+    const result = await tools.get('skill_create').execute('call-create', {
+      name: 'generated',
+      description: 'Generated.',
+      instructions: 'Instructions.',
     });
-    assert.ok(Array.isArray(result.content));
-    assert.equal(result.details?.name, 'x');
+    assert.equal(result.details?.name, 'generated');
     assert.equal(result.details?.reload?.reloaded, false);
     assert.match(result.details?.reload?.error ?? '', /loader exploded/);
   });
 
-  it('skill_list returns AgentToolResult with system + user tiers', async () => {
-    const tools = collectTools(
-      createSkillLifecycleExtension({
-        runContext: RUN_CTX,
-        deps: {
-          skillManager: fakeSkillManager({
-            describeInstalled: () => [
-              {
-                name: 'pdf',
-                tier: 'system',
-                editable: false,
-                path: '/home/sandbox/skill/pdf',
-                root: '/home/sandbox/skill',
-                description: 'System bundled PDF skill',
-              },
-              {
-                name: 'my-team-skill',
-                tier: 'user',
-                editable: true,
-                path: `/home/sandbox/skill-user/${RUN_CTX.orgId}/${RUN_CTX.userId}/my-team-skill`,
-                root: `/home/sandbox/skill-user/${RUN_CTX.orgId}/${RUN_CTX.userId}`,
-                description: 'User-installed skill',
-              },
-            ],
-          }),
+  it('lists system and user tiers in AgentToolResult shape', async () => {
+    const tools = collectTools(extension(fakeSkillManager({
+      describeInstalled: () => [
+        {
+          name: 'pdf',
+          tier: 'system',
+          editable: false,
+          path: '/home/sandbox/skill/pdf',
+          root: '/home/sandbox/skill',
+          description: 'System PDF Skill',
         },
-      }),
-    );
+        {
+          name: 'mine',
+          tier: 'user',
+          editable: true,
+          path: `${fakeSkillManager().userSkillRoot}/mine`,
+          root: fakeSkillManager().userSkillRoot,
+          description: 'User Skill',
+        },
+      ],
+    })));
     const result = await tools.get('skill_list').execute('call-list', {});
-    // Pi AgentToolResult shape — bare objects break the next model turn.
-    assert.ok(Array.isArray(result.content), 'content must be iterable');
-    assert.equal(result.content[0]?.type, 'text');
-    const text = result.content[0]?.text ?? '';
-    assert.match(text, /"tier":"system"/);
-    assert.match(text, /"tier":"user"/);
-    assert.match(text, /system_skills/);
-    assert.match(text, /user_skills/);
-    const body = JSON.parse(text);
+    assert.ok(Array.isArray(result.content));
+    const body = JSON.parse(result.content[0].text);
     assert.equal(body.counts.system, 1);
     assert.equal(body.counts.user, 1);
-    assert.equal(body.system_skills[0].name, 'pdf');
     assert.equal(body.system_skills[0].editable, false);
-    assert.equal(body.user_skills[0].name, 'my-team-skill');
     assert.equal(body.user_skills[0].editable, true);
   });
 
-  it('loads in the bundle when an enabled manager is injected', () => {
-    const names = extensionFactoryNames(
-      createEnterpriseExtensionBundle(RUN_CTX, {
+  it('loads by default with a per-run manager and stays absent without one', () => {
+    assert.deepEqual(
+      extensionFactoryNames(createEnterpriseExtensionBundle(RUN_CTX, {
         skillManager: fakeSkillManager(),
-      }),
+      })),
+      [...REQUIRED_EXTENSION_NAMES, 'skill-lifecycle'],
     );
-    assert.deepEqual(names, [...REQUIRED_EXTENSION_NAMES, 'skill-lifecycle']);
-  });
 
-  it('builds the manager per Run, bound to that Run identity', () => {
     const seen = [];
-    const names = extensionFactoryNames(
-      createEnterpriseExtensionBundle(RUN_CTX, {
-        skillManagerFactory: (runContext) => {
-          seen.push({ orgId: runContext.orgId, userId: runContext.userId });
+    const session = { reload: async () => {} };
+    const getAgentSession = () => session;
+    assert.deepEqual(
+      extensionFactoryNames(createEnterpriseExtensionBundle(RUN_CTX, {
+        getAgentSession,
+        skillManagerFactory: (runContext, lifecycleDeps) => {
+          seen.push([
+            runContext.orgId,
+            runContext.userId,
+            lifecycleDeps?.getAgentSession?.(),
+          ]);
           return fakeSkillManager();
         },
-      }),
+      })),
+      [...REQUIRED_EXTENSION_NAMES, 'skill-lifecycle'],
     );
-    assert.deepEqual(names, [...REQUIRED_EXTENSION_NAMES, 'skill-lifecycle']);
-    assert.deepEqual(seen, [{ orgId: RUN_CTX.orgId, userId: RUN_CTX.userId }]);
-  });
-
-  it('a factory returning null keeps the extension out (no per-user dir)', () => {
-    assert.deepEqual(
-      extensionFactoryNames(
-        createEnterpriseExtensionBundle(RUN_CTX, {
-          skillManagerFactory: () => null,
-        }),
-      ),
-      [...REQUIRED_EXTENSION_NAMES],
-    );
-  });
-
-  it('stays out of the bundle when installation is disabled', () => {
+    assert.deepEqual(seen, [[RUN_CTX.orgId, RUN_CTX.userId, session]]);
     assert.deepEqual(
       extensionFactoryNames(createEnterpriseExtensionBundle(RUN_CTX)),
       [...REQUIRED_EXTENSION_NAMES],
     );
     assert.deepEqual(
-      extensionFactoryNames(
-        createEnterpriseExtensionBundle(RUN_CTX, {
-          skillManager: fakeSkillManager({
-            isEnabled: () => false,
-            mode: 'readonly',
-          }),
-        }),
-      ),
-      [...REQUIRED_EXTENSION_NAMES],
-    );
-    // Enabled but with no per-user directory: no write tools.
-    assert.deepEqual(
-      extensionFactoryNames(
-        createEnterpriseExtensionBundle(RUN_CTX, {
-          skillManager: fakeSkillManager({ userSkillRoot: null }),
-        }),
-      ),
+      extensionFactoryNames(createEnterpriseExtensionBundle(RUN_CTX, {
+        skillManagerFactory: () => null,
+      })),
       [...REQUIRED_EXTENSION_NAMES],
     );
   });
 
-  it('an explicit AgentVersion list stays authoritative', () => {
-    // Listing it requires the manager…
+  it('keeps an explicit AgentVersion extension list authoritative', () => {
     assert.throws(
-      () =>
-        createEnterpriseExtensionBundle(RUN_CTX, {
-          extensions: [...REQUIRED_EXTENSION_NAMES, 'skill-lifecycle'],
-        }),
+      () => createEnterpriseExtensionBundle(RUN_CTX, {
+        extensions: [...REQUIRED_EXTENSION_NAMES, 'skill-lifecycle'],
+      }),
       /SKILL_MANAGER_REQUIRED/,
     );
-    // …and omitting it keeps it out even when a manager is available, because
-    // pi-runtime-factory matches the factory list against the AgentVersion.
     assert.deepEqual(
-      extensionFactoryNames(
-        createEnterpriseExtensionBundle(RUN_CTX, {
-          extensions: [...REQUIRED_EXTENSION_NAMES],
-          skillManager: fakeSkillManager(),
-        }),
-      ),
+      extensionFactoryNames(createEnterpriseExtensionBundle(RUN_CTX, {
+        extensions: [...REQUIRED_EXTENSION_NAMES],
+        skillManager: fakeSkillManager(),
+      })),
       [...REQUIRED_EXTENSION_NAMES],
     );
   });
 
-  it('skill tools are classified and priced by the risk table', async () => {
+  it('requires approval for every mutation and allows listing', async () => {
     for (const name of SKILL_LIFECYCLE_TOOL_NAMES) {
       assert.equal(classifyTool(name).class, 'local_low', name);
     }
-
-    // Default config: skill_install is high risk → approval; skill_list is low.
+    const mutationNames = ['skill_install', 'skill_create', 'skill_edit', 'skill_uninstall'];
     const engine = createPolicyEngine({
       auditSink: async () => {},
       toolRiskPolicy: {
-        tools: { skill_install: 'high', skill_list: 'low' },
+        tools: {
+          skill_list: 'low',
+          ...Object.fromEntries(mutationNames.map((name) => [name, 'high'])),
+        },
       },
     });
-    const ctx = { ...RUN_CTX };
-    const install = await engine.evaluateToolCall({
-      toolName: 'skill_install',
-      args: { source: 'https://example.com/repo' },
-      runContext: ctx,
-    });
-    assert.equal(install.decision, 'require_approval');
+    for (const toolName of mutationNames) {
+      const decision = await engine.evaluateToolCall({
+        toolName,
+        args: {},
+        runContext: { ...RUN_CTX },
+      });
+      assert.equal(decision.decision, 'require_approval', toolName);
+    }
     const list = await engine.evaluateToolCall({
       toolName: 'skill_list',
       args: {},
-      runContext: ctx,
+      runContext: { ...RUN_CTX },
     });
     assert.equal(list.decision, 'allow');
   });

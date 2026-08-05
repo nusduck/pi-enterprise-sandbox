@@ -1,10 +1,15 @@
 /**
- * Atomic skill install from allowlisted local dirs or HTTPS Git.
+ * Atomic lifecycle operations for per-user Skill packages.
+ *
+ * New packages have exactly two trusted entry points:
+ *   1. a ZIP attachment fetched by attachment id; or
+ *   2. an Agent-generated package supplied as structured text files.
+ *
+ * No URL, Git repository or caller-provided filesystem path is accepted.
  */
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
-import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import {
   skillPackageDir,
@@ -12,70 +17,52 @@ import {
   writableSkillRoot,
 } from './paths.js';
 import {
-  assertLocalSourceAllowlisted,
-  validateGitHttpsUrl,
-  validateGitRef,
+  parseSkillMdFrontmatter,
   validateSkillPackage,
-  validateSourceType,
 } from './validator.js';
-import { parseSkillMdFrontmatter } from './validator.js';
+import {
+  extractSkillArchive,
+  SKILL_ARCHIVE_MAX_PATH_BYTES,
+} from './archive.js';
 
-/** Explicit bounds keep large skill edits from hanging a tool turn or
- * flooding the event/ledger persistence path. */
 export const SKILL_EDIT_MAX_BYTES = 16 * 1024 * 1024;
 export const SKILL_EDIT_TIMEOUT_MS = 30_000;
 export const SKILL_INSTALL_TIMEOUT_MS = 90_000;
-export const SKILL_COMMAND_TIMEOUT_MS = 30_000;
+export const SKILL_GENERATED_MAX_BYTES = 512 * 1024;
+export const SKILL_GENERATED_MAX_FILES = 32;
 
-/** Default git ref when the caller does not pin one. */
-export const DEFAULT_GIT_REF = 'HEAD';
+const PACKAGE_SCAN_MAX_DEPTH = 3;
+const PACKAGE_SCAN_MAX_CANDIDATES = 25;
 
-/** How deep subpath auto-discovery looks for a SKILL.md. */
-const SUBPATH_SCAN_MAX_DEPTH = 3;
-const SUBPATH_SCAN_MAX_CANDIDATES = 25;
+function assertBeforeDeadline(deadlineAt) {
+  if (deadlineAt != null && Date.now() >= deadlineAt) {
+    throw new Error(`Skill operation timed out after ${SKILL_INSTALL_TIMEOUT_MS}ms`);
+  }
+}
 
-/**
- * Infer the source type so callers can pass one `source` string instead of
- * having to say `sourceType: 'git'` alongside an obviously-git URL.
- *
- * @param {string} source
- * @returns {'git' | 'local'}
- */
-export function detectSourceType(source) {
-  const raw = String(source ?? '').trim();
-  if (!raw) throw new Error('source is required');
-  if (/^https?:\/\//i.test(raw)) return 'git';
-  // git@, ssh://, git:// are rejected by the validator, but classify them as
-  // git so the caller gets the real "HTTPS only" message instead of
-  // "local source is not a directory".
-  if (/^(?:git@|ssh:\/\/|git:\/\/)/i.test(raw)) return 'git';
-  return 'local';
+function resolveUserSkillRoot(value) {
+  const raw = String(value || writableSkillRoot() || '').trim();
+  if (!raw) {
+    throw new Error(
+      'No writable skill root is configured; installs require a per-user skill root',
+    );
+  }
+  return path.resolve(raw);
 }
 
 /**
- * Find the package directory inside a source tree.
- *
- * A repo may hold the SKILL.md at its root, or nest packages under
- * `skills/<name>/`. Rather than making the caller guess the subpath, search a
- * bounded depth: one candidate is used automatically, several are reported so
- * the caller can pick, none is an error naming what was searched.
- *
+ * Find exactly one Skill package in an extracted archive.
  * @param {string} root
  * @param {{ deadlineAt?: number }} [opts]
  * @returns {{ dir: string, subpath: string, candidates: string[] }}
  */
 export function discoverSkillPackageDir(root, opts = {}) {
   const base = path.resolve(root);
-  if (fs.existsSync(path.join(base, 'SKILL.md'))) {
-    return { dir: base, subpath: '', candidates: [''] };
-  }
-
   /** @type {string[]} */
-  const candidates = [];
-  /** @param {string} dir @param {number} depth */
+  const candidates = fs.existsSync(path.join(base, 'SKILL.md')) ? [''] : [];
   function walk(dir, depth) {
-    if (depth > SUBPATH_SCAN_MAX_DEPTH) return;
-    if (candidates.length >= SUBPATH_SCAN_MAX_CANDIDATES) return;
+    if (depth > PACKAGE_SCAN_MAX_DEPTH) return;
+    if (candidates.length >= PACKAGE_SCAN_MAX_CANDIDATES) return;
     assertBeforeDeadline(opts.deadlineAt);
     let entries;
     try {
@@ -83,13 +70,12 @@ export function discoverSkillPackageDir(root, opts = {}) {
     } catch {
       return;
     }
-    for (const ent of entries) {
-      if (!ent.isDirectory()) continue;
-      if (ent.name.startsWith('.') || ent.name === 'node_modules') continue;
-      const full = path.join(dir, ent.name);
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      if (entry.name.startsWith('.') || entry.name === 'node_modules') continue;
+      const full = path.join(dir, entry.name);
       if (fs.existsSync(path.join(full, 'SKILL.md'))) {
         candidates.push(path.relative(base, full).replace(/\\/g, '/'));
-        // A package's own subdirectories are not separate packages.
         continue;
       }
       walk(full, depth + 1);
@@ -106,205 +92,83 @@ export function discoverSkillPackageDir(root, opts = {}) {
   }
   if (candidates.length === 0) {
     throw new Error(
-      `No SKILL.md found at the source root or within ${SUBPATH_SCAN_MAX_DEPTH} levels. ` +
-        'Point source at the package directory, or pass subpath.',
+      `Skill ZIP contains no SKILL.md at its root or within ${PACKAGE_SCAN_MAX_DEPTH} levels`,
     );
   }
   throw new Error(
-    `Source contains ${candidates.length} skill packages; pass subpath to choose one: ` +
-      `${candidates.slice(0, 10).join(', ')}${candidates.length > 10 ? ', …' : ''}`,
+    `Skill ZIP must contain exactly one package; found ${candidates.length}: ` +
+      `${candidates.slice(0, 10).map((item) => item || '<archive-root>').join(', ')}` +
+      `${candidates.length > 10 ? ', …' : ''}`,
   );
 }
 
-/**
- * Read the package's declared name from SKILL.md so the caller does not have
- * to repeat it (and cannot get it subtly wrong).
- *
- * @param {string} packageDir
- * @returns {string}
- */
+/** @param {string} packageDir */
 export function readSkillPackageName(packageDir) {
   const skillMd = path.join(path.resolve(packageDir), 'SKILL.md');
-  if (!fs.existsSync(skillMd)) {
-    throw new Error('Missing SKILL.md in skill package');
-  }
+  if (!fs.existsSync(skillMd)) throw new Error('Missing SKILL.md in Skill package');
   return parseSkillMdFrontmatter(fs.readFileSync(skillMd, 'utf8')).name;
 }
 
 /**
- * @param {string} command
- * @param {string[]} args
- * @param {{ cwd?: string, env?: NodeJS.ProcessEnv, timeoutMs?: number, deadlineAt?: number }} [opts]
- * @returns {Promise<{ stdout: string, stderr: string, code: number }>}
- */
-function runCommand(command, args, opts = {}) {
-  const requestedTimeout = opts.timeoutMs ?? SKILL_COMMAND_TIMEOUT_MS;
-  const remaining = opts.deadlineAt == null ? requestedTimeout : opts.deadlineAt - Date.now();
-  const timeoutMs = Math.min(requestedTimeout, remaining);
-  if (timeoutMs <= 0) {
-    return Promise.reject(new Error(`${command} timed out before it started`));
-  }
-  return new Promise((resolve, reject) => {
-    const child = spawn(command, args, {
-      cwd: opts.cwd,
-      env: {
-        ...process.env,
-        ...(opts.env || {}),
-        // Avoid interactive prompts / credential helpers leaking
-        GIT_TERMINAL_PROMPT: '0',
-        GIT_CONFIG_NOSYSTEM: '1',
-        GIT_CONFIG_GLOBAL: '/dev/null',
-      },
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
-    let stdout = '';
-    let stderr = '';
-    let settled = false;
-    let timer;
-    const settle = (fn, value) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      fn(value);
-    };
-    timer = setTimeout(() => {
-      child.kill('SIGKILL');
-      settle(reject, new Error(`${command} timed out after ${timeoutMs}ms`));
-    }, timeoutMs);
-    child.stdout.on('data', (d) => {
-      stdout += d.toString();
-      if (stdout.length > 2_000_000) stdout = stdout.slice(-1_000_000);
-    });
-    child.stderr.on('data', (d) => {
-      stderr += d.toString();
-      if (stderr.length > 2_000_000) stderr = stderr.slice(-1_000_000);
-    });
-    child.on('error', (err) => {
-      settle(reject, err);
-    });
-    child.on('close', (code) => {
-      settle(resolve, { stdout, stderr, code: code ?? 1 });
-    });
-  });
-}
-
-function assertBeforeDeadline(deadlineAt) {
-  if (deadlineAt != null && Date.now() >= deadlineAt) {
-    throw new Error(`Skill operation timed out after ${SKILL_INSTALL_TIMEOUT_MS}ms`);
-  }
-}
-
-/**
- * Recursive copy (files + dirs). Does not follow symlinks out of tree.
- * @param {string} src
- * @param {string} dest
+ * Copy a package tree without following or reproducing links.
+ * @param {string} source
+ * @param {string} destination
  * @param {{ deadlineAt?: number }} [opts]
  */
-async function copyTree(src, dest, opts = {}) {
+async function copyTree(source, destination, opts = {}) {
   assertBeforeDeadline(opts.deadlineAt);
-  const stat = await fsp.lstat(src);
+  const stat = await fsp.lstat(source);
   if (stat.isSymbolicLink()) {
-    // Copy symlink as-is only if target stays reasonable; skip external links
-    const link = await fsp.readlink(src);
-    await fsp.symlink(link, dest);
-    return;
+    throw new Error(`Symbolic links are not allowed in Skill packages: ${source}`);
   }
   if (stat.isDirectory()) {
-    await fsp.mkdir(dest, { recursive: true });
-    const entries = await fsp.readdir(src);
-    for (const ent of entries) {
-      if (ent === '.git') continue; // do not install VCS metadata into skill root
-      await copyTree(path.join(src, ent), path.join(dest, ent), opts);
+    await fsp.mkdir(destination, { recursive: true, mode: 0o755 });
+    for (const entry of await fsp.readdir(source)) {
+      if (entry.toLowerCase() === '.git') continue;
+      await copyTree(
+        path.join(source, entry),
+        path.join(destination, entry),
+        opts,
+      );
     }
     return;
   }
-  await fsp.mkdir(path.dirname(dest), { recursive: true });
-  const source = await fsp.open(src, 'r');
-  const target = await fsp.open(dest, 'w');
-  const buffer = Buffer.allocUnsafe(64 * 1024);
-  try {
-    let position = 0;
-    while (true) {
-      assertBeforeDeadline(opts.deadlineAt);
-      const { bytesRead } = await source.read(buffer, 0, buffer.length, position);
-      if (bytesRead === 0) break;
-      let written = 0;
-      while (written < bytesRead) {
-        assertBeforeDeadline(opts.deadlineAt);
-        const result = await target.write(
-          buffer,
-          written,
-          bytesRead - written,
-          position + written,
-        );
-        written += result.bytesWritten;
-      }
-      position += bytesRead;
-    }
-  } finally {
-    await Promise.allSettled([source.close(), target.close()]);
+  if (!stat.isFile()) {
+    throw new Error(`Special filesystem entries are not allowed in Skill packages: ${source}`);
   }
+  await fsp.mkdir(path.dirname(destination), { recursive: true, mode: 0o755 });
+  await fsp.copyFile(source, destination, fs.constants.COPYFILE_EXCL);
+  await fsp.chmod(destination, 0o644);
 }
 
-/**
- * Remove path recursively if present.
- * @param {string} p
- */
-async function rmrf(p) {
+async function rmrf(target) {
   try {
-    await fsp.rm(p, { recursive: true, force: true });
+    await fsp.rm(target, { recursive: true, force: true });
   } catch {
-    /* ignore */
+    // Cleanup is best effort; the original operation error is more useful.
   }
 }
 
-/**
- * Simple directory content digest for audit summary.
- * @param {string} dir
- * @param {{ deadlineAt?: number }} [opts]
- */
+/** @param {string} dir @param {{ deadlineAt?: number }} [opts] */
 function digestDir(dir, opts = {}) {
   const hash = createHash('sha256');
-  /** @param {string} d */
-  function walk(d) {
+  function walk(current) {
     assertBeforeDeadline(opts.deadlineAt);
-    let entries;
-    try {
-      entries = fs.readdirSync(d, { withFileTypes: true }).sort((a, b) =>
-        a.name.localeCompare(b.name),
-      );
-    } catch {
-      return;
-    }
-    for (const ent of entries) {
+    const entries = fs
+      .readdirSync(current, { withFileTypes: true })
+      .sort((a, b) => a.name.localeCompare(b.name));
+    for (const entry of entries) {
       assertBeforeDeadline(opts.deadlineAt);
-      if (ent.name === '.git') continue;
-      const full = path.join(d, ent.name);
-      const rel = path.relative(dir, full);
-      if (ent.isDirectory()) {
-        hash.update(`d:${rel}\n`);
+      const full = path.join(current, entry.name);
+      const relative = path.relative(dir, full).replace(/\\/g, '/');
+      if (entry.isDirectory()) {
+        hash.update(`d:${relative}\n`);
         walk(full);
-      } else if (ent.isFile()) {
-        try {
-          const st = fs.statSync(full);
-          hash.update(`f:${rel}:${st.size}\n`);
-          const fd = fs.openSync(full, 'r');
-          const buffer = Buffer.allocUnsafe(64 * 1024);
-          try {
-            let offset = 0;
-            let read;
-            while ((read = fs.readSync(fd, buffer, 0, buffer.length, offset)) > 0) {
-              hash.update(buffer.subarray(0, read));
-              offset += read;
-              assertBeforeDeadline(opts.deadlineAt);
-            }
-          } finally {
-            fs.closeSync(fd);
-          }
-        } catch (err) {
-          if (opts.deadlineAt != null && Date.now() >= opts.deadlineAt) throw err;
-          hash.update(`f:${rel}\n`);
-        }
+      } else if (entry.isFile()) {
+        hash.update(`f:${relative}:${fs.statSync(full).size}\n`);
+        hash.update(fs.readFileSync(full));
+      } else {
+        throw new Error(`Skill package contains a non-regular entry: ${relative}`);
       }
     }
   }
@@ -313,324 +177,306 @@ function digestDir(dir, opts = {}) {
 }
 
 /**
- * Atomically replace dest with contents prepared in stagingDir.
- * On failure, restores previous dest if it existed and cleans staging.
- *
- * @param {string} stagingDir - fully prepared skill package dir
- * @param {string} destDir - final package path (skillRoot/name)
+ * Atomically replace a package, restoring the previous version on failure.
+ * @param {string} stagingDir
+ * @param {string} destinationDir
  */
-export async function atomicReplaceDir(stagingDir, destDir) {
-  const parent = path.dirname(destDir);
+export async function atomicReplaceDir(stagingDir, destinationDir) {
+  const parent = path.dirname(destinationDir);
   await fsp.mkdir(parent, { recursive: true });
-
   const token = `${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-  const backupDir = path.join(parent, `.backup-${path.basename(destDir)}-${token}`);
+  const backup = path.join(parent, `.backup-${path.basename(destinationDir)}-${token}`);
   let movedExisting = false;
   let swapped = false;
-
   try {
-    // Ensure staging is on same filesystem parent when possible
     if (!fs.existsSync(stagingDir)) {
       throw new Error('Staging directory missing before atomic replace');
     }
-
-    if (fs.existsSync(destDir)) {
-      await fsp.rename(destDir, backupDir);
+    if (fs.existsSync(destinationDir)) {
+      await fsp.rename(destinationDir, backup);
       movedExisting = true;
     }
-
-    await fsp.rename(stagingDir, destDir);
+    await fsp.rename(stagingDir, destinationDir);
     swapped = true;
-
-    if (movedExisting) {
-      await rmrf(backupDir);
-    }
-  } catch (err) {
-    // Rollback
-    if (swapped) {
-      // rename to dest succeeded but later step failed — rare
-      await rmrf(destDir);
-    }
-    if (movedExisting && fs.existsSync(backupDir)) {
+    if (movedExisting) await rmrf(backup);
+  } catch (error) {
+    if (swapped) await rmrf(destinationDir);
+    if (movedExisting && fs.existsSync(backup)) {
       try {
-        if (fs.existsSync(destDir)) await rmrf(destDir);
-        await fsp.rename(backupDir, destDir);
-      } catch (restoreErr) {
+        await fsp.rename(backup, destinationDir);
+      } catch (restoreError) {
         throw new Error(
-          `Atomic replace failed and restore failed: ${err.message}; restore: ${restoreErr.message}`,
+          `Atomic Skill replacement failed and restore failed: ${error.message}; ` +
+            `restore: ${restoreError.message}`,
         );
       }
     }
     await rmrf(stagingDir);
-    await rmrf(backupDir);
-    throw err;
+    await rmrf(backup);
+    throw error;
+  }
+}
+
+function assertDoesNotShadowSystem(name, systemSkillNames) {
+  const systemNames = new Set(
+    systemSkillNames ? [...systemSkillNames].map(String) : [],
+  );
+  if (systemNames.has(name)) {
+    throw new Error(
+      `"${name}" is a bundled system Skill and cannot be replaced; choose another name`,
+    );
   }
 }
 
 /**
- * Clone HTTPS git repo at ref into targetDir; return resolved commit.
- * @param {string} url
- * @param {string} ref
- * @param {string} targetDir
- * @param {{ deadlineAt?: number }} [opts]
- */
-async function gitCloneAtRef(url, ref, targetDir, opts = {}) {
-  const commandOpts = () => {
-    assertBeforeDeadline(opts.deadlineAt);
-    const remaining = opts.deadlineAt == null
-      ? SKILL_COMMAND_TIMEOUT_MS
-      : Math.max(1, opts.deadlineAt - Date.now());
-    return {
-      timeoutMs: Math.min(SKILL_COMMAND_TIMEOUT_MS, remaining),
-      deadlineAt: opts.deadlineAt,
-    };
-  };
-  await rmrf(targetDir);
-  await fsp.mkdir(path.dirname(targetDir), { recursive: true });
-
-  // Initialize an empty repository and fetch exactly the requested ref. This
-  // avoids downloading the default HEAD and then downloading the requested
-  // branch/tag a second time.
-  const init = await runCommand('git', ['init', '--quiet', targetDir], commandOpts());
-  if (init.code !== 0) {
-    throw new Error(`git init failed: ${(init.stderr || init.stdout).slice(0, 400)}`);
-  }
-  const remote = await runCommand(
-    'git',
-    ['remote', 'add', 'origin', url],
-    { cwd: targetDir, ...commandOpts() },
-  );
-  if (remote.code !== 0) {
-    throw new Error(`git remote setup failed: ${(remote.stderr || remote.stdout).slice(0, 400)}`);
-  }
-  const fetch = await runCommand(
-    'git',
-    ['fetch', '--depth', '1', '--filter=blob:none', 'origin', ref],
-    { cwd: targetDir, ...commandOpts() },
-  );
-  if (fetch.code !== 0) {
-    throw new Error(
-      `git ref fetch failed for "${ref}": ${(fetch.stderr || fetch.stdout).slice(0, 400)}. ` +
-      'The Git server must support filtered HTTPS fetches; use a compatible mirror or ref.',
-    );
-  }
-
-  const checkout = await runCommand(
-    'git',
-    ['checkout', '--force', 'FETCH_HEAD'],
-    { cwd: targetDir, ...commandOpts() },
-  );
-  if (checkout.code !== 0) {
-    throw new Error(
-      `git checkout failed for ref "${ref}": ${(checkout.stderr || checkout.stdout).slice(0, 400)}`,
-    );
-  }
-
-  const rev = await runCommand('git', ['rev-parse', 'HEAD'], {
-    cwd: targetDir,
-    ...commandOpts(),
-  });
-  if (rev.code !== 0) {
-    throw new Error('Failed to resolve git commit after checkout');
-  }
-  return rev.stdout.trim();
-}
-
-/**
- * Install a skill package into the writable (user) skill root.
- *
- * `sourceType`, `name`, `ref` and `subpath` are all optional: the source type
- * is inferred from the source string, the package directory is discovered
- * inside the fetched tree, and the name comes from the package's own SKILL.md.
- * Supplying any of them pins it and turns a mismatch into an error.
- *
+ * Validate, digest and atomically install one prepared package directory.
  * @param {{
- *   name?: string,
- *   sourceType?: string,
- *   source: string,
- *   ref?: string,
+ *   packageSource: string,
+ *   stagingPackage: string,
  *   skillRoot: string,
- *   localAllowlist?: string[],
- *   subpath?: string,
+ *   deadlineAt: number,
+ *   systemSkillNames?: Iterable<string>,
+ * }} input
+ */
+async function installPreparedPackage(input) {
+  const declaredName = readSkillPackageName(input.packageSource);
+  const name = validateSkillName(declaredName);
+  assertDoesNotShadowSystem(name, input.systemSkillNames);
+
+  await copyTree(input.packageSource, input.stagingPackage, {
+    deadlineAt: input.deadlineAt,
+  });
+  const meta = validateSkillPackage(input.stagingPackage, { expectedName: name });
+  const digest = digestDir(input.stagingPackage, { deadlineAt: input.deadlineAt });
+  const destination = skillPackageDir(input.skillRoot, name);
+
+  if (fs.existsSync(destination)) {
+    try {
+      const existing = validateSkillPackage(destination, { expectedName: name });
+      const existingDigest = digestDir(destination, { deadlineAt: input.deadlineAt });
+      if (existingDigest === digest) {
+        await rmrf(input.stagingPackage);
+        return {
+          name: existing.name,
+          description: existing.description,
+          path: destination,
+          digest: existingDigest,
+          idempotent: true,
+          summary: `already installed ${existing.name} digest=${existingDigest}`,
+        };
+      }
+    } catch {
+      // Invalid or changed destinations are replaced atomically below.
+    }
+  }
+
+  assertBeforeDeadline(input.deadlineAt);
+  await atomicReplaceDir(input.stagingPackage, destination);
+  return {
+    name: meta.name,
+    description: meta.description,
+    path: destination,
+    digest,
+    summary: `installed ${meta.name} digest=${digest}`,
+  };
+}
+
+/**
+ * Install one uploaded ZIP attachment into the caller's user Skill root.
+ * @param {{
+ *   archiveBytes: Buffer,
+ *   archiveName: string,
+ *   attachmentId: string,
+ *   skillRoot: string,
  *   timeoutMs?: number,
  *   systemSkillNames?: Iterable<string>,
  * }} opts
  */
-export async function installSkill(opts) {
-  const sourceType = opts.sourceType
-    ? validateSourceType(opts.sourceType)
-    : detectSourceType(opts.source);
-  const requestedName = opts.name ? validateSkillName(opts.name) : null;
-  const skillRoot = path.resolve(opts.skillRoot || writableSkillRoot() || '');
-  if (!skillRoot || skillRoot === path.resolve('')) {
-    throw new Error(
-      'No writable skill root is configured; installs require a user skill root',
-    );
+export async function installSkillArchive(opts) {
+  const archiveName = path.basename(String(opts.archiveName || '').trim());
+  if (!archiveName.toLowerCase().endsWith('.zip')) {
+    throw new Error('Skill installation accepts ZIP attachments only');
   }
-  const installTimeoutMs = Number.isFinite(opts.timeoutMs)
+  const attachmentId = String(opts.attachmentId || '').trim();
+  if (!attachmentId) throw new Error('Skill archive attachment_id is required');
+  const skillRoot = resolveUserSkillRoot(opts.skillRoot);
+  const timeoutMs = Number.isFinite(opts.timeoutMs)
     ? Math.max(1, Number(opts.timeoutMs))
     : SKILL_INSTALL_TIMEOUT_MS;
-  const deadlineAt = Date.now() + installTimeoutMs;
-
-  // Staging inside the skill root so the final rename stays on one filesystem.
+  const deadlineAt = Date.now() + timeoutMs;
   const token = `${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   const stagingRoot = path.join(skillRoot, `.tmp-install-${token}`);
-  const stagingPkg = path.join(stagingRoot, '_pkg');
-
-  let resolvedCommit = null;
-  let sourceSummary = opts.source;
-  const ref = sourceType === 'git' ? validateGitRef(opts.ref || DEFAULT_GIT_REF) : null;
-
-  /** @param {string} sub */
-  const assertSubpath = (sub) => {
-    if (sub.includes('..') || path.isAbsolute(sub)) {
-      throw new Error('Invalid subpath');
-    }
-    return sub;
-  };
+  const extracted = path.join(stagingRoot, '_archive');
+  const stagingPackage = path.join(stagingRoot, '_package');
 
   try {
-    await fsp.mkdir(stagingRoot, { recursive: true });
-
-    /** Tree the package is copied out of, plus the subpath actually used. */
-    let sourceTree;
-    if (sourceType === 'local') {
-      const allowed = assertLocalSourceAllowlisted(
-        opts.source,
-        opts.localAllowlist || [],
-      );
-      if (!fs.existsSync(allowed) || !fs.statSync(allowed).isDirectory()) {
-        throw new Error('Local source is not a directory');
-      }
-      sourceTree = allowed;
-      sourceSummary = allowed;
-    } else {
-      const url = validateGitHttpsUrl(opts.source);
-      const cloneDir = path.join(stagingRoot, '_clone');
-      resolvedCommit = await gitCloneAtRef(url, ref, cloneDir, { deadlineAt });
-      sourceTree = cloneDir;
-      sourceSummary = url;
-    }
-
-    const explicitSub = opts.subpath
-      ? assertSubpath(String(opts.subpath).replace(/^\/+/, ''))
-      : '';
-    let packageSrc;
-    let usedSubpath;
-    if (explicitSub) {
-      packageSrc = path.join(sourceTree, explicitSub);
-      if (!fs.existsSync(packageSrc)) {
-        throw new Error(`Subpath not found in source: ${explicitSub}`);
-      }
-      usedSubpath = explicitSub;
-    } else {
-      const discovered = discoverSkillPackageDir(sourceTree, { deadlineAt });
-      packageSrc = discovered.dir;
-      usedSubpath = discovered.subpath;
-    }
-    assertBeforeDeadline(deadlineAt);
-
-    // The package's own SKILL.md is authoritative for the name; an explicit
-    // name is a pin that must agree with it.
-    const declaredName = readSkillPackageName(packageSrc);
-    const name = requestedName ?? declaredName;
-    if (requestedName && requestedName !== declaredName) {
-      throw new Error(
-        `SKILL.md name "${declaredName}" does not match requested name "${requestedName}"`,
-      );
-    }
-
-    // A user package must not shadow a bundled system package: discovery reads
-    // the system root first, so the install would silently have no effect.
-    const systemNames = new Set(
-      opts.systemSkillNames ? [...opts.systemSkillNames].map(String) : [],
-    );
-    if (systemNames.has(name)) {
-      throw new Error(
-        `"${name}" is a bundled system skill and cannot be replaced by an install. ` +
-          'Choose a different name in SKILL.md.',
-      );
-    }
-
-    const dest = skillPackageDir(skillRoot, name);
-    await copyTree(packageSrc, stagingPkg, { deadlineAt });
-    await rmrf(path.join(stagingPkg, '.git'));
-
-    const meta = validateSkillPackage(stagingPkg, { expectedName: name });
-    const digest = digestDir(stagingPkg, { deadlineAt });
-    assertBeforeDeadline(deadlineAt);
-
-    // Reinstalling identical content is an explicit no-op rather than a
-    // replace, so repeated installs do not churn the skill tree.
-    if (fs.existsSync(dest)) {
-      try {
-        const existingMeta = validateSkillPackage(dest, { expectedName: name });
-        const existingDigest = digestDir(dest, { deadlineAt });
-        if (existingDigest === digest) {
-          await rmrf(stagingRoot);
-          return {
-            name: existingMeta.name,
-            description: existingMeta.description,
-            path: dest,
-            source_type: sourceType,
-            source: sourceSummary,
-            ref,
-            subpath: usedSubpath || null,
-            resolved_commit: resolvedCommit,
-            digest: existingDigest,
-            idempotent: true,
-            summary: `already installed ${existingMeta.name} digest=${existingDigest}`,
-          };
-        }
-      } catch {
-        // Invalid or changed destinations are replaced atomically below.
-      }
-    }
-
-    assertBeforeDeadline(deadlineAt);
-    await atomicReplaceDir(stagingPkg, dest);
+    await fsp.mkdir(stagingRoot, { recursive: true, mode: 0o700 });
+    const archive = await extractSkillArchive(opts.archiveBytes, extracted, {
+      deadlineAt,
+    });
+    const discovered = discoverSkillPackageDir(extracted, { deadlineAt });
+    const installed = await installPreparedPackage({
+      packageSource: discovered.dir,
+      stagingPackage,
+      skillRoot,
+      deadlineAt,
+      systemSkillNames: opts.systemSkillNames,
+    });
     await rmrf(stagingRoot);
-
     return {
-      name: meta.name,
-      description: meta.description,
-      path: dest,
-      source_type: sourceType,
-      source: sourceSummary,
-      ref,
-      subpath: usedSubpath || null,
-      resolved_commit: resolvedCommit,
-      digest,
-      summary: `installed ${meta.name} digest=${digest}` +
-        (resolvedCommit ? ` commit=${resolvedCommit.slice(0, 12)}` : ''),
+      ...installed,
+      source_type: 'upload',
+      attachment_id: attachmentId,
+      archive_name: archiveName,
+      package_subpath: discovered.subpath || null,
+      archive,
     };
-  } catch (err) {
+  } catch (error) {
     await rmrf(stagingRoot);
-    // Do not leave partial dest from failed rename — atomicReplaceDir handles dest
-    throw err;
+    throw error;
   }
 }
 
+function normalizeDescription(value) {
+  const description = String(value ?? '').replace(/\s+/g, ' ').trim();
+  if (!description) throw new Error('Skill description is required');
+  if (description.length > 500) {
+    throw new Error('Skill description must be at most 500 characters');
+  }
+  return description;
+}
+
+/** @param {string} raw */
+export function normalizeGeneratedFilePath(raw) {
+  const value = String(raw ?? '').trim();
+  if (!value || /[\x00-\x1f\x7f]/.test(value) || value.includes('\\')) {
+    throw new Error('Generated Skill file path is invalid');
+  }
+  if (Buffer.byteLength(value, 'utf8') > SKILL_ARCHIVE_MAX_PATH_BYTES) {
+    throw new Error('Generated Skill file path is too long');
+  }
+  if (path.isAbsolute(value) || /^[A-Za-z]:\//.test(value)) {
+    throw new Error(`Generated Skill file path must be relative: ${value}`);
+  }
+  const segments = value.split('/');
+  if (segments.some((segment) => !segment || segment === '.' || segment === '..')) {
+    throw new Error(`Generated Skill file path is unsafe: ${value}`);
+  }
+  if (segments.some((segment) => segment.toLowerCase() === '.git')) {
+    throw new Error(`Generated Skill file path must not contain .git: ${value}`);
+  }
+  if (segments.join('/') === 'SKILL.md') {
+    throw new Error('SKILL.md is generated from name, description and instructions');
+  }
+  return segments.join('/');
+}
+
 /**
- * Remove an installed package from the writable skill root.
- *
- * @param {{ name: string, skillRoot: string }} opts
+ * Atomically create or replace an Agent-generated Skill package.
+ * @param {{
+ *   name: string,
+ *   description: string,
+ *   instructions: string,
+ *   files?: Array<{ path: string, content: string }>,
+ *   skillRoot: string,
+ *   timeoutMs?: number,
+ *   systemSkillNames?: Iterable<string>,
+ * }} opts
  */
+export async function createGeneratedSkill(opts) {
+  const name = validateSkillName(opts.name);
+  const description = normalizeDescription(opts.description);
+  const instructions = String(opts.instructions ?? '').trim();
+  if (!instructions) throw new Error('Skill instructions are required');
+  const files = Array.isArray(opts.files) ? opts.files : [];
+  if (files.length > SKILL_GENERATED_MAX_FILES) {
+    throw new Error(`Generated Skill may contain at most ${SKILL_GENERATED_MAX_FILES} extra files`);
+  }
+  assertDoesNotShadowSystem(name, opts.systemSkillNames);
+
+  const normalizedFiles = [];
+  const seen = new Set(['skill.md']);
+  let totalBytes = Buffer.byteLength(instructions, 'utf8');
+  for (const raw of files) {
+    const relative = normalizeGeneratedFilePath(raw?.path);
+    const collisionKey = relative.toLocaleLowerCase('en-US');
+    if (seen.has(collisionKey)) {
+      throw new Error(`Generated Skill contains a duplicate file path: ${relative}`);
+    }
+    seen.add(collisionKey);
+    const content = String(raw?.content ?? '');
+    totalBytes += Buffer.byteLength(content, 'utf8');
+    normalizedFiles.push({ relative, content });
+  }
+  if (totalBytes > SKILL_GENERATED_MAX_BYTES) {
+    throw new Error(
+      `Generated Skill content is ${totalBytes} bytes; maximum is ${SKILL_GENERATED_MAX_BYTES}`,
+    );
+  }
+
+  const skillRoot = resolveUserSkillRoot(opts.skillRoot);
+  const timeoutMs = Number.isFinite(opts.timeoutMs)
+    ? Math.max(1, Number(opts.timeoutMs))
+    : SKILL_INSTALL_TIMEOUT_MS;
+  const deadlineAt = Date.now() + timeoutMs;
+  const token = `${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const stagingRoot = path.join(skillRoot, `.tmp-create-${token}`);
+  const packageSource = path.join(stagingRoot, '_generated');
+  const stagingPackage = path.join(stagingRoot, '_package');
+
+  try {
+    await fsp.mkdir(packageSource, { recursive: true, mode: 0o700 });
+    const skillMd =
+      `---\nname: ${name}\ndescription: ${JSON.stringify(description)}\n---\n\n` +
+      `${instructions}\n`;
+    await fsp.writeFile(path.join(packageSource, 'SKILL.md'), skillMd, {
+      encoding: 'utf8',
+      mode: 0o644,
+    });
+    for (const file of normalizedFiles) {
+      assertBeforeDeadline(deadlineAt);
+      const destination = path.join(packageSource, file.relative);
+      await fsp.mkdir(path.dirname(destination), { recursive: true, mode: 0o755 });
+      await fsp.writeFile(destination, file.content, { encoding: 'utf8', mode: 0o644 });
+    }
+
+    const installed = await installPreparedPackage({
+      packageSource,
+      stagingPackage,
+      skillRoot,
+      deadlineAt,
+      systemSkillNames: opts.systemSkillNames,
+    });
+    await rmrf(stagingRoot);
+    return {
+      ...installed,
+      source_type: 'agent_generated',
+      generated_files: normalizedFiles.length + 1,
+      generated_bytes: totalBytes,
+    };
+  } catch (error) {
+    await rmrf(stagingRoot);
+    throw error;
+  }
+}
+
+/** @param {{ name: string, skillRoot: string }} opts */
 export async function uninstallSkill(opts) {
   const name = validateSkillName(opts.name);
-  const skillRoot = path.resolve(opts.skillRoot || writableSkillRoot() || '');
-  const dest = skillPackageDir(skillRoot, name);
-  if (!fs.existsSync(dest)) {
+  const skillRoot = resolveUserSkillRoot(opts.skillRoot);
+  const destination = skillPackageDir(skillRoot, name);
+  if (!fs.existsSync(destination)) {
     throw new Error(
-      `"${name}" is not installed in the user skill root (bundled system skills cannot be uninstalled)`,
+      `"${name}" is not installed in the user Skill root (bundled Skills cannot be uninstalled)`,
     );
   }
-  await rmrf(dest);
-  return { name, path: dest, summary: `uninstalled ${name}` };
+  await rmrf(destination);
+  return { name, path: destination, summary: `uninstalled ${name}` };
 }
 
 /**
- * Write or replace a single file under the skill root (development edit).
+ * Edit one file in an existing user Skill. This function cannot create a new
+ * package; new packages must go through approved install/create operations.
  * @param {{
  *   skillRoot: string,
  *   path: string,
@@ -641,72 +487,87 @@ export async function uninstallSkill(opts) {
  */
 export async function editSkillFile(opts) {
   const { resolveSkillPath } = await import('./paths.js');
-  const { absolute, relative } = resolveSkillPath(opts.path, opts.skillRoot);
-  const content = typeof opts.content === 'string' ? opts.content : String(opts.content ?? '');
+  const skillRoot = resolveUserSkillRoot(opts.skillRoot);
+  const { absolute, relative } = resolveSkillPath(opts.path, skillRoot);
+  const [packageName] = relative.replace(/\\/g, '/').split('/');
+  const name = validateSkillName(packageName);
+  if (
+    relative
+      .replace(/\\/g, '/')
+      .split('/')
+      .some((segment) => segment.toLowerCase() === '.git')
+  ) {
+    throw new Error('skill_edit cannot write VCS metadata');
+  }
+  const packageDir = skillPackageDir(skillRoot, name);
+  validateSkillPackage(packageDir, { expectedName: name });
+  if (path.resolve(absolute) === path.resolve(packageDir)) {
+    throw new Error('skill_edit path must name a file inside an installed Skill');
+  }
+
+  const content = typeof opts.content === 'string'
+    ? opts.content
+    : String(opts.content ?? '');
   const maxBytes = Number.isFinite(opts.maxBytes)
     ? Math.max(1, Number(opts.maxBytes))
     : SKILL_EDIT_MAX_BYTES;
   const bytes = Buffer.byteLength(content, 'utf8');
   if (bytes > maxBytes) {
     throw new Error(
-      `skill_edit content is ${bytes} bytes; maximum is ${maxBytes} bytes. ` +
-      'Split the edit into smaller files or use an allowlisted install.',
+      `skill_edit content is ${bytes} bytes; maximum is ${maxBytes}. ` +
+        'Upload a replacement Skill ZIP for larger changes.',
     );
   }
-
-  // If editing SKILL.md, validate content before write
   if (path.basename(absolute) === 'SKILL.md') {
-    const { parseSkillMdFrontmatter } = await import('./validator.js');
-    parseSkillMdFrontmatter(content);
+    const metadata = parseSkillMdFrontmatter(content);
+    if (metadata.name !== name) {
+      throw new Error(
+        `SKILL.md name "${metadata.name}" must match installed package "${name}"`,
+      );
+    }
   }
 
-  await fsp.mkdir(path.dirname(absolute), { recursive: true });
-
-  // Atomic write via temp file in same directory
-  const tmp = `${absolute}.tmp-${process.pid}-${Date.now()}`;
+  await fsp.mkdir(path.dirname(absolute), { recursive: true, mode: 0o755 });
+  const temporary = `${absolute}.tmp-${process.pid}-${Date.now()}`;
   const timeoutMs = Number.isFinite(opts.timeoutMs)
     ? Math.max(1, Number(opts.timeoutMs))
     : SKILL_EDIT_TIMEOUT_MS;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    await fsp.writeFile(tmp, content, { encoding: 'utf8', signal: controller.signal });
+    await fsp.writeFile(temporary, content, {
+      encoding: 'utf8',
+      mode: 0o644,
+      signal: controller.signal,
+    });
     if (controller.signal.aborted) {
       throw new Error(`skill_edit timed out after ${timeoutMs}ms while writing ${relative}`);
     }
-    await fsp.rename(tmp, absolute);
-  } catch (err) {
-    await rmrf(tmp);
-    if (controller.signal.aborted || err?.name === 'AbortError') {
+    await fsp.rename(temporary, absolute);
+  } catch (error) {
+    await rmrf(temporary);
+    if (controller.signal.aborted || error?.name === 'AbortError') {
       throw new Error(`skill_edit timed out after ${timeoutMs}ms while writing ${relative}`);
     }
-    throw err;
+    throw error;
   } finally {
     clearTimeout(timer);
   }
-
-  return {
-    path: relative,
-    absolute,
-    bytes,
-  };
+  return { path: relative, absolute, bytes };
 }
 
-/**
- * List installed skill package names under root.
- * @param {string} skillRoot
- */
+/** @param {string} skillRoot */
 export function listInstalledSkills(skillRoot) {
   const root = path.resolve(skillRoot);
   if (!fs.existsSync(root)) return [];
   return fs
     .readdirSync(root, { withFileTypes: true })
-    .filter((d) => d.isDirectory() && !d.name.startsWith('.'))
-    .map((d) => d.name)
-    .filter((n) => {
+    .filter((entry) => entry.isDirectory() && !entry.name.startsWith('.'))
+    .map((entry) => entry.name)
+    .filter((name) => {
       try {
-        validateSkillName(n);
-        return fs.existsSync(path.join(root, n, 'SKILL.md'));
+        validateSkillName(name);
+        return fs.existsSync(path.join(root, name, 'SKILL.md'));
       } catch {
         return false;
       }
@@ -714,39 +575,25 @@ export function listInstalledSkills(skillRoot) {
 }
 
 /**
- * Describe the installed packages across every root, tagging which tier each
- * came from. System packages shadow user packages of the same name because
- * discovery reads the roots in order.
- *
- * @param {string[]} skillRoots - in read-precedence order (system first)
+ * Describe installed packages across system and user roots. First root wins.
+ * @param {string[]} skillRoots
  * @param {{ writableRoot?: string | null }} [opts]
- * @returns {Array<{
- *   name: string,
- *   description: string | null,
- *   tier: 'system' | 'user',
- *   root: string,
- *   path: string,
- *   editable: boolean,
- *   invalid?: string,
- * }>}
  */
 export function describeInstalledSkills(skillRoots, opts = {}) {
   const writable = opts.writableRoot ? path.resolve(opts.writableRoot) : null;
-  /** @type {Map<string, object>} */
   const byName = new Map();
   for (const rawRoot of skillRoots || []) {
     const root = path.resolve(String(rawRoot));
     const tier = writable && root === writable ? 'user' : 'system';
     for (const name of listInstalledSkills(root)) {
-      // First root wins: a later root cannot shadow an earlier one.
       if (byName.has(name)) continue;
       const dir = path.join(root, name);
       let description = null;
       let invalid;
       try {
         description = validateSkillPackage(dir, { expectedName: name }).description;
-      } catch (err) {
-        invalid = err instanceof Error ? err.message : String(err);
+      } catch (error) {
+        invalid = error instanceof Error ? error.message : String(error);
       }
       byName.set(name, {
         name,
@@ -762,7 +609,7 @@ export function describeInstalledSkills(skillRoots, opts = {}) {
   return [...byName.values()].sort((a, b) => a.name.localeCompare(b.name));
 }
 
-/** @deprecated test helper */
+/** Test-only helpers for failure injection and cleanup assertions. */
 export function _testHelpers() {
-  return { copyTree, rmrf, digestDir, runCommand, gitCloneAtRef };
+  return { copyTree, rmrf, digestDir };
 }

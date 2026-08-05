@@ -273,7 +273,8 @@ export function assertEnterpriseExtensions(extensions) {
  *   toolRiskPolicy?: object,
  *   agentVersionToolRiskPolicy?: object,
  *   skillManager?: object | null,
- *   skillManagerFactory?: (runContext: object) => object | null,
+ *   skillManagerFactory?: (runContext: object, lifecycleDeps?: { getAgentSession?: Function }) => object | null,
+ *   getAgentSession?: () => object | null,
  *   sandboxBridge?: object,
  *   enterprisePolicy?: object,
  *   observability?: object,
@@ -335,12 +336,15 @@ export function createEnterpriseExtensionBundle(runContext, deps = {}) {
   // orgId/userId. A pre-built `deps.skillManager` is accepted for tests only.
   let skillManager = deps.skillManager ?? null;
   if (!skillManager && typeof deps.skillManagerFactory === 'function') {
-    skillManager = deps.skillManagerFactory(frozen);
+    skillManager = deps.skillManagerFactory(frozen, {
+      getAgentSession:
+        typeof deps.getAgentSession === 'function' ? deps.getAgentSession : undefined,
+    });
   }
   const skillManagerReady = Boolean(
     skillManager &&
-      typeof skillManager.isEnabled === 'function' &&
-      skillManager.isEnabled() &&
+      typeof skillManager.install === 'function' &&
+      typeof skillManager.create === 'function' &&
       skillManager.userSkillRoot,
   );
 
@@ -357,7 +361,7 @@ export function createEnterpriseExtensionBundle(runContext, deps = {}) {
   }
   if (selected.has('skill-lifecycle') && !skillManagerReady) {
     throw new Error(
-      'SKILL_MANAGER_REQUIRED: AgentVersion enables skill-lifecycle but no enabled SkillManager with a per-user skill directory was injected',
+      'SKILL_MANAGER_REQUIRED: AgentVersion enables skill-lifecycle but no SkillManager with a per-user directory was injected',
     );
   }
 
@@ -490,7 +494,11 @@ export function createEnterpriseExtensionBundle(runContext, deps = {}) {
   if (selected.has('skill-lifecycle')) {
     built['skill-lifecycle'] = createSkillLifecycleExtension({
       runContext: frozen,
-      deps: { skillManager, ...(deps.skillLifecycle || {}) },
+      deps: {
+        skillManager,
+        currentTurnAttachments: deps.currentTurnAttachments,
+        ...(deps.skillLifecycle || {}),
+      },
     });
   }
 

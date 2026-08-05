@@ -140,9 +140,9 @@ Agent **可以在零 Skill package 下启动**并使用基础工具（read/write
 3. 添加脚本到 `skills/your-skill-name/scripts/`
 4. `skills/` 默认只读挂载到 Agent / Sandbox skill 根
 5. Agent 经 `dynamic-resources` + profile skill policy 发现技能；工作区始终从空目录起步，技能不复制进 workspace
-6. 安装/编辑后调用 `skill_reload`（development）或新 session 以刷新 registry
+6. 重新构建服务或创建新 session 以刷新系统层 registry
 
-**方式 B — 对话里安装（默认可用）**
+**方式 B — 用户对话安装**
 
 Skill 分两层：
 
@@ -155,16 +155,13 @@ Skill 分两层：
 上，所以装过的 skill **跨对话、跨容器重建都在**，但**不跨用户** —— 别人（哪怕同组织）
 的 agent 上下文里看不到，Sandbox 执行时也只 bind 调用者本人的目录。
 
-**不需要开发模式**：`SKILLS_MODE` 默认 `enabled`，生产同样可用。安全性来自写入范围
-被限制在自己的 `<orgId>/<userId>` 目录 + `skill_install` 走审批（见下节）。
-`SKILLS_MODE=readonly` 是彻底关掉安装能力的开关。
+Skill 生命周期在所有部署环境中使用同一套行为，不读取开发/生产模式开关。安全性来自
+用户目录隔离、当前回合附件绑定、归档校验，以及所有变更工具的审批。
 
 ```bash
 # .env
 SKILLS_ROOT=/home/sandbox/skill
 SKILLS_USER_ROOT=/home/sandbox/skill-user
-# 本地安装源白名单（容器内绝对路径，逗号分隔）；git 源不需要
-SKILLS_INSTALL_LOCAL_ALLOWLIST=/tmp/skill-src
 # 可选审计文件
 # SKILLS_AUDIT_LOG=/tmp/skill-audit.jsonl
 ```
@@ -174,19 +171,21 @@ SKILLS_INSTALL_LOCAL_ALLOWLIST=/tmp/skill-src
 | 工具 | 作用 |
 |------|------|
 | `skill_list` | 列出两层可见 package（含 tier / description / 是否可编辑） |
-| `skill_install` | 从**白名单本地目录**或 **HTTPS Git** 安装到自己的目录；装完自动 reload |
+| `skill_install` | 安装当前用户回合上传的单个 `.zip` package |
+| `skill_create` | 把与用户确认后的说明和文本文件原子生成成一个 package |
 | `skill_uninstall` | 删除自己装的 package（系统层不可删） |
-| `skill_edit` | 写自己 package 内的文件（路径不逃逸；`SKILL.md` 格式校验） |
-| `skill_reload` | 显式 reload loader；下一回合也会重新扫描 |
+| `skill_edit` | 修改已安装用户 package；不能用来新建 package |
 
-`skill_install` 只需要 `source`：源类型自动判断（`https://…` → git，其余按本地路径），
-git ref 默认 `HEAD`，包目录在源码树里自动发现（根目录或 `skills/<name>/`，多个候选会报错
-并列出让你用 `subpath` 指定），package 名取自 SKILL.md 的 `name`。内容相同的重复安装返回
-`idempotent: true`，不会反复覆盖。装同名于系统层 package 会被拒绝（否则装了也不生效）。
+上传流程复用聊天附件：前端把 ZIP 作为 Dataset 上传到当前 Sandbox session，Run 中保留
+结构化 `attachment_id`。Agent 只把当前回合的 attachment id 交给 `skill_install`；审批通过后，
+Worker 使用 owner-scoped Sandbox client 下载内容，在 Agent 用户 Skill 卷内的临时目录安全解压、
+校验唯一 `SKILL.md`、原子替换并自动 reload。URL 和本地路径不是工具参数。
 
-**拒绝**：`git@` / SSH、URL 内嵌凭证、任意压缩包/安装脚本、npm/OCI。
-**路径策略**：通用 `write` / `edit` / `bash` **不能**写任一 skill 根；orgId/userId 作为
-路径段会被严格校验，无法 `../` 逃逸。Sandbox 始终只读挂载 skill（仅执行）。
+`skill_create` 是“和 Agent 交互生成”的安装入口：Agent 收集并确认需求后，在一次高风险
+工具调用中提交 `name`、`description`、`instructions` 与可选文件；用户批准后才落盘。
+
+所有变更工具（install/create/edit/uninstall）默认 high risk。ZIP 解压拒绝 traversal、链接、
+特殊文件、重复路径、加密条目和 zip bomb；通用 `write` / `edit` / `bash` 不能写 Skill 根。
 
 ### 配置工具风险等级与审批
 
@@ -281,7 +280,7 @@ AgentVersion 侧（同一份语义，只能收紧）：
 2. `agent/src/bootstrap/` — ServiceContainer、HTTP factory、BullMQ worker（MySQL Create/Get/Cancel/Execute）
 3. `agent/src/application/` — Run / Session recovery / Event SSE / A2A services
 4. `agent/src/infrastructure/pi/` — Pi Runtime Factory + Session Adapter
-5. `agent/src/extensions/` — 仅三类企业 Extension：`sandbox-bridge` / `enterprise-policy` / `observability`
+5. `agent/src/extensions/` — 注册表内置必需 Extension（含 sandbox、审批、审计和交互）及用户级 `skill-lifecycle`
 6. `agent/src/infrastructure/mcp/` — `pi-mcp-adapter`（禁止自研 MCP Client 主路径）
 7. `agent/src/infrastructure/sandbox/sandbox-client.js` — Sandbox 内部 HMAC HTTP（`/internal/v1/*` 执行/文件/artifact submit；**不** dual-write Run）
 8. 语法检查: `node --check agent/server.js && node --check agent/worker.js`
@@ -502,7 +501,7 @@ cd frontend && npm run build && ls dist/
 APPROVAL_MODE=ask
 ```
 
-- **Agent 层**：`agent/src/extensions` 固定装配 `sandbox-bridge`、`enterprise-policy`、`observability`；本地 Workspace 工具默认不审批，外部副作用审批由 MySQL durable ledger fail-closed。
+- **Agent 层**：`agent/src/extensions` 固定装配 sandbox、审批、审计和交互能力；用户级 `skill-lifecycle` 的所有变更工具也进入同一 MySQL durable approval ledger。普通 Workspace 工具默认不审批。
 - **Sandbox 层**：`policy_checker` 与 `/internal/v1/*` execution handlers 独立执行路径、owner、HMAC claim 和 hard-deny；普通 workspace bash/python/node 不进入审批。
 - **审批模式**：`ask`（默认）创建 durable approval 并暂停；`deny` 明确拒绝
   `approval_required` 且不创建审批；`auto_approve` 仅用于明确受控的研发旁路并写

@@ -346,30 +346,26 @@ curl -f http://localhost:4000/health/ready
 |--------|------|------|
 | `nginx_ssl` | `/etc/nginx/ssl` | SSL 证书（生产） |
 | `nginx_certbot` | `/var/www/certbot` | Let's Encrypt ACME challenge（生产） |
-| `./skills` | Agent `/home/sandbox/skill`（默认 `:ro`；研发可 `:rw`）+ Sandbox `:ro` | 共享技能；生产只读 |
+| `./skills` | Agent `/home/sandbox/skill:ro` + Sandbox `:ro` | 共享系统 Skill，始终只读 |
 | `./.runtime/sandbox/workspaces` | `/var/sandbox/workspaces` | Agent Session 物理工作区 |
 | `./.runtime/sandbox/tmp` | `/var/sandbox/tmp` | Agent Session 私有持久化 `/tmp`（`tmp_{workspace_id}`） |
 | `./.runtime/sandbox/artifacts` | `/var/sandbox/artifacts` | 显式提交的 Artifact blob |
 | `./.runtime/sandbox/control` | `/var/sandbox/control` | Dataset staging 与控制面状态 |
 
-### Skill 挂载与 SKILLS_MODE
+### Skill 挂载与用户生命周期
 
 Skill 分两层，挂在两个 canonical 路径：
 
 | 层 | 路径 | 来源 | 可见范围 | 卷 |
 |----|------|------|----------|----|
-| 系统 | `/home/sandbox/skill` | 仓库 `./skills` | 所有人 | 任何模式 `:ro` |
-| 用户 | `/home/sandbox/skill-user/<orgId>/<userId>` | `skill_install` 装的 | 仅该用户 | named volume `agent_user_skills` |
+| 系统 | `/home/sandbox/skill` | 仓库 `./skills` | 所有人 | `:ro` |
+| 用户 | `/home/sandbox/skill-user/<orgId>/<userId>` | 上传 ZIP 或 Agent 生成 | 仅该用户 | named volume `agent_user_skills` |
 
-| `SKILLS_MODE` | Agent/Worker 用户层 | Sandbox | 说明 |
-|---------------|---------------------|---------|------|
-| `enabled`（默认） | 可写 | `:ro`，且只 bind 调用者本人的目录 | 生产同样可用；每次安装走审批 |
-| `readonly` | 只读 | `:ro` | 完全关掉 skill 安装能力 |
-
-安装在生产可用，安全性来自两点：写入范围被限制在调用者自己的 `<orgId>/<userId>`
-子树，且 `skill_install` 在风险表里是 `high` → 必须审批。系统层在任何模式下只读，
-安装无法覆盖自带 package。Sandbox 只 bind 调用者本人的用户目录，别的租户的 package
-在沙箱里根本不存在。
+Skill 生命周期不根据部署环境切换。Agent/Worker 对用户卷可写，Sandbox 始终以只读方式
+只绑定调用者本人的目录。`skill_install` 只接受当前回合 ZIP attachment id，
+`skill_create` 接受 Agent 生成的结构化 package；install/create/edit/uninstall 全部为 high risk，
+附件上传会先形成 Dataset；安装审批通过前，Agent 不会读取其内容、解压或写入 Skill 目录。
+系统 Skill 不能被同名覆盖。
 
 `validateProductionConfig` 仍然拒绝任何非 canonical 的
 `SKILLS_ROOT` / `SKILLS_USER_ROOT`（这些是 Bubblewrap profile 认识的挂载点）。
