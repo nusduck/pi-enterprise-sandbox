@@ -50,11 +50,10 @@
     "submit_artifact": "low",
     "ask_user": "low",
 
-    "_skill_lifecycle": "Development-only tools (SKILLS_MODE=development). Installing runs third-party code on the next turn, so it needs approval by default.",
     "skill_list": "low",
-    "skill_reload": "low",
-    "skill_edit": "medium",
     "skill_install": "high",
+    "skill_create": "high",
+    "skill_edit": "high",
     "skill_uninstall": "high"
   },
 

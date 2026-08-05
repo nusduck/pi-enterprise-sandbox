@@ -309,10 +309,9 @@ services:
 
   agent:
     # Production: the bundled system tier stays read-only. The user tier is
-    # writable because installs are a normal user action here — each user only
-    # ever writes their own <orgId>/<userId> subtree, and skill_install is
-    # high risk so every install goes through approval. Set SKILLS_MODE=readonly
-    # to turn skill installation off entirely.
+    # writable because installs are a normal user action — each user only
+    # writes their own <orgId>/<userId> subtree and every mutation goes through
+    # approval. The lifecycle is identical in every deployment environment.
     environment:
       DEPLOYMENT_ENV: production
       SANDBOX_API_TOKEN: ${SANDBOX_API_TOKEN:?Set SANDBOX_API_TOKEN for production}
@@ -339,7 +338,6 @@ services:
       SANDBOX_POLICY_PROFILE: strict
       SANDBOX_ISOLATION_BACKEND: bubblewrap
       SANDBOX_ISOLATION_REQUIRED: "true"
-      SKILLS_MODE: ${SKILLS_MODE:-enabled}
       SKILLS_ROOT: /home/sandbox/skill
       SKILLS_USER_ROOT: /home/sandbox/skill-user
       TOOL_RISK_POLICY_PATH: ${TOOL_RISK_POLICY_PATH:-/app/config/agent/tool-risk.json}
@@ -347,7 +345,8 @@ services:
       AGENT_SYSTEM_PROMPT: ${AGENT_SYSTEM_PROMPT:-}
       AGENT_SYSTEM_PROMPT_FILE: ${AGENT_SYSTEM_PROMPT_FILE:-}
     volumes:
-      # Force read-only skill mounts in production (override any RW dev mount)
+      # Bundled Skills stay read-only; the user tier remains Agent-writable for
+      # the same approval-gated lifecycle used in every deployment environment.
       - ./skills:/home/sandbox/skill:ro
       - agent_user_skills:/home/sandbox/skill-user
       - ./config/agent:/app/config/agent:ro
@@ -397,7 +396,6 @@ services:
       SANDBOX_POLICY_PROFILE: strict
       SANDBOX_ISOLATION_BACKEND: bubblewrap
       SANDBOX_ISOLATION_REQUIRED: "true"
-      SKILLS_MODE: ${SKILLS_MODE:-enabled}
       SKILLS_ROOT: /home/sandbox/skill
       SKILLS_USER_ROOT: /home/sandbox/skill-user
       TOOL_RISK_POLICY_PATH: ${TOOL_RISK_POLICY_PATH:-/app/config/agent/tool-risk.json}

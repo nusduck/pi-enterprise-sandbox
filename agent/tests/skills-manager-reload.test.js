@@ -7,12 +7,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { createSkillManager, SKILLS_MODE } from '../src/skills/manager.js';
+import { createSkillManager } from '../src/skills/manager.js';
 
 function makeManager({ session, skillRoot }) {
   const auditEvents = [];
   const manager = createSkillManager({
-    mode: SKILLS_MODE.READONLY,
     skillRoots: [skillRoot],
     getAgentSession: () => session,
     auditSink: (ev) => auditEvents.push(ev),

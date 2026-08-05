@@ -415,7 +415,6 @@ class TestEnvCatalogConsistency:
             "SANDBOX_POLICY_PROFILE",
             "SANDBOX_API_TOKEN=",
             "AGENT_INTERNAL_TOKEN",
-            "SKILLS_MODE=",
             "AGENT_SYSTEM_PROMPT",
             "SANDBOX_CORS_ORIGINS",
             "SANDBOX_AUTH_ENABLED",

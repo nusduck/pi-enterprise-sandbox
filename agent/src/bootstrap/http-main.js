@@ -154,7 +154,7 @@ export function createA2aArtifactByteStreamer(deps) {
  */
 export async function startHttpMain(env = process.env) {
   try {
-    validateProductionConfig(env, { skillsMode: config.SKILLS_MODE });
+    validateProductionConfig(env);
   } catch (err) {
     console.error(`[agent-server] ${err instanceof Error ? err.message : err}`);
     process.exit(1);

@@ -33,9 +33,8 @@ export const REQUIRED_EXTENSION_NAMES = Object.freeze([
  * every tool it registers, otherwise those tools are denied as
  * UNKNOWN_TOOL_DENIED (enforced by a guard test).
  *
- * `skill-lifecycle` is development-only: its factory refuses to construct
- * unless SKILLS_MODE=development and a writable user skill root exists. It is
- * deliberately not named `skill-management` — that is a legacy
+ * `skill-lifecycle` is user-scoped and requires a writable per-user Skill
+ * root. It is deliberately not named `skill-management` — that is a legacy
  * enterprise-agent-kit package name the registry must keep refusing.
  *
  * @type {readonly string[]}

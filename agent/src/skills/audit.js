@@ -10,10 +10,8 @@ import path from 'node:path';
  * @property {string} action - install | edit | reload | deny
  * @property {string} result - success | failure | denied
  * @property {string} [skill_name]
- * @property {string} [source_type]
- * @property {string} [source]
- * @property {string} [ref]
- * @property {string} [resolved_commit]
+ * @property {'upload' | 'agent_generated'} [source_type]
+ * @property {string} [source] attachment id or `agent`; never a filesystem path
  * @property {string} [summary]
  * @property {string} [error]
  * @property {object} [meta]
@@ -36,8 +34,6 @@ export function emitSkillAudit(event, opts = {}) {
     source_type: event.source_type ?? null,
     // Never log credentials; source should already be sanitized
     source: event.source ? String(event.source).slice(0, 500) : null,
-    ref: event.ref ?? null,
-    resolved_commit: event.resolved_commit ?? null,
     summary: event.summary ? String(event.summary).slice(0, 500) : null,
     error: event.error ? String(event.error).slice(0, 300) : null,
     meta: {
@@ -45,9 +41,9 @@ export function emitSkillAudit(event, opts = {}) {
       organization_id: event.meta?.organization_id ?? event.meta?.orgId ?? null,
       conversation_id: event.meta?.conversation_id ?? event.meta?.conversationId ?? null,
       session_id: event.meta?.session_id ?? event.meta?.sessionId ?? null,
+      run_id: event.meta?.run_id ?? event.meta?.runId ?? null,
       trace_id: event.meta?.trace_id ?? event.meta?.traceId ?? null,
       actor: event.meta?.actor ?? event.meta?.user_id ?? 'agent',
-      skills_mode: event.meta?.skills_mode ?? null,
     },
   };
 

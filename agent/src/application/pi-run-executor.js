@@ -63,6 +63,8 @@ import {
   INTERACTION_STATUS,
 } from '../domain/interaction/interaction-status.js';
 import {
+  appendCurrentTurnAttachmentContext,
+  attachmentsFromTriggeringMessage,
   derivePromptFromTriggeringMessage,
   generateRunLeaseOwnerToken,
   imageAttachmentsFromTriggeringMessage,
@@ -83,6 +85,8 @@ export {
   assertCompatiblePolicyReplay,
 } from './fenced-tool-governance-recorder.js';
 export {
+  appendCurrentTurnAttachmentContext,
+  attachmentsFromTriggeringMessage,
   derivePromptFromTriggeringMessage,
   generateRunLeaseOwnerToken,
   imageAttachmentsFromTriggeringMessage,
@@ -395,6 +399,7 @@ export class PiRunExecutor {
       });
       this.#assertTriggeringMessageBinding(triggering, run);
       const requestedModelId = requestedModelIdFromTriggeringMessage(triggering);
+      const currentTurnAttachments = attachmentsFromTriggeringMessage(triggering);
       const imageAttachments = imageAttachmentsFromTriggeringMessage(triggering);
 
       const model = await this.modelResolver(agentVersion, {
@@ -538,6 +543,11 @@ export class PiRunExecutor {
           extensionFactories = this.extensionBundleFactory(eventContext, {
             recorder: this._eventRecorder,
             governanceRecorder: this._governanceRecorder,
+            currentTurnAttachments,
+            // The bundle is built before Pi creates its Session. Keep a lazy
+            // accessor so lifecycle tools can refresh that exact Session after
+            // an approved mutation instead of reporting a synthetic reload.
+            getAgentSession: () => runtimeSession,
             observability: {
               modelId:
                 typeof model.id === 'string'
@@ -744,7 +754,12 @@ export class PiRunExecutor {
           }),
         );
       } else {
-        prompt = toPiPromptInvocation(derivePromptFromTriggeringMessage(triggering));
+        prompt = toPiPromptInvocation(
+          appendCurrentTurnAttachmentContext(
+            derivePromptFromTriggeringMessage(triggering),
+            currentTurnAttachments,
+          ),
+        );
         if (imageAttachments.length > 0) {
           if (!this.promptImageLoader) {
             return {

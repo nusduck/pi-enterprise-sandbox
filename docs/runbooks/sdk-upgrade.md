@@ -90,7 +90,7 @@ Agent image for rollback, and never dual-write one session from two versions.
 
 - [ ] `runtime-versions.json` `pi_sdk` updated to the new exact versions
 - [ ] `agent/package.json` has **exact** version (e.g. `"0.81.0"`, not `^0.81.0`) for both `pi-coding-agent` and `pi-ai`
-- [ ] `agent/src/extensions` 仍只装配三类正式 Extension，且 production no-legacy guard 通过
+- [ ] `agent/src/extensions` 仍只装配注册表中的 first-party Extension，且 production no-legacy guard 通过
 - [ ] `agent/package-lock.json` committed and matches (`npm ci --prefix agent`)
 - [ ] `uv run pytest tests/test_runtime_versions.py -q` green
 - [ ] ADR inventory updated if imports/events change (`docs/adr/0001-pi-coding-agent-sdk.md`)

@@ -792,32 +792,53 @@ export class ServiceContainer {
    *
    * The manager must be per-Run because the writable skill directory is
    * per-user (`<base>/<orgId>/<userId>`): one process-wide manager would give
-   * every tenant the same install target. Returns null when SKILLS_MODE
-   * disables installation, so the extension is simply not loaded rather than
-   * presenting write tools that fail on every call.
+   * every tenant the same install target. Uploaded archives are fetched by
+   * attachment id through an owner-scoped Sandbox client; no filesystem source
+   * path crosses the service boundary.
    *
-   * @returns {Promise<((runContext: object) => object | null) | null>}
+   * @returns {Promise<(runContext: object) => object | null>}
    */
   async createSkillManagerFactory() {
-    const {
-      createSkillManager,
-      resolveSkillsMode,
-      resolveSkillRoots,
-      SKILLS_MODE,
-    } = await import('../skills/manager.js');
-    const mode = resolveSkillsMode(this.env);
-    if (mode !== SKILLS_MODE.ENABLED) return null;
+    const [{ createSkillManager, resolveSkillRoots }, { createSandboxClient }] =
+      await Promise.all([
+        import('../skills/manager.js'),
+        import('../infrastructure/sandbox/sandbox-client.js'),
+      ]);
 
-    return (runContext) => {
+    return (runContext, lifecycleDeps = {}) => {
       const orgId = runContext?.orgId;
       const userId = runContext?.userId;
-      if (orgId == null || userId == null) return null;
+      const sandboxSessionId = String(runContext?.sandboxSessionId || '').trim();
+      if (orgId == null || userId == null || !sandboxSessionId) return null;
       let manager;
       try {
+        const sandboxClient = createSandboxClient({
+          traceId: runContext?.traceId,
+          traceState: runContext?.traceState,
+          auth: {
+            actingUserId: String(userId),
+            actingOrganizationId: String(orgId),
+          },
+        });
         manager = createSkillManager({
-          mode,
           identity: { orgId, userId },
           skillRoots: resolveSkillRoots(this.env, { orgId, userId }),
+          downloadArchive: ({ attachmentId, signal }) =>
+            sandboxClient.downloadDatasetContent(sandboxSessionId, attachmentId, {
+              signal,
+            }),
+          getAgentSession:
+            typeof lifecycleDeps.getAgentSession === 'function'
+              ? lifecycleDeps.getAgentSession
+              : undefined,
+          getMeta: () => ({
+            orgId,
+            userId,
+            conversationId: runContext?.conversationId,
+            sessionId: runContext?.agentSessionId,
+            runId: runContext?.runId,
+            traceId: runContext?.traceId,
+          }),
         });
       } catch (err) {
         // A malformed identity must not take the whole Run down; the Run just
@@ -1061,7 +1082,6 @@ export class ServiceContainer {
       const { resolveToolRiskPolicy } = await import('../../config.js');
       const toolRiskPolicy =
         opts.toolRiskPolicy ?? resolveToolRiskPolicy(this.env);
-      // Null when SKILLS_MODE disables installation → skill-lifecycle unloaded.
       const skillManagerFactory =
         opts.skillManagerFactory !== undefined
           ? opts.skillManagerFactory

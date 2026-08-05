@@ -26,7 +26,7 @@ describe('CapabilitiesPage diagnostics and MCP status contracts', () => {
     );
   });
 
-  it('projects configured capabilities from the production three-extension runtime', () => {
+  it('projects configured capabilities from the first-party extension runtime', () => {
     const diagnosticsSrc = readFileSync(
       join(__dirname, '../../agent/src/application/extension-diagnostics-service.js'),
       'utf8',
@@ -39,6 +39,8 @@ describe('CapabilitiesPage diagnostics and MCP status contracts', () => {
     assert.match(extensionSrc, /sandbox-bridge/);
     assert.match(extensionSrc, /enterprise-policy/);
     assert.match(extensionSrc, /observability/);
+    assert.match(extensionSrc, /user-interaction/);
+    assert.match(extensionSrc, /skill-lifecycle/);
     assert.doesNotMatch(diagnosticsSrc, /packages\/enterprise-agent-kit/);
   });
 

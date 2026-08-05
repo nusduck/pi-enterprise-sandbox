@@ -53,8 +53,8 @@ In chat, name the skill or describe the task, e.g.:
 ## Notes
 
 - Upstream licenses remain those of the source repos (see each package).
-- This directory is the **system tier**: bundled with the image and read-only in
-  every mode. User installs land in a separate per-user tier.
+- This directory is the **system tier**: bundled with the image and always
+  read-only. User installs land in a separate per-user tier.
 
 ---
 
@@ -62,7 +62,7 @@ In chat, name the skill or describe the task, e.g.:
 
 | 层 | 路径 | 内容 | 可见范围 | 可写 |
 |----|------|------|----------|------|
-| 系统 | `/home/sandbox/skill` | 本仓库 `./skills` 自带的 package | 所有人 | 否（任何模式） |
+| 系统 | `/home/sandbox/skill` | 本仓库 `./skills` 自带的 package | 所有人 | 否 |
 | 用户 | `/home/sandbox/skill-user/<orgId>/<userId>` | 该用户 `skill_install` 装的 package | **仅该用户本人** | 是 |
 
 每个 Run 扫描 `[系统层, 自己的用户目录]`，**系统层优先**：同名 package 以系统层为准，
@@ -77,87 +77,47 @@ In chat, name the skill or describe the task, e.g.:
 
 ---
 
-## 安装 Skill
+## 用户 Skill 生命周期
 
-### 1. 默认就能装
+Skill 生命周期不区分开发环境和生产环境。用户有且只有两种新建入口：
 
-**不需要开发模式**。`SKILLS_MODE` 默认 `enabled`，生产环境同样可用。安全性来自两点：
+1. 在聊天输入框点击 🧩，上传一个 `.zip`，然后发送安装请求。Agent 使用当前回合的
+   `attachment_id` 调用 `skill_install`；URL 和文件系统路径不会被接受。
+2. 与 Agent 讨论需求。内容确认后，Agent 用完整的说明和可选文本文件调用
+   `skill_create`，一次性生成并安装 package。
 
-1. 写入范围被限制在调用者自己的 `<orgId>/<userId>` 目录
-2. `skill_install` 在风险表里是 `high`，走审批
+已有用户 Skill 可以通过 `skill_edit` 修改、通过 `skill_uninstall` 删除。所有变更完成后
+都会自动刷新运行时能力清单；内容相同的重复安装是显式 no-op。
 
-要彻底关掉安装能力：`SKILLS_MODE=readonly`（skill 生命周期工具不再注册）。
-
-可选配置：
-
-```bash
-# .env
-# 允许 skill_install 从这些容器内绝对路径拷贝（git 源不需要）
-SKILLS_INSTALL_LOCAL_ALLOWLIST=/tmp/skill-src
-# 可选审计
-# SKILLS_AUDIT_LOG=/tmp/skill-audit.jsonl
-```
-
-工具：`skill_list` / `skill_install` / `skill_uninstall` / `skill_edit` / `skill_reload`。
-
-### 2. 安装体验
-
-`skill_install` **只需要 `source`**：
-
-- 源类型自动判断（`https://…` → git；其它 → 本地路径）
-- git ref 默认 `HEAD`
-- 包目录自动发现：SKILL.md 在仓库根或 `skills/<name>/` 都能找到，找到多个会报错
-  并列出候选让你用 `subpath` 指定
-- package 名取自 SKILL.md 的 `name`，不用重复写；写了就必须一致
-- 装完自动 `skill_reload`，当前回合即可使用
-
-对话里直接说即可：
-
-```
-装一下 https://github.com/anthropics/skills 里的 skill-creator
-```
-
-Agent 会调用：
-
-```
-skill_install:
-- source: https://github.com/anthropics/skills
-- subpath: skills/skill-creator     # 仓库里有多个 package 时才需要
-```
-
-本地目录：
-
-```
-skill_install:
-- source: /tmp/skill-src/my-skill   # 必须在 SKILLS_INSTALL_LOCAL_ALLOWLIST 下
-```
-
-内容相同的重复安装是显式 no-op（返回 `idempotent: true`），不会反复覆盖。
-`skill_uninstall` 只能删自己装的 package。
-
-### 3. 审批
-
-Skill 工具和其它工具一样走风险表（`config/agent/tool-risk.json`）。默认：
+工具与审批策略：
 
 | 工具 | 风险 | 结果 |
 |------|------|------|
-| `skill_list` / `skill_reload` | low | 直接放行 |
-| `skill_edit` | medium | 直接放行 |
-| `skill_install` / `skill_uninstall` | high | 需要审批 |
+| `skill_list` | low | 直接放行 |
+| `skill_install` | high | 审批后下载、解压并安装当前回合 ZIP |
+| `skill_create` | high | 审批后原子写入 Agent 生成的 package |
+| `skill_edit` / `skill_uninstall` | high | 审批后修改或删除 |
 
-安装意味着下一回合会执行第三方代码，所以默认要审批。要免审批就把
-`tool-risk.json` 里 `skill_install` 调成 `low`/`medium`。
+附件上传会先形成 Dataset；安装审批发生在 Agent 读取、解压和写入 Skill 目录之前。
+拒绝审批不会改变用户 Skill 目录；批准后只执行持久化工具调用中已经确认的参数。
 
-### 4. 约束（安全）
+安全约束：
 
-- **拒绝**：`git@` / SSH、URL 内凭证、npm/OCI、任意压缩包脚本
-- 通用 `write` / `edit` / `bash` **不能**写任何 skill 根；只有 `skill_install` /
-  `skill_edit` / `skill_uninstall` 可以，且只能写调用者自己的目录
-- 系统层在所有模式下只读，安装无法覆盖自带 package
-- Sandbox 侧两层 skill 都是**只读**挂载（执行用），且只 bind 调用者本人的用户目录
-- orgId / userId 作为路径段会被严格校验，无法用 `../` 逃逸
+- ZIP 必须来自当前用户回合，Sandbox 下载仍会校验 session 与 owner。
+- 拒绝 Zip Slip、绝对路径、符号链接、特殊文件、加密条目、重复路径和 `.git` 元数据。
+- 压缩包、单文件、展开总大小、条目数和路径深度都有硬限制。
+- 一个 ZIP 必须只包含一个合法 `SKILL.md` package；系统 Skill 不能被同名覆盖。
+- `skill_edit` 只能修改已安装 package，不能绕过审批创建新 Skill。
+- 通用 `write` / `edit` / `bash` 不能写 Skill 根；Sandbox 侧 Skill 挂载只读。
+- orgId / userId 路径段严格校验，不同用户的目录互不可见。
 
-### 5. 校验格式
+可选审计配置：
+
+```bash
+# SKILLS_AUDIT_LOG=/tmp/skill-audit.jsonl
+```
+
+### Package 格式
 
 每个 package：
 

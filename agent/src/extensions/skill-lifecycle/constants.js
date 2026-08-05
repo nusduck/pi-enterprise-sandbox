@@ -9,7 +9,7 @@
 export const SKILL_LIFECYCLE_TOOL_NAMES = Object.freeze([
   'skill_list',
   'skill_install',
+  'skill_create',
   'skill_uninstall',
   'skill_edit',
-  'skill_reload',
 ]);

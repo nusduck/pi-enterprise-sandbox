@@ -248,10 +248,9 @@ services:
   #   /home/sandbox/skill        bundled ./skills — always read-only
   #   /home/sandbox/skill-user   installed packages, one dir per user:
   #                              <orgId>/<userId>/<package>/
-  # Installs are on by default in every environment: a user only ever writes
-  # their own subtree, and skill_install is high risk so it needs approval.
-  #   SKILLS_MODE=readonly              turns skill installation off entirely
-  #   SKILLS_INSTALL_LOCAL_ALLOWLIST=/path/inside/container   (local sources)
+  # Users install current-turn ZIP attachments or ask the Agent to generate a
+  # package. Every mutation is high risk and goes through approval; URL and
+  # filesystem-path sources are not supported.
   # The user tier is a named volume, so installs survive a container rebuild
   # and follow the user across conversations.
   # Sandbox mounts both tiers read-only, and binds only the calling user's own
@@ -319,19 +318,16 @@ services:
       MCP_SERVERS_JSON: ${MCP_SERVERS_JSON:-[]}
       APPROVAL_MODE: ${APPROVAL_MODE:-${SANDBOX_APPROVAL_MODE:-}}
       APPROVAL_ENABLED: ${APPROVAL_ENABLED:-${SANDBOX_APPROVAL_ENABLED:-}}
-      # readonly (default) | development — skill_install/edit/reload only in development
-      SKILLS_MODE: ${SKILLS_MODE:-enabled}
       SKILLS_ROOT: /home/sandbox/skill
       SKILLS_USER_ROOT: /home/sandbox/skill-user
-      SKILLS_INSTALL_LOCAL_ALLOWLIST: ${SKILLS_INSTALL_LOCAL_ALLOWLIST:-}
       SKILLS_AUDIT_LOG: ${SKILLS_AUDIT_LOG:-}
       # Platform tool risk table → which tools require approval.
       TOOL_RISK_POLICY_PATH: ${TOOL_RISK_POLICY_PATH:-/app/config/agent/tool-risk.json}
       PORT: 4100
     volumes:
-      # Bundled system skills: read-only in every mode.
+      # Bundled system skills are always read-only.
       - ./skills:/home/sandbox/skill:ro
-      # User-installed skills: writable so skill_install has a target.
+      # User Skills: writable only to Agent lifecycle operations.
       - agent_user_skills:/home/sandbox/skill-user
       - ./config/agent:/app/config/agent:ro
     restart: unless-stopped
@@ -413,10 +409,8 @@ services:
       MCP_SERVERS_JSON: ${MCP_SERVERS_JSON:-[]}
       APPROVAL_MODE: ${APPROVAL_MODE:-${SANDBOX_APPROVAL_MODE:-}}
       APPROVAL_ENABLED: ${APPROVAL_ENABLED:-${SANDBOX_APPROVAL_ENABLED:-}}
-      SKILLS_MODE: ${SKILLS_MODE:-enabled}
       SKILLS_ROOT: /home/sandbox/skill
       SKILLS_USER_ROOT: /home/sandbox/skill-user
-      SKILLS_INSTALL_LOCAL_ALLOWLIST: ${SKILLS_INSTALL_LOCAL_ALLOWLIST:-}
       SKILLS_AUDIT_LOG: ${SKILLS_AUDIT_LOG:-}
       # Platform tool risk table → which tools require approval.
       TOOL_RISK_POLICY_PATH: ${TOOL_RISK_POLICY_PATH:-/app/config/agent/tool-risk.json}
