@@ -1,59 +1,58 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-label="UPRC Agent">
   <defs>
-    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#1a1440"/>
-      <stop offset="55%" stop-color="#0f1b3d"/>
-      <stop offset="100%" stop-color="#0a1228"/>
-    </linearGradient>
-    <linearGradient id="shieldFill" x1="30%" y1="10%" x2="70%" y2="90%">
-      <stop offset="0%" stop-color="#24306b"/>
-      <stop offset="100%" stop-color="#152048"/>
-    </linearGradient>
-    <linearGradient id="chevron" x1="50%" y1="0%" x2="50%" y2="100%">
-      <stop offset="0%" stop-color="#7df0ff"/>
-      <stop offset="100%" stop-color="#22d3ee"/>
-    </linearGradient>
-    <filter id="glow" x="-40%" y="-40%" width="180%" height="180%">
-      <feGaussianBlur stdDeviation="1.6" result="b"/>
+    <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="1.4" result="b"/>
       <feMerge>
         <feMergeNode in="b"/>
         <feMergeNode in="SourceGraphic"/>
       </feMerge>
     </filter>
   </defs>
-  <!-- rounded app tile -->
-  <rect x="4" y="4" width="120" height="120" rx="28" fill="url(#bg)"/>
-  <!-- shield -->
-  <path
-    d="M64 22
-       C78 22 92 26 98 30
-       V58
-       C98 84 84 100 64 108
-       C44 100 30 84 30 58
-       V30
-       C36 26 50 22 64 22Z"
-    fill="url(#shieldFill)"
-    stroke="#c9a227"
-    stroke-width="2.5"
-  />
-  <!-- hex mesh (simplified) -->
-  <g opacity="0.45" stroke="#5b8cff" stroke-width="1" fill="none">
-    <path d="M48 52h16l8 12-8 12H48l-8-12z"/>
-    <path d="M64 40h16l8 12-8 12H64l-8-12z"/>
-    <path d="M64 64h16l8 12-8 12H64l-8-12z"/>
-    <circle cx="56" cy="52" r="1.5" fill="#7df0ff"/>
-    <circle cx="72" cy="52" r="1.5" fill="#7df0ff"/>
-    <circle cx="64" cy="64" r="1.5" fill="#7df0ff"/>
-    <circle cx="80" cy="64" r="1.5" fill="#7df0ff"/>
-  </g>
-  <!-- control chevron -->
-  <path
-    d="M46 62 L64 44 L82 62"
+  <!-- black app tile -->
+  <rect width="128" height="128" rx="28" fill="#000"/>
+
+  <!-- orbital ring (behind letters, Grok-style) -->
+  <ellipse
+    cx="68" cy="68"
+    rx="48" ry="17"
     fill="none"
-    stroke="url(#chevron)"
-    stroke-width="7"
-    stroke-linecap="round"
-    stroke-linejoin="round"
+    stroke="#ffffff"
+    stroke-width="3"
+    transform="rotate(-32 68 68)"
+    opacity="0.92"
     filter="url(#glow)"
   />
+
+  <!-- UP monogram — bold, interlocking -->
+  <g fill="#ffffff">
+    <!-- U -->
+    <path d="
+      M28 34
+      h12.5
+      v34
+      c0 7.5 4.2 12 11 12
+      s11-4.5 11-12
+      V34
+      H75
+      v34
+      c0 15.5-10.2 25.5-23.5 25.5
+      S28 83.5 28 68
+      Z"/>
+    <!-- P -->
+    <path d="
+      M72 34
+      h18
+      c14 0 24 9 24 22.5
+      S104 79 90 79
+      H84.5
+      V98
+      H72
+      Z
+      M84.5 46.5
+      v20
+      H90
+      c7 0 11.5-3.8 11.5-10
+      S97 46.5 90 46.5
+      Z"/>
+  </g>
 </svg>
