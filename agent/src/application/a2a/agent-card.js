@@ -196,6 +196,20 @@ export function resolveAgentCardSkills(opts = {}) {
   return normalizeAgentSkills([...configured, ...bundled]);
 }
 
+/** MIME modes this agent accepts as input (text parts only). */
+export const A2A_SUPPORTED_INPUT_MODES = Object.freeze(['text/plain']);
+
+/** MIME modes this agent may produce as outputs / artifacts. */
+export const A2A_SUPPORTED_OUTPUT_MODES = Object.freeze([
+  'text/plain',
+  'application/pdf',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+]);
+
+/** Stable extension URI for enterprise tenant fields on task metadata. */
+export const A2A_ENTERPRISE_EXTENSION_URI =
+  'https://pi-enterprise.local/a2a/extensions/enterprise/v1';
+
 /**
  * @param {{
  *   agentId?: string,
@@ -232,6 +246,7 @@ export function buildAgentCard(input) {
     configured: input.skills,
     skillRoot: input.skillRoot,
   });
+  // Strict A2A v0.3 Agent Card — MIME types only, no v1 mixed fields.
   return {
     name:
       (typeof input.name === 'string' && input.name.trim()) ||
@@ -239,28 +254,20 @@ export function buildAgentCard(input) {
     description,
     url,
     version: input.version || '1.0.0',
-    // Advertise both legacy top-level url + 1.x supportedInterfaces so
-    // company registries on either card shape can discover the RPC endpoint.
     protocolVersion: '0.3',
     preferredTransport: 'JSONRPC',
-    supportedInterfaces: [
+    additionalInterfaces: [
       {
         url,
-        protocolBinding: 'JSONRPC',
-        protocolVersion: '0.3',
+        transport: 'JSONRPC',
       },
     ],
     capabilities: {
       streaming: true,
       pushNotifications: false,
     },
-    defaultInputModes: ['text', 'text/plain'],
-    defaultOutputModes: [
-      'text',
-      'text/plain',
-      'application/pdf',
-      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-    ],
+    defaultInputModes: [...A2A_SUPPORTED_INPUT_MODES],
+    defaultOutputModes: [...A2A_SUPPORTED_OUTPUT_MODES],
     skills,
     securitySchemes: {
       bearer: {
@@ -272,6 +279,16 @@ export function buildAgentCard(input) {
       },
     },
     security: [{ bearer: [] }],
+    supportsAuthenticatedExtendedCard: false,
+    // Enterprise extension surface (org/client audit metadata on tasks).
+    extensions: [
+      {
+        uri: A2A_ENTERPRISE_EXTENSION_URI,
+        description:
+          'Enterprise tenant metadata (org_id, client_id, budget) on task metadata',
+        required: false,
+      },
+    ],
   };
 }
 

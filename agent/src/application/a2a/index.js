@@ -19,6 +19,7 @@ export {
   A2aAuditError,
   extractTextFromA2aMessage,
   parseSendParams,
+  assertSendConfiguration,
   requireStableIdempotencyKey,
 } from './task-service.js';
 
@@ -32,6 +33,7 @@ export {
   buildA2aTaskObject,
   collectArtifactsFromEnvelopes,
   projectArtifactRowsToA2a,
+  projectMessagesToA2aHistory,
 } from './event-projector.js';
 
 export {
@@ -40,6 +42,7 @@ export {
   A2A_RPC_ERROR,
   A2A_METHODS,
   A2A_METHOD_ALIASES,
+  A2A_PROTOCOL_VERSION,
   normalizeA2aMethod,
   parseJsonRpcRequest,
   jsonRpcSuccess,
@@ -56,6 +59,9 @@ export {
   resolveAgentCardSkills,
   listSkillsFromRoot,
   parseSkillMdFrontmatter,
+  A2A_SUPPORTED_INPUT_MODES,
+  A2A_SUPPORTED_OUTPUT_MODES,
+  A2A_ENTERPRISE_EXTENSION_URI,
 } from './agent-card.js';
 
 export {

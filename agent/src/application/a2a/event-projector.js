@@ -146,6 +146,7 @@ export function projectEnvelopeToA2aResult(envelope, ctx) {
  *   createdAt?: string | null,
  *   updatedAt?: string | null,
  *   artifacts?: object[],
+ *   history?: object[],
  *   metadata?: Record<string, unknown>,
  * }} input
  */
@@ -155,7 +156,8 @@ export function buildA2aTaskObject(input) {
     typeof input.contextId === 'string' && input.contextId.trim()
       ? input.contextId.trim()
       : input.a2aTaskId;
-  return {
+  /** @type {Record<string, unknown>} */
+  const task = {
     id: input.a2aTaskId,
     contextId,
     status: {
@@ -168,6 +170,99 @@ export function buildA2aTaskObject(input) {
       ...(input.metadata || {}),
     },
   };
+  if (Array.isArray(input.history) && input.history.length > 0) {
+    task.history = input.history;
+  }
+  return task;
+}
+
+/**
+ * Project durable conversation messages → A2A Message history.
+ *
+ * @param {object[]} messages
+ * @param {{ a2aTaskId: string, contextId?: string | null }} ctx
+ * @returns {object[]}
+ */
+export function projectMessagesToA2aHistory(messages, ctx) {
+  if (!Array.isArray(messages) || messages.length === 0) return [];
+  const contextId =
+    typeof ctx.contextId === 'string' && ctx.contextId.trim()
+      ? ctx.contextId.trim()
+      : ctx.a2aTaskId;
+  /** @type {object[]} */
+  const out = [];
+  for (const row of messages) {
+    if (!row || typeof row !== 'object') continue;
+    const roleRaw = String(row.role || '').toLowerCase();
+    const role =
+      roleRaw === 'assistant' || roleRaw === 'agent'
+        ? 'agent'
+        : roleRaw === 'user'
+          ? 'user'
+          : null;
+    if (!role) continue;
+    const content = extractTextFromMessageRow(row);
+    if (!content) continue;
+    const messageId =
+      typeof row.messageId === 'string' && row.messageId
+        ? row.messageId
+        : typeof row.message_id === 'string' && row.message_id
+          ? row.message_id
+          : `${ctx.a2aTaskId}:${row.sequenceNo ?? out.length}`;
+    out.push({
+      kind: 'message',
+      messageId,
+      role,
+      parts: [{ kind: 'text', text: content }],
+      taskId: ctx.a2aTaskId,
+      contextId,
+    });
+  }
+  return out;
+}
+
+/**
+ * @param {object} row
+ * @returns {string | null}
+ */
+function extractTextFromMessageRow(row) {
+  const json = row.contentJson ?? row.content_json ?? null;
+  if (typeof json === 'string') {
+    try {
+      const parsed = JSON.parse(json);
+      return extractTextFromContentJson(parsed);
+    } catch {
+      return json.trim() || null;
+    }
+  }
+  if (json && typeof json === 'object') {
+    return extractTextFromContentJson(json);
+  }
+  if (typeof row.content === 'string' && row.content.trim()) {
+    return row.content.trim();
+  }
+  return null;
+}
+
+/**
+ * @param {unknown} content
+ * @returns {string | null}
+ */
+function extractTextFromContentJson(content) {
+  if (!content || typeof content !== 'object') return null;
+  const c = /** @type {Record<string, unknown>} */ (content);
+  if (typeof c.text === 'string' && c.text.trim()) return c.text.trim();
+  if (typeof c.content === 'string' && c.content.trim()) return c.content.trim();
+  if (Array.isArray(c.parts)) {
+    const texts = [];
+    for (const p of c.parts) {
+      if (p && typeof p === 'object' && typeof p.text === 'string' && p.text.trim()) {
+        texts.push(p.text.trim());
+      }
+    }
+    if (texts.length) return texts.join('\n');
+  }
+  return null;
 }
 
 /**
