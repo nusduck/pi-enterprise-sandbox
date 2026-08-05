@@ -36,8 +36,11 @@ HOTSPOT_LINE_BUDGETS = {
     "agent/src/infrastructure/pi/pi-runtime-factory.js": 1_120,
     "agent/src/infrastructure/sandbox/internal-files-read-http.js": 1_420,
     "sandbox/app/persistence/repositories/tool_execution_claim_validator.py": 1_111,
-    "sandbox/config.py": 1_469,
-    "sandbox/services/process_manager.py": 1_887,
+    # Ratcheted down after node parsing moved to node_config.py and log
+    # redaction to config_redaction.py.
+    "sandbox/config.py": 1_450,
+    # Ratcheted down after orphan recovery moved to process_orphan_recovery.py.
+    "sandbox/services/process_manager.py": 1_833,
 }
 
 

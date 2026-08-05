@@ -37,9 +37,11 @@ class ProcessRepository:
             INSERT INTO {TABLE} (
                 process_id, org_id, user_id, sandbox_session_id, run_id,
                 execution_id, command_json, status, pid, exit_code,
-                stdout_path, stderr_path, started_at, ended_at, created_at
+                stdout_path, stderr_path, started_at, ended_at, created_at,
+                node_id, node_generation
             ) VALUES (
-                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                %s, %s
             )
             """,
             (
@@ -66,6 +68,10 @@ class ProcessRepository:
                     else None
                 ),
                 now,
+                # Stamps which replica owns the OS process behind this row.
+                # Recovery signals PIDs only for rows carrying its own node id.
+                input.get("node_id"),
+                input.get("node_generation"),
             ),
         )
         row = self.get_by_id(conn, input["process_id"], scope)
@@ -215,22 +221,46 @@ class ProcessRepository:
         self,
         conn: SupportsExecute,
         *,
+        node_id: str,
+        node_generation: int,
         limit: int = 1000,
     ) -> list[ProcessRecord]:
-        """List non-terminal processes for trusted runner restart recovery.
+        """Non-terminal process rows this replica is entitled to recover.
 
-        This is deliberately an unscoped system operation. It is only called
-        during Sandbox startup before user routes are admitted.
+        Owner-unscoped by design — a system operation run at startup, before
+        user routes are admitted — but **node-scoped without exception**.
+
+        The scope is the whole point. A global scan would let every starting
+        replica mark every other replica's running processes as LOST, so a
+        rolling restart of N pods would kill live work N times over. Two
+        predicates prevent that:
+
+        ``node_id = ?``
+            Only rows this replica spawned. Another node's PIDs are not even
+            addressable from here — they live in a different PID namespace.
+
+        ``node_generation < ?``
+            Only rows from a *previous* incarnation of this replica. Rows
+            carrying the current generation belong to the process running right
+            now and must never be reaped.
+
+        Rows with a NULL ``node_id`` predate placement and cannot be attributed
+        to anyone. They are returned so they can be closed out, but the caller
+        must never signal a PID for them.
         """
         conn.execute(
             f"""
             SELECT * FROM {TABLE}
             WHERE LOWER(status) NOT IN
               ('completed', 'failed', 'cancelled', 'timeout', 'orphaned', 'lost')
+              AND (
+                (node_id = %s AND node_generation < %s)
+                OR node_id IS NULL
+              )
             ORDER BY created_at ASC
             LIMIT %s
             """,
-            (int(limit),),
+            (node_id, int(node_generation), int(limit)),
         )
         return [map_process(row) for row in conn.fetchall()]
 

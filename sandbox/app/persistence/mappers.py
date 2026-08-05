@@ -165,6 +165,14 @@ def map_process(row: dict[str, Any]) -> ProcessRecord:
         ),
         started_at=format_datetime(row.get("started_at")),
         ended_at=format_datetime(row.get("ended_at")),
+        node_id=(
+            str(row["node_id"]) if row.get("node_id") is not None else None
+        ),
+        node_generation=(
+            int(row["node_generation"])
+            if row.get("node_generation") is not None
+            else None
+        ),
     )
 
 

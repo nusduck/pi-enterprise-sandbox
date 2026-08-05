@@ -59,6 +59,7 @@ from sandbox.services.process_identity import (
     safe_signal_identity,
 )
 from sandbox.services.process_handle_store import FormalProcessDualWriter
+from sandbox.services.process_orphan_recovery import recover_orphans
 from sandbox.services.child_workspace_quota import (
     ChildQuotaDecision,
     ChildWorkspaceQuotaWatch,
@@ -223,11 +224,31 @@ class ProcessManager:
         self._cancel_requested.discard(process_id)
         return True
 
+    def _stamp_node(self, entry: dict[str, Any]) -> dict[str, Any]:
+        """Attach this replica's identity unless the caller already supplied one.
+
+        Recovery decides whether it may signal a PID purely from these columns,
+        so an unstamped row is one nobody will ever be able to clean up safely.
+        The row only records where the OS process lives; the writer must not
+        overwrite an attribution that already exists (recovery passes the
+        original through when it closes a row out).
+        """
+        if entry.get("node_id") is not None:
+            return entry
+        identity = self._recovery_identity()
+        if identity is None:
+            return entry
+        node_id, generation = identity
+        stamped = dict(entry)
+        stamped["node_id"] = node_id
+        stamped["node_generation"] = generation
+        return stamped
+
     def _persist(self, entry: dict[str, Any]) -> None:
         """Persist to the configured authority before exposing runtime state."""
         if not self._formal.enabled:
             raise RuntimeError("process persistence is not installed")
-        self._formal.upsert_from_runtime(entry)
+        self._formal.upsert_from_runtime(self._stamp_node(entry))
 
     def _persist_reap_soft(self, process_id: str, entry: dict[str, Any]) -> None:
         """Best-effort persist from the reaper thread — must never block completion.
@@ -340,115 +361,40 @@ class ProcessManager:
         with self._lock:
             return self.recover_formal_orphans()
 
+    @staticmethod
+    def _recovery_identity() -> tuple[str, int] | None:
+        """This replica's (node_id, generation), or None if unregistered."""
+        from sandbox.services.node_registry import node_registry
+
+        identity = node_registry.identity
+        if identity is None:
+            return None
+        return identity.node_id, identity.generation
+
     def recover_formal_orphans(self) -> int:
-        """Resolve formal MySQL process rows left active by a runner restart."""
-        recovered = 0
-        now = _now_iso()
-        for record in self._formal.list_active_for_recovery():
-            command_json = (
-                dict(record.command_json)
-                if isinstance(record.command_json, dict)
-                else {}
-            )
-            start_identity = command_json.get("start_identity")
-            pgid = command_json.get("pgid")
-            namespace_pid = command_json.get("namespace_pid")
-            namespace_start_identity = command_json.get("namespace_start_identity")
-            namespace_pgid = command_json.get("namespace_pgid")
-            try:
-                pgid_i = int(pgid) if pgid is not None else None
-            except (TypeError, ValueError):
-                pgid_i = None
-            try:
-                namespace_pid_i = int(namespace_pid) if namespace_pid is not None else None
-            except (TypeError, ValueError):
-                namespace_pid_i = None
-            try:
-                namespace_pgid_i = int(namespace_pgid) if namespace_pgid is not None else None
-            except (TypeError, ValueError):
-                namespace_pgid_i = None
+        """Close out process rows left active by this replica's previous run.
 
-            signaled = False
-            # The namespace init is the recovery authority. Killing it (rather
-            # than its process group) makes Linux tear down every descendant,
-            # including descendants that called setsid().
-            if namespace_pid_i is not None and namespace_start_identity:
-                result = safe_signal_identity(
-                    pid=namespace_pid_i,
-                    pgid=None,
-                    start_identity=str(namespace_start_identity),
-                    signum=signal.SIGTERM,
-                )
-                if result.get("signaled"):
-                    signaled = True
-                    if identity_matches(namespace_pid_i, str(namespace_start_identity)):
-                        safe_signal_identity(
-                            pid=namespace_pid_i,
-                            pgid=None,
-                            start_identity=str(namespace_start_identity),
-                            signum=signal.SIGKILL,
-                        )
-            if record.pid is not None and start_identity:
-                result = safe_signal_identity(
-                    pid=int(record.pid),
-                    pgid=pgid_i,
-                    start_identity=str(start_identity),
-                    signum=signal.SIGTERM,
-                )
-                if result.get("signaled"):
-                    signaled = True
-                    if identity_matches(int(record.pid), str(start_identity)):
-                        safe_signal_identity(
-                            pid=int(record.pid),
-                            pgid=pgid_i,
-                            start_identity=str(start_identity),
-                            signum=signal.SIGKILL,
-                        )
-            elif record.pid is not None and process_alive(record.pid):
-                logger.warning(
-                    "formal process %s active after restart without "
-                    "start_identity; not signaling pid %s",
-                    record.process_id,
-                    record.pid,
-                )
-
-            self._formal.upsert_from_runtime(
-                {
-                    "process_id": record.process_id,
-                    "org_id": record.org_id,
-                    "user_id": record.user_id,
-                    "sandbox_session_id": record.sandbox_session_id,
-                    "session_id": record.sandbox_session_id,
-                    "run_id": record.run_id,
-                    "execution_id": record.execution_id,
-                    "command": command_json.get("command") or "",
-                    "cwd": command_json.get("cwd"),
-                    "pgid": pgid_i,
-                    "start_identity": start_identity,
-                    "namespace_pid": namespace_pid_i,
-                    "namespace_pgid": namespace_pgid_i,
-                    "namespace_start_identity": namespace_start_identity,
-                    "pid_namespace": command_json.get("pid_namespace"),
-                    "timeout_seconds": command_json.get("timeout_seconds"),
-                    "background": bool(command_json.get("background")),
-                    "status": ProcessStatus.LOST.value,
-                    "pid": record.pid,
-                    "exit_code": -signal.SIGTERM if signaled else -1,
-                    "stdout_path": record.stdout_path,
-                    "stderr_path": record.stderr_path,
-                    "started_at": record.started_at,
-                    "finished_at": record.ended_at or now,
-                    "created_at": record.created_at,
-                }
-            )
-            recovered += 1
-
-        self._orphans_marked += recovered
-        if recovered:
+        Delegates to :mod:`sandbox.services.process_orphan_recovery`, which
+        documents why the node scope is mandatory. Without a claimed identity
+        there is nothing safe to recover, so this is a no-op rather than a
+        global sweep.
+        """
+        identity = self._recovery_identity()
+        if identity is None:
             logger.info(
-                "Marked %d formal process execution(s) as LOST after restart",
-                recovered,
+                "skipping formal orphan recovery: no node identity claimed yet"
             )
+            return 0
+        node_id, node_generation = identity
+
+        recovered = recover_orphans(
+            self._formal,
+            node_id=node_id,
+            node_generation=node_generation,
+            now=_now_iso(),
+            lost_status=ProcessStatus.LOST.value,
+        )
+        self._orphans_marked += recovered
         return recovered
 
     @staticmethod

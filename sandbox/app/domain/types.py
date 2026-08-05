@@ -127,6 +127,12 @@ class ProcessRecord:
     stderr_path: str | None = None
     started_at: str | None = None
     ended_at: str | None = None
+    # Which Sandbox replica spawned this process, and in which incarnation of
+    # it. A child can only be signalled from the pod owning its PID namespace,
+    # so recovery reaps by (node_id, node_generation) and never signals a row
+    # it does not own. NULL means unattributed (pre-placement row).
+    node_id: str | None = None
+    node_generation: int | None = None
 
 
 @dataclass(frozen=True, slots=True)

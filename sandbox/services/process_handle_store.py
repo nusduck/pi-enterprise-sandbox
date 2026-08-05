@@ -51,7 +51,12 @@ class FormalProcessRepositoryPort(Protocol):
     ) -> ProcessRecord: ...
 
     def list_active_for_recovery(
-        self, conn: Any, *, limit: int = 1000
+        self,
+        conn: Any,
+        *,
+        node_id: str,
+        node_generation: int,
+        limit: int = 1000,
     ) -> list[ProcessRecord]: ...
 
     def list_by_sandbox_session(
@@ -99,6 +104,9 @@ class FakeFormalProcessRepository:
                 "started_at": input.get("started_at"),
                 "ended_at": input.get("ended_at"),
                 "created_at": input.get("created_at") or to_mysql_datetime(),
+                # Ownership stamp, set once at create like the real table.
+                "node_id": input.get("node_id"),
+                "node_generation": input.get("node_generation"),
             }
             self.rows[pid] = row
             return self._to_record(row)
@@ -202,16 +210,37 @@ class FakeFormalProcessRepository:
         return out[: int(limit)]
 
     def list_active_for_recovery(
-        self, conn: Any, *, limit: int = 1000
-    ) -> list[ProcessRecord]:  # noqa: ARG002
+        self,
+        conn: Any,  # noqa: ARG002
+        *,
+        node_id: str,
+        node_generation: int,
+        limit: int = 1000,
+    ) -> list[ProcessRecord]:
+        """Mirror the real node-scoped predicate — see ProcessRepository."""
         terminal = {"completed", "failed", "cancelled", "timeout", "orphaned", "lost"}
         with self._lock:
             rows = [
                 self._to_record(row)
                 for row in self.rows.values()
                 if str(row.get("status", "")).lower() not in terminal
+                and self._recoverable_by(row, node_id, node_generation)
             ]
         return rows[: int(limit)]
+
+    @staticmethod
+    def _recoverable_by(
+        row: dict[str, Any],
+        node_id: str,
+        node_generation: int,
+    ) -> bool:
+        row_node = row.get("node_id")
+        if row_node is None:
+            return True  # unattributed: closable, but never signalled
+        if str(row_node) != node_id:
+            return False
+        row_generation = row.get("node_generation")
+        return row_generation is not None and int(row_generation) < int(node_generation)
 
     @staticmethod
     def _to_record(row: dict[str, Any]) -> ProcessRecord:
@@ -231,6 +260,8 @@ class FakeFormalProcessRepository:
             stderr_path=row.get("stderr_path"),
             started_at=row.get("started_at"),
             ended_at=row.get("ended_at"),
+            node_id=row.get("node_id"),
+            node_generation=row.get("node_generation"),
         )
 
 
@@ -371,6 +402,12 @@ class FormalProcessDualWriter:
             "started_at": entry.get("started_at"),
             "ended_at": entry.get("finished_at") or entry.get("ended_at"),
             "created_at": entry.get("created_at"),
+            # Ownership stamp, written on create and never rewritten. The node
+            # id records whose PID namespace the OS process lives in; rewriting
+            # it later would hand another replica permission to signal a PID it
+            # cannot even see.
+            "node_id": entry.get("node_id"),
+            "node_generation": entry.get("node_generation"),
         }
         try:
             with self._lock:
@@ -411,11 +448,23 @@ class FormalProcessDualWriter:
             )
             return False
 
-    def list_active_for_recovery(self, *, limit: int = 1000) -> list[ProcessRecord]:
+    def list_active_for_recovery(
+        self,
+        *,
+        node_id: str,
+        node_generation: int,
+        limit: int = 1000,
+    ) -> list[ProcessRecord]:
+        """Rows this replica may recover. Node scope is mandatory, never global."""
         if self.repo is None:
             if self.authoritative:
                 raise RuntimeError("formal process repository is unavailable")
             return []
         return self._with_conn(
-            lambda conn: self.repo.list_active_for_recovery(conn, limit=limit)
+            lambda conn: self.repo.list_active_for_recovery(
+                conn,
+                node_id=node_id,
+                node_generation=node_generation,
+                limit=limit,
+            )
         )
