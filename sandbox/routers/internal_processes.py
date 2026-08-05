@@ -7,6 +7,7 @@ from fastapi.responses import JSONResponse
 
 from sandbox.security.internal_http_auth import InternalAuthContext, require_internal_auth
 from sandbox.services.formal_process_runtime import get_formal_process_runtime
+from sandbox.services.placement_guard import require_local_placement
 
 router = APIRouter(tags=["internal-processes"])
 PROCESS_MAX_BODY_BYTES = 64 * 1024
@@ -20,6 +21,10 @@ async def _handle(request: Request, ctx: InternalAuthContext, *, tool_name: str)
     runtime = get_formal_process_runtime(request.app)
     if runtime is None:
         raise HTTPException(status_code=503, detail="Service temporarily unavailable")
+    # The most dangerous routes to misroute. A process handle is a Popen object
+    # in one replica's memory: elsewhere, `read` returns an empty slice and
+    # `kill` signals nothing, both with a success status.
+    require_local_placement(request.app, ctx.claims)
     return await runtime.handle(claims=ctx.claims, raw_body=await request.body(), tool_name=tool_name)
 
 

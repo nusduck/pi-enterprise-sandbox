@@ -42,8 +42,9 @@ class SessionRepository:
             f"""
             INSERT INTO {TABLE} (
                 sandbox_session_id, org_id, user_id, agent_session_id,
-                workspace_id, status, created_at, updated_at, closed_at
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                workspace_id, status, created_at, updated_at, closed_at,
+                node_id
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """,
             (
                 input["sandbox_session_id"],
@@ -55,6 +56,7 @@ class SessionRepository:
                 now,
                 updated,
                 closed,
+                input.get("node_id"),
             ),
         )
         row = self.get_by_id(conn, input["sandbox_session_id"], scope)
@@ -158,6 +160,39 @@ class SessionRepository:
                 resource=TABLE,
                 id=sandbox_session_id,
             )
+        return self.require_by_id(conn, sandbox_session_id, s)
+
+    def assign_node(
+        self,
+        conn: SupportsExecute,
+        sandbox_session_id: str,
+        scope: OwnerScope | dict[str, str],
+        *,
+        node_id: str,
+    ) -> SandboxSessionRecord:
+        """Bind an unplaced session to a replica, once and only once.
+
+        ``node_id IS NULL`` in the WHERE clause makes this a compare-and-set:
+        two replicas racing to place the same session cannot both win, and the
+        loser sees its update affect zero rows. That matters because the winner
+        is about to create the workspace directory on its own local volume —
+        a second, different answer would leave the session pointing at a
+        replica that has no data for it.
+
+        A no-op update returns the current row rather than raising, so the
+        caller re-reads the winner's placement and routes there.
+        """
+        s = require_owner_scope(scope, resource=TABLE)
+        now = to_mysql_datetime()
+        conn.execute(
+            f"""
+            UPDATE {TABLE}
+            SET node_id = %s, updated_at = %s
+            WHERE sandbox_session_id = %s AND org_id = %s AND user_id = %s
+              AND node_id IS NULL
+            """,
+            (node_id, now, sandbox_session_id, s.org_id, s.user_id),
+        )
         return self.require_by_id(conn, sandbox_session_id, s)
 
     def list_for_owner(

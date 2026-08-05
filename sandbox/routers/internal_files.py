@@ -21,6 +21,7 @@ from sandbox.services.files_read_runtime import (
     get_skills_read_runtime,
 )
 from sandbox.services.files_write_runtime import get_files_write_runtime
+from sandbox.services.placement_guard import require_local_placement
 
 logger = logging.getLogger("sandbox.routers.internal_files")
 
@@ -79,6 +80,9 @@ async def internal_files_read(
         logger.warning("files.read runtime unconfigured")
         raise HTTPException(status_code=503, detail=_DETAIL_UNAVAILABLE)
 
+    # Workspace files live on the owning replica's volume only.
+    require_local_placement(request.app, ctx.claims)
+
     # Must be the same bytes the auth dependency hashed (cached on Request).
     raw_body = await request.body()
     if type(raw_body) is not bytes:  # noqa: E721
@@ -107,6 +111,9 @@ async def _internal_files_write_or_edit(request: Request, ctx: InternalAuthConte
     runtime = get_files_write_runtime(request.app)
     if runtime is None:
         raise HTTPException(status_code=503, detail=_DETAIL_UNAVAILABLE)
+    # Writing here without owning the workspace would create the file on the
+    # wrong volume, where nothing will ever read it back.
+    require_local_placement(request.app, ctx.claims)
     raw_body = await request.body()
     if type(raw_body) is not bytes:  # noqa: E721
         raise HTTPException(status_code=400, detail="Invalid request")

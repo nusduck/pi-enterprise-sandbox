@@ -7,6 +7,7 @@ from fastapi.responses import JSONResponse
 
 from sandbox.security.internal_http_auth import InternalAuthContext, require_internal_auth
 from sandbox.services.formal_execution_runtime import get_formal_execution_runtime
+from sandbox.services.placement_guard import require_local_placement
 
 router = APIRouter(tags=["internal-executions"])
 
@@ -27,6 +28,10 @@ async def _handle(
     runtime = get_formal_execution_runtime(request.app)
     if runtime is None:
         raise HTTPException(status_code=503, detail="Service temporarily unavailable")
+    # Executions run in the workspace directory, which exists on exactly one
+    # replica's volume. Running here without owning it would execute against an
+    # empty directory and report success.
+    require_local_placement(request.app, ctx.claims)
     return await runtime.handle(
         claims=ctx.claims,
         raw_body=await request.body(),

@@ -35,6 +35,11 @@ class SandboxSessionRecord:
     created_at: str
     updated_at: str
     closed_at: str | None = None
+    # The Sandbox replica that owns this workspace. Assigned once, at first
+    # ensure, and never reassigned while the session is open: the workspace
+    # directory exists on that replica's volume and nowhere else. NULL means
+    # not yet placed.
+    node_id: str | None = None
 
 
 # Sandbox execution lifecycle (PR-07B batch 2B).
@@ -171,6 +176,10 @@ class ArtifactRecord:
     status: str
     created_at: str
     mime_type: str | None = None
+    # Replica whose artifacts volume holds the immutable snapshot. Downloads
+    # route here until artifacts move to shared object storage. NULL means the
+    # blob predates placement.
+    storage_node_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

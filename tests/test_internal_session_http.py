@@ -95,7 +95,11 @@ def test_internal_session_route_authenticates_and_passes_exact_binding(
                 agent_session_id=AGENT,
                 workspace_id=WORKSPACE,
                 status="ACTIVE",
+                node_id=None,
             )
+
+        def describe_placement(self, record):
+            return {"nodeId": None, "nodeAddress": None, "placedElsewhere": False}
 
     app = FastAPI()
     set_replay_store(app, InMemoryReplayStore())

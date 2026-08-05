@@ -23,6 +23,10 @@ from sandbox.artifact.infrastructure.manager import (
     iter_snapshot_chunks,
 )
 from sandbox.artifact.application.runtime import get_formal_artifact_runtime
+from sandbox.services.placement_guard import (
+    require_local_artifact_storage,
+    require_local_placement,
+)
 
 router = APIRouter(tags=["internal-artifacts"])
 ARTIFACT_SUBMIT_MAX_BODY_BYTES = 16 * 1024
@@ -48,6 +52,9 @@ async def internal_artifact_submit(
     runtime = get_formal_artifact_runtime(request.app)
     if runtime is None:
         raise HTTPException(status_code=503, detail="Service temporarily unavailable")
+    # Submitting snapshots a workspace file, so it needs the workspace owner.
+    # The resulting artifact is stamped with this replica's storage node.
+    require_local_placement(request.app, ctx.claims)
     return await runtime.handle(claims=ctx.claims, raw_body=await request.body())
 
 
@@ -84,6 +91,11 @@ async def internal_artifact_download(
             503: "Service temporarily unavailable",
         }[status]
         raise HTTPException(status_code=status, detail=detail) from None
+
+    # Artifacts are routed by where the blob physically lives, not by the
+    # workspace: the producing session may have been closed long ago, and
+    # snapshots outlive their workspace by design.
+    require_local_artifact_storage(artifact)
 
     disposition = artifact_content_disposition(artifact.name)
     media_type = str(artifact.mime_type or "application/octet-stream").strip()

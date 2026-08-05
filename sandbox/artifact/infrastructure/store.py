@@ -338,6 +338,15 @@ class FormalArtifactDualWriter:
         rel = str(entry["relative_path"])
         sha = str(entry["sha256"]).lower()
         entry = {**entry, "sha256": sha}
+        if entry.get("storage_node_id") is None:
+            # The snapshot was just written to *this* replica's artifacts
+            # volume, so this replica is where downloads must be routed. An
+            # unstamped artifact is one no replica can prove it holds.
+            from sandbox.services.node_registry import node_registry
+
+            identity = node_registry.identity
+            if identity is not None:
+                entry["storage_node_id"] = identity.node_id
 
         def _do(conn):
             existing = self.repo.get_by_run_path_hash(

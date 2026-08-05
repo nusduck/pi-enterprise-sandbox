@@ -98,6 +98,7 @@ def map_sandbox_session(row: dict[str, Any]) -> SandboxSessionRecord:
         created_at=format_datetime(row["created_at"]) or "",
         updated_at=format_datetime(row["updated_at"]) or "",
         closed_at=format_datetime(row.get("closed_at")),
+        node_id=(str(row["node_id"]) if row.get("node_id") is not None else None),
     )
 
 
@@ -211,6 +212,11 @@ def map_artifact(row: dict[str, Any]) -> ArtifactRecord:
         status=str(row["status"]),
         created_at=format_datetime(row["created_at"]) or "",
         mime_type=str(row["mime_type"]) if row.get("mime_type") is not None else None,
+        storage_node_id=(
+            str(row["storage_node_id"])
+            if row.get("storage_node_id") is not None
+            else None
+        ),
     )
 
 

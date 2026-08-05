@@ -223,9 +223,19 @@ class FormalSessionRuntime:
                             "agent_session_id": agent_session_id,
                             "workspace_id": workspace_id,
                             "status": "ACTIVE",
+                            # Placed below, in its own compare-and-set, so a
+                            # create that races another replica cannot claim a
+                            # placement it did not win.
+                            "node_id": None,
                         },
                     )
                     conn.commit()
+
+                if record.node_id is None:
+                    placed = self._place(conn, record, scope)
+                    if placed is not None:
+                        record = placed
+                        conn.commit()
         except SessionProvisioningError:
             raise
         except Exception as exc:
@@ -234,6 +244,12 @@ class FormalSessionRuntime:
                 "Session persistence unavailable",
                 status=503,
             ) from exc
+
+        if not self._owns(record):
+            # Another replica owns this workspace. Creating the directory here
+            # would produce an empty duplicate on the wrong volume, so the
+            # caller is told where to go instead.
+            return record
 
         try:
             workspace_manager.init_workspace(workspace_id)
@@ -246,6 +262,125 @@ class FormalSessionRuntime:
                 status=503,
             ) from exc
         return record
+
+    def resolve_placement(
+        self,
+        sandbox_session_id: str,
+        *,
+        org_id: str,
+        user_id: str,
+    ) -> tuple[str | None, str | None] | None:
+        """Return ``(owner_node_id, owner_address)`` for an owned session.
+
+        None means the session does not exist, is not owned by this tenant, or
+        its persistence is unreachable — the placement guard treats all three
+        identically so routing cannot be used to probe for sessions.
+        """
+        from sandbox.services.node_registry import node_registry
+
+        try:
+            sandbox_session_id = validate_formal_id(
+                sandbox_session_id, "sandbox_session_id"
+            )
+            scope = OwnerScope(
+                org_id=validate_formal_id(org_id, "org_id"),
+                user_id=validate_formal_id(user_id, "user_id"),
+            )
+        except (TypeError, ValueError):
+            return None
+
+        try:
+            with self.db.connection() as conn:
+                record = self.repository.get_by_id(conn, sandbox_session_id, scope)
+                if record is None:
+                    return None
+                if record.node_id is None:
+                    return (None, None)
+                owner = node_registry.resolve_node(conn, record.node_id)
+                return (record.node_id, owner.address if owner else None)
+        except Exception:
+            return None
+
+    def describe_placement(self, record: SandboxSessionRecord) -> dict[str, Any]:
+        """Routing hint for the caller: who owns this workspace, and where.
+
+        ``nodeAddress`` is resolved from the registry rather than echoed from
+        config, so the caller always dials the address the owner last published
+        for itself.
+        """
+        from sandbox.services.node_registry import node_registry
+
+        if record.node_id is None or node_registry.identity is None:
+            return {"nodeId": None, "nodeAddress": None, "placedElsewhere": False}
+
+        address: str | None = None
+        if record.node_id == node_registry.identity.node_id:
+            address = node_registry.identity.address
+        else:
+            try:
+                with self.db.connection() as conn:
+                    owner = node_registry.resolve_node(conn, record.node_id)
+                address = owner.address if owner is not None else None
+            except Exception:
+                # A missing address is not fatal here: the caller can still
+                # re-resolve through its own placement lookup.
+                address = None
+
+        return {
+            "nodeId": record.node_id,
+            "nodeAddress": address,
+            "placedElsewhere": not self._owns(record),
+        }
+
+    @staticmethod
+    def _owns(record: SandboxSessionRecord) -> bool:
+        """True when this replica is the placement owner of ``record``."""
+        from sandbox.services.node_registry import node_registry
+
+        identity = node_registry.identity
+        if identity is None:
+            # No registry means single-process development: there is only one
+            # replica, so it owns everything by definition.
+            return True
+        return record.node_id == identity.node_id
+
+    def _place(
+        self,
+        conn: Any,
+        record: SandboxSessionRecord,
+        scope: OwnerScope,
+    ) -> SandboxSessionRecord | None:
+        """Bind an unplaced session to the least-loaded live replica.
+
+        ``sessions/ensure`` is the only internal route that may be served by any
+        replica, which makes it the single placement oracle. Every other route
+        is guarded and must reach the owner directly.
+
+        Returns None when there is nothing to place — a single-process runtime
+        has one replica, so placement would be a write with no meaning.
+        """
+        from sandbox.config import settings
+        from sandbox.services.node_registry import node_registry
+
+        if node_registry.identity is None:
+            return None  # single-process development: nothing to place
+
+        chosen = node_registry.select_placement_node(
+            conn,
+            interval_seconds=settings.node_heartbeat_interval_seconds,
+            liveness_multiplier=settings.node_liveness_multiplier,
+        )
+        if chosen is None:
+            # Every replica is draining or its heartbeat has expired. Retryable:
+            # placing on a node we believe is dead would strand the workspace.
+            raise SessionProvisioningError(
+                "NO_PLACEABLE_NODE",
+                "No Sandbox replica is currently accepting new workspaces",
+                status=503,
+            )
+        return self.repository.assign_node(
+            conn, record.sandbox_session_id, scope, node_id=chosen.node_id
+        )
 
     def remove_owned(
         self,

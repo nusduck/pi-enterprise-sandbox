@@ -39,6 +39,7 @@ async def internal_session_ensure(
     try:
         workspace_id = parse_session_ensure_body(await request.body())
         record = runtime.ensure(claims=ctx.claims, workspace_id=workspace_id)
+        placement = runtime.describe_placement(record)
     except SessionProvisioningError as exc:
         raise HTTPException(
             status_code=exc.status,
@@ -51,6 +52,11 @@ async def internal_session_ensure(
             "agentSessionId": record.agent_session_id,
             "workspaceId": record.workspace_id,
             "status": record.status,
+            # Where every *other* internal call for this session must be sent.
+            # `placedElsewhere` says this reply came from a replica that does
+            # not own the workspace, so the caller has to repeat ensure against
+            # the owner before the workspace directory will exist.
+            **placement,
         },
     )
 

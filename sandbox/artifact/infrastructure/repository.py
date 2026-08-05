@@ -45,9 +45,9 @@ class ArtifactRepository:
             INSERT INTO {TABLE} (
                 artifact_id, org_id, user_id, conversation_id, agent_session_id,
                 run_id, relative_path, display_name, mime_type, size_bytes,
-                sha256, status, created_at
+                sha256, status, created_at, storage_node_id
             ) VALUES (
-                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
             )
             """,
             (
@@ -64,6 +64,9 @@ class ArtifactRepository:
                 input["sha256"],
                 input["status"],
                 now,
+                # Which replica's artifacts volume holds the blob. Downloads
+                # must be routed there until artifacts move to object storage.
+                input.get("storage_node_id"),
             ),
         )
         row = self.get_by_id(conn, input["artifact_id"], scope)
