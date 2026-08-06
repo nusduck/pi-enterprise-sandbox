@@ -939,7 +939,12 @@ export class ServiceContainer {
       '../infrastructure/sandbox/internal-session-http.js'
     );
     return createInternalSessionProvisioner({
-      baseUrl: this.env.SANDBOX_BASE_URL || 'http://sandbox:8081',
+      // Discovery, deliberately: `sessions/ensure` is the one internal route
+      // any replica may answer, and answering it is what assigns a placement.
+      // A replica that is not the owner says so, and the provisioner repeats
+      // the call against the owner so the workspace is created in the right
+      // place.
+      baseUrl: this.env.SANDBOX_DISCOVERY_URL || 'http://sandbox:8081',
       keyring,
       activeKid,
       allowInsecureHttp: true,
@@ -1093,78 +1098,22 @@ export class ServiceContainer {
             'SANDBOX_INTERNAL_HMAC_KEYRING and SANDBOX_INTERNAL_HMAC_ACTIVE_KID are required (see .env.example)',
           );
         }
-        let createInternalReadTransport = null;
-        let createInternalExecutionTransport = null;
-        let createInternalFilesWriteTransport = null;
-        let createInternalArtifactTransport = null;
-        let createInternalProcessTransport = null;
-        {
-          const {
-            createInternalFilesReadTransport,
-            createInternalSkillsReadTransport,
-          } = await import(
-            '../infrastructure/sandbox/internal-files-read-http.js'
-          );
-          createInternalReadTransport = (runContext) =>
-            {
-              const readOptions = {
-              baseUrl: this.env.SANDBOX_BASE_URL || 'http://sandbox:8081',
-              keyring: internalKeyring,
-              activeKid: internalActiveKid,
-              allowInsecureHttp: true,
-              traceState: runContext?.traceState,
-              };
-              const files = createInternalFilesReadTransport(readOptions);
-              const skills = createInternalSkillsReadTransport(readOptions);
-              return { ...files, readSkill: skills.readFile };
-            };
-          const { createInternalExecutionTransport: createExecutionTransport } =
-            await import(
-              '../infrastructure/sandbox/internal-execution-http.js'
-            );
-          createInternalExecutionTransport = (runContext) =>
-            createExecutionTransport({
-              baseUrl: this.env.SANDBOX_BASE_URL || 'http://sandbox:8081',
-              keyring: internalKeyring,
-              activeKid: internalActiveKid,
-              allowInsecureHttp: true,
-              traceState: runContext?.traceState,
-            });
-          const { createInternalFilesWriteTransport: createFilesWriteTransport } = await import(
-            '../infrastructure/sandbox/internal-files-write-http.js'
-          );
-          createInternalFilesWriteTransport = (runContext) =>
-            createFilesWriteTransport({
-              baseUrl: this.env.SANDBOX_BASE_URL || 'http://sandbox:8081',
-              keyring: internalKeyring,
-              activeKid: internalActiveKid,
-              allowInsecureHttp: true,
-              traceState: runContext?.traceState,
-            });
-          const { createInternalArtifactSubmitTransport } = await import(
-            '../infrastructure/sandbox/internal-artifact-submit-http.js'
-          );
-          createInternalArtifactTransport = (runContext) =>
-            createInternalArtifactSubmitTransport({
-              baseUrl: this.env.SANDBOX_BASE_URL || 'http://sandbox:8081',
-              keyring: internalKeyring,
-              activeKid: internalActiveKid,
-              allowInsecureHttp: true,
-              traceState: runContext?.traceState,
-            });
-          const { createInternalProcessTransport: createProcessTransport } =
-            await import(
-              '../infrastructure/sandbox/internal-process-http.js'
-            );
-          createInternalProcessTransport = (runContext) =>
-            createProcessTransport({
-              baseUrl: this.env.SANDBOX_BASE_URL || 'http://sandbox:8081',
-              keyring: internalKeyring,
-              activeKid: internalActiveKid,
-              allowInsecureHttp: true,
-              traceState: runContext?.traceState,
-            });
-        }
+        const { createSandboxTransportFactories } = await import(
+          './sandbox-transports.js'
+        );
+        const {
+          createInternalReadTransport,
+          createInternalExecutionTransport,
+          createInternalFilesWriteTransport,
+          createInternalArtifactTransport,
+          createInternalProcessTransport,
+        } = await createSandboxTransportFactories({
+          discoveryUrl: this.env.SANDBOX_DISCOVERY_URL || 'http://sandbox:8081',
+          keyring: internalKeyring,
+          activeKid: internalActiveKid,
+          knexFactory: () => this.knex ?? null,
+        });
+
         extensionBundleFactory = createSandboxBridgeExtensionBundleFactory({
           extraDeps: { toolRiskPolicy, skillManagerFactory },
           createTransportForRun: (runContext) =>

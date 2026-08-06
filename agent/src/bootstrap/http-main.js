@@ -332,9 +332,21 @@ export async function startHttpMain(env = process.env) {
       const { createInternalArtifactDownloadTransport } = await import(
         '../infrastructure/sandbox/internal-artifact-download-http.js'
       );
+      // A2A byte delivery reads artifact snapshots, which live on the replica
+      // that produced them. The resolver routes by `artifacts.storage_node_id`;
+      // the discovery URL is only the fallback for unstamped blobs.
+      const { createSandboxPlacementResolver } = await import(
+        '../infrastructure/sandbox/placement-resolver.js'
+      );
+      const sandboxDiscoveryUrl =
+        env.SANDBOX_DISCOVERY_URL || config.SANDBOX_DISCOVERY_URL;
       const artifactDownloadTransport =
         createInternalArtifactDownloadTransport({
-          baseUrl: env.SANDBOX_BASE_URL || config.SANDBOX_BASE_URL,
+          baseUrl: sandboxDiscoveryUrl,
+          placement: createSandboxPlacementResolver({
+            discoveryUrl: sandboxDiscoveryUrl,
+            knexFactory: () => httpServices.knex ?? null,
+          }),
           keyring: internalKeyring,
           activeKid: internalActiveKid,
           allowInsecureHttp: true,

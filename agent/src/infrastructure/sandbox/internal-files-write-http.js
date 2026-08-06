@@ -10,6 +10,10 @@ import {
   normalizeBaseUrl,
 } from './internal-files-read-http.js';
 import { createTraceHeaders } from './trace-context.js';
+import {
+  createBaseUrlSelector,
+  sendWithPlacementRetry,
+} from './placement-routing.js';
 
 export const FILES_WRITE_HTU = '/internal/v1/files/write';
 export const FILES_EDIT_HTU = '/internal/v1/files/edit';
@@ -301,6 +305,10 @@ export function createInternalFilesWriteTransport(options = {}) {
   const baseUrl = normalizeBaseUrl(options.baseUrl, {
     allowInsecureHttp: options.allowInsecureHttp === true,
   });
+  const selectBaseUrl = createBaseUrlSelector({
+    baseUrl,
+    placement: options.placement,
+  });
   const fetchImpl = options.fetchImpl ?? globalThis.fetch;
   if (typeof fetchImpl !== 'function') {
     fail('SANDBOX_TRANSPORT_CONFIG', 'fetchImpl required');
@@ -367,40 +375,55 @@ export function createInternalFilesWriteTransport(options = {}) {
       });
     }
 
-    let response;
-    try {
-      response = await fetchImpl(`${baseUrl}${htu}`, {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${token}`,
-          'Content-Type': 'application/json',
-          ...createTraceHeaders(normalized.identity.traceId, {
-            randomBytes: options.spanRandomBytes,
-            traceState: options.traceState,
-          }),
-        },
-        body: bodyBytes,
-        signal: options.signal,
-      });
-    } catch (cause) {
-      throw new InternalFilesWriteError(
-        'TOOL_OUTCOME_UNKNOWN',
-        'network error after dispatch; outcome unknown',
-        { outcomeUnknown: true, cause },
-      );
+    // The token binds `htu` (path) only, so it stays valid at whatever host
+    // placement routing picks — including a retry against a different owner.
+    async function send(target) {
+      let response;
+      try {
+        response = await fetchImpl(`${target}${htu}`, {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${token}`,
+            'Content-Type': 'application/json',
+            ...createTraceHeaders(normalized.identity.traceId, {
+              randomBytes: options.spanRandomBytes,
+              traceState: options.traceState,
+            }),
+          },
+          body: bodyBytes,
+          signal: options.signal,
+        });
+      } catch (cause) {
+        throw new InternalFilesWriteError(
+          'TOOL_OUTCOME_UNKNOWN',
+          'network error after dispatch; outcome unknown',
+          { outcomeUnknown: true, cause },
+        );
+      }
+
+      let parsed;
+      try {
+        parsed = await response.json();
+      } catch (cause) {
+        fail('SANDBOX_RESPONSE_INVALID', 'response is not JSON', {
+          httpStatus: response.status,
+          cause,
+        });
+      }
+      return { status: response.status, ok: response.ok, parsed };
     }
 
-    let parsed;
-    try {
-      parsed = await response.json();
-    } catch (cause) {
-      fail('SANDBOX_RESPONSE_INVALID', 'response is not JSON', {
-        httpStatus: response.status,
-        cause,
-      });
-    }
-    if (!response.ok) safeError(response.status, parsed);
-    return validateResponse(parsed, normalized, tool);
+    // A misrouted write lands on the wrong volume, where nothing will ever
+    // read it back. A placement mismatch is therefore re-sent to the owner
+    // rather than reported as an unknown outcome.
+    const result = await sendWithPlacementRetry({
+      send,
+      selectBaseUrl,
+      placement: options.placement,
+      identity: normalized.identity,
+    });
+    if (!result.ok) safeError(result.status, result.parsed);
+    return validateResponse(result.parsed, normalized, tool);
   }
 
   return Object.freeze({

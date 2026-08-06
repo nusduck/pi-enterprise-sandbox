@@ -322,7 +322,7 @@ export function effectiveConfig(cfg = config) {
     RUN_INITIALIZATION_TIMEOUT_MS: cfg.RUN_INITIALIZATION_TIMEOUT_MS,
     NODE_ENV: cfg.NODE_ENV,
     DEPLOYMENT_ENV: cfg.DEPLOYMENT_ENV,
-    SANDBOX_BASE_URL: cfg.SANDBOX_BASE_URL,
+    SANDBOX_DISCOVERY_URL: cfg.SANDBOX_DISCOVERY_URL,
     SANDBOX_API_TOKEN: cfg.SANDBOX_API_TOKEN ? '***' : '<empty>',
     AGENT_INTERNAL_TOKEN: cfg.AGENT_INTERNAL_TOKEN ? '***' : '<empty>',
     A2A_PUBLIC_BASE_URL: cfg.A2A_PUBLIC_BASE_URL || '<empty>',
@@ -426,7 +426,17 @@ export const config = {
     60_000,
     Math.max(1_000, parseInt(process.env.AGENT_RUN_INIT_TIMEOUT_MS, 10) || 15_000),
   ),
-  SANDBOX_BASE_URL: process.env.SANDBOX_BASE_URL || 'http://sandbox:8081',
+  /**
+   * Sandbox Service address used for *discovery* only.
+   *
+   * The Sandbox is sharded: a workspace lives on one replica's local volume
+   * and a managed process in one replica's memory, so this is where
+   * `sessions/ensure` goes to learn a placement — never where workspace-bound
+   * work is sent. Those calls are routed per session by the placement
+   * resolver.
+   */
+  SANDBOX_DISCOVERY_URL:
+    process.env.SANDBOX_DISCOVERY_URL || 'http://sandbox:8081',
   SANDBOX_API_TOKEN: process.env.SANDBOX_API_TOKEN || '',
   /**
    * Stable logical cwd recorded by Pi SDK sessions after Sandbox creates or

@@ -64,6 +64,13 @@ const TRANSIENT_MAP_WHITELIST = Object.freeze([
     scope: 'local',
   },
   {
+    rel: 'infrastructure/sandbox/placement-resolver.js',
+    match: /const\s+cache\s*=\s*new\s+Map\s*\(/,
+    purpose:
+      'TTL cache of workspace -> Sandbox replica routing. MySQL sandbox_sessions.node_id is authoritative and a Sandbox 409 PLACEMENT_MISMATCH corrects any stale entry; not Run state, lost on restart',
+    scope: 'local',
+  },
+  {
     rel: 'infrastructure/mcp/pi-mcp-adapter-factory.js',
     match: /const\s+partialById\s*=\s*new\s+Map\s*\(/,
     purpose:
@@ -347,9 +354,11 @@ describe('no authoritative in-process Run Map (B3)', () => {
     // the tool-risk-policy layer merge. All function-local, none Run authority.
     // 17 → 18: owner-scoped Run-list AgentSession batch lookup.
     // 18 → 19: function-local sandbox read deduplication guard.
+    // 19 → 20: Sandbox replica routing cache. MySQL sandbox_sessions.node_id
+    // stays authoritative and a 409 PLACEMENT_MISMATCH corrects stale entries.
     assert.equal(
       TRANSIENT_MAP_WHITELIST.length,
-      19,
+      20,
       'whitelist size drift — update STATUS B3 inventory evidence if intentional',
     );
   });

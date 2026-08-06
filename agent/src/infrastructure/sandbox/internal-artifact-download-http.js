@@ -227,8 +227,18 @@ export function createInternalArtifactDownloadTransport(options = {}) {
       else callerSignal?.addEventListener?.('abort', onCallerAbort, { once: true });
       const timer = setTimeout(() => controller.abort(), timeoutMs);
       let response;
+      // Artifacts route by where the bytes physically live, not by workspace
+      // placement: a snapshot is immutable and outlives its session, so the
+      // producing workspace may be long closed.
+      const target =
+        typeof options.placement?.resolveArtifact === 'function'
+          ? await options.placement.resolveArtifact(
+              normalized.artifactId,
+              normalized.identity,
+            )
+          : baseUrl;
       try {
-        response = await fetchImpl(`${baseUrl}${ARTIFACT_DOWNLOAD_HTU}`, {
+        response = await fetchImpl(`${target}${ARTIFACT_DOWNLOAD_HTU}`, {
           method: 'POST',
           headers: {
             authorization: `Bearer ${token}`,

@@ -5,6 +5,10 @@ import { assertUlid } from '../../domain/shared/ulid.js';
 import { issueInternalToken, validateInternalHmacKeyring } from './internal-hmac.js';
 import { normalizeBaseUrl } from './internal-files-read-http.js';
 import { createTraceHeaders } from './trace-context.js';
+import {
+  createBaseUrlSelector,
+  sendWithPlacementRetry,
+} from './placement-routing.js';
 
 const ROUTES = Object.freeze({
   process_start: ['/internal/v1/processes/start', 'sandbox.processes.process_start'],
@@ -67,19 +71,35 @@ export function createInternalProcessTransport(options) {
   const fetchImpl = options.fetchImpl ?? globalThis.fetch; if (typeof fetchImpl !== 'function') fail('PROCESS_TRANSPORT_CONFIG', 'fetchImpl must be a function');
   validateInternalHmacKeyring(options.keyring, options.activeKid);
   const timeoutMs = options.timeoutMs ?? DEFAULT_PROCESS_TIMEOUT_MS;
+  // Process handles are the most affinity-critical surface in the system: a
+  // read that reaches the wrong replica returns an empty slice and a kill
+  // signals nothing, both reporting success. Routing has to be right.
+  const selectBaseUrl = createBaseUrlSelector({ baseUrl, placement: options.placement });
   async function call(toolName, payload) {
     const normalized = normalize(toolName, payload);
     const body = Buffer.from(JSON.stringify(normalized), 'utf8');
     const bodySha256 = createHash('sha256').update(body).digest('hex');
     const [htu, scope] = ROUTES[toolName];
     const token = issueInternalToken({ keyring: options.keyring, activeKid: options.activeKid, clock: options.clock, randomBytes: options.randomBytes, ttlSeconds: options.ttlSeconds, claims: { org_id: normalized.identity.orgId, user_id: normalized.identity.userId, conversation_id: normalized.identity.conversationId, agent_session_id: normalized.identity.agentSessionId, sandbox_session_id: normalized.identity.sandboxSessionId, run_id: normalized.identity.runId, tool_execution_id: normalized.toolExecutionId, tool_call_id: normalized.toolCallId, tool_name: toolName, scope: [scope], request_hash: normalized.requestHash, execution_fence_token: normalized.identity.executionFenceToken, trace_id: normalized.identity.traceId, htm: 'POST', htu, body_sha256: bodySha256 } });
-    const controller = new AbortController(); const timer = setTimeout(() => controller.abort(), timeoutMs);
-    // Let undici generate Content-Length for the Buffer body. The signed
-    // body_sha256 remains the integrity binding; forcing the header can throw
-    // UND_ERR_INVALID_ARG before the request leaves the Agent process.
-    let response; try { response = await fetchImpl(`${baseUrl}${htu}`, { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'content-type': 'application/json', ...createTraceHeaders(normalized.identity.traceId, { randomBytes: options.spanRandomBytes, traceState: options.traceState }) }, body, signal: controller.signal }); } catch (err) { fail('PROCESS_TRANSPORT_UNAVAILABLE', 'Sandbox process request failed', { outcomeUnknown: true, cause: err }); } finally { clearTimeout(timer); }
-    const text = await response.text(); let parsed; try { parsed = text ? JSON.parse(text) : {}; } catch { fail('PROCESS_RESPONSE_INVALID', 'Sandbox returned invalid JSON'); }
-    if (!response.ok) { const code = plain(parsed?.error) && typeof parsed.error.code === 'string' ? parsed.error.code : 'SANDBOX_ERROR'; fail(code, 'Sandbox process request failed', { httpStatus: response.status, outcomeUnknown: code === 'TOOL_OUTCOME_UNKNOWN' }); }
+    // The token binds `htu` (path) only, so the same token is valid at whatever
+    // host placement routing selects — including a retry against a new owner.
+    async function send(target) {
+      const controller = new AbortController(); const timer = setTimeout(() => controller.abort(), timeoutMs);
+      // Let undici generate Content-Length for the Buffer body. The signed
+      // body_sha256 remains the integrity binding; forcing the header can throw
+      // UND_ERR_INVALID_ARG before the request leaves the Agent process.
+      let response; try { response = await fetchImpl(`${target}${htu}`, { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'content-type': 'application/json', ...createTraceHeaders(normalized.identity.traceId, { randomBytes: options.spanRandomBytes, traceState: options.traceState }) }, body, signal: controller.signal }); } catch (err) { fail('PROCESS_TRANSPORT_UNAVAILABLE', 'Sandbox process request failed', { outcomeUnknown: true, cause: err }); } finally { clearTimeout(timer); }
+      const text = await response.text(); let parsed; try { parsed = text ? JSON.parse(text) : {}; } catch { fail('PROCESS_RESPONSE_INVALID', 'Sandbox returned invalid JSON'); }
+      return { status: response.status, ok: response.ok, parsed };
+    }
+    const result = await sendWithPlacementRetry({
+      send,
+      selectBaseUrl,
+      placement: options.placement,
+      identity: normalized.identity,
+    });
+    const parsed = result.parsed;
+    if (!result.ok) { const code = plain(parsed?.error) && typeof parsed.error.code === 'string' ? parsed.error.code : 'SANDBOX_ERROR'; fail(code, 'Sandbox process request failed', { httpStatus: result.status, outcomeUnknown: code === 'TOOL_OUTCOME_UNKNOWN' }); }
     if (!plain(parsed)) fail('PROCESS_RESPONSE_INVALID', 'Sandbox response must be object');
     return parsed;
   }

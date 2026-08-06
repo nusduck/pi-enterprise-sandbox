@@ -10,6 +10,10 @@ import {
 } from './internal-hmac.js';
 import { normalizeBaseUrl } from './internal-files-read-http.js';
 import { createTraceHeaders } from './trace-context.js';
+import {
+  createBaseUrlSelector,
+  retryOnPlacementMismatch,
+} from './placement-routing.js';
 
 export const BASH_EXECUTION_HTU = '/internal/v1/executions/bash';
 export const PYTHON_EXECUTION_HTU = '/internal/v1/executions/python';
@@ -418,6 +422,10 @@ export function createInternalExecutionTransport(options) {
   }
   validateInternalHmacKeyring(options.keyring, options.activeKid);
   const timeoutMs = options.timeoutMs ?? DEFAULT_EXECUTION_TIMEOUT_MS;
+  const selectBaseUrl = createBaseUrlSelector({
+    baseUrl,
+    placement: options.placement,
+  });
   const maxResponseBytes =
     options.maxResponseBytes ?? DEFAULT_MAX_RESPONSE_BYTES;
   requireSafeInteger(timeoutMs, 'timeoutMs', 1, Number.MAX_SAFE_INTEGER);
@@ -466,44 +474,61 @@ export function createInternalExecutionTransport(options) {
       },
     });
 
-    const controller = new AbortController();
-    const onAbort = () => controller.abort();
-    options.signal?.addEventListener('abort', onAbort, { once: true });
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
-    let response;
-    const url = `${baseUrl}${htu}`;
-    try {
-      // Node undici rejects explicit `Content-Length` on some Buffer body
-      // paths with UND_ERR_INVALID_ARG ("invalid content-length header").
-      // Session ensure already omits a forced length / uses lowercase headers;
-      // let fetch derive Content-Length from the Buffer. HMAC body_sha256 still
-      // covers the exact bodyBytes we send.
-      response = await fetchImpl(url, {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${token}`,
-          'content-type': 'application/json',
-          ...createTraceHeaders(normalized.identity.traceId, {
-            randomBytes: options.spanRandomBytes,
-            traceState: options.traceState,
-          }),
-        },
-        body: bodyBytes,
-        signal: controller.signal,
-      });
-    } catch (error) {
-      throw new InternalExecutionTransportError(
-        'TOOL_OUTCOME_UNKNOWN',
-        'Sandbox execution outcome is unknown after dispatch',
-        {
-          outcomeUnknown: true,
-          retryable: false,
-          cause: error,
-        },
+    // The token binds `htu` (path) only, so it stays valid at whatever host
+    // placement routing picks — including a retry against a different owner.
+    async function dispatch(target) {
+      const controller = new AbortController();
+      const onAbort = () => controller.abort();
+      options.signal?.addEventListener('abort', onAbort, { once: true });
+      const timer = setTimeout(() => controller.abort(), timeoutMs);
+      try {
+        // Node undici rejects explicit `Content-Length` on some Buffer body
+        // paths with UND_ERR_INVALID_ARG ("invalid content-length header").
+        // Session ensure already omits a forced length / uses lowercase headers;
+        // let fetch derive Content-Length from the Buffer. HMAC body_sha256 still
+        // covers the exact bodyBytes we send.
+        return await fetchImpl(`${target}${htu}`, {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${token}`,
+            'content-type': 'application/json',
+            ...createTraceHeaders(normalized.identity.traceId, {
+              randomBytes: options.spanRandomBytes,
+              traceState: options.traceState,
+            }),
+          },
+          body: bodyBytes,
+          signal: controller.signal,
+        });
+      } catch (error) {
+        throw new InternalExecutionTransportError(
+          'TOOL_OUTCOME_UNKNOWN',
+          'Sandbox execution outcome is unknown after dispatch',
+          {
+            outcomeUnknown: true,
+            retryable: false,
+            cause: error,
+          },
+        );
+      } finally {
+        clearTimeout(timer);
+        options.signal?.removeEventListener('abort', onAbort);
+      }
+    }
+
+    let response = await dispatch(await selectBaseUrl(normalized.identity));
+    // A placement mismatch is a clean, authenticated refusal: the execution
+    // provably did not run. It must be retried against the named owner rather
+    // than surfaced as TOOL_OUTCOME_UNKNOWN, which would tell the run "this may
+    // or may not have executed" when we know for certain it did not.
+    if (response.status === 409 && options.placement) {
+      const retried = await retryOnPlacementMismatch(
+        response,
+        normalized.identity,
+        options.placement,
+        dispatch,
       );
-    } finally {
-      clearTimeout(timer);
-      options.signal?.removeEventListener('abort', onAbort);
+      if (retried) response = retried;
     }
 
     try {

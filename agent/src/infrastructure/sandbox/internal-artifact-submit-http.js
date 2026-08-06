@@ -5,6 +5,10 @@ import { computeToolRequestHashV1 } from '../../domain/tool/tool-request-hash.js
 import { issueInternalToken, validateInternalHmacKeyring } from './internal-hmac.js';
 import { normalizeBaseUrl } from './internal-files-read-http.js';
 import { createTraceHeaders } from './trace-context.js';
+import {
+  createBaseUrlSelector,
+  sendWithPlacementRetry,
+} from './placement-routing.js';
 
 export const ARTIFACT_SUBMIT_HTU = '/internal/v1/artifacts/submit';
 export const ARTIFACT_SUBMIT_SCOPE = 'sandbox.artifacts.submit';
@@ -46,6 +50,7 @@ export function validateAndNormalizeArtifactPayload(payload) {
 
 export function createInternalArtifactSubmitTransport(options = {}) {
   const baseUrl = normalizeBaseUrl(options.baseUrl, { allowInsecureHttp: options.allowInsecureHttp === true });
+  const selectBaseUrl = createBaseUrlSelector({ baseUrl, placement: options.placement });
   const fetchImpl = options.fetchImpl ?? globalThis.fetch; if (typeof fetchImpl !== 'function') fail('SANDBOX_TRANSPORT_CONFIG', 'fetchImpl required');
   if (typeof options.tokenIssuer !== 'function') validateInternalHmacKeyring(options.keyring, options.activeKid);
   return Object.freeze({
@@ -55,14 +60,24 @@ export function createInternalArtifactSubmitTransport(options = {}) {
       const bodySha256 = createHash('sha256').update(body).digest('hex');
       const claims = { org_id: normalized.identity.orgId, user_id: normalized.identity.userId, conversation_id: normalized.identity.conversationId, agent_session_id: normalized.identity.agentSessionId, sandbox_session_id: normalized.identity.sandboxSessionId, run_id: normalized.identity.runId, tool_execution_id: normalized.toolExecutionId, tool_call_id: normalized.toolCallId, tool_name: ARTIFACT_SUBMIT_TOOL, scope: [ARTIFACT_SUBMIT_SCOPE], request_hash: normalized.requestHash, execution_fence_token: normalized.identity.executionFenceToken, trace_id: normalized.identity.traceId, htm: 'POST', htu: ARTIFACT_SUBMIT_HTU, body_sha256: bodySha256 };
       const token = typeof options.tokenIssuer === 'function' ? await options.tokenIssuer(claims, { bodyBytes: body, bodySha256 }) : issueInternalToken({ keyring: options.keyring, activeKid: options.activeKid, clock: options.clock, randomBytes: options.randomBytes, ttlSeconds: options.ttlSeconds, claims });
-      let response;
-      // Avoid forcing Content-Length on Buffer request bodies: Node/undici may
-      // reject it before dispatch. HMAC still binds the exact body with
-      // body_sha256, and fetch supplies the transport header.
-      try { response = await fetchImpl(`${baseUrl}${ARTIFACT_SUBMIT_HTU}`, { method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json', ...createTraceHeaders(normalized.identity.traceId, { randomBytes: options.spanRandomBytes, traceState: options.traceState }) }, body, signal: options.signal }); }
-      catch (cause) { fail('TOOL_OUTCOME_UNKNOWN', 'artifact submit outcome unknown', { outcomeUnknown: true, retryable: false, cause }); }
-      let parsed; try { const raw = await response.text(); parsed = raw ? JSON.parse(raw) : {}; } catch { fail('SANDBOX_RESPONSE_INVALID', 'Sandbox returned invalid JSON', { httpStatus: response.status }); }
-      if (!response.ok) { const e = plain(parsed?.error) ? parsed.error : plain(parsed?.detail) ? parsed.detail : null; const code = typeof e?.code === 'string' ? e.code : response.status === 409 ? 'SANDBOX_CONFLICT' : 'SANDBOX_ERROR'; fail(code, typeof e?.message === 'string' ? e.message.slice(0, 512) : 'artifact submit failed', { httpStatus: response.status, outcomeUnknown: code === 'TOOL_OUTCOME_UNKNOWN' }); }
+      // The token binds `htu` (path) only, so it stays valid at whatever host
+      // placement routing picks — including a retry against a different owner.
+      async function send(target) {
+        let response;
+        // Avoid forcing Content-Length on Buffer request bodies: Node/undici may
+        // reject it before dispatch. HMAC still binds the exact body with
+        // body_sha256, and fetch supplies the transport header.
+        try { response = await fetchImpl(`${target}${ARTIFACT_SUBMIT_HTU}`, { method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json', ...createTraceHeaders(normalized.identity.traceId, { randomBytes: options.spanRandomBytes, traceState: options.traceState }) }, body, signal: options.signal }); }
+        catch (cause) { fail('TOOL_OUTCOME_UNKNOWN', 'artifact submit outcome unknown', { outcomeUnknown: true, retryable: false, cause }); }
+        let parsed; try { const raw = await response.text(); parsed = raw ? JSON.parse(raw) : {}; } catch { fail('SANDBOX_RESPONSE_INVALID', 'Sandbox returned invalid JSON', { httpStatus: response.status }); }
+        return { status: response.status, ok: response.ok, parsed };
+      }
+      // Submitting snapshots a workspace file, so it must reach the workspace
+      // owner. This also disambiguates 409: a plain SANDBOX_CONFLICT is a real
+      // artifact conflict, PLACEMENT_MISMATCH just means the wrong door.
+      const result = await sendWithPlacementRetry({ send, selectBaseUrl, placement: options.placement, identity: normalized.identity });
+      const parsed = result.parsed;
+      if (!result.ok) { const e = plain(parsed?.error) ? parsed.error : plain(parsed?.detail) ? parsed.detail : null; const code = typeof e?.code === 'string' ? e.code : result.status === 409 ? 'SANDBOX_CONFLICT' : 'SANDBOX_ERROR'; fail(code, typeof e?.message === 'string' ? e.message.slice(0, 512) : 'artifact submit failed', { httpStatus: result.status, outcomeUnknown: code === 'TOOL_OUTCOME_UNKNOWN' }); }
       if (!plain(parsed)) fail('SANDBOX_RESPONSE_INVALID', 'response must be object');
       const artifactId = ulid(parsed.artifactId, 'artifactId');
       if (parsed.path !== normalized.path || typeof parsed.sha256 !== 'string' || !/^[0-9a-f]{64}$/.test(parsed.sha256) || !Number.isSafeInteger(parsed.size) || parsed.size < 0) fail('SANDBOX_RESPONSE_INVALID', 'artifact response invalid');

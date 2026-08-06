@@ -20,6 +20,24 @@ import {
 import { computeToolRequestHashV1 } from '../../domain/tool/tool-request-hash.js';
 import { assertUlid } from '../../domain/shared/ulid.js';
 import { createTraceHeaders } from './trace-context.js';
+import { InternalSandboxTransportError } from './internal-sandbox-error.js';
+import { normalizeBaseUrl } from './base-url.js';
+
+// Re-exported: several transports import both from here today.
+export { InternalSandboxTransportError, normalizeBaseUrl };
+import {
+  createBaseUrlSelector,
+  readPlacementMismatch,
+} from './placement-routing.js';
+
+/** Best-effort decode used only to recognise a placement instruction. */
+function parseJsonSafely(bytes) {
+  try {
+    return JSON.parse(bytes.toString('utf8'));
+  } catch {
+    return null;
+  }
+}
 
 export const FILES_READ_HTU = '/internal/v1/files/read';
 export const FILES_READ_TOOL_NAME = 'read';
@@ -93,34 +111,6 @@ const IDENTITY_KEYS = Object.freeze([
   'traceId',
   'executionFenceToken',
 ]);
-
-/**
- * Typed transport error with stable `.code` for mapTransportError / callers.
- * When `outcomeUnknown === true`, ledger must record TOOL_OUTCOME_UNKNOWN
- * (never ordinary FAILED/CANCELLED) — Sandbox may still complete the claim.
- */
-export class InternalSandboxTransportError extends Error {
-  /**
-   * @param {string} code
-   * @param {string} message
-   * @param {{
-   *   httpStatus?: number,
-   *   retryable?: boolean,
-   *   outcomeUnknown?: boolean,
-   * }} [extra]
-   */
-  constructor(code, message, extra = {}) {
-    super(message);
-    this.name = 'InternalSandboxTransportError';
-    this.code = code;
-    if (extra.httpStatus != null) this.httpStatus = extra.httpStatus;
-    if (extra.retryable != null) this.retryable = extra.retryable;
-    // Strict boolean only — never truthy coercion from strings.
-    if (extra.outcomeUnknown === true) {
-      this.outcomeUnknown = true;
-    }
-  }
-}
 
 /**
  * @param {string} code
@@ -581,62 +571,6 @@ export function filterFilesReadSuccessResult(raw, command) {
 }
 
 /**
- * Literal loopback hostnames only — no DNS/CIDR invention.
- * @param {string} hostname
- * @returns {boolean}
- */
-function isLiteralLoopbackHostname(hostname) {
-  const h = String(hostname || '')
-    .toLowerCase()
-    .replace(/^\[|\]$/g, '');
-  return h === 'localhost' || h === '127.0.0.1' || h === '::1';
-}
-
-/**
- * @param {string} baseUrl
- * @param {{ allowInsecureHttp?: boolean }} [opts]
- * @returns {string}
- */
-export function normalizeBaseUrl(baseUrl, opts = {}) {
-  if (typeof baseUrl !== 'string' || !baseUrl.trim()) {
-    fail('SANDBOX_TRANSPORT_CONFIG', 'baseUrl is required');
-  }
-  const allowInsecureHttp = opts.allowInsecureHttp === true;
-  const trimmed = baseUrl.trim().replace(/\/+$/, '');
-  if (!/^https?:\/\/.+/i.test(trimmed)) {
-    fail('SANDBOX_TRANSPORT_CONFIG', 'baseUrl must be an absolute http(s) URL');
-  }
-  let u;
-  try {
-    u = new URL(trimmed);
-  } catch {
-    fail('SANDBOX_TRANSPORT_CONFIG', 'baseUrl is not a valid URL');
-  }
-  if (u.username || u.password) {
-    fail('SANDBOX_TRANSPORT_CONFIG', 'baseUrl must not embed credentials');
-  }
-  if (u.search || u.hash) {
-    fail('SANDBOX_TRANSPORT_CONFIG', 'baseUrl must not include query/hash');
-  }
-  if (u.protocol === 'https:') {
-    return trimmed;
-  }
-  if (u.protocol === 'http:') {
-    // Default: only literal loopback over http. External/plain http requires
-    // explicit allowInsecureHttp (dev/controlled). No CIDR/DNS policy here —
-    // production config will tighten further.
-    if (allowInsecureHttp || isLiteralLoopbackHostname(u.hostname)) {
-      return trimmed;
-    }
-    fail(
-      'SANDBOX_TRANSPORT_CONFIG',
-      'http baseUrl rejected unless loopback or allowInsecureHttp=true',
-    );
-  }
-  fail('SANDBOX_TRANSPORT_CONFIG', 'baseUrl scheme must be http or https');
-}
-
-/**
  * Extract and validate compact JWT payload `.jti` without trusting arbitrary
  * token text (bounded, canonical base64url, plain JSON object).
  *
@@ -962,7 +896,12 @@ function createInternalReadTransport(options, target) {
   const baseUrl = normalizeBaseUrl(options.baseUrl, {
     allowInsecureHttp: options.allowInsecureHttp === true,
   });
-  const url = `${baseUrl}${target.htu}`;
+  // Resolved per attempt, not once: a placement correction mid-call must take
+  // effect on the very next dispatch.
+  const selectBaseUrl = createBaseUrlSelector({
+    baseUrl,
+    placement: options.placement,
+  });
   const fetchImpl = options.fetchImpl ?? globalThis.fetch;
   if (typeof fetchImpl !== 'function') {
     fail('SANDBOX_TRANSPORT_CONFIG', 'fetchImpl must be a function');
@@ -1128,6 +1067,10 @@ function createInternalReadTransport(options, target) {
 
     const deadlineMs = Date.now() + totalTimeoutMs;
     let lastRetryableError = /** @type {Error | null} */ (null);
+    // At most one placement correction per call. A second mismatch means
+    // placement is genuinely unstable, and re-routing harder would just spread
+    // one confused request across the fleet.
+    let placementRetried = false;
 
     for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
       const remainingMs = deadlineMs - Date.now();
@@ -1195,6 +1138,7 @@ function createInternalReadTransport(options, target) {
 
         requestDispatched = true;
         let response;
+        const url = `${await selectBaseUrl(normalized.identity)}${target.htu}`;
         try {
           response = await fetchImpl(url, {
             method: 'POST',
@@ -1275,6 +1219,28 @@ function createInternalReadTransport(options, target) {
             limit: normalized.limit,
             maxBytes: normalized.maxBytes,
           });
+        }
+
+        // A placement mismatch means we reached a replica that does not own
+        // this workspace. Nothing was read, so re-dispatch to the owner it
+        // named. This does not consume the retry budget: it is a routing
+        // correction, not a failure of the Sandbox to serve the request.
+        if (status === 409 && options.placement && !placementRetried) {
+          const mismatch = readPlacementMismatch(
+            status,
+            parseJsonSafely(respBytes),
+          );
+          if (mismatch) {
+            placementRetried = true;
+            const owner = options.placement.onMismatch(
+              normalized.identity.sandboxSessionId,
+              mismatch.ownerAddress,
+            );
+            if (owner) {
+              attempt -= 1; // re-dispatch without spending an attempt
+              continue;
+            }
+          }
         }
 
         // Retry only explicit gateway statuses before parsing as final error.
@@ -1391,8 +1357,11 @@ function createInternalReadTransport(options, target) {
 
   return Object.freeze({
     readFile,
-    /** @internal test aid */
-    _url: url,
+    /**
+     * @internal test aid — the statically configured URL. The URL actually
+     * dispatched to is resolved per attempt from placement.
+     */
+    _url: `${baseUrl}${target.htu}`,
     _maxAttempts: maxAttempts,
   });
 }

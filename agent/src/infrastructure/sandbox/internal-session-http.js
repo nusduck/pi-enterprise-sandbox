@@ -5,6 +5,7 @@ import { createHash } from 'node:crypto';
 import { assertUlid } from '../../domain/shared/ulid.js';
 import { issueInternalToken } from './internal-hmac.js';
 import { normalizeBaseUrl } from './internal-files-read-http.js';
+import { addressToBaseUrl } from './placement-resolver.js';
 import {
   assertW3cTraceId,
   createTraceHeaders,
@@ -121,74 +122,94 @@ export function createInternalSessionProvisioner(options) {
         }),
       };
 
-      let response;
-      let lastError = null;
-      // One retry for transient client/network failures (DNS blip, undici
-      // connect reset). Deterministic 4xx from Sandbox is not retried.
-      for (let attempt = 0; attempt < 2; attempt += 1) {
-        const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), timeoutMs);
-        try {
-          response = await fetchImpl(`${baseUrl}${SESSION_ENSURE_HTU}`, {
-            method: 'POST',
-            headers,
-            body,
-            signal: controller.signal,
-          });
-          lastError = null;
-          break;
-        } catch (error) {
-          lastError = error;
-          if (attempt === 0) {
-            await new Promise((r) => setTimeout(r, 50));
-            continue;
+      // One ensure round against a specific replica. Any replica may answer
+      // ensure — that is what makes it the placement oracle — but only the
+      // owner can create the workspace directory.
+      async function attemptEnsure(target) {
+        let response;
+        let lastError = null;
+        // One retry for transient client/network failures (DNS blip, undici
+        // connect reset). Deterministic 4xx from Sandbox is not retried.
+        for (let attempt = 0; attempt < 2; attempt += 1) {
+          const controller = new AbortController();
+          const timer = setTimeout(() => controller.abort(), timeoutMs);
+          try {
+            response = await fetchImpl(`${target}${SESSION_ENSURE_HTU}`, {
+              method: 'POST',
+              headers,
+              body,
+              signal: controller.signal,
+            });
+            lastError = null;
+            break;
+          } catch (error) {
+            lastError = error;
+            if (attempt === 0) {
+              await new Promise((r) => setTimeout(r, 50));
+              continue;
+            }
+          } finally {
+            clearTimeout(timer);
           }
-        } finally {
-          clearTimeout(timer);
+        }
+        if (lastError) {
+          const cause =
+            lastError instanceof Error
+              ? lastError.cause instanceof Error
+                ? lastError.cause
+                : lastError
+              : null;
+          const detail = cause
+            ? `${cause.name || 'Error'}: ${cause.message || String(cause)}`
+            : lastError instanceof Error
+              ? lastError.message
+              : String(lastError);
+          const wrapped = new Error(
+            `Sandbox session provisioning unavailable (${String(detail).slice(0, 160)})`,
+          );
+          wrapped.code = 'SANDBOX_SESSION_PROVISION_FAILED';
+          wrapped.cause = lastError;
+          throw wrapped;
+        }
+        const text = await response.text();
+        if (!response.ok) {
+          const error = new Error(
+            `Sandbox session provisioning failed (status=${response.status})`,
+          );
+          error.code = 'SANDBOX_SESSION_PROVISION_FAILED';
+          error.httpStatus = response.status;
+          throw error;
+        }
+        let parsed;
+        try {
+          parsed = JSON.parse(text);
+        } catch {
+          throw new Error('Sandbox session provisioning returned invalid JSON');
+        }
+        if (
+          parsed?.sandboxSessionId !== identity.sandboxSessionId ||
+          parsed?.agentSessionId !== identity.agentSessionId ||
+          parsed?.workspaceId !== identity.workspaceId ||
+          parsed?.status !== 'ACTIVE'
+        ) {
+          throw new Error('Sandbox session provisioning response binding mismatch');
+        }
+        return parsed;
+      }
+
+      let payload = await attemptEnsure(baseUrl);
+
+      // The replica that answered assigned a placement but is not the owner,
+      // so it deliberately did not create the workspace directory. Repeat
+      // against the owner, which will. One extra hop, only on first use of a
+      // session, and only when the load balancer happened to pick elsewhere.
+      if (payload?.placedElsewhere === true && payload?.nodeAddress) {
+        const ownerBaseUrl = addressToBaseUrl(payload.nodeAddress);
+        if (ownerBaseUrl && ownerBaseUrl !== baseUrl) {
+          payload = await attemptEnsure(ownerBaseUrl);
         }
       }
-      if (lastError) {
-        const cause =
-          lastError instanceof Error
-            ? lastError.cause instanceof Error
-              ? lastError.cause
-              : lastError
-            : null;
-        const detail = cause
-          ? `${cause.name || 'Error'}: ${cause.message || String(cause)}`
-          : lastError instanceof Error
-            ? lastError.message
-            : String(lastError);
-        const wrapped = new Error(
-          `Sandbox session provisioning unavailable (${String(detail).slice(0, 160)})`,
-        );
-        wrapped.code = 'SANDBOX_SESSION_PROVISION_FAILED';
-        wrapped.cause = lastError;
-        throw wrapped;
-      }
-      const text = await response.text();
-      if (!response.ok) {
-        const error = new Error(
-          `Sandbox session provisioning failed (status=${response.status})`,
-        );
-        error.code = 'SANDBOX_SESSION_PROVISION_FAILED';
-        error.httpStatus = response.status;
-        throw error;
-      }
-      let payload;
-      try {
-        payload = JSON.parse(text);
-      } catch {
-        throw new Error('Sandbox session provisioning returned invalid JSON');
-      }
-      if (
-        payload?.sandboxSessionId !== identity.sandboxSessionId ||
-        payload?.agentSessionId !== identity.agentSessionId ||
-        payload?.workspaceId !== identity.workspaceId ||
-        payload?.status !== 'ACTIVE'
-      ) {
-        throw new Error('Sandbox session provisioning response binding mismatch');
-      }
+
       return payload;
     },
   };

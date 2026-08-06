@@ -268,7 +268,7 @@ services:
       - ${API_ENV_FILE:-.env}
     environment:
       DEPLOYMENT_ENV: ${DEPLOYMENT_ENV:-development}
-      SANDBOX_BASE_URL: http://sandbox:8081
+      SANDBOX_DISCOVERY_URL: http://sandbox:8081
       # Agent persistence is separate; never inherit Sandbox's DSN from
       # env_file.
       SANDBOX_DATABASE_URL: ""
@@ -367,7 +367,7 @@ services:
       - ${API_ENV_FILE:-.env}
     environment:
       DEPLOYMENT_ENV: ${DEPLOYMENT_ENV:-development}
-      SANDBOX_BASE_URL: http://sandbox:8081
+      SANDBOX_DISCOVERY_URL: http://sandbox:8081
       # Worker persistence is separate; never inherit Sandbox's DSN from
       # env_file.
       SANDBOX_DATABASE_URL: ""

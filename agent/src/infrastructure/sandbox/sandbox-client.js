@@ -15,7 +15,10 @@ import { randomBytes } from 'node:crypto';
 import { config, resolveSandboxAuthHeader } from '../../../config.js';
 import { createTraceHeaders } from './trace-context.js';
 
-const BASE = config.SANDBOX_BASE_URL;
+// Legacy public-plane client. Deliberately not placement-aware: the routes it
+// calls are scheduled for removal, so until then it targets the service
+// address rather than growing routing logic that will be deleted.
+const BASE = config.SANDBOX_DISCOVERY_URL;
 const REQUEST_GRACE_MS = 5_000;
 
 export class SandboxError extends Error {
