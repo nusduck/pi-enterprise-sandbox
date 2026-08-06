@@ -25,6 +25,7 @@ def install_formal_runtime_persistence(
     from sandbox.services.dataset_manager import dataset_manager
     from sandbox.services.node_registry import node_registry
     from sandbox.services.process_manager import process_manager
+    from sandbox.services.user_skill_materializer import user_skill_materializer
 
     if db is None:
         from sandbox.config import is_mysql_database_url, settings
@@ -41,6 +42,7 @@ def install_formal_runtime_persistence(
         )
         audit_logger.reset_for_config(authoritative=formal_required)
         node_registry.set_repository(None)
+        user_skill_materializer.set_connection_factory(None)
         return None
 
     # Internal-plane lifecycle tests may inject protocol fakes that only
@@ -98,6 +100,10 @@ def install_formal_runtime_persistence(
             NodeRepository(db),
             conn_factory=connection,
         )
+        # User-installed skills are bound into every execution but installed by
+        # the Agent, on other pods. MySQL is the authority; this replica keeps a
+        # local copy it can rebuild, so no volume needs more than one writer.
+        user_skill_materializer.set_connection_factory(connection)
         # Claim this replica's generation before anything reaps by generation.
         node_registry.register(
             node_id=settings.node_id,
@@ -111,6 +117,7 @@ def install_formal_runtime_persistence(
         process_manager.set_formal_repository(None, authoritative=True)
         audit_logger.set_formal_repository(None, authoritative=True)
         node_registry.set_repository(None)
+        user_skill_materializer.set_connection_factory(None)
         raise
     return FormalSessionRuntime(db=db, repository=SessionRepository(db))
 

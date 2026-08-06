@@ -134,15 +134,12 @@ agentWorker:
   cronIntervalMs: 30000
   intervalJitterMs: 5000
   piAgentHomeSizeLimit: 2Gi
-  # User-installed skills. Until skills move to shared storage this is the
-  # only volume in the deployment that several pods write to concurrently,
-  # so it needs ReadWriteMany.
+  # User-installed skills are stored in MySQL and materialised into a local
+  # cache per pod, so this is an emptyDir rather than a shared volume. No
+  # ReadWriteMany storage class is required anywhere in this chart.
   userSkills:
     enabled: true
-    existingClaim: ""
-    storageClass: ""
-    accessMode: ReadWriteMany
-    size: 5Gi
+    cacheSizeLimit: 2Gi
   resources:
     requests: { cpu: 200m, memory: 512Mi }
     limits: { cpu: 2, memory: 2Gi }

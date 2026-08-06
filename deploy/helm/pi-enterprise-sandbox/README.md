@@ -32,8 +32,9 @@ stateless and scales freely.
   - one for Agent coordination (queue, leases, cancel, event stream)
   - a **separate** one for the Sandbox HMAC replay store; the Sandbox asserts
     the isolation at startup and refuses to share credentials with the Agent's
-- A `ReadWriteMany` storage class, **only** if `agentWorker.userSkills.enabled`
-  (see "Remaining RWX dependency")
+- Block storage for the Sandbox StatefulSet. **No `ReadWriteMany` storage class
+  is needed anywhere** — every volume in this chart is written by exactly one
+  pod.
 
 ## Cluster requirements for the Sandbox
 
@@ -117,17 +118,20 @@ stream 401s. The ingress routes everything to the frontend, whose nginx proxies
 `proxy-buffering: off`, `proxy-request-buffering: off`, a read timeout ≥ the
 SSE heartbeat, and a 55m body size — otherwise SSE buffers and uploads 413.
 
-## Remaining RWX dependency
+## User-installed skills
 
-`agentWorker.userSkills` is the only volume several pods write to concurrently,
-so it needs `ReadWriteMany`. It is also the only reason this deployment needs
-an RWX storage class at all. Set `agentWorker.userSkills.enabled=false` if you
-do not use user-installed skills.
+Skills are stored in MySQL (`user_skills`) and materialised into a per-pod
+`emptyDir` cache on first use. The Agent worker writes through on install; the
+Agent HTTP pod and every Sandbox replica rebuild their own copy from the same
+rows. That is why no volume in this chart is shared: the filesystem is a cache
+that can be rebuilt, not state that must be preserved.
+
+Set `agentWorker.userSkills.enabled=false` if you do not use user-installed
+skills at all.
 
 ## Not yet covered
 
-- Execution-owner leases: a SIGKILLed Sandbox pod can leave `tool_executions`
-  rows RUNNING with no sweeper to reap them. Columns exist; the logic does not.
 - Artifact bytes are stored per shard (`artifacts.storage_node_id`) and routed
   accordingly. Moving them to object storage would decouple downloads from
-  Sandbox placement entirely.
+  Sandbox placement entirely, and would let a drained shard's deliverables stay
+  reachable.

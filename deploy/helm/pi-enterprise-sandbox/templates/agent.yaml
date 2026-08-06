@@ -57,8 +57,8 @@ spec:
             # container fails to start if it is not writable.
             - { name: pi-agent-home, mountPath: /app/pi-agent-home }
             {{- if .Values.agentWorker.userSkills.enabled }}
-            # Read-only here: only workers install skills.
-            - { name: user-skills, mountPath: /home/sandbox/skill-user, readOnly: true }
+            # Local cache rebuilt from MySQL, not shared state.
+            - { name: user-skills, mountPath: /home/sandbox/skill-user }
             {{- end }}
           livenessProbe:
             httpGet: { path: /health, port: http }
@@ -74,8 +74,7 @@ spec:
           emptyDir: { sizeLimit: {{ .Values.agent.piAgentHomeSizeLimit }} }
         {{- if .Values.agentWorker.userSkills.enabled }}
         - name: user-skills
-          persistentVolumeClaim:
-            claimName: {{ default (printf "%s-user-skills" (include "pi.fullname" .)) .Values.agentWorker.userSkills.existingClaim }}
+          emptyDir: { sizeLimit: {{ .Values.agentWorker.userSkills.cacheSizeLimit }} }
         {{- end }}
 {{- if .Values.agent.podDisruptionBudget.enabled }}
 ---
@@ -166,29 +165,6 @@ spec:
           emptyDir: { sizeLimit: {{ .Values.agentWorker.piAgentHomeSizeLimit }} }
         {{- if .Values.agentWorker.userSkills.enabled }}
         - name: user-skills
-          persistentVolumeClaim:
-            claimName: {{ default (printf "%s-user-skills" (include "pi.fullname" .)) .Values.agentWorker.userSkills.existingClaim }}
+          emptyDir: { sizeLimit: {{ .Values.agentWorker.userSkills.cacheSizeLimit }} }
         {{- end }}
-{{- if and .Values.agentWorker.userSkills.enabled (not .Values.agentWorker.userSkills.existingClaim) }}
----
-{{/*
-The only multi-writer volume in this chart. Several worker pods install skills
-concurrently, so it must be ReadWriteMany — which not every storage class
-supports. Removing this requirement means moving skill bundles out of the
-filesystem entirely.
-*/}}
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: {{ include "pi.fullname" . }}-user-skills
-  labels: {{- include "pi.labels" . | nindent 4 }}
-spec:
-  accessModes: [{{ .Values.agentWorker.userSkills.accessMode }}]
-  {{- with .Values.agentWorker.userSkills.storageClass }}
-  storageClassName: {{ . }}
-  {{- end }}
-  resources:
-    requests:
-      storage: {{ .Values.agentWorker.userSkills.size }}
-{{- end }}
 {{- end }}

@@ -181,16 +181,31 @@ def test_agent_discovery_url_is_the_service_not_a_pod(manifests) -> None:
     assert discovery.endswith(":8081")
 
 
-def test_user_skills_is_the_only_shared_write_volume(manifests) -> None:
-    """Flags the chart's single remaining ReadWriteMany dependency."""
-    claims = _by_kind(manifests, "PersistentVolumeClaim")
-    rwx = [c for c in claims if "ReadWriteMany" in c["spec"]["accessModes"]]
-    assert [c["metadata"]["name"] for c in rwx] == [
-        "pi-pi-enterprise-sandbox-user-skills"
-    ], "a new RWX claim means a new multi-writer coupling — document it first"
+def test_no_volume_is_written_by_more_than_one_pod(manifests) -> None:
+    """The chart must need no ReadWriteMany storage class at all.
+
+    RWX was the last coupling that made a volume shared state rather than
+    per-pod. User skills now live in MySQL and are materialised into a local
+    cache, so a new RWX claim here would mean a new multi-writer dependency
+    that deserves to be argued for explicitly.
+    """
+    for claim in _by_kind(manifests, "PersistentVolumeClaim"):
+        assert "ReadWriteMany" not in claim["spec"]["accessModes"], (
+            f"{claim['metadata']['name']} reintroduces a shared-write volume"
+        )
+    sts = _named(manifests, "StatefulSet", "-sandbox")
+    for claim in sts["spec"]["volumeClaimTemplates"]:
+        assert "ReadWriteMany" not in claim["spec"]["accessModes"]
 
 
-def test_user_skills_can_be_disabled_to_remove_rwx_entirely(manifests) -> None:
-    without = _render("agentWorker.userSkills.enabled=false")
-    claims = _by_kind(without, "PersistentVolumeClaim")
-    assert not any("ReadWriteMany" in c["spec"]["accessModes"] for c in claims)
+def test_skill_cache_is_ephemeral_on_every_consumer(manifests) -> None:
+    """Agent, worker and Sandbox each rebuild their own copy from MySQL."""
+    consumers = ["-agent", "-agent-worker"]
+    for suffix in consumers:
+        spec = _named(manifests, "Deployment", suffix)["spec"]["template"]["spec"]
+        volume = next(v for v in spec["volumes"] if v["name"] == "user-skills")
+        assert "emptyDir" in volume, f"{suffix} skill cache must be ephemeral"
+
+    sts_spec = _named(manifests, "StatefulSet", "-sandbox")["spec"]["template"]["spec"]
+    volume = next(v for v in sts_spec["volumes"] if v["name"] == "user-skills")
+    assert "emptyDir" in volume

@@ -120,6 +120,12 @@ spec:
               drop: [ALL]
               add: {{- toYaml .Values.sandbox.security.capabilities.add | nindent 16 }}
           volumeMounts:
+            {{- if .Values.agentWorker.userSkills.enabled }}
+            # Bubblewrap binds the caller's skills into every execution. This
+            # replica rebuilds them from MySQL, so it is a cache, not shared
+            # state — nothing else writes here.
+            - { name: user-skills, mountPath: /home/sandbox/skill-user }
+            {{- end }}
             - { name: workspaces, mountPath: /var/sandbox/workspaces }
             - { name: sandbox-tmp, mountPath: /var/sandbox/tmp }
             - { name: artifacts, mountPath: /var/sandbox/artifacts }
@@ -141,6 +147,11 @@ spec:
             periodSeconds: 5
             failureThreshold: 30
           resources: {{- toYaml .Values.sandbox.resources | nindent 12 }}
+      {{- if .Values.agentWorker.userSkills.enabled }}
+      volumes:
+        - name: user-skills
+          emptyDir: { sizeLimit: {{ .Values.agentWorker.userSkills.cacheSizeLimit }} }
+      {{- end }}
   volumeClaimTemplates:
     # ReadWriteOnce is correct: these belong to one pod, and a shared volume
     # would not help anyway — the process table is in memory, not on disk.

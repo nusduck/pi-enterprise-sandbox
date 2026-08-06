@@ -12,6 +12,7 @@ process.
 
 from __future__ import annotations
 
+import logging
 import os
 import re
 import shutil
@@ -30,6 +31,8 @@ from sandbox.paths import (
     SandboxPathScope,
 )
 from sandbox.security.safe_env import safe_env
+
+logger = logging.getLogger("sandbox.isolation.bubblewrap")
 
 _ENV_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
@@ -67,6 +70,30 @@ def _capability_drop_prefix() -> list[str]:
             "setpriv is required to drop service capabilities before Bubblewrap"
         )
     return [setpriv, "--inh-caps=-all", "--ambient-caps=-all", "--"]
+
+
+
+def _refresh_user_skills(context: object, user_dir: Path) -> None:
+    """Reconcile this replica's copy of the caller's skills before binding.
+
+    Deliberately swallows every failure: skills enhance an execution, and a
+    database hiccup should leave the previous contents bound rather than fail
+    the command outright.
+    """
+    org_id = getattr(context, "org_id", None)
+    user_id = getattr(context, "user_id", None)
+    if not org_id or not user_id:
+        return
+    try:
+        from sandbox.services.user_skill_materializer import (
+            user_skill_materializer,
+        )
+
+        user_skill_materializer.ensure_current(
+            org_id=str(org_id), user_id=str(user_id), skill_dir=user_dir
+        )
+    except Exception:  # pragma: no cover — never block an execution
+        logger.debug("user skill refresh skipped", exc_info=True)
 
 
 class BubblewrapIsolationBackend:
@@ -112,6 +139,14 @@ class BubblewrapIsolationBackend:
         if user_dir is None:
             # Unknown identity → system tier only. Never fall back to the base.
             return args
+
+        # Skills are installed by the Agent, on other pods. MySQL is the
+        # authority and this replica keeps a local copy, so reconcile before
+        # binding — otherwise the execution sees whichever skills this
+        # particular pod happened to have. Best-effort by design: a database
+        # problem must not stop code from running.
+        _refresh_user_skills(context, Path(user_dir))
+
         try:
             relative = Path(user_dir).resolve().relative_to(self.user_skills_root)
         except (ValueError, OSError):
