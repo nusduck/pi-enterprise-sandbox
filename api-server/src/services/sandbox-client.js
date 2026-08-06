@@ -13,6 +13,7 @@
  */
 import { config, AUTH_HEADER } from '../config.js';
 import { readCookie } from '../http/cookies.js';
+import { resolveSandboxBaseUrl } from './sandbox-placement.js';
 import {
   boundRequestTraceContext,
   createTraceId,
@@ -22,6 +23,21 @@ import {
 } from '../application/trace-context.js';
 
 const BASE = config.SANDBOX_BASE_URL;
+
+/** `/sessions/{id}/...` is the only shard-affine prefix on the Sandbox. */
+const SESSION_PATH_RE = /^\/sessions\/([^/?#]+)/;
+
+/**
+ * Pick the Sandbox address for one request path.
+ *
+ * @param {string} path
+ * @param {{ organizationId?: string, userId?: string }} auth
+ */
+async function resolveBaseForPath(path, auth) {
+  const match = SESSION_PATH_RE.exec(path);
+  if (!match) return BASE;
+  return resolveSandboxBaseUrl(decodeURIComponent(match[1]), auth);
+}
 const REQUEST_GRACE_MS = 5_000;
 
 function createClientTraceContext(traceId, traceState) {
@@ -137,7 +153,11 @@ export function createSandboxClient({
   }
 
   async function sbFetch(path, opts = {}) {
-    const url = `${BASE}${path}`;
+    // Session-scoped routes touch a workspace that lives on exactly one
+    // replica, so they must be dialled at the owner. Everything else (auth,
+    // health) is shard-agnostic and keeps using the Service address.
+    const base = await resolveBaseForPath(path, authCtx);
+    const url = `${base}${path}`;
     const {
       headers: extraHeaders,
       signal: externalSignal,

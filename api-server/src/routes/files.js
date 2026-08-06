@@ -11,6 +11,7 @@ import { join } from 'node:path';
 import * as sb from '../services/sandbox-client.js';
 import { authFromRequest } from '../services/sandbox-client.js';
 import { config, AUTH_HEADER } from '../config.js';
+import { resolveSandboxBaseUrl } from '../services/sandbox-placement.js';
 import { authorizeSandboxSession } from '../application/run-access-service.js';
 import {
   boundRequestTraceContext,
@@ -250,7 +251,10 @@ export async function handleFileDownload(parsedUrl, res, req = null) {
     return;
   }
 
-  const sanUrl = `${config.SANDBOX_BASE_URL}/sessions/${encodeURIComponent(sessionId)}/files/download?path=${encodeURIComponent(filePath)}`;
+  // Dial the replica that owns this workspace; the Service address would
+  // land on an arbitrary shard, which the Sandbox then refuses with 409.
+  const sanBase = await resolveSandboxBaseUrl(sessionId, sessionAccess.sandboxAuth);
+  const sanUrl = `${sanBase}/sessions/${encodeURIComponent(sessionId)}/files/download?path=${encodeURIComponent(filePath)}`;
   const sanRes = await fetch(sanUrl, {
     headers: sandboxProxyHeaders(req, {}, sessionAccess.sandboxAuth),
   });
@@ -311,7 +315,8 @@ export async function handleArtifactDownload(parsedUrl, res, req = null) {
   }
 
   const sanPath = sb.artifactDownloadPath(sessionId, artifactId);
-  const sanUrl = `${config.SANDBOX_BASE_URL}${sanPath}`;
+  const sanBase = await resolveSandboxBaseUrl(sessionId, sessionAccess.sandboxAuth);
+  const sanUrl = `${sanBase}${sanPath}`;
   const sanRes = await fetch(sanUrl, {
     headers: sandboxProxyHeaders(req, {}, sessionAccess.sandboxAuth),
   });
@@ -465,10 +470,16 @@ export async function handleFileUpload(parsedUrl, req, res) {
       headers['Idempotency-Key'] = String(idem);
     }
 
-    // Stream file to sandbox via fetch (Readable stream body)
+    // Stream file to sandbox via fetch (Readable stream body). Streamed to
+    // the owning replica directly — proxying it through the Agent would add a
+    // hop and buffer 50 MB for nothing.
     const bodyStream = createReadStream(spill.filePath);
+    const uploadBase = await resolveSandboxBaseUrl(
+      sessionId,
+      sessionAccess.sandboxAuth,
+    );
     const sanRes = await fetch(
-      `${config.SANDBOX_BASE_URL}/sessions/${sessionId}/files/upload`,
+      `${uploadBase}/sessions/${sessionId}/files/upload`,
       {
         method: 'POST',
         headers,

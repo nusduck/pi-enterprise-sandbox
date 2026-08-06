@@ -472,6 +472,23 @@ export async function startHttpMain(env = process.env) {
     getExtensionDiagnostics,
     activeRunHint: () => 0,
     isDraining: () => shuttingDown,
+    // Routing lookup for the BFF, which streams to the Sandbox directly but has
+    // no database of its own to learn which shard owns a workspace.
+    resolveSandboxPlacement: async ({ sandboxSessionId, orgId, userId }) => {
+      const knex = httpServices.knex;
+      if (!knex) return null;
+      const row = await knex('sandbox_sessions as s')
+        .leftJoin('sandbox_nodes as n', 'n.node_id', 's.node_id')
+        .where('s.sandbox_session_id', sandboxSessionId)
+        .andWhere('s.org_id', orgId)
+        .andWhere('s.user_id', userId)
+        .first('s.node_id as nodeId', 'n.address as address');
+      if (!row?.nodeId || !row?.address) return { nodeId: null, baseUrl: null };
+      const { addressToBaseUrl } = await import(
+        '../infrastructure/sandbox/placement-resolver.js'
+      );
+      return { nodeId: row.nodeId, baseUrl: addressToBaseUrl(row.address) };
+    },
   });
 
   const port = Number(env.PORT) || config.PORT || 4100;

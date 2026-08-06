@@ -238,6 +238,53 @@ export function createAgentHttpServer(deps) {
         if (handled) return;
       }
 
+      // Which Sandbox replica owns a session's workspace.
+      //
+      // The BFF streams files and datasets straight to the Sandbox — proxying
+      // 50 MB uploads through here would buy nothing — but it has no database
+      // of its own, so it cannot know which shard holds the workspace. The
+      // Agent does, so it answers the routing question and the BFF dials the
+      // owner directly.
+      if (req.method === 'GET' && path === '/internal/sandbox-placement') {
+        if (typeof deps.resolveSandboxPlacement !== 'function') {
+          json(res, 501, {
+            error: 'Sandbox placement lookup not configured',
+            code: 'NOT_IMPLEMENTED',
+          });
+          return;
+        }
+        const auth = authSubjectsFromRequest(req);
+        if (!auth) {
+          json(res, 400, {
+            error: 'X-Acting-User-Id and X-Acting-Organization-Id are required',
+          });
+          return;
+        }
+        const sandboxSessionId = String(
+          parsedUrl.searchParams.get('sandboxSessionId') || '',
+        ).trim();
+        if (!sandboxSessionId) {
+          json(res, 400, { error: 'sandboxSessionId is required' });
+          return;
+        }
+        try {
+          const placement = await deps.resolveSandboxPlacement({
+            sandboxSessionId,
+            orgId: auth.organizationId,
+            userId: auth.userId,
+          });
+          // A session with no placement yet is not an error: it has not been
+          // ensured. The caller falls back to discovery, where ensure runs.
+          json(res, 200, placement ?? { nodeId: null, baseUrl: null });
+        } catch {
+          json(res, 503, {
+            error: 'Sandbox placement lookup unavailable',
+            code: 'PLACEMENT_UNAVAILABLE',
+          });
+        }
+        return;
+      }
+
       if (req.method === 'GET' && path === '/internal/extensions/diagnostics') {
         if (typeof deps.getExtensionDiagnostics !== 'function') {
           json(res, 501, {

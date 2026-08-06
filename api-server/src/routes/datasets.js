@@ -10,6 +10,7 @@
  */
 import { Transform } from 'node:stream';
 import { config } from '../config.js';
+import { resolveSandboxBaseUrl } from '../services/sandbox-placement.js';
 import { authorizeSandboxSession } from '../application/run-access-service.js';
 import {
   discardRequestBody,
@@ -204,8 +205,12 @@ export async function handleDatasetUpload(conversationId, parsedUrl, req, res) {
 
   const bounded = createBoundedDatasetUploadBody(req, maxBytes);
   try {
+    const uploadBase = await resolveSandboxBaseUrl(
+      sessionId,
+      sessionAccess.sandboxAuth,
+    );
     const sanRes = await fetch(
-      `${config.SANDBOX_BASE_URL}/sessions/${encodeURIComponent(sessionId)}/datasets`,
+      `${uploadBase}/sessions/${encodeURIComponent(sessionId)}/datasets`,
       {
         method: 'POST',
         headers,
@@ -319,8 +324,12 @@ export async function handleListDatasets(
       },
       sessionAccess.sandboxAuth,
     );
+    const listBase = await resolveSandboxBaseUrl(
+      sessionId,
+      sessionAccess.sandboxAuth,
+    );
     const sanRes = await fetch(
-      `${config.SANDBOX_BASE_URL}/sessions/${encodeURIComponent(sessionId)}/datasets`,
+      `${listBase}/sessions/${encodeURIComponent(sessionId)}/datasets`,
       { headers },
     );
     const text = await sanRes.text();
