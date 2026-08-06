@@ -194,6 +194,10 @@ class FormalExecutionRuntime:
             temp_id=physical_temp.name,
             physical_workspace=physical_workspace,
             physical_temp=physical_temp,
+            # Both identity fields are required for user-skill binds: without
+            # org_id the per-user tier is omitted and skill-user paths vanish
+            # inside Bubblewrap (PATH_OUTSIDE / missing mount).
+            org_id=command.org_id,
             user_id=command.user_id,
         )
         if command.tool_name == "bash" and policy_checker.is_blocked_command(

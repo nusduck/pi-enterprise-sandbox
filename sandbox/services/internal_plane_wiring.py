@@ -23,6 +23,7 @@ from sandbox.app.persistence.repositories.tool_execution_claim_validator import 
 )
 from sandbox.config import (
     Settings,
+    settings,
     validate_internal_plane_config,
 )
 from sandbox.security.internal_http_auth import set_replay_store
@@ -207,7 +208,10 @@ class FastApiInternalPlaneTarget:
         set_files_read_runtime(self.app, runtime)
         self.skills_read_runtime = FilesReadRuntime(
             claim_validator=validator,
-            reader=InternalSkillReader(),
+            reader=InternalSkillReader(
+                skills_path=settings.skills_path,
+                user_skills_path=settings.user_skills_path,
+            ),
             id_factory=self.id_factory,
             supervisor=self.supervisor,
             parse_command=parse_and_bind_skills_read,

@@ -31,7 +31,14 @@ from pathlib import PurePosixPath
 from typing import Any, Callable
 
 from sandbox.config import settings
-from sandbox.paths import AGENT_SKILL_PATH, AGENT_WORKSPACE_PATH, sanitize_path_error
+from sandbox.paths import (
+    AGENT_SKILL_PATH,
+    AGENT_SKILL_PATHS,
+    AGENT_USER_SKILL_PATH,
+    AGENT_WORKSPACE_PATH,
+    logical_skill_root,
+    sanitize_path_error,
+)
 from sandbox.security.path_validation import validate_formal_id
 from sandbox.security.secure_workspace_file import (
     SecureWorkspaceFileError,
@@ -71,6 +78,8 @@ class _ValidatedReadInput:
     offset: int
     limit: int
     max_bytes: int
+    # Optional physical root override (skill-user vs system skill).
+    physical_root: str | None = None
 
 
 def _require_strict_int(
@@ -157,8 +166,22 @@ def _parse_workspace_logical_path(path: Any) -> tuple[str, tuple[str, ...]]:
     )
 
 
-def _parse_skill_logical_path(path: Any) -> tuple[str, tuple[str, ...]]:
-    return _parse_logical_path(path, root=AGENT_SKILL_PATH, root_label="skill")
+def _parse_skill_logical_path(path: Any) -> tuple[str, tuple[str, ...], str]:
+    """Parse a skill path under either system or user skill root.
+
+    Returns ``(logical_path, relative_parts, matched_root)``. Longest root
+    wins so skill-user is never treated as a child of skill.
+    """
+    if not isinstance(path, str):
+        raise InternalFileReadError("PATH_INVALID", "path must be a string")
+    root = logical_skill_root(path)
+    if root is None:
+        raise InternalFileReadError(
+            "PATH_INVALID",
+            f"path must be under one of {', '.join(AGENT_SKILL_PATHS)}",
+        )
+    logical, parts = _parse_logical_path(path, root=root, root_label="skill")
+    return logical, parts, root
 
 
 def _validate_input(
@@ -664,26 +687,35 @@ class InternalFileReader:
 
 
 class InternalSkillReader(InternalFileReader):
-    """Reader for the immutable shared Skill tree.
+    """Reader for the immutable Skill trees (system + per-user).
 
     ``workspace_id`` remains part of the tool ledger/claim contract, but the
-    physical Skill root is global and never derived from it.
+    physical Skill roots are never derived from it. System packages live under
+    ``skills_path``; user packages under ``user_skills_path`` (caller scope is
+    enforced at the skills-read contract layer).
     """
 
     def __init__(
         self,
         *,
         skills_path: str | os.PathLike[str] = AGENT_SKILL_PATH,
+        user_skills_path: str | os.PathLike[str] = AGENT_USER_SKILL_PATH,
         max_file_size_mb: int | None = None,
     ) -> None:
         super().__init__(max_file_size_mb=max_file_size_mb)
         self._skills_path = str(skills_path)
+        self._user_skills_path = str(user_skills_path)
+
+    def _physical_root_for(self, logical_root: str) -> str:
+        if logical_root == AGENT_USER_SKILL_PATH:
+            return self._user_skills_path
+        return self._skills_path
 
     def _validate(
         self, *, workspace_id: Any, path: Any, offset: Any, limit: Any, max_bytes: Any
     ) -> _ValidatedReadInput:
         _ = workspace_id
-        logical, parts = _parse_skill_logical_path(path)
+        logical, parts, root = _parse_skill_logical_path(path)
         return _ValidatedReadInput(
             workspace_id="",
             logical_path=logical,
@@ -693,10 +725,12 @@ class InternalSkillReader(InternalFileReader):
             max_bytes=_require_strict_int(
                 max_bytes, "max_bytes", min_v=_MIN_POSITIVE, max_v=_MAX_BYTES_CAP
             ),
+            physical_root=self._physical_root_for(root),
         )
 
     def _open(self, inp: _ValidatedReadInput) -> Any:
-        return open_trusted_root_regular_file(self._skills_path, inp.relative_parts)
+        physical = inp.physical_root or self._skills_path
+        return open_trusted_root_regular_file(physical, inp.relative_parts)
 
 
 def read_workspace_file(

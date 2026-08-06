@@ -162,3 +162,16 @@ def test_execution_context_resolves_only_its_own_user_skill_dir(monkeypatch, tmp
     for bad in ("../..", "a/b", "", "."):
         assert replace(base, org_id="org1", user_id=bad).user_skill_dir is None
         assert replace(base, org_id=bad, user_id="user1").user_skill_dir is None
+
+
+def test_execution_context_owner_field_accepts_organization_id_alias():
+    """Public session records may expose organization_id instead of org_id."""
+    import sandbox.services.execution_context as ec
+
+    class _Sess:
+        user_id = "userULID"
+        organization_id = "orgULID"
+
+    assert ec._owner_field(_Sess(), "org_id") is None
+    assert ec._owner_field(_Sess(), "organization_id") == "orgULID"
+    assert ec._owner_field(_Sess(), "user_id") == "userULID"

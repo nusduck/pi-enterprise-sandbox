@@ -24,3 +24,34 @@ describe('sandbox temporary path guard', () => {
     });
   });
 });
+
+describe('user skill path guard', () => {
+  const systemSkill = '/home/sandbox/skill/hello/SKILL.md';
+  const userSkill =
+    '/home/sandbox/skill-user/01ORGEXAMPLEULID00000001/01USEREXAMPLEULID00000001/hello/SKILL.md';
+
+  it('permits system and per-user skill reads when allowSkillRead is set', () => {
+    assert.deepEqual(normalizeLogicalPath(systemSkill, { allowSkillRead: true }), {
+      ok: true,
+      path: systemSkill,
+      area: 'skill',
+    });
+    assert.deepEqual(normalizeLogicalPath(userSkill, { allowSkillRead: true }), {
+      ok: true,
+      path: userSkill,
+      area: 'skill',
+    });
+  });
+
+  it('does not treat skill-user as a child of the system skill root', () => {
+    const result = normalizeLogicalPath(userSkill, { allowSkillRead: true });
+    assert.equal(result.ok, true);
+    assert.equal(result.area, 'skill');
+    assert.equal(result.path, userSkill);
+  });
+
+  it('denies writes to both skill tiers', () => {
+    assert.equal(normalizeWritePath(systemSkill).code, 'PATH_SKILL_WRITE_DENIED');
+    assert.equal(normalizeWritePath(userSkill).code, 'PATH_SKILL_WRITE_DENIED');
+  });
+});

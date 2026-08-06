@@ -81,7 +81,21 @@ class SandboxExecutionContext:
         if not session_id or not workspace_id:
             raise ValueError("Session is missing filesystem identity")
         user_id = _owner_field(session, "user_id")
-        org_id = _owner_field(session, "org_id")
+        # Formal public sessions expose organization_id; some records use org_id.
+        org_id = _owner_field(session, "org_id") or _owner_field(
+            session, "organization_id"
+        )
+        if org_id is None and isinstance(getattr(session, "metadata", None), dict):
+            meta = session.metadata
+            org_id = _owner_field(meta, "org_id") or _owner_field(
+                meta, "organization_id"
+            )
+        elif org_id is None and isinstance(session, dict):
+            meta = session.get("metadata")
+            if isinstance(meta, dict):
+                org_id = _owner_field(meta, "org_id") or _owner_field(
+                    meta, "organization_id"
+                )
         return cls(
             session_id=str(session_id),
             workspace_id=str(workspace_id),

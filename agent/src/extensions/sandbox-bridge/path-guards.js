@@ -4,16 +4,36 @@
  */
 
 import {
-  LOGICAL_SKILL_ROOT,
+  LOGICAL_SKILL_ROOTS,
   LOGICAL_TEMP_ROOT,
   LOGICAL_WORKSPACE_ROOT,
   MAX_PATH_LEN,
 } from './constants.js';
 
 /**
+ * Longest skill root first so ``/home/sandbox/skill-user/...`` is not
+ * matched as a child of ``/home/sandbox/skill``.
+ * @returns {readonly string[]}
+ */
+function skillRootsLongestFirst() {
+  return [...LOGICAL_SKILL_ROOTS].sort((a, b) => b.length - a.length);
+}
+
+/**
+ * @param {string} logical
+ * @returns {string | null}
+ */
+function matchingSkillRoot(logical) {
+  for (const root of skillRootsLongestFirst()) {
+    if (logical === root || logical.startsWith(`${root}/`)) return root;
+  }
+  return null;
+}
+
+/**
  * Normalize a model-supplied path to a logical sandbox path.
  * Relative paths → under workspace. Absolute paths may be under workspace,
- * skill, or the session-scoped temporary directory.
+ * skill (system or per-user), or the session-scoped temporary directory.
  *
  * @param {unknown} raw
  * @param {{ allowSkillRead?: boolean }} [opts]
@@ -84,7 +104,7 @@ export function normalizeLogicalPath(raw, opts = {}) {
     logical = LOGICAL_WORKSPACE_ROOT;
   }
 
-  if (logical === LOGICAL_SKILL_ROOT || logical.startsWith(`${LOGICAL_SKILL_ROOT}/`)) {
+  if (matchingSkillRoot(logical)) {
     if (!opts.allowSkillRead) {
       return {
         ok: false,
@@ -125,9 +145,11 @@ export function normalizeWritePath(raw, opts = {}) {
     // Remap skill read-only to write denied when path looked like skill
     if (
       typeof raw === 'string' &&
-      (raw.startsWith(LOGICAL_SKILL_ROOT) ||
+      (matchingSkillRoot(raw.trim()) ||
         raw.includes('/skill/') ||
-        raw.startsWith('skill/'))
+        raw.includes('/skill-user/') ||
+        raw.startsWith('skill/') ||
+        raw.startsWith('skill-user/'))
     ) {
       return {
         ok: false,
