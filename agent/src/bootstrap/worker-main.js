@@ -109,11 +109,37 @@ export async function startWorkerMain(env = process.env, hooks = {}) {
   }, recoveryIntervalMs);
   if (typeof recoveryTimer.unref === 'function') recoveryTimer.unref();
 
+  // Reap tool executions whose Sandbox replica died without reconciling them.
+  // It runs here rather than in the Sandbox because the replica that needs
+  // reaping is, by definition, the one that cannot do it. Claim-based, so
+  // every worker replica can run it concurrently.
+  const { createExecutionLeaseSweeper } = await import(
+    '../application/execution-lease-sweeper.js'
+  );
+  // Maintenance, not a prerequisite for processing jobs: with no database
+  // handle the worker still runs, it just cannot reap. Say so rather than
+  // failing startup over a loop that only matters after something else crashes.
+  const leaseSweeper = container.knex
+    ? createExecutionLeaseSweeper({ db: container.knex })
+    : null;
+  if (!leaseSweeper) {
+    console.warn(
+      '[agent-worker] no database handle — execution lease sweeping disabled',
+    );
+  }
+  const leaseSweepIntervalMs =
+    Number(env.AGENT_LEASE_SWEEP_INTERVAL_MS) || 60_000;
+  const leaseTimer = setInterval(() => {
+    void leaseSweeper?.sweepOnce();
+  }, leaseSweepIntervalMs);
+  if (typeof leaseTimer.unref === 'function') leaseTimer.unref();
+
   let publisher;
   try {
     publisher = await container.createOutboxPublisher();
   } catch (err) {
     clearInterval(recoveryTimer);
+    clearInterval(leaseTimer);
     await cronScheduler?.shutdown().catch(() => {});
     await workerRuntime.shutdown().catch(() => {});
     await container.shutdown().catch(() => {});
@@ -177,6 +203,7 @@ export async function startWorkerMain(env = process.env, hooks = {}) {
       err instanceof Error ? err.message : 'error',
     );
     clearInterval(recoveryTimer);
+    clearInterval(leaseTimer);
     await cronScheduler?.shutdown().catch(() => {});
     outboxAbort.abort();
     try {
@@ -195,6 +222,7 @@ export async function startWorkerMain(env = process.env, hooks = {}) {
     shuttingDown = true;
     console.log(`[agent-worker] ${signal} — shutting down`);
     clearInterval(recoveryTimer);
+    clearInterval(leaseTimer);
     await cronScheduler?.shutdown().catch(() => {});
     outboxAbort.abort();
     try {

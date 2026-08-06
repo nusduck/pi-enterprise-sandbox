@@ -4,11 +4,8 @@ Owns its DB transaction for authoritative claim validation, insert, and
 finalize CAS. No HTTP / HMAC / Redis / FastAPI in this batch.
 
 Lock / validation order within one transaction:
-  1. agent_sessions     FOR SHARE
-  2. runs               FOR SHARE
-  3. sandbox_sessions   FOR SHARE
-  4. tool_executions    FOR UPDATE
-  5. sandbox_executions FOR UPDATE / reload
+  agent_sessions FOR SHARE -> runs FOR SHARE -> sandbox_sessions FOR SHARE
+  -> tool_executions FOR UPDATE -> sandbox_executions FOR UPDATE / reload
 
 Parent SHARE locks prevent lifecycle/fence changes while allowing distinct
 tool calls to proceed concurrently.
@@ -32,6 +29,12 @@ from sandbox.app.domain.types import (
     can_transition_sandbox_execution,
     is_terminal_sandbox_execution_status,
 )
+from sandbox.app.persistence import execution_lease
+from sandbox.app.persistence.claim_schema_probe import (
+    CLAIM_REQUIRED_COLUMNS,
+    CLAIM_REQUIRED_INDEXES,
+    probe_claim_schema_capability,
+)
 from sandbox.app.persistence.errors import (
     ConflictError,
     IdempotencyKeyReuseError,
@@ -52,34 +55,12 @@ AGENT_SESSION_ACTIVE = "ACTIVE"
 RUN_STATUS_RUNNING = "RUNNING"
 SANDBOX_SESSION_ACTIVE = "ACTIVE"
 
-# Startup recovery is intentionally bounded.  A production Sandbox is a
-# single active instance (the entrypoint defaults to one Uvicorn worker); a
-# second instance must not be used as a live scale-out mechanism until an
-# execution-owner lease is added to the schema.  The limits keep a corrupt or
-# unexpectedly large ledger from turning startup into an unbounded transaction.
+# Startup recovery is intentionally bounded.  Each replica owns a disjoint set
+# of workspaces, and an execution-owner lease (see execution_lease) lets a
+# sweeper close out a replica that died without reconciling.  The limits keep a
+# corrupt ledger from turning startup into an unbounded transaction.
 DEFAULT_RECOVERY_BATCH_SIZE = 100
 DEFAULT_RECOVERY_MAX_ROWS = 10_000
-
-# PR-07B claim capability (migration 20260718000008) — readonly probe targets.
-CLAIM_REQUIRED_COLUMNS: dict[str, tuple[str, ...]] = {
-    "sandbox_executions": (
-        "tool_execution_id",
-        "tool_call_id",
-        "request_hash",
-        "request_hash_version",
-        "execution_fence_token",
-    ),
-    "tool_executions": (
-        "request_hash",
-        "request_hash_version",
-        "execution_fence_token",
-    ),
-}
-CLAIM_REQUIRED_INDEXES: tuple[tuple[str, str], ...] = (
-    ("sandbox_executions", "uk_sandbox_execution_run_tool_call"),
-    ("sandbox_executions", "uk_sandbox_execution_tool_execution"),
-)
-
 
 def _is_mysql_dup(err: BaseException) -> bool:
     """True only for MySQL duplicate-key error 1062 (never swallow others)."""
@@ -163,51 +144,12 @@ class ToolExecutionClaimValidator:
     # ── public API ──────────────────────────────────────────────────────
 
     def probe_claim_schema_capability(self, conn: Any) -> None:
-        """Readonly schema/index capability probe for claim path.
+        """Readonly capability probe; see claim_schema_probe for the rules.
 
-        Uses INFORMATION_SCHEMA only (no DDL). Missing columns or unique indexes
-        raise :class:`SchemaGapError` (fail closed).
+        Marks the instance capable only on success, so a failed probe is
+        retried rather than remembered as having passed.
         """
-        missing: list[str] = []
-        for table, columns in CLAIM_REQUIRED_COLUMNS.items():
-            for col in columns:
-                conn.execute(
-                    """
-                    SELECT COLUMN_NAME AS name
-                    FROM information_schema.COLUMNS
-                    WHERE TABLE_SCHEMA = DATABASE()
-                      AND TABLE_NAME = %s
-                      AND COLUMN_NAME = %s
-                    LIMIT 1
-                    """,
-                    (table, col),
-                )
-                row = conn.fetchone()
-                if row is None:
-                    missing.append(f"column:{table}.{col}")
-
-        for table, index_name in CLAIM_REQUIRED_INDEXES:
-            conn.execute(
-                """
-                SELECT INDEX_NAME AS name
-                FROM information_schema.STATISTICS
-                WHERE TABLE_SCHEMA = DATABASE()
-                  AND TABLE_NAME = %s
-                  AND INDEX_NAME = %s
-                LIMIT 1
-                """,
-                (table, index_name),
-            )
-            row = conn.fetchone()
-            if row is None:
-                missing.append(f"index:{table}.{index_name}")
-
-        if missing:
-            raise SchemaGapError(
-                "claim schema capability missing (fail closed): "
-                + ", ".join(missing),
-                table="sandbox_executions",
-            )
+        probe_claim_schema_capability(conn)
         self._schema_capable = True
 
     def ensure_claim_schema_capability(self, conn: Any) -> None:
@@ -249,6 +191,9 @@ class ToolExecutionClaimValidator:
 
             try:
                 created = self._insert_running(conn, claim, scope)
+                # Owned in the same transaction as the RUNNING row, so a
+                # replica that dies can be reaped (see execution_lease).
+                execution_lease.acquire(conn, claim["tool_execution_id"])
                 return {
                     "created": True,
                     "execution": created,
@@ -362,6 +307,9 @@ class ToolExecutionClaimValidator:
                     ),
                 )
                 if getattr(conn, "rowcount", 0) == 1:
+                    # Accounted for: release, or the sweeper would later
+                    # "reap" a row that already finished.
+                    execution_lease.release(conn, row.get("tool_execution_id"))
                     updated = self._get_execution_by_id(conn, execution_id, scope)
                     assert updated is not None
                     return {"changed": True, "execution": updated}

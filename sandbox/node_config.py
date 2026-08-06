@@ -36,6 +36,14 @@ ENV_NODE_ADDRESS = "SANDBOX_NODE_ADDRESS"
 ENV_HEARTBEAT = "SANDBOX_NODE_HEARTBEAT_INTERVAL_SECONDS"
 ENV_LIVENESS_MULTIPLIER = "SANDBOX_NODE_LIVENESS_MULTIPLIER"
 ENV_UVICORN_WORKERS = "SANDBOX_UVICORN_WORKERS"
+ENV_EXECUTION_LEASE = "SANDBOX_EXECUTION_LEASE_SECONDS"
+
+#: How long a claimed tool execution stays owned by a replica. Generous on
+#: purpose: every claim is one bounded tool call, and reaping a still-running
+#: execution is worse than reaping a dead one late.
+DEFAULT_EXECUTION_LEASE_SECONDS = 900
+MIN_EXECUTION_LEASE_SECONDS = 60
+MAX_EXECUTION_LEASE_SECONDS = 86_400
 
 #: Scaling out means more replicas, never more workers. The execution admission
 #: lock and the managed-process table live in a single process, so a second
@@ -139,6 +147,10 @@ def production_identity_errors(
 
 
 __all__ = [
+    "DEFAULT_EXECUTION_LEASE_SECONDS",
+    "ENV_EXECUTION_LEASE",
+    "MAX_EXECUTION_LEASE_SECONDS",
+    "MIN_EXECUTION_LEASE_SECONDS",
     "DEFAULT_HEARTBEAT_INTERVAL_SECONDS",
     "DEFAULT_LIVENESS_MULTIPLIER",
     "DEFAULT_NODE_ID",

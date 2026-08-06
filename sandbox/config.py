@@ -295,6 +295,7 @@ class Settings(BaseSettings):
     )
     node_liveness_multiplier: int = node_config.DEFAULT_LIVENESS_MULTIPLIER
     uvicorn_workers: int = node_config.REQUIRED_UVICORN_WORKERS
+    execution_lease_seconds: int = node_config.DEFAULT_EXECUTION_LEASE_SECONDS
 
     # ── Paths (physical storage) ─────────────────────────────────────
     # Physical per-session workspaces live under workspaces_root/{workspace_id}.
@@ -702,6 +703,18 @@ class Settings(BaseSettings):
             return 64
         return _positive_int_field(
             value, name="SANDBOX_INTERNAL_MAX_CONCURRENCY", minimum=1, maximum=10_000
+        )
+
+    @field_validator("execution_lease_seconds", mode="before")
+    @classmethod
+    def _validate_execution_lease_seconds(cls, value: Any) -> int:
+        if value is None or value == "":
+            return node_config.DEFAULT_EXECUTION_LEASE_SECONDS
+        return _positive_int_field(
+            value,
+            name=node_config.ENV_EXECUTION_LEASE,
+            minimum=node_config.MIN_EXECUTION_LEASE_SECONDS,
+            maximum=node_config.MAX_EXECUTION_LEASE_SECONDS,
         )
 
     @field_validator("node_id", mode="before")
