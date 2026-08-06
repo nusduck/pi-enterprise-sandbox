@@ -392,3 +392,72 @@ def test_unstamped_artifact_is_served_optimistically() -> None:
     """Refusing would make pre-placement deliverables permanently unreachable."""
     with registered(NODE_A, [(NODE_A, ADDR_A)]):
         require_local_artifact_storage(_Artifact(None))  # no raise
+
+
+# ── Public plane (BFF → Sandbox) ────────────────────────────────────────
+
+
+def test_public_session_routes_refuse_a_workspace_owned_elsewhere(monkeypatch) -> None:
+    """The BFF dials a ClusterIP, so it can land on any shard.
+
+    Without a guard here, a file listing on the wrong replica answers 200 with
+    an empty directory — indistinguishable from "this user has no files".
+    """
+    from sandbox.security import ownership
+
+    class Actor:
+        organization_id = ORG
+        user_id = USER
+
+    class Runtime:
+        def resolve_owned(self, sandbox_session_id, *, org_id, user_id):
+            return {"session_id": sandbox_session_id}
+
+        def resolve_placement(self, sandbox_session_id, *, org_id, user_id):
+            return (NODE_B, ADDR_B)
+
+    monkeypatch.setattr(ownership, "require_end_user_actor", lambda _r: Actor())
+    monkeypatch.setattr(
+        "sandbox.services.formal_session_runtime.get_formal_session_runtime",
+        lambda _app: Runtime(),
+    )
+
+    class Request:
+        app = object()
+
+    with registered(NODE_A, [(NODE_A, ADDR_A)]):
+        with pytest.raises(HTTPException) as excinfo:
+            ownership.require_owned_session(SANDBOX_SESSION, Request())
+
+    assert excinfo.value.status_code == 409
+    assert excinfo.value.detail["code"] == PLACEMENT_MISMATCH_CODE
+    assert excinfo.value.detail["ownerNodeId"] == NODE_B
+
+
+def test_public_session_routes_serve_the_owner(monkeypatch) -> None:
+    from sandbox.security import ownership
+
+    class Actor:
+        organization_id = ORG
+        user_id = USER
+
+    class Runtime:
+        def resolve_owned(self, sandbox_session_id, *, org_id, user_id):
+            return {"session_id": sandbox_session_id}
+
+        def resolve_placement(self, sandbox_session_id, *, org_id, user_id):
+            return (NODE_A, ADDR_A)
+
+    monkeypatch.setattr(ownership, "require_end_user_actor", lambda _r: Actor())
+    monkeypatch.setattr(
+        "sandbox.services.formal_session_runtime.get_formal_session_runtime",
+        lambda _app: Runtime(),
+    )
+
+    class Request:
+        app = object()
+
+    with registered(NODE_A, [(NODE_A, ADDR_A)]):
+        session = ownership.require_owned_session(SANDBOX_SESSION, Request())
+
+    assert session["session_id"] == SANDBOX_SESSION

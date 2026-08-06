@@ -220,5 +220,21 @@ def require_owned_session(session_id: str, request: Request | None = None) -> An
         raise HTTPException(status_code=exc.status, detail=exc.message) from exc
     if session is None:
         raise HTTPException(status_code=404, detail=_SESSION_NOT_FOUND)
+
+    # Every public session route reads or writes the session's workspace, and
+    # that workspace exists on exactly one replica. The BFF reaches the Sandbox
+    # through a ClusterIP Service, so without this guard a file listing or
+    # download would land on an arbitrary shard and answer 200 with an empty
+    # directory — indistinguishable from "this user has no files".
+    from sandbox.services.placement_guard import require_local_placement
+
+    require_local_placement(
+        request.app,
+        {
+            "sandbox_session_id": session_id,
+            "org_id": actor.organization_id,
+            "user_id": actor.user_id,
+        },
+    )
     return session
 
