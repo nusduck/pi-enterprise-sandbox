@@ -1,0 +1,13 @@
+apiVersion: v2
+name: pi-enterprise-sandbox
+description: >-
+  Four-service secure sandbox and AI coding assistant: SPA frontend, thin BFF,
+  Agent (HTTP + worker), and a sharded Sandbox execution plane.
+type: application
+version: 0.1.0
+appVersion: "4.0.0"
+keywords:
+  - sandbox
+  - agent
+  - ai
+home: https://github.com/nusduck/pi-enterprise-sandbox

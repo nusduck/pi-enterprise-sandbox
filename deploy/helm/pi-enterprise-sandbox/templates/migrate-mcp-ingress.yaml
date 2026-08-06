@@ -1,0 +1,171 @@
+{{- if .Values.migration.enabled }}
+{{/*
+Schema migration, as a Helm hook rather than a startup step.
+
+Every long-running replica keeps AGENT_MIGRATE_ON_START=false. Migrating on
+start would have N replicas racing the same DDL during a rollout; running it
+once, before anything else is created or upgraded, is the whole point.
+*/}}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "pi.fullname" . }}-migrate
+  labels: {{- include "pi.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "-5"
+    # Kept on failure so the logs survive for diagnosis; MySQL DDL is not
+    # transactional, so a partial migration needs a human.
+    "helm.sh/hook-delete-policy": before-hook-creation
+spec:
+  backoffLimit: {{ .Values.migration.backoffLimit }}
+  template:
+    metadata:
+      labels: {{- include "pi.selectorLabels" (dict "ctx" . "component" "migrate") | nindent 8 }}
+    spec:
+      restartPolicy: Never
+      {{- include "pi.podPlacement" . | nindent 6 }}
+      containers:
+        - name: migrate
+          image: {{ include "pi.image" (dict "ctx" . "image" .Values.agent.image) }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["node", "src/infrastructure/mysql/cli-migrate.js", "latest"]
+          envFrom:
+            - configMapRef: { name: {{ include "pi.configName" . }} }
+          env:
+            {{- include "pi.agentSecretEnv" . | nindent 12 }}
+          resources: {{- toYaml .Values.migration.resources | nindent 12 }}
+{{- end }}
+{{- if .Values.sandboxMcp.enabled }}
+---
+{{/*
+MCP facade: same image as the Sandbox, different process. It mounts no
+workspace or artifact storage — everything goes through the authenticated
+bridge — and keeps its session context in Redis, so it is plain stateless.
+*/}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "pi.mcpService" . }}
+  labels: {{- include "pi.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector: {{- include "pi.selectorLabels" (dict "ctx" . "component" "sandbox-mcp") | nindent 4 }}
+  ports:
+    - { name: http, port: 8082, targetPort: http }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "pi.fullname" . }}-sandbox-mcp
+  labels: {{- include "pi.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.sandboxMcp.replicaCount }}
+  selector:
+    matchLabels: {{- include "pi.selectorLabels" (dict "ctx" . "component" "sandbox-mcp") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "pi.selectorLabels" (dict "ctx" . "component" "sandbox-mcp") | nindent 8 }}
+        {{- with .Values.podLabels }}{{- toYaml . | nindent 8 }}{{- end }}
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/config.yaml") . | sha256sum }}
+        {{- with .Values.podAnnotations }}{{- toYaml . | nindent 8 }}{{- end }}
+    spec:
+      {{- include "pi.podPlacement" . | nindent 6 }}
+      containers:
+        - name: sandbox-mcp
+          image: {{ include "pi.image" (dict "ctx" . "image" .Values.sandbox.image) }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["/app/.venv/bin/python", "-m", "uvicorn", "sandbox.mcp.app:app", "--host", "0.0.0.0", "--port", "8082"]
+          ports:
+            - { name: http, containerPort: 8082 }
+          envFrom:
+            - configMapRef: { name: {{ include "pi.configName" . }} }
+          env:
+            - name: SANDBOX_MCP_TOKEN
+              valueFrom:
+                secretKeyRef: { name: {{ include "pi.secretName" . }}, key: sandbox-mcp-token }
+            - name: SANDBOX_MCP_INTERNAL_TOKEN
+              valueFrom:
+                secretKeyRef: { name: {{ include "pi.secretName" . }}, key: sandbox-mcp-internal-token }
+            - name: SANDBOX_MCP_REDIS_URL
+              valueFrom:
+                secretKeyRef: { name: {{ include "pi.secretName" . }}, key: redis-url }
+          # No workspace mounts, and it never needs bubblewrap, so it runs as
+          # an ordinary unprivileged container.
+          securityContext:
+            runAsUser: 10001
+            runAsGroup: 10001
+            allowPrivilegeEscalation: false
+            capabilities: { drop: [ALL] }
+          resources: {{- toYaml .Values.sandboxMcp.resources | nindent 12 }}
+{{- end }}
+{{- if .Values.ingress.enabled }}
+---
+{{/*
+One host for both the SPA and /api.
+
+Same-origin is a requirement, not a preference: the browser's SSE fetch sends
+no explicit credentials, so a separate API origin silently drops the session
+cookie and every stream 401s.
+*/}}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "pi.fullname" . }}
+  labels: {{- include "pi.labels" . | nindent 4 }}
+  {{- with .Values.ingress.annotations }}
+  annotations: {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- with .Values.ingress.className }}
+  ingressClassName: {{ . }}
+  {{- end }}
+  {{- if .Values.ingress.tls.enabled }}
+  tls:
+    - hosts: [{{ required "ingress.host is required when TLS is enabled" .Values.ingress.host | quote }}]
+      secretName: {{ required "ingress.tls.secretName is required" .Values.ingress.tls.secretName }}
+  {{- end }}
+  rules:
+    - host: {{ required "ingress.host is required when ingress is enabled" .Values.ingress.host | quote }}
+      http:
+        paths:
+          # The SPA's nginx already proxies /api to the BFF, so routing
+          # everything at it keeps one origin and one set of SSE settings.
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "pi.frontendService" . }}
+                port: { number: 80 }
+{{- end }}
+{{- if .Values.networkPolicy.enabled }}
+---
+{{/*
+Mirrors the Compose `backend_internal` network: the Sandbox accepts traffic
+only from the Agent and the MCP facade, never from the ingress or the BFF.
+*/}}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "pi.fullname" . }}-sandbox
+  labels: {{- include "pi.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels: {{- include "pi.selectorLabels" (dict "ctx" . "component" "sandbox") | nindent 6 }}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels: {{- include "pi.selectorLabels" (dict "ctx" . "component" "agent") | nindent 14 }}
+        - podSelector:
+            matchLabels: {{- include "pi.selectorLabels" (dict "ctx" . "component" "agent-worker") | nindent 14 }}
+        - podSelector:
+            matchLabels: {{- include "pi.selectorLabels" (dict "ctx" . "component" "sandbox-mcp") | nindent 14 }}
+        # The BFF still calls the Sandbox public plane directly.
+        - podSelector:
+            matchLabels: {{- include "pi.selectorLabels" (dict "ctx" . "component" "api-server") | nindent 14 }}
+      ports:
+        - { protocol: TCP, port: 8081 }
+{{- end }}

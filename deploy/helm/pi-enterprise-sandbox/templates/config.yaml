@@ -1,0 +1,94 @@
+{{/*
+Non-secret configuration shared by every service, plus the secret that carries
+everything else. Split this way so the ConfigMap can be read freely while
+credentials stay in one auditable place.
+*/}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "pi.configName" . }}
+  labels: {{- include "pi.labels" . | nindent 4 }}
+data:
+  DEPLOYMENT_ENV: {{ .Values.deploymentEnv | quote }}
+  LOG_LEVEL: {{ .Values.logLevel | quote }}
+
+  # ── Service addressing ────────────────────────────────────────────────
+  AGENT_BASE_URL: {{ printf "http://%s:4100" (include "pi.agentService" .) | quote }}
+  # Discovery only. Workspace-bound calls are routed per session to the
+  # replica that owns the workspace, via the headless service below.
+  SANDBOX_DISCOVERY_URL: {{ printf "http://%s:8081" (include "pi.sandboxService" .) | quote }}
+  # The BFF still reaches the Sandbox directly for the public plane.
+  SANDBOX_BASE_URL: {{ printf "http://%s:8081" (include "pi.sandboxService" .) | quote }}
+  SANDBOX_MCP_SANDBOX_BASE_URL: {{ printf "http://%s:8081" (include "pi.sandboxService" .) | quote }}
+
+  # ── Sandbox execution posture ─────────────────────────────────────────
+  # Production requires real isolation and no egress from child processes.
+  SANDBOX_ISOLATION_BACKEND: bubblewrap
+  SANDBOX_ISOLATION_REQUIRED: "true"
+  SANDBOX_NETWORK_MODE: disabled
+  SANDBOX_POLICY_PROFILE: strict
+  SANDBOX_INTERNAL_PLANE_ENABLED: "true"
+  SANDBOX_UVICORN_WORKERS: {{ .Values.sandbox.uvicornWorkers | quote }}
+  SANDBOX_NODE_HEARTBEAT_INTERVAL_SECONDS: {{ .Values.sandbox.heartbeatIntervalSeconds | quote }}
+  SANDBOX_NODE_LIVENESS_MULTIPLIER: {{ .Values.sandbox.livenessMultiplier | quote }}
+
+  SANDBOX_WORKSPACES_ROOT: /var/sandbox/workspaces
+  SANDBOX_TEMP_ROOT: /var/sandbox/tmp
+  SANDBOX_ARTIFACTS_ROOT: /var/sandbox/artifacts
+  SANDBOX_CONTROL_ROOT: /var/sandbox/control
+
+  SANDBOX_EXECUTION_TIMEOUT_SECONDS: {{ .Values.sandbox.execution.timeoutSeconds | quote }}
+  SANDBOX_MAX_OUTPUT_CHARS: {{ .Values.sandbox.execution.maxOutputChars | quote }}
+  SANDBOX_MAX_PROCESS_COUNT: {{ .Values.sandbox.execution.maxProcessCount | quote }}
+  SANDBOX_MAX_MEMORY_MB: {{ .Values.sandbox.execution.maxMemoryMb | quote }}
+  SANDBOX_WORKSPACE_QUOTA_MB: {{ .Values.sandbox.execution.workspaceQuotaMb | quote }}
+  SANDBOX_TEMP_QUOTA_MB: {{ .Values.sandbox.execution.tempQuotaMb | quote }}
+
+  # Probes and internal traffic arrive from pod CIDRs, so loopback alone would
+  # reject them. Narrow this to your actual pod network in production.
+  SANDBOX_ALLOWED_CLIENT_CIDRS: "127.0.0.1/32,::1/128,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
+
+  # ── Agent ─────────────────────────────────────────────────────────────
+  # Migrations run once, as a Helm hook. A replica that migrated on start
+  # would race every other replica during a rollout.
+  AGENT_MIGRATE_ON_START: "false"
+  AGENT_PI_AGENT_DIR: /app/pi-agent-home
+  AGENT_RECOVERY_INTERVAL_MS: {{ .Values.agentWorker.recoveryIntervalMs | quote }}
+  AGENT_CRON_SCHEDULER_INTERVAL_MS: {{ .Values.agentWorker.cronIntervalMs | quote }}
+  AGENT_INTERVAL_JITTER_MS: {{ .Values.agentWorker.intervalJitterMs | quote }}
+{{- if .Values.agent.publicBaseUrl }}
+  A2A_PUBLIC_BASE_URL: {{ .Values.agent.publicBaseUrl | quote }}
+{{- else if .Values.ingress.host }}
+  A2A_PUBLIC_BASE_URL: {{ printf "%s://%s" (ternary "https" "http" .Values.ingress.tls.enabled) .Values.ingress.host | quote }}
+{{- end }}
+
+  SHUTDOWN_DRAIN_MS: {{ mul .Values.apiServer.shutdownDrainSeconds 1000 | quote }}
+{{- if not .Values.secrets.existingSecret }}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ include "pi.secretName" . }}
+  labels: {{- include "pi.labels" . | nindent 4 }}
+type: Opaque
+stringData:
+  mysql-user: {{ required "secrets.mysqlUser is required" .Values.secrets.mysqlUser | quote }}
+  mysql-password: {{ required "secrets.mysqlPassword is required" .Values.secrets.mysqlPassword | quote }}
+  redis-password: {{ .Values.secrets.redisPassword | quote }}
+  replay-redis-password: {{ .Values.secrets.replayRedisPassword | quote }}
+  llm-api-key: {{ .Values.secrets.llmApiKey | quote }}
+  llm-base-url: {{ .Values.secrets.llmBaseUrl | quote }}
+  # Agent signs internal requests with this keyring and the Sandbox verifies
+  # them against the same one; a mismatch fails every sandbox tool closed.
+  internal-hmac-keyring: {{ required "secrets.internalHmacKeyring is required" .Values.secrets.internalHmacKeyring | quote }}
+  internal-hmac-active-kid: {{ required "secrets.internalHmacActiveKid is required" .Values.secrets.internalHmacActiveKid | quote }}
+  agent-internal-token: {{ .Values.secrets.agentInternalToken | quote }}
+  sandbox-mcp-token: {{ .Values.secrets.sandboxMcpToken | quote }}
+  sandbox-mcp-internal-token: {{ .Values.secrets.sandboxMcpInternalToken | quote }}
+  mysql-url: {{ printf "mysql://%s:%s@%s:%v/%s" .Values.secrets.mysqlUser .Values.secrets.mysqlPassword .Values.externalServices.mysql.host .Values.externalServices.mysql.port .Values.externalServices.mysql.database | quote }}
+  sandbox-database-url: {{ printf "mysql+pymysql://%s:%s@%s:%v/%s" .Values.secrets.mysqlUser .Values.secrets.mysqlPassword .Values.externalServices.mysql.host .Values.externalServices.mysql.port .Values.externalServices.mysql.database | quote }}
+  redis-url: {{ printf "redis://:%s@%s:%v/0" .Values.secrets.redisPassword .Values.externalServices.redis.host .Values.externalServices.redis.port | quote }}
+  # Deliberately a different instance from the Agent's Redis. The Sandbox
+  # asserts the isolation at startup and refuses to share credentials.
+  replay-redis-url: {{ printf "redis://:%s@%s:%v/0" .Values.secrets.replayRedisPassword .Values.externalServices.replayRedis.host .Values.externalServices.replayRedis.port | quote }}
+{{- end }}

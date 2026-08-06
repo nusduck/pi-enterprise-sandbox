@@ -114,6 +114,42 @@ jobs:
       - name: Production build
         run: npm run build --prefix frontend
 
+  helm:
+    name: Helm chart (lint + schema)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v4
+
+      - name: Lint chart
+        run: |
+          helm lint deploy/helm/pi-enterprise-sandbox \
+            --set secrets.mysqlUser=ci \
+            --set secrets.mysqlPassword=ci_password \
+            --set secrets.internalHmacKeyring='{"ci-key":"a2tra2tra2s"}' \
+            --set secrets.internalHmacActiveKid=ci-key
+
+      - name: Render chart
+        run: |
+          helm template pi deploy/helm/pi-enterprise-sandbox \
+            --set secrets.mysqlUser=ci \
+            --set secrets.mysqlPassword=ci_password \
+            --set secrets.internalHmacKeyring='{"ci-key":"a2tra2tra2s"}' \
+            --set secrets.internalHmacActiveKid=ci-key \
+            > /tmp/rendered.yaml
+
+      # Catches field-level mistakes helm lint cannot see: a misplaced
+      # appArmorProfile or an invalid procMount renders fine and fails at apply.
+      - name: Validate against Kubernetes schema
+        run: |
+          curl -sSLo /tmp/kubeconform.tar.gz \
+            https://github.com/yannh/kubeconform/releases/download/v0.6.7/kubeconform-linux-amd64.tar.gz
+          tar -xzf /tmp/kubeconform.tar.gz -C /tmp
+          /tmp/kubeconform -strict -summary -kubernetes-version 1.31.0 /tmp/rendered.yaml
+
   compose:
     name: Compose config
     runs-on: ubuntu-latest

@@ -1,0 +1,260 @@
+# Default values for pi-enterprise-sandbox.
+#
+# The one thing to understand before tuning anything else: the Sandbox is
+# *sharded*, not load balanced. A workspace is a directory on one replica's
+# volume and a managed process is a handle in one replica's memory, so it runs
+# as a StatefulSet with per-pod storage and stable identity, and the Agent
+# routes each call to the replica that owns the workspace. Frontend, BFF, Agent
+# HTTP and Agent worker are stateless and scale freely.
+
+nameOverride: ""
+fullnameOverride: ""
+
+image:
+  registry: ""
+  pullPolicy: IfNotPresent
+  pullSecrets: []
+
+# ── External dependencies ────────────────────────────────────────────────
+# This chart does not deploy MySQL or Redis. Point it at what you run.
+externalServices:
+  mysql:
+    # Consumed by Agent (authority) and Sandbox (execution domain).
+    host: mysql
+    port: 3306
+    database: pi_enterprise
+    # Credentials come from the secret below, never from values.
+  redis:
+    # Agent coordination: queue, leases, cancel signals, event stream.
+    host: redis
+    port: 6379
+  replayRedis:
+    # Sandbox HMAC replay nonce store. Must be a *separate* Redis from the
+    # Agent's — the Sandbox refuses to start if it detects shared credentials.
+    host: sandbox-replay-redis
+    port: 6379
+
+# Secret values. Supply via --set, a values file kept out of git, or set
+# `existingSecret` to a secret you manage elsewhere.
+secrets:
+  existingSecret: ""
+  mysqlUser: ""
+  mysqlPassword: ""
+  redisPassword: ""
+  replayRedisPassword: ""
+  llmApiKey: ""
+  llmBaseUrl: ""
+  # Shared HMAC keyring for the Agent -> Sandbox internal plane (JSON).
+  internalHmacKeyring: ""
+  internalHmacActiveKid: ""
+  agentInternalToken: ""
+  sandboxMcpToken: ""
+  sandboxMcpInternalToken: ""
+
+# ── Frontend ─────────────────────────────────────────────────────────────
+frontend:
+  enabled: true
+  image:
+    repository: pi-enterprise-frontend
+    tag: ""
+  replicaCount: 2
+  # nginx resolves its upstream through a variable, so it must be told which
+  # resolver to use. A literal name would otherwise be resolved once at start
+  # and cached for the life of the process.
+  dnsResolver: kube-dns.kube-system.svc.cluster.local
+  resources:
+    requests: { cpu: 25m, memory: 32Mi }
+    limits: { cpu: 200m, memory: 128Mi }
+  autoscaling:
+    enabled: false
+    minReplicas: 2
+    maxReplicas: 6
+    targetCPUUtilizationPercentage: 70
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 1
+
+# ── API Server (BFF) ─────────────────────────────────────────────────────
+apiServer:
+  enabled: true
+  image:
+    repository: pi-enterprise-api
+    tag: ""
+  replicaCount: 2
+  # Uploads spill to disk before being forwarded, so /tmp must be writable.
+  tmpSizeLimit: 1Gi
+  # Time to finish in-flight requests after SIGTERM. SSE relays never end on
+  # their own, so this is also the point at which they are force-closed.
+  shutdownDrainSeconds: 15
+  resources:
+    requests: { cpu: 50m, memory: 128Mi }
+    limits: { cpu: 500m, memory: 512Mi }
+  autoscaling:
+    enabled: false
+    minReplicas: 2
+    maxReplicas: 8
+    targetCPUUtilizationPercentage: 70
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 1
+
+# ── Agent (HTTP) ─────────────────────────────────────────────────────────
+agent:
+  enabled: true
+  image:
+    repository: pi-enterprise-agent
+    tag: ""
+  replicaCount: 2
+  shutdownDrainSeconds: 15
+  # Must be reachable from outside the cluster: it is minted into A2A artifact
+  # URIs, so 127.0.0.1 would produce links nobody can fetch.
+  publicBaseUrl: ""
+  # Pi SDK scratch space. Ephemeral per pod; nothing durable lives here.
+  piAgentHomeSizeLimit: 1Gi
+  resources:
+    requests: { cpu: 100m, memory: 256Mi }
+    limits: { cpu: 1, memory: 1Gi }
+  autoscaling:
+    enabled: false
+    minReplicas: 2
+    maxReplicas: 8
+    targetCPUUtilizationPercentage: 70
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 1
+
+# ── Agent worker ─────────────────────────────────────────────────────────
+agentWorker:
+  enabled: true
+  replicaCount: 2
+  # Recovery, cron and outbox sweeps are claim-based (FOR UPDATE SKIP LOCKED),
+  # so extra replicas are safe — they just duplicate polling. Jitter spreads
+  # the wasted scans instead of synchronising them.
+  recoveryIntervalMs: 60000
+  cronIntervalMs: 30000
+  intervalJitterMs: 5000
+  piAgentHomeSizeLimit: 2Gi
+  # User-installed skills. Until skills move to shared storage this is the
+  # only volume in the deployment that several pods write to concurrently,
+  # so it needs ReadWriteMany.
+  userSkills:
+    enabled: true
+    existingClaim: ""
+    storageClass: ""
+    accessMode: ReadWriteMany
+    size: 5Gi
+  resources:
+    requests: { cpu: 200m, memory: 512Mi }
+    limits: { cpu: 2, memory: 2Gi }
+
+# ── Sandbox (sharded StatefulSet) ────────────────────────────────────────
+sandbox:
+  enabled: true
+  image:
+    repository: enterprise-sandbox
+    tag: ""
+  # Each replica owns a disjoint set of workspaces. Scaling up adds capacity
+  # for *new* workspaces; scaling down strands the ones on removed shards, so
+  # drain them first (deliverables live in artifacts, which survive).
+  replicaCount: 3
+  # Never more than one. The execution admission lock and the managed-process
+  # table live in a single process, so a second worker would serve the same
+  # workspace without seeing either. The container refuses to start otherwise.
+  uvicornWorkers: 1
+  heartbeatIntervalSeconds: 10
+  livenessMultiplier: 3
+  terminationGracePeriodSeconds: 60
+  persistence:
+    storageClass: ""
+    # Per-pod volumes: ReadWriteOnce is correct and intended.
+    accessMode: ReadWriteOnce
+    workspacesSize: 20Gi
+    tmpSize: 10Gi
+    artifactsSize: 20Gi
+    controlSize: 5Gi
+  security:
+    # Bubblewrap needs syscalls the default seccomp profile blocks. Install
+    # sandbox/seccomp-bubblewrap.json on every node under the kubelet's
+    # seccomp directory and reference it here; "Unconfined" is the fallback if
+    # you cannot, and it is a real reduction in defence depth.
+    seccompProfile:
+      type: Localhost
+      localhostProfile: pi-enterprise/seccomp-bubblewrap.json
+    # Docker's `apparmor=unconfined`. Bubblewrap must create mount namespaces
+    # inside user namespaces, which the default profile denies.
+    appArmorProfile: Unconfined
+    # Docker's `systempaths=unconfined` — the unprivileged mount namespace has
+    # to mount its own /proc. This has NO clean Kubernetes equivalent:
+    # procMount: Unmasked requires the ProcMountType feature gate and normally
+    # `hostUsers: false`. VERIFY ON YOUR CLUSTER BEFORE RELYING ON IT.
+    procMount: Unmasked
+    hostUsers: false
+    capabilities:
+      # chown/chmod of bind-mounted storage, privilege drop, and signalling
+      # bubblewrap orphans that outlived a previous process.
+      add: [CHOWN, FOWNER, SETUID, SETGID, KILL]
+  resources:
+    requests: { cpu: 500m, memory: 512Mi }
+    limits: { cpu: 2, memory: 2Gi }
+  # Execution limits applied to child processes, not the service itself.
+  execution:
+    timeoutSeconds: 120
+    maxOutputChars: 50000
+    maxProcessCount: 20
+    maxMemoryMb: 512
+    workspaceQuotaMb: 500
+    tempQuotaMb: 500
+
+# ── Sandbox MCP facade ───────────────────────────────────────────────────
+sandboxMcp:
+  enabled: true
+  replicaCount: 2
+  # Stateless: session context lives in Redis, and it mounts no storage.
+  resources:
+    requests: { cpu: 50m, memory: 128Mi }
+    limits: { cpu: 500m, memory: 512Mi }
+
+# ── Database migrations ──────────────────────────────────────────────────
+# Runs as a Helm pre-install/pre-upgrade hook so schema is in place before any
+# pod starts. Every long-running replica keeps AGENT_MIGRATE_ON_START=false;
+# concurrent migrations from N replicas is exactly what this avoids.
+migration:
+  enabled: true
+  backoffLimit: 3
+  resources:
+    requests: { cpu: 100m, memory: 256Mi }
+    limits: { cpu: 1, memory: 1Gi }
+
+# ── Ingress ──────────────────────────────────────────────────────────────
+# Frontend and BFF must stay same-origin: the browser's SSE fetch sends no
+# explicit credentials, so splitting them across origins silently drops the
+# session cookie and every stream 401s.
+ingress:
+  enabled: false
+  className: nginx
+  host: ""
+  tls:
+    enabled: false
+    secretName: ""
+  annotations:
+    # These mirror the in-cluster nginx and are not optional: without them SSE
+    # is buffered into uselessness and 50MB uploads are rejected with 413.
+    nginx.ingress.kubernetes.io/proxy-buffering: "off"
+    nginx.ingress.kubernetes.io/proxy-request-buffering: "off"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "300"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "300"
+    nginx.ingress.kubernetes.io/proxy-body-size: 55m
+
+networkPolicy:
+  # Mirrors the Compose `backend_internal` network: only the frontend is
+  # reachable from outside, and the Sandbox only from the Agent.
+  enabled: false
+
+deploymentEnv: production
+logLevel: info
+
+podAnnotations: {}
+podLabels: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}

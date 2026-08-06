@@ -1,0 +1,175 @@
+{{- if .Values.sandbox.enabled }}
+{{/*
+The Sandbox is the one component that cannot be a Deployment.
+
+A workspace is a directory on one replica's local volume; a managed process is
+a Popen handle in one replica's memory. Neither is reachable from anywhere
+else, so replicas are shards with stable identity and per-pod storage, and the
+Agent routes each call to the owner.
+
+Two services, for two different jobs:
+  - headless: per-pod DNS. This is how the Agent reaches a *specific* replica.
+  - ClusterIP: discovery only. `sessions/ensure` is the single route any
+    replica may answer, because answering it is what assigns an owner.
+*/}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "pi.sandboxHeadless" . }}
+  labels: {{- include "pi.labels" . | nindent 4 }}
+spec:
+  clusterIP: None
+  # Pods must be resolvable the moment they are created: placement can name a
+  # replica before its readiness probe has passed.
+  publishNotReadyAddresses: true
+  selector: {{- include "pi.selectorLabels" (dict "ctx" . "component" "sandbox") | nindent 4 }}
+  ports:
+    - { name: http, port: 8081, targetPort: http }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "pi.sandboxService" . }}
+  labels: {{- include "pi.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector: {{- include "pi.selectorLabels" (dict "ctx" . "component" "sandbox") | nindent 4 }}
+  ports:
+    - { name: http, port: 8081, targetPort: http }
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "pi.fullname" . }}-sandbox
+  labels: {{- include "pi.labels" . | nindent 4 }}
+spec:
+  serviceName: {{ include "pi.sandboxHeadless" . }}
+  replicas: {{ .Values.sandbox.replicaCount }}
+  # Parallel: shards are independent, and ordered startup would make a rollout
+  # take replicas * (drain + start) for no benefit.
+  podManagementPolicy: Parallel
+  selector:
+    matchLabels: {{- include "pi.selectorLabels" (dict "ctx" . "component" "sandbox") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "pi.selectorLabels" (dict "ctx" . "component" "sandbox") | nindent 8 }}
+        {{- with .Values.podLabels }}{{- toYaml . | nindent 8 }}{{- end }}
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/config.yaml") . | sha256sum }}
+        {{- with .Values.podAnnotations }}{{- toYaml . | nindent 8 }}{{- end }}
+    spec:
+      {{- include "pi.podPlacement" . | nindent 6 }}
+      # Long enough for in-flight executions to finish after the pod is marked
+      # DRAINING and stops accepting new placements.
+      terminationGracePeriodSeconds: {{ .Values.sandbox.terminationGracePeriodSeconds }}
+      {{- if .Values.sandbox.security.hostUsers | kindIs "bool" }}
+      hostUsers: {{ .Values.sandbox.security.hostUsers }}
+      {{- end }}
+      securityContext:
+        seccompProfile: {{- toYaml .Values.sandbox.security.seccompProfile | nindent 10 }}
+        {{- if .Values.sandbox.security.appArmorProfile }}
+        appArmorProfile:
+          type: {{ .Values.sandbox.security.appArmorProfile }}
+        {{- end }}
+      containers:
+        - name: sandbox
+          image: {{ include "pi.image" (dict "ctx" . "image" .Values.sandbox.image) }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - { name: http, containerPort: 8081 }
+          envFrom:
+            - configMapRef: { name: {{ include "pi.configName" . }} }
+          env:
+            # Identity comes from the pod name, which a StatefulSet guarantees
+            # is stable across restarts. Two replicas sharing a node id would
+            # reap each other's live processes during orphan recovery.
+            - name: SANDBOX_NODE_ID
+              valueFrom:
+                fieldRef: { fieldPath: metadata.name }
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef: { fieldPath: metadata.namespace }
+            # The address the Agent dials to reach *this* replica specifically.
+            # Never the ClusterIP: that would land on an arbitrary shard.
+            - name: SANDBOX_NODE_ADDRESS
+              value: "$(SANDBOX_NODE_ID).{{ include "pi.sandboxHeadless" . }}.$(POD_NAMESPACE).svc.cluster.local:8081"
+            - name: SANDBOX_DATABASE_URL
+              valueFrom:
+                secretKeyRef: { name: {{ include "pi.secretName" . }}, key: sandbox-database-url }
+            - name: SANDBOX_INTERNAL_REDIS_URL
+              valueFrom:
+                secretKeyRef: { name: {{ include "pi.secretName" . }}, key: replay-redis-url }
+            - name: SANDBOX_INTERNAL_HMAC_KEYRING
+              valueFrom:
+                secretKeyRef: { name: {{ include "pi.secretName" . }}, key: internal-hmac-keyring }
+            - name: SANDBOX_INTERNAL_HMAC_ACTIVE_KID
+              valueFrom:
+                secretKeyRef: { name: {{ include "pi.secretName" . }}, key: internal-hmac-active-kid }
+            - name: SANDBOX_MCP_INTERNAL_TOKEN
+              valueFrom:
+                secretKeyRef: { name: {{ include "pi.secretName" . }}, key: sandbox-mcp-internal-token }
+          securityContext:
+            allowPrivilegeEscalation: true
+            {{- if .Values.sandbox.security.procMount }}
+            # Bubblewrap must mount its own /proc inside an unprivileged user
+            # namespace. Requires the ProcMountType feature gate.
+            procMount: {{ .Values.sandbox.security.procMount }}
+            {{- end }}
+            capabilities:
+              drop: [ALL]
+              add: {{- toYaml .Values.sandbox.security.capabilities.add | nindent 16 }}
+          volumeMounts:
+            - { name: workspaces, mountPath: /var/sandbox/workspaces }
+            - { name: sandbox-tmp, mountPath: /var/sandbox/tmp }
+            - { name: artifacts, mountPath: /var/sandbox/artifacts }
+            - { name: control, mountPath: /var/sandbox/control }
+          # Liveness must not consult dependencies: a MySQL blip would restart
+          # every shard at once and strand every running execution.
+          livenessProbe:
+            httpGet: { path: /health, port: http }
+            initialDelaySeconds: 15
+            periodSeconds: 20
+            failureThreshold: 3
+          readinessProbe:
+            httpGet: { path: /ready, port: http }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            failureThreshold: 3
+          startupProbe:
+            httpGet: { path: /health, port: http }
+            periodSeconds: 5
+            failureThreshold: 30
+          resources: {{- toYaml .Values.sandbox.resources | nindent 12 }}
+  volumeClaimTemplates:
+    # ReadWriteOnce is correct: these belong to one pod, and a shared volume
+    # would not help anyway — the process table is in memory, not on disk.
+    - metadata: { name: workspaces }
+      spec:
+        accessModes: [{{ .Values.sandbox.persistence.accessMode }}]
+        {{- with .Values.sandbox.persistence.storageClass }}
+        storageClassName: {{ . }}
+        {{- end }}
+        resources: { requests: { storage: {{ .Values.sandbox.persistence.workspacesSize }} } }
+    - metadata: { name: sandbox-tmp }
+      spec:
+        accessModes: [{{ .Values.sandbox.persistence.accessMode }}]
+        {{- with .Values.sandbox.persistence.storageClass }}
+        storageClassName: {{ . }}
+        {{- end }}
+        resources: { requests: { storage: {{ .Values.sandbox.persistence.tmpSize }} } }
+    - metadata: { name: artifacts }
+      spec:
+        accessModes: [{{ .Values.sandbox.persistence.accessMode }}]
+        {{- with .Values.sandbox.persistence.storageClass }}
+        storageClassName: {{ . }}
+        {{- end }}
+        resources: { requests: { storage: {{ .Values.sandbox.persistence.artifactsSize }} } }
+    - metadata: { name: control }
+      spec:
+        accessModes: [{{ .Values.sandbox.persistence.accessMode }}]
+        {{- with .Values.sandbox.persistence.storageClass }}
+        storageClassName: {{ . }}
+        {{- end }}
+        resources: { requests: { storage: {{ .Values.sandbox.persistence.controlSize }} } }
+{{- end }}

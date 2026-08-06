@@ -1,0 +1,204 @@
+{{- if .Values.apiServer.enabled }}
+{{/*
+BFF: every route is a proxy and session state is a cookie, so replicas are
+interchangeable and no sticky routing is needed. SSE reconnects carry a cursor
+that any replica can serve.
+*/}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "pi.apiService" . }}
+  labels: {{- include "pi.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector: {{- include "pi.selectorLabels" (dict "ctx" . "component" "api-server") | nindent 4 }}
+  ports:
+    - { name: http, port: 4000, targetPort: http }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "pi.fullname" . }}-api
+  labels: {{- include "pi.labels" . | nindent 4 }}
+spec:
+  {{- if not .Values.apiServer.autoscaling.enabled }}
+  replicas: {{ .Values.apiServer.replicaCount }}
+  {{- end }}
+  selector:
+    matchLabels: {{- include "pi.selectorLabels" (dict "ctx" . "component" "api-server") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "pi.selectorLabels" (dict "ctx" . "component" "api-server") | nindent 8 }}
+        {{- with .Values.podLabels }}{{- toYaml . | nindent 8 }}{{- end }}
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/config.yaml") . | sha256sum }}
+        {{- with .Values.podAnnotations }}{{- toYaml . | nindent 8 }}{{- end }}
+    spec:
+      {{- include "pi.podPlacement" . | nindent 6 }}
+      terminationGracePeriodSeconds: {{ add .Values.apiServer.shutdownDrainSeconds 15 }}
+      containers:
+        - name: api-server
+          image: {{ include "pi.image" (dict "ctx" . "image" .Values.apiServer.image) }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - { name: http, containerPort: 4000 }
+          envFrom:
+            - configMapRef: { name: {{ include "pi.configName" . }} }
+          env:
+            - name: AGENT_INTERNAL_TOKEN
+              valueFrom:
+                secretKeyRef: { name: {{ include "pi.secretName" . }}, key: agent-internal-token }
+            - name: SHUTDOWN_DRAIN_MS
+              value: {{ mul .Values.apiServer.shutdownDrainSeconds 1000 | quote }}
+          lifecycle:
+            preStop:
+              # Endpoint removal is eventually consistent. Pausing here lets
+              # in-flight proxies land before the process starts draining.
+              exec: { command: ["sleep", "5"] }
+          volumeMounts:
+            # Multipart uploads spill to disk before being forwarded, so /tmp
+            # must be writable even with a read-only root filesystem.
+            - { name: tmp, mountPath: /tmp }
+          livenessProbe:
+            httpGet: { path: /health/live, port: http }
+            initialDelaySeconds: 10
+            periodSeconds: 20
+          readinessProbe:
+            # Self-scoped on purpose. Pointing this at /health/deps would fail
+            # every replica together on one upstream blip.
+            httpGet: { path: /health/ready, port: http }
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          resources: {{- toYaml .Values.apiServer.resources | nindent 12 }}
+      volumes:
+        - name: tmp
+          emptyDir: { sizeLimit: {{ .Values.apiServer.tmpSizeLimit }} }
+{{- if .Values.apiServer.podDisruptionBudget.enabled }}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "pi.fullname" . }}-api
+  labels: {{- include "pi.labels" . | nindent 4 }}
+spec:
+  minAvailable: {{ .Values.apiServer.podDisruptionBudget.minAvailable }}
+  selector:
+    matchLabels: {{- include "pi.selectorLabels" (dict "ctx" . "component" "api-server") | nindent 6 }}
+{{- end }}
+{{- if .Values.apiServer.autoscaling.enabled }}
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "pi.fullname" . }}-api
+  labels: {{- include "pi.labels" . | nindent 4 }}
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ include "pi.fullname" . }}-api
+  minReplicas: {{ .Values.apiServer.autoscaling.minReplicas }}
+  maxReplicas: {{ .Values.apiServer.autoscaling.maxReplicas }}
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ .Values.apiServer.autoscaling.targetCPUUtilizationPercentage }}
+{{- end }}
+{{- end }}
+{{- if .Values.frontend.enabled }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "pi.frontendService" . }}
+  labels: {{- include "pi.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector: {{- include "pi.selectorLabels" (dict "ctx" . "component" "frontend") | nindent 4 }}
+  ports:
+    - { name: http, port: 80, targetPort: http }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "pi.fullname" . }}-frontend
+  labels: {{- include "pi.labels" . | nindent 4 }}
+spec:
+  {{- if not .Values.frontend.autoscaling.enabled }}
+  replicas: {{ .Values.frontend.replicaCount }}
+  {{- end }}
+  selector:
+    matchLabels: {{- include "pi.selectorLabels" (dict "ctx" . "component" "frontend") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "pi.selectorLabels" (dict "ctx" . "component" "frontend") | nindent 8 }}
+        {{- with .Values.podLabels }}{{- toYaml . | nindent 8 }}{{- end }}
+      {{- with .Values.podAnnotations }}
+      annotations: {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      {{- include "pi.podPlacement" . | nindent 6 }}
+      containers:
+        - name: frontend
+          image: {{ include "pi.image" (dict "ctx" . "image" .Values.frontend.image) }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - { name: http, containerPort: 80 }
+          env:
+            # nginx caches a literal upstream's address for the life of the
+            # process, so the upstream goes through a variable and needs an
+            # explicit resolver to re-resolve it.
+            - name: BFF_UPSTREAM
+              value: {{ printf "%s:4000" (include "pi.apiService" .) | quote }}
+            - name: DNS_RESOLVER
+              value: {{ .Values.frontend.dnsResolver | quote }}
+          livenessProbe:
+            httpGet: { path: /healthz, port: http }
+            initialDelaySeconds: 5
+            periodSeconds: 20
+          readinessProbe:
+            # Local: reports this replica, not whether the BFF is reachable.
+            httpGet: { path: /healthz, port: http }
+            initialDelaySeconds: 2
+            periodSeconds: 10
+          resources: {{- toYaml .Values.frontend.resources | nindent 12 }}
+{{- if .Values.frontend.podDisruptionBudget.enabled }}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "pi.fullname" . }}-frontend
+  labels: {{- include "pi.labels" . | nindent 4 }}
+spec:
+  minAvailable: {{ .Values.frontend.podDisruptionBudget.minAvailable }}
+  selector:
+    matchLabels: {{- include "pi.selectorLabels" (dict "ctx" . "component" "frontend") | nindent 6 }}
+{{- end }}
+{{- if .Values.frontend.autoscaling.enabled }}
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "pi.fullname" . }}-frontend
+  labels: {{- include "pi.labels" . | nindent 4 }}
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ include "pi.fullname" . }}-frontend
+  minReplicas: {{ .Values.frontend.autoscaling.minReplicas }}
+  maxReplicas: {{ .Values.frontend.autoscaling.maxReplicas }}
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ .Values.frontend.autoscaling.targetCPUUtilizationPercentage }}
+{{- end }}
+{{- end }}

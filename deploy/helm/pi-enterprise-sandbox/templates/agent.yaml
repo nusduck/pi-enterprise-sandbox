@@ -1,0 +1,194 @@
+{{- if .Values.agent.enabled }}
+{{/*
+Agent HTTP: stateless by design and already proven so by the codebase's own
+"no authoritative in-process Run map" test. MySQL is the fact authority, Redis
+is coordination, and the SDK loop lives only in the worker — so an SSE client
+can reconnect to any replica and resume from its cursor.
+*/}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "pi.agentService" . }}
+  labels: {{- include "pi.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector: {{- include "pi.selectorLabels" (dict "ctx" . "component" "agent") | nindent 4 }}
+  ports:
+    - { name: http, port: 4100, targetPort: http }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "pi.fullname" . }}-agent
+  labels: {{- include "pi.labels" . | nindent 4 }}
+spec:
+  {{- if not .Values.agent.autoscaling.enabled }}
+  replicas: {{ .Values.agent.replicaCount }}
+  {{- end }}
+  selector:
+    matchLabels: {{- include "pi.selectorLabels" (dict "ctx" . "component" "agent") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "pi.selectorLabels" (dict "ctx" . "component" "agent") | nindent 8 }}
+        {{- with .Values.podLabels }}{{- toYaml . | nindent 8 }}{{- end }}
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/config.yaml") . | sha256sum }}
+        {{- with .Values.podAnnotations }}{{- toYaml . | nindent 8 }}{{- end }}
+    spec:
+      {{- include "pi.podPlacement" . | nindent 6 }}
+      # Drain deadline plus headroom for the process to exit cleanly.
+      terminationGracePeriodSeconds: {{ add .Values.agent.shutdownDrainSeconds 15 }}
+      containers:
+        - name: agent
+          image: {{ include "pi.image" (dict "ctx" . "image" .Values.agent.image) }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["node", "server.js"]
+          ports:
+            - { name: http, containerPort: 4100 }
+          envFrom:
+            - configMapRef: { name: {{ include "pi.configName" . }} }
+          env:
+            {{- include "pi.agentSecretEnv" . | nindent 12 }}
+            - name: SHUTDOWN_DRAIN_MS
+              value: {{ mul .Values.agent.shutdownDrainSeconds 1000 | quote }}
+          volumeMounts:
+            # Pi SDK scratch. Ephemeral: nothing durable is kept here, and the
+            # container fails to start if it is not writable.
+            - { name: pi-agent-home, mountPath: /app/pi-agent-home }
+            {{- if .Values.agentWorker.userSkills.enabled }}
+            # Read-only here: only workers install skills.
+            - { name: user-skills, mountPath: /home/sandbox/skill-user, readOnly: true }
+            {{- end }}
+          livenessProbe:
+            httpGet: { path: /health, port: http }
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          readinessProbe:
+            httpGet: { path: /ready, port: http }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources: {{- toYaml .Values.agent.resources | nindent 12 }}
+      volumes:
+        - name: pi-agent-home
+          emptyDir: { sizeLimit: {{ .Values.agent.piAgentHomeSizeLimit }} }
+        {{- if .Values.agentWorker.userSkills.enabled }}
+        - name: user-skills
+          persistentVolumeClaim:
+            claimName: {{ default (printf "%s-user-skills" (include "pi.fullname" .)) .Values.agentWorker.userSkills.existingClaim }}
+        {{- end }}
+{{- if .Values.agent.podDisruptionBudget.enabled }}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "pi.fullname" . }}-agent
+  labels: {{- include "pi.labels" . | nindent 4 }}
+spec:
+  minAvailable: {{ .Values.agent.podDisruptionBudget.minAvailable }}
+  selector:
+    matchLabels: {{- include "pi.selectorLabels" (dict "ctx" . "component" "agent") | nindent 6 }}
+{{- end }}
+{{- if .Values.agent.autoscaling.enabled }}
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "pi.fullname" . }}-agent
+  labels: {{- include "pi.labels" . | nindent 4 }}
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ include "pi.fullname" . }}-agent
+  minReplicas: {{ .Values.agent.autoscaling.minReplicas }}
+  maxReplicas: {{ .Values.agent.autoscaling.maxReplicas }}
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ .Values.agent.autoscaling.targetCPUUtilizationPercentage }}
+{{- end }}
+{{- end }}
+{{- if .Values.agentWorker.enabled }}
+---
+{{/*
+Agent worker: the only process that runs the Pi SDK loop.
+
+Runs are distributed through BullMQ with a deterministic job id, guarded by
+Redis leases and per-session locks, so N workers is safe. Recovery, cron and
+outbox sweeps claim rows with FOR UPDATE SKIP LOCKED — extra replicas duplicate
+polling, they do not duplicate work.
+*/}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "pi.fullname" . }}-agent-worker
+  labels: {{- include "pi.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.agentWorker.replicaCount }}
+  selector:
+    matchLabels: {{- include "pi.selectorLabels" (dict "ctx" . "component" "agent-worker") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "pi.selectorLabels" (dict "ctx" . "component" "agent-worker") | nindent 8 }}
+        {{- with .Values.podLabels }}{{- toYaml . | nindent 8 }}{{- end }}
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/config.yaml") . | sha256sum }}
+        {{- with .Values.podAnnotations }}{{- toYaml . | nindent 8 }}{{- end }}
+    spec:
+      {{- include "pi.podPlacement" . | nindent 6 }}
+      # A run that loses its lease is replayed from durable state by another
+      # worker, so a long grace period buys little — but let the current job
+      # reach a checkpoint rather than being cut mid-tool.
+      terminationGracePeriodSeconds: 60
+      containers:
+        - name: agent-worker
+          image: {{ include "pi.image" (dict "ctx" . "image" .Values.agent.image) }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["node", "worker.js"]
+          envFrom:
+            - configMapRef: { name: {{ include "pi.configName" . }} }
+          env:
+            {{- include "pi.agentSecretEnv" . | nindent 12 }}
+          volumeMounts:
+            - { name: pi-agent-home, mountPath: /app/pi-agent-home }
+            {{- if .Values.agentWorker.userSkills.enabled }}
+            # Writable: skill_install runs inside a run, which is here.
+            - { name: user-skills, mountPath: /home/sandbox/skill-user }
+            {{- end }}
+          resources: {{- toYaml .Values.agentWorker.resources | nindent 12 }}
+      volumes:
+        - name: pi-agent-home
+          emptyDir: { sizeLimit: {{ .Values.agentWorker.piAgentHomeSizeLimit }} }
+        {{- if .Values.agentWorker.userSkills.enabled }}
+        - name: user-skills
+          persistentVolumeClaim:
+            claimName: {{ default (printf "%s-user-skills" (include "pi.fullname" .)) .Values.agentWorker.userSkills.existingClaim }}
+        {{- end }}
+{{- if and .Values.agentWorker.userSkills.enabled (not .Values.agentWorker.userSkills.existingClaim) }}
+---
+{{/*
+The only multi-writer volume in this chart. Several worker pods install skills
+concurrently, so it must be ReadWriteMany — which not every storage class
+supports. Removing this requirement means moving skill bundles out of the
+filesystem entirely.
+*/}}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "pi.fullname" . }}-user-skills
+  labels: {{- include "pi.labels" . | nindent 4 }}
+spec:
+  accessModes: [{{ .Values.agentWorker.userSkills.accessMode }}]
+  {{- with .Values.agentWorker.userSkills.storageClass }}
+  storageClassName: {{ . }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.agentWorker.userSkills.size }}
+{{- end }}
+{{- end }}
