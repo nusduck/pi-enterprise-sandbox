@@ -808,6 +808,16 @@ export class ServiceContainer {
     const mode = resolveSkillsMode(this.env);
     if (mode !== SKILLS_MODE.ENABLED) return null;
 
+    // MySQL is the authority for user-installed skills; each pod keeps a local
+    // copy it can rebuild. Without a database handle the manager falls back to
+    // filesystem-only behaviour, which is the single-node development shape.
+    const { createSkillBundleStore, materialiseUserSkills } = await import(
+      '../skills/bundle-store.js'
+    );
+    const bundleStore = this.knex
+      ? createSkillBundleStore({ db: this.knex })
+      : null;
+
     return (runContext) => {
       const orgId = runContext?.orgId;
       const userId = runContext?.userId;
@@ -818,6 +828,7 @@ export class ServiceContainer {
           mode,
           identity: { orgId, userId },
           skillRoots: resolveSkillRoots(this.env, { orgId, userId }),
+          bundleStore,
         });
       } catch (err) {
         // A malformed identity must not take the whole Run down; the Run just
@@ -828,7 +839,21 @@ export class ServiceContainer {
         );
         return null;
       }
-      return manager.userSkillRoot ? manager : null;
+      if (!manager.userSkillRoot) return null;
+
+      // Bring this pod's cache in line with the durable store before the Run
+      // reads it. Deliberately not awaited: skills enhance a Run, and blocking
+      // its start on an extraction (or a slow query) would trade a missing
+      // skill for a stalled Run. A Run that starts before materialisation
+      // finishes sees the previous contents, and the next Run sees the update.
+      if (bundleStore) {
+        void materialiseUserSkills({
+          store: bundleStore,
+          scope: { orgId, userId },
+          userSkillDir: manager.userSkillRoot,
+        }).catch(() => {});
+      }
+      return manager;
     };
   }
 
