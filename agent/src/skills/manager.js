@@ -27,6 +27,7 @@ import {
   describeInstalledSkills,
 } from './install.js';
 import fs from 'node:fs';
+import path from 'node:path';
 
 import { emitSkillAudit } from './audit.js';
 
@@ -164,6 +165,14 @@ export function createSkillManager(options = {}) {
     typeof options.getAgentSession === 'function' ? options.getAgentSession : () => null;
   const onAfterReload =
     typeof options.onAfterReload === 'function' ? options.onAfterReload : null;
+  // Durable authority for user skills. Optional so single-node development and
+  // the existing tests keep working against the filesystem alone; when present
+  // the local directory becomes a rebuildable cache instead of the only copy.
+  const bundleStore = options.bundleStore ?? null;
+  const bundleScope =
+    identity?.orgId && identity?.userId
+      ? { orgId: identity.orgId, userId: identity.userId }
+      : null;
 
   function audit(partial) {
     return emitSkillAudit(
@@ -210,6 +219,40 @@ export function createSkillManager(options = {}) {
     return names;
   }
 
+  /** Copy a freshly installed skill into the durable store. */
+  async function persistBundle(skillName, source) {
+    if (!bundleStore || !bundleScope || !userRoot) return;
+    try {
+      const { packSkillBundle } = await import('./bundle-store.js');
+      const packed = await packSkillBundle(path.join(userRoot, skillName));
+      await bundleStore.put(bundleScope, skillName, { ...packed, source });
+    } catch (err) {
+      audit({
+        action: 'install',
+        result: 'partial',
+        skill_name: skillName,
+        error: `durable store write failed: ${err?.message || String(err)}`,
+      });
+    }
+  }
+
+  /** Drop a skill from the durable store so other pods stop materialising it. */
+  async function forgetBundle(skillName) {
+    if (!bundleStore || !bundleScope) return;
+    try {
+      await bundleStore.remove(bundleScope, skillName);
+    } catch (err) {
+      // The local copy is gone; leaving the row means other pods keep it until
+      // the next successful uninstall. Visible, not silent.
+      audit({
+        action: 'uninstall',
+        result: 'partial',
+        skill_name: skillName,
+        error: `durable store delete failed: ${err?.message || String(err)}`,
+      });
+    }
+  }
+
   return {
     mode,
     skillRoot,
@@ -244,6 +287,15 @@ export function createSkillManager(options = {}) {
           skillRoot: userRoot,
           localAllowlist,
           systemSkillNames: systemSkillNames(),
+        });
+        // Persist after the filesystem swap, not before: the installed
+        // directory is what we bundle, so a failed install stores nothing.
+        // A store failure is reported but does not undo the install — the
+        // skill works on this pod, it just is not durable yet.
+        await persistBundle(result.name, {
+          sourceType: result.source_type,
+          source: result.source,
+          resolvedCommit: result.resolved_commit,
         });
         audit({
           action: 'install',
@@ -280,6 +332,7 @@ export function createSkillManager(options = {}) {
           name: params.name,
           skillRoot: userRoot,
         });
+        await forgetBundle(result.name);
         audit({
           action: 'uninstall',
           result: 'success',
