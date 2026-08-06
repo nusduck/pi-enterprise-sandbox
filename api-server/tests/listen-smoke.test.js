@@ -17,10 +17,10 @@ async function waitForStatus(port, timeoutMs = 15000) {
   let lastErr;
   while (Date.now() < deadline) {
     try {
-      const res = await fetch(`http://127.0.0.1:${port}/health/ready`);
-      // Readiness answers 503 while a dependency is down — which is the case
-      // here by design (deps point at a dead port). Any HTTP response proves
-      // the server is listening and serving the aggregated body.
+      const res = await fetch(`http://127.0.0.1:${port}/health/deps`);
+      // The dependency endpoint answers 503 while an upstream is down — the
+      // case here by design (deps point at a dead port). Any HTTP response
+      // proves the server is listening and serving the aggregated body.
       if (res.status === 200 || res.status === 503) return res.json();
       lastErr = new Error(`status ${res.status}`);
     } catch (err) {
@@ -38,7 +38,7 @@ describe('api-server import/listen smoke', () => {
     assert.equal(typeof mod.config.PORT, 'number');
   });
 
-  it('listens and serves GET /health/ready', async () => {
+  it('listens and separates self-scoped probes from dependency status', async () => {
     const port = 20000 + Math.floor(Math.random() * 1000);
     const child = spawn(process.execPath, ['server.js'], {
       cwd: BFF_ROOT,
@@ -59,8 +59,11 @@ describe('api-server import/listen smoke', () => {
       assert.equal(body.version, '4.0.0');
       const live = await fetch(`http://127.0.0.1:${port}/health/live`);
       assert.equal(live.status, 200);
+      // Readiness stays 200 with both upstreams dead: it reports whether *this*
+      // replica can serve, not whether the system is healthy. Coupling it to
+      // upstreams would pull every replica out of rotation together.
       const ready = await fetch(`http://127.0.0.1:${port}/health/ready`);
-      assert.equal(ready.status, 503);
+      assert.equal(ready.status, 200);
     } finally {
       child.kill('SIGTERM');
       await Promise.race([once(child, 'exit'), new Promise((r) => setTimeout(r, 3000))]);

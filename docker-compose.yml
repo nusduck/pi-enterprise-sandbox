@@ -234,7 +234,11 @@ services:
       agent:
         condition: service_started
     healthcheck:
-      test: ["CMD", "node", "-e", "require('http').get('http://localhost:4000/health/ready',r=>{process.exit(r.statusCode===200?0:1)}).on('error',()=>process.exit(1))"]
+      # /health/deps, not /health/ready: Compose uses this for startup ordering,
+      # so it should wait for upstreams. Kubernetes probes must use
+      # /health/ready instead — it is self-scoped, so one shaky upstream cannot
+      # pull every replica out of rotation at once.
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:4000/health/deps',r=>{process.exit(r.statusCode===200?0:1)}).on('error',()=>process.exit(1))"]
       interval: 30s
       timeout: 10s
       retries: 3

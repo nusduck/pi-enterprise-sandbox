@@ -27,7 +27,7 @@ frontend/
 │   └── pages/
 ├── test/                    ← node:test + tsx
 ├── index.html
-├── nginx.conf               ← /api/* 反代，SSE buffering off
+├── nginx.conf.template      ← /api/* 反代（envsubst 渲染），SSE buffering off
 ├── vite.config.ts           ← dev proxy → localhost:4000
 ├── package.json
 ├── Dockerfile

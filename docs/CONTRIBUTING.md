@@ -70,7 +70,7 @@ pi-enterprise-sandbox/
 │   ├── test/          # node:test
 │   ├── index.html
 │   ├── Dockerfile
-│   └── nginx.conf     # /api/* → api-server:4000
+│   └── nginx.conf.template  # /api/* → $BFF_UPSTREAM（默认 api-server:4000）
 ├── api-server/        # Thin Node BFF (auth, files, SSE relay)
 │   ├── server.js
 │   ├── routes/        # chat.js, status.js, conversations, files, …

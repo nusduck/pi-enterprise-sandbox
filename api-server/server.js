@@ -11,7 +11,12 @@ import {
   validateProductionConfig,
   effectiveConfig,
 } from './src/config.js';
-import { handleLiveness, handleReadiness } from './src/routes/status.js';
+import {
+  beginDraining,
+  handleDependencies,
+  handleLiveness,
+  handleReadiness,
+} from './src/routes/status.js';
 import { handleFileDownload, handleFileUpload, handleArtifactDownload } from './src/routes/files.js';
 import {
   handleListConversations,
@@ -244,7 +249,13 @@ const server = http.createServer(async (req, res) => {
       return;
     }
     if (req.method === 'GET' && path === '/health/ready') {
-      await handleReadiness(res);
+      handleReadiness(res);
+      return;
+    }
+    // Dependency fan-out for dashboards and the cross-service smoke test.
+    // Deliberately not a probe — see src/routes/status.js.
+    if (req.method === 'GET' && path === '/health/deps') {
+      await handleDependencies(res);
       return;
     }
 
@@ -601,11 +612,53 @@ server.listen(config.PORT, async () => {
 });
 
 let shuttingDown = false;
+
+/**
+ * Drain deadline before open connections are force-closed.
+ *
+ * `server.close()` alone is not enough here: it waits for in-flight connections
+ * to end, and an SSE relay never ends on its own while its run is live. Without
+ * a deadline a terminating replica simply hangs until the orchestrator SIGKILLs
+ * it — slow rollouts, and streams cut at TCP death rather than closed cleanly.
+ *
+ * Clients recover either way (the browser reconnects with its cursor and
+ * resumes from Agent's durable log), so the goal is to make that happen
+ * promptly and predictably.
+ */
+const SHUTDOWN_DRAIN_MS = Math.max(
+  0,
+  Number.parseInt(process.env.SHUTDOWN_DRAIN_MS ?? '', 10) || 15_000,
+);
+
 async function shutdown(signal) {
   if (shuttingDown) return;
   shuttingDown = true;
-  console.log(`[server] ${signal} — shutting down`);
-  await new Promise((resolve) => server.close(() => resolve(undefined)));
+  console.log(`[server] ${signal} — draining for up to ${SHUTDOWN_DRAIN_MS}ms`);
+
+  // Fail readiness first so the orchestrator stops routing new requests here
+  // while the ones already accepted finish.
+  beginDraining();
+
+  server.close();
+  // Connections sitting idle between keep-alive requests have nothing to
+  // finish; close them immediately rather than waiting out the deadline.
+  server.closeIdleConnections?.();
+
+  await new Promise((resolve) => {
+    const done = setTimeout(() => {
+      console.log('[server] drain deadline reached — closing open connections');
+      server.closeAllConnections?.();
+      resolve(undefined);
+    }, SHUTDOWN_DRAIN_MS);
+    // `unref` so a quiet server exits as soon as it is idle instead of
+    // sitting out the full deadline.
+    done.unref?.();
+    server.once('close', () => {
+      clearTimeout(done);
+      resolve(undefined);
+    });
+  });
+
   try {
     const telemetry = await startTelemetry(process.env);
     await telemetry.shutdown();

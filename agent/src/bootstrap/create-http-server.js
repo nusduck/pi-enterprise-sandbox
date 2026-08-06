@@ -162,6 +162,13 @@ export function createAgentHttpServer(deps) {
       }
 
       if (req.method === 'GET' && path === '/ready') {
+        // Draining wins over every other signal. On SIGTERM this replica must
+        // leave the Service endpoints *before* it starts refusing work, so
+        // in-flight requests finish while new ones go elsewhere.
+        if (typeof deps.isDraining === 'function' && deps.isDraining()) {
+          json(res, 503, { status: 'draining' });
+          return;
+        }
         let dataPlaneOk = true;
         if (deps.dataPlaneReady === false) {
           dataPlaneOk = false;

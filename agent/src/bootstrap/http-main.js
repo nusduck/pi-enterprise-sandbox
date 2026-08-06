@@ -160,6 +160,13 @@ export async function startHttpMain(env = process.env) {
     process.exit(1);
   }
 
+  // Declared before the server so /ready can observe it via a closure.
+  let shuttingDown = false;
+  const SHUTDOWN_DRAIN_MS = Math.max(
+    0,
+    Number.parseInt(env.SHUTDOWN_DRAIN_MS ?? '', 10) || 15_000,
+  );
+
   const telemetry = await startTelemetry(env, {
     serviceName: 'pi-enterprise-agent-http',
   });
@@ -464,6 +471,7 @@ export async function startHttpMain(env = process.env) {
     mcpReadiness: () => container.getMcpReadiness(),
     getExtensionDiagnostics,
     activeRunHint: () => 0,
+    isDraining: () => shuttingDown,
   });
 
   const port = Number(env.PORT) || config.PORT || 4100;
@@ -497,12 +505,36 @@ export async function startHttpMain(env = process.env) {
     }
   }
 
-  let shuttingDown = false;
   const shutdown = async (signal) => {
     if (shuttingDown) return;
+    // Flipping this first makes /ready answer 503, so the orchestrator pulls
+    // this replica from the Service endpoints before we stop accepting work.
     shuttingDown = true;
-    console.log(`[agent-server] ${signal} — shutting down`);
-    await new Promise((resolve) => server.close(() => resolve(undefined)));
+    console.log(
+      `[agent-server] ${signal} — draining for up to ${SHUTDOWN_DRAIN_MS}ms`,
+    );
+
+    server.close();
+    // Idle keep-alive connections have nothing to finish.
+    server.closeIdleConnections?.();
+
+    // `server.close()` waits for in-flight connections to end, and an SSE
+    // stream never ends on its own while its run is live. Without a deadline
+    // the pod hangs until SIGKILL. Clients resume from their cursor against
+    // the durable log, so a prompt close is better than a stalled rollout.
+    await new Promise((resolve) => {
+      const deadline = setTimeout(() => {
+        console.log('[agent-server] drain deadline reached — closing connections');
+        server.closeAllConnections?.();
+        resolve(undefined);
+      }, SHUTDOWN_DRAIN_MS);
+      deadline.unref?.();
+      server.once('close', () => {
+        clearTimeout(deadline);
+        resolve(undefined);
+      });
+    });
+
     try {
       await container.shutdown();
     } catch (err) {
