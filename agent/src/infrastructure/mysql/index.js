@@ -83,6 +83,7 @@ export {
   TRACE_TABLES,
   INTERACTION_TABLES,
   PLACEMENT_TABLES,
+  SKILL_TABLES,
 } from './schema-tables.js';
 
 export {

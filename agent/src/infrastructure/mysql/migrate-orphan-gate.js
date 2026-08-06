@@ -11,6 +11,7 @@ import {
   A2A_TABLES,
   TRACE_TABLES,
   PLACEMENT_TABLES,
+  SKILL_TABLES,
 } from './schema-tables.js';
 
 /** Filename stem recorded by knex for the core platform migration. */
@@ -40,6 +41,10 @@ export const CREATE_TABLE_MIGRATION_SENTINELS = Object.freeze([
   {
     migrationName: '20260805000001_sandbox_node_placement.js',
     tables: PLACEMENT_TABLES,
+  },
+  {
+    migrationName: '20260806000001_user_skill_bundles.js',
+    tables: SKILL_TABLES,
   },
 ]);
 

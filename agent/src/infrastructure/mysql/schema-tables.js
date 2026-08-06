@@ -46,6 +46,9 @@ export const INTERACTION_TABLES = Object.freeze(['run_interactions']);
 /** Sandbox replica registry backing workspace placement (multi-pod scale-out). */
 export const PLACEMENT_TABLES = Object.freeze(['sandbox_nodes']);
 
+/** Durable user-installed skill bundles; the filesystem copy is a cache. */
+export const SKILL_TABLES = Object.freeze(['user_skills']);
+
 export const CORE_TABLES_DROP_ORDER = Object.freeze(
   [...CORE_TABLES_CREATE_ORDER].reverse(),
 );

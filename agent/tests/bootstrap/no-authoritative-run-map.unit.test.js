@@ -64,6 +64,13 @@ const TRANSIENT_MAP_WHITELIST = Object.freeze([
     scope: 'local',
   },
   {
+    rel: 'skills/bundle-store.js',
+    match: /const\s+wantedByName\s*=\s*new\s+Map\s*\(/,
+    purpose:
+      'Function-local index of the durable skill list while reconciling one local cache directory; MySQL user_skills is authoritative and the directory is rebuilt from it. Not Run state',
+    scope: 'local',
+  },
+  {
     rel: 'infrastructure/sandbox/placement-resolver.js',
     match: /const\s+cache\s*=\s*new\s+Map\s*\(/,
     purpose:
@@ -356,9 +363,11 @@ describe('no authoritative in-process Run Map (B3)', () => {
     // 18 → 19: function-local sandbox read deduplication guard.
     // 19 → 20: Sandbox replica routing cache. MySQL sandbox_sessions.node_id
     // stays authoritative and a 409 PLACEMENT_MISMATCH corrects stale entries.
+    // 20 → 21: local skill-cache reconciliation index; MySQL user_skills is
+    // authoritative and the directory is rebuilt from it.
     assert.equal(
       TRANSIENT_MAP_WHITELIST.length,
-      20,
+      21,
       'whitelist size drift — update STATUS B3 inventory evidence if intentional',
     );
   });

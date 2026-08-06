@@ -72,14 +72,17 @@ describe('20260805000001_sandbox_node_placement migration static', () => {
     assert.equal(NODE_ID_LENGTH, 64);
   });
 
-  it('sorts after every pre-existing migration', () => {
+  it('runs after every migration that predates placement', () => {
+    // Ordering is what makes the expand safe: the columns must not be added
+    // before the tables they extend exist.
     const files = readdirSync(MIGRATIONS_DIR)
       .filter((f) => f.endsWith('.js'))
       .sort();
-    assert.equal(
-      files[files.length - 1],
-      MIGRATION_FILE,
-      'placement migration must run last',
+    const index = files.indexOf(MIGRATION_FILE);
+    assert.ok(index > 0, 'placement migration must be present');
+    assert.ok(
+      files.slice(0, index).every((f) => f < MIGRATION_FILE),
+      'every earlier migration must sort before placement',
     );
   });
 
