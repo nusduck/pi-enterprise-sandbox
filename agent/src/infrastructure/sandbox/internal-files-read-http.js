@@ -46,6 +46,12 @@ export const DEFAULT_RETRYABLE_HTTP_STATUSES = Object.freeze([502, 503, 504]);
 
 export const LOGICAL_WORKSPACE_ROOT = '/home/sandbox/workspace';
 export const LOGICAL_SKILL_ROOT = '/home/sandbox/skill';
+export const LOGICAL_USER_SKILL_ROOT = '/home/sandbox/skill-user';
+/** Longest-first skill roots for path validation. */
+export const LOGICAL_SKILL_ROOTS = Object.freeze([
+  LOGICAL_SKILL_ROOT,
+  LOGICAL_USER_SKILL_ROOT,
+]);
 
 const SHA256_HEX_RE = /^[0-9a-f]{64}$/;
 const PRINTABLE_ASCII_RE = /^[\x21-\x7e]+$/;
@@ -261,8 +267,26 @@ function validateCanonicalWorkspacePath(path) {
   return validateCanonicalPath(path, LOGICAL_WORKSPACE_ROOT, 'workspace');
 }
 
+/**
+ * Accept either skill tier. Longest root wins so skill-user is not parsed as
+ * a child of the system skill root.
+ * @param {unknown} path
+ * @returns {string}
+ */
 function validateCanonicalSkillPath(path) {
-  return validateCanonicalPath(path, LOGICAL_SKILL_ROOT, 'skill');
+  if (typeof path !== 'string') {
+    fail('FILES_READ_PATH', 'path must be a string');
+  }
+  const roots = [...LOGICAL_SKILL_ROOTS].sort((a, b) => b.length - a.length);
+  for (const root of roots) {
+    if (path === root || path.startsWith(`${root}/`)) {
+      return validateCanonicalPath(path, root, 'skill');
+    }
+  }
+  fail(
+    'FILES_READ_PATH',
+    `path must be under one of ${LOGICAL_SKILL_ROOTS.join(', ')}`,
+  );
 }
 
 /**

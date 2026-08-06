@@ -79,7 +79,21 @@ export const MAX_CURSOR_LEN = 64;
 
 /** Logical workspace root (plan). Never a host physical path. */
 export const LOGICAL_WORKSPACE_ROOT = '/home/sandbox/workspace';
+/** Bundled system skill tree (read-only). */
 export const LOGICAL_SKILL_ROOT = '/home/sandbox/skill';
+/**
+ * Per-user installed skill tree base (read-only in the sandbox).
+ * Packages live under ``<root>/<orgId>/<userId>/<package>``.
+ */
+export const LOGICAL_USER_SKILL_ROOT = '/home/sandbox/skill-user';
+/**
+ * All logical skill roots the model/tools may address.
+ * Longest-first when matching so skill-user is not treated as a child of skill.
+ */
+export const LOGICAL_SKILL_ROOTS = Object.freeze([
+  LOGICAL_SKILL_ROOT,
+  LOGICAL_USER_SKILL_ROOT,
+]);
 /** Per-session sandbox temporary directory. Read-only through the file tool. */
 export const LOGICAL_TEMP_ROOT = '/tmp';
 

@@ -22,6 +22,7 @@ from sandbox.app.domain.tool_request_hash import (
 from sandbox.paths import (
     AGENT_SKILL_PATHS,
     AGENT_TEMP_PATH,
+    AGENT_USER_SKILL_PATH,
     AGENT_WORKSPACE_PATH,
     is_logical_skill_path,
     logical_skill_root,
@@ -509,17 +510,31 @@ def parse_and_bind_files_read(
     )
 
 
+def _enforce_user_skill_scope(path: str, org_id: str, user_id: str) -> None:
+    """User-tier skill paths may only address the caller's own directory."""
+    if not path.startswith(f"{AGENT_USER_SKILL_PATH}/"):
+        return
+    allowed = f"{AGENT_USER_SKILL_PATH}/{org_id}/{user_id}/"
+    if not path.startswith(allowed):
+        _fail(
+            "FILES_READ_PATH",
+            "user skill path is outside the caller's org/user directory",
+        )
+
+
 def parse_and_bind_skills_read(
     raw_body: bytes,
     claims: Mapping[str, Any],
 ) -> ReadCommand:
     """Parse a signed read-only Skill mount request."""
-    return _parse_and_bind_read(
+    command = _parse_and_bind_read(
         raw_body,
         claims,
         scope_expected=_SCOPE_SKILLS_READ,
         validate_path=_validate_canonical_skill_path,
     )
+    _enforce_user_skill_scope(command.path, command.org_id, command.user_id)
+    return command
 
 
 __all__ = [
