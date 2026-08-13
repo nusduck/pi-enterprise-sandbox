@@ -6,7 +6,7 @@ under `/home/sandbox/skill-user/<orgId>/<userId>` — see 两层 Skill below.
 
 The Agent discovers each `*/SKILL.md` package automatically.
 
-## Installed packages (19)
+## Installed packages (21)
 
 ### Create & authoring
 
@@ -15,6 +15,13 @@ The Agent discovers each `*/SKILL.md` package automatically.
 | `skill-creator` | Design and scaffold new Agent Skills | [anthropics/skills](https://github.com/anthropics/skills) |
 | `doc-coauthoring` | Collaborative document drafting | anthropics/skills |
 | `theme-factory` | Theme / visual system generation | anthropics/skills |
+
+### Skill quality & learning
+
+| Skill | Purpose | Source |
+|-------|---------|--------|
+| `skill-vetter` | Security-first vetting for external skills | [dtyq/magic](https://github.com/dtyq/magic/tree/master/backend/super-magic/agents/skills/skill-vetter) |
+| `grill-me` | Stress-test plans and designs through guided questioning | [grp06/useful-codex-skills](https://github.com/grp06/useful-codex-skills/tree/main/grill-me) |
 
 ### Documents & conversion
 
