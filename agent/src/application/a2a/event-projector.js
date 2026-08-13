@@ -40,6 +40,9 @@ const ARTIFACT_EVENT_TYPES = new Set([
   'artifact.created',
 ]);
 
+/** Completed assistant turns → standalone A2A Message (not status.message). */
+const MESSAGE_EVENT_TYPES = new Set(['message.completed']);
+
 /**
  * @param {object} envelope
  * @param {{
@@ -48,6 +51,7 @@ const ARTIFACT_EVENT_TYPES = new Set([
  *   runStatus?: string | null,
  *   principal?: { orgId?: string, clientId?: string } | null,
  *   buildDownloadUri?: ((input: object) => string | null) | null,
+ *   lastA2aStatus?: string | null,
  * }} ctx
  */
 export function projectEnvelopeToA2aResult(envelope, ctx) {
@@ -59,14 +63,11 @@ export function projectEnvelopeToA2aResult(envelope, ctx) {
   const type = String(event.type || '');
   const sequence = Number(envelope.sequence);
   const eventId = envelope.event_id || event.event_id || null;
+  const contextId = resolveContextId(ctx);
 
   if (ARTIFACT_EVENT_TYPES.has(type)) {
     const artifact = projectArtifactEvent(event, ctx);
     if (!artifact) return null;
-    const contextId =
-      typeof ctx.contextId === 'string' && ctx.contextId.trim()
-        ? ctx.contextId.trim()
-        : ctx.a2aTaskId;
     return {
       kind: 'artifact-update',
       sequence,
@@ -78,25 +79,53 @@ export function projectEnvelopeToA2aResult(envelope, ctx) {
         artifact,
         append: false,
         lastChunk: true,
-        metadata: {
-          sequence,
-          eventId,
-          sourceEventType: type,
-        },
+        metadata: streamMetadata(sequence, eventId),
       },
     };
   }
 
-  if (RUN_STATUS_EVENT_TYPES.has(type) || type.startsWith('run.')) {
+  if (MESSAGE_EVENT_TYPES.has(type)) {
+    // Official 0.3 task-lifecycle stream: after Task, only status-update /
+    // artifact-update. Fold assistant text into TaskStatus.message.
+    const message = projectCompletedMessage(event, {
+      a2aTaskId: ctx.a2aTaskId,
+      contextId,
+      sequence,
+      eventId,
+    });
+    if (!message) return null;
+    const status =
+      (typeof ctx.lastA2aStatus === 'string' && ctx.lastA2aStatus) ||
+      (ctx.runStatus ? projectRunStatusToA2a(ctx.runStatus) : null) ||
+      A2A_TASK_STATUS.WORKING;
+    return {
+      kind: 'status-update',
+      sequence,
+      eventId,
+      result: {
+        kind: 'status-update',
+        taskId: ctx.a2aTaskId,
+        contextId,
+        status: {
+          state: status,
+          timestamp: envelope.ts
+            ? new Date(envelope.ts).toISOString()
+            : new Date().toISOString(),
+          message,
+        },
+        final: isTerminalA2aTaskStatus(status),
+        metadata: streamMetadata(sequence, eventId),
+      },
+    };
+  }
+
+  // Only the explicit Run-status vocabulary — never prefix-match run.*.
+  if (RUN_STATUS_EVENT_TYPES.has(type)) {
     const status = resolveStatusFromEvent(event, ctx.runStatus);
     if (!status) return null;
+    // Collapse no-op transitions (accepted+queued both map to submitted).
+    if (ctx.lastA2aStatus && ctx.lastA2aStatus === status) return null;
     const final = isTerminalA2aTaskStatus(status);
-    // A2A TaskStatusUpdateEvent.contextId is required (string). Fall back to
-    // taskId so strict SDK validators never receive null/undefined.
-    const contextId =
-      typeof ctx.contextId === 'string' && ctx.contextId.trim()
-        ? ctx.contextId.trim()
-        : ctx.a2aTaskId;
     const statusBody = {
       state: status,
       timestamp: envelope.ts
@@ -125,17 +154,35 @@ export function projectEnvelopeToA2aResult(envelope, ctx) {
         contextId,
         status: statusBody,
         final,
-        metadata: {
-          sequence,
-          eventId,
-          sourceEventType: type,
-          runStatus: extractRunStatus(event) ?? ctx.runStatus ?? null,
-        },
+        metadata: streamMetadata(sequence, eventId),
       },
     };
   }
 
   return null;
+}
+
+/**
+ * @param {{ contextId?: string | null, a2aTaskId: string }} ctx
+ * @returns {string}
+ */
+function resolveContextId(ctx) {
+  if (typeof ctx.contextId === 'string' && ctx.contextId.trim()) {
+    return ctx.contextId.trim();
+  }
+  return ctx.a2aTaskId;
+}
+
+/**
+ * Wire metadata for SSE resume only — no internal runStatus / sourceEventType.
+ * @param {number} sequence
+ * @param {unknown} eventId
+ */
+function streamMetadata(sequence, eventId) {
+  /** @type {Record<string, unknown>} */
+  const metadata = { sequence };
+  if (typeof eventId === 'string' && eventId) metadata.eventId = eventId;
+  return metadata;
 }
 
 /**
@@ -365,18 +412,18 @@ function projectArtifactEvent(event, ctx) {
       uri = null;
     }
   }
-  const filePart = {
-    kind: 'file',
-    file: {
-      name,
-      mimeType:
-        typeof mimeType === 'string' ? mimeType : 'application/octet-stream',
-    },
-  };
+  // A2A FilePart requires uri or bytes — never emit a name-only file stub.
   if (uri) {
-    filePart.file.uri = uri;
+    parts.push({
+      kind: 'file',
+      file: {
+        name,
+        mimeType:
+          typeof mimeType === 'string' ? mimeType : 'application/octet-stream',
+        uri,
+      },
+    });
   }
-  parts.push(filePart);
 
   if (event.data != null && typeof event.data === 'object' && !Array.isArray(event.data)) {
     // Only allow non-path structured data keys.
@@ -390,27 +437,119 @@ function projectArtifactEvent(event, ctx) {
     parts.push({ kind: 'data', data: safe });
   }
 
-  return {
+  const descriptionRaw =
+    typeof event.description === 'string'
+      ? event.description
+      : typeof data.description === 'string'
+        ? data.description
+        : typeof payload.description === 'string'
+          ? payload.description
+          : '';
+  const description = descriptionRaw.trim().slice(0, 512);
+
+  /** @type {Record<string, unknown>} */
+  const artifact = {
     artifactId,
     name,
-    description:
-      typeof event.description === 'string'
-        ? event.description.slice(0, 512)
-        : typeof data.description === 'string'
-          ? data.description.slice(0, 512)
-          : typeof payload.description === 'string'
-            ? payload.description.slice(0, 512)
-            : null,
     parts,
-    metadata: {
-      mimeType: typeof mimeType === 'string' ? mimeType : 'application/octet-stream',
-      sizeBytes:
-        sizeBytes != null && Number.isFinite(Number(sizeBytes))
-          ? Number(sizeBytes)
-          : null,
-      // Explicitly omit path / relative_path / workspace fields.
-    },
   };
+  if (description) artifact.description = description;
+
+  /** @type {Record<string, unknown>} */
+  const metadata = {
+    mimeType: typeof mimeType === 'string' ? mimeType : 'application/octet-stream',
+  };
+  if (sizeBytes != null && Number.isFinite(Number(sizeBytes))) {
+    metadata.sizeBytes = Number(sizeBytes);
+  }
+  artifact.metadata = metadata;
+  return artifact;
+}
+
+/**
+ * Project durable message.completed → A2A Message (kind: message).
+ *
+ * @param {object} event
+ * @param {{
+ *   a2aTaskId: string,
+ *   contextId: string,
+ *   sequence?: number,
+ *   eventId?: string | null,
+ * }} ctx
+ * @returns {object | null}
+ */
+function projectCompletedMessage(event, ctx) {
+  const payload =
+    event.payload && typeof event.payload === 'object' && !Array.isArray(event.payload)
+      ? event.payload
+      : {};
+  const roleRaw = String(
+    event.role || payload.role || event.message?.role || payload.message?.role || '',
+  ).toLowerCase();
+  const role =
+    roleRaw === 'user' ? 'user' : roleRaw === 'assistant' || roleRaw === 'agent'
+      ? 'agent'
+      : null;
+  if (role !== 'agent') return null;
+
+  const text = extractCompletedMessageText(event, payload);
+  if (!text) return null;
+
+  const seq =
+    Number.isFinite(Number(ctx.sequence)) && Number(ctx.sequence) >= 0
+      ? Number(ctx.sequence)
+      : 0;
+  const messageId =
+    (typeof event.messageId === 'string' && event.messageId.trim()) ||
+    (typeof event.message_id === 'string' && event.message_id.trim()) ||
+    (typeof payload.messageId === 'string' && payload.messageId.trim()) ||
+    (typeof ctx.eventId === 'string' && ctx.eventId.trim()) ||
+    `a2a-msg-${ctx.a2aTaskId}-${seq}`;
+
+  return {
+    kind: 'message',
+    messageId,
+    role,
+    parts: [{ kind: 'text', text: text.slice(0, 16_384) }],
+    taskId: ctx.a2aTaskId,
+    contextId: ctx.contextId,
+    metadata: streamMetadata(seq, ctx.eventId),
+  };
+}
+
+/**
+ * @param {object} event
+ * @param {Record<string, unknown>} payload
+ * @returns {string | null}
+ */
+function extractCompletedMessageText(event, payload) {
+  if (typeof event.text === 'string' && event.text.trim()) {
+    return event.text.trim();
+  }
+  const msg = event.message ?? payload.message ?? null;
+  if (typeof msg === 'string' && msg.trim()) return msg.trim();
+  if (!msg || typeof msg !== 'object') return null;
+  const body = /** @type {Record<string, unknown>} */ (msg);
+  if (typeof body.text === 'string' && body.text.trim()) return body.text.trim();
+  if (typeof body.content === 'string' && body.content.trim()) {
+    return body.content.trim();
+  }
+  if (Array.isArray(body.content)) {
+    const texts = [];
+    for (const part of body.content) {
+      if (!part || typeof part !== 'object') continue;
+      const p = /** @type {Record<string, unknown>} */ (part);
+      if (
+        (p.type === 'text' || p.kind === 'text') &&
+        typeof p.text === 'string' &&
+        p.text.trim()
+      ) {
+        texts.push(p.text.trim());
+      }
+    }
+    if (texts.length) return texts.join('');
+  }
+  return null;
 }
 
 /**

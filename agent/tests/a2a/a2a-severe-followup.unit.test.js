@@ -552,9 +552,9 @@ describe('artifact projector + download token isolation', () => {
     const json = JSON.stringify(ok.result.artifact);
     assert.doesNotMatch(json, /should\/not\/leak/);
     assert.doesNotMatch(json, /workspace/);
-    // Fail closed: no download URI without byte transport
+    // Fail closed: no FilePart at all without uri/bytes (A2A 0.3).
     const filePart = ok.result.artifact.parts.find((p) => p.kind === 'file');
-    assert.equal(filePart.file.uri, undefined);
+    assert.equal(filePart, undefined);
   });
 
   it('does not emit file.uri when buildDownloadUri is null or returns null', () => {
@@ -576,7 +576,7 @@ describe('artifact projector + download token isolation', () => {
       );
       assert.ok(projected);
       const file = projected.result.artifact.parts.find((p) => p.kind === 'file');
-      assert.equal(file.file.uri, undefined);
+      assert.equal(file, undefined);
     }
   });
 

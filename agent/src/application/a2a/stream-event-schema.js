@@ -1,0 +1,300 @@
+/**
+ * Emit-time A2A v0.3 StreamResponse checks (no official SDK runtime).
+ *
+ * Validates the discriminated `kind` union and required fields so Python
+ * a2a-sdk / Pydantic clients fail locally instead of on the wire.
+ *
+ * Official 0.3 StreamResponse `kind` union (a2a-python / Pydantic):
+ *   task | message | status-update | artifact-update
+ *
+ * Stream grammar (§3.1.2):
+ *   message-only: exactly one Message, then close
+ *   task lifecycle: Task, then status-update | artifact-update, close on terminal
+ */
+
+import { ALL_A2A_TASK_STATUSES } from '../../domain/a2a/status.js';
+
+export const A2A_STREAM_RESULT_KINDS = Object.freeze([
+  'task',
+  'message',
+  'status-update',
+  'artifact-update',
+]);
+
+/** Official 0.3 `message/stream` and `tasks/resubscribe` share this union. */
+export const A2A_MESSAGE_STREAM_KINDS = Object.freeze([...A2A_STREAM_RESULT_KINDS]);
+
+/** After an initial Task, official 0.3 allows only these follow-up kinds. */
+export const A2A_TASK_LIFECYCLE_FOLLOW_UP_KINDS = Object.freeze([
+  'status-update',
+  'artifact-update',
+]);
+
+/** @deprecated same as A2A_STREAM_RESULT_KINDS — kept for existing imports. */
+export const A2A_TASK_STREAM_KINDS = Object.freeze([...A2A_STREAM_RESULT_KINDS]);
+
+const MESSAGE_ROLES = new Set(['user', 'agent']);
+const PART_KINDS = new Set(['text', 'file', 'data']);
+const STATUS_SET = new Set(ALL_A2A_TASK_STATUSES);
+
+/**
+ * @param {unknown} method
+ * @returns {readonly string[]}
+ */
+export function streamKindsForMethod(_method) {
+  return A2A_STREAM_RESULT_KINDS;
+}
+
+/**
+ * Official 0.3 SendStreamingMessage / SubscribeToTask grammar.
+ *
+ * @param {object[]} results
+ */
+export function assertOfficialStreamGrammar(results) {
+  if (!Array.isArray(results) || results.length === 0) {
+    throw new A2aStreamSchemaError('stream must contain at least one result');
+  }
+  for (const result of results) {
+    assertA2aStreamResult(result);
+  }
+  const first = results[0];
+  if (first.kind === 'message') {
+    if (results.length !== 1) {
+      throw new A2aStreamSchemaError(
+        'message-only stream must contain exactly one Message',
+      );
+    }
+    return results;
+  }
+  if (first.kind !== 'task') {
+    throw new A2aStreamSchemaError(
+      'task-lifecycle stream must start with Task (or a lone Message)',
+      { kind: first.kind },
+    );
+  }
+  for (let i = 1; i < results.length; i += 1) {
+    const kind = results[i].kind;
+    if (!A2A_TASK_LIFECYCLE_FOLLOW_UP_KINDS.includes(kind)) {
+      throw new A2aStreamSchemaError(
+        'after Task, official 0.3 allows only status-update or artifact-update',
+        { kind, index: i },
+      );
+    }
+  }
+  return results;
+}
+
+/**
+ * Deep-omit null/undefined keys so optional fields are absent, not null.
+ *
+ * @param {unknown} value
+ * @returns {unknown}
+ */
+export function omitNullFields(value) {
+  if (Array.isArray(value)) {
+    return value.map((item) => omitNullFields(item));
+  }
+  if (!value || typeof value !== 'object') return value;
+  /** @type {Record<string, unknown>} */
+  const out = {};
+  for (const [key, child] of Object.entries(value)) {
+    if (child == null) continue;
+    out[key] = omitNullFields(child);
+  }
+  return out;
+}
+
+/**
+ * @param {unknown} result
+ * @returns {object}
+ */
+export function assertA2aStreamResult(result) {
+  if (!result || typeof result !== 'object' || Array.isArray(result)) {
+    throw new A2aStreamSchemaError('stream result must be an object');
+  }
+  const row = /** @type {Record<string, unknown>} */ (result);
+  const kind = row.kind;
+  if (typeof kind !== 'string' || !A2A_STREAM_RESULT_KINDS.includes(kind)) {
+    throw new A2aStreamSchemaError(
+      `kind must be one of ${A2A_STREAM_RESULT_KINDS.join(', ')}`,
+      { kind },
+    );
+  }
+  switch (kind) {
+    case 'task':
+      assertTask(row);
+      break;
+    case 'message':
+      assertMessage(row);
+      break;
+    case 'status-update':
+      assertStatusUpdate(row);
+      break;
+    case 'artifact-update':
+      assertArtifactUpdate(row);
+      break;
+    default:
+      throw new A2aStreamSchemaError('unsupported kind', { kind });
+  }
+  return row;
+}
+
+/**
+ * Omit nulls, then validate. Returns null when the frame is not protocol-valid
+ * (caller should skip emit and still advance the journal cursor).
+ *
+ * @param {unknown} result
+ * @returns {object | null}
+ */
+export function prepareA2aStreamResult(result) {
+  const cleaned = omitNullFields(result);
+  try {
+    return assertA2aStreamResult(cleaned);
+  } catch {
+    return null;
+  }
+}
+
+export class A2aStreamSchemaError extends Error {
+  /**
+   * @param {string} message
+   * @param {Record<string, unknown>} [details]
+   */
+  constructor(message, details = {}) {
+    super(message);
+    this.name = 'A2aStreamSchemaError';
+    this.details = details;
+  }
+}
+
+/**
+ * @param {Record<string, unknown>} row
+ */
+function assertTask(row) {
+  requireNonEmptyString(row.id, 'task.id');
+  requireNonEmptyString(row.contextId, 'task.contextId');
+  assertTaskStatus(row.status, 'task.status');
+}
+
+/**
+ * @param {Record<string, unknown>} row
+ */
+function assertMessage(row) {
+  requireNonEmptyString(row.messageId, 'message.messageId');
+  if (typeof row.role !== 'string' || !MESSAGE_ROLES.has(row.role)) {
+    throw new A2aStreamSchemaError('message.role must be "user" or "agent"', {
+      role: row.role,
+    });
+  }
+  if (!Array.isArray(row.parts) || row.parts.length === 0) {
+    throw new A2aStreamSchemaError('message.parts must be a non-empty array');
+  }
+  assertParts(row.parts, 'message.parts');
+}
+
+/**
+ * @param {Record<string, unknown>} row
+ */
+function assertStatusUpdate(row) {
+  requireNonEmptyString(row.taskId, 'status-update.taskId');
+  requireNonEmptyString(row.contextId, 'status-update.contextId');
+  assertTaskStatus(row.status, 'status-update.status');
+  if (typeof row.final !== 'boolean') {
+    throw new A2aStreamSchemaError('status-update.final must be a boolean');
+  }
+}
+
+/**
+ * @param {Record<string, unknown>} row
+ */
+function assertArtifactUpdate(row) {
+  requireNonEmptyString(row.taskId, 'artifact-update.taskId');
+  requireNonEmptyString(row.contextId, 'artifact-update.contextId');
+  if (!row.artifact || typeof row.artifact !== 'object' || Array.isArray(row.artifact)) {
+    throw new A2aStreamSchemaError('artifact-update.artifact is required');
+  }
+  const artifact = /** @type {Record<string, unknown>} */ (row.artifact);
+  requireNonEmptyString(artifact.artifactId, 'artifact.artifactId');
+  if ('description' in artifact && artifact.description == null) {
+    throw new A2aStreamSchemaError('artifact.description must be omitted when empty');
+  }
+  if (artifact.parts != null) {
+    if (!Array.isArray(artifact.parts)) {
+      throw new A2aStreamSchemaError('artifact.parts must be an array');
+    }
+    assertParts(artifact.parts, 'artifact.parts');
+  }
+}
+
+/**
+ * @param {unknown} status
+ * @param {string} label
+ */
+function assertTaskStatus(status, label) {
+  if (!status || typeof status !== 'object' || Array.isArray(status)) {
+    throw new A2aStreamSchemaError(`${label} must be an object`);
+  }
+  const body = /** @type {Record<string, unknown>} */ (status);
+  if (typeof body.state !== 'string' || !STATUS_SET.has(body.state)) {
+    throw new A2aStreamSchemaError(`${label}.state is not an A2A task state`, {
+      state: body.state,
+    });
+  }
+  if (body.message != null) {
+    if (typeof body.message !== 'object' || Array.isArray(body.message)) {
+      throw new A2aStreamSchemaError(`${label}.message must be a Message`);
+    }
+    assertMessage(/** @type {Record<string, unknown>} */ (body.message));
+  }
+}
+
+/**
+ * @param {unknown[]} parts
+ * @param {string} label
+ */
+function assertParts(parts, label) {
+  for (let i = 0; i < parts.length; i += 1) {
+    const part = parts[i];
+    if (!part || typeof part !== 'object' || Array.isArray(part)) {
+      throw new A2aStreamSchemaError(`${label}[${i}] must be an object`);
+    }
+    const p = /** @type {Record<string, unknown>} */ (part);
+    if (typeof p.kind !== 'string' || !PART_KINDS.has(p.kind)) {
+      throw new A2aStreamSchemaError(
+        `${label}[${i}].kind must be text, file, or data`,
+        { kind: p.kind },
+      );
+    }
+    if (p.kind === 'text') {
+      if (typeof p.text !== 'string' || !p.text) {
+        throw new A2aStreamSchemaError(`${label}[${i}].text is required`);
+      }
+    } else if (p.kind === 'file') {
+      if (!p.file || typeof p.file !== 'object' || Array.isArray(p.file)) {
+        throw new A2aStreamSchemaError(`${label}[${i}].file is required`);
+      }
+      const file = /** @type {Record<string, unknown>} */ (p.file);
+      const hasUri = typeof file.uri === 'string' && file.uri.trim();
+      const hasBytes = typeof file.bytes === 'string' && file.bytes;
+      if (!hasUri && !hasBytes) {
+        throw new A2aStreamSchemaError(
+          `${label}[${i}].file must include uri or bytes`,
+        );
+      }
+    } else if (p.kind === 'data') {
+      if (!p.data || typeof p.data !== 'object' || Array.isArray(p.data)) {
+        throw new A2aStreamSchemaError(`${label}[${i}].data must be an object`);
+      }
+    }
+  }
+}
+
+/**
+ * @param {unknown} value
+ * @param {string} label
+ */
+function requireNonEmptyString(value, label) {
+  if (typeof value !== 'string' || !value.trim()) {
+    throw new A2aStreamSchemaError(`${label} is required`);
+  }
+}

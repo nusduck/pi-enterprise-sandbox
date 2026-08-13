@@ -212,6 +212,9 @@ export function jsonRpcError(id, error) {
  * Last-Event-ID resume as if it were a run_event ULID.
  *
  * @param {object} rpcResponse
+ * JSON-RPC A2A streams must not set SSE `event:` — clients discriminate on
+ * `result.kind`. The `event` option is kept only for explicit caller use.
+ *
  * @param {{ id?: string | number | null, event?: string }} [opts]
  * @returns {string}
  */

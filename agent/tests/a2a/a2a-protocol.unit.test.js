@@ -97,6 +97,10 @@ describe('JSON-RPC parse + method aliases', () => {
     assert.match(frame, /^id: 5\n/);
     assert.match(frame, /event: status-update\n/);
     assert.match(frame, /"jsonrpc":"2.0"/);
+    const bare = formatA2aSseRpcFrame(
+      jsonRpcSuccess(1, { kind: 'task', id: TASK }),
+    );
+    assert.doesNotMatch(bare, /^event:/m);
     assert.match(frame, /\n\n$/);
     const errFrame = formatA2aSseRpcFrame(
       jsonRpcError(1, { ...JSON_RPC_ERROR.INTERNAL }),
@@ -173,7 +177,8 @@ describe('A2A event projector (artifact + status)', () => {
     );
     assert.equal(good.kind, 'artifact-update');
     assert.equal(good.result.artifact.artifactId, ART);
-    assert.ok(good.result.artifact.parts.some((p) => p.kind === 'file'));
+    // No FilePart without uri/bytes (A2A 0.3 FilePart required field).
+    assert.ok(!good.result.artifact.parts.some((p) => p.kind === 'file'));
     assert.doesNotMatch(JSON.stringify(good.result.artifact), /\/artifacts\//);
 
     const noise = projectEnvelopeToA2aResult(

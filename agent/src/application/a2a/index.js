@@ -37,6 +37,19 @@ export {
 } from './event-projector.js';
 
 export {
+  A2A_STREAM_RESULT_KINDS,
+  A2A_MESSAGE_STREAM_KINDS,
+  A2A_TASK_STREAM_KINDS,
+  A2A_TASK_LIFECYCLE_FOLLOW_UP_KINDS,
+  streamKindsForMethod,
+  omitNullFields,
+  assertA2aStreamResult,
+  assertOfficialStreamGrammar,
+  prepareA2aStreamResult,
+  A2aStreamSchemaError,
+} from './stream-event-schema.js';
+
+export {
   JSON_RPC_VERSION,
   JSON_RPC_ERROR,
   A2A_RPC_ERROR,

@@ -860,6 +860,7 @@ export function createA2aHttpHandler(deps) {
           afterSequence: streamInput.afterSequence,
           lastEventId: streamInput.lastEventId,
           includeInitialTask: streamInput.includeInitialTask !== false,
+          method: streamInput.method,
         },
         {
           write: writeChunk,

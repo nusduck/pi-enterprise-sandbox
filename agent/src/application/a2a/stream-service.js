@@ -29,6 +29,10 @@ import {
 } from '../run-event-sse-service.js';
 import { projectEnvelopeToA2aResult } from './event-projector.js';
 import { formatA2aSseRpcFrame, jsonRpcSuccess } from './json-rpc.js';
+import {
+  prepareA2aStreamResult,
+  streamKindsForMethod,
+} from './stream-event-schema.js';
 
 /** SSE comment keep-alive — not a `data:` frame (plan: every data is JSON-RPC). */
 export function formatA2aSseHeartbeatComment(timestampIso = new Date().toISOString()) {
@@ -90,6 +94,7 @@ export class A2aStreamService {
    *   afterSequence?: number,
    *   lastEventId?: string | null,
    *   includeInitialTask?: boolean,
+   *   method?: string | null,
    * }} input
    * @param {{
    *   write: (chunk: string) => boolean | void | Promise<boolean | void>,
@@ -163,6 +168,7 @@ export class A2aStreamService {
      */
     const emitRpc = async (rpcBody, meta = {}) => {
       // Snapshot frames must omit SSE id so Last-Event-ID is never a task ULID.
+      // JSON-RPC A2A streams carry kind on result — do not set SSE `event:`.
       const id = meta.omitId
         ? null
         : meta.eventId != null && String(meta.eventId)
@@ -170,12 +176,13 @@ export class A2aStreamService {
           : meta.sequence != null && Number.isSafeInteger(Number(meta.sequence))
             ? String(meta.sequence)
             : null;
-      const frame = formatA2aSseRpcFrame(rpcBody, {
-        id,
-        event: meta.event,
-      });
+      const frame = formatA2aSseRpcFrame(rpcBody, { id });
       return pushFrame(frame);
     };
+
+    const allowedKinds = new Set(streamKindsForMethod(input.method));
+    /** @type {string | null} */
+    let lastA2aStatus = null;
 
     // Initial Task snapshot — no SSE id (PR-12 severe: do not use taskId as event id).
     if (input.includeInitialTask !== false) {
@@ -184,13 +191,18 @@ export class A2aStreamService {
         agentId: input.agentId,
         taskId: mapping.a2aTaskId,
       });
-      if (
-        !(await emitRpc(jsonRpcSuccess(input.rpcId, task), {
-          omitId: true,
-          event: 'task',
-        }))
-      ) {
-        return { lastSequence: lastEmitted, status: task.status?.state ?? null };
+      const outboundTask = prepareA2aStreamResult(task);
+      if (outboundTask && allowedKinds.has('task')) {
+        if (
+          !(await emitRpc(jsonRpcSuccess(input.rpcId, outboundTask), {
+            omitId: true,
+          }))
+        ) {
+          return {
+            lastSequence: lastEmitted,
+            status: outboundTask.status?.state ?? null,
+          };
+        }
       }
     }
 
@@ -219,23 +231,39 @@ export class A2aStreamService {
       const projected = projectEnvelopeToA2aResult(envelope, {
         ...projectCtx(),
         runStatus,
+        lastA2aStatus,
       });
       // Non-A2A platform events still advance the journal cursor (no hole on reconnect).
       if (!projected) {
         lastEmitted = Number(envelope.sequence);
         return true;
       }
-      const ok = await emitRpc(jsonRpcSuccess(input.rpcId, projected.result), {
+      if (
+        projected.kind === 'status-update' &&
+        typeof projected.result?.status?.state === 'string'
+      ) {
+        lastA2aStatus = projected.result.status.state;
+      }
+      if (projected.result?.final === true) {
+        terminalStatus = projected.result.status?.state ?? terminalStatus;
+      }
+      // Drop kinds outside the official 0.3 StreamResponse union.
+      if (!allowedKinds.has(projected.kind)) {
+        lastEmitted = Number(envelope.sequence);
+        return true;
+      }
+      const outbound = prepareA2aStreamResult(projected.result);
+      if (!outbound) {
+        lastEmitted = Number(envelope.sequence);
+        return true;
+      }
+      const ok = await emitRpc(jsonRpcSuccess(input.rpcId, outbound), {
         eventId: projected.eventId,
         sequence: projected.sequence,
-        event: projected.kind,
       });
       if (!ok) return false;
       // Advance only after successful write (matches PR-10 emitEnvelope).
       lastEmitted = projected.sequence;
-      if (projected.result?.final === true) {
-        terminalStatus = projected.result.status?.state ?? terminalStatus;
-      }
       return true;
     };
 
