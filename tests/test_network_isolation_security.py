@@ -120,12 +120,11 @@ class TestComposeNetworkTopology:
         assert "service_egress:" in text
         assert re.search(r"backend_internal:.*?internal:\s*true", text, re.S)
 
-    def test_sandbox_only_on_backend_internal(self):
+    def test_dev_sandbox_can_use_explicit_remote_db_egress(self):
         text = COMPOSE.read_text(encoding="utf-8")
         block = _service_block(text, "sandbox")
         nets = _networks_in_block(block)
-        assert nets == {"backend_internal"}
-        assert "service_egress" not in nets
+        assert nets == {"backend_internal", "service_egress"}
 
     def test_mysql_redis_use_dev_ingress_only_in_base_compose(self):
         text = COMPOSE.read_text(encoding="utf-8")

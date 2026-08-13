@@ -194,7 +194,11 @@ SANDBOX_TRUSTED_PROXY_CIDRS=172.16.0.0/12
 | `SANDBOX_NETWORK_MODE` | 可显式 `unrestricted` | 固定 `disabled` | 生产禁止 `allowlist`/`unrestricted` |
 
 Compose 拓扑：`backend_internal`（`internal: true`）供 mysql/redis/sandbox/api/frontend；
-`agent`/`agent-worker` 同时接入 `service_egress` 以访问 LLM；Sandbox 不挂 egress 网。
+开发 Compose 另外给 Sandbox 接入 `service_egress`，仅当显式设置
+`SANDBOX_NETWORK_MODE=unrestricted` 时，沙箱子进程才可访问通过
+`SANDBOX_EXEC_ENV_*` 注入的远程业务库。生产 overlay 用 `!override` 移除该网络，
+并固定 `SANDBOX_NETWORK_MODE=disabled`；`agent`/`agent-worker` 始终接入
+`service_egress` 以访问 LLM。
 
 ### LLM Provider
 

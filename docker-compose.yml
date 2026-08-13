@@ -3,7 +3,9 @@
 #   service_egress    — egress-capable bridge for services that must call the internet
 #
 # Placement by call chain:
-#   mysql, redis, sandbox          → backend_internal only
+#   mysql, redis                   → backend_internal only
+#   sandbox                       → backend_internal + service_egress in dev;
+#                                    production overlay removes service_egress
 #   api-server, frontend           → backend_internal (BFF↔Agent/Sandbox; SPA static)
 #   agent, agent-worker            → backend_internal + service_egress (LLM/MCP egress)
 # Production nginx (overlay)       → both (public edge + upstreams)
@@ -585,10 +587,15 @@ services:
       - apparmor=unconfined
       # Allow the unprivileged mount namespace to mount its private /proc.
       - systempaths=unconfined
-    # Sandbox API is reachable only on the internal backend fabric.
-    # Untrusted child processes with network_mode=disabled get --unshare-net.
+    # Sandbox API is reachable on the internal backend fabric. Development
+    # workloads may explicitly use SANDBOX_NETWORK_MODE=unrestricted to reach
+    # an external business DB through SANDBOX_EXEC_ENV_*; production removes
+    # this network and forces disabled execution networking in the overlay.
+    # With network_mode=disabled, untrusted child processes still get
+    # --unshare-net even though the service has a dev egress attachment.
     networks:
       - backend_internal
+      - service_egress
 
   # ── Sandbox MCP facade — separate process, no workspace/artifact mounts ──
   sandbox-mcp:

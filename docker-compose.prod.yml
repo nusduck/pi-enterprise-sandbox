@@ -256,8 +256,10 @@ services:
         max-size: "10m"
         max-file: "3"
     restart: always
-    # Reinforce base topology: Sandbox never joins service_egress.
-    networks:
+    # Reinforce production topology: Sandbox never joins service_egress.
+    # !override is required because the dev base attaches service_egress for
+    # explicitly configured remote business-DB workloads.
+    networks: !override
       - backend_internal
 
   # MCP stays independent of Agent, but production traffic must enter through
