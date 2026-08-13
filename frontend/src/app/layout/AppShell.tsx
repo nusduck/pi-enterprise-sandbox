@@ -104,7 +104,7 @@ export function AppShell({ children }: { children: ReactNode }) {
                 ☰
               </button>
               <div className="logo" aria-hidden="true">
-                <img src="/brand/uprc-icon.svg" alt="" width={28} height={28} />
+                <img src="/brand/uprc-icon.png" alt="" width={28} height={28} />
               </div>
               <h1>{managementTitle(location.pathname)}</h1>
               <div className="badge" aria-live="polite">

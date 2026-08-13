@@ -37,7 +37,7 @@ export function MessageList() {
       {displayMessages.length === 0 ? (
         <div className="welcome">
           <div className="icon">
-            <img src="/brand/uprc-icon.svg" alt="" width={48} height={48} />
+            <img src="/brand/uprc-icon.png" alt="" width={48} height={48} />
           </div>
           <h2>What do you want to run?</h2>
           <p>

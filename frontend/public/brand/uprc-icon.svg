@@ -1,58 +1,23 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-label="UPRC Agent">
-  <defs>
-    <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
-      <feGaussianBlur stdDeviation="1.4" result="b"/>
-      <feMerge>
-        <feMergeNode in="b"/>
-        <feMergeNode in="SourceGraphic"/>
-      </feMerge>
-    </filter>
-  </defs>
-  <!-- black app tile -->
-  <rect width="128" height="128" rx="28" fill="#000"/>
-
-  <!-- orbital ring (behind letters, Grok-style) -->
-  <ellipse
-    cx="68" cy="68"
-    rx="48" ry="17"
+  <!-- Adapted from Grok Imagine 912e5580-d7f0-40c6-87b8-d78239798126 -->
+  <rect width="128" height="128" rx="28" fill="#333237"/>
+  <!-- U -->
+  <path
     fill="none"
     stroke="#ffffff"
-    stroke-width="3"
-    transform="rotate(-32 68 68)"
-    opacity="0.92"
-    filter="url(#glow)"
-  />
-
-  <!-- UP monogram — bold, interlocking -->
-  <g fill="#ffffff">
-    <!-- U -->
-    <path d="
-      M28 34
-      h12.5
-      v34
-      c0 7.5 4.2 12 11 12
-      s11-4.5 11-12
-      V34
-      H75
-      v34
-      c0 15.5-10.2 25.5-23.5 25.5
-      S28 83.5 28 68
-      Z"/>
-    <!-- P -->
-    <path d="
-      M72 34
-      h18
-      c14 0 24 9 24 22.5
-      S104 79 90 79
-      H84.5
-      V98
-      H72
-      Z
-      M84.5 46.5
-      v20
-      H90
-      c7 0 11.5-3.8 11.5-10
-      S97 46.5 90 46.5
-      Z"/>
-  </g>
+    stroke-width="15.5"
+    stroke-linejoin="round"
+    d="M33 35.5 v37.5 c0 12.8 8.4 21.5 20.8 21.5 S74.6 85.8 74.6 73 V35.5"/>
+  <!-- R bowl -->
+  <path
+    fill="#ffffff"
+    d="M78 35.5 h17.2 c11.6 0 19.8 7.4 19.8 18.6 0 11-8 18.4-19.4 18.4 H78 Z
+       M90.6 47.2 v13.4 h5.2 c4.8 0 7.6-2.6 7.6-6.7 s-2.8-6.7-7.6-6.7 z"/>
+  <!-- R diagonal cut + leg -->
+  <path
+    fill="#ffffff"
+    d="M86.2 35.5 h16.4 L78 76.8 h-14.6 z"/>
+  <path
+    fill="#ffffff"
+    d="M79.5 70.5 h15.2 L112.8 96 H96.4 Z"/>
 </svg>
