@@ -33,6 +33,25 @@ import { config as defaultAgentConfig } from '../../../config.js';
 export const PINNED_PI_SDK_VERSION = '0.80.3';
 
 /**
+ * Pi built-in tools that operate on the **Agent container's** filesystem.
+ *
+ * sandbox-bridge registers `read`/`write`/`edit`/`bash` under the same names,
+ * so those four are shadowed by the sandbox-routed versions. `grep`/`find`/`ls`
+ * have no sandbox counterpart: nothing shadows them, and they stay out of the
+ * active set only because Pi's default happens to be exactly those first four
+ * (`defaultActiveToolNames` in the SDK). That is an implicit contract — if a
+ * future Pi release widens its default, this multi-tenant Agent container's own
+ * filesystem becomes readable by the model, silently and without error.
+ *
+ * A denylist rather than the `tools` allowlist on purpose: MCP tool names are
+ * discovered at runtime (`mcp__server__tool`), so an allowlist would filter
+ * every MCP tool out of the session.
+ *
+ * @type {readonly string[]}
+ */
+export const LOCAL_FILESYSTEM_TOOL_NAMES = Object.freeze(['grep', 'find', 'ls']);
+
+/**
  * Deep-clone then freeze plain JSON-compatible structures.
  * @param {unknown} value
  * @returns {unknown}
@@ -132,6 +151,41 @@ export function assertModelShape(model) {
       { code: 'PI_MODEL_SHAPE_INVALID' },
     );
   }
+}
+
+/**
+ * pi-ai ModelThinkingLevel values accepted in AgentVersion config.
+ * @type {readonly string[]}
+ */
+export const AGENT_VERSION_THINKING_LEVELS = Object.freeze([
+  'off',
+  'minimal',
+  'low',
+  'medium',
+  'high',
+  'xhigh',
+]);
+
+/**
+ * Validate an AgentVersion-declared thinking level.
+ * Absent → null (SDK decides). Present but unknown → fail closed, because a
+ * typo silently downgrading a reasoning model is exactly the kind of drift a
+ * frozen AgentVersion is supposed to prevent.
+ *
+ * @param {unknown} value
+ * @returns {string | null}
+ */
+export function normalizeThinkingLevel(value) {
+  if (value == null || value === '') return null;
+  const level = String(value).trim().toLowerCase();
+  if (!AGENT_VERSION_THINKING_LEVELS.includes(level)) {
+    throw new PiRuntimeFactoryError(
+      `AgentVersion thinkingLevel "${String(value)}" is not a pi thinking level ` +
+        `(${AGENT_VERSION_THINKING_LEVELS.join(', ')})`,
+      { code: 'PI_THINKING_LEVEL_INVALID' },
+    );
+  }
+  return level;
 }
 
 /**
@@ -239,6 +293,12 @@ export function bindAgentVersionConfig(agentVersion) {
           : '',
     modelPolicy: Object.freeze({ ...modelPolicy }),
     model,
+    // Reasoning depth for this Agent. Accepted at either level so a logical
+    // modelPolicy reference and a flat config express it the same way.
+    // `null` (not 'off') means "unset — let the SDK decide".
+    thinkingLevel: normalizeThinkingLevel(
+      modelPolicy.thinkingLevel ?? configJson.thinkingLevel,
+    ),
     systemPrompt:
       typeof configJson.systemPrompt === 'string' ? configJson.systemPrompt : '',
     extensions: Array.isArray(configJson.extensions)
@@ -340,6 +400,51 @@ export function resolveConcreteModel(bound, inputModel) {
 }
 
 /**
+ * Build the Pi `skillsOverride` that realises `AgentVersion.skills`.
+ *
+ * The field is an allowlist: the ResourceLoader still discovers every skill
+ * under the run's skill roots, and this narrows what the model is told about.
+ * A requested skill that this caller cannot see (wrong tier, not installed)
+ * is reported as a warning rather than failing the Run — absence is a normal
+ * per-user state, not a misconfiguration.
+ *
+ * @param {readonly unknown[]} allowedSkills
+ * @returns {(base: { skills?: object[], diagnostics?: object[] }) => { skills: object[], diagnostics: object[] }}
+ */
+export function createSkillAllowlistOverride(allowedSkills) {
+  const allowed = new Set(
+    (Array.isArray(allowedSkills) ? allowedSkills : [])
+      .map((entry) => {
+        if (typeof entry === 'string') return entry.trim();
+        if (entry && typeof entry === 'object' && typeof (/** @type {any} */ (entry).name) === 'string') {
+          return String(/** @type {any} */ (entry).name).trim();
+        }
+        return '';
+      })
+      .filter(Boolean),
+  );
+
+  return function skillAllowlistOverride(base) {
+    const skills = Array.isArray(base?.skills) ? base.skills : [];
+    const diagnostics = Array.isArray(base?.diagnostics) ? [...base.diagnostics] : [];
+    const kept = skills.filter((skill) =>
+      allowed.has(String(/** @type {any} */ (skill)?.name ?? '')),
+    );
+    const seen = new Set(
+      kept.map((skill) => String(/** @type {any} */ (skill)?.name ?? '')),
+    );
+    for (const name of allowed) {
+      if (seen.has(name)) continue;
+      diagnostics.push({
+        type: 'warning',
+        message: `AgentVersion.skills requests "${name}", which is not available on this run's skill roots`,
+      });
+    }
+    return { skills: kept, diagnostics };
+  };
+}
+
+/**
  * Explicit, testable resolved bindings seam for AgentVersion config.
  * Non-empty config without a corresponding binding fails closed.
  *
@@ -364,7 +469,16 @@ export function resolveConcreteModel(bound, inputModel) {
  */
 export function resolveAgentVersionBindings(bound, options = {}) {
   const extensionFactories = options.extensionFactories;
-  const skillsOverride = options.skillsOverride;
+  // AgentVersion.skills is realised here rather than by every caller: the
+  // allowlist is fully determined by the frozen config, so requiring callers
+  // to hand-build the same override made the field unusable in production.
+  // An explicit override still wins (tests, future non-allowlist semantics).
+  const skillsOverride =
+    typeof options.skillsOverride === 'function'
+      ? options.skillsOverride
+      : bound.skills.length > 0
+        ? createSkillAllowlistOverride(bound.skills)
+        : undefined;
   const customTools = options.customTools;
   const tools = options.tools;
   const mcpResolver = options.mcpResolver;
@@ -421,13 +535,13 @@ export function resolveAgentVersionBindings(bound, options = {}) {
       }
     }
   }
-  if (bound.skills.length > 0) {
-    if (typeof skillsOverride !== 'function') {
-      throw new PiRuntimeFactoryError(
-        'AgentVersion.skills is non-empty but no skillsOverride binding was provided (fail closed)',
-        { code: 'PI_BINDING_REQUIRED' },
-      );
-    }
+  if (bound.skills.length > 0 && typeof skillsOverride !== 'function') {
+    // Unreachable while the allowlist default above stands; kept so a future
+    // change to that default cannot silently drop the skill restriction.
+    throw new PiRuntimeFactoryError(
+      'AgentVersion.skills is non-empty but no skillsOverride binding was resolved (fail closed)',
+      { code: 'PI_BINDING_REQUIRED' },
+    );
   }
   if (bound.mcpServers.length > 0) {
     if (mcpResolver == null) {
@@ -451,9 +565,16 @@ export function resolveAgentVersionBindings(bound, options = {}) {
   }
   if (isNonEmptyObject(bound.sandboxPolicy)) {
     if (sandboxPolicyBinding == null) {
+      // Distinct from PI_BINDING_REQUIRED on purpose. Per-AgentVersion sandbox
+      // limits have no enforcement path today (the Sandbox service takes its
+      // quotas from deployment env), so this is "not implemented", not "the
+      // caller forgot to wire something". Saying so is what lets an operator
+      // act on the error instead of filing it as an internal bug.
       throw new PiRuntimeFactoryError(
-        'AgentVersion.sandboxPolicy is non-empty but no sandboxPolicyBinding was provided (fail closed; PR-06/07)',
-        { code: 'PI_BINDING_REQUIRED' },
+        'AgentVersion.sandboxPolicy is not supported by this build: sandbox limits are ' +
+          'deployment-level (SANDBOX_* environment variables), not per-AgentVersion. ' +
+          'Remove sandboxPolicy from configJson.',
+        { code: 'PI_FEATURE_NOT_ENABLED' },
       );
     }
   }
@@ -526,7 +647,23 @@ export function resolveAgentVersionBindings(bound, options = {}) {
       ? Object.freeze([...customTools])
       : null,
     tools: Array.isArray(tools) ? Object.freeze([...tools]) : null,
+    // Always denied, regardless of AgentVersion config. Callers may add to the
+    // denylist but never shorten it — the sandbox boundary is not negotiable
+    // per Agent.
+    excludeTools: Object.freeze([
+      ...new Set([
+        ...LOCAL_FILESYSTEM_TOOL_NAMES,
+        ...(Array.isArray(options.excludeTools)
+          ? options.excludeTools.filter(
+              (name) => typeof name === 'string' && name.trim(),
+            )
+          : []),
+      ]),
+    ]),
     mcpResolver: mcpResolver ?? null,
+    // null → omit the option so the SDK resolves from settings, then clamps to
+    // the model. Never coerce to a concrete level here.
+    thinkingLevel: bound.thinkingLevel ?? null,
     toolPolicyBinding: toolPolicyBinding ?? null,
     sandboxPolicyBinding: sandboxPolicyBinding ?? null,
     // Compaction policy is applied to the run's settings manager, so unlike
@@ -1015,7 +1152,9 @@ export class PiRuntimeFactory {
         // manager in memory — never written back to a settings file, which is
         // shared across tenants. Absent policy keeps the SDK defaults.
         if (services?.settingsManager) {
-          applyContextPolicy(services.settingsManager, bindings.contextPolicy);
+          applyContextPolicy(services.settingsManager, bindings.contextPolicy, {
+            defaults: sdk.DEFAULT_COMPACTION_SETTINGS,
+          });
         }
 
         /** @type {Record<string, unknown>} */
@@ -1028,6 +1167,17 @@ export class PiRuntimeFactory {
         if (bindings.tools) fromServicesOpts.tools = bindings.tools;
         if (bindings.customTools) {
           fromServicesOpts.customTools = bindings.customTools;
+        }
+        // Applied after `tools` by the SDK, so it holds even if an AgentVersion
+        // ever ships a tool allowlist that names a local filesystem tool.
+        if (bindings.excludeTools?.length) {
+          fromServicesOpts.excludeTools = [...bindings.excludeTools];
+        }
+        // The SDK clamps this against the model's thinkingLevelMap, so an
+        // AgentVersion asking for more depth than its model offers degrades
+        // to the nearest supported level rather than failing the Run.
+        if (bindings.thinkingLevel) {
+          fromServicesOpts.thinkingLevel = bindings.thinkingLevel;
         }
         const result = await createFromServices(fromServicesOpts);
         if (!result?.session) {

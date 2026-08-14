@@ -12,6 +12,10 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import {
+  SettingsManager,
+  DEFAULT_COMPACTION_SETTINGS,
+} from '@earendil-works/pi-coding-agent';
 
 import { createObservabilityExtension } from '../../src/extensions/observability/index.js';
 import { applyContextPolicy } from '../../src/application/context-policy-service.js';
@@ -160,8 +164,8 @@ describe('AgentVersion compaction policy', () => {
     assert.deepEqual(bindings.contextPolicy, {});
 
     // Pi's own defaults: auto-compact on, 16k reserve, 20k kept recent.
-    const manager = {};
-    applyContextPolicy(manager, {});
+    const manager = SettingsManager.inMemory();
+    applyContextPolicy(manager, {}, { defaults: DEFAULT_COMPACTION_SETTINGS });
     assert.deepEqual(manager.getCompactionSettings(), {
       enabled: true,
       reserveTokens: 16_384,
@@ -170,7 +174,7 @@ describe('AgentVersion compaction policy', () => {
   });
 
   it('turns compaction off and resizes the window when configured', () => {
-    const manager = {};
+    const manager = SettingsManager.inMemory();
     applyContextPolicy(manager, {
       autoCompact: false,
       reserveTokens: 8_192,

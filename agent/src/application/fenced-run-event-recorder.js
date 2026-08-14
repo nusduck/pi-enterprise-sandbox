@@ -18,7 +18,7 @@ import { AGGREGATE_TYPE_RUN } from '../infrastructure/outbox/outbox-status.js';
 import {
   redactPayload,
   redactInlineSecrets,
-} from '../infrastructure/pi/platform-event-projector.js';
+} from '../infrastructure/pi/event-redaction.js';
 import { createPromiseTail } from './promise-tail.js';
 
 /**

@@ -19,7 +19,7 @@ import {
   summarizeAssistantMessage,
   extractToolCallBlocks,
   redactInlineSecrets,
-} from '../../infrastructure/pi/platform-event-projector.js';
+} from '../../infrastructure/pi/event-redaction.js';
 import { SANDBOX_TOOL_NAMES } from '../sandbox-bridge/constants.js';
 
 /** Sandbox-bridge tool names only — MCP/other tools cannot spoof UNKNOWN. */
@@ -95,6 +95,33 @@ export function extractUsageSummary(message) {
 }
 
 /**
+ * Normalize `ExtensionContext.getContextUsage()` into a durable payload.
+ *
+ * `tokens`/`percent` are legitimately null right after a compaction, before the
+ * next assistant response re-estimates them. Null is preserved rather than
+ * coerced to 0 — "unknown" and "empty context" are different states, and a UI
+ * that renders 0% for the first is worse than one that renders nothing.
+ *
+ * @param {unknown} usage
+ * @returns {{ tokens: number|null, contextWindow: number|null, percent: number|null } | null}
+ */
+export function normalizeContextUsage(usage) {
+  if (!usage || typeof usage !== 'object' || Array.isArray(usage)) return null;
+  const u = /** @type {Record<string, unknown>} */ (usage);
+  const num = (value) =>
+    typeof value === 'number' && Number.isFinite(value) ? value : null;
+  const contextWindow = num(u.contextWindow);
+  const tokens = num(u.tokens);
+  if (contextWindow == null && tokens == null) return null;
+  const percent =
+    num(u.percent) ??
+    (tokens != null && contextWindow != null && contextWindow > 0
+      ? Math.round((tokens / contextWindow) * 10_000) / 100
+      : null);
+  return { tokens, contextWindow, percent };
+}
+
+/**
  * @param {{
  *   runContext: {
  *     orgId: string,
@@ -156,6 +183,10 @@ export function createObservabilityExtension(options) {
    */
   const providerStack = [];
   let providerSeq = 0;
+  /** Per-session counter for `context` (one per assembled LLM call). */
+  let contextSeq = 0;
+  /** Last emitted usage, so an unchanged context does not re-emit on retry. */
+  let lastContextUsageKey = null;
   /** Per-session monotonic sequence for stable message identities. */
   let messageSeq = 0;
   /** Separate assistant stream identity; one model turn can emit many messages. */
@@ -238,6 +269,33 @@ export function createObservabilityExtension(options) {
       if (typeof deps.onSessionShutdown === 'function') {
         await deps.onSessionShutdown(event, ctx);
       }
+    });
+
+    // ── Context pressure ────────────────────────────────────────────────
+    // `context` fires as each LLM call is assembled, which is the only point
+    // where how full the window is can be observed *before* compaction acts on
+    // it. Without this the UI learns about context pressure only after the
+    // fact, from session.compacted.
+    pi.on('context', async (_event, ctx) => {
+      const usage = normalizeContextUsage(ctx?.getContextUsage?.());
+      if (!usage) return;
+      // Pi retries a failed provider call with the same assembled context;
+      // emitting once per distinct context keeps the stream readable.
+      const key = `${usage.tokens}:${usage.contextWindow}`;
+      if (key === lastContextUsageKey) return;
+      lastContextUsageKey = key;
+      contextSeq += 1;
+      await emit(
+        'context.usage',
+        {
+          ...usage,
+          ...modelMetadata(),
+          sequence: contextSeq,
+        },
+        { dedupeKey: `context.usage:${runContext.runId}:${contextSeq}` },
+      );
+      // `context` must not alter the messages Pi assembled.
+      return undefined;
     });
 
     // ── Provider lifecycle (model.request.*) — NOT agent_start/end ──────
@@ -506,6 +564,7 @@ export function createObservabilityExtension(options) {
     slice: 1,
     ownsModelRequestEvents: true,
     ownsMessageToolCompactionEvents: true,
+    ownsContextUsageEvents: true,
   });
   return observabilityExtension;
 }

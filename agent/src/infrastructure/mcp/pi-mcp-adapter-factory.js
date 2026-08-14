@@ -27,7 +27,7 @@ import {
 import {
   redactInlineSecrets,
   redactPayload,
-} from '../pi/platform-event-projector.js';
+} from '../pi/event-redaction.js';
 
 export class PiMcpAdapterError extends Error {
   /**

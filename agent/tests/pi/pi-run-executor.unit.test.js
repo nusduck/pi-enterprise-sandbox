@@ -1021,6 +1021,106 @@ describe('PiRunExecutor', () => {
     );
   });
 
+  it('passes a toolPolicyBinding so configJson.toolPolicy is not fail-closed', async () => {
+    // Regression: the factory rejects a non-empty configJson.toolPolicy unless
+    // a binding proves it is honoured, and nothing used to supply one — so any
+    // AgentVersion that configured tool policy at all failed every Run with
+    // PI_BINDING_REQUIRED.
+    state.tables.agent_versions[0].config_json = JSON.stringify({
+      systemPrompt: 'hi',
+      toolPolicy: {
+        tools: { bash: 'deny' },
+        riskLevels: { python: 'high' },
+      },
+    });
+    const generateId = nextId;
+    /** @type {object[]} */
+    const createInputs = [];
+    const exec = new PiRunExecutor({
+      transactionManager: { run: (fn) => knex.transaction(fn) },
+      createRepositories: (db) =>
+        createRepositoryBundle(db, { now: () => new Date(), generateId }),
+      sessionLockManager: new SessionLockManager(redis, {
+        ttlMs: 30_000,
+        renewIntervalMs: 60_000,
+      }),
+      piRuntimeFactory: {
+        async create(input) {
+          createInputs.push(input);
+          return createFakePiRuntimeFactory().create(input);
+        },
+      },
+      modelResolver: async () => fullModel,
+      workspaceResolver: async () => `/workspace/${WSP}`,
+      generateId,
+      agentDir: '/tmp/agent-dir',
+      sessionLockRenewIntervalMs: 60_000,
+      extensionBundleFactory: () => [],
+      sessionAdapter: {
+        captureSnapshotPayload: (sm) => ({
+          header: sm.getHeader(),
+          entries: sm.getEntries(),
+        }),
+      },
+    });
+
+    const result = await exec.execute({
+      run: {
+        runId: RUN,
+        agentSessionId: SESS,
+        conversationId: CONV,
+        agentVersionId: VER,
+        triggeringMessageId: TRIG,
+        traceId: 'b'.repeat(32),
+      },
+      scope,
+      workerId: 'w1',
+      signal: new AbortController().signal,
+    });
+
+    assert.equal(result.outcome, RUN_STATUS.SUCCEEDED);
+    assert.equal(createInputs.length, 1);
+    const binding = createInputs[0].toolPolicyBinding;
+    assert.ok(binding, 'toolPolicyBinding must reach piRuntimeFactory.create');
+    assert.equal(binding.appliedBy, 'enterprise-policy');
+    assert.deepEqual(binding.tools, { bash: 'deny' });
+    assert.ok(binding.riskPolicy, 'riskLevels must project into the risk table');
+    await exec.dispose();
+  });
+
+  it('omits toolPolicyBinding when no extension bundle can enforce it', async () => {
+    // Without enterprise-policy nothing enforces the field, so the factory's
+    // fail-closed guard must still fire rather than be papered over.
+    state.tables.agent_versions[0].config_json = JSON.stringify({
+      toolPolicy: { tools: { bash: 'deny' } },
+    });
+    /** @type {object[]} */
+    const createInputs = [];
+    const exec = makeExecutor();
+    exec.piRuntimeFactory = {
+      async create(input) {
+        createInputs.push(input);
+        return createFakePiRuntimeFactory().create(input);
+      },
+    };
+    await exec.execute({
+      run: {
+        runId: RUN,
+        agentSessionId: SESS,
+        conversationId: CONV,
+        agentVersionId: VER,
+        triggeringMessageId: TRIG,
+        traceId: 'b'.repeat(32),
+      },
+      scope,
+      workerId: 'w1',
+      signal: new AbortController().signal,
+    });
+    assert.equal(createInputs.length, 1);
+    assert.equal(createInputs[0].toolPolicyBinding, undefined);
+    await exec.dispose();
+  });
+
   it('fails closed on invalid acquired fence before extension/runtime', async () => {
     const generateId = nextId;
     let bundleCalled = 0;

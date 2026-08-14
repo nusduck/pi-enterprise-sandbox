@@ -15,6 +15,7 @@
  */
 
 import { Type } from 'typebox';
+import { truncateLine } from '@earendil-works/pi-coding-agent';
 import {
   DEFAULT_BASH_TIMEOUT_SEC,
   DEFAULT_PROCESS_READ_LIMIT,
@@ -1108,10 +1109,9 @@ export function formatReadContentWithGutter(source, offset0, maxLineLength = MAX
   /** @type {string[]} */
   const out = [];
   for (let i = 0; i < lines.length; i += 1) {
-    let line = lines[i];
-    if (line.length > maxLen) {
-      line = `${line.slice(0, maxLen)}... [truncated]`;
-    }
+    // Pi's own per-line clamp, so an over-wide line is marked the same way the
+    // model sees it from every other Pi tool.
+    const { text: line } = truncateLine(lines[i], maxLen);
     out.push(`${start + i + 1}|${line}`);
   }
   return out.join('\n');

@@ -41,7 +41,7 @@ import {
 } from './fenced-run-event-recorder.js';
 import { createPromiseTail } from './promise-tail.js';
 import { isLocalSandboxTool } from '../extensions/enterprise-policy/tool-risk-classifier.js';
-import { redactPayload } from '../infrastructure/pi/platform-event-projector.js';
+import { redactPayload } from '../infrastructure/pi/event-redaction.js';
 import {
   assertToolExecutionReplayMatch,
   policyDecisionFingerprint,

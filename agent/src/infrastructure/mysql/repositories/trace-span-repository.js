@@ -8,7 +8,7 @@ import {
   toMysqlDateTime,
 } from '../row-mappers.js';
 import { assertUlid } from '../../../domain/shared/ulid.js';
-import { redactPayload } from '../../pi/platform-event-projector.js';
+import { redactPayload } from '../../pi/event-redaction.js';
 
 const TRACE_ID_RE = /^[0-9a-f]{32}$/;
 const SPAN_ID_RE = /^[0-9a-f]{16}$/;
