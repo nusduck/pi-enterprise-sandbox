@@ -25,6 +25,7 @@ import {
 } from '@earendil-works/pi-coding-agent';
 import {
   LOCAL_FILESYSTEM_TOOL_NAMES,
+  PiRuntimeFactory,
   bindAgentVersionConfig,
   resolveAgentVersionBindings,
 } from '../../src/infrastructure/pi/pi-runtime-factory.js';
@@ -114,6 +115,65 @@ describe('local filesystem tools are excluded from every Run', () => {
     for (const name of LOCAL_FILESYSTEM_TOOL_NAMES) {
       assert.ok(bindings.excludeTools.includes(name));
     }
+  });
+
+  it('the extension point is reachable from PiRuntimeFactory.create', async () => {
+    // Regression: the merge branch existed but no caller could reach it —
+    // create() built its bindings options without forwarding excludeTools, so
+    // the "callers may extend" contract above was untestable in practice.
+    /** @type {object | null} */
+    let seenOpts = null;
+    const factory = new PiRuntimeFactory({
+      agentDir: '/tmp/agent-dir',
+      excludeTools: ['from_constructor'],
+      loadSdk: async () => ({ VERSION: '0.80.3' }),
+      createServices: async () => ({ settingsManager: null, diagnostics: [] }),
+      createFromServices: async (opts) => {
+        seenOpts = opts;
+        return { session: { bindExtensions() {} } };
+      },
+      createRuntime: async (create, opts) => {
+        const built = await create(opts);
+        return { ...built, services: {}, cwd: opts.cwd };
+      },
+      sessionAdapter: {
+        async createNew() {
+          return { sessionManager: {}, sessionDir: null };
+        },
+        async dispose() {},
+      },
+    });
+
+    await factory.create({
+      agentVersion: { agentVersionId: VER, configJson: {} },
+      agentSession: { agentSessionId: VER },
+      cwd: '/workspace',
+      model: {
+        id: 'm',
+        name: 'M',
+        api: 'openai-completions',
+        provider: 'test',
+        baseUrl: '',
+        reasoning: false,
+        input: ['text'],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 1000,
+        maxTokens: 100,
+      },
+      excludeTools: ['from_call'],
+    });
+
+    assert.ok(seenOpts, 'createFromServices must have been reached');
+    for (const name of [...LOCAL_FILESYSTEM_TOOL_NAMES, 'from_call']) {
+      assert.ok(
+        seenOpts.excludeTools.includes(name),
+        `${name} must reach createAgentSessionFromServices`,
+      );
+    }
+    assert.ok(
+      !seenOpts.excludeTools.includes('from_constructor'),
+      'a per-call list replaces the constructor default',
+    );
   });
 
   it('without excludeTools the SDK keeps them reachable in the registry', async () => {

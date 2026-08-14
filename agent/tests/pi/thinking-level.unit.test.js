@@ -111,13 +111,41 @@ describe('registry thinking_levels project into the pi-ai model', () => {
     assert.deepEqual(supportedThinkingLevels({ supports_reasoning: false }), []);
   });
 
-  it('gives an explicitly declared xhigh the value pi-ai requires', () => {
-    // pi-ai treats an unmapped xhigh as unsupported, unlike every other level.
+  it('refuses to invent a wire value for xhigh', () => {
+    // pi-ai sends the map value verbatim as reasoning_effort, and providers
+    // disagree on xhigh's literal (deepseek and anthropic use "max"; an
+    // OpenAI-compatible gateway accepts only minimal|low|medium|high). Marking
+    // a declared xhigh as supported without a registry-supplied literal would
+    // turn a config typo into a provider 400 for the whole Run.
     const map = toThinkingLevelMap({
       supports_reasoning: true,
       thinking_levels: ['high', 'xhigh'],
     });
-    assert.equal(map.xhigh, 'xhigh');
+    assert.equal(map.xhigh, null, 'xhigh stays unsupported, not mis-mapped');
+    assert.ok(!('high' in map), 'high remains on the provider default');
+    assert.deepEqual(
+      supportedThinkingLevels({
+        supports_reasoning: true,
+        thinking_levels: ['high', 'xhigh'],
+      }),
+      ['high'],
+      'and the capability list must not advertise it either',
+    );
+  });
+
+  it('agrees with pi-ai about what an unconstrained reasoning model offers', () => {
+    // Regression: supportedThinkingLevels used to report all five for an empty
+    // declaration while toThinkingLevelMap returned undefined — and pi-ai drops
+    // xhigh whenever the map does not name it. A capability UI built on the
+    // mismatch would offer a level the session then clamps away.
+    const entry = { supports_reasoning: true, thinking_levels: [] };
+    assert.deepEqual(supportedThinkingLevels(entry), [
+      'minimal',
+      'low',
+      'medium',
+      'high',
+    ]);
+    assert.equal(toThinkingLevelMap(entry), undefined);
   });
 
   it('carries the map onto the real registry entries', () => {

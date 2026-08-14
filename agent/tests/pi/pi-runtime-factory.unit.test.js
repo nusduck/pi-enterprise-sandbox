@@ -637,6 +637,33 @@ describe('immutable AgentVersion model + bindings', () => {
         err.code === 'PI_FEATURE_NOT_ENABLED' &&
         /SANDBOX_\*/.test(err.message),
     );
+    // Unconditional: the message asserts nothing enforces the field, so no
+    // caller-supplied value may wave it through.
+    assert.throws(
+      () =>
+        resolveAgentVersionBindings(bound, {
+          sandboxPolicyBinding: { pretendItIsEnforced: true },
+        }),
+      (err) => err.code === 'PI_FEATURE_NOT_ENABLED',
+    );
+  });
+
+  it('rejects a non-object toolPolicy instead of blaming a missing binding', () => {
+    // `typeof [] === 'object'` used to let an array through as {0: 'bash'},
+    // which the projection read as empty — so the Run died at
+    // PI_BINDING_REQUIRED and never named the malformed config.
+    for (const toolPolicy of [['bash'], 'deny', 42]) {
+      assert.throws(
+        () =>
+          bindAgentVersionConfig({
+            agentVersionId: VER,
+            piSdkVersion: '0.80.3',
+            configJson: { toolPolicy },
+          }),
+        (err) => err.code === 'PI_TOOL_POLICY_INVALID',
+        `toolPolicy: ${JSON.stringify(toolPolicy)}`,
+      );
+    }
   });
 
   it('uses the enterprise prompt when AgentVersion systemPrompt is empty', () => {

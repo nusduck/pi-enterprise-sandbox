@@ -496,57 +496,75 @@ export const THINKING_LEVELS = Object.freeze([
  * Project a registry entry's `thinking_levels` allowlist into the pi-ai
  * `thinkingLevelMap`.
  *
- * pi-ai reads the map as: `null` marks a level unsupported, `undefined` means
- * "use the provider default mapping", and `xhigh` additionally requires an
- * explicit value to count as supported. So the allowlist becomes a set of
- * `null` entries for the levels this model does not offer — declared levels are
- * left unmapped on purpose, because inventing a provider-specific value here
- * would change what is sent on the wire for models that already work.
+ * pi-ai reads the map two ways at once, and both matter here:
+ *
+ *  - support: `null` marks a level unsupported; `undefined` means "supported,
+ *    use the provider default". `xhigh` is the exception — it counts as
+ *    supported only when explicitly mapped (`models.js` getSupportedThinkingLevels).
+ *  - wire value: whatever the map holds is sent verbatim, e.g.
+ *    `reasoning_effort = thinkingLevelMap?.[level] ?? level`
+ *    (`api/openai-completions.js`).
+ *
+ * So a declared level must be left unmapped: inventing a value here would
+ * change what goes on the wire for models that already work. That leaves no way
+ * to express a supported `xhigh` without also naming the provider's literal for
+ * it — providers disagree (`deepseek` and `anthropic` both use `"max"`, while
+ * an OpenAI-compatible gateway only accepts `minimal|low|medium|high`). Rather
+ * than guess and turn a config typo into a 400 for the whole Run, `xhigh` is
+ * mapped to null until the registry carries an explicit wire value for it.
  *
  * Returns undefined when the entry declares nothing, which preserves pi-ai's
- * "every level available" default for reasoning models.
+ * default for reasoning models.
  *
  * @param {ModelEntry} entry
  * @returns {Record<string, string|null> | undefined}
  */
 export function toThinkingLevelMap(entry) {
   if (!entry?.supports_reasoning) return undefined;
-  const declared = Array.isArray(entry.thinking_levels)
-    ? entry.thinking_levels.map((level) => String(level).trim().toLowerCase())
-    : [];
-  const allowed = new Set(declared.filter((level) => THINKING_LEVELS.includes(level)));
+  const allowed = declaredThinkingLevels(entry);
   if (allowed.size === 0) return undefined;
 
   /** @type {Record<string, string|null>} */
   const map = {};
   for (const level of THINKING_LEVELS) {
-    if (!allowed.has(level)) {
+    // xhigh has no portable wire value, so it is never declarable as supported.
+    if (!allowed.has(level) || level === 'xhigh') {
       map[level] = null;
-    } else if (level === 'xhigh') {
-      // pi-ai treats an unmapped xhigh as unsupported, so an explicitly
-      // declared xhigh needs a value to survive getSupportedThinkingLevels.
-      map[level] = 'xhigh';
     }
   }
   return Object.keys(map).length > 0 ? map : undefined;
 }
 
 /**
+ * @param {ModelEntry} entry
+ * @returns {Set<string>}
+ */
+function declaredThinkingLevels(entry) {
+  const declared = Array.isArray(entry?.thinking_levels)
+    ? entry.thinking_levels.map((level) => String(level).trim().toLowerCase())
+    : [];
+  return new Set(declared.filter((level) => THINKING_LEVELS.includes(level)));
+}
+
+/**
  * Thinking levels this entry actually offers, in pi-ai order.
  * `[]` for a non-reasoning model.
+ *
+ * Must agree with what pi-ai's `getSupportedThinkingLevels` will report for the
+ * Model that `toPiModel` produces — an admin or capability UI built on this
+ * should not advertise a level the session then clamps away. That is why
+ * `xhigh` is excluded even in the unconstrained case: pi-ai drops it whenever
+ * the map does not name it, and {@link toThinkingLevelMap} never does.
  *
  * @param {ModelEntry} entry
  * @returns {string[]}
  */
 export function supportedThinkingLevels(entry) {
   if (!entry?.supports_reasoning) return [];
-  const declared = Array.isArray(entry.thinking_levels)
-    ? entry.thinking_levels.map((level) => String(level).trim().toLowerCase())
-    : [];
-  const allowed = new Set(declared.filter((level) => THINKING_LEVELS.includes(level)));
-  // An empty declaration means "unconstrained", matching toThinkingLevelMap.
-  if (allowed.size === 0) return [...THINKING_LEVELS];
-  return THINKING_LEVELS.filter((level) => allowed.has(level));
+  const portable = THINKING_LEVELS.filter((level) => level !== 'xhigh');
+  const allowed = declaredThinkingLevels(entry);
+  if (allowed.size === 0) return portable;
+  return portable.filter((level) => allowed.has(level));
 }
 
 /**

@@ -12,13 +12,10 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import {
-  SettingsManager,
-  DEFAULT_COMPACTION_SETTINGS,
-} from '@earendil-works/pi-coding-agent';
+import { DEFAULT_COMPACTION_SETTINGS } from '@earendil-works/pi-coding-agent';
 
 import { createObservabilityExtension } from '../../src/extensions/observability/index.js';
-import { applyContextPolicy } from '../../src/application/context-policy-service.js';
+import { resolveCompactionSettings } from '../../src/application/context-policy-service.js';
 import {
   bindAgentVersionConfig,
   resolveAgentVersionBindings,
@@ -164,24 +161,20 @@ describe('AgentVersion compaction policy', () => {
     assert.deepEqual(bindings.contextPolicy, {});
 
     // Pi's own defaults: auto-compact on, 16k reserve, 20k kept recent.
-    const manager = SettingsManager.inMemory();
-    applyContextPolicy(manager, {}, { defaults: DEFAULT_COMPACTION_SETTINGS });
-    assert.deepEqual(manager.getCompactionSettings(), {
-      enabled: true,
-      reserveTokens: 16_384,
-      keepRecentTokens: 20_000,
-    });
+    assert.deepEqual(
+      resolveCompactionSettings({}, DEFAULT_COMPACTION_SETTINGS),
+      { enabled: true, reserveTokens: 16_384, keepRecentTokens: 20_000 },
+    );
   });
 
   it('turns compaction off and resizes the window when configured', () => {
-    const manager = SettingsManager.inMemory();
-    applyContextPolicy(manager, {
-      autoCompact: false,
-      reserveTokens: 8_192,
-      keepRecentTokens: 30_000,
-    });
-    assert.equal(manager.getCompactionEnabled(), false);
-    assert.equal(manager.getCompactionReserveTokens(), 8_192);
-    assert.equal(manager.getCompactionKeepRecentTokens(), 30_000);
+    assert.deepEqual(
+      resolveCompactionSettings({
+        autoCompact: false,
+        reserveTokens: 8_192,
+        keepRecentTokens: 30_000,
+      }),
+      { enabled: false, reserveTokens: 8_192, keepRecentTokens: 30_000 },
+    );
   });
 });

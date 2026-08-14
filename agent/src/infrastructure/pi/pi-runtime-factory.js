@@ -21,7 +21,7 @@ import {
   assertEnterpriseExtensions,
 } from '../../extensions/index.js';
 import { resolveEnterpriseSystemPrompt } from './enterprise-system-prompt.js';
-import { applyContextPolicy } from '../../application/context-policy-service.js';
+import { createRunSettingsManager } from '../../application/context-policy-service.js';
 import {
   LOGICAL_SKILL_ROOT,
   LOGICAL_WORKSPACE_ROOT,
@@ -192,6 +192,14 @@ export function normalizeThinkingLevel(value) {
  * @param {unknown} value
  * @returns {boolean}
  */
+function isPlainObject(value) {
+  return value != null && typeof value === 'object' && !Array.isArray(value);
+}
+
+/**
+ * @param {unknown} value
+ * @returns {boolean}
+ */
 function isNonEmptyObject(value) {
   return (
     value != null &&
@@ -266,10 +274,18 @@ export function bindAgentVersionConfig(agentVersion) {
     model = candidate;
   }
 
+  // Arrays are rejected rather than accepted as objects. `typeof [] === 'object'`
+  // used to let `toolPolicy: ["bash"]` through as `{0: "bash"}`, which the
+  // projection in tool-risk-bindings then read as empty — so the Run failed
+  // with "no binding provided" instead of naming the malformed config.
+  if (configJson.toolPolicy != null && !isPlainObject(configJson.toolPolicy)) {
+    throw new PiRuntimeFactoryError(
+      'AgentVersion.toolPolicy must be an object (e.g. { "tools": { "bash": "deny" } })',
+      { code: 'PI_TOOL_POLICY_INVALID' },
+    );
+  }
   const toolPolicy =
-    configJson.toolPolicy && typeof configJson.toolPolicy === 'object'
-      ? /** @type {Record<string, unknown>} */ (configJson.toolPolicy)
-      : {};
+    /** @type {Record<string, unknown>} */ (configJson.toolPolicy) ?? {};
   const sandboxPolicy =
     configJson.sandboxPolicy && typeof configJson.sandboxPolicy === 'object'
       ? /** @type {Record<string, unknown>} */ (configJson.sandboxPolicy)
@@ -460,7 +476,6 @@ export function createSkillAllowlistOverride(allowedSkills) {
  *   tools?: string[],
  *   mcpResolver?: Function | object | null,
  *   toolPolicyBinding?: object | null,
- *   sandboxPolicyBinding?: object | null,
  *   additionalSkillPaths?: string[],
  *   workspaceRoot?: string,
  *   skillRoot?: string,
@@ -483,7 +498,6 @@ export function resolveAgentVersionBindings(bound, options = {}) {
   const tools = options.tools;
   const mcpResolver = options.mcpResolver;
   const toolPolicyBinding = options.toolPolicyBinding;
-  const sandboxPolicyBinding = options.sandboxPolicyBinding;
 
   /** @type {readonly string[]} Extensions actually loaded for this binding. */
   let resolvedExtensionNames = Object.freeze([]);
@@ -564,19 +578,17 @@ export function resolveAgentVersionBindings(bound, options = {}) {
     }
   }
   if (isNonEmptyObject(bound.sandboxPolicy)) {
-    if (sandboxPolicyBinding == null) {
-      // Distinct from PI_BINDING_REQUIRED on purpose. Per-AgentVersion sandbox
-      // limits have no enforcement path today (the Sandbox service takes its
-      // quotas from deployment env), so this is "not implemented", not "the
-      // caller forgot to wire something". Saying so is what lets an operator
-      // act on the error instead of filing it as an internal bug.
-      throw new PiRuntimeFactoryError(
-        'AgentVersion.sandboxPolicy is not supported by this build: sandbox limits are ' +
-          'deployment-level (SANDBOX_* environment variables), not per-AgentVersion. ' +
-          'Remove sandboxPolicy from configJson.',
-        { code: 'PI_FEATURE_NOT_ENABLED' },
-      );
-    }
+    // Unconditional, unlike the bindings above. Those ask "did a caller wire
+    // the thing that enforces this field?"; here nothing in this build can
+    // enforce it at all — the Sandbox service takes its quotas from deployment
+    // env — so accepting a binding would let a caller wave through a policy
+    // that this very message says is unenforced.
+    throw new PiRuntimeFactoryError(
+      'AgentVersion.sandboxPolicy is not supported by this build: sandbox limits are ' +
+        'deployment-level (SANDBOX_* environment variables), not per-AgentVersion. ' +
+        'Remove sandboxPolicy from configJson.',
+      { code: 'PI_FEATURE_NOT_ENABLED' },
+    );
   }
 
   // Enterprise system prompt (mirrors pi buildSystemPrompt shape) so we never
@@ -665,7 +677,6 @@ export function resolveAgentVersionBindings(bound, options = {}) {
     // the model. Never coerce to a concrete level here.
     thinkingLevel: bound.thinkingLevel ?? null,
     toolPolicyBinding: toolPolicyBinding ?? null,
-    sandboxPolicyBinding: sandboxPolicyBinding ?? null,
     // Compaction policy is applied to the run's settings manager, so unlike
     // toolPolicy/sandboxPolicy it needs no separate caller-supplied binding.
     contextPolicy: Object.freeze({ ...(bound.contextPolicy || {}) }),
@@ -778,8 +789,7 @@ export class PiRuntimeFactory {
    *   tools?: string[],
    *   mcpResolver?: Function | object | null,
    *   toolPolicyBinding?: object | null,
-   *   sandboxPolicyBinding?: object | null,
-   *   defaultCwd?: string,
+     *   defaultCwd?: string,
    *   agentDir?: string,
    *   additionalSkillPaths?: string[],
    *   skillRoot?: string,
@@ -802,7 +812,9 @@ export class PiRuntimeFactory {
     this.tools = deps.tools ?? null;
     this.mcpResolver = deps.mcpResolver ?? null;
     this.toolPolicyBinding = deps.toolPolicyBinding ?? null;
-    this.sandboxPolicyBinding = deps.sandboxPolicyBinding ?? null;
+    this.excludeTools = Array.isArray(deps.excludeTools)
+      ? [...deps.excludeTools]
+      : null;
     this.defaultCwd = deps.defaultCwd ?? process.cwd();
     this.agentDir = deps.agentDir ?? null;
     this.additionalSkillPaths = Array.isArray(deps.additionalSkillPaths)
@@ -832,8 +844,7 @@ export class PiRuntimeFactory {
    *   tools?: string[],
    *   mcpResolver?: Function | object | null,
    *   toolPolicyBinding?: object | null,
-   *   sandboxPolicyBinding?: object | null,
-   *   bindExtensions?: boolean,
+     *   bindExtensions?: boolean,
    *   abortHandler?: () => void,
    *   shutdownHandler?: () => void | Promise<void>,
    *   onExtensionError?: (err: object) => void,
@@ -1028,8 +1039,7 @@ export class PiRuntimeFactory {
         tools: input.tools ?? this.tools ?? undefined,
         mcpResolver: mcpBinding,
         toolPolicyBinding: input.toolPolicyBinding ?? this.toolPolicyBinding,
-        sandboxPolicyBinding:
-          input.sandboxPolicyBinding ?? this.sandboxPolicyBinding,
+        excludeTools: input.excludeTools ?? this.excludeTools ?? undefined,
         additionalSkillPaths: skillPaths,
         skillRoot: input.skillRoot ?? this.skillRoot ?? undefined,
         workspaceRoot:
@@ -1133,12 +1143,29 @@ export class PiRuntimeFactory {
                 : base,
             );
         }
+        // AgentVersion owns compaction policy, so the settings manager is built
+        // here rather than left to the SDK default. It must be injected — not
+        // patched after the fact: SettingsManager.save() rebuilds its effective
+        // settings from globalSettings/projectSettings, so anything layered on
+        // top afterwards is dropped the first time a Run persists any setting
+        // (setModel, setThinkingLevel, setAutoCompactionEnabled, …).
+        const settingsManager =
+          typeof sdk.SettingsManager?.inMemory === 'function'
+            ? createRunSettingsManager(sdk.SettingsManager, {
+                cwd: opts.cwd,
+                agentDir: opts.agentDir,
+                policy: bindings.contextPolicy,
+                defaults: sdk.DEFAULT_COMPACTION_SETTINGS,
+              })
+            : null;
+
         const services =
           injectedServices ??
           (await createServices({
             cwd: opts.cwd,
             agentDir: opts.agentDir,
             ...(authStorage ? { authStorage } : {}),
+            ...(settingsManager ? { settingsManager } : {}),
             resourceLoaderOptions,
             ...(mcpBinding?.enabled
               ? { extensionFlagValues: mcpBinding.extensionFlagValues }
@@ -1147,15 +1174,6 @@ export class PiRuntimeFactory {
 
         // Fail-closed on extension load errors before session create.
         assertExtensionsLoadedClean(services, null);
-
-        // AgentVersion owns compaction policy. Applied to this run's settings
-        // manager in memory — never written back to a settings file, which is
-        // shared across tenants. Absent policy keeps the SDK defaults.
-        if (services?.settingsManager) {
-          applyContextPolicy(services.settingsManager, bindings.contextPolicy, {
-            defaults: sdk.DEFAULT_COMPACTION_SETTINGS,
-          });
-        }
 
         /** @type {Record<string, unknown>} */
         const fromServicesOpts = {
