@@ -20,6 +20,9 @@ import {
   createPiMcpResolver,
   loadMcpServerRegistry,
   assertMcpToolArgsAgainstSchema,
+  normalizeMcpToolParameters,
+  sanitizeMcpToolDescription,
+  mcpToolArgumentError,
   PiMcpAdapterError,
   PI_MCP_ADAPTER_PACKAGE,
   PINNED_PI_MCP_ADAPTER_VERSION,
@@ -602,10 +605,10 @@ describe('pi-mcp-adapter-factory', () => {
     });
     const projected = override(base);
     const tool = projected.extensions[0].tools.get('mcp__db__query').definition;
-    await assert.rejects(
-      () => tool.execute('tc1', { q: 123 }),
-      (e) => e.code === 'MCP_TOOL_ARGUMENTS_INVALID',
-    );
+    const invalid = await tool.execute('tc1', { q: 123 });
+    assert.equal(invalid.isError, true);
+    assert.equal(invalid.details.code, 'MCP_TOOL_ARGUMENTS_INVALID');
+    assert.match(invalid.content[0].text, /args\.q does not match inputSchema type/);
     assert.equal(proxyCalled, false);
     await assert.rejects(
       () => tool.execute('tc1', { q: 'x'.repeat(MCP_TOOL_ARGS_MAX_JSON_BYTES) }),
@@ -615,5 +618,88 @@ describe('pi-mcp-adapter-factory', () => {
     const ok = await tool.execute('tc1', { q: 'hello' });
     assert.equal(proxyCalled, true);
     assert.ok(ok);
+  });
+
+  it('projects discovered inputSchema and description onto the model-facing tool', () => {
+    const schema = {
+      $schema: 'https://json-schema.org/draft/2020-12/schema',
+      type: 'object',
+      required: ['urls'],
+      properties: {
+        urls: { type: 'array', items: { type: 'string' } },
+      },
+    };
+    const params = normalizeMcpToolParameters(schema);
+    assert.equal(params.type, 'object');
+    assert.deepEqual(params.required, ['urls']);
+    assert.equal(params.properties.urls.type, 'array');
+    assert.equal(params.$schema, undefined);
+
+    const empty = normalizeMcpToolParameters(null);
+    assert.equal(empty.additionalProperties, true);
+
+    assert.equal(
+      sanitizeMcpToolDescription('  Fetch pages by URL  ', 'fallback'),
+      'Fetch pages by URL',
+    );
+    assert.equal(sanitizeMcpToolDescription('', 'fallback'), 'fallback');
+    const argErr = mcpToolArgumentError('args.urls is required');
+    assert.equal(argErr.isError, true);
+    assert.equal(argErr.details.code, 'MCP_TOOL_ARGUMENTS_INVALID');
+
+    const extensionPath = path.join(os.tmpdir(), 'mcp-ext-schema.ts');
+    const override = createMcpExtensionsOverride({
+      extensionPath,
+      tools: [
+        {
+          serverId: 'exa',
+          toolName: 'web_fetch_exa',
+          name: 'mcp__exa__web_fetch_exa',
+          inputSchema: schema,
+          description: 'Fetch the contents of a list of URLs',
+        },
+      ],
+    });
+    const projected = override({
+      extensions: [
+        {
+          resolvedPath: extensionPath,
+          sourceInfo: { path: extensionPath },
+          tools: new Map([
+            [
+              'mcp',
+              {
+                definition: { async execute() { return { content: [] }; } },
+                sourceInfo: { path: extensionPath },
+              },
+            ],
+          ]),
+        },
+      ],
+    });
+    const tool = projected.extensions[0].tools.get('mcp__exa__web_fetch_exa').definition;
+    assert.equal(tool.description, 'Fetch the contents of a list of URLs');
+    assert.equal(tool.parameters.type, 'object');
+    assert.deepEqual(tool.parameters.required, ['urls']);
+    assert.ok(tool.parameters.properties.urls);
+  });
+
+  it('loadMcpConfig preserves discovery descriptions', () => {
+    const cfg = loadMcpConfig([
+      {
+        serverId: 'exa',
+        enabledTools: ['web_fetch_exa'],
+        toolInputSchemas: {
+          web_fetch_exa: { type: 'object', required: ['urls'] },
+        },
+        toolDescriptions: {
+          web_fetch_exa: 'Fetch URLs with Exa',
+        },
+      },
+    ]);
+    assert.deepEqual(cfg[0].toolDescriptions, {
+      web_fetch_exa: 'Fetch URLs with Exa',
+    });
+    assert.equal(cfg[0].toolInputSchemas.web_fetch_exa.required[0], 'urls');
   });
 });

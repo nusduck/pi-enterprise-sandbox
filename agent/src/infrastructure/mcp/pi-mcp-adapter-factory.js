@@ -24,7 +24,10 @@ import {
   createTraceHeaders,
   normalizeW3cTracestate,
 } from '../sandbox/trace-context.js';
-import { redactPayload } from '../pi/platform-event-projector.js';
+import {
+  redactInlineSecrets,
+  redactPayload,
+} from '../pi/platform-event-projector.js';
 
 export class PiMcpAdapterError extends Error {
   /**
@@ -60,6 +63,10 @@ export const MCP_DISCOVERY_DEFAULT_RETRY_BACKOFF_MS = 750;
 export const MCP_TOOL_ARGS_MAX_JSON_BYTES = 256 * 1024;
 /** Bound result JSON size after await, before deep redact (A4). */
 export const MCP_TOOL_RESULT_MAX_JSON_BYTES = 1024 * 1024;
+/** Model-facing MCP tool description budget (untrusted server text). */
+export const MCP_TOOL_DESCRIPTION_MAX_CHARS = 2_000;
+/** Short prompt snippet derived from the server description. */
+export const MCP_TOOL_SNIPPET_MAX_CHARS = 160;
 
 /** Allowed values for MCP_SERVERS_JSON[].transport (url servers only). */
 export const MCP_TRANSPORT_VALUES = Object.freeze([
@@ -512,6 +519,55 @@ export function assertMcpToolArgsAgainstSchema(schema, value, path = 'args') {
 }
 
 /**
+ * Project a discovered MCP inputSchema as model-facing tool parameters.
+ * TypeBox builders are JSON Schema objects; Pi also accepts a plain schema.
+ * Unknown/empty schemas stay an open object so we do not invent fields.
+ *
+ * @param {unknown} inputSchema
+ */
+export function normalizeMcpToolParameters(inputSchema) {
+  if (inputSchema == null || typeof inputSchema !== 'object' || Array.isArray(inputSchema)) {
+    return Type.Object({}, { additionalProperties: true });
+  }
+  const { $schema, ...normalized } = /** @type {Record<string, unknown>} */ ({
+    .../** @type {Record<string, unknown>} */ (inputSchema),
+  });
+  void $schema;
+  if (normalized.type == null && normalized.properties != null) {
+    normalized.type = 'object';
+  }
+  if (normalized.type == null && normalized.properties == null) {
+    return Type.Object({}, { additionalProperties: true });
+  }
+  return normalized;
+}
+
+/**
+ * @param {unknown} raw
+ * @param {string} fallback
+ */
+export function sanitizeMcpToolDescription(raw, fallback) {
+  const text = typeof raw === 'string' ? raw.trim() : '';
+  const source = text || String(fallback || '').trim();
+  return redactInlineSecrets(source).slice(0, MCP_TOOL_DESCRIPTION_MAX_CHARS);
+}
+
+/**
+ * Argument-shape failures are certain (the MCP server was not invoked).
+ * Return an isError tool result so approved replay can continue the run.
+ *
+ * @param {string} message
+ */
+export function mcpToolArgumentError(message) {
+  const safe = redactInlineSecrets(String(message ?? 'invalid arguments')).slice(0, 512);
+  return {
+    content: [{ type: 'text', text: `Error [MCP_TOOL_ARGUMENTS_INVALID]: ${safe}` }],
+    details: { code: 'MCP_TOOL_ARGUMENTS_INVALID' },
+    isError: true,
+  };
+}
+
+/**
  * Discover tools for every enabled deployment server once during process
  * startup.  The returned logical config is deliberately process-scoped: a
  * changed MCP_SERVERS_JSON requires an Agent restart and is never hot-loaded.
@@ -646,6 +702,8 @@ export async function discoverEnabledMcpServers(options = {}) {
       }
       /** @type {Record<string, unknown>} */
       const toolInputSchemas = {};
+      /** @type {Record<string, string>} */
+      const toolDescriptions = {};
       const toolNames = [];
       for (const tool of connection.tools ?? []) {
         const name = String(tool?.name ?? '').trim();
@@ -653,6 +711,12 @@ export async function discoverEnabledMcpServers(options = {}) {
         toolNames.push(name);
         if (tool?.inputSchema != null && typeof tool.inputSchema === 'object') {
           toolInputSchemas[name] = tool.inputSchema;
+        }
+        if (typeof tool?.description === 'string') {
+          const desc = tool.description.trim();
+          if (desc) {
+            toolDescriptions[name] = desc.slice(0, MCP_TOOL_DESCRIPTION_MAX_CHARS);
+          }
         }
       }
       const uniqueNames = [...new Set(toolNames)].sort();
@@ -662,6 +726,7 @@ export async function discoverEnabledMcpServers(options = {}) {
         status: 'connected',
         toolNames: Object.freeze(uniqueNames),
         toolInputSchemas: Object.freeze(toolInputSchemas),
+        toolDescriptions: Object.freeze(toolDescriptions),
         toolCount: uniqueNames.length,
         rejectedToolCount,
         error: null,
@@ -702,6 +767,7 @@ export async function discoverEnabledMcpServers(options = {}) {
       status: 'unreachable',
       toolNames: Object.freeze([]),
       toolInputSchemas: Object.freeze({}),
+      toolDescriptions: Object.freeze({}),
       toolCount: 0,
       rejectedToolCount: 0,
       error: typeof safeMessage === 'string' ? safeMessage : 'MCP discovery failed',
@@ -735,6 +801,7 @@ export async function discoverEnabledMcpServers(options = {}) {
         status: 'unreachable',
         toolNames: Object.freeze(/** @type {string[]} */ ([])),
         toolInputSchemas: Object.freeze({}),
+        toolDescriptions: Object.freeze({}),
         toolCount: 0,
         rejectedToolCount: 0,
         error: msg,
@@ -750,6 +817,7 @@ export async function discoverEnabledMcpServers(options = {}) {
       serverId: server.serverId,
       enabledTools: server.toolNames,
       toolInputSchemas: server.toolInputSchemas,
+      toolDescriptions: server.toolDescriptions,
       toolPolicy: Object.freeze({ default: 'require_approval' }),
       timeoutSec: Math.max(
         1,
@@ -957,6 +1025,12 @@ async function buildVendorConfig(
       !Array.isArray(logical.toolInputSchemas)
         ? /** @type {Record<string, unknown>} */ (logical.toolInputSchemas)
         : null;
+    const descriptions =
+      logical.toolDescriptions != null &&
+      typeof logical.toolDescriptions === 'object' &&
+      !Array.isArray(logical.toolDescriptions)
+        ? /** @type {Record<string, unknown>} */ (logical.toolDescriptions)
+        : null;
     for (const toolName of logical.enabledTools) {
       tools.push(
         Object.freeze({
@@ -964,6 +1038,10 @@ async function buildVendorConfig(
           toolName,
           name: mcpToolName(logical.serverId, toolName),
           inputSchema: schemas?.[toolName] ?? null,
+          description:
+            typeof descriptions?.[toolName] === 'string'
+              ? descriptions[toolName]
+              : null,
         }),
       );
     }
@@ -1085,7 +1163,13 @@ export async function resolvePiMcpAdapterPackage(deps = {}) {
  * replace its model-facing surface with immutable AgentVersion allowlisted
  * wrappers using the required enterprise names.
  *
- * @param {{ extensionPath: string, tools: readonly {serverId:string,toolName:string,name:string}[] }} binding
+ * @param {{ extensionPath: string, tools: readonly {
+ *   serverId: string,
+ *   toolName: string,
+ *   name: string,
+ *   inputSchema?: unknown,
+ *   description?: string | null,
+ * }[] }} binding
  */
 export function createMcpExtensionsOverride(binding) {
   return function projectMcpTools(base) {
@@ -1111,30 +1195,46 @@ export function createMcpExtensionsOverride(binding) {
     // AgentVersion server/tool allowlist and enterprise mcp__ naming policy.
     extension.tools.clear();
     for (const mapping of binding.tools) {
+      const fallbackDescription = `Call allowlisted MCP tool ${mapping.toolName} on ${mapping.serverId}`;
+      const description = sanitizeMcpToolDescription(
+        mapping.description,
+        fallbackDescription,
+      );
+      const snippetSource =
+        typeof mapping.description === 'string' && mapping.description.trim()
+          ? description
+          : `MCP tool ${mapping.name}`;
+      const promptSnippet =
+        snippetSource.length <= MCP_TOOL_SNIPPET_MAX_CHARS
+          ? snippetSource
+          : `${snippetSource.slice(0, MCP_TOOL_SNIPPET_MAX_CHARS - 1)}…`;
       const definition = {
         name: mapping.name,
         label: `MCP: ${mapping.serverId}/${mapping.toolName}`,
-        description: `Call allowlisted MCP tool ${mapping.toolName} on ${mapping.serverId}`,
-        promptSnippet: `MCP tool ${mapping.name}`,
-        parameters: Type.Object({}, { additionalProperties: true }),
+        description,
+        promptSnippet,
+        parameters: normalizeMcpToolParameters(mapping.inputSchema),
         async execute(toolCallId, params, signal, onUpdate, context) {
-          // A4: reject non-object args early; optional JSON Schema when known.
+          // Argument-shape failures are certain (server not invoked). Return
+          // isError so approved-tool replay can continue instead of failing
+          // the run as APPROVED_TOOL_REPLAY_UNCERTAIN.
           if (params != null && (typeof params !== 'object' || Array.isArray(params))) {
-            throw new PiMcpAdapterError('MCP tool arguments must be a plain object', {
-              code: 'MCP_TOOL_ARGUMENTS_INVALID',
-            });
+            return mcpToolArgumentError('MCP tool arguments must be a plain object');
           }
           if (mapping.inputSchema) {
-            assertMcpToolArgsAgainstSchema(mapping.inputSchema, params ?? {});
+            try {
+              assertMcpToolArgsAgainstSchema(mapping.inputSchema, params ?? {});
+            } catch (error) {
+              return mcpToolArgumentError(
+                error instanceof Error ? error.message : 'invalid MCP tool arguments',
+              );
+            }
           }
           let args;
           try {
             args = JSON.stringify(params ?? {});
-          } catch (error) {
-            throw new PiMcpAdapterError('MCP tool arguments are not JSON serializable', {
-              code: 'MCP_TOOL_ARGUMENTS_INVALID',
-              cause: error,
-            });
+          } catch {
+            return mcpToolArgumentError('MCP tool arguments are not JSON serializable');
           }
           if (Buffer.byteLength(args, 'utf8') > MCP_TOOL_ARGS_MAX_JSON_BYTES) {
             throw new PiMcpAdapterError('MCP tool arguments exceed size limit', {
@@ -1345,11 +1445,35 @@ function intersectMcpConfigWithRegistry(declared, registrySurface) {
       }
       toolInputSchemas = Object.freeze(merged);
     }
+    const surfaceDescriptions =
+      surfaced.toolDescriptions != null &&
+      typeof surfaced.toolDescriptions === 'object'
+        ? /** @type {Record<string, unknown>} */ (surfaced.toolDescriptions)
+        : null;
+    const declaredDescriptions =
+      server.toolDescriptions != null && typeof server.toolDescriptions === 'object'
+        ? /** @type {Record<string, unknown>} */ (server.toolDescriptions)
+        : null;
+    /** @type {Record<string, string> | null} */
+    let toolDescriptions = null;
+    if (surfaceDescriptions || declaredDescriptions) {
+      /** @type {Record<string, string>} */
+      const merged = {};
+      for (const tool of enabledTools) {
+        if (typeof surfaceDescriptions?.[tool] === 'string') {
+          merged[tool] = surfaceDescriptions[tool];
+        } else if (typeof declaredDescriptions?.[tool] === 'string') {
+          merged[tool] = declaredDescriptions[tool];
+        }
+      }
+      toolDescriptions = Object.freeze(merged);
+    }
     out.push(
       Object.freeze({
         ...server,
         enabledTools,
         toolInputSchemas,
+        toolDescriptions,
       }),
     );
   }

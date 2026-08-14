@@ -129,6 +129,8 @@ export function assertNoPlaintextSecrets(value, path, depth = 0) {
  *   toolPolicy: Readonly<{ default: string } & Record<string, unknown>>,
  *   timeoutSec: number,
  *   secretRef: string | null,
+ *   toolInputSchemas?: Readonly<Record<string, unknown>> | null,
+ *   toolDescriptions?: Readonly<Record<string, string>> | null,
  * }>}
  */
 export function loadMcpConfig(raw) {
@@ -329,6 +331,29 @@ export function loadMcpConfig(raw) {
       });
     }
 
+    /** Optional per-tool descriptions from discovery (not AgentVersion config). */
+    let toolDescriptions = null;
+    if (e.toolDescriptions != null) {
+      if (
+        typeof e.toolDescriptions !== 'object' ||
+        Array.isArray(e.toolDescriptions)
+      ) {
+        throw new McpConfigError(`${path}.toolDescriptions must be an object map`, {
+          code: 'MCP_CONFIG_SHAPE',
+        });
+      }
+      /** @type {Record<string, string>} */
+      const normalized = {};
+      for (const [tool, raw] of Object.entries(
+        /** @type {Record<string, unknown>} */ (e.toolDescriptions),
+      )) {
+        if (typeof raw !== 'string') continue;
+        const desc = raw.trim();
+        if (desc) normalized[tool] = desc;
+      }
+      toolDescriptions = Object.freeze(normalized);
+    }
+
     out.push(
       Object.freeze({
         serverId,
@@ -337,6 +362,7 @@ export function loadMcpConfig(raw) {
         timeoutSec,
         secretRef,
         toolInputSchemas,
+        toolDescriptions,
       }),
     );
   }

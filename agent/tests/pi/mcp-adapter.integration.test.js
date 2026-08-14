@@ -172,6 +172,9 @@ describe('real pi-mcp-adapter runtime', () => {
     try {
       const tool = managed.session.getToolDefinition('mcp__mock__echo');
       assert.equal(typeof tool?.execute, 'function');
+      assert.match(String(tool.description), /Echo a value/);
+      assert.equal(tool.parameters?.type, 'object');
+      assert.ok(tool.parameters?.properties?.value);
       const result = await tool.execute(
         'mcp-default-registry-1',
         { value: 'default-registry' },
