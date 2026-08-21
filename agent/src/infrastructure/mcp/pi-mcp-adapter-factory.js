@@ -28,72 +28,58 @@ import {
   redactInlineSecrets,
   redactPayload,
 } from '../pi/event-redaction.js';
+import {
+  MCP_DISCOVERY_DEFAULT_CONCURRENCY,
+  MCP_DISCOVERY_DEFAULT_OVERALL_TIMEOUT_MS,
+  MCP_DISCOVERY_DEFAULT_PER_SERVER_ATTEMPTS,
+  MCP_DISCOVERY_DEFAULT_PER_SERVER_TIMEOUT_MS,
+  MCP_DISCOVERY_DEFAULT_RETRY_BACKOFF_MS,
+  MCP_TOOL_ARGS_MAX_JSON_BYTES,
+  MCP_TOOL_DESCRIPTION_MAX_CHARS,
+  MCP_TOOL_NAME_PATTERN,
+  MCP_TOOL_RESULT_MAX_JSON_BYTES,
+  MCP_TOOL_SNIPPET_MAX_CHARS,
+  PINNED_PI_MCP_ADAPTER_VERSION,
+  PI_MCP_ADAPTER_PACKAGE,
+  PiMcpAdapterError,
+  RESERVED_TRACE_ENV_NAMES,
+  RESERVED_TRACE_HEADER_NAMES,
+  SECRET_REF_PATTERN,
+  SERVER_ID_PATTERN,
+} from './mcp-constants.js';
+import { cloneJson, loadMcpServerRegistry } from './mcp-server-registry.js';
+import {
+  assertMcpToolArgsAgainstSchema,
+  mcpToolArgumentError,
+  normalizeMcpToolParameters,
+  sanitizeMcpToolDescription,
+} from './mcp-tool-schema.js';
 
-export class PiMcpAdapterError extends Error {
-  /**
-   * @param {string} message
-   * @param {{ code?: string, details?: object, cause?: unknown }} [opts]
-   */
-  constructor(message, opts = {}) {
-    super(message, opts.cause === undefined ? undefined : { cause: opts.cause });
-    this.name = 'PiMcpAdapterError';
-    this.code = opts.code ?? 'PI_MCP_ADAPTER_ERROR';
-    this.details = opts.details ?? undefined;
-  }
-}
-
-export const PI_MCP_ADAPTER_PACKAGE = 'pi-mcp-adapter';
-export const PINNED_PI_MCP_ADAPTER_VERSION = '2.11.0';
-
-/** Parallel discovery workers (A5): avoid one hung server blocking all others. */
-export const MCP_DISCOVERY_DEFAULT_CONCURRENCY = 4;
-/** Overall discovery budget for process readiness (A5). */
-export const MCP_DISCOVERY_DEFAULT_OVERALL_TIMEOUT_MS = 60_000;
-/** Per-server discovery hard cap (A5); min()'d with server requestTimeoutMs. */
-export const MCP_DISCOVERY_DEFAULT_PER_SERVER_TIMEOUT_MS = 15_000;
-/**
- * Per-server connect attempts during discovery. Streamable-HTTP servers that
- * briefly fail probe then fall through to SSE (405) need a second chance —
- * cold start / DNS / concurrent probe races are common at worker boot.
- */
-export const MCP_DISCOVERY_DEFAULT_PER_SERVER_ATTEMPTS = 3;
-/** Delay between per-server discovery attempts (ms), multiplied by attempt index. */
-export const MCP_DISCOVERY_DEFAULT_RETRY_BACKOFF_MS = 750;
-/** Bound args JSON size before MCP dispatch (A4). */
-export const MCP_TOOL_ARGS_MAX_JSON_BYTES = 256 * 1024;
-/** Bound result JSON size after await, before deep redact (A4). */
-export const MCP_TOOL_RESULT_MAX_JSON_BYTES = 1024 * 1024;
-/** Model-facing MCP tool description budget (untrusted server text). */
-export const MCP_TOOL_DESCRIPTION_MAX_CHARS = 2_000;
-/** Short prompt snippet derived from the server description. */
-export const MCP_TOOL_SNIPPET_MAX_CHARS = 160;
-
-/** Allowed values for MCP_SERVERS_JSON[].transport (url servers only). */
-export const MCP_TRANSPORT_VALUES = Object.freeze([
-  'streamable-http',
-  'sse',
-  'auto',
-]);
+// Re-exported so this module stays the single entry point for the MCP boundary.
+export {
+  MCP_DISCOVERY_DEFAULT_CONCURRENCY,
+  MCP_DISCOVERY_DEFAULT_OVERALL_TIMEOUT_MS,
+  MCP_DISCOVERY_DEFAULT_PER_SERVER_ATTEMPTS,
+  MCP_DISCOVERY_DEFAULT_PER_SERVER_TIMEOUT_MS,
+  MCP_DISCOVERY_DEFAULT_RETRY_BACKOFF_MS,
+  MCP_TOOL_ARGS_MAX_JSON_BYTES,
+  MCP_TOOL_DESCRIPTION_MAX_CHARS,
+  MCP_TOOL_RESULT_MAX_JSON_BYTES,
+  MCP_TOOL_SNIPPET_MAX_CHARS,
+  MCP_TRANSPORT_VALUES,
+  PI_MCP_ADAPTER_PACKAGE,
+  PINNED_PI_MCP_ADAPTER_VERSION,
+  PiMcpAdapterError,
+} from './mcp-constants.js';
+export { loadMcpServerRegistry } from './mcp-server-registry.js';
+export {
+  assertMcpToolArgsAgainstSchema,
+  mcpToolArgumentError,
+  normalizeMcpToolParameters,
+  sanitizeMcpToolDescription,
+} from './mcp-tool-schema.js';
 
 const require = createRequire(import.meta.url);
-const SECRET_REF_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
-const SERVER_ID_PATTERN = /^[A-Za-z0-9._-]+$/;
-const HEADER_NAME_PATTERN = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
-const ENV_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
-const SENSITIVE_QUERY_KEY = /(?:token|secret|password|api[_-]?key|authorization)/i;
-const RESERVED_TRACE_HEADER_NAMES = new Set([
-  'traceparent',
-  'tracestate',
-  'x-trace-id',
-]);
-const RESERVED_TRACE_ENV_NAMES = new Set([
-  'traceparent',
-  'tracestate',
-  'trace_id',
-  'trace_state',
-]);
-
-const MCP_TOOL_NAME_PATTERN = /^[A-Za-z0-9._-]+$/;
 
 /**
  * Load the connection manager shipped by the pinned adapter.  The adapter is
@@ -132,222 +118,6 @@ function loadPinnedAdapterConnectionManager() {
       { code: 'PI_MCP_ADAPTER_API_UNVERIFIED', cause },
     );
   }
-}
-
-/** @param {unknown} value */
-function cloneJson(value) {
-  return value == null ? value : JSON.parse(JSON.stringify(value));
-}
-
-/**
- * @param {unknown} raw
- * @returns {unknown[]}
- */
-function parseRegistryInput(raw) {
-  if (raw == null || raw === '') return [];
-  if (Array.isArray(raw)) return raw;
-  if (typeof raw === 'string') {
-    try {
-      const parsed = JSON.parse(raw);
-      if (!Array.isArray(parsed)) throw new Error('must be an array');
-      return parsed;
-    } catch (error) {
-      throw new PiMcpAdapterError('MCP_SERVERS_JSON must be valid JSON array', {
-        code: 'MCP_SERVER_REGISTRY_INVALID',
-        cause: error,
-      });
-    }
-  }
-  throw new PiMcpAdapterError('MCP server registry must be an array or JSON array', {
-    code: 'MCP_SERVER_REGISTRY_INVALID',
-  });
-}
-
-/**
- * @param {unknown} raw
- * @param {string} field
- * @param {RegExp} keyPattern
- */
-function parseReferenceMap(raw, field, keyPattern) {
-  if (raw == null) return Object.freeze({});
-  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
-    throw new PiMcpAdapterError(`${field} must be an object of secret references`, {
-      code: 'MCP_SERVER_REGISTRY_INVALID',
-    });
-  }
-  /** @type {Record<string, string>} */
-  const out = {};
-  for (const [key, value] of Object.entries(raw)) {
-    const ref = String(value ?? '').trim();
-    if (!keyPattern.test(key) || !ref) {
-      throw new PiMcpAdapterError(`${field} contains an invalid key or secret reference`, {
-        code: 'MCP_SERVER_REGISTRY_INVALID',
-      });
-    }
-    out[key] = ref;
-  }
-  return Object.freeze(out);
-}
-
-/**
- * Validate the deployment-owned MCP registry. Plaintext credential-bearing
- * fields are rejected; values must be referenced through authTokenRef,
- * envRefs, or headerRefs.
- *
- * @param {unknown} raw
- * @returns {ReadonlyMap<string, Readonly<Record<string, unknown>>>}
- */
-export function loadMcpServerRegistry(raw) {
-  const entries = parseRegistryInput(raw);
-  const registry = new Map();
-  for (let index = 0; index < entries.length; index += 1) {
-    const entry = entries[index];
-    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
-      throw new PiMcpAdapterError(`MCP_SERVERS_JSON[${index}] must be an object`, {
-        code: 'MCP_SERVER_REGISTRY_INVALID',
-      });
-    }
-    const value = /** @type {Record<string, unknown>} */ (entry);
-    const serverId = String(value.id ?? value.serverId ?? '').trim();
-    if (!SERVER_ID_PATTERN.test(serverId)) {
-      throw new PiMcpAdapterError(`MCP_SERVERS_JSON[${index}].id is invalid`, {
-        code: 'MCP_SERVER_REGISTRY_INVALID',
-      });
-    }
-    if (registry.has(serverId)) {
-      throw new PiMcpAdapterError(`duplicate MCP server registry id: ${serverId}`, {
-        code: 'MCP_SERVER_REGISTRY_INVALID',
-      });
-    }
-    for (const forbidden of [
-      'token',
-      'authToken',
-      'bearerToken',
-      'apiKey',
-      'password',
-      'secret',
-      'headers',
-      'env',
-    ]) {
-      if (Object.hasOwn(value, forbidden)) {
-        throw new PiMcpAdapterError(
-          `MCP_SERVERS_JSON[${index}].${forbidden} must not contain plaintext credentials; use a *Ref field`,
-          { code: 'MCP_PLAINTEXT_SECRET_FORBIDDEN' },
-        );
-      }
-    }
-
-    const url = value.url == null ? null : String(value.url).trim();
-    const command = value.command == null ? null : String(value.command).trim();
-    if ((url ? 1 : 0) + (command ? 1 : 0) !== 1) {
-      throw new PiMcpAdapterError(
-        `MCP server ${serverId} must configure exactly one of url or command`,
-        { code: 'MCP_SERVER_REGISTRY_INVALID' },
-      );
-    }
-    if (url) {
-      let parsed;
-      try {
-        parsed = new URL(url);
-      } catch (error) {
-        throw new PiMcpAdapterError(`MCP server ${serverId} has an invalid URL`, {
-          code: 'MCP_SERVER_REGISTRY_INVALID',
-          cause: error,
-        });
-      }
-      if (!['http:', 'https:'].includes(parsed.protocol) || parsed.username || parsed.password) {
-        throw new PiMcpAdapterError(
-          `MCP server ${serverId} URL must be http(s) and must not embed credentials`,
-          { code: 'MCP_SERVER_REGISTRY_INVALID' },
-        );
-      }
-      for (const key of parsed.searchParams.keys()) {
-        if (SENSITIVE_QUERY_KEY.test(key)) {
-          throw new PiMcpAdapterError(
-            `MCP server ${serverId} URL must not embed credential query parameters`,
-            { code: 'MCP_PLAINTEXT_SECRET_FORBIDDEN' },
-          );
-        }
-      }
-    }
-
-    const args = value.args == null ? [] : value.args;
-    if (!Array.isArray(args) || args.some((arg) => typeof arg !== 'string')) {
-      throw new PiMcpAdapterError(`MCP server ${serverId}.args must be strings`, {
-        code: 'MCP_SERVER_REGISTRY_INVALID',
-      });
-    }
-    const authTokenRef =
-      value.authTokenRef == null ? null : String(value.authTokenRef).trim();
-    if (authTokenRef === '') {
-      throw new PiMcpAdapterError(`MCP server ${serverId}.authTokenRef is empty`, {
-        code: 'MCP_SERVER_REGISTRY_INVALID',
-      });
-    }
-    const auth = value.auth == null ? null : value.auth;
-    if (auth !== null && auth !== false && !['bearer', 'oauth'].includes(String(auth))) {
-      throw new PiMcpAdapterError(`MCP server ${serverId}.auth is invalid`, {
-        code: 'MCP_SERVER_REGISTRY_INVALID',
-      });
-    }
-
-    const timeoutMs = value.timeoutMs == null ? null : Number(value.timeoutMs);
-    if (
-      timeoutMs !== null &&
-      (!Number.isInteger(timeoutMs) || timeoutMs < 1_000 || timeoutMs > 300_000)
-    ) {
-      throw new PiMcpAdapterError(
-        `MCP server ${serverId}.timeoutMs must be 1000..300000`,
-        { code: 'MCP_SERVER_REGISTRY_INVALID' },
-      );
-    }
-
-    // transport is advisory for http(s) servers. Vendor adapter probes
-    // streamable-http first then SSE; we retain the declared preference so
-    // discovery retries can prefer re-probing streamable over caching a
-    // transient SSE 405 as a permanent failure.
-    let transport = null;
-    if (value.transport != null && String(value.transport).trim() !== '') {
-      transport = String(value.transport).trim().toLowerCase();
-      if (!MCP_TRANSPORT_VALUES.includes(transport)) {
-        throw new PiMcpAdapterError(
-          `MCP server ${serverId}.transport must be one of ${MCP_TRANSPORT_VALUES.join(', ')}`,
-          { code: 'MCP_SERVER_REGISTRY_INVALID' },
-        );
-      }
-      if (!url && transport) {
-        throw new PiMcpAdapterError(
-          `MCP server ${serverId}.transport is only valid for url servers`,
-          { code: 'MCP_SERVER_REGISTRY_INVALID' },
-        );
-      }
-    } else if (url) {
-      transport = 'auto';
-    }
-
-    registry.set(
-      serverId,
-      Object.freeze({
-        serverId,
-        enabled: value.enabled !== false,
-        url,
-        command,
-        args: Object.freeze([...args]),
-        cwd: value.cwd == null ? null : String(value.cwd).trim() || null,
-        auth,
-        authTokenRef,
-        envRefs: parseReferenceMap(value.envRefs, `${serverId}.envRefs`, ENV_NAME_PATTERN),
-        headerRefs: parseReferenceMap(
-          value.headerRefs,
-          `${serverId}.headerRefs`,
-          HEADER_NAME_PATTERN,
-        ),
-        timeoutMs,
-        transport,
-      }),
-    );
-  }
-  return registry;
 }
 
 /**
@@ -443,129 +213,6 @@ async function mapPool(items, concurrency, fn) {
   return results;
 }
 
-/**
- * Lightweight JSON Schema subset validation for MCP tool args (A4).
- * Supports type, required, properties, additionalProperties:false, enum,
- * and nested object/array. Intentionally small — no $ref / allOf.
- *
- * @param {unknown} schema
- * @param {unknown} value
- * @param {string} [path]
- */
-export function assertMcpToolArgsAgainstSchema(schema, value, path = 'args') {
-  if (schema == null || typeof schema !== 'object' || Array.isArray(schema)) {
-    return;
-  }
-  const s = /** @type {Record<string, unknown>} */ (schema);
-  const types = s.type == null ? null : Array.isArray(s.type) ? s.type : [s.type];
-  if (types) {
-    const ok = types.some((t) => {
-      if (t === 'object') return value != null && typeof value === 'object' && !Array.isArray(value);
-      if (t === 'array') return Array.isArray(value);
-      if (t === 'string') return typeof value === 'string';
-      if (t === 'number') return typeof value === 'number' && Number.isFinite(value);
-      if (t === 'integer') return typeof value === 'number' && Number.isInteger(value);
-      if (t === 'boolean') return typeof value === 'boolean';
-      if (t === 'null') return value === null;
-      return true;
-    });
-    if (!ok) {
-      throw new PiMcpAdapterError(`${path} does not match inputSchema type`, {
-        code: 'MCP_TOOL_ARGUMENTS_INVALID',
-      });
-    }
-  }
-  if (Array.isArray(s.enum) && !s.enum.includes(value)) {
-    throw new PiMcpAdapterError(`${path} is not an allowed enum value`, {
-      code: 'MCP_TOOL_ARGUMENTS_INVALID',
-    });
-  }
-  if (value != null && typeof value === 'object' && !Array.isArray(value)) {
-    const obj = /** @type {Record<string, unknown>} */ (value);
-    const required = Array.isArray(s.required) ? s.required : [];
-    for (const key of required) {
-      if (!(String(key) in obj)) {
-        throw new PiMcpAdapterError(`${path}.${key} is required`, {
-          code: 'MCP_TOOL_ARGUMENTS_INVALID',
-        });
-      }
-    }
-    const properties =
-      s.properties != null && typeof s.properties === 'object' && !Array.isArray(s.properties)
-        ? /** @type {Record<string, unknown>} */ (s.properties)
-        : null;
-    if (properties) {
-      for (const [key, child] of Object.entries(properties)) {
-        if (key in obj) {
-          assertMcpToolArgsAgainstSchema(child, obj[key], `${path}.${key}`);
-        }
-      }
-      if (s.additionalProperties === false) {
-        for (const key of Object.keys(obj)) {
-          if (!(key in properties)) {
-            throw new PiMcpAdapterError(`${path}.${key} is not allowed`, {
-              code: 'MCP_TOOL_ARGUMENTS_INVALID',
-            });
-          }
-        }
-      }
-    }
-  }
-  if (Array.isArray(value) && s.items != null) {
-    for (let i = 0; i < value.length; i += 1) {
-      assertMcpToolArgsAgainstSchema(s.items, value[i], `${path}[${i}]`);
-    }
-  }
-}
-
-/**
- * Project a discovered MCP inputSchema as model-facing tool parameters.
- * TypeBox builders are JSON Schema objects; Pi also accepts a plain schema.
- * Unknown/empty schemas stay an open object so we do not invent fields.
- *
- * @param {unknown} inputSchema
- */
-export function normalizeMcpToolParameters(inputSchema) {
-  if (inputSchema == null || typeof inputSchema !== 'object' || Array.isArray(inputSchema)) {
-    return Type.Object({}, { additionalProperties: true });
-  }
-  const { $schema, ...normalized } = /** @type {Record<string, unknown>} */ ({
-    .../** @type {Record<string, unknown>} */ (inputSchema),
-  });
-  void $schema;
-  if (normalized.type == null && normalized.properties != null) {
-    normalized.type = 'object';
-  }
-  if (normalized.type == null && normalized.properties == null) {
-    return Type.Object({}, { additionalProperties: true });
-  }
-  return normalized;
-}
-
-/**
- * @param {unknown} raw
- * @param {string} fallback
- */
-export function sanitizeMcpToolDescription(raw, fallback) {
-  const text = typeof raw === 'string' ? raw.trim() : '';
-  const source = text || String(fallback || '').trim();
-  return redactInlineSecrets(source).slice(0, MCP_TOOL_DESCRIPTION_MAX_CHARS);
-}
-
-/**
- * Argument-shape failures are certain (the MCP server was not invoked).
- * Return an isError tool result so approved replay can continue the run.
- *
- * @param {string} message
- */
-export function mcpToolArgumentError(message) {
-  const safe = redactInlineSecrets(String(message ?? 'invalid arguments')).slice(0, 512);
-  return {
-    content: [{ type: 'text', text: `Error [MCP_TOOL_ARGUMENTS_INVALID]: ${safe}` }],
-    details: { code: 'MCP_TOOL_ARGUMENTS_INVALID' },
-    isError: true,
-  };
-}
 
 /**
  * Discover tools for every enabled deployment server once during process

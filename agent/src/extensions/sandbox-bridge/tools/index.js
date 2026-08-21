@@ -71,6 +71,26 @@ import {
 } from '../../../domain/tool/tool-request-hash.js';
 import { assertUlid } from '../../../domain/shared/ulid.js';
 import { normalizeProcessStatus } from '../../../domain/process-status.js';
+import { createReadDedup } from './read-dedup.js';
+import {
+  formatExecStreams,
+  formatReadContentWithGutter,
+  formatReadResult,
+  looksLikeReadFileGutterContent,
+} from './read-format.js';
+import {
+  mapBindError,
+  mapTransportError,
+  normalizeProcessTransportResult,
+} from './transport-result.js';
+
+// Re-exported so this module stays the sandbox-bridge tool entry point.
+export {
+  formatExecStreams,
+  formatReadContentWithGutter,
+  formatReadResult,
+  looksLikeReadFileGutterContent,
+} from './read-format.js';
 
 /** JSON envelope budget for read — content is pre-bounded to MAX_READ_CHARS. */
 const MAX_READ_RESULT_BYTES = MAX_READ_CHARS + 8 * 1024;
@@ -82,17 +102,6 @@ const READ_DEDUP_HARD_HITS = 2;
  * Writing that back is almost always a model mistake (Hermes refuses it).
  */
 const READ_GUTTER_LINE_RE = /^\d+\|/;
-
-function normalizeProcessTransportResult(toolName, data) {
-  if (!toolName.startsWith('process_') || !data || typeof data !== 'object') {
-    return data;
-  }
-  if (toolName === 'process_read' && data.status == null) return data;
-  const fallback = toolName === 'process_start' || toolName === 'process_kill'
-    ? 'running'
-    : null;
-  return { ...data, status: normalizeProcessStatus(data.status, fallback) };
-}
 
 /**
  * @param {object} runContext
@@ -121,99 +130,10 @@ export function createSandboxBridgeToolDefinitions(
 ) {
   const identity = buildTransportIdentity(runContext);
   const binder = opts.sandboxRequestBinder ?? null;
-  /**
-   * Hermes-style read dedup within one run/tool-bundle instance.
-   * Key: path + offset + limit → { fingerprint, hits }.
-   * Soft-hit returns a stub (saves context); hard-hit blocks loops.
-   * @type {Map<string, { fingerprint: string, hits: number }>}
-   */
-  const readDedup = new Map();
+  const { finalizeReadResult, invalidateReadDedupForPath } = createReadDedup();
 
   function modeFor(name) {
     return PARALLEL_TOOLS.has(name) ? 'parallel' : 'sequential';
-  }
-
-  /**
-   * @param {string} path
-   * @param {number} offset
-   * @param {number} limit
-   * @param {string} fingerprint
-   * @returns {{ action: 'proceed' } | { action: 'stub' | 'block', hits: number }}
-   */
-  function noteReadDedup(path, offset, limit, fingerprint) {
-    const key = `${path}\0${offset}\0${limit}`;
-    const prev = readDedup.get(key);
-    if (!prev || prev.fingerprint !== fingerprint) {
-      readDedup.set(key, { fingerprint, hits: 0 });
-      // Cap map growth on pathological agents.
-      if (readDedup.size > 256) {
-        const first = readDedup.keys().next().value;
-        if (first != null) readDedup.delete(first);
-      }
-      return { action: 'proceed' };
-    }
-    const hits = prev.hits + 1;
-    prev.hits = hits;
-    if (hits >= READ_DEDUP_HARD_HITS) {
-      return { action: 'block', hits: hits + 1 };
-    }
-    if (hits >= READ_DEDUP_SOFT_HITS) {
-      return { action: 'stub', hits: hits + 1 };
-    }
-    return { action: 'proceed' };
-  }
-
-  /** After write/edit, cached read pages for that path are stale. */
-  function invalidateReadDedupForPath(path) {
-    const prefix = `${path}\0`;
-    for (const key of readDedup.keys()) {
-      if (key.startsWith(prefix)) readDedup.delete(key);
-    }
-  }
-
-  /**
-   * Format + Hermes-style dedup for model-facing read results.
-   * @param {any} data
-   * @param {string} path
-   * @param {number} offset
-   * @param {number} limit
-   */
-  function finalizeReadResult(data, path, offset, limit) {
-    const { payload, fingerprint } = formatReadResult(
-      data,
-      path,
-      offset,
-      limit,
-    );
-    if (payload.binary) {
-      return toolOk(toolResultJson(payload, MAX_READ_RESULT_BYTES));
-    }
-    const dedup = noteReadDedup(path, offset, limit, fingerprint);
-    if (dedup.action === 'block') {
-      return toolErr(
-        'READ_DEDUP_BLOCKED',
-        `You have re-read this exact region ${dedup.hits} times and the content has not changed. Stop re-reading; use the earlier read_file result and proceed.`,
-        { path, offset, limit, alreadyRead: dedup.hits },
-      );
-    }
-    if (dedup.action === 'stub') {
-      return toolOk(
-        toolResultJson(
-          {
-            status: 'unchanged',
-            path,
-            offset,
-            limit,
-            dedup: true,
-            content_returned: false,
-            message:
-              'File region unchanged since the last identical read in this run. Reuse the earlier content instead of re-reading.',
-          },
-          MAX_READ_RESULT_BYTES,
-        ),
-      );
-    }
-    return toolOk(toolResultJson(payload, MAX_READ_RESULT_BYTES));
   }
 
   /**
@@ -1028,319 +948,6 @@ export function createSandboxBridgeToolDefinitions(
     }
   }
   return tools;
-}
-
-/**
- * True when content is dominated by read-tool gutters (`12|...`).
- * @param {string} content
- */
-export function looksLikeReadFileGutterContent(content) {
-  const text = String(content ?? '');
-  if (!text.trim()) return false;
-  const lines = text.split('\n').filter((line) => line.trim().length > 0);
-  if (lines.length < 2) return false;
-  let hits = 0;
-  for (const line of lines) {
-    if (READ_GUTTER_LINE_RE.test(line)) hits += 1;
-  }
-  return hits / lines.length >= 0.7;
-}
-
-/**
- * Hermes/Pi-aligned exec stream bounding for bash/python.
- * @param {any} data
- * @param {{ extras?: Record<string, unknown> }} [opts]
- */
-export function formatExecStreams(data, opts = {}) {
-  const stdout = truncateToolOutput(data?.stdout ?? '', {
-    maxBytes: MAX_EXEC_STREAM_BYTES,
-    maxLines: MAX_EXEC_STREAM_LINES,
-  });
-  const stderr = truncateToolOutput(data?.stderr ?? '', {
-    maxBytes: MAX_EXEC_STREAM_BYTES,
-    maxLines: MAX_EXEC_STREAM_LINES,
-  });
-  /** @type {Record<string, unknown>} */
-  const payload = {
-    exitCode: data?.exitCode ?? data?.exit_code ?? null,
-    stdout: stdout.text,
-    stderr: stderr.text,
-    stdoutTruncated: stdout.truncated,
-    stderrTruncated: stderr.truncated,
-    stdoutTruncatedBy: stdout.truncatedBy,
-    stderrTruncatedBy: stderr.truncatedBy,
-    stdoutTotalBytes: stdout.totalBytes,
-    stderrTotalBytes: stderr.totalBytes,
-    stdoutTotalLines: stdout.totalLines,
-    stderrTotalLines: stderr.totalLines,
-    stdoutOutputLines: stdout.outputLines,
-    stderrOutputLines: stderr.outputLines,
-  };
-  if (stdout.truncated) {
-    payload.stdoutContinuation =
-      `stdout truncated by ${stdout.truncatedBy} (showing ${stdout.outputLines}/${stdout.totalLines} lines, ${stdout.outputBytes}/${stdout.totalBytes} bytes). Re-run with a narrower command (head/tail/rg).`;
-  }
-  if (stderr.truncated) {
-    payload.stderrContinuation =
-      `stderr truncated by ${stderr.truncatedBy} (showing ${stderr.outputLines}/${stderr.totalLines} lines). Re-run with a narrower command.`;
-  }
-  if (opts.extras && typeof opts.extras === 'object') {
-    Object.assign(payload, opts.extras);
-  }
-  return payload;
-}
-
-/**
- * Compact gutter `LINE_NUM|CONTENT` (Hermes / Pi style). Line numbers are
- * 1-based file coordinates: page start at 0-based `offset` → first line is
- * `offset + 1`.
- *
- * @param {string} source
- * @param {number} offset0
- * @param {number} maxLineLength
- * @returns {string}
- */
-export function formatReadContentWithGutter(source, offset0, maxLineLength = MAX_READ_LINE_LENGTH) {
-  const text = String(source ?? '');
-  if (!text) return '';
-  const lines = text.split('\n');
-  const start = Math.max(0, Number(offset0) || 0);
-  const maxLen = Math.max(1, Number(maxLineLength) || MAX_READ_LINE_LENGTH);
-  /** @type {string[]} */
-  const out = [];
-  for (let i = 0; i < lines.length; i += 1) {
-    // Pi's own per-line clamp, so an over-wide line is marked the same way the
-    // model sees it from every other Pi tool.
-    const { text: line } = truncateLine(lines[i], maxLen);
-    out.push(`${start + i + 1}|${line}`);
-  }
-  return out.join('\n');
-}
-
-/**
- * Stable fingerprint for dedup (size + content head/tail hash proxy).
- * @param {string} content
- * @param {unknown} size
- */
-function readContentFingerprint(content, size) {
-  const text = String(content ?? '');
-  const head = text.slice(0, 256);
-  const tail = text.length > 256 ? text.slice(-256) : '';
-  return `${size ?? ''}|${text.length}|${head.length}:${head}|${tail.length}:${tail}`;
-}
-
-/**
- * Build model-facing read payload (Hermes-aligned gutters + char budget).
- * @param {any} data
- * @param {string} path
- * @param {number} requestOffset
- * @param {number} requestLimit
- */
-export function formatReadResult(data, path, requestOffset = 0, requestLimit = DEFAULT_READ_LIMIT) {
-  if (data?.binary || data?.isBinary) {
-    return {
-      payload: {
-        path,
-        binary: true,
-        size: data.size ?? null,
-        mimeType: data.mimeType ?? null,
-      },
-      fingerprint: `binary:${data?.size ?? ''}:${data?.mimeType ?? ''}`,
-    };
-  }
-
-  const offset = Math.max(
-    0,
-    Number(data?.offset ?? requestOffset ?? 0) || 0,
-  );
-  const limit =
-    data?.limit != null
-      ? Number(data.limit)
-      : requestLimit;
-  const source = String(data?.content ?? data?.text ?? '');
-  const guttered = formatReadContentWithGutter(
-    source,
-    offset,
-    MAX_READ_LINE_LENGTH,
-  );
-
-  // Line-count cap first (Hermes max_lines / Pi DEFAULT_MAX_LINES).
-  const lineBound = truncateToolOutput(guttered, {
-    maxBytes: Number.MAX_SAFE_INTEGER,
-    maxLines: DEFAULT_TOOL_OUTPUT_LINES,
-  });
-  let bodyText = lineBound.text;
-  let linesKept = lineBound.completedLines;
-  let truncated = lineBound.truncated || Boolean(data?.truncated);
-  /** @type {string | null} */
-  let truncatedBy = lineBound.truncated ? lineBound.truncatedBy : null;
-  let partialLine = Boolean(lineBound.partialLine);
-
-  // Character budget (Hermes file_read_max_chars) — whole lines only.
-  const charBound = truncateToCharBudget(bodyText, MAX_READ_CHARS);
-  if (charBound.truncated) {
-    bodyText = charBound.text;
-    linesKept = charBound.partialLine ? 0 : charBound.linesKept;
-    truncated = true;
-    truncatedBy = 'chars';
-    partialLine = charBound.partialLine;
-  }
-
-  // Bridge-side bounds override the sandbox cursor so we never skip unread
-  // lines from a partially-rendered page.
-  const bridgeTruncated =
-    lineBound.truncated || charBound.truncated || partialLine;
-  const nextOffset = bridgeTruncated
-    ? offset + linesKept
-    : data?.nextOffset ??
-      data?.next_offset ??
-      (data?.truncated ? offset + linesKept : null);
-
-  /** @type {string | undefined} */
-  let continuation;
-  if (truncated) {
-    if (partialLine && linesKept === 0) {
-      continuation =
-        'Read output is truncated inside the first line; use a narrower range or Python to inspect that line.';
-    } else if (nextOffset != null) {
-      const shownEnd = offset + Math.max(linesKept, 1);
-      continuation =
-        `Showing lines ${offset + 1}-${shownEnd}` +
-        (truncatedBy ? ` (truncated by ${truncatedBy})` : '') +
-        `. Continue with offset=${nextOffset}.`;
-    } else {
-      continuation = 'Read output is truncated.';
-    }
-  }
-
-  const size =
-    data?.size != null && Number.isFinite(Number(data.size))
-      ? Number(data.size)
-      : null;
-  /** @type {string | undefined} */
-  let hint;
-  if (
-    size != null &&
-    size > LARGE_FILE_HINT_BYTES &&
-    (limit == null || limit > 200)
-  ) {
-    hint =
-      'Large file: prefer targeted offset/limit ranges or a section map before reading the whole document.';
-  }
-
-  const payload = {
-    path,
-    content: bodyText,
-    truncated,
-    truncatedBy,
-    totalBytes: Buffer.byteLength(source, 'utf8'),
-    totalLines: lineBound.totalLines,
-    offset,
-    limit: limit ?? null,
-    size,
-    nextOffset,
-    ...(continuation ? { continuation } : {}),
-    ...(hint ? { hint } : {}),
-  };
-
-  return {
-    payload,
-    fingerprint: readContentFingerprint(bodyText, size),
-  };
-}
-
-/**
- * Bind failures stay explicit codes — never UNKNOWN (UNKNOWN is only for
- * ambiguous post-claim transport outcomes later).
- * @param {unknown} err
- */
-function mapBindError(err) {
-  const code =
-    /** @type {any} */ (err)?.code ||
-    (/** @type {any} */ (err)?.name === 'NotFoundError'
-      ? 'TOOL_EXECUTION_NOT_FOUND'
-      : /** @type {any} */ (err)?.name === 'ConflictError'
-        ? 'SANDBOX_REQUEST_BIND_CONFLICT'
-        : 'SANDBOX_REQUEST_BIND_FAILED');
-  const msg =
-    err instanceof Error
-      ? err.message
-      : typeof err === 'string'
-        ? err
-        : 'sandbox request bind failed';
-  // Ordinary bind/ledger failures are never mapped to UNKNOWN.
-  const safeCode =
-    String(code) === 'UNKNOWN' || String(code) === 'TOOL_OUTCOME_UNKNOWN'
-      ? 'SANDBOX_REQUEST_BIND_FAILED'
-      : String(code);
-  return toolErr(safeCode, msg);
-}
-
-/**
- * Stable ledger / one-shot outcome codes from Sandbox internal transport.
- * Must pass through to tool details — never collapse into SANDBOX_ERROR.
- * (Bare "UNKNOWN" remains remapped; "TOOL_OUTCOME_UNKNOWN" is intentional.)
- */
-const PRESERVED_TRANSPORT_ERROR_CODES = new Set([
-  'IN_PROGRESS',
-  'TOOL_OUTCOME_UNKNOWN',
-  'CANCELLED',
-]);
-
-/**
- * Detect authoritative outcome-unknown from transport only.
- * Accepts strict boolean marker and/or exact code TOOL_OUTCOME_UNKNOWN.
- * Does not accept string "true", 1, or arbitrary details.
- *
- * @param {unknown} err
- * @returns {boolean}
- */
-function isTransportOutcomeUnknown(err) {
-  const e = /** @type {any} */ (err);
-  if (!e || typeof e !== 'object') return false;
-  if (e.outcomeUnknown === true) return true;
-  return e.code === 'TOOL_OUTCOME_UNKNOWN';
-}
-
-/**
- * @param {unknown} err
- */
-function mapTransportError(err) {
-  const msg =
-    err instanceof Error
-      ? err.message
-      : typeof err === 'string'
-        ? err
-        : 'sandbox transport error';
-
-  // Ambiguous Sandbox outcome: fixed code + fixed boolean marker only.
-  // Never spread arbitrary error fields into tool details (anti-spoof).
-  if (isTransportOutcomeUnknown(err)) {
-    return toolErr('TOOL_OUTCOME_UNKNOWN', msg, { outcomeUnknown: true });
-  }
-
-  const code =
-    /** @type {any} */ (err)?.code ||
-    (/** @type {any} */ (err)?.message?.includes('SANDBOX_TRANSPORT')
-      ? 'SANDBOX_TRANSPORT_UNAVAILABLE'
-      : 'SANDBOX_ERROR');
-  const codeStr = String(code);
-  // Preserve IN_PROGRESS / CANCELLED. Only remap bare UNKNOWN.
-  const safeCode = PRESERVED_TRANSPORT_ERROR_CODES.has(codeStr)
-    ? codeStr
-    : codeStr === 'UNKNOWN'
-      ? 'SANDBOX_ERROR'
-      : codeStr;
-  // read/readSkill hit a single line wider than the sandbox's max_bytes cap.
-  // Unlike every other read-truncation path, this one has no partial content
-  // or nextOffset to offer — give the model a way forward instead of a bare
-  // "line too large" dead end.
-  const safeMsg =
-    safeCode === 'FILE_LINE_TOO_LARGE'
-      ? `${msg}. This line has no newline within the read byte budget (e.g. minified or single-line data). Use bash with grep/head/cut, or python, to inspect it in byte ranges instead of read.`
-      : msg;
-  // No extra details object — avoid leaking transport internals.
-  return toolErr(safeCode, safeMsg);
 }
 
 export { SANDBOX_TOOL_NAMES };

@@ -92,7 +92,7 @@ const TRANSIENT_MAP_WHITELIST = Object.freeze([
     scope: 'local',
   },
   {
-    rel: 'extensions/sandbox-bridge/tools/index.js',
+    rel: 'extensions/sandbox-bridge/tools/read-dedup.js',
     match: /const\s+readDedup\s*=\s*new\s+Map\s*\(/,
     purpose:
       'Function-local repeated-read convergence guard; discarded with the tool bundle and not durable Run state',
@@ -106,7 +106,7 @@ const TRANSIENT_MAP_WHITELIST = Object.freeze([
     scope: 'local',
   },
   {
-    rel: 'infrastructure/mcp/pi-mcp-adapter-factory.js',
+    rel: 'infrastructure/mcp/mcp-server-registry.js',
     match: /const\s+registry\s*=\s*new\s+Map\s*\(/,
     purpose:
       'Function-local MCP server registry parse result returned to caller; config snapshot, not Run map',
