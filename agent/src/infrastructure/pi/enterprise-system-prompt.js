@@ -107,7 +107,12 @@ When a skills section is present below (or under \`${skillRoot}\`):
 3. Follow the skill instructions; resolve relative paths against the skill directory.
 4. Do not invent skill APIs — load the file first.
 
-If no skills section is listed, you may list \`${skillRoot}\` with tools only when the user asks about installed skills.
+If no skills section is listed, use \`ls\` on \`${skillRoot}\` only when the user asks about installed skills.
+
+## Finding things
+- \`ls\` a directory before guessing paths; \`find\` locates files by name, \`grep\` by contents.
+- Reach for those three rather than \`bash\` with ls/find/rg: they are budgeted, they run in parallel, and they tell you when a result was truncated.
+- Read a file only once you know which one you want.
 
 ## Guidelines
 - Be concise; show paths clearly when working with files

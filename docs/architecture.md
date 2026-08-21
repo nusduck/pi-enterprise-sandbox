@@ -124,7 +124,7 @@ Agent（`pi-coding-agent` SDK）运行在独立 `agent/` 服务中，而非浏�
 
 | Extension | 角色 |
 |-----------|------|
-| `sandbox-bridge` | 注册 `SANDBOX_TOOL_NAMES` 的 10 个工具，全部路由到 Sandbox internal plane |
+| `sandbox-bridge` | 注册 `SANDBOX_TOOL_NAMES` 的 13 个工具，全部路由到 Sandbox internal plane |
 | `enterprise-policy` | 纯拦截器；不注册任何工具，对每次 `tool_call` 给出 allow / require_approval / deny |
 | `observability` | 记录工具结果与审计事件 |
 | `user-interaction` | 注册 `ask_user`。名字不叫 `interaction`，因为那是 registry 必须持续拒绝的 legacy enterprise-agent-kit 包名 |
@@ -228,7 +228,7 @@ Agent Session 生命周期。
 
 ```text
 Agent Host + first-party Extensions
-  sandbox-bridge         → 注册 10 个工具；owner/run/session 绑定、写工具串行互斥
+  sandbox-bridge         → 注册 13 个工具；owner/run/session 绑定、写工具串行互斥
   enterprise-policy      → 拦截每次 tool_call：allow | require_approval | deny
   observability          → 记录工具结果与审计事件
   user-interaction       → 注册 ask_user（必需；由 interaction 这个 legacy 包名改名而来）
@@ -248,7 +248,7 @@ Sandbox internal plane (FastAPI)
 | `require_approval` | 暂停等人审 | **明确拒绝，不创建审批** | 执行 + bypass 审计 |
 | `hard_deny` | 拒绝 | **仍拒绝** | **仍拒绝** |
 
-- 读工具（`read`/`ls`/`find`/`grep`…）可并行；Workspace 写操作按 Agent Session/workspace 串行。是否审批取决于外部副作用策略，而不是 `bash` 这一工具名。
+- 读工具（`read`/`ls`/`find`/`grep`）可并行；Workspace 写操作按 Agent Session/workspace 串行。是否审批取决于外部副作用策略，而不是 `bash` 这一工具名。
 - 策略版本常量 `POLICY_VERSION`（当前 `2026-07-15.1`）写入审批响应与审计 meta，便于追溯。
 - `SANDBOX_POLICY_PROFILE=strict|balanced` 在 Agent 与 Sandbox 对称生效；`balanced` 仅在 required Bubblewrap 已通过配置校验时激活，并只放行常见包管理命令的审批前置门。`SANDBOX_NETWORK_MODE` 仍是网络权限唯一事实源，生产固定 `strict`。
 - approval key 由 durable `run_id`、Sandbox session、工具名、稳定 SDK

@@ -1,5 +1,5 @@
 /**
- * sandbox-bridge 10 tools + transport identity (PR-06 B1).
+ * sandbox-bridge 13 tools + transport identity (PR-06 B1).
  */
 
 import { describe, it } from 'node:test';
@@ -61,6 +61,9 @@ function createFakeBinder(binds = []) {
 function createFakeTransport(calls) {
   const methods = [
     'readFile',
+    'lsFiles',
+    'findFiles',
+    'grepFiles',
     'writeFile',
     'editFile',
     'bash',
@@ -78,6 +81,24 @@ function createFakeTransport(calls) {
       calls.push({ method: m, payload });
       if (m === 'readFile') {
         return { content: 'hello', offset: 0, size: 5 };
+      }
+      if (m === 'lsFiles' || m === 'findFiles') {
+        return {
+          items: [{ path: 'src/app.js', name: 'app.js', type: 'file', size: 12 }],
+          skipped: [],
+          stats: { scanned: 1, matched: 1 },
+          truncated: false,
+          stop_reason: null,
+        };
+      }
+      if (m === 'grepFiles') {
+        return {
+          matches: [{ path: 'src/app.js', line: 3, column: 1, text: 'const x = 1;' }],
+          skipped: [],
+          stats: { scanned: 1, matched: 1 },
+          truncated: false,
+          stop_reason: null,
+        };
       }
       if (m === 'writeFile') return { size: 3 };
       if (m === 'editFile') return { hash: 'abc', version: '2' };
@@ -159,18 +180,23 @@ function capturePiApi() {
 }
 
 describe('SANDBOX_TOOL_NAMES / allowlist', () => {
-  it('is exact 10 names and equals ENTERPRISE_DEFAULT_TOOLS', () => {
-    assert.equal(SANDBOX_TOOL_NAMES.length, 10);
+  it('is exact 13 names and equals ENTERPRISE_DEFAULT_TOOLS', () => {
+    assert.equal(SANDBOX_TOOL_NAMES.length, 13);
     assert.deepEqual([...ENTERPRISE_DEFAULT_TOOLS], [...SANDBOX_TOOL_NAMES]);
     assert.ok(SANDBOX_TOOL_NAMES.includes('read'));
     assert.ok(SANDBOX_TOOL_NAMES.includes('write'));
     assert.ok(SANDBOX_TOOL_NAMES.includes('edit'));
     assert.ok(SANDBOX_TOOL_NAMES.includes('bash'));
+    // Sandbox-routed replacements for the SDK's local-filesystem tools, which
+    // stay permanently excluded because they would read the Agent container.
+    for (const name of ['ls', 'find', 'grep']) {
+      assert.ok(SANDBOX_TOOL_NAMES.includes(name), name);
+    }
   });
 });
 
 describe('sandbox-bridge registration', () => {
-  it('registers exactly 10 tools including default read/write/edit/bash', async () => {
+  it('registers exactly 13 tools including default read/write/edit/bash', async () => {
     const calls = [];
     const transport = createFakeTransport(calls);
     const factories = createEnterpriseExtensionBundle(RUN_A, {
@@ -179,7 +205,7 @@ describe('sandbox-bridge registration', () => {
     });
     const { tools, pi } = capturePiApi();
     await factories[0](pi);
-    assert.equal(tools.length, 10);
+    assert.equal(tools.length, 13);
     assert.deepEqual(
       tools.map((t) => t.name),
       [...SANDBOX_TOOL_NAMES],
@@ -190,6 +216,10 @@ describe('sandbox-bridge registration', () => {
     // executionMode: reads parallel, writes sequential
     assert.equal(tools.find((t) => t.name === 'read').executionMode, 'parallel');
     assert.equal(tools.find((t) => t.name === 'bash').executionMode, 'sequential');
+    // Search is read-only, so it may fan out alongside read.
+    for (const name of ['ls', 'find', 'grep']) {
+      assert.equal(tools.find((t) => t.name === name).executionMode, 'parallel', name);
+    }
   });
 
   it('each tool hits transport once with frozen identity + exact toolCallId (model cannot override)', async () => {
@@ -263,6 +293,9 @@ describe('sandbox-bridge registration', () => {
         'submit_artifact',
         { path: 'out/report.pdf', displayName: 'r', toolCallId: 'spoofed' },
       ],
+      ['ls', { path: '.', toolCallId: 'spoofed' }],
+      ['find', { pattern: '*.js', toolCallId: 'spoofed' }],
+      ['grep', { query: 'const', toolCallId: 'spoofed' }],
     ];
 
     for (let i = 0; i < invocations.length; i += 1) {
@@ -285,8 +318,8 @@ describe('sandbox-bridge registration', () => {
       );
     }
 
-    assert.equal(calls.length, 10);
-    assert.equal(binds.length, 10);
+    assert.equal(calls.length, 13);
+    assert.equal(binds.length, 13);
     for (let i = 0; i < calls.length; i += 1) {
       const c = calls[i];
       const [name] = invocations[i];
@@ -396,7 +429,7 @@ describe('sandbox-bridge registration', () => {
     assert.equal(Object.hasOwn(result.details, 'description_truncated'), false);
   });
 
-  it('rejects invalid toolCallId before transport (all 10 tools, zero calls)', async () => {
+  it('rejects invalid toolCallId before transport (all 13 tools, zero calls)', async () => {
     const badIds = [
       '',
       '  leading',
@@ -418,6 +451,9 @@ describe('sandbox-bridge registration', () => {
       process_read: { processId: '01K0G2PAV8FPMVC9QHJG7JPN5C' },
       process_kill: { processId: '01K0G2PAV8FPMVC9QHJG7JPN5C' },
       submit_artifact: { path: 'out/r.pdf' },
+      ls: { path: '.' },
+      find: { pattern: '*.js' },
+      grep: { query: 'x' },
     };
 
     for (const bad of badIds) {

@@ -21,9 +21,10 @@ from sandbox.routers import (
     health,
     internal_executions,
     internal_files,
-    mcp_internal,
     internal_processes,
+    internal_search,
     internal_sessions,
+    mcp_internal,
 )
 from sandbox.artifact.api import internal as internal_artifacts
 from sandbox.security.internal_http_auth import set_replay_store
@@ -432,6 +433,7 @@ app.include_router(internal_executions.router)
 app.include_router(internal_artifacts.router)
 app.include_router(internal_sessions.router)
 app.include_router(internal_processes.router)
+app.include_router(internal_search.router)
 app.include_router(mcp_internal.router)
 
 

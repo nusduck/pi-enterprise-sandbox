@@ -13,6 +13,9 @@
 /** Methods required for full 10-tool coverage. */
 export const SANDBOX_TRANSPORT_METHODS = Object.freeze([
   'readFile',
+  'lsFiles',
+  'findFiles',
+  'grepFiles',
   'writeFile',
   'editFile',
   'bash',

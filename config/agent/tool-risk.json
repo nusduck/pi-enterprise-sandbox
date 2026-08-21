@@ -39,6 +39,9 @@
 
   "tools": {
     "read": "low",
+    "ls": "low",
+    "find": "low",
+    "grep": "low",
     "write": "low",
     "edit": "low",
     "bash": "low",

@@ -72,6 +72,7 @@ import {
 import { assertUlid } from '../../../domain/shared/ulid.js';
 import { normalizeProcessStatus } from '../../../domain/process-status.js';
 import { createReadDedup } from './read-dedup.js';
+import { createSearchToolDefinitions } from './search-tools.js';
 import {
   formatExecStreams,
   formatReadContentWithGutter,
@@ -102,6 +103,7 @@ const READ_DEDUP_HARD_HITS = 2;
  * Writing that back is almost always a model mistake (Hermes refuses it).
  */
 const READ_GUTTER_LINE_RE = /^\d+\|/;
+
 
 /**
  * @param {object} runContext
@@ -257,7 +259,7 @@ export function createSandboxBridgeToolDefinitions(
       promptGuidelines: [
         'Use read to inspect files instead of cat or sed.',
         'Keep following nextOffset until the needed range is complete; do not re-read the same offset/limit page.',
-        'For large files, start with a section map (headings/grep) then read targeted ranges.',
+        'For large files, locate the region with grep first, then read targeted ranges.',
       ],
       parameters: Type.Object({
         path: Type.String({ maxLength: MAX_PATH_LEN }),
@@ -324,6 +326,9 @@ export function createSandboxBridgeToolDefinitions(
         return finalizeReadResult(inv.data, norm.path, offset, limit);
       },
     },
+
+    // ── ls / find / grep ───────────────────────────────────────────────
+    ...createSearchToolDefinitions({ invoke, modeFor }),
 
     // ── write ──────────────────────────────────────────────────────────
     {
@@ -497,10 +502,10 @@ export function createSandboxBridgeToolDefinitions(
       name: 'bash',
       label: 'Bash',
       description:
-        `Run a shell command in the sandbox workspace. stdout and stderr are each capped at ~${Math.floor(MAX_EXEC_STREAM_BYTES / 1024)}KB / ${MAX_EXEC_STREAM_LINES} lines (whichever first). Prefer read for files; use head/tail/rg when output may be large. Default timeout ${DEFAULT_BASH_TIMEOUT_SEC}s (max ${MAX_BASH_TIMEOUT_SEC}s).`,
+        `Run a shell command in the sandbox workspace. stdout and stderr are each capped at ~${Math.floor(MAX_EXEC_STREAM_BYTES / 1024)}KB / ${MAX_EXEC_STREAM_LINES} lines (whichever first). Prefer read for files and grep for searching; use head/tail when output may be large. Default timeout ${DEFAULT_BASH_TIMEOUT_SEC}s (max ${MAX_BASH_TIMEOUT_SEC}s).`,
       promptSnippet: 'Run sandbox bash commands',
       promptGuidelines: [
-        'Use read for file inspection; use bash for commands and narrow diagnostics.',
+        'Use read for file inspection and ls/find/grep for locating things; use bash for commands and narrow diagnostics.',
         'Prefer bounded output such as head, tail, or focused filters; never dump whole large files via cat.',
         'On truncation, narrow the command rather than re-running the same dump.',
       ],

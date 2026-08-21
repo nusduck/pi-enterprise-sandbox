@@ -287,6 +287,9 @@ Base URL: `http://sandbox:8081`（Docker 内网）
 |------|------|----------|
 | `POST` | `/internal/v1/sessions/ensure` | Session 绑定 |
 | `POST` | `/internal/v1/files/read` | `read` |
+| `POST` | `/internal/v1/files/ls` | `ls` |
+| `POST` | `/internal/v1/files/find` | `find` |
+| `POST` | `/internal/v1/files/grep` | `grep` |
 | `POST` | `/internal/v1/files/write` | `write` |
 | `POST` | `/internal/v1/files/edit` | `edit` |
 | `POST` | `/internal/v1/skills/read` | Skill 读取（只读根） |
@@ -300,11 +303,15 @@ Base URL: `http://sandbox:8081`（Docker 内网）
 | `POST` | `/internal/v1/artifacts/download` | 交付物取回 |
 | — | `/internal/mcp/v1/*` | `sandbox-mcp` facade（独立部署，见 [`sandbox-mcp.md`](./sandbox-mcp.md)） |
 
-这 10 个 sandbox-bridge 工具（`read` `write` `edit` `bash` `python`
-`process_start` `process_status` `process_read` `process_kill`
+这 13 个 sandbox-bridge 工具（`read` `ls` `find` `grep` `write` `edit` `bash`
+`python` `process_start` `process_status` `process_read` `process_kill`
 `submit_artifact`）是模型能看到的全部 Sandbox 工具面，由
 `agent/src/extensions/sandbox-bridge/constants.js` 的 `SANDBOX_TOOL_NAMES` 固定，
 并有守卫测试断言其中不含任何 SQL/DSN 工具。
+
+`ls` / `find` / `grep` 是 SDK 同名本地工具的沙箱替代品：那三个因为会读 Agent
+容器的文件系统而被永久排除（`LOCAL_FILESYSTEM_TOOL_NAMES`），此处的版本走
+internal plane、只读、有预算、可与 `read` 并行。
 
 ---
 

@@ -4,6 +4,7 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import { SANDBOX_TRANSPORT_METHODS } from '../../src/extensions/sandbox-bridge/transport.js';
 import {
   REQUIRED_EXTENSION_NAMES,
   createEnterpriseExtensionBundle,
@@ -362,19 +363,10 @@ describe('observability provider hooks (unit, fake ExtensionAPI)', () => {
 
   it('session_start can be triggered via registered handler', async () => {
     let started = 0;
+    // Built from the production list so a new transport method cannot make
+    // this fake silently stale.
     const transport = Object.fromEntries(
-      [
-        'readFile',
-        'writeFile',
-        'editFile',
-        'bash',
-        'python',
-        'processStart',
-        'processStatus',
-        'processRead',
-        'processKill',
-        'submitArtifact',
-      ].map((m) => [m, async () => ({})]),
+      SANDBOX_TRANSPORT_METHODS.map((m) => [m, async () => ({})]),
     );
     const factories = createEnterpriseExtensionBundle(RUN_CTX, {
       sandboxTransport: transport,
