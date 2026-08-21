@@ -84,9 +84,8 @@ jobs:
 
       - name: Syntax-check Agent sources
         run: |
-          find agent -name '*.js' -type f ! -path '*/node_modules/*' ! -path '*/testing/*' -print0 \
+          find agent -name '*.js' -type f ! -path '*/node_modules/*' -print0 \
             | xargs -0 -n1 node --check
-          node --check agent/testing/fake-openai-provider.js
 
       - name: Import/listen + fake provider smoke
         run: node --test agent/tests/listen-smoke.test.js agent/tests/fake-openai-provider.test.js
