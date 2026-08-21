@@ -7,7 +7,7 @@
  * Every decision is audited via auditSink. If audit fails, allow is fail-closed.
  */
 
-import { redactPayload } from '../../infrastructure/pi/platform-event-projector.js';
+import { redactPayload } from '../../infrastructure/pi/event-redaction.js';
 import { evaluateLocalArgGuards } from './arg-guards.js';
 import {
   makePolicyDecision,

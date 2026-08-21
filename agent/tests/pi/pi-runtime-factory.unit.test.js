@@ -10,6 +10,7 @@ import {
   assertModelShape,
   assertSdkVersionPinned,
   bindAgentVersionConfig,
+  createSkillAllowlistOverride,
   resolveConcreteModel,
   resolveAgentVersionBindings,
 } from '../../src/infrastructure/pi/pi-runtime-factory.js';
@@ -494,7 +495,7 @@ describe('immutable AgentVersion model + bindings', () => {
     );
   });
 
-  it('fail-closes non-empty extensions/skills/mcp without bindings', () => {
+  it('fail-closes non-empty extensions/mcp without bindings', () => {
     const bound = bindAgentVersionConfig({
       agentVersionId: VER,
       piSdkVersion: '0.80.3',
@@ -576,6 +577,93 @@ describe('immutable AgentVersion model + bindings', () => {
     assert.match(ok.resourceLoaderOptions.systemPrompt, /\/home\/sandbox\/skill/);
     assert.deepEqual(ok.additionalSkillPaths, ['/home/sandbox/skill']);
     assert.equal(ok.resourceLoaderOptions.noExtensions, true);
+  });
+
+  it('realises AgentVersion.skills as an allowlist without a caller binding', () => {
+    // Regression: this field used to fail every Run with PI_BINDING_REQUIRED
+    // because no caller ever built the skillsOverride it demanded.
+    const bound = bindAgentVersionConfig({
+      agentVersionId: VER,
+      piSdkVersion: '0.80.3',
+      configJson: { skills: ['pdf-report', 'sql-review'] },
+    });
+    const bindings = resolveAgentVersionBindings(bound, {});
+    assert.equal(typeof bindings.skillsOverride, 'function');
+    assert.equal(
+      typeof bindings.resourceLoaderOptions.skillsOverride,
+      'function',
+      'the override must reach the Pi ResourceLoader',
+    );
+
+    const filtered = bindings.skillsOverride({
+      skills: [
+        { name: 'pdf-report', description: 'a' },
+        { name: 'sql-review', description: 'b' },
+        { name: 'not-listed', description: 'c' },
+      ],
+      diagnostics: [],
+    });
+    assert.deepEqual(
+      filtered.skills.map((s) => s.name),
+      ['pdf-report', 'sql-review'],
+    );
+    assert.equal(filtered.diagnostics.length, 0);
+  });
+
+  it('warns rather than fails when an allowlisted skill is not installed', () => {
+    const override = createSkillAllowlistOverride(['present', 'missing']);
+    const out = override({
+      skills: [{ name: 'present', description: 'a' }],
+      diagnostics: [{ type: 'warning', message: 'pre-existing' }],
+    });
+    assert.deepEqual(out.skills.map((s) => s.name), ['present']);
+    assert.equal(out.diagnostics.length, 2, 'pre-existing diagnostics survive');
+    assert.match(out.diagnostics[1].message, /missing/);
+    assert.equal(out.diagnostics[1].type, 'warning');
+  });
+
+  it('reports sandboxPolicy as unsupported, not as a missing binding', () => {
+    // The distinction is what an operator acts on: nothing in this build can
+    // enforce per-AgentVersion sandbox limits, so "wire a binding" would be
+    // the wrong instruction.
+    const bound = bindAgentVersionConfig({
+      agentVersionId: VER,
+      piSdkVersion: '0.80.3',
+      configJson: { sandboxPolicy: { networkEgress: false } },
+    });
+    assert.throws(
+      () => resolveAgentVersionBindings(bound, {}),
+      (err) =>
+        err.code === 'PI_FEATURE_NOT_ENABLED' &&
+        /SANDBOX_\*/.test(err.message),
+    );
+    // Unconditional: the message asserts nothing enforces the field, so no
+    // caller-supplied value may wave it through.
+    assert.throws(
+      () =>
+        resolveAgentVersionBindings(bound, {
+          sandboxPolicyBinding: { pretendItIsEnforced: true },
+        }),
+      (err) => err.code === 'PI_FEATURE_NOT_ENABLED',
+    );
+  });
+
+  it('rejects a non-object toolPolicy instead of blaming a missing binding', () => {
+    // `typeof [] === 'object'` used to let an array through as {0: 'bash'},
+    // which the projection read as empty — so the Run died at
+    // PI_BINDING_REQUIRED and never named the malformed config.
+    for (const toolPolicy of [['bash'], 'deny', 42]) {
+      assert.throws(
+        () =>
+          bindAgentVersionConfig({
+            agentVersionId: VER,
+            piSdkVersion: '0.80.3',
+            configJson: { toolPolicy },
+          }),
+        (err) => err.code === 'PI_TOOL_POLICY_INVALID',
+        `toolPolicy: ${JSON.stringify(toolPolicy)}`,
+      );
+    }
   });
 
   it('uses the enterprise prompt when AgentVersion systemPrompt is empty', () => {

@@ -10,16 +10,13 @@ import { tmpdir } from 'node:os';
 import {
   ModelRegistryError,
   SEED_MODELS,
-  aggregateUsageFromMessages,
   applyEnvOverrides,
   buildRegistry,
-  estimateCost,
   listEnabledModels,
   loadModelsFromFile,
   normalizeModelEntry,
   resolveModel,
   toPiModel,
-  usageFromProviderResponse,
 } from '../src/infrastructure/model-registry.js';
 
 describe('normalizeModelEntry', () => {
@@ -205,58 +202,8 @@ describe('disabled model', () => {
 });
 
 describe('usage recording', () => {
-  it('estimateCost uses per-mtok pricing', () => {
-    const cost = estimateCost(
-      { input_per_mtok: 1, output_per_mtok: 2, cache_read_per_mtok: 0, cache_write_per_mtok: 0 },
-      { input: 1_000_000, output: 500_000 },
-    );
-    assert.equal(cost.input, 1);
-    assert.equal(cost.output, 1);
-    assert.equal(cost.total, 2);
-  });
 
-  it('aggregateUsageFromMessages sums assistant usage and attaches model_id', () => {
-    const reg = buildRegistry({ seed: SEED_MODELS, filePath: null });
-    const entry = resolveModel('deepseek-v4-flash', {
-      registry: reg,
-      applyOverrides: false,
-    });
-    const usage = aggregateUsageFromMessages(
-      [
-        { role: 'user', content: 'hi' },
-        {
-          role: 'assistant',
-          usage: { input: 100, output: 50, cacheRead: 10, cacheWrite: 0 },
-        },
-        {
-          role: 'assistant',
-          usage: { input: 20, output: 30, cacheRead: 0, cacheWrite: 5 },
-        },
-      ],
-      entry,
-    );
-    assert.equal(usage.input_tokens, 120);
-    assert.equal(usage.output_tokens, 80);
-    assert.equal(usage.cache_read_tokens, 10);
-    assert.equal(usage.cache_write_tokens, 5);
-    assert.equal(usage.total_tokens, 215);
-    assert.equal(usage.model_id, 'deepseek-v4-flash');
-    assert.equal(usage.provider, 'llmio');
-    assert.ok(usage.cost.total > 0);
-  });
 
-  it('usageFromProviderResponse maps OpenAI-style usage', () => {
-    const reg = buildRegistry({ seed: SEED_MODELS, filePath: null });
-    const entry = resolveModel('gpt-5.5', { registry: reg, applyOverrides: false });
-    const usage = usageFromProviderResponse(
-      { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 },
-      entry,
-    );
-    assert.equal(usage.input_tokens, 10);
-    assert.equal(usage.output_tokens, 5);
-    assert.equal(usage.model_id, 'gpt-5.5');
-    assert.ok(typeof usage.cost.total === 'number');
-  });
 });
 
 describe('env overrides (backward compatible)', () => {
@@ -321,6 +268,38 @@ describe('file-backed registry', () => {
       assert.equal(custom.max_output_tokens, 7);
     } finally {
       rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('cost accounting is pi-ai’s job', () => {
+  it('registry pricing reaches the pi-ai Model, which is what computes cost', () => {
+    // pi-ai fills usage.cost from Model.cost on every assistant message
+    // (pi-ai/dist/models.js). The registry used to run the same arithmetic on
+    // the same numbers; that duplicate is gone, and this pins the one path
+    // that remains: catalog pricing -> Model.cost -> pi-ai usage.cost.
+    const entry = resolveModel('deepseek-v4-pro', { env: {} });
+    const model = toPiModel(entry, { baseUrl: 'http://localhost' });
+    assert.deepEqual(model.cost, {
+      input: entry.pricing.input_per_mtok,
+      output: entry.pricing.output_per_mtok,
+      cacheRead: entry.pricing.cache_read_per_mtok,
+      cacheWrite: entry.pricing.cache_write_per_mtok,
+    });
+  });
+
+  it('exports no second cost engine', async () => {
+    const mod = await import('../src/infrastructure/model-registry.js');
+    for (const gone of [
+      'estimateCost',
+      'aggregateUsageFromMessages',
+      'usageFromProviderResponse',
+    ]) {
+      assert.equal(
+        mod[gone],
+        undefined,
+        `${gone} duplicates pi-ai cost accounting — do not reintroduce it`,
+      );
     }
   });
 });

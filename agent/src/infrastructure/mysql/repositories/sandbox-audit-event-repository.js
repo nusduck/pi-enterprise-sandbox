@@ -10,7 +10,7 @@ import { applyOwnerScope, requireOwnerScope } from '../ownership.js';
 import { mapSandboxAuditEvent, toMysqlDateTime } from '../row-mappers.js';
 import { ConflictError, NotFoundError } from '../errors.js';
 import { assertUlid } from '../../../domain/shared/ulid.js';
-import { redactPayload } from '../../pi/platform-event-projector.js';
+import { redactPayload } from '../../pi/event-redaction.js';
 
 const EVENT_TYPE_MAX = 128;
 const MAX_PAYLOAD_BYTES = 64 * 1024;

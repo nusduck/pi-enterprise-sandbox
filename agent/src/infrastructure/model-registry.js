@@ -9,6 +9,26 @@
  * Config-backed with optional file seed. Env overrides (MODEL_ID,
  * MODEL_CONTEXT_WINDOW, MODEL_MAX_TOKENS) remain backward-compatible but are
  * no longer the sole source of capability constants on the hot path.
+ *
+ * Why this is not `pi.registerProvider()`
+ * ---------------------------------------
+ * Pi's ExtensionAPI can register a whole provider with its models, and that is
+ * the right tool for an interactive client where the user picks a model from a
+ * list. It does not fit here, for two reasons:
+ *
+ *  1. Ordering. `registerProvider` is only reachable from inside an extension
+ *     factory, and extensions bind *after* `createAgentSessionFromServices`
+ *     has already been handed the model. A Run's model is AgentVersion policy
+ *     decided before the session exists, so registering a catalog the session
+ *     will never consult buys nothing.
+ *  2. Credentials. `ProviderConfig.apiKey` is a literal or env reference baked
+ *     into the registration. The current path keeps the LLMIO key in a
+ *     request-scoped `AuthStorage.inMemory` and out of the Model descriptor
+ *     entirely (`assertModelShape` actively rejects credential fields on it).
+ *     Moving the key into a per-Run provider registration widens that boundary.
+ *
+ * So this module stays the enterprise catalog and `toPiModel` stays the seam
+ * that hands one concrete pi-ai Model to the runtime.
  */
 import { readFileSync, existsSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
@@ -196,18 +216,6 @@ export const SEED_MODELS = Object.freeze([
  * @property {string[]} thinking_levels
  * @property {ModelPricing} pricing
  * @property {boolean} enabled
- */
-
-/**
- * @typedef {object} TokenUsage
- * @property {number} input_tokens
- * @property {number} output_tokens
- * @property {number} cache_read_tokens
- * @property {number} cache_write_tokens
- * @property {number} total_tokens
- * @property {{ input: number, output: number, cache_read: number, cache_write: number, total: number }} cost
- * @property {string} model_id
- * @property {string} provider
  */
 
 export class ModelRegistryError extends Error {
@@ -475,6 +483,90 @@ export function resolveModel(modelId, opts = {}) {
   return entry;
 }
 
+/** pi-ai ThinkingLevel values, weakest to strongest. */
+export const THINKING_LEVELS = Object.freeze([
+  'minimal',
+  'low',
+  'medium',
+  'high',
+  'xhigh',
+]);
+
+/**
+ * Project a registry entry's `thinking_levels` allowlist into the pi-ai
+ * `thinkingLevelMap`.
+ *
+ * pi-ai reads the map two ways at once, and both matter here:
+ *
+ *  - support: `null` marks a level unsupported; `undefined` means "supported,
+ *    use the provider default". `xhigh` is the exception — it counts as
+ *    supported only when explicitly mapped (`models.js` getSupportedThinkingLevels).
+ *  - wire value: whatever the map holds is sent verbatim, e.g.
+ *    `reasoning_effort = thinkingLevelMap?.[level] ?? level`
+ *    (`api/openai-completions.js`).
+ *
+ * So a declared level must be left unmapped: inventing a value here would
+ * change what goes on the wire for models that already work. That leaves no way
+ * to express a supported `xhigh` without also naming the provider's literal for
+ * it — providers disagree (`deepseek` and `anthropic` both use `"max"`, while
+ * an OpenAI-compatible gateway only accepts `minimal|low|medium|high`). Rather
+ * than guess and turn a config typo into a 400 for the whole Run, `xhigh` is
+ * mapped to null until the registry carries an explicit wire value for it.
+ *
+ * Returns undefined when the entry declares nothing, which preserves pi-ai's
+ * default for reasoning models.
+ *
+ * @param {ModelEntry} entry
+ * @returns {Record<string, string|null> | undefined}
+ */
+export function toThinkingLevelMap(entry) {
+  if (!entry?.supports_reasoning) return undefined;
+  const allowed = declaredThinkingLevels(entry);
+  if (allowed.size === 0) return undefined;
+
+  /** @type {Record<string, string|null>} */
+  const map = {};
+  for (const level of THINKING_LEVELS) {
+    // xhigh has no portable wire value, so it is never declarable as supported.
+    if (!allowed.has(level) || level === 'xhigh') {
+      map[level] = null;
+    }
+  }
+  return Object.keys(map).length > 0 ? map : undefined;
+}
+
+/**
+ * @param {ModelEntry} entry
+ * @returns {Set<string>}
+ */
+function declaredThinkingLevels(entry) {
+  const declared = Array.isArray(entry?.thinking_levels)
+    ? entry.thinking_levels.map((level) => String(level).trim().toLowerCase())
+    : [];
+  return new Set(declared.filter((level) => THINKING_LEVELS.includes(level)));
+}
+
+/**
+ * Thinking levels this entry actually offers, in pi-ai order.
+ * `[]` for a non-reasoning model.
+ *
+ * Must agree with what pi-ai's `getSupportedThinkingLevels` will report for the
+ * Model that `toPiModel` produces — an admin or capability UI built on this
+ * should not advertise a level the session then clamps away. That is why
+ * `xhigh` is excluded even in the unconstrained case: pi-ai drops it whenever
+ * the map does not name it, and {@link toThinkingLevelMap} never does.
+ *
+ * @param {ModelEntry} entry
+ * @returns {string[]}
+ */
+export function supportedThinkingLevels(entry) {
+  if (!entry?.supports_reasoning) return [];
+  const portable = THINKING_LEVELS.filter((level) => level !== 'xhigh');
+  const allowed = declaredThinkingLevels(entry);
+  if (allowed.size === 0) return portable;
+  return portable.filter((level) => allowed.has(level));
+}
+
 /**
  * Convert a registry entry into a pi-ai Model object for createAgentSession.
  *
@@ -491,6 +583,7 @@ export function toPiModel(entry, runtime = {}) {
     cacheRead: entry.pricing.cache_read_per_mtok,
     cacheWrite: entry.pricing.cache_write_per_mtok,
   };
+  const thinkingLevelMap = toThinkingLevelMap(entry);
   // pi-ai Model shape (types.d.ts): id, name, api, provider, baseUrl, reasoning,
   // input, cost, contextWindow, maxTokens, optional headers/compat.
   // Do NOT set ImagesModel-only `output`.
@@ -501,6 +594,10 @@ export function toPiModel(entry, runtime = {}) {
     provider: entry.provider,
     baseUrl: runtime.baseUrl || '',
     reasoning: Boolean(entry.supports_reasoning),
+    // Registry `thinking_levels` is the capability contract; without this the
+    // field was collected and then dropped, and pi-ai treated every reasoning
+    // model as supporting all five levels.
+    ...(thinkingLevelMap ? { thinkingLevelMap } : {}),
     // Request credentials belong to Pi ModelRegistry/AuthStorage, not the
     // immutable Model descriptor.
     headers: runtime.headers,
@@ -518,114 +615,19 @@ export function toPiModel(entry, runtime = {}) {
 }
 
 /**
- * Estimate USD cost from token counts and per-mtok pricing.
- * @param {ModelPricing} pricing
- * @param {{ input?: number, output?: number, cacheRead?: number, cacheWrite?: number }} tokens
- */
-export function estimateCost(pricing, tokens = {}) {
-  const input = Number(tokens.input) || 0;
-  const output = Number(tokens.output) || 0;
-  const cacheRead = Number(tokens.cacheRead) || 0;
-  const cacheWrite = Number(tokens.cacheWrite) || 0;
-  const p = pricing || ZERO_PRICING;
-  const costInput = (input / 1_000_000) * (p.input_per_mtok || 0);
-  const costOutput = (output / 1_000_000) * (p.output_per_mtok || 0);
-  const costCacheRead = (cacheRead / 1_000_000) * (p.cache_read_per_mtok || 0);
-  const costCacheWrite = (cacheWrite / 1_000_000) * (p.cache_write_per_mtok || 0);
-  return {
-    input: costInput,
-    output: costOutput,
-    cache_read: costCacheRead,
-    cache_write: costCacheWrite,
-    total: costInput + costOutput + costCacheRead + costCacheWrite,
-  };
-}
-
-/**
- * Aggregate usage from pi-ai assistant messages (or raw usage objects).
+ * Token accounting and cost live in pi-ai, not here.
  *
- * @param {unknown[]} messages
- * @param {ModelEntry} entry
- * @returns {TokenUsage}
+ * There used to be a second cost engine in this module (estimateCost /
+ * aggregateUsageFromMessages / usageFromProviderResponse). It ran on the same
+ * inputs pi-ai already uses — `Model.cost`, which `toPiModel` fills from this
+ * registry's `pricing` — so pi-ai's `usage.cost` on every assistant message was
+ * always the same number, computed one layer down. Nothing in the service read
+ * the local copy; the observability extension takes usage and cost straight off
+ * the assistant message via `extractUsageSummary`.
+ *
+ * Pricing stays here because it is enterprise catalog data. The arithmetic on
+ * it does not.
  */
-export function aggregateUsageFromMessages(messages, entry) {
-  let input = 0;
-  let output = 0;
-  let cacheRead = 0;
-  let cacheWrite = 0;
-  const list = Array.isArray(messages) ? messages : [];
-  for (const m of list) {
-    if (!m || typeof m !== 'object') continue;
-    const usage = m.usage;
-    if (!usage || typeof usage !== 'object') continue;
-    // Only count assistant-side usage (provider responses).
-    if (m.role && m.role !== 'assistant') continue;
-    input += Number(usage.input) || Number(usage.input_tokens) || Number(usage.prompt_tokens) || 0;
-    output += Number(usage.output) || Number(usage.output_tokens) || Number(usage.completion_tokens) || 0;
-    cacheRead += Number(usage.cacheRead) || Number(usage.cache_read) || 0;
-    cacheWrite += Number(usage.cacheWrite) || Number(usage.cache_write) || 0;
-  }
-  const total = input + output + cacheRead + cacheWrite;
-  const cost = estimateCost(entry.pricing, {
-    input,
-    output,
-    cacheRead,
-    cacheWrite,
-  });
-  return {
-    input_tokens: input,
-    output_tokens: output,
-    cache_read_tokens: cacheRead,
-    cache_write_tokens: cacheWrite,
-    total_tokens: total,
-    cost,
-    model_id: entry.model_id,
-    provider: entry.provider,
-  };
-}
-
-/**
- * Build usage payload from a single OpenAI-style usage object.
- * @param {Record<string, unknown>|null|undefined} usage
- * @param {ModelEntry} entry
- * @returns {TokenUsage}
- */
-export function usageFromProviderResponse(usage, entry) {
-  const input =
-    Number(usage?.prompt_tokens) ||
-    Number(usage?.input) ||
-    Number(usage?.input_tokens) ||
-    0;
-  const output =
-    Number(usage?.completion_tokens) ||
-    Number(usage?.output) ||
-    Number(usage?.output_tokens) ||
-    0;
-  const cacheRead =
-    Number(usage?.cache_read_tokens) ||
-    Number(usage?.cacheRead) ||
-    0;
-  const cacheWrite =
-    Number(usage?.cache_write_tokens) ||
-    Number(usage?.cacheWrite) ||
-    0;
-  const cost = estimateCost(entry.pricing, {
-    input,
-    output,
-    cacheRead,
-    cacheWrite,
-  });
-  return {
-    input_tokens: input,
-    output_tokens: output,
-    cache_read_tokens: cacheRead,
-    cache_write_tokens: cacheWrite,
-    total_tokens: input + output + cacheRead + cacheWrite,
-    cost,
-    model_id: entry.model_id,
-    provider: entry.provider,
-  };
-}
 
 /**
  * List enabled models (for admin / capability switch UIs).

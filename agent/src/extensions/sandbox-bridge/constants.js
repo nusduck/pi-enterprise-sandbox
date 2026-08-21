@@ -2,6 +2,11 @@
  * sandbox-bridge constants (plan §13 / PR-06 B1).
  */
 
+import {
+  DEFAULT_MAX_BYTES,
+  DEFAULT_MAX_LINES,
+} from '@earendil-works/pi-coding-agent';
+
 /** Exact 10 tool names — no more, no less. */
 export const SANDBOX_TOOL_NAMES = Object.freeze([
   'read',
@@ -53,14 +58,18 @@ export const MAX_BASH_COMMAND_LEN = 8_192;
 export const MAX_BASH_TIMEOUT_SEC = 600;
 export const DEFAULT_BASH_TIMEOUT_SEC = 120;
 /**
- * Hermes/Pi terminal output budget (~50KB / 2000 lines per stream).
- * Applied independently to stdout and stderr; the JSON envelope uses a
- * larger cap so dual-stream results do not collapse into result_bytes.
+ * Terminal output budget per stream, taken from Pi's own tool-output limits
+ * rather than copied, so a retune in the SDK reaches sandbox-routed bash and
+ * python too. Applied independently to stdout and stderr.
  */
-export const MAX_EXEC_STREAM_BYTES = 50 * 1024;
-export const MAX_EXEC_STREAM_LINES = 2_000;
-/** Envelope for bash/python tool JSON (both streams + metadata). */
-export const MAX_EXEC_RESULT_BYTES = 110 * 1024;
+export const MAX_EXEC_STREAM_BYTES = DEFAULT_MAX_BYTES;
+export const MAX_EXEC_STREAM_LINES = DEFAULT_MAX_LINES;
+/**
+ * Envelope for bash/python tool JSON (both streams + metadata). Must stay
+ * above 2× the per-stream byte budget or a result with two full streams
+ * collapses into the result_bytes fallback.
+ */
+export const MAX_EXEC_RESULT_BYTES = MAX_EXEC_STREAM_BYTES * 2 + 10 * 1024;
 export const MAX_PYTHON_CODE_BYTES = 256 * 1024;
 export const MAX_PYTHON_ARGS = 32;
 export const MAX_PYTHON_TIMEOUT_SEC = 600;

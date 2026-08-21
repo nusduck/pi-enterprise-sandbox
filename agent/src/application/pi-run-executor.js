@@ -38,12 +38,13 @@ import { buildMcpPolicyBindings } from '../infrastructure/mcp/pi-mcp-adapter-fac
 import {
   buildAgentVersionToolRiskBindings,
   readAgentVersionExtensions,
+  readAgentVersionToolPolicy,
 } from './tool-risk-bindings.js';
+import { PlatformEventProjector } from '../infrastructure/pi/platform-event-projector.js';
 import {
-  PlatformEventProjector,
   extractAssistantTextForUi,
   redactPayload,
-} from '../infrastructure/pi/platform-event-projector.js';
+} from '../infrastructure/pi/event-redaction.js';
 import { normalizeExecutorResult } from './run-executor.js';
 import { sanitizeStatusReason } from './sanitize-status-reason.js';
 import {
@@ -532,6 +533,15 @@ export class PiRunExecutor {
         emit: emitAfterCommit,
       });
 
+      /**
+       * Proof for piRuntimeFactory that configJson.toolPolicy is actually
+       * enforced this Run. Only enterprise-policy enforces it, so a Run
+       * assembled without the extension bundle deliberately leaves this null
+       * and lets the factory's fail-closed guard reject the AgentVersion.
+       * @type {object | null}
+       */
+      let toolPolicyBinding = null;
+
       if (typeof this.extensionBundleFactory === 'function') {
         const { mcpServerPolicies, mcpToolRiskPolicy } =
           buildMcpPolicyBindings(agentVersion);
@@ -540,6 +550,15 @@ export class PiRunExecutor {
         const { agentVersionToolPolicy, agentVersionToolRiskPolicy } =
           buildAgentVersionToolRiskBindings(agentVersion, { mcpToolRiskPolicy });
         const agentVersionExtensions = readAgentVersionExtensions(agentVersion);
+        // Keyed off the raw config, not the projection: a structurally present
+        // but empty policy (`{ tools: {} }`) is still a field we honoured.
+        if (Object.keys(readAgentVersionToolPolicy(agentVersion)).length > 0) {
+          toolPolicyBinding = Object.freeze({
+            appliedBy: 'enterprise-policy',
+            tools: agentVersionToolPolicy ?? null,
+            riskPolicy: agentVersionToolRiskPolicy ?? null,
+          });
+        }
           extensionFactories = this.extensionBundleFactory(eventContext, {
             recorder: this._eventRecorder,
             governanceRecorder: this._governanceRecorder,
@@ -648,6 +667,7 @@ export class PiRunExecutor {
         extensionFactories,
         runEventRecorder: this._eventRecorder,
         ...(runSkillPaths?.length ? { additionalSkillPaths: runSkillPaths } : {}),
+        ...(toolPolicyBinding ? { toolPolicyBinding } : {}),
       });
 
       runtimeSession = this._runtime?.session;

@@ -8,10 +8,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import {
-  redactInlineSecrets,
-  projectPiEvent,
-} from '../../src/infrastructure/pi/platform-event-projector.js';
+import { projectPiEvent } from '../../src/infrastructure/pi/platform-event-projector.js';
+import { redactInlineSecrets } from '../../src/infrastructure/pi/event-redaction.js';
 import { redactSecretText } from '../../src/lib/text-redaction.js';
 import { sanitizeStatusReason } from '../../src/application/sanitize-status-reason.js';
 import { sanitizeOutboxError } from '../../src/infrastructure/outbox/sanitize-error.js';
@@ -42,9 +40,9 @@ describe('secret redaction (H5)', () => {
     assert.doesNotMatch(text, /sk-abc1234567890secret/);
   });
 
-  it('redactInlineSecrets is used by the projector module', () => {
+  it('redactInlineSecrets is used by the redaction module', () => {
     const src = fs.readFileSync(
-      path.join(root, 'src/infrastructure/pi/platform-event-projector.js'),
+      path.join(root, 'src/infrastructure/pi/event-redaction.js'),
       'utf8',
     );
     assert.match(src, /redactInlineSecrets|redactPayload/);
@@ -123,12 +121,12 @@ describe('secret redaction (H5)', () => {
   it('shared SECRET_PATTERNS cover compound forms projector already redacted', () => {
     // Dual-pattern drift guard: durable status/outbox use redactSecretText only;
     // projector INLINE is a style layer that ends with the same shared base.
-    const projectorSrc = fs.readFileSync(
-      path.join(root, 'src/infrastructure/pi/platform-event-projector.js'),
+    const redactionSrc = fs.readFileSync(
+      path.join(root, 'src/infrastructure/pi/event-redaction.js'),
       'utf8',
     );
-    assert.match(projectorSrc, /redactSecretText/);
-    assert.match(projectorSrc, /INLINE_SECRET_PATTERNS/);
+    assert.match(redactionSrc, /redactSecretText/);
+    assert.match(redactionSrc, /INLINE_SECRET_PATTERNS/);
 
     const shared = redactSecretText(
       'access_token=a refresh_token=b client_secret=c sk-abcdefghij Cookie: sid=1',

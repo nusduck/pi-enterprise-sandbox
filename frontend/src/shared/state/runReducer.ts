@@ -1090,9 +1090,13 @@ export function reduceRuntimeEvent(
       next = touchRun(next, runId, {
         contextUsage: {
           tokens: typeof payload.tokens === 'number' ? payload.tokens : prior?.tokens ?? null,
+          // Two producers, two conventions: the legacy agent stream sends
+          // context_window, the platform context.usage event sends contextWindow.
           contextWindow: typeof payload.context_window === 'number'
             ? payload.context_window
-            : prior?.contextWindow ?? null,
+            : typeof payload.contextWindow === 'number'
+              ? payload.contextWindow
+              : prior?.contextWindow ?? null,
           percent: typeof payload.percent === 'number' ? payload.percent : prior?.percent ?? null,
           warning: typeof payload.warning === 'boolean'
             ? payload.warning

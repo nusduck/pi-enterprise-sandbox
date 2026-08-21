@@ -9,6 +9,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { ValidationError } from '../errors.js';
+import { parseSkillFrontmatter } from '../../skills/frontmatter.js';
 
 /** Cap skill discovery so Agent Card stays lightweight for registry crawlers. */
 const MAX_CARD_SKILLS = 64;
@@ -96,34 +97,22 @@ export function defaultAgentSkills() {
 }
 
 /**
- * Parse YAML-like frontmatter from a SKILL.md (name / description only).
- * Intentionally minimal — avoids pulling a YAML dependency for Agent Card.
+ * Read name / description from a SKILL.md for the Agent Card.
+ *
+ * Shares the service-wide reader so a skill is described on the card the same
+ * way the lifecycle validator and Pi's own loader read it. Fail-soft: an
+ * unreadable or truncated package yields empty fields and the caller falls back
+ * to the directory name, rather than failing the whole card.
  *
  * @param {string} text
  * @returns {{ name?: string, description?: string }}
  */
 export function parseSkillMdFrontmatter(text) {
-  const src = String(text || '');
-  if (!src.startsWith('---')) return {};
-  const end = src.indexOf('\n---', 3);
-  if (end < 0) return {};
-  const block = src.slice(3, end).replace(/^\r?\n/, '');
+  const { name, description } = parseSkillFrontmatter(String(text || ''));
   /** @type {{ name?: string, description?: string }} */
   const out = {};
-  for (const line of block.split(/\r?\n/)) {
-    const m = line.match(/^(name|description)\s*:\s*(.*)$/i);
-    if (!m) continue;
-    let val = m[2].trim();
-    if (
-      (val.startsWith('"') && val.endsWith('"')) ||
-      (val.startsWith("'") && val.endsWith("'"))
-    ) {
-      val = val.slice(1, -1);
-    }
-    if (!val) continue;
-    if (m[1].toLowerCase() === 'name') out.name = val.slice(0, 256);
-    else out.description = val.slice(0, 1024);
-  }
+  if (name) out.name = name;
+  if (description) out.description = description;
   return out;
 }
 

@@ -55,6 +55,20 @@ export function readAgentVersionExtensions(agentVersion) {
 }
 
 /**
+ * The raw `configJson.toolPolicy` object, or `{}` when absent/malformed.
+ *
+ * Exported so callers can tell "this AgentVersion configures tool policy at
+ * all" apart from "the projection happened to yield no decisions and no risk
+ * table" — `{ tools: {} }` is the first but not the second.
+ *
+ * @param {unknown} agentVersion
+ * @returns {Record<string, unknown>}
+ */
+export function readAgentVersionToolPolicy(agentVersion) {
+  return readToolPolicy(agentVersion);
+}
+
+/**
  * @param {unknown} agentVersion
  * @returns {Record<string, unknown>}
  */

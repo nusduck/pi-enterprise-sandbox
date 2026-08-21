@@ -38,6 +38,9 @@ const PLATFORM_TYPE_ALIASES: Record<string, string> = {
   'approval.resolved': 'approval.resolved',
   // Artifact — only explicit submit path
   'artifact.ready': 'artifact.created',
+  // Context pressure, emitted by the observability extension as each LLM call
+  // is assembled. The reducer case already existed; nothing was feeding it.
+  'context.usage': 'run.context_updated',
   // Errors
   'error.occurred': 'error.occurred',
   // Model → handled as trace spans in reducer under these names

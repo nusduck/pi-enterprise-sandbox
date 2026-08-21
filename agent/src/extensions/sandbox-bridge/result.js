@@ -2,12 +2,19 @@
  * Pi AgentToolResult helpers + redaction for sandbox-bridge.
  */
 
-import { redactInlineSecrets, redactPayload } from '../../infrastructure/pi/platform-event-projector.js';
+import {
+  DEFAULT_MAX_BYTES,
+  DEFAULT_MAX_LINES,
+} from '@earendil-works/pi-coding-agent';
+import { redactInlineSecrets, redactPayload } from '../../infrastructure/pi/event-redaction.js';
 import { safeSlice } from '../../lib/text-redaction.js';
 
-/** Match Pi's model-facing tool-output budget: bounded and explicit. */
-export const DEFAULT_TOOL_OUTPUT_BYTES = 50 * 1024;
-export const DEFAULT_TOOL_OUTPUT_LINES = 2_000;
+/**
+ * Pi's model-facing tool-output budget, taken from the SDK rather than copied.
+ * When Pi retunes what fits in a tool result, sandbox-routed tools follow.
+ */
+export const DEFAULT_TOOL_OUTPUT_BYTES = DEFAULT_MAX_BYTES;
+export const DEFAULT_TOOL_OUTPUT_LINES = DEFAULT_MAX_LINES;
 
 /**
  * @param {string} text
@@ -51,9 +58,19 @@ export function toolErr(code, message, details = {}) {
 }
 
 /**
- * Pi-style bounded text output. Unlike the former JSON-string truncation,
- * this always returns valid text plus enough metadata for the model to
- * continue with an offset/cursor or choose a narrower query.
+ * Bounded text output for a sandbox tool result.
+ *
+ * This is deliberately *not* Pi's `truncateHead`, and the difference is one
+ * behaviour: when a single line is wider than the byte budget, `truncateHead`
+ * returns empty content with `firstLineExceedsLimit`, while this returns the
+ * prefix that fits and flags `partialLine`. A minified bundle or a one-line CSV
+ * is a normal thing to find in a workspace, and handing the model nothing at
+ * all for it is a dead end — the read tool's pagination reports `completedLines`
+ * so the next offset still never skips an unread line.
+ *
+ * The budgets themselves come from the SDK (see DEFAULT_TOOL_OUTPUT_*), and
+ * `tests/pi/sandbox-truncation-contract.unit.test.js` pins where the two agree,
+ * so an SDK change to the shared semantics surfaces rather than drifting.
  *
  * @param {unknown} value
  * @param {{ maxBytes?: number, maxLines?: number }} [opts]
