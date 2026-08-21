@@ -50,7 +50,7 @@ function requireInternal(transport, method) {
 }
 
 /**
- * Build the 10-method sandboxTransport expected by sandbox-bridge.
+ * Build the 13-method sandboxTransport expected by sandbox-bridge.
  *
  * @param {{
  *   internalReadTransport?: {
@@ -67,6 +67,11 @@ function requireInternal(transport, method) {
  *     processRead: (payload: object) => Promise<object>,
  *     processKill: (payload: object) => Promise<object>,
  *   } | null,
+ *   internalSearchTransport?: {
+ *     lsFiles: (payload: object) => Promise<object>,
+ *     findFiles: (payload: object) => Promise<object>,
+ *     grepFiles: (payload: object) => Promise<object>,
+ *   } | null,
  *   internalFilesWriteTransport?: { writeFile: Function, editFile: Function } | null,
  *   internalArtifactTransport?: { submitArtifact: Function } | null,
  * }} [opts]
@@ -76,6 +81,7 @@ export function createSandboxBridgeHttpTransport(opts = {}) {
   const internalReadTransport = opts.internalReadTransport ?? null;
   const internalExecutionTransport = opts.internalExecutionTransport ?? null;
   const internalProcessTransport = opts.internalProcessTransport ?? null;
+  const internalSearchTransport = opts.internalSearchTransport ?? null;
   const internalFilesWriteTransport = opts.internalFilesWriteTransport ?? null;
   const internalArtifactTransport = opts.internalArtifactTransport ?? null;
 
@@ -104,6 +110,38 @@ export function createSandboxBridgeHttpTransport(opts = {}) {
           throw err;
         }
         return await internalReadTransport.readSkill(payload);
+      } catch (err) {
+        rethrowTransport(err);
+      }
+    },
+
+    async lsFiles(payload) {
+      try {
+        return await requireInternal(internalSearchTransport, 'lsFiles').lsFiles(
+          payload,
+        );
+      } catch (err) {
+        rethrowTransport(err);
+      }
+    },
+
+    async findFiles(payload) {
+      try {
+        return await requireInternal(
+          internalSearchTransport,
+          'findFiles',
+        ).findFiles(payload);
+      } catch (err) {
+        rethrowTransport(err);
+      }
+    },
+
+    async grepFiles(payload) {
+      try {
+        return await requireInternal(
+          internalSearchTransport,
+          'grepFiles',
+        ).grepFiles(payload);
       } catch (err) {
         rethrowTransport(err);
       }
@@ -272,6 +310,7 @@ export function createSandboxBridgeHttpTransport(opts = {}) {
  *   createInternalReadTransport?: (runContext: object) => object,
  *   createInternalExecutionTransport?: (runContext: object) => object,
  *   createInternalProcessTransport?: (runContext: object) => object,
+ *   createInternalSearchTransport?: (runContext: object) => object,
  *   createInternalFilesWriteTransport?: (runContext: object) => object,
  *   createInternalArtifactTransport?: (runContext: object) => object,
  * }} [opts]
@@ -311,6 +350,7 @@ export function createRunScopedSandboxBridgeTransport(runContext, opts = {}) {
     internalReadTransport: perRun(opts.createInternalReadTransport),
     internalExecutionTransport: perRun(opts.createInternalExecutionTransport),
     internalProcessTransport: perRun(opts.createInternalProcessTransport),
+    internalSearchTransport: perRun(opts.createInternalSearchTransport),
     internalFilesWriteTransport: perRun(opts.createInternalFilesWriteTransport),
     internalArtifactTransport: perRun(opts.createInternalArtifactTransport),
   });

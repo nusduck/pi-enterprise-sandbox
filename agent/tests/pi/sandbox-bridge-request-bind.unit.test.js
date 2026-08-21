@@ -1,6 +1,6 @@
 /**
  * PR-07B batch 2B: sandbox-bridge binds request-hash before transport.
- * Covers all 10 tools + skill-read, spoof prevention, post-normalization
+ * Covers all 13 tools + skill-read, spoof prevention, post-normalization
  * hashing, binder-before-transport order, and fail-closed behavior.
  */
 
@@ -17,6 +17,10 @@ import {
   DEFAULT_PROCESS_TIMEOUT_SEC,
   DEFAULT_PYTHON_TIMEOUT_SEC,
   DEFAULT_READ_LIMIT,
+  FIND_DEFAULT_LIMIT,
+  FIND_DEFAULT_MAX_DEPTH,
+  GREP_DEFAULT_LIMIT,
+  LS_DEFAULT_DEPTH,
   MAX_READ_BYTES,
 } from '../../src/extensions/sandbox-bridge/constants.js';
 import { ConflictError, NotFoundError } from '../../src/infrastructure/mysql/errors.js';
@@ -56,6 +60,9 @@ function createRecordingTransport(calls) {
     'processKill',
     'submitArtifact',
     'readSkill',
+    'lsFiles',
+    'findFiles',
+    'grepFiles',
   ];
   /** @type {Record<string, Function>} */
   const t = {};
@@ -85,6 +92,24 @@ function createRecordingTransport(calls) {
         return { data: 'x', nextCursor: '0-1', stream: 'stdout' };
       }
       if (m === 'processKill') return { status: 'running' };
+      if (m === 'lsFiles' || m === 'findFiles') {
+        return {
+          items: [{ path: 'a.js', name: 'a.js', type: 'file', size: 1 }],
+          skipped: [],
+          stats: { scanned: 1, matched: 1 },
+          truncated: false,
+          stop_reason: null,
+        };
+      }
+      if (m === 'grepFiles') {
+        return {
+          matches: [{ path: 'a.js', line: 1, column: 1, text: 'x' }],
+          skipped: [],
+          stats: { scanned: 1, matched: 1 },
+          truncated: false,
+          stop_reason: null,
+        };
+      }
       if (m === 'submitArtifact') {
         return {
           artifactId: '01K0G2PAV8FPMVC9QHJG7JPN5D',
@@ -151,6 +176,9 @@ const BASE_PARAMS = Object.freeze({
   process_read: { processId: '01K0G2PAV8FPMVC9QHJG7JPN5C' },
   process_kill: { processId: '01K0G2PAV8FPMVC9QHJG7JPN5C' },
   submit_artifact: { path: 'out/report.pdf' },
+  ls: { path: 'src' },
+  find: { pattern: '*.js' },
+  grep: { query: 'needle' },
 });
 
 /**
@@ -197,6 +225,30 @@ function expectedNormalizedArgs(name) {
         env: {},
         timeoutSeconds: DEFAULT_PROCESS_TIMEOUT_SEC,
       };
+    case 'ls':
+      return {
+        path: '/home/sandbox/workspace/src',
+        depth: LS_DEFAULT_DEPTH,
+        includeHidden: false,
+      };
+    case 'find':
+      return {
+        path: '/home/sandbox/workspace',
+        pattern: '*.js',
+        type: null,
+        maxDepth: FIND_DEFAULT_MAX_DEPTH,
+        limit: FIND_DEFAULT_LIMIT,
+      };
+    case 'grep':
+      return {
+        path: '/home/sandbox/workspace',
+        query: 'needle',
+        glob: null,
+        regex: false,
+        caseSensitive: true,
+        context: 0,
+        limit: GREP_DEFAULT_LIMIT,
+      };
     case 'process_status':
       return { processId: '01K0G2PAV8FPMVC9QHJG7JPN5C' };
     case 'process_read':
@@ -220,8 +272,8 @@ function expectedNormalizedArgs(name) {
   }
 }
 
-describe('PR-07B batch 2B: all 10 tools bind before transport', () => {
-  it('binds and transports all 10 tools with claim fields + frozen identity', async () => {
+describe('PR-07B batch 2B: all 13 tools bind before transport', () => {
+  it('binds and transports all 13 tools with claim fields + frozen identity', async () => {
     const calls = [];
     const binds = [];
     const transport = createRecordingTransport(calls);
@@ -251,8 +303,8 @@ describe('PR-07B batch 2B: all 10 tools bind before transport', () => {
       );
     }
 
-    assert.equal(binds.length, 10);
-    assert.equal(calls.length, 10);
+    assert.equal(binds.length, 13);
+    assert.equal(calls.length, 13);
 
     for (let i = 0; i < SANDBOX_TOOL_NAMES.length; i += 1) {
       const name = SANDBOX_TOOL_NAMES[i];
@@ -391,7 +443,7 @@ describe('PR-07B batch 2B: binder-before-transport order + fail-closed', () => {
     assert.deepEqual(order.slice(0, 2), ['bind', 'transport:bash']);
   });
 
-  it('missing binder: zero transport calls for all 10 tools', async () => {
+  it('missing binder: zero transport calls for all 13 tools', async () => {
     const calls = [];
     const defs = createSandboxBridgeToolDefinitions(
       RUN,

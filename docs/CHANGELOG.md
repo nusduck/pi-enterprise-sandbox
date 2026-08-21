@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **A2A v0.3 对齐**: Agent Card 发布 skills；streaming status 事件符合 SDK schema；发出官方 task-lifecycle 流。
 - **用户 Skill 生命周期**: 新增可选第一方 extension `skill-lifecycle`，支持上传安装、Agent 生成、编辑与卸载，全部限制在 per-user Skill 根内并走审批。Sandbox 执行侧的 read/bind 认可用户 Skill 路径。
 - **模型能力**: 模型选择、视觉输入与 thinking UI；MCP 发现到的 schema 投射给模型。
+- **工作区搜索工具**: 新增 `ls` / `find` / `grep` 三个 sandbox-bridge 工具，走 `/internal/v1/files/{ls,find,grep}` HMAC 内部平面。此前 SDK 同名工具因会读 Agent 容器文件系统而被永久排除，却没有替代品——模型只能用 `bash` 探索工作区（串行、无结构、无预算）。三者只读、可与 `read` 并行、有默认与上限预算，并把截断和跳过的目录如实报给模型。`SANDBOX_TOOL_NAMES` 由 10 增至 13。
 - **Run 收敛保护**: 为每个 Pi Run 增加模型回合、总工具调用和相同工具/参数调用上限；达到上限后禁止继续调用工具，并要求模型依据已有结果作答。三个上限均可通过 `AGENT_RUN_MAX_*` 配置。
 - **MCP 启动发现**: Agent 启动时连接每个启用的 MCP Server 并执行 `tools/list`；发现到的工具以 `mcp__{serverId}__{toolName}` 注册，对应的连接与工具数量会出现在 readiness/diagnostics。
 

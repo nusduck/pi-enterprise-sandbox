@@ -189,12 +189,15 @@ describe('MCP data-plane policy (H6)', () => {
     }
   });
 
-  it('sandbox-bridge tool surface is the exact 10 non-SQL tools', () => {
+  it('sandbox-bridge tool surface is the exact 13 non-SQL tools', () => {
     assert.deepEqual(
       [...SANDBOX_TOOL_NAMES].sort(),
       [
         'bash',
         'edit',
+        'find',
+        'grep',
+        'ls',
         'process_kill',
         'process_read',
         'process_start',
@@ -268,10 +271,13 @@ describe('MCP data-plane policy (H6)', () => {
     );
 
     // Only sandbox tools + ask_user are registered via pi.registerTool.
-    const toolsSrc = fs.readFileSync(
-      path.join(root, 'src/extensions/sandbox-bridge/tools/index.js'),
-      'utf8',
-    );
+    // The bundle is split across the tool modules; concatenate them so the
+    // guard covers every registered tool wherever it is defined.
+    const toolsSrc = listJsFiles(
+      path.join(root, 'src/extensions/sandbox-bridge/tools'),
+    )
+      .map((file) => fs.readFileSync(file, 'utf8'))
+      .join('\n');
     const policySrc = fs.readFileSync(
       path.join(root, 'src/extensions/enterprise-policy/index.js'),
       'utf8',

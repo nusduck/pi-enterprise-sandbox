@@ -47,6 +47,10 @@ from sandbox.services.formal_process_runtime import (
     FormalProcessRuntime,
     set_formal_process_runtime,
 )
+from sandbox.services.formal_search_runtime import (
+    FormalSearchRuntime,
+    set_formal_search_runtime,
+)
 from sandbox.services.internal_execution_supervisor import InternalExecutionSupervisor
 from sandbox.services.internal_file_reader import InternalFileReader, InternalSkillReader
 from sandbox.services.internal_plane_resources import (
@@ -169,6 +173,7 @@ class FastApiInternalPlaneTarget:
         self.formal_artifact_runtime: FormalArtifactRuntime | None = None
         self.files_write_runtime: FilesWriteRuntime | None = None
         self.formal_process_runtime: FormalProcessRuntime | None = None
+        self.formal_search_runtime: FormalSearchRuntime | None = None
 
     def set_mysql_database(self, db: Any | None) -> None:
         from sandbox.services.formal_session_runtime import (
@@ -191,12 +196,14 @@ class FastApiInternalPlaneTarget:
             self.formal_artifact_runtime = None
             self.files_write_runtime = None
             self.formal_process_runtime = None
+            self.formal_search_runtime = None
             set_files_read_runtime(self.app, None)
             set_skills_read_runtime(self.app, None)
             set_formal_execution_runtime(self.app, None)
             set_formal_artifact_runtime(self.app, None)
             set_files_write_runtime(self.app, None)
             set_formal_process_runtime(self.app, None)
+            set_formal_search_runtime(self.app, None)
             return
         runtime = FilesReadRuntime(
             claim_validator=validator,
@@ -243,6 +250,12 @@ class FastApiInternalPlaneTarget:
             id_factory=self.id_factory,
         )
         set_formal_process_runtime(self.app, self.formal_process_runtime)
+        self.formal_search_runtime = FormalSearchRuntime(
+            claim_validator=validator,
+            supervisor=self.supervisor,
+            id_factory=self.id_factory,
+        )
+        set_formal_search_runtime(self.app, self.formal_search_runtime)
 
     def set_replay_store(self, store: Any | None) -> None:
         set_replay_store(self.app, store)
@@ -301,9 +314,16 @@ async def start_internal_plane(
         id_factory=id_factory,
     )
     # Strong ref for shutdown reconcile after app.state slots are cleared.
-    runtime_box: list[tuple[FilesReadRuntime | None, FormalExecutionRuntime | None, FilesWriteRuntime | None, FormalProcessRuntime | None, FormalArtifactRuntime | None]] = [
-        (None, None, None, None, None)
-    ]
+    runtime_box: list[
+        tuple[
+            FilesReadRuntime | None,
+            FormalExecutionRuntime | None,
+            FilesWriteRuntime | None,
+            FormalProcessRuntime | None,
+            FormalArtifactRuntime | None,
+            FormalSearchRuntime | None,
+        ]
+    ] = [(None, None, None, None, None, None)]
     _orig_set_claim = target.set_claim_validator
 
     def _set_claim_and_track(validator: Any | None) -> None:
@@ -315,6 +335,7 @@ async def start_internal_plane(
                 target.files_write_runtime,
                 target.formal_process_runtime,
                 target.formal_artifact_runtime,
+                target.formal_search_runtime,
             )
         # On clear, keep last runtime for reconcile (do not null runtime_box).
 

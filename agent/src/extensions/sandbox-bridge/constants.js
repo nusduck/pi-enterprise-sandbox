@@ -7,9 +7,12 @@ import {
   DEFAULT_MAX_LINES,
 } from '@earendil-works/pi-coding-agent';
 
-/** Exact 10 tool names — no more, no less. */
+/** Exact 13 tool names — no more, no less. */
 export const SANDBOX_TOOL_NAMES = Object.freeze([
   'read',
+  'ls',
+  'find',
+  'grep',
   'write',
   'edit',
   'bash',
@@ -21,9 +24,15 @@ export const SANDBOX_TOOL_NAMES = Object.freeze([
   'submit_artifact',
 ]);
 
-/** Tools that may run in parallel. */
+/**
+ * Tools that may run in parallel.
+ *
+ * Read-only tools only. Anything that touches the workspace stays sequential so
+ * two writes in one turn cannot race; searching cannot observe a torn state it
+ * did not already have.
+ */
 export const PARALLEL_TOOLS = Object.freeze(
-  new Set(['read', 'process_status', 'process_read']),
+  new Set(['read', 'ls', 'find', 'grep', 'process_status', 'process_read']),
 );
 
 /**
@@ -111,3 +120,22 @@ export const PROCESS_SIGNALS = Object.freeze(['TERM', 'KILL', 'INT']);
 /** Env keys forbidden in bash/process (host secret leakage). */
 export const SENSITIVE_ENV_KEY =
   /^(?:AWS_|AZURE_|GCP_|GOOGLE_|OPENAI_|ANTHROPIC_|API[_-]?KEY|SECRET|PASSWORD|TOKEN|AUTHORIZATION|BEARER|PRIVATE[_-]?KEY|SSH_|HOME|PATH|LD_|DYLD_)/i;
+
+/**
+ * Workspace search budgets (mirrored by the Sandbox contract, which clamps
+ * again). Defaults stay small so the model narrows its query instead of
+ * pulling a whole tree into context.
+ */
+export const LS_DEFAULT_DEPTH = 1;
+export const LS_MAX_DEPTH = 5;
+export const FIND_DEFAULT_MAX_DEPTH = 20;
+export const FIND_MAX_DEPTH = 20;
+export const FIND_DEFAULT_LIMIT = 200;
+export const FIND_MAX_LIMIT = 500;
+export const GREP_DEFAULT_LIMIT = 100;
+export const GREP_MAX_LIMIT = 500;
+export const GREP_MAX_CONTEXT = 5;
+export const MAX_SEARCH_PATTERN_LEN = 512;
+export const MAX_SEARCH_QUERY_LEN = 1_024;
+/** JSON envelope budget for one search result body. */
+export const MAX_SEARCH_RESULT_BYTES = 96 * 1024;

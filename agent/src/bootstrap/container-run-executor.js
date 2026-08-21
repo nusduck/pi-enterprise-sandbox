@@ -150,6 +150,7 @@ export async function buildPiRunExecutorFactory(container, opts) {
       let createInternalFilesWriteTransport = null;
       let createInternalArtifactTransport = null;
       let createInternalProcessTransport = null;
+      let createInternalSearchTransport = null;
       {
         const {
           createInternalFilesReadTransport,
@@ -216,6 +217,16 @@ export async function buildPiRunExecutorFactory(container, opts) {
             allowInsecureHttp: true,
             traceState: runContext?.traceState,
           });
+        const { createInternalSearchTransport: createSearchTransport } =
+          await import('../infrastructure/sandbox/internal-search-http.js');
+        createInternalSearchTransport = (runContext) =>
+          createSearchTransport({
+            baseUrl: container.env.SANDBOX_BASE_URL || 'http://sandbox:8081',
+            keyring: internalKeyring,
+            activeKid: internalActiveKid,
+            allowInsecureHttp: true,
+            traceState: runContext?.traceState,
+          });
       }
       extensionBundleFactory = createSandboxBridgeExtensionBundleFactory({
         extraDeps: { toolRiskPolicy, skillManagerFactory },
@@ -227,6 +238,7 @@ export async function buildPiRunExecutorFactory(container, opts) {
             createInternalFilesWriteTransport,
             createInternalArtifactTransport,
             createInternalProcessTransport,
+            createInternalSearchTransport,
           }),
       });
     }
