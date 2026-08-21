@@ -110,3 +110,23 @@ def test_project_markdown_lives_under_docs_except_readmes() -> None:
         "Move project documentation under docs/ (README.md is the exception): "
         + ", ".join(sorted(misplaced))
     )
+
+
+def test_deferred_items_board_records_when_it_was_last_audited() -> None:
+    """The deferred board rots silently without a visible audit marker.
+
+    It went 2.5 weeks unmaintained once and three of its rows described work
+    that had already shipped, which is worse than no board: a reader trusts it.
+    Requiring the marker does not keep the board fresh by itself, but it makes
+    staleness readable at a glance instead of only discoverable by spot-check.
+    """
+    board = ROOT / "docs" / "review-deferred-items.md"
+    text = board.read_text(encoding="utf-8")
+    assert "**Last audited:**" in text, (
+        "docs/review-deferred-items.md must carry a '**Last audited:** <commit> (<date>)' "
+        "line so a reader can tell how stale the board is"
+    )
+    assert "## Closed in the current refactor" not in text, (
+        "Closure evidence belongs in docs/archive/reviews/, not on the live "
+        "deferred board — it buries the rows that still need a decision"
+    )
