@@ -110,10 +110,15 @@ describe('Pi Run tool budget', () => {
       maxToolCalls: 200,
       maxIdenticalToolCalls: 6,
       maxModelTurns: 120,
+      runDeadlineMs: 30 * 60 * 1000,
     });
     assert.throws(
       () => resolvePiRunToolBudget({ AGENT_RUN_MAX_TOOL_CALLS: '0' }),
       /AGENT_RUN_MAX_TOOL_CALLS/,
+    );
+    assert.throws(
+      () => resolvePiRunToolBudget({ AGENT_RUN_DEADLINE_MS: '0' }),
+      /AGENT_RUN_DEADLINE_MS/,
     );
   });
 });

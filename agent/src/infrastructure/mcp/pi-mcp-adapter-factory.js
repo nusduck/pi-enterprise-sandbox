@@ -216,8 +216,11 @@ async function mapPool(items, concurrency, fn) {
 
 /**
  * Discover tools for every enabled deployment server once during process
- * startup.  The returned logical config is deliberately process-scoped: a
- * changed MCP_SERVERS_JSON requires an Agent restart and is never hot-loaded.
+ * startup.  The returned logical config is process-scoped at startup, but the
+ * Agent re-reads MCP_SERVERS_JSON on every discovery call: with
+ * AGENT_MCP_REFRESH_INTERVAL_MS > 0 the container's refresh loop periodically
+ * force-re-discovers, so registry changes become visible to subsequent Runs
+ * without a process restart (see ServiceContainer.#ensureMcpRediscoveryLoop).
  *
  * Discovery is parallel with a bounded concurrency and hard overall timeout
  * so one hung command-based server cannot block Agent readiness for minutes

@@ -12,6 +12,7 @@
       "supports_developer_role": false,
       "supports_reasoning": false,
       "thinking_levels": [],
+      "default": true,
       "pricing": {
         "input_per_mtok": 0.14,
         "output_per_mtok": 0.28,

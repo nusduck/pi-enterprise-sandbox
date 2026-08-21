@@ -122,6 +122,19 @@ export function normalizeContextUsage(usage) {
 }
 
 /**
+ * Coerce a truncation limit to a positive integer, falling back to the
+ * default when absent/invalid.
+ *
+ * @param {unknown} value
+ * @param {number} fallback
+ * @returns {number}
+ */
+function positiveLimit(value, fallback) {
+  const n = Number(value);
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : fallback;
+}
+
+/**
  * @param {{
  *   runContext: {
  *     orgId: string,
@@ -156,6 +169,11 @@ export function normalizeContextUsage(usage) {
 export function createObservabilityExtension(options) {
   const runContext = options?.runContext;
   const deps = options?.deps ?? {};
+  // Audit-content truncation limits. Defaults keep the historical sizes;
+  // operators raising AGENT_OBS_DELTA_TRUNCATE / AGENT_OBS_THINKING_TRUNCATE
+  // accept larger run_events rows in exchange for fuller audit fidelity.
+  const deltaTruncateLimit = positiveLimit(deps.deltaTruncateLimit, 512);
+  const thinkingTruncateLimit = positiveLimit(deps.thinkingTruncateLimit, 2048);
   const recorder = deps.recorder ?? null;
   const isDurableInteractionPending =
     typeof deps.isDurableInteractionPending === 'function'
@@ -364,8 +382,8 @@ export function createObservabilityExtension(options) {
         await emit('message.delta', {
           role: 'assistant',
           messageId: activeAssistantMessage(),
-          delta: delta.slice(0, 512),
-          delta_truncated: delta.length > 512,
+          delta: delta.slice(0, deltaTruncateLimit),
+          delta_truncated: delta.length > deltaTruncateLimit,
         });
       } else if (ame?.type === 'thinking_start') {
         await emit('thinking.started', {
@@ -377,16 +395,16 @@ export function createObservabilityExtension(options) {
         await emit('thinking.delta', {
           role: 'assistant',
           messageId: activeAssistantMessage(),
-          delta: delta.slice(0, 512),
-          delta_truncated: delta.length > 512,
+          delta: delta.slice(0, deltaTruncateLimit),
+          delta_truncated: delta.length > deltaTruncateLimit,
         });
       } else if (ame?.type === 'thinking_end') {
         const thinking = redactInlineSecrets(String(ame.content ?? ''));
         await emit('thinking.completed', {
           role: 'assistant',
           messageId: activeAssistantMessage(),
-          text: thinking.slice(0, 2048),
-          text_truncated: thinking.length > 2048,
+          text: thinking.slice(0, thinkingTruncateLimit),
+          text_truncated: thinking.length > thinkingTruncateLimit,
         });
       }
     });

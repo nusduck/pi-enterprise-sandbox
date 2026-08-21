@@ -10,6 +10,8 @@
 export const DEFAULT_MAX_TOOL_CALLS_PER_RUN = 200;
 export const DEFAULT_MAX_IDENTICAL_TOOL_CALLS = 6;
 export const DEFAULT_MAX_MODEL_TURNS_PER_RUN = 120;
+/** Wall-clock Run deadline (ms). Guards against hung streams, not just loops. */
+export const DEFAULT_RUN_DEADLINE_MS = 30 * 60 * 1000;
 
 function positiveInt(value, name, fallback) {
   if (value == null || value === '') return fallback;
@@ -39,6 +41,11 @@ export function resolvePiRunToolBudget(env = process.env) {
       env.AGENT_RUN_MAX_MODEL_TURNS,
       'AGENT_RUN_MAX_MODEL_TURNS',
       DEFAULT_MAX_MODEL_TURNS_PER_RUN,
+    ),
+    runDeadlineMs: positiveInt(
+      env.AGENT_RUN_DEADLINE_MS,
+      'AGENT_RUN_DEADLINE_MS',
+      DEFAULT_RUN_DEADLINE_MS,
     ),
   });
 }
@@ -74,7 +81,13 @@ function budgetInstruction(reason) {
  * final defensive measure.
  *
  * @param {object} session
- * @param {{ maxToolCalls?: number, maxIdenticalToolCalls?: number, maxModelTurns?: number }} [limits]
+ * @param {{
+ *   maxToolCalls?: number,
+ *   maxIdenticalToolCalls?: number,
+ *   maxModelTurns?: number,
+ *   runDeadlineMs?: number,
+ *   now?: () => number,
+ * }} [limits]
  * @returns {{ supported: boolean, dispose: () => void, snapshot: () => object }}
  */
 export function installPiRunToolBudget(session, limits = {}) {
@@ -102,9 +115,16 @@ export function installPiRunToolBudget(session, limits = {}) {
     'maxModelTurns',
     DEFAULT_MAX_MODEL_TURNS_PER_RUN,
   );
+  const runDeadlineMs = positiveInt(
+    limits.runDeadlineMs,
+    'runDeadlineMs',
+    DEFAULT_RUN_DEADLINE_MS,
+  );
+  const now = typeof limits.now === 'function' ? limits.now : Date.now;
+  const deadlineAt = now() + runDeadlineMs;
 
   const priorBeforeToolCall = agent.beforeToolCall;
-  const priorPrepareNextTurn = agent.prepareNextTurnWithContext;
+  const priorPrepareNextTurnWithContext = agent.prepareNextTurnWithContext;
   const seen = new Map();
   let toolCalls = 0;
   let modelTurns = 0;
@@ -113,6 +133,11 @@ export function installPiRunToolBudget(session, limits = {}) {
   const exhaust = (reason) => {
     if (!exhaustedReason) exhaustedReason = reason;
   };
+
+  const deadlineRemainingMs = () => deadlineAt - now();
+  if (deadlineRemainingMs() <= 0) {
+    exhaust(`wall-clock deadline (${runDeadlineMs}ms)`);
+  }
 
   agent.beforeToolCall = async (context, signal) => {
     // Keep governance/approval hooks authoritative; a budget must never turn a
@@ -143,6 +168,13 @@ export function installPiRunToolBudget(session, limits = {}) {
         reason: `RUN_TOOL_BUDGET_EXHAUSTED: tool call limit (${maxToolCalls}) reached. Give a final answer without more tools.`,
       };
     }
+    if (deadlineRemainingMs() <= 0) {
+      exhaust(`wall-clock deadline (${runDeadlineMs}ms)`);
+      return {
+        block: true,
+        reason: `RUN_DEADLINE_EXCEEDED: wall-clock deadline (${runDeadlineMs}ms) reached. Give a final answer without more tools.`,
+      };
+    }
 
     seen.set(key, identicalCalls + 1);
     toolCalls += 1;
@@ -155,10 +187,13 @@ export function installPiRunToolBudget(session, limits = {}) {
   };
 
   agent.prepareNextTurnWithContext = async (turn, signal) => {
-    const priorSnapshot = await priorPrepareNextTurn?.(turn, signal);
+    const priorSnapshot = await priorPrepareNextTurnWithContext?.(turn, signal);
     modelTurns += 1;
     if (modelTurns >= maxModelTurns) {
       exhaust(`model turn limit (${maxModelTurns})`);
+    }
+    if (!exhaustedReason && deadlineRemainingMs() <= 0) {
+      exhaust(`wall-clock deadline (${runDeadlineMs}ms)`);
     }
     if (!exhaustedReason) return priorSnapshot;
 
@@ -183,7 +218,7 @@ export function installPiRunToolBudget(session, limits = {}) {
       if (disposed) return;
       disposed = true;
       agent.beforeToolCall = priorBeforeToolCall;
-      agent.prepareNextTurnWithContext = priorPrepareNextTurn;
+      agent.prepareNextTurnWithContext = priorPrepareNextTurnWithContext;
     },
     snapshot: () => ({
       supported: true,
@@ -194,6 +229,8 @@ export function installPiRunToolBudget(session, limits = {}) {
       maxToolCalls,
       maxIdenticalToolCalls,
       maxModelTurns,
+      runDeadlineMs,
+      deadlineRemainingMs: Math.max(0, deadlineRemainingMs()),
     }),
   };
 }
