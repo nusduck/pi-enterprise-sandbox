@@ -33,3 +33,8 @@ pi-agent-home/
 agent/pi-agent-home/
 agent/.a2a-live-agent-home/
 agent/.a2a-live-agent-workspace/
+
+# Internal deliverables. This repository is public — the design spec under
+# docs/deliverables/ carries a distribution scope and is not for publication.
+# Keep it local, or move it somewhere private before tracking it.
+docs/deliverables/

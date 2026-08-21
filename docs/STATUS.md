@@ -1,10 +1,14 @@
 # Refactor acceptance status
 
-**Branch:** `codex/plan-acceptance`  
-**Baseline commit (WIP snapshot):** `6d25783c`  
+**Tracks:** `main`  
+**Last audited at:** `be4a077a` (2026-08-21)  
 **Normative source:** [`plan.md`](./plan.md) §32
 **Evidence index:** [`evidence/`](./evidence/)  
 **Process log:** [`PROCESS_LOG.md`](./PROCESS_LOG.md)
+
+> The acceptance program ran on `codex/plan-acceptance`, which merged as PR #1 on
+> 2026-07-30 and was deleted. This board now tracks `main`; the dated evidence
+> under `evidence/` still refers to gate runs from that program.
 
 This file is the **only** living gap board for plan acceptance.  
 A green unit-test suite alone does **not** complete a row.
@@ -30,7 +34,7 @@ Change this file in the **same commit** as the implementation or evidence that j
 | ID | Criterion | Status | Evidence / notes |
 |----|-----------|--------|------------------|
 | A1 | Use Pi native Agent Loop | `done` | `agent/src/infrastructure/pi/*`, executor path; no second ReAct loop |
-| A2 | Three enterprise extensions load | `done` | `sandbox-bridge`, `enterprise-policy`, `observability`; kit removed |
+| A2 | Required enterprise extensions load | `done` | Four required: `sandbox-bridge`, `enterprise-policy`, `observability`, `user-interaction` (the `ask_user` split, 2026-08). `skill-lifecycle` is the one optional first-party extension. enterprise-agent-kit removed; the 12 legacy package names stay refused. |
 | A3 | MCP via `pi-mcp-adapter` | `done` | exact pin + 启动期 `tools/list` 发现/ready fail-closed（`agent/tests/pi/mcp-adapter.integration.test.js`） |
 | A4 | Multi-turn Session recoverable | `done` | Offline: session-recovery + journal units + WAITING_INPUT recovery matrix. **Live 2026-07-19:** full `agent-worker-pi-restart.release-gate.test.js` **5/5 PASS** (model SIGKILL replay, durable interaction, tool boundary, sandbox UNKNOWN) on isolated MySQL/Redis/Sandbox — Pi Session checkpoint path only. Evidence: `evidence/a4-g2-restart-matrix-2026-07-19.md`, `evidence/g6-interaction-worker-restart-2026-07-19.md`. Residual non-blocking: dedicated corrupt-journal-under-kill live gate not separate. |
 | A5 | Agent Version pinned | `done` | credential/version binding tests under `agent/tests/a2a/` |
@@ -137,15 +141,24 @@ Non-blocking debt remains in [`review-deferred-items.md`](./review-deferred-item
 
 ---
 
-## Checkpoint inventory (this branch)
+## Work merged after the acceptance program (2026-08-01 → 2026-08-21)
 
-Snapshot commit `6d25783c` brought in uncommitted follow-up from `codex/pi-enterprise-refactor`, including:
+`main` moved on after the §32 board was last audited. None of it reopened a
+`done` row, but the rows it touches are worth naming so the next audit knows
+where to look:
 
-- Durable interaction domain, migrations, repository, services, unit tests
-- Trace spans / run trace state migrations and query paths
-- Formal Sandbox internal plane (sessions/executions/processes/artifacts/files write)
-- A2A admin UI/API, authority tests on BFF
-- Removal of `enterprise-agent-kit` and many legacy Sandbox public routes
-- Release-gate scripts and dated evidence under `docs/evidence/`
+| Merged | Change | Rows it touches |
+|--------|--------|-----------------|
+| `0454f730` | Hermes-style tool paging and output budgets for sandbox tools | C5, C6 |
+| `6f991674` `0f58c3af` | Model selection, vision input, thinking UI | D2 |
+| `0db540c1` (#6) | Session restore + Run lifecycle synchronisation in the web UI | D1, D3 |
+| `752fd8ed` | `sandbox-mcp` bridge errors, non-ASCII artifact downloads | E3 |
+| `15e5aaf2` `90eb0ff7` (#7) `192a2520` | A2A v0.3 surface, SDK-valid streaming status, official task-lifecycle streams | F1–F5 |
+| `862b9f5e` (#8) | User Skill installation lifecycle redesign — `skill-lifecycle` extension | A2, H3 |
+| `266af012` (#9) | User Skill paths allowed in sandbox reads and binds | C2, H3 |
+| `b2fe388e` | Sandbox dev egress; production overlay strips it | H4 |
+| `7fae4dbd` | MCP discovered schemas projected to the model | A3 |
+| `be4a077a` (#10) | Agent service ↔ Pi SDK gap closure | A1, A4 |
 
-That snapshot is **not** acceptance. It is the engineering baseline for acceptance work on `codex/plan-acceptance`.
+The H5/H6 ops sampling is still the only thing between this board and
+"refactor complete", and it still needs a real deployment — no offline substitute.

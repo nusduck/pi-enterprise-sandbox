@@ -7,11 +7,11 @@ Pi Enterprise Sandbox 四服务 API 分层：
 | **Public** | Frontend Nginx | `/api/*` 反向代理到 API Server |
 | **API Server (BFF)** | Node.js 22 (port 4000) | Run API/SSE relay、健康探针、文件上传/下载代理 |
 | **Agent** | Node.js 22 (port 4100) | 内部 Run API + pi-coding-agent SDK（浏览器不直连） |
-| **Sandbox** | FastAPI (port 8081) | Agent 专用内部执行平面（HMAC `/internal/v1/*`）；文件/执行/进程/数据集/产物（Docker 内网） |
+| **Sandbox** | FastAPI (container 8081，无宿主映射) | Agent 专用内部执行平面（HMAC `/internal/v1/*`）；文件/执行/进程/数据集/产物（Docker 内网） |
 
 无 Python Agent Runtime、无双 Runtime 开关。Agent **支持零 Skill 启动**；共享 `skills/` 挂载与 package skills 由 Agent Profile 策略 + session capability registry 控制。
 
-> **Sandbox 端口 8081 仅 Docker 内网可访问，生产不发布宿主端口**。Agent 调用正式执行能力使用 HMAC-authenticated `/internal/v1/*`；浏览器不能直连 Sandbox，也不能提供 Sandbox service credential。BFF `/api/*` 是唯一浏览器 API 边界。
+> **Sandbox 端口 8081 仅 Docker 内网可访问；compose 里该服务没有 `ports:` 段，dev 与生产都不发布宿主端口**。Agent 调用正式执行能力使用 HMAC-authenticated `/internal/v1/*`；浏览器不能直连 Sandbox，也不能提供 Sandbox service credential。BFF `/api/*` 是唯一浏览器 API 边界。
 > MCP 由 Agent Host 的 MCP Connection Manager 直连企业 MCP Gateway/Server，不经过 Sandbox，也不向浏览器暴露凭据。
 
 ---
@@ -134,7 +134,84 @@ data: {"sequence":18,"event":{...},"ts":...,"eventId":"01K..."}
 
 `GET /api/capabilities/{skills,mcp,tools,models}` 仍从 diagnostics 投影列表；字段可附加 `status` / `dynamic`。
 
+`GET /api/runs/{run_id}/trace` 返回 owner-scoped durable span 树：
+
+```json
+{
+  "traceId": "0123456789abcdef0123456789abcdef",
+  "runId": "01...",
+  "spans": [
+    {
+      "spanId": "0123456789abcdef",
+      "parentSpanId": null,
+      "name": "run.execute",
+      "kind": "internal",
+      "status": "ok",
+      "startTime": "2026-07-19T00:00:00.000Z",
+      "endTime": "2026-07-19T00:00:00.100Z",
+      "attributes": {}
+    }
+  ]
+}
+```
+
+归属按已认证用户的 organization/user 与 Run 校验；跨租户或不存在的 Run
+返回相同的 not-found 语义。Trace ID 是结果中的字段，不是未授权的全局索引。
+
 Agent 模型侧权威清单工具：`capabilities`（`action=list|search|describe`），只读、有界、不含凭据/完整 schema/技能正文。
+
+### 完整路由表
+
+浏览器唯一的 API 边界。以下是 `api-server/server.js` 当前分发的全部路由；
+未列出的路径返回 404。
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| `POST` | `/api/auth/register` | 注册；成功后写 HttpOnly 会话 Cookie |
+| `POST` | `/api/auth/login` | 登录 |
+| `POST` | `/api/auth/logout` | 清理会话 |
+| `GET` | `/api/auth/me` | 当前用户 |
+| `GET` `POST` | `/api/conversations` | 列出 / 创建 Conversation |
+| `GET` `DELETE` | `/api/conversations/{id}` | 详情 / 删除 |
+| `GET` | `/api/conversations/{id}/events` | Conversation 维度 SSE |
+| `POST` | `/api/conversations/{id}/runs` | 在指定 Conversation 下创建 Run |
+| `POST` | `/api/conversations/{id}/follow-ups` | 追问 |
+| `GET` `POST` | `/api/conversations/{id}/datasets` | 列出 / 上传 Dataset |
+| `POST` | `/api/conversations/{id}/artifact-imports` | 跨会话导入已有 Artifact |
+| `GET` `POST` | `/api/runs` | 列出 / 创建 Run |
+| `GET` | `/api/runs/{id}` | Run 详情 |
+| `GET` | `/api/runs/{id}/events` | SSE replay |
+| `GET` | `/api/runs/{id}/trace` | owner-scoped durable span 树 |
+| `GET` | `/api/runs/{id}/tools` | 该 Run 的工具执行台账 |
+| `POST` | `/api/runs/{id}/cancel` | 取消（需 `Idempotency-Key`） |
+| `POST` | `/api/runs/{id}/steer` | 运行中改向 |
+| `POST` | `/api/runs/{id}/resume-approval` | 审批后恢复 |
+| `POST` | `/api/runs/{id}/interactions/{iid}/respond` | 回答 `ask_user` |
+| `GET` | `/api/approvals` | 待审批列表 |
+| `GET` | `/api/approvals/{id}` | 审批详情 |
+| `POST` | `/api/approvals/{id}/decide` | 批准 / 拒绝 |
+| `GET` | `/api/artifacts` | Artifact 列表 |
+| `GET` | `/api/datasets` | Dataset 列表 |
+| `GET` | `/api/processes` | 长进程列表 |
+| `GET` | `/api/processes/{id}` | 进程详情 |
+| `GET` | `/api/processes/{id}/logs\|read` | 进程输出（游标读） |
+| `POST` | `/api/processes/{id}/stdin\|signal\|cancel\|kill` | 进程控制 |
+| `GET` `POST` | `/api/cron-jobs` | 列出 / 创建定时任务 |
+| `GET` `PATCH` `DELETE` | `/api/cron-jobs/{id}` | 详情 / 修改 / 删除 |
+| `GET` | `/api/cron-jobs/{id}/runs` | 该定时任务的历史 Run |
+| `POST` | `/api/cron-jobs/{id}/run` | 立即触发一次 |
+| `GET` | `/api/capabilities/{skills,mcp,tools,models}` | 从 diagnostics 投影的能力清单 |
+| `GET` | `/api/extensions/diagnostics` | Extension / Profile / allowlist 状态 |
+| `GET` | `/api/a2a/config` | A2A 配置（**admin**） |
+| `POST` | `/api/a2a/credentials` | 签发 A2A 凭据（**admin**） |
+| `POST` | `/api/a2a/credentials/{id}/rotate\|revoke` | 轮换 / 吊销（**admin**） |
+| `GET` | `/api/files/artifact-download` | 交付物下载（`session_id` + `artifact_id`） |
+| `GET` | `/api/files/download` | 按路径下载 workspace 文件 |
+| `POST` | `/api/files/upload` | 上传附件（multipart 流式代理） |
+| `POST` | `/api/sessions/ensure` | 确保 Conversation + Sandbox Session 绑定 |
+| `GET` | `/health/live` `/health/ready` | 探针 |
+
+`/api/a2a/*` 要求 `actingRole === 'admin'`，否则 403 `ADMIN_REQUIRED`。
 
 ### BFF 健康检查
 
@@ -172,12 +249,13 @@ Agent 模型侧权威清单工具：`capabilities`（`action=list|search|describ
 
 Base URL: `http://sandbox:8081`（Docker 内网）
 
-本节列出的 `/sessions/*`、`/executions/*`、`/files/*`、`/artifacts/*`
-路径是旧适配器和 BFF 上游代理的兼容说明，不是浏览器或第三方可依赖的
-公共 API。正式 Agent 工具调用走带 scope、claim 和 replay protection 的
-`/internal/v1/*` HMAC 平面；生产环境不发布 Sandbox 宿主端口。新的集成
-必须添加对应的 `/api/*` BFF 路由或 Agent internal contract，不能把
-`X-API-Key` 当作终端用户身份。
+正式的 Agent 工具调用只走带 scope、claim 和 replay protection 的
+`/internal/v1/*` HMAC 平面。剩下的 `/sessions/{id}/files/*`、
+`/sessions/{id}/datasets/*`、`/sessions/{id}/artifacts/*` 是 BFF 上游代理的
+兼容路径，不是浏览器或第三方可依赖的公共 API；`/sessions/{id}/executions/*`
+这一层已经删除。生产环境不发布 Sandbox 宿主端口。新的集成必须添加对应的
+`/api/*` BFF 路由或 Agent internal contract，不能把 `X-API-Key`
+当作终端用户身份。
 
 ### 通用约定
 
@@ -198,94 +276,58 @@ Base URL: `http://sandbox:8081`（Docker 内网）
   - 旧数据迁移绑定 `user_bootstrap` / `org_bootstrap`；新用户默认加入 bootstrap org
   - BFF `AUTH_ENABLED`（默认同 `SANDBOX_AUTH_ENABLED`）保护 `/api/conversations`、`/api/runs`、Extension diagnostics、文件/产物路由；`/health/*` 与 `/api/auth/*` 保持公开
 
-### Sessions
 
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| `POST` | `/sessions` | 创建会话 |
-| `GET` | `/sessions` | 列出所有活跃会话 |
-| `GET` | `/sessions/{id}` | 获取会话详情 |
-| `DELETE` | `/sessions/{id}` | 关闭会话并按保留策略清理该 Agent Session 的私有存储 |
-| `GET` | `/sessions/by-agent/{aid}` | 按 agent session ID 查询 |
-| `GET` | `/sessions/by-enterprise/{eid}` | 按 enterprise session ID 查询 |
+### `/internal/v1/*` — Agent 专用执行平面
 
-#### `POST /sessions` — 创建会话
+正式的 Agent → Sandbox 调用全部走这一层。每次请求携带短期 HMAC claim
+（scope + owner + run/session + body digest + replay jti），Sandbox 独立校验，
+不信任 Agent 侧的策略结论。
 
-```json
-// Request
-{
-  "caller_id": "pi-coding-agent",
-  "agent_session_id": "...",
-  "enterprise_session_id": "...",
-  "user_id": "...",
-  "metadata": {},
-  "conversation_id": "conversation_uuid",
-  "workspace_id": "01K0G2PAV8FPMVC9QHJG7JPN4Z"
-}
+| 方法 | 路径 | 对应工具 |
+|------|------|----------|
+| `POST` | `/internal/v1/sessions/ensure` | Session 绑定 |
+| `POST` | `/internal/v1/files/read` | `read` |
+| `POST` | `/internal/v1/files/write` | `write` |
+| `POST` | `/internal/v1/files/edit` | `edit` |
+| `POST` | `/internal/v1/skills/read` | Skill 读取（只读根） |
+| `POST` | `/internal/v1/executions/bash` | `bash` |
+| `POST` | `/internal/v1/executions/python` | `python` |
+| `POST` | `/internal/v1/processes/start` | `process_start` |
+| `POST` | `/internal/v1/processes/status` | `process_status` |
+| `POST` | `/internal/v1/processes/read` | `process_read` |
+| `POST` | `/internal/v1/processes/kill` | `process_kill` |
+| `POST` | `/internal/v1/artifacts/submit` | `submit_artifact` |
+| `POST` | `/internal/v1/artifacts/download` | 交付物取回 |
+| — | `/internal/mcp/v1/*` | `sandbox-mcp` facade（独立部署，见 [`sandbox-mcp.md`](./sandbox-mcp.md)） |
 
-// Response (201)
-{
-  "session_id": "sandbox_abc123",
-  "status": "RUNNING",
-  "workspace_id": "ws_abc",
-  "agent_session_id": "...",
-  "enterprise_session_id": "...",
-  "user_id": "...",
-  "caller_id": "pi-coding-agent",
-  "created_at": "2026-07-04T10:00:00Z",
-  "updated_at": "2026-07-04T10:00:00Z",
-  "metadata": {}
-}
-```
-
-> 公共协议使用 opaque **`workspace_id`**。工具/文件/Artifact 接受 workspace 相对路径、`/home/sandbox/workspace/...` 和当前 Agent Session 私有的持久化 `/tmp/...`；其他绝对路径与路径逃逸 fail-closed。
-> 物理存储根仅存在于服务内部，**不**出现在 API、SSE 或模型上下文。
-> `workspace_id` 由受信任的 Agent Session provisioner 预分配，并与 `agent_session_id` 形成不可变的一对一绑定；它不从 `conversation_id` 派生。Sandbox 拒绝缺失绑定证明或与既有绑定冲突的请求。
-> Skill 根在 workspace 外；Agent 可零 Skill 启动。共享/package skills 由 Profile + capability registry 控制；Sandbox 执行侧始终只读。
+这 10 个 sandbox-bridge 工具（`read` `write` `edit` `bash` `python`
+`process_start` `process_status` `process_read` `process_kill`
+`submit_artifact`）是模型能看到的全部 Sandbox 工具面，由
+`agent/src/extensions/sandbox-bridge/constants.js` 的 `SANDBOX_TOOL_NAMES` 固定，
+并有守卫测试断言其中不含任何 SQL/DSN 工具。
 
 ---
 
-### Executions
+### 兼容适配层实际剩余的公共路由
+
+历史上的 `POST /sessions`、`/sessions/{id}/executions/*`、Sandbox 侧的
+`/approvals` 与 `/conversations` **均已删除**。执行只存在于 `/internal/v1/*`；
+审批与 Conversation 的唯一权威是 Agent MySQL，经 BFF `/api/*` 访问。
+
+当前 Sandbox 进程实际挂载的非 internal 路由只有：
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| `POST` | `/sessions/{id}/executions/python` | 执行 Python 代码 |
-| `POST` | `/sessions/{id}/executions/command` | 执行 Shell 命令 |
-| `POST` | `/sessions/{id}/executions/node` | 执行 Node.js 代码 |
-| `POST` | `/sessions/{id}/executions/approval-check` | 外部副作用工具的审批预检；普通 workspace bash/python/node 不调用此端点 |
-| `GET` | `/sessions/{id}/executions/{eid}` | 查询执行结果 |
-| `POST` | `/sessions/{id}/executions/{eid}/cancel` | 取消进行中的执行 |
-
-#### `POST /sessions/{id}/executions/python`
-
-```json
-// Request
-{ "code": "print('hello')", "timeout": 120 }
-
-// Response (201)
-{
-  "execution_id": "exec_abc123",
-  "session_id": "sandbox_abc123",
-  "status": "SUCCESS",
-  "stdout_preview": "hello\n",
-  "stderr_preview": "",
-  "exit_code": 0,
-  "duration_ms": 45.2,
-  "truncated": false,
-  "trace_id": "trace_xyz"
-}
-```
-
-#### `POST /sessions/{id}/executions/command`
-
-```json
-// Request
-{ "command": "ls -la", "timeout": 120 }
-
-// Response (201) — 同 Python 响应格式
-```
-
-> **注意**：执行完成后**不会自动注册 artifact**。如需将执行产物标记为可下载，请显式调用 `submit_artifact` 或 `register`。
+| `POST` | `/auth/register` `/auth/login` | 兼容认证 |
+| `GET` | `/auth/me` | 当前用户 |
+| `DELETE` | `/sessions/{session_id}` | 按保留策略清理该 Session 的私有存储 |
+| — | `/sessions/{id}/files/*` | 见下方 Files |
+| `GET` `POST` | `/sessions/{id}/datasets` | 列出 / 创建 Dataset |
+| `GET` | `/sessions/{id}/datasets/{did}` | Dataset 详情 |
+| `GET` | `/sessions/{id}/datasets/{did}/content` | 流式取内容 |
+| `POST` | `/sessions/{id}/datasets/{did}/abort` | 中止上传 |
+| — | `/sessions/{id}/artifacts/*` | 见下方 Artifacts |
+| `GET` | `/health` `/ready` `/metrics` | 探针与指标 |
 
 ---
 
@@ -300,6 +342,8 @@ Base URL: `http://sandbox:8081`（Docker 内网）
 | `GET` | `/sessions/{id}/files/read?path=&offset=&limit=` | 读取文件 |
 | `POST` | `/sessions/{id}/files/read` | 读取文件（POST body） |
 | `POST` | `/sessions/{id}/files/write` | 写入文件 |
+| `POST` | `/sessions/{id}/files/edit` | 按锚点编辑文件 |
+| `POST` | `/sessions/{id}/files/apply_patch` | 应用补丁 |
 | `GET` | `/sessions/{id}/files/preview?path=` | 预览文件前 40 行 |
 | `GET` | `/sessions/{id}/files/download?path=` | 下载文件 |
 | `DELETE` | `/sessions/{id}/files?path=` | 删除文件 |
@@ -412,11 +456,12 @@ Agent 工具 `ls` / `find` / `grep` 覆盖 SDK 本地同名工具，全部转发
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| `GET` | `/sessions/{id}/artifacts` | 列出已注册的产物 |
 | `POST` | `/sessions/{id}/artifacts/register` | 注册产物（旧端点） |
 | **`POST`** | **`/sessions/{id}/artifacts/submit`** | **显式提交产物（推荐）** |
 | `POST` | `/sessions/{id}/artifacts/imports` | 将 owner-scoped Artifact 导入本 Session workspace（BFF 上游兼容端点） |
 | `GET` | `/sessions/{id}/artifacts/{aid}/download` | 下载产物 |
+
+Sandbox 侧**没有**产物列表路由；列表由 Agent MySQL 提供，经 BFF `GET /api/artifacts` 访问。
 
 > **核心设计（P7）**：系统**不会自动扫描** workspace。`write` / `edit` / `bash` 只改私有工作区，**不会**注册 artifact，也**不会**触发 `file_ready`。只有通过 `submit_artifact`（或等价 `POST .../artifacts/submit`）显式提交的文件才会出现在 artifact 列表并可供用户下载。
 
@@ -459,93 +504,6 @@ metadata，也不触发 `artifact.ready/file_ready`。目标会话如需正式�
 
 // Response (201) — 同 submit
 ```
-
----
-
-### Approvals
-
-审批的 `idempotency_key` 必须由 Agent 根据 durable run、Sandbox session、工具名、稳定的 SDK
-`tool_call_id` 和规范化参数生成，且只在该 session 内生效。相同 `(session_id, idempotency_key)` 的请求
-原子复用同一条 pending、approved 或 rejected 记录；同一执行尝试的重试不会重复弹窗。approval resume
-会携带原审批 key 和 operation fingerprint 作为一次性授权，即使 SDK 产生新的 `tool_call_id` 也只会
-授权完全相同的规范化操作，并在成功使用后失效；之后相同命令的新执行仍会生成新 key。`APPROVAL_MODE=deny`
-对 `approval_required` 明确拒绝且不创建记录；`auto_approve` 是显式的开发旁路，生产配置会拒绝它。
-
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| `POST` | `/approvals` | 创建或复用 durable approval |
-| `GET` | `/approvals/{id}` | 查询审批状态 |
-| `POST` | `/approve` | 审批决策 |
-
-```json
-// Request
-{ "approval_id": "approval_abc123", "decision": "approve" }
-
-// Response (200)
-{ "approval_id": "approval_abc123", "idempotency_key": "approval_hash", "status": "approved", "risk_level": "high", "reason": "" }
-```
-
----
-
-### Conversations
-
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| `GET` | `/conversations` | 列出对话 |
-| `POST` | `/conversations` | 创建对话 |
-| `GET` | `/conversations/{id}` | 获取对话详情 |
-| `PATCH` | `/conversations/{id}` | 更新对话 |
-| `DELETE` | `/conversations/{id}` | 删除对话元数据；Workspace 生命周期由 Agent Session 决定 |
-| `GET` | `/conversations/{id}/messages` | 获取消息列表 |
-| `PATCH` | `/conversations/{id}/title` | 重命名对话 |
-
-```json
-// POST /conversations — Request
-{ "title": "My Conversation" }
-
-// Response (201)
-{
-  "id": "conv_uuid",
-  "title": "My Conversation",
-  "messages": [],
-  "created_at": "...",
-  "updated_at": "..."
-}
-```
-
-Conversation 只组织消息，不拥有 Workspace。一个 Conversation 一期默认对应一个活跃 Agent Session；由该 Agent Session 绑定并复用 opaque `workspace_id` 与 `tmp_{workspace_id}`。公共响应不返回物理路径。
-
----
-
-### Traces
-
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| `GET` | `/api/runs/{run_id}/trace` | 获取 owner-scoped durable Run trace tree |
-
-```json
-// Response (200)
-{
-  "traceId": "0123456789abcdef0123456789abcdef",
-  "runId": "01...",
-  "spans": [
-    {
-      "spanId": "0123456789abcdef",
-      "parentSpanId": null,
-      "name": "run.execute",
-      "kind": "internal",
-      "status": "ok",
-      "startTime": "2026-07-19T00:00:00.000Z",
-      "endTime": "2026-07-19T00:00:00.100Z",
-      "attributes": {}
-    }
-  ]
-}
-```
-
-查询按已认证用户的 organization/user 与 Run 做归属校验；跨租户或
-不存在的 Run 返回相同的 not-found 语义。Trace ID 是查询结果中的字段，
-不是未授权的全局索引。
 
 ---
 

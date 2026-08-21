@@ -30,7 +30,7 @@ open http://localhost:3000
 | **Frontend** | Vite + React → Nginx | `3000→80` |
 | **API Server (BFF)** | Node.js 22 — auth / files / SSE relay | `4000→4000` |
 | **Agent** | Node.js 22 + pi-coding-agent SDK `0.80.3` | `4100→4100` |
-| **Sandbox API** | Python 3.11 + FastAPI | `8083→8081` |
+| **Sandbox API** | Python 3.11 + FastAPI | 仅 Docker 内网 `8081`，不发布宿主端口 |
 
 运行时版本钉（Node 22 / Python 3.11 / Pi SDK 0.80.3）见根目录 `runtime-versions.json`，由 `tests/test_runtime_versions.py` 校验。
 
@@ -50,12 +50,12 @@ pi-sandbox/
 ├── agent/                ← 独立 Agent（@earendil-works/pi-coding-agent 0.80.3）
 │   ├── server.js         ← 内部 Run API / health
 │   ├── src/application/  ← Run、Session、审批、A2A 应用服务
-│   ├── src/extensions/   ← sandbox-bridge、enterprise-policy、observability
+│   ├── src/extensions/   ← sandbox-bridge、enterprise-policy、observability、user-interaction（+ 可选 skill-lifecycle）
 │   ├── src/infrastructure/ ← MySQL、Redis、Pi、MCP 与 Sandbox ports
 │   └── Dockerfile
 ├── sandbox/              ← 安全沙箱（Python FastAPI + 多层防护，无 Agent 主循环）
 │   ├── main.py           ← FastAPI 入口
-│   ├── routers/          ← sessions, executions, files, artifacts, traces...
+│   ├── routers/          ← internal/v1 执行平面 + files/datasets/artifacts 兼容适配 + health
 │   ├── services/         ← 会话/执行/文件/审计/审批策略
 │   └── Dockerfile
 ├── skills/               ← 可选共享 Skill 挂载（非硬依赖；profile + capability registry 控制可见性）

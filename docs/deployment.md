@@ -16,8 +16,8 @@ docker compose up --build -d
 curl -f http://localhost:3000/            # Frontend
 curl -f http://localhost:4000/health/ready  # BFF + dependencies
 curl -f http://localhost:4100/health      # Agent
-curl -f http://localhost:8083/health      # Sandbox liveness
-curl -f http://localhost:8083/ready       # Sandbox readiness (workspaces + DB)
+docker compose exec sandbox curl -fsS http://localhost:8081/health      # Sandbox liveness
+docker compose exec sandbox curl -fsS http://localhost:8081/ready       # Sandbox readiness (workspaces + DB)
 ```
 
 | 服务 | 端口 | 容器内端口 |
@@ -25,7 +25,8 @@ curl -f http://localhost:8083/ready       # Sandbox readiness (workspaces + DB)
 | Frontend (Nginx) | `3000` | `80` |
 | API Server (BFF) | `4000` | `4000` |
 | Agent | `4100` | `4100` |
-| Sandbox internal execution plane | 内网仅（生产不发布） | `8081` |
+| Sandbox internal execution plane | 无宿主映射（dev 与生产均不发布） | `8081` |
+| `sandbox-mcp` facade | `SANDBOX_MCP_HOST_PORT`（默认 `8082`，绑 `127.0.0.1`） | `8082` |
 
 ## 生产部署
 
@@ -339,8 +340,8 @@ X-API-Key: ***
 
 ```bash
 # 只验证健康与 BFF 边界；不要用宿主 curl 模拟 internal HMAC 请求
-curl -f http://localhost:8083/health
-curl -f http://localhost:8083/ready
+docker compose exec sandbox curl -fsS http://localhost:8081/health
+docker compose exec sandbox curl -fsS http://localhost:8081/ready
 curl -f http://localhost:4000/health/ready
 ```
 
@@ -405,11 +406,11 @@ curl -f http://localhost:4000/health/ready
 # {"status":"ok","version":"4.0.0","agent":{"status":"ok"},"sandbox":{"status":"ok"}}
 
 # Sandbox liveness（进程存活；公开路由，无需 API key）
-curl -f http://localhost:8083/health
+docker compose exec sandbox curl -fsS http://localhost:8081/health
 # {"status":"ok","version":"…","workspace_available":true,…}
 
 # Sandbox readiness（依赖就绪；未就绪时 curl -f 因 503 失败）
-curl -f http://localhost:8083/ready
+docker compose exec sandbox curl -fsS http://localhost:8081/ready
 # {"status":"ok","workspace_available":true,…}  或 HTTP 503 status=not_ready
 
 # Nginx (生产)
@@ -431,7 +432,7 @@ node scripts/smoke-cross-service.mjs
 
 **完整栈（需有效 `LLMIO_*` 或测试用 fake 指向可路由地址）：**
 
-1. `docker compose up --build -d` → 等待 `curl -f localhost:4000/health/ready` 与 `curl -f localhost:8083/ready`
+1. `docker compose up --build -d` → 等待 `curl -f localhost:4000/health/ready` 与 `docker compose exec sandbox curl -fsS localhost:8081/ready`
 2. 浏览器打开 `http://localhost:3000`，发送多轮消息（同一 conversation）
 3. 触发高风险外部副作用 Tool → UI 出现审批 → approve/reject；普通 Sandbox bash 不审批
 4. 上传二进制文件 → 下载校验字节一致
@@ -558,7 +559,7 @@ docker exec pi-enterprise-agent sh -c \
 
 # 检查独立 replay Redis 与 Sandbox readiness
 docker compose ps sandbox-replay-redis sandbox
-curl -f http://localhost:8083/ready
+docker compose exec sandbox curl -fsS http://localhost:8081/ready
 ```
 
 ### 数据库问题

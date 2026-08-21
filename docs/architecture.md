@@ -22,7 +22,7 @@ Pi Enterprise Sandbox 采用**四服务架构**，前端、BFF、Agent 与沙箱
 │    Internal execution plane: files · execution · process │
 │    datasets · artifacts · resource limits                │
 │    MySQL 8 (sole formal DB topology, dev + prod)         │
-│    dev host:8083 → container:8081; prod is not published │
+│    container:8081 only — no host port in dev or prod     │
 ├──────────────────────────────────────────────────────────┤
 │    Redis 7 (Agent-only runtime coordination)             │
 │    Queue · Lease · Stream · cancel · Outbox wakeup       │
@@ -39,8 +39,8 @@ Pi Enterprise Sandbox 采用**四服务架构**，前端、BFF、Agent 与沙箱
 |------|--------|--------|------|
 | **Frontend** | `pi-enterprise-frontend` | Vite + React → Nginx | 纯 UI 渲染，零 Agent 逻辑；Nginx 反向代理 `/api/*` |
 | **API Server (BFF)** | `pi-enterprise-api` | Node.js 22 | 认证、会话文件边缘、Run API 与 SSE relay |
-| **Agent** | `pi-enterprise-agent` | Node.js 22 + pi-coding-agent SDK `0.80.3` | MySQL Run/Session authority、Pi Runtime、三类 Extension、`pi-mcp-adapter` |
-| **Sandbox** | `pi-enterprise-sandbox` | Python 3.11 + FastAPI | Agent 专用内部执行平面（HMAC `/internal/v1/*`）；安全命令执行、文件读写、产物管理（无 Agent 主循环） |
+| **Agent** | `pi-enterprise-agent` | Node.js 22 + pi-coding-agent SDK `0.80.3` | MySQL Run/Session authority、Pi Runtime、四个必需 Extension + 一个可选、`pi-mcp-adapter` |
+| **Sandbox** | `pi-enterprise-sandbox` | Python 3.11 + FastAPI | Agent 专用内部执行平面（HMAC `/internal/v1/*`）；安全命令执行、文件读写、产物管理（无 Agent 主循环）。compose 中无 `ports:` 段——宿主不可直连，只能从 `backend_internal` 访问 |
 
 ## 通信协议
 
@@ -117,6 +117,26 @@ Agent（`pi-coding-agent` SDK）运行在独立 `agent/` 服务中，而非浏�
 - **清空 Redis 的后果**：仅丢失运行态协调（queue job、lease、live stream 游标、短期 cache）；MySQL 中 Conversation / Run / `run_events` / 审计事实保留
 - **恢复路径**：Outbox publisher 从 `domain_outbox` 重试未发布事件；SSE/历史从 MySQL `run_events` 重放；Worker 按 MySQL Run 状态 + 幂等记录决定重试或失败
 - 生产：`REDIS_PASSWORD` 必填（compose fail-fast）；禁止无密码生产 Redis
+
+### 4c. 第一方 Extension 名单
+
+`REQUIRED_EXTENSION_NAMES` 是**四个**（`agent/src/extensions/constants.js`）：
+
+| Extension | 角色 |
+|-----------|------|
+| `sandbox-bridge` | 注册 `SANDBOX_TOOL_NAMES` 的 10 个工具，全部路由到 Sandbox internal plane |
+| `enterprise-policy` | 纯拦截器；不注册任何工具，对每次 `tool_call` 给出 allow / require_approval / deny |
+| `observability` | 记录工具结果与审计事件 |
+| `user-interaction` | 注册 `ask_user`。名字不叫 `interaction`，因为那是 registry 必须持续拒绝的 legacy enterprise-agent-kit 包名 |
+
+`OPTIONAL_EXTENSION_NAMES` 目前只有 `skill-lifecycle`：用户态 Skill 的安装、
+Agent 生成、编辑与卸载，需要可写的 per-user Skill 根。新增可选 Extension 必须
+同时为它注册的每个工具补 tool-risk-classifier 条目，否则这些工具会以
+`UNKNOWN_TOOL_DENIED` 被拒（有守卫测试）。
+
+`LEGACY_REQUIRED_EXTENSION_NAMES`（三个，不含 `user-interaction`）仅用于兼容
+`user-interaction` 拆分之前的配置：给出这三个即隐含启用 `user-interaction`，
+`ask_user` 不会静默消失。
 
 ### 5. 审批工作流（外部副作用）
 
@@ -207,9 +227,12 @@ Agent Session 生命周期。
 安全策略在两层独立执行，**Sandbox 不信任 Extension 结论**：
 
 ```text
-Agent Host + three enterprise Extensions
-  enterprise-policy      → allow | require_approval | deny
-  sandbox-bridge         → owner/run/session 绑定、写工具串行互斥
+Agent Host + first-party Extensions
+  sandbox-bridge         → 注册 10 个工具；owner/run/session 绑定、写工具串行互斥
+  enterprise-policy      → 拦截每次 tool_call：allow | require_approval | deny
+  observability          → 记录工具结果与审计事件
+  user-interaction       → 注册 ask_user（必需；由 interaction 这个 legacy 包名改名而来）
+  skill-lifecycle        → 可选，用户态 Skill 安装/生成/编辑/卸载
   durable MySQL ledger   → 外部副作用审批、审计、resume
         │
         ▼
