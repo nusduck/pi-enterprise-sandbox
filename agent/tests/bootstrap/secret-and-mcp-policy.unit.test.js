@@ -294,12 +294,17 @@ describe('MCP data-plane policy (H6)', () => {
     assert.match(interactionSrc, /registerTool/);
     assert.doesNotMatch(policySrc, /registerTool/);
 
-    // MCP module set is closed: config loader + adapter factory only.
+    // MCP module set is closed: config loader + adapter factory, plus the
+    // factory's own split-out parts (shared constants, deployment registry
+    // parsing, tool-schema validation). No second protocol/client stack.
     const mcpFiles = listJsFiles(path.join(root, 'src/infrastructure/mcp'))
       .map((f) => path.basename(f))
       .sort();
     assert.deepEqual(mcpFiles, [
       'mcp-config-loader.js',
+      'mcp-constants.js',
+      'mcp-server-registry.js',
+      'mcp-tool-schema.js',
       'pi-mcp-adapter-factory.js',
     ]);
 

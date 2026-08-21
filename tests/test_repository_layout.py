@@ -22,19 +22,22 @@ LOCAL_GENERATED_DIRECTORIES = frozenset(
     }
 )
 
-# Existing hotspots are explicit debt, not a silent exception. Budgets are at
-# or below the 2026-07-30 baseline so these files can shrink but cannot grow.
+# Existing hotspots are explicit debt, not a silent exception. Every budget is
+# pinned to the file's current length, so a hotspot can shrink but never grow:
+# adding to one fails this test in the same PR that added the lines. Growing a
+# hotspot on purpose means splitting it or raising its budget here, with the
+# reason in the commit message — never silently.
 HOTSPOT_LINE_BUDGETS = {
     "agent/src/application/execute-run-service.js": 1_484,
-    "agent/src/application/fenced-tool-governance-recorder.js": 1_716,
-    "agent/src/application/pi-run-executor.js": 1_707,
-    "agent/src/bootstrap/container.js": 1_477,
-    "agent/src/bootstrap/create-http-server.js": 1_518,
-    "agent/src/infrastructure/mcp/pi-mcp-adapter-factory.js": 1_382,
+    "agent/src/application/fenced-tool-governance-recorder.js": 1_666,
+    "agent/src/application/pi-run-executor.js": 1_549,
+    "agent/src/bootstrap/container.js": 1_235,
+    "agent/src/bootstrap/create-http-server.js": 1_448,
+    "agent/src/infrastructure/mcp/pi-mcp-adapter-factory.js": 1_266,
     "agent/src/infrastructure/mysql/repositories/tool-execution-repository.js": 1_131,
     "agent/src/infrastructure/mysql/repositories/trace-span-repository.js": 1_046,
-    "agent/src/infrastructure/pi/pi-runtime-factory.js": 1_120,
-    "agent/src/infrastructure/sandbox/internal-files-read-http.js": 1_420,
+    "agent/src/infrastructure/pi/pi-runtime-factory.js": 646,
+    "agent/src/infrastructure/sandbox/internal-files-read-http.js": 1_009,
     "sandbox/app/persistence/repositories/tool_execution_claim_validator.py": 1_111,
     "sandbox/config.py": 1_469,
     "sandbox/services/process_manager.py": 1_887,
