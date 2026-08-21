@@ -5,8 +5,11 @@
 ## Repository structure rules
 
 - Production source files default to at most 1,000 lines. The structural test
-  in `tests/test_repository_layout.py` records remaining legacy hotspots as
-  non-increasing budgets; reduce the budget whenever a hotspot is split.
+  in `tests/test_repository_layout.py` records the remaining hotspots as
+  budgets pinned to their current length: a hotspot can shrink but never grow.
+  Adding lines to one fails that test in the same PR that added them. Growing a
+  hotspot on purpose means splitting it or raising its budget there, with the
+  reason in the commit message — never silently.
 - Runtime code belongs under the service's `src/` or package tree. Test helpers
   belong under `tests/support`; do not recreate a parallel `testing/` root.
 - Project documentation belongs under `docs/`, except `README.md` files that
@@ -40,12 +43,12 @@ agent/
   src/                   # sole production source root
     bootstrap/           # composition root, http-main, worker-main
     application/         # use-cases / services
+    config/              # runtime policy data (fake-llm-policy)
     domain/              # pure domain
-    infrastructure/      # mysql, redis, pi, mcp, sandbox transports, model-registry
-    extensions/          # first-party Pi extension registry (constants.js)
+    infrastructure/      # mysql, redis, pi, mcp, outbox, sandbox transports, model-registry, telemetry
+    extensions/          # first-party Pi extensions + registry (constants.js)
     presentation/        # a2a HTTP handlers
     lib/                 # shared pure helpers (text-redaction)
-    runtime/             # message/attachment/vision helpers
     skills/              # skill install/validate/paths
   tests/
     support/             # non-production harnesses and fakes
@@ -56,7 +59,9 @@ agent/
 - New production modules land under `src/` only.
 - Obsolete approval-waiter code is deleted; do not add a package-root `legacy/` tree.
 - `tests/support/` is the only home for gates and local fakes. Production code
-  may import a runtime policy, but never a test harness.
+  may import a runtime policy, but never a test harness. There is no
+  `agent/testing/` root — CI syntax-checks every `agent/**/*.js` outside
+  `node_modules`, with no carve-out.
 
 ---
 
@@ -92,10 +97,12 @@ sandbox/
   main.py                # FastAPI app entry (uvicorn sandbox.main:app)
   config.py, auth.py, paths.py, models.py, telemetry.py, trace.py
   artifact/              # Artifact domain: contracts, facade/runtime, infra, API
-  routers/               # HTTP routers (internal plane + health)
+  routers/               # HTTP routers (internal plane + compat adapters + health)
   services/              # runtime services (process, files, formal_*)
   isolation/             # bubblewrap / resource policy
   security/              # internal auth, network policy
+  mcp/                   # sandbox-mcp Streamable HTTP facade (separately deployed)
+  utils/                 # resource_limits and other pure helpers
   app/
     domain/              # pure contracts / types
     persistence/         # MySQL repositories for formal plane

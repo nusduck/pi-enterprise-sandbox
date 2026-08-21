@@ -44,6 +44,12 @@ When documents disagree, use this order:
 | [0001](./adr/0001-pi-coding-agent-sdk.md) | Adopt upstream `pi-coding-agent` SDK |
 | [0004](./adr/0004-session-persistent-tmp.md) | Agent Session–private persistent `/tmp` |
 
+**0002 and 0003 are intentionally absent.** They were 07-12 task specs
+(`0002-backend2712`, `0003-fronted0712`) whose decisions `plan.md` superseded;
+they were removed on 2026-07-19 in `7370220d`. The numbers are retired — a new
+ADR takes 0005. Recover the originals from git history if you need the
+historical reasoning; do not cite them as current.
+
 ## How to close an acceptance item
 
 1. Implement and test against the relevant `plan.md` §32 bullet.

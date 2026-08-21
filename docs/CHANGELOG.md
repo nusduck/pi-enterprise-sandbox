@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A2A v0.3 对齐**: Agent Card 发布 skills；streaming status 事件符合 SDK schema；发出官方 task-lifecycle 流。
+- **用户 Skill 生命周期**: 新增可选第一方 extension `skill-lifecycle`，支持上传安装、Agent 生成、编辑与卸载，全部限制在 per-user Skill 根内并走审批。Sandbox 执行侧的 read/bind 认可用户 Skill 路径。
+- **模型能力**: 模型选择、视觉输入与 thinking UI；MCP 发现到的 schema 投射给模型。
 - **Run 收敛保护**: 为每个 Pi Run 增加模型回合、总工具调用和相同工具/参数调用上限；达到上限后禁止继续调用工具，并要求模型依据已有结果作答。三个上限均可通过 `AGENT_RUN_MAX_*` 配置。
 - **MCP 启动发现**: Agent 启动时连接每个启用的 MCP Server 并执行 `tools/list`；发现到的工具以 `mcp__{serverId}__{toolName}` 注册，对应的连接与工具数量会出现在 readiness/diagnostics。
 
@@ -18,6 +21,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Run 与对话投影**: Run 列表/详情补充模型、token usage、规范化生命周期时间及最新 durable event ID；对话历史保留 durable message ID、Run ID 与顺序，且只显示当前用户回合而非整个历史 prompt。
 - **运行管理界面**: 按 Agent 的权威状态过滤 Run，支持 `WAITING_INPUT`，并兼容 `completed_at` 与历史 `finished_at` 字段。
 - **Artifact 下载**: 对非 ASCII 文件名使用 RFC 5987 `filename*`，同时提供 ASCII fallback，避免下载响应因 HTTP header 编码失败。
+- **必需 Extension 增至四个**: `user-interaction` 从 `enterprise-policy` 拆出并成为必需，`ask_user` 由它注册；`enterprise-policy` 回归纯拦截器，不再注册任何工具。仅给出旧的三个名字仍可用，隐含启用 `user-interaction`。
+- **Sandbox 公共执行路由删除**: `POST /sessions/{id}/executions/*` 及 Sandbox 侧的 `/approvals`、`/conversations` 全部移除。执行只存在于 `/internal/v1/*` HMAC 平面；审批与 Conversation 的唯一权威是 Agent MySQL。
+- **Sandbox 网络**: 开发态给出 egress，生产 overlay 明确剥离。
+- **Web UI**: 会话恢复与 Run 生命周期同步；模型选择器改版。
+- **行数闸门**: `HOTSPOT_LINE_BUDGETS` 改为钉在各文件当前长度——只能缩不能涨。六个超限文件按职责拆分，闸门自 2026-07-31 以来首次转绿。
+- **CI**: 修正 Agent syntax-check 指向的失效路径 `agent/testing/fake-openai-provider.js`（实际位于 `agent/tests/support/`），该 job 因此长期失败。
+
+### Removed
+
+- ADR 0002 / 0003（2026-07-19，`7370220d`）——内容已被 `plan.md` 取代，编号不再复用。
 
 ## [4.0.0] — 2026-07-04
 
