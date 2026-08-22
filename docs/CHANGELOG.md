@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **子 Run（sub-agent）**: 新增可选 extension `subagent-spawn`，注册 `spawn_subagent` / `check_subagent`。子 Run 是普通 Run——同一张 `runs` 表、同一个 `agent-runs` 队列、同一套 worker 与恢复路径，只多了 `source='subagent'` / `parent_run_id` / `subagent_depth` 血缘（migration `20260822000001`）。每个子 Run 有自己的 Conversation 与 AgentSession（父 Run 整个生命周期持有其执行 fence，共用会话必然死锁），继承父 Run 的 AgentVersion、`trace_id` 与父 span。`toolCallId` 作幂等键保证一次 tool call 只产生一个子 Run；深度与并发上限在父行加锁后于事务内复查，可用 `AGENT_SUBAGENT_MAX_DEPTH` / `AGENT_SUBAGENT_MAX_CONCURRENT` 或 AgentVersion `configJson.subagent` 收紧。
+- **持久任务状态**: 新增可选 extension `task-state`，注册 `todo_write` / `todo_read`（按 AgentSession 整体替换的计划清单）与 `memory_write` / `memory_search`（owner 级、跨对话的追加式备忘）。两张表 `task_todos` / `task_memories`（migration `20260822000002`）全程 org+user 作用域。
+- **Provider 并发闸门与 429 冷却**: 每个 Agent 进程一个闸门（不是每个 Run 一个——那样只会限制本已串行的单个 prompt 循环），在 `before_provider_request` 取号、`after_provider_response` 归还；等待有界，超时后降级直通并交回**空操作**的 release，所以降级调用方不会释放别人的名额。连续 429 按 key 指数延长冷却窗口，非 429 响应立即清除。`AGENT_PROVIDER_MAX_CONCURRENT` / `AGENT_PROVIDER_COOLDOWN_MS` 可调。
+- **OTel 工具 span**: 配置了 OTLP endpoint 时，每次工具执行产生一个 CLIENT span（`agent.tool.<name>`），挂在当前 Run span 下；失败只记录结果的稳定 code，绝不把工具输出带进链路。Run 中断遗留的 span 与 provider 名额都在 `session_shutdown` 收口。
 - **A2A v0.3 对齐**: Agent Card 发布 skills；streaming status 事件符合 SDK schema；发出官方 task-lifecycle 流。
 - **用户 Skill 生命周期**: 新增可选第一方 extension `skill-lifecycle`，支持上传安装、Agent 生成、编辑与卸载，全部限制在 per-user Skill 根内并走审批。Sandbox 执行侧的 read/bind 认可用户 Skill 路径。
 - **模型能力**: 模型选择、视觉输入与 thinking UI；MCP 发现到的 schema 投射给模型。

@@ -33,6 +33,64 @@ function positiveIntEnv(raw, fallback) {
 }
 
 /**
+ * Durable sub-agent spawn port.
+ *
+ * The service is constructed per call rather than once, because MySQL and the
+ * BullMQ queue only exist after the container has started, and this factory
+ * can be assembled before that. Construction is cheap (repositories are made
+ * per transaction anyway); the durable state lives entirely in MySQL.
+ *
+ * @param {import('./container.js').ServiceContainer} container
+ * @returns {{ spawn: Function, getStatuses: Function }}
+ */
+function createSubagentSpawnPort(container) {
+  const build = async () => {
+    const { SubagentSpawnService } = await import(
+      '../application/subagent-spawn-service.js'
+    );
+    return new SubagentSpawnService({
+      transactionManager: container.getTransactionManager(),
+      createRepositories: (db) => container.createRepositories(db),
+      generateId: container.generateId,
+      now: container.now,
+      runQueue: container.createRunQueueAdapter(),
+      maxDepth: positiveIntEnv(container.env.AGENT_SUBAGENT_MAX_DEPTH, undefined),
+      maxConcurrent: positiveIntEnv(
+        container.env.AGENT_SUBAGENT_MAX_CONCURRENT,
+        undefined,
+      ),
+    });
+  };
+  return {
+    spawn: async (input) => (await build()).spawn(input),
+    getStatuses: async (input) => (await build()).getStatuses(input),
+  };
+}
+
+/**
+ * Durable task-state store (session todo list + owner-scoped notes).
+ *
+ * Each call runs in its own transaction: `replaceTodos` deletes the old list
+ * before inserting the new one, so a crash between the two must not leave the
+ * session with no plan at all.
+ *
+ * @param {import('./container.js').ServiceContainer} container
+ * @returns {{ replaceTodos: Function, getTodos: Function, appendMemory: Function, searchMemory: Function }}
+ */
+function createTaskStateStore(container) {
+  const inTx = (fn) =>
+    container
+      .getTransactionManager()
+      .run(async (trx) => fn(container.createRepositories(trx).taskState));
+  return {
+    replaceTodos: (input) => inTx((repo) => repo.replaceTodos(input)),
+    getTodos: (input) => inTx((repo) => repo.getTodos(input)),
+    appendMemory: (input) => inTx((repo) => repo.appendMemory(input)),
+    searchMemory: (input) => inTx((repo) => repo.searchMemory(input)),
+  };
+}
+
+/**
  * Explicit PiRunExecutor factory (PR-05 slice B).
  *
  * @param {import('./container.js').ServiceContainer} container
@@ -61,6 +119,9 @@ function positiveIntEnv(raw, fallback) {
  *   mcpResolver?: Function | object | null,
  *   mcpSecretResolver?: Function,
  *   mcpRuntimeRoot?: string,
+ *   subagentSpawnPort?: { spawn: Function, getStatuses: Function },
+ *   taskStateStore?: object,
+ *   otelToolSpans?: boolean,
  * }} opts
  * @returns {Promise<import('../application/run-executor.js').RunExecutorFactory>}
  */
@@ -141,6 +202,32 @@ export async function buildPiRunExecutorFactory(container, opts) {
         opts.thinkingTruncateLimit ??
         positiveIntEnv(container.env.AGENT_OBS_THINKING_TRUNCATE, 2048),
     };
+    // OTel tool spans only when an OTLP endpoint is configured; otherwise the
+    // observability extension keeps its cheap no-op path.
+    const otel =
+      opts.otelToolSpans ??
+      Boolean(
+        String(
+          container.env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT ||
+            container.env.OTEL_EXPORTER_OTLP_ENDPOINT ||
+            '',
+        ).trim(),
+      );
+    // Durable sub-agent port. Built once per factory and bound lazily per call
+    // so a not-yet-started container does not break assembly; the extension is
+    // only constructed for AgentVersions that enable subagent-spawn.
+    const subagentSpawnPort =
+      opts.subagentSpawnPort ?? createSubagentSpawnPort(container);
+    // task-state store: durable todo/memory backed by the same MySQL authority.
+    const taskStateStore = opts.taskStateStore ?? createTaskStateStore(container);
+    const bundleDeps = {
+      toolRiskPolicy,
+      skillManagerFactory,
+      subagentSpawnPort,
+      taskStateStore,
+      otel,
+      ...obsTruncationLimits,
+    };
     const {
       createSandboxBridgeExtensionBundleFactory,
       createRunScopedSandboxBridgeTransport,
@@ -152,7 +239,7 @@ export async function buildPiRunExecutorFactory(container, opts) {
       // Explicit static transport (tests / advanced inject only).
       extensionBundleFactory = createSandboxBridgeExtensionBundleFactory({
         sandboxTransport: opts.sandboxTransport,
-        extraDeps: { toolRiskPolicy, skillManagerFactory, ...obsTruncationLimits },
+        extraDeps: bundleDeps,
       });
     } else {
       const internalKeyring = String(
@@ -252,7 +339,7 @@ export async function buildPiRunExecutorFactory(container, opts) {
           });
       }
       extensionBundleFactory = createSandboxBridgeExtensionBundleFactory({
-        extraDeps: { toolRiskPolicy, skillManagerFactory, ...obsTruncationLimits },
+        extraDeps: bundleDeps,
         createTransportForRun: (runContext) =>
           createRunScopedSandboxBridgeTransport(runContext, {
             createTransport: createSandboxBridgeHttpTransport,

@@ -37,9 +37,18 @@ export const REQUIRED_EXTENSION_NAMES = Object.freeze([
  * root. It is deliberately not named `skill-management` — that is a legacy
  * enterprise-agent-kit package name the registry must keep refusing.
  *
+ * `subagent-spawn` requires a durable spawn port (MySQL + the run queue), and
+ * `task-state` requires a durable todo/memory store. Neither is named
+ * `task-plan` or `context-management`: those are legacy enterprise-agent-kit
+ * package names the registry must keep refusing.
+ *
  * @type {readonly string[]}
  */
-export const OPTIONAL_EXTENSION_NAMES = Object.freeze(['skill-lifecycle']);
+export const OPTIONAL_EXTENSION_NAMES = Object.freeze([
+  'skill-lifecycle',
+  'subagent-spawn',
+  'task-state',
+]);
 
 /** Every extension name this build knows how to construct. */
 export const REGISTERED_EXTENSION_NAMES = Object.freeze([

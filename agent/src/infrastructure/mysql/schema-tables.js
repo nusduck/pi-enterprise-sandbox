@@ -43,6 +43,12 @@ export const TRACE_TABLES = Object.freeze(['trace_spans']);
 /** Durable WAITING_INPUT interaction facts. */
 export const INTERACTION_TABLES = Object.freeze(['run_interactions']);
 
+/** Agent working memory: session todo list + owner-scoped note log. */
+export const TASK_STATE_TABLES = Object.freeze([
+  'task_todos',
+  'task_memories',
+]);
+
 export const CORE_TABLES_DROP_ORDER = Object.freeze(
   [...CORE_TABLES_CREATE_ORDER].reverse(),
 );

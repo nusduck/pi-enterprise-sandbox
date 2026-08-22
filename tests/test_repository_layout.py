@@ -30,7 +30,7 @@ LOCAL_GENERATED_DIRECTORIES = frozenset(
 HOTSPOT_LINE_BUDGETS = {
     "agent/src/application/execute-run-service.js": 1_484,
     "agent/src/application/fenced-tool-governance-recorder.js": 1_666,
-    "agent/src/application/pi-run-executor.js": 1_612,
+    "agent/src/application/pi-run-executor.js": 1_617,
     "agent/src/bootstrap/container.js": 1_235,
     "agent/src/bootstrap/create-http-server.js": 1_448,
     "agent/src/infrastructure/mcp/pi-mcp-adapter-factory.js": 1_269,

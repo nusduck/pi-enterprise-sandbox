@@ -51,6 +51,10 @@ export {
   RunRepository,
   mapRunRow,
   sanitizeCancelReason,
+  sanitizeSubagentLabel,
+  assertSubagentDepth,
+  SUBAGENT_LABEL_MAX_LEN,
+  SUBAGENT_CHILD_LIST_MAX,
   resolveRunListLimit,
   normalizeExpectedStatuses,
   assertRunStatus,
@@ -135,6 +139,19 @@ export {
   serializeTraceAttributes,
 } from './trace-span-repository.js';
 export { InteractionRepository } from './interaction-repository.js';
+export {
+  TaskStateRepository,
+  mapTodo,
+  mapMemory,
+  assertTodoStatus,
+  boundText,
+  TODO_STATUSES,
+  MAX_TODO_ITEMS,
+  MAX_TODO_CONTENT_CHARS,
+  MAX_MEMORY_CONTENT_CHARS,
+  MEMORY_SEARCH_DEFAULT_LIMIT,
+  MEMORY_SEARCH_MAX_LIMIT,
+} from './task-state-repository.js';
 export { mapInteraction } from '../row-mappers.js';
 export {
   CronJobRepository,

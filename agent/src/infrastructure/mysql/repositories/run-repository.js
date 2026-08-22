@@ -14,7 +14,7 @@
 import { applyOwnerScope, requireOwnerScope } from '../ownership.js';
 import { mapRun, toMysqlDateTime, formatDateTime } from '../row-mappers.js';
 import { ConflictError, NotFoundError } from '../errors.js';
-import { assertUlid } from '../../../domain/shared/ulid.js';
+import { assertUlid, isUlid } from '../../../domain/shared/ulid.js';
 import {
   isRunStatus,
   NON_TERMINAL_RUN_STATUSES,
@@ -190,6 +190,43 @@ export function sanitizeCancelReason(reason) {
   return s;
 }
 
+/** Bound for runs.subagent_label (migration 20260822000001). */
+export const SUBAGENT_LABEL_MAX_LEN = 128;
+
+/** Children of one parent returned by a single {@link RunRepository#listChildren}. */
+export const SUBAGENT_CHILD_LIST_MAX = 50;
+
+/**
+ * @param {unknown} depth
+ * @returns {number}
+ */
+export function assertSubagentDepth(depth) {
+  if (depth == null || depth === '') return 0;
+  const n = Number(depth);
+  if (!Number.isSafeInteger(n) || n < 0) {
+    throw new Error('subagentDepth must be a non-negative integer');
+  }
+  return n;
+}
+
+/**
+ * Model-authored label: strip controls, collapse whitespace, bound length.
+ * @param {unknown} label
+ * @returns {string | null}
+ */
+export function sanitizeSubagentLabel(label) {
+  if (label == null || label === '') return null;
+  if (typeof label !== 'string') {
+    throw new Error('subagentLabel must be a string when provided');
+  }
+  const s = label
+    .replace(/[\u0000-\u001F\u007F]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!s) return null;
+  return s.slice(0, SUBAGENT_LABEL_MAX_LEN);
+}
+
 export class RunRepository {
   /**
    * @param {import('knex').Knex | import('knex').Knex.Transaction} db
@@ -211,6 +248,9 @@ export class RunRepository {
    *   agentVersionId: string,
    *   triggeringMessageId: string,
    *   source: string,
+   *   parentRunId?: string | null,
+   *   subagentDepth?: number,
+   *   subagentLabel?: string | null,
    *   status: string,
    *   statusReason?: string | null,
    *   queueName: string,
@@ -234,6 +274,18 @@ export class RunRepository {
       'triggeringMessageId',
     );
     const status = assertRunStatus(input.status);
+    const parentRunId =
+      input.parentRunId == null || input.parentRunId === ''
+        ? null
+        : assertUlid(input.parentRunId, 'parentRunId');
+    if (parentRunId === runId) {
+      throw new Error('parentRunId must not be the run itself');
+    }
+    const subagentDepth = assertSubagentDepth(input.subagentDepth);
+    if (parentRunId == null && subagentDepth > 0) {
+      throw new Error('subagentDepth requires a parentRunId');
+    }
+    const subagentLabel = sanitizeSubagentLabel(input.subagentLabel);
     const traceId = assertTraceId(input.traceId);
     const traceState = assertTraceState(input.traceState);
     const traceFlags = assertTraceFlags(input.traceFlags);
@@ -249,6 +301,9 @@ export class RunRepository {
       agent_version_id: agentVersionId,
       triggering_message_id: triggeringMessageId,
       source: input.source,
+      parent_run_id: parentRunId,
+      subagent_depth: subagentDepth,
+      subagent_label: subagentLabel,
       status,
       status_reason: input.statusReason ?? null,
       queue_name: input.queueName,
@@ -296,6 +351,42 @@ export class RunRepository {
       });
     }
     return row;
+  }
+
+  /**
+   * Runs spawned by one parent Run, newest first.
+   *
+   * Owner-scoped like every other read: a child always carries the parent's
+   * org/user, so the scope filter alone is enough — there is no need to load
+   * the parent first. `childRunIds` narrows to a caller-named subset; unknown
+   * or foreign ids simply do not come back rather than erroring, so one
+   * finished child cannot make a whole poll fail.
+   *
+   * @param {string} parentRunId
+   * @param {{ orgId: string, userId: string }} scope
+   * @param {{ childRunIds?: readonly string[] | null, limit?: number }} [opts]
+   */
+  async listChildren(parentRunId, scope, opts = {}) {
+    const s = requireOwnerUlids(scope);
+    const parentId = assertUlid(parentRunId, 'parentRunId');
+    const limit = Math.min(
+      resolveRunListLimit(opts.limit, SUBAGENT_CHILD_LIST_MAX),
+      SUBAGENT_CHILD_LIST_MAX,
+    );
+    let q = applyOwnerScope(
+      this.db('runs').where({ parent_run_id: parentId }),
+      s,
+    );
+    if (Array.isArray(opts.childRunIds)) {
+      const ids = opts.childRunIds
+        .filter((id) => isUlid(id))
+        .slice(0, SUBAGENT_CHILD_LIST_MAX);
+      // An all-invalid id list must not silently widen to "every child".
+      if (ids.length === 0) return [];
+      q = q.whereIn('run_id', ids);
+    }
+    const rows = await q.orderBy('created_at', 'desc').limit(limit);
+    return rows.map(mapRunRow);
   }
 
   /**

@@ -38,6 +38,7 @@ import { buildMcpPolicyBindings } from '../infrastructure/mcp/pi-mcp-adapter-fac
 import {
   buildAgentVersionToolRiskBindings,
   readAgentVersionExtensions,
+  readAgentVersionSubagentPolicy,
   readAgentVersionToolPolicy,
 } from './tool-risk-bindings.js';
 import { PlatformEventProjector } from '../infrastructure/pi/platform-event-projector.js';
@@ -496,6 +497,8 @@ export class PiRunExecutor {
         traceId,
         ...(traceState ? { traceState } : {}),
         executionFenceToken: fenceToken,
+        // Depth of this Run in the sub-agent chain; the spawn cap reads it.
+        subagentDepth: Number(run.subagentDepth ?? 0),
       };
 
       const emitAfterCommit = externalEmit
@@ -555,6 +558,7 @@ export class PiRunExecutor {
         const { agentVersionToolPolicy, agentVersionToolRiskPolicy } =
           buildAgentVersionToolRiskBindings(agentVersion, { mcpToolRiskPolicy });
         const agentVersionExtensions = readAgentVersionExtensions(agentVersion);
+        const subagentSpawn = readAgentVersionSubagentPolicy(agentVersion);
         // Keyed off the raw config, not the projection: a structurally present
         // but empty policy (`{ tools: {} }`) is still a field we honoured.
         if (Object.keys(readAgentVersionToolPolicy(agentVersion)).length > 0) {
@@ -584,6 +588,7 @@ export class PiRunExecutor {
             mcpServerPolicies,
             ...(agentVersionToolPolicy ? { agentVersionToolPolicy } : {}),
             ...(agentVersionToolRiskPolicy ? { agentVersionToolRiskPolicy } : {}),
+            ...(Object.keys(subagentSpawn).length > 0 ? { subagentSpawn } : {}),
             // pi-runtime-factory validates the factory list against
             // AgentVersion.extensions exactly, so the bundle must build the
             // same set the AgentVersion asks for.

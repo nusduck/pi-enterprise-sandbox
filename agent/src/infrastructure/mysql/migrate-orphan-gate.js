@@ -9,6 +9,7 @@ import { MysqlOrphanSchemaError } from './errors.js';
 import {
   CORE_TABLES_CREATE_ORDER,
   A2A_TABLES,
+  TASK_STATE_TABLES,
   TRACE_TABLES,
 } from './schema-tables.js';
 
@@ -35,6 +36,10 @@ export const CREATE_TABLE_MIGRATION_SENTINELS = Object.freeze([
   {
     migrationName: '20260719000003_run_interactions.js',
     tables: Object.freeze(['run_interactions']),
+  },
+  {
+    migrationName: '20260822000002_task_state.js',
+    tables: TASK_STATE_TABLES,
   },
 ]);
 

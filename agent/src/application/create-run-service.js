@@ -36,6 +36,7 @@ import {
   ValidationError,
 } from './errors.js';
 import { RunParentProvisioner } from './parent/run-parent-provisioner.js';
+import { projectAcceptedToQueued } from './run-queued-projection.js';
 import { normalizeW3cTracestate } from '../infrastructure/sandbox/trace-context.js';
 import { formatStoredTraceCarrier } from '../infrastructure/telemetry.js';
 import {
@@ -764,7 +765,9 @@ export class CreateRunService {
 
   /**
    * Second transaction: ACCEPTED → QUEUED via sole RunStateMachine + CAS.
-   * Worker racing this transition is handled idempotently.
+   * Worker racing this transition is handled idempotently. The projection
+   * itself lives in run-queued-projection.js so the sub-agent spawn path
+   * commits its child through exactly the same transition.
    *
    * @param {{
    *   runId: string,
@@ -775,75 +778,12 @@ export class CreateRunService {
    * @returns {Promise<{ ok: boolean, alreadyAdvanced?: boolean }>}
    */
   async #transitionAcceptedToQueued(args) {
-    const scope = { orgId: args.orgId, userId: args.userId };
-    try {
-      return await this.tx.run(async (trx) => {
-        const repos = this.createRepositories(trx);
-        const run = await repos.runs.getById(args.runId, scope, {
-          forUpdate: true,
-        });
-        if (!run) {
-          return { ok: false };
-        }
-
-        if (run.status !== RUN_STATUS.ACCEPTED) {
-          return { ok: true, alreadyAdvanced: true };
-        }
-
-        this.stateMachine.assertTransition(
-          RUN_STATUS.ACCEPTED,
-          RUN_STATUS.QUEUED,
-        );
-
-        try {
-          await repos.runs.updateStatusIf(args.runId, scope, {
-            expectedStatus: RUN_STATUS.ACCEPTED,
-            status: RUN_STATUS.QUEUED,
-          });
-        } catch (err) {
-          if (err instanceof ConflictError) {
-            return { ok: true, alreadyAdvanced: true };
-          }
-          throw err;
-        }
-
-        const eventId = assertUlid(this.generateId(), 'eventId');
-        const outboxId = assertUlid(this.generateId(), 'outboxId');
-        const queuedEvent = await repos.runEvents.append({
-          eventId,
-          runId: args.runId,
-          orgId: scope.orgId,
-          userId: scope.userId,
-          eventType: 'run.queued',
-          eventVersion: 1,
-          payloadJson: {
-            status: RUN_STATUS.QUEUED,
-            from: RUN_STATUS.ACCEPTED,
-          },
-          traceId: args.traceId,
-        });
-
-        await repos.outbox.insert({
-          outboxId,
-          aggregateType: AGGREGATE_TYPE_RUN,
-          aggregateId: args.runId,
-          eventType: 'run.queued',
-          payloadJson: {
-            eventId: queuedEvent.eventId,
-            runId: args.runId,
-            sequence: queuedEvent.sequenceNo,
-            type: 'run.queued',
-            status: RUN_STATUS.QUEUED,
-            orgId: scope.orgId,
-            userId: scope.userId,
-          },
-        });
-
-        return { ok: true };
-      });
-    } catch {
-      // Projection failure after enqueue is recoverable; surface via queueWarning.
-      return { ok: false };
-    }
+    return projectAcceptedToQueued({
+      transactionManager: this.tx,
+      createRepositories: this.createRepositories,
+      generateId: this.generateId,
+      stateMachine: this.stateMachine,
+      ...args,
+    });
   }
 }

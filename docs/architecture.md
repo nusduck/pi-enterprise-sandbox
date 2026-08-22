@@ -129,10 +129,37 @@ Agent（`pi-coding-agent` SDK）运行在独立 `agent/` 服务中，而非浏�
 | `observability` | 记录工具结果与审计事件 |
 | `user-interaction` | 注册 `ask_user`。名字不叫 `interaction`，因为那是 registry 必须持续拒绝的 legacy enterprise-agent-kit 包名 |
 
-`OPTIONAL_EXTENSION_NAMES` 目前只有 `skill-lifecycle`：用户态 Skill 的安装、
-Agent 生成、编辑与卸载，需要可写的 per-user Skill 根。新增可选 Extension 必须
-同时为它注册的每个工具补 tool-risk-classifier 条目，否则这些工具会以
-`UNKNOWN_TOOL_DENIED` 被拒（有守卫测试）。
+`OPTIONAL_EXTENSION_NAMES` 有三个，只有 AgentVersion 明确列出时才装载，并且都
+要求容器注入对应的持久化端口——端口缺失时 bundle 在装配期直接报错，而不是让模型
+在第一次调用时才拿到一个永远失败的工具：
+
+| Extension | 角色 | 必需依赖 |
+|-----------|------|----------|
+| `skill-lifecycle` | 用户态 Skill 的安装、Agent 生成、编辑与卸载 | 可写的 per-user Skill 根 |
+| `subagent-spawn` | `spawn_subagent` / `check_subagent`：创建并轮询子 Run | `subagentSpawnPort`（MySQL + Run Queue） |
+| `task-state` | `todo_write` / `todo_read` / `memory_write` / `memory_search` | `taskStateStore`（`task_todos` / `task_memories`） |
+
+新增可选 Extension 必须同时为它注册的每个工具补 tool-risk-classifier 条目，否则
+这些工具会以 `UNKNOWN_TOOL_DENIED` 被拒（有守卫测试）。
+
+#### 子 Run（sub-agent）
+
+子 Run 就是普通 Run：同一张 `runs` 表、同一个 `agent-runs` 队列、同一套 worker
+与恢复路径，只是多了血缘字段 `source='subagent'` / `parent_run_id` /
+`subagent_depth`（migration `20260822000001`）。三条硬约束：
+
+- **子 Run 有自己的 Conversation 与 AgentSession**。父 Run 在整个生命周期内持有其
+  AgentSession 的执行 fence 与 Redis 锁，共用会话的子 Run 永远拿不到锁——它会一直
+  排队等一个正在等它的父 Run。AgentVersion 仍然继承父 Run 的版本。
+- **一次 tool call 只产生一个子 Run**。Pi 的 `toolCallId` 就是幂等键，重试认领已建
+  的子 Run。
+- **深度与并发在事务内复查**。父行加锁后再数存活兄弟，两个并发 spawn 不会同时读到
+  "还剩一个名额"。默认 `maxDepth=2`、`maxConcurrent=5`，可由
+  `AGENT_SUBAGENT_MAX_DEPTH` / `AGENT_SUBAGENT_MAX_CONCURRENT` 收紧，也可由
+  AgentVersion 的 `configJson.subagent` 按租户收紧（只能更严，不能更松）。
+
+子 Run 沿用父 Run 的 `trace_id`，并把 `trace_parent_span_id` 指向父 Run 的 run
+span，所以一次 fan-out 在链路上是一棵树而不是 N 个孤立的 root。
 
 `LEGACY_REQUIRED_EXTENSION_NAMES`（三个，不含 `user-interaction`）仅用于兼容
 `user-interaction` 拆分之前的配置：给出这三个即隐含启用 `user-interaction`，
@@ -233,6 +260,8 @@ Agent Host + first-party Extensions
   observability          → 记录工具结果与审计事件
   user-interaction       → 注册 ask_user（必需；由 interaction 这个 legacy 包名改名而来）
   skill-lifecycle        → 可选，用户态 Skill 安装/生成/编辑/卸载
+  subagent-spawn         → 可选，创建/轮询子 Run（同队列、同 worker、同恢复路径）
+  task-state             → 可选，会话 todo 列表 + owner 级长期备忘
   durable MySQL ledger   → 外部副作用审批、审计、resume
         │
         ▼

@@ -4,6 +4,8 @@
 
 import { SANDBOX_TOOL_NAMES } from '../sandbox-bridge/constants.js';
 import { SKILL_LIFECYCLE_TOOL_NAMES } from '../skill-lifecycle/constants.js';
+import { SUBAGENT_TOOL_NAMES } from '../subagent-spawn/constants.js';
+import { TASK_STATE_TOOL_NAMES } from '../task-state/constants.js';
 
 /**
  * Tools that execute inside the platform's own trust boundary rather than
@@ -14,6 +16,11 @@ import { SKILL_LIFECYCLE_TOOL_NAMES } from '../skill-lifecycle/constants.js';
 const LOCAL_SET = new Set([
   ...SANDBOX_TOOL_NAMES,
   ...SKILL_LIFECYCLE_TOOL_NAMES,
+  // Sub-agent spawn/poll run inside the platform: they create durable Runs
+  // through the Agent's own MySQL authority, never an external system.
+  ...SUBAGENT_TOOL_NAMES,
+  // Todo/memory writes land in the platform's own owner-scoped tables.
+  ...TASK_STATE_TOOL_NAMES,
 ]);
 
 /**

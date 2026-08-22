@@ -57,7 +57,15 @@
     "skill_install": "high",
     "skill_create": "high",
     "skill_edit": "high",
-    "skill_uninstall": "high"
+    "skill_uninstall": "high",
+
+    "spawn_subagent": "medium",
+    "check_subagent": "low",
+
+    "todo_write": "low",
+    "todo_read": "low",
+    "memory_write": "low",
+    "memory_search": "low"
   },
 
   "mcpServers": {}
