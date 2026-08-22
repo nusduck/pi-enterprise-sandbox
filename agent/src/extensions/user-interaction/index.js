@@ -14,6 +14,15 @@
  * (`internal_interaction`) and intercepted by its `tool_call` handler —
  * `tool_call` is a global Pi event, so moving the registration here does not
  * move it outside policy enforcement.
+ *
+ * A sub-agent Run (`runContext.subagentDepth > 0`) does NOT get the tool. Its
+ * task prompt is contractually self-contained, its conversation is deliberately
+ * kept out of the owner's list, and nothing routes a child's question to the
+ * person who started the parent — so a child that called `ask_user` would park
+ * in WAITING_INPUT waiting for an answer nobody can see it asking for. Leaving
+ * the tool unregistered makes the model decide or fail instead of hanging; the
+ * extension itself still loads, because the registry validates the AgentVersion
+ * extension list exactly.
  */
 
 import { Type } from 'typebox';
@@ -34,11 +43,15 @@ export function createUserInteractionExtension(options) {
   const deps = options?.deps ?? {};
   const governance = deps.governanceRecorder ?? null;
   const suspension = deps.runSuspensionPort ?? null;
+  // Depth is written by the executor and frozen into the run context by the
+  // bundle; anything above 0 is a child Run.
+  const isSubagentRun = Number(runContext?.subagentDepth ?? 0) > 0;
 
   /**
    * @param {import('@earendil-works/pi-coding-agent').ExtensionAPI} pi
    */
   function userInteractionExtension(pi) {
+    if (isSubagentRun) return;
     pi.registerTool({
       name: 'ask_user',
       label: 'Ask user',
@@ -112,9 +125,9 @@ export function createUserInteractionExtension(options) {
     name: 'user-interaction',
     role: 'durable-user-interaction',
     failClosed: true,
-    toolsRegistered: true,
-    durableInteractionPending: true,
-    claimsRunWaitingInput: true,
+    toolsRegistered: !isSubagentRun,
+    durableInteractionPending: !isSubagentRun,
+    claimsRunWaitingInput: !isSubagentRun,
   });
   return userInteractionExtension;
 }

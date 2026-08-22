@@ -225,6 +225,36 @@ describe('RunRecoveryService WAITING_INPUT restart cells (offline)', () => {
     assert.equal(state.tables.runs[0].status, RUN_STATUS.WAITING_INPUT);
   });
 
+  it('terminalizes a PENDING WAITING_INPUT run that carries cancel intent', async () => {
+    // A parked Run has no live worker to notice the cancel flag. This is the
+    // path a sub-agent child takes when its parent's cancel cascade writes
+    // intent for the whole subtree — without it the child stays parked on
+    // ask_user forever, because the PENDING branch leaves parked Runs alone.
+    seed(state, {
+      interactionStatus: INTERACTION_STATUS.PENDING,
+      resumePhase: INTERACTION_RESUME_PHASE.NONE,
+      toolStatus: 'RUNNING',
+    });
+    state.tables.runs[0].cancel_requested_at = NOW;
+    state.tables.runs[0].cancel_reason = 'parent run cancelled';
+    state.tables.runs[0].cancel_requested_by = USER;
+
+    const action = await recovery.recoverOneRef({ runId: RUN, orgId: ORG });
+
+    assert.equal(action.action, 'terminalized', JSON.stringify(action));
+    assert.equal(action.status, RUN_STATUS.CANCELLED);
+    assert.equal(state.tables.runs[0].status, RUN_STATUS.CANCELLED);
+    // The ledgers are closed too, not just the run row.
+    assert.equal(
+      state.tables.run_interactions[0].status,
+      INTERACTION_STATUS.CANCELLED,
+    );
+    assert.equal(state.tables.tool_executions[0].status, 'CANCELLED');
+    assert.equal(enqueued.length, 0, 'a cancelled run must not be re-enqueued');
+    const events = state.tables.run_events.map((e) => e.event_type);
+    assert.ok(events.includes('run.cancelled'), JSON.stringify(events));
+  });
+
   it('re-enqueues WAITING_INPUT when interaction is RESOLVED (resume job after worker loss)', async () => {
     seed(state, {
       interactionStatus: INTERACTION_STATUS.RESOLVED,

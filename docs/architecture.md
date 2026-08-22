@@ -168,6 +168,11 @@ cancel intent 并发信号。**只写 intent**——`execute-run-service` 在进
 行的 `FOR UPDATE` 让"取消"与"创建子 Run"串行：取消先提交则新的 spawn 被拒
 （`SUBAGENT_PARENT_NOT_RUNNABLE`），spawn 先提交则级联能看到这个新子 Run。
 
+子 Run **不注册 `ask_user`**：它的对话不在会话列表里，也没有任何路径把它的提问送到
+人面前，停泊在 WAITING_INPUT 就是永久卡死。停泊 Run 的取消回收也已对齐——
+WAITING_INPUT 与 WAITING_APPROVAL 现在共用 `run-recovery-parked-cancel.js`，此前只
+有后者会响应 cancel intent。
+
 子 Run 的 Conversation 带 `parent_run_id`（migration `20260822000003`），
 `listForOwner` 默认过滤掉它们，但 `getById` 不过滤——列表里看不到，按 id 仍然读得
 到 transcript。

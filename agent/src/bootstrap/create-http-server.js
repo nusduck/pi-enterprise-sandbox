@@ -1331,6 +1331,11 @@ export function createAgentHttpServer(deps) {
               signalPending: result.signalPending,
               signal_pending: result.signalPending,
               terminal: result.terminal,
+              // Sub-agent children stopped by this cancel; empty for an
+              // ordinary Run. A caller cancelling a fan-out otherwise has to
+              // reconstruct the child ids from the parent's tool results.
+              cancelledDescendants: result.cancelledDescendants ?? [],
+              cancelled_descendants: result.cancelledDescendants ?? [],
               // Echo key so clients can correlate; not a stored replay payload.
               idempotencyKey,
             });
