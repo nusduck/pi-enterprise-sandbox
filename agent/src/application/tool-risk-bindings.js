@@ -54,6 +54,7 @@ export function readAgentVersionExtensions(agentVersion) {
   return Array.isArray(config?.extensions) ? [...config.extensions] : [];
 }
 
+
 /**
  * The raw `configJson.toolPolicy` object, or `{}` when absent/malformed.
  *

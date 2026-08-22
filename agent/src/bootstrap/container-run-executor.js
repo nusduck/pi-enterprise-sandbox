@@ -20,6 +20,19 @@ import { mkdirSync } from 'node:fs';
 import path from 'node:path';
 
 /**
+ * Parse a positive-integer env value with fallback (invalid/absent → default).
+ *
+ * @param {string | undefined} raw
+ * @param {number} fallback
+ * @returns {number}
+ */
+function positiveIntEnv(raw, fallback) {
+  if (raw == null || String(raw).trim() === '') return fallback;
+  const n = parseInt(String(raw), 10);
+  return Number.isFinite(n) && n > 0 ? n : fallback;
+}
+
+/**
  * Explicit PiRunExecutor factory (PR-05 slice B).
  *
  * @param {import('./container.js').ServiceContainer} container
@@ -118,6 +131,16 @@ export async function buildPiRunExecutorFactory(container, opts) {
       opts.skillManagerFactory !== undefined
         ? opts.skillManagerFactory
         : await container.createSkillManagerFactory();
+    // Audit truncation limits: env-tunable so operators can trade run_events
+    // row size for fuller audit fidelity (defaults keep historical sizes).
+    const obsTruncationLimits = {
+      deltaTruncateLimit:
+        opts.deltaTruncateLimit ??
+        positiveIntEnv(container.env.AGENT_OBS_DELTA_TRUNCATE, 512),
+      thinkingTruncateLimit:
+        opts.thinkingTruncateLimit ??
+        positiveIntEnv(container.env.AGENT_OBS_THINKING_TRUNCATE, 2048),
+    };
     const {
       createSandboxBridgeExtensionBundleFactory,
       createRunScopedSandboxBridgeTransport,
@@ -129,7 +152,7 @@ export async function buildPiRunExecutorFactory(container, opts) {
       // Explicit static transport (tests / advanced inject only).
       extensionBundleFactory = createSandboxBridgeExtensionBundleFactory({
         sandboxTransport: opts.sandboxTransport,
-        extraDeps: { toolRiskPolicy, skillManagerFactory },
+        extraDeps: { toolRiskPolicy, skillManagerFactory, ...obsTruncationLimits },
       });
     } else {
       const internalKeyring = String(
@@ -229,7 +252,7 @@ export async function buildPiRunExecutorFactory(container, opts) {
           });
       }
       extensionBundleFactory = createSandboxBridgeExtensionBundleFactory({
-        extraDeps: { toolRiskPolicy, skillManagerFactory },
+        extraDeps: { toolRiskPolicy, skillManagerFactory, ...obsTruncationLimits },
         createTransportForRun: (runContext) =>
           createRunScopedSandboxBridgeTransport(runContext, {
             createTransport: createSandboxBridgeHttpTransport,

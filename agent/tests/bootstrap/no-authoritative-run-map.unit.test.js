@@ -161,6 +161,13 @@ const TRANSIENT_MAP_WHITELIST = Object.freeze([
       'Function-local model id → entry index while building registry snapshot; not Run authority',
     scope: 'local',
   },
+  {
+    rel: 'infrastructure/model-registry.js',
+    match: /const\s+cache\s*=\s*new\s+Map\s*\(/,
+    purpose:
+      'Closure-scoped mtime-keyed registry hot-reload cache (path → {mtimeMs, registry}); derived config view, not Run state',
+    scope: 'local',
+  },
 ]);
 
 function walkJs(dir, acc = []) {
@@ -347,9 +354,10 @@ describe('no authoritative in-process Run Map (B3)', () => {
     // the tool-risk-policy layer merge. All function-local, none Run authority.
     // 17 → 18: owner-scoped Run-list AgentSession batch lookup.
     // 18 → 19: function-local sandbox read deduplication guard.
+    // 19 → 20: mtime-keyed model-registry hot-reload cache.
     assert.equal(
       TRANSIENT_MAP_WHITELIST.length,
-      19,
+      20,
       'whitelist size drift — update STATUS B3 inventory evidence if intentional',
     );
   });

@@ -469,6 +469,13 @@ export function createEnterpriseExtensionBundle(runContext, deps = {}) {
   if (typeof deps.provider === 'string' && deps.provider.trim()) {
     observabilityDeps.provider = deps.provider;
   }
+  // Audit truncation limits (env-tunable; defaults preserve historical sizes).
+  if (deps.deltaTruncateLimit != null) {
+    observabilityDeps.deltaTruncateLimit = deps.deltaTruncateLimit;
+  }
+  if (deps.thinkingTruncateLimit != null) {
+    observabilityDeps.thinkingTruncateLimit = deps.thinkingTruncateLimit;
+  }
   const observability = createObservabilityExtension({
     runContext: frozen,
     deps: observabilityDeps,

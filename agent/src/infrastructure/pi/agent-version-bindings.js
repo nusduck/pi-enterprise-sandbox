@@ -274,6 +274,20 @@ export function bindAgentVersionConfig(agentVersion) {
       ? /** @type {Record<string, unknown>} */ (configJson.contextPolicy)
       : {};
 
+  // Model parameter overrides. maxOutputTokens is applied onto the resolved
+  // Model.maxTokens (the SDK caps each provider response with it). temperature
+  // is validated and carried for future SDK plumbing — pi-ai StreamOptions
+  // supports it, but the coding-agent loop does not surface it per-session
+  // yet, so we fail closed on bad values and document the wire gap.
+  const maxOutputTokens = optionalPositiveInt(
+    modelPolicy.maxOutputTokens ?? configJson.maxOutputTokens,
+    'modelPolicy.maxOutputTokens',
+  );
+  const temperature = optionalFiniteNumber(
+    modelPolicy.temperature ?? configJson.temperature,
+    'modelPolicy.temperature',
+  );
+
   return Object.freeze({
     agentVersionId,
     piSdkVersion,
@@ -286,6 +300,8 @@ export function bindAgentVersionConfig(agentVersion) {
           : '',
     modelPolicy: Object.freeze({ ...modelPolicy }),
     model,
+    maxOutputTokens,
+    temperature,
     // Reasoning depth for this Agent. Accepted at either level so a logical
     // modelPolicy reference and a flat config express it the same way.
     // `null` (not 'off') means "unset — let the SDK decide".
@@ -332,6 +348,9 @@ export function resolveConcreteModel(bound, inputModel) {
           { code: 'PI_MODEL_OVERRIDE_FORBIDDEN' },
         );
       }
+    }
+    if (bound.maxOutputTokens != null) {
+      return { ...bound.model, maxTokens: bound.maxOutputTokens };
     }
     return bound.model;
   }
@@ -389,7 +408,50 @@ export function resolveConcreteModel(bound, inputModel) {
       { code: 'PI_MODEL_POLICY_MISMATCH' },
     );
   }
+  // Apply the AgentVersion-declared max output tokens onto the resolved Model.
+  // Model.maxTokens is the SDK's per-response cap, so this is the correct
+  // single knob — never mutate the caller's model object.
+  if (bound.maxOutputTokens != null) {
+    return { ...inputModel, maxTokens: bound.maxOutputTokens };
+  }
   return inputModel;
+}
+
+/**
+ * Parse an optional positive integer with fail-closed validation.
+ *
+ * @param {unknown} value
+ * @param {string} field
+ * @returns {number | undefined}
+ */
+function optionalPositiveInt(value, field) {
+  if (value == null || value === '') return undefined;
+  const n = Number(value);
+  if (!Number.isSafeInteger(n) || n < 1) {
+    throw new PiRuntimeFactoryError(`${field} must be a positive integer`, {
+      code: 'PI_MODEL_PARAM_INVALID',
+    });
+  }
+  return n;
+}
+
+/**
+ * Parse an optional finite number (temperature) with fail-closed validation.
+ *
+ * @param {unknown} value
+ * @param {string} field
+ * @returns {number | undefined}
+ */
+function optionalFiniteNumber(value, field) {
+  if (value == null || value === '') return undefined;
+  const n = Number(value);
+  if (!Number.isFinite(n) || n < 0 || n > 2) {
+    throw new PiRuntimeFactoryError(
+      `${field} must be a finite number in [0, 2]`,
+      { code: 'PI_MODEL_PARAM_INVALID' },
+    );
+  }
+  return n;
 }
 
 /**

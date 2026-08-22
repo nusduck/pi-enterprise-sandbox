@@ -66,6 +66,7 @@ export const SEED_MODELS = Object.freeze([
     supports_developer_role: false,
     supports_reasoning: false,
     thinking_levels: Object.freeze([]),
+    default: true,
     pricing: Object.freeze({
       input_per_mtok: 0.14,
       output_per_mtok: 0.28,
@@ -290,9 +291,33 @@ export function normalizeModelEntry(raw) {
     supports_developer_role: bool(raw.supports_developer_role, false),
     supports_reasoning: bool(raw.supports_reasoning, false),
     thinking_levels: thinking,
+    // Explicit provider wire values per thinking level (e.g. xhigh → "max"
+    // for deepseek/anthropic). Absent → pi-ai default mapping applies.
+    thinking_wire_map: isPlainObject(raw.thinking_wire_map)
+      ? Object.freeze(
+          Object.fromEntries(
+            Object.entries(raw.thinking_wire_map).map(([k, v]) => [
+              String(k),
+              v == null ? null : String(v),
+            ]),
+          ),
+        )
+      : undefined,
+    // Marks the fallback model used when neither the request, the
+    // AgentVersion policy, nor MODEL_ID names one. Exactly one entry should
+    // carry `default: true`; when several do, buildRegistry keeps the first.
+    default: bool(raw.default, false),
     pricing,
     enabled: bool(raw.enabled, true),
   };
+}
+
+/**
+ * @param {unknown} v
+ * @returns {v is Record<string, unknown>}
+ */
+function isPlainObject(v) {
+  return v != null && typeof v === 'object' && !Array.isArray(v);
 }
 
 /**
@@ -348,6 +373,44 @@ export function resolveRegistryPath(env = process.env) {
 }
 
 /**
+ * Cached registry loader with mtime-based hot reload.
+ *
+ * Unlike {@link buildRegistry} (fresh file read per call), this keeps the
+ * parsed map keyed by resolved path + mtimeMs. Editing MODEL_REGISTRY_PATH /
+ * config/agent/model-registry.json is picked up on the next resolution
+ * without a process restart, while steady-state resolution stays cheap.
+ *
+ * The cache lives in a closure (not module scope): it is a derived view of a
+ * config file, never Run state — the no-authoritative-run-map guard only
+ * whitelists function-scoped Maps.
+ */
+export const buildCachedRegistry = (() => {
+  /** @type {Map<string, { mtimeMs: number, registry: Map<string, ModelEntry> }>} */
+  const cache = new Map();
+  /**
+   * @param {NodeJS.ProcessEnv | Record<string, string|undefined>} [env]
+   * @returns {Map<string, ModelEntry>}
+   */
+  return (env = process.env) => {
+    const filePath = resolveRegistryPath(env);
+    let mtimeMs = 0;
+    if (filePath && existsSync(filePath)) {
+      try {
+        mtimeMs = statSync(filePath).mtimeMs;
+      } catch {
+        mtimeMs = 0;
+      }
+    }
+    const cacheKey = filePath ?? '__seed-only__';
+    const cached = cache.get(cacheKey);
+    if (cached && cached.mtimeMs === mtimeMs) return cached.registry;
+    const registry = buildRegistry({ env, filePath: filePath ?? undefined });
+    cache.set(cacheKey, { mtimeMs, registry });
+    return registry;
+  };
+})();
+
+/**
  * Load raw model list from a registry file.
  * Supports enterprise `{ models: [...] }` and pi-style `{ providers: { p: { models: [...] } } }`.
  * @param {string} filePath
@@ -401,8 +464,27 @@ export function buildRegistry(opts = {}) {
       : resolveRegistryPath(opts.env || process.env);
   if (filePath && existsSync(filePath)) {
     try {
+      /** @type {string[]} */
+      const fromFile = [];
       for (const entry of loadModelsFromFile(filePath)) {
         map.set(entry.model_id, entry);
+        fromFile.push(entry.model_id);
+      }
+      // Map.set keeps an existing key's insertion position, so a seed entry
+      // flagged `default: true` would always be found first by
+      // resolveDefaultModelId and silently beat the operator's choice. When
+      // the file names a default, it is authoritative: clear the flag on
+      // everything the file did not define.
+      const fileIds = new Set(fromFile);
+      const fileDeclaresDefault = fromFile.some(
+        (id) => map.get(id)?.default === true,
+      );
+      if (fileDeclaresDefault) {
+        for (const [id, entry] of map) {
+          if (!fileIds.has(id) && entry.default === true) {
+            map.set(id, { ...entry, default: false });
+          }
+        }
       }
     } catch (err) {
       console.warn(
@@ -415,9 +497,29 @@ export function buildRegistry(opts = {}) {
 }
 
 /**
+ * Resolve the fallback model id: the registry entry carrying `default: true`
+ * (first one wins), falling back to SEED default for registries that declare
+ * none. Keeps model selection data-driven — switching the default model is a
+ * registry-file change, not a code change.
+ *
+ * @param {Map<string, ModelEntry>} registry
+ * @returns {string}
+ */
+export function resolveDefaultModelId(registry) {
+  for (const entry of registry.values()) {
+    if (entry.default === true) return entry.model_id;
+  }
+  // Legacy fallback so registries without any `default` flag keep working.
+  return 'deepseek-v4-flash';
+}
+
+/**
  * Apply backward-compatible env overrides onto a resolved entry.
  * MODEL_CONTEXT_WINDOW / MODEL_MAX_TOKENS only apply when they target the
  * active MODEL_ID (or when no model_id filter is set).
+ * MODEL_OVERRIDES_JSON applies per-model overrides to ANY model:
+ *   {"<model_id>": {"context_window": N, "max_output_tokens": N}}
+ * Per-model JSON entries win over the legacy scalar env vars.
  *
  * @param {ModelEntry} entry
  * @param {NodeJS.ProcessEnv | Record<string, string|undefined>} [env]
@@ -425,6 +527,7 @@ export function buildRegistry(opts = {}) {
  */
 export function applyEnvOverrides(entry, env = process.env) {
   const next = { ...entry, pricing: { ...entry.pricing } };
+  let applied = false;
   const envModelId = env.MODEL_ID != null ? String(env.MODEL_ID).trim() : '';
   // Env token limits apply to the default/active model only.
   const appliesToThis =
@@ -433,14 +536,47 @@ export function applyEnvOverrides(entry, env = process.env) {
   if (appliesToThis) {
     if (env.MODEL_CONTEXT_WINDOW != null && String(env.MODEL_CONTEXT_WINDOW).trim() !== '') {
       const cw = parseInt(String(env.MODEL_CONTEXT_WINDOW), 10);
-      if (Number.isFinite(cw) && cw > 0) next.context_window = cw;
+      if (Number.isFinite(cw) && cw > 0) { next.context_window = cw; applied = true; }
     }
     if (env.MODEL_MAX_TOKENS != null && String(env.MODEL_MAX_TOKENS).trim() !== '') {
       const mt = parseInt(String(env.MODEL_MAX_TOKENS), 10);
-      if (Number.isFinite(mt) && mt > 0) next.max_output_tokens = mt;
+      if (Number.isFinite(mt) && mt > 0) { next.max_output_tokens = mt; applied = true; }
     }
   }
-  return next;
+  for (const [key, patch] of parseModelOverridesJson(env)) {
+    if (key !== entry.model_id) continue;
+    const cw = int(patch.context_window ?? patch.contextWindow, NaN);
+    if (Number.isFinite(cw) && cw > 0) { next.context_window = cw; applied = true; }
+    const mt = int(patch.max_output_tokens ?? patch.maxTokens, NaN);
+    if (Number.isFinite(mt) && mt > 0) { next.max_output_tokens = mt; applied = true; }
+  }
+  return applied ? next : entry;
+}
+
+/**
+ * Parse MODEL_OVERRIDES_JSON once per call. Malformed JSON or non-object
+ * shapes are warned and ignored (overrides are an operator convenience, not
+ * authority) — never a Run failure.
+ *
+ * @param {NodeJS.ProcessEnv | Record<string, string|undefined>} env
+ * @returns {Array<[string, Record<string, unknown>]>}
+ */
+function parseModelOverridesJson(env) {
+  const raw = env.MODEL_OVERRIDES_JSON;
+  if (raw == null || String(raw).trim() === '') return [];
+  try {
+    const parsed = JSON.parse(String(raw));
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return [];
+    return Object.entries(parsed).filter(
+      ([, v]) => v != null && typeof v === 'object' && !Array.isArray(v),
+    );
+  } catch (err) {
+    console.warn(
+      '[model-registry] Ignoring malformed MODEL_OVERRIDES_JSON:',
+      err instanceof Error ? err.message : err,
+    );
+    return [];
+  }
 }
 
 /**
@@ -457,11 +593,12 @@ export function applyEnvOverrides(entry, env = process.env) {
  */
 export function resolveModel(modelId, opts = {}) {
   const env = opts.env || process.env;
-  const registry = opts.registry || buildRegistry({ env });
+  const registry =
+    opts.registry || (opts.useCached ? buildCachedRegistry(env) : buildRegistry({ env }));
   const id =
     (modelId && String(modelId).trim()) ||
     (env.MODEL_ID && String(env.MODEL_ID).trim()) ||
-    'deepseek-v4-flash';
+    resolveDefaultModelId(registry);
 
   let entry = registry.get(id);
   if (!entry) {
@@ -524,10 +661,28 @@ export function toThinkingLevelMap(entry) {
   const allowed = declaredThinkingLevels(entry);
   if (allowed.size === 0) return undefined;
 
+  // Explicit per-level wire values from the registry entry (thinking_wire_map)
+  // override the conservative defaults below. This is how xhigh becomes
+  // usable: a provider that accepts it (deepseek/anthropic "max") declares
+  // the mapping, providers that do not simply leave it out.
+  const wireMap = entry.thinking_wire_map ?? {};
+
   /** @type {Record<string, string|null>} */
   const map = {};
   for (const level of THINKING_LEVELS) {
-    // xhigh has no portable wire value, so it is never declarable as supported.
+    // A wire value says *how* to send a level, not *whether* the model offers
+    // it. Applying it to an undeclared level would make pi-ai report a level
+    // that supportedThinkingLevels() still filters out, and the two must
+    // agree (see that function's contract).
+    if (
+      allowed.has(level) &&
+      Object.prototype.hasOwnProperty.call(wireMap, level)
+    ) {
+      map[level] = wireMap[level]; // explicit wire value (string or null)
+      continue;
+    }
+    // Without an explicit wire value, xhigh has no portable mapping and stays
+    // unsupported rather than guessed.
     if (!allowed.has(level) || level === 'xhigh') {
       map[level] = null;
     }
@@ -553,15 +708,21 @@ function declaredThinkingLevels(entry) {
  * Must agree with what pi-ai's `getSupportedThinkingLevels` will report for the
  * Model that `toPiModel` produces — an admin or capability UI built on this
  * should not advertise a level the session then clamps away. That is why
- * `xhigh` is excluded even in the unconstrained case: pi-ai drops it whenever
- * the map does not name it, and {@link toThinkingLevelMap} never does.
+ * `xhigh` is excluded unless the entry declares an explicit wire value for it
+ * via `thinking_wire_map` (pi-ai drops xhigh whenever the map does not name it).
  *
  * @param {ModelEntry} entry
  * @returns {string[]}
  */
 export function supportedThinkingLevels(entry) {
   if (!entry?.supports_reasoning) return [];
-  const portable = THINKING_LEVELS.filter((level) => level !== 'xhigh');
+  const wireMap = entry.thinking_wire_map ?? {};
+  const portable = THINKING_LEVELS.filter(
+    (level) =>
+      level !== 'xhigh' ||
+      (Object.prototype.hasOwnProperty.call(wireMap, level) &&
+        wireMap[level] != null),
+  );
   const allowed = declaredThinkingLevels(entry);
   if (allowed.size === 0) return portable;
   return portable.filter((level) => allowed.has(level));

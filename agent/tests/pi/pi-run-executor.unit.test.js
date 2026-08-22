@@ -1532,7 +1532,16 @@ describe('PiRunExecutor', () => {
         emitLog2.push(env.type);
       },
     });
-    assert.equal(emitLog2.length, 0);
+    // The run.agent_version fingerprint event commits in its own transaction
+    // before the prompt loop, so it legitimately emits even when the later
+    // message.completed batch rolls back. Only the rolled-back batch's events
+    // must be absent from the external emit log.
+    assert.ok(
+      !emitLog2.includes('message.completed'),
+      'rolled-back message.completed must not be emitted',
+    );
+    // Still the load-bearing half: the rolled-back batch must not survive in
+    // the durable table either. Only the emit-count assertion had to relax.
     assert.ok(
       !state.tables.run_events.some((e) => e.event_type === 'message.completed'),
       'rolled-back message.completed must not remain',

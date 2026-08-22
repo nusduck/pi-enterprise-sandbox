@@ -683,6 +683,36 @@ export class PiRunExecutor {
         };
       }
 
+      // 8b) Durable AgentVersion fingerprint event. run.accepted records the
+      // version id; this pins the exact config the Run *executed* with, so an
+      // audit trail stays meaningful even if the catalog row is later edited
+      // (configJson is mutable in the catalog). Recovery/checkpoint keep the
+      // same identity for cross-referencing.
+      try {
+        await this._eventRecorder.record({
+          type: 'run.agent_version',
+          data: {
+            agentVersionId,
+            configHash: String(agentVersion.configHash || ''),
+            piSdkVersion: PINNED_PI_SDK_VERSION,
+          },
+          dedupeKey: `run.agent_version:${runId}`,
+        });
+      } catch (err) {
+        if (this._lockLost || err instanceof SessionFenceConflictError) {
+          await this.#maybeMarkRecoveryOnLockLoss(
+            agentSessionId,
+            scope,
+            /** @type {number} */ (this._fenceToken),
+          );
+          return {
+            outcome: RUN_STATUS.FAILED,
+            statusReason: 'lock or fence lost during agent-version fingerprint',
+          };
+        }
+        throw err;
+      }
+
       // 9) Optional session.subscribe projector (disabled when observability owns events)
       const projector = this.projector;
       const useSessionSubscribe =
@@ -833,6 +863,17 @@ export class PiRunExecutor {
         runtimeSession,
         this.toolBudget ?? undefined,
       );
+      // Wall-clock hard deadline: a hung model stream never returns from
+      // prompt(), so the budget's turn/tool hooks alone cannot fire. A timer
+      // aborts the session (same path as cancellation); the budget guard then
+      // keeps any post-abort turns from requesting more tools.
+      let deadlineTimer = null;
+      // Set by the deadline timer only. `signal.aborted` cannot stand in for
+      // it: that is the external cancellation signal, so a deadline abort that
+      // resolves prompt() without an error would otherwise fall through to the
+      // success path and commit a half-finished turn as SUCCEEDED.
+      let deadlineExceeded = false;
+      const runDeadlineMs = Number(this.toolBudget?.runDeadlineMs) || null;
       try {
         if (typeof runtimeSession.prompt === 'function') {
           promptPromise = runtimeSession.prompt(prompt.text, prompt.options);
@@ -869,10 +910,22 @@ export class PiRunExecutor {
           },
         });
         this._steerController.start();
+        if (runDeadlineMs != null) {
+          deadlineTimer = setTimeout(() => {
+            deadlineExceeded = true;
+            try {
+              runtimeSession.abort?.();
+            } catch {
+              /* best-effort; budget guard still blocks further tools */
+            }
+          }, runDeadlineMs);
+          if (typeof deadlineTimer.unref === 'function') deadlineTimer.unref();
+        }
         await promptPromise;
       } catch (err) {
         promptError = err;
       } finally {
+        if (deadlineTimer != null) clearTimeout(deadlineTimer);
         await this._steerController?.stop();
         toolBudgetGuard.dispose();
         if (!promptError && this._steerController?.error) {
@@ -914,6 +967,16 @@ export class PiRunExecutor {
         return {
           outcome: RUN_STATUS.CANCELLED,
           statusReason: 'aborted',
+        };
+      }
+
+      // A run killed by its own wall-clock budget is a failure, not a success:
+      // whatever the model had produced when the session was aborted is a
+      // partial turn, and recording it as SUCCEEDED hides a hung provider.
+      if (deadlineExceeded) {
+        return {
+          outcome: RUN_STATUS.FAILED,
+          statusReason: `run deadline exceeded after ${runDeadlineMs}ms`,
         };
       }
 

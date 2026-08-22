@@ -442,9 +442,8 @@ export class ServiceContainer {
       const { bindAgentVersionConfig, resolveConcreteModel } = await import(
         '../infrastructure/pi/pi-runtime-factory.js'
       );
-      const { resolveModel, toPiModel } = await import(
-        '../infrastructure/model-registry.js'
-      );
+      const { resolveModel, toPiModel, buildCachedRegistry, resolveDefaultModelId } =
+        await import('../infrastructure/model-registry.js');
       const bound = bindAgentVersionConfig(agentVersion);
       if (bound.model) {
         if (selection.modelId && String(bound.model.id) !== selection.modelId) {
@@ -471,8 +470,8 @@ export class ServiceContainer {
         (typeof ref.modelId === 'string' && String(ref.modelId).trim()) ||
         (typeof ref.id === 'string' && String(ref.id).trim()) ||
         (env.MODEL_ID && String(env.MODEL_ID).trim()) ||
-        'deepseek-v4-flash';
-      const entry = resolveModel(modelId, { env });
+        resolveDefaultModelId(buildCachedRegistry(env));
+      const entry = resolveModel(modelId, { env, useCached: true });
       const baseUrl = String(env.LLMIO_BASE_URL || '').trim();
       const piModel = toPiModel(entry, {
         baseUrl,
