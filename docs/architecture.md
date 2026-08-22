@@ -161,6 +161,17 @@ Agent（`pi-coding-agent` SDK）运行在独立 `agent/` 服务中，而非浏�
 子 Run 沿用父 Run 的 `trace_id`，并把 `trace_parent_span_id` 指向父 Run 的 run
 span，所以一次 fan-out 在链路上是一棵树而不是 N 个孤立的 root。
 
+取消会级联：取消父 Run 时，沿 `parent_run_id` 深度有界地为每个存活后代写入持久
+cancel intent 并发信号。**只写 intent**——`execute-run-service` 在进入 runtime 前
+和每步前后都检查它（MySQL 权威，Redis 加速），所以排队中的子 Run 被捡起时就地终
+止，运行中的子 Run 走它本来就有的取消路径。已终态的父 Run 也会回收存活子 Run。父
+行的 `FOR UPDATE` 让"取消"与"创建子 Run"串行：取消先提交则新的 spawn 被拒
+（`SUBAGENT_PARENT_NOT_RUNNABLE`），spawn 先提交则级联能看到这个新子 Run。
+
+子 Run 的 Conversation 带 `parent_run_id`（migration `20260822000003`），
+`listForOwner` 默认过滤掉它们，但 `getById` 不过滤——列表里看不到，按 id 仍然读得
+到 transcript。
+
 `LEGACY_REQUIRED_EXTENSION_NAMES`（三个，不含 `user-interaction`）仅用于兼容
 `user-interaction` 拆分之前的配置：给出这三个即隐含启用 `user-interaction`，
 `ask_user` 不会静默消失。

@@ -55,6 +55,7 @@ export {
   assertSubagentDepth,
   SUBAGENT_LABEL_MAX_LEN,
   SUBAGENT_CHILD_LIST_MAX,
+  SUBAGENT_MAX_WALK_DEPTH,
   resolveRunListLimit,
   normalizeExpectedStatuses,
   assertRunStatus,

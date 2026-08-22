@@ -90,6 +90,9 @@ export function mapConversation(row) {
     orgId: String(row.org_id),
     userId: String(row.user_id),
     agentId: String(row.agent_id),
+    // Set only on a sub-agent's own conversation (migration 20260822000003):
+    // the Run whose spawn_subagent call created it.
+    parentRunId: row.parent_run_id == null ? null : String(row.parent_run_id),
     title: row.title == null ? null : String(row.title),
     status: String(row.status),
     currentAgentSessionId:

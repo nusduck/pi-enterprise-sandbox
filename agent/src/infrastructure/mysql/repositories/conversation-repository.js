@@ -22,6 +22,7 @@ export class ConversationRepository {
    *   orgId: string,
    *   userId: string,
    *   agentId: string,
+   *   parentRunId?: string | null,
    *   title?: string | null,
    *   status: string,
    *   currentAgentSessionId?: string | null,
@@ -39,6 +40,7 @@ export class ConversationRepository {
       org_id: scope.orgId,
       user_id: scope.userId,
       agent_id: input.agentId,
+      parent_run_id: input.parentRunId ?? null,
       title: input.title ?? null,
       status: input.status,
       current_agent_session_id: input.currentAgentSessionId ?? null,
@@ -50,6 +52,9 @@ export class ConversationRepository {
   }
 
   /**
+   * Read one conversation by id, sub-agent conversations included: the list
+   * hides them, this does not.
+   *
    * @param {string} conversationId
    * @param {{ orgId: string, userId: string }} scope
    * @param {{ forUpdate?: boolean }} [opts]
@@ -98,6 +103,10 @@ export class ConversationRepository {
     const limit = opts.limit ?? 50;
     let query = applyOwnerScope(this.db('conversations'), s);
     if (opts.includeArchived !== true) query = query.whereNull('archived_at');
+    // A sub-agent's conversation belongs to the Run that spawned it, not
+    // beside it in the owner's list. It stays fully readable by id — hiding it
+    // here is a listing decision, never an access one.
+    if (opts.includeSubagent !== true) query = query.whereNull('parent_run_id');
     const rows = await query.orderBy('updated_at', 'desc').limit(limit);
     return rows.map(mapConversation);
   }

@@ -114,7 +114,13 @@ async function appendEventInTxn({
  *   transitionedToCancelling: boolean,
  *   signalPending: boolean,
  *   terminal: boolean,
+ *   cancelledDescendants: string[],
  * }} CancelRunResponse
+ *
+ * `cancelledDescendants` is deliberately not echoed by the HTTP layer: each
+ * child emits its own `run.status.changed` / `run.cancelled` events, which is
+ * how a client already learns a Run stopped. It exists so callers inside the
+ * process (and the tests) can assert the cascade actually ran.
  */
 
 export class CancelRunService {
@@ -227,8 +233,24 @@ export class CancelRunService {
         });
       }
 
-      // Terminal: idempotent — do not write new cancel intent, do not signal.
+      // Terminal parent: idempotent for the parent itself — no new intent, no
+      // signal. Its children are NOT skipped: a parent that already failed or
+      // was cancelled can still have live children burning sandbox and
+      // provider budget, and this call is the user asking for them to stop.
       if (this.stateMachine.isTerminal(run.status)) {
+        const orphans = await repos.runs.listDescendants(runId, scope, {
+          onlyNonTerminal: true,
+        });
+        /** @type {string[]} */
+        const cancelledOrphans = [];
+        for (const child of orphans) {
+          await repos.runs.setCancelIntent(child.runId, scope, {
+            reason: input.reason ?? `parent run ${runId} is ${run.status}`,
+            requestedBy: owner.userId,
+            requestedAt: this.now(),
+          });
+          cancelledOrphans.push(child.runId);
+        }
         return {
           runId,
           status: run.status,
@@ -239,6 +261,7 @@ export class CancelRunService {
           skipSignal: true,
           requestedBy: run.cancelRequestedBy,
           reason: run.cancelReason,
+          cancelledDescendants: cancelledOrphans,
         };
       }
 
@@ -478,6 +501,29 @@ export class CancelRunService {
         }
       }
 
+      // Cascade to sub-agent children (PR #16 lineage). Only the durable
+      // intent is written here: a child stops itself through the ordinary
+      // path — execute-run-service checks cancel intent before entering the
+      // runtime and again around each step, reading MySQL first and Redis as
+      // acceleration. Re-implementing the parked WAITING_INPUT/APPROVAL
+      // terminalisation per child would duplicate the riskiest code in this
+      // file for no behavioural gain.
+      const descendants = await repos.runs.listDescendants(runId, scope, {
+        onlyNonTerminal: true,
+      });
+      /** @type {string[]} */
+      const cancelledDescendants = [];
+      for (const child of descendants) {
+        // First-writer-wins and idempotent: a child the user already cancelled
+        // keeps its original reason and requester.
+        await repos.runs.setCancelIntent(child.runId, scope, {
+          reason: input.reason ?? `parent run ${runId} cancelled`,
+          requestedBy: owner.userId,
+          requestedAt: this.now(),
+        });
+        cancelledDescendants.push(child.runId);
+      }
+
       return {
         runId,
         status,
@@ -488,6 +534,7 @@ export class CancelRunService {
         skipSignal: status === RUN_STATUS.CANCELLED,
         requestedBy: owner.userId,
         reason: withIntent.cancelReason,
+        cancelledDescendants,
       };
     });
 
@@ -495,6 +542,21 @@ export class CancelRunService {
     if (!committed.skipSignal) {
       try {
         await this.cancelSignal.request(runId, {
+          reason: committed.reason ?? undefined,
+          requestedBy: committed.requestedBy ?? undefined,
+        });
+      } catch {
+        signalPending = true;
+      }
+    }
+
+    // Redis is acceleration for children exactly as it is for the parent: the
+    // intent is already committed, so a failed signal only means a running
+    // child notices at its next MySQL check instead of immediately.
+    const cancelledDescendants = committed.cancelledDescendants ?? [];
+    for (const childRunId of cancelledDescendants) {
+      try {
+        await this.cancelSignal.request(childRunId, {
           reason: committed.reason ?? undefined,
           requestedBy: committed.requestedBy ?? undefined,
         });
@@ -511,6 +573,7 @@ export class CancelRunService {
       transitionedToCancelling: committed.transitionedToCancelling,
       signalPending,
       terminal: committed.terminal,
+      cancelledDescendants,
     };
   }
 }
