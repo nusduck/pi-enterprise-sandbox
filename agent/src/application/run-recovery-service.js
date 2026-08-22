@@ -32,6 +32,8 @@ import { applyRunTransitionInTxn } from './run-transition.js';
 import { sanitizeStatusReason } from './sanitize-status-reason.js';
 import { formatStoredTraceCarrier } from '../infrastructure/telemetry.js';
 import { terminalizeParkedWaitingApprovalInTxn } from './parked-approval-cancel.js';
+import { terminalizeParkedWaitingInputInTxn } from './parked-interaction-cancel.js';
+import { recoverParkedCancel } from './run-recovery-parked-cancel.js';
 import {
   APPROVAL_STATUS,
   isTerminalApprovalStatus,
@@ -266,10 +268,50 @@ export class RunRecoveryService {
   }
 
   /**
-   * PENDING input remains parked. A durable RESOLVED answer is a resume intent
-   * and gets its own BullMQ job id, so the original active job cannot absorb it.
+   * Finish a parked Run whose cancel intent is already durable.
+   * @param {object} run
+   * @param {object} base
+   * @param {{ parkedStatus: string, terminalize: Function }} handler
+   * @returns {Promise<RecoveryAction>}
+   */
+  async #terminalizeParkedCancel(run, base, handler) {
+    return recoverParkedCancel({
+      tx: this.tx,
+      createRepositories: this.createRepositories,
+      run,
+      base,
+      ...handler,
+    });
+  }
+
+  /**
+   * WAITING_INPUT recovery:
+   * - cancel intent present → parked terminalize (mirrors WAITING_APPROVAL)
+   * - durable RESOLVED answer → enqueue a resume job under its own job id, so
+   *   the original active job cannot absorb it
+   * - still PENDING → leave parked (the user must answer)
    */
   async #recoverWaitingInput(run, base) {
+    // A Run can get cancel intent with no live worker to act on it — a
+    // sub-agent child reached by its parent's cancel cascade is exactly that.
+    // Without this the child stays parked on ask_user forever, because the
+    // PENDING branch below deliberately leaves parked Runs alone.
+    if (run.cancelRequestedAt) {
+      return this.#terminalizeParkedCancel(run, base, {
+        parkedStatus: RUN_STATUS.WAITING_INPUT,
+        terminalize: (repos, current, scope) =>
+          terminalizeParkedWaitingInputInTxn({
+            repos,
+            run: current,
+            scope,
+            cancelledBy: current.cancelRequestedBy || current.userId,
+            generateId: this.generateId,
+            now: this.now,
+            stateMachine: this.stateMachine,
+          }),
+      });
+    }
+
     try {
       const scope = { orgId: run.orgId, userId: run.userId };
       const interaction = await this.tx.run(async (trx) => {
@@ -349,23 +391,10 @@ export class RunRecoveryService {
   async #recoverWaitingApproval(run, base) {
     const scope = { orgId: run.orgId, userId: run.userId };
     if (run.cancelRequestedAt) {
-      try {
-        const result = await this.tx.run(async (trx) => {
-          const repos = this.createRepositories(trx);
-          const current = await repos.runs.getById(run.runId, scope, {
-            forUpdate: true,
-          });
-          if (!current) return { ok: false, reason: 'missing' };
-          if (isTerminalRunStatus(current.status)) {
-            return { ok: true, status: current.status, already: true };
-          }
-          if (current.status !== RUN_STATUS.WAITING_APPROVAL) {
-            return {
-              ok: false,
-              reason: `status advanced to ${current.status}`,
-            };
-          }
-          const parked = await terminalizeParkedWaitingApprovalInTxn({
+      return this.#terminalizeParkedCancel(run, base, {
+        parkedStatus: RUN_STATUS.WAITING_APPROVAL,
+        terminalize: (repos, current, scope) =>
+          terminalizeParkedWaitingApprovalInTxn({
             repos,
             run: current,
             scope,
@@ -373,31 +402,8 @@ export class RunRecoveryService {
             generateId: this.generateId,
             now: this.now,
             stateMachine: this.stateMachine,
-          });
-          return { ok: true, status: parked.status };
-        });
-        if (result.ok) {
-          return {
-            ...base,
-            status: result.status,
-            action: 'terminalized',
-            reason: result.already
-              ? 'already terminal'
-              : 'WAITING_APPROVAL parked cancel (cancel intent)',
-          };
-        }
-        return {
-          ...base,
-          action: 'error',
-          reason: result.reason ?? 'parked approval cancel failed',
-        };
-      } catch (err) {
-        return {
-          ...base,
-          action: 'error',
-          reason: sanitizeStatusReason(err),
-        };
-      }
+          }),
+      });
     }
 
     try {

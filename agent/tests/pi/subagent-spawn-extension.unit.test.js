@@ -253,6 +253,29 @@ describe('subagent-spawn bundle wiring', () => {
     );
   });
 
+  it('does not give a child run the ask_user tool', () => {
+    // A child's conversation is deliberately out of the owner's list and its
+    // task prompt is contractually self-contained, so nothing routes a child's
+    // question to a human. Registering ask_user would let it park in
+    // WAITING_INPUT forever, waiting for an answer nobody sees it asking for.
+    const port = fakePort();
+    const build = (ctx) =>
+      collectTools(
+        createEnterpriseExtensionBundle(ctx, {
+          extensions,
+          subagentSpawnPort: port,
+          sandboxTransport: {},
+        }).find((f) => f.extensionName === 'user-interaction'),
+      );
+
+    assert.ok(build(RUN_CTX).has('ask_user'), 'a top-level run keeps ask_user');
+    assert.equal(
+      build({ ...RUN_CTX, subagentDepth: 1 }).has('ask_user'),
+      false,
+      'a sub-agent run must not be able to park on ask_user',
+    );
+  });
+
   it('carries subagentDepth through the frozen run context', () => {
     assert.equal(assertEnterpriseRunContext(RUN_CTX).subagentDepth, 0);
     assert.equal(

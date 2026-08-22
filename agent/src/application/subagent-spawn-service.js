@@ -165,6 +165,16 @@ export class SubagentSpawnService {
           id: parentRunId,
         });
       }
+      // The parent row is locked FOR UPDATE here and in CancelRunService, so
+      // the two serialize: cancel-first makes this refuse, spawn-first makes
+      // the cascade see the new child. Without this check the losing order
+      // would leave a child running under a cancelled parent forever.
+      if (isTerminalRunStatus(parent.status) || parent.cancelRequestedAt) {
+        throw new SubagentLimitError(
+          'SUBAGENT_PARENT_NOT_RUNNABLE',
+          `parent run is ${parent.cancelRequestedAt ? 'being cancelled' : parent.status.toLowerCase()}; not spawning new children`,
+        );
+      }
       const depth = Number(parent.subagentDepth ?? 0);
       if (depth >= maxDepth) {
         throw new SubagentLimitError(
@@ -237,6 +247,9 @@ export class SubagentSpawnService {
         orgId: scope.orgId,
         userId: scope.userId,
         agentId: parentConversation.agentId,
+        // Lineage for the conversation list: a fan-out must not push N rows
+        // into the owner's sidebar.
+        parentRunId,
         title: childConversationTitle(label, task),
         status: 'active',
         currentAgentSessionId: agentSessionId,

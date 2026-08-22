@@ -197,6 +197,13 @@ export const SUBAGENT_LABEL_MAX_LEN = 128;
 export const SUBAGENT_CHILD_LIST_MAX = 50;
 
 /**
+ * Levels {@link RunRepository#listDescendants} will walk. One more than the
+ * spawn depth cap, so raising `AGENT_SUBAGENT_MAX_DEPTH` by one does not
+ * silently leave the deepest generation unreachable by a cascade.
+ */
+export const SUBAGENT_MAX_WALK_DEPTH = 4;
+
+/**
  * @param {unknown} depth
  * @returns {number}
  */
@@ -387,6 +394,55 @@ export class RunRepository {
     }
     const rows = await q.orderBy('created_at', 'desc').limit(limit);
     return rows.map(mapRunRow);
+  }
+
+  /**
+   * Every non-terminal Run below one parent, breadth-first.
+   *
+   * Bounded twice over: `maxDepth` levels (the spawn cap is 2, so this is two
+   * round trips in practice) and `SUBAGENT_CHILD_LIST_MAX` rows per level. A
+   * `parent_run_id` cycle is impossible — a child's parent always predates it —
+   * but the visited set makes the walk terminate anyway rather than trusting
+   * that invariant with an unbounded loop.
+   *
+   * @param {string} rootRunId
+   * @param {{ orgId: string, userId: string }} scope
+   * @param {{ maxDepth?: number, onlyNonTerminal?: boolean }} [opts]
+   */
+  async listDescendants(rootRunId, scope, opts = {}) {
+    const s = requireOwnerUlids(scope);
+    const rootId = assertUlid(rootRunId, 'rootRunId');
+    const maxDepth = Math.min(
+      Math.max(1, Number(opts.maxDepth) || SUBAGENT_MAX_WALK_DEPTH),
+      SUBAGENT_MAX_WALK_DEPTH,
+    );
+    const onlyNonTerminal = opts.onlyNonTerminal !== false;
+    /** @type {Set<string>} */
+    const visited = new Set([rootId]);
+    /** @type {object[]} */
+    const found = [];
+    let frontier = [rootId];
+
+    for (let depth = 0; depth < maxDepth && frontier.length > 0; depth += 1) {
+      const rows = await applyOwnerScope(
+        this.db('runs').whereIn('parent_run_id', frontier),
+        s,
+      )
+        .orderBy('created_at', 'desc')
+        .limit(SUBAGENT_CHILD_LIST_MAX * frontier.length);
+      const next = [];
+      for (const row of rows) {
+        const run = mapRunRow(row);
+        if (visited.has(run.runId)) continue;
+        visited.add(run.runId);
+        next.push(run.runId);
+        if (!onlyNonTerminal || !TERMINAL_RUN_STATUSES.includes(run.status)) {
+          found.push(run);
+        }
+      }
+      frontier = next;
+    }
+    return found;
   }
 
   /**
