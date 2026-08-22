@@ -185,6 +185,12 @@ export function mapRun(row) {
     agentVersionId: String(row.agent_version_id),
     triggeringMessageId: String(row.triggering_message_id),
     source: String(row.source),
+    // Sub-agent lineage (migration 20260822000001). Depth is stored, not
+    // derived: the spawn cap must hold even if a parent row is gone.
+    parentRunId: row.parent_run_id == null ? null : String(row.parent_run_id),
+    subagentDepth: row.subagent_depth == null ? 0 : Number(row.subagent_depth),
+    subagentLabel:
+      row.subagent_label == null ? null : String(row.subagent_label),
     status: String(row.status),
     statusReason: row.status_reason == null ? null : String(row.status_reason),
     queueName: String(row.queue_name),

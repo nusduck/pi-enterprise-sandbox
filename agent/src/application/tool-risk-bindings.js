@@ -56,6 +56,34 @@ export function readAgentVersionExtensions(agentVersion) {
 
 
 /**
+ * Sub-agent resource limits declared by an AgentVersion's `configJson.subagent`
+ * (`{ maxDepth?, maxConcurrent? }`). Absent/invalid values are omitted so the
+ * extension falls back to its own (env-tunable) defaults. This mirrors how
+ * `toolPolicy`/`thinkingLevel` live on the version: per-tenant behaviour stays
+ * version-scoped instead of one deployment-wide env knob.
+ *
+ * @param {unknown} agentVersion
+ * @returns {{ maxDepth?: number, maxConcurrent?: number }}
+ */
+export function readAgentVersionSubagentPolicy(agentVersion) {
+  const config = readConfigJson(agentVersion);
+  const subagent =
+    config?.subagent &&
+    typeof config.subagent === 'object' &&
+    !Array.isArray(config.subagent)
+      ? config.subagent
+      : {};
+  const maxDepth = Number(subagent.maxDepth);
+  const maxConcurrent = Number(subagent.maxConcurrent);
+  return {
+    ...(Number.isSafeInteger(maxDepth) && maxDepth >= 0 ? { maxDepth } : {}),
+    ...(Number.isSafeInteger(maxConcurrent) && maxConcurrent >= 1
+      ? { maxConcurrent }
+      : {}),
+  };
+}
+
+/**
  * The raw `configJson.toolPolicy` object, or `{}` when absent/malformed.
  *
  * Exported so callers can tell "this AgentVersion configures tool policy at

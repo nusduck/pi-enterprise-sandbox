@@ -20,6 +20,8 @@ import { createUserInteractionExtension } from './user-interaction/index.js';
 import { createEnterprisePolicyExtension } from './enterprise-policy/index.js';
 import { createObservabilityExtension } from './observability/index.js';
 import { createSkillLifecycleExtension } from './skill-lifecycle/index.js';
+import { createSubagentSpawnExtension } from './subagent-spawn/index.js';
+import { createTaskStateExtension } from './task-state/index.js';
 import { SANDBOX_TOOL_NAMES } from './sandbox-bridge/constants.js';
 import { createPolicyEngine } from './enterprise-policy/policy-engine.js';
 import {
@@ -82,6 +84,16 @@ export {
   createSkillLifecycleExtension,
   SKILL_LIFECYCLE_TOOL_NAMES,
 } from './skill-lifecycle/index.js';
+export {
+  createSubagentSpawnExtension,
+  SUBAGENT_TOOL_NAMES,
+  MAX_SUBAGENT_DEPTH,
+  MAX_CONCURRENT_CHILDREN,
+} from './subagent-spawn/index.js';
+export {
+  createTaskStateExtension,
+  TASK_STATE_TOOL_NAMES,
+} from './task-state/index.js';
 
 /**
  * Exact tool allowlist for Pi createFromServices({ tools }).
@@ -149,6 +161,11 @@ export function assertEnterpriseRunContext(runContext) {
   const executionFenceToken = assertEnterpriseExecutionFenceToken(
     ctx.executionFenceToken,
   );
+  // Sub-agent nesting depth of the Run being executed. Optional and additive:
+  // a context without it is depth 0 (a top-level Run), and anything that is
+  // not a non-negative integer is refused rather than coerced — the spawn
+  // depth cap reads this value.
+  const subagentDepth = assertSubagentDepth(ctx.subagentDepth);
   return Object.freeze({
     orgId: String(ctx.orgId),
     userId: String(ctx.userId),
@@ -159,7 +176,26 @@ export function assertEnterpriseRunContext(runContext) {
       ctx.sandboxSessionId == null ? null : String(ctx.sandboxSessionId),
     traceId: String(ctx.traceId),
     executionFenceToken,
+    subagentDepth,
   });
+}
+
+/**
+ * @param {unknown} depth
+ * @returns {number}
+ */
+function assertSubagentDepth(depth) {
+  if (depth == null) return 0;
+  if (
+    typeof depth !== 'number' ||
+    !Number.isSafeInteger(depth) ||
+    depth < 0
+  ) {
+    throw new Error(
+      'createEnterpriseExtensionBundle runContext.subagentDepth must be a non-negative integer when present',
+    );
+  }
+  return depth;
 }
 
 /**
@@ -272,6 +308,20 @@ export function assertEnterpriseExtensions(extensions) {
  *   agentVersionToolPolicy?: object,
  *   toolRiskPolicy?: object,
  *   agentVersionToolRiskPolicy?: object,
+ *   subagentSpawnPort?: { spawn: Function, getStatuses: Function } | null,
+ *   taskStateStore?: {
+ *     replaceTodos: Function,
+ *     getTodos: Function,
+ *     appendMemory: Function,
+ *     searchMemory: Function,
+ *   } | null,
+ *   subagentSpawn?: { maxDepth?: number, maxConcurrent?: number },
+ *   otel?: boolean,
+ *   providerGate?: { acquire: Function, observe: Function } | null,
+ *   providerMaxConcurrent?: number,
+ *   providerCooldownMs?: number,
+ *   deltaTruncateLimit?: number,
+ *   thinkingTruncateLimit?: number,
  *   skillManager?: object | null,
  *   skillManagerFactory?: (runContext: object, lifecycleDeps?: { getAgentSession?: Function }) => object | null,
  *   getAgentSession?: () => object | null,
@@ -476,6 +526,21 @@ export function createEnterpriseExtensionBundle(runContext, deps = {}) {
   if (deps.thinkingTruncateLimit != null) {
     observabilityDeps.thinkingTruncateLimit = deps.thinkingTruncateLimit;
   }
+  // OTel tool spans are opt-in from the container (an OTLP endpoint exists);
+  // the flag has to be forwarded here or the extension never sees it.
+  if (deps.otel != null) {
+    observabilityDeps.otel = deps.otel === true;
+  }
+  // Provider gate knobs / test seam. The gate itself is process-global.
+  if (deps.providerGate != null) {
+    observabilityDeps.providerGate = deps.providerGate;
+  }
+  if (deps.providerMaxConcurrent != null) {
+    observabilityDeps.providerMaxConcurrent = deps.providerMaxConcurrent;
+  }
+  if (deps.providerCooldownMs != null) {
+    observabilityDeps.providerCooldownMs = deps.providerCooldownMs;
+  }
   const observability = createObservabilityExtension({
     runContext: frozen,
     deps: observabilityDeps,
@@ -497,6 +562,52 @@ export function createEnterpriseExtensionBundle(runContext, deps = {}) {
     'enterprise-policy': enterprisePolicy,
     observability,
   };
+
+  // subagent-spawn only loads when an AgentVersion asks for it AND the durable
+  // port is wired. Enabling the extension without the port would register two
+  // tools that can only ever return SUBAGENT_PORT_UNAVAILABLE, so refuse at
+  // assembly instead of at the model's first call.
+  if (selected.has('subagent-spawn')) {
+    const spawnPort = deps.subagentSpawnPort ?? null;
+    if (
+      !spawnPort ||
+      typeof spawnPort.spawn !== 'function' ||
+      typeof spawnPort.getStatuses !== 'function'
+    ) {
+      throw new Error(
+        'SUBAGENT_PORT_REQUIRED: AgentVersion enables subagent-spawn but no durable spawn port (spawn/getStatuses) was injected',
+      );
+    }
+    built['subagent-spawn'] = createSubagentSpawnExtension({
+      runContext: frozen,
+      deps: {
+        spawnPort,
+        // AgentVersion-scoped limits (configJson.subagent), when declared.
+        ...(deps.subagentSpawn || {}),
+      },
+    });
+  }
+
+  // task-state, same contract as subagent-spawn: the store is what makes the
+  // tools real, so an AgentVersion that enables the extension without one is
+  // an assembly error, not a runtime surprise.
+  if (selected.has('task-state')) {
+    const taskStateStore = deps.taskStateStore ?? null;
+    const complete =
+      taskStateStore &&
+      ['replaceTodos', 'getTodos', 'appendMemory', 'searchMemory'].every(
+        (method) => typeof taskStateStore[method] === 'function',
+      );
+    if (!complete) {
+      throw new Error(
+        'TASK_STATE_STORE_REQUIRED: AgentVersion enables task-state but no durable store (replaceTodos/getTodos/appendMemory/searchMemory) was injected',
+      );
+    }
+    built['task-state'] = createTaskStateExtension({
+      runContext: frozen,
+      deps: { taskStateStore },
+    });
+  }
 
   if (selected.has('skill-lifecycle')) {
     built['skill-lifecycle'] = createSkillLifecycleExtension({

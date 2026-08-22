@@ -29,6 +29,20 @@ const SRC_ROOT = path.join(root, 'src');
  */
 const TRANSIENT_MAP_WHITELIST = Object.freeze([
   {
+    rel: 'extensions/observability/index.js',
+    match: /const\s+activeToolSpans\s*=\s*new\s+Map\s*\(/,
+    purpose:
+      'Per-session in-flight OTel tool span handles keyed by Pi toolCallId; ended on tool_execution_end or session_shutdown, never Run authority',
+    scope: 'local',
+  },
+  {
+    rel: 'infrastructure/provider-gate.js',
+    match: /const\s+cooldowns\s*=\s*new\s+Map\s*\(/,
+    purpose:
+      'Gate-local per-provider 429 cooldown windows; advisory throttling for this process only, not Run authority',
+    scope: 'local',
+  },
+  {
     rel: 'bootstrap/http-main.js',
     match: /const\s+sessionByAgentId\s*=\s*new\s+Map\s*\(/,
     purpose:
@@ -355,9 +369,10 @@ describe('no authoritative in-process Run Map (B3)', () => {
     // 17 → 18: owner-scoped Run-list AgentSession batch lookup.
     // 18 → 19: function-local sandbox read deduplication guard.
     // 19 → 20: mtime-keyed model-registry hot-reload cache.
+    // 20 → 22: in-flight OTel tool spans + provider-gate 429 cooldowns.
     assert.equal(
       TRANSIENT_MAP_WHITELIST.length,
-      20,
+      22,
       'whitelist size drift — update STATUS B3 inventory evidence if intentional',
     );
   });

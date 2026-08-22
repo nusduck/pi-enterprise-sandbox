@@ -21,6 +21,8 @@ import {
   redactInlineSecrets,
 } from '../../infrastructure/pi/event-redaction.js';
 import { SANDBOX_TOOL_NAMES } from '../sandbox-bridge/constants.js';
+import { startSpan, SpanKind } from '../../infrastructure/telemetry.js';
+import { getProcessProviderGate } from '../../infrastructure/provider-gate.js';
 
 /** Sandbox-bridge tool names only — MCP/other tools cannot spoof UNKNOWN. */
 const SANDBOX_BRIDGE_TOOL_NAME_SET = new Set(SANDBOX_TOOL_NAMES);
@@ -135,6 +137,23 @@ function positiveLimit(value, fallback) {
 }
 
 /**
+ * First usable positive integer from deps then env, else undefined so the
+ * provider gate keeps its own documented defaults.
+ *
+ * @param {unknown} depValue
+ * @param {string | undefined} envValue
+ * @returns {number | undefined}
+ */
+function positiveIntOr(depValue, envValue) {
+  for (const candidate of [depValue, envValue]) {
+    if (candidate == null || String(candidate).trim() === '') continue;
+    const n = Number(candidate);
+    if (Number.isFinite(n) && n > 0) return Math.floor(n);
+  }
+  return undefined;
+}
+
+/**
  * @param {{
  *   runContext: {
  *     orgId: string,
@@ -162,6 +181,12 @@ function positiveLimit(value, fallback) {
  *     now?: () => Date,
  *     modelId?: string | null,
  *     provider?: string | null,
+ *     deltaTruncateLimit?: number,
+ *     thinkingTruncateLimit?: number,
+ *     otel?: boolean,
+ *     providerGate?: { acquire: Function, observe: Function } | null,
+ *     providerMaxConcurrent?: number,
+ *     providerCooldownMs?: number,
  *   },
  * }} options
  * @returns {import('@earendil-works/pi-coding-agent').ExtensionFactory}
@@ -188,6 +213,27 @@ export function createObservabilityExtension(options) {
     typeof deps.provider === 'string' && deps.provider.trim()
       ? deps.provider.trim().slice(0, 255)
       : null;
+  // Provider concurrency gate + 429 cooldown. Deliberately the *process*
+  // gate, not a per-Run one: this extension is built once per Run, so a gate
+  // owned here would only ever throttle a single already-serial prompt loop.
+  // deps.providerGate is the test seam.
+  const providerGate =
+    deps.providerGate && typeof deps.providerGate.acquire === 'function'
+      ? deps.providerGate
+      : getProcessProviderGate({
+          maxConcurrent: positiveIntOr(
+            deps.providerMaxConcurrent,
+            process.env.AGENT_PROVIDER_MAX_CONCURRENT,
+          ),
+          cooldownMs: positiveIntOr(
+            deps.providerCooldownMs,
+            process.env.AGENT_PROVIDER_COOLDOWN_MS,
+          ),
+        });
+  const providerKey = () => String(modelId || provider || 'default');
+  // OTel tool spans stay off unless the container saw an OTLP endpoint, so a
+  // deployment without a collector keeps the cheap NoopSpanProcessor path.
+  const otelEnabled = deps.otel === true;
 
   const modelMetadata = () => ({
     ...(modelId ? { modelId } : {}),
@@ -284,6 +330,17 @@ export function createObservabilityExtension(options) {
       }
     });
     pi.on('session_shutdown', async (event, ctx) => {
+      // An aborted Run (cancel, deadline, lost lease) can leave a provider
+      // call or a tool execution without its paired end event. The process
+      // gate outlives this Run, so an unreleased slot would shrink the cap for
+      // every later Run in this worker — release here, unconditionally.
+      while (providerStack.length > 0) {
+        const frame = providerStack.pop();
+        if (typeof frame?.release === 'function') frame.release();
+      }
+      for (const toolCallId of [...activeToolSpans.keys()]) {
+        endToolSpan(toolCallId, true, 'RUN_ENDED_BEFORE_TOOL_RESULT');
+      }
       if (typeof deps.onSessionShutdown === 'function') {
         await deps.onSessionShutdown(event, ctx);
       }
@@ -317,11 +374,17 @@ export function createObservabilityExtension(options) {
     });
 
     // ── Provider lifecycle (model.request.*) — NOT agent_start/end ──────
-    pi.on('before_provider_request', async (_event) => {
+    pi.on('before_provider_request', async (event) => {
       providerSeq += 1;
       const correlationId = `prov:${runContext.runId}:${providerSeq}`;
       const startedAt = now().getTime();
-      providerStack.push({ correlationId, startedAt });
+      const frame = { correlationId, startedAt, release: null };
+      providerStack.push(frame);
+      // Acquire a provider slot BEFORE the request goes out. The release is
+      // parked on this frame so after_provider_response can always find it
+      // even when the event pairing is lossy; a degraded acquire hands back a
+      // no-op, so the gate can never be over-released.
+      frame.release = await providerGate.acquire(providerKey(), event?.signal);
       // Never persist payload / headers / prompt.
       await emit(
         'model.request.started',
@@ -346,6 +409,9 @@ export function createObservabilityExtension(options) {
         frame?.startedAt != null
           ? Math.max(0, now().getTime() - frame.startedAt)
           : undefined;
+      // Release the slot and record/clear this provider's 429 cooldown.
+      if (typeof frame?.release === 'function') frame.release();
+      providerGate.observe(providerKey(), status);
       // Never persist headers or body.
       if (ok) {
         await emit(
@@ -447,9 +513,50 @@ export function createObservabilityExtension(options) {
     // Progress remains event-only (no schema progress columns).
     const governance = deps.governanceRecorder ?? null;
 
+    // ── OTel tool spans ─────────────────────────────────────────────────
+    // One CLIENT span per tool execution, parented to whatever run span is
+    // active (run-worker's agent.run.execute). Exported by the process-level
+    // OTLP exporter in telemetry.js; a NoopSpanProcessor otherwise. Span
+    // bookkeeping must never break execution, so every call is guarded.
+    /** @type {Map<string, { end: (error?: unknown) => void }>} */
+    const activeToolSpans = new Map();
+    const startToolSpan = (toolCallId, toolName) => {
+      if (!otelEnabled || !toolCallId) return;
+      try {
+        activeToolSpans.set(
+          toolCallId,
+          startSpan(`agent.tool.${toolName || 'unknown'}`, {
+            kind: SpanKind.CLIENT,
+            attributes: {
+              'agent.tool.name': toolName,
+              'agent.tool.call_id': toolCallId,
+              'agent.run.id': String(runContext.runId),
+            },
+          }),
+        );
+      } catch {
+        // Observability must never break execution.
+      }
+    };
+    // errorCode is the tool result's own stable code (never its message), so
+    // the span records why without carrying redacted output into the trace.
+    const endToolSpan = (toolCallId, isError, errorCode) => {
+      const handle = activeToolSpans.get(toolCallId);
+      if (!handle) return;
+      activeToolSpans.delete(toolCallId);
+      try {
+        handle.end(
+          isError ? new Error(String(errorCode || 'tool failed')) : null,
+        );
+      } catch {
+        // Ignore span-end failures.
+      }
+    };
+
     pi.on('tool_execution_start', async (event) => {
       const toolCallId = String(event?.toolCallId ?? '');
       const toolName = String(event?.toolName ?? '');
+      startToolSpan(toolCallId, toolName);
       const args = summarizeToolArgs(toolName, event?.args);
       if (governance && typeof governance.recordToolStarted === 'function') {
         // Direct call — enqueue would swallow ConflictError into promise-tail.
@@ -489,6 +596,7 @@ export function createObservabilityExtension(options) {
       const toolName = String(event?.toolName ?? '');
       const isError = Boolean(event?.isError);
       const result = event?.result;
+      endToolSpan(toolCallId, isError, isError ? result?.details?.code : null);
 
       // Pi converts a thrown durable ask_user suspension into an ordinary
       // error ToolResult and drops custom Error fields before this event. The

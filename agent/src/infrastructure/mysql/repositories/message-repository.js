@@ -156,6 +156,39 @@ export class MessageRepository {
   }
 
   /**
+   * The newest assistant message written by one Run.
+   *
+   * `check_subagent` needs a finished child's answer, and the assistant
+   * transcript rows (written by the executor from the Pi payload) are where it
+   * lives — the run row only carries status. Owner scope is proven the same
+   * way {@link listByConversation} proves it: the conversation is read under
+   * the scope first, and messages are only reachable through it.
+   *
+   * @param {string} conversationId
+   * @param {string} runId
+   * @param {{ orgId: string, userId: string }} scope
+   * @returns {Promise<object | null>}
+   */
+  async latestAssistantForRun(conversationId, runId, scope) {
+    const s = requireOwnerScope(scope);
+    const conv = await applyOwnerScope(
+      this.db('conversations').where({ conversation_id: conversationId }),
+      s,
+    ).first();
+    if (!conv) {
+      throw new NotFoundError('Conversation not found', {
+        resource: 'conversations',
+        id: conversationId,
+      });
+    }
+    const row = await this.db('messages')
+      .where({ conversation_id: conversationId, run_id: runId, role: 'assistant' })
+      .orderBy('sequence_no', 'desc')
+      .first();
+    return row ? mapMessage(row) : null;
+  }
+
+  /**
    * @param {string} messageId
    * @param {{ orgId: string, userId: string }} scope
    */

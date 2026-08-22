@@ -23,6 +23,36 @@ export function createFakeState() {
 }
 
 /**
+ * MySQL LIKE with `\` escapes, as the repositories emit it.
+ *
+ * @param {unknown} value
+ * @param {unknown} pattern
+ */
+function likeMatches(value, pattern) {
+  if (value == null) return false;
+  const source = String(pattern ?? '');
+  let regex = '';
+  for (let i = 0; i < source.length; i += 1) {
+    const ch = source[i];
+    if (ch === '\\') {
+      i += 1;
+      regex += source[i] ? source[i].replace(/[.*+?^${}()|[\]\\]/g, '\\$&') : '';
+      continue;
+    }
+    if (ch === '%') {
+      regex += '.*';
+      continue;
+    }
+    if (ch === '_') {
+      regex += '.';
+      continue;
+    }
+    regex += ch.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  }
+  return new RegExp(`^${regex}$`, 'i').test(String(value));
+}
+
+/**
  * Build a chainable query builder bound to in-memory tables.
  * @param {FakeState} state
  * @param {string} tableName
@@ -35,6 +65,8 @@ function createQuery(state, tableName, opts = {}) {
     filters: [],
     inFilters: [],
     notInFilters: [],
+    /** @type {Array<Array<[string, unknown]>>} grouped OR predicates */
+    orGroups: [],
   };
 
   const ensureTable = (name) => {
@@ -67,6 +99,7 @@ function createQuery(state, tableName, opts = {}) {
         if (val.op === 'isnull') {
           return row[col] == null;
         }
+        if (val.op === 'like') return likeMatches(row[col], val.value);
         const left = Number(row[col]);
         if (val.op === '>') return left > Number(val.value);
         if (val.op === '>=') return left >= Number(val.value);
@@ -76,6 +109,15 @@ function createQuery(state, tableName, opts = {}) {
       return row[col] === val;
     });
     if (!eqOk) return false;
+    // where((b) => b.where(..).orWhere(..)): every group must have one hit.
+    const orOk = ctx.orGroups.every((group) =>
+      group.some(([col, val]) =>
+        val && typeof val === 'object' && val.op === 'like'
+          ? likeMatches(row[col], val.value)
+          : row[col] === val,
+      ),
+    );
+    if (!orOk) return false;
     const inOk = ctx.inFilters.every(([col, vals]) => {
       const key = col.includes('.') ? col.split('.').pop() : col;
       return vals.includes(row[key]);
@@ -88,7 +130,31 @@ function createQuery(state, tableName, opts = {}) {
   };
 
   const api = {
-    where(colOrObj, val) {
+    where(colOrObj, opOrVal, maybeVal) {
+      if (typeof colOrObj === 'function') {
+        // Grouped OR: knex hands the callback a sub-builder.
+        /** @type {Array<[string, unknown]>} */
+        const group = [];
+        const sub = {
+          where(col, op, value) {
+            group.push(
+              value === undefined ? [String(col), op] : [String(col), { op, value }],
+            );
+            return sub;
+          },
+          orWhere(col, op, value) {
+            return sub.where(col, op, value);
+          },
+        };
+        colOrObj(sub);
+        ctx.orGroups.push(group);
+        return api;
+      }
+      if (maybeVal !== undefined) {
+        ctx.filters.push([String(colOrObj), { op: opOrVal, value: maybeVal }]);
+        return api;
+      }
+      const val = opOrVal;
       if (typeof colOrObj === 'object' && colOrObj !== null) {
         for (const [k, v] of Object.entries(colOrObj)) {
           ctx.filters.push([k, v]);
@@ -170,6 +236,10 @@ function createQuery(state, tableName, opts = {}) {
     update(patch) {
       ctx.type = 'update';
       ctx.updates = patch;
+      return Promise.resolve(run());
+    },
+    delete() {
+      ctx.type = 'delete';
       return Promise.resolve(run());
     },
     first() {
@@ -354,6 +424,17 @@ function createQuery(state, tableName, opts = {}) {
       for (const row of table) {
         if (rowMatches(row)) {
           Object.assign(row, ctx.updates);
+          count += 1;
+        }
+      }
+      return count;
+    }
+
+    if (ctx.type === 'delete') {
+      let count = 0;
+      for (let i = table.length - 1; i >= 0; i -= 1) {
+        if (rowMatches(table[i])) {
+          table.splice(i, 1);
           count += 1;
         }
       }

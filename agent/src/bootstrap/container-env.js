@@ -22,6 +22,7 @@ import { IdempotencyRepository } from '../infrastructure/mysql/repositories/idem
 import { ToolExecutionRepository } from '../infrastructure/mysql/repositories/tool-execution-repository.js';
 import { ApprovalRepository } from '../infrastructure/mysql/repositories/approval-repository.js';
 import { InteractionRepository } from '../infrastructure/mysql/repositories/interaction-repository.js';
+import { TaskStateRepository } from '../infrastructure/mysql/repositories/task-state-repository.js';
 import { SandboxAuditEventRepository } from '../infrastructure/mysql/repositories/sandbox-audit-event-repository.js';
 import { A2aCredentialRepository } from '../infrastructure/mysql/repositories/a2a-credential-repository.js';
 import { A2aTaskRepository } from '../infrastructure/mysql/repositories/a2a-task-repository.js';
@@ -185,6 +186,11 @@ export function createRepositoryBundle(db, opts = {}) {
     toolExecutions: new ToolExecutionRepository(db, { now }),
     approvals: new ApprovalRepository(db, { now }),
     interactions: new InteractionRepository(db, { now }),
+    /** Agent working memory: session todo list + owner-scoped note log. */
+    taskState: new TaskStateRepository(db, {
+      now,
+      generateId: opts.generateId,
+    }),
     sandboxAudit: new SandboxAuditEventRepository(db, { now }),
     outbox: new OutboxRepository(db, { now }),
     /** PR-12 A2A protocol. */
