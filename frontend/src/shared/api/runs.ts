@@ -216,7 +216,16 @@ export async function getRunTraceSpans(
 /**
  * POST /runs/{run_id}/cancel — user-initiated stop only.
  */
-export async function cancelRun(runId: string): Promise<boolean> {
+export type CancelRunResult = {
+  /**
+   * Sub-agent children this cancel also stopped. Empty for an ordinary Run,
+   * and empty against an Agent that predates the cascade — never assume the
+   * field is present.
+   */
+  cancelledDescendants: string[];
+};
+
+export async function cancelRun(runId: string): Promise<CancelRunResult> {
   try {
     const headers = authHeaders({ 'Content-Type': 'application/json' });
     headers['Idempotency-Key'] = createIdempotencyKey('cancel');
@@ -235,11 +244,31 @@ export async function cancelRun(runId: string): Promise<boolean> {
         { status: resp.status },
       );
     }
-    return true;
+    // A malformed or empty success body must not turn a completed cancel into
+    // a thrown error: the Run is already stopping either way.
+    let body: unknown = null;
+    try {
+      body = await resp.json();
+    } catch {
+      body = null;
+    }
+    return { cancelledDescendants: readDescendants(body) };
   } catch (err) {
     if (err instanceof ApiError) throw err;
     throw new ApiError((err as Error).message || 'Cancel run failed');
   }
+}
+
+/** Accept camelCase or snake_case, ignore anything that is not a string id. */
+function readDescendants(body: unknown): string[] {
+  if (typeof body !== 'object' || body === null) return [];
+  const raw =
+    (body as Record<string, unknown>).cancelledDescendants ??
+    (body as Record<string, unknown>).cancelled_descendants;
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .map((id) => (typeof id === 'string' ? id.trim() : ''))
+    .filter((id): id is string => id.length > 0);
 }
 
 /**

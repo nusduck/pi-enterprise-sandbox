@@ -17,6 +17,26 @@ import {
   formatToolResultDisplay,
 } from '../message-list/formatToolDisplay';
 import {
+  isCheckSubagentToolName,
+  isSpawnSubagentToolName,
+  parseCheckSubagentFields,
+  parseSpawnSubagentFields,
+} from './subagentFields';
+import {
+  isMemoryToolName,
+  isTodoToolName,
+  parseMemoryFields,
+  parseTodoFields,
+} from './taskStateFields';
+import {
+  MemoryNotes,
+  SubagentChildList,
+  TodoChecklist,
+  summarizeChildren,
+  summarizeMemory,
+  summarizeTodos,
+} from './taskStateViews';
+import {
   isAskUserToolName,
   parseAskUserFields,
   summarizeInteractionResult,
@@ -316,6 +336,32 @@ function ToolStep({
     );
   }
 
+  // subagent-spawn / task-state results are JSON documents inside a tool-result
+  // envelope. Rendering them raw would put the model's wire format in the
+  // transcript, so these four get a structured body inside the same shell.
+  const structured = structuredToolStep(tool);
+  if (structured) {
+    return (
+      <StepShell
+        tone={toolTone(tool.status, tool.isError)}
+        title={formatToolName(tool.name, tool.source)}
+        subtitle={structured.subtitle}
+        meta={
+          formatDuration(tool.createdAt, tool.updatedAt) !== '—'
+            ? formatDuration(tool.createdAt, tool.updatedAt)
+            : isActiveStatus(tool.status)
+              ? 'live'
+              : null
+        }
+        defaultOpen
+        selected={selected}
+        onSelect={onSelect}
+      >
+        {structured.body}
+      </StepShell>
+    );
+  }
+
   const tone = toolTone(tool.status, tool.isError);
   const title = formatToolName(tool.name, tool.source);
   const subtitle = tool.summary || summarizeToolInput(tool.input);
@@ -371,6 +417,55 @@ function ToolStep({
       ) : null}
     </StepShell>
   );
+}
+
+/**
+ * Structured collapsed-line + body for the subagent / task-state tools.
+ * Returns null for every other tool so the generic renderer stays in charge.
+ */
+function structuredToolStep(
+  tool: { name: string; input: unknown; result: unknown },
+): { subtitle: string; body: ReactNode } | null {
+  if (isSpawnSubagentToolName(tool.name)) {
+    const fields = parseSpawnSubagentFields(tool.input, tool.result);
+    return {
+      subtitle: fields.errorCode ?? fields.label ?? fields.task ?? 'sub-agent',
+      body: (
+        <>
+          {fields.task ? <p className="sa-task">{fields.task}</p> : null}
+          {fields.childRunId ? (
+            <p className="sa-runid">
+              <span className="sa-runid-label">run</span>
+              <code>{fields.childRunId}</code>
+            </p>
+          ) : null}
+          {fields.errorCode ? <p className="sa-error">{fields.errorCode}</p> : null}
+        </>
+      ),
+    };
+  }
+  if (isCheckSubagentToolName(tool.name)) {
+    const fields = parseCheckSubagentFields(tool.result);
+    return {
+      subtitle: fields.errorCode ?? summarizeChildren(fields.children),
+      body: <SubagentChildList items={fields.children} />,
+    };
+  }
+  if (isTodoToolName(tool.name)) {
+    const fields = parseTodoFields(tool.input, tool.result);
+    return {
+      subtitle: fields.errorCode ?? summarizeTodos(fields.todos),
+      body: <TodoChecklist todos={fields.todos} />,
+    };
+  }
+  if (isMemoryToolName(tool.name)) {
+    const fields = parseMemoryFields(tool.name, tool.input, tool.result);
+    return {
+      subtitle: summarizeMemory(fields),
+      body: <MemoryNotes fields={fields} />,
+    };
+  }
+  return null;
 }
 
 function ProcessStep({

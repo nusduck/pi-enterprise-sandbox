@@ -78,10 +78,52 @@ describe('Run API idempotency headers', () => {
       });
     };
 
-    assert.equal(await cancelRun('run/1'), true);
+    assert.deepEqual(await cancelRun('run/1'), { cancelledDescendants: [] });
 
     const headers = captured?.headers as Record<string, string>;
     assert.match(headers['Idempotency-Key'], /^cancel_[A-Za-z0-9_-]+$/);
+  });
+
+  it('reports the sub-agent children a cancel also stopped', async () => {
+    globalThis.fetch = async () =>
+      new Response(
+        JSON.stringify({
+          runId: 'run-1',
+          cancelledDescendants: ['01K0G2PAV8FPMVC9QHJG7JPN60', ' '],
+          cancelled_descendants: ['ignored when camelCase is present'],
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      );
+    assert.deepEqual(await cancelRun('run-1'), {
+      cancelledDescendants: ['01K0G2PAV8FPMVC9QHJG7JPN60'],
+    });
+  });
+
+  it('accepts the snake_case alias and an Agent without the field', async () => {
+    globalThis.fetch = async () =>
+      new Response(JSON.stringify({ cancelled_descendants: ['run-child'] }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    assert.deepEqual(await cancelRun('run-1'), {
+      cancelledDescendants: ['run-child'],
+    });
+
+    globalThis.fetch = async () =>
+      new Response('{"runId":"run-1"}', {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    assert.deepEqual(await cancelRun('run-1'), { cancelledDescendants: [] });
+  });
+
+  it('does not fail a completed cancel on an unparseable body', async () => {
+    globalThis.fetch = async () =>
+      new Response('not json', {
+        status: 202,
+        headers: { 'Content-Type': 'text/plain' },
+      });
+    assert.deepEqual(await cancelRun('run-1'), { cancelledDescendants: [] });
   });
 
   it('adds a steer idempotency key and preserves the run-scoped path', async () => {

@@ -3994,3 +3994,246 @@ body {
   font-size: var(--font-size-xs);
   color: var(--color-text-secondary);
 }
+
+/* ── Sub-agent + task-state tool cards ──────────────────────────────────
+   Purpose-built cards for the tools added with subagent-spawn and
+   task-state. Both share the ix-card surface treatment so a fan-out or a
+   plan does not look like a different product from an ask_user card. */
+
+.sa-card,
+.ts-card {
+  border: 1px solid var(--color-hairline);
+  border-radius: 14px;
+  background: linear-gradient(
+    180deg,
+    rgba(255, 255, 255, 0.04) 0%,
+    rgba(255, 255, 255, 0.015) 100%
+  );
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.18);
+  transition:
+    border-color var(--duration-fast) var(--ease-out),
+    box-shadow var(--duration-fast) var(--ease-out);
+}
+[data-theme='light'] .sa-card,
+[data-theme='light'] .ts-card {
+  background: linear-gradient(
+    180deg,
+    rgba(255, 255, 255, 0.95) 0%,
+    rgba(248, 248, 250, 0.92) 100%
+  );
+  box-shadow: 0 6px 20px rgba(15, 23, 42, 0.06);
+}
+.sa-card.selected,
+.sa-card:hover,
+.ts-card.selected,
+.ts-card:hover {
+  border-color: var(--color-border);
+}
+.sa-card-error,
+.ts-card-error {
+  border-color: var(--color-danger-soft);
+}
+
+.sa-head,
+.ts-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+.sa-icon,
+.ts-icon {
+  font-size: 15px;
+  line-height: 1.4;
+  color: var(--color-text-secondary);
+  flex: 0 0 auto;
+}
+.sa-head-text,
+.ts-head-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.sa-kicker,
+.ts-kicker {
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+}
+.sa-title,
+.ts-title {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--color-text);
+  overflow-wrap: anywhere;
+}
+
+.sa-task {
+  margin: 0;
+  font-size: 13px;
+  color: var(--color-text-secondary);
+  overflow-wrap: anywhere;
+}
+.sa-runid {
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+}
+.sa-runid-label {
+  color: var(--color-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-size: 10px;
+}
+.sa-runid code {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  color: var(--color-text-secondary);
+  overflow-wrap: anywhere;
+}
+.sa-error {
+  margin: 0;
+  font-size: 12px;
+  color: var(--color-danger-text);
+}
+.sa-muted,
+.ts-muted {
+  color: var(--color-text-muted);
+}
+
+.sa-children {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.sa-child {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  min-width: 0;
+}
+.sa-pill {
+  flex: 0 0 auto;
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  padding: 2px 7px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  white-space: nowrap;
+}
+.sa-pill.sa-ok {
+  color: var(--color-success-text);
+  background: var(--color-success-soft);
+  border-color: var(--color-success-soft);
+}
+.sa-pill.sa-err,
+.sa-pill.sa-cancel {
+  color: var(--color-danger-text);
+  background: var(--color-danger-soft);
+  border-color: var(--color-danger-soft);
+}
+.sa-pill.sa-run {
+  color: var(--color-accent);
+  background: var(--color-accent-soft);
+  border-color: var(--color-accent-border);
+}
+.sa-child-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.sa-child-name {
+  font-size: 13px;
+  color: var(--color-text);
+  overflow-wrap: anywhere;
+}
+.sa-child-summary {
+  font-size: 12px;
+  color: var(--color-text-secondary);
+  overflow-wrap: anywhere;
+}
+
+.ts-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  counter-reset: ts-item;
+}
+.ts-item {
+  display: flex;
+  align-items: baseline;
+  gap: 9px;
+  font-size: 13px;
+  min-width: 0;
+}
+.ts-mark {
+  flex: 0 0 auto;
+  width: 1em;
+  text-align: center;
+  color: var(--color-text-muted);
+}
+.ts-text {
+  overflow-wrap: anywhere;
+  color: var(--color-text-secondary);
+}
+.ts-item.ts-done .ts-mark {
+  color: var(--color-success-text);
+}
+.ts-item.ts-done .ts-text {
+  color: var(--color-text-muted);
+  text-decoration: line-through;
+  text-decoration-thickness: 1px;
+}
+.ts-item.ts-active .ts-mark {
+  color: var(--color-accent);
+}
+.ts-item.ts-active .ts-text {
+  color: var(--color-text);
+  font-weight: 550;
+}
+
+.ts-note {
+  margin: 0;
+  font-size: 13px;
+  color: var(--color-text-secondary);
+  overflow-wrap: anywhere;
+}
+.ts-notes {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.ts-note-row {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.ts-note-key {
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+}
+.ts-note-text {
+  font-size: 13px;
+  color: var(--color-text-secondary);
+  overflow-wrap: anywhere;
+}
