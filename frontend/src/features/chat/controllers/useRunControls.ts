@@ -179,7 +179,12 @@ export function useRunControls({
     cancelStream();
     void (async () => {
       try {
-        await cancelRun(runId);
+        const { cancelledDescendants } = await cancelRun(runId);
+        // A fan-out stops as a tree; say so rather than reporting only the
+        // parent, which would read as "the sub-agents are still going".
+        const alsoStopped = cancelledDescendants.length
+          ? ` · ${cancelledDescendants.length} sub-agent${cancelledDescendants.length > 1 ? 's' : ''}`
+          : '';
 
         // Cancelling is asynchronous on the Agent. The user stop also closes
         // SSE, so no terminal event is guaranteed to reach this tab. Re-read
@@ -192,7 +197,7 @@ export function useRunControls({
         });
 
         if (latest?.status === 'cancelled') {
-          setStatus('Cancelled', '#64748b');
+          setStatus(`Cancelled${alsoStopped}`, '#64748b');
         } else if (latest && isTerminalRunStatus(latest.status)) {
           setStatus(`Run ${latest.status}`, '#64748b');
         }
