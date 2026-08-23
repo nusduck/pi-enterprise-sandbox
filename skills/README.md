@@ -6,14 +6,13 @@ under `/home/sandbox/skill-user/<orgId>/<userId>` — see 两层 Skill below.
 
 The Agent discovers each `*/SKILL.md` package automatically.
 
-## Installed packages (21)
+## Installed packages (13)
 
 ### Create & authoring
 
 | Skill | Purpose | Source |
 |-------|---------|--------|
 | `skill-creator` | Design and scaffold new Agent Skills | [anthropics/skills](https://github.com/anthropics/skills) |
-| `doc-coauthoring` | Collaborative document drafting | anthropics/skills |
 | `theme-factory` | Theme / visual system generation | anthropics/skills |
 
 ### Skill quality & learning
@@ -28,10 +27,8 @@ The Agent discovers each `*/SKILL.md` package automatically.
 | Skill | Purpose | Source |
 |-------|---------|--------|
 | `convert-to-markdown` | General PDF/DOCX/HTML/URL → Markdown | local curated |
-| `baoyu-url-to-markdown` | Fetch URL → Markdown | [jimliu/baoyu-skills](https://github.com/jimliu/baoyu-skills) |
 | `baoyu-format-markdown` | Format / clean Markdown | baoyu-skills |
 | `baoyu-markdown-to-html` | Markdown → HTML | baoyu-skills |
-| `baoyu-translate` | Translate content | baoyu-skills |
 | `pdf` | PDF creation & manipulation | anthropics/skills |
 | `docx` | Word documents | anthropics/skills |
 | `pptx` | PowerPoint decks | anthropics/skills |
@@ -41,13 +38,8 @@ The Agent discovers each `*/SKILL.md` package automatically.
 
 | Skill | Purpose | Source |
 |-------|---------|--------|
-| `frontend-design` | UI / frontend craft | anthropics/skills |
-| `webapp-testing` | Web app testing patterns | anthropics/skills |
 | `mcp-builder` | Build MCP servers/tools | anthropics/skills |
-| `code-review-and-quality` | Code review checklist | [addyosmani/agent-skills](https://github.com/addyosmani/agent-skills) |
-| `debugging-and-error-recovery` | Debugging playbook | addyosmani/agent-skills |
 | `planning-and-task-breakdown` | Task planning | addyosmani/agent-skills |
-| `documentation-and-adrs` | Docs & ADRs | addyosmani/agent-skills |
 
 ## Usage
 
