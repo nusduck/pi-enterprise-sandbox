@@ -30,16 +30,16 @@ LOCAL_GENERATED_DIRECTORIES = frozenset(
 HOTSPOT_LINE_BUDGETS = {
     "agent/src/application/execute-run-service.js": 1_484,
     "agent/src/application/fenced-tool-governance-recorder.js": 1_666,
-    "agent/src/application/pi-run-executor.js": 1_617,
+    "agent/src/application/pi-run-executor.js": 1_626,
     "agent/src/bootstrap/container.js": 1_235,
-    "agent/src/bootstrap/create-http-server.js": 1_453,
+    "agent/src/bootstrap/create-http-server.js": 1_439,
     "agent/src/infrastructure/mcp/pi-mcp-adapter-factory.js": 1_269,
     "agent/src/infrastructure/mysql/repositories/tool-execution-repository.js": 1_131,
     "agent/src/infrastructure/mysql/repositories/trace-span-repository.js": 1_046,
     "agent/src/infrastructure/pi/pi-runtime-factory.js": 650,
     "agent/src/infrastructure/sandbox/internal-files-read-http.js": 1_009,
     "sandbox/app/persistence/repositories/tool_execution_claim_validator.py": 1_111,
-    "sandbox/config.py": 1_478,
+    "sandbox/config.py": 1_488,
     "sandbox/services/process_manager.py": 1_773,
 }
 

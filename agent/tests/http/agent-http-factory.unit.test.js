@@ -361,7 +361,7 @@ describe('createAgentHttpServer factory', () => {
       followUpService,
       traceQueryService,
       cronJobService,
-      config: { AGENT_INTERNAL_TOKEN: '' },
+      config: { AGENT_INTERNAL_TOKEN: '', ALLOW_UNAUTHENTICATED_INTERNAL: true },
       eventPollIntervalMs: 50,
       eventHeartbeatMs: 1000,
     });
@@ -692,7 +692,7 @@ describe('createAgentHttpServer factory', () => {
       eventQueryService: { listEvents: async () => ({ events: [] }) },
       dataPlaneReady: false,
       sandboxHealthCheck: async () => ({ status: 'ok' }),
-      config: {},
+      config: { ALLOW_UNAUTHENTICATED_INTERNAL: true },
     });
     const p = await listen(srv);
     try {
@@ -726,7 +726,7 @@ describe('createAgentHttpServer factory', () => {
           },
         ],
       }),
-      config: {},
+      config: { ALLOW_UNAUTHENTICATED_INTERNAL: true },
     });
     const p = await listen(srv);
     try {

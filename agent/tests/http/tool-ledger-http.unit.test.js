@@ -89,7 +89,7 @@ describe('GET /internal/agent-runs/:id/tools', () => {
           },
         ];
       },
-      config: {},
+      config: { ALLOW_UNAUTHENTICATED_INTERNAL: true },
     });
     await new Promise((resolve) => {
       server.listen(0, '127.0.0.1', () => {

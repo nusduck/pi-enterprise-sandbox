@@ -16,6 +16,7 @@
  */
 
 import http from 'node:http';
+import { createInternalAuthGate } from './internal-auth.js';
 import {
   parseTraceparentContext,
   parseTracestate,
@@ -98,7 +99,7 @@ export function createAgentHttpServer(deps) {
     throw new Error('createAgentHttpServer requires eventQueryService');
   }
 
-  const token = deps.config?.AGENT_INTERNAL_TOKEN || '';
+  const enforceInternalAuth = createInternalAuthGate(deps.config, json);
   const pollMs = deps.eventPollIntervalMs ?? 500;
   const heartbeatMs = deps.eventHeartbeatMs ?? 15_000;
   const eventSseService = deps.eventSseService || null;
@@ -111,21 +112,6 @@ export function createAgentHttpServer(deps) {
   const processAccessService = deps.processAccessService || null;
   const traceQueryService = deps.traceQueryService || null;
   const cronJobService = deps.cronJobService || null;
-
-  /**
-   * @param {import('node:http').IncomingMessage} req
-   * @param {import('node:http').ServerResponse} res
-   */
-  function enforceInternalAuth(req, res) {
-    if (!token) return true;
-    const provided =
-      req.headers['x-internal-token'] || req.headers['X-Internal-Token'] || '';
-    if (provided !== token) {
-      json(res, 401, { error: 'Invalid or missing internal token' });
-      return false;
-    }
-    return true;
-  }
 
   const server = http.createServer(async (req, res) => {
     const requestId = resolveRequestId(req);

@@ -1307,6 +1307,16 @@ def ensure_safe_to_start(s: Settings | None = None) -> Settings:
     """
     cfg = s or settings
     validate_production_settings(cfg)
+    if cfg.auth_enabled and not (
+        (cfg.jwt_secret or "").strip() or (cfg.api_token or "").strip()
+    ):
+        # Every environment, not just production: auth on with no secret used
+        # to fall back to a constant compiled into the image, which is a
+        # published signing key — anyone could mint a token for any user.
+        raise ProductionConfigError(
+            "SANDBOX_JWT_SECRET (or SANDBOX_API_TOKEN) is required when "
+            "SANDBOX_AUTH_ENABLED=true"
+        )
     if not is_mysql_database_url(cfg.database_url):
         scheme = database_url_scheme(cfg.database_url) or "missing"
         raise ProductionConfigError(
