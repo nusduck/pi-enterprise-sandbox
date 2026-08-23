@@ -117,6 +117,17 @@ async def sandbox_python_execute(
     )
 
 
+@mcp.tool(name="sandbox_shell_execute", description="Execute a bash command in the context's isolated persistent workspace. Network access is disabled.")
+async def sandbox_shell_execute(
+    command: str,
+    context_id: str | None = None,
+    timeout_seconds: int = 120,
+) -> dict[str, Any]:
+    return await service.execute_shell(
+        context_id=context_id, command=command, timeout_seconds=timeout_seconds
+    )
+
+
 @mcp.tool(name="sandbox_file_write", description="Write UTF-8 text to a file in the persistent Sandbox workspace.")
 async def sandbox_file_write(
     path: str,

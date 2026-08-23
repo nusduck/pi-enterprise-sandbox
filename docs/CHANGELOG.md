@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Sandbox MCP bash 执行工具**: `sandbox-mcp` 新增 `sandbox_shell_execute`，在与 `sandbox_python_execute` 相同的 Bubblewrap 隔离工作区里执行 bash 命令（`execution_manager.run_command` 既有路径：网络黑名单预检 + `--unshare-net`、非 root、ulimit/seccomp 全套生效）。安全增量接近零——Python 本就能等价 spawn shell。命令长度上限 `SANDBOX_MCP_MAX_COMMAND_LENGTH`（默认 20000，Sandbox 桥侧同名上限 200000）；返回字段与 python 工具对齐（status/exit_code/stdout_preview/stderr_preview/duration_ms/truncated）。`sandbox/config.py` 热点预算 1488→1491（新增一个配置项的三行）。
+
 - **消息气泡操作与滚动体验（前端）**: 助手气泡 hover 后出现 Copy（复制全文纯文本）与 Regenerate（仅最后一条助手气泡、且无活跃 Run 时显示，取前一条用户回合文本重发为新 Run——语义是追加一轮而非原地改写）；距底部超过 120px 时右下角出现「回到最新」浮标（sticky 定位，smooth 滚动）。流式渲染性能：`MessageBubble` 改为 `React.memo` + 内容指纹比较（投影层每个 SSE tick 都重建气泡对象，身份比较永远失效；气泡内不再订阅 chat context，否则 memo 被穿透），流式中的气泡照常更新，已完成气泡不再随每个 token 重新解析 markdown。
 
 - **子 Run 不再注册 `ask_user`**: 子 Run 的对话被刻意排除在会话列表外，任务提示按契约自包含，也没有任何路径把子 Run 的提问送到发起父 Run 的人面前——注册这个工具只会让它停在 WAITING_INPUT 等一个没人看得见的问题。现在直接不注册，模型自行决定或失败，而不是挂死。extension 本身仍然装载（registry 对 AgentVersion 的 extension 列表是精确校验）。

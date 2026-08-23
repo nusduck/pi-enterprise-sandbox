@@ -41,7 +41,7 @@ HOTSPOT_LINE_BUDGETS = {
     "agent/src/infrastructure/pi/pi-runtime-factory.js": 650,
     "agent/src/infrastructure/sandbox/internal-files-read-http.js": 1_009,
     "sandbox/app/persistence/repositories/tool_execution_claim_validator.py": 1_111,
-    "sandbox/config.py": 1_488,
+    "sandbox/config.py": 1_491,
     "sandbox/services/process_manager.py": 1_773,
 }
 

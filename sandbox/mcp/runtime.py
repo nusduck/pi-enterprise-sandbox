@@ -92,6 +92,39 @@ class McpSandboxRuntime:
             )
         }
 
+    def execute_shell(
+        self,
+        *,
+        sandbox_session_id: str,
+        workspace_id: str,
+        command: str,
+        timeout_seconds: int,
+    ) -> dict[str, Any]:
+        if len(command) > settings.mcp_max_command_length:
+            raise ValueError("command exceeds MCP size limit")
+        if not 1 <= timeout_seconds <= settings.mcp_max_timeout_seconds:
+            raise ValueError("timeout_seconds exceeds MCP limit")
+        context = self._context(sandbox_session_id, workspace_id)
+        result = execution_manager.run_command(
+            context.session_id,
+            command,
+            timeout=timeout_seconds,
+            context=context,
+            formal_claimed=False,
+        )
+        return {
+            key: result.get(key)
+            for key in (
+                "status",
+                "exit_code",
+                "stdout_preview",
+                "stderr_preview",
+                "duration_ms",
+                "truncated",
+                "execution_id",
+            )
+        }
+
     def write_file(
         self,
         *,
