@@ -104,6 +104,21 @@ SANDBOX_BASE_URL=http://localhost:8081
 
 `GET /health/live` 检查 BFF 进程，`GET /health/ready` 聚合 Agent/Sandbox readiness；`GET /api/status` 保留为 UI 状态视图。Python Agent Runtime 与 `AGENT_RUNTIME` 开关已删除。
 
+### 认证与管理员
+
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `SANDBOX_AUTH_ENABLED` / `AUTH_ENABLED` | `false` | 开启后 Sandbox 要求用户 JWT（或服务令牌 + `X-Acting-*`），会话按 owner 隔离，跨租户统一 404 |
+| `SANDBOX_AUTH_ALLOW_PUBLIC_REGISTER` | `true` | 公开自注册；生产必须 `false`（管理员预置 / 邀请制） |
+| `SANDBOX_AUTH_ADMIN_USERNAMES` | _(空)_ | 管理员用户名白名单，逗号分隔、大小写不敏感 |
+
+`SANDBOX_AUTH_ADMIN_USERNAMES` 是 admin 角色的**唯一**来源。注册接口忽略客户端提交的
+`role` 与 `organization_id`，所以没有这份名单就永远产生不出第一个管理员，
+`/api/a2a/config` 等管理面会一直 403 `ADMIN_REQUIRED`。名单内的用户名注册即为 admin；
+已存在的账号在下次 login 或 `/auth/me` 时提升，从名单移除则降级回 user。
+
+`BFF_DEV_ACTING_ROLE` 只对 `AUTH_ENABLED=false` 的开发身份生效，不会提升真实用户。
+
 ### 执行限制
 
 | 变量 | 默认值 | 说明 |
