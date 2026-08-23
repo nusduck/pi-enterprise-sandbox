@@ -27,7 +27,10 @@ Concrete `AskUserQuestion` references below are examples — substitute the loca
 
 ## Script Directory
 
-**Agent Execution**: Determine this SKILL.md directory as `{baseDir}`. Resolve `${BUN_X}` runtime: if `bun` installed → `bun`; if `npx` available → `npx -y bun`; else suggest installing bun. Replace `{baseDir}` and `${BUN_X}` with actual values.
+**Agent Execution**: The Sandbox image provides
+`/usr/local/bin/baoyu-markdown-to-html` with the locked runtime dependencies
+already bundled. Use that wrapper instead of `npx` or a first-run install; it
+works when execution networking is disabled.
 
 | Script | Purpose |
 |--------|---------|
@@ -100,7 +103,7 @@ Read `$HOME/.baoyu-skills/baoyu-post-to-wechat/EXTEND.md` if it exists and look 
 ### Step 2: Convert
 
 ```bash
-${BUN_X} {baseDir}/scripts/main.ts <markdown_file> --theme <theme> [--cite]
+baoyu-markdown-to-html <markdown_file> --theme <theme> [--cite]
 ```
 
 ### Step 3: Report Result
@@ -110,7 +113,7 @@ Display the output path from JSON result. If backup was created, mention it.
 ## Usage
 
 ```bash
-${BUN_X} {baseDir}/scripts/main.ts <markdown_file> [options]
+baoyu-markdown-to-html <markdown_file> [options]
 ```
 
 **Options:**
@@ -153,22 +156,22 @@ ${BUN_X} {baseDir}/scripts/main.ts <markdown_file> [options]
 
 ```bash
 # Basic conversion (uses default theme, removes first heading)
-${BUN_X} {baseDir}/scripts/main.ts article.md
+baoyu-markdown-to-html article.md
 
 # With specific theme
-${BUN_X} {baseDir}/scripts/main.ts article.md --theme grace
+baoyu-markdown-to-html article.md --theme grace
 
 # Theme with custom color
-${BUN_X} {baseDir}/scripts/main.ts article.md --theme modern --color red
+baoyu-markdown-to-html article.md --theme modern --color red
 
 # Enable bottom citations for ordinary external links
-${BUN_X} {baseDir}/scripts/main.ts article.md --cite
+baoyu-markdown-to-html article.md --cite
 
 # Keep the first heading in content
-${BUN_X} {baseDir}/scripts/main.ts article.md --keep-title
+baoyu-markdown-to-html article.md --keep-title
 
 # Override title
-${BUN_X} {baseDir}/scripts/main.ts article.md --title "My Article"
+baoyu-markdown-to-html article.md --title "My Article"
 ```
 
 ## Output

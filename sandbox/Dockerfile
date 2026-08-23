@@ -2,10 +2,14 @@
 # Python minor pin: runtime-versions.json → python.docker_image
 FROM python:3.11-slim AS sandbox-base
 
-# System deps: runtime isolation + everyday agent tooling (docs, git, text utils)
+# System deps: runtime isolation + everyday agent tooling (docs, office, git, text utils)
 # Intentionally NO iptables: container-wide firewall is not the execution
 # isolation authority (no NET_ADMIN/NET_RAW; missing tools must not fail-open).
-RUN apt-get update && apt-get install -y --no-install-recommends \
+ARG BUN_VERSION=1.4.0
+ARG DOCX_JS_VERSION=9.7.1
+ARG PPTXGENJS_VERSION=4.0.1
+
+RUN DEBIAN_FRONTEND=noninteractive apt-get update && apt-get install -y --no-install-recommends \
     curl \
     ca-certificates \
     bubblewrap \
@@ -22,15 +26,42 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     fd-find \
     pandoc \
     poppler-utils \
+    qpdf \
     tesseract-ocr \
     tesseract-ocr-eng \
     tesseract-ocr-chi-sim \
+    chromium \
+    fonts-liberation \
+    fonts-noto-cjk \
+    libreoffice-calc \
+    libreoffice-impress \
+    libreoffice-writer \
     ffmpeg \
     build-essential \
     && curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
     && apt-get install -y --no-install-recommends nodejs \
+    && npm install --global --prefix /usr/local --no-audit --no-fund \
+        "bun@${BUN_VERSION}" \
+        "docx@${DOCX_JS_VERSION}" \
+        "pptxgenjs@${PPTXGENJS_VERSION}" \
     && ln -sf "$(command -v fdfind || true)" /usr/local/bin/fd || true \
     && rm -rf /var/lib/apt/lists/*
+
+# BaoYu's TypeScript Skills are read-only bind mounts at runtime. Keep a
+# build-time copy with locked dependencies in the image so the production
+# Bubblewrap child never needs npx/npm access to the network.
+COPY skills/baoyu-format-markdown/scripts/ /usr/local/lib/pi-skill-runtime/baoyu-format-markdown/
+COPY skills/baoyu-markdown-to-html/scripts/ /usr/local/lib/pi-skill-runtime/baoyu-markdown-to-html/
+RUN npm ci --omit=dev --ignore-scripts \
+        --prefix /usr/local/lib/pi-skill-runtime/baoyu-format-markdown && \
+    cd /usr/local/lib/pi-skill-runtime/baoyu-markdown-to-html && \
+    bun install --frozen-lockfile --production --no-progress
+
+COPY sandbox/skill-runtime/ /usr/local/bin/
+RUN chmod 0555 \
+        /usr/local/bin/baoyu-format-markdown \
+        /usr/local/bin/baoyu-markdown-to-html \
+        /usr/local/bin/baoyu-chromium
 RUN groupadd -g 10001 sandbox && \
     useradd -m -u 10001 -g sandbox sandbox && \
     mkdir -p \

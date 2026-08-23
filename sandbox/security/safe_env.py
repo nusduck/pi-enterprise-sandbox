@@ -26,6 +26,13 @@ _BASE_SAFE_ENV: dict[str, str] = {
     "LC_ALL": "C.UTF-8",
     "PYTHONIOENCODING": "utf-8",
     "NODE_OPTIONS": "--max-old-space-size=512",
+    # Bundled office/slide JS packages are installed in the image's global
+    # Node module tree; expose only that non-secret tooling path to children.
+    "NODE_PATH": "/usr/local/lib/node_modules",
+    # Debian's Chromium launcher sources /etc/chromium.d, which is outside the
+    # deliberately minimal Bubblewrap /etc view.  The image wrapper calls the
+    # real binary directly; Bubblewrap remains the outer security boundary.
+    "BAOYU_CHROME_PATH": "/usr/local/bin/baoyu-chromium",
     "DEBIAN_FRONTEND": "noninteractive",
 }
 

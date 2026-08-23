@@ -30,6 +30,13 @@
     "nodesource_setup": "setup_22.x",
     "notes": "Node installed inside the sandbox image for agent-executed Node tooling (not the Agent/BFF service runtime). Aligned to the same major as service Node."
   },
+  "skill_runtime": {
+    "bun": "1.4.0",
+    "docx_js": "9.7.1",
+    "pptxgenjs": "4.0.1",
+    "autocorrect_node": "2.14.0",
+    "notes": "Exact versions for bundled Skill tooling. These packages are installed while building the Sandbox image; executions must not download them at runtime."
+  },
   "frontend_dev_types": {
     "types_node": "22.20.0",
     "types_node_major": 22,
