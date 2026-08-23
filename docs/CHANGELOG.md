@@ -82,7 +82,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- No bug fixes in this release
+- **首个管理员无法创建**：注册忽略客户端提供的 role/organization_id（正确），而 `BFF_DEV_ACTING_ROLE` 只在关闭鉴权时生效，导致任何真实部署上 `/api/a2a/config` 等管理员面不可达。新增 `SANDBOX_AUTH_ADMIN_USERNAMES`：名单内用户名注册即晋升 admin。
+- **进程控制、取消与上传错误路径**：QA 发现的六处缺陷修复（admin bootstrap、process control、cancel 与 upload 错误处理）。
+- **Agent `/internal/*` 平面在 token 未配置时无鉴权**：这些路由直接信任 `X-Acting-*` 头，能触达端口即能冒充任意用户。现在空 token 直接关闭内部平面；无鉴权运行必须显式设置 `AGENT_ALLOW_UNAUTHENTICATED_INTERNAL=true`，生产配置校验拒绝该选项，启动日志明示当前模式；token 比较改为常量时间。
+- **api-server 与 agent 容器以 root 运行**：两个 Dockerfile 现在在移交写入路径后降权到基础镜像的 `node` 用户。存量部署注意：`agent_user_skills` 卷是以 root 创建的，需重建或 chown 一次。
+- **BFF 全部出站调用无超时**：上游接受连接但不响应时会无限悬挂并钉死浏览器请求与 socket。Agent 调用现受 `AGENT_REQUEST_TIMEOUT_MS`（默认 15s）约束，Sandbox 调用受 `SANDBOX_REQUEST_TIMEOUT_MS`（默认 15s）约束。
+- **Sandbox JWT 密钥 fail-open**：`auth_enabled=true` 但未配置密钥时回退到公开默认值，可伪造任意身份 token。现在缺失即启动失败（fail-closed）。
+
 
 ## [0.1.0] — 2026-06-28
 

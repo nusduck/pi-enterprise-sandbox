@@ -121,6 +121,10 @@ key 前缀保存 `context_id` 映射，并通过 Sandbox 私有桥接执行。�
 | `SANDBOX_INTERNAL_HMAC_KEYRING` | — | 正式 Agent→Sandbox `/internal/v1/*` HMAC keyring；生产必填，密钥不得写入日志 |
 | `SANDBOX_INTERNAL_HMAC_ACTIVE_KID` | — | 当前签名 key id；必须存在于 keyring |
 | `SANDBOX_INTERNAL_REDIS_URL` | — | 独立 replay Redis，用于 HMAC jti 防重放；不得复用 Agent Redis 凭据 |
+| `SANDBOX_AUTH_ADMIN_USERNAMES` | — | 注册即晋升 admin 的用户名列表（逗号分隔）。注册始终忽略客户端提供的 role/organization_id，这是真实部署上创建首个管理员的唯一途径 |
+| `AGENT_REQUEST_TIMEOUT_MS` | `15000` | BFF → Agent 出站调用超时（SSE 长连接除外）；防止挂起的依赖拖垮无关路由 |
+| `SANDBOX_REQUEST_TIMEOUT_MS` | `15000` | BFF → Sandbox 出站调用超时（SSE 长连接除外） |
+| `AGENT_ALLOW_UNAUTHENTICATED_INTERNAL` | dev `true` / 生产禁止 | Agent `/internal/*` 平面的鉴权开关。token 未配置且未显式设为 true 时启动即失败（fail-closed）；生产配置校验拒绝 true |
 | `MCP_SERVERS_JSON` | `[]` | Agent Runtime 外部 MCP Server registry；凭据仅通过 `authTokenRef`/`envRefs`/`headerRefs` 引用环境变量 |
 | `AGENT_MCP_RUNTIME_ROOT` | `/tmp/pi-enterprise-mcp-runtime` | 每个 Run 的私有 `pi-mcp-adapter` 配置目录；配置文件为 `0600` 并在 runtime dispose 时删除 |
 
@@ -325,6 +329,11 @@ the Agent fail-closes with `MYSQL_TRIGGER_BINLOG_BLOCKED` and will **not**
 通过独立 replay Redis 拒绝重放。一个永不过期的 `SANDBOX_API_TOKEN` 不能
 替代该授权。
 
+Agent 自身的 `/internal/*` HTTP 面（conversations、runs、A2A admin 等）由
+`AGENT_INTERNAL_TOKEN` 保护，比较为常量时间；**token 缺失时平面直接关闭**
+（fail-closed），除非显式设置 `AGENT_ALLOW_UNAUTHENTICATED_INTERNAL=true`
+（仅限开发，生产配置校验会拒绝）。启动日志会明示当前处于哪种模式。
+
 `SANDBOX_API_TOKEN` 只保护仍由 BFF 使用的兼容文件/Dataset/Artifact adapters：
 
 ```
@@ -358,6 +367,10 @@ curl -f http://localhost:4000/health/ready
 | `./.runtime/sandbox/control` | `/var/sandbox/control` | Dataset staging 与控制面状态 |
 
 ### Skill 挂载与用户生命周期
+
+> **存量部署迁移注意**：api-server 与 agent 容器自 2026-08-23 起以非 root
+> （`node` 用户）运行。此前创建的 `agent_user_skills` 卷属主为 root，需重建
+> 该卷或手动 chown 一次，否则用户 Skill 上传会因权限失败。
 
 Skill 分两层，挂在两个 canonical 路径：
 
