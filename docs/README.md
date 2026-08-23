@@ -6,6 +6,7 @@ This directory is the **active** documentation set for Pi Enterprise Sandbox.
 - [`module-layout.md`](./module-layout.md) — conventional source roots per service (agent/api-server/sandbox/frontend)
 - [`artifact-module.md`](./artifact-module.md) — Artifact domain boundary, frozen contracts, and cross-conversation Import MVP
 - [`sandbox-mcp.md`](./sandbox-mcp.md) — independently deployed Sandbox Streamable HTTP MCP facade
+- [`reviews/*`](./reviews/) — dated review / dead-code inventory reports (working papers; conclusions land in `review-deferred-items.md` or code, then the report is archived to `archive/reviews/`)
 
 ## Authority order
 
@@ -19,6 +20,14 @@ When documents disagree, use this order:
 6. **Code** — if STATUS and code diverge, code wins and STATUS must be fixed in the same change set.
 
 `review-deferred-items.md` is a **non-blocking debt** board. It must not hide open P0 acceptance items (those belong in STATUS only).
+
+AI agents must read [`../AGENTS.md`](../AGENTS.md) before editing anything in this
+directory — it defines the update rules, forbidden actions, and the pre-commit
+documentation checklist summarized below.
+
+Out-of-map directories:
+
+- `deliverables/` — gitignored local deliverables; not part of this repo's doc set.
 
 ## Document roles
 

@@ -162,3 +162,9 @@ Each entry should say **what changed**, **why**, and **which STATUS IDs** it aff
 - **Action:** Removed the now-unused Agent approval waiter, unreferenced TypeScript contracts package, and obsolete Sandbox Agent/approval DTOs. Moved the two retained cross-language golden fixtures to `tests/fixtures/contracts/`.
 - **Documentation:** Corrected stale source-root paths and SDK persistence/upgrade guidance; removed references to deleted compat fixtures and legacy modules.
 - **Tests:** Added a Sandbox model regression check; retained cross-language fixture consumers under their new shared location.
+
+## 2026-08-23 — Documentation pass: drift fixes, AGENTS.md, dead doc removal
+
+- **Action:** Created root `AGENTS.md` (docs authority order, per-file update rules, forbidden actions, pre-commit checklist for AI agents). Updated active docs to match code reality through `0a73cf64`: CHANGELOG gained Fixed entries for #19/#21 (admin bootstrap via `SANDBOX_AUTH_ADMIN_USERNAMES`, process control/cancel/upload error paths, agent `/internal/*` fail-closed auth with `AGENT_ALLOW_UNAUTHENTICATED_INTERNAL` escape hatch, non-root containers, bounded BFF outbound timeouts, sandbox JWT fail-open fix); deployment.md documents the new env vars and the `agent_user_skills` chown caveat; architecture.md security table updated; webui.md reflects the pages/ structure, sub-agent fan-out/task-state rendering and the SVG theme system. Removed `docs/biz-db-mcp/` (external-service design doc, confirmed out of repo scope). Added `docs/reviews/dead-code-2026-08-23/` working papers. STATUS.md header notes the docs pass.
+- **Why:** Active docs had drifted behind twelve commits of behavior changes (#13–#21); agents lacked a single binding spec for how docs must be maintained.
+- **STATUS IDs touched:** none flipped; H5/H6 remain the only `partial` rows.

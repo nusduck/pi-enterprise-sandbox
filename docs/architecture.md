@@ -253,7 +253,8 @@ Agent Session 生命周期。
 | **Docker** | 容器隔离；`backend_internal`（internal）与 `service_egress`；Sandbox 无 NET_ADMIN/NET_RAW |
 | **执行网络** | 生产 `network_mode=disabled` + Bubblewrap `--unshare-net`；无 per-child egress proxy 时禁止 allowlist 伪装隔离 |
 | **入站 HTTP** | `SANDBOX_ALLOWED_CLIENT_CIDRS`（与出站执行策略分离） |
-| **non-root** | 子进程以 `sandbox` 用户运行 |
+| **non-root** | Sandbox 子进程以 `sandbox` 用户运行；api-server 与 agent 容器自 2026-08-23 起以基础镜像 `node` 用户运行（存量 `agent_user_skills` 卷需 chown 一次） |
+| **BFF 出站边界** | 所有 BFF→Agent/Sandbox 调用受超时约束（`AGENT_REQUEST_TIMEOUT_MS` / `SANDBOX_REQUEST_TIMEOUT_MS`，默认 15s；SSE 长连接除外），挂起的依赖不会钉死浏览器请求与 socket |
 | **ulimit** | CPU 300s、内存 512MB、进程数 20、文件大小 50MB |
 | **Path validation** | `resolve()` + `is_relative_to()` — 防止路径逃逸；每 session 物理根隔离 |
 | **Artifact-only delivery** | 仅 `submit_artifact` 向用户交付；`write` 不自动分享 |
@@ -261,7 +262,7 @@ Agent Session 生命周期。
 | **Output limits** | stdout/stderr 上限 50K chars |
 | **Audit logging** | 每次执行记录 trace_id |
 | **Approval** | 外部副作用 Tool 由 Agent durable policy/approval ledger 控制；普通 Sandbox bash/python/node 不审批 |
-| **Internal auth** | Agent→Sandbox 使用短期 HMAC claim + body digest + replay jti；密钥仅在服务端，浏览器零接触 |
+| **Internal auth** | Agent→Sandbox 使用短期 HMAC claim + body digest + replay jti；密钥仅在服务端，浏览器零接触。Agent 自身 `/internal/*` 面由 `AGENT_INTERNAL_TOKEN` 保护（常量时间比较），token 缺失即 fail-closed 关闭平面 |
 | **SDK Extension** | Agent 侧统一 `tool_call` 策略入口；异常 fail-closed |
 | **Run 收敛保护** | 每个 Run 限制模型回合、总工具调用和重复的工具/参数调用；到达任一上限后移除工具并要求模型根据已有结果完成回答 |
 
