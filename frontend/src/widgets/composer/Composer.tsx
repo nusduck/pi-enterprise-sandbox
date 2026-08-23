@@ -595,8 +595,3 @@ export function Composer() {
 
 // Re-export gate helpers for tests / external use
 export { canSendAttachments, hasUploadingAttachments };
-export {
-  resolveComposerMode,
-  composerModeLabel,
-  shouldShowResumeEntry,
-} from './composerMode';

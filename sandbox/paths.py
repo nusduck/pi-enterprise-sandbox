@@ -95,26 +95,6 @@ class SandboxPath:
             return "." if relative == "." else relative
         return AGENT_TEMP_PATH if relative == "." else f"{AGENT_TEMP_PATH}/{relative}"
 
-    def as_logical(self) -> str:
-        root = (
-            LEGACY_AGENT_WORKSPACE_PATH
-            if self.scope == SandboxPathScope.WORKSPACE
-            else AGENT_TEMP_PATH
-        )
-        relative = self.relative.as_posix()
-        return root if relative == "." else f"{root}/{relative}"
-
-
-def is_legacy_logical_workspace_path(path: str | None) -> bool:
-    """Return True if *path* uses the accepted logical workspace root."""
-    if not path:
-        return False
-    p = path.rstrip("/")
-    return p == LEGACY_AGENT_WORKSPACE_PATH or p.startswith(
-        LEGACY_AGENT_WORKSPACE_PATH + "/"
-    )
-
-
 
 def is_logical_skill_path(path: str | None) -> bool:
     if not path:

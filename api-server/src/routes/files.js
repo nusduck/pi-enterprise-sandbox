@@ -71,13 +71,11 @@ export function sandboxProxyHeaders(req, extra = {}, trustedAuth = null) {
 /**
  * Resolve a stable X-Trace-Id for an upload request (browser → BFF → sandbox).
  * @param {import('node:http').IncomingMessage | null | undefined} req
- * @param {string} [fallback]
  */
-export function resolveUploadTraceId(req, fallback) {
+export function resolveUploadTraceId(req) {
   const fromReq =
     (req && (req.headers['x-trace-id'] || req.headers['X-Trace-Id'])) || null;
   if (fromReq) return String(fromReq);
-  if (fallback) return String(fallback);
   return createTraceId();
 }
 

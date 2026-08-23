@@ -447,8 +447,6 @@ export const config = {
   MODEL_MAX_TOKENS: parseInt(process.env.MODEL_MAX_TOKENS, 10) || 65536,
   /** Optional path to enterprise model-registry.json (overrides seed). */
   MODEL_REGISTRY_PATH: process.env.MODEL_REGISTRY_PATH || '',
-  /** True only when AGENT_ENABLE_FAKE_LLM is set and production guards pass. */
-  FAKE_LLM_ENABLED: isFakeLlmEnabled(),
   NODE_ENV: process.env.NODE_ENV || 'development',
   DEPLOYMENT_ENV: resolveDeploymentEnv(),
   /**

@@ -147,20 +147,6 @@ class WorkspaceManager:
                 + "; ".join(errors)
             )
 
-    def get_workspace_path(self, workspace_id: str) -> Path:
-        """Return the physical workspace path for *workspace_id* (may not exist)."""
-        return settings.workspaces_path / workspace_id
-
-    def get_temp_path(self, workspace_id: str) -> Path:
-        """Return physical persistent-temp path for an opaque workspace id."""
-        return self.physical_temp_path_for_workspace_id(workspace_id)
-
-    def workspace_exists(self, workspace_id: str) -> bool:
-        return (settings.workspaces_path / workspace_id).exists()
-
-    def cleanup_stale(self) -> int:
-        return 0
-
     @property
     def disk_free_mb(self) -> float:
         root = settings.workspaces_path

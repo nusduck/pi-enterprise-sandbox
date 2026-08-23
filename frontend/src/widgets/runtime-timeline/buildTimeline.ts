@@ -327,17 +327,6 @@ export function listPendingApprovals(store: EntityStore): ApprovalEntity[] {
   return Object.values(store.approvalsById).filter((a) => a.status === 'pending');
 }
 
-/** Pending approvals for a specific conversation (via its runs). */
-export function listPendingApprovalsForConversation(
-  store: EntityStore,
-  conversationId: string | null | undefined,
-): ApprovalEntity[] {
-  if (!conversationId) return listPendingApprovals(store);
-  return listPendingApprovals(store).filter((a) => {
-    const run = store.runsById[a.runId];
-    return run?.conversationId === conversationId;
-  });
-}
 
 /** Map conversation id → latest non-terminal run status (for nav markers). */
 export function conversationRunMarkers(

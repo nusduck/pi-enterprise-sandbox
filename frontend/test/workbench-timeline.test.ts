@@ -25,7 +25,6 @@ import {
   formatDuration,
   formatRunStatusLabel,
   listPendingApprovals,
-  listPendingApprovalsForConversation,
   runStatusTone,
   selectionToInspectorTab,
   summarizeToolInput,
@@ -209,7 +208,5 @@ describe('conversation run markers + pending approvals', () => {
     // Approvals persist for conversation even after focus switch
     s = setActiveConversation(s, 'c1');
     assert.equal(listPendingApprovals(s).length, 1);
-    assert.equal(listPendingApprovalsForConversation(s, 'c2').length, 1);
-    assert.equal(listPendingApprovalsForConversation(s, 'c1').length, 0);
   });
 });

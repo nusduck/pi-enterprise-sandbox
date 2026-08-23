@@ -35,28 +35,10 @@ export function createState(initial: Partial<ChatState> | ChatState = INITIAL): 
   };
 }
 
-type ChangeMap = Record<string, { prev: unknown; next: unknown }>;
-type Subscriber = (changes: ChangeMap) => void;
-
-const subscribers: Subscriber[] = [];
-
-export function subscribe(fn: Subscriber): () => void {
-  subscribers.push(fn);
-  return () => {
-    const i = subscribers.indexOf(fn);
-    if (i >= 0) subscribers.splice(i, 1);
-  };
-}
-
-function notify(changes: ChangeMap): void {
-  for (const fn of subscribers) fn(changes);
-}
-
 /**
- * Apply an atomic state mutation. Returns the new state and notifies subscribers.
+ * Apply an atomic state mutation. Returns a new snapshot.
  */
 export function update(state: ChatState, patch: Partial<ChatState>): ChatState {
-  const prev = state;
   const next: ChatState = { ...state, ...patch };
   if (patch.conversations !== undefined) {
     next.conversations = [...patch.conversations];
@@ -70,13 +52,6 @@ export function update(state: ChatState, patch: Partial<ChatState>): ChatState {
   if (patch.messages !== undefined) {
     next.messages = [...patch.messages];
   }
-  const changes: ChangeMap = {};
-  for (const k of Object.keys(patch) as (keyof ChatState)[]) {
-    if (prev[k] !== next[k]) {
-      changes[k as string] = { prev: prev[k], next: next[k] };
-    }
-  }
-  if (Object.keys(changes).length) notify(changes);
   return next;
 }
 

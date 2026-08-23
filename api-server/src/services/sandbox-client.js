@@ -22,7 +22,6 @@ import {
 } from '../application/trace-context.js';
 
 const BASE = config.SANDBOX_BASE_URL;
-const REQUEST_GRACE_MS = 5_000;
 
 function createClientTraceContext(traceId, traceState) {
   const context = resolveRequestTraceContext({
@@ -141,17 +140,18 @@ export function createSandboxClient({
     const {
       headers: extraHeaders,
       signal: externalSignal,
-      // A per-call value (long executions pass their own); otherwise the
-      // configured default. `null` used to mean "wait forever", and every
-      // caller took that default — a Sandbox that stopped answering held BFF
-      // requests open until the client gave up.
-      timeoutMs = config.SANDBOX_REQUEST_TIMEOUT_MS,
+      // Per-call override; otherwise the configured deadline. There is no
+      // "wait forever" any more — an unbounded call is how a stalled Sandbox
+      // used to hold BFF requests open until the browser gave up.
+      timeoutMs,
       ...rest
     } = opts;
+    const deadlineMs =
+      Number.isFinite(timeoutMs) && timeoutMs > 0
+        ? timeoutMs
+        : config.SANDBOX_REQUEST_TIMEOUT_MS;
     const controller = new AbortController();
-    const timer = timeoutMs == null
-      ? null
-      : setTimeout(() => controller.abort(), timeoutMs);
+    const timer = setTimeout(() => controller.abort(), deadlineMs);
     const onAbort = () => controller.abort();
     externalSignal?.addEventListener('abort', onAbort, { once: true });
     try {
@@ -179,21 +179,14 @@ export function createSandboxClient({
       return resp;
     } catch (err) {
       if (controller.signal.aborted && !externalSignal?.aborted) {
-        throw new Error(`Sandbox request timed out after ${timeoutMs}ms: ${path}`);
+        throw new Error(`Sandbox request timed out after ${deadlineMs}ms: ${path}`);
       }
       throw err;
     } finally {
-      if (timer !== null) clearTimeout(timer);
+      clearTimeout(timer);
       externalSignal?.removeEventListener('abort', onAbort);
     }
   }
-
-  const timeoutForSeconds = (seconds) => {
-    const value = Number(seconds);
-    return Number.isFinite(value) && value >= 0
-      ? value * 1000 + REQUEST_GRACE_MS
-      : null;
-  };
 
   return {
     // PR-13 severe: Sandbox does not expose /agent-runs, /agent-sessions, or

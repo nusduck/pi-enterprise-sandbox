@@ -82,17 +82,10 @@ class ExecutionManager:
         self._runner_active: set[str] = set()
         # Durable state is owned by FormalExecutionRuntime/claim persistence.
         # This manager keeps only active process handles and bounded live output.
-        self._total_count = 0
 
     def is_session_busy(self, session_id: str) -> bool:
         with self._lock:
             return self.get_running_execution_id(session_id) is not None
-
-    def is_workspace_busy(self, workspace_id: str) -> bool:
-        """Return whether a synchronous execution owns this workspace lock."""
-        with self._lock:
-            execution_id = self._session_locks.get(workspace_id)
-            return bool(execution_id and execution_id in self._runner_active)
 
     def get_running_execution_id(self, session_id: str) -> str | None:
         with self._lock:
@@ -123,7 +116,6 @@ class ExecutionManager:
             self._executions[execution_id] = entry
             self._session_locks[workspace_id] = execution_id
             self._runner_active.add(execution_id)
-            self._total_count += 1
             return None
 
     def _register_proc(self, execution_id: str, proc: Any) -> None:
@@ -581,127 +573,12 @@ class ExecutionManager:
 
     # ── Node.js execution ────────────────────────────────────────
 
-    def run_node(
-        self,
-        session_id: str,
-        code: str,
-        workspace_path: str | None = None,
-        timeout: int | None = None,
-        env_overrides: dict[str, str] | None = None,
-        run_id: str | None = None,
-        *,
-        context: SandboxExecutionContext | None = None,
-    ) -> dict[str, Any]:
-        context = self._coerce_context(session_id, workspace_path, context)
-        execution_id = f"exec_{uuid.uuid4().hex[:10]}"
-        timeout = timeout or settings.execution_timeout_seconds
-        entry = self._new_entry(
-            execution_id,
-            session_id,
-            "node",
-            workspace_id=context.workspace_id,
-            run_id=run_id,
-            command="node",
-        )
-        conflict = self._admit(context.workspace_id, execution_id, entry)
-        if conflict is not None:
-            return conflict
-
-        code_dir = context.physical_temp / ".pi-executions"
-        code_dir.mkdir(parents=True, exist_ok=True)
-        code_path = code_dir / f"{execution_id}.js"
-        with code_path.open("w", encoding="utf-8") as f:
-            f.write(code)
-        payload_path = (
-            f"/tmp/.pi-executions/{execution_id}.js"
-            if self._isolation.name == "bubblewrap"
-            else str(code_path)
-        )
-        try:
-            return self._run_body(
-                session_id,
-                execution_id,
-                entry,
-                ["node", payload_path],
-                context,
-                timeout,
-                env_overrides,
-            )
-        finally:
-            code_path.unlink(missing_ok=True)
-
-    # ── Query / cancel ───────────────────────────────────────────
-
     def get(self, execution_id: str) -> dict | None:
         with self._lock:
             mem = self._executions.get(execution_id)
             if mem is not None:
                 return mem
         return None
-
-    def logs(
-        self,
-        execution_id: str,
-        *,
-        offset: int = 0,
-        limit: int | None = None,
-    ) -> dict[str, Any] | None:
-        entry = self.get(execution_id)
-        if entry is None:
-            return None
-        status = entry.get("status")
-        completed = status in _TERMINAL_STATUSES
-        truncated = bool(entry.get("truncated"))
-        lim = limit if limit is not None else settings.max_output_chars
-        result = self._stream.get_logs(
-            SOURCE_EXECUTION,
-            execution_id,
-            offset=offset,
-            limit=lim,
-            completed=completed,
-            truncated=truncated,
-            session_id=entry.get("session_id"),
-        )
-        # Fallback: if no chunks yet but previews exist (edge race), surface them
-        if not result["stdout"] and not result["stderr"] and offset == 0:
-            result["stdout"] = entry.get("stdout_preview") or ""
-            result["stderr"] = entry.get("stderr_preview") or ""
-            result["next_offset"] = len(result["stdout"]) + len(result["stderr"])
-        if truncated and not result.get("full_log_location"):
-            result["full_log_location"] = full_log_location(
-                SOURCE_EXECUTION,
-                execution_id,
-                session_id=entry.get("session_id"),
-            )
-        return result
-
-    def list_events(
-        self,
-        execution_id: str,
-        *,
-        after_sequence: int = 0,
-        limit: int | None = None,
-    ) -> list[dict[str, Any]] | None:
-        if self.get(execution_id) is None:
-            return None
-        return self._stream.list_events(
-            SOURCE_EXECUTION,
-            execution_id,
-            after_sequence=after_sequence,
-            limit=limit,
-        )
-
-    def subscribe_events(
-        self,
-        execution_id: str,
-        after_sequence: int,
-        callback: Any,
-    ) -> Any:
-        if self.get(execution_id) is None:
-            return None
-        return self._stream.subscribe(
-            SOURCE_EXECUTION, execution_id, after_sequence, callback
-        )
 
     def cancel(self, execution_id: str) -> bool:
         """Terminate a running execution's process group and mark CANCELLED.
@@ -757,19 +634,6 @@ class ExecutionManager:
             return None
         self.cancel(exec_id)
         return self.get(exec_id)
-
-    def cancel_active_workspace(self, workspace_id: str) -> dict | None:
-        """Cancel the execution mounted on a stable workspace, if any."""
-        with self._lock:
-            execution_id = self._session_locks.get(workspace_id)
-        if not execution_id:
-            return None
-        self.cancel(execution_id)
-        return self.get(execution_id)
-
-    @property
-    def total_count(self) -> int:
-        return self._total_count
 
 
 execution_manager = ExecutionManager()

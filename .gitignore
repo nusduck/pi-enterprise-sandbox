@@ -38,3 +38,6 @@ agent/.a2a-live-agent-workspace/
 # docs/deliverables/ carries a distribution scope and is not for publication.
 # Keep it local, or move it somewhere private before tracking it.
 docs/deliverables/
+
+# Local Claude Code settings (per-developer permissions, never shared).
+.claude/

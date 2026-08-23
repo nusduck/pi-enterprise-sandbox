@@ -123,7 +123,6 @@ class ProcessManager(OwnerScopedProcessAccess):
             _DEFAULT_MAX_LOG_CHARS,
         )
         self._refresh_limits_from_settings()
-        self._orphans_marked = 0
         # Formal MySQL recovery runs after lifecycle composition; never touch
         # persistence while modules are being imported.
         with self._lock:
@@ -448,7 +447,6 @@ class ProcessManager(OwnerScopedProcessAccess):
             )
             recovered += 1
 
-        self._orphans_marked += recovered
         if recovered:
             logger.info(
                 "Marked %d formal process execution(s) as LOST after restart",
@@ -1269,35 +1267,6 @@ class ProcessManager(OwnerScopedProcessAccess):
             "log_total": log_total,
         }
 
-    def list_events(
-        self,
-        process_id: str,
-        *,
-        after_sequence: int = 0,
-        limit: int | None = None,
-    ) -> list[dict[str, Any]] | None:
-        if self.get(process_id) is None:
-            return None
-        return self._stream.list_events(
-            SOURCE_PROCESS,
-            process_id,
-            after_sequence=after_sequence,
-            limit=limit,
-        )
-
-    def subscribe_events(
-        self,
-        process_id: str,
-        after_sequence: int,
-        callback: Any,
-    ) -> Any:
-        """Subscribe to live process events; returns unsubscribe callable or None."""
-        if self.get(process_id) is None:
-            return None
-        return self._stream.subscribe(
-            SOURCE_PROCESS, process_id, after_sequence, callback
-        )
-
     def wait(
         self,
         process_id: str,
@@ -1759,15 +1728,6 @@ class ProcessManager(OwnerScopedProcessAccess):
         if return_details:
             return {"cancelled": cancelled, "failed": failed}
         return cancelled
-
-    @property
-    def total_count(self) -> int:
-        with self._lock:
-            return len(self._entries)
-
-    @property
-    def orphans_marked(self) -> int:
-        return self._orphans_marked
 
 
 process_manager = ProcessManager()

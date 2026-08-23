@@ -292,15 +292,6 @@ export async function ensureSession(
 }
 
 
-/**
- * Build a download URL for a raw workspace file.
- * Agent deliverables should use getArtifactDownloadUrl instead.
- */
-export function getDownloadUrl(sessionId: string, path: string): string | null {
-  const url = `${BASE}/files/download?session_id=${encodeURIComponent(sessionId)}&path=${encodeURIComponent(path)}`;
-  return isAllowedApiUrl(url) ? url : null;
-}
-
 /** Build a download URL for a registered artifact deliverable. */
 export function getArtifactDownloadUrl(
   sessionId: string,

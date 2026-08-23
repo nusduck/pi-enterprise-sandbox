@@ -369,7 +369,6 @@ def test_formal_execution_manager_entries_never_touch_legacy_repository() -> Non
     manager._active_procs = {}
     manager._cancel_requested = set()
     manager._lock = threading.RLock()
-    manager._total_count = 0
     manager._isolation = type("Isolation", (), {"name": "test"})()
     entry = manager._new_entry(EXECUTION, SBX, "command", workspace_id=WORKSPACE)
     entry["_formal_claimed"] = True

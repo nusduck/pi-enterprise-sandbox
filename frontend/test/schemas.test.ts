@@ -10,7 +10,6 @@ import {
   ArtifactImportResponseSchema,
   ArtifactListSchema,
   parseApi,
-  SSEEventSchema,
 } from '../src/shared/schemas/api.ts';
 
 describe('API schemas', () => {
@@ -75,12 +74,5 @@ describe('API schemas', () => {
       },
     });
     assert.equal(parsed.workspace_file.path, 'imports/import_1/report.pdf');
-  });
-
-  it('SSE event schema requires type', () => {
-    const ok = SSEEventSchema.safeParse({ type: 'token', text: 'hi' });
-    assert.equal(ok.success, true);
-    const bad = SSEEventSchema.safeParse({ text: 'no type' });
-    assert.equal(bad.success, false);
   });
 });

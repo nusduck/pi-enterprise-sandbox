@@ -261,7 +261,10 @@ export const config = {
   /**
    * Approval behavior for high-risk tools. Default ask. Legacy false maps to deny;
    * auto_approve requires an explicit mode and is rejected in production.
-   * Surfaced on status for UI; enforcement lives in Agent + Sandbox.
+   *
+   * The BFF neither enforces nor serves this — Agent + Sandbox own enforcement,
+   * and the UI reads the mode from the capability registry. It is kept here for
+   * the production guardrail above and the startup config echo.
    */
   APPROVAL_MODE: resolveApprovalMode(),
   APPROVAL_ENABLED: resolveApprovalEnabled(),

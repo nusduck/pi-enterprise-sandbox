@@ -7,9 +7,6 @@ from pathlib import Path
 import pytest
 
 from sandbox.config import settings
-from sandbox.paths import (
-    PUBLIC_WORKSPACE_TOKEN,
-)
 from sandbox.services.workspace_manager import WorkspaceManager
 
 WSP_A = "01JTESTWRKSP0000000000000A"
@@ -46,14 +43,6 @@ class TestWorkspaceManager:
             mgr.init_workspace("conv_not-formal")
         with pytest.raises(ValueError):
             mgr.init_workspace("../escape")
-
-    def test_get_workspace_path_is_physical(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(settings, "workspaces_root", str(tmp_path / "workspaces"))
-        mgr = WorkspaceManager()
-        path = mgr.get_workspace_path(WSP_A)
-        assert path == Path(tmp_path / "workspaces" / WSP_A)
-        assert str(path) != PUBLIC_WORKSPACE_TOKEN
-        assert not str(path).startswith("/home/sandbox")
 
     def test_no_global_symlink_api(self):
         """Static absence: global symlink symbols must not exist on WorkspaceManager."""

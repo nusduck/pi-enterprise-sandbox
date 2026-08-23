@@ -38,8 +38,6 @@ export {
 
 export {
   A2A_STREAM_RESULT_KINDS,
-  A2A_MESSAGE_STREAM_KINDS,
-  A2A_TASK_STREAM_KINDS,
   A2A_TASK_LIFECYCLE_FOLLOW_UP_KINDS,
   streamKindsForMethod,
   omitNullFields,
