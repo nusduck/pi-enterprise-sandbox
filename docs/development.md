@@ -131,7 +131,11 @@ SANDBOX_BASE_URL=http://localhost:8081 AGENT_BASE_URL=http://localhost:4100 \
 
 Agent **可以在零 Skill package 下启动**并使用基础工具（read/write/edit/bash/ls/find/grep/submit_artifact 等）。仓库 `skills/` 当前可挂载共享 Skill package（如文档/办公类技能）；它们不是运行时硬依赖。
 
-模型与运营侧的权威清单来自 **session-scoped capability registry** 与模型工具 `capabilities`（list/search/describe），而不是模型对 prompt 的记忆。`coding-agent` 默认 `sharedSkills.mode=all`，在保留 package skill allowlist（`profile.skills`）的同时暴露共享挂载上的全部合法 package。
+每个 Run 先扫描系统层和调用者自己的用户层。若
+`AgentVersion.configJson.skills` 非空，它作为 allowlist 进一步收窄模型可见
+的 Skill；模型与运营侧的最终权威清单来自 **session-scoped capability
+registry** 与模型工具 `capabilities`（list/search/describe），而不是模型对
+prompt 的记忆。
 
 **方式 A — 手工放置（仍建议只读挂载）**
 
@@ -139,7 +143,7 @@ Agent **可以在零 Skill package 下启动**并使用基础工具（read/write
 2. 添加 `SKILL.md`（YAML frontmatter：`name` + `description` 必填）
 3. 添加脚本到 `skills/your-skill-name/scripts/`
 4. `skills/` 默认只读挂载到 Agent / Sandbox skill 根
-5. Agent 经 `dynamic-resources` + profile skill policy 发现技能；工作区始终从空目录起步，技能不复制进 workspace
+5. Agent 通过 Pi ResourceLoader 发现 Skill，再应用可选的 `AgentVersion.skills` allowlist；工作区始终从空目录起步，Skill 不复制进 workspace
 6. 重新构建服务或创建新 session 以刷新系统层 registry
 
 **方式 B — 用户对话安装**

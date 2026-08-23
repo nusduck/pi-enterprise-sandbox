@@ -55,10 +55,11 @@ pi-sandbox/
 │   └── Dockerfile
 ├── sandbox/              ← 安全沙箱（Python FastAPI + 多层防护，无 Agent 主循环）
 │   ├── main.py           ← FastAPI 入口
-│   ├── routers/          ← internal/v1 执行平面 + files/datasets/artifacts 兼容适配 + health
+│   ├── artifact/         ← Artifact 领域、应用、持久化与 public/internal API
+│   ├── routers/          ← internal/v1 执行平面 + files/datasets 兼容适配 + health
 │   ├── services/         ← 会话/执行/文件/审计/审批策略
 │   └── Dockerfile
-├── skills/               ← 可选共享 Skill 挂载（非硬依赖；profile + capability registry 控制可见性）
+├── skills/               ← 可选系统 Skill 挂载（非硬依赖；AgentVersion allowlist + capabilities 控制模型可见性）
 ├── tests/                ← pytest 测试套件
 ├── scripts/              ← 备份/恢复、development reset、跨服务 smoke
 ├── nginx/                ← 生产 Nginx + SSL
@@ -66,8 +67,7 @@ pi-sandbox/
 ├── .runtime/             ← 全部宿主机运行态（Git/Docker build 均忽略）
 │   ├── sandbox/          ← workspaces、tmp、artifacts、control
 │   ├── agent/            ← 本地 Pi Agent 资源目录
-│   ├── smoke/            ← 跨服务 smoke 临时状态
-│   └── release-gates/    ← live gate 临时状态
+│   └── …                 ← smoke / release-gate 等按需创建的临时状态
 ├── docker-compose.yml           ← 开发编排（Frontend + BFF + Agent + Sandbox + MySQL 8 + Redis 7）
 ├── docker-compose.prod.yml      ← 生产 overlay（MySQL 8 + Redis 7 + Nginx + SSL）
 └── .env.example          ← 环境变量模板（与部署文档一致）
@@ -193,7 +193,19 @@ Redis 只保存队列、lease、stream、取消信号等运行态；**不是** R
 
 ### Skill
 
-Agent **支持零 Skill 启动**（基础工具 read/write/edit/bash/…）。共享 `skills/` 与 kit package skills 由 Agent Profile（`profile.skills` + `sharedSkills`）与 session capability registry 控制；模型侧权威清单为 `capabilities` 工具。用户可以上传当前回合的 Skill ZIP，或与 Agent 交互生成 Skill；安装、生成、编辑和卸载统一经过高风险工具审批，完成后自动刷新能力清单。
+Agent **支持零 Skill 启动**（基础工具 read/write/edit/bash/…）。Skill 分两层，
+Agent 自动发现每个 `*/SKILL.md` 包（详见 [skills/README.md](skills/README.md)）：
+
+| 层 | 路径 | 内容 | 可见范围 | 可写 |
+|----|------|------|----------|------|
+| 系统 | `/home/sandbox/skill` | 本仓库 `./skills` 自带的 package | 所有人 | 否 |
+| 用户 | `/home/sandbox/skill-user/<orgId>/<userId>` | 该用户 `skill_install` 装的 package | 仅该用户本人 | 是 |
+
+每个 Run 先扫描系统层和调用者自己的用户层；非空
+`AgentVersion.configJson.skills` 作为 allowlist 进一步收窄模型可见的 Skill。
+模型侧的最终权威清单是 `capabilities` 工具。用户可以上传当前回合的
+Skill ZIP，或与 Agent 交互生成 Skill；安装、生成、编辑和卸载统一经过高风险
+工具审批，完成后自动刷新能力清单。
 
 ### 其他
 

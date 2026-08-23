@@ -286,18 +286,6 @@ def child_resource_limit_kwargs(
 # ── Environment helpers ─────────────────────────────────────────────
 
 
-def apply_ulimit_env(max_memory_mb: int = 512) -> dict[str, str]:
-    """Return environment variables that constrain resource-heavy interpreters.
-
-    Soft hints only (Node heap). Hard enforcement is RLIMIT_AS in
-    :func:`apply_resource_limits` — never rely on these alone.
-    """
-    return {
-        "PYTHON_MEM_LIMIT": str(max_memory_mb),
-        "NODE_OPTIONS": f"--max-old-space-size={max_memory_mb}",
-    }
-
-
 # ── Subprocess runner ───────────────────────────────────────────────
 
 # Read size for drain loops. Large enough to keep up with noisy children

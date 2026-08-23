@@ -1,7 +1,7 @@
 /**
  * Artifact Panel (plan §19.8) — only submit_artifact deliverables.
- * Downloads use getArtifactDownloadUrl(sessionId, artifactId) only —
- * never workspace path getDownloadUrl.
+ * Downloads go through getArtifactDownloadUrl(sessionId, artifactId) — an
+ * artifact id, never a workspace path.
  */
 import { useMemo, useState } from 'react';
 import type { ArtifactEntity } from '../../entities';

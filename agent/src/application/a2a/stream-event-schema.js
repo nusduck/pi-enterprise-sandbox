@@ -21,17 +21,11 @@ export const A2A_STREAM_RESULT_KINDS = Object.freeze([
   'artifact-update',
 ]);
 
-/** Official 0.3 `message/stream` and `tasks/resubscribe` share this union. */
-export const A2A_MESSAGE_STREAM_KINDS = Object.freeze([...A2A_STREAM_RESULT_KINDS]);
-
 /** After an initial Task, official 0.3 allows only these follow-up kinds. */
 export const A2A_TASK_LIFECYCLE_FOLLOW_UP_KINDS = Object.freeze([
   'status-update',
   'artifact-update',
 ]);
-
-/** @deprecated same as A2A_STREAM_RESULT_KINDS — kept for existing imports. */
-export const A2A_TASK_STREAM_KINDS = Object.freeze([...A2A_STREAM_RESULT_KINDS]);
 
 const MESSAGE_ROLES = new Set(['user', 'agent']);
 const PART_KINDS = new Set(['text', 'file', 'data']);

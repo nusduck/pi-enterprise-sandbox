@@ -104,10 +104,6 @@ def new_attachment_id() -> str:
     return f"att_{uuid.uuid4().hex}"
 
 
-def new_idempotency_key() -> str:
-    return f"idem_{uuid.uuid4().hex}"
-
-
 class AttachmentManager:
     """Isolated attachment storage + idempotent commit for a workspace."""
 
@@ -170,12 +166,6 @@ class AttachmentManager:
 
     def max_file_bytes(self) -> int:
         return settings.max_file_size_mb * 1024 * 1024
-
-    def max_turn_bytes(self) -> int:
-        return settings.max_turn_attachment_mb * 1024 * 1024
-
-    def max_attachments_per_turn(self) -> int:
-        return settings.max_attachments_per_turn
 
     def open_temp_upload(
         self, workspace_path: str, attachment_id: str, sanitized_name: str,
@@ -286,47 +276,6 @@ class AttachmentManager:
                 pass
 
         return entry
-
-    def write_bytes(
-        self,
-        workspace_path: str,
-        content: bytes,
-        *,
-        filename: str,
-        idempotency_key: str | None = None,
-        mime_type: str | None = None,
-        attachment_id: str | None = None,
-    ) -> dict:
-        """Convenience: write full bytes (tests / small payloads). Streams via temp."""
-        if idempotency_key:
-            existing = self.lookup_idempotency(workspace_path, idempotency_key)
-            if existing:
-                return existing
-
-        sanitized = self.validate_filename(filename)
-        att_id = attachment_id or new_attachment_id()
-        final, tmp, handle = self.open_temp_upload(workspace_path, att_id, sanitized)
-        try:
-            handle.write(content)
-            handle.flush()
-            os.fsync(handle.fileno())
-            handle.close()
-            handle = None
-            return self.commit_upload(
-                workspace_path,
-                attachment_id=att_id,
-                sanitized_name=sanitized,
-                original_name=Path(filename or sanitized).name,
-                final_path=final,
-                temp_path=tmp,
-                size=len(content),
-                idempotency_key=idempotency_key,
-                mime_type=mime_type,
-            )
-        except Exception:
-            self.abort_temp(tmp, handle)
-            raise
-
 
 def normalize_attachment_context(item: dict | None) -> dict | None:
     """Normalize a message attachment dict to ADR §4.5 fields.

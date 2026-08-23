@@ -14,7 +14,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from sandbox.config import Settings
-from sandbox.routers import internal_artifacts
+from sandbox.artifact.api import internal as internal_artifacts
 from sandbox.security.internal_http_auth import (
     INTERNAL_AUTH_HTTP_DETAIL,
     INTERNAL_TOKEN_AUDIENCE,

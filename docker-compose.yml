@@ -219,8 +219,6 @@ services:
       SANDBOX_API_TOKEN: ${SANDBOX_API_TOKEN:-dev_only_sandbox_api_token_not_for_prod_32b}
       AGENT_BASE_URL: http://agent:4100
       AGENT_INTERNAL_TOKEN: ${AGENT_INTERNAL_TOKEN:-}
-      # Dev convenience: an empty token would otherwise close /internal/*.
-      AGENT_ALLOW_UNAUTHENTICATED_INTERNAL: ${AGENT_ALLOW_UNAUTHENTICATED_INTERNAL:-true}
       AUTH_ENABLED: ${AUTH_ENABLED:-}
       # Stable external subjects for explicit auth-disabled local development.
       # Agent provisions owner-scoped internal ULIDs from these values.
@@ -470,7 +468,6 @@ services:
       DEPLOYMENT_ENV: ${DEPLOYMENT_ENV:-development}
       # Listen address only — does NOT authorize clients. See ALLOWED_CLIENT_CIDRS.
       SANDBOX_BIND_HOST: ${SANDBOX_BIND_HOST:-0.0.0.0}
-      SANDBOX_HOST: ${SANDBOX_BIND_HOST:-0.0.0.0}
       SANDBOX_PORT: 8081
       SANDBOX_LOG_LEVEL: ${SANDBOX_LOG_LEVEL:-INFO}
       # Sandbox persistence DSN (formal: MySQL via PyMySQL dialect).

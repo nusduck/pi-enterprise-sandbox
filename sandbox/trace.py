@@ -158,7 +158,3 @@ def get_span_id() -> str | None:
 
 def get_parent_span_id() -> str | None:
     return _parent_span_id.get()
-
-
-def get_trace_flags() -> str:
-    return _trace_flags.get()

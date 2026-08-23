@@ -254,7 +254,6 @@ SCHEMA_CAPABILITY: dict[str, Any] = {
 
 # Backward-compatible names (gap report is empty — capability is present).
 SCHEMA_GAP_MISSING_TABLES: tuple[dict[str, Any], ...] = ()
-SCHEMA_GAP_NOTES: tuple[str, ...] = SCHEMA_CAPABILITY_NOTES
 SCHEMA_GAP: dict[str, Any] = SCHEMA_CAPABILITY
 
 
@@ -290,11 +289,6 @@ def report_schema_gap() -> dict[str, Any]:
 
 def is_table_present(table: str) -> bool:
     return table in EXECUTION_DOMAIN_TABLES
-
-
-def is_table_schema_gap(table: str) -> bool:
-    """No longer expected: PR-02 owns all Sandbox execution-domain tables."""
-    return False
 
 
 def validate_execution_domain_capability(

@@ -133,13 +133,6 @@ export const ApprovalDecisionSchema = z
   })
   .passthrough();
 
-/** Loose SSE event envelope — unknown types are ignored by the handler. */
-export const SSEEventSchema = z
-  .object({
-    type: z.string(),
-  })
-  .passthrough();
-
 // Re-export runtime event schemas for convenience
 export {
   RuntimeEventSchema,
