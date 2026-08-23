@@ -23,8 +23,13 @@ frontend/
 │   ├── shared/api/          ← /api fetch 与 URL 构造
 │   ├── shared/sse/          ← SSE parser/manager/Agent event adapter
 │   ├── shared/state/        ← UI state + run reducer
-│   ├── widgets/             ← 消息、时间线、审批、交付物等组件
+│   ├── widgets/             ← 消息、时间线、审批、交付物、进程控制台等组件
 │   └── pages/
+│       ├── workbench/       ← 主工作台（聊天 + 实体检查器）
+│       ├── runs/            ← Run 列表与取消
+│       ├── approvals/       ← 待审批列表
+│       ├── schedules/       ← Cron 任务管理
+│       └── settings/        ← Capabilities 与 A2A 管理
 ├── test/                    ← node:test + tsx
 ├── index.html
 ├── nginx.conf               ← /api/* 反代，SSE buffering off
@@ -131,8 +136,7 @@ attachment draft: queued → uploading → uploaded | failed
 ```
 file_ready（仅 submit_artifact 成功后）
   ↓
-  有 artifact_id → getArtifactDownloadUrl(sessionId, artifact_id)
-  无 artifact_id 仅 path → 兼容 getDownloadUrl（非推荐）
+  getArtifactDownloadUrl(sessionId, artifact_id) → 下载 URL
   ↓
 render → security.isAllowedApiUrl 校验后生成 <a class="dl" href="/api/...">
 ```
@@ -172,6 +176,7 @@ render → security.isAllowedApiUrl 校验后生成 <a class="dl" href="/api/...
 - `agentEventAdapter -> runReducer` 是 RuntimeEvent 的唯一写入路径
 - `projectRunMessages` 从 Run/Message/Tool/Artifact 实体生成聊天投影
 - Timeline、Context Inspector、Approval 与 Deliverables widgets 按实体 id 更新，不维护第二份 runtime state
+- 子代理 fan-out：`spawn_subagent` / `check_subagent` 工具卡片渲染为结构化任务视图（子 Run 状态聚合），而不是裸 wire JSON；`todo_write` / `memory_write`（task-state extension）同理
 - Markdown 通过 `react-markdown` + `rehype-sanitize` 渲染；下载链接仍经 URL allowlist 过滤
 
 ## 测试
@@ -185,7 +190,8 @@ npm run build --prefix frontend     # 生产构建（CI 同款）
 
 ## 主题
 
-支持暗色（默认）和亮色主题，通过 CSS `[data-theme]` 切换。
+支持暗色（默认）和亮色主题：`ThemeProvider` 持久化用户偏好，通过 CSS `[data-theme]`
+切换；图标为内联 SVG 集合（`shared/ui/Icons.tsx`），不再使用 emoji 字形。
 
 ## 键盘快捷键
 

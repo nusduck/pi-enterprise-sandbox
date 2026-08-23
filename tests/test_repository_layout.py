@@ -19,6 +19,8 @@ LOCAL_GENERATED_DIRECTORIES = frozenset(
         "artifacts",
         "control",
         "pi-agent-home",
+        # Per-developer local tooling state (gitignored, never part of the repo).
+        ".claude",
     }
 )
 
@@ -100,7 +102,9 @@ def test_project_markdown_lives_under_docs_except_readmes() -> None:
     for path in ROOT.rglob("*.md"):
         relative = path.relative_to(ROOT)
         if (
-            path.name == "README.md"
+            # AGENTS.md is read from the repository root by convention — the
+            # agent working spec has to sit where an agent looks for it.
+            path.name in {"README.md", "AGENTS.md"}
             or relative.parts[0] in {"docs", "skills"}
             or any(part in LOCAL_GENERATED_DIRECTORIES for part in relative.parts)
         ):

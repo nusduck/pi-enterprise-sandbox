@@ -2,6 +2,7 @@
 
 **Tracks:** `main`  
 **Last audited at:** `be4a077a` (2026-08-21)  
+**Docs pass:** `0a73cf64` (2026-08-23) — reviewed commits #13–#21 for documentation impact; no §32 row status changed. #21 (internal plane fail-closed, non-root containers, bounded BFF outbound, sandbox auth fail-closed) strengthens existing rows and does not close H5/H6 ops sampling.  
 **Normative source:** [`plan.md`](./plan.md) §32
 **Evidence index:** [`evidence/`](./evidence/)  
 **Process log:** [`PROCESS_LOG.md`](./PROCESS_LOG.md)
