@@ -71,6 +71,7 @@ export function composerPlaceholder(
   return 'Steer: change direction of the current run…';
 }
 
+/** Short help under the mode switcher. */
 export function runningActionHint(action: RunningAction): string {
   if (action === 'follow_up') {
     return 'Follow-up queues work after the current run finishes.';

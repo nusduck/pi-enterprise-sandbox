@@ -172,14 +172,11 @@ export function Composer() {
       ) {
         return;
       }
-      const target = e.target as HTMLElement | null;
-      if (target?.closest('[data-no-upload-shortcut]')) return;
-      e.preventDefault();
       // The upload button is disabled while a run is active; the shortcut
-      // respects the same gate.
-      if (mode !== 'running') {
-        fileInputRef.current?.click();
-      }
+      // respects the same gate and leaves the key to the browser otherwise.
+      if (mode === 'running') return;
+      e.preventDefault();
+      fileInputRef.current?.click();
     };
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);

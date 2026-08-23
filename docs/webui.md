@@ -202,6 +202,7 @@ npm run build --prefix frontend     # 生产构建（CI 同款）
 | `Ctrl+U` / `Cmd+U` | 打开文件选择器上传（Run 运行中与按钮一致被禁用） |
 | `Ctrl+L` / `Cmd+L` | 新建会话 |
 
-消息日志区域不声明自己的 `aria-live`：流式 token 的高频更新不应进入读屏
-live region（`role="log"` 已隐式携带 polite 语义），Run 状态变化由 FlashZone
-（`role="status"` + `aria-live="assertive"`）统一播报。
+消息日志区域显式声明 `aria-live="off"`：`role="log"` 本身隐式携带 polite live
+region，而流式 token 是在已有文本节点上追加（落在默认 `aria-relevant` 的 `text`
+范畴内），不显式关掉就会让读屏逐 delta 重读整段 transcript。Run 状态变化由
+FlashZone（`role="status"` + `aria-live="assertive"`）统一播报。
