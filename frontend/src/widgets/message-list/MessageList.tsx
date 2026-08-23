@@ -197,6 +197,9 @@ export function MessageList() {
             runHasEntitySteps(entityStore, msg._runId || null);
           const canRegenerate =
             regen.allowed && idx === regen.assistantIdx;
+          // Only the regenerating bubble gets the source text: handing it to
+          // every bubble would break their memo comparator on each new turn.
+          const regenerateSource = canRegenerate ? regen.source : null;
           return (
             <MessageBubble
               key={
@@ -211,7 +214,7 @@ export function MessageList() {
               showRuntimeSteps={showRuntimeSteps}
               useEntitySteps={useEntitySteps}
               canRegenerate={canRegenerate}
-              regenerateSource={regen.source}
+              regenerateSource={regenerateSource}
               onRegenerate={handleRegenerate}
             />
           );

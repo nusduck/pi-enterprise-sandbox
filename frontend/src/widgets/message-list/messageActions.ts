@@ -10,7 +10,7 @@ export const NEAR_BOTTOM_THRESHOLD_PX = 120;
 
 /** Join all text parts of a message — what "Copy" puts on the clipboard. */
 export function messagePlainText(message: ChatMessage): string {
-  return message.content
+  return (message.content || [])
     .filter((part) => part.type === 'text' && 'text' in part)
     .map((part) => String((part as { text?: unknown }).text || ''))
     .join('');

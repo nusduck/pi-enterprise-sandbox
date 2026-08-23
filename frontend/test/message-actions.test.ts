@@ -43,6 +43,22 @@ describe('messagePlainText', () => {
 
   it('returns empty string when there is no text', () => {
     assert.equal(messagePlainText(asstMsg('')), '');
+    // Tool-only turns have parts but no copyable text — the bubble gates its
+    // Copy button on this so it never offers to copy an empty string.
+    assert.equal(
+      messagePlainText({
+        role: 'assistant',
+        content: [{ type: 'tool_use', id: 't1', name: 'bash', input: {} }],
+      }),
+      '',
+    );
+  });
+
+  it('tolerates a message whose content array is missing', () => {
+    assert.equal(
+      messagePlainText({ role: 'assistant' } as unknown as ChatMessage),
+      '',
+    );
   });
 });
 
@@ -140,6 +156,8 @@ describe('chat UX surfaces (static structure)', () => {
     assert.match(bubble, /aria-label=["']Copy message text["']/);
     assert.match(bubble, /aria-label=["']Regenerate answer["']/);
     assert.match(bubble, /messagePlainText\(msg\)/);
+    // Copy is offered only when the turn actually has text to copy.
+    assert.match(bubble, /copyText\.length > 0/);
     const css = readSrc('shared', 'styles', 'app.css');
     assert.match(css, /\.msg-actions/);
     assert.match(css, /\.msg-action-btn/);

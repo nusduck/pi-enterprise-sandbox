@@ -367,14 +367,18 @@ function MessageBubbleBase({
 
   async function handleCopy() {
     try {
-      if (!navigator.clipboard?.writeText) return;
-      await navigator.clipboard.writeText(messagePlainText(msg));
+      if (!navigator.clipboard?.writeText || !copyText) return;
+      await navigator.clipboard.writeText(copyText);
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);
     } catch {
       setCopied(false);
     }
   }
+
+  // Only text parts are copyable; a bubble that carried nothing but tool calls
+  // would otherwise offer a Copy button that writes an empty string.
+  const copyText = messagePlainText(msg);
 
   function handleRegenerate() {
     if (!canRegenerate || !regenerateSource) return;
@@ -405,9 +409,9 @@ function MessageBubbleBase({
             </div>
           ) : null}
         </div>
-        {!isUser && (msg.content.length > 0 || canRegenerate) ? (
+        {!isUser && (copyText.length > 0 || canRegenerate) ? (
           <div className="msg-actions" aria-label="Message actions">
-            {msg.content.length > 0 ? (
+            {copyText.length > 0 ? (
               <button
                 type="button"
                 className="msg-action-btn"
