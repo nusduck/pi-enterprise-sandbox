@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 import uuid
+from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
@@ -15,6 +16,30 @@ from sandbox.security.ownership import BOOTSTRAP_ORG_ID
 router = APIRouter(prefix="/auth", tags=["auth"])
 
 _USERNAME_RE = re.compile(r"^[A-Za-z0-9_./@+-]{2,64}$")
+ROLE_ADMIN = "admin"
+ROLE_USER = "user"
+
+
+def _configured_admin_usernames() -> set[str]:
+    """Usernames the deployment declares as administrators.
+
+    Matching is case-insensitive so an operator does not have to reproduce the
+    exact casing of an account that already exists.
+    """
+    return {
+        name.strip().lower()
+        for name in (settings.auth_admin_usernames or [])
+        if name and name.strip()
+    }
+
+
+def _role_for(username: str) -> str:
+    """Role a freshly registered account starts with."""
+    return (
+        ROLE_ADMIN
+        if username.lower() in _configured_admin_usernames()
+        else ROLE_USER
+    )
 
 
 class RegisterBody(BaseModel):
@@ -81,6 +106,27 @@ def _normalize_username(raw: str) -> str:
     return username
 
 
+def _reconcile_admin_role(users: Any, entry: dict) -> dict:
+    """Align a stored role with the deployment's admin list.
+
+    Promotion is what bootstraps the first administrator: the account may have
+    been registered long before anyone was declared an admin. Demotion is the
+    same rule read backwards — an account dropped from the list must not keep
+    powers the deployment no longer grants it.
+    """
+    admins = _configured_admin_usernames()
+    if not admins and (entry.get("role") or ROLE_USER) != ROLE_ADMIN:
+        return entry
+    desired = ROLE_ADMIN if entry["username"].lower() in admins else ROLE_USER
+    if (entry.get("role") or ROLE_USER) == desired:
+        return entry
+    try:
+        users.set_role(entry["id"], desired)
+    except Exception:  # noqa: BLE001 — never fail a login on role upkeep
+        return entry
+    return {**entry, "role": desired}
+
+
 @router.post("/register")
 def register(body: RegisterBody):
     # Production / hardened deployments disable public self-registration.
@@ -104,6 +150,9 @@ def register(body: RegisterBody):
             display_name=body.display_name,
             # Ignore client-supplied organization_id (no self-join into arbitrary orgs).
             external_org_id=BOOTSTRAP_ORG_ID,
+            # Clients cannot self-select a role either; admin comes only from
+            # the deployment's SANDBOX_AUTH_ADMIN_USERNAMES list.
+            role=_role_for(username),
         )
     except Exception as exc:  # noqa: BLE001
         # Unique race or missing table.
@@ -147,6 +196,7 @@ def login(body: LoginBody):
         raise HTTPException(status_code=401, detail="Invalid credentials")
     if not verify_password(body.password, entry["password_hash"]):
         raise HTTPException(status_code=401, detail="Invalid credentials")
+    entry = _reconcile_admin_role(users, entry)
     users.touch_login(entry["id"])
     token = create_token(
         user_id=entry["id"],
@@ -173,4 +223,4 @@ def me(request: Request):
         raise HTTPException(status_code=503, detail="Auth store unavailable") from exc
     if not entry:
         raise HTTPException(status_code=401, detail="User not found")
-    return _public_user(entry)
+    return _public_user(_reconcile_admin_role(users, entry))

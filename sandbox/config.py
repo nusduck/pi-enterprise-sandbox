@@ -456,6 +456,14 @@ class Settings(BaseSettings):
     jwt_audience: str = "pi-enterprise-sandbox"
     # Public self-registration. Production must disable (admin invite only).
     auth_allow_public_register: bool = True
+    # Usernames that own the admin role, comma-separated. Without this there is
+    # no way to get a first admin into a fresh deployment: registration always
+    # creates plain users, so admin-only surfaces (A2A config, capability
+    # administration) would stay unreachable forever. A listed username is
+    # created as admin on register and promoted on login, so an account that
+    # already exists is fixed by adding it here and signing in again.
+    # Env: SANDBOX_AUTH_ADMIN_USERNAMES
+    auth_admin_usernames: Annotated[list[str], NoDecode] = []
 
     # ── Internal HMAC (Agent -> Sandbox plane) ────────────────────────
     # JSON object: kid -> canonical unpadded base64url key material.
@@ -536,6 +544,7 @@ class Settings(BaseSettings):
         "trusted_proxy_cidrs",
         "cors_origins",
         "shared_env_keys",
+        "auth_admin_usernames",
         mode="before",
     )
     @classmethod

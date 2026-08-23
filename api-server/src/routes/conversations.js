@@ -11,7 +11,15 @@ import {
 } from '../services/agent-client.js';
 import { resolveTrustedAuth } from '../application/run-access-service.js';
 import { loadConversationTimeline } from '../application/conversation-timeline-service.js';
+import { HttpError } from '../http/errors.js';
 import { sendError, sendJson as json } from '../http/response.js';
+
+/** Crockford ULID — the only conversation id shape Agent MySQL issues. */
+const ULID_RE = /^[0-9A-HJKMNP-TV-Z]{26}$/i;
+
+function isUlid(value) {
+  return typeof value === 'string' && ULID_RE.test(value);
+}
 
 /**
  * GET /api/conversations
@@ -86,6 +94,15 @@ export async function handleGetConversationEvents(id, res, req, query = {}) {
     // loading the Agent MySQL run/event timeline.
     const auth = await resolveTrustedAuth(req);
     const traceId = req?.traceId || null;
+    // Fail closed on the conversation itself first. The run listing below is
+    // a filter, not an existence check: a conversation that belongs to another
+    // tenant, was deleted, or never existed matches no runs and would answer
+    // 200 with an empty timeline — indistinguishable from an owned but idle
+    // conversation. A malformed id must not reach Agent as a 500 either.
+    if (!isUlid(id)) {
+      throw new HttpError(404, 'NOT_FOUND', 'Conversation not found');
+    }
+    await getAgentConversation(id, { auth, traceId });
     const client = {
       listAgentRuns: (q) => listAgentRuns(q, { auth, traceId }),
       listAgentEvents: (runId, q) => listAgentEvents(runId, q, { auth, traceId }),

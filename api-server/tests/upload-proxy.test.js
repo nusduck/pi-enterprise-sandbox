@@ -55,6 +55,41 @@ describe('resolveUploadTraceId / discardRequestBody', () => {
     });
     assert.equal(destroyed, true);
   });
+
+  it('drains first and destroys only once the rejection is on the wire', () => {
+    // Regression: destroying the request socket immediately raced the error
+    // response out of it, so a cross-tenant or oversized upload came back as a
+    // closed connection instead of the 403/404/413 JSON explaining why.
+    const events = [];
+    const listeners = {};
+    const req = {
+      complete: false,
+      resume() { events.push('drain'); },
+      destroy() { events.push('destroy'); },
+    };
+    const res = {
+      once(event, handler) { listeners[event] = handler; },
+    };
+
+    discardRequestBody(req, res);
+    assert.deepEqual(events, ['drain'], 'the socket must survive the rejection');
+
+    listeners.finish();
+    assert.deepEqual(events, ['drain', 'destroy']);
+  });
+
+  it('leaves a fully-received body alone', () => {
+    const events = [];
+    const listeners = {};
+    const req = {
+      complete: true,
+      resume() { events.push('drain'); },
+      destroy() { events.push('destroy'); },
+    };
+    discardRequestBody(req, { once(event, handler) { listeners[event] = handler; } });
+    listeners.finish();
+    assert.deepEqual(events, ['drain'], 'nothing left to abort');
+  });
 });
 
 describe('spillRequestToTempFile', () => {

@@ -11,6 +11,9 @@ const NOT_FOUND_NOUNS = Object.freeze({
   conversations: 'Conversation',
   approvals: 'Approval',
   process_executions: 'Process',
+  agent_sessions: 'Session',
+  sandbox_sessions: 'Session',
+  datasets: 'Dataset',
   trace_spans: 'Trace',
   interactions: 'Interaction',
   cron_jobs: 'Cron job',
@@ -78,6 +81,11 @@ export function mapErrorToHttp(error) {
       body: { error: 'Service dependency unavailable', code: 'DEPENDENCY' },
     };
   }
+  // Nothing claimed this error, so it becomes an opaque 500. Log it here —
+  // the only place every unmapped failure passes through — otherwise the sole
+  // record of a server-side bug is a bare "Internal server error" in the
+  // browser, with no stack anywhere in the Agent's output.
+  console.error('[agent-http] unmapped error →500:', error);
   return { status: 500, body: { error: 'Internal server error' } };
 }
 

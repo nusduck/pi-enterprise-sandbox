@@ -36,11 +36,11 @@ HOTSPOT_LINE_BUDGETS = {
     "agent/src/infrastructure/mcp/pi-mcp-adapter-factory.js": 1_269,
     "agent/src/infrastructure/mysql/repositories/tool-execution-repository.js": 1_131,
     "agent/src/infrastructure/mysql/repositories/trace-span-repository.js": 1_046,
-    "agent/src/infrastructure/pi/pi-runtime-factory.js": 646,
+    "agent/src/infrastructure/pi/pi-runtime-factory.js": 650,
     "agent/src/infrastructure/sandbox/internal-files-read-http.js": 1_009,
     "sandbox/app/persistence/repositories/tool_execution_claim_validator.py": 1_111,
-    "sandbox/config.py": 1_469,
-    "sandbox/services/process_manager.py": 1_887,
+    "sandbox/config.py": 1_478,
+    "sandbox/services/process_manager.py": 1_773,
 }
 
 

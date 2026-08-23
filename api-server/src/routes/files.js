@@ -127,16 +127,39 @@ export function mapUploadErrorBody(status, data, traceId) {
 /**
  * Stop reading the inbound body so early error responses do not leave the
  * socket half-open while the client keeps sending multipart data.
+ *
+ * Draining is not the same as destroying: `req.destroy()` tears down the
+ * whole TCP connection, and on an early reject (auth failure, 413, missing
+ * header) that races the error response out of the socket — the client sees
+ * a reset connection instead of the JSON body explaining what went wrong.
+ * So drain now, and only destroy once the response has actually been
+ * flushed, and only if the client is still uploading.
+ *
  * @param {import('node:http').IncomingMessage | null | undefined} req
+ * @param {import('node:http').ServerResponse | null} [res]
+ *   Response the caller is about to write the rejection to. When given, the
+ *   socket is closed after that response is on the wire.
  */
-export function discardRequestBody(req) {
+export function discardRequestBody(req, res = null) {
   if (!req) return;
   try {
     req.resume?.();
   } catch { /* ignore */ }
-  try {
-    req.destroy?.();
-  } catch { /* ignore */ }
+
+  const destroy = () => {
+    try {
+      if (req.complete !== true) req.destroy?.();
+    } catch { /* ignore */ }
+  };
+
+  if (!res || typeof res.once !== 'function') {
+    destroy();
+    return;
+  }
+  // `finish` fires once the response has been handed to the socket; `close`
+  // covers a client that gave up before that.
+  res.once('finish', destroy);
+  res.once('close', destroy);
 }
 
 /**
@@ -385,7 +408,7 @@ export async function handleFileUpload(parsedUrl, req, res) {
   const traceId = resolveUploadTraceId(req);
 
   if (!sessionId) {
-    discardRequestBody(req);
+    discardRequestBody(req, res);
     writeUploadJson(res, 400, { error: 'session_id required' }, traceId);
     return;
   }
@@ -399,7 +422,7 @@ export async function handleFileUpload(parsedUrl, req, res) {
   const declared = parseInt(req.headers['content-length'] || '0', 10);
   if (declared > maxBytes) {
     // Drain/destroy so the client is not stuck sending a rejected body.
-    discardRequestBody(req);
+    discardRequestBody(req, res);
     writeUploadJson(
       res,
       413,
@@ -413,7 +436,7 @@ export async function handleFileUpload(parsedUrl, req, res) {
   try {
     sessionAccess = await authorizeSandboxSession(sessionId, req, { traceId });
   } catch (err) {
-    discardRequestBody(req);
+    discardRequestBody(req, res);
     const status = Number(err?.status) || 500;
     writeUploadJson(
       res,
