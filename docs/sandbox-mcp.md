@@ -19,6 +19,7 @@ flowchart LR
 | MCP Tool | 作用 |
 |---|---|
 | `sandbox_python_execute` | 在隔离 Python 环境执行代码 |
+| `sandbox_shell_execute` | 在同一隔离环境执行 bash 命令（网络禁用，与 `sandbox_python_execute` 同一工作区与限制） |
 | `sandbox_file_write` | 写入 UTF-8 文件（覆盖或追加） |
 | `sandbox_file_read` | 读取文本文件（可传 offset/limit） |
 | `sandbox_file_list` | 有深度上限的文件列表 |

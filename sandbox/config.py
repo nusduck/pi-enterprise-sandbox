@@ -511,6 +511,7 @@ class Settings(BaseSettings):
     mcp_internal_token: str = ""
     mcp_max_timeout_seconds: int = 300
     mcp_max_code_length: int = 200_000
+    mcp_max_command_length: int = 20_000
     mcp_max_file_size_bytes: int = 10 * 1024 * 1024
     mcp_artifact_ttl_seconds: int = 24 * 3600
 
@@ -722,6 +723,7 @@ class Settings(BaseSettings):
     @field_validator(
         "mcp_max_timeout_seconds",
         "mcp_max_code_length",
+        "mcp_max_command_length",
         "mcp_max_file_size_bytes",
         "mcp_artifact_ttl_seconds",
         mode="before",
@@ -731,6 +733,7 @@ class Settings(BaseSettings):
         maxima = {
             "mcp_max_timeout_seconds": 3_600,
             "mcp_max_code_length": 2_000_000,
+            "mcp_max_command_length": 200_000,
             "mcp_max_file_size_bytes": 100 * 1024 * 1024,
             "mcp_artifact_ttl_seconds": 30 * 24 * 3600,
         }

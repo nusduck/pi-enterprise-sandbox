@@ -44,6 +44,9 @@ class McpSettings(BaseSettings):
     max_code_length: int = Field(
         default=200_000, validation_alias="SANDBOX_MCP_MAX_CODE_LENGTH"
     )
+    max_command_length: int = Field(
+        default=20_000, validation_alias="SANDBOX_MCP_MAX_COMMAND_LENGTH"
+    )
     max_file_size_bytes: int = Field(
         default=10 * 1024 * 1024,
         validation_alias="SANDBOX_MCP_MAX_FILE_SIZE_BYTES",
@@ -65,6 +68,7 @@ class McpSettings(BaseSettings):
         "artifact_ttl_seconds",
         "max_timeout_seconds",
         "max_code_length",
+        "max_command_length",
         "max_file_size_bytes",
     )
     @classmethod

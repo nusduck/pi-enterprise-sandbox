@@ -31,6 +31,11 @@ class PythonRequest(ContextRequest):
     timeout_seconds: int = Field(default=120, ge=1)
 
 
+class ShellRequest(ContextRequest):
+    command: str = Field(min_length=1)
+    timeout_seconds: int = Field(default=120, ge=1)
+
+
 class FileWriteRequest(ContextRequest):
     path: str = Field(min_length=1, max_length=4096)
     content: str
@@ -110,6 +115,19 @@ async def execute_python(request: Request) -> JSONResponse:
             request, PythonRequest, max_bytes=_json_size_limit(settings.mcp_max_code_length)
         )
         return JSONResponse(mcp_sandbox_runtime.execute_python(**payload.model_dump()))
+    except Exception as exc:
+        raise _translate_error(exc) from exc
+
+
+@router.post("/shell/execute", dependencies=[Depends(require_mcp_internal_auth)])
+async def execute_shell(request: Request) -> JSONResponse:
+    try:
+        payload = await _parse_payload(
+            request,
+            ShellRequest,
+            max_bytes=_json_size_limit(settings.mcp_max_command_length),
+        )
+        return JSONResponse(mcp_sandbox_runtime.execute_shell(**payload.model_dump()))
     except Exception as exc:
         raise _translate_error(exc) from exc
 

@@ -112,3 +112,49 @@ def test_mcp_bridge_snapshots_artifact_without_exposing_workspace(monkeypatch):
     )
     assert content.status_code == 200
     assert content.content == b"a,b\n1,2\n"
+
+
+def test_mcp_bridge_runs_shell_command_in_workspace(monkeypatch):
+    # Direct-backend unit tests share the host UID: disable RLIMIT_NPROC so
+    # bash can fork external commands (production tightens it inside bwrap).
+    monkeypatch.setattr(settings, "max_process_count", 0)
+    client = _client(monkeypatch)
+    headers = {"Authorization": "Bearer bridge-test-token"}
+    base = _payload()
+
+    client.post(
+        "/internal/mcp/v1/files/write",
+        json=base | {"path": "notes.txt", "content": "alpha\nbeta\n", "mode": "overwrite"},
+        headers=headers,
+    )
+    executed = client.post(
+        "/internal/mcp/v1/shell/execute",
+        json=base | {"command": "wc -l < notes.txt", "timeout_seconds": 10},
+        headers=headers,
+    )
+    assert executed.status_code == 200
+    body = executed.json()
+    assert body["status"] == "SUCCESS"
+    assert body["exit_code"] == 0
+    # wc output is zero/space-padded differently across platforms; strip it.
+    assert body["stdout_preview"].strip() == "2"
+
+
+def test_mcp_bridge_shell_rejects_extra_fields_and_bad_timeout(monkeypatch):
+    client = _client(monkeypatch)
+    headers = {"Authorization": "Bearer bridge-test-token"}
+    base = _payload()
+
+    extra = client.post(
+        "/internal/mcp/v1/shell/execute",
+        json=base | {"command": "echo hi", "unexpected": True},
+        headers=headers,
+    )
+    assert extra.status_code == 400
+
+    bad_timeout = client.post(
+        "/internal/mcp/v1/shell/execute",
+        json=base | {"command": "echo hi", "timeout_seconds": 0},
+        headers=headers,
+    )
+    assert bad_timeout.status_code == 400

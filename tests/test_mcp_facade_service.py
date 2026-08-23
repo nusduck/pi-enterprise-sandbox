@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 
 from sandbox.mcp.context_store import ContextStore
-from sandbox.mcp.service import McpFacadeService
+from sandbox.mcp.service import McpFacadeError, McpFacadeService
 from sandbox.mcp.settings import McpSettings
 
 
@@ -66,6 +66,12 @@ class _Bridge:
             return payload
         if path.endswith("python/execute"):
             return {"status": "SUCCESS", "stdout_preview": "ok\n", "exit_code": 0}
+        if path.endswith("shell/execute"):
+            return {
+                "status": "SUCCESS",
+                "stdout_preview": "shell-ok\n",
+                "exit_code": 0,
+            }
         if path.endswith("artifacts/submit"):
             return {"artifact_id": payload["artifact_id"], "size": 3, "sha256": "abc"}
         return {"path": payload.get("path", "."), "content": "", "size": 0}
@@ -109,4 +115,45 @@ async def test_context_is_provisioned_once_and_artifact_url_is_expiring():
         "sha256": "abc",
         "context_id": "turn-42",
     }
+    await service.close()
+
+
+@pytest.mark.asyncio
+async def test_execute_shell_validates_limits_and_routes_to_bridge():
+    config = McpSettings(
+        token="outer-token",
+        internal_token="inner-token",
+        download_secret="download-secret",
+        redis_url="redis://unit-test",
+    )
+    redis = _Redis()
+    bridge = _Bridge()
+    service = McpFacadeService(
+        config,
+        context_store=ContextStore(config, redis_client=redis),
+        bridge=bridge,
+    )
+    await service.start()
+
+    with pytest.raises(McpFacadeError, match="command exceeds MCP size limit"):
+        await service.execute_shell(context_id="turn-42", command="x" * (config.max_command_length + 1))
+    with pytest.raises(McpFacadeError, match="timeout_seconds exceeds MCP limit"):
+        await service.execute_shell(context_id="turn-42", command="echo hi", timeout_seconds=0)
+    with pytest.raises(McpFacadeError, match="timeout_seconds exceeds MCP limit"):
+        await service.execute_shell(
+            context_id="turn-42", command="echo hi", timeout_seconds=config.max_timeout_seconds + 1
+        )
+
+    result = await service.execute_shell(context_id="turn-42", command="echo shell-ok")
+    assert result["context_id"] == "turn-42"
+    assert result["stdout_preview"] == "shell-ok\n"
+    shell_calls = [payload for path, payload in bridge.calls if path.endswith("shell/execute")]
+    assert shell_calls == [
+        {
+            "sandbox_session_id": bridge.calls[0][1]["sandbox_session_id"],
+            "workspace_id": bridge.calls[0][1]["workspace_id"],
+            "command": "echo shell-ok",
+            "timeout_seconds": 120,
+        }
+    ]
     await service.close()

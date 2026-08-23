@@ -98,6 +98,20 @@ class McpFacadeService:
         )
         return {"context_id": record.context_id, **data}
 
+    async def execute_shell(
+        self, *, context_id: str | None, command: str, timeout_seconds: int = 120
+    ) -> dict[str, Any]:
+        if len(command) > self.settings.max_command_length:
+            raise McpFacadeError("command exceeds MCP size limit")
+        if not 1 <= timeout_seconds <= self.settings.max_timeout_seconds:
+            raise McpFacadeError("timeout_seconds exceeds MCP limit")
+        record, data = await self._call(
+            "/internal/mcp/v1/shell/execute",
+            context_id,
+            {"command": command, "timeout_seconds": timeout_seconds},
+        )
+        return {"context_id": record.context_id, **data}
+
     async def file_write(
         self,
         *,
