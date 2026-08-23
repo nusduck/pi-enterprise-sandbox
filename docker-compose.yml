@@ -219,6 +219,8 @@ services:
       SANDBOX_API_TOKEN: ${SANDBOX_API_TOKEN:-dev_only_sandbox_api_token_not_for_prod_32b}
       AGENT_BASE_URL: http://agent:4100
       AGENT_INTERNAL_TOKEN: ${AGENT_INTERNAL_TOKEN:-}
+      # Dev convenience: an empty token would otherwise close /internal/*.
+      AGENT_ALLOW_UNAUTHENTICATED_INTERNAL: ${AGENT_ALLOW_UNAUTHENTICATED_INTERNAL:-true}
       AUTH_ENABLED: ${AUTH_ENABLED:-}
       # Stable external subjects for explicit auth-disabled local development.
       # Agent provisions owner-scoped internal ULIDs from these values.
@@ -278,6 +280,8 @@ services:
       SANDBOX_INTERNAL_HMAC_KEYRING: ${SANDBOX_INTERNAL_HMAC_KEYRING:?Set SANDBOX_INTERNAL_HMAC_KEYRING (see .env.example) — the Agent talks to Sandbox only over the signed internal plane}
       SANDBOX_INTERNAL_HMAC_ACTIVE_KID: ${SANDBOX_INTERNAL_HMAC_ACTIVE_KID:?Set SANDBOX_INTERNAL_HMAC_ACTIVE_KID (see .env.example)}
       AGENT_INTERNAL_TOKEN: ${AGENT_INTERNAL_TOKEN:-}
+      # Dev convenience: an empty token would otherwise close /internal/*.
+      AGENT_ALLOW_UNAUTHENTICATED_INTERNAL: ${AGENT_ALLOW_UNAUTHENTICATED_INTERNAL:-true}
       A2A_PUBLIC_BASE_URL: ${A2A_PUBLIC_BASE_URL:-http://127.0.0.1:${AGENT_PORT:-4100}}
       A2A_ARTIFACT_DOWNLOAD_SECRET: ${A2A_ARTIFACT_DOWNLOAD_SECRET:-dev_only_a2a_artifact_download_secret_32b}
       A2A_ALLOW_DEV_HOST_FALLBACK: ${A2A_ALLOW_DEV_HOST_FALLBACK:-true}
@@ -374,6 +378,8 @@ services:
       SANDBOX_INTERNAL_HMAC_KEYRING: ${SANDBOX_INTERNAL_HMAC_KEYRING:?Set SANDBOX_INTERNAL_HMAC_KEYRING (see .env.example) — the Agent talks to Sandbox only over the signed internal plane}
       SANDBOX_INTERNAL_HMAC_ACTIVE_KID: ${SANDBOX_INTERNAL_HMAC_ACTIVE_KID:?Set SANDBOX_INTERNAL_HMAC_ACTIVE_KID (see .env.example)}
       AGENT_INTERNAL_TOKEN: ${AGENT_INTERNAL_TOKEN:-}
+      # Dev convenience: an empty token would otherwise close /internal/*.
+      AGENT_ALLOW_UNAUTHENTICATED_INTERNAL: ${AGENT_ALLOW_UNAUTHENTICATED_INTERNAL:-true}
       AGENT_DATABASE_URL: ${AGENT_DATABASE_URL:-mysql://sandbox:sandbox_dev_only@mysql:3306/sandbox}
       AGENT_MIGRATE_ON_START: "false"
       REDIS_URL: ${REDIS_URL:-redis://:redis_dev_only@redis:6379/0}

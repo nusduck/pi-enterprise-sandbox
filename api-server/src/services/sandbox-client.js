@@ -141,7 +141,11 @@ export function createSandboxClient({
     const {
       headers: extraHeaders,
       signal: externalSignal,
-      timeoutMs = null,
+      // A per-call value (long executions pass their own); otherwise the
+      // configured default. `null` used to mean "wait forever", and every
+      // caller took that default — a Sandbox that stopped answering held BFF
+      // requests open until the client gave up.
+      timeoutMs = config.SANDBOX_REQUEST_TIMEOUT_MS,
       ...rest
     } = opts;
     const controller = new AbortController();

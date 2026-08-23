@@ -210,6 +210,14 @@ export function effectiveConfig(cfg = config) {
   };
 }
 
+/** Bounded positive-integer millisecond setting with a documented default. */
+export function resolveTimeoutMs(env, key, fallback) {
+  const raw = String(env[key] || '').trim();
+  if (!raw) return fallback;
+  const value = Number(raw);
+  return Number.isSafeInteger(value) && value > 0 ? value : fallback;
+}
+
 export const config = {
   PORT: parseInt(process.env.PORT, 10) || 4000,
   SANDBOX_BASE_URL: process.env.SANDBOX_BASE_URL || 'http://sandbox:8081',
@@ -223,6 +231,25 @@ export const config = {
    * Shared secret for BFF → Agent. Empty allows open dev mode.
    */
   AGENT_INTERNAL_TOKEN: process.env.AGENT_INTERNAL_TOKEN || '',
+  /**
+   * Deadline for a single BFF → Agent / Sandbox request.
+   *
+   * A downstream that accepts the connection and then stops answering must
+   * not pin a browser request, its socket and the Node handles behind it for
+   * as long as it feels like: without a bound, one stuck dependency drains
+   * the BFF's sockets and takes down routes that never touched it. Long-lived
+   * SSE streams are excluded — they are bounded by the client connection.
+   */
+  AGENT_REQUEST_TIMEOUT_MS: resolveTimeoutMs(
+    process.env,
+    'AGENT_REQUEST_TIMEOUT_MS',
+    15_000,
+  ),
+  SANDBOX_REQUEST_TIMEOUT_MS: resolveTimeoutMs(
+    process.env,
+    'SANDBOX_REQUEST_TIMEOUT_MS',
+    15_000,
+  ),
   NODE_ENV: process.env.NODE_ENV || 'development',
   DEPLOYMENT_ENV: resolveDeploymentEnv(),
   /**

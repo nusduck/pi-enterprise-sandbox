@@ -978,7 +978,16 @@ export class PiRunExecutor {
       // A run killed by its own wall-clock budget is a failure, not a success:
       // whatever the model had produced when the session was aborted is a
       // partial turn, and recording it as SUCCEEDED hides a hung provider.
-      if (deadlineExceeded) {
+      //
+      // A durable park outranks it, exactly as it does for promptError below.
+      // Parking commits an approval/interaction row as PENDING and aborts the
+      // session, so the deadline timer can fire inside that same window. A
+      // terminal Run with a PENDING approval against it is unresolvable: the
+      // decision endpoints refuse to act on a finished Run, so the approval
+      // can never be granted, denied or cleaned up. The deadline guards a hung
+      // provider — it is not a clock on the human, who gets a fresh one when
+      // their decision resumes the Run.
+      if (deadlineExceeded && !pendingApproval && !pendingInteraction) {
         return {
           outcome: RUN_STATUS.FAILED,
           statusReason: `run deadline exceeded after ${runDeadlineMs}ms`,

@@ -11,13 +11,36 @@ from typing import Any
 from sandbox.config import settings
 
 
+class AuthSecretMissingError(RuntimeError):
+    """Auth is on but the deployment configured no signing secret."""
+
+
+# Signing material for a deployment that has auth switched **off**. Tokens are
+# not a trust boundary there — nothing checks them — but they are still minted
+# and verified by tests and local tooling, so the value has to exist. It is
+# random per process rather than a constant: a hardcoded fallback is a public
+# signing key, and one left reachable with auth on lets anyone mint a token for
+# any user and organization.
+_EPHEMERAL_SECRET = secrets.token_hex(32)
+
+
 def _secret() -> str:
-    # Prefer dedicated JWT secret; fall back to API token; else dev default
-    return (
-        getattr(settings, "jwt_secret", None)
-        or settings.api_token
-        or "dev-only-change-me"
-    )
+    configured = (getattr(settings, "jwt_secret", None) or "").strip() or (
+        settings.api_token or ""
+    ).strip()
+    if configured:
+        return configured
+    if getattr(settings, "auth_enabled", False):
+        # Fail closed. Production is already refused by
+        # validate_production_settings; this covers every other environment,
+        # where auth_enabled=true with no secret used to silently sign with a
+        # constant published in this file.
+        raise AuthSecretMissingError(
+            "SANDBOX_JWT_SECRET (or SANDBOX_API_TOKEN) is required when "
+            "SANDBOX_AUTH_ENABLED=true; refusing to sign or verify tokens "
+            "with a default secret"
+        )
+    return _EPHEMERAL_SECRET
 
 
 def hash_password(password: str, salt: str | None = None) -> str:

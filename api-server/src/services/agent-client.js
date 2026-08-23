@@ -11,6 +11,42 @@ import {
   traceCarrierHeaders,
 } from '../application/trace-context.js';
 
+/**
+ * One BFF → Agent request, bounded by AGENT_REQUEST_TIMEOUT_MS.
+ *
+ * `fetch` has no default timeout: an upstream that accepts the connection and
+ * never answers holds the caller — and the browser request behind it — open
+ * indefinitely. Every non-streaming call goes through here so a stuck Agent
+ * degrades into 504s instead of exhausted sockets. The SSE relay is the
+ * deliberate exception: it is long-lived by design and is bounded by the
+ * client connection's own signal.
+ *
+ * @param {string | URL} url
+ * @param {RequestInit} [init]
+ * @returns {Promise<Response>}
+ */
+async function agentFetch(url, init = {}) {
+  const timeoutMs = config.AGENT_REQUEST_TIMEOUT_MS;
+  const timeout = AbortSignal.timeout(timeoutMs);
+  const signal = init.signal
+    ? AbortSignal.any([init.signal, timeout])
+    : timeout;
+  try {
+    return await fetch(url, { ...init, signal });
+  } catch (err) {
+    if (timeout.aborted && !init.signal?.aborted) {
+      const error = new Error(
+        `Agent request timed out after ${timeoutMs}ms: ${new URL(String(url)).pathname}`,
+      );
+      error.status = 504;
+      error.code = 'AGENT_TIMEOUT';
+      error.cause = err;
+      throw error;
+    }
+    throw err;
+  }
+}
+
 function internalHeaders(extra = {}) {
   const h = {
     'Content-Type': 'application/json',
@@ -111,7 +147,7 @@ export async function createAgentRun(
 ) {
   const headers = requestHeaders({ auth, traceId, idempotencyKey });
 
-  const resp = await fetch(`${config.AGENT_BASE_URL}/internal/agent-runs`, {
+  const resp = await agentFetch(`${config.AGENT_BASE_URL}/internal/agent-runs`, {
     method: 'POST',
     headers,
     body: JSON.stringify(body),
@@ -142,7 +178,7 @@ export async function getAgentExtensionDiagnostics(
 ) {
   const url = new URL(`${config.AGENT_BASE_URL}/internal/extensions/diagnostics`);
   url.searchParams.set('profile_id', profileId);
-  const resp = await fetch(url, { headers: requestHeaders({ auth, traceId }) });
+  const resp = await agentFetch(url, { headers: requestHeaders({ auth, traceId }) });
   if (!resp.ok) {
     const text = await resp.text().catch(() => resp.statusText);
     const error = new Error(`Agent diagnostics failed (${resp.status}): ${text}`);
@@ -156,7 +192,7 @@ async function requestAgentA2aAdmin(
   path,
   { method = 'GET', body = null, auth = null, traceId = null } = {},
 ) {
-  const resp = await fetch(
+  const resp = await agentFetch(
     `${config.AGENT_BASE_URL}/internal/a2a/${path.replace(/^\/+/, '')}`,
     {
       method,
@@ -225,7 +261,7 @@ async function requestAgentConversation(
   path,
   { method = 'GET', body = null, auth = null, traceId = null } = {},
 ) {
-  const resp = await fetch(
+  const resp = await agentFetch(
     `${config.AGENT_BASE_URL}/internal/conversations${path}`,
     {
       method,
@@ -292,7 +328,7 @@ export async function ensureAgentSession(
   { auth = null, traceId = null } = {},
 ) {
   const body = conversationId ? { conversation_id: conversationId } : {};
-  const resp = await fetch(`${config.AGENT_BASE_URL}/internal/sessions/ensure`, {
+  const resp = await agentFetch(`${config.AGENT_BASE_URL}/internal/sessions/ensure`, {
     method: 'POST',
     headers: requestHeaders({ auth, traceId }),
     body: JSON.stringify(body),
@@ -319,7 +355,7 @@ export async function resolveAgentSandboxSession(
   sandboxSessionId,
   { auth = null, traceId = null } = {},
 ) {
-  const resp = await fetch(
+  const resp = await agentFetch(
     `${config.AGENT_BASE_URL}/internal/sessions/${encodeURIComponent(sandboxSessionId)}`,
     { headers: requestHeaders({ auth, traceId }) },
   );
@@ -352,7 +388,7 @@ export async function listAgentRuns(
   }
   if (query.status) url.searchParams.set('status', query.status);
   if (query.limit) url.searchParams.set('limit', String(query.limit));
-  const resp = await fetch(url, {
+  const resp = await agentFetch(url, {
     headers: requestHeaders({ auth, traceId }),
   });
   if (!resp.ok) {
@@ -368,7 +404,7 @@ async function requestAgentCron(
   path,
   { method = 'GET', body = null, auth = null, traceId = null } = {},
 ) {
-  const resp = await fetch(
+  const resp = await agentFetch(
     `${config.AGENT_BASE_URL}/internal/cron-jobs${path}`,
     {
       method,
@@ -444,7 +480,7 @@ export async function cancelAgentRun(
   runId,
   { auth = null, traceId = null, idempotencyKey = null } = {},
 ) {
-  const resp = await fetch(
+  const resp = await agentFetch(
     `${config.AGENT_BASE_URL}/internal/agent-runs/${encodeURIComponent(runId)}/cancel`,
     {
       method: 'POST',
@@ -470,7 +506,7 @@ export async function steerAgentRun(
   body,
   { auth = null, traceId = null, idempotencyKey = null } = {},
 ) {
-  const resp = await fetch(
+  const resp = await agentFetch(
     `${config.AGENT_BASE_URL}/internal/agent-runs/${encodeURIComponent(runId)}/steer`,
     {
       method: 'POST',
@@ -497,7 +533,7 @@ export async function createConversationFollowUp(
   body,
   { auth = null, traceId = null, idempotencyKey = null } = {},
 ) {
-  const resp = await fetch(
+  const resp = await agentFetch(
     `${config.AGENT_BASE_URL}/internal/conversations/${encodeURIComponent(conversationId)}/follow-ups`,
     {
       method: 'POST',
@@ -527,7 +563,7 @@ export async function resumeAgentRunApproval(
   { auth = null, traceId = null } = {},
 ) {
   const headers = requestHeaders({ auth, traceId });
-  const resp = await fetch(
+  const resp = await agentFetch(
     `${config.AGENT_BASE_URL}/internal/agent-runs/${encodeURIComponent(runId)}/resume-approval`,
     {
       method: 'POST',
@@ -551,7 +587,7 @@ export async function respondAgentInteraction(
   { auth = null, traceId = null } = {},
 ) {
   const headers = requestHeaders({ auth, traceId });
-  const resp = await fetch(
+  const resp = await agentFetch(
     `${config.AGENT_BASE_URL}/internal/agent-runs/${encodeURIComponent(runId)}` +
       `/interactions/${encodeURIComponent(interactionId)}/respond`,
     {
@@ -580,7 +616,7 @@ export async function decideAgentApproval(
   { auth = null, traceId = null } = {},
 ) {
   const headers = requestHeaders({ auth, traceId });
-  const resp = await fetch(
+  const resp = await agentFetch(
     `${config.AGENT_BASE_URL}/internal/approvals/${encodeURIComponent(approvalId)}/decide`,
     {
       method: 'POST',
@@ -601,7 +637,7 @@ async function requestAgentApproval(
   path,
   { auth = null, traceId = null } = {},
 ) {
-  const resp = await fetch(
+  const resp = await agentFetch(
     `${config.AGENT_BASE_URL}/internal/approvals${path}`,
     { headers: requestHeaders({ auth, traceId }) },
   );
@@ -646,7 +682,7 @@ export async function getAgentApproval(
  * @param {string} runId
  */
 export async function getAgentRun(runId, { auth = null, traceId = null } = {}) {
-  const resp = await fetch(
+  const resp = await agentFetch(
     `${config.AGENT_BASE_URL}/internal/agent-runs/${encodeURIComponent(runId)}`,
     { headers: requestHeaders({ auth, traceId }) },
   );
@@ -671,7 +707,7 @@ export async function getAgentRunTrace(
   if (cursor != null && String(cursor).trim()) {
     url.searchParams.set('cursor', String(cursor).trim());
   }
-  const resp = await fetch(url, {
+  const resp = await agentFetch(url, {
     headers: requestHeaders({ auth, traceId }),
   });
   if (!resp.ok) {
@@ -697,7 +733,7 @@ export async function listAgentToolExecutions(
   runId,
   { auth = null, traceId = null } = {},
 ) {
-  const resp = await fetch(
+  const resp = await agentFetch(
     `${config.AGENT_BASE_URL}/internal/agent-runs/${encodeURIComponent(runId)}/tools`,
     { headers: requestHeaders({ auth, traceId }) },
   );
@@ -716,7 +752,7 @@ async function requestAgentProcess(
   path,
   { method = 'GET', body = null, auth = null, traceId = null } = {},
 ) {
-  const resp = await fetch(
+  const resp = await agentFetch(
     `${config.AGENT_BASE_URL}/internal/processes${path}`,
     {
       method,
@@ -828,7 +864,7 @@ export async function listAgentEvents(
       ? Number(query.limit)
       : 500;
   url.searchParams.set('limit', String(limit));
-  const resp = await fetch(url, { headers: requestHeaders({ auth, traceId }) });
+  const resp = await agentFetch(url, { headers: requestHeaders({ auth, traceId }) });
   if (!resp.ok) {
     const text = await resp.text().catch(() => resp.statusText);
     const err = new Error(`Agent list events failed (${resp.status}): ${text}`);

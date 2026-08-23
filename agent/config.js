@@ -200,6 +200,15 @@ export function validateProductionConfig(env = process.env) {
     env.A2A_ARTIFACT_DOWNLOAD_SECRET || '',
   ).trim();
 
+  if (
+    String(env.AGENT_ALLOW_UNAUTHENTICATED_INTERNAL || '').trim().toLowerCase() ===
+    'true'
+  ) {
+    errors.push(
+      'AGENT_ALLOW_UNAUTHENTICATED_INTERNAL must not be set in production',
+    );
+  }
+
   if (!internal) {
     errors.push('AGENT_INTERNAL_TOKEN must be non-empty in production');
   } else if (isWeakSecret(internal)) {
@@ -312,6 +321,7 @@ export function effectiveConfig(cfg = config) {
     SANDBOX_BASE_URL: cfg.SANDBOX_BASE_URL,
     SANDBOX_API_TOKEN: cfg.SANDBOX_API_TOKEN ? '***' : '<empty>',
     AGENT_INTERNAL_TOKEN: cfg.AGENT_INTERNAL_TOKEN ? '***' : '<empty>',
+    ALLOW_UNAUTHENTICATED_INTERNAL: cfg.ALLOW_UNAUTHENTICATED_INTERNAL,
     A2A_PUBLIC_BASE_URL: cfg.A2A_PUBLIC_BASE_URL || '<empty>',
     A2A_ARTIFACT_DOWNLOAD_SECRET: cfg.A2A_ARTIFACT_DOWNLOAD_SECRET
       ? '***'
@@ -441,6 +451,15 @@ export const config = {
   FAKE_LLM_ENABLED: isFakeLlmEnabled(),
   NODE_ENV: process.env.NODE_ENV || 'development',
   DEPLOYMENT_ENV: resolveDeploymentEnv(),
+  /**
+   * Explicit opt-in to run /internal/* with no token. Those routes trust the
+   * caller's X-Acting-* headers, so an empty token must close the plane rather
+   * than open it; local development sets this to keep the old behaviour.
+   */
+  ALLOW_UNAUTHENTICATED_INTERNAL:
+    String(process.env.AGENT_ALLOW_UNAUTHENTICATED_INTERNAL || '')
+      .trim()
+      .toLowerCase() === 'true',
   APPROVAL_MODE: resolveApprovalMode(),
   /** strict by default; balanced only activates with effective required bwrap. */
   POLICY_PROFILE: resolvePolicyProfile(),
