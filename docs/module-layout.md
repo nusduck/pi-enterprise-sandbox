@@ -97,7 +97,7 @@ sandbox/
   main.py                # FastAPI app entry (uvicorn sandbox.main:app)
   config.py, auth.py, paths.py, models.py, telemetry.py, trace.py
   artifact/              # Artifact domain: contracts, facade/runtime, infra, API
-  routers/               # HTTP routers (internal plane + compat adapters + health)
+  routers/               # HTTP routers (internal plane + files/datasets compat + health)
   services/              # runtime services (process, files, formal_*)
   isolation/             # bubblewrap / resource policy
   security/              # internal auth, network policy
@@ -115,8 +115,9 @@ sandbox/
 - Import as `from sandbox....` (package root on `PYTHONPATH` / installed editable).
 - Domain and persistence live under `sandbox/app/`; HTTP and process runtime stay at package-level `routers/` / `services/` (FastAPI conventional hybrid — not a second competing app tree).
 - Artifact is the explicit L1 domain exception: new Artifact code lives under
-  `sandbox/artifact/`; the former service/router/domain paths are compatibility
-  imports only.
+  `sandbox/artifact/`; `main.py` mounts `sandbox.artifact.api` directly. Former
+  service/domain paths that still exist are compatibility imports; the former
+  `sandbox.routers.{artifacts,internal_artifacts}` shims have been removed.
 - Do not create a parallel `sandbox/src/` that duplicates these modules.
 
 ---
