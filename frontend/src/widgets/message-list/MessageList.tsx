@@ -83,13 +83,16 @@ export function MessageList() {
     }
   }
 
+  // aria-live="off" is deliberate: role="log" carries an implicit polite live
+  // region, and streaming SSE tokens mutate existing text nodes, so leaving it
+  // live makes screen readers re-read the transcript on every delta. Run state
+  // is announced by FlashZone (role="status" + aria-live="assertive") instead.
   return (
     <div
       id="messages"
       className="msgs"
       role="log"
-      aria-live="polite"
-      aria-relevant="additions"
+      aria-live="off"
       ref={ref}
       onScroll={handleScroll}
     >
@@ -131,7 +134,9 @@ export function MessageList() {
             <span className="hint-sep">·</span>
             <kbd>Shift+Enter</kbd> newline
             <span className="hint-sep">·</span>
-            <kbd>Ctrl+L</kbd> new chat
+            <kbd>Ctrl/Cmd+U</kbd> attach
+            <span className="hint-sep">·</span>
+            <kbd>Ctrl/Cmd+L</kbd> new chat
           </p>
         </div>
       ) : (

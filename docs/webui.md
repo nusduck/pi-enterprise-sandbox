@@ -197,6 +197,12 @@ npm run build --prefix frontend     # 生产构建（CI 同款）
 
 | 快捷键 | 操作 |
 |--------|------|
-| `Enter` | 发送消息 |
+| `Enter` | 发送消息（输入法组合期间不触发，回车先确认候选词） |
 | `Shift+Enter` | 换行 |
-| `Ctrl+U` | 打开文件选择器上传 |
+| `Ctrl+U` / `Cmd+U` | 打开文件选择器上传（Run 运行中与按钮一致被禁用） |
+| `Ctrl+L` / `Cmd+L` | 新建会话 |
+
+消息日志区域显式声明 `aria-live="off"`：`role="log"` 本身隐式携带 polite live
+region，而流式 token 是在已有文本节点上追加（落在默认 `aria-relevant` 的 `text`
+范畴内），不显式关掉就会让读屏逐 delta 重读整段 transcript。Run 状态变化由
+FlashZone（`role="status"` + `aria-live="assertive"`）统一播报。
