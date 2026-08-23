@@ -237,6 +237,31 @@ Compose 拓扑：`backend_internal`（`internal: true`）供 mysql/redis/sandbox
 
 **生产:** `docker-compose.prod.yml` 内置 MySQL 8、healthcheck、持久 volume，以及 Sandbox/Agent 对 MySQL 的健康依赖。启动前必须设置强 `MYSQL_PASSWORD` 与 `MYSQL_ROOT_PASSWORD`；production overlay **不**回退 SQLite 或 PostgreSQL。Sandbox 生产配置校验拒绝非 MySQL DSN。
 
+### Bundled Skill runtime dependencies
+
+The Sandbox image packages the runtime dependencies used by the bundled office
+Skills; they are not installed by a user command at execution time:
+
+- LibreOffice Writer/Calc/Impress for DOCX/PPTX conversion, rendering, and XLSX formula recalculation.
+- Poppler, `qpdf`, Tesseract, `reportlab`, `pdf2image`, and `pytesseract` for PDF workflows.
+- Chromium plus CJK fonts for Mermaid rendering in `baoyu-markdown-to-html`.
+  The child environment points `BAOYU_CHROME_PATH` at an image-provided
+  launcher that invokes Chromium's real binary directly; this avoids relying
+  on Debian's `/etc/chromium.d` launcher files, which are outside the minimal
+  Bubblewrap `/etc` view. Bubblewrap remains the outer no-network isolation
+  boundary.
+- Bun and the locked BaoYu script dependencies. The image exposes
+  `/usr/local/bin/baoyu-format-markdown` and
+  `/usr/local/bin/baoyu-markdown-to-html`; these wrappers do not invoke
+  `npx`, `npm install`, or another network download at runtime.
+- `docx` and `pptxgenjs` are installed in the image's global Node module tree;
+  the child execution environment exposes that tree through `NODE_PATH`.
+
+The production overlay keeps execution networking disabled. Therefore image
+builds must be performed in CI or an internal mirror with access to the
+configured Debian, PyPI, and npm registries; deployed containers do not need
+those registries for the bundled Skills themselves.
+
 **Compose migration order:** `agent-migrate` is the only migration owner. It
 waits for MySQL health, runs `migrate:latest` once, and exits. `sandbox`,
 `agent`, and `agent-worker` all require

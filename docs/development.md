@@ -188,6 +188,26 @@ Worker 使用 owner-scoped Sandbox client 下载内容，在 Agent 用户 Skill 
 `skill_create` 是“和 Agent 交互生成”的安装入口：Agent 收集并确认需求后，在一次高风险
 工具调用中提交 `name`、`description`、`instructions` 与可选文件；用户批准后才落盘。
 
+#### Bundled Skill dependencies
+
+The Sandbox Docker image owns the runtime for bundled office Skills. Keep
+dependency installation in `sandbox/Dockerfile` and
+`sandbox/requirements.txt`; do not add first-run `npx`, `npm install`, or
+`pip install` steps to a Skill that must work under production's disabled
+execution network. BaoYu's two TypeScript converters use the image-provided
+`/usr/local/bin/baoyu-format-markdown` and
+`/usr/local/bin/baoyu-markdown-to-html` wrappers, whose source and lockfiles are
+copied and installed at image build time.
+Mermaid rendering uses the image-provided `baoyu-chromium` launcher through
+`BAOYU_CHROME_PATH`; it calls the Chromium binary directly because the
+production Bubblewrap child intentionally does not expose Debian's full
+`/etc/chromium.d` launcher configuration.
+
+When changing one of these Skills, rebuild `sandbox` before testing it. A
+normal execution still sees the read-only `/home/sandbox/skill` bind mount for
+instructions and source inspection, while the wrapper runs the corresponding
+build-time copy under `/usr/local/lib/pi-skill-runtime`.
+
 所有变更工具（install/create/edit/uninstall）默认 high risk。ZIP 解压拒绝 traversal、链接、
 特殊文件、重复路径、加密条目和 zip bomb；通用 `write` / `edit` / `bash` 不能写 Skill 根。
 

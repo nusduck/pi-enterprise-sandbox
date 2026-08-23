@@ -29,7 +29,9 @@ Concrete `AskUserQuestion` references below are examples — substitute the loca
 
 ## Script Directory
 
-Scripts in `scripts/` subdirectory. `{baseDir}` = this SKILL.md's directory path. Resolve `${BUN_X}` runtime: if `bun` installed → `bun`; if `npx` available → `npx -y bun`; else suggest installing bun. Replace `{baseDir}` and `${BUN_X}` with actual values.
+The Sandbox image provides `/usr/local/bin/baoyu-format-markdown` with the locked
+runtime dependencies already bundled. Use that wrapper instead of `npx` or a
+first-run install; it works when execution networking is disabled.
 
 | Script | Purpose |
 |--------|---------|
@@ -276,7 +278,7 @@ fi
 Run the formatting script on the output file:
 
 ```bash
-${BUN_X} {baseDir}/scripts/main.ts {output-file-path} [options]
+baoyu-format-markdown {output-file-path} [options]
 ```
 
 **Script Options:**
@@ -294,13 +296,13 @@ ${BUN_X} {baseDir}/scripts/main.ts {output-file-path} [options]
 
 ```bash
 # Default: spacing + emphasis enabled, quotes disabled
-${BUN_X} {baseDir}/scripts/main.ts article.md
+baoyu-format-markdown article.md
 
 # Enable all features including quote replacement
-${BUN_X} {baseDir}/scripts/main.ts article.md --quotes
+baoyu-format-markdown article.md --quotes
 
 # Only fix emphasis issues, skip spacing
-${BUN_X} {baseDir}/scripts/main.ts article.md --no-spacing
+baoyu-format-markdown article.md --no-spacing
 ```
 
 **Script performs (based on options):**

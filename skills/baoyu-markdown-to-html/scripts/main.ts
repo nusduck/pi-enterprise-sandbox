@@ -203,7 +203,7 @@ function printUsage(exitCode = 0): never {
   console.log(`Convert Markdown to styled HTML
 
 Usage:
-  npx -y bun main.ts <markdown_file> [options]
+  baoyu-markdown-to-html <markdown_file> [options]
 
 Options:
   --title <title>         Override title
@@ -242,10 +242,10 @@ Output JSON format:
 }
 
 Example:
-  npx -y bun main.ts article.md
-  npx -y bun main.ts article.md --theme grace
-  npx -y bun main.ts article.md --theme modern --color red
-  npx -y bun main.ts article.md --cite
+  baoyu-markdown-to-html article.md
+  baoyu-markdown-to-html article.md --theme grace
+  baoyu-markdown-to-html article.md --theme modern --color red
+  baoyu-markdown-to-html article.md --cite
 `);
   process.exit(exitCode);
 }

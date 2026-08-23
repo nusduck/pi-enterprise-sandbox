@@ -1,5 +1,6 @@
 {
   "dependencies": {
+    "autocorrect-node": "2.14.0",
     "remark-cjk-friendly": "^1.1.0",
     "remark-frontmatter": "^5.0.0",
     "remark-gfm": "^4.0.1",

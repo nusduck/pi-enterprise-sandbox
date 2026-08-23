@@ -141,7 +141,7 @@ function parseArgs(args: string[]): { filePath: string; options: FormatOptions }
     } else if (arg === "--no-emphasis") {
       options.emphasis = false;
     } else if (arg === "--help" || arg === "-h") {
-      console.log(`Usage: npx -y bun scripts/main.ts <file.md> [options]
+      console.log(`Usage: baoyu-format-markdown <file.md> [options]
 
 Options:
   -q, --quotes       Replace ASCII quotes with fullwidth quotes (default: false)
@@ -164,7 +164,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   const { filePath, options } = parseArgs(process.argv.slice(2));
 
   if (!filePath) {
-    console.error("Usage: npx -y bun scripts/main.ts <file.md> [options]");
+    console.error("Usage: baoyu-format-markdown <file.md> [options]");
     console.error("Use --help for more information.");
     process.exit(1);
   }

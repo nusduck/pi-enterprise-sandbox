@@ -19,6 +19,10 @@ mammoth
 openpyxl
 PyMuPDF
 pdfplumber
+pypdfium2
+pytesseract
+pdf2image
+reportlab
 python-docx
 markitdown
 python-pptx
