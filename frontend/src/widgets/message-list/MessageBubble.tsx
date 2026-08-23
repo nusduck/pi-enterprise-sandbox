@@ -1,4 +1,4 @@
-import { useState, isValidElement, type ReactNode } from 'react';
+import { memo, useState, isValidElement, type ReactNode } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeSanitize from 'rehype-sanitize';
@@ -13,11 +13,10 @@ import {
   splitAttachmentDisplay,
 } from '../../shared/state';
 import { safeApiUrl } from '../../shared/security/url';
-import { useChat } from '../../features/chat/ChatContext';
 import {
   InlineRuntimeSteps,
-  runHasEntitySteps,
 } from '../runtime-steps/InlineRuntimeSteps';
+import { messageFingerprint, messagePlainText } from './messageActions';
 import {
   IconCopy,
   IconCheck,
@@ -26,6 +25,7 @@ import {
   IconChevronDown,
   IconChevronRight,
   IconAlertCircle,
+  IconRefresh,
 } from '../../shared/ui/Icons';
 
 function SafeDownloadLink({
@@ -268,25 +268,33 @@ function ThinkingBlock({
   );
 }
 
-export function MessageBubble({
+function MessageBubbleBase({
   msg,
   idx,
   showRuntimeSteps = false,
+  useEntitySteps = false,
+  canRegenerate = false,
+  regenerateSource = null,
+  onRegenerate,
 }: {
   msg: ChatMessage;
   idx: number;
   showRuntimeSteps?: boolean;
+  /** Precomputed by MessageList — keeps this component off the chat context so React.memo holds. */
+  useEntitySteps?: boolean;
+  canRegenerate?: boolean;
+  regenerateSource?: string | null;
+  /** Stable callback from MessageList; identity must not change per render. */
+  onRegenerate?: (text: string) => void;
 }) {
-  const { entityStore } = useChat();
+  const [copied, setCopied] = useState(false);
   const role = msg.role || 'assistant';
   const isUser = role === 'user';
   const interrupted = isInterruptedMessage(msg);
   const parts = msg.content || [];
   const runId = msg._runId || null;
-  const useEntitySteps =
-    Boolean(showRuntimeSteps) &&
-    !isUser &&
-    runHasEntitySteps(entityStore, runId);
+  const useEntityStepsResolved =
+    Boolean(showRuntimeSteps) && useEntitySteps && !isUser && Boolean(runId);
 
   let hasContent = false;
   const body: ReactNode[] = [];
@@ -305,7 +313,7 @@ export function MessageBubble({
   }
 
   // 2. Inline Runtime Steps / Tool executions (Chronological before final output)
-  if (useEntitySteps && runId) {
+  if (useEntityStepsResolved && runId) {
     body.push(<InlineRuntimeSteps key="runtime-steps" runId={runId} />);
     hasContent = true;
   }
@@ -357,6 +365,22 @@ export function MessageBubble({
     }
   }
 
+  async function handleCopy() {
+    try {
+      if (!navigator.clipboard?.writeText) return;
+      await navigator.clipboard.writeText(messagePlainText(msg));
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      setCopied(false);
+    }
+  }
+
+  function handleRegenerate() {
+    if (!canRegenerate || !regenerateSource) return;
+    onRegenerate?.(regenerateSource);
+  }
+
   return (
     <div
       className={`mw ${role}`}
@@ -381,8 +405,56 @@ export function MessageBubble({
             </div>
           ) : null}
         </div>
+        {!isUser && (msg.content.length > 0 || canRegenerate) ? (
+          <div className="msg-actions" aria-label="Message actions">
+            {msg.content.length > 0 ? (
+              <button
+                type="button"
+                className="msg-action-btn"
+                onClick={() => void handleCopy()}
+                title="Copy message text"
+                aria-label="Copy message text"
+              >
+                {copied ? <IconCheck size={13} /> : <IconCopy size={13} />}
+                <span>{copied ? 'Copied' : 'Copy'}</span>
+              </button>
+            ) : null}
+            {canRegenerate && regenerateSource ? (
+              <button
+                type="button"
+                className="msg-action-btn"
+                onClick={handleRegenerate}
+                title="Re-send the previous message and generate a new answer"
+                aria-label="Regenerate answer"
+              >
+                <IconRefresh size={13} />
+                <span>Regenerate</span>
+              </button>
+            ) : null}
+          </div>
+        ) : null}
         <div className="time">{formatTime(msg.createdAt)}</div>
       </div>
     </div>
   );
 }
+
+/**
+ * Memoized: during streaming every SSE tick rebuilds the projected transcript
+ * with fresh objects, so identity comparison never holds. The fingerprint
+ * skips re-renders when a bubble's rendered content is unchanged — the
+ * streaming bubble still updates (its text/thinking grows), completed ones
+ * stop re-parsing markdown.
+ */
+export const MessageBubble = memo(
+  MessageBubbleBase,
+  (prev, next) =>
+    prev.idx === next.idx &&
+    prev.showRuntimeSteps === next.showRuntimeSteps &&
+    prev.useEntitySteps === next.useEntitySteps &&
+    prev.canRegenerate === next.canRegenerate &&
+    prev.regenerateSource === next.regenerateSource &&
+    prev.onRegenerate === next.onRegenerate &&
+    (prev.msg === next.msg ||
+      messageFingerprint(prev.msg) === messageFingerprint(next.msg)),
+);

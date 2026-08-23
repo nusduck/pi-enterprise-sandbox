@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **消息气泡操作与滚动体验（前端）**: 助手气泡 hover 后出现 Copy（复制全文纯文本）与 Regenerate（仅最后一条助手气泡、且无活跃 Run 时显示，取前一条用户回合文本重发为新 Run——语义是追加一轮而非原地改写）；距底部超过 120px 时右下角出现「回到最新」浮标（sticky 定位，smooth 滚动）。流式渲染性能：`MessageBubble` 改为 `React.memo` + 内容指纹比较（投影层每个 SSE tick 都重建气泡对象，身份比较永远失效；气泡内不再订阅 chat context，否则 memo 被穿透），流式中的气泡照常更新，已完成气泡不再随每个 token 重新解析 markdown。
+
 - **子 Run 不再注册 `ask_user`**: 子 Run 的对话被刻意排除在会话列表外，任务提示按契约自包含，也没有任何路径把子 Run 的提问送到发起父 Run 的人面前——注册这个工具只会让它停在 WAITING_INPUT 等一个没人看得见的问题。现在直接不注册，模型自行决定或失败，而不是挂死。extension 本身仍然装载（registry 对 AgentVersion 的 extension 列表是精确校验）。
 - **停泊 Run 的取消回收对齐**: `run-recovery-service` 处理 WAITING_APPROVAL 的 cancel intent 已久，但 WAITING_INPUT 分支从不检查它——interaction 还是 PENDING 就直接跳过。带 cancel intent 的停泊 Run 因此可能永远卡住。两条分支现在共用一条路径（`run-recovery-parked-cancel.js`），WAITING_INPUT 的就地了结逻辑也从 `CancelRunService` 抽到 `parked-interaction-cancel.js`，与既有的 `parked-approval-cancel.js` 对称，由直接取消与恢复共用。
 - **子 Run 级联取消**: 取消父 Run 会为其所有存活后代写入持久 cancel intent（沿 `parent_run_id` 深度有界遍历）并发出 Redis 取消信号（子 Run id 列表随取消响应返回）。这里只写 intent：`execute-run-service` 在进入 runtime 前及每步前后都会检查它（先读 MySQL，Redis 仅为加速），所以排队中的子 Run 在被捡起时就地终止、运行中的子 Run 走它自己那条已有的取消路径——无需为每个子 Run 复刻 WAITING_INPUT/WAITING_APPROVAL 的停泊终结逻辑。已终态的父 Run 同样会回收其存活子 Run（父 Run 失败后子 Run 仍在烧预算）。子 Run 自己更早的取消原因不会被父级覆盖（first-writer-wins）。`spawn_subagent` 现在拒绝在已终态或已请求取消的父 Run 下创建新子 Run——父行的 `FOR UPDATE` 让取消与创建串行，两种先后顺序都安全。
