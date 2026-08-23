@@ -23,10 +23,7 @@ import {
 } from '../../extensions/sandbox-bridge/constants.js';
 import { primarySkillRoot, normalizeSkillRoots } from '../../skills/paths.js';
 import { config as defaultAgentConfig } from '../../../config.js';
-import {
-  LOCAL_FILESYSTEM_TOOL_NAMES,
-  PINNED_PI_SDK_VERSION,
-} from './pi-runtime-constants.js';
+import { PINNED_PI_SDK_VERSION } from './pi-runtime-constants.js';
 
 /**
  * Deep-clone then freeze plain JSON-compatible structures.
@@ -698,18 +695,19 @@ export function resolveAgentVersionBindings(bound, options = {}) {
       ? Object.freeze([...customTools])
       : null,
     tools: Array.isArray(tools) ? Object.freeze([...tools]) : null,
-    // Always denied, regardless of AgentVersion config. Callers may add to the
-    // denylist but never shorten it — the sandbox boundary is not negotiable
-    // per Agent.
+    // Caller-supplied denials only. `ls`/`find`/`grep` used to be pinned here,
+    // but the SDK applies excludeTools to extension tools as well, so the
+    // sandbox-bridge replacements were denied along with the built-ins they
+    // shadow. The container-filesystem boundary is enforced after bind by
+    // findUnshadowedLocalTools() instead — see pi-runtime-constants.js.
     excludeTools: Object.freeze([
-      ...new Set([
-        ...LOCAL_FILESYSTEM_TOOL_NAMES,
-        ...(Array.isArray(options.excludeTools)
+      ...new Set(
+        Array.isArray(options.excludeTools)
           ? options.excludeTools.filter(
               (name) => typeof name === 'string' && name.trim(),
             )
-          : []),
-      ]),
+          : [],
+      ),
     ]),
     mcpResolver: mcpResolver ?? null,
     // null → omit the option so the SDK resolves from settings, then clamps to

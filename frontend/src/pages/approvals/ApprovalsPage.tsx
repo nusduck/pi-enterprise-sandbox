@@ -18,6 +18,14 @@ import {
   type ApprovalStatusFilterId,
 } from './approvalHelpers';
 import { shortId } from '../runs/runHelpers';
+import {
+  IconRefresh,
+  IconClose,
+  IconCheck,
+  IconChat,
+  IconAlertCircle,
+  IconSparkles,
+} from '../../shared/ui/Icons';
 
 export function ApprovalsPage() {
   const { entityStore, resolveApproval, selectConversation } = useChat();
@@ -92,8 +100,7 @@ export function ApprovalsPage() {
         <div>
           <h2 className="mgmt-title">Approval Center</h2>
           <p className="mgmt-subtitle">
-            Pending, approved, rejected, expired, and cancelled tool approvals.
-            Decisions apply even when you leave the conversation.
+            Pending, approved, rejected, expired, and cancelled tool approvals. Decisions apply globally.
           </p>
         </div>
         <button
@@ -102,15 +109,23 @@ export function ApprovalsPage() {
           onClick={() => void refresh()}
           disabled={loading}
         >
-          {loading ? 'Refreshing…' : 'Refresh'}
+          <IconRefresh size={14} className={loading ? 'icon-spin' : ''} />
+          <span>{loading ? 'Refreshing…' : 'Refresh'}</span>
         </button>
       </header>
 
       {banner ? (
         <div className="mgmt-banner" role="status">
+          <IconAlertCircle size={15} />
           <span>{banner}</span>
-          <button type="button" className="mgmt-banner-close" onClick={() => setBanner(null)}>
-            ✕
+          <button
+            type="button"
+            className="mgmt-banner-close"
+            aria-label="Dismiss notification"
+            title="Dismiss notification"
+            onClick={() => setBanner(null)}
+          >
+            <IconClose size={13} />
           </button>
         </div>
       ) : null}
@@ -131,15 +146,18 @@ export function ApprovalsPage() {
       </div>
 
       {loading && rows.length === 0 ? (
-        <div className="mgmt-empty">Loading approvals…</div>
+        <div className="mgmt-empty">
+          <IconSparkles size={24} className="icon-pulse" />
+          <p>Loading approvals…</p>
+        </div>
       ) : rows.length === 0 ? (
         <div className="mgmt-empty">
-          <p className="mgmt-empty-title">No approvals to show</p>
+          <p className="mgmt-empty-title">No approvals found</p>
           <p className="mgmt-empty-body">
             {apiAvailable === false
-              ? 'The approvals list API is not available yet. Approvals from this browser session (entity store) will appear here when tools request them.'
+              ? 'The approvals list API is not available yet. Approvals from this browser session will appear here when tools request them.'
               : filter === 'pending'
-                ? 'No pending approvals. High-risk tools will show up here when they need a decision.'
+                ? 'No pending approvals. High-risk tools will show up here when they require a human decision.'
                 : `No approvals with status “${APPROVAL_STATUS_FILTERS.find((x) => x.id === filter)?.label}”.`}
           </p>
         </div>
@@ -153,10 +171,11 @@ export function ApprovalsPage() {
                 <header className="mgmt-card-head">
                   <div>
                     <span className={`mgmt-status status-${row.status}`}>
+                      <span className="mgmt-status-dot" />
                       {row.status}
                     </span>
                     {row.riskLevel ? (
-                      <span className="mgmt-risk">risk: {row.riskLevel}</span>
+                      <span className={`mgmt-risk risk-${row.riskLevel}`}>risk: {row.riskLevel}</span>
                     ) : null}
                     <h3 className="mgmt-card-title">
                       {row.tool || 'Tool approval'}
@@ -179,13 +198,13 @@ export function ApprovalsPage() {
 
                 <dl className="mgmt-meta-grid">
                   <div>
-                    <dt>Approval</dt>
+                    <dt>Approval ID</dt>
                     <dd>
                       <code title={row.id}>{shortId(row.id, 14)}</code>
                     </dd>
                   </div>
                   <div>
-                    <dt>Run</dt>
+                    <dt>Run ID</dt>
                     <dd>
                       {row.runId ? (
                         <code title={row.runId}>{shortId(row.runId, 12)}</code>
@@ -229,7 +248,7 @@ export function ApprovalsPage() {
                         disabled={busyId === row.id}
                         onClick={() => void onDecide(row, 'approve')}
                       >
-                        {busyId === row.id ? '…' : 'Approve'}
+                        <IconCheck size={12} /> {busyId === row.id ? '…' : 'Approve'}
                       </button>
                       <button
                         type="button"
@@ -237,7 +256,7 @@ export function ApprovalsPage() {
                         disabled={busyId === row.id}
                         onClick={() => void onDecide(row, 'reject')}
                       >
-                        Reject
+                        <IconClose size={12} /> Reject
                       </button>
                     </>
                   ) : null}
@@ -247,7 +266,7 @@ export function ApprovalsPage() {
                       className="mgmt-btn sm secondary"
                       onClick={() => void onOpenConversation(row)}
                     >
-                      Open conversation
+                      <IconChat size={12} /> Open conversation
                     </button>
                   ) : null}
                   {row.arguments != null ? (

@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import { useState, isValidElement, type ReactNode } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeSanitize from 'rehype-sanitize';
@@ -18,6 +18,15 @@ import {
   InlineRuntimeSteps,
   runHasEntitySteps,
 } from '../runtime-steps/InlineRuntimeSteps';
+import {
+  IconCopy,
+  IconCheck,
+  IconDownload,
+  IconBrain,
+  IconChevronDown,
+  IconChevronRight,
+  IconAlertCircle,
+} from '../../shared/ui/Icons';
 
 function SafeDownloadLink({
   url,
@@ -32,20 +41,35 @@ function SafeDownloadLink({
   if (!safe) return <span>{name}</span>;
   return (
     <a className={className} href={safe} download="">
-      ⬇ {name}
+      <IconDownload size={14} /> {name}
     </a>
   );
 }
 
 function formatTime(createdAt?: string): string {
   if (!createdAt || Number.isNaN(Date.parse(createdAt))) return '';
+  const d = new Date(createdAt);
+  const now = new Date();
+  const isSameDay =
+    d.getFullYear() === now.getFullYear() &&
+    d.getMonth() === now.getMonth() &&
+    d.getDate() === now.getDate();
+
+  if (isSameDay) {
+    return new Intl.DateTimeFormat(undefined, {
+      hour: '2-digit',
+      minute: '2-digit',
+    }).format(d);
+  }
+
+  const isSameYear = d.getFullYear() === now.getFullYear();
   return new Intl.DateTimeFormat(undefined, {
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
+    month: 'numeric',
+    day: 'numeric',
+    ...(isSameYear ? {} : { year: '2-digit' }),
     hour: '2-digit',
     minute: '2-digit',
-  }).format(new Date(createdAt));
+  }).format(d);
 }
 
 function formatFileSize(n?: number | null): string {
@@ -93,8 +117,51 @@ function AttachmentCards({
   );
 }
 
+function CodeBlock({
+  className,
+  children,
+}: {
+  className?: string;
+  children: ReactNode;
+}) {
+  const [copied, setCopied] = useState(false);
+  const match = /language-(\w+)/.exec(className || '');
+  const language = match ? match[1] : '';
+  const rawText = String(children).replace(/\n$/, '');
+
+  async function handleCopy() {
+    try {
+      if (!navigator.clipboard?.writeText) return;
+      await navigator.clipboard.writeText(rawText);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      setCopied(false);
+    }
+  }
+
+  return (
+    <div className="md-code-container">
+      <div className="md-code-header">
+        <span className="md-code-lang">{language || 'code'}</span>
+        <button
+          type="button"
+          className="md-code-copy"
+          onClick={() => void handleCopy()}
+          title="Copy code"
+        >
+          {copied ? <IconCheck size={13} /> : <IconCopy size={13} />}
+          <span>{copied ? 'Copied!' : 'Copy'}</span>
+        </button>
+      </div>
+      <pre className="md-pre">
+        <code className={className}>{children}</code>
+      </pre>
+    </div>
+  );
+}
+
 function MarkdownBody({ text }: { text: string }) {
-  // Extract download-markdown patterns into trailing links
   const re = /📄 \*\*([^*]+)\*\* — \[Download\]\(([^)]+)\)\n?/g;
   const links: { name: string; url: string }[] = [];
   let m: RegExpExecArray | null;
@@ -115,7 +182,6 @@ function MarkdownBody({ text }: { text: string }) {
           components={{
             a: ({ href, children }) => {
               const safe = href ? safeApiUrl(href) || href : undefined;
-              // Only allow http(s) and relative safe API paths
               const ok =
                 safe &&
                 (safe.startsWith('http://') ||
@@ -128,22 +194,27 @@ function MarkdownBody({ text }: { text: string }) {
                 </a>
               );
             },
-            code: ({ className, children, ...props }) => {
-              const inline = !className;
-              if (inline) {
+            pre: ({ children }) => {
+              if (isValidElement(children)) {
+                const codeProps = children.props as {
+                  className?: string;
+                  children?: ReactNode;
+                };
                 return (
-                  <code className="md-code-inline" {...props}>
-                    {children}
-                  </code>
+                  <CodeBlock className={codeProps.className}>
+                    {codeProps.children}
+                  </CodeBlock>
                 );
               }
+              return <pre className="md-pre">{children}</pre>;
+            },
+            code: ({ children, ...props }) => {
               return (
-                <code className={className} {...props}>
+                <code className="md-code-inline" {...props}>
                   {children}
                 </code>
               );
             },
-            pre: ({ children }) => <pre className="md-pre">{children}</pre>,
             table: ({ children }) => (
               <div className="md-table-wrap">
                 <table>{children}</table>
@@ -165,6 +236,38 @@ function MarkdownBody({ text }: { text: string }) {
   );
 }
 
+function ThinkingBlock({
+  thinking,
+  isStreaming,
+}: {
+  thinking: string;
+  isStreaming?: boolean;
+}) {
+  const [open, setOpen] = useState(isStreaming);
+
+  return (
+    <div className={`message-thinking-box${open ? ' is-open' : ''}${isStreaming ? ' is-streaming' : ''}`}>
+      <button
+        type="button"
+        className="thinking-toggle-btn"
+        onClick={() => setOpen((v) => !v)}
+      >
+        <IconBrain size={15} className="thinking-icon" />
+        <span className="thinking-label">
+          {isStreaming ? 'Agent Reasoning…' : 'Thought Process'}
+        </span>
+        {isStreaming ? <span className="thinking-live-dot" /> : null}
+        <span className="thinking-chevron">
+          {open ? <IconChevronDown size={14} /> : <IconChevronRight size={14} />}
+        </span>
+      </button>
+      {open ? (
+        <div className="message-thinking-body">{thinking}</div>
+      ) : null}
+    </div>
+  );
+}
+
 export function MessageBubble({
   msg,
   idx,
@@ -172,7 +275,6 @@ export function MessageBubble({
 }: {
   msg: ChatMessage;
   idx: number;
-  /** When true, render entity-backed tool/MCP/process steps for this turn. */
   showRuntimeSteps?: boolean;
 }) {
   const { entityStore } = useChat();
@@ -190,25 +292,25 @@ export function MessageBubble({
   const body: ReactNode[] = [];
   let visibleAttachments = msg.attachments || [];
 
+  // 1. Thinking / Reasoning Process first (Chronological execution flow)
   if (!isUser && msg.thinking) {
     body.push(
-      <details key="thinking" className="message-thinking">
-        <summary>
-          Thinking{msg.thinkingStatus === 'streaming' ? '…' : ''}
-        </summary>
-        <div className="message-thinking-body">{msg.thinking}</div>
-      </details>,
+      <ThinkingBlock
+        key="thinking"
+        thinking={msg.thinking}
+        isStreaming={msg.thinkingStatus === 'streaming'}
+      />,
     );
     hasContent = true;
   }
 
-  // Tools / processes / approvals / artifacts are rendered only here, from the
-  // EntityStore, and only once per run (MessageList picks the host bubble).
+  // 2. Inline Runtime Steps / Tool executions (Chronological before final output)
   if (useEntitySteps && runId) {
     body.push(<InlineRuntimeSteps key="runtime-steps" runId={runId} />);
     hasContent = true;
   }
 
+  // 3. Main Text Content Parts
   parts.forEach((p: ContentPart, i) => {
     if (p.type === 'text' && 'text' in p && typeof p.text === 'string' && p.text) {
       if (isUser) {
@@ -231,6 +333,7 @@ export function MessageBubble({
     }
   });
 
+  // 4. Attachments & File Links
   if (isUser && visibleAttachments.length) {
     body.push(
       <AttachmentCards
@@ -261,22 +364,21 @@ export function MessageBubble({
     >
       <div className="body">
         {!isUser ? (
-          <div className="msg-role-label" aria-hidden="true">
-            UPRC
+          <div className="msg-header" aria-hidden="true">
+            <div className="msg-avatar-brand">
+              <img src="/brand/uprc-icon.png" alt="" width={18} height={18} />
+            </div>
+            <span className="msg-role-name">UPRC Agent</span>
           </div>
         ) : null}
+
         <div className={`bubble${isUser ? '' : ' bubble-md'}`}>
-          {hasContent ? body : <em className="bubble-empty">(empty)</em>}
+          {hasContent ? body : <em className="bubble-empty">(empty message)</em>}
           {!isUser && interrupted ? (
-            <>
-              {' '}
-              <span
-                className="msg-status msg-status-interrupted"
-                role="status"
-              >
-                interrupted
-              </span>
-            </>
+            <div className="msg-interrupted-banner" role="status">
+              <IconAlertCircle size={14} />
+              <span>Execution interrupted</span>
+            </div>
           ) : null}
         </div>
         <div className="time">{formatTime(msg.createdAt)}</div>

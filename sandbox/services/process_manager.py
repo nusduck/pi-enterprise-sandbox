@@ -59,6 +59,7 @@ from sandbox.services.process_identity import (
     safe_signal_identity,
 )
 from sandbox.services.process_handle_store import FormalProcessDualWriter
+from sandbox.services.process_owner_access import OwnerScopedProcessAccess
 from sandbox.services.child_workspace_quota import (
     ChildQuotaDecision,
     ChildWorkspaceQuotaWatch,
@@ -82,8 +83,12 @@ from sandbox.services.process_runtime_support import (
 logger = logging.getLogger("sandbox.process_manager")
 
 
-class ProcessManager:
-    """Manage long-running processes within sandbox sessions."""
+class ProcessManager(OwnerScopedProcessAccess):
+    """Manage long-running processes within sandbox sessions.
+
+    Owner-scoped reads and control (``*_owned``) live in
+    :class:`~sandbox.services.process_owner_access.OwnerScopedProcessAccess`.
+    """
 
     def __init__(
         self,
@@ -1165,125 +1170,6 @@ class ProcessManager:
                 self._persist(entry)
 
     # ── Query ────────────────────────────────────────────────────────
-
-    def get_owned(
-        self,
-        process_id: str,
-        *,
-        org_id: str,
-        user_id: str,
-        sandbox_session_id: str,
-    ) -> dict[str, Any] | None:
-        """Read only after formal owner and SandboxSession scope validation."""
-        formal = self._formal.get_owned(
-            process_id,
-            org_id=org_id,
-            user_id=user_id,
-            sandbox_session_id=sandbox_session_id,
-        )
-        if formal is None:
-            return None
-        with self._lock:
-            entry = self._entries.get(process_id)
-            if entry is not None:
-                if (
-                    entry.get("org_id") != org_id
-                    or entry.get("user_id") != user_id
-                    or entry.get("sandbox_session_id") != sandbox_session_id
-                ):
-                    return None
-                return self._public_view(entry)
-        command_json = formal.command_json if isinstance(formal.command_json, dict) else {}
-        return {
-            "process_id": formal.process_id,
-            "session_id": formal.sandbox_session_id,
-            "run_id": formal.run_id,
-            "command": str(command_json.get("command") or ""),
-            "status": formal.status,
-            "pid": formal.pid,
-            "exit_code": formal.exit_code,
-            "background": bool(command_json.get("background")),
-            "cwd": command_json.get("cwd"),
-            "error": None,
-            "timeout_seconds": command_json.get("timeout_seconds"),
-            "started_at": formal.started_at,
-            "finished_at": formal.ended_at,
-            "created_at": formal.created_at,
-            "updated_at": formal.ended_at or formal.started_at or formal.created_at,
-            "trace_id": None,
-            "stdout_cursor": INITIAL_CURSOR,
-            "stderr_cursor": INITIAL_CURSOR,
-            "elapsed_seconds": None,
-        }
-
-    def read_stream_owned(
-        self,
-        process_id: str,
-        *,
-        org_id: str,
-        user_id: str,
-        sandbox_session_id: str,
-        stream: str,
-        cursor: str,
-        limit: int,
-    ) -> dict[str, Any] | None:
-        owned = self.get_owned(
-            process_id,
-            org_id=org_id,
-            user_id=user_id,
-            sandbox_session_id=sandbox_session_id,
-        )
-        if owned is None:
-            return None
-        with self._lock:
-            live = process_id in self._entries
-        if live:
-            return self.read_stream(
-                process_id, stream=stream, cursor=cursor, limit=limit
-            )
-        # Formal schema keeps process metadata, not inline log bodies.  After a
-        # restart/eviction return an explicit bounded empty/truncated slice.
-        try:
-            parsed = parse_cursor(cursor)
-        except ValueError as exc:
-            return {"process_id": process_id, "stream": stream, "error": str(exc), "status": "invalid"}
-        normalized = encode_cursor(parsed.generation, parsed.offset)
-        return {
-            "process_id": process_id,
-            "stream": stream,
-            "cursor": normalized,
-            "next_cursor": normalized,
-            "data": "",
-            "truncated": True,
-            "completed": _is_terminal(owned.get("status")),
-            "status": owned.get("status"),
-            "dropped": True,
-            "log_total": 0,
-        }
-
-    def signal_process_owned(
-        self,
-        process_id: str,
-        sig: str | int,
-        *,
-        org_id: str,
-        user_id: str,
-        sandbox_session_id: str,
-    ) -> dict[str, Any]:
-        owned = self.get_owned(
-            process_id,
-            org_id=org_id,
-            user_id=user_id,
-            sandbox_session_id=sandbox_session_id,
-        )
-        if owned is None:
-            return {"error": "not found", "status": "not_found", "ok": False}
-        with self._lock:
-            if process_id not in self._entries:
-                # No live Popen/start identity is available after restart. Never
-                # signal a PID using processId/formal metadata alone.
-                return {"error": "process control unavailable", "status": "unavailable", "ok": False, "signaled": False}
-        return self.signal_process(process_id, sig)
 
     def get(self, process_id: str) -> dict[str, Any] | None:
         with self._lock:

@@ -105,12 +105,12 @@ export async function handleDatasetUpload(conversationId, parsedUrl, req, res) {
   const traceId = resolveUploadTraceId(req);
 
   if (!sessionId) {
-    discardRequestBody(req);
+    discardRequestBody(req, res);
     writeJson(res, 400, { error: 'session_id required', code: 'session_required' }, traceId);
     return;
   }
   if (!conversationId) {
-    discardRequestBody(req);
+    discardRequestBody(req, res);
     writeJson(
       res,
       400,
@@ -123,7 +123,7 @@ export async function handleDatasetUpload(conversationId, parsedUrl, req, res) {
   // Validate the durable-write contract before piping any request bytes.
   const idempotencyKey = String(req.headers['idempotency-key'] || '').trim();
   if (!idempotencyKey) {
-    discardRequestBody(req);
+    discardRequestBody(req, res);
     writeJson(
       res,
       400,
@@ -141,7 +141,7 @@ export async function handleDatasetUpload(conversationId, parsedUrl, req, res) {
   const declaredRaw = req.headers['content-length'];
   const declared = declaredRaw == null ? null : Number(declaredRaw);
   if (declared > maxBytes) {
-    discardRequestBody(req);
+    discardRequestBody(req, res);
     writeJson(
       res,
       413,
@@ -160,7 +160,7 @@ export async function handleDatasetUpload(conversationId, parsedUrl, req, res) {
       traceId,
     });
   } catch (err) {
-    discardRequestBody(req);
+    discardRequestBody(req, res);
     const status = Number(err?.status) || 500;
     const message =
       status >= 500

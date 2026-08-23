@@ -18,6 +18,15 @@ import { createTraceHeaders } from './trace-context.js';
 const BASE = config.SANDBOX_BASE_URL;
 const REQUEST_GRACE_MS = 5_000;
 
+/**
+ * Path of one managed process under the session that owns it.
+ * @param {string} sessionId
+ * @param {string} processId
+ */
+function processPath(sessionId, processId) {
+  return `/sessions/${encodeURIComponent(sessionId)}/processes/${encodeURIComponent(processId)}`;
+}
+
 export class SandboxError extends Error {
   constructor(status, message, path) {
     super(message);
@@ -263,67 +272,67 @@ export function createSandboxClient({ traceId = null, traceState = null, auth = 
       return resp.json();
     },
 
-    async getProcessLogs(processId, offset = 0, limit = null) {
+    /**
+     * Managed-process control for the operator surface.
+     *
+     * These are session-scoped (`/sessions/:sandboxSessionId/processes/...`),
+     * not `/processes/...`: Sandbox has no tenant-free process surface, and the
+     * `/internal/v1/processes/*` HMAC plane is for the model's claimed
+     * ToolExecutions, which a browser-side call has no fence token for. The
+     * caller passes the sandboxSessionId recorded on the process row.
+     */
+    async getProcessLogs(sessionId, processId, offset = 0, limit = null) {
       const q = new URLSearchParams({ offset: String(offset ?? 0) });
       if (limit != null) q.set('limit', String(limit));
       const resp = await sbFetch(
-        `/processes/${encodeURIComponent(processId)}/logs?${q}`,
+        `${processPath(sessionId, processId)}/logs?${q}`,
       );
       return resp.json();
     },
 
     /**
      * PR-08 process_read: incremental stream read by generation-offset cursor.
+     * @param {string} sessionId
      * @param {string} processId
      * @param {{ stream?: 'stdout'|'stderr', cursor?: string, limit?: number }} [opts]
      */
-    async readProcess(processId, { stream = 'stdout', cursor = '0-0', limit = 8192 } = {}) {
+    async readProcess(
+      sessionId,
+      processId,
+      { stream = 'stdout', cursor = '0-0', limit = 8192 } = {},
+    ) {
       const q = new URLSearchParams({
         stream: stream === 'stderr' ? 'stderr' : 'stdout',
         cursor: String(cursor ?? '0-0'),
         limit: String(limit ?? 8192),
       });
       const resp = await sbFetch(
-        `/processes/${encodeURIComponent(processId)}/read?${q}`,
+        `${processPath(sessionId, processId)}/read?${q}`,
       );
       return resp.json();
     },
 
-    /**
-     * List sequenced process execution events (B3) after a sequence.
-     * @param {string} processId
-     * @param {{ afterSequence?: number, limit?: number|null }} [opts]
-     */
-    async listProcessEvents(processId, { afterSequence = 0, limit } = {}) {
-      const q = new URLSearchParams();
-      if (afterSequence) q.set('after_sequence', String(afterSequence));
-      if (limit != null) q.set('limit', String(limit));
-      const qs = q.toString();
-      const resp = await sbFetch(
-        `/processes/${encodeURIComponent(processId)}/events${qs ? `?${qs}` : ''}`,
-      );
+    async writeProcessStdin(sessionId, processId, data, eof = false) {
+      const resp = await sbFetch(`${processPath(sessionId, processId)}/stdin`, {
+        method: 'POST',
+        body: JSON.stringify({ data, eof }),
+      });
       return resp.json();
     },
 
-    /**
-     * Open SSE stream of process execution events (B3).
-     * Resume via afterSequence or Last-Event-ID semantics on the sandbox.
-     * @param {string} processId
-     * @param {number} [afterSequence]
-     * @param {{ signal?: AbortSignal, lastEventId?: string|number }} [opts]
-     * @returns {Promise<Response>}
-     */
-    async openProcessEventStream(processId, afterSequence = 0, { signal, lastEventId } = {}) {
-      const q = new URLSearchParams();
-      if (afterSequence) q.set('after_sequence', String(afterSequence));
-      const headers = { Accept: 'text/event-stream' };
-      if (lastEventId != null) headers['Last-Event-ID'] = String(lastEventId);
-      const qs = q.toString();
-      // sbFetch returns the Response; caller reads the SSE body stream.
-      return sbFetch(
-        `/processes/${encodeURIComponent(processId)}/events/stream${qs ? `?${qs}` : ''}`,
-        { headers, signal },
-      );
+    async signalProcess(sessionId, processId, signal = 'SIGTERM') {
+      const resp = await sbFetch(`${processPath(sessionId, processId)}/signal`, {
+        method: 'POST',
+        body: JSON.stringify({ signal }),
+      });
+      return resp.json();
+    },
+
+    async cancelProcess(sessionId, processId) {
+      const resp = await sbFetch(`${processPath(sessionId, processId)}/cancel`, {
+        method: 'POST',
+      });
+      return resp.json();
     },
 
     async getExecutionLogs(sessionId, executionId, offset = 0, limit = null) {
@@ -342,49 +351,6 @@ export function createSandboxClient({ traceId = null, traceState = null, auth = 
       const qs = q.toString();
       const resp = await sbFetch(
         `/sessions/${encodeURIComponent(sessionId)}/executions/${encodeURIComponent(executionId)}/events${qs ? `?${qs}` : ''}`,
-      );
-      return resp.json();
-    },
-
-    async waitProcess(processId, timeout = null) {
-      const resp = await sbFetch(`/processes/${encodeURIComponent(processId)}/wait`, {
-        method: 'POST',
-        body: JSON.stringify({ timeout }),
-        timeoutMs: timeoutForSeconds(timeout),
-      });
-      return resp.json();
-    },
-
-    async writeProcessStdin(processId, data, eof = false) {
-      const resp = await sbFetch(`/processes/${encodeURIComponent(processId)}/stdin`, {
-        method: 'POST',
-        body: JSON.stringify({ data, eof }),
-      });
-      return resp.json();
-    },
-
-    async signalProcess(processId, signal = 'SIGTERM') {
-      const resp = await sbFetch(`/processes/${encodeURIComponent(processId)}/signal`, {
-        method: 'POST',
-        body: JSON.stringify({ signal }),
-      });
-      return resp.json();
-    },
-
-    async cancelProcess(processId) {
-      const resp = await sbFetch(`/processes/${encodeURIComponent(processId)}/cancel`, {
-        method: 'POST',
-      });
-      return resp.json();
-    },
-
-    async cancelSessionProcesses(sessionId, foregroundOnly = false) {
-      const q = new URLSearchParams();
-      if (foregroundOnly) q.set('foreground_only', 'true');
-      const qs = q.toString();
-      const resp = await sbFetch(
-        `/processes/session/${encodeURIComponent(sessionId)}/cancel${qs ? `?${qs}` : ''}`,
-        { method: 'POST' },
       );
       return resp.json();
     },

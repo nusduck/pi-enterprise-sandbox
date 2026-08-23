@@ -213,6 +213,11 @@ Agent 模型侧权威清单工具：`capabilities`（`action=list|search|describ
 
 `/api/a2a/*` 要求 `actingRole === 'admin'`，否则 403 `ADMIN_REQUIRED`。
 
+admin 只有一个来源：`SANDBOX_AUTH_ADMIN_USERNAMES`（逗号分隔，大小写不敏感）。
+注册接口忽略客户端提交的 `role` / `organization_id`；名单内的用户名注册即为
+admin，已存在的账号在下次 login 或 `/auth/me` 时提升，移出名单则降级。
+`BFF_DEV_ACTING_ROLE` 只影响 `AUTH_ENABLED=false` 的开发身份，不会提升真实用户。
+
 ### BFF 健康检查
 
 - `GET /health/live`：仅检查 BFF 进程，正常返回 200。
@@ -251,7 +256,8 @@ Base URL: `http://sandbox:8081`（Docker 内网）
 
 正式的 Agent 工具调用只走带 scope、claim 和 replay protection 的
 `/internal/v1/*` HMAC 平面。剩下的 `/sessions/{id}/files/*`、
-`/sessions/{id}/datasets/*`、`/sessions/{id}/artifacts/*` 是 BFF 上游代理的
+`/sessions/{id}/datasets/*`、`/sessions/{id}/artifacts/*`、
+`/sessions/{id}/processes/*` 是 BFF 上游代理的
 兼容路径，不是浏览器或第三方可依赖的公共 API；`/sessions/{id}/executions/*`
 这一层已经删除。生产环境不发布 Sandbox 宿主端口。新的集成必须添加对应的
 `/api/*` BFF 路由或 Agent internal contract，不能把 `X-API-Key`
@@ -334,6 +340,9 @@ internal plane、只读、有预算、可与 `read` 并行。
 | `GET` | `/sessions/{id}/datasets/{did}/content` | 流式取内容 |
 | `POST` | `/sessions/{id}/datasets/{did}/abort` | 中止上传 |
 | — | `/sessions/{id}/artifacts/*` | 见下方 Artifacts |
+| `GET` | `/sessions/{id}/processes/{pid}` | 进程状态（owner 校验） |
+| `GET` | `/sessions/{id}/processes/{pid}/logs\|read` | 进程输出（偏移 / 游标） |
+| `POST` | `/sessions/{id}/processes/{pid}/signal\|stdin\|cancel` | 进程控制 |
 | `GET` | `/health` `/ready` `/metrics` | 探针与指标 |
 
 ---

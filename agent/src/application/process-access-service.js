@@ -74,8 +74,9 @@ export class ProcessAccessService {
   }
 
   async logs({ processId, auth, offset = 0, limit = null }) {
-    const { sandbox } = await this.#owned(processId, auth);
+    const { sandbox, process } = await this.#owned(processId, auth);
     return sandbox.getProcessLogs(
+      process.sandboxSessionId,
       processId,
       boundedInteger(offset, 'offset', { min: 0, max: 2_147_483_647, fallback: 0 }),
       limit == null
@@ -92,8 +93,8 @@ export class ProcessAccessService {
     if (!normalizedCursor || normalizedCursor.length > 128) {
       throw new ValidationError('cursor must be a non-empty string of at most 128 characters');
     }
-    const { sandbox } = await this.#owned(processId, auth);
-    return sandbox.readProcess(processId, {
+    const { sandbox, process } = await this.#owned(processId, auth);
+    return sandbox.readProcess(process.sandboxSessionId, processId, {
       stream,
       cursor: normalizedCursor,
       limit: boundedInteger(limit, 'limit', { min: 1, max: 65_536, fallback: 8192 }),
@@ -104,8 +105,13 @@ export class ProcessAccessService {
     if (typeof data !== 'string' || Buffer.byteLength(data, 'utf8') > 65_536) {
       throw new ValidationError('stdin data must be a string of at most 65536 bytes');
     }
-    const { sandbox } = await this.#owned(processId, auth);
-    return sandbox.writeProcessStdin(processId, data, Boolean(eof));
+    const { sandbox, process } = await this.#owned(processId, auth);
+    return sandbox.writeProcessStdin(
+      process.sandboxSessionId,
+      processId,
+      data,
+      Boolean(eof),
+    );
   }
 
   async signal({ processId, auth, signal = 'SIGTERM' }) {
@@ -113,12 +119,12 @@ export class ProcessAccessService {
     if (!SIGNALS.has(normalized)) {
       throw new ValidationError('signal must be SIGTERM, SIGKILL, SIGINT, or SIGHUP');
     }
-    const { sandbox } = await this.#owned(processId, auth);
-    return sandbox.signalProcess(processId, normalized);
+    const { sandbox, process } = await this.#owned(processId, auth);
+    return sandbox.signalProcess(process.sandboxSessionId, processId, normalized);
   }
 
   async cancel({ processId, auth }) {
-    const { sandbox } = await this.#owned(processId, auth);
-    return sandbox.cancelProcess(processId);
+    const { sandbox, process } = await this.#owned(processId, auth);
+    return sandbox.cancelProcess(process.sandboxSessionId, processId);
   }
 }

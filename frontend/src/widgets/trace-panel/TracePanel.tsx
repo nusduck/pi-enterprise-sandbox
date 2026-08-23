@@ -1,9 +1,10 @@
 /**
  * Trace Panel (plan §19.10) — tree of run / model / tool / sandbox spans.
  */
-import { useMemo } from 'react';
+import { useMemo, type ReactNode } from 'react';
 import type { TraceSpanEntity } from '../../entities';
 import { formatDuration } from '../runtime-timeline/buildTimeline';
+import { IconCheck, IconClose, IconClock } from '../../shared/ui/Icons';
 
 export type TraceTreeNode = {
   span: TraceSpanEntity;
@@ -66,18 +67,18 @@ export function buildTraceTree(spans: TraceSpanEntity[]): TraceTreeNode[] {
   return roots;
 }
 
-function statusGlyph(status: TraceSpanEntity['status']): string {
+function StatusGlyph({ status }: { status: TraceSpanEntity['status'] }): ReactNode {
   switch (status) {
     case 'running':
-      return '●';
+      return <span className="trace-dot-running" />;
     case 'ok':
-      return '✓';
+      return <IconCheck size={12} className="trace-icon-ok" />;
     case 'error':
-      return '✗';
+      return <IconClose size={12} className="trace-icon-error" />;
     case 'cancelled':
-      return '○';
+      return <IconClock size={12} className="trace-icon-muted" />;
     default:
-      return '·';
+      return <span className="trace-dot-idle" />;
   }
 }
 
@@ -119,7 +120,7 @@ function TraceNodeView({
       className={`trace-node status-${span.status}`}
       data-span-id={span.id}
       data-kind={span.kind}
-      style={{ marginLeft: depth * 12 }}
+      style={{ marginLeft: depth * 14 }}
     >
       <div className="trace-node-head">
         <span
@@ -127,9 +128,9 @@ function TraceNodeView({
           aria-label={`Status: ${statusLabel(span.status)}`}
           title={`Status: ${statusLabel(span.status)}`}
         >
-          {statusGlyph(span.status)}
+          <StatusGlyph status={span.status} />
         </span>
-        <span className="trace-status">{statusLabel(span.status)}</span>
+        <span className={`trace-status status-pill-${span.status}`}>{statusLabel(span.status)}</span>
         <span className="trace-kind">{span.kind}</span>
         <span className="trace-name">{span.name}</span>
         <span className="rtc-meta">{duration}</span>

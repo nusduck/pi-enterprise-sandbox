@@ -10,11 +10,10 @@ import {
 } from '../runtime-timeline/buildTimeline';
 import { BudgetBar } from '../budget-bar/BudgetBar';
 import { shouldShowResumeEntry } from '../composer/composerMode';
+import { IconMenu, IconLayers, IconRefresh, IconSun, IconMoon } from '../../shared/ui/Icons';
 
-/**
- * Single workbench toolbar — conversation title + live run chips + Details.
- * Runtime tool/MCP steps live inline in the chat stream (not a separate drawer).
- */
+import { useTheme } from '../../shared/ui/theme';
+
 export function ConversationHeader() {
   const {
     state,
@@ -29,6 +28,8 @@ export function ConversationHeader() {
     toggleInspector,
   } = useChat();
 
+  const [theme, toggleTheme] = useTheme();
+
   const conv = (state.conversations || []).find(
     (c) => c.id === state.conversationId,
   );
@@ -36,7 +37,7 @@ export function ConversationHeader() {
     ? conversationTitle(conv)
     : state.conversationId
       ? 'Conversation'
-      : 'New conversation';
+      : 'New Conversation';
 
   const run = getActiveRunEntity(entityStore, activeRunId);
   const [, setTick] = useState(0);
@@ -89,8 +90,6 @@ export function ConversationHeader() {
       )) ||
     null;
 
-  // The Agent Run row carries model_id on the wire; the agent-session entity
-  // and the conversation row are older, currently unpopulated sources.
   const model =
     run?.modelId ||
     agentSession?.modelId ||
@@ -112,7 +111,7 @@ export function ConversationHeader() {
           aria-label="Toggle sidebar"
           onClick={toggleSidebar}
         >
-          ☰
+          <IconMenu size={18} />
         </button>
         <div className="wb-title-block">
           <h1 className="conv-header-title" title={title}>
@@ -120,18 +119,18 @@ export function ConversationHeader() {
           </h1>
           <div className="conv-header-meta">
             {model ? (
-              <span className="conv-chip" title={model}>
+              <span className="conv-chip model-chip" title={model}>
                 {model}
               </span>
             ) : null}
             {activeSessionId || agentSession ? (
               <span
-                className="conv-chip muted"
+                className="conv-chip session-chip"
                 title={agentSession?.id || activeSessionId || ''}
               >
                 {agentSession
-                  ? `Session ${agentSession.status}`
-                  : `UPRC …${(activeSessionId || '').slice(-6)}`}
+                  ? `Session · ${agentSession.status}`
+                  : `Sandbox · ${(activeSessionId || '').slice(-6)}`}
               </span>
             ) : null}
           </div>
@@ -170,7 +169,7 @@ export function ConversationHeader() {
                 onClick={() => void resumeInterrupted()}
                 title="Resume interrupted run"
               >
-                Resume
+                <IconRefresh size={12} /> Resume
               </button>
             ) : null}
             {activeTraceId ? (
@@ -196,6 +195,16 @@ export function ConversationHeader() {
       <div className="wb-toolbar-right">
         <button
           type="button"
+          className="btn-icon"
+          title={`Switch to ${theme === 'light' ? 'dark' : 'light'} mode`}
+          aria-label="Toggle color theme"
+          onClick={() => toggleTheme()}
+        >
+          {theme === 'light' ? <IconMoon size={16} /> : <IconSun size={16} />}
+        </button>
+
+        <button
+          type="button"
           className={`btn-toolbar${inspectorOpen ? ' active' : ''}`}
           id="btn-inspector-toggle"
           title="Context inspector"
@@ -203,7 +212,8 @@ export function ConversationHeader() {
           aria-pressed={inspectorOpen}
           onClick={toggleInspector}
         >
-          Details
+          <IconLayers size={14} />
+          <span>Details</span>
         </button>
       </div>
     </header>

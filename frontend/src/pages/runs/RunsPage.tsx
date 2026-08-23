@@ -18,6 +18,14 @@ import {
   type RunRow,
   type RunStatusFilterId,
 } from './runHelpers';
+import {
+  IconRefresh,
+  IconClose,
+  IconTerminal,
+  IconChat,
+  IconAlertCircle,
+  IconSparkles,
+} from '../../shared/ui/Icons';
 
 export function RunsPage() {
   const { entityStore, selectConversation } = useChat();
@@ -34,13 +42,8 @@ export function RunsPage() {
   const refresh = useCallback(async () => {
     setLoading(true);
     try {
-      // The durable Agent API uses uppercase plan §10 status values and has no
-      // "completed" aggregate. Fetch the authoritative page once and apply the
-      // UI's aggregate filters locally, rather than sending stale UI labels
-      // such as `completed` or `interrupted` to the API.
       const list = await listRuns();
       setApiRows(list);
-      // Heuristic: empty + no store data later → may be unavailable; we still mark tried
       setApiAvailable(true);
     } catch {
       setApiRows([]);
@@ -104,7 +107,6 @@ export function RunsPage() {
         ];
         setDetailLog(lines.join('\n'));
       } else {
-        // Fall back to entity / row fields
         const run = entityStore.runsById[row.id];
         const tools = run
           ? run.toolExecutionIds
@@ -140,8 +142,7 @@ export function RunsPage() {
         <div>
           <h2 className="mgmt-title">Active Runs</h2>
           <p className="mgmt-subtitle">
-            Running, waiting approval, interrupted, failed, and completed runs
-            across conversations.
+            Running, waiting approval, interrupted, failed, and completed runs across all conversations.
           </p>
         </div>
         <button
@@ -150,15 +151,23 @@ export function RunsPage() {
           onClick={() => void refresh()}
           disabled={loading}
         >
-          {loading ? 'Refreshing…' : 'Refresh'}
+          <IconRefresh size={14} className={loading ? 'icon-spin' : ''} />
+          <span>{loading ? 'Refreshing…' : 'Refresh'}</span>
         </button>
       </header>
 
       {banner ? (
         <div className="mgmt-banner" role="status">
+          <IconAlertCircle size={15} />
           <span>{banner}</span>
-          <button type="button" className="mgmt-banner-close" onClick={() => setBanner(null)}>
-            ✕
+          <button
+            type="button"
+            className="mgmt-banner-close"
+            aria-label="Dismiss notification"
+            title="Dismiss notification"
+            onClick={() => setBanner(null)}
+          >
+            <IconClose size={13} />
           </button>
         </div>
       ) : null}
@@ -179,15 +188,18 @@ export function RunsPage() {
       </div>
 
       {loading && rows.length === 0 ? (
-        <div className="mgmt-empty">Loading runs…</div>
+        <div className="mgmt-empty">
+          <IconSparkles size={24} className="icon-pulse" />
+          <p>Loading runs…</p>
+        </div>
       ) : rows.length === 0 ? (
         <div className="mgmt-empty">
-          <p className="mgmt-empty-title">No runs to show</p>
+          <p className="mgmt-empty-title">No runs to display</p>
           <p className="mgmt-empty-body">
             {apiAvailable === false
               ? 'The runs list API is not available yet. Active runs from this browser session will appear here when the workbench creates them.'
               : filter === 'all'
-                ? 'No runs in the local store or API. Start a conversation to create a run.'
+                ? 'No runs found in the local store or API. Start a conversation to create a run.'
                 : `No runs match “${RUN_STATUS_FILTERS.find((x) => x.id === filter)?.label}”.`}
           </p>
         </div>
@@ -213,11 +225,11 @@ export function RunsPage() {
                   className={selected?.id === row.id ? 'selected' : ''}
                 >
                   <td>
-                    <code title={row.id}>{shortId(row.id, 12)}</code>
+                    <code className="mgmt-id-code" title={row.id}>{shortId(row.id, 12)}</code>
                   </td>
                   <td>
                     {row.conversationId ? (
-                      <code title={row.conversationId}>
+                      <code className="mgmt-id-code" title={row.conversationId}>
                         {shortId(row.conversationId, 10)}
                       </code>
                     ) : (
@@ -226,6 +238,7 @@ export function RunsPage() {
                   </td>
                   <td>
                     <span className={`mgmt-status status-${row.status}`}>
+                      <span className="mgmt-status-dot" />
                       {formatRunStatusLabel(row.status)}
                     </span>
                   </td>
@@ -244,7 +257,7 @@ export function RunsPage() {
                         onClick={() => void onOpen(row)}
                         title="Open conversation"
                       >
-                        Open
+                        <IconChat size={12} /> Open
                       </button>
                       <button
                         type="button"
@@ -252,7 +265,7 @@ export function RunsPage() {
                         onClick={() => void onViewLogs(row)}
                         title="View logs / detail"
                       >
-                        Logs
+                        <IconTerminal size={12} /> Logs
                       </button>
                       {canCancelRun(row.status) ? (
                         <button
@@ -285,7 +298,7 @@ export function RunsPage() {
                 setDetailLog(null);
               }}
             >
-              Close
+              <IconClose size={13} /> Close
             </button>
           </header>
           {selected.error ? (

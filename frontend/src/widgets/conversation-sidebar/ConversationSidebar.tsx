@@ -8,6 +8,18 @@ import {
   listPendingApprovals,
 } from '../runtime-timeline/buildTimeline';
 import { listActiveRuns } from '../../entities';
+import {
+  IconChat,
+  IconRuns,
+  IconApprovals,
+  IconSchedules,
+  IconSettings,
+  IconA2a,
+  IconClose,
+  IconPlus,
+  IconTrash,
+  IconSparkles,
+} from '../../shared/ui/Icons';
 
 function shortDate(iso?: string | null): string {
   if (!iso) return '';
@@ -26,11 +38,6 @@ function runMarkerLabel(status: string | null, hasApproval: boolean): string {
   return formatRunStatusLabel(status);
 }
 
-/**
- * Grok-style sidebar:
- * Top — brand, new chat, primary destinations, recent conversations
- * Bottom — settings + account only
- */
 export function ConversationSidebar() {
   const navigate = useNavigate();
   const {
@@ -122,8 +129,6 @@ export function ConversationSidebar() {
   }
 
   function onNewChat() {
-    // Route immediately; conversation reset is synchronous in the controller
-    // and should not make a management page look unresponsive.
     void startNewChat();
     navigate('/');
     if (isMobile) closeSidebar();
@@ -135,9 +140,12 @@ export function ConversationSidebar() {
         <div className="sidebar-head">
           <div className="sidebar-brand">
             <span className="sidebar-brand-mark" aria-hidden="true">
-              <img src="/brand/uprc-icon.png" alt="" width={28} height={28} />
+              <img src="/brand/uprc-icon.png" alt="" width={26} height={26} />
             </span>
-            <span className="sidebar-brand-name">UPRC Agent</span>
+            <div className="sidebar-brand-text">
+              <span className="sidebar-brand-name">UPRC Agent</span>
+              <span className="sidebar-brand-badge">PRO</span>
+            </div>
           </div>
           <button
             type="button"
@@ -146,7 +154,7 @@ export function ConversationSidebar() {
             aria-label="Close sidebar"
             onClick={closeSidebar}
           >
-            ✕
+            <IconClose size={16} />
           </button>
         </div>
 
@@ -154,10 +162,12 @@ export function ConversationSidebar() {
           <button
             type="button"
             className="btn-new-chat"
-            title="New conversation"
+            title="New conversation (Ctrl+L)"
             onClick={onNewChat}
           >
-            + New chat
+            <IconPlus size={16} className="btn-new-chat-icon" />
+            <span>New Chat</span>
+            <kbd className="btn-new-chat-kbd">Ctrl+L</kbd>
           </button>
         </div>
 
@@ -173,7 +183,7 @@ export function ConversationSidebar() {
             }}
           >
             <span className="sidebar-nav-icon" aria-hidden="true">
-              ⌂
+              <IconChat size={17} />
             </span>
             <span className="sidebar-nav-text">Chat</span>
           </NavLink>
@@ -187,7 +197,7 @@ export function ConversationSidebar() {
             }}
           >
             <span className="sidebar-nav-icon" aria-hidden="true">
-              ◎
+              <IconRuns size={17} />
             </span>
             <span className="sidebar-nav-text">Runs</span>
             {activeRuns.length > 0 ? (
@@ -209,7 +219,7 @@ export function ConversationSidebar() {
             }}
           >
             <span className="sidebar-nav-icon" aria-hidden="true">
-              ⚑
+              <IconApprovals size={17} />
             </span>
             <span className="sidebar-nav-text">Approvals</span>
             {pendingApprovals.length > 0 ? (
@@ -231,20 +241,21 @@ export function ConversationSidebar() {
             }}
           >
             <span className="sidebar-nav-icon" aria-hidden="true">
-              ⏱
+              <IconSchedules size={17} />
             </span>
             <span className="sidebar-nav-text">Schedules</span>
           </NavLink>
         </nav>
 
-        <div className="sidebar-section-label">Recent</div>
+        <div className="sidebar-section-divider" />
+        <div className="sidebar-section-label">Recent Conversations</div>
 
         <div className="sidebar-list" role="list">
           {conversations.length === 0 ? (
             <div className="sidebar-empty">
-              No conversations yet.
-              <br />
-              Start a new one above.
+              <IconSparkles size={20} className="sidebar-empty-icon" />
+              <span>No conversations yet.</span>
+              <small>Start a new chat to begin.</small>
             </div>
           ) : (
             conversations.map((conv) => {
@@ -297,7 +308,7 @@ export function ConversationSidebar() {
                       void removeConversation(conv.id);
                     }}
                   >
-                    ×
+                    <IconTrash size={13} />
                   </button>
                 </div>
               );
@@ -317,7 +328,7 @@ export function ConversationSidebar() {
               }}
             >
               <span className="sidebar-nav-icon" aria-hidden="true">
-                ⚙
+                <IconSettings size={17} />
               </span>
               <span className="sidebar-nav-text">Settings</span>
             </NavLink>
@@ -332,7 +343,7 @@ export function ConversationSidebar() {
                 }}
               >
                 <span className="sidebar-nav-icon" aria-hidden="true">
-                  ⇄
+                  <IconA2a size={17} />
                 </span>
                 <span className="sidebar-nav-text">A2A</span>
               </NavLink>
@@ -344,8 +355,7 @@ export function ConversationSidebar() {
               <button
                 type="button"
                 className="sidebar-user"
-                title="Double-click to log out"
-                onDoubleClick={() => void onLogout()}
+                title="Click to expand session options"
                 onClick={() => setAuthOpen((v) => !v)}
               >
                 <span className="sidebar-user-avatar" aria-hidden="true">
@@ -367,7 +377,7 @@ export function ConversationSidebar() {
                 aria-expanded={authOpen}
                 onClick={() => setAuthOpen((v) => !v)}
               >
-                Sign in
+                Sign In / Register
               </button>
             )}
             {authOpen && !signedIn ? (
@@ -420,7 +430,7 @@ export function ConversationSidebar() {
                 className="btn-auth secondary sidebar-logout"
                 onClick={() => void onLogout()}
               >
-                Log out
+                Log Out
               </button>
             ) : null}
           </div>

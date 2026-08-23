@@ -16,7 +16,7 @@ import { PiRuntimeFactoryError } from './errors.js';
 import { PiSessionAdapter } from './pi-session-adapter.js';
 import { createRunSettingsManager } from '../../application/context-policy-service.js';
 import { LOGICAL_WORKSPACE_ROOT } from '../../extensions/sandbox-bridge/constants.js';
-import { PINNED_PI_SDK_VERSION } from './pi-runtime-constants.js';
+import { PINNED_PI_SDK_VERSION, assertSandboxShadowedTools } from './pi-runtime-constants.js';
 import {
   bindAgentVersionConfig,
   resolveAgentVersionBindings,
@@ -27,7 +27,10 @@ import {
 // and the binding rules it enforces.
 export {
   LOCAL_FILESYSTEM_TOOL_NAMES,
+  SANDBOX_SHADOWED_TOOL_NAMES,
   PINNED_PI_SDK_VERSION,
+  assertSandboxShadowedTools,
+  findUnshadowedLocalTools,
 } from './pi-runtime-constants.js';
 export {
   AGENT_VERSION_THINKING_LEVELS,
@@ -336,6 +339,7 @@ export class PiRuntimeFactory {
           : undefined,
       });
       await session.bindExtensions(extensionBindings);
+      assertSandboxShadowedTools(session);
       bindCount += 1;
     };
 

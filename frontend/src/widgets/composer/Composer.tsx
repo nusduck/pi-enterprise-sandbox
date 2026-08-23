@@ -31,6 +31,18 @@ import {
   formatRunStatusLabel,
   getActiveRunEntity,
 } from '../runtime-timeline/buildTimeline';
+import {
+  IconPaperclip,
+  IconPuzzle,
+  IconStop,
+  IconSend,
+  IconSteer,
+  IconPlus,
+  IconRefresh,
+  IconClose,
+  IconAlertCircle,
+  IconUpload,
+} from '../../shared/ui/Icons';
 
 function formatSize(n?: number | null): string {
   if (n == null || Number.isNaN(Number(n))) return '';
@@ -119,6 +131,13 @@ export function Composer() {
   const idleSendDisabled = !gateOk;
   const textEmpty = !draftText.trim() && !hasUploaded;
 
+  useEffect(() => {
+    const el = textareaRef.current;
+    if (!el) return;
+    el.style.height = 'auto';
+    el.style.height = `${Math.min(el.scrollHeight, 160)}px`;
+  }, [draftText]);
+
   function onKeyDown(e: KeyboardEvent<HTMLTextAreaElement>) {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
@@ -130,7 +149,7 @@ export function Composer() {
     setDraftText(e.target.value);
     const el = e.target;
     el.style.height = 'auto';
-    el.style.height = `${Math.min(el.scrollHeight, 150)}px`;
+    el.style.height = `${Math.min(el.scrollHeight, 160)}px`;
   }
 
   function openFilePicker() {
@@ -202,7 +221,7 @@ export function Composer() {
           : 'Remove or retry failed attachments'
         : 'Send (Enter)'
       : runningAction === 'steer' && mode === 'running'
-        ? 'Steer — change direction now (Enter)'
+        ? 'Steer — change direction immediately (Enter)'
         : 'Follow-up — queue after current work (Enter)';
 
   const primaryDisabled =
@@ -232,22 +251,27 @@ export function Composer() {
         }}
       >
         <div className="dropzone-inner">
-          <div className="dz-icon">📤</div>
+          <div className="dz-icon">
+            <IconUpload size={38} />
+          </div>
           <p>Drop file to upload</p>
-          <small>Uploaded to sandbox workspace</small>
+          <small>Uploaded directly to sandbox workspace</small>
         </div>
       </div>
 
       <div className={`input-wrap composer-mode-${mode}`}>
         {mode === 'waiting_approval' ? (
           <div className="composer-banner waiting" role="status">
-            <span className="composer-banner-text">
-              Agent is waiting for approval
-              {pendingApproval?.reason
-                ? `: ${pendingApproval.reason}`
-                : ''}
-            </span>
-            <span className="composer-banner-actions">
+            <div className="composer-banner-content">
+              <IconAlertCircle size={16} className="composer-banner-icon" />
+              <span className="composer-banner-text">
+                Agent is waiting for human approval
+                {pendingApproval?.reason
+                  ? `: ${pendingApproval.reason}`
+                  : ''}
+              </span>
+            </div>
+            <div className="composer-banner-actions">
               <button
                 type="button"
                 className="composer-banner-btn approve"
@@ -280,23 +304,26 @@ export function Composer() {
                   className="composer-banner-btn stop"
                   onClick={onStop}
                 >
-                  Cancel run
+                  Cancel Run
                 </button>
               ) : null}
-            </span>
+            </div>
           </div>
         ) : null}
 
         {mode === 'waiting_input' && run?.pendingInput ? (
           <div className="composer-banner waiting ix-composer-hint" role="status">
-            <span className="composer-banner-text">
-              <strong>{run.pendingInput.title}</strong>
-              {run.pendingInput.message
-                ? ` — reply in the card above or type here`
-                : ' — reply in the card above or type here'}
-            </span>
+            <div className="composer-banner-content">
+              <IconAlertCircle size={16} className="composer-banner-icon" />
+              <span className="composer-banner-text">
+                <strong>{run.pendingInput.title}</strong>
+                {run.pendingInput.message
+                  ? ` — reply in card or type here`
+                  : ' — reply in card or type here'}
+              </span>
+            </div>
             {run.pendingInput.options.length ? (
-              <span className="composer-banner-actions">
+              <div className="composer-banner-actions">
                 {run.pendingInput.options.map((option) => (
                   <button
                     key={option}
@@ -307,10 +334,10 @@ export function Composer() {
                     {option}
                   </button>
                 ))}
-              </span>
+              </div>
             ) : null}
             {run.pendingInput.interactionType === 'confirm' ? (
-              <span className="composer-banner-actions">
+              <div className="composer-banner-actions">
                 <button
                   type="button"
                   className="composer-banner-btn approve"
@@ -325,21 +352,24 @@ export function Composer() {
                 >
                   Decline
                 </button>
-              </span>
+              </div>
             ) : null}
           </div>
         ) : null}
 
         {showResume ? (
           <div className="composer-banner resume" role="status">
-            <span className="composer-banner-text">
-              Run was interrupted
-              {run?.status === 'interrupted'
-                ? ` (${formatRunStatusLabel(run.status)})`
-                : ''}
-              . You can continue the conversation.
-            </span>
-            <span className="composer-banner-actions">
+            <div className="composer-banner-content">
+              <IconAlertCircle size={16} className="composer-banner-icon" />
+              <span className="composer-banner-text">
+                Run was interrupted
+                {run?.status === 'interrupted'
+                  ? ` (${formatRunStatusLabel(run.status)})`
+                  : ''}
+                . You can continue the execution.
+              </span>
+            </div>
+            <div className="composer-banner-actions">
               <button
                 type="button"
                 className="composer-banner-btn resume"
@@ -350,7 +380,7 @@ export function Composer() {
               >
                 Resume
               </button>
-            </span>
+            </div>
           </div>
         ) : null}
 
@@ -367,7 +397,7 @@ export function Composer() {
                 disabled={!canSteer(mode, run?.status)}
                 title="Change current execution direction"
               >
-                Steer
+                <IconSteer size={13} /> Steer
               </button>
               <button
                 type="button"
@@ -375,7 +405,7 @@ export function Composer() {
                 onClick={() => setRunningAction('follow_up')}
                 title="Queue after current run finishes"
               >
-                Follow-up
+                <IconPlus size={13} /> Follow-up
               </button>
             </div>
             <span className="composer-action-hint">
@@ -437,7 +467,7 @@ export function Composer() {
                     aria-label={`Retry ${a.name}`}
                     onClick={() => void retryAttachmentDraft(a.localId)}
                   >
-                    ↻
+                    <IconRefresh size={13} />
                   </button>
                 ) : null}
                 <button
@@ -447,7 +477,7 @@ export function Composer() {
                   aria-label={`Remove ${a.name}`}
                   onClick={() => removeAttachmentDraft(a.localId)}
                 >
-                  ×
+                  <IconClose size={13} />
                 </button>
               </span>
             </div>
@@ -464,54 +494,57 @@ export function Composer() {
         </div>
 
         <div className="input-inner">
-          <button
-            className="btn btn-upload"
-            id="btn-install-skill"
-            title="Install a Skill ZIP"
-            aria-label="Install a Skill ZIP"
-            type="button"
-            onClick={openSkillPicker}
-            disabled={mode !== 'idle'}
-          >
-            🧩
-          </button>
-          <input
-            ref={skillFileInputRef}
-            type="file"
-            accept=".zip,application/zip"
-            hidden
-            onChange={(e) => {
-              if (e.target.files?.length) {
-                void handleFilesSelected(e.target.files);
-                if (!draftText.trim()) {
-                  setDraftText('Install the attached Skill ZIP for my account.');
+          <div className="composer-tools-left">
+            <button
+              className="btn btn-upload"
+              id="btn-install-skill"
+              title="Install a Skill ZIP"
+              aria-label="Install a Skill ZIP"
+              type="button"
+              onClick={openSkillPicker}
+              disabled={mode !== 'idle'}
+            >
+              <IconPuzzle size={17} />
+            </button>
+            <input
+              ref={skillFileInputRef}
+              type="file"
+              accept=".zip,application/zip"
+              hidden
+              onChange={(e) => {
+                if (e.target.files?.length) {
+                  void handleFilesSelected(e.target.files);
+                  if (!draftText.trim()) {
+                    setDraftText('Install the attached Skill ZIP for my account.');
+                  }
+                  e.target.value = '';
                 }
-                e.target.value = '';
-              }
-            }}
-          />
-          <button
-            className="btn btn-upload"
-            id="btn-upload"
-            title="Attach files (Ctrl+U)"
-            type="button"
-            onClick={openFilePicker}
-            disabled={mode === 'running'}
-          >
-            📎
-          </button>
-          <input
-            ref={fileInputRef}
-            type="file"
-            multiple
-            hidden
-            onChange={(e) => {
-              if (e.target.files?.length) {
-                void handleFilesSelected(e.target.files);
-                e.target.value = '';
-              }
-            }}
-          />
+              }}
+            />
+            <button
+              className="btn btn-upload"
+              id="btn-upload"
+              title="Attach files (Ctrl+U)"
+              type="button"
+              onClick={openFilePicker}
+              disabled={mode === 'running'}
+            >
+              <IconPaperclip size={17} />
+            </button>
+            <input
+              ref={fileInputRef}
+              type="file"
+              multiple
+              hidden
+              onChange={(e) => {
+                if (e.target.files?.length) {
+                  void handleFilesSelected(e.target.files);
+                  e.target.value = '';
+                }
+              }}
+            />
+          </div>
+
           <textarea
             id="input"
             ref={textareaRef}
@@ -522,29 +555,38 @@ export function Composer() {
             onChange={onInput}
             onKeyDown={onKeyDown}
           />
-          {canStop(mode) ? (
+
+          <div className="composer-tools-right">
+            {canStop(mode) ? (
+              <button
+                className="btn btn-stop"
+                id="btn-stop"
+                type="button"
+                title="Stop run"
+                aria-label="Stop generating"
+                onClick={onStop}
+              >
+                <IconStop size={13} />
+              </button>
+            ) : null}
             <button
-              className="btn btn-stop"
-              id="btn-stop"
+              className={`btn ${mode === 'idle' ? 'btn-send' : 'btn-action'}`}
+              id="btn-send"
               type="button"
-              title="Stop run"
-              aria-label="Stop generating"
-              onClick={onStop}
+              title={primaryTitle}
+              aria-label={primaryLabel}
+              disabled={primaryDisabled}
+              onClick={() => void onPrimaryAction()}
             >
-              ■
+              {mode === 'idle' ? (
+                <IconSend size={15} />
+              ) : primaryLabel === 'Steer' ? (
+                <IconSteer size={15} />
+              ) : (
+                <IconPlus size={15} />
+              )}
             </button>
-          ) : null}
-          <button
-            className={`btn ${mode === 'idle' ? 'btn-send' : 'btn-action'}`}
-            id="btn-send"
-            type="button"
-            title={primaryTitle}
-            aria-label={primaryLabel}
-            disabled={primaryDisabled}
-            onClick={() => void onPrimaryAction()}
-          >
-            {mode === 'idle' ? '➤' : primaryLabel === 'Steer' ? '↪' : '＋'}
-          </button>
+          </div>
         </div>
       </div>
     </>

@@ -3,6 +3,7 @@ import { useChat } from '../../features/chat/ChatContext';
 import { getArtifactDownloadUrl } from '../../shared/api';
 import { safeApiUrl } from '../../shared/security/url';
 import { isDurableArtifactId } from '../../shared/state/runReducer';
+import { IconDownload, IconFile } from '../../shared/ui/Icons';
 
 function formatSize(n?: number | null): string {
   if (n == null || Number.isNaN(Number(n))) return '';
@@ -52,7 +53,6 @@ export function DeliverablesPanel() {
     return out;
   }, [entityStore, activeRunId, state.conversationId]);
 
-  // API list is already sandbox artifact register (submit path); de-dupe by id.
   const listed = (state.artifacts || []).filter((a) => {
     const id = a.artifact_id || a.id;
     if (!id) return false;
@@ -79,6 +79,7 @@ export function DeliverablesPanel() {
   return (
     <div id="deliverables" className="deliverables">
       <div className="deliverables-head">
+        <IconFile size={14} className="deliverables-icon" />
         <span className="deliverables-title">Deliverables</span>
         <span className="deliverables-count" id="deliverables-count">
           {total}
@@ -87,7 +88,6 @@ export function DeliverablesPanel() {
       <div className="deliverables-list" id="deliverables-list">
         {entityArtifacts.map((a) => {
           const sid = a.sessionId || activeSessionId;
-          // Strict: durable artifact_id only — never workspace path download.
           if (!sid || !a.id || !isDurableArtifactId(a.id, activeRunId || '')) {
             return null;
           }
@@ -104,15 +104,15 @@ export function DeliverablesPanel() {
               title={a.path || a.name}
               data-source="submit_artifact"
             >
-              ⬇ {a.name}
-              {size ? <span className="chip-size"> {size}</span> : null}
+              <IconDownload size={13} />
+              <span className="artifact-chip-name">{a.name}</span>
+              {size ? <span className="chip-size">{size}</span> : null}
             </a>
           );
         })}
         {listed.map((a) => {
           const id = a.artifact_id || a.id;
           const name = a.name || a.path || id || 'file';
-          // Strict: durable artifact_id only — never workspace path download.
           if (!id || !activeSessionId || !isDurableArtifactId(String(id), activeRunId || '')) {
             return null;
           }
@@ -129,8 +129,9 @@ export function DeliverablesPanel() {
               title={a.path || String(name)}
               data-source="submit_artifact"
             >
-              ⬇ {String(name)}
-              {size ? <span className="chip-size"> {size}</span> : null}
+              <IconDownload size={13} />
+              <span className="artifact-chip-name">{String(name)}</span>
+              {size ? <span className="chip-size">{size}</span> : null}
             </a>
           );
         })}

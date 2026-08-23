@@ -97,6 +97,20 @@ class AuthCredentialRepository:
             row = conn.fetchone()
         return _row(row)
 
+    def set_role(self, external_user_id: str, role: str) -> None:
+        """Set an account's role (admin bootstrap / demotion)."""
+        now = _utcnow()
+        with self.db.connection() as conn:
+            conn.execute(
+                """
+                UPDATE auth_credentials
+                SET role = %s, updated_at = %s
+                WHERE external_user_id = %s
+                """,
+                (role, now, external_user_id),
+            )
+            conn.commit()
+
     def touch_login(self, external_user_id: str) -> None:
         now = _utcnow()
         with self.db.connection() as conn:

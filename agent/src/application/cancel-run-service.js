@@ -17,6 +17,11 @@
  * Redis failure must not erase MySQL intent; response indicates signal pending.
  * Parked WAITING_INPUT / WAITING_APPROVAL Runs are terminalized by the API
  * transaction; active/queued Runs are still terminalized by the Worker.
+ *
+ * If that transaction loses a deadlock or lock wait against the Worker, the
+ * rollback takes the intent with it. A second, minimal transaction then writes
+ * the intent alone so a cancel is never silently dropped; the caller still
+ * sees the dependency error. See #commitCancel.
  */
 
 import { RUN_STATUS, runStateMachine } from '../domain/run/index.js';
@@ -89,44 +94,70 @@ export class CancelRunService {
   }
 
   /**
-   * @param {{
-   *   runId: string,
-   *   auth: {
-   *     provider?: string,
-   *     externalOrgId: string,
-   *     externalUserId: string,
-   *   },
-   *   reason?: string | null,
-   * }} input
-   * @returns {Promise<CancelRunResponse>}
+   * Commit the cancel decision, and never lose the user's intent to a
+   * transient MySQL failure.
+   *
+   * The full transaction touches the Run row, its event ledger and the Outbox
+   * while the Worker is writing to the same rows, so it can lose a deadlock or
+   * a lock wait. That rolls everything back — including the durable intent the
+   * Worker reads to stop the Run — leaving a user who pressed Cancel with an
+   * error and a Run that keeps burning provider budget. So on a dependency
+   * failure, write the intent alone (one short UPDATE, first-writer-wins) and
+   * still surface the error: the caller learns the cancel did not complete,
+   * while the Run is already condemned.
+   *
+   * @param {string} runId
+   * @param {{ auth: object, reason?: string | null }} input
    */
-  async execute(input) {
-    if (!input || typeof input !== 'object') {
-      throw new ValidationError('CancelRun input is required');
-    }
-    if (typeof input.runId !== 'string' || !input.runId.trim()) {
-      throw new ValidationError('runId is required');
-    }
-    if (isLegacyOrUuidIdentity(input.runId)) {
-      throw new OwnerScopedNotFoundError('Run not found', {
-        resource: 'runs',
-        id: input.runId,
-      });
-    }
-    let runId;
+  async #commitCancel(runId, input) {
     try {
-      runId = assertUlid(input.runId, 'runId');
-    } catch {
-      throw new OwnerScopedNotFoundError('Run not found', {
-        resource: 'runs',
-        id: input.runId,
-      });
+      return await this.#cancelInTxn(runId, input);
+    } catch (err) {
+      if (err?.code !== 'MYSQL_DEPENDENCY_ERROR') throw err;
+      try {
+        await this.#recordIntentOnly(runId, input);
+      } catch {
+        // Best effort. The original dependency error is the one to report.
+      }
+      throw err;
     }
-    if (!input.auth) {
-      throw new ValidationError('auth (trusted external subjects) is required');
-    }
+  }
 
-    const committed = await this.tx.run(async (trx) => {
+  /**
+   * Durable cancel intent with no status transition, in its own short
+   * transaction. Idempotent by construction (first-writer-wins).
+   *
+   * @param {string} runId
+   * @param {{ auth: object, reason?: string | null }} input
+   */
+  async #recordIntentOnly(runId, input) {
+    return this.tx.run(async (trx) => {
+      const repos = this.createRepositories(trx);
+      const resolver = new ExternalIdentityResolver(
+        {
+          organizations: repos.organizations,
+          externalRefs: repos.externalRefs,
+        },
+        { defaultProvider: this.defaultProvider },
+      );
+      const owner = await resolver.resolveOwner(input.auth);
+      const scope = { orgId: owner.orgId, userId: owner.userId };
+      const run = await repos.runs.getById(runId, scope);
+      if (!run || this.stateMachine.isTerminal(run.status)) return null;
+      return repos.runs.setCancelIntent(runId, scope, {
+        reason: input.reason ?? null,
+        requestedBy: owner.userId,
+        requestedAt: this.now(),
+      });
+    });
+  }
+
+  /**
+   * @param {string} runId
+   * @param {{ auth: object, reason?: string | null }} input
+   */
+  async #cancelInTxn(runId, input) {
+    return this.tx.run(async (trx) => {
       const repos = this.createRepositories(trx);
       const resolver = new ExternalIdentityResolver(
         {
@@ -298,8 +329,48 @@ export class CancelRunService {
         requestedBy: owner.userId,
         reason: withIntent.cancelReason,
         cancelledDescendants,
-      };
-    });
+      };    });
+  }
+
+  /**
+   * @param {{
+   *   runId: string,
+   *   auth: {
+   *     provider?: string,
+   *     externalOrgId: string,
+   *     externalUserId: string,
+   *   },
+   *   reason?: string | null,
+   * }} input
+   * @returns {Promise<CancelRunResponse>}
+   */
+  async execute(input) {
+    if (!input || typeof input !== 'object') {
+      throw new ValidationError('CancelRun input is required');
+    }
+    if (typeof input.runId !== 'string' || !input.runId.trim()) {
+      throw new ValidationError('runId is required');
+    }
+    if (isLegacyOrUuidIdentity(input.runId)) {
+      throw new OwnerScopedNotFoundError('Run not found', {
+        resource: 'runs',
+        id: input.runId,
+      });
+    }
+    let runId;
+    try {
+      runId = assertUlid(input.runId, 'runId');
+    } catch {
+      throw new OwnerScopedNotFoundError('Run not found', {
+        resource: 'runs',
+        id: input.runId,
+      });
+    }
+    if (!input.auth) {
+      throw new ValidationError('auth (trusted external subjects) is required');
+    }
+
+    const committed = await this.#commitCancel(runId, input);
 
     let signalPending = false;
     if (!committed.skipSignal) {

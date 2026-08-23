@@ -418,11 +418,18 @@ async def value_error_handler(request: Request, exc: ValueError):
 # user-facing BFF flows. Session identity and all authority come from the
 # formal AgentSession/SandboxSession binding installed by the internal plane.
 from sandbox.artifact.api import public as artifacts
-from sandbox.routers import auth_router, datasets, files, session_workspace
+from sandbox.routers import (
+    auth_router,
+    datasets,
+    files,
+    session_processes,
+    session_workspace,
+)
 
 app.include_router(auth_router.router)
 app.include_router(session_workspace.router)
 app.include_router(files.router)
+app.include_router(session_processes.router)
 app.include_router(datasets.router)
 app.include_router(artifacts.router)
 app.include_router(health.router)
