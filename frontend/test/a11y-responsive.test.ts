@@ -156,3 +156,23 @@ describe('F6 cleanup invariants', () => {
     assert.equal(typeof mod.clearPersistedChat, 'function');
   });
 });
+
+describe('message log a11y: no token-level live region', () => {
+  it('MessageList silences its live region so stream tokens are not re-announced', () => {
+    // role="log" carries an IMPLICIT polite live region, so merely dropping an
+    // explicit aria-live changes nothing — the transcript must opt out with
+    // aria-live="off". Streaming appends mutate existing text nodes, which the
+    // default aria-relevant ("additions text") would otherwise announce on
+    // every SSE delta. Run state is announced via FlashZone instead.
+    const list = readSrc('widgets', 'message-list', 'MessageList.tsx');
+    assert.match(list, /role=["']log["']/);
+    assert.match(list, /aria-live=["']off["']/);
+    assert.doesNotMatch(list, /aria-live=["']polite["']/);
+  });
+
+  it('FlashZone stays the assertive announce channel for run state', () => {
+    const flash = readSrc('widgets', 'flash', 'FlashZone.tsx');
+    assert.match(flash, /role=["']status["']/);
+    assert.match(flash, /aria-live=["']assertive["']/);
+  });
+});

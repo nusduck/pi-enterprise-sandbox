@@ -1,7 +1,14 @@
-import { useEffect, useMemo, useRef } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useChat } from '../../features/chat/ChatContext';
 import { MessageBubble } from './MessageBubble';
-import { IconSparkles, IconTerminal, IconCode, IconAlertCircle } from '../../shared/ui/Icons';
+import {
+  lastAssistantIndex,
+  findRegenerateSource,
+  shouldShowJumpToBottom,
+} from './messageActions';
+import { runHasEntitySteps } from '../runtime-steps/InlineRuntimeSteps';
+import { isTerminalRunStatus } from '../../entities';
+import { IconChevronDown, IconSparkles, IconTerminal, IconCode, IconAlertCircle } from '../../shared/ui/Icons';
 
 const PROMPT_STARTERS = [
   {
@@ -31,19 +38,35 @@ const PROMPT_STARTERS = [
 ];
 
 export function MessageList() {
-  const { state, displayMessages, setDraftText } = useChat();
+  const { state, displayMessages, setDraftText, sendMessage, entityStore, activeRunId } = useChat();
   const ref = useRef<HTMLDivElement>(null);
   const isNearBottomRef = useRef(true);
+  const [showJumpToBottom, setShowJumpToBottom] = useState(false);
 
   function handleScroll() {
     const el = ref.current;
     if (!el) return;
     const distance = el.scrollHeight - el.scrollTop - el.clientHeight;
     isNearBottomRef.current = distance < 120;
+    setShowJumpToBottom(
+      shouldShowJumpToBottom(distance, {
+        hasMessages: displayMessages.length > 0,
+      }),
+    );
   }
 
+  function scrollToBottom() {
+    const el = ref.current;
+    if (!el) return;
+    isNearBottomRef.current = true;
+    setShowJumpToBottom(false);
+    el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
+  }
+
+  // Hide the jump button whenever an effect scrolls us back to the bottom.
   useEffect(() => {
     isNearBottomRef.current = true;
+    setShowJumpToBottom(false);
     const el = ref.current;
     if (!el) return;
     requestAnimationFrame(() => {
@@ -62,6 +85,9 @@ export function MessageList() {
         el.scrollTop = el.scrollHeight;
       });
     }
+    setShowJumpToBottom((show) =>
+      isNearBottomRef.current || displayMessages.length === 0 ? false : show,
+    );
   }, [displayMessages]);
 
   /** One step rail per run — attach to the last assistant bubble of that run. */
@@ -75,6 +101,28 @@ export function MessageList() {
     return new Set(lastByRun.values());
   }, [displayMessages]);
 
+  /** Regenerate is only offered on the last assistant bubble while idle. */
+  const regen = useMemo(() => {
+    const assistantIdx = lastAssistantIndex(displayMessages);
+    if (assistantIdx < 0) {
+      return { assistantIdx, source: null as string | null, allowed: false };
+    }
+    const activeRun = activeRunId ? entityStore.runsById[activeRunId] : null;
+    const runBusy = Boolean(
+      activeRun && !isTerminalRunStatus(String(activeRun.status)),
+    );
+    return {
+      assistantIdx,
+      source: findRegenerateSource(displayMessages, assistantIdx),
+      allowed: !state.isStreaming && !runBusy,
+    };
+  }, [displayMessages, state.isStreaming, entityStore, activeRunId]);
+
+  const handleRegenerate = useCallback(
+    (text: string) => void sendMessage(text),
+    [sendMessage],
+  );
+
   function selectStarter(prompt: string) {
     setDraftText(prompt);
     const textarea = document.getElementById('input') as HTMLTextAreaElement | null;
@@ -83,13 +131,16 @@ export function MessageList() {
     }
   }
 
+  // aria-live="off" is deliberate: role="log" carries an implicit polite live
+  // region, and streaming SSE tokens mutate existing text nodes, so leaving it
+  // live makes screen readers re-read the transcript on every delta. Run state
+  // is announced by FlashZone (role="status" + aria-live="assertive") instead.
   return (
     <div
       id="messages"
       className="msgs"
       role="log"
-      aria-live="polite"
-      aria-relevant="additions"
+      aria-live="off"
       ref={ref}
       onScroll={handleScroll}
     >
@@ -131,25 +182,55 @@ export function MessageList() {
             <span className="hint-sep">·</span>
             <kbd>Shift+Enter</kbd> newline
             <span className="hint-sep">·</span>
-            <kbd>Ctrl+L</kbd> new chat
+            <kbd>Ctrl/Cmd+U</kbd> attach
+            <span className="hint-sep">·</span>
+            <kbd>Ctrl/Cmd+L</kbd> new chat
           </p>
         </div>
       ) : (
-        displayMessages.map((msg, idx) => (
-          <MessageBubble
-            key={
-              msg._messageId
-                ? `${msg.role}-${msg._messageId}`
-                : msg._runId
-                  ? `${msg.role}-${msg._runId}-${idx}`
-                  : `${msg.role}-${idx}`
-            }
-            msg={msg}
-            idx={idx}
-            showRuntimeSteps={runtimeStepRunIds.has(idx)}
-          />
-        ))
+        displayMessages.map((msg, idx) => {
+          const showRuntimeSteps = runtimeStepRunIds.has(idx);
+          const useEntitySteps =
+            showRuntimeSteps &&
+            msg.role === 'assistant' &&
+            Boolean(msg._runId) &&
+            runHasEntitySteps(entityStore, msg._runId || null);
+          const canRegenerate =
+            regen.allowed && idx === regen.assistantIdx;
+          // Only the regenerating bubble gets the source text: handing it to
+          // every bubble would break their memo comparator on each new turn.
+          const regenerateSource = canRegenerate ? regen.source : null;
+          return (
+            <MessageBubble
+              key={
+                msg._messageId
+                  ? `${msg.role}-${msg._messageId}`
+                  : msg._runId
+                    ? `${msg.role}-${msg._runId}-${idx}`
+                    : `${msg.role}-${idx}`
+              }
+              msg={msg}
+              idx={idx}
+              showRuntimeSteps={showRuntimeSteps}
+              useEntitySteps={useEntitySteps}
+              canRegenerate={canRegenerate}
+              regenerateSource={regenerateSource}
+              onRegenerate={handleRegenerate}
+            />
+          );
+        })
       )}
+      {showJumpToBottom ? (
+        <button
+          type="button"
+          className="jump-to-bottom"
+          aria-label="Jump to latest messages"
+          title="Jump to latest messages"
+          onClick={scrollToBottom}
+        >
+          <IconChevronDown size={16} />
+        </button>
+      ) : null}
     </div>
   );
 }

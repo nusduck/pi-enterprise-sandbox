@@ -1177,6 +1177,57 @@ body {
 .mw:hover .time { opacity: 1; }
 .mw.user .time { text-align: right; }
 
+.msg-actions {
+  display: flex;
+  gap: var(--space-2);
+  margin-top: 4px;
+  opacity: 0;
+  transition: opacity var(--duration-fast) var(--ease-out);
+}
+.mw:hover .msg-actions,
+.msg-actions:focus-within {
+  opacity: 1;
+}
+
+.msg-action-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  border: none;
+  border-radius: var(--radius-sm, 6px);
+  background: transparent;
+  color: var(--color-text-dim);
+  font-size: 11px;
+  cursor: pointer;
+}
+.msg-action-btn:hover {
+  background: var(--material-fill);
+  color: var(--color-text);
+}
+
+.jump-to-bottom {
+  position: sticky;
+  bottom: var(--space-4);
+  align-self: flex-end;
+  margin-right: var(--space-6);
+  z-index: 5;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border: 1px solid var(--separator-color, rgba(0, 0, 0, 0.08));
+  border-radius: var(--radius-pill);
+  background: var(--color-bg-elevated, var(--color-bg));
+  color: var(--color-text);
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.12);
+  cursor: pointer;
+}
+.jump-to-bottom:hover {
+  background: var(--material-fill);
+}
+
 .msg-interrupted-banner {
   display: inline-flex;
   align-items: center;

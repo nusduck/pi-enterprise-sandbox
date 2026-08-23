@@ -143,7 +143,7 @@ render → security.isAllowedApiUrl 校验后生成 <a class="dl" href="/api/...
 
 ## 事件绑定
 
-| 交互 | 触发 | 处理 |
+| 事件 | 触发 | 处理 |
 |------|------|------|
 | 发送消息 | Enter / 发送按钮 | `sendMessage` |
 | 中断流 | 停止按钮 | `abortStream` |
@@ -152,6 +152,9 @@ render → security.isAllowedApiUrl 校验后生成 <a class="dl" href="/api/...
 | 新对话 | 侧栏 New chat | `startNewChat` |
 | 切换会话 | 侧栏列表 | `selectConversation` |
 | 审批 | 横幅按钮 | `decideApproval` |
+| 复制消息 | 气泡下方 Copy（hover 显示） | 剪贴板写入 `messagePlainText(msg)` |
+| 重新生成 | 最后一条助手气泡的 Regenerate（仅 idle 时显示） | 取前一条用户回合文本重发 `sendMessage`（纯文本；不重建附件） |
+| 回到最新 | 右下角浮标（距底部 >120px 时出现） | smooth 滚动到底 |
 
 ## SSE 事件消费
 
@@ -197,6 +200,12 @@ npm run build --prefix frontend     # 生产构建（CI 同款）
 
 | 快捷键 | 操作 |
 |--------|------|
-| `Enter` | 发送消息 |
+| `Enter` | 发送消息（输入法组合期间不触发，回车先确认候选词） |
 | `Shift+Enter` | 换行 |
-| `Ctrl+U` | 打开文件选择器上传 |
+| `Ctrl+U` / `Cmd+U` | 打开文件选择器上传（Run 运行中与按钮一致被禁用） |
+| `Ctrl+L` / `Cmd+L` | 新建会话 |
+
+消息日志区域显式声明 `aria-live="off"`：`role="log"` 本身隐式携带 polite live
+region，而流式 token 是在已有文本节点上追加（落在默认 `aria-relevant` 的 `text`
+范畴内），不显式关掉就会让读屏逐 delta 重读整段 transcript。Run 状态变化由
+FlashZone（`role="status"` + `aria-live="assertive"`）统一播报。
