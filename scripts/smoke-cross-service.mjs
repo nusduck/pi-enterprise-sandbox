@@ -37,6 +37,11 @@ const ROOT = path.resolve(__dirname, '..');
 // non-production value local to the hermetic test; it is never used by a
 // deployed service.
 const SMOKE_SANDBOX_API_TOKEN = 'smoke-sandbox-service-token-0123456789abcdef';
+// The Agent's /internal/* plane reads the acting tenant from request headers,
+// so an unset token closes it. The smoke therefore runs the authenticated
+// path — the one a deployment uses — rather than the development escape
+// hatch, and covers BFF → Agent token propagation while it is at it.
+const SMOKE_AGENT_INTERNAL_TOKEN = 'smoke-agent-internal-token-0123456789abcdef';
 const children = [];
 
 function freePort() {
@@ -467,7 +472,7 @@ async function main() {
       AGENT_ENABLE_FAKE_LLM: '1',
       SANDBOX_BASE_URL: `http://127.0.0.1:${sandboxPort}`,
       SANDBOX_API_TOKEN: SMOKE_SANDBOX_API_TOKEN,
-      AGENT_INTERNAL_TOKEN: '',
+      AGENT_INTERNAL_TOKEN: SMOKE_AGENT_INTERNAL_TOKEN,
       AGENT_DATABASE_URL: agentMysqlUrl,
       AGENT_REDIS_URL: redisUrl,
       AGENT_MIGRATE_ON_START: 'false',
@@ -525,7 +530,7 @@ async function main() {
       NODE_ENV: 'test',
       SANDBOX_BASE_URL: `http://127.0.0.1:${sandboxPort}`,
       AGENT_BASE_URL: `http://127.0.0.1:${agentPort}`,
-      AGENT_INTERNAL_TOKEN: '',
+      AGENT_INTERNAL_TOKEN: SMOKE_AGENT_INTERNAL_TOKEN,
       AUTH_ENABLED: 'false',
       SANDBOX_API_TOKEN: SMOKE_SANDBOX_API_TOKEN,
       BFF_DEV_ACTING_USER_ID: `smoke-user-${process.pid}`,
