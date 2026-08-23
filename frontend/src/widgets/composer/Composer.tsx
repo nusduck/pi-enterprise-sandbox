@@ -15,6 +15,7 @@ import {
   isInterruptedMessage,
   uploadedAttachments,
 } from '../../shared/state';
+import { isEnterSubmitKey, isUploadShortcut } from '../../shared/ui/keyboard';
 import {
   canFollowUp,
   canSteer,
@@ -139,7 +140,7 @@ export function Composer() {
   }, [draftText]);
 
   function onKeyDown(e: KeyboardEvent<HTMLTextAreaElement>) {
-    if (e.key === 'Enter' && !e.shiftKey) {
+    if (isEnterSubmitKey({ key: e.key, shiftKey: e.shiftKey, isComposing: e.nativeEvent.isComposing })) {
       e.preventDefault();
       void onPrimaryAction();
     }
@@ -155,6 +156,34 @@ export function Composer() {
   function openFilePicker() {
     fileInputRef.current?.click();
   }
+
+  // Ctrl+U / Cmd+U attaches files. The upload button is disabled while a run
+  // is active, so the shortcut respects the same gate.
+  useEffect(() => {
+    const onKey = (e: globalThis.KeyboardEvent) => {
+      if (
+        !isUploadShortcut({
+          key: e.key,
+          ctrlKey: e.ctrlKey,
+          metaKey: e.metaKey,
+          shiftKey: e.shiftKey,
+          isComposing: e.isComposing,
+        })
+      ) {
+        return;
+      }
+      const target = e.target as HTMLElement | null;
+      if (target?.closest('[data-no-upload-shortcut]')) return;
+      e.preventDefault();
+      // The upload button is disabled while a run is active; the shortcut
+      // respects the same gate.
+      if (mode !== 'running') {
+        fileInputRef.current?.click();
+      }
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [mode]);
 
   function openSkillPicker() {
     skillFileInputRef.current?.click();

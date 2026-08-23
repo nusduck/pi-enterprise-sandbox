@@ -197,6 +197,11 @@ npm run build --prefix frontend     # 生产构建（CI 同款）
 
 | 快捷键 | 操作 |
 |--------|------|
-| `Enter` | 发送消息 |
+| `Enter` | 发送消息（输入法组合期间不触发，回车先确认候选词） |
 | `Shift+Enter` | 换行 |
-| `Ctrl+U` | 打开文件选择器上传 |
+| `Ctrl+U` / `Cmd+U` | 打开文件选择器上传（Run 运行中与按钮一致被禁用） |
+| `Ctrl+L` / `Cmd+L` | 新建会话 |
+
+消息日志区域不声明自己的 `aria-live`：流式 token 的高频更新不应进入读屏
+live region（`role="log"` 已隐式携带 polite 语义），Run 状态变化由 FlashZone
+（`role="status"` + `aria-live="assertive"`）统一播报。

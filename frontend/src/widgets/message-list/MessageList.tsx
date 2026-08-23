@@ -88,8 +88,6 @@ export function MessageList() {
       id="messages"
       className="msgs"
       role="log"
-      aria-live="polite"
-      aria-relevant="additions"
       ref={ref}
       onScroll={handleScroll}
     >

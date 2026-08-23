@@ -41,6 +41,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - ADR 0002 / 0003（2026-07-19，`7370220d`）——内容已被 `plan.md` 取代，编号不再复用。
 
+### Fixed
+
+- **输入法组合期回车误发送**：Composer 的回车提交未检查 `isComposing`，中文/日文输入法按回车确认候选词会把拼音原文直接发出去。现在组合期间的 Enter 不再触发提交（`isEnterSubmitKey` 纯函数 + 回归测试）。
+- **Ctrl+U 上传快捷键空头支票**：上传按钮文案宣称支持 Ctrl+U，但全局 keydown 里该分支只有注释没有实现。现在由 Composer 旁的监听器真正打开文件选择器（与按钮同一运行中禁用门控），且 `Ctrl/Cmd+L`（新建会话）在 macOS 上也能通过 Cmd 触发；快捷键在输入法组合期间同样不触发。
+- **消息日志 aria-live 刷屏**：流式输出时每个 SSE token 都进入整段 transcript 的 live region，读屏软件被逐 token 重读。移除 MessageList 上显式的 `aria-live`/`aria-relevant`（`role="log"` 已隐式 polite），Run 状态播报继续走 FlashZone 的 `role="status"`。
+
 ## [4.0.0] — 2026-07-04
 
 ### Added

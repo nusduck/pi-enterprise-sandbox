@@ -37,6 +37,7 @@ import {
   type ChatState,
   type ChatMessage,
 } from '../../shared/state';
+import { isNewChatShortcut } from '../../shared/ui/keyboard';
 import {
   createRun as apiCreateRun,
   streamRunEvents,
@@ -1343,15 +1344,21 @@ export function ChatProvider({ children }: { children: ReactNode }) {
 
   // Keyboard shortcuts
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.ctrlKey && e.key === 'l') {
+    const onKey = (e: globalThis.KeyboardEvent) => {
+      if (
+        isNewChatShortcut({
+          key: e.key,
+          ctrlKey: e.ctrlKey,
+          metaKey: e.metaKey,
+          shiftKey: e.shiftKey,
+          isComposing: e.isComposing,
+        })
+      ) {
         e.preventDefault();
         void startNewChat();
       }
-      if (e.ctrlKey && e.key === 'u') {
-        e.preventDefault();
-        // Triggered via composer upload button focus path — leave to Composer
-      }
+      // Ctrl+U (attach files) is handled inside the Composer, next to the
+      // file input it triggers.
     };
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);

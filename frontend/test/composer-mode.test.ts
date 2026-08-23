@@ -13,6 +13,11 @@ import {
   runningActionHint,
   shouldShowResumeEntry,
 } from '../src/widgets/composer/composerMode.ts';
+import {
+  isEnterSubmitKey,
+  isNewChatShortcut,
+  isUploadShortcut,
+} from '../src/shared/ui/keyboard.ts';
 
 describe('resolveComposerMode', () => {
   it('returns idle when not streaming and no run', () => {
@@ -119,5 +124,54 @@ describe('shouldShowResumeEntry', () => {
       false,
     );
     assert.equal(shouldShowResumeEntry({}), false);
+  });
+});
+
+describe('isEnterSubmitKey', () => {
+  it('submits on plain Enter', () => {
+    assert.equal(isEnterSubmitKey({ key: 'Enter' }), true);
+    assert.equal(
+      isEnterSubmitKey({ key: 'Enter', shiftKey: false, isComposing: false }),
+      true,
+    );
+  });
+
+  it('never submits on Shift+Enter (newline)', () => {
+    assert.equal(isEnterSubmitKey({ key: 'Enter', shiftKey: true }), false);
+  });
+
+  it('does not submit while an IME composition is in progress', () => {
+    // Chinese/Japanese/Korean input: Enter confirms the candidate, it must
+    // not send the raw composition text.
+    assert.equal(
+      isEnterSubmitKey({ key: 'Enter', isComposing: true }),
+      false,
+    );
+    assert.equal(isEnterSubmitKey({ key: 'Enter', isComposing: undefined }), true);
+  });
+
+  it('ignores non-Enter keys', () => {
+    assert.equal(isEnterSubmitKey({ key: 'a' }), false);
+    assert.equal(isEnterSubmitKey({ key: 'Escape' }), false);
+  });
+});
+
+describe('composer keyboard shortcuts', () => {
+  it('upload shortcut matches Ctrl+U and Cmd+U', () => {
+    assert.equal(isUploadShortcut({ key: 'u', ctrlKey: true }), true);
+    assert.equal(isUploadShortcut({ key: 'u', metaKey: true }), true);
+    assert.equal(isUploadShortcut({ key: 'u' }), false);
+    assert.equal(isUploadShortcut({ key: 'u', ctrlKey: true, shiftKey: true }), false);
+  });
+
+  it('new-chat shortcut matches Ctrl+L and Cmd+L', () => {
+    assert.equal(isNewChatShortcut({ key: 'l', ctrlKey: true }), true);
+    assert.equal(isNewChatShortcut({ key: 'l', metaKey: true }), true);
+    assert.equal(isNewChatShortcut({ key: 'l' }), false);
+  });
+
+  it('shortcuts never fire while an IME composition is active', () => {
+    assert.equal(isUploadShortcut({ key: 'u', ctrlKey: true, isComposing: true }), false);
+    assert.equal(isNewChatShortcut({ key: 'l', ctrlKey: true, isComposing: true }), false);
   });
 });

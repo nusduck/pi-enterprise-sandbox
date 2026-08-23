@@ -156,3 +156,22 @@ describe('F6 cleanup invariants', () => {
     assert.equal(typeof mod.clearPersistedChat, 'function');
   });
 });
+
+describe('message log a11y: no token-level live region', () => {
+  it('MessageList keeps role="log" but does not re-announce every stream token', () => {
+    // role="log" already implies polite live semantics; an explicit
+    // aria-live on the streaming transcript makes screen readers re-read
+    // the whole conversation on every SSE delta. Run state is announced
+    // via FlashZone (role="status") instead.
+    const list = readSrc('widgets', 'message-list', 'MessageList.tsx');
+    assert.match(list, /role=["']log["']/);
+    assert.doesNotMatch(list, /aria-live=/);
+    assert.doesNotMatch(list, /aria-relevant=/);
+  });
+
+  it('FlashZone stays the assertive announce channel for run state', () => {
+    const flash = readSrc('widgets', 'flash', 'FlashZone.tsx');
+    assert.match(flash, /role=["']status["']/);
+    assert.match(flash, /aria-live=["']assertive["']/);
+  });
+});
