@@ -1,6 +1,6 @@
 /**
  * Capability management — /settings/capabilities (F5 / ADR 0003 §11).
- * Tabs: Skills · MCP Servers · Tools · Models
+ * Tabs: Skills · MCP Servers · Tools · Models · Extension Diagnostics
  * Soft-fails when registry BFF endpoints are incomplete.
  */
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
@@ -17,6 +17,7 @@ import {
   type SoftListResult,
   type ToolRegistryItem,
 } from '../../shared/api/capabilities';
+import { IconRefresh, IconSparkles, IconPuzzle, IconTerminal, IconCode, IconLayers } from '../../shared/ui/Icons';
 
 const TABS = [
   { id: 'skills', label: 'Skills' },
@@ -72,8 +73,11 @@ function SkillCards({ items }: { items: SkillItem[] }) {
         return (
           <li key={name} className="mgmt-card">
             <header className="mgmt-card-head">
-              <h3 className="mgmt-card-title">{name}</h3>
-              <span className={`mgmt-status status-${status}`}>{status}</span>
+              <div className="mgmt-card-title-row">
+                <IconPuzzle size={16} className="mgmt-card-icon" />
+                <h3 className="mgmt-card-title">{name}</h3>
+              </div>
+              <span className={`mgmt-status status-${status}`}><span className="mgmt-status-dot" />{status}</span>
             </header>
             {s.description ? (
               <p className="mgmt-card-reason">{s.description}</p>
@@ -111,14 +115,17 @@ function McpCards({ items }: { items: McpServerItem[] }) {
         return (
           <li key={id} className="mgmt-card">
             <header className="mgmt-card-head">
-              <h3 className="mgmt-card-title">{s.name || id}</h3>
-              <span className={`mgmt-status status-${status}`}>{status}</span>
+              <div className="mgmt-card-title-row">
+                <IconLayers size={16} className="mgmt-card-icon" />
+                <h3 className="mgmt-card-title">{s.name || id}</h3>
+              </div>
+              <span className={`mgmt-status status-${status}`}><span className="mgmt-status-dot" />{status}</span>
             </header>
             <dl className="mgmt-meta-grid">
               <div>
                 <dt>Server ID</dt>
                 <dd>
-                  <code>{id}</code>
+                  <code className="mgmt-id-code">{id}</code>
                 </dd>
               </div>
               <div>
@@ -130,7 +137,7 @@ function McpCards({ items }: { items: McpServerItem[] }) {
                 <dd>{s.authorization || '—'}</dd>
               </div>
               <div>
-                <dt>Last refresh</dt>
+                <dt>Last Refresh</dt>
                 <dd>{s.last_refresh || s.last_refreshed_at || '—'}</dd>
               </div>
             </dl>
@@ -150,10 +157,13 @@ function ToolCards({ items }: { items: ToolRegistryItem[] }) {
         return (
           <li key={name} className="mgmt-card">
             <header className="mgmt-card-head">
-              <h3 className="mgmt-card-title">{name}</h3>
-              <span className={`mgmt-status status-${status}`}>{status}</span>
+              <div className="mgmt-card-title-row">
+                <IconTerminal size={16} className="mgmt-card-icon" />
+                <h3 className="mgmt-card-title">{name}</h3>
+              </div>
+              <span className={`mgmt-status status-${status}`}><span className="mgmt-status-dot" />{status}</span>
               {t.risk_level ? (
-                <span className="mgmt-risk">risk: {t.risk_level}</span>
+                <span className={`mgmt-risk risk-${t.risk_level}`}>risk: {t.risk_level}</span>
               ) : null}
             </header>
             {t.description ? (
@@ -173,7 +183,7 @@ function ToolCards({ items }: { items: ToolRegistryItem[] }) {
                 <dd>{t.approval_policy || '—'}</dd>
               </div>
               <div>
-                <dt>Risk from</dt>
+                <dt>Risk Source</dt>
                 <dd>{t.risk_source || '—'}</dd>
               </div>
               <div>
@@ -204,10 +214,14 @@ function ModelCards({ items }: { items: ModelItem[] }) {
         return (
           <li key={id} className="mgmt-card">
             <header className="mgmt-card-head">
-              <h3 className="mgmt-card-title">{id}</h3>
+              <div className="mgmt-card-title-row">
+                <IconCode size={16} className="mgmt-card-icon" />
+                <h3 className="mgmt-card-title">{id}</h3>
+              </div>
               <span
                 className={`mgmt-status status-${m.enabled === false ? 'disabled' : 'enabled'}`}
               >
+                <span className="mgmt-status-dot" />
                 {m.enabled === false ? 'disabled' : 'enabled'}
               </span>
             </header>
@@ -221,15 +235,15 @@ function ModelCards({ items }: { items: ModelItem[] }) {
                 <dd>{m.api_protocol || '—'}</dd>
               </div>
               <div>
-                <dt>Context window</dt>
+                <dt>Context Window</dt>
                 <dd>{m.context_window ?? '—'}</dd>
               </div>
               <div>
-                <dt>Max output</dt>
+                <dt>Max Output</dt>
                 <dd>{m.max_output_tokens ?? '—'}</dd>
               </div>
               <div>
-                <dt>Tool call</dt>
+                <dt>Tool Calls</dt>
                 <dd>{m.supports_tool_call ? 'Yes' : m.supports_tool_call === false ? 'No' : '—'}</dd>
               </div>
               <div>
@@ -297,7 +311,7 @@ export function CapabilitiesPage() {
 
   let body: ReactNode = null;
   if (loading) {
-    body = <div className="mgmt-empty">Loading registry…</div>;
+    body = <div className="mgmt-empty"><IconSparkles size={24} className="icon-pulse" /><p>Loading capability registry…</p></div>;
   } else if (tab === 'skills') {
     body =
       skills.items.length === 0 ? (
@@ -367,15 +381,15 @@ export function CapabilitiesPage() {
               <dd>{diagnostics.registry?.registry_version ?? '—'}</dd>
             </div>
             <div>
-              <dt>Run</dt>
+              <dt>Run ID</dt>
               <dd>{diagnostics.registry?.run_id || '—'}</dd>
             </div>
             <div>
-              <dt>Conversation</dt>
+              <dt>Conversation ID</dt>
               <dd>{diagnostics.registry?.conversation_id || '—'}</dd>
             </div>
             <div>
-              <dt>Session</dt>
+              <dt>Session ID</dt>
               <dd>{diagnostics.registry?.session_id || '—'}</dd>
             </div>
             <div>
@@ -383,15 +397,15 @@ export function CapabilitiesPage() {
               <dd>{diagnostics.package.audit?.status || '—'}</dd>
             </div>
             <div>
-              <dt>Allowed tools</dt>
+              <dt>Allowed Tools</dt>
               <dd>{diagnostics.profile.allowed_tools.length}</dd>
             </div>
             <div>
-              <dt>Shared skills policy</dt>
+              <dt>Shared Skills Policy</dt>
               <dd>{diagnostics.profile.shared_skills?.mode || '—'}</dd>
             </div>
             <div>
-              <dt>Generated</dt>
+              <dt>Generated At</dt>
               <dd>{diagnostics.generated_at}</dd>
             </div>
           </dl>
@@ -408,6 +422,7 @@ export function CapabilitiesPage() {
                 <header className="mgmt-card-head">
                   <h4 className="mgmt-card-title">{ext.name}</h4>
                   <span className={`mgmt-status status-${statusLabel(ext)}`}>
+                    <span className="mgmt-status-dot" />
                     {statusLabel(ext)}
                   </span>
                 </header>
@@ -446,9 +461,7 @@ export function CapabilitiesPage() {
         <div>
           <h2 className="mgmt-title">Capabilities</h2>
           <p className="mgmt-subtitle">
-            Skills, MCP servers, tools, and models from the enterprise registry.
-            Users can install a Skill ZIP from chat or ask the Agent to generate
-            one; every Skill mutation is submitted for approval.
+            Skills, MCP servers, tools, and models from the enterprise registry. Users can install Skill ZIP packages from chat.
           </p>
         </div>
         <button
@@ -457,7 +470,8 @@ export function CapabilitiesPage() {
           onClick={() => void refresh()}
           disabled={loading}
         >
-          {loading ? 'Refreshing…' : 'Refresh'}
+          <IconRefresh size={14} className={loading ? 'icon-spin' : ''} />
+          <span>{loading ? 'Refreshing…' : 'Refresh'}</span>
         </button>
       </header>
 

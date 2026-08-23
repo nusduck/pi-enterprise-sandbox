@@ -9,15 +9,14 @@ import {
   type SelectedEntity,
 } from '../../widgets/runtime-timeline/buildTimeline';
 import { WorkbenchSelectionContext } from './WorkbenchSelectionContext';
+import { IconMenu, IconSun, IconMoon } from '../../shared/ui/Icons';
+import { useTheme } from '../../shared/ui/theme';
 
 /**
  * Shell interaction model:
  * - Left: navigation + conversations (drawer on mobile)
  * - Center: page content (workbench owns its own toolbar)
  * - Right: context inspector (workbench only; opens on entity select)
- *
- * Management pages keep a slim global header; the chat workbench uses
- * ConversationHeader as the single top chrome so we don't stack bars.
  */
 function isManagementPath(pathname: string): boolean {
   return (
@@ -30,8 +29,9 @@ function isManagementPath(pathname: string): boolean {
 
 function managementTitle(pathname: string): string {
   if (pathname === '/runs') return 'Active Runs';
-  if (pathname === '/approvals') return 'Approvals';
+  if (pathname === '/approvals') return 'Approval Center';
   if (pathname === '/schedules') return 'Scheduled Runs';
+  if (pathname.startsWith('/settings/a2a')) return 'A2A Access';
   if (pathname.startsWith('/settings')) return 'Capabilities';
   return 'UPRC Agent';
 }
@@ -40,6 +40,7 @@ export function AppShell({ children }: { children: ReactNode }) {
   const location = useLocation();
   const management = isManagementPath(location.pathname);
   const { state, toggleSidebar, inspectorOpen, setInspectorOpen } = useChat();
+  const [theme, toggleTheme] = useTheme();
 
   const [inspectorTab, setInspectorTab] = useState<InspectorTabId>('overview');
   const [selected, setSelected] = useState<SelectedEntity>(null);
@@ -101,10 +102,10 @@ export function AppShell({ children }: { children: ReactNode }) {
                 aria-label="Toggle sidebar"
                 onClick={toggleSidebar}
               >
-                ☰
+                <IconMenu size={18} />
               </button>
               <div className="logo" aria-hidden="true">
-                <img src="/brand/uprc-icon.png" alt="" width={28} height={28} />
+                <img src="/brand/uprc-icon.png" alt="" width={26} height={26} />
               </div>
               <h1>{managementTitle(location.pathname)}</h1>
               <div className="badge" aria-live="polite">
@@ -115,6 +116,15 @@ export function AppShell({ children }: { children: ReactNode }) {
                 />
                 <span id="status-label">{state.statusLabel}</span>
               </div>
+              <button
+                type="button"
+                className="btn-icon"
+                title={`Switch to ${theme === 'light' ? 'dark' : 'light'} mode`}
+                aria-label="Toggle color theme"
+                onClick={() => toggleTheme()}
+              >
+                {theme === 'light' ? <IconMoon size={16} /> : <IconSun size={16} />}
+              </button>
             </header>
           ) : null}
 

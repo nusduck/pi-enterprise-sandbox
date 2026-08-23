@@ -1,4 +1,4 @@
-import { useMemo, type ReactNode } from 'react';
+import { useMemo, useState, type ReactNode } from 'react';
 import { useChat } from '../../features/chat/ChatContext';
 import {
   getRunApprovals,
@@ -25,6 +25,7 @@ import { TracePanel } from '../trace-panel/TracePanel';
 import { ToolCallPanel } from '../tool-call-panel/ToolCallPanel';
 import { ProcessPanel } from '../process-panel/ProcessPanel';
 import { useWorkbenchSelection } from '../../app/layout/WorkbenchSelectionContext';
+import { IconClose, IconCopy, IconCheck, IconLayers, IconSparkles } from '../../shared/ui/Icons';
 
 type TabDef = {
   id: InspectorTabId;
@@ -135,6 +136,20 @@ function MetaRow({
   danger?: boolean;
   copyable?: string | null;
 }) {
+  const [copied, setCopied] = useState(false);
+
+  async function handleCopy() {
+    if (!copyable) return;
+    try {
+      if (!navigator.clipboard?.writeText) return;
+      await navigator.clipboard.writeText(copyable);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      setCopied(false);
+    }
+  }
+
   return (
     <div className="insp-meta-row">
       <span className="insp-meta-label">{label}</span>
@@ -142,18 +157,17 @@ function MetaRow({
         className={`insp-meta-value${mono ? ' mono' : ''}${danger ? ' danger' : ''}`}
         title={typeof value === 'string' ? value : undefined}
       >
-        {value}
+        <span className="insp-meta-text">{value}</span>
         {copyable ? (
           <button
             type="button"
             className="insp-copy"
             title="Copy"
             aria-label={`Copy ${label}`}
-            onClick={() => {
-              void navigator.clipboard?.writeText(copyable);
-            }}
+            onClick={handleCopy}
           >
-            copy
+            {copied ? <IconCheck size={11} /> : <IconCopy size={11} />}
+            <span>{copied ? 'copied' : 'copy'}</span>
           </button>
         ) : null}
       </span>
@@ -222,8 +236,6 @@ export function ContextInspector({
     () => (runId ? getRunToolExecutions(entityStore, runId) : []),
     [entityStore, runId],
   );
-  // Managed processes are session-scoped: a background process started by an
-  // earlier run is still alive and still belongs in this conversation's list.
   const processes = useMemo(
     () => listProcessesForSession(entityStore, activeSessionId),
     [entityStore, activeSessionId],
@@ -276,8 +288,6 @@ export function ContextInspector({
       const listedRunId = String(
         listed.run_id || listed.runId || '',
       ).trim();
-      // Session artifact lists can span multiple runs. In an active Run view,
-      // only accept API fallback rows that carry matching run ownership.
       if (runId && listedRunId !== runId) continue;
       if (!isDurableArtifactId(id, runId || '')) continue;
       seen.add(id);
@@ -384,12 +394,15 @@ export function ContextInspector({
       >
         <div className="inspector-head">
           <div className="inspector-head-text">
-            <h2 className="inspector-title">Details</h2>
+            <div className="inspector-title-row">
+              <IconLayers size={16} className="inspector-title-icon" />
+              <h2 className="inspector-title">Details</h2>
+            </div>
             <p className="inspector-subtitle">
               {run
                 ? `Run · ${statusLabel}`
                 : state.conversationId
-                  ? 'Conversation context'
+                  ? 'Conversation Context'
                   : 'No active run'}
             </p>
           </div>
@@ -400,7 +413,7 @@ export function ContextInspector({
             aria-label="Close details"
             onClick={onClose}
           >
-            ✕
+            <IconClose size={16} />
           </button>
           <button
             type="button"
@@ -409,7 +422,7 @@ export function ContextInspector({
             aria-label="Close details"
             onClick={onClose}
           >
-            ✕
+            <IconClose size={16} />
           </button>
         </div>
 
@@ -553,8 +566,8 @@ function OverviewPanel({
   if (!run && !agentSession && !conversationId) {
     return (
       <EmptyState
-        title="Nothing selected"
-        body="Start a chat or open a run to inspect runtime context."
+        title="Nothing Selected"
+        body="Start a chat or select an execution step to inspect context."
       />
     );
   }
@@ -572,7 +585,7 @@ function OverviewPanel({
     <div className="insp-stack">
       <section className="insp-card">
         <div className="insp-card-head">
-          <h3 className="insp-card-title">Snapshot</h3>
+          <h3 className="insp-card-title">Execution Snapshot</h3>
         </div>
         <div className="insp-stat-grid">
           <StatPill
@@ -600,7 +613,7 @@ function OverviewPanel({
 
       <section className="insp-card">
         <div className="insp-card-head">
-          <h3 className="insp-card-title">Run</h3>
+          <h3 className="insp-card-title">Run Details</h3>
         </div>
         <div className="insp-meta-list">
           <MetaRow
@@ -627,7 +640,7 @@ function OverviewPanel({
             }
             mono
           />
-          <MetaRow label="Context" value={ctxLabel} mono />
+          <MetaRow label="Context Usage" value={ctxLabel} mono />
           <MetaRow
             label="Compaction"
             value={
@@ -645,7 +658,7 @@ function OverviewPanel({
 
       <section className="insp-card">
         <div className="insp-card-head">
-          <h3 className="insp-card-title">Identity</h3>
+          <h3 className="insp-card-title">Identity & Tracing</h3>
         </div>
         <div className="insp-meta-list">
           <MetaRow
@@ -653,7 +666,7 @@ function OverviewPanel({
             value={run?.modelId || agentSession?.modelId || '—'}
           />
           <MetaRow
-            label="Agent session"
+            label="Agent Session"
             value={
               agentSession
                 ? `${shortId(agentSession.id, 12)} · ${agentSession.status}`
@@ -675,7 +688,7 @@ function OverviewPanel({
             copyable={conversationId}
           />
           <MetaRow
-            label="Trace"
+            label="Trace ID"
             value={shortId(traceId, 14)}
             mono
             copyable={traceId}
@@ -686,7 +699,7 @@ function OverviewPanel({
       {run?.taskPlan?.length ? (
         <section className="insp-card">
           <div className="insp-card-head">
-            <h3 className="insp-card-title">Task plan</h3>
+            <h3 className="insp-card-title">Task Plan</h3>
             <span className="insp-card-count">{run.taskPlan.length}</span>
           </div>
           <ul className="insp-task-list">
@@ -713,8 +726,8 @@ function FilesPanel({
   if (!files.length) {
     return (
       <EmptyState
-        title="No referenced files"
-        body="Files read or written by tools in this run will appear here. Submitted deliverables stay in Artifacts."
+        title="No Referenced Files"
+        body="Files read or written by tools in this run will appear here. Final deliverables stay in Artifacts."
       />
     );
   }
@@ -722,7 +735,7 @@ function FilesPanel({
   return (
     <div className="insp-stack">
       <div className="insp-section-intro">
-        <span>Workspace references</span>
+        <span>Workspace References</span>
         <span>{files.length}</span>
       </div>
       <ul className="insp-file-list">
@@ -771,7 +784,7 @@ function SessionPanel({
   if (!run && !agentSession && !sessionId && !conversationId) {
     return (
       <EmptyState
-        title="No session"
+        title="No Active Session"
         body="Session identity appears after the first run starts."
       />
     );
@@ -781,7 +794,7 @@ function SessionPanel({
     <div className="insp-stack">
       <section className="insp-card">
         <div className="insp-card-head">
-          <h3 className="insp-card-title">Agent session</h3>
+          <h3 className="insp-card-title">Agent Session</h3>
           {agentSession?.status ? (
             <span className="insp-pill">{agentSession.status}</span>
           ) : null}
@@ -798,6 +811,12 @@ function SessionPanel({
             value={run?.modelId || agentSession?.modelId || '—'}
           />
           <MetaRow
+            label="Workspace ID"
+            value={shortId(agentSession?.workspaceId || sessionId, 16)}
+            mono
+            copyable={agentSession?.workspaceId || sessionId}
+          />
+          <MetaRow
             label="Created"
             value={agentSession?.createdAt || '—'}
             mono
@@ -806,47 +825,6 @@ function SessionPanel({
             label="Updated"
             value={agentSession?.updatedAt || '—'}
             mono
-          />
-        </div>
-      </section>
-
-      <section className="insp-card">
-        <div className="insp-card-head">
-          <h3 className="insp-card-title">Sandbox</h3>
-        </div>
-        <div className="insp-meta-list">
-          <MetaRow
-            label="Sandbox session"
-            value={shortId(
-              agentSession?.sandboxSessionId || sessionId,
-              16,
-            )}
-            mono
-            copyable={agentSession?.sandboxSessionId || sessionId}
-          />
-          <MetaRow
-            label="Workspace"
-            value={shortId(agentSession?.workspaceId, 16)}
-            mono
-            copyable={agentSession?.workspaceId}
-          />
-          <MetaRow
-            label="Conversation"
-            value={shortId(conversationId, 16)}
-            mono
-            copyable={conversationId}
-          />
-          <MetaRow
-            label="Active run"
-            value={shortId(run?.id, 16)}
-            mono
-            copyable={run?.id || null}
-          />
-          <MetaRow
-            label="Trace"
-            value={shortId(traceId, 16)}
-            mono
-            copyable={traceId}
           />
         </div>
       </section>

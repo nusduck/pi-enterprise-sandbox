@@ -1,10 +1,13 @@
 import { ChatProvider } from '../features/chat/ChatContext';
+import { ThemeProvider } from '../shared/ui/theme';
 import { AppRouter } from './router';
 
 export function App() {
   return (
-    <ChatProvider>
-      <AppRouter />
-    </ChatProvider>
+    <ThemeProvider>
+      <ChatProvider>
+        <AppRouter />
+      </ChatProvider>
+    </ThemeProvider>
   );
 }

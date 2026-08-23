@@ -41,6 +41,43 @@ import {
   parseAskUserFields,
   summarizeInteractionResult,
 } from './interactionFields';
+import {
+  IconChevronDown,
+  IconChevronRight,
+  IconCheck,
+  IconClose,
+  IconTerminal,
+  IconSubagent,
+  IconFile,
+  IconCode,
+  IconAlertCircle,
+  IconDownload,
+  IconCopy,
+  IconSparkles,
+} from '../../shared/ui/Icons';
+
+export function runHasEntitySteps(store: unknown, runId: string | null): boolean {
+  if (!runId || !store) return false;
+  const s = store as {
+    runsById?: Record<
+      string,
+      {
+        toolExecutionIds?: string[];
+        processIds?: string[];
+        approvalIds?: string[];
+        artifactIds?: string[];
+      }
+    >;
+  };
+  const run = s.runsById?.[runId];
+  if (!run) return false;
+  return Boolean(
+    run.toolExecutionIds?.length ||
+    run.processIds?.length ||
+    run.approvalIds?.length ||
+    run.artifactIds?.length,
+  );
+}
 
 function isActiveStatus(status: string | null | undefined): boolean {
   return (
@@ -79,70 +116,116 @@ function processTone(status: string): string {
   return 'muted';
 }
 
-function statusGlyph(tone: string): ReactNode {
-  if (tone === 'running') return <span className="rs-dot rs-dot-live" aria-hidden="true" />;
-  if (tone === 'error') return <span className="rs-glyph" aria-hidden="true">✕</span>;
-  if (tone === 'wait') return <span className="rs-glyph" aria-hidden="true">⏸</span>;
-  if (tone === 'done') return <span className="rs-glyph" aria-hidden="true">✓</span>;
-  return <span className="rs-glyph muted" aria-hidden="true">○</span>;
+function StatusBadge({ tone }: { tone: string }) {
+  if (tone === 'running') {
+    return (
+      <span className="rs-badge-running" aria-label="Running">
+        <span className="rs-dot rs-dot-live" />
+      </span>
+    );
+  }
+  if (tone === 'error') {
+    return (
+      <span className="rs-badge-error" aria-label="Error">
+        <IconClose size={12} />
+      </span>
+    );
+  }
+  if (tone === 'wait') {
+    return (
+      <span className="rs-badge-wait" aria-label="Waiting">
+        <IconAlertCircle size={12} />
+      </span>
+    );
+  }
+  if (tone === 'done') {
+    return (
+      <span className="rs-badge-done" aria-label="Completed">
+        <IconCheck size={12} />
+      </span>
+    );
+  }
+  return <span className="rs-badge-muted" aria-label="Pending">○</span>;
 }
 
 function StepShell({
   tone,
+  icon,
   title,
   subtitle,
   meta,
+  badgeText,
   defaultOpen,
   selected,
   onSelect,
   actions,
   children,
+  isLeaf = false,
 }: {
   tone: string;
+  icon?: ReactNode;
   title: string;
   subtitle?: string | null;
   meta?: string | null;
+  badgeText?: string | null;
   defaultOpen?: boolean;
   selected?: boolean;
   onSelect?: () => void;
   actions?: ReactNode;
   children?: ReactNode;
+  isLeaf?: boolean;
 }) {
   const [open, setOpen] = useState(Boolean(defaultOpen));
   const expandable = Boolean(children);
 
   return (
     <div
-      className={`rs-step tone-${tone}${selected ? ' selected' : ''}${open ? ' open' : ''}`}
+      className={`rs-tree-node tone-${tone}${selected ? ' selected' : ''}${open ? ' open' : ''}`}
       data-tone={tone}
     >
-      <button
-        type="button"
-        className="rs-step-head"
-        onClick={() => {
-          if (expandable) setOpen((v) => !v);
-          onSelect?.();
-        }}
-        aria-expanded={expandable ? open : undefined}
-      >
-        <span className="rs-step-status">{statusGlyph(tone)}</span>
-        <span className="rs-step-title" title={title}>
-          {title}
-        </span>
-        {subtitle ? (
-          <span className="rs-step-sub" title={subtitle}>
-            {subtitle}
-          </span>
-        ) : null}
-        {meta ? <span className="rs-step-meta">{meta}</span> : null}
-        {expandable ? (
-          <span className="rs-step-chevron" aria-hidden="true">
-            {open ? '▾' : '▸'}
-          </span>
-        ) : null}
-      </button>
-      {actions ? <div className="rs-step-actions">{actions}</div> : null}
-      {open && children ? <div className="rs-step-body">{children}</div> : null}
+      <div className="rs-node-spine">
+        <div className={`rs-node-dot tone-${tone}`}>
+          <StatusBadge tone={tone} />
+        </div>
+        {!isLeaf ? <div className="rs-spine-line" /> : null}
+      </div>
+
+      <div className="rs-node-card">
+        <button
+          type="button"
+          className="rs-step-head"
+          onClick={() => {
+            if (expandable) setOpen((v) => !v);
+            onSelect?.();
+          }}
+          aria-expanded={expandable ? open : undefined}
+        >
+          {icon ? <span className="rs-step-icon">{icon}</span> : null}
+          <div className="rs-step-info">
+            <span className="rs-step-title" title={title}>
+              {title}
+            </span>
+            {subtitle ? (
+              <span className="rs-step-sub" title={subtitle}>
+                {subtitle}
+              </span>
+            ) : null}
+          </div>
+
+          <div className="rs-step-meta-group">
+            {badgeText ? <span className="rs-step-badge">{badgeText}</span> : null}
+            {meta ? <span className="rs-step-meta">{meta}</span> : null}
+            {expandable ? (
+              <span className="rs-step-chevron" aria-hidden="true">
+                {open ? <IconChevronDown size={14} /> : <IconChevronRight size={14} />}
+              </span>
+            ) : null}
+          </div>
+        </button>
+
+        {actions ? <div className="rs-step-actions">{actions}</div> : null}
+        {open && children ? <div className="rs-step-body">{children}</div> : null}
+      </div>
     </div>
   );
 }
@@ -200,11 +283,11 @@ function InteractionStep({
     >
       <header className="ix-head">
         <span className="ix-icon" aria-hidden="true">
-          {waiting ? '💬' : resolved ? '✓' : '○'}
+          {waiting ? '💬' : resolved ? <IconCheck size={16} /> : '○'}
         </span>
         <div className="ix-head-text">
           <span className="ix-kicker">
-            {waiting ? 'Waiting for you' : resolved ? 'Answered' : 'Ask user'}
+            {waiting ? 'Needs Your Input' : resolved ? 'Answered' : 'Ask user'}
           </span>
           <h3 className="ix-title">{fields.title}</h3>
         </div>
@@ -293,7 +376,7 @@ function InteractionStep({
 
       {!waiting && answer ? (
         <p className="ix-answer">
-          <span className="ix-answer-label">Your reply</span>
+          <span className="ix-answer-label">Response:</span>
           {answer}
         </p>
       ) : null}
@@ -323,6 +406,7 @@ function ToolStep({
   onRespond?: (response: unknown) => Promise<boolean>;
 }) {
   const tool = item.tool;
+  const [copied, setCopied] = useState(false);
 
   if (isAskUserToolName(tool.name) && onRespond) {
     return (
@@ -336,14 +420,12 @@ function ToolStep({
     );
   }
 
-  // subagent-spawn / task-state results are JSON documents inside a tool-result
-  // envelope. Rendering them raw would put the model's wire format in the
-  // transcript, so these four get a structured body inside the same shell.
   const structured = structuredToolStep(tool);
   if (structured) {
     return (
       <StepShell
         tone={toolTone(tool.status, tool.isError)}
+        icon={<IconSubagent size={15} />}
         title={formatToolName(tool.name, tool.source)}
         subtitle={structured.subtitle}
         meta={
@@ -372,12 +454,36 @@ function ToolStep({
     formatToolResultDisplay(tool.result) || formatPayload(tool.result) || '';
   const running = isActiveStatus(tool.status);
 
+  const isBash = tool.name.toLowerCase().includes('bash') || tool.name.toLowerCase().includes('command');
+  const isFile = tool.name.toLowerCase().includes('file') || tool.name.toLowerCase().includes('dir');
+
+  async function copyOutput() {
+    if (!result) return;
+    try {
+      if (!navigator.clipboard?.writeText) return;
+      await navigator.clipboard.writeText(result);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      setCopied(false);
+    }
+  }
+
   return (
     <StepShell
       tone={tone}
+      icon={
+        isBash ? (
+          <IconTerminal size={15} />
+        ) : isFile ? (
+          <IconFile size={15} />
+        ) : (
+          <IconCode size={15} />
+        )
+      }
       title={title}
       subtitle={subtitle}
-      meta={duration !== '—' ? duration : running ? 'live' : null}
+      meta={duration !== '—' ? duration : running ? 'running…' : null}
       defaultOpen={running || tool.isError}
       selected={selected}
       onSelect={onSelect}
@@ -391,56 +497,70 @@ function ToolStep({
               onOpenConsole(tool.processId!);
             }}
           >
-            Console
+            <IconTerminal size={12} /> Console
           </button>
         ) : null
       }
     >
       {args ? (
-        <section>
-          <h4>Input</h4>
-          <pre>{args}</pre>
+        <section className="rs-section">
+          <div className="rs-section-head">
+            <h4>Input</h4>
+          </div>
+          <pre className="rs-code-block">{args}</pre>
         </section>
       ) : null}
-      <section>
-        <h4>Output</h4>
+      <section className="rs-section">
+        <div className="rs-section-head">
+          <h4>Output</h4>
+          {result ? (
+            <button
+              type="button"
+              className="rs-copy-btn"
+              onClick={(e) => {
+                e.stopPropagation();
+                copyOutput();
+              }}
+              title="Copy output"
+            >
+              {copied ? <IconCheck size={12} /> : <IconCopy size={12} />}
+              <span>{copied ? 'Copied' : 'Copy'}</span>
+            </button>
+          ) : null}
+        </div>
         {result ? (
-          <pre>{result}</pre>
+          <pre className="rs-code-block rs-output-block">{result}</pre>
         ) : (
           <p className="rs-muted">
-            {running ? 'Running…' : '(no output)'}
+            {running ? 'Executing step…' : '(no output)'}
           </p>
         )}
       </section>
       {tool.source && tool.source !== 'unknown' ? (
-        <p className="rs-muted">source · {tool.source}</p>
+        <div className="rs-footer-source">Source · {tool.source}</div>
       ) : null}
     </StepShell>
   );
 }
 
-/**
- * Structured collapsed-line + body for the subagent / task-state tools.
- * Returns null for every other tool so the generic renderer stays in charge.
- */
 function structuredToolStep(
   tool: { name: string; input: unknown; result: unknown },
 ): { subtitle: string; body: ReactNode } | null {
   if (isSpawnSubagentToolName(tool.name)) {
     const fields = parseSpawnSubagentFields(tool.input, tool.result);
     return {
-      subtitle: fields.errorCode ?? fields.label ?? fields.task ?? 'sub-agent',
+      subtitle: fields.errorCode ?? fields.label ?? fields.task ?? 'subagent task',
       body: (
-        <>
+        <div className="sa-body-wrapper">
           {fields.task ? <p className="sa-task">{fields.task}</p> : null}
           {fields.childRunId ? (
-            <p className="sa-runid">
-              <span className="sa-runid-label">run</span>
+            <div className="sa-runid">
+              <span className="sa-runid-label">Subagent Run:</span>
               <code>{fields.childRunId}</code>
-            </p>
+            </div>
           ) : null}
           {fields.errorCode ? <p className="sa-error">{fields.errorCode}</p> : null}
-        </>
+        </div>
       ),
     };
   }
@@ -489,9 +609,10 @@ function ProcessStep({
   return (
     <StepShell
       tone={tone}
-      title="process"
+      icon={<IconTerminal size={15} />}
+      title="Background Process"
       subtitle={cmd}
-      meta={duration !== '—' ? duration : running ? 'live' : process.status}
+      meta={duration !== '—' ? duration : running ? 'active' : process.status}
       defaultOpen={running}
       selected={selected}
       onSelect={onSelect}
@@ -505,23 +626,25 @@ function ProcessStep({
               onOpenConsole(process.id);
             }}
           >
-            Console
+            <IconTerminal size={12} /> Console
           </button>
         ) : null
       }
     >
-      <section>
+      <section className="rs-section">
         <h4>Command</h4>
-        <pre>{cmd}</pre>
+        <pre className="rs-code-block">{cmd}</pre>
       </section>
       {preview ? (
-        <section>
+        <section className="rs-section">
           <h4>Output</h4>
-          <pre>{preview.length > 4000 ? `${preview.slice(0, 4000)}…` : preview}</pre>
+          <pre className="rs-code-block rs-output-block">
+            {preview.length > 4000 ? `${preview.slice(0, 4000)}…` : preview}
+          </pre>
         </section>
       ) : (
         <p className="rs-muted">
-          {running ? 'Running…' : 'No buffered output'}
+          {running ? 'Running process stream…' : 'No buffered output'}
           {process.exitCode != null ? ` · exit ${process.exitCode}` : ''}
         </p>
       )}
@@ -575,19 +698,31 @@ function ApprovalStep({
     >
       <header className="ix-head">
         <span className="ix-icon" aria-hidden="true">
-          {pending ? '⚠' : approval.status === 'approved' ? '✓' : '✕'}
+          {pending ? (
+            <IconAlertCircle size={18} />
+          ) : approval.status === 'approved' ? (
+            <IconCheck size={18} />
+          ) : (
+            <IconClose size={18} />
+          )}
         </span>
         <div className="ix-head-text">
-          <span className="ix-kicker">
-            {pending
-              ? 'Needs your approval'
-              : approval.status === 'approved'
-                ? 'Approved'
-                : approval.status === 'rejected'
-                  ? 'Rejected'
-                  : `Approval · ${approval.status}`}
-            {approval.risk ? ` · ${approval.risk}` : ''}
-          </span>
+          <div className="ix-head-row">
+            <span className="ix-kicker">
+              {pending
+                ? 'Human Approval Required'
+                : approval.status === 'approved'
+                  ? 'Approved'
+                  : approval.status === 'rejected'
+                    ? 'Rejected'
+                    : `Approval · ${approval.status}`}
+            </span>
+            {approval.risk ? (
+              <span className={`ix-risk-badge risk-${approval.risk}`}>
+                {approval.risk} risk
+              </span>
+            ) : null}
+          </div>
           <h3 className="ix-title">{toolName}</h3>
         </div>
       </header>
@@ -656,6 +791,7 @@ function ArtifactStep({
   return (
     <StepShell
       tone="done"
+      icon={<IconFile size={15} />}
       title={artifact.name || artifact.path || 'artifact'}
       subtitle={artifact.mimeType || artifact.path || null}
       meta={size || null}
@@ -669,7 +805,7 @@ function ArtifactStep({
             download=""
             onClick={(e) => e.stopPropagation()}
           >
-            Download
+            <IconDownload size={12} /> Download
           </a>
         ) : null
       }
@@ -678,9 +814,7 @@ function ArtifactStep({
 }
 
 /**
- * Codex / Claude Code style runtime steps embedded in the chat stream.
- * Session lifecycle noise is omitted; process rows linked to a tool are folded
- * into the tool step (Console action) to avoid double-listing.
+ * Modern hierarchical execution tree embedded in the chat stream.
  */
 export function InlineRuntimeSteps({ runId }: { runId: string }) {
   const {
@@ -691,6 +825,7 @@ export function InlineRuntimeSteps({ runId }: { runId: string }) {
   } = useChat();
   const { selected, setSelected, openProcessConsole } = useWorkbenchSelection();
   const [busyApproval, setBusyApproval] = useState<string | null>(null);
+  const [collapsed, setCollapsed] = useState(false);
 
   const run = entityStore.runsById[runId];
   const pendingInput = run?.pendingInput ?? null;
@@ -756,7 +891,6 @@ export function InlineRuntimeSteps({ runId }: { runId: string }) {
     if (approval.toolExecutionId && toolsById[approval.toolExecutionId]) {
       return toolsById[approval.toolExecutionId];
     }
-    // Fall back: pending tool on this run waiting on this approval.
     for (const id of run?.toolExecutionIds || []) {
       const t = toolsById[id];
       if (t && t.approvalId === approval.id) return t;
@@ -767,90 +901,108 @@ export function InlineRuntimeSteps({ runId }: { runId: string }) {
     return null;
   }
 
-  return (
-    <div className="runtime-steps" role="list" aria-label="Runtime steps">
-      {items.map((item) => {
-        const selectedRow = isSelected(item);
-        if (item.kind === 'tool') {
-          return (
-            <div key={item.id} role="listitem">
-              <ToolStep
-                item={item}
-                selected={selectedRow}
-                onSelect={() => setSelected({ kind: 'tool', id: item.tool.id })}
-                onOpenConsole={openProcessConsole}
-                pendingInput={
-                  isAskUserToolName(item.tool.name) ? pendingInput : null
-                }
-                onRespond={respondInteraction}
-              />
-            </div>
-          );
-        }
-        if (item.kind === 'process') {
-          return (
-            <div key={item.id} role="listitem">
-              <ProcessStep
-                item={item}
-                selected={selectedRow}
-                onSelect={() =>
-                  setSelected({ kind: 'process', id: item.process.id })
-                }
-                onOpenConsole={openProcessConsole}
-              />
-            </div>
-          );
-        }
-        if (item.kind === 'approval') {
-          return (
-            <div key={item.id} role="listitem">
-              <ApprovalStep
-                item={item}
-                tool={toolForApproval(item.approval)}
-                selected={selectedRow}
-                onSelect={() =>
-                  setSelected({ kind: 'approval', id: item.approval.id })
-                }
-                onApprove={(id) => void handleApprove(id)}
-                onReject={(id) => void handleReject(id)}
-                busy={busyApproval === item.approval.id}
-              />
-            </div>
-          );
-        }
-        if (item.kind === 'artifact') {
-          return (
-            <div key={item.id} role="listitem">
-              <ArtifactStep
-                item={item}
-                selected={selectedRow}
-                onSelect={() =>
-                  setSelected({ kind: 'artifact', id: item.artifact.id })
-                }
-                sessionId={activeSessionId}
-              />
-            </div>
-          );
-        }
-        return null;
-      })}
-    </div>
-  );
-}
+  const isRunning = run?.status === 'running' || run?.status === 'waiting_approval';
+  const duration = run ? formatDuration(run.startedAt, run.finishedAt) : null;
 
-/** True when the entity store already owns rich tool rows for this run. */
-export function runHasEntitySteps(
-  // loose typing so MessageBubble can pass the store without importing EntityStore deep
-  store: { toolExecutionsById: Record<string, unknown>; runsById: Record<string, { toolExecutionIds?: string[]; processIds?: string[]; approvalIds?: string[]; artifactIds?: string[] } | undefined> },
-  runId: string | null | undefined,
-): boolean {
-  if (!runId) return false;
-  const run = store.runsById[runId];
-  if (!run) return false;
-  return Boolean(
-    run.toolExecutionIds?.length ||
-      run.processIds?.length ||
-      run.approvalIds?.length ||
-      run.artifactIds?.length,
+  return (
+    <div className="runtime-steps-container">
+      <div className="rs-tree-summary">
+        <div className="rs-summary-left">
+          <IconSparkles size={14} className="rs-summary-icon" />
+          <span className="rs-summary-text">
+            {isRunning ? 'Agent Execution In Progress' : 'Agent Execution Steps'}
+          </span>
+          <span className="rs-summary-pill">
+            {items.length} step{items.length === 1 ? '' : 's'}
+          </span>
+          {duration && duration !== '—' ? (
+            <span className="rs-summary-duration">{duration}</span>
+          ) : null}
+        </div>
+        <button
+          type="button"
+          className="rs-toggle-summary-btn"
+          onClick={() => setCollapsed((v) => !v)}
+          title={collapsed ? 'Expand steps' : 'Collapse steps'}
+        >
+          {collapsed ? 'Expand tree' : 'Collapse'}
+        </button>
+      </div>
+
+      {!collapsed ? (
+        <div className="runtime-steps" role="list" aria-label="Runtime steps">
+          {items.map((item, idx) => {
+            const selectedRow = isSelected(item);
+            const isLast = idx === items.length - 1;
+
+            if (item.kind === 'tool') {
+              return (
+                <div key={item.id} role="listitem" className="rs-item-wrapper">
+                  <ToolStep
+                    item={item}
+                    selected={selectedRow}
+                    onSelect={() =>
+                      setSelected({ kind: 'tool', id: item.tool.id })
+                    }
+                    onOpenConsole={openProcessConsole}
+                    pendingInput={
+                      isAskUserToolName(item.tool.name) ? pendingInput : null
+                    }
+                    onRespond={respondInteraction}
+                  />
+                </div>
+              );
+            }
+            if (item.kind === 'process') {
+              return (
+                <div key={item.id} role="listitem" className="rs-item-wrapper">
+                  <ProcessStep
+                    item={item}
+                    selected={selectedRow}
+                    onSelect={() =>
+                      setSelected({ kind: 'process', id: item.process.id })
+                    }
+                    onOpenConsole={openProcessConsole}
+                  />
+                </div>
+              );
+            }
+            if (item.kind === 'approval') {
+              const matchedTool = toolForApproval(item.approval);
+              return (
+                <div key={item.id} role="listitem" className="rs-item-wrapper">
+                  <ApprovalStep
+                    item={item}
+                    selected={selectedRow}
+                    onSelect={() =>
+                      setSelected({ kind: 'approval', id: item.approval.id })
+                    }
+                    onApprove={handleApprove}
+                    onReject={handleReject}
+                    busy={busyApproval === item.approval.id}
+                    tool={matchedTool}
+                  />
+                </div>
+              );
+            }
+            if (item.kind === 'artifact') {
+              return (
+                <div key={item.id} role="listitem" className="rs-item-wrapper">
+                  <ArtifactStep
+                    item={item}
+                    selected={selectedRow}
+                    onSelect={() =>
+                      setSelected({ kind: 'artifact', id: item.artifact.id })
+                    }
+                    sessionId={activeSessionId}
+                  />
+                </div>
+              );
+            }
+            return null;
+          })}
+        </div>
+      ) : null}
+    </div>
   );
 }
