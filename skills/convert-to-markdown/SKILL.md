@@ -44,7 +44,6 @@ For scanned PDFs, OCR may be required — report clearly if tools are unavailabl
 ### E. URL / web page
 - Fetch with `curl -L` only if network policy allows.
 - Prefer main content only; drop nav/footer chrome.
-- Companion skill `baoyu-url-to-markdown` can help when present.
 - Save as `output.md` and note the source URL.
 
 ### F. Spreadsheet (CSV/XLSX)
