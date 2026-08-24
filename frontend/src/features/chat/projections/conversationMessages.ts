@@ -106,6 +106,59 @@ function tagExactTranscriptTurns(
 }
 
 /**
+ * Collapse the assistant rows of one run into a single bubble.
+ *
+ * A run that emits text, calls a tool, then emits more text produces several
+ * durable assistant rows. Rendered one bubble each, a single answer reads as a
+ * stack of disconnected fragments that each repeat the avatar and agent name,
+ * and the run's step rail can only hang off one of them. The run *is* the turn,
+ * so its assistant rows are concatenated into one message whose content parts
+ * render as consecutive markdown blocks.
+ *
+ * Only adjacent rows of the same run merge: a user turn between two runs, or a
+ * row belonging to a different run, still ends the bubble. Identity fields come
+ * from the first row so the bubble keeps a stable React key and its turn-start
+ * timestamp while later rows stream in; liveness fields (thinking status, the
+ * interrupted banner) come from the last row, which is the one still moving.
+ */
+function mergeAssistantTurns(messages: ChatMessage[]): ChatMessage[] {
+  const merged: ChatMessage[] = [];
+  for (const message of messages) {
+    const previous = merged[merged.length - 1];
+    const mergeable =
+      message.role === 'assistant' &&
+      message._runId != null &&
+      previous != null &&
+      previous.role === 'assistant' &&
+      previous._runId === message._runId;
+    if (!mergeable) {
+      merged.push(message);
+      continue;
+    }
+
+    const thinking = [previous.thinking, message.thinking]
+      .filter((part) => Boolean(part && String(part).trim()))
+      .join('\n\n');
+    const fileLinks = [...(previous._fileLinks || []), ...(message._fileLinks || [])];
+
+    merged[merged.length - 1] = {
+      ...previous,
+      content: [...previous.content, ...message.content],
+      // A turn did runtime work if any of its rows did.
+      _hasRuntimeSteps: Boolean(previous._hasRuntimeSteps || message._hasRuntimeSteps),
+      ...(thinking ? { thinking } : {}),
+      thinkingStatus: message.thinkingStatus ?? previous.thinkingStatus,
+      // Only the final row can report how the turn ended.
+      interrupted: message.interrupted,
+      status: message.status,
+      stopReason: message.stopReason,
+      ...(fileLinks.length ? { _fileLinks: fileLinks } : {}),
+    };
+  }
+  return merged;
+}
+
+/**
  * Merge server transcript rows with live per-Run projections.
  *
  * Persisted history remains ordered by `sequenceNo`; live projections are
@@ -311,7 +364,7 @@ export function projectConversationMessages(options: {
   // safe identity key here; identical text alone is intentionally not enough
   // because a run may legitimately emit two different assistant messages.
   const seenAssistantIds = new Set<string>();
-  return result.filter((message) => {
+  const deduped = result.filter((message) => {
     if (message.role !== 'assistant' || !message._runId || !message._messageId) {
       return true;
     }
@@ -320,4 +373,8 @@ export function projectConversationMessages(options: {
     seenAssistantIds.add(key);
     return true;
   });
+
+  // Merge last: dedupe above keys on durable message ids, which a merged row no
+  // longer carries one-to-one.
+  return mergeAssistantTurns(deduped);
 }

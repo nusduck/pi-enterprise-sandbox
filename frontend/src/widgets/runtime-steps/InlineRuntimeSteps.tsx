@@ -825,7 +825,10 @@ export function InlineRuntimeSteps({ runId }: { runId: string }) {
   } = useChat();
   const { selected, setSelected, openProcessConsole } = useWorkbenchSelection();
   const [busyApproval, setBusyApproval] = useState<string | null>(null);
-  const [collapsed, setCollapsed] = useState(false);
+  // Collapsed by default: the step rail sits at the top of the turn, so an
+  // expanded tree pushes the agent's actual answer below the fold. The summary
+  // row still reports step count and duration, and one click opens it.
+  const [collapsed, setCollapsed] = useState(true);
 
   const run = entityStore.runsById[runId];
   const pendingInput = run?.pendingInput ?? null;
