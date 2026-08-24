@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **read 工具支持图片（模型可以直接看工作区里的图）**: `read` 命中图片时返回 Pi `ImageContent` 而不是 `{binary:true}` 空壳——对齐 Pi 原生 read 的做法（Pi 没有独立 vision 工具，图片能力就做在 read 里）。此前一轮 Run 渲染出来的图表、截图、PDF 转页对模型完全不可见，唯一出路是 OCR。Sandbox 侧按**内容**嗅探类型（`image_sniff.py`，png/jpeg/gif/webp/bmp；工作区路径是模型自己写的，扩展名不作数），在 2MiB 预算内随响应回传 base64；超预算返回 `imageOmitted: IMAGE_TOO_LARGE` 并告诉模型先降采样再读，而不是静默给空。Agent 侧复用 SDK 导出的 `convertToPng` / `resizeImage` / `formatDimensionNote` 归一化并压到 Pi 的内联预算，且对到达的字段独立复核（base64 形状、类型白名单、解码后长度）——Sandbox 是跨网络的另一个服务，不能只凭它说了算。
+
+- **Ctrl+V 粘贴图片为附件（前端）**: 输入框支持从剪贴板粘贴图片/文件。剪贴板图片没有文件名，按嗅探到的 MIME 命名为 `pasted-image-<时间戳>-<序号>.<ext>`——附件白名单按扩展名判定，不改名会被当作禁止类型拒收。与上传按钮、Ctrl+U 共用同一道「Run 运行中不可附加」门禁；剪贴板只有文本时不拦截事件，正常落进输入框。
+
 - **Sandbox MCP bash 执行工具**: `sandbox-mcp` 新增 `sandbox_shell_execute`，在与 `sandbox_python_execute` 相同的 Bubblewrap 隔离工作区里执行 bash 命令（`execution_manager.run_command` 既有路径：网络黑名单预检 + `--unshare-net`、非 root、ulimit/seccomp 全套生效）。安全增量接近零——Python 本就能等价 spawn shell。命令长度上限 `SANDBOX_MCP_MAX_COMMAND_LENGTH`（默认 20000，Sandbox 桥侧同名上限 200000）；返回字段与 python 工具对齐（status/exit_code/stdout_preview/stderr_preview/duration_ms/truncated）。`sandbox/config.py` 热点预算 1488→1491（新增一个配置项的三行）。
 
 - **消息气泡操作与滚动体验（前端）**: 助手气泡 hover 后出现 Copy（复制全文纯文本）与 Regenerate（仅最后一条助手气泡、且无活跃 Run 时显示，取前一条用户回合文本重发为新 Run——语义是追加一轮而非原地改写）；距底部超过 120px 时右下角出现「回到最新」浮标（sticky 定位，smooth 滚动）。流式渲染性能：`MessageBubble` 改为 `React.memo` + 内容指纹比较（投影层每个 SSE tick 都重建气泡对象，身份比较永远失效；气泡内不再订阅 chat context，否则 memo 被穿透），流式中的气泡照常更新，已完成气泡不再随每个 token 重新解析 markdown。
@@ -28,7 +32,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Run 收敛保护**: 为每个 Pi Run 增加模型回合、总工具调用和相同工具/参数调用上限；达到上限后禁止继续调用工具，并要求模型依据已有结果作答。三个上限均可通过 `AGENT_RUN_MAX_*` 配置。
 - **MCP 启动发现**: Agent 启动时连接每个启用的 MCP Server 并执行 `tools/list`；发现到的工具以 `mcp__{serverId}__{toolName}` 注册，对应的连接与工具数量会出现在 readiness/diagnostics。
 
+### Removed
+
+- **`config/agent/models.json`**: 与 `model-registry.json` 重复的第二份模型目录，全仓库零引用——不被任何代码读取，也不在 pi SDK 查找 `models.json` 的 `AGENT_PI_AGENT_DIR` 下（容器里 `/app/pi-agent-home/` 是空的）。留着只会继续和真实目录漂移。
+- **`disabled-test-model` 与 `ZERO_PRICING`**: 前者是只为测试存在却出货在生产 seed 里的假模型，已移进测试自己的 fixture；后者随之失去全部引用（`normalizeModelEntry` 本就把各价格字段内联默认为 0）。
+
 ### Changed
+
+- **模型目录对齐真实网关**: registry 此前列的 `gpt-5.5` / `mimo-v2.5` / `mimo-v2.5-pro` / `gemini-3.5-flash` 在实际 LLMIO 网关上都不存在——选中即失败（`mimo-v2.5` 报 "supported API model names are…"，`gpt-5.5` 更早地因 `supports_developer_role: true` 报 `unknown variant 'developer'`）。现在只保留网关真正提供的三个：`deepseek-v4-flash`（默认）、`deepseek-v4-pro`、新增的 `deepseek-v4-flash-vision-exp`（唯一支持图片输入的 id，这也是上面 read 图片能力在本部署里唯一可用的模型）。
+
+  两处都要改才生效：`buildRegistry` 是「源码 seed + 文件」合并，文件只增不减，所以只清 `config/agent/model-registry.json` 会让删掉的模型继续从 `SEED_MODELS` 暴露出来。
+
+- **模型注册表测试改用自带 fixture**: 「registry 是数据驱动而非硬编码」这类机制测试原本依赖 `SEED_MODELS` 里恰好存在的 gemini/gpt 作对照，导致改动出货目录就会打断无关测试。现在用测试文件内的 `FIXTURE_MODELS`，出货目录另有一条断言单独覆盖。
+
+- **一轮 Run 合并为一个助手气泡（前端）**: 同一 Run 的相邻 assistant 行在投影末尾合并成一条消息。此前「出文本 → 调工具 → 再出文本」的一轮会摊成一叠各自带头像和「UPRC Agent」抬头的碎片，读起来像好几个人在说话。身份字段取首行（React key 与回合起始时间稳定），存活状态取末行。步骤树随之挂到该 Run 的**第一个**气泡并渲染在正文之前，**默认折叠**——它在回合顶端，展开会把回答本身顶到屏幕外；折叠态摘要行仍显示步骤数与耗时。
+
+- **`task-state` 默认装载**: `defaultAgentConfigJson()` 发的是 `extensions: []`，而空列表只选必需的四个 + `skill-lifecycle`，所以 `todo_write` / `todo_read` 从来没有真正到过模型手上——表现就是「Agent 不会拆解多步任务」，每一轮都从 transcript 重新推导计划，compaction 之后彻底丢失。现在与 `skill-lifecycle` 同规则：store 就绪且 AgentVersion 未显式列出 extensions 时自动装载。显式列表仍然权威（`pi-runtime-factory` 精确校验 factory 列表，静默追加会把合法 AgentVersion 变成 `PI_EXTENSIONS_COUNT` 错误），因此显式列表也是关闭它的方式。
+
+- **纯文本模型收到图片不再让 Run 失败**: 此前给不支持 vision 的模型附图会直接 `FAILED: does not support image input`，把用户打的字连同图片一起丢掉。现在丢弃图片并在 prompt 里告知模型（文件名、原因、附件仍可当文件读），对齐 Pi 原生 read 对非 vision 模型的降级提示。`read` 读到的图片同理：不支持 vision 时只回文本注记，绝不把图片字节送给收不下的 provider。
 
 - **代码与文档整理**: 删除未接入的 TypeScript contracts 包、历史 approval waiter 与 Sandbox 中未使用的 Agent/审批 DTO；跨语言 golden fixture 统一到 `tests/fixtures/contracts/`，开发与 SDK 升级文档按当前 `src/` 布局和持久化模型修订。
 - **Run 与对话投影**: Run 列表/详情补充模型、token usage、规范化生命周期时间及最新 durable event ID；对话历史保留 durable message ID、Run ID 与顺序，且只显示当前用户回合而非整个历史 prompt。

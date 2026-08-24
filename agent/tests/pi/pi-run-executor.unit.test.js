@@ -190,7 +190,7 @@ describe('derivePromptFromTriggeringMessage', () => {
   it('extracts model and image attachment ids without trusting browser paths', () => {
     const message = {
       contentJson: {
-        modelId: 'gpt-5.5',
+        modelId: 'deepseek-v4-flash-vision-exp',
         messages: [{
           role: 'user',
           content: 'look',
@@ -203,7 +203,7 @@ describe('derivePromptFromTriggeringMessage', () => {
         }],
       },
     };
-    assert.equal(requestedModelIdFromTriggeringMessage(message), 'gpt-5.5');
+    assert.equal(requestedModelIdFromTriggeringMessage(message), 'deepseek-v4-flash-vision-exp');
     assert.deepEqual(imageAttachmentsFromTriggeringMessage(message), [{
       attachmentId: 'dataset-1',
       mimeType: 'image/png',
@@ -323,7 +323,7 @@ describe('PiRunExecutor', () => {
 
   it('loads current-turn image ids and passes Pi prompt image content directly', async () => {
     state.tables.messages[0].content_json = JSON.stringify({
-      modelId: 'gpt-5.5',
+      modelId: 'deepseek-v4-flash-vision-exp',
       messages: [{
         role: 'user',
         content: 'describe image',
@@ -342,7 +342,7 @@ describe('PiRunExecutor', () => {
       mimeType: 'image/png',
     };
     const exec = makeExecutor({
-      model: { ...fullModel, id: 'gpt-5.5', input: ['text', 'image'] },
+      model: { ...fullModel, id: 'deepseek-v4-flash-vision-exp', input: ['text', 'image'] },
       promptImageLoader: async (input) => {
         loaderInput = input;
         return [image];

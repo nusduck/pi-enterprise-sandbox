@@ -151,13 +151,13 @@ describe('CreateRunService durable path', () => {
   it('persists an explicit model selection on the triggering message', async () => {
     await svc.create.execute({
       messages: MESSAGES,
-      modelId: 'gpt-5.5',
+      modelId: 'deepseek-v4-flash-vision-exp',
       auth: FIXED_AUTH,
       traceId: TRACE,
       idempotencyKey: 'selected-model',
     });
     const stored = JSON.parse(world.tables.messages[0].content_json);
-    assert.equal(stored.modelId, 'gpt-5.5');
+    assert.equal(stored.modelId, 'deepseek-v4-flash-vision-exp');
   });
 
   it('rejects image turns for a text-only selected model', async () => {
