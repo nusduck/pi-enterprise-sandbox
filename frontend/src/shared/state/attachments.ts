@@ -51,6 +51,46 @@ export function isAllowedAttachmentName(filename: string): boolean {
   return Boolean(ext) && ALLOWED_EXTENSIONS.has(ext);
 }
 
+/**
+ * Extension to give a pasted image blob, keyed by its MIME type.
+ *
+ * Only types the attachment allowlist already accepts appear here — a paste
+ * must not become a way to smuggle in a file type the picker would refuse.
+ */
+const CLIPBOARD_IMAGE_EXTENSIONS: Record<string, string> = {
+  'image/png': '.png',
+  'image/jpeg': '.jpg',
+  'image/gif': '.gif',
+  'image/webp': '.webp',
+  'image/bmp': '.bmp',
+  'image/tiff': '.tiff',
+  'image/svg+xml': '.svg',
+};
+
+/**
+ * Filename for an image taken off the clipboard.
+ *
+ * Clipboard blobs are unnamed, or carry a browser-invented name that repeats on
+ * every paste. Both are a problem: `validateNewAttachments` keys the allowlist
+ * on the extension, so an unnamed blob is rejected as a denied type, and two
+ * identical names in one turn are indistinguishable in the composer chip row.
+ * The timestamp and sequence make each paste identifiable; the extension comes
+ * from the sniffed MIME type rather than anything the page was handed.
+ *
+ * @returns null when the type is not a pasteable image (caller ignores it)
+ */
+export function pastedImageName(
+  mimeType: string | null | undefined,
+  seq: number,
+  now: number,
+): string | null {
+  const type = String(mimeType || '').toLowerCase().split(';')[0].trim();
+  const ext = CLIPBOARD_IMAGE_EXTENSIONS[type];
+  if (!ext) return null;
+  const stamp = new Date(now).toISOString().replace(/[-:]/g, '').slice(0, 15);
+  return `pasted-image-${stamp}-${seq}${ext}`;
+}
+
 let attachmentSeq = 0;
 
 type FileLike = File | Blob | { name?: string; size?: number; type?: string };

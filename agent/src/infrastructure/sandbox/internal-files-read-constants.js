@@ -22,8 +22,26 @@ export const TRACE_ID_MAX_LEN = 255;
 export const DEFAULT_MAX_ATTEMPTS = 1;
 export const DEFAULT_ATTEMPT_TIMEOUT_MS = 30_000;
 export const DEFAULT_TOTAL_TIMEOUT_MS = 30_000;
-/** Hard cap on response body (success content ≤ 256KiB + JSON overhead). */
-export const DEFAULT_MAX_RESPONSE_BYTES = 512 * 1024;
+/**
+ * Largest image the sandbox inlines on a read, in raw bytes.
+ *
+ * Mirrors `InternalFileReader.IMAGE_MAX_BYTES`; the sandbox is the enforcer and
+ * this side re-checks what arrived. Kept equal to MAX_WRITE_BYTES so an image a
+ * tool could write is one a read can hand back.
+ */
+export const READ_IMAGE_MAX_BYTES = 2 * 1024 * 1024;
+
+/**
+ * Hard cap on response body.
+ *
+ * Sized for the larger of the two success shapes: a text read stays within its
+ * own 256KiB `maxBytes` budget, while an image read carries
+ * READ_IMAGE_MAX_BYTES base64-expanded (~4/3) plus the JSON envelope. This is a
+ * transport-level DoS guard only — text content is separately and strictly
+ * bounded by `command.maxBytes` in filterFilesReadSuccessResult, so the wider
+ * ceiling never loosens what a text read may return.
+ */
+export const DEFAULT_MAX_RESPONSE_BYTES = 4 * 1024 * 1024;
 /** Safe transport-layer retries only (never business 4xx / 409 ledger). */
 export const DEFAULT_RETRYABLE_HTTP_STATUSES = Object.freeze([502, 503, 504]);
 
@@ -58,7 +76,23 @@ export const SUCCESS_BINARY_KEYS = Object.freeze([
   'binary',
   'size',
   'mimeType',
+  // Present only when the sandbox sniffed the content as an inline image.
+  'imageMimeType',
+  'imageContent',
+  'imageOmitted',
 ]);
+
+/** Image types the sandbox may sniff and this side will accept. */
+export const READ_IMAGE_MIME_TYPES = Object.freeze([
+  'image/png',
+  'image/jpeg',
+  'image/gif',
+  'image/webp',
+  'image/bmp',
+]);
+
+/** Reasons the sandbox may give for withholding image bytes. */
+export const READ_IMAGE_OMITTED_REASONS = Object.freeze(['IMAGE_TOO_LARGE']);
 
 export const BODY_ROOT_KEYS = Object.freeze([
   'path',

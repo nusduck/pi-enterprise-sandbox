@@ -66,6 +66,7 @@ import {
 } from '../domain/interaction/interaction-status.js';
 import {
   appendCurrentTurnAttachmentContext,
+  appendNonVisionImageNotice,
   attachmentsFromTriggeringMessage,
   derivePromptFromTriggeringMessage,
   generateRunLeaseOwnerToken,
@@ -418,15 +419,10 @@ export class PiRunExecutor {
           statusReason: 'modelResolver returned no model',
         };
       }
-      if (
-        imageAttachments.length > 0 &&
-        (!Array.isArray(model.input) || !model.input.includes('image'))
-      ) {
-        return {
-          outcome: RUN_STATUS.FAILED,
-          statusReason: `selected model ${String(model.id || '')} does not support image input`,
-        };
-      }
+      // A text-only model drops the images and is told so in the prompt rather
+      // than failing: the run used to die, taking the user's question with it.
+      const modelAcceptsImages =
+        Array.isArray(model.input) && model.input.includes('image');
       const requestAuth = this.requestAuthResolver
         ? await this.requestAuthResolver(model, agentVersion)
         : null;
@@ -815,12 +811,16 @@ export class PiRunExecutor {
         );
       } else {
         prompt = toPiPromptInvocation(
-          appendCurrentTurnAttachmentContext(
-            derivePromptFromTriggeringMessage(triggering),
-            currentTurnAttachments,
+          appendNonVisionImageNotice(
+            appendCurrentTurnAttachmentContext(
+              derivePromptFromTriggeringMessage(triggering),
+              currentTurnAttachments,
+            ),
+            modelAcceptsImages ? [] : imageAttachments,
+            String(model.id || ''),
           ),
         );
-        if (imageAttachments.length > 0) {
+        if (imageAttachments.length > 0 && modelAcceptsImages) {
           if (!this.promptImageLoader) {
             return {
               outcome: RUN_STATUS.FAILED,

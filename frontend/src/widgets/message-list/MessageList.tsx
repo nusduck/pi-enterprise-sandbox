@@ -90,15 +90,24 @@ export function MessageList() {
     );
   }, [displayMessages]);
 
-  /** One step rail per run — attach to the last assistant bubble of that run. */
+  /**
+   * One step rail per run, on the *first* assistant bubble of that run.
+   *
+   * The projection normally merges a run into a single bubble, so first and
+   * last are the same row. When something splits them anyway — a legacy
+   * transcript, or another run's row landing in between — the rail belongs to
+   * the top of the turn, where it reads as "here is what I did" before the
+   * answer, rather than trailing after it.
+   */
   const runtimeStepRunIds = useMemo(() => {
-    const lastByRun = new Map<string, number>();
+    const firstByRun = new Map<string, number>();
     displayMessages.forEach((msg, idx) => {
       if (msg.role === 'assistant' && msg._runId) {
-        lastByRun.set(String(msg._runId), idx);
+        const key = String(msg._runId);
+        if (!firstByRun.has(key)) firstByRun.set(key, idx);
       }
     });
-    return new Set(lastByRun.values());
+    return new Set(firstByRun.values());
   }, [displayMessages]);
 
   /** Regenerate is only offered on the last assistant bubble while idle. */

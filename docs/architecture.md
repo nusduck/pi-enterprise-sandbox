@@ -129,15 +129,20 @@ Agent（`pi-coding-agent` SDK）运行在独立 `agent/` 服务中，而非浏�
 | `observability` | 记录工具结果与审计事件 |
 | `user-interaction` | 注册 `ask_user`。名字不叫 `interaction`，因为那是 registry 必须持续拒绝的 legacy enterprise-agent-kit 包名 |
 
-`OPTIONAL_EXTENSION_NAMES` 有三个，只有 AgentVersion 明确列出时才装载，并且都
-要求容器注入对应的持久化端口——端口缺失时 bundle 在装配期直接报错，而不是让模型
-在第一次调用时才拿到一个永远失败的工具：
+`OPTIONAL_EXTENSION_NAMES` 有三个，都要求容器注入对应的持久化端口——端口缺失时
+bundle 在装配期直接报错，而不是让模型在第一次调用时才拿到一个永远失败的工具。
+
+装载规则：AgentVersion **显式列出** extensions 时，那份列表是权威的（
+`pi-runtime-factory` 会按列表逐一校验 factory，静默追加会把一个合法 AgentVersion
+变成 `PI_EXTENSIONS_COUNT` 错误）。列表为空时（`defaultAgentConfigJson()` 的默认
+形态），`skill-lifecycle` 与 `task-state` 在各自依赖就绪的前提下自动装载；
+`subagent-spawn` 仍需显式列出。
 
 | Extension | 角色 | 必需依赖 |
 |-----------|------|----------|
 | `skill-lifecycle` | 用户态 Skill 的安装、Agent 生成、编辑与卸载 | 可写的 per-user Skill 根 |
 | `subagent-spawn` | `spawn_subagent` / `check_subagent`：创建并轮询子 Run | `subagentSpawnPort`（MySQL + Run Queue） |
-| `task-state` | `todo_write` / `todo_read` / `memory_write` / `memory_search` | `taskStateStore`（`task_todos` / `task_memories`） |
+| `task-state` | `todo_write` / `todo_read` / `memory_write` / `memory_search` | `taskStateStore`（`task_todos` / `task_memories`）；**依赖就绪时默认装载** |
 
 新增可选 Extension 必须同时为它注册的每个工具补 tool-risk-classifier 条目，否则
 这些工具会以 `UNKNOWN_TOOL_DENIED` 被拒（有守卫测试）。
@@ -278,7 +283,7 @@ Agent Host + first-party Extensions
   user-interaction       → 注册 ask_user（必需；由 interaction 这个 legacy 包名改名而来）
   skill-lifecycle        → 可选，用户态 Skill 安装/生成/编辑/卸载
   subagent-spawn         → 可选，创建/轮询子 Run（同队列、同 worker、同恢复路径）
-  task-state             → 可选，会话 todo 列表 + owner 级长期备忘
+  task-state             → 默认装载（store 就绪时），会话 todo 列表 + owner 级长期备忘
   durable MySQL ledger   → 外部副作用审批、审计、resume
         │
         ▼

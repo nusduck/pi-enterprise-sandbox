@@ -5,6 +5,7 @@ import {
   useState,
   type KeyboardEvent,
   type ChangeEvent,
+  type ClipboardEvent,
 } from 'react';
 import { useChat } from '../../features/chat/ChatContext';
 import {
@@ -13,6 +14,7 @@ import {
   fileTypeLabel,
   hasUploadingAttachments,
   isInterruptedMessage,
+  pastedImageName,
   uploadedAttachments,
 } from '../../shared/state';
 import { isEnterSubmitKey, isUploadShortcut } from '../../shared/ui/keyboard';
@@ -151,6 +153,43 @@ export function Composer() {
     const el = e.target;
     el.style.height = 'auto';
     el.style.height = `${Math.min(el.scrollHeight, 160)}px`;
+  }
+
+  /**
+   * Ctrl+V / Cmd+V attaches images (and any other file) from the clipboard.
+   *
+   * Screenshots arrive as unnamed blobs, so each one is renamed before it hits
+   * the upload queue — the attachment allowlist keys on the extension, and an
+   * unnamed blob would be refused as a denied type. Files that already carry a
+   * name (copied from a file manager) keep it.
+   *
+   * The event is only consumed when a file actually came off the clipboard;
+   * pasting text must still land in the textarea untouched, including the mixed
+   * case where a copy carries both an image and its alt text.
+   */
+  function onPaste(e: ClipboardEvent<HTMLTextAreaElement>) {
+    // Same gate as the upload button and Ctrl+U: no attaching mid-run.
+    if (mode === 'running') return;
+    const items = Array.from(e.clipboardData?.items || []);
+    const now = Date.now();
+    const files: File[] = [];
+    for (const item of items) {
+      if (item.kind !== 'file') continue;
+      const file = item.getAsFile();
+      if (!file) continue;
+      if (file.name) {
+        files.push(file);
+        continue;
+      }
+      const name = pastedImageName(file.type, files.length + 1, now);
+      // An unnamed non-image blob has no extension we can justify inventing;
+      // the server allowlist would refuse it anyway.
+      if (!name) continue;
+      files.push(new File([file], name, { type: file.type }));
+    }
+    if (!files.length) return;
+    e.preventDefault();
+    void handleFilesSelected(files);
   }
 
   function openFilePicker() {
@@ -580,6 +619,7 @@ export function Composer() {
             disabled={false}
             onChange={onInput}
             onKeyDown={onKeyDown}
+            onPaste={onPaste}
           />
 
           <div className="composer-tools-right">

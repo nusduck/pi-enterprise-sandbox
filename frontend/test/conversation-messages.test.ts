@@ -140,7 +140,7 @@ describe('conversation message projection', () => {
     assert.equal(projected[0]._hasRuntimeSteps, true);
   });
 
-  it('keeps every assistant message in a run and marks runtime steps on its final message', () => {
+  it('merges the assistant messages of one run into a single bubble carrying the runtime steps', () => {
     let store = createEntityStore();
     store = upsertRun(store, createRun({
       id: 'run_multi_assistant',
@@ -194,14 +194,15 @@ describe('conversation message projection', () => {
       ],
     });
 
+    // The run is the turn: its assistant rows collapse into one bubble whose
+    // content parts stay in durable order. Exactly one bubble per run also
+    // means only one can claim the steps, so the runtime timeline can never
+    // render the same tools twice.
     const assistants = projected.filter((message) => message.role === 'assistant');
-    assert.equal(assistants.length, 2);
+    assert.equal(assistants.length, 1);
     assert.equal((assistants[0].content[0] as { text: string }).text, 'The artifact has been submitted.');
-    assert.equal((assistants[1].content[0] as { text: string }).text, 'You can download it from Artifacts.');
-    // Only one bubble per run may claim the steps, otherwise the runtime
-    // timeline renders the same tools twice.
-    assert.equal(assistants[0]._hasRuntimeSteps, undefined);
-    assert.equal(assistants[1]._hasRuntimeSteps, true);
+    assert.equal((assistants[0].content[1] as { text: string }).text, 'You can download it from Artifacts.');
+    assert.equal(assistants[0]._hasRuntimeSteps, true);
   });
 
   it('keeps the full persisted assistant text while adding runtime tool details', () => {

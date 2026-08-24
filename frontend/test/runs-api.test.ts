@@ -53,7 +53,7 @@ describe('Run API idempotency headers', () => {
     };
 
     await createRun({
-      model_id: 'gpt-5.5',
+      model_id: 'deepseek-v4-flash-vision-exp',
       messages: [{ role: 'user', content: 'hello' }],
     });
 
@@ -64,7 +64,7 @@ describe('Run API idempotency headers', () => {
     assert.match(headers['Idempotency-Key'], /^run_[A-Za-z0-9_-]+$/);
     assert.equal(
       JSON.parse(String(requests[0].init?.body)).model_id,
-      'gpt-5.5',
+      'deepseek-v4-flash-vision-exp',
     );
   });
 

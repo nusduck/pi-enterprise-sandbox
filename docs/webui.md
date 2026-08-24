@@ -119,7 +119,7 @@ sendMessage(text)
 ### 文件附件（草稿生命周期）
 
 ```
-选择/拖拽文件（可多选，同名不去重）
+选择/拖拽/粘贴文件（可多选，同名不去重）
   ↓
 ensureSession → POST /api/sessions/ensure（创建/复用 Conversation + Session）
   ↓
@@ -127,6 +127,8 @@ attachment draft: queued → uploading → uploaded | failed
   ├── POST /api/files/upload?session_id=xxx (+ Idempotency-Key)
   ├── 不自动发送聊天
   └── 可移除 / 失败重试；上传中或失败时禁用发送
+      （剪贴板图片没有文件名，按嗅探到的 MIME 命名为 `pasted-image-<时间戳>-<序号>.<ext>`，
+        否则扩展名白名单会直接拒收）
   ↓
 用户点击发送 → 文本 + attachment manifest 组成同一 user turn
 ```
@@ -148,7 +150,7 @@ render → security.isAllowedApiUrl 校验后生成 <a class="dl" href="/api/...
 | 发送消息 | Enter / 发送按钮 | `sendMessage` |
 | 中断流 | 停止按钮 | `abortStream` |
 | 新行 | Shift+Enter | textarea 默认 |
-| 附件 | 按钮 / Ctrl+U / 拖拽 | `handleFilesSelected`（后台上传，不自动发送） |
+| 附件 | 按钮 / Ctrl+U / 拖拽 / Ctrl+V 粘贴 | `handleFilesSelected`（后台上传，不自动发送） |
 | 新对话 | 侧栏 New chat | `startNewChat` |
 | 切换会话 | 侧栏列表 | `selectConversation` |
 | 审批 | 横幅按钮 | `decideApproval` |
@@ -178,6 +180,14 @@ render → security.isAllowedApiUrl 校验后生成 <a class="dl" href="/api/...
 - React 组件通过 `ChatContext` 订阅规范化 `EntityStore` 与 UI snapshot
 - `agentEventAdapter -> runReducer` 是 RuntimeEvent 的唯一写入路径
 - `projectRunMessages` 从 Run/Message/Tool/Artifact 实体生成聊天投影
+- **一轮 Run = 一个助手气泡**：`projectConversationMessages` 末尾的 `mergeAssistantTurns`
+  把同一 Run 的相邻 assistant 行合并成一条消息（多个 text part 顺序渲染为连续
+  Markdown 块）。否则「出文本 → 调工具 → 再出文本」的一轮会摊成一叠各自带头像和
+  「UPRC Agent」抬头的碎片。身份字段（`_messageId` / `sequenceNo` / `createdAt`）取
+  首行以保持 React key 与回合起始时间稳定，存活状态（thinking 状态、中断横幅）取末行
+- 步骤树（`InlineRuntimeSteps`）挂在该 Run 的**第一个**助手气泡上，渲染在正文之前，
+  **默认折叠**——它在回合顶端，展开会把回答本身顶到屏幕外；折叠态的摘要行仍显示
+  步骤数与耗时
 - Timeline、Context Inspector、Approval 与 Deliverables widgets 按实体 id 更新，不维护第二份 runtime state
 - 子代理 fan-out：`spawn_subagent` / `check_subagent` 工具卡片渲染为结构化任务视图（子 Run 状态聚合），而不是裸 wire JSON；`todo_write` / `memory_write`（task-state extension）同理
 - Markdown 通过 `react-markdown` + `rehype-sanitize` 渲染；下载链接仍经 URL allowlist 过滤
@@ -203,6 +213,7 @@ npm run build --prefix frontend     # 生产构建（CI 同款）
 | `Enter` | 发送消息（输入法组合期间不触发，回车先确认候选词） |
 | `Shift+Enter` | 换行 |
 | `Ctrl+U` / `Cmd+U` | 打开文件选择器上传（Run 运行中与按钮一致被禁用） |
+| `Ctrl+V` / `Cmd+V` | 粘贴剪贴板里的图片/文件为附件（同一道 Run 运行中门禁）；剪贴板只有文本时不拦截，正常落进输入框 |
 | `Ctrl+L` / `Cmd+L` | 新建会话 |
 
 消息日志区域显式声明 `aria-live="off"`：`role="log"` 本身隐式携带 polite live

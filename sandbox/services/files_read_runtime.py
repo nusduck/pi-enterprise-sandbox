@@ -82,6 +82,9 @@ _SUCCESS_TEXT_KEYS = frozenset(
     }
 )
 _SUCCESS_BINARY_KEYS = frozenset({"path", "binary", "size", "mimeType"})
+#: Present only when the reader sniffed the content as an inlineable image.
+#: Optional because every other binary file keeps the four-field shape above.
+_SUCCESS_IMAGE_KEYS = frozenset({"imageMimeType", "imageContent", "imageOmitted"})
 
 _READER_HTTP_STATUS: dict[str, int] = {
     "FILE_NOT_FOUND": 404,
@@ -142,6 +145,31 @@ def _safe_error_message(message: Any) -> str | None:
     return message
 
 
+def _validate_binary_image_fields(out: dict[str, Any]) -> None:
+    """Keep the image fields internally consistent before they reach the ledger.
+
+    The reader is the only producer of these, but this function is also the
+    rebinding boundary for a replayed result, so the invariants are checked
+    here rather than assumed.
+    """
+    has_content = "imageContent" in out
+    has_omitted = "imageOmitted" in out
+    if not has_content and not has_omitted:
+        if "imageMimeType" in out:
+            raise ValueError("binary imageMimeType without an image")
+        return
+    if has_content and has_omitted:
+        raise ValueError("binary result cannot both carry and omit image content")
+    if type(out.get("imageMimeType")) is not str:  # noqa: E721
+        raise ValueError("binary imageMimeType invalid")
+    if has_omitted:
+        if out["imageOmitted"] != "IMAGE_TOO_LARGE":
+            raise ValueError("binary imageOmitted reason unknown")
+        return
+    if type(out["imageContent"]) is not str:  # noqa: E721
+        raise ValueError("binary imageContent invalid")
+
+
 def filter_success_result(
     raw: Mapping[str, Any],
     command: ReadCommand,
@@ -164,6 +192,10 @@ def filter_success_result(
             raise ValueError("binary size invalid")
         if type(out["mimeType"]) is not str:  # noqa: E721
             raise ValueError("binary mimeType invalid")
+        for k in _SUCCESS_IMAGE_KEYS:
+            if k in raw:
+                out[k] = raw[k]
+        _validate_binary_image_fields(out)
         return out
     if binary is False:
         out = {}

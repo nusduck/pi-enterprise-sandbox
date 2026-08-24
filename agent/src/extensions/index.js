@@ -22,6 +22,7 @@ import { createObservabilityExtension } from './observability/index.js';
 import { createSkillLifecycleExtension } from './skill-lifecycle/index.js';
 import { createSubagentSpawnExtension } from './subagent-spawn/index.js';
 import { createTaskStateExtension } from './task-state/index.js';
+import { TASK_STATE_STORE_METHODS } from './task-state/constants.js';
 import { SANDBOX_TOOL_NAMES } from './sandbox-bridge/constants.js';
 import { createPolicyEngine } from './enterprise-policy/policy-engine.js';
 import {
@@ -398,16 +399,32 @@ export function createEnterpriseExtensionBundle(runContext, deps = {}) {
       skillManager.userSkillRoot,
   );
 
+  const taskStateStoreReady = Boolean(
+    deps.taskStateStore &&
+      TASK_STATE_STORE_METHODS.every(
+        (method) => typeof deps.taskStateStore[method] === 'function',
+      ),
+  );
+
   // When the AgentVersion did not spell out an extension list, skill-lifecycle
   // loads wherever installation is enabled. An explicit non-empty list stays
   // authoritative — pi-runtime-factory validates the factories against it
   // exactly, so silently appending would turn a valid AgentVersion into a
   // PI_EXTENSIONS_COUNT error.
-  if (
-    skillManagerReady &&
-    !(Array.isArray(deps.extensions) && deps.extensions.length > 0)
-  ) {
+  const agentVersionListedExtensions =
+    Array.isArray(deps.extensions) && deps.extensions.length > 0;
+  if (skillManagerReady && !agentVersionListedExtensions) {
     selected.add('skill-lifecycle');
+  }
+
+  // task-state loads by default under the same rule. Without it the model never
+  // sees todo_write/todo_read, so it re-derives a multi-step plan from the
+  // transcript on every run and loses it entirely across a compaction — which
+  // reads to a user as "the agent cannot break a task down". The tools are inert
+  // bookkeeping (owner-scoped store, no sandbox reach), so defaulting them on
+  // costs nothing an AgentVersion cannot still override with an explicit list.
+  if (taskStateStoreReady && !agentVersionListedExtensions) {
+    selected.add('task-state');
   }
   if (selected.has('skill-lifecycle') && !skillManagerReady) {
     throw new Error(
@@ -593,12 +610,7 @@ export function createEnterpriseExtensionBundle(runContext, deps = {}) {
   // an assembly error, not a runtime surprise.
   if (selected.has('task-state')) {
     const taskStateStore = deps.taskStateStore ?? null;
-    const complete =
-      taskStateStore &&
-      ['replaceTodos', 'getTodos', 'appendMemory', 'searchMemory'].every(
-        (method) => typeof taskStateStore[method] === 'function',
-      );
-    if (!complete) {
+    if (!taskStateStoreReady) {
       throw new Error(
         'TASK_STATE_STORE_REQUIRED: AgentVersion enables task-state but no durable store (replaceTodos/getTodos/appendMemory/searchMemory) was injected',
       );

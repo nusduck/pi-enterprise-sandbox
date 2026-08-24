@@ -40,14 +40,6 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 export const DEFAULT_CONTEXT_WINDOW = 262144;
 export const DEFAULT_MAX_OUTPUT_TOKENS = 65536;
 
-/** Default pricing when a model omits rates (cost reported as 0). */
-export const ZERO_PRICING = Object.freeze({
-  input_per_mtok: 0,
-  output_per_mtok: 0,
-  cache_read_per_mtok: 0,
-  cache_write_per_mtok: 0,
-});
-
 /**
  * Built-in seed so the agent works without an external file mount.
  * Mirrors config/agent/model-registry.json.
@@ -97,100 +89,24 @@ export const SEED_MODELS = Object.freeze([
   },
   {
     provider: 'llmio',
-    model_id: 'gemini-3.5-flash',
-    name: 'Gemini 3.5 Flash',
+    model_id: 'deepseek-v4-flash-vision-exp',
+    name: 'DeepSeek V4 Flash Vision',
     api_protocol: 'openai-completions',
-    // LLMIO gateway currently strips/ignores image_url for this model id.
-    input_modalities: Object.freeze(['text']),
-    context_window: 1048576,
-    max_output_tokens: DEFAULT_MAX_OUTPUT_TOKENS,
-    supports_tool_call: true,
-    supports_developer_role: false,
-    supports_reasoning: false,
-    thinking_levels: Object.freeze([]),
-    pricing: Object.freeze({
-      input_per_mtok: 0.15,
-      output_per_mtok: 0.6,
-      cache_read_per_mtok: 0.0375,
-      cache_write_per_mtok: 0.15,
-    }),
-    enabled: true,
-  },
-  {
-    provider: 'llmio',
-    model_id: 'gpt-5.5',
-    name: 'GPT 5.5',
-    api_protocol: 'openai-completions',
-    input_modalities: Object.freeze(['text', 'image']),
-    context_window: DEFAULT_CONTEXT_WINDOW,
-    max_output_tokens: DEFAULT_MAX_OUTPUT_TOKENS,
-    supports_tool_call: true,
-    supports_developer_role: true,
-    supports_reasoning: true,
-    thinking_levels: Object.freeze(['minimal', 'low', 'medium', 'high']),
-    pricing: Object.freeze({
-      input_per_mtok: 2.5,
-      output_per_mtok: 10.0,
-      cache_read_per_mtok: 0.25,
-      cache_write_per_mtok: 2.5,
-    }),
-    enabled: true,
-  },
-  {
-    provider: 'llmio',
-    model_id: 'mimo-v2.5',
-    name: 'MiMo v2.5',
-    api_protocol: 'openai-completions',
-    // Verified vision via LLMIO OpenAI image_url (image_tokens in usage).
+    // The only image-capable id the LLMIO gateway serves.
     input_modalities: Object.freeze(['text', 'image']),
     context_window: DEFAULT_CONTEXT_WINDOW,
     max_output_tokens: DEFAULT_MAX_OUTPUT_TOKENS,
     supports_tool_call: true,
     supports_developer_role: false,
-    supports_reasoning: true,
-    thinking_levels: Object.freeze([]),
-    pricing: Object.freeze({
-      input_per_mtok: 0.4,
-      output_per_mtok: 1.2,
-      cache_read_per_mtok: 0.04,
-      cache_write_per_mtok: 0.4,
-    }),
-    enabled: true,
-  },
-  {
-    provider: 'llmio',
-    model_id: 'mimo-v2.5-pro',
-    name: 'MiMo v2.5 Pro',
-    api_protocol: 'openai-completions',
-    input_modalities: Object.freeze(['text']),
-    context_window: DEFAULT_CONTEXT_WINDOW,
-    max_output_tokens: DEFAULT_MAX_OUTPUT_TOKENS,
-    supports_tool_call: true,
-    supports_developer_role: false,
     supports_reasoning: false,
     thinking_levels: Object.freeze([]),
     pricing: Object.freeze({
-      input_per_mtok: 0.5,
-      output_per_mtok: 1.5,
-      cache_read_per_mtok: 0.05,
-      cache_write_per_mtok: 0.5,
+      input_per_mtok: 0.14,
+      output_per_mtok: 0.28,
+      cache_read_per_mtok: 0.014,
+      cache_write_per_mtok: 0.14,
     }),
     enabled: true,
-  },
-  {
-    provider: 'llmio',
-    model_id: 'disabled-test-model',
-    name: 'Disabled Test Model',
-    api_protocol: 'openai-completions',
-    input_modalities: Object.freeze(['text']),
-    context_window: 8000,
-    max_output_tokens: 1024,
-    supports_tool_call: false,
-    supports_developer_role: false,
-    supports_reasoning: false,
-    thinking_levels: Object.freeze([]),
-    pricing: Object.freeze({ ...ZERO_PRICING }),
-    enabled: false,
   },
 ]);
 

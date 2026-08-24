@@ -7,9 +7,10 @@
  * write/edit to a path drops that path's entries so the next read is honest.
  */
 
-import { MAX_READ_CHARS } from '../constants.js';
+import { MAX_READ_CHARS, MAX_READ_IMAGE_BYTES } from '../constants.js';
 import { toolErr, toolOk, toolResultJson } from '../result.js';
 import { formatReadResult } from './read-format.js';
+import { buildReadImageResult } from './read-image.js';
 
 /** JSON envelope budget for read — content is pre-bounded to MAX_READ_CHARS. */
 const MAX_READ_RESULT_BYTES = MAX_READ_CHARS + 8 * 1024;
@@ -69,8 +70,9 @@ export function createReadDedup() {
    * @param {string} path
    * @param {number} offset
    * @param {number} limit
+   * @param {{ model?: object | null }} [opts] current model, for the vision check
    */
-  function finalizeReadResult(data, path, offset, limit) {
+  async function finalizeReadResult(data, path, offset, limit, opts = {}) {
     const { payload, fingerprint } = formatReadResult(
       data,
       path,
@@ -78,6 +80,13 @@ export function createReadDedup() {
       limit,
     );
     if (payload.binary) {
+      // Dedup deliberately does not apply: an image result is content the model
+      // is looking at, and a stub in its place would blind a legitimate re-read.
+      const image = await buildReadImageResult(data, path, {
+        model: opts.model ?? null,
+        maxBytes: MAX_READ_IMAGE_BYTES,
+      });
+      if (image) return image;
       return toolOk(toolResultJson(payload, MAX_READ_RESULT_BYTES));
     }
     const dedup = noteReadDedup(path, offset, limit, fingerprint);

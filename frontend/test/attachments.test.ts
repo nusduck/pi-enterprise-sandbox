@@ -22,6 +22,7 @@ import {
   extensionOf,
   fileTypeLabel,
   splitAttachmentDisplay,
+  pastedImageName,
 } from '../src/shared/state/index.ts';
 
 function fakeFile(name: string, size = 10) {
@@ -234,5 +235,53 @@ describe('attachment drafts', () => {
     assert.equal(s.isStreaming, false);
     assert.equal(s.messages.length, 0);
     assert.equal(canSendAttachments(s.attachments), true);
+  });
+});
+
+describe('pasted image naming (Ctrl+V)', () => {
+  it('names an unnamed clipboard blob so the allowlist accepts it', () => {
+    const name = pastedImageName('image/png', 1, Date.parse('2026-08-24T10:20:30Z'));
+    assert.equal(name, 'pasted-image-20260824T102030-1.png');
+    assert.equal(isAllowedAttachmentName(name!), true);
+  });
+
+  it('accepts every pasteable image type and keeps them allowlisted', () => {
+    for (const [mime, ext] of Object.entries({
+      'image/png': '.png',
+      'image/jpeg': '.jpg',
+      'image/gif': '.gif',
+      'image/webp': '.webp',
+      'image/bmp': '.bmp',
+      'image/tiff': '.tiff',
+      'image/svg+xml': '.svg',
+    })) {
+      const name = pastedImageName(mime, 1, Date.now());
+      assert.equal(extensionOf(name!), ext, `${mime} -> ${ext}`);
+      assert.equal(isAllowedAttachmentName(name!), true, `${mime} allowlisted`);
+    }
+  });
+
+  it('tolerates a charset-suffixed type from the clipboard', () => {
+    assert.equal(
+      extensionOf(pastedImageName('image/PNG; charset=binary', 2, Date.now())!),
+      '.png',
+    );
+  });
+
+  it('refuses to invent a name for a non-image blob', () => {
+    assert.equal(pastedImageName('application/zip', 1, Date.now()), null);
+    assert.equal(pastedImageName('', 1, Date.now()), null);
+    assert.equal(pastedImageName(null, 1, Date.now()), null);
+  });
+
+  it('keeps two pastes in the same turn distinguishable', () => {
+    const now = Date.now();
+    assert.notEqual(pastedImageName('image/png', 1, now), pastedImageName('image/png', 2, now));
+  });
+
+  it('produces a name a fresh turn will accept through validateNewAttachments', () => {
+    const name = pastedImageName('image/png', 1, Date.now())!;
+    const check = validateNewAttachments([], [{ name, size: 1024, type: 'image/png' }]);
+    assert.equal(check.ok, true);
   });
 });

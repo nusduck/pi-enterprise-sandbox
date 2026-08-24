@@ -76,7 +76,7 @@ describe('canonical-json', () => {
       messages,
       modelId: 'deepseek-v4-flash',
     });
-    const vision = hashCreateRunRequest({ messages, modelId: 'gpt-5.5' });
+    const vision = hashCreateRunRequest({ messages, modelId: 'deepseek-v4-flash-vision-exp' });
     assert.notEqual(flash, vision);
   });
 
