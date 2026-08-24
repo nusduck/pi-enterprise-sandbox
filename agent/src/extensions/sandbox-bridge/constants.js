@@ -45,6 +45,15 @@ export const MAX_READ_LIMIT = 2_000;
 /** Sandbox read hard cap (bytes of file content before bridge formatting). */
 export const MAX_READ_BYTES = 256 * 1024;
 /**
+ * Largest image a read may inline for the model, in raw bytes.
+ *
+ * Mirrors the transport's READ_IMAGE_MAX_BYTES and MAX_WRITE_BYTES below: an
+ * image a tool could write into the workspace is one a read can hand back.
+ * Text content stays bound by MAX_READ_BYTES — the two budgets are separate
+ * because a screenshot and a source file are not the same kind of payload.
+ */
+export const MAX_READ_IMAGE_BYTES = 2 * 1024 * 1024;
+/**
  * Model-facing character budget for a single read result body (Hermes
  * file_read_max_chars default). Applied after line-number formatting so
  * the value that enters context is what we bound.

@@ -147,6 +147,32 @@ export function imageAttachmentsFromTriggeringMessage(message) {
 }
 
 /**
+ * Tell the model its images were dropped, rather than failing the run.
+ *
+ * A text-only model with an image attached used to fail the whole turn. The
+ * user has already uploaded and sent — losing the question along with the
+ * picture helps nobody, and the model can still act on the filenames and the
+ * text. Mirrors the note Pi's own read tool emits for a non-vision model.
+ *
+ * @param {string | Array<{ type: string, text?: string, [k: string]: unknown }>} prompt
+ * @param {Array<{ name?: string }>} images
+ * @param {string} modelId
+ */
+export function appendNonVisionImageNotice(prompt, images, modelId) {
+  if (!Array.isArray(images) || images.length === 0) return prompt;
+  const names = images
+    .map((image) => String(image?.name || 'image'))
+    .join(', ');
+  const block =
+    `[${images.length} image attachment(s) omitted: model ${modelId || 'selected'} does not accept image input. ` +
+    `Attached: ${names}. Ask the user to switch to a vision-capable model, or work from the file another way ` +
+    '(the attachments are in the workspace and readable as files).]';
+  if (typeof prompt === 'string') return `${prompt}\n\n${block}`;
+  if (Array.isArray(prompt)) return [...prompt, { type: 'text', text: block }];
+  return block;
+}
+
+/**
  * Adapt durable text/image parts to AgentSession.prompt(text, { images }).
  * Pi 0.80.3 always requires the first argument to be a string.
  *

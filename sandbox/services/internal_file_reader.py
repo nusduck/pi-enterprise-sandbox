@@ -13,7 +13,9 @@ Contract highlights:
 - ``offset`` int 0..JS_MAX_SAFE_INTEGER (0-based line skip; Agent has no
   50000 offset ceiling), ``limit`` 1..50000, ``max_bytes`` 1..262144 —
   strict ``type is int`` (no bool/float/str).
-- UTF-8 strict text; NUL or invalid UTF-8 → binary (no content).
+- UTF-8 strict text; NUL or invalid UTF-8 → binary (no content), except a
+  binary file whose *bytes* sniff as an image, which is returned base64 up to
+  ``read_image_max_bytes`` so the Agent can hand it to a vision model.
 - LF logical lines; ``max_bytes`` hard limit never splits a multi-byte char
   or a half line.
 - Streamed read: fixed-size chunks only; memory O(chunk + max_bytes + line
@@ -23,6 +25,7 @@ Contract highlights:
 
 from __future__ import annotations
 
+import base64
 import codecs
 import mimetypes
 import os
@@ -31,6 +34,7 @@ from pathlib import PurePosixPath
 from typing import Any, Callable
 
 from sandbox.config import settings
+from sandbox.services.image_sniff import IMAGE_SNIFF_BYTES, sniff_image_mime
 from sandbox.paths import (
     AGENT_SKILL_PATH,
     AGENT_SKILL_PATHS,
@@ -462,6 +466,12 @@ class _StreamReadOutcome:
     returned_lines: int
     next_offset: int | None
     bytes_read: int
+    #: Sniffed image type, set only when the leading bytes identify one.
+    image_mime: str | None = None
+    #: Full image bytes, retained only while within the image budget.
+    image_bytes: bytes | None = None
+    #: True when the file is an image the budget refused to retain.
+    image_too_large: bool = False
 
 
 def _stream_read_and_select(
@@ -472,12 +482,20 @@ def _stream_read_and_select(
     max_bytes: int,
     chunk_size: int = _READ_CHUNK_SIZE,
     read_fn: Callable[[int, int], bytes] | None = None,
+    image_max_bytes: int = 0,
 ) -> _StreamReadOutcome:
     """Stream *fd* in fixed-size chunks; select lines without full-file buffers.
 
     Memory is O(chunk_size + max_bytes + pending line ≤ max_bytes). Continues
     to EOF after selection to validate strict UTF-8 / NUL (binary) without
     retaining body text. Each read request size is exactly *chunk_size*.
+
+    When *image_max_bytes* is positive, the leading bytes are sniffed once and,
+    if they identify an image, its bytes are retained up to that budget so the
+    caller can inline them. Retention is decided by the sniff, so a large text
+    file or an unrecognised binary still buffers nothing: worst-case memory
+    grows by *image_max_bytes* only for files that really are images, and an
+    image past the budget drops what it held rather than growing further.
     """
     if type(chunk_size) is not int or chunk_size <= 0:  # noqa: E721
         raise InternalFileReadError(
@@ -490,6 +508,10 @@ def _stream_read_and_select(
     )
     bytes_read = 0
     is_binary = False
+    sniff_head = b"" if image_max_bytes > 0 else None
+    image_mime: str | None = None
+    image_buffer: bytearray | None = bytearray() if image_max_bytes > 0 else None
+    budget_exceeded = False
 
     while True:
         try:
@@ -502,8 +524,34 @@ def _stream_read_and_select(
             break
         bytes_read += len(chunk)
 
+        # Retain provisionally from the first chunk, because the bytes that
+        # decide the question are the same bytes we would need to keep. The
+        # sniff resolves within IMAGE_SNIFF_BYTES, so a file that turns out not
+        # to be an image gives the buffer back after a single chunk.
+        if image_buffer is not None:
+            if len(image_buffer) + len(chunk) > image_max_bytes:
+                # Past budget: stop holding bytes but keep draining, so the
+                # size and identity checks below still see the whole file.
+                # Whether that matters depends on the sniff, which may not have
+                # resolved yet — the two are combined once, after the loop.
+                image_buffer = None
+                budget_exceeded = True
+            else:
+                image_buffer += chunk
+
+        # Sniff once the head is complete. A short chunk is not proof of EOF
+        # (a caller may inject any read size), so the decision waits for either
+        # enough bytes or the end of the loop rather than guessing.
+        if sniff_head is not None:
+            sniff_head += chunk[: IMAGE_SNIFF_BYTES - len(sniff_head)]
+            if len(sniff_head) >= IMAGE_SNIFF_BYTES:
+                image_mime = sniff_image_mime(bytes(sniff_head))
+                sniff_head = None
+                if image_mime is None:
+                    image_buffer = None
+
         if is_binary:
-            # Drain remainder for size / stability checks; retain nothing.
+            # Drain remainder for size / stability checks; retain no text.
             continue
 
         if b"\x00" in chunk:
@@ -518,6 +566,17 @@ def _stream_read_and_select(
 
         if text:
             selector.feed(text)
+
+    if sniff_head is not None:
+        # File ended inside the sniff window, or the budget cut retention short
+        # before the window filled: decide on the bytes actually seen.
+        image_mime = sniff_image_mime(bytes(sniff_head))
+
+    if image_mime is None:
+        image_buffer = None
+    # Only an image that was recognised can be "too large" — an oversized blob
+    # of anything else is just a binary file, as it has always been.
+    image_too_large = budget_exceeded and image_mime is not None
 
     if not is_binary:
         try:
@@ -537,6 +596,9 @@ def _stream_read_and_select(
             returned_lines=0,
             next_offset=None,
             bytes_read=bytes_read,
+            image_mime=image_mime,
+            image_bytes=bytes(image_buffer) if image_buffer is not None else None,
+            image_too_large=image_too_large,
         )
 
     content, truncated, returned, next_off = selector.result()
@@ -553,11 +615,20 @@ def _stream_read_and_select(
 class InternalFileReader:
     """Read a single workspace regular file for internal Agent tool paths."""
 
+    #: Largest image inlined as base64 on a read.
+    #:
+    #: Matched to the sandbox-bridge write ceiling: whatever a tool can write
+    #: into the workspace, a read can hand back. Bigger images are reported
+    #: with ``imageOmitted`` so the model downscales and reads again rather
+    #: than silently getting nothing.
+    IMAGE_MAX_BYTES = 2 * 1024 * 1024
+
     def __init__(
         self,
         *,
         workspaces_path: str | os.PathLike[str] | None = None,
         max_file_size_mb: int | None = None,
+        image_max_bytes: int | None = None,
     ) -> None:
         self._workspaces_path = (
             str(workspaces_path)
@@ -572,6 +643,9 @@ class InternalFileReader:
         if type(mb) is not int or mb <= 0:  # noqa: E721
             raise ValueError("max_file_size_mb must be a positive int")
         self._max_file_bytes = mb * 1024 * 1024
+        self._image_max_bytes = (
+            self.IMAGE_MAX_BYTES if image_max_bytes is None else int(image_max_bytes)
+        )
 
     def read(
         self,
@@ -626,6 +700,7 @@ class InternalFileReader:
                     max_bytes=inp.max_bytes,
                     chunk_size=chunk_size,
                     read_fn=read_fn,
+                    image_max_bytes=self._image_max_bytes,
                 )
 
                 if before_second_fstat is not None:
@@ -648,12 +723,25 @@ class InternalFileReader:
         mime = _guess_mime(inp.logical_path)
 
         if outcome.binary:
-            return {
+            result: dict[str, Any] = {
                 "path": inp.logical_path,
                 "binary": True,
                 "size": before.st_size,
                 "mimeType": mime,
             }
+            # An image is the one binary shape a model can actually use, so its
+            # bytes ride along base64. ``imageMimeType`` is sniffed from the
+            # content and is the only type the Agent may act on — ``mimeType``
+            # above is still just a guess from the path.
+            if outcome.image_bytes is not None and outcome.image_mime:
+                result["imageMimeType"] = outcome.image_mime
+                result["imageContent"] = base64.b64encode(
+                    outcome.image_bytes
+                ).decode("ascii")
+            elif outcome.image_too_large:
+                result["imageMimeType"] = outcome.image_mime
+                result["imageOmitted"] = "IMAGE_TOO_LARGE"
+            return result
 
         text_mime = mime if mime != "application/octet-stream" else "text/plain"
         return {

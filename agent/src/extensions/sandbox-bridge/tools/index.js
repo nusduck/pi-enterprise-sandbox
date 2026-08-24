@@ -254,7 +254,7 @@ export function createSandboxBridgeToolDefinitions(
       name: 'read',
       label: 'Read file',
       description:
-        `Read a text file from the sandbox workspace, session temporary directory, or skill root. Pagination uses 0-based offset (default 0) and limit (default ${DEFAULT_READ_LIMIT}, max ${MAX_READ_LIMIT} lines). Output uses LINE_NUM|CONTENT gutters, is capped at ${DEFAULT_TOOL_OUTPUT_LINES} lines or ~${Math.floor(MAX_READ_CHARS / 1000)}k characters (whichever first), and returns nextOffset when truncated. Prefer read over cat/sed.`,
+        `Read a file from the sandbox workspace, session temporary directory, or skill root. Images (png, jpeg, gif, webp, bmp) are returned as viewable attachments, so read an image directly instead of trying to OCR it. Pagination uses 0-based offset (default 0) and limit (default ${DEFAULT_READ_LIMIT}, max ${MAX_READ_LIMIT} lines). Output uses LINE_NUM|CONTENT gutters, is capped at ${DEFAULT_TOOL_OUTPUT_LINES} lines or ~${Math.floor(MAX_READ_CHARS / 1000)}k characters (whichever first), and returns nextOffset when truncated. Prefer read over cat/sed.`,
       promptSnippet: 'Read workspace, temporary, or skill files with pagination',
       promptGuidelines: [
         'Use read to inspect files instead of cat or sed.',
@@ -269,7 +269,7 @@ export function createSandboxBridgeToolDefinitions(
         ),
       }),
       executionMode: modeFor('read'),
-      async execute(toolCallId, params) {
+      async execute(toolCallId, params, _signal, _onUpdate, ctx) {
         const allowSkill = true;
         const norm = normalizeLogicalPath(params.path, {
           allowSkillRead: allowSkill,
@@ -308,7 +308,9 @@ export function createSandboxBridgeToolDefinitions(
             normalizedParams,
           );
           if (!inv.ok) return inv.result;
-          return finalizeReadResult(inv.data, norm.path, offset, limit);
+          return finalizeReadResult(inv.data, norm.path, offset, limit, {
+            model: ctx?.model ?? null,
+          });
         }
         const normalizedParams = {
           path: norm.path,
@@ -323,7 +325,9 @@ export function createSandboxBridgeToolDefinitions(
           normalizedParams,
         );
         if (!inv.ok) return inv.result;
-        return finalizeReadResult(inv.data, norm.path, offset, limit);
+        return finalizeReadResult(inv.data, norm.path, offset, limit, {
+          model: ctx?.model ?? null,
+        });
       },
     },
 

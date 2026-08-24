@@ -606,3 +606,127 @@ class TestStreamingMemory:
         assert out["truncated"] is True
         assert out["returnedLines"] == 1
         assert out["nextOffset"] == 1
+
+
+# Minimal but structurally valid PNG/JPEG heads (see tests/test_image_sniff.py).
+_PNG_HEAD = b"\x89PNG\r\n\x1a\n" + (13).to_bytes(4, "big") + b"IHDR"
+_JPEG_HEAD = b"\xff\xd8\xff\xe0"
+
+
+class TestImageInlining:
+    """An image produced during a run must reach the model as bytes.
+
+    Before this, every binary file — a chart the agent had just rendered
+    included — came back as ``{binary: True}`` with no content, so the only way
+    to "look at" an image was to OCR it.
+    """
+
+    def test_png_comes_back_base64(self, reader_tree) -> None:
+        import base64
+
+        r, _root, ws = reader_tree
+        body = _PNG_HEAD + b"\x00" * 100
+        (ws / "chart.png").write_bytes(body)
+        out = r.read(
+            workspace_id=WS, path=_lp("chart.png"), offset=0, limit=10, max_bytes=100
+        )
+        assert out["binary"] is True
+        assert out["imageMimeType"] == "image/png"
+        assert base64.b64decode(out["imageContent"]) == body
+
+    def test_jpeg_comes_back_base64(self, reader_tree) -> None:
+        r, _root, ws = reader_tree
+        (ws / "photo.jpg").write_bytes(_JPEG_HEAD + b"\x01" * 200)
+        out = r.read(
+            workspace_id=WS, path=_lp("photo.jpg"), offset=0, limit=10, max_bytes=100
+        )
+        assert out["imageMimeType"] == "image/jpeg"
+        assert out["imageContent"]
+
+    def test_type_is_sniffed_not_taken_from_the_path(self, reader_tree) -> None:
+        """A workspace path is model-authored; only the bytes decide."""
+        r, _root, ws = reader_tree
+        (ws / "totally.png").write_bytes(b"\x7fELF\x02\x01\x01" + b"\x00" * 200)
+        out = r.read(
+            workspace_id=WS, path=_lp("totally.png"), offset=0, limit=10, max_bytes=100
+        )
+        assert out["binary"] is True
+        assert "imageContent" not in out
+        assert "imageMimeType" not in out
+
+    def test_real_image_named_as_text_still_inlines(self, reader_tree) -> None:
+        r, _root, ws = reader_tree
+        (ws / "notes.txt").write_bytes(_PNG_HEAD + b"\x00" * 50)
+        out = r.read(
+            workspace_id=WS, path=_lp("notes.txt"), offset=0, limit=10, max_bytes=100
+        )
+        assert out["imageMimeType"] == "image/png"
+
+    def test_oversize_image_is_reported_not_silently_dropped(self, reader_tree) -> None:
+        r, _root, ws = reader_tree
+        r._image_max_bytes = 128
+        (ws / "big.png").write_bytes(_PNG_HEAD + b"\x00" * 4096)
+        out = r.read(
+            workspace_id=WS, path=_lp("big.png"), offset=0, limit=10, max_bytes=100
+        )
+        assert out["binary"] is True
+        assert "imageContent" not in out
+        assert out["imageOmitted"] == "IMAGE_TOO_LARGE"
+        assert out["imageMimeType"] == "image/png"
+
+    def test_non_image_binary_is_unchanged(self, reader_tree) -> None:
+        """The existing binary contract must not grow fields for other files."""
+        r, _root, ws = reader_tree
+        (ws / "data.bin").write_bytes(b"\x00\x01\x02\x03" * 64)
+        out = r.read(
+            workspace_id=WS, path=_lp("data.bin"), offset=0, limit=10, max_bytes=100
+        )
+        assert out == {
+            "path": _lp("data.bin"),
+            "binary": True,
+            "size": 256,
+            "mimeType": "application/octet-stream",
+        }
+
+    def test_text_reads_retain_no_image_fields(self, reader_tree) -> None:
+        r, _root, ws = reader_tree
+        (ws / "a.txt").write_text("hello\nworld\n", encoding="utf-8")
+        out = r.read(
+            workspace_id=WS, path=_lp("a.txt"), offset=0, limit=10, max_bytes=100
+        )
+        assert out["binary"] is False
+        assert "imageContent" not in out
+
+    def test_image_smaller_than_the_sniff_window(self, reader_tree) -> None:
+        """A file that ends mid-sniff still gets a decision, not a hang."""
+        r, _root, ws = reader_tree
+        (ws / "tiny.bin").write_bytes(b"\xff\xd8\xff")
+        out = r.read(
+            workspace_id=WS, path=_lp("tiny.bin"), offset=0, limit=10, max_bytes=100
+        )
+        assert out["binary"] is True
+
+    def test_tiny_chunks_do_not_break_the_sniff(self, reader_tree) -> None:
+        """A short read is not EOF: the decision waits for the full window."""
+        r, _root, ws = reader_tree
+        body = _PNG_HEAD + b"\x00" * 100
+        (ws / "chart.png").write_bytes(body)
+        out = r.read(
+            workspace_id=WS,
+            path=_lp("chart.png"),
+            offset=0,
+            limit=10,
+            max_bytes=100,
+            read_chunk_size=3,
+        )
+        assert out["imageMimeType"] == "image/png"
+
+    def test_inlining_is_off_when_the_budget_is_zero(self, reader_tree) -> None:
+        r, _root, ws = reader_tree
+        r._image_max_bytes = 0
+        (ws / "chart.png").write_bytes(_PNG_HEAD + b"\x00" * 50)
+        out = r.read(
+            workspace_id=WS, path=_lp("chart.png"), offset=0, limit=10, max_bytes=100
+        )
+        assert "imageContent" not in out
+        assert "imageOmitted" not in out
