@@ -199,6 +199,41 @@ describe('task-state bundle wiring', () => {
     assert.deepEqual(store.calls[0][0], 'getTodos');
   });
 
+  it('loads by default when the store is wired and the AgentVersion lists nothing', () => {
+    // The shipped AgentVersion config is `extensions: []`, so without this the
+    // model never sees todo_write and cannot hold a plan across a compaction.
+    const names = extensionFactoryNames(
+      createEnterpriseExtensionBundle(RUN_CTX, {
+        taskStateStore: fakeStore(),
+        sandboxTransport: {},
+      }),
+    );
+    assert.ok(names.includes('task-state'), `expected task-state in ${names.join(', ')}`);
+  });
+
+  it('stays off when no durable store is wired', () => {
+    // Registering tools that could only ever return TASK_STATE_STORE_UNAVAILABLE
+    // is worse than not offering them at all.
+    const names = extensionFactoryNames(
+      createEnterpriseExtensionBundle(RUN_CTX, { sandboxTransport: {} }),
+    );
+    assert.ok(!names.includes('task-state'));
+  });
+
+  it('an explicit AgentVersion list stays authoritative and can opt out', () => {
+    // pi-runtime-factory validates factories against the declared list exactly,
+    // so appending to a non-empty list would turn a valid AgentVersion into a
+    // PI_EXTENSIONS_COUNT error.
+    const names = extensionFactoryNames(
+      createEnterpriseExtensionBundle(RUN_CTX, {
+        extensions: [...REQUIRED_EXTENSION_NAMES],
+        taskStateStore: fakeStore(),
+        sandboxTransport: {},
+      }),
+    );
+    assert.deepEqual(names, [...REQUIRED_EXTENSION_NAMES]);
+  });
+
   it('refuses to build the extension with an incomplete store', () => {
     assert.throws(
       () =>

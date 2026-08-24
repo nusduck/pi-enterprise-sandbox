@@ -12,3 +12,17 @@ export const TASK_STATE_TOOL_NAMES = Object.freeze([
   'memory_write',
   'memory_search',
 ]);
+
+/**
+ * Store methods the extension needs before it can register anything.
+ *
+ * Kept beside the tool names so both the auto-selection check and the
+ * assembly-time guard in the bundle read the same list — a store that grows a
+ * method must not leave the two disagreeing about what "wired" means.
+ */
+export const TASK_STATE_STORE_METHODS = Object.freeze([
+  'replaceTodos',
+  'getTodos',
+  'appendMemory',
+  'searchMemory',
+]);
