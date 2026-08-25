@@ -194,6 +194,63 @@ export function toPiPromptInvocation(prompt) {
 }
 
 /**
+ * Recover the arguments the model actually emitted for `toolCallId`.
+ *
+ * The ToolExecution ledger deliberately stores a *redacted* view of the
+ * arguments (`$payload`), while `$integrity` commits to the original. Replaying
+ * an approved tool from the ledger therefore both fails the integrity check and
+ * would execute the tool with truncated arguments. The Pi session still holds
+ * the assistant message that produced the call, so that — not the ledger — is
+ * the authority on what to re-execute.
+ *
+ * @param {{ agent?: { state?: { messages?: unknown[] } }, sessionManager?: { getEntries?: Function } } | null} session
+ * @param {string} toolCallId
+ * @returns {{ found: true, args: Record<string, unknown> } | { found: false }}
+ */
+export function findToolCallArgumentsInSession(session, toolCallId) {
+  const wanted = String(toolCallId || '');
+  if (!session || !wanted) return { found: false };
+
+  /** @param {unknown[]} messages */
+  const scan = (messages) => {
+    if (!Array.isArray(messages)) return null;
+    for (let i = messages.length - 1; i >= 0; i -= 1) {
+      const message = /** @type {any} */ (messages[i]);
+      if (message?.role !== 'assistant' || !Array.isArray(message.content)) {
+        continue;
+      }
+      for (const block of message.content) {
+        if (
+          block?.type === 'toolCall' &&
+          String(block.id || '') === wanted &&
+          block.arguments !== null &&
+          typeof block.arguments === 'object' &&
+          !Array.isArray(block.arguments)
+        ) {
+          return /** @type {Record<string, unknown>} */ (block.arguments);
+        }
+      }
+    }
+    return null;
+  };
+
+  const live = scan(session.agent?.state?.messages);
+  if (live) return { found: true, args: live };
+
+  const manager = session.sessionManager;
+  if (manager && typeof manager.getEntries === 'function') {
+    const entries = manager.getEntries() || [];
+    const messages = entries
+      .filter((entry) => entry?.type === 'message' && entry.message)
+      .map((entry) => entry.message);
+    const durable = scan(messages);
+    if (durable) return { found: true, args: durable };
+  }
+
+  return { found: false };
+}
+
+/**
  * Replace a parked approval/interaction placeholder in live state and the
  * durable branch. `appendIfMissing` is reserved for interaction recovery from
  * an older snapshot that was checkpointed before Pi emitted a toolResult slot.

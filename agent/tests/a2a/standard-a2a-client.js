@@ -23,6 +23,7 @@ export class StandardA2aClient {
    *   token: string,
    *   agentId: string,
    *   fetchImpl?: typeof fetch,
+   *   configuration?: Record<string, unknown> | null,
    * }} opts
    */
   constructor(opts) {
@@ -32,6 +33,13 @@ export class StandardA2aClient {
     this.fetchImpl = opts.fetchImpl || fetch;
     this.rpcPath = `${this.baseUrl}/a2a/agents/${this.agentId}`;
     this.nextId = 1;
+    // a2a-python's ClientFactory always attaches a MessageSendConfiguration,
+    // and ClientConfig.accepted_output_modes defaults to an empty list. Send
+    // the same thing so the simulator exercises the real wire shape.
+    this.configuration = opts.configuration ?? {
+      acceptedOutputModes: [],
+      blocking: false,
+    };
   }
 
   /**
@@ -67,6 +75,8 @@ export class StandardA2aClient {
   async sendMessage(input) {
     const rpc = await this.#rpc('message/send', {
       message: this.#userMessage(input),
+      configuration: this.configuration,
+      metadata: null,
     });
     assertA2aStreamResult(rpc.result);
     if (rpc.result.kind !== 'task') {
@@ -84,6 +94,8 @@ export class StandardA2aClient {
   async sendStreamingMessage(input) {
     const results = await this.#rpcStream('message/stream', {
       message: this.#userMessage(input),
+      configuration: this.configuration,
+      metadata: null,
     });
     return assertOfficialStreamGrammar(results);
   }

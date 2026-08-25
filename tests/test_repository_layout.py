@@ -36,7 +36,10 @@ HOTSPOT_LINE_BUDGETS = {
     "agent/src/bootstrap/container.js": 1_235,
     "agent/src/bootstrap/create-http-server.js": 1_439,
     "agent/src/infrastructure/mcp/pi-mcp-adapter-factory.js": 1_269,
-    "agent/src/infrastructure/mysql/repositories/tool-execution-repository.js": 1_131,
+    # +6 (1_131 -> 1_137): packJsonWithIntegrity now raises a stable
+    # ARGUMENT_TOO_LARGE code instead of a bare message, so callers can tell
+    # "too big to store" apart from a redaction-truncated replay conflict.
+    "agent/src/infrastructure/mysql/repositories/tool-execution-repository.js": 1_137,
     "agent/src/infrastructure/mysql/repositories/trace-span-repository.js": 1_046,
     "agent/src/infrastructure/pi/pi-runtime-factory.js": 650,
     "agent/src/infrastructure/sandbox/internal-files-read-http.js": 1_009,

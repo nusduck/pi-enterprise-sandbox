@@ -179,6 +179,32 @@ export function parseSendParams(params) {
 }
 
 /**
+ * Does one requested output mode match something this agent can produce?
+ *
+ * Accepts the wire forms real clients send, not just exact MIME strings:
+ * the bare `text` alias used throughout the A2A spec samples and a2a-python,
+ * and `*​/*` / `type/*` wildcards.
+ *
+ * @param {string} mode
+ * @param {Set<string>} supported
+ * @returns {boolean}
+ */
+function isOutputModeSupported(mode, supported) {
+  const m = mode.toLowerCase();
+  if (m === '*' || m === '*/*') return true;
+  if (supported.has(m)) return true;
+  // Bare type alias: "text" means text/plain.
+  if (!m.includes('/')) {
+    return [...supported].some((s) => s.split('/')[0] === m);
+  }
+  if (m.endsWith('/*')) {
+    const type = m.slice(0, -2);
+    return [...supported].some((s) => s.split('/')[0] === type);
+  }
+  return false;
+}
+
+/**
  * Fail closed on unsupported push / output-mode negotiation (A2A v0.3).
  * @param {Record<string, unknown> | null | undefined} configuration
  */
@@ -198,24 +224,24 @@ export function assertSendConfiguration(configuration) {
 
   const modes = configuration.acceptedOutputModes ?? configuration.accepted_output_modes;
   if (modes == null) return;
-  if (!Array.isArray(modes) || modes.length === 0) {
+  if (!Array.isArray(modes)) {
     throw new A2aTaskError('Content type not supported', {
       code: 'CONTENT_TYPE_NOT_SUPPORTED',
       rpc: A2A_RPC_ERROR.CONTENT_TYPE,
-      details: { reason: 'acceptedOutputModes must be a non-empty array' },
+      details: { reason: 'acceptedOutputModes must be an array' },
     });
   }
-  const supported = new Set(A2A_SUPPORTED_OUTPUT_MODES);
   const requested = modes
     .filter((m) => typeof m === 'string' && m.trim())
     .map((m) => String(m).trim());
-  if (requested.length === 0) {
-    throw new A2aTaskError('Content type not supported', {
-      code: 'CONTENT_TYPE_NOT_SUPPORTED',
-      rpc: A2A_RPC_ERROR.CONTENT_TYPE,
-    });
-  }
-  const anySupported = requested.some((m) => supported.has(m));
+  // An empty list is "no preference", not "nothing works": a2a-python's
+  // ClientConfig.accepted_output_modes defaults to []. Rejecting it turned
+  // every default-configured official client's message/stream into a JSON-RPC
+  // error, which that client reports as an SSE protocol error.
+  if (requested.length === 0) return;
+
+  const supported = new Set(A2A_SUPPORTED_OUTPUT_MODES);
+  const anySupported = requested.some((m) => isOutputModeSupported(m, supported));
   if (!anySupported) {
     throw new A2aTaskError('Content type not supported', {
       code: 'CONTENT_TYPE_NOT_SUPPORTED',

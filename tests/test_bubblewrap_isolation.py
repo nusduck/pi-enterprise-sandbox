@@ -451,3 +451,68 @@ def test_bwrap_omits_user_skill_tier_without_identity(tmp_path):
         prepared.argv, "--ro-bind"
     )
     assert "/home/sandbox/skill-user" not in " ".join(prepared.argv)
+
+
+def test_bwrap_names_the_missing_skill_root_instead_of_failing_at_launch(
+    tmp_path,
+):
+    """A missing system skill root must be diagnosable.
+
+    The system tier is a hard ``--ro-bind``, so an absent root used to surface
+    only once bwrap ran, as ``bwrap: can't find source path ...``. Every
+    sandboxed command failed at once — bash, python, even ``pwd`` — which reads
+    as "the tools are broken" rather than "a mount is missing". Fail before
+    launch, naming the path and the mount to check.
+    """
+    context = _context(tmp_path)
+    missing = tmp_path / "skills-that-were-never-mounted"
+    backend = BubblewrapIsolationBackend(
+        executable="/usr/bin/bwrap",
+        skills_root=missing,
+    )
+
+    with pytest.raises(ValueError) as excinfo:
+        backend.prepare(
+            LaunchSpec(
+                context=context,
+                argv=["bash", "-c", "pwd"],
+                env_overrides={},
+                network_mode="disabled",
+                relative_cwd=PurePosixPath("."),
+                cwd_scope=SandboxPathScope.WORKSPACE,
+            )
+        )
+
+    message = str(excinfo.value)
+    assert "skill root is missing" in message
+    assert str(missing) in message
+    assert "SKILLS_ROOT" in message
+
+
+def test_bwrap_still_launches_when_only_the_user_skill_tier_is_absent(tmp_path):
+    """A user with nothing installed must not lose bash/python."""
+    context = _context(tmp_path)
+    skills = tmp_path / "skills"
+    skills.mkdir()
+    user_base = tmp_path / "skill-user"
+    user_base.mkdir()
+    backend = BubblewrapIsolationBackend(
+        executable="/usr/bin/bwrap",
+        skills_root=skills,
+        user_skills_root=user_base,
+    )
+
+    prepared = backend.prepare(
+        LaunchSpec(
+            context=replace(context, org_id="org_a", user_id="user_a"),
+            argv=["bash", "-c", "pwd"],
+            env_overrides={},
+            network_mode="disabled",
+            relative_cwd=PurePosixPath("."),
+            cwd_scope=SandboxPathScope.WORKSPACE,
+        )
+    )
+
+    # Tolerant bind for the tier that is legitimately empty.
+    assert "--ro-bind-try" in prepared.argv
+    assert prepared.argv[-1] == "pwd"

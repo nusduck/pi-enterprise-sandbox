@@ -39,6 +39,38 @@ function clampInt(value, fallback, min, max) {
 }
 
 /**
+ * ls / find / grep run through the Sandbox search plane, whose path model only
+ * knows the workspace and the session temp tree (`parse_sandbox_path`). Skill
+ * roots are reachable read-only, but only through the dedicated `read` path.
+ *
+ * The Agent used to forward skill paths anyway, so the model got the Sandbox's
+ * opaque `PATH_INVALID` / "search request failed" instead of being told which
+ * tool to use. Resolve the inconsistency here, at the layer that knows both.
+ *
+ * @param {unknown} raw
+ * @returns {{ ok: true, path: string } | { ok: false, result: object }}
+ */
+function normalizeSearchPath(raw) {
+  // allowSkillRead so a skill path is *recognised* rather than reported as a
+  // generic out-of-workspace path.
+  const norm = normalizeLogicalPath(raw ?? '.', { allowSkillRead: true });
+  if (!norm.ok) return { ok: false, result: toolErr(norm.code, norm.reason) };
+  if (norm.area === 'skill') {
+    return {
+      ok: false,
+      result: toolErr(
+        'PATH_SKILL_SEARCH_UNSUPPORTED',
+        'Skill directories are not searchable. Read a skill file directly ' +
+          'with the read tool (for example read ' +
+          `${norm.path}/SKILL.md); ls, find and grep cover the workspace and ` +
+          '/tmp only.',
+      ),
+    };
+  }
+  return { ok: true, path: norm.path };
+}
+
+/**
  * @param {{
  *   invoke: (toolCallId: unknown, method: string, toolName: string, params: object) =>
  *     Promise<{ ok: true, data: any } | { ok: false, result: object }>,
@@ -57,6 +89,7 @@ export function createSearchToolDefinitions({ invoke, modeFor }) {
       promptGuidelines: [
         'Start a task by listing the workspace root before guessing file paths.',
         'Increase depth only when a shallow listing was not enough; a deep listing on a large tree is mostly truncated noise.',
+        'Skill directories are not listable; open a skill file with read instead.',
       ],
       parameters: Type.Object({
         path: Type.Optional(Type.String({ maxLength: MAX_PATH_LEN })),
@@ -68,10 +101,8 @@ export function createSearchToolDefinitions({ invoke, modeFor }) {
       executionMode: modeFor('ls'),
       // Every parameter is optional for ls, so a bare call must not throw.
       async execute(toolCallId, params = {}) {
-        const norm = normalizeLogicalPath(params.path ?? '.', {
-          allowSkillRead: true,
-        });
-        if (!norm.ok) return toolErr(norm.code, norm.reason);
+        const norm = normalizeSearchPath(params.path);
+        if (!norm.ok) return norm.result;
         const normalizedParams = {
           path: norm.path,
           depth: clampInt(params.depth, LS_DEFAULT_DEPTH, 0, LS_MAX_DEPTH),
@@ -112,10 +143,8 @@ export function createSearchToolDefinitions({ invoke, modeFor }) {
       }),
       executionMode: modeFor('find'),
       async execute(toolCallId, params = {}) {
-        const norm = normalizeLogicalPath(params.path ?? '.', {
-          allowSkillRead: true,
-        });
-        if (!norm.ok) return toolErr(norm.code, norm.reason);
+        const norm = normalizeSearchPath(params.path);
+        if (!norm.ok) return norm.result;
         const pattern = String(params.pattern ?? '').trim();
         if (!pattern) return toolErr('PATTERN_REQUIRED', 'pattern is required');
         const normalizedParams = {
@@ -169,10 +198,8 @@ export function createSearchToolDefinitions({ invoke, modeFor }) {
       }),
       executionMode: modeFor('grep'),
       async execute(toolCallId, params = {}) {
-        const norm = normalizeLogicalPath(params.path ?? '.', {
-          allowSkillRead: true,
-        });
-        if (!norm.ok) return toolErr(norm.code, norm.reason);
+        const norm = normalizeSearchPath(params.path);
+        if (!norm.ok) return norm.result;
         const query = String(params.query ?? '');
         if (!query.trim()) return toolErr('QUERY_REQUIRED', 'query is required');
         const glob = params.glob == null ? null : String(params.glob);

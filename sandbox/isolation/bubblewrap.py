@@ -105,6 +105,17 @@ class BubblewrapIsolationBackend:
         ``--ro-bind-try`` because an absent directory is normal (nothing
         installed yet).
         """
+        # Hard bind, so a missing root would otherwise surface as bwrap's
+        # "can't find source path" *after* launch — which reads as "bash is
+        # broken" / "python is broken" and takes the whole Run down with no
+        # hint that a skill mount is at fault. Check first and say so.
+        if not self.skills_root.is_dir():
+            raise ValueError(
+                "Sandbox skill root is missing or not a directory: "
+                f"{self.skills_root} — this is a deployment fault (check the "
+                "SKILLS_ROOT mount); every sandboxed command fails until it is "
+                "present."
+            )
         args = ["--ro-bind", str(self.skills_root), AGENT_SKILL_PATH]
         if self.user_skills_root is None:
             return args

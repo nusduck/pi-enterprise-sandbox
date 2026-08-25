@@ -92,3 +92,102 @@ describe('createInternalFilesWriteTransport', () => {
     );
   });
 });
+
+describe('unicode workspace paths', () => {
+  const unicodePaths = [
+    '/home/sandbox/workspace/专项汇报.md',
+    '/home/sandbox/workspace/报告 2026.txt',
+    '/home/sandbox/workspace/数据/汇总.csv',
+    '/home/sandbox/workspace/rapport-café.md',
+    '/home/sandbox/workspace/レポート.txt',
+  ];
+
+  for (const path of unicodePaths) {
+    it(`writes ${JSON.stringify(path)}`, async () => {
+      let sent = null;
+      const args = { path, content: 'hi', encoding: 'utf-8' };
+      const transport = createInternalFilesWriteTransport({
+        baseUrl: 'http://sandbox:8081',
+        allowInsecureHttp: true,
+        tokenIssuer: tokenForIssuer,
+        fetchImpl: async (_url, init) => {
+          sent = JSON.parse(String(init.body));
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({
+              path,
+              size: 2,
+              hash: 'a'.repeat(64),
+              version: 'a'.repeat(64),
+            }),
+          };
+        },
+      });
+      const out = await transport.writeFile(payload('write', args));
+      assert.equal(sent.path, path);
+      assert.equal(out.path, path);
+    });
+  }
+
+  it('still rejects traversal, separators and unsafe unicode', async () => {
+    let calls = 0;
+    const transport = createInternalFilesWriteTransport({
+      baseUrl: 'http://sandbox:8081',
+      allowInsecureHttp: true,
+      tokenIssuer: tokenForIssuer,
+      fetchImpl: async () => {
+        calls++;
+      },
+    });
+    const bad = [
+      '/home/sandbox/workspace/../专项.md',
+      '/home/sandbox/workspace/数据//汇总.csv',
+      '/home/sandbox/workspace/数据\\汇总.csv',
+      '/etc/专项.md',
+      // U+202E right-to-left override: filename spoofing.
+      '/home/sandbox/workspace/汇\u202E总.md',
+      // U+0007 control character.
+      '/home/sandbox/workspace/汇\u0007总.md',
+      ' /home/sandbox/workspace/汇总.md',
+    ];
+    for (const path of bad) {
+      await assert.rejects(
+        () =>
+          transport.writeFile(
+            payload('write', { path, content: 'x', encoding: 'utf-8' }),
+          ),
+        (err) => String(err.code).startsWith('FILES_WRITE_'),
+        `expected rejection for ${JSON.stringify(path)}`,
+      );
+    }
+    assert.equal(calls, 0);
+  });
+
+  it('rejects a lone surrogate in the path', async () => {
+    let calls = 0;
+    const transport = createInternalFilesWriteTransport({
+      baseUrl: 'http://sandbox:8081',
+      allowInsecureHttp: true,
+      tokenIssuer: tokenForIssuer,
+      fetchImpl: async () => {
+        calls++;
+      },
+    });
+    await assert.rejects(
+      () =>
+        transport.writeFile({
+          path: '/home/sandbox/workspace/\ud800.md',
+          content: 'x',
+          encoding: 'utf-8',
+          identity,
+          toolExecutionId: TE,
+          toolCallId: 'tc-write',
+          requestHash: 'a'.repeat(64),
+          requestHashVersion: 1,
+        }),
+      { code: 'FILES_WRITE_PAYLOAD_INVALID' },
+    );
+    assert.equal(calls, 0);
+  });
+});

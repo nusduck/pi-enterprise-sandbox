@@ -74,7 +74,8 @@ export function evaluateLocalArgGuards(toolName, args) {
         decision: 'deny',
         reasonCode: 'SKILL_SCRIPT_COMMAND_DENIED',
         reason:
-          'Skill paths may only be executed as python/python3 *.py or sh/bash *.sh without shell operators',
+          'Skill paths may only be executed as python/python3 *.py or sh/bash *.sh ' +
+          'without shell operators; use the read tool to inspect a skill file',
         policyId: 'platform:path-guard',
         riskLevel: 'high',
       });

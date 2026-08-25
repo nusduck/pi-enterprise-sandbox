@@ -44,6 +44,16 @@ const SHA256_RE = /^[0-9a-f]{64}$/;
 const TRACE_RE = /^[0-9a-f]{32}$/;
 const VISIBLE_ASCII_RE = /^[\x21-\x7e]+$/;
 const BASE64_RE = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
+/**
+ * Characters a workspace path may never contain, whatever script it is in.
+ * C0/DEL/C1 controls, then the invisible formatting characters that let a
+ * filename render as something other than what it is (zero-width joiners,
+ * bidi overrides/isolates, BOM). Everything else — CJK, Cyrillic, accents,
+ * spaces — is a legitimate file name on the sandbox filesystem.
+ */
+// eslint-disable-next-line no-control-regex
+const UNSAFE_PATH_CHAR_RE =
+  /[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u202a-\u202e\u2060-\u2064\u2066-\u2069\ufeff]/;
 
 export class InternalFilesWriteError extends Error {
   constructor(code, message, extra = {}) {
@@ -132,20 +142,54 @@ function normalizeIdentity(value) {
   };
 }
 
+/**
+ * Workspace paths are Unicode, not ASCII: `专项汇报.md` and `报告 2026.txt` are
+ * ordinary file names and both the Sandbox contract and the filesystem accept
+ * them. Only `toolCallId` / `expectedVersion` stay ASCII — they are protocol
+ * identifiers, not user data.
+ *
+ * Safety comes from structure (workspace prefix, no traversal, no separators)
+ * plus a character deny-list, not from an alphabet allow-list.
+ */
 function normalizePath(value) {
-  const path = requireVisibleAscii(value, 'path', 512);
+  if (typeof value !== 'string' || !value) {
+    fail('FILES_WRITE_PAYLOAD_INVALID', 'path must be a non-empty string');
+  }
+  // Bound both ways: the Sandbox contract caps code points at 512, and the
+  // wire/filesystem cares about bytes.
+  if (value.length > 512 || Buffer.byteLength(value, 'utf8') > 512) {
+    fail('FILES_WRITE_PAYLOAD_INVALID', 'path exceeds max length');
+  }
+  // Lone surrogates cannot round-trip through UTF-8.
+  if (!value.isWellFormed()) {
+    fail('FILES_WRITE_PAYLOAD_INVALID', 'path contains lone Unicode surrogate');
+  }
+  if (UNSAFE_PATH_CHAR_RE.test(value)) {
+    fail('FILES_WRITE_PAYLOAD_INVALID', 'path contains control or invisible characters');
+  }
+  const path = value;
   const prefix = '/home/sandbox/workspace/';
   if (
     !path.startsWith(prefix) ||
     path.endsWith('/') ||
     path.includes('//') ||
-    path.includes('\\') ||
-    path.includes('\0')
+    path.includes('\\')
   ) {
     fail('FILES_WRITE_PATH', 'invalid workspace path');
   }
   const parts = path.slice(prefix.length).split('/');
-  if (!parts.length || parts.some((part) => !part || part === '.' || part === '..')) {
+  if (
+    !parts.length ||
+    parts.some(
+      (part) =>
+        !part ||
+        part === '.' ||
+        part === '..' ||
+        // A segment padded with whitespace renders as a different name than it
+        // resolves to; reject rather than silently trim.
+        part !== part.trim(),
+    )
+  ) {
     fail('FILES_WRITE_PATH', 'invalid workspace path');
   }
   return path;

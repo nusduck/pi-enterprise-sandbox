@@ -32,6 +32,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Run 收敛保护**: 为每个 Pi Run 增加模型回合、总工具调用和相同工具/参数调用上限；达到上限后禁止继续调用工具，并要求模型依据已有结果作答。三个上限均可通过 `AGENT_RUN_MAX_*` 配置。
 - **MCP 启动发现**: Agent 启动时连接每个启用的 MCP Server 并执行 `tools/list`；发现到的工具以 `mcp__{serverId}__{toolName}` 注册，对应的连接与工具数量会出现在 readiness/diagnostics。
 
+### Fixed
+
+- **`write` / `edit` 接受中文（及任何 Unicode）文件名**: `write` 到 `workspace/专项汇报.md` 返回 `FILES_WRITE_PAYLOAD_INVALID: path must be bounded visible ASCII`，`fetchCalls: 0`——请求根本没离开 Agent。根因在 Agent→Sandbox 的 HTTP transport：`normalizePath()` 复用了给协议标识符准备的 `requireVisibleAscii()`（`[\x21-\x7e]`），于是中日韩文件名、连带空格一起被拒。Sandbox 侧的 `_path()` 契约、request hash、Python 写入器、文件系统全都本来就接受 Unicode——只有这一层不接受。路径改为**按结构 + 字符黑名单**校验：仍然拒绝 NUL/控制字符、C1、零宽与 bidi 覆盖字符（`U+200B–200F`/`U+202A–202E`/`U+2066–2069`/`U+FEFF`，文件名伪装）、孤立代理对、反斜杠、`//`、`.`/`..`、workspace 前缀之外的路径，以及首尾带空白的路径段；长度同时按码元与 UTF-8 字节双向封顶 512（对齐 Sandbox 契约）。`toolCallId` / `expectedVersion` 继续走 ASCII——它们是协议标识符，不是用户数据。
+
+- **长参数的工具在审批放行后不再让整个 Run FAILED**: 带审批的工具调用只要有任一参数字符串超过 512 字符，审批通过后的重放就抛 `tool_call_id replay conflicts with existing args integrity`，Run 直接 FAILED。根因不在完整性校验本身，而在**重放读错了地方**：ToolExecution 账本存的是完整性信封，`$integrity` 承诺的是**原始** args，`$payload` 却是 `redactPayload()` 脱敏后的视图——超过 `DEFAULT_MAX_STRING`（512）的字符串会被截断并补上 `_bytes`/`_sha256`/`_truncated` 兄弟字段。`resumeApprovedToolCall` 拿 `argumentsJson`（即 `$payload`）去重放，指纹自然对不上；更糟的是——**即使指纹对得上，被批准的工具也会用截断后的参数执行**（一个 600 字符的 `write` 会写出被截断的文件）。现在重放的权威来源是 Pi 会话里那条发出调用的 assistant 消息（`findToolCallArgumentsInSession`）；只有当账本视图的指纹可证明等于 `$integrity`（即短参数、脱敏无损）时才回退到账本；两者都不可用时以 `APPROVED_TOOL_ARGS_UNRECOVERABLE` 明确失败，而不是拿脱敏视图去执行。另外 `packJsonWithIntegrity` 超限时改抛稳定的 `ARGUMENT_TOO_LARGE`，让"存不下"与"脱敏截断导致的重放冲突"在日志里可区分。
+
+- **官方 A2A 客户端可以建立流式连接**: 官方 a2a-python / a2a-js 客户端能取到 Agent Card 与 skill 列表，但 `message/stream` 报 `Expected response header Content-Type to contain 'text/event-stream', got 'application/json'`。根因是内容协商过严：`assertSendConfiguration()` 把**空的** `acceptedOutputModes` 判成 `CONTENT_TYPE_NOT_SUPPORTED`，而 a2a-python 的 `ClientConfig.accepted_output_modes` 默认就是空列表，且 `ClientFactory` 总会附上 `MessageSendConfiguration`；流式方法上的 JSON-RPC 错误以 `application/json` 返回，客户端便报成 SSE 协议错误。空列表现在按"无偏好"处理；同时接受 A2A 规范样例与 SDK 常用的短别名 `text` 与 `*/*`、`text/*` 通配。真正不支持的集合（如只要 `image/png`）与 push notification 配置仍然拒绝。仓库自带的 `StandardA2aClient` 模拟器此前从不发送 `configuration`，所以 110 条 A2A 用例全绿却漏掉了真实线格式——模拟器已改为按官方客户端的形状发送。
+
+- **Run 进行中刷新不再丢失 assistant 正文**: Run 还在跑时刷新页面，气泡只剩 `Agent Execution Steps`，正文消失，且 Run 结束后也不会自己回来——要等用户再发一条消息，旧回答才重新出现并重新排序。根因在 `rehydrateConversation()`：Run 状态为 running/pending/queued 时**跳过**持久事件回放，完全依赖 SSE 重连；而工具账本无论如何都会回放，于是"有步骤、没回答"。刷新期间 Run 恰好结束（或 SSE 没及时恢复）时，重连已无增量可送，正文就永久缺席。现在**总是先回放 durable events，再连 SSE 取增量**——reducer 按 event id 去重，重复投递是安全的；`runtime_available === false` 分支里那次补偿性回放随之删除（不再需要，也避免二次回放）。
+
+- **Skill 目录的 `ls`/`find`/`grep` 给出可操作的错误**: Agent 侧路径规范化放行 Skill 只读路径并把请求转给 Sandbox，但 Sandbox 的 `parse_sandbox_path()` 只认 workspace 与 `/tmp`，于是模型拿到的是 `PATH_INVALID` / "search request failed" 这种不知所云的结果。三层现在口径一致：Skill 目录**不可搜索**，读取只走 `read`——`ls`/`find`/`grep` 在 Agent 层就返回 `PATH_SKILL_SEARCH_UNSUPPORTED` 并点名 `read` 与具体路径，不再把注定被拒的请求发给 Sandbox；`bash` 的既有拒绝理由也补上了同一句指引。
+
+- **缺失的系统 Skill 根不再表现为「bash 坏了」**: 系统 Skill 层是硬 `--ro-bind`（有意为之：缺失即部署故障，应当大声失败），但 `skills_root.resolve()` 不做存在性检查，缺失时要等 bwrap 启动才报 `bwrap: can't find source path …`——表现是 `pwd`、`bash`、`python` 一起失败、Run FAILED，完全看不出是挂载问题。改为启动前检查并抛出点名路径与 `SKILLS_ROOT` 挂载的错误。用户 Skill 层本就是 `--ro-bind-try`（没装过 Skill 是正常状态），保持不变。
+
 ### Removed
 
 - **`config/agent/models.json`**: 与 `model-registry.json` 重复的第二份模型目录，全仓库零引用——不被任何代码读取，也不在 pi SDK 查找 `models.json` 的 `AGENT_PI_AGENT_DIR` 下（容器里 `/app/pi-agent-home/` 是空的）。留着只会继续和真实目录漂移。
