@@ -10,7 +10,11 @@ import {
   hashJournalPayload,
   JOURNAL_HEADER_ENTRY_ID,
   JOURNAL_MESSAGE_TYPE,
+  JOURNAL_ORDER_INDEX,
 } from '../../src/infrastructure/mysql/repositories/pi-session-journal-repository.js';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import nodePath from 'node:path';
 import { SessionJournalError } from '../../src/domain/session/errors.js';
 import { createUlidGenerator } from '../../src/domain/shared/ulid.js';
 
@@ -254,6 +258,66 @@ describe('PiSessionJournalRepository', () => {
           userId: '01K0G2PAV8FPMVC9QHJG7JPN99',
         }),
       /not found/i,
+    );
+  });
+
+  /**
+   * A journal entry carrying an inline image is ~2.7MB of base64
+   * (MAX_READ_IMAGE_BYTES is 2MiB before encoding). Ordering that with a
+   * filesort buffers whole rows, `content_json` included, and one such row
+   * blows the 256KB default `sort_buffer_size`: MySQL raises
+   * ER_OUT_OF_SORTMEMORY and the Run dies. recover() runs this read on every
+   * run start and persist() re-reads immediately after appending the entry, so
+   * the read has to be orderable straight from an index.
+   *
+   * Left to itself the optimizer picks
+   * idx_messages_session_pi_kind (agent_session_id, pi_entry_kind, sequence_no)
+   * — a middle column this query never constrains, since it filters on
+   * message_type — so the index cannot order by sequence_no.
+   */
+  it('pins the ordering index so the journal read cannot filesort', async () => {
+    const base = createFakeKnex(state);
+    /** @type {unknown[]} */
+    const tables = [];
+    const spy = Object.assign(
+      (table) => {
+        tables.push(table);
+        return base(table);
+      },
+      base,
+    );
+    const repo = new PiSessionJournalRepository(spy);
+    await repo.appendHeader({
+      messageId: MSG1,
+      agentSessionId: SESS,
+      ...scope,
+      header,
+    });
+
+    tables.length = 0;
+    await repo.listBySession(SESS, scope);
+
+    const forced = tables.find(
+      (t) => t && typeof t === 'object' && t.__forceIndex,
+    );
+    assert.ok(forced, 'journal read must name an index explicitly');
+    assert.equal(forced.__fakeTable, 'messages');
+    assert.equal(forced.__forceIndex, JOURNAL_ORDER_INDEX);
+  });
+
+  it('pins an index the schema actually defines', () => {
+    const here = nodePath.dirname(fileURLToPath(import.meta.url));
+    const migration = readFileSync(
+      nodePath.join(
+        here,
+        '../../src/infrastructure/mysql/migrations/20260718000001_core_platform_schema.js',
+      ),
+      'utf8',
+    );
+    assert.ok(
+      migration.includes(JOURNAL_ORDER_INDEX),
+      `${JOURNAL_ORDER_INDEX} is not created by the core migration; a rename ` +
+        'would make FORCE INDEX fail at runtime',
     );
   });
 

@@ -118,3 +118,60 @@ read: /home/sandbox/skill-user/<org>/<user>/verify-skill/SKILL.md
 
 验证用的 Skill 包与 `<org>/<user>` 目录已从 `agent_user_skills` 卷删除
 （`skill-user entries: 0`）；容器内临时脚本已删除；测试账号与其会话保留在库中。
+
+---
+
+## 追加：图片分析 `Out of sort memory`（同日报告，真机复现 + 修复验证）
+
+### 复现（真实栈）
+
+让模型生成 1.5MB PNG 后，用 vision 模型 `deepseek-v4-flash-vision-exp` 触发 `read` 内联：
+
+```
+run 01M0WP2AGEBEE1YQ0162GJZEK7  FAILED
+reason: select * from `messages` where `agent_session_id` = … order by `sequence_no` asc limit 500
+        - Out of sort memory…
+```
+
+与用户报告逐字一致。用默认（非 vision）模型跑同一个 `read` 不会失败——返回
+`[Current model does not support images. The image will be omitted…]`，这解释了为何
+只有图片分析触发。
+
+### 执行计划
+
+```
+key: idx_messages_session_pi_kind    Extra: Using index condition; Using where; Using filesort
+```
+
+该索引中间列是 `pi_entry_kind`，而查询过滤 `message_type`，故无法提供 `sequence_no`
+顺序 → filesort → 对整行（含 `content_json`）排序。`sort_buffer_size` 默认 262144。
+
+### 两个容易带偏排查的现象
+
+1. **事后查库看不到大行**：失败回滚，2.7MB 那条 entry 随之消失。复现后立即查，journal
+   最大行只剩 2.9KB，同一条 SQL 还能正常返回 12 行。
+2. **会话没有被永久损坏**：失败后再发一轮普通 bash，`SUCCEEDED`
+   （run `01M0WP67TEEAYP22P8T362YMHJ`）。是「每次图片分析都失败」，不是「对话报废」。
+
+### 修复后 A/B（同一份真实数据，session `01M0WNZWV0YAJP00Y4JE5A03SH`，含一条 2.015MB entry）
+
+```
+--- OLD query (no hint) ---     ERROR 1038 (HY001): Out of sort memory…
+--- NEW query (FORCE INDEX) --- COUNT(*) = 22
+```
+
+### 端到端
+
+重建 agent 镜像后重跑此前失败的那轮图片分析：
+
+```
+run 01M0WQ0ZM20KPQD0FSFQQ6GFK8  SUCCEEDED
+journal: pi_journal_entry  n=21  max_mb=2.015
+```
+
+2MB 的 entry 确实落库，Run 正常完成。
+
+### 未做
+
+`JOURNAL_DEFAULT_PAGE_SIZE` 仍是按行数（500）分页，没有字节预算——排序问题解决了，但
+500 × 2.7MB 一次性拉进 Node 仍是隐患。已记入 `review-deferred-items.md`。

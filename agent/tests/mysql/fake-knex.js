@@ -548,7 +548,13 @@ function createQuery(state, tableName, opts = {}) {
  */
 export function createFakeKnex(state = createFakeState()) {
   /** @type {any} */
-  const knex = (tableName) => createQuery(state, tableName);
+  const knex = (table) =>
+    createQuery(
+      state,
+      table && typeof table === 'object' && typeof table.__fakeTable === 'string'
+        ? table.__fakeTable
+        : table,
+    );
 
   knex.__state = state;
   knex.isTransaction = false;
@@ -569,7 +575,21 @@ export function createFakeKnex(state = createFakeState()) {
     }
   };
 
-  knex.raw = async (sql, bindings = []) => {
+  // Real knex lets a Raw stand in for a table (`knex(knex.raw('?? FORCE INDEX
+  // (??)', [...]))`). That is a builder fragment, not a statement to run, so
+  // recognise it synchronously and hand back a table descriptor instead of the
+  // promise every other raw() returns.
+  knex.raw = (sql, bindings = []) => {
+    const forceIndex = /^\?\?\s+FORCE INDEX\s*\(\?\?\)$/i.test(
+      String(sql).trim(),
+    );
+    if (forceIndex && typeof bindings[0] === 'string') {
+      return { __fakeTable: bindings[0], __forceIndex: bindings[1] ?? null };
+    }
+    return rawAsync(sql, bindings);
+  };
+
+  const rawAsync = async (sql, bindings = []) => {
     state.rawCalls.push({ sql: String(sql), bindings: [...bindings] });
     const sqlNorm = String(sql).replace(/\s+/g, ' ').trim();
 
