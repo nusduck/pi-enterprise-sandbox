@@ -1,8 +1,8 @@
 # 2026-08-25 pi-sandbox 问题清单：复现与处置
 
 对外部测试报告 `pi-sandbox-issues-detailed.md`（九项）的逐条复现记录。
-**结论先行**：六项已复现并在同一分支修复（含回归测试），一项无法在当前代码上复现，
-两项是设计/产品问题、不属于缺陷修复范围。
+**结论先行**：七项已复现并在同一分支修复（含回归测试），一项（问题六）根因已在代码层
+确认但需 Linux 真机验证故未落地，两项是设计/产品问题、不属于缺陷修复范围。
 
 修复本身的用户可见描述见 [`../../CHANGELOG.md`](../../CHANGELOG.md) `[Unreleased] → Fixed`。
 本文只记录**复现方法、根因判定与未落地项的行动建议**。
@@ -15,7 +15,7 @@
 | 4 | Skill 目录 `ls`/`find`/`grep` 不一致 | ✅ 双层实测 | ✅ 已修（口径统一） |
 | 5 | 长参数触发 replay args integrity 冲突 | ✅ 单元级 | ✅ 已修 |
 | 6 | `~/.config` 类应用无法持久化配置 | ⚠️ 代码级确认，未实测 | ❌ 未改，见下 |
-| 7 | Skill install 污染 bwrap source path | ❌ 当前代码无法复现 | ⚠️ 部分加固 |
+| 7 | Skill install 污染 bwrap source path | ✅ 已复现（用户提供触发条件后） | ✅ 已修 |
 | 8 | Skill creator 逻辑不合理 | — 设计问题 | ❌ 未改，见下 |
 | 9 | User Skill 前端无展示 | — 产品缺口 | ❌ 未改，见下 |
 
@@ -91,29 +91,59 @@ bwrap 无法在开发机的 `docker compose exec` 上下文中运行
 应用配置会被另一个租户读到。同时需要明确 session 重启后的保留策略，并在
 `deployment.md` 记录新增的磁盘占用面。
 
-## 问题七：bwrap source path 污染（当前代码无法复现）
+## 问题七：Skill 安装打坏 bwrap bind source（已复现、已修）
 
-报告的错误是 `bwrap: can't find source path /home/sandbox/skill-user/<org>/<user>/...`。
-在当前 `main` 上：
+**初次排查的结论是错的**，记录在此以免重蹈：当时只看到用户层用的是 `--ro-bind-try`，
+便推断"源不存在会被静默跳过，因此报不出这个错"。遗漏的前提是——
+**`--ro-bind-try` 只宽容 `ENOENT`，不宽容 `EACCES`**。用户补充了触发条件
+（"都是产生在我通过 skill 上传 button 上传 skill.zip 后"）之后，链条立刻闭合。
 
-- 用户 Skill 层用的是 **`--ro-bind-try`**——源不存在时静默跳过，不会产生该错误
-  （`bubblewrap.py:_skill_binds`，注释明确写了"没装过 Skill 是正常状态"）；
-- 报告建议的"启动前对每个 source path 做存在性检查"**在用户层已经等价存在**。
+**根因**（`agent/src/skills/install.js`）：
 
-也就是说该错误要么来自比 `44aca423`（per-user skill 特性）更早的镜像，要么来自
-系统层。已实测的相邻事实是：容器侧 user-skill 根路径与沙盒内逻辑路径**同名**
-（`docker-compose.yml` 把 `agent_user_skills` 卷挂到 `/home/sandbox/skill-user`），
-所以报错里那个"看起来像沙盒内路径"的 source 其实就是宿主容器里的真实路径——这解释了
-报告为何觉得路径被"污染"。
+Node 的 `fs.mkdir` 会把 `mode` 施加到递归创建的**每一级**目录。安装的第一个动作是
 
-**已做的加固**：系统 Skill 层是硬 `--ro-bind` 且 `skills_root.resolve()` 不做存在性
-检查，缺失时同样以 `can't find source path` 在**启动后**爆出来——表现为 `pwd`/`bash`/
-`python` 一起失败，完全看不出是挂载问题。现改为启动前检查并点名
-`SKILLS_ROOT`。**保留硬失败语义**（缺少内置 Skill 根是部署故障，不应静默降级），
-只让它变得可诊断。
+```js
+const stagingRoot = path.join(skillRoot, `.tmp-install-${token}`);
+await fsp.mkdir(stagingRoot, { recursive: true, mode: 0o700 });
+```
 
-**仍需线上确认**：请提供复现时的镜像 digest 与完整 bwrap 命令行。若确实发生在当前代码
-上，则说明存在第三条 mount 组装路径，本次排查未覆盖。
+其中 `skillRoot` = `<base>/<org>/<user>`。某用户**首次**安装时这两级尚不存在，于是
+`<org>` 与 `<user>` 一并被创建成 `0700`、属主 `node`(uid 1000)。已实测确认：
+
+```
+0755 /tmp/skilltest
+0700 /tmp/skilltest/ORG26CHARS0000000000000000
+0700 /tmp/skilltest/ORG26CHARS0000000000000000/USER26CHARS000000000000000
+0700 /tmp/skilltest/.../.tmp-install-abc
+```
+
+而 `<base>/<org>/<user>` 正是 Bubblewrap 用户 Skill 层的 **bind source**。
+Sandbox 以 uid 10001 解析它 → `realpath()` 得到 `EACCES` → bwrap
+`Can't find source path …` → **该用户的每一次沙盒启动全部失败**（`bash`、`python`、
+连 `pwd` 都不行），且不会自愈。`read`/`write`/`ls`/`find`/`grep` 仍然可用，因为它们
+走内部文件面、不经过 bwrap——这与用户截图里的现象完全吻合。
+
+同一缺陷也存在于 Agent 生成 Skill 的路径（`.tmp-create-…`，`mkdir(packageSource,
+{ recursive: true, mode: 0o700 })`）。
+
+**修复**：两条路径都先 `ensureTraversableUserSkillRoot()` 以 `0755` 建好身份目录，再建
+私有 staging；该函数同时修复已被打坏的目录，所以受影响用户在下一次安装时自愈。
+回归测试覆盖上传、生成、以及"已被打坏的目录被修复"三种情形，去掉修复即三条全红。
+
+**为什么 `0755` 不是放松**：这条路径上其它目录（`copyTree` 建的包内目录、
+`atomicReplaceDir` 建的父目录）本来就是 `0755`；`0700` 是 `recursive` + `mode` 的意外
+副作用，不是有意的租户边界——两个容器里各自都只有一个 uid 在跑，这两位权限位从未
+起到隔离作用。真正的租户隔离是"只把调用者自己的 `<org>/<user>` bind 进命名空间"
+（`_skill_binds` 的注释写得很清楚），那一条没有改动。
+
+**纵深防御**：Sandbox 侧现在 bind 之前先 `stat()` 探测源，`ENOENT`（没装过，正常）与
+其它 `OSError`（不可遍历）都降级为"只挂系统层"并记 warning。丢掉一个用户的 Skill
+不应该等于丢掉他的全部工具——这正是报告里"缺失一个 Skill 不影响 bash/python 启动"
+那条验收标准。
+
+**顺带修的系统层**：系统 Skill 层是硬 `--ro-bind` 且 `skills_root.resolve()` 不做存在性
+检查，缺失时同样在启动后才爆 `can't find source path`。现改为启动前检查并点名
+`SKILLS_ROOT`，保留"缺失即部署故障、应当大声失败"的语义，只让它可诊断。
 
 ## 问题八：Skill creator 的形态
 

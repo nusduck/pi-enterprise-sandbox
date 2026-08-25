@@ -12,6 +12,7 @@ process.
 
 from __future__ import annotations
 
+import logging
 import os
 import re
 import shutil
@@ -30,6 +31,8 @@ from sandbox.paths import (
     SandboxPathScope,
 )
 from sandbox.security.safe_env import safe_env
+
+logger = logging.getLogger(__name__)
 
 _ENV_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
@@ -127,10 +130,28 @@ class BubblewrapIsolationBackend:
             relative = Path(user_dir).resolve().relative_to(self.user_skills_root)
         except (ValueError, OSError):
             return args
+        source = Path(self.user_skills_root) / relative
+        # ``--ro-bind-try`` forgives ENOENT and *nothing else*. A skill root
+        # whose ancestor is not traversable by this uid makes bwrap's realpath
+        # fail with EACCES, and bwrap then dies with "Can't find source path"
+        # — taking bash, python and even ``pwd`` down with it. Losing one
+        # user's skills must never cost that user every tool, so probe first
+        # and fall back to the system tier.
+        try:
+            source.stat()
+        except FileNotFoundError:
+            return args  # Nothing installed yet — normal.
+        except OSError:
+            logger.warning(
+                "User skill root is not readable; continuing with the system "
+                "tier only: %s",
+                source,
+            )
+            return args
         args.extend(
             [
                 "--ro-bind-try",
-                str(Path(self.user_skills_root) / relative),
+                str(source),
                 f"{AGENT_USER_SKILL_PATH}/{relative.as_posix()}",
             ]
         )

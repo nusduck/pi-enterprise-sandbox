@@ -342,3 +342,112 @@ test('SkillManager rejects malformed install inputs before downloading bytes', a
   );
   assert.equal(downloads, 0);
 });
+
+/**
+ * The identity directories on the Bubblewrap bind path must stay traversable.
+ *
+ * `<base>/<org>/<user>` is the source of the per-user skill `--ro-bind-try`.
+ * The Agent creates it as `node` (uid 1000); the Sandbox resolves it as uid
+ * 10001. Installing used to create it as a side effect of
+ * `mkdir(stagingRoot, { recursive: true, mode: 0o700 })` — `fs.mkdir` applies
+ * `mode` to *every* directory it creates — so `<org>` and `<user>` came out
+ * 0700. `realpath()` from the Sandbox then failed with EACCES, and
+ * `--ro-bind-try` only forgives ENOENT, so bwrap died with
+ * "Can't find source path /home/sandbox/skill-user/<org>/<user>" and every
+ * bash/python launch failed for that user right after their first upload.
+ */
+
+function modeOf(target) {
+  return fs.statSync(target).mode & 0o777;
+}
+
+/** Mirror of userSkillRootFor(): <base>/<org>/<user>. */
+const ORG = '01M0VEVCKYRHKC9SR0DKPDBFCQ';
+const USER = '01M0VEVCMCEECW4SPFAFEX0X35';
+
+test('uploading a Skill leaves the bwrap bind path traversable', async () => {
+  const base = await tmpdir('skill-base');
+  const userRoot = path.join(base, ORG, USER);
+  const zip = createStoredZip([
+    { name: 'bind-path-skill/SKILL.md', content: skillMd('bind-path-skill') },
+  ]);
+
+  await installSkillArchive({
+    archiveBytes: zip,
+    archiveName: 'bind-path-skill.zip',
+    attachmentId: 'dataset-bind',
+    skillRoot: userRoot,
+  });
+
+  for (const dir of [path.join(base, ORG), userRoot]) {
+    assert.equal(
+      modeOf(dir) & 0o055,
+      0o055,
+      `${dir} must stay group/other traversable (mode ${modeOf(dir).toString(8)})`,
+    );
+  }
+  // The package itself has to be readable from the Sandbox too.
+  assert.equal(modeOf(path.join(userRoot, 'bind-path-skill')) & 0o055, 0o055);
+});
+
+test('generating a Skill leaves the bwrap bind path traversable', async () => {
+  const base = await tmpdir('skill-base');
+  const userRoot = path.join(base, ORG, USER);
+
+  await createGeneratedSkill({
+    name: 'generated-skill',
+    description: 'Generated.',
+    instructions: 'Do the thing.',
+    files: [{ path: 'references/notes.md', content: '# Notes\n' }],
+    skillRoot: userRoot,
+  });
+
+  for (const dir of [path.join(base, ORG), userRoot]) {
+    assert.equal(
+      modeOf(dir) & 0o055,
+      0o055,
+      `${dir} must stay group/other traversable (mode ${modeOf(dir).toString(8)})`,
+    );
+  }
+});
+
+test('a root already bricked by an earlier install is repaired', async () => {
+  const base = await tmpdir('skill-base');
+  const userRoot = path.join(base, ORG, USER);
+  // Exactly the state the old code left behind.
+  fs.mkdirSync(userRoot, { recursive: true, mode: 0o700 });
+  assert.equal(modeOf(path.join(base, ORG)) & 0o055, 0);
+
+  const zip = createStoredZip([
+    { name: 'repair-skill/SKILL.md', content: skillMd('repair-skill') },
+  ]);
+  await installSkillArchive({
+    archiveBytes: zip,
+    archiveName: 'repair-skill.zip',
+    attachmentId: 'dataset-repair',
+    skillRoot: userRoot,
+  });
+
+  for (const dir of [path.join(base, ORG), userRoot]) {
+    assert.equal(modeOf(dir) & 0o055, 0o055, `${dir} must be repaired`);
+  }
+});
+
+test('the transient staging directory stays private', async () => {
+  const base = await tmpdir('skill-base');
+  const userRoot = path.join(base, ORG, USER);
+  const zip = createStoredZip([
+    { name: 'staging-skill/SKILL.md', content: skillMd('staging-skill') },
+  ]);
+  await installSkillArchive({
+    archiveBytes: zip,
+    archiveName: 'staging-skill.zip',
+    attachmentId: 'dataset-staging',
+    skillRoot: userRoot,
+  });
+  // Nothing transient may be left on the bind path at all.
+  const leftovers = fs
+    .readdirSync(userRoot)
+    .filter((entry) => entry.startsWith('.tmp-') || entry.startsWith('.backup-'));
+  assert.deepEqual(leftovers, []);
+});

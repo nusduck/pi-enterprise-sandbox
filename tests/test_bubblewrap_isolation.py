@@ -516,3 +516,56 @@ def test_bwrap_still_launches_when_only_the_user_skill_tier_is_absent(tmp_path):
     # Tolerant bind for the tier that is legitimately empty.
     assert "--ro-bind-try" in prepared.argv
     assert prepared.argv[-1] == "pwd"
+
+
+def test_bwrap_degrades_to_system_tier_when_user_skill_root_is_unreadable(
+    tmp_path, monkeypatch
+):
+    """One user's broken skill root must not cost that user bash and python.
+
+    ``--ro-bind-try`` forgives ENOENT and nothing else, so a skill root whose
+    ancestor is not traversable by the sandbox uid made bwrap fail its realpath
+    with EACCES and die with ``Can't find source path`` — every command,
+    including ``pwd``, went down with it. Probe the source and fall back.
+    """
+    from sandbox.config import settings
+
+    context = _context(tmp_path)
+    skills = tmp_path / "skills"
+    skills.mkdir()
+    user_base = tmp_path / "skills-user"
+    org, user = "org1", "user1"
+    mine = user_base / org / user
+    mine.mkdir(parents=True)
+    # Exactly the state a 0700 install left behind: the ancestor is not
+    # traversable, so stat() on the bind source raises EACCES.
+    (user_base / org).chmod(0o600)
+    monkeypatch.setattr(settings, "user_skills_root", str(user_base))
+
+    backend = BubblewrapIsolationBackend(
+        executable="/usr/bin/bwrap",
+        skills_root=skills,
+        user_skills_root=user_base,
+    )
+    try:
+        prepared = backend.prepare(
+            LaunchSpec(
+                context=replace(context, org_id=org, user_id=user),
+                argv=["bash", "-c", "pwd"],
+                env_overrides={},
+                network_mode="disabled",
+                relative_cwd=PurePosixPath("."),
+                cwd_scope=SandboxPathScope.WORKSPACE,
+            )
+        )
+    finally:
+        (user_base / org).chmod(0o755)
+
+    # System tier still bound; the unreadable user tier is simply absent.
+    assert ("--ro-bind", str(skills)) in [
+        (prepared.argv[i], prepared.argv[i + 1])
+        for i, v in enumerate(prepared.argv)
+        if v == "--ro-bind"
+    ]
+    assert not any(str(mine) == arg for arg in prepared.argv)
+    assert prepared.argv[-1] == "pwd"
