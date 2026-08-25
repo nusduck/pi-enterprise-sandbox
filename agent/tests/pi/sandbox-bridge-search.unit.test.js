@@ -330,7 +330,13 @@ describe('skill paths are refused at the Agent layer, consistently', () => {
         const tool = defs.find((d) => d.name === name);
         const out = await tool.execute(`tc-${name}`, buildParams(path));
         assert.equal(out.details.code, 'PATH_SKILL_SEARCH_UNSUPPORTED');
-        assert.match(out.content[0].text, /read tool/);
+        assert.match(
+          out.content[0].text,
+          path.endsWith('/skill') || path.endsWith('/skill-user')
+            ? /skills section/
+            : /read \/home\/sandbox\/skill/,
+          out.content[0].text,
+        );
         assert.equal(
           calls.length,
           0,

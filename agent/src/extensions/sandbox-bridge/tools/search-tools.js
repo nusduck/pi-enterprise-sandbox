@@ -14,6 +14,7 @@
 
 import { Type } from 'typebox';
 import {
+  LOGICAL_SKILL_ROOTS,
   FIND_DEFAULT_LIMIT,
   FIND_DEFAULT_MAX_DEPTH,
   FIND_MAX_DEPTH,
@@ -56,14 +57,20 @@ function normalizeSearchPath(raw) {
   const norm = normalizeLogicalPath(raw ?? '.', { allowSkillRead: true });
   if (!norm.ok) return { ok: false, result: toolErr(norm.code, norm.reason) };
   if (norm.area === 'skill') {
+    // Only suggest a concrete file when the caller already named a package
+    // directory. At a bare skill root there is no SKILL.md to point at, and
+    // inventing one sends the model chasing a path that does not exist.
+    const isSkillRoot = LOGICAL_SKILL_ROOTS.some((root) => norm.path === root);
+    const hint = isSkillRoot
+      ? 'Every installed skill is already listed with its location in your ' +
+        'skills section; read that location directly.'
+      : `Read the file directly instead, for example read ${norm.path}/SKILL.md.`;
     return {
       ok: false,
       result: toolErr(
         'PATH_SKILL_SEARCH_UNSUPPORTED',
-        'Skill directories are not searchable. Read a skill file directly ' +
-          'with the read tool (for example read ' +
-          `${norm.path}/SKILL.md); ls, find and grep cover the workspace and ` +
-          '/tmp only.',
+        `Skill directories are not searchable. ${hint} ` +
+          'ls, find and grep cover the workspace and /tmp only.',
       ),
     };
   }
