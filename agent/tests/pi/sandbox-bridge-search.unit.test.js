@@ -307,3 +307,53 @@ describe('ledger binding', () => {
     assert.equal(calls.length, 0);
   });
 });
+
+describe('skill paths are refused at the Agent layer, consistently', () => {
+  const skillPaths = [
+    '/home/sandbox/skill',
+    '/home/sandbox/skill/docx',
+    '/home/sandbox/skill/docx/SKILL.md',
+    '/home/sandbox/skill-user/01K0G2PAV8FPMVC9QHJG7JPN4Z/01K0G2PAV8FPMVC9QHJG7JPN50/pkg',
+  ];
+
+  const invocations = {
+    ls: (path) => ({ path }),
+    find: (path) => ({ path, pattern: '*.md' }),
+    grep: (path) => ({ path, query: 'needle' }),
+  };
+
+  for (const [name, buildParams] of Object.entries(invocations)) {
+    for (const path of skillPaths) {
+      it(`${name} refuses ${path} without calling the Sandbox`, async () => {
+        const calls = [];
+        const defs = defsFor(calls);
+        const tool = defs.find((d) => d.name === name);
+        const out = await tool.execute(`tc-${name}`, buildParams(path));
+        assert.equal(out.details.code, 'PATH_SKILL_SEARCH_UNSUPPORTED');
+        assert.match(
+          out.content[0].text,
+          path.endsWith('/skill') || path.endsWith('/skill-user')
+            ? /skills section/
+            : /read \/home\/sandbox\/skill/,
+          out.content[0].text,
+        );
+        assert.equal(
+          calls.length,
+          0,
+          'must not forward a path the Sandbox will reject',
+        );
+      });
+    }
+  }
+
+  it('still searches the workspace and /tmp', async () => {
+    for (const path of ['/home/sandbox/workspace/src', '/tmp', 'src']) {
+      const calls = [];
+      const defs = defsFor(calls);
+      const tool = defs.find((d) => d.name === 'ls');
+      const out = await tool.execute('tc-ls', { path });
+      assert.equal(out.details?.code, undefined, `${path} should be searchable`);
+      assert.equal(calls.length, 1);
+    }
+  });
+});

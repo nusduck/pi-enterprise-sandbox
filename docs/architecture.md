@@ -85,7 +85,8 @@ Agent（`pi-coding-agent` SDK）运行在独立 `agent/` 服务中，而非浏�
 每个 Agent Session 独占一个稳定工作区；同一 Agent Session 的多轮 Run 复用同一 `workspace_id`：
 - 公共协议只暴露 opaque **`workspace_id`**；不绑定临时 runner/PID
 - 相对路径与 `/home/sandbox/workspace/...` 都指向当前 workspace；`/tmp/...` 指向同一 Agent Session 的持久化临时树
-- 每次不可信进程通过 Bubblewrap 创建 mount/PID/IPC/user namespace，仅挂载当前 workspace、当前 `/tmp` 与只读 Skills
+- 每次不可信进程通过 Bubblewrap 创建 mount/PID/IPC/user namespace，仅挂载当前 workspace、当前 `/tmp`、本 Session 的 XDG home 与只读 Skills
+- `$HOME` 是 Bubblewrap 每次执行新建的 tmpfs，因此 `~/.config`、`~/.cache`、`~/.local/share` 显式绑定到 `<session tmp>/.home/` 下的对应目录（`XDG_*_HOME` 同步设置）。依赖用户配置目录的应用（LibreOffice 宏、插件、缓存）因此能在同一 Session 内复用配置；这些目录随 Session 私有 `/tmp` 一同计入配额并一同清理，不构成第四个存储根，也不跨租户共享
 - 内部物理根仅存于 service/repository，不进入 API、SSE、模型上下文或活跃文档示例
 - Skills：共享系统根在 workspace 外并始终只读；用户根按 org/user 隔离。新建只允许当前回合 ZIP attachment 或 Agent 结构化生成，所有变更走审批并由 Agent 原子落盘，Sandbox 执行侧始终只读
 - 副作用执行按 `workspace_id` 串行，避免同一 Session 的并发写竞态

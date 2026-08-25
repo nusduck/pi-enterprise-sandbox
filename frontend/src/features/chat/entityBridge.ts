@@ -903,9 +903,13 @@ export function createEntityBridge(
         manager.setStore(store);
       };
 
-      if (!activelyStreaming) {
-        replayPersisted();
-      }
+      // Always replay durable events first, then let SSE deliver the increment.
+      // Skipping replay while the run row still said RUNNING lost the assistant
+      // body whenever the run finished during the refresh, or SSE did not
+      // reconnect in time: the tool ledger below still restored the execution
+      // steps, so the bubble showed steps with no answer. The reducer dedupes on
+      // event id, so replaying before the stream connects is safe.
+      replayPersisted();
 
       // Always rehydrate the durable tool ledger for every run — including
       // terminal SUCCEEDED/FAILED/CANCELLED. Event replay alone is not enough:
@@ -946,9 +950,9 @@ export function createEntityBridge(
           }
           manager.setStore(store);
         }
-        if (live?.runtime_available === false) {
-          if (activelyStreaming) replayPersisted();
-        } else if (live) {
+        // runtime_available === false: no stream to attach to. The durable
+        // replay above already restored everything this run can show.
+        if (live && live.runtime_available !== false) {
           const liveCursor = resumable && live?.next_sequence
             ? Math.max(0, live.next_sequence - 1)
             : 0;

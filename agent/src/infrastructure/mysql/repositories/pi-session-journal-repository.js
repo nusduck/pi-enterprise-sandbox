@@ -43,6 +43,9 @@ export const JOURNAL_HEADER_ENTRY_ID = '__pi_session_header__';
 export const JOURNAL_HEADER_KIND = 'session';
 
 /** Default page size for journal reads (not a hard truncation of full rebuild). */
+/** (agent_session_id, sequence_no) — the only index that orders this read. */
+export const JOURNAL_ORDER_INDEX = 'idx_messages_session';
+
 export const JOURNAL_DEFAULT_PAGE_SIZE = 500;
 
 /** Hard ceiling for a single page to protect memory. */
@@ -584,7 +587,23 @@ export class PiSessionJournalRepository {
 
     // Only Pi journal channel rows — never UI assistant messages that share
     // pi_entry_id for idempotency (ui:assistant:…) or other non-journal markers.
-    const rows = await this.db('messages')
+    //
+    // FORCE INDEX is not a micro-optimisation here, it is what keeps this query
+    // runnable. Left alone the optimizer picks
+    // `idx_messages_session_pi_kind (agent_session_id, pi_entry_kind, sequence_no)`,
+    // whose middle column this query never constrains — it filters on
+    // `message_type` — so the index cannot supply `sequence_no` order and MySQL
+    // adds a filesort over whole rows, `content_json` included. A journal entry
+    // holding an inline image is ~2.7MB of base64 (MAX_READ_IMAGE_BYTES is 2MiB
+    // before encoding) and one such row exceeds the 256KB default
+    // `sort_buffer_size`, so the read fails with ER_OUT_OF_SORTMEMORY and takes
+    // the Run down with it — recover() runs this on every run start, and
+    // persist() re-reads right after appending the entry that just broke it.
+    // `idx_messages_session (agent_session_id, sequence_no)` yields the rows
+    // already ordered: no sort, no buffer, and it stops at LIMIT.
+    const rows = await this.db(
+      this.db.raw('?? FORCE INDEX (??)', ['messages', JOURNAL_ORDER_INDEX]),
+    )
       .where({ agent_session_id: sid })
       .whereIn('message_type', [
         JOURNAL_MESSAGE_TYPE.HEADER,

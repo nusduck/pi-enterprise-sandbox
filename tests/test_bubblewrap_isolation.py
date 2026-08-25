@@ -451,3 +451,201 @@ def test_bwrap_omits_user_skill_tier_without_identity(tmp_path):
         prepared.argv, "--ro-bind"
     )
     assert "/home/sandbox/skill-user" not in " ".join(prepared.argv)
+
+
+def test_bwrap_names_the_missing_skill_root_instead_of_failing_at_launch(
+    tmp_path,
+):
+    """A missing system skill root must be diagnosable.
+
+    The system tier is a hard ``--ro-bind``, so an absent root used to surface
+    only once bwrap ran, as ``bwrap: can't find source path ...``. Every
+    sandboxed command failed at once — bash, python, even ``pwd`` — which reads
+    as "the tools are broken" rather than "a mount is missing". Fail before
+    launch, naming the path and the mount to check.
+    """
+    context = _context(tmp_path)
+    missing = tmp_path / "skills-that-were-never-mounted"
+    backend = BubblewrapIsolationBackend(
+        executable="/usr/bin/bwrap",
+        skills_root=missing,
+    )
+
+    with pytest.raises(ValueError) as excinfo:
+        backend.prepare(
+            LaunchSpec(
+                context=context,
+                argv=["bash", "-c", "pwd"],
+                env_overrides={},
+                network_mode="disabled",
+                relative_cwd=PurePosixPath("."),
+                cwd_scope=SandboxPathScope.WORKSPACE,
+            )
+        )
+
+    message = str(excinfo.value)
+    assert "skill root is missing" in message
+    assert str(missing) in message
+    assert "SKILLS_ROOT" in message
+
+
+def test_bwrap_still_launches_when_only_the_user_skill_tier_is_absent(tmp_path):
+    """A user with nothing installed must not lose bash/python."""
+    context = _context(tmp_path)
+    skills = tmp_path / "skills"
+    skills.mkdir()
+    user_base = tmp_path / "skill-user"
+    user_base.mkdir()
+    backend = BubblewrapIsolationBackend(
+        executable="/usr/bin/bwrap",
+        skills_root=skills,
+        user_skills_root=user_base,
+    )
+
+    prepared = backend.prepare(
+        LaunchSpec(
+            context=replace(context, org_id="org_a", user_id="user_a"),
+            argv=["bash", "-c", "pwd"],
+            env_overrides={},
+            network_mode="disabled",
+            relative_cwd=PurePosixPath("."),
+            cwd_scope=SandboxPathScope.WORKSPACE,
+        )
+    )
+
+    # Tolerant bind for the tier that is legitimately empty.
+    assert "--ro-bind-try" in prepared.argv
+    assert prepared.argv[-1] == "pwd"
+
+
+def test_bwrap_degrades_to_system_tier_when_user_skill_root_is_unreadable(
+    tmp_path, monkeypatch
+):
+    """One user's broken skill root must not cost that user bash and python.
+
+    ``--ro-bind-try`` forgives ENOENT and nothing else, so a skill root whose
+    ancestor is not traversable by the sandbox uid made bwrap fail its realpath
+    with EACCES and die with ``Can't find source path`` — every command,
+    including ``pwd``, went down with it. Probe the source and fall back.
+    """
+    from sandbox.config import settings
+
+    context = _context(tmp_path)
+    skills = tmp_path / "skills"
+    skills.mkdir()
+    user_base = tmp_path / "skills-user"
+    org, user = "org1", "user1"
+    mine = user_base / org / user
+    mine.mkdir(parents=True)
+    # Exactly the state a 0700 install left behind: the ancestor is not
+    # traversable, so stat() on the bind source raises EACCES.
+    (user_base / org).chmod(0o600)
+    monkeypatch.setattr(settings, "user_skills_root", str(user_base))
+
+    backend = BubblewrapIsolationBackend(
+        executable="/usr/bin/bwrap",
+        skills_root=skills,
+        user_skills_root=user_base,
+    )
+    try:
+        prepared = backend.prepare(
+            LaunchSpec(
+                context=replace(context, org_id=org, user_id=user),
+                argv=["bash", "-c", "pwd"],
+                env_overrides={},
+                network_mode="disabled",
+                relative_cwd=PurePosixPath("."),
+                cwd_scope=SandboxPathScope.WORKSPACE,
+            )
+        )
+    finally:
+        (user_base / org).chmod(0o755)
+
+    # System tier still bound; the unreadable user tier is simply absent.
+    assert ("--ro-bind", str(skills)) in [
+        (prepared.argv[i], prepared.argv[i + 1])
+        for i, v in enumerate(prepared.argv)
+        if v == "--ro-bind"
+    ]
+    assert not any(str(mine) == arg for arg in prepared.argv)
+    assert prepared.argv[-1] == "pwd"
+
+
+def _launch(backend, context):
+    return backend.prepare(
+        LaunchSpec(
+            context=context,
+            argv=["bash", "-c", "pwd"],
+            env_overrides={},
+            network_mode="disabled",
+            relative_cwd=PurePosixPath("."),
+            cwd_scope=SandboxPathScope.WORKSPACE,
+        )
+    )
+
+
+def test_bwrap_gives_the_session_a_persistent_xdg_home(tmp_path):
+    """`~/.config` must survive between tool calls in one session.
+
+    bwrap's root is a fresh tmpfs per execution and only workspace and /tmp were
+    bound, so `$HOME` was rebuilt empty every call: LibreOffice re-created its
+    profile each time and a macro written to
+    `~/.config/libreoffice/4/user/basic/Standard/Module1.xba` was gone by the
+    next call.
+    """
+    context = _context(tmp_path)
+    skills = tmp_path / "skills"
+    skills.mkdir()
+    backend = BubblewrapIsolationBackend(
+        executable="/usr/bin/bwrap", skills_root=skills
+    )
+
+    prepared = _launch(backend, context)
+    binds = dict(_pairs(prepared.argv, "--bind"))
+    home = context.physical_temp / ".home"
+
+    for relative, logical in (
+        (".config", "/home/sandbox/.config"),
+        (".cache", "/home/sandbox/.cache"),
+        (".local/share", "/home/sandbox/.local/share"),
+    ):
+        source = home / relative
+        assert binds.get(str(source)) == logical, f"{logical} is not bound"
+        # --bind needs a real source; --bind-try would silently fall back to
+        # the ephemeral tmpfs, which is the bug.
+        assert source.is_dir()
+
+    env = dict(_pairs(prepared.argv, "--setenv"))
+    assert env["HOME"] == "/home/sandbox"
+    assert env["XDG_CONFIG_HOME"] == "/home/sandbox/.config"
+    assert env["XDG_CACHE_HOME"] == "/home/sandbox/.cache"
+    assert env["XDG_DATA_HOME"] == "/home/sandbox/.local/share"
+
+    # Workspace and /tmp keep their own mappings.
+    assert binds[str(context.physical_workspace)] == "/home/sandbox/workspace"
+    assert binds[str(context.physical_temp)] == "/tmp"
+
+
+def test_persistent_home_is_per_session_not_shared(tmp_path):
+    """One tenant's app config must never be visible to another's."""
+    skills = tmp_path / "skills"
+    skills.mkdir()
+    backend = BubblewrapIsolationBackend(
+        executable="/usr/bin/bwrap", skills_root=skills
+    )
+
+    first = _context(tmp_path / "a")
+    second = _context(tmp_path / "b")
+    sources = []
+    for context in (first, second):
+        binds = dict(_pairs(_launch(backend, context).argv, "--bind"))
+        [source] = [
+            src for src, dest in binds.items() if dest == "/home/sandbox/.config"
+        ]
+        sources.append(source)
+
+    assert sources[0] != sources[1]
+    # Each lives inside its own session temp tree, so it inherits that
+    # lifecycle and quota rather than adding a shared storage root.
+    assert sources[0].startswith(str(first.physical_temp))
+    assert sources[1].startswith(str(second.physical_temp))

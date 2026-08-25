@@ -177,6 +177,48 @@ function digestDir(dir, opts = {}) {
 }
 
 /**
+ * Create `<base>/<org>/<user>` so the Sandbox can traverse into it.
+ *
+ * This must run before any staging directory is created. `fs.mkdir` applies its
+ * `mode` to **every** directory it creates on a recursive call, so
+ * `mkdir('<base>/<org>/<user>/.tmp-install-x', { recursive: true, mode: 0o700 })`
+ * used to stamp 0700 on `<org>` and `<user>` as a side effect of wanting a
+ * private staging dir.
+ *
+ * Those two are the Bubblewrap bind source. The Agent owns them as `node`
+ * (uid 1000); the Sandbox resolves them as uid 10001, so 0700 made
+ * `realpath()` fail with EACCES — and `--ro-bind-try` only forgives ENOENT.
+ * bwrap then died with `Can't find source path /home/sandbox/skill-user/...`
+ * and took every bash/python launch with it, for that user, until the mode was
+ * repaired. First upload of a Skill therefore broke the whole session.
+ *
+ * 0755 is not a weakening: it is what every other directory on this path
+ * already uses. Tenant isolation comes from binding only the caller's own
+ * `<org>/<user>` into the namespace, never from these bits — nothing untrusted
+ * runs in either container, and untrusted code inside the sandbox only ever
+ * sees its own bound directory.
+ *
+ * Repairs an already-broken root in place, so a user bricked by an earlier
+ * install recovers on their next one.
+ *
+ * @param {string} skillRoot `<base>/<org>/<user>`
+ */
+export async function ensureTraversableUserSkillRoot(skillRoot) {
+  const resolved = path.resolve(skillRoot);
+  await fsp.mkdir(resolved, { recursive: true, mode: 0o755 });
+  // `<org>` first, then `<user>`: repairing top-down keeps every prefix
+  // traversable at each step.
+  for (const dir of [path.dirname(resolved), resolved]) {
+    try {
+      const stat = await fsp.stat(dir);
+      if ((stat.mode & 0o755) !== 0o755) await fsp.chmod(dir, 0o755);
+    } catch {
+      // A root we cannot stat is reported by the install that follows.
+    }
+  }
+}
+
+/**
  * Atomically replace a package, restoring the previous version on failure.
  * @param {string} stagingDir
  * @param {string} destinationDir
@@ -310,6 +352,9 @@ export async function installSkillArchive(opts) {
   const stagingPackage = path.join(stagingRoot, '_package');
 
   try {
+    // Before the 0700 staging dir, so its mode is not stamped onto the
+    // identity directories the Sandbox has to traverse.
+    await ensureTraversableUserSkillRoot(skillRoot);
     await fsp.mkdir(stagingRoot, { recursive: true, mode: 0o700 });
     const archive = await extractSkillArchive(opts.archiveBytes, extracted, {
       deadlineAt,
@@ -425,6 +470,7 @@ export async function createGeneratedSkill(opts) {
   const stagingPackage = path.join(stagingRoot, '_package');
 
   try {
+    await ensureTraversableUserSkillRoot(skillRoot);
     await fsp.mkdir(packageSource, { recursive: true, mode: 0o700 });
     const skillMd =
       `---\nname: ${name}\ndescription: ${JSON.stringify(description)}\n---\n\n` +

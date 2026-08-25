@@ -107,7 +107,7 @@ When a skills section is present below (or under \`${skillRoot}\`):
 3. Follow the skill instructions; resolve relative paths against the skill directory.
 4. Do not invent skill APIs — load the file first.
 
-If no skills section is listed, use \`ls\` on \`${skillRoot}\` only when the user asks about installed skills.
+Skill directories are not searchable: \`ls\`, \`find\` and \`grep\` cover the workspace and \`/tmp\` only. Every installed skill is already named in the skills section, so \`read\` its \`SKILL.md\` rather than listing \`${skillRoot}\`. If no skills section is listed, none are installed.
 
 ## Finding things
 - \`ls\` a directory before guessing paths; \`find\` locates files by name, \`grep\` by contents.

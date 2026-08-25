@@ -15,10 +15,56 @@ import { assertUlid } from '../domain/shared/ulid.js';
 import { redactPayload } from '../infrastructure/pi/event-redaction.js';
 import { sanitizeStatusReason } from './sanitize-status-reason.js';
 import { ConflictError } from '../infrastructure/mysql/errors.js';
+import { integrityFingerprint } from '../infrastructure/mysql/repositories/tool-execution-repository.js';
 import { APPROVAL_STATUS } from '../domain/tool/approval-status.js';
 import { TOOL_EXECUTION_STATUS } from '../domain/tool/tool-execution-status.js';
 import { INTERACTION_STATUS } from '../domain/interaction/interaction-status.js';
-import { replaceSuspendedToolResultInSession } from './pi-run-input.js';
+import {
+  findToolCallArgumentsInSession,
+  replaceSuspendedToolResultInSession,
+} from './pi-run-input.js';
+
+/**
+ * The arguments an approved tool must be re-executed with.
+ *
+ * `toolExecution.argumentsJson` is the ledger's *redacted* `$payload`, not the
+ * original: any string over `DEFAULT_MAX_STRING` (512) comes back truncated
+ * with `_bytes`/`_sha256`/`_truncated` siblings. Replaying that both fails the
+ * args-integrity check ("tool_call_id replay conflicts with existing args
+ * integrity") and would run the approved tool on truncated input.
+ *
+ * The Pi session still holds the assistant message that emitted the call, so
+ * it is the authority. The ledger view is used only when it provably equals the
+ * original — its fingerprint matches the stored `$integrity` — which is the
+ * common short-argument case.
+ *
+ * @param {object} replaySession
+ * @param {{ toolCallId: string, toolName: string, argumentsJson?: unknown, _argsIntegrity?: string | null }} toolExecution
+ * @returns {Record<string, unknown>}
+ */
+function resolveApprovedReplayArgs(replaySession, toolExecution) {
+  const recovered = findToolCallArgumentsInSession(
+    replaySession,
+    toolExecution.toolCallId,
+  );
+  if (recovered.found) return recovered.args;
+
+  const ledgerArgs = toolExecution.argumentsJson ?? {};
+  const durableFingerprint = toolExecution._argsIntegrity;
+  if (
+    durableFingerprint &&
+    integrityFingerprint(ledgerArgs) === durableFingerprint
+  ) {
+    return /** @type {Record<string, unknown>} */ (ledgerArgs);
+  }
+
+  const failure = new Error(
+    'approved tool replay cannot recover the original arguments: they are ' +
+      'absent from the session and the ledger view is redacted',
+  );
+  /** @type {any} */ (failure).code = 'APPROVED_TOOL_ARGS_UNRECOVERABLE';
+  throw failure;
+}
 
 /**
  * Verify the worker-provided resume context against MySQL. Approved tools are
@@ -127,10 +173,16 @@ export async function prepareApprovalResume(executor, {
     );
   }
 
+  // The ledger's argumentsJson is the redacted `$payload`, not the original:
+  // a string over DEFAULT_MAX_STRING comes back truncated, which both breaks
+  // the args-integrity replay check and would run the approved tool on
+  // truncated input. The session holds what the model actually emitted.
+  const replayArgs = resolveApprovedReplayArgs(replaySession, toolExecution);
+
   await executor._governanceRecorder.recordToolStarted({
     toolCallId: toolExecution.toolCallId,
     toolName: toolExecution.toolName,
-    args: toolExecution.argumentsJson ?? {},
+    args: replayArgs,
     approvalId,
   });
 
@@ -138,7 +190,7 @@ export async function prepareApprovalResume(executor, {
   try {
     result = await definition.execute(
       toolExecution.toolCallId,
-      toolExecution.argumentsJson ?? {},
+      replayArgs,
       signal,
       undefined,
       undefined,
@@ -147,7 +199,7 @@ export async function prepareApprovalResume(executor, {
     await executor._governanceRecorder.recordToolUnknown({
       toolCallId: toolExecution.toolCallId,
       toolName: toolExecution.toolName,
-      args: toolExecution.argumentsJson ?? {},
+      args: replayArgs,
       errorCode: 'APPROVED_TOOL_REPLAY_UNCERTAIN',
       result: {
         unknown: true,
@@ -166,7 +218,7 @@ export async function prepareApprovalResume(executor, {
   await executor._governanceRecorder.recordToolEnded({
     toolCallId: toolExecution.toolCallId,
     toolName: toolExecution.toolName,
-    args: toolExecution.argumentsJson ?? {},
+    args: replayArgs,
     isError,
     result: result ?? null,
   });

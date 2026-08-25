@@ -35,7 +35,7 @@ const TOOL_CALL_ID_MAX = 255;
 const TOOL_NAME_MAX = 255;
 const TRACE_ID_RE = /^[0-9a-f]{32}$/i;
 const REQUEST_HASH_RE = /^[0-9a-f]{64}$/;
-const MAX_ARGS_JSON_BYTES = 64 * 1024;
+export const MAX_ARGS_JSON_BYTES = 64 * 1024;
 const MAX_RESULT_JSON_BYTES = 128 * 1024;
 /** Explicit max for canonical original before hashing (reject, never truncate). */
 export const MAX_INTEGRITY_CANONICAL_BYTES = 1_048_576;
@@ -198,7 +198,13 @@ export function packJsonWithIntegrity(original, maxBytes, opts = {}) {
   }
   const raw = JSON.stringify(envelope);
   if (Buffer.byteLength(raw, 'utf8') > maxBytes) {
-    throw new Error(`JSON exceeds max ${maxBytes} bytes after redaction`);
+    // Stable code: an oversized argument must be reported as such, never
+    // silently shortened into something whose fingerprint no longer matches.
+    const err = new Error(
+      `ARGUMENT_TOO_LARGE: JSON exceeds max ${maxBytes} bytes after redaction`,
+    );
+    /** @type {any} */ (err).code = 'ARGUMENT_TOO_LARGE';
+    throw err;
   }
   return raw;
 }
