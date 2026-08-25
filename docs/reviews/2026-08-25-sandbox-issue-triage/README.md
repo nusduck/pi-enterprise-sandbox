@@ -1,8 +1,8 @@
 # 2026-08-25 pi-sandbox 问题清单：复现与处置
 
 对外部测试报告 `pi-sandbox-issues-detailed.md`（九项）的逐条复现记录。
-**结论先行**：七项已复现并在同一分支修复（含回归测试），一项（问题六）根因已在代码层
-确认但需 Linux 真机验证故未落地，两项是设计/产品问题、不属于缺陷修复范围。
+**结论先行**：八项已复现并在同一分支修复（含回归测试），其中问题六、七已用容器内真实
+bwrap 验证；两项（八、九）是设计/产品问题，不属于缺陷修复范围。
 
 修复本身的用户可见描述见 [`../../CHANGELOG.md`](../../CHANGELOG.md) `[Unreleased] → Fixed`。
 本文只记录**复现方法、根因判定与未落地项的行动建议**。
@@ -14,7 +14,7 @@
 | 3 | Run 进行中刷新丢失 assistant 正文 | ✅ 单元级 | ✅ 已修 |
 | 4 | Skill 目录 `ls`/`find`/`grep` 不一致 | ✅ 双层实测 | ✅ 已修（口径统一） |
 | 5 | 长参数触发 replay args integrity 冲突 | ✅ 单元级 | ✅ 已修 |
-| 6 | `~/.config` 类应用无法持久化配置 | ⚠️ 代码级确认，未实测 | ❌ 未改，见下 |
+| 6 | `~/.config` 类应用无法持久化配置 | ✅ 真实 bwrap 复现 | ✅ 已修 |
 | 7 | Skill install 污染 bwrap source path | ✅ 已复现（用户提供触发条件后） | ✅ 已修 |
 | 8 | Skill creator 逻辑不合理 | — 设计问题 | ❌ 未改，见下 |
 | 9 | User Skill 前端无展示 | — 产品缺口 | ❌ 未改，见下 |
@@ -58,38 +58,45 @@ adopt 该行；`getOrCreate()` 在覆盖 `arguments_json` **之前**先做
 
 ---
 
-## 问题六：`~/.config` 无法持久化（代码级确认，未落地）
+## 问题六：`~/.config` 无法持久化（已复现、已修）
 
-**确认的机制**（`sandbox/isolation/bubblewrap.py`）：
+**初次排查判定"无法在本机验证"，这一判断也是错的**。当时 `docker compose exec` 跑
+bwrap 报 `Operation not permitted`，便据此结论。真实原因是 **exec 进去默认是 root**，
+而该容器 `cap_drop: ALL` 只补了 `CHOWN/FOWNER/KILL/SETGID/SETUID`——没有
+`CAP_SYS_ADMIN`，root 反而建不了 namespace。服务本身以 **uid 10001** 运行，
+以同一 uid 进去（`docker compose exec --user 10001:10001`）bwrap 就能正常创建
+namespace（自定义 seccomp profile 明确放行了 `clone/unshare/mount/pivot_root/umount`，
+注释写着"Bubblewrap child/user/mount namespace syscalls; no CAP_SYS_ADMIN is granted"）。
 
-- bwrap 未指定 `--bind / /` 或 `--tmpfs /`，因此根文件系统是 **每次执行新建的
-  tmpfs**；
-- `--dir /home` `--dir /home/sandbox` 在该 tmpfs 里创建目录，`HOME=/home/sandbox`；
-- 持久化绑定只有 `--bind <workspace> /home/sandbox/workspace` 与
-  `--bind <temp> /tmp`。
-
-推论：`~/.config` **可写但不持久**——每次 `bash`/`python` 工具调用都拿到一个全新的
-空 HOME。LibreOffice 这类应用因此每次重建用户 profile，写进
-`~/.config/libreoffice/4/user/basic/Standard/Module1.xba` 的宏在下一次调用中消失。
-这与报告描述一致（"目录没有持久化"）。
-
-**为什么本次不改**：这是隔离层的运行路径变更，AGENTS.md §3/§4 要求真机验证，而
-bwrap 无法在开发机的 `docker compose exec` 上下文中运行
-（`Operation not permitted`，命名空间权限在容器启动时授予其自身进程树）。
-未经验证就改动仓库里最敏感的安全边界，正是 §3 要避免的猜测性修复。
-
-**建议的落地方式**（需在 Linux/CI 上验证）：在会话持久目录下开一个
-`home/` 子树，按 XDG 显式映射，而不是把整个 `$HOME` 变成可写持久面：
+**复现**（容器内真实 bwrap，两次独立执行）：
 
 ```
---bind <session>/home/.config      /home/sandbox/.config
---bind <session>/home/.cache       /home/sandbox/.cache
---bind <session>/home/.local/share /home/sandbox/.local/share
+== run 1: write a config ==   WROTE: macro
+== run 2: read it back ==     GONE
 ```
 
-三个目录都必须是**每 sandbox session** 独立的，绝不能跨用户共享——否则一个租户的
-应用配置会被另一个租户读到。同时需要明确 session 重启后的保留策略，并在
-`deployment.md` 记录新增的磁盘占用面。
+**根因**：bwrap 未指定 `--bind / /` 或 `--tmpfs /`，根文件系统是**每次执行新建的
+tmpfs**；`--dir /home/sandbox` 在该 tmpfs 上建目录，持久绑定只有
+`--bind <workspace> /home/sandbox/workspace` 与 `--bind <temp> /tmp`。于是 `$HOME`
+可写但每次调用都归零。
+
+**修复**：把 `~/.config`、`~/.cache`、`~/.local/share` 绑到 `<session tmp>/.home/`
+下的对应目录，并同步设置 `XDG_CONFIG_HOME` / `XDG_CACHE_HOME` / `XDG_DATA_HOME`。
+用 `--bind` 而非 `--bind-try`——后者在源缺失时会静默跳过，把调用者又丢回临时
+tmpfs，正是这个 bug 本身；所以绑定前先 `mkdir(parents=True, exist_ok=True)`。
+
+**为什么放在 Session 的 `/tmp` 树里**：保留策略、配额、清理全部沿用
+[ADR 0004](../../adr/0004-session-persistent-tmp.md) 已经定义好的那一套（Session 私有、
+随 Session 清理），不新增第四个存储根，也就天然不跨租户共享——报告里"应用不能借此
+访问其他用户配置"那条验收标准由构造保证，而不是靠额外的权限判断。
+
+**验证**（同样在容器内跑真实 bwrap，用生产代码生成的 argv）：
+
+```
+== run 1: app writes its profile ==      WROTE
+== run 2: separate execution, same session ==  PERSISTED: macro
+== workspace/tmp still writable ==       RW_OK
+```
 
 ## 问题七：Skill 安装打坏 bwrap bind source（已复现、已修）
 

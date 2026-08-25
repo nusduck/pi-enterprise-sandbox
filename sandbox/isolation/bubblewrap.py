@@ -72,6 +72,35 @@ def _capability_drop_prefix() -> list[str]:
     return [setpriv, "--inh-caps=-all", "--ambient-caps=-all", "--"]
 
 
+# XDG directories an application expects to find under $HOME. Bubblewrap's root
+# is a fresh tmpfs per execution, so without these binds ``$HOME`` is rebuilt
+# empty on *every* tool call: LibreOffice re-creates its user profile each time
+# and a macro written to ``~/.config/libreoffice/.../Module1.xba`` is gone by the
+# next call. They live inside the session's own persistent temp tree, so they
+# inherit its lifecycle (per session, per tenant, cleaned up with the session)
+# and its quota, rather than introducing a fourth storage root.
+_HOME_SUBDIRS: tuple[tuple[str, str], ...] = (
+    (".config", "/home/sandbox/.config"),
+    (".cache", "/home/sandbox/.cache"),
+    (".local/share", "/home/sandbox/.local/share"),
+)
+_HOME_TREE = ".home"
+
+
+def _persistent_home_binds(temp: Path) -> list[str]:
+    """Bind a per-session XDG home, creating it on first use.
+
+    ``--bind`` needs an existing source; ``--bind-try`` would silently skip and
+    leave the caller with the ephemeral tmpfs again, which is the bug.
+    """
+    args: list[str] = []
+    for relative, logical in _HOME_SUBDIRS:
+        source = temp / _HOME_TREE / relative
+        source.mkdir(parents=True, exist_ok=True)
+        args.extend(["--bind", str(source), logical])
+    return args
+
+
 class BubblewrapIsolationBackend:
     name = "bubblewrap"
 
@@ -253,9 +282,10 @@ class BubblewrapIsolationBackend:
                 "--bind",
                 str(temp),
                 "/tmp",
-                "--clearenv",
             ]
         )
+        args.extend(_persistent_home_binds(temp))
+        args.append("--clearenv")
 
         env = safe_env(overrides=dict(spec.env_overrides))
         env.update(
@@ -263,6 +293,11 @@ class BubblewrapIsolationBackend:
                 "HOME": "/home/sandbox",
                 "PWD": logical_cwd,
                 "TMPDIR": "/tmp",
+                # Explicit, so an application that reads XDG_* rather than
+                # assuming $HOME lands in the same persistent tree.
+                "XDG_CONFIG_HOME": "/home/sandbox/.config",
+                "XDG_CACHE_HOME": "/home/sandbox/.cache",
+                "XDG_DATA_HOME": "/home/sandbox/.local/share",
             }
         )
         for key, value in env.items():

@@ -569,3 +569,83 @@ def test_bwrap_degrades_to_system_tier_when_user_skill_root_is_unreadable(
     ]
     assert not any(str(mine) == arg for arg in prepared.argv)
     assert prepared.argv[-1] == "pwd"
+
+
+def _launch(backend, context):
+    return backend.prepare(
+        LaunchSpec(
+            context=context,
+            argv=["bash", "-c", "pwd"],
+            env_overrides={},
+            network_mode="disabled",
+            relative_cwd=PurePosixPath("."),
+            cwd_scope=SandboxPathScope.WORKSPACE,
+        )
+    )
+
+
+def test_bwrap_gives_the_session_a_persistent_xdg_home(tmp_path):
+    """`~/.config` must survive between tool calls in one session.
+
+    bwrap's root is a fresh tmpfs per execution and only workspace and /tmp were
+    bound, so `$HOME` was rebuilt empty every call: LibreOffice re-created its
+    profile each time and a macro written to
+    `~/.config/libreoffice/4/user/basic/Standard/Module1.xba` was gone by the
+    next call.
+    """
+    context = _context(tmp_path)
+    skills = tmp_path / "skills"
+    skills.mkdir()
+    backend = BubblewrapIsolationBackend(
+        executable="/usr/bin/bwrap", skills_root=skills
+    )
+
+    prepared = _launch(backend, context)
+    binds = dict(_pairs(prepared.argv, "--bind"))
+    home = context.physical_temp / ".home"
+
+    for relative, logical in (
+        (".config", "/home/sandbox/.config"),
+        (".cache", "/home/sandbox/.cache"),
+        (".local/share", "/home/sandbox/.local/share"),
+    ):
+        source = home / relative
+        assert binds.get(str(source)) == logical, f"{logical} is not bound"
+        # --bind needs a real source; --bind-try would silently fall back to
+        # the ephemeral tmpfs, which is the bug.
+        assert source.is_dir()
+
+    env = dict(_pairs(prepared.argv, "--setenv"))
+    assert env["HOME"] == "/home/sandbox"
+    assert env["XDG_CONFIG_HOME"] == "/home/sandbox/.config"
+    assert env["XDG_CACHE_HOME"] == "/home/sandbox/.cache"
+    assert env["XDG_DATA_HOME"] == "/home/sandbox/.local/share"
+
+    # Workspace and /tmp keep their own mappings.
+    assert binds[str(context.physical_workspace)] == "/home/sandbox/workspace"
+    assert binds[str(context.physical_temp)] == "/tmp"
+
+
+def test_persistent_home_is_per_session_not_shared(tmp_path):
+    """One tenant's app config must never be visible to another's."""
+    skills = tmp_path / "skills"
+    skills.mkdir()
+    backend = BubblewrapIsolationBackend(
+        executable="/usr/bin/bwrap", skills_root=skills
+    )
+
+    first = _context(tmp_path / "a")
+    second = _context(tmp_path / "b")
+    sources = []
+    for context in (first, second):
+        binds = dict(_pairs(_launch(backend, context).argv, "--bind"))
+        [source] = [
+            src for src, dest in binds.items() if dest == "/home/sandbox/.config"
+        ]
+        sources.append(source)
+
+    assert sources[0] != sources[1]
+    # Each lives inside its own session temp tree, so it inherits that
+    # lifecycle and quota rather than adding a shared storage root.
+    assert sources[0].startswith(str(first.physical_temp))
+    assert sources[1].startswith(str(second.physical_temp))
