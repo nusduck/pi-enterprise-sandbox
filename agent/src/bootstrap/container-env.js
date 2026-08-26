@@ -132,6 +132,33 @@ export function resolveSkillRootsForRun(env, identity) {
 }
 
 /**
+ * Skill roots for the capability projection, plus the caller's own writable
+ * directory so the projection can label each package's tier.
+ *
+ * Deliberately the same resolver a Run uses: the Skills tab must list what that
+ * caller's next Run would actually load, not a process-wide inventory.
+ *
+ * @param {NodeJS.ProcessEnv | Record<string, string|undefined>} env
+ * @param {{ orgId?: unknown, userId?: unknown } | null} identity
+ * @returns {{ skillRoots: string[], userSkillRoot: string | null }}
+ */
+export function resolveSkillScopeForIdentity(env, identity) {
+  const skillRoots = resolveSkillRootsForRun(env, identity);
+  const { USER_SKILL_ROOT, userSkillRootFor } = skillPathsModule;
+  const userRootBase = String(
+    env?.SKILLS_USER_ROOT || env?.AGENT_SKILLS_USER_ROOT || USER_SKILL_ROOT,
+  ).trim();
+  let userSkillRoot = null;
+  try {
+    userSkillRoot = userSkillRootFor(identity, userRootBase);
+  } catch {
+    // Malformed identity: system tier only, same degradation as the Run path.
+    userSkillRoot = null;
+  }
+  return { skillRoots, userSkillRoot };
+}
+
+/**
  * @param {NodeJS.ProcessEnv | Record<string, string|undefined>} [env]
  */
 export function resolveMysqlUrlFromEnv(env = process.env) {

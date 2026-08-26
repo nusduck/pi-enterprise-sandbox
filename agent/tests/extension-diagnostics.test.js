@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
 import { getExtensionDiagnostics } from '../src/application/extension-diagnostics-service.js';
+import { resolveSkillScopeForIdentity } from '../src/bootstrap/container-env.js';
 import {
   ENTERPRISE_DEFAULT_TOOLS,
   REGISTERED_EXTENSION_NAMES,
@@ -136,4 +137,56 @@ test('unknown legacy profile ids fail closed', () => {
       }),
     /Unknown diagnostics profile/,
   );
+});
+
+test('skills are projected per caller and tagged with their tier', async () => {
+  const scopeRoot = await mkdtemp(join(tmpdir(), 'skill-tiers-'));
+  const systemRoot = join(scopeRoot, 'system');
+  const userBase = join(scopeRoot, 'user');
+  const identity = { orgId: 'ORG26CHARS0000000000000000', userId: 'USER26CHARS000000000000000' };
+  const userDir = join(userBase, identity.orgId, identity.userId);
+
+  const writePackage = async (root, name, description) => {
+    const dir = join(root, name);
+    await mkdir(dir, { recursive: true });
+    await writeFile(
+      join(dir, 'SKILL.md'),
+      ['---', `name: ${name}`, `description: ${description}`, '---', '', `# ${name}`, ''].join('\n'),
+      'utf8',
+    );
+  };
+
+  try {
+    await writePackage(systemRoot, 'bundled-helper', 'Bundled tier package.');
+    await writePackage(userDir, 'my-report', 'Installed by this user.');
+
+    const env = { SKILLS_ROOT: systemRoot, SKILLS_USER_ROOT: userBase };
+    const scope = resolveSkillScopeForIdentity(env, identity);
+    const diagnostics = getExtensionDiagnostics({
+      skillRoots: scope.skillRoots,
+      userSkillRoot: scope.userSkillRoot,
+      now: () => new Date('2026-08-26T00:00:00.000Z'),
+    });
+
+    const bySource = Object.fromEntries(
+      diagnostics.skills.map((skill) => [skill.name, skill.source]),
+    );
+    assert.deepEqual(bySource, {
+      'bundled-helper': 'shared-skill-root',
+      'my-report': 'user-skill-root',
+    });
+
+    // No identity on the request: the user tier is not resolvable, so the
+    // projection must not leak another tenant's packages through the base root.
+    const anonymous = getExtensionDiagnostics({
+      skillRoots: [systemRoot, userBase],
+      now: () => new Date('2026-08-26T00:00:00.000Z'),
+    });
+    assert.deepEqual(
+      anonymous.skills.map((skill) => skill.name),
+      ['bundled-helper'],
+    );
+  } finally {
+    await rm(scopeRoot, { recursive: true, force: true });
+  }
 });

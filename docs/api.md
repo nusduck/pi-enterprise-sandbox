@@ -134,6 +134,8 @@ data: {"sequence":18,"event":{...},"ts":...,"eventId":"01K..."}
 
 `GET /api/capabilities/{skills,mcp,tools,models}` 仍从 diagnostics 投影列表；字段可附加 `status` / `dynamic`。
 
+`skills` 是**按调用者投影**的：Agent 用 `X-Acting-User-Id` / `X-Acting-Organization-Id` 解析出与该用户下一次 Run 相同的 skill 根（系统层 + 该用户自己的 `<orgId>/<userId>` 目录），每项以 `source` 标明层级——`shared-skill-root`（内置只读）或 `user-skill-root`（该用户已安装）。请求不带身份时只投影系统层；用户层基目录**永远不整根扫描**，否则会跨租户列出他人已安装的 Skill。
+
 `GET /api/runs/{run_id}/trace` 返回 owner-scoped durable span 树：
 
 ```json

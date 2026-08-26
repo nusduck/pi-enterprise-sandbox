@@ -11,6 +11,7 @@ import {
   effectiveConfig,
 } from '../../config.js';
 import { createServiceContainer } from './container.js';
+import { resolveSkillScopeForIdentity } from './container-env.js';
 import { createAgentHttpServer } from './create-http-server.js';
 import { ProcessAccessService } from '../application/process-access-service.js';
 import { getExtensionDiagnostics as projectExtensionDiagnostics } from '../application/extension-diagnostics-service.js';
@@ -195,14 +196,26 @@ export async function startHttpMain(env = process.env) {
     sandboxHealthCheck = null;
   }
 
-  const getExtensionDiagnostics = (options = {}) =>
-    projectExtensionDiagnostics({
+  // Skills are per-caller: the bundled tier plus that user's own directory.
+  // Without an identity on the request there is no user tier to project, and
+  // the process-wide roots list bundled packages only.
+  const getExtensionDiagnostics = (options = {}) => {
+    const identity =
+      options.organizationId != null && options.ownerUserId != null
+        ? { orgId: options.organizationId, userId: options.ownerUserId }
+        : null;
+    const { skillRoots, userSkillRoot } = identity
+      ? resolveSkillScopeForIdentity(env, identity)
+      : { skillRoots: config.SKILL_ROOTS, userSkillRoot: null };
+    return projectExtensionDiagnostics({
       ...options,
-      skillRoots: config.SKILL_ROOTS,
+      skillRoots,
+      userSkillRoot,
       mcpServers: config.MCP_SERVERS,
       mcpDiscovery: container.getMcpReadiness(),
       toolRiskPolicy: config.TOOL_RISK_POLICY,
     });
+  };
 
   const notReady = async () => {
     const err = new Error('Agent data plane not started');

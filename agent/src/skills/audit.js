@@ -10,8 +10,11 @@ import path from 'node:path';
  * @property {string} action - install | edit | reload | deny
  * @property {string} result - success | failure | denied
  * @property {string} [skill_name]
- * @property {'upload' | 'agent_generated'} [source_type]
- * @property {string} [source] attachment id or `agent`; never a filesystem path
+ * @property {'upload' | 'agent_generated' | 'sandbox_build'} [source_type]
+ * @property {string} [source] provenance key: `attachment:<id>`, `agent`, or
+ *   `sandbox:<logical path>`. The sandbox form is a logical in-sandbox path the
+ *   model itself supplied (`/tmp/...`, `/home/sandbox/workspace/...`) — never a
+ *   host filesystem path, which would leak the Agent's storage layout.
  * @property {string} [summary]
  * @property {string} [error]
  * @property {object} [meta]

@@ -86,6 +86,65 @@ describe('skill-lifecycle extension', () => {
     );
   });
 
+  it('installs a package the model built in the sandbox', async () => {
+    const calls = [];
+    const tools = collectTools(
+      extension(fakeSkillManager({
+        install: async (input) => {
+          calls.push(input);
+          return { name: 'built-skill', summary: 'installed built-skill' };
+        },
+      })),
+    );
+
+    // Workspace-relative, /tmp and logical workspace paths all resolve to the
+    // same logical form the file tools use.
+    for (const [given, expected] of [
+      ['dist/built-skill.zip', '/home/sandbox/workspace/dist/built-skill.zip'],
+      ['/tmp/built-skill.skill', '/tmp/built-skill.skill'],
+      ['/home/sandbox/workspace/built-skill.zip', '/home/sandbox/workspace/built-skill.zip'],
+    ]) {
+      await tools.get('skill_install').execute('call-install', {
+        source: 'sandbox',
+        path: given,
+      });
+      assert.deepEqual(calls.at(-1), {
+        source: 'sandbox',
+        sourcePath: expected,
+        archiveName: expected.split('/').pop(),
+      });
+    }
+
+    // The sandbox branch never consults the current-turn attachment block.
+    assert.equal(
+      calls.some((call) => 'attachmentId' in call),
+      false,
+    );
+  });
+
+  it('refuses to install from the read-only Skill root', async () => {
+    const tools = collectTools(
+      extension(fakeSkillManager({
+        install: async () => assert.fail('install must not be reached'),
+      })),
+    );
+    for (const path of [
+      '/home/sandbox/skill/pdf/pdf.zip',
+      '/home/sandbox/skill-user/anything.zip',
+    ]) {
+      await assert.rejects(
+        tools.get('skill_install').execute('call-install', { source: 'sandbox', path }),
+        /cannot be installed from the Skill root/,
+      );
+    }
+    await assert.rejects(
+      tools
+        .get('skill_install')
+        .execute('call-install', { source: 'sandbox', path: '/etc/passwd' }),
+      /must be under workspace/,
+    );
+  });
+
   it('installs only a ZIP attached in the current turn and reloads', async () => {
     let installed;
     let reloads = 0;
