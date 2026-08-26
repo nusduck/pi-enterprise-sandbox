@@ -24,6 +24,10 @@ import {
   persistSidebarOpen,
   loadPersistedSidebarOpen,
   clearPersistedChat,
+  lastRunModelIdForConversation,
+  readConversationModelId,
+  resolveConversationModelId,
+  writeConversationModelId,
   normalizeServerMessages,
   createAttachmentDraft,
   patchAttachment,
@@ -159,7 +163,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   const [models, setModels] = useState<ModelItem[]>([]);
   const [selectedModelId, setSelectedModelIdState] = useState<string | null>(() => {
     if (typeof window === 'undefined') return null;
-    return window.localStorage.getItem('pi.selectedModelId');
+    return readConversationModelId(loadPersistedConversationId());
   });
   const [entityStore, setEntityStore] = useState<EntityStore>(() =>
     createEntityBridge().getStore(),
@@ -170,6 +174,8 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   // Always-current refs for async handlers
   const stateRef = useRef(state);
   stateRef.current = state;
+  const modelsRef = useRef(models);
+  modelsRef.current = models;
   const activeStreamGenRef = useRef(0);
   const conversationLoadGenerationRef = useRef(0);
   /** Invalidates account-scoped requests when login/logout changes identity. */
@@ -218,11 +224,31 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     setState((s) => update(s, { flashMessage: null }));
   }, []);
 
+  const applyModelForConversation = useCallback(
+    (conversationId: string | null | undefined) => {
+      const enabledIds = modelsRef.current
+        .map((model) => String(model.model_id || model.id || '').trim())
+        .filter(Boolean);
+      const stored = readConversationModelId(conversationId);
+      const lastRun = lastRunModelIdForConversation(
+        bridge.getStore().runsById,
+        conversationId,
+      );
+      const next = resolveConversationModelId({
+        stored,
+        lastRunModelId: lastRun,
+        enabledIds,
+      });
+      setSelectedModelIdState(next);
+      if (next !== stored) writeConversationModelId(conversationId, next);
+    },
+    [bridge],
+  );
+
   const setSelectedModelId = useCallback((modelId: string | null) => {
-    const normalized = String(modelId || '').trim();
-    setSelectedModelIdState(normalized || null);
-    if (normalized) window.localStorage.setItem('pi.selectedModelId', normalized);
-    else window.localStorage.removeItem('pi.selectedModelId');
+    const normalized = String(modelId || '').trim() || null;
+    setSelectedModelIdState(normalized);
+    writeConversationModelId(stateRef.current.conversationId, normalized);
   }, []);
 
   const refreshModels = useCallback(async () => {
@@ -231,18 +257,11 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       (model) => model.enabled !== false && Boolean(model.model_id || model.id),
     );
     setModels(enabled);
-    setSelectedModelIdState((current) => {
-      const valid = enabled.some(
-        (model) => (model.model_id || model.id) === current,
-      );
-      // No explicit choice means "use the AgentVersion/default policy". Do not
-      // silently override an immutable pinned model with the first catalog row.
-      const next = valid ? current : null;
-      if (next) window.localStorage.setItem('pi.selectedModelId', next);
-      else window.localStorage.removeItem('pi.selectedModelId');
-      return next;
-    });
-  }, []);
+    modelsRef.current = enabled;
+    applyModelForConversation(
+      stateRef.current.conversationId || loadPersistedConversationId(),
+    );
+  }, [applyModelForConversation]);
 
   const refreshConversations = useCallback(async () => {
     const generation = sessionGenerationRef.current;
@@ -380,6 +399,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
 
         await bridge.rehydrateConversation(conv.id);
         if (loadGeneration !== conversationLoadGenerationRef.current) return;
+        applyModelForConversation(conv.id);
 
         if (sessionId) {
           await refreshArtifacts(sessionId);
@@ -394,7 +414,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         setStatus('Agent Ready');
       }
     },
-    [setStatus, flashError, refreshArtifacts, bridge],
+    [setStatus, flashError, refreshArtifacts, bridge, applyModelForConversation],
   );
 
   const importArtifactToConversation = useCallback(
@@ -498,8 +518,9 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       return n;
     });
     clearPersistedChat();
+    applyModelForConversation(null);
     setStatus('Agent Ready');
-  }, [setStatus, bridge]);
+  }, [setStatus, bridge, applyModelForConversation]);
 
   const removeConversation = useCallback(
     async (id: string) => {
@@ -616,6 +637,9 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         // fields null when the durable run stream only emitted platform events,
         // so every send after the first silently created a new conversation.
         const createdConversationId = created.conversation_id || cur.conversationId;
+        if (createdConversationId) {
+          writeConversationModelId(createdConversationId, selectedModelId);
+        }
         const createdSessionId = created.session_id || currentSessionId();
         if (createdConversationId || createdSessionId) {
           setState((s) => {
@@ -1318,6 +1342,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
             cancelled ||
             loadGeneration !== conversationLoadGenerationRef.current
           ) return;
+          applyModelForConversation(conv.id);
           if (conv.sandbox_session_id) {
             await refreshArtifacts(conv.sandbox_session_id);
             setStatus(`Session ${conv.sandbox_session_id.slice(-8)}`);
@@ -1333,7 +1358,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     return () => {
       cancelled = true;
     };
-  }, [refreshConversations, refreshArtifacts, refreshModels, setStatus, flashError, bridge]);
+  }, [refreshConversations, refreshArtifacts, refreshModels, setStatus, flashError, bridge, applyModelForConversation]);
 
   // Dispose entity SSE managers on unmount (page unload)
   useEffect(() => {
