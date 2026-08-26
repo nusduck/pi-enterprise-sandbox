@@ -12,10 +12,7 @@
  */
 
 import { PiRuntimeFactoryError } from './errors.js';
-import {
-  REQUIRED_EXTENSION_NAMES,
-  assertEnterpriseExtensions,
-} from '../../extensions/index.js';
+import { assertEnterpriseExtensions } from '../../extensions/index.js';
 import { resolveEnterpriseSystemPrompt } from './enterprise-system-prompt.js';
 import {
   LOGICAL_SKILL_ROOT,
@@ -535,16 +532,15 @@ export function resolveAgentVersionBindings(bound, options = {}) {
   const mcpResolver = options.mcpResolver;
   const toolPolicyBinding = options.toolPolicyBinding;
 
-  /** @type {readonly string[]} Extensions actually loaded for this binding. */
-  let resolvedExtensionNames = Object.freeze([]);
-
   if (bound.extensions.length > 0) {
     // Non-empty must resolve against the first-party registry (not legacy 12).
+    // The resolved names order the factory check below; nothing carries them
+    // into the prompt any more -- the loaded set reaches the model as tool
+    // schemas, which `## Tools` is filled from at before_agent_start.
     /** @type {{ names: readonly string[] }} */
     let resolved;
     try {
       resolved = assertEnterpriseExtensions(bound.extensions);
-      resolvedExtensionNames = resolved.names;
     } catch (err) {
       throw new PiRuntimeFactoryError(
         err instanceof Error ? err.message : String(err),
@@ -657,11 +653,6 @@ export function resolveAgentVersionBindings(bound, options = {}) {
       workspaceRoot: options.workspaceRoot || LOGICAL_WORKSPACE_ROOT,
       skillRoot:
         options.skillRoot || primarySkillRoot(skillPaths) || LOGICAL_SKILL_ROOT,
-      extensionNames: [
-        ...(resolvedExtensionNames.length > 0
-          ? resolvedExtensionNames
-          : REQUIRED_EXTENSION_NAMES),
-      ],
     },
   );
 

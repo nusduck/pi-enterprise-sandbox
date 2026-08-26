@@ -9,7 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **System prompt 不再自称 pi / coding assistant**: 默认身份改为「风控通用智能体」。`## Available tools` 那份写死的 13 项闭合清单和内部 extension 包名一并去掉——模型以本轮请求的 tools schema 为准；prompt 只交代 sandbox 文件/命令工具、`ask_user` / skill 生命周期 / todo·memory（若本轮有）、以及 MCP 的 `mcp__<server>__<tool>` 命名。有 AgentVersion / `AGENT_SYSTEM_PROMPT` lead 时不再重复默认身份句，以免两套人设打架。
+- **System prompt 不再自称 pi / coding assistant**: 默认身份改为「风控通用智能体」——一个通用企业智能体，风控/合规/运营是它当前的部署场景而不是能力边界；同时明确「用用户的语言回复」。原先挂在“For risk work:”下面的那条纪律（交代查了什么、没查什么、结论有多确定，并区分观察与推断）改为无条件生效，否则模型对任何它不归类为风控的任务都可以跳过。非空的 AgentVersion / `AGENT_SYSTEM_PROMPT` lead 会**替换**默认身份句而不是叠加，所以两个 lead 槽位都必须写完整人设，不能只写一条补充规则——`.env.example` 已写明。
+
+- **`## Available tools` 那份写死的 13 项闭合清单改为按 run 渲染**: 旧清单和内部 extension 包名一起去掉了，但没有换成一份“if present”的散文清单——那只是保真度更低的同一个错误：没启 `skill-lifecycle` 的 run 照样会读到 `skill_list`，而 `spawn_subagent` 谁都没提。工具的 name/description/parameters 本来就在本轮请求的 tools 数组里，prompt 里再抄一遍必然漂移。现在 `## Tools` 的正文由 `renderToolSurface` 从**本 run 实际绑定的工具**生成，数据源是每个工具定义上早就写好的 `promptSnippet` / `promptGuidelines`（sandbox-bridge、skill-lifecycle、subagent-spawn、user-interaction，以及 `mcp__<server>__<tool>` 包装器都有），由 Pi 按活的 registry 聚合；sandbox-bridge 在 `before_agent_start` 上把它拼进去。**顺带补回了此前完全丢失的 `promptGuidelines`**（仅 sandbox-bridge 的 13 个工具就有 31 条）——那是跨调用的工作流规则（例如 read 的“沿着 nextOffset 读完，不要重复同一页”），放在单个工具的 description 里天然错位，此前因为走 customPrompt 分支而哪儿都没去。没有拼接时 prompt 依然成立：`## Tools` 只说各工具自己的 schema 为准，外加 MCP 命名、审批会等待、缺能力就直说这三条静态跨工具规则。
 
 ### Added
 
