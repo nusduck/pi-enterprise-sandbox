@@ -3,7 +3,7 @@
  */
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { isAllowedApiUrl, safeApiUrl } from '../src/shared/security/url.ts';
+import { downloadAttrName, isAllowedApiUrl, safeApiUrl } from '../src/shared/security/url.ts';
 
 describe('isAllowedApiUrl', () => {
   it('accepts relative /api/ paths', () => {
@@ -51,5 +51,23 @@ describe('safeApiUrl', () => {
   it('returns url or null', () => {
     assert.equal(safeApiUrl('/api/ok'), '/api/ok');
     assert.equal(safeApiUrl('https://evil'), null);
+  });
+});
+
+describe('downloadAttrName', () => {
+  it('keeps the original basename and extension', () => {
+    assert.equal(downloadAttrName('季度报告.pptx'), '季度报告.pptx');
+    assert.equal(downloadAttrName('notes.md'), 'notes.md');
+  });
+
+  it('strips path segments and control chars', () => {
+    assert.equal(downloadAttrName('a/b\\c.txt'), 'c.txt');
+    assert.equal(downloadAttrName('a\r\nb.txt'), 'ab.txt');
+  });
+
+  it('falls back when empty', () => {
+    assert.equal(downloadAttrName(''), 'download');
+    assert.equal(downloadAttrName('../..'), 'download');
+    assert.equal(downloadAttrName(null), 'download');
   });
 });

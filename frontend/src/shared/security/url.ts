@@ -37,3 +37,20 @@ export function isAllowedApiUrl(url: unknown): boolean {
 export function safeApiUrl(url: unknown): string | null {
   return isAllowedApiUrl(url) ? (url as string) : null;
 }
+
+/**
+ * Safe HTML `download` attribute value.
+ *
+ * Empty `download=""` makes browsers ignore Content-Disposition and save as the
+ * URL's last path segment (`artifact-download`, no extension).
+ */
+export function downloadAttrName(name: unknown): string {
+  const raw = typeof name === 'string' ? name : '';
+  const base = raw.split(/[/\\]/).pop() || '';
+  const cleaned = base
+    .replace(/[\u0000-\u001F\u007F]/g, '')
+    .replace(/["<>]/g, '_')
+    .trim();
+  if (!cleaned || cleaned === '.' || cleaned === '..') return 'download';
+  return cleaned.slice(0, 200);
+}

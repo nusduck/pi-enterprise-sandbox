@@ -1,7 +1,7 @@
 import { useMemo } from 'react';
 import { useChat } from '../../features/chat/ChatContext';
 import { getArtifactDownloadUrl } from '../../shared/api';
-import { safeApiUrl } from '../../shared/security/url';
+import { downloadAttrName, safeApiUrl } from '../../shared/security/url';
 import { isDurableArtifactId } from '../../shared/state/runReducer';
 import { IconDownload, IconFile } from '../../shared/ui/Icons';
 
@@ -100,7 +100,7 @@ export function DeliverablesPanel() {
               key={a.id}
               className="artifact-chip"
               href={safe}
-              download=""
+              download={downloadAttrName(a.name)}
               title={a.path || a.name}
               data-source="submit_artifact"
             >
@@ -125,7 +125,7 @@ export function DeliverablesPanel() {
               key={String(id)}
               className="artifact-chip"
               href={safe}
-              download=""
+              download={downloadAttrName(name)}
               title={a.path || String(name)}
               data-source="submit_artifact"
             >

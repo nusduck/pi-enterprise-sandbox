@@ -298,6 +298,53 @@ export async function handleFileDownload(parsedUrl, res, req = null) {
   res.end();
 }
 
+function isAsciiHeaderValue(value) {
+  return typeof value === 'string' && value.length > 0 && /^[\x20-\x7E]+$/.test(value) && !/[\r\n]/.test(value);
+}
+
+function asciiFilenameFallback(name) {
+  const base = String(name || 'download').split(/[/\\]/).pop() || 'download';
+  const match = base.match(/(\.[A-Za-z0-9]{1,8})$/);
+  const ext = match ? match[1].toLowerCase() : '';
+  const body = ext ? base.slice(0, -ext.length) : base;
+  let ascii = '';
+  for (const ch of body) {
+    const code = ch.codePointAt(0);
+    ascii += code >= 0x20 && code <= 0x7e ? ch : '_';
+  }
+  ascii = ascii.replace(/[_\s.]+/g, '_').replace(/^[._]+|[._]+$/g, '') || 'download';
+  return `${ascii}${ext}`.slice(0, 200);
+}
+
+/**
+ * Prefer Sandbox Content-Disposition. Never fall back to the ULID artifact_id —
+ * that name has no extension, so browsers save as `artifact-download`.
+ * @param {Headers | Record<string, string> | null | undefined} headers
+ */
+export function artifactDownloadDisposition(headers) {
+  const get = (name) => {
+    if (!headers) return '';
+    if (typeof headers.get === 'function') return headers.get(name) || '';
+    return headers[name] || headers[name.toLowerCase()] || '';
+  };
+  const disposition = get('content-disposition');
+  if (disposition && /filename\s*\*?=/i.test(disposition) && isAsciiHeaderValue(disposition)) {
+    return disposition;
+  }
+  const encoded = get('x-artifact-filename');
+  if (isAsciiHeaderValue(encoded)) {
+    let decoded = 'download';
+    try {
+      decoded = decodeURIComponent(encoded) || 'download';
+    } catch {
+      decoded = 'download';
+    }
+    const ascii = asciiFilenameFallback(decoded);
+    return `attachment; filename="${ascii}"; filename*=UTF-8''${encoded}`;
+  }
+  return 'attachment; filename="download"';
+}
+
 /**
  * GET /api/files/artifact-download?session_id=xxx&artifact_id=yyy
  * Stream a registered artifact (P7 / PR-09 deliverable path).
@@ -343,8 +390,6 @@ export async function handleArtifactDownload(parsedUrl, res, req = null) {
     return;
   }
 
-  const disposition = sanRes.headers.get('content-disposition')
-    || `attachment; filename="${artifactId}"`;
   const contentType = sanRes.headers.get('content-type') || 'application/octet-stream';
   // Type safety: never forward HTML/SVG as navigable content
   const safeType =
@@ -354,9 +399,13 @@ export async function handleArtifactDownload(parsedUrl, res, req = null) {
 
   const headers = {
     'Content-Type': safeType,
-    'Content-Disposition': disposition,
+    'Content-Disposition': artifactDownloadDisposition(sanRes.headers),
     'X-Content-Type-Options': 'nosniff',
   };
+  const encodedName = sanRes.headers.get('x-artifact-filename');
+  if (encodedName && isAsciiHeaderValue(encodedName)) {
+    headers['X-Artifact-Filename'] = encodedName;
+  }
   const len = sanRes.headers.get('content-length');
   if (len) headers['Content-Length'] = len;
   const sha = sanRes.headers.get('x-artifact-sha256');

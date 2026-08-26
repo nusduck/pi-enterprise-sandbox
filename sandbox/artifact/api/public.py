@@ -16,6 +16,7 @@ from sandbox.artifact.domain.contracts import (
     ArtifactResponse,
 )
 from sandbox.security.ownership import require_owned_session, resolve_actor
+from sandbox.artifact.infrastructure.disposition import artifact_filename_header
 from sandbox.artifact.infrastructure.manager import (
     ArtifactError,
     artifact_content_disposition,
@@ -278,6 +279,7 @@ async def download_artifact(session_id: str, artifact_id: str, request: Request)
 
     headers = {
         "Content-Disposition": disposition,
+        "X-Artifact-Filename": artifact_filename_header(art.name),
         "X-Content-Type-Options": "nosniff",
         "Content-Length": str(identity.st_size),
     }
