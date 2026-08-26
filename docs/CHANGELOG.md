@@ -40,6 +40,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`submit_artifact` 下载下来带原文件名和后缀**: 交付物点下载，保存成没有扩展名的 `artifact-download`，中文名（如 `季度报告.pptx`）尤其明显。两处叠在一起：前端所有下载链接写了空的 `download=""`，Chrome 因此忽略 `Content-Disposition`，改用 URL 最后一段 `/api/files/artifact-download`；BFF 在沙箱没带 disposition 时又退回 `filename="<artifactId>"`（ULID，同样没后缀），ASCII `filename=` 兜底也不保留 `.pptx` / `.md`。现在链接带真实 basename；`filename=` 对纯 CJK 名是 `download.pptx`（后缀还在），完整原名走 `filename*` 与 `X-Artifact-Filename`；BFF 转发沙箱 header，不再用 ULID 顶替。
+
+- **模型选择按对话记住，不再全局串台**: Composer 的模型选择器是一份 `pi.selectedModelId`，切到另一个会话 picker 还停在上一个会话的模型，发出去的 `model_id` 也是那一个。现在按 `conversationId` 分槽（未保存的新对话单独一份 draft）；切会话时恢复该对话上次的选择，没有手动选过则用该对话最近一次 run 的 `model_id`。旧的全局 key 只迁到新对话 draft，不会覆盖已有会话。
+
 - **`write` / `edit` 接受中文（及任何 Unicode）文件名**: `write` 到 `workspace/专项汇报.md` 返回 `FILES_WRITE_PAYLOAD_INVALID: path must be bounded visible ASCII`，`fetchCalls: 0`——请求根本没离开 Agent。根因在 Agent→Sandbox 的 HTTP transport：`normalizePath()` 复用了给协议标识符准备的 `requireVisibleAscii()`（`[\x21-\x7e]`），于是中日韩文件名、连带空格一起被拒。Sandbox 侧的 `_path()` 契约、request hash、Python 写入器、文件系统全都本来就接受 Unicode——只有这一层不接受。路径改为**按结构 + 字符黑名单**校验：仍然拒绝 NUL/控制字符、C1、零宽与 bidi 覆盖字符（`U+200B–200F`/`U+202A–202E`/`U+2066–2069`/`U+FEFF`，文件名伪装）、孤立代理对、反斜杠、`//`、`.`/`..`、workspace 前缀之外的路径，以及首尾带空白的路径段；长度同时按码元与 UTF-8 字节双向封顶 512（对齐 Sandbox 契约）。`toolCallId` / `expectedVersion` 继续走 ASCII——它们是协议标识符，不是用户数据。
 
 - **长参数的工具在审批放行后不再让整个 Run FAILED**: 带审批的工具调用只要有任一参数字符串超过 512 字符，审批通过后的重放就抛 `tool_call_id replay conflicts with existing args integrity`，Run 直接 FAILED。根因不在完整性校验本身，而在**重放读错了地方**：ToolExecution 账本存的是完整性信封，`$integrity` 承诺的是**原始** args，`$payload` 却是 `redactPayload()` 脱敏后的视图——超过 `DEFAULT_MAX_STRING`（512）的字符串会被截断并补上 `_bytes`/`_sha256`/`_truncated` 兄弟字段。`resumeApprovedToolCall` 拿 `argumentsJson`（即 `$payload`）去重放，指纹自然对不上；更糟的是——**即使指纹对得上，被批准的工具也会用截断后的参数执行**（一个 600 字符的 `write` 会写出被截断的文件）。现在重放的权威来源是 Pi 会话里那条发出调用的 assistant 消息（`findToolCallArgumentsInSession`）；只有当账本视图的指纹可证明等于 `$integrity`（即短参数、脱敏无损）时才回退到账本；两者都不可用时以 `APPROVED_TOOL_ARGS_UNRECOVERABLE` 明确失败，而不是拿脱敏视图去执行。另外 `packJsonWithIntegrity` 超限时改抛稳定的 `ARGUMENT_TOO_LARGE`，让"存不下"与"脱敏截断导致的重放冲突"在日志里可区分。
