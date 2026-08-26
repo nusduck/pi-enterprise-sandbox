@@ -175,7 +175,7 @@ SKILLS_USER_ROOT=/home/sandbox/skill-user
 | 工具 | 作用 |
 |------|------|
 | `skill_list` | 列出两层可见 package（含 tier / description / 是否可编辑） |
-| `skill_install` | 安装当前用户回合上传的单个 `.zip` package |
+| `skill_install` | 安装单个 package：当前回合上传的 `.zip`（`source="attachment"`，默认），或模型自己在沙盒里搭好并打包的 `.zip` / `.skill`（`source="sandbox"`，传 `path`） |
 | `skill_create` | 把与用户确认后的说明和文本文件原子生成成一个 package |
 | `skill_uninstall` | 删除自己装的 package（系统层不可删） |
 | `skill_edit` | 修改已安装用户 package；不能用来新建 package |
@@ -183,7 +183,15 @@ SKILLS_USER_ROOT=/home/sandbox/skill-user
 上传流程复用聊天附件：前端把 ZIP 作为 Dataset 上传到当前 Sandbox session，Run 中保留
 结构化 `attachment_id`。Agent 只把当前回合的 attachment id 交给 `skill_install`；审批通过后，
 Worker 使用 owner-scoped Sandbox client 下载内容，在 Agent 用户 Skill 卷内的临时目录安全解压、
-校验唯一 `SKILL.md`、原子替换并自动 reload。URL 和本地路径不是工具参数。
+校验唯一 `SKILL.md`、原子替换并自动 reload。URL 不是工具参数。
+
+`source="sandbox"` 是给「模型自己写一个 Skill」用的：模型用普通 `write` / `bash` 在
+workspace 或 `/tmp` 里搭包、跑通、打成 ZIP，然后把**归档路径**交给 `skill_install`。
+路径先过 `sandbox-bridge` 的 `normalizeLogicalPath`（Skill 根被显式拒绝——只读挂载不能
+既是安装源又是安装目标），再由 Sandbox 的 `parse_sandbox_path` 二次限定在该 session 的
+workspace/temp 根内。取回字节走已有的 owner-scoped `GET /sessions/{id}/files/download`，
+之后与上传路径**汇流到同一个** `installSkillArchive`：同样的解压、校验、原子替换。
+换句话说，这条路增加的是「够得着一个归档」的方式，不是第二条写入 Skill 根的路径。
 
 `skill_create` 是“和 Agent 交互生成”的安装入口：Agent 收集并确认需求后，在一次高风险
 工具调用中提交 `name`、`description`、`instructions` 与可选文件；用户批准后才落盘。

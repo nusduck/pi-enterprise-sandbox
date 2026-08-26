@@ -19,6 +19,7 @@ import {
   isUnderSkillRoot,
 } from './paths.js';
 import {
+  assertSkillArchiveName,
   createGeneratedSkill,
   installSkillArchive,
   uninstallSkill,
@@ -127,6 +128,7 @@ export async function readSkillArchiveDownload(response) {
  *   skillRoots?: string[],
  *   userSkillRoot?: string | null,
  *   downloadArchive?: ((input: { attachmentId: string }) => Promise<unknown>) | null,
+ *   downloadWorkspaceArchive?: ((input: { path: string }) => Promise<unknown>) | null,
  *   auditLogPath?: string | null,
  *   auditSink?: ((event: object) => void) | null,
  *   getMeta?: () => object,
@@ -145,6 +147,10 @@ export function createSkillManager(options = {}) {
     : writableSkillRoot(skillRoots);
   const downloadArchive =
     typeof options.downloadArchive === 'function' ? options.downloadArchive : null;
+  const downloadWorkspaceArchive =
+    typeof options.downloadWorkspaceArchive === 'function'
+      ? options.downloadWorkspaceArchive
+      : null;
   const auditLogPath = options.auditLogPath ?? process.env.SKILLS_AUDIT_LOG ?? null;
   const auditSink = options.auditSink || null;
   const getMeta = typeof options.getMeta === 'function' ? options.getMeta : () => ({});
@@ -202,20 +208,42 @@ export function createSkillManager(options = {}) {
     describeInstalled: () =>
       describeInstalledSkills(skillRoots, { writableRoot: userRoot }),
 
-    /** Install a ZIP attachment. The extension verifies current-turn binding. */
+    /**
+     * Install one Skill from a ZIP, from either provenance.
+     *
+     * `source: 'sandbox'` installs a package the model built in this session's
+     * workspace or `/tmp`; anything else installs a ZIP the user attached in
+     * the current turn (the extension verifies that binding). Both are fetched
+     * owner-scoped, size-capped and hashed here, then handed to the same
+     * `installSkillArchive` — the sandbox provenance adds a way to *reach* an
+     * archive, never a second way to write into the Skill root.
+     */
     async install(params) {
       assertWritable('install');
+      const sourceType = params?.source === 'sandbox' ? 'sandbox_build' : 'upload';
+      const fromSandbox = sourceType === 'sandbox_build';
       const attachmentId = String(params?.attachmentId || '').trim();
+      const sourcePath = String(params?.sourcePath || '').trim();
+      const auditSource = fromSandbox
+        ? sourcePath && `sandbox:${sourcePath}`
+        : attachmentId && `attachment:${attachmentId}`;
       try {
-        if (!downloadArchive) {
-          throw new Error('Skill archive download is not configured');
+        const fetchArchive = fromSandbox ? downloadWorkspaceArchive : downloadArchive;
+        if (!fetchArchive) {
+          throw new Error(
+            fromSandbox
+              ? 'Sandbox archive download is not configured'
+              : 'Skill archive download is not configured',
+          );
         }
-        if (!attachmentId) {
+        if (fromSandbox) {
+          if (!sourcePath) throw new Error('Skill archive sandbox path is required');
+        } else if (!attachmentId) {
           throw new Error('Skill archive attachment_id is required');
         }
-        if (!String(params?.archiveName || '').trim().toLowerCase().endsWith('.zip')) {
-          throw new Error('Skill installation accepts ZIP attachments only');
-        }
+        const archiveName = assertSkillArchiveName(params?.archiveName, sourceType);
+        // Only an attachment declares its size up front; a sandbox file is
+        // capped by the streaming reader instead.
         if (Number(params?.declaredSize) > SKILL_ARCHIVE_MAX_BYTES) {
           throw new Error(`Skill archive exceeds ${SKILL_ARCHIVE_MAX_BYTES} bytes`);
         }
@@ -227,10 +255,11 @@ export function createSkillManager(options = {}) {
         }, SKILL_INSTALL_TIMEOUT_MS);
         let downloaded;
         try {
-          const response = await downloadArchive({
-            attachmentId,
-            signal: controller.signal,
-          });
+          const response = await fetchArchive(
+            fromSandbox
+              ? { path: sourcePath, signal: controller.signal }
+              : { attachmentId, signal: controller.signal },
+          );
           downloaded = await readSkillArchiveDownload(response);
         } catch (error) {
           if (timedOut || error?.name === 'AbortError') {
@@ -244,8 +273,9 @@ export function createSkillManager(options = {}) {
         }
         const result = await installSkillArchive({
           archiveBytes: downloaded.bytes,
-          archiveName: params.archiveName,
-          attachmentId,
+          archiveName,
+          sourceType,
+          ...(fromSandbox ? { sourcePath } : { attachmentId }),
           skillRoot: userRoot,
           systemSkillNames: systemSkillNames(),
         });
@@ -253,8 +283,8 @@ export function createSkillManager(options = {}) {
           action: 'install',
           result: 'success',
           skill_name: result.name,
-          source_type: 'upload',
-          source: `attachment:${attachmentId}`,
+          source_type: sourceType,
+          source: auditSource || null,
           summary: `${result.summary} archive_sha256=${downloaded.sha256}`,
         });
         return { ...result, archive_sha256: downloaded.sha256 };
@@ -262,8 +292,8 @@ export function createSkillManager(options = {}) {
         audit({
           action: 'install',
           result: 'failure',
-          source_type: 'upload',
-          source: attachmentId ? `attachment:${attachmentId}` : null,
+          source_type: sourceType,
+          source: auditSource || null,
           error: error?.message || String(error),
         });
         throw error;

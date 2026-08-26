@@ -29,9 +29,23 @@ function toolCategory(name) {
   return 'execution';
 }
 
-function discoverSkills(skillRoots) {
+/**
+ * Project the skill packages one caller can load, tagging each with the tier it
+ * came from. `userSkillRoot` is that caller's own `<orgId>/<userId>` directory;
+ * without it there is no user tier and everything reads as bundled.
+ *
+ * System roots are scanned first, so a user package can never mask a bundled
+ * name in the listing — the same precedence installs already enforce.
+ *
+ * @param {string[]} skillRoots
+ * @param {string | null} [userSkillRoot]
+ */
+function discoverSkills(skillRoots, userSkillRoot = null) {
+  const userRoot = userSkillRoot ? path.resolve(String(userSkillRoot)) : null;
   const discovered = new Map();
-  for (const root of skillRoots || []) {
+  for (const rawRoot of skillRoots || []) {
+    const root = path.resolve(String(rawRoot));
+    const source = userRoot && root === userRoot ? 'user-skill-root' : 'shared-skill-root';
     let names = [];
     try {
       names = listInstalledSkills(root);
@@ -47,7 +61,7 @@ function discoverSkills(skillRoots) {
           description: metadata.description,
           enabled: true,
           status: 'configured',
-          source: 'shared-skill-root',
+          source,
           path: null,
           dynamic: true,
         });
@@ -102,6 +116,7 @@ function projectMcpServers(rawServers, discovery = null) {
  * @param {{
  *   profileId?: string,
  *   skillRoots?: string[],
+ *   userSkillRoot?: string | null,
  *   mcpServers?: object[] | string,
  *   mcpDiscovery?: { servers?: object[], ready?: boolean, toolCount?: number },
  *   models?: Iterable<object>,
@@ -117,7 +132,10 @@ export function getExtensionDiagnostics(options = {}) {
     throw new Error(`Unknown diagnostics profile: ${profileId}`);
   }
 
-  const skills = discoverSkills(options.skillRoots || []);
+  const skills = discoverSkills(
+    options.skillRoots || [],
+    options.userSkillRoot ?? null,
+  );
   const mcpServers = projectMcpServers(
     options.mcpServers || [],
     options.mcpDiscovery,

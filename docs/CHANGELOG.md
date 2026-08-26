@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **模型可以自己搭一个 Skill 并直接安装**: `skill_install` 新增 `source="sandbox"`——模型用普通 `write` / `bash` 在 workspace 或 `/tmp` 里搭好包、跑通脚本、打成 `.zip` / `.skill`，然后把归档路径交给它。此前只有两条路：把 `SKILL.md` 拆成 `skill_create` 的结构化字段（连 frontmatter 都控制不了），或者打完包让用户下载再上传一遍——bundled `skill-creator` 教的正是后者，所以模型会一路做对最后一步卡住。归档路径先过 `normalizeLogicalPath`（Skill 根显式拒绝：只读挂载不能既是源又是目标），再由 Sandbox 的 `parse_sandbox_path` 二次限定在该 session 的 workspace/temp 内；取字节走已有的 owner-scoped `files/download`，然后与上传路径汇流到**同一个** `installSkillArchive`。Sandbox 侧零改动，特权写入仍然只有那一处。审批语义不变（high risk，一次 tool call），但用户批的是一个已经落盘、可被检视的包。
+
+- **bundled `skill-creator` 改写为本平台的流程**: 原版是上游 Claude Skills 的说明书，教的是“复制到可写位置编辑 → `package_skill.py` 打包 → 让用户去装”，还依赖 `claude` CLI 和 subagent 跑 eval——这里两者都不存在。现在按实际可用的两条路径重写（小包 `skill_create`，其余在沙盒里搭完 `skill_install(source="sandbox")`），写明 Skill 树只读、不可搜索只可 `read`、名字/描述的校验口径与各项上限，并点名哪些自带脚本在这里不可用。文中给出的打包命令是实测过的（`PYTHONPATH` 与输出目录两个参数都必需，否则脚本要么 import 失败、要么试图写进只读的 Skill 根）。
+
+- **Capabilities → Skills 区分系统与用户两层**: 此前该页只列内置 Skill——`extensions/diagnostics` 拿的是进程级 skill 根，而用户 Skill 装在 `<base>/<orgId>/<userId>` 下，扫描基目录一个也匹配不到（那一级没有 `SKILL.md`），于是"装没装上"在界面上完全看不出来。请求里其实早就带着身份（BFF 发 `X-Acting-*`，Agent 路由也已解出），只是投影时被丢掉了。现在 diagnostics 用**与 Run 相同的解析器**（`resolveSkillScopeForIdentity`）取该调用者的 skill 根，每项按 `source` 标 `shared-skill-root` / `user-skill-root`，前端分成 "My Skills" 与 "System Skills" 两栏。无身份的请求仍只投影系统层——用户层基目录不整根扫描，否则会列出其他租户已安装的 Skill。
+
 - **read 工具支持图片（模型可以直接看工作区里的图）**: `read` 命中图片时返回 Pi `ImageContent` 而不是 `{binary:true}` 空壳——对齐 Pi 原生 read 的做法（Pi 没有独立 vision 工具，图片能力就做在 read 里）。此前一轮 Run 渲染出来的图表、截图、PDF 转页对模型完全不可见，唯一出路是 OCR。Sandbox 侧按**内容**嗅探类型（`image_sniff.py`，png/jpeg/gif/webp/bmp；工作区路径是模型自己写的，扩展名不作数），在 2MiB 预算内随响应回传 base64；超预算返回 `imageOmitted: IMAGE_TOO_LARGE` 并告诉模型先降采样再读，而不是静默给空。Agent 侧复用 SDK 导出的 `convertToPng` / `resizeImage` / `formatDimensionNote` 归一化并压到 Pi 的内联预算，且对到达的字段独立复核（base64 形状、类型白名单、解码后长度）——Sandbox 是跨网络的另一个服务，不能只凭它说了算。
 
 - **Ctrl+V 粘贴图片为附件（前端）**: 输入框支持从剪贴板粘贴图片/文件。剪贴板图片没有文件名，按嗅探到的 MIME 命名为 `pasted-image-<时间戳>-<序号>.<ext>`——附件白名单按扩展名判定，不改名会被当作禁止类型拒收。与上传按钮、Ctrl+U 共用同一道「Run 运行中不可附加」门禁；剪贴板只有文本时不拦截事件，正常落进输入框。

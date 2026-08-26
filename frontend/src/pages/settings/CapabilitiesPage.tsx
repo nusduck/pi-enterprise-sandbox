@@ -64,6 +64,49 @@ function statusLabel(item: {
   return item.enabled === false ? 'disabled' : 'configured';
 }
 
+/** Bundled packages come from the shared root; user packages from the caller's own. */
+function isUserSkill(item: SkillItem): boolean {
+  return item.source === 'user-skill-root';
+}
+
+function skillSourceLabel(item: SkillItem): string {
+  if (item.source === 'user-skill-root') return 'User';
+  if (item.source === 'shared-skill-root') return 'System';
+  return item.source || item.path || '—';
+}
+
+/**
+ * Skills split by tier. Both sections always render when the tab has any
+ * package, so an empty "My Skills" reads as "nothing installed" rather than as
+ * a section that failed to load.
+ */
+function SkillTiers({ items }: { items: SkillItem[] }) {
+  const user = items.filter(isUserSkill);
+  const system = items.filter((item) => !isUserSkill(item));
+  return (
+    <>
+      <section className="mgmt-section">
+        <h3 className="mgmt-section-title">My Skills ({user.length})</h3>
+        {user.length === 0 ? (
+          <p className="mgmt-empty-body">
+            No Skills installed for your account. Install a Skill ZIP from chat.
+          </p>
+        ) : (
+          <SkillCards items={user} />
+        )}
+      </section>
+      <section className="mgmt-section">
+        <h3 className="mgmt-section-title">System Skills ({system.length})</h3>
+        {system.length === 0 ? (
+          <p className="mgmt-empty-body">No bundled Skills.</p>
+        ) : (
+          <SkillCards items={system} />
+        )}
+      </section>
+    </>
+  );
+}
+
 function SkillCards({ items }: { items: SkillItem[] }) {
   return (
     <ul className="mgmt-card-list">
@@ -85,7 +128,7 @@ function SkillCards({ items }: { items: SkillItem[] }) {
             <dl className="mgmt-meta-grid">
               <div>
                 <dt>Source</dt>
-                <dd>{s.source || s.path || '—'}</dd>
+                <dd>{skillSourceLabel(s)}</dd>
               </div>
               <div>
                 <dt>Enabled</dt>
@@ -321,7 +364,7 @@ export function CapabilitiesPage() {
           error={skills.error}
         />
       ) : (
-        <SkillCards items={skills.items} />
+        <SkillTiers items={skills.items} />
       );
   } else if (tab === 'mcp') {
     body =

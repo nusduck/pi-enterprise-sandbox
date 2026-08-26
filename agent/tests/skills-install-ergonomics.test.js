@@ -320,6 +320,94 @@ test('SkillManager downloads only the requested attachment id and isolates users
   assert.equal(auditEvents[0].meta.session_id, 'session-skill-test');
 });
 
+test('SkillManager installs a package the model built in the sandbox', async () => {
+  const userRoot = await tmpdir('skill-user');
+  const zip = createStoredZip([
+    { name: 'built-skill/SKILL.md', content: skillMd('built-skill', 'Built in the sandbox.') },
+    { name: 'built-skill/reference.md', content: '# notes\n' },
+  ]);
+  const auditEvents = [];
+  const requested = [];
+  const manager = createSkillManager({
+    identity: { orgId: 'org-1', userId: 'user-1' },
+    skillRoots: ['/system-skills', userRoot],
+    userSkillRoot: userRoot,
+    auditSink: (event) => auditEvents.push(event),
+    downloadArchive: async () => assert.fail('attachment path must not be used'),
+    downloadWorkspaceArchive: async ({ path: sourcePath }) => {
+      requested.push(sourcePath);
+      return {
+        ok: true,
+        headers: new Map([
+          ['content-type', 'application/octet-stream'],
+          ['content-length', String(zip.length)],
+        ]),
+        arrayBuffer: async () => zip,
+      };
+    },
+  });
+
+  const result = await manager.install({
+    source: 'sandbox',
+    sourcePath: '/tmp/built-skill.skill',
+    archiveName: 'built-skill.skill',
+  });
+
+  assert.deepEqual(requested, ['/tmp/built-skill.skill']);
+  assert.equal(result.name, 'built-skill');
+  assert.equal(result.source_type, 'sandbox_build');
+  assert.equal(result.source_path, '/tmp/built-skill.skill');
+  assert.equal(result.attachment_id, undefined);
+  assert.equal(
+    result.archive_sha256,
+    createHash('sha256').update(zip).digest('hex'),
+  );
+  assert.deepEqual(manager.listInstalled(), ['built-skill']);
+  assert.equal(
+    fs.readFileSync(path.join(userRoot, 'built-skill', 'reference.md'), 'utf8'),
+    '# notes\n',
+  );
+
+  const installAudit = auditEvents.find((event) => event.action === 'install');
+  assert.equal(installAudit.result, 'success');
+  assert.equal(installAudit.source_type, 'sandbox_build');
+  assert.equal(installAudit.source, 'sandbox:/tmp/built-skill.skill');
+});
+
+test('SkillManager rejects malformed sandbox install inputs before downloading bytes', async () => {
+  const userRoot = await tmpdir('skill-user');
+  let downloads = 0;
+  const manager = createSkillManager({
+    identity: { orgId: 'org-1', userId: 'user-1' },
+    skillRoots: ['/system-skills', userRoot],
+    userSkillRoot: userRoot,
+    downloadWorkspaceArchive: async () => {
+      downloads += 1;
+      throw new Error('must not run');
+    },
+  });
+  await assert.rejects(
+    manager.install({ source: 'sandbox', archiveName: 'built.zip' }),
+    /sandbox path is required/,
+  );
+  await assert.rejects(
+    manager.install({
+      source: 'sandbox',
+      sourcePath: '/tmp/built.tar.gz',
+      archiveName: 'built.tar.gz',
+    }),
+    /\.zip or \.skill archives/,
+  );
+  assert.equal(downloads, 0);
+
+  // An attachment install must still fail closed when only the sandbox fetcher
+  // is configured, rather than silently reaching for the wrong source.
+  await assert.rejects(
+    manager.install({ attachmentId: 'dataset-1', archiveName: 'skill.zip' }),
+    /archive download is not configured/,
+  );
+});
+
 test('SkillManager rejects malformed install inputs before downloading bytes', async () => {
   const userRoot = await tmpdir('skill-user');
   let downloads = 0;

@@ -324,23 +324,83 @@ async function installPreparedPackage(input) {
 }
 
 /**
- * Install one uploaded ZIP attachment into the caller's user Skill root.
+ * Archive extensions each provenance may present.
+ *
+ * Uploads stay ``.zip`` only — that is the contract the composer's Skill upload
+ * button and its file picker advertise. A package the model builds inside the
+ * sandbox may also arrive as ``.skill``, which is the extension the bundled
+ * ``skill-creator`` packaging script emits; it is the same ZIP container. The
+ * extension is only a fast, legible guard either way — the bytes still have to
+ * survive real ZIP extraction and package validation below.
+ */
+const ARCHIVE_POLICY = Object.freeze({
+  upload: {
+    extensions: ['.zip'],
+    message: 'Skill installation accepts ZIP attachments only',
+  },
+  sandbox_build: {
+    extensions: ['.zip', '.skill'],
+    message: 'Skill installation accepts .zip or .skill archives',
+  },
+});
+
+/** @param {unknown} raw */
+export function normalizeArchiveSourceType(raw) {
+  return raw === 'sandbox_build' ? 'sandbox_build' : 'upload';
+}
+
+/**
+ * Validate an archive filename for one provenance and return its basename.
+ *
+ * Shared by the SkillManager's pre-download check and the install routine, so
+ * the accepted-extension rule has exactly one definition.
+ *
+ * @param {unknown} raw
+ * @param {'upload' | 'sandbox_build'} [sourceType]
+ * @returns {string}
+ */
+export function assertSkillArchiveName(raw, sourceType = 'upload') {
+  const archiveName = path.basename(String(raw || '').trim());
+  const policy = ARCHIVE_POLICY[normalizeArchiveSourceType(sourceType)];
+  const lower = archiveName.toLowerCase();
+  if (!policy.extensions.some((extension) => lower.endsWith(extension))) {
+    throw new Error(policy.message);
+  }
+  return archiveName;
+}
+
+/**
+ * Install one ZIP archive into the caller's user Skill root.
+ *
+ * The archive is either a ZIP the user attached (`sourceType: 'upload'`, keyed
+ * by `attachmentId`) or one the model built inside the sandbox
+ * (`sourceType: 'sandbox_build'`, keyed by `sourcePath`). Provenance only
+ * changes what is recorded and which extensions are accepted — extraction,
+ * package validation and the atomic replace are identical, so there is still
+ * exactly one way bytes reach the Skill root.
+ *
  * @param {{
  *   archiveBytes: Buffer,
  *   archiveName: string,
- *   attachmentId: string,
+ *   sourceType?: 'upload' | 'sandbox_build',
+ *   attachmentId?: string,
+ *   sourcePath?: string,
  *   skillRoot: string,
  *   timeoutMs?: number,
  *   systemSkillNames?: Iterable<string>,
  * }} opts
  */
 export async function installSkillArchive(opts) {
-  const archiveName = path.basename(String(opts.archiveName || '').trim());
-  if (!archiveName.toLowerCase().endsWith('.zip')) {
-    throw new Error('Skill installation accepts ZIP attachments only');
-  }
+  const sourceType = normalizeArchiveSourceType(opts.sourceType);
+  const archiveName = assertSkillArchiveName(opts.archiveName, sourceType);
   const attachmentId = String(opts.attachmentId || '').trim();
-  if (!attachmentId) throw new Error('Skill archive attachment_id is required');
+  const sourcePath = String(opts.sourcePath || '').trim();
+  if (sourceType === 'upload' && !attachmentId) {
+    throw new Error('Skill archive attachment_id is required');
+  }
+  if (sourceType === 'sandbox_build' && !sourcePath) {
+    throw new Error('Skill archive sandbox path is required');
+  }
   const skillRoot = resolveUserSkillRoot(opts.skillRoot);
   const timeoutMs = Number.isFinite(opts.timeoutMs)
     ? Math.max(1, Number(opts.timeoutMs))
@@ -370,8 +430,9 @@ export async function installSkillArchive(opts) {
     await rmrf(stagingRoot);
     return {
       ...installed,
-      source_type: 'upload',
-      attachment_id: attachmentId,
+      source_type: sourceType,
+      ...(attachmentId ? { attachment_id: attachmentId } : {}),
+      ...(sourcePath ? { source_path: sourcePath } : {}),
       archive_name: archiveName,
       package_subpath: discovered.subpath || null,
       archive,

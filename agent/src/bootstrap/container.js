@@ -74,6 +74,7 @@ import {
   assertWorkerSandboxServiceToken,
 } from './container-env.js';
 import { buildPiRunExecutorFactory } from './container-run-executor.js';
+import { buildSkillManagerFactory } from './container-skill-manager.js';
 
 // Re-exported so bootstrap callers keep one entry point for the container.
 export {
@@ -614,6 +615,14 @@ export class ServiceContainer {
   }
 
   /**
+   * Build a per-Run SkillManager factory for the skill-lifecycle extension.
+   * @returns {Promise<(runContext: object) => object | null>}
+   */
+  async createSkillManagerFactory() {
+    return buildSkillManagerFactory(this.env);
+  }
+
+  /**
    * Pi runtime factory constructor/factory (PR-05 slice A).
    * Does **not** enable production RunExecutor — worker still fail-fast without
    * an explicit runExecutorFactory (slice B wires the executor).
@@ -627,72 +636,6 @@ export class ServiceContainer {
    *   mcpRuntimeRoot?: string,
    * }} [opts]
    */
-  /**
-   * Build a per-Run SkillManager factory for the skill-lifecycle extension.
-   *
-   * The manager must be per-Run because the writable skill directory is
-   * per-user (`<base>/<orgId>/<userId>`): one process-wide manager would give
-   * every tenant the same install target. Uploaded archives are fetched by
-   * attachment id through an owner-scoped Sandbox client; no filesystem source
-   * path crosses the service boundary.
-   *
-   * @returns {Promise<(runContext: object) => object | null>}
-   */
-  async createSkillManagerFactory() {
-    const [{ createSkillManager, resolveSkillRoots }, { createSandboxClient }] =
-      await Promise.all([
-        import('../skills/manager.js'),
-        import('../infrastructure/sandbox/sandbox-client.js'),
-      ]);
-
-    return (runContext, lifecycleDeps = {}) => {
-      const orgId = runContext?.orgId;
-      const userId = runContext?.userId;
-      const sandboxSessionId = String(runContext?.sandboxSessionId || '').trim();
-      if (orgId == null || userId == null || !sandboxSessionId) return null;
-      let manager;
-      try {
-        const sandboxClient = createSandboxClient({
-          traceId: runContext?.traceId,
-          traceState: runContext?.traceState,
-          auth: {
-            actingUserId: String(userId),
-            actingOrganizationId: String(orgId),
-          },
-        });
-        manager = createSkillManager({
-          identity: { orgId, userId },
-          skillRoots: resolveSkillRoots(this.env, { orgId, userId }),
-          downloadArchive: ({ attachmentId, signal }) =>
-            sandboxClient.downloadDatasetContent(sandboxSessionId, attachmentId, {
-              signal,
-            }),
-          getAgentSession:
-            typeof lifecycleDeps.getAgentSession === 'function'
-              ? lifecycleDeps.getAgentSession
-              : undefined,
-          getMeta: () => ({
-            orgId,
-            userId,
-            conversationId: runContext?.conversationId,
-            sessionId: runContext?.agentSessionId,
-            runId: runContext?.runId,
-            traceId: runContext?.traceId,
-          }),
-        });
-      } catch (err) {
-        // A malformed identity must not take the whole Run down; the Run just
-        // runs without skill lifecycle tools.
-        console.warn(
-          '[skills] could not resolve per-user skill directory:',
-          err?.message || err,
-        );
-        return null;
-      }
-      return manager.userSkillRoot ? manager : null;
-    };
-  }
-
   createPiRuntimeFactory(opts = {}) {
     // Lazy class load so import of container stays free of SDK side effects.
     // agentDir must be concrete before PiRuntimeFactory.create() (fail at assembly).
