@@ -675,7 +675,8 @@ describe('immutable AgentVersion model + bindings', () => {
     // Explicit empty product layer so this test is env-independent
     // (AGENT_SYSTEM_PROMPT may be set in local .env).
     const ok = resolveAgentVersionBindings(bound, { productSystemPrompt: '' });
-    assert.match(ok.systemPrompt, /enterprise coding assistant/);
+    assert.match(ok.systemPrompt, /风控通用智能体/);
+    assert.doesNotMatch(ok.systemPrompt, /\*\*pi\*\*|coding assistant|pi-enterprise-sandbox/);
     assert.doesNotMatch(ok.systemPrompt, /^You are a helpful/);
     assert.equal(ok.resourceLoaderOptions.systemPrompt, ok.systemPrompt);
     assert.ok(Object.prototype.hasOwnProperty.call(ok.resourceLoaderOptions, 'systemPrompt'));
@@ -691,7 +692,8 @@ describe('immutable AgentVersion model + bindings', () => {
       productSystemPrompt: 'You are Acme Corp enterprise assistant.',
     });
     assert.match(ok.systemPrompt, /^You are Acme Corp enterprise assistant\./);
-    assert.match(ok.systemPrompt, /enterprise coding assistant/);
+    assert.match(ok.systemPrompt, /## Tools/);
+    assert.doesNotMatch(ok.systemPrompt, /风控通用智能体/);
     assert.match(ok.systemPrompt, /---/);
   });
 

@@ -13,6 +13,7 @@ import {
   extensionFactoryNames,
 } from '../../src/extensions/index.js';
 import { extractUsageSummary } from '../../src/extensions/observability/index.js';
+import { buildEnterpriseSystemPrompt } from '../../src/infrastructure/pi/enterprise-system-prompt.js';
 
 const RUN_CTX = Object.freeze({
   orgId: '01K0G2PAV8FPMVC9QHJG7JPN4Z',
@@ -389,6 +390,85 @@ describe('observability provider hooks (unit, fake ExtensionAPI)', () => {
       await h({ reason: 'startup' });
     }
     assert.equal(started, 1);
+  });
+
+  it('sandbox-bridge fills the Tools section from the run\'s bound tools', async () => {
+    const transport = Object.fromEntries(
+      SANDBOX_TRANSPORT_METHODS.map((m) => [m, async () => ({})]),
+    );
+    const factories = createEnterpriseExtensionBundle(RUN_CTX, {
+      sandboxTransport: transport,
+    });
+    const handlers = new Map();
+    /** @type {object[]} */
+    const registered = [];
+    const pi = {
+      registerTool(def) {
+        registered.push(def);
+      },
+      on(event, handler) {
+        if (!handlers.has(event)) handlers.set(event, []);
+        handlers.get(event).push(handler);
+      },
+    };
+    await factories[0](pi);
+
+    const base = buildEnterpriseSystemPrompt();
+    // Pi aggregates snippets/guidelines over the tools it actually holds; an
+    // MCP wrapper reaches the handler through the same aggregate.
+    const systemPromptOptions = {
+      selectedTools: [...registered.map((d) => d.name), 'mcp__github__create_pr'],
+      toolSnippets: {
+        ...Object.fromEntries(
+          registered
+            .filter((d) => d.promptSnippet)
+            .map((d) => [d.name, d.promptSnippet]),
+        ),
+        mcp__github__create_pr: 'Open a pull request',
+      },
+      promptGuidelines: [],
+    };
+
+    const results = [];
+    for (const h of handlers.get('before_agent_start') || []) {
+      results.push(await h({ type: 'before_agent_start', systemPrompt: base, systemPromptOptions }));
+    }
+    assert.equal(results.length, 1);
+    const next = results[0].systemPrompt;
+    for (const def of registered) {
+      assert.ok(
+        next.includes(`- \`${def.name}\`: ${def.promptSnippet}`),
+        `missing bound tool ${def.name}`,
+      );
+    }
+    assert.match(next, /^- `mcp__github__create_pr`: Open a pull request$/m);
+    assert.ok(next.startsWith('You are '));
+  });
+
+  it('sandbox-bridge leaves the prompt alone when no tool is bound', async () => {
+    const transport = Object.fromEntries(
+      SANDBOX_TRANSPORT_METHODS.map((m) => [m, async () => ({})]),
+    );
+    const factories = createEnterpriseExtensionBundle(RUN_CTX, {
+      sandboxTransport: transport,
+    });
+    const handlers = new Map();
+    const pi = {
+      registerTool() {},
+      on(event, handler) {
+        if (!handlers.has(event)) handlers.set(event, []);
+        handlers.get(event).push(handler);
+      },
+    };
+    await factories[0](pi);
+    const base = buildEnterpriseSystemPrompt();
+    for (const h of handlers.get('before_agent_start') || []) {
+      assert.equal(
+        await h({ type: 'before_agent_start', systemPrompt: base, systemPromptOptions: { selectedTools: [] } }),
+        undefined,
+      );
+      assert.equal(await h({ type: 'before_agent_start', systemPrompt: '' }), undefined);
+    }
   });
 
   it('observability session_start does not durable-write invented session.started', async () => {

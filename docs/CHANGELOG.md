@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **System prompt 不再自称 pi / coding assistant**: 默认身份改为「风控通用智能体」——一个通用企业智能体，风控/合规/运营是它当前的部署场景而不是能力边界；同时明确「用用户的语言回复」。原先挂在“For risk work:”下面的那条纪律（交代查了什么、没查什么、结论有多确定，并区分观察与推断）改为无条件生效，否则模型对任何它不归类为风控的任务都可以跳过。非空的 AgentVersion / `AGENT_SYSTEM_PROMPT` lead 会**替换**默认身份句而不是叠加，所以两个 lead 槽位都必须写完整人设，不能只写一条补充规则——`.env.example` 已写明。
+
+- **`## Available tools` 那份写死的 13 项闭合清单改为按 run 渲染**: 旧清单和内部 extension 包名一起去掉了，但没有换成一份“if present”的散文清单——那只是保真度更低的同一个错误：没启 `skill-lifecycle` 的 run 照样会读到 `skill_list`，而 `spawn_subagent` 谁都没提。工具的 name/description/parameters 本来就在本轮请求的 tools 数组里，prompt 里再抄一遍必然漂移。现在 `## Tools` 的正文由 `renderToolSurface` 从**本 run 实际绑定的工具**生成，数据源是每个工具定义上早就写好的 `promptSnippet` / `promptGuidelines`（sandbox-bridge、skill-lifecycle、subagent-spawn、user-interaction，以及 `mcp__<server>__<tool>` 包装器都有），由 Pi 按活的 registry 聚合；sandbox-bridge 在 `before_agent_start` 上把它拼进去。**顺带补回了此前完全丢失的 `promptGuidelines`**（仅 sandbox-bridge 的 13 个工具就有 31 条）——那是跨调用的工作流规则（例如 read 的“沿着 nextOffset 读完，不要重复同一页”），放在单个工具的 description 里天然错位，此前因为走 customPrompt 分支而哪儿都没去。没有拼接时 prompt 依然成立：`## Tools` 只说各工具自己的 schema 为准，外加 MCP 命名、审批会等待、缺能力就直说这三条静态跨工具规则。
+
 ### Added
 
 - **`ls` 现在可以列 Skill 目录（`find` / `grep` 仍然不行）**: 此前三个搜索工具一律拒绝 Skill 路径，模型只能 `read`——于是一个 Skill 除非在 `SKILL.md` 里自己写明，它随包发的 `reference/`、`scripts/` 就无从发现，渐进披露反而变成了看不见。这从来不是安全边界：只有调用者自己的目录会被绑进来，跨租户在构造上就搜不到。现在按工具区分：`ls` 放行，`find` / `grep` 保持关闭（全树内容检索恰好会把渐进披露想挡住的东西一次性拉进上下文，而模型总可以先 `ls` 再 `read` 那一个文件）。实现没有新开内部面——`ls` 沿用既有 search 面：`InternalSearchCommand` 本来就带着与签名绑定的 `org_id`/`user_id`，`_resolve_search_root` 是唯一的根解析接缝，它返回的 `public_prefix` 本来就负责把物理路径写回逻辑路径。用户层的裸根 `/home/sandbox/skill-user` **解析为调用者自己的 `<org>/<user>` 目录**（`ls` 的意义就是“不知道有什么才来看”，要求先写全自己的 org/user 等于把这次改动的收益退回去）；返回的每一项都带完整逻辑前缀，所以 `ls` 的结果可以直接喂给 `read`。`<root>/<其他租户>` 与只写到 `<root>/<org>` 的裸 org 段都拒绝——后者会枚举该 org 下的用户——并与格式错误的路径共用同一个不透明错误码，避免探测。物理目录由 `user_skill_dir_for()` 唯一决定，与执行时 bwrap 绑定走的是同一个函数。

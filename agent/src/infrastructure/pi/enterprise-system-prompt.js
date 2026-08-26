@@ -1,50 +1,113 @@
 /**
- * Enterprise system prompt — mirrors pi-coding-agent buildSystemPrompt shape
- * (tools + guidelines + skills progressive disclosure + cwd/date) without
- * pointing the model at /app/node_modules pi product docs.
+ * Enterprise system prompt — identity + path/skill contract as Pi customPrompt.
+ * Avoids the SDK default that points at host / node_modules docs.
  *
- * Skills: name/description injected by Pi formatSkillsForPrompt when the
- * ResourceLoader has loaded skill paths (additionalSkillPaths → SKILLS_ROOT).
- * Full SKILL.md is loaded on demand via the `read` tool.
+ * The tool *inventory* is deliberately not written here. Every tool this build
+ * registers already declares `promptSnippet` / `promptGuidelines` on its
+ * definition (sandbox-bridge, skill-lifecycle, subagent-spawn,
+ * user-interaction, and the `mcp__server__tool` wrappers), and Pi aggregates
+ * those for exactly the tools bound to a run. `renderToolSurface` turns that
+ * aggregate into the `## Tools` body and `applyToolSurface` splices it in on
+ * `before_agent_start`, so the section can never drift from the tool schemas
+ * actually sent on the request.
+ *
+ * With no surface applied the prompt is still correct — it just says the tool
+ * schemas are authoritative and leaves the inventory to them.
+ *
+ * Skills XML is appended later by Pi formatSkillsForPrompt when loadedSkills
+ * is non-empty and `read` exists.
  */
 
 import {
   LOGICAL_SKILL_ROOT,
   LOGICAL_WORKSPACE_ROOT,
-  SANDBOX_TOOL_NAMES,
 } from '../../extensions/sandbox-bridge/constants.js';
-import { EXTENSION_LOAD_ORDER } from '../../extensions/constants.js';
 
-/** One-line tool snippets for the default sandbox-bridge surface (plan §13). */
-export const ENTERPRISE_TOOL_SNIPPETS = Object.freeze({
-  read: 'Read workspace or skill files with offset/limit pagination',
-  write: 'Write utf-8/base64 files under the sandbox workspace only',
-  edit: 'Edit a workspace file with optimistic concurrency',
-  bash: 'Run shell commands in the sandbox workspace',
-  python: 'Execute Python in the sandbox (no host shell)',
-  process_start: 'Start a long-running managed process',
-  process_status: 'Poll managed process status',
-  process_read: 'Read managed process stdout/stderr',
-  process_kill: 'Signal a managed process',
-  submit_artifact: 'Publish a durable deliverable artifact from workspace',
-  ask_user: 'Request durable user input when the task cannot continue',
-});
+/** Heading the live tool surface is spliced under. */
+export const TOOL_SURFACE_HEADING = '## Tools';
+
+const IDENTITY = `You are 风控通用智能体 — a general-purpose enterprise agent whose current deployment serves risk, compliance, and operations teams. You work inside an isolated sandbox session. The task in front of you decides the work; the deployment is context, not a limit on what you can be asked. Reply in the language the user writes in.`;
 
 /**
- * @param {string[]} [toolNames]
- * @param {Record<string, string>} [snippets]
+ * Render the `## Tools` body from the options Pi assembled for this run.
+ *
+ * Input is Pi's `BuildSystemPromptOptions`: `selectedTools` is already
+ * filtered to tools present in the registry, and `toolSnippets` /
+ * `promptGuidelines` are aggregated from those tools' own definitions. Tool
+ * order is preserved rather than sorted — it is stable for a given
+ * AgentVersion, and a stable string keeps the provider's prefix cache warm.
+ *
+ * @param {{
+ *   selectedTools?: string[],
+ *   toolSnippets?: Record<string, string>,
+ *   promptGuidelines?: string[],
+ * }} [options]
+ * @returns {string} Empty when no tool is bound (caller leaves the section as-is).
  */
-export function formatEnterpriseToolsSection(
-  toolNames = [...SANDBOX_TOOL_NAMES],
-  snippets = ENTERPRISE_TOOL_SNIPPETS,
-) {
-  const lines = [];
-  for (const name of toolNames) {
-    const snip = snippets[name];
-    if (snip) lines.push(`- ${name}: ${snip}`);
-    else lines.push(`- ${name}`);
+export function renderToolSurface(options = {}) {
+  const selected = Array.isArray(options?.selectedTools)
+    ? options.selectedTools
+    : [];
+  const snippets =
+    options?.toolSnippets && typeof options.toolSnippets === 'object'
+      ? options.toolSnippets
+      : {};
+  const guidelines = Array.isArray(options?.promptGuidelines)
+    ? options.promptGuidelines
+    : [];
+
+  const seenTools = new Set();
+  const toolLines = [];
+  for (const raw of selected) {
+    const name = typeof raw === 'string' ? raw.trim() : '';
+    if (!name || seenTools.has(name)) continue;
+    seenTools.add(name);
+    const snippet = typeof snippets[name] === 'string' ? snippets[name].trim() : '';
+    toolLines.push(snippet ? `- \`${name}\`: ${snippet}` : `- \`${name}\``);
   }
-  return lines.length ? lines.join('\n') : '(none)';
+  if (toolLines.length === 0) return '';
+
+  const seenGuidelines = new Set();
+  const guidelineLines = [];
+  for (const raw of guidelines) {
+    const text = typeof raw === 'string' ? raw.trim() : '';
+    if (!text || seenGuidelines.has(text)) continue;
+    seenGuidelines.add(text);
+    guidelineLines.push(`- ${text}`);
+  }
+
+  const blocks = [`Bound to this run:\n${toolLines.join('\n')}`];
+  if (guidelineLines.length > 0) {
+    blocks.push(`Tool usage rules:\n${guidelineLines.join('\n')}`);
+  }
+  return blocks.join('\n\n');
+}
+
+/**
+ * Splice the rendered tool surface into an assembled system prompt.
+ *
+ * Insertion point is the `## Tools` heading, which `buildEnterpriseSystemPrompt`
+ * always emits (the contract is appended even behind an AgentVersion lead).
+ * Returns the prompt unchanged when there is no heading and when no tool is
+ * bound, so a run without this splice still gets a truthful prompt.
+ *
+ * @param {string} systemPrompt Fully assembled prompt (Pi `_baseSystemPrompt`).
+ * @param {Parameters<typeof renderToolSurface>[0]} [options]
+ * @returns {string}
+ */
+export function applyToolSurface(systemPrompt, options = {}) {
+  const prompt = typeof systemPrompt === 'string' ? systemPrompt : '';
+  if (!prompt) return prompt;
+  const surface = renderToolSurface(options);
+  if (!surface) return prompt;
+  const marker = `\n${TOOL_SURFACE_HEADING}\n`;
+  const at = prompt.indexOf(marker);
+  if (at === -1) return prompt;
+  const insertAt = at + marker.length;
+  // Pi always hands back the base prompt, so this is belt-and-braces: never
+  // stack two inventories under one heading if something re-applies.
+  if (prompt.startsWith(`${surface}\n\n`, insertAt)) return prompt;
+  return `${prompt.slice(0, insertAt)}${surface}\n\n${prompt.slice(insertAt)}`;
 }
 
 /**
@@ -55,9 +118,6 @@ export function formatEnterpriseToolsSection(
  *   systemPrompt?: string | null,
  *   workspaceRoot?: string,
  *   skillRoot?: string,
- *   toolNames?: string[],
- *   toolSnippets?: Record<string, string>,
- *   extensionNames?: string[],
  * }} [options]
  * @returns {string}
  */
@@ -70,35 +130,17 @@ export function buildEnterpriseSystemPrompt(options = {}) {
     '/',
   );
   const custom = String(options.systemPrompt || '').trim();
-  const toolNames = Array.isArray(options.toolNames)
-    ? options.toolNames
-    : [...SANDBOX_TOOL_NAMES];
-  const snippets = options.toolSnippets || ENTERPRISE_TOOL_SNIPPETS;
-  const extensionNames = Array.isArray(options.extensionNames)
-    ? options.extensionNames
-    : [...EXTENSION_LOAD_ORDER];
 
-  const toolsList = formatEnterpriseToolsSection(toolNames, snippets);
-  const extensionsList = extensionNames.map((n) => `- ${n}`).join('\n');
-
-  const base = `You are **pi**, an enterprise coding assistant running inside a sandboxed session (pi-enterprise-sandbox).
-
-## Paths (hard rules)
+  const contract = `## Paths (hard rules)
 - **User project / workspace**: \`${workspaceRoot}\` — read and write here. Relative paths resolve under this root.
 - **Skills (read-only)**: \`${skillRoot}\` — installed skill packages (\`SKILL.md\` + assets). Never write here.
 - Do **not** search or read host install trees such as \`/app\`, \`node_modules\`, or agent home. Those are not the user project and not skills.
 
-## Available tools
-${toolsList}
-
-Other tools (for example MCP) may appear depending on agent configuration. Prefer sandbox tools for file and command work.
-
-## Runtime extensions (platform — not user packages)
-These are already bound for this run; you do not install them:
-${extensionsList}
-- sandbox-bridge routes file/shell/python/process tools into the formal sandbox
-- enterprise-policy enforces risk/approval/rate limits on tool calls
-- observability records durable run/tool events for the UI
+${TOOL_SURFACE_HEADING}
+Each bound tool's own schema is authoritative; call any of them when they fit.
+- External systems appear as \`mcp__<server>__<tool>\`. Call those directly; there is no separate MCP gateway tool for you.
+- Do not invent an API for a capability no bound tool provides — say it is unavailable instead.
+- High-risk actions may wait on approval. Do not try to bypass policy.
 
 ## Skills (progressive disclosure)
 When a skills section is present below (or under \`${skillRoot}\`):
@@ -115,14 +157,14 @@ Skill directories are listable but not searchable: \`ls\` reaches them, \`find\`
 - Read a file only once you know which one you want.
 
 ## Guidelines
-- Be concise; show paths clearly when working with files
-- Use tools for real filesystem and command outcomes; do not invent command output
+- Be concise; show paths and evidence clearly
+- Use tools for real filesystem, command, and external-system outcomes; do not invent output or data
 - Prefer editing existing files over writing new ones when possible
-- Ordinary bash does not require approval; high-risk actions may wait on policy`;
+- Say what you checked, what you did not, and how confident the conclusion is; separate observed fact from inference`;
 
-  if (!custom) return base;
-  // AgentVersion.systemPrompt wins as the lead voice; keep enterprise path/tool contract.
-  return `${custom}\n\n---\n\n${base}`;
+  // AgentVersion / product lead owns voice when set; keep the path/tool contract.
+  if (custom) return `${custom}\n\n---\n\n${contract}`;
+  return `${IDENTITY}\n\n${contract}`;
 }
 
 /**
@@ -132,9 +174,14 @@ Skill directories are listable but not searchable: \`ls\` reaches them, \`find\`
  * 1. Non-empty AgentVersion.systemPrompt
  * 2. Else product layer from env (`opts.productSystemPrompt` /
  *    AGENT_SYSTEM_PROMPT)
- * 3. Else empty → full enterprise template only (avoids Pi default docs paths)
+ * 3. Else empty → default identity + enterprise contract (avoids Pi default
+ *    docs paths)
  *
- * Non-empty lead → author/product prompt + enterprise trailer.
+ * A non-empty lead *replaces* the default identity sentence rather than
+ * stacking with it, so two personas can never argue inside one prompt. Both
+ * lead slots are therefore whole-persona slots: a lead that is only a partial
+ * addendum ("always answer in 简体中文") silently drops the risk identity.
+ * `.env.example` says so for the env layer.
  *
  * @param {string | null | undefined} agentVersionSystemPrompt
  * @param {Parameters<typeof buildEnterpriseSystemPrompt>[0] & {
