@@ -17,7 +17,6 @@ from sandbox.paths import temp_id_for_workspace_id
 from sandbox.services.execution_context import SandboxExecutionContext
 from sandbox.services.transient_execution_stream import (
     SOURCE_EXECUTION,
-    full_log_location,
     transient_execution_stream,
 )
 from sandbox.trace import get_trace_id

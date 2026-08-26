@@ -658,6 +658,3 @@ export function Composer() {
     </>
   );
 }
-
-// Re-export gate helpers for tests / external use
-export { canSendAttachments, hasUploadingAttachments };

@@ -90,7 +90,7 @@ Change this file in the **same commit** as the implementation or evidence that j
 | ID | Criterion | Status | Evidence / notes |
 |----|-----------|--------|------------------|
 | F1 | Agent Card reachable | `done` | A2A surface + live gate |
-| F2 | Streaming | `done` | live gate |
+| F2 | Streaming | `done` | live gate. **2026-08-26:** the live gate never checked the terminal frame — `message/stream` / `tasks/resubscribe` ended after `working` with no `status-update(final=true)` because the A2A projector's run-status vocabulary (`run.succeeded`) did not match what the Run services emit (`run.status.changed` / `run.completed`, per plan.md §event vocabulary). Fixed, plus a ratchet that fails when a `run.*` eventType in `src/application` is not projectable: `agent/tests/a2a/a2a-terminal-event-vocabulary.unit.test.js`. |
 | F3 | Task query / cancel / resubscribe | `done` | live gate |
 | F4 | A2A Task ↔ Run mapping | `done` | task service + repos |
 | F5 | A2A SSE disconnect does not cancel Run | `done` | protocol design + gate notes |

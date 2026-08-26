@@ -22,7 +22,7 @@ from sandbox.config import settings
 from sandbox.app.domain.ulid import new_ulid
 from sandbox.isolation import IsolationBackend, LaunchSpec, build_isolation_backend
 from sandbox.models import ProcessStatus
-from sandbox.paths import SandboxPathScope, temp_id_for_workspace_id
+from sandbox.paths import temp_id_for_workspace_id
 from sandbox.security.path_validation import parse_sandbox_path
 from sandbox.services.execution_context import SandboxExecutionContext
 from sandbox.services.transient_execution_stream import (

@@ -24,7 +24,7 @@ import logging
 import threading
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Awaitable, Callable, Final, Protocol, TypeVar
+from typing import Any, Callable, Final, Protocol, TypeVar
 
 logger = logging.getLogger("sandbox.services.internal_plane_resources")
 

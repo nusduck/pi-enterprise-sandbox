@@ -20,6 +20,74 @@ import {
 } from '../application/trace-context.js';
 
 /**
+ * Upload streams the request body up before Sandbox answers, so its deadline
+ * has to cover the transfer, not just Sandbox think time. Downloads only wait
+ * for headers — the body is piped out afterwards, unbounded by design.
+ */
+export const UPLOAD_RESPONSE_TIMEOUT_MS = 10 * 60 * 1000;
+
+/**
+ * Bounded proxy fetch to Sandbox (AGENTS.md §2 — no unbounded outbound call).
+ *
+ * The deadline covers everything up to the response headers, then is cleared:
+ * a stalled Sandbox can no longer pin a browser request and a BFF socket open,
+ * while a large body still streams for as long as it needs.
+ *
+ * @param {string} url
+ * @param {RequestInit} [init]
+ * @param {number} [deadlineMs]
+ * @returns {Promise<Response>}
+ */
+export async function fetchSandboxBounded(
+  url,
+  init = {},
+  deadlineMs = config.SANDBOX_REQUEST_TIMEOUT_MS,
+) {
+  const { signal: externalSignal, ...rest } = init;
+  const controller = new AbortController();
+  let timer = setTimeout(() => controller.abort(), deadlineMs);
+  const onAbort = () => controller.abort();
+  if (externalSignal?.aborted) controller.abort();
+  else externalSignal?.addEventListener('abort', onAbort, { once: true });
+  try {
+    const resp = await fetch(url, { ...rest, signal: controller.signal });
+    clearTimeout(timer);
+    timer = null;
+    return resp;
+  } catch (err) {
+    // A caller-driven abort (browser hung up) keeps its own error.
+    if (controller.signal.aborted && !externalSignal?.aborted) {
+      const timeout = new Error(
+        `Sandbox request timed out after ${deadlineMs}ms`,
+      );
+      timeout.code = 'SANDBOX_TIMEOUT';
+      timeout.status = 504;
+      throw timeout;
+    }
+    throw err;
+  } finally {
+    if (timer !== null) clearTimeout(timer);
+    externalSignal?.removeEventListener('abort', onAbort);
+  }
+}
+
+/**
+ * Write a 504 for a Sandbox proxy deadline; rethrow anything else.
+ * @param {unknown} err
+ * @param {import('node:http').ServerResponse} res
+ * @param {string} message
+ */
+function handleSandboxProxyError(err, res, message) {
+  if (err?.code !== 'SANDBOX_TIMEOUT') throw err;
+  if (!res.headersSent) {
+    res.writeHead(504, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: message, code: 'SANDBOX_TIMEOUT' }));
+  } else if (!res.writableEnded) {
+    res.end();
+  }
+}
+
+/**
  * Headers for sandbox file proxies: service key + browser Bearer (never acting*).
  * @param {import('node:http').IncomingMessage | null | undefined} req
  * @param {Record<string, string>} [extra]
@@ -272,9 +340,15 @@ export async function handleFileDownload(parsedUrl, res, req = null) {
   }
 
   const sanUrl = `${config.SANDBOX_BASE_URL}/sessions/${encodeURIComponent(sessionId)}/files/download?path=${encodeURIComponent(filePath)}`;
-  const sanRes = await fetch(sanUrl, {
-    headers: sandboxProxyHeaders(req, {}, sessionAccess.sandboxAuth),
-  });
+  let sanRes;
+  try {
+    sanRes = await fetchSandboxBounded(sanUrl, {
+      headers: sandboxProxyHeaders(req, {}, sessionAccess.sandboxAuth),
+    });
+  } catch (err) {
+    handleSandboxProxyError(err, res, 'File service timed out');
+    return;
+  }
 
   if (!sanRes.ok) {
     res.writeHead(sanRes.status, { 'Content-Type': 'application/json' });
@@ -380,9 +454,15 @@ export async function handleArtifactDownload(parsedUrl, res, req = null) {
 
   const sanPath = sb.artifactDownloadPath(sessionId, artifactId);
   const sanUrl = `${config.SANDBOX_BASE_URL}${sanPath}`;
-  const sanRes = await fetch(sanUrl, {
-    headers: sandboxProxyHeaders(req, {}, sessionAccess.sandboxAuth),
-  });
+  let sanRes;
+  try {
+    sanRes = await fetchSandboxBounded(sanUrl, {
+      headers: sandboxProxyHeaders(req, {}, sessionAccess.sandboxAuth),
+    });
+  } catch (err) {
+    handleSandboxProxyError(err, res, 'Artifact service timed out');
+    return;
+  }
 
   if (!sanRes.ok) {
     res.writeHead(sanRes.status, { 'Content-Type': 'application/json' });
@@ -537,7 +617,7 @@ export async function handleFileUpload(parsedUrl, req, res) {
 
     // Stream file to sandbox via fetch (Readable stream body)
     const bodyStream = createReadStream(spill.filePath);
-    const sanRes = await fetch(
+    const sanRes = await fetchSandboxBounded(
       `${config.SANDBOX_BASE_URL}/sessions/${sessionId}/files/upload`,
       {
         method: 'POST',
@@ -545,6 +625,7 @@ export async function handleFileUpload(parsedUrl, req, res) {
         body: bodyStream,
         duplex: 'half',
       },
+      UPLOAD_RESPONSE_TIMEOUT_MS,
     );
 
     const text = await sanRes.text();

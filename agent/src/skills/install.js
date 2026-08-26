@@ -715,8 +715,3 @@ export function describeInstalledSkills(skillRoots, opts = {}) {
   }
   return [...byName.values()].sort((a, b) => a.name.localeCompare(b.name));
 }
-
-/** Test-only helpers for failure injection and cleanup assertions. */
-export function _testHelpers() {
-  return { copyTree, rmrf, digestDir };
-}

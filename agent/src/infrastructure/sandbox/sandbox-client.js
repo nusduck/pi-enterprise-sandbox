@@ -1,9 +1,9 @@
 /**
  * Sandbox HTTP Client — typed wrapper around fetch to the sandbox FastAPI service.
  *
- * Prefer `createSandboxClient({ traceId, auth })` for request-scoped Agent turns.
- * Module-level helpers use ephemeral clients so concurrent requests never share
- * mutable trace state.
+ * `createSandboxClient({ traceId, auth })` is the entry point — trace state is
+ * per-client, so a request-scoped client is what keeps concurrent Agent turns
+ * from sharing it. The one module-level export left is the `/health` probe.
  *
  * Auth model:
  * - Always send service X-API-Key when configured.
@@ -29,6 +29,19 @@ import { config, resolveSandboxAuthHeader } from '../../../config.js';
 import { createTraceHeaders } from './trace-context.js';
 
 const BASE = config.SANDBOX_BASE_URL;
+
+/**
+ * AGENTS.md §2: every outbound call is bounded. A hung Sandbox must not pin a
+ * conversation-delete GC, an operator process call or a health probe forever.
+ *
+ * `DEFAULT_SANDBOX_TIMEOUT_MS` bounds the whole request/response for the
+ * control-plane calls. Byte-streaming responses (`streaming: true`) bound only
+ * time-to-headers — the deadline is cleared once headers land so a large
+ * download is not aborted mid-body.
+ */
+const DEFAULT_SANDBOX_TIMEOUT_MS = 30_000;
+const DEFAULT_SANDBOX_STREAM_HEADERS_TIMEOUT_MS = 60_000;
+const SANDBOX_HEALTH_TIMEOUT_MS = 3_000;
 
 /**
  * Path of one managed process under the session that owns it.
@@ -150,11 +163,14 @@ export function createSandboxClient({ traceId = null, traceState = null, auth = 
     const {
       headers: extraHeaders,
       signal: externalSignal,
-      timeoutMs = null,
+      streaming = false,
+      timeoutMs = streaming
+        ? DEFAULT_SANDBOX_STREAM_HEADERS_TIMEOUT_MS
+        : DEFAULT_SANDBOX_TIMEOUT_MS,
       ...rest
     } = opts;
     const controller = new AbortController();
-    const timer = timeoutMs == null
+    let timer = timeoutMs == null
       ? null
       : setTimeout(() => controller.abort(), timeoutMs);
     const onAbort = () => controller.abort();
@@ -165,6 +181,11 @@ export function createSandboxClient({ traceId = null, traceState = null, auth = 
         signal: controller.signal,
         headers: headers(extraHeaders || {}),
       });
+      if (streaming && timer !== null) {
+        // Deadline covered time-to-headers; the body is consumed by the caller.
+        clearTimeout(timer);
+        timer = null;
+      }
       if (!resp.ok) {
         const detail = await resp.json().catch(() => ({ detail: resp.statusText }));
         throw new SandboxError(resp.status, detail.detail || resp.statusText, path);
@@ -345,14 +366,14 @@ export function createSandboxClient({ traceId = null, traceState = null, auth = 
     async downloadFileStream(sessionId, path, options = {}) {
       return sbFetch(
         `/sessions/${sessionId}/files/download?path=${encodeURIComponent(path)}`,
-        { signal: options.signal },
+        { signal: options.signal, streaming: true },
       );
     },
 
     async downloadDatasetContent(sessionId, datasetId, options = {}) {
       return sbFetch(
         `/sessions/${encodeURIComponent(sessionId)}/datasets/${encodeURIComponent(datasetId)}/content`,
-        { signal: options.signal },
+        { signal: options.signal, streaming: true },
       );
     },
 
@@ -381,6 +402,7 @@ export function createSandboxClient({ traceId = null, traceState = null, auth = 
     async downloadArtifactStream(sessionId, artifactId, options = {}) {
       return sbFetch(this.artifactDownloadPath(sessionId, artifactId), {
         signal: options.signal,
+        streaming: true,
       });
     },
 
@@ -411,6 +433,7 @@ export function createSandboxClient({ traceId = null, traceState = null, auth = 
       try {
         const resp = await fetch(`${BASE}/health`, {
           headers: resolveSandboxAuthHeader(),
+          signal: AbortSignal.timeout(SANDBOX_HEALTH_TIMEOUT_MS),
         });
         if (!resp.ok) return null;
         return resp.json();
@@ -421,76 +444,11 @@ export function createSandboxClient({ traceId = null, traceState = null, auth = 
   };
 }
 
-// ── Module-level helpers (ephemeral client per call — no shared request state) ──
-
-/** Generate or return a preferred trace id without mutating shared state. */
-export function ensureTraceId(preferred) {
-  return preferred || randomUUID();
-}
-
-export function artifactDownloadPath(sessionId, artifactId) {
-  return `/sessions/${sessionId}/artifacts/${encodeURIComponent(artifactId)}/download`;
-}
-
-export async function removeSessionWorkspace(sessionId, auth = null) {
-  return createSandboxClient({ auth }).removeSessionWorkspace(sessionId);
-}
-
-export async function authRegister(body) {
-  return createSandboxClient().authRegister(body);
-}
-
-export async function authLogin(body) {
-  return createSandboxClient().authLogin(body);
-}
-
-export async function authMe(auth = null) {
-  return createSandboxClient({ auth }).authMe();
-}
-
-export async function readFile(sessionId, path) {
-  return createSandboxClient().readFile(sessionId, path);
-}
-
-export async function writeFile(sessionId, path, content) {
-  return createSandboxClient().writeFile(sessionId, path, content);
-}
-
-export async function listFiles(sessionId, dir = '.') {
-  return createSandboxClient().listFiles(sessionId, dir);
-}
-
-export async function lsFiles(sessionId, body = {}) {
-  return createSandboxClient().lsFiles(sessionId, body);
-}
-
-export async function findFiles(sessionId, body = {}) {
-  return createSandboxClient().findFiles(sessionId, body);
-}
-
-export async function grepFiles(sessionId, body = {}) {
-  return createSandboxClient().grepFiles(sessionId, body);
-}
-
-export async function downloadFileStream(sessionId, path) {
-  return createSandboxClient().downloadFileStream(sessionId, path);
-}
-
-export async function submitArtifact(sessionId, name, path, mimeType) {
-  return createSandboxClient().submitArtifact(sessionId, name, path, mimeType);
-}
-
-export async function listArtifacts(sessionId) {
-  return createSandboxClient().listArtifacts(sessionId);
-}
-
-export async function downloadArtifactStream(sessionId, artifactId, options = {}) {
-  return createSandboxClient().downloadArtifactStream(
-    sessionId,
-    artifactId,
-    options,
-  );
-}
+// ── Module-level helpers ─────────────────────────────────────────────────
+// Only the /health probe still has a module-level caller (`http-main.js`
+// imports it dynamically). Everything else goes through `createSandboxClient`
+// so trace state stays request-scoped; the old per-route wrappers pointed at
+// retired Sandbox routes and are gone. Do not add one back without a caller.
 
 export async function checkHealth() {
   return createSandboxClient().checkHealth();

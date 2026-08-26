@@ -15,9 +15,8 @@ from __future__ import annotations
 
 import hashlib
 import json
-import math
 import re
-from typing import Any, Mapping, MutableSet
+from typing import Any, MutableSet
 
 TOOL_REQUEST_HASH_VERSION = 1
 TOOL_NAME_MAX_LEN = 255

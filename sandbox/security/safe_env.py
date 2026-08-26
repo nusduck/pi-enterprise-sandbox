@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import os
 import re
-from typing import Any, Mapping
+from typing import Mapping
 
 # Safe environment that excludes host secrets.
 # The sandbox service process may have tokens in its own environment;
@@ -221,14 +221,3 @@ def safe_env(
             env[name] = str(value)
     return env
 
-
-def sanitize_for_log(value: str, sensitive_keys: list[str] | None = None) -> str:
-    """Redact sensitive values from log output."""
-    keys = sensitive_keys or [
-        "password", "secret", "token", "api_key",
-        "authorization", "cookie", "auth", "key",
-    ]
-    sanitized = value
-    for key in keys:
-        sanitized = sanitized.replace(key, "***")
-    return sanitized

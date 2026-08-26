@@ -13,9 +13,11 @@ import { config } from '../config.js';
 import { authorizeSandboxSession } from '../application/run-access-service.js';
 import {
   discardRequestBody,
+  fetchSandboxBounded,
   mapUploadErrorBody,
   resolveUploadTraceId,
   sandboxProxyHeaders,
+  UPLOAD_RESPONSE_TIMEOUT_MS,
 } from './files.js';
 
 function writeJson(res, status, body, traceId) {
@@ -204,7 +206,7 @@ export async function handleDatasetUpload(conversationId, parsedUrl, req, res) {
 
   const bounded = createBoundedDatasetUploadBody(req, maxBytes);
   try {
-    const sanRes = await fetch(
+    const sanRes = await fetchSandboxBounded(
       `${config.SANDBOX_BASE_URL}/sessions/${encodeURIComponent(sessionId)}/datasets`,
       {
         method: 'POST',
@@ -213,6 +215,7 @@ export async function handleDatasetUpload(conversationId, parsedUrl, req, res) {
         duplex: 'half',
         signal: upstreamAbort.signal,
       },
+      UPLOAD_RESPONSE_TIMEOUT_MS,
     );
 
     const text = await sanRes.text();
@@ -319,7 +322,7 @@ export async function handleListDatasets(
       },
       sessionAccess.sandboxAuth,
     );
-    const sanRes = await fetch(
+    const sanRes = await fetchSandboxBounded(
       `${config.SANDBOX_BASE_URL}/sessions/${encodeURIComponent(sessionId)}/datasets`,
       { headers },
     );

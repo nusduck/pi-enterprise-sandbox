@@ -133,24 +133,11 @@ export const ApprovalDecisionSchema = z
   })
   .passthrough();
 
-// Re-export runtime event schemas for convenience
-export {
-  RuntimeEventSchema,
-  parseRuntimeEvent,
-  makeRuntimeEvent,
-  RUNTIME_EVENT_TYPES,
-  CreateRunResponseSchema,
-  RunDetailSchema,
-  ConversationEventsResponseSchema,
-} from './events';
-export type {
-  RuntimeEvent,
-  RuntimeEventType,
-  CreateRunResponse,
-  RunDetail,
-  PersistedAgentEvent,
-  ConversationEventsResponse,
-} from './events';
+// The conversation-events contract is the one runtime-event symbol the API
+// client reaches for through this module; everything else imports ./events
+// directly, so no other name is re-exported here.
+export { ConversationEventsResponseSchema } from './events';
+export type { ConversationEventsResponse } from './events';
 
 export type AuthUser = z.infer<typeof AuthUserSchema>;
 export type AuthResponse = z.infer<typeof AuthResponseSchema>;

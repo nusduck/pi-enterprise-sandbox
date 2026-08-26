@@ -46,6 +46,14 @@ HOTSPOT_LINE_BUDGETS = {
     "sandbox/app/persistence/repositories/tool_execution_claim_validator.py": 1_111,
     "sandbox/config.py": 1_491,
     "sandbox/services/process_manager.py": 1_773,
+    # frontend/src joined this ratchet on 2026-08-26 (full-repo standards
+    # review): AGENTS.md §3 applies to every production file, but only
+    # agent/ and sandbox/ were pinned, so these three grew past 1000 lines
+    # unnoticed. Pinned at their current length — split, do not raise.
+    "frontend/src/features/chat/ChatContext.tsx": 1_456,
+    "frontend/src/features/chat/entityBridge.ts": 1_176,
+    "frontend/src/shared/state/runReducer.ts": 1_492,
+    "frontend/src/widgets/runtime-steps/InlineRuntimeSteps.tsx": 1_011,
 }
 
 
@@ -53,9 +61,20 @@ def _production_sources() -> list[Path]:
     sources = [
         *ROOT.joinpath("agent", "src").rglob("*.js"),
         *ROOT.joinpath("sandbox").rglob("*.py"),
+        *ROOT.joinpath("frontend", "src").rglob("*.ts"),
+        *ROOT.joinpath("frontend", "src").rglob("*.tsx"),
+        *ROOT.joinpath("api-server", "src").rglob("*.js"),
     ]
     sources.extend(ROOT.joinpath("agent").glob("*.js"))
-    return sorted(path for path in sources if "__pycache__" not in path.parts)
+    sources.extend(ROOT.joinpath("api-server").glob("*.js"))
+    return sorted(
+        path
+        for path in sources
+        if not any(
+            part in LOCAL_GENERATED_DIRECTORIES
+            for part in path.relative_to(ROOT).parts
+        )
+    )
 
 
 def test_production_source_files_respect_line_budgets() -> None:

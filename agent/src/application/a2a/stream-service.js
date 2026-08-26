@@ -183,6 +183,8 @@ export class A2aStreamService {
     const allowedKinds = new Set(streamKindsForMethod(input.method));
     /** @type {string | null} */
     let lastA2aStatus = null;
+    // A2A 0.3 §3.1.2: a task-lifecycle stream closes on a `final: true` frame.
+    let emittedFinal = false;
 
     // Initial Task snapshot — no SSE id (PR-12 severe: do not use taskId as event id).
     if (input.includeInitialTask !== false) {
@@ -264,7 +266,41 @@ export class A2aStreamService {
       if (!ok) return false;
       // Advance only after successful write (matches PR-10 emitEnvelope).
       lastEmitted = projected.sequence;
+      if (projected.result?.final === true) emittedFinal = true;
       return true;
+    };
+
+    /**
+     * Close the task-lifecycle stream on a terminal frame.
+     *
+     * The journal normally carries a projectable terminal transition
+     * (`run.completed` / `run.failed` / `run.cancelled`). When it does not —
+     * resume past it, or a Run whose terminal event never projected — the
+     * authoritative Run status still terminates the subscription, and a client
+     * that only reads the stream would otherwise never see a terminal state.
+     *
+     * @param {string | null} status — A2A task status
+     */
+    const ensureFinalFrame = async (status) => {
+      if (emittedFinal || stopped()) return;
+      if (!status || !isTerminalA2aTaskStatus(status)) return;
+      if (!allowedKinds.has('status-update')) return;
+      const outbound = prepareA2aStreamResult({
+        kind: 'status-update',
+        taskId: mapping.a2aTaskId,
+        contextId: mapping.contextId || mapping.a2aTaskId,
+        status: {
+          state: status,
+          timestamp: new Date(this.now()).toISOString(),
+        },
+        final: true,
+        metadata: { sequence: lastEmitted },
+      });
+      if (!outbound) return;
+      // Synthesized frame is not journal-backed — no SSE id to resume from.
+      if (await emitRpc(jsonRpcSuccess(input.rpcId, outbound), { omitId: true })) {
+        emittedFinal = true;
+      }
     };
 
     /**
@@ -322,12 +358,14 @@ export class A2aStreamService {
         ) {
           terminalStatus =
             terminalStatus || projectRunStatusToA2a(confirm.status);
+          await ensureFinalFrame(terminalStatus);
           return { lastSequence: lastEmitted, status: terminalStatus, mode };
         }
       }
     }
 
     if (terminalStatus || stopped()) {
+      await ensureFinalFrame(terminalStatus);
       return { lastSequence: lastEmitted, status: terminalStatus, mode };
     }
 
@@ -456,15 +494,19 @@ export class A2aStreamService {
             }
             sawWork = true;
           }
-          if (page.terminal && (!page.events || page.events.length === 0)) {
+          // A full page may hide later events (the terminal one included) —
+          // only trust an ambient terminal status once the journal is drained.
+          const drained =
+            !page.events?.length || page.events.length < this.historyPageSize;
+          if (page.terminal && drained) {
             terminalStatus =
               terminalStatus || projectRunStatusToA2a(page.status);
             break;
           }
-          if (runStatus && isTerminalRunStatus(runStatus)) {
+          if (runStatus && isTerminalRunStatus(runStatus) && drained) {
             terminalStatus =
               terminalStatus || projectRunStatusToA2a(runStatus);
-            if (!page.events?.length) break;
+            break;
           }
         } catch {
           // Transient read — retry while connected.
@@ -483,6 +525,7 @@ export class A2aStreamService {
       }
     }
 
+    await ensureFinalFrame(terminalStatus);
     return { lastSequence: lastEmitted, status: terminalStatus, mode };
   }
 
