@@ -190,7 +190,14 @@ class ArtifactManager:
             else path.lstrip("/")
         )
         display = name or Path(stored_path).name or "artifact"
-        mime = mime_type or mimetypes.guess_type(display)[0] or "application/octet-stream"
+        # A titled display name ("随机 Markdown 文档") carries no extension;
+        # the stored path does, so it decides the type in that case.
+        mime = (
+            mime_type
+            or mimetypes.guess_type(display)[0]
+            or mimetypes.guess_type(stored_path)[0]
+            or "application/octet-stream"
+        )
 
         org_s = (org_id or "").strip()
         user_s = (user_id or "").strip()

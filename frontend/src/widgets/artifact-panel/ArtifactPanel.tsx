@@ -127,7 +127,7 @@ export function ArtifactPanel({
                 <a
                   className="rtc-link-btn artifact-download-btn"
                   href={safe}
-                  download={downloadAttrName(a.name)}
+                  download={downloadAttrName(a.name, a.path)}
                   onClick={(e) => e.stopPropagation()}
                 >
                   <span aria-hidden="true">↓</span>

@@ -374,9 +374,18 @@ export class TraceSpanRepository {
       throw new Error('trace span cannot be its own parent');
     }
     const runId = input.runId ? assertUlid(input.runId, 'runId') : null;
-    const existing = await this.db('trace_spans')
-      .where({ trace_id: traceId, span_id: spanId })
-      .first();
+    // REPEATABLE READ: a non-locking SELECT freezes a snapshot for the whole
+    // transaction, so CAS retries livelock against a newer committed row
+    // (streaming watermark vs GET /trace materialize). Locking reads see the
+    // latest version and serialize writers on this span.
+    let existingQuery = this.db('trace_spans').where({
+      trace_id: traceId,
+      span_id: spanId,
+    });
+    if (this.db.isTransaction === true) {
+      existingQuery = existingQuery.forUpdate();
+    }
+    const existing = await existingQuery.first();
 
     if (
       existing &&
@@ -475,26 +484,18 @@ export class TraceSpanRepository {
         org_id: scope.orgId,
         user_id: scope.userId,
       });
-      // attributes_json contains the internal watermark. Use it as an
-      // optimistic token so a concurrent materializer cannot be overwritten by
-      // a stale ordinary span update that read an older watermark.
+      // Watermark lives in attributes_json; pair it with updated_at so a
+      // status-only writer still invalidates a stale merge.
       if (existing.attributes_json == null) {
         update = update.whereNull('attributes_json');
       } else if (typeof update.whereRaw === 'function' && this.db.client) {
-        // MySQL compares a JSON column to a quoted string as different JSON
-        // types. CAST the token back to JSON so the CAS is semantic, not a
-        // brittle byte-for-byte string comparison.
+        // CAST: MySQL treats JSON vs quoted string as different types.
         update = update.whereRaw('attributes_json = CAST(? AS JSON)', [
           JSON.stringify(jsonObject(existing.attributes_json)),
         ]);
       } else {
-        // Connection-free fakes and minimal query adapters may not implement
-        // whereRaw; their JSON values are represented as the original string.
         update = update.andWhere('attributes_json', existing.attributes_json);
       }
-      // Include the row timestamp in the CAS as well. A concurrent update may
-      // legitimately leave attributes_json unchanged while changing status or
-      // lifecycle fields; that update must still force a re-read before merge.
       if (existing.updated_at == null) {
         update = update.whereNull('updated_at');
       } else {
@@ -520,9 +521,7 @@ export class TraceSpanRepository {
           created_at: toMysqlDateTime(now),
         });
       } catch (err) {
-        // Two restart-safe materializers can observe an absent span at the
-        // same time. Re-read the winner and apply the normal owner/merge path
-        // instead of surfacing a transient duplicate-key failure.
+        // Concurrent first-writers: re-read the winner and merge.
         if (/** @type {{ code?: string }} */ (err)?.code !== 'ER_DUP_ENTRY') {
           throw err;
         }

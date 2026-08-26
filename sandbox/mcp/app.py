@@ -211,13 +211,15 @@ async def artifact_download(request: Request) -> Response:
             return
 
     filename = str(metadata.get("name", "artifact"))
+    # Display names are titles; the extension may live only in the path.
+    stored_path = str(metadata.get("path") or "")
     media_type = str(metadata.get("mime_type") or "application/octet-stream")
     return StreamingResponse(
         body(),
         media_type=media_type,
         headers={
-            "Content-Disposition": content_disposition_attachment(filename),
-            "X-Artifact-Filename": artifact_filename_header(filename),
+            "Content-Disposition": content_disposition_attachment(filename, stored_path),
+            "X-Artifact-Filename": artifact_filename_header(filename, stored_path),
         },
     )
 

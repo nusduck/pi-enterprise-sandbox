@@ -1297,3 +1297,28 @@ class TestArtifactDisposition:
         encoded.encode("latin-1")
         assert "示例" not in encoded
         assert "%E7%A4%BA%E4%BE%8B.md" in encoded
+
+
+class TestArtifactExtensionFromPath:
+    """`submit_artifact` display names are titles: `随机 Markdown 文档` with the
+    extension only in the stored path. Downloads must still land as `.md`."""
+
+    def test_titled_name_borrows_extension_from_path(self):
+        header = artifact_content_disposition(
+            "随机 Markdown 文档", "random-markdown.md"
+        )
+        assert header.encode("latin-1")
+        assert 'filename="Markdown.md"' in header
+        assert header.endswith("%E9%9A%8F%E6%9C%BA%20Markdown%20%E6%96%87%E6%A1%A3.md")
+
+    def test_own_extension_wins_over_path(self):
+        header = artifact_content_disposition("notes.md", "workspace/other.txt")
+        assert 'filename="notes.md"' in header
+        assert header.endswith("notes.md")
+
+    def test_filename_header_carries_the_path_extension(self):
+        assert artifact_filename_header("示例", "sub/dir/demo.md") == "%E7%A4%BA%E4%BE%8B.md"
+
+    def test_no_extension_anywhere_is_left_alone(self):
+        header = artifact_content_disposition("报告", "workspace/report")
+        assert 'filename="download"' in header

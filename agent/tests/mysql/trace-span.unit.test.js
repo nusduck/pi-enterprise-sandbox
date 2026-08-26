@@ -205,6 +205,53 @@ describe('durable trace span projection', () => {
     assert.equal(publicSpan.attributes.projectedSequence, undefined);
   });
 
+  it('commits the event when trace projection hits a CAS livelock', async () => {
+    // Projection is rebuildable from run_events. A REPEATABLE READ snapshot
+    // livelock on the Run root span must not roll back the ledger row or the
+    // executor will mark a successful agent loop FAILED.
+    const state = createFakeState();
+    const knex = createFakeKnex(state);
+    state.tables.runs = [
+      {
+        run_id: RUN,
+        org_id: ORG,
+        user_id: USER,
+        trace_id: TRACE,
+        next_event_sequence: 0,
+      },
+    ];
+    state.tables.run_events = [];
+    state.tables.trace_spans = [];
+    const projector = {
+      projectRunEvent: async () => {
+        throw new Error('root executor must not be used');
+      },
+      forExecutor() {
+        return {
+          projectRunEvent: async () => {},
+          advanceRunProjectionWatermark: async () => {
+            throw new Error('trace span optimistic upsert did not converge');
+          },
+        };
+      },
+    };
+    const repo = new RunEventRepository(knex, { traceSpans: projector });
+
+    const stored = await repo.append({
+      eventId: '01K0G2PAV8FPMVC9QHJG7JPN5A',
+      runId: RUN,
+      orgId: ORG,
+      userId: USER,
+      eventType: 'message.completed',
+      payloadJson: { data: { text: 'done' } },
+      traceId: TRACE,
+    });
+
+    assert.equal(stored.eventType, 'message.completed');
+    assert.equal(state.tables.run_events.length, 1);
+    assert.equal(state.tables.runs[0].next_event_sequence, 1);
+  });
+
   it('upserts a span with fake knex without requiring a real MySQL driver', async () => {
     const state = createFakeState();
     const knex = createFakeKnex(state);
@@ -680,6 +727,89 @@ describe('durable trace span projection', () => {
     assert.equal(JSON.parse(root.attributes_json).projectedSequence, 3);
     assert.equal(root.org_id, ORG);
     assert.equal(root.user_id, USER);
+  });
+
+  it('locks the span row when upserting inside a transaction', async () => {
+    const state = createFakeState();
+    const knex = createFakeKnex(state);
+    state.tables.trace_spans = [];
+    await knex.transaction(async (trx) => {
+      const repo = new TraceSpanRepository(trx, {
+        now: () => new Date('2026-07-19T00:00:00.000Z'),
+      });
+      await repo.upsert({
+        orgId: ORG,
+        userId: USER,
+        traceId: TRACE,
+        spanId: 'c'.repeat(16),
+        runId: RUN,
+        kind: 'model',
+        name: 'Model call',
+        status: 'running',
+        startedAt: '2026-07-19T00:00:00.000Z',
+      });
+    });
+    assert.ok(
+      (state.lockCalls || []).some(
+        (call) => call.table === 'trace_spans' && call.mode === 'update',
+      ),
+      'transactional upsert must SELECT … FOR UPDATE so retries see the latest row',
+    );
+  });
+
+  it('does not livelock when a REPEATABLE READ snapshot is already stale', async () => {
+    // MySQL REPEATABLE READ: a non-locking SELECT in the append transaction
+    // freezes the Run root span. GET /trace materialize then commits a newer
+    // watermark. CAS retries that re-read the snapshot never match. Production
+    // Run 01M0YZ6C0HZAQX1GGZ8CHAA9K5 failed this way after 916 events.
+    const state = createFakeState();
+    const baseKnex = createFakeKnex(state);
+    state.tables.trace_spans = [];
+    const seed = new TraceSpanRepository(baseKnex, {
+      now: () => new Date('2026-07-19T00:00:00.000Z'),
+    });
+    await seed.advanceRunProjectionWatermark(
+      { runId: RUN, traceId: TRACE, createdAt: '2026-07-19T00:00:00.000Z' },
+      { orgId: ORG, userId: USER },
+      1,
+    );
+    const snapshot = { ...state.tables.trace_spans[0] };
+    const live = state.tables.trace_spans[0];
+    const liveAttrs = JSON.parse(live.attributes_json);
+    liveAttrs.projectedSequence = 5;
+    live.attributes_json = JSON.stringify(liveAttrs);
+    live.updated_at = '2026-07-19 00:00:05.000';
+
+    const trxKnex = (tableName) => {
+      const query = baseKnex(tableName);
+      let locked = false;
+      const origForUpdate = query.forUpdate.bind(query);
+      query.forUpdate = () => {
+        locked = true;
+        return origForUpdate();
+      };
+      const origFirst = query.first.bind(query);
+      query.first = async () => {
+        if (tableName !== 'trace_spans') return origFirst();
+        const row = locked ? state.tables.trace_spans[0] : snapshot;
+        return row ? { ...row } : undefined;
+      };
+      return query;
+    };
+    trxKnex.isTransaction = true;
+    const repo = new TraceSpanRepository(trxKnex, {
+      now: () => new Date('2026-07-19T00:00:06.000Z'),
+    });
+
+    await repo.advanceRunProjectionWatermark(
+      { runId: RUN, traceId: TRACE, createdAt: '2026-07-19T00:00:00.000Z' },
+      { orgId: ORG, userId: USER },
+      2,
+    );
+    assert.equal(
+      JSON.parse(state.tables.trace_spans[0].attributes_json).projectedSequence,
+      5,
+    );
   });
 
   it('does not let stale replay reopen a terminal span', async () => {

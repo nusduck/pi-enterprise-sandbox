@@ -19,6 +19,14 @@ import {
   SequenceAllocationError,
 } from '../errors.js';
 
+function isTraceProjectionConvergeError(err) {
+  const message = String(err?.message ?? '');
+  return (
+    message.includes('optimistic upsert did not converge') ||
+    message.includes('duplicate-key upsert did not converge')
+  );
+}
+
 /**
  * Parse LAST_INSERT_ID() from mysql2/knex raw result shapes.
  * @param {unknown} rawResult
@@ -152,11 +160,17 @@ export class RunEventRepository {
           typeof this.traceSpans.forExecutor === 'function'
             ? this.traceSpans.forExecutor(trx)
             : this.traceSpans;
-        await projector.projectRunEvent(stored, scope);
-        if (typeof projector.advanceRunProjectionWatermark === 'function') {
-          // Timeline-only events intentionally create no span, but still move
-          // the replay cursor so trace GETs never rescan them indefinitely.
-          await projector.advanceRunProjectionWatermark(stored, scope);
+        try {
+          await projector.projectRunEvent(stored, scope);
+          if (typeof projector.advanceRunProjectionWatermark === 'function') {
+            // Timeline-only events intentionally create no span, but still move
+            // the replay cursor so trace GETs never rescan them indefinitely.
+            await projector.advanceRunProjectionWatermark(stored, scope);
+          }
+        } catch (err) {
+          // Events are the ledger; GET /trace rebuilds spans. A CAS livelock
+          // on the Run root span must not roll back a successful agent loop.
+          if (!isTraceProjectionConvergeError(err)) throw err;
         }
       }
       return stored;
