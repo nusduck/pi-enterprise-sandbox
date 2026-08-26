@@ -1,11 +1,10 @@
 /**
- * Enterprise system prompt — mirrors pi-coding-agent buildSystemPrompt shape
- * (tools + guidelines + skills progressive disclosure + cwd/date) without
- * pointing the model at /app/node_modules pi product docs.
+ * Enterprise system prompt — path/tool/skill contract as Pi customPrompt.
+ * Avoids the SDK default that points at host / node_modules docs.
  *
- * Skills: name/description injected by Pi formatSkillsForPrompt when the
- * ResourceLoader has loaded skill paths (additionalSkillPaths → SKILLS_ROOT).
- * Full SKILL.md is loaded on demand via the `read` tool.
+ * Tool *schemas* (extension + MCP wrappers) are sent on the request; this
+ * text must not pretend to be a closed catalog. Skills XML is appended later
+ * by Pi formatSkillsForPrompt when loadedSkills is non-empty and `read` exists.
  */
 
 import {
@@ -13,11 +12,13 @@ import {
   LOGICAL_WORKSPACE_ROOT,
   SANDBOX_TOOL_NAMES,
 } from '../../extensions/sandbox-bridge/constants.js';
-import { EXTENSION_LOAD_ORDER } from '../../extensions/constants.js';
 
-/** One-line tool snippets for the default sandbox-bridge surface (plan §13). */
+/** One-line tool snippets for the sandbox-bridge surface (plan §13). */
 export const ENTERPRISE_TOOL_SNIPPETS = Object.freeze({
   read: 'Read workspace or skill files with offset/limit pagination',
+  ls: 'List workspace, temporary or skill directories with bounded depth',
+  find: 'Find workspace files by glob pattern',
+  grep: 'Search workspace file contents',
   write: 'Write utf-8/base64 files under the sandbox workspace only',
   edit: 'Edit a workspace file with optimistic concurrency',
   bash: 'Run shell commands in the sandbox workspace',
@@ -47,6 +48,8 @@ export function formatEnterpriseToolsSection(
   return lines.length ? lines.join('\n') : '(none)';
 }
 
+const IDENTITY = `You are a 风控通用智能体 (risk-control general agent). You work inside an isolated sandbox session. Investigate, analyze, and act on risk, compliance, policy, and operations tasks. Use tools for evidence; distinguish observed fact from inference.`;
+
 /**
  * Build the enterprise base system prompt (customPrompt path in Pi buildSystemPrompt).
  * Skills XML is appended later by Pi when loadedSkills is non-empty and `read` exists.
@@ -70,35 +73,20 @@ export function buildEnterpriseSystemPrompt(options = {}) {
     '/',
   );
   const custom = String(options.systemPrompt || '').trim();
-  const toolNames = Array.isArray(options.toolNames)
-    ? options.toolNames
-    : [...SANDBOX_TOOL_NAMES];
-  const snippets = options.toolSnippets || ENTERPRISE_TOOL_SNIPPETS;
-  const extensionNames = Array.isArray(options.extensionNames)
-    ? options.extensionNames
-    : [...EXTENSION_LOAD_ORDER];
 
-  const toolsList = formatEnterpriseToolsSection(toolNames, snippets);
-  const extensionsList = extensionNames.map((n) => `- ${n}`).join('\n');
-
-  const base = `You are **pi**, an enterprise coding assistant running inside a sandboxed session (pi-enterprise-sandbox).
-
-## Paths (hard rules)
+  const contract = `## Paths (hard rules)
 - **User project / workspace**: \`${workspaceRoot}\` — read and write here. Relative paths resolve under this root.
 - **Skills (read-only)**: \`${skillRoot}\` — installed skill packages (\`SKILL.md\` + assets). Never write here.
 - Do **not** search or read host install trees such as \`/app\`, \`node_modules\`, or agent home. Those are not the user project and not skills.
 
-## Available tools
-${toolsList}
-
-Other tools (for example MCP) may appear depending on agent configuration. Prefer sandbox tools for file and command work.
-
-## Runtime extensions (platform — not user packages)
-These are already bound for this run; you do not install them:
-${extensionsList}
-- sandbox-bridge routes file/shell/python/process tools into the formal sandbox
-- enterprise-policy enforces risk/approval/rate limits on tool calls
-- observability records durable run/tool events for the UI
+## Tools
+The tools attached to this turn (name, description, parameters) are authoritative. Call any of them when they fit; this section is not a closed catalog.
+- Files and commands: \`read\`, \`ls\`, \`find\`, \`grep\`, \`write\`, \`edit\`, \`bash\`, \`python\`, plus \`process_*\` and \`submit_artifact\` when present.
+- If \`ask_user\` is present, use it when the task cannot continue without a choice or a missing fact.
+- If \`skill_list\` / \`skill_install\` (and related) are present, use those for Skill catalog and lifecycle work — do not invent install APIs.
+- If \`todo_write\` / \`memory_write\` (and related) are present, use them for durable plans and notes.
+- External systems appear as \`mcp__<server>__<tool>\`. Call those directly; there is no separate MCP gateway tool for you.
+- High-risk actions may wait on approval. Do not try to bypass policy.
 
 ## Skills (progressive disclosure)
 When a skills section is present below (or under \`${skillRoot}\`):
@@ -115,14 +103,14 @@ Skill directories are listable but not searchable: \`ls\` reaches them, \`find\`
 - Read a file only once you know which one you want.
 
 ## Guidelines
-- Be concise; show paths clearly when working with files
-- Use tools for real filesystem and command outcomes; do not invent command output
+- Be concise; show paths and evidence clearly
+- Use tools for real filesystem, command, and external-system outcomes; do not invent output or data
 - Prefer editing existing files over writing new ones when possible
-- Ordinary bash does not require approval; high-risk actions may wait on policy`;
+- For risk work: say what you checked, what you did not, and how confident the conclusion is`;
 
-  if (!custom) return base;
-  // AgentVersion.systemPrompt wins as the lead voice; keep enterprise path/tool contract.
-  return `${custom}\n\n---\n\n${base}`;
+  // AgentVersion / product lead owns voice when set; keep the path/tool contract.
+  if (custom) return `${custom}\n\n---\n\n${contract}`;
+  return `${IDENTITY}\n\n${contract}`;
 }
 
 /**

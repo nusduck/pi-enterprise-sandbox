@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **System prompt 不再自称 pi / coding assistant**: 默认身份改为「风控通用智能体」。`## Available tools` 那份写死的 13 项闭合清单和内部 extension 包名一并去掉——模型以本轮请求的 tools schema 为准；prompt 只交代 sandbox 文件/命令工具、`ask_user` / skill 生命周期 / todo·memory（若本轮有）、以及 MCP 的 `mcp__<server>__<tool>` 命名。有 AgentVersion / `AGENT_SYSTEM_PROMPT` lead 时不再重复默认身份句，以免两套人设打架。
+
 ### Added
 
 - **`ls` 现在可以列 Skill 目录（`find` / `grep` 仍然不行）**: 此前三个搜索工具一律拒绝 Skill 路径，模型只能 `read`——于是一个 Skill 除非在 `SKILL.md` 里自己写明，它随包发的 `reference/`、`scripts/` 就无从发现，渐进披露反而变成了看不见。这从来不是安全边界：只有调用者自己的目录会被绑进来，跨租户在构造上就搜不到。现在按工具区分：`ls` 放行，`find` / `grep` 保持关闭（全树内容检索恰好会把渐进披露想挡住的东西一次性拉进上下文，而模型总可以先 `ls` 再 `read` 那一个文件）。实现没有新开内部面——`ls` 沿用既有 search 面：`InternalSearchCommand` 本来就带着与签名绑定的 `org_id`/`user_id`，`_resolve_search_root` 是唯一的根解析接缝，它返回的 `public_prefix` 本来就负责把物理路径写回逻辑路径。用户层的裸根 `/home/sandbox/skill-user` **解析为调用者自己的 `<org>/<user>` 目录**（`ls` 的意义就是“不知道有什么才来看”，要求先写全自己的 org/user 等于把这次改动的收益退回去）；返回的每一项都带完整逻辑前缀，所以 `ls` 的结果可以直接喂给 `read`。`<root>/<其他租户>` 与只写到 `<root>/<org>` 的裸 org 段都拒绝——后者会枚举该 org 下的用户——并与格式错误的路径共用同一个不透明错误码，避免探测。物理目录由 `user_skill_dir_for()` 唯一决定，与执行时 bwrap 绑定走的是同一个函数。
