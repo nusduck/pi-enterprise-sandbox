@@ -46,6 +46,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **标题式 artifact 名不再丢后缀**: 上一条修好了「名字怎么送到浏览器」，但 `submit_artifact` 的 `name` 是模型给的**标题**——`随机 Markdown 文档` 本身就没有扩展名，后缀只活在 `relative_path`（`random-markdown.md`）里，于是三层都忠实地把一个没后缀的名字保留了下来，Markdown 存下来仍然打不开。顺带一提，注册时 `mimetypes.guess_type(display)` 同样猜不出类型，这条 artifact 的 `mime_type` 被记成 `application/octet-stream`。现在名字没有扩展名时从 stored path 借一个（`with_path_extension()`），public / internal / MCP 三个下载出口都传入 path；注册时的 mime 在 display 猜不出时回落到 `stored_path`。前端 `downloadAttrName(name, path)` 同样要改——`download` 属性一旦有值就**完全覆盖** `Content-Disposition`，只修服务端在走链接下载时看不到效果。名字自带的扩展名优先，两边都没有则保持原样。
+
 - **`submit_artifact` 下载下来带原文件名和后缀**: 交付物点下载，保存成没有扩展名的 `artifact-download`，中文名（如 `季度报告.pptx`）尤其明显。两处叠在一起：前端所有下载链接写了空的 `download=""`，Chrome 因此忽略 `Content-Disposition`，改用 URL 最后一段 `/api/files/artifact-download`；BFF 在沙箱没带 disposition 时又退回 `filename="<artifactId>"`（ULID，同样没后缀），ASCII `filename=` 兜底也不保留 `.pptx` / `.md`。现在链接带真实 basename；`filename=` 对纯 CJK 名是 `download.pptx`（后缀还在），完整原名走 `filename*` 与 `X-Artifact-Filename`；BFF 转发沙箱 header，不再用 ULID 顶替。
 
 - **模型选择按对话记住，不再全局串台**: Composer 的模型选择器是一份 `pi.selectedModelId`，切到另一个会话 picker 还停在上一个会话的模型，发出去的 `model_id` 也是那一个。现在按 `conversationId` 分槽（未保存的新对话单独一份 draft）；切会话时恢复该对话上次的选择，没有手动选过则用该对话最近一次 run 的 `model_id`。旧的全局 key 只迁到新对话 draft，不会覆盖已有会话。

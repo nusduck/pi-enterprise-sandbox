@@ -31,16 +31,18 @@ import {
 function SafeDownloadLink({
   url,
   name,
+  path,
   className = 'dl',
 }: {
   url: string;
   name: string;
+  path?: string;
   className?: string;
 }) {
   const safe = safeApiUrl(url);
   if (!safe) return <span>{name}</span>;
   return (
-    <a className={className} href={safe} download={downloadAttrName(name)}>
+    <a className={className} href={safe} download={downloadAttrName(name, path)}>
       <IconDownload size={14} /> {name}
     </a>
   );
@@ -359,6 +361,7 @@ function MessageBubbleBase({
           key={`fl-${fl.url}-${fl.name}`}
           url={fl.url}
           name={fl.name || 'file'}
+          path={fl.path}
         />,
       );
       hasContent = true;

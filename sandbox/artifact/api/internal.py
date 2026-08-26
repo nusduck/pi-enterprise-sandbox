@@ -86,7 +86,7 @@ async def internal_artifact_download(
         }[status]
         raise HTTPException(status_code=status, detail=detail) from None
 
-    disposition = artifact_content_disposition(artifact.name)
+    disposition = artifact_content_disposition(artifact.name, artifact.path)
     media_type = str(artifact.mime_type or "application/octet-stream").strip()
     if (
         _SAFE_MEDIA_TYPE_RE.fullmatch(media_type) is None
@@ -119,7 +119,7 @@ async def internal_artifact_download(
         "Content-Disposition": disposition,
         "Content-Length": str(identity.st_size),
         "X-Artifact-Id": artifact.artifact_id,
-        "X-Artifact-Filename": artifact_filename_header(artifact.name),
+        "X-Artifact-Filename": artifact_filename_header(artifact.name, artifact.path),
         "X-Artifact-Sha256": artifact.sha256 or "",
         "X-Content-Type-Options": "nosniff",
     }
