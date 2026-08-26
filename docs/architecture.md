@@ -198,6 +198,7 @@ Workspace 内的 `read`、`write`、`edit`、`bash`、Python、Node、文件删�
 - 解析合法的 32-hex non-zero trace id，并为下游创建新的 span id
 - 审计日志关联
 - 可查询单个 Run 的 owner-scoped durable trace：`GET /api/runs/{run_id}/trace`
+- 事件行是账本；span 投影挂在同一 append 事务里，用 `SELECT … FOR UPDATE` 读 Run 根 span。投影 CAS 耗尽时提交事件、不把成功的 Agent 循环写成 `FAILED`；`GET /trace` 会从事件重建 span。
 
 ### 7. 非 Root 执行
 
