@@ -6,7 +6,7 @@
 import { useMemo, useState } from 'react';
 import type { ArtifactEntity } from '../../entities';
 import { getArtifactDownloadUrl } from '../../shared/api';
-import { safeApiUrl } from '../../shared/security/url';
+import { downloadAttrName, safeApiUrl } from '../../shared/security/url';
 import { fileTypeLabel } from '../../shared/state';
 import { isDurableArtifactId } from '../../shared/state/runReducer';
 
@@ -127,7 +127,7 @@ export function ArtifactPanel({
                 <a
                   className="rtc-link-btn artifact-download-btn"
                   href={safe}
-                  download=""
+                  download={downloadAttrName(a.name)}
                   onClick={(e) => e.stopPropagation()}
                 >
                   <span aria-hidden="true">↓</span>

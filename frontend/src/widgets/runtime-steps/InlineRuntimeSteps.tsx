@@ -2,7 +2,7 @@ import { useMemo, useState, type ReactNode } from 'react';
 import { useChat } from '../../features/chat/ChatContext';
 import { useWorkbenchSelection } from '../../app/layout/WorkbenchSelectionContext';
 import { getArtifactDownloadUrl } from '../../shared/api';
-import { safeApiUrl } from '../../shared/security/url';
+import { downloadAttrName, safeApiUrl } from '../../shared/security/url';
 import { isDurableArtifactId } from '../../shared/state/runReducer';
 import type { ApprovalEntity, ToolExecutionEntity } from '../../entities';
 import {
@@ -802,7 +802,7 @@ function ArtifactStep({
           <a
             className="rs-link"
             href={safe}
-            download=""
+            download={downloadAttrName(artifact.name || artifact.path)}
             onClick={(e) => e.stopPropagation()}
           >
             <IconDownload size={12} /> Download

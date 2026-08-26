@@ -16,6 +16,7 @@ from sandbox.artifact.domain.download_contract import (
     parse_and_bind_internal_artifact_download,
 )
 from sandbox.security.internal_http_auth import InternalAuthContext, require_internal_auth
+from sandbox.artifact.infrastructure.disposition import artifact_filename_header
 from sandbox.artifact.infrastructure.manager import (
     ArtifactError,
     artifact_content_disposition,
@@ -118,6 +119,7 @@ async def internal_artifact_download(
         "Content-Disposition": disposition,
         "Content-Length": str(identity.st_size),
         "X-Artifact-Id": artifact.artifact_id,
+        "X-Artifact-Filename": artifact_filename_header(artifact.name),
         "X-Artifact-Sha256": artifact.sha256 or "",
         "X-Content-Type-Options": "nosniff",
     }

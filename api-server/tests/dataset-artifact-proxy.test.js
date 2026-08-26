@@ -5,7 +5,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { PassThrough, Readable } from 'node:stream';
-import { mapUploadErrorBody } from '../src/routes/files.js';
+import { artifactDownloadDisposition, mapUploadErrorBody } from '../src/routes/files.js';
 import {
   createBoundedDatasetUploadBody,
   datasetOwnershipHeaders,
@@ -296,6 +296,32 @@ describe('mapUploadErrorBody dataset codes', () => {
       detail: { code: 'workspace_quota_exceeded', message: 'quota' },
     }, 't');
     assert.equal(out.code, 'workspace_quota_exceeded');
+  });
+});
+
+describe('artifactDownloadDisposition', () => {
+  it('forwards sandbox Content-Disposition when present', () => {
+    const headers = new Headers({
+      'Content-Disposition': 'attachment; filename="download.pptx"; filename*=UTF-8\'\'%E6%8A%A5.pptx',
+    });
+    assert.match(artifactDownloadDisposition(headers), /filename="download\.pptx"/);
+  });
+
+  it('builds a named fallback from X-Artifact-Filename instead of the ULID', () => {
+    const headers = new Headers({
+      'X-Artifact-Filename': encodeURIComponent('季度报告.pptx'),
+    });
+    const value = artifactDownloadDisposition(headers);
+    assert.match(value, /filename="download\.pptx"/);
+    assert.match(value, /filename\*=UTF-8''/);
+    assert.equal(value.includes('01ARZ'), false);
+  });
+
+  it('does not fall back to the artifact id when headers are missing', () => {
+    assert.equal(
+      artifactDownloadDisposition(new Headers()),
+      'attachment; filename="download"',
+    );
   });
 });
 

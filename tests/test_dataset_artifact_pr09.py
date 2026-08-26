@@ -19,6 +19,8 @@ from sandbox.services.artifact_manager import (
     ArtifactError,
     ArtifactManager,
     artifact_content_disposition,
+    artifact_filename_header,
+    ascii_filename_fallback,
     safe_content_disposition_filename,
 )
 from sandbox.services.artifact_store import (
@@ -1281,6 +1283,17 @@ class TestArtifactDisposition:
     def test_unicode_filename_uses_ascii_fallback_and_utf8_extended_value(self):
         header = artifact_content_disposition("π 自我介绍演示文稿.pptx")
         assert header.encode("latin-1")
-        assert 'filename="_' in header
+        assert 'filename="download.pptx"' in header
         assert 'π' not in header.split("filename*=", maxsplit=1)[0]
         assert "filename*=UTF-8''%CF%80%20%E8%87%AA%E6%88%91" in header
+
+    def test_cjk_stem_keeps_ascii_extension(self):
+        assert ascii_filename_fallback("季度报告.pptx") == "download.pptx"
+        assert ascii_filename_fallback("notes.md") == "notes.md"
+        assert ascii_filename_fallback("mixed报告.md") == "mixed.md"
+
+    def test_filename_header_is_percent_encoded(self):
+        encoded = artifact_filename_header("示例.md")
+        encoded.encode("latin-1")
+        assert "示例" not in encoded
+        assert "%E7%A4%BA%E4%BE%8B.md" in encoded

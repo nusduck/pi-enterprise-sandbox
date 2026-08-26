@@ -12,7 +12,7 @@ import {
   isInterruptedMessage,
   splitAttachmentDisplay,
 } from '../../shared/state';
-import { safeApiUrl } from '../../shared/security/url';
+import { downloadAttrName, safeApiUrl } from '../../shared/security/url';
 import {
   InlineRuntimeSteps,
 } from '../runtime-steps/InlineRuntimeSteps';
@@ -40,7 +40,7 @@ function SafeDownloadLink({
   const safe = safeApiUrl(url);
   if (!safe) return <span>{name}</span>;
   return (
-    <a className={className} href={safe} download="">
+    <a className={className} href={safe} download={downloadAttrName(name)}>
       <IconDownload size={14} /> {name}
     </a>
   );

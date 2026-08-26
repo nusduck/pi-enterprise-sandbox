@@ -2,12 +2,10 @@
 
 from __future__ import annotations
 
-import re
 import secrets
 from contextlib import asynccontextmanager
-from pathlib import PurePosixPath
 from typing import Any
-from urllib.parse import quote, urlparse
+from urllib.parse import urlparse
 
 from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
@@ -17,28 +15,12 @@ from starlette.responses import JSONResponse, Response, StreamingResponse
 from starlette.routing import Mount, Route
 from starlette.types import ASGIApp, Receive, Scope, Send
 
+from sandbox.artifact.infrastructure.disposition import (
+    artifact_content_disposition as content_disposition_attachment,
+    artifact_filename_header,
+)
 from sandbox.mcp.service import McpFacadeError, McpFacadeService
 from sandbox.mcp.settings import settings
-
-
-def content_disposition_attachment(name: str) -> str:
-    """ASCII-safe Content-Disposition (RFC 5987) for MCP artifact downloads.
-
-    Starlette encodes response headers as latin-1. Putting CJK / other non-ASCII
-    characters in ``filename="..."`` raises UnicodeEncodeError → HTTP 500.
-    """
-    base = PurePosixPath(str(name or "artifact")).name
-    base = base.replace("\r", "").replace("\n", "")
-    base = re.sub(r'["\\;]', "_", base)
-    base = re.sub(r"[\x00-\x1f\x7f]", "", base).strip() or "artifact"
-    base = base[:200]
-    ascii_fallback = "".join(
-        char if 0x20 <= ord(char) <= 0x7E else "_" for char in base
-    ).strip() or "artifact"
-    return (
-        f'attachment; filename="{ascii_fallback}"; '
-        f"filename*=UTF-8''{quote(base, safe='')}"
-    )
 
 
 class McpBearerAuth:
@@ -233,7 +215,10 @@ async def artifact_download(request: Request) -> Response:
     return StreamingResponse(
         body(),
         media_type=media_type,
-        headers={"Content-Disposition": content_disposition_attachment(filename)},
+        headers={
+            "Content-Disposition": content_disposition_attachment(filename),
+            "X-Artifact-Filename": artifact_filename_header(filename),
+        },
     )
 
 
