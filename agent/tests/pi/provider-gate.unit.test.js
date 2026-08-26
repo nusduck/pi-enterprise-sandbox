@@ -19,6 +19,29 @@ import {
 /** Resolve after the current macrotask queue drains. */
 const tick = () => new Promise((resolve) => setImmediate(resolve));
 
+/**
+ * Hold the event loop open across an awaited gate timeout.
+ *
+ * The gate's bounded-wait timer is `unref()`ed on purpose: a caller queued
+ * behind a full gate must never keep the Agent process alive at shutdown. An
+ * unref'd timer cannot keep the loop running long enough to fire on its own,
+ * so in a quiet test process the loop drains first, `acquire()` never settles,
+ * and node:test reports "Promise resolution is still pending but the event
+ * loop has already resolved" — cancelling every remaining test in the file.
+ *
+ * A real Agent always has sockets and pools holding the loop open, which is
+ * why this only ever bit the unit test. The test has to supply that condition
+ * itself rather than depend on whatever else happens to be pending.
+ */
+async function withLoopAlive(run) {
+  const keepAlive = setInterval(() => {}, 5);
+  try {
+    return await run();
+  } finally {
+    clearInterval(keepAlive);
+  }
+}
+
 describe('provider gate', () => {
   it('counts concurrent calls to the SAME provider against the cap', async () => {
     const gate = createProviderGate({ maxConcurrent: 2, maxWaitMs: 5_000 });
@@ -52,7 +75,7 @@ describe('provider gate', () => {
     const held = await gate.acquire('p');
     assert.equal(gate.snapshot().inFlight, 1);
 
-    const degraded = await gate.acquire('p');
+    const degraded = await withLoopAlive(() => gate.acquire('p'));
     assert.equal(gate.snapshot().inFlight, 1, 'timed-out caller holds no slot');
 
     // Calling the degraded release must not free the slot someone else owns.

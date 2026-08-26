@@ -91,6 +91,12 @@ export function createProviderGate(options = {}) {
         if (index >= 0) waiters.splice(index, 1);
         resolve(granted);
       };
+      // unref: a caller queued behind a full gate must not keep the process
+      // alive at shutdown. The trade-off is that this timer cannot keep the
+      // loop running long enough to fire by itself — a caller in an otherwise
+      // idle process may never observe the degrade, because that process is on
+      // its way out anyway. Anything unit-testing this path has to hold the
+      // loop open on its own (see withLoopAlive in provider-gate.unit.test.js).
       const timer = setTimeout(() => finish(false), maxWaitMs);
       if (typeof timer.unref === 'function') timer.unref();
       // release() hands the slot straight to this waiter: inFlight is never
