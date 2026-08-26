@@ -256,7 +256,7 @@ async def download_artifact(session_id: str, artifact_id: str, request: Request)
     except ArtifactError as exc:
         raise _artifact_http_error(exc) from exc
 
-    disposition = artifact_content_disposition(art.name)
+    disposition = artifact_content_disposition(art.name, art.path)
     media = art.mime_type or "application/octet-stream"
     if media.lower() in {"text/html", "application/xhtml+xml", "image/svg+xml"}:
         media = "application/octet-stream"
@@ -279,7 +279,7 @@ async def download_artifact(session_id: str, artifact_id: str, request: Request)
 
     headers = {
         "Content-Disposition": disposition,
-        "X-Artifact-Filename": artifact_filename_header(art.name),
+        "X-Artifact-Filename": artifact_filename_header(art.name, art.path),
         "X-Content-Type-Options": "nosniff",
         "Content-Length": str(identity.st_size),
     }

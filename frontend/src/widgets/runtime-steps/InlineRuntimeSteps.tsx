@@ -802,7 +802,7 @@ function ArtifactStep({
           <a
             className="rs-link"
             href={safe}
-            download={downloadAttrName(artifact.name || artifact.path)}
+            download={downloadAttrName(artifact.name, artifact.path)}
             onClick={(e) => e.stopPropagation()}
           >
             <IconDownload size={12} /> Download

@@ -100,7 +100,7 @@ export function DeliverablesPanel() {
               key={a.id}
               className="artifact-chip"
               href={safe}
-              download={downloadAttrName(a.name)}
+              download={downloadAttrName(a.name, a.path)}
               title={a.path || a.name}
               data-source="submit_artifact"
             >
@@ -125,7 +125,7 @@ export function DeliverablesPanel() {
               key={String(id)}
               className="artifact-chip"
               href={safe}
-              download={downloadAttrName(name)}
+              download={downloadAttrName(name, a.path)}
               title={a.path || String(name)}
               data-source="submit_artifact"
             >

@@ -70,4 +70,16 @@ describe('downloadAttrName', () => {
     assert.equal(downloadAttrName('../..'), 'download');
     assert.equal(downloadAttrName(null), 'download');
   });
+
+  it('borrows the extension from the path when the name is a title', () => {
+    // submit_artifact names are user-facing titles; `download` overrides
+    // Content-Disposition, so an extensionless title saves an unopenable file.
+    assert.equal(
+      downloadAttrName('随机 Markdown 文档', 'random-markdown.md'),
+      '随机 Markdown 文档.md',
+    );
+    assert.equal(downloadAttrName('notes.md', 'other.txt'), 'notes.md');
+    assert.equal(downloadAttrName('报告', 'workspace/report'), '报告');
+    assert.equal(downloadAttrName('', 'workspace/report.md'), 'report.md');
+  });
 });
