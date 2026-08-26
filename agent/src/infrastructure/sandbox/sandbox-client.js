@@ -10,13 +10,25 @@
  * - Forward browser `Authorization: Bearer <jwt>` so sandbox resolves the actor.
  * - Never trust browser-supplied X-Acting-* headers (stripped via authFromRequest).
  * - Server code may set acting headers after validating the user.
+ *
+ * Scope: this is the **owner-scoped public plane** only. The model's own tool
+ * calls do not come through here — they go over the signed internal plane
+ * (`sandbox-bridge-http-transport.js`), which is run-fenced and carries a
+ * claimed ToolExecution. What is left here is what a server-side caller with no
+ * fence token needs: workspace GC, managed-process control for the operator
+ * surface, file and artifact access, and health.
+ *
+ * Every method here must correspond to a route Sandbox still serves. Sandbox
+ * dropped its own session-creation, conversation, ad-hoc execution and approval
+ * surfaces, and the methods for them lived on here for a while returning 404 on
+ * first use; a few module-level wrappers were worse still, delegating to client
+ * methods that did not exist. Check `/openapi.json` before adding one back.
  */
 import { randomBytes } from 'node:crypto';
 import { config, resolveSandboxAuthHeader } from '../../../config.js';
 import { createTraceHeaders } from './trace-context.js';
 
 const BASE = config.SANDBOX_BASE_URL;
-const REQUEST_GRACE_MS = 5_000;
 
 /**
  * Path of one managed process under the session that owns it.
@@ -169,32 +181,12 @@ export function createSandboxClient({ traceId = null, traceState = null, auth = 
     }
   }
 
-  const timeoutForSeconds = (seconds) => {
-    const value = Number(seconds);
-    return Number.isFinite(value) && value >= 0
-      ? value * 1000 + REQUEST_GRACE_MS
-      : null;
-  };
-
   return {
     setTraceId,
     getTraceId,
     ensureTraceId,
 
     // ── Session ─────────────────────────────────────
-    async createSession(callerId = 'pi-coding-agent', extra = {}) {
-      const resp = await sbFetch('/sessions', {
-        method: 'POST',
-        body: JSON.stringify({ caller_id: callerId, ...extra }),
-      });
-      return resp.json();
-    },
-
-    async getSession(sessionId) {
-      const resp = await sbFetch(`/sessions/${sessionId}`);
-      return resp.json();
-    },
-
     /**
      * Remove a SandboxSession's physical workspace (idempotent GC).
      * Triggered by Agent conversation delete/archive (D2 triage: no
@@ -210,68 +202,7 @@ export function createSandboxClient({ traceId = null, traceState = null, auth = 
       return resp.json();
     },
 
-    // ── Conversation ───────────────────────────────
-    async listConversations() {
-      const resp = await sbFetch('/conversations');
-      return resp.json();
-    },
-
-    async createConversation(title = 'New chat') {
-      const resp = await sbFetch('/conversations', {
-        method: 'POST',
-        body: JSON.stringify({ title }),
-      });
-      return resp.json();
-    },
-
-    async getConversation(conversationId) {
-      const resp = await sbFetch(`/conversations/${conversationId}`);
-      return resp.json();
-    },
-
-    async getConversationWorkspace(conversationId) {
-      const resp = await sbFetch(`/conversations/${conversationId}/workspace`);
-      return resp.json();
-    },
-
-    async updateConversation(conversationId, patch = {}) {
-      const resp = await sbFetch(`/conversations/${conversationId}`, {
-        method: 'PATCH',
-        body: JSON.stringify(patch),
-      });
-      return resp.json();
-    },
-
-    async deleteConversation(conversationId) {
-      const resp = await sbFetch(`/conversations/${conversationId}`, {
-        method: 'DELETE',
-      });
-      if (resp.status === 204) return { ok: true };
-      const text = await resp.text();
-      return text ? JSON.parse(text) : { ok: true };
-    },
-
-    // PR-13 severe: Sandbox does not expose /agent-runs, /agent-sessions, or
-    // /tool-executions. Run/tool ledger authority is Agent MySQL. Do not re-add.
-
-    async editFile(sessionId, body) {
-      const resp = await sbFetch(`/sessions/${sessionId}/files/edit`, {
-        method: 'POST',
-        body: JSON.stringify(body),
-      });
-      return resp.json();
-    },
-
-    // ── Execution ───────────────────────────────────
-    async executeCommand(sessionId, command, timeout = 120) {
-      const resp = await sbFetch(`/sessions/${sessionId}/executions/command`, {
-        method: 'POST',
-        body: JSON.stringify({ command, timeout }),
-        timeoutMs: timeoutForSeconds(timeout),
-      });
-      return resp.json();
-    },
-
+    // ── Managed processes ───────────────────────────
     /**
      * Managed-process control for the operator surface.
      *
@@ -335,27 +266,15 @@ export function createSandboxClient({ traceId = null, traceState = null, auth = 
       return resp.json();
     },
 
-    async getExecutionLogs(sessionId, executionId, offset = 0, limit = null) {
-      const q = new URLSearchParams({ offset: String(offset ?? 0) });
-      if (limit != null) q.set('limit', String(limit));
-      const resp = await sbFetch(
-        `/sessions/${encodeURIComponent(sessionId)}/executions/${encodeURIComponent(executionId)}/logs?${q}`,
-      );
-      return resp.json();
-    },
-
-    async listExecutionEvents(sessionId, executionId, { afterSequence = 0, limit } = {}) {
-      const q = new URLSearchParams();
-      if (afterSequence) q.set('after_sequence', String(afterSequence));
-      if (limit != null) q.set('limit', String(limit));
-      const qs = q.toString();
-      const resp = await sbFetch(
-        `/sessions/${encodeURIComponent(sessionId)}/executions/${encodeURIComponent(executionId)}/events${qs ? `?${qs}` : ''}`,
-      );
-      return resp.json();
-    },
-
     // ── Files ───────────────────────────────────────
+    async editFile(sessionId, body) {
+      const resp = await sbFetch(`/sessions/${sessionId}/files/edit`, {
+        method: 'POST',
+        body: JSON.stringify(body),
+      });
+      return resp.json();
+    },
+
     async readFile(sessionId, path) {
       const q = new URLSearchParams({ path });
       const resp = await sbFetch(`/sessions/${sessionId}/files/read?${q}`);
@@ -465,36 +384,6 @@ export function createSandboxClient({ traceId = null, traceState = null, auth = 
       });
     },
 
-    // ── Approvals ───────────────────────────────────
-    async createApproval(body) {
-      const resp = await sbFetch('/approvals', {
-        method: 'POST',
-        body: JSON.stringify(body),
-      });
-      return resp.json();
-    },
-
-    async approvalCheck(sessionId, body) {
-      const resp = await sbFetch(`/sessions/${sessionId}/executions/approval-check`, {
-        method: 'POST',
-        body: JSON.stringify(body),
-      });
-      return resp.json();
-    },
-
-    async getApproval(approvalId) {
-      const resp = await sbFetch(`/approvals/${encodeURIComponent(approvalId)}`);
-      return resp.json();
-    },
-
-    async decideApproval(approvalId, decision) {
-      const resp = await sbFetch('/approve', {
-        method: 'POST',
-        body: JSON.stringify({ approval_id: approvalId, decision }),
-      });
-      return resp.json();
-    },
-
     // ── Auth proxy ──────────────────────────────────
     async authRegister(body) {
       const resp = await sbFetch('/auth/register', {
@@ -543,40 +432,8 @@ export function artifactDownloadPath(sessionId, artifactId) {
   return `/sessions/${sessionId}/artifacts/${encodeURIComponent(artifactId)}/download`;
 }
 
-export async function createSession(callerId = 'pi-coding-agent', extra = {}) {
-  return createSandboxClient().createSession(callerId, extra);
-}
-
-export async function getSession(sessionId) {
-  return createSandboxClient().getSession(sessionId);
-}
-
 export async function removeSessionWorkspace(sessionId, auth = null) {
   return createSandboxClient({ auth }).removeSessionWorkspace(sessionId);
-}
-
-export async function listConversations(auth = null) {
-  return createSandboxClient({ auth }).listConversations();
-}
-
-export async function createConversation(title = 'New chat', auth = null) {
-  return createSandboxClient({ auth }).createConversation(title);
-}
-
-export async function getConversation(conversationId, auth = null) {
-  return createSandboxClient({ auth }).getConversation(conversationId);
-}
-
-export async function getConversationWorkspace(conversationId, auth = null) {
-  return createSandboxClient({ auth }).getConversationWorkspace(conversationId);
-}
-
-export async function updateConversation(conversationId, patch = {}, auth = null) {
-  return createSandboxClient({ auth }).updateConversation(conversationId, patch);
-}
-
-export async function deleteConversation(conversationId, auth = null) {
-  return createSandboxClient({ auth }).deleteConversation(conversationId);
 }
 
 export async function authRegister(body) {
@@ -591,56 +448,8 @@ export async function authMe(auth = null) {
   return createSandboxClient({ auth }).authMe();
 }
 
-export async function executeCommand(sessionId, command, timeout = 120) {
-  return createSandboxClient().executeCommand(sessionId, command, timeout);
-}
-
-export async function cancelExecution(sessionId, executionId) {
-  return createSandboxClient().cancelExecution(sessionId, executionId);
-}
-
-export async function cancelActiveExecution(sessionId) {
-  return createSandboxClient().cancelActiveExecution(sessionId);
-}
-
-export async function startProcess(body) {
-  return createSandboxClient().startProcess(body);
-}
-
-export async function getProcess(processId) {
-  return createSandboxClient().getProcess(processId);
-}
-
-export async function getProcessLogs(processId, offset = 0, limit = null) {
-  return createSandboxClient().getProcessLogs(processId, offset, limit);
-}
-
-export async function waitProcess(processId, timeout = null) {
-  return createSandboxClient().waitProcess(processId, timeout);
-}
-
-export async function writeProcessStdin(processId, data, eof = false) {
-  return createSandboxClient().writeProcessStdin(processId, data, eof);
-}
-
-export async function signalProcess(processId, signal = 'SIGTERM') {
-  return createSandboxClient().signalProcess(processId, signal);
-}
-
-export async function cancelProcess(processId) {
-  return createSandboxClient().cancelProcess(processId);
-}
-
-export async function cancelSessionProcesses(sessionId, foregroundOnly = false) {
-  return createSandboxClient().cancelSessionProcesses(sessionId, foregroundOnly);
-}
-
 export async function readFile(sessionId, path) {
   return createSandboxClient().readFile(sessionId, path);
-}
-
-export async function readFileWithRange(sessionId, path, offset, limit) {
-  return createSandboxClient().readFileWithRange(sessionId, path, offset, limit);
 }
 
 export async function writeFile(sessionId, path, content) {
@@ -681,18 +490,6 @@ export async function downloadArtifactStream(sessionId, artifactId, options = {}
     artifactId,
     options,
   );
-}
-
-export async function approvalCheck(sessionId, body) {
-  return createSandboxClient().approvalCheck(sessionId, body);
-}
-
-export async function getApproval(approvalId) {
-  return createSandboxClient().getApproval(approvalId);
-}
-
-export async function decideApproval(approvalId, decision) {
-  return createSandboxClient().decideApproval(approvalId, decision);
 }
 
 export async function checkHealth() {

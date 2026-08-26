@@ -72,6 +72,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+- **Agent `sandbox-client.js`里指向已下线路由的死方法**: 该 client 是 owner-scoped 公共面封装（模型自己的工具调用不走这里，走签名内部面 `sandbox-bridge-http-transport.js`）。Sandbox 早已撤掉自己的 session 创建、conversation、临时执行与审批面，但对应方法一直留着——调用即 404：`createSession` / `getSession`（`POST /sessions`、`GET /sessions/{id}`）、整个 `/conversations/*` 六个方法、`executeCommand`（`/sessions/{id}/executions/command`）、`getExecutionLogs` / `listExecutionEvents`、以及 `createApproval` / `approvalCheck` / `getApproval` / `decideApproval`（`/approvals`、`/approve`）。更糟的是一批模块级封装：`startProcess` / `getProcess` / `waitProcess` / `cancelExecution` / `cancelActiveExecution` / `cancelSessionProcesses` / `readFileWithRange` 委托的 client 方法**根本不存在**（`TypeError`），而 `getProcessLogs` / `writeProcessStdin` / `signalProcess` / `cancelProcess` 四个模块级封装**参数错位**——把 `processId` 当成 `sessionId` 传进去。全部删除，共 -223 行；随之删掉只为 `executeCommand` 存在的 `timeoutForSeconds` / `REQUEST_GRACE_MS` 及其单测。留下的每个方法都对得上 `/openapi.json` 里仍在服务的路由，文件头补上了这条规则。`api-server` 那份同名 client 已经是干净的，未改动。
 - **`config/agent/models.json`**: 与 `model-registry.json` 重复的第二份模型目录，全仓库零引用——不被任何代码读取，也不在 pi SDK 查找 `models.json` 的 `AGENT_PI_AGENT_DIR` 下（容器里 `/app/pi-agent-home/` 是空的）。留着只会继续和真实目录漂移。
 - **`disabled-test-model` 与 `ZERO_PRICING`**: 前者是只为测试存在却出货在生产 seed 里的假模型，已移进测试自己的 fixture；后者随之失去全部引用（`normalizeModelEntry` 本就把各价格字段内联默认为 0）。
 
