@@ -406,7 +406,8 @@ Skill 分两层，挂在两个 canonical 路径：
 
 Skill 生命周期不根据部署环境切换。Agent/Worker 对用户卷可写，Sandbox 始终以只读方式
 只绑定调用者本人的目录。`skill_install` 接受当前回合 ZIP attachment id，或模型在该 session
-的 workspace/`tmp` 内构建的归档路径（`source="sandbox"`，两侧各自限定路径，Skill 根被拒）；
+的 workspace/`tmp` 内构建的归档路径（`source="sandbox"`，两侧各自限定路径，Skill 根被拒，
+并且必须带 `source_digest` 把审批绑定到具体字节而不只是路径）；
 `skill_create` 接受 Agent 生成的结构化 package。install/create/edit/uninstall 全部为 high risk，
 附件上传会先形成 Dataset；安装审批通过前，Agent 不会读取其内容、解压或写入 Skill 目录。
 系统 Skill 不能被同名覆盖。

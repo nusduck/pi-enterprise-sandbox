@@ -97,6 +97,8 @@ describe('skill-lifecycle extension', () => {
       })),
     );
 
+    const digest = 'b'.repeat(64);
+
     // Workspace-relative, /tmp and logical workspace paths all resolve to the
     // same logical form the file tools use.
     for (const [given, expected] of [
@@ -107,19 +109,76 @@ describe('skill-lifecycle extension', () => {
       await tools.get('skill_install').execute('call-install', {
         source: 'sandbox',
         path: given,
+        source_digest: digest,
       });
       assert.deepEqual(calls.at(-1), {
         source: 'sandbox',
         sourcePath: expected,
+        sourceDigest: digest,
         archiveName: expected.split('/').pop(),
       });
     }
+
+    // An uppercase digest is the same digest; normalise rather than refuse.
+    await tools.get('skill_install').execute('call-install', {
+      source: 'sandbox',
+      path: '/tmp/built-skill.skill',
+      source_digest: 'C'.repeat(64),
+    });
+    assert.equal(calls.at(-1).sourceDigest, 'c'.repeat(64));
 
     // The sandbox branch never consults the current-turn attachment block.
     assert.equal(
       calls.some((call) => 'attachmentId' in call),
       false,
     );
+  });
+
+  it('will not install from the sandbox without a sha256 to pin the approval to', async () => {
+    const tools = collectTools(
+      extension(fakeSkillManager({
+        install: async () => assert.fail('install must not be reached'),
+      })),
+    );
+    // `skill_install` is replayed after the user approves it, and the workspace
+    // stays writable in between. Without the digest the approval would bind a
+    // path, not the bytes the user was shown.
+    for (const source_digest of [
+      undefined,
+      '',
+      'not-a-digest',
+      'a'.repeat(63),
+      'a'.repeat(65),
+      `${'a'.repeat(63)}g`,
+    ]) {
+      await assert.rejects(
+        tools.get('skill_install').execute('call-install', {
+          source: 'sandbox',
+          path: '/tmp/built-skill.skill',
+          source_digest,
+        }),
+        /source_digest is required/,
+        String(source_digest),
+      );
+    }
+  });
+
+  it('does not ask the attachment source for a digest', async () => {
+    // An attachment is already pinned by an id the user attached this turn.
+    let installed;
+    const tools = collectTools(
+      extension(fakeSkillManager({
+        install: async (input) => {
+          installed = input;
+          return { name: 'uploaded', summary: 'installed uploaded' };
+        },
+      })),
+    );
+    await tools.get('skill_install').execute('call-install', {
+      attachment_id: ZIP_ATTACHMENT.attachmentId,
+      filename: ZIP_ATTACHMENT.filename,
+    });
+    assert.equal('sourceDigest' in installed, false);
   });
 
   it('refuses to install from the read-only Skill root', async () => {

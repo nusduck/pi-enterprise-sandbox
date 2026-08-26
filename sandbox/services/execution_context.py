@@ -28,6 +28,25 @@ from sandbox.paths import (
 _IDENTITY_SEGMENT = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}")
 
 
+def user_skill_dir_for(org_id: str | None, user_id: str | None) -> Path | None:
+    """Physical skill directory owned by ``org_id``/``user_id``, or None.
+
+    The single definition of the user-tier tenant boundary: every surface that
+    reaches into the user skill tree — an execution's bwrap binds, an internal
+    read, a search — must locate the directory through this function so the
+    three cannot drift apart. Returns None when identity is missing or is not a
+    safe path segment; callers then see the system tier only, never a shared
+    view of every tenant's packages.
+    """
+    if not org_id or not user_id:
+        return None
+    if not _IDENTITY_SEGMENT.fullmatch(org_id):
+        return None
+    if not _IDENTITY_SEGMENT.fullmatch(user_id):
+        return None
+    return Path(settings.user_skills_root) / org_id / user_id
+
+
 def _owner_field(session: Any, key: str) -> str | None:
     """Read an owner id from a session record or dict, normalizing empties."""
     value = getattr(session, key, None)
@@ -64,13 +83,7 @@ class SandboxExecutionContext:
         None when identity is unknown; the caller then gets the system skill
         tier only rather than a shared view of every tenant's packages.
         """
-        if not self.org_id or not self.user_id:
-            return None
-        if not _IDENTITY_SEGMENT.fullmatch(self.org_id):
-            return None
-        if not _IDENTITY_SEGMENT.fullmatch(self.user_id):
-            return None
-        return Path(settings.user_skills_root) / self.org_id / self.user_id
+        return user_skill_dir_for(self.org_id, self.user_id)
 
     @classmethod
     def from_session(cls, session: Any) -> "SandboxExecutionContext":

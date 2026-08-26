@@ -9,9 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`ls` 现在可以列 Skill 目录（`find` / `grep` 仍然不行）**: 此前三个搜索工具一律拒绝 Skill 路径，模型只能 `read`——于是一个 Skill 除非在 `SKILL.md` 里自己写明，它随包发的 `reference/`、`scripts/` 就无从发现，渐进披露反而变成了看不见。这从来不是安全边界：只有调用者自己的目录会被绑进来，跨租户在构造上就搜不到。现在按工具区分：`ls` 放行，`find` / `grep` 保持关闭（全树内容检索恰好会把渐进披露想挡住的东西一次性拉进上下文，而模型总可以先 `ls` 再 `read` 那一个文件）。实现没有新开内部面——`ls` 沿用既有 search 面：`InternalSearchCommand` 本来就带着与签名绑定的 `org_id`/`user_id`，`_resolve_search_root` 是唯一的根解析接缝，它返回的 `public_prefix` 本来就负责把物理路径写回逻辑路径。用户层的裸根 `/home/sandbox/skill-user` **解析为调用者自己的 `<org>/<user>` 目录**（`ls` 的意义就是“不知道有什么才来看”，要求先写全自己的 org/user 等于把这次改动的收益退回去）；返回的每一项都带完整逻辑前缀，所以 `ls` 的结果可以直接喂给 `read`。`<root>/<其他租户>` 与只写到 `<root>/<org>` 的裸 org 段都拒绝——后者会枚举该 org 下的用户——并与格式错误的路径共用同一个不透明错误码，避免探测。物理目录由 `user_skill_dir_for()` 唯一决定，与执行时 bwrap 绑定走的是同一个函数。
+
 - **模型可以自己搭一个 Skill 并直接安装**: `skill_install` 新增 `source="sandbox"`——模型用普通 `write` / `bash` 在 workspace 或 `/tmp` 里搭好包、跑通脚本、打成 `.zip` / `.skill`，然后把归档路径交给它。此前只有两条路：把 `SKILL.md` 拆成 `skill_create` 的结构化字段（连 frontmatter 都控制不了），或者打完包让用户下载再上传一遍——bundled `skill-creator` 教的正是后者，所以模型会一路做对最后一步卡住。归档路径先过 `normalizeLogicalPath`（Skill 根显式拒绝：只读挂载不能既是源又是目标），再由 Sandbox 的 `parse_sandbox_path` 二次限定在该 session 的 workspace/temp 内；取字节走已有的 owner-scoped `files/download`，然后与上传路径汇流到**同一个** `installSkillArchive`。Sandbox 侧零改动，特权写入仍然只有那一处。审批语义不变（high risk，一次 tool call），但用户批的是一个已经落盘、可被检视的包。
 
-- **bundled `skill-creator` 改写为本平台的流程**: 原版是上游 Claude Skills 的说明书，教的是“复制到可写位置编辑 → `package_skill.py` 打包 → 让用户去装”，还依赖 `claude` CLI 和 subagent 跑 eval——这里两者都不存在。现在按实际可用的两条路径重写（小包 `skill_create`，其余在沙盒里搭完 `skill_install(source="sandbox")`），写明 Skill 树只读、不可搜索只可 `read`、名字/描述的校验口径与各项上限，并点名哪些自带脚本在这里不可用。文中给出的打包命令是实测过的（`PYTHONPATH` 与输出目录两个参数都必需，否则脚本要么 import 失败、要么试图写进只读的 Skill 根）。
+- **bundled `skill-creator` 改写为本平台的流程**: 原版是上游 Claude Skills 的说明书，教的是“复制到可写位置编辑 → `package_skill.py` 打包 → 让用户去装”，还依赖 `claude` CLI 和 subagent 跑 eval——这里两者都不存在。现在按实际可用的两条路径重写（小包 `skill_create`，其余在沙盒里搭完 `skill_install(source="sandbox")`），写明 Skill 树只读、可 `ls` 可 `read` 但不可 `find`/`grep`、名字/描述的校验口径与各项上限，并点名哪些自带脚本在这里不可用。文中给出的打包命令是实测过的（`PYTHONPATH` 与输出目录两个参数都必需，否则脚本要么 import 失败、要么试图写进只读的 Skill 根）。
 
 - **Capabilities → Skills 区分系统与用户两层**: 此前该页只列内置 Skill——`extensions/diagnostics` 拿的是进程级 skill 根，而用户 Skill 装在 `<base>/<orgId>/<userId>` 下，扫描基目录一个也匹配不到（那一级没有 `SKILL.md`），于是"装没装上"在界面上完全看不出来。请求里其实早就带着身份（BFF 发 `X-Acting-*`，Agent 路由也已解出），只是投影时被丢掉了。现在 diagnostics 用**与 Run 相同的解析器**（`resolveSkillScopeForIdentity`）取该调用者的 skill 根，每项按 `source` 标 `shared-skill-root` / `user-skill-root`，前端分成 "My Skills" 与 "System Skills" 两栏。无身份的请求仍只投影系统层——用户层基目录不整根扫描，否则会列出其他租户已安装的 Skill。
 
@@ -38,6 +40,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Run 收敛保护**: 为每个 Pi Run 增加模型回合、总工具调用和相同工具/参数调用上限；达到上限后禁止继续调用工具，并要求模型依据已有结果作答。三个上限均可通过 `AGENT_RUN_MAX_*` 配置。
 - **MCP 启动发现**: Agent 启动时连接每个启用的 MCP Server 并执行 `tools/list`；发现到的工具以 `mcp__{serverId}__{toolName}` 注册，对应的连接与工具数量会出现在 readiness/diagnostics。
 
+### Security
+
+- **`skill_install(source="sandbox")` 的审批现在绑定字节，而不只是路径**: 该分支的参数只有 `{ source, path }`，没有任何摘要；`archive_sha256` 是**批准之后**下载时才算的，只写进审计日志。而 `skill_install` 是 high risk——参数先入账本、用户批准后**重放**执行——这期间 workspace 一直可写。于是模型可以先递一个人畜无害的归档、等批准、覆写该路径、让重放去装另一份。现在 `source="sandbox"` **必须**带 `source_digest`（64 位小写十六进制 sha256）：下载完成后按字节重算，不等就拒绝安装，错误里同时给出两个摘要并写明什么都没装。模型自己算摘要不削弱这一点——想装别的包它本来就可以直接提议，那正是审批要挡的；digest 挡住的是**批准之后掉包**。Attachment 分支不受影响：它由用户本回合上传的 attachment id 锚定，Sandbox 给了 `x-dataset-sha256` 时还会再校一次。校验在工具与 SkillManager 两处各做一遍——manager 是独立的 API 面，“没有 digest 的沙盒安装”在哪一面都不该存在。
+
 ### Fixed
 
 - **`submit_artifact` 下载下来带原文件名和后缀**: 交付物点下载，保存成没有扩展名的 `artifact-download`，中文名（如 `季度报告.pptx`）尤其明显。两处叠在一起：前端所有下载链接写了空的 `download=""`，Chrome 因此忽略 `Content-Disposition`，改用 URL 最后一段 `/api/files/artifact-download`；BFF 在沙箱没带 disposition 时又退回 `filename="<artifactId>"`（ULID，同样没后缀），ASCII `filename=` 兜底也不保留 `.pptx` / `.md`。现在链接带真实 basename；`filename=` 对纯 CJK 名是 `download.pptx`（后缀还在），完整原名走 `filename*` 与 `X-Artifact-Filename`；BFF 转发沙箱 header，不再用 ULID 顶替。
@@ -52,7 +58,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Run 进行中刷新不再丢失 assistant 正文**: Run 还在跑时刷新页面，气泡只剩 `Agent Execution Steps`，正文消失，且 Run 结束后也不会自己回来——要等用户再发一条消息，旧回答才重新出现并重新排序。根因在 `rehydrateConversation()`：Run 状态为 running/pending/queued 时**跳过**持久事件回放，完全依赖 SSE 重连；而工具账本无论如何都会回放，于是"有步骤、没回答"。刷新期间 Run 恰好结束（或 SSE 没及时恢复）时，重连已无增量可送，正文就永久缺席。现在**总是先回放 durable events，再连 SSE 取增量**——reducer 按 event id 去重，重复投递是安全的；`runtime_available === false` 分支里那次补偿性回放随之删除（不再需要，也避免二次回放）。
 
-- **Skill 目录的 `ls`/`find`/`grep` 给出可操作的错误**: Agent 侧路径规范化放行 Skill 只读路径并把请求转给 Sandbox，但 Sandbox 的 `parse_sandbox_path()` 只认 workspace 与 `/tmp`，于是模型拿到的是 `PATH_INVALID` / "search request failed" 这种不知所云的结果。三层现在口径一致：Skill 目录**不可搜索**，读取只走 `read`——`ls`/`find`/`grep` 在 Agent 层就返回 `PATH_SKILL_SEARCH_UNSUPPORTED` 并点名 `read` 与具体路径，不再把注定被拒的请求发给 Sandbox；`bash` 的既有拒绝理由也补上了同一句指引。企业系统提示此前写着「没有 skills 段时用 `ls` 看 `${skillRoot}`」——那正是第四层不一致，现已改为说明 Skill 目录不可搜索、已安装的 Skill 都列在 skills 段里、要看就 `read` 它的 `SKILL.md`。
+- **Skill 目录的 `ls`/`find`/`grep` 给出可操作的错误**: Agent 侧路径规范化放行 Skill 只读路径并把请求转给 Sandbox，但 Sandbox 的 `parse_sandbox_path()` 只认 workspace 与 `/tmp`，于是模型拿到的是 `PATH_INVALID` / "search request failed" 这种不知所云的结果。三层口径就此统一：注定被拒的请求不再发给 Sandbox，`ls`/`find`/`grep` 在 Agent 层就返回 `PATH_SKILL_SEARCH_UNSUPPORTED` 并点名该用哪个工具；`bash` 的既有拒绝理由也补上了同一句指引。企业系统提示此前写着「没有 skills 段时用 `ls` 看 `${skillRoot}`」——那正是第四层不一致。（本条最初把三层统一在“Skill 目录一律不可搜索”上；同一未发布区间内 `ls` 已被放开，最终口径见上面 Added 中的 `ls` 一条。）
 
 - **图片分析不再让 Run FAILED（`Out of sort memory`）**: 上传图片做分析时 Run 失败，前端弹出 `select * from messages where agent_session_id = … order by sequence_no asc limit 500 - Out of sort memory…`。根因是 Pi journal 读取会 filesort：优化器为这条查询选了 `idx_messages_session_pi_kind (agent_session_id, pi_entry_kind, sequence_no)`，而查询过滤的是 `message_type`、从不约束中间那列 `pi_entry_kind`，索引因此给不出 `sequence_no` 顺序 → MySQL 退化成对整行（含 `content_json`）排序。平时无害（journal 行 1–3KB），但 `read` 内联图片上限是 `MAX_READ_IMAGE_BYTES = 2MiB`，base64 后单条 entry ≈ 2.7MB，一条就超过默认 256KB 的 `sort_buffer_size`，直接 ER_OUT_OF_SORTMEMORY。触发面很宽：`recover()` 在**每次 Run 启动**都读一遍，`persist()` 更是在写入那条图片 entry 之后**立刻回读**——失败即回滚，所以事后查库根本看不到那条大行（这一点很容易把排查带偏）。改为 `FORCE INDEX (idx_messages_session)`：`(agent_session_id, sequence_no)` 天生按 `sequence_no` 有序，排序整个消失，`LIMIT` 也能提前停止。同一份真实数据 A/B：旧查询 `ERROR 1038`，新查询正常返回 22 行；真机重跑此前失败的那轮图片分析，SUCCEEDED，且 journal 里确实留下了一条 2.015MB 的 entry。
 
@@ -66,6 +72,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+- **Agent `sandbox-client.js`里指向已下线路由的死方法**: 该 client 是 owner-scoped 公共面封装（模型自己的工具调用不走这里，走签名内部面 `sandbox-bridge-http-transport.js`）。Sandbox 早已撤掉自己的 session 创建、conversation、临时执行与审批面，但对应方法一直留着——调用即 404：`createSession` / `getSession`（`POST /sessions`、`GET /sessions/{id}`）、整个 `/conversations/*` 六个方法、`executeCommand`（`/sessions/{id}/executions/command`）、`getExecutionLogs` / `listExecutionEvents`、以及 `createApproval` / `approvalCheck` / `getApproval` / `decideApproval`（`/approvals`、`/approve`）。更糟的是一批模块级封装：`startProcess` / `getProcess` / `waitProcess` / `cancelExecution` / `cancelActiveExecution` / `cancelSessionProcesses` / `readFileWithRange` 委托的 client 方法**根本不存在**（`TypeError`），而 `getProcessLogs` / `writeProcessStdin` / `signalProcess` / `cancelProcess` 四个模块级封装**参数错位**——把 `processId` 当成 `sessionId` 传进去。全部删除，共 -223 行；随之删掉只为 `executeCommand` 存在的 `timeoutForSeconds` / `REQUEST_GRACE_MS` 及其单测。留下的每个方法都对得上 `/openapi.json` 里仍在服务的路由，文件头补上了这条规则。`api-server` 那份同名 client 已经是干净的，未改动。
 - **`config/agent/models.json`**: 与 `model-registry.json` 重复的第二份模型目录，全仓库零引用——不被任何代码读取，也不在 pi SDK 查找 `models.json` 的 `AGENT_PI_AGENT_DIR` 下（容器里 `/app/pi-agent-home/` 是空的）。留着只会继续和真实目录漂移。
 - **`disabled-test-model` 与 `ZERO_PRICING`**: 前者是只为测试存在却出货在生产 seed 里的假模型，已移进测试自己的 fixture；后者随之失去全部引用（`normalizeModelEntry` 本就把各价格字段内联默认为 0）。
 

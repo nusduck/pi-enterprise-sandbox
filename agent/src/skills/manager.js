@@ -217,6 +217,12 @@ export function createSkillManager(options = {}) {
      * owner-scoped, size-capped and hashed here, then handed to the same
      * `installSkillArchive` — the sandbox provenance adds a way to *reach* an
      * archive, never a second way to write into the Skill root.
+     *
+     * Each provenance pins its bytes differently. An attachment is pinned by
+     * its id and, when Sandbox supplies the header, by `x-dataset-sha256`. A
+     * sandbox path pins nothing on its own — the workspace stays writable while
+     * the call waits for approval — so `sourceDigest` is required and checked
+     * against what was actually downloaded.
      */
     async install(params) {
       assertWritable('install');
@@ -224,6 +230,7 @@ export function createSkillManager(options = {}) {
       const fromSandbox = sourceType === 'sandbox_build';
       const attachmentId = String(params?.attachmentId || '').trim();
       const sourcePath = String(params?.sourcePath || '').trim();
+      const sourceDigest = String(params?.sourceDigest || '').trim().toLowerCase();
       const auditSource = fromSandbox
         ? sourcePath && `sandbox:${sourcePath}`
         : attachmentId && `attachment:${attachmentId}`;
@@ -238,6 +245,11 @@ export function createSkillManager(options = {}) {
         }
         if (fromSandbox) {
           if (!sourcePath) throw new Error('Skill archive sandbox path is required');
+          // Validated here as well as in the tool: the manager is its own API
+          // surface, and an unpinned sandbox install must not exist on either.
+          if (!/^[0-9a-f]{64}$/.test(sourceDigest)) {
+            throw new Error('Skill archive sourceDigest must be a sha256 hex digest');
+          }
         } else if (!attachmentId) {
           throw new Error('Skill archive attachment_id is required');
         }
@@ -270,6 +282,16 @@ export function createSkillManager(options = {}) {
           throw error;
         } finally {
           clearTimeout(timer);
+        }
+        if (fromSandbox && downloaded.sha256 !== sourceDigest) {
+          // Do not install "whatever is there now". The user approved one
+          // archive; if the path holds different bytes, the safe outcome is to
+          // refuse and let the model propose the new package for approval.
+          throw new Error(
+            `Skill archive at ${sourcePath} does not match the approved ` +
+              `source_digest (expected ${sourceDigest}, found ${downloaded.sha256}); ` +
+              'nothing was installed. Call skill_install again with the current digest.',
+          );
         }
         const result = await installSkillArchive({
           archiveBytes: downloaded.bytes,

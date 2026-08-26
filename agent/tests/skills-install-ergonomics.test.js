@@ -350,6 +350,7 @@ test('SkillManager installs a package the model built in the sandbox', async () 
   const result = await manager.install({
     source: 'sandbox',
     sourcePath: '/tmp/built-skill.skill',
+    sourceDigest: createHash('sha256').update(zip).digest('hex'),
     archiveName: 'built-skill.skill',
   });
 
@@ -386,6 +387,7 @@ test('SkillManager rejects malformed sandbox install inputs before downloading b
       throw new Error('must not run');
     },
   });
+  const anyDigest = 'a'.repeat(64);
   await assert.rejects(
     manager.install({ source: 'sandbox', archiveName: 'built.zip' }),
     /sandbox path is required/,
@@ -394,10 +396,26 @@ test('SkillManager rejects malformed sandbox install inputs before downloading b
     manager.install({
       source: 'sandbox',
       sourcePath: '/tmp/built.tar.gz',
+      sourceDigest: anyDigest,
       archiveName: 'built.tar.gz',
     }),
     /\.zip or \.skill archives/,
   );
+  // A sandbox install with no digest, or a digest that is not a sha256, must
+  // not reach the wire: an unpinned sandbox install has to be impossible on the
+  // manager API too, not only through the tool.
+  for (const sourceDigest of [undefined, '', 'not-a-digest', 'A'.repeat(63), 'z'.repeat(64)]) {
+    await assert.rejects(
+      manager.install({
+        source: 'sandbox',
+        sourcePath: '/tmp/built.zip',
+        sourceDigest,
+        archiveName: 'built.zip',
+      }),
+      /sourceDigest must be a sha256/,
+      String(sourceDigest),
+    );
+  }
   assert.equal(downloads, 0);
 
   // An attachment install must still fail closed when only the sandbox fetcher
@@ -406,6 +424,59 @@ test('SkillManager rejects malformed sandbox install inputs before downloading b
     manager.install({ attachmentId: 'dataset-1', archiveName: 'skill.zip' }),
     /archive download is not configured/,
   );
+});
+
+test('SkillManager refuses a sandbox archive whose bytes changed after approval', async () => {
+  const userRoot = await tmpdir('skill-user');
+  const approved = createStoredZip([
+    { name: 'built-skill/SKILL.md', content: skillMd('built-skill', 'The package the user approved.') },
+  ]);
+  // What the path holds by the time the approved call replays.
+  const swapped = createStoredZip([
+    { name: 'built-skill/SKILL.md', content: skillMd('built-skill', 'Something else entirely.') },
+    { name: 'built-skill/exfil.py', content: 'print("not approved")\n' },
+  ]);
+  const auditEvents = [];
+  const manager = createSkillManager({
+    identity: { orgId: 'org-1', userId: 'user-1' },
+    skillRoots: ['/system-skills', userRoot],
+    userSkillRoot: userRoot,
+    auditSink: (event) => auditEvents.push(event),
+    downloadWorkspaceArchive: async () => ({
+      ok: true,
+      headers: new Map([
+        ['content-type', 'application/octet-stream'],
+        ['content-length', String(swapped.length)],
+      ]),
+      arrayBuffer: async () => swapped,
+    }),
+  });
+
+  const approvedDigest = createHash('sha256').update(approved).digest('hex');
+  const swappedDigest = createHash('sha256').update(swapped).digest('hex');
+  await assert.rejects(
+    manager.install({
+      source: 'sandbox',
+      sourcePath: '/tmp/built-skill.skill',
+      sourceDigest: approvedDigest,
+      archiveName: 'built-skill.skill',
+    }),
+    (error) => {
+      // Both digests are named so the failure is diagnosable, and the message
+      // says plainly that nothing landed.
+      assert.match(error.message, new RegExp(approvedDigest));
+      assert.match(error.message, new RegExp(swappedDigest));
+      assert.match(error.message, /nothing was installed/);
+      return true;
+    },
+  );
+
+  // The swapped package must not be on disk, and the refusal must be audited.
+  assert.deepEqual(manager.listInstalled(), []);
+  assert.equal(fs.existsSync(path.join(userRoot, 'built-skill')), false);
+  const failure = auditEvents.find((event) => event.action === 'install');
+  assert.equal(failure.result, 'failure');
+  assert.equal(failure.source_type, 'sandbox_build');
 });
 
 test('SkillManager rejects malformed install inputs before downloading bytes', async () => {

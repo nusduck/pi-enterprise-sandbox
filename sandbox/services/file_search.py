@@ -10,6 +10,7 @@ import fnmatch
 import os
 import re
 import time
+from dataclasses import dataclass
 from pathlib import Path
 
 from sandbox.models import (
@@ -20,7 +21,13 @@ from sandbox.models import (
     GrepMatch,
     GrepResponse,
 )
-from sandbox.paths import SandboxPathScope, sanitize_path_error
+from sandbox.paths import (
+    AGENT_SKILL_PATH,
+    AGENT_USER_SKILL_PATH,
+    SandboxPathScope,
+    logical_skill_root,
+    sanitize_path_error,
+)
 from sandbox.security.path_validation import (
     enforce_path_within_workspace,
     resolve_sandbox_path,
@@ -91,11 +98,91 @@ def _to_rel(root: Path, path: Path, public_prefix: str | None = None) -> str:
     return public_prefix if relative == "." else f"{public_prefix}/{relative}"
 
 
+@dataclass(frozen=True)
+class SkillSearchRoots:
+    """Physical Skill roots a single caller may list.
+
+    ``user`` is already scoped to one tenant — it is the caller's own
+    ``<base>/<org>/<user>`` directory, resolved by
+    ``execution_context.user_skill_dir_for``, never the shared base. The base is
+    therefore not reachable from here at all, so no path a caller can write can
+    walk sideways into another tenant's packages.
+    """
+
+    system: Path | None = None
+    user: Path | None = None
+    org_id: str | None = None
+    user_id: str | None = None
+
+
+def _resolve_skill_search_root(
+    path: str, roots: SkillSearchRoots
+) -> tuple[Path, Path, str | None]:
+    """Map a logical Skill path onto the physical tier root the caller owns.
+
+    Skill trees are listable but not searchable: only ``ls`` reaches here, and
+    only through the Agent guard that rejects ``find``/``grep`` on these roots.
+
+    The user tier accepts two spellings of the same place, and this is a
+    deliberate divergence from the read plane, which rejects a bare root
+    outright (``files_read_contract._enforce_user_skill_scope``):
+
+    - ``/home/sandbox/skill-user`` — the bare root, resolved to the *caller's
+      own* directory. ``ls`` exists for "I do not know what is there"; making
+      the caller spell out its own org/user first would give that back. Listed
+      entries always carry the fully qualified prefix, so the answer to a bare
+      listing is itself the path ``read`` wants.
+    - ``/home/sandbox/skill-user/<org>/<user>/...`` — the explicit form the read
+      plane uses, accepted so a path from a skills section or an earlier ``ls``
+      can be pasted straight back in.
+
+    Any other spelling — another tenant, or a bare ``<org>`` that would
+    enumerate its users — raises ``PermissionError``, which the caller reports
+    with the same opaque code as a malformed path so existence is not probeable.
+    """
+    root = logical_skill_root(path)
+    rest = path[len(root):].strip("/") if root else ""
+
+    if root == AGENT_SKILL_PATH:
+        base = roots.system
+        prefix = AGENT_SKILL_PATH
+        tail = rest
+    else:
+        if roots.user is None or not roots.org_id or not roots.user_id:
+            # Identity unknown: the user tier does not exist for this caller.
+            raise PermissionError("Path escape detected: skill path is not listable")
+        base = roots.user
+        prefix = f"{AGENT_USER_SKILL_PATH}/{roots.org_id}/{roots.user_id}"
+        parts = [part for part in rest.split("/") if part]
+        if not parts:
+            tail = ""
+        elif parts[:2] == [roots.org_id, roots.user_id]:
+            tail = "/".join(parts[2:])
+        else:
+            raise PermissionError("Path escape detected: skill path is not listable")
+
+    if base is None:
+        raise PermissionError("Path escape detected: skill path is not listable")
+
+    resolved_base = base.resolve()
+    target = (resolved_base / tail).resolve() if tail else resolved_base
+    try:
+        inside = target == resolved_base or target.is_relative_to(resolved_base)
+    except (OSError, RuntimeError, ValueError):
+        inside = False
+    if not inside:
+        raise PermissionError("Path escape detected: skill path is not listable")
+    return resolved_base, target, prefix
+
+
 def _resolve_search_root(
     workspace_path: str,
     path: str,
     temp_path: str | None,
+    skill_roots: SkillSearchRoots | None = None,
 ) -> tuple[Path, Path, str | None]:
+    if skill_roots is not None and logical_skill_root(path):
+        return _resolve_skill_search_root(path, skill_roots)
     if temp_path is None:
         root = _workspace_root(workspace_path)
         return root, enforce_path_within_workspace(workspace_path, path), None
@@ -216,10 +303,14 @@ class FileSearchService:
         include_hidden: bool = False,
         *,
         temp_path: str | None = None,
+        skill_roots: SkillSearchRoots | None = None,
     ) -> FileSearchResponse:
         depth = _clamp_int(depth, 1, 0, LS_MAX_DEPTH)
+        # ls is the only search tool given skill roots; find and grep pass None,
+        # so a skill path there still fails closed even if the Agent guard that
+        # rejects them first were ever bypassed.
         root, start, public_prefix = _resolve_search_root(
-            workspace_path, path, temp_path
+            workspace_path, path, temp_path, skill_roots
         )
 
         t0 = time.monotonic()
