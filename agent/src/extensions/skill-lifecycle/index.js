@@ -71,6 +71,37 @@ function toolError(error, action) {
   });
 }
 
+/**
+ * Require the sha256 of the archive a `source: "sandbox"` install names.
+ *
+ * `skill_install` is `high` risk, so its arguments are recorded and then
+ * *replayed* after the user approves. For the attachment source that is safe:
+ * the bytes are pinned by an attachment id the user themselves attached this
+ * turn. The sandbox source names a workspace path instead, and a path is not
+ * content — nothing stopped the archive from being rewritten between the
+ * proposal the user read and the replay that installs it.
+ *
+ * The digest closes that: it travels inside the approved arguments, so the
+ * approval binds the bytes, not just where they were. The model choosing the
+ * digest is not a weakness — a model that wants to install something else can
+ * simply propose it, which is what approval is there to catch. What it can no
+ * longer do is have one archive approved and a different one installed.
+ *
+ * @param {unknown} raw
+ * @returns {string} lowercase hex sha256
+ */
+function assertSandboxSourceDigest(raw) {
+  const digest = String(raw ?? '').trim().toLowerCase();
+  if (!/^[0-9a-f]{64}$/.test(digest)) {
+    throw new Error(
+      'source_digest is required for source "sandbox": the archive\'s sha256 as ' +
+        '64 hex characters (for example `sha256sum dist/pkg.zip`). It pins the ' +
+        'approval to these exact bytes, so finish the archive before calling.',
+    );
+  }
+  return digest;
+}
+
 function normalizeCurrentTurnAttachments(value) {
   if (!Array.isArray(value)) return [];
   return value.flatMap((raw) => {
@@ -161,11 +192,13 @@ export function createSkillLifecycleExtension(options) {
         'source "attachment" (default) installs a ZIP the user attached in the current turn — ' +
         'use the attachment_id and filename from the current-turn attachment block. ' +
         'source "sandbox" installs a package you built and zipped yourself in the workspace ' +
-        'or /tmp — pass its path. URLs are never accepted. This operation requires user approval.',
+        'or /tmp — pass its path and its sha256 as source_digest. ' +
+        'URLs are never accepted. This operation requires user approval.',
       promptSnippet: 'Install a Skill ZIP (current-turn attachment or one you built) after approval',
       promptGuidelines: [
         'For source "attachment": only a .zip in the current user turn; copy attachment_id and filename exactly.',
-        'For source "sandbox": build the package directory, zip it, then pass that archive path.',
+        'For source "sandbox": build the package directory, zip it, take its sha256, then pass the archive path and that digest.',
+        'Finish and verify the archive before calling: what installs is the archive as it was when you named its digest, so rewriting it afterwards fails the install instead of updating it.',
         'Skill directories are read-only — never try to build a package under the Skill root.',
       ],
       parameters: Type.Object({
@@ -175,6 +208,8 @@ export function createSkillLifecycleExtension(options) {
         attachment_id: Type.Optional(Type.String({ minLength: 1, maxLength: 128 })),
         filename: Type.Optional(Type.String({ minLength: 1, maxLength: 255 })),
         path: Type.Optional(Type.String({ minLength: 1, maxLength: MAX_PATH_LEN })),
+        // Required for source "sandbox"; see assertSandboxSourceDigest.
+        source_digest: Type.Optional(Type.String({ minLength: 64, maxLength: 64 })),
       }),
       async execute(_toolCallId, input) {
         try {
@@ -199,6 +234,7 @@ export function createSkillLifecycleExtension(options) {
                 manager.install({
                   source: 'sandbox',
                   sourcePath: norm.path,
+                  sourceDigest: assertSandboxSourceDigest(input?.source_digest),
                   archiveName: norm.path.split('/').pop(),
                 }),
               ),

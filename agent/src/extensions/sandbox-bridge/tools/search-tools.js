@@ -14,7 +14,6 @@
 
 import { Type } from 'typebox';
 import {
-  LOGICAL_SKILL_ROOTS,
   FIND_DEFAULT_LIMIT,
   FIND_DEFAULT_MAX_DEPTH,
   FIND_MAX_DEPTH,
@@ -40,37 +39,36 @@ function clampInt(value, fallback, min, max) {
 }
 
 /**
- * ls / find / grep run through the Sandbox search plane, whose path model only
- * knows the workspace and the session temp tree (`parse_sandbox_path`). Skill
- * roots are reachable read-only, but only through the dedicated `read` path.
+ * Skill roots are *listable* but not *searchable*.
  *
- * The Agent used to forward skill paths anyway, so the model got the Sandbox's
- * opaque `PATH_INVALID` / "search request failed" instead of being told which
- * tool to use. Resolve the inconsistency here, at the layer that knows both.
+ * `ls` is allowed on them: without it the model cannot discover which reference
+ * or script files a Skill ships unless its SKILL.md happens to say so, which
+ * defeats the point of shipping them. `find` and `grep` stay closed — a
+ * content search across every installed package pulls in exactly the material
+ * progressive disclosure exists to keep out, and the model can always `ls` then
+ * `read` the one file it wants.
+ *
+ * That split is decided here, at the only layer that knows both the path model
+ * and which tool is asking; the Sandbox fails a skill path closed for `find`
+ * and `grep` regardless (it is handed no skill roots for them).
  *
  * @param {unknown} raw
+ * @param {{ allowSkill?: boolean }} [opts]
  * @returns {{ ok: true, path: string } | { ok: false, result: object }}
  */
-function normalizeSearchPath(raw) {
+function normalizeSearchPath(raw, opts = {}) {
   // allowSkillRead so a skill path is *recognised* rather than reported as a
   // generic out-of-workspace path.
   const norm = normalizeLogicalPath(raw ?? '.', { allowSkillRead: true });
   if (!norm.ok) return { ok: false, result: toolErr(norm.code, norm.reason) };
-  if (norm.area === 'skill') {
-    // Only suggest a concrete file when the caller already named a package
-    // directory. At a bare skill root there is no SKILL.md to point at, and
-    // inventing one sends the model chasing a path that does not exist.
-    const isSkillRoot = LOGICAL_SKILL_ROOTS.some((root) => norm.path === root);
-    const hint = isSkillRoot
-      ? 'Every installed skill is already listed with its location in your ' +
-        'skills section; read that location directly.'
-      : `Read the file directly instead, for example read ${norm.path}/SKILL.md.`;
+  if (norm.area === 'skill' && opts.allowSkill !== true) {
     return {
       ok: false,
       result: toolErr(
         'PATH_SKILL_SEARCH_UNSUPPORTED',
-        `Skill directories are not searchable. ${hint} ` +
-          'ls, find and grep cover the workspace and /tmp only.',
+        'Skill directory contents cannot be searched. Use ls to see what a ' +
+          'skill ships, then read the file you want. find and grep cover the ' +
+          'workspace and /tmp only.',
       ),
     };
   }
@@ -91,12 +89,12 @@ export function createSearchToolDefinitions({ invoke, modeFor }) {
       name: 'ls',
       label: 'List directory',
       description:
-        `List a workspace or /tmp directory. depth 0 is the directory itself, default ${LS_DEFAULT_DEPTH}, max ${LS_MAX_DEPTH}. Hidden entries are omitted unless includeHidden is true. Results are budgeted and report truncated with a stopReason. Prefer ls over bash ls.`,
-      promptSnippet: 'List workspace directories with bounded depth',
+        `List a workspace, /tmp or skill directory. depth 0 is the directory itself, default ${LS_DEFAULT_DEPTH}, max ${LS_MAX_DEPTH}. Hidden entries are omitted unless includeHidden is true. Results are budgeted and report truncated with a stopReason. Prefer ls over bash ls.`,
+      promptSnippet: 'List workspace, temporary or skill directories with bounded depth',
       promptGuidelines: [
         'Start a task by listing the workspace root before guessing file paths.',
         'Increase depth only when a shallow listing was not enough; a deep listing on a large tree is mostly truncated noise.',
-        'Skill directories are not listable; open a skill file with read instead.',
+        'Use ls on a skill directory to see which reference files and scripts it ships, then read the one you need; find and grep do not reach skill directories.',
       ],
       parameters: Type.Object({
         path: Type.Optional(Type.String({ maxLength: MAX_PATH_LEN })),
@@ -108,7 +106,7 @@ export function createSearchToolDefinitions({ invoke, modeFor }) {
       executionMode: modeFor('ls'),
       // Every parameter is optional for ls, so a bare call must not throw.
       async execute(toolCallId, params = {}) {
-        const norm = normalizeSearchPath(params.path);
+        const norm = normalizeSearchPath(params.path, { allowSkill: true });
         if (!norm.ok) return norm.result;
         const normalizedParams = {
           path: norm.path,

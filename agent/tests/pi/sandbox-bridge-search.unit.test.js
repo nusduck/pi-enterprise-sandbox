@@ -308,21 +308,21 @@ describe('ledger binding', () => {
   });
 });
 
-describe('skill paths are refused at the Agent layer, consistently', () => {
+describe('skill paths: listable, not searchable', () => {
   const skillPaths = [
     '/home/sandbox/skill',
     '/home/sandbox/skill/docx',
     '/home/sandbox/skill/docx/SKILL.md',
+    '/home/sandbox/skill-user',
     '/home/sandbox/skill-user/01K0G2PAV8FPMVC9QHJG7JPN4Z/01K0G2PAV8FPMVC9QHJG7JPN50/pkg',
   ];
 
-  const invocations = {
-    ls: (path) => ({ path }),
+  const searchInvocations = {
     find: (path) => ({ path, pattern: '*.md' }),
     grep: (path) => ({ path, query: 'needle' }),
   };
 
-  for (const [name, buildParams] of Object.entries(invocations)) {
+  for (const [name, buildParams] of Object.entries(searchInvocations)) {
     for (const path of skillPaths) {
       it(`${name} refuses ${path} without calling the Sandbox`, async () => {
         const calls = [];
@@ -330,13 +330,8 @@ describe('skill paths are refused at the Agent layer, consistently', () => {
         const tool = defs.find((d) => d.name === name);
         const out = await tool.execute(`tc-${name}`, buildParams(path));
         assert.equal(out.details.code, 'PATH_SKILL_SEARCH_UNSUPPORTED');
-        assert.match(
-          out.content[0].text,
-          path.endsWith('/skill') || path.endsWith('/skill-user')
-            ? /skills section/
-            : /read \/home\/sandbox\/skill/,
-          out.content[0].text,
-        );
+        // The message must send the model somewhere that works, and ls now does.
+        assert.match(out.content[0].text, /Use ls/, out.content[0].text);
         assert.equal(
           calls.length,
           0,
@@ -345,6 +340,28 @@ describe('skill paths are refused at the Agent layer, consistently', () => {
       });
     }
   }
+
+  for (const path of skillPaths) {
+    it(`ls forwards ${path} to the Sandbox`, async () => {
+      const calls = [];
+      const defs = defsFor(calls);
+      const tool = defs.find((d) => d.name === 'ls');
+      const out = await tool.execute('tc-ls', { path });
+      assert.equal(out.details?.code, undefined, out.content[0].text);
+      assert.equal(calls.length, 1, 'ls must reach the Sandbox for skill paths');
+      assert.equal(calls[0].method, 'lsFiles');
+      assert.equal(calls[0].payload.path, path);
+    });
+  }
+
+  it('ls still rejects a path outside every root', async () => {
+    const calls = [];
+    const defs = defsFor(calls);
+    const tool = defs.find((d) => d.name === 'ls');
+    const out = await tool.execute('tc-ls', { path: '/etc' });
+    assert.equal(out.details.code, 'PATH_OUTSIDE_WORKSPACE');
+    assert.equal(calls.length, 0);
+  });
 
   it('still searches the workspace and /tmp', async () => {
     for (const path of ['/home/sandbox/workspace/src', '/tmp', 'src']) {

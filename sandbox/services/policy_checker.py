@@ -18,6 +18,7 @@ from __future__ import annotations
 import re
 import shlex
 
+from sandbox.paths import AGENT_SKILL_PATHS
 from sandbox.models import (
     PolicyDecision,
     RiskLevel,
@@ -586,9 +587,11 @@ class ToolPolicyChecker:
         roots = ("/home/sandbox/workspace", "/tmp")
         if any(raw == root or raw.startswith(root + "/") for root in roots):
             return False
-        if tool_name in _LOW_TOOLS and (
-            raw == "/home/sandbox/skill"
-            or raw.startswith("/home/sandbox/skill/")
+        # Both Skill tiers, not just the system one: the per-user tier was
+        # missing here, which made this the odd layer out again. Read-only tools
+        # only — the tree is a read-only mount for everyone else.
+        if tool_name in _LOW_TOOLS and any(
+            raw == root or raw.startswith(root + "/") for root in AGENT_SKILL_PATHS
         ):
             return False
         return True

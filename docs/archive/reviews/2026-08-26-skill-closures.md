@@ -54,9 +54,21 @@ they are recorded here rather than re-deferred:
 - Python: `tests/test_builtin_skills.py`, `test_skill_runtime_dependencies.py`,
   `test_path_validation.py` — 27 passed.
 - The rewritten `skills/skill-creator/SKILL.md` passes the platform's own
-  `validateSkillPackage`, and the build → package → install path in it was run
-  end to end: `package_skill.py` output installed through the real
-  `installSkillArchive` as `source_type: sandbox_build`.
+  `validateSkillPackage`, and its **install segment** was run for real:
+  `package_skill.py` output handed to the real `installSkillArchive` as
+  `source_type: sandbox_build`.
+  The download segment was **not** covered by that run: `manager.install()` for
+  `source: "sandbox"` runs `downloadWorkspaceArchive({ path }) →
+  readSkillArchiveDownload → installSkillArchive`
+  (`agent/src/skills/manager.js`), and the run above skipped the first two hops
+  and fed the archive bytes in directly.
+
+  **Closed on 2026-08-26** against the running stack — see
+  [`docs/evidence/2026-08-26-skill-ls-and-install-digest.md`](../../evidence/2026-08-26-skill-ls-and-install-digest.md).
+  An archive in a real Sandbox workspace was fetched over the real
+  `GET /sessions/{id}/files/download` and installed; the bytes that arrived hash
+  to what was sent. Read the evidence for what that run does and does not cover
+  before citing it.
 
 The packaging command in that Skill needs both `PYTHONPATH` and an explicit
 output directory. Without the first the script fails to import its own

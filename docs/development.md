@@ -175,7 +175,7 @@ SKILLS_USER_ROOT=/home/sandbox/skill-user
 | 工具 | 作用 |
 |------|------|
 | `skill_list` | 列出两层可见 package（含 tier / description / 是否可编辑） |
-| `skill_install` | 安装单个 package：当前回合上传的 `.zip`（`source="attachment"`，默认），或模型自己在沙盒里搭好并打包的 `.zip` / `.skill`（`source="sandbox"`，传 `path`） |
+| `skill_install` | 安装单个 package：当前回合上传的 `.zip`（`source="attachment"`，默认），或模型自己在沙盒里搭好并打包的 `.zip` / `.skill`（`source="sandbox"`，传 `path` 与 `source_digest`） |
 | `skill_create` | 把与用户确认后的说明和文本文件原子生成成一个 package |
 | `skill_uninstall` | 删除自己装的 package（系统层不可删） |
 | `skill_edit` | 修改已安装用户 package；不能用来新建 package |
@@ -192,6 +192,14 @@ workspace 或 `/tmp` 里搭包、跑通、打成 ZIP，然后把**归档路径**
 workspace/temp 根内。取回字节走已有的 owner-scoped `GET /sessions/{id}/files/download`，
 之后与上传路径**汇流到同一个** `installSkillArchive`：同样的解压、校验、原子替换。
 换句话说，这条路增加的是「够得着一个归档」的方式，不是第二条写入 Skill 根的路径。
+
+`source="sandbox"` 另外**必须**带 `source_digest`（归档的 sha256，64 位小写十六进制）。
+原因是两条来源锚定字节的方式不同：attachment 由用户本回合上传的 attachment id 锚定，
+而沙盒路径只是一个位置——`skill_install` 是 high risk，参数先入账本、审批通过后**重放**执行，
+而这期间 workspace 一直可写。没有 digest，用户批准的归档与最终安装的归档可以不是同一份。
+下载完成后按字节重算 sha256，不等即拒绝安装并同时给出两个摘要，不会"安装当前那一份"。
+模型自己提供摘要并不削弱这一点：想装别的包它本来就可以直接提议，审批要挡的正是那个；
+digest 挡住的是**批准之后掉包**。
 
 `skill_create` 是“和 Agent 交互生成”的安装入口：Agent 收集并确认需求后，在一次高风险
 工具调用中提交 `name`、`description`、`instructions` 与可选文件；用户批准后才落盘。

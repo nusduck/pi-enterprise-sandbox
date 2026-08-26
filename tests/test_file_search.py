@@ -11,6 +11,7 @@ import pytest
 from sandbox.services.file_search import (
     FIND_MAX_LIMIT,
     FileSearchService,
+    SkillSearchRoots,
 )
 
 
@@ -330,3 +331,128 @@ class TestGrep:
             assert any(s.reason == "symlink_escape" for s in result.skipped)
         finally:
             shutil.rmtree(str(outside), ignore_errors=True)
+
+
+class TestLsSkillRoots:
+    """`ls` reaches Skill trees; `find` / `grep` never do.
+
+    The user tier is the interesting half: the caller is handed *its own*
+    directory, never the shared base, so the tenant boundary holds even for a
+    path the model made up.
+    """
+
+    ORG = "01K0G2PAV8FPMVC9QHJG7JPN4Z"
+    USER = "01K0G2PAV8FPMVC9QHJG7JPN50"
+    OTHER_ORG = "01K0G2PAV8FPMVC9QHJG7JPN5A"
+    OTHER_USER = "01K0G2PAV8FPMVC9QHJG7JPN5B"
+
+    @pytest.fixture
+    def skills(self):
+        base = Path(tempfile.mkdtemp(prefix="skill_roots_"))
+        system = base / "skill"
+        user_base = base / "skill-user"
+        mine = user_base / self.ORG / self.USER
+        theirs = user_base / self.OTHER_ORG / self.OTHER_USER
+        for pkg, files in (
+            (system / "docx", ("SKILL.md", "reference/api.md")),
+            (mine / "invoices", ("SKILL.md", "scripts/build.py")),
+            (theirs / "secret-pkg", ("SKILL.md",)),
+        ):
+            for rel in files:
+                target = pkg / rel
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text("x", encoding="utf-8")
+        yield SkillSearchRoots(
+            system=system, user=mine, org_id=self.ORG, user_id=self.USER
+        )
+        shutil.rmtree(str(base), ignore_errors=True)
+
+    def _ls(self, svc, ws, path, skills, depth=2):
+        return svc.ls(ws, path, depth=depth, temp_path=ws, skill_roots=skills)
+
+    def test_system_root_lists_packages(self, svc, ws: str, skills):
+        result = self._ls(svc, ws, "/home/sandbox/skill", skills)
+        paths = [i.path for i in result.items]
+        assert "/home/sandbox/skill/docx" in paths
+        assert "/home/sandbox/skill/docx/SKILL.md" in paths
+
+    def test_lists_files_a_skill_ships_beyond_skill_md(self, svc, ws: str, skills):
+        # The whole point of opening ls: reference/ is undiscoverable otherwise.
+        result = self._ls(svc, ws, "/home/sandbox/skill/docx", skills)
+        assert "/home/sandbox/skill/docx/reference/api.md" in [
+            i.path for i in result.items
+        ]
+
+    def test_bare_user_root_resolves_to_the_callers_own_directory(
+        self, svc, ws: str, skills
+    ):
+        """Option B: the bare root is an alias, and the answer names the real path."""
+        result = self._ls(svc, ws, "/home/sandbox/skill-user", skills)
+        paths = [i.path for i in result.items]
+        prefix = f"/home/sandbox/skill-user/{self.ORG}/{self.USER}"
+        assert f"{prefix}/invoices" in paths
+        assert f"{prefix}/invoices/SKILL.md" in paths
+        # A bare listing must never surface another tenant's directory name.
+        assert not any(self.OTHER_ORG in p for p in paths)
+
+    def test_explicit_user_path_is_accepted_too(self, svc, ws: str, skills):
+        prefix = f"/home/sandbox/skill-user/{self.ORG}/{self.USER}"
+        result = self._ls(svc, ws, f"{prefix}/invoices", skills)
+        assert f"{prefix}/invoices/scripts/build.py" in [i.path for i in result.items]
+
+    def test_listed_paths_are_what_read_accepts(self, svc, ws: str, skills):
+        """An ls result must be pasteable into read without editing."""
+        result = self._ls(svc, ws, "/home/sandbox/skill-user", skills)
+        for item in result.items:
+            assert item.path.startswith(
+                f"/home/sandbox/skill-user/{self.ORG}/{self.USER}/"
+            )
+
+    def test_another_tenant_is_refused(self, svc, ws: str, skills):
+        with pytest.raises(PermissionError):
+            self._ls(
+                svc,
+                ws,
+                f"/home/sandbox/skill-user/{self.OTHER_ORG}/{self.OTHER_USER}",
+                skills,
+            )
+
+    def test_bare_org_segment_is_refused(self, svc, ws: str, skills):
+        """`<root>/<org>` would enumerate that org's users."""
+        with pytest.raises(PermissionError):
+            self._ls(svc, ws, f"/home/sandbox/skill-user/{self.ORG}", skills)
+
+    def test_unknown_identity_sees_no_user_tier(self, svc, ws: str, skills):
+        anonymous = SkillSearchRoots(system=skills.system)
+        assert svc.ls(
+            ws, "/home/sandbox/skill", depth=1, temp_path=ws, skill_roots=anonymous
+        ).items
+        with pytest.raises(PermissionError):
+            svc.ls(
+                ws,
+                "/home/sandbox/skill-user",
+                depth=1,
+                temp_path=ws,
+                skill_roots=anonymous,
+            )
+
+    def test_traversal_out_of_the_skill_root_is_refused(self, svc, ws: str, skills):
+        with pytest.raises(PermissionError):
+            self._ls(
+                svc,
+                ws,
+                f"/home/sandbox/skill-user/{self.ORG}/{self.USER}/../{self.OTHER_ORG}",
+                skills,
+            )
+
+    def test_physical_roots_never_appear_in_the_response(self, svc, ws: str, skills):
+        blob = self._ls(svc, ws, "/home/sandbox/skill-user", skills).model_dump_json()
+        assert str(skills.user) not in blob
+        assert str(skills.system) not in blob
+
+    def test_find_and_grep_are_handed_no_skill_roots(self, svc, ws: str, skills):
+        """Defense in depth: even called directly they must not resolve."""
+        with pytest.raises(PermissionError):
+            svc.find(ws, "/home/sandbox/skill", pattern="*.md", temp_path=ws)
+        with pytest.raises(PermissionError):
+            svc.grep(ws, "/home/sandbox/skill", query="needle", temp_path=ws)

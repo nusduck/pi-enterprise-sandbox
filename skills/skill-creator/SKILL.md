@@ -85,11 +85,28 @@ good place for a package you are still iterating on.
    weekly-report.zip weekly-report/` works too where `zip` is installed; both
    extensions are accepted.
 
-4. **Install it.** Pass the archive path — not the directory:
+4. **Install it.** Pass the archive path — not the directory — together with
+   the archive's sha256:
+
+   ```bash
+   sha256sum /tmp/weekly-report.skill    # or: python -c "import hashlib,sys;print(hashlib.sha256(open(sys.argv[1],'rb').read()).hexdigest())" /tmp/weekly-report.skill
+   ```
 
    ```
-   skill_install(source="sandbox", path="/tmp/weekly-report.skill")
+   skill_install(
+     source="sandbox",
+     path="/tmp/weekly-report.skill",
+     source_digest="<the 64 hex characters>",
+   )
    ```
+
+   The digest is required, and it is what the user's approval actually binds
+   to. Between proposing the install and the user approving it, the workspace
+   stays writable — the digest is what makes "the archive you showed me" and
+   "the archive that gets installed" the same thing. So **finish the package
+   before you call**: if you rebuild the archive afterwards, the install is
+   refused with the two digests, not silently updated. Take the digest last,
+   after the final edit and after packaging.
 
    The user approves, the package is validated and installed into their own
    Skill directory, and the Skill list is reloaded in the same step. Do **not**
@@ -140,10 +157,11 @@ whole package (right for anything structural). `skill_uninstall` removes one.
 All three affect only the calling user and all three need approval.
 
 To read an installed Skill, `read` its path — for example
-`/home/sandbox/skill/skill-creator/SKILL.md`. **Skill directories are not
-searchable**: `ls`, `find` and `grep` cover the workspace and `/tmp` only. Every
-installed Skill is already named in your skills section, so read the file
-directly instead of trying to list the directory.
+`/home/sandbox/skill/skill-creator/SKILL.md`. Skill directories are **listable
+but not searchable**: `ls` reaches them, so you can see which reference files
+and scripts a package ships beyond its `SKILL.md`; `find` and `grep` cover the
+workspace and `/tmp` only. `ls /home/sandbox/skill-user` lists your own
+installed Skills with their full paths.
 
 ## Not available in this environment
 

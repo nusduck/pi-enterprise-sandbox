@@ -37,6 +37,9 @@ from sandbox.app.persistence.errors import (
     IdempotencyKeyReuseError,
     NotFoundError,
 )
+from sandbox.config import settings
+from sandbox.services.execution_context import user_skill_dir_for
+from sandbox.services.file_search import SkillSearchRoots
 from sandbox.services.internal_execution_supervisor import (
     InternalExecutionSupervisor,
     SupervisorAdmissionError,
@@ -49,6 +52,25 @@ logger = logging.getLogger("sandbox.services.formal_search_runtime")
 FORMAL_SEARCH_RUNTIME_STATE_KEY = "formal_search_runtime"
 
 SEARCH_TOOL_NAMES = ("ls", "find", "grep")
+
+
+def _skill_search_roots(command: InternalSearchCommand) -> SkillSearchRoots:
+    """Skill roots this caller may list, derived from the signed claims.
+
+    ``org_id``/``user_id`` on the command are bound to the request signature by
+    ``parse_and_bind_internal_search`` — they are not model input — and the user
+    tier is narrowed to one directory by ``user_skill_dir_for``, the same
+    function an execution's bwrap binds go through. When identity does not
+    resolve, the user tier is simply absent and the caller sees the system tier
+    only.
+    """
+    user_dir = user_skill_dir_for(command.org_id, command.user_id)
+    return SkillSearchRoots(
+        system=settings.skills_path,
+        user=user_dir,
+        org_id=command.org_id if user_dir is not None else None,
+        user_id=command.user_id if user_dir is not None else None,
+    )
 
 
 class FormalSearchRuntime:
@@ -215,6 +237,7 @@ class FormalSearchRuntime:
                     depth=args["depth"],
                     include_hidden=args["includeHidden"],
                     temp_path=str(temp),
+                    skill_roots=_skill_search_roots(command),
                 )
             elif command.tool_name == "find":
                 found = self.search_service.find(
@@ -239,13 +262,14 @@ class FormalSearchRuntime:
                     temp_path=str(temp),
                 )
         except PermissionError:
-            # Path escaped the workspace/temp roots. Same shape as a bad path so
+            # Path escaped the workspace/temp roots, or named a Skill directory
+            # this caller does not own. Same shape as a bad path either way, so
             # the caller cannot probe what exists outside.
             return (
                 {
                     "error": {
                         "code": "PATH_INVALID",
-                        "message": "path must resolve inside the workspace",
+                        "message": "path must resolve inside an allowed root",
                     },
                     "_httpStatus": 400,
                 },
