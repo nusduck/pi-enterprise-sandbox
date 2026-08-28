@@ -7,7 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Skill 入口脚本允许嵌套在 `scripts/` 子目录下**: 守卫要求脚本路径匹配 `/scripts/<单个文件>$`，于是仓库自带的首方包**当场就跑不了**——`xlsx/scripts/office/pack.py`、`skill-creator/scripts/` 之外的 `eval-viewer/generate_review.py` 都被 `SKILL_SCRIPT_COMMAND_DENIED` 拒绝，而这是唯一被放行的执行入口。现在 `scripts/` 下任意深度都接受；同时补上 `..` 拒绝——旧的扁平正则顺带挡住了 `…/scripts/../hidden.py` 这类「读起来像 scripts/」的路径，放开嵌套后必须显式挡。
+
 ### Changed
+
+- **`skill_edit` 一次提交一组文件**: 参数从单个 `path` + `content` 改为 `files: [{path, content}]`（同一个 package，最多 32 个文件；旧形参仍然接受，这样部署前记录的审批仍能重放）。每次 Skill 变更都要花一次审批，而按文件拆分让「改一个 Skill」= N 次横幅——用户点到第三次就变成机械同意，审批疲劳本身就在削弱这道闸门；更糟的是用户可能批准一个只改了一半的 package。批次是全成或全败：先对整批做完校验（路径、包归属、`.git`、体积、`SKILL.md` 名字），再全部写进临时文件，最后统一换入，中途失败会把已换入的文件回滚。
+- **拒绝信息和 system prompt 现在都写明可执行形态**: 旧的拒绝理由只说「必须是 python *.py / bash *.sh 且无 shell 操作符」，**完全没提 `scripts/` 这条**，而 system prompt 的 Skills 段只讲了只读和 `ls`/`find` 的差别、一个字没讲怎么执行。模型撞墙后既读不到规则也猜不出缺了什么，只能反复试。两处现在都给出完整形态与被排除的写法（`cd &&`、管道、重定向、`$(...)`、glob、`python -m`、换解释器、`cat`）。
 
 - **千行棘轮扩到 `frontend/src` 与 `api-server/src`**: AGENTS.md §3 的「生产文件 ≤1000 行」对四个服务都成立，但 `tests/test_repository_layout.py` 只扫 `agent/` 与 `sandbox/`，于是前端三个文件在没人发现的情况下越了线（`runReducer.ts` 1492、`ChatContext.tsx` 1456、`InlineRuntimeSteps.tsx` 1011），`api-server` 则完全没被钉住（`agent-client.js` 已 944 行且在长）。两个目录现在都在扫描范围内；越线的四个前端文件按既有做法**钉在当前行数**记为显式债务——只能减不能增，加一行就在加它的那个 PR 里失败。`api-server` 无需任何预算即通过。
 

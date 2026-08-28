@@ -302,6 +302,14 @@ Sandbox internal plane (FastAPI)
 | `hard_deny` | 拒绝 | **仍拒绝** | **仍拒绝** |
 
 - 读工具（`read`/`ls`/`find`/`grep`）可并行；Workspace 写操作按 Agent Session/workspace 串行。是否审批取决于外部副作用策略，而不是 `bash` 这一工具名。
+- **Skill 树只能通过声明的入口脚本执行**：`bash` / `process_start` 的命令一旦提到任何 Skill 路径，
+  必须整条是 `python|python3 <skill>/<package>/scripts/<file>.py [args]` 或
+  `bash|sh …/scripts/<file>.sh [args]`，否则 `SKILL_SCRIPT_COMMAND_DENIED`。脚本必须落在该
+  package 的 `scripts/` 下，**允许再套子目录**（首方包本来就这么发，例如
+  `xlsx/scripts/office/pack.py`）；路径里含 `..` 一律拒绝。命令里不允许出现 shell 操作符或
+  glob，因此 `cd … && …`、管道、重定向、`$(...)`、`python -m`、换用别的解释器、以及用 `cat`
+  读 Skill 文件都会被拒——读文件用 `read` 工具，需要更复杂的命令先把脚本复制到 workspace。
+  这条规则同时写进 system prompt 的 Skills 段，模型不必靠撞墙去发现它。
 - 策略版本常量 `POLICY_VERSION`（当前 `2026-07-15.1`）写入审批响应与审计 meta，便于追溯。
 - `SANDBOX_POLICY_PROFILE=strict|balanced` 在 Agent 与 Sandbox 对称生效；`balanced` 仅在 required Bubblewrap 已通过配置校验时激活，并只放行常见包管理命令的审批前置门。`SANDBOX_NETWORK_MODE` 仍是网络权限唯一事实源，生产固定 `strict`。
 - approval key 由 durable `run_id`、Sandbox session、工具名、稳定 SDK
