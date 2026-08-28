@@ -512,6 +512,7 @@ export function createSandboxBridgeToolDefinitions(
         'Use read for file inspection and ls/find/grep for locating things; use bash for commands and narrow diagnostics.',
         'Prefer bounded output such as head, tail, or focused filters; never dump whole large files via cat.',
         'On truncation, narrow the command rather than re-running the same dump.',
+        'Do not use bash to talk to the user (echo, printf, comments); write progress in the reply.',
       ],
       parameters: Type.Object({
         command: Type.String({ maxLength: MAX_BASH_COMMAND_LEN }),
@@ -874,6 +875,7 @@ export function createSandboxBridgeToolDefinitions(
       promptGuidelines: [
         'Only submit finished deliverables the user should download.',
         'Write/edit the file first; then submit_artifact with a clear displayName.',
+        'User-facing files go through this tool; do not paste large contents into the reply or tell the user to copy from the workspace.',
       ],
       parameters: Type.Object({
         path: Type.String({ maxLength: MAX_PATH_LEN }),

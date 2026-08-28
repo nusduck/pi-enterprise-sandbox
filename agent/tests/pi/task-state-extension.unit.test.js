@@ -102,6 +102,21 @@ describe('task-state extension', () => {
     }
   });
 
+  it('declares plan/memory usage rules on the tools that implement them', () => {
+    const registered = tools(fakeStore());
+    const includes = (name, snippet) => {
+      const guidelines = registered.get(name).promptGuidelines || [];
+      assert.ok(
+        guidelines.some((line) => line.includes(snippet)),
+        `${name} missing guideline containing ${JSON.stringify(snippet)}`,
+      );
+    };
+    includes('todo_write', 'write the plan with todo_write before the first action');
+    includes('todo_read', 'after a restart, compaction, or a new run');
+    includes('memory_write', 'not transient run state');
+    includes('memory_search', 'Search at the start of a conversation');
+  });
+
   it('round-trips a todo list through the durable store', async () => {
     const store = fakeStore();
     const registered = tools(store);

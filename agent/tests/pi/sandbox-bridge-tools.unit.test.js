@@ -134,6 +134,23 @@ function createFakeTransport(calls) {
   return t;
 }
 
+describe('sandbox-bridge prompt guidelines', () => {
+  it('tells the model not to talk through bash and to deliver files via submit_artifact', () => {
+    const defs = createSandboxBridgeToolDefinitions(RUN_A, {}, {});
+    const includes = (name, snippet) => {
+      const tool = defs.find((definition) => definition.name === name);
+      assert.ok(tool, name);
+      const guidelines = tool.promptGuidelines || [];
+      assert.ok(
+        guidelines.some((line) => line.includes(snippet)),
+        `${name} missing guideline containing ${JSON.stringify(snippet)}`,
+      );
+    };
+    includes('bash', 'Do not use bash to talk to the user');
+    includes('submit_artifact', 'User-facing files go through this tool');
+  });
+});
+
 describe('process result status contract', () => {
   it('normalizes process tool results to lowercase ProcessStatus values', async () => {
     const defs = createSandboxBridgeToolDefinitions(

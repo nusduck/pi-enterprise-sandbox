@@ -93,6 +93,7 @@ export function createTaskStateExtension(options) {
       promptSnippet:
         'Keep a durable todo list for multi-step work instead of replanning each turn',
       promptGuidelines: [
+        'For multi-step work, write the plan with todo_write before the first action; skip this only for a single obvious step.',
         'Send the whole list every time: this replaces the stored list rather than merging into it.',
         'Keep exactly one item in_progress while you work on it, and mark it completed before starting the next.',
       ],
@@ -131,6 +132,9 @@ export function createTaskStateExtension(options) {
       description:
         'Read this conversation’s stored todo list, including items written by earlier runs.',
       promptSnippet: 'Recover the current plan after a restart or compaction',
+      promptGuidelines: [
+        'Call todo_read after a restart, compaction, or a new run in the same conversation before continuing the plan.',
+      ],
       parameters: Type.Object({}),
       async execute() {
         const getTodos = storeFor('getTodos');
@@ -190,6 +194,9 @@ export function createTaskStateExtension(options) {
       description:
         'Search this user’s durable notes by substring of the key or the content. An empty query returns the most recent notes.',
       promptSnippet: 'Look up durable notes recorded in earlier conversations',
+      promptGuidelines: [
+        'Search at the start of a conversation before asking the user for preferences or conventions they may have already given.',
+      ],
       parameters: Type.Object({
         query: Type.Optional(Type.String({ maxLength: MAX_MEMORY_KEY })),
         limit: Type.Optional(

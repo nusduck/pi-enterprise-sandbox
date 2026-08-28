@@ -65,14 +65,52 @@ describe('enterprise system prompt identity', () => {
     assert.doesNotMatch(prompt, /For risk work:/);
   });
 
+  it('ships a tool-agnostic Doing work contract', () => {
+    const prompt = buildEnterpriseSystemPrompt();
+    assert.match(prompt, /^## Doing work$/m);
+    assert.match(prompt, /Finish the actual request in this turn: inspect, act, and verify/);
+    assert.match(prompt, /A plan or an analysis is not delivery/);
+    assert.match(prompt, /Do not silently narrow, widen, or transform the requested scope/);
+    assert.match(prompt, /Write progress in the user-visible reply/);
+    assert.match(prompt, /Never print API keys, tokens, passwords, or full connection strings/);
+    assert.match(prompt, /bound delivery tool when one exists/);
+    assert.match(
+      prompt,
+      /When a bound tool exists for a durable plan, long-lived notes, asking the user, or publishing a file/,
+    );
+    assert.doesNotMatch(prompt, /Platform security \(non-overridable\)/);
+    // Tools that are only on the request when bound must not be named here —
+    // a run that did not bind them would otherwise be told to call a missing tool.
+    for (const name of [
+      'todo_write',
+      'todo_read',
+      'memory_write',
+      'memory_search',
+      'ask_user',
+      'spawn_subagent',
+      'check_subagent',
+      'skill_list',
+      'skill_install',
+      'submit_artifact',
+    ]) {
+      assert.doesNotMatch(
+        prompt,
+        new RegExp(`\`${name}\``),
+        `base prompt must not name optional/bound-only tool ${name}`,
+      );
+    }
+  });
+
   it('omits the default identity when a lead voice is set, keeping the contract', () => {
     const prompt = resolveEnterpriseSystemPrompt('Version-owned voice', {
       productSystemPrompt: 'Env product voice must not lead',
     });
     assert.match(prompt, /^Version-owned voice\n\n---\n\n## Paths/);
     assert.match(prompt, /## Tools/);
+    assert.match(prompt, /## Doing work/);
     assert.doesNotMatch(prompt, /风控通用智能体/);
     assert.doesNotMatch(prompt, /Env product voice must not lead/);
+    assert.doesNotMatch(prompt, /Platform security \(non-overridable\)/);
   });
 });
 
@@ -164,6 +202,7 @@ describe('applyToolSurface', () => {
     // Everything else survives untouched.
     assert.ok(applied.startsWith('You are 风控通用智能体'));
     assert.ok(applied.includes('## Skills (progressive disclosure)'));
+    assert.ok(applied.includes('## Doing work'));
   });
 
   it('degrades to the base prompt when nothing is bound or no heading exists', () => {
