@@ -42,6 +42,7 @@ DEFAULT_ARGS = {
         "caseSensitive": True,
         "context": 0,
         "limit": 100,
+        "outputMode": "content",
     },
 }
 

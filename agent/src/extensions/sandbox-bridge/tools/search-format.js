@@ -20,7 +20,13 @@ function projectItem(item) {
   return out;
 }
 
-function projectMatch(match) {
+function projectMatch(match, outputMode) {
+  if (outputMode === 'files_with_matches') {
+    return { path: match?.path ?? '', line: match?.line ?? 0 };
+  }
+  if (outputMode === 'count') {
+    return { path: match?.path ?? '', count: match?.count ?? 0 };
+  }
   const out = {
     path: match?.path ?? '',
     line: match?.line ?? 0,
@@ -97,13 +103,17 @@ export function formatListResult(tool, data, path) {
  * @param {any} data
  * @param {string} path
  * @param {string} query
+ * @param {'content' | 'files_with_matches' | 'count'} [outputMode]
  */
-export function formatGrepResult(data, path, query) {
-  const matches = Array.isArray(data?.matches) ? data.matches.map(projectMatch) : [];
+export function formatGrepResult(data, path, query, outputMode = 'content') {
+  const matches = Array.isArray(data?.matches)
+    ? data.matches.map((m) => projectMatch(m, outputMode))
+    : [];
   const payload = {
     tool: 'grep',
     path,
     query,
+    outputMode,
     count: matches.length,
     matches,
   };

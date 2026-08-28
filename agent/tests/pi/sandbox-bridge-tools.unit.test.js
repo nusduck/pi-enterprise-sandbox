@@ -858,6 +858,25 @@ describe('sandbox-bridge registration', () => {
     assert.equal(ok.path.includes('out.txt'), true);
   });
 
+  it('write allows non-sequential leading-digit-pipe content that only looks like a gutter', async () => {
+    const transport = createFakeTransport([]);
+    transport.writeFile = async () => ({ size: 42, hash: 'h1' });
+    const defs = createSandboxBridgeToolDefinitions(RUN_A, transport, {
+      sandboxRequestBinder: createFakeBinder(),
+    });
+    const write = defs.find((t) => t.name === 'write');
+
+    // A pipe-delimited export with a leading id column: looks like
+    // "NUM|..." per line, but the numbers are not `offset + i + 1`, so it is
+    // not read-tool gutter output and must not be refused.
+    const result = await write.execute('w-csvish', {
+      path: 'ids.txt',
+      content: '17|apple\n42|banana\n3|cherry\n99|date\n',
+    });
+    const parsed = JSON.parse(result.content[0].text);
+    assert.equal(parsed.ok, true);
+  });
+
   it('edit requires oldText/newText and rejects gutter text', async () => {
     const transport = createFakeTransport([]);
     transport.editFile = async () => ({ hash: 'h2', version: '3' });

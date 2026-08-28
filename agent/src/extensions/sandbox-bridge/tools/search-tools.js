@@ -19,8 +19,10 @@ import {
   FIND_MAX_DEPTH,
   FIND_MAX_LIMIT,
   GREP_DEFAULT_LIMIT,
+  GREP_DEFAULT_OUTPUT_MODE,
   GREP_MAX_CONTEXT,
   GREP_MAX_LIMIT,
+  GREP_OUTPUT_MODES,
   LS_DEFAULT_DEPTH,
   LS_MAX_DEPTH,
   MAX_PATH_LEN,
@@ -123,7 +125,7 @@ export function createSearchToolDefinitions({ invoke, modeFor }) {
       name: 'find',
       label: 'Find files',
       description:
-        `Find files by glob pattern under a workspace or /tmp directory. Default limit ${FIND_DEFAULT_LIMIT}, max ${FIND_MAX_LIMIT}; max depth ${FIND_MAX_DEPTH}. Optional type filter: file, dir, symlink. Matches paths, not contents — use grep for contents. Prefer find over bash find.`,
+        `Find files by glob pattern under a workspace or /tmp directory; the search already recurses into subdirectories, so a bare pattern like "*.ts" matches that filename anywhere in the tree without a "**/" prefix. Default limit ${FIND_DEFAULT_LIMIT}, max ${FIND_MAX_LIMIT}; max depth ${FIND_MAX_DEPTH}. To scope to a subdirectory, pass path, or write a pattern containing "/" (e.g. "src/*.ts") to match against the path relative to path/root instead of just the filename. Optional type filter: file, dir, symlink. Matches paths, not contents — use grep for contents. Prefer find over bash find.`,
       promptSnippet: 'Find workspace files by glob pattern',
       promptGuidelines: [
         'Use find to locate files by name or extension; use grep to locate them by contents.',
@@ -179,11 +181,12 @@ export function createSearchToolDefinitions({ invoke, modeFor }) {
       name: 'grep',
       label: 'Search file contents',
       description:
-        `Search file contents under a workspace or /tmp directory. Literal by default; set regex true for a pattern. Optional glob narrows which files are read. context adds up to ${GREP_MAX_CONTEXT} surrounding lines per match. Default limit ${GREP_DEFAULT_LIMIT}, max ${GREP_MAX_LIMIT}. Prefer grep over bash grep or rg.`,
+        `Search file contents under a workspace or /tmp directory. Literal by default; set regex true for a pattern. Optional glob narrows which files are read — a bare pattern like "*.ts" matches the filename anywhere under path (no "**/" prefix needed); a pattern containing "/" (e.g. "src/*.ts") matches against the path relative to path instead. context adds up to ${GREP_MAX_CONTEXT} surrounding lines per match. Default limit ${GREP_DEFAULT_LIMIT}, max ${GREP_MAX_LIMIT}. outputMode: "content" (default, full match text), "files_with_matches" (just the matching paths, one per file — cheapest for an existence check), or "count" (one match count per file, no text). Prefer grep over bash grep or rg.`,
       promptSnippet: 'Search workspace file contents',
       promptGuidelines: [
         'Use grep to find where something is defined or used before reading whole files.',
         'Add a glob to skip files that cannot match; it is cheaper than a larger limit.',
+        'Use outputMode "files_with_matches" or "count" instead of the default when you only need to know which/how many files match — it costs far fewer tokens than full match text.',
         'On truncation, make the query more specific rather than re-running it unchanged.',
       ],
       parameters: Type.Object({
@@ -200,6 +203,9 @@ export function createSearchToolDefinitions({ invoke, modeFor }) {
         limit: Type.Optional(
           Type.Integer({ minimum: 1, maximum: GREP_MAX_LIMIT }),
         ),
+        outputMode: Type.Optional(
+          Type.Union(GREP_OUTPUT_MODES.map((m) => Type.Literal(m))),
+        ),
       }),
       executionMode: modeFor('grep'),
       async execute(toolCallId, params = {}) {
@@ -211,6 +217,11 @@ export function createSearchToolDefinitions({ invoke, modeFor }) {
         if (glob !== null && !glob.trim()) {
           return toolErr('GLOB_INVALID', 'glob must not be blank');
         }
+        const outputMode = GREP_OUTPUT_MODES.includes(
+          /** @type {any} */ (params.outputMode),
+        )
+          ? params.outputMode
+          : GREP_DEFAULT_OUTPUT_MODE;
         const normalizedParams = {
           path: norm.path,
           query,
@@ -219,6 +230,7 @@ export function createSearchToolDefinitions({ invoke, modeFor }) {
           caseSensitive: params.caseSensitive !== false,
           context: clampInt(params.context, 0, 0, GREP_MAX_CONTEXT),
           limit: clampInt(params.limit, GREP_DEFAULT_LIMIT, 1, GREP_MAX_LIMIT),
+          outputMode,
         };
         const inv = await invoke(
           toolCallId,
@@ -227,7 +239,7 @@ export function createSearchToolDefinitions({ invoke, modeFor }) {
           normalizedParams,
         );
         if (!inv.ok) return inv.result;
-        return toolOk(formatGrepResult(inv.data, norm.path, query));
+        return toolOk(formatGrepResult(inv.data, norm.path, query, outputMode));
       },
     },
   ];

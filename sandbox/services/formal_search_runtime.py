@@ -259,6 +259,7 @@ class FormalSearchRuntime:
                     case_sensitive=args["caseSensitive"],
                     context=args["context"],
                     limit=args["limit"],
+                    output_mode=args["outputMode"],
                     temp_path=str(temp),
                 )
         except PermissionError:

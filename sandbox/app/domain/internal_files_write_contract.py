@@ -134,7 +134,7 @@ class WriteCommand:
 
 @dataclass(frozen=True, slots=True)
 class EditCommand:
-    path: str; old_text: str; new_text: str; expected_hash: str | None; expected_version: str | None; identity: dict[str, Any]; tool_execution_id: str; tool_call_id: str; request_hash: str; request_hash_version: int
+    path: str; old_text: str; new_text: str; expected_hash: str | None; expected_version: str | None; replace_all: bool; identity: dict[str, Any]; tool_execution_id: str; tool_call_id: str; request_hash: str; request_hash_version: int
 
 
 def _check_hash(tool: str, args: dict[str, Any], supplied: str) -> None:
@@ -181,7 +181,8 @@ def parse_and_bind_files_write(raw_body: bytes, claims: Mapping[str, Any]) -> Wr
 def parse_and_bind_files_edit(raw_body: bytes, claims: Mapping[str, Any]) -> EditCommand:
     root = _decode(raw_body)
     base = _ROOT_COMMON | {"oldText", "newText"}
-    if frozenset(root) - (base | {"expectedHash", "expectedVersion"}) or not base.issubset(root):
+    optional = {"expectedHash", "expectedVersion", "replaceAll"}
+    if frozenset(root) - (base | optional) or not base.issubset(root):
         _fail("FILES_WRITE_SCHEMA", "body keys invalid")
     if "expectedHash" not in root and "expectedVersion" not in root:
         _fail("FILE_VERSION_PRECONDITION_REQUIRED", "expectedHash or expectedVersion required")
@@ -203,11 +204,17 @@ def parse_and_bind_files_edit(raw_body: bytes, claims: Mapping[str, Any]) -> Edi
         _fail("FILES_WRITE_FIELD", "expectedHash invalid")
     if ev is not None and (type(ev) is not str or not ev or len(ev) > 255 or not _ID_RE.fullmatch(ev)):
         _fail("FILES_WRITE_FIELD", "expectedVersion invalid")
+    replace_all = False
+    if "replaceAll" in root:
+        if root["replaceAll"] is not True:
+            _fail("FILES_WRITE_FIELD", "replaceAll must be true when present")
+        replace_all = True
     args = {"path": path, "oldText": old_text, "newText": new_text}
     if "expectedHash" in root: args["expectedHash"] = eh
     if "expectedVersion" in root: args["expectedVersion"] = ev
+    if "replaceAll" in root: args["replaceAll"] = replace_all
     _check_hash("edit", args, c["requestHash"])
-    return EditCommand(path, old_text, new_text, eh, ev, ident, c["toolExecutionId"], c["toolCallId"], c["requestHash"], c["requestHashVersion"])
+    return EditCommand(path, old_text, new_text, eh, ev, replace_all, ident, c["toolExecutionId"], c["toolCallId"], c["requestHash"], c["requestHashVersion"])
 
 
 __all__ = ["FilesWriteContractError", "WriteCommand", "EditCommand", "parse_and_bind_files_write", "parse_and_bind_files_edit"]

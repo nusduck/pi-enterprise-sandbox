@@ -34,10 +34,12 @@ const TOOL_KEYS = Object.freeze({
     'caseSensitive',
     'context',
     'limit',
+    'outputMode',
   ],
 });
 
 const FIND_TYPES = new Set(['file', 'dir', 'symlink']);
+const GREP_OUTPUT_MODES = new Set(['content', 'files_with_matches', 'count']);
 
 export const SEARCH_MAX_PATH_LEN = 512;
 export const SEARCH_MAX_PATTERN_LEN = 512;
@@ -167,6 +169,9 @@ function searchArgs(toolName, payload) {
   if (glob !== null) {
     glob = reqText(glob, 'glob', SEARCH_MAX_PATTERN_LEN);
   }
+  if (!GREP_OUTPUT_MODES.has(payload.outputMode)) {
+    fail('SEARCH_PAYLOAD_INVALID', 'outputMode invalid');
+  }
   return {
     path,
     query: reqText(payload.query, 'query', SEARCH_MAX_QUERY_LEN),
@@ -175,6 +180,7 @@ function searchArgs(toolName, payload) {
     caseSensitive: reqBool(payload.caseSensitive, 'caseSensitive'),
     context: reqInt(payload.context, 'context', 0, GREP_MAX_CONTEXT),
     limit: reqInt(payload.limit, 'limit', 1, GREP_MAX_LIMIT),
+    outputMode: payload.outputMode,
   };
 }
 

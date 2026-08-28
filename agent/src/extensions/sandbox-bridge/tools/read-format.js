@@ -6,6 +6,7 @@
  * no tool registration.
  */
 
+import { createHash } from 'node:crypto';
 import { truncateLine } from '@earendil-works/pi-coding-agent';
 import {
   DEFAULT_READ_LIMIT,
@@ -25,10 +26,18 @@ import {
 } from '../result.js';
 
 /** Majority of non-empty lines look like read-tool gutters (`12|...`). */
-const READ_GUTTER_LINE_RE = /^\d+\|/;
+const READ_GUTTER_LINE_RE = /^(\d+)\|/;
 
 /**
  * True when content is dominated by read-tool gutters (`12|...`).
+ *
+ * A leading-digit-then-pipe prefix alone is not enough: legitimate content
+ * can look like that too (a pipe-delimited export with a leading id column,
+ * a numbered log). What real gutter output ({@link formatReadContentWithGutter})
+ * never varies is the numbering itself — consecutive matched lines are
+ * consecutive integers, because it is always `offset + i + 1`. Requiring that
+ * run keeps the check from refusing a write/edit over content that merely
+ * starts lines with a number.
  * @param {string} content
  */
 export function looksLikeReadFileGutterContent(content) {
@@ -36,11 +45,19 @@ export function looksLikeReadFileGutterContent(content) {
   if (!text.trim()) return false;
   const lines = text.split('\n').filter((line) => line.trim().length > 0);
   if (lines.length < 2) return false;
-  let hits = 0;
+  /** @type {number[]} */
+  const numbers = [];
   for (const line of lines) {
-    if (READ_GUTTER_LINE_RE.test(line)) hits += 1;
+    const m = READ_GUTTER_LINE_RE.exec(line);
+    if (m) numbers.push(Number(m[1]));
   }
-  return hits / lines.length >= 0.7;
+  if (numbers.length / lines.length < 0.7) return false;
+  if (numbers.length < 2) return false;
+  let consecutive = 0;
+  for (let i = 1; i < numbers.length; i += 1) {
+    if (numbers[i] === numbers[i - 1] + 1) consecutive += 1;
+  }
+  return consecutive / (numbers.length - 1) >= 0.9;
 }
 
 /**
@@ -115,15 +132,19 @@ export function formatReadContentWithGutter(source, offset0, maxLineLength = MAX
 }
 
 /**
- * Stable fingerprint for dedup (size + content head/tail hash proxy).
+ * Stable fingerprint for dedup. Hashes the *whole* rendered page, not just
+ * its head/tail: a same-length edit in the middle of a page (a script run
+ * through bash/python touching a file the read/edit tool did not itself
+ * write, so the dedup cache was never invalidated for that path) must still
+ * change the fingerprint, or a re-read would wrongly get stubbed as
+ * "unchanged" and the model would reason from stale content.
  * @param {string} content
  * @param {unknown} size
  */
 export function readContentFingerprint(content, size) {
   const text = String(content ?? '');
-  const head = text.slice(0, 256);
-  const tail = text.length > 256 ? text.slice(-256) : '';
-  return `${size ?? ''}|${text.length}|${head.length}:${head}|${tail.length}:${tail}`;
+  const hash = createHash('sha1').update(text, 'utf8').digest('hex');
+  return `${size ?? ''}|${text.length}|${hash}`;
 }
 
 /**
