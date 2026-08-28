@@ -22,7 +22,6 @@ from sandbox.artifact.infrastructure.manager import (
     artifact_content_disposition,
     iter_snapshot_chunks,
 )
-from sandbox.services.control_plane_storage import FileIdentity
 from sandbox.services.execution_context import SandboxExecutionContext
 
 router = APIRouter(prefix="/sessions/{session_id}/artifacts", tags=["artifacts"])

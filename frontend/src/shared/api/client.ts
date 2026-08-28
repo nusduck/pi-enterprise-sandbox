@@ -24,9 +24,6 @@ import {
 } from '../schemas/api';
 import type { Artifact } from '../state/types';
 
-export { readSSEStream } from '../sse/parser';
-export { isAllowedApiUrl, safeApiUrl } from '../security/url';
-
 const BASE = '/api';
 
 /** Browser authentication is carried by the BFF-owned HttpOnly session cookie. */
@@ -164,19 +161,6 @@ export async function getConversationEvents(
     await resp.json(),
     'conversation events',
   );
-}
-
-export async function createConversation(title = 'New chat'): Promise<Conversation> {
-  const resp = await fetch(`${BASE}/conversations`, {
-    method: 'POST',
-    headers: authHeaders({ 'Content-Type': 'application/json' }),
-    body: JSON.stringify({ title }),
-  });
-  if (!resp.ok) {
-    const err = await errorBody(resp);
-    throw new Error(String(err.error || `Create conversation failed: ${resp.status}`));
-  }
-  return parseApi(ConversationDetailSchema, await resp.json(), 'createConversation');
 }
 
 export async function deleteConversation(id: string): Promise<boolean> {

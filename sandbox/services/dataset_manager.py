@@ -14,7 +14,6 @@ import json
 import mimetypes
 import os
 import re
-import stat
 import threading
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone

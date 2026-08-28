@@ -178,7 +178,7 @@ SKILLS_USER_ROOT=/home/sandbox/skill-user
 | `skill_install` | 安装单个 package：当前回合上传的 `.zip`（`source="attachment"`，默认），或模型自己在沙盒里搭好并打包的 `.zip` / `.skill`（`source="sandbox"`，传 `path` 与 `source_digest`） |
 | `skill_create` | 把与用户确认后的说明和文本文件原子生成成一个 package |
 | `skill_uninstall` | 删除自己装的 package（系统层不可删） |
-| `skill_edit` | 修改已安装用户 package；不能用来新建 package |
+| `skill_edit` | 修改已安装用户 package 里的一个或多个文件；不能用来新建 package。`files: [{path, content}]` 一次提交一组改动（同一个 package，最多 32 个文件，全成或全败），旧的单文件 `path` + `content` 形参仍然接受 |
 
 上传流程复用聊天附件：前端把 ZIP 作为 Dataset 上传到当前 Sandbox session，Run 中保留
 结构化 `attachment_id`。Agent 只把当前回合的 attachment id 交给 `skill_install`；审批通过后，

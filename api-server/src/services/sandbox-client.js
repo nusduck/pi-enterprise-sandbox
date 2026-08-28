@@ -23,6 +23,9 @@ import {
 
 const BASE = config.SANDBOX_BASE_URL;
 
+/** Readiness probe deadline — matches the Agent-client probe in agent-client.js. */
+const SANDBOX_HEALTH_TIMEOUT_MS = 3_000;
+
 function createClientTraceContext(traceId, traceState) {
   const context = resolveRequestTraceContext({
     'X-Trace-Id': String(traceId),
@@ -232,7 +235,12 @@ export function createSandboxClient({
     // ── Health ──────────────────────────────────────
     async checkHealth() {
       try {
-        const resp = await fetch(`${BASE}/health`, { headers: AUTH_HEADER });
+        const resp = await fetch(`${BASE}/health`, {
+          headers: AUTH_HEADER,
+          // AGENTS.md §2: bounded like the agent-client probe — a hung Sandbox
+          // must not stall readiness behind a socket that never answers.
+          signal: AbortSignal.timeout(SANDBOX_HEALTH_TIMEOUT_MS),
+        });
         if (!resp.ok) return null;
         return resp.json();
       } catch {

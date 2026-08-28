@@ -12,6 +12,25 @@ test('policy allows a simple declared Skill script invocation', () => {
   );
 });
 
+test('policy allows a Skill script nested under scripts/', () => {
+  // Bundled packages ship helper modules in subdirectories, e.g.
+  // xlsx/scripts/office/pack.py. Requiring a flat scripts/ made those
+  // unrunnable through the only entrypoint the guard allows.
+  assert.equal(
+    evaluateLocalArgGuards('bash', {
+      command: 'python3 /home/sandbox/skill/xlsx/scripts/office/pack.py book.xlsx',
+    }),
+    null,
+  );
+});
+
+test('policy rejects traversal that only reads as a scripts/ path', () => {
+  const result = evaluateLocalArgGuards('bash', {
+    command: 'python3 /home/sandbox/skill/pdf/scripts/../hidden.py',
+  });
+  assert.equal(result?.reasonCode, 'SKILL_SCRIPT_COMMAND_DENIED');
+});
+
 test('policy rejects shell composition or non-script Skill paths', () => {
   for (const command of [
     `python3 ${script}; id`,

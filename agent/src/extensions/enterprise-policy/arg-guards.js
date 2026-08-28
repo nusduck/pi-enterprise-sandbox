@@ -74,8 +74,12 @@ export function evaluateLocalArgGuards(toolName, args) {
         decision: 'deny',
         reasonCode: 'SKILL_SCRIPT_COMMAND_DENIED',
         reason:
-          'Skill paths may only be executed as python/python3 *.py or sh/bash *.sh ' +
-          'without shell operators; use the read tool to inspect a skill file',
+          'A command touching a Skill path must be exactly ' +
+          '`python|python3 <skill>/<package>/scripts/<file>.py [args]` or ' +
+          '`bash|sh <skill>/<package>/scripts/<file>.sh [args]` — the script has to live ' +
+          'under that package\'s scripts/ directory (subdirectories are fine), and the ' +
+          'command may not contain shell operators (; & | < > ` $ newline) or glob ' +
+          'characters. Use the read tool to inspect a skill file instead of cat.',
         policyId: 'platform:path-guard',
         riskLevel: 'high',
       });

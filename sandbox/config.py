@@ -12,7 +12,7 @@ from pathlib import Path
 from collections.abc import Mapping
 from typing import Annotated, Any, Literal
 
-from pydantic import Field, PrivateAttr, field_validator, model_validator
+from pydantic import PrivateAttr, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 from sandbox.paths import (

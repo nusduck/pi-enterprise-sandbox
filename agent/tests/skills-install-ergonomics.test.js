@@ -11,6 +11,7 @@ import {
   createGeneratedSkill,
   describeInstalledSkills,
   editSkillFile,
+  editSkillFiles,
   installSkillArchive,
   uninstallSkill,
 } from '../src/skills/install.js';
@@ -248,6 +249,68 @@ test('skill_edit only changes an existing user package and cannot install one', 
       content: 'no',
     }),
     /cannot write VCS metadata/,
+  );
+});
+
+test('skill_edit applies a multi-file batch as one all-or-nothing change', async () => {
+  const userRoot = await tmpdir('skill-user');
+  const packageDir = path.join(userRoot, 'existing');
+  writeSkillPackage(packageDir, 'existing');
+  fs.writeFileSync(path.join(packageDir, 'notes.md'), '# Original\n');
+
+  const result = await editSkillFiles({
+    skillRoot: userRoot,
+    files: [
+      { path: 'existing/notes.md', content: '# Batched\n' },
+      { path: 'existing/scripts/office/pack.py', content: 'print("pack")\n' },
+    ],
+  });
+  assert.equal(result.skill_name, 'existing');
+  assert.equal(result.files.length, 2);
+  assert.equal(fs.readFileSync(path.join(packageDir, 'notes.md'), 'utf8'), '# Batched\n');
+  assert.equal(
+    fs.readFileSync(path.join(packageDir, 'scripts', 'office', 'pack.py'), 'utf8'),
+    'print("pack")\n',
+  );
+
+  // A bad entry anywhere rejects the whole batch: the good entry beside it
+  // must not have been written.
+  await assert.rejects(
+    editSkillFiles({
+      skillRoot: userRoot,
+      files: [
+        { path: 'existing/notes.md', content: '# Should not land\n' },
+        { path: 'existing/SKILL.md', content: skillMd('renamed') },
+      ],
+    }),
+    /must match installed package/,
+  );
+  assert.equal(fs.readFileSync(path.join(packageDir, 'notes.md'), 'utf8'), '# Batched\n');
+
+  await assert.rejects(
+    editSkillFiles({
+      skillRoot: userRoot,
+      files: [
+        { path: 'existing/notes.md', content: 'a' },
+        { path: 'existing/notes.md', content: 'b' },
+      ],
+    }),
+    /twice/,
+  );
+  writeSkillPackage(path.join(userRoot, 'other'), 'other');
+  await assert.rejects(
+    editSkillFiles({
+      skillRoot: userRoot,
+      files: [
+        { path: 'existing/notes.md', content: 'a' },
+        { path: 'other/notes.md', content: 'b' },
+      ],
+    }),
+    /one Skill package/,
+  );
+  await assert.rejects(
+    editSkillFiles({ skillRoot: userRoot, files: [] }),
+    /at least one file/,
   );
 });
 

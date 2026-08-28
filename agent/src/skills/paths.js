@@ -254,9 +254,16 @@ export function isReadonlySkillExecution(command, skillRoots = DEFAULT_SKILL_ROO
   const interpreter = match[1];
   const scriptPath = match[2] || match[3] || match[4] || '';
   if (!isUnderSkillRoot(scriptPath, skillRoots)) return false;
+  const normalizedScript = scriptPath.replace(/\\/g, '/');
+  // `..` would let a path that reads as `scripts/...` resolve to a file
+  // outside scripts/ that is still inside the package, so the entrypoint
+  // shape below has to be checked on a path with no traversal in it.
+  if (normalizedScript.split('/').includes('..')) return false;
   // A package's executable assets live under scripts/.  Do not treat an
-  // arbitrary .py/.sh file beside SKILL.md as an entrypoint.
-  if (!/\/scripts\/[^/]+$/.test(scriptPath.replace(/\\/g, '/'))) return false;
+  // arbitrary .py/.sh file beside SKILL.md as an entrypoint. Nesting below
+  // scripts/ is allowed: first-party packages ship helper modules in
+  // subdirectories (for example `xlsx/scripts/office/pack.py`).
+  if (!/\/scripts\/(?:[^/]+\/)*[^/]+$/.test(normalizedScript)) return false;
   if (interpreter === 'bash' || interpreter === 'sh') return scriptPath.endsWith('.sh');
   return scriptPath.endsWith('.py');
 }

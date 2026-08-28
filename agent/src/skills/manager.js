@@ -23,7 +23,7 @@ import {
   createGeneratedSkill,
   installSkillArchive,
   uninstallSkill,
-  editSkillFile,
+  editSkillFiles,
   listInstalledSkills,
   describeInstalledSkills,
   SKILL_INSTALL_TIMEOUT_MS,
@@ -381,16 +381,19 @@ export function createSkillManager(options = {}) {
     async edit(params) {
       assertWritable('edit');
       try {
-        const result = await editSkillFile({
+        const result = await editSkillFiles({
           skillRoot: userRoot,
+          files: params.files,
           path: params.path,
           content: params.content,
         });
+        const edited = result.files.map((file) => file.path).join(', ');
         audit({
           action: 'edit',
           result: 'success',
-          skill_name: String(result.path || '').split('/')[0] || null,
-          summary: `edited ${result.path} (${result.bytes} bytes)`,
+          skill_name: result.skill_name || null,
+          summary: `edited ${result.files.length} file(s) in ${result.skill_name}: ` +
+            `${edited} (${result.bytes} bytes)`,
         });
         return result;
       } catch (error) {
@@ -398,7 +401,9 @@ export function createSkillManager(options = {}) {
           action: 'edit',
           result: 'failure',
           error: error?.message || String(error),
-          summary: params?.path,
+          summary: Array.isArray(params?.files)
+            ? params.files.map((file) => file?.path).join(', ')
+            : params?.path,
         });
         throw error;
       }

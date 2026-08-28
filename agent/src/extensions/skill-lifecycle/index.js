@@ -311,12 +311,29 @@ export function createSkillLifecycleExtension(options) {
       name: 'skill_edit',
       label: 'Edit installed Skill',
       description:
-        'Replace one file inside an existing user Skill. This cannot create a new Skill. ' +
-        'Bundled Skills are read-only. This operation requires user approval.',
-      promptSnippet: 'Edit one file in an installed user Skill after approval',
+        'Replace one or more files inside an existing user Skill. This cannot create a ' +
+        'new Skill. Bundled Skills are read-only. This operation requires user approval, ' +
+        'so send every file of one coherent change in a single call: all files must ' +
+        'belong to the same Skill and are applied together or not at all.',
+      promptSnippet: 'Edit files in an installed user Skill after approval',
+      promptGuidelines: [
+        'Batch a multi-file change into one call; do not call skill_edit once per file.',
+        'Each file replaces the whole file — send its complete new content.',
+      ],
       parameters: Type.Object({
-        path: Type.String({ minLength: 1, maxLength: 1024 }),
-        content: Type.String(),
+        files: Type.Optional(
+          Type.Array(
+            Type.Object({
+              path: Type.String({ minLength: 1, maxLength: 1024 }),
+              content: Type.String(),
+            }),
+            { minItems: 1, maxItems: 32 },
+          ),
+        ),
+        // Single-file shape, kept so an approval recorded before `files`
+        // existed still replays.
+        path: Type.Optional(Type.String({ minLength: 1, maxLength: 1024 })),
+        content: Type.Optional(Type.String()),
       }),
       async execute(_toolCallId, input) {
         try {

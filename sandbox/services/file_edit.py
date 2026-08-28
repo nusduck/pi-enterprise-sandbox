@@ -221,7 +221,8 @@ def apply_unified_patch_to_content(content: str, patch: str) -> str:
             raise ValueError(f"invalid patch line (expected hunk header): {line!r}")
 
         old_start = int(m.group(1))
-        # old_len = int(m.group(2) or "1")  # unused; driven by body
+        # The hunk header's old_len is intentionally ignored: the hunk body
+        # drives how many old lines are consumed.
         # Copy unchanged prefix up to old_start (1-based)
         target = old_start - 1
         if target < i:

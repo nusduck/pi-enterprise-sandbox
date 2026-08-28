@@ -149,6 +149,14 @@ When a skills section is present below (or under \`${skillRoot}\`):
 3. Follow the skill instructions; resolve relative paths against the skill directory.
 4. Do not invent skill APIs — load the file first.
 
+To run a script a skill ships, call it by absolute path in exactly this shape:
+\`python <skill-path>/scripts/<file>.py [args]\` (or \`bash\`/\`sh\` for \`.sh\`).
+The script must sit under that package's \`scripts/\` directory; subdirectories of
+\`scripts/\` are fine. Any command that mentions a skill path is rejected unless it
+matches that shape — no \`cd\`, \`&&\`, pipes, redirects, \`$(...)\`, globs, \`python -m\`,
+or a different interpreter. Copy the script into the workspace first if you need
+any of those.
+
 Skill directories are listable but not searchable: \`ls\` reaches them, \`find\` and \`grep\` cover the workspace and \`/tmp\` only. \`ls\` a skill's directory to see which reference files and scripts it ships beyond \`SKILL.md\`, then \`read\` the one you need. If no skills section is listed, none are installed.
 
 ## Finding things

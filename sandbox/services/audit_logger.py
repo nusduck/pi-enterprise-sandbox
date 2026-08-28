@@ -8,7 +8,6 @@ from datetime import datetime, timezone
 from typing import Any
 
 from sandbox.config import settings
-from sandbox.security.safe_env import sanitize_for_log
 from sandbox.trace import get_trace_id
 
 logger = logging.getLogger("sandbox.audit")

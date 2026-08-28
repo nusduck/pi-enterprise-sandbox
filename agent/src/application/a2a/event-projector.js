@@ -16,20 +16,45 @@ import {
 import { isRunStatus } from '../../domain/run/run-status.js';
 import { isUlid } from '../../domain/shared/ulid.js';
 
-/** Platform event types that carry Run status transitions. */
-const RUN_STATUS_EVENT_TYPES = new Set([
+/**
+ * Platform event types that carry Run status transitions.
+ *
+ * The first block is the vocabulary the Run services actually append
+ * (`applyRunTransitionInTxn` defaults to `run.status.changed`; the terminal
+ * success event is `run.completed`). The second block is accepted-but-unused
+ * spelling kept so older journals still project. Adding a new `run.*`
+ * eventType without listing it here makes the A2A stream silently skip the
+ * transition — `tests/a2a/a2a-terminal-event-vocabulary.unit.test.js` fails
+ * when that happens.
+ */
+export const RUN_STATUS_EVENT_TYPES = new Set([
   'run.accepted',
   'run.queued',
-  'run.starting',
   'run.started',
+  'run.retrying',
+  'run.status.changed',
+  'run.completed',
+  'run.failed',
+  'run.cancelled',
+  // Legacy / historical spellings.
+  'run.starting',
   'run.running',
   'run.waiting_input',
   'run.waiting_approval',
   'run.cancelling',
-  'run.retrying',
   'run.succeeded',
-  'run.failed',
-  'run.cancelled',
+  'run.status',
+  'run.terminal',
+]);
+
+/**
+ * Types whose name alone does not identify the target status — the durable
+ * payload must say. Never inherit the ambient Run status for these: a generic
+ * transition read while the Run row already reads SUCCEEDED would otherwise
+ * project a premature `final: true`.
+ */
+const AMBIGUOUS_RUN_STATUS_EVENT_TYPES = new Set([
+  'run.status.changed',
   'run.status',
   'run.terminal',
 ]);
@@ -160,6 +185,16 @@ export function projectEnvelopeToA2aResult(envelope, ctx) {
   }
 
   return null;
+}
+
+/**
+ * @param {unknown} value
+ * @returns {Record<string, unknown>}
+ */
+function plainObject(value) {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? /** @type {Record<string, unknown>} */ (value)
+    : {};
 }
 
 /**
@@ -479,12 +514,19 @@ function projectArtifactEvent(event, ctx) {
  * @returns {object | null}
  */
 function projectCompletedMessage(event, ctx) {
-  const payload =
-    event.payload && typeof event.payload === 'object' && !Array.isArray(event.payload)
-      ? event.payload
-      : {};
+  const payload = plainObject(event.payload);
+  // The observability projector writes `{ context, data }` payloads, so the
+  // role/message/messageId of a live message.completed sit one level down.
+  // Read both shapes: `event.*` (flat), `event.payload.*`, `event.data.*`.
+  const data = plainObject(event.data ?? payload.data);
   const roleRaw = String(
-    event.role || payload.role || event.message?.role || payload.message?.role || '',
+    event.role ||
+      payload.role ||
+      data.role ||
+      event.message?.role ||
+      payload.message?.role ||
+      data.message?.role ||
+      '',
   ).toLowerCase();
   const role =
     roleRaw === 'user' ? 'user' : roleRaw === 'assistant' || roleRaw === 'agent'
@@ -492,7 +534,9 @@ function projectCompletedMessage(event, ctx) {
       : null;
   if (role !== 'agent') return null;
 
-  const text = extractCompletedMessageText(event, payload);
+  const text =
+    extractCompletedMessageText(event, payload) ||
+    extractCompletedMessageText(data, data);
   if (!text) return null;
 
   const seq =
@@ -503,6 +547,7 @@ function projectCompletedMessage(event, ctx) {
     (typeof event.messageId === 'string' && event.messageId.trim()) ||
     (typeof event.message_id === 'string' && event.message_id.trim()) ||
     (typeof payload.messageId === 'string' && payload.messageId.trim()) ||
+    (typeof data.messageId === 'string' && data.messageId.trim()) ||
     (typeof ctx.eventId === 'string' && ctx.eventId.trim()) ||
     `a2a-msg-${ctx.a2aTaskId}-${seq}`;
 
@@ -578,28 +623,37 @@ export function projectArtifactRowsToA2a(rows, ctx) {
   return out;
 }
 
+/** Types whose name alone pins the target status. */
+const RUN_STATUS_EVENT_TYPE_MAP = {
+  'run.accepted': A2A_TASK_STATUS.SUBMITTED,
+  'run.queued': A2A_TASK_STATUS.SUBMITTED,
+  'run.starting': A2A_TASK_STATUS.WORKING,
+  'run.started': A2A_TASK_STATUS.WORKING,
+  'run.running': A2A_TASK_STATUS.WORKING,
+  'run.waiting_input': A2A_TASK_STATUS.INPUT_REQUIRED,
+  'run.waiting_approval': A2A_TASK_STATUS.AUTH_REQUIRED,
+  'run.cancelling': A2A_TASK_STATUS.WORKING,
+  'run.retrying': A2A_TASK_STATUS.WORKING,
+  'run.completed': A2A_TASK_STATUS.COMPLETED,
+  'run.succeeded': A2A_TASK_STATUS.COMPLETED,
+  'run.failed': A2A_TASK_STATUS.FAILED,
+  'run.cancelled': A2A_TASK_STATUS.CANCELED,
+};
+
 function resolveStatusFromEvent(event, fallbackRunStatus) {
+  // Durable payload status first — it is the fact the transition wrote.
   const fromEvent = extractRunStatus(event);
   if (fromEvent) return projectRunStatusToA2a(fromEvent);
+  const type = String(event.type || '');
+  const mapped = RUN_STATUS_EVENT_TYPE_MAP[type];
+  if (mapped) return mapped;
+  // Ambient Run status is a last resort, and never for a generic transition:
+  // it is read at page time and may already be terminal.
+  if (AMBIGUOUS_RUN_STATUS_EVENT_TYPES.has(type)) return null;
   if (fallbackRunStatus && isRunStatus(fallbackRunStatus)) {
     return projectRunStatusToA2a(fallbackRunStatus);
   }
-  const type = String(event.type || '');
-  const map = {
-    'run.accepted': A2A_TASK_STATUS.SUBMITTED,
-    'run.queued': A2A_TASK_STATUS.SUBMITTED,
-    'run.starting': A2A_TASK_STATUS.WORKING,
-    'run.started': A2A_TASK_STATUS.WORKING,
-    'run.running': A2A_TASK_STATUS.WORKING,
-    'run.waiting_input': A2A_TASK_STATUS.INPUT_REQUIRED,
-    'run.waiting_approval': A2A_TASK_STATUS.AUTH_REQUIRED,
-    'run.cancelling': A2A_TASK_STATUS.WORKING,
-    'run.retrying': A2A_TASK_STATUS.WORKING,
-    'run.succeeded': A2A_TASK_STATUS.COMPLETED,
-    'run.failed': A2A_TASK_STATUS.FAILED,
-    'run.cancelled': A2A_TASK_STATUS.CANCELED,
-  };
-  return map[type] || null;
+  return null;
 }
 
 function extractRunStatus(event) {
@@ -607,6 +661,9 @@ function extractRunStatus(event) {
     event.status,
     event.runStatus,
     event.run_status,
+    // Governance-recorded transitions store `{ context, data }` payloads.
+    event.data?.status,
+    event.data?.runStatus,
     event.payload?.status,
     event.payload?.runStatus,
   ];

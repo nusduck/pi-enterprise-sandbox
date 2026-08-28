@@ -12,7 +12,6 @@ from __future__ import annotations
 import mimetypes
 import os
 import re
-import stat
 import threading
 import uuid
 from datetime import datetime, timezone
@@ -31,6 +30,10 @@ from sandbox.artifact.infrastructure.store import (
     FormalArtifactRepositoryPort,
     try_wire_formal_artifact_repository,
 )
+# Re-exported, not used here: `sandbox.services.artifact_manager` is a
+# star-import compatibility shim over this module, and tests reach the
+# disposition helpers through it. Unused-import scanners flag these; they are
+# a deliberate surface, so check that shim before deleting one.
 from sandbox.artifact.infrastructure.disposition import (
     artifact_content_disposition,
     artifact_filename_header,
@@ -46,7 +49,6 @@ from sandbox.services.control_plane_storage import (
     open_control_file_read,
     open_workspace_leaf_nofollow,
     stream_copy_hash_from_fd,
-    stream_copy_hash_to_control,
     unlink_control_file,
 )
 

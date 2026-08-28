@@ -457,10 +457,6 @@ export function upsertTraceSpan(
 
 // ── Selectors ───────────────────────────────────
 
-export function getRun(store: EntityStore, runId: string): RunEntity | null {
-  return store.runsById[runId] || null;
-}
-
 export function listRunsForConversation(
   store: EntityStore,
   conversationId: string,

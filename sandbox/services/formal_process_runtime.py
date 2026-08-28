@@ -27,7 +27,6 @@ from sandbox.app.domain.types import (
 )
 from sandbox.app.persistence.errors import ConflictError, IdempotencyKeyReuseError, NotFoundError
 from sandbox.services.execution_context import SandboxExecutionContext
-from sandbox.services.formal_session_runtime import get_formal_session_runtime
 from sandbox.services.internal_execution_supervisor import InternalExecutionSupervisor, SupervisorAdmissionError
 from sandbox.services.workspace_manager import workspace_manager
 from sandbox.trace import reset_trace_id, set_trace_id
