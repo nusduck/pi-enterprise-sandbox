@@ -85,6 +85,14 @@ describe('subagent-spawn extension', () => {
     }
   });
 
+  it('tells the model to spawn only independent subtasks', () => {
+    const spawn = tools({ spawnPort: fakePort() }).get('spawn_subagent');
+    const guidelines = spawn.promptGuidelines || [];
+    assert.ok(
+      guidelines.some((line) => line.includes('Spawn only independent subtasks')),
+    );
+  });
+
   it('returns Pi tool-result envelopes, not bare objects', async () => {
     const port = fakePort();
     const registered = tools({ spawnPort: port });

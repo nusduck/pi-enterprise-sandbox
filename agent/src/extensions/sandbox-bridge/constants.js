@@ -144,6 +144,12 @@ export const FIND_MAX_LIMIT = 500;
 export const GREP_DEFAULT_LIMIT = 100;
 export const GREP_MAX_LIMIT = 500;
 export const GREP_MAX_CONTEXT = 5;
+export const GREP_OUTPUT_MODES = Object.freeze([
+  'content',
+  'files_with_matches',
+  'count',
+]);
+export const GREP_DEFAULT_OUTPUT_MODE = 'content';
 export const MAX_SEARCH_PATTERN_LEN = 512;
 export const MAX_SEARCH_QUERY_LEN = 1_024;
 /** JSON envelope budget for one search result body. */

@@ -51,6 +51,7 @@ GREP_MAX_TOTAL_BYTES = 100 * 1024 * 1024  # 100 MB
 GREP_TIMEOUT_S = 5.0
 GREP_BINARY_PROBE = 8192
 GREP_MAX_PATTERN_LEN = 512
+GREP_OUTPUT_MODES = frozenset({"content", "files_with_matches", "count"})
 
 # Patterns that commonly cause catastrophic backtracking; reject when regex=True.
 _UNSAFE_REGEX = re.compile(
@@ -279,6 +280,30 @@ def _compile_grep_query(
         return re.compile(query, flags)
     except re.error as exc:
         raise ValueError(f"invalid regex: {exc}") from exc
+
+
+def _glob_matches(pattern: str, name: str, rel: str) -> bool:
+    """Match a find/grep glob against a basename, or a relative path when the
+    caller wrote a path-qualified pattern (contains ``/``).
+
+    Plain patterns (``*.py``, ``test_*.py``) match the basename, so they find
+    files anywhere in the tree without the caller needing ``**/`` — the walk
+    already recurses. A pattern containing ``/`` (``src/**/*.ts``) is matched
+    against the workspace-relative path instead, so a caller who does want to
+    scope by directory is not silently met with an empty, unexplained result.
+    A leading ``/`` is stripped so a caller thinking of the pattern as
+    workspace-root-relative does not need to know the tree walk never emits
+    one itself.
+    """
+    if "/" in pattern:
+        candidate = rel
+        glob_pattern = pattern.lstrip("/")
+    else:
+        candidate = name
+        glob_pattern = pattern
+    return fnmatch.fnmatch(candidate, glob_pattern) or fnmatch.fnmatch(
+        candidate.lower(), glob_pattern.lower()
+    )
 
 
 def _scandir_sorted(path: Path) -> list[os.DirEntry[str]]:
@@ -533,21 +558,17 @@ class FileSearchService:
                 stop_reason="not_found",
             )
 
-        def name_matches(name: str) -> bool:
-            return fnmatch.fnmatch(name, pattern) or fnmatch.fnmatch(
-                name.lower(), pattern.lower()
-            )
-
         def consider(child: Path, name: str, et: str, size: int) -> bool:
             """Append if matches; return False when limit hit."""
             nonlocal truncated, stop_reason
             if type_filter and et != type_filter:
                 return True
-            if not name_matches(name):
+            rel = _to_rel(root, child, public_prefix)
+            if not _glob_matches(pattern, name, rel):
                 return True
             items.append(
                 FileSearchItem(
-                    path=_to_rel(root, child, public_prefix),
+                    path=rel,
                     name=name,
                     type=et,
                     size=size,
@@ -672,9 +693,15 @@ class FileSearchService:
         case_sensitive: bool = True,
         context: int | None = None,
         limit: int | None = None,
+        output_mode: str = "content",
         *,
         temp_path: str | None = None,
     ) -> GrepResponse:
+        if output_mode not in GREP_OUTPUT_MODES:
+            raise ValueError(
+                f"invalid output_mode: {output_mode!r}; expected one of "
+                f"{sorted(GREP_OUTPUT_MODES)}"
+            )
         context_n = _clamp_int(context, 0, 0, GREP_MAX_CONTEXT)
         limit_n = _clamp_int(limit, GREP_DEFAULT_LIMIT, 1, GREP_MAX_LIMIT)
         pattern = _compile_grep_query(
@@ -716,12 +743,10 @@ class FileSearchService:
                 return False
             return True
 
-        def glob_ok(name: str) -> bool:
+        def glob_ok(name: str, rel: str) -> bool:
             if not glob_pat:
                 return True
-            return fnmatch.fnmatch(name, glob_pat) or fnmatch.fnmatch(
-                name.lower(), glob_pat.lower()
-            )
+            return _glob_matches(glob_pat, name, rel)
 
         def scan_file(file_path: Path) -> bool:
             """Scan one file. Return False to abort overall search."""
@@ -796,30 +821,67 @@ class FileSearchService:
                 text = raw.decode("utf-8", errors="replace")
 
             lines = text.splitlines()
+            if output_mode == "content":
+                for idx, line in enumerate(lines):
+                    if not budget_ok():
+                        return False
+                    m = pattern.search(line)
+                    if not m:
+                        continue
+                    before = lines[max(0, idx - context_n) : idx] if context_n else []
+                    after = (
+                        lines[idx + 1 : idx + 1 + context_n] if context_n else []
+                    )
+                    matches.append(
+                        GrepMatch(
+                            path=rel,
+                            line=idx + 1,
+                            column=m.start() + 1,
+                            text=line,
+                            before=list(before),
+                            after=list(after),
+                        )
+                    )
+                    if len(matches) >= limit_n:
+                        truncated = True
+                        stop_reason = "match_limit"
+                        return False
+                return True
+
+            # files_with_matches / count: no line text leaves this function,
+            # so context is irrelevant and files_with_matches can stop at the
+            # first hit instead of scanning the rest of the file.
+            first_line = 0
+            first_column = 1
+            file_match_count = 0
             for idx, line in enumerate(lines):
-                if not budget_ok():
-                    return False
                 m = pattern.search(line)
                 if not m:
                     continue
-                before = lines[max(0, idx - context_n) : idx] if context_n else []
-                after = (
-                    lines[idx + 1 : idx + 1 + context_n] if context_n else []
+                file_match_count += 1
+                if first_line == 0:
+                    first_line = idx + 1
+                    first_column = m.start() + 1
+                if output_mode == "files_with_matches":
+                    break
+
+            if file_match_count == 0:
+                return True
+            if not budget_ok():
+                return False
+            matches.append(
+                GrepMatch(
+                    path=rel,
+                    line=first_line,
+                    column=first_column,
+                    text="",
+                    count=file_match_count if output_mode == "count" else None,
                 )
-                matches.append(
-                    GrepMatch(
-                        path=rel,
-                        line=idx + 1,
-                        column=m.start() + 1,
-                        text=line,
-                        before=list(before),
-                        after=list(after),
-                    )
-                )
-                if len(matches) >= limit_n:
-                    truncated = True
-                    stop_reason = "match_limit"
-                    return False
+            )
+            if len(matches) >= limit_n:
+                truncated = True
+                stop_reason = "match_limit"
+                return False
             return True
 
         if not start.exists():
@@ -836,7 +898,7 @@ class FileSearchService:
             )
 
         if start.is_file() or (start.is_symlink() and not start.is_dir()):
-            if glob_ok(start.name):
+            if glob_ok(start.name, _to_rel(root, start, public_prefix)):
                 scan_file(start)
         else:
             # Walk without following symlinks
@@ -876,9 +938,9 @@ class FileSearchService:
                 for fname in filenames:
                     if not budget_ok():
                         break
-                    if not glob_ok(fname):
-                        continue
                     fpath = base / fname
+                    if not glob_ok(fname, _to_rel(root, fpath, public_prefix)):
+                        continue
                     if not scan_file(fpath):
                         break
 

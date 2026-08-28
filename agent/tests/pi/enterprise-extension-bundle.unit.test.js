@@ -48,6 +48,29 @@ describe('createEnterpriseExtensionBundle', () => {
     assert.ok(names.includes('user-interaction'));
   });
 
+  it('ask_user guideline tells the model when a question is actually blocking', () => {
+    const factories = createEnterpriseExtensionBundle(RUN_CTX);
+    const interaction = factories.find(
+      (factory) => factory.extensionMetadata?.name === 'user-interaction',
+    );
+    assert.ok(interaction);
+    /** @type {object[]} */
+    const registered = [];
+    interaction({
+      registerTool(def) {
+        registered.push(def);
+      },
+      on() {},
+    });
+    const askUser = registered.find((def) => def.name === 'ask_user');
+    assert.ok(askUser);
+    assert.ok(
+      (askUser.promptGuidelines || []).some((line) =>
+        line.includes('useless or unsafe if guessed'),
+      ),
+    );
+  });
+
   it('an AgentVersion listing the legacy three still gets user-interaction', () => {
     const names = extensionFactoryNames(
       createEnterpriseExtensionBundle(RUN_CTX, {

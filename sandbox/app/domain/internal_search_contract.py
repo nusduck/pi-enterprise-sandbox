@@ -40,7 +40,9 @@ _COMMON_KEYS = frozenset(
 _TOOL_KEYS = {
     "ls": frozenset({"path", "depth", "includeHidden"}),
     "find": frozenset({"path", "pattern", "type", "maxDepth", "limit"}),
-    "grep": frozenset({"path", "query", "glob", "regex", "caseSensitive", "context", "limit"}),
+    "grep": frozenset(
+        {"path", "query", "glob", "regex", "caseSensitive", "context", "limit", "outputMode"}
+    ),
 }
 
 # Mirrors the model-facing schema in sandbox-bridge; the service clamps again.
@@ -53,6 +55,7 @@ FIND_MAX_LIMIT = 500
 GREP_MAX_LIMIT = 500
 GREP_MAX_CONTEXT = 5
 _FIND_TYPES = frozenset({"file", "dir", "symlink"})
+_GREP_OUTPUT_MODES = frozenset({"content", "files_with_matches", "count"})
 
 
 class InternalSearchContractError(ValueError):
@@ -180,6 +183,9 @@ def _search_args(tool_name: str, root: Mapping[str, Any]) -> dict[str, Any]:
     glob = root["glob"]
     if glob is not None:
         glob = _text(glob, "glob", MAX_PATTERN_LEN)
+    output_mode = root["outputMode"]
+    if output_mode not in _GREP_OUTPUT_MODES:
+        raise InternalSearchContractError("SEARCH_FIELD_INVALID", "outputMode invalid")
     return {
         "path": path,
         "query": _text(root["query"], "query", MAX_QUERY_LEN),
@@ -188,6 +194,7 @@ def _search_args(tool_name: str, root: Mapping[str, Any]) -> dict[str, Any]:
         "caseSensitive": _bool(root["caseSensitive"], "caseSensitive"),
         "context": _int(root["context"], "context", 0, GREP_MAX_CONTEXT),
         "limit": _int(root["limit"], "limit", 1, GREP_MAX_LIMIT),
+        "outputMode": output_mode,
     }
 
 

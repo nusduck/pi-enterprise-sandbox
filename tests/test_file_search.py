@@ -145,6 +145,34 @@ class TestFind:
         assert "sub/c.py" in paths
         assert "b.txt" not in paths
 
+    def test_path_qualified_pattern_matches_relative_path(
+        self, svc: FileSearchService, ws: str
+    ):
+        # fnmatch's "*" matches "/" too, so "sub/*.py" matches anything under
+        # sub/ (like "**/*.py" would), not only direct children — same
+        # semantics a bare "*.py" already had against basenames.
+        _write(ws, "a.py", "x")
+        _write(ws, "sub/a.py", "y")
+        _write(ws, "sub/other/a.py", "z")
+        _write(ws, "elsewhere/a.py", "w")
+        result = svc.find(ws, ".", pattern="sub/*.py")
+        paths = [i.path for i in result.items]
+        assert set(paths) == {"sub/a.py", "sub/other/a.py"}
+        assert "a.py" not in paths
+        assert "elsewhere/a.py" not in paths
+
+    def test_path_qualified_pattern_with_double_star(
+        self, svc: FileSearchService, ws: str
+    ):
+        _write(ws, "a.py", "x")
+        _write(ws, "sub/a.py", "y")
+        _write(ws, "sub/nested/a.py", "z")
+        result = svc.find(ws, ".", pattern="**/*.py")
+        paths = [i.path for i in result.items]
+        assert "a.py" not in paths
+        assert "sub/a.py" in paths
+        assert "sub/nested/a.py" in paths
+
     def test_type_filter_file(self, svc: FileSearchService, ws: str):
         _write(ws, "a.txt", "x")
         Path(ws, "subdir").mkdir()
@@ -250,6 +278,38 @@ class TestGrep:
         result = svc.grep(ws, ".", query="needle", glob="*.py")
         assert len(result.matches) == 1
         assert result.matches[0].path == "a.py"
+
+    def test_path_qualified_glob_matches_relative_path(
+        self, svc: FileSearchService, ws: str
+    ):
+        _write(ws, "a.py", "needle")
+        _write(ws, "sub/a.py", "needle")
+        result = svc.grep(ws, ".", query="needle", glob="sub/*.py")
+        paths = [m.path for m in result.matches]
+        assert paths == ["sub/a.py"]
+
+    def test_output_mode_files_with_matches_stops_at_first_hit(
+        self, svc: FileSearchService, ws: str
+    ):
+        _write(ws, "a.py", "needle\nneedle\nneedle\n")
+        _write(ws, "b.py", "nothing here\n")
+        result = svc.grep(ws, ".", query="needle", output_mode="files_with_matches")
+        assert [m.path for m in result.matches] == ["a.py"]
+        assert result.matches[0].text == ""
+        assert result.matches[0].count is None
+
+    def test_output_mode_count_reports_per_file_total(
+        self, svc: FileSearchService, ws: str
+    ):
+        _write(ws, "a.py", "needle\nneedle\nneedle\n")
+        result = svc.grep(ws, ".", query="needle", output_mode="count")
+        assert len(result.matches) == 1
+        assert result.matches[0].path == "a.py"
+        assert result.matches[0].count == 3
+
+    def test_invalid_output_mode_rejected(self, svc: FileSearchService, ws: str):
+        with pytest.raises(ValueError, match="output_mode"):
+            svc.grep(ws, ".", query="needle", output_mode="bogus")
 
     def test_context_lines(self, svc: FileSearchService, ws: str):
         _write(ws, "a.txt", "l1\nl2\nMATCH\nl4\nl5\n")

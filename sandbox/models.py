@@ -167,6 +167,9 @@ class GrepMatch(BaseModel):
     text: str
     before: list[str] = Field(default_factory=list)
     after: list[str] = Field(default_factory=list)
+    # Set only when outputMode="count": total matches in this file: no
+    # per-line entries are emitted for that mode, one row per file instead.
+    count: int | None = None
 
 
 class GrepResponse(BaseModel):

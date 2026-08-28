@@ -29,7 +29,7 @@ const EDIT_REQUIRED_KEYS = Object.freeze([
   'oldText',
   'newText',
 ]);
-const EDIT_OPTIONAL_KEYS = Object.freeze(['expectedHash', 'expectedVersion']);
+const EDIT_OPTIONAL_KEYS = Object.freeze(['expectedHash', 'expectedVersion', 'replaceAll']);
 const IDENTITY_KEYS = Object.freeze([
   'orgId',
   'userId',
@@ -262,6 +262,12 @@ function normalize(payload, tool) {
     if (Object.hasOwn(payload, 'expectedVersion')) {
       args.expectedVersion = requireVisibleAscii(payload.expectedVersion, 'expectedVersion');
     }
+    if (Object.hasOwn(payload, 'replaceAll')) {
+      if (payload.replaceAll !== true) {
+        fail('FILES_WRITE_PAYLOAD_INVALID', 'replaceAll must be true when present');
+      }
+      args.replaceAll = true;
+    }
   }
 
   let computed;
@@ -317,7 +323,7 @@ function validateResponse(parsed, normalized, tool) {
   }
   const keys = tool === 'write'
     ? ['path', 'size', 'hash', 'version']
-    : ['path', 'hash', 'version', 'beforeHash'];
+    : ['path', 'hash', 'version', 'beforeHash', 'replaced'];
   const result = {};
   for (const key of keys) {
     if (!Object.hasOwn(parsed, key)) {
@@ -330,6 +336,9 @@ function validateResponse(parsed, normalized, tool) {
   }
   if (tool === 'write' && (!Number.isSafeInteger(result.size) || result.size < 0)) {
     fail('SANDBOX_RESPONSE_INVALID', 'response size invalid');
+  }
+  if (tool === 'edit' && (!Number.isSafeInteger(result.replaced) || result.replaced < 1)) {
+    fail('SANDBOX_RESPONSE_INVALID', 'response replaced count invalid');
   }
   for (const key of tool === 'write'
     ? ['hash', 'version']

@@ -129,7 +129,12 @@ export function isWeakSecret(value) {
 
 /**
  * Load optional product-layer system prompt from env or file.
- * Platform security layer is always appended separately and cannot be disabled.
+ *
+ * This is a whole-persona *lead* for `resolveEnterpriseSystemPrompt`, not a
+ * security appendix. Path boundaries, approval, artifact delivery, and
+ * hard_deny stay in the enterprise contract and in code; this function must
+ * not splice extra layers onto the returned string.
+ *
  * @param {NodeJS.ProcessEnv | Record<string, string|undefined>} [env]
  */
 export function resolveProductSystemPrompt(env = process.env) {
@@ -144,42 +149,6 @@ export function resolveProductSystemPrompt(env = process.env) {
     return String(env.AGENT_SYSTEM_PROMPT);
   }
   return '';
-}
-
-/**
- * Platform security / tools / artifact layer — never overridable by env alone.
- * Hard-deny, path boundaries, and artifact-only delivery remain code-enforced.
- */
-export const PLATFORM_SYSTEM_PROMPT_LAYER = `
-## Platform security (non-overridable)
-
-- Obey sandbox path boundaries. Use workspace-relative paths, /home/sandbox/workspace/..., or the Conversation-owned persistent /tmp/....
-- Never attempt privilege escalation, host filesystem access, or secret exfiltration.
-- Do not disable or bypass hard_deny policies; security tools enforce them in code.
-- Skills outside development mode are read-only; do not invent install/edit tools.
-- Deliver user-facing files only via submit_artifact (artifact-only delivery).
-- Never print API keys, tokens, passwords, database URLs, or full connection strings.
-`.trim();
-
-/**
- * Compose product (env) + platform layers. Product layer is fully env-controlled;
- * platform layer is always appended and cannot be turned off via env.
- * @param {string} [productPrompt]
- * @param {string} [platformLayer]
- */
-export function composeSystemPrompt(
-  productPrompt = '',
-  platformLayer = PLATFORM_SYSTEM_PROMPT_LAYER,
-) {
-  const product = String(productPrompt || '').trim();
-  const platform = String(platformLayer || PLATFORM_SYSTEM_PROMPT_LAYER).trim();
-  if (!product) return platform;
-  if (!platform) return product;
-  // If product already embeds platform text, still re-append for invariant.
-  if (product.includes('Platform security (non-overridable)')) {
-    return product;
-  }
-  return `${product}\n\n${platform}`;
 }
 
 /**

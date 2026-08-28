@@ -417,11 +417,12 @@ export function createSandboxBridgeToolDefinitions(
       name: 'edit',
       label: 'Edit file',
       description:
-        'Exact oldText→newText replacement in a workspace or /tmp file. Requires expectedHash or expectedVersion (optimistic concurrency) and a unique oldText. Prefer edit over sed/awk; use write only for full rewrites.',
+        'Exact oldText→newText replacement in a workspace or /tmp file. Requires expectedHash or expectedVersion (optimistic concurrency). By default oldText must match exactly once; pass replaceAll: true to replace every occurrence (e.g. renaming a variable used many times) instead of failing on multi-match. Prefer edit over sed/awk; use write only for full rewrites.',
       promptSnippet: 'Edit workspace or temporary files with a version precondition',
       promptGuidelines: [
         'Read the file first and pass expectedHash or expectedVersion from that read.',
         'Keep oldText as small as possible while unique; merge nearby changes into one edit.',
+        'To replace every occurrence of oldText in the file (e.g. a rename), pass replaceAll: true instead of retrying with a narrower oldText or falling back to write.',
         'Do not include read-tool LINE_NUM|CONTENT gutters in oldText/newText.',
         'Use write only for complete rewrites.',
       ],
@@ -431,6 +432,7 @@ export function createSandboxBridgeToolDefinitions(
         newText: Type.Optional(Type.String({ maxLength: MAX_WRITE_BYTES })),
         expectedHash: Type.Optional(Type.String({ maxLength: 128 })),
         expectedVersion: Type.Optional(Type.Union([Type.String(), Type.Integer()])),
+        replaceAll: Type.Optional(Type.Boolean()),
       }),
       executionMode: modeFor('edit'),
       async execute(toolCallId, params) {
@@ -479,6 +481,7 @@ export function createSandboxBridgeToolDefinitions(
         };
         if (expectedHash) normalizedParams.expectedHash = expectedHash;
         if (expectedVersion) normalizedParams.expectedVersion = expectedVersion;
+        if (params.replaceAll === true) normalizedParams.replaceAll = true;
         const inv = await invoke(
           toolCallId,
           'editFile',
@@ -488,14 +491,18 @@ export function createSandboxBridgeToolDefinitions(
         if (!inv.ok) return inv.result;
         const data = inv.data;
         invalidateReadDedupForPath(norm.path);
+        const replaced = data?.replaced ?? 1;
         return toolOk(
           toolResultJson({
             ok: true,
             path: norm.path,
             hash: data?.hash ?? null,
             version: data?.version ?? null,
-            replaced: data?.replaced ?? 1,
-            message: `Successfully replaced text in ${norm.path}.`,
+            replaced,
+            message:
+              replaced > 1
+                ? `Replaced ${replaced} occurrences in ${norm.path}.`
+                : `Successfully replaced text in ${norm.path}.`,
           }),
         );
       },
@@ -512,6 +519,7 @@ export function createSandboxBridgeToolDefinitions(
         'Use read for file inspection and ls/find/grep for locating things; use bash for commands and narrow diagnostics.',
         'Prefer bounded output such as head, tail, or focused filters; never dump whole large files via cat.',
         'On truncation, narrow the command rather than re-running the same dump.',
+        'Do not use bash to talk to the user (echo, printf, comments); write progress in the reply.',
       ],
       parameters: Type.Object({
         command: Type.String({ maxLength: MAX_BASH_COMMAND_LEN }),
@@ -874,6 +882,7 @@ export function createSandboxBridgeToolDefinitions(
       promptGuidelines: [
         'Only submit finished deliverables the user should download.',
         'Write/edit the file first; then submit_artifact with a clear displayName.',
+        'User-facing files go through this tool; do not paste large contents into the reply or tell the user to copy from the workspace.',
       ],
       parameters: Type.Object({
         path: Type.String({ maxLength: MAX_PATH_LEN }),

@@ -177,7 +177,7 @@ class InternalFileWriter:
         digest = hashlib.sha256(data).hexdigest()
         return {"path": path, "size": len(data), "hash": digest, "version": digest}
 
-    def edit(self, *, workspace_id: str, path: str, old_text: str, new_text: str, expected_hash: str | None, expected_version: str | None) -> dict[str, object]:
+    def edit(self, *, workspace_id: str, path: str, old_text: str, new_text: str, expected_hash: str | None, expected_version: str | None, replace_all: bool = False) -> dict[str, object]:
         parts = _parts(path)
         try:
             safe_workspace_id = validate_formal_id(workspace_id, "workspace_id")
@@ -192,8 +192,13 @@ class InternalFileWriter:
                     raise InternalFileWriteError("FILE_VERSION_CONFLICT", "file version precondition failed")
                 count = before.count(old_text) if old_text else 0
                 if count == 0: raise InternalFileWriteError("FILE_TEXT_NOT_FOUND", "old text not found")
-                if count != 1: raise InternalFileWriteError("FILE_MULTIPLE_MATCH", "old text matched multiple times")
-                after = before.replace(old_text, new_text, 1)
+                if count != 1 and not replace_all:
+                    raise InternalFileWriteError(
+                        "FILE_MULTIPLE_MATCH",
+                        f"old text matched {count} times; pass replaceAll=true to replace every occurrence",
+                    )
+                replaced = count if replace_all else 1
+                after = before.replace(old_text, new_text) if replace_all else before.replace(old_text, new_text, 1)
                 after_bytes = after.encode("utf-8")
                 if len(after_bytes) > max_bytes:
                     raise InternalFileWriteError("FILE_TOO_LARGE", "content exceeds configured size limit")
@@ -204,7 +209,7 @@ class InternalFileWriter:
                 self._enforce_workspace_quota(safe_workspace_id, before_size, len(after_bytes))
                 _atomic_replace(parent, leaf, after_bytes)
         digest = hashlib.sha256(after_bytes).hexdigest()
-        return {"path": path, "hash": digest, "version": digest, "beforeHash": before_hash}
+        return {"path": path, "hash": digest, "version": digest, "beforeHash": before_hash, "replaced": replaced}
 
     @staticmethod
     def _enforce_workspace_quota(workspace_id: str, existing_bytes: int, new_bytes: int) -> None:

@@ -134,6 +134,23 @@ function createFakeTransport(calls) {
   return t;
 }
 
+describe('sandbox-bridge prompt guidelines', () => {
+  it('tells the model not to talk through bash and to deliver files via submit_artifact', () => {
+    const defs = createSandboxBridgeToolDefinitions(RUN_A, {}, {});
+    const includes = (name, snippet) => {
+      const tool = defs.find((definition) => definition.name === name);
+      assert.ok(tool, name);
+      const guidelines = tool.promptGuidelines || [];
+      assert.ok(
+        guidelines.some((line) => line.includes(snippet)),
+        `${name} missing guideline containing ${JSON.stringify(snippet)}`,
+      );
+    };
+    includes('bash', 'Do not use bash to talk to the user');
+    includes('submit_artifact', 'User-facing files go through this tool');
+  });
+});
+
 describe('process result status contract', () => {
   it('normalizes process tool results to lowercase ProcessStatus values', async () => {
     const defs = createSandboxBridgeToolDefinitions(
@@ -839,6 +856,25 @@ describe('sandbox-bridge registration', () => {
     assert.equal(ok.ok, true);
     assert.equal(ok.bytesWritten, 11);
     assert.equal(ok.path.includes('out.txt'), true);
+  });
+
+  it('write allows non-sequential leading-digit-pipe content that only looks like a gutter', async () => {
+    const transport = createFakeTransport([]);
+    transport.writeFile = async () => ({ size: 42, hash: 'h1' });
+    const defs = createSandboxBridgeToolDefinitions(RUN_A, transport, {
+      sandboxRequestBinder: createFakeBinder(),
+    });
+    const write = defs.find((t) => t.name === 'write');
+
+    // A pipe-delimited export with a leading id column: looks like
+    // "NUM|..." per line, but the numbers are not `offset + i + 1`, so it is
+    // not read-tool gutter output and must not be refused.
+    const result = await write.execute('w-csvish', {
+      path: 'ids.txt',
+      content: '17|apple\n42|banana\n3|cherry\n99|date\n',
+    });
+    const parsed = JSON.parse(result.content[0].text);
+    assert.equal(parsed.ok, true);
   });
 
   it('edit requires oldText/newText and rejects gutter text', async () => {

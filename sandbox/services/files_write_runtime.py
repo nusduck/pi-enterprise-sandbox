@@ -72,7 +72,7 @@ def _filter_success_result(
     keys = (
         ("path", "size", "hash", "version")
         if tool == "write"
-        else ("path", "hash", "version", "beforeHash")
+        else ("path", "hash", "version", "beforeHash", "replaced")
     )
     if not all(key in result for key in keys):
         raise ValueError("file result fields missing")
@@ -83,6 +83,10 @@ def _filter_success_result(
         type(filtered["size"]) is not int or filtered["size"] < 0
     ):
         raise ValueError("file result size invalid")
+    if tool == "edit" and (
+        type(filtered["replaced"]) is not int or filtered["replaced"] < 1
+    ):
+        raise ValueError("file result replaced count invalid")
     digest_keys = (
         ("hash", "version")
         if tool == "write"
@@ -303,6 +307,7 @@ class FilesWriteRuntime:
                     new_text=command.new_text,
                     expected_hash=command.expected_hash,
                     expected_version=command.expected_version,
+                    replace_all=command.replace_all,
                 )
             else:
                 raise ValueError("tool/command binding invalid")

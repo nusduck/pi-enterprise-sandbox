@@ -310,6 +310,16 @@ Sandbox internal plane (FastAPI)
   glob，因此 `cd … && …`、管道、重定向、`$(...)`、`python -m`、换用别的解释器、以及用 `cat`
   读 Skill 文件都会被拒——读文件用 `read` 工具，需要更复杂的命令先把脚本复制到 workspace。
   这条规则同时写进 system prompt 的 Skills 段，模型不必靠撞墙去发现它。
+- **Enterprise system prompt** 是 Pi `customPrompt`：身份可被 AgentVersion /
+  `AGENT_SYSTEM_PROMPT` lead 整段替换，路径 / Skill 入口 / 工具契约 / `## Doing work`
+  不可被替换。`## Tools` 正文按本 run 绑定的工具现场拼接（各工具自己的
+  `promptSnippet` / `promptGuidelines`），基座不写死工具清单。`## Doing work` 只写
+  工具无关的工作纪律（本轮做完并验证、不擅自改范围、进度写在用户可见回复、密钥不进回复、
+  有交付工具就走交付工具）；todo / memory / `ask_user` / 子代理 / artifact 的用法只出现在
+  对应工具被绑定后的 guideline 里，避免没装该 extension 的 run 读到幽灵工具。
+  `AGENT_SYSTEM_PROMPT` 只替换身份 lead，不再另拼一层「平台安全」附录——那层曾经写在
+  `config.js` 的 `PLATFORM_SYSTEM_PROMPT_LAYER` 里，从未进入运行时 prompt。
+  实现：`agent/src/infrastructure/pi/enterprise-system-prompt.js`。
 - 策略版本常量 `POLICY_VERSION`（当前 `2026-07-15.1`）写入审批响应与审计 meta，便于追溯。
 - `SANDBOX_POLICY_PROFILE=strict|balanced` 在 Agent 与 Sandbox 对称生效；`balanced` 仅在 required Bubblewrap 已通过配置校验时激活，并只放行常见包管理命令的审批前置门。`SANDBOX_NETWORK_MODE` 仍是网络权限唯一事实源，生产固定 `strict`。
 - approval key 由 durable `run_id`、Sandbox session、工具名、稳定 SDK

@@ -248,6 +248,7 @@ function expectedNormalizedArgs(name) {
         caseSensitive: true,
         context: 0,
         limit: GREP_DEFAULT_LIMIT,
+        outputMode: 'content',
       };
     case 'process_status':
       return { processId: '01K0G2PAV8FPMVC9QHJG7JPN5C' };

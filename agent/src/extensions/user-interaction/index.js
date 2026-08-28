@@ -59,7 +59,7 @@ export function createUserInteractionExtension(options) {
         'Pause the current run and request required input, confirmation, or a selection from the user.',
       promptSnippet: 'Request user input durably when the task cannot continue without it',
       promptGuidelines: [
-        'Use ask_user only when the task genuinely requires information or a choice that is not already available.',
+        'Use ask_user only when a missing fact or choice would make the rest of the work useless or unsafe if guessed; do not block on niceties.',
       ],
       parameters: Type.Object({
         interaction_type: Type.Union([

@@ -14,6 +14,11 @@
  * With no surface applied the prompt is still correct — it just says the tool
  * schemas are authoritative and leaves the inventory to them.
  *
+ * `## Doing work` is harness behaviour (finish-and-verify, scope, visible
+ * progress, no secrets). It must stay tool-agnostic: naming `todo_write` or
+ * `ask_user` here would re-introduce the stale-inventory bug the live surface
+ * exists to prevent. Those workflows live on the tools' own `promptGuidelines`.
+ *
  * Skills XML is appended later by Pi formatSkillsForPrompt when loadedSkills
  * is non-empty and `read` exists.
  */
@@ -164,11 +169,20 @@ Skill directories are listable but not searchable: \`ls\` reaches them, \`find\`
 - Reach for those three rather than \`bash\` with ls/find/rg: they are budgeted, they run in parallel, and they tell you when a result was truncated.
 - Read a file only once you know which one you want.
 
+## Doing work
+- Finish the actual request in this turn: inspect, act, and verify. A plan or an analysis is not delivery unless the user asked only for that.
+- Do not silently narrow, widen, or transform the requested scope. If part of the work is blocked, finish every other part and say what was left out and why.
+- Make routine judgment calls yourself. Ask only when different readings would produce materially different work, or when any assumption would be unsafe or make the result useless.
+- Write progress in the user-visible reply. Never use a shell command, a file comment, or an invented status line to communicate with the user.
+- Never print API keys, tokens, passwords, or full connection strings.
+- Before claiming done: tools were actually used for real outcomes, user-facing files were published through a bound delivery tool when one exists, and the reply states what was not checked.
+
 ## Guidelines
 - Be concise; show paths and evidence clearly
 - Use tools for real filesystem, command, and external-system outcomes; do not invent output or data
 - Prefer editing existing files over writing new ones when possible
-- Say what you checked, what you did not, and how confident the conclusion is; separate observed fact from inference`;
+- Say what you checked, what you did not, and how confident the conclusion is; separate observed fact from inference
+- When a bound tool exists for a durable plan, long-lived notes, asking the user, or publishing a file, use that tool instead of simulating it in text`;
 
   // AgentVersion / product lead owns voice when set; keep the path/tool contract.
   if (custom) return `${custom}\n\n---\n\n${contract}`;

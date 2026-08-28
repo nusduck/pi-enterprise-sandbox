@@ -115,6 +115,7 @@ export function createSubagentSpawnExtension(options) {
       promptSnippet:
         'Fan out independent subtasks to parallel child runs instead of doing everything inline',
       promptGuidelines: [
+        'Spawn only independent subtasks; sequential work that needs this conversation stays in this run.',
         'Each child must be fully self-contained: it cannot see this conversation and starts in its own empty workspace, so include every requirement, input and expected output in the task prompt.',
         `At most ${maxConcurrent} children may be running at once; use check_subagent to wait for completion before spawning more or aggregating.`,
       ],
