@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1
 # ── JS toolchain (build-time only) ──────────────────────────────────
 # nodejs/npm exist only in this ephemeral stage, to fetch bun itself (a
 # standalone binary — chicken-and-egg, npm is the bootstrap), docx/pptxgenjs,
@@ -9,16 +10,23 @@ ARG BUN_VERSION=1.4.0
 ARG DOCX_JS_VERSION=9.7.1
 ARG PPTXGENJS_VERSION=4.0.1
 
-RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates \
+# Cache mounts persist across builds (BuildKit build cache, not an image
+# layer) so tweaking package lists here doesn't re-fetch everything over
+# the network each time — only re-download what actually changed.
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
+    apt-get update && apt-get install -y --no-install-recommends curl ca-certificates \
     && curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
-    && apt-get install -y --no-install-recommends nodejs \
-    && npm install --global --prefix /usr/local --no-audit --no-fund \
+    && apt-get install -y --no-install-recommends nodejs
+RUN --mount=type=cache,target=/root/.npm,sharing=locked \
+    npm install --global --prefix /usr/local --no-audit --no-fund \
         "bun@${BUN_VERSION}" \
         "docx@${DOCX_JS_VERSION}" \
         "pptxgenjs@${PPTXGENJS_VERSION}"
 
 COPY skills/baoyu-format-markdown/scripts/ /build/baoyu-format-markdown/
-RUN npm ci --omit=dev --ignore-scripts --prefix /build/baoyu-format-markdown
+RUN --mount=type=cache,target=/root/.npm,sharing=locked \
+    npm ci --omit=dev --ignore-scripts --prefix /build/baoyu-format-markdown
 
 # ── Sandbox Service (Python FastAPI) ──────────────────────────────
 # Python minor pin: runtime-versions.json → python.docker_image
@@ -31,7 +39,12 @@ ARG BUN_VERSION=1.4.0
 ARG DOCX_JS_VERSION=9.7.1
 ARG PPTXGENJS_VERSION=4.0.1
 
-RUN DEBIAN_FRONTEND=noninteractive apt-get update && apt-get install -y --no-install-recommends \
+# Cache mounts persist across builds (BuildKit build cache, not an image
+# layer) so tweaking this package list doesn't re-fetch the whole ~2GB set
+# over the network on every edit — only what actually changed gets pulled.
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
+    DEBIAN_FRONTEND=noninteractive apt-get update && apt-get install -y --no-install-recommends \
     curl \
     ca-certificates \
     bubblewrap \
@@ -43,7 +56,6 @@ RUN DEBIAN_FRONTEND=noninteractive apt-get update && apt-get install -y --no-ins
     zip \
     file \
     less \
-    tree \
     ripgrep \
     fd-find \
     pandoc \
@@ -58,8 +70,7 @@ RUN DEBIAN_FRONTEND=noninteractive apt-get update && apt-get install -y --no-ins
     libreoffice-calc \
     libreoffice-impress \
     libreoffice-writer \
-    && ln -sf "$(command -v fdfind || true)" /usr/local/bin/fd || true \
-    && rm -rf /var/lib/apt/lists/*
+    && ln -sf "$(command -v fdfind || true)" /usr/local/bin/fd || true
 
 # bun (standalone binary) + docx/pptxgenjs, fetched via npm in the js-deps
 # stage above; no nodejs/npm in this (final) image.
@@ -72,7 +83,8 @@ COPY --from=js-deps /usr/local/bin/bun /usr/local/bin/bun
 COPY skills/baoyu-format-markdown/scripts/ /usr/local/lib/pi-skill-runtime/baoyu-format-markdown/
 COPY --from=js-deps /build/baoyu-format-markdown/node_modules/ /usr/local/lib/pi-skill-runtime/baoyu-format-markdown/node_modules/
 COPY skills/baoyu-markdown-to-html/scripts/ /usr/local/lib/pi-skill-runtime/baoyu-markdown-to-html/
-RUN cd /usr/local/lib/pi-skill-runtime/baoyu-markdown-to-html && \
+RUN --mount=type=cache,target=/root/.bun/install/cache,sharing=locked \
+    cd /usr/local/lib/pi-skill-runtime/baoyu-markdown-to-html && \
     bun install --frozen-lockfile --production --no-progress
 
 COPY sandbox/skill-runtime/ /usr/local/bin/
@@ -101,11 +113,12 @@ COPY pyproject.toml /app/
 COPY sandbox/requirements.txt /app/sandbox/requirements.txt
 
 # Create venv and install API deps plus preinstalled workload/tooling deps (no dev/test deps)
-RUN uv venv /app/.venv && \
+RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
+    uv venv /app/.venv && \
     . /app/.venv/bin/activate && \
-    uv pip install --no-cache -e "." && \
-    uv pip install --no-cache -r /app/sandbox/requirements.txt && \
-    uv pip install --no-cache pip && \
+    uv pip install -e "." && \
+    uv pip install -r /app/sandbox/requirements.txt && \
+    uv pip install pip && \
     chown -R sandbox:sandbox /app
 
 # Copy application code
