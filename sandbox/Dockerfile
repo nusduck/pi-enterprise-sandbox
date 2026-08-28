@@ -1,3 +1,25 @@
+# ── JS toolchain (build-time only) ──────────────────────────────────
+# nodejs/npm exist only in this ephemeral stage, to fetch bun itself (a
+# standalone binary — chicken-and-egg, npm is the bootstrap), docx/pptxgenjs,
+# and to `npm ci` the native autocorrect-node addon with its npm lockfile.
+# Nothing at runtime invokes `node`: BaoYu skills and docx/pptx generation
+# scripts all run under bun, so nodejs itself never reaches the final image.
+FROM python:3.11-slim AS js-deps
+ARG BUN_VERSION=1.4.0
+ARG DOCX_JS_VERSION=9.7.1
+ARG PPTXGENJS_VERSION=4.0.1
+
+RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates \
+    && curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
+    && apt-get install -y --no-install-recommends nodejs \
+    && npm install --global --prefix /usr/local --no-audit --no-fund \
+        "bun@${BUN_VERSION}" \
+        "docx@${DOCX_JS_VERSION}" \
+        "pptxgenjs@${PPTXGENJS_VERSION}"
+
+COPY skills/baoyu-format-markdown/scripts/ /build/baoyu-format-markdown/
+RUN npm ci --omit=dev --ignore-scripts --prefix /build/baoyu-format-markdown
+
 # ── Sandbox Service (Python FastAPI) ──────────────────────────────
 # Python minor pin: runtime-versions.json → python.docker_image
 FROM python:3.11-slim AS sandbox-base
@@ -36,25 +58,21 @@ RUN DEBIAN_FRONTEND=noninteractive apt-get update && apt-get install -y --no-ins
     libreoffice-calc \
     libreoffice-impress \
     libreoffice-writer \
-    ffmpeg \
-    build-essential \
-    && curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
-    && apt-get install -y --no-install-recommends nodejs \
-    && npm install --global --prefix /usr/local --no-audit --no-fund \
-        "bun@${BUN_VERSION}" \
-        "docx@${DOCX_JS_VERSION}" \
-        "pptxgenjs@${PPTXGENJS_VERSION}" \
     && ln -sf "$(command -v fdfind || true)" /usr/local/bin/fd || true \
     && rm -rf /var/lib/apt/lists/*
+
+# bun (standalone binary) + docx/pptxgenjs, fetched via npm in the js-deps
+# stage above; no nodejs/npm in this (final) image.
+COPY --from=js-deps /usr/local/lib/node_modules/ /usr/local/lib/node_modules/
+COPY --from=js-deps /usr/local/bin/bun /usr/local/bin/bun
 
 # BaoYu's TypeScript Skills are read-only bind mounts at runtime. Keep a
 # build-time copy with locked dependencies in the image so the production
 # Bubblewrap child never needs npx/npm access to the network.
 COPY skills/baoyu-format-markdown/scripts/ /usr/local/lib/pi-skill-runtime/baoyu-format-markdown/
+COPY --from=js-deps /build/baoyu-format-markdown/node_modules/ /usr/local/lib/pi-skill-runtime/baoyu-format-markdown/node_modules/
 COPY skills/baoyu-markdown-to-html/scripts/ /usr/local/lib/pi-skill-runtime/baoyu-markdown-to-html/
-RUN npm ci --omit=dev --ignore-scripts \
-        --prefix /usr/local/lib/pi-skill-runtime/baoyu-format-markdown && \
-    cd /usr/local/lib/pi-skill-runtime/baoyu-markdown-to-html && \
+RUN cd /usr/local/lib/pi-skill-runtime/baoyu-markdown-to-html && \
     bun install --frozen-lockfile --production --no-progress
 
 COPY sandbox/skill-runtime/ /usr/local/bin/
@@ -82,17 +100,16 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 COPY pyproject.toml /app/
 COPY sandbox/requirements.txt /app/sandbox/requirements.txt
 
-# Create venv and install API deps plus preinstalled workload/tooling deps (no dev deps)
+# Create venv and install API deps plus preinstalled workload/tooling deps (no dev/test deps)
 RUN uv venv /app/.venv && \
     . /app/.venv/bin/activate && \
-    uv pip install --no-cache -e ".[test]" && \
+    uv pip install --no-cache -e "." && \
     uv pip install --no-cache -r /app/sandbox/requirements.txt && \
     uv pip install --no-cache pip && \
     chown -R sandbox:sandbox /app
 
 # Copy application code
 COPY sandbox/ /app/sandbox/
-COPY tests/ /app/tests/
 COPY sandbox/entrypoint.sh /app/entrypoint.sh
 
 # Fix ownership

@@ -1,5 +1,7 @@
 # PptxGenJS Tutorial
 
+`pptxgenjs` is preinstalled in the sandbox image. Run scripts with `bun` (there is no `node` binary in the sandbox).
+
 ## Setup & Basic Structure
 
 ```javascript
