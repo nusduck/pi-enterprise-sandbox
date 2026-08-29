@@ -280,6 +280,8 @@ export class McpFacadeService {
       context_id: record.contextId,
       // 存下路径，下载时才能从它借扩展名（displayName 常是没有后缀的标题）。
       path: input.sourcePath,
+      // 下载时要拿它做归属维度，见 bridge-client.artifactStream()。
+      sandbox_session_id: record.sandboxSessionId,
     });
     const token = this.#signArtifact(artifactId, expiresAt);
     const query = new URLSearchParams({ token }).toString();
@@ -307,9 +309,9 @@ export class McpFacadeService {
     }
   }
 
-  async artifactStream(artifactId: string): Promise<Response> {
+  async artifactStream(artifactId: string, sandboxSessionId: string): Promise<Response> {
     try {
-      return await this.#bridge.artifactStream(artifactId);
+      return await this.#bridge.artifactStream(artifactId, sandboxSessionId);
     } catch (error) {
       if (error instanceof SandboxBridgeError) throw new McpFacadeError(error.message);
       throw error;

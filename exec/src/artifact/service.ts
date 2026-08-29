@@ -108,6 +108,12 @@ export interface ArtifactSubmitRequest {
   readonly expectedSha256?: string | null;
   /** 提交时用调用方身份，不信任 body 里的 org/user。 */
   readonly owner: OwnerScope;
+  /**
+   * 由调用方指定的 artifact id。只有 MCP 窄桥用：facade 先生成 ULID、写进
+   * 自己的 Redis 元数据并签进下载 URL，之后才调过来——exec 这边再生成一个
+   * 新 id，两边就对不上了。其余调用方一律不传，由本服务生成。
+   */
+  readonly externalArtifactId?: string | null;
 }
 
 export interface ArtifactServiceOptions {
@@ -165,7 +171,8 @@ export class ArtifactService {
     const fs = this.fsFactory(workspace);
     const target = await fs.resolve(sourcePath);
 
-    const artifactId = `art_${randomUUID().replace(/-/g, '')}`;
+    const artifactId =
+      (req.externalArtifactId ?? '').trim() || `art_${randomUUID().replace(/-/g, '')}`;
     const dest = artifactBlobPath(this.#roots, req.owner.orgId, artifactId);
 
     const copied = await streamCopyHashToControl(target.targetKey, dest, {

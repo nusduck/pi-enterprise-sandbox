@@ -109,7 +109,7 @@ export function createMcpApp(settings: McpSettings, service: McpFacadeService): 
 
     let upstream: Response;
     try {
-      upstream = await service.artifactStream(artifactId);
+      upstream = await service.artifactStream(artifactId, String(metadata['sandbox_session_id'] ?? ''));
     } catch {
       return c.json({ detail: 'Artifact unavailable' }, 503);
     }

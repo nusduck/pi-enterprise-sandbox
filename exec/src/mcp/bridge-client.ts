@@ -166,13 +166,22 @@ export class SandboxBridgeClient {
     return data as Record<string, unknown>;
   }
 
-  /** 产物字节流。调用方负责消费或取消 body。 */
-  async artifactStream(artifactId: string): Promise<Response> {
+  /**
+   * 产物字节流。调用方负责消费或取消 body。
+   *
+   * `sandboxSessionId` 是归属维度：Python 版这条路由**不做任何归属校验**，
+   * 纯靠桥的 token 兜底。带上它之后，即使 token 泄漏，也只能取到自己那份
+   * 上下文的产物——比原版严一档，且 facade 本来就有这个值。
+   */
+  async artifactStream(artifactId: string, sandboxSessionId: string): Promise<Response> {
     if (!this.#started) throw new SandboxBridgeError('Sandbox bridge is unavailable');
+    const query = new URLSearchParams({ sandbox_session_id: sandboxSessionId }).toString();
     let response: Response;
     try {
       response = await this.#fetch(
-        this.#url(`/internal/mcp/v1/artifacts/${encodeURIComponent(artifactId)}/content`),
+        this.#url(
+          `/internal/mcp/v1/artifacts/${encodeURIComponent(artifactId)}/content?${query}`,
+        ),
         { method: 'GET', headers: this.#headers, signal: AbortSignal.timeout(BRIDGE_TIMEOUT_MS) },
       );
     } catch {

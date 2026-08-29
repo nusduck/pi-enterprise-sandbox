@@ -5,6 +5,9 @@
 import { Hono } from 'hono';
 import { Context } from '@deepseek-ai/cordis';
 import { createInternalRouter, type InternalRouterDeps } from './router.js';
+import { registerInternalMcpRoutes } from './internal-mcp.js';
+import { ArtifactService } from '../artifact/service.js';
+import { WorkspaceFileSystem } from '../fs/workspace-fs.js';
 import { createPublicRouter, type PublicRouterDeps } from './public/router.js';
 import { WorkspaceManager } from '../workspace/manager.js';
 import { readWorkspaceLifecycleConfig } from '../workspace/env-config.js';
@@ -31,6 +34,8 @@ export interface ExecAppDeps {
   readonly enabledSkillPackagesFor?: InternalRouterDeps['enabledSkillPackagesFor'];
   readonly modeFor?: InternalRouterDeps['modeFor'];
   readonly cordisContext?: unknown;
+  /** MCP 窄桥的 bearer token；空串表示该桥不可用（回 503）。 */
+  readonly mcpInternalToken?: string;
 }
 
 export function createExecApp(deps: ExecAppDeps): Hono {
@@ -63,6 +68,19 @@ export function createExecApp(deps: ExecAppDeps): Hono {
   app.get('/health/ready', health);
   app.route('/', createInternalRouter(internal));
   app.route('/', createPublicRouter(pub));
+
+  // MCP 窄桥：独立 token、独立路径前缀，**不**走 HMAC/CIDR 中间件。
+  // 挂在这里而不是 createInternalRouter 里，正是为了让"facade 够不到
+  // /internal/v1/*"这条性质在代码结构上看得见。
+  registerInternalMcpRoutes(app, {
+    workspaceManager: deps.workspaceManager,
+    systemSkillRoot: deps.systemSkillRoot,
+    bwrapExecutable: deps.bwrapExecutable,
+    artifactService: new ArtifactService(
+      (ws) => new WorkspaceFileSystem(cordisContext as never, ws),
+    ),
+    internalToken: deps.mcpInternalToken ?? '',
+  });
   return app;
 }
 
@@ -120,6 +138,7 @@ export function createExecAppFromEnv(env: NodeJS.ProcessEnv = process.env): Exec
     keyring,
     systemSkillRoot: env['SANDBOX_SKILLS_ROOT'] ?? AGENT_SKILL_PATH,
     bwrapExecutable: env['SANDBOX_BWRAP_PATH'] ?? '/usr/bin/bwrap',
+    mcpInternalToken: env['SANDBOX_MCP_INTERNAL_TOKEN'] ?? '',
   });
 
   return {
