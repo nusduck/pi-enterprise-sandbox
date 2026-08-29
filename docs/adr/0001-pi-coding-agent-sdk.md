@@ -2,7 +2,7 @@
 
 | Field | Value |
 |-------|-------|
-| Status | Accepted |
+| Status | **Superseded by [ADR 0007](0007-agent-runtime-rebuild-on-dsh.md)** (2026-08-29) |
 | Date | 2026-07-11 |
 | Decision owners | Agent runtime / api-server maintainers |
 | Related | Agent Runtime, package `agent` |

@@ -2,11 +2,26 @@
 
 | 字段 | 值 |
 |------|----|
-| 状态 | Proposed |
+| 状态 | **Superseded by [ADR 0007](0007-agent-runtime-rebuild-on-dsh.md)**（2026-08-29） |
 | 日期 | 2026-08-26 |
 | 决策所有者 | Agent runtime / data maintainers |
 | 适用范围 | `agent/` 的 Pi Session journal、snapshot、恢复与归档边界 |
 | 关联决策 | [ADR 0001](0001-pi-coding-agent-sdk.md)、`plan.md` §2.5、§7、§8.7–§8.9、§12.5 |
+
+> **作废说明（2026-08-29）**
+>
+> 本 ADR 的六条决策**全部有效并被 [ADR 0007](0007-agent-runtime-rebuild-on-dsh.md) 继承**，
+> 只是绑定对象从 Pi 的 JSONL 换成了 DSH 的会话事件。作废的是**措辞层**：所有提到
+> `Pi SessionEntry`、`PI_SESSION_JSONL_VERSION`、`SessionManager.open`、
+> `toPrecision(15)` 的条款不再适用。
+>
+> 决策的继承对照见 ADR 0007「会话持久化」一节。本文件保留为**设计推理的历史记录**——
+> 特别是「备选方案」表，它否掉的四条路（每会话一个 JSONL 文件、每 Run 全量快照、
+> Conversation 单行存全史、对象存储做在线 journal）在新引擎下依然是错的，
+> 理由一字不改。
+>
+> 另注：本 ADR 写作时项目已有落库数据，故有「迁移策略」一节。**该节整节作废**——
+> 项目处于研发阶段，决策所有者已确认不做历史数据迁移。
 
 ## 背景
 
