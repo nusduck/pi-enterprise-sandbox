@@ -12,10 +12,12 @@ import {
   ENTERPRISE_DEFAULT_TOOLS,
   REGISTERED_EXTENSION_NAMES,
   REQUIRED_EXTENSION_NAMES,
+} from '../infrastructure/dsh/constants.js';
+import {
   coerceToolRiskPolicy,
   decisionForRiskLevel,
   resolveToolRiskLevel,
-} from '../extensions/index.js';
+} from '../infrastructure/dsh/tool-risk-policy.js';
 import { loadMcpServerRegistry } from '../infrastructure/mcp/pi-mcp-adapter-factory.js';
 
 const PRODUCT_PACKAGE = 'pi-enterprise-agent';
@@ -184,8 +186,6 @@ export function getExtensionDiagnostics(options = {}) {
   const requiredExtensions = new Set(REQUIRED_EXTENSION_NAMES);
   const extensions = REGISTERED_EXTENSION_NAMES.map((name) => ({
     name,
-    // Required extensions always load with the bundle; optional first-party
-    // extensions load only when the AgentVersion lists them.
     enabled: requiredExtensions.has(name),
     required: requiredExtensions.has(name),
     status: 'configured',

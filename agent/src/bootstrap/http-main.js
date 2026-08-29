@@ -488,6 +488,7 @@ export async function startHttpMain(env = process.env) {
   if (sandboxHealthCheck) {
     try {
       const health = await sandboxHealthCheck();
+      // @ts-expect-error 遗留JS占位类型object未展开，访问status需收窄，存活代码先用expect-error收敛 —— TS2339: Property 'status' does not exist on type 'unknown'.
       if (health?.status === 'ok') {
         console.log('[agent-server] Sandbox healthy');
       } else {

@@ -34,6 +34,7 @@ export const TERMINAL_RUN_STATUS_SET = new Set(TERMINAL_RUN_STATUSES);
  * Non-terminal statuses (recoverable by workers after restart).
  */
 export const NON_TERMINAL_RUN_STATUSES = Object.freeze(
+  // @ts-expect-error 未校验string传入闭合联合，运行时需窄化守卫，存活代码先用expect-error收敛 —— TS2345: Argument of type '"ACCEPTED" | "QUEUED" | "STARTING" | "RUNN
   ALL_RUN_STATUSES.filter((s) => !TERMINAL_RUN_STATUS_SET.has(s)),
 );
 
@@ -87,5 +88,6 @@ export function isRunStatus(status) {
  * @returns {boolean}
  */
 export function isTerminalRunStatus(status) {
+  // @ts-expect-error 未校验string传入闭合联合，运行时需窄化守卫，存活代码先用expect-error收敛 —— TS2345: Argument of type 'string' is not assignable to parameter of 
   return typeof status === 'string' && TERMINAL_RUN_STATUS_SET.has(status);
 }

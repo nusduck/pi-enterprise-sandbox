@@ -24,7 +24,7 @@ import { ExecuteRunService } from '../../src/application/execute-run-service.js'
 import { createStubRunExecutor } from '../../src/application/run-executor.js';
 import { createUlidGenerator } from '../../src/domain/shared/ulid.js';
 import { RUN_STATUS } from '../../src/domain/run/run-status.js';
-import { PINNED_PI_SDK_VERSION } from '../../src/infrastructure/pi/pi-runtime-factory.js';
+import { PINNED_PI_SDK_VERSION } from '../../src/infrastructure/dsh/runtime-factory.js';
 
 import {
   CONV,
@@ -271,7 +271,7 @@ describe('PiRunExecutor', () => {
       workspaceResolver: async (sess) => `/workspace/${sess.workspaceId}`,
       generateId,
       now: () => new Date(),
-      sessionAdapter: {
+      sessionAdapter: factoryOpts.sessionAdapter ?? {
         captureSnapshotPayload(sm, opts) {
           return {
             header: sm.getHeader(),
@@ -282,6 +282,7 @@ describe('PiRunExecutor', () => {
       },
       agentDir: '/tmp/agent-dir',
       sessionLockRenewIntervalMs: 60_000,
+      extensionBundleFactory: factoryOpts.extensionBundleFactory,
     });
   }
 
@@ -318,6 +319,61 @@ describe('PiRunExecutor', () => {
     );
     assert.ok(uiAssistant, 'UI assistant message persisted for history');
     assert.notEqual(uiAssistant.message_type, 'pi_journal_entry');
+    await exec.dispose();
+  });
+
+  it('keeps session-subscribe projection when the extension bundle is empty', async () => {
+    const exec = makeExecutor({
+      extensionBundleFactory: () => [],
+    });
+    const result = await exec.execute({
+      run: {
+        runId: RUN,
+        agentSessionId: SESS,
+        conversationId: CONV,
+        agentVersionId: VER,
+        triggeringMessageId: TRIG,
+        traceId: 'b'.repeat(32),
+        orgId: ORG,
+        userId: USER,
+      },
+      scope,
+      workerId: 'w1',
+      signal: new AbortController().signal,
+    });
+    assert.equal(result.outcome, RUN_STATUS.SUCCEEDED);
+    assert.ok(
+      state.tables.run_events.some((e) => e.event_type === 'message.completed'),
+      'empty Wave-6 bundle must not disable session-subscribe projection',
+    );
+    await exec.dispose();
+  });
+
+  it('does not fail with snapshot header is required when adapter returns a Promise of null', async () => {
+    const exec = makeExecutor({
+      sessionAdapter: {
+        async captureSnapshotPayload() {
+          return null;
+        },
+      },
+    });
+    const result = await exec.execute({
+      run: {
+        runId: RUN,
+        agentSessionId: SESS,
+        conversationId: CONV,
+        agentVersionId: VER,
+        triggeringMessageId: TRIG,
+        traceId: 'b'.repeat(32),
+        orgId: ORG,
+        userId: USER,
+      },
+      scope,
+      workerId: 'w1',
+      signal: new AbortController().signal,
+    });
+    assert.equal(result.outcome, RUN_STATUS.SUCCEEDED);
+    assert.notEqual(result.statusReason, 'snapshot header is required');
     await exec.dispose();
   });
 
@@ -1179,7 +1235,7 @@ describe('PiRunExecutor', () => {
   it('only writes UI assistant for this-run entries; recovered history not rebound', async () => {
     // Seed recovered journal/snapshot with prior assistant entry e-old (no UI row).
     const { checksumSnapshotPayload } = await import(
-      '../../src/infrastructure/pi/pi-jsonl-codec.js'
+      '../../src/application/session-json-codec.js'
     );
     const oldPayload = {
       header: {
@@ -1745,8 +1801,7 @@ describe('PiRunExecutor', () => {
     const files = [
       'application/pi-run-executor.js',
       'application/session-recovery-service.js',
-      'infrastructure/pi/pi-session-adapter.js',
-      'infrastructure/pi/pi-runtime-factory.js',
+      'infrastructure/dsh/runtime-factory.js',
     ];
     for (const f of files) {
       const src = readFileSync(path.join(root, f), 'utf8');

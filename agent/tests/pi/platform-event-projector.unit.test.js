@@ -8,8 +8,8 @@ import {
   PlatformEventProjector,
   projectPiEvent,
   PROJECTOR_EVENT_TYPES,
-} from '../../src/infrastructure/pi/platform-event-projector.js';
-import { redactInlineSecrets } from '../../src/infrastructure/pi/event-redaction.js';
+} from '../../src/infrastructure/dsh/event-projector.js';
+import { redactInlineSecrets } from '../../src/lib/event-redaction.js';
 
 const CTX = {
   runId: '01K0G2PAV8FPMVC9QHJG7JPN53',

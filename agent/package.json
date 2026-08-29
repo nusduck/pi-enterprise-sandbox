@@ -30,8 +30,7 @@
     "smoke": "node --test tests/listen-smoke.test.js tests/fake-openai-provider.test.js"
   },
   "dependencies": {
-    "@earendil-works/pi-ai": "0.80.3",
-    "@earendil-works/pi-coding-agent": "0.80.3",
+    "@a2a-js/sdk": "1.1.0",
     "@opentelemetry/api": "^1.9.0",
     "@opentelemetry/core": "^2.9.0",
     "@opentelemetry/exporter-trace-otlp-proto": "^0.220.0",
@@ -40,8 +39,10 @@
     "@opentelemetry/sdk-node": "^0.220.0",
     "@opentelemetry/sdk-trace-base": "^2.9.0",
     "@opentelemetry/semantic-conventions": "^1.43.0",
+    "@pi/runtime": "file:../runtime",
     "bullmq": "^5.80.2",
     "ioredis": "^5.10.1",
+    "jiti": "2.6.1",
     "knex": "^3.1.0",
     "mysql2": "^3.14.0",
     "pi-mcp-adapter": "2.11.0",

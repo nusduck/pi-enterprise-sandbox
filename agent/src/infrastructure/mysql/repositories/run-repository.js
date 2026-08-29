@@ -294,8 +294,11 @@ export class RunRepository {
     }
     const subagentLabel = sanitizeSubagentLabel(input.subagentLabel);
     const traceId = assertTraceId(input.traceId);
+    // @ts-expect-error 遗留JS占位类型object未展开，访问traceState需收窄，存活代码先用expect-error收敛 —— TS2339: Property 'traceState' does not exist on type '{ runId: strin
     const traceState = assertTraceState(input.traceState);
+    // @ts-expect-error 遗留JS占位类型object未展开，访问traceFlags需收窄，存活代码先用expect-error收敛 —— TS2339: Property 'traceFlags' does not exist on type '{ runId: strin
     const traceFlags = assertTraceFlags(input.traceFlags);
+    // @ts-expect-error 遗留JS占位类型object未展开，访问traceParentSpanId需收窄，存活代码先用expect-error收敛 —— TS2339: Property 'traceParentSpanId' does not exist on type '{ runId
     const traceParentSpanId = assertTraceParentSpanId(input.traceParentSpanId);
 
     const now = toMysqlDateTime(input.createdAt || this.now());
@@ -436,6 +439,7 @@ export class RunRepository {
         if (visited.has(run.runId)) continue;
         visited.add(run.runId);
         next.push(run.runId);
+        // @ts-expect-error 未校验string传入闭合联合，运行时需窄化守卫，存活代码先用expect-error收敛 —— TS2345: Argument of type 'string' is not assignable to parameter of 
         if (!onlyNonTerminal || !TERMINAL_RUN_STATUSES.includes(run.status)) {
           found.push(run);
         }

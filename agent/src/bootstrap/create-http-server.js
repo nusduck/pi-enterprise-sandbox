@@ -77,7 +77,7 @@ export {
  *   mcpReadiness?: () => { ready?: boolean, serverCount?: number, toolCount?: number, servers?: object[] },
  *   getExtensionDiagnostics?: Function | null,
  *   listRuns?: Function | null,
- *   conversationService?: { list: Function, get: Function, create: Function, delete: Function, ensureSession: Function } | null,
+ *   conversationService?: { list: Function, get: Function, create: Function, delete: Function, ensureSession: Function, resolveSandboxSession?: Function } | null,
  *   approvalQueryService?: { list: Function, get: Function } | null,
  *   approvalDecisionService?: { resolve: Function, resume: Function } | null,
  *   interactionResponseService?: { respond: Function, rehydrateWaiting: Function } | null,
@@ -115,7 +115,7 @@ export function createAgentHttpServer(deps) {
 
   const server = http.createServer(async (req, res) => {
     const requestId = resolveRequestId(req);
-    req.requestId = requestId;
+    Object.assign(req, { requestId });
     res.setHeader('X-Request-Id', requestId);
     try {
       const parsedUrl = new URL(
@@ -172,7 +172,7 @@ export function createAgentHttpServer(deps) {
           }
         }
 
-        let mcp = { ready: true, serverCount: 0, toolCount: 0, servers: [] };
+        let mcp = /** @type {{ ready?: boolean, serverCount?: number, toolCount?: number, servers?: object[] }} */ ({ ready: true, serverCount: 0, toolCount: 0, servers: [] });
         if (typeof deps.mcpReadiness === 'function') {
           try {
             mcp = deps.mcpReadiness() || mcp;

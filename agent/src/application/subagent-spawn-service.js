@@ -39,7 +39,7 @@ import { runRootSpanId } from '../infrastructure/mysql/repositories/trace-span-r
 import {
   MAX_CONCURRENT_CHILDREN,
   MAX_SUBAGENT_DEPTH,
-} from '../extensions/subagent-spawn/constants.js';
+} from '../infrastructure/dsh/subagent-constants.js';
 
 /** Run source recorded for every child (runs.source, VARCHAR(32)). */
 export const SUBAGENT_RUN_SOURCE = 'subagent';

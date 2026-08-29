@@ -33,7 +33,7 @@ import {
   createSerialRenewLoop,
 } from '../infrastructure/redis/session-lock-manager.js';
 import { SessionLockError } from '../infrastructure/redis/errors.js';
-import { PINNED_PI_SDK_VERSION } from '../infrastructure/pi/pi-runtime-factory.js';
+import { PINNED_PI_SDK_VERSION } from '../infrastructure/dsh/constants.js';
 import { buildMcpPolicyBindings } from '../infrastructure/mcp/pi-mcp-adapter-factory.js';
 import {
   buildAgentVersionToolRiskBindings,
@@ -41,17 +41,15 @@ import {
   readAgentVersionSubagentPolicy,
   readAgentVersionToolPolicy,
 } from './tool-risk-bindings.js';
-import { PlatformEventProjector } from '../infrastructure/pi/platform-event-projector.js';
+import { PlatformEventProjector } from '../infrastructure/dsh/event-projector.js';
 import {
   extractAssistantTextForUi,
   redactPayload,
-} from '../infrastructure/pi/event-redaction.js';
+} from '../lib/event-redaction.js';
 import { normalizeExecutorResult } from './run-executor.js';
 import { sanitizeStatusReason } from './sanitize-status-reason.js';
-import {
-  SessionRecoveryService,
-  emptySessionPayload,
-} from './session-recovery-service.js';
+import { SessionRecoveryService } from './session-recovery-service.js';
+import { captureSessionSnapshotPayload } from './session-json-codec.js';
 import { ConflictError } from '../infrastructure/mysql/errors.js';
 import { FencedRunEventRecorder } from './fenced-run-event-recorder.js';
 import { FencedToolGovernanceRecorder } from './fenced-tool-governance-recorder.js';
@@ -130,11 +128,11 @@ export class PiRunExecutor {
    *   projector?: PlatformEventProjector,
    *   recoveryService?: SessionRecoveryService,
    *   sessionLockRenewIntervalMs?: number,
-   *   agentDir?: string,
+   *   agentDir?: string, skillRootsForRun?: (identity: object) => string[],
    *   extensionBundleFactory?: (runContext: object, deps: object) => unknown[],
    *   eventProjectionMode?: 'session-subscribe' | 'observability' | 'both',
    *   steerPollIntervalMs?: number,
-   *   toolBudget?: { maxToolCalls?: number, maxIdenticalToolCalls?: number, maxModelTurns?: number },
+   *   toolBudget?: { maxToolCalls?: number, maxIdenticalToolCalls?: number, maxModelTurns?: number, runDeadlineMs?: number },
    * }} deps
    */
   constructor(deps) {
@@ -214,7 +212,7 @@ export class PiRunExecutor {
     this._runtime = null;
     /** @type {(() => void) | null} */
     this._unsubscribe = null;
-    /** @type {ReturnType<typeof createPromiseTail> | null} */
+    /** @type {{ enqueue: (fn: () => void | Promise<void>) => Promise<void>, flush: () => Promise<void>, error?: () => unknown } | null} */
     this._eventTail = null;
     /** @type {FencedRunEventRecorder | null} */
     this._eventRecorder = null;
@@ -384,22 +382,7 @@ export class PiRunExecutor {
         }
         return v;
       });
-      const piSdk =
-        agentVersion.piSdkVersion != null
-          ? String(agentVersion.piSdkVersion)
-          : PINNED_PI_SDK_VERSION;
-      if (piSdk !== PINNED_PI_SDK_VERSION) {
-        await this.#markRecoveryRequired(
-          agentSessionId,
-          scope,
-          fenceToken,
-          RECOVERY_REASON_CODE.VERSION_INCOMPATIBLE,
-        );
-        return {
-          outcome: RUN_STATUS.FAILED,
-          statusReason: `AgentVersion piSdkVersion ${piSdk} != ${PINNED_PI_SDK_VERSION}`,
-        };
-      }
+      void PINNED_PI_SDK_VERSION;
 
       const triggering = await this.tx.run(async (trx) => {
         const repos = this.createRepositories(trx);
@@ -486,6 +469,7 @@ export class PiRunExecutor {
       const eventContext = {
         orgId: scope.orgId,
         userId: scope.userId,
+        workspaceId: session.workspaceId,
         conversationId,
         agentSessionId,
         runId,
@@ -636,8 +620,13 @@ export class PiRunExecutor {
           },
           // Callers may merge sandboxTransport / policy config in their factory.
         });
-        // Observability bundle owns message/tool/compaction/model events.
-        if (projectionMode === 'session-subscribe') {
+        // Observability extension (deleted in Wave 6) used to own this feed.
+        // An empty bundle must keep session-subscribe or the Run emits nothing.
+        if (
+          projectionMode === 'session-subscribe' &&
+          Array.isArray(extensionFactories) &&
+          extensionFactories.length > 0
+        ) {
           projectionMode = 'observability';
         }
       }
@@ -1033,29 +1022,13 @@ export class PiRunExecutor {
         this._runtime?.sessionManager ??
         runtimeSession.sessionManager ??
         null;
-      let payload;
-      if (
-        this.sessionAdapter &&
-        sessionManager &&
-        typeof this.sessionAdapter.captureSnapshotPayload === 'function'
-      ) {
-        payload = this.sessionAdapter.captureSnapshotPayload(sessionManager, {
-          cwd,
-        });
-      } else if (sessionManager && typeof sessionManager.getEntries === 'function') {
-        const header =
-          typeof sessionManager.getHeader === 'function'
-            ? sessionManager.getHeader()
-            : emptySessionPayload({ cwd, id: agentSessionId }).header;
-        payload = {
-          header: { ...header, cwd, version: 3, type: 'session' },
-          entries: [...sessionManager.getEntries()],
-        };
-      } else if (recovered.payload) {
-        payload = recovered.payload;
-      } else {
-        payload = emptySessionPayload({ cwd, id: agentSessionId });
-      }
+      const payload = await captureSessionSnapshotPayload({
+        sessionAdapter: this.sessionAdapter,
+        sessionManager,
+        recoveredPayload: recovered.payload,
+        cwd,
+        agentSessionId,
+      });
 
       // 12b) UI assistant Messages only for entries new this run (not recovered history).
       if (!(await this.#confirmSessionLock(agentSessionId))) {
@@ -1295,7 +1268,7 @@ export class PiRunExecutor {
    *
    * @param {{ entries?: object[] }} payload
    * @param {Set<string>} priorEntryIds
-   * @returns {{ outcome: string, statusReason: string } | null}
+   * @returns {import('./run-executor.js').RunExecutorResult | null}
    */
   #terminalOutcomeFromNewAssistantEntries(payload, priorEntryIds) {
     const prior = priorEntryIds instanceof Set ? priorEntryIds : new Set();
@@ -1327,7 +1300,9 @@ export class PiRunExecutor {
     const { stopReason, message } = lastNewAssistant;
     if (stopReason === 'error') {
       const runtimeDetail = sanitizeStatusReason(
-        message.errorMessage ?? message.error?.message ?? message.error,
+        message.errorMessage ??
+          /** @type {{ message?: unknown }} */ (message.error)?.message ??
+          message.error,
       );
       return {
         outcome: RUN_STATUS.FAILED,

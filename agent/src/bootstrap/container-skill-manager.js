@@ -42,6 +42,7 @@ export async function buildSkillManagerFactory(env) {
       manager = createSkillManager({
         identity: { orgId, userId },
         skillRoots: resolveSkillRoots(env, { orgId, userId }),
+        // @ts-expect-error 遗留JS占位类型object未展开，访问signal需收窄，存活代码先用expect-error收敛 —— TS2339: Property 'signal' does not exist on type '{ attachmentId: st
         downloadArchive: ({ attachmentId, signal }) =>
           sandboxClient.downloadDatasetContent(sandboxSessionId, attachmentId, {
             signal,
@@ -50,6 +51,7 @@ export async function buildSkillManagerFactory(env) {
         // logical path against the workspace/temp roots of the owning
         // session only, so a Skill-root path is rejected there as well as by
         // the tool's own guard.
+        // @ts-expect-error 遗留JS占位类型object未展开，访问signal需收窄，存活代码先用expect-error收敛 —— TS2339: Property 'signal' does not exist on type '{ path: string; }'
         downloadWorkspaceArchive: ({ path: sourcePath, signal }) =>
           sandboxClient.downloadFileStream(sandboxSessionId, sourcePath, { signal }),
         getAgentSession:

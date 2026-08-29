@@ -29,6 +29,7 @@ export const RECOVERY_REASON_CODE_SET = new Set(ALL_RECOVERY_REASON_CODES);
  * @returns {boolean}
  */
 export function isRecoveryReasonCode(code) {
+  // @ts-expect-error 未校验string传入闭合联合，运行时需窄化守卫，存活代码先用expect-error收敛 —— TS2345: Argument of type 'string' is not assignable to parameter of 
   return typeof code === 'string' && RECOVERY_REASON_CODE_SET.has(code);
 }
 

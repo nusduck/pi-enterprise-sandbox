@@ -585,13 +585,8 @@ export async function uninstallSkill(opts) {
 /**
  * Edit one file in an existing user Skill. This function cannot create a new
  * package; new packages must go through approved install/create operations.
- * @param {{
- *   skillRoot: string,
- *   path: string,
- *   content: string,
- *   timeoutMs?: number,
- *   maxBytes?: number,
- * }} opts
+ * @param {{ skillRoot?: string, path?: string, content?: unknown }} raw
+ * @param {{ resolveSkillPath: Function, skillRoot: string, maxBytes: number }} ctx
  */
 function prepareSkillEdit(raw, ctx) {
   const { absolute, relative } = ctx.resolveSkillPath(raw?.path, ctx.skillRoot);

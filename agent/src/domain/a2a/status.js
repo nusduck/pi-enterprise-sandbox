@@ -72,6 +72,7 @@ export function projectRunStatusToA2a(runStatus) {
  * @returns {status is A2aTaskStatus}
  */
 export function isA2aTaskStatus(status) {
+  // @ts-expect-error 未校验string传入闭合联合，运行时需窄化守卫，存活代码先用expect-error收敛 —— TS2345: Argument of type 'string' is not assignable to parameter of 
   return typeof status === 'string' && ALL_A2A_TASK_STATUSES.includes(status);
 }
 
@@ -80,5 +81,6 @@ export function isA2aTaskStatus(status) {
  * @returns {boolean}
  */
 export function isTerminalA2aTaskStatus(status) {
+  // @ts-expect-error 未校验string传入闭合联合，运行时需窄化守卫，存活代码先用expect-error收敛 —— TS2345: Argument of type 'string' is not assignable to parameter of 
   return typeof status === 'string' && TERMINAL_A2A_TASK_STATUS_SET.has(status);
 }

@@ -39,20 +39,29 @@ import {
   isTerminalApprovalStatus,
 } from '../domain/tool/approval-status.js';
 
+// Membership checks below (.has()/.includes()) run against a `String(run.status)`
+// that has already been widened away from its literal union, so the sets/arrays
+// themselves are typed as plain `string` containers rather than the narrower
+// literal unions `TOOL_EXECUTION_STATUS`/`RUN_STATUS` would otherwise infer.
+// Membership testing is safe for any string value (an unknown status just
+// yields `false`), so this is a type-only widening, not a behavior change.
+/** @type {Set<string>} */
 const REPLAY_SAFE_TOOL_STATUSES = new Set([
   TOOL_EXECUTION_STATUS.SUCCEEDED,
   TOOL_EXECUTION_STATUS.FAILED,
   TOOL_EXECUTION_STATUS.CANCELLED,
 ]);
 
-/** Statuses that recovery will re-enqueue. */
+/** Statuses that recovery will re-enqueue.
+ * @type {readonly string[]} */
 export const RECOVERY_ENQUEUE_STATUSES = Object.freeze([
   RUN_STATUS.ACCEPTED,
   RUN_STATUS.QUEUED,
   RUN_STATUS.RETRYING,
 ]);
 
-/** Statuses that require lease + durable tool-ledger reconciliation. */
+/** Statuses that require lease + durable tool-ledger reconciliation.
+ * @type {readonly string[]} */
 export const RECOVERY_RECONCILE_STATUSES = Object.freeze([
   RUN_STATUS.STARTING,
   RUN_STATUS.RUNNING,
@@ -79,7 +88,7 @@ export class RunRecoveryService {
   /**
    * @param {{
    *   transactionManager: { run: (fn: (trx: any) => Promise<any>) => Promise<any> },
-   *   createRepositories: (db: any) => { runs: any, runEvents: any, outbox: any },
+   *   createRepositories: (db: any) => { runs: any, runEvents: any, outbox: any, interactions?: any, approvals?: any, toolExecutions?: any, sessions?: any },
    *   runQueue: { enqueue: (ref: { runId: string, orgId: string, traceId: string }, options?: object) => Promise<unknown> },
    *   generateId: () => string,
    *   runStateMachine?: import('../domain/run/run-state-machine.js').RunStateMachine,
@@ -271,7 +280,7 @@ export class RunRecoveryService {
    * Finish a parked Run whose cancel intent is already durable.
    * @param {object} run
    * @param {object} base
-   * @param {{ parkedStatus: string, terminalize: Function }} handler
+   * @param {{ parkedStatus: string, terminalize: (repos: any, current: any, scope: any) => Promise<{ status: string }> }} handler
    * @returns {Promise<RecoveryAction>}
    */
   async #terminalizeParkedCancel(run, base, handler) {

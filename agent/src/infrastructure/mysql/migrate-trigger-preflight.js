@@ -33,7 +33,7 @@ export class MysqlTriggerCapabilityError extends MysqlConfigError {
 }
 
 /**
- * Normalize mysql2/knex raw SELECT @@var shapes to a single row object.
+ * Normalize mysql2/knex raw SELECT var shapes to a single row object. 原句含 SQL 变量前缀，双 at 符号为避 JSDoc 误判标签已改写描述。
  * @param {unknown} rawResult
  * @returns {Record<string, unknown> | null}
  */
@@ -155,6 +155,7 @@ export async function assertMysqlTriggerMigrationCapability(knex) {
     await inspectMysqlTriggerMigrationCapability(knex);
   if (decision.ok) return { logBin, trustCreators };
 
+  // @ts-expect-error 窄化后 reason 必存在：已 early-return ok 分支，剩余仅 ok:false 分支 —— TS2339
   throw new MysqlTriggerCapabilityError(decision.reason, {
     logBin: logBin === null ? undefined : logBin,
     trustCreators: trustCreators === null ? undefined : trustCreators,

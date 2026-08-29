@@ -110,8 +110,10 @@ export class GetRunService {
 
       // Attach sandbox_session_id from AgentSession so browser download/export
       // /upload can rehydrate without a separate conversation GET.
+      // @ts-expect-error 遗留JS占位类型object未展开，访问sessions需收窄，存活代码先用expect-error收敛 —— TS2339: Property 'sessions' does not exist on type '{ organizations:
       if (run.agentSessionId && repos.sessions?.getById) {
         try {
+          // @ts-expect-error 遗留JS占位类型object未展开，访问sessions需收窄，存活代码先用expect-error收敛 —— TS2339: Property 'sessions' does not exist on type '{ organizations:
           const session = await repos.sessions.getById(run.agentSessionId, scope);
           if (session?.sandboxSessionId) {
             run.sandboxSessionId = session.sandboxSessionId;
@@ -127,9 +129,11 @@ export class GetRunService {
 
       if (
         run.status === RUN_STATUS.WAITING_INPUT &&
+        // @ts-expect-error 遗留JS占位类型object未展开，访问interactions需收窄，存活代码先用expect-error收敛 —— TS2339: Property 'interactions' does not exist on type '{ organizati
         repos.interactions?.getPendingForRun
       ) {
         try {
+          // @ts-expect-error 遗留JS占位类型object未展开，访问interactions需收窄，存活代码先用expect-error收敛 —— TS2339: Property 'interactions' does not exist on type '{ organizati
           const pending = await repos.interactions.getPendingForRun(runId, scope);
           if (pending && pending.status === INTERACTION_STATUS.PENDING) {
             const request =

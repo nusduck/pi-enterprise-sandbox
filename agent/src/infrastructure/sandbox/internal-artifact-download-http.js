@@ -28,6 +28,12 @@ export class InternalArtifactDownloadError extends Error {
   }
 }
 
+/**
+ * @param {string} code
+ * @param {string} message
+ * @param {object} [extra]
+ * @returns {never}
+ */
 function fail(code, message, extra = {}) {
   throw new InternalArtifactDownloadError(code, message, extra);
 }
@@ -153,7 +159,7 @@ function cancelBody(response) {
 
 /**
  * @param {{
- *   baseUrl: string,
+ *   baseUrl?: string,
  *   keyring?: object|string,
  *   activeKid?: string,
  *   allowInsecureHttp?: boolean,
@@ -163,7 +169,9 @@ function cancelBody(response) {
  *   randomBytes?: (size: number) => Uint8Array,
  *   ttlSeconds?: number,
  *   timeoutMs?: number,
- * }} options
+ *   spanRandomBytes?: (size: number) => Uint8Array,
+ *   traceState?: unknown,
+ * }} [options]
  */
 export function createInternalArtifactDownloadTransport(options = {}) {
   const baseUrl = normalizeBaseUrl(options.baseUrl, {

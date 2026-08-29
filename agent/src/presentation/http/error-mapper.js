@@ -25,6 +25,7 @@ export function mapErrorToHttp(error) {
     return { status: 400, body: { error: error.message, code: error.code } };
   }
   if (error instanceof OwnerScopedNotFoundError) {
+    // @ts-expect-error 遗留JSDoc未校验，存活代码先用expect-error收敛，Wave6前不改运行时 —— TS2538: Type 'unknown' cannot be used as an index type.
     const noun = NOT_FOUND_NOUNS[error.details?.resource] || 'Run';
     return { status: 404, body: { error: `${noun} not found`, code: 'NOT_FOUND' } };
   }

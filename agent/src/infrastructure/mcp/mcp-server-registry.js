@@ -76,12 +76,29 @@ function parseReferenceMap(raw, field, keyPattern) {
 }
 
 /**
+ * @typedef {{
+ *   serverId: string,
+ *   enabled: boolean,
+ *   url: string | null,
+ *   command: string | null,
+ *   args: readonly string[],
+ *   cwd: string | null,
+ *   auth: unknown,
+ *   authTokenRef: string | null,
+ *   envRefs: Readonly<Record<string, string>>,
+ *   headerRefs: Readonly<Record<string, string>>,
+ *   timeoutMs: number | null,
+ *   transport: string | null,
+ * }} McpServerRecord
+ */
+
+/**
  * Validate the deployment-owned MCP registry. Plaintext credential-bearing
  * fields are rejected; values must be referenced through authTokenRef,
  * envRefs, or headerRefs.
  *
  * @param {unknown} raw
- * @returns {ReadonlyMap<string, Readonly<Record<string, unknown>>>}
+ * @returns {Map<string, McpServerRecord>}
  */
 export function loadMcpServerRegistry(raw) {
   const entries = parseRegistryInput(raw);

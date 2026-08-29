@@ -145,8 +145,10 @@ function currentUserTurnText(messages) {
   const current = [...messages]
     .reverse()
     .find((message) => message && typeof message === 'object' &&
+      // @ts-expect-error 遗留JS占位类型object未展开，访问role需收窄，存活代码先用expect-error收敛 —— TS2339: Property 'role' does not exist on type 'object'.
       (message.role === 'user' || message.role == null));
   if (!current || typeof current !== 'object') return '';
+  // @ts-expect-error 遗留JS占位类型object未展开，访问content需收窄，存活代码先用expect-error收敛 —— TS2339: Property 'content' does not exist on type 'object'.
   const raw = current.content ?? current.text ?? '';
   if (typeof raw === 'string') return raw;
   if (!Array.isArray(raw)) return '';

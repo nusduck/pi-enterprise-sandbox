@@ -59,6 +59,12 @@ export class InternalExecutionTransportError extends Error {
   }
 }
 
+/**
+ * @param {string} code
+ * @param {string} message
+ * @param {object} [extra]
+ * @returns {never}
+ */
 function fail(code, message, extra) {
   throw new InternalExecutionTransportError(code, message, extra);
 }
@@ -403,6 +409,8 @@ function errorFromResponse(payload, status) {
  *   maxResponseBytes?: number,
  *   ttlSeconds?: number,
  *   signal?: AbortSignal,
+ *   traceState?: unknown,
+ *   spanRandomBytes?: (size: number) => Uint8Array,
  * }} options
  */
 export function createInternalExecutionTransport(options) {

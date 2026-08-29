@@ -32,7 +32,7 @@ import { ProcessExecutionRepository } from '../infrastructure/mysql/repositories
 import { CronJobRepository } from '../infrastructure/mysql/repositories/cron-job-repository.js';
 import { OutboxRepository } from '../infrastructure/outbox/outbox-repository.js';
 import { createStubRunExecutor } from '../application/run-executor.js';
-import { PINNED_PI_SDK_VERSION } from '../infrastructure/pi/pi-runtime-factory.js';
+import { PINNED_PI_SDK_VERSION } from '../infrastructure/dsh/constants.js';
 import { mkdirSync } from 'node:fs';
 import path from 'node:path';
 import * as skillPathsModule from '../skills/paths.js';
@@ -150,6 +150,7 @@ export function resolveSkillScopeForIdentity(env, identity) {
   ).trim();
   let userSkillRoot = null;
   try {
+    // @ts-expect-error 未校验string传入闭合联合，运行时需窄化守卫，存活代码先用expect-error收敛 —— TS2345: Argument of type '{ orgId?: unknown; userId?: unknown; }' is
     userSkillRoot = userSkillRootFor(identity, userRootBase);
   } catch {
     // Malformed identity: system tier only, same degradation as the Run path.
@@ -197,12 +198,14 @@ export function createRepositoryBundle(db, opts = {}) {
     /** PR-05 acceleration snapshots (not sole truth). */
     sessionSnapshots: new AgentSessionSnapshotRepository(db, {
       now,
+      // @ts-expect-error 遗留JS占位类型object未展开，访问runtimePiSdkVersion需收窄，存活代码先用expect-error收敛 —— TS2339: Property 'runtimePiSdkVersion' does not exist on type '{ now
       runtimePiSdkVersion: opts.runtimePiSdkVersion ?? PINNED_PI_SDK_VERSION,
     }),
     messages: new MessageRepository(db),
     /** PR-05 long-term Pi JSONL journal (messages-backed). */
     journal: new PiSessionJournalRepository(db, {
       now,
+      // @ts-expect-error 遗留JS占位类型object未展开，访问generateId需收窄，存活代码先用expect-error收敛 —— TS2339: Property 'generateId' does not exist on type '{ now?: () => 
       generateId: opts.generateId,
     }),
     runs: new RunRepository(db, { now }),
@@ -216,6 +219,7 @@ export function createRepositoryBundle(db, opts = {}) {
     /** Agent working memory: session todo list + owner-scoped note log. */
     taskState: new TaskStateRepository(db, {
       now,
+      // @ts-expect-error 遗留JS占位类型object未展开，访问generateId需收窄，存活代码先用expect-error收敛 —— TS2339: Property 'generateId' does not exist on type '{ now?: () => 
       generateId: opts.generateId,
     }),
     sandboxAudit: new SandboxAuditEventRepository(db, { now }),

@@ -350,7 +350,7 @@ describe('AgentSessionSnapshotRepository atomic appendAndAdvance', () => {
     ]);
     const fromRepo = checksumSnapshotPayload(payload);
     const { materializeJsonl, checksumJsonl } = await import(
-      '../../src/infrastructure/pi/pi-jsonl-codec.js'
+      '../../src/application/session-json-codec.js'
     );
     assert.equal(fromRepo, checksumJsonl(materializeJsonl(payload)));
   });

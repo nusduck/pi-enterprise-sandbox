@@ -42,11 +42,13 @@ export function createA2aAdminHttpHandler(deps) {
     const auth = deps.authSubjectsFromRequest(req);
     if (!auth) {
       const error = new Error('Authenticated admin identity is required');
+      // @ts-expect-error 遗留JS占位类型object未展开，访问status需收窄，存活代码先用expect-error收敛 —— TS2339: Property 'status' does not exist on type 'Error'.
       error.status = 401;
       throw error;
     }
     if (String(auth.role || '').toLowerCase() !== 'admin') {
       const error = new Error('Administrator role is required');
+      // @ts-expect-error 遗留JS占位类型object未展开，访问status需收窄，存活代码先用expect-error收敛 —— TS2339: Property 'status' does not exist on type 'Error'.
       error.status = 403;
       throw error;
     }

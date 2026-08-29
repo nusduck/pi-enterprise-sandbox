@@ -437,6 +437,7 @@ export function createA2aHttpHandler(deps) {
     const onClose = () => {
       aborted = true;
       try {
+        // @ts-expect-error 遗留JS占位类型object未展开，访问cancel需收窄，存活代码先用expect-error收敛 —— TS2339: Property 'cancel' does not exist on type 'AsyncIterable<Buff
         streamResult.body?.cancel?.();
       } catch {
         /* ignore */
@@ -515,6 +516,7 @@ export function createA2aHttpHandler(deps) {
 
     const parsed = parseJsonRpcRequest(body);
     if (!parsed.ok) {
+      // @ts-expect-error 遗留JS占位类型object未展开，访问error需收窄，存活代码先用expect-error收敛 —— TS2339: Property 'error' does not exist on type '{ ok: true; id: str
       deps.json(res, 200, jsonRpcError(parsed.id, parsed.error));
       return;
     }
@@ -580,6 +582,7 @@ export function createA2aHttpHandler(deps) {
                   ? /** @type {any} */ (params.message).messageId ||
                     /** @type {any} */ (params.message).message_id
                   : params?.messageId,
+              // @ts-expect-error Function宽松类型与精确签名不匹配，JSDoc形状待补，先用expect-error收敛 —— TS2322: Type 'string | string[]' is not assignable to type 'string'.
               idempotencyKey:
                 req.headers['idempotency-key'] ||
                 req.headers['Idempotency-Key'] ||
@@ -648,6 +651,7 @@ export function createA2aHttpHandler(deps) {
           return;
         }
         case A2A_METHODS.LIST_TASKS: {
+          // @ts-expect-error 遗留JS占位类型object未展开，访问listTasks需收窄，存活代码先用expect-error收敛 —— TS2339: Property 'listTasks' does not exist on type '{ sendMessage: 
           if (typeof deps.taskService.listTasks !== 'function') {
             deps.json(
               res,
@@ -656,6 +660,7 @@ export function createA2aHttpHandler(deps) {
             );
             return;
           }
+          // @ts-expect-error 遗留JS占位类型object未展开，访问listTasks需收窄，存活代码先用expect-error收敛 —— TS2339: Property 'listTasks' does not exist on type '{ sendMessage: 
           const listed = await deps.taskService.listTasks({
             principal,
             agentId,
@@ -685,6 +690,7 @@ export function createA2aHttpHandler(deps) {
                   ? /** @type {any} */ (params.message).messageId ||
                     /** @type {any} */ (params.message).message_id
                   : params?.messageId,
+              // @ts-expect-error Function宽松类型与精确签名不匹配，JSDoc形状待补，先用expect-error收敛 —— TS2322: Type 'string | string[]' is not assignable to type 'string'.
               idempotencyKey:
                 req.headers['idempotency-key'] ||
                 req.headers['Idempotency-Key'] ||

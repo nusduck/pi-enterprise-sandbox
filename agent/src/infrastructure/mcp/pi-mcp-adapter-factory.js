@@ -1,10 +1,9 @@
 /**
- * Production binding for pi-mcp-adapter (plan section 2.3 / 21).
+ * MCP protocol client binding (`pi-mcp-adapter@2.11.0`).
  *
- * The vendor package remains the only MCP protocol/client implementation. This
- * module owns the enterprise boundary around it: logical AgentVersion refs,
- * deployment registry lookup, secret resolution, private config materialization,
- * and exact mcp__server__tool registration.
+ * Not the deleted Pi coding-agent SDK. DSH has no MCP transport; this pinned
+ * client still does tools/list. Owns registry lookup, secrets, and
+ * mcp__server__tool registration around the vendor package.
  */
 
 import { randomBytes } from 'node:crypto';
@@ -27,7 +26,7 @@ import {
 import {
   redactInlineSecrets,
   redactPayload,
-} from '../pi/event-redaction.js';
+} from '../../lib/event-redaction.js';
 import {
   MCP_DISCOVERY_DEFAULT_CONCURRENCY,
   MCP_DISCOVERY_DEFAULT_OVERALL_TIMEOUT_MS,
@@ -93,16 +92,9 @@ function loadPinnedAdapterConnectionManager() {
   try {
     adapterPackageJson = require.resolve(`${PI_MCP_ADAPTER_PACKAGE}/package.json`);
     const adapterRoot = path.dirname(adapterPackageJson);
-    const jitiPath = path.join(
-      path.dirname(adapterRoot),
-      '@earendil-works',
-      'pi-coding-agent',
-      'node_modules',
-      'jiti',
+    const { createJiti } = /** @type {{ createJiti?: Function }} */ (
+      require('jiti')
     );
-    // Jiti is part of the exact Pi SDK installation.  Resolve it by absolute
-    // path because the SDK deliberately does not export package internals.
-    const { createJiti } = require(jitiPath);
     if (typeof createJiti !== 'function') throw new Error('createJiti unavailable');
     const jiti = createJiti(path.join(adapterRoot, 'index.ts'), {
       interopDefault: true,
@@ -233,6 +225,8 @@ async function mapPool(items, concurrency, fn) {
  *   concurrency?: number,
  *   overallTimeoutMs?: number,
  *   perServerTimeoutMs?: number,
+ *   perServerAttempts?: number,
+ *   retryBackoffMs?: number,
  * }} [options]
  */
 export async function discoverEnabledMcpServers(options = {}) {
@@ -291,7 +285,7 @@ export async function discoverEnabledMcpServers(options = {}) {
     options.secretResolver ?? createEnvironmentSecretResolver(process.env);
 
   /**
-   * @param {ReturnType<typeof loadMcpServerRegistry> extends Map<string, infer V> ? V : never} server
+   * @param {import('./mcp-server-registry.js').McpServerRecord} server
    */
   async function discoverOneAttempt(server) {
     /** @type {Record<string, unknown>} */
@@ -391,7 +385,7 @@ export async function discoverEnabledMcpServers(options = {}) {
   }
 
   /**
-   * @param {ReturnType<typeof loadMcpServerRegistry> extends Map<string, infer V> ? V : never} server
+   * @param {import('./mcp-server-registry.js').McpServerRecord} server
    */
   async function discoverOne(server) {
     /** @type {unknown} */
@@ -408,9 +402,11 @@ export async function discoverEnabledMcpServers(options = {}) {
     }
     const rawMessage =
       lastError instanceof Error ? lastError.message : 'MCP discovery failed';
-    const safeMessage = redactPayload(
-      { message: rawMessage.slice(0, 512) },
-      { maxString: 512 },
+    const safeMessage = /** @type {{ message?: unknown }} */ (
+      redactPayload(
+        { message: rawMessage.slice(0, 512) },
+        { maxString: 512 },
+      )
     ).message;
     return Object.freeze({
       serverId: server.serverId,
@@ -520,10 +516,11 @@ function normalizeMcpTraceContext(context, spanRandomBytes) {
       { code: 'MCP_TRACE_CONTEXT_INVALID' },
     );
   }
+  const ctx = /** @type {Record<string, unknown>} */ (context);
   try {
     return Object.freeze({
-      traceId: assertW3cTraceId(context.traceId, 'context.traceId'),
-      traceState: normalizeW3cTracestate(context.traceState),
+      traceId: assertW3cTraceId(ctx.traceId, 'context.traceId'),
+      traceState: normalizeW3cTracestate(ctx.traceState),
       spanRandomBytes,
     });
   } catch (error) {
@@ -555,7 +552,7 @@ function assertNoReservedTraceBindings(bindings, reserved, field) {
 
 /**
  * @param {ReadonlyArray<ReturnType<typeof loadMcpConfig>[number]>} logicalServers
- * @param {ReadonlyMap<string, Readonly<Record<string, unknown>>>} registry
+ * @param {Map<string, import('./mcp-server-registry.js').McpServerRecord>} registry
  * @param {(ref: string) => unknown | Promise<unknown>} secretResolver
  * @param {{ traceId: string, traceState?: string | null, spanRandomBytes?: (size: number) => Uint8Array }} traceContext
  */
@@ -1140,6 +1137,7 @@ function intersectMcpConfigWithRegistry(declared, registrySurface) {
  *   spanRandomBytes?: (size: number) => Uint8Array,
  *   packageResolver?: typeof resolvePiMcpAdapterPackage,
  *   defaultMcpServers?: unknown,
+ *   getDefaultMcpServers?: () => unknown,
  * }} [options]
  */
 export function createPiMcpResolver(options = {}) {

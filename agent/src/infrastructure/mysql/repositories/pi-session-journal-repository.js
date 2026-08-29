@@ -25,7 +25,7 @@ import {
   serializeJsonlLine,
   PI_JSONL_ENTRY_TYPE_SET,
   PI_SESSION_JSONL_VERSION,
-} from '../../pi/pi-jsonl-codec.js';
+} from '../../../application/session-json-codec.js';
 
 /** Message role for journal channel rows. */
 export const JOURNAL_MESSAGE_ROLE = 'system';

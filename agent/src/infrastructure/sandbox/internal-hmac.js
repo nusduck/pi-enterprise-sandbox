@@ -104,6 +104,11 @@ export class InternalHmacError extends Error {
   }
 }
 
+/**
+ * @param {string} code
+ * @param {string} message
+ * @returns {never}
+ */
 function fail(code, message) {
   throw new InternalHmacError(code, message);
 }

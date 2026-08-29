@@ -8,7 +8,7 @@ import {
   toMysqlDateTime,
 } from '../row-mappers.js';
 import { assertUlid } from '../../../domain/shared/ulid.js';
-import { redactPayload } from '../../pi/event-redaction.js';
+import { redactPayload } from '../../../lib/event-redaction.js';
 
 const TRACE_ID_RE = /^[0-9a-f]{32}$/;
 const SPAN_ID_RE = /^[0-9a-f]{16}$/;
@@ -101,14 +101,19 @@ function maybeSpanId(value) {
   return SPAN_ID_RE.test(id) && id !== '0'.repeat(16) ? id : null;
 }
 
-/** @param {unknown} value */
+/** @param {unknown} value @returns {Record<string, unknown> | undefined} */
+function asRecord(value) {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? /** @type {Record<string, unknown>} */ (value)
+    : undefined;
+}
+
+/** @param {unknown} value @returns {Record<string, unknown>} */
 function jsonObject(value) {
   if (value == null) return {};
   try {
     const parsed = parseJsonColumn(value);
-    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
-      ? parsed
-      : {};
+    return asRecord(parsed) ?? {};
   } catch {
     return {};
   }
@@ -601,12 +606,8 @@ export class TraceSpanRepository {
     const runId = assertUlid(event.runId ?? event.run_id, 'runId');
     const eventType = String(event.eventType ?? event.event_type ?? 'event');
     const payload = jsonObject(event.payloadJson ?? event.payload_json);
-    const data =
-      payload.data && typeof payload.data === 'object' && !Array.isArray(payload.data)
-        ? payload.data
-        : payload;
-    const context =
-      payload.context && typeof payload.context === 'object' ? payload.context : {};
+    const data = asRecord(payload.data) ?? payload;
+    const context = asRecord(payload.context) ?? {};
     const at = event.createdAt ?? event.created_at ?? this.now();
     const root = runRootSpanId(traceId, runId);
     const lower = eventType.toLowerCase();
@@ -699,7 +700,7 @@ export class TraceSpanRepository {
       identity = data.toolCallId ?? data.toolExecutionId ?? identity;
     } else if (lower.startsWith('model.request.')) {
       kind = 'model';
-      name = String(data.modelId ?? data.model?.id ?? 'Model call');
+      name = String(data.modelId ?? asRecord(data.model)?.id ?? 'Model call');
       identity = data.correlationId ?? data.messageId ?? identity;
     } else if (lower.startsWith('sandbox.') || lower.startsWith('execution.')) {
       kind = 'sandbox';
@@ -767,8 +768,8 @@ export class TraceSpanRepository {
         toolName: data.toolName ?? null,
         source:
           data.source ?? data.toolSource ?? data.tool_source ?? null,
-        modelId: data.modelId ?? data.model?.id ?? null,
-        provider: data.provider ?? data.model?.provider ?? null,
+        modelId: data.modelId ?? asRecord(data.model)?.id ?? null,
+        provider: data.provider ?? asRecord(data.model)?.provider ?? null,
         errorCode: data.errorCode ?? data.error_code ?? null,
       },
     });
@@ -832,12 +833,7 @@ export class TraceSpanRepository {
           event.eventType ?? event.event_type ?? '',
         ).toLowerCase();
         const payload = jsonObject(event.payloadJson ?? event.payload_json);
-        const data =
-          payload.data &&
-          typeof payload.data === 'object' &&
-          !Array.isArray(payload.data)
-            ? payload.data
-            : payload;
+        const data = asRecord(payload.data) ?? payload;
         if (eventType === 'artifact.ready' && data.artifactId) {
           artifactParentRefs.set(String(data.artifactId), {
             toolExecutionId:

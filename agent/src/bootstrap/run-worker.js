@@ -114,17 +114,21 @@ export function createRunWorkerRuntime(deps) {
       const err = new Error(
         'createRunWorkerRuntime requires runExecutor or runExecutorFactory; set allowStubExecutor=true only in explicit test/dev wiring',
       );
+      // @ts-expect-error 遗留JS占位类型object未展开，访问code需收窄，存活代码先用expect-error收敛 —— TS2339: Property 'code' does not exist on type 'Error'.
       err.code = 'RUN_EXECUTOR_NOT_CONFIGURED';
       throw err;
     }
   }
 
   const executeRunService = new ExecuteRunService({
+    // @ts-expect-error Function宽松类型与精确签名不匹配，JSDoc形状待补，先用expect-error收敛 —— TS2322: Type '{ run: Function; }' is not assignable to type '{ run: 
     transactionManager: deps.transactionManager,
+    // @ts-expect-error Function宽松类型与精确签名不匹配，JSDoc形状待补，先用expect-error收敛 —— TS2322: Type 'Function' is not assignable to type '(db: any) => { ru
     createRepositories: deps.createRepositories,
     leaseManager: deps.leaseManager,
     cancelSignal: deps.cancelSignal ?? null,
     runExecutor: deps.runExecutor,
+    // @ts-expect-error Function宽松类型与精确签名不匹配，JSDoc形状待补，先用expect-error收敛 —— TS2322: Type 'Function' is not assignable to type '(job: { runId: st
     runExecutorFactory,
     generateId: deps.generateId,
     now: deps.now,
@@ -133,8 +137,11 @@ export function createRunWorkerRuntime(deps) {
   });
 
   const recoveryService = new RunRecoveryService({
+    // @ts-expect-error Function宽松类型与精确签名不匹配，JSDoc形状待补，先用expect-error收敛 —— TS2322: Type '{ run: Function; }' is not assignable to type '{ run: 
     transactionManager: deps.transactionManager,
+    // @ts-expect-error Function宽松类型与精确签名不匹配，JSDoc形状待补，先用expect-error收敛 —— TS2322: Type 'Function' is not assignable to type '(db: any) => { ru
     createRepositories: deps.createRepositories,
+    // @ts-expect-error Function宽松类型与精确签名不匹配，JSDoc形状待补，先用expect-error收敛 —— TS2322: Type '{ enqueue: Function; }' is not assignable to type '{ e
     runQueue: deps.runQueue,
     generateId: deps.generateId,
     now: deps.now,

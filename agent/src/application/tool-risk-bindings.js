@@ -19,7 +19,7 @@
  * server's risk lives next to the rest of its config.
  */
 
-import { loadToolRiskPolicy } from '../extensions/enterprise-policy/tool-risk-policy.js';
+import { loadToolRiskPolicy } from '../infrastructure/dsh/tool-risk-policy.js';
 import { parseAgentVersionConfigJson } from '../infrastructure/mcp/mcp-config-loader.js';
 
 /** Risk-table fields inside toolPolicy; everything else is a decision entry. */
@@ -73,7 +73,9 @@ export function readAgentVersionSubagentPolicy(agentVersion) {
     !Array.isArray(config.subagent)
       ? config.subagent
       : {};
+  // @ts-expect-error 遗留JS占位类型object未展开，访问maxDepth需收窄，存活代码先用expect-error收敛 —— TS2339: Property 'maxDepth' does not exist on type 'object'.
   const maxDepth = Number(subagent.maxDepth);
+  // @ts-expect-error 遗留JS占位类型object未展开，访问maxConcurrent需收窄，存活代码先用expect-error收敛 —— TS2339: Property 'maxConcurrent' does not exist on type 'object'.
   const maxConcurrent = Number(subagent.maxConcurrent);
   return {
     ...(Number.isSafeInteger(maxDepth) && maxDepth >= 0 ? { maxDepth } : {}),

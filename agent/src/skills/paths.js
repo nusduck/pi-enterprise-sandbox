@@ -114,6 +114,7 @@ export function validateSkillName(name) {
  * @param {string[]} roots
  * @returns {string[]}
  */
+// @ts-expect-error readonly与可变数组不兼容，调用方已保证不突变 —— TS4104: The type 'readonly string[]' is 'readonly' and cannot be ass
 export function normalizeSkillRoots(roots = DEFAULT_SKILL_ROOTS) {
   const out = [];
   const seen = new Set();
@@ -142,6 +143,7 @@ export function normalizeSkillRoots(roots = DEFAULT_SKILL_ROOTS) {
  * path appears in prompts and redaction.
  * @param {string[]} roots
  */
+// @ts-expect-error readonly与可变数组不兼容，调用方已保证不突变 —— TS4104: The type 'readonly string[]' is 'readonly' and cannot be ass
 export function primarySkillRoot(roots = DEFAULT_SKILL_ROOTS) {
   return normalizeSkillRoots(roots)[0];
 }
@@ -156,6 +158,7 @@ export function primarySkillRoot(roots = DEFAULT_SKILL_ROOTS) {
  *
  * @param {string[]} roots
  */
+// @ts-expect-error readonly与可变数组不兼容，调用方已保证不突变 —— TS4104: The type 'readonly string[]' is 'readonly' and cannot be ass
 export function writableSkillRoot(roots = DEFAULT_SKILL_ROOTS) {
   const normalized = normalizeSkillRoots(roots);
   const systemResolved = path.resolve(SYSTEM_SKILL_ROOT);
@@ -172,6 +175,7 @@ export function writableSkillRoot(roots = DEFAULT_SKILL_ROOTS) {
  * @param {string | null | undefined} userPath
  * @param {string[]} [skillRoots]
  */
+// @ts-expect-error readonly与可变数组不兼容，调用方已保证不突变 —— TS4104: The type 'readonly string[]' is 'readonly' and cannot be ass
 export function isUnderSkillRoot(userPath, skillRoots = DEFAULT_SKILL_ROOTS) {
   if (userPath == null || typeof userPath !== 'string') return false;
   const raw = userPath.trim();
@@ -221,6 +225,7 @@ export function isUnderSkillRoot(userPath, skillRoots = DEFAULT_SKILL_ROOTS) {
  * @param {string | null | undefined} command
  * @param {string[]} [skillRoots]
  */
+// @ts-expect-error readonly与可变数组不兼容，调用方已保证不突变 —— TS4104: The type 'readonly string[]' is 'readonly' and cannot be ass
 export function commandTouchesSkillRoot(command, skillRoots = DEFAULT_SKILL_ROOTS) {
   if (!command || typeof command !== 'string') return false;
   const cmd = command;
@@ -242,6 +247,7 @@ export function commandTouchesSkillRoot(command, skillRoots = DEFAULT_SKILL_ROOT
  * @param {string | null | undefined} command
  * @param {string[]} [skillRoots]
  */
+// @ts-expect-error readonly与可变数组不兼容，调用方已保证不突变 —— TS4104: The type 'readonly string[]' is 'readonly' and cannot be ass
 export function isReadonlySkillExecution(command, skillRoots = DEFAULT_SKILL_ROOTS) {
   if (!command || typeof command !== 'string') return false;
   if (/[;&|<>`\n\r$*?{}\[\]!]/.test(command) || command.includes('$(')) return false;

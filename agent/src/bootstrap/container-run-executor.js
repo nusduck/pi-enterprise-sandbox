@@ -113,7 +113,7 @@ function createTaskStateStore(container) {
  *   projector?: any,
  *   recoveryService?: SessionRecoveryService,
  *   sandboxSessionProvisioner?: any,
- *   promptImageLoader?: Function,
+ *   promptImageLoader?: (input: object) => Promise<Array<{ type: 'image', data: string, mimeType: string }>>,
  *   sessionLockRenewIntervalMs?: number,
  *   steerPollIntervalMs?: number,
  *   mcpResolver?: Function | object | null,
@@ -122,6 +122,13 @@ function createTaskStateStore(container) {
  *   subagentSpawnPort?: { spawn: Function, getStatuses: Function },
  *   taskStateStore?: object,
  *   otelToolSpans?: boolean,
+ *   sandboxTransport?: any,
+ *   toolRiskPolicy?: any,
+ *   skillManagerFactory?: any,
+ *   deltaTruncateLimit?: number,
+ *   thinkingTruncateLimit?: number,
+ *   requestAuthResolver?: (model: object, agentVersion: object) => object | Promise<object>,
+ *   skillRootsForRun?: (identity: object) => unknown,
  * }} opts
  * @returns {Promise<import('../application/run-executor.js').RunExecutorFactory>}
  */
@@ -360,7 +367,7 @@ export async function buildPiRunExecutorFactory(container, opts) {
       const [{ createSandboxClient }, { loadPromptImagesFromAttachmentStore }] =
         await Promise.all([
           import('../infrastructure/sandbox/sandbox-client.js'),
-          import('../infrastructure/pi/prompt-image-loader.js'),
+          import('../infrastructure/dsh/prompt-image-loader.js'),
         ]);
       const sandboxClient = createSandboxClient({
         traceId: input.traceId,
@@ -385,7 +392,10 @@ export async function buildPiRunExecutorFactory(container, opts) {
       });
     });
 
-  return createPiRunExecutorFactory({
+  // Built as a variable (not an inline literal) so the excess-property check
+  // does not fire on `skillRootsForRun` if a caller still uses a narrower
+  // factory options type. PiRunExecutor now declares the field in JSDoc.
+  const factoryOpts = {
     transactionManager: container.getTransactionManager(),
     createRepositories: (db) => container.createRepositories(db),
     sessionLockManager,
@@ -419,5 +429,6 @@ export async function buildPiRunExecutorFactory(container, opts) {
     toolBudget: resolvePiRunToolBudget(container.env),
     extensionBundleFactory,
     eventProjectionMode: opts.eventProjectionMode,
-  });
+  };
+  return createPiRunExecutorFactory(factoryOpts);
 }

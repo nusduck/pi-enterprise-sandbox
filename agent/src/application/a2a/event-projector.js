@@ -75,7 +75,7 @@ const MESSAGE_EVENT_TYPES = new Set(['message.completed']);
  *   contextId?: string | null,
  *   runStatus?: string | null,
  *   principal?: { orgId?: string, clientId?: string } | null,
- *   buildDownloadUri?: ((input: object) => string | null) | null,
+ *   buildDownloadUri?: Function | null,
  *   lastA2aStatus?: string | null,
  * }} ctx
  */
@@ -524,8 +524,8 @@ function projectCompletedMessage(event, ctx) {
       payload.role ||
       data.role ||
       event.message?.role ||
-      payload.message?.role ||
-      data.message?.role ||
+      /** @type {any} */ (payload.message)?.role ||
+      /** @type {any} */ (data.message)?.role ||
       '',
   ).toLowerCase();
   const role =

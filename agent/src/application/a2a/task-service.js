@@ -119,6 +119,7 @@ export class A2aTaskService {
    *   traceId: string,
    *   traceState?: string | null,
    *   spanId?: string | null,
+   *   traceFlags?: string | number | null,
    *   idempotencyKey?: string | null,
    *   method?: string,
    * }} input

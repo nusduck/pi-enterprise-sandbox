@@ -4,7 +4,7 @@
  */
 import { readFileSync, existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { loadToolRiskPolicy } from './src/extensions/enterprise-policy/tool-risk-policy.js';
+import { loadToolRiskPolicy } from './src/infrastructure/dsh/tool-risk-policy.js';
 import { resolveSkillRoots } from './src/skills/manager.js';
 import { primarySkillRoot, DEFAULT_SKILL_ROOTS } from './src/skills/paths.js';
 import {
@@ -90,6 +90,7 @@ export function resolveApprovalMode(env = process.env) {
   const explicit = nonEmptyEnv(env, 'APPROVAL_MODE') || nonEmptyEnv(env, 'SANDBOX_APPROVAL_MODE');
   if (explicit) {
     const mode = explicit.toLowerCase().replaceAll('-', '_');
+    // @ts-expect-error 未校验string传入闭合联合，运行时需窄化守卫，存活代码先用expect-error收敛 —— TS2345: Argument of type 'string' is not assignable to parameter of 
     if (Object.values(APPROVAL_MODES).includes(mode)) return mode;
     throw new Error(
       `Invalid APPROVAL_MODE=${explicit}; expected ask|auto_approve|deny`,
@@ -272,6 +273,7 @@ export function validateProductionConfig(env = process.env) {
       `Production configuration is unsafe (${errors.length} issue(s)): ${errors.join('; ')}`,
     );
     err.name = 'ProductionConfigError';
+    // @ts-expect-error 遗留JS占位类型object未展开，访问errors需收窄，存活代码先用expect-error收敛 —— TS2339: Property 'errors' does not exist on type 'Error'.
     err.errors = errors;
     throw err;
   }

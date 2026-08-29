@@ -34,7 +34,7 @@ function optionalSafeInteger(value, minimum) {
  * @param {{
  *   createContainer?: typeof createServiceContainer,
  *   createRunWorker?: Function,
- * }} [hooks] — DI seams for tests
+ * }} [hooks] - DI seams for tests
  */
 export async function startWorkerMain(env = process.env, hooks = {}) {
   const telemetry = await startTelemetry(env, {

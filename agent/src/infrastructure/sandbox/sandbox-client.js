@@ -129,12 +129,12 @@ export function createSandboxClient({ traceId = null, traceState = null, auth = 
     delete safeExtra['x-acting-organization-id'];
     delete safeExtra['x-acting-role'];
 
-    const h = {
+    const h = /** @type {Record<string, string>} */ ({
       'Content-Type': 'application/json',
       ...safeExtra,
       // Service identity is resolved last and cannot be overridden by extras.
       ...resolveSandboxAuthHeader(),
-    };
+    });
     if (authCtx.authorization) {
       h.Authorization = authCtx.authorization;
     }
@@ -187,7 +187,9 @@ export function createSandboxClient({ traceId = null, traceState = null, auth = 
         timer = null;
       }
       if (!resp.ok) {
-        const detail = await resp.json().catch(() => ({ detail: resp.statusText }));
+        const detail = /** @type {{ detail?: string }} */ (
+          await resp.json().catch(() => ({ detail: resp.statusText }))
+        );
         throw new SandboxError(resp.status, detail.detail || resp.statusText, path);
       }
       return resp;

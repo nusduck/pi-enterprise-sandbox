@@ -61,11 +61,9 @@ function normalizeConversationTitle(text) {
 export function conversationTitleFromMessages(messages) {
   if (!Array.isArray(messages)) return DEFAULT_CONVERSATION_TITLE;
   for (const message of messages) {
-    if (
-      !message ||
-      typeof message !== 'object' ||
-      (message.role !== 'user' && message.role != null)
-    ) {
+    if (!message || typeof message !== 'object') continue;
+    const rec = /** @type {Record<string, unknown>} */ (message);
+    if (rec.role !== 'user' && rec.role != null) {
       continue;
     }
     const title = normalizeConversationTitle(messageText(message));

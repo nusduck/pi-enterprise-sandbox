@@ -8,7 +8,7 @@
 
 import { Type } from 'typebox';
 import { MCP_TOOL_DESCRIPTION_MAX_CHARS, PiMcpAdapterError } from './mcp-constants.js';
-import { redactInlineSecrets } from '../pi/event-redaction.js';
+import { redactInlineSecrets } from '../../lib/event-redaction.js';
 
 /**
  * Lightweight JSON Schema subset validation for MCP tool args (A4).

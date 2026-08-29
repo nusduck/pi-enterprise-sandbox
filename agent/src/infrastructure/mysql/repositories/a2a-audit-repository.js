@@ -7,7 +7,7 @@
 
 import { toMysqlDateTime, parseJsonColumn, formatDateTime } from '../row-mappers.js';
 import { assertUlid } from '../../../domain/shared/ulid.js';
-import { redactPayload } from '../../pi/event-redaction.js';
+import { redactPayload } from '../../../lib/event-redaction.js';
 
 const EVENT_TYPE_MAX = 128;
 const METHOD_MAX = 128;

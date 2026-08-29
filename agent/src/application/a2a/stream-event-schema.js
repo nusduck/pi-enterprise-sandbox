@@ -32,7 +32,7 @@ const PART_KINDS = new Set(['text', 'file', 'data']);
 const STATUS_SET = new Set(ALL_A2A_TASK_STATUSES);
 
 /**
- * @param {unknown} method
+ * @param {unknown} [_method]
  * @returns {readonly string[]}
  */
 export function streamKindsForMethod(_method) {
@@ -229,7 +229,7 @@ function assertTaskStatus(status, label) {
     throw new A2aStreamSchemaError(`${label} must be an object`);
   }
   const body = /** @type {Record<string, unknown>} */ (status);
-  if (typeof body.state !== 'string' || !STATUS_SET.has(body.state)) {
+  if (typeof body.state !== 'string' || !STATUS_SET.has(/** @type {any} */ (body.state))) {
     throw new A2aStreamSchemaError(`${label}.state is not an A2A task state`, {
       state: body.state,
     });

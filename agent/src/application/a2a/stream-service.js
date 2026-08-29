@@ -142,10 +142,7 @@ export class A2aStreamService {
       if (stopped()) return false;
       let ok;
       try {
-        ok = write(frame);
-        if (ok != null && typeof ok.then === 'function') {
-          ok = await ok;
-        }
+        ok = await Promise.resolve(write(frame));
       } catch {
         return false;
       }

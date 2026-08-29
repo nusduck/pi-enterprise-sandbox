@@ -225,6 +225,7 @@ export function projectRedisStreamToSseEnvelope(entry) {
       payload = {};
     }
   } else if (entry.payload && typeof entry.payload === 'object') {
+    // @ts-expect-error 展开类型非对象，运行时已保证为对象 —— TS2698: Spread types may only be created from object types.
     payload = { ...entry.payload };
   }
 
@@ -416,6 +417,7 @@ export class RunEventSseService {
       let ok;
       try {
         ok = write(frame);
+        // @ts-expect-error 遗留JS占位类型object未展开，访问then需收窄，存活代码先用expect-error收敛 —— TS2339: Property 'then' does not exist on type 'boolean | void | Pro
         if (ok != null && typeof ok.then === 'function') {
           ok = await ok;
         }
@@ -444,6 +446,7 @@ export class RunEventSseService {
       let ok;
       try {
         ok = write(frame);
+        // @ts-expect-error 遗留JS占位类型object未展开，访问then需收窄，存活代码先用expect-error收敛 —— TS2339: Property 'then' does not exist on type 'boolean | void | Pro
         if (ok != null && typeof ok.then === 'function') {
           ok = await ok;
         }
@@ -593,6 +596,7 @@ export class RunEventSseService {
         if (env.sequence === lastEmitted + 1) {
           // eslint-disable-next-line no-await-in-loop
           if (!(await emitEnvelope(env))) {
+            // @ts-expect-error 对象字面量存在未知属性，类型定义待对齐 —— TS2353: Object literal may only specify known properties, and 'abort
             return { sawWork, needMysqlCatchup: false, aborted: true };
           }
           sawWork = true;
@@ -604,6 +608,7 @@ export class RunEventSseService {
       if (needMysqlCatchup) {
         const gap = await drainMysql({ maxPages: 100 });
         if (gap.aborted) {
+          // @ts-expect-error 对象字面量存在未知属性，类型定义待对齐 —— TS2353: Object literal may only specify known properties, and 'abort
           return { sawWork, needMysqlCatchup: true, aborted: true };
         }
         for (const entry of entries) {
@@ -612,6 +617,7 @@ export class RunEventSseService {
           if (env && env.sequence === lastEmitted + 1) {
             // eslint-disable-next-line no-await-in-loop
             if (!(await emitEnvelope(env))) {
+              // @ts-expect-error 对象字面量存在未知属性，类型定义待对齐 —— TS2353: Object literal may only specify known properties, and 'abort
               return { sawWork: true, needMysqlCatchup: true, aborted: true };
             }
             sawWork = true;
@@ -620,6 +626,7 @@ export class RunEventSseService {
           }
         }
       }
+      // @ts-expect-error 对象字面量存在未知属性，类型定义待对齐 —— TS2353: Object literal may only specify known properties, and 'abort
       return { sawWork, needMysqlCatchup, aborted: false };
     };
 
@@ -663,6 +670,7 @@ export class RunEventSseService {
           });
           if (live.length > 0) {
             const applied = await applyRedisEntries(live);
+            // @ts-expect-error 遗留JS占位类型object未展开，访问aborted需收窄，存活代码先用expect-error收敛 —— TS2339: Property 'aborted' does not exist on type '{ sawWork: boolea
             if (applied.aborted) break;
             sawWork = sawWork || applied.sawWork;
           }

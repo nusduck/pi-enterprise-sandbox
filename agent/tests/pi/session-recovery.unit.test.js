@@ -18,7 +18,7 @@ import {
 import {
   checksumSnapshotPayload,
   validateSnapshotPayload,
-} from '../../src/infrastructure/pi/pi-jsonl-codec.js';
+} from '../../src/application/session-json-codec.js';
 import { createUlidGenerator } from '../../src/domain/shared/ulid.js';
 import { SNAPSHOT_FORMAT } from '../../src/infrastructure/mysql/repositories/agent-session-snapshot-repository.js';
 

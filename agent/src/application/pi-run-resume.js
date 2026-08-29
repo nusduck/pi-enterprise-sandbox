@@ -12,7 +12,7 @@
  */
 
 import { assertUlid } from '../domain/shared/ulid.js';
-import { redactPayload } from '../infrastructure/pi/event-redaction.js';
+import { redactPayload } from '../lib/event-redaction.js';
 import { sanitizeStatusReason } from './sanitize-status-reason.js';
 import { ConflictError } from '../infrastructure/mysql/errors.js';
 import { integrityFingerprint } from '../infrastructure/mysql/repositories/tool-execution-repository.js';
@@ -207,8 +207,10 @@ export async function prepareApprovalResume(executor, {
         reason: sanitizeStatusReason(err),
       },
     });
-    const failure = new Error(
-      `approved tool replay outcome is uncertain: ${sanitizeStatusReason(err) || 'unknown error'}`,
+    const failure = /** @type {Error & { code?: string }} */ (
+      new Error(
+        `approved tool replay outcome is uncertain: ${sanitizeStatusReason(err) || 'unknown error'}`,
+      )
     );
     failure.code = 'APPROVED_TOOL_REPLAY_UNCERTAIN';
     throw failure;

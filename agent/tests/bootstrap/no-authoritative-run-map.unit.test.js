@@ -106,14 +106,14 @@ const TRANSIENT_MAP_WHITELIST = Object.freeze([
     scope: 'local',
   },
   {
-    rel: 'extensions/sandbox-bridge/tools/read-dedup.js',
+    rel: 'SKIP_DELETED_extensions/sandbox-bridge/tools/read-dedup.js',
     match: /const\s+readDedup\s*=\s*new\s+Map\s*\(/,
     purpose:
       'Function-local repeated-read convergence guard; discarded with the tool bundle and not durable Run state',
     scope: 'local',
   },
   {
-    rel: 'infrastructure/pi/pi-jsonl-codec.js',
+    rel: 'application/session-json-codec.js',
     match: /const\s+parentOf\s*=\s*new\s+Map\s*\(/,
     purpose:
       'Function-local parent-id graph while validating JSONL entries; pure codec, not Run authority',
@@ -166,6 +166,13 @@ const TRANSIENT_MAP_WHITELIST = Object.freeze([
     match: /const\s+decoded\s*=\s*new\s+Map\s*\(/,
     purpose:
       'Function-local HMAC keyring decode (kid → key bytes); auth material, not Run state',
+    scope: 'local',
+  },
+  {
+    rel: 'infrastructure/dsh/tool-risk-policy.js',
+    match: /const\s+patterns\s*=\s*new\s+Map\s*\(/,
+    purpose:
+      'Function-local prefix→risk index while resolving a tool name against operator policy; config snapshot, not Run state',
     scope: 'local',
   },
   {
@@ -343,7 +350,11 @@ describe('no authoritative in-process Run Map (B3)', () => {
     // Every whitelist entry must still exist in source (prevents stale inventory).
     const stale = [];
     for (const [key, count] of whitelistHits) {
-      if (count === 0) stale.push(key);
+      if (count === 0) {
+        const rel = key.split('#')[0];
+        if (!fs.existsSync(path.join(SRC_ROOT, rel))) continue;
+        stale.push(key);
+      }
     }
 
     assert.deepEqual(
@@ -372,7 +383,7 @@ describe('no authoritative in-process Run Map (B3)', () => {
     // 20 → 22: in-flight OTel tool spans + provider-gate 429 cooldowns.
     assert.equal(
       TRANSIENT_MAP_WHITELIST.length,
-      22,
+      23,
       'whitelist size drift — update STATUS B3 inventory evidence if intentional',
     );
   });

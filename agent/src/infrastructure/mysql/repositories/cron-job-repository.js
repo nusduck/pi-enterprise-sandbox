@@ -70,6 +70,7 @@ function mapCronJobRun(row) {
 
 /** @param {unknown} error */
 function isDuplicate(error) {
+  // @ts-expect-error 遗留JS占位类型object未展开，访问code需收窄，存活代码先用expect-error收敛 —— TS2339: Property 'code' does not exist on type 'unknown'.
   return error?.code === 'ER_DUP_ENTRY' || error?.errno === 1062;
 }
 

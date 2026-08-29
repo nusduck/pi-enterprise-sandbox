@@ -30,7 +30,7 @@
  * So this module stays the enterprise catalog and `toPiModel` stays the seam
  * that hands one concrete pi-ai Model to the runtime.
  */
-import { readFileSync, existsSync } from 'node:fs';
+import { readFileSync, existsSync, statSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -43,7 +43,7 @@ export const DEFAULT_MAX_OUTPUT_TOKENS = 65536;
 /**
  * Built-in seed so the agent works without an external file mount.
  * Mirrors config/agent/model-registry.json.
- * @type {import('./model-registry.js').ModelEntry[]}
+ * @type {readonly import('./model-registry.js').ModelEntry[]}
  */
 export const SEED_MODELS = Object.freeze([
   {
@@ -124,15 +124,17 @@ export const SEED_MODELS = Object.freeze([
  * @property {string} model_id
  * @property {string} [name]
  * @property {string} api_protocol
- * @property {string[]} input_modalities
+ * @property {readonly string[]} input_modalities
  * @property {number} context_window
  * @property {number} max_output_tokens
  * @property {boolean} supports_tool_call
  * @property {boolean} supports_developer_role
  * @property {boolean} supports_reasoning
- * @property {string[]} thinking_levels
+ * @property {readonly string[]} thinking_levels
  * @property {ModelPricing} pricing
  * @property {boolean} enabled
+ * @property {boolean} [default]
+ * @property {Record<string, string|null>} [thinking_wire_map]
  */
 
 export class ModelRegistryError extends Error {
@@ -162,7 +164,9 @@ export function normalizeModelEntry(raw) {
     throw new ModelRegistryError('model_id is required', { code: 'missing_model_id' });
   }
   const pricingRaw =
-    raw.pricing && typeof raw.pricing === 'object' ? raw.pricing : {};
+    raw.pricing && typeof raw.pricing === 'object'
+      ? /** @type {Record<string, unknown>} */ (raw.pricing)
+      : {};
   const pricing = {
     input_per_mtok: num(pricingRaw.input_per_mtok ?? pricingRaw.input, 0),
     output_per_mtok: num(pricingRaw.output_per_mtok ?? pricingRaw.output, 0),
@@ -362,7 +366,7 @@ export function loadModelsFromFile(filePath) {
 /**
  * Build a registry map: model_id → ModelEntry (file overrides seed).
  * @param {{
- *   seed?: ModelEntry[],
+ *   seed?: readonly ModelEntry[],
  *   filePath?: string|null,
  *   env?: NodeJS.ProcessEnv | Record<string, string|undefined>,
  * }} [opts]
@@ -504,6 +508,7 @@ function parseModelOverridesJson(env) {
  *   env?: NodeJS.ProcessEnv | Record<string, string|undefined>,
  *   allowDisabled?: boolean,
  *   applyOverrides?: boolean,
+ *   useCached?: boolean,
  * }} [opts]
  * @returns {ModelEntry}
  */
@@ -651,6 +656,7 @@ export function supportedThinkingLevels(entry) {
  * @param {{
  *   baseUrl?: string,
  *   apiKey?: string,
+ *   headers?: Record<string, string>,
  * }} [runtime]
  */
 export function toPiModel(entry, runtime = {}) {

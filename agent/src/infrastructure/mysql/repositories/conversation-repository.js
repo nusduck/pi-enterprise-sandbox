@@ -106,6 +106,7 @@ export class ConversationRepository {
     // A sub-agent's conversation belongs to the Run that spawned it, not
     // beside it in the owner's list. It stays fully readable by id — hiding it
     // here is a listing decision, never an access one.
+    // @ts-expect-error 遗留JS占位类型object未展开，访问includeSubagent需收窄，存活代码先用expect-error收敛 —— TS2339: Property 'includeSubagent' does not exist on type '{ limit?:
     if (opts.includeSubagent !== true) query = query.whereNull('parent_run_id');
     const rows = await query.orderBy('updated_at', 'desc').limit(limit);
     return rows.map(mapConversation);

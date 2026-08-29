@@ -3,7 +3,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   loadPromptImagesFromAttachmentStore,
-} from '../../src/infrastructure/pi/prompt-image-loader.js';
+} from '../../src/infrastructure/dsh/prompt-image-loader.js';
 
 function imageResponse(bytes, mime = 'image/png', sha256 = null) {
   const headers = new Headers({ 'content-type': mime });

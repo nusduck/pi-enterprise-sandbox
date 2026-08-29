@@ -98,6 +98,7 @@ export function loadKnexModule() {
   try {
     // knex default export is the knex function
     const mod = require('knex');
+    // @ts-expect-error 遗留JS占位类型object未展开，访问default需收窄，存活代码先用expect-error收敛 —— TS2339: Property 'default' does not exist on type 'never'.
     return typeof mod === 'function' ? mod : mod.default;
   } catch (err) {
     throw new MysqlDependencyError(

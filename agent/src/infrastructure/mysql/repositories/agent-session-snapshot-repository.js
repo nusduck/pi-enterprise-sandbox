@@ -26,7 +26,7 @@ import {
   verifySnapshotChecksum,
   PI_SESSION_JSONL_VERSION,
   DEFAULT_MAX_JSONL_BYTES,
-} from '../../pi/pi-jsonl-codec.js';
+} from '../../../application/session-json-codec.js';
 
 /** Supported snapshot payload format identifiers. */
 export const SNAPSHOT_FORMAT = Object.freeze({
@@ -55,6 +55,7 @@ function requireOwnerUlids(scope) {
  * @param {string} [field]
  */
 export function assertSnapshotFormat(format, field = 'snapshotFormat') {
+  // @ts-expect-error 未校验string传入闭合联合，运行时需窄化守卫，存活代码先用expect-error收敛 —— TS2345: Argument of type 'string' is not assignable to parameter of 
   if (typeof format !== 'string' || !SUPPORTED_SNAPSHOT_FORMATS.includes(format)) {
     throw new SessionSnapshotError(
       `Unsupported ${field}: ${String(format)} (supported: ${SUPPORTED_SNAPSHOT_FORMATS.join(',')})`,

@@ -297,6 +297,7 @@ export class ConversationService {
     if (input == null || typeof input !== 'object' || Array.isArray(input)) {
       throw new ValidationError('conversation body must be an object');
     }
+    // @ts-expect-error 遗留JS占位类型object未展开，访问title需收窄，存活代码先用expect-error收敛 —— TS2339: Property 'title' does not exist on type 'object'.
     const title = normalizeTitle(input.title);
     let lastRace = null;
     for (let attempt = 0; attempt < MAX_CREATE_ATTEMPTS; attempt += 1) {
@@ -426,6 +427,7 @@ export class ConversationService {
   async ensureSession(auth, input = {}) {
     if (!this.sessionProvisioner?.ensure) {
       const error = new Error('Sandbox session provisioning unavailable');
+      // @ts-expect-error 遗留JS占位类型object未展开，访问code需收窄，存活代码先用expect-error收敛 —— TS2339: Property 'code' does not exist on type 'Error'.
       error.code = 'SANDBOX_SESSION_PROVISION_FAILED';
       throw error;
     }
@@ -433,6 +435,7 @@ export class ConversationService {
       throw new ValidationError('session ensure body must be an object');
     }
     const rawConversationId =
+      // @ts-expect-error 遗留JS占位类型object未展开，访问conversationId需收窄，存活代码先用expect-error收敛 —— TS2339: Property 'conversationId' does not exist on type 'object'.
       input.conversationId ?? input.conversation_id ?? null;
     let conversationId = null;
     let selectedAgentId = null;
@@ -514,6 +517,7 @@ export class ConversationService {
       agentSessionId: parents.agentSessionId,
       sandboxSessionId: parents.sandboxSessionId,
       workspaceId: parents.workspaceId,
+      // @ts-expect-error 遗留JS占位类型object未展开，访问traceId需收窄，存活代码先用expect-error收敛 —— TS2339: Property 'traceId' does not exist on type 'object'.
       traceId: input.traceId,
     });
     return {

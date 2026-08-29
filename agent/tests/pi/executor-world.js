@@ -8,7 +8,7 @@
  * knex without duplicating the seed.
  */
 
-import { PINNED_PI_SDK_VERSION } from '../../src/infrastructure/pi/pi-runtime-factory.js';
+import { PINNED_PI_SDK_VERSION } from '../../src/infrastructure/dsh/runtime-factory.js';
 
 export const ORG = '01K0G2PAV8FPMVC9QHJG7JPN4Z';
 export const USER = '01K0G2PAV8FPMVC9QHJG7JPN50';

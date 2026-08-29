@@ -157,7 +157,9 @@ export class RunEventRepository {
       // event (or vice versa). Existing callers may omit the optional projector.
       if (this.traceSpans?.projectRunEvent) {
         const projector =
+          // @ts-expect-error 遗留JS占位类型object未展开，访问forExecutor需收窄，存活代码先用expect-error收敛 —— TS2339: Property 'forExecutor' does not exist on type '{ projectRunE
           typeof this.traceSpans.forExecutor === 'function'
+            // @ts-expect-error 遗留JS占位类型object未展开，访问forExecutor需收窄，存活代码先用expect-error收敛 —— TS2339: Property 'forExecutor' does not exist on type '{ projectRunE
             ? this.traceSpans.forExecutor(trx)
             : this.traceSpans;
         try {

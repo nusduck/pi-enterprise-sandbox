@@ -142,9 +142,7 @@ export class ExecuteRunService {
    * @param {{
    *   transactionManager: { run: (fn: (trx: any) => Promise<any>) => Promise<any> },
    *   createRepositories: (db: any) => {
-   *     runs: any,
-   *     runEvents: any,
-   *     outbox: any,
+   *     runs: any, runEvents: any, outbox: any, approvals: any, toolExecutions: any, interactions: any,
    *   },
    *   leaseManager: {
    *     acquire: (runId: string, ownerToken: string) => Promise<boolean>,

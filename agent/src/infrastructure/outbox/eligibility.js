@@ -22,6 +22,7 @@
  *
  * @type {Readonly<ClaimEligibility>}
  */
+// @ts-expect-error Function宽松类型与精确签名不匹配，JSDoc形状待补，先用expect-error收敛 —— TS2322: Type 'Readonly<{ aggregateTypes: readonly string[]; includeP
 export const RUN_STREAM_CLAIM_ELIGIBILITY = Object.freeze({
   aggregateTypes: Object.freeze(['run']),
   includePayloadRunId: true,

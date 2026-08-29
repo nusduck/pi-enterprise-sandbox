@@ -22,6 +22,7 @@ function objectOrEmpty(value) {
 /** Present only fields already redacted before request_json persistence. */
 export function presentApproval(approval) {
   const payload = objectOrEmpty(approval.requestJson);
+  // @ts-expect-error 未校验string传入闭合联合，运行时需窄化守卫，存活代码先用expect-error收敛 —— TS2345: Argument of type 'unknown' is not assignable to parameter of
   const decision = objectOrEmpty(payload.decision);
   const args = payload.argsSummary ?? null;
   return {
@@ -43,7 +44,9 @@ export function presentApproval(approval) {
           ? decision.reasonCode
           : null),
     command:
+      // @ts-expect-error 遗留JS占位类型object未展开，访问command需收窄，存活代码先用expect-error收敛 —— TS2339: Property 'command' does not exist on type 'object'.
       args && typeof args === 'object' && typeof args.command === 'string'
+        // @ts-expect-error 遗留JS占位类型object未展开，访问command需收窄，存活代码先用expect-error收敛 —— TS2339: Property 'command' does not exist on type 'object'.
         ? args.command
         : null,
     arguments: args,

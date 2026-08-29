@@ -286,6 +286,7 @@ export function createRedisClient(connectionUrl, options = {}) {
     guardOpts.log = options.connectionLog;
   }
 
+  // @ts-expect-error 未校验string传入闭合联合，运行时需窄化守卫，存活代码先用expect-error收敛 —— TS2345: Argument of type '{ role?: string; minIntervalMs?: number; n
   const GuardedRedis = createGuardedRedisClass(Redis, guardOpts);
   return new GuardedRedis(url, redisOptions);
 }

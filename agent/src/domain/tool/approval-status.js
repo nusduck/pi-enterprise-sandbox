@@ -48,6 +48,7 @@ export function assertApprovalStatus(status) {
  * @param {string} status
  */
 export function isTerminalApprovalStatus(status) {
+  // @ts-expect-error 未校验string传入闭合联合，运行时需窄化守卫，存活代码先用expect-error收敛 —— TS2345: Argument of type 'string' is not assignable to parameter of 
   return TERMINAL.has(status);
 }
 

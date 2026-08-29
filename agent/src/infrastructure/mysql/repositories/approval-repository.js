@@ -24,7 +24,7 @@ import {
   assertApprovalStatus,
   isTerminalApprovalStatus,
 } from '../../../domain/tool/approval-status.js';
-import { redactPayload } from '../../pi/event-redaction.js';
+import { redactPayload } from '../../../lib/event-redaction.js';
 import { TOOL_EXECUTION_CHILD_SELECT } from './tool-execution-repository.js';
 
 const MAX_REQUEST_JSON_BYTES = 64 * 1024;

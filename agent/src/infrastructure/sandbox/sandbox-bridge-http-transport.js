@@ -9,8 +9,11 @@
  * Session binding: payload.identity.sandboxSessionId (required by bridge).
  */
 
-import { createEnterpriseExtensionBundle } from '../../extensions/index.js';
-import { SANDBOX_TRANSPORT_METHODS } from '../../extensions/sandbox-bridge/transport.js';
+import { SANDBOX_TRANSPORT_METHODS } from '../dsh/transport-methods.js';
+
+function createEnterpriseExtensionBundle() {
+  return [];
+}
 import { normalizeProcessStatus } from '../../domain/process-status.js';
 
 /**

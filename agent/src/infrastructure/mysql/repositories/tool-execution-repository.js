@@ -29,7 +29,7 @@ import {
 } from '../../../domain/tool/tool-execution-status.js';
 import { SESSION_STATUS } from '../../../domain/session/session-status.js';
 import { RUN_STATUS } from '../../../domain/run/run-status.js';
-import { redactPayload } from '../../pi/event-redaction.js';
+import { redactPayload } from '../../../lib/event-redaction.js';
 
 const TOOL_CALL_ID_MAX = 255;
 const TOOL_NAME_MAX = 255;

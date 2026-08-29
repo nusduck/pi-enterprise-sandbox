@@ -40,8 +40,8 @@ import {
   redactEventData,
 } from './fenced-run-event-recorder.js';
 import { createPromiseTail } from './promise-tail.js';
-import { isLocalSandboxTool } from '../extensions/enterprise-policy/tool-risk-classifier.js';
-import { redactPayload } from '../infrastructure/pi/event-redaction.js';
+import { isLocalSandboxTool } from '../infrastructure/dsh/tool-risk-classifier.js';
+import { redactPayload } from '../lib/event-redaction.js';
 import {
   assertToolExecutionReplayMatch,
   policyDecisionFingerprint,
@@ -281,7 +281,7 @@ export class FencedToolGovernanceRecorder {
         riskLevel: decision.riskLevel,
       });
 
-      let desiredStatus = TOOL_EXECUTION_STATUS.PROPOSED;
+      let desiredStatus = /** @type {string} */ (TOOL_EXECUTION_STATUS.PROPOSED);
       let errorCode = null;
       if (decision.decision === 'deny') {
         desiredStatus = TOOL_EXECUTION_STATUS.FAILED;
@@ -684,7 +684,7 @@ export class FencedToolGovernanceRecorder {
    * Create a durable ask_user request and park the Run in WAITING_INPUT.
    * The request, interaction.requested event, Run transition, and outbox row
    * share one transaction; the returned suspension signal is ephemeral.
-   * @param {{toolCallId:string,toolName?:string,args?:object,interactionType:string,title:string,message?:string|null,options?:string[],placeholder?:string|null,toolExecutionId?:string}} input
+   * @param {{toolCallId:string,toolName?:string,args?:object,interactionId?:string,interactionType:string,title:string,message?:string|null,options?:string[],placeholder?:string|null,toolExecutionId?:string}} input
    */
   async requestInteraction(input) {
     this.#assertLock();
@@ -1047,10 +1047,7 @@ export class FencedToolGovernanceRecorder {
    * WAITING_APPROVAL / incompatible status → fail closed.
    *
    * @param {{
-   *   toolCallId: string,
-   *   toolName: string,
-   *   isError?: boolean,
-   *   result?: unknown,
+   *   toolCallId: string, toolName: string, isError?: boolean, result?: unknown, toolSource?: unknown, args?: unknown,
    * }} input
    */
   async recordToolEnded(input) {

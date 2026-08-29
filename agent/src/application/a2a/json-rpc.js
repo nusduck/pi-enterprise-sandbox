@@ -122,8 +122,9 @@ export function parseJsonRpcRequest(body) {
       error: { ...JSON_RPC_ERROR.INVALID_REQUEST },
     };
   }
-  const id = 'id' in body ? /** @type {any} */ (body).id : null;
-  if (body.jsonrpc !== JSON_RPC_VERSION) {
+  const req = /** @type {Record<string, unknown>} */ (body);
+  const id = /** @type {string | number | null} */ ('id' in req ? req.id : null);
+  if (req.jsonrpc !== JSON_RPC_VERSION) {
     return {
       ok: false,
       id,
@@ -133,7 +134,7 @@ export function parseJsonRpcRequest(body) {
       },
     };
   }
-  if (typeof body.method !== 'string' || !body.method.trim()) {
+  if (typeof req.method !== 'string' || !req.method.trim()) {
     return {
       ok: false,
       id,
@@ -143,18 +144,18 @@ export function parseJsonRpcRequest(body) {
       },
     };
   }
-  const method = normalizeA2aMethod(body.method);
+  const method = normalizeA2aMethod(req.method);
   if (!method) {
     return {
       ok: false,
       id,
       error: {
         ...JSON_RPC_ERROR.METHOD_NOT_FOUND,
-        data: { method: body.method },
+        data: { method: req.method },
       },
     };
   }
-  let params = body.params;
+  let params = req.params;
   if (params == null) params = {};
   if (typeof params !== 'object' || Array.isArray(params)) {
     return {

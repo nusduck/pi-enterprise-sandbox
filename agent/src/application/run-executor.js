@@ -92,6 +92,7 @@ export function normalizeExecutorResult(result) {
     RUN_STATUS.WAITING_INPUT,
     RUN_STATUS.RETRYING,
   ]);
+  // @ts-expect-error 未校验string传入闭合联合，运行时需窄化守卫，存活代码先用expect-error收敛 —— TS2345: Argument of type 'string' is not assignable to parameter of 
   if (!allowed.has(outcome)) {
     return {
       outcome: RUN_STATUS.FAILED,

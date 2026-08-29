@@ -62,6 +62,12 @@ class InternalSearchTransportError extends Error {
   }
 }
 
+/**
+ * @param {string} code
+ * @param {string} message
+ * @param {object} [extra]
+ * @returns {never}
+ */
 function fail(code, message, extra) {
   throw new InternalSearchTransportError(code, message, extra);
 }

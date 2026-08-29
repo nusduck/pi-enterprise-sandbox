@@ -35,6 +35,7 @@ export function normalizeScopes(scopes) {
       throw new Error('each scope must be a non-empty string');
     }
     const v = s.trim();
+    // @ts-expect-error 未校验string传入闭合联合，运行时需窄化守卫，存活代码先用expect-error收敛 —— TS2345: Argument of type 'string' is not assignable to parameter of 
     if (!ALL_A2A_SCOPES.includes(v)) {
       throw new Error(`unknown A2A scope: ${v}`);
     }

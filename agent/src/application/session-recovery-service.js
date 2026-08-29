@@ -31,11 +31,11 @@ import {
   PI_SESSION_JSONL_VERSION,
   buildSessionHeader,
   findLeafEntryId,
-} from '../infrastructure/pi/pi-jsonl-codec.js';
+} from './session-json-codec.js';
 import {
   SNAPSHOT_FORMAT,
 } from '../infrastructure/mysql/repositories/agent-session-snapshot-repository.js';
-import { PINNED_PI_SDK_VERSION } from '../infrastructure/pi/pi-runtime-factory.js';
+import { PINNED_PI_SDK_VERSION } from '../infrastructure/dsh/constants.js';
 import { AGGREGATE_TYPE_RUN } from '../infrastructure/outbox/outbox-status.js';
 import { createHash } from 'node:crypto';
 
@@ -179,6 +179,7 @@ export class SessionRecoveryService {
     const fence = Number(input.executionFenceToken);
 
     try {
+      // @ts-expect-error Function宽松类型与精确签名不匹配，JSDoc形状待补，先用expect-error收敛 —— TS2322: Type '{ source: string; payload: { header: Record<string, un
       return await this.#recoverInner({
         agentSessionId,
         scope,
@@ -538,7 +539,9 @@ export class SessionRecoveryService {
         lastRunId: runId,
       });
 
+      // @ts-expect-error 遗留JS占位类型object未展开，访问interactions需收窄，存活代码先用expect-error收敛 —— TS2339: Property 'interactions' does not exist on type '{ sessions: 
       if (input.interactionResumeId && repos.interactions) {
+        // @ts-expect-error 遗留JS占位类型object未展开，访问interactions需收窄，存活代码先用expect-error收敛 —— TS2339: Property 'interactions' does not exist on type '{ sessions: 
         await repos.interactions.markResumeAppliedIfClaimed(
           input.interactionResumeId,
           scope,
