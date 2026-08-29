@@ -156,3 +156,14 @@ export const AGENT_SKILL_PATH = '/home/sandbox/skill';
 export const AGENT_USER_SKILL_PATH = '/home/sandbox/skill-user';
 export const AGENT_WORKSPACE_PATH = '/home/sandbox/workspace';
 export const AGENT_TEMP_PATH = '/tmp';
+
+/**
+ * 模型执行 Python 代码用的 venv（镜像里预装了 pandas/reportlab 等运行库）。
+ *
+ * **单一事实源。** 沙箱的只读挂载与子进程 `PATH` 都从这里派生——两处各写
+ * 一份就是 2026-08-30 那个 bug 的成因：挂载写着 `/app/.venv`（Python 镜像
+ * 时代的路径）、PATH 也写着它，镜像换成 node:22-slim 之后两处同时失效，
+ * 而挂载是 `required: false`，缺失被静默宽恕，于是沙箱里的 `python3` 退化成
+ * 一个什么库都没有的裸解释器，不报错。
+ */
+export const AGENT_PYTHON_VENV = '/opt/pi-python/venv';

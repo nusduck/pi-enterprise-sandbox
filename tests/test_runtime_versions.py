@@ -234,13 +234,30 @@ def test_exec_dockerfile_uses_pinned_node(pins: dict) -> None:
     assert "npm ci" in text
 
 
-def test_sandbox_mcp_dockerfile_uses_pinned_python(pins: dict) -> None:
-    text = _read("sandbox/Dockerfile")
-    assert re.search(
-        rf"^FROM\s+{re.escape(pins['python']['docker_image'])}\b",
-        text,
-        re.M,
-    )
+def test_exec_dockerfile_uses_pinned_node(pins: dict) -> None:
+    """The exec image is Node-based; every FROM must use the pinned major."""
+    text = _read("exec/Dockerfile")
+    froms = re.findall(r"^FROM\s+(\S+)", text, re.M)
+    assert froms, "exec/Dockerfile has no FROM"
+    for image in froms:
+        # Multi-stage COPY --from targets a stage name, not an image.
+        if not image.startswith("node:"):
+            continue
+        assert image == pins["node"]["docker_image"], image
+
+
+def test_exec_image_installs_the_pinned_python_minor(pins: dict) -> None:
+    """Agent-executed code runs `python3`; it must be the pinned minor.
+
+    The image is node:22-slim (Debian bookworm), whose `python3` is 3.11 —
+    the same minor the SSOT pins. This asserts the *intent* is recorded, so a
+    base-image bump that changes the Python minor is a visible decision rather
+    than a silent one.
+    """
+    text = _read("exec/Dockerfile")
+    assert "\n    python3 \\" in text
+    assert pins["python"]["major_minor"] == "3.11"
+    assert "bookworm" in text or "node:22-slim" in text
 
 
 # ── GitHub Actions ──────────────────────────────────────────────────────────

@@ -4,23 +4,11 @@ version = "0.1.0"
 description = "Enterprise Sandbox Runtime for Pi Agent — secure execution and governance"
 license = {text = "MIT"}
 requires-python = ">=3.11,<3.12"
-dependencies = [
-    "fastapi>=0.115.0",
-    "uvicorn[standard]>=0.30.0",
-    "pydantic>=2.0",
-    "pydantic-settings>=2.0",
-    "httpx>=0.27.0",
-    "mcp>=1.0,<2",
-    "python-multipart>=0.0.9",
-    "prometheus-client>=0.20.0",
-    "PyMySQL>=1.1.0",
-    "redis>=5.0",
-    "opentelemetry-api==1.39.1",
-    "opentelemetry-sdk==1.39.1",
-    "opentelemetry-exporter-otlp-proto-http==1.39.1",
-    "opentelemetry-instrumentation-fastapi==0.60b1",
-    "opentelemetry-instrumentation-httpx==0.60b1",
-]
+# 2026-08-30：Python 服务代码已全部删除（执行面与 MCP facade 都在 exec/ 里，
+# 用 TypeScript）。这个 pyproject 只剩一个用途——跑 tests/ 下的仓库卫生检查
+# （布局棘轮、版本钉一致性、compose 安全、SSE 契约夹具）。那些用例只读文件，
+# 不 import 任何应用代码，所以运行期依赖为空。
+dependencies = []
 
 [project.optional-dependencies]
 test = [
@@ -34,9 +22,6 @@ test = [
 [build-system]
 requires = ["setuptools>=75.0"]
 build-backend = "setuptools.build_meta"
-
-[tool.setuptools.packages.find]
-include = ["sandbox.mcp*", "sandbox*"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

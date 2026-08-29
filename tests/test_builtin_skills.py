@@ -29,7 +29,6 @@ RUNTIME_SKILL_PATH_FILES = (
     ROOT / "agent" / "src" / "lib" / "text-redaction.js",
     ROOT / "exec" / "src" / "isolation" / "profile.ts",
     ROOT / "exec" / "Dockerfile",
-    ROOT / "sandbox" / "Dockerfile",
     ROOT / "docker-compose.yml",
     ROOT / "docker-compose.prod.yml",
 )

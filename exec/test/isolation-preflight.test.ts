@@ -8,6 +8,7 @@
  * 挂载/命名空间策略是前者的**字面子集**（`Array.prototype.filter` 的结果，
  * 不是重新拼出来的另一份列表）——只有这样才能保证"分叉在构造层面不可能发生"。
  */
+import { AGENT_PYTHON_VENV } from '../src/isolation/profile.js';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { buildIsolationProfile } from '../src/isolation/build.js';
@@ -86,8 +87,10 @@ test('preflight profile keeps every static mount build.ts produces — including
     for (const path of ['/usr', '/bin', '/sbin', '/lib', '/lib64', '/usr/local']) {
       assert.ok(targets.has(path), `missing static runtime mount: ${path}`);
     }
-    // .venv 与 9 条 /etc/* 文件：今天 Python 版 preflight 完全没有。
-    assert.ok(targets.has('/app/.venv'));
+    // Python venv 与 9 条 /etc/* 文件：今天 Python 版 preflight 完全没有。
+    // 引用常量而不是再抄一遍字符串——两处各写一份正是 2026-08-30 那个
+    // "挂载与 PATH 同时指向已不存在的 /app/.venv" 的成因。
+    assert.ok(targets.has(AGENT_PYTHON_VENV), `missing venv mount: ${AGENT_PYTHON_VENV}`);
     for (const path of [
       '/etc/passwd',
       '/etc/group',

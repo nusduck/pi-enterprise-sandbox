@@ -607,12 +607,13 @@ services:
   sandbox-mcp:
     build:
       context: .
-      dockerfile: ${SANDBOX_DOCKERFILE:-sandbox/Dockerfile}
+      dockerfile: exec/Dockerfile
     image: ${SANDBOX_IMAGE:-enterprise-sandbox:latest}
     container_name: ${SANDBOX_MCP_CONTAINER:-pi-enterprise-sandbox-mcp}
-    # MCP facade only — no Bubblewrap, no workspace mounts.
-    entrypoint: ["uvicorn"]
-    command: ["sandbox.mcp.app:app", "--host", "0.0.0.0", "--port", "8082"]
+    # MCP facade only — same image as the executor, different entrypoint and
+    # different credentials. No Bubblewrap, no workspace mounts: it never
+    # executes anything itself, it calls the narrow bridge.
+    command: ["node", "dist/mcp-main.js"]
     user: "10001:10001"
     env_file:
       - ${SANDBOX_ENV_FILE:-.env}

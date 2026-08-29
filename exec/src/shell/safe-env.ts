@@ -24,6 +24,8 @@
 export const EXEC_ENV_PREFIX = 'SANDBOX_EXEC_ENV_';
 
 /** 合法的类 POSIX 环境变量名——与 `render.ts` 里 bwrap `--setenv` 的校验一致。 */
+import { AGENT_PYTHON_VENV } from '../isolation/profile.js';
+
 const ENV_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 /**
@@ -31,8 +33,8 @@ const ENV_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
  * `HOME`（原版本身就是 `""`，注释写着"overridden per-execution"，这里干脆
  * 不放）。`PWD` 同理不放，都交给 `build.ts` 的 `EnvPlan` 决定。
  */
-const BASE_SAFE_ENV: Readonly<Record<string, string>> = {
-  PATH: '/app/.venv/bin:/usr/local/bin:/usr/bin:/bin',
+export const BASE_SAFE_ENV: Readonly<Record<string, string>> = {
+  PATH: `${AGENT_PYTHON_VENV}/bin:/usr/local/bin:/usr/bin:/bin`,
   LANG: 'C.UTF-8',
   LC_ALL: 'C.UTF-8',
   PYTHONIOENCODING: 'utf-8',

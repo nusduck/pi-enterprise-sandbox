@@ -12,7 +12,12 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { buildIsolationProfile } from '../src/isolation/build.js';
 import { writableRoots } from '../src/fs/writable-roots.js';
-import { IsolationConfigError, type BindMount, type Mount } from '../src/isolation/profile.js';
+import {
+  AGENT_PYTHON_VENV,
+  IsolationConfigError,
+  type BindMount,
+  type Mount,
+} from '../src/isolation/profile.js';
 import { isPathWithin, makeTestWorkspace } from './helpers.js';
 
 function bindMounts(mounts: readonly Mount[]): BindMount[] {
@@ -459,5 +464,32 @@ test('env: isolation-mandated keys (HOME/PWD/TMPDIR/XDG_*) always win over calle
     assert.equal(profile.env.vars['XDG_CONFIG_HOME'], '/home/sandbox/.config');
   } finally {
     await ws.cleanup();
+  }
+});
+
+test('沙箱能看到模型的 Python venv，且 PATH 与挂载同出一源', async () => {
+  const { context, cleanup } = await makeTestWorkspace();
+  try {
+    const profile = buildIsolationProfile({
+      context,
+      mode: 'workspace-write',
+      command: ['python3', '-c', 'pass'],
+    });
+    const venv = profile.mounts.find(
+      (m): m is BindMount => m.kind === 'ro_bind' && m.source === AGENT_PYTHON_VENV,
+    );
+    assert.ok(venv, `venv 必须被只读挂载进沙箱：${AGENT_PYTHON_VENV}`);
+    assert.equal(venv.target, AGENT_PYTHON_VENV, '容器内外路径要一致，否则 PATH 对不上');
+
+    // 这条是 2026-08-30 那个 bug 的回归护栏：挂载源与子进程 PATH 曾经各写一份
+    // 硬编码路径（都是 `/app/.venv`），镜像基底一换两处同时失效——而挂载是
+    // required:false，缺失被静默宽恕，沙箱里的 python3 退化成裸解释器且不报错。
+    const { BASE_SAFE_ENV } = await import('../src/shell/safe-env.js');
+    assert.ok(
+      String(BASE_SAFE_ENV['PATH']).startsWith(`${AGENT_PYTHON_VENV}/bin:`),
+      `PATH 必须以 venv 的 bin 打头，实际是 ${String(BASE_SAFE_ENV['PATH'])}`,
+    );
+  } finally {
+    await cleanup();
   }
 });

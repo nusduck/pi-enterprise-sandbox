@@ -15,6 +15,7 @@
 import type { EnabledSkillPackage, SandboxMode, WorkspaceContext } from '../types.js';
 import { writableRoots } from '../fs/writable-roots.js';
 import {
+  AGENT_PYTHON_VENV,
   AGENT_SKILL_PATH,
   AGENT_TEMP_PATH,
   AGENT_USER_SKILL_PATH,
@@ -133,10 +134,11 @@ function buildStaticMounts(ctx: Pick<WorkspaceContext, 'systemSkillRoot'>): Moun
       sessionSpecific: false,
     });
   }
+  // 模型的 Python 运行库。源与 `safe-env.ts` 的 PATH 同出 `AGENT_PYTHON_VENV`。
   mounts.push({
     kind: 'ro_bind',
-    source: '/app/.venv',
-    target: '/app/.venv',
+    source: AGENT_PYTHON_VENV,
+    target: AGENT_PYTHON_VENV,
     required: false,
     sessionSpecific: false,
   });
