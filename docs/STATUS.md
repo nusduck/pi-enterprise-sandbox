@@ -14,6 +14,24 @@
 This file is the **only** living gap board for plan acceptance.  
 A green unit-test suite alone does **not** complete a row.
 
+> ## ⚠️ 2026-08-29：DSH 重建让本板大部分证据失效
+>
+> [ADR 0007](adr/0007-agent-runtime-rebuild-on-dsh.md) / [ADR 0008](adr/0008-sandbox-isolation-and-fs-seam-redesign.md)
+> 删除了 Python 执行面（`sandbox/` 36k 行）与 Pi Runtime（`agent/src/infrastructure/pi/`、
+> `agent/src/extensions/`）。**凡是以这两处为证据的行，证据文件已经不存在了**，
+> 状态不再成立——哪怕它写着 `done`。
+>
+> 已知**功能性回归**（不是"证据过期"，是功能真的没了），逐函数对照见
+> [`design/waves/gap-audit.md`](design/waves/gap-audit.md)，红色用例在
+> `exec/test/semantic-gaps.test.ts`：
+>
+> - **搜索**：`exec/` 无 search 模块，find/grep 是 `listDir` 假实现
+> - **产物**：公共面四条路由全是占位（submit 编造 `sha256: '0'×64`，download 恒 404）
+> - **数据集**：上传不落盘；`DatasetService` 签名收整块 `Uint8Array`，撑不住 C8 的 5GiB
+>
+> 本板的逐行重审尚未做。**在重审完成前，把每一行都当 `unknown` 对待**，
+> 不要引用它作为"已达成"的依据。
+
 ### Status vocabulary
 
 | Status | Meaning |
@@ -34,7 +52,7 @@ Change this file in the **same commit** as the implementation or evidence that j
 
 | ID | Criterion | Status | Evidence / notes |
 |----|-----------|--------|------------------|
-| A1 | Use Pi native Agent Loop | `done` | `agent/src/infrastructure/pi/*`, executor path; no second ReAct loop |
+| A1 | Use Pi native Agent Loop | `unknown` | **证据已删除**：`agent/src/infrastructure/pi/*` 不复存在。Pi 换成 DSH（ADR 0007），本行需按 `agent/runtime/` 重新表述与取证 |
 | A2 | Required enterprise extensions load | `done` | Four required: `sandbox-bridge`, `enterprise-policy`, `observability`, `user-interaction` (the `ask_user` split, 2026-08). Three optional first-party extensions: `skill-lifecycle`, `subagent-spawn` (durable child Runs) and `task-state` (session todo list + owner-scoped notes); each only builds when its durable port/store is injected. enterprise-agent-kit removed; the 12 legacy package names stay refused. |
 | A3 | MCP via `pi-mcp-adapter` | `done` | exact pin + 启动期 `tools/list` 发现/ready fail-closed（`agent/tests/pi/mcp-adapter.integration.test.js`） |
 | A4 | Multi-turn Session recoverable | `done` | Offline: session-recovery + journal units + WAITING_INPUT recovery matrix. **Live 2026-07-19:** full `agent-worker-pi-restart.release-gate.test.js` **5/5 PASS** (model SIGKILL replay, durable interaction, tool boundary, sandbox UNKNOWN) on isolated MySQL/Redis/Sandbox — Pi Session checkpoint path only. Evidence: `evidence/a4-g2-restart-matrix-2026-07-19.md`, `evidence/g6-interaction-worker-restart-2026-07-19.md`. Residual non-blocking: dedicated corrupt-journal-under-kill live gate not separate. |
@@ -62,7 +80,7 @@ Change this file in the **same commit** as the implementation or evidence that j
 | C5 | Ordinary commands no approval | `done` | policy defaults; enterprise tools only |
 | C6 | Python multi-line auto-materialize | `done` | formal execution path + tests |
 | C7 | Long tasks via Process Handle | `done` | Single-instance formal path: ProcessManager start/status/read/kill + dual-write + durable `die_with_parent=False`/`as_pid_1=True` (`tests/test_formal_process_handle.py` + orphan/identity/bwrap). Evidence: `evidence/partial-c7-process-handle-2026-07-19.md`. **Residual (non-blocking):** multi-host reclaim review-deferred — honest LOST on this host only. |
-| C8 | Dataset streams into Workspace | `done` | PR-09 path + live 5GiB gate evidence |
+| C8 | Dataset streams into Workspace | `open` | **回归**：`exec/src/dataset/service.ts` 的 `create(content: Uint8Array)` 整块进内存，5GiB 会打死进程；公共面上传不落盘。见 [gap-audit](design/waves/gap-audit.md#二数据集) |
 
 ## D. Frontend
 
@@ -81,9 +99,9 @@ Change this file in the **same commit** as the implementation or evidence that j
 
 | ID | Criterion | Status | Evidence / notes |
 |----|-----------|--------|------------------|
-| E1 | write/edit do not auto-download | `done` | design + submit_artifact only |
-| E2 | Only `submit_artifact` creates Artifact | `done` | formal artifact runtime |
-| E3 | Download tenant/user scoped | `done` | owner-scoped download + A2A caller-bound gate |
+| E1 | write/edit do not auto-download | `unknown` | 设计不变，但产物面已是占位实现，未重新取证 |
+| E2 | Only `submit_artifact` creates Artifact | `open` | **回归**：`public/artifacts.ts` 的 submit 编造记录不落盘，download 恒 404。见 [gap-audit](design/waves/gap-audit.md#三产物) |
+| E3 | Download tenant/user scoped | `open` | **回归**：`ArtifactService` 只按 workspaceId 比对，缺 org/user/conversation 维度；且公共面 download 未接服务 |
 
 ## F. A2A
 

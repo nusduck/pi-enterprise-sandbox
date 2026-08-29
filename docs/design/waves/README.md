@@ -16,6 +16,16 @@ DSH 重建的施工分解。设计依据见 [dsh-rebuild.md](../dsh-rebuild.md)�
 > **验证为什么必须独立做**：Wave 1 三个任务交回来时**测试全是绿的**，
 > 但每个里面都有一处 fail-open 缺陷。测试绿证明不了移植没掉东西——
 > 因为原来的测试压根没测到那几条，改写过来自然也测不到。
+>
+> **2026-08-29 复盘，同一个坑更深的一次**：Wave 3 交回时 231 个用例全绿，
+> 进度表标成 ✅，但产物、数据集、搜索三块是**占位实现**——用例断言的是
+> 响应形状，占位实现形状恰好是对的。逐函数对照见
+> [gap-audit.md](gap-audit.md)，`exec/test/semantic-gaps.test.ts` 是把这些
+> 缺口固定成红色的 9 条语义用例。
+>
+> **由此新增一条硬规矩**：新增路由的验收用例必须断言**语义**（grep 断言匹配到
+> 的行、artifact 断言字节 round-trip、dataset 断言读得回来），断言形状的用例
+> 不算验收。写完先问一句：**空实现能不能让这条用例通过？**能就重写。
 
 ## 进度
 
@@ -35,11 +45,11 @@ DSH 重建的施工分解。设计依据见 [dsh-rebuild.md](../dsh-rebuild.md)�
 | [W2-B](w2-b.md) | `exec/src/shell/job-registry.ts`（MySQL 支撑） | ✅ |
 | [W2-C](w2-c.md) | `exec/src/workspace/`：工作区、持久 tmp、配额、锁抽象 | ✅ |
 | [W2-D](w2-d.md) | `agent/` 的 220 个 checkJs 错误 | ✅ 0 error |
-| **Wave 3** | 执行面其余（**W3-D 必须先单独跑**，接口定死再并行其余三个） | ✅ |
-| W3-A | `exec/src/http/internal-*` + HMAC 中间件 | ✅ |
-| W3-B | `exec/src/artifact/` + `dataset/` + `attachment/` | ✅ |
-| W3-C | `exec/src/http/public/`：公共面，对 BFF 契约逐字节不变 | ✅ |
-| W3-D | `exec/src/db/`：仓储层 | ✅ |
+| **Wave 3** | 执行面其余（**W3-D 必须先单独跑**，接口定死再并行其余三个） | ⚠️ 部分 |
+| W3-A | `exec/src/http/internal-*` + HMAC 中间件 | ⚠️ fs/shell/jobs 真实；artifact 是占位，fs 的 find/grep 是占位 |
+| W3-B | `exec/src/artifact/` + `dataset/` + `attachment/` | ❌ 仅 attachment 可用；artifact/dataset 见 [gap-audit](gap-audit.md) |
+| W3-C | `exec/src/http/public/`：公共面，对 BFF 契约逐字节不变 | ⚠️ 形状一致、**语义不一致**：产物四条路由与数据集上传是占位 |
+| W3-D | `exec/src/db/`：仓储层 | ⚠️ 表结构缺 `sha256`/`mime_type`，产物面补实现时要改 |
 | **Wave 4** | Agent 侧 provider | ✅ 独立验收（不看 subagent 自述） |
 | W4-A | `runtime/providers/remote-{fs,shell,jobs}.ts` | ✅ RPC 代理，本机零文件/进程 |
 | W4-B | `runtime/providers/mysql-session-store.ts`（8 个方法） | ✅ 官方 chunk-rows + seq 校验 |
