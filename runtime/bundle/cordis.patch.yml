@@ -1,0 +1,79 @@
+# 我们的组合层——叠在 dsh-base 之上（dsh-rebuild 2 runtime/bundle/cordis.patch.yml）。
+# 这是第 1 层 patch；用户的 cordis.patch.yml 会叠在它之上，最后写入获胜。
+# 每个被命中的 id 都会整体替换 config（不做深度合并），因此被覆盖的字段必须重述。
+
+# -- 凭据：用只读环境变量实现替换 dsh-credentials-local（无租户维度的文件热重载在多租户下是漂移面） --
+- id: credentials
+  name: '../src/providers/env-credentials.js'
+  config: {}
+
+# -- 模型目录：固定路由名 deepseek-official（包自占），指向自有网关，协议与官方一致 --
+- id: llm-deepseek
+  config:
+    apiKeyEnv: LLMIO_API_KEY
+    baseURL: !!js (process.env.LLMIO_BASE_URL || process.env.DEEPSEEK_BASE_URL || 'https://api.deepseek.com')
+    defaultContextWindow: 262144
+    models:
+      - id: deepseek-v4-flash
+        name: DeepSeek V4 Flash
+        contextWindow: 262144
+      - id: deepseek-v4-pro
+        name: DeepSeek V4 Pro
+        contextWindow: 262144
+        reasoning: true
+      - id: private-reasoner
+        description: Company-hosted reasoning model
+        contextWindow: 512000
+        reasoning: true
+
+# -- 本机执行族一律不挂（ADR 0007 D11）。远程 fs/shell/jobs 以 Cordis 插件提供服务，
+#    这样 tool-bash / tool-fs 才能在 boot 时等到 fs/shell/jobs 并激活。
+#    tool-fs-search 依赖本机 subprocess+ripgrep，继续关掉。 --
+- id: sandbox
+  disabled: true
+- id: sandbox-policy
+  disabled: true
+- id: bash-sandbox
+  disabled: true
+- id: pwsh-sandbox
+  disabled: true
+- id: fs-sandbox
+  disabled: true
+- id: subprocess
+  disabled: true
+- id: jobs
+  disabled: true
+- id: tool-pwsh
+  disabled: true
+- id: tool-fs-search
+  disabled: true
+- insert:
+    - id: remote-fs
+      name: '../dist/providers/remote-fs.js'
+      config: {}
+    - id: remote-shell
+      name: '../dist/providers/remote-shell.js'
+      config: {}
+    - id: remote-jobs
+      name: '../dist/providers/remote-jobs.js'
+      config: {}
+
+# -- 不组合原生审批/权限预设（ADR 0007 D4）；企业策略在 Wave 5 自建挂载点。 --
+- id: approval
+  disabled: true
+- id: permission
+  disabled: true
+
+# -- 关掉本机 JSONL 会话落盘。MySQL PersistenceBackend 由 boot.createSessionBackend 按 Run 装配。 --
+- id: session-persistence-jsonl
+  disabled: true
+- id: session-checkpoint-policy
+  disabled: true
+- id: session-query-sqlite
+  disabled: true
+
+# -- 子 Agent：原生 trusted same-process 对不上，退回 durable 队列面。 --
+- id: subagent-spawn-in-process
+  name: '../src/providers/durable-subagent.js'
+  config:
+    providerName: spawn
