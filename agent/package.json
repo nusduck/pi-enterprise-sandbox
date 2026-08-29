@@ -39,7 +39,7 @@
     "@opentelemetry/sdk-node": "^0.220.0",
     "@opentelemetry/sdk-trace-base": "^2.9.0",
     "@opentelemetry/semantic-conventions": "^1.43.0",
-    "@pi/runtime": "file:../runtime",
+    "@pi/runtime": "file:./runtime",
     "bullmq": "^5.80.2",
     "ioredis": "^5.10.1",
     "jiti": "2.6.1",

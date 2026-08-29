@@ -3,6 +3,10 @@
 .venv/
 .runtime/
 node_modules/
+# Build outputs: every image compiles its own. Shipping the host's would let a
+# stale local `dist/` silently win over the in-image build.
+dist/
+*.tsbuildinfo
 *.egg-info/
 .pytest_cache/
 .smoke-tmp/

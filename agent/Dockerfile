@@ -1,18 +1,21 @@
 # Node major pin: runtime-versions.json → node.docker_image
-# Compose context is the repo root so `@pi/runtime` (file:../runtime) and
-# `@pi/contract` are installable. The HTTP process and worker both import them.
+# Compose context is the repo root so `@pi/contract` (file:../../contract from
+# agent/runtime) is installable. The HTTP process and worker both import it.
 FROM node:22-slim
 WORKDIR /app
 
 COPY tsconfig.base.json ./
 COPY contract ./contract
-COPY runtime ./runtime
+COPY agent/runtime ./agent/runtime
 COPY agent/package.json agent/package-lock.json ./agent/
 
 WORKDIR /app/contract
 RUN npm ci --ignore-scripts && npx tsc
 
-WORKDIR /app/runtime
+# `@pi/runtime` is agent-private (file:./runtime) and must be compiled before
+# the agent install resolves it. `dist/` is dockerignored, so the later
+# `COPY agent ./agent` cannot clobber what this stage builds.
+WORKDIR /app/agent/runtime
 RUN npm ci --ignore-scripts && npx tsc
 
 WORKDIR /app/agent

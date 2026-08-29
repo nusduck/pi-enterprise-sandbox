@@ -73,12 +73,33 @@ def test_package_engines_match_pins(pins: dict, rel: str) -> None:
     assert engines.get("node") == pins["node"]["engines"], rel
 
 
-def test_agent_has_no_earendil_direct_deps(pins: dict) -> None:
-    pkg = _read_json("agent/package.json")
+@pytest.mark.parametrize(
+    "rel",
+    [
+        "agent/package.json",
+        "agent/runtime/package.json",
+        "exec/package.json",
+        "contract/package.json",
+    ],
+)
+def test_no_earendil_direct_deps(pins: dict, rel: str) -> None:
+    """ADR 0007 版本策略：三个包的直接依赖中不得出现 @earendil-works/*。
+
+    早前这条只查 agent/，runtime/ 与 exec/ 是漏网的——重建期间任何一个包
+    重新引入 Pi SDK 都会让"不得作为直接依赖"这条约束静默失效。
+    """
+    pkg = _read_json(rel)
     deps = {**(pkg.get("dependencies") or {}), **(pkg.get("devDependencies") or {})}
     hits = [k for k in deps if k.startswith("@earendil-works/")]
-    assert hits == [], hits
-    assert deps.get("@pi/runtime") == "file:../runtime"
+    assert hits == [], (rel, hits)
+
+
+def test_runtime_is_agent_private(pins: dict) -> None:
+    """`@pi/runtime` 只有 agent 一个消费者，所以它住在 agent/runtime/。"""
+    deps = _read_json("agent/package.json").get("dependencies") or {}
+    assert deps.get("@pi/runtime") == "file:./runtime"
+    assert (REPO_ROOT / "agent" / "runtime" / "package.json").is_file()
+    assert not (REPO_ROOT / "runtime").exists()
 
 
 def test_api_server_does_not_depend_on_sdk(pins: dict) -> None:

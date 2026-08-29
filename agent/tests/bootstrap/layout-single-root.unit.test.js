@@ -11,6 +11,18 @@ import { fileURLToPath } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 
+/** Relative paths of every file under `dir`, skipping node_modules. */
+function collectFiles(dir, prefix = '') {
+  const out = [];
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    if (entry.name === 'node_modules') continue;
+    const rel = prefix ? `${prefix}/${entry.name}` : entry.name;
+    if (entry.isDirectory()) out.push(...collectFiles(path.join(dir, entry.name), rel));
+    else out.push(rel);
+  }
+  return out;
+}
+
 describe('agent single production source root', () => {
   it('keeps dual-tree package-root dirs absent', () => {
     for (const name of [
@@ -21,10 +33,24 @@ describe('agent single production source root', () => {
       'infrastructure',
       'skills',
     ]) {
-      assert.equal(
-        fs.existsSync(path.join(root, name)),
-        false,
+      const dir = path.join(root, name);
+      if (!fs.existsSync(dir)) continue;
+      // One narrow exception: a nested npm package (its own package.json, its
+      // own build) is not a dual tree. `agent/runtime/` is `@pi/runtime`, the
+      // TypeScript DSH composition layer that only agent consumes. The gate
+      // still has to hold, so prove it is a package and that it contributes no
+      // production JS that could shadow agent/src/<name>/.
+      assert.ok(
+        fs.existsSync(path.join(dir, 'package.json')),
         `unexpected dual-tree directory agent/${name}`,
+      );
+      const strays = collectFiles(dir).filter(
+        (rel) => rel.endsWith('.js') && !rel.startsWith('node_modules/') && !rel.startsWith('dist/'),
+      );
+      assert.deepEqual(
+        strays,
+        [],
+        `agent/${name} is a nested package and must ship no production .js: ${strays.join(', ')}`,
       );
     }
   });

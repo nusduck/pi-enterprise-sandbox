@@ -66,7 +66,7 @@ def _production_sources() -> list[Path]:
         # DSH 重建的三个新 TS 包（ADR 0007 / 0008）。刻意**不给任何 hotspot
         # 预算**：新代码从第一天就守 1000 行上限，不把既有债务复制过去。
         *ROOT.joinpath("contract", "src").rglob("*.ts"),
-        *ROOT.joinpath("runtime", "src").rglob("*.ts"),
+        *ROOT.joinpath("agent", "runtime", "src").rglob("*.ts"),
         *ROOT.joinpath("exec", "src").rglob("*.ts"),
     ]
     sources.extend(ROOT.joinpath("agent").glob("*.js"))

@@ -425,9 +425,6 @@ export function createSkillManager(options = {}) {
         } else if (session?.resourceLoader?.reload) {
           await session.resourceLoader.reload();
         }
-        if (session?.resourceLoader) {
-          // DSH 无 Pi resourceLoader 扩展扫描；技能列表走正式 Skill 根。
-        }
         const loaded =
           session?.resourceLoader?.getSkills?.()?.skills ||
           session?.getSkills?.()?.skills ||
@@ -436,13 +433,12 @@ export function createSkillManager(options = {}) {
         const installed = describeInstalledSkills(skillRoots, {
           writableRoot: userRoot,
         }).map((skill) => skill.name);
-        if (onAfterReload) {
-          try {
-            await onAfterReload();
-          } catch (error) {
-            console.warn('[skills] onAfterReload failed:', error?.message || error);
-          }
-        }
+        // Fail closed. Pi rebuilt the extension runtime inside session.reload()
+        // and this manager asserted the loader reported no errors; DSH composes
+        // plugins once at boot, so `onAfterReload` is the only post-reload
+        // rebuild left. Swallowing its failure would report a successful reload
+        // over a projection that was never rebuilt — the caller must see it.
+        if (onAfterReload) await onAfterReload();
         const summary = skillCount != null
           ? `reloaded loader skills=${skillCount} installed=${installed.length}`
           : `reload marked; installed=${installed.length}`;

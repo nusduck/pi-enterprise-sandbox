@@ -10,7 +10,7 @@ import { encodeSseStream, projectToSse, type SseEvent } from '../src/projection/
 
 const fixturePath = join(
   dirname(fileURLToPath(import.meta.url)),
-  '../../tests/fixtures/sse_events.json',
+  '../../../tests/fixtures/sse_events.json',
 );
 
 interface Fixture {

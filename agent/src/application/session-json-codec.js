@@ -546,7 +546,17 @@ export async function captureSessionSnapshotPayload(input) {
       entries: [...sessionManager.getEntries()],
     };
   }
-  if (input.recoveredPayload) return input.recoveredPayload;
+  // A recovered payload comes off the wire and may be missing either half.
+  // Returning it verbatim would checkpoint a snapshot with no header (or no
+  // entries array), which only surfaces on the next recovery — normalize both
+  // halves here so every return of this function has the same shape.
+  const recovered = input.recoveredPayload;
+  if (recovered) {
+    return {
+      header: recovered.header ?? buildSessionHeader({ id: agentSessionId, cwd: cwd ?? '' }),
+      entries: Array.isArray(recovered.entries) ? recovered.entries : [],
+    };
+  }
   return {
     header: buildSessionHeader({ id: agentSessionId, cwd: cwd ?? '' }),
     entries: [],
