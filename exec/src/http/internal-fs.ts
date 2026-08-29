@@ -21,6 +21,8 @@ import { WorkspaceFileSystem } from '../fs/workspace-fs.js';
 import type { WorkspaceContext } from '../types.js';
 import type { WorkspaceManager } from '../workspace/manager.js';
 import { redactPhysicalRoots } from '../fs/redact.js';
+import { fileSearchService } from '../search/index.js';
+import type { SearchRoot } from '../search/index.js';
 
 export interface InternalFsDeps {
   readonly workspaceManager: WorkspaceManager;
@@ -175,21 +177,71 @@ export function registerInternalFsRoutes(app: import('hono').Hono, deps: Interna
     }
   });
 
-  // find / grep 单独端点（服务 dsh-tool-fs-search，形状与 fs  primitives 不同）
-  app.post('/internal/v1/fs/find', (c) => withFs<{ target: FsTarget; pattern?: string; options?: unknown }>(c, deps, async (fs, _ctx, payload) => {
-    // 复用 workspace-fs 的 list 能力做简化实现；真实搜索由 dsh-tool-fs-search 提供，exec 侧透传
-    const target = (payload as Record<string, unknown>)['target'] as FsTarget | undefined;
-    if (!target) throw new ContractError('ENVELOPE_INVALID', 'target required');
-    // 简化：返回 listDir 结果作为 find 占位
-    return await fs.listDir(target);
-  }));
+  // find / grep 单独端点（服务 dsh-tool-fs-search，形状与 fs primitives 不同）。
+  //
+  // 这两条曾是占位：find 忽略 pattern、grep 忽略 query，双双返回 `listDir()`
+  // 的结果。模型因此会拿到"没报错但内容是错的"回答——比报错更糟。现在走
+  // `search/` 的真实实现，与公共面同一个服务，不再各写一份。
+  app.post('/internal/v1/fs/find', (c) =>
+    withFs<{ target: FsTarget; pattern?: string; options?: Record<string, unknown> }>(
+      c,
+      deps,
+      async (fs, ctx, payload) => {
+        const p = payload as Record<string, unknown>;
+        const target = p['target'] as FsTarget | undefined;
+        if (!target) throw new ContractError('ENVELOPE_INVALID', 'target required');
+        const opts = (p['options'] ?? {}) as Record<string, unknown>;
+        return await fileSearchService.find(await searchRootOf(fs, ctx, target), {
+          pattern: typeof p['pattern'] === 'string' ? (p['pattern'] as string) : '*',
+          type: (opts['type'] as string | undefined) ?? null,
+          maxDepth: (opts['maxDepth'] as number | undefined) ?? null,
+          limit: (opts['limit'] as number | undefined) ?? null,
+        });
+      },
+    ),
+  );
 
-  app.post('/internal/v1/fs/grep', (c) => withFs<{ target: FsTarget; pattern: string }>(c, deps, async (fs, _ctx, payload) => {
-    if (!payload || typeof (payload as Record<string, unknown>)['pattern'] !== 'string') throw new ContractError('ENVELOPE_INVALID', 'pattern required');
-    const target = (payload as Record<string, unknown>)['target'] as FsTarget | undefined;
-    if (!target) throw new ContractError('ENVELOPE_INVALID', 'target required');
-    // 简化占位：读文本后做字符串匹配，避免引入额外依赖；真实 grep 由上游工具提供
-    const entries = await fs.listDir(target);
-    return entries;
-  }));
+  app.post('/internal/v1/fs/grep', (c) =>
+    withFs<{ target: FsTarget; pattern: string; options?: Record<string, unknown> }>(
+      c,
+      deps,
+      async (fs, ctx, payload) => {
+        const p = payload as Record<string, unknown>;
+        const target = p['target'] as FsTarget | undefined;
+        if (!target) throw new ContractError('ENVELOPE_INVALID', 'target required');
+        // `dsh-tool-fs-search` 把查询串叫 `pattern`；`search/` 内部叫 `query`。
+        const query = p['pattern'];
+        if (typeof query !== 'string') {
+          throw new ContractError('ENVELOPE_INVALID', 'pattern required');
+        }
+        const opts = (p['options'] ?? {}) as Record<string, unknown>;
+        return await fileSearchService.grep(await searchRootOf(fs, ctx, target), {
+          query,
+          glob: (opts['glob'] as string | undefined) ?? null,
+          regex: Boolean(opts['regex']),
+          caseSensitive: opts['caseSensitive'] !== false,
+          context: (opts['context'] as number | undefined) ?? null,
+          limit: (opts['limit'] as number | undefined) ?? null,
+          ...(typeof opts['outputMode'] === 'string'
+            ? { outputMode: opts['outputMode'] as string }
+            : {}),
+        });
+      },
+    ),
+  );
+}
+
+/**
+ * 把一个 `FsTarget` 解析成搜索起点。
+ *
+ * 复用 `WorkspaceFileSystem.resolve()`——围栏只有一处，搜索不自己再算一遍
+ * 路径（ADR 0008 D2 的同一条纪律：不让两处各算各的）。
+ */
+async function searchRootOf(
+  fs: WorkspaceFileSystem,
+  ctx: WorkspaceContext,
+  target: FsTarget,
+): Promise<SearchRoot> {
+  const resolved = await fs.resolve(target as unknown as string);
+  return { root: ctx.workspaceRoot, start: resolved.targetKey, publicPrefix: null };
 }

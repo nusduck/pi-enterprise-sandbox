@@ -125,8 +125,28 @@ describe('public: byte-identical contract vs Python', () => {
       body: JSON.stringify({ path: '.' }),
     });
     assert.equal(res.status, 200);
-    const body = await res.json() as { files: unknown[] };
-    assert.ok(Array.isArray(body.files));
+    // Python `/ls` 的 response_model 是 `FileSearchResponse`：`items` + `skipped`
+    // + 六字段 `stats` + `truncated` + `stop_reason`。这条用例原先断言的
+    // `{files}` 是占位实现自己发明的形状，断言跟着占位实现走了。
+    const body = (await res.json()) as {
+      items: unknown[];
+      skipped: unknown[];
+      stats: Record<string, number>;
+      truncated: boolean;
+      stop_reason: string | null;
+    };
+    assert.ok(Array.isArray(body.items));
+    assert.ok(Array.isArray(body.skipped));
+    assert.equal(body.truncated, false);
+    assert.equal(body.stop_reason, null);
+    assert.deepEqual(Object.keys(body.stats).sort(), [
+      'bytes_scanned',
+      'depth_reached',
+      'duration_ms',
+      'examined',
+      'matched',
+      'skipped',
+    ]);
   });
 
   // ── artifacts ───────────────────────────────────────────────────────

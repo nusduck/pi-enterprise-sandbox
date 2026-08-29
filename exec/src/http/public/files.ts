@@ -25,6 +25,8 @@ import { parseActingHeaders, requireOwnedSession } from './ownership.js';
 import { redactPhysicalRoots } from '../../fs/redact.js';
 import type { WorkspaceManager } from '../../workspace/manager.js';
 import { joinContained } from '../../workspace/ids.js';
+import { fileSearchService } from '../../search/index.js';
+import type { SearchRoot } from '../../search/index.js';
 
 export interface PublicFilesDeps {
   readonly workspaceManager: WorkspaceManager;
@@ -270,7 +272,33 @@ export function registerPublicFilesRoutes(app: Hono, deps: PublicFilesDeps): voi
     }
   });
 
-  // POST /ls /find /grep 三个结构化搜索（简化：基于 readdir/grep）
+  // POST /ls /find /grep —— 三个结构化搜索，全部走 `search/` 的真实实现。
+  //
+  // 这三条曾经是占位：ls 回 `{files,is_dir}`（Python 是 `{items}`），find/grep
+  // 恒回空。形状和语义都不对，但断言形状的用例照样绿。见
+  // docs/design/waves/gap-audit.md。
+  //
+  // `searchRootFor` 把归属校验后的工作区根包成 `SearchRoot`。目前只覆盖工作区
+  // 根，`/tmp` 作用域与 Skill 根待后续（见 search/service.ts 的 Known Limitations）。
+  const searchRootFor = async (
+    workspaceRoot: string,
+    logicalPath: string,
+    roots: readonly string[],
+  ): Promise<SearchRoot> => ({
+    root: workspaceRoot,
+    start: await resolveInWorkspace(workspaceRoot, logicalPath, roots),
+    publicPrefix: null,
+  });
+
+  /** 与 Python `_search_http_error` 对齐：权限 403，其余 400，一律脱敏。 */
+  const searchError = (err: unknown, roots: readonly string[]): HttpError => {
+    if (err instanceof HttpError) return err;
+    const raw = err instanceof Error ? err.message : String(err);
+    const msg = redactPhysicalRoots(raw, roots);
+    if ((err as NodeJS.ErrnoException).code === 'EACCES') return forbidden(msg);
+    return badRequest(msg);
+  };
+
   app.post('/sessions/:sessionId/files/ls', async (c) => {
     const sessionId = c.req.param('sessionId') ?? '';
     const acting = parseActingHeaders(actingFrom(c));
@@ -278,21 +306,20 @@ export function registerPublicFilesRoutes(app: Hono, deps: PublicFilesDeps): voi
     try {
       const own = await requireOwnedSession(sessionId, deps, acting, roots);
       roots = own.physicalRoots;
-      const body = await c.req.json().catch(() => ({})) as { path?: string };
-      const rel = body.path ?? '.';
-      const abs = await resolveInWorkspace(own.workspace.workspaceRoot, rel, roots);
-      const entries = await readdir(abs, { withFileTypes: true }).catch((err: unknown) => {
-        const raw = err instanceof Error ? err.message : String(err);
-        // 与 Python _search_http_error 对齐：Permission 403，否则 400
-        if ((err as NodeJS.ErrnoException).code === 'EACCES') throw forbidden(redactPhysicalRoots(raw, roots));
-        throw badRequest(redactPhysicalRoots(raw, roots));
+      const body = (await c.req.json().catch(() => ({}))) as {
+        path?: string;
+        depth?: number;
+        include_hidden?: boolean;
+      };
+      const where = await searchRootFor(own.workspace.workspaceRoot, body.path ?? '.', roots);
+      const result = await fileSearchService.ls(where, {
+        depth: body.depth ?? 1,
+        includeHidden: Boolean(body.include_hidden),
       });
-      return c.json({ files: entries.map((e) => ({ name: e.name, is_dir: e.isDirectory() })), total: entries.length, truncated: false, stop_reason: null, stats: { matched: entries.length } });
+      return c.json(result);
     } catch (err) {
-      const status = err instanceof HttpError ? err.status : 400;
-      const raw = err instanceof Error ? err.message : String(err);
-      const msg = err instanceof HttpError ? err.message : redactPhysicalRoots(raw, roots);
-      return c.json({ error: msg, code: (err as HttpError).code }, status as never);
+      const mapped = searchError(err, roots);
+      return c.json(errorBody(mapped, roots), mapped.status as never);
     }
   });
 
@@ -303,11 +330,24 @@ export function registerPublicFilesRoutes(app: Hono, deps: PublicFilesDeps): voi
     try {
       const own = await requireOwnedSession(sessionId, deps, acting, roots);
       roots = own.physicalRoots;
-      // 简化占位：返回与 ls 相同结构，保证 BFF 不会因 shape 误判
-      return c.json({ files: [], total: 0, truncated: false, stop_reason: null, stats: { matched: 0 } });
+      const body = (await c.req.json().catch(() => ({}))) as {
+        path?: string;
+        pattern?: string;
+        type?: string | null;
+        max_depth?: number | null;
+        limit?: number | null;
+      };
+      const where = await searchRootFor(own.workspace.workspaceRoot, body.path ?? '.', roots);
+      const result = await fileSearchService.find(where, {
+        pattern: body.pattern ?? '*',
+        type: body.type ?? null,
+        maxDepth: body.max_depth ?? null,
+        limit: body.limit ?? null,
+      });
+      return c.json(result);
     } catch (err) {
-      const status = err instanceof HttpError ? err.status : 400;
-      return c.json(errorBody(err, roots), status as never);
+      const mapped = searchError(err, roots);
+      return c.json(errorBody(mapped, roots), mapped.status as never);
     }
   });
 
@@ -318,10 +358,28 @@ export function registerPublicFilesRoutes(app: Hono, deps: PublicFilesDeps): voi
     try {
       const own = await requireOwnedSession(sessionId, deps, acting, roots);
       roots = own.physicalRoots;
-      return c.json({ matches: [], total: 0, truncated: false, stop_reason: null, stats: { matched: 0 } });
+      const body = (await c.req.json().catch(() => ({}))) as {
+        path?: string;
+        query?: string;
+        glob?: string | null;
+        regex?: boolean;
+        case_sensitive?: boolean;
+        context?: number | null;
+        limit?: number | null;
+      };
+      const where = await searchRootFor(own.workspace.workspaceRoot, body.path ?? '.', roots);
+      const result = await fileSearchService.grep(where, {
+        query: body.query ?? '',
+        glob: body.glob ?? null,
+        regex: Boolean(body.regex),
+        caseSensitive: body.case_sensitive !== false,
+        context: body.context ?? null,
+        limit: body.limit ?? null,
+      });
+      return c.json(result);
     } catch (err) {
-      const status = err instanceof HttpError ? err.status : 400;
-      return c.json(errorBody(err, roots), status as never);
+      const mapped = searchError(err, roots);
+      return c.json(errorBody(mapped, roots), mapped.status as never);
     }
   });
 }

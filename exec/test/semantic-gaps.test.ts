@@ -82,7 +82,7 @@ describe('semantic gaps: search / artifact / dataset (expected red until impleme
     const res = await app.request(`/sessions/${id}/files/grep`, {
       method: 'POST',
       headers: json,
-      body: JSON.stringify({ pattern: 'NEEDLE', path: '.' }),
+      body: JSON.stringify({ query: 'NEEDLE', path: '.' }),
     });
     assert.equal(res.status, 200);
     const body = (await res.json()) as { matches?: { path: string; line: number; text: string }[] };
@@ -109,7 +109,7 @@ describe('semantic gaps: search / artifact / dataset (expected red until impleme
     const res = await app.request(`/sessions/${id}/files/grep`, {
       method: 'POST',
       headers: json,
-      body: JSON.stringify({ pattern: 'NEED', path: '.' }),
+      body: JSON.stringify({ query: 'NEED', path: '.' }),
     });
     assert.equal(res.status, 200);
     const body = (await res.json()) as { matches?: { path: string }[] };
@@ -140,10 +140,14 @@ describe('semantic gaps: search / artifact / dataset (expected red until impleme
       body: JSON.stringify({ pattern: '*.md', path: '.' }),
     });
     assert.equal(res.status, 200);
-    const body = (await res.json()) as { files: { path: string }[]; total: number };
+    // Python `FindRequest` → `FileSearchResponse`：是 `items`，不是 `files`。
+    const body = (await res.json()) as {
+      items: { path: string }[];
+      stats: { matched: number };
+    };
 
-    assert.equal(body.total, 2, '两个 .md 文件');
-    const found = body.files.map((f) => f.path).sort();
+    assert.equal(body.stats.matched, 2, '两个 .md 文件');
+    const found = body.items.map((f) => f.path).sort();
     assert.deepEqual(found, ['keep.md', 'nested/also.md']);
   });
 
