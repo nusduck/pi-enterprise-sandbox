@@ -1,0 +1,32 @@
+{
+  "name": "@pi/contract",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Agent 与执行面之间的共享类型与 RPC 信封。类型系统即契约。",
+  "type": "module",
+  "exports": {
+    ".": "./dist/index.js",
+    "./errors.js": "./dist/errors.js",
+    "./envelope.js": "./dist/envelope.js",
+    "./hmac.js": "./dist/hmac.js",
+    "./errors": "./dist/errors.js",
+    "./envelope": "./dist/envelope.js",
+    "./hmac": "./dist/hmac.js"
+  },
+  "types": "./dist/index.d.ts",
+  "engines": { "node": ">=22.19.0 <23" },
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc --noEmit",
+    "test": "tsx --test test/**/*.test.ts"
+  },
+  "dependencies": {
+    "@deepseek-ai/dsh-fs": "0.1.1-rc.2",
+    "@deepseek-ai/dsh-shell": "0.1.1-rc.2"
+  },
+  "devDependencies": {
+    "@types/node": "26.4.0",
+    "tsx": "4.23.12",
+    "typescript": "5.9.3"
+  }
+}
