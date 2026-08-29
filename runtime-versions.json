@@ -16,14 +16,20 @@
     "file": "3.11",
     "notes": "Minor pin only (no invented patch/digest). Sandbox service image and CI install 3.11."
   },
+  "dsh": {
+    "packages": "0.1.1-rc.2",
+    "cordis": "4.0.1",
+    "notes": "Wave 6: Agent runtime is @pi/runtime on DSH. @earendil-works/* is not a direct dependency."
+  },
   "pi_sdk": {
+    "status": "removed",
     "pi_coding_agent": "0.80.3",
     "pi_ai": "0.80.3",
     "package_names": {
       "pi_coding_agent": "@earendil-works/pi-coding-agent",
       "pi_ai": "@earendil-works/pi-ai"
     },
-    "notes": "Exact pins only (no ^/~). BFF (api-server) must not depend on the SDK. Frontend does not pin the coding-agent SDK."
+    "notes": "Superseded by DSH. Kept as historical pin record; must not appear in agent/runtime/exec direct dependencies."
   },
   "sandbox_tooling_node": {
     "major": 22,

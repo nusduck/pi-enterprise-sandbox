@@ -16,8 +16,8 @@ docker compose up --build -d
 curl -f http://localhost:3000/            # Frontend
 curl -f http://localhost:4000/health/ready  # BFF + dependencies
 curl -f http://localhost:4100/health      # Agent
-docker compose exec sandbox curl -fsS http://localhost:8081/health      # Sandbox liveness
-docker compose exec sandbox curl -fsS http://localhost:8081/ready       # Sandbox readiness (workspaces + DB)
+docker compose exec sandbox node -e "fetch('http://127.0.0.1:8081/health').then(r=>r.text()).then(console.log)"
+docker compose exec sandbox node -e "fetch('http://127.0.0.1:8081/ready').then(r=>r.text()).then(console.log)"
 ```
 
 | 服务 | 端口 | 容器内端口 |

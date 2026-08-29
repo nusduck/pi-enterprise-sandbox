@@ -27,8 +27,8 @@ REQUIRED_SKILLS = {
 RUNTIME_SKILL_PATH_FILES = (
     ROOT / "agent" / "src" / "skills" / "paths.js",
     ROOT / "agent" / "src" / "lib" / "text-redaction.js",
-    ROOT / "sandbox" / "isolation" / "bubblewrap.py",
-    ROOT / "sandbox" / "services" / "policy_checker.py",
+    ROOT / "exec" / "src" / "isolation" / "profile.ts",
+    ROOT / "exec" / "Dockerfile",
     ROOT / "sandbox" / "Dockerfile",
     ROOT / "docker-compose.yml",
     ROOT / "docker-compose.prod.yml",

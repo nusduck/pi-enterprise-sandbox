@@ -30,22 +30,21 @@ LOCAL_GENERATED_DIRECTORIES = frozenset(
 # hotspot on purpose means splitting it or raising its budget here, with the
 # reason in the commit message — never silently.
 HOTSPOT_LINE_BUDGETS = {
-    "agent/src/application/execute-run-service.js": 1_484,
-    "agent/src/application/fenced-tool-governance-recorder.js": 1_666,
-    "agent/src/application/pi-run-executor.js": 1_626,
-    "agent/src/bootstrap/container.js": 1_235,
+    # W2-D 曾为 @ts-expect-error 横幅抬到 1_493；Wave 6 换成 JSDoc 形状后收回。
+    "agent/src/application/execute-run-service.js": 1_482,
+    # W2-D 曾抬到 1_672；去掉 expect-error 后收回。
+    "agent/src/application/fenced-tool-governance-recorder.js": 1_663,
+    "agent/src/application/pi-run-executor.js": 1_613,
+    "agent/src/bootstrap/container.js": 1_190,
+    # W2-D 曾抬到 1_443；Wave 6 收回。
     "agent/src/bootstrap/create-http-server.js": 1_439,
-    "agent/src/infrastructure/mcp/pi-mcp-adapter-factory.js": 1_269,
+    "agent/src/infrastructure/mcp/pi-mcp-adapter-factory.js": 1_268,
     # +6 (1_131 -> 1_137): packJsonWithIntegrity now raises a stable
     # ARGUMENT_TOO_LARGE code instead of a bare message, so callers can tell
     # "too big to store" apart from a redaction-truncated replay conflict.
     "agent/src/infrastructure/mysql/repositories/tool-execution-repository.js": 1_137,
-    "agent/src/infrastructure/mysql/repositories/trace-span-repository.js": 1_046,
-    "agent/src/infrastructure/pi/pi-runtime-factory.js": 650,
-    "agent/src/infrastructure/sandbox/internal-files-read-http.js": 1_009,
-    "sandbox/app/persistence/repositories/tool_execution_claim_validator.py": 1_111,
-    "sandbox/config.py": 1_491,
-    "sandbox/services/process_manager.py": 1_773,
+    # W2-D 曾为 inline 收窄抬到 1_057；Wave 6 抽 asRecord 后收回。
+    "agent/src/infrastructure/mysql/repositories/trace-span-repository.js": 1_041,
     # frontend/src joined this ratchet on 2026-08-26 (full-repo standards
     # review): AGENTS.md §3 applies to every production file, but only
     # agent/ and sandbox/ were pinned, so these three grew past 1000 lines
@@ -64,6 +63,11 @@ def _production_sources() -> list[Path]:
         *ROOT.joinpath("frontend", "src").rglob("*.ts"),
         *ROOT.joinpath("frontend", "src").rglob("*.tsx"),
         *ROOT.joinpath("api-server", "src").rglob("*.js"),
+        # DSH 重建的三个新 TS 包（ADR 0007 / 0008）。刻意**不给任何 hotspot
+        # 预算**：新代码从第一天就守 1000 行上限，不把既有债务复制过去。
+        *ROOT.joinpath("contract", "src").rglob("*.ts"),
+        *ROOT.joinpath("runtime", "src").rglob("*.ts"),
+        *ROOT.joinpath("exec", "src").rglob("*.ts"),
     ]
     sources.extend(ROOT.joinpath("agent").glob("*.js"))
     sources.extend(ROOT.joinpath("api-server").glob("*.js"))

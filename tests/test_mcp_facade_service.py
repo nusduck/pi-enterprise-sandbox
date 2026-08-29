@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import pytest
 
+pytest.importorskip("pytest_asyncio")
+
 from sandbox.mcp.context_store import ContextStore
 from sandbox.mcp.service import McpFacadeError, McpFacadeService
 from sandbox.mcp.settings import McpSettings

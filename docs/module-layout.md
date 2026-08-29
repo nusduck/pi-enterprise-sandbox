@@ -26,8 +26,43 @@
 | `api-server/` | BFF | `api-server/src/**` | `server.js` |
 | `sandbox/` | FastAPI execution plane | Python package `sandbox/` (installable) | `sandbox/main.py` (uvicorn) |
 | `frontend/` | Vite React app | `frontend/src/**` (FSD-style) | `index.html` + Vite |
+| `contract/` | Agent↔执行面共享类型与 RPC 信封（TS） | `contract/src/**` | `src/index.ts` |
+| `runtime/` | Agent 侧 DSH 组合层：provider / 策略 / 投影（TS） | `runtime/src/**` | `src/boot.ts` |
+| `exec/` | 执行面：隔离、文件、命令、作业、产物（TS） | `exec/src/**` | `src/main.ts` |
 
 Do **not** reintroduce parallel production trees at the package root that mirror `src/` (e.g. `agent/application` next to `agent/src/application`).
+
+---
+
+## DSH 重建的三个新包（ADR 0007 / 0008）
+
+```text
+contract/          Agent 与执行面之间的共享契约。两侧同为 TS，所以不手写 DTO：
+  src/               直接复用 @deepseek-ai/dsh-fs / dsh-shell 的类型，本包只加
+    envelope.ts      RPC 信封（必带 workspaceId，多实例路由的预留键）
+    errors.ts        错误码 + 物理路径脱敏（脱敏参数**必填**，不给默认值）
+    hmac.ts          两侧共用一份签名实现
+runtime/           Agent 侧的 DSH 组合层
+  bundle/            cordis.patch.yml —— 叠在 dsh-base 之上的组合层
+  src/providers/     ctx.fs / ctx.shell / ctx.jobs / sessionPersistence / skills / …
+  src/policy/        四个挂载点：pre-execute / guard / execute / post-execute
+  src/projection/    session/event → 平台 Run Event → SSE（契约逐字节不变）
+exec/              执行面（取代 Python 版 sandbox/）
+  src/fs/            WorkspaceFileSystem extends LocalFileSystem + 围栏
+  src/isolation/     Profile 数据模型 + 唯一的 render() + preflight 同源
+  src/shell/         命令执行与作业登记
+  src/workspace/     工作区、配额、路径
+  src/http/          内部面（HMAC）与公共面（对 BFF 契约不变）
+```
+
+**规则**
+
+- 三个新包**没有任何 hotspot 预算**：`tests/test_repository_layout.py` 已把它们纳入，
+  1000 行上限从第一天就生效。**不要把既有债务复制过来。**
+- 相对 import 必须带 `.js` 后缀（NodeNext 解析），`"type": "module"`。
+- 每个文件顶部写清楚"这是什么、为什么这样设计"，中文。
+- `exec/src/types.ts` 与 `contract/` 的导出是跨任务共享面，**改签名要先提出来**，
+  不要各写一份（可写根、路径常量都踩过这个坑）。
 
 ---
 

@@ -15,7 +15,7 @@ from starlette.responses import JSONResponse, Response, StreamingResponse
 from starlette.routing import Mount, Route
 from starlette.types import ASGIApp, Receive, Scope, Send
 
-from sandbox.artifact.infrastructure.disposition import (
+from sandbox.mcp.disposition import (
     artifact_content_disposition as content_disposition_attachment,
     artifact_filename_header,
 )

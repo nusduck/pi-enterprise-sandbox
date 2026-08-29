@@ -11,7 +11,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import asdict, dataclass
 from typing import Any
 
-from sandbox.app.domain.ulid import new_ulid
+from sandbox.mcp.ulid import new_ulid
 from sandbox.mcp.settings import McpSettings
 
 _CONTEXT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,254}$")

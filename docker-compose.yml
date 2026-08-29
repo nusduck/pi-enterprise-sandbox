@@ -77,8 +77,8 @@ services:
   # probes the formal schema or long-running Agent processes open DB pools.
   agent-migrate:
     build:
-      context: ./agent
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: agent/Dockerfile
     image: ${AGENT_IMAGE:-pi-enterprise-agent:latest}
     container_name: ${AGENT_MIGRATE_CONTAINER:-pi-enterprise-agent-migrate}
     env_file:
@@ -259,8 +259,8 @@ services:
   # directory into each execution.
   agent:
     build:
-      context: ./agent
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: agent/Dockerfile
     image: ${AGENT_IMAGE:-pi-enterprise-agent:latest}
     container_name: ${AGENT_CONTAINER:-pi-enterprise-agent}
     ports:
@@ -360,8 +360,8 @@ services:
   agent-worker:
     image: ${AGENT_IMAGE:-pi-enterprise-agent:latest}
     build:
-      context: ./agent
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: agent/Dockerfile
     container_name: ${AGENT_WORKER_CONTAINER:-pi-enterprise-agent-worker}
     env_file:
       - ${API_ENV_FILE:-.env}
@@ -442,12 +442,12 @@ services:
       - backend_internal
       - service_egress
 
-  # ── Sandbox — Safe Execution Environment (Python FastAPI) ─
+  # ── Exec — TypeScript execution plane (replaces Python sandbox) ─
   sandbox:
     init: true
     build:
       context: .
-      dockerfile: ${SANDBOX_DOCKERFILE:-sandbox/Dockerfile}
+      dockerfile: exec/Dockerfile
     image: ${SANDBOX_IMAGE:-enterprise-sandbox:latest}
     container_name: ${SANDBOX_CONTAINER:-pi-enterprise-sandbox}
     # Load project .env so SANDBOX_SHARED_ENV_KEYS / SANDBOX_EXEC_ENV_* values
@@ -562,7 +562,13 @@ services:
       sandbox-replay-redis:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8081/ready"]
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:8081/health').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -582,14 +588,10 @@ services:
       # user namespace return EPERM and leave OS orphans after LOST recovery.
       - KILL
     security_opt:
-      # Docker's default seccomp profile blocks the namespace/mount syscalls
-      # Bubblewrap needs. This repo profile narrowly adds its child/user/mount
-      # namespace operations without granting CAP_SYS_ADMIN.
-      - seccomp=./sandbox/seccomp-bubblewrap.json
-      # Bubblewrap needs to create mount namespaces inside user namespaces;
-      # docker-default AppArmor denies mount even in new user namespaces.
+      # Exec still uses Bubblewrap inside the Node process. Docker-default
+      # AppArmor denies unprivileged mount; keep it unconfined. The old
+      # sandbox/seccomp-bubblewrap.json was deleted with the Python plane.
       - apparmor=unconfined
-      # Allow the unprivileged mount namespace to mount its private /proc.
       - systempaths=unconfined
     # Sandbox API is reachable on the internal backend fabric. Development
     # workloads may explicitly use SANDBOX_NETWORK_MODE=unrestricted to reach
@@ -608,9 +610,8 @@ services:
       dockerfile: ${SANDBOX_DOCKERFILE:-sandbox/Dockerfile}
     image: ${SANDBOX_IMAGE:-enterprise-sandbox:latest}
     container_name: ${SANDBOX_MCP_CONTAINER:-pi-enterprise-sandbox-mcp}
-    # Do not use sandbox/entrypoint.sh: this process needs neither privileged
-    # storage setup nor Bubblewrap. It has no storage volumes by design.
-    entrypoint: ["/app/.venv/bin/uvicorn"]
+    # MCP facade only — no Bubblewrap, no workspace mounts.
+    entrypoint: ["uvicorn"]
     command: ["sandbox.mcp.app:app", "--host", "0.0.0.0", "--port", "8082"]
     user: "10001:10001"
     env_file:

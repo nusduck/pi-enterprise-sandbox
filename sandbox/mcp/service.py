@@ -14,7 +14,7 @@ from pathlib import PurePosixPath
 from typing import Any
 from urllib.parse import urlencode
 
-from sandbox.app.domain.ulid import new_ulid
+from sandbox.mcp.ulid import new_ulid
 from sandbox.mcp.context_store import ContextRecord, ContextStore, ContextStoreError
 from sandbox.mcp.sandbox_client import SandboxBridgeClient, SandboxBridgeError
 from sandbox.mcp.settings import McpSettings

@@ -17,6 +17,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Wave 6 checkJs 收口**: `agent/tsconfig.json` 不再 `exclude` 存活 JS；去掉 44 个 Wave 6 占位 `@ts-nocheck` 横幅，checkJs 仍为 0。布局棘轮收回 W2-D 为 `@ts-expect-error` 抬过的四条预算（`execute-run-service` / `fenced-tool-governance-recorder` / `create-http-server` / `trace-span-repository`），`internal-files-read-http.js` 已低于 1000 行退出 hotspot。
+- **Compose 构建上下文改为仓库根**: `agent` / `exec` 镜像需要 `file:../runtime` 与 `file:../contract`，因此 `docker-compose.yml` 的 build context 从包目录改为 `.`，Dockerfile 分别为 `agent/Dockerfile` 与 `exec/Dockerfile`。Agent 增加精确钉 `jiti@2.6.1` 以加载 `pi-mcp-adapter` 的 TypeScript 源。Exec 健康检查改为 Node `fetch`（`node:22-slim` 没有 curl），并去掉已删除的 Python `seccomp-bubblewrap.json`。
+
 - **System prompt 补上 Doing work 工作纪律**: 基座仍是 Pi 风格的短契约，但补了「本轮把请求做完并验证、不擅自缩放范围、进度写在用户可见回复、密钥不进回复、有交付工具就走交付工具」。todo / memory / `ask_user` / `spawn_subagent` / `submit_artifact` / `bash` 的用法加强写在各自 `promptGuidelines` 上，只有绑了这些工具的 run 才看得到——基座故意不点名，避免重复「没启某个 extension 却读到它的工具名」那类漂移。
 
 - **`skill_edit` 一次提交一组文件**: 参数从单个 `path` + `content` 改为 `files: [{path, content}]`（同一个 package，最多 32 个文件；旧形参仍然接受，这样部署前记录的审批仍能重放）。每次 Skill 变更都要花一次审批，而按文件拆分让「改一个 Skill」= N 次横幅——用户点到第三次就变成机械同意，审批疲劳本身就在削弱这道闸门；更糟的是用户可能批准一个只改了一半的 package。批次是全成或全败：先对整批做完校验（路径、包归属、`.git`、体积、`SKILL.md` 名字），再全部写进临时文件，最后统一换入，中途失败会把已换入的文件回滚。

@@ -7,6 +7,8 @@ import json
 import httpx
 import pytest
 
+pytest.importorskip("pytest_asyncio")
+
 from sandbox.mcp.sandbox_client import SandboxBridgeClient, SandboxBridgeError, _safe_bridge_error
 from sandbox.mcp.settings import McpSettings
 

@@ -22,7 +22,7 @@ PINS_PATH = REPO_ROOT / "runtime-versions.json"
 def pins() -> dict:
     assert PINS_PATH.is_file(), "runtime-versions.json must exist at repo root"
     data = json.loads(PINS_PATH.read_text(encoding="utf-8"))
-    assert "node" in data and "python" in data and "pi_sdk" in data
+    assert "node" in data and "python" in data and "dsh" in data and "pi_sdk" in data
     return data
 
 
@@ -46,8 +46,8 @@ def test_pins_declare_fixed_baselines(pins: dict) -> None:
     assert pins["python"]["ci"] == "3.11"
     assert pins["python"]["docker_image"] == "python:3.11-slim"
     assert pins["python"]["requires"] == ">=3.11,<3.12"
-    assert pins["pi_sdk"]["pi_coding_agent"] == "0.80.3"
-    assert pins["pi_sdk"]["pi_ai"] == "0.80.3"
+    assert pins["dsh"]["packages"] == "0.1.1-rc.2"
+    assert pins["dsh"]["cordis"] == "4.0.1"
     assert pins["sandbox_tooling_node"]["nodesource_setup"] == "setup_22.x"
 
 
@@ -73,17 +73,12 @@ def test_package_engines_match_pins(pins: dict, rel: str) -> None:
     assert engines.get("node") == pins["node"]["engines"], rel
 
 
-def test_agent_sdk_exact_pins(pins: dict) -> None:
+def test_agent_has_no_earendil_direct_deps(pins: dict) -> None:
     pkg = _read_json("agent/package.json")
-    deps = pkg.get("dependencies") or {}
-    coding = pins["pi_sdk"]["package_names"]["pi_coding_agent"]
-    ai = pins["pi_sdk"]["package_names"]["pi_ai"]
-    assert deps.get(coding) == pins["pi_sdk"]["pi_coding_agent"]
-    assert deps.get(ai) == pins["pi_sdk"]["pi_ai"]
-    # exact pin: no range operators
-    for name in (coding, ai):
-        spec = deps[name]
-        assert re.fullmatch(r"\d+\.\d+\.\d+", spec), f"{name} must be exact x.y.z, got {spec}"
+    deps = {**(pkg.get("dependencies") or {}), **(pkg.get("devDependencies") or {})}
+    hits = [k for k in deps if k.startswith("@earendil-works/")]
+    assert hits == [], hits
+    assert deps.get("@pi/runtime") == "file:../runtime"
 
 
 def test_api_server_does_not_depend_on_sdk(pins: dict) -> None:
@@ -128,24 +123,11 @@ def test_frontend_declares_types_node_explicitly(pins: dict) -> None:
     assert entry.get("version") == expected
 
 
-def test_agent_lockfile_pins_match_package_json(pins: dict) -> None:
-    pkg = _read_json("agent/package.json")
+def test_agent_lockfile_has_no_earendil_root_deps(pins: dict) -> None:
     lock = _read_json("agent/package-lock.json")
     root_deps = (lock.get("packages") or {}).get("", {}).get("dependencies") or {}
-    coding = pins["pi_sdk"]["package_names"]["pi_coding_agent"]
-    ai = pins["pi_sdk"]["package_names"]["pi_ai"]
-    assert root_deps.get(coding) == pkg["dependencies"][coding]
-    assert root_deps.get(ai) == pkg["dependencies"][ai]
-    # installed package versions when present in lock
-    for name, key in (
-        (coding, f"node_modules/{coding}"),
-        (ai, f"node_modules/{ai}"),
-    ):
-        entry = (lock.get("packages") or {}).get(key)
-        if entry is not None:
-            assert entry.get("version") == pins["pi_sdk"][
-                "pi_coding_agent" if name == coding else "pi_ai"
-            ]
+    hits = [k for k in root_deps if k.startswith("@earendil-works/")]
+    assert hits == [], hits
 
 
 # ── Python requires-python ──────────────────────────────────────────────────
@@ -221,16 +203,23 @@ def test_node_service_dockerfiles_use_pinned_image(pins: dict, rel: str) -> None
     assert "npm ci" in text, rel
 
 
-def test_sandbox_dockerfile_python_and_tooling_node(pins: dict) -> None:
+def test_exec_dockerfile_uses_pinned_node(pins: dict) -> None:
+    text = _read("exec/Dockerfile")
+    assert re.search(
+        rf"^FROM\s+{re.escape(pins['node']['docker_image'])}\b",
+        text,
+        re.M,
+    )
+    assert "npm ci" in text
+
+
+def test_sandbox_mcp_dockerfile_uses_pinned_python(pins: dict) -> None:
     text = _read("sandbox/Dockerfile")
     assert re.search(
         rf"^FROM\s+{re.escape(pins['python']['docker_image'])}\b",
         text,
         re.M,
     )
-    setup = pins["sandbox_tooling_node"]["nodesource_setup"]
-    assert setup in text
-    assert "setup_20.x" not in text
 
 
 # ── GitHub Actions ──────────────────────────────────────────────────────────
