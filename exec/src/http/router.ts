@@ -19,6 +19,10 @@ import { registerInternalArtifactRoutes } from './internal-artifact.js';
 import { registerInternalSessionRoutes } from './internal-session.js';
 import type { WorkspaceManager } from '../workspace/manager.js';
 import type { MySqlJobRegistry } from '../shell/job-registry.js';
+import { ArtifactService } from '../artifact/service.js';
+import { WorkspaceFileSystem } from '../fs/workspace-fs.js';
+import { Context as CordisContext } from '@deepseek-ai/cordis';
+import type { WorkspaceContext } from '../types.js';
 
 export interface InternalRouterDeps {
   readonly workspaceManager: WorkspaceManager;
@@ -30,6 +34,8 @@ export interface InternalRouterDeps {
   readonly jobRegistry: MySqlJobRegistry;
   readonly keyring: InternalHmacKeyringInput;
   readonly allowCidr?: readonly string[];
+  /** 产物服务；不传则进程内默认装配（与公共面共用同一份控制面存储）。 */
+  readonly artifactService?: ArtifactService;
 }
 
 function getClientIp(c: import('hono').Context): string {
@@ -92,7 +98,16 @@ export function createInternalRouter(deps: InternalRouterDeps): Hono {
     modeFor: deps.modeFor,
   });
   registerInternalJobsRoutes(app, { jobRegistry: deps.jobRegistry });
-  registerInternalArtifactRoutes(app);
+  registerInternalArtifactRoutes(app, {
+    workspaceManager: deps.workspaceManager,
+    systemSkillRoot: deps.systemSkillRoot,
+    enabledSkillPackagesFor: deps.enabledSkillPackagesFor,
+    artifactService:
+      deps.artifactService ??
+      new ArtifactService(
+        (ws: WorkspaceContext) => new WorkspaceFileSystem(new CordisContext() as never, ws),
+      ),
+  });
   registerInternalSessionRoutes(app, { workspaceManager: deps.workspaceManager });
 
   // 兜底错误处理：任何未捕获的抛错都脱敏后 500

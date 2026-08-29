@@ -1,26 +1,40 @@
 /**
- * 公共面产物路由——对 BFF `/api/artifacts` 与 Python `artifact/api/public.py` 逐字节不变。
+ * 公共面产物路由——对 BFF `/api/artifacts` 与 Python `artifact/api/public.py` 对齐。
  *
- * Python 行为：
- * - GET /sessions/:id/artifacts → 200 {artifacts,total}（owner 校验，跨租户 404）
- * - POST /sessions/:id/artifacts/register|submit → 201 ArtifactResponse（path/name/mime_type 等，owner 字段来自可信 session/actor，不信任 body）
- * - POST /sessions/:id/artifacts/imports {artifact_id,target_filename?} → 201 ArtifactImportResponse（跨 workspace 导入）
- * - GET /sessions/:id/artifacts/:artifactId/download → 200 流（Content-Disposition 用 ascii fallback，X-Artifact-Filename/Sha256，html/svg 转 octet-stream）
+ * - GET  /sessions/:id/artifacts → 200 {artifacts,total}（owner 作用域，跨租户当作空）
+ * - POST /sessions/:id/artifacts/register|submit → 201 ArtifactResponse
+ * - POST /sessions/:id/artifacts/imports {artifact_id,target_filename?} → 201
+ * - GET  /sessions/:id/artifacts/:artifactId/download → 200 流
  *
- * 脱敏与围栏：所有错误经 redactPhysicalRoots 无条件处理；owner 为空时 401/404（与 Python 对齐）。
+ * **归属只认可信来源。** org/user 一律取自已校验的 acting 头（api-server 从
+ * JWT/cookie 解析后转发，浏览器直传的会被剥掉），**绝不读 body 里的
+ * org_id/user_id**——Python 版的注释写得很清楚：伪造这些字段曾经能把正式记录
+ * 和控制面快照写到别的租户路径下。
+ *
+ * 这四条路由在 2026-08-29 之前是占位：list 恒空、submit 编造
+ * `sha256: '0'.repeat(64)` 并回 201、imports 只回显、download 恒 404。
+ * 见 docs/design/waves/gap-audit.md。
  */
 
 import { Hono } from 'hono';
 import path from 'node:path';
+import { Readable } from 'node:stream';
 import { badRequest, errorBody, HttpError, notFound } from './errors.js';
 import { parseActingHeaders, requireOwnedSession } from './ownership.js';
 import { redactPhysicalRoots } from '../../fs/redact.js';
 import type { WorkspaceManager } from '../../workspace/manager.js';
+import type { ArtifactService } from '../../artifact/service.js';
+import { ArtifactError, downloadMimeType } from '../../artifact/service.js';
+import type { ExecArtifactRecord } from '../../db/repositories/artifacts.js';
 
 export interface PublicArtifactDeps {
   readonly workspaceManager: WorkspaceManager;
   readonly systemSkillRoot: string;
-  readonly enabledSkillPackagesFor: (orgId: string, userId: string) => readonly { name: string; sourcePath: string }[];
+  readonly enabledSkillPackagesFor: (
+    orgId: string,
+    userId: string,
+  ) => readonly { name: string; sourcePath: string }[];
+  readonly artifactService: ArtifactService;
 }
 
 function actingFrom(c: import('hono').Context): Record<string, string | undefined> {
@@ -32,6 +46,22 @@ function actingFrom(c: import('hono').Context): Record<string, string | undefine
   return h;
 }
 
+const ASCII_EXT_RE = /\.([A-Za-z0-9]{1,8})$/;
+
+/**
+ * 显示名 + 从存储路径借来的扩展名。
+ *
+ * `submit` 的 name 是用户可见标题（`随机 Markdown 文档`），扩展名常常只存在于
+ * 工作区路径里。原样下载标题会存出一个没有应用打得开的文件。
+ */
+function displayFilename(record: ExecArtifactRecord): string {
+  const base = path.basename(record.name || 'artifact');
+  if (ASCII_EXT_RE.test(base)) return base;
+  const matched = ASCII_EXT_RE.exec(path.basename(record.sourcePath || ''));
+  return matched ? `${base}${matched[0]}` : base;
+}
+
+/** latin-1 安全的 `filename=` 兜底值，保留扩展名。 */
 function asciiFallback(name: string): string {
   const base = path.basename(String(name || 'download'));
   const ext = path.extname(base);
@@ -45,15 +75,40 @@ function asciiFallback(name: string): string {
   return `${ascii}${ext}`.slice(0, 200);
 }
 
-function dispositionFor(name: string | undefined, logicalPath: string): string {
-  const safeName = name ?? logicalPath;
-  const ascii = asciiFallback(safeName);
-  const encoded = encodeURIComponent(safeName);
-  return `attachment; filename="${ascii}"; filename*=UTF-8''${encoded}`;
+/** Python `quote(safe='')`：比 encodeURIComponent 多编码 `!'()*`。 */
+function quoteAll(value: string): string {
+  return encodeURIComponent(value).replace(
+    /[!'()*]/g,
+    (ch) => `%${ch.charCodeAt(0).toString(16).toUpperCase()}`,
+  );
+}
+
+/** 对外的产物 JSON。字段名与 Python `ArtifactResponse` 一致。 */
+function toResponse(record: ExecArtifactRecord): Record<string, unknown> {
+  return {
+    artifact_id: record.artifactId,
+    session_id: record.sessionId,
+    org_id: record.orgId,
+    user_id: record.userId,
+    path: record.sourcePath,
+    name: record.name,
+    mime_type: record.mimeType,
+    sha256: record.sha256,
+    size: record.sizeBytes,
+    created_at: record.createdAt.toISOString(),
+  };
+}
+
+function mapError(err: unknown, roots: readonly string[]): HttpError {
+  if (err instanceof HttpError) return err;
+  if (err instanceof ArtifactError) {
+    return new HttpError(err.status, redactPhysicalRoots(err.message, roots), err.code);
+  }
+  const raw = err instanceof Error ? err.message : String(err);
+  return new HttpError(500, redactPhysicalRoots(raw, roots));
 }
 
 export function registerPublicArtifactRoutes(app: Hono, deps: PublicArtifactDeps): void {
-  // GET list
   app.get('/sessions/:sessionId/artifacts', async (c) => {
     const sessionId = c.req.param('sessionId') ?? '';
     const acting = parseActingHeaders(actingFrom(c));
@@ -61,15 +116,17 @@ export function registerPublicArtifactRoutes(app: Hono, deps: PublicArtifactDeps
     try {
       const own = await requireOwnedSession(sessionId, deps, acting, roots);
       roots = own.physicalRoots;
-      // 简化：无真实 artifact_repository，返回空列表但保持 shape 逐字节一致
-      return c.json({ artifacts: [], total: 0 });
+      const artifacts = await deps.artifactService.list(sessionId, {
+        orgId: own.workspace.orgId,
+        userId: own.workspace.userId,
+      });
+      return c.json({ artifacts: artifacts.map(toResponse), total: artifacts.length });
     } catch (err) {
-      const status = err instanceof HttpError ? err.status : 500;
-      return c.json(errorBody(err, roots), status as never);
+      const mapped = mapError(err, roots);
+      return c.json(errorBody(mapped, roots), mapped.status as never);
     }
   });
 
-  // POST register / submit
   const handleSubmit = async (c: import('hono').Context): Promise<Response> => {
     const sessionId = c.req.param('sessionId') ?? '';
     const acting = parseActingHeaders(actingFrom(c));
@@ -77,33 +134,34 @@ export function registerPublicArtifactRoutes(app: Hono, deps: PublicArtifactDeps
     try {
       const own = await requireOwnedSession(sessionId, deps, acting, roots);
       roots = own.physicalRoots;
-      const body = (await c.req.json().catch(() => null)) as { path?: string; name?: string; mime_type?: string } | null;
-      const rawPath = body?.path;
-      const p = typeof rawPath === 'string' ? rawPath.trim() : '';
-      if (!p) throw badRequest('path is required', 'path_required');
-      const rawName = body?.name;
-      const name = (typeof rawName === 'string' ? rawName.trim() : '') || path.basename(p);
-      const mime = body?.mime_type ?? 'application/octet-stream';
-      // 模拟已落盘的 artifact 记录，sha256 占位
-      const artifact = {
-        artifact_id: `art_${Date.now()}`,
-        session_id: sessionId,
-        path: p,
-        name,
-        mime_type: mime,
-        sha256: '0'.repeat(64),
-        size: 0,
-      };
-      return c.json(artifact, 201 as never);
+      const body = (await c.req.json().catch(() => null)) as {
+        path?: string;
+        name?: string;
+        mime_type?: string;
+        expected_sha256?: string;
+      } | null;
+      const sourcePath = typeof body?.path === 'string' ? body.path.trim() : '';
+      if (!sourcePath) throw badRequest('path is required', 'path_required');
+
+      const record = await deps.artifactService.submit({
+        workspace: own.workspace,
+        sessionId,
+        sourcePath,
+        name: body?.name ?? null,
+        mimeType: body?.mime_type ?? null,
+        expectedSha256: body?.expected_sha256 ?? null,
+        // 归属只来自可信 session/actor，绝不取 body。
+        owner: { orgId: own.workspace.orgId, userId: own.workspace.userId },
+      });
+      return c.json(toResponse(record), 201 as never);
     } catch (err) {
-      const status = err instanceof HttpError ? err.status : 500;
-      return c.json(errorBody(err, roots), status as never);
+      const mapped = mapError(err, roots);
+      return c.json(errorBody(mapped, roots), mapped.status as never);
     }
   };
   app.post('/sessions/:sessionId/artifacts/register', handleSubmit);
   app.post('/sessions/:sessionId/artifacts/submit', handleSubmit);
 
-  // POST imports
   app.post('/sessions/:sessionId/artifacts/imports', async (c) => {
     const sessionId = c.req.param('sessionId') ?? '';
     const acting = parseActingHeaders(actingFrom(c));
@@ -111,33 +169,44 @@ export function registerPublicArtifactRoutes(app: Hono, deps: PublicArtifactDeps
     try {
       const own = await requireOwnedSession(sessionId, deps, acting, roots);
       roots = own.physicalRoots;
-      const body = (await c.req.json().catch(() => null)) as { artifact_id?: string; target_filename?: string } | null;
+      const body = (await c.req.json().catch(() => null)) as {
+        artifact_id?: string;
+        target_filename?: string;
+      } | null;
       const artifactId = String(body?.artifact_id ?? '').trim();
       if (!artifactId) throw badRequest('artifact_id is required', 'artifact_id_required');
       const targetFilename = body?.target_filename ? String(body.target_filename).trim() : null;
       if (targetFilename !== null && (targetFilename.length === 0 || targetFilename.length > 256)) {
-        throw badRequest('target_filename must be between 1 and 256 characters', 'target_filename_invalid');
+        throw badRequest(
+          'target_filename must be between 1 and 256 characters',
+          'target_filename_invalid',
+        );
       }
       if (!acting.orgId || !acting.userId) {
-        // 与 Python 对齐：无 owner 时 401
         throw new HttpError(401, redactPhysicalRoots('Artifact owner unavailable', roots));
       }
+
+      const { path: written } = await deps.artifactService.importToWorkspace({
+        artifactId,
+        workspace: own.workspace,
+        owner: { orgId: own.workspace.orgId, userId: own.workspace.userId },
+        targetFilename,
+      });
       return c.json(
         {
           artifact_id: artifactId,
           target_session_id: sessionId,
           target_conversation_id: null,
-          path: targetFilename ?? artifactId,
+          path: written,
         },
         201 as never,
       );
     } catch (err) {
-      const status = err instanceof HttpError ? err.status : 500;
-      return c.json(errorBody(err, roots), status as never);
+      const mapped = mapError(err, roots);
+      return c.json(errorBody(mapped, roots), mapped.status as never);
     }
   });
 
-  // GET download
   app.get('/sessions/:sessionId/artifacts/:artifactId/download', async (c) => {
     const sessionId = c.req.param('sessionId') ?? '';
     const artifactId = c.req.param('artifactId') ?? '';
@@ -147,15 +216,31 @@ export function registerPublicArtifactRoutes(app: Hono, deps: PublicArtifactDeps
       const own = await requireOwnedSession(sessionId, deps, acting, roots);
       roots = own.physicalRoots;
       if (!artifactId) throw notFound('Artifact not found');
-      // 无真实存储时 404，保持与 Python 的 ArtifactError 404 一致
-      throw notFound('Artifact not found');
+
+      const record = await deps.artifactService.get(artifactId, {
+        orgId: own.workspace.orgId,
+        userId: own.workspace.userId,
+      });
+      // 归属不符与不存在给同一个 404：存在性本身不能泄漏。
+      if (record === null || record.sessionId !== sessionId) throw notFound('Artifact not found');
+
+      const filename = displayFilename(record);
+      const stream = Readable.from(deps.artifactService.openSnapshot(record));
+      return new Response(Readable.toWeb(stream) as ReadableStream, {
+        status: 200,
+        headers: {
+          'content-type': downloadMimeType(record.mimeType),
+          'content-length': String(record.sizeBytes),
+          'content-disposition': `attachment; filename="${asciiFallback(filename)}"; filename*=UTF-8''${quoteAll(filename)}`,
+          'x-artifact-filename': quoteAll(filename),
+          'x-artifact-sha256': record.sha256,
+          // 即使 content-type 已降级，也要挡住浏览器的类型嗅探。
+          'x-content-type-options': 'nosniff',
+        },
+      });
     } catch (err) {
-      if (err instanceof HttpError && err.status === 404) {
-        return c.json(errorBody(err, roots), 404 as never);
-      }
-      const status = err instanceof HttpError ? err.status : 500;
-      return c.json(errorBody(err, roots), status as never);
+      const mapped = mapError(err, roots);
+      return c.json(errorBody(mapped, roots), mapped.status as never);
     }
   });
-
 }

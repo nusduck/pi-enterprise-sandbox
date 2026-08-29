@@ -1,25 +1,48 @@
 /**
- * 产物提交/下载服务——移植自 Python 版
- * `sandbox/artifact/infrastructure/manager.py` + `application/facade.py` 的
- * `submit` / `resolve_download` 路径。
+ * 产物提交 / 列举 / 下载 / 导入。移植自 Python 版
+ * `sandbox/artifact/infrastructure/manager.py` + `application/facade.py`。
  *
- * 落点：`exec_artifacts` 表（`exec/src/db/repositories/artifacts.ts`），
- * 物理文件走 `WorkspaceFileSystem` 围栏，大小走 `WorkspaceQuotaLedger`
- * 预留账本（工作区外，防删超卖）。错误一律经 `redactPhysicalRoots()` 脱敏。
+ * **快照存控制面，不存工作区。** 早前的 TS 版把产物写进
+ * `工作区/artifacts/{id}/{name}`，而工作区是模型可写的——模型能改写甚至删掉
+ * 自己已提交的产物，"提交那一刻的不可变快照"这个语义就不成立了。现在走
+ * `control-plane-storage.ts`，沙箱子进程的挂载表里没有控制面根。
+ *
+ * ## Model Experience
+ * `submit` 返回真实字节的 `sha256` 与 `size`；模型可以据此确认自己交付的东西
+ * 就是它以为的那个。失败是稳定错误码（见 `control-plane-storage.ts`），
+ * 不是自由文本，所以重试策略是可学的。
+ *
+ * ## Known Limitations and Deferred Work
+ * - `source_execution_id` 溯源（Python `source_provenance`）未移植：它依赖
+ *   agent 侧的执行记账，跨面契约要单独定。
+ * - `delete_by_session` 未移植：目前没有调用方。
  */
 
 import { randomUUID } from 'node:crypto';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
-import path from 'node:path';
+import { createWriteStream } from 'node:fs';
+import { pipeline } from 'node:stream/promises';
 import type { WorkspaceContext } from '../types.js';
 import { redactPhysicalRoots } from '../fs/redact.js';
 import type { WorkspaceFileSystem } from '../fs/workspace-fs.js';
 import { sanitizeFilename } from '../attachment/sanitize.js';
-import type { ExecArtifactRecord } from '../db/repositories/artifacts.js';
-import { InMemoryArtifactStore, type ExecArtifactInsert } from '../db/repositories/artifacts.js';
+import type {
+  ArtifactStore,
+  ExecArtifactRecord,
+  OwnerScope,
+} from '../db/repositories/artifacts.js';
+import { InMemoryArtifactStore } from '../db/repositories/artifacts.js';
 import { InMemoryQuotaStore } from '../workspace/quota-store.js';
 import { InProcessWorkspaceLock } from '../workspace/lock.js';
 import { WorkspaceQuotaLedger } from '../workspace/quota-ledger.js';
+import {
+  ControlPlaneError,
+  artifactBlobPath,
+  iterSnapshotChunks,
+  readControlPlaneRoots,
+  streamCopyHashToControl,
+  unlinkControlFile,
+  type ControlPlaneRoots,
+} from './control-plane-storage.js';
 
 export class ArtifactError extends Error {
   override name = 'ArtifactError';
@@ -32,131 +55,219 @@ export class ArtifactError extends Error {
   }
 }
 
+/** 产物默认上限：与 Python `settings.artifact_max_bytes` 同量级。 */
+const DEFAULT_MAX_ARTIFACT_BYTES = 512 * 1024 * 1024;
+
+/**
+ * 浏览器会把这几种类型当页面执行。产物是用户生成的内容，直接以原 MIME 下发
+ * 等于给自己开一个存储型 XSS，所以下发时降级成 `octet-stream`。
+ * 与 Python `public.py` 的同名判断逐条一致。
+ */
+const EXECUTABLE_MIME = new Set(['text/html', 'application/xhtml+xml', 'image/svg+xml']);
+
+export function downloadMimeType(mime: string | null | undefined): string {
+  const value = (mime ?? '').trim() || 'application/octet-stream';
+  return EXECUTABLE_MIME.has(value.toLowerCase()) ? 'application/octet-stream' : value;
+}
+
+const MIME_BY_EXT: Readonly<Record<string, string>> = {
+  '.txt': 'text/plain',
+  '.md': 'text/markdown',
+  '.csv': 'text/csv',
+  '.json': 'application/json',
+  '.xml': 'application/xml',
+  '.html': 'text/html',
+  '.pdf': 'application/pdf',
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.gif': 'image/gif',
+  '.svg': 'image/svg+xml',
+  '.webp': 'image/webp',
+  '.zip': 'application/zip',
+  '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  '.pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+};
+
+function guessMime(name: string): string {
+  const dot = name.lastIndexOf('.');
+  if (dot < 0) return 'application/octet-stream';
+  return MIME_BY_EXT[name.slice(dot).toLowerCase()] ?? 'application/octet-stream';
+}
+
 export interface ArtifactSubmitRequest {
   readonly workspace: WorkspaceContext;
-  /** 逻辑源路径（工作区内已存在的文件），为空时仅落库不拷文件。 */
-  readonly sourcePath?: string | undefined;
-  /** 期望落库的文件名；不传则从 sourcePath 推导，仍经 sanitize。 */
-  readonly filename?: string | undefined;
-  /** 直接以字节提交（无源文件时用）；与 sourcePath 二选一。 */
-  readonly content?: Uint8Array | undefined;
+  readonly sessionId: string;
+  /** 工作区内已存在的逻辑源路径。 */
+  readonly sourcePath: string;
+  /** 用户可见显示名；不传则从 sourcePath 推导。 */
+  readonly name?: string | null;
+  readonly mimeType?: string | null;
+  /** 提交方声明的摘要；不匹配即拒。 */
+  readonly expectedSha256?: string | null;
+  /** 提交时用调用方身份，不信任 body 里的 org/user。 */
+  readonly owner: OwnerScope;
+}
+
+export interface ArtifactServiceOptions {
+  readonly roots?: ControlPlaneRoots;
+  readonly maxBytes?: number;
+  readonly quotaLedger?: WorkspaceQuotaLedger;
 }
 
 export class ArtifactService {
-  private readonly quotaLedger: WorkspaceQuotaLedger;
+  readonly #roots: ControlPlaneRoots;
+  readonly #maxBytes: number;
+  readonly #quotaLedger: WorkspaceQuotaLedger;
 
   constructor(
     private readonly fsFactory: (workspace: WorkspaceContext) => WorkspaceFileSystem,
-    private readonly store: InMemoryArtifactStore = new InMemoryArtifactStore(),
-    quotaLedger?: WorkspaceQuotaLedger,
+    private readonly store: ArtifactStore = new InMemoryArtifactStore(),
+    options: ArtifactServiceOptions = {},
   ) {
-    this.quotaLedger =
-      quotaLedger ??
+    this.#roots = options.roots ?? readControlPlaneRoots();
+    this.#maxBytes = options.maxBytes ?? DEFAULT_MAX_ARTIFACT_BYTES;
+    this.#quotaLedger =
+      options.quotaLedger ??
       new WorkspaceQuotaLedger(new InMemoryQuotaStore(), new InProcessWorkspaceLock(), {
         defaultQuotaMb: 1024,
       });
   }
 
-  private roots(workspace: WorkspaceContext): readonly string[] {
-    return [workspace.workspaceRoot, workspace.tempRoot];
-  }
-
-  private redact(err: unknown, workspace: WorkspaceContext): never {
-    const roots = this.roots(workspace);
+  #redact(err: unknown, workspace: WorkspaceContext): never {
+    const roots = [workspace.workspaceRoot, workspace.tempRoot, this.#roots.artifactsRoot];
     const msg = err instanceof Error ? err.message : String(err);
     const redacted = redactPhysicalRoots(msg, roots);
     if (err instanceof ArtifactError) throw new ArtifactError(err.code, redacted, err.status);
+    if (err instanceof ControlPlaneError) throw new ArtifactError(err.code, redacted, err.status);
     throw new Error(redacted);
   }
 
   async submit(req: ArtifactSubmitRequest): Promise<ExecArtifactRecord> {
     try {
-      return await this.submitInner(req);
+      return await this.#submitInner(req);
     } catch (err) {
-      this.redact(err, req.workspace);
+      this.#redact(err, req.workspace);
     }
   }
 
-  private async submitInner(req: ArtifactSubmitRequest): Promise<ExecArtifactRecord> {
-    const { workspace, sourcePath, filename, content } = req;
-    const fs = this.fsFactory(workspace);
-
-    let bytes: Uint8Array | undefined;
-    let sizeBytes = 0;
-    let sanitized: string;
-
-    if (content !== undefined) {
-      sanitized = sanitizeFilename(filename ?? 'artifact');
-      bytes = content;
-      sizeBytes = content.byteLength;
-    } else if (sourcePath !== undefined) {
-      sanitized = sanitizeFilename(filename ?? sourcePath.split('/').pop() ?? 'artifact');
-      const target = await fs.resolve(sourcePath);
-      // 经围栏校验后通过物理路径读取（WorkspaceFileSystem 无 writeBytes/readBytes 的二进制版本，复用 targetKey）
-      bytes = new Uint8Array(await readFile(target.targetKey));
-      sizeBytes = bytes.byteLength;
-    } else {
-      throw new ArtifactError('artifact_missing_source', 'artifact submit requires sourcePath or content', 400);
+  async #submitInner(req: ArtifactSubmitRequest): Promise<ExecArtifactRecord> {
+    const { workspace, sourcePath } = req;
+    if (!sourcePath || sourcePath.trim() === '') {
+      throw new ArtifactError('artifact_path_required', 'artifact source_path is required', 400);
     }
+    const displayName = (req.name ?? '').trim() || (sourcePath.split('/').pop() ?? 'artifact');
+    const safeName = sanitizeFilename(displayName);
+    if (!safeName) throw new ArtifactError('artifact_bad_name', 'artifact name is invalid', 400);
+
+    // 围栏只有一处：源路径经 WorkspaceFileSystem.resolve()，不自己拼物理路径。
+    const fs = this.fsFactory(workspace);
+    const target = await fs.resolve(sourcePath);
 
     const artifactId = `art_${randomUUID().replace(/-/g, '')}`;
+    const dest = artifactBlobPath(this.#roots, req.owner.orgId, artifactId);
 
-    const reservation = await this.quotaLedger.reserve(
+    const copied = await streamCopyHashToControl(target.targetKey, dest, {
+      maxBytes: this.#maxBytes,
+      roots: this.#roots,
+    });
+
+    if (req.expectedSha256 && req.expectedSha256.toLowerCase() !== copied.digest) {
+      // 声明与实际不符：删掉快照再拒，不留下一个没人认领的产物。
+      await unlinkControlFile(dest);
+      throw new ArtifactError(
+        'artifact_digest_mismatch',
+        'artifact sha256 does not match expected_sha256',
+        409,
+      );
+    }
+
+    // 快照落在控制面，不占工作区配额；但产物总量仍然要记账，否则一个会话
+    // 可以用无限次 submit 把控制面盘写满。
+    const reservation = await this.#quotaLedger.reserve(
       workspace.workspaceRoot,
       workspace.workspaceId,
-      sizeBytes,
+      copied.size,
     );
     try {
-      // 产物物理存放：控制面逻辑路径 `artifacts/{id}/{name}` 同样走工作区围栏
-      // （本实现落在工作区内，便于用 WorkspaceFileSystem 统一围栏；生产可换控制面目录）
-      if (bytes !== undefined) {
-        const dest = await fs.resolve(`artifacts/${artifactId}/${sanitized}`);
-        await mkdir(path.dirname(dest.targetKey), { recursive: true });
-        await writeFile(dest.targetKey, bytes);
-      }
       await reservation.commit();
     } catch (err) {
-      try {
-        await reservation.release();
-      } catch {}
+      await reservation.release().catch(() => {});
+      await unlinkControlFile(dest);
       throw err;
     }
 
-    const rec: ExecArtifactInsert = {
+    await this.store.insert({
       artifactId,
+      sessionId: req.sessionId,
       workspaceId: workspace.workspaceId,
-      orgId: workspace.orgId,
-      userId: workspace.userId,
-      filename: sanitized,
-      sizeBytes,
-    };
-    await this.store.insert(rec);
-    const got = await this.store.getById(artifactId);
+      orgId: req.owner.orgId,
+      userId: req.owner.userId,
+      name: displayName,
+      sourcePath,
+      mimeType: (req.mimeType ?? '').trim() || guessMime(safeName),
+      sha256: copied.digest,
+      sizeBytes: copied.size,
+      identity: copied.identity,
+    });
+
+    const got = await this.store.getOwned(artifactId, req.owner);
     if (!got) throw new ArtifactError('artifact_not_found', 'artifact insert not visible', 500);
     return got;
   }
 
-  async download(artifactId: string, workspace: WorkspaceContext): Promise<{ record: ExecArtifactRecord; content: Uint8Array }> {
-    try {
-      const rec = await this.store.getById(artifactId);
-      if (!rec) throw new ArtifactError('artifact_not_found', `artifact ${artifactId} not found`, 404);
-      if (rec.workspaceId !== workspace.workspaceId) {
-        throw new ArtifactError('artifact_not_found', `artifact ${artifactId} not found`, 404);
-      }
-      const fs = this.fsFactory(workspace);
-      const target = await fs.resolve(`artifacts/${artifactId}/${rec.filename}`);
-      const content = await readFile(target.targetKey);
-      return { record: rec, content: new Uint8Array(content) };
-    } catch (err) {
-      this.redact(err, workspace);
-    }
+  async list(sessionId: string, owner: OwnerScope): Promise<ExecArtifactRecord[]> {
+    return await this.store.listBySession(sessionId, owner);
   }
 
-  async list(workspace: WorkspaceContext): Promise<ExecArtifactRecord[]> {
+  /** 取产物元数据；归属不符返回 null（调用方一律翻成 404，不泄漏存在性）。 */
+  async get(artifactId: string, owner: OwnerScope): Promise<ExecArtifactRecord | null> {
+    return await this.store.getOwned(artifactId, owner);
+  }
+
+  /**
+   * 打开快照字节流。返回一个异步迭代器，调用方直接转成 HTTP body——
+   * 不整读进内存，产物可以很大。
+   */
+  openSnapshot(record: ExecArtifactRecord): AsyncGenerator<Buffer> {
+    const dest = artifactBlobPath(this.#roots, record.orgId, record.artifactId);
+    return iterSnapshotChunks(dest, record.identity ?? undefined);
+  }
+
+  /**
+   * 把一个属于调用者的产物导入目标工作区，作为输入文件。
+   *
+   * 与 submit 相反的方向：控制面 → 工作区。落点同样经 `resolve()` 围栏，
+   * 目标名经 `sanitizeFilename`。
+   */
+  async importToWorkspace(input: {
+    artifactId: string;
+    workspace: WorkspaceContext;
+    owner: OwnerScope;
+    targetFilename?: string | null;
+  }): Promise<{ record: ExecArtifactRecord; path: string }> {
     try {
-      return await this.store.listByWorkspace(workspace.workspaceId);
+      const record = await this.store.getOwned(input.artifactId, input.owner);
+      if (!record) {
+        throw new ArtifactError('artifact_not_found', 'Artifact not found', 404);
+      }
+      const wanted = (input.targetFilename ?? '').trim() || record.name;
+      const safeName = sanitizeFilename(wanted);
+      if (!safeName) {
+        throw new ArtifactError('target_filename_invalid', 'target_filename is invalid', 400);
+      }
+
+      const fs = this.fsFactory(input.workspace);
+      const target = await fs.resolve(safeName);
+
+      // 流式落盘。产物上限 512MiB，整读进内存再写会让一次导入就吃掉半个 G。
+      const sink = createWriteStream(target.targetKey);
+      await pipeline(this.openSnapshot(record), sink);
+
+      return { record, path: safeName };
     } catch (err) {
-      this.redact(err, workspace);
+      this.#redact(err, input.workspace);
     }
   }
 }

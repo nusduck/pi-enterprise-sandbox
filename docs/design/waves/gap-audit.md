@@ -21,7 +21,7 @@
 | 文件读写 | ~2,900 | `fs/` 637 | ⚠️ 基础操作靠继承 `dsh-fs-local`，编辑/读运行时缺 |
 | **搜索** | 1,368 | `search/` 约 900 | ✅ 已补（2026-08-29）|
 | **数据集** | 1,856 | `dataset/` 128 | ❌ 上传不落盘；签名形状也不支持流式 |
-| **产物** | ~2,000 | `artifact/` 167 | ❌ 公共面四条路由全假；存储位置设计已偏 |
+| **产物** | ~2,000 | `artifact/` 约 700 | ✅ 已补（2026-08-29），快照改存控制面 |
 
 `exec/src` 合计 11,717 行，其中 1,323 行是 2026-08-29 新写的 `mcp/`。
 
@@ -94,7 +94,14 @@ Python 是**分块流式**：`begin_upload` → `write_chunk` → `finish_upload
 
 ## 三、产物（`artifact_manager.py` 825 + `control_plane_storage.py` 834）
 
-### ⚠️ 存储位置的设计已经偏了
+> **✅ 已补，2026-08-29。** 新增 `exec/src/artifact/control-plane-storage.ts`
+> （`streamCopyHashToControl` / `iterSnapshotChunks` / `FileIdentity`），
+> `ArtifactService` 重写为控制面快照，`exec_artifacts` 扩列
+> `sha256`/`mime_type`/`source_path`/`identity`/`session_id`，公共面四条路由与
+> 内部面两条全部接上真实服务。验收：`artifact-dataset-attachment.test.ts` 6 条
+> + `semantic-gaps.test.ts` 的 4 条产物用例。下文保留作决策记录。
+
+### ⚠️ 存储位置的设计曾经偏了（已修）
 
 Python 的语义是 **快照存控制面，不存工作区**，读时用 `stat` identity 校验：
 

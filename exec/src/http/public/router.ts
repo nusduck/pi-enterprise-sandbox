@@ -15,10 +15,21 @@ import { Hono } from 'hono';
 import { toWireError } from '@pi/contract/errors.js';
 import type { WorkspaceManager } from '../../workspace/manager.js';
 import type { MySqlJobRegistry } from '../../shell/job-registry.js';
+import { ArtifactService } from '../../artifact/service.js';
+import { WorkspaceFileSystem } from '../../fs/workspace-fs.js';
+import type { ArtifactStore } from '../../db/repositories/artifacts.js';
+import { Context as CordisContext } from '@deepseek-ai/cordis';
+import type { WorkspaceContext } from '../../types.js';
+
 import { registerPublicFilesRoutes } from './files.js';
 import { registerPublicArtifactRoutes } from './artifacts.js';
 import { registerPublicDatasetRoutes } from './datasets.js';
 import { registerPublicProcessRoutes } from './processes.js';
+
+/** 与 `internal-fs.ts` 同一种装配：cordis Context 只是 dsh-fs 的宿主，不承载状态。 */
+const makeWorkspaceFs = (ws: WorkspaceContext): WorkspaceFileSystem =>
+  new WorkspaceFileSystem(new CordisContext() as never, ws);
+
 
 export interface PublicRouterDeps {
   readonly workspaceManager: WorkspaceManager;
@@ -27,6 +38,9 @@ export interface PublicRouterDeps {
   readonly jobRegistry: MySqlJobRegistry;
   readonly datasetMaxBytes?: number;
   readonly maxFileBytes?: number;
+  /** 产物服务。不传则按进程内默认装配（测试与本地开发用）。 */
+  readonly artifactService?: ArtifactService;
+  readonly artifactStore?: ArtifactStore;
 }
 
 export function createPublicRouter(deps: PublicRouterDeps): Hono {
@@ -38,10 +52,16 @@ export function createPublicRouter(deps: PublicRouterDeps): Hono {
     enabledSkillPackagesFor: deps.enabledSkillPackagesFor,
     ...(deps.maxFileBytes !== undefined ? { maxFileBytes: deps.maxFileBytes } : {}),
   });
+  const artifactService =
+    deps.artifactService ??
+    (deps.artifactStore !== undefined
+      ? new ArtifactService(makeWorkspaceFs, deps.artifactStore)
+      : new ArtifactService(makeWorkspaceFs));
   registerPublicArtifactRoutes(app, {
     workspaceManager: deps.workspaceManager,
     systemSkillRoot: deps.systemSkillRoot,
     enabledSkillPackagesFor: deps.enabledSkillPackagesFor,
+    artifactService,
   });
   registerPublicDatasetRoutes(app, {
     workspaceManager: deps.workspaceManager,

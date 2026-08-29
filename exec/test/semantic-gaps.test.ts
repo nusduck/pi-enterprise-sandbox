@@ -26,6 +26,9 @@ import { WorkspaceManager } from '../src/workspace/manager.js';
 import { createPublicRouter } from '../src/http/public/router.js';
 import { InMemoryJobStore } from '../src/shell/job-store-memory.js';
 import { MySqlJobRegistry } from '../src/shell/job-registry.js';
+import { ArtifactService } from '../src/artifact/service.js';
+import { WorkspaceFileSystem } from '../src/fs/workspace-fs.js';
+import { Context as CordisContext } from '@deepseek-ai/cordis';
 
 describe('semantic gaps: search / artifact / dataset (expected red until implemented)', () => {
   let base: string;
@@ -46,11 +49,24 @@ describe('semantic gaps: search / artifact / dataset (expected red until impleme
       tempBaseRoot: path.join(base, 'tmp'),
     });
     await mkdir(path.join(base, 'skills'), { recursive: true });
+    // 控制面根指到 scratch 下。生产默认是 /var/sandbox/artifacts，macOS 上不可写，
+    // 而快照必须落在工作区**之外**才谈得上不可变（见 artifact/service.ts）。
+    const artifactService = new ArtifactService(
+      (ws) => new WorkspaceFileSystem(new CordisContext() as never, ws),
+      undefined,
+      {
+        roots: {
+          artifactsRoot: path.join(base, 'control', 'artifacts'),
+          controlRoot: path.join(base, 'control', 'root'),
+        },
+      },
+    );
     app = createPublicRouter({
       workspaceManager,
       systemSkillRoot: path.join(base, 'skills'),
       enabledSkillPackagesFor: () => [],
       jobRegistry: new MySqlJobRegistry(new InMemoryJobStore()),
+      artifactService,
     });
   });
 

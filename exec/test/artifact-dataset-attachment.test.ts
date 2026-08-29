@@ -8,14 +8,15 @@
  * - 临时目录先 realpath
  */
 import assert from 'node:assert/strict';
-import { mkdtemp, realpath, rm } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+import { mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { describe, test, before, after } from 'node:test';
 import { Context } from '@deepseek-ai/cordis';
 import type { WorkspaceContext } from '../src/types.js';
 import { WorkspaceFileSystem } from '../src/fs/workspace-fs.js';
-import { ArtifactService } from '../src/artifact/service.js';
+import { ArtifactService, downloadMimeType } from '../src/artifact/service.js';
 import { DatasetService } from '../src/dataset/service.js';
 import { AttachmentService } from '../src/attachment/service.js';
 import { InMemoryArtifactStore } from '../src/db/repositories/artifacts.js';
@@ -46,46 +47,135 @@ async function makeWs(): Promise<{ root: string; ctx: WorkspaceContext; fs: Work
 }
 
 describe('W3-B artifact', () => {
-  test('submit with content → download round-trips, filename sanitized, not leaking physical root', async () => {
-    const { ctx, fs, cleanup } = await makeWs();
-    const store = new InMemoryArtifactStore();
-    const svc = new ArtifactService(() => fs, store);
-    const content = new TextEncoder().encode('hello artifact');
-    const rec = await svc.submit({ workspace: ctx, content, filename: '../evil.txt' });
-    assert.equal(rec.filename, 'evil.txt');
-    assert.ok(!rec.filename.includes('..'));
-    const { record, content: got } = await svc.download(rec.artifactId, ctx);
-    assert.equal(record.artifactId, rec.artifactId);
-    assert.equal(new TextDecoder().decode(got), 'hello artifact');
+  /** 控制面根放在工作区之外的 scratch 目录里——快照的全部意义在于模型碰不到它。 */
+  function svcFor(fs: WorkspaceFileSystem, root: string, store?: InMemoryArtifactStore) {
+    return new ArtifactService(() => fs, store ?? new InMemoryArtifactStore(), {
+      roots: {
+        artifactsRoot: path.join(root, 'control', 'artifacts'),
+        controlRoot: path.join(root, 'control', 'root'),
+      },
+    });
+  }
+
+  const owner = { orgId: 'org_w3b', userId: 'user_w3b' };
+
+  test('submit → 快照落在控制面而不是工作区，字节与 sha256 都对得上', async () => {
+    const { root, ctx, fs, cleanup } = await makeWs();
+    const svc = svcFor(fs, root);
+    const payload = 'hello artifact';
+    await writeFile(path.join(ctx.workspaceRoot, 'out.txt'), payload);
+
+    const rec = await svc.submit({
+      workspace: ctx,
+      sessionId: ctx.workspaceId,
+      sourcePath: 'out.txt',
+      name: '../evil.txt',
+      owner,
+    });
+
+    assert.equal(rec.sha256, createHash('sha256').update(payload).digest('hex'));
+    assert.equal(rec.sizeBytes, Buffer.byteLength(payload));
+
+    const chunks: Buffer[] = [];
+    for await (const chunk of svc.openSnapshot(rec)) chunks.push(chunk);
+    assert.equal(Buffer.concat(chunks).toString('utf8'), payload);
+
+    // 快照不在工作区里：模型删掉源文件也不影响已提交的产物。
+    await rm(path.join(ctx.workspaceRoot, 'out.txt'));
+    const again: Buffer[] = [];
+    for await (const chunk of svc.openSnapshot(rec)) again.push(chunk);
+    assert.equal(Buffer.concat(again).toString('utf8'), payload, '源文件删除后快照仍可读');
+
     await cleanup();
   });
 
-  test('artifact download with wrong workspace returns 404 without leaking root', async () => {
+  test('跨租户取产物返回 null（当作不存在），且不泄漏物理根', async () => {
     const a = await makeWs();
-    const b = await makeWs();
     const store = new InMemoryArtifactStore();
-    const svcA = new ArtifactService(() => a.fs, store);
-    const content = new TextEncoder().encode('secret');
-    const rec = await svcA.submit({ workspace: a.ctx, content, filename: 'a.txt' });
-    const svcB = new ArtifactService(() => b.fs, store);
-    await assert.rejects(() => svcB.download(rec.artifactId, b.ctx), (err: unknown) => {
-      const msg = (err as Error).message;
-      assert.ok(!msg.includes(a.ctx.workspaceRoot), `leaked root: ${msg}`);
-      return true;
+    const svcA = svcFor(a.fs, a.root, store);
+    await writeFile(path.join(a.ctx.workspaceRoot, 'secret.txt'), 'secret');
+    const rec = await svcA.submit({
+      workspace: a.ctx,
+      sessionId: a.ctx.workspaceId,
+      sourcePath: 'secret.txt',
+      owner,
     });
+
+    // 同一个 store，换一个租户身份来取：必须是 null，而不是"找到了但拒绝"
+    // ——后者会泄漏"这个 id 存在"。
+    const got = await svcA.get(rec.artifactId, { orgId: 'org_other', userId: 'user_other' });
+    assert.equal(got, null);
+
     await a.cleanup();
-    await b.cleanup();
   });
 
-  test('submit via sourcePath traverses WorkspaceFileSystem fence and redacts', async () => {
-    const { ctx, fs, cleanup } = await makeWs();
-    const svc = new ArtifactService(() => fs);
-    await assert.rejects(() => svc.submit({ workspace: ctx, sourcePath: '../../etc/passwd' }), (err: unknown) => {
-      const msg = (err as Error).message;
-      assert.ok(!msg.includes(ctx.workspaceRoot));
-      return true;
-    });
+  test('submit 的 sourcePath 经 WorkspaceFileSystem 围栏，越界即拒且脱敏', async () => {
+    const { root, ctx, fs, cleanup } = await makeWs();
+    const svc = svcFor(fs, root);
+    await assert.rejects(
+      () =>
+        svc.submit({
+          workspace: ctx,
+          sessionId: ctx.workspaceId,
+          sourcePath: '../../etc/passwd',
+          owner,
+        }),
+      (err: unknown) => {
+        const msg = (err as Error).message;
+        assert.ok(!msg.includes(ctx.workspaceRoot), `leaked root: ${msg}`);
+        return true;
+      },
+    );
     await cleanup();
+  });
+
+  test('expected_sha256 不匹配即拒，且不留下无主快照', async () => {
+    const { root, ctx, fs, cleanup } = await makeWs();
+    const svc = svcFor(fs, root);
+    await writeFile(path.join(ctx.workspaceRoot, 'x.txt'), 'real');
+    await assert.rejects(
+      () =>
+        svc.submit({
+          workspace: ctx,
+          sessionId: ctx.workspaceId,
+          sourcePath: 'x.txt',
+          expectedSha256: 'f'.repeat(64),
+          owner,
+        }),
+      /sha256/,
+    );
+    assert.deepEqual(await svc.list(ctx.workspaceId, owner), [], '拒绝后不该留下记录');
+    await cleanup();
+  });
+
+  test('importToWorkspace 把快照写回工作区，名字经 sanitize', async () => {
+    const { root, ctx, fs, cleanup } = await makeWs();
+    const svc = svcFor(fs, root);
+    await writeFile(path.join(ctx.workspaceRoot, 'src.txt'), 'imported bytes');
+    const rec = await svc.submit({
+      workspace: ctx,
+      sessionId: ctx.workspaceId,
+      sourcePath: 'src.txt',
+      owner,
+    });
+
+    const { path: written } = await svc.importToWorkspace({
+      artifactId: rec.artifactId,
+      workspace: ctx,
+      owner,
+      targetFilename: '../escape.txt',
+    });
+    assert.ok(!written.includes('..'), `sanitize 失效: ${written}`);
+    assert.equal(await readFile(path.join(ctx.workspaceRoot, written), 'utf8'), 'imported bytes');
+    await cleanup();
+  });
+
+  test('downloadMimeType 把可执行类型降级成 octet-stream', () => {
+    for (const mime of ['text/html', 'image/svg+xml', 'application/xhtml+xml', 'TEXT/HTML']) {
+      assert.equal(downloadMimeType(mime), 'application/octet-stream', mime);
+    }
+    assert.equal(downloadMimeType('text/plain'), 'text/plain');
+    assert.equal(downloadMimeType(''), 'application/octet-stream');
   });
 });
 

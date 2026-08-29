@@ -48,7 +48,14 @@ test('DDLs contain required columns and indexes', () => {
 
   // exec_artifacts / exec_datasets
   assert.match(EXEC_ARTIFACTS_DDL, /artifact_id/);
-  assert.match(EXEC_ARTIFACTS_DDL, /filename/);
+  assert.match(EXEC_ARTIFACTS_DDL, /name/);
+  // 2026-08-29 扩列：公共面 ArtifactResponse 需要这两个字段，之前表里没有，
+  // 所以路由只能编一个 '0'.repeat(64) 出来。
+  assert.match(EXEC_ARTIFACTS_DDL, /sha256/);
+  assert.match(EXEC_ARTIFACTS_DDL, /mime_type/);
+  assert.match(EXEC_ARTIFACTS_DDL, /source_path/);
+  assert.match(EXEC_ARTIFACTS_DDL, /identity/);
+  assert.match(EXEC_ARTIFACTS_DDL, /session_id/);
   assert.match(EXEC_DATASETS_DDL, /dataset_id/);
 
   // session_events: ADR 0005 决策 2
@@ -106,27 +113,31 @@ test('InMemoryExecutionStore: insert and updateStatus', async () => {
   assert.equal(after?.status, 'completed');
 });
 
-test('InMemoryArtifactStore: insert and listByWorkspace', async () => {
+test('InMemoryArtifactStore: 按 session + owner 列举，跨租户当作不存在', async () => {
   const s = new InMemoryArtifactStore();
-  await s.insert({
-    artifactId: 'a1',
+  const base = {
+    sessionId: 'sess1',
     workspaceId: 'ws1',
     orgId: 'o1',
     userId: 'u1',
-    filename: 'out.txt',
-    sizeBytes: 123,
-  });
-  await s.insert({
-    artifactId: 'a2',
-    workspaceId: 'ws1',
-    orgId: 'o1',
-    userId: 'u1',
-    filename: 'b.txt',
-    sizeBytes: 456,
-  });
-  const list = await s.listByWorkspace('ws1', 10);
+    sourcePath: 'out.txt',
+    mimeType: 'text/plain',
+    sha256: 'a'.repeat(64),
+    identity: null,
+  };
+  await s.insert({ ...base, artifactId: 'a1', name: 'out.txt', sizeBytes: 123 });
+  await s.insert({ ...base, artifactId: 'a2', name: 'b.txt', sizeBytes: 456 });
+
+  const owner = { orgId: 'o1', userId: 'u1' };
+  const list = await s.listBySession('sess1', owner, 10);
   assert.equal(list.length, 2);
-  assert.equal(await s.getById('a1').then((r) => r?.filename), 'out.txt');
+  assert.equal(await s.getOwned('a1', owner).then((r) => r?.name), 'out.txt');
+
+  // 换一个租户：getOwned 必须返回 null（不是"找到了但拒绝"——那会泄漏存在性），
+  // listBySession 必须为空。
+  const other = { orgId: 'o2', userId: 'u2' };
+  assert.equal(await s.getOwned('a1', other), null);
+  assert.deepEqual(await s.listBySession('sess1', other, 10), []);
 });
 
 test('InMemoryDatasetStore: insert and get', async () => {
