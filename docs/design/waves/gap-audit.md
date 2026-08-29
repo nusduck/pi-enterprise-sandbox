@@ -20,7 +20,7 @@
 | 工作区 / 配额 | 972 | `workspace/` 1,545 | ✅ 已移植 |
 | 文件读写 | ~2,900 | `fs/` 637 | ⚠️ 基础操作靠继承 `dsh-fs-local`，编辑/读运行时缺 |
 | **搜索** | 1,368 | `search/` 约 900 | ✅ 已补（2026-08-29）|
-| **数据集** | 1,856 | `dataset/` 128 | ❌ 上传不落盘；签名形状也不支持流式 |
+| **数据集** | 1,856 | `dataset/` 约 400 | ✅ 已补（2026-08-29），改为三段式流式 |
 | **产物** | ~2,000 | `artifact/` 约 700 | ✅ 已补（2026-08-29），快照改存控制面 |
 
 `exec/src` 合计 11,717 行，其中 1,323 行是 2026-08-29 新写的 `mcp/`。
@@ -63,9 +63,15 @@
 
 ## 二、数据集（`dataset_manager.py` 975 + `dataset_store.py` 881）
 
-`exec/src/dataset/service.ts` 128 行，只有 `create(content: Uint8Array)` 与 `read()`。
+> **✅ 已补，2026-08-29。** `DatasetService` 重写为三段式流式
+> （`beginUpload`/`writeChunk`/`finishUpload`/`abortUpload` + `uploadStream`），
+> 控制面暂存 → 工作区发布，幂等键落库。`exec_datasets` 扩列
+> `session_id`/`conversation_id`/`original_filename`/`stored_relative_path`/
+> `mime_type`/`sha256`/`size_bytes`/`status`/`idempotency_key`/`completed_at`。
+> 公共面补齐 upload/list/get/content 四条路由。验收：
+> `artifact-dataset-attachment.test.ts` 5 条 + `semantic-gaps.test.ts` 2 条。
 
-### ⚠️ 签名形状不足——补实现之前必须先改
+### ⚠️ 签名形状曾经不足（已修）
 
 Python 是**分块流式**：`begin_upload` → `write_chunk` → `finish_upload`，
 配合 `stream_from_iterator`。`STATUS.md` C8 记着一次 **5GiB 实测**。
@@ -158,7 +164,8 @@ Python 的语义是 **快照存控制面，不存工作区**，读时用 `stat` 
 - **第 2 条**（SSE 契约逐字节不变）—— SSE 本身没问题，但同批声称的"公共面契约
   不变"只在形状层面成立，语义层面不成立
 - **第 9 条**（本机文件系统不可达）—— 未受影响，仍成立
-- **第 14 条**（真实链路）—— 从未跑过；按本清单，跑也跑不通
+- **第 14 条**（真实链路）—— 从未跑过。搜索/产物/数据集补齐后不再有已知的
+  语义空洞，但镜像工具链（gap-audit 之外的 P0-1）仍缺，见下
 
 [ADR 0008 §验收要求](../../adr/0008-sandbox-isolation-and-fs-seam-redesign.md) 第 9 条
 "公共面契约不变：BFF 侧用例零改动通过"**需要重新表述**：BFF 用例通过，是因为

@@ -15,12 +15,42 @@ import { badRequest, errorBody, HttpError, payloadTooLarge } from './errors.js';
 import { parseActingHeaders, requireOwnedSession } from './ownership.js';
 import { redactPhysicalRoots } from '../../fs/redact.js';
 import type { WorkspaceManager } from '../../workspace/manager.js';
+import { createReadStream } from 'node:fs';
+import { Readable } from 'node:stream';
+import type { DatasetService } from '../../dataset/service.js';
+import { DatasetError } from '../../dataset/service.js';
+import type { ExecDatasetRecord } from '../../db/repositories/datasets.js';
 
 export interface PublicDatasetDeps {
   readonly workspaceManager: WorkspaceManager;
   readonly systemSkillRoot: string;
   readonly enabledSkillPackagesFor: (orgId: string, userId: string) => readonly { name: string; sourcePath: string }[];
   readonly datasetMaxBytes?: number;
+  readonly datasetService: DatasetService;
+}
+
+/** 对外 JSON。字段名与 Python `DatasetEntry.to_public()` 一致（含冗余别名）。 */
+function toResponse(r: ExecDatasetRecord): Record<string, unknown> {
+  const storedPath = r.status === 'ready' ? r.storedRelativePath : '';
+  return {
+    dataset_id: r.datasetId,
+    org_id: r.orgId,
+    user_id: r.userId,
+    conversation_id: r.conversationId,
+    agent_session_id: r.sessionId,
+    sandbox_session_id: r.sessionId,
+    original_filename: r.originalFilename,
+    name: r.originalFilename,
+    path: storedPath,
+    stored_relative_path: storedPath,
+    mime_type: r.mimeType,
+    size_bytes: r.sizeBytes,
+    size: r.sizeBytes,
+    sha256: r.status === 'ready' ? r.sha256 : null,
+    status: r.status,
+    created_at: r.createdAt.toISOString(),
+    completed_at: r.completedAt ? r.completedAt.toISOString() : null,
+  };
 }
 
 const DEFAULT_DATASET_MAX = 100 * 1024 * 1024;
@@ -59,16 +89,34 @@ export function registerPublicDatasetRoutes(app: Hono, deps: PublicDatasetDeps):
       const acting = parseActingHeaders(actingFrom(c));
       const own = await requireOwnedSession(sessionId, deps, acting, roots);
       roots = own.physicalRoots;
-      // 不缓冲整文件：此处仅校验头，真实流由下游 `fetchSandboxBounded` 背压，此处回 201 占位
-      const datasetId = `ds_${Date.now()}`;
-      const body = {
-        dataset_id: datasetId,
-        conversation_id: conversationId,
-        session_id: sessionId,
-        trace_id: traceId,
-      };
+
+      // 真流式：请求体按块喂给三段式上传，整个文件不进内存。
+      // 之前这里只校验头就回 201，字节根本没落盘。
+      const filename =
+        url.searchParams.get('filename') ??
+        c.req.header('x-filename') ??
+        'dataset';
+      const stream = c.req.raw.body;
+      const body: AsyncIterable<Uint8Array> =
+        stream !== null
+          ? (Readable.fromWeb(stream as never) as unknown as AsyncIterable<Uint8Array>)
+          : (async function* () {})();
+
+      const record = await deps.datasetService.uploadStream(
+        {
+          workspace: own.workspace,
+          sessionId,
+          conversationId,
+          owner: { orgId: own.workspace.orgId, userId: own.workspace.userId },
+          originalFilename: filename,
+          mimeType: c.req.header('content-type') ?? null,
+          declaredSize: declared,
+          idempotencyKey: idem,
+        },
+        body,
+      );
       c.header('X-Trace-Id', traceId);
-      return c.json(body, 201 as never);
+      return c.json({ ...toResponse(record), session_id: sessionId, trace_id: traceId }, 201 as never);
     } catch (err) {
       const status = err instanceof HttpError ? err.status : 500;
       const raw = err instanceof Error ? err.message : String(err);
@@ -98,8 +146,16 @@ export function registerPublicDatasetRoutes(app: Hono, deps: PublicDatasetDeps):
       const acting = parseActingHeaders(actingFrom(c));
       const own = await requireOwnedSession(sessionId, deps, acting, roots);
       roots = own.physicalRoots;
+      const datasets = await deps.datasetService.list(sessionId, {
+        orgId: own.workspace.orgId,
+        userId: own.workspace.userId,
+      });
       c.header('X-Trace-Id', traceId);
-      return c.json({ datasets: [], total: 0, trace_id: traceId });
+      return c.json({
+        datasets: datasets.map(toResponse),
+        total: datasets.length,
+        trace_id: traceId,
+      });
     } catch (err) {
       const status = err instanceof HttpError ? err.status : 500;
       const raw = err instanceof Error ? err.message : String(err);
@@ -111,4 +167,67 @@ export function registerPublicDatasetRoutes(app: Hono, deps: PublicDatasetDeps):
   app.get('/sessions/:sessionId/datasets', handleList);
   app.get('/conversations/:conversationId/datasets', handleList);
   app.get('/datasets', handleList);
+
+  app.get('/sessions/:sessionId/datasets/:datasetId', async (c) => {
+    const sessionId = c.req.param('sessionId') ?? '';
+    const datasetId = c.req.param('datasetId') ?? '';
+    let roots: readonly string[] = [];
+    try {
+      const acting = parseActingHeaders(actingFrom(c));
+      const own = await requireOwnedSession(sessionId, deps, acting, roots);
+      roots = own.physicalRoots;
+      const record = await deps.datasetService.get(datasetId, {
+        orgId: own.workspace.orgId,
+        userId: own.workspace.userId,
+      });
+      if (record === null || record.sessionId !== sessionId) {
+        throw new HttpError(404, 'Dataset not found', 'dataset_not_found');
+      }
+      return c.json(toResponse(record));
+    } catch (err) {
+      const mapped = datasetHttpError(err, roots);
+      return c.json(errorBody(mapped, roots), mapped.status as never);
+    }
+  });
+
+  app.get('/sessions/:sessionId/datasets/:datasetId/content', async (c) => {
+    const sessionId = c.req.param('sessionId') ?? '';
+    const datasetId = c.req.param('datasetId') ?? '';
+    let roots: readonly string[] = [];
+    try {
+      const acting = parseActingHeaders(actingFrom(c));
+      const own = await requireOwnedSession(sessionId, deps, acting, roots);
+      roots = own.physicalRoots;
+      const record = await deps.datasetService.get(datasetId, {
+        orgId: own.workspace.orgId,
+        userId: own.workspace.userId,
+      });
+      // 归属不符与不存在同一个 404：存在性不能泄漏。
+      if (record === null || record.sessionId !== sessionId) {
+        throw new HttpError(404, 'Dataset not found', 'dataset_not_found');
+      }
+      const physical = await deps.datasetService.resolveContentPath(record, own.workspace);
+      const stream = Readable.toWeb(createReadStream(physical)) as ReadableStream;
+      return new Response(stream, {
+        status: 200,
+        headers: {
+          'content-type': record.mimeType,
+          'content-length': String(record.sizeBytes),
+          'x-content-type-options': 'nosniff',
+        },
+      });
+    } catch (err) {
+      const mapped = datasetHttpError(err, roots);
+      return c.json(errorBody(mapped, roots), mapped.status as never);
+    }
+  });
+}
+
+function datasetHttpError(err: unknown, roots: readonly string[]): HttpError {
+  if (err instanceof HttpError) return err;
+  if (err instanceof DatasetError) {
+    return new HttpError(err.status, redactPhysicalRoots(err.message, roots), err.code);
+  }
+  const raw = err instanceof Error ? err.message : String(err);
+  return new HttpError(500, redactPhysicalRoots(raw, roots));
 }

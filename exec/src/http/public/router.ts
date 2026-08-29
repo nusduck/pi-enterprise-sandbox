@@ -16,8 +16,10 @@ import { toWireError } from '@pi/contract/errors.js';
 import type { WorkspaceManager } from '../../workspace/manager.js';
 import type { MySqlJobRegistry } from '../../shell/job-registry.js';
 import { ArtifactService } from '../../artifact/service.js';
+import { DatasetService } from '../../dataset/service.js';
 import { WorkspaceFileSystem } from '../../fs/workspace-fs.js';
 import type { ArtifactStore } from '../../db/repositories/artifacts.js';
+import type { DatasetStore } from '../../db/repositories/datasets.js';
 import { Context as CordisContext } from '@deepseek-ai/cordis';
 import type { WorkspaceContext } from '../../types.js';
 
@@ -41,6 +43,8 @@ export interface PublicRouterDeps {
   /** 产物服务。不传则按进程内默认装配（测试与本地开发用）。 */
   readonly artifactService?: ArtifactService;
   readonly artifactStore?: ArtifactStore;
+  readonly datasetService?: DatasetService;
+  readonly datasetStore?: DatasetStore;
 }
 
 export function createPublicRouter(deps: PublicRouterDeps): Hono {
@@ -63,10 +67,16 @@ export function createPublicRouter(deps: PublicRouterDeps): Hono {
     enabledSkillPackagesFor: deps.enabledSkillPackagesFor,
     artifactService,
   });
+  const datasetService =
+    deps.datasetService ??
+    (deps.datasetStore !== undefined
+      ? new DatasetService(makeWorkspaceFs, deps.datasetStore)
+      : new DatasetService(makeWorkspaceFs));
   registerPublicDatasetRoutes(app, {
     workspaceManager: deps.workspaceManager,
     systemSkillRoot: deps.systemSkillRoot,
     enabledSkillPackagesFor: deps.enabledSkillPackagesFor,
+    datasetService,
     ...(deps.datasetMaxBytes !== undefined ? { datasetMaxBytes: deps.datasetMaxBytes } : {}),
   });
   registerPublicProcessRoutes(app, {

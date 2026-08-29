@@ -21,6 +21,11 @@ import { createPublicRouter } from '../src/http/public/router.js';
 import { InMemoryJobStore } from '../src/shell/job-store-memory.js';
 import { MySqlJobRegistry } from '../src/shell/job-registry.js';
 import { makeTestWorkspace } from './helpers.js';
+import { ArtifactService } from '../src/artifact/service.js';
+import { DatasetService } from '../src/dataset/service.js';
+import { WorkspaceFileSystem } from '../src/fs/workspace-fs.js';
+import { Context as CordisContext } from '@deepseek-ai/cordis';
+import type { WorkspaceContext } from '../src/types.js';
 
 describe('public: byte-identical contract vs Python', () => {
   let base: string;
@@ -37,11 +42,21 @@ describe('public: byte-identical contract vs Python', () => {
     });
     const store = new InMemoryJobStore();
     jobRegistry = new MySqlJobRegistry(store);
+    // 控制面根指到 scratch 下：产物快照与数据集暂存都落在这里，生产默认的
+    // /var/sandbox/* 在 macOS 上不可写。
+    const controlRoots = {
+      artifactsRoot: path.join(base, 'control', 'artifacts'),
+      controlRoot: path.join(base, 'control', 'root'),
+    };
+    const makeFs = (ws: WorkspaceContext) =>
+      new WorkspaceFileSystem(new CordisContext() as never, ws);
     app = createPublicRouter({
       workspaceManager,
       systemSkillRoot: path.join(base, 'skills'),
       enabledSkillPackagesFor: () => [],
       jobRegistry,
+      artifactService: new ArtifactService(makeFs, undefined, { roots: controlRoots }),
+      datasetService: new DatasetService(makeFs, undefined, { roots: controlRoots }),
     });
     await mkdir(path.join(base, 'skills'), { recursive: true });
   });

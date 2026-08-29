@@ -27,6 +27,7 @@ import { createPublicRouter } from '../src/http/public/router.js';
 import { InMemoryJobStore } from '../src/shell/job-store-memory.js';
 import { MySqlJobRegistry } from '../src/shell/job-registry.js';
 import { ArtifactService } from '../src/artifact/service.js';
+import { DatasetService } from '../src/dataset/service.js';
 import { WorkspaceFileSystem } from '../src/fs/workspace-fs.js';
 import { Context as CordisContext } from '@deepseek-ai/cordis';
 
@@ -61,12 +62,23 @@ describe('semantic gaps: search / artifact / dataset (expected red until impleme
         },
       },
     );
+    const datasetService = new DatasetService(
+      (ws) => new WorkspaceFileSystem(new CordisContext() as never, ws),
+      undefined,
+      {
+        roots: {
+          artifactsRoot: path.join(base, 'control', 'artifacts'),
+          controlRoot: path.join(base, 'control', 'root'),
+        },
+      },
+    );
     app = createPublicRouter({
       workspaceManager,
       systemSkillRoot: path.join(base, 'skills'),
       enabledSkillPackagesFor: () => [],
       jobRegistry: new MySqlJobRegistry(new InMemoryJobStore()),
       artifactService,
+      datasetService,
     });
   });
 
@@ -254,6 +266,8 @@ describe('semantic gaps: search / artifact / dataset (expected red until impleme
       method: 'POST',
       headers: {
         ...acting,
+        // Python `_ownership_from_request` 同样要求 conversation_id。
+        'X-Conversation-Id': 'conv_sem_1',
         'Content-Type': 'text/csv',
         'Idempotency-Key': 'sem-ds-1-key',
         'Content-Length': String(Buffer.byteLength(payload)),
@@ -276,6 +290,7 @@ describe('semantic gaps: search / artifact / dataset (expected red until impleme
     const payload = 'x\n';
     const headers = {
       ...acting,
+      'X-Conversation-Id': 'conv_sem_2',
       'Content-Type': 'text/csv',
       'Idempotency-Key': 'sem-ds-2-key',
       'Content-Length': String(Buffer.byteLength(payload)),

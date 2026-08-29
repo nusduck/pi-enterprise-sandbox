@@ -17,7 +17,7 @@ import { Context } from '@deepseek-ai/cordis';
 import type { WorkspaceContext } from '../src/types.js';
 import { WorkspaceFileSystem } from '../src/fs/workspace-fs.js';
 import { ArtifactService, downloadMimeType } from '../src/artifact/service.js';
-import { DatasetService } from '../src/dataset/service.js';
+import { DatasetService, DatasetError, sanitizeDatasetFilename } from '../src/dataset/service.js';
 import { AttachmentService } from '../src/attachment/service.js';
 import { InMemoryArtifactStore } from '../src/db/repositories/artifacts.js';
 import { InMemoryDatasetStore } from '../src/db/repositories/datasets.js';
@@ -180,31 +180,109 @@ describe('W3-B artifact', () => {
 });
 
 describe('W3-B dataset', () => {
-  test('create → read round-trips, quota and fence enforced', async () => {
-    const { ctx, fs, cleanup } = await makeWs();
-    const store = new InMemoryDatasetStore();
-    const svc = new DatasetService(() => fs, store);
-    const content = new TextEncoder().encode('dataset payload');
-    const rec = await svc.create({ workspace: ctx, name: 'my dataset.csv', content, filename: 'data.csv' });
-    assert.equal(rec.name, 'data.csv');
-    const { content: got } = await svc.read(rec.datasetId, ctx);
-    assert.equal(new TextDecoder().decode(got), 'dataset payload');
+  function svcFor(fs: WorkspaceFileSystem, root: string, store?: InMemoryDatasetStore) {
+    return new DatasetService(() => fs, store ?? new InMemoryDatasetStore(), {
+      roots: {
+        artifactsRoot: path.join(root, 'control', 'artifacts'),
+        controlRoot: path.join(root, 'control', 'root'),
+      },
+    });
+  }
+
+  const owner = { orgId: 'org_w3b', userId: 'user_w3b' };
+
+  function begin(ctx: WorkspaceContext, filename: string, idem?: string) {
+    return {
+      workspace: ctx,
+      sessionId: ctx.workspaceId,
+      conversationId: 'conv_w3b',
+      owner,
+      originalFilename: filename,
+      ...(idem !== undefined ? { idempotencyKey: idem } : {}),
+    };
+  }
+
+  async function* bytes(...parts: string[]): AsyncGenerator<Uint8Array> {
+    for (const part of parts) yield new TextEncoder().encode(part);
+  }
+
+  test('三段式流式上传 → 落到工作区 datasets/{id}/{name}，字节与 sha256 都对', async () => {
+    const { root, ctx, fs, cleanup } = await makeWs();
+    const svc = svcFor(fs, root);
+    // 分两块喂，证明确实是流式而不是一次性 buffer。
+    const rec = await svc.uploadStream(begin(ctx, 'my dataset.csv'), bytes('col_a,col_b\n', '1,2\n'));
+
+    assert.equal(rec.status, 'ready');
+    // Python 的 sanitize 不动空格，只处理分隔符/控制字符/`..`/首尾点。
+    assert.equal(rec.storedRelativePath, `datasets/${rec.datasetId}/my dataset.csv`);
+    assert.equal(rec.sizeBytes, Buffer.byteLength('col_a,col_b\n1,2\n'));
+    assert.equal(rec.sha256, createHash('sha256').update('col_a,col_b\n1,2\n').digest('hex'));
+
+    const physical = await svc.resolveContentPath(rec, ctx);
+    assert.equal(await readFile(physical, 'utf8'), 'col_a,col_b\n1,2\n');
+    // 落点必须在工作区内——数据集与产物相反，它就是要给模型读的。
+    assert.ok(physical.startsWith(ctx.workspaceRoot), physical);
     await cleanup();
   });
 
-  test('dataset cross-workspace read 404 without leaking path', async () => {
+  test('跨租户取数据集当作不存在，不泄漏物理根', async () => {
     const a = await makeWs();
-    const b = await makeWs();
     const store = new InMemoryDatasetStore();
-    const svcA = new DatasetService(() => a.fs, store);
-    const rec = await svcA.create({ workspace: a.ctx, name: 'x', content: new TextEncoder().encode('hi') });
-    const svcB = new DatasetService(() => b.fs, store);
-    await assert.rejects(() => svcB.read(rec.datasetId, b.ctx), (err: unknown) => {
-      assert.ok(!(err as Error).message.includes(a.ctx.workspaceRoot));
-      return true;
-    });
+    const svcA = svcFor(a.fs, a.root, store);
+    const rec = await svcA.uploadStream(begin(a.ctx, 'secret.csv'), bytes('hi'));
+
+    assert.equal(await svcA.get(rec.datasetId, { orgId: 'org_x', userId: 'user_x' }), null);
+    assert.deepEqual(await svcA.list(a.ctx.workspaceId, { orgId: 'org_x', userId: 'user_x' }), []);
     await a.cleanup();
-    await b.cleanup();
+  });
+
+  test('同一个幂等键第二次上传不新建，直接回首次的记录', async () => {
+    const { root, ctx, fs, cleanup } = await makeWs();
+    const store = new InMemoryDatasetStore();
+    const svc = svcFor(fs, root, store);
+    const first = await svc.uploadStream(begin(ctx, 'a.csv', 'idem-key-1'), bytes('x'));
+    const second = await svc.uploadStream(begin(ctx, 'a.csv', 'idem-key-1'), bytes('x'));
+    assert.equal(second.datasetId, first.datasetId);
+    assert.equal((await svc.list(ctx.workspaceId, owner)).length, 1);
+    await cleanup();
+  });
+
+  test('超过上限即 413，且不在工作区留下半个文件', async () => {
+    const { root, ctx, fs, cleanup } = await makeWs();
+    const svc = new DatasetService(() => fs, new InMemoryDatasetStore(), {
+      roots: {
+        artifactsRoot: path.join(root, 'control', 'artifacts'),
+        controlRoot: path.join(root, 'control', 'root'),
+      },
+      maxBytes: 8,
+    });
+    await assert.rejects(
+      () => svc.uploadStream(begin(ctx, 'big.bin'), bytes('0123456789')),
+      (err: unknown) => {
+        assert.equal((err as DatasetError).code, 'dataset_too_large');
+        assert.equal((err as DatasetError).status, 413);
+        return true;
+      },
+    );
+    // 工作区里不该出现 datasets/ 目录——发布只在收完之后发生。
+    await assert.rejects(() => readFile(path.join(ctx.workspaceRoot, 'datasets'), 'utf8'));
+    await cleanup();
+  });
+
+  test('sanitizeDatasetFilename 逐条对齐 Python', () => {
+    assert.equal(sanitizeDatasetFilename('../../etc/passwd'), 'passwd');
+    assert.equal(sanitizeDatasetFilename('a/b/c.csv'), 'c.csv');
+    assert.equal(sanitizeDatasetFilename(''), 'dataset');
+    // '...' → replace('..','_') 得 '_.'，再 strip('.') 得 '_'（与 Python 逐字符一致，
+    // 不是 'dataset'——只有结果为空或恰为 '.'/'..' 时才回落到 'dataset'）。
+    assert.equal(sanitizeDatasetFilename('...'), '_');
+    assert.equal(sanitizeDatasetFilename('.'), 'dataset');
+    assert.throws(() => sanitizeDatasetFilename('/abs.csv'), DatasetError);
+    assert.throws(() => sanitizeDatasetFilename('a\u0000b'), DatasetError);
+    // 复合扩展名整体保留
+    const long = `${'x'.repeat(300)}.tar.gz`;
+    assert.ok(sanitizeDatasetFilename(long).endsWith('.tar.gz'));
+    assert.ok(sanitizeDatasetFilename(long).length <= 200);
   });
 });
 

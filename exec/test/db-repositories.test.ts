@@ -140,17 +140,42 @@ test('InMemoryArtifactStore: 按 session + owner 列举，跨租户当作不存�
   assert.deepEqual(await s.listBySession('sess1', other, 10), []);
 });
 
-test('InMemoryDatasetStore: insert and get', async () => {
+test('InMemoryDatasetStore: 幂等键查得到，跨租户当作不存在', async () => {
   const s = new InMemoryDatasetStore();
-  await s.insert({
-    datasetId: 'd1',
+  const base = {
+    sessionId: 'sess1',
+    conversationId: 'conv1',
     workspaceId: 'ws1',
     orgId: 'o1',
     userId: 'u1',
-    name: 'ds',
+    originalFilename: 'd.csv',
+    storedRelativePath: 'datasets/d1/d.csv',
+    mimeType: 'text/csv',
+    sha256: null,
+    sizeBytes: 0,
+    status: 'uploading' as const,
+    completedAt: null,
+  };
+  await s.insert({ ...base, datasetId: 'd1', idempotencyKey: 'k1' });
+
+  const owner = { orgId: 'o1', userId: 'u1' };
+  assert.equal(await s.getOwned('d1', owner).then((r) => r?.originalFilename), 'd.csv');
+  assert.equal(await s.findByIdempotencyKey('sess1', owner, 'k1').then((r) => r?.datasetId), 'd1');
+  assert.equal(await s.findByIdempotencyKey('sess1', owner, 'nope'), null);
+
+  await s.complete('d1', {
+    sha256: 'b'.repeat(64),
+    sizeBytes: 42,
+    status: 'ready',
+    completedAt: new Date(),
   });
-  const r = await s.getById('d1');
-  assert.equal(r?.name, 'ds');
+  const done = await s.getOwned('d1', owner);
+  assert.equal(done?.status, 'ready');
+  assert.equal(done?.sizeBytes, 42);
+
+  const other = { orgId: 'o2', userId: 'u2' };
+  assert.equal(await s.getOwned('d1', other), null);
+  assert.equal(await s.findByIdempotencyKey('sess1', other, 'k1'), null);
 });
 
 test('InMemorySessionEventStore: appendBatch and list fromSeq', async () => {
