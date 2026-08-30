@@ -6,8 +6,8 @@ Pi Enterprise Sandbox 四服务 API 分层：
 |----|------|------|
 | **Public** | Frontend Nginx | `/api/*` 反向代理到 API Server |
 | **API Server (BFF)** | Node.js 22 (port 4000) | Run API/SSE relay、健康探针、文件上传/下载代理 |
-| **Agent** | Node.js 22 (port 4100) | 内部 Run API + pi-coding-agent SDK（浏览器不直连） |
-| **Sandbox** | FastAPI (container 8081，无宿主映射) | Agent 专用内部执行平面（HMAC `/internal/v1/*`）；文件/执行/进程/数据集/产物（Docker 内网） |
+| **Agent** | Node.js 22 (port 4100) | 内部 Run API + DeepSeek Harness（浏览器不直连） |
+| **Sandbox（执行面）** | Node.js/TypeScript (container 8081，无宿主映射) | Agent 专用内部执行平面（HMAC `/internal/v1/*`）+ 对 BFF 的公共会话面；文件/执行/搜索/进程/数据集/产物（Docker 内网） |
 
 无 Python Agent Runtime、无双 Runtime 开关。Agent **支持零 Skill 启动**；共享 `skills/` 挂载与 package skills 由 Agent Profile 策略 + session capability registry 控制。
 
@@ -314,7 +314,7 @@ Base URL: `http://sandbox:8081`（Docker 内网）
 这 13 个 sandbox-bridge 工具（`read` `ls` `find` `grep` `write` `edit` `bash`
 `python` `process_start` `process_status` `process_read` `process_kill`
 `submit_artifact`）是模型能看到的全部 Sandbox 工具面，由
-`agent/src/extensions/sandbox-bridge/constants.js` 的 `SANDBOX_TOOL_NAMES` 固定，
+`agent/src/infrastructure/dsh/constants.js` 的 `SANDBOX_TOOL_NAMES` 固定，
 并有守卫测试断言其中不含任何 SQL/DSN 工具。
 
 `ls` / `find` / `grep` 是 SDK 同名本地工具的沙箱替代品：那三个因为会读 Agent
@@ -529,7 +529,7 @@ metadata，也不触发 `artifact.ready/file_ready`。目标会话如需正式�
 
 Agent Runtime 的 MCP Connection Manager 仍直接连接外部 MCP Gateway/Server，并在进程启动时对每个 `enabled=true` 的 `MCP_SERVERS_JSON` 条目执行 `tools/list`。发现的工具直接注册为 `mcp__{serverId}__{toolName}`，并默认走 approval；配置不支持热加载。任一启用 Server 不可连接时，Agent `GET /ready` 返回 503，避免将故障静默降级为没有 MCP 工具。
 
-另外，Sandbox 模块提供独立部署的 `sandbox-mcp` Streamable HTTP 服务（`/mcp`），用于不经过 Agent 的受限 Python、文件和 Artifact 工作流。它不是 Sandbox API 的公开路由，且 MCP 进程不挂载任何 Sandbox 存储卷；详细部署与认证边界见 [`sandbox-mcp.md`](./sandbox-mcp.md)。
+另外，执行面镜像提供**第二个入口** `sandbox-mcp`（Streamable HTTP，`/mcp`），用于不经过 Agent 的受限 Python、文件和 Artifact 工作流。它是独立进程、独立凭据，只能经 `/internal/mcp/v1/*` 窄桥访问执行面，够不到 HMAC 内部面；不挂载任何工作区卷。详细部署与认证边界见 [`sandbox-mcp.md`](./sandbox-mcp.md)。
 
 ---
 

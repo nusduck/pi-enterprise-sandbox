@@ -9,14 +9,18 @@
 
 ## 1. 三十秒定位
 
-四个可独立部署的服务，**权威边界是本仓库最重要的约定**——改错层是最常见的错误：
+五个可独立部署的进程，**权威边界是本仓库最重要的约定**——改错层是最常见的错误：
 
 | 服务 | 是什么 | 拥有哪些权威事实 | 不该有什么 |
 |------|--------|------------------|-----------|
 | `frontend/` | Vite + React SPA | UI 状态投影 | 零 Agent SDK、零 LLM key |
-| `api-server/` | 薄 BFF | 浏览器会话、上传/下载代理、SSE 中继 | 不做编排、不判 Run 状态、**不依赖 pi SDK** |
+| `api-server/` | 薄 BFF | 浏览器会话、上传/下载代理、SSE 中继 | 不做编排、不判 Run 状态、**不依赖 Agent SDK** |
 | `agent/` | 独立 Agent 服务 + Worker | **Run / ToolExecution / Conversation / 审批的唯一账本（MySQL）** | 不直接碰工作区字节 |
-| `sandbox/` | Python FastAPI 执行面 | **工作区与 /tmp 的字节、进程、隔离** | 不存 Run 账本（`/agent-runs` 已删，勿重建） |
+| `exec/` | TypeScript 执行面（`dist/main.js`） | **工作区与 /tmp 的字节、进程、Bubblewrap 隔离、产物快照** | 不存 Run 账本（`/agent-runs` 已删，勿重建） |
+| `exec/`（第二入口 `dist/mcp-main.js`） | 对外的 MCP facade，compose 里叫 `sandbox-mcp` | 外部 `context_id` → 沙箱身份的映射（Redis） | **够不到 `/internal/v1/*`**；只走 `/internal/mcp/v1/*` 窄桥 |
+
+> **`agent/runtime/`** 是 agent 私有的 DSH 组合层（`@pi/runtime`），不是第六个服务：
+> 只有 `agent/` 消费它。`contract/` 是 exec 与 runtime 共用的 RPC 契约包。
 
 推论（都踩过坑）：
 
@@ -25,6 +29,8 @@
   浏览器侧的运维操作走会话作用域的公共适配器。**两者不可互相替代**——浏览器请求
   没有 fence token，内部面也不认它。
 - BFF 只做转发与鉴权投影；它的 `X-Acting-*` 必须由服务端解析后写入，永远不能透传浏览器的。
+- MCP facade 与执行面**同镜像、不同入口、不同凭据**。它是唯一对外暴露的进程，
+  所以它只持有窄桥那枚 token；把这两个进程合并等于让一次 RCE 直接拿到完整内部面。
 
 源码根与分层约定见 [`docs/module-layout.md`](docs/module-layout.md)。
 
@@ -35,9 +41,11 @@
 - **fail-closed 优先**：鉴权/密钥/隔离配置缺失时必须关闭能力，不能回退到默认可用。
   已有先例：Agent `/internal/*` 空 token 关闭平面、Sandbox 无 JWT secret 拒绝启动。
 - **跨租户一律 404**，不用 403——存在性本身不能泄漏。
-- **令牌比较用常量时间**（`timingSafeEqual` / `hmac.compare_digest`）。
-- **容器非 root 运行**：`api-server`/`agent` 以 `node` 用户运行；`sandbox` 以 root 启动
-  仅为搭建 Bubblewrap，随后 `setpriv` 降权。
+- **令牌比较用常量时间**（`timingSafeEqual`）。
+- **容器非 root 运行**：`api-server`/`agent` 以 `node` 用户运行；`sandbox`/`sandbox-mcp`
+  以 uid 10001 运行。exec 进程自身若带着 capabilities，会在 exec bwrap 之前用
+  `setpriv --inh-caps=-all --ambient-caps=-all` 剥掉——镜像里缺 `setpriv` 时
+  **fail-closed 拒绝执行**，不是降级放行。
 - **所有出站调用有超时**：无界 fetch 会让一个挂起的依赖拖垮全站。
 - **不把密钥写进文档、日志、`.env.example`**（只允许占位符）。
 
@@ -57,21 +65,38 @@
 
 ## 4. 验证清单
 
-四套测试（命令详见 `docs/development.md`）：
+六套测试（命令详见 `docs/development.md`）：
 
 ```bash
-uv run pytest -q                    # sandbox（含仓库结构与版本钉检查）
+uv run pytest -q                    # 仓库卫生：结构棘轮、版本钉、compose 安全、SSE 夹具
+npm test --prefix exec              # 执行面 + MCP facade（TypeScript）
+npm test --prefix contract          # RPC 契约
 npm test --prefix agent             # agent
 npm test --prefix api-server        # BFF
 npm test --prefix frontend && npx tsc --noEmit -p frontend/tsconfig.json
 ```
 
-**什么时候必须重建容器并跑真实链路**：改了 `agent/`、`api-server/`、`sandbox/` 的运行
+TypeScript 侧还要过类型检查，**它不在 `npm test` 里**：
+
+```bash
+npx tsc --noEmit -p exec/tsconfig.json
+npx tsc --noEmit -p contract/tsconfig.json
+npx tsc --noEmit -p agent/runtime/tsconfig.json
+exec/node_modules/.bin/tsc -p agent/tsconfig.json   # agent 的 JS 开了 checkJs
+```
+
+`agent/runtime/` 的用例要**逐文件**跑（`npx tsx --test test/<name>.test.ts`）：
+四个并行跑全量会超时，见 `docs/design/waves/HANDOFF.md` 的已知坑。
+
+**什么时候必须重建容器并跑真实链路**：改了 `agent/`、`api-server/`、`exec/` 的运行
 路径，或删除了任何生产代码。镜像**不挂载源码**，不重建就是在验证旧代码：
 
 ```bash
-docker compose build agent api-server sandbox && docker compose up -d
+docker compose build agent api-server sandbox sandbox-mcp && docker compose up -d
 ```
+
+> `sandbox` 与 `sandbox-mcp` 是**同一个镜像的两个入口**。只重建其中一个，另一个
+> 还在跑旧代码——2026-08-30 就因此追了半天一个"第一次成功、之后全 500"的假象。
 
 真实链路最少覆盖：登录 → 建会话 → 一轮带工具的 run → 进程 logs/signal → 跨租户 404。
 
@@ -80,6 +105,9 @@ docker compose build agent api-server sandbox && docker compose up -d
 - 宿主机存在 `~/.pi/agent/mcp.json` 时，`agent/tests/pi/mcp-seam.unit.test.js` 的 6 个用例
   必失败（企业运行时禁止 ambient MCP 配置）。移开该文件即可确认。
 - `scripts/smoke-cross-service.mjs` 依赖 bubblewrap，**只能在 Linux/CI 跑**，macOS 上必失败。
+- 同理，macOS 的 Docker Desktop 不允许在容器里创建非特权 user namespace，
+  容器内 `bwrap` 会报 `No permissions to create new namespace`。执行链路的其余部分
+  （facade → 窄桥 → exec → 调起 bwrap）在 macOS 上可验，真正的隔离执行要 Linux 宿主。
 - `tests/test_repository_layout.py` 是棘轮：生产文件默认 ≤1000 行，热点文件的预算钉在当前
   行数，只能减不能增。加行就会失败——优先按职责拆分，确需提高预算必须在 commit message
   说明理由。

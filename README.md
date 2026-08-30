@@ -29,10 +29,14 @@ open http://localhost:3000
 |------|--------|---------------|
 | **Frontend** | Vite + React → Nginx | `3000→80` |
 | **API Server (BFF)** | Node.js 22 — auth / files / SSE relay | `4000→4000` |
-| **Agent** | Node.js 22 + pi-coding-agent SDK `0.80.3` | `4100→4100` |
-| **Sandbox API** | Python 3.11 + FastAPI | 仅 Docker 内网 `8081`，不发布宿主端口 |
+| **Agent** | Node.js 22 + DeepSeek Harness（`@deepseek-ai/dsh-*`）| `4100→4100` |
+| **Sandbox（执行面）** | Node.js 22 + TypeScript + Bubblewrap | 仅 Docker 内网 `8081`，不发布宿主端口 |
+| **Sandbox MCP facade** | 同一镜像的第二入口 | 开发期回环 `8082`；生产由边缘代理 |
 
-运行时版本钉（Node 22 / Python 3.11 / Pi SDK 0.80.3）见根目录 `runtime-versions.json`，由 `tests/test_runtime_versions.py` 校验。
+运行时版本钉（Node 22 / Python 3.11 / DSH `0.1.1-rc.2`）见根目录 `runtime-versions.json`，由 `tests/test_runtime_versions.py` 校验。
+
+> Python 3.11 现在只有一个用途：**沙箱镜像里给模型执行代码用的解释器与运行库**
+> （`exec/requirements.txt`）。服务代码已全部是 TypeScript。
 
 ## 目录结构
 
@@ -47,28 +51,33 @@ pi-sandbox/
 │   ├── src/routes/       ← runs, files, status, conversations, capabilities...
 │   ├── src/services/     ← sandbox-client + agent-client
 │   └── Dockerfile
-├── agent/                ← 独立 Agent（@earendil-works/pi-coding-agent 0.80.3）
+├── agent/                ← 独立 Agent（DeepSeek Harness）
 │   ├── server.js         ← 内部 Run API / health
 │   ├── src/application/  ← Run、Session、审批、A2A 应用服务
-│   ├── src/extensions/   ← sandbox-bridge、enterprise-policy、observability、user-interaction（+ 可选 skill-lifecycle）
-│   ├── src/infrastructure/ ← MySQL、Redis、Pi、MCP 与 Sandbox ports
+│   ├── src/infrastructure/dsh/ ← 与 @pi/runtime 的接线
+│   ├── runtime/          ← @pi/runtime：DSH 组合层（provider / policy / projection）
+│   │                        agent 私有，不是独立服务
 │   └── Dockerfile
-├── sandbox/              ← 安全沙箱（Python FastAPI + 多层防护，无 Agent 主循环）
-│   ├── main.py           ← FastAPI 入口
-│   ├── artifact/         ← Artifact 领域、应用、持久化与 public/internal API
-│   ├── routers/          ← internal/v1 执行平面 + files/datasets 兼容适配 + health
-│   ├── services/         ← 会话/执行/文件/审计/审批策略
-│   └── Dockerfile
+├── contract/             ← @pi/contract：exec ↔ runtime 的 RPC 信封、HMAC、错误码
+├── exec/                 ← 执行面 + MCP facade（TypeScript，取代原 Python sandbox/）
+│   ├── src/main.js       ← 执行面入口（compose: sandbox）
+│   ├── src/mcp-main.ts   ← MCP facade 入口（compose: sandbox-mcp，同镜像不同入口）
+│   ├── src/isolation/    ← Bubblewrap profile 建模为数据 + 单一 render()
+│   ├── src/fs/ shell/ search/ workspace/  ← 文件、命令与作业、搜索、工作区与配额
+│   ├── src/artifact/ dataset/ attachment/ ← 产物（控制面快照）、数据集、附件
+│   ├── src/http/         ← internal（HMAC）、internal-mcp（窄桥）、public（BFF 契约）
+│   ├── requirements.txt  ← 镜像里给**模型执行代码**用的 Python 运行库
+│   └── Dockerfile        ← 服务 + 模型工具链（python3/chromium/LibreOffice/bun…）
 ├── skills/               ← 可选系统 Skill 挂载（非硬依赖；AgentVersion allowlist + capabilities 控制模型可见性）
-├── tests/                ← pytest 测试套件
+├── tests/                ← pytest：仓库卫生（结构棘轮、版本钉、compose 安全、SSE 夹具）
 ├── scripts/              ← 备份/恢复、development reset、跨服务 smoke
 ├── nginx/                ← 生产 Nginx + SSL
 ├── docs/                 ← 活跃文档（见 docs/README.md 权威顺序）
 ├── .runtime/             ← 全部宿主机运行态（Git/Docker build 均忽略）
 │   ├── sandbox/          ← workspaces、tmp、artifacts、control
-│   ├── agent/            ← 本地 Pi Agent 资源目录
+│   ├── agent/            ← 本地 Agent 资源目录
 │   └── …                 ← smoke / release-gate 等按需创建的临时状态
-├── docker-compose.yml           ← 开发编排（Frontend + BFF + Agent + Sandbox + MySQL 8 + Redis 7）
+├── docker-compose.yml           ← 开发编排（Frontend + BFF + Agent + Sandbox + MCP + MySQL 8 + Redis 7）
 ├── docker-compose.prod.yml      ← 生产 overlay（MySQL 8 + Redis 7 + Nginx + SSL）
 └── .env.example          ← 环境变量模板（与部署文档一致）
 ```
@@ -221,13 +230,16 @@ Skill ZIP，或与 Agent 交互生成 Skill；安装、生成、编辑和卸载�
 
 ```bash
 # 依赖（从仓库根目录；Node 22）
-uv sync --extra test
+uv sync --extra test          # 只为跑 tests/ 的仓库卫生检查
+npm ci --prefix contract
+npm ci --prefix exec
+npm ci --prefix agent/runtime
 npm ci --prefix api-server
 npm ci --prefix agent
 npm ci --prefix frontend
 
-# 本地四进程
-uv run uvicorn sandbox.main:app --port 8081 --reload
+# 本地进程（执行面裸跑需要 Linux：Bubblewrap 要非特权 user namespace）
+npm run build --prefix contract && npm run build --prefix exec && node exec/dist/main.js
 SANDBOX_BASE_URL=http://localhost:8081 npm run dev --prefix agent
 SANDBOX_BASE_URL=http://localhost:8081 AGENT_BASE_URL=http://localhost:4100 \
   npm run dev --prefix api-server
@@ -235,8 +247,10 @@ npm run dev --prefix frontend
 
 # 质量门禁（与 CI 对齐）
 uv run pytest tests/ -q --tb=short
+npm test --prefix exec && npx tsc --noEmit -p exec/tsconfig.json
+npm test --prefix contract
+npm test --prefix agent && exec/node_modules/.bin/tsc -p agent/tsconfig.json
 node --test api-server/tests/*.test.js
-node --test agent/tests/*.test.js agent/tests/sdk-compat/*.test.js
 npm test --prefix frontend && npm run build --prefix frontend
 docker compose config -q
 # 无真实 LLM key 的跨服务 smoke（fake OpenAI；禁止 production）

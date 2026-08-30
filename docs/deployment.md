@@ -84,11 +84,11 @@ Child monitor codes: `workspace_quota_exceeded`,
                                   │
                   ┌───────────────▼──────────────┐
                   │   agent (Node:4100)           │
-                  │   pi-coding-agent SDK · LLM   │
+                  │   DeepSeek Harness · LLM      │
                   └───────────────┬──────────────┘
                                   │
                   ┌───────────────▼──────────────┐
-                  │   sandbox (FastAPI:8081)       │
+                  │   exec (Node/TS:8081)          │
                   │   Execution · Files · Auth     │
                   │   MySQL 8 (formal topology)    │
                   └──────────────────────────────┘

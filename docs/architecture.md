@@ -15,12 +15,14 @@ Pi Enterprise Sandbox 采用**四服务架构**，前端、BFF、Agent 与沙箱
 │    host:4000 → container:4000                            │
 ├──────────────────────────────────────────────────────────┤
 │              Agent Service (Node.js)                      │
-│    pi-coding-agent SDK · Run API · Extensions · Tools     │
+│    DeepSeek Harness · Run API · policy · tools            │
+│    @pi/runtime = providers + policy + projection          │
 │    host:4100 → container:4100                            │
 ├──────────────────────────────────────────────────────────┤
-│              Sandbox Service (FastAPI)                     │
+│              Exec Service (Node.js / TypeScript)          │
 │    Internal execution plane: files · execution · process │
-│    datasets · artifacts · resource limits                │
+│    search · datasets · artifacts · resource limits       │
+│    + MCP facade as a second entrypoint (same image)      │
 │    MySQL 8 (sole formal DB topology, dev + prod)         │
 │    container:8081 only — no host port in dev or prod     │
 ├──────────────────────────────────────────────────────────┤
@@ -39,14 +41,23 @@ Pi Enterprise Sandbox 采用**四服务架构**，前端、BFF、Agent 与沙箱
 |------|--------|--------|------|
 | **Frontend** | `pi-enterprise-frontend` | Vite + React → Nginx | 纯 UI 渲染，零 Agent 逻辑；Nginx 反向代理 `/api/*` |
 | **API Server (BFF)** | `pi-enterprise-api` | Node.js 22 | 认证、会话文件边缘、Run API 与 SSE relay |
-| **Agent** | `pi-enterprise-agent` | Node.js 22 + pi-coding-agent SDK `0.80.3` | MySQL Run/Session authority、Pi Runtime、四个必需 Extension + 一个可选、`pi-mcp-adapter` |
-| **Sandbox** | `pi-enterprise-sandbox` | Python 3.11 + FastAPI | Agent 专用内部执行平面（HMAC `/internal/v1/*`）；安全命令执行、文件读写、产物管理（无 Agent 主循环）。compose 中无 `ports:` 段——宿主不可直连，只能从 `backend_internal` 访问 |
+| **Agent** | `pi-enterprise-agent` | Node.js 22 + `@deepseek-ai/dsh-*` `0.1.1-rc.2` | MySQL Run/Session authority；经 `agent/runtime`（`@pi/runtime`）组合 DSH：远程 fs/shell/jobs provider、MySQL 会话持久化、策略挂载点、SSE 投影 |
+| **Sandbox（执行面）** | `pi-enterprise-sandbox` | Node.js 22 + TypeScript + Bubblewrap | Agent 专用内部执行平面（HMAC `/internal/v1/*`）+ 对 BFF 的公共会话面；命令执行、文件、搜索、数据集、产物。compose 中无 `ports:` 段——宿主不可直连，只能从 `backend_internal` 访问 |
+| **Sandbox MCP** | `pi-enterprise-sandbox-mcp` | 同一镜像，入口 `dist/mcp-main.js` | 对外的 Streamable HTTP MCP 面。**只能走 `/internal/mcp/v1/*` 窄桥**，够不到内部面——这是它单独成进程的全部理由 |
+
+> **Python 还在，但换了角色。** 服务代码全是 TypeScript；Python 3.11 只作为
+> 沙箱镜像里给**模型执行代码**用的解释器与运行库（`exec/requirements.txt`），
+> 挂载在 `/opt/pi-python/venv`，由 `AGENT_PYTHON_VENV` 单一事实源同时决定
+> Bubblewrap 的只读挂载与子进程 `PATH`。
 
 ## 通信协议
 
 ```
-Browser → Frontend → BFF (Node:4000) → Agent (Node:4100) → Sandbox (FastAPI:8081)
-                       │ SSE relay      │ SDK loop + LLM     │ REST 执行点
+Browser → Frontend → BFF (Node:4000) → Agent (Node:4100) → Exec (Node:8081)
+                       │ SSE relay      │ DSH loop + LLM     │ HMAC 内部面
+
+外部 MCP 客户端 → Sandbox MCP (Node:8082) ──窄桥──→ Exec (Node:8081)
+                   只持有 SANDBOX_MCP_INTERNAL_TOKEN，只认 /internal/mcp/v1/*
 ```
 
 - **Browser → Frontend**: HTTP，静态文件服务 + `/api/*` 反向代理
@@ -54,7 +65,7 @@ Browser → Frontend → BFF (Node:4000) → Agent (Node:4100) → Sandbox (Fast
 - **API Server → Agent**: 内部 Run API（`X-Internal-Token`），序列化 SSE 事件；Run/event 事实仅 Agent MySQL
 - **Agent → Sandbox**: HMAC-authenticated internal HTTP (`/internal/v1/*`) for execution, files, processes, datasets and artifact submit; **不** dual-write Run 状态
 - **Browser/BFF → Sandbox**: 浏览器不直连 Sandbox。用户可见的文件、Dataset、Artifact 操作只能经 BFF `/api/*`，并由 BFF/Agent 注入 owner context；旧 `/sessions/*` adapters 仅供兼容测试或受控开发代理，不是正式公共 API。
-- **Agent → MCP**: `pi-mcp-adapter` 直连外部 MCP（不经 Sandbox）
+- **Agent → MCP**: 直连外部 MCP（不经执行面）
 - **Agent → LLM**: HTTPS 直连，API Key 仅存 Agent 服务环境变量
 - **Browser ← API Server**: SSE (`text/event-stream`)，事件驱动渲染
 - **Artifact 下载**: 仅 `artifact_id` → control-plane snapshot；禁止 workspace path 作为交付 fallback
@@ -69,16 +80,17 @@ Sub-Agent 暂不进入运行时。启用门槛与安全边界以 `plan.md` 与�
 
 ### 1. 独立 Node Agent 服务
 
-Agent（`pi-coding-agent` SDK）运行在独立 `agent/` 服务中，而非浏览器或 BFF。收益：
+Agent（DeepSeek Harness）运行在独立 `agent/` 服务中，而非浏览器或 BFF。收益：
 
 - **LLM API Key 零暴露** — 仅存 Agent 服务环境变量
 - **BFF / Agent / Sandbox 可独立扩缩容与回滚**
 - **工具调用不可篡改** — 用户只能发文本消息，无法绕过服务端
-- **Python 仅作 Sandbox 执行语言** — 无 Python Agent 主循环
+- **Python 只是模型的执行语言之一** — 服务代码全是 TypeScript，镜像里的
+  Python 解释器与运行库只供 Bubblewrap 子进程使用
 
 ### 2. 前端纯 UI，零 Agent 依赖
 
-前端为自研 React/TypeScript SPA（Vite），通过 BFF SSE 消费事件流并自行管理 UI 状态。**不**依赖 `@earendil-works/pi-coding-agent` / `pi-ai` / `pi-web-ui`（后者已从 `frontend/package.json` 移除：静态搜索确认无 import）。运行时版本钉见根目录 `runtime-versions.json`。
+前端为自研 React/TypeScript SPA（Vite），通过 BFF SSE 消费事件流并自行管理 UI 状态。**不**依赖任何 Agent SDK（`@earendil-works/*` 已整仓移除，见 `tests/test_runtime_versions.py::test_no_earendil_direct_deps`）。运行时版本钉见根目录 `runtime-versions.json`。
 
 ### 3. AgentSession-owned workspace 隔离（Bubblewrap + `workspace_id`）
 
@@ -211,11 +223,11 @@ Workspace 内的 `read`、`write`、`edit`、`bash`、Python、Node、文件删�
 ```
 1. 用户输入 → Browser 发送 `POST /api/runs`，取得 canonical `run_id`
 2. Frontend Nginx 反向代理到 api-server:4000
-3. Browser 通过 `GET /api/runs/:id/events` 消费 BFF relay 的序列化 SSE（BFF 不 import pi-coding-agent）
+3. Browser 通过 `GET /api/runs/:id/events` 消费 BFF relay 的序列化 SSE（BFF 不 import 任何 Agent SDK）
 4. Agent：
    a. 创建或复用 conversation + Agent Session，并恢复其 sandbox session（`workspace_id`）
-   b. 初始化 pi-coding-agent session（基础 tools、model、auth；session-scoped capability registry；profile skill 策略）。进程启动时已对每个启用 MCP 执行 `tools/list`，并将工具注册为 `mcp__{serverId}__{toolName}`；MCP 配置变更须重启 Agent。
-   c. 绑定 Extensions 后以 Pi active tools + resourceLoader skills + MCP 注入结果做权威 reconcile，并发布 diagnostics 可消费的 live snapshot
+   b. 经 `@pi/runtime` 组合 DSH 会话（基础 tools、model、auth；per-Run scope 承载工具视图/guard/skill 层；profile skill 策略）。进程启动时已对每个启用 MCP 执行 `tools/list`，并将工具注册为 `mcp__{serverId}__{toolName}`；MCP 配置变更须重启 Agent。
+   c. 绑定策略挂载点后以 DSH active tools + 启用集 skills + MCP 注入结果做权威 reconcile，并发布 diagnostics 可消费的 live snapshot
    d. 调用 session.prompt(text)；清单/数量类问题须经 `capabilities` 工具（list/search/describe）
    e. Agent 循环：
       - LLM text_delta → SSE: {type:"token", text:"..."}
@@ -278,22 +290,25 @@ Agent Session 生命周期。
 安全策略在两层独立执行，**Sandbox 不信任 Extension 结论**：
 
 ```text
-Agent Host + first-party Extensions
-  sandbox-bridge         → 注册 13 个工具；owner/run/session 绑定、写工具串行互斥
-  enterprise-policy      → 拦截每次 tool_call：allow | require_approval | deny
-  observability          → 记录工具结果与审计事件
-  user-interaction       → 注册 ask_user（必需；由 interaction 这个 legacy 包名改名而来）
-  skill-lifecycle        → 可选，用户态 Skill 安装/生成/编辑/卸载
-  subagent-spawn         → 可选，创建/轮询子 Run（同队列、同 worker、同恢复路径）
-  task-state             → 默认装载（store 就绪时），会话 todo 列表 + owner 级长期备忘
+Agent Host + @pi/runtime（DSH 的四个既有挂载点，不建平行体系）
+  tools/pre-execute      → 风险表、参数守卫、source_digest、持久 PENDING 审批
+  ctx.tools.guard()      → 租户与 fence 的单调兜底；拒绝后监听器无法翻案
+  tools/execute（环绕）  → 每 Run 工具数、轮次、deadline
+  tools/post-execute     → 脱敏、账本、上下文附加
+  远程 provider          → ctx.fs / ctx.shell / ctx.jobs 全部指向 exec，
+                           agent 进程内零本机文件与进程操作
   durable MySQL ledger   → 外部副作用审批、审计、resume
         │
         ▼
-Sandbox internal plane (FastAPI)
-  HMAC claim/scope/body digest/replay jti → 调用身份 fail-closed
+Exec internal plane (TypeScript)
+  HMAC claim/scope/body digest           → 调用身份 fail-closed
   /internal/v1/* hard deny               → 危险命令不进入审批
   path / ownership / isolation           → 路径、租户与执行资源独立校验
+  Bubblewrap                             → **唯一的安全边界**（ADR 0007 D11）
 ```
+
+**Exec 不信任 Agent 侧的策略结论**：上面两层是独立的，agent 侧策略被绕过也不等于
+执行面放行。
 
 | 策略结果 | `APPROVAL_MODE=ask` | `APPROVAL_MODE=deny` | `APPROVAL_MODE=auto_approve` |
 |----------|----------------------|-----------------------|-----------------------------------|
@@ -334,15 +349,15 @@ Sandbox internal plane (FastAPI)
 
 | 组件 | 技术 |
 |------|------|
-| Sandbox API | Python 3.11 / FastAPI |
-| Persistence | **MySQL 8**（dev/prod 唯一正式拓扑；`AGENT_DATABASE_URL` / `SANDBOX_DATABASE_URL`）；Agent Knex migrations + Sandbox PyMySQL repos |
+| Exec / Sandbox | **Node.js 22 / TypeScript** + Bubblewrap；镜像内另带 Python 3.11 venv 供模型执行代码 |
+| Persistence | **MySQL 8**（dev/prod 唯一正式拓扑；`AGENT_DATABASE_URL` / `EXEC_DATABASE_URL`）；Agent Knex migrations + exec 自有 `exec_*` 表 |
 | Runtime coordination | **Redis 7**（Agent-only；`AGENT_REDIS_URL` / `REDIS_URL`；queue/lease/stream；非事实权威） |
 | API Server (BFF) | **Node.js 22** — 薄 BFF，不托管 Agent SDK |
 | Frontend | Vite + React 19 + TypeScript SPA（`frontend/src/*.tsx`/`*.ts`），构建镜像 Node 22 |
-| Agent SDK | 独立 Node 22 服务（`@earendil-works/pi-coding-agent` 精确锁定） |
-| MCP Adapter | Agent Node runtime `pi-mcp-adapter@2.11.0`（exact lock）；直连外部 MCP Gateway/Server |
+| Agent Harness | 独立 Node 22 服务（`@deepseek-ai/dsh-*` `0.1.1-rc.2`，逐包 exact pin） |
+| MCP | 对外 facade 用 `@modelcontextprotocol/sdk`（exec 的第二入口）；Agent 侧的外部 MCP 接入见 `docs/sandbox-mcp.md` |
 | Container | Docker, docker compose |
-| Testing | pytest；`node:test`（api-server + agent + frontend）；无密钥 cross-service smoke；CI 见 `.github/workflows/test.yml` |
+| Testing | `node:test`（exec / contract / agent / api-server / frontend）；pytest 只做仓库卫生（结构棘轮、版本钉、compose 安全、SSE 夹具）；无密钥 cross-service smoke；CI 见 `.github/workflows/test.yml` |
 
 ## 健康检查语义
 

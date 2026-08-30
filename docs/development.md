@@ -4,9 +4,9 @@
 
 ### 前置要求
 
-- **Python 3.11**（次版本固定；`runtime-versions.json` / `.python-version`；`requires-python = ">=3.11,<3.12"`）
-- **Node.js 22**（主版本固定；`runtime-versions.json` / `.node-version`；`engines.node = ">=22.19.0 <23"`，与 Pi SDK `0.80.3` 一致）
-- **Pi SDK** `@earendil-works/pi-coding-agent` / `@earendil-works/pi-ai` **精确** `0.80.3`（仅 `agent/`；禁止 `^`/`~`）
+- **Node.js 22**（主版本固定；`runtime-versions.json` / `.node-version`；`engines.node = ">=22.19.0 <23"`）
+- **DeepSeek Harness** `@deepseek-ai/dsh-*` **逐包精确** `0.1.1-rc.2`（禁止 `^`/`~`，也不依赖 dist-tag）
+- **Python 3.11**（只用于跑 `tests/` 的仓库卫生检查，以及沙箱镜像里给**模型执行代码**用的解释器；服务代码没有 Python）
 - **Docker** / Docker Compose
 - **Git**
 
@@ -44,11 +44,21 @@ uv run pytest tests/ -q --tb=short
 node --test api-server/tests/*.test.js
 # 或：npm test --prefix api-server
 
-# Node Agent（含 sdk-compat、fake OpenAI、listen smoke）
-node --test agent/tests/*.test.js agent/tests/sdk-compat/*.test.js
-# SDK 精确版本：npm ls --prefix agent @earendil-works/pi-coding-agent
-# 升级流程：docs/runbooks/sdk-upgrade.md · ADR：docs/adr/0001-pi-coding-agent-sdk.md
+# Node Agent
+npm test --prefix agent
+# checkJs（不在 npm test 里）：
+exec/node_modules/.bin/tsc -p agent/tsconfig.json
+# SDK 精确版本：npm ls --prefix agent @deepseek-ai/dsh-base
+# 升级流程：docs/runbooks/sdk-upgrade.md · ADR：docs/adr/0007-agent-runtime-rebuild-on-dsh.md
 # SSOT：runtime-versions.json
+
+# 执行面 + 契约（TypeScript）
+npm test --prefix exec && npx tsc --noEmit -p exec/tsconfig.json
+npm test --prefix contract && npx tsc --noEmit -p contract/tsconfig.json
+
+# @pi/runtime —— **逐文件跑**，四个并行跑全量会超时
+for f in agent/runtime/test/*.test.ts; do (cd agent/runtime && npx tsx --test "test/$(basename $f)"); done
+npx tsc --noEmit -p agent/runtime/tsconfig.json
 
 # Frontend
 npm test --prefix frontend
@@ -84,11 +94,14 @@ smoke/gate 临时目录。
 
 ### 运行（本地四进程）
 
+> **本地裸跑执行面只在 Linux 上有意义**：Bubblewrap 需要非特权 user namespace，
+> macOS 没有。macOS 上请用 Docker（下方），或只跑不涉及执行的那几层。
+
 ```bash
-# Terminal 1: Sandbox
+# Terminal 1: 执行面（exec）
 # Inbound allowlist defaults to loopback + private ranges; see SANDBOX_ALLOWED_CLIENT_CIDRS.
-# SANDBOX_BIND_HOST only sets the listen address (0.0.0.0 ≠ allow any client).
-uv run uvicorn sandbox.main:app --host 127.0.0.1 --port 8081 --reload
+npm run build --prefix contract && npm run build --prefix exec
+node exec/dist/main.js
 
 # Terminal 2: Agent（需要 Sandbox + LLM 配置）
 SANDBOX_BASE_URL=http://localhost:8081 npm run dev --prefix agent
@@ -108,8 +121,10 @@ npm run dev --prefix frontend
 # 完整栈
 docker compose up --build
 
-# 仅 Sandbox（用于 Agent / BFF 本地开发）
+# 仅执行面（用于 Agent / BFF 本地开发）
 docker compose up --build sandbox -d
+# 需要对外 MCP 面时再加一个（同镜像第二入口，必须一起 build）
+docker compose up --build sandbox sandbox-mcp -d
 # 然后本地运行 Agent + BFF：
 SANDBOX_BASE_URL=http://localhost:8081 npm run dev --prefix agent
 SANDBOX_BASE_URL=http://localhost:8081 AGENT_BASE_URL=http://localhost:4100 \
@@ -118,14 +133,19 @@ SANDBOX_BASE_URL=http://localhost:8081 AGENT_BASE_URL=http://localhost:4100 \
 
 ## 开发流程
 
-### 新增 API 端点 (Sandbox)
+### 新增 API 端点（执行面 exec）
 
-1. 在 `sandbox/routers/` 创建或更新 router
-2. 在 `sandbox/services/` 添加业务逻辑
-3. 在 `sandbox/main.py` 注册 router
-4. 如需新模型，在 `sandbox/models.py` 添加 Pydantic schema
-5. 编写测试 `tests/`
-6. 更新 API 文档 `docs/api.md`
+1. 在 `exec/src/http/` 建或改路由文件：
+   - `internal-*.ts` → Agent 用的 HMAC 内部面
+   - `public/*.ts` → BFF 用的会话作用域面（**契约对 BFF 不变**）
+   - `internal-mcp.ts` → 对外 MCP facade 的窄桥（独立 bearer）
+2. 业务逻辑放对应的领域目录（`fs/` `shell/` `search/` `artifact/` `dataset/` …），
+   **不要写在路由里**
+3. 在 `exec/src/http/app.ts`（唯一组合入口）挂载
+4. 写测试到 `exec/test/`——**断言语义，不要断言形状**：
+   写完先问一句"空实现能不能让这条用例通过？"能就重写。
+   这条规矩的由来见 [`design/waves/gap-audit.md`](design/waves/gap-audit.md)
+5. 更新 API 文档 `docs/api.md`
 
 ### 新增技能（零 Skill 仍可启动）
 
@@ -418,24 +438,40 @@ npm run build --prefix frontend
 | `tests/test_python_agent_removed.py` | 确认 Python Agent Runtime 已删除 |
 | `tests/test_container_startup.py` | Docker entrypoint, compose 配置 |
 | `api-server/tests/*.test.js` | BFF agent-client / chat relay / listen smoke |
-| `agent/tests/*.test.js` | Run API、fake OpenAI、listen smoke、SDK compat |
+| `agent/tests/*.test.js` | Run API、fake OpenAI、listen smoke |
+| `agent/runtime/test/*.test.ts` | provider、策略、SSE 投影 |
+| `exec/test/*.test.ts` | 隔离、文件、搜索、产物、数据集、内部面、公共面、MCP |
 | `frontend/test/*.test.js` | SSE 解析、state、security/a11y |
-| `scripts/smoke-cross-service.mjs` | 无真实 LLM key 的 BFF↔Agent↔Sandbox smoke |
+| `scripts/smoke-cross-service.mjs` | 无真实 LLM key 的 BFF↔Agent↔Exec smoke |
 
 ### 编写测试
 
-```python
-from fastapi.testclient import TestClient
-from sandbox.main import app
+执行面用 `node:test` + `tsx`。**断言语义，不要断言形状**：
 
-client = TestClient(app)
+```ts
+// 好：空实现过不去
+const res = await app.request(`/sessions/${id}/files/grep`, {
+  method: 'POST', headers: json, body: JSON.stringify({ query: 'NEEDLE', path: '.' }),
+});
+const body = await res.json();
+assert.equal(body.matches.length, 2);
+assert.deepEqual(body.matches.map((m) => m.text.trim()).sort(), [...]);
 
-def test_my_endpoint():
-    # Public Sandbox session creation was removed. Exercise a formal internal
-    # contract with an injected fake repository/runtime instead.
-    response = client.get("/health")
-    assert response.status_code == 200
+// 坏：`{matches: []}` 也能通过
+assert.ok(Array.isArray(body.matches));
 ```
+
+需要控制面根（产物/数据集）的用例，把它指到测试的 scratch 目录下——生产默认的
+`/var/sandbox/*` 在 macOS 上不可写：
+
+```ts
+const svc = new ArtifactService(makeWorkspaceFs, undefined, {
+  roots: { artifactsRoot: path.join(base, 'art'), controlRoot: path.join(base, 'ctl') },
+});
+```
+
+**别把已建好的 `WorkspaceFileSystem` 实例传进服务**（`() => fs`）：那样复用同一个
+实例，永远测不到重复构造，用例就是假绿。用 `makeWorkspaceFs` 本身。
 
 ## 代码质量
 
