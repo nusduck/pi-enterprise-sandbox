@@ -453,3 +453,37 @@ class TestRenderedProductionConfigVerifier:
         )
         with pytest.raises(SystemExit, match="compatibility Skill mounts"):
             verify_rendered_prod_config(config)
+
+
+def test_sandbox_keeps_the_bubblewrap_seccomp_profile() -> None:
+    """Bubblewrap 需要的 namespace/mount 系统调用被 Docker 默认 seccomp 挡着。
+
+    2026-08-30：这行配置在删除 Python 执行面时一并丢了（profile 当时在
+    ``sandbox/seccomp-bubblewrap.json``）。表现是 bwrap 报 "No permissions to
+    create new namespace"——与内核不允许非特权 user namespace 的症状完全一样，
+    因此被误判成宿主限制，白绕了一大圈。这条用例让它不能再被静默删掉。
+    """
+    import json as _json
+    from pathlib import Path as _Path
+
+    root = _Path(__file__).resolve().parents[1]
+    compose = (root / "docker-compose.yml").read_text(encoding="utf-8")
+    sandbox = compose.split("\n  sandbox:\n", 1)[1].split("\n  sandbox-mcp:", 1)[0]
+
+    assert "seccomp=./exec/seccomp-bubblewrap.json" in sandbox
+    assert "apparmor=unconfined" in sandbox
+    # 私有 /proc 要能在非特权 mount namespace 里挂上。
+    assert "systempaths=unconfined" in sandbox
+
+    profile = root / "exec" / "seccomp-bubblewrap.json"
+    assert profile.is_file(), profile
+    data = _json.loads(profile.read_text(encoding="utf-8"))
+    allowed = {
+        name
+        for group in data.get("syscalls", [])
+        if group.get("action") == "SCMP_ACT_ALLOW"
+        for name in group.get("names", [])
+    }
+    # bwrap 建命名空间与私有挂载所必需的一组。
+    for syscall in ("clone", "unshare", "mount", "pivot_root", "umount2"):
+        assert syscall in allowed, syscall

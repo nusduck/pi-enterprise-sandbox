@@ -588,10 +588,20 @@ services:
       # user namespace return EPERM and leave OS orphans after LOST recovery.
       - KILL
     security_opt:
-      # Exec still uses Bubblewrap inside the Node process. Docker-default
-      # AppArmor denies unprivileged mount; keep it unconfined. The old
-      # sandbox/seccomp-bubblewrap.json was deleted with the Python plane.
+      # Docker's default seccomp profile blocks the namespace/mount syscalls
+      # Bubblewrap needs. This repo profile narrowly adds its child/user/mount
+      # namespace operations without granting CAP_SYS_ADMIN.
+      #
+      # 2026-08-30: this line was dropped when the Python plane was deleted
+      # (the profile lived at sandbox/seccomp-bubblewrap.json). Without it
+      # bwrap fails with "No permissions to create new namespace" — which looks
+      # exactly like a host/kernel limitation and was misdiagnosed as one.
+      # The profile moved to exec/ with the rest of the execution plane.
+      - seccomp=./exec/seccomp-bubblewrap.json
+      # Bubblewrap needs to create mount namespaces inside user namespaces;
+      # docker-default AppArmor denies mount even in new user namespaces.
       - apparmor=unconfined
+      # Allow the unprivileged mount namespace to mount its private /proc.
       - systempaths=unconfined
     # Sandbox API is reachable on the internal backend fabric. Development
     # workloads may explicitly use SANDBOX_NETWORK_MODE=unrestricted to reach
