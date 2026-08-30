@@ -1,7 +1,31 @@
 # Agent 模块整理与 TypeScript 重写
 
-**写于 2026-08-30。** 承接 [ADR 0007](../adr/0007-agent-runtime-rebuild-on-dsh.md) 的
-未竟部分。DSH 重建把执行面换掉了，但 `agent/` 内部只做了"接线"，没有整理——
+**写于 2026-08-30，同日更新执行结果。** 承接 [ADR 0007](../adr/0007-agent-runtime-rebuild-on-dsh.md) 的
+未竟部分。
+
+> ## 执行进度
+>
+> | 阶段 | 状态 |
+> |---|---|
+> | 0 修 patch 路径 + 启动期断言 | ✅ 完成，但**真因不是路径**（见下） |
+> | **A′ 装配企业策略/提示词/会话后端** | ✅ 完成（计划里原本没有，追查阶段 A 时发现） |
+> | A″ 删重复 transport | ✅ 完成，-4866 行 |
+> | B 装配收进 runtime | ✅ 完成，清单改为类型化单一事实源 |
+> | G 清 pi-agent-home 死配置 | ✅ 完成 |
+> | C–F 语言迁移（61k 行） | 未开始 |
+>
+> **阶段 0 的真因比预想严重**：不是路径拼错，是 `dsh-app-boot` 把 patch 的
+> `name` 当**断言**——在已有行上改 `name` 会让整条 patch 被静默跳过。后果是
+> `ctx.credentials` 一直是出厂的 `LocalCredentialProvider`，正是 ADR 0007
+> 「必须移除的行」点名不得组合的那个。
+>
+> **阶段 A 追查时发现更大的洞**：`runtime-factory.create()` 里
+> `void promptText; void sessionStore;`——企业系统提示词与 MySQL 会话后端算完
+> 丢弃，DSH 的四个策略挂载点一个没接。Wave 5 的 `policy/` 全套有单测且全绿，
+> 因为测的是纯函数。审批、租户 guard、每 Run 预算、脱敏、账本在那之前**全部
+> 不生效**。这成了阶段 A′，优先级高于所有结构整理。
+
+DSH 重建把执行面换掉了，但 `agent/` 内部只做了"接线"，没有整理——
 留下了重复实现、失效的目录、以及一个半 JS 半 TS 的结构。
 
 本文件是**方案与任务分解**，不是决策记录：目标形态与三条硬规则来自决策所有者
@@ -133,7 +157,7 @@ Pi 的资源根随 Pi 一起失效了，但：
 原则：**每个阶段结束时仓库都是可跑的、测试全绿的**。不允许出现"重写到一半"的
 中间态——那比现状更糟。
 
-### 阶段 0：修 P5（先做，与结构无关）
+### 阶段 0：修 P5（先做，与结构无关）—— ✅ 完成
 
 `cordis.patch.yml` 的两条 `../src/*.js` 改成 `../dist/*.js`，并加一条**启动期断言**：
 patch 里引用的每个 `name` 路径必须真实存在，否则 boot 失败。
@@ -144,7 +168,7 @@ patch 里引用的每个 `name` 路径必须真实存在，否则 boot 失败。
 **验收**：`agent/runtime/test/boot.test.ts` 断言 patch 里所有 `name` 可解析；
 把任一条改坏，测试必须红。
 
-### 阶段 A：删掉重复的那一套（减法）
+### 阶段 A：删掉重复的那一套（减法）—— ✅ 完成（实际拆成 A′ + A″）
 
 1. 工具路径改走 runtime provider：`container-run-executor.js` 不再 `await import`
    `internal-files-read-http` / `-write-http` / `internal-execution-http` /
@@ -165,9 +189,16 @@ patch 里引用的每个 `name` 路径必须真实存在，否则 boot 失败。
 image 读取的 payload 形状）。落地前先写一组**对照测试**：同一输入分别走两条路径，
 断言输出一致；对不齐的地方以旧行为为准修 provider，再删旧路径。
 
-### 阶段 B：装配收进 `runtime/`（P4 + 规则 2）
+### 阶段 B：装配收进 `runtime/`（P4 + 规则 2）—— ✅ 完成
 
-把插件装配从 `bootstrap/` 的动态 import 收成 `agent/runtime/src/plugins/` 下的
+> **落地时改了做法。** 原计划是"把 46 处 `await import` 收进清单"，但插件清单
+> 本来就在一处（`bundle/cordis.patch.yml`）；那 46 处大多是启动开销的懒加载，
+> 与插件装配无关。真正的缺陷是**那份 YAML 能静默写错**（本轮踩到两种）。
+> 所以实际做的是：`src/plugins/manifest.ts` 成为类型化的唯一事实源，YAML 由
+> `npm run gen:patch` 生成，`plugins.test.ts` 断言两者逐字节一致。
+> 替换出厂插件只有 `replaceFactory()` 一个入口，"改 name"那种写法写不出来。
+
+原计划（保留作对照）：把插件装配收成 `agent/runtime/src/plugins/` 下的
 **一份显式清单**，三类分开：
 
 ```
@@ -217,7 +248,7 @@ tsconfig.json` 与两个入口。
 
 **这一步不能提前做**：agent 还是 JS 的时候，TS 的 runtime 必须是独立包。
 
-### 阶段 G：清理死配置（P2，可以随时做，建议跟在阶段 A 后）
+### 阶段 G：清理死配置（P2）—— ✅ 完成
 
 - 删 `AGENT_PI_AGENT_DIR` / `PI_CODING_AGENT_DIR` 两个环境变量（compose ×3、
   prod overlay ×1、Dockerfile）

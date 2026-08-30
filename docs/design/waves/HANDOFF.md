@@ -84,6 +84,25 @@ done
 
 ---
 
+## agent 内部整理（2026-08-30，方案见 [agent-ts-rebuild.md](../agent-ts-rebuild.md)）
+
+阶段 0 / A′ / A″ / B / G 已完成。三个值得记住的发现：
+
+1. **patch 的 `name` 是断言不是替换手段**。在已有行上改 `name`，
+   `dsh-app-boot` 会 `warn("name mismatch … skipping")` 并跳过整条。替换出厂
+   插件只能"disable 出厂行 + insert 自建行"。此前 `ctx.credentials` 因此一直
+   是出厂的 `LocalCredentialProvider`（ADR 0007 明令不得组合）。
+2. **Wave 5 的策略层从未被装配**。`runtime-factory.create()` 里
+   `void promptText; void sessionStore;`，四个挂载点一个没接。审批、guard、
+   预算、脱敏、账本全部不生效，而 `policy.test.ts` 全绿——它测纯函数。
+3. **cordis 服务必须经 `ctx.inject([names], cb)` 取**，且名字是 `systemPrompt`
+   不是 `'system-prompt'`。直接取属性会**抛**，不是静默跳过。
+
+`bundle/cordis.patch.yml` 现在是生成的，事实源是 `src/plugins/manifest.ts`；
+改完跑 `npm run gen:patch`，`plugins.test.ts` 断言两者逐字节一致。
+
+**C–F（61k 行 JS → TS）未开始。** 那是语言迁移，不改变结构，按模块滚动推进。
+
 ## 剩下什么
 
 ### 1. 真实链路的两半（都不在 macOS 上可做）
