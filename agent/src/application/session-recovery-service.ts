@@ -15,6 +15,7 @@
 
 import {
   RECOVERY_REASON_CODE,
+  type RecoveryReasonCode,
 } from '../domain/session/recovery-reason.js';
 import {
   SessionRecoveryRequiredError,
@@ -39,6 +40,9 @@ import { PINNED_PI_SDK_VERSION } from '../infrastructure/dsh/constants.js';
 import { AGGREGATE_TYPE_RUN } from '../infrastructure/outbox/outbox-status.js';
 import { createHash } from 'node:crypto';
 
+/** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
+type Loose = any;
+
 /** customType for protected platform manifest inside Pi JSONL. */
 export const PLATFORM_MANIFEST_CUSTOM_TYPE = 'platform.session.manifest';
 
@@ -61,7 +65,7 @@ export const PLATFORM_MANIFEST_CUSTOM_TYPE = 'platform.session.manifest';
  *   agentSessionId: string,
  * }} input
  */
-export function buildProtectedManifestEntry(input) {
+export function buildProtectedManifestEntry(input: { id: string, parentId?: string | null, timestamp?: string, agentVersionId: string, configHash: string, workspaceId: string, journalHighWaterMark: number, journalDigest: string, piSdkVersion?: string, agentSessionId: string, }) {
   const timestamp = input.timestamp || new Date().toISOString();
   const parentId =
     input.parentId === undefined ? null : input.parentId;
@@ -85,10 +89,10 @@ export function buildProtectedManifestEntry(input) {
 }
 
 /**
- * @param {object[]} entries
+ * @param entries
  * @returns {object | null}
  */
-export function findProtectedManifest(entries) {
+export function findProtectedManifest(entries: Record<string, any>[]) {
   if (!Array.isArray(entries)) return null;
   for (let i = entries.length - 1; i >= 0; i -= 1) {
     const e = entries[i];
@@ -104,16 +108,23 @@ export function findProtectedManifest(entries) {
 }
 
 /**
- * @param {unknown} payload
+ * @param payload
  * @returns {string}
  */
-function materializeChecksum(payload) {
+function materializeChecksum(payload: unknown) {
   const normalized = validateSnapshotPayload(payload);
   materializeJsonl(normalized);
   return checksumSnapshotPayload(normalized);
 }
 
 export class SessionRecoveryService {
+  // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
+  tx: Loose;
+  createRepositories: Loose;
+  generateId: Loose;
+  now: Loose;
+  runtimePiSdkVersion: Loose;
+
   /**
    * @param {{
    *   transactionManager: { run: (fn: (trx: any) => Promise<any>) => Promise<any> },
@@ -131,7 +142,7 @@ export class SessionRecoveryService {
    *   runtimePiSdkVersion?: string,
    * }} deps
    */
-  constructor(deps) {
+  constructor(deps: { transactionManager: { run: (fn: (trx: any) => Promise<any>) => Promise<any> }, createRepositories: (db: any) => { sessions: any, sessionSnapshots: any, journal: any, runEvents?: any, outbox?: any, runs?: any, catalog?: any, }, generateId: () => string, now?: () => Date, runtimePiSdkVersion?: string, }) {
     if (!deps?.transactionManager?.run) {
       throw new Error('SessionRecoveryService requires transactionManager.run');
     }
@@ -170,7 +181,7 @@ export class SessionRecoveryService {
    *   journalDigest: string | null,
    * }>}
    */
-  async recover(input) {
+  async recover(input: { agentSessionId: string, orgId: string, userId: string, executionFenceToken: number, workspaceId?: string, agentVersionId?: string, cwd?: string, markSuspendedOnFailure?: boolean, }) {
     const agentSessionId = assertUlid(input.agentSessionId, 'agentSessionId');
     const scope = {
       orgId: assertUlid(input.orgId, 'orgId'),
@@ -179,7 +190,6 @@ export class SessionRecoveryService {
     const fence = Number(input.executionFenceToken);
 
     try {
-      // @ts-expect-error Function宽松类型与精确签名不匹配，JSDoc形状待补，先用expect-error收敛 —— TS2322: Type '{ source: string; payload: { header: Record<string, un
       return await this.#recoverInner({
         agentSessionId,
         scope,
@@ -204,7 +214,7 @@ export class SessionRecoveryService {
         );
       }
       throw new SessionRecoveryRequiredError(
-        `Session recovery required: ${String(/** @type {Error} */ (err)?.message || err)}`,
+        `Session recovery required: ${String((err as Error)?.message || err)}`,
         {
           agentSessionId,
           recoveryReasonCode: RECOVERY_REASON_CODE.RECOVERY_REQUIRED,
@@ -224,7 +234,7 @@ export class SessionRecoveryService {
    *   cwd?: string,
    * }} args
    */
-  async #recoverInner(args) {
+  async #recoverInner(args: { agentSessionId: string, scope: { orgId: string, userId: string }, fence: number, workspaceId?: string, agentVersionId?: string, cwd?: string, }) {
     const { agentSessionId, scope, fence } = args;
 
     const { session, snapshot, journal } = await this.tx.run(async (trx) => {
@@ -393,7 +403,7 @@ export class SessionRecoveryService {
    *   interactionResumeId?: string | null,
    * }} input
    */
-  async checkpoint(input) {
+  async checkpoint(input: { agentSessionId: string, orgId: string, userId: string, executionFenceToken: number, runId: string, traceId: string, payload: { header: Record<string, any>, entries: Record<string, any>[] }, workspacePath?: string | null, agentVersionId: string, configHash: string, workspaceId: string, piSdkVersion?: string, interactionResumeId?: string | null, }) {
     const agentSessionId = assertUlid(input.agentSessionId, 'agentSessionId');
     const scope = {
       orgId: assertUlid(input.orgId, 'orgId'),
@@ -539,9 +549,7 @@ export class SessionRecoveryService {
         lastRunId: runId,
       });
 
-      // @ts-expect-error 遗留JS占位类型object未展开，访问interactions需收窄，存活代码先用expect-error收敛 —— TS2339: Property 'interactions' does not exist on type '{ sessions: 
       if (input.interactionResumeId && repos.interactions) {
-        // @ts-expect-error 遗留JS占位类型object未展开，访问interactions需收窄，存活代码先用expect-error收敛 —— TS2339: Property 'interactions' does not exist on type '{ sessions: 
         await repos.interactions.markResumeAppliedIfClaimed(
           input.interactionResumeId,
           scope,
@@ -597,14 +605,13 @@ export class SessionRecoveryService {
     });
   }
 
-  /**
-   * @param {string} agentSessionId
-   * @param {{ orgId: string, userId: string }} scope
-   * @param {number} fence
-   * @param {string} reason
-   * @param {string} message
-   */
-  async #markAndThrow(agentSessionId, scope, fence, reason, message) {
+  async #markAndThrow(
+    agentSessionId: string,
+    scope: { orgId: string; userId: string },
+    fence: number,
+    reason: RecoveryReasonCode,
+    message: string,
+  ) {
     await this.#tryMarkRecoveryRequired(
       agentSessionId,
       scope,
@@ -630,7 +637,7 @@ export class SessionRecoveryService {
     scope,
     fence,
     err,
-    reason = RECOVERY_REASON_CODE.RECOVERY_REQUIRED,
+    reason: RecoveryReasonCode = RECOVERY_REASON_CODE.RECOVERY_REQUIRED,
   ) {
     try {
       await this.tx.run(async (trx) => {
@@ -655,10 +662,7 @@ export class SessionRecoveryService {
   }
 }
 
-/**
- * @param {{ header?: object, entries?: object[], cwd?: string, id?: string }} opts
- */
-export function emptySessionPayload(opts = {}) {
+export function emptySessionPayload(opts: { header?: Record<string, any>, entries?: Record<string, any>[], cwd?: string, id?: string } = {}) {
   const header =
     opts.header ||
     buildSessionHeader({
@@ -673,8 +677,8 @@ export function emptySessionPayload(opts = {}) {
 
 /**
  * Digest helper for tests.
- * @param {string} text
+ * @param text
  */
-export function sha256Hex(text) {
+export function sha256Hex(text: string) {
   return createHash('sha256').update(text, 'utf8').digest('hex');
 }

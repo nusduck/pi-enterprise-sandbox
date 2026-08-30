@@ -1791,7 +1791,7 @@ describe('PiRunExecutor', () => {
   });
 
   it('production modules do not assign agent.state.messages', async () => {
-    const { readFileSync } = await import('node:fs');
+    const { readSource } = await import('../support/read-source.js');
     const { fileURLToPath } = await import('node:url');
     const path = await import('node:path');
     const root = path.join(
@@ -1804,7 +1804,7 @@ describe('PiRunExecutor', () => {
       'infrastructure/dsh/runtime-factory.js',
     ];
     for (const f of files) {
-      const src = readFileSync(path.join(root, f), 'utf8');
+      const src = readSource(path.join(root, f));
       assert.equal(
         /agent\.state\.messages\s*=/.test(src),
         false,

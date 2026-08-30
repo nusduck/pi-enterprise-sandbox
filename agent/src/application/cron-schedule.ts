@@ -98,10 +98,10 @@ function parseField(raw, spec) {
 }
 
 /**
- * @param {unknown} expression
+ * @param expression
  * @returns {{ expression: string, minute: object, hour: object, dayOfMonth: object, month: object, dayOfWeek: object }}
  */
-export function parseCronExpression(expression) {
+export function parseCronExpression(expression: unknown) {
   if (typeof expression !== 'string' || !expression.trim()) {
     throw new ValidationError('cronExpression is required');
   }

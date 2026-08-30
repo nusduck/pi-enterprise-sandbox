@@ -285,7 +285,6 @@ export class CancelRunService {
           transitionedToCancelling = true;
 
         } else {
-          // @ts-expect-error 遗留JS占位类型object未展开，访问current需收窄，存活代码先用expect-error收敛 —— TS2339: Property 'current' does not exist on type '{ ok: true; run: 
           const reloaded = toCancelling.current ??
             (await repos.runs.requireById(runId, scope));
           status = reloaded.status;

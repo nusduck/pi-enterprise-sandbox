@@ -19,10 +19,10 @@ export const MAX_ARTIFACT_TOKEN_TTL_SEC = 3600;
 export const MIN_DOWNLOAD_SECRET_LEN = 32;
 
 /**
- * @param {unknown} secret
+ * @param secret
  * @returns {string}
  */
-export function assertDownloadSecret(secret) {
+export function assertDownloadSecret(secret: unknown) {
   if (typeof secret !== 'string' || secret.trim().length < MIN_DOWNLOAD_SECRET_LEN) {
     throw new ValidationError(
       `A2A artifact download secret must be at least ${MIN_DOWNLOAD_SECRET_LEN} chars`,
@@ -42,7 +42,7 @@ export function assertDownloadSecret(secret) {
  *   nonce: string,
  * }} claims
  */
-export function canonicalizeArtifactClaims(claims) {
+export function canonicalizeArtifactClaims(claims: { orgId: string, clientId: string, taskId: string, artifactId: string, exp: number, nonce: string, }) {
   return [
     'a2a-artifact-dl-v1',
     claims.orgId,
@@ -66,7 +66,7 @@ export function canonicalizeArtifactClaims(claims) {
  * }} input
  * @returns {{ token: string, exp: number, claims: object }}
  */
-export function mintArtifactDownloadToken(input) {
+export function mintArtifactDownloadToken(input: { orgId: string, clientId: string, taskId: string, artifactId: string, secret: string, ttlSec?: number, now?: () => number, }) {
   const secret = assertDownloadSecret(input.secret);
   const orgId = assertUlid(input.orgId, 'orgId');
   const taskId = assertUlid(input.taskId, 'taskId');
@@ -94,9 +94,9 @@ export function mintArtifactDownloadToken(input) {
 }
 
 /**
- * @param {string} token
- * @param {string} secret
- * @param {{ now?: () => number }} [opts]
+ * @param token
+ * @param secret
+ * @param [opts]
  * @returns {{
  *   orgId: string,
  *   clientId: string,
@@ -106,7 +106,7 @@ export function mintArtifactDownloadToken(input) {
  *   nonce: string,
  * }}
  */
-export function verifyArtifactDownloadToken(token, secret, opts = {}) {
+export function verifyArtifactDownloadToken(token: string, secret: string, opts: { now?: () => number } = {}) {
   const sec = assertDownloadSecret(secret);
   if (typeof token !== 'string' || !token.includes('.')) {
     throw new ValidationError('invalid artifact download token');
@@ -174,7 +174,7 @@ export function verifyArtifactDownloadToken(token, secret, opts = {}) {
  * }} input
  * @returns {string | null}
  */
-export function buildArtifactDownloadUri(input) {
+export function buildArtifactDownloadUri(input: { baseUrl: string, orgId: string, clientId: string, taskId: string, artifactId: string, secret: string | null | undefined, ttlSec?: number, now?: () => number, }) {
   if (!input.secret || typeof input.secret !== 'string' || !input.secret.trim()) {
     return null;
   }

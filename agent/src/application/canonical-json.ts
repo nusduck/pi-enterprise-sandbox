@@ -21,10 +21,10 @@ export const DEFAULT_MAX_MESSAGES = 100;
 export const DEFAULT_MAX_MESSAGE_CHARS = 64 * 1024;
 
 /**
- * @param {unknown} value
+ * @param value
  * @returns {boolean}
  */
-function isPlainObject(value) {
+function isPlainObject(value: unknown) {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) {
     return false;
   }
@@ -39,11 +39,11 @@ function isPlainObject(value) {
  * so shared-but-acyclic object graphs serialize successfully, while true
  * cycles still throw.
  *
- * @param {unknown} value
- * @param {WeakSet<object>} [stack]
+ * @param value
+ * @param [stack]
  * @returns {unknown}
  */
-export function canonicalize(value, stack = new WeakSet()) {
+export function canonicalize(value: unknown, stack: WeakSet<Record<string, any>> = new WeakSet()) {
   if (value === null) return null;
 
   const t = typeof value;
@@ -79,7 +79,7 @@ export function canonicalize(value, stack = new WeakSet()) {
       throw new CanonicalJsonError('binary buffers are not supported');
     }
 
-    const obj = /** @type {object} */ (value);
+    const obj = (value as object);
     if (stack.has(obj)) {
       throw new CanonicalJsonError('circular reference is not supported');
     }
@@ -99,12 +99,11 @@ export function canonicalize(value, stack = new WeakSet()) {
         );
       }
 
-      /** @type {Record<string, unknown>} */
-      const out = {};
-      const keys = Object.keys(/** @type {object} */ (value)).sort();
+            const out: Record<string, unknown> = {};
+      const keys = Object.keys((value as object)).sort();
       for (const k of keys) {
         // Skip undefined-valued keys (stable omit) rather than failing.
-        const v = /** @type {Record<string, unknown>} */ (value)[k];
+        const v = (value as Record<string, unknown>)[k];
         if (v === undefined) continue;
         out[k] = canonicalize(v, stack);
       }
@@ -120,11 +119,11 @@ export function canonicalize(value, stack = new WeakSet()) {
 
 /**
  * Stable JSON string (sorted keys, no whitespace variance).
- * @param {unknown} value
- * @param {{ maxBytes?: number }} [opts]
+ * @param value
+ * @param [opts]
  * @returns {string}
  */
-export function stableStringify(value, opts = {}) {
+export function stableStringify(value: unknown, opts: { maxBytes?: number } = {}) {
   const maxBytes = opts.maxBytes ?? DEFAULT_MAX_CANONICAL_BYTES;
   const canonical = canonicalize(value);
   const text = JSON.stringify(canonical);
@@ -140,10 +139,10 @@ export function stableStringify(value, opts = {}) {
 
 /**
  * SHA-256 hex digest of a string (utf8).
- * @param {string} text
+ * @param text
  * @returns {string}
  */
-export function sha256Hex(text) {
+export function sha256Hex(text: string) {
   if (typeof text !== 'string') {
     throw new CanonicalJsonError('sha256Hex requires a string');
   }
@@ -152,11 +151,11 @@ export function sha256Hex(text) {
 
 /**
  * Canonicalize + SHA-256.
- * @param {unknown} value
- * @param {{ maxBytes?: number }} [opts]
+ * @param value
+ * @param [opts]
  * @returns {string}
  */
-export function hashCanonical(value, opts = {}) {
+export function hashCanonical(value: unknown, opts: { maxBytes?: number } = {}) {
   return sha256Hex(stableStringify(value, opts));
 }
 
@@ -180,7 +179,7 @@ export function hashCanonical(value, opts = {}) {
  * }} [opts]
  * @returns {string} 64-char lowercase hex
  */
-export function hashCreateRunRequest(input, opts = {}) {
+export function hashCreateRunRequest(input: { messages?: unknown, externalConversationId?: string | null, agentProfileId?: string | null, agentId?: string | null, modelId?: string | null, budget?: unknown, }, opts: { maxMessages?: number, maxMessageChars?: number, maxBytes?: number, } = {}) {
   const maxMessages = opts.maxMessages ?? DEFAULT_MAX_MESSAGES;
   const maxMessageChars = opts.maxMessageChars ?? DEFAULT_MAX_MESSAGE_CHARS;
 
@@ -213,8 +212,7 @@ export function hashCreateRunRequest(input, opts = {}) {
     return m;
   });
 
-  /** @type {Record<string, unknown>} */
-  const body = {
+    const body: Record<string, unknown> = {
     messages: boundMessages,
   };
   if (

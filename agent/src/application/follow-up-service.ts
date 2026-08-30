@@ -6,7 +6,13 @@
 import { assertUlid } from '../domain/shared/ulid.js';
 import { ValidationError } from './errors.js';
 
+/** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
+type Loose = any;
+
 export class FollowUpService {
+  // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
+  createRunService: Loose;
+
   /** @param {{ createRunService: { execute: Function } }} deps */
   constructor(deps) {
     if (!deps?.createRunService?.execute) {
@@ -28,7 +34,7 @@ export class FollowUpService {
    *   spanId?: string | null,
    * }} input
    */
-  async execute(input) {
+  async execute(input: { conversationId: string, text: string, auth: Record<string, any>, traceId: string, traceState?: string | null, traceFlags?: string | null, idempotencyKey: string, agentId?: string | null, spanId?: string | null, }) {
     if (!input || typeof input !== 'object') {
       throw new ValidationError('FollowUp input is required');
     }

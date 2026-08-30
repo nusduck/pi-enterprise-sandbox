@@ -29,7 +29,43 @@ import { sanitizeStatusReason } from './sanitize-status-reason.js';
  * }} input
  * @returns {Promise<object>} recovery action
  */
-export async function recoverParkedCancel(input) {
+/**
+ * 恢复动作的取值。run-recovery-service 的 `RecoveryAction` 用的是同一套——
+ * 那边转 TS 时（阶段 D 后续轮次）应当引用这里，而不是再抄一遍。
+ */
+export type RecoveryActionKind =
+  | 'enqueued'
+  | 'projected_and_enqueued'
+  | 'needsReconciliation'
+  | 'terminalized'
+  | 'skipped'
+  | 'error';
+
+/** 每条恢复结果都带的 Run 标识。调用方以 `base` 传入，这里原样透传。 */
+export interface RecoveryActionBase {
+  runId: string;
+  orgId: string;
+  traceId: string;
+  status: string;
+}
+
+export type ParkedCancelOutcome = RecoveryActionBase & {
+  action: RecoveryActionKind;
+  reason?: string | null;
+};
+
+export async function recoverParkedCancel(input: {
+  tx: { run: (fn: (trx: any) => Promise<any>) => Promise<any> };
+  createRepositories: (db: any) => any;
+  run: Record<string, any>;
+  base: RecoveryActionBase;
+  parkedStatus: string;
+  terminalize: (
+    repos: Record<string, any>,
+    current: Record<string, any>,
+    scope: Record<string, any>,
+  ) => Promise<{ status: string }>;
+}): Promise<ParkedCancelOutcome> {
   const { tx, createRepositories, run, base, parkedStatus, terminalize } = input;
   const scope = { orgId: run.orgId, userId: run.userId };
   try {

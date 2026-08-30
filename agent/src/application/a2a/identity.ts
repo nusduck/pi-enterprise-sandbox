@@ -4,10 +4,10 @@ import { ValidationError } from '../errors.js';
 export const A2A_IDENTITY_PROVIDER = 'a2a';
 
 /**
- * @param {unknown} value
+ * @param value
  * @returns {string}
  */
-export function normalizeA2aClientId(value) {
+export function normalizeA2aClientId(value: unknown) {
   if (typeof value !== 'string' || !value.trim()) {
     throw new ValidationError('clientId is required');
   }
@@ -22,11 +22,11 @@ export function normalizeA2aClientId(value) {
  * A2A client ids are only unique inside an Organization. Qualifying the raw
  * external user subject keeps the globally unique users.external_subject safe.
  *
- * @param {string} orgId
- * @param {string} clientId
+ * @param orgId
+ * @param clientId
  * @returns {string}
  */
-export function formatA2aExternalUserId(orgId, clientId) {
+export function formatA2aExternalUserId(orgId: string, clientId: string) {
   const owner = assertUlid(orgId, 'orgId');
   return `${owner}:${normalizeA2aClientId(clientId)}`;
 }

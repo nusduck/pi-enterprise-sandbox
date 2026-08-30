@@ -16,15 +16,18 @@ import {
 import { OwnerScopedNotFoundError, ValidationError } from '../errors.js';
 import { assertUlid, isLegacyOrUuidIdentity, isUlid } from '../../domain/shared/ulid.js';
 
+/** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
+type Loose = any;
+
 /** Default external identity provider for BFF compatibility. */
 export const DEFAULT_EXTERNAL_PROVIDER = 'bff';
 
 /**
- * @param {unknown} value
- * @param {string} field
+ * @param value
+ * @param field
  * @returns {string}
  */
-export function requireExternalSubject(value, field) {
+export function requireExternalSubject(value: unknown, field: string) {
   if (typeof value !== 'string' || !value.trim()) {
     throw new ValidationError(`${field} must be a non-empty string`);
   }
@@ -37,10 +40,10 @@ export function requireExternalSubject(value, field) {
 
 /**
  * Reject accidental placement of external UUID/arun_ strings into ULID slots.
- * @param {unknown} value
- * @param {string} field
+ * @param value
+ * @param field
  */
-export function assertNotExternalInUlidSlot(value, field) {
+export function assertNotExternalInUlidSlot(value: unknown, field: string) {
   if (isLegacyOrUuidIdentity(value)) {
     throw new ValidationError(
       `${field} must be an internal ULID; external UUID/arun_ identities belong in mapping tables`,
@@ -57,14 +60,18 @@ export function assertNotExternalInUlidSlot(value, field) {
 }
 
 export class ExternalIdentityResolver {
+  // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
+  repos: Loose;
+  defaultProvider: Loose;
+
   /**
    * @param {{
    *   organizations: import('../../infrastructure/mysql/repositories/organization-repository.js').OrganizationRepository,
    *   externalRefs: import('../../infrastructure/mysql/repositories/external-reference-repository.js').ExternalReferenceRepository,
    * }} repos
-   * @param {{ defaultProvider?: string }} [opts]
+   * @param [opts]
    */
-  constructor(repos, opts = {}) {
+  constructor(repos: { organizations: import('../../infrastructure/mysql/repositories/organization-repository.js').OrganizationRepository, externalRefs: import('../../infrastructure/mysql/repositories/external-reference-repository.js').ExternalReferenceRepository, }, opts: { defaultProvider?: string } = {}) {
     if (!repos?.organizations || !repos?.externalRefs) {
       throw new Error(
         'ExternalIdentityResolver requires organizations and externalRefs repositories',
@@ -82,7 +89,7 @@ export class ExternalIdentityResolver {
    * }} auth
    * @returns {Promise<{ orgId: string, userId: string, provider: string, membership: object }>}
    */
-  async resolveOwner(auth) {
+  async resolveOwner(auth: { provider?: string, externalOrgId: string, externalUserId: string, }) {
     if (!auth || typeof auth !== 'object') {
       throw new ValidationError('auth context is required');
     }
@@ -147,7 +154,7 @@ export class ExternalIdentityResolver {
    *   externalConversationId: string,
    * }} input
    */
-  async resolveConversation(input) {
+  async resolveConversation(input: { orgId: string, userId: string, provider?: string, externalConversationId: string, }) {
     const orgId = assertUlid(input.orgId, 'orgId');
     const userId = assertUlid(input.userId, 'userId');
     const provider = (input.provider ?? this.defaultProvider).trim();

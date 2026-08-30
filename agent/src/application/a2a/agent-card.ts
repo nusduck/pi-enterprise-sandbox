@@ -19,13 +19,12 @@ const SKILL_MD_READ_BYTES = 4096;
  * Normalize loose skill descriptors into A2A AgentSkill objects.
  * Required fields: id, name, description.
  *
- * @param {unknown} skills
+ * @param skills
  * @returns {object[]}
  */
-export function normalizeAgentSkills(skills) {
+export function normalizeAgentSkills(skills: unknown) {
   if (!Array.isArray(skills)) return [];
-  /** @type {object[]} */
-  const out = [];
+    const out: object[] = [];
   const seen = new Set();
   for (const raw of skills) {
     if (out.length >= MAX_CARD_SKILLS) break;
@@ -42,7 +41,7 @@ export function normalizeAgentSkills(skills) {
       continue;
     }
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) continue;
-    const r = /** @type {Record<string, unknown>} */ (raw);
+    const r = (raw as Record<string, unknown>);
     const idRaw = r.id ?? r.skillId ?? r.name;
     if (typeof idRaw !== 'string' || !idRaw.trim()) continue;
     const id = idRaw.trim().slice(0, 128);
@@ -56,8 +55,7 @@ export function normalizeAgentSkills(skills) {
       typeof r.description === 'string' && r.description.trim()
         ? r.description.trim().slice(0, 1024)
         : `Skill: ${name}`;
-    /** @type {Record<string, unknown>} */
-    const skill = { id, name, description };
+        const skill: Record<string, unknown> = { id, name, description };
     if (Array.isArray(r.tags)) {
       skill.tags = r.tags
         .filter((t) => typeof t === 'string' && t.trim())
@@ -104,13 +102,12 @@ export function defaultAgentSkills() {
  * unreadable or truncated package yields empty fields and the caller falls back
  * to the directory name, rather than failing the whole card.
  *
- * @param {string} text
+ * @param text
  * @returns {{ name?: string, description?: string }}
  */
-export function parseSkillMdFrontmatter(text) {
+export function parseSkillMdFrontmatter(text: string) {
   const { name, description } = parseSkillFrontmatter(String(text || ''));
-  /** @type {{ name?: string, description?: string }} */
-  const out = {};
+    const out: { name?: string, description?: string } = {};
   if (name) out.name = name;
   if (description) out.description = description;
   return out;
@@ -120,10 +117,10 @@ export function parseSkillMdFrontmatter(text) {
  * List AgentSkill entries from a bundled skill root (directories with SKILL.md).
  * Fail-soft: missing root or unreadable packages are skipped.
  *
- * @param {string | null | undefined} skillRoot
+ * @param skillRoot
  * @returns {object[]}
  */
-export function listSkillsFromRoot(skillRoot) {
+export function listSkillsFromRoot(skillRoot: string | null | undefined) {
   if (typeof skillRoot !== 'string' || !skillRoot.trim()) return [];
   const root = path.resolve(skillRoot.trim());
   let entries;
@@ -132,8 +129,7 @@ export function listSkillsFromRoot(skillRoot) {
   } catch {
     return [];
   }
-  /** @type {object[]} */
-  const skills = [];
+    const skills: object[] = [];
   for (const ent of entries) {
     if (skills.length >= MAX_CARD_SKILLS) break;
     if (!ent.isDirectory() || ent.name.startsWith('.')) continue;
@@ -176,7 +172,7 @@ export function listSkillsFromRoot(skillRoot) {
  * }} [opts]
  * @returns {object[]}
  */
-export function resolveAgentCardSkills(opts = {}) {
+export function resolveAgentCardSkills(opts: { configured?: unknown, skillRoot?: string | null, } = {}) {
   const configured = normalizeAgentSkills(opts.configured);
   const bundled = listSkillsFromRoot(opts.skillRoot);
   if (configured.length === 0 && bundled.length === 0) {
@@ -211,7 +207,7 @@ export const A2A_ENTERPRISE_EXTENSION_URI =
  *   skillRoot?: string | null,
  * }} input
  */
-export function buildAgentCard(input) {
+export function buildAgentCard(input: { agentId?: string, rpcPath?: string, name?: string | null, description?: string | null, baseUrl: string, version?: string, skills?: Record<string, any>[], skillRoot?: string | null, }) {
   const agentId = String(input.agentId || '').trim();
   const base = String(input.baseUrl || '').replace(/\/$/, '');
   if (!input.rpcPath && !agentId) {
@@ -284,11 +280,11 @@ export function buildAgentCard(input) {
 /**
  * Strict public base URL validation for Agent Card / download links.
  *
- * @param {unknown} raw
- * @param {{ requireHttps?: boolean }} [opts]
+ * @param raw
+ * @param [opts]
  * @returns {string} origin without trailing slash
  */
-export function assertPublicBaseUrl(raw, opts = {}) {
+export function assertPublicBaseUrl(raw: unknown, opts: { requireHttps?: boolean } = {}) {
   if (typeof raw !== 'string' || !raw.trim()) {
     throw new ValidationError('A2A_PUBLIC_BASE_URL is required');
   }
@@ -336,7 +332,7 @@ const LOOPBACK_HOSTS = new Set([
 /**
  * Resolve public base URL for Agent Card links.
  *
- * @param {import('node:http').IncomingMessage | null} req
+ * @param req
  * @param {{
  *   publicBaseUrl?: string | null,
  *   deploymentEnv?: string,
@@ -344,7 +340,7 @@ const LOOPBACK_HOSTS = new Set([
  * }} [config]
  * @returns {string}
  */
-export function resolvePublicBaseUrl(req, config = {}) {
+export function resolvePublicBaseUrl(req: import('node:http').IncomingMessage | null, config: { publicBaseUrl?: string | null, deploymentEnv?: string, allowDevHostFallback?: boolean, } = {}) {
   const envName = String(
     config.deploymentEnv || process.env.DEPLOYMENT_ENV || process.env.NODE_ENV || '',
   ).toLowerCase();

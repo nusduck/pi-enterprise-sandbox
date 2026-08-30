@@ -38,11 +38,11 @@ import {
  * original — its fingerprint matches the stored `$integrity` — which is the
  * common short-argument case.
  *
- * @param {object} replaySession
- * @param {{ toolCallId: string, toolName: string, argumentsJson?: unknown, _argsIntegrity?: string | null }} toolExecution
+ * @param replaySession
+ * @param toolExecution
  * @returns {Record<string, unknown>}
  */
-function resolveApprovedReplayArgs(replaySession, toolExecution) {
+function resolveApprovedReplayArgs(replaySession: Record<string, any>, toolExecution: { toolCallId: string, toolName: string, argumentsJson?: unknown, _argsIntegrity?: string | null }) {
   const recovered = findToolCallArgumentsInSession(
     replaySession,
     toolExecution.toolCallId,
@@ -55,14 +55,14 @@ function resolveApprovedReplayArgs(replaySession, toolExecution) {
     durableFingerprint &&
     integrityFingerprint(ledgerArgs) === durableFingerprint
   ) {
-    return /** @type {Record<string, unknown>} */ (ledgerArgs);
+    return (ledgerArgs as Record<string, unknown>);
   }
 
   const failure = new Error(
     'approved tool replay cannot recover the original arguments: they are ' +
       'absent from the session and the ledger view is redacted',
   );
-  /** @type {any} */ (failure).code = 'APPROVED_TOOL_ARGS_UNRECOVERABLE';
+  (failure as any).code = 'APPROVED_TOOL_ARGS_UNRECOVERABLE';
   throw failure;
 }
 
@@ -207,10 +207,8 @@ export async function prepareApprovalResume(executor, {
         reason: sanitizeStatusReason(err),
       },
     });
-    const failure = /** @type {Error & { code?: string }} */ (
-      new Error(
-        `approved tool replay outcome is uncertain: ${sanitizeStatusReason(err) || 'unknown error'}`,
-      )
+    const failure: Error & { code?: string } = new Error(
+      `approved tool replay outcome is uncertain: ${sanitizeStatusReason(err) || 'unknown error'}`,
     );
     failure.code = 'APPROVED_TOOL_REPLAY_UNCERTAIN';
     throw failure;

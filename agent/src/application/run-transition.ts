@@ -32,7 +32,7 @@ import { sanitizeStatusReason } from './sanitize-status-reason.js';
  * }} args
  * @returns {Promise<{ ok: true, run: object, event: object } | { ok: false, reason: 'conflict'|'not_found', current?: object | null }>}
  */
-export async function applyRunTransitionInTxn(args) {
+export async function applyRunTransitionInTxn(args: { repos: { runs: any, runEvents: any, outbox: any, }, runId: string, scope: { orgId: string, userId: string }, from: string, to: string, traceId: string, generateId: () => string, eventType?: string, statusReason?: string | null, attempt?: number, startedAt?: Date | string | null, completedAt?: Date | string | null, payloadExtra?: Record<string, unknown>, }) {
   const {
     repos,
     runId,
@@ -49,8 +49,7 @@ export async function applyRunTransitionInTxn(args) {
     payloadExtra = {},
   } = args;
 
-  /** @type {Record<string, unknown>} */
-  const patch = {
+    const patch: Record<string, unknown> = {
     expectedStatus: from,
     status: to,
   };

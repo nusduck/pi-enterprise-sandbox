@@ -21,38 +21,37 @@ import {
 } from '../lib/event-redaction.js';
 import { createPromiseTail } from './promise-tail.js';
 
-/**
- * @typedef {{
- *   orgId: string,
- *   userId: string,
- *   conversationId: string,
- *   agentSessionId: string,
- *   runId: string,
- *   traceId: string,
- *   sandboxSessionId?: string | null,
- * }} RunEventContext
- */
+/** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
+type Loose = any;
 
-/**
- * @typedef {{
- *   eventId: string,
- *   eventVersion: number,
- *   sequence: number,
- *   type: string,
- *   timestamp: string,
- *   context: {
- *     orgId: string,
- *     userId: string,
- *     conversationId: string,
- *     agentSessionId: string,
- *     runId: string,
- *     traceId: string,
- *     spanId: string | null,
- *     sandboxSessionId?: string | null,
- *   },
- *   data: Record<string, unknown>,
- * }} CanonicalRunEventEnvelope
- */
+export type RunEventContext = {
+  orgId: string;
+  userId: string;
+  conversationId: string;
+  agentSessionId: string;
+  runId: string;
+  traceId: string;
+  sandboxSessionId?: string | null;
+};
+
+export type CanonicalRunEventEnvelope = {
+  eventId: string;
+  eventVersion: number;
+  sequence: number;
+  type: string;
+  timestamp: string;
+  context: {
+    orgId: string;
+    userId: string;
+    conversationId: string;
+    agentSessionId: string;
+    runId: string;
+    traceId: string;
+    spanId: string | null;
+    sandboxSessionId?: string | null;
+  };
+  data: Record<string, unknown>;
+};
 
 /**
  * Build plan §15.3 envelope (pure).
@@ -68,7 +67,7 @@ import { createPromiseTail } from './promise-tail.js';
  * }} input
  * @returns {CanonicalRunEventEnvelope}
  */
-export function buildCanonicalEnvelope(input) {
+export function buildCanonicalEnvelope(input: { eventId: string, sequence: number, type: string, timestamp: string | Date, context: RunEventContext & { spanId?: string | null }, data?: Record<string, unknown>, eventVersion?: number, }) {
   const ts =
     input.timestamp instanceof Date
       ? input.timestamp.toISOString()
@@ -106,22 +105,36 @@ export function buildCanonicalEnvelope(input) {
 
 /**
  * Redact event data for durable storage (secrets never stored).
- * @param {unknown} data
+ * @param data
  * @returns {Record<string, unknown>}
  */
-export function redactEventData(data) {
+export function redactEventData(data: unknown) {
   if (data == null) return {};
   if (typeof data === 'string') {
     return { text: redactInlineSecrets(data) };
   }
   const redacted = redactPayload(data);
   if (redacted && typeof redacted === 'object' && !Array.isArray(redacted)) {
-    return /** @type {Record<string, unknown>} */ (redacted);
+    return (redacted as Record<string, unknown>);
   }
   return { value: redacted };
 }
 
 export class FencedRunEventRecorder {
+  // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
+  tx: Loose;
+  createRepositories: Loose;
+  generateId: Loose;
+  context: Loose;
+  executionFenceToken: Loose;
+  now: Loose;
+  emit: Loose;
+  isLockLost: Loose;
+  _seenDedupeKeys: Set<string>;
+  _pendingDedupe: Map<any, any>;
+  _tail: Loose;
+  _sequenceHint: number;
+
   /**
    * @param {{
    *   transactionManager: { run: (fn: (trx: any) => Promise<any>) => Promise<any> },
@@ -134,7 +147,7 @@ export class FencedRunEventRecorder {
    *   isLockLost?: () => boolean,
    * }} deps
    */
-  constructor(deps) {
+  constructor(deps: { transactionManager: { run: (fn: (trx: any) => Promise<any>) => Promise<any> }, createRepositories: (db: any) => any, generateId: () => string, context: RunEventContext, executionFenceToken: number, now?: () => Date, emit?: ((envelope: CanonicalRunEventEnvelope) => Promise<void> | void) | null, isLockLost?: () => boolean, }) {
     if (!deps?.transactionManager?.run) {
       throw new Error('FencedRunEventRecorder requires transactionManager');
     }
@@ -177,9 +190,9 @@ export class FencedRunEventRecorder {
 
   /**
    * Sequential enqueue (same ordering as PiRunExecutor event tail).
-   * @param {() => Promise<void>} fn
+   * @param fn
    */
-  enqueue(fn) {
+  enqueue(fn: () => Promise<void>) {
     return this._tail.enqueue(fn);
   }
 
@@ -193,27 +206,25 @@ export class FencedRunEventRecorder {
    * - { kind: 'join', promise } if another writer is in flight
    * - { kind: 'owner', release } if this caller owns the write
    *
-   * @param {string} key
+   * @param key
    */
-  #claimDedupeKey(key) {
+  #claimDedupeKey(key: string) {
     if (this._seenDedupeKeys.has(key)) {
-      return { kind: /** @type {const} */ ('duplicate') };
+      return { kind: ('duplicate' as const) };
     }
     const pending = this._pendingDedupe.get(key);
     if (pending) {
-      return { kind: /** @type {const} */ ('join'), promise: pending };
+      return { kind: ('join' as const), promise: pending };
     }
 
-    /** @type {{ resolve: (v: CanonicalRunEventEnvelope | null) => void }} */
-    const gate = { resolve: () => {} };
-    /** @type {Promise<CanonicalRunEventEnvelope | null>} */
-    const promise = new Promise((resolve) => {
+        const gate: { resolve: (v: CanonicalRunEventEnvelope | null) => void } = { resolve: () => {} };
+        const promise: Promise<CanonicalRunEventEnvelope | null> = new Promise((resolve) => {
       gate.resolve = resolve;
     });
     this._pendingDedupe.set(key, promise);
 
     return {
-      kind: /** @type {const} */ ('owner'),
+      kind: ('owner' as const),
       /**
        * @param {CanonicalRunEventEnvelope | null} result
        * @param {{ success: boolean }} meta
@@ -240,7 +251,7 @@ export class FencedRunEventRecorder {
    * }} input
    * @returns {Promise<CanonicalRunEventEnvelope | null>} null when deduped
    */
-  async record(input) {
+  async record(input: { type: string, data?: Record<string, unknown>, dedupeKey?: string | null, spanId?: string | null, }) {
     if (!input?.type || typeof input.type !== 'string') {
       throw new Error('FencedRunEventRecorder.record requires type');
     }
@@ -277,8 +288,7 @@ export class FencedRunEventRecorder {
       const eventId = assertUlid(this.generateId(), 'eventId');
       const outboxId = assertUlid(this.generateId(), 'outboxId');
 
-      /** @type {CanonicalRunEventEnvelope | null} */
-      let envelope = null;
+            let envelope: CanonicalRunEventEnvelope | null = null;
 
       await this.tx.run(async (trx) => {
         const repos = this.createRepositories(trx);
@@ -383,13 +393,12 @@ export class FencedRunEventRecorder {
    * Projected events helper: record each projected { type, payload } item.
    * Payload context fields are stripped from data (context comes from recorder).
    *
-   * @param {Array<{ type: string, payload?: Record<string, unknown> }>} projected
-   * @param {{ dedupeKeyFor?: (ev: { type: string, payload?: object }) => string | null }} [opts]
+   * @param projected
+   * @param [opts]
    * @returns {Promise<Array<CanonicalRunEventEnvelope>>}
    */
-  async recordProjected(projected, opts = {}) {
-    /** @type {CanonicalRunEventEnvelope[]} */
-    const out = [];
+  async recordProjected(projected: Array<{ type: string, payload?: Record<string, unknown> }>, opts: { dedupeKeyFor?: (ev: { type: string, payload?: Record<string, any> }) => string | null } = {}) {
+        const out: CanonicalRunEventEnvelope[] = [];
     for (const ev of projected || []) {
       if (!ev?.type) continue;
       const payload =

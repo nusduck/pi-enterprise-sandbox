@@ -617,10 +617,8 @@ describe('CreateRunService durable path', () => {
       'get-run-service.js',
       'cancel-run-service.js',
     ]) {
-      const src = fs.readFileSync(
-        path.join(dir, '../../src/application', file),
-        'utf8',
-      );
+      const { readSource } = await import('../support/read-source.js');
+      const src = readSource(path.join(dir, '../../src/application', file));
       assert.equal(src.includes('new Map'), false, `${file} must not use Map`);
       assert.equal(
         /const\s+runs\s*=/.test(src),
