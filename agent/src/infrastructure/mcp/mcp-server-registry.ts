@@ -26,10 +26,10 @@ export function cloneJson(value) {
 }
 
 /**
- * @param {unknown} raw
+ * @param raw
  * @returns {unknown[]}
  */
-function parseRegistryInput(raw) {
+function parseRegistryInput(raw: unknown) {
   if (raw == null || raw === '') return [];
   if (Array.isArray(raw)) return raw;
   if (typeof raw === 'string') {
@@ -49,20 +49,14 @@ function parseRegistryInput(raw) {
   });
 }
 
-/**
- * @param {unknown} raw
- * @param {string} field
- * @param {RegExp} keyPattern
- */
-function parseReferenceMap(raw, field, keyPattern) {
+function parseReferenceMap(raw: unknown, field: string, keyPattern: RegExp) {
   if (raw == null) return Object.freeze({});
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
     throw new PiMcpAdapterError(`${field} must be an object of secret references`, {
       code: 'MCP_SERVER_REGISTRY_INVALID',
     });
   }
-  /** @type {Record<string, string>} */
-  const out = {};
+  const out: Record<string, string> = {};
   for (const [key, value] of Object.entries(raw)) {
     const ref = String(value ?? '').trim();
     if (!keyPattern.test(key) || !ref) {
@@ -75,32 +69,30 @@ function parseReferenceMap(raw, field, keyPattern) {
   return Object.freeze(out);
 }
 
-/**
- * @typedef {{
- *   serverId: string,
- *   enabled: boolean,
- *   url: string | null,
- *   command: string | null,
- *   args: readonly string[],
- *   cwd: string | null,
- *   auth: unknown,
- *   authTokenRef: string | null,
- *   envRefs: Readonly<Record<string, string>>,
- *   headerRefs: Readonly<Record<string, string>>,
- *   timeoutMs: number | null,
- *   transport: string | null,
- * }} McpServerRecord
- */
+export type McpServerRecord = {
+  serverId: string;
+  enabled: boolean;
+  url: string | null;
+  command: string | null;
+  args: readonly string[];
+  cwd: string | null;
+  auth: unknown;
+  authTokenRef: string | null;
+  envRefs: Readonly<Record<string, string>>;
+  headerRefs: Readonly<Record<string, string>>;
+  timeoutMs: number | null;
+  transport: string | null;
+};
 
 /**
  * Validate the deployment-owned MCP registry. Plaintext credential-bearing
  * fields are rejected; values must be referenced through authTokenRef,
  * envRefs, or headerRefs.
  *
- * @param {unknown} raw
+ * @param raw
  * @returns {Map<string, McpServerRecord>}
  */
-export function loadMcpServerRegistry(raw) {
+export function loadMcpServerRegistry(raw: unknown) {
   const entries = parseRegistryInput(raw);
   const registry = new Map();
   for (let index = 0; index < entries.length; index += 1) {
@@ -110,7 +102,7 @@ export function loadMcpServerRegistry(raw) {
         code: 'MCP_SERVER_REGISTRY_INVALID',
       });
     }
-    const value = /** @type {Record<string, unknown>} */ (entry);
+    const value = (entry as Record<string, unknown>);
     const serverId = String(value.id ?? value.serverId ?? '').trim();
     if (!SERVER_ID_PATTERN.test(serverId)) {
       throw new PiMcpAdapterError(`MCP_SERVERS_JSON[${index}].id is invalid`, {

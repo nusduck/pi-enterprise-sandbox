@@ -15,15 +15,15 @@ import { redactInlineSecrets } from '../../lib/event-redaction.js';
  * Supports type, required, properties, additionalProperties:false, enum,
  * and nested object/array. Intentionally small — no $ref / allOf.
  *
- * @param {unknown} schema
- * @param {unknown} value
- * @param {string} [path]
+ * @param schema
+ * @param value
+ * @param [path]
  */
-export function assertMcpToolArgsAgainstSchema(schema, value, path = 'args') {
+export function assertMcpToolArgsAgainstSchema(schema: unknown, value: unknown, path: string = 'args') {
   if (schema == null || typeof schema !== 'object' || Array.isArray(schema)) {
     return;
   }
-  const s = /** @type {Record<string, unknown>} */ (schema);
+  const s = (schema as Record<string, unknown>);
   const types = s.type == null ? null : Array.isArray(s.type) ? s.type : [s.type];
   if (types) {
     const ok = types.some((t) => {
@@ -48,7 +48,7 @@ export function assertMcpToolArgsAgainstSchema(schema, value, path = 'args') {
     });
   }
   if (value != null && typeof value === 'object' && !Array.isArray(value)) {
-    const obj = /** @type {Record<string, unknown>} */ (value);
+    const obj = (value as Record<string, unknown>);
     const required = Array.isArray(s.required) ? s.required : [];
     for (const key of required) {
       if (!(String(key) in obj)) {
@@ -59,7 +59,7 @@ export function assertMcpToolArgsAgainstSchema(schema, value, path = 'args') {
     }
     const properties =
       s.properties != null && typeof s.properties === 'object' && !Array.isArray(s.properties)
-        ? /** @type {Record<string, unknown>} */ (s.properties)
+        ? (s.properties as Record<string, unknown>)
         : null;
     if (properties) {
       for (const [key, child] of Object.entries(properties)) {
@@ -90,15 +90,15 @@ export function assertMcpToolArgsAgainstSchema(schema, value, path = 'args') {
  * TypeBox builders are JSON Schema objects; Pi also accepts a plain schema.
  * Unknown/empty schemas stay an open object so we do not invent fields.
  *
- * @param {unknown} inputSchema
+ * @param inputSchema
  */
-export function normalizeMcpToolParameters(inputSchema) {
+export function normalizeMcpToolParameters(inputSchema: unknown) {
   if (inputSchema == null || typeof inputSchema !== 'object' || Array.isArray(inputSchema)) {
     return Type.Object({}, { additionalProperties: true });
   }
-  const { $schema, ...normalized } = /** @type {Record<string, unknown>} */ ({
-    .../** @type {Record<string, unknown>} */ (inputSchema),
-  });
+  const { $schema, ...normalized } = (({
+    ...(inputSchema as Record<string, unknown>),
+  }) as Record<string, unknown>);
   void $schema;
   if (normalized.type == null && normalized.properties != null) {
     normalized.type = 'object';
@@ -109,11 +109,7 @@ export function normalizeMcpToolParameters(inputSchema) {
   return normalized;
 }
 
-/**
- * @param {unknown} raw
- * @param {string} fallback
- */
-export function sanitizeMcpToolDescription(raw, fallback) {
+export function sanitizeMcpToolDescription(raw: unknown, fallback: string) {
   const text = typeof raw === 'string' ? raw.trim() : '';
   const source = text || String(fallback || '').trim();
   return redactInlineSecrets(source).slice(0, MCP_TOOL_DESCRIPTION_MAX_CHARS);
@@ -123,9 +119,9 @@ export function sanitizeMcpToolDescription(raw, fallback) {
  * Argument-shape failures are certain (the MCP server was not invoked).
  * Return an isError tool result so approved replay can continue the run.
  *
- * @param {string} message
+ * @param message
  */
-export function mcpToolArgumentError(message) {
+export function mcpToolArgumentError(message: string) {
   const safe = redactInlineSecrets(String(message ?? 'invalid arguments')).slice(0, 512);
   return {
     content: [{ type: 'text', text: `Error [MCP_TOOL_ARGUMENTS_INVALID]: ${safe}` }],

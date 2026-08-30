@@ -13,11 +13,11 @@ const ZERO_TRACE_ID = /^0{32}$/;
 const TRACESTATE_KEY_RE = /^[a-z][a-z0-9_*/-]{0,255}$/;
 
 /**
- * @param {unknown} value
- * @param {string} [field]
+ * @param value
+ * @param [field]
  * @returns {string}
  */
-export function assertW3cTraceId(value, field = 'traceId') {
+export function assertW3cTraceId(value: unknown, field: string = 'traceId') {
   if (
     typeof value !== 'string' ||
     !TRACE_ID_RE.test(value) ||
@@ -67,11 +67,11 @@ export function normalizeW3cTracestate(value) {
 }
 
 /**
- * @param {string} traceId
- * @param {{ randomBytes?: (size: number) => Uint8Array }} [options]
+ * @param traceId
+ * @param [options]
  * @returns {string}
  */
-export function createW3cTraceparent(traceId, options = {}) {
+export function createW3cTraceparent(traceId: string, options: { randomBytes?: (size: number) => Uint8Array } = {}) {
   const tid = assertW3cTraceId(traceId);
   const randomBytes = options.randomBytes ?? cryptoRandomBytes;
   if (typeof randomBytes !== 'function') {
@@ -94,11 +94,11 @@ export function createW3cTraceparent(traceId, options = {}) {
 }
 
 /**
- * @param {string} traceId
- * @param {{ randomBytes?: (size: number) => Uint8Array, traceState?: unknown }} [options]
+ * @param traceId
+ * @param [options]
  * @returns {{ traceparent: string, 'X-Trace-Id': string, tracestate?: string }}
  */
-export function createTraceHeaders(traceId, options = {}) {
+export function createTraceHeaders(traceId: string, options: { randomBytes?: (size: number) => Uint8Array, traceState?: unknown } = {}) {
   const tid = assertW3cTraceId(traceId);
   const traceState = normalizeW3cTracestate(options.traceState);
   return {

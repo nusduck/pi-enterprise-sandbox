@@ -5,12 +5,15 @@
  * tool-schema validator can all depend on them without a cycle.
  */
 
+/** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
+type Loose = any;
+
 export class PiMcpAdapterError extends Error {
-  /**
-   * @param {string} message
-   * @param {{ code?: string, details?: object, cause?: unknown }} [opts]
-   */
-  constructor(message, opts = {}) {
+  // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
+  code: Loose;
+  details: Loose;
+
+  constructor(message: string, opts: { code?: string, details?: Record<string, any>, cause?: unknown } = {}) {
     super(message, opts.cause === undefined ? undefined : { cause: opts.cause });
     this.name = 'PiMcpAdapterError';
     this.code = opts.code ?? 'PI_MCP_ADAPTER_ERROR';

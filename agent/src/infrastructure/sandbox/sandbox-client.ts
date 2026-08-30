@@ -28,6 +28,9 @@ import { randomBytes } from 'node:crypto';
 import { config, resolveSandboxAuthHeader } from '../../../config.js';
 import { createTraceHeaders } from './trace-context.js';
 
+/** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
+type Loose = any;
+
 const BASE = config.SANDBOX_BASE_URL;
 
 /**
@@ -45,14 +48,18 @@ const SANDBOX_HEALTH_TIMEOUT_MS = 3_000;
 
 /**
  * Path of one managed process under the session that owns it.
- * @param {string} sessionId
- * @param {string} processId
+ * @param sessionId
+ * @param processId
  */
-function processPath(sessionId, processId) {
+function processPath(sessionId: string, processId: string) {
   return `/sessions/${encodeURIComponent(sessionId)}/processes/${encodeURIComponent(processId)}`;
 }
 
 export class SandboxError extends Error {
+  // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
+  status: Loose;
+  path: Loose;
+
   constructor(status, message, path) {
     super(message);
     this.name = 'SandboxError';
@@ -62,14 +69,34 @@ export class SandboxError extends Error {
 }
 
 /**
+ * 转发给 exec 的调用者身份。
+ *
+ * `authorization` 只从**服务端已认证**的请求上取；X-Acting-* 一律不从浏览器
+ * 复制，由服务端在认证后自行设置。
+ */
+/**
+ * 发往 exec 的 JSON 请求体。**刻意不逐路由收窄**：每条路由的字段由 exec 侧
+ * 的契约定义并校验，在客户端再抄一份形状只会多一处会漂移的声明。
+ */
+export type SandboxRequestBody = Record<string, any>;
+
+export interface SandboxAuth {
+  authorization?: string;
+  actingUserId?: string;
+  actingOrganizationId?: string;
+  actingRole?: string;
+}
+
+/**
  * Extract sandbox-forwardable auth from an incoming HTTP request.
  * Strips client X-Acting-* (untrusted from browser).
- * @param {import('node:http').IncomingMessage | null | undefined} req
- * @returns {{ authorization?: string, actingUserId?: string, actingOrganizationId?: string, actingRole?: string }}
  */
-export function authFromRequest(req) {
+export function authFromRequest(
+  req: import('node:http').IncomingMessage | null | undefined,
+): SandboxAuth {
   if (!req || !req.headers) return {};
-  const out = {};
+  // 逐条按条件填，字面量推断带不上没写出来的字段。
+  const out: SandboxAuth = {};
   const auth = req.headers.authorization || req.headers.Authorization;
   if (typeof auth === 'string' && auth.toLowerCase().startsWith('bearer ')) {
     out.authorization = auth;
@@ -129,12 +156,12 @@ export function createSandboxClient({ traceId = null, traceState = null, auth = 
     delete safeExtra['x-acting-organization-id'];
     delete safeExtra['x-acting-role'];
 
-    const h = /** @type {Record<string, string>} */ ({
+    const h = (({
       'Content-Type': 'application/json',
       ...safeExtra,
       // Service identity is resolved last and cannot be overridden by extras.
       ...resolveSandboxAuthHeader(),
-    });
+    }) as Record<string, string>);
     if (authCtx.authorization) {
       h.Authorization = authCtx.authorization;
     }
@@ -158,7 +185,16 @@ export function createSandboxClient({ traceId = null, traceState = null, auth = 
     return h;
   }
 
-  async function sbFetch(path, opts = {}) {
+  async function sbFetch(
+    path: string,
+    opts: {
+      headers?: Record<string, string>;
+      signal?: AbortSignal;
+      streaming?: boolean;
+      timeoutMs?: number;
+      [key: string]: unknown;
+    } = {},
+  ) {
     const url = `${BASE}${path}`;
     const {
       headers: extraHeaders,
@@ -187,9 +223,9 @@ export function createSandboxClient({ traceId = null, traceState = null, auth = 
         timer = null;
       }
       if (!resp.ok) {
-        const detail = /** @type {{ detail?: string }} */ (
-          await resp.json().catch(() => ({ detail: resp.statusText }))
-        );
+        const detail = (await resp
+          .json()
+          .catch(() => ({ detail: resp.statusText }))) as { detail?: string };
         throw new SandboxError(resp.status, detail.detail || resp.statusText, path);
       }
       return resp;
@@ -216,9 +252,9 @@ export function createSandboxClient({ traceId = null, traceState = null, auth = 
      * separate legal-hold requirement — Sandbox disk is deleted when its
      * owning conversation is deleted). A session that was never provisioned
      * or already removed is not an error — Sandbox reports `removed: false`.
-     * @param {string} sessionId sandbox_session_id (AgentSession-bound)
+     * @param sessionId sandbox_session_id (AgentSession-bound)
      */
-    async removeSessionWorkspace(sessionId) {
+    async removeSessionWorkspace(sessionId: string) {
       const resp = await sbFetch(`/sessions/${encodeURIComponent(sessionId)}`, {
         method: 'DELETE',
       });
@@ -319,7 +355,7 @@ export function createSandboxClient({ traceId = null, traceState = null, auth = 
     },
 
     /** Structured ls — POST /sessions/{id}/files/ls */
-    async lsFiles(sessionId, body = {}) {
+    async lsFiles(sessionId: string, body: SandboxRequestBody = {}) {
       const resp = await sbFetch(`/sessions/${sessionId}/files/ls`, {
         method: 'POST',
         body: JSON.stringify({
@@ -332,8 +368,9 @@ export function createSandboxClient({ traceId = null, traceState = null, auth = 
     },
 
     /** Structured find — POST /sessions/{id}/files/find */
-    async findFiles(sessionId, body = {}) {
-      const payload = {
+    async findFiles(sessionId: string, body: SandboxRequestBody = {}) {
+      // type / max_depth / limit 按需追加，字面量推断带不上。
+      const payload: Record<string, unknown> = {
         path: body.path ?? '.',
         pattern: body.pattern ?? '*',
       };
@@ -348,8 +385,8 @@ export function createSandboxClient({ traceId = null, traceState = null, auth = 
     },
 
     /** Structured grep — POST /sessions/{id}/files/grep */
-    async grepFiles(sessionId, body = {}) {
-      const payload = {
+    async grepFiles(sessionId: string, body: SandboxRequestBody = {}) {
+      const payload: Record<string, unknown> = {
         path: body.path ?? '.',
         query: body.query,
         regex: Boolean(body.regex),
@@ -365,14 +402,14 @@ export function createSandboxClient({ traceId = null, traceState = null, auth = 
       return resp.json();
     },
 
-    async downloadFileStream(sessionId, path, options = {}) {
+    async downloadFileStream(sessionId, path, options: { signal?: AbortSignal } = {}) {
       return sbFetch(
         `/sessions/${sessionId}/files/download?path=${encodeURIComponent(path)}`,
         { signal: options.signal, streaming: true },
       );
     },
 
-    async downloadDatasetContent(sessionId, datasetId, options = {}) {
+    async downloadDatasetContent(sessionId, datasetId, options: { signal?: AbortSignal } = {}) {
       return sbFetch(
         `/sessions/${encodeURIComponent(sessionId)}/datasets/${encodeURIComponent(datasetId)}/content`,
         { signal: options.signal, streaming: true },
@@ -401,7 +438,7 @@ export function createSandboxClient({ traceId = null, traceState = null, auth = 
       return `/sessions/${sessionId}/artifacts/${encodeURIComponent(artifactId)}/download`;
     },
 
-    async downloadArtifactStream(sessionId, artifactId, options = {}) {
+    async downloadArtifactStream(sessionId, artifactId, options: { signal?: AbortSignal } = {}) {
       return sbFetch(this.artifactDownloadPath(sessionId, artifactId), {
         signal: options.signal,
         streaming: true,

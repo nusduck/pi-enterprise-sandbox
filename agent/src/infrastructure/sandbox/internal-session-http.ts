@@ -42,7 +42,7 @@ function assertTraceId(value) {
  *   spanRandomBytes?: (size: number) => Uint8Array,
  * }} options
  */
-export function createInternalSessionProvisioner(options) {
+export function createInternalSessionProvisioner(options: { baseUrl: string, keyring: Record<string, any>|string, activeKid: string, allowInsecureHttp?: boolean, fetchImpl?: typeof fetch, clock?: () => number, timeoutMs?: number, spanRandomBytes?: (size: number) => Uint8Array, }) {
   const baseUrl = normalizeBaseUrl(options?.baseUrl, {
     allowInsecureHttp: options?.allowInsecureHttp === true,
   });
@@ -159,10 +159,8 @@ export function createInternalSessionProvisioner(options) {
           : lastError instanceof Error
             ? lastError.message
             : String(lastError);
-        const wrapped = /** @type {Error & { code?: string }} */ (
-          new Error(
-            `Sandbox session provisioning unavailable (${String(detail).slice(0, 160)})`,
-          )
+        const wrapped: Error & { code?: string } = new Error(
+          `Sandbox session provisioning unavailable (${String(detail).slice(0, 160)})`,
         );
         wrapped.code = 'SANDBOX_SESSION_PROVISION_FAILED';
         wrapped.cause = lastError;
@@ -170,10 +168,8 @@ export function createInternalSessionProvisioner(options) {
       }
       const text = await response.text();
       if (!response.ok) {
-        const error = /** @type {Error & { code?: string, httpStatus?: number }} */ (
-          new Error(
-            `Sandbox session provisioning failed (status=${response.status})`,
-          )
+        const error: Error & { code?: string; httpStatus?: number } = new Error(
+          `Sandbox session provisioning failed (status=${response.status})`,
         );
         error.code = 'SANDBOX_SESSION_PROVISION_FAILED';
         error.httpStatus = response.status;

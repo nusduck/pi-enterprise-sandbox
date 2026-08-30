@@ -8,12 +8,15 @@
  * Does NOT implement MCP protocol, tools/list, JSON-RPC, SSE, or fetch.
  */
 
+/** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
+type Loose = any;
+
 export class McpConfigError extends Error {
-  /**
-   * @param {string} message
-   * @param {{ code?: string, details?: object }} [opts]
-   */
-  constructor(message, opts = {}) {
+  // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
+  code: Loose;
+  details: Loose;
+
+  constructor(message: string, opts: { code?: string, details?: Record<string, any> } = {}) {
     super(message);
     this.name = 'McpConfigError';
     this.code = opts.code ?? 'MCP_CONFIG_INVALID';
@@ -34,18 +37,18 @@ const MCP_RISK_LEVELS = Object.freeze(['low', 'medium', 'high', 'critical']);
 
 /**
  * Final tool name pattern after adapter registration (plan §21.1).
- * @param {string} serverName
- * @param {string} toolName
+ * @param serverName
+ * @param toolName
  */
-export function mcpToolName(serverName, toolName) {
+export function mcpToolName(serverName: string, toolName: string) {
   return `mcp__${serverName}__${toolName}`;
 }
 
 /**
- * @param {string} name
+ * @param name
  * @returns {boolean}
  */
-export function isValidMcpToolName(name) {
+export function isValidMcpToolName(name: string) {
   return (
     typeof name === 'string' &&
     /^mcp__[A-Za-z0-9._-]+__[A-Za-z0-9._-]+$/.test(name)
@@ -53,11 +56,11 @@ export function isValidMcpToolName(name) {
 }
 
 /**
- * @param {unknown} value
- * @param {string} field
+ * @param value
+ * @param field
  * @returns {number}
  */
-function parseTimeoutSec(value, field) {
+function parseTimeoutSec(value: unknown, field: string) {
   if (value == null) return DEFAULT_TIMEOUT_SEC;
   const n = Number(value);
   if (!Number.isFinite(n) || !Number.isInteger(n)) {
@@ -79,11 +82,11 @@ function parseTimeoutSec(value, field) {
  * `secretRef` is the only allowed secret-related field name (logical ref).
  * Never includes secret values in the error message.
  *
- * @param {unknown} value
- * @param {string} path
- * @param {number} [depth]
+ * @param value
+ * @param path
+ * @param [depth]
  */
-export function assertNoPlaintextSecrets(value, path, depth = 0) {
+export function assertNoPlaintextSecrets(value: unknown, path: string, depth: number = 0) {
   if (depth > 12) {
     throw new McpConfigError(`${path} exceeds max nesting for secret scan`, {
       code: 'MCP_CONFIG_SHAPE',
@@ -98,7 +101,7 @@ export function assertNoPlaintextSecrets(value, path, depth = 0) {
   }
   if (typeof value !== 'object') return;
 
-  const obj = /** @type {Record<string, unknown>} */ (value);
+  const obj = (value as Record<string, unknown>);
   for (const key of Object.keys(obj)) {
     if (key === 'secretRef') {
       // Logical ref only — do not recurse into its string value as a secret map.
@@ -122,7 +125,7 @@ export function assertNoPlaintextSecrets(value, path, depth = 0) {
 }
 
 /**
- * @param {unknown} raw
+ * @param raw
  * @returns {ReadonlyArray<{
  *   serverId: string,
  *   enabledTools: readonly string[],
@@ -133,14 +136,14 @@ export function assertNoPlaintextSecrets(value, path, depth = 0) {
  *   toolDescriptions?: Readonly<Record<string, string>> | null,
  * }>}
  */
-export function loadMcpConfig(raw) {
+export function loadMcpConfig(raw: unknown) {
   if (raw == null) {
     return Object.freeze([]);
   }
 
   let list = raw;
   if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
-    const obj = /** @type {Record<string, unknown>} */ (raw);
+    const obj = (raw as Record<string, unknown>);
     if (Array.isArray(obj.mcpServers)) {
       list = obj.mcpServers;
     } else if (Array.isArray(obj.servers)) {
@@ -159,8 +162,7 @@ export function loadMcpConfig(raw) {
     });
   }
 
-  /** @type {Array<object>} */
-  const out = [];
+  const out: Array<Record<string, any>> = [];
   const seen = new Set();
 
   for (let i = 0; i < list.length; i += 1) {
@@ -171,7 +173,7 @@ export function loadMcpConfig(raw) {
         code: 'MCP_CONFIG_SHAPE',
       });
     }
-    const e = /** @type {Record<string, unknown>} */ (entry);
+    const e = (entry as Record<string, unknown>);
     assertNoPlaintextSecrets(e, path);
 
     const serverId = String(e.serverId ?? e.name ?? e.server_id ?? '').trim();
@@ -219,8 +221,7 @@ export function loadMcpConfig(raw) {
       });
     }
 
-    /** @type {Record<string, unknown>} */
-    let toolPolicy = { default: 'allow' };
+    let toolPolicy: Record<string, unknown> = { default: 'allow' };
     if (e.toolPolicy != null) {
       if (typeof e.toolPolicy !== 'object' || Array.isArray(e.toolPolicy)) {
         throw new McpConfigError(`${path}.toolPolicy must be an object`, {
@@ -228,7 +229,7 @@ export function loadMcpConfig(raw) {
         });
       }
       // Nested scan already done via assertNoPlaintextSecrets(e)
-      toolPolicy = { default: 'allow', .../** @type {object} */ (e.toolPolicy) };
+      toolPolicy = { default: 'allow', ...(e.toolPolicy as Record<string, any>) };
       const d = String(toolPolicy.default ?? 'allow');
       if (!['allow', 'deny', 'require_approval'].includes(d)) {
         throw new McpConfigError(
@@ -261,10 +262,9 @@ export function loadMcpConfig(raw) {
             { code: 'MCP_TOOL_POLICY_INVALID' },
           );
         }
-        /** @type {Record<string, string>} */
-        const normalizedRisk = {};
+        const normalizedRisk: Record<string, string> = {};
         for (const [toolName, raw] of Object.entries(
-          /** @type {Record<string, unknown>} */ (toolPolicy.toolRiskLevels),
+          (toolPolicy.toolRiskLevels as Record<string, unknown>),
         )) {
           if (!/^[A-Za-z0-9._-]+$/.test(toolName)) {
             throw new McpConfigError(
@@ -327,7 +327,7 @@ export function loadMcpConfig(raw) {
         });
       }
       toolInputSchemas = Object.freeze({
-        .../** @type {Record<string, unknown>} */ (e.toolInputSchemas),
+        ...(e.toolInputSchemas as Record<string, unknown>),
       });
     }
 
@@ -342,10 +342,9 @@ export function loadMcpConfig(raw) {
           code: 'MCP_CONFIG_SHAPE',
         });
       }
-      /** @type {Record<string, string>} */
-      const normalized = {};
+      const normalized: Record<string, string> = {};
       for (const [tool, raw] of Object.entries(
-        /** @type {Record<string, unknown>} */ (e.toolDescriptions),
+        (e.toolDescriptions as Record<string, unknown>),
       )) {
         if (typeof raw !== 'string') continue;
         const desc = raw.trim();
@@ -374,11 +373,11 @@ export function loadMcpConfig(raw) {
  * Parse config_json / configJson which may be an object or a JSON string.
  * Invalid JSON fails closed (no silent empty).
  *
- * @param {unknown} raw
- * @param {string} field
+ * @param raw
+ * @param field
  * @returns {Record<string, unknown>}
  */
-export function parseAgentVersionConfigJson(raw, field = 'configJson') {
+export function parseAgentVersionConfigJson(raw: unknown, field: string = 'configJson') {
   if (raw == null) return {};
   if (typeof raw === 'string') {
     const trimmed = raw.trim();
@@ -391,7 +390,7 @@ export function parseAgentVersionConfigJson(raw, field = 'configJson') {
           { code: 'MCP_CONFIG_JSON_INVALID' },
         );
       }
-      return /** @type {Record<string, unknown>} */ (parsed);
+      return (parsed as Record<string, unknown>);
     } catch (err) {
       if (err instanceof McpConfigError) throw err;
       throw new McpConfigError(`${field} contains invalid JSON`, {
@@ -400,7 +399,7 @@ export function parseAgentVersionConfigJson(raw, field = 'configJson') {
     }
   }
   if (typeof raw === 'object' && !Array.isArray(raw)) {
-    return /** @type {Record<string, unknown>} */ (raw);
+    return (raw as Record<string, unknown>);
   }
   throw new McpConfigError(`${field} must be an object or JSON string`, {
     code: 'MCP_CONFIG_JSON_INVALID',
@@ -409,11 +408,11 @@ export function parseAgentVersionConfigJson(raw, field = 'configJson') {
 
 /**
  * Load MCP config from AgentVersion bound config / raw configJson.
- * @param {object | null | undefined} agentVersionOrConfig
+ * @param agentVersionOrConfig
  */
-export function loadMcpConfigFromAgentVersion(agentVersionOrConfig) {
+export function loadMcpConfigFromAgentVersion(agentVersionOrConfig: Record<string, any> | null | undefined) {
   if (!agentVersionOrConfig) return loadMcpConfig([]);
-  const v = /** @type {Record<string, unknown>} */ (agentVersionOrConfig);
+  const v = (agentVersionOrConfig as Record<string, unknown>);
   if (Array.isArray(v)) return loadMcpConfig(v);
   if (Array.isArray(v.mcpServers)) return loadMcpConfig(v.mcpServers);
 

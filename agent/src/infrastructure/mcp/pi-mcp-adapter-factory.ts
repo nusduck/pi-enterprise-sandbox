@@ -81,6 +81,27 @@ export {
 const require = createRequire(import.meta.url);
 
 /**
+ * 我们对「钉住的 pi-mcp-adapter」实际依赖的那部分接口。
+ *
+ * 这个类是运行时经 jiti 从 node_modules 里加载的，没有类型可言。把依赖面
+ * 写下来的价值不在于类型检查——而在于**升级适配器版本时能一眼看到我们靠
+ * 它的哪几个成员**：一次 connect、可选的 close/closeAll，以及连接对象上的
+ * status 与 tools。
+ */
+interface McpConnection {
+  status?: string;
+  tools?: readonly { name?: unknown; description?: unknown; inputSchema?: unknown }[];
+}
+
+interface McpServerManagerLike {
+  connect(name: string, definition: unknown): Promise<McpConnection>;
+  close?(name: string): Promise<unknown>;
+  closeAll(): Promise<unknown>;
+}
+
+type McpServerManagerCtor = new (cwd?: string) => McpServerManagerLike;
+
+/**
  * Load the connection manager shipped by the pinned adapter.  The adapter is
  * the sole MCP protocol implementation in this product; this preflight only
  * asks it to connect and run its built-in tools/list discovery before a Pi
@@ -92,9 +113,8 @@ function loadPinnedAdapterConnectionManager() {
   try {
     adapterPackageJson = require.resolve(`${PI_MCP_ADAPTER_PACKAGE}/package.json`);
     const adapterRoot = path.dirname(adapterPackageJson);
-    const { createJiti } = /** @type {{ createJiti?: Function }} */ (
-      require('jiti')
-    );
+    const { createJiti } = ((
+      require('jiti')) as { createJiti?: Function });
     if (typeof createJiti !== 'function') throw new Error('createJiti unavailable');
     const jiti = createJiti(path.join(adapterRoot, 'index.ts'), {
       interopDefault: true,
@@ -103,7 +123,7 @@ function loadPinnedAdapterConnectionManager() {
     if (typeof mod?.McpServerManager !== 'function') {
       throw new Error('McpServerManager unavailable');
     }
-    return mod.McpServerManager;
+    return mod.McpServerManager as McpServerManagerCtor;
   } catch (cause) {
     throw new PiMcpAdapterError(
       'Pinned pi-mcp-adapter discovery implementation is unavailable',
@@ -113,10 +133,10 @@ function loadPinnedAdapterConnectionManager() {
 }
 
 /**
- * @param {number} ms
+ * @param ms
  * @returns {Promise<void>}
  */
-function sleep(ms) {
+function sleep(ms: number) {
   return new Promise((resolve) => {
     setTimeout(resolve, ms);
   });
@@ -126,9 +146,9 @@ function sleep(ms) {
  * Resolve environment-backed secret references without ever including values in
  * diagnostics. Other providers can be injected at the composition root.
  *
- * @param {NodeJS.ProcessEnv | Record<string, string | undefined>} env
+ * @param env
  */
-export function createEnvironmentSecretResolver(env = process.env) {
+export function createEnvironmentSecretResolver(env: NodeJS.ProcessEnv | Record<string, string | undefined> = process.env) {
   return async function resolveEnvironmentSecret(rawRef) {
     let ref = String(rawRef ?? '').trim();
     if (ref.startsWith('env://')) ref = ref.slice('env://'.length);
@@ -149,16 +169,20 @@ export function createEnvironmentSecretResolver(env = process.env) {
 
 /**
  * Race a promise against a hard timeout (clears timer on settle).
- * @template T
- * @param {Promise<T>} promise
- * @param {number} timeoutMs
- * @param {string} label
+
+ * @param promise
+ * @param timeoutMs
+ * @param label
  * @returns {Promise<T>}
  */
-function withTimeout(promise, timeoutMs, label) {
+function withTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  label: string,
+): Promise<T> {
   if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) return promise;
-  let timer;
-  return new Promise((resolve, reject) => {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  return new Promise<T>((resolve, reject) => {
     timer = setTimeout(() => {
       reject(
         new PiMcpAdapterError(`${label} timed out after ${timeoutMs}ms`, {
@@ -181,15 +205,13 @@ function withTimeout(promise, timeoutMs, label) {
 
 /**
  * Bounded parallel map (fixed worker pool).
- * @template T, R
- * @param {readonly T[]} items
- * @param {number} concurrency
- * @param {(item: T, index: number) => Promise<R>} fn
- * @returns {Promise<R[]>}
  */
-async function mapPool(items, concurrency, fn) {
-  /** @type {R[]} */
-  const results = new Array(items.length);
+async function mapPool<T, R>(
+  items: readonly T[],
+  concurrency: number,
+  fn: (item: T, index: number) => Promise<R>,
+): Promise<R[]> {
+  const results: R[] = new Array(items.length);
   let next = 0;
   const workers = Math.max(1, Math.min(concurrency, items.length));
   await Promise.all(
@@ -229,7 +251,7 @@ async function mapPool(items, concurrency, fn) {
  *   retryBackoffMs?: number,
  * }} [options]
  */
-export async function discoverEnabledMcpServers(options = {}) {
+export async function discoverEnabledMcpServers(options: { serverRegistry?: unknown, secretResolver?: (ref: string) => unknown | Promise<unknown>, cwd?: string, concurrency?: number, overallTimeoutMs?: number, perServerTimeoutMs?: number, perServerAttempts?: number, retryBackoffMs?: number, } = {}) {
   const registry = loadMcpServerRegistry(options.serverRegistry ?? []);
   const enabled = [...registry.values()].filter((server) => server.enabled !== false);
   if (enabled.length === 0) {
@@ -284,12 +306,8 @@ export async function discoverEnabledMcpServers(options = {}) {
   const secretResolver =
     options.secretResolver ?? createEnvironmentSecretResolver(process.env);
 
-  /**
-   * @param {import('./mcp-server-registry.js').McpServerRecord} server
-   */
-  async function discoverOneAttempt(server) {
-    /** @type {Record<string, unknown>} */
-    const definition = {
+  async function discoverOneAttempt(server: import('./mcp-server-registry.js').McpServerRecord) {
+    const definition: Record<string, unknown> = {
       ...(server.url ? { url: server.url } : {}),
       ...(server.command
         ? {
@@ -344,10 +362,8 @@ export async function discoverEnabledMcpServers(options = {}) {
           { code: 'MCP_SERVER_AUTH_REQUIRED' },
         );
       }
-      /** @type {Record<string, unknown>} */
-      const toolInputSchemas = {};
-      /** @type {Record<string, string>} */
-      const toolDescriptions = {};
+      const toolInputSchemas: Record<string, unknown> = {};
+      const toolDescriptions: Record<string, string> = {};
       const toolNames = [];
       for (const tool of connection.tools ?? []) {
         const name = String(tool?.name ?? '').trim();
@@ -384,12 +400,8 @@ export async function discoverEnabledMcpServers(options = {}) {
     }
   }
 
-  /**
-   * @param {import('./mcp-server-registry.js').McpServerRecord} server
-   */
-  async function discoverOne(server) {
-    /** @type {unknown} */
-    let lastError = null;
+  async function discoverOne(server: import('./mcp-server-registry.js').McpServerRecord) {
+    let lastError: unknown = null;
     for (let attempt = 1; attempt <= perServerAttempts; attempt += 1) {
       try {
         return await discoverOneAttempt(server);
@@ -402,11 +414,10 @@ export async function discoverEnabledMcpServers(options = {}) {
     }
     const rawMessage =
       lastError instanceof Error ? lastError.message : 'MCP discovery failed';
-    const safeMessage = /** @type {{ message?: unknown }} */ (
-      redactPayload(
-        { message: rawMessage.slice(0, 512) },
-        { maxString: 512 },
-      )
+    const safeMessage = (
+      redactPayload({ message: rawMessage.slice(0, 512) }, { maxString: 512 }) as {
+        message?: unknown;
+      }
     ).message;
     return Object.freeze({
       serverId: server.serverId,
@@ -421,8 +432,7 @@ export async function discoverEnabledMcpServers(options = {}) {
     });
   }
 
-  /** @type {Awaited<ReturnType<typeof discoverOne>>[]} */
-  let servers = [];
+  let servers: Awaited<ReturnType<typeof discoverOne>>[] = [];
   /** Partial results if overall budget expires mid-flight. */
   const partialById = new Map();
   try {
@@ -445,7 +455,7 @@ export async function discoverEnabledMcpServers(options = {}) {
       return Object.freeze({
         serverId: server.serverId,
         status: 'unreachable',
-        toolNames: Object.freeze(/** @type {string[]} */ ([])),
+        toolNames: Object.freeze(([] as string[])),
         toolInputSchemas: Object.freeze({}),
         toolDescriptions: Object.freeze({}),
         toolCount: 0,
@@ -501,11 +511,7 @@ async function resolveSecretValue(ref, resolver) {
   return value;
 }
 
-/**
- * @param {unknown} context
- * @param {((size: number) => Uint8Array) | undefined} spanRandomBytes
- */
-function normalizeMcpTraceContext(context, spanRandomBytes) {
+function normalizeMcpTraceContext(context: unknown, spanRandomBytes: ((size: number) => Uint8Array) | undefined) {
   if (
     context === null ||
     typeof context !== 'object' ||
@@ -516,7 +522,7 @@ function normalizeMcpTraceContext(context, spanRandomBytes) {
       { code: 'MCP_TRACE_CONTEXT_INVALID' },
     );
   }
-  const ctx = /** @type {Record<string, unknown>} */ (context);
+  const ctx = (context as Record<string, unknown>);
   try {
     return Object.freeze({
       traceId: assertW3cTraceId(ctx.traceId, 'context.traceId'),
@@ -535,11 +541,11 @@ function normalizeMcpTraceContext(context, spanRandomBytes) {
  * Propagation fields are owned by the runtime and are case-insensitive for
  * HTTP. A deployment secret reference must not replace them.
  *
- * @param {Record<string, string>} bindings
- * @param {Set<string>} reserved
- * @param {string} field
+ * @param bindings
+ * @param reserved
+ * @param field
  */
-function assertNoReservedTraceBindings(bindings, reserved, field) {
+function assertNoReservedTraceBindings(bindings: Record<string, string>, reserved: Set<string>, field: string) {
   for (const name of Object.keys(bindings)) {
     if (reserved.has(name.toLowerCase())) {
       throw new PiMcpAdapterError(
@@ -562,8 +568,7 @@ async function buildVendorConfig(
   secretResolver,
   traceContext,
 ) {
-  /** @type {Record<string, Record<string, unknown>>} */
-  const mcpServers = {};
+  const mcpServers: Record<string, Record<string, unknown>> = {};
   const tools = [];
 
   for (const logical of logicalServers) {
@@ -587,8 +592,7 @@ async function buildVendorConfig(
       );
     }
 
-    /** @type {Record<string, unknown>} */
-    const vendor = {
+    const vendor: Record<string, unknown> = {
       lifecycle: 'lazy',
       requestTimeoutMs: logical.timeoutSec * 1000,
       exposeResources: false,
@@ -610,8 +614,7 @@ async function buildVendorConfig(
       traceState: traceContext.traceState,
     });
 
-    /** @type {Record<string, string>} */
-    const resolvedEnv = {};
+    const resolvedEnv: Record<string, string> = {};
     assertNoReservedTraceBindings(
       definition.envRefs,
       RESERVED_TRACE_ENV_NAMES,
@@ -633,8 +636,7 @@ async function buildVendorConfig(
       vendor.env = resolvedEnv;
     }
 
-    /** @type {Record<string, string>} */
-    const resolvedHeaders = {};
+    const resolvedHeaders: Record<string, string> = {};
     assertNoReservedTraceBindings(
       definition.headerRefs,
       RESERVED_TRACE_HEADER_NAMES,
@@ -670,13 +672,13 @@ async function buildVendorConfig(
       logical.toolInputSchemas != null &&
       typeof logical.toolInputSchemas === 'object' &&
       !Array.isArray(logical.toolInputSchemas)
-        ? /** @type {Record<string, unknown>} */ (logical.toolInputSchemas)
+        ? (logical.toolInputSchemas as Record<string, unknown>)
         : null;
     const descriptions =
       logical.toolDescriptions != null &&
       typeof logical.toolDescriptions === 'object' &&
       !Array.isArray(logical.toolDescriptions)
-        ? /** @type {Record<string, unknown>} */ (logical.toolDescriptions)
+        ? (logical.toolDescriptions as Record<string, unknown>)
         : null;
     for (const toolName of logical.enabledTools) {
       tools.push(
@@ -716,9 +718,9 @@ async function buildVendorConfig(
  * supplied. Enterprise runtimes reject those ambient sources so they cannot
  * override a deployment registry endpoint or add an unapproved server.
  *
- * @param {{ cwd?: string, agentDir?: string, fsImpl?: typeof fs }} options
+ * @param options
  */
-async function assertNoAmbientMcpConfig(options) {
+async function assertNoAmbientMcpConfig(options: { cwd?: string, agentDir?: string, fsImpl?: typeof fs }) {
   const fsApi = options.fsImpl ?? fs;
   const candidates = new Set([
     path.join(os.homedir(), '.config', 'mcp', 'mcp.json'),
@@ -753,9 +755,9 @@ async function assertNoAmbientMcpConfig(options) {
  * Verify the installed vendor package without importing its TypeScript root with
  * Node. Pi's own Jiti extension loader will load index.ts.
  *
- * @param {{ resolvePackageJson?: () => string, readFile?: typeof fs.readFile, access?: typeof fs.access }} [deps]
+ * @param [deps]
  */
-export async function resolvePiMcpAdapterPackage(deps = {}) {
+export async function resolvePiMcpAdapterPackage(deps: { resolvePackageJson?: () => string, readFile?: typeof fs.readFile, access?: typeof fs.access } = {}) {
   let packageJsonPath;
   try {
     packageJsonPath =
@@ -818,7 +820,7 @@ export async function resolvePiMcpAdapterPackage(deps = {}) {
  *   description?: string | null,
  * }[] }} binding
  */
-export function createMcpExtensionsOverride(binding) {
+export function createMcpExtensionsOverride(binding: { extensionPath: string, tools: readonly { serverId: string, toolName: string, name: string, inputSchema?: unknown, description?: string | null, }[] }) {
   return function projectMcpTools(base) {
     const matches = (base?.extensions || []).filter(
       (extension) => path.resolve(extension.resolvedPath) === path.resolve(binding.extensionPath),
@@ -955,7 +957,7 @@ export function createMcpExtensionsOverride(binding) {
  *   fsImpl?: typeof fs,
  * }} [options]
  */
-export async function createPiMcpAdapter(options = {}) {
+export async function createPiMcpAdapter(options: { mcpServers?: unknown, serverRegistry?: unknown, secretResolver?: (ref: string) => unknown | Promise<unknown>, agentSessionId?: string, cwd?: string, agentDir?: string, runtimeRoot?: string, context?: { traceId?: string, traceState?: string|null }, spanRandomBytes?: (size: number) => Uint8Array, packageResolver?: typeof resolvePiMcpAdapterPackage, fsImpl?: typeof fs, } = {}) {
   const config = loadMcpConfig(options.mcpServers ?? []);
   if (config.length === 0) {
     return Object.freeze({
@@ -1026,6 +1028,9 @@ export async function createPiMcpAdapter(options = {}) {
         runtimeDir = null;
         await fsApi.rm(owned, { recursive: true, force: true });
       },
+      // 先占位再回填：createMcpExtensionsOverride 需要 binding 自身作为入参，
+      // 所以它只能在字面量构造完之后挂上。
+      extensionsOverride: undefined as unknown,
     };
     binding.extensionsOverride = createMcpExtensionsOverride(binding);
     return binding;
@@ -1056,10 +1061,10 @@ export async function resolveMcpBinding(mcpServers, options = {}) {
  * Servers the AgentVersion references that are absent from the registry
  * surface are dropped rather than granted.
  *
- * @param {ReadonlyArray<ReturnType<typeof loadMcpConfig>[number]>} declared
- * @param {ReadonlyArray<ReturnType<typeof loadMcpConfig>[number]>} registrySurface
+ * @param declared
+ * @param registrySurface
  */
-function intersectMcpConfigWithRegistry(declared, registrySurface) {
+function intersectMcpConfigWithRegistry(declared: ReadonlyArray<ReturnType<typeof loadMcpConfig>[number]>, registrySurface: ReadonlyArray<ReturnType<typeof loadMcpConfig>[number]>) {
   const bySurfaceId = new Map(
     registrySurface.map((server) => [server.serverId, server]),
   );
@@ -1075,17 +1080,15 @@ function intersectMcpConfigWithRegistry(declared, registrySurface) {
     const surfaceSchemas =
       surfaced.toolInputSchemas != null &&
       typeof surfaced.toolInputSchemas === 'object'
-        ? /** @type {Record<string, unknown>} */ (surfaced.toolInputSchemas)
+        ? (surfaced.toolInputSchemas as Record<string, unknown>)
         : null;
     const declaredSchemas =
       server.toolInputSchemas != null && typeof server.toolInputSchemas === 'object'
-        ? /** @type {Record<string, unknown>} */ (server.toolInputSchemas)
+        ? (server.toolInputSchemas as Record<string, unknown>)
         : null;
-    /** @type {Record<string, unknown> | null} */
-    let toolInputSchemas = null;
+    let toolInputSchemas: Record<string, unknown> | null = null;
     if (surfaceSchemas || declaredSchemas) {
-      /** @type {Record<string, unknown>} */
-      const merged = {};
+      const merged: Record<string, unknown> = {};
       for (const tool of enabledTools) {
         if (surfaceSchemas?.[tool] != null) merged[tool] = surfaceSchemas[tool];
         else if (declaredSchemas?.[tool] != null) merged[tool] = declaredSchemas[tool];
@@ -1095,17 +1098,15 @@ function intersectMcpConfigWithRegistry(declared, registrySurface) {
     const surfaceDescriptions =
       surfaced.toolDescriptions != null &&
       typeof surfaced.toolDescriptions === 'object'
-        ? /** @type {Record<string, unknown>} */ (surfaced.toolDescriptions)
+        ? (surfaced.toolDescriptions as Record<string, unknown>)
         : null;
     const declaredDescriptions =
       server.toolDescriptions != null && typeof server.toolDescriptions === 'object'
-        ? /** @type {Record<string, unknown>} */ (server.toolDescriptions)
+        ? (server.toolDescriptions as Record<string, unknown>)
         : null;
-    /** @type {Record<string, string> | null} */
-    let toolDescriptions = null;
+    let toolDescriptions: Record<string, string> | null = null;
     if (surfaceDescriptions || declaredDescriptions) {
-      /** @type {Record<string, string>} */
-      const merged = {};
+      const merged: Record<string, string> = {};
       for (const tool of enabledTools) {
         if (typeof surfaceDescriptions?.[tool] === 'string') {
           merged[tool] = surfaceDescriptions[tool];
@@ -1140,7 +1141,7 @@ function intersectMcpConfigWithRegistry(declared, registrySurface) {
  *   getDefaultMcpServers?: () => unknown,
  * }} [options]
  */
-export function createPiMcpResolver(options = {}) {
+export function createPiMcpResolver(options: { serverRegistry?: unknown, secretResolver?: (ref: string) => unknown | Promise<unknown>, runtimeRoot?: string, spanRandomBytes?: (size: number) => Uint8Array, packageResolver?: typeof resolvePiMcpAdapterPackage, defaultMcpServers?: unknown, getDefaultMcpServers?: () => unknown, } = {}) {
   // Validate deployment config during assembly, before the first model request.
   const registry = loadMcpServerRegistry(options.serverRegistry ?? []);
   /**
@@ -1222,9 +1223,9 @@ export function createPiMcpResolver(options = {}) {
  * AgentVersion risk-table layer, so an MCP server's risk is configured next to
  * the rest of its policy instead of in a second unrelated file.
  *
- * @param {unknown} raw
+ * @param raw
  */
-export function buildMcpPolicyBindings(raw) {
+export function buildMcpPolicyBindings(raw: unknown) {
   const logical =
     raw &&
     typeof raw === 'object' &&
@@ -1232,10 +1233,8 @@ export function buildMcpPolicyBindings(raw) {
     (Object.hasOwn(raw, 'configJson') || Object.hasOwn(raw, 'config_json'))
       ? loadMcpConfigFromAgentVersion(raw)
       : loadMcpConfig(raw ?? []);
-  /** @type {Record<string, Record<string, unknown>>} */
-  const mcpServerPolicies = {};
-  /** @type {Record<string, { riskLevel?: string, tools?: Record<string, string> }>} */
-  const riskServers = {};
+  const mcpServerPolicies: Record<string, Record<string, unknown>> = {};
+  const riskServers: Record<string, { riskLevel?: string, tools?: Record<string, string> }> = {};
   for (const server of logical) {
     mcpServerPolicies[server.serverId] = {
       ...server.toolPolicy,
@@ -1251,7 +1250,7 @@ export function buildMcpPolicyBindings(raw) {
       riskServers[server.serverId] = {
         ...(riskLevel ? { riskLevel: String(riskLevel) } : {}),
         ...(toolRiskLevels && typeof toolRiskLevels === 'object'
-          ? { tools: { .../** @type {object} */ (toolRiskLevels) } }
+          ? { tools: { ...(toolRiskLevels as Record<string, any>) } }
           : {}),
       };
     }

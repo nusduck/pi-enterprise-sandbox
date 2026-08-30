@@ -10,6 +10,9 @@ import {
 } from './internal-hmac.js';
 import { createTraceHeaders } from './trace-context.js';
 
+/** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
+type Loose = any;
+
 export const ARTIFACT_DOWNLOAD_HTU = '/internal/v1/artifacts/download';
 export const ARTIFACT_DOWNLOAD_SCOPE = 'sandbox.artifacts.download';
 export const ARTIFACT_DOWNLOAD_TOOL = 'artifact.download';
@@ -20,6 +23,9 @@ const SHA256_RE = /^[0-9a-f]{64}$/;
 const HEADER_VALUE_MAX_LENGTH = 1024;
 
 export class InternalArtifactDownloadError extends Error {
+  // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
+  code: Loose;
+
   constructor(code, message, extra = {}) {
     super(message);
     this.name = 'InternalArtifactDownloadError';
@@ -29,12 +35,12 @@ export class InternalArtifactDownloadError extends Error {
 }
 
 /**
- * @param {string} code
- * @param {string} message
- * @param {object} [extra]
+ * @param code
+ * @param message
+ * @param [extra]
  * @returns {never}
  */
-function fail(code, message, extra = {}) {
+function fail(code: string, message: string, extra: Record<string, any> = {}) {
   throw new InternalArtifactDownloadError(code, message, extra);
 }
 
@@ -173,7 +179,7 @@ function cancelBody(response) {
  *   traceState?: unknown,
  * }} [options]
  */
-export function createInternalArtifactDownloadTransport(options = {}) {
+export function createInternalArtifactDownloadTransport(options: { baseUrl?: string, keyring?: Record<string, any>|string, activeKid?: string, allowInsecureHttp?: boolean, fetchImpl?: typeof fetch, tokenIssuer?: Function, clock?: () => number, randomBytes?: (size: number) => Uint8Array, ttlSeconds?: number, timeoutMs?: number, spanRandomBytes?: (size: number) => Uint8Array, traceState?: unknown, } = {}) {
   const baseUrl = normalizeBaseUrl(options.baseUrl, {
     allowInsecureHttp: options.allowInsecureHttp === true,
   });
@@ -189,7 +195,12 @@ export function createInternalArtifactDownloadTransport(options = {}) {
   positiveSafeInteger(timeoutMs, 'timeoutMs');
 
   return Object.freeze({
-    async downloadArtifact(input, requestOptions = {}) {
+    async downloadArtifact(
+      input: Record<string, any>,
+      // 请求级选项。traceState 优先用**随本次调用到达的**载体，
+      // 取不到才回落到工厂默认（既有的 run-scoped 调用方）。
+      requestOptions: { signal?: AbortSignal; traceState?: string | null } = {},
+    ) {
       const normalized = normalizeInput(input);
       const wireBody = {
         artifactId: normalized.artifactId,

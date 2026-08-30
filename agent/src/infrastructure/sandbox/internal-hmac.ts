@@ -13,6 +13,9 @@ import {
 } from 'node:crypto';
 import { TextDecoder } from 'node:util';
 
+/** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
+type Loose = any;
+
 export const INTERNAL_TOKEN_ALGORITHM = 'HS256';
 export const INTERNAL_TOKEN_TYPE = 'sandbox-internal+jwt';
 export const INTERNAL_TOKEN_VERSION = 1;
@@ -93,11 +96,10 @@ const PRINTABLE_ASCII_RE = /^[\x21-\x7e]+$/;
 const UTF8_FATAL_DECODER = new TextDecoder('utf-8', { fatal: true });
 
 export class InternalHmacError extends Error {
-  /**
-   * @param {string} code
-   * @param {string} message
-   */
-  constructor(code, message) {
+  // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
+  code: Loose;
+
+  constructor(code: string, message: string) {
     super(message);
     this.name = 'InternalHmacError';
     this.code = code;
@@ -105,19 +107,17 @@ export class InternalHmacError extends Error {
 }
 
 /**
- * @param {string} code
- * @param {string} message
- * @returns {never}
+ * 永远抛出。返回类型必须写 `never`——否则 TS 认为它可能正常返回，
+ * 所有「校验失败就 fail(...)」的守卫都不会收窄类型，后面每一次读字段
+ * 都会报 unknown。
  */
-function fail(code, message) {
+function fail(code: string, message: string): never {
   throw new InternalHmacError(code, message);
 }
 
 /**
- * @param {unknown} value
- * @returns {value is Record<string, unknown>}
  */
-function isPlainObject(value) {
+function isPlainObject(value: unknown): value is Record<string, unknown> {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) {
     return false;
   }
@@ -130,17 +130,17 @@ function isPlainObject(value) {
  * missing/extra keys. This keeps the object accepted here identical to the
  * object that is serialized.
  *
- * @param {unknown} value
- * @param {readonly string[]} expected
- * @param {string} label
+ * @param value
+ * @param expected
+ * @param label
  * @returns {Record<string, unknown>}
  */
-function assertExactObjectKeys(value, expected, label) {
+function assertExactObjectKeys(value: unknown, expected: readonly string[], label: string) {
   if (!isPlainObject(value)) {
     fail('INTERNAL_TOKEN_SCHEMA_INVALID', `${label} must be a plain object`);
   }
 
-  const object = /** @type {Record<string, unknown>} */ (value);
+  const object = (value as Record<string, unknown>);
   const ownKeys = Reflect.ownKeys(object);
   if (
     ownKeys.length !== expected.length ||
@@ -194,11 +194,11 @@ function assertAsciiIdentifier(
 }
 
 /**
- * @param {unknown} value
- * @param {string} field
+ * @param value
+ * @param field
  * @returns {number}
  */
-function assertPositiveSafeInteger(value, field) {
+function assertPositiveSafeInteger(value: unknown, field: string) {
   if (
     typeof value !== 'number' ||
     !Number.isSafeInteger(value) ||
@@ -215,11 +215,11 @@ function assertPositiveSafeInteger(value, field) {
 /**
  * Strict unpadded canonical base64url decoder.
  *
- * @param {unknown} value
- * @param {string} field
+ * @param value
+ * @param field
  * @returns {Buffer}
  */
-function decodeCanonicalBase64url(value, field) {
+function decodeCanonicalBase64url(value: unknown, field: string) {
   if (
     typeof value !== 'string' ||
     value.length === 0 ||
@@ -246,10 +246,10 @@ function decodeCanonicalBase64url(value, field) {
  * ability to reject duplicate keys (JSON.parse alone would silently replace
  * them).
  *
- * @param {string} source
+ * @param source
  * @returns {Record<string, string>}
  */
-function parseJsonKeyring(source) {
+function parseJsonKeyring(source: string) {
   if (Buffer.byteLength(source, 'utf8') > MAX_KEYRING_JSON_BYTES) {
     fail('INTERNAL_TOKEN_KEYRING_INVALID', 'keyring JSON is too large');
   }
@@ -351,10 +351,10 @@ function parseJsonKeyring(source) {
 }
 
 /**
- * @param {unknown} input
+ * @param input
  * @returns {Map<string, Buffer>}
  */
-function decodeKeyring(input) {
+function decodeKeyring(input: unknown) {
   let object;
   if (typeof input === 'string') {
     object = parseJsonKeyring(input);
@@ -365,7 +365,7 @@ function decodeKeyring(input) {
         'keyring must be an object or JSON object string',
       );
     }
-    object = /** @type {Record<string, unknown>} */ (input);
+    object = (input as Record<string, unknown>);
     for (const key of Reflect.ownKeys(object)) {
       if (typeof key !== 'string') {
         fail(
@@ -423,11 +423,11 @@ function decodeKeyring(input) {
 /**
  * Validate a keyring and active signing kid without exposing a fallback key.
  *
- * @param {unknown} keyring
- * @param {unknown} activeKid
+ * @param keyring
+ * @param activeKid
  * @returns {{activeKid: string, kids: readonly string[]}}
  */
-export function validateInternalHmacKeyring(keyring, activeKid) {
+export function validateInternalHmacKeyring(keyring: unknown, activeKid: unknown) {
   const decoded = decodeKeyring(keyring);
   const kid = assertAsciiIdentifier(activeKid, 'activeKid', MAX_KID_LENGTH);
   if (!KID_RE.test(kid) || !decoded.has(kid)) {
@@ -443,11 +443,11 @@ export function validateInternalHmacKeyring(keyring, activeKid) {
 }
 
 /**
- * @param {unknown} value
- * @param {string} field
+ * @param value
+ * @param field
  * @returns {string}
  */
-function assertSha256(value, field) {
+function assertSha256(value: unknown, field: string) {
   if (typeof value !== 'string' || !SHA256_HEX_RE.test(value)) {
     fail(
       'INTERNAL_TOKEN_CLAIM_INVALID',
@@ -458,10 +458,10 @@ function assertSha256(value, field) {
 }
 
 /**
- * @param {unknown} value
+ * @param value
  * @returns {string}
  */
-function assertHtu(value) {
+function assertHtu(value: unknown) {
   if (
     typeof value !== 'string' ||
     value.length === 0 ||
@@ -480,10 +480,10 @@ function assertHtu(value) {
 }
 
 /**
- * @param {unknown} value
+ * @param value
  * @returns {readonly [string]}
  */
-function assertScope(value) {
+function assertScope(value: unknown) {
   if (
     !Array.isArray(value) ||
     value.length !== 1 ||
@@ -505,10 +505,10 @@ function assertScope(value) {
  * Validate and copy the exact final claim set in deterministic serialization
  * order.
  *
- * @param {unknown} input
+ * @param input
  * @returns {Readonly<Record<string, unknown>>}
  */
-export function validateInternalTokenClaims(input) {
+export function validateInternalTokenClaims(input: unknown) {
   const claims = assertExactObjectKeys(
     input,
     INTERNAL_TOKEN_CLAIM_KEYS,
@@ -611,16 +611,16 @@ export function validateInternalTokenClaims(input) {
   if (jtiBytes.length !== 16) {
     fail('INTERNAL_TOKEN_CLAIM_INVALID', 'jti must encode exactly 128 bits');
   }
-  normalized.jti = /** @type {string} */ (claims.jti);
+  normalized.jti = (claims.jti as string);
 
   return Object.freeze(normalized);
 }
 
 /**
- * @param {unknown} input
+ * @param input
  * @returns {Readonly<Record<string, unknown>>}
  */
-function validateIssueClaims(input) {
+function validateIssueClaims(input: unknown) {
   const claims = assertExactObjectKeys(
     input,
     INTERNAL_TOKEN_ISSUE_CLAIM_KEYS,
@@ -677,18 +677,18 @@ function validateIssueClaims(input) {
 }
 
 /**
- * @param {unknown} now
+ * @param now
  * @returns {number}
  */
-function assertClockSeconds(now) {
+function assertClockSeconds(now: unknown) {
   return assertPositiveSafeInteger(now, 'clock result');
 }
 
 /**
- * @param {Buffer} bytes
+ * @param bytes
  * @returns {string}
  */
-function encodeBase64url(bytes) {
+function encodeBase64url(bytes: Buffer) {
   return bytes.toString('base64url');
 }
 
@@ -702,7 +702,7 @@ function encodeBase64url(bytes) {
  * }} options
  * @returns {string}
  */
-export function signInternalToken(options) {
+export function signInternalToken(options: { keyring: Record<string, any>|string, activeKid: string, claims: Record<string, any>, }) {
   const decoded = decodeKeyring(options?.keyring);
   const activeKid = assertAsciiIdentifier(
     options?.activeKid,
@@ -744,7 +744,7 @@ export function signInternalToken(options) {
  * }} options
  * @returns {string}
  */
-export function issueInternalToken(options) {
+export function issueInternalToken(options: { keyring: Record<string, any>|string, activeKid: string, claims: Record<string, any>, ttlSeconds?: number, clock?: () => number, randomBytes?: (size: number) => Uint8Array, }) {
   const ttl = options?.ttlSeconds ?? INTERNAL_TOKEN_DEFAULT_TTL_SECONDS;
   if (
     typeof ttl !== 'number' ||
@@ -802,11 +802,11 @@ export function issueInternalToken(options) {
 }
 
 /**
- * @param {string} segment
- * @param {string} field
+ * @param segment
+ * @param field
  * @returns {{text: string, value: unknown}}
  */
-function decodeJwtJsonSegment(segment, field) {
+function decodeJwtJsonSegment(segment: string, field: string) {
   const bytes = decodeCanonicalBase64url(segment, field);
   let text;
   try {
@@ -825,14 +825,14 @@ function decodeJwtJsonSegment(segment, field) {
  * Verify signature, exact schemas, canonical compact serialization, fixed
  * issuer/audience/subject, and strict token time validity.
  *
- * @param {string} token
+ * @param token
  * @param {{
  *   keyring: object|string,
  *   clock?: () => number,
  * }} options
  * @returns {Readonly<Record<string, unknown>>}
  */
-export function verifyInternalToken(token, options) {
+export function verifyInternalToken(token: string, options: { keyring: Record<string, any>|string, clock?: () => number, }) {
   if (typeof token !== 'string' || token.length > 16 * 1024) {
     fail('INTERNAL_TOKEN_MALFORMED', 'token must be a bounded string');
   }
@@ -907,10 +907,10 @@ export function verifyInternalToken(token, options) {
   const now = assertClockSeconds(
     (options?.clock ?? (() => Math.floor(Date.now() / 1000)))(),
   );
-  if (now < /** @type {number} */ (claims.nbf)) {
+  if (now < (claims.nbf as number)) {
     fail('INTERNAL_TOKEN_NOT_YET_VALID', 'token is not yet valid');
   }
-  if (now >= /** @type {number} */ (claims.exp)) {
+  if (now >= (claims.exp as number)) {
     fail('INTERNAL_TOKEN_EXPIRED', 'token has expired');
   }
   return claims;
@@ -925,10 +925,10 @@ export function verifyInternalToken(token, options) {
 
 /**
  * Literal loopback hostnames only — no DNS/CIDR invention.
- * @param {string} hostname
+ * @param hostname
  * @returns {boolean}
  */
-function isLiteralLoopbackHostname(hostname) {
+function isLiteralLoopbackHostname(hostname: string) {
   const h = String(hostname || '')
     .toLowerCase()
     .replace(/^\[|\]$/g, '');
@@ -936,11 +936,11 @@ function isLiteralLoopbackHostname(hostname) {
 }
 
 /**
- * @param {string} baseUrl
- * @param {{ allowInsecureHttp?: boolean }} [opts]
+ * @param baseUrl
+ * @param [opts]
  * @returns {string}
  */
-export function normalizeBaseUrl(baseUrl, opts = {}) {
+export function normalizeBaseUrl(baseUrl: string, opts: { allowInsecureHttp?: boolean } = {}) {
   if (typeof baseUrl !== 'string' || !baseUrl.trim()) {
     fail('SANDBOX_TRANSPORT_CONFIG', 'baseUrl is required');
   }
