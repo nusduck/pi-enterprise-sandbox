@@ -27,3 +27,6 @@ export { RunBudget, wrapExecute } from './policy/run-budget.js';
 export { recordLedger, redactPostExecute } from './policy/post-execute.js';
 export { encodeSseStream, projectToSse } from './projection/sse.js';
 export { assembleSystemPrompt, ENTERPRISE_CLAUSES } from './prompt/enterprise-clauses.js';
+export { PLUGIN_MANIFEST, ownModulePaths } from './plugins/manifest.js';
+export type { PatchEntry } from './plugins/manifest.js';
+export { renderPatchYaml } from './plugins/render.js';
