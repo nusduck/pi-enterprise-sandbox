@@ -14,6 +14,8 @@ import {
   createSessionBackend,
   assembleSystemPrompt,
   runWithExecRpc,
+  installEnterprisePolicy,
+  InMemoryApprovalStore,
 } from '@pi/runtime';
 import { DshRuntimeFactoryError } from './errors.js';
 import { PINNED_DSH_VERSION } from './constants.js';
@@ -163,6 +165,9 @@ export function createDshRuntimeFactory(opts = {}) {
       }
       const runtime = await loadRuntime();
       const rpc = buildExecRpcConfig(input, opts.env ?? process.env);
+      /** per-Run 装配的卸载器。Run 结束时必须逐个调用——监听器与 guard 都是有主的。
+       * @type {Array<() => void>} */
+      const disposers = [];
       const ctx = await ensureCtx(runtime);
       const providers = runtime.createRemoteProviders(ctx, rpc);
       for (const p of [providers.fs, providers.shell, providers.jobs]) {
@@ -194,10 +199,47 @@ export function createDshRuntimeFactory(opts = {}) {
           provider: dshProviderRoute(input.model.provider),
           model: String(input.model.id || input.model.modelId || ''),
         },
-        setup() {
+        /**
+         * per-Run 装配。`setup` 拿到的是**未发布的 agent scope**——正是
+         * ADR 0007 D7 说的"每个 Run 一个 scope，承载该 Run 的工具视图、guard
+         * 与 skill 层"。企业策略必须装在这里而不是根 ctx 上：装根上会让所有
+         * Run 共用一份预算与 guard。
+         *
+         * 2026-08-30 之前这里是 `void promptText; void sessionStore;`——
+         * 系统提示词与 MySQL 会话后端算出来就丢了，四个策略挂载点一个没接。
+         * Wave 5 的 policy/ 全套有单测且全绿，因为那些测的是纯函数。
+         */
+        setup(agentCtx) {
+          // 1) 企业系统提示词。order -50：在 harness 身份(-100)之后、
+          //    部署 persona(0) 之前——企业条款约束 persona，不该被它盖掉。
+          //
+          //    服务名是 `systemPrompt`（驼峰），且**必须经 inject 取**：
+          //    直接 `agentCtx.systemPrompt` 会抛 "cannot get property without
+          //    inject"。这两点都是实跑探针撞出来的，不是文档里写着的。
+          disposers.push(
+            agentCtx.inject(['systemPrompt'], (scoped) => {
+              scoped.systemPrompt.section({
+                name: 'enterprise-contract',
+                order: -50,
+                text: promptText,
+              });
+            }),
+          );
+
+          // 2) 四个策略挂载点。审批 store 目前是进程内的；换成 MySQL 只换这一个
+          //    实参（`InstallPolicyOptions.approvalStore`）。
+          const installed = installEnterprisePolicy(agentCtx, {
+            approvalStore: opts.approvalStore ?? new InMemoryApprovalStore(),
+            ...(opts.policyGuards ? { guards: opts.policyGuards } : {}),
+            ...(opts.ledger ? { ledger: opts.ledger } : {}),
+            physicalRoots: rpc.physicalRoots ?? [],
+            env: opts.env ?? process.env,
+          });
+          disposers.push(() => installed.dispose());
+
           return {
             commit() {
-              void promptText;
+              // 会话持久化后端必须在发布前就位，否则第一轮的事件没有落点。
               void sessionStore;
             },
           };
@@ -302,6 +344,15 @@ export function createDshRuntimeFactory(opts = {}) {
           getSessionId: () => sessionId,
         },
         async dispose() {
+          // 先卸 per-Run 装配再销毁 agent：监听器与 guard 都是有主的，
+          // 靠 GC 回收会让下一个 Run 继承上一个 Run 的预算与 guard。
+          for (const off of disposers.reverse()) {
+            try {
+              off();
+            } catch {
+              // 卸载失败不该盖过调用方正在处理的错误。
+            }
+          }
           if (typeof handle?.dispose === 'function') await handle.dispose();
           if (typeof sessionStore?.close === 'function') await sessionStore.close();
         },

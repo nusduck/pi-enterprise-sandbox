@@ -20,6 +20,8 @@ export { createDurableSubagentProvider, buildDurableJobSpec } from './providers/
 export { createEnabledSkillsProvider, isSkillVisible } from './providers/enabled-skills.js';
 export { MemoryService } from './providers/memory.js';
 export { evaluatePreExecute, InMemoryApprovalStore } from './policy/pre-execute.js';
+export { installEnterprisePolicy } from './policy/install.js';
+export type { InstallPolicyOptions, InstalledPolicy } from './policy/install.js';
 export { runGuards } from './policy/guards.js';
 export { RunBudget, wrapExecute } from './policy/run-budget.js';
 export { recordLedger, redactPostExecute } from './policy/post-execute.js';
