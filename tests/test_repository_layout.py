@@ -35,9 +35,11 @@ HOTSPOT_LINE_BUDGETS = {
     # W2-D 曾抬到 1_672；去掉 expect-error 后收回。
     "agent/src/application/fenced-tool-governance-recorder.js": 1_663,
     "agent/src/application/pi-run-executor.js": 1_613,
-    "agent/src/bootstrap/container.js": 1_190,
-    # W2-D 曾抬到 1_443；Wave 6 收回。
-    "agent/src/bootstrap/create-http-server.js": 1_439,
+    # 转 TS 时拆出 container-mcp.ts（MCP 发现状态机），1_178 -> 1_065，预算收紧。
+    "agent/src/bootstrap/container.ts": 1_065,
+    # W2-D 曾抬到 1_443；Wave 6 收回。转 TS 时拆出 presentation/http/health-routes.ts
+    # （/health + /ready），1_439 -> 1_399，预算收紧。
+    "agent/src/bootstrap/create-http-server.ts": 1_399,
     "agent/src/infrastructure/mcp/pi-mcp-adapter-factory.js": 1_268,
     # +6 (1_131 -> 1_137): packJsonWithIntegrity now raises a stable
     # ARGUMENT_TOO_LARGE code instead of a bare message, so callers can tell
@@ -59,6 +61,10 @@ HOTSPOT_LINE_BUDGETS = {
 def _production_sources() -> list[Path]:
     sources = [
         *ROOT.joinpath("agent", "src").rglob("*.js"),
+        # 阶段 C 起 agent/src 同时有 .js 和 .ts。**两种都要扫**：只扫 .js 的话，
+        # 一个文件转成 TS 就会静悄悄退出这条棘轮——http-handler 正是这样在转换里
+        # 从 993 长到 1009 而没人发现。
+        *ROOT.joinpath("agent", "src").rglob("*.ts"),
         *ROOT.joinpath("sandbox").rglob("*.py"),
         *ROOT.joinpath("frontend", "src").rglob("*.ts"),
         *ROOT.joinpath("frontend", "src").rglob("*.tsx"),

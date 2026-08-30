@@ -15,7 +15,7 @@ import {
   parseTraceparent,
   mapErrorToHttp,
   presentCreateRunResponse,
-} from '../../src/bootstrap/create-http-server.js';
+} from '../../src/bootstrap/create-http-server.ts';
 import {
   OwnerScopedNotFoundError,
   ValidationError,
@@ -783,7 +783,7 @@ describe('production import graph', () => {
 
   it('create-http-server does not import run-manager', () => {
     const src = readFileSync(
-      path.join(__dirname, '../../src/bootstrap/create-http-server.js'),
+      path.join(__dirname, '../../src/bootstrap/create-http-server.ts'),
       'utf8',
     );
     assert.doesNotMatch(src, /from ['"].*run-manager/);
@@ -793,7 +793,7 @@ describe('production import graph', () => {
 
   it('SSE path wires waitDrain + sleepMs (async backpressure, no listener leak)', () => {
     const src = readFileSync(
-      path.join(__dirname, '../../src/bootstrap/create-http-server.js'),
+      path.join(__dirname, '../../src/bootstrap/create-http-server.ts'),
       'utf8',
     );
     assert.match(src, /waitDrain/);
@@ -806,7 +806,7 @@ describe('production import graph', () => {
 
   it('container module has no top-level knex/ioredis require side effects', () => {
     const src = readFileSync(
-      path.join(__dirname, '../../src/bootstrap/container.js'),
+      path.join(__dirname, '../../src/bootstrap/container.ts'),
       'utf8',
     );
     // Lazy dynamic import only inside start()

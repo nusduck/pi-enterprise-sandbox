@@ -72,7 +72,7 @@ export class SubagentSpawnService {
    *   createRepositories: (db: any) => any,
    *   generateId: () => string,
    *   now?: () => Date,
-   *   runQueue: { enqueue: (ref: object) => Promise<unknown> },
+   *   runQueue: { enqueue: (ref: object, options?: object) => Promise<unknown> },
    *   runStateMachine?: object,
    *   queueName?: string,
    *   maxDepth?: number,

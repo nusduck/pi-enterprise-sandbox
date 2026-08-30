@@ -38,6 +38,15 @@ import {
 } from '../../application/a2a/artifact-download.js';
 import { ValidationError } from '../../application/errors.js';
 import { waitForWritableResume } from '../../application/run-event-sse-service.js';
+import {
+  extractTaskId,
+  mapA2aErrorToRpc,
+  readA2aVersionHeader,
+  requiredScopeForMethod,
+} from './http-handler-mapping.js';
+
+// mapA2aErrorToRpc 是这个模块既有的公开出口，拆分后从这里继续导出，调用方不必改。
+export { mapA2aErrorToRpc } from './http-handler-mapping.js';
 
 /** 取单值头。重复头在 Node 里是数组；幂等键是单值语义，取第一个。 */
 function firstHeaderValue(req: { headers: Record<string, string | string[] | undefined> }, name: string): string | null {
@@ -926,84 +935,4 @@ export function createA2aHttpHandler(deps: A2aHandlerDeps) {
   }
 
   return { handle };
-}
-
-function requiredScopeForMethod(method) {
-  switch (method) {
-    case A2A_METHODS.SEND_MESSAGE:
-    case A2A_METHODS.SEND_STREAMING_MESSAGE:
-      return A2A_SCOPES.INVOKE;
-    case A2A_METHODS.GET_TASK:
-    case A2A_METHODS.SUBSCRIBE_TO_TASK:
-    case A2A_METHODS.LIST_TASKS:
-      return A2A_SCOPES.READ;
-    case A2A_METHODS.CANCEL_TASK:
-      return A2A_SCOPES.CANCEL;
-    default:
-      return A2A_SCOPES.READ;
-  }
-}
-
-/**
- * @param {import('node:http').IncomingMessage} req
- * @returns {string | null}
- */
-function readA2aVersionHeader(req) {
-  const raw =
-    req.headers['a2a-version'] ||
-    req.headers['A2A-Version'] ||
-    req.headers['A2A-VERSION'];
-  if (typeof raw !== 'string' || !raw.trim()) return null;
-  // Take first token if comma-separated negotiation list.
-  return raw.split(',')[0].trim();
-}
-
-function extractTaskId(params) {
-  const id =
-    params?.id ??
-    params?.taskId ??
-    params?.task_id ??
-    (params?.task && typeof params.task === 'object'
-      ? (params.task as Loose).id
-      : null);
-  if (typeof id !== 'string' || !id.trim()) {
-    throw new ValidationError('params.id (task id) is required');
-  }
-  return id.trim();
-}
-
-/**
- * @param {unknown} err
- */
-export function mapA2aErrorToRpc(err) {
-  if (err instanceof A2aTaskError && err.rpc) {
-    return {
-      code: err.rpc.code,
-      message: err.rpc.message,
-      data: { code: err.code },
-    };
-  }
-  if (err instanceof A2aAuditError) {
-    return {
-      ...JSON_RPC_ERROR.INTERNAL,
-      data: { code: err.code },
-    };
-  }
-  if (err instanceof A2aAuthError) {
-    return {
-      ...A2A_RPC_ERROR.AUTH,
-      data: { code: err.code },
-    };
-  }
-  if (err instanceof ValidationError) {
-    return {
-      ...JSON_RPC_ERROR.INVALID_PARAMS,
-      data: { reason: err.message, code: err.code },
-    };
-  }
-  const code = /** @type {{ code?: string }} */ (err)?.code;
-  if (code === 'NOT_FOUND') {
-    return { ...A2A_RPC_ERROR.TASK_NOT_FOUND };
-  }
-  return { ...JSON_RPC_ERROR.INTERNAL };
 }

@@ -22,11 +22,11 @@ import { startTelemetry } from '../infrastructure/telemetry.js';
  * Model identity is emitted by model.request.* events, while token usage is
  * emitted by assistant message.completed events. Neither belongs on the Run
  * state row itself, so this projection deliberately reads only durable events.
- *
- * @param {Array<{ eventType?: string, payloadJson?: unknown }>} events
  */
-export function summarizeRunObservability(events) {
-  let modelId = null;
+export function summarizeRunObservability(
+  events: Array<{ eventType?: string; payloadJson?: unknown }>,
+) {
+  let modelId: string | null = null;
   let inputTokens = 0;
   let outputTokens = 0;
   let totalTokens = 0;
@@ -35,14 +35,14 @@ export function summarizeRunObservability(events) {
   for (const event of events || []) {
     const data = event?.payloadJson;
     if (!data || typeof data !== 'object' || Array.isArray(data)) continue;
-    const payload = /** @type {Record<string, unknown>} */ (data);
+    const payload = data as Record<string, unknown>;
     if (String(event.eventType || '').toLowerCase().startsWith('model.request.')) {
       const model = payload.model;
       const candidate =
         payload.modelId ??
         payload.model_id ??
         (model && typeof model === 'object' && !Array.isArray(model)
-          ? /** @type {Record<string, unknown>} */ (model).id
+          ? (model as Record<string, unknown>).id
           : null);
       if (typeof candidate === 'string' && candidate.trim()) {
         modelId = candidate.trim();
@@ -50,7 +50,7 @@ export function summarizeRunObservability(events) {
     }
     const usage = payload.usage;
     if (!usage || typeof usage !== 'object' || Array.isArray(usage)) continue;
-    const u = /** @type {Record<string, unknown>} */ (usage);
+    const u = usage as Record<string, unknown>;
     const input = Number(u.inputTokens ?? u.input_tokens ?? u.input ?? 0);
     const output = Number(u.outputTokens ?? u.output_tokens ?? u.output ?? 0);
     const total = Number(u.totalTokens ?? u.total_tokens ?? u.total ?? 0);
@@ -79,14 +79,12 @@ export function summarizeRunObservability(events) {
  * Build the A2A artifact byte authority. It resolves the task's durable Run
  * and Agent Session under the credential owner before asking Sandbox for an
  * artifact by opaque id. Filesystem paths are never accepted or forwarded.
- *
- * @param {{
- *   createRepositories: (db?: any) => any,
- *   db?: any,
- *   artifactDownloadTransport: { downloadArtifact: Function },
- * }} deps
  */
-export function createA2aArtifactByteStreamer(deps) {
+export function createA2aArtifactByteStreamer(deps: {
+  createRepositories: (db?: any) => any;
+  db?: any;
+  artifactDownloadTransport: { downloadArtifact: (...args: any[]) => any };
+}) {
   if (typeof deps?.createRepositories !== 'function') {
     throw new Error('createA2aArtifactByteStreamer requires repositories');
   }
@@ -150,10 +148,7 @@ export function createA2aArtifactByteStreamer(deps) {
   };
 }
 
-/**
- * @param {NodeJS.ProcessEnv} [env]
- */
-export async function startHttpMain(env = process.env) {
+export async function startHttpMain(env: NodeJS.ProcessEnv = process.env) {
   try {
     validateProductionConfig(env);
   } catch (err) {
@@ -172,8 +167,9 @@ export async function startHttpMain(env = process.env) {
       'production' ||
     Boolean(String(env.AGENT_DATABASE_URL || '').trim());
 
-  /** @type {Awaited<ReturnType<typeof container.createHttpServices>> | null} */
-  let httpServices = null;
+  let httpServices: Awaited<
+    ReturnType<typeof container.createHttpServices>
+  > | null = null;
 
   if (requireDataPlane) {
     await container.start({
@@ -188,7 +184,7 @@ export async function startHttpMain(env = process.env) {
     );
   }
 
-  let sandboxHealthCheck = null;
+  let sandboxHealthCheck: (() => Promise<{ status?: string } | null>) | null = null;
   try {
     const mod = await import('../infrastructure/sandbox/sandbox-client.js');
     sandboxHealthCheck = () => mod.checkHealth();
@@ -199,7 +195,13 @@ export async function startHttpMain(env = process.env) {
   // Skills are per-caller: the bundled tier plus that user's own directory.
   // Without an identity on the request there is no user tier to project, and
   // the process-wide roots list bundled packages only.
-  const getExtensionDiagnostics = (options = {}) => {
+  const getExtensionDiagnostics = (
+    options: {
+      organizationId?: string | null;
+      ownerUserId?: string | null;
+      [key: string]: unknown;
+    } = {},
+  ) => {
     const identity =
       options.organizationId != null && options.ownerUserId != null
         ? { orgId: options.organizationId, userId: options.ownerUserId }
@@ -248,11 +250,13 @@ export async function startHttpMain(env = process.env) {
         // browser artifact download/export/upload rehydration.
         const sessionByAgentId = new Map();
         if (repos.sessions?.getById) {
+          // repos 经 knex 出来是 any，`new Set(any)` 会塌成 Set<unknown>，
+          // 所以显式给出元素类型——它由紧跟着的 `id is string` 断言保证。
           const uniqueAgentSessionIds = [
-            ...new Set(
+            ...new Set<string>(
               runs
                 .map((run) => run.agentSessionId)
-                .filter((id) => typeof id === 'string' && id),
+                .filter((id): id is string => typeof id === 'string' && Boolean(id)),
             ),
           ];
           await Promise.all(
@@ -317,10 +321,9 @@ export async function startHttpMain(env = process.env) {
     });
   }
 
-  /** @type {{ handle: Function } | null} */
-  let a2aHandler = null;
-  /** @type {{ handle: Function } | null} */
-  let a2aAdminHandler = null;
+  type RequestHandler = { handle: (...args: any[]) => any };
+  let a2aHandler: RequestHandler | null = null;
+  let a2aAdminHandler: RequestHandler | null = null;
   if (httpServices?.a2aCredentialService && httpServices?.a2aTaskService) {
     const { createA2aHttpHandler } = await import(
       '../presentation/a2a/http-handler.js'
@@ -390,8 +393,7 @@ export async function startHttpMain(env = process.env) {
           const repos = httpServices.createRepositories(httpServices.knex);
           const def = await repos.catalog.getDefinitionById(agentId);
           if (!def) return null;
-          /** @type {unknown[]} */
-          let skills = [];
+          let skills: unknown[] = [];
           if (def.activeVersionId) {
             try {
               const ver = await repos.catalog.getVersionById(def.activeVersionId);
@@ -488,7 +490,6 @@ export async function startHttpMain(env = process.env) {
   if (sandboxHealthCheck) {
     try {
       const health = await sandboxHealthCheck();
-      // @ts-expect-error 遗留JS占位类型object未展开，访问status需收窄，存活代码先用expect-error收敛 —— TS2339: Property 'status' does not exist on type 'unknown'.
       if (health?.status === 'ok') {
         console.log('[agent-server] Sandbox healthy');
       } else {

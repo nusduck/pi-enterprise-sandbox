@@ -56,6 +56,8 @@ describe('agent single production source root', () => {
   });
 
   it('exposes production modules under src/', () => {
+    // 断言的是「这个模块在 src/ 下存在」，不是「它是 JavaScript」——阶段 C 起
+    // 这些文件正陆续转成 .ts，写死后缀会让每次转换都误报。
     for (const rel of [
       'src/lib/text-redaction.js',
       'src/infrastructure/model-registry.js',
@@ -66,7 +68,13 @@ describe('agent single production source root', () => {
       'worker.js',
       'config.js',
     ]) {
-      assert.ok(fs.existsSync(path.join(root, rel)), `missing ${rel}`);
+      const candidates = rel.endsWith('.js')
+        ? [rel, `${rel.slice(0, -3)}.ts`]
+        : [rel];
+      assert.ok(
+        candidates.some((candidate) => fs.existsSync(path.join(root, candidate))),
+        `missing ${candidates.join(' / ')}`,
+      );
     }
   });
 

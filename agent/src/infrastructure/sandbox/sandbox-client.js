@@ -452,6 +452,12 @@ export function createSandboxClient({ traceId = null, traceState = null, auth = 
 // so trace state stays request-scoped; the old per-route wrappers pointed at
 // retired Sandbox routes and are gone. Do not add one back without a caller.
 
+/**
+ * Sandbox `/health` 探针。返回 null 表示不可达（超时/非 2xx/网络错误都归一到
+ * null），而不是抛错——调用方是 `/ready`，它只需要"健不健康"。
+ *
+ * @returns {Promise<{ status?: string } | null>}
+ */
 export async function checkHealth() {
   return createSandboxClient().checkHealth();
 }

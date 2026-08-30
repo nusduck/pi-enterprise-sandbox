@@ -73,6 +73,7 @@ import {
 } from './container-env.js';
 import { buildPiRunExecutorFactory } from './container-run-executor.js';
 import { buildSkillManagerFactory } from './container-skill-manager.js';
+import { McpDiscoveryState } from './container-mcp.js';
 
 // Re-exported so bootstrap callers keep one entry point for the container.
 export {
@@ -84,22 +85,50 @@ export {
   resolveWorkerExecutorFactory,
 } from './container-env.js';
 
+/** 过渡期宽松类型：容器装配的对象几乎都还是 JS。 */
+type Loose = any;
+
+/** 构造期可注入的缝。生产不传，走真实实现；测试用它避开真连接。 */
+export interface ServiceContainerOptions {
+  readonly generateId?: () => string;
+  readonly now?: () => Date;
+  readonly runExecutorFactory?: Loose;
+  readonly createMysqlKnex?: Loose;
+  readonly createRedisClient?: Loose;
+  readonly createRunQueue?: Loose;
+  readonly destroyMysqlKnex?: Loose;
+  readonly destroyRedisClient?: Loose;
+  readonly destroyRunQueue?: Loose;
+}
+
 export class ServiceContainer {
+  // TS 要求类字段显式声明；JS 里它们只在构造器里赋值。逐条列出来还有个好处：
+  // 容器持有的可变状态一眼可见，不必读完整个构造器。
+  env: NodeJS.ProcessEnv | Record<string, string | undefined>;
+  mysqlUrl: Loose;
+  redisUrl: Loose;
+  generateId: () => string;
+  now: () => Date;
+  /** Explicit factory only — no silent production stub. */
+  runExecutorFactory: Loose;
+  _opts: ServiceContainerOptions;
+  knex: import('knex').Knex | null = null;
+  redis: Loose = null;
+  runQueueHandle: Loose = null;
+  started = false;
   /**
-   * @param {NodeJS.ProcessEnv | Record<string, string|undefined>} [env]
-   * @param {{
-   *   generateId?: () => string,
-   *   now?: () => Date,
-   *   runExecutorFactory?: Function | null,
-   *   createMysqlKnex?: Function,
-   *   createRedisClient?: Function,
-   *   createRunQueue?: Function,
-   *   destroyMysqlKnex?: Function,
-   *   destroyRedisClient?: Function,
-   *   destroyRunQueue?: Function,
-   * }} [opts]
+   * After a successful start then shutdown, instance is terminal (no restart).
+   * Failed start cleans up and allows retry (startPromise cleared).
    */
-  constructor(env = process.env, opts = {}) {
+  shutdownDone = false;
+  startPromise: Promise<ServiceContainer> | null = null;
+  shutdownPromise: Promise<void> | null = null;
+  readonly #mcp: McpDiscoveryState;
+
+  constructor(
+    env: NodeJS.ProcessEnv | Record<string, string | undefined> = process.env,
+    opts: ServiceContainerOptions = {},
+  ) {
     this.env = env;
     this.mysqlUrl = resolveMysqlUrlFromEnv(env);
     this.redisUrl = resolveRedisUrlFromEnv(env);
@@ -109,13 +138,9 @@ export class ServiceContainer {
     this.runExecutorFactory = opts.runExecutorFactory ?? null;
     this._opts = opts;
 
-    /** @type {import('knex').Knex | null} */
     this.knex = null;
-    /** @type {any} */
     this.redis = null;
-    /** @type {any} */
     this.runQueueHandle = null;
-    /** @type {boolean} */
     this.started = false;
     /**
      * After a successful start then shutdown, instance is terminal (no restart).
@@ -123,155 +148,26 @@ export class ServiceContainer {
      * @type {boolean}
      */
     this.shutdownDone = false;
-    /** @type {Promise<ServiceContainer> | null} */
     this.startPromise = null;
-    /** @type {Promise<void> | null} */
     this.shutdownPromise = null;
     /**
      * Latest MCP discovery snapshot (may be incomplete after a cold-start
      * failure). Refreshed by {@link preflightMcpServers}; incomplete results
      * are not permanent — later force/cooldown refreshes can recover tools.
      */
-    this.mcpDiscovery = null;
-    /** @type {number} epoch ms of last discovery attempt */
-    this.mcpDiscoveryAt = 0;
-    /** @type {Promise<object> | null} */
-    this.mcpDiscoveryPromise = null;
-    /** @type {ReturnType<typeof setInterval> | null} */
-    this.mcpRediscoveryTimer = null;
+    this.#mcp = new McpDiscoveryState(env);
   }
 
-  /**
-   * Connect enabled MCP_SERVERS_JSON entries and run adapter-owned tools/list
-   * discovery. Retries transient Streamable-HTTP → SSE 405 races at worker
-   * boot. Incomplete snapshots are retained for /ready diagnostics but can be
-   * refreshed (force or cooldown) so runs are not stuck without MCP forever.
-   *
-   * @param {{
-   *   force?: boolean,
-   *   maxAttempts?: number,
-   *   retryCooldownMs?: number,
-   * }} [opts]
-   */
-  async preflightMcpServers(opts = {}) {
-    const force = opts.force === true;
-    const retryCooldownMs = Number.isFinite(opts.retryCooldownMs)
-      ? Math.max(0, Number(opts.retryCooldownMs))
-      : 30_000;
-    const maxAttempts = Math.max(
-      1,
-      Math.min(5, Number.isFinite(opts.maxAttempts) ? Number(opts.maxAttempts) : 3),
-    );
-
-    if (this.mcpDiscovery && !force) {
-      const complete =
-        this.mcpDiscovery.ready === true ||
-        Number(this.mcpDiscovery.serverCount ?? 0) === 0 ||
-        Number(this.mcpDiscovery.toolCount ?? 0) > 0;
-      if (complete) return this.mcpDiscovery;
-      const age = Date.now() - (this.mcpDiscoveryAt || 0);
-      if (age < retryCooldownMs) return this.mcpDiscovery;
-      // Incomplete and cooldown elapsed → fall through to rediscover.
-    }
-    if (this.mcpDiscoveryPromise) return this.mcpDiscoveryPromise;
-
-    this.mcpDiscoveryPromise = import(
-      '../infrastructure/mcp/pi-mcp-adapter-factory.js'
-    )
-      .then(async ({ createEnvironmentSecretResolver, discoverEnabledMcpServers }) => {
-        const secretResolver = createEnvironmentSecretResolver(this.env);
-        const cwd =
-          this.env.AGENT_PI_DEFAULT_CWD ||
-          this.env.AGENT_SESSION_WORKSPACE_CWD ||
-          undefined;
-        const serverRegistry = this.env.MCP_SERVERS_JSON || '[]';
-
-        /** @type {object | null} */
-        let snapshot = null;
-        for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
-          snapshot = await discoverEnabledMcpServers({
-            serverRegistry,
-            secretResolver,
-            cwd,
-          });
-          if (
-            snapshot.ready === true ||
-            Number(snapshot.serverCount ?? 0) === 0 ||
-            Number(snapshot.toolCount ?? 0) > 0
-          ) {
-            break;
-          }
-          if (attempt < maxAttempts) {
-            const delayMs = 750 * attempt;
-            console.warn(
-              `[agent-mcp] discovery incomplete (attempt ${attempt}/${maxAttempts}); retrying in ${delayMs}ms`,
-            );
-            await new Promise((resolve) => setTimeout(resolve, delayMs));
-          }
-        }
-
-        this.mcpDiscovery = snapshot;
-        this.mcpDiscoveryAt = Date.now();
-        for (const server of snapshot?.servers ?? []) {
-          if (server.status === 'connected') {
-            console.log(
-              `[agent-mcp] MCP Server connected id=${server.serverId} tools=${server.toolCount}`,
-            );
-          } else {
-            console.error(
-              `[agent-mcp] MCP readiness error id=${server.serverId}: ${server.error}`,
-            );
-          }
-        }
-        // Background rediscovery if still incomplete so a later run can pick
-        // up tools without a process restart.
-        this.#ensureMcpRediscoveryLoop();
-        return snapshot;
-      })
-      .finally(() => {
-        this.mcpDiscoveryPromise = null;
-      });
-    return this.mcpDiscoveryPromise;
+  /** @see McpDiscoveryState.preflight */
+  async preflightMcpServers(
+    opts: { force?: boolean; maxAttempts?: number; retryCooldownMs?: number } = {},
+  ) {
+    return this.#mcp.preflight(opts);
   }
 
-  /**
-   * When bootstrap discovery left servers unreachable, periodically re-probe
-   * so worker runs can gain MCP tools without a restart.
-   */
-  #ensureMcpRediscoveryLoop() {
-    if (this.mcpRediscoveryTimer) return;
-    if (this.mcpDiscovery?.ready === true) return;
-    if (Number(this.mcpDiscovery?.serverCount ?? 0) === 0) return;
-    this.mcpRediscoveryTimer = setInterval(() => {
-      if (this.mcpDiscovery?.ready === true || Number(this.mcpDiscovery?.toolCount ?? 0) > 0) {
-        if (this.mcpRediscoveryTimer) {
-          clearInterval(this.mcpRediscoveryTimer);
-          this.mcpRediscoveryTimer = null;
-        }
-        return;
-      }
-      void this.preflightMcpServers({ force: true, maxAttempts: 2 }).catch((err) => {
-        console.error(
-          '[agent-mcp] background rediscovery failed:',
-          err instanceof Error ? err.message : err,
-        );
-      });
-    }, 30_000);
-    if (typeof this.mcpRediscoveryTimer.unref === 'function') {
-      this.mcpRediscoveryTimer.unref();
-    }
-  }
-
+  /** @see McpDiscoveryState.readiness */
   getMcpReadiness() {
-    return (
-      this.mcpDiscovery ?? {
-        ready: false,
-        serverCount: 0,
-        toolCount: 0,
-        servers: [],
-        mcpServers: [],
-      }
-    );
+    return this.#mcp.readiness();
   }
 
   /**
@@ -431,11 +327,13 @@ export class ServiceContainer {
   /**
    * Default modelResolver: AgentVersion embedded model, else modelPolicy id /
    * MODEL_ID registry entry → pi-ai Model (LLMIO baseUrl/apiKey from env).
-   * @returns {(agentVersion: object, selection?: { modelId?: string|null }) => Promise<object>}
    */
-  createDefaultModelResolver() {
+  createDefaultModelResolver(): (
+    agentVersion: Loose,
+    selection?: { modelId?: string | null },
+  ) => Promise<Loose> {
     const env = this.env;
-    return async (agentVersion, selection = {}) => {
+    return async (agentVersion, selection: { modelId?: string | null } = {}) => {
       const { bindAgentVersionConfig, resolveConcreteModel } = await import(
         '../infrastructure/dsh/agent-version-bindings.js'
       );
@@ -443,8 +341,7 @@ export class ServiceContainer {
         await import('../infrastructure/model-registry.js');
       const bound = bindAgentVersionConfig(agentVersion);
       if (bound.model) {
-        // @ts-expect-error 遗留JS占位类型object未展开，访问id需收窄，存活代码先用expect-error收敛 —— TS2339: Property 'id' does not exist on type 'unknown'.
-        if (selection.modelId && String(bound.model.id) !== selection.modelId) {
+        if (selection.modelId && String((bound.model as Loose).id) !== selection.modelId) {
           return resolveConcreteModel(
             bound,
             toPiModel(resolveModel(selection.modelId, { env }), {
@@ -454,12 +351,12 @@ export class ServiceContainer {
         }
         return resolveConcreteModel(bound, null);
       }
-      const policy = bound.modelPolicy || {};
+      const policy: Loose = bound.modelPolicy || {};
       const ref =
         policy.reference && typeof policy.reference === 'object'
-          ? /** @type {Record<string, unknown>} */ (policy.reference)
+          ? (policy.reference as Record<string, unknown>)
           : policy.modelRef && typeof policy.modelRef === 'object'
-            ? /** @type {Record<string, unknown>} */ (policy.modelRef)
+            ? (policy.modelRef as Record<string, unknown>)
             : {};
       const modelId =
         (typeof selection.modelId === 'string' && selection.modelId.trim()) ||
@@ -623,17 +520,17 @@ export class ServiceContainer {
    * Pi runtime factory constructor/factory (PR-05 slice A).
    * Does **not** enable production RunExecutor — worker still fail-fast without
    * an explicit runExecutorFactory (slice B wires the executor).
-   *
-   * @param {{
-   *   sessionAdapter?: { captureSnapshotPayload?: Function, dispose?: Function },
-   *   extensionFactories?: unknown[],
-   *   loadSdk?: () => Promise<any>,
-   *   mcpResolver?: Function | object | null,
-   *   mcpSecretResolver?: Function,
-   *   mcpRuntimeRoot?: string,
-     * }} [opts]
    */
-  createPiRuntimeFactory(opts = {}) {
+  createPiRuntimeFactory(
+    opts: {
+      sessionAdapter?: { captureSnapshotPayload?: Loose; dispose?: Loose };
+      extensionFactories?: unknown[];
+      loadSdk?: () => Promise<Loose>;
+      mcpResolver?: Loose;
+      mcpSecretResolver?: Loose;
+      mcpRuntimeRoot?: string;
+    } = {},
+  ) {
     // Lazy class load so import of container stays free of SDK side effects.
     return import('../infrastructure/dsh/runtime-factory.js').then(
       async ({ DshRuntimeFactory }) => {
@@ -648,7 +545,6 @@ export class ServiceContainer {
           // next run sees newly connected tools without rebuilding the factory.
           mcpResolver = createPiMcpResolver({
             serverRegistry: this.env.MCP_SERVERS_JSON || '[]',
-            // @ts-expect-error Function宽松类型与精确签名不匹配，JSDoc形状待补，先用expect-error收敛 —— TS2322: Type 'Function' is not assignable to type '(ref: string) => 
             secretResolver:
               opts.mcpSecretResolver ??
               createEnvironmentSecretResolver(this.env),
@@ -730,8 +626,7 @@ export class ServiceContainer {
           'SANDBOX_INTERNAL_HMAC_KEYRING and SANDBOX_INTERNAL_HMAC_ACTIVE_KID ' +
             'are required for production SandboxSession provisioning',
         );
-        // @ts-expect-error 遗留JS占位类型object未展开，访问code需收窄，存活代码先用expect-error收敛 —— TS2339: Property 'code' does not exist on type 'Error'.
-        error.code = 'SANDBOX_INTERNAL_HMAC_REQUIRED';
+        (error as Loose).code = 'SANDBOX_INTERNAL_HMAC_REQUIRED';
         throw error;
       }
       return null;
@@ -750,18 +645,17 @@ export class ServiceContainer {
   /**
    * Session recovery + atomic journal/snapshot checkpoint service (PR-05 slice B).
    * Requires started MySQL (or inject transactionManager).
-   *
-   * @param {{
-   *   transactionManager?: { run: Function },
-   *   createRepositories?: (db: any) => any,
-   * }} [opts]
    */
-  createSessionRecoveryService(opts = {}) {
+  createSessionRecoveryService(
+    opts: {
+      transactionManager?: { run: Loose };
+      createRepositories?: (db: Loose) => Loose;
+    } = {},
+  ) {
     const tx = opts.transactionManager ?? this.getTransactionManager();
     const createRepositories =
       opts.createRepositories ?? ((db) => this.createRepositories(db));
     return new SessionRecoveryService({
-      // @ts-expect-error Function宽松类型与精确签名不匹配，JSDoc形状待补，先用expect-error收敛 —— TS2322: Type '{ run: Function; }' is not assignable to type '{ run: 
       transactionManager: tx,
       createRepositories,
       generateId: this.generateId,
@@ -801,7 +695,6 @@ export class ServiceContainer {
    * @returns {Promise<import('../application/run-executor.js').RunExecutorFactory>}
    */
   async createPiRunExecutorFactory(opts) {
-    // @ts-expect-error 未校验string传入闭合联合，运行时需窄化守卫，存活代码先用expect-error收敛 —— TS2345: Argument of type '{ modelResolver: (agentVersion: any) => an
     return buildPiRunExecutorFactory(this, opts);
   }
 
@@ -958,9 +851,6 @@ export class ServiceContainer {
       createRunService,
       getRunService,
       cancelRunService,
-      // @ts-expect-error 遗留JSDoc未校验，存活代码先用expect-error收敛，Wave6前不改运行时 —— TS2561: Object literal may only specify known properties, but 'steer
-      steerRunService,
-      followUpService,
       eventQueryService,
       createRepositories,
       transactionManager: tx,
@@ -1024,7 +914,6 @@ export class ServiceContainer {
       createRepositories,
       leaseManager,
       cancelSignal,
-      // @ts-expect-error Function宽松类型与精确签名不匹配，JSDoc形状待补，先用expect-error收敛 —— TS2322: Type 'Function' is not assignable to type '(job: { runId: st
       runExecutorFactory,
       generateId: this.generateId,
       now: this.now,
@@ -1115,13 +1004,9 @@ export class ServiceContainer {
   async #shutdownOnce() {
     if (this.shutdownDone) return;
     this.shutdownDone = true;
-    /** @type {unknown[]} */
-    const errors = [];
+    const errors: unknown[] = [];
 
-    if (this.mcpRediscoveryTimer) {
-      clearInterval(this.mcpRediscoveryTimer);
-      this.mcpRediscoveryTimer = null;
-    }
+    this.#mcp.stop();
 
     if (this.runQueueHandle) {
       try {
@@ -1172,6 +1057,9 @@ export class ServiceContainer {
  * @param {NodeJS.ProcessEnv | Record<string, string|undefined>} [env]
  * @param {object} [opts]
  */
-export function createServiceContainer(env = process.env, opts = {}) {
+export function createServiceContainer(
+  env: NodeJS.ProcessEnv | Record<string, string | undefined> = process.env,
+  opts: ServiceContainerOptions = {},
+): ServiceContainer {
   return new ServiceContainer(env, opts);
 }

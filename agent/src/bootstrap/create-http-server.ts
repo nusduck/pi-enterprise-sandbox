@@ -36,6 +36,10 @@ import {
   mapProcessErrorToHttp,
 } from '../presentation/http/error-mapper.js';
 import {
+  handleHealthRoute,
+  type McpReadiness,
+} from '../presentation/http/health-routes.js';
+import {
   presentCreateRunResponse,
   presentGetRunResponse,
   presentToolExecutionResponse,
@@ -61,37 +65,47 @@ export {
   presentProcessResponse,
 };
 
+/** 过渡期宽松类型：这些依赖大多还是 JS 类，形状由各自的服务模块负责。 */
+type Loose = any;
+
 /**
- * @param {{
- *   createRunService: { execute: Function },
- *   getRunService: { execute: Function },
- *   cancelRunService: { execute: Function },
- *   eventQueryService: { listEvents: Function, resolveEventSequence?: Function },
- *   traceQueryService?: { listForRun: Function, listByTrace?: Function } | null,
- *   eventSseService?: { openStream: Function } | null,
- *   a2aHandler?: { handle: Function } | null,
- *   a2aAdminHandler?: { handle: Function } | null,
- *   config?: { AGENT_INTERNAL_TOKEN?: string, PORT?: number, A2A_PUBLIC_BASE_URL?: string },
- *   sandboxHealthCheck?: () => Promise<{ status?: string } | null>,
- *   dataPlaneReady?: boolean | (() => boolean | Promise<boolean>),
- *   mcpReadiness?: () => { ready?: boolean, serverCount?: number, toolCount?: number, servers?: object[] },
- *   getExtensionDiagnostics?: Function | null,
- *   listRuns?: Function | null,
- *   conversationService?: { list: Function, get: Function, create: Function, delete: Function, ensureSession: Function, resolveSandboxSession?: Function } | null,
- *   approvalQueryService?: { list: Function, get: Function } | null,
- *   approvalDecisionService?: { resolve: Function, resume: Function } | null,
- *   interactionResponseService?: { respond: Function, rehydrateWaiting: Function } | null,
- *   steerRunService?: { execute: Function } | null,
- *   followUpService?: { execute: Function } | null,
- *   listToolExecutions?: Function | null,
- *   processAccessService?: object | null,
- *   cronJobService?: import('../presentation/http/cron-routes.js').CronJobServiceLike | null,
- *   activeRunHint?: () => number,
- *   eventPollIntervalMs?: number,
- *   eventHeartbeatMs?: number,
- * }} deps
+ * 解析后的请求体。**刻意不收窄**：这是未经校验的外来 JSON，字段是否存在、
+ * 是什么类型，由每条路由自己判断（大量 `body.a || body.b` 的双写法兼容）。
+ * 写成 `Record<string, unknown>` 只会把判断变成一串断言，不会更安全。
  */
-export function createAgentHttpServer(deps) {
+type JsonBody = Record<string, any>;
+
+/** HTTP 服务器的依赖面。必需的三个在函数体里 fail-fast，其余缺省即关闭对应路由。 */
+export interface AgentHttpServerDeps {
+  createRunService: { execute: Loose };
+  getRunService: { execute: Loose };
+  cancelRunService: { execute: Loose };
+  eventQueryService: { listEvents: Loose; resolveEventSequence?: Loose };
+  traceQueryService?: { listForRun: Loose; listByTrace?: Loose } | null;
+  eventSseService?: { openStream: Loose } | null;
+  a2aHandler?: { handle: Loose } | null;
+  a2aAdminHandler?: { handle: Loose } | null;
+  config?: { AGENT_INTERNAL_TOKEN?: string; PORT?: number; A2A_PUBLIC_BASE_URL?: string };
+  sandboxHealthCheck?: () => Promise<{ status?: string } | null>;
+  dataPlaneReady?: boolean | (() => boolean | Promise<boolean>);
+  mcpReadiness?: () => McpReadiness;
+  getExtensionDiagnostics?: Loose;
+  listRuns?: Loose;
+  conversationService?: Loose;
+  approvalQueryService?: { list: Loose; get: Loose } | null;
+  approvalDecisionService?: { resolve: Loose; resume: Loose } | null;
+  interactionResponseService?: { respond: Loose; rehydrateWaiting: Loose } | null;
+  steerRunService?: { execute: Loose } | null;
+  followUpService?: { execute: Loose } | null;
+  listToolExecutions?: Loose;
+  processAccessService?: Loose;
+  cronJobService?: import('../presentation/http/cron-routes.js').CronJobServiceLike | null;
+  activeRunHint?: () => number;
+  eventPollIntervalMs?: number;
+  eventHeartbeatMs?: number;
+}
+
+export function createAgentHttpServer(deps: AgentHttpServerDeps) {
   if (!deps?.createRunService || !deps?.getRunService || !deps?.cancelRunService) {
     throw new Error('createAgentHttpServer requires create/get/cancel services');
   }
@@ -136,71 +150,17 @@ export function createAgentHttpServer(deps) {
         if (handled) return;
       }
 
-      if (req.method === 'GET' && path === '/health') {
-        json(res, 200, {
-          status: 'ok',
-          service: 'pi-enterprise-agent',
-          version: '4.0.0',
-          active_runs: deps.activeRunHint ? deps.activeRunHint() : 0,
-          authority: 'mysql',
-        });
-        return;
-      }
-
-      if (req.method === 'GET' && path === '/ready') {
-        let dataPlaneOk = true;
-        if (deps.dataPlaneReady === false) {
-          dataPlaneOk = false;
-        } else if (typeof deps.dataPlaneReady === 'function') {
-          try {
-            dataPlaneOk = Boolean(await deps.dataPlaneReady());
-          } catch {
-            dataPlaneOk = false;
-          }
-        } else if (deps.dataPlaneReady === undefined) {
-          // Default: require explicit data plane when not injected as ready.
-          dataPlaneOk = true;
-        }
-
-        let sandboxOk = true;
-        if (deps.sandboxHealthCheck) {
-          try {
-            const h = await deps.sandboxHealthCheck();
-            sandboxOk = h?.status === 'ok';
-          } catch {
-            sandboxOk = false;
-          }
-        }
-
-        let mcp = /** @type {{ ready?: boolean, serverCount?: number, toolCount?: number, servers?: object[] }} */ ({ ready: true, serverCount: 0, toolCount: 0, servers: [] });
-        if (typeof deps.mcpReadiness === 'function') {
-          try {
-            mcp = deps.mcpReadiness() || mcp;
-          } catch {
-            mcp = { ...mcp, ready: false };
-          }
-        }
-        const mcpOk = mcp.ready !== false;
-
-        const ready = dataPlaneOk && sandboxOk && mcpOk;
-        json(res, ready ? 200 : 503, {
-          status: ready ? 'ready' : 'not_ready',
-          data_plane: dataPlaneOk ? 'ok' : 'unavailable',
-          sandbox: sandboxOk ? 'ok' : 'unreachable',
-          mcp: {
-            status: mcpOk ? 'ok' : 'unreachable',
-            server_count: Number(mcp.serverCount) || 0,
-            tool_count: Number(mcp.toolCount) || 0,
-            servers: Array.isArray(mcp.servers)
-              ? mcp.servers.map((server) => ({
-                  id: server.serverId,
-                  status: server.status,
-                  tool_count: Number(server.toolCount) || 0,
-                  ...(server.error ? { error: String(server.error) } : {}),
-                }))
-              : [],
-          },
-        });
+      if (
+        await handleHealthRoute({
+          req,
+          res,
+          path,
+          activeRunHint: deps.activeRunHint,
+          dataPlaneReady: deps.dataPlaneReady,
+          sandboxHealthCheck: deps.sandboxHealthCheck,
+          mcpReadiness: deps.mcpReadiness,
+        })
+      ) {
         return;
       }
 
@@ -282,7 +242,7 @@ export function createAgentHttpServer(deps) {
           }
           if (req.method === 'POST') {
             const raw = await readBody(req);
-            let body = {};
+            let body: JsonBody = {};
             try {
               body = raw ? JSON.parse(raw) : {};
             } catch {
@@ -316,7 +276,7 @@ export function createAgentHttpServer(deps) {
           return;
         }
         const raw = await readBody(req);
-        let body = {};
+        let body: JsonBody = {};
         try {
           body = raw ? JSON.parse(raw) : {};
         } catch {
@@ -570,7 +530,7 @@ export function createAgentHttpServer(deps) {
               (action === 'stdin' || action === 'signal' || action === 'kill')
             ) {
               const raw = await readBody(req);
-              let body = {};
+              let body: JsonBody = {};
               try {
                 body = raw ? JSON.parse(raw) : {};
               } catch {
@@ -760,7 +720,7 @@ export function createAgentHttpServer(deps) {
       // POST create
       if (req.method === 'POST' && path === '/internal/agent-runs') {
         const raw = await readBody(req);
-        let body = {};
+        let body: JsonBody = {};
         try {
           body = raw ? JSON.parse(raw) : {};
         } catch {
@@ -1295,7 +1255,7 @@ export function createAgentHttpServer(deps) {
             });
             return;
           }
-          let body = {};
+          let body: JsonBody = {};
           try {
             const raw = await readBody(req);
             body = raw ? JSON.parse(raw) : {};

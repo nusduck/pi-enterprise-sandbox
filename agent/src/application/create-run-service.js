@@ -230,7 +230,7 @@ export class CreateRunService {
    *   },
    *   generateId: () => string,
    *   now?: () => Date,
-   *   runQueue: { enqueue: (ref: { runId: string, orgId: string, traceId: string }) => Promise<unknown> },
+   *   runQueue: { enqueue: (ref: { runId: string, orgId: string, traceId: string }, options?: object) => Promise<unknown> },
    *   runStateMachine?: import('../domain/run/run-state-machine.js').RunStateMachine,
    *   queueName?: string,
    *   idempotencyTtlMs?: number,
