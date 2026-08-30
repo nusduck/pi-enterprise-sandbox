@@ -133,7 +133,11 @@ export interface PiRunExecutorFactoryOptions {
   readonly thinkingTruncateLimit?: number;
   /** model 带 provider/id 等字段，形状由模型目录决定，暂不收紧。 */
   readonly requestAuthResolver?: (model: Loose, agentVersion: Loose) => object | Promise<object>;
-  readonly skillRootsForRun?: (identity: object) => unknown;
+  /**
+   * 每个 Run 的 skill 根目录。返回 `string[]`——写 `unknown` 会让
+   * PiRunExecutor 的依赖声明对不上（它要的就是路径数组）。
+   */
+  readonly skillRootsForRun?: (identity: object) => string[];
 }
 
 export async function buildPiRunExecutorFactory(
@@ -239,9 +243,9 @@ export async function buildPiRunExecutorFactory(
       });
     });
 
-  // Built as a variable (not an inline literal) so the excess-property check
-  // does not fire on `skillRootsForRun` if a caller still uses a narrower
-  // factory options type. PiRunExecutor now declares the field in JSDoc.
+  // 建成变量而不是内联字面量：内联时多余属性检查会对不在
+  // PiRunExecutorFactoryOptions 里的字段报错，而这里刻意多带了几个
+  // 装配期用得到、执行器本身不读的项。
   const factoryOpts = {
     transactionManager: container.getTransactionManager(),
     createRepositories: (db) => container.createRepositories(db),

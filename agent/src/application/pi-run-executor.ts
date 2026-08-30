@@ -47,6 +47,13 @@ import {
   redactPayload,
 } from '../lib/event-redaction.js';
 import { normalizeExecutorResult } from './run-executor.js';
+import {
+  assertTriggeringMessageBinding,
+  looksLikeUncertainSideEffect,
+  terminalOutcomeFromNewAssistantEntries,
+  type PiRunExecutorDeps,
+  type PiRunExecutorFactoryOptions,
+} from './pi-run-executor-deps.js';
 import { sanitizeStatusReason } from './sanitize-status-reason.js';
 import { SessionRecoveryService } from './session-recovery-service.js';
 import { captureSessionSnapshotPayload } from './session-json-codec.js';
@@ -102,10 +109,51 @@ import {
   prepareInteractionResume,
 } from './pi-run-resume.js';
 
+/** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
+type Loose = any;
+
 export const UI_ASSISTANT_PI_ENTRY_PREFIX = 'ui:assistant:';
 
 
+
+
 export class PiRunExecutor {
+  // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
+  tx: Loose;
+  createRepositories: Loose;
+  sessionLockManager: Loose;
+  piRuntimeFactory: Loose;
+  sessionAdapter: Loose;
+  modelResolver: Loose;
+  promptImageLoader: Loose;
+  requestAuthResolver: Loose;
+  workspaceResolver: Loose;
+  sandboxSessionProvisioner: Loose;
+  generateId: Loose;
+  now: Loose;
+  projector: Loose;
+  recoveryService: Loose;
+  sessionLockRenewIntervalMs: Loose;
+  skillRootsForRun: Loose;
+  extensionBundleFactory: Loose;
+  eventProjectionMode: Loose;
+  steerPollIntervalMs: Loose;
+  toolBudget: Loose;
+  _lockToken: string | null;
+  _lockedSessionId: string | null;
+  _lockRenewLoop: ReturnType<typeof createSerialRenewLoop> | null;
+  _fenceToken: number | null;
+  _runtime: any;
+  _unsubscribe: (() => void) | null;
+  _eventTail: { enqueue: (fn: () => void | Promise<void>) => Promise<void>, flush: () => Promise<void>, error?: () => unknown } | null;
+  _eventRecorder: FencedRunEventRecorder | null;
+  _governanceRecorder: FencedToolGovernanceRecorder | null;
+  _pendingInteractionToolCallIds: Set<string>;
+  _steerController: DurableSteerController | null;
+  _disposed: boolean;
+  _lockLost: boolean;
+  _cleanupErrors: unknown[];
+
   /**
    * @param {{
    *   transactionManager: { run: (fn: (trx: any) => Promise<any>) => Promise<any> },
@@ -135,7 +183,7 @@ export class PiRunExecutor {
    *   toolBudget?: { maxToolCalls?: number, maxIdenticalToolCalls?: number, maxModelTurns?: number, runDeadlineMs?: number },
    * }} deps
    */
-  constructor(deps) {
+  constructor(deps: PiRunExecutorDeps) {
     if (!deps?.transactionManager?.run) {
       throw new Error('PiRunExecutor requires transactionManager');
     }
@@ -230,10 +278,10 @@ export class PiRunExecutor {
   }
 
   /**
-   * @param {import('./run-executor.js').RunExecutorContext} ctx
+   * @param ctx
    * @returns {Promise<import('./run-executor.js').RunExecutorResult>}
    */
-  async execute(ctx) {
+  async execute(ctx: import('./run-executor.js').RunExecutorContext) {
     if (this._disposed) {
       return {
         outcome: RUN_STATUS.FAILED,
@@ -387,7 +435,7 @@ export class PiRunExecutor {
         const repos = this.createRepositories(trx);
         return repos.messages.getById(run.triggeringMessageId, scope);
       });
-      this.#assertTriggeringMessageBinding(triggering, run);
+      assertTriggeringMessageBinding(triggering, run);
       const requestedModelId = requestedModelIdFromTriggeringMessage(triggering);
       const currentTurnAttachments = attachmentsFromTriggeringMessage(triggering);
       const imageAttachments = imageAttachmentsFromTriggeringMessage(triggering);
@@ -420,8 +468,7 @@ export class PiRunExecutor {
         markSuspendedOnFailure: true,
       });
       // Entry IDs present before this run's prompt — UI messages only for net-new.
-      /** @type {Set<string>} */
-      const priorEntryIds = new Set(
+      const priorEntryIds: Set<string> = new Set(
         (recovered.payload?.entries || [])
           .map((e) => (e && typeof e.id === 'string' ? e.id : null))
           .filter(Boolean),
@@ -441,12 +488,9 @@ export class PiRunExecutor {
       let extensionFactories;
       let projectionMode = this.eventProjectionMode;
       let sandboxSessionIdForCtx = session.sandboxSessionId ?? null;
-      /** @type {any} */
-      let runtimeSession = null;
-      /** @type {object | null} */
-      let pendingApproval = null;
-      /** @type {object | null} */
-      let pendingInteraction = null;
+      let runtimeSession: any = null;
+      let pendingApproval: Record<string, any> | null = null;
+      let pendingInteraction: Record<string, any> | null = null;
 
       if (typeof this.extensionBundleFactory === 'function') {
         // plan: runtime sandboxSessionId must exist when enterprise extensions run.
@@ -501,7 +545,7 @@ export class PiRunExecutor {
         createRepositories: this.createRepositories,
         generateId: this.generateId,
         context: eventContext,
-        executionFenceToken: /** @type {number} */ (fenceToken),
+        executionFenceToken: (fenceToken as number),
         now: this.now,
         isLockLost: () => this._lockLost,
         emit: emitAfterCommit,
@@ -514,7 +558,7 @@ export class PiRunExecutor {
         createRepositories: this.createRepositories,
         generateId: this.generateId,
         context: eventContext,
-        executionFenceToken: /** @type {number} */ (fenceToken),
+        executionFenceToken: (fenceToken as number),
         now: this.now,
         isLockLost: () => this._lockLost,
         emit: emitAfterCommit,
@@ -691,7 +735,7 @@ export class PiRunExecutor {
           await this.#maybeMarkRecoveryOnLockLoss(
             agentSessionId,
             scope,
-            /** @type {number} */ (this._fenceToken),
+            (this._fenceToken as number),
           );
           return {
             outcome: RUN_STATUS.FAILED,
@@ -933,7 +977,7 @@ export class PiRunExecutor {
           await this.#maybeMarkRecoveryOnLockLoss(
             agentSessionId,
             scope,
-            /** @type {number} */ (this._fenceToken),
+            (this._fenceToken as number),
           );
           return {
             outcome: RUN_STATUS.FAILED,
@@ -947,7 +991,7 @@ export class PiRunExecutor {
         await this.#maybeMarkRecoveryOnLockLoss(
           agentSessionId,
           scope,
-          /** @type {number} */ (this._fenceToken),
+          (this._fenceToken as number),
         );
         return {
           outcome: RUN_STATUS.FAILED,
@@ -984,11 +1028,11 @@ export class PiRunExecutor {
       if (promptError && !pendingApproval && !pendingInteraction) {
         const msg = sanitizeStatusReason(promptError);
         // Uncertain side effects → recovery-required, not silent success
-        if (this.#looksLikeUncertainSideEffect(promptError)) {
+        if (looksLikeUncertainSideEffect(promptError)) {
           await this.#markRecoveryRequired(
             agentSessionId,
             scope,
-            /** @type {number} */ (this._fenceToken),
+            (this._fenceToken as number),
             RECOVERY_REASON_CODE.RECOVERY_REQUIRED,
           );
           return {
@@ -1008,7 +1052,7 @@ export class PiRunExecutor {
         await this.#maybeMarkRecoveryOnLockLoss(
           agentSessionId,
           scope,
-          /** @type {number} */ (this._fenceToken),
+          (this._fenceToken as number),
         );
         return {
           outcome: RUN_STATUS.FAILED,
@@ -1033,7 +1077,7 @@ export class PiRunExecutor {
         await this.#maybeMarkRecoveryOnLockLoss(
           agentSessionId,
           scope,
-          /** @type {number} */ (this._fenceToken),
+          (this._fenceToken as number),
         );
         return {
           outcome: RUN_STATUS.FAILED,
@@ -1047,7 +1091,7 @@ export class PiRunExecutor {
         scope,
         conversationId,
         agentSessionId,
-        fenceToken: /** @type {number} */ (this._fenceToken),
+        fenceToken: (this._fenceToken as number),
       });
 
       // 13) Atomic journal + snapshot checkpoint (fence gated inside service)
@@ -1055,7 +1099,7 @@ export class PiRunExecutor {
         await this.#maybeMarkRecoveryOnLockLoss(
           agentSessionId,
           scope,
-          /** @type {number} */ (this._fenceToken),
+          (this._fenceToken as number),
         );
         return {
           outcome: RUN_STATUS.FAILED,
@@ -1068,7 +1112,7 @@ export class PiRunExecutor {
         agentSessionId,
         orgId: scope.orgId,
         userId: scope.userId,
-        executionFenceToken: /** @type {number} */ (this._fenceToken),
+        executionFenceToken: (this._fenceToken as number),
         runId,
         traceId,
         payload,
@@ -1107,7 +1151,7 @@ export class PiRunExecutor {
       // be marked SUCCEEDED with no assistant answer. Inspect only entries
       // created by this prompt so an error in recovered history cannot poison
       // a later successful turn.
-      const runtimeTerminal = this.#terminalOutcomeFromNewAssistantEntries(
+      const runtimeTerminal = terminalOutcomeFromNewAssistantEntries(
         payload,
         priorEntryIds,
       );
@@ -1171,8 +1215,7 @@ export class PiRunExecutor {
     }
     this._disposed = true;
     this._pendingInteractionToolCallIds.clear();
-    /** @type {unknown[]} */
-    const errors = [];
+    const errors: unknown[] = [];
 
     if (this._steerController) {
       try {
@@ -1245,119 +1288,16 @@ export class PiRunExecutor {
     }
   }
 
-  /**
-   * @param {unknown} err
-   */
-  #looksLikeUncertainSideEffect(err) {
-    const msg = String(/** @type {Error} */ (err)?.message || err || '');
-    return /side.?effect|tool.*uncertain|partial.*tool|mid-tool/i.test(msg);
-  }
 
-  /**
-   * Pi reports some terminal runtime failures in an assistant entry instead
-   * of rejecting `session.prompt()`. Convert those terminal markers into the
-   * RunExecutor contract before ExecuteRunService commits the Run status.
-   *
-   * Only the **last** new assistant message for this prompt decides the
-   * outcome. Intermediate `stopReason=error` entries are common when the
-   * provider hits a transient "Connection error" and Pi retries within the
-   * same prompt — those must not poison a later successful turn that ends
-   * with `stop` / `toolUse` / etc.
-   *
-   * @param {{ entries?: object[] }} payload
-   * @param {Set<string>} priorEntryIds
-   * @returns {import('./run-executor.js').RunExecutorResult | null}
-   */
-  #terminalOutcomeFromNewAssistantEntries(payload, priorEntryIds) {
-    const prior = priorEntryIds instanceof Set ? priorEntryIds : new Set();
-    const entries = Array.isArray(payload?.entries) ? payload.entries : [];
 
-    /** @type {{ stopReason: string, message: Record<string, unknown> } | null} */
-    let lastNewAssistant = null;
-    for (let index = entries.length - 1; index >= 0; index -= 1) {
-      const entry = entries[index];
-      if (!entry || entry.type !== 'message') continue;
-      if (typeof entry.id !== 'string' || !entry.id || prior.has(entry.id)) {
-        continue;
-      }
-      const message = entry.message;
-      if (!message || message.role !== 'assistant') continue;
-
-      lastNewAssistant = {
-        stopReason: String(message.stopReason ?? '')
-          .trim()
-          .toLowerCase(),
-        message: /** @type {Record<string, unknown>} */ (message),
-      };
-      // First hit walking reverse = latest new assistant for this prompt.
-      break;
-    }
-
-    if (!lastNewAssistant) return null;
-
-    const { stopReason, message } = lastNewAssistant;
-    if (stopReason === 'error') {
-      const runtimeDetail = sanitizeStatusReason(
-        message.errorMessage ??
-          /** @type {{ message?: unknown }} */ (message.error)?.message ??
-          message.error,
-      );
-      return {
-        outcome: RUN_STATUS.FAILED,
-        statusReason: runtimeDetail
-          ? `Pi runtime completed with assistant stopReason=error: ${runtimeDetail}`
-          : 'Pi runtime completed with assistant stopReason=error',
-      };
-    }
-    if (
-      stopReason === 'aborted' ||
-      stopReason === 'interrupted' ||
-      stopReason === 'cancelled' ||
-      stopReason === 'canceled'
-    ) {
-      return {
-        outcome: RUN_STATUS.CANCELLED,
-        statusReason: `Pi runtime completed with assistant stopReason=${stopReason}`,
-      };
-    }
-
-    return null;
-  }
-
-  /**
-   * Fail closed unless triggering message is owned by this run/conversation/session.
-   * conversationId, agentSessionId, and runId must all be present and strictly equal.
-   * @param {object | null} triggering
-   * @param {object} run
-   */
-  #assertTriggeringMessageBinding(triggering, run) {
-    if (!triggering) {
-      throw new Error('triggering message is required');
-    }
-    if (
-      triggering.conversationId == null ||
-      triggering.conversationId !== run.conversationId
-    ) {
-      throw new Error('triggering message conversationId does not match run');
-    }
-    if (
-      triggering.agentSessionId == null ||
-      triggering.agentSessionId !== run.agentSessionId
-    ) {
-      throw new Error('triggering message agentSessionId does not match run');
-    }
-    if (triggering.runId == null || triggering.runId !== run.runId) {
-      throw new Error('triggering message runId does not match run');
-    }
-  }
 
   /**
    * Confirm session lock still held: renew current token (extends TTL).
    * Background renew continues; this is an explicit pre-write gate.
-   * @param {string} agentSessionId
+   * @param agentSessionId
    * @returns {Promise<boolean>}
    */
-  async #confirmSessionLock(agentSessionId) {
+  async #confirmSessionLock(agentSessionId: string) {
     if (this._lockLost || this._disposed) return false;
     if (!this._lockToken || this._lockedSessionId !== agentSessionId) {
       this._lockLost = true;
@@ -1395,7 +1335,7 @@ export class PiRunExecutor {
    *   fenceToken: number,
    * }} args
    */
-  async #persistAssistantMessagesFromPayload(args) {
+  async #persistAssistantMessagesFromPayload(args: { payload: { entries?: Record<string, any>[] }, priorEntryIds: Set<string>, run: Record<string, any>, scope: { orgId: string, userId: string }, conversationId: string, agentSessionId: string, fenceToken: number, }) {
     const {
       payload,
       priorEntryIds,
@@ -1456,7 +1396,7 @@ export class PiRunExecutor {
           });
         } catch (err) {
           const isDup =
-            /** @type {{ code?: string }} */ (err)?.code === 'ER_DUP_ENTRY' ||
+            (err as { code?: string })?.code === 'ER_DUP_ENTRY' ||
             err instanceof ConflictError ||
             err?.name === 'ConflictError';
           if (isDup) {
@@ -1474,13 +1414,7 @@ export class PiRunExecutor {
     }
   }
 
-  /**
-   * @param {string} agentSessionId
-   * @param {{ orgId: string, userId: string }} scope
-   * @param {number} fence
-   * @param {string} reason
-   */
-  async #markRecoveryRequired(agentSessionId, scope, fence, reason) {
+  async #markRecoveryRequired(agentSessionId: string, scope: { orgId: string, userId: string }, fence: number, reason: string) {
     try {
       await this.tx.run(async (trx) => {
         const repos = this.createRepositories(trx);
@@ -1498,12 +1432,7 @@ export class PiRunExecutor {
     }
   }
 
-  /**
-   * @param {string} agentSessionId
-   * @param {{ orgId: string, userId: string }} scope
-   * @param {number} fence
-   */
-  async #maybeMarkRecoveryOnLockLoss(agentSessionId, scope, fence) {
+  async #maybeMarkRecoveryOnLockLoss(agentSessionId: string, scope: { orgId: string, userId: string }, fence: number) {
     await this.#markRecoveryRequired(
       agentSessionId,
       scope,
@@ -1541,7 +1470,7 @@ export class PiRunExecutor {
  * }} opts
  * @returns {import('./run-executor.js').RunExecutorFactory}
  */
-export function createPiRunExecutorFactory(opts) {
+export function createPiRunExecutorFactory(opts: PiRunExecutorFactoryOptions) {
   if (typeof opts?.modelResolver !== 'function') {
     throw new Error(
       'createPiRunExecutorFactory requires modelResolver(agentVersion)',

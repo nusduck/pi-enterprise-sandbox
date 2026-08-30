@@ -30,13 +30,16 @@ LOCAL_GENERATED_DIRECTORIES = frozenset(
 # hotspot on purpose means splitting it or raising its budget here, with the
 # reason in the commit message — never silently.
 HOTSPOT_LINE_BUDGETS = {
-    # W2-D 曾为 @ts-expect-error 横幅抬到 1_493；Wave 6 换成 JSDoc 形状后收回。
-    "agent/src/application/execute-run-service.js": 1_482,
+    # W2-D 曾为 @ts-expect-error 横幅抬到 1_493；Wave 6 换成 JSDoc 形状后收回
+    # 1_482；转 TS 又收回 16 行。
+    "agent/src/application/execute-run-service.ts": 1_466,
     # W2-D 曾抬到 1_672；去掉 expect-error 后收回 1_663；转 TS 又收回 9 行
     # （提升上去的 JSDoc @param 块比加上的类型声明更长）。仍是全仓最长的
     # 文件，阶段 D 收尾时应当拆。
     "agent/src/application/fenced-tool-governance-recorder.ts": 1_654,
-    "agent/src/application/pi-run-executor.js": 1_613,
+    # 转 TS 时拆出 pi-run-executor-deps.ts（依赖面类型 + 三个不读 this 的
+    # 纯判定），1_597 -> 1_526，预算收紧。
+    "agent/src/application/pi-run-executor.ts": 1_526,
     # 转 TS 时拆出 container-mcp.ts（MCP 发现状态机），1_178 -> 1_065，预算收紧。
     "agent/src/bootstrap/container.ts": 1_065,
     # W2-D 曾抬到 1_443；Wave 6 收回。转 TS 时拆出 presentation/http/health-routes.ts

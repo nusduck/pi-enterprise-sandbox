@@ -21,50 +21,43 @@ import { mapLegacyRuntimeOutcome } from '../domain/run/legacy-status.js';
 import { RUN_STATUS } from '../domain/run/run-status.js';
 import { sanitizeStatusReason } from './sanitize-status-reason.js';
 
-/**
- * @typedef {'SUCCEEDED'|'FAILED'|'CANCELLED'|'WAITING_APPROVAL'|'WAITING_INPUT'|'RETRYING'} RunExecutorOutcomeStatus
- */
+export type RunExecutorOutcomeStatus = 'SUCCEEDED'|'FAILED'|'CANCELLED'|'WAITING_APPROVAL'|'WAITING_INPUT'|'RETRYING';
 
-/**
- * @typedef {{
- *   outcome: RunExecutorOutcomeStatus,
- *   statusReason?: string | null,
- * }} RunExecutorResult
- */
+export type RunExecutorResult = {
+  outcome: RunExecutorOutcomeStatus;
+  statusReason?: string | null;
+};
 
-/**
- * @typedef {{
- *   run: object,
- *   scope: { orgId: string, userId: string },
- *   workerId: string,
- *   signal: AbortSignal,
- *   emit?: (event: { type: string, payload?: Record<string, unknown> }) => Promise<void>,
- * }} RunExecutorContext
- */
+export type RunExecutorContext = {
+  run: Record<string, any>;
+  scope: {
+    orgId: string;
+    userId: string;
+  };
+  workerId: string;
+  signal: AbortSignal;
+  emit?: (event: { type: string, payload?: Record<string, unknown> }) => Promise<void>;
+};
 
-/**
- * @typedef {{
- *   execute: (ctx: RunExecutorContext) => Promise<RunExecutorResult>,
- *   dispose?: () => Promise<void> | void,
- * }} RunExecutor
- */
+export type RunExecutor = {
+  execute: (ctx: RunExecutorContext) => Promise<RunExecutorResult>;
+  dispose?: () => Promise<void> | void;
+};
 
 /**
  * Factory preferred by ExecuteRunService / worker for concurrency > 1.
  * Each job gets its own instance; dispose runs after that job only.
- *
- * @typedef {(job: { runId: string, orgId: string, workerId: string }) => RunExecutor | Promise<RunExecutor>} RunExecutorFactory
- *
  * Shared single `runExecutor` instance is only safe at concurrency=1 —
  * disposing it would break sibling jobs.
  */
+export type RunExecutorFactory = (job: { runId: string, orgId: string, workerId: string }) => RunExecutor | Promise<RunExecutor>;
 
 /**
  * Normalize an executor result to a plan §10 status.
- * @param {RunExecutorResult | { outcome?: unknown, statusReason?: unknown }} result
+ * @param result
  * @returns {RunExecutorResult}
  */
-export function normalizeExecutorResult(result) {
+export function normalizeExecutorResult(result: RunExecutorResult | { outcome?: unknown, statusReason?: unknown }) {
   if (!result || typeof result !== 'object') {
     return { outcome: RUN_STATUS.FAILED, statusReason: 'empty executor result' };
   }
@@ -92,7 +85,6 @@ export function normalizeExecutorResult(result) {
     RUN_STATUS.WAITING_INPUT,
     RUN_STATUS.RETRYING,
   ]);
-  // @ts-expect-error 未校验string传入闭合联合，运行时需窄化守卫，存活代码先用expect-error收敛 —— TS2345: Argument of type 'string' is not assignable to parameter of 
   if (!allowed.has(outcome)) {
     return {
       outcome: RUN_STATUS.FAILED,
@@ -103,7 +95,7 @@ export function normalizeExecutorResult(result) {
   }
 
   return {
-    outcome: /** @type {RunExecutorOutcomeStatus} */ (outcome),
+    outcome: (outcome as RunExecutorOutcomeStatus),
     statusReason: sanitizeStatusReason(result.statusReason),
   };
 }
@@ -112,10 +104,10 @@ export function normalizeExecutorResult(result) {
  * Stub executor for T3 tests / offline wiring.
  * Completes immediately with SUCCEEDED unless aborted (CANCELLED).
  *
- * @param {{ outcome?: RunExecutorOutcomeStatus, delayMs?: number, onExecute?: (ctx: RunExecutorContext) => Promise<RunExecutorResult> | RunExecutorResult }} [opts]
+ * @param [opts]
  * @returns {RunExecutor}
  */
-export function createStubRunExecutor(opts = {}) {
+export function createStubRunExecutor(opts: { outcome?: RunExecutorOutcomeStatus, delayMs?: number, onExecute?: (ctx: RunExecutorContext) => Promise<RunExecutorResult> | RunExecutorResult } = {}) {
   return {
     async execute(ctx) {
       if (typeof opts.onExecute === 'function') {

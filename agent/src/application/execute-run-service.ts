@@ -45,21 +45,22 @@ import {
 } from '../domain/interaction/interaction-status.js';
 import { terminalizeParkedWaitingApprovalInTxn } from './parked-approval-cancel.js';
 
+/** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
+type Loose = any;
+
 /** Default cancel poll interval while executor runs (injectable). */
 export const DEFAULT_CANCEL_POLL_INTERVAL_MS = 100;
 
-/**
- * @typedef {{
- *   status: string,
- *   runId: string,
- *   outcome?: string | null,
- *   leaseBusy?: boolean,
- *   cancelled?: boolean,
- *   needsReconciliation?: boolean,
- *   error?: string | null,
- *   cleanupError?: string | null,
- * }} ExecuteRunResult
- */
+export type ExecuteRunResult = {
+  status: string;
+  runId: string;
+  outcome?: string | null;
+  leaseBusy?: boolean;
+  cancelled?: boolean;
+  needsReconciliation?: boolean;
+  error?: string | null;
+  cleanupError?: string | null;
+};
 
 /**
  * Serial setTimeout loop: at most one async tick in flight; stop waits for it.
@@ -69,12 +70,11 @@ export const DEFAULT_CANCEL_POLL_INTERVAL_MS = 100;
  *   isStopped: () => boolean,
  * }} opts
  */
-export function createSerialTimeoutLoop(opts) {
+export function createSerialTimeoutLoop(opts: { intervalMs: number, tick: () => Promise<void>, isStopped: () => boolean, }) {
   const intervalMs = Math.max(1, Number(opts.intervalMs) || 1);
   let stopped = false;
   let timer = null;
-  /** @type {Promise<void> | null} */
-  let inFlight = null;
+  let inFlight: Promise<void> | null = null;
 
   const schedule = () => {
     if (stopped || opts.isStopped()) return;
@@ -124,11 +124,13 @@ export function createSerialTimeoutLoop(opts) {
  * BullMQ processor must treat this as a **retryable failure** (never complete).
  */
 export class LeaseBusyError extends Error {
-  /**
-   * @param {string} runId
-   * @param {{ delayMs?: number }} [opts]
-   */
-  constructor(runId, opts = {}) {
+  // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
+  name: string;
+  code: string;
+  runId: Loose;
+  delayMs: Loose;
+
+  constructor(runId: string, opts: { delayMs?: number } = {}) {
     super(`Run lease busy for ${runId}; delayed retry`);
     this.name = 'LeaseBusyError';
     this.code = 'LEASE_BUSY';
@@ -138,6 +140,19 @@ export class LeaseBusyError extends Error {
 }
 
 export class ExecuteRunService {
+  // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
+  tx: Loose;
+  createRepositories: Loose;
+  leaseManager: Loose;
+  cancelSignal: Loose;
+  sharedExecutor: import('./run-executor.js').RunExecutor | null;
+  runExecutorFactory: Loose;
+  generateId: Loose;
+  now: Loose;
+  stateMachine: Loose;
+  leaseRenewIntervalMs: Loose;
+  cancelPollIntervalMs: Loose;
+
   /**
    * @param {{
    *   transactionManager: { run: (fn: (trx: any) => Promise<any>) => Promise<any> },
@@ -160,7 +175,7 @@ export class ExecuteRunService {
    *   cancelPollIntervalMs?: number,
    * }} deps
    */
-  constructor(deps) {
+  constructor(deps: { transactionManager: { run: (fn: (trx: any) => Promise<any>) => Promise<any> }, createRepositories: (db: any) => { runs: any, runEvents: any, outbox: any, approvals: any, toolExecutions: any, interactions: any, }, leaseManager: { acquire: (runId: string, ownerToken: string) => Promise<boolean>, renew: (runId: string, ownerToken: string) => Promise<boolean>, release: (runId: string, ownerToken: string) => Promise<boolean>, renewIntervalMs?: number, }, cancelSignal?: { isRequested: (runId: string) => Promise<boolean> } | null, runExecutor?: import('./run-executor.js').RunExecutor, runExecutorFactory?: (job: { runId: string, orgId: string, workerId: string }) => import('./run-executor.js').RunExecutor | Promise<import('./run-executor.js').RunExecutor>, generateId: () => string, now?: () => Date, runStateMachine?: import('../domain/run/run-state-machine.js').RunStateMachine, leaseRenewIntervalMs?: number, cancelPollIntervalMs?: number, }) {
     if (!deps?.transactionManager?.run) {
       throw new Error('ExecuteRunService requires transactionManager.run');
     }
@@ -193,9 +208,9 @@ export class ExecuteRunService {
 
   /**
    * Resolve per-job executor. Factory preferred for concurrency safety.
-   * @param {{ runId: string, orgId: string, workerId: string }} job
+   * @param job
    */
-  async #resolveExecutor(job) {
+  async #resolveExecutor(job: { runId: string, orgId: string, workerId: string }) {
     if (typeof this.runExecutorFactory === 'function') {
       return this.runExecutorFactory(job);
     }
@@ -216,7 +231,7 @@ export class ExecuteRunService {
    * }} job
    * @returns {Promise<ExecuteRunResult>}
    */
-  async execute(job) {
+  async execute(job: { runId: string, orgId: string, traceId: string, workerId: string, }) {
     if (!job || typeof job !== 'object') {
       throw new ValidationError('ExecuteRun job is required');
     }
@@ -246,10 +261,8 @@ export class ExecuteRunService {
     const abortController = new AbortController();
     let leaseLost = false;
     let released = false;
-    /** @type {unknown} */
-    let releaseError = null;
-    /** @type {import('./run-executor.js').RunExecutor | null} */
-    let jobExecutor = null;
+    let releaseError: unknown = null;
+    let jobExecutor: import('./run-executor.js').RunExecutor | null = null;
     const createdViaFactory = typeof this.runExecutorFactory === 'function';
 
     const requestAbort = () => {
@@ -292,8 +305,7 @@ export class ExecuteRunService {
     });
     renewLoop.start();
 
-    /** @type {ExecuteRunResult} */
-    let result = {
+    let result: ExecuteRunResult = {
       status: 'UNKNOWN',
       runId,
       outcome: null,
@@ -325,8 +337,7 @@ export class ExecuteRunService {
     } finally {
       await renewLoop.stop();
 
-      /** @type {unknown[]} */
-      const cleanupErrors = [];
+      const cleanupErrors: unknown[] = [];
 
       // Dispose only factory-created instances (never dispose shared concurrency=1
       // adapter mid-flight of another job — factory path is the safe default).
@@ -403,7 +414,7 @@ export class ExecuteRunService {
    *   executor: import('./run-executor.js').RunExecutor,
    * }} ctx
    */
-  async #runWithLease(ctx) {
+  async #runWithLease(ctx: { runId: string, orgId: string, jobTraceId: string, workerId: string, signal: AbortSignal, isLeaseLost: () => boolean, requestAbort: () => void, executor: import('./run-executor.js').RunExecutor, }) {
     const {
       runId,
       orgId,
@@ -640,7 +651,7 @@ export class ExecuteRunService {
    *   executor: import('./run-executor.js').RunExecutor,
    * }} args
    */
-  async #executeWithCancelWatch(args) {
+  async #executeWithCancelWatch(args: { run: Record<string, any>, scope: { orgId: string, userId: string }, traceId: string, workerId: string, signal: AbortSignal, isLeaseLost: () => boolean, requestAbort: () => void, executor: import('./run-executor.js').RunExecutor, }) {
     const {
       scope,
       traceId,
@@ -653,8 +664,7 @@ export class ExecuteRunService {
     let run = args.run;
     const runId = run.runId;
 
-    /** @type {{ handled: boolean, promise: Promise<void> | null }} */
-    const cancelGate = { handled: false, promise: null };
+    const cancelGate: { handled: boolean, promise: Promise<void> | null } = { handled: false, promise: null };
 
     const onCancelDetected = async () => {
       if (cancelGate.handled) return cancelGate.promise;
@@ -765,11 +775,11 @@ export class ExecuteRunService {
    * Cancel before executor starts. Legal SM path for STARTING:
    * STARTING → RUNNING → CANCELLING → CANCELLED.
    *
-   * @param {object} run
-   * @param {{ orgId: string, userId: string }} scope
-   * @param {string} traceId
+   * @param run
+   * @param scope
+   * @param traceId
    */
-  async #cancelBeforeRuntime(run, scope, traceId) {
+  async #cancelBeforeRuntime(run: Record<string, any>, scope: { orgId: string, userId: string }, traceId: string) {
     if (isTerminalRunStatus(run.status)) {
       return {
         status: run.status,
@@ -907,10 +917,10 @@ export class ExecuteRunService {
   }
 
   /**
-   * @param {string} runId
-   * @param {object} run — may already include cancelRequestedAt from a fresh reload
+   * @param runId
+   * @param run — may already include cancelRequestedAt from a fresh reload
    */
-  async #isCancelRequested(runId, run) {
+  async #isCancelRequested(runId: string, run: Record<string, any>) {
     if (run?.cancelRequestedAt) return true;
     if (!this.cancelSignal) return false;
     try {
@@ -921,11 +931,7 @@ export class ExecuteRunService {
     }
   }
 
-  /**
-   * @param {string} runId
-   * @param {{ orgId: string, userId: string }} scope
-   */
-  async #reload(runId, scope) {
+  async #reload(runId: string, scope: { orgId: string, userId: string }) {
     return this.tx.run(async (trx) => {
       const repos = this.createRepositories(trx);
       return repos.runs.requireById(runId, scope);
@@ -1257,13 +1263,7 @@ export class ExecuteRunService {
     };
   }
 
-  /**
-   * @param {string} runId
-   * @param {{ orgId: string, userId: string }} scope
-   * @param {string} traceId
-   * @param {object} opts
-   */
-  async #transition(runId, scope, traceId, opts) {
+  async #transition(runId: string, scope: { orgId: string, userId: string }, traceId: string, opts: Record<string, any>) {
     this.stateMachine.assertTransition(opts.from, opts.to);
     return this.tx.run(async (trx) => {
       const repos = this.createRepositories(trx);
@@ -1285,12 +1285,7 @@ export class ExecuteRunService {
     });
   }
 
-  /**
-   * @param {object} run
-   * @param {{ orgId: string, userId: string }} scope
-   * @param {string} traceId
-   */
-  async #transitionToCancelling(run, scope, traceId) {
+  async #transitionToCancelling(run: Record<string, any>, scope: { orgId: string, userId: string }, traceId: string) {
     if (run.status === RUN_STATUS.CANCELLING) return { ok: true, run };
 
     if (run.status === RUN_STATUS.ACCEPTED) {
@@ -1324,12 +1319,7 @@ export class ExecuteRunService {
     return { ok: false, current: run };
   }
 
-  /**
-   * @param {object} run
-   * @param {{ orgId: string, userId: string }} scope
-   * @param {string} traceId
-   */
-  async #finishCancelled(run, scope, traceId) {
+  async #finishCancelled(run: Record<string, any>, scope: { orgId: string, userId: string }, traceId: string) {
     if (run.status === RUN_STATUS.CANCELLED) {
       return {
         status: RUN_STATUS.CANCELLED,
@@ -1376,13 +1366,7 @@ export class ExecuteRunService {
     };
   }
 
-  /**
-   * @param {object} run
-   * @param {{ orgId: string, userId: string }} scope
-   * @param {string} traceId
-   * @param {import('./run-executor.js').RunExecutorResult} execResult
-   */
-  async #applyExecutorOutcome(run, scope, traceId, execResult) {
+  async #applyExecutorOutcome(run: Record<string, any>, scope: { orgId: string, userId: string }, traceId: string, execResult: import('./run-executor.js').RunExecutorResult) {
     const outcome = execResult.outcome;
     let currentFrom = run.status;
 
