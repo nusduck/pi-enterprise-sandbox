@@ -232,6 +232,9 @@ export function createDshRuntimeFactory(opts = {}) {
             approvalStore: opts.approvalStore ?? new InMemoryApprovalStore(),
             ...(opts.policyGuards ? { guards: opts.policyGuards } : {}),
             ...(opts.ledger ? { ledger: opts.ledger } : {}),
+            // 运维可配的风险覆盖。以前这份配置解析出来后喂给了一个返回 []
+            // 的 extension bundle，等于没配。
+            ...(opts.riskOverrides ? { riskOverrides: opts.riskOverrides } : {}),
             physicalRoots: rpc.physicalRoots ?? [],
             env: opts.env ?? process.env,
           });

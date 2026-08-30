@@ -13,8 +13,6 @@ import {
   resolveRedisUrlFromEnv,
   createRepositoryBundle,
   resolveWorkerExecutorFactory,
-  resolveAgentPiAgentDir,
-  ensureAgentPiAgentDir,
   assertWorkerSandboxServiceToken,
 } from '../../src/bootstrap/container.js';
 
@@ -176,18 +174,6 @@ describe('ServiceContainer', () => {
     );
   });
 
-  it('ensureAgentPiAgentDir creates concrete agentDir (runtime create boundary)', () => {
-    const base = mkdtempSync(path.join(tmpdir(), 'pi-agent-dir-'));
-    const dir = path.join(base, 'nested-home');
-    try {
-      const resolved = ensureAgentPiAgentDir({ AGENT_PI_AGENT_DIR: dir });
-      assert.equal(resolved, path.resolve(dir));
-      assert.equal(resolveAgentPiAgentDir({ AGENT_PI_AGENT_DIR: dir }), resolved);
-    } finally {
-      rmSync(base, { recursive: true, force: true });
-    }
-  });
-
   it('assertWorkerSandboxServiceToken fail-closed in production without token', () => {
     assert.throws(
       () =>
@@ -322,62 +308,6 @@ describe('ServiceContainer', () => {
     );
   });
 
-  it('createPiRunExecutorFactory assembly requires agentDir and refuses null-auth transport', async () => {
-    const knex = { raw: async () => [[{}]], transaction: async (fn) => fn({}) };
-    const redis = { status: 'ready' };
-    const agentDir = mkdtempSync(path.join(tmpdir(), 'pi-agent-exec-'));
-    const c = createServiceContainer(
-      {
-        AGENT_DATABASE_URL: 'mysql://u:p@h/db',
-        AGENT_REDIS_URL: 'redis://localhost:6379/0',
-        AGENT_PI_AGENT_DIR: agentDir,
-        SANDBOX_API_TOKEN: 'dev_only_sandbox_api_token_not_for_prod_32b',
-        SANDBOX_INTERNAL_HMAC_KEYRING: '{"test-v1":"dGVzdC1rZXktbWF0ZXJpYWwtMzItYnl0ZXMtbG9uZy0x"}',
-        SANDBOX_INTERNAL_HMAC_ACTIVE_KID: 'test-v1',
-        DEPLOYMENT_ENV: 'development',
-      },
-      {
-        createMysqlKnex: () => knex,
-        createRedisClient: () => redis,
-        createRunQueue: () => ({ queue: { add: async () => ({}) } }),
-        destroyMysqlKnex: async () => {},
-        destroyRedisClient: async () => {},
-        destroyRunQueue: async () => {},
-      },
-    );
-    await c.start();
-    const factory = await c.createPiRunExecutorFactory({
-      modelResolver: () => ({ id: 'm', name: 'm', api: 'openai-completions', provider: 'x', baseUrl: 'http://x', reasoning: false, input: ['text'], cost: {}, contextWindow: 1, maxTokens: 1 }),
-      workspaceResolver: () => '/home/sandbox/workspace',
-      sessionLockManager: {
-        acquire: async () => true,
-        renew: async () => true,
-        release: async () => true,
-      },
-      piRuntimeFactory: {
-        agentDir,
-        create: async (input) => {
-          assert.ok(String(input.agentDir || '').trim(), 'runtime create must receive agentDir');
-          assert.equal(path.resolve(input.agentDir), path.resolve(agentDir));
-          return { session: {} };
-        },
-      },
-      sessionAdapter: {},
-      projector: { project: () => [] },
-      recoveryService: {
-        recover: async () => ({ payload: null, checksum: null }),
-        checkpoint: async () => {},
-      },
-    });
-    assert.equal(typeof factory, 'function');
-    // Extension factory must be per-run scoped (createTransportForRun path).
-    // Building the executor instance must not throw assembly errors.
-    const exec = factory({ runId: '01RUNTEST' });
-    assert.ok(exec);
-    assert.equal(path.resolve(String(exec.agentDir)), path.resolve(agentDir));
-    rmSync(agentDir, { recursive: true, force: true });
-  });
-
   it('createWorkerServices uses stub only when explicitly allowed and non-production', async () => {
     const knex = { raw: async () => [[{}]], transaction: async (fn) => fn({}) };
     const redis = { status: 'ready' };
@@ -438,6 +368,11 @@ describe('ServiceContainer', () => {
       {
         AGENT_DATABASE_URL: 'mysql://u:p@h/db',
         AGENT_REDIS_URL: 'redis://localhost:6379/0',
+        // 内部面 HMAC 现在是**无条件**要求：通往 exec 的唯一路径是 RPC，
+        // 它必须签名。以前这个检查在"没有注入 extensionBundleFactory"的分支里，
+        // 注入一个就能绕过——那是旧 extension bundle 时代的遗留。
+        SANDBOX_INTERNAL_HMAC_KEYRING: '{"k1":"a2tra2tra2tra2tra2tra2tra2tra2tra2tra2tra2s"}',
+        SANDBOX_INTERNAL_HMAC_ACTIVE_KID: 'k1',
       },
       {
         createMysqlKnex: () => knex,

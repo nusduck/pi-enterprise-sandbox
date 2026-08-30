@@ -60,6 +60,13 @@ export interface InstallPolicyOptions {
   readonly physicalRoots?: readonly string[];
   readonly env?: NodeJS.ProcessEnv;
   readonly now?: () => number;
+  /**
+   * 运维可配的工具风险覆盖（`TOOL_RISK_POLICY_JSON` / `TOOL_RISK_POLICY_PATH`
+   * 经 `agent/config.js` 的 `resolveToolRiskPolicy` 解析）。
+   * **不传等于把这个配置面静默丢掉**——它以前就是这么丢的：解析出来喂给了一个
+   * 返回 [] 的 extension bundle。
+   */
+  readonly riskOverrides?: Readonly<Record<string, 'low' | 'medium' | 'high' | 'critical'>>;
 }
 
 /** 装配结果，供组合断言与主动卸载使用。 */
@@ -115,6 +122,8 @@ export function installEnterprisePolicy(ctx: Context, options: InstallPolicyOpti
       const outcome = await evaluatePreExecute(
         { toolName: toolNameOf(exec), args: argsOf(exec), callId: callIdOf(exec) },
         options.approvalStore,
+        undefined,
+        options.riskOverrides ?? {},
       );
       // allow 时把决定权交回瀑布——我们只加约束，不抢走别人的拒绝权。
       if (!outcome.blocked) return await next();

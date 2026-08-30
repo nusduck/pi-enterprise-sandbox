@@ -26,26 +26,27 @@ COPY agent ./agent
 
 WORKDIR /app/agent
 
-# Pi Runtime resource root (AGENT_PI_AGENT_DIR) and logical workspace cwd.
-# The workspace directory is intentionally empty in this image: all workspace
-# bytes remain owned by Sandbox and are accessed through the formal transport.
-RUN mkdir -p /app/pi-agent-home /home/sandbox/workspace /home/sandbox/skill-user /tmp/pi-enterprise-mcp-runtime \
-    && chmod 755 /app/pi-agent-home /home/sandbox/workspace \
+# Logical workspace cwd. The directory is intentionally empty in this image:
+# all workspace bytes stay owned by exec and are reached over the signed RPC.
+#
+# `/app/pi-agent-home` (AGENT_PI_AGENT_DIR / PI_CODING_AGENT_DIR) is gone with
+# the Pi runtime: agentDir was threaded from the container to
+# runtime-factory.create(), which never read it, and @pi/runtime never
+# mentioned it at all.
+RUN mkdir -p /home/sandbox/workspace /home/sandbox/skill-user /tmp/pi-enterprise-mcp-runtime \
+    && chmod 755 /home/sandbox/workspace \
     && chmod 700 /tmp/pi-enterprise-mcp-runtime
-ENV AGENT_PI_AGENT_DIR=/app/pi-agent-home \
-    PI_CODING_AGENT_DIR=/app/pi-agent-home \
-    AGENT_MCP_RUNTIME_ROOT=/tmp/pi-enterprise-mcp-runtime
+ENV AGENT_MCP_RUNTIME_ROOT=/tmp/pi-enterprise-mcp-runtime
 
-# Drop root. Unlike Sandbox — which starts as root to build the Bubblewrap
-# jail and then drops with setpriv — the Agent process never needs a
-# privileged operation: it talks to MySQL, Redis, the provider and Sandbox.
-# The writable paths are the Pi resource root, the MCP runtime dir and the
+# Drop root. Unlike the exec service — which needs Bubblewrap — the Agent
+# process never performs a privileged operation: it talks to MySQL, Redis, the
+# provider and exec. The writable paths are the MCP runtime dir and the
 # user-skill tier, so those are handed over with the image.
 #
 # /home/sandbox/skill-user is a named volume at runtime. Docker seeds a fresh
 # volume from the image directory, ownership included — a volume created
 # before this change stays root-owned and must be recreated or chowned once.
-RUN chown -R node:node /app /app/pi-agent-home /home/sandbox/skill-user /tmp/pi-enterprise-mcp-runtime
+RUN chown -R node:node /app /home/sandbox/skill-user /tmp/pi-enterprise-mcp-runtime
 USER node
 
 EXPOSE 4100

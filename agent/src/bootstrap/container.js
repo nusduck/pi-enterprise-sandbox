@@ -65,8 +65,6 @@ import path from 'node:path';
 import * as skillPathsModule from '../skills/paths.js';
 import {
   createRepositoryBundle,
-  ensureAgentPiAgentDir,
-  resolveAgentPiAgentDir,
   resolveMysqlUrlFromEnv,
   resolveRedisUrlFromEnv,
   resolveSkillRootsForRun,
@@ -80,8 +78,6 @@ import { buildSkillManagerFactory } from './container-skill-manager.js';
 export {
   assertWorkerSandboxServiceToken,
   createRepositoryBundle,
-  ensureAgentPiAgentDir,
-  resolveAgentPiAgentDir,
   resolveMysqlUrlFromEnv,
   resolveRedisUrlFromEnv,
   resolveSkillRootsForRun,
@@ -636,16 +632,10 @@ export class ServiceContainer {
    *   mcpResolver?: Function | object | null,
    *   mcpSecretResolver?: Function,
    *   mcpRuntimeRoot?: string,
-   *   agentDir?: string,
-   * }} [opts]
+     * }} [opts]
    */
   createPiRuntimeFactory(opts = {}) {
     // Lazy class load so import of container stays free of SDK side effects.
-    // agentDir must be concrete before PiRuntimeFactory.create() (fail at assembly).
-    const agentDir =
-      opts.agentDir != null && String(opts.agentDir).trim()
-        ? path.resolve(String(opts.agentDir).trim())
-        : ensureAgentPiAgentDir(this.env);
     return import('../infrastructure/dsh/runtime-factory.js').then(
       async ({ DshRuntimeFactory }) => {
         let mcpResolver = opts.mcpResolver;
@@ -685,7 +675,6 @@ export class ServiceContainer {
             this.env.AGENT_PI_DEFAULT_CWD ||
             this.env.AGENT_SESSION_WORKSPACE_CWD ||
             undefined,
-          agentDir,
           // Progressive skill disclosure: scan formal skill mount into loader
           // → formatSkillsForPrompt (not Pi product docs under node_modules).
           additionalSkillPaths: skillRoots,
@@ -797,8 +786,7 @@ export class ServiceContainer {
    *   extensionFactories?: unknown[],
    *   extensionBundleFactory?: (runContext: object, deps: object) => unknown[],
    *   eventProjectionMode?: 'session-subscribe' | 'observability' | 'both',
-   *   agentDir?: string,
-   *   sessionLockManager?: any,
+     *   sessionLockManager?: any,
    *   piRuntimeFactory?: any,
    *   sessionAdapter?: any,
    *   projector?: any,

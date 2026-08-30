@@ -48,6 +48,25 @@ describe('buildExecRpcConfig', () => {
     );
   });
 
+  // 这条性质原本由 `infrastructure/run-scoped-sandbox-transport.unit.test.js`
+  // 的 "fails closed without durable org/user (no anonymous Sandbox access)"
+  // 守着。那份测试随旧 transport 一起删除，性质必须搬到存活的路径上——
+  // 现在通往 exec 的唯一入口是 buildExecRpcConfig。
+  it('fails closed without durable org/user/workspace (no anonymous exec access)', () => {
+    for (const missing of ['orgId', 'userId', 'workspaceId']) {
+      const input = baseInput();
+      input.context = { ...input.context, [missing]: '' };
+      input.agentSession = { ...input.agentSession, [missing]: '' };
+      // workspaceId 还会回落到 cwd，一并清掉才能验到这条分支。
+      if (missing === 'workspaceId') input.cwd = '';
+      assert.throws(
+        () => buildExecRpcConfig(input, HMAC),
+        /orgId, userId, and workspaceId/,
+        `missing ${missing} must fail closed`,
+      );
+    }
+  });
+
   it('takes tenant ids from the run context', () => {
     const rpc = buildExecRpcConfig(baseInput(), HMAC);
     assert.equal(rpc.orgId, 'org1');

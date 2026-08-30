@@ -6,6 +6,7 @@
  */
 
 import { makePolicyDecision, mergePolicyDecisions, type PolicyDecision } from './decision.js';
+import type { PolicyRiskLevel } from './decision.js';
 import { decideFromRiskTable } from './risk-table.js';
 import { assertSourceDigest, digestArgs, rejectMismatchedDigest } from './source-digest.js';
 
@@ -53,9 +54,12 @@ export async function evaluatePreExecute(
   input: PreExecuteInput,
   store: ApprovalStore,
   idFactory: () => string = () => `appr_${input.callId}`,
+  /** 运维可配的风险覆盖（`TOOL_RISK_POLICY_JSON` / `TOOL_RISK_POLICY_PATH`）。
+   *  不传就只用平台默认表——但那样运维配的东西就静默失效了，所以装配处必须传。 */
+  riskOverrides: Readonly<Record<string, PolicyRiskLevel>> = {},
 ): Promise<PreExecuteResult> {
   const digest = digestArgs(input.args);
-  const pieces: PolicyDecision[] = [decideFromRiskTable(input.toolName)];
+  const pieces: PolicyDecision[] = [decideFromRiskTable(input.toolName, riskOverrides)];
   const digestDecision = assertSourceDigest(input.toolName, input.args);
   if (digestDecision) pieces.push(digestDecision);
   if (input.replayDigest !== undefined) {

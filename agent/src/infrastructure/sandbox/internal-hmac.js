@@ -915,3 +915,66 @@ export function verifyInternalToken(token, options) {
   }
   return claims;
 }
+
+// ── baseUrl 归一化 ────────────────────────────────────────────────────────
+//
+// 2026-08-30 从 `internal-files-read-http.js` 搬来。那个文件连同其余 11 个
+// `internal-*-http` 一起删除了（它们喂的 extension bundle 自 W6-A 起就是
+// `return []`），但这两个存活的传输——会话开通与产物字节下载——都要它。
+// 它属于"HMAC 传输的公共部分"，本来就该在这里。
+
+/**
+ * Literal loopback hostnames only — no DNS/CIDR invention.
+ * @param {string} hostname
+ * @returns {boolean}
+ */
+function isLiteralLoopbackHostname(hostname) {
+  const h = String(hostname || '')
+    .toLowerCase()
+    .replace(/^\[|\]$/g, '');
+  return h === 'localhost' || h === '127.0.0.1' || h === '::1';
+}
+
+/**
+ * @param {string} baseUrl
+ * @param {{ allowInsecureHttp?: boolean }} [opts]
+ * @returns {string}
+ */
+export function normalizeBaseUrl(baseUrl, opts = {}) {
+  if (typeof baseUrl !== 'string' || !baseUrl.trim()) {
+    fail('SANDBOX_TRANSPORT_CONFIG', 'baseUrl is required');
+  }
+  const allowInsecureHttp = opts.allowInsecureHttp === true;
+  const trimmed = baseUrl.trim().replace(/\/+$/, '');
+  if (!/^https?:\/\/.+/i.test(trimmed)) {
+    fail('SANDBOX_TRANSPORT_CONFIG', 'baseUrl must be an absolute http(s) URL');
+  }
+  let u;
+  try {
+    u = new URL(trimmed);
+  } catch {
+    fail('SANDBOX_TRANSPORT_CONFIG', 'baseUrl is not a valid URL');
+  }
+  if (u.username || u.password) {
+    fail('SANDBOX_TRANSPORT_CONFIG', 'baseUrl must not embed credentials');
+  }
+  if (u.search || u.hash) {
+    fail('SANDBOX_TRANSPORT_CONFIG', 'baseUrl must not include query/hash');
+  }
+  if (u.protocol === 'https:') {
+    return trimmed;
+  }
+  if (u.protocol === 'http:') {
+    // Default: only literal loopback over http. External/plain http requires
+    // explicit allowInsecureHttp (dev/controlled). No CIDR/DNS policy here —
+    // production config will tighten further.
+    if (allowInsecureHttp || isLiteralLoopbackHostname(u.hostname)) {
+      return trimmed;
+    }
+    fail(
+      'SANDBOX_TRANSPORT_CONFIG',
+      'http baseUrl rejected unless loopback or allowInsecureHttp=true',
+    );
+  }
+  fail('SANDBOX_TRANSPORT_CONFIG', 'baseUrl scheme must be http or https');
+}

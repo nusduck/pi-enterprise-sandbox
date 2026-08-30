@@ -29,8 +29,6 @@ workspaces/
 tmp-workspaces/
 artifacts/
 control/
-pi-agent-home/
-agent/pi-agent-home/
 agent/.a2a-live-agent-home/
 agent/.a2a-live-agent-workspace/
 

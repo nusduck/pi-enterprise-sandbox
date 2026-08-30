@@ -308,9 +308,7 @@ services:
       # not mount or directly access the physical workspace volume.
       AGENT_SESSION_WORKSPACE_CWD: ${AGENT_SESSION_WORKSPACE_CWD:-/home/sandbox/workspace}
       # Concrete Pi resource root (PiRuntimeFactory.create requires non-empty agentDir).
-      AGENT_PI_AGENT_DIR: ${AGENT_PI_AGENT_DIR:-/app/pi-agent-home}
       # pi-mcp-adapter state follows the same process-owned resource root.
-      PI_CODING_AGENT_DIR: ${AGENT_PI_AGENT_DIR:-/app/pi-agent-home}
       AGENT_MCP_RUNTIME_ROOT: ${AGENT_MCP_RUNTIME_ROOT:-/tmp/pi-enterprise-mcp-runtime}
       LLMIO_BASE_URL: ${LLMIO_BASE_URL:-}
       LLMIO_API_KEY: ${LLMIO_API_KEY:-}
@@ -402,8 +400,6 @@ services:
       SANDBOX_ISOLATION_REQUIRED: ${SANDBOX_ISOLATION_REQUIRED:-true}
       # Pi executor (same logical cwd / agentDir / model knobs as HTTP agent)
       AGENT_SESSION_WORKSPACE_CWD: ${AGENT_SESSION_WORKSPACE_CWD:-/home/sandbox/workspace}
-      AGENT_PI_AGENT_DIR: ${AGENT_PI_AGENT_DIR:-/app/pi-agent-home}
-      PI_CODING_AGENT_DIR: ${AGENT_PI_AGENT_DIR:-/app/pi-agent-home}
       AGENT_MCP_RUNTIME_ROOT: ${AGENT_MCP_RUNTIME_ROOT:-/tmp/pi-enterprise-mcp-runtime}
       LLMIO_BASE_URL: ${LLMIO_BASE_URL:-}
       LLMIO_API_KEY: ${LLMIO_API_KEY:-}

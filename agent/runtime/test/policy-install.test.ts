@@ -161,6 +161,16 @@ test('未知工具 fail-closed 拒绝，不是放行', async () => {
   assert.equal(decision.kind, 'deny');
 });
 
+test('运维配置的风险覆盖真的生效（否则 TOOL_RISK_POLICY_* 是摆设）', async () => {
+  const ctx = new FakeCtx();
+  // `read` 默认是 local_low → allow。运维把它提到 high 就该变成 ask。
+  installOn(ctx, { riskOverrides: { read: 'high' } });
+  const decision = (await ctx.pre({ name: 'read', arguments: { path: 'a' }, id: 'c7' })) as {
+    kind: string;
+  };
+  assert.equal(decision.kind, 'ask', '覆盖表必须能提升风险等级');
+});
+
 test('guard 是单调的：拒绝之后放行的 listener 翻不了案', () => {
   const ctx = new FakeCtx();
   const guards: GuardListener[] = [

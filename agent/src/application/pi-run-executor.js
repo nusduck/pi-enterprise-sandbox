@@ -128,7 +128,7 @@ export class PiRunExecutor {
    *   projector?: PlatformEventProjector,
    *   recoveryService?: SessionRecoveryService,
    *   sessionLockRenewIntervalMs?: number,
-   *   agentDir?: string, skillRootsForRun?: (identity: object) => string[],
+   *   skillRootsForRun?: (identity: object) => string[],
    *   extensionBundleFactory?: (runContext: object, deps: object) => unknown[],
    *   eventProjectionMode?: 'session-subscribe' | 'observability' | 'both',
    *   steerPollIntervalMs?: number,
@@ -183,7 +183,6 @@ export class PiRunExecutor {
       deps.sessionLockRenewIntervalMs ??
       deps.sessionLockManager.renewIntervalMs ??
       10_000;
-    this.agentDir = deps.agentDir ?? null;
     /**
      * Per-Run skill roots: `(identity) => string[]`. The user tier is scoped to
      * `<orgId>/<userId>`, so this cannot be resolved once per process.
@@ -657,7 +656,6 @@ export class PiRunExecutor {
         cwd,
         model,
         requestAuth,
-        agentDir: this.agentDir ?? undefined,
         context: eventContext,
         extensionFactories,
         runEventRecorder: this._eventRecorder,
@@ -1537,7 +1535,6 @@ export class PiRunExecutor {
  *   extensionFactories?: unknown[],
  *   extensionBundleFactory?: (runContext: object, deps: object) => unknown[],
  *   eventProjectionMode?: 'session-subscribe' | 'observability' | 'both',
- *   agentDir?: string,
  *   sessionLockRenewIntervalMs?: number,
  *   steerPollIntervalMs?: number,
  *   toolBudget?: { maxToolCalls?: number, maxIdenticalToolCalls?: number, maxModelTurns?: number },
@@ -1585,7 +1582,6 @@ export function createPiRunExecutorFactory(opts) {
       sessionAdapter: opts.sessionAdapter,
       projector: opts.projector,
       recoveryService: opts.recoveryService,
-      agentDir: opts.agentDir,
       sessionLockRenewIntervalMs: opts.sessionLockRenewIntervalMs,
       steerPollIntervalMs: opts.steerPollIntervalMs,
       toolBudget: opts.toolBudget,

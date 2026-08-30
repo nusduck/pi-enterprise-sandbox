@@ -33,45 +33,7 @@ import { CronJobRepository } from '../infrastructure/mysql/repositories/cron-job
 import { OutboxRepository } from '../infrastructure/outbox/outbox-repository.js';
 import { createStubRunExecutor } from '../application/run-executor.js';
 import { PINNED_PI_SDK_VERSION } from '../infrastructure/dsh/constants.js';
-import { mkdirSync } from 'node:fs';
-import path from 'node:path';
 import * as skillPathsModule from '../skills/paths.js';
-
-/**
- * Resolve concrete AGENT_PI_AGENT_DIR for PiRuntimeFactory.create().
- * Local default: `{cwd}/.runtime/agent/pi-agent-home`.
- * Containers set AGENT_PI_AGENT_DIR explicitly to `/app/pi-agent-home`.
- * Empty/missing env is OK only when the default path can be ensured on disk.
- *
- * @param {NodeJS.ProcessEnv | Record<string, string|undefined>} [env]
- * @returns {string}
- */
-export function resolveAgentPiAgentDir(env = process.env) {
-  const raw = String(env.AGENT_PI_AGENT_DIR || '').trim();
-  if (raw) return path.resolve(raw);
-  return path.resolve(process.cwd(), '.runtime', 'agent', 'pi-agent-home');
-}
-
-/**
- * Ensure agentDir exists and is usable before first Pi runtime create.
- * @param {NodeJS.ProcessEnv | Record<string, string|undefined>} [env]
- * @returns {string} absolute path
- */
-export function ensureAgentPiAgentDir(env = process.env) {
-  const dir = resolveAgentPiAgentDir(env);
-  try {
-    mkdirSync(dir, { recursive: true, mode: 0o755 });
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    const e = new Error(
-      `AGENT_PI_AGENT_DIR is required and must be creatable (path=${dir}): ${msg}`,
-    );
-    // @ts-ignore
-    e.code = 'PI_AGENT_DIR_REQUIRED';
-    throw e;
-  }
-  return dir;
-}
 
 /**
  * Fail-closed: worker Sandbox calls need service API token when not stub.

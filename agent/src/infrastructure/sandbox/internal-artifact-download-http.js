@@ -5,9 +5,9 @@ import { createHash } from 'node:crypto';
 import { assertUlid } from '../../domain/shared/ulid.js';
 import {
   issueInternalToken,
+  normalizeBaseUrl,
   validateInternalHmacKeyring,
 } from './internal-hmac.js';
-import { normalizeBaseUrl } from './internal-files-read-http.js';
 import { createTraceHeaders } from './trace-context.js';
 
 export const ARTIFACT_DOWNLOAD_HTU = '/internal/v1/artifacts/download';
