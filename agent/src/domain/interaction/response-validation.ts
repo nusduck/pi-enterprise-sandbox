@@ -5,6 +5,9 @@ import { assertInteractionType } from './interaction-status.js';
 export const MAX_INTERACTION_INPUT_CHARS = 64 * 1024;
 
 export class InteractionResponseValidationError extends Error {
+  // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
+  code: string;
+
   constructor(message) {
     super(message);
     this.name = 'InteractionResponseValidationError';

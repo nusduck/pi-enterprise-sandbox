@@ -5,7 +5,7 @@
  * SUSPENDED and recovery_reason_code is set (plan §12.5).
  */
 
-/** @typedef {typeof RECOVERY_REASON_CODE[keyof typeof RECOVERY_REASON_CODE]} RecoveryReasonCode */
+export type RecoveryReasonCode = typeof RECOVERY_REASON_CODE[keyof typeof RECOVERY_REASON_CODE];
 
 export const RECOVERY_REASON_CODE = Object.freeze({
   /** Snapshot vs message/event journal checksum or version mismatch. */
@@ -25,24 +25,24 @@ export const ALL_RECOVERY_REASON_CODES = Object.freeze(
 export const RECOVERY_REASON_CODE_SET = new Set(ALL_RECOVERY_REASON_CODES);
 
 /**
- * @param {unknown} code
+ * @param code
  * @returns {boolean}
  */
-export function isRecoveryReasonCode(code) {
+export function isRecoveryReasonCode(code: unknown) {
   // @ts-expect-error 未校验string传入闭合联合，运行时需窄化守卫，存活代码先用expect-error收敛 —— TS2345: Argument of type 'string' is not assignable to parameter of 
   return typeof code === 'string' && RECOVERY_REASON_CODE_SET.has(code);
 }
 
 /**
- * @param {unknown} code
- * @param {string} [field]
+ * @param code
+ * @param [field]
  * @returns {string}
  */
-export function assertRecoveryReasonCode(code, field = 'recoveryReasonCode') {
+export function assertRecoveryReasonCode(code: unknown, field: string = 'recoveryReasonCode') {
   if (!isRecoveryReasonCode(code)) {
     throw new Error(
       `Invalid ${field}: expected known recovery reason code, got ${String(code)}`,
     );
   }
-  return /** @type {string} */ (code);
+  return (code as string);
 }

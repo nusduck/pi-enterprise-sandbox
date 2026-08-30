@@ -53,14 +53,13 @@ function resolveUserSkillRoot(value) {
 
 /**
  * Find exactly one Skill package in an extracted archive.
- * @param {string} root
- * @param {{ deadlineAt?: number }} [opts]
+ * @param root
+ * @param [opts]
  * @returns {{ dir: string, subpath: string, candidates: string[] }}
  */
-export function discoverSkillPackageDir(root, opts = {}) {
+export function discoverSkillPackageDir(root: string, opts: { deadlineAt?: number } = {}) {
   const base = path.resolve(root);
-  /** @type {string[]} */
-  const candidates = fs.existsSync(path.join(base, 'SKILL.md')) ? [''] : [];
+  const candidates: string[] = fs.existsSync(path.join(base, 'SKILL.md')) ? [''] : [];
   function walk(dir, depth) {
     if (depth > PACKAGE_SCAN_MAX_DEPTH) return;
     if (candidates.length >= PACKAGE_SCAN_MAX_CANDIDATES) return;
@@ -112,11 +111,11 @@ export function readSkillPackageName(packageDir) {
 
 /**
  * Copy a package tree without following or reproducing links.
- * @param {string} source
- * @param {string} destination
- * @param {{ deadlineAt?: number }} [opts]
+ * @param source
+ * @param destination
+ * @param [opts]
  */
-async function copyTree(source, destination, opts = {}) {
+async function copyTree(source: string, destination: string, opts: { deadlineAt?: number } = {}) {
   assertBeforeDeadline(opts.deadlineAt);
   const stat = await fsp.lstat(source);
   if (stat.isSymbolicLink()) {
@@ -150,8 +149,7 @@ async function rmrf(target) {
   }
 }
 
-/** @param {string} dir @param {{ deadlineAt?: number }} [opts] */
-function digestDir(dir, opts = {}) {
+function digestDir(dir: string, opts: { deadlineAt?: number } = {}) {
   const hash = createHash('sha256');
   function walk(current) {
     assertBeforeDeadline(opts.deadlineAt);
@@ -202,9 +200,9 @@ function digestDir(dir, opts = {}) {
  * Repairs an already-broken root in place, so a user bricked by an earlier
  * install recovers on their next one.
  *
- * @param {string} skillRoot `<base>/<org>/<user>`
+ * @param skillRoot `<base>/<org>/<user>`
  */
-export async function ensureTraversableUserSkillRoot(skillRoot) {
+export async function ensureTraversableUserSkillRoot(skillRoot: string) {
   const resolved = path.resolve(skillRoot);
   await fsp.mkdir(resolved, { recursive: true, mode: 0o755 });
   // `<org>` first, then `<user>`: repairing top-down keeps every prefix
@@ -221,10 +219,10 @@ export async function ensureTraversableUserSkillRoot(skillRoot) {
 
 /**
  * Atomically replace a package, restoring the previous version on failure.
- * @param {string} stagingDir
- * @param {string} destinationDir
+ * @param stagingDir
+ * @param destinationDir
  */
-export async function atomicReplaceDir(stagingDir, destinationDir) {
+export async function atomicReplaceDir(stagingDir: string, destinationDir: string) {
   const parent = path.dirname(destinationDir);
   await fsp.mkdir(parent, { recursive: true });
   const token = `${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -281,7 +279,7 @@ function assertDoesNotShadowSystem(name, systemSkillNames) {
  *   systemSkillNames?: Iterable<string>,
  * }} input
  */
-async function installPreparedPackage(input) {
+async function installPreparedPackage(input: { packageSource: string, stagingPackage: string, skillRoot: string, deadlineAt: number, systemSkillNames?: Iterable<string>, }) {
   const declaredName = readSkillPackageName(input.packageSource);
   const name = validateSkillName(declaredName);
   assertDoesNotShadowSystem(name, input.systemSkillNames);
@@ -356,11 +354,11 @@ export function normalizeArchiveSourceType(raw) {
  * Shared by the SkillManager's pre-download check and the install routine, so
  * the accepted-extension rule has exactly one definition.
  *
- * @param {unknown} raw
- * @param {'upload' | 'sandbox_build'} [sourceType]
+ * @param raw
+ * @param [sourceType]
  * @returns {string}
  */
-export function assertSkillArchiveName(raw, sourceType = 'upload') {
+export function assertSkillArchiveName(raw: unknown, sourceType: 'upload' | 'sandbox_build' = 'upload') {
   const archiveName = path.basename(String(raw || '').trim());
   const policy = ARCHIVE_POLICY[normalizeArchiveSourceType(sourceType)];
   const lower = archiveName.toLowerCase();
@@ -391,7 +389,7 @@ export function assertSkillArchiveName(raw, sourceType = 'upload') {
  *   systemSkillNames?: Iterable<string>,
  * }} opts
  */
-export async function installSkillArchive(opts) {
+export async function installSkillArchive(opts: { archiveBytes: Buffer, archiveName: string, sourceType?: 'upload' | 'sandbox_build', attachmentId?: string, sourcePath?: string, skillRoot: string, timeoutMs?: number, systemSkillNames?: Iterable<string>, }) {
   const sourceType = normalizeArchiveSourceType(opts.sourceType);
   const archiveName = assertSkillArchiveName(opts.archiveName, sourceType);
   const attachmentId = String(opts.attachmentId || '').trim();
@@ -490,7 +488,7 @@ export function normalizeGeneratedFilePath(raw) {
  *   systemSkillNames?: Iterable<string>,
  * }} opts
  */
-export async function createGeneratedSkill(opts) {
+export async function createGeneratedSkill(opts: { name: string, description: string, instructions: string, files?: Array<{ path: string, content: string }>, skillRoot: string, timeoutMs?: number, systemSkillNames?: Iterable<string>, }) {
   const name = validateSkillName(opts.name);
   const description = normalizeDescription(opts.description);
   const instructions = String(opts.instructions ?? '').trim();
@@ -585,10 +583,10 @@ export async function uninstallSkill(opts) {
 /**
  * Edit one file in an existing user Skill. This function cannot create a new
  * package; new packages must go through approved install/create operations.
- * @param {{ skillRoot?: string, path?: string, content?: unknown }} raw
- * @param {{ resolveSkillPath: Function, skillRoot: string, maxBytes: number }} ctx
+ * @param raw
+ * @param ctx
  */
-function prepareSkillEdit(raw, ctx) {
+function prepareSkillEdit(raw: { skillRoot?: string, path?: string, content?: unknown }, ctx: { resolveSkillPath: Function, skillRoot: string, maxBytes: number }) {
   const { absolute, relative } = ctx.resolveSkillPath(raw?.path, ctx.skillRoot);
   const normalized = relative.replace(/\\/g, '/');
   const [packageName] = normalized.split('/');
@@ -641,7 +639,7 @@ function prepareSkillEdit(raw, ctx) {
  *   timeoutMs?: number,
  * }} opts
  */
-export async function editSkillFiles(opts) {
+export async function editSkillFiles(opts: { skillRoot: string, files?: Array<{ path: string, content: string }>, path?: string, content?: string, maxBytes?: number, timeoutMs?: number, }) {
   const { resolveSkillPath } = await import('./paths.js');
   const skillRoot = resolveUserSkillRoot(opts.skillRoot);
   const entries =
@@ -690,8 +688,7 @@ export async function editSkillFiles(opts) {
   const token = `${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
-  /** @type {Array<{ absolute: string, backup: string | null }>} */
-  const swapped = [];
+  const swapped: Array<{ absolute: string, backup: string | null }> = [];
   try {
     for (const item of prepared) {
       await fsp.mkdir(path.dirname(item.absolute), { recursive: true, mode: 0o755 });
@@ -756,9 +753,9 @@ export async function editSkillFiles(opts) {
 
 /**
  * Single-file edit. Thin wrapper over {@link editSkillFiles}.
- * @param {{ skillRoot: string, path: string, content: string, maxBytes?: number, timeoutMs?: number }} opts
+ * @param opts
  */
-export async function editSkillFile(opts) {
+export async function editSkillFile(opts: { skillRoot: string, path: string, content: string, maxBytes?: number, timeoutMs?: number }) {
   return editSkillFiles(opts);
 }
 
@@ -782,10 +779,10 @@ export function listInstalledSkills(skillRoot) {
 
 /**
  * Describe installed packages across system and user roots. First root wins.
- * @param {string[]} skillRoots
- * @param {{ writableRoot?: string | null }} [opts]
+ * @param skillRoots
+ * @param [opts]
  */
-export function describeInstalledSkills(skillRoots, opts = {}) {
+export function describeInstalledSkills(skillRoots: string[], opts: { writableRoot?: string | null } = {}) {
   const writable = opts.writableRoot ? path.resolve(opts.writableRoot) : null;
   const byName = new Map();
   for (const rawRoot of skillRoots || []) {

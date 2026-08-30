@@ -6,28 +6,29 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 /**
- * @typedef {object} SkillAuditEvent
- * @property {string} action - install | edit | reload | deny
- * @property {string} result - success | failure | denied
- * @property {string} [skill_name]
- * @property {'upload' | 'agent_generated' | 'sandbox_build'} [source_type]
- * @property {string} [source] provenance key: `attachment:<id>`, `agent`, or
  *   `sandbox:<logical path>`. The sandbox form is a logical in-sandbox path the
  *   model itself supplied (`/tmp/...`, `/home/sandbox/workspace/...`) — never a
  *   host filesystem path, which would leak the Agent's storage layout.
- * @property {string} [summary]
- * @property {string} [error]
- * @property {object} [meta]
  */
+export type SkillAuditEvent = {
+  action: string;
+  result: string;
+  skill_name?: string;
+  source_type?: 'upload' | 'agent_generated' | 'sandbox_build';
+  source?: string;
+  summary?: string;
+  error?: string;
+  meta?: Record<string, any>;
+};
 
 /**
- * @param {SkillAuditEvent} event
+ * @param event
  * @param {{
  *   auditLogPath?: string | null,
  *   sink?: ((ev: object) => void) | null,
  * }} [opts]
  */
-export function emitSkillAudit(event, opts = {}) {
+export function emitSkillAudit(event: SkillAuditEvent, opts: { auditLogPath?: string | null, sink?: ((ev: Record<string, any>) => void) | null, } = {}) {
   const line = {
     event: 'skill_change',
     ts: new Date().toISOString(),

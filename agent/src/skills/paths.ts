@@ -37,11 +37,11 @@ export const DEFAULT_SKILL_ROOTS = Object.freeze([
 const IDENTITY_SEGMENT_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
 
 /**
- * @param {unknown} value
- * @param {string} field
+ * @param value
+ * @param field
  * @returns {string}
  */
-function assertIdentitySegment(value, field) {
+function assertIdentitySegment(value: unknown, field: string) {
   const segment = String(value ?? '').trim();
   if (!IDENTITY_SEGMENT_RE.test(segment)) {
     throw new Error(
@@ -57,11 +57,11 @@ function assertIdentitySegment(value, field) {
  * Org is included so the path is unique even if user ids were ever reissued
  * per org, and so an operator can wipe a whole tenant's skills as one subtree.
  *
- * @param {{ orgId: unknown, userId: unknown }} identity
- * @param {string} [base]
+ * @param identity
+ * @param [base]
  * @returns {string}
  */
-export function userSkillRootFor(identity, base = USER_SKILL_ROOT) {
+export function userSkillRootFor(identity: { orgId: unknown, userId: unknown }, base: string = USER_SKILL_ROOT) {
   const orgId = assertIdentitySegment(identity?.orgId, 'orgId');
   const userId = assertIdentitySegment(identity?.userId, 'userId');
   return path.join(path.resolve(base), orgId, userId);
@@ -71,11 +71,11 @@ export function userSkillRootFor(identity, base = USER_SKILL_ROOT) {
  * Skill roots one Run may read, in precedence order.
  * Without an identity there is no user tier — the caller sees system only.
  *
- * @param {{ orgId?: unknown, userId?: unknown } | null | undefined} identity
- * @param {{ systemRoot?: string, userRootBase?: string }} [opts]
+ * @param identity
+ * @param [opts]
  * @returns {string[]}
  */
-export function skillRootsForIdentity(identity, opts = {}) {
+export function skillRootsForIdentity(identity: { orgId?: unknown, userId?: unknown } | null | undefined, opts: { systemRoot?: string, userRootBase?: string } = {}) {
   const systemRoot = opts.systemRoot || SYSTEM_SKILL_ROOT;
   if (identity?.orgId == null || identity?.userId == null) {
     return normalizeSkillRoots([systemRoot]);
@@ -93,10 +93,10 @@ export function skillRootsForIdentity(identity, opts = {}) {
 export const SKILL_NAME_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/;
 
 /**
- * @param {string | null | undefined} name
+ * @param name
  * @returns {string}
  */
-export function validateSkillName(name) {
+export function validateSkillName(name: string | null | undefined) {
   const n = String(name || '').trim();
   if (!SKILL_NAME_RE.test(n)) {
     throw new Error(
@@ -114,7 +114,6 @@ export function validateSkillName(name) {
  * @param {string[]} roots
  * @returns {string[]}
  */
-// @ts-expect-error readonly与可变数组不兼容，调用方已保证不突变 —— TS4104: The type 'readonly string[]' is 'readonly' and cannot be ass
 export function normalizeSkillRoots(roots = DEFAULT_SKILL_ROOTS) {
   const out = [];
   const seen = new Set();
@@ -143,7 +142,6 @@ export function normalizeSkillRoots(roots = DEFAULT_SKILL_ROOTS) {
  * path appears in prompts and redaction.
  * @param {string[]} roots
  */
-// @ts-expect-error readonly与可变数组不兼容，调用方已保证不突变 —— TS4104: The type 'readonly string[]' is 'readonly' and cannot be ass
 export function primarySkillRoot(roots = DEFAULT_SKILL_ROOTS) {
   return normalizeSkillRoots(roots)[0];
 }
@@ -158,7 +156,6 @@ export function primarySkillRoot(roots = DEFAULT_SKILL_ROOTS) {
  *
  * @param {string[]} roots
  */
-// @ts-expect-error readonly与可变数组不兼容，调用方已保证不突变 —— TS4104: The type 'readonly string[]' is 'readonly' and cannot be ass
 export function writableSkillRoot(roots = DEFAULT_SKILL_ROOTS) {
   const normalized = normalizeSkillRoots(roots);
   const systemResolved = path.resolve(SYSTEM_SKILL_ROOT);
@@ -175,7 +172,6 @@ export function writableSkillRoot(roots = DEFAULT_SKILL_ROOTS) {
  * @param {string | null | undefined} userPath
  * @param {string[]} [skillRoots]
  */
-// @ts-expect-error readonly与可变数组不兼容，调用方已保证不突变 —— TS4104: The type 'readonly string[]' is 'readonly' and cannot be ass
 export function isUnderSkillRoot(userPath, skillRoots = DEFAULT_SKILL_ROOTS) {
   if (userPath == null || typeof userPath !== 'string') return false;
   const raw = userPath.trim();
@@ -225,7 +221,6 @@ export function isUnderSkillRoot(userPath, skillRoots = DEFAULT_SKILL_ROOTS) {
  * @param {string | null | undefined} command
  * @param {string[]} [skillRoots]
  */
-// @ts-expect-error readonly与可变数组不兼容，调用方已保证不突变 —— TS4104: The type 'readonly string[]' is 'readonly' and cannot be ass
 export function commandTouchesSkillRoot(command, skillRoots = DEFAULT_SKILL_ROOTS) {
   if (!command || typeof command !== 'string') return false;
   const cmd = command;
@@ -247,7 +242,6 @@ export function commandTouchesSkillRoot(command, skillRoots = DEFAULT_SKILL_ROOT
  * @param {string | null | undefined} command
  * @param {string[]} [skillRoots]
  */
-// @ts-expect-error readonly与可变数组不兼容，调用方已保证不突变 —— TS4104: The type 'readonly string[]' is 'readonly' and cannot be ass
 export function isReadonlySkillExecution(command, skillRoots = DEFAULT_SKILL_ROOTS) {
   if (!command || typeof command !== 'string') return false;
   if (/[;&|<>`\n\r$*?{}\[\]!]/.test(command) || command.includes('$(')) return false;
@@ -278,11 +272,11 @@ export function isReadonlySkillExecution(command, skillRoots = DEFAULT_SKILL_ROO
  * Resolve a skill-relative path strictly under the primary skill root.
  * Rejects escape via `..`, absolute paths outside root, and null bytes.
  *
- * @param {string} userPath - relative to skill root or absolute under a skill root
- * @param {string} skillRoot
+ * @param userPath - relative to skill root or absolute under a skill root
+ * @param skillRoot
  * @returns {{ absolute: string, relative: string }}
  */
-export function resolveSkillPath(userPath, skillRoot) {
+export function resolveSkillPath(userPath: string, skillRoot: string) {
   if (userPath == null || typeof userPath !== 'string') {
     throw new Error('Invalid path');
   }
@@ -352,10 +346,10 @@ export function resolveSkillPath(userPath, skillRoot) {
 
 /**
  * Destination directory for a named skill package.
- * @param {string} skillRoot
- * @param {string} name
+ * @param skillRoot
+ * @param name
  */
-export function skillPackageDir(skillRoot, name) {
+export function skillPackageDir(skillRoot: string, name: string) {
   const safe = validateSkillName(name);
   return path.join(path.resolve(skillRoot), safe);
 }

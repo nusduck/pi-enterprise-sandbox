@@ -16,5 +16,5 @@
     "declaration": false,
     "sourceMap": true
   },
-  "include": ["src/**/*.js", "src/**/*.ts", "config.js", "server.js", "worker.js"]
+  "include": ["src/**/*.js", "src/**/*.ts", "config.ts", "server.ts", "worker.ts"]
 }

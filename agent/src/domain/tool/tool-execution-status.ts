@@ -59,30 +59,24 @@ const TERMINAL = new Set([
 ]);
 
 /**
- * @param {unknown} status
+ * @param status
  * @returns {boolean}
  */
-export function isToolExecutionStatus(status) {
+export function isToolExecutionStatus(status: unknown) {
   return (
     typeof status === 'string' &&
-    TOOL_EXECUTION_STATUSES.includes(/** @type {any} */ (status))
+    TOOL_EXECUTION_STATUSES.includes((status as any))
   );
 }
 
-/**
- * @param {unknown} status
- */
-export function assertToolExecutionStatus(status) {
+export function assertToolExecutionStatus(status: unknown) {
   if (!isToolExecutionStatus(status)) {
     throw new Error(`Invalid tool execution status: ${String(status)}`);
   }
-  return /** @type {string} */ (status);
+  return (status as string);
 }
 
-/**
- * @param {string} status
- */
-export function isTerminalToolExecutionStatus(status) {
+export function isTerminalToolExecutionStatus(status: string) {
   // @ts-expect-error 未校验string传入闭合联合，运行时需窄化守卫，存活代码先用expect-error收敛 —— TS2345: Argument of type 'string' is not assignable to parameter of 
   return TERMINAL.has(status);
 }
@@ -117,31 +111,21 @@ export const TOOL_EXECUTION_TRANSITIONS = Object.freeze({
   [TOOL_EXECUTION_STATUS.UNKNOWN]: Object.freeze([]),
 });
 
-/**
- * @param {string} from
- * @param {string} to
- */
-export function canTransitionToolExecution(from, to) {
+export function canTransitionToolExecution(from: string, to: string) {
   const allowed = TOOL_EXECUTION_TRANSITIONS[from];
   return Array.isArray(allowed) && allowed.includes(to);
 }
 
-/**
- * @param {unknown} source
- */
-export function assertToolSource(source) {
-  if (!TOOL_SOURCES.includes(/** @type {any} */ (source))) {
+export function assertToolSource(source: unknown) {
+  if (!TOOL_SOURCES.includes((source as any))) {
     throw new Error(`Invalid tool_source: ${String(source)}`);
   }
-  return /** @type {string} */ (source);
+  return (source as string);
 }
 
-/**
- * @param {unknown} risk
- */
-export function assertToolRiskLevel(risk) {
-  if (!TOOL_RISK_LEVELS.includes(/** @type {any} */ (risk))) {
+export function assertToolRiskLevel(risk: unknown) {
+  if (!TOOL_RISK_LEVELS.includes((risk as any))) {
     throw new Error(`Invalid risk_level: ${String(risk)}`);
   }
-  return /** @type {string} */ (risk);
+  return (risk as string);
 }

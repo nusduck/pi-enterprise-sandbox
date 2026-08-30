@@ -2,7 +2,7 @@
  * Plan §10 Run statuses (uppercase). Sole vocabulary for new Run authority.
  */
 
-/** @typedef {typeof RUN_STATUS[keyof typeof RUN_STATUS]} RunStatus */
+export type RunStatus = typeof RUN_STATUS[keyof typeof RUN_STATUS];
 
 export const RUN_STATUS = Object.freeze({
   ACCEPTED: 'ACCEPTED',
@@ -76,18 +76,18 @@ export const RUN_TRANSITIONS = Object.freeze({
 });
 
 /**
- * @param {unknown} status
+ * @param status
  * @returns {status is RunStatus}
  */
-export function isRunStatus(status) {
+export function isRunStatus(status: unknown) {
   return typeof status === 'string' && Object.hasOwn(RUN_TRANSITIONS, status);
 }
 
 /**
- * @param {unknown} status
+ * @param status
  * @returns {boolean}
  */
-export function isTerminalRunStatus(status) {
+export function isTerminalRunStatus(status: unknown) {
   // @ts-expect-error 未校验string传入闭合联合，运行时需窄化守卫，存活代码先用expect-error收敛 —— TS2345: Argument of type 'string' is not assignable to parameter of 
   return typeof status === 'string' && TERMINAL_RUN_STATUS_SET.has(status);
 }

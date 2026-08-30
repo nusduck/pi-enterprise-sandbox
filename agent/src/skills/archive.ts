@@ -43,10 +43,10 @@ export function assertZipArchive(bytes) {
 
 /**
  * Normalize one entry name without ever accepting a filesystem path.
- * @param {string} raw
+ * @param raw
  * @returns {{ relative: string, directory: boolean }}
  */
-export function normalizeArchiveEntryName(raw) {
+export function normalizeArchiveEntryName(raw: string) {
   const name = String(raw ?? '');
   if (!name || /[\x00-\x1f\x7f]/.test(name)) {
     throw new Error('Skill archive contains an empty or invalid entry name');
@@ -106,12 +106,12 @@ function assertRegularEntry(entry, directory) {
 /**
  * Extract a ZIP into an empty staging directory.
  *
- * @param {Buffer} bytes
- * @param {string} destination
- * @param {{ deadlineAt?: number }} [opts]
+ * @param bytes
+ * @param destination
+ * @param [opts]
  * @returns {Promise<{ entries: number, files: number, expanded_bytes: number }>}
  */
-export async function extractSkillArchive(bytes, destination, opts = {}) {
+export async function extractSkillArchive(bytes: Buffer, destination: string, opts: { deadlineAt?: number } = {}) {
   assertZipArchive(bytes);
   const root = path.resolve(destination);
   await fsp.mkdir(root, { recursive: false, mode: 0o700 });

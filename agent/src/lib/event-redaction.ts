@@ -41,18 +41,18 @@ const INLINE_SECRET_PATTERNS = [
 ];
 
 /**
- * @param {unknown} value
+ * @param value
  * @returns {boolean}
  */
-function isPlainObject(value) {
+function isPlainObject(value: unknown) {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 
 /**
- * @param {string} value
+ * @param value
  * @returns {string}
  */
-function digest(value) {
+function digest(value: string) {
   return createHash('sha256').update(value, 'utf8').digest('hex');
 }
 
@@ -60,10 +60,10 @@ function digest(value) {
  * Redact sensitive substrings inside free text while preserving safe prose.
  * Does not wipe a whole sentence merely because it contains the word "token".
  *
- * @param {string} text
+ * @param text
  * @returns {string}
  */
-export function redactInlineSecrets(text) {
+export function redactInlineSecrets(text: string) {
   if (typeof text !== 'string' || !text) return text;
   let out = text;
   for (const re of INLINE_SECRET_PATTERNS) {
@@ -75,11 +75,11 @@ export function redactInlineSecrets(text) {
 }
 
 /**
- * @param {unknown} value
- * @param {{ maxString?: number, depth?: number }} [opts]
+ * @param value
+ * @param [opts]
  * @returns {unknown}
  */
-export function redactPayload(value, opts = {}) {
+export function redactPayload(value: unknown, opts: { maxString?: number, depth?: number } = {}) {
   const maxString = opts.maxString ?? DEFAULT_MAX_STRING;
   const depth = opts.depth ?? 0;
   if (depth > 6) return '[omitted]';
@@ -98,15 +98,14 @@ export function redactPayload(value, opts = {}) {
   if (!isPlainObject(value)) {
     return String(value).slice(0, maxString);
   }
-  /** @type {Record<string, unknown>} */
-  const out = {};
+  const out: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(value)) {
     if (SENSITIVE_KEY.test(k)) {
       out[k] = '[redacted]';
       continue;
     }
     if (k === 'provider' && v && typeof v === 'object' && !Array.isArray(v)) {
-      const p = /** @type {Record<string, unknown>} */ (v);
+      const p = (v as Record<string, unknown>);
       out.provider =
         typeof p.id === 'string'
           ? p.id
@@ -116,7 +115,7 @@ export function redactPayload(value, opts = {}) {
       continue;
     }
     if (k === 'model' && v && typeof v === 'object' && !Array.isArray(v)) {
-      const m = /** @type {Record<string, unknown>} */ (v);
+      const m = (v as Record<string, unknown>);
       out.model = {
         id: m.id ?? m.modelId ?? null,
         provider: m.provider ?? null,
@@ -142,25 +141,17 @@ export function redactPayload(value, opts = {}) {
   return out;
 }
 
-/**
- * @param {string} toolName
- * @param {unknown} args
- */
-export function summarizeToolArgs(toolName, args) {
+export function summarizeToolArgs(toolName: string, args: unknown) {
   void toolName;
   if (!args || typeof args !== 'object' || Array.isArray(args)) {
     const s = redactInlineSecrets(String(args ?? ''));
     return { value: safeSlice(s, DEFAULT_MAX_STRING).text };
   }
-  return /** @type {Record<string, unknown>} */ (
-    redactPayload(args, { maxString: DEFAULT_MAX_STRING })
-  );
+  return ((
+    redactPayload(args, { maxString: DEFAULT_MAX_STRING })) as Record<string, unknown>);
 }
 
-/**
- * @param {unknown} result
- */
-export function summarizeToolResult(result) {
+export function summarizeToolResult(result: unknown) {
   if (result == null) return null;
   if (typeof result === 'string') {
     const redacted = redactInlineSecrets(result);
@@ -183,13 +174,12 @@ export function summarizeToolResult(result) {
 
 /**
  * Bounded redacted projection of a complete assistant message.
- * @param {unknown} message
+ * @param message
  */
-export function summarizeAssistantMessage(message) {
+export function summarizeAssistantMessage(message: unknown) {
   if (!message || typeof message !== 'object') return null;
-  const m = /** @type {Record<string, unknown>} */ (message);
-  /** @type {Record<string, unknown>} */
-  const out = {
+  const m = (message as Record<string, unknown>);
+  const out: Record<string, unknown> = {
     role: m.role ?? 'assistant',
   };
   let textTruncated = false;
@@ -197,7 +187,7 @@ export function summarizeAssistantMessage(message) {
   if (Array.isArray(m.content)) {
     out.content = m.content.map((part) => {
       if (!part || typeof part !== 'object') return { type: 'unknown' };
-      const p = /** @type {Record<string, unknown>} */ (part);
+      const p = (part as Record<string, unknown>);
       if (p.type === 'text') {
         const text = redactInlineSecrets(String(p.text ?? ''));
         const sliced = safeSlice(text, DEFAULT_MAX_STRING);
@@ -233,18 +223,17 @@ export function summarizeAssistantMessage(message) {
 
 /**
  * Extract toolCall blocks from assistant message content (order preserved).
- * @param {unknown} message
+ * @param message
  * @returns {Array<{ id: string, name: string, arguments: unknown }>}
  */
-export function extractToolCallBlocks(message) {
+export function extractToolCallBlocks(message: unknown) {
   if (!message || typeof message !== 'object') return [];
-  const content = /** @type {Record<string, unknown>} */ (message).content;
+  const content = (message as Record<string, unknown>).content;
   if (!Array.isArray(content)) return [];
-  /** @type {Array<{ id: string, name: string, arguments: unknown }>} */
-  const out = [];
+  const out: Array<{ id: string, name: string, arguments: unknown }> = [];
   for (const part of content) {
     if (!part || typeof part !== 'object') continue;
-    const p = /** @type {Record<string, unknown>} */ (part);
+    const p = (part as Record<string, unknown>);
     if (p.type !== 'toolCall') continue;
     out.push({
       id: String(p.id ?? ''),
@@ -257,12 +246,12 @@ export function extractToolCallBlocks(message) {
 
 /**
  * UI-safe assistant text only (no toolCall args leakage).
- * @param {unknown} message
+ * @param message
  * @returns {string}
  */
-export function extractAssistantTextForUi(message) {
+export function extractAssistantTextForUi(message: unknown) {
   if (!message || typeof message !== 'object') return '';
-  const m = /** @type {Record<string, unknown>} */ (message);
+  const m = (message as Record<string, unknown>);
   if (typeof m.content === 'string') {
     return redactInlineSecrets(m.content);
   }

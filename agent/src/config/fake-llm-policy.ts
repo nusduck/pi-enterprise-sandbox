@@ -9,10 +9,7 @@
 /** Env flag that enables the test-only fake provider. */
 export const FAKE_LLM_ENV = 'AGENT_ENABLE_FAKE_LLM';
 
-/**
- * @param {NodeJS.ProcessEnv | Record<string, string|undefined>} [env]
- */
-export function isFakeLlmEnabled(env = process.env) {
+export function isFakeLlmEnabled(env: NodeJS.ProcessEnv | Record<string, string|undefined> = process.env) {
   const raw = env[FAKE_LLM_ENV];
   if (raw == null || String(raw).trim() === '') return false;
   return ['1', 'true', 'yes', 'on'].includes(String(raw).toLowerCase());
@@ -20,9 +17,9 @@ export function isFakeLlmEnabled(env = process.env) {
 
 /**
  * Fail closed when a production process attempts to enable the fake provider.
- * @param {NodeJS.ProcessEnv | Record<string, string|undefined>} [env]
+ * @param [env]
  */
-export function assertFakeLlmAllowed(env = process.env) {
+export function assertFakeLlmAllowed(env: NodeJS.ProcessEnv | Record<string, string|undefined> = process.env) {
   if (!isFakeLlmEnabled(env)) return false;
   const nodeEnv = String(env.NODE_ENV || '').toLowerCase();
   const deployEnv = String(env.DEPLOYMENT_ENV || '').toLowerCase();

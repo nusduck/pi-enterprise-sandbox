@@ -7,7 +7,7 @@
 
 import { RUN_STATUS, isRunStatus } from '../run/run-status.js';
 
-/** @typedef {typeof A2A_TASK_STATUS[keyof typeof A2A_TASK_STATUS]} A2aTaskStatus */
+export type A2aTaskStatus = typeof A2A_TASK_STATUS[keyof typeof A2A_TASK_STATUS];
 
 export const A2A_TASK_STATUS = Object.freeze({
   SUBMITTED: 'submitted',
@@ -35,10 +35,10 @@ export const TERMINAL_A2A_TASK_STATUS_SET = new Set(TERMINAL_A2A_TASK_STATUSES);
  * WAITING_APPROVAL → auth-required (plan allows auth-required or working+metadata).
  * CANCELLING / RETRYING map to working (in-progress), not a second authority.
  *
- * @param {unknown} runStatus
+ * @param runStatus
  * @returns {A2aTaskStatus}
  */
-export function projectRunStatusToA2a(runStatus) {
+export function projectRunStatusToA2a(runStatus: unknown) {
   if (!isRunStatus(runStatus)) {
     // Unknown/corrupt run status must not invent protocol states.
     return A2A_TASK_STATUS.FAILED;
@@ -68,19 +68,19 @@ export function projectRunStatusToA2a(runStatus) {
 }
 
 /**
- * @param {unknown} status
+ * @param status
  * @returns {status is A2aTaskStatus}
  */
-export function isA2aTaskStatus(status) {
+export function isA2aTaskStatus(status: unknown) {
   // @ts-expect-error 未校验string传入闭合联合，运行时需窄化守卫，存活代码先用expect-error收敛 —— TS2345: Argument of type 'string' is not assignable to parameter of 
   return typeof status === 'string' && ALL_A2A_TASK_STATUSES.includes(status);
 }
 
 /**
- * @param {unknown} status
+ * @param status
  * @returns {boolean}
  */
-export function isTerminalA2aTaskStatus(status) {
+export function isTerminalA2aTaskStatus(status: unknown) {
   // @ts-expect-error 未校验string传入闭合联合，运行时需窄化守卫，存活代码先用expect-error收敛 —— TS2345: Argument of type 'string' is not assignable to parameter of 
   return typeof status === 'string' && TERMINAL_A2A_TASK_STATUS_SET.has(status);
 }

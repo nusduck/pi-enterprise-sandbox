@@ -36,10 +36,10 @@ export const LEGACY_RUNTIME_OUTCOME_MAP = Object.freeze({
  *
  * Unknown outcomes throw {@link UnknownLegacyOutcomeError}.
  *
- * @param {unknown} outcome
+ * @param outcome
  * @returns {string}
  */
-export function mapLegacyRuntimeOutcome(outcome) {
+export function mapLegacyRuntimeOutcome(outcome: unknown) {
   if (typeof outcome !== 'string' || outcome.length === 0) {
     throw new UnknownLegacyOutcomeError(outcome);
   }

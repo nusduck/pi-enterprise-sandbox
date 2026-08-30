@@ -15,6 +15,9 @@
 
 import { createHash } from 'node:crypto';
 
+/** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
+type Loose = any;
+
 export const TOOL_REQUEST_HASH_VERSION = 1;
 export const TOOL_NAME_MAX_LEN = 255;
 
@@ -22,11 +25,10 @@ export const TOOL_NAME_MAX_LEN = 255;
 const ASCII_KEY_RE = /^[\x20-\x7E]+$/;
 
 export class ToolRequestHashError extends Error {
-  /**
-   * @param {string} message
-   * @param {string} [code]
-   */
-  constructor(message, code = 'TOOL_REQUEST_HASH_INVALID') {
+  // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
+  code: Loose;
+
+  constructor(message: string, code: string = 'TOOL_REQUEST_HASH_INVALID') {
     super(message);
     this.name = 'ToolRequestHashError';
     this.code = code;
@@ -34,10 +36,10 @@ export class ToolRequestHashError extends Error {
 }
 
 /**
- * @param {string} s
+ * @param s
  * @returns {boolean}
  */
-function hasLoneSurrogate(s) {
+function hasLoneSurrogate(s: string) {
   for (let i = 0; i < s.length; i += 1) {
     const c = s.charCodeAt(i);
     if (c >= 0xd800 && c <= 0xdbff) {
@@ -53,10 +55,10 @@ function hasLoneSurrogate(s) {
 }
 
 /**
- * @param {string} toolName
+ * @param toolName
  * @returns {string}
  */
-export function assertToolRequestToolName(toolName) {
+export function assertToolRequestToolName(toolName: string) {
   if (typeof toolName !== 'string') {
     throw new ToolRequestHashError(
       'toolName must be a non-empty already-trimmed string',
@@ -87,18 +89,18 @@ export function assertToolRequestToolName(toolName) {
 /**
  * Canonical JSON fragment for an accepted value (no surrounding whitespace).
  *
- * @param {unknown} value
- * @param {Set<object>} stack
+ * @param value
+ * @param stack
  * @returns {string}
  */
-function canonicalizeValue(value, stack) {
+function canonicalizeValue(value: unknown, stack: Set<Record<string, any>>) {
   if (value === null) return 'null';
 
   const t = typeof value;
   if (t === 'boolean') return value ? 'true' : 'false';
 
   if (t === 'string') {
-    if (hasLoneSurrogate(/** @type {string} */ (value))) {
+    if (hasLoneSurrogate((value as string))) {
       throw new ToolRequestHashError(
         'string contains lone Unicode surrogate',
         'TOOL_REQUEST_HASH_LONE_SURROGATE',
@@ -169,7 +171,7 @@ function canonicalizeValue(value, stack) {
     );
   }
 
-  const objRef = /** @type {object} */ (value);
+  const objRef = (value as Record<string, any>);
   if (stack.has(objRef)) {
     throw new ToolRequestHashError(
       'cyclic structure is not allowed',
@@ -198,7 +200,7 @@ function canonicalizeValue(value, stack) {
 
   stack.add(objRef);
   try {
-    const obj = /** @type {Record<string, unknown>} */ (value);
+    const obj = (value as Record<string, unknown>);
     const keys = Object.keys(obj);
     for (const k of keys) {
       if (typeof k !== 'string' || !ASCII_KEY_RE.test(k)) {
@@ -226,10 +228,10 @@ function canonicalizeValue(value, stack) {
 /**
  * Build canonical envelope JSON for request-hash v1.
  *
- * @param {{ toolName: string, args?: unknown }} input
+ * @param input
  * @returns {string}
  */
-export function canonicalToolRequestJsonV1(input) {
+export function canonicalToolRequestJsonV1(input: { toolName: string, args?: unknown }) {
   const toolName = assertToolRequestToolName(input.toolName);
   const args = input.args === undefined ? {} : input.args;
   const stack = new Set();
@@ -241,10 +243,10 @@ export function canonicalToolRequestJsonV1(input) {
 }
 
 /**
- * @param {{ toolName: string, args?: unknown }} input
+ * @param input
  * @returns {{ requestHash: string, requestHashVersion: number, canonicalJson: string }}
  */
-export function computeToolRequestHashV1(input) {
+export function computeToolRequestHashV1(input: { toolName: string, args?: unknown }) {
   const canonicalJson = canonicalToolRequestJsonV1(input);
   const requestHash = createHash('sha256')
     .update(canonicalJson, 'utf8')

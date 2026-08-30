@@ -28,20 +28,20 @@ import {
 
 export class SessionStateMachine {
   /**
-   * @param {unknown} status
+   * @param status
    * @returns {asserts status is string}
    */
-  assertStatus(status) {
+  assertStatus(status: unknown) {
     if (!isSessionStatus(status)) {
       throw new InvalidSessionStatusError(status);
     }
   }
 
   /**
-   * @param {unknown} status
+   * @param status
    * @returns {boolean}
    */
-  isTerminal(status) {
+  isTerminal(status: unknown) {
     return isTerminalSessionStatus(status);
   }
 
@@ -60,31 +60,31 @@ export class SessionStateMachine {
   }
 
   /**
-   * @param {string} from
+   * @param from
    * @returns {readonly string[]}
    */
-  allowedTargets(from) {
+  allowedTargets(from: string) {
     this.assertStatus(from);
     return SESSION_TRANSITIONS[from];
   }
 
   /**
-   * @param {string} from
-   * @param {string} to
+   * @param from
+   * @param to
    * @returns {boolean}
    */
-  canTransition(from, to) {
+  canTransition(from: string, to: string) {
     if (!isSessionStatus(from) || !isSessionStatus(to)) return false;
     return SESSION_TRANSITIONS[from].includes(to);
   }
 
   /**
    * Validate and return the target status. No I/O.
-   * @param {string} from
-   * @param {string} to
+   * @param from
+   * @param to
    * @returns {string}
    */
-  transition(from, to) {
+  transition(from: string, to: string) {
     this.assertStatus(from);
     this.assertStatus(to);
     if (!SESSION_TRANSITIONS[from].includes(to)) {
@@ -93,21 +93,17 @@ export class SessionStateMachine {
     return to;
   }
 
-  /**
-   * @param {string} from
-   * @param {string} to
-   */
-  assertTransition(from, to) {
+  assertTransition(from: string, to: string) {
     this.transition(from, to);
   }
 
   /**
    * Whether (from → to) is legal, including same-status SUSPENDED re-reason.
-   * @param {string} from
-   * @param {string} to
+   * @param from
+   * @param to
    * @returns {boolean}
    */
-  isLegalEdge(from, to) {
+  isLegalEdge(from: string, to: string) {
     if (!isSessionStatus(from) || !isSessionStatus(to)) return false;
     if (from === to && from === SESSION_STATUS.SUSPENDED) return true;
     return this.canTransition(from, to);
@@ -115,10 +111,10 @@ export class SessionStateMachine {
 
   /**
    * Assert legal edge (transition or SUSPENDED re-reason).
-   * @param {string} from
-   * @param {string} to
+   * @param from
+   * @param to
    */
-  assertLegalEdge(from, to) {
+  assertLegalEdge(from: string, to: string) {
     this.assertStatus(from);
     this.assertStatus(to);
     if (from === to && from === SESSION_STATUS.SUSPENDED) return;
@@ -130,11 +126,11 @@ export class SessionStateMachine {
    * Only from ACTIVE (transition) or already SUSPENDED (idempotent re-reason).
    * CREATING→SUSPENDED is illegal.
    *
-   * @param {string} from
-   * @param {string} [reasonCode]
+   * @param from
+   * @param [reasonCode]
    * @returns {{ status: string, recoveryReasonCode: string }}
    */
-  assertSuspendForRecovery(from, reasonCode = RECOVERY_REASON_CODE.RECOVERY_REQUIRED) {
+  assertSuspendForRecovery(from: string, reasonCode: string = RECOVERY_REASON_CODE.RECOVERY_REQUIRED) {
     const code = assertRecoveryReasonCode(reasonCode);
     this.assertStatus(from);
     if (from === SESSION_STATUS.SUSPENDED) {
@@ -153,10 +149,10 @@ export class SessionStateMachine {
 
   /**
    * Resume from recovery: SUSPENDED → ACTIVE and clear recovery reason.
-   * @param {string} from
+   * @param from
    * @returns {{ status: string, recoveryReasonCode: null }}
    */
-  assertResumeFromRecovery(from) {
+  assertResumeFromRecovery(from: string) {
     this.transition(from, SESSION_STATUS.ACTIVE);
     return { status: SESSION_STATUS.ACTIVE, recoveryReasonCode: null };
   }

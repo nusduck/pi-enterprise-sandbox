@@ -28,20 +28,20 @@ import { mapLegacyRuntimeOutcome } from './legacy-status.js';
  */
 export class RunStateMachine {
   /**
-   * @param {unknown} status
+   * @param status
    * @returns {asserts status is string}
    */
-  assertStatus(status) {
+  assertStatus(status: unknown) {
     if (!isRunStatus(status)) {
       throw new InvalidRunStatusError(status);
     }
   }
 
   /**
-   * @param {unknown} status
+   * @param status
    * @returns {boolean}
    */
-  isTerminal(status) {
+  isTerminal(status: unknown) {
     return isTerminalRunStatus(status);
   }
 
@@ -60,31 +60,31 @@ export class RunStateMachine {
   }
 
   /**
-   * @param {string} from
+   * @param from
    * @returns {readonly string[]}
    */
-  allowedTargets(from) {
+  allowedTargets(from: string) {
     this.assertStatus(from);
     return RUN_TRANSITIONS[from];
   }
 
   /**
-   * @param {string} from
-   * @param {string} to
+   * @param from
+   * @param to
    * @returns {boolean}
    */
-  canTransition(from, to) {
+  canTransition(from: string, to: string) {
     if (!isRunStatus(from) || !isRunStatus(to)) return false;
     return RUN_TRANSITIONS[from].includes(to);
   }
 
   /**
    * Validate and return the target status. No I/O.
-   * @param {string} from
-   * @param {string} to
+   * @param from
+   * @param to
    * @returns {string}
    */
-  transition(from, to) {
+  transition(from: string, to: string) {
     this.assertStatus(from);
     this.assertStatus(to);
     if (!RUN_TRANSITIONS[from].includes(to)) {
@@ -95,19 +95,19 @@ export class RunStateMachine {
 
   /**
    * Assert transition is allowed; throw typed error otherwise.
-   * @param {string} from
-   * @param {string} to
+   * @param from
+   * @param to
    */
-  assertTransition(from, to) {
+  assertTransition(from: string, to: string) {
     this.transition(from, to);
   }
 
   /**
    * Normalize legacy runtime outcomes only through the explicit mapper.
-   * @param {unknown} outcome
+   * @param outcome
    * @returns {string}
    */
-  mapLegacyOutcome(outcome) {
+  mapLegacyOutcome(outcome: unknown) {
     return mapLegacyRuntimeOutcome(outcome);
   }
 }

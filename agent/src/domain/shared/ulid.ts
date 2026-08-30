@@ -10,6 +10,9 @@
 
 import { randomBytes as nodeRandomBytes } from 'node:crypto';
 
+/** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
+type Loose = any;
+
 /** Crockford Base32 (excludes I, L, O, U). */
 export const CROCKFORD_ALPHABET = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
 
@@ -30,11 +33,10 @@ const RANDOM_BYTES = 10; // 80 bits
  * Typed error for ULID generation / validation failures.
  */
 export class UlidError extends Error {
-  /**
-   * @param {string} message
-   * @param {string} code
-   */
-  constructor(message, code) {
+  // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
+  code: Loose;
+
+  constructor(message: string, code: string) {
     super(message);
     this.name = 'UlidError';
     this.code = code;
@@ -42,10 +44,10 @@ export class UlidError extends Error {
 }
 
 /**
- * @param {number} timeMs
+ * @param timeMs
  * @returns {string}
  */
-export function encodeTime(timeMs) {
+export function encodeTime(timeMs: number) {
   if (!Number.isInteger(timeMs) || timeMs < 0) {
     throw new UlidError(
       'ULID timestamp must be a non-negative integer (ms)',
@@ -68,10 +70,10 @@ export function encodeTime(timeMs) {
 }
 
 /**
- * @param {Uint8Array | Buffer} bytes — exactly 10 bytes
+ * @param bytes — exactly 10 bytes
  * @returns {string}
  */
-export function encodeRandom(bytes) {
+export function encodeRandom(bytes: Uint8Array | Buffer) {
   if (!bytes || bytes.length !== RANDOM_BYTES) {
     throw new UlidError(
       `ULID random component requires ${RANDOM_BYTES} bytes`,
@@ -94,10 +96,10 @@ export function encodeRandom(bytes) {
 
 /**
  * Decode 10-char Crockford time component to ms.
- * @param {string} timePart
+ * @param timePart
  * @returns {number}
  */
-export function decodeTime(timePart) {
+export function decodeTime(timePart: string) {
   if (typeof timePart !== 'string' || timePart.length !== TIME_LEN) {
     throw new UlidError('Invalid ULID time component', 'ULID_INVALID');
   }
@@ -115,10 +117,10 @@ export function decodeTime(timePart) {
 
 /**
  * Increment 10-byte big-endian random in place.
- * @param {Uint8Array} bytes
+ * @param bytes
  * @returns {boolean} false if overflow (all 0xff)
  */
-export function incrementRandomBytes(bytes) {
+export function incrementRandomBytes(bytes: Uint8Array) {
   for (let i = bytes.length - 1; i >= 0; i -= 1) {
     if (bytes[i] === 0xff) {
       bytes[i] = 0;
@@ -131,29 +133,29 @@ export function incrementRandomBytes(bytes) {
 }
 
 /**
- * @param {unknown} value
+ * @param value
  * @returns {value is string}
  */
-export function isUlid(value) {
+export function isUlid(value: unknown) {
   return typeof value === 'string' && ULID_PATTERN_I.test(value);
 }
 
 /**
  * Normalize to uppercase canonical form, or null if invalid.
- * @param {unknown} value
+ * @param value
  * @returns {string | null}
  */
-export function normalizeUlid(value) {
+export function normalizeUlid(value: unknown) {
   if (!isUlid(value)) return null;
   return String(value).toUpperCase();
 }
 
 /**
- * @param {unknown} value
- * @param {string} [field]
+ * @param value
+ * @param [field]
  * @returns {string}
  */
-export function assertUlid(value, field = 'id') {
+export function assertUlid(value: unknown, field: string = 'id') {
   const n = normalizeUlid(value);
   if (!n) {
     throw new UlidError(
@@ -174,9 +176,9 @@ export function assertUlid(value, field = 'id') {
 /**
  * True when value is a legacy runtime run id (`arun_…`) or a UUID string.
  * These must never be stored in plan CHAR(26) columns.
- * @param {unknown} value
+ * @param value
  */
-export function isLegacyOrUuidIdentity(value) {
+export function isLegacyOrUuidIdentity(value: unknown) {
   if (typeof value !== 'string') return false;
   if (value.startsWith('arun_')) return true;
   // UUID with or without hyphens
@@ -205,15 +207,13 @@ export function isLegacyOrUuidIdentity(value) {
  * }} [options]
  * @returns {() => string}
  */
-export function createUlidGenerator(options = {}) {
+export function createUlidGenerator(options: { now?: () => number, randomBytes?: (size: number) => Uint8Array | Buffer, } = {}) {
   const nowFn = options.now ?? (() => Date.now());
   const randomBytesFn =
     options.randomBytes ?? ((n) => nodeRandomBytes(n));
 
-  /** @type {number} */
-  let lastTime = -1;
-  /** @type {Uint8Array | null} */
-  let lastRandom = null;
+  let lastTime: number = -1;
+  let lastRandom: Uint8Array | null = null;
 
   return function generateUlid() {
     let time = nowFn();

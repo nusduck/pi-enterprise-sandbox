@@ -20,10 +20,10 @@ export const DEFAULT_A2A_SCOPES = Object.freeze([
 ]);
 
 /**
- * @param {unknown} scopes
+ * @param scopes
  * @returns {string[]}
  */
-export function normalizeScopes(scopes) {
+export function normalizeScopes(scopes: unknown) {
   if (scopes == null) return [...DEFAULT_A2A_SCOPES];
   if (!Array.isArray(scopes)) {
     throw new Error('scopes must be an array of strings');
@@ -51,11 +51,11 @@ export function normalizeScopes(scopes) {
 }
 
 /**
- * @param {readonly string[] | null | undefined} granted
- * @param {string} required
+ * @param granted
+ * @param required
  * @returns {boolean}
  */
-export function hasScope(granted, required) {
+export function hasScope(granted: readonly string[] | null | undefined, required: string) {
   if (!Array.isArray(granted) || typeof required !== 'string') return false;
   return granted.includes(required);
 }

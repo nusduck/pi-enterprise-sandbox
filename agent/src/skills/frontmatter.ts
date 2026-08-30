@@ -28,10 +28,10 @@ import { parse as parseYaml } from 'yaml';
  * Frontmatter extraction, matching Pi's `parseFrontmatter` exactly: a leading
  * `---`, the next `\n---`, and everything between them as YAML.
  *
- * @param {string} normalized  content with CRLF already normalised
+ * @param normalized  content with CRLF already normalised
  * @returns {{ yamlString: string | null, body: string }}
  */
-function extractFrontmatter(normalized) {
+function extractFrontmatter(normalized: string) {
   if (!normalized.startsWith('---')) {
     return { yamlString: null, body: normalized };
   }
@@ -46,10 +46,10 @@ function extractFrontmatter(normalized) {
 }
 
 /**
- * @param {string} content
+ * @param content
  * @returns {{ frontmatter: Record<string, unknown>, body: string }}
  */
-function parseFrontmatter(content) {
+function parseFrontmatter(content: string) {
   const { yamlString, body } = extractFrontmatter(content.replace(/\r\n/g, '\n'));
   if (!yamlString) return { frontmatter: {}, body };
   return { frontmatter: parseYaml(yamlString) ?? {}, body };
@@ -72,10 +72,10 @@ export class SkillFrontmatterError extends Error {
  * and dates; `name`/`description` are strings, and quietly stringifying a map
  * into "[object Object]" is worse than reporting nothing.
  *
- * @param {unknown} value
+ * @param value
  * @returns {string}
  */
-function scalarString(value) {
+function scalarString(value: unknown) {
   if (typeof value === 'string') return value.trim();
   if (typeof value === 'number' || typeof value === 'boolean') {
     return String(value);
@@ -94,11 +94,11 @@ function scalarString(value) {
  * reserved character (`description: @mention ...`). A bare parser message with
  * no line does not get an operator there.
  *
- * @param {unknown} err
- * @param {string} text
+ * @param err
+ * @param text
  * @returns {string}
  */
-function describeYamlError(err, text) {
+function describeYamlError(err: unknown, text: string) {
   const detail = err instanceof Error ? err.message : String(err);
   // `yaml` reports linePos against the frontmatter block it was handed, not
   // the file, so resolve the offending line against the same slice the SDK
@@ -107,8 +107,8 @@ function describeYamlError(err, text) {
   const blockEnd = normalized.indexOf('\n---', 3);
   const block = blockEnd === -1 ? '' : normalized.slice(4, blockEnd);
   const blockLine =
-    /** @type {any} */ (err)?.linePos?.[0]?.line ??
-    /** @type {any} */ (err)?.linePos?.line ??
+    (err as any)?.linePos?.[0]?.line ??
+    (err as any)?.linePos?.line ??
     null;
   const source =
     typeof blockLine === 'number' ? block.split('\n')[blockLine - 1] : null;
@@ -136,15 +136,15 @@ function describeYamlError(err, text) {
 /**
  * Read `name` / `description` from SKILL.md frontmatter.
  *
- * @param {unknown} content
- * @param {{ strict?: boolean }} [opts]
+ * @param content
+ * @param [opts]
  *   `strict` (lifecycle install/validate) throws a specific SkillFrontmatterError
  *   on anything unusable. Non-strict (Agent Card listing) returns empty fields so
  *   a malformed package degrades to its directory name instead of breaking the
  *   whole card.
  * @returns {{ name: string, description: string, body: string }}
  */
-export function parseSkillFrontmatter(content, opts = {}) {
+export function parseSkillFrontmatter(content: unknown, opts: { strict?: boolean } = {}) {
   const strict = opts.strict === true;
   /** @param {string} message */
   const fail = (message) => {

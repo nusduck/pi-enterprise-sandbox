@@ -1,10 +1,17 @@
 {
   "$comment": [
-    "agent 正在从 JS 迁到 TS（docs/design/agent-ts-rebuild.md 阶段 C–F）。",
+    "agent 已从 JS 迁到 TS（docs/design/agent-ts-rebuild.md 阶段 C–F）。",
     "",
-    "过渡期同时容纳两种源文件：`allowJs` + `checkJs` 让尚未转换的 .js 仍受",
-    "类型检查，已转换的 .ts 按同一套宽松规则检查。**这是棘轮，不是终点**：",
-    "全部转完之后关掉 allowJs、打开 strict。",
+    "`allowJs` 仍然开着，但**只为 mysql/migrations/**：knex 在运行时按目录",
+    "扫描加载它们，且 `node dist/.../cli-migrate.js` 走的是编译产物，所以那 21",
+    "个纯 DDL 文件保持 .js。src/ 下已经没有其它 .js 了。",
+    "",
+    "`strict` 还关着——这是**已知的待办，不是终点**。实测代价（2026-08-31）：",
+    "  strict: true          964 error（其中 TS7006 隐式 any 形参 646）",
+    "  strictNullChecks only 290 error",
+    "先开哪个由后续决定；strictNullChecks 有过实绩：阶段 C 抽 health-routes 时",
+    "一个原样搬运的 `return;` 落在声明为 Promise<boolean> 的函数里，正是因为它",
+    "关着才通过了检查（详见 agent-ts-rebuild.md 阶段 C 的「两个洞」）。",
     "",
     "`noEmit` 留在这里（`tsc -p tsconfig.json` 只做检查）；出产物走",
     "`tsconfig.build.json`，它继承本文件并覆盖 noEmit/outDir。分成两份是因为",
@@ -22,5 +29,5 @@
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true
   },
-  "include": ["src/**/*.js", "src/**/*.ts", "config.js"]
+  "include": ["src/**/*.js", "src/**/*.ts", "config.ts"]
 }

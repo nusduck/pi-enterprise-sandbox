@@ -65,10 +65,10 @@ function responseHeader(response, name) {
  * Read an owner-scoped Sandbox attachment response with a hard byte limit and
  * verify the dataset hash when Sandbox provides it.
  *
- * @param {unknown} response
+ * @param response
  * @returns {Promise<{ bytes: Buffer, sha256: string }>}
  */
-export async function readSkillArchiveDownload(response) {
+export async function readSkillArchiveDownload(response: unknown) {
   if (!response || typeof response !== 'object') {
     throw new Error('Skill archive download returned no response');
   }
@@ -128,20 +128,35 @@ export async function readSkillArchiveDownload(response) {
 }
 
 /**
- * @param {{
- *   identity?: { orgId: unknown, userId: unknown } | null,
- *   skillRoots?: string[],
- *   userSkillRoot?: string | null,
- *   downloadArchive?: ((input: { attachmentId: string, signal?: AbortSignal }) => Promise<unknown>) | null,
- *   downloadWorkspaceArchive?: ((input: { path: string, signal?: AbortSignal }) => Promise<unknown>) | null,
- *   auditLogPath?: string | null,
- *   auditSink?: ((event: object) => void) | null,
- *   getMeta?: () => object,
- *   getAgentSession?: () => { reload?: () => Promise<void>, resourceLoader?: { getSkills?: () => { skills: unknown[] }, reload?: () => Promise<void> } } | null,
- *   onAfterReload?: () => Promise<void>|void,
- * }} [options]
+ * SkillManager 的构造选项。
+ *
+ * `downloadArchive` / `downloadWorkspaceArchive` 是注入的取字节通道——skill
+ * 包的字节全部由 exec 持有，这一层只拿 id 或路径去换。
  */
-export function createSkillManager(options = {}) {
+export interface SkillManagerOptions {
+  identity?: { orgId: unknown; userId: unknown } | null;
+  skillRoots?: string[];
+  userSkillRoot?: string | null;
+  downloadArchive?:
+    | ((input: { attachmentId: string; signal?: AbortSignal }) => Promise<unknown>)
+    | null;
+  downloadWorkspaceArchive?:
+    | ((input: { path: string; signal?: AbortSignal }) => Promise<unknown>)
+    | null;
+  auditLogPath?: string | null;
+  auditSink?: ((event: object) => void) | null;
+  getMeta?: () => object;
+  getAgentSession?: () => {
+    reload?: () => Promise<void>;
+    resourceLoader?: {
+      getSkills?: () => { skills: unknown[] };
+      reload?: () => Promise<void>;
+    };
+  } | null;
+  onAfterReload?: () => Promise<void> | void;
+}
+
+export function createSkillManager(options: SkillManagerOptions = {}) {
   const identity = options.identity ?? null;
   const skillRoots = normalizeSkillRoots(
     options.skillRoots || resolveSkillRoots(process.env, identity),
@@ -192,7 +207,7 @@ export function createSkillManager(options = {}) {
   }
 
   function systemSkillNames() {
-    const names = new Set();
+    const names = new Set<string>();
     for (const root of skillRoots) {
       if (userRoot && root === userRoot) continue;
       for (const name of listInstalledSkills(root)) names.add(name);
@@ -276,11 +291,10 @@ export function createSkillManager(options = {}) {
           // 非空，否则 attachmentId 非空。fetchArchive 的两个实现各只认自己
           // 那一种，所以这里断言成联合而不是让 JSDoc 去表达"取决于分支"。
           const response = await fetchArchive(
-            /** @type {any} */ (
+            ((
               fromSandbox
                 ? { path: sourcePath, signal: controller.signal }
-                : { attachmentId, signal: controller.signal }
-            ),
+                : { attachmentId, signal: controller.signal }) as any),
           );
           downloaded = await readSkillArchiveDownload(response);
         } catch (error) {

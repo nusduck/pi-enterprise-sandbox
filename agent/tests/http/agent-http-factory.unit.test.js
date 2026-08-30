@@ -16,6 +16,7 @@ import {
   mapErrorToHttp,
   presentCreateRunResponse,
 } from '../../src/bootstrap/create-http-server.ts';
+import { readSource } from '../support/read-source.js';
 import {
   OwnerScopedNotFoundError,
   ValidationError,
@@ -771,11 +772,8 @@ describe('createAgentHttpServer factory', () => {
 });
 
 describe('production import graph', () => {
-  it('server.js does not import run-manager', () => {
-    const src = readFileSync(
-      path.join(__dirname, '../../server.js'),
-      'utf8',
-    );
+  it('server entry does not import run-manager', () => {
+    const src = readSource(path.join(__dirname, '../../server.js'));
     assert.doesNotMatch(src, /from ['"].*run-manager/);
     assert.doesNotMatch(src, /application\/run-manager/);
     assert.match(src, /createAgentHttpServer|startHttpMain/);

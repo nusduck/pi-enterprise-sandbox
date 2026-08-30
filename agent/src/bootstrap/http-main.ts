@@ -382,12 +382,10 @@ export async function startHttpMain(env: NodeJS.ProcessEnv = process.env) {
       readBody,
       json,
       // Bundled skill packages (repo skills/ or container /home/sandbox/skill).
-      skillRoot:
-        env.SKILLS_ROOT ||
-        env.SYSTEM_SKILL_ROOT ||
-        config.SKILLS_ROOT ||
-        config.SYSTEM_SKILL_ROOT ||
-        '',
+      // config 上没有 SYSTEM_SKILL_ROOT 这个键（config.ts 导出的是
+      // SKILLS_ROOT / SKILL_ROOTS / DEFAULT_SKILL_ROOTS），原来那一档回落
+      // 永远是 undefined。env 侧的 SYSTEM_SKILL_ROOT 保留：它是环境变量名。
+      skillRoot: env.SKILLS_ROOT || env.SYSTEM_SKILL_ROOT || config.SKILLS_ROOT || '',
       resolveAgentMeta: async (agentId) => {
         try {
           const repos = httpServices.createRepositories(httpServices.knex);

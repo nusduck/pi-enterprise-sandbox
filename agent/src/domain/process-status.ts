@@ -23,16 +23,16 @@ const INTERNAL_PROCESS_STATUS_ALIASES = Object.freeze({
 });
 
 /**
- * @param {unknown} status
- * @param {string | null} [fallback]
+ * @param status
+ * @param [fallback]
  * @returns {string}
  */
-export function normalizeProcessStatus(status, fallback = null) {
+export function normalizeProcessStatus(status: unknown, fallback: string | null = null) {
   const raw = String(status ?? fallback ?? '').trim().toLowerCase();
   const normalized = INTERNAL_PROCESS_STATUS_ALIASES[raw] ?? raw;
   if (PUBLIC_PROCESS_STATUSES.has(normalized)) return normalized;
 
   const err = new Error(`Invalid process status: ${String(status)}`);
-  /** @type {any} */ (err).code = 'PROCESS_STATUS_INVALID';
+  (err as any).code = 'PROCESS_STATUS_INVALID';
   throw err;
 }

@@ -33,11 +33,11 @@ export function redactSecretText(value) {
  * producing an unpaired surrogate in the output. Iterating `for...of` walks
  * code points instead, so the cut always lands on a character boundary.
  *
- * @param {string} value
- * @param {number} maxLength
+ * @param value
+ * @param maxLength
  * @returns {{ text: string, truncated: boolean }}
  */
-export function safeSlice(value, maxLength) {
+export function safeSlice(value: string, maxLength: number) {
   const source = String(value ?? '');
   if (source.length <= maxLength) {
     return { text: source, truncated: false };

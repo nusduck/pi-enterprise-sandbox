@@ -24,30 +24,21 @@ const TERMINAL = new Set([
   APPROVAL_STATUS.CANCELLED,
 ]);
 
-/**
- * @param {unknown} status
- */
-export function isApprovalStatus(status) {
+export function isApprovalStatus(status: unknown) {
   return (
     typeof status === 'string' &&
-    APPROVAL_STATUSES.includes(/** @type {any} */ (status))
+    APPROVAL_STATUSES.includes((status as any))
   );
 }
 
-/**
- * @param {unknown} status
- */
-export function assertApprovalStatus(status) {
+export function assertApprovalStatus(status: unknown) {
   if (!isApprovalStatus(status)) {
     throw new Error(`Invalid approval status: ${String(status)}`);
   }
-  return /** @type {string} */ (status);
+  return (status as string);
 }
 
-/**
- * @param {string} status
- */
-export function isTerminalApprovalStatus(status) {
+export function isTerminalApprovalStatus(status: string) {
   // @ts-expect-error 未校验string传入闭合联合，运行时需窄化守卫，存活代码先用expect-error收敛 —— TS2345: Argument of type 'string' is not assignable to parameter of 
   return TERMINAL.has(status);
 }
@@ -57,16 +48,15 @@ export function isTerminalApprovalStatus(status) {
  * Policy returns block + this signal after the same transaction has moved the
  * Run to WAITING_APPROVAL. PiRunExecutor uses it to stop the current model loop
  * only after the durable pause exists.
- *
- * @typedef {{
- *   kind: 'DURABLE_APPROVAL_PENDING',
- *   approvalId: string,
- *   toolExecutionId: string,
- *   toolCallId: string,
- *   toolName: string,
- *   runId: string,
- *   status: 'PENDING',
- * }} DurableApprovalPendingSignal
  */
+export type DurableApprovalPendingSignal = {
+  kind: 'DURABLE_APPROVAL_PENDING';
+  approvalId: string;
+  toolExecutionId: string;
+  toolCallId: string;
+  toolName: string;
+  runId: string;
+  status: 'PENDING';
+};
 
 export const DURABLE_APPROVAL_PENDING = 'DURABLE_APPROVAL_PENDING';

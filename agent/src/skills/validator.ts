@@ -11,10 +11,10 @@ import { parseSkillFrontmatter } from './frontmatter.js';
  * that installs is a package the runtime can actually load. Only the enterprise
  * name policy is applied on top.
  *
- * @param {string} content
+ * @param content
  * @returns {{ name: string, description: string }}
  */
-export function parseSkillMdFrontmatter(content) {
+export function parseSkillMdFrontmatter(content: string) {
   const { name, description } = parseSkillFrontmatter(content, { strict: true });
   return {
     name: validateSkillName(name),
@@ -24,10 +24,10 @@ export function parseSkillMdFrontmatter(content) {
 
 /**
  * Validate a package directory and its SKILL.md.
- * @param {string} dir
- * @param {{ expectedName?: string }} [opts]
+ * @param dir
+ * @param [opts]
  */
-export function validateSkillPackage(dir, opts = {}) {
+export function validateSkillPackage(dir: string, opts: { expectedName?: string } = {}) {
   if (!dir || typeof dir !== 'string') {
     throw new Error('Skill package directory is required');
   }

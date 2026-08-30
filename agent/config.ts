@@ -84,9 +84,9 @@ function parseLegacyApprovalEnabled(value) {
  * Resolve the global approval policy. Default is ask. Legacy booleans map
  * true → ask and false → deny, so disabling the ask switch never broadens
  * permissions. auto_approve is explicit and intended only for development.
- * @param {NodeJS.ProcessEnv | Record<string, string|boolean|undefined>} [env]
+ * @param [env]
  */
-export function resolveApprovalMode(env = process.env) {
+export function resolveApprovalMode(env: NodeJS.ProcessEnv | Record<string, string|boolean|undefined> = process.env) {
   const explicit = nonEmptyEnv(env, 'APPROVAL_MODE') || nonEmptyEnv(env, 'SANDBOX_APPROVAL_MODE');
   if (explicit) {
     const mode = explicit.toLowerCase().replaceAll('-', '_');
@@ -107,10 +107,10 @@ export function resolveApprovalMode(env = process.env) {
 }
 
 /**
- * @param {NodeJS.ProcessEnv | Record<string, string|undefined>} [env]
+ * @param [env]
  * @returns {'development' | 'production'}
  */
-export function resolveDeploymentEnv(env = process.env) {
+export function resolveDeploymentEnv(env: NodeJS.ProcessEnv | Record<string, string|undefined> = process.env) {
   const raw = String(env.DEPLOYMENT_ENV || env.NODE_ENV || 'development')
     .trim()
     .toLowerCase();
@@ -118,10 +118,7 @@ export function resolveDeploymentEnv(env = process.env) {
   return 'development';
 }
 
-/**
- * @param {string | undefined | null} value
- */
-export function isWeakSecret(value) {
+export function isWeakSecret(value: string | undefined | null) {
   const text = String(value || '').trim();
   if (text.length < MIN_SECRET_LEN) return true;
   const lower = text.toLowerCase();
@@ -136,9 +133,9 @@ export function isWeakSecret(value) {
  * hard_deny stay in the enterprise contract and in code; this function must
  * not splice extra layers onto the returned string.
  *
- * @param {NodeJS.ProcessEnv | Record<string, string|undefined>} [env]
+ * @param [env]
  */
-export function resolveProductSystemPrompt(env = process.env) {
+export function resolveProductSystemPrompt(env: NodeJS.ProcessEnv | Record<string, string|undefined> = process.env) {
   const filePath = env.AGENT_SYSTEM_PROMPT_FILE;
   if (filePath && String(filePath).trim()) {
     const path = String(filePath).trim();
@@ -154,9 +151,9 @@ export function resolveProductSystemPrompt(env = process.env) {
 
 /**
  * Production fail-fast for Agent service. Call before listen.
- * @param {NodeJS.ProcessEnv | Record<string, string|undefined>} [env]
+ * @param [env]
  */
-export function validateProductionConfig(env = process.env) {
+export function validateProductionConfig(env: NodeJS.ProcessEnv | Record<string, string|undefined> = process.env) {
   if (resolveDeploymentEnv(env) !== 'production') return;
 
   const errors = [];
@@ -281,9 +278,9 @@ export function validateProductionConfig(env = process.env) {
 
 /**
  * Redacted effective config for INFO logs (never tokens/secrets/full prompt).
- * @param {typeof config} [cfg]
+ * @param [cfg]
  */
-export function effectiveConfig(cfg = config) {
+export function effectiveConfig(cfg: typeof config = config) {
   return {
     PORT: cfg.PORT,
     RUN_INITIALIZATION_TIMEOUT_MS: cfg.RUN_INITIALIZATION_TIMEOUT_MS,
@@ -350,9 +347,9 @@ export const DEFAULT_TOOL_RISK_POLICY_PATH = fileURLToPath(
  * throws at startup — a silently empty risk table would downgrade every
  * configured approval gate to its built-in default.
  *
- * @param {NodeJS.ProcessEnv | Record<string, string|undefined>} [env]
+ * @param [env]
  */
-export function resolveToolRiskPolicy(env = process.env) {
+export function resolveToolRiskPolicy(env: NodeJS.ProcessEnv | Record<string, string|undefined> = process.env) {
   const inline = env.TOOL_RISK_POLICY_JSON;
   if (inline != null && String(inline).trim() !== '') {
     try {

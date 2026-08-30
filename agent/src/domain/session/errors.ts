@@ -3,13 +3,16 @@
  * State machine never writes storage; callers map these to application errors.
  */
 
+/** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
+type Loose = any;
+
 export class InvalidSessionTransitionError extends Error {
-  /**
-   * @param {string} from
-   * @param {string} to
-   * @param {string} [message]
-   */
-  constructor(from, to, message) {
+  // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
+  code: string;
+  from: Loose;
+  to: Loose;
+
+  constructor(from: string, to: string, message?: string) {
     super(
       message ??
         `Invalid session transition: ${String(from)} → ${String(to)} (plan §11)`,
@@ -22,11 +25,11 @@ export class InvalidSessionTransitionError extends Error {
 }
 
 export class InvalidSessionStatusError extends Error {
-  /**
-   * @param {unknown} status
-   * @param {string} [message]
-   */
-  constructor(status, message) {
+  // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
+  code: string;
+  status: Loose;
+
+  constructor(status: unknown, message?: string) {
     super(
       message ??
         `Invalid session status: ${String(status)} (expected plan §11 uppercase)`,
@@ -38,11 +41,13 @@ export class InvalidSessionStatusError extends Error {
 }
 
 export class SessionFenceConflictError extends Error {
-  /**
-   * @param {string} message
-   * @param {{ agentSessionId?: string, expectedToken?: number, actualToken?: number | null }} [meta]
-   */
-  constructor(message, meta = {}) {
+  // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
+  code: string;
+  agentSessionId: Loose;
+  expectedToken: Loose;
+  actualToken: Loose;
+
+  constructor(message: string, meta: { agentSessionId?: string, expectedToken?: number, actualToken?: number | null } = {}) {
     super(message);
     this.name = 'SessionFenceConflictError';
     this.code = 'SESSION_FENCE_CONFLICT';
@@ -53,11 +58,12 @@ export class SessionFenceConflictError extends Error {
 }
 
 export class SessionSnapshotError extends Error {
-  /**
-   * @param {string} message
-   * @param {{ code?: string, agentSessionId?: string, snapshotVersion?: number | null }} [meta]
-   */
-  constructor(message, meta = {}) {
+  // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
+  code: Loose;
+  agentSessionId: Loose;
+  snapshotVersion: Loose;
+
+  constructor(message: string, meta: { code?: string, agentSessionId?: string, snapshotVersion?: number | null } = {}) {
     super(message);
     this.name = 'SessionSnapshotError';
     this.code = meta.code ?? 'SESSION_SNAPSHOT_ERROR';
@@ -72,8 +78,13 @@ export class SessionSnapshotError extends Error {
  * side effects.
  */
 export class SessionRecoveryRequiredError extends Error {
+  // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
+  code: Loose;
+  agentSessionId: Loose;
+  recoveryReasonCode: Loose;
+
   /**
-   * @param {string} message
+   * @param message
    * @param {{
    *   code?: string,
    *   agentSessionId?: string,
@@ -81,7 +92,7 @@ export class SessionRecoveryRequiredError extends Error {
    *   cause?: unknown,
    * }} [meta]
    */
-  constructor(message, meta = {}) {
+  constructor(message: string, meta: { code?: string, agentSessionId?: string, recoveryReasonCode?: string | null, cause?: unknown, } = {}) {
     super(
       message,
       meta.cause !== undefined ? { cause: meta.cause } : undefined,
@@ -97,8 +108,13 @@ export class SessionRecoveryRequiredError extends Error {
  * Pi JSONL journal append / load failures (idempotency hash conflict, scope).
  */
 export class SessionJournalError extends Error {
+  // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
+  code: Loose;
+  agentSessionId: Loose;
+  piEntryId: Loose;
+
   /**
-   * @param {string} message
+   * @param message
    * @param {{
    *   code?: string,
    *   agentSessionId?: string,
@@ -106,7 +122,7 @@ export class SessionJournalError extends Error {
    *   cause?: unknown,
    * }} [meta]
    */
-  constructor(message, meta = {}) {
+  constructor(message: string, meta: { code?: string, agentSessionId?: string, piEntryId?: string | null, cause?: unknown, } = {}) {
     super(
       message,
       meta.cause !== undefined ? { cause: meta.cause } : undefined,
