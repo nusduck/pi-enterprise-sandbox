@@ -26,7 +26,9 @@
 
 import { RUN_STATUS, runStateMachine } from '../domain/run/index.js';
 import { assertUlid, isLegacyOrUuidIdentity } from '../domain/shared/ulid.js';
-import { ExternalIdentityResolver } from './parent/external-identity-resolver.js';
+import { ExternalIdentityResolver,
+  type ExternalAuth,
+} from './parent/external-identity-resolver.js';
 import { applyRunTransitionInTxn } from './run-transition.js';
 import { terminalizeParkedWaitingApprovalInTxn } from './parked-approval-cancel.js';
 import { terminalizeParkedWaitingInputInTxn } from './parked-interaction-cancel.js';
@@ -35,25 +37,36 @@ import {
   ValidationError,
 } from './errors.js';
 
+/** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
+type Loose = any;
+
 /**
- * @typedef {{
- *   runId: string,
- *   status: string,
- *   cancelRequested: boolean,
- *   cancelRequestedAt: string | null,
- *   transitionedToCancelling: boolean,
- *   signalPending: boolean,
- *   terminal: boolean,
- *   cancelledDescendants: string[],
- * }} CancelRunResponse
- *
  * `cancelledDescendants` is the sub-agent subtree this cancel also stopped.
  * Each child additionally emits its own `run.status.changed` / `run.cancelled`
  * events; the list is what lets a caller correlate them without first digging
  * the child ids out of the parent's tool results.
  */
+export type CancelRunResponse = {
+  runId: string;
+  status: string;
+  cancelRequested: boolean;
+  cancelRequestedAt: string | null;
+  transitionedToCancelling: boolean;
+  signalPending: boolean;
+  terminal: boolean;
+  cancelledDescendants: string[];
+};
 
 export class CancelRunService {
+  // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
+  tx: Loose;
+  createRepositories: Loose;
+  cancelSignal: Loose;
+  generateId: Loose;
+  now: Loose;
+  stateMachine: Loose;
+  defaultProvider: Loose;
+
   /**
    * `createRepositories` 里的 interactions / toolExecutions 本服务不直接读：
    * 取消一个 parked WAITING_INPUT 时整个 bundle 会透传给
@@ -113,10 +126,10 @@ export class CancelRunService {
    * still surface the error: the caller learns the cancel did not complete,
    * while the Run is already condemned.
    *
-   * @param {string} runId
-   * @param {{ auth: object, reason?: string | null }} input
+   * @param runId
+   * @param input
    */
-  async #commitCancel(runId, input) {
+  async #commitCancel(runId: string, input: { auth: ExternalAuth, reason?: string | null }) {
     try {
       return await this.#cancelInTxn(runId, input);
     } catch (err) {
@@ -134,10 +147,10 @@ export class CancelRunService {
    * Durable cancel intent with no status transition, in its own short
    * transaction. Idempotent by construction (first-writer-wins).
    *
-   * @param {string} runId
-   * @param {{ auth: object, reason?: string | null }} input
+   * @param runId
+   * @param input
    */
-  async #recordIntentOnly(runId, input) {
+  async #recordIntentOnly(runId: string, input: { auth: ExternalAuth, reason?: string | null }) {
     return this.tx.run(async (trx) => {
       const repos = this.createRepositories(trx);
       const resolver = new ExternalIdentityResolver(
@@ -159,11 +172,7 @@ export class CancelRunService {
     });
   }
 
-  /**
-   * @param {string} runId
-   * @param {{ auth: object, reason?: string | null }} input
-   */
-  async #cancelInTxn(runId, input) {
+  async #cancelInTxn(runId: string, input: { auth: ExternalAuth, reason?: string | null }) {
     return this.tx.run(async (trx) => {
       const repos = this.createRepositories(trx);
       const resolver = new ExternalIdentityResolver(
@@ -204,8 +213,7 @@ export class CancelRunService {
         const orphans = await repos.runs.listDescendants(runId, scope, {
           onlyNonTerminal: true,
         });
-        /** @type {string[]} */
-        const cancelledOrphans = [];
+        const cancelledOrphans: string[] = [];
         for (const child of orphans) {
           await repos.runs.setCancelIntent(child.runId, scope, {
             reason: input.reason ?? `parent run ${runId} is ${run.status}`,
@@ -312,8 +320,7 @@ export class CancelRunService {
       const descendants = await repos.runs.listDescendants(runId, scope, {
         onlyNonTerminal: true,
       });
-      /** @type {string[]} */
-      const cancelledDescendants = [];
+      const cancelledDescendants: string[] = [];
       for (const child of descendants) {
         // First-writer-wins and idempotent: a child the user already cancelled
         // keeps its original reason and requester.
@@ -351,7 +358,7 @@ export class CancelRunService {
    * }} input
    * @returns {Promise<CancelRunResponse>}
    */
-  async execute(input) {
+  async execute(input: { runId: string, auth: { provider?: string, externalOrgId: string, externalUserId: string, }, reason?: string | null, }) {
     if (!input || typeof input !== 'object') {
       throw new ValidationError('CancelRun input is required');
     }

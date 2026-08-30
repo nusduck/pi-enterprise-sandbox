@@ -142,7 +142,7 @@ export function buildAgentVersionToolRiskBindings(agentVersion: unknown, mcpBind
     decisions[key] = value;
   }
 
-    const riskRaw: Record<string, unknown> = {};
+  const riskRaw: Record<string, unknown> = {};
   if (toolPolicy.riskLevels != null) riskRaw.tools = toolPolicy.riskLevels;
   if (toolPolicy.riskApproval != null) riskRaw.riskApproval = toolPolicy.riskApproval;
   if (toolPolicy.classRiskLevels != null) {

@@ -100,7 +100,7 @@ export function canonicalizeForJsonl(value: unknown, stack: WeakSet<Record<strin
     }
     if (!isPlainObject(value)) {
       const keys = Object.keys((value as Record<string, any>)).sort();
-            const out: Record<string, unknown> = {};
+  const out: Record<string, unknown> = {};
       for (const k of keys) {
         const v = (value as Record<string, unknown>)[k];
         if (v === undefined) continue;
@@ -108,7 +108,7 @@ export function canonicalizeForJsonl(value: unknown, stack: WeakSet<Record<strin
       }
       return out;
     }
-        const out: Record<string, unknown> = {};
+  const out: Record<string, unknown> = {};
     for (const k of Object.keys((value as Record<string, any>)).sort()) {
       const v = (value as Record<string, unknown>)[k];
       if (v === undefined) continue;
@@ -200,7 +200,7 @@ export function validateHeader(header: unknown) {
  */
 export function isAncestorOrSelf(nodeId: string, ancestorId: string, parentOf: Map<string, string | null>) {
   if (nodeId === ancestorId) return true;
-    const seen: Set<string> = new Set();
+  const seen: Set<string> = new Set();
   let cur = (nodeId as string | null | undefined);
   while (cur != null) {
     if (cur === ancestorId) return true;
@@ -221,7 +221,7 @@ export function isAncestorOrSelf(nodeId: string, ancestorId: string, parentOf: M
  */
 export function findLeafEntryId(entries: Array<{ id: string, parentId?: string | null }>) {
   if (!Array.isArray(entries) || entries.length === 0) return null;
-    const usedAsParent: Set<string> = new Set();
+  const usedAsParent: Set<string> = new Set();
   for (const e of entries) {
     if (e && e.parentId != null && typeof e.parentId === 'string') {
       usedAsParent.add(e.parentId);
@@ -249,9 +249,9 @@ export function findLeafEntryId(entries: Array<{ id: string, parentId?: string |
  * @returns {Record<string, unknown>[]}
  */
 export function validateEntries(entries: unknown[]) {
-    const out: Record<string, unknown>[] = [];
-    const seenIds: Set<string> = new Set();
-    const parentOf: Map<string, string | null> = new Map();
+  const out: Record<string, unknown>[] = [];
+  const seenIds: Set<string> = new Set();
+  const parentOf: Map<string, string | null> = new Map();
   let nullRootSeen = false;
 
   for (let i = 0; i < entries.length; i += 1) {
@@ -461,7 +461,7 @@ export function parseAndValidateJsonl(jsonlText: string) {
       code: 'PI_JSONL_PARSE_ERROR',
     });
   }
-    const parsed: unknown[] = [];
+  const parsed: unknown[] = [];
   for (let i = 0; i < lines.length; i += 1) {
     try {
       parsed.push(JSON.parse(lines[i]));

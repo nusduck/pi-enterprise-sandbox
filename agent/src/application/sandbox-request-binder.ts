@@ -169,7 +169,7 @@ export class SandboxRequestBinder {
       'sandboxSessionId',
     );
 
-        let out: any = null;
+    let out: any = null;
 
     await this.tx.run(async (trx) => {
       const repos = this.createRepositories(trx);
@@ -179,7 +179,7 @@ export class SandboxRequestBinder {
         );
       }
 
-            const bindInput: Record<string, unknown> = {
+      const bindInput: Record<string, unknown> = {
         runId,
         toolCallId,
         toolName,

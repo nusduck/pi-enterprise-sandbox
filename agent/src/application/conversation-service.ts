@@ -11,12 +11,17 @@ import {
   ValidationError,
 } from './errors.js';
 import { RunParentProvisioner } from './parent/run-parent-provisioner.js';
-import { ExternalIdentityResolver } from './parent/external-identity-resolver.js';
+import { ExternalIdentityResolver,
+  type ExternalAuth,
+} from './parent/external-identity-resolver.js';
 import { assertUlid, isUlid } from '../domain/shared/ulid.js';
 import {
   conversationTitleFromMessages,
   isPlaceholderConversationTitle,
 } from './conversation-title.js';
+
+/** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
+type Loose = any;
 
 const MAX_CREATE_ATTEMPTS = 3;
 
@@ -124,11 +129,11 @@ export function presentTranscriptMessage(msg) {
  * sandbox_session_id for dataset/artifact list/upload; leaving it null
  * forces every `/api/conversations/:id/datasets` call to 400/404.
  *
- * @param {object} row
- * @param {object[]} [messages]
- * @param {{ sandboxSessionId?: string|null, workspaceId?: string|null, agentSessionId?: string|null } | null} [session]
+ * @param row
+ * @param [messages]
+ * @param [session]
  */
-export function presentConversation(row, messages = [], session = null) {
+export function presentConversation(row: Record<string, any>, messages: Record<string, any>[] = [], session: { sandboxSessionId?: string|null, workspaceId?: string|null, agentSessionId?: string|null } | null = null) {
   const transcript = Array.isArray(messages)
     ? messages.map(presentTranscriptMessage).filter(Boolean)
     : [];
@@ -155,6 +160,16 @@ export function presentConversation(row, messages = [], session = null) {
 }
 
 export class ConversationService {
+  // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
+  tx: Loose;
+  createRepositories: Loose;
+  db: Loose;
+  generateId: Loose;
+  now: Loose;
+  sessionProvisioner: Loose;
+  createSandboxClient: Loose;
+  logger: Loose;
+
   /**
    * @param {{
  *   transactionManager: { run: Function },
@@ -167,7 +182,7 @@ export class ConversationService {
  *   logger?: { error: Function },
  * }} deps
    */
-  constructor(deps) {
+  constructor(deps: { transactionManager: { run: Function }, createRepositories: (db: any) => any, db: any, generateId: () => string, now?: () => Date, sessionProvisioner?: { ensure: Function } | null, createSandboxClient?: (opts: { auth?: Record<string, any> }) => { removeSessionWorkspace: Function } | null, logger?: { error: Function }, }) {
     if (!deps?.transactionManager || typeof deps.transactionManager.run !== 'function') {
       throw new Error('ConversationService requires transactionManager');
     }
@@ -202,11 +217,11 @@ export class ConversationService {
    * Resolve the current AgentSession for a conversation when the pointer is set.
    * Best-effort: list/get still succeed if the session row is missing.
    *
-   * @param {object} repos
-   * @param {object} row conversation row
-   * @param {{ orgId: string, userId: string }} owner
+   * @param repos
+   * @param row conversation row
+   * @param owner
    */
-  async #sessionForConversation(repos, row, owner) {
+  async #sessionForConversation(repos: Record<string, any>, row: Record<string, any>, owner: { orgId: string, userId: string }) {
     const agentSessionId = row?.currentAgentSessionId ?? null;
     if (!agentSessionId || typeof repos.sessions?.getById !== 'function') {
       return null;
@@ -218,7 +233,7 @@ export class ConversationService {
     }
   }
 
-  async list(auth, opts = {}) {
+  async list(auth: ExternalAuth, opts: { limit?: number } = {}) {
     const repos = this.createRepositories(this.db);
     let owner;
     try {
@@ -396,11 +411,11 @@ export class ConversationService {
    * to a just-archived conversation. Never throws: logs and continues so one
    * unreachable/failing session never blocks cleanup of the others, and
    * Sandbox being down never surfaces as a failed conversation delete.
-   * @param {object} auth
-   * @param {{ orgId: string, userId: string } | null} owner
-   * @param {Array<{ sandboxSessionId: string }>} sessions
+   * @param auth
+   * @param owner
+   * @param sessions
    */
-  async #cleanupSandboxWorkspaces(auth, owner, sessions) {
+  async #cleanupSandboxWorkspaces(auth: ExternalAuth, owner: { orgId: string, userId: string } | null, sessions: Array<{ sandboxSessionId: string }>) {
     if (!owner || !sessions?.length || typeof this.createSandboxClient !== 'function') {
       return;
     }
@@ -536,10 +551,10 @@ export class ConversationService {
    * owner ids are internal ULIDs and are intended only for the BFF-to-Sandbox
    * server hop; callers must not expose them to browsers or A2A clients.
    *
-   * @param {{ provider?: string, externalOrgId: string, externalUserId: string }} auth
-   * @param {string} sandboxSessionId
+   * @param auth
+   * @param sandboxSessionId
    */
-  async resolveSandboxSession(auth, sandboxSessionId) {
+  async resolveSandboxSession(auth: { provider?: string, externalOrgId: string, externalUserId: string }, sandboxSessionId: string) {
     if (!isUlid(sandboxSessionId)) {
       throw new ValidationError('sandboxSessionId must be a ULID');
     }

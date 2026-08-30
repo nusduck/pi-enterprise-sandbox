@@ -92,7 +92,7 @@ export function omitNullFields(value: unknown) {
     return value.map((item) => omitNullFields(item));
   }
   if (!value || typeof value !== 'object') return value;
-    const out: Record<string, unknown> = {};
+  const out: Record<string, unknown> = {};
   for (const [key, child] of Object.entries(value)) {
     if (child == null) continue;
     out[key] = omitNullFields(child);

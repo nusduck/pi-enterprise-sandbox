@@ -344,7 +344,6 @@ export class OutboxRepository {
     const elig = buildEligibilitySql(eligibility);
     const eligibilitySql = elig.sql ? ` AND ${elig.sql}` : '';
 
-    // @ts-expect-error knex Raw重载不匹配，参数已保证为string[] —— TS2769: No overload matches this call.
     const result = await executor.raw(
       `UPDATE domain_outbox
        SET status = ?,
@@ -514,7 +513,6 @@ export class OutboxRepository {
          ${eligibilitySql}
        ORDER BY created_at ASC
        LIMIT ?`,
-      // @ts-expect-error knex Raw重载不匹配，参数已保证为string[] —— TS2769: No overload matches this call.
       [OUTBOX_STATUS.PENDING, nowSql, ...elig.bindings, limit],
     );
     return parseRawSelectRows(result).map(mapDomainOutbox);
@@ -572,7 +570,6 @@ export class OutboxRepository {
        ${eligibilitySql}
        ORDER BY created_at ASC
        LIMIT ?`,
-      // @ts-expect-error knex Raw重载不匹配，参数已保证为string[] —— TS2769: No overload matches this call.
       [
         OUTBOX_STATUS.PENDING,
         nowSql,

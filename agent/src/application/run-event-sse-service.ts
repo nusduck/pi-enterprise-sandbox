@@ -27,6 +27,10 @@ import {
   projectRunEventToSseEnvelope,
   RunEventQueryService,
 } from './run-event-query-service.js';
+import type { ExternalAuth } from './parent/external-identity-resolver.js';
+
+/** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
+type Loose = any;
 
 /** Default live poll when Redis is absent or failed (ms). */
 export const DEFAULT_SSE_POLL_MS = 400;
@@ -42,12 +46,9 @@ export const DEFAULT_MYSQL_OPEN_RETRY_ATTEMPTS = 3;
 /**
  * Abort-safe sleep. Always removes the abort listener on normal timeout or abort.
  *
- * @param {number} ms
- * @param {AbortSignal} [signal]
- * @returns {Promise<void>}
  */
-export function sleepMs(ms, signal) {
-  return new Promise((resolve, reject) => {
+export function sleepMs(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
     if (signal?.aborted) {
       const err = new Error('aborted');
       err.name = 'AbortError';
@@ -55,8 +56,7 @@ export function sleepMs(ms, signal) {
       return;
     }
     let settled = false;
-    /** @type {ReturnType<typeof setTimeout> | null} */
-    let timer = null;
+    let timer: ReturnType<typeof setTimeout> | null = null;
     const cleanup = () => {
       if (timer != null) {
         clearTimeout(timer);
@@ -106,7 +106,7 @@ export function sleepMs(ms, signal) {
  * }} opts
  * @returns {Promise<'drained' | 'closed' | 'aborted'>}
  */
-export function waitForWritableResume(opts = {}) {
+export function waitForWritableResume(opts: { waitDrain?: () => Promise<'drained' | 'closed' | 'aborted'>, stream?: { once?: Function, on?: Function, off?: Function, removeListener?: Function, writableEnded?: boolean, destroyed?: boolean, }, signal?: AbortSignal | null, isClosed?: () => boolean, } = {}) {
   if (typeof opts.waitDrain === 'function') {
     return Promise.resolve(opts.waitDrain()).then((r) => {
       if (r === 'drained' || r === 'closed' || r === 'aborted') return r;
@@ -174,10 +174,10 @@ export function waitForWritableResume(opts = {}) {
  * Format one SSE frame. Named `event:` line is advisory; clients that only
  * parse `data:` remain compatible.
  *
- * @param {{ sequence: number, event: object, ts?: number, eventId?: string, event_id?: string }} envelope
+ * @param envelope
  * @returns {string}
  */
-export function formatSseDataFrame(envelope) {
+export function formatSseDataFrame(envelope: { sequence: number, event: Record<string, any>, ts?: number, eventId?: string, event_id?: string }) {
   const eventId = envelope.event_id || envelope.event?.event_id || null;
   const type = envelope.event?.type || 'message';
   const id = eventId != null && String(eventId) ? String(eventId) : String(envelope.sequence);
@@ -187,19 +187,19 @@ export function formatSseDataFrame(envelope) {
 
 /**
  * Heartbeat frame (plan §18.4).
- * @param {string} [timestampIso]
+ * @param [timestampIso]
  * @returns {string}
  */
-export function formatSsePingFrame(timestampIso = new Date().toISOString()) {
+export function formatSsePingFrame(timestampIso: string = new Date().toISOString()) {
   return `event: ping\ndata: ${JSON.stringify({ timestamp: timestampIso })}\n\n`;
 }
 
 /**
  * Terminal end frame.
- * @param {string} status
+ * @param status
  * @returns {string}
  */
-export function formatSseEndFrame(status) {
+export function formatSseEndFrame(status: string) {
   return `event: end\ndata: ${JSON.stringify({ status })}\n\n`;
 }
 
@@ -207,10 +207,16 @@ export function formatSseEndFrame(status) {
  * Project a Redis stream entry to the same SSE envelope as MySQL rows.
  * Sequence/type/payload come from stream fields; Redis is never status authority.
  *
- * @param {{ eventId?: string, sequence?: string|number, type?: string, payload?: string, createdAt?: string }} entry
+ * @param entry
  * @returns {{ sequence: number, event: object, ts: number, event_id?: string } | null}
  */
-export function projectRedisStreamToSseEnvelope(entry) {
+export function projectRedisStreamToSseEnvelope(entry: {
+    eventId?: string;
+    sequence?: string | number;
+    type?: string;
+    payload?: string | Record<string, unknown>;
+    createdAt?: string;
+  }) {
   const sequence = Number(entry?.sequence);
   if (!Number.isSafeInteger(sequence) || sequence < 0) return null;
 
@@ -225,7 +231,6 @@ export function projectRedisStreamToSseEnvelope(entry) {
       payload = {};
     }
   } else if (entry.payload && typeof entry.payload === 'object') {
-    // @ts-expect-error 展开类型非对象，运行时已保证为对象 —— TS2698: Spread types may only be created from object types.
     payload = { ...entry.payload };
   }
 
@@ -258,7 +263,7 @@ export function projectRedisStreamToSseEnvelope(entry) {
  * }} input
  * @returns {Promise<number>}
  */
-export async function resolveSseAfterSequence(input) {
+export async function resolveSseAfterSequence(input: { afterSequence?: number|string|null, lastEventId?: string|null, resolveEventSequence?: (eventId: string) => Promise<number|null>, }) {
   let after = Math.max(0, Number(input.afterSequence) || 0);
 
   const last = input.lastEventId != null ? String(input.lastEventId).trim() : '';
@@ -281,17 +286,29 @@ export async function resolveSseAfterSequence(input) {
 }
 
 /**
- * @param {object} envelope
- * @param {number} lastEmitted
+ * @param envelope
+ * @param lastEmitted
  * @returns {boolean}
  */
-export function shouldEmitSequence(envelope, lastEmitted) {
+export function shouldEmitSequence(envelope: Record<string, any>, lastEmitted: number) {
   const seq = Number(envelope?.sequence);
   if (!Number.isSafeInteger(seq) || seq < 0) return false;
   return seq > lastEmitted;
 }
 
 export class RunEventSseService {
+  // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
+  eventQuery: Loose;
+  runEventStream: Loose;
+  pollMs: Loose;
+  heartbeatMs: Loose;
+  mysqlCatchupMs: Loose;
+  mysqlOpenRetryAttempts: Loose;
+  mysqlOpenRetryMs: Loose;
+  historyPageSize: Loose;
+  now: Loose;
+  sleep: Loose;
+
   /**
    * @param {{
    *   eventQueryService: RunEventQueryService | { listEvents: Function, resolveEventSequence?: Function },
@@ -306,7 +323,7 @@ export class RunEventSseService {
    *   sleep?: (ms: number, signal?: AbortSignal) => Promise<void>,
    * }} deps
    */
-  constructor(deps) {
+  constructor(deps: { eventQueryService: RunEventQueryService | { listEvents: Function, resolveEventSequence?: Function }, runEventStream?: { readAfter: Function } | null, pollMs?: number, heartbeatMs?: number, mysqlCatchupMs?: number, mysqlOpenRetryAttempts?: number, mysqlOpenRetryMs?: number, historyPageSize?: number, now?: () => number, sleep?: (ms: number, signal?: AbortSignal) => Promise<void>, }) {
     if (!deps?.eventQueryService || typeof deps.eventQueryService.listEvents !== 'function') {
       throw new Error('RunEventSseService requires eventQueryService.listEvents');
     }
@@ -337,7 +354,7 @@ export class RunEventSseService {
    * }} input
    * @returns {Promise<number>}
    */
-  async resolveCursor(input) {
+  async resolveCursor(input: { runId: string, auth: ExternalAuth, afterSequence?: number, lastEventId?: string|null, }) {
     const resolveEventSequence =
       typeof this.eventQuery.resolveEventSequence === 'function'
         ? (eventId) =>
@@ -379,7 +396,7 @@ export class RunEventSseService {
    * }} sinks
    * @returns {Promise<{ lastSequence: number, status: string|null, mode: string }>}
    */
-  async openStream(input, sinks) {
+  async openStream(input: { runId: string, auth: ExternalAuth, afterSequence?: number, lastEventId?: string|null, }, sinks: { write: (chunk: string) => boolean | void | Promise<boolean | void>, waitDrain?: () => Promise<'drained' | 'closed' | 'aborted'>, stream?: Record<string, any>, isClosed: () => boolean, signal?: AbortSignal, }) {
     const { write, isClosed, signal } = sinks;
     let lastEmitted = await this.resolveCursor(input);
     let status = null;
@@ -417,7 +434,6 @@ export class RunEventSseService {
       let ok;
       try {
         ok = write(frame);
-        // @ts-expect-error 遗留JS占位类型object未展开，访问then需收窄，存活代码先用expect-error收敛 —— TS2339: Property 'then' does not exist on type 'boolean | void | Pro
         if (ok != null && typeof ok.then === 'function') {
           ok = await ok;
         }
@@ -446,7 +462,6 @@ export class RunEventSseService {
       let ok;
       try {
         ok = write(frame);
-        // @ts-expect-error 遗留JS占位类型object未展开，访问then需收窄，存活代码先用expect-error收敛 —— TS2339: Property 'then' does not exist on type 'boolean | void | Pro
         if (ok != null && typeof ok.then === 'function') {
           ok = await ok;
         }
@@ -516,9 +531,8 @@ export class RunEventSseService {
 
     /**
      * Drain MySQL page(s) after lastEmitted. Awaits backpressure per event.
-     * @param {{ maxPages?: number }} [opts]
      */
-    const drainMysql = async (opts = {}) => {
+    const drainMysql = async (opts: { maxPages?: number } = {}) => {
       const maxPages = opts.maxPages ?? 50;
       let pages = 0;
       let terminal = false;
@@ -596,7 +610,6 @@ export class RunEventSseService {
         if (env.sequence === lastEmitted + 1) {
           // eslint-disable-next-line no-await-in-loop
           if (!(await emitEnvelope(env))) {
-            // @ts-expect-error 对象字面量存在未知属性，类型定义待对齐 —— TS2353: Object literal may only specify known properties, and 'abort
             return { sawWork, needMysqlCatchup: false, aborted: true };
           }
           sawWork = true;
@@ -608,7 +621,6 @@ export class RunEventSseService {
       if (needMysqlCatchup) {
         const gap = await drainMysql({ maxPages: 100 });
         if (gap.aborted) {
-          // @ts-expect-error 对象字面量存在未知属性，类型定义待对齐 —— TS2353: Object literal may only specify known properties, and 'abort
           return { sawWork, needMysqlCatchup: true, aborted: true };
         }
         for (const entry of entries) {
@@ -617,7 +629,6 @@ export class RunEventSseService {
           if (env && env.sequence === lastEmitted + 1) {
             // eslint-disable-next-line no-await-in-loop
             if (!(await emitEnvelope(env))) {
-              // @ts-expect-error 对象字面量存在未知属性，类型定义待对齐 —— TS2353: Object literal may only specify known properties, and 'abort
               return { sawWork: true, needMysqlCatchup: true, aborted: true };
             }
             sawWork = true;
@@ -626,7 +637,6 @@ export class RunEventSseService {
           }
         }
       }
-      // @ts-expect-error 对象字面量存在未知属性，类型定义待对齐 —— TS2353: Object literal may only specify known properties, and 'abort
       return { sawWork, needMysqlCatchup, aborted: false };
     };
 
@@ -670,7 +680,6 @@ export class RunEventSseService {
           });
           if (live.length > 0) {
             const applied = await applyRedisEntries(live);
-            // @ts-expect-error 遗留JS占位类型object未展开，访问aborted需收窄，存活代码先用expect-error收敛 —— TS2339: Property 'aborted' does not exist on type '{ sawWork: boolea
             if (applied.aborted) break;
             sawWork = sawWork || applied.sawWork;
           }

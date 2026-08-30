@@ -217,8 +217,8 @@ export class FencedRunEventRecorder {
       return { kind: ('join' as const), promise: pending };
     }
 
-        const gate: { resolve: (v: CanonicalRunEventEnvelope | null) => void } = { resolve: () => {} };
-        const promise: Promise<CanonicalRunEventEnvelope | null> = new Promise((resolve) => {
+    const gate: { resolve: (v: CanonicalRunEventEnvelope | null) => void } = { resolve: () => {} };
+    const promise: Promise<CanonicalRunEventEnvelope | null> = new Promise((resolve) => {
       gate.resolve = resolve;
     });
     this._pendingDedupe.set(key, promise);
@@ -288,7 +288,7 @@ export class FencedRunEventRecorder {
       const eventId = assertUlid(this.generateId(), 'eventId');
       const outboxId = assertUlid(this.generateId(), 'outboxId');
 
-            let envelope: CanonicalRunEventEnvelope | null = null;
+      let envelope: CanonicalRunEventEnvelope | null = null;
 
       await this.tx.run(async (trx) => {
         const repos = this.createRepositories(trx);
@@ -398,7 +398,7 @@ export class FencedRunEventRecorder {
    * @returns {Promise<Array<CanonicalRunEventEnvelope>>}
    */
   async recordProjected(projected: Array<{ type: string, payload?: Record<string, unknown> }>, opts: { dedupeKeyFor?: (ev: { type: string, payload?: Record<string, any> }) => string | null } = {}) {
-        const out: CanonicalRunEventEnvelope[] = [];
+    const out: CanonicalRunEventEnvelope[] = [];
     for (const ev of projected || []) {
       if (!ev?.type) continue;
       const payload =

@@ -33,11 +33,18 @@ import { sanitizeStatusReason } from './sanitize-status-reason.js';
 import { formatStoredTraceCarrier } from '../infrastructure/telemetry.js';
 import { terminalizeParkedWaitingApprovalInTxn } from './parked-approval-cancel.js';
 import { terminalizeParkedWaitingInputInTxn } from './parked-interaction-cancel.js';
-import { recoverParkedCancel } from './run-recovery-parked-cancel.js';
+import {
+  recoverParkedCancel,
+  type RecoveryActionBase,
+  type RecoveryActionKind,
+} from './run-recovery-parked-cancel.js';
 import {
   APPROVAL_STATUS,
   isTerminalApprovalStatus,
 } from '../domain/tool/approval-status.js';
+
+/** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
+type Loose = any;
 
 // Membership checks below (.has()/.includes()) run against a `String(run.status)`
 // that has already been widened away from its literal union, so the sets/arrays
@@ -45,46 +52,45 @@ import {
 // literal unions `TOOL_EXECUTION_STATUS`/`RUN_STATUS` would otherwise infer.
 // Membership testing is safe for any string value (an unknown status just
 // yields `false`), so this is a type-only widening, not a behavior change.
-/** @type {Set<string>} */
-const REPLAY_SAFE_TOOL_STATUSES = new Set([
+const REPLAY_SAFE_TOOL_STATUSES: Set<string> = new Set([
   TOOL_EXECUTION_STATUS.SUCCEEDED,
   TOOL_EXECUTION_STATUS.FAILED,
   TOOL_EXECUTION_STATUS.CANCELLED,
 ]);
 
-/** Statuses that recovery will re-enqueue.
- * @type {readonly string[]} */
-export const RECOVERY_ENQUEUE_STATUSES = Object.freeze([
+/** Statuses that recovery will re-enqueue. */
+export const RECOVERY_ENQUEUE_STATUSES: readonly string[] = Object.freeze([
   RUN_STATUS.ACCEPTED,
   RUN_STATUS.QUEUED,
   RUN_STATUS.RETRYING,
 ]);
 
-/** Statuses that require lease + durable tool-ledger reconciliation.
- * @type {readonly string[]} */
-export const RECOVERY_RECONCILE_STATUSES = Object.freeze([
+/** Statuses that require lease + durable tool-ledger reconciliation. */
+export const RECOVERY_RECONCILE_STATUSES: readonly string[] = Object.freeze([
   RUN_STATUS.STARTING,
   RUN_STATUS.RUNNING,
 ]);
 
 /**
- * @typedef {{
- *   runId: string,
- *   orgId: string,
- *   traceId: string,
- *   status: string,
- *   action:
- *     | 'enqueued'
- *     | 'projected_and_enqueued'
- *     | 'needsReconciliation'
- *     | 'terminalized'
- *     | 'skipped'
- *     | 'error',
- *   reason?: string | null,
- * }} RecoveryAction
+ * 一次恢复尝试的结果。标识字段与动作取值都来自 run-recovery-parked-cancel
+ * ——那边是这两个类型的定义处，两边各抄一份迟早对不上（D2 转换时就已经
+ * 因为字面量被推宽而对不上过一次）。
  */
+export type RecoveryAction = RecoveryActionBase & {
+  action: RecoveryActionKind;
+  reason?: string | null;
+};
 
 export class RunRecoveryService {
+  // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
+  tx: Loose;
+  createRepositories: Loose;
+  runQueue: Loose;
+  generateId: Loose;
+  stateMachine: Loose;
+  now: Loose;
+  leaseManager: Loose;
+
   /**
    * @param {{
    *   transactionManager: { run: (fn: (trx: any) => Promise<any>) => Promise<any> },
@@ -129,7 +135,7 @@ export class RunRecoveryService {
    * }} [opts]
    * @returns {Promise<{ actions: RecoveryAction[], nextAfterRunId: string | null }>}
    */
-  async scanAndRequeue(opts = {}) {
+  async scanAndRequeue(opts: { limit?: number, afterRunId?: string | null, orgId?: string | null, statuses?: string[], } = {}) {
     const runs = await this.tx.run(async (trx) => {
       const repos = this.createRepositories(trx);
       return repos.runs.listNonTerminalForSystemWorker({
@@ -140,8 +146,7 @@ export class RunRecoveryService {
       });
     });
 
-    /** @type {RecoveryAction[]} */
-    const actions = [];
+    const actions: RecoveryAction[] = [];
     for (const run of runs) {
       actions.push(await this.#recoverOne(run));
     }
@@ -154,9 +159,9 @@ export class RunRecoveryService {
 
   /**
    * Recover a single known run by org-scoped load (worker path).
-   * @param {{ runId: string, orgId: string }} ref
+   * @param ref
    */
-  async recoverOneRef(ref) {
+  async recoverOneRef(ref: { runId: string, orgId: string }) {
     const runId = assertUlid(ref.runId, 'runId');
     const orgId = assertUlid(ref.orgId, 'orgId');
     const run = await this.tx.run(async (trx) => {
@@ -169,7 +174,7 @@ export class RunRecoveryService {
         orgId,
         traceId: '',
         status: 'MISSING',
-        action: /** @type {const} */ ('skipped'),
+        action: ('skipped' as const),
         reason: 'run not found for org',
       };
     }
@@ -177,10 +182,10 @@ export class RunRecoveryService {
   }
 
   /**
-   * @param {object} run
+   * @param run
    * @returns {Promise<RecoveryAction>}
    */
-  async #recoverOne(run) {
+  async #recoverOne(run: Record<string, any>): Promise<RecoveryAction> {
     const runId = String(run.runId);
     const orgId = String(run.orgId);
     const traceId = String(run.traceId || '');
@@ -278,12 +283,12 @@ export class RunRecoveryService {
 
   /**
    * Finish a parked Run whose cancel intent is already durable.
-   * @param {object} run
-   * @param {object} base
-   * @param {{ parkedStatus: string, terminalize: (repos: any, current: any, scope: any) => Promise<{ status: string }> }} handler
+   * @param run
+   * @param base
+   * @param handler
    * @returns {Promise<RecoveryAction>}
    */
-  async #terminalizeParkedCancel(run, base, handler) {
+  async #terminalizeParkedCancel(run: Record<string, any>, base: RecoveryActionBase, handler: { parkedStatus: string, terminalize: (repos: any, current: any, scope: any) => Promise<{ status: string }> }): Promise<RecoveryAction> {
     return recoverParkedCancel({
       tx: this.tx,
       createRepositories: this.createRepositories,
@@ -300,7 +305,7 @@ export class RunRecoveryService {
    *   the original active job cannot absorb it
    * - still PENDING → leave parked (the user must answer)
    */
-  async #recoverWaitingInput(run, base) {
+  async #recoverWaitingInput(run: Record<string, any>, base: RecoveryActionBase): Promise<RecoveryAction> {
     // A Run can get cancel intent with no live worker to act on it — a
     // sub-agent child reached by its parent's cancel cascade is exactly that.
     // Without this the child stays parked on ask_user forever, because the
@@ -393,11 +398,11 @@ export class RunRecoveryService {
    * - terminal approval present → enqueue approval-resume job
    * - still PENDING → leave parked (user must decide)
    *
-   * @param {object} run
-   * @param {object} base
+   * @param run
+   * @param base
    * @returns {Promise<RecoveryAction>}
    */
-  async #recoverWaitingApproval(run, base) {
+  async #recoverWaitingApproval(run: Record<string, any>, base: RecoveryActionBase): Promise<RecoveryAction> {
     const scope = { orgId: run.orgId, userId: run.userId };
     if (run.cancelRequestedAt) {
       return this.#terminalizeParkedCancel(run, base, {
@@ -467,11 +472,11 @@ export class RunRecoveryService {
 
   /**
    * CANCELLING with no live lease → durable CANCELLED (no runtime re-entry).
-   * @param {object} run
-   * @param {object} base
+   * @param run
+   * @param base
    * @returns {Promise<RecoveryAction>}
    */
-  async #terminalizeCancelling(run, base) {
+  async #terminalizeCancelling(run: Record<string, any>, base: RecoveryActionBase): Promise<RecoveryAction> {
     const leaseHeld = await this.#isLeaseHeld(run.runId);
     if (leaseHeld === true) {
       return {
@@ -543,11 +548,11 @@ export class RunRecoveryService {
    * ordinary terminal outcome. PROPOSED/WAITING_APPROVAL/RUNNING and UNKNOWN
    * all represent an unresolved side-effect boundary, so the Run remains
    * non-terminal and an operator must reconcile it explicitly.
-   * @param {object} run
-   * @param {object} base
+   * @param run
+   * @param base
    * @returns {Promise<RecoveryAction>}
    */
-  async #reconcileOrphanRuntime(run, base) {
+  async #reconcileOrphanRuntime(run: Record<string, any>, base: RecoveryActionBase): Promise<RecoveryAction> {
     const leaseHeld = await this.#isLeaseHeld(run.runId);
     if (leaseHeld === true) {
       return {
@@ -892,10 +897,10 @@ export class RunRecoveryService {
   }
 
   /**
-   * @param {string} runId
+   * @param runId
    * @returns {Promise<boolean | null>} true held, false free, null unknown
    */
-  async #isLeaseHeld(runId) {
+  async #isLeaseHeld(runId: string) {
     if (!this.leaseManager || typeof this.leaseManager.getOwner !== 'function') {
       return null;
     }
@@ -908,10 +913,7 @@ export class RunRecoveryService {
     }
   }
 
-  /**
-   * @param {object} run
-   */
-  async #projectAcceptedToQueued(run) {
+  async #projectAcceptedToQueued(run: Record<string, any>) {
     const scope = { orgId: run.orgId, userId: run.userId };
     try {
       this.stateMachine.assertTransition(
@@ -943,10 +945,7 @@ export class RunRecoveryService {
     }
   }
 
-  /**
-   * @param {object} run
-   */
-  async #projectRetryingToQueued(run) {
+  async #projectRetryingToQueued(run: Record<string, any>) {
     const scope = { orgId: run.orgId, userId: run.userId };
     try {
       this.stateMachine.assertTransition(

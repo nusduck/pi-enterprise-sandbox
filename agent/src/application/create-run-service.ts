@@ -47,6 +47,10 @@ import {
   ModelRegistryError,
   resolveModel,
 } from '../infrastructure/model-registry.js';
+import type { ExternalAuth } from './parent/external-identity-resolver.js';
+
+/** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
+type Loose = any;
 
 export const CREATE_RUN_OPERATION = 'create_run';
 export const DEFAULT_IDEMPOTENCY_TTL_MS = 24 * 60 * 60 * 1000;
@@ -70,33 +74,31 @@ const REPLAY_ENQUEUE_STATUSES = new Set([
   RUN_STATUS.RETRYING,
 ]);
 
-/**
- * @typedef {{
- *   runId: string,
- *   status: 'ACCEPTED',
- *   conversationId: string,
- *   eventsUrl: string,
- *   agentSessionId?: string,
- *   sandboxSessionId?: string,
- *   queueWarning?: string | null,
- *   replayed?: boolean,
- * }} CreateRunResponse
- */
+export type CreateRunResponse = {
+  runId: string;
+  status: 'ACCEPTED';
+  conversationId: string;
+  eventsUrl: string;
+  agentSessionId?: string;
+  sandboxSessionId?: string;
+  queueWarning?: string | null;
+  replayed?: boolean;
+};
 
 /**
- * @param {string} runId
+ * @param runId
  * @returns {string}
  */
-export function buildEventsUrl(runId) {
+export function buildEventsUrl(runId: string) {
   return `/api/runs/${assertUlid(runId, 'runId')}/events`;
 }
 
 /**
  * Normalize W3C trace-id (32 hex, not all-zero) for runs.trace_id CHAR(32).
- * @param {unknown} traceId
+ * @param traceId
  * @returns {string} lowercase
  */
-export function normalizeTraceId(traceId) {
+export function normalizeTraceId(traceId: unknown) {
   if (typeof traceId !== 'string' || !/^[0-9a-fA-F]{32}$/.test(traceId)) {
     throw new ValidationError(
       'traceId must be a 32-char hex W3C trace-id',
@@ -123,10 +125,10 @@ export function normalizeTraceState(traceState) {
 }
 
 /**
- * @param {unknown} messages
+ * @param messages
  * @returns {unknown[]}
  */
-function requireMessages(messages) {
+function requireMessages(messages: unknown) {
   if (!Array.isArray(messages) || messages.length === 0) {
     throw new ValidationError('messages must be a non-empty array');
   }
@@ -138,10 +140,10 @@ function requireMessages(messages) {
  * The latter is needed by Pi, but it must never be used as the browser's
  * transcript body: its first item belongs to an older turn after turn one.
  *
- * @param {unknown[]} messages
+ * @param messages
  * @returns {string}
  */
-function currentUserTurnText(messages) {
+function currentUserTurnText(messages: unknown[]) {
   const current = [...messages]
     .reverse()
     .find((message) => message && typeof message === 'object' &&
@@ -213,6 +215,19 @@ function normalizeRequestedModel(modelId, messages) {
 }
 
 export class CreateRunService {
+  // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
+  tx: Loose;
+  createRepositories: Loose;
+  generateId: Loose;
+  now: Loose;
+  runQueue: Loose;
+  stateMachine: Loose;
+  queueName: Loose;
+  idempotencyTtlMs: Loose;
+  maxProvisionRetries: Loose;
+  defaultProvider: Loose;
+  source: Loose;
+
   /**
    * @param {{
    *   transactionManager: { run: (fn: (trx: any) => Promise<any>) => Promise<any> },
@@ -291,7 +306,7 @@ export class CreateRunService {
    * }} input
    * @returns {Promise<CreateRunResponse>}
    */
-  async execute(input) {
+  async execute(input: { messages: unknown[], auth: { provider?: string, externalOrgId: string, externalUserId: string, externalConversationId?: string | null, displayName?: string | null, email?: string | null, orgName?: string | null, }, traceId: string, traceState?: string | null, traceFlags?: string | null, idempotencyKey: string, agentId?: string | null, agentProfileId?: string | null, modelId?: string | null, budget?: unknown, spanId?: string | null, }) {
     if (!input || typeof input !== 'object') {
       throw new ValidationError('CreateRun input is required');
     }
@@ -382,7 +397,7 @@ export class CreateRunService {
    *   modelId: string | null,
    * }} ctx
    */
-  async #createOnce(ctx) {
+  async #createOnce(ctx: { messages: unknown[], auth: ExternalAuth, traceId: string, traceState: string | null, traceFlags: string, idempotencyKey: string, requestHash: string, spanId: string | null, agentId: string | null, agentProfileId: string | null, modelId: string | null, }) {
     const committed = await this.tx.run(async (trx) => {
       const repos = this.createRepositories(trx);
       const provisioner = new RunParentProvisioner(
@@ -438,7 +453,7 @@ export class CreateRunService {
         const resourceId = beginResult.record.resourceId;
         if (!stored || typeof stored !== 'object') {
           return {
-            kind: /** @type {const} */ ('replay_invalid'),
+            kind: ('replay_invalid' as const),
             orgId: scope.orgId,
             userId: scope.userId,
             reason: QUEUE_WARNING.REPLAY_INVALID_STORED,
@@ -447,7 +462,7 @@ export class CreateRunService {
         const runIdRaw = stored.runId ?? resourceId;
         if (typeof runIdRaw !== 'string' || !isUlid(runIdRaw)) {
           return {
-            kind: /** @type {const} */ ('replay_invalid'),
+            kind: ('replay_invalid' as const),
             orgId: scope.orgId,
             userId: scope.userId,
             reason: QUEUE_WARNING.REPLAY_INVALID_STORED,
@@ -461,7 +476,7 @@ export class CreateRunService {
             : parents.conversationId;
 
         return {
-          kind: /** @type {const} */ ('replay'),
+          kind: ('replay' as const),
           orgId: scope.orgId,
           userId: scope.userId,
           runId,
@@ -588,8 +603,7 @@ export class CreateRunService {
         },
       });
 
-      /** @type {CreateRunResponse} */
-      const response = {
+    const response: CreateRunResponse = {
         runId,
         status: 'ACCEPTED',
         conversationId: parents.conversationId,
@@ -616,7 +630,7 @@ export class CreateRunService {
       });
 
       return {
-        kind: /** @type {const} */ ('created'),
+        kind: ('created' as const),
         response,
         orgId: scope.orgId,
         userId: scope.userId,
@@ -656,9 +670,8 @@ export class CreateRunService {
    *   traceFlags?: string,
    * }} committed
    */
-  async #afterCreateEnqueue(committed) {
-    /** @type {CreateRunResponse} */
-    const response = { ...committed.response, queueWarning: null };
+  async #afterCreateEnqueue(committed: { response: CreateRunResponse, orgId: string, userId: string, runId: string, traceId: string, traceState?: string | null, traceFlags?: string, }) {
+    const response: CreateRunResponse = { ...committed.response, queueWarning: null };
 
     try {
       await this.runQueue.enqueue({
@@ -694,9 +707,8 @@ export class CreateRunService {
    *   runId: string,
    * }} committed
    */
-  async #handleReplayRecovery(committed) {
-    /** @type {CreateRunResponse} */
-    const response = {
+  async #handleReplayRecovery(committed: { response: CreateRunResponse, orgId: string, userId: string, runId: string, }) {
+    const response: CreateRunResponse = {
       ...committed.response,
       replayed: true,
       queueWarning: null,
@@ -779,7 +791,7 @@ export class CreateRunService {
    * }} args
    * @returns {Promise<{ ok: boolean, alreadyAdvanced?: boolean }>}
    */
-  async #transitionAcceptedToQueued(args) {
+  async #transitionAcceptedToQueued(args: { runId: string, orgId: string, userId: string, traceId: string, }) {
     return projectAcceptedToQueued({
       transactionManager: this.tx,
       createRepositories: this.createRepositories,

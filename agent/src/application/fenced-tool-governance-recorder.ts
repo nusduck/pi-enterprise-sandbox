@@ -296,7 +296,7 @@ export class FencedToolGovernanceRecorder {
         errorCode = decision.reasonCode || 'POLICY_DENIED';
       }
 
-            let result: any = null;
+      let result: any = null;
 
       await this.tx.run(async (trx) => {
         const repos = this.createRepositories(trx);
@@ -484,7 +484,7 @@ export class FencedToolGovernanceRecorder {
 
     return this.#withInflight(`approval.requested:${toolCallId}`, async () => {
       const timestamp = this.now();
-            let out: any = null;
+      let out: any = null;
 
       await this.tx.run(async (trx) => {
         const repos = this.createRepositories(trx);
@@ -613,7 +613,7 @@ export class FencedToolGovernanceRecorder {
           );
         }
 
-                let envelope: CanonicalRunEventEnvelope | null = null;
+      let envelope: CanonicalRunEventEnvelope | null = null;
         // MySQL-authoritative: event only when Approval row is newly created.
         if (created) {
           envelope = await this.#appendEventInTrx(repos, {
@@ -631,7 +631,7 @@ export class FencedToolGovernanceRecorder {
           });
         }
 
-                let statusEnvelope: CanonicalRunEventEnvelope | null = null;
+        let statusEnvelope: CanonicalRunEventEnvelope | null = null;
         if (run.status === RUN_STATUS.RUNNING) {
           runStateMachine.assertTransition(
             RUN_STATUS.RUNNING,
@@ -708,7 +708,7 @@ export class FencedToolGovernanceRecorder {
     }
 
     return this.#withInflight(`interaction.requested:${toolCallId}`, async () => {
-            let out: any = null;
+      let out: any = null;
       await this.tx.run(async (trx) => {
         const repos = this.createRepositories(trx);
         const scope = { orgId: this.context.orgId, userId: this.context.userId };
@@ -811,7 +811,7 @@ export class FencedToolGovernanceRecorder {
             { resource: 'interactions', id: interaction.interactionId },
           );
         }
-                const envelopes: any[] = [];
+        const envelopes: any[] = [];
         if (pending.created) {
           await this.#appendEventInTrx(repos, {
             type: 'interaction.requested',
@@ -890,8 +890,8 @@ export class FencedToolGovernanceRecorder {
 
     return this.#withInflight(`tool.execution.started:${toolCallId}`, async () => {
       const timestamp = this.now();
-            let envelope: CanonicalRunEventEnvelope | null = null;
-            let toolExecution: any = null;
+      let envelope: CanonicalRunEventEnvelope | null = null;
+      let toolExecution: any = null;
       let statusChanged = false;
 
       await this.tx.run(async (trx) => {
@@ -1064,9 +1064,9 @@ export class FencedToolGovernanceRecorder {
 
     return this.#withInflight(`${eventType}:${toolCallId}`, async () => {
       const timestamp = this.now();
-            let envelope: CanonicalRunEventEnvelope | null = null;
-            let artifactEnvelope: CanonicalRunEventEnvelope | null = null;
-            let toolExecution: any = null;
+      let envelope: CanonicalRunEventEnvelope | null = null;
+      let artifactEnvelope: CanonicalRunEventEnvelope | null = null;
+      let toolExecution: any = null;
       let statusChanged = false;
 
       await this.tx.run(async (trx) => {
@@ -1289,8 +1289,8 @@ export class FencedToolGovernanceRecorder {
 
     return this.#withInflight(`tool.execution.unknown:${toolCallId}`, async () => {
       const timestamp = this.now();
-            let envelope: CanonicalRunEventEnvelope | null = null;
-            let toolExecution: any = null;
+      let envelope: CanonicalRunEventEnvelope | null = null;
+      let toolExecution: any = null;
       let statusChanged = false;
 
       await this.tx.run(async (trx) => {
@@ -1366,7 +1366,7 @@ export class FencedToolGovernanceRecorder {
           // Idempotent same UNKNOWN: only re-check integrity when caller
           // supplies result. Omitted result must not re-fingerprint a newly
           // constructed default object against stored integrity.
-                    const replay: Record<string, unknown> = {
+          const replay: Record<string, unknown> = {
             toolExecutionId: toolExecution.toolExecutionId,
             orgId: this.context.orgId,
             userId: this.context.userId,
@@ -1487,7 +1487,7 @@ export class FencedToolGovernanceRecorder {
     }
 
     return this.#withInflight(`sandbox.bind:${toolCallId}`, async () => {
-            let out: any = null;
+      let out: any = null;
       await this.tx.run(async (trx) => {
         const repos = this.createRepositories(trx);
         if (!repos?.toolExecutions?.bindSandboxRequest) {
@@ -1495,7 +1495,7 @@ export class FencedToolGovernanceRecorder {
             'createRepositories must wire toolExecutions.bindSandboxRequest',
           );
         }
-                const bindInput: Record<string, unknown> = {
+        const bindInput: Record<string, unknown> = {
           runId: this.context.runId,
           toolCallId,
           toolName,

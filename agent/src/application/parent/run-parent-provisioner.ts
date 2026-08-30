@@ -167,7 +167,7 @@ export class RunParentProvisioner {
       'externalUserId',
     );
 
-        const created: ParentGraph['created'] = {
+    const created: ParentGraph['created'] = {
       organization: false,
       user: false,
       membership: false,

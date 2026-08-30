@@ -60,7 +60,7 @@ export async function applyRunTransitionInTxn(args: { repos: RunTransitionRepos,
     payloadExtra = {},
   } = args;
 
-    const patch: Record<string, unknown> = {
+  const patch: Record<string, unknown> = {
     expectedStatus: from,
     status: to,
   };

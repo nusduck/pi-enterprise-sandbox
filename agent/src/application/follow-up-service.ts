@@ -5,6 +5,7 @@
 
 import { assertUlid } from '../domain/shared/ulid.js';
 import { ValidationError } from './errors.js';
+import type { ExternalAuth } from './parent/external-identity-resolver.js';
 
 /** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
 type Loose = any;
@@ -34,7 +35,7 @@ export class FollowUpService {
    *   spanId?: string | null,
    * }} input
    */
-  async execute(input: { conversationId: string, text: string, auth: Record<string, any>, traceId: string, traceState?: string | null, traceFlags?: string | null, idempotencyKey: string, agentId?: string | null, spanId?: string | null, }) {
+  async execute(input: { conversationId: string, text: string, auth: ExternalAuth, traceId: string, traceState?: string | null, traceFlags?: string | null, idempotencyKey: string, agentId?: string | null, spanId?: string | null, }) {
     if (!input || typeof input !== 'object') {
       throw new ValidationError('FollowUp input is required');
     }

@@ -231,7 +231,7 @@ function resolveContextId(ctx: { contextId?: string | null, a2aTaskId: string })
  * @param eventId
  */
 function streamMetadata(sequence: number, eventId: unknown) {
-    const metadata: Record<string, unknown> = { sequence };
+  const metadata: Record<string, unknown> = { sequence };
   if (typeof eventId === 'string' && eventId) metadata.eventId = eventId;
   return metadata;
 }
@@ -254,7 +254,7 @@ export function buildA2aTaskObject(input: { a2aTaskId: string, contextId?: strin
     typeof input.contextId === 'string' && input.contextId.trim()
       ? input.contextId.trim()
       : input.a2aTaskId;
-    const task: Record<string, unknown> = {
+  const task: Record<string, unknown> = {
     id: input.a2aTaskId,
     contextId,
     status: {
@@ -286,7 +286,7 @@ export function projectMessagesToA2aHistory(messages: Record<string, any>[], ctx
     typeof ctx.contextId === 'string' && ctx.contextId.trim()
       ? ctx.contextId.trim()
       : ctx.a2aTaskId;
-    const out: object[] = [];
+  const out: object[] = [];
   for (const row of messages) {
     if (!row || typeof row !== 'object') continue;
     const roleRaw = String(row.role || '').toLowerCase();
@@ -436,7 +436,7 @@ function projectArtifactEvent(event: Record<string, any>, ctx: { a2aTaskId: stri
     payload.size ??
     null;
 
-    const parts: object[] = [];
+  const parts: object[] = [];
   if (typeof event.text === 'string' && event.text) {
     parts.push({ kind: 'text', text: event.text.slice(0, 4096) });
   }
@@ -495,14 +495,14 @@ function projectArtifactEvent(event: Record<string, any>, ctx: { a2aTaskId: stri
           : '';
   const description = descriptionRaw.trim().slice(0, 512);
 
-    const artifact: Record<string, unknown> = {
+  const artifact: Record<string, unknown> = {
     artifactId,
     name,
     parts,
   };
   if (description) artifact.description = description;
 
-    const metadata: Record<string, unknown> = {
+  const metadata: Record<string, unknown> = {
     mimeType: typeof mimeType === 'string' ? mimeType : 'application/octet-stream',
   };
   if (sizeBytes != null && Number.isFinite(Number(sizeBytes))) {
@@ -721,7 +721,7 @@ function statusMessage(event: Record<string, any>, a2aStatus: string, ctx: { a2a
     (typeof event.message_id === 'string' && event.message_id.trim()) ||
     (typeof ctx.eventId === 'string' && ctx.eventId.trim()) ||
     `a2a-status-${ctx.a2aTaskId || 'task'}-${seq}-${a2aStatus}`;
-    const msg: Record<string, unknown> = {
+  const msg: Record<string, unknown> = {
     messageId,
     role: 'agent',
     parts: [{ kind: 'text', text: reason.trim().slice(0, 500) }],

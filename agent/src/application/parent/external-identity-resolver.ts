@@ -59,6 +59,25 @@ export function assertNotExternalInUlidSlot(value: unknown, field: string) {
   }
 }
 
+/**
+ * BFF 解析后的调用者身份。**必需的是这两个外部 id**：所有 owner-scoped 查询
+ * 都由它们定位租户，缺一个就无法判定归属。
+ *
+ * 抽成具名类型是因为六个服务原本都把它写成 JSDoc 的 `object`——那既不能
+ * 阻止漏传 externalOrgId，也不能在改字段名时提醒任何一处。
+ */
+export interface ExternalAuth {
+  provider?: string;
+  externalOrgId: string;
+  externalUserId: string;
+  externalConversationId?: string;
+  displayName?: string;
+  email?: string;
+  orgName?: string;
+  /** BFF 透传的调用者角色；conversation 删除工作区时下发给 sandbox。 */
+  role?: string | null;
+}
+
 export class ExternalIdentityResolver {
   // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
   repos: Loose;
@@ -89,7 +108,7 @@ export class ExternalIdentityResolver {
    * }} auth
    * @returns {Promise<{ orgId: string, userId: string, provider: string, membership: object }>}
    */
-  async resolveOwner(auth: { provider?: string, externalOrgId: string, externalUserId: string, }) {
+  async resolveOwner(auth: ExternalAuth) {
     if (!auth || typeof auth !== 'object') {
       throw new ValidationError('auth context is required');
     }

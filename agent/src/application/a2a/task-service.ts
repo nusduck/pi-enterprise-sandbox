@@ -54,6 +54,9 @@ import {
   requireStableIdempotencyKey,
 } from './task-request.js';
 
+/** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
+type Loose = any;
+
 // Re-exported so callers keep one entry point for the A2A task surface.
 export {
   A2aAuditError,
@@ -65,6 +68,20 @@ export {
 } from './task-request.js';
 
 export class A2aTaskService {
+  // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
+  createRunService: Loose;
+  getRunService: Loose;
+  cancelRunService: Loose;
+  eventQueryService: Loose;
+  createRepositories: Loose;
+  tx: Loose;
+  db: Loose;
+  generateId: Loose;
+  now: Loose;
+  defaultProvider: Loose;
+  buildArtifactDownloadUri: Loose;
+  requireAudit: Loose;
+
   /**
    * @param {{
    *   createRunService: { execute: Function },
@@ -81,7 +98,7 @@ export class A2aTaskService {
    *   requireAudit?: boolean,
    * }} deps
    */
-  constructor(deps) {
+  constructor(deps: { createRunService: { execute: Function }, getRunService: { execute: Function }, cancelRunService: { execute: Function }, eventQueryService?: { listEvents: Function } | null, createRepositories: (db?: any) => any, transactionManager?: { run: Function } | null, db?: any, generateId: () => string, now?: () => Date, defaultProvider?: string, buildArtifactDownloadUri?: Function | null, requireAudit?: boolean, }) {
     if (!deps?.createRunService?.execute) {
       throw new Error('A2aTaskService requires createRunService');
     }
@@ -124,7 +141,7 @@ export class A2aTaskService {
    *   method?: string,
    * }} input
    */
-  async sendMessage(input) {
+  async sendMessage(input: { principal: Record<string, any>, agentId: string, params: Record<string, unknown>, traceId: string, traceState?: string | null, spanId?: string | null, traceFlags?: string | number | null, idempotencyKey?: string | null, method?: string, }) {
     this.#assertScope(input.principal, A2A_SCOPES.INVOKE);
     this.#assertAgentBinding(input.principal, input.agentId);
 
@@ -141,8 +158,7 @@ export class A2aTaskService {
 
     await this.#ensureA2aIdentityBindings(input.principal);
 
-    /** @type {{ conversationId: string | null, parentTask: object | null, wireContextId: string | null }} */
-    let continueFrom = {
+    let continueFrom: { conversationId: string | null, parentTask: Record<string, any> | null, wireContextId: string | null } = {
       conversationId: null,
       parentTask: null,
       wireContextId: contextId,
@@ -383,7 +399,7 @@ export class A2aTaskService {
    *   traceId?: string | null,
    * }} input
    */
-  async getTask(input) {
+  async getTask(input: { principal: Record<string, any>, agentId: string, taskId: string, historyLength?: number, method?: string, traceId?: string | null, }) {
     this.#assertScope(input.principal, A2A_SCOPES.READ);
     this.#assertAgentBinding(input.principal, input.agentId);
 
@@ -445,7 +461,7 @@ export class A2aTaskService {
    *   traceId?: string | null,
    * }} input
    */
-  async listTasks(input) {
+  async listTasks(input: { principal: Record<string, any>, agentId: string, contextId?: string | null, limit?: number, method?: string, traceId?: string | null, }) {
     this.#assertScope(input.principal, A2A_SCOPES.READ);
     this.#assertAgentBinding(input.principal, input.agentId);
 
@@ -471,8 +487,7 @@ export class A2aTaskService {
       },
     );
 
-    /** @type {object[]} */
-    const tasks = [];
+    const tasks: Record<string, any>[] = [];
     for (const mapping of mappings) {
       // eslint-disable-next-line no-await-in-loop
       const run = await this.#loadOwnedRun(input.principal, mapping.runId);
@@ -521,7 +536,7 @@ export class A2aTaskService {
    *   traceId?: string | null,
    * }} input
    */
-  async cancelTask(input) {
+  async cancelTask(input: { principal: Record<string, any>, agentId: string, taskId: string, reason?: string | null, method?: string, traceId?: string | null, }) {
     this.#assertScope(input.principal, A2A_SCOPES.CANCEL);
     this.#assertAgentBinding(input.principal, input.agentId);
 
@@ -614,7 +629,7 @@ export class A2aTaskService {
    *   traceId?: string | null,
    * }} input
    */
-  async beginSubscribe(input) {
+  async beginSubscribe(input: { principal: Record<string, any>, agentId: string, taskId: string, method?: string, traceId?: string | null, }) {
     this.#assertScope(input.principal, A2A_SCOPES.READ);
     this.#assertAgentBinding(input.principal, input.agentId);
     const mapping = await this.#loadOwnedTask(input.principal, input.taskId);
@@ -670,7 +685,7 @@ export class A2aTaskService {
    *   traceId?: string | null,
    * }} input
    */
-  async auditArtifactDownload(input) {
+  async auditArtifactDownload(input: { principal: Record<string, any>, agentId: string, taskId: string, runId: string, artifactId: string, traceId?: string | null, }) {
     this.#assertScope(input.principal, A2A_SCOPES.ARTIFACT_READ);
     this.#assertAgentBinding(input.principal, input.agentId);
     await this.#auditRequired({
@@ -822,8 +837,7 @@ export class A2aTaskService {
       return [];
     }
 
-    /** @type {object[]} */
-    const all = [];
+    const all: Record<string, any>[] = [];
     let after = 0;
     let pages = 0;
     const maxPages = Math.ceil(GET_TASK_EVENT_SCAN_MAX / 200) + 1;
@@ -860,12 +874,12 @@ export class A2aTaskService {
 
   /**
    * Load A2A Message history for GetTask when historyLength > 0.
-   * @param {object} principal
-   * @param {object} mapping
-   * @param {unknown} historyLengthRaw
+   * @param principal
+   * @param mapping
+   * @param historyLengthRaw
    * @returns {Promise<object[]>}
    */
-  async #loadMessageHistory(principal, mapping, historyLengthRaw) {
+  async #loadMessageHistory(principal: Record<string, any>, mapping: Record<string, any>, historyLengthRaw: unknown) {
     const n = Number(historyLengthRaw);
     if (!Number.isFinite(n) || n <= 0) return [];
     const limit = Math.min(Math.max(Math.trunc(n), 1), 200);
@@ -945,17 +959,13 @@ export class A2aTaskService {
 
   /**
    * Mutating / authenticated ops: audit failure fails the request.
-   * @param {object} input
+   * @param input
    */
-  async #auditRequired(input) {
+  async #auditRequired(input: Record<string, any>) {
     return this.#auditSafe(input, { failClosed: this.requireAudit });
   }
 
-  /**
-   * @param {object} input
-   * @param {{ failClosed?: boolean }} [opts]
-   */
-  async #auditSafe(input, opts = {}) {
+  async #auditSafe(input: Record<string, any>, opts: { failClosed?: boolean } = {}) {
     const failClosed = opts.failClosed === true;
     const repos = this.createRepositories(this.db);
     if (!repos?.a2aAudit?.append) {

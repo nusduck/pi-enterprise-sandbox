@@ -33,6 +33,10 @@ import {
   prepareA2aStreamResult,
   streamKindsForMethod,
 } from './stream-event-schema.js';
+import type { ExternalAuth } from '../parent/external-identity-resolver.js';
+
+/** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
+type Loose = any;
 
 /** SSE comment keep-alive — not a `data:` frame (plan: every data is JSON-RPC). */
 export function formatA2aSseHeartbeatComment(timestampIso = new Date().toISOString()) {
@@ -40,6 +44,19 @@ export function formatA2aSseHeartbeatComment(timestampIso = new Date().toISOStri
 }
 
 export class A2aStreamService {
+  // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
+  taskService: Loose;
+  eventQuery: Loose;
+  getRunService: Loose;
+  runEventStream: Loose;
+  pollMs: Loose;
+  heartbeatMs: Loose;
+  mysqlCatchupMs: Loose;
+  historyPageSize: Loose;
+  now: Loose;
+  sleep: Loose;
+  buildArtifactDownloadUri: Loose;
+
   /**
    * @param {{
    *   taskService: {
@@ -62,7 +79,7 @@ export class A2aStreamService {
    *   buildArtifactDownloadUri?: Function | null,
    * }} deps
    */
-  constructor(deps) {
+  constructor(deps: { taskService: { getTask: Function, resolveOwnedTask: Function, runAuthForPrincipal: Function, }, eventQueryService: { listEvents: Function, resolveEventSequence?: Function, }, getRunService: { execute: Function }, runEventStream?: { readAfter: Function } | null, pollMs?: number, heartbeatMs?: number, mysqlCatchupMs?: number, historyPageSize?: number, now?: () => number, sleep?: typeof sleepMs, buildArtifactDownloadUri?: Function | null, }) {
     if (!deps?.taskService) {
       throw new Error('A2aStreamService requires taskService');
     }
@@ -104,7 +121,7 @@ export class A2aStreamService {
    *   signal?: AbortSignal,
    * }} sinks
    */
-  async openTaskStream(input, sinks) {
+  async openTaskStream(input: { principal: Record<string, any>, agentId: string, taskId: string, rpcId: string | number | null, afterSequence?: number, lastEventId?: string | null, includeInitialTask?: boolean, method?: string | null, }, sinks: { write: (chunk: string) => boolean | void | Promise<boolean | void>, waitDrain?: () => Promise<'drained' | 'closed' | 'aborted'>, stream?: Record<string, any>, isClosed: () => boolean, signal?: AbortSignal, }) {
     const { write, isClosed, signal } = sinks;
     const principal = input.principal;
     const mapping = await this.taskService.resolveOwnedTask(
@@ -163,7 +180,10 @@ export class A2aStreamService {
      *   omitId?: boolean,
      * }} [meta]
      */
-    const emitRpc = async (rpcBody, meta = {}) => {
+    const emitRpc = async (
+      rpcBody: unknown,
+      meta: { omitId?: boolean; eventId?: unknown; sequence?: unknown } = {},
+    ) => {
       // Snapshot frames must omit SSE id so Last-Event-ID is never a task ULID.
       // JSON-RPC A2A streams carry kind on result — do not set SSE `event:`.
       const id = meta.omitId
@@ -178,8 +198,7 @@ export class A2aStreamService {
     };
 
     const allowedKinds = new Set(streamKindsForMethod(input.method));
-    /** @type {string | null} */
-    let lastA2aStatus = null;
+    let lastA2aStatus: string | null = null;
     // A2A 0.3 §3.1.2: a task-lifecycle stream closes on a `final: true` frame.
     let emittedFinal = false;
 
@@ -300,11 +319,8 @@ export class A2aStreamService {
       }
     };
 
-    /**
-     * Drain MySQL after lastEmitted (contiguous pages).
-     * @param {{ maxPages?: number }} [opts]
-     */
-    const drainMysql = async (opts = {}) => {
+    /** Drain MySQL after lastEmitted (contiguous pages). */
+    const drainMysql = async (opts: { maxPages?: number } = {}) => {
       const maxPages = opts.maxPages ?? 50;
       let pages = 0;
       let terminal = false;
@@ -534,7 +550,7 @@ export class A2aStreamService {
    *   lastEventId?: string | null,
    * }} input
    */
-  async #resolveCursor(input) {
+  async #resolveCursor(input: { runId: string, auth: ExternalAuth, afterSequence?: number, lastEventId?: string | null, }) {
     // Ignore Last-Event-ID values that are not numeric sequences or event ULIDs
     // that resolve under owner scope (task snapshot id must not advance cursor).
     const resolveEventSequence =

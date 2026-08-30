@@ -24,7 +24,7 @@ const SKILL_MD_READ_BYTES = 4096;
  */
 export function normalizeAgentSkills(skills: unknown) {
   if (!Array.isArray(skills)) return [];
-    const out: object[] = [];
+  const out: object[] = [];
   const seen = new Set();
   for (const raw of skills) {
     if (out.length >= MAX_CARD_SKILLS) break;
@@ -55,7 +55,7 @@ export function normalizeAgentSkills(skills: unknown) {
       typeof r.description === 'string' && r.description.trim()
         ? r.description.trim().slice(0, 1024)
         : `Skill: ${name}`;
-        const skill: Record<string, unknown> = { id, name, description };
+    const skill: Record<string, unknown> = { id, name, description };
     if (Array.isArray(r.tags)) {
       skill.tags = r.tags
         .filter((t) => typeof t === 'string' && t.trim())
@@ -107,7 +107,7 @@ export function defaultAgentSkills() {
  */
 export function parseSkillMdFrontmatter(text: string) {
   const { name, description } = parseSkillFrontmatter(String(text || ''));
-    const out: { name?: string, description?: string } = {};
+  const out: { name?: string, description?: string } = {};
   if (name) out.name = name;
   if (description) out.description = description;
   return out;
@@ -129,7 +129,7 @@ export function listSkillsFromRoot(skillRoot: string | null | undefined) {
   } catch {
     return [];
   }
-    const skills: object[] = [];
+  const skills: object[] = [];
   for (const ent of entries) {
     if (skills.length >= MAX_CARD_SKILLS) break;
     if (!ent.isDirectory() || ent.name.startsWith('.')) continue;

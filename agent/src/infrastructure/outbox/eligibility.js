@@ -100,13 +100,16 @@ export function hasEligibilityFilter(eligibility) {
  * Returns empty sql when no filter (caller must not append AND).
  *
  * @param {ClaimEligibility | null | undefined} eligibility
- * @returns {{ sql: string, bindings: unknown[] }}
+ * @returns {{ sql: string, bindings: string[] }}
  */
 export function buildEligibilitySql(eligibility) {
   const e = normalizeClaimEligibility(eligibility);
   /** @type {string[]} */
   const parts = [];
-  /** @type {unknown[]} */
+  // 只 push aggregateTypes / eventTypes 的元素，两者都是 string[]。
+  // 写成 unknown[] 会让调用方把它 spread 进 knex.raw 的 bindings 时
+  // 匹配不上任何重载——那处的 @ts-expect-error 就是这么来的。
+  /** @type {string[]} */
   const bindings = [];
 
   if (e.aggregateTypes && e.aggregateTypes.length > 0) {

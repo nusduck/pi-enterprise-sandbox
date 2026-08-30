@@ -12,6 +12,9 @@ import {
   STEER_REQUESTED_EVENT,
 } from './steer-run-service.js';
 
+/** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
+type Loose = any;
+
 export const DEFAULT_STEER_POLL_INTERVAL_MS = 25;
 export const STEER_EVENT_PAGE_SIZE = 500;
 
@@ -43,6 +46,24 @@ export function steerTextFromMessage(message, binding) {
 }
 
 export class DurableSteerController {
+  // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
+  tx: Loose;
+  createRepositories: Loose;
+  runtimeSession: Loose;
+  eventRecorder: Loose;
+  runId: Loose;
+  conversationId: Loose;
+  agentSessionId: Loose;
+  scope: Loose;
+  pollIntervalMs: Loose;
+  onError: Loose;
+  cursor: number;
+  pending: Map<any, any>;
+  stopped: boolean;
+  timer: Loose;
+  inFlight: Loose;
+  error: Loose;
+
   /**
    * @param {{
    *   transactionManager: { run: (fn: (trx: any) => Promise<any>) => Promise<any> },
@@ -57,7 +78,7 @@ export class DurableSteerController {
    *   onError?: (error: unknown) => void,
    * }} deps
    */
-  constructor(deps) {
+  constructor(deps: { transactionManager: { run: (fn: (trx: any) => Promise<any>) => Promise<any> }, createRepositories: (db: any) => any, runtimeSession: { steer: (text: string) => Promise<void> | void, abort?: Function }, eventRecorder: { record: Function }, runId: string, conversationId: string, agentSessionId: string, scope: { orgId: string, userId: string }, pollIntervalMs?: number, onError?: (error: unknown) => void, }) {
     if (!deps?.transactionManager?.run) {
       throw new Error('DurableSteerController requires transactionManager');
     }

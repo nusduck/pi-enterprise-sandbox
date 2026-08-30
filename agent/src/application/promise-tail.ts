@@ -13,8 +13,8 @@
  * }}
  */
 export function createPromiseTail() {
-    let tail: Promise<void> = Promise.resolve();
-    let firstError: unknown | null = null;
+  let tail: Promise<void> = Promise.resolve();
+  let firstError: unknown | null = null;
 
   return {
     enqueue(fn: () => Promise<void> | void) {

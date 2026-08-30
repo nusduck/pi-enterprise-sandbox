@@ -99,7 +99,7 @@ export function canonicalize(value: unknown, stack: WeakSet<Record<string, any>>
         );
       }
 
-            const out: Record<string, unknown> = {};
+      const out: Record<string, unknown> = {};
       const keys = Object.keys((value as Record<string, any>)).sort();
       for (const k of keys) {
         // Skip undefined-valued keys (stable omit) rather than failing.
@@ -212,7 +212,7 @@ export function hashCreateRunRequest(input: { messages?: unknown, externalConver
     return m;
   });
 
-    const body: Record<string, unknown> = {
+  const body: Record<string, unknown> = {
     messages: boundMessages,
   };
   if (
