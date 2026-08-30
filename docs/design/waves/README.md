@@ -81,3 +81,20 @@ DSH 重建的施工分解。设计依据见 [dsh-rebuild.md](../dsh-rebuild.md)�
   `exec/src/fs/path-policy.ts` 两处重复定义，收口时提到共享位置
 - W2-B / W2-C 定义的持久化接口要交给 W3-D，避免各建一套仓储
 - Wave 6 已去掉 `agent/tsconfig.json` 的 exclude 与 `@ts-nocheck` 横幅，W2-D 四条抬预算已收回
+
+## Wave 7 —— gap-audit 的补齐（2026-08-29 / 30）
+
+Wave 3 标 ✅ 时，搜索、产物、数据集三块是占位实现。补齐记录：
+
+| 任务 | 产出 | 状态 |
+|---|---|---|
+| W7-A | `exec/src/search/`：ls / find / grep，内部面与公共面共用 | ✅ |
+| W7-B | 产物改控制面快照 + `control-plane-storage.ts`；`exec_artifacts` 扩列 | ✅ |
+| W7-C | 数据集改三段式流式；`exec_datasets` 扩列 + 幂等键 | ✅ |
+| W7-D | `exec/Dockerfile` 补模型工具链；`test_skill_runtime_dependencies.py` 重新写严 | ✅ |
+| W7-E | MCP facade 移植进 `exec/src/mcp/` + 窄桥八条路由；`sandbox/` 删除 | ✅ |
+| W7-F | 文档收口：AGENTS / README / architecture / module-layout / api / development；ADR 转 Accepted；STATUS 逐行重审 | ✅ |
+
+**起栈后才发现、299 个绿测试没抓到的两个 bug**（详见 [HANDOFF](HANDOFF.md) 的坑表）：
+共享 cordis Context 导致每进程只有第一次产物提交成功；把 Python 的 `host:*` 通配
+语法搬进只做精确匹配的 TS SDK，导致 MCP 面拒绝所有带端口的 Host。

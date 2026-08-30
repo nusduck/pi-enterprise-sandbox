@@ -2,13 +2,13 @@
 
 | 字段 | 值 |
 |---|---|
-| 状态 | Proposed（**紧急**：生产 Agent 当前不可用） |
+| 状态 | **Accepted**（2026-08-30 实施完毕；实施偏差见文末「实施记录」） |
 | 日期 | 2026-08-29 |
 | 决策所有者 | Agent runtime maintainers |
 | 适用范围 | `agent/` 的 Runtime 层、新增 `runtime/` 与 `contract/` 包；`exec/` 见 [ADR 0008](0008-sandbox-isolation-and-fs-seam-redesign.md) |
 | 取代 | **[ADR 0001](0001-pi-coding-agent-sdk.md)**、**[ADR 0002](0002-dsh-harness-evaluation.md)**、**[ADR 0005](0005-pi-session-jsonl-persistence.md)**（均转 Superseded） |
 | 关联决策 | [ADR 0004](0004-session-persistent-tmp.md)（不变）、[ADR 0006](0006-user-skill-enablement-gate.md)（不变）、[ADR 0008](0008-sandbox-isolation-and-fs-seam-redesign.md)（同批交付） |
-| 详细设计 | **[docs/design/dsh-rebuild.md](../design/dsh-rebuild.md)** —— 本 ADR 只记决策与理由，模块布局、目录树、接口清单与施工分工在设计文档里 |
+| 详细设计 | **[docs/design/dsh-rebuild.md](../design/dsh-rebuild.md)**；逐函数移植对照见 [design/waves/gap-audit.md](../design/waves/gap-audit.md) |
 | 上游基线 | `@deepseek-ai/*@0.1.1-rc.2`，**本次逐包下载核实**（非二手转述） |
 
 ## 背景与约束
@@ -215,3 +215,37 @@ policy 的文档标准。
 - 需更新：`runtime-versions.json`、`tests/test_runtime_versions.py`、
   `docs/architecture.md`、`docs/module-layout.md`、`docs/STATUS.md`、
   [sdk-upgrade runbook](../runbooks/sdk-upgrade.md)
+
+---
+
+## 实施记录（2026-08-30）
+
+实施过程中有三处偏离本 ADR 的原始描述，都记在这里而不是默默改掉。
+
+### 1. `runtime/` 移到 `agent/runtime/`
+
+本 ADR 与设计文档写的是顶层三包 `contract/` `runtime/` `exec/`。实施后
+`runtime/` 只有 `agent/` 一个消费者，既不可独立部署也不被复用，放在顶层与
+`agent/`/`exec/`/`api-server/` 平级是误导。已移到 `agent/runtime/`，依赖改成
+`file:./runtime`。`contract/` 留在顶层——exec 与 runtime 都消费它。
+
+### 2. MCP facade 一并迁入 `exec/`
+
+[ADR 0008](0008-sandbox-isolation-and-fs-seam-redesign.md) 原本把
+`sandbox/mcp/`（1,192 行 Python）列为「本次不动」。但 exec 镜像是 `node:22-slim`，
+里面没有 Python——"不动"实际等价于"删掉它"。已按 D1 一并用 TS 重写进
+`exec/src/mcp/`，作为同一镜像的第二入口。`sandbox/` 整个删除。
+
+窄桥（`/internal/mcp/v1/*`）在实施前 exec **一条都没有实现**，而 facade 一直在调，
+所以 MCP 面在这段时间是完全断的。现已补齐，并比 Python 版多一道归属校验。
+
+### 3. `tools.mode` 与残余风险的结论
+
+- `ctx.subagents` 的「同进程」契约与我们的 durable BullMQ 子 Run **对不上**，
+  按 ADR 预案退回自建工具面（`runtime/src/providers/durable-subagent.ts`）。
+- 生产网关冒烟**仍未做**，依旧是上线准入项。
+
+### 遗留：`agent/src/application/pi-run-executor.js` 等文件名
+
+若干 `pi-` 前缀的文件名尚未改。纯改名，无行为影响，未做以免与实质改动混在一个
+变更集里。

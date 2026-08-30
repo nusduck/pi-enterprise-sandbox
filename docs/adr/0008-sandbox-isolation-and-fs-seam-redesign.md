@@ -2,7 +2,7 @@
 
 | 字段 | 值 |
 |---|---|
-| 状态 | Proposed |
+| 状态 | **Accepted**（2026-08-30 实施完毕；实施偏差见文末「实施记录」） |
 | 日期 | 2026-08-29 |
 | 决策所有者 | Sandbox isolation maintainers |
 | 适用范围 | 新增 `exec/` 包（TS）；`sandbox/` Python 包收敛后删除 |
@@ -201,3 +201,35 @@ Session 私有、跨 Run 持久的 `/tmp` **语义一字不改**。区别只是�
 - `sandbox/` Python 包整个删除（35,958 行）；`sandbox/skill-runtime/` 的三个垫片迁入 `exec/`
 - `sandbox/mcp/`（1,192 行）**本次不动**，Wave 6 之后单独补齐
 - 需更新：`docs/architecture.md`、`docs/api.md`、`docs/module-layout.md`、`docs/sandbox-mcp.md`
+
+---
+
+## 实施记录（2026-08-30）
+
+### `sandbox/mcp/` 不再「本次不动」
+
+本 ADR §11 与「影响」都写着 `sandbox/mcp/` 保留、Wave 6 之后补齐。实际不可行：
+exec 镜像没有 Python，保留等于让它不可运行。已用 TS 重写进 `exec/src/mcp/`，
+`sandbox/` 整个删除。窄桥八条路由同批补齐（此前 exec 一条都没实现）。
+
+### 验证要求的完成情况
+
+第 1–8 条（plan 断言、preflight 同源、targetKey 稳定性、版本守卫、单实例断言、
+既有安全不回归、错误面不泄漏、skill 绑定）已由 `exec/test/` 覆盖。
+
+**第 9 条「公共面契约不变」当时成立得很表面**：BFF 用例通过，是因为它们断言
+JSON 形状，而搜索、产物、数据集三块是占位实现——形状恰好是对的。这一条已重新
+表述并补齐语义用例，全过程见 [gap-audit.md](../design/waves/gap-audit.md)。
+
+**第 10 条（真实链路）部分完成**：MCP 全链路已在 compose 上端到端验证（工具列表、
+文件往返、连续产物提交、签名下载的字节与 sha256 一致、篡改 token 404）。
+Bubblewrap 的真实执行需要 Linux 宿主——macOS 的 Docker Desktop 不允许在容器内
+创建非特权 user namespace。**Agent 半段的链路尚未跑**，需要可用的 LLM 网关。
+
+### 一个本 ADR 的纪律被违反后又补上的例子
+
+D2 说「可写根是单一事实源，MountPlan 与文件 API 不得各算一遍」。实施时另有两处
+犯了同类错误：Python venv 的挂载源与子进程 `PATH` 各写了一份硬编码 `/app/.venv`，
+镜像基底换成 `node:22-slim` 后两处同时失效，而挂载是 `required: false`，缺失被
+静默宽恕——沙箱里的 `python3` 退化成裸解释器且不报错。现已收敛为
+`AGENT_PYTHON_VENV` 单一常量，两处派生，并有 plan 断言守着。
