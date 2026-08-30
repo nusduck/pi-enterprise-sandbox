@@ -22,34 +22,48 @@ import { primarySkillRoot, normalizeSkillRoots } from '../../skills/paths.js';
 import { config as defaultAgentConfig } from '../../../config.js';
 
 /**
- * @param {unknown} names
+ * @param names
  * @returns {{ names: readonly string[] }}
  */
-function assertEnterpriseExtensions(names) {
+function assertEnterpriseExtensions(names: unknown) {
   const list = Array.isArray(names) ? names.map((name) => String(name)) : [];
   return { names: Object.freeze(list) };
 }
 
-function resolveEnterpriseSystemPrompt(agentVersionSystemPrompt, opts = {}) {
+/**
+ * 企业系统提示 = AgentVersion 的 lead（没有就用产品默认 lead）+ 不可覆盖的
+ * 企业条款。`workspaceRoot` / `skillRoot` 从容器一路传到这里，条款里的路径
+ * 用的就是它们——写死会让提示词和真实挂载点对不上。
+ */
+function resolveEnterpriseSystemPrompt(
+  agentVersionSystemPrompt: unknown,
+  opts: {
+    productSystemPrompt?: string;
+    workspaceRoot?: string;
+    skillRoot?: string;
+  } = {},
+) {
   const agentLead = String(agentVersionSystemPrompt || '').trim();
   const productLead = String(opts.productSystemPrompt || '').trim();
-  return assembleSystemPrompt(agentLead || productLead);
+  return assembleSystemPrompt(agentLead || productLead, {
+    workspaceRoot: opts.workspaceRoot,
+    skillRoot: opts.skillRoot,
+  });
 }
 
 /**
  * Deep-clone then freeze plain JSON-compatible structures.
- * @param {unknown} value
+ * @param value
  * @returns {unknown}
  */
-export function deepFreezeClone(value) {
+export function deepFreezeClone(value: unknown) {
   if (value === null || typeof value !== 'object') return value;
   if (Array.isArray(value)) {
     const arr = value.map((v) => deepFreezeClone(v));
     return Object.freeze(arr);
   }
-  /** @type {Record<string, unknown>} */
-  const out = {};
-  for (const [k, v] of Object.entries(/** @type {object} */ (value))) {
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries((value as Record<string, any>))) {
     out[k] = deepFreezeClone(v);
   }
   return Object.freeze(out);
@@ -57,9 +71,9 @@ export function deepFreezeClone(value) {
 
 /**
  * Require actual pi-ai Model fields whenever a model is supplied.
- * @param {unknown} model
+ * @param model
  */
-export function assertModelShape(model) {
+export function assertModelShape(model: unknown) {
   if (model == null) {
     throw new PiRuntimeFactoryError('model is required when supplied to runtime create', {
       code: 'PI_MODEL_SHAPE_INVALID',
@@ -70,7 +84,7 @@ export function assertModelShape(model) {
       code: 'PI_MODEL_SHAPE_INVALID',
     });
   }
-  const m = /** @type {Record<string, unknown>} */ (model);
+  const m = (model as Record<string, unknown>);
   for (const key of Object.keys(m)) {
     if (key === 'headers') continue;
     if (/(?:apiKey|api_key|secret|password)/i.test(key)) {
@@ -157,10 +171,10 @@ export const AGENT_VERSION_THINKING_LEVELS = Object.freeze([
  * typo silently downgrading a reasoning model is exactly the kind of drift a
  * frozen AgentVersion is supposed to prevent.
  *
- * @param {unknown} value
+ * @param value
  * @returns {string | null}
  */
-export function normalizeThinkingLevel(value) {
+export function normalizeThinkingLevel(value: unknown) {
   if (value == null || value === '') return null;
   const level = String(value).trim().toLowerCase();
   if (!AGENT_VERSION_THINKING_LEVELS.includes(level)) {
@@ -174,32 +188,32 @@ export function normalizeThinkingLevel(value) {
 }
 
 /**
- * @param {unknown} value
+ * @param value
  * @returns {boolean}
  */
-function isPlainObject(value) {
+function isPlainObject(value: unknown) {
   return value != null && typeof value === 'object' && !Array.isArray(value);
 }
 
 /**
- * @param {unknown} value
+ * @param value
  * @returns {boolean}
  */
-function isNonEmptyObject(value) {
+function isNonEmptyObject(value: unknown) {
   return (
     value != null &&
     typeof value === 'object' &&
     !Array.isArray(value) &&
-    Object.keys(/** @type {object} */ (value)).length > 0
+    Object.keys((value as Record<string, any>)).length > 0
   );
 }
 
 /**
  * Identity fields that pin a Model to AgentVersion policy.
- * @param {object} a
- * @param {object} b
+ * @param a
+ * @param b
  */
-export function modelIdentityEqual(a, b) {
+export function modelIdentityEqual(a: Record<string, any>, b: Record<string, any>) {
   return (
     String(a.id) === String(b.id) &&
     String(a.provider) === String(b.provider) &&
@@ -211,15 +225,15 @@ export function modelIdentityEqual(a, b) {
 /**
  * Bind Agent Version config (immutable deep-freeze clone).
  *
- * @param {object} agentVersion
+ * @param agentVersion
  */
-export function bindAgentVersionConfig(agentVersion) {
+export function bindAgentVersionConfig(agentVersion: Record<string, any>) {
   if (!agentVersion || typeof agentVersion !== 'object') {
     throw new PiRuntimeFactoryError('agentVersion is required', {
       code: 'PI_AGENT_VERSION_REQUIRED',
     });
   }
-  const v = /** @type {Record<string, unknown>} */ (agentVersion);
+  const v = (agentVersion as Record<string, unknown>);
   const agentVersionId = String(v.agentVersionId ?? v.agent_version_id ?? '');
   if (!agentVersionId) {
     throw new PiRuntimeFactoryError('agentVersion.agentVersionId is required', {
@@ -228,9 +242,9 @@ export function bindAgentVersionConfig(agentVersion) {
   }
   const rawConfig =
     v.configJson && typeof v.configJson === 'object'
-      ? /** @type {Record<string, unknown>} */ (v.configJson)
+      ? (v.configJson as Record<string, unknown>)
       : v.config_json && typeof v.config_json === 'object'
-        ? /** @type {Record<string, unknown>} */ (v.config_json)
+        ? (v.config_json as Record<string, unknown>)
         : {};
   // Never re-embed runtime credentials into frozen Agent Version config.
   const configJson = /** @type {Record<string, unknown>} */ (
@@ -249,7 +263,7 @@ export function bindAgentVersionConfig(agentVersion) {
 
   const modelPolicy =
     configJson.modelPolicy && typeof configJson.modelPolicy === 'object'
-      ? /** @type {Record<string, unknown>} */ (configJson.modelPolicy)
+      ? (configJson.modelPolicy as Record<string, unknown>)
       : {};
   // Full Model only when present; incomplete policy references are not models.
   let model = null;
@@ -270,16 +284,16 @@ export function bindAgentVersionConfig(agentVersion) {
     );
   }
   const toolPolicy =
-    /** @type {Record<string, unknown>} */ (configJson.toolPolicy) ?? {};
+    (configJson.toolPolicy as Record<string, unknown>) ?? {};
   const sandboxPolicy =
     configJson.sandboxPolicy && typeof configJson.sandboxPolicy === 'object'
-      ? /** @type {Record<string, unknown>} */ (configJson.sandboxPolicy)
+      ? (configJson.sandboxPolicy as Record<string, unknown>)
       : {};
   // Compaction policy. Absent → Pi SDK defaults (auto-compact on, 16k reserve,
   // 20k kept recent), which is what production has always run with.
   const contextPolicy =
     configJson.contextPolicy && typeof configJson.contextPolicy === 'object'
-      ? /** @type {Record<string, unknown>} */ (configJson.contextPolicy)
+      ? (configJson.contextPolicy as Record<string, unknown>)
       : {};
 
   // Model parameter overrides. maxOutputTokens is applied onto the resolved
@@ -343,10 +357,10 @@ export function bindAgentVersionConfig(agentVersion) {
  *   available provider/id/api constraints from the policy.
  * - If neither full model nor constraints: input.model is required as concrete model.
  *
- * @param {ReturnType<typeof bindAgentVersionConfig>} bound
- * @param {object | null | undefined} inputModel
+ * @param bound
+ * @param inputModel
  */
-export function resolveConcreteModel(bound, inputModel) {
+export function resolveConcreteModel(bound: ReturnType<typeof bindAgentVersionConfig>, inputModel: Record<string, any> | null | undefined) {
   if (bound.model) {
     if (inputModel != null) {
       assertModelShape(inputModel);
@@ -359,7 +373,7 @@ export function resolveConcreteModel(bound, inputModel) {
     }
     if (bound.maxOutputTokens != null) {
       return {
-        .../** @type {object} */ (bound.model),
+        ...(bound.model as Record<string, any>),
         maxTokens: bound.maxOutputTokens,
       };
     }
@@ -369,9 +383,9 @@ export function resolveConcreteModel(bound, inputModel) {
   const policy = bound.modelPolicy || {};
   const ref =
     policy.reference && typeof policy.reference === 'object'
-      ? /** @type {Record<string, unknown>} */ (policy.reference)
+      ? (policy.reference as Record<string, unknown>)
       : policy.modelRef && typeof policy.modelRef === 'object'
-        ? /** @type {Record<string, unknown>} */ (policy.modelRef)
+        ? (policy.modelRef as Record<string, unknown>)
         : {};
   const constraintProvider =
     (typeof policy.provider === 'string' && policy.provider) ||
@@ -400,7 +414,7 @@ export function resolveConcreteModel(bound, inputModel) {
     );
   }
   assertModelShape(inputModel);
-  const m = /** @type {Record<string, unknown>} */ (inputModel);
+  const m = (inputModel as Record<string, unknown>);
   if (constraintProvider && String(m.provider) !== constraintProvider) {
     throw new PiRuntimeFactoryError(
       `resolved model.provider ${String(m.provider)} does not match AgentVersion constraint ${constraintProvider}`,
@@ -431,11 +445,11 @@ export function resolveConcreteModel(bound, inputModel) {
 /**
  * Parse an optional positive integer with fail-closed validation.
  *
- * @param {unknown} value
- * @param {string} field
+ * @param value
+ * @param field
  * @returns {number | undefined}
  */
-function optionalPositiveInt(value, field) {
+function optionalPositiveInt(value: unknown, field: string) {
   if (value == null || value === '') return undefined;
   const n = Number(value);
   if (!Number.isSafeInteger(n) || n < 1) {
@@ -449,11 +463,11 @@ function optionalPositiveInt(value, field) {
 /**
  * Parse an optional finite number (temperature) with fail-closed validation.
  *
- * @param {unknown} value
- * @param {string} field
+ * @param value
+ * @param field
  * @returns {number | undefined}
  */
-function optionalFiniteNumber(value, field) {
+function optionalFiniteNumber(value: unknown, field: string) {
   if (value == null || value === '') return undefined;
   const n = Number(value);
   if (!Number.isFinite(n) || n < 0 || n > 2) {
@@ -474,16 +488,16 @@ function optionalFiniteNumber(value, field) {
  * is reported as a warning rather than failing the Run — absence is a normal
  * per-user state, not a misconfiguration.
  *
- * @param {readonly unknown[]} allowedSkills
+ * @param allowedSkills
  * @returns {(base: { skills?: object[], diagnostics?: object[] }) => { skills: object[], diagnostics: object[] }}
  */
-export function createSkillAllowlistOverride(allowedSkills) {
+export function createSkillAllowlistOverride(allowedSkills: readonly unknown[]) {
   const allowed = new Set(
     (Array.isArray(allowedSkills) ? allowedSkills : [])
       .map((entry) => {
         if (typeof entry === 'string') return entry.trim();
-        if (entry && typeof entry === 'object' && typeof (/** @type {any} */ (entry).name) === 'string') {
-          return String(/** @type {any} */ (entry).name).trim();
+        if (entry && typeof entry === 'object' && typeof ((entry as any).name) === 'string') {
+          return String((entry as any).name).trim();
         }
         return '';
       })
@@ -494,10 +508,10 @@ export function createSkillAllowlistOverride(allowedSkills) {
     const skills = Array.isArray(base?.skills) ? base.skills : [];
     const diagnostics = Array.isArray(base?.diagnostics) ? [...base.diagnostics] : [];
     const kept = skills.filter((skill) =>
-      allowed.has(String(/** @type {any} */ (skill)?.name ?? '')),
+      allowed.has(String((skill as any)?.name ?? '')),
     );
     const seen = new Set(
-      kept.map((skill) => String(/** @type {any} */ (skill)?.name ?? '')),
+      kept.map((skill) => String((skill as any)?.name ?? '')),
     );
     for (const name of allowed) {
       if (seen.has(name)) continue;
@@ -518,7 +532,7 @@ export function createSkillAllowlistOverride(allowedSkills) {
  * - resourceLoaderOptions.systemPrompt / extensionFactories / skillsOverride
  * - createAgentSessionFromServices tools / customTools
  *
- * @param {ReturnType<typeof bindAgentVersionConfig>} bound
+ * @param bound
  * @param {{
  *   extensionFactories?: unknown[],
  *   skillsOverride?: Function,
@@ -533,7 +547,7 @@ export function createSkillAllowlistOverride(allowedSkills) {
  *   excludeTools?: string[],
  * }} [options]
  */
-export function resolveAgentVersionBindings(bound, options = {}) {
+export function resolveAgentVersionBindings(bound: ReturnType<typeof bindAgentVersionConfig>, options: { extensionFactories?: unknown[], skillsOverride?: Function, customTools?: unknown[], tools?: string[], mcpResolver?: Function | Record<string, any> | null, toolPolicyBinding?: Record<string, any> | null, additionalSkillPaths?: string[], workspaceRoot?: string, skillRoot?: string, productSystemPrompt?: string, excludeTools?: string[], } = {}) {
   const extensionFactories = options.extensionFactories;
   // AgentVersion.skills is realised here rather than by every caller: the
   // allowlist is fully determined by the frozen config, so requiring callers
@@ -587,7 +601,7 @@ export function resolveAgentVersionBindings(bound, options = {}) {
           { code: 'PI_EXTENSIONS_NAME_MISMATCH' },
         );
       }
-      const named = /** @type {Function & { extensionName?: string }} */ (factory);
+      const named = (factory as Function & { extensionName?: string });
       const name =
         typeof named.extensionName === 'string'
           ? named.extensionName
@@ -678,8 +692,7 @@ export function resolveAgentVersionBindings(bound, options = {}) {
   // Exact AgentVersion string, including '' — never collapse empty to SDK defaults.
   // noExtensions: true prevents agentDir auto-discovery of legacy package extensions.
   // Only explicit extensionFactories (resolved enterprise three) are loaded.
-  /** @type {Record<string, unknown>} */
-  const resourceLoaderOptions = {
+  const resourceLoaderOptions: Record<string, unknown> = {
     systemPrompt: enterpriseSystemPrompt,
     noExtensions: true,
   };

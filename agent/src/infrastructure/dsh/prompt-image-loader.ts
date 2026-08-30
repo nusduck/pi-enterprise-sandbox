@@ -52,7 +52,7 @@ export function detectPromptImageMime(bytes) {
  * }} input
  * @returns {Promise<Array<{ type: 'image', data: string, mimeType: string }>>}
  */
-export async function loadPromptImagesFromAttachmentStore(input) {
+export async function loadPromptImagesFromAttachmentStore(input: { attachmentStore: { download: Function }, sandboxSessionId: string, attachments: Array<{ attachmentId: string, mimeType: string, size?: number|null }>, signal?: AbortSignal, maxImages?: number, maxImageBytes?: number, maxTotalBytes?: number, }) {
   const maxImages = positiveLimit(input.maxImages, DEFAULT_MAX_PROMPT_IMAGES);
   const maxImageBytes = positiveLimit(
     input.maxImageBytes,
@@ -68,8 +68,7 @@ export async function loadPromptImagesFromAttachmentStore(input) {
   }
 
   let totalBytes = 0;
-  /** @type {{ type: 'image', data: string, mimeType: string }[]} */
-  const images = [];
+  const images: { type: 'image', data: string, mimeType: string }[] = [];
   for (const attachment of attachments) {
     const declaredMime = String(attachment?.mimeType || '').toLowerCase();
     if (!SUPPORTED_PROMPT_IMAGE_MIME_TYPES.includes(declaredMime)) {
@@ -120,7 +119,7 @@ export async function loadPromptImagesFromAttachmentStore(input) {
       }
     }
     images.push({
-      type: /** @type {'image'} */ ('image'),
+      type: ('image' as 'image'),
       data: bytes.toString('base64'),
       mimeType: declaredMime,
     });

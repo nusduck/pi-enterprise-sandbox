@@ -32,6 +32,9 @@ import {
   summarizeToolResult,
 } from '../../lib/event-redaction.js';
 
+/** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
+type Loose = any;
+
 export const PROJECTOR_EVENT_TYPES = Object.freeze([
   'message.delta',
   'message.completed',
@@ -56,15 +59,15 @@ export const PROJECTOR_EVENT_TYPES = Object.freeze([
  * Stateless pure projector.
  */
 export class PlatformEventProjector {
-  /**
-   * @param {{ maxString?: number }} [opts]
-   */
-  constructor(opts = {}) {
+  // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
+  maxString: Loose;
+
+  constructor(opts: { maxString?: number } = {}) {
     this.maxString = opts.maxString ?? DEFAULT_MAX_STRING;
   }
 
   /**
-   * @param {object | null | undefined} event
+   * @param event
    * @param {{
    *   runId?: string | null,
    *   orgId?: string | null,
@@ -76,17 +79,17 @@ export class PlatformEventProjector {
    * }} [ctx]
    * @returns {Array<{ type: string, payload: Record<string, unknown> }>}
    */
-  project(event, ctx = {}) {
+  project(event: Record<string, any> | null | undefined, ctx: { runId?: string | null, orgId?: string | null, userId?: string | null, conversationId?: string | null, agentSessionId?: string | null, traceId?: string | null, spanId?: string | null, } = {}) {
     if (!event || typeof event !== 'object') return [];
-    const type = /** @type {Record<string, unknown>} */ (event).type;
+    const type = (event as Record<string, unknown>).type;
     if (typeof type !== 'string') return [];
 
     const base = this.#baseContext(ctx);
-    const ev = /** @type {Record<string, unknown>} */ (event);
+    const ev = (event as Record<string, unknown>);
 
     switch (type) {
       case 'message_update': {
-        const ame = /** @type {any} */ (ev).assistantMessageEvent;
+        const ame = (ev as any).assistantMessageEvent;
         if (ame?.type === 'text_delta') {
           const delta = redactInlineSecrets(String(ame.delta ?? ''));
           return [
@@ -141,9 +144,8 @@ export class PlatformEventProjector {
       }
 
       case 'message_end': {
-        const message = /** @type {any} */ (ev).message;
-        /** @type {Array<{ type: string, payload: Record<string, unknown> }>} */
-        const out = [
+        const message = (ev as any).message;
+        const out: Array<{ type: string, payload: Record<string, unknown> }> = [
           {
             type: 'message.completed',
             payload: {
@@ -267,13 +269,8 @@ export class PlatformEventProjector {
     }
   }
 
-  /**
-   * @param {Iterable<object>} events
-   * @param {object} [ctx]
-   */
-  projectMany(events, ctx = {}) {
-    /** @type {Array<{ type: string, payload: Record<string, unknown> }>} */
-    const out = [];
+  projectMany(events: Iterable<Record<string, any>>, ctx: Record<string, any> = {}) {
+    const out: Array<{ type: string, payload: Record<string, unknown> }> = [];
     for (const ev of events) {
       out.push(...this.project(ev, ctx));
     }
@@ -281,12 +278,11 @@ export class PlatformEventProjector {
   }
 
   /**
-   * @param {object} ctx
+   * @param ctx
    * @returns {Record<string, unknown>}
    */
-  #baseContext(ctx) {
-    /** @type {Record<string, unknown>} */
-    const base = {};
+  #baseContext(ctx: Record<string, any>) {
+    const base: Record<string, unknown> = {};
     if (ctx.runId) base.runId = ctx.runId;
     if (ctx.orgId) base.orgId = ctx.orgId;
     if (ctx.userId) base.userId = ctx.userId;
@@ -298,10 +294,6 @@ export class PlatformEventProjector {
   }
 }
 
-/**
- * @param {object} event
- * @param {object} [ctx]
- */
-export function projectPiEvent(event, ctx = {}) {
+export function projectPiEvent(event: Record<string, any>, ctx: Record<string, any> = {}) {
   return new PlatformEventProjector().project(event, ctx);
 }

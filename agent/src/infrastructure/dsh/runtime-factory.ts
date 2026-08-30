@@ -20,14 +20,13 @@ import {
 import { DshRuntimeFactoryError } from './errors.js';
 import { PINNED_DSH_VERSION } from './constants.js';
 
+/** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
+type Loose = any;
+
 export { PINNED_DSH_VERSION, PINNED_PI_SDK_VERSION } from './constants.js';
 export { DshRuntimeFactoryError };
 
-/**
- * @param {object} input
- * @param {NodeJS.ProcessEnv} [env]
- */
-export function buildExecRpcConfig(input, env = process.env) {
+export function buildExecRpcConfig(input: Record<string, any>, env: NodeJS.ProcessEnv = process.env) {
   const ctx = input?.context && typeof input.context === 'object' ? input.context : {};
   const session = input?.agentSession && typeof input.agentSession === 'object'
     ? input.agentSession
@@ -72,13 +71,20 @@ function dshProviderRoute(raw) {
   return p;
 }
 
-function toUserMessage(text, options) {
-  /** @type {Array<{ type: string, text?: string }>} */
-  const content = [{ type: 'text', text: String(text ?? '') }];
+function toUserMessage(
+  text: unknown,
+  options?: { images?: unknown[] },
+) {
+  // 首块是文本，后面可以追加图片块——两者形状不同，所以元素类型只约束
+  // 共有的 `type`，其余字段由各块自己带。
+  const content: Array<{ type: string; [key: string]: unknown }> = [
+    { type: 'text', text: String(text ?? '') },
+  ];
   const images = options?.images;
   if (Array.isArray(images)) {
     for (const image of images) {
-      if (image && typeof image === 'object') content.push(image);
+      if (image && typeof image === 'object')
+        content.push(image as { type: string; [key: string]: unknown });
     }
   }
   const id =
@@ -126,10 +132,7 @@ function summarizeSessionLog(log) {
   return types.length > 0 ? types.join(',') : '(empty)';
 }
 
-/**
- * @param {object} [opts]
- */
-export function createDshRuntimeFactory(opts = {}) {
+export function createDshRuntimeFactory(opts: Record<string, any> = {}) {
   const loadRuntime = opts.loadRuntime ?? (async () => ({
     createRemoteProviders,
     createSessionBackend,
@@ -140,8 +143,7 @@ export function createDshRuntimeFactory(opts = {}) {
   const bootRuntime = opts.bootRuntime;
   const createAgent = opts.createAgent;
 
-  /** @type {Promise<object> | null} */
-  let bootOnce = null;
+  let bootOnce: Promise<Record<string, any>> | null = null;
 
   async function ensureCtx(runtime) {
     if (typeof bootRuntime === 'function') return bootRuntime();
@@ -153,10 +155,7 @@ export function createDshRuntimeFactory(opts = {}) {
   }
 
   return {
-    /**
-     * @param {object} input
-     */
-    async create(input) {
+    async create(input: Record<string, any>) {
       if (!input?.model) {
         throw new DshRuntimeFactoryError('runtime factory requires model');
       }
@@ -253,17 +252,14 @@ export function createDshRuntimeFactory(opts = {}) {
         throw new DshRuntimeFactoryError('createAgent must return an agent with followup()');
       }
 
-      /** @type {Array<(ev: object) => void>} */
-      const subs = [];
+      const subs: Array<(ev: Record<string, any>) => void> = [];
       const entries = [];
-      /** @type {object[]} */
-      const seenPi = [];
+      const seenPi: Record<string, any>[] = [];
       const emit = (ev) => {
         seenPi.push(ev);
         for (const fn of subs) fn(ev);
       };
-      /** @type {unknown} */
-      let turnError = null;
+      let turnError: unknown = null;
       const onAgentError = (payload) => {
         const err = payload?.error ?? payload;
         if (err) turnError = err;
@@ -365,6 +361,9 @@ export function createDshRuntimeFactory(opts = {}) {
 }
 
 export class DshRuntimeFactory {
+  // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
+  _inner: Loose;
+
   constructor(opts = {}) {
     this._inner = createDshRuntimeFactory(opts);
   }

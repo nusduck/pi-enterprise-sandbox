@@ -2,18 +2,16 @@
  * PolicyDecision helpers (plan §14.3).
  */
 
-/** @typedef {'allow' | 'deny' | 'require_approval'} PolicyDecisionKind */
-/** @typedef {'low' | 'medium' | 'high' | 'critical'} PolicyRiskLevel */
+export type PolicyDecisionKind = 'allow' | 'deny' | 'require_approval';
+export type PolicyRiskLevel = 'low' | 'medium' | 'high' | 'critical';
 
-/**
- * @typedef {{
- *   decision: PolicyDecisionKind,
- *   reasonCode: string,
- *   reason: string,
- *   policyId: string,
- *   riskLevel: PolicyRiskLevel,
- * }} PolicyDecision
- */
+export type PolicyDecision = {
+  decision: PolicyDecisionKind;
+  reasonCode: string;
+  reason: string;
+  policyId: string;
+  riskLevel: PolicyRiskLevel;
+};
 
 export const DECISIONS = Object.freeze(['allow', 'deny', 'require_approval']);
 export const RISK_LEVELS = Object.freeze(['low', 'medium', 'high', 'critical']);
@@ -32,31 +30,31 @@ const RISK_RANK = Object.freeze({
 });
 
 /**
- * @param {unknown} value
+ * @param value
  * @returns {PolicyDecision | null}
  */
-export function validatePolicyDecision(value) {
+export function validatePolicyDecision(value: unknown) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
-  const d = /** @type {Record<string, unknown>} */ (value);
-  if (!DECISIONS.includes(/** @type {any} */ (d.decision))) return null;
+  const d = (value as Record<string, unknown>);
+  if (!DECISIONS.includes((d.decision as any))) return null;
   if (typeof d.reasonCode !== 'string' || !d.reasonCode.trim()) return null;
   if (typeof d.reason !== 'string' || !d.reason.trim()) return null;
   if (typeof d.policyId !== 'string' || !d.policyId.trim()) return null;
-  if (!RISK_LEVELS.includes(/** @type {any} */ (d.riskLevel))) return null;
+  if (!RISK_LEVELS.includes((d.riskLevel as any))) return null;
   return {
-    decision: /** @type {PolicyDecisionKind} */ (d.decision),
+    decision: (d.decision as PolicyDecisionKind),
     reasonCode: d.reasonCode.trim(),
     reason: d.reason.trim(),
     policyId: d.policyId.trim(),
-    riskLevel: /** @type {PolicyRiskLevel} */ (d.riskLevel),
+    riskLevel: (d.riskLevel as PolicyRiskLevel),
   };
 }
 
 /**
- * @param {Partial<PolicyDecision> & { decision: PolicyDecisionKind, reasonCode: string, reason: string, policyId: string }} partial
+ * @param partial
  * @returns {PolicyDecision}
  */
-export function makePolicyDecision(partial) {
+export function makePolicyDecision(partial: Partial<PolicyDecision> & { decision: PolicyDecisionKind, reasonCode: string, reason: string, policyId: string }) {
   const d = validatePolicyDecision({
     riskLevel: 'low',
     ...partial,
@@ -70,10 +68,10 @@ export function makePolicyDecision(partial) {
 /**
  * Merge decisions: never relax — max(decision rank), max(risk rank).
  * Lower layers cannot override a stricter upper-layer decision.
- * @param {PolicyDecision[]} decisions — higher priority first
+ * @param decisions — higher priority first
  * @returns {PolicyDecision}
  */
-export function mergePolicyDecisions(decisions) {
+export function mergePolicyDecisions(decisions: PolicyDecision[]) {
   if (!decisions.length) {
     return makePolicyDecision({
       decision: 'deny',

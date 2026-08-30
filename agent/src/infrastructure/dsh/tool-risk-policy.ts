@@ -19,6 +19,9 @@
 
 import { DECISION_RANK, RISK_LEVELS, RISK_RANK } from './policy-decision.js';
 
+/** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
+type Loose = any;
+
 /** Classification classes the risk table can address. */
 export const RISK_CLASSES = Object.freeze([
   'internal_interaction',
@@ -51,63 +54,58 @@ export const DEFAULT_RISK_APPROVAL = Object.freeze({
 const DECISIONS = Object.freeze(['allow', 'require_approval', 'deny']);
 
 export class ToolRiskPolicyError extends Error {
-  /**
-   * @param {string} message
-   * @param {{ code?: string }} [opts]
-   */
-  constructor(message, opts = {}) {
+  // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
+  code: Loose;
+
+  constructor(message: string, opts: { code?: string } = {}) {
     super(message);
     this.name = 'ToolRiskPolicyError';
     this.code = opts.code ?? 'TOOL_RISK_POLICY_INVALID';
   }
 }
 
-/**
- * @typedef {'low' | 'medium' | 'high' | 'critical'} RiskLevel
- * @typedef {'allow' | 'require_approval' | 'deny'} RiskDecision
- *
- * @typedef {{
- *   riskApproval: Readonly<Record<RiskLevel, RiskDecision>>,
- *   classRiskLevels: Readonly<Record<string, RiskLevel>>,
- *   tools: Readonly<Record<string, RiskLevel>>,
- *   toolPatterns: ReadonlyArray<{ prefix: string, riskLevel: RiskLevel }>,
- *   mcpServers: Readonly<Record<string, {
- *     riskLevel: RiskLevel | null,
- *     tools: Readonly<Record<string, RiskLevel>>,
- *   }>>,
- * }} ToolRiskPolicy
- */
+export type RiskLevel = 'low' | 'medium' | 'high' | 'critical';
+
+export type RiskDecision = 'allow' | 'require_approval' | 'deny';
+
+export type ToolRiskPolicy = {
+  riskApproval: Readonly<Record<RiskLevel, RiskDecision>>;
+  classRiskLevels: Readonly<Record<string, RiskLevel>>;
+  tools: Readonly<Record<string, RiskLevel>>;
+  toolPatterns: ReadonlyArray<{ prefix: string, riskLevel: RiskLevel }>;
+  mcpServers: Readonly<Record<string, { riskLevel: RiskLevel | null, tools: Readonly<Record<string, RiskLevel>>, }>>;
+};
 
 /**
- * @param {unknown} value
- * @param {string} field
+ * @param value
+ * @param field
  * @returns {RiskLevel}
  */
-function assertRiskLevel(value, field) {
+function assertRiskLevel(value: unknown, field: string) {
   const level = String(value ?? '').trim().toLowerCase();
-  if (!RISK_LEVELS.includes(/** @type {any} */ (level))) {
+  if (!RISK_LEVELS.includes((level as any))) {
     throw new ToolRiskPolicyError(
       `${field} must be one of ${RISK_LEVELS.join('|')} (got ${JSON.stringify(value)})`,
       { code: 'TOOL_RISK_LEVEL_INVALID' },
     );
   }
-  return /** @type {RiskLevel} */ (level);
+  return (level as RiskLevel);
 }
 
 /**
- * @param {unknown} value
- * @param {string} field
+ * @param value
+ * @param field
  * @returns {RiskDecision}
  */
-function assertDecision(value, field) {
+function assertDecision(value: unknown, field: string) {
   const decision = String(value ?? '').trim().toLowerCase();
-  if (!DECISIONS.includes(/** @type {any} */ (decision))) {
+  if (!DECISIONS.includes((decision as any))) {
     throw new ToolRiskPolicyError(
       `${field} must be one of ${DECISIONS.join('|')} (got ${JSON.stringify(value)})`,
       { code: 'TOOL_RISK_DECISION_INVALID' },
     );
   }
-  return /** @type {RiskDecision} */ (decision);
+  return (decision as RiskDecision);
 }
 
 /**
@@ -115,13 +113,13 @@ function assertDecision(value, field) {
  * (`{ riskLevel: "high" }`), so the same table can gain fields later without
  * breaking existing config files.
  *
- * @param {unknown} entry
- * @param {string} field
+ * @param entry
+ * @param field
  * @returns {RiskLevel}
  */
-function readRiskEntry(entry, field) {
+function readRiskEntry(entry: unknown, field: string) {
   if (entry != null && typeof entry === 'object' && !Array.isArray(entry)) {
-    const obj = /** @type {Record<string, unknown>} */ (entry);
+    const obj = (entry as Record<string, unknown>);
     const raw = obj.riskLevel ?? obj.risk_level ?? obj.risk;
     if (raw == null) {
       throw new ToolRiskPolicyError(`${field} must carry riskLevel`, {
@@ -134,25 +132,25 @@ function readRiskEntry(entry, field) {
 }
 
 /**
- * @param {unknown} value
- * @param {string} field
+ * @param value
+ * @param field
  * @returns {Record<string, unknown>}
  */
-function assertObject(value, field) {
+function assertObject(value: unknown, field: string) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     throw new ToolRiskPolicyError(`${field} must be an object`, {
       code: 'TOOL_RISK_POLICY_SHAPE',
     });
   }
-  return /** @type {Record<string, unknown>} */ (value);
+  return (value as Record<string, unknown>);
 }
 
 /**
  * Tool keys accept the projected tool name (`read`, `mcp__github__create_pr`),
  * the `server::tool` form, or a trailing-`*` prefix pattern.
- * @param {string} key
+ * @param key
  */
-function normalizeToolKey(key) {
+function normalizeToolKey(key: string) {
   const raw = String(key ?? '').trim();
   if (!raw) {
     throw new ToolRiskPolicyError('tool risk key must be a non-empty string', {
@@ -191,11 +189,11 @@ export function defaultToolRiskPolicy() {
  * typo in an operator config file fails at startup instead of silently
  * leaving a tool at its default risk.
  *
- * @param {unknown} raw
- * @param {{ field?: string }} [opts]
+ * @param raw
+ * @param [opts]
  * @returns {ToolRiskPolicy}
  */
-export function loadToolRiskPolicy(raw, opts = {}) {
+export function loadToolRiskPolicy(raw: unknown, opts: { field?: string } = {}) {
   const field = opts.field || 'toolRiskPolicy';
   if (raw == null) return defaultToolRiskPolicy();
 
@@ -231,8 +229,7 @@ export function loadToolRiskPolicy(raw, opts = {}) {
     }
   }
 
-  /** @type {Record<string, RiskDecision>} */
-  const riskApproval = { ...DEFAULT_RISK_APPROVAL };
+  const riskApproval: Record<string, RiskDecision> = { ...DEFAULT_RISK_APPROVAL };
   if (obj.riskApproval != null) {
     const table = assertObject(obj.riskApproval, `${field}.riskApproval`);
     for (const [level, decision] of Object.entries(table)) {
@@ -244,12 +241,11 @@ export function loadToolRiskPolicy(raw, opts = {}) {
     }
   }
 
-  /** @type {Record<string, RiskLevel>} */
-  const classRiskLevels = { ...DEFAULT_CLASS_RISK_LEVELS };
+  const classRiskLevels: Record<string, RiskLevel> = { ...DEFAULT_CLASS_RISK_LEVELS };
   if (obj.classRiskLevels != null) {
     const table = assertObject(obj.classRiskLevels, `${field}.classRiskLevels`);
     for (const [cls, level] of Object.entries(table)) {
-      if (!RISK_CLASSES.includes(/** @type {any} */ (cls))) {
+      if (!RISK_CLASSES.includes((cls as any))) {
         throw new ToolRiskPolicyError(
           `${field}.classRiskLevels.${cls} is not a tool class (expected ${RISK_CLASSES.join(', ')})`,
           { code: 'TOOL_RISK_POLICY_SHAPE' },
@@ -259,10 +255,8 @@ export function loadToolRiskPolicy(raw, opts = {}) {
     }
   }
 
-  /** @type {Record<string, RiskLevel>} */
-  const tools = {};
-  /** @type {Array<{ prefix: string, riskLevel: RiskLevel }>} */
-  const toolPatterns = [];
+  const tools: Record<string, RiskLevel> = {};
+  const toolPatterns: Array<{ prefix: string, riskLevel: RiskLevel }> = [];
   if (obj.tools != null) {
     const table = assertObject(obj.tools, `${field}.tools`);
     for (const [key, entry] of Object.entries(table)) {
@@ -279,8 +273,7 @@ export function loadToolRiskPolicy(raw, opts = {}) {
   // Longest prefix wins, so `mcp__github__delete_*` beats `mcp__github__*`.
   toolPatterns.sort((a, b) => b.prefix.length - a.prefix.length);
 
-  /** @type {Record<string, { riskLevel: RiskLevel | null, tools: Record<string, RiskLevel> }>} */
-  const mcpServers = {};
+  const mcpServers: Record<string, { riskLevel: RiskLevel | null, tools: Record<string, RiskLevel> }> = {};
   if (obj.mcpServers != null) {
     const table = assertObject(obj.mcpServers, `${field}.mcpServers`);
     for (const [serverId, entry] of Object.entries(table)) {
@@ -302,8 +295,7 @@ export function loadToolRiskPolicy(raw, opts = {}) {
       }
       const server = assertObject(entry, `${field}.mcpServers.${id}`);
       const rawLevel = server.riskLevel ?? server.risk_level ?? null;
-      /** @type {Record<string, RiskLevel>} */
-      const serverTools = {};
+      const serverTools: Record<string, RiskLevel> = {};
       const rawTools = server.tools ?? server.toolRiskLevels ?? null;
       if (rawTools != null) {
         const toolTable = assertObject(rawTools, `${field}.mcpServers.${id}.tools`);
@@ -351,21 +343,17 @@ export function loadToolRiskPolicy(raw, opts = {}) {
 }
 
 /**
- * @param {RiskLevel | null | undefined} a
- * @param {RiskLevel | null | undefined} b
+ * @param a
+ * @param b
  * @returns {RiskLevel | null}
  */
-function maxRisk(a, b) {
+function maxRisk(a: RiskLevel | null | undefined, b: RiskLevel | null | undefined) {
   if (!a) return b ?? null;
   if (!b) return a;
   return RISK_RANK[b] > RISK_RANK[a] ? b : a;
 }
 
-/**
- * @param {RiskDecision} a
- * @param {RiskDecision} b
- */
-function strictestDecision(a, b) {
+function strictestDecision(a: RiskDecision, b: RiskDecision) {
   return DECISION_RANK[b] > DECISION_RANK[a] ? b : a;
 }
 
@@ -373,15 +361,14 @@ function strictestDecision(a, b) {
  * Merge an override layer onto a base layer. The override may only tighten:
  * risk levels take the maximum, decisions take the stricter of the two.
  *
- * @param {ToolRiskPolicy} base
- * @param {ToolRiskPolicy | null | undefined} override
+ * @param base
+ * @param override
  * @returns {ToolRiskPolicy}
  */
-export function mergeToolRiskPolicies(base, override) {
+export function mergeToolRiskPolicies(base: ToolRiskPolicy, override: ToolRiskPolicy | null | undefined) {
   if (!override) return base;
 
-  /** @type {Record<string, RiskDecision>} */
-  const riskApproval = { ...base.riskApproval };
+  const riskApproval: Record<string, RiskDecision> = { ...base.riskApproval };
   for (const level of RISK_LEVELS) {
     riskApproval[level] = strictestDecision(
       base.riskApproval[level],
@@ -389,37 +376,32 @@ export function mergeToolRiskPolicies(base, override) {
     );
   }
 
-  /** @type {Record<string, RiskLevel>} */
-  const classRiskLevels = { ...base.classRiskLevels };
+  const classRiskLevels: Record<string, RiskLevel> = { ...base.classRiskLevels };
   for (const cls of RISK_CLASSES) {
     const merged = maxRisk(base.classRiskLevels[cls], override.classRiskLevels[cls]);
     if (merged) classRiskLevels[cls] = merged;
   }
 
-  /** @type {Record<string, RiskLevel>} */
-  const tools = { ...base.tools };
+  const tools: Record<string, RiskLevel> = { ...base.tools };
   for (const [name, level] of Object.entries(override.tools)) {
     const merged = maxRisk(tools[name], level);
     if (merged) tools[name] = merged;
   }
 
-  /** @type {Map<string, RiskLevel>} */
-  const patterns = new Map();
+  const patterns: Map<string, RiskLevel> = new Map();
   for (const { prefix, riskLevel } of [...base.toolPatterns, ...override.toolPatterns]) {
     const merged = maxRisk(patterns.get(prefix), riskLevel);
     if (merged) patterns.set(prefix, merged);
   }
 
-  /** @type {Record<string, { riskLevel: RiskLevel | null, tools: Record<string, RiskLevel> }>} */
-  const mcpServers = {};
+  const mcpServers: Record<string, { riskLevel: RiskLevel | null, tools: Record<string, RiskLevel> }> = {};
   for (const id of new Set([
     ...Object.keys(base.mcpServers),
     ...Object.keys(override.mcpServers),
   ])) {
     const b = base.mcpServers[id];
     const o = override.mcpServers[id];
-    /** @type {Record<string, RiskLevel>} */
-    const serverTools = { ...(b?.tools || {}) };
+    const serverTools: Record<string, RiskLevel> = { ...(b?.tools || {}) };
     for (const [tool, level] of Object.entries(o?.tools || {})) {
       const merged = maxRisk(serverTools[tool], level);
       if (merged) serverTools[tool] = merged;
@@ -463,12 +445,12 @@ export function mergeToolRiskPolicies(base, override) {
  *   5. per-server default           mcpServers.github.riskLevel
  *   6. classification baseline      classRiskLevels.external_high
  *
- * @param {string} toolName
- * @param {{ class?: string, serverId?: string, tool?: string }} cls
- * @param {ToolRiskPolicy} policy
+ * @param toolName
+ * @param cls
+ * @param policy
  * @returns {{ riskLevel: RiskLevel, source: string, configured: boolean }}
  */
-export function resolveToolRiskLevel(toolName, cls, policy) {
+export function resolveToolRiskLevel(toolName: string, cls: { class?: string, serverId?: string, tool?: string }, policy: ToolRiskPolicy) {
   const name = String(toolName || '');
   const serverId = cls?.serverId ? String(cls.serverId) : null;
   const bareTool = cls?.tool ? String(cls.tool) : null;
@@ -518,35 +500,35 @@ export function resolveToolRiskLevel(toolName, cls, policy) {
   const className = String(cls?.class || '');
   const classLevel =
     policy.classRiskLevels[className] ??
-    DEFAULT_CLASS_RISK_LEVELS[/** @type {keyof typeof DEFAULT_CLASS_RISK_LEVELS} */ (className)] ??
+    DEFAULT_CLASS_RISK_LEVELS[(className as keyof typeof DEFAULT_CLASS_RISK_LEVELS)] ??
     'critical';
   return {
-    riskLevel: /** @type {RiskLevel} */ (classLevel),
+    riskLevel: (classLevel as RiskLevel),
     source: `class:${className || 'unknown'}`,
     configured:
       classLevel !==
       DEFAULT_CLASS_RISK_LEVELS[
-        /** @type {keyof typeof DEFAULT_CLASS_RISK_LEVELS} */ (className)
+        (className as keyof typeof DEFAULT_CLASS_RISK_LEVELS)
       ],
   };
 }
 
 /**
- * @param {RiskLevel} riskLevel
- * @param {ToolRiskPolicy} policy
+ * @param riskLevel
+ * @param policy
  * @returns {RiskDecision}
  */
-export function decisionForRiskLevel(riskLevel, policy) {
+export function decisionForRiskLevel(riskLevel: RiskLevel, policy: ToolRiskPolicy) {
   return policy.riskApproval[riskLevel] ?? DEFAULT_RISK_APPROVAL[riskLevel] ?? 'deny';
 }
 
 /**
  * Accept an already-normalized policy or raw config and return a policy.
- * @param {unknown} value
- * @param {{ field?: string }} [opts]
+ * @param value
+ * @param [opts]
  * @returns {ToolRiskPolicy}
  */
-export function coerceToolRiskPolicy(value, opts = {}) {
+export function coerceToolRiskPolicy(value: unknown, opts: { field?: string } = {}) {
   if (!value) return defaultToolRiskPolicy();
   if (
     typeof value === 'object' &&
@@ -554,7 +536,7 @@ export function coerceToolRiskPolicy(value, opts = {}) {
     'riskApproval' in value &&
     'toolPatterns' in value
   ) {
-    return /** @type {ToolRiskPolicy} */ (value);
+    return (value as ToolRiskPolicy);
   }
   return loadToolRiskPolicy(value, opts);
 }
