@@ -39,45 +39,64 @@ import {
 import { ValidationError } from '../../application/errors.js';
 import { waitForWritableResume } from '../../application/run-event-sse-service.js';
 
+/** 取单值头。重复头在 Node 里是数组；幂等键是单值语义，取第一个。 */
+function firstHeaderValue(req: { headers: Record<string, string | string[] | undefined> }, name: string): string | null {
+  const raw = req.headers[name] ?? req.headers[name.replace(/(^|-)([a-z])/g, (_m, p, c) => p + c.toUpperCase())];
+  if (Array.isArray(raw)) return raw[0] ?? null;
+  return typeof raw === 'string' ? raw : null;
+}
+
 /**
- * @param {{
- *   credentialService: { authenticate: Function },
- *   taskService: {
- *     sendMessage: Function,
- *     getTask: Function,
- *     cancelTask: Function,
- *     beginSubscribe?: Function,
- *     auditStreamEnd?: Function,
- *     auditArtifactDownload?: Function,
- *     resolveOwnedTask?: Function,
- *   },
- *   streamService: { openTaskStream: Function },
- *   resolveAgentMeta?: (agentId: string) => Promise<{
- *     name?: string,
- *     description?: string,
- *     skills?: object[],
- *   } | null>,
- *   skillRoot?: string | null,
- *   publicBaseUrl?: string | null,
- *   deploymentEnv?: string,
- *   allowDevHostFallback?: boolean,
- *   artifactDownloadSecret?: string | null,
- *   streamArtifactBytes?: ((ctx: object) => Promise<{
- *     body: AsyncIterable<Uint8Array|Buffer> | ReadableStream | null,
- *     contentType?: string | null,
- *     contentLength?: string | number | null,
- *     contentDisposition?: string | null,
- *     sha256?: string | null,
- *   }>) | null,
- *   createRepositories?: (db?: any) => any,
- *   db?: any,
- *   resolveTraceId: Function,
- *   resolveTraceContext?: Function,
- *   readBody: Function,
- *   json: Function,
- * }} deps
+ * 本处理器的依赖。由 JSDoc 的 `@param {{…}}` 转成真接口——原来的形状里
+ * `taskService.listTasks` 是可选方法却没声明，`readBody`/`json` 是裸
+ * `Function`，两处都逼出了 `@ts-expect-error`。
+ *
+ * 仍然宽松的部分（`Loose`）是过渡期的诚实表述：仓储与应用服务还是 JS，
+ * 给它们编造精确类型会谎报现状。
  */
-export function createA2aHttpHandler(deps) {
+type Loose = any;
+
+export interface A2aHandlerDeps {
+  readonly credentialService: { authenticate: (...args: Loose[]) => Loose };
+  readonly taskService: {
+    sendMessage: (...args: Loose[]) => Loose;
+    getTask: (...args: Loose[]) => Loose;
+    cancelTask: (...args: Loose[]) => Loose;
+    beginSubscribe?: (...args: Loose[]) => Loose;
+    auditStreamEnd?: (...args: Loose[]) => Loose;
+    auditArtifactDownload?: (...args: Loose[]) => Loose;
+    resolveOwnedTask?: (...args: Loose[]) => Loose;
+    /** 可选：不是每个部署都开列表接口，缺失时按 UNSUPPORTED 回。 */
+    listTasks?: (...args: Loose[]) => Loose;
+  };
+  readonly streamService: { openTaskStream: (...args: Loose[]) => Loose };
+  // 返回形状按调用方实际给的来：有的实现返回带具体字段的对象，收得太紧会
+  // 让合法实现不可赋值。
+  readonly resolveAgentMeta?: (agentId: string) => Promise<Loose>;
+  readonly skillRoot?: string | null;
+  readonly publicBaseUrl?: string | null;
+  readonly deploymentEnv?: string;
+  readonly allowDevHostFallback?: boolean;
+  readonly artifactDownloadSecret?: string | null;
+  readonly streamArtifactBytes?:
+    | ((ctx: object) => Promise<{
+        /** 三种形态：异步迭代器、Web 流、或没有字节。只有 Web 流有 cancel()。 */
+        body: AsyncIterable<Uint8Array | Buffer> | ReadableStream | null;
+        contentType?: string | null;
+        contentLength?: string | number | null;
+        contentDisposition?: string | null;
+        sha256?: string | null;
+      }>)
+    | null;
+  readonly createRepositories?: (db?: Loose) => Loose;
+  readonly db?: Loose;
+  readonly resolveTraceId: (...args: Loose[]) => string;
+  readonly resolveTraceContext?: (req: Loose, bodyTrace?: unknown) => Loose;
+  readonly readBody: (...args: Loose[]) => Promise<string>;
+  readonly json: (...args: Loose[]) => void;
+}
+
+export function createA2aHttpHandler(deps: A2aHandlerDeps) {
   if (!deps?.credentialService?.authenticate) {
     throw new Error('createA2aHttpHandler requires credentialService');
   }
@@ -97,7 +116,7 @@ export function createA2aHttpHandler(deps) {
    * @param {unknown} [bodyTrace]
    * @returns {{ traceId: string, parentSpanId: string|null, traceFlags: string|null, traceState: string|null }}
    */
-  function resolveTraceContext(req, bodyTrace) {
+  function resolveTraceContext(req: Loose, bodyTrace?: unknown) {
     if (typeof deps.resolveTraceContext === 'function') {
       const resolved = deps.resolveTraceContext(req, bodyTrace);
       if (resolved && typeof resolved.traceId === 'string') {
@@ -437,8 +456,10 @@ export function createA2aHttpHandler(deps) {
     const onClose = () => {
       aborted = true;
       try {
-        // @ts-expect-error 遗留JS占位类型object未展开，访问cancel需收窄，存活代码先用expect-error收敛 —— TS2339: Property 'cancel' does not exist on type 'AsyncIterable<Buff
-        streamResult.body?.cancel?.();
+        // body 有三种形态，只有 Web ReadableStream 有 cancel()。显式判断，
+        // 而不是靠可选链在异步迭代器上"碰巧"取到 undefined。
+        const body = streamResult.body as { cancel?: () => unknown } | null;
+        body?.cancel?.();
       } catch {
         /* ignore */
       }
@@ -516,8 +537,9 @@ export function createA2aHttpHandler(deps) {
 
     const parsed = parseJsonRpcRequest(body);
     if (!parsed.ok) {
-      // @ts-expect-error 遗留JS占位类型object未展开，访问error需收窄，存活代码先用expect-error收敛 —— TS2339: Property 'error' does not exist on type '{ ok: true; id: str
-      deps.json(res, 200, jsonRpcError(parsed.id, parsed.error));
+      // parseJsonRpcRequest 返回判别联合；`ok: false` 这一支才有 error。
+      const failed = parsed as { id: string | number; error: Loose };
+      deps.json(res, 200, jsonRpcError(failed.id, failed.error));
       return;
     }
 
@@ -563,7 +585,7 @@ export function createA2aHttpHandler(deps) {
     const bodyTrace =
       params?.metadata &&
       typeof params.metadata === 'object' &&
-      /** @type {any} */ (params.metadata).traceId;
+      (params.metadata as Loose).traceId;
     const traceContext = resolveTraceContext(req, bodyTrace);
     const traceId = traceContext.traceId;
 
@@ -579,14 +601,12 @@ export function createA2aHttpHandler(deps) {
             requireStableIdempotencyKey({
               messageId:
                 params?.message && typeof params.message === 'object'
-                  ? /** @type {any} */ (params.message).messageId ||
-                    /** @type {any} */ (params.message).message_id
+                  ? (params.message as Loose).messageId ||
+                    (params.message as Loose).message_id
                   : params?.messageId,
-              // @ts-expect-error Function宽松类型与精确签名不匹配，JSDoc形状待补，先用expect-error收敛 —— TS2322: Type 'string | string[]' is not assignable to type 'string'.
-              idempotencyKey:
-                req.headers['idempotency-key'] ||
-                req.headers['Idempotency-Key'] ||
-                null,
+              // 头值可能是 string[]（重复头）。取第一个而不是把数组传下去——
+              // 幂等键是单值语义，数组会让下游把 "a,b" 当成一个键。
+              idempotencyKey: firstHeaderValue(req, 'idempotency-key'),
             });
           } catch (err) {
             if (err instanceof ValidationError) {
@@ -651,7 +671,6 @@ export function createA2aHttpHandler(deps) {
           return;
         }
         case A2A_METHODS.LIST_TASKS: {
-          // @ts-expect-error 遗留JS占位类型object未展开，访问listTasks需收窄，存活代码先用expect-error收敛 —— TS2339: Property 'listTasks' does not exist on type '{ sendMessage: 
           if (typeof deps.taskService.listTasks !== 'function') {
             deps.json(
               res,
@@ -660,7 +679,6 @@ export function createA2aHttpHandler(deps) {
             );
             return;
           }
-          // @ts-expect-error 遗留JS占位类型object未展开，访问listTasks需收窄，存活代码先用expect-error收敛 —— TS2339: Property 'listTasks' does not exist on type '{ sendMessage: 
           const listed = await deps.taskService.listTasks({
             principal,
             agentId,
@@ -687,14 +705,12 @@ export function createA2aHttpHandler(deps) {
             requireStableIdempotencyKey({
               messageId:
                 params?.message && typeof params.message === 'object'
-                  ? /** @type {any} */ (params.message).messageId ||
-                    /** @type {any} */ (params.message).message_id
+                  ? (params.message as Loose).messageId ||
+                    (params.message as Loose).message_id
                   : params?.messageId,
-              // @ts-expect-error Function宽松类型与精确签名不匹配，JSDoc形状待补，先用expect-error收敛 —— TS2322: Type 'string | string[]' is not assignable to type 'string'.
-              idempotencyKey:
-                req.headers['idempotency-key'] ||
-                req.headers['Idempotency-Key'] ||
-                null,
+              // 头值可能是 string[]（重复头）。取第一个而不是把数组传下去——
+              // 幂等键是单值语义，数组会让下游把 "a,b" 当成一个键。
+              idempotencyKey: firstHeaderValue(req, 'idempotency-key'),
             });
           } catch (err) {
             if (err instanceof ValidationError) {
@@ -948,7 +964,7 @@ function extractTaskId(params) {
     params?.taskId ??
     params?.task_id ??
     (params?.task && typeof params.task === 'object'
-      ? /** @type {any} */ (params.task).id
+      ? (params.task as Loose).id
       : null);
   if (typeof id !== 'string' || !id.trim()) {
     throw new ValidationError('params.id (task id) is required');
