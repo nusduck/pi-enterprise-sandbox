@@ -87,7 +87,7 @@ export function canonicalizeForJsonl(value: unknown, stack: WeakSet<Record<strin
       code: 'PI_JSONL_CANONICALIZE_ERROR',
     });
   }
-  const obj = (value as object);
+  const obj = (value as Record<string, any>);
   if (stack.has(obj)) {
     throw new PiSessionAdapterError('circular reference is not supported in JSONL', {
       code: 'PI_JSONL_CANONICALIZE_ERROR',
@@ -99,7 +99,7 @@ export function canonicalizeForJsonl(value: unknown, stack: WeakSet<Record<strin
       return value.map((v) => canonicalizeForJsonl(v, stack));
     }
     if (!isPlainObject(value)) {
-      const keys = Object.keys((value as object)).sort();
+      const keys = Object.keys((value as Record<string, any>)).sort();
             const out: Record<string, unknown> = {};
       for (const k of keys) {
         const v = (value as Record<string, unknown>)[k];
@@ -109,7 +109,7 @@ export function canonicalizeForJsonl(value: unknown, stack: WeakSet<Record<strin
       return out;
     }
         const out: Record<string, unknown> = {};
-    for (const k of Object.keys((value as object)).sort()) {
+    for (const k of Object.keys((value as Record<string, any>)).sort()) {
       const v = (value as Record<string, unknown>)[k];
       if (v === undefined) continue;
       out[k] = canonicalizeForJsonl(v, stack);

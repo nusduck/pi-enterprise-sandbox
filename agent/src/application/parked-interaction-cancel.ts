@@ -25,7 +25,19 @@ import {
   buildCanonicalEnvelope,
   redactEventData,
 } from './fenced-run-event-recorder.js';
-import { applyRunTransitionInTxn } from './run-transition.js';
+import {
+  applyRunTransitionInTxn,
+  type RunTransitionRepos,
+} from './run-transition.js';
+
+/**
+ * 这条路径要用的仓储：状态迁移那三个，外加 interaction 与工具执行——
+ * 取消一个 parked WAITING_INPUT 需要同时收尾这两张表。
+ */
+export type ParkedInteractionRepos = RunTransitionRepos & {
+  interactions: any;
+  toolExecutions: any;
+};
 
 /** Tool states a parked cancel may close; anything else is left alone. */
 export const PARKED_TOOL_CANCELLABLE_STATUSES = new Set([
@@ -44,7 +56,10 @@ export const PARKED_TOOL_CANCELLABLE_STATUSES = new Set([
  *   now: () => Date,
  * }} args
  */
-async function appendEventInTxn({ repos, run, eventType, data, generateId, now }) {
+async function appendEventInTxn({ repos, run, eventType, data, generateId, now }: {
+  repos: RunTransitionRepos;
+  [key: string]: any;
+}) {
   const timestamp = now();
   const eventId = assertUlid(generateId(), 'eventId');
   const outboxId = assertUlid(generateId(), 'outboxId');
@@ -114,7 +129,7 @@ async function appendEventInTxn({ repos, run, eventType, data, generateId, now }
  * }} input
  * @returns {Promise<{ status: string }>}
  */
-export async function terminalizeParkedWaitingInputInTxn(input) {
+export async function terminalizeParkedWaitingInputInTxn(input: { repos: ParkedInteractionRepos, run: Record<string, any>, scope: { orgId: string, userId: string }, cancelledBy: string, generateId: () => string, now?: () => Date, stateMachine?: { assertTransition: (from: string, to: string) => void }, }) {
   const {
     repos,
     run,

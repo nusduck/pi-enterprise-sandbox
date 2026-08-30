@@ -32,8 +32,10 @@ LOCAL_GENERATED_DIRECTORIES = frozenset(
 HOTSPOT_LINE_BUDGETS = {
     # W2-D 曾为 @ts-expect-error 横幅抬到 1_493；Wave 6 换成 JSDoc 形状后收回。
     "agent/src/application/execute-run-service.js": 1_482,
-    # W2-D 曾抬到 1_672；去掉 expect-error 后收回。
-    "agent/src/application/fenced-tool-governance-recorder.js": 1_663,
+    # W2-D 曾抬到 1_672；去掉 expect-error 后收回 1_663；转 TS 又收回 9 行
+    # （提升上去的 JSDoc @param 块比加上的类型声明更长）。仍是全仓最长的
+    # 文件，阶段 D 收尾时应当拆。
+    "agent/src/application/fenced-tool-governance-recorder.ts": 1_654,
     "agent/src/application/pi-run-executor.js": 1_613,
     # 转 TS 时拆出 container-mcp.ts（MCP 发现状态机），1_178 -> 1_065，预算收紧。
     "agent/src/bootstrap/container.ts": 1_065,

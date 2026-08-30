@@ -52,17 +52,22 @@ import {
   INTERACTION_STATUS,
 } from '../domain/interaction/interaction-status.js';
 
+/** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
+type Loose = any;
+
 
 /**
  * Durable policy state conflict — enterprise-policy maps to block.
  * Does not claim PR-09 resume; prevents allow bypass of prior deny/pending.
  */
 export class DurablePolicyConflictError extends Error {
-  /**
-   * @param {string} message
-   * @param {{ reasonCode?: string, toolExecution?: object }} [meta]
-   */
-  constructor(message, meta = {}) {
+  // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
+  name: string;
+  code: string;
+  reasonCode: Loose;
+  toolExecution: Loose;
+
+  constructor(message: string, meta: { reasonCode?: string, toolExecution?: Record<string, any> } = {}) {
     super(message);
     this.name = 'DurablePolicyConflictError';
     this.code = 'POLICY_DURABLE_CONFLICT';
@@ -71,12 +76,23 @@ export class DurablePolicyConflictError extends Error {
   }
 }
 
-/**
- * @typedef {import('./fenced-run-event-recorder.js').RunEventContext} RunEventContext
- * @typedef {import('./fenced-run-event-recorder.js').CanonicalRunEventEnvelope} CanonicalRunEventEnvelope
- */
+export type RunEventContext = import('./fenced-run-event-recorder.js').RunEventContext;
+export type CanonicalRunEventEnvelope =
+  import('./fenced-run-event-recorder.js').CanonicalRunEventEnvelope;
 
 export class FencedToolGovernanceRecorder {
+  // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
+  tx: Loose;
+  createRepositories: Loose;
+  generateId: Loose;
+  context: Loose;
+  executionFenceToken: Loose;
+  now: Loose;
+  emit: Loose;
+  isLockLost: Loose;
+  _tail: Loose;
+  _inflight: Map<any, any>;
+
   /**
    * @param {{
    *   transactionManager: { run: (fn: (trx: any) => Promise<any>) => Promise<any> },
@@ -89,7 +105,7 @@ export class FencedToolGovernanceRecorder {
    *   isLockLost?: () => boolean,
    * }} deps
    */
-  constructor(deps) {
+  constructor(deps: { transactionManager: { run: (fn: (trx: any) => Promise<any>) => Promise<any> }, createRepositories: (db: any) => any, generateId: () => string, context: RunEventContext, executionFenceToken: number, now?: () => Date, emit?: ((envelope: CanonicalRunEventEnvelope) => Promise<void> | void) | null, isLockLost?: () => boolean, }) {
     if (!deps?.transactionManager?.run) {
       throw new Error('FencedToolGovernanceRecorder requires transactionManager');
     }
@@ -147,12 +163,8 @@ export class FencedToolGovernanceRecorder {
 
   /**
    * Serialize concurrent same-key work on this instance only.
-   * @template T
-   * @param {string} key
-   * @param {() => Promise<T>} work
-   * @returns {Promise<T>}
    */
-  async #withInflight(key, work) {
+  async #withInflight<T>(key: string, work: () => Promise<T>): Promise<T> {
     const existing = this._inflight.get(key);
     if (existing) return existing;
     const p = (async () => {
@@ -166,11 +178,7 @@ export class FencedToolGovernanceRecorder {
     return p;
   }
 
-  /**
-   * @param {any} repos
-   * @param {{ type: string, data: object, spanId?: string | null, timestamp: Date }} input
-   */
-  async #appendEventInTrx(repos, input) {
+  async #appendEventInTrx(repos: any, input: { type: string, data: Record<string, any>, spanId?: string | null, timestamp: Date }) {
     const eventId = assertUlid(this.generateId(), 'eventId');
     const outboxId = assertUlid(this.generateId(), 'outboxId');
     const data = redactEventData(input.data ?? {});
@@ -234,7 +242,7 @@ export class FencedToolGovernanceRecorder {
     return envelope;
   }
 
-  #resolveToolSource(toolName, explicit) {
+  #resolveToolSource(toolName: string, explicit?: unknown) {
     if (explicit) return assertToolSource(explicit);
     if (isLocalSandboxTool(toolName)) return TOOL_SOURCE.SANDBOX;
     if (toolName.startsWith('mcp__')) return TOOL_SOURCE.MCP;
@@ -260,7 +268,7 @@ export class FencedToolGovernanceRecorder {
    *   toolSource?: string,
    * }} input
    */
-  async recordPolicyDecision(input) {
+  async recordPolicyDecision(input: { toolCallId: string, toolName: string, args?: unknown, decision: { decision: string, reasonCode: string, reason: string, policyId: string, riskLevel: string, }, toolSource?: string, }) {
     this.#assertLock();
     const toolCallId = String(input.toolCallId || '').trim();
     if (!toolCallId) {
@@ -281,15 +289,14 @@ export class FencedToolGovernanceRecorder {
         riskLevel: decision.riskLevel,
       });
 
-      let desiredStatus = /** @type {string} */ (TOOL_EXECUTION_STATUS.PROPOSED);
+      let desiredStatus = (TOOL_EXECUTION_STATUS.PROPOSED as string);
       let errorCode = null;
       if (decision.decision === 'deny') {
         desiredStatus = TOOL_EXECUTION_STATUS.FAILED;
         errorCode = decision.reasonCode || 'POLICY_DENIED';
       }
 
-      /** @type {any} */
-      let result = null;
+            let result: any = null;
 
       await this.tx.run(async (trx) => {
         const repos = this.createRepositories(trx);
@@ -421,7 +428,7 @@ export class FencedToolGovernanceRecorder {
                 toolName,
                 keys:
                   input.args && typeof input.args === 'object'
-                    ? Object.keys(/** @type {object} */ (input.args)).slice(
+                    ? Object.keys((input.args as Record<string, any>)).slice(
                         0,
                         16,
                       )
@@ -443,9 +450,8 @@ export class FencedToolGovernanceRecorder {
           toolExecution,
           audit,
           created: firstPolicyDecision,
-          envelopes: /** @type {CanonicalRunEventEnvelope[]} */ (
-            startedEnvelope ? [startedEnvelope] : []
-          ),
+          envelopes: ((
+            startedEnvelope ? [startedEnvelope] : []) as CanonicalRunEventEnvelope[]),
         };
       });
 
@@ -470,7 +476,7 @@ export class FencedToolGovernanceRecorder {
    *   toolExecutionId?: string,
    * }} input
    */
-  async requestApproval(input) {
+  async requestApproval(input: { toolCallId: string, toolName: string, args?: unknown, decision: Record<string, any>, toolExecutionId?: string, }) {
     this.#assertLock();
     const toolCallId = String(input.toolCallId || '').trim();
     if (!toolCallId) throw new Error('requestApproval requires toolCallId');
@@ -478,8 +484,7 @@ export class FencedToolGovernanceRecorder {
 
     return this.#withInflight(`approval.requested:${toolCallId}`, async () => {
       const timestamp = this.now();
-      /** @type {any} */
-      let out = null;
+            let out: any = null;
 
       await this.tx.run(async (trx) => {
         const repos = this.createRepositories(trx);
@@ -608,8 +613,7 @@ export class FencedToolGovernanceRecorder {
           );
         }
 
-        /** @type {CanonicalRunEventEnvelope | null} */
-        let envelope = null;
+                let envelope: CanonicalRunEventEnvelope | null = null;
         // MySQL-authoritative: event only when Approval row is newly created.
         if (created) {
           envelope = await this.#appendEventInTrx(repos, {
@@ -627,8 +631,7 @@ export class FencedToolGovernanceRecorder {
           });
         }
 
-        /** @type {CanonicalRunEventEnvelope | null} */
-        let statusEnvelope = null;
+                let statusEnvelope: CanonicalRunEventEnvelope | null = null;
         if (run.status === RUN_STATUS.RUNNING) {
           runStateMachine.assertTransition(
             RUN_STATUS.RUNNING,
@@ -684,9 +687,9 @@ export class FencedToolGovernanceRecorder {
    * Create a durable ask_user request and park the Run in WAITING_INPUT.
    * The request, interaction.requested event, Run transition, and outbox row
    * share one transaction; the returned suspension signal is ephemeral.
-   * @param {{toolCallId:string,toolName?:string,args?:object,interactionId?:string,interactionType:string,title:string,message?:string|null,options?:string[],placeholder?:string|null,toolExecutionId?:string}} input
+   * @param input
    */
-  async requestInteraction(input) {
+  async requestInteraction(input: {toolCallId:string,toolName?:string,args?:Record<string, any>,interactionId?:string,interactionType:string,title:string,message?:string|null,options?:string[],placeholder?:string|null,toolExecutionId?:string}) {
     this.#assertLock();
     const toolCallId = String(input?.toolCallId || '').trim();
     if (!toolCallId) throw new Error('requestInteraction requires toolCallId');
@@ -705,8 +708,7 @@ export class FencedToolGovernanceRecorder {
     }
 
     return this.#withInflight(`interaction.requested:${toolCallId}`, async () => {
-      /** @type {any} */
-      let out = null;
+            let out: any = null;
       await this.tx.run(async (trx) => {
         const repos = this.createRepositories(trx);
         const scope = { orgId: this.context.orgId, userId: this.context.userId };
@@ -809,8 +811,7 @@ export class FencedToolGovernanceRecorder {
             { resource: 'interactions', id: interaction.interactionId },
           );
         }
-        /** @type {any[]} */
-        const envelopes = [];
+                const envelopes: any[] = [];
         if (pending.created) {
           await this.#appendEventInTrx(repos, {
             type: 'interaction.requested',
@@ -879,9 +880,9 @@ export class FencedToolGovernanceRecorder {
   /**
    * tool.execution.started only when ledger transitions into RUNNING.
    *
-   * @param {{ toolCallId: string, toolName: string, args?: unknown, toolSource?: string, approvalId?: string }} input
+   * @param input
    */
-  async recordToolStarted(input) {
+  async recordToolStarted(input: { toolCallId: string, toolName: string, args?: unknown, toolSource?: string, approvalId?: string }) {
     this.#assertLock();
     const toolCallId = String(input.toolCallId || '').trim();
     if (!toolCallId) throw new Error('recordToolStarted requires toolCallId');
@@ -889,10 +890,8 @@ export class FencedToolGovernanceRecorder {
 
     return this.#withInflight(`tool.execution.started:${toolCallId}`, async () => {
       const timestamp = this.now();
-      /** @type {CanonicalRunEventEnvelope | null} */
-      let envelope = null;
-      /** @type {any} */
-      let toolExecution = null;
+            let envelope: CanonicalRunEventEnvelope | null = null;
+            let toolExecution: any = null;
       let statusChanged = false;
 
       await this.tx.run(async (trx) => {
@@ -1050,7 +1049,7 @@ export class FencedToolGovernanceRecorder {
    *   toolCallId: string, toolName: string, isError?: boolean, result?: unknown, toolSource?: unknown, args?: unknown,
    * }} input
    */
-  async recordToolEnded(input) {
+  async recordToolEnded(input: { toolCallId: string, toolName: string, isError?: boolean, result?: unknown, toolSource?: unknown, args?: unknown, }) {
     this.#assertLock();
     const toolCallId = String(input.toolCallId || '').trim();
     if (!toolCallId) throw new Error('recordToolEnded requires toolCallId');
@@ -1065,12 +1064,9 @@ export class FencedToolGovernanceRecorder {
 
     return this.#withInflight(`${eventType}:${toolCallId}`, async () => {
       const timestamp = this.now();
-      /** @type {CanonicalRunEventEnvelope | null} */
-      let envelope = null;
-      /** @type {CanonicalRunEventEnvelope | null} */
-      let artifactEnvelope = null;
-      /** @type {any} */
-      let toolExecution = null;
+            let envelope: CanonicalRunEventEnvelope | null = null;
+            let artifactEnvelope: CanonicalRunEventEnvelope | null = null;
+            let toolExecution: any = null;
       let statusChanged = false;
 
       await this.tx.run(async (trx) => {
@@ -1274,7 +1270,7 @@ export class FencedToolGovernanceRecorder {
    *   args?: unknown,
    * }} input
    */
-  async recordToolUnknown(input) {
+  async recordToolUnknown(input: { toolCallId: string, toolName: string, result?: unknown, errorCode?: string | null, toolSource?: string, args?: unknown, }) {
     this.#assertLock();
     const toolCallId = String(input.toolCallId || '').trim();
     if (!toolCallId) throw new Error('recordToolUnknown requires toolCallId');
@@ -1293,10 +1289,8 @@ export class FencedToolGovernanceRecorder {
 
     return this.#withInflight(`tool.execution.unknown:${toolCallId}`, async () => {
       const timestamp = this.now();
-      /** @type {CanonicalRunEventEnvelope | null} */
-      let envelope = null;
-      /** @type {any} */
-      let toolExecution = null;
+            let envelope: CanonicalRunEventEnvelope | null = null;
+            let toolExecution: any = null;
       let statusChanged = false;
 
       await this.tx.run(async (trx) => {
@@ -1372,8 +1366,7 @@ export class FencedToolGovernanceRecorder {
           // Idempotent same UNKNOWN: only re-check integrity when caller
           // supplies result. Omitted result must not re-fingerprint a newly
           // constructed default object against stored integrity.
-          /** @type {Record<string, unknown>} */
-          const replay = {
+                    const replay: Record<string, unknown> = {
             toolExecutionId: toolExecution.toolExecutionId,
             orgId: this.context.orgId,
             userId: this.context.userId,
@@ -1452,7 +1445,7 @@ export class FencedToolGovernanceRecorder {
    *   toolExecution: object,
    * }>}
    */
-  async bindSandboxRequest(input) {
+  async bindSandboxRequest(input: { toolCallId: string, toolName: string, requestHash: string, requestHashVersion?: number, toolExecutionId?: string, }) {
     this.#assertLock();
     const toolCallId = String(input?.toolCallId || '').trim();
     if (!toolCallId) {
@@ -1494,8 +1487,7 @@ export class FencedToolGovernanceRecorder {
     }
 
     return this.#withInflight(`sandbox.bind:${toolCallId}`, async () => {
-      /** @type {any} */
-      let out = null;
+            let out: any = null;
       await this.tx.run(async (trx) => {
         const repos = this.createRepositories(trx);
         if (!repos?.toolExecutions?.bindSandboxRequest) {
@@ -1503,8 +1495,7 @@ export class FencedToolGovernanceRecorder {
             'createRepositories must wire toolExecutions.bindSandboxRequest',
           );
         }
-        /** @type {Record<string, unknown>} */
-        const bindInput = {
+                const bindInput: Record<string, unknown> = {
           runId: this.context.runId,
           toolCallId,
           toolName,
@@ -1547,7 +1538,7 @@ export class FencedToolGovernanceRecorder {
  * Fresh `allow` may proceed while PROPOSED. RUNNING is replay-compatible only
  * before a Sandbox request claim exists; claimed/terminal states cannot re-enter.
  *
- * @param {object} toolExecution
+ * @param toolExecution
  * @param {{
  *   decision: string,
  *   desiredStatus: string,
@@ -1555,7 +1546,7 @@ export class FencedToolGovernanceRecorder {
  *   policyFingerprint: string,
  * }} next
  */
-export function assertCompatiblePolicyReplay(toolExecution, next) {
+export function assertCompatiblePolicyReplay(toolExecution: Record<string, any>, next: { decision: string, desiredStatus: string, errorCode?: string | null, policyFingerprint: string, }) {
   const status = toolExecution.status;
   const decision = next.decision;
   const nextPf = next.policyFingerprint

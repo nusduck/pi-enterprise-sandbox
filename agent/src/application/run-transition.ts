@@ -32,7 +32,18 @@ import { sanitizeStatusReason } from './sanitize-status-reason.js';
  * }} args
  * @returns {Promise<{ ok: true, run: object, event: object } | { ok: false, reason: 'conflict'|'not_found', current?: object | null }>}
  */
-export async function applyRunTransitionInTxn(args: { repos: { runs: any, runEvents: any, outbox: any, }, runId: string, scope: { orgId: string, userId: string }, from: string, to: string, traceId: string, generateId: () => string, eventType?: string, statusReason?: string | null, attempt?: number, startedAt?: Date | string | null, completedAt?: Date | string | null, payloadExtra?: Record<string, unknown>, }) {
+/**
+ * 一次 Run 状态迁移需要用到的仓储。**只列真正会被读写的三个**，不是整个
+ * 仓储包——调用方（parked-*-cancel 等）传的是同一个 bundle，但契约应当说明
+ * 这里实际依赖什么。
+ */
+export interface RunTransitionRepos {
+  runs: any;
+  runEvents: any;
+  outbox: any;
+}
+
+export async function applyRunTransitionInTxn(args: { repos: RunTransitionRepos, runId: string, scope: { orgId: string, userId: string }, from: string, to: string, traceId: string, generateId: () => string, eventType?: string, statusReason?: string | null, attempt?: number, startedAt?: Date | string | null, completedAt?: Date | string | null, payloadExtra?: Record<string, unknown>, }) {
   const {
     repos,
     runId,

@@ -79,7 +79,7 @@ export function canonicalize(value: unknown, stack: WeakSet<Record<string, any>>
       throw new CanonicalJsonError('binary buffers are not supported');
     }
 
-    const obj = (value as object);
+    const obj = (value as Record<string, any>);
     if (stack.has(obj)) {
       throw new CanonicalJsonError('circular reference is not supported');
     }
@@ -100,7 +100,7 @@ export function canonicalize(value: unknown, stack: WeakSet<Record<string, any>>
       }
 
             const out: Record<string, unknown> = {};
-      const keys = Object.keys((value as object)).sort();
+      const keys = Object.keys((value as Record<string, any>)).sort();
       for (const k of keys) {
         // Skip undefined-valued keys (stable omit) rather than failing.
         const v = (value as Record<string, unknown>)[k];

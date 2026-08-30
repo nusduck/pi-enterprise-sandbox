@@ -40,29 +40,37 @@ import {
   isUlid,
 } from '../../domain/shared/ulid.js';
 
-/**
- * @typedef {{
- *   orgId: string,
- *   userId: string,
- *   provider: string,
- *   agentId: string,
- *   agentVersionId: string,
- *   conversationId: string,
- *   agentSessionId: string,
- *   sandboxSessionId: string,
- *   workspaceId: string,
- *   created: {
- *     organization: boolean,
- *     user: boolean,
- *     membership: boolean,
- *     agent: boolean,
- *     conversation: boolean,
- *     session: boolean,
- *   },
- * }} ParentGraph
- */
+/** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
+type Loose = any;
+
+export type ParentGraph = {
+  orgId: string;
+  userId: string;
+  provider: string;
+  agentId: string;
+  agentVersionId: string;
+  conversationId: string;
+  agentSessionId: string;
+  sandboxSessionId: string;
+  workspaceId: string;
+  created: {
+    organization: boolean;
+    user: boolean;
+    membership: boolean;
+    agent: boolean;
+    conversation: boolean;
+    session: boolean;
+  };
+};
 
 export class RunParentProvisioner {
+  // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
+  repos: Loose;
+  generateId: Loose;
+  now: Loose;
+  defaultProvider: Loose;
+  db: Loose;
+
   /**
    * @param {{
    *   organizations: import('../../infrastructure/mysql/repositories/organization-repository.js').OrganizationRepository,
@@ -78,7 +86,7 @@ export class RunParentProvisioner {
    *   db?: import('knex').Knex | import('knex').Knex.Transaction,
    * }} opts
    */
-  constructor(repos, opts) {
+  constructor(repos: { organizations: import('../../infrastructure/mysql/repositories/organization-repository.js').OrganizationRepository, externalRefs: import('../../infrastructure/mysql/repositories/external-reference-repository.js').ExternalReferenceRepository, catalog: import('../../infrastructure/mysql/repositories/agent-catalog-repository.js').AgentCatalogRepository, conversations: import('../../infrastructure/mysql/repositories/conversation-repository.js').ConversationRepository, sessions: import('../../infrastructure/mysql/repositories/agent-session-repository.js').AgentSessionRepository, }, opts: { generateId: () => string, now?: () => Date, defaultProvider?: string, db?: import('knex').Knex | import('knex').Knex.Transaction, }) {
     if (!repos?.organizations || !repos?.externalRefs || !repos?.catalog) {
       throw new Error(
         'RunParentProvisioner requires organizations, externalRefs, catalog',
@@ -109,10 +117,10 @@ export class RunParentProvisioner {
   }
 
   /**
-   * @param {() => string} generateId
+   * @param generateId
    * @returns {string}
    */
-  #newUlid(generateId = this.generateId) {
+  #newUlid(generateId: () => string = this.generateId) {
     const id = generateId();
     if (isLegacyOrUuidIdentity(id)) {
       throw new ValidationError(
@@ -124,9 +132,9 @@ export class RunParentProvisioner {
 
   /**
    * Lock organization row (required for concurrent default-agent creation).
-   * @param {string} orgId
+   * @param orgId
    */
-  async #lockOrganization(orgId) {
+  async #lockOrganization(orgId: string) {
     await this.db('organizations').where({ org_id: orgId }).forUpdate().first();
   }
 
@@ -140,10 +148,10 @@ export class RunParentProvisioner {
    *   email?: string | null,
    *   orgName?: string | null,
    * }} auth
-   * @param {{ agentId?: string | null }} [selection]
+   * @param [selection]
    * @returns {Promise<ParentGraph>}
    */
-  async provision(auth, selection = {}) {
+  async provision(auth: { provider?: string, externalOrgId: string, externalUserId: string, externalConversationId?: string | null, displayName?: string | null, email?: string | null, orgName?: string | null, }, selection: { agentId?: string | null } = {}) {
     if (!auth || typeof auth !== 'object') {
       throw new ValidationError('auth context is required for parent provisioning');
     }
@@ -159,8 +167,7 @@ export class RunParentProvisioner {
       'externalUserId',
     );
 
-    /** @type {ParentGraph['created']} */
-    const created = {
+        const created: ParentGraph['created'] = {
       organization: false,
       user: false,
       membership: false,
@@ -525,11 +532,8 @@ export class RunParentProvisioner {
   }
 }
 
-/**
- * @param {unknown} err
- */
-function isDup(err) {
-  const code = /** @type {{ code?: string, errno?: number }} */ (err)?.code;
-  const errno = /** @type {{ errno?: number }} */ (err)?.errno;
+function isDup(err: unknown) {
+  const code = (err as { code?: string, errno?: number })?.code;
+  const errno = (err as { errno?: number })?.errno;
   return code === 'ER_DUP_ENTRY' || errno === 1062;
 }

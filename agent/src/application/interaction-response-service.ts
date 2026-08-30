@@ -15,6 +15,9 @@ import {
   redactEventData,
 } from './fenced-run-event-recorder.js';
 
+/** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
+type Loose = any;
+
 function requiredUlid(value, field) {
   if (!isUlid(value)) throw new ValidationError(`${field} must be a ULID`);
   return assertUlid(value, field);
@@ -76,10 +79,14 @@ async function appendEventInTxn({ repos, run, eventType, data, generateId, now }
 }
 
 export class InteractionResponseService {
-  /**
-   * @param {{transactionManager:{run:Function},createRepositories:Function,runQueue:{enqueue:(ref:object,options?:object)=>Promise<unknown>},generateId:Function,now?:()=>Date}} deps
-   */
-  constructor(deps) {
+  // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
+  tx: Loose;
+  createRepositories: Loose;
+  runQueue: Loose;
+  generateId: Loose;
+  now: Loose;
+
+  constructor(deps: {transactionManager:{run:Function},createRepositories:Function,runQueue:{enqueue:(ref:Record<string, any>,options?:Record<string, any>)=>Promise<unknown>},generateId:Function,now?:()=>Date}) {
     if (!deps?.transactionManager?.run) {
       throw new Error('InteractionResponseService requires transactionManager');
     }
@@ -291,7 +298,13 @@ export class InteractionResponseService {
    * Re-enqueue resolved WAITING_INPUT Runs after an HTTP/Redis restart. Pending
    * interactions remain parked and are returned for UI rehydration.
    */
-  async rehydrateWaiting(input = {}) {
+  async rehydrateWaiting(
+    input: {
+      limit?: number | string | null;
+      auth?: unknown;
+      runId?: string | null;
+    } = {},
+  ) {
     const limit = input.limit == null ? 100 : Number(input.limit);
     if (!Number.isInteger(limit) || limit < 1 || limit > 200) {
       throw new ValidationError('limit must be an integer between 1 and 200');

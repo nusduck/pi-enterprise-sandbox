@@ -22,6 +22,9 @@ import {
   A2A_ENTERPRISE_EXTENSION_URI,
 } from './agent-card.js';
 
+/** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
+type Loose = any;
+
 /** Run statuses that accept a follow-up message on the same task conversation. */
 export const CONTINUABLE_RUN_STATUSES = new Set([
   RUN_STATUS.SUCCEEDED,
@@ -32,11 +35,13 @@ export const CONTINUABLE_RUN_STATUSES = new Set([
 ]);
 
 export class A2aTaskError extends Error {
-  /**
-   * @param {string} message
-   * @param {{ code?: string, rpc?: { code: number, message: string }, details?: unknown }} [opts]
-   */
-  constructor(message, opts = {}) {
+  // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
+  name: string;
+  code: Loose;
+  rpc: Loose;
+  details: Loose;
+
+  constructor(message: string, opts: { code?: string, rpc?: { code: number, message: string }, details?: unknown } = {}) {
     super(message);
     this.name = 'A2aTaskError';
     this.code = opts.code ?? 'A2A_TASK_ERROR';
@@ -46,11 +51,11 @@ export class A2aTaskError extends Error {
 }
 
 export class A2aAuditError extends Error {
-  /**
-   * @param {string} message
-   * @param {{ code?: string }} [opts]
-   */
-  constructor(message, opts = {}) {
+  // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
+  name: string;
+  code: Loose;
+
+  constructor(message: string, opts: { code?: string } = {}) {
     super(message);
     this.name = 'A2aAuditError';
     this.code = opts.code ?? 'A2A_AUDIT_FAILED';
@@ -58,18 +63,18 @@ export class A2aAuditError extends Error {
 }
 
 /**
- * @param {unknown} message
+ * @param message
  * @returns {string}
  */
-export function extractTextFromA2aMessage(message) {
+export function extractTextFromA2aMessage(message: unknown) {
   if (!message || typeof message !== 'object') {
     throw new ValidationError('message is required');
   }
-  const parts = /** @type {any} */ (message).parts;
+  const parts = (message as any).parts;
   if (!Array.isArray(parts) || parts.length === 0) {
     const bare =
-      /** @type {any} */ (message).text ||
-      /** @type {any} */ (message).content;
+      (message as any).text ||
+      (message as any).content;
     if (typeof bare === 'string' && bare.trim()) return bare.trim();
     throw new ValidationError('message.parts must be a non-empty array');
   }
@@ -94,7 +99,7 @@ export function extractTextFromA2aMessage(message) {
 }
 
 /**
- * @param {unknown} params
+ * @param params
  * @returns {{
  *   message: object,
  *   messageId: string | null,
@@ -104,16 +109,16 @@ export function extractTextFromA2aMessage(message) {
  *   metadata: object,
  * }}
  */
-export function parseSendParams(params) {
+export function parseSendParams(params: unknown) {
   if (!params || typeof params !== 'object') {
     throw new ValidationError('params are required');
   }
-  const p = /** @type {Record<string, unknown>} */ (params);
+  const p = (params as Record<string, unknown>);
   const message = p.message;
   if (!message || typeof message !== 'object') {
     throw new ValidationError('params.message is required');
   }
-  const msg = /** @type {Record<string, unknown>} */ (message);
+  const msg = (message as Record<string, unknown>);
   const messageIdRaw =
     typeof msg.messageId === 'string'
       ? msg.messageId
@@ -157,19 +162,19 @@ export function parseSendParams(params) {
     p.configuration &&
     typeof p.configuration === 'object' &&
     !Array.isArray(p.configuration)
-      ? /** @type {Record<string, unknown>} */ (p.configuration)
+      ? (p.configuration as Record<string, unknown>)
       : msg.configuration &&
           typeof msg.configuration === 'object' &&
           !Array.isArray(msg.configuration)
-        ? /** @type {Record<string, unknown>} */ (msg.configuration)
+        ? (msg.configuration as Record<string, unknown>)
         : null;
 
   const metadata =
     p.metadata && typeof p.metadata === 'object' && !Array.isArray(p.metadata)
-      ? /** @type {object} */ (p.metadata)
+      ? (p.metadata as Record<string, any>)
       : {};
   return {
-    message: /** @type {object} */ (message),
+    message: (message as Record<string, any>),
     messageId,
     taskId,
     contextId,
@@ -185,11 +190,11 @@ export function parseSendParams(params) {
  * the bare `text` alias used throughout the A2A spec samples and a2a-python,
  * and `*​/*` / `type/*` wildcards.
  *
- * @param {string} mode
- * @param {Set<string>} supported
+ * @param mode
+ * @param supported
  * @returns {boolean}
  */
-function isOutputModeSupported(mode, supported) {
+function isOutputModeSupported(mode: string, supported: Set<string>) {
   const m = mode.toLowerCase();
   if (m === '*' || m === '*/*') return true;
   if (supported.has(m)) return true;
@@ -206,9 +211,9 @@ function isOutputModeSupported(mode, supported) {
 
 /**
  * Fail closed on unsupported push / output-mode negotiation (A2A v0.3).
- * @param {Record<string, unknown> | null | undefined} configuration
+ * @param configuration
  */
-export function assertSendConfiguration(configuration) {
+export function assertSendConfiguration(configuration: Record<string, unknown> | null | undefined) {
   if (!configuration) return;
 
   if (
@@ -256,10 +261,10 @@ export function assertSendConfiguration(configuration) {
 
 /**
  * Require stable messageId or Idempotency-Key (no random generateId keys).
- * @param {{ messageId?: string | null, idempotencyKey?: string | null }} input
+ * @param input
  * @returns {string}
  */
-export function requireStableIdempotencyKey(input) {
+export function requireStableIdempotencyKey(input: { messageId?: string | null, idempotencyKey?: string | null }) {
   const fromHeader =
     typeof input.idempotencyKey === 'string' && input.idempotencyKey.trim()
       ? input.idempotencyKey.trim()

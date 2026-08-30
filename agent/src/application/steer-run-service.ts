@@ -20,6 +20,9 @@ import {
 } from './errors.js';
 import { ExternalIdentityResolver } from './parent/external-identity-resolver.js';
 
+/** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
+type Loose = any;
+
 export const STEER_RUN_OPERATION = 'steer_run';
 export const STEER_REQUESTED_EVENT = 'run.steer.requested';
 export const STEER_DELIVERED_EVENT = 'run.steer.delivered';
@@ -57,6 +60,14 @@ function requireText(value) {
 }
 
 export class SteerRunService {
+  // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
+  tx: Loose;
+  createRepositories: Loose;
+  generateId: Loose;
+  now: Loose;
+  defaultProvider: Loose;
+  idempotencyTtlMs: Loose;
+
   /**
    * @param {{
    *   transactionManager: { run: (fn: (trx: any) => Promise<any>) => Promise<any> },
@@ -67,7 +78,7 @@ export class SteerRunService {
    *   idempotencyTtlMs?: number,
    * }} deps
    */
-  constructor(deps) {
+  constructor(deps: { transactionManager: { run: (fn: (trx: any) => Promise<any>) => Promise<any> }, createRepositories: (db: any) => any, generateId: () => string, now?: () => Date, defaultProvider?: string, idempotencyTtlMs?: number, }) {
     if (!deps?.transactionManager?.run) {
       throw new Error('SteerRunService requires transactionManager.run');
     }
@@ -98,7 +109,7 @@ export class SteerRunService {
    *   spanId?: string | null,
    * }} input
    */
-  async execute(input) {
+  async execute(input: { runId: string, text: string, auth: { provider?: string, externalOrgId: string, externalUserId: string }, traceId: string, traceState?: string | null, idempotencyKey: string, conversationId?: string | null, spanId?: string | null, }) {
     if (!input || typeof input !== 'object') {
       throw new ValidationError('SteerRun input is required');
     }

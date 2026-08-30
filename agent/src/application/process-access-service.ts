@@ -3,6 +3,9 @@
 import { ExternalIdentityResolver } from './parent/external-identity-resolver.js';
 import { OwnerScopedNotFoundError, ValidationError } from './errors.js';
 
+/** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
+type Loose = any;
+
 const SIGNALS = new Set(['SIGTERM', 'SIGKILL', 'SIGINT', 'SIGHUP']);
 
 function boundedInteger(value, field, { min, max, fallback }) {
@@ -15,6 +18,11 @@ function boundedInteger(value, field, { min, max, fallback }) {
 }
 
 export class ProcessAccessService {
+  // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
+  createRepositories: Loose;
+  db: Loose;
+  createSandboxClient: Loose;
+
   constructor({ createRepositories, db, createSandboxClient }) {
     if (typeof createRepositories !== 'function') {
       throw new Error('ProcessAccessService requires repositories');

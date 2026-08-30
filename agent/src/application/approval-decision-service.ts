@@ -23,6 +23,9 @@ import {
   redactEventData,
 } from './fenced-run-event-recorder.js';
 
+/** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
+type Loose = any;
+
 const DECISIONS = Object.freeze({
   approve: APPROVAL_STATUS.APPROVED,
   reject: APPROVAL_STATUS.REJECTED,
@@ -127,6 +130,13 @@ async function appendEventInTxn({
 }
 
 export class ApprovalDecisionService {
+  // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
+  tx: Loose;
+  createRepositories: Loose;
+  runQueue: Loose;
+  generateId: Loose;
+  now: Loose;
+
   /**
    * @param {{
    *   transactionManager: { run: Function },
@@ -136,7 +146,7 @@ export class ApprovalDecisionService {
    *   now?: () => Date,
    * }} deps
    */
-  constructor(deps) {
+  constructor(deps: { transactionManager: { run: Function }, createRepositories: (db: any) => any, runQueue: { enqueue: (ref: Record<string, any>, options?: Record<string, any>) => Promise<unknown> }, generateId: () => string, now?: () => Date, }) {
     if (!deps?.transactionManager?.run) {
       throw new Error('ApprovalDecisionService requires transactionManager');
     }

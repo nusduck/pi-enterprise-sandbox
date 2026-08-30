@@ -55,6 +55,11 @@ import {
 
 export class CancelRunService {
   /**
+   * `createRepositories` 里的 interactions / toolExecutions 本服务不直接读：
+   * 取消一个 parked WAITING_INPUT 时整个 bundle 会透传给
+   * `terminalizeParkedWaitingInputInTxn`，收尾那两张表的是它。端口声明要写
+   * 拿到的东西，不是自己用到的那部分。
+   *
    * @param {{
    *   transactionManager: { run: (fn: (trx: any) => Promise<any>) => Promise<any> },
    *   createRepositories: (db: any) => {
@@ -63,6 +68,8 @@ export class CancelRunService {
    *     runs: any,
    *     runEvents: any,
    *     outbox: any,
+   *     interactions: any,
+   *     toolExecutions: any,
    *   },
    *   cancelSignal: { request: (runId: string, meta?: { reason?: string, requestedBy?: string }) => Promise<void> },
    *   generateId: () => string,

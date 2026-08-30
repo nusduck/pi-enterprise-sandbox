@@ -11,15 +11,18 @@ import { OwnerScopedNotFoundError, ValidationError } from './errors.js';
 import { assertUlid, isLegacyOrUuidIdentity, isUlid } from '../domain/shared/ulid.js';
 import { isTerminalRunStatus } from '../domain/run/run-status.js';
 
+/** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
+type Loose = any;
+
 /**
  * Project a durable run_events row to the SSE envelope used by BFF/frontend:
  * `{ sequence, event, ts, eventId, event_id }` where event carries platform
  * type + payload fields. Top-level eventId supports Last-Event-ID resume.
  *
- * @param {object} row — mapped RunEvent
+ * @param row — mapped RunEvent
  * @returns {{ sequence: number, event: object, ts: number, eventId?: string, event_id?: string }}
  */
-export function projectRunEventToSseEnvelope(row) {
+export function projectRunEventToSseEnvelope(row: Record<string, any>) {
   const sequence = Number(row.sequenceNo);
   const payload =
     row.payloadJson && typeof row.payloadJson === 'object'
@@ -47,6 +50,11 @@ export function projectRunEventToSseEnvelope(row) {
 }
 
 export class RunEventQueryService {
+  // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
+  createRepositories: Loose;
+  db: Loose;
+  defaultProvider: Loose;
+
   /**
    * @param {{
    *   createRepositories: (db?: any) => {
@@ -59,7 +67,7 @@ export class RunEventQueryService {
    *   defaultProvider?: string,
    * }} deps
    */
-  constructor(deps) {
+  constructor(deps: { createRepositories: (db?: any) => { organizations: any, externalRefs: any, runs: any, runEvents: any, }, db?: any, defaultProvider?: string, }) {
     if (typeof deps?.createRepositories !== 'function') {
       throw new Error('RunEventQueryService requires createRepositories');
     }
@@ -69,10 +77,10 @@ export class RunEventQueryService {
   }
 
   /**
-   * @param {string} runIdRaw
+   * @param runIdRaw
    * @returns {string}
    */
-  #requireRunUlid(runIdRaw) {
+  #requireRunUlid(runIdRaw: string) {
     if (typeof runIdRaw !== 'string' || !runIdRaw.trim()) {
       throw new ValidationError('runId is required');
     }
@@ -96,11 +104,11 @@ export class RunEventQueryService {
    * Resolve trusted external subjects → internal owner scope, then load run.
    * Cross-tenant / unknown run → OwnerScopedNotFoundError (404).
    *
-   * @param {string} runId
-   * @param {{ provider?: string, externalOrgId: string, externalUserId: string }} auth
+   * @param runId
+   * @param auth
    * @returns {Promise<{ run: object, scope: { orgId: string, userId: string }, repos: object }>}
    */
-  async #loadOwnedRun(runId, auth) {
+  async #loadOwnedRun(runId: string, auth: { provider?: string, externalOrgId: string, externalUserId: string }) {
     if (!auth) throw new ValidationError('auth is required');
     const repos = this.createRepositories(this.db);
     const resolver = new ExternalIdentityResolver(
@@ -146,7 +154,7 @@ export class RunEventQueryService {
    * }} input
    * @returns {Promise<number|null>}
    */
-  async resolveEventSequence(input) {
+  async resolveEventSequence(input: { runId: string, auth: { provider?: string, externalOrgId: string, externalUserId: string }, eventId: string, }) {
     if (!input?.auth) throw new ValidationError('auth is required');
     const runId = this.#requireRunUlid(input.runId);
     if (typeof input.eventId !== 'string' || !isUlid(input.eventId)) {
@@ -172,7 +180,7 @@ export class RunEventQueryService {
    *   limit?: number,
    * }} input
    */
-  async listEvents(input) {
+  async listEvents(input: { runId: string, auth: { provider?: string, externalOrgId: string, externalUserId: string }, afterSequence?: number, limit?: number, }) {
     if (!input?.auth) throw new ValidationError('auth is required');
     const runId = this.#requireRunUlid(input.runId);
     const { run, scope, repos } = await this.#loadOwnedRun(runId, input.auth);

@@ -107,7 +107,7 @@ async function appendEventInTxn({
  * }} input
  * @returns {Promise<{ status: string, run: object }>}
  */
-export async function terminalizeParkedWaitingApprovalInTxn(input) {
+export async function terminalizeParkedWaitingApprovalInTxn(input: { repos: { approvals?: any, toolExecutions?: any, runs: any, runEvents: any, outbox: any, }, run: Record<string, any>, scope: { orgId: string, userId: string }, decidedBy: string, generateId: () => string, now?: () => Date, stateMachine?: { assertTransition: (from: string, to: string) => void }, }) {
   const {
     repos,
     run,

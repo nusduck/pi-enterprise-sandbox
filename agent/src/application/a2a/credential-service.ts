@@ -32,16 +32,19 @@ import {
   normalizeA2aClientId,
 } from './identity.js';
 
+/** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
+type Loose = any;
+
 /** Dummy hash for constant-time path when credential missing. */
 const DUMMY_SECRET_HASH =
   '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef';
 
 export class A2aAuthError extends Error {
-  /**
-   * @param {string} message
-   * @param {{ code?: string }} [opts]
-   */
-  constructor(message, opts = {}) {
+  // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
+  name: string;
+  code: Loose;
+
+  constructor(message: string, opts: { code?: string } = {}) {
     super(message);
     this.name = 'A2aAuthError';
     this.code = opts.code ?? 'A2A_AUTH_FAILED';
@@ -82,6 +85,14 @@ export function evaluateStoredExpiry(expiresAt, now = () => new Date()) {
 }
 
 export class A2aCredentialService {
+  // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
+  createRepositories: Loose;
+  tx: Loose;
+  db: Loose;
+  generateId: Loose;
+  now: Loose;
+  allowNonTransactionalRotate: Loose;
+
   /**
    * @param {{
    *   createRepositories: (db?: any) => any,
@@ -92,7 +103,7 @@ export class A2aCredentialService {
    *   allowNonTransactionalRotate?: boolean,
    * }} deps
    */
-  constructor(deps) {
+  constructor(deps: { createRepositories: (db?: any) => any, transactionManager?: { run: (fn: (trx: any) => Promise<any>) => Promise<any> } | null, db?: any, generateId: () => string, now?: () => Date, allowNonTransactionalRotate?: boolean, }) {
     if (typeof deps?.createRepositories !== 'function') {
       throw new Error('A2aCredentialService requires createRepositories');
     }
@@ -118,7 +129,7 @@ export class A2aCredentialService {
    *   rotatedFromId?: string | null,
    * }} input
    */
-  async issue(input) {
+  async issue(input: { orgId: string, agentId: string, serviceUserId?: string, clientId: string, scopes?: string[], expiresAt?: Date | string | null, rotatedFromId?: string | null, }) {
     const orgId = assertUlid(input.orgId, 'orgId');
     const agentId = assertUlid(input.agentId, 'agentId');
     const explicitServiceUserId = input.serviceUserId == null
@@ -173,11 +184,11 @@ export class A2aCredentialService {
    * called inside the same transaction that inserts the credential so a
    * credential can never commit without its user and membership.
    *
-   * @param {object} repos
-   * @param {{ orgId: string, clientId: string }} input
+   * @param repos
+   * @param input
    * @returns {Promise<string>}
    */
-  async #resolveServiceUser(repos, input) {
+  async #resolveServiceUser(repos: Record<string, any>, input: { orgId: string, clientId: string }) {
     const organizations = repos?.organizations;
     if (
       !organizations?.getUserByExternalSubject ||
@@ -223,11 +234,7 @@ export class A2aCredentialService {
     return serviceUserId;
   }
 
-  /**
-   * @param {string | null | undefined} authorizationHeader
-   * @param {{ agentId?: string | null, requiredScope?: string | null }} [opts]
-   */
-  async authenticate(authorizationHeader, opts = {}) {
+  async authenticate(authorizationHeader: string | null | undefined, opts: { agentId?: string | null, requiredScope?: string | null } = {}) {
     const raw =
       typeof authorizationHeader === 'string' ? authorizationHeader.trim() : '';
     if (!raw) {
@@ -309,7 +316,7 @@ export class A2aCredentialService {
       serviceUserId: cred.serviceUserId,
       clientId: cred.clientId,
       scopes: cred.scopes,
-      callerType: /** @type {const} */ ('a2a'),
+      callerType: ('a2a' as const),
       callerId: cred.clientId,
     };
   }
@@ -325,7 +332,7 @@ export class A2aCredentialService {
    *   expiresAt?: Date | string | null,
    * }} input
    */
-  async rotate(input) {
+  async rotate(input: { credentialId: string, orgId: string, scopes?: string[], expiresAt?: Date | string | null, }) {
     const credentialId = assertUlid(input.credentialId, 'credentialId');
     const orgId = assertUlid(input.orgId, 'orgId');
     // Validate caller-supplied expiresAt before any state change.
@@ -436,10 +443,7 @@ export class A2aCredentialService {
     return this.tx.run(run);
   }
 
-  /**
-   * @param {{ credentialId: string, orgId: string }} input
-   */
-  async revoke(input) {
+  async revoke(input: { credentialId: string, orgId: string }) {
     const credentialId = assertUlid(input.credentialId, 'credentialId');
     const orgId = assertUlid(input.orgId, 'orgId');
     const repos = this.createRepositories(this.db);
@@ -461,10 +465,7 @@ export class A2aCredentialService {
   }
 }
 
-/**
- * @param {object | null} cred
- */
-export function publicCredentialView(cred) {
+export function publicCredentialView(cred: Record<string, any> | null) {
   if (!cred) return null;
   return {
     credentialId: cred.credentialId,

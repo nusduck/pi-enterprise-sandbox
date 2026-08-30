@@ -41,6 +41,9 @@ import {
   MAX_SUBAGENT_DEPTH,
 } from '../infrastructure/dsh/subagent-constants.js';
 
+/** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
+type Loose = any;
+
 /** Run source recorded for every child (runs.source, VARCHAR(32)). */
 export const SUBAGENT_RUN_SOURCE = 'subagent';
 
@@ -54,11 +57,11 @@ export const DEFAULT_RESULT_SUMMARY_CHARS = 4_000;
 
 /** Coded failures the extension turns into tool errors the model can read. */
 export class SubagentLimitError extends Error {
-  /**
-   * @param {string} code
-   * @param {string} message
-   */
-  constructor(code, message) {
+  // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
+  name: string;
+  code: Loose;
+
+  constructor(code: string, message: string) {
     super(message);
     this.name = 'SubagentLimitError';
     this.code = code;
@@ -66,6 +69,19 @@ export class SubagentLimitError extends Error {
 }
 
 export class SubagentSpawnService {
+  // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
+  tx: Loose;
+  createRepositories: Loose;
+  generateId: Loose;
+  now: Loose;
+  runQueue: Loose;
+  stateMachine: Loose;
+  queueName: Loose;
+  maxDepth: Loose;
+  maxConcurrent: Loose;
+  idempotencyTtlMs: Loose;
+  resultSummaryChars: Loose;
+
   /**
    * @param {{
    *   transactionManager: { run: (fn: (trx: any) => Promise<any>) => Promise<any> },
@@ -81,7 +97,7 @@ export class SubagentSpawnService {
    *   resultSummaryChars?: number,
    * }} deps
    */
-  constructor(deps) {
+  constructor(deps: { transactionManager: { run: (fn: (trx: any) => Promise<any>) => Promise<any> }, createRepositories: (db: any) => any, generateId: () => string, now?: () => Date, runQueue: { enqueue: (ref: Record<string, any>, options?: Record<string, any>) => Promise<unknown> }, runStateMachine?: Record<string, any>, queueName?: string, maxDepth?: number, maxConcurrent?: number, idempotencyTtlMs?: number, resultSummaryChars?: number, }) {
     if (!deps?.transactionManager?.run) {
       throw new Error('SubagentSpawnService requires transactionManager.run');
     }
@@ -130,7 +146,7 @@ export class SubagentSpawnService {
    * }} input
    * @returns {Promise<{ runId: string, replayed: boolean, queueWarning?: string | null }>}
    */
-  async spawn(input) {
+  async spawn(input: { toolCallId: string, parentRunId: string, orgId: string, userId: string, task: string, label?: string | null, maxDepth?: number, maxConcurrent?: number, }) {
     const parentRunId = assertUlid(input?.parentRunId, 'parentRunId');
     const scope = requireScope(input);
     const toolCallId = String(input?.toolCallId ?? '').trim();
@@ -194,7 +210,7 @@ export class SubagentSpawnService {
       if (begun.outcome === 'replay') {
         const runId = begun.record?.resourceId;
         if (typeof runId === 'string' && runId) {
-          return { kind: /** @type {const} */ ('replay'), runId };
+          return { kind: ('replay' as const), runId };
         }
         // A record without a resource id is an in-flight or corrupt first
         // write; treat it as retryable rather than inventing a child id.
@@ -359,7 +375,7 @@ export class SubagentSpawnService {
       });
 
       return {
-        kind: /** @type {const} */ ('created'),
+        kind: ('created' as const),
         runId,
         traceId: parent.traceId,
         traceState: parent.traceState,
@@ -422,7 +438,7 @@ export class SubagentSpawnService {
    * }} input
    * @returns {Promise<Array<{ runId: string, status: string, statusReason: string | null, label: string | null, resultSummary?: string }>>}
    */
-  async getStatuses(input) {
+  async getStatuses(input: { parentRunId: string, orgId: string, userId: string, childRunIds?: readonly string[] | null, }) {
     const parentRunId = assertUlid(input?.parentRunId, 'parentRunId');
     const scope = requireScope(input);
     return this.tx.run(async (trx) => {
@@ -432,7 +448,15 @@ export class SubagentSpawnService {
       });
       const out = [];
       for (const child of children) {
-        const entry = {
+        // resultSummary 只在子 Run 到终态时补，字面量推断不会带上没写出来的
+        // 可选字段，所以显式给形状。
+        const entry: {
+          runId: string;
+          status: string;
+          statusReason: unknown;
+          label: unknown;
+          resultSummary?: string;
+        } = {
           runId: child.runId,
           status: child.status,
           statusReason: child.statusReason ?? null,
@@ -454,50 +478,34 @@ export class SubagentSpawnService {
   }
 }
 
-/**
- * @param {string} parentRunId
- * @param {string} toolCallId
- */
-export function spawnIdempotencyKey(parentRunId, toolCallId) {
+export function spawnIdempotencyKey(parentRunId: string, toolCallId: string) {
   return `subagent:${parentRunId}:${toolCallId}`.slice(0, 255);
 }
 
-/**
- * @param {string | null} label
- * @param {string} task
- */
-function childConversationTitle(label, task) {
+function childConversationTitle(label: string | null, task: string) {
   const source = (label && label.trim()) || task;
   return source.replace(/\s+/g, ' ').trim().slice(0, 120) || null;
 }
 
 /**
- * @param {unknown} message
+ * @param message
  * @returns {string}
  */
-function assistantText(message) {
-  const content = /** @type {{ contentJson?: unknown }} */ (message)?.contentJson;
+function assistantText(message: unknown) {
+  const content = (message as { contentJson?: unknown })?.contentJson;
   if (!content || typeof content !== 'object') return '';
-  const text = /** @type {{ text?: unknown }} */ (content).text;
+  const text = (content as { text?: unknown }).text;
   return typeof text === 'string' ? text.trim() : '';
 }
 
-/**
- * @param {{ orgId?: unknown, userId?: unknown }} input
- */
-function requireScope(input) {
+function requireScope(input: { orgId?: unknown, userId?: unknown }) {
   return {
     orgId: assertUlid(input?.orgId, 'orgId'),
     userId: assertUlid(input?.userId, 'userId'),
   };
 }
 
-/**
- * @param {unknown} value
- * @param {number} fallback
- * @param {number} min
- */
-function positiveOrDefault(value, fallback, min) {
+function positiveOrDefault(value: unknown, fallback: number, min: number) {
   const n = Number(value);
   return Number.isSafeInteger(n) && n >= min ? n : fallback;
 }

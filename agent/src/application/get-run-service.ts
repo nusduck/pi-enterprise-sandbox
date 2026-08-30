@@ -15,7 +15,16 @@ import { assertUlid, isLegacyOrUuidIdentity } from '../domain/shared/ulid.js';
 import { RUN_STATUS } from '../domain/run/run-status.js';
 import { INTERACTION_STATUS } from '../domain/interaction/interaction-status.js';
 
+/** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
+type Loose = any;
+
 export class GetRunService {
+  // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
+  createRepositories: Loose;
+  db: Loose;
+  defaultProvider: Loose;
+  tx: Loose;
+
   /**
    * @param {{
    *   createRepositories: (db?: any) => {
@@ -28,7 +37,7 @@ export class GetRunService {
    *   transactionManager?: { run: (fn: (trx: any) => Promise<any>) => Promise<any> } | null,
    * }} deps
    */
-  constructor(deps) {
+  constructor(deps: { createRepositories: (db?: any) => { organizations: any, externalRefs: any, runs: any, }, db?: any, defaultProvider?: string, transactionManager?: { run: (fn: (trx: any) => Promise<any>) => Promise<any> } | null, }) {
     if (typeof deps?.createRepositories !== 'function') {
       throw new Error('GetRunService requires createRepositories');
     }
@@ -48,7 +57,7 @@ export class GetRunService {
    *   },
    * }} input
    */
-  async execute(input) {
+  async execute(input: { runId: string, auth: { provider?: string, externalOrgId: string, externalUserId: string, }, }) {
     if (!input || typeof input !== 'object') {
       throw new ValidationError('GetRun input is required');
     }
@@ -110,10 +119,8 @@ export class GetRunService {
 
       // Attach sandbox_session_id from AgentSession so browser download/export
       // /upload can rehydrate without a separate conversation GET.
-      // @ts-expect-error 遗留JS占位类型object未展开，访问sessions需收窄，存活代码先用expect-error收敛 —— TS2339: Property 'sessions' does not exist on type '{ organizations:
       if (run.agentSessionId && repos.sessions?.getById) {
         try {
-          // @ts-expect-error 遗留JS占位类型object未展开，访问sessions需收窄，存活代码先用expect-error收敛 —— TS2339: Property 'sessions' does not exist on type '{ organizations:
           const session = await repos.sessions.getById(run.agentSessionId, scope);
           if (session?.sandboxSessionId) {
             run.sandboxSessionId = session.sandboxSessionId;
@@ -129,11 +136,9 @@ export class GetRunService {
 
       if (
         run.status === RUN_STATUS.WAITING_INPUT &&
-        // @ts-expect-error 遗留JS占位类型object未展开，访问interactions需收窄，存活代码先用expect-error收敛 —— TS2339: Property 'interactions' does not exist on type '{ organizati
         repos.interactions?.getPendingForRun
       ) {
         try {
-          // @ts-expect-error 遗留JS占位类型object未展开，访问interactions需收窄，存活代码先用expect-error收敛 —— TS2339: Property 'interactions' does not exist on type '{ organizati
           const pending = await repos.interactions.getPendingForRun(runId, scope);
           if (pending && pending.status === INTERACTION_STATUS.PENDING) {
             const request =

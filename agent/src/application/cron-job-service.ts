@@ -18,6 +18,9 @@ import {
   toScheduleIso,
 } from './cron-schedule.js';
 
+/** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
+type Loose = any;
+
 export const CRON_MISFIRE_POLICIES = Object.freeze(['skip', 'fire_once']);
 export const CRON_CONCURRENCY_POLICIES = Object.freeze(['forbid', 'allow']);
 export const CRON_SCHEDULE_TYPES = Object.freeze(['cron', 'once']);
@@ -103,6 +106,15 @@ export function presentCronJobRun(execution) {
 }
 
 export class CronJobService {
+  // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
+  tx: Loose;
+  createRepositories: Loose;
+  db: Loose;
+  createRunService: Loose;
+  generateId: Loose;
+  now: Loose;
+  misfireGraceMs: Loose;
+
   /**
    * @param {{
    *   transactionManager: { run: Function },
@@ -114,7 +126,7 @@ export class CronJobService {
    *   misfireGraceMs?: number,
    * }} deps
    */
-  constructor(deps) {
+  constructor(deps: { transactionManager: { run: Function }, createRepositories: Function, db: any, createRunService: { execute: Function }, generateId: () => string, now?: () => Date, misfireGraceMs?: number, }) {
     if (!deps?.transactionManager?.run || typeof deps.createRepositories !== 'function') {
       throw new Error('CronJobService requires transactionManager and createRepositories');
     }
@@ -424,6 +436,17 @@ export class CronJobService {
 
 /** Timer wrapper used only by agent-worker, never by a browser or Extension. */
 export class CronScheduler {
+  // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
+  service: Loose;
+  now: Loose;
+  intervalMs: Loose;
+  claimRetryMs: Loose;
+  batchSize: Loose;
+  logger: Loose;
+  timer: Loose;
+  running: boolean;
+  started: boolean;
+
   /** @param {{ cronJobService: CronJobService, now?: () => Date, intervalMs?: number, claimRetryMs?: number, batchSize?: number, logger?: Console }} deps */
   constructor(deps) {
     if (!deps?.cronJobService) throw new Error('CronScheduler requires cronJobService');
