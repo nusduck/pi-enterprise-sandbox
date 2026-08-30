@@ -72,15 +72,21 @@ DSH 重建的施工分解。设计依据见 [dsh-rebuild.md](../dsh-rebuild.md)�
 - **`danger-full-access` 已删除**：DSH 那个词汇是单用户本机场景的，多租户下"完全放开"不该存在
 - **无历史数据迁移，无回退目标**：研发阶段，本次发布不可逆
 - **能用 DSH 原生的一律用原生**，自建清单见 ADR 0007 D2
-- **`sandbox/mcp/`（1192 行）本次不动**，Wave 6 之后补齐
+- ~~**`sandbox/mcp/`（1192 行）本次不动**~~ —— **2026-08-30 推翻**：exec 镜像是
+  `node:22-slim`，没有 Python，"不动"实际等于"删掉它"。已按 ADR 0007 D1 一并用 TS
+  重写进 `exec/src/mcp/`，作为同一镜像的第二入口
 - **`sandbox/skill-runtime/` 是运行时资产**（三个 shell 启动垫片），原样迁入 `exec/`
+- **`runtime/` 已移到 `agent/runtime/`**（2026-08-30）：只有 agent 一个消费者。
+  下表 W4/W5 行里的 `runtime/...` 路径是当时的写法，现读作 `agent/runtime/...`
 
 ## 待办的跨任务事项（主控负责）
 
-- `AGENT_WORKSPACE_PATH` / `AGENT_TEMP_PATH` 在 `exec/src/isolation/profile.ts` 与
-  `exec/src/fs/path-policy.ts` 两处重复定义，收口时提到共享位置
-- W2-B / W2-C 定义的持久化接口要交给 W3-D，避免各建一套仓储
-- Wave 6 已去掉 `agent/tsconfig.json` 的 exclude 与 `@ts-nocheck` 横幅，W2-D 四条抬预算已收回
+- ~~`AGENT_WORKSPACE_PATH` / `AGENT_TEMP_PATH` 两处重复定义~~ —— 已收口到
+  `exec/src/isolation/profile.ts`；`AGENT_PYTHON_VENV` 同样是单一事实源
+- ~~W2-B / W2-C 的持久化接口交给 W3-D~~ —— 已统一在 `exec/src/db/`
+- ~~Wave 6 去掉 tsconfig exclude 与 `@ts-nocheck`~~ —— 已完成，checkJs 0
+
+剩余待办见 [HANDOFF.md](HANDOFF.md) 的"剩下什么"。
 
 ## Wave 7 —— gap-audit 的补齐（2026-08-29 / 30）
 
