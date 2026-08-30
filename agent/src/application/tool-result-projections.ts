@@ -24,22 +24,22 @@ const CONTROL_CHARACTER_PATTERN = /[\u0000-\u001f\u007f]/u;
  * The process console is reachable only if the durable completed event carries
  * this id, so it is projected next to the tool result rather than left inside
  * the model-facing text.
- * @param {unknown} result
+ * @param result
  * @returns {string | null}
  */
-export function extractStartedProcessId(result) {
+export function extractStartedProcessId(result: unknown) {
   if (!result || typeof result !== 'object' || Array.isArray(result)) return null;
-  const details = /** @type {Record<string, unknown>} */ (result).details;
+  const details = (result as Record<string, unknown>).details;
   if (!details || typeof details !== 'object' || Array.isArray(details)) return null;
-  return normalizeUlid(/** @type {Record<string, unknown>} */ (details).processId);
+  return normalizeUlid((details as Record<string, unknown>).processId);
 }
 
 export function extractSubmittedArtifact(result) {
   if (!result || typeof result !== 'object' || Array.isArray(result)) return null;
-  const details = /** @type {Record<string, unknown>} */ (result).details;
+  const details = (result as Record<string, unknown>).details;
   if (!details || typeof details !== 'object' || Array.isArray(details)) return null;
 
-  const metadata = /** @type {Record<string, unknown>} */ (details);
+  const metadata = (details as Record<string, unknown>);
   const artifactId = normalizeUlid(metadata.artifactId);
   const rawName = metadata.displayName ?? metadata.name;
   const name = typeof rawName === 'string' ? rawName : '';

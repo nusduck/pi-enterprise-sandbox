@@ -21,10 +21,10 @@ import { assertPositiveSafeInt } from '../infrastructure/mysql/repositories/tool
 const REQUEST_HASH_RE = /^[0-9a-f]{64}$/;
 
 /**
- * @param {unknown} hash
+ * @param hash
  * @returns {string}
  */
-function assertRequestHash(hash) {
+function assertRequestHash(hash: unknown) {
   if (typeof hash !== 'string' || !REQUEST_HASH_RE.test(hash)) {
     throw new Error('requestHash must be 64 lowercase hex chars');
   }
@@ -32,10 +32,10 @@ function assertRequestHash(hash) {
 }
 
 /**
- * @param {unknown} toolCallId
+ * @param toolCallId
  * @returns {string}
  */
-function assertToolCallId(toolCallId) {
+function assertToolCallId(toolCallId: unknown) {
   if (typeof toolCallId !== 'string' || !toolCallId || toolCallId !== toolCallId.trim()) {
     throw new Error('toolCallId must be a non-empty already-trimmed string');
   }
@@ -46,10 +46,10 @@ function assertToolCallId(toolCallId) {
 }
 
 /**
- * @param {unknown} toolName
+ * @param toolName
  * @returns {string}
  */
-function assertToolName(toolName) {
+function assertToolName(toolName: unknown) {
   if (typeof toolName !== 'string' || !toolName || toolName !== toolName.trim()) {
     throw new Error('toolName must be a non-empty already-trimmed string');
   }
@@ -62,17 +62,26 @@ function assertToolName(toolName) {
 /**
  * Compute v1 request hash from tool name + post-normalization args.
  *
- * @param {{ toolName: string, args?: unknown }} input
+ * @param input
  * @returns {{ requestHash: string, requestHashVersion: number, canonicalJson: string }}
  */
-export function computeSandboxToolRequestHash(input) {
+export function computeSandboxToolRequestHash(input: { toolName: string, args?: unknown }) {
   return computeToolRequestHashV1({
     toolName: input.toolName,
     args: input.args === undefined ? {} : input.args,
   });
 }
 
+/** 过渡期宽松类型：注入的仓储/事务管理器仍是 JS 类。 */
+type Loose = any;
+
 export class SandboxRequestBinder {
+  // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
+  tx: Loose;
+  createRepositories: Loose;
+  context: Loose;
+  executionFenceToken: Loose;
+
   /**
    * @param {{
    *   transactionManager: { run: (fn: (trx: any) => Promise<any>) => Promise<any> },
@@ -89,7 +98,7 @@ export class SandboxRequestBinder {
    *   executionFenceToken: number,
    * }} deps
    */
-  constructor(deps) {
+  constructor(deps: { transactionManager: { run: (fn: (trx: any) => Promise<any>) => Promise<any> }, createRepositories: (db: any) => any, context: { orgId: string, userId: string, conversationId: string, agentSessionId: string, runId: string, sandboxSessionId: string, traceId?: string, }, executionFenceToken: number, }) {
     if (!deps?.transactionManager?.run) {
       throw new Error('SandboxRequestBinder requires transactionManager');
     }
@@ -138,7 +147,7 @@ export class SandboxRequestBinder {
    *   toolExecution: object,
    * }>}
    */
-  async bindSandboxRequest(input) {
+  async bindSandboxRequest(input: { toolCallId: string, toolName: string, requestHash: string, requestHashVersion?: number, toolExecutionId?: string, }) {
     const toolCallId = assertToolCallId(input.toolCallId);
     const toolName = assertToolName(input.toolName);
     const requestHash = assertRequestHash(input.requestHash);
@@ -160,8 +169,7 @@ export class SandboxRequestBinder {
       'sandboxSessionId',
     );
 
-    /** @type {any} */
-    let out = null;
+        let out: any = null;
 
     await this.tx.run(async (trx) => {
       const repos = this.createRepositories(trx);
@@ -171,8 +179,7 @@ export class SandboxRequestBinder {
         );
       }
 
-      /** @type {Record<string, unknown>} */
-      const bindInput = {
+            const bindInput: Record<string, unknown> = {
         runId,
         toolCallId,
         toolName,
@@ -212,10 +219,10 @@ export class SandboxRequestBinder {
 /**
  * Build a binder port from a FencedToolGovernanceRecorder (or compatible).
  *
- * @param {{ bindSandboxRequest: Function }} recorder
+ * @param recorder
  * @returns {{ bindSandboxRequest: Function }}
  */
-export function binderPortFromRecorder(recorder) {
+export function binderPortFromRecorder(recorder: { bindSandboxRequest: Function }) {
   if (!recorder || typeof recorder.bindSandboxRequest !== 'function') {
     throw new Error('binderPortFromRecorder requires bindSandboxRequest');
   }

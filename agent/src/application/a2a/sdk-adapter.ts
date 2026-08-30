@@ -7,17 +7,17 @@ import { formatSSEEvent } from '@a2a-js/sdk';
 import { projectRunStatusToA2a } from '../../domain/a2a/status.js';
 
 /**
- * @param {unknown} runStatus
+ * @param runStatus
  * @returns {string}
  */
-export function mapRunStatusToSdkTaskState(runStatus) {
+export function mapRunStatusToSdkTaskState(runStatus: unknown) {
   return projectRunStatusToA2a(runStatus);
 }
 
 /**
- * @param {object} payload
+ * @param payload
  * @returns {string}
  */
-export function encodeA2aSseFromSdk(payload) {
+export function encodeA2aSseFromSdk(payload: Record<string, any>) {
   return formatSSEEvent(payload);
 }

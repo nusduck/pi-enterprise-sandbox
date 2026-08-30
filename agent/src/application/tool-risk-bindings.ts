@@ -30,26 +30,26 @@ const RISK_FIELDS = Object.freeze([
 ]);
 
 /**
- * @param {unknown} agentVersion
+ * @param agentVersion
  * @returns {Record<string, unknown>}
  */
-function readConfigJson(agentVersion) {
+function readConfigJson(agentVersion: unknown) {
   if (!agentVersion || typeof agentVersion !== 'object') return {};
-  const v = /** @type {Record<string, unknown>} */ (agentVersion);
+  const v = (agentVersion as Record<string, unknown>);
   const raw = v.configJson ?? v.config_json;
   return raw != null
     ? parseAgentVersionConfigJson(raw, 'configJson')
-    : /** @type {Record<string, unknown>} */ (v);
+    : (v as Record<string, unknown>);
 }
 
 /**
  * The extension names this AgentVersion asks for, in its own order.
  * Empty means "platform default set".
  *
- * @param {unknown} agentVersion
+ * @param agentVersion
  * @returns {string[]}
  */
-export function readAgentVersionExtensions(agentVersion) {
+export function readAgentVersionExtensions(agentVersion: unknown) {
   const config = readConfigJson(agentVersion);
   return Array.isArray(config?.extensions) ? [...config.extensions] : [];
 }
@@ -62,10 +62,10 @@ export function readAgentVersionExtensions(agentVersion) {
  * `toolPolicy`/`thinkingLevel` live on the version: per-tenant behaviour stays
  * version-scoped instead of one deployment-wide env knob.
  *
- * @param {unknown} agentVersion
+ * @param agentVersion
  * @returns {{ maxDepth?: number, maxConcurrent?: number }}
  */
-export function readAgentVersionSubagentPolicy(agentVersion) {
+export function readAgentVersionSubagentPolicy(agentVersion: unknown) {
   const config = readConfigJson(agentVersion);
   const subagent =
     config?.subagent &&
@@ -92,35 +92,35 @@ export function readAgentVersionSubagentPolicy(agentVersion) {
  * all" apart from "the projection happened to yield no decisions and no risk
  * table" — `{ tools: {} }` is the first but not the second.
  *
- * @param {unknown} agentVersion
+ * @param agentVersion
  * @returns {Record<string, unknown>}
  */
-export function readAgentVersionToolPolicy(agentVersion) {
+export function readAgentVersionToolPolicy(agentVersion: unknown) {
   return readToolPolicy(agentVersion);
 }
 
 /**
- * @param {unknown} agentVersion
+ * @param agentVersion
  * @returns {Record<string, unknown>}
  */
-function readToolPolicy(agentVersion) {
+function readToolPolicy(agentVersion: unknown) {
   const config = readConfigJson(agentVersion);
   const toolPolicy = config?.toolPolicy;
   if (!toolPolicy || typeof toolPolicy !== 'object' || Array.isArray(toolPolicy)) {
     return {};
   }
-  return /** @type {Record<string, unknown>} */ (toolPolicy);
+  return (toolPolicy as Record<string, unknown>);
 }
 
 /**
- * @param {unknown} agentVersion
- * @param {{ mcpToolRiskPolicy?: { mcpServers?: Record<string, unknown> } }} [mcpBindings]
+ * @param agentVersion
+ * @param [mcpBindings]
  * @returns {{
  *   agentVersionToolPolicy: Record<string, unknown> | undefined,
  *   agentVersionToolRiskPolicy: Record<string, unknown> | undefined,
  * }}
  */
-export function buildAgentVersionToolRiskBindings(agentVersion, mcpBindings = {}) {
+export function buildAgentVersionToolRiskBindings(agentVersion: unknown, mcpBindings: { mcpToolRiskPolicy?: { mcpServers?: Record<string, unknown> } } = {}) {
   const toolPolicy = readToolPolicy(agentVersion);
 
   /**
@@ -142,8 +142,7 @@ export function buildAgentVersionToolRiskBindings(agentVersion, mcpBindings = {}
     decisions[key] = value;
   }
 
-  /** @type {Record<string, unknown>} */
-  const riskRaw = {};
+    const riskRaw: Record<string, unknown> = {};
   if (toolPolicy.riskLevels != null) riskRaw.tools = toolPolicy.riskLevels;
   if (toolPolicy.riskApproval != null) riskRaw.riskApproval = toolPolicy.riskApproval;
   if (toolPolicy.classRiskLevels != null) {

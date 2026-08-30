@@ -13,16 +13,11 @@
  * }}
  */
 export function createPromiseTail() {
-  /** @type {Promise<void>} */
-  let tail = Promise.resolve();
-  /** @type {unknown | null} */
-  let firstError = null;
+    let tail: Promise<void> = Promise.resolve();
+    let firstError: unknown | null = null;
 
   return {
-    /**
-     * @param {() => Promise<void> | void} fn
-     */
-    enqueue(fn) {
+    enqueue(fn: () => Promise<void> | void) {
       tail = tail.then(
         async () => {
           try {

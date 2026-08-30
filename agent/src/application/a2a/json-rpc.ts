@@ -92,17 +92,17 @@ export const A2A_METHOD_ALIASES = Object.freeze({
 });
 
 /**
- * @param {unknown} method
+ * @param method
  * @returns {string | null}
  */
-export function normalizeA2aMethod(method) {
+export function normalizeA2aMethod(method: unknown) {
   if (typeof method !== 'string' || !method.trim()) return null;
   const m = method.trim();
   return A2A_METHOD_ALIASES[m] || null;
 }
 
 /**
- * @param {unknown} body
+ * @param body
  * @returns {{
  *   ok: true,
  *   id: string | number | null,
@@ -114,7 +114,7 @@ export function normalizeA2aMethod(method) {
  *   error: { code: number, message: string, data?: unknown },
  * }}
  */
-export function parseJsonRpcRequest(body) {
+export function parseJsonRpcRequest(body: unknown) {
   if (body == null || typeof body !== 'object' || Array.isArray(body)) {
     return {
       ok: false,
@@ -122,8 +122,8 @@ export function parseJsonRpcRequest(body) {
       error: { ...JSON_RPC_ERROR.INVALID_REQUEST },
     };
   }
-  const req = /** @type {Record<string, unknown>} */ (body);
-  const id = /** @type {string | number | null} */ ('id' in req ? req.id : null);
+  const req = (body as Record<string, unknown>);
+  const id = ('id' in req ? req.id : null as string | number | null);
   if (req.jsonrpc !== JSON_RPC_VERSION) {
     return {
       ok: false,
@@ -171,15 +171,11 @@ export function parseJsonRpcRequest(body) {
     ok: true,
     id: id === undefined ? null : id,
     method,
-    params: /** @type {Record<string, unknown>} */ (params),
+    params: (params as Record<string, unknown>),
   };
 }
 
-/**
- * @param {string | number | null} id
- * @param {unknown} result
- */
-export function jsonRpcSuccess(id, result) {
+export function jsonRpcSuccess(id: string | number | null, result: unknown) {
   return {
     jsonrpc: JSON_RPC_VERSION,
     id,
@@ -187,12 +183,12 @@ export function jsonRpcSuccess(id, result) {
   };
 }
 
-/**
- * @param {string | number | null} id
- * @param {{ code: number, message: string, data?: unknown }} error
- */
-export function jsonRpcError(id, error) {
-  const body = {
+export function jsonRpcError(id: string | number | null, error: { code: number, message: string, data?: unknown }) {
+  const body: {
+    jsonrpc: string;
+    id: string | number | null;
+    error: { code: number; message: string; data?: unknown };
+  } = {
     jsonrpc: JSON_RPC_VERSION,
     id,
     error: {
@@ -212,14 +208,14 @@ export function jsonRpcError(id, error) {
  * IMPORTANT: do not fall back to result.id (task id) for SSE id — that poisons
  * Last-Event-ID resume as if it were a run_event ULID.
  *
- * @param {object} rpcResponse
+ * @param rpcResponse
  * JSON-RPC A2A streams must not set SSE `event:` — clients discriminate on
  * `result.kind`. The `event` option is kept only for explicit caller use.
  *
- * @param {{ id?: string | number | null, event?: string }} [opts]
+ * @param [opts]
  * @returns {string}
  */
-export function formatA2aSseRpcFrame(rpcResponse, opts = {}) {
+export function formatA2aSseRpcFrame(rpcResponse: Record<string, any>, opts: { id?: string | number | null, event?: string } = {}) {
   let id = null;
   if (opts.id != null && String(opts.id).length > 0) {
     id = String(opts.id);

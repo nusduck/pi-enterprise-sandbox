@@ -8,11 +8,11 @@ import { redactSecretText } from '../lib/text-redaction.js';
 export const STATUS_REASON_MAX_LEN = 255;
 
 /**
- * @param {unknown} err
- * @param {number} [maxLen]
+ * @param err
+ * @param [maxLen]
  * @returns {string | null}
  */
-export function sanitizeStatusReason(err, maxLen = STATUS_REASON_MAX_LEN) {
+export function sanitizeStatusReason(err: unknown, maxLen: number = STATUS_REASON_MAX_LEN) {
   if (err == null || err === '') return null;
   const limit =
     Number.isFinite(maxLen) && maxLen > 0 ? Math.floor(maxLen) : STATUS_REASON_MAX_LEN;
@@ -24,7 +24,7 @@ export function sanitizeStatusReason(err, maxLen = STATUS_REASON_MAX_LEN) {
     // Message only — never stack.
     text = err.message || err.name || 'Error';
   } else if (typeof err === 'object' && err !== null && 'message' in err) {
-    text = String(/** @type {{ message?: unknown }} */ (err).message ?? 'error');
+    text = String((err as { message?: unknown }).message ?? 'error');
   } else {
     text = String(err);
   }

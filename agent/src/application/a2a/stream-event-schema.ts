@@ -14,6 +14,9 @@
 
 import { ALL_A2A_TASK_STATUSES } from '../../domain/a2a/status.js';
 
+/** 已通过 schema 校验的 A2A 流帧。字段随 kind 变化，故不逐个收窄。 */
+export type A2aStreamResult = Record<string, any>;
+
 export const A2A_STREAM_RESULT_KINDS = Object.freeze([
   'task',
   'message',
@@ -32,19 +35,19 @@ const PART_KINDS = new Set(['text', 'file', 'data']);
 const STATUS_SET = new Set(ALL_A2A_TASK_STATUSES);
 
 /**
- * @param {unknown} [_method]
+ * @param [_method]
  * @returns {readonly string[]}
  */
-export function streamKindsForMethod(_method) {
+export function streamKindsForMethod(_method?: unknown) {
   return A2A_STREAM_RESULT_KINDS;
 }
 
 /**
  * Official 0.3 SendStreamingMessage / SubscribeToTask grammar.
  *
- * @param {object[]} results
+ * @param results
  */
-export function assertOfficialStreamGrammar(results) {
+export function assertOfficialStreamGrammar(results: Record<string, any>[]) {
   if (!Array.isArray(results) || results.length === 0) {
     throw new A2aStreamSchemaError('stream must contain at least one result');
   }
@@ -81,16 +84,15 @@ export function assertOfficialStreamGrammar(results) {
 /**
  * Deep-omit null/undefined keys so optional fields are absent, not null.
  *
- * @param {unknown} value
+ * @param value
  * @returns {unknown}
  */
-export function omitNullFields(value) {
+export function omitNullFields(value: unknown) {
   if (Array.isArray(value)) {
     return value.map((item) => omitNullFields(item));
   }
   if (!value || typeof value !== 'object') return value;
-  /** @type {Record<string, unknown>} */
-  const out = {};
+    const out: Record<string, unknown> = {};
   for (const [key, child] of Object.entries(value)) {
     if (child == null) continue;
     out[key] = omitNullFields(child);
@@ -99,14 +101,15 @@ export function omitNullFields(value) {
 }
 
 /**
- * @param {unknown} result
- * @returns {object}
+ * 校验通过后返回同一个对象。返回类型刻意是宽松记录而不是 `unknown`：
+ * 调用方（stream-service）要读 `status.state` 之类的字段，逐个断言只会
+ * 把已经校验过的东西再断言一遍。
  */
-export function assertA2aStreamResult(result) {
+export function assertA2aStreamResult(result: unknown): A2aStreamResult {
   if (!result || typeof result !== 'object' || Array.isArray(result)) {
     throw new A2aStreamSchemaError('stream result must be an object');
   }
-  const row = /** @type {Record<string, unknown>} */ (result);
+  const row = (result as Record<string, unknown>);
   const kind = row.kind;
   if (typeof kind !== 'string' || !A2A_STREAM_RESULT_KINDS.includes(kind)) {
     throw new A2aStreamSchemaError(
@@ -137,10 +140,8 @@ export function assertA2aStreamResult(result) {
  * Omit nulls, then validate. Returns null when the frame is not protocol-valid
  * (caller should skip emit and still advance the journal cursor).
  *
- * @param {unknown} result
- * @returns {object | null}
  */
-export function prepareA2aStreamResult(result) {
+export function prepareA2aStreamResult(result: unknown): A2aStreamResult | null {
   const cleaned = omitNullFields(result);
   try {
     return assertA2aStreamResult(cleaned);
@@ -150,30 +151,22 @@ export function prepareA2aStreamResult(result) {
 }
 
 export class A2aStreamSchemaError extends Error {
-  /**
-   * @param {string} message
-   * @param {Record<string, unknown>} [details]
-   */
-  constructor(message, details = {}) {
+  readonly details: Record<string, unknown>;
+
+  constructor(message: string, details: Record<string, unknown> = {}) {
     super(message);
     this.name = 'A2aStreamSchemaError';
     this.details = details;
   }
 }
 
-/**
- * @param {Record<string, unknown>} row
- */
-function assertTask(row) {
+function assertTask(row: Record<string, unknown>) {
   requireNonEmptyString(row.id, 'task.id');
   requireNonEmptyString(row.contextId, 'task.contextId');
   assertTaskStatus(row.status, 'task.status');
 }
 
-/**
- * @param {Record<string, unknown>} row
- */
-function assertMessage(row) {
+function assertMessage(row: Record<string, unknown>) {
   requireNonEmptyString(row.messageId, 'message.messageId');
   if (typeof row.role !== 'string' || !MESSAGE_ROLES.has(row.role)) {
     throw new A2aStreamSchemaError('message.role must be "user" or "agent"', {
@@ -186,10 +179,7 @@ function assertMessage(row) {
   assertParts(row.parts, 'message.parts');
 }
 
-/**
- * @param {Record<string, unknown>} row
- */
-function assertStatusUpdate(row) {
+function assertStatusUpdate(row: Record<string, unknown>) {
   requireNonEmptyString(row.taskId, 'status-update.taskId');
   requireNonEmptyString(row.contextId, 'status-update.contextId');
   assertTaskStatus(row.status, 'status-update.status');
@@ -198,16 +188,13 @@ function assertStatusUpdate(row) {
   }
 }
 
-/**
- * @param {Record<string, unknown>} row
- */
-function assertArtifactUpdate(row) {
+function assertArtifactUpdate(row: Record<string, unknown>) {
   requireNonEmptyString(row.taskId, 'artifact-update.taskId');
   requireNonEmptyString(row.contextId, 'artifact-update.contextId');
   if (!row.artifact || typeof row.artifact !== 'object' || Array.isArray(row.artifact)) {
     throw new A2aStreamSchemaError('artifact-update.artifact is required');
   }
-  const artifact = /** @type {Record<string, unknown>} */ (row.artifact);
+  const artifact = (row.artifact as Record<string, unknown>);
   requireNonEmptyString(artifact.artifactId, 'artifact.artifactId');
   if ('description' in artifact && artifact.description == null) {
     throw new A2aStreamSchemaError('artifact.description must be omitted when empty');
@@ -220,16 +207,12 @@ function assertArtifactUpdate(row) {
   }
 }
 
-/**
- * @param {unknown} status
- * @param {string} label
- */
-function assertTaskStatus(status, label) {
+function assertTaskStatus(status: unknown, label: string) {
   if (!status || typeof status !== 'object' || Array.isArray(status)) {
     throw new A2aStreamSchemaError(`${label} must be an object`);
   }
-  const body = /** @type {Record<string, unknown>} */ (status);
-  if (typeof body.state !== 'string' || !STATUS_SET.has(/** @type {any} */ (body.state))) {
+  const body = (status as Record<string, unknown>);
+  if (typeof body.state !== 'string' || !STATUS_SET.has((body.state as any))) {
     throw new A2aStreamSchemaError(`${label}.state is not an A2A task state`, {
       state: body.state,
     });
@@ -238,21 +221,17 @@ function assertTaskStatus(status, label) {
     if (typeof body.message !== 'object' || Array.isArray(body.message)) {
       throw new A2aStreamSchemaError(`${label}.message must be a Message`);
     }
-    assertMessage(/** @type {Record<string, unknown>} */ (body.message));
+    assertMessage((body.message as Record<string, unknown>));
   }
 }
 
-/**
- * @param {unknown[]} parts
- * @param {string} label
- */
-function assertParts(parts, label) {
+function assertParts(parts: unknown[], label: string) {
   for (let i = 0; i < parts.length; i += 1) {
     const part = parts[i];
     if (!part || typeof part !== 'object' || Array.isArray(part)) {
       throw new A2aStreamSchemaError(`${label}[${i}] must be an object`);
     }
-    const p = /** @type {Record<string, unknown>} */ (part);
+    const p = (part as Record<string, unknown>);
     if (typeof p.kind !== 'string' || !PART_KINDS.has(p.kind)) {
       throw new A2aStreamSchemaError(
         `${label}[${i}].kind must be text, file, or data`,
@@ -267,7 +246,7 @@ function assertParts(parts, label) {
       if (!p.file || typeof p.file !== 'object' || Array.isArray(p.file)) {
         throw new A2aStreamSchemaError(`${label}[${i}].file is required`);
       }
-      const file = /** @type {Record<string, unknown>} */ (p.file);
+      const file = (p.file as Record<string, unknown>);
       const hasUri = typeof file.uri === 'string' && file.uri.trim();
       const hasBytes = typeof file.bytes === 'string' && file.bytes;
       if (!hasUri && !hasBytes) {
@@ -283,11 +262,7 @@ function assertParts(parts, label) {
   }
 }
 
-/**
- * @param {unknown} value
- * @param {string} label
- */
-function requireNonEmptyString(value, label) {
+function requireNonEmptyString(value: unknown, label: string) {
   if (typeof value !== 'string' || !value.trim()) {
     throw new A2aStreamSchemaError(`${label} is required`);
   }

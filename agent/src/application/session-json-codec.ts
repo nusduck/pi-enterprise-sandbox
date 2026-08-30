@@ -43,10 +43,10 @@ export const PI_JSONL_ENTRY_TYPE_SET = new Set(PI_JSONL_ENTRY_TYPES);
 export const DEFAULT_MAX_JSONL_BYTES = 8 * 1024 * 1024;
 
 /**
- * @param {unknown} value
+ * @param value
  * @returns {boolean}
  */
-function isPlainObject(value) {
+function isPlainObject(value: unknown) {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) {
     return false;
   }
@@ -56,11 +56,11 @@ function isPlainObject(value) {
 
 /**
  * Recursive canonical form: sorted object keys; array order preserved.
- * @param {unknown} value
- * @param {WeakSet<object>} [stack]
+ * @param value
+ * @param [stack]
  * @returns {unknown}
  */
-export function canonicalizeForJsonl(value, stack = new WeakSet()) {
+export function canonicalizeForJsonl(value: unknown, stack: WeakSet<Record<string, any>> = new WeakSet()) {
   if (value === null) return null;
   const t = typeof value;
   if (t === 'string' || t === 'boolean') return value;
@@ -78,7 +78,7 @@ export function canonicalizeForJsonl(value, stack = new WeakSet()) {
     // JOURNAL_HASH_MISMATCH. Round non-integers through toPrecision(15) so
     // the stored hash matches the post-MySQL reparse (integers unchanged).
     if (!Number.isInteger(value)) {
-      return Number.parseFloat(/** @type {number} */ (value).toPrecision(15));
+      return Number.parseFloat((value as number).toPrecision(15));
     }
     return value;
   }
@@ -87,7 +87,7 @@ export function canonicalizeForJsonl(value, stack = new WeakSet()) {
       code: 'PI_JSONL_CANONICALIZE_ERROR',
     });
   }
-  const obj = /** @type {object} */ (value);
+  const obj = (value as object);
   if (stack.has(obj)) {
     throw new PiSessionAdapterError('circular reference is not supported in JSONL', {
       code: 'PI_JSONL_CANONICALIZE_ERROR',
@@ -99,20 +99,18 @@ export function canonicalizeForJsonl(value, stack = new WeakSet()) {
       return value.map((v) => canonicalizeForJsonl(v, stack));
     }
     if (!isPlainObject(value)) {
-      const keys = Object.keys(/** @type {object} */ (value)).sort();
-      /** @type {Record<string, unknown>} */
-      const out = {};
+      const keys = Object.keys((value as object)).sort();
+            const out: Record<string, unknown> = {};
       for (const k of keys) {
-        const v = /** @type {Record<string, unknown>} */ (value)[k];
+        const v = (value as Record<string, unknown>)[k];
         if (v === undefined) continue;
         out[k] = canonicalizeForJsonl(v, stack);
       }
       return out;
     }
-    /** @type {Record<string, unknown>} */
-    const out = {};
-    for (const k of Object.keys(/** @type {object} */ (value)).sort()) {
-      const v = /** @type {Record<string, unknown>} */ (value)[k];
+        const out: Record<string, unknown> = {};
+    for (const k of Object.keys((value as object)).sort()) {
+      const v = (value as Record<string, unknown>)[k];
       if (v === undefined) continue;
       out[k] = canonicalizeForJsonl(v, stack);
     }
@@ -124,46 +122,46 @@ export function canonicalizeForJsonl(value, stack = new WeakSet()) {
 
 /**
  * Deterministic JSON string for one JSONL line (sorted keys, no whitespace variance).
- * @param {unknown} value
+ * @param value
  * @returns {string}
  */
-export function serializeJsonlLine(value) {
+export function serializeJsonlLine(value: unknown) {
   return JSON.stringify(canonicalizeForJsonl(value));
 }
 
 /**
  * Fail-closed validation of logical snapshot payload (header + entries).
- * @param {unknown} payload
+ * @param payload
  * @returns {{ header: Record<string, unknown>, entries: Record<string, unknown>[] }}
  */
-export function validateSnapshotPayload(payload) {
+export function validateSnapshotPayload(payload: unknown) {
   if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
     throw new PiSessionAdapterError('snapshot payload must be an object', {
       code: 'PI_SNAPSHOT_PAYLOAD_INVALID',
     });
   }
-  const p = /** @type {Record<string, unknown>} */ (payload);
+  const p = (payload as Record<string, unknown>);
   const header = validateHeader(p.header);
   if (!Array.isArray(p.entries)) {
     throw new PiSessionAdapterError('snapshot payload.entries must be an array', {
       code: 'PI_SNAPSHOT_PAYLOAD_INVALID',
     });
   }
-  const entries = validateEntries(/** @type {unknown[]} */ (p.entries));
+  const entries = validateEntries((p.entries as unknown[]));
   return { header, entries };
 }
 
 /**
- * @param {unknown} header
+ * @param header
  * @returns {Record<string, unknown>}
  */
-export function validateHeader(header) {
+export function validateHeader(header: unknown) {
   if (!header || typeof header !== 'object' || Array.isArray(header)) {
     throw new PiSessionAdapterError('snapshot header is required', {
       code: 'PI_JSONL_HEADER_INVALID',
     });
   }
-  const h = /** @type {Record<string, unknown>} */ (header);
+  const h = (header as Record<string, unknown>);
   if (h.type !== 'session') {
     throw new PiSessionAdapterError('header.type must be "session"', {
       code: 'PI_JSONL_HEADER_INVALID',
@@ -196,15 +194,14 @@ export function validateHeader(header) {
 
 /**
  * Walk parent chain: is `ancestorId` an ancestor of `nodeId` (or equal)?
- * @param {string} nodeId
- * @param {string} ancestorId
- * @param {Map<string, string | null>} parentOf
+ * @param nodeId
+ * @param ancestorId
+ * @param parentOf
  */
-export function isAncestorOrSelf(nodeId, ancestorId, parentOf) {
+export function isAncestorOrSelf(nodeId: string, ancestorId: string, parentOf: Map<string, string | null>) {
   if (nodeId === ancestorId) return true;
-  /** @type {Set<string>} */
-  const seen = new Set();
-  let cur = /** @type {string | null | undefined} */ (nodeId);
+    const seen: Set<string> = new Set();
+  let cur = (nodeId as string | null | undefined);
   while (cur != null) {
     if (cur === ancestorId) return true;
     if (seen.has(cur)) return false;
@@ -219,13 +216,12 @@ export function isAncestorOrSelf(nodeId, ancestorId, parentOf) {
  * Leaf entry id in append order: last entry that is not a parent of any later entry.
  * Empty → null (manifest may be sole root).
  *
- * @param {Array<{ id: string, parentId?: string | null }>} entries
+ * @param entries
  * @returns {string | null}
  */
-export function findLeafEntryId(entries) {
+export function findLeafEntryId(entries: Array<{ id: string, parentId?: string | null }>) {
   if (!Array.isArray(entries) || entries.length === 0) return null;
-  /** @type {Set<string>} */
-  const usedAsParent = new Set();
+    const usedAsParent: Set<string> = new Set();
   for (const e of entries) {
     if (e && e.parentId != null && typeof e.parentId === 'string') {
       usedAsParent.add(e.parentId);
@@ -249,16 +245,13 @@ export function findLeafEntryId(entries) {
  *
  * Preserves full toolCall / toolResult / compaction / branch / custom payloads.
  *
- * @param {unknown[]} entries
+ * @param entries
  * @returns {Record<string, unknown>[]}
  */
-export function validateEntries(entries) {
-  /** @type {Record<string, unknown>[]} */
-  const out = [];
-  /** @type {Set<string>} */
-  const seenIds = new Set();
-  /** @type {Map<string, string | null>} */
-  const parentOf = new Map();
+export function validateEntries(entries: unknown[]) {
+    const out: Record<string, unknown>[] = [];
+    const seenIds: Set<string> = new Set();
+    const parentOf: Map<string, string | null> = new Map();
   let nullRootSeen = false;
 
   for (let i = 0; i < entries.length; i += 1) {
@@ -268,7 +261,7 @@ export function validateEntries(entries) {
         code: 'PI_SNAPSHOT_ENTRY_INVALID',
       });
     }
-    const e = /** @type {Record<string, unknown>} */ (raw);
+    const e = (raw as Record<string, unknown>);
     const type = e.type;
     if (typeof type !== 'string' || !PI_JSONL_ENTRY_TYPE_SET.has(type)) {
       throw new PiSessionAdapterError(
@@ -347,7 +340,7 @@ export function validateEntries(entries) {
         );
       }
       // firstKeptEntryId must be on the ancestry of this entry's parent (or be parent).
-      const parentId = /** @type {string | null} */ (e.parentId);
+      const parentId = (e.parentId as string | null);
       if (parentId != null) {
         if (!isAncestorOrSelf(parentId, e.firstKeptEntryId, parentOf)) {
           throw new PiSessionAdapterError(
@@ -382,7 +375,7 @@ export function validateEntries(entries) {
     }
 
     seenIds.add(id);
-    parentOf.set(id, /** @type {string | null} */ (e.parentId));
+    parentOf.set(id, (e.parentId as string | null));
     out.push(e);
   }
   return out;
@@ -392,11 +385,11 @@ export function validateEntries(entries) {
  * Materialize complete version-3 Pi JSONL text (header first, then entries).
  * Each line uses deterministic canonical serialization.
  *
- * @param {unknown} payload
- * @param {{ maxBytes?: number }} [opts]
+ * @param payload
+ * @param [opts]
  * @returns {string}
  */
-export function materializeJsonl(payload, opts = {}) {
+export function materializeJsonl(payload: unknown, opts: { maxBytes?: number } = {}) {
   const { header, entries } = validateSnapshotPayload(payload);
   const lines = [serializeJsonlLine(header)];
   for (const entry of entries) {
@@ -416,10 +409,10 @@ export function materializeJsonl(payload, opts = {}) {
 
 /**
  * SHA-256 hex of exact UTF-8 JSONL bytes.
- * @param {string} jsonlText
+ * @param jsonlText
  * @returns {string}
  */
-export function checksumJsonl(jsonlText) {
+export function checksumJsonl(jsonlText: string) {
   if (typeof jsonlText !== 'string') {
     throw new PiSessionAdapterError('checksumJsonl requires a string', {
       code: 'PI_JSONL_CHECKSUM_INVALID',
@@ -430,18 +423,18 @@ export function checksumJsonl(jsonlText) {
 
 /**
  * SHA-256 of materializeJsonl(payload) — shared repository/adapter contract.
- * @param {unknown} payload
+ * @param payload
  * @returns {string}
  */
-export function checksumSnapshotPayload(payload) {
+export function checksumSnapshotPayload(payload: unknown) {
   return checksumJsonl(materializeJsonl(payload));
 }
 
 /**
- * @param {{ snapshotJson?: unknown, checksum?: string } | null | undefined} snapshot
+ * @param snapshot
  * @returns {boolean}
  */
-export function verifySnapshotChecksum(snapshot) {
+export function verifySnapshotChecksum(snapshot: { snapshotJson?: unknown, checksum?: string } | null | undefined) {
   if (!snapshot?.snapshotJson || !snapshot.checksum) return false;
   try {
     const actual = checksumSnapshotPayload(snapshot.snapshotJson).toLowerCase();
@@ -453,10 +446,10 @@ export function verifySnapshotChecksum(snapshot) {
 
 /**
  * Parse JSONL text and validate fail-closed.
- * @param {string} jsonlText
+ * @param jsonlText
  * @returns {{ header: object, entries: object[] }}
  */
-export function parseAndValidateJsonl(jsonlText) {
+export function parseAndValidateJsonl(jsonlText: string) {
   if (typeof jsonlText !== 'string' || !jsonlText.trim()) {
     throw new PiSessionAdapterError('JSONL text is required', {
       code: 'PI_JSONL_PARSE_ERROR',
@@ -468,8 +461,7 @@ export function parseAndValidateJsonl(jsonlText) {
       code: 'PI_JSONL_PARSE_ERROR',
     });
   }
-  /** @type {unknown[]} */
-  const parsed = [];
+    const parsed: unknown[] = [];
   for (let i = 0; i < lines.length; i += 1) {
     try {
       parsed.push(JSON.parse(lines[i]));
@@ -485,10 +477,7 @@ export function parseAndValidateJsonl(jsonlText) {
   return validateSnapshotPayload({ header, entries });
 }
 
-/**
- * @param {{ id: string, cwd: string, timestamp?: string }} opts
- */
-export function buildSessionHeader(opts) {
+export function buildSessionHeader(opts: { id: string, cwd: string, timestamp?: string }) {
   return {
     type: 'session',
     version: PI_SESSION_JSONL_VERSION,
@@ -511,7 +500,7 @@ export function buildSessionHeader(opts) {
  *   agentSessionId: string,
  * }} input
  */
-export async function captureSessionSnapshotPayload(input) {
+export async function captureSessionSnapshotPayload(input: { sessionAdapter?: { captureSnapshotPayload?: Function }, sessionManager?: { getHeader?: Function, getEntries?: Function }, recoveredPayload?: { header?: Record<string, any>, entries?: Record<string, any>[] } | null, cwd: string, agentSessionId: string, }) {
   const sessionManager = input.sessionManager;
   const cwd = input.cwd;
   const agentSessionId = input.agentSessionId;

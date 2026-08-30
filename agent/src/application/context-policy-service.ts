@@ -31,13 +31,13 @@ export const FALLBACK_COMPACTION_DEFAULTS = Object.freeze({
 });
 
 /**
- * @param {{ autoCompact?: boolean, reserveTokens?: number, keepRecentTokens?: number }} [policy]
- * @param {{ enabled?: boolean, reserveTokens?: number, keepRecentTokens?: number }} [defaults]
+ * @param [policy]
+ * @param [defaults]
  *   Pass the SDK's `DEFAULT_COMPACTION_SETTINGS` so an absent policy tracks the
  *   SDK rather than a copied constant.
  * @returns {{ enabled: boolean, reserveTokens: number, keepRecentTokens: number }}
  */
-export function resolveCompactionSettings(policy = {}, defaults = {}) {
+export function resolveCompactionSettings(policy: { autoCompact?: boolean, reserveTokens?: number, keepRecentTokens?: number } = {}, defaults: { enabled?: boolean, reserveTokens?: number, keepRecentTokens?: number } = {}) {
   const base = { ...FALLBACK_COMPACTION_DEFAULTS, ...defaults };
   const compaction = {
     enabled: policy.autoCompact !== false,
@@ -68,7 +68,7 @@ export function resolveCompactionSettings(policy = {}, defaults = {}) {
  *   defaults?: object,
  * }} input
  */
-export function createRunSettingsManager(SettingsManager, input) {
+export function createRunSettingsManager(SettingsManager: { create: (cwd: string, agentDir?: string) => Record<string, any>, inMemory: (settings?: Record<string, any>) => Record<string, any>, }, input: { cwd: string, agentDir?: string, policy?: Record<string, any>, defaults?: Record<string, any>, }) {
   if (
     typeof SettingsManager?.create !== 'function' ||
     typeof SettingsManager?.inMemory !== 'function'

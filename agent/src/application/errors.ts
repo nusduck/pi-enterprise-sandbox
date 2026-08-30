@@ -3,12 +3,20 @@
  * Map to HTTP at presentation boundaries; services stay transport-agnostic.
  */
 
+/** 错误附带的结构化上下文。允许 null：多数子类不传。 */
+export type ErrorDetails = Record<string, unknown> | null | undefined;
+
 export class ApplicationError extends Error {
-  /**
-   * @param {string} message
-   * @param {{ code?: string, retryable?: boolean, details?: Record<string, unknown> }} [opts]
-   */
-  constructor(message, opts = {}) {
+  /** 稳定的机器可读码。表现层按它映射 HTTP，不按 message。 */
+  readonly code: string;
+  /** 调用方是否可以原样重试。 */
+  readonly retryable: boolean;
+  readonly details: Record<string, unknown> | null;
+
+  constructor(
+    message: string,
+    opts: { code?: string; retryable?: boolean; details?: ErrorDetails } = {},
+  ) {
     super(message);
     this.name = 'ApplicationError';
     this.code = opts.code ?? 'APPLICATION_ERROR';
@@ -19,11 +27,10 @@ export class ApplicationError extends Error {
 
 /** Parent-graph mapping race: outer caller should retry the whole transaction. */
 export class ParentProvisioningRaceError extends ApplicationError {
-  /**
-   * @param {string} [message]
-   * @param {Record<string, unknown>} [details]
-   */
-  constructor(message = 'Parent graph provisioning race; retry transaction', details) {
+  constructor(
+    message = 'Parent graph provisioning race; retry transaction',
+    details?: ErrorDetails,
+  ) {
     super(message, {
       code: 'PARENT_PROVISIONING_RACE',
       retryable: true,
@@ -35,13 +42,9 @@ export class ParentProvisioningRaceError extends ApplicationError {
 
 /** Same idempotency key + same hash, response not yet completed. */
 export class IdempotencyInProgressError extends ApplicationError {
-  /**
-   * @param {string} [message]
-   * @param {Record<string, unknown>} [details]
-   */
   constructor(
     message = 'Idempotent operation is still in progress',
-    details,
+    details?: ErrorDetails,
   ) {
     super(message, {
       code: 'IDEMPOTENCY_IN_PROGRESS',
@@ -54,13 +57,9 @@ export class IdempotencyInProgressError extends ApplicationError {
 
 /** Same idempotency key with a different request body hash. */
 export class IdempotencyConflictError extends ApplicationError {
-  /**
-   * @param {string} [message]
-   * @param {Record<string, unknown>} [details]
-   */
   constructor(
     message = 'Idempotency key reused with a different request body',
-    details,
+    details?: ErrorDetails,
   ) {
     super(message, {
       code: 'IDEMPOTENCY_CONFLICT',
@@ -73,11 +72,10 @@ export class IdempotencyConflictError extends ApplicationError {
 
 /** Owner-scoped resource missing (never leak cross-tenant existence). */
 export class OwnerScopedNotFoundError extends ApplicationError {
-  /**
-   * @param {string} message
-   * @param {{ resource?: string, id?: string }} [meta]
-   */
-  constructor(message, meta = {}) {
+  readonly resource: string | null;
+  readonly id: string | null;
+
+  constructor(message: string, meta: { resource?: string; id?: string } = {}) {
     super(message, {
       code: 'NOT_FOUND',
       retryable: false,
@@ -91,11 +89,7 @@ export class OwnerScopedNotFoundError extends ApplicationError {
 
 /** Input validation failure (messages, trace, sizes, etc.). */
 export class ValidationError extends ApplicationError {
-  /**
-   * @param {string} message
-   * @param {Record<string, unknown>} [details]
-   */
-  constructor(message, details) {
+  constructor(message: string, details?: ErrorDetails) {
     super(message, {
       code: 'VALIDATION_ERROR',
       retryable: false,
@@ -109,11 +103,7 @@ export class ValidationError extends ApplicationError {
  * Canonical JSON / hash construction failed.
  */
 export class CanonicalJsonError extends ApplicationError {
-  /**
-   * @param {string} message
-   * @param {Record<string, unknown>} [details]
-   */
-  constructor(message, details) {
+  constructor(message: string, details?: ErrorDetails) {
     super(message, {
       code: 'CANONICAL_JSON_ERROR',
       retryable: false,

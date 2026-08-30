@@ -30,7 +30,7 @@ import { assertUlid } from '../domain/shared/ulid.js';
  * }} args
  * @returns {Promise<{ ok: boolean, alreadyAdvanced?: boolean }>}
  */
-export async function projectAcceptedToQueued(args) {
+export async function projectAcceptedToQueued(args: { transactionManager: { run: (fn: (trx: any) => Promise<any>) => Promise<any> }, createRepositories: (db: any) => any, generateId: () => string, stateMachine?: import('../domain/run/run-state-machine.js').RunStateMachine, runId: string, orgId: string, userId: string, traceId: string, }) {
   const scope = { orgId: args.orgId, userId: args.userId };
   const stateMachine = args.stateMachine ?? runStateMachine;
   try {

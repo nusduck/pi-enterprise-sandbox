@@ -4,11 +4,11 @@ import { randomBytes } from 'node:crypto';
  * Unique Run lease acquisition token (workerId is metadata only).
  * Format: `{workerId}:{cryptographicSuffix}` — same shape as session lock tokens.
  *
- * @param {string} workerId
- * @param {{ randomBytes?: (n: number) => Buffer | Uint8Array }} [opts]
+ * @param workerId
+ * @param [opts]
  * @returns {string}
  */
-export function generateRunLeaseOwnerToken(workerId, opts = {}) {
+export function generateRunLeaseOwnerToken(workerId: string, opts: { randomBytes?: (n: number) => Buffer | Uint8Array } = {}) {
   const base = String(workerId ?? '').trim();
   if (!base) {
     throw new Error('workerId is required for run lease owner token');
@@ -21,10 +21,10 @@ export function generateRunLeaseOwnerToken(workerId, opts = {}) {
  * Derive Pi prompt content from the durable triggering user message only.
  * Never re-sends full accumulated history into prompt.
  *
- * @param {object | null | undefined} message — mapped Message row
+ * @param message — mapped Message row
  * @returns {string | Array<{ type: string, text?: string, [k: string]: unknown }>}
  */
-export function derivePromptFromTriggeringMessage(message) {
+export function derivePromptFromTriggeringMessage(message: Record<string, any> | null | undefined) {
   if (!message) {
     throw new Error('triggering message is required');
   }
@@ -154,11 +154,11 @@ export function imageAttachmentsFromTriggeringMessage(message) {
  * picture helps nobody, and the model can still act on the filenames and the
  * text. Mirrors the note Pi's own read tool emits for a non-vision model.
  *
- * @param {string | Array<{ type: string, text?: string, [k: string]: unknown }>} prompt
- * @param {Array<{ name?: string }>} images
- * @param {string} modelId
+ * @param prompt
+ * @param images
+ * @param modelId
  */
-export function appendNonVisionImageNotice(prompt, images, modelId) {
+export function appendNonVisionImageNotice(prompt: string | Array<{ type: string, text?: string, [k: string]: unknown }>, images: Array<{ name?: string }>, modelId: string) {
   if (!Array.isArray(images) || images.length === 0) return prompt;
   const names = images
     .map((image) => String(image?.name || 'image'))
@@ -176,10 +176,10 @@ export function appendNonVisionImageNotice(prompt, images, modelId) {
  * Adapt durable text/image parts to AgentSession.prompt(text, { images }).
  * Pi 0.80.3 always requires the first argument to be a string.
  *
- * @param {string | Array<{ type: string, text?: string, [k: string]: unknown }>} prompt
+ * @param prompt
  * @returns {{ text: string, options?: { images: object[] } }}
  */
-export function toPiPromptInvocation(prompt) {
+export function toPiPromptInvocation(prompt: string | Array<{ type: string, text?: string, [k: string]: unknown }>) {
   if (typeof prompt === 'string') return { text: prompt };
 
   const text = prompt
@@ -215,7 +215,7 @@ export function findToolCallArgumentsInSession(session, toolCallId) {
   const scan = (messages) => {
     if (!Array.isArray(messages)) return null;
     for (let i = messages.length - 1; i >= 0; i -= 1) {
-      const message = /** @type {any} */ (messages[i]);
+      const message = (messages[i] as any);
       if (message?.role !== 'assistant' || !Array.isArray(message.content)) {
         continue;
       }
@@ -227,7 +227,7 @@ export function findToolCallArgumentsInSession(session, toolCallId) {
           typeof block.arguments === 'object' &&
           !Array.isArray(block.arguments)
         ) {
-          return /** @type {Record<string, unknown>} */ (block.arguments);
+          return (block.arguments as Record<string, unknown>);
         }
       }
     }

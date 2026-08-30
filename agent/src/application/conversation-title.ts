@@ -55,14 +55,14 @@ function normalizeConversationTitle(text) {
  *
  * Supports both API message shapes and durable Message rows.
  *
- * @param {unknown[]} messages
+ * @param messages
  * @returns {string}
  */
-export function conversationTitleFromMessages(messages) {
+export function conversationTitleFromMessages(messages: unknown[]) {
   if (!Array.isArray(messages)) return DEFAULT_CONVERSATION_TITLE;
   for (const message of messages) {
     if (!message || typeof message !== 'object') continue;
-    const rec = /** @type {Record<string, unknown>} */ (message);
+    const rec = (message as Record<string, unknown>);
     if (rec.role !== 'user' && rec.role != null) {
       continue;
     }

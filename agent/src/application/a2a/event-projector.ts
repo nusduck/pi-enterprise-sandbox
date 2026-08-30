@@ -69,7 +69,22 @@ const ARTIFACT_EVENT_TYPES = new Set([
 const MESSAGE_EVENT_TYPES = new Set(['message.completed']);
 
 /**
- * @param {object} envelope
+ * 投影一条 Run 事件所需的 A2A 上下文。原本以 JSDoc 内联在
+ * `projectEnvelopeToA2aResult` 上，抽成具名类型是因为
+ * `collectArtifactsFromEnvelopes` 会把同一个 ctx 透传下去——两处必须是同一个
+ * 形状，写两遍迟早对不上。
+ */
+export interface A2aProjectionContext {
+  a2aTaskId: string;
+  contextId?: string | null;
+  runStatus?: string | null;
+  principal?: { orgId?: string; clientId?: string } | null;
+  buildDownloadUri?: Function | null;
+  lastA2aStatus?: string | null;
+}
+
+/**
+ * @param envelope
  * @param {{
  *   a2aTaskId: string,
  *   contextId?: string | null,
@@ -79,7 +94,7 @@ const MESSAGE_EVENT_TYPES = new Set(['message.completed']);
  *   lastA2aStatus?: string | null,
  * }} ctx
  */
-export function projectEnvelopeToA2aResult(envelope, ctx) {
+export function projectEnvelopeToA2aResult(envelope: Record<string, any>, ctx: A2aProjectionContext) {
   if (!envelope || typeof envelope !== 'object') return null;
   const event =
     envelope.event && typeof envelope.event === 'object'
@@ -151,7 +166,9 @@ export function projectEnvelopeToA2aResult(envelope, ctx) {
     // Collapse no-op transitions (accepted+queued both map to submitted).
     if (ctx.lastA2aStatus && ctx.lastA2aStatus === status) return null;
     const final = isTerminalA2aTaskStatus(status);
-    const statusBody = {
+    // message 是 TaskStatus 上的可选字段，下面按需补。字面量推断不会带上
+    // 没写出来的可选字段，所以这里显式给出形状。
+    const statusBody: { state: unknown; timestamp: string; message?: unknown } = {
       state: status,
       timestamp: envelope.ts
         ? new Date(envelope.ts).toISOString()
@@ -188,20 +205,20 @@ export function projectEnvelopeToA2aResult(envelope, ctx) {
 }
 
 /**
- * @param {unknown} value
+ * @param value
  * @returns {Record<string, unknown>}
  */
-function plainObject(value) {
+function plainObject(value: unknown) {
   return value && typeof value === 'object' && !Array.isArray(value)
-    ? /** @type {Record<string, unknown>} */ (value)
+    ? (value as Record<string, unknown>)
     : {};
 }
 
 /**
- * @param {{ contextId?: string | null, a2aTaskId: string }} ctx
+ * @param ctx
  * @returns {string}
  */
-function resolveContextId(ctx) {
+function resolveContextId(ctx: { contextId?: string | null, a2aTaskId: string }) {
   if (typeof ctx.contextId === 'string' && ctx.contextId.trim()) {
     return ctx.contextId.trim();
   }
@@ -210,12 +227,11 @@ function resolveContextId(ctx) {
 
 /**
  * Wire metadata for SSE resume only — no internal runStatus / sourceEventType.
- * @param {number} sequence
- * @param {unknown} eventId
+ * @param sequence
+ * @param eventId
  */
-function streamMetadata(sequence, eventId) {
-  /** @type {Record<string, unknown>} */
-  const metadata = { sequence };
+function streamMetadata(sequence: number, eventId: unknown) {
+    const metadata: Record<string, unknown> = { sequence };
   if (typeof eventId === 'string' && eventId) metadata.eventId = eventId;
   return metadata;
 }
@@ -232,14 +248,13 @@ function streamMetadata(sequence, eventId) {
  *   metadata?: Record<string, unknown>,
  * }} input
  */
-export function buildA2aTaskObject(input) {
+export function buildA2aTaskObject(input: { a2aTaskId: string, contextId?: string | null, runStatus: string, createdAt?: string | null, updatedAt?: string | null, artifacts?: Record<string, any>[], history?: Record<string, any>[], metadata?: Record<string, unknown>, }) {
   const state = projectRunStatusToA2a(input.runStatus);
   const contextId =
     typeof input.contextId === 'string' && input.contextId.trim()
       ? input.contextId.trim()
       : input.a2aTaskId;
-  /** @type {Record<string, unknown>} */
-  const task = {
+    const task: Record<string, unknown> = {
     id: input.a2aTaskId,
     contextId,
     status: {
@@ -261,18 +276,17 @@ export function buildA2aTaskObject(input) {
 /**
  * Project durable conversation messages → A2A Message history.
  *
- * @param {object[]} messages
- * @param {{ a2aTaskId: string, contextId?: string | null }} ctx
+ * @param messages
+ * @param ctx
  * @returns {object[]}
  */
-export function projectMessagesToA2aHistory(messages, ctx) {
+export function projectMessagesToA2aHistory(messages: Record<string, any>[], ctx: { a2aTaskId: string, contextId?: string | null }) {
   if (!Array.isArray(messages) || messages.length === 0) return [];
   const contextId =
     typeof ctx.contextId === 'string' && ctx.contextId.trim()
       ? ctx.contextId.trim()
       : ctx.a2aTaskId;
-  /** @type {object[]} */
-  const out = [];
+    const out: object[] = [];
   for (const row of messages) {
     if (!row || typeof row !== 'object') continue;
     const roleRaw = String(row.role || '').toLowerCase();
@@ -304,10 +318,10 @@ export function projectMessagesToA2aHistory(messages, ctx) {
 }
 
 /**
- * @param {object} row
+ * @param row
  * @returns {string | null}
  */
-function extractTextFromMessageRow(row) {
+function extractTextFromMessageRow(row: Record<string, any>) {
   const json = row.contentJson ?? row.content_json ?? null;
   if (typeof json === 'string') {
     try {
@@ -327,12 +341,12 @@ function extractTextFromMessageRow(row) {
 }
 
 /**
- * @param {unknown} content
+ * @param content
  * @returns {string | null}
  */
-function extractTextFromContentJson(content) {
+function extractTextFromContentJson(content: unknown) {
   if (!content || typeof content !== 'object') return null;
-  const c = /** @type {Record<string, unknown>} */ (content);
+  const c = (content as Record<string, unknown>);
   if (typeof c.text === 'string' && c.text.trim()) return c.text.trim();
   if (typeof c.content === 'string' && c.content.trim()) return c.content.trim();
   if (Array.isArray(c.parts)) {
@@ -351,7 +365,7 @@ function extractTextFromContentJson(content) {
  * Durable artifact_id required (ULID). Path/name-only rejected.
  * Never includes relativePath/workspace path on the wire.
  *
- * @param {object} event
+ * @param event
  * @param {{
  *   a2aTaskId: string,
  *   contextId?: string | null,
@@ -360,7 +374,7 @@ function extractTextFromContentJson(content) {
  * }} ctx
  * @returns {object | null}
  */
-function projectArtifactEvent(event, ctx) {
+function projectArtifactEvent(event: Record<string, any>, ctx: { a2aTaskId: string, contextId?: string | null, principal?: { orgId?: string, clientId?: string } | null, buildDownloadUri?: Function | null, }) {
   const data =
     event.data && typeof event.data === 'object' && !Array.isArray(event.data)
       ? event.data
@@ -422,8 +436,7 @@ function projectArtifactEvent(event, ctx) {
     payload.size ??
     null;
 
-  /** @type {object[]} */
-  const parts = [];
+    const parts: object[] = [];
   if (typeof event.text === 'string' && event.text) {
     parts.push({ kind: 'text', text: event.text.slice(0, 4096) });
   }
@@ -482,16 +495,14 @@ function projectArtifactEvent(event, ctx) {
           : '';
   const description = descriptionRaw.trim().slice(0, 512);
 
-  /** @type {Record<string, unknown>} */
-  const artifact = {
+    const artifact: Record<string, unknown> = {
     artifactId,
     name,
     parts,
   };
   if (description) artifact.description = description;
 
-  /** @type {Record<string, unknown>} */
-  const metadata = {
+    const metadata: Record<string, unknown> = {
     mimeType: typeof mimeType === 'string' ? mimeType : 'application/octet-stream',
   };
   if (sizeBytes != null && Number.isFinite(Number(sizeBytes))) {
@@ -504,7 +515,7 @@ function projectArtifactEvent(event, ctx) {
 /**
  * Project durable message.completed → A2A Message (kind: message).
  *
- * @param {object} event
+ * @param event
  * @param {{
  *   a2aTaskId: string,
  *   contextId: string,
@@ -513,7 +524,7 @@ function projectArtifactEvent(event, ctx) {
  * }} ctx
  * @returns {object | null}
  */
-function projectCompletedMessage(event, ctx) {
+function projectCompletedMessage(event: Record<string, any>, ctx: { a2aTaskId: string, contextId: string, sequence?: number, eventId?: string | null, }) {
   const payload = plainObject(event.payload);
   // The observability projector writes `{ context, data }` payloads, so the
   // role/message/messageId of a live message.completed sit one level down.
@@ -524,8 +535,8 @@ function projectCompletedMessage(event, ctx) {
       payload.role ||
       data.role ||
       event.message?.role ||
-      /** @type {any} */ (payload.message)?.role ||
-      /** @type {any} */ (data.message)?.role ||
+      (payload.message as any)?.role ||
+      (data.message as any)?.role ||
       '',
   ).toLowerCase();
   const role =
@@ -563,18 +574,18 @@ function projectCompletedMessage(event, ctx) {
 }
 
 /**
- * @param {object} event
- * @param {Record<string, unknown>} payload
+ * @param event
+ * @param payload
  * @returns {string | null}
  */
-function extractCompletedMessageText(event, payload) {
+function extractCompletedMessageText(event: Record<string, any>, payload: Record<string, unknown>) {
   if (typeof event.text === 'string' && event.text.trim()) {
     return event.text.trim();
   }
   const msg = event.message ?? payload.message ?? null;
   if (typeof msg === 'string' && msg.trim()) return msg.trim();
   if (!msg || typeof msg !== 'object') return null;
-  const body = /** @type {Record<string, unknown>} */ (msg);
+  const body = (msg as Record<string, unknown>);
   if (typeof body.text === 'string' && body.text.trim()) return body.text.trim();
   if (typeof body.content === 'string' && body.content.trim()) {
     return body.content.trim();
@@ -583,7 +594,7 @@ function extractCompletedMessageText(event, payload) {
     const texts = [];
     for (const part of body.content) {
       if (!part || typeof part !== 'object') continue;
-      const p = /** @type {Record<string, unknown>} */ (part);
+      const p = (part as Record<string, unknown>);
       if (
         (p.type === 'text' || p.kind === 'text') &&
         typeof p.text === 'string' &&
@@ -599,14 +610,14 @@ function extractCompletedMessageText(event, payload) {
 
 /**
  * Project durable MySQL artifact rows (no path leak).
- * @param {object[]} rows — mapped ArtifactRepository rows
+ * @param rows — mapped ArtifactRepository rows
  * @param {{
  *   a2aTaskId: string,
  *   principal: { orgId: string, clientId: string },
  *   buildDownloadUri?: Function | null,
  * }} ctx
  */
-export function projectArtifactRowsToA2a(rows, ctx) {
+export function projectArtifactRowsToA2a(rows: Record<string, any>[], ctx: { a2aTaskId: string, principal: { orgId: string, clientId: string }, buildDownloadUri?: Function | null, }) {
   const out = [];
   for (const row of rows || []) {
     if (!row?.artifactId || !isUlid(row.artifactId)) continue;
@@ -681,8 +692,8 @@ function extractRunStatus(event) {
  * a2a-python Pydantic) never reject status-update frames; real reasons keep
  * a stable, deterministic messageId for stream replay.
  *
- * @param {object} event
- * @param {string} a2aStatus
+ * @param event
+ * @param a2aStatus
  * @param {{
  *   a2aTaskId?: string,
  *   contextId?: string | null,
@@ -691,7 +702,7 @@ function extractRunStatus(event) {
  * }} [ctx]
  * @returns {object | null}
  */
-function statusMessage(event, a2aStatus, ctx = {}) {
+function statusMessage(event: Record<string, any>, a2aStatus: string, ctx: { a2aTaskId?: string, contextId?: string | null, sequence?: number, eventId?: string | null, } = {}) {
   const reason =
     event.statusReason ||
     event.status_reason ||
@@ -710,8 +721,7 @@ function statusMessage(event, a2aStatus, ctx = {}) {
     (typeof event.message_id === 'string' && event.message_id.trim()) ||
     (typeof ctx.eventId === 'string' && ctx.eventId.trim()) ||
     `a2a-status-${ctx.a2aTaskId || 'task'}-${seq}-${a2aStatus}`;
-  /** @type {Record<string, unknown>} */
-  const msg = {
+    const msg: Record<string, unknown> = {
     messageId,
     role: 'agent',
     parts: [{ kind: 'text', text: reason.trim().slice(0, 500) }],
@@ -726,11 +736,10 @@ function statusMessage(event, a2aStatus, ctx = {}) {
   return msg;
 }
 
-/**
- * @param {object[]} envelopes
- * @param {object} ctx
- */
-export function collectArtifactsFromEnvelopes(envelopes, ctx) {
+export function collectArtifactsFromEnvelopes(
+  envelopes: Record<string, any>[],
+  ctx: A2aProjectionContext,
+) {
   const artifacts = [];
   const seen = new Set();
   for (const env of envelopes || []) {

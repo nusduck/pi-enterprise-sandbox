@@ -22,10 +22,7 @@ function positiveInt(value, name, fallback) {
   return parsed;
 }
 
-/**
- * @param {NodeJS.ProcessEnv | Record<string, string | undefined>} [env]
- */
-export function resolvePiRunToolBudget(env = process.env) {
+export function resolvePiRunToolBudget(env: NodeJS.ProcessEnv | Record<string, string | undefined> = process.env) {
   return Object.freeze({
     maxToolCalls: positiveInt(
       env.AGENT_RUN_MAX_TOOL_CALLS,
@@ -80,7 +77,7 @@ function budgetInstruction(reason) {
  * instruction to answer. A tool attempt after that point is blocked as a
  * final defensive measure.
  *
- * @param {object} session
+ * @param session
  * @param {{
  *   maxToolCalls?: number,
  *   maxIdenticalToolCalls?: number,
@@ -90,7 +87,7 @@ function budgetInstruction(reason) {
  * }} [limits]
  * @returns {{ supported: boolean, dispose: () => void, snapshot: () => object }}
  */
-export function installPiRunToolBudget(session, limits = {}) {
+export function installPiRunToolBudget(session: Record<string, any>, limits: { maxToolCalls?: number, maxIdenticalToolCalls?: number, maxModelTurns?: number, runDeadlineMs?: number, now?: () => number, } = {}) {
   const agent = session?.agent;
   if (!agent || !agent.state || !Array.isArray(agent.state.tools)) {
     return {

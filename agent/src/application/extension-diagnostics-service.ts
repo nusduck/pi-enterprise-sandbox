@@ -39,10 +39,10 @@ function toolCategory(name) {
  * System roots are scanned first, so a user package can never mask a bundled
  * name in the listing — the same precedence installs already enforce.
  *
- * @param {string[]} skillRoots
- * @param {string | null} [userSkillRoot]
+ * @param skillRoots
+ * @param [userSkillRoot]
  */
-function discoverSkills(skillRoots, userSkillRoot = null) {
+function discoverSkills(skillRoots: string[], userSkillRoot: string | null = null) {
   const userRoot = userSkillRoot ? path.resolve(String(userSkillRoot)) : null;
   const discovered = new Map();
   for (const rawRoot of skillRoots || []) {
@@ -77,9 +77,21 @@ function discoverSkills(skillRoots, userSkillRoot = null) {
   );
 }
 
-function projectMcpServers(rawServers, discovery = null) {
+/** 单个 MCP server 的发现结果。/ready 与诊断端点都按这几个字段展开。 */
+interface McpServerDiscovery {
+  serverId?: string;
+  status?: string;
+  toolCount?: number;
+  toolNames?: string[];
+}
+
+function projectMcpServers(
+  rawServers: unknown,
+  discovery: { servers?: McpServerDiscovery[] } | null = null,
+) {
   const registry = loadMcpServerRegistry(rawServers || []);
-  const discovered = new Map(
+  // `new Map(any)` 会塌成 Map<unknown, unknown>，显式给出元素类型。
+  const discovered = new Map<string | undefined, McpServerDiscovery>(
     Array.isArray(discovery?.servers)
       ? discovery.servers.map((server) => [server.serverId, server])
       : [],
@@ -126,7 +138,7 @@ function projectMcpServers(rawServers, discovery = null) {
  *   now?: () => Date,
  * }} [options]
  */
-export function getExtensionDiagnostics(options = {}) {
+export function getExtensionDiagnostics(options: { profileId?: string, skillRoots?: string[], userSkillRoot?: string | null, mcpServers?: Record<string, any>[] | string, mcpDiscovery?: { servers?: Record<string, any>[], ready?: boolean, toolCount?: number }, models?: Iterable<Record<string, any>>, toolRiskPolicy?: Record<string, any>, now?: () => Date, } = {}) {
   const profileId = String(
     options.profileId || DEFAULT_PROFILE_ID,
   ).trim();

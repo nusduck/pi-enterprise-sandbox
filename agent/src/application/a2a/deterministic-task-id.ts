@@ -9,12 +9,12 @@ import { createHash } from 'node:crypto';
 import { CROCKFORD_ALPHABET } from '../../domain/shared/ulid.js';
 
 /**
- * @param {string} orgId
- * @param {string} clientId
- * @param {string} runId
+ * @param orgId
+ * @param clientId
+ * @param runId
  * @returns {string}
  */
-export function deterministicA2aTaskId(orgId, clientId, runId) {
+export function deterministicA2aTaskId(orgId: string, clientId: string, runId: string) {
   const material = `a2a-task-v1:${String(orgId)}:${String(clientId)}:${String(runId)}`;
   const digest = createHash('sha256').update(material, 'utf8').digest();
   // 130 bits → 26 × 5-bit Crockford chars
