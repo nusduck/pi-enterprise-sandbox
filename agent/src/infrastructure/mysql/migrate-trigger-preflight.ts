@@ -15,15 +15,19 @@
 
 import { MysqlConfigError } from './errors.js';
 
+/** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
+type Loose = any;
+
 /** Stable error code for deploy gates and tests. */
 export const MYSQL_TRIGGER_BINLOG_BLOCKED = 'MYSQL_TRIGGER_BINLOG_BLOCKED';
 
 export class MysqlTriggerCapabilityError extends MysqlConfigError {
-  /**
-   * @param {string} message
-   * @param {{ logBin?: boolean, trustCreators?: boolean }} [meta]
-   */
-  constructor(message, meta = {}) {
+  // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
+  // code 不在此列：MysqlConfigError 已经声明过，子类重复声明是 TS2612。
+  logBin: Loose;
+  trustCreators: Loose;
+
+  constructor(message: string, meta: { logBin?: boolean, trustCreators?: boolean } = {}) {
     super(message);
     this.name = 'MysqlTriggerCapabilityError';
     this.code = MYSQL_TRIGGER_BINLOG_BLOCKED;
@@ -34,36 +38,36 @@ export class MysqlTriggerCapabilityError extends MysqlConfigError {
 
 /**
  * Normalize mysql2/knex raw SELECT var shapes to a single row object. 原句含 SQL 变量前缀，双 at 符号为避 JSDoc 误判标签已改写描述。
- * @param {unknown} rawResult
+ * @param rawResult
  * @returns {Record<string, unknown> | null}
  */
-export function extractFirstRow(rawResult) {
+export function extractFirstRow(rawResult: unknown) {
   if (rawResult == null) return null;
   // knex mysql2: [rows, fields]
   if (Array.isArray(rawResult)) {
     const first = rawResult[0];
     if (Array.isArray(first)) {
       return first[0] && typeof first[0] === 'object'
-        ? /** @type {Record<string, unknown>} */ (first[0])
+        ? (first[0] as Record<string, unknown>)
         : null;
     }
     if (first && typeof first === 'object' && !Array.isArray(first)) {
-      return /** @type {Record<string, unknown>} */ (first);
+      return (first as Record<string, unknown>);
     }
     return null;
   }
   if (typeof rawResult === 'object') {
-    return /** @type {Record<string, unknown>} */ (rawResult);
+    return (rawResult as Record<string, unknown>);
   }
   return null;
 }
 
 /**
  * Coerce MySQL boolean-ish session/global values (0/1, 'ON'/'OFF', true/false).
- * @param {unknown} value
+ * @param value
  * @returns {boolean | null} null if unparseable
  */
-export function coerceMysqlBool(value) {
+export function coerceMysqlBool(value: unknown) {
   if (value === true || value === 1 || value === '1') return true;
   if (value === false || value === 0 || value === '0') return false;
   if (typeof value === 'string') {
@@ -80,10 +84,10 @@ export function coerceMysqlBool(value) {
 
 /**
  * Pure decision: can a non-SUPER account create triggers?
- * @param {{ logBin: boolean | null, trustCreators: boolean | null }} vars
+ * @param vars
  * @returns {{ ok: true } | { ok: false, reason: string }}
  */
-export function evaluateTriggerMigrationCapability(vars) {
+export function evaluateTriggerMigrationCapability(vars: { logBin: boolean | null, trustCreators: boolean | null }) {
   if (vars.logBin === null || vars.trustCreators === null) {
     return {
       ok: false,
@@ -116,10 +120,10 @@ export function evaluateTriggerMigrationCapability(vars) {
 
 /**
  * Query globals and evaluate (injectable knex.raw for unit tests).
- * @param {import('knex').Knex} knex
+ * @param knex
  * @returns {Promise<{ logBin: boolean | null, trustCreators: boolean | null, decision: ReturnType<typeof evaluateTriggerMigrationCapability> }>}
  */
-export async function inspectMysqlTriggerMigrationCapability(knex) {
+export async function inspectMysqlTriggerMigrationCapability(knex: import('knex').Knex) {
   if (!knex || typeof knex.raw !== 'function') {
     throw new Error('inspectMysqlTriggerMigrationCapability requires knex');
   }
@@ -148,14 +152,13 @@ export async function inspectMysqlTriggerMigrationCapability(knex) {
 /**
  * Fail closed when pending migrations would hit CREATE TRIGGER without capability.
  *
- * @param {import('knex').Knex} knex
+ * @param knex
  */
-export async function assertMysqlTriggerMigrationCapability(knex) {
+export async function assertMysqlTriggerMigrationCapability(knex: import('knex').Knex) {
   const { logBin, trustCreators, decision } =
     await inspectMysqlTriggerMigrationCapability(knex);
   if (decision.ok) return { logBin, trustCreators };
 
-  // @ts-expect-error 窄化后 reason 必存在：已 early-return ok 分支，剩余仅 ok:false 分支 —— TS2339
   throw new MysqlTriggerCapabilityError(decision.reason, {
     logBin: logBin === null ? undefined : logBin,
     trustCreators: trustCreators === null ? undefined : trustCreators,

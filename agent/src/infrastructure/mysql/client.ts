@@ -12,10 +12,10 @@ const require = createRequire(import.meta.url);
 
 /**
  * Classify a rejected URL for error messages without echoing credentials.
- * @param {string} normalized
+ * @param normalized
  * @returns {string}
  */
-export function describeRejectedMysqlUrl(normalized) {
+export function describeRejectedMysqlUrl(normalized: string) {
   const lower = normalized.toLowerCase();
   const schemeMatch = lower.match(/^([a-z][a-z0-9+.-]*):/i);
   if (schemeMatch) {
@@ -32,10 +32,10 @@ export function describeRejectedMysqlUrl(normalized) {
  * Rejects sqlite, postgres, `mysql+…`, and bare `user:pass@host/db` strings.
  * Error messages never include the full URL (avoids credential leakage).
  *
- * @param {string | undefined | null} url
+ * @param url
  * @returns {string} trimmed original URL when valid
  */
-export function assertMysqlConnectionUrl(url) {
+export function assertMysqlConnectionUrl(url: string | undefined | null) {
   if (url == null || String(url).trim() === '') {
     throw new MysqlConfigError(
       'MySQL connection URL is required (set AGENT_DATABASE_URL or TEST_MYSQL_URL). ' +
@@ -68,10 +68,10 @@ export function assertMysqlConnectionUrl(url) {
  * `eu`, which is indistinguishable from unparsed JSON text at repository
  * boundaries.
  *
- * @param {string} connectionUrl
+ * @param connectionUrl
  * @returns {string} mysql:// URL with UTC/string date options
  */
-export function normalizeMysqlConnectionUrl(connectionUrl) {
+export function normalizeMysqlConnectionUrl(connectionUrl: string) {
   const url = assertMysqlConnectionUrl(connectionUrl);
   let parsed;
   try {
@@ -98,7 +98,6 @@ export function loadKnexModule() {
   try {
     // knex default export is the knex function
     const mod = require('knex');
-    // @ts-expect-error 遗留JS占位类型object未展开，访问default需收窄，存活代码先用expect-error收敛 —— TS2339: Property 'default' does not exist on type 'never'.
     return typeof mod === 'function' ? mod : mod.default;
   } catch (err) {
     throw new MysqlDependencyError(
@@ -130,11 +129,11 @@ export function migrationsDirectory() {
 }
 
 /**
- * @param {string} connectionUrl
- * @param {{ pool?: { min?: number, max?: number } }} [options]
+ * @param connectionUrl
+ * @param [options]
  * @returns {import('knex').Knex}
  */
-export function createMysqlKnex(connectionUrl, options = {}) {
+export function createMysqlKnex(connectionUrl: string, options: { pool?: { min?: number, max?: number } } = {}) {
   const connection = normalizeMysqlConnectionUrl(connectionUrl);
   assertMysql2Installed();
   const knex = loadKnexModule();
@@ -157,9 +156,9 @@ export function createMysqlKnex(connectionUrl, options = {}) {
 
 /**
  * Destroy knex pool (integration tests / CLI).
- * @param {import('knex').Knex | null | undefined} knex
+ * @param knex
  */
-export async function destroyMysqlKnex(knex) {
+export async function destroyMysqlKnex(knex: import('knex').Knex | null | undefined) {
   if (knex && typeof knex.destroy === 'function') {
     await knex.destroy();
   }

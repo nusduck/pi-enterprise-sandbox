@@ -44,21 +44,17 @@ export const CREATE_TABLE_MIGRATION_SENTINELS = Object.freeze([
 ]);
 
 /**
- * @param {import('knex').Knex} knex
+ * @param knex
  * @returns {Promise<Set<string>>}
  */
-async function loadRecordedMigrationNames(knex) {
+async function loadRecordedMigrationNames(knex: import('knex').Knex) {
   const has = await knex.schema.hasTable('knex_migrations');
   if (!has) return new Set();
   const rows = await knex('knex_migrations').select('name');
   return new Set(rows.map((r) => String(r.name)));
 }
 
-/**
- * @param {import('knex').Knex} knex
- * @param {string} table
- */
-async function tableExists(knex, table) {
+async function tableExists(knex: import('knex').Knex, table: string) {
   return knex.schema.hasTable(table);
 }
 
@@ -66,23 +62,21 @@ async function tableExists(knex, table) {
  * Detect orphan tables that exist without their creating migration recorded.
  * Returns a structured report (no throw).
  *
- * @param {import('knex').Knex} knex
+ * @param knex
  * @returns {Promise<{
  *   orphanTables: string[],
  *   missingMigrations: string[],
  *   recorded: string[],
  * }>}
  */
-export async function inspectOrphanPartialSchema(knex) {
+export async function inspectOrphanPartialSchema(knex: import('knex').Knex) {
   if (!knex || !knex.schema) {
     throw new Error('inspectOrphanPartialSchema requires a knex instance');
   }
 
   const recorded = await loadRecordedMigrationNames(knex);
-  /** @type {string[]} */
-  const orphanTables = [];
-  /** @type {string[]} */
-  const missingMigrations = [];
+  const orphanTables: string[] = [];
+  const missingMigrations: string[] = [];
 
   const coreRecorded = recorded.has(CORE_MIGRATION_NAME);
   if (!coreRecorded) {
@@ -99,8 +93,7 @@ export async function inspectOrphanPartialSchema(knex) {
 
   for (const sentinel of CREATE_TABLE_MIGRATION_SENTINELS) {
     if (recorded.has(sentinel.migrationName)) continue;
-    /** @type {string[]} */
-    const found = [];
+    const found: string[] = [];
     for (const table of sentinel.tables) {
       // eslint-disable-next-line no-await-in-loop
       if (await tableExists(knex, table)) {
@@ -124,9 +117,9 @@ export async function inspectOrphanPartialSchema(knex) {
  * Fail closed when residual half-migration schema is present.
  * Safe to call before every migrateLatest (empty DB → no-op).
  *
- * @param {import('knex').Knex} knex
+ * @param knex
  */
-export async function assertNoOrphanPartialSchema(knex) {
+export async function assertNoOrphanPartialSchema(knex: import('knex').Knex) {
   const report = await inspectOrphanPartialSchema(knex);
   if (report.orphanTables.length === 0) return report;
 

@@ -34,7 +34,20 @@ import { readFileSync, existsSync, statSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+/** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
+type Loose = any;
+
 const __dirname = dirname(fileURLToPath(import.meta.url));
+
+/**
+ * 注册表 JSON / MODEL_OVERRIDES_JSON 里的原始对象。
+ *
+ * **刻意不收窄**：这是外部配置文件与环境变量的内容，字段名两种写法并存
+ * （context_window / contextWindow、max_output_tokens / maxTokens），
+ * 归一化正是 `normalizeEntry` 的职责。写成 `unknown` 会让每一次读字段都要
+ * 断言一遍，把校验逻辑淹掉。
+ */
+type RawRegistryObject = Record<string, any>;
 
 /** Platform defaults for models whose registry does not declare larger limits. */
 export const DEFAULT_CONTEXT_WINDOW = 262144;
@@ -110,39 +123,37 @@ export const SEED_MODELS = Object.freeze([
   },
 ]);
 
-/**
- * @typedef {object} ModelPricing
- * @property {number} input_per_mtok
- * @property {number} output_per_mtok
- * @property {number} cache_read_per_mtok
- * @property {number} cache_write_per_mtok
- */
+export type ModelPricing = {
+  input_per_mtok: number;
+  output_per_mtok: number;
+  cache_read_per_mtok: number;
+  cache_write_per_mtok: number;
+};
 
-/**
- * @typedef {object} ModelEntry
- * @property {string} provider
- * @property {string} model_id
- * @property {string} [name]
- * @property {string} api_protocol
- * @property {readonly string[]} input_modalities
- * @property {number} context_window
- * @property {number} max_output_tokens
- * @property {boolean} supports_tool_call
- * @property {boolean} supports_developer_role
- * @property {boolean} supports_reasoning
- * @property {readonly string[]} thinking_levels
- * @property {ModelPricing} pricing
- * @property {boolean} enabled
- * @property {boolean} [default]
- * @property {Record<string, string|null>} [thinking_wire_map]
- */
+export type ModelEntry = {
+  provider: string;
+  model_id: string;
+  name?: string;
+  api_protocol: string;
+  input_modalities: readonly string[];
+  context_window: number;
+  max_output_tokens: number;
+  supports_tool_call: boolean;
+  supports_developer_role: boolean;
+  supports_reasoning: boolean;
+  thinking_levels: readonly string[];
+  pricing: ModelPricing;
+  enabled: boolean;
+  default?: boolean;
+  thinking_wire_map?: Record<string, string|null>;
+};
 
 export class ModelRegistryError extends Error {
-  /**
-   * @param {string} message
-   * @param {{ code?: string, modelId?: string|null }} [opts]
-   */
-  constructor(message, opts = {}) {
+  // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
+  code: Loose;
+  modelId: Loose;
+
+  constructor(message: string, opts: { code?: string, modelId?: string|null } = {}) {
     super(message);
     this.name = 'ModelRegistryError';
     this.code = opts.code || 'model_registry_error';
@@ -152,10 +163,10 @@ export class ModelRegistryError extends Error {
 
 /**
  * Normalize a raw registry object into a ModelEntry.
- * @param {Record<string, unknown>} raw
+ * @param raw
  * @returns {ModelEntry}
  */
-export function normalizeModelEntry(raw) {
+export function normalizeModelEntry(raw: Record<string, unknown>) {
   if (!raw || typeof raw !== 'object') {
     throw new ModelRegistryError('Invalid model entry', { code: 'invalid_entry' });
   }
@@ -165,7 +176,7 @@ export function normalizeModelEntry(raw) {
   }
   const pricingRaw =
     raw.pricing && typeof raw.pricing === 'object'
-      ? /** @type {Record<string, unknown>} */ (raw.pricing)
+      ? (raw.pricing as Record<string, unknown>)
       : {};
   const pricing = {
     input_per_mtok: num(pricingRaw.input_per_mtok ?? pricingRaw.input, 0),
@@ -233,36 +244,24 @@ export function normalizeModelEntry(raw) {
 }
 
 /**
- * @param {unknown} v
+ * @param v
  * @returns {v is Record<string, unknown>}
  */
-function isPlainObject(v) {
+function isPlainObject(v: unknown) {
   return v != null && typeof v === 'object' && !Array.isArray(v);
 }
 
-/**
- * @param {unknown} v
- * @param {number} fallback
- */
-function num(v, fallback) {
+function num(v: unknown, fallback: number) {
   const n = Number(v);
   return Number.isFinite(n) ? n : fallback;
 }
 
-/**
- * @param {unknown} v
- * @param {number} fallback
- */
-function int(v, fallback) {
+function int(v: unknown, fallback: number) {
   const n = parseInt(String(v), 10);
   return Number.isFinite(n) ? n : fallback;
 }
 
-/**
- * @param {unknown} v
- * @param {boolean} fallback
- */
-function bool(v, fallback) {
+function bool(v: unknown, fallback: boolean) {
   if (v === undefined || v === null || v === '') return fallback;
   if (typeof v === 'boolean') return v;
   const s = String(v).trim().toLowerCase();
@@ -273,10 +272,10 @@ function bool(v, fallback) {
 
 /**
  * Resolve path to the registry JSON file.
- * @param {NodeJS.ProcessEnv | Record<string, string|undefined>} [env]
+ * @param [env]
  * @returns {string|null}
  */
-export function resolveRegistryPath(env = process.env) {
+export function resolveRegistryPath(env: NodeJS.ProcessEnv | Record<string, string|undefined> = process.env) {
   if (env.MODEL_REGISTRY_PATH && String(env.MODEL_REGISTRY_PATH).trim()) {
     return resolve(String(env.MODEL_REGISTRY_PATH).trim());
   }
@@ -305,8 +304,7 @@ export function resolveRegistryPath(env = process.env) {
  * whitelists function-scoped Maps.
  */
 export const buildCachedRegistry = (() => {
-  /** @type {Map<string, { mtimeMs: number, registry: Map<string, ModelEntry> }>} */
-  const cache = new Map();
+  const cache: Map<string, { mtimeMs: number, registry: Map<string, ModelEntry> }> = new Map();
   /**
    * @param {NodeJS.ProcessEnv | Record<string, string|undefined>} [env]
    * @returns {Map<string, ModelEntry>}
@@ -333,18 +331,19 @@ export const buildCachedRegistry = (() => {
 /**
  * Load raw model list from a registry file.
  * Supports enterprise `{ models: [...] }` and pi-style `{ providers: { p: { models: [...] } } }`.
- * @param {string} filePath
+ * @param filePath
  * @returns {ModelEntry[]}
  */
-export function loadModelsFromFile(filePath) {
+export function loadModelsFromFile(filePath: string) {
   const text = readFileSync(filePath, 'utf8');
-  const data = JSON.parse(text);
-  /** @type {Record<string, unknown>[]} */
-  const raws = [];
+  const data: RawRegistryObject = JSON.parse(text);
+  const raws: Record<string, unknown>[] = [];
   if (Array.isArray(data?.models)) {
     raws.push(...data.models);
   } else if (data?.providers && typeof data.providers === 'object') {
-    for (const [provider, pcfg] of Object.entries(data.providers)) {
+    for (const [provider, pcfg] of Object.entries<RawRegistryObject>(
+      data.providers,
+    )) {
       const models = Array.isArray(pcfg?.models) ? pcfg.models : [];
       for (const m of models) {
         raws.push({
@@ -372,7 +371,7 @@ export function loadModelsFromFile(filePath) {
  * }} [opts]
  * @returns {Map<string, ModelEntry>}
  */
-export function buildRegistry(opts = {}) {
+export function buildRegistry(opts: { seed?: readonly ModelEntry[], filePath?: string|null, env?: NodeJS.ProcessEnv | Record<string, string|undefined>, } = {}) {
   const seed = opts.seed || SEED_MODELS;
   const map = new Map();
   for (const entry of seed) {
@@ -384,8 +383,7 @@ export function buildRegistry(opts = {}) {
       : resolveRegistryPath(opts.env || process.env);
   if (filePath && existsSync(filePath)) {
     try {
-      /** @type {string[]} */
-      const fromFile = [];
+      const fromFile: string[] = [];
       for (const entry of loadModelsFromFile(filePath)) {
         map.set(entry.model_id, entry);
         fromFile.push(entry.model_id);
@@ -422,10 +420,10 @@ export function buildRegistry(opts = {}) {
  * none. Keeps model selection data-driven — switching the default model is a
  * registry-file change, not a code change.
  *
- * @param {Map<string, ModelEntry>} registry
+ * @param registry
  * @returns {string}
  */
-export function resolveDefaultModelId(registry) {
+export function resolveDefaultModelId(registry: Map<string, ModelEntry>) {
   for (const entry of registry.values()) {
     if (entry.default === true) return entry.model_id;
   }
@@ -441,11 +439,11 @@ export function resolveDefaultModelId(registry) {
  *   {"<model_id>": {"context_window": N, "max_output_tokens": N}}
  * Per-model JSON entries win over the legacy scalar env vars.
  *
- * @param {ModelEntry} entry
- * @param {NodeJS.ProcessEnv | Record<string, string|undefined>} [env]
+ * @param entry
+ * @param [env]
  * @returns {ModelEntry}
  */
-export function applyEnvOverrides(entry, env = process.env) {
+export function applyEnvOverrides(entry: ModelEntry, env: NodeJS.ProcessEnv | Record<string, string|undefined> = process.env) {
   const next = { ...entry, pricing: { ...entry.pricing } };
   let applied = false;
   const envModelId = env.MODEL_ID != null ? String(env.MODEL_ID).trim() : '';
@@ -478,10 +476,12 @@ export function applyEnvOverrides(entry, env = process.env) {
  * shapes are warned and ignored (overrides are an operator convenience, not
  * authority) — never a Run failure.
  *
- * @param {NodeJS.ProcessEnv | Record<string, string|undefined>} env
+ * @param env
  * @returns {Array<[string, Record<string, unknown>]>}
  */
-function parseModelOverridesJson(env) {
+function parseModelOverridesJson(
+  env: NodeJS.ProcessEnv | Record<string, string | undefined>,
+): [string, RawRegistryObject][] {
   const raw = env.MODEL_OVERRIDES_JSON;
   if (raw == null || String(raw).trim() === '') return [];
   try {
@@ -489,7 +489,7 @@ function parseModelOverridesJson(env) {
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return [];
     return Object.entries(parsed).filter(
       ([, v]) => v != null && typeof v === 'object' && !Array.isArray(v),
-    );
+    ) as [string, RawRegistryObject][];
   } catch (err) {
     console.warn(
       '[model-registry] Ignoring malformed MODEL_OVERRIDES_JSON:',
@@ -502,7 +502,7 @@ function parseModelOverridesJson(env) {
 /**
  * Resolve a model by id. Rejects missing and disabled models.
  *
- * @param {string|null|undefined} modelId
+ * @param modelId
  * @param {{
  *   registry?: Map<string, ModelEntry>,
  *   env?: NodeJS.ProcessEnv | Record<string, string|undefined>,
@@ -512,7 +512,7 @@ function parseModelOverridesJson(env) {
  * }} [opts]
  * @returns {ModelEntry}
  */
-export function resolveModel(modelId, opts = {}) {
+export function resolveModel(modelId: string|null|undefined, opts: { registry?: Map<string, ModelEntry>, env?: NodeJS.ProcessEnv | Record<string, string|undefined>, allowDisabled?: boolean, applyOverrides?: boolean, useCached?: boolean, } = {}) {
   const env = opts.env || process.env;
   const registry =
     opts.registry || (opts.useCached ? buildCachedRegistry(env) : buildRegistry({ env }));
@@ -574,10 +574,10 @@ export const THINKING_LEVELS = Object.freeze([
  * Returns undefined when the entry declares nothing, which preserves pi-ai's
  * default for reasoning models.
  *
- * @param {ModelEntry} entry
+ * @param entry
  * @returns {Record<string, string|null> | undefined}
  */
-export function toThinkingLevelMap(entry) {
+export function toThinkingLevelMap(entry: ModelEntry) {
   if (!entry?.supports_reasoning) return undefined;
   const allowed = declaredThinkingLevels(entry);
   if (allowed.size === 0) return undefined;
@@ -588,8 +588,7 @@ export function toThinkingLevelMap(entry) {
   // the mapping, providers that do not simply leave it out.
   const wireMap = entry.thinking_wire_map ?? {};
 
-  /** @type {Record<string, string|null>} */
-  const map = {};
+  const map: Record<string, string|null> = {};
   for (const level of THINKING_LEVELS) {
     // A wire value says *how* to send a level, not *whether* the model offers
     // it. Applying it to an undeclared level would make pi-ai report a level
@@ -612,10 +611,10 @@ export function toThinkingLevelMap(entry) {
 }
 
 /**
- * @param {ModelEntry} entry
+ * @param entry
  * @returns {Set<string>}
  */
-function declaredThinkingLevels(entry) {
+function declaredThinkingLevels(entry: ModelEntry) {
   const declared = Array.isArray(entry?.thinking_levels)
     ? entry.thinking_levels.map((level) => String(level).trim().toLowerCase())
     : [];
@@ -632,10 +631,10 @@ function declaredThinkingLevels(entry) {
  * `xhigh` is excluded unless the entry declares an explicit wire value for it
  * via `thinking_wire_map` (pi-ai drops xhigh whenever the map does not name it).
  *
- * @param {ModelEntry} entry
+ * @param entry
  * @returns {string[]}
  */
-export function supportedThinkingLevels(entry) {
+export function supportedThinkingLevels(entry: ModelEntry) {
   if (!entry?.supports_reasoning) return [];
   const wireMap = entry.thinking_wire_map ?? {};
   const portable = THINKING_LEVELS.filter(
@@ -652,14 +651,14 @@ export function supportedThinkingLevels(entry) {
 /**
  * Convert a registry entry into a pi-ai Model object for createAgentSession.
  *
- * @param {ModelEntry} entry
+ * @param entry
  * @param {{
  *   baseUrl?: string,
  *   apiKey?: string,
  *   headers?: Record<string, string>,
  * }} [runtime]
  */
-export function toPiModel(entry, runtime = {}) {
+export function toPiModel(entry: ModelEntry, runtime: { baseUrl?: string, apiKey?: string, headers?: Record<string, string>, } = {}) {
   const cost = {
     input: entry.pricing.input_per_mtok,
     output: entry.pricing.output_per_mtok,
@@ -714,10 +713,10 @@ export function toPiModel(entry, runtime = {}) {
 
 /**
  * List enabled models (for admin / capability switch UIs).
- * @param {Map<string, ModelEntry>} [registry]
+ * @param [registry]
  * @returns {ModelEntry[]}
  */
-export function listEnabledModels(registry) {
+export function listEnabledModels(registry?: Map<string, ModelEntry>) {
   const map = registry || buildRegistry();
   return [...map.values()].filter((m) => m.enabled);
 }

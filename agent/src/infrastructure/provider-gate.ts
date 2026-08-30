@@ -16,13 +16,12 @@
  *   let the provider call go out.
  */
 
-/**
- * @typedef {object} ProviderGateOptions
- * @property {number} [maxConcurrent] Max in-flight provider calls process-wide.
- * @property {number} [maxWaitMs] Bounded wait before degrading to pass-through.
- * @property {number} [cooldownMs] Base 429 cooldown applied per provider key.
- * @property {number} [maxCooldownMs] Ceiling for the escalating 429 cooldown.
- */
+export type ProviderGateOptions = {
+  maxConcurrent?: number;
+  maxWaitMs?: number;
+  cooldownMs?: number;
+  maxCooldownMs?: number;
+};
 
 export const DEFAULT_MAX_CONCURRENT = 32;
 export const DEFAULT_MAX_WAIT_MS = 15_000;
@@ -32,10 +31,7 @@ export const DEFAULT_MAX_COOLDOWN_MS = 60_000;
 /** No-op release handed to a caller that was never granted a slot. */
 const NOOP_RELEASE = () => {};
 
-/**
- * @param {ProviderGateOptions} [options]
- */
-export function createProviderGate(options = {}) {
+export function createProviderGate(options: ProviderGateOptions = {}) {
   const maxConcurrent = positiveInt(options.maxConcurrent, DEFAULT_MAX_CONCURRENT);
   const maxWaitMs = positiveInt(options.maxWaitMs, DEFAULT_MAX_WAIT_MS);
   const cooldownMs = positiveInt(options.cooldownMs, DEFAULT_COOLDOWN_MS);
@@ -48,10 +44,8 @@ export function createProviderGate(options = {}) {
   // are exactly what the cap exists to bound, so a per-name Set would collapse
   // them into one entry and never engage.
   let inFlight = 0;
-  /** @type {Array<{ grant: () => void, cancel: () => void }>} */
-  const waiters = [];
-  /** @type {Map<string, { until: number, strikes: number }>} */
-  const cooldowns = new Map();
+  const waiters: Array<{ grant: () => void, cancel: () => void }> = [];
+  const cooldowns: Map<string, { until: number, strikes: number }> = new Map();
 
   const sleep = (ms, signal) =>
     new Promise((resolve) => {
@@ -123,11 +117,11 @@ export function createProviderGate(options = {}) {
    * from after_provider_response; it is a no-op when no slot was granted, and
    * calling it twice releases at most once.
    *
-   * @param {string} providerKey
-   * @param {AbortSignal} [signal]
+   * @param providerKey
+   * @param [signal]
    * @returns {Promise<() => void>}
    */
-  async function acquire(providerKey, signal) {
+  async function acquire(providerKey: string, signal?: AbortSignal) {
     const key = normalizeKey(providerKey);
     // 429 cooldown: if this provider was rate-limited recently, wait out the
     // remainder (bounded) before even attempting a request.
@@ -150,10 +144,10 @@ export function createProviderGate(options = {}) {
    * 429s lengthen the window (capped); any other observed status clears it, so
    * a provider that recovers is not throttled for the rest of the process.
    *
-   * @param {string} providerKey
-   * @param {number} status
+   * @param providerKey
+   * @param status
    */
-  function observe(providerKey, status) {
+  function observe(providerKey: string, status: number) {
     const key = normalizeKey(providerKey);
     if (!Number.isFinite(Number(status))) return;
     if (Number(status) !== 429) {
@@ -180,8 +174,7 @@ export function createProviderGate(options = {}) {
   };
 }
 
-/** @type {ReturnType<typeof createProviderGate> | null} */
-let processGate = null;
+let processGate: ReturnType<typeof createProviderGate> | null = null;
 
 /**
  * The one gate for this Agent process. Every Run's observability extension
@@ -189,9 +182,9 @@ let processGate = null;
  * per-Run one. Options are read from the first caller (the container passes
  * env-derived values); later callers get the same instance.
  *
- * @param {ProviderGateOptions} [options]
+ * @param [options]
  */
-export function getProcessProviderGate(options = {}) {
+export function getProcessProviderGate(options: ProviderGateOptions = {}) {
   if (!processGate) processGate = createProviderGate(options);
   return processGate;
 }
@@ -202,19 +195,15 @@ export function resetProcessProviderGate() {
 }
 
 /**
- * @param {unknown} providerKey
+ * @param providerKey
  * @returns {string}
  */
-function normalizeKey(providerKey) {
+function normalizeKey(providerKey: unknown) {
   const key = String(providerKey ?? '').trim();
   return key || 'default';
 }
 
-/**
- * @param {unknown} value
- * @param {number} fallback
- */
-function positiveInt(value, fallback) {
+function positiveInt(value: unknown, fallback: number) {
   const n = Number(value);
   return Number.isFinite(n) && n > 0 ? Math.floor(n) : fallback;
 }

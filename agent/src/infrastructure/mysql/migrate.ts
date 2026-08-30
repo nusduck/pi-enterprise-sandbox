@@ -5,10 +5,7 @@
 import { createMysqlKnex, destroyMysqlKnex, migrationsDirectory } from './client.js';
 import { MysqlConfigError } from './errors.js';
 
-/**
- * @param {import('knex').Knex} knex
- */
-function migrationConfig(knex) {
+function migrationConfig(knex: import('knex').Knex) {
   return {
     directory: migrationsDirectory(),
     tableName: 'knex_migrations',
@@ -28,10 +25,10 @@ function migrationConfig(knex) {
  * Residual schema recovery:
  * docs/runbooks/mysql-partial-migration-recovery.md
  *
- * @param {import('knex').Knex} knex
+ * @param knex
  * @returns {Promise<[number, string[]]>}
  */
-export async function migrateLatest(knex) {
+export async function migrateLatest(knex: import('knex').Knex) {
   if (!knex || typeof knex.migrate?.latest !== 'function') {
     throw new Error('migrateLatest requires a knex instance');
   }
@@ -58,10 +55,10 @@ export async function migrateLatest(knex) {
 
 /**
  * Roll back the last batch of migrations.
- * @param {import('knex').Knex} knex
+ * @param knex
  * @returns {Promise<[number, string[]]>}
  */
-export async function migrateRollback(knex) {
+export async function migrateRollback(knex: import('knex').Knex) {
   if (!knex || typeof knex.migrate?.rollback !== 'function') {
     throw new Error('migrateRollback requires a knex instance');
   }
@@ -70,10 +67,10 @@ export async function migrateRollback(knex) {
 
 /**
  * Roll back all migrations (development empty-DB reset).
- * @param {import('knex').Knex} knex
+ * @param knex
  * @returns {Promise<[number, string[]]>}
  */
-export async function migrateRollbackAll(knex) {
+export async function migrateRollbackAll(knex: import('knex').Knex) {
   if (!knex || typeof knex.migrate?.rollback !== 'function') {
     throw new Error('migrateRollbackAll requires a knex instance');
   }
@@ -82,9 +79,9 @@ export async function migrateRollbackAll(knex) {
 
 /**
  * Current migration status.
- * @param {import('knex').Knex} knex
+ * @param knex
  */
-export async function migrateStatus(knex) {
+export async function migrateStatus(knex: import('knex').Knex) {
   if (!knex || typeof knex.migrate?.list !== 'function') {
     throw new Error('migrateStatus requires a knex instance');
   }
@@ -101,11 +98,11 @@ export async function migrateStatus(knex) {
  * - When `destroy === false`: return `{ knex, result }`; caller owns destroy.
  * - On migrate failure: always destroy the pool, then rethrow.
  *
- * @param {string} connectionUrl
- * @param {{ destroy?: boolean }} [opts]
+ * @param connectionUrl
+ * @param [opts]
  * @returns {Promise<{ result: [number, string[]], knex?: import('knex').Knex }>}
  */
-export async function migrateLatestFromUrl(connectionUrl, opts = {}) {
+export async function migrateLatestFromUrl(connectionUrl: string, opts: { destroy?: boolean } = {}) {
   const { runMigrateLatestFromUrl } = await import('./migrate-from-url-core.js');
   return runMigrateLatestFromUrl({
     createKnex: createMysqlKnex,
@@ -120,9 +117,9 @@ export { runMigrateLatestFromUrl } from './migrate-from-url-core.js';
 
 /**
  * Resolve connection URL for CLI / integration tests.
- * @param {NodeJS.ProcessEnv} [env]
+ * @param [env]
  */
-export function resolveMysqlUrl(env = process.env) {
+export function resolveMysqlUrl(env: NodeJS.ProcessEnv = process.env) {
   const url = env.AGENT_DATABASE_URL || env.TEST_MYSQL_URL || '';
   if (!url) {
     throw new MysqlConfigError(

@@ -16,7 +16,7 @@
  * }} deps
  * @returns {Promise<{ result: [number, string[]], knex?: import('knex').Knex }>}
  */
-export async function runMigrateLatestFromUrl(deps) {
+export async function runMigrateLatestFromUrl(deps: { createKnex: (url: string) => import('knex').Knex, destroyKnex: (knex: import('knex').Knex) => Promise<void>, migrateLatest: (knex: import('knex').Knex) => Promise<[number, string[]]>, connectionUrl: string, opts?: { destroy?: boolean }, }) {
   const destroy = deps.opts?.destroy !== false;
   const knex = deps.createKnex(deps.connectionUrl);
   let destroyed = false;

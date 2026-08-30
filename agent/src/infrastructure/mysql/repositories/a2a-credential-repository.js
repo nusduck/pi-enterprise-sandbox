@@ -58,9 +58,7 @@ export function mapA2aCredential(row) {
 function normalizeScopesArray(raw) {
   const parsed = typeof raw === 'string' ? parseJsonColumn(raw) : raw;
   if (Array.isArray(parsed)) return normalizeScopes(parsed);
-  // @ts-expect-error 遗留JS占位类型object未展开，访问scopes需收窄，存活代码先用expect-error收敛 —— TS2339: Property 'scopes' does not exist on type 'object'.
   if (parsed && typeof parsed === 'object' && Array.isArray(parsed.scopes)) {
-    // @ts-expect-error 遗留JS占位类型object未展开，访问scopes需收窄，存活代码先用expect-error收敛 —— TS2339: Property 'scopes' does not exist on type 'object'.
     return normalizeScopes(parsed.scopes);
   }
   return [...DEFAULT_A2A_SCOPES];

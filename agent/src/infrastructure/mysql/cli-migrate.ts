@@ -1,6 +1,10 @@
 #!/usr/bin/env node
 /**
- * CLI: node src/infrastructure/mysql/cli-migrate.js latest|rollback|rollback-all|status
+ * CLI: `npm run migrate:latest|migrate:rollback|migrate:rollback-all|migrate:status`
+ *
+ * 开发期经 tsx 运行（本文件是 TS，plain node 读不了）；容器里跑的是编译产物
+ * `dist/src/infrastructure/mysql/cli-migrate.js`，见 docker-compose 的
+ * agent-migrate 服务。
  *
  * Requires knex + mysql2 installed and AGENT_DATABASE_URL or TEST_MYSQL_URL.
  */

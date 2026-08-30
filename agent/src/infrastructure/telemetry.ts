@@ -34,7 +34,10 @@ function configuredEndpoint(env) {
   return base ? `${base}/v1/traces` : null;
 }
 
-export async function startTelemetry(env = process.env, options = {}) {
+export async function startTelemetry(
+  env: NodeJS.ProcessEnv | Record<string, string | undefined> = process.env,
+  options: { serviceName?: string } = {},
+) {
   if (telemetry) return telemetry;
   const endpoint = configuredEndpoint(env);
   propagation.setGlobalPropagator(new W3CTraceContextPropagator());
@@ -134,7 +137,25 @@ export function formatStoredTraceCarrier(run) {
   };
 }
 
-export function contextFromTraceFields(value, options = {}) {
+/**
+ * 从一行带 trace 字段的记录还原 OTel 上下文。
+ *
+ * `spanId` 与 `parentSpanId` 都收：Run 行上存的是父 span（本进程要在它下面
+ * 开新 span），而 span 行上存的是自己的 id。
+ */
+export function contextFromTraceFields(
+  value:
+    | {
+        traceId?: string;
+        spanId?: string;
+        parentSpanId?: string;
+        traceFlags?: string | number;
+        traceState?: string;
+      }
+    | null
+    | undefined,
+  options: { isRemote?: boolean } = {},
+) {
   const traceId = String(value?.traceId || '').toLowerCase();
   const spanId = String(value?.spanId || value?.parentSpanId || '').toLowerCase();
   if (!/^[0-9a-f]{32}$/.test(traceId) || !/^[0-9a-f]{16}$/.test(spanId)) {

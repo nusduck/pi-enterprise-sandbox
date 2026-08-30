@@ -3,13 +3,13 @@
  */
 
 /**
- * @param {unknown} value
+ * @param value
  * @returns {Record<string, unknown>}
  */
-export function parseJsonColumn(value) {
+export function parseJsonColumn(value: unknown) {
   if (value == null) return {};
   if (typeof value === 'object' && !Buffer.isBuffer(value)) {
-    return /** @type {Record<string, unknown>} */ (value);
+    return (value as Record<string, unknown>);
   }
   if (typeof value === 'string') {
     return JSON.parse(value);
@@ -22,10 +22,10 @@ export function parseJsonColumn(value) {
  * string without an explicit offset is a UTC wall-clock value rather than a
  * host-local timestamp.
  *
- * @param {unknown} value
+ * @param value
  * @returns {Date}
  */
-function parseDateTimeAsUtc(value) {
+function parseDateTimeAsUtc(value: unknown) {
   if (value instanceof Date) return value;
   if (typeof value !== 'string') {
     throw new Error(`Unsupported datetime value: ${typeof value}`);
@@ -45,18 +45,15 @@ function parseDateTimeAsUtc(value) {
 }
 
 /**
- * @param {unknown} value
+ * @param value
  * @returns {string | null}
  */
-export function formatDateTime(value) {
+export function formatDateTime(value: unknown) {
   if (value == null) return null;
   return parseDateTimeAsUtc(value).toISOString();
 }
 
-/**
- * @param {Record<string, unknown>} row
- */
-export function mapOrganization(row) {
+export function mapOrganization(row: Record<string, unknown>) {
   return {
     orgId: String(row.org_id),
     name: String(row.name),
@@ -66,10 +63,7 @@ export function mapOrganization(row) {
   };
 }
 
-/**
- * @param {Record<string, unknown>} row
- */
-export function mapUser(row) {
+export function mapUser(row: Record<string, unknown>) {
   return {
     userId: String(row.user_id),
     externalSubject: String(row.external_subject),
@@ -81,10 +75,7 @@ export function mapUser(row) {
   };
 }
 
-/**
- * @param {Record<string, unknown>} row
- */
-export function mapConversation(row) {
+export function mapConversation(row: Record<string, unknown>) {
   return {
     conversationId: String(row.conversation_id),
     orgId: String(row.org_id),
@@ -105,10 +96,7 @@ export function mapConversation(row) {
   };
 }
 
-/**
- * @param {Record<string, unknown>} row
- */
-export function mapMessage(row) {
+export function mapMessage(row: Record<string, unknown>) {
   return {
     messageId: String(row.message_id),
     conversationId: String(row.conversation_id),
@@ -126,10 +114,7 @@ export function mapMessage(row) {
   };
 }
 
-/**
- * @param {Record<string, unknown>} row
- */
-export function mapAgentSession(row) {
+export function mapAgentSession(row: Record<string, unknown>) {
   return {
     agentSessionId: String(row.agent_session_id),
     orgId: String(row.org_id),
@@ -156,9 +141,9 @@ export function mapAgentSession(row) {
 /**
  * Map agent_session_snapshots row (plan §8.9). Snapshot is an acceleration
  * artifact, not the sole truth.
- * @param {Record<string, unknown>} row
+ * @param row
  */
-export function mapAgentSessionSnapshot(row) {
+export function mapAgentSessionSnapshot(row: Record<string, unknown>) {
   return {
     snapshotId: String(row.snapshot_id),
     agentSessionId: String(row.agent_session_id),
@@ -175,10 +160,7 @@ export function mapAgentSessionSnapshot(row) {
   };
 }
 
-/**
- * @param {Record<string, unknown>} row
- */
-export function mapRun(row) {
+export function mapRun(row: Record<string, unknown>) {
   return {
     runId: String(row.run_id),
     orgId: String(row.org_id),
@@ -213,10 +195,7 @@ export function mapRun(row) {
   };
 }
 
-/**
- * @param {Record<string, unknown>} row
- */
-export function mapRunEvent(row) {
+export function mapRunEvent(row: Record<string, unknown>) {
   return {
     eventId: String(row.event_id),
     runId: String(row.run_id),
@@ -231,10 +210,7 @@ export function mapRunEvent(row) {
   };
 }
 
-/**
- * @param {Record<string, unknown>} row
- */
-export function mapToolExecution(row) {
+export function mapToolExecution(row: Record<string, unknown>) {
   return {
     toolExecutionId: String(row.tool_execution_id),
     runId: String(row.run_id),
@@ -265,10 +241,7 @@ export function mapToolExecution(row) {
   };
 }
 
-/**
- * @param {Record<string, unknown>} row
- */
-export function mapApproval(row) {
+export function mapApproval(row: Record<string, unknown>) {
   return {
     approvalId: String(row.approval_id),
     orgId: String(row.org_id),
@@ -315,10 +288,7 @@ export function mapInteraction(row) {
   };
 }
 
-/**
- * @param {Record<string, unknown>} row
- */
-export function mapSandboxAuditEvent(row) {
+export function mapSandboxAuditEvent(row: Record<string, unknown>) {
   return {
     auditId: String(row.audit_id),
     orgId: String(row.org_id),
@@ -340,10 +310,10 @@ export function mapSandboxAuditEvent(row) {
 
 /**
  * Format a Date or ISO string for MySQL DATETIME(3) UTC storage.
- * @param {Date | string} value
+ * @param value
  * @returns {string}
  */
-export function toMysqlDateTime(value) {
+export function toMysqlDateTime(value: Date | string) {
   let d;
   try {
     d = parseDateTimeAsUtc(value);

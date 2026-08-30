@@ -2,11 +2,14 @@
  * Explicit MySQL infrastructure errors (no silent SQLite/memory fallback).
  */
 
+/** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
+type Loose = any;
+
 export class MysqlConfigError extends Error {
-  /**
-   * @param {string} message
-   */
-  constructor(message) {
+  // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
+  code: string;
+
+  constructor(message: string) {
     super(message);
     this.name = 'MysqlConfigError';
     this.code = 'MYSQL_CONFIG_ERROR';
@@ -18,11 +21,11 @@ export class MysqlConfigError extends Error {
  * Fail closed — operators must follow the recovery runbook.
  */
 export class MysqlOrphanSchemaError extends MysqlConfigError {
-  /**
-   * @param {string} message
-   * @param {{ orphanTables?: string[], missingMigrations?: string[] }} [meta]
-   */
-  constructor(message, meta = {}) {
+  // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
+  orphanTables: Loose;
+  missingMigrations: Loose;
+
+  constructor(message: string, meta: { orphanTables?: string[], missingMigrations?: string[] } = {}) {
     super(message);
     this.name = 'MysqlOrphanSchemaError';
     this.code = 'MYSQL_ORPHAN_SCHEMA';
@@ -32,11 +35,10 @@ export class MysqlOrphanSchemaError extends MysqlConfigError {
 }
 
 export class MysqlDependencyError extends Error {
-  /**
-   * @param {string} message
-   * @param {{ cause?: unknown }} [opts]
-   */
-  constructor(message, opts = {}) {
+  // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
+  code: string;
+
+  constructor(message: string, opts: { cause?: unknown } = {}) {
     super(message, opts.cause !== undefined ? { cause: opts.cause } : undefined);
     this.name = 'MysqlDependencyError';
     this.code = 'MYSQL_DEPENDENCY_ERROR';
@@ -44,11 +46,12 @@ export class MysqlDependencyError extends Error {
 }
 
 export class OwnershipError extends Error {
-  /**
-   * @param {string} message
-   * @param {{ resource?: string, id?: string }} [meta]
-   */
-  constructor(message, meta = {}) {
+  // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
+  code: string;
+  resource: Loose;
+  id: Loose;
+
+  constructor(message: string, meta: { resource?: string, id?: string } = {}) {
     super(message);
     this.name = 'OwnershipError';
     this.code = 'OWNERSHIP_DENIED';
@@ -58,11 +61,12 @@ export class OwnershipError extends Error {
 }
 
 export class NotFoundError extends Error {
-  /**
-   * @param {string} message
-   * @param {{ resource?: string, id?: string }} [meta]
-   */
-  constructor(message, meta = {}) {
+  // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
+  code: string;
+  resource: Loose;
+  id: Loose;
+
+  constructor(message: string, meta: { resource?: string, id?: string } = {}) {
     super(message);
     this.name = 'NotFoundError';
     this.code = 'NOT_FOUND';
@@ -72,11 +76,12 @@ export class NotFoundError extends Error {
 }
 
 export class ConflictError extends Error {
-  /**
-   * @param {string} message
-   * @param {{ resource?: string, id?: string }} [meta]
-   */
-  constructor(message, meta = {}) {
+  // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
+  code: string;
+  resource: Loose;
+  id: Loose;
+
+  constructor(message: string, meta: { resource?: string, id?: string } = {}) {
     super(message);
     this.name = 'ConflictError';
     this.code = 'CONFLICT';
@@ -86,11 +91,11 @@ export class ConflictError extends Error {
 }
 
 export class SequenceAllocationError extends Error {
-  /**
-   * @param {string} message
-   * @param {{ runId?: string }} [meta]
-   */
-  constructor(message, meta = {}) {
+  // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
+  code: string;
+  runId: Loose;
+
+  constructor(message: string, meta: { runId?: string } = {}) {
     super(message);
     this.name = 'SequenceAllocationError';
     this.code = 'SEQUENCE_ALLOCATION_FAILED';

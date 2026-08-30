@@ -7,22 +7,21 @@
  * production tables that already existed before the run.
  */
 
-/**
- * @typedef {object} PartialDdlTracker
- * @property {(name: string, builder: (t: import('knex').Knex.CreateTableBuilder) => void) => Promise<void>} createTable
- * @property {(name: string, sql: string) => Promise<void>} createTrigger
- * @property {(name: string) => void} recordTable
- * @property {(name: string) => void} recordTrigger
- * @property {() => string[]} getCreatedTables
- * @property {() => string[]} getCreatedTriggers
- * @property {() => Promise<Error[]>} dropThisRunOnly
- */
+export type PartialDdlTracker = {
+  createTable: (name: string, builder: (t: import('knex').Knex.CreateTableBuilder) => void) => Promise<void>;
+  createTrigger: (name: string, sql: string) => Promise<void>;
+  recordTable: (name: string) => void;
+  recordTrigger: (name: string) => void;
+  getCreatedTables: () => string[];
+  getCreatedTriggers: () => string[];
+  dropThisRunOnly: () => Promise<Error[]>;
+};
 
 /**
  * Escape a MySQL identifier for DROP TRIGGER (bare names only).
- * @param {string} name
+ * @param name
  */
-function quoteIdent(name) {
+function quoteIdent(name: string) {
   if (typeof name !== 'string' || !/^[A-Za-z0-9_]+$/.test(name)) {
     throw new Error(`Refusing unsafe SQL identifier for partial DDL: ${String(name)}`);
   }
@@ -30,18 +29,16 @@ function quoteIdent(name) {
 }
 
 /**
- * @param {import('knex').Knex} knex
+ * @param knex
  * @returns {PartialDdlTracker}
  */
-export function createPartialDdlTracker(knex) {
+export function createPartialDdlTracker(knex: import('knex').Knex) {
   if (!knex || !knex.schema) {
     throw new Error('createPartialDdlTracker requires a knex instance');
   }
 
-  /** @type {string[]} create order */
-  const tables = [];
-  /** @type {string[]} create order */
-  const triggers = [];
+  const tables: string[] = [];
+  const triggers: string[] = [];
   let sealed = false;
 
   function assertOpen() {
@@ -51,11 +48,7 @@ export function createPartialDdlTracker(knex) {
   }
 
   return {
-    /**
-     * @param {string} name
-     * @param {(t: import('knex').Knex.CreateTableBuilder) => void} builder
-     */
-    async createTable(name, builder) {
+    async createTable(name: string, builder: (t: import('knex').Knex.CreateTableBuilder) => void) {
       assertOpen();
       if (typeof name !== 'string' || !name) {
         throw new Error('createTable requires a table name');
@@ -66,10 +59,10 @@ export function createPartialDdlTracker(knex) {
     },
 
     /**
-     * @param {string} name
-     * @param {string} sql full CREATE TRIGGER statement
+     * @param name
+     * @param sql full CREATE TRIGGER statement
      */
-    async createTrigger(name, sql) {
+    async createTrigger(name: string, sql: string) {
       assertOpen();
       if (typeof name !== 'string' || !name) {
         throw new Error('createTrigger requires a trigger name');
@@ -104,14 +97,13 @@ export function createPartialDdlTracker(knex) {
      */
     async dropThisRunOnly() {
       sealed = true;
-      /** @type {Error[]} */
-      const errors = [];
+      const errors: Error[] = [];
 
       for (const name of [...triggers].reverse()) {
         try {
           await knex.raw(`DROP TRIGGER IF EXISTS ${quoteIdent(name)}`);
         } catch (err) {
-          errors.push(/** @type {Error} */ (err));
+          errors.push((err as Error));
         }
       }
 
@@ -119,7 +111,7 @@ export function createPartialDdlTracker(knex) {
         try {
           await knex.schema.dropTableIfExists(name);
         } catch (err) {
-          errors.push(/** @type {Error} */ (err));
+          errors.push((err as Error));
         }
       }
 
@@ -131,12 +123,12 @@ export function createPartialDdlTracker(knex) {
 /**
  * Run migration body; on failure drop only this-run DDL then rethrow.
  *
- * @template T
- * @param {import('knex').Knex} knex
- * @param {(tracker: PartialDdlTracker) => Promise<T>} work
+
+ * @param knex
+ * @param work
  * @returns {Promise<T>}
  */
-export async function withPartialDdlCleanup(knex, work) {
+export async function withPartialDdlCleanup<T>(knex: import('knex').Knex, work: (tracker: PartialDdlTracker) => Promise<T>) {
   const tracker = createPartialDdlTracker(knex);
   try {
     return await work(tracker);
@@ -162,10 +154,10 @@ export async function withPartialDdlCleanup(knex, work) {
  * "`value` as `key`" (illegal: "as indexName"). Only a string constraint
  * name is safe for composite primary on create.
  *
- * @param {unknown} primarySecondArg
+ * @param primarySecondArg
  * @returns {{ ok: boolean, illegalSqlFragment?: string, reason?: string }}
  */
-export function diagnosePrimaryConstraintArg(primarySecondArg) {
+export function diagnosePrimaryConstraintArg(primarySecondArg: unknown) {
   if (primarySecondArg === undefined || primarySecondArg === null || primarySecondArg === '') {
     return { ok: true };
   }
@@ -181,7 +173,7 @@ export function diagnosePrimaryConstraintArg(primarySecondArg) {
   }
   if (typeof primarySecondArg === 'object') {
     // Mirrors knex wrappingFormatter.parseObject: key→alias of value
-    const entries = Object.entries(/** @type {Record<string, unknown>} */ (primarySecondArg));
+    const entries = Object.entries((primarySecondArg as Record<string, unknown>));
     if (entries.length === 0) {
       return {
         ok: false,

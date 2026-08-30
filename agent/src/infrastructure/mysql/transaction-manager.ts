@@ -4,9 +4,10 @@
 
 import { MysqlDependencyError } from './errors.js';
 
-/**
- * @typedef {import('knex').Knex | import('knex').Knex.Transaction} DbExecutor
- */
+/** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
+type Loose = any;
+
+export type DbExecutor = import('knex').Knex | import('knex').Knex.Transaction;
 
 /**
  * InnoDB contention. The transaction is already rolled back when these
@@ -38,12 +39,12 @@ const CONNECTION_ERROR_CODES = new Set([
 const RETRY_BACKOFF_MS = Object.freeze([25, 100]);
 
 /**
- * @param {unknown} error
+ * @param error
  * @returns {boolean}
  */
-export function isRetryableMysqlError(error) {
-  const code = /** @type {{ code?: string, errno?: number }} */ (error)?.code;
-  const errno = /** @type {{ errno?: number }} */ (error)?.errno;
+export function isRetryableMysqlError(error: unknown) {
+  const code = (error as { code?: string, errno?: number })?.code;
+  const errno = (error as { errno?: number })?.errno;
   return (
     (typeof code === 'string' && RETRYABLE_MYSQL_CODES.has(code)) ||
     (typeof errno === 'number' && RETRYABLE_MYSQL_ERRNOS.has(errno))
@@ -51,22 +52,23 @@ export function isRetryableMysqlError(error) {
 }
 
 /**
- * @param {unknown} error
+ * @param error
  * @returns {boolean}
  */
-export function isConnectionMysqlError(error) {
-  const code = /** @type {{ code?: string }} */ (error)?.code;
+export function isConnectionMysqlError(error: unknown) {
+  const code = (error as { code?: string })?.code;
   return typeof code === 'string' && CONNECTION_ERROR_CODES.has(code);
 }
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 export class TransactionManager {
-  /**
-   * @param {import('knex').Knex} knex
-   * @param {{ retryBackoffMs?: readonly number[], sleep?: (ms: number) => Promise<void> }} [opts]
-   */
-  constructor(knex, opts = {}) {
+  // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
+  knex: Loose;
+  retryBackoffMs: Loose;
+  sleep: Loose;
+
+  constructor(knex: import('knex').Knex, opts: { retryBackoffMs?: readonly number[], sleep?: (ms: number) => Promise<void> } = {}) {
     if (!knex || typeof knex.transaction !== 'function') {
       throw new Error('TransactionManager requires a knex instance with transaction()');
     }
@@ -87,11 +89,11 @@ export class TransactionManager {
    * that shape. Without this, a deadlock the transaction already rolled back
    * reaches the browser as a bare 500 and the user's cancel is simply lost.
    *
-   * @template T
-   * @param {(trx: import('knex').Knex.Transaction) => Promise<T>} work
+
+   * @param work
    * @returns {Promise<T>}
    */
-  async run(work) {
+  async run<T>(work: (trx: import('knex').Knex.Transaction) => Promise<T>) {
     if (typeof work !== 'function') {
       throw new Error('TransactionManager.run requires a work function');
     }
@@ -107,7 +109,7 @@ export class TransactionManager {
         }
         if (isRetryableMysqlError(err) || isConnectionMysqlError(err)) {
           throw new MysqlDependencyError(
-            `MySQL transaction failed (${/** @type {{ code?: string }} */ (err)?.code ?? 'unknown'}); nothing was committed`,
+            `MySQL transaction failed (${(err as { code?: string })?.code ?? 'unknown'}); nothing was committed`,
             { cause: err },
           );
         }
