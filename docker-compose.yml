@@ -93,7 +93,7 @@ services:
       mysql:
         condition: service_healthy
     restart: "no"
-    command: ["node", "src/infrastructure/mysql/cli-migrate.js", "latest"]
+    command: ["node", "dist/src/infrastructure/mysql/cli-migrate.js", "latest"]
     networks:
       - backend_internal
 
@@ -349,7 +349,7 @@ services:
       retries: 3
       start_period: 15s
     # HTTP only — worker is a separate service (PR-04 T4).
-    command: ["node", "server.js"]
+    command: ["node", "dist/server.js"]
     networks:
       - backend_internal
       - service_egress

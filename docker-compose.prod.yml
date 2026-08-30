@@ -376,7 +376,7 @@ services:
     restart: always
     # Internal only — BFF reaches agent on backend_internal (+ egress for LLM).
     ports: !reset []
-    command: ["node", "server.js"]
+    command: ["node", "dist/server.js"]
 
   agent-worker:
     environment:
