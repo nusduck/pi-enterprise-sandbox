@@ -415,7 +415,7 @@ services:
     restart: always
     # Never published (base has no ports either); reset for merge safety.
     ports: !reset []
-    command: ["node", "worker.js"]
+    command: ["node", "dist/worker.js"]
 
 volumes:
   mysql_data:

@@ -1,9 +1,14 @@
 {
   "$comment": [
-    "给既有 JS 开类型检查（ADR 0007 配套决策，选项 C）。",
-    "Wave 6 已删除 infrastructure/pi 与 extensions，并去掉本文件的 exclude。",
-    "strict 暂时关闭：JS 上开 strict 会让错误数爆炸。这是棘轮的下一格，",
-    "不是终点。"
+    "agent 正在从 JS 迁到 TS（docs/design/agent-ts-rebuild.md 阶段 C–F）。",
+    "",
+    "过渡期同时容纳两种源文件：`allowJs` + `checkJs` 让尚未转换的 .js 仍受",
+    "类型检查，已转换的 .ts 按同一套宽松规则检查。**这是棘轮，不是终点**：",
+    "全部转完之后关掉 allowJs、打开 strict。",
+    "",
+    "`noEmit` 留在这里（`tsc -p tsconfig.json` 只做检查）；出产物走",
+    "`tsconfig.build.json`，它继承本文件并覆盖 noEmit/outDir。分成两份是因为",
+    "日常最常跑的是检查，而检查时不该往工作树里写 dist。"
   ],
   "compilerOptions": {
     "target": "ES2023",
@@ -17,5 +22,5 @@
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true
   },
-  "include": ["src/**/*.js", "config.js"]
+  "include": ["src/**/*.js", "src/**/*.ts", "config.js"]
 }

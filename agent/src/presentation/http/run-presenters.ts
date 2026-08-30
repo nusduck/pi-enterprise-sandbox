@@ -1,4 +1,20 @@
-export function presentCreateRunResponse(result) {
+/**
+ * 领域对象 → 对外 JSON。阶段 C 的 TS 转换。
+ *
+ * 入参刻意用宽松结构，不是偷懒：这些函数同时接受 camelCase 的领域对象与
+ * snake_case 的行记录——两种拼写在现实里都会流到这里。发明一个"精确"的入参
+ * 类型会是对现状的谎报，等 application/ 与 infrastructure/ 转完 TS、行映射
+ * 有了真类型之后再收紧。
+ *
+ * 输出侧相反，是严格的：**每个字段一种拼写**（snake_case）。少数几对
+ * （completed_at/finished_at、usage/token_usage）是刻意保留的同义名，
+ * 在下面各自注明。
+ */
+
+/** 松散领域输入：camelCase 或 snake_case 都可能。 */
+type Loose = Record<string, any>;
+
+export function presentCreateRunResponse(result: Loose): Record<string, unknown> {
   const sandboxSessionId =
     result.sandboxSessionId ?? result.sandbox_session_id ?? result.session_id ?? null;
   // One spelling per field: snake_case, matching the rest of the public wire.
@@ -15,7 +31,7 @@ export function presentCreateRunResponse(result) {
   };
 }
 
-export function presentGetRunResponse(run) {
+export function presentGetRunResponse(run: Loose): Record<string, unknown> {
   const pending = run.pendingInput || run.pending_input || null;
   const pendingInput = pending
     ? {
@@ -71,7 +87,7 @@ export function presentGetRunResponse(run) {
   };
 }
 
-const PUBLIC_TOOL_STATUS = Object.freeze({
+const PUBLIC_TOOL_STATUS: Readonly<Record<string, string>> = Object.freeze({
   PROPOSED: 'prepared',
   WAITING_APPROVAL: 'waiting_approval',
   RUNNING: 'executing',
@@ -81,7 +97,7 @@ const PUBLIC_TOOL_STATUS = Object.freeze({
   UNKNOWN: 'unknown',
 });
 
-export function presentToolExecutionResponse(tool) {
+export function presentToolExecutionResponse(tool: Loose): Record<string, unknown> {
   const status = PUBLIC_TOOL_STATUS[String(tool.status)] || 'unknown';
   return {
     tool_execution_id: tool.toolExecutionId,
@@ -104,7 +120,7 @@ export function presentToolExecutionResponse(tool) {
   };
 }
 
-export function presentProcessResponse(process) {
+export function presentProcessResponse(process: Loose): Record<string, unknown> {
   return {
     process_id: process.processId,
     session_id: process.sandboxSessionId,

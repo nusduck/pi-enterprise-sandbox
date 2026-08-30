@@ -1,0 +1,20 @@
+{
+  "$comment": [
+    "出产物用。继承 tsconfig.json 的检查规则，只覆盖输出相关的项。",
+    "",
+    "`allowJs` 意味着 tsc 会把尚未转换的 .js 一并搬进 dist/，所以 dist/ 是一棵",
+    "完整可跑的树——迁移期间不需要维护「哪些文件从 src 跑、哪些从 dist 跑」这种",
+    "分叉。入口 `server.js` / `worker.js` 与 `config.js` 也一起进去。",
+    "",
+    "`declaration` 关掉：agent 是应用不是库，没有消费者需要它的 .d.ts。"
+  ],
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "outDir": "dist",
+    "rootDir": ".",
+    "declaration": false,
+    "sourceMap": true
+  },
+  "include": ["src/**/*.js", "src/**/*.ts", "config.js", "server.js", "worker.js"]
+}

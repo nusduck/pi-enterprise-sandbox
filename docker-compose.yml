@@ -433,7 +433,7 @@ services:
       agent:
         condition: service_healthy
     # No ports — worker is not an HTTP public service.
-    command: ["node", "worker.js"]
+    command: ["node", "dist/worker.js"]
     networks:
       - backend_internal
       - service_egress

@@ -25,6 +25,9 @@ WORKDIR /app
 COPY agent ./agent
 
 WORKDIR /app/agent
+# agent 正在从 JS 迁到 TS（agent-ts-rebuild.md 阶段 C）。`allowJs` 让 tsc 把
+# 尚未转换的 .js 一并搬进 dist/，所以 dist/ 是一棵完整可跑的树，入口也在里面。
+RUN npx tsc -p tsconfig.build.json
 
 # Logical workspace cwd. The directory is intentionally empty in this image:
 # all workspace bytes stay owned by exec and are reached over the signed RPC.
@@ -50,4 +53,4 @@ RUN chown -R node:node /app /home/sandbox/skill-user /tmp/pi-enterprise-mcp-runt
 USER node
 
 EXPOSE 4100
-CMD ["node", "server.js"]
+CMD ["node", "dist/server.js"]

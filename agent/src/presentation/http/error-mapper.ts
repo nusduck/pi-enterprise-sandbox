@@ -1,3 +1,11 @@
+/**
+ * 领域错误 → HTTP 状态与响应体。阶段 C 的 TS 转换。
+ *
+ * 这是**唯一**把内部错误翻成对外响应的地方。两条纪律：
+ * - 认不出来的错误一律 500 + 通用文案，**绝不**把 message 透给调用方
+ * - 但那种情况必须记日志：否则一个服务端 bug 在世上唯一的痕迹就是浏览器里
+ *   一句 "Internal server error"，Agent 的输出里连栈都没有
+ */
 import {
   OwnerScopedNotFoundError,
   IdempotencyInProgressError,
@@ -7,7 +15,8 @@ import {
   ParentProvisioningRaceError,
 } from '../../application/errors.js';
 
-const NOT_FOUND_NOUNS = Object.freeze({
+/** 资源名 → 对外的名词。查不到时用 'Run'（最常见的资源）。 */
+const NOT_FOUND_NOUNS: Readonly<Record<string, string>> = Object.freeze({
   conversations: 'Conversation',
   approvals: 'Approval',
   process_executions: 'Process',
@@ -20,13 +29,30 @@ const NOT_FOUND_NOUNS = Object.freeze({
   cron_job_runs: 'Cron job run',
 });
 
-export function mapErrorToHttp(error) {
+/** 对外响应：状态码 + 响应体。 */
+export interface HttpErrorResponse {
+  readonly status: number;
+  readonly body: Record<string, unknown>;
+}
+
+/** 领域错误常见的两个鸭子字段。用最小结构，不假设具体的错误类。 */
+interface ErrorLike {
+  readonly code?: unknown;
+  readonly name?: unknown;
+  readonly status?: unknown;
+  readonly httpStatus?: unknown;
+  readonly details?: { readonly resource?: unknown } | undefined;
+}
+
+export function mapErrorToHttp(error: unknown): HttpErrorResponse {
   if (error instanceof ValidationError || error instanceof CanonicalJsonError) {
     return { status: 400, body: { error: error.message, code: error.code } };
   }
   if (error instanceof OwnerScopedNotFoundError) {
-    // @ts-expect-error 遗留JSDoc未校验，存活代码先用expect-error收敛，Wave6前不改运行时 —— TS2538: Type 'unknown' cannot be used as an index type.
-    const noun = NOT_FOUND_NOUNS[error.details?.resource] || 'Run';
+    // 转 TS 时顺手去掉了这里的 @ts-expect-error：把 NOT_FOUND_NOUNS 声明成
+    // Record<string, string> 之后，只需要把 resource 收窄成 string 即可。
+    const resource = (error as ErrorLike).details?.resource;
+    const noun = (typeof resource === 'string' ? NOT_FOUND_NOUNS[resource] : undefined) || 'Run';
     return { status: 404, body: { error: `${noun} not found`, code: 'NOT_FOUND' } };
   }
   if (error instanceof IdempotencyInProgressError) {
@@ -45,8 +71,9 @@ export function mapErrorToHttp(error) {
     };
   }
 
-  const code = error?.code;
-  const name = error?.name;
+  const err = (error ?? {}) as ErrorLike;
+  const code = err.code;
+  const name = err.name;
   if (code === 'INTERACTION_RESPONSE_INVALID') {
     return {
       status: 400,
@@ -90,10 +117,11 @@ export function mapErrorToHttp(error) {
   return { status: 500, body: { error: 'Internal server error' } };
 }
 
-export function mapProcessErrorToHttp(error) {
+export function mapProcessErrorToHttp(error: unknown): HttpErrorResponse {
   const mapped = mapErrorToHttp(error);
   if (mapped.status !== 500) return mapped;
-  const status = Number(error?.status ?? error?.httpStatus);
+  const err = (error ?? {}) as ErrorLike;
+  const status = Number(err.status ?? err.httpStatus);
   if (status === 400 || status === 422) {
     return {
       status: 400,

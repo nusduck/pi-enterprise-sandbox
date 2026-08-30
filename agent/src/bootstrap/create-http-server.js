@@ -85,7 +85,7 @@ export {
  *   followUpService?: { execute: Function } | null,
  *   listToolExecutions?: Function | null,
  *   processAccessService?: object | null,
- *   cronJobService?: { list: Function, get: Function, create: Function, update: Function, delete: Function, listRuns: Function, runManual: Function } | null,
+ *   cronJobService?: import('../presentation/http/cron-routes.js').CronJobServiceLike | null,
  *   activeRunHint?: () => number,
  *   eventPollIntervalMs?: number,
  *   eventHeartbeatMs?: number,
@@ -916,7 +916,7 @@ export function createAgentHttpServer(deps) {
                 const page = await deps.eventQueryService.listEvents({
                   runId,
                   auth,
-                  afterSequence: Math.max(0, body.last_sequence - 1),
+                  afterSequence: Math.max(0, Number(body.last_sequence) - 1),
                   limit: 1,
                 });
                 const event = Array.isArray(page?.events) ? page.events[0] : null;
