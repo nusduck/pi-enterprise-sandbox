@@ -2,12 +2,16 @@
  * W4-D 组合层：叠在 dsh-base 上，deepseek-official 指向配置网关，本机执行族关闭。
  */
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
 import { Context } from '@deepseek-ai/cordis';
-import { bootEnterpriseRuntime, createRemoteProviders, createSessionBackend } from '../src/boot.js';
+import { bootEnterpriseRuntime, createRemoteProviders, createSessionBackend ,
+  assertOverlayPatchResolvable,
+  resolvePathRelativeTo,
+} from '../src/boot.js';
 import { InMemorySessionStore } from '../src/providers/mysql-session-store.js';
 
 const patchPath = join(dirname(fileURLToPath(import.meta.url)), '../bundle/cordis.patch.yml');
@@ -87,4 +91,110 @@ test('createSessionBackend 缺 MySQL 配回退内存，不红', () => {
     if (prev.DB_HOST !== undefined) process.env['DB_HOST'] = prev.DB_HOST;
     if (prev.EXEC_DB_HOST !== undefined) process.env['EXEC_DB_HOST'] = prev.EXEC_DB_HOST;
   }
+});
+
+// ── overlay patch 可解析性 ───────────────────────────────────────────────
+
+test('resolvePathRelativeTo 按 patch 文件所在目录解析相对路径', () => {
+  assert.equal(
+    resolvePathRelativeTo('/app/runtime/bundle/cordis.patch.yml', '../dist/providers/x.js'),
+    '/app/runtime/dist/providers/x.js',
+  );
+  assert.equal(
+    resolvePathRelativeTo('/app/runtime/bundle/cordis.patch.yml', './y.js'),
+    '/app/runtime/bundle/y.js',
+  );
+});
+
+test('assertOverlayPatchResolvable：引用不存在的文件即抛，且指名道姓', () => {
+  const exists = (p: string): boolean => p.includes('/dist/');
+  // 顶层条目
+  assert.throws(
+    () =>
+      assertOverlayPatchResolvable(
+        '/r/bundle/cordis.patch.yml',
+        [{ id: 'credentials', name: '../src/providers/env-credentials.js' }],
+        exists,
+      ),
+    /credentials → \.\.\/src\/providers\/env-credentials\.js/,
+  );
+  // insert 里的条目也要查——remote-* 就在 insert 下面
+  assert.throws(
+    () =>
+      assertOverlayPatchResolvable(
+        '/r/bundle/cordis.patch.yml',
+        [{ insert: [{ id: 'remote-fs', name: '../src/providers/remote-fs.js' }] }],
+        exists,
+      ),
+    /remote-fs/,
+  );
+  // 存在的路径不抛；裸模块名不归这里判定
+  assert.doesNotThrow(() =>
+    assertOverlayPatchResolvable(
+      '/r/bundle/cordis.patch.yml',
+      [
+        { id: 'ok', name: '../dist/providers/env-credentials.js' },
+        { id: 'bare', name: '@deepseek-ai/dsh-tool-fs' },
+        { id: 'disabled-only', disabled: true },
+      ],
+      exists,
+    ),
+  );
+});
+
+test('真实的 bundle/cordis.patch.yml 全部可解析', async () => {
+  const { existsSync } = await import('node:fs');
+  const { dirname, join } = await import('node:path');
+  const { fileURLToPath } = await import('node:url');
+  const { loadOverlayPatches } = await import('@deepseek-ai/dsh-app-boot');
+  const here = dirname(fileURLToPath(import.meta.url));
+  const overlayFile = join(here, '../bundle/cordis.patch.yml');
+  const entries = loadOverlayPatches('pi-runtime', overlayFile);
+  // 这条守的是"自建插件真的装得上"。它红过一次：credentials 与
+  // subagent-spawn-in-process 曾指向 ../src/*.js（源码是 .ts），于是
+  // ctx.credentials 静默退回出厂的 LocalCredentialProvider。
+  assert.doesNotThrow(() => assertOverlayPatchResolvable(overlayFile, entries, existsSync));
+});
+
+// ── 组合断言（ADR 0007 验证要求 #2：断言组合结果，不是断言配置意图）──────
+//
+// 上面那条 YAML 断言在整个 2026-08 期间都是绿的，而 `ctx.credentials` 实际是出厂的
+// `LocalCredentialProvider`——ADR 0007「必须从出厂组合中移除的行」点名不得组合的
+// 那个。原因是 patch 里在已有行上改 `name`，被 dsh-app-boot 当作断言不匹配静默跳过。
+// 断言 YAML 写了什么，永远发现不了这类问题。
+
+test('boot 之后实际挂载的是自建实现，不是出厂实现', () => {
+  // 子进程跑：boot 起的插件树没有 dispose 接口，留在本进程会让 node:test 挂住。
+  const probe = join(dirname(fileURLToPath(import.meta.url)), 'fixtures/boot-composition-probe.ts');
+  const out = execFileSync('npx', ['tsx', probe], {
+    encoding: 'utf8',
+    cwd: join(dirname(fileURLToPath(import.meta.url)), '..'),
+  });
+  const mounted = JSON.parse(out.trim().split('\n').pop() as string) as {
+    credentials: string | null;
+    fs: string | null;
+    shell: string | null;
+    jobs: string | null;
+    spawnProvider: { inheritsParentContext: boolean; capabilities: unknown } | null;
+  };
+
+  // 凭据：必须是我们的只读 env 实现。出厂的 LocalCredentialProvider 没有租户维度
+  // 且热重载设置文件，多租户下是配置漂移面（ADR 0007「必须移除的行」）。
+  assert.equal(mounted.credentials, 'EnvCredentialsProvider');
+
+  // fs / shell / jobs：本机执行族全部关闭，只剩 RPC 代理。
+  assert.equal(mounted.fs, 'RemoteFileSystem');
+  assert.equal(mounted.shell, 'RemoteShell');
+  assert.equal(mounted.jobs, 'RemoteJobs');
+
+  // 子 Agent：`spawn` 名下必须是我们的 durable provider——用它声明的 capabilities
+  // 组合识别，出厂的 spawn-in-process 声明的不是这一组。
+  assert.ok(mounted.spawnProvider, 'provider "spawn" 必须注册');
+  assert.equal(mounted.spawnProvider.inheritsParentContext, false);
+  assert.deepEqual(mounted.spawnProvider.capabilities, {
+    outputSchema: false,
+    depthLimit: true,
+    toolFilter: false,
+    persona: false,
+  });
 });

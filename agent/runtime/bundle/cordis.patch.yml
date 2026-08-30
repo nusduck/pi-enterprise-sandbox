@@ -1,11 +1,30 @@
 # 我们的组合层——叠在 dsh-base 之上（dsh-rebuild 2 runtime/bundle/cordis.patch.yml）。
 # 这是第 1 层 patch；用户的 cordis.patch.yml 会叠在它之上，最后写入获胜。
 # 每个被命中的 id 都会整体替换 config（不做深度合并），因此被覆盖的字段必须重述。
+#
+# ## 两条写法上的硬规则（2026-08-30 各踩过一次）
+#
+# 1. **`name` 是断言，不是替换手段。** `dsh-app-boot` 的 patch 应用逻辑写着：
+#    `if (name && name !== target.name) { warn("name mismatch ... skipping"); continue }`
+#    ——给已有行写一个不同的 `name`，**整条 patch 被静默跳过**。想换掉一个出厂
+#    插件，唯一正确的写法是 `disabled: true` 掉它，再 `insert:` 自己的行。
+#    此前 credentials 与 subagent-spawn-in-process 就是这么写坏的，后果是
+#    `ctx.credentials` 一直是出厂的 `LocalCredentialProvider`——正是 ADR 0007
+#    「必须从出厂组合中移除的行」点名不得组合的那个（无租户维度 + 热重载设置文件）。
+#
+# 2. **`name` 一律指向 `../dist/`，不是 `../src/`。** 源码是 .ts，运行时加载编译产物。
+#
+# 这两条都不能靠人记：`assertOverlayPatchResolvable()` 守第 2 条，
+# `boot.test.ts` 的组合断言守第 1 条（断言**实际挂载的实现**，不是断言 YAML 写了什么）。
 
-# -- 凭据：用只读环境变量实现替换 dsh-credentials-local（无租户维度的文件热重载在多租户下是漂移面） --
+# -- 凭据：用只读环境变量实现替换 dsh-credentials-local（无租户维度的文件热重载在多租户下是漂移面）。
+#    必须"禁用 + 插入"，不能在原行上改 name（见上面规则 1）。 --
 - id: credentials
-  name: '../src/providers/env-credentials.js'
-  config: {}
+  disabled: true
+- insert:
+    - id: enterprise-credentials
+      name: '../dist/providers/env-credentials.js'
+      config: {}
 
 # -- 模型目录：固定路由名 deepseek-official（包自占），指向自有网关，协议与官方一致 --
 - id: llm-deepseek
@@ -72,8 +91,31 @@
 - id: session-query-sqlite
   disabled: true
 
-# -- 子 Agent：原生 trusted same-process 对不上，退回 durable 队列面。 --
+# -- 子 Agent：原生 trusted same-process 对不上，退回 durable 队列面。
+#    同样是"禁用 + 插入"。 --
 - id: subagent-spawn-in-process
-  name: '../src/providers/durable-subagent.js'
+  disabled: true
+- insert:
+    - id: enterprise-durable-subagent
+      name: '../dist/providers/durable-subagent.js'
+      config:
+        providerName: spawn
+
+# -- tool-subagent 退回 one-shot。
+#
+# base 把它配成 `backgroundMode: continuable`，那要求 provider 实现
+# `prepareContinuable`——即"子会话可以再开后续轮次"（模型能用 send_message 往同一个
+# 子对话里继续说）。我们的 durable provider 是一次性作业：start → 落 BullMQ →
+# 轮询 → 结算，跨 Worker 重启可恢复，但没有"续聊"这个概念。
+#
+# 这正是 ADR 0007 残余风险清单里那条「`ctx.subagents` 原生契约写着 trusted
+# same-process，我们的 durable provider 可能对不上」，预案是「对不上就退回，
+# 只丢工具层的模型体验」。**丢掉的具体是什么**：模型不能对同一个子 Agent 追加
+# 后续消息，只能起新的子 Agent。后台执行本身仍在（run_in_background + job_output）。
+#
+# 这个不兼容此前一直没暴露，因为 provider 压根没挂上（见文件顶部规则 1）。
+- id: tool-subagent
   config:
-    providerName: spawn
+    provider: spawn
+    toolName: subagent
+    backgroundMode: one-shot

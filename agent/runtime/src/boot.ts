@@ -129,6 +129,60 @@ export function readProcessExecRpcConfig(env: NodeJS.ProcessEnv = process.env): 
   return readExecRpcFromEnv(env);
 }
 
+
+/**
+ * 校验 overlay patch 里每个 `name` 引用的文件真的存在。
+ *
+ * **为什么必须有这一条**：cordis 的 patch 在插件加载失败时不报错——它只是
+ * 不替换那个 id，于是出厂实现留在原位。2026-08-30 发现 `credentials` 与
+ * `subagent-spawn-in-process` 两行写的是 `../src/providers/*.js`（源码是 .ts，
+ * 该文件不存在），结果 `ctx.credentials` 是出厂的 `LocalCredentialProvider`
+ * ——正是 ADR 0007「必须从出厂组合中移除的行」点名不得组合的那个。
+ * 这个错误能活下来，唯一原因就是没有任何人报错。
+ *
+ * 所以这里 **fail-closed**：路径解析不到就直接抛，让进程起不来。
+ *
+ * `name` 相对 patch 文件所在目录解析（cordis 的 `bareModuleBaseUrl` 语义），
+ * 裸模块名（不以 `.` 开头）交给 Node 解析，不在这里判定。
+ */
+export function assertOverlayPatchResolvable(
+  patchFile: string,
+  entries: readonly unknown[],
+  fileExists: (p: string) => boolean,
+): void {
+  const bad: string[] = [];
+  const visit = (entry: unknown): void => {
+    if (entry === null || typeof entry !== 'object') return;
+    const rec = entry as Record<string, unknown>;
+    const inserted = rec['insert'];
+    if (Array.isArray(inserted)) for (const child of inserted) visit(child);
+    const name = rec['name'];
+    if (typeof name !== 'string' || !name.startsWith('.')) return;
+    const resolved = resolvePathRelativeTo(patchFile, name);
+    if (!fileExists(resolved)) bad.push(`${String(rec['id'] ?? '<no id>')} → ${name}`);
+  };
+  for (const entry of entries) visit(entry);
+  if (bad.length > 0) {
+    throw new Error(
+      'boot: cordis overlay patch references files that do not exist ' +
+        `(plugins would silently fall back to the factory implementation): ${bad.join(', ')}`,
+    );
+  }
+}
+
+/** patch 文件所在目录 + 相对路径。抽出来只为可单测。 */
+export function resolvePathRelativeTo(patchFile: string, relative: string): string {
+  const dir = patchFile.slice(0, Math.max(0, patchFile.lastIndexOf('/')));
+  const segments = `${dir}/${relative}`.split('/');
+  const out: string[] = [];
+  for (const seg of segments) {
+    if (seg === '' || seg === '.') continue;
+    if (seg === '..') out.pop();
+    else out.push(seg);
+  }
+  return `/${out.join('/')}`;
+}
+
 export async function bootEnterpriseRuntime(
   rpc: ExecRpcConfig = readProcessExecRpcConfig(),
 ): Promise<Context> {
@@ -141,9 +195,13 @@ export async function bootEnterpriseRuntime(
   const here = dirname(fileURLToPath(import.meta.url));
   const overlayFile = join(here, '../bundle/cordis.patch.yml');
   const emptyConfig = join(here, '../bundle/cordis.yml');
+  const { existsSync } = await import('node:fs');
+  const overlayPatches = loadOverlayPatches('pi-runtime', overlayFile);
+  // fail-closed：本包 patch 里引用不到的文件会让插件静默退回出厂实现。
+  assertOverlayPatchResolvable(overlayFile, overlayPatches, existsSync);
   const patches = [
     ...loadOverlayPatches('pi-runtime', basePatchFile),
-    ...loadOverlayPatches('pi-runtime', overlayFile),
+    ...overlayPatches,
   ];
   const bareModuleBaseUrl = pathToFileURL(join(here, '../')).href;
   void rpc;
