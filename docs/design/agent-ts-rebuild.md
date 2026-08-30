@@ -12,7 +12,8 @@
 > | A″ 删重复 transport | ✅ 完成，-4866 行 |
 > | B 装配收进 runtime | ✅ 完成，清单改为类型化单一事实源 |
 > | G 清 pi-agent-home 死配置 | ✅ 完成 |
-> | C–F 语言迁移（61k 行） | 未开始 |
+> | **C bootstrap/ + presentation/ 转 TS** | ✅ 完成，两个目录已无 `.js` |
+> | D–F 语言迁移（剩余约 55k 行） | 未开始 |
 >
 > **阶段 0 的真因比预想严重**：不是路径拼错，是 `dsh-app-boot` 把 patch 的
 > `name` 当**断言**——在已有行上改 `name` 会让整条 patch 被静默跳过。后果是
@@ -219,13 +220,49 @@ runtime/src/plugins/
 - 组合断言（ADR 0007 验证要求 #2）：遥测、出网、凭据、本机 fs/shell/sandbox
   各行**实际未挂载**——断言组合结果，不是断言配置意图
 
-### 阶段 C：`bootstrap/` + `presentation/` 转 TS（约 6,300 行）
+### 阶段 C：`bootstrap/` + `presentation/` 转 TS（约 6,300 行）—— ✅ 完成
 
-从这里开始 agent 有构建步骤。选一次性切换还是 `allowJs` 渐进，落地时定；
-倾向**逐目录切换 + `allowJs` 过渡**，因为 61k 行不可能一次切干净。
+走的是**逐目录切换 + `allowJs` 过渡**：`tsconfig.json` 只做检查
+（`noEmit` + `allowJs` + `checkJs`），`tsconfig.build.json` 出 `dist/`。
+`allowJs` 让未转换的 `.js` 也被搬进 `dist/`，所以迁移期间不存在"哪些从 src
+跑、哪些从 dist 跑"的分叉。
 
-**验收**：`tsc -b` 0 error；`server.js` / `worker.js` 变成 `dist/` 产物入口；
-Dockerfile 增加构建阶段。
+**验收（已达成）**：checkJs 0 error；`server.js` / `worker.js` 入口指向
+`dist/`；Dockerfile / compose / 生产 overlay 同步；agent 1043 测试全绿。
+
+转换中消除的 `@ts-expect-error` 共 27 处，**没有一处是搬走或重新压住的**。
+根因高度一致：**JSDoc 描述的是"我用到了什么"，而代码实际收下的比这多**。
+典型三类——端口声明漏了参数（`runQueue.enqueue` 的 `options`）、返回形状
+没写（`checkHealth()`）、容器传了服务根本不读的依赖（A2aTaskService 的
+`steerRunService` / `followUpService`，删的是接线不是能力）。
+
+#### ⚠️ 过渡期配置的两个洞（阶段 D–F 继续踩）
+
+`strict: false` 关掉的不只是"烦人的报错"，它同时关掉了 `strictNullChecks`：
+
+- **`return;` 落在声明为 `Promise<boolean>` 的函数里，tsc 收下**。抽
+  `health-routes.ts` 时原样搬出的两个 `return;` 就是这样通过检查的——真跑
+  起来 `/health` 返回 `undefined`，调用方判定"不是我的路由"继续往下匹配。
+  测试也没覆盖到（没有用例断言 `/health` 之后不再匹配）。
+- 结论：**搬运代码时的控制流必须人来看**。宽松配置不是安全网，它只是让
+  转换不至于一次红几千行。
+
+另一个洞已修：`tests/test_repository_layout.py` 的行数棘轮原本只扫
+`agent/src/**/*.js`，**一个文件转成 TS 就静悄悄退出棘轮**。
+`presentation/a2a/http-handler` 正是这样在转换里从 993 长到 1009 无人发现。
+现在 `.js` / `.ts` 都扫——阶段 D/E 转换时不会再有文件借转换偷偷变长。
+
+#### 守住 1000 行：拆分而不是抬预算
+
+| 文件 | 拆出 | 行数 |
+|---|---|---|
+| `bootstrap/container.ts` | `bootstrap/container-mcp.ts`（`McpDiscoveryState`） | 1178 → 1065 |
+| `bootstrap/create-http-server.ts` | `presentation/http/health-routes.ts` | 1439 → 1399 |
+| `presentation/a2a/http-handler.ts` | `presentation/a2a/http-handler-mapping.ts` | 1009 → 938 |
+
+三次拆分的判据相同：**这组代码有没有只属于它自己的状态或职责**。
+`McpDiscoveryState` 的四个可变字段只被那三个方法读写；health/ready 只读探针
+拼运维快照；mapping 是不闭包 `deps` 的纯查表。
 
 ### 阶段 D：`application/` 转 TS（21,773 行，多轮）
 
@@ -291,6 +328,9 @@ tsconfig.json` 与两个入口。
    DNS 允许列表）都是 299 个绿测试没抓到、`docker compose up` 后五分钟暴露的。
 3. **删除任何东西之前，先证明它没有消费者**，并把证明写进 commit message。
 4. **反向验证护栏**：新加的断言要故意改坏实现确认它变红。
+5. **（阶段 C 补充）语言迁移中，`tsc` 通过不等于行为不变。** `strict: false`
+   下 `undefined` 可赋给任何类型，搬运代码时的 `return` / 早退 / 空值分支要
+   人工逐处核对。凡是"原样搬出去"的代码块，先读一遍它的所有出口。
 
 ---
 
