@@ -27,6 +27,9 @@ import {
   PI_SESSION_JSONL_VERSION,
 } from '../../../application/session-json-codec.js';
 
+/** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
+type Loose = any;
+
 /** Message role for journal channel rows. */
 export const JOURNAL_MESSAGE_ROLE = 'system';
 
@@ -51,10 +54,7 @@ export const JOURNAL_DEFAULT_PAGE_SIZE = 500;
 /** Hard ceiling for a single page to protect memory. */
 export const JOURNAL_MAX_PAGE_SIZE = 2000;
 
-/**
- * @param {{ orgId: string, userId: string }} scope
- */
-function requireOwnerUlids(scope) {
+function requireOwnerUlids(scope: { orgId: string, userId: string }) {
   const s = requireOwnerScope(scope);
   return {
     orgId: assertUlid(s.orgId, 'orgId'),
@@ -64,35 +64,35 @@ function requireOwnerUlids(scope) {
 
 /**
  * Deterministic SHA-256 of a JSON-compatible journal payload.
- * @param {unknown} payload
+ * @param payload
  * @returns {string}
  */
-export function hashJournalPayload(payload) {
+export function hashJournalPayload(payload: unknown) {
   const line = serializeJsonlLine(payload);
   return createHash('sha256').update(line, 'utf8').digest('hex');
 }
 
 /**
- * @param {unknown} err
+ * @param err
  * @returns {boolean}
  */
-function isDuplicateKeyError(err) {
-  const code = /** @type {{ code?: string, errno?: number }} */ (err)?.code;
-  const errno = /** @type {{ errno?: number }} */ (err)?.errno;
+function isDuplicateKeyError(err: unknown) {
+  const code = (err as { code?: string, errno?: number })?.code;
+  const errno = (err as { errno?: number })?.errno;
   return code === 'ER_DUP_ENTRY' || errno === 1062;
 }
 
 /**
- * @param {unknown} entry
+ * @param entry
  * @returns {Record<string, unknown>}
  */
-export function assertJournalEntryShape(entry) {
+export function assertJournalEntryShape(entry: unknown) {
   if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
     throw new SessionJournalError('journal entry must be an object', {
       code: 'JOURNAL_ENTRY_INVALID',
     });
   }
-  const e = /** @type {Record<string, unknown>} */ (entry);
+  const e = (entry as Record<string, unknown>);
   if (typeof e.type !== 'string' || !e.type.trim()) {
     throw new SessionJournalError('journal entry.type is required', {
       code: 'JOURNAL_ENTRY_INVALID',
@@ -128,22 +128,21 @@ export function assertJournalEntryShape(entry) {
     );
   }
   // Preserve full toolCall / toolResult / compaction / branch / custom — no stripping.
-  return /** @type {Record<string, unknown>} */ (
-    canonicalizeForJsonl(e)
-  );
+  return ((
+    canonicalizeForJsonl(e)) as Record<string, unknown>);
 }
 
 /**
- * @param {unknown} header
+ * @param header
  * @returns {Record<string, unknown>}
  */
-export function assertJournalHeaderShape(header) {
+export function assertJournalHeaderShape(header: unknown) {
   if (!header || typeof header !== 'object' || Array.isArray(header)) {
     throw new SessionJournalError('journal header must be an object', {
       code: 'JOURNAL_HEADER_INVALID',
     });
   }
-  const h = /** @type {Record<string, unknown>} */ (header);
+  const h = (header as Record<string, unknown>);
   if (h.type !== 'session') {
     throw new SessionJournalError('journal header.type must be "session"', {
       code: 'JOURNAL_HEADER_INVALID',
@@ -170,7 +169,7 @@ export function assertJournalHeaderShape(header) {
       code: 'JOURNAL_HEADER_INVALID',
     });
   }
-  return /** @type {Record<string, unknown>} */ (canonicalizeForJsonl(h));
+  return (canonicalizeForJsonl(h) as Record<string, unknown>);
 }
 
 /**
@@ -180,10 +179,10 @@ export function assertJournalHeaderShape(header) {
  * the actual header/entry payload. If a stored payloadHash exists and differs,
  * fails closed with JOURNAL_HASH_MISMATCH.
  *
- * @param {ReturnType<typeof mapMessage>} msg
+ * @param msg
  * @returns {{ kind: 'header'|'entry', payload: object, payloadHash: string }}
  */
-export function unwrapJournalContent(msg) {
+export function unwrapJournalContent(msg: ReturnType<typeof mapMessage>) {
   const c = msg.contentJson || {};
   if (msg.messageType === JOURNAL_MESSAGE_TYPE.HEADER || c.kind === 'pi_journal_header') {
     const header = c.header ?? c.payload;
@@ -208,7 +207,7 @@ export function unwrapJournalContent(msg) {
     }
     return {
       kind: 'header',
-      payload: /** @type {object} */ (header),
+      payload: (header as Record<string, any>),
       payloadHash: recomputed,
     };
   }
@@ -234,17 +233,18 @@ export function unwrapJournalContent(msg) {
   }
   return {
     kind: 'entry',
-    payload: /** @type {object} */ (entry),
+    payload: (entry as Record<string, any>),
     payloadHash: recomputed,
   };
 }
 
 export class PiSessionJournalRepository {
-  /**
-   * @param {import('knex').Knex | import('knex').Knex.Transaction} db
-   * @param {{ now?: () => Date, generateId?: () => string }} [opts]
-   */
-  constructor(db, opts = {}) {
+  // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
+  db: Loose;
+  now: Loose;
+  generateId: Loose;
+
+  constructor(db: import('knex').Knex | import('knex').Knex.Transaction, opts: { now?: () => Date, generateId?: () => string } = {}) {
     if (!db) {
       throw new Error('PiSessionJournalRepository requires a knex executor');
     }
@@ -253,13 +253,7 @@ export class PiSessionJournalRepository {
     this.generateId = opts.generateId ?? null;
   }
 
-  /**
-   * @param {import('knex').Knex | import('knex').Knex.Transaction} db
-   * @param {string} agentSessionId
-   * @param {{ orgId: string, userId: string }} scope
-   * @param {{ forUpdate?: boolean }} [opts]
-   */
-  async #requireOwnedSession(db, agentSessionId, scope, opts = {}) {
+  async #requireOwnedSession(db: import('knex').Knex | import('knex').Knex.Transaction, agentSessionId: string, scope: { orgId: string, userId: string }, opts: { forUpdate?: boolean } = {}) {
     const s = requireOwnerUlids(scope);
     const id = assertUlid(agentSessionId, 'agentSessionId');
     let q = applyOwnerScope(
@@ -283,12 +277,7 @@ export class PiSessionJournalRepository {
     };
   }
 
-  /**
-   * @param {import('knex').Knex.Transaction | import('knex').Knex} trx
-   * @param {string} conversationId
-   * @param {{ orgId: string, userId: string }} scope
-   */
-  async #allocateSequence(trx, conversationId, scope) {
+  async #allocateSequence(trx: import('knex').Knex.Transaction | import('knex').Knex, conversationId: string, scope: { orgId: string, userId: string }) {
     const conv = await applyOwnerScope(
       trx('conversations').where({ conversation_id: conversationId }),
       scope,
@@ -322,7 +311,7 @@ export class PiSessionJournalRepository {
    *   createdAt?: Date | string,
    * }} input
    */
-  async appendHeader(input) {
+  async appendHeader(input: { messageId?: string, agentSessionId: string, orgId: string, userId: string, runId?: string | null, header: Record<string, any>, createdAt?: Date | string, }) {
     const header = assertJournalHeaderShape(input.header);
     return this.#appendJournalRow({
       ...input,
@@ -351,7 +340,7 @@ export class PiSessionJournalRepository {
    *   createdAt?: Date | string,
    * }} input
    */
-  async appendEntry(input) {
+  async appendEntry(input: { messageId?: string, agentSessionId: string, orgId: string, userId: string, runId?: string | null, entry: Record<string, any>, createdAt?: Date | string, }) {
     const entry = assertJournalEntryShape(input.entry);
     const piEntryId = String(entry.id);
     const piEntryKind = String(entry.type);
@@ -383,7 +372,7 @@ export class PiSessionJournalRepository {
    * }} input
    * @returns {Promise<{ appended: number, skipped: number, header: object|null, entries: object[] }>}
    */
-  async appendMissingFromPayload(input) {
+  async appendMissingFromPayload(input: { agentSessionId: string, orgId: string, userId: string, runId?: string | null, header: Record<string, any>, entries: Record<string, any>[], generateId?: () => string, }) {
     const generateId = input.generateId ?? this.generateId;
     if (typeof generateId !== 'function') {
       throw new Error(
@@ -441,7 +430,7 @@ export class PiSessionJournalRepository {
    *   createdAt?: Date | string,
    * }} input
    */
-  async #appendJournalRow(input) {
+  async #appendJournalRow(input: { messageId?: string, agentSessionId: string, orgId: string, userId: string, runId?: string | null, piEntryId: string, piEntryKind: string, messageType: string, contentJson: Record<string, unknown>, createdAt?: Date | string, }) {
     const scope = requireOwnerUlids(input);
     const agentSessionId = assertUlid(input.agentSessionId, 'agentSessionId');
     const piEntryId = String(input.piEntryId || '').trim();
@@ -569,11 +558,11 @@ export class PiSessionJournalRepository {
    * Does not use the conversation list default of 200 as a hard cap for rebuild —
    * callers iterate with afterSequence until empty.
    *
-   * @param {string} agentSessionId
-   * @param {{ orgId: string, userId: string }} scope
-   * @param {{ afterSequence?: number, limit?: number }} [opts]
+   * @param agentSessionId
+   * @param scope
+   * @param [opts]
    */
-  async listBySession(agentSessionId, scope, opts = {}) {
+  async listBySession(agentSessionId: string, scope: { orgId: string, userId: string }, opts: { afterSequence?: number, limit?: number } = {}) {
     const s = requireOwnerUlids(scope);
     const sid = assertUlid(agentSessionId, 'agentSessionId');
     await this.#requireOwnedSession(this.db, sid, s);
@@ -620,17 +609,16 @@ export class PiSessionJournalRepository {
   /**
    * Load all journal rows for a session (paginated internally — no 200 truncation).
    *
-   * @param {string} agentSessionId
-   * @param {{ orgId: string, userId: string }} scope
-   * @param {{ pageSize?: number }} [opts]
+   * @param agentSessionId
+   * @param scope
+   * @param [opts]
    */
-  async listAllBySession(agentSessionId, scope, opts = {}) {
+  async listAllBySession(agentSessionId: string, scope: { orgId: string, userId: string }, opts: { pageSize?: number } = {}) {
     const pageSize = Math.min(
       opts.pageSize ?? JOURNAL_DEFAULT_PAGE_SIZE,
       JOURNAL_MAX_PAGE_SIZE,
     );
-    /** @type {ReturnType<typeof mapMessage>[]} */
-    const all = [];
+    const all: ReturnType<typeof mapMessage>[] = [];
     let after = 0;
     for (;;) {
       const page = await this.listBySession(agentSessionId, scope, {
@@ -653,16 +641,14 @@ export class PiSessionJournalRepository {
    * that digest without self-including.
    * `fullDigest` includes every journal row (including manifests).
    *
-   * @param {string} agentSessionId
-   * @param {{ orgId: string, userId: string }} scope
+   * @param agentSessionId
+   * @param scope
    * @returns {Promise<{ header: object | null, entries: object[], highWaterSequence: number, digest: string, fullDigest: string }>}
    */
-  async loadPayload(agentSessionId, scope) {
+  async loadPayload(agentSessionId: string, scope: { orgId: string, userId: string }) {
     const rows = await this.listAllBySession(agentSessionId, scope);
-    /** @type {object | null} */
-    let header = null;
-    /** @type {object[]} */
-    const entries = [];
+    let header: Record<string, any> | null = null;
+    const entries: Record<string, any>[] = [];
     let highWaterSequence = 0;
     const contentDigestParts = [];
     const fullDigestParts = [];
@@ -699,10 +685,10 @@ export class PiSessionJournalRepository {
   /**
    * High-water sequence + digest without materializing full entry bodies twice.
    *
-   * @param {string} agentSessionId
-   * @param {{ orgId: string, userId: string }} scope
+   * @param agentSessionId
+   * @param scope
    */
-  async getDigest(agentSessionId, scope) {
+  async getDigest(agentSessionId: string, scope: { orgId: string, userId: string }) {
     const loaded = await this.loadPayload(agentSessionId, scope);
     return {
       highWaterSequence: loaded.highWaterSequence,
@@ -712,12 +698,7 @@ export class PiSessionJournalRepository {
     };
   }
 
-  /**
-   * @param {string} agentSessionId
-   * @param {string} piEntryId
-   * @param {{ orgId: string, userId: string }} scope
-   */
-  async getByEntryId(agentSessionId, piEntryId, scope) {
+  async getByEntryId(agentSessionId: string, piEntryId: string, scope: { orgId: string, userId: string }) {
     const s = requireOwnerUlids(scope);
     const sid = assertUlid(agentSessionId, 'agentSessionId');
     await this.#requireOwnedSession(this.db, sid, s);

@@ -21,31 +21,32 @@ import { toMysqlDateTime, parseJsonColumn, formatDateTime } from '../row-mappers
 import { ConflictError, NotFoundError } from '../errors.js';
 import { assertUlid } from '../../../domain/shared/ulid.js';
 
+/** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
+type Loose = any;
+
 /** plan §8.18 column bounds */
 export const IDEMPOTENCY_KEY_MAX_LEN = 255;
 export const IDEMPOTENCY_OPERATION_MAX_LEN = 128;
 export const IDEMPOTENCY_REQUEST_HASH_LEN = 64;
 
-/**
- * @typedef {{
- *   orgId: string,
- *   userId: string,
- *   idempotencyKey: string,
- *   operation: string,
- *   requestHash: string,
- *   responseStatus: number | null,
- *   responseJson: Record<string, unknown> | null,
- *   resourceId: string | null,
- *   expiresAt: string | null,
- *   createdAt: string | null,
- * }} IdempotencyRecord
- */
+export type IdempotencyRecord = {
+  orgId: string;
+  userId: string;
+  idempotencyKey: string;
+  operation: string;
+  requestHash: string;
+  responseStatus: number | null;
+  responseJson: Record<string, unknown> | null;
+  resourceId: string | null;
+  expiresAt: string | null;
+  createdAt: string | null;
+};
 
 /**
- * @param {Record<string, unknown>} row
+ * @param row
  * @returns {IdempotencyRecord}
  */
-export function mapIdempotencyRecord(row) {
+export function mapIdempotencyRecord(row: Record<string, unknown>) {
   return {
     orgId: String(row.org_id),
     userId: String(row.user_id),
@@ -62,12 +63,7 @@ export function mapIdempotencyRecord(row) {
   };
 }
 
-/**
- * @param {string} value
- * @param {string} field
- * @param {number} maxLen
- */
-function requireBoundedString(value, field, maxLen) {
+function requireBoundedString(value: string, field: string, maxLen: number) {
   if (typeof value !== 'string') {
     throw new Error(`${field} must be a non-empty string`);
   }
@@ -79,10 +75,7 @@ function requireBoundedString(value, field, maxLen) {
   return v;
 }
 
-/**
- * @param {string} hash
- */
-function requireRequestHash(hash) {
+function requireRequestHash(hash: string) {
   const h = requireBoundedString(hash, 'requestHash', IDEMPOTENCY_REQUEST_HASH_LEN);
   if (h.length !== IDEMPOTENCY_REQUEST_HASH_LEN) {
     throw new Error(
@@ -96,30 +89,27 @@ function requireRequestHash(hash) {
 }
 
 /**
- * @param {unknown} err
+ * @param err
  * @returns {boolean}
  */
-function isDuplicateKeyError(err) {
-  const code = /** @type {{ code?: string, errno?: number }} */ (err)?.code;
-  const errno = /** @type {{ errno?: number }} */ (err)?.errno;
+function isDuplicateKeyError(err: unknown) {
+  const code = (err as { code?: string, errno?: number })?.code;
+  const errno = (err as { errno?: number })?.errno;
   return code === 'ER_DUP_ENTRY' || errno === 1062;
 }
 
 export class IdempotencyRepository {
-  /**
-   * @param {import('knex').Knex | import('knex').Knex.Transaction} db
-   * @param {{ now?: () => Date }} [opts]
-   */
-  constructor(db, opts = {}) {
+  // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
+  db: Loose;
+  now: Loose;
+
+  constructor(db: import('knex').Knex | import('knex').Knex.Transaction, opts: { now?: () => Date } = {}) {
     if (!db) throw new Error('IdempotencyRepository requires a knex executor');
     this.db = db;
     this.now = opts.now ?? (() => new Date());
   }
 
-  /**
-   * @param {{ orgId: string, userId: string, idempotencyKey: string, operation: string }} key
-   */
-  #validateKeyParts(key) {
+  #validateKeyParts(key: { orgId: string, userId: string, idempotencyKey: string, operation: string }) {
     const scopeRaw = requireOwnerScope(key);
     const scope = {
       orgId: assertUlid(scopeRaw.orgId, 'orgId'),
@@ -140,11 +130,11 @@ export class IdempotencyRepository {
 
   /**
    * Owner-scoped load. Never returns a row for another tenant.
-   * @param {{ orgId: string, userId: string, idempotencyKey: string, operation: string }} key
-   * @param {{ forUpdate?: boolean }} [opts]
+   * @param key
+   * @param [opts]
    * @returns {Promise<IdempotencyRecord | null>}
    */
-  async get(key, opts = {}) {
+  async get(key: { orgId: string, userId: string, idempotencyKey: string, operation: string }, opts: { forUpdate?: boolean } = {}) {
     const { scope, idempotencyKey, operation } = this.#validateKeyParts(key);
     let query = applyOwnerScope(this.db('idempotency_records'), scope)
       .where({
@@ -156,29 +146,22 @@ export class IdempotencyRepository {
     return row ? mapIdempotencyRecord(row) : null;
   }
 
-  /**
-   * @param {IdempotencyRecord} record
-   * @param {Date} [now]
-   */
-  isExpired(record, now = this.now()) {
+  isExpired(record: IdempotencyRecord, now: Date = this.now()) {
     if (!record.expiresAt) return true;
     return new Date(record.expiresAt).getTime() <= now.getTime();
   }
 
-  /**
-   * @param {IdempotencyRecord} record
-   */
-  isComplete(record) {
+  isComplete(record: IdempotencyRecord) {
     return record.responseStatus != null;
   }
 
   /**
    * Non-expired observe path: hash compare → replay / in_progress / conflict.
-   * @param {IdempotencyRecord} existing
-   * @param {string} requestHash
-   * @param {{ orgId: string, userId: string, idempotencyKey: string, operation: string }} id
+   * @param existing
+   * @param requestHash
+   * @param id
    */
-  #resolveNonExpired(existing, requestHash, id) {
+  #resolveNonExpired(existing: IdempotencyRecord, requestHash: string, id: { orgId: string, userId: string, idempotencyKey: string, operation: string }) {
     if (existing.requestHash !== requestHash) {
       throw new ConflictError(
         'Idempotency key reused with a different request hash',
@@ -189,16 +172,16 @@ export class IdempotencyRepository {
       );
     }
     if (this.isComplete(existing)) {
-      return { outcome: /** @type {const} */ ('replay'), record: existing };
+      return { outcome: ('replay' as const), record: existing };
     }
-    return { outcome: /** @type {const} */ ('in_progress'), record: existing };
+    return { outcome: ('in_progress' as const), record: existing };
   }
 
   /**
    * CAS-replace an expired row. Predicate includes expiry + observed hash +
    * observed created_at so concurrent different hashes cannot both win.
    *
-   * @param {IdempotencyRecord} existing
+   * @param existing
    * @param {{
    *   scope: { orgId: string, userId: string },
    *   idempotencyKey: string,
@@ -208,7 +191,7 @@ export class IdempotencyRepository {
    *   createdAt: string,
    * }} ctx
    */
-  async #tryReplaceExpired(existing, ctx) {
+  async #tryReplaceExpired(existing: IdempotencyRecord, ctx: { scope: { orgId: string, userId: string }, idempotencyKey: string, operation: string, requestHash: string, expiresAt: string, createdAt: string, }) {
     const nowMysql = toMysqlDateTime(this.now());
     const observedHash = existing.requestHash;
     const observedCreatedAt = existing.createdAt
@@ -246,7 +229,7 @@ export class IdempotencyRepository {
       if (!record) {
         throw new Error('Idempotency replace succeeded but row not readable');
       }
-      return { outcome: /** @type {const} */ ('begun'), record };
+      return { outcome: ('begun' as const), record };
     }
 
     // CAS lost — reload under owner scope; never assume we overwrote.
@@ -302,7 +285,7 @@ export class IdempotencyRepository {
    *   record: IdempotencyRecord,
    * }>}
    */
-  async begin(input) {
+  async begin(input: { orgId: string, userId: string, idempotencyKey: string, operation: string, requestHash: string, expiresAt: Date | string, }) {
     const { scope, idempotencyKey, operation } = this.#validateKeyParts(input);
     const requestHash = requireRequestHash(input.requestHash);
     if (input.expiresAt == null) {
@@ -391,7 +374,7 @@ export class IdempotencyRepository {
    * }} input
    * @returns {Promise<IdempotencyRecord>}
    */
-  async complete(input) {
+  async complete(input: { orgId: string, userId: string, idempotencyKey: string, operation: string, responseStatus: number, responseJson?: Record<string, unknown> | null, resourceId?: string | null, }) {
     const { scope, idempotencyKey, operation } = this.#validateKeyParts(input);
     if (
       typeof input.responseStatus !== 'number' ||

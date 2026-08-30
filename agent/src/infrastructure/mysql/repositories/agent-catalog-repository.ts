@@ -11,6 +11,9 @@ import { ConflictError, NotFoundError } from '../errors.js';
 import { assertUlid } from '../../../domain/shared/ulid.js';
 import { createHash } from 'node:crypto';
 
+/** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
+type Loose = any;
+
 /** Default tenant agent definition name (stable per org). */
 export const DEFAULT_AGENT_DEFINITION_NAME = 'default';
 
@@ -18,19 +21,16 @@ export const DEFAULT_AGENT_DEFINITION_NAME = 'default';
 export const DEFAULT_PI_SDK_VERSION = '0.80.3';
 
 /**
- * @param {unknown} err
+ * @param err
  * @returns {boolean}
  */
-function isDuplicateKeyError(err) {
-  const code = /** @type {{ code?: string, errno?: number }} */ (err)?.code;
-  const errno = /** @type {{ errno?: number }} */ (err)?.errno;
+function isDuplicateKeyError(err: unknown) {
+  const code = (err as { code?: string, errno?: number })?.code;
+  const errno = (err as { errno?: number })?.errno;
   return code === 'ER_DUP_ENTRY' || errno === 1062;
 }
 
-/**
- * @param {Record<string, unknown>} row
- */
-export function mapAgentDefinition(row) {
+export function mapAgentDefinition(row: Record<string, unknown>) {
   return {
     agentId: String(row.agent_id),
     orgId: String(row.org_id),
@@ -45,10 +45,7 @@ export function mapAgentDefinition(row) {
   };
 }
 
-/**
- * @param {Record<string, unknown>} row
- */
-export function mapAgentVersion(row) {
+export function mapAgentVersion(row: Record<string, unknown>) {
   return {
     agentVersionId: String(row.agent_version_id),
     agentId: String(row.agent_id),
@@ -64,10 +61,10 @@ export function mapAgentVersion(row) {
 
 /**
  * Stable config hash for agent version config JSON.
- * @param {Record<string, unknown>} configJson
+ * @param configJson
  * @returns {string}
  */
-export function hashAgentConfig(configJson) {
+export function hashAgentConfig(configJson: Record<string, unknown>) {
   const body = JSON.stringify(configJson ?? {});
   return createHash('sha256').update(body, 'utf8').digest('hex');
 }
@@ -93,30 +90,23 @@ export function defaultAgentConfigJson() {
 }
 
 export class AgentCatalogRepository {
-  /**
-   * @param {import('knex').Knex | import('knex').Knex.Transaction} db
-   * @param {{ now?: () => Date }} [opts]
-   */
-  constructor(db, opts = {}) {
+  // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
+  db: Loose;
+  now: Loose;
+
+  constructor(db: import('knex').Knex | import('knex').Knex.Transaction, opts: { now?: () => Date } = {}) {
     if (!db) throw new Error('AgentCatalogRepository requires a knex executor');
     this.db = db;
     this.now = opts.now ?? (() => new Date());
   }
 
-  /**
-   * @param {string} agentId
-   */
-  async getDefinitionById(agentId) {
+  async getDefinitionById(agentId: string) {
     const id = assertUlid(agentId, 'agentId');
     const row = await this.db('agent_definitions').where({ agent_id: id }).first();
     return row ? mapAgentDefinition(row) : null;
   }
 
-  /**
-   * @param {string} orgId
-   * @param {string} name
-   */
-  async getDefinitionByOrgAndName(orgId, name) {
+  async getDefinitionByOrgAndName(orgId: string, name: string) {
     const oid = assertUlid(orgId, 'orgId');
     if (typeof name !== 'string' || !name.trim()) {
       throw new Error('name must be a non-empty string');
@@ -127,11 +117,7 @@ export class AgentCatalogRepository {
     return row ? mapAgentDefinition(row) : null;
   }
 
-  /**
-   * @param {string} orgId
-   * @param {{ limit?: number }} [opts]
-   */
-  async listDefinitionsByOrg(orgId, opts = {}) {
+  async listDefinitionsByOrg(orgId: string, opts: { limit?: number } = {}) {
     const oid = assertUlid(orgId, 'orgId');
     const limit = Math.min(Math.max(Number(opts.limit) || 50, 1), 100);
     const rows = await this.db('agent_definitions')
@@ -154,7 +140,7 @@ export class AgentCatalogRepository {
    *   updatedAt?: Date | string,
    * }} input
    */
-  async createDefinition(input) {
+  async createDefinition(input: { agentId: string, orgId: string, name: string, description?: string | null, status?: string, activeVersionId?: string | null, createdBy: string, createdAt?: Date | string, updatedAt?: Date | string, }) {
     const agentId = assertUlid(input.agentId, 'agentId');
     const orgId = assertUlid(input.orgId, 'orgId');
     const createdBy = assertUlid(input.createdBy, 'createdBy');
@@ -183,7 +169,7 @@ export class AgentCatalogRepository {
     } catch (err) {
       if (isDuplicateKeyError(err)) {
         // uk_agent_definitions_org_name (org_id, name) or primary key collision.
-        const msg = String(/** @type {{ message?: string }} */ (err)?.message || '');
+        const msg = String((err as { message?: string })?.message || '');
         if (
           msg.includes('uk_agent_definitions_org_name') ||
           msg.includes("for key 'org_id'") ||
@@ -204,10 +190,7 @@ export class AgentCatalogRepository {
     return this.getDefinitionById(agentId);
   }
 
-  /**
-   * @param {string} agentVersionId
-   */
-  async getVersionById(agentVersionId) {
+  async getVersionById(agentVersionId: string) {
     const id = assertUlid(agentVersionId, 'agentVersionId');
     const row = await this.db('agent_versions')
       .where({ agent_version_id: id })
@@ -228,7 +211,7 @@ export class AgentCatalogRepository {
    *   createdAt?: Date | string,
    * }} input
    */
-  async createVersion(input) {
+  async createVersion(input: { agentVersionId: string, agentId: string, versionNo: number, configJson?: Record<string, unknown>, configHash?: string, piSdkVersion?: string, status?: string, createdBy: string, createdAt?: Date | string, }) {
     const agentVersionId = assertUlid(input.agentVersionId, 'agentVersionId');
     const agentId = assertUlid(input.agentId, 'agentId');
     const createdBy = assertUlid(input.createdBy, 'createdBy');
@@ -264,11 +247,7 @@ export class AgentCatalogRepository {
     return this.getVersionById(agentVersionId);
   }
 
-  /**
-   * @param {string} agentId
-   * @param {string} activeVersionId
-   */
-  async setActiveVersion(agentId, activeVersionId) {
+  async setActiveVersion(agentId: string, activeVersionId: string) {
     const aid = assertUlid(agentId, 'agentId');
     const vid = assertUlid(activeVersionId, 'activeVersionId');
     const n = await this.db('agent_definitions')
@@ -299,7 +278,7 @@ export class AgentCatalogRepository {
    *   piSdkVersion?: string,
    * }} input
    */
-  async ensureTenantDefaultAgent(input) {
+  async ensureTenantDefaultAgent(input: { orgId: string, createdBy: string, generateId: () => string, name?: string, configJson?: Record<string, unknown>, piSdkVersion?: string, }) {
     const orgId = assertUlid(input.orgId, 'orgId');
     const createdBy = assertUlid(input.createdBy, 'createdBy');
     if (typeof input.generateId !== 'function') {

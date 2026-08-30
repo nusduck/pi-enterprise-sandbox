@@ -5,6 +5,9 @@ import { formatDateTime, toMysqlDateTime } from '../row-mappers.js';
 import { NotFoundError } from '../errors.js';
 import { assertUlid } from '../../../domain/shared/ulid.js';
 
+/** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
+type Loose = any;
+
 export const CRON_JOB_LIST_DEFAULT_LIMIT = 100;
 export const CRON_JOB_RUN_LIST_DEFAULT_LIMIT = 50;
 export const CRON_JOB_LIST_MAX_LIMIT = 200;
@@ -70,16 +73,18 @@ function mapCronJobRun(row) {
 
 /** @param {unknown} error */
 function isDuplicate(error) {
-  // @ts-expect-error 遗留JS占位类型object未展开，访问code需收窄，存活代码先用expect-error收敛 —— TS2339: Property 'code' does not exist on type 'unknown'.
   return error?.code === 'ER_DUP_ENTRY' || error?.errno === 1062;
 }
 
+/** Owner-scoped 查询的租户边界。所有仓储方法都按它定位归属。 */
+type OwnerScope = { orgId: string; userId: string };
+
 export class CronJobRepository {
-  /**
-   * @param {import('knex').Knex | import('knex').Knex.Transaction} db
-   * @param {{ now?: () => Date }} [opts]
-   */
-  constructor(db, opts = {}) {
+  // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
+  db: Loose;
+  now: Loose;
+
+  constructor(db: import('knex').Knex | import('knex').Knex.Transaction, opts: { now?: () => Date } = {}) {
     if (!db) throw new Error('CronJobRepository requires a knex executor');
     this.db = db;
     this.now = opts.now ?? (() => new Date());
@@ -115,7 +120,11 @@ export class CronJobRepository {
     return this.requireById(cronJobId, owner);
   }
 
-  async getById(cronJobId, scope, opts = {}) {
+  async getById(
+    cronJobId: string,
+    scope: OwnerScope,
+    opts: { forUpdate?: boolean; includeDeleted?: boolean } = {},
+  ) {
     const owner = requireOwner(scope);
     let query = applyOwnerScope(
       this.db('cron_jobs').where({ cron_job_id: assertUlid(cronJobId, 'cronJobId') }),
@@ -138,7 +147,10 @@ export class CronJobRepository {
     return job;
   }
 
-  async listForOwner(scope, opts = {}) {
+  async listForOwner(
+    scope: OwnerScope,
+    opts: { enabled?: boolean; limit?: number } = {},
+  ) {
     const owner = requireOwner(scope);
     const limit = requireLimit(opts.limit, CRON_JOB_LIST_DEFAULT_LIMIT);
     let query = applyOwnerScope(this.db('cron_jobs'), owner).whereNull('deleted_at');
@@ -197,8 +209,15 @@ export class CronJobRepository {
    * Scheduler-only state transition. Callers must already hold the job row
    * lock from listDueForUpdate / requireById(..., { forUpdate: true }).
    */
-  async updateScheduleState(cronJobId, patch) {
-    const update = { updated_at: toMysqlDateTime(this.now()) };
+  async updateScheduleState(
+    cronJobId: string,
+    patch: { nextRunAt?: Date | string | null; lastRunAt?: Date | string | null; enabled?: boolean },
+  ) {
+    // 按列增量拼的 UPDATE 补丁：哪些列出现取决于 patch 里有哪些键，
+    // 字面量推断不会带上没写出来的列。
+    const update: Record<string, unknown> = {
+      updated_at: toMysqlDateTime(this.now()),
+    };
     if ('nextRunAt' in patch) {
       update.next_run_at = patch.nextRunAt == null ? null : toMysqlDateTime(patch.nextRunAt);
     }
@@ -276,8 +295,13 @@ export class CronJobRepository {
     }
   }
 
-  async updateExecution(cronJobRunId, patch) {
-    const update = { updated_at: toMysqlDateTime(this.now()) };
+  async updateExecution(
+    cronJobRunId: string,
+    patch: { runId?: string | null; status?: string; errorMessage?: string | null },
+  ) {
+    const update: Record<string, unknown> = {
+      updated_at: toMysqlDateTime(this.now()),
+    };
     if ('runId' in patch) update.run_id = patch.runId == null ? null : assertUlid(patch.runId, 'runId');
     if ('status' in patch) update.status = patch.status;
     if ('errorMessage' in patch) update.error_message = patch.errorMessage ?? null;
@@ -294,7 +318,11 @@ export class CronJobRepository {
     return row ? mapCronJobRun(row) : null;
   }
 
-  async listRunsForJob(cronJobId, scope, opts = {}) {
+  async listRunsForJob(
+    cronJobId: string,
+    scope: OwnerScope,
+    opts: { limit?: number } = {},
+  ) {
     const owner = requireOwner(scope);
     const limit = requireLimit(opts.limit, CRON_JOB_RUN_LIST_DEFAULT_LIMIT);
     const id = assertUlid(cronJobId, 'cronJobId');

@@ -31,6 +31,9 @@ import { SESSION_STATUS } from '../../../domain/session/session-status.js';
 import { RUN_STATUS } from '../../../domain/run/run-status.js';
 import { redactPayload } from '../../../lib/event-redaction.js';
 
+/** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
+type Loose = any;
+
 const TOOL_CALL_ID_MAX = 255;
 const TOOL_NAME_MAX = 255;
 const TRACE_ID_RE = /^[0-9a-f]{32}$/i;
@@ -57,11 +60,11 @@ export const ENVELOPE_KEYS = Object.freeze([
  * Recursion-stack cycle detection (add/delete) so shared DAG refs serialize
  * repeatedly, while true cycles become "[Circular]".
  *
- * @param {unknown} value
- * @param {Set<object>} [stack]
+ * @param value
+ * @param [stack]
  * @returns {string}
  */
-export function stableCanonicalStringify(value, stack = new Set()) {
+export function stableCanonicalStringify(value: unknown, stack: Set<Record<string, any>> = new Set()) {
   if (value === undefined || typeof value === 'function' || typeof value === 'symbol') {
     return 'null';
   }
@@ -76,7 +79,7 @@ export function stableCanonicalStringify(value, stack = new Set()) {
   }
   if (typeof value !== 'object') return 'null';
 
-  const objRef = /** @type {object} */ (value);
+  const objRef = (value as Record<string, any>);
   if (stack.has(objRef)) {
     return JSON.stringify('[Circular]');
   }
@@ -91,7 +94,7 @@ export function stableCanonicalStringify(value, stack = new Set()) {
     if (Buffer.isBuffer(value)) {
       return JSON.stringify({ $buf: value.toString('base64') });
     }
-    const obj = /** @type {Record<string, unknown>} */ (value);
+    const obj = (value as Record<string, unknown>);
     const keys = Object.keys(obj).sort();
     return `{${keys
       .map((k) => `${JSON.stringify(k)}:${stableCanonicalStringify(obj[k], stack)}`)
@@ -103,13 +106,13 @@ export function stableCanonicalStringify(value, stack = new Set()) {
 
 /**
  * Reject reserved keys at top-level of plain objects (caller data, not envelope).
- * @param {unknown} original
+ * @param original
  */
-export function assertNoReservedIntegrityKeys(original) {
+export function assertNoReservedIntegrityKeys(original: unknown) {
   if (!original || typeof original !== 'object' || Array.isArray(original)) {
     return;
   }
-  const obj = /** @type {Record<string, unknown>} */ (original);
+  const obj = (original as Record<string, unknown>);
   if (Object.prototype.hasOwnProperty.call(obj, INTEGRITY_META_KEY)) {
     throw new Error(
       `RESERVED_KEY_FORBIDDEN: arguments/result must not include "${INTEGRITY_META_KEY}"`,
@@ -126,17 +129,17 @@ export function assertNoReservedIntegrityKeys(original) {
 
 /**
  * Full-string SHA-256; rejects oversized canonical forms (no truncate).
- * @param {unknown} value
+ * @param value
  * @returns {string}
  */
-export function integrityFingerprint(value) {
+export function integrityFingerprint(value: unknown) {
   const canonical = stableCanonicalStringify(value ?? null);
   const bytes = Buffer.byteLength(canonical, 'utf8');
   if (bytes > MAX_INTEGRITY_CANONICAL_BYTES) {
     const err = new Error(
       `INTEGRITY_INPUT_TOO_LARGE: canonical form is ${bytes} bytes (max ${MAX_INTEGRITY_CANONICAL_BYTES})`,
     );
-    /** @type {any} */ (err).code = 'INTEGRITY_INPUT_TOO_LARGE';
+    (err as any).code = 'INTEGRITY_INPUT_TOO_LARGE';
     throw err;
   }
   return createHash('sha256').update(canonical, 'utf8').digest('hex');
@@ -153,7 +156,7 @@ export function integrityFingerprint(value) {
  * }} decision
  * @returns {string}
  */
-export function policyDecisionFingerprint(decision) {
+export function policyDecisionFingerprint(decision: { decision: string, reasonCode: string, reason: string, policyId: string, riskLevel: string, }) {
   if (!decision || typeof decision !== 'object') {
     throw new Error('policyDecisionFingerprint requires a decision object');
   }
@@ -171,17 +174,16 @@ export function policyDecisionFingerprint(decision) {
  * Pack redacted public value + integrity of original in unambiguous envelope.
  * Optional policyFingerprint is hidden metadata (never in $payload).
  *
- * @param {unknown} original
- * @param {number} maxBytes
- * @param {{ policyFingerprint?: string | null, policyPending?: boolean }} [opts]
+ * @param original
+ * @param maxBytes
+ * @param [opts]
  * @returns {string}
  */
-export function packJsonWithIntegrity(original, maxBytes, opts = {}) {
+export function packJsonWithIntegrity(original: unknown, maxBytes: number, opts: { policyFingerprint?: string | null, policyPending?: boolean } = {}) {
   assertNoReservedIntegrityKeys(original);
   const hash = integrityFingerprint(original ?? null);
   const redacted = redactPayload(original ?? null);
-  /** @type {Record<string, unknown>} */
-  const envelope = {
+  const envelope: Record<string, unknown> = {
     $v: ENVELOPE_VERSION,
     $integrity: hash,
     $payload: redacted,
@@ -203,17 +205,17 @@ export function packJsonWithIntegrity(original, maxBytes, opts = {}) {
     const err = new Error(
       `ARGUMENT_TOO_LARGE: JSON exceeds max ${maxBytes} bytes after redaction`,
     );
-    /** @type {any} */ (err).code = 'ARGUMENT_TOO_LARGE';
+    (err as any).code = 'ARGUMENT_TOO_LARGE';
     throw err;
   }
   return raw;
 }
 
 /**
- * @param {unknown} stored
+ * @param stored
  * @returns {string | null}
  */
-export function extractIntegrity(stored) {
+export function extractIntegrity(stored: unknown) {
   if (stored == null) return null;
   let obj = stored;
   if (typeof stored === 'string') {
@@ -226,23 +228,23 @@ export function extractIntegrity(stored) {
   if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return null;
   // Envelope form
   if (
-    /** @type {any} */ (obj).$v === ENVELOPE_VERSION &&
-    typeof /** @type {any} */ (obj).$integrity === 'string'
+    (obj as any).$v === ENVELOPE_VERSION &&
+    typeof (obj as any).$integrity === 'string'
   ) {
-    const h = /** @type {any} */ (obj).$integrity;
+    const h = (obj as any).$integrity;
     return /^[0-9a-f]{64}$/i.test(h) ? h.toLowerCase() : null;
   }
   // Legacy sibling form
-  const h = /** @type {any} */ (obj)[INTEGRITY_META_KEY];
+  const h = (obj as any)[INTEGRITY_META_KEY];
   return typeof h === 'string' && /^[0-9a-f]{64}$/i.test(h) ? h.toLowerCase() : null;
 }
 
 /**
  * Extract hidden policy fingerprint from stored envelope (null if absent).
- * @param {unknown} stored
+ * @param stored
  * @returns {string | null}
  */
-export function extractPolicyFingerprint(stored) {
+export function extractPolicyFingerprint(stored: unknown) {
   if (stored == null) return null;
   let obj = stored;
   if (typeof stored === 'string') {
@@ -253,8 +255,8 @@ export function extractPolicyFingerprint(stored) {
     }
   }
   if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return null;
-  if (/** @type {any} */ (obj).$v !== ENVELOPE_VERSION) return null;
-  const pf = /** @type {any} */ (obj).$policyFingerprint;
+  if ((obj as any).$v !== ENVELOPE_VERSION) return null;
+  const pf = (obj as any).$policyFingerprint;
   return typeof pf === 'string' && /^[0-9a-f]{64}$/i.test(pf)
     ? pf.toLowerCase()
     : null;
@@ -263,10 +265,10 @@ export function extractPolicyFingerprint(stored) {
 /**
  * Identify the explicit, side-effect-free placeholder written when Pi emits
  * tool_execution_start before the policy hook.
- * @param {unknown} stored
+ * @param stored
  * @returns {boolean}
  */
-export function extractPolicyPending(stored) {
+export function extractPolicyPending(stored: unknown) {
   if (stored == null) return false;
   let obj = stored;
   if (typeof stored === 'string') {
@@ -280,8 +282,8 @@ export function extractPolicyPending(stored) {
     obj &&
       typeof obj === 'object' &&
       !Array.isArray(obj) &&
-      /** @type {any} */ (obj).$v === ENVELOPE_VERSION &&
-      /** @type {any} */ (obj).$policyPending === true,
+      (obj as any).$v === ENVELOPE_VERSION &&
+      (obj as any).$policyPending === true,
   );
 }
 
@@ -289,9 +291,9 @@ export function extractPolicyPending(stored) {
  * Public view: unwrap envelope payload; strip legacy integrity key.
  * Preserves arrays/primitives/objects as stored in $payload.
  * Never exposes $integrity / $policyFingerprint.
- * @param {unknown} stored
+ * @param stored
  */
-export function publicJsonView(stored) {
+export function publicJsonView(stored: unknown) {
   if (stored == null) return stored;
   let obj = stored;
   if (typeof stored === 'string') {
@@ -303,13 +305,13 @@ export function publicJsonView(stored) {
   }
   if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return obj;
   if (
-    /** @type {any} */ (obj).$v === ENVELOPE_VERSION &&
+    (obj as any).$v === ENVELOPE_VERSION &&
     Object.prototype.hasOwnProperty.call(obj, '$payload')
   ) {
-    return /** @type {any} */ (obj).$payload;
+    return (obj as any).$payload;
   }
   // Legacy: strip _integrity sibling
-  const { [INTEGRITY_META_KEY]: _h, ...rest } = /** @type {object} */ (obj);
+  const { [INTEGRITY_META_KEY]: _h, ...rest } = (obj as Record<string, any>);
   void _h;
   return rest;
 }
@@ -320,10 +322,7 @@ export function publicJsonView(stored) {
  */
 export const TOOL_EXECUTION_CHILD_SELECT = Object.freeze(['te.*']);
 
-/**
- * @param {string} toolCallId
- */
-function assertToolCallId(toolCallId) {
+function assertToolCallId(toolCallId: string) {
   if (typeof toolCallId !== 'string' || !toolCallId.trim()) {
     throw new Error('toolCallId is required');
   }
@@ -334,10 +333,7 @@ function assertToolCallId(toolCallId) {
   return v;
 }
 
-/**
- * @param {string} toolName
- */
-function assertToolName(toolName) {
+function assertToolName(toolName: string) {
   if (typeof toolName !== 'string' || !toolName.trim()) {
     throw new Error('toolName is required');
   }
@@ -348,10 +344,7 @@ function assertToolName(toolName) {
   return v;
 }
 
-/**
- * @param {string} traceId
- */
-function assertTraceId32(traceId) {
+function assertTraceId32(traceId: string) {
   const t = String(traceId || '').trim().toLowerCase();
   if (!TRACE_ID_RE.test(t) || /^0+$/.test(t)) {
     throw new Error('traceId must be 32 hex chars (non-zero)');
@@ -361,10 +354,10 @@ function assertTraceId32(traceId) {
 
 /**
  * Sandbox request hash: 64 lowercase hex chars.
- * @param {unknown} hash
+ * @param hash
  * @returns {string}
  */
-function assertRequestHash(hash) {
+function assertRequestHash(hash: unknown) {
   if (typeof hash !== 'string' || !REQUEST_HASH_RE.test(hash)) {
     throw new Error('requestHash must be 64 lowercase hex chars');
   }
@@ -377,11 +370,11 @@ function assertRequestHash(hash) {
  * unsafe integers, and null→0 coercion. Only typeof number +
  * Number.isSafeInteger(n) && n > 0. (Note: JS cannot distinguish 1.0 from 1.)
  *
- * @param {unknown} value
- * @param {string} field
+ * @param value
+ * @param field
  * @returns {number}
  */
-export function assertPositiveSafeInt(value, field) {
+export function assertPositiveSafeInt(value: unknown, field: string) {
   if (typeof value !== 'number') {
     throw new Error(`${field} must be a positive safe integer number`);
   }
@@ -391,10 +384,7 @@ export function assertPositiveSafeInt(value, field) {
   return value;
 }
 
-/**
- * @param {Record<string, unknown>} row
- */
-function mapToolExecutionPublic(row) {
+function mapToolExecutionPublic(row: Record<string, unknown>) {
   const mapped = mapToolExecution(row);
   const rawArgs =
     typeof row.arguments_json === 'string'
@@ -424,7 +414,7 @@ function mapToolExecutionPublic(row) {
  * When policyFingerprint is supplied (policy path), exact match is required;
  * missing durable fingerprint fails closed (no permissive legacy fallback).
  *
- * @param {ReturnType<typeof mapToolExecutionPublic>} existing
+ * @param existing
  * @param {{
  *   toolName: string,
  *   toolSource: string,
@@ -432,7 +422,7 @@ function mapToolExecutionPublic(row) {
  *   policyFingerprint?: string | null,
  * }} expected
  */
-export function assertToolExecutionReplayMatch(existing, expected) {
+export function assertToolExecutionReplayMatch(existing: ReturnType<typeof mapToolExecutionPublic>, expected: { toolName: string, toolSource: string, argumentsJson?: unknown, policyFingerprint?: string | null, }) {
   const toolName = assertToolName(expected.toolName);
   const toolSource = assertToolSource(expected.toolSource);
   if (existing.toolName !== toolName || existing.toolSource !== toolSource) {
@@ -461,7 +451,7 @@ export function assertToolExecutionReplayMatch(existing, expected) {
         'POLICY_FINGERPRINT_MISSING: durable ToolExecution lacks policy fingerprint (fail closed)',
         { resource: 'tool_executions', id: existing.toolExecutionId },
       );
-      /** @type {any} */ (err).reasonCode = 'POLICY_FINGERPRINT_MISSING';
+      (err as any).reasonCode = 'POLICY_FINGERPRINT_MISSING';
       throw err;
     }
     if (have !== want) {
@@ -469,29 +459,24 @@ export function assertToolExecutionReplayMatch(existing, expected) {
         'POLICY_FINGERPRINT_MISMATCH: policy decision fingerprint differs from durable state',
         { resource: 'tool_executions', id: existing.toolExecutionId },
       );
-      /** @type {any} */ (err).reasonCode = 'POLICY_FINGERPRINT_MISMATCH';
+      (err as any).reasonCode = 'POLICY_FINGERPRINT_MISMATCH';
       throw err;
     }
   }
 }
 
 export class ToolExecutionRepository {
-  /**
-   * @param {import('knex').Knex | import('knex').Knex.Transaction} db
-   * @param {{ now?: () => Date }} [opts]
-   */
-  constructor(db, opts = {}) {
+  // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
+  db: Loose;
+  now: Loose;
+
+  constructor(db: import('knex').Knex | import('knex').Knex.Transaction, opts: { now?: () => Date } = {}) {
     if (!db) throw new Error('ToolExecutionRepository requires a knex executor');
     this.db = db;
     this.now = opts.now ?? (() => new Date());
   }
 
-  /**
-   * @param {string} runId
-   * @param {{ orgId: string, userId: string }} scope
-   * @param {{ forUpdate?: boolean, forShare?: boolean }} [opts]
-   */
-  async requireOwnedRun(runId, scope, opts = {}) {
+  async requireOwnedRun(runId: string, scope: { orgId: string, userId: string }, opts: { forUpdate?: boolean, forShare?: boolean } = {}) {
     const s = requireOwnerScope(scope);
     const id = assertUlid(runId, 'runId');
     let q = applyOwnerScope(this.db('runs').where({ run_id: id }), s);
@@ -509,10 +494,10 @@ export class ToolExecutionRepository {
 
   /**
    * Owner-scoped tool_executions join runs — child columns only.
-   * @param {{ orgId: string, userId: string }} scope
-   * @param {{ forUpdate?: boolean }} [opts]
+   * @param scope
+   * @param [opts]
    */
-  #ownedToolQuery(scope, opts = {}) {
+  #ownedToolQuery(scope: { orgId: string, userId: string }, opts: { forUpdate?: boolean } = {}) {
     const s = requireOwnerScope(scope);
     let q = this.db('tool_executions as te')
       .join('runs as r', 'te.run_id', 'r.run_id')
@@ -523,13 +508,7 @@ export class ToolExecutionRepository {
     return q;
   }
 
-  /**
-   * @param {string} runId
-   * @param {string} toolCallId
-   * @param {{ orgId: string, userId: string }} scope
-   * @param {{ forUpdate?: boolean }} [opts]
-   */
-  async getByRunAndToolCallId(runId, toolCallId, scope, opts = {}) {
+  async getByRunAndToolCallId(runId: string, toolCallId: string, scope: { orgId: string, userId: string }, opts: { forUpdate?: boolean } = {}) {
     const s = requireOwnerScope(scope);
     const rid = assertUlid(runId, 'runId');
     const tc = assertToolCallId(toolCallId);
@@ -540,12 +519,7 @@ export class ToolExecutionRepository {
     return row ? mapToolExecutionPublic(row) : null;
   }
 
-  /**
-   * @param {string} toolExecutionId
-   * @param {{ orgId: string, userId: string }} scope
-   * @param {{ forUpdate?: boolean }} [opts]
-   */
-  async getById(toolExecutionId, scope, opts = {}) {
+  async getById(toolExecutionId: string, scope: { orgId: string, userId: string }, opts: { forUpdate?: boolean } = {}) {
     const s = requireOwnerScope(scope);
     const id = assertUlid(toolExecutionId, 'toolExecutionId');
     const row = await this.#ownedToolQuery(s, opts)
@@ -565,10 +539,10 @@ export class ToolExecutionRepository {
    *
    * The explicit owned-Run read is intentional: an owned run with no tools
    * returns `[]`, while a foreign or missing run fails closed as NOT_FOUND.
-   * @param {string} runId
-   * @param {{ orgId: string, userId: string }} scope
+   * @param runId
+   * @param scope
    */
-  async listByRun(runId, scope) {
+  async listByRun(runId: string, scope: { orgId: string, userId: string }) {
     const s = requireOwnerScope(scope);
     const id = assertUlid(runId, 'runId');
     await this.requireOwnedRun(id, s);
@@ -599,7 +573,7 @@ export class ToolExecutionRepository {
    *   conversationId?: string | null,
    * }} input
    */
-  async getOrCreate(input) {
+  async getOrCreate(input: { toolExecutionId: string, runId: string, agentSessionId: string, toolCallId: string, toolName: string, toolSource: string, riskLevel: string, argumentsJson?: unknown, status?: string, errorCode?: string | null, policyFingerprint?: string | null, policyPending?: boolean, traceId: string, orgId: string, userId: string, conversationId?: string | null, }) {
     const scope = requireOwnerScope(input);
     const runId = assertUlid(input.runId, 'runId');
     const agentSessionId = assertUlid(input.agentSessionId, 'agentSessionId');
@@ -717,7 +691,7 @@ export class ToolExecutionRepository {
         created_at: toMysqlDateTime(now),
       });
     } catch (err) {
-      const code = /** @type {{ code?: string }} */ (err)?.code;
+      const code = (err as { code?: string })?.code;
       if (code === 'ER_DUP_ENTRY') {
         const again = await this.db('tool_executions')
           .where({ run_id: runId, tool_call_id: toolCallId })
@@ -795,7 +769,7 @@ export class ToolExecutionRepository {
    * }} input
    * @returns {Promise<{ bound: boolean, toolExecution: object }>}
    */
-  async bindSandboxRequest(input) {
+  async bindSandboxRequest(input: { toolExecutionId?: string, runId?: string, toolCallId?: string, toolName: string, agentSessionId: string, conversationId: string, sandboxSessionId: string, requestHash: string, requestHashVersion: number, executionFenceToken: number, orgId: string, userId: string, }) {
     const scope = requireOwnerScope(input);
     const agentSessionId = assertUlid(input.agentSessionId, 'agentSessionId');
     const conversationId = assertUlid(input.conversationId, 'conversationId');
@@ -1046,7 +1020,7 @@ export class ToolExecutionRepository {
    *   setCompletedAt?: boolean,
    * }} input
    */
-  async transitionStatus(input) {
+  async transitionStatus(input: { toolExecutionId: string, orgId: string, userId: string, fromStatus: string | string[], toStatus: string, resultJson?: unknown, errorCode?: string | null, setStartedAt?: boolean, setCompletedAt?: boolean, }) {
     const scope = requireOwnerScope(input);
     const id = assertUlid(input.toolExecutionId, 'toolExecutionId');
     const toStatus = assertToolExecutionStatus(input.toStatus);
@@ -1093,8 +1067,7 @@ export class ToolExecutionRepository {
     }
 
     const now = this.now();
-    /** @type {Record<string, unknown>} */
-    const patch = { status: toStatus };
+    const patch: Record<string, unknown> = { status: toStatus };
     if (input.setStartedAt || toStatus === TOOL_EXECUTION_STATUS.RUNNING) {
       if (!existing.startedAt) {
         patch.started_at = toMysqlDateTime(now);

@@ -17,6 +17,9 @@ import { assertUlid } from '../../../domain/shared/ulid.js';
 import { applyOwnerScope, requireOwnerScope } from '../ownership.js';
 import { formatDateTime, toMysqlDateTime } from '../row-mappers.js';
 
+/** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
+type Loose = any;
+
 /** Statuses a todo item may hold. */
 export const TODO_STATUSES = Object.freeze([
   'pending',
@@ -31,10 +34,7 @@ export const MAX_MEMORY_KEY_CHARS = 191;
 export const MEMORY_SEARCH_DEFAULT_LIMIT = 10;
 export const MEMORY_SEARCH_MAX_LIMIT = 50;
 
-/**
- * @param {Record<string, unknown>} row
- */
-export function mapTodo(row) {
+export function mapTodo(row: Record<string, unknown>) {
   return {
     todoId: String(row.todo_id),
     agentSessionId: String(row.agent_session_id),
@@ -47,10 +47,7 @@ export function mapTodo(row) {
   };
 }
 
-/**
- * @param {Record<string, unknown>} row
- */
-export function mapMemory(row) {
+export function mapMemory(row: Record<string, unknown>) {
   return {
     memoryId: String(row.memory_id),
     agentSessionId:
@@ -66,12 +63,12 @@ export function mapMemory(row) {
  * Bound a model-authored string: strip C0 controls (keep newlines in notes),
  * collapse runs of whitespace for todos, and cut to the column width.
  *
- * @param {unknown} value
- * @param {number} maxChars
- * @param {{ keepNewlines?: boolean }} [opts]
+ * @param value
+ * @param maxChars
+ * @param [opts]
  * @returns {string}
  */
-export function boundText(value, maxChars, opts = {}) {
+export function boundText(value: unknown, maxChars: number, opts: { keepNewlines?: boolean } = {}) {
   const raw = String(value ?? '');
   const stripped = opts.keepNewlines
     ? // Keep \n and \t so a multi-line note stays readable.
@@ -83,10 +80,10 @@ export function boundText(value, maxChars, opts = {}) {
 }
 
 /**
- * @param {unknown} status
+ * @param status
  * @returns {string}
  */
-export function assertTodoStatus(status) {
+export function assertTodoStatus(status: unknown) {
   const s = String(status ?? '').trim().toLowerCase();
   if (!TODO_STATUSES.includes(s)) {
     throw new Error(
@@ -97,11 +94,12 @@ export function assertTodoStatus(status) {
 }
 
 export class TaskStateRepository {
-  /**
-   * @param {import('knex').Knex | import('knex').Knex.Transaction} db
-   * @param {{ now?: () => Date, generateId?: () => string }} [opts]
-   */
-  constructor(db, opts = {}) {
+  // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
+  db: Loose;
+  now: Loose;
+  generateId: Loose;
+
+  constructor(db: import('knex').Knex | import('knex').Knex.Transaction, opts: { now?: () => Date, generateId?: () => string } = {}) {
     if (!db) throw new Error('TaskStateRepository requires a knex executor');
     this.db = db;
     this.now = opts.now ?? (() => new Date());
@@ -130,7 +128,7 @@ export class TaskStateRepository {
    *   items: Array<{ content: string, status?: string }>,
    * }} input
    */
-  async replaceTodos(input) {
+  async replaceTodos(input: { orgId: string, userId: string, agentSessionId: string, runId?: string | null, items: Array<{ content: string, status?: string }>, }) {
     const scope = requireOwnerScope(input);
     const agentSessionId = assertUlid(input.agentSessionId, 'agentSessionId');
     const runId = input.runId ? assertUlid(input.runId, 'runId') : null;
@@ -168,10 +166,7 @@ export class TaskStateRepository {
     return this.getTodos({ ...scope, agentSessionId });
   }
 
-  /**
-   * @param {{ orgId: string, userId: string, agentSessionId: string }} input
-   */
-  async getTodos(input) {
+  async getTodos(input: { orgId: string, userId: string, agentSessionId: string }) {
     const scope = requireOwnerScope(input);
     const agentSessionId = assertUlid(input.agentSessionId, 'agentSessionId');
     const rows = await applyOwnerScope(
@@ -195,7 +190,7 @@ export class TaskStateRepository {
    *   content: string,
    * }} input
    */
-  async appendMemory(input) {
+  async appendMemory(input: { orgId: string, userId: string, agentSessionId?: string | null, runId?: string | null, key?: string | null, content: string, }) {
     const scope = requireOwnerScope(input);
     const content = boundText(input.content, MAX_MEMORY_CONTENT_CHARS, {
       keepNewlines: true,
@@ -237,7 +232,7 @@ export class TaskStateRepository {
    *   limit?: number,
    * }} input
    */
-  async searchMemory(input) {
+  async searchMemory(input: { orgId: string, userId: string, query?: string | null, limit?: number, }) {
     const scope = requireOwnerScope(input);
     const limit = boundLimit(input.limit);
     const query = boundText(input.query, MAX_MEMORY_KEY_CHARS);
@@ -256,10 +251,7 @@ export class TaskStateRepository {
   }
 }
 
-/**
- * @param {unknown} limit
- */
-function boundLimit(limit) {
+function boundLimit(limit: unknown) {
   if (limit == null || limit === '') return MEMORY_SEARCH_DEFAULT_LIMIT;
   const n = Number(limit);
   if (!Number.isSafeInteger(n) || n < 1) return MEMORY_SEARCH_DEFAULT_LIMIT;

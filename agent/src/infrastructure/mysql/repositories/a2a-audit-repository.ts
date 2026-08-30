@@ -9,15 +9,15 @@ import { toMysqlDateTime, parseJsonColumn, formatDateTime } from '../row-mappers
 import { assertUlid } from '../../../domain/shared/ulid.js';
 import { redactPayload } from '../../../lib/event-redaction.js';
 
+/** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
+type Loose = any;
+
 const EVENT_TYPE_MAX = 128;
 const METHOD_MAX = 128;
 const MAX_PAYLOAD_BYTES = 32 * 1024;
 const TRACE_ID_RE = /^[0-9a-f]{32}$/i;
 
-/**
- * @param {Record<string, unknown>} row
- */
-export function mapA2aAuditEvent(row) {
+export function mapA2aAuditEvent(row: Record<string, unknown>) {
   return {
     auditId: String(row.audit_id),
     orgId: String(row.org_id),
@@ -37,10 +37,10 @@ export function mapA2aAuditEvent(row) {
 }
 
 /**
- * @param {unknown} payload
+ * @param payload
  * @returns {string | null}
  */
-function boundPayload(payload) {
+function boundPayload(payload: unknown) {
   if (payload == null) return null;
   const redacted = redactPayload(payload);
   const raw = JSON.stringify(redacted ?? null);
@@ -54,11 +54,11 @@ function boundPayload(payload) {
 }
 
 export class A2aAuditRepository {
-  /**
-   * @param {import('knex').Knex | import('knex').Knex.Transaction} db
-   * @param {{ now?: () => Date }} [opts]
-   */
-  constructor(db, opts = {}) {
+  // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
+  db: Loose;
+  now: Loose;
+
+  constructor(db: import('knex').Knex | import('knex').Knex.Transaction, opts: { now?: () => Date } = {}) {
     if (!db) throw new Error('A2aAuditRepository requires a knex executor');
     this.db = db;
     this.now = opts.now ?? (() => new Date());
@@ -79,7 +79,7 @@ export class A2aAuditRepository {
    *   payloadJson?: unknown,
    * }} input
    */
-  async append(input) {
+  async append(input: { auditId: string, orgId: string, clientId: string, eventType: string, credentialId?: string | null, agentId?: string | null, a2aTaskId?: string | null, runId?: string | null, traceId?: string | null, method?: string | null, payloadJson?: unknown, }) {
     const auditId = assertUlid(input.auditId, 'auditId');
     const orgId = assertUlid(input.orgId, 'orgId');
     if (typeof input.clientId !== 'string' || !input.clientId.trim()) {
@@ -131,10 +131,10 @@ export class A2aAuditRepository {
   /**
    * Organization-wide enumeration is reserved for the internal admin API.
    *
-   * @param {string} orgId
-   * @param {{ agentId?: string | null, limit?: number }} [opts]
+   * @param orgId
+   * @param [opts]
    */
-  async listForOrgAdmin(orgId, opts = {}) {
+  async listForOrgAdmin(orgId: string, opts: { agentId?: string | null, limit?: number } = {}) {
     const oid = assertUlid(orgId, 'orgId');
     const limit = Math.min(Math.max(Number(opts.limit) || 20, 1), 100);
     let query = this.db('a2a_audit_events')

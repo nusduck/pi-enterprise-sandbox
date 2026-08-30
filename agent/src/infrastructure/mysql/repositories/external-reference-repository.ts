@@ -16,25 +16,23 @@ import { toMysqlDateTime, formatDateTime } from '../row-mappers.js';
 import { ConflictError } from '../errors.js';
 import { assertUlid } from '../../../domain/shared/ulid.js';
 
+/** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
+type Loose = any;
+
 export const EXTERNAL_PROVIDER_MAX_LEN = 64;
 export const EXTERNAL_SUBJECT_MAX_LEN = 255;
 
 /**
- * @param {unknown} err
+ * @param err
  * @returns {boolean}
  */
-function isDuplicateKeyError(err) {
-  const code = /** @type {{ code?: string, errno?: number }} */ (err)?.code;
-  const errno = /** @type {{ errno?: number }} */ (err)?.errno;
+function isDuplicateKeyError(err: unknown) {
+  const code = (err as { code?: string, errno?: number })?.code;
+  const errno = (err as { errno?: number })?.errno;
   return code === 'ER_DUP_ENTRY' || errno === 1062;
 }
 
-/**
- * @param {string} value
- * @param {string} field
- * @param {number} maxLen
- */
-function requireBoundedString(value, field, maxLen) {
+function requireBoundedString(value: string, field: string, maxLen: number) {
   if (typeof value !== 'string') {
     throw new Error(`${field} must be a non-empty string`);
   }
@@ -46,10 +44,7 @@ function requireBoundedString(value, field, maxLen) {
   return v;
 }
 
-/**
- * @param {Record<string, unknown>} row
- */
-export function mapOrganizationExternalRef(row) {
+export function mapOrganizationExternalRef(row: Record<string, unknown>) {
   return {
     provider: String(row.provider),
     externalSubject: String(row.external_subject),
@@ -58,10 +53,7 @@ export function mapOrganizationExternalRef(row) {
   };
 }
 
-/**
- * @param {Record<string, unknown>} row
- */
-export function mapConversationExternalRef(row) {
+export function mapConversationExternalRef(row: Record<string, unknown>) {
   return {
     orgId: String(row.org_id),
     userId: String(row.user_id),
@@ -73,11 +65,11 @@ export function mapConversationExternalRef(row) {
 }
 
 export class ExternalReferenceRepository {
-  /**
-   * @param {import('knex').Knex | import('knex').Knex.Transaction} db
-   * @param {{ now?: () => Date }} [opts]
-   */
-  constructor(db, opts = {}) {
+  // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
+  db: Loose;
+  now: Loose;
+
+  constructor(db: import('knex').Knex | import('knex').Knex.Transaction, opts: { now?: () => Date } = {}) {
     if (!db) {
       throw new Error('ExternalReferenceRepository requires a knex executor');
     }
@@ -85,11 +77,7 @@ export class ExternalReferenceRepository {
     this.now = opts.now ?? (() => new Date());
   }
 
-  /**
-   * @param {string} provider
-   * @param {string} externalSubject
-   */
-  async getOrganizationRef(provider, externalSubject) {
+  async getOrganizationRef(provider: string, externalSubject: string) {
     const p = requireBoundedString(provider, 'provider', EXTERNAL_PROVIDER_MAX_LEN);
     const s = requireBoundedString(
       externalSubject,
@@ -113,7 +101,7 @@ export class ExternalReferenceRepository {
    *   createdAt?: Date | string,
    * }} input
    */
-  async createOrganizationRef(input) {
+  async createOrganizationRef(input: { provider: string, externalSubject: string, orgId: string, createdAt?: Date | string, }) {
     const provider = requireBoundedString(
       input.provider,
       'provider',
@@ -171,7 +159,7 @@ export class ExternalReferenceRepository {
    *   createdAt?: Date | string,
    * }} input
    */
-  async getOrCreateOrganizationRef(input) {
+  async getOrCreateOrganizationRef(input: { provider: string, externalSubject: string, orgId: string, createdAt?: Date | string, }) {
     assertUlid(input.orgId, 'orgId');
     const existing = await this.getOrganizationRef(
       input.provider,
@@ -201,7 +189,7 @@ export class ExternalReferenceRepository {
    *   externalSubject: string,
    * }} input
    */
-  async getConversationRef(input) {
+  async getConversationRef(input: { orgId: string, userId: string, provider: string, externalSubject: string, }) {
     const scopeRaw = requireOwnerScope(input);
     const scope = {
       orgId: assertUlid(scopeRaw.orgId, 'orgId'),
@@ -242,7 +230,7 @@ export class ExternalReferenceRepository {
    *   createdAt?: Date | string,
    * }} input
    */
-  async createConversationRef(input) {
+  async createConversationRef(input: { orgId: string, userId: string, provider: string, externalSubject: string, conversationId: string, createdAt?: Date | string, }) {
     const scopeRaw = requireOwnerScope(input);
     const scope = {
       orgId: assertUlid(scopeRaw.orgId, 'orgId'),
@@ -318,7 +306,7 @@ export class ExternalReferenceRepository {
    *   createdAt?: Date | string,
    * }} input
    */
-  async getOrCreateConversationRef(input) {
+  async getOrCreateConversationRef(input: { orgId: string, userId: string, provider: string, externalSubject: string, conversationId: string, createdAt?: Date | string, }) {
     assertUlid(input.conversationId, 'conversationId');
     const existing = await this.getConversationRef(input);
     if (existing) {

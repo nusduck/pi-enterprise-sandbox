@@ -24,26 +24,29 @@ import {
 import { sessionStateMachine } from '../../../domain/session/session-state-machine.js';
 import { RUN_STATUS } from '../../../domain/run/run-status.js';
 
+/** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
+type Loose = any;
+
 /**
- * @param {unknown} status
- * @param {string} [field]
+ * @param status
+ * @param [field]
  * @returns {string}
  */
-export function assertSessionStatus(status, field = 'status') {
+export function assertSessionStatus(status: unknown, field: string = 'status') {
   if (!isSessionStatus(status)) {
     throw new InvalidSessionStatusError(
       status,
       `Invalid ${field}: expected plan §11 Session status`,
     );
   }
-  return /** @type {string} */ (status);
+  return (status as string);
 }
 
 /**
- * @param {string | string[]} expected
+ * @param expected
  * @returns {string[]}
  */
-export function normalizeExpectedSessionStatuses(expected) {
+export function normalizeExpectedSessionStatuses(expected: string | string[]) {
   const list = Array.isArray(expected) ? expected : [expected];
   const out = [];
   for (const s of list) {
@@ -58,10 +61,7 @@ export function normalizeExpectedSessionStatuses(expected) {
   return out;
 }
 
-/**
- * @param {{ orgId: string, userId: string }} scope
- */
-function requireOwnerUlids(scope) {
+function requireOwnerUlids(scope: { orgId: string, userId: string }) {
   const s = requireOwnerScope(scope);
   return {
     orgId: assertUlid(s.orgId, 'orgId'),
@@ -70,11 +70,11 @@ function requireOwnerUlids(scope) {
 }
 
 /**
- * @param {unknown} token
- * @param {string} [field]
+ * @param token
+ * @param [field]
  * @returns {number}
  */
-export function assertFenceToken(token, field = 'executionFenceToken') {
+export function assertFenceToken(token: unknown, field: string = 'executionFenceToken') {
   const n = Number(token);
   if (!Number.isInteger(n) || n < 0) {
     throw new Error(`${field} must be a non-negative integer`);
@@ -83,11 +83,11 @@ export function assertFenceToken(token, field = 'executionFenceToken') {
 }
 
 export class AgentSessionRepository {
-  /**
-   * @param {import('knex').Knex | import('knex').Knex.Transaction} db
-   * @param {{ now?: () => Date }} [opts]
-   */
-  constructor(db, opts = {}) {
+  // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
+  db: Loose;
+  now: Loose;
+
+  constructor(db: import('knex').Knex | import('knex').Knex.Transaction, opts: { now?: () => Date } = {}) {
     if (!db) throw new Error('AgentSessionRepository requires a knex executor');
     this.db = db;
     this.now = opts.now ?? (() => new Date());
@@ -112,7 +112,7 @@ export class AgentSessionRepository {
    *   closedAt?: Date | string | null,
    * }} input
    */
-  async create(input) {
+  async create(input: { agentSessionId: string, orgId: string, userId: string, conversationId: string, agentVersionId: string, sandboxSessionId: string, workspaceId: string, status: string, piSessionVersion?: number, lastRunId?: string | null, executionFenceToken?: number, recoveryReasonCode?: string | null, createdAt?: Date | string, updatedAt?: Date | string, closedAt?: Date | string | null, }) {
     const scope = requireOwnerUlids(input);
     const agentSessionId = assertUlid(input.agentSessionId, 'agentSessionId');
     const status = assertSessionStatus(input.status);
@@ -150,12 +150,7 @@ export class AgentSessionRepository {
     return this.getById(agentSessionId, scope);
   }
 
-  /**
-   * @param {string} agentSessionId
-   * @param {{ orgId: string, userId: string }} scope
-   * @param {{ forUpdate?: boolean }} [opts]
-   */
-  async getById(agentSessionId, scope, opts = {}) {
+  async getById(agentSessionId: string, scope: { orgId: string, userId: string }, opts: { forUpdate?: boolean } = {}) {
     const s = requireOwnerUlids(scope);
     const id = assertUlid(agentSessionId, 'agentSessionId');
     let q = applyOwnerScope(
@@ -167,12 +162,7 @@ export class AgentSessionRepository {
     return row ? mapAgentSession(row) : null;
   }
 
-  /**
-   * @param {string} agentSessionId
-   * @param {{ orgId: string, userId: string }} scope
-   * @param {{ forUpdate?: boolean }} [opts]
-   */
-  async requireById(agentSessionId, scope, opts = {}) {
+  async requireById(agentSessionId: string, scope: { orgId: string, userId: string }, opts: { forUpdate?: boolean } = {}) {
     const row = await this.getById(agentSessionId, scope, opts);
     if (!row) {
       throw new NotFoundError('Agent session not found', {
@@ -188,11 +178,11 @@ export class AgentSessionRepository {
    * every other AgentSession read. This is the narrow bridge used by the BFF
    * Dataset/Artifact upload path; it never exposes an unscoped session lookup.
    *
-   * @param {string} sandboxSessionId
-   * @param {{ orgId: string, userId: string }} scope
-   * @param {{ forUpdate?: boolean }} [opts]
+   * @param sandboxSessionId
+   * @param scope
+   * @param [opts]
    */
-  async getBySandboxSessionId(sandboxSessionId, scope, opts = {}) {
+  async getBySandboxSessionId(sandboxSessionId: string, scope: { orgId: string, userId: string }, opts: { forUpdate?: boolean } = {}) {
     const s = requireOwnerUlids(scope);
     const id = assertUlid(sandboxSessionId, 'sandboxSessionId');
     let q = applyOwnerScope(
@@ -204,12 +194,7 @@ export class AgentSessionRepository {
     return row ? mapAgentSession(row) : null;
   }
 
-  /**
-   * @param {string} conversationId
-   * @param {{ orgId: string, userId: string }} scope
-   * @param {{ status?: string }} [opts]
-   */
-  async listByConversation(conversationId, scope, opts = {}) {
+  async listByConversation(conversationId: string, scope: { orgId: string, userId: string }, opts: { status?: string } = {}) {
     const s = requireOwnerUlids(scope);
     const cid = assertUlid(conversationId, 'conversationId');
     let q = applyOwnerScope(
@@ -221,12 +206,7 @@ export class AgentSessionRepository {
     return rows.map(mapAgentSession);
   }
 
-  /**
-   * @param {string} conversationId
-   * @param {{ orgId: string, userId: string }} scope
-   * @param {{ forUpdate?: boolean }} [opts]
-   */
-  async findActiveForConversation(conversationId, scope, opts = {}) {
+  async findActiveForConversation(conversationId: string, scope: { orgId: string, userId: string }, opts: { forUpdate?: boolean } = {}) {
     const s = requireOwnerUlids(scope);
     const cid = assertUlid(conversationId, 'conversationId');
     let q = applyOwnerScope(
@@ -254,14 +234,14 @@ export class AgentSessionRepository {
   /**
    * Set last_run_id under ACTIVE + expected fence (checkpoint companion write).
    *
-   * @param {string} agentSessionId
-   * @param {{ orgId: string, userId: string }} scope
+   * @param agentSessionId
+   * @param scope
    * @param {{
    *   expectedFenceToken: number,
    *   lastRunId: string,
    * }} opts
    */
-  async updateLastRunIdIfFence(agentSessionId, scope, opts) {
+  async updateLastRunIdIfFence(agentSessionId: string, scope: { orgId: string, userId: string }, opts: { expectedFenceToken: number, lastRunId: string, }) {
     const s = requireOwnerUlids(scope);
     const id = assertUlid(agentSessionId, 'agentSessionId');
     const expected = assertFenceToken(
@@ -307,8 +287,8 @@ export class AgentSessionRepository {
    * Every expected→target edge is validated via SessionStateMachine
    * (same-status SUSPENDED re-reason is the only non-transition edge).
    *
-   * @param {string} agentSessionId
-   * @param {{ orgId: string, userId: string }} scope
+   * @param agentSessionId
+   * @param scope
    * @param {{
    *   expectedStatus?: string,
    *   expectedStatuses?: string[],
@@ -318,7 +298,7 @@ export class AgentSessionRepository {
    *   closedAt?: Date | string | null,
    * }} patch
    */
-  async transitionIf(agentSessionId, scope, patch) {
+  async transitionIf(agentSessionId: string, scope: { orgId: string, userId: string }, patch: { expectedStatus?: string, expectedStatuses?: string[], status: string, recoveryReasonCode?: string | null, lastRunId?: string | null, closedAt?: Date | string | null, }) {
     const s = requireOwnerUlids(scope);
     const id = assertUlid(agentSessionId, 'agentSessionId');
     if (typeof patch.status !== 'string' || !patch.status.trim()) {
@@ -334,8 +314,7 @@ export class AgentSessionRepository {
       sessionStateMachine.assertLegalEdge(from, target);
     }
 
-    /** @type {Record<string, unknown>} */
-    const update = {
+    const update: Record<string, unknown> = {
       status: target,
       updated_at: toMysqlDateTime(this.now()),
     };
@@ -390,15 +369,15 @@ export class AgentSessionRepository {
    * Mark SUSPENDED with recovery_reason_code under fence CAS.
    * Requires expectedExecutionFenceToken (no unfenced recovery mark).
    *
-   * @param {string} agentSessionId
-   * @param {{ orgId: string, userId: string }} scope
+   * @param agentSessionId
+   * @param scope
    * @param {{
    *   expectedExecutionFenceToken?: number,
    *   expectedFenceToken?: number,
    *   recoveryReasonCode?: string,
    * }} opts
    */
-  async markRecoveryRequired(agentSessionId, scope, opts = {}) {
+  async markRecoveryRequired(agentSessionId: string, scope: { orgId: string, userId: string }, opts: { expectedExecutionFenceToken?: number, expectedFenceToken?: number, recoveryReasonCode?: string, } = {}) {
     const fence =
       opts.expectedExecutionFenceToken ?? opts.expectedFenceToken;
     if (fence == null) {
@@ -415,19 +394,18 @@ export class AgentSessionRepository {
   /**
    * Monotonic fence acquire: CAS current token → current+1 under owner scope.
    *
-   * @param {string} agentSessionId
-   * @param {{ orgId: string, userId: string }} scope
-   * @param {{ expectedToken: number, requireActive?: boolean }} opts
+   * @param agentSessionId
+   * @param scope
+   * @param opts
    * @returns {Promise<{ session: object, fenceToken: number }>}
    */
-  async advanceExecutionFence(agentSessionId, scope, opts) {
+  async advanceExecutionFence(agentSessionId: string, scope: { orgId: string, userId: string }, opts: { expectedToken: number, requireActive?: boolean }) {
     const s = requireOwnerUlids(scope);
     const id = assertUlid(agentSessionId, 'agentSessionId');
     const expected = assertFenceToken(opts.expectedToken, 'expectedToken');
     const next = expected + 1;
 
-    /** @type {Record<string, unknown>} */
-    const where = {
+    const where: Record<string, unknown> = {
       agent_session_id: id,
       execution_fence_token: expected,
     };
@@ -479,11 +457,11 @@ export class AgentSessionRepository {
    * Acquire next fence only for an owner-scoped ACTIVE session.
    * Prefer {@link acquireExecutionFenceForRun} when Run binding must be verified.
    *
-   * @param {string} agentSessionId
-   * @param {{ orgId: string, userId: string }} scope
+   * @param agentSessionId
+   * @param scope
    * @returns {Promise<{ session: object, fenceToken: number }>}
    */
-  async acquireNextExecutionFence(agentSessionId, scope) {
+  async acquireNextExecutionFence(agentSessionId: string, scope: { orgId: string, userId: string }) {
     const current = await this.requireById(agentSessionId, scope, {
       forUpdate: true,
     });
@@ -510,8 +488,8 @@ export class AgentSessionRepository {
    * Lock order (caller trx): Session FOR UPDATE → Run FOR UPDATE → advance fence.
    * Missing / cross-owner / binding / non-RUNNING Run must not advance the fence.
    *
-   * @param {string} agentSessionId
-   * @param {{ orgId: string, userId: string }} scope
+   * @param agentSessionId
+   * @param scope
    * @param {{
    *   conversationId: string,
    *   agentVersionId: string,
@@ -519,7 +497,7 @@ export class AgentSessionRepository {
    * }} binding
    * @returns {Promise<{ session: object, fenceToken: number }>}
    */
-  async acquireExecutionFenceForRun(agentSessionId, scope, binding) {
+  async acquireExecutionFenceForRun(agentSessionId: string, scope: { orgId: string, userId: string }, binding: { conversationId: string, agentVersionId: string, runId: string, }) {
     const s = requireOwnerUlids(scope);
     const id = assertUlid(agentSessionId, 'agentSessionId');
     const conversationId = assertUlid(binding.conversationId, 'conversationId');
@@ -626,13 +604,13 @@ export class AgentSessionRepository {
    * Assert the current fence still equals expectedToken (stale-writer gate).
    * Usable inside every journal / event / checkpoint transaction.
    *
-   * @param {string} agentSessionId
-   * @param {{ orgId: string, userId: string }} scope
-   * @param {number} expectedToken
-   * @param {{ forUpdate?: boolean, requireActive?: boolean }} [opts]
+   * @param agentSessionId
+   * @param scope
+   * @param expectedToken
+   * @param [opts]
    * @returns {Promise<object>} session row
    */
-  async assertExecutionFence(agentSessionId, scope, expectedToken, opts = {}) {
+  async assertExecutionFence(agentSessionId: string, scope: { orgId: string, userId: string }, expectedToken: number, opts: { forUpdate?: boolean, requireActive?: boolean } = {}) {
     const s = requireOwnerUlids(scope);
     const id = assertUlid(agentSessionId, 'agentSessionId');
     const expected = assertFenceToken(expectedToken, 'expectedToken');
@@ -666,14 +644,14 @@ export class AgentSessionRepository {
    * Mark SUSPENDED + recovery reason only when the caller still holds the fence.
    * Used when lock/fence is lost or recovery sources disagree — never via stale writer.
    *
-   * @param {string} agentSessionId
-   * @param {{ orgId: string, userId: string }} scope
+   * @param agentSessionId
+   * @param scope
    * @param {{
    *   expectedFenceToken: number,
    *   recoveryReasonCode?: string,
    * }} opts
    */
-  async markRecoveryRequiredIfFence(agentSessionId, scope, opts) {
+  async markRecoveryRequiredIfFence(agentSessionId: string, scope: { orgId: string, userId: string }, opts: { expectedFenceToken: number, recoveryReasonCode?: string, }) {
     const s = requireOwnerUlids(scope);
     const id = assertUlid(agentSessionId, 'agentSessionId');
     const expected = assertFenceToken(
@@ -700,8 +678,7 @@ export class AgentSessionRepository {
     sessionStateMachine.assertSuspendForRecovery(current.status, reason);
 
     // CAS status + fence together so a concurrent fence advance loses the write.
-    /** @type {Record<string, unknown>} */
-    const update = {
+    const update: Record<string, unknown> = {
       status: SESSION_STATUS.SUSPENDED,
       recovery_reason_code: reason,
       updated_at: toMysqlDateTime(this.now()),

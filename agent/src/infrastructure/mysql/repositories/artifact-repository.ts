@@ -7,10 +7,10 @@ import { applyOwnerScope, requireOwnerScope } from '../ownership.js';
 import { formatDateTime } from '../row-mappers.js';
 import { assertUlid } from '../../../domain/shared/ulid.js';
 
-/**
- * @param {Record<string, unknown>} row
- */
-export function mapArtifact(row) {
+/** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
+type Loose = any;
+
+export function mapArtifact(row: Record<string, unknown>) {
   return {
     artifactId: String(row.artifact_id),
     orgId: String(row.org_id),
@@ -30,19 +30,15 @@ export function mapArtifact(row) {
 }
 
 export class ArtifactRepository {
-  /**
-   * @param {import('knex').Knex | import('knex').Knex.Transaction} db
-   */
-  constructor(db) {
+  // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
+  db: Loose;
+
+  constructor(db: import('knex').Knex | import('knex').Knex.Transaction) {
     if (!db) throw new Error('ArtifactRepository requires a knex executor');
     this.db = db;
   }
 
-  /**
-   * @param {string} artifactId
-   * @param {{ orgId: string, userId: string }} scope
-   */
-  async getById(artifactId, scope) {
+  async getById(artifactId: string, scope: { orgId: string, userId: string }) {
     const id = assertUlid(artifactId, 'artifactId');
     const s = requireOwnerScope(scope);
     const row = await applyOwnerScope(
@@ -55,11 +51,11 @@ export class ArtifactRepository {
   /**
    * List artifacts for a run under owner scope (complete, bounded).
    *
-   * @param {string} runId
-   * @param {{ orgId: string, userId: string }} scope
-   * @param {{ limit?: number }} [opts]
+   * @param runId
+   * @param scope
+   * @param [opts]
    */
-  async listByRunId(runId, scope, opts = {}) {
+  async listByRunId(runId: string, scope: { orgId: string, userId: string }, opts: { limit?: number } = {}) {
     const rid = assertUlid(runId, 'runId');
     const s = requireOwnerScope(scope);
     const limit = Math.min(Math.max(Number(opts.limit) || 200, 1), 1000);

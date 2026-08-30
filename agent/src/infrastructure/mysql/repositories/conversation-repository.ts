@@ -7,11 +7,14 @@ import { applyOwnerScope, requireOwnerScope } from '../ownership.js';
 import { mapConversation, toMysqlDateTime } from '../row-mappers.js';
 import { NotFoundError } from '../errors.js';
 
+/** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
+type Loose = any;
+
 export class ConversationRepository {
-  /**
-   * @param {import('knex').Knex | import('knex').Knex.Transaction} db
-   */
-  constructor(db) {
+  // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
+  db: Loose;
+
+  constructor(db: import('knex').Knex | import('knex').Knex.Transaction) {
     if (!db) throw new Error('ConversationRepository requires a knex executor');
     this.db = db;
   }
@@ -31,7 +34,7 @@ export class ConversationRepository {
    *   archivedAt?: Date | string | null,
    * }} input
    */
-  async create(input) {
+  async create(input: { conversationId: string, orgId: string, userId: string, agentId: string, parentRunId?: string | null, title?: string | null, status: string, currentAgentSessionId?: string | null, createdAt?: Date | string, updatedAt?: Date | string, archivedAt?: Date | string | null, }) {
     const scope = requireOwnerScope(input);
     const now = toMysqlDateTime(input.createdAt || new Date());
     const updated = toMysqlDateTime(input.updatedAt || input.createdAt || new Date());
@@ -55,11 +58,11 @@ export class ConversationRepository {
    * Read one conversation by id, sub-agent conversations included: the list
    * hides them, this does not.
    *
-   * @param {string} conversationId
-   * @param {{ orgId: string, userId: string }} scope
-   * @param {{ forUpdate?: boolean }} [opts]
+   * @param conversationId
+   * @param scope
+   * @param [opts]
    */
-  async getById(conversationId, scope, opts = {}) {
+  async getById(conversationId: string, scope: { orgId: string, userId: string }, opts: { forUpdate?: boolean } = {}) {
     const s = requireOwnerScope(scope);
     let q = applyOwnerScope(
       this.db('conversations').where({ conversation_id: conversationId }),
@@ -72,18 +75,14 @@ export class ConversationRepository {
 
   /**
    * Lock conversation row for parent-graph provisioning (FOR UPDATE).
-   * @param {string} conversationId
-   * @param {{ orgId: string, userId: string }} scope
+   * @param conversationId
+   * @param scope
    */
-  async lockById(conversationId, scope) {
+  async lockById(conversationId: string, scope: { orgId: string, userId: string }) {
     return this.getById(conversationId, scope, { forUpdate: true });
   }
 
-  /**
-   * @param {string} conversationId
-   * @param {{ orgId: string, userId: string }} scope
-   */
-  async requireById(conversationId, scope) {
+  async requireById(conversationId: string, scope: { orgId: string, userId: string }) {
     const row = await this.getById(conversationId, scope);
     if (!row) {
       throw new NotFoundError('Conversation not found', {
@@ -94,11 +93,7 @@ export class ConversationRepository {
     return row;
   }
 
-  /**
-   * @param {{ orgId: string, userId: string }} scope
-   * @param {{ limit?: number, includeArchived?: boolean }} [opts]
-   */
-  async listForOwner(scope, opts = {}) {
+  async listForOwner(scope: { orgId: string, userId: string }, opts: { limit?: number, includeArchived?: boolean } = {}) {
     const s = requireOwnerScope(scope);
     const limit = opts.limit ?? 50;
     let query = applyOwnerScope(this.db('conversations'), s);
@@ -112,15 +107,9 @@ export class ConversationRepository {
     return rows.map(mapConversation);
   }
 
-  /**
-   * @param {string} conversationId
-   * @param {{ orgId: string, userId: string }} scope
-   * @param {{ title?: string | null, status?: string, currentAgentSessionId?: string | null, archivedAt?: Date | string | null }} patch
-   */
-  async updateMeta(conversationId, scope, patch) {
+  async updateMeta(conversationId: string, scope: { orgId: string, userId: string }, patch: { title?: string | null, status?: string, currentAgentSessionId?: string | null, archivedAt?: Date | string | null }) {
     const s = requireOwnerScope(scope);
-    /** @type {Record<string, unknown>} */
-    const update = { updated_at: toMysqlDateTime(new Date()) };
+    const update: Record<string, unknown> = { updated_at: toMysqlDateTime(new Date()) };
     if (patch.title !== undefined) update.title = patch.title;
     if (patch.status !== undefined) update.status = patch.status;
     if (patch.currentAgentSessionId !== undefined) {
@@ -146,11 +135,11 @@ export class ConversationRepository {
 
   /**
    * Soft-delete while preserving referenced sessions/messages/runs.
-   * @param {string} conversationId
-   * @param {{ orgId: string, userId: string }} scope
-   * @param {Date | string} archivedAt
+   * @param conversationId
+   * @param scope
+   * @param archivedAt
    */
-  async archive(conversationId, scope, archivedAt = new Date()) {
+  async archive(conversationId: string, scope: { orgId: string, userId: string }, archivedAt: Date | string = new Date()) {
     return this.updateMeta(conversationId, scope, {
       status: 'archived',
       archivedAt,

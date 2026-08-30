@@ -11,11 +11,14 @@ import { applyOwnerScope, requireOwnerScope } from '../ownership.js';
 import { mapMessage, toMysqlDateTime } from '../row-mappers.js';
 import { ConflictError, NotFoundError } from '../errors.js';
 
+/** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
+type Loose = any;
+
 export class MessageRepository {
-  /**
-   * @param {import('knex').Knex | import('knex').Knex.Transaction} db
-   */
-  constructor(db) {
+  // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
+  db: Loose;
+
+  constructor(db: import('knex').Knex | import('knex').Knex.Transaction) {
     if (!db) throw new Error('MessageRepository requires a knex executor');
     this.db = db;
   }
@@ -39,7 +42,7 @@ export class MessageRepository {
    *   createdAt?: Date | string,
    * }} input
    */
-  async append(input) {
+  async append(input: { messageId: string, conversationId: string, orgId: string, userId: string, agentSessionId?: string | null, runId?: string | null, role: string, messageType: string, contentJson: Record<string, unknown>, sequenceNo?: number, piEntryId?: string | null, piEntryKind?: string | null, createdAt?: Date | string, }) {
     const scope = requireOwnerScope(input);
     const runInTxn = async (trx) => {
       const conv = await applyOwnerScope(
@@ -90,7 +93,7 @@ export class MessageRepository {
           created_at: toMysqlDateTime(input.createdAt || new Date()),
         });
       } catch (err) {
-        const code = /** @type {{ code?: string }} */ (err)?.code;
+        const code = (err as { code?: string })?.code;
         if (code === 'ER_DUP_ENTRY') {
           throw new ConflictError('Message sequence or id conflict', {
             resource: 'messages',
@@ -128,11 +131,11 @@ export class MessageRepository {
   /**
    * List messages for an owned conversation (append-only read).
    *
-   * @param {string} conversationId
-   * @param {{ orgId: string, userId: string }} scope
-   * @param {{ afterSequence?: number, limit?: number }} [opts]
+   * @param conversationId
+   * @param scope
+   * @param [opts]
    */
-  async listByConversation(conversationId, scope, opts = {}) {
+  async listByConversation(conversationId: string, scope: { orgId: string, userId: string }, opts: { afterSequence?: number, limit?: number } = {}) {
     const s = requireOwnerScope(scope);
     const conv = await applyOwnerScope(
       this.db('conversations').where({ conversation_id: conversationId }),
@@ -164,12 +167,12 @@ export class MessageRepository {
    * way {@link listByConversation} proves it: the conversation is read under
    * the scope first, and messages are only reachable through it.
    *
-   * @param {string} conversationId
-   * @param {string} runId
-   * @param {{ orgId: string, userId: string }} scope
+   * @param conversationId
+   * @param runId
+   * @param scope
    * @returns {Promise<object | null>}
    */
-  async latestAssistantForRun(conversationId, runId, scope) {
+  async latestAssistantForRun(conversationId: string, runId: string, scope: { orgId: string, userId: string }) {
     const s = requireOwnerScope(scope);
     const conv = await applyOwnerScope(
       this.db('conversations').where({ conversation_id: conversationId }),
@@ -188,11 +191,7 @@ export class MessageRepository {
     return row ? mapMessage(row) : null;
   }
 
-  /**
-   * @param {string} messageId
-   * @param {{ orgId: string, userId: string }} scope
-   */
-  async getById(messageId, scope) {
+  async getById(messageId: string, scope: { orgId: string, userId: string }) {
     const s = requireOwnerScope(scope);
     const row = await this.db('messages as m')
       .join('conversations as c', 'c.conversation_id', 'm.conversation_id')

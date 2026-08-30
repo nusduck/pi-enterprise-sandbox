@@ -10,14 +10,17 @@ import { toMysqlDateTime, formatDateTime } from '../row-mappers.js';
 import { ConflictError } from '../errors.js';
 import { assertUlid } from '../../../domain/shared/ulid.js';
 
+/** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
+type Loose = any;
+
 /** Opaque A2A context_id max length (VARCHAR(255)). */
 export const A2A_CONTEXT_ID_MAX_LEN = 255;
 
 /**
- * @param {unknown} value
+ * @param value
  * @returns {string | null}
  */
-export function normalizeOpaqueContextId(value) {
+export function normalizeOpaqueContextId(value: unknown) {
   if (value == null) return null;
   if (typeof value !== 'string') return null;
   const s = value.trim();
@@ -30,10 +33,7 @@ export function normalizeOpaqueContextId(value) {
   return s;
 }
 
-/**
- * @param {Record<string, unknown>} row
- */
-export function mapA2aTask(row) {
+export function mapA2aTask(row: Record<string, unknown>) {
   return {
     a2aTaskId: String(row.a2a_task_id),
     orgId: String(row.org_id),
@@ -52,14 +52,17 @@ export function mapA2aTask(row) {
 
 /**
  * Client-scoped owner for A2A (stricter than org+user alone).
- * @typedef {{ orgId: string, clientId: string }} A2aClientScope
  */
+export type A2aClientScope = {
+  orgId: string;
+  clientId: string;
+};
 
 /**
- * @param {Partial<A2aClientScope> | null | undefined} scope
+ * @param scope
  * @returns {A2aClientScope}
  */
-export function requireA2aClientScope(scope) {
+export function requireA2aClientScope(scope: Partial<A2aClientScope> | null | undefined) {
   const orgId = scope?.orgId != null ? String(scope.orgId).trim() : '';
   const clientId = scope?.clientId != null ? String(scope.clientId).trim() : '';
   if (!orgId || !clientId) {
@@ -68,21 +71,17 @@ export function requireA2aClientScope(scope) {
   return { orgId, clientId };
 }
 
-/**
- * @param {import('knex').Knex.QueryBuilder} query
- * @param {A2aClientScope} scope
- */
-export function applyA2aClientScope(query, scope) {
+export function applyA2aClientScope(query: import('knex').Knex.QueryBuilder, scope: A2aClientScope) {
   const s = requireA2aClientScope(scope);
   return query.where('org_id', s.orgId).andWhere('client_id', s.clientId);
 }
 
 export class A2aTaskRepository {
-  /**
-   * @param {import('knex').Knex | import('knex').Knex.Transaction} db
-   * @param {{ now?: () => Date }} [opts]
-   */
-  constructor(db, opts = {}) {
+  // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
+  db: Loose;
+  now: Loose;
+
+  constructor(db: import('knex').Knex | import('knex').Knex.Transaction, opts: { now?: () => Date } = {}) {
     if (!db) throw new Error('A2aTaskRepository requires a knex executor');
     this.db = db;
     this.now = opts.now ?? (() => new Date());
@@ -104,7 +103,7 @@ export class A2aTaskRepository {
    *   traceId: string,
    * }} input
    */
-  async insert(input) {
+  async insert(input: { a2aTaskId: string, orgId: string, userId: string, clientId: string, agentId: string, credentialId: string, runId: string, conversationId: string, contextId?: string | null, traceId: string, }) {
     const a2aTaskId = assertUlid(input.a2aTaskId, 'a2aTaskId');
     const orgId = assertUlid(input.orgId, 'orgId');
     const userId = assertUlid(input.userId, 'userId');
@@ -141,8 +140,8 @@ export class A2aTaskRepository {
         updated_at: now,
       });
     } catch (err) {
-      const code = /** @type {{ code?: string, errno?: number }} */ (err)?.code;
-      const errno = /** @type {{ errno?: number }} */ (err)?.errno;
+      const code = (err as { code?: string, errno?: number })?.code;
+      const errno = (err as { errno?: number })?.errno;
       if (code === 'ER_DUP_ENTRY' || errno === 1062) {
         throw new ConflictError('A2A task mapping already exists for run');
       }
@@ -158,10 +157,10 @@ export class A2aTaskRepository {
   /**
    * Owner+client scoped get — foreign client → null (not found).
    *
-   * @param {string} a2aTaskId
-   * @param {A2aClientScope} scope
+   * @param a2aTaskId
+   * @param scope
    */
-  async getById(a2aTaskId, scope) {
+  async getById(a2aTaskId: string, scope: A2aClientScope) {
     const id = assertUlid(a2aTaskId, 'a2aTaskId');
     const s = requireA2aClientScope(scope);
     const row = await applyA2aClientScope(
@@ -171,11 +170,7 @@ export class A2aTaskRepository {
     return row ? mapA2aTask(row) : null;
   }
 
-  /**
-   * @param {string} runId
-   * @param {A2aClientScope} scope
-   */
-  async getByRunId(runId, scope) {
+  async getByRunId(runId: string, scope: A2aClientScope) {
     const id = assertUlid(runId, 'runId');
     const s = requireA2aClientScope(scope);
     const row = await applyA2aClientScope(
@@ -188,7 +183,7 @@ export class A2aTaskRepository {
   /**
    * List tasks for one client only (never org-wide enumeration).
    *
-   * @param {A2aClientScope} scope
+   * @param scope
    * @param {{
    *   agentId?: string,
    *   contextId?: string | null,
@@ -196,7 +191,7 @@ export class A2aTaskRepository {
    *   afterCreatedAt?: string,
    * }} [opts]
    */
-  async listForClient(scope, opts = {}) {
+  async listForClient(scope: A2aClientScope, opts: { agentId?: string, contextId?: string | null, limit?: number, afterCreatedAt?: string, } = {}) {
     const s = requireA2aClientScope(scope);
     const limit = Math.min(Math.max(Number(opts.limit) || 50, 1), 100);
     let q = applyA2aClientScope(this.db('a2a_tasks'), s).orderBy(
@@ -217,10 +212,10 @@ export class A2aTaskRepository {
   /**
    * Organization-wide enumeration is reserved for the internal admin API.
    *
-   * @param {string} orgId
-   * @param {{ agentId?: string | null, limit?: number }} [opts]
+   * @param orgId
+   * @param [opts]
    */
-  async listForOrgAdmin(orgId, opts = {}) {
+  async listForOrgAdmin(orgId: string, opts: { agentId?: string | null, limit?: number } = {}) {
     const oid = assertUlid(orgId, 'orgId');
     const limit = Math.min(Math.max(Number(opts.limit) || 20, 1), 100);
     let query = this.db('a2a_tasks')
@@ -239,10 +234,10 @@ export class A2aTaskRepository {
    * Unscoped by id — only for internal join after client scope already verified.
    * Prefer getById with client scope.
    *
-   * @param {string} a2aTaskId
-   * @param {{ orgId: string, userId: string }} ownerScope
+   * @param a2aTaskId
+   * @param ownerScope
    */
-  async getByIdUnderOwner(a2aTaskId, ownerScope) {
+  async getByIdUnderOwner(a2aTaskId: string, ownerScope: { orgId: string, userId: string }) {
     const id = assertUlid(a2aTaskId, 'a2aTaskId');
     const scope = requireOwnerScope(ownerScope);
     const row = await applyOwnerScope(

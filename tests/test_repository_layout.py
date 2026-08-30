@@ -49,9 +49,11 @@ HOTSPOT_LINE_BUDGETS = {
     # +6 (1_131 -> 1_137): packJsonWithIntegrity now raises a stable
     # ARGUMENT_TOO_LARGE code instead of a bare message, so callers can tell
     # "too big to store" apart from a redaction-truncated replay conflict.
-    "agent/src/infrastructure/mysql/repositories/tool-execution-repository.js": 1_137,
-    # W2-D 曾为 inline 收窄抬到 1_057；Wave 6 抽 asRecord 后收回。
-    "agent/src/infrastructure/mysql/repositories/trace-span-repository.js": 1_041,
+    # 转 TS 后收回 27 行。
+    "agent/src/infrastructure/mysql/repositories/tool-execution-repository.ts": 1_110,
+    # W2-D 曾为 inline 收窄抬到 1_057；Wave 6 抽 asRecord 后收回 1_041；转 TS
+    # 时拆出 trace-span-projections.ts（不碰 knex 的纯投影/归一化），
+    # 1_041 -> 774，已回到默认上限之下，不再需要预算。
     # frontend/src joined this ratchet on 2026-08-26 (full-repo standards
     # review): AGENTS.md §3 applies to every production file, but only
     # agent/ and sandbox/ were pinned, so these three grew past 1000 lines

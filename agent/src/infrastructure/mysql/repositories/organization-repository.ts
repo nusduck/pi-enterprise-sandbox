@@ -10,6 +10,9 @@ import { mapOrganization, mapUser, toMysqlDateTime } from '../row-mappers.js';
 import { ConflictError, NotFoundError } from '../errors.js';
 import { assertUlid } from '../../../domain/shared/ulid.js';
 
+/** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
+type Loose = any;
+
 /** Bound for provider segment in `provider:subject` encoding. */
 export const USER_EXTERNAL_PROVIDER_MAX_LEN = 64;
 /** Bound for full users.external_subject column (schema VARCHAR(255)). */
@@ -17,11 +20,11 @@ export const USER_EXTERNAL_SUBJECT_MAX_LEN = 255;
 
 /**
  * Encode external user identity as `provider:subject` for users.external_subject.
- * @param {string} provider
- * @param {string} externalSubject
+ * @param provider
+ * @param externalSubject
  * @returns {string}
  */
-export function formatUserExternalSubject(provider, externalSubject) {
+export function formatUserExternalSubject(provider: string, externalSubject: string) {
   if (typeof provider !== 'string' || !provider.trim()) {
     throw new Error('provider must be a non-empty string');
   }
@@ -48,10 +51,10 @@ export function formatUserExternalSubject(provider, externalSubject) {
 }
 
 /**
- * @param {string} encoded
+ * @param encoded
  * @returns {{ provider: string, externalSubject: string } | null}
  */
-export function parseUserExternalSubject(encoded) {
+export function parseUserExternalSubject(encoded: string) {
   if (typeof encoded !== 'string' || !encoded.includes(':')) return null;
   const idx = encoded.indexOf(':');
   const provider = encoded.slice(0, idx);
@@ -61,21 +64,21 @@ export function parseUserExternalSubject(encoded) {
 }
 
 /**
- * @param {unknown} err
+ * @param err
  * @returns {boolean}
  */
-function isDuplicateKeyError(err) {
-  const code = /** @type {{ code?: string, errno?: number }} */ (err)?.code;
-  const errno = /** @type {{ errno?: number }} */ (err)?.errno;
+function isDuplicateKeyError(err: unknown) {
+  const code = (err as { code?: string, errno?: number })?.code;
+  const errno = (err as { errno?: number })?.errno;
   return code === 'ER_DUP_ENTRY' || errno === 1062;
 }
 
 export class OrganizationRepository {
-  /**
-   * @param {import('knex').Knex | import('knex').Knex.Transaction} db
-   * @param {{ now?: () => Date }} [opts]
-   */
-  constructor(db, opts = {}) {
+  // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
+  db: Loose;
+  now: Loose;
+
+  constructor(db: import('knex').Knex | import('knex').Knex.Transaction, opts: { now?: () => Date } = {}) {
     if (!db) throw new Error('OrganizationRepository requires a knex executor');
     this.db = db;
     this.now = opts.now ?? (() => new Date());
@@ -90,7 +93,7 @@ export class OrganizationRepository {
    *   updatedAt?: Date | string,
    * }} input
    */
-  async createOrganization(input) {
+  async createOrganization(input: { orgId: string, name: string, status: string, createdAt?: Date | string, updatedAt?: Date | string, }) {
     const orgId = assertUlid(input.orgId, 'orgId');
     const now = toMysqlDateTime(input.createdAt || this.now());
     const updated = toMysqlDateTime(
@@ -106,10 +109,7 @@ export class OrganizationRepository {
     return this.getOrganization(orgId);
   }
 
-  /**
-   * @param {string} orgId
-   */
-  async getOrganization(orgId) {
+  async getOrganization(orgId: string) {
     const id = assertUlid(orgId, 'orgId');
     const row = await this.db('organizations').where({ org_id: id }).first();
     return row ? mapOrganization(row) : null;
@@ -126,7 +126,7 @@ export class OrganizationRepository {
    *   updatedAt?: Date | string,
    * }} input
    */
-  async createUser(input) {
+  async createUser(input: { userId: string, externalSubject: string, displayName?: string | null, email?: string | null, status: string, createdAt?: Date | string, updatedAt?: Date | string, }) {
     const userId = assertUlid(input.userId, 'userId');
     if (typeof input.externalSubject !== 'string' || !input.externalSubject.trim()) {
       throw new Error('externalSubject must be a non-empty string');
@@ -154,10 +154,7 @@ export class OrganizationRepository {
     return mapUser(row);
   }
 
-  /**
-   * @param {string} userId
-   */
-  async getUser(userId) {
+  async getUser(userId: string) {
     const id = assertUlid(userId, 'userId');
     const row = await this.db('users').where({ user_id: id }).first();
     return row ? mapUser(row) : null;
@@ -165,9 +162,9 @@ export class OrganizationRepository {
 
   /**
    * Lookup user by full external_subject value (may include provider prefix).
-   * @param {string} externalSubject
+   * @param externalSubject
    */
-  async getUserByExternalSubject(externalSubject) {
+  async getUserByExternalSubject(externalSubject: string) {
     if (typeof externalSubject !== 'string' || !externalSubject.trim()) {
       throw new Error('externalSubject must be a non-empty string');
     }
@@ -185,10 +182,10 @@ export class OrganizationRepository {
 
   /**
    * Lookup user by provider + raw external subject (encodes prefix).
-   * @param {string} provider
-   * @param {string} externalSubject
+   * @param provider
+   * @param externalSubject
    */
-  async getUserByProviderSubject(provider, externalSubject) {
+  async getUserByProviderSubject(provider: string, externalSubject: string) {
     const encoded = formatUserExternalSubject(provider, externalSubject);
     return this.getUserByExternalSubject(encoded);
   }
@@ -207,7 +204,7 @@ export class OrganizationRepository {
    *   updatedAt?: Date | string,
    * }} input
    */
-  async createUserIfAbsent(input) {
+  async createUserIfAbsent(input: { userId: string, externalSubject: string, displayName?: string | null, email?: string | null, status: string, createdAt?: Date | string, updatedAt?: Date | string, }) {
     // Validate ULID early so race path and insert share the same contract.
     assertUlid(input.userId, 'userId');
     const existing = await this.getUserByExternalSubject(input.externalSubject);
@@ -256,7 +253,7 @@ export class OrganizationRepository {
    *   createdAt?: Date | string,
    * }} input
    */
-  async addMembership(input) {
+  async addMembership(input: { orgId: string, userId: string, role: string, status: string, createdAt?: Date | string, }) {
     const orgId = assertUlid(input.orgId, 'orgId');
     const userId = assertUlid(input.userId, 'userId');
     await this.db('organization_memberships').insert({
@@ -278,7 +275,7 @@ export class OrganizationRepository {
    *   createdAt?: Date | string,
    * }} input
    */
-  async addMembershipIfAbsent(input) {
+  async addMembershipIfAbsent(input: { orgId: string, userId: string, role: string, status: string, createdAt?: Date | string, }) {
     assertUlid(input.orgId, 'orgId');
     assertUlid(input.userId, 'userId');
     const existing = await this.getMembership(input);
@@ -300,9 +297,9 @@ export class OrganizationRepository {
 
   /**
    * Membership lookup always scoped to org + user (ownership).
-   * @param {{ orgId: string, userId: string }} scope
+   * @param scope
    */
-  async getMembership(scope) {
+  async getMembership(scope: { orgId: string, userId: string }) {
     const s = requireOwnerScope(scope);
     const owner = {
       orgId: assertUlid(s.orgId, 'orgId'),
@@ -322,10 +319,7 @@ export class OrganizationRepository {
     };
   }
 
-  /**
-   * @param {{ orgId: string, userId: string }} scope
-   */
-  async requireMembership(scope) {
+  async requireMembership(scope: { orgId: string, userId: string }) {
     const m = await this.getMembership(scope);
     if (!m || m.status !== 'active') {
       throw new NotFoundError('Membership not found', {

@@ -4,6 +4,9 @@ import { applyOwnerScope, requireOwnerScope } from '../ownership.js';
 import { formatDateTime, parseJsonColumn } from '../row-mappers.js';
 import { assertUlid } from '../../../domain/shared/ulid.js';
 
+/** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
+type Loose = any;
+
 /** @param {Record<string, unknown>} row */
 export function mapProcessExecution(row) {
   const commandJson = parseJsonColumn(row.command_json) || {};
@@ -27,7 +30,13 @@ export function mapProcessExecution(row) {
   };
 }
 
+/** Owner-scoped 查询的租户边界。所有仓储方法都按它定位归属。 */
+type OwnerScope = { orgId: string; userId: string };
+
 export class ProcessExecutionRepository {
+  // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
+  db: Loose;
+
   /** @param {import('knex').Knex | import('knex').Knex.Transaction} db */
   constructor(db) {
     if (!db) throw new Error('ProcessExecutionRepository requires a knex executor');
@@ -44,7 +53,15 @@ export class ProcessExecutionRepository {
     return row ? mapProcessExecution(row) : null;
   }
 
-  async list(scope, filters = {}) {
+  async list(
+    scope: OwnerScope,
+    filters: {
+      limit?: number;
+      runId?: string;
+      sandboxSessionId?: string;
+      status?: string;
+    } = {},
+  ) {
     const owner = requireOwnerScope(scope);
     const limit = Math.min(Math.max(Number(filters.limit) || 100, 1), 500);
     let query = applyOwnerScope(this.db('process_executions'), owner);

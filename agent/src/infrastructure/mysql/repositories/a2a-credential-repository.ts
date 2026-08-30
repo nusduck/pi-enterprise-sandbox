@@ -18,6 +18,9 @@ import {
   DEFAULT_A2A_SCOPES,
 } from '../../../domain/a2a/scopes.js';
 
+/** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
+type Loose = any;
+
 export const A2A_CREDENTIAL_STATUS = Object.freeze({
   ACTIVE: 'active',
   ROTATED: 'rotated',
@@ -28,10 +31,7 @@ export const KEY_ID_LEN = 16;
 export const SECRET_BYTES = 32;
 export const TOKEN_PREFIX = 'a2a';
 
-/**
- * @param {Record<string, unknown>} row
- */
-export function mapA2aCredential(row) {
+export function mapA2aCredential(row: Record<string, unknown>) {
   return {
     credentialId: String(row.credential_id),
     orgId: String(row.org_id),
@@ -52,10 +52,10 @@ export function mapA2aCredential(row) {
 }
 
 /**
- * @param {unknown} raw
+ * @param raw
  * @returns {string[]}
  */
-function normalizeScopesArray(raw) {
+function normalizeScopesArray(raw: unknown) {
   const parsed = typeof raw === 'string' ? parseJsonColumn(raw) : raw;
   if (Array.isArray(parsed)) return normalizeScopes(parsed);
   if (parsed && typeof parsed === 'object' && Array.isArray(parsed.scopes)) {
@@ -66,10 +66,10 @@ function normalizeScopesArray(raw) {
 
 /**
  * Hash a full bearer token (or secret material) to SHA-256 hex.
- * @param {string} token
+ * @param token
  * @returns {string}
  */
-export function hashA2aToken(token) {
+export function hashA2aToken(token: string) {
   if (typeof token !== 'string' || !token) {
     throw new Error('token is required for hashing');
   }
@@ -78,11 +78,11 @@ export function hashA2aToken(token) {
 
 /**
  * Constant-time compare of two hex digests (same length required).
- * @param {string} a
- * @param {string} b
+ * @param a
+ * @param b
  * @returns {boolean}
  */
-export function constantTimeEqualHex(a, b) {
+export function constantTimeEqualHex(a: string, b: string) {
   if (typeof a !== 'string' || typeof b !== 'string') return false;
   if (a.length !== b.length) return false;
   if (!/^[0-9a-f]+$/i.test(a) || !/^[0-9a-f]+$/i.test(b)) return false;
@@ -95,38 +95,38 @@ export function constantTimeEqualHex(a, b) {
 
 /**
  * Mint a public key id (hex).
- * @param {number} [bytes]
+ * @param [bytes]
  * @returns {string}
  */
-export function mintKeyId(bytes = KEY_ID_LEN / 2) {
+export function mintKeyId(bytes: number = KEY_ID_LEN / 2) {
   return randomBytes(bytes).toString('hex');
 }
 
 /**
  * Mint a high-entropy secret (hex).
- * @param {number} [bytes]
+ * @param [bytes]
  * @returns {string}
  */
-export function mintSecret(bytes = SECRET_BYTES) {
+export function mintSecret(bytes: number = SECRET_BYTES) {
   return randomBytes(bytes).toString('hex');
 }
 
 /**
  * Wire format: a2a_<keyId>_<secret>
- * @param {string} keyId
- * @param {string} secret
+ * @param keyId
+ * @param secret
  * @returns {string}
  */
-export function formatBearerToken(keyId, secret) {
+export function formatBearerToken(keyId: string, secret: string) {
   return `${TOKEN_PREFIX}_${keyId}_${secret}`;
 }
 
 /**
  * Parse bearer token into keyId + raw token for hash verification.
- * @param {string} token
+ * @param token
  * @returns {{ keyId: string, token: string } | null}
  */
-export function parseBearerToken(token) {
+export function parseBearerToken(token: string) {
   if (typeof token !== 'string' || !token.trim()) return null;
   const raw = token.trim();
   // Accept "Bearer …" already stripped by caller; still strip if present.
@@ -138,30 +138,27 @@ export function parseBearerToken(token) {
 
 /**
  * Verify plaintext token against stored hash (constant-time).
- * @param {string} token
- * @param {string} secretHash
+ * @param token
+ * @param secretHash
  * @returns {boolean}
  */
-export function verifyTokenHash(token, secretHash) {
+export function verifyTokenHash(token: string, secretHash: string) {
   const computed = hashA2aToken(token);
   return constantTimeEqualHex(computed, String(secretHash).toLowerCase());
 }
 
 export class A2aCredentialRepository {
-  /**
-   * @param {import('knex').Knex | import('knex').Knex.Transaction} db
-   * @param {{ now?: () => Date }} [opts]
-   */
-  constructor(db, opts = {}) {
+  // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
+  db: Loose;
+  now: Loose;
+
+  constructor(db: import('knex').Knex | import('knex').Knex.Transaction, opts: { now?: () => Date } = {}) {
     if (!db) throw new Error('A2aCredentialRepository requires a knex executor');
     this.db = db;
     this.now = opts.now ?? (() => new Date());
   }
 
-  /**
-   * @param {string} credentialId
-   */
-  async getById(credentialId) {
+  async getById(credentialId: string) {
     const id = assertUlid(credentialId, 'credentialId');
     const row = await this.db('a2a_api_credentials')
       .where({ credential_id: id })
@@ -171,9 +168,9 @@ export class A2aCredentialRepository {
 
   /**
    * Lookup by public key_id (not owner-scoped — secret still required).
-   * @param {string} keyId
+   * @param keyId
    */
-  async getByKeyId(keyId) {
+  async getByKeyId(keyId: string) {
     if (typeof keyId !== 'string' || !/^[0-9a-f]{16}$/i.test(keyId.trim())) {
       return null;
     }
@@ -186,10 +183,10 @@ export class A2aCredentialRepository {
   /**
    * Admin-only caller contract: organization scope is mandatory.
    *
-   * @param {string} orgId
-   * @param {{ agentId?: string | null, limit?: number }} [opts]
+   * @param orgId
+   * @param [opts]
    */
-  async listByOrg(orgId, opts = {}) {
+  async listByOrg(orgId: string, opts: { agentId?: string | null, limit?: number } = {}) {
     const oid = assertUlid(orgId, 'orgId');
     const limit = Math.min(Math.max(Number(opts.limit) || 50, 1), 100);
     let query = this.db('a2a_api_credentials')
@@ -219,7 +216,7 @@ export class A2aCredentialRepository {
    *   rotatedFromId?: string | null,
    * }} input
    */
-  async insert(input) {
+  async insert(input: { credentialId: string, orgId: string, agentId: string, serviceUserId: string, clientId: string, keyId: string, secretHash: string, scopes?: string[], status?: string, expiresAt?: Date | string | null, rotatedFromId?: string | null, }) {
     const credentialId = assertUlid(input.credentialId, 'credentialId');
     const orgId = assertUlid(input.orgId, 'orgId');
     const agentId = assertUlid(input.agentId, 'agentId');
@@ -264,8 +261,8 @@ export class A2aCredentialRepository {
         updated_at: now,
       });
     } catch (err) {
-      const code = /** @type {{ code?: string, errno?: number }} */ (err)?.code;
-      const errno = /** @type {{ errno?: number }} */ (err)?.errno;
+      const code = (err as { code?: string, errno?: number })?.code;
+      const errno = (err as { errno?: number })?.errno;
       if (code === 'ER_DUP_ENTRY' || errno === 1062) {
         throw new ConflictError('A2A credential key_id already exists');
       }
@@ -278,11 +275,11 @@ export class A2aCredentialRepository {
   /**
    * Mark credential status (rotation / revoke). CAS on expected status.
    *
-   * @param {string} credentialId
-   * @param {string} nextStatus
-   * @param {{ expectedStatus?: string | string[] }} [opts]
+   * @param credentialId
+   * @param nextStatus
+   * @param [opts]
    */
-  async updateStatus(credentialId, nextStatus, opts = {}) {
+  async updateStatus(credentialId: string, nextStatus: string, opts: { expectedStatus?: string | string[] } = {}) {
     const id = assertUlid(credentialId, 'credentialId');
     const now = toMysqlDateTime(this.now());
     let q = this.db('a2a_api_credentials')
@@ -304,10 +301,7 @@ export class A2aCredentialRepository {
     return this.getById(id);
   }
 
-  /**
-   * @param {string} credentialId
-   */
-  async touchLastUsed(credentialId) {
+  async touchLastUsed(credentialId: string) {
     const id = assertUlid(credentialId, 'credentialId');
     const now = toMysqlDateTime(this.now());
     await this.db('a2a_api_credentials')

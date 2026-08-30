@@ -23,6 +23,9 @@ import {
 import { InvalidRunStatusError } from '../../../domain/run/errors.js';
 import { normalizeW3cTracestate } from '../../sandbox/trace-context.js';
 
+/** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
+type Loose = any;
+
 /** Default / max page size for list helpers. */
 export const RUN_LIST_DEFAULT_LIMIT = 50;
 export const RUN_LIST_MAX_LIMIT = 200;
@@ -37,11 +40,11 @@ export const TRACE_ID_PATTERN = /^[0-9a-fA-F]{32}$/;
 export const TRACE_ID_ALL_ZERO = '0'.repeat(32);
 
 /**
- * @param {unknown} limit
- * @param {number} [fallback]
+ * @param limit
+ * @param [fallback]
  * @returns {number}
  */
-export function resolveRunListLimit(limit, fallback = RUN_LIST_DEFAULT_LIMIT) {
+export function resolveRunListLimit(limit: unknown, fallback: number = RUN_LIST_DEFAULT_LIMIT) {
   if (limit == null) return fallback;
   const n = Number(limit);
   if (!Number.isInteger(n) || n < 1) {
@@ -58,26 +61,26 @@ export function resolveRunListLimit(limit, fallback = RUN_LIST_DEFAULT_LIMIT) {
 }
 
 /**
- * @param {unknown} status
- * @param {string} [field]
+ * @param status
+ * @param [field]
  * @returns {string}
  */
-export function assertRunStatus(status, field = 'status') {
+export function assertRunStatus(status: unknown, field: string = 'status') {
   if (!isRunStatus(status)) {
     throw new InvalidRunStatusError(
       status,
       `Invalid ${field}: expected plan §10 Run status`,
     );
   }
-  return /** @type {string} */ (status);
+  return (status as string);
 }
 
 /**
  * W3C trace-id: 32 hex, not all-zero; returns lowercase canonical form.
- * @param {unknown} traceId
+ * @param traceId
  * @returns {string}
  */
-export function assertTraceId(traceId) {
+export function assertTraceId(traceId: unknown) {
   if (typeof traceId !== 'string' || !TRACE_ID_PATTERN.test(traceId)) {
     throw new Error('traceId must be 32 hex characters (CHAR(32))');
   }
@@ -120,10 +123,10 @@ export function assertTraceParentSpanId(spanId) {
 
 /**
  * Normalize expected status(es) for conditional update.
- * @param {string | string[]} expected
+ * @param expected
  * @returns {string[]}
  */
-export function normalizeExpectedStatuses(expected) {
+export function normalizeExpectedStatuses(expected: string | string[]) {
   const list = Array.isArray(expected) ? expected : [expected];
   const out = [];
   for (const s of list) {
@@ -138,10 +141,7 @@ export function normalizeExpectedStatuses(expected) {
   return out;
 }
 
-/**
- * @param {{ orgId: string, userId: string }} scope
- */
-function requireOwnerUlids(scope) {
+function requireOwnerUlids(scope: { orgId: string, userId: string }) {
   const s = requireOwnerScope(scope);
   return {
     orgId: assertUlid(s.orgId, 'orgId'),
@@ -151,9 +151,9 @@ function requireOwnerUlids(scope) {
 
 /**
  * Extend core mapRun with PR-04 T2 cancel intent columns (additive).
- * @param {Record<string, unknown>} row
+ * @param row
  */
-export function mapRunRow(row) {
+export function mapRunRow(row: Record<string, unknown>) {
   const base = mapRun(row);
   return {
     ...base,
@@ -169,10 +169,10 @@ export function mapRunRow(row) {
 
 /**
  * Sanitize cancel reason: strip controls, bound length, never store secrets patterns.
- * @param {unknown} reason
+ * @param reason
  * @returns {string | null}
  */
-export function sanitizeCancelReason(reason) {
+export function sanitizeCancelReason(reason: unknown) {
   if (reason == null) return null;
   if (typeof reason !== 'string') {
     throw new Error('cancel reason must be a string when provided');
@@ -204,10 +204,10 @@ export const SUBAGENT_CHILD_LIST_MAX = 50;
 export const SUBAGENT_MAX_WALK_DEPTH = 4;
 
 /**
- * @param {unknown} depth
+ * @param depth
  * @returns {number}
  */
-export function assertSubagentDepth(depth) {
+export function assertSubagentDepth(depth: unknown) {
   if (depth == null || depth === '') return 0;
   const n = Number(depth);
   if (!Number.isSafeInteger(n) || n < 0) {
@@ -218,10 +218,10 @@ export function assertSubagentDepth(depth) {
 
 /**
  * Model-authored label: strip controls, collapse whitespace, bound length.
- * @param {unknown} label
+ * @param label
  * @returns {string | null}
  */
-export function sanitizeSubagentLabel(label) {
+export function sanitizeSubagentLabel(label: unknown) {
   if (label == null || label === '') return null;
   if (typeof label !== 'string') {
     throw new Error('subagentLabel must be a string when provided');
@@ -234,12 +234,15 @@ export function sanitizeSubagentLabel(label) {
   return s.slice(0, SUBAGENT_LABEL_MAX_LEN);
 }
 
+/** Owner-scoped 查询的租户边界。所有仓储方法都按它定位归属。 */
+type OwnerScope = { orgId: string; userId: string };
+
 export class RunRepository {
-  /**
-   * @param {import('knex').Knex | import('knex').Knex.Transaction} db
-   * @param {{ now?: () => Date }} [opts]
-   */
-  constructor(db, opts = {}) {
+  // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
+  db: Loose;
+  now: Loose;
+
+  constructor(db: import('knex').Knex | import('knex').Knex.Transaction, opts: { now?: () => Date } = {}) {
     if (!db) throw new Error('RunRepository requires a knex executor');
     this.db = db;
     this.now = opts.now ?? (() => new Date());
@@ -270,7 +273,7 @@ export class RunRepository {
    *   updatedAt?: Date | string,
    * }} input
    */
-  async create(input) {
+  async create(input: { runId: string, orgId: string, userId: string, conversationId: string, agentSessionId: string, agentVersionId: string, triggeringMessageId: string, source: string, parentRunId?: string | null, subagentDepth?: number, subagentLabel?: string | null, status: string, statusReason?: string | null, queueName: string, attempt?: number, traceId: string, nextEventSequence?: number, startedAt?: Date | string | null, completedAt?: Date | string | null, createdAt?: Date | string, updatedAt?: Date | string, }) {
     const scope = requireOwnerUlids(input);
     const runId = assertUlid(input.runId, 'runId');
     const conversationId = assertUlid(input.conversationId, 'conversationId');
@@ -334,12 +337,7 @@ export class RunRepository {
     return this.getById(runId, scope);
   }
 
-  /**
-   * @param {string} runId
-   * @param {{ orgId: string, userId: string }} scope
-   * @param {{ forUpdate?: boolean }} [opts]
-   */
-  async getById(runId, scope, opts = {}) {
+  async getById(runId: string, scope: { orgId: string, userId: string }, opts: { forUpdate?: boolean } = {}) {
     const s = requireOwnerUlids(scope);
     const id = assertUlid(runId, 'runId');
     let q = applyOwnerScope(this.db('runs').where({ run_id: id }), s);
@@ -348,11 +346,7 @@ export class RunRepository {
     return row ? mapRunRow(row) : null;
   }
 
-  /**
-   * @param {string} runId
-   * @param {{ orgId: string, userId: string }} scope
-   */
-  async requireById(runId, scope) {
+  async requireById(runId: string, scope: { orgId: string, userId: string }) {
     const row = await this.getById(runId, scope);
     if (!row) {
       throw new NotFoundError('Run not found', {
@@ -372,11 +366,11 @@ export class RunRepository {
    * or foreign ids simply do not come back rather than erroring, so one
    * finished child cannot make a whole poll fail.
    *
-   * @param {string} parentRunId
-   * @param {{ orgId: string, userId: string }} scope
-   * @param {{ childRunIds?: readonly string[] | null, limit?: number }} [opts]
+   * @param parentRunId
+   * @param scope
+   * @param [opts]
    */
-  async listChildren(parentRunId, scope, opts = {}) {
+  async listChildren(parentRunId: string, scope: { orgId: string, userId: string }, opts: { childRunIds?: readonly string[] | null, limit?: number } = {}) {
     const s = requireOwnerUlids(scope);
     const parentId = assertUlid(parentRunId, 'parentRunId');
     const limit = Math.min(
@@ -408,11 +402,11 @@ export class RunRepository {
    * but the visited set makes the walk terminate anyway rather than trusting
    * that invariant with an unbounded loop.
    *
-   * @param {string} rootRunId
-   * @param {{ orgId: string, userId: string }} scope
-   * @param {{ maxDepth?: number, onlyNonTerminal?: boolean }} [opts]
+   * @param rootRunId
+   * @param scope
+   * @param [opts]
    */
-  async listDescendants(rootRunId, scope, opts = {}) {
+  async listDescendants(rootRunId: string, scope: { orgId: string, userId: string }, opts: { maxDepth?: number, onlyNonTerminal?: boolean } = {}) {
     const s = requireOwnerUlids(scope);
     const rootId = assertUlid(rootRunId, 'rootRunId');
     const maxDepth = Math.min(
@@ -420,10 +414,8 @@ export class RunRepository {
       SUBAGENT_MAX_WALK_DEPTH,
     );
     const onlyNonTerminal = opts.onlyNonTerminal !== false;
-    /** @type {Set<string>} */
-    const visited = new Set([rootId]);
-    /** @type {object[]} */
-    const found = [];
+    const visited: Set<string> = new Set([rootId]);
+    const found: Record<string, any>[] = [];
     let frontier = [rootId];
 
     for (let depth = 0; depth < maxDepth && frontier.length > 0; depth += 1) {
@@ -454,11 +446,11 @@ export class RunRepository {
    * Never crosses org boundaries. After load, callers build full owner scope
    * from the returned run.userId.
    *
-   * @param {string} runId
-   * @param {string} orgId
-   * @param {{ forUpdate?: boolean }} [opts]
+   * @param runId
+   * @param orgId
+   * @param [opts]
    */
-  async getByIdForOrg(runId, orgId, opts = {}) {
+  async getByIdForOrg(runId: string, orgId: string, opts: { forUpdate?: boolean } = {}) {
     const id = assertUlid(runId, 'runId');
     const oid = assertUlid(orgId, 'orgId');
     let q = this.db('runs').where({ run_id: id, org_id: oid });
@@ -467,12 +459,7 @@ export class RunRepository {
     return row ? mapRunRow(row) : null;
   }
 
-  /**
-   * @param {string} runId
-   * @param {string} orgId
-   * @param {{ forUpdate?: boolean }} [opts]
-   */
-  async requireByIdForOrg(runId, orgId, opts = {}) {
+  async requireByIdForOrg(runId: string, orgId: string, opts: { forUpdate?: boolean } = {}) {
     const row = await this.getByIdForOrg(runId, orgId, opts);
     if (!row) {
       throw new NotFoundError('Run not found', {
@@ -499,7 +486,7 @@ export class RunRepository {
    *   orgId?: string | null,
    * }} [opts]
    */
-  async listNonTerminalForSystemWorker(opts = {}) {
+  async listNonTerminalForSystemWorker(opts: { statuses?: string[], limit?: number, afterRunId?: string | null, orgId?: string | null, } = {}) {
     const limit = resolveRunListLimit(opts.limit, RUN_LIST_DEFAULT_LIMIT);
     const statuses =
       opts.statuses && opts.statuses.length
@@ -522,11 +509,7 @@ export class RunRepository {
     return rows.map(mapRunRow);
   }
 
-  /**
-   * @param {{ orgId: string, userId: string }} scope
-   * @param {{ conversationId?: string, status?: string, limit?: number }} [opts]
-   */
-  async list(scope, opts = {}) {
+  async list(scope: { orgId: string, userId: string }, opts: { conversationId?: string, status?: string, limit?: number } = {}) {
     const s = requireOwnerUlids(scope);
     const limit = resolveRunListLimit(opts.limit, RUN_LIST_DEFAULT_LIMIT);
     let q = applyOwnerScope(this.db('runs'), s).orderBy('created_at', 'desc');
@@ -542,7 +525,11 @@ export class RunRepository {
   }
 
   /** Owner-scoped lookup used by the durable Trace query endpoint. */
-  async listByTraceId(traceId, scope, opts = {}) {
+  async listByTraceId(
+    traceId: string,
+    scope: OwnerScope,
+    opts: { limit?: number } = {},
+  ) {
     const s = requireOwnerUlids(scope);
     const trace = assertTraceId(traceId);
     const limit = resolveRunListLimit(opts.limit, RUN_LIST_DEFAULT_LIMIT);
@@ -559,7 +546,7 @@ export class RunRepository {
    * List non-terminal runs for an owner (worker recovery / health).
    * Status filter uses plan §10 non-terminal set — not an internal transition table.
    *
-   * @param {{ orgId: string, userId: string }} scope
+   * @param scope
    * @param {{
    *   conversationId?: string,
    *   agentSessionId?: string,
@@ -567,7 +554,7 @@ export class RunRepository {
    *   statuses?: string[],
    * }} [opts]
    */
-  async listNonTerminal(scope, opts = {}) {
+  async listNonTerminal(scope: { orgId: string, userId: string }, opts: { conversationId?: string, agentSessionId?: string, limit?: number, statuses?: string[], } = {}) {
     const s = requireOwnerUlids(scope);
     const limit = resolveRunListLimit(opts.limit, RUN_LIST_DEFAULT_LIMIT);
     const statuses =
@@ -597,14 +584,14 @@ export class RunRepository {
    * Recoverable = non-terminal (alias for workers scanning incomplete work).
    * Explicitly excludes plan §10 terminal set.
    *
-   * @param {{ orgId: string, userId: string }} scope
+   * @param scope
    * @param {{
    *   conversationId?: string,
    *   agentSessionId?: string,
    *   limit?: number,
    * }} [opts]
    */
-  async listRecoverable(scope, opts = {}) {
+  async listRecoverable(scope: { orgId: string, userId: string }, opts: { conversationId?: string, agentSessionId?: string, limit?: number, } = {}) {
     return this.listNonTerminal(scope, {
       ...opts,
       statuses: [...NON_TERMINAL_RUN_STATUSES],
@@ -615,8 +602,8 @@ export class RunRepository {
    * Unconditional status patch (preserved API). Prefer
    * {@link updateStatusIf} for RunStateMachine-controlled transitions.
    *
-   * @param {string} runId
-   * @param {{ orgId: string, userId: string }} scope
+   * @param runId
+   * @param scope
    * @param {{
    *   status?: string,
    *   statusReason?: string | null,
@@ -625,11 +612,10 @@ export class RunRepository {
    *   completedAt?: Date | string | null,
    * }} patch
    */
-  async updateStatus(runId, scope, patch) {
+  async updateStatus(runId: string, scope: { orgId: string, userId: string }, patch: { status?: string, statusReason?: string | null, attempt?: number, startedAt?: Date | string | null, completedAt?: Date | string | null, }) {
     const s = requireOwnerUlids(scope);
     const id = assertUlid(runId, 'runId');
-    /** @type {Record<string, unknown>} */
-    const update = { updated_at: toMysqlDateTime(this.now()) };
+    const update: Record<string, unknown> = { updated_at: toMysqlDateTime(this.now()) };
     if (patch.status !== undefined) update.status = assertRunStatus(patch.status);
     if (patch.statusReason !== undefined) update.status_reason = patch.statusReason;
     if (patch.attempt !== undefined) update.attempt = patch.attempt;
@@ -662,8 +648,8 @@ export class RunRepository {
    * Does not embed a transition table — caller supplies the expected source
    * statuses and the already-validated target status.
    *
-   * @param {string} runId
-   * @param {{ orgId: string, userId: string }} scope
+   * @param runId
+   * @param scope
    * @param {{
    *   expectedStatus?: string,
    *   expectedStatuses?: string[],
@@ -674,7 +660,7 @@ export class RunRepository {
    *   completedAt?: Date | string | null,
    * }} patch
    */
-  async updateStatusIf(runId, scope, patch) {
+  async updateStatusIf(runId: string, scope: { orgId: string, userId: string }, patch: { expectedStatus?: string, expectedStatuses?: string[], status: string, statusReason?: string | null, attempt?: number, startedAt?: Date | string | null, completedAt?: Date | string | null, }) {
     const s = requireOwnerUlids(scope);
     const id = assertUlid(runId, 'runId');
     if (typeof patch.status !== 'string' || !patch.status.trim()) {
@@ -685,8 +671,7 @@ export class RunRepository {
       patch.expectedStatuses ?? patch.expectedStatus ?? [],
     );
 
-    /** @type {Record<string, unknown>} */
-    const update = {
+    const update: Record<string, unknown> = {
       status: target,
       updated_at: toMysqlDateTime(this.now()),
     };
@@ -729,15 +714,15 @@ export class RunRepository {
    * Persist durable cancel intent (first-writer wins). Does not change status.
    * Status transitions to CANCELLING remain the sole RunStateMachine's job.
    *
-   * @param {string} runId
-   * @param {{ orgId: string, userId: string }} scope
+   * @param runId
+   * @param scope
    * @param {{
    *   reason?: string | null,
    *   requestedBy: string,
    *   requestedAt?: Date | string,
    * }} intent
    */
-  async setCancelIntent(runId, scope, intent) {
+  async setCancelIntent(runId: string, scope: { orgId: string, userId: string }, intent: { reason?: string | null, requestedBy: string, requestedAt?: Date | string, }) {
     const s = requireOwnerUlids(scope);
     const id = assertUlid(runId, 'runId');
     const requestedBy = assertUlid(intent.requestedBy, 'requestedBy');

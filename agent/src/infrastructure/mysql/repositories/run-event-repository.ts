@@ -19,6 +19,9 @@ import {
   SequenceAllocationError,
 } from '../errors.js';
 
+/** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
+type Loose = any;
+
 function isTraceProjectionConvergeError(err) {
   const message = String(err?.message ?? '');
   return (
@@ -29,10 +32,10 @@ function isTraceProjectionConvergeError(err) {
 
 /**
  * Parse LAST_INSERT_ID() from mysql2/knex raw result shapes.
- * @param {unknown} rawResult
+ * @param rawResult
  * @returns {number}
  */
-export function parseLastInsertId(rawResult) {
+export function parseLastInsertId(rawResult: unknown) {
   // knex mysql2: [rows, fields] or rows depending on version
   const rows = Array.isArray(rawResult)
     ? Array.isArray(rawResult[0])
@@ -58,11 +61,11 @@ export function parseLastInsertId(rawResult) {
 }
 
 export class RunEventRepository {
-  /**
-   * @param {import('knex').Knex | import('knex').Knex.Transaction} db
-   * @param {{ traceSpans?: { projectRunEvent: Function, advanceRunProjectionWatermark?: Function } | null }} [opts]
-   */
-  constructor(db, opts = {}) {
+  // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
+  db: Loose;
+  traceSpans: Loose;
+
+  constructor(db: import('knex').Knex | import('knex').Knex.Transaction, opts: { traceSpans?: { projectRunEvent: Function, advanceRunProjectionWatermark?: Function } | null } = {}) {
     if (!db) throw new Error('RunEventRepository requires a knex executor');
     this.db = db;
     this.traceSpans = opts.traceSpans ?? null;
@@ -84,7 +87,7 @@ export class RunEventRepository {
    *   createdAt?: Date | string,
    * }} input
    */
-  async append(input) {
+  async append(input: { eventId: string, runId: string, orgId: string, userId: string, eventType: string, eventVersion?: number, payloadJson?: Record<string, unknown>, traceId: string, spanId?: string | null, createdAt?: Date | string, }) {
     const scope = requireOwnerScope(input);
 
     const work = async (trx) => {
@@ -140,7 +143,7 @@ export class RunEventRepository {
           created_at: toMysqlDateTime(input.createdAt || new Date()),
         });
       } catch (err) {
-        const code = /** @type {{ code?: string }} */ (err)?.code;
+        const code = (err as { code?: string })?.code;
         if (code === 'ER_DUP_ENTRY') {
           throw new ConflictError('Run event id or sequence conflict', {
             resource: 'run_events',
@@ -157,9 +160,7 @@ export class RunEventRepository {
       // event (or vice versa). Existing callers may omit the optional projector.
       if (this.traceSpans?.projectRunEvent) {
         const projector =
-          // @ts-expect-error 遗留JS占位类型object未展开，访问forExecutor需收窄，存活代码先用expect-error收敛 —— TS2339: Property 'forExecutor' does not exist on type '{ projectRunE
           typeof this.traceSpans.forExecutor === 'function'
-            // @ts-expect-error 遗留JS占位类型object未展开，访问forExecutor需收窄，存活代码先用expect-error收敛 —— TS2339: Property 'forExecutor' does not exist on type '{ projectRunE
             ? this.traceSpans.forExecutor(trx)
             : this.traceSpans;
         try {
@@ -192,11 +193,11 @@ export class RunEventRepository {
   /**
    * List events for an owned run.
    *
-   * @param {string} runId
-   * @param {{ orgId: string, userId: string }} scope
-   * @param {{ afterSequence?: number, limit?: number }} [opts]
+   * @param runId
+   * @param scope
+   * @param [opts]
    */
-  async listByRun(runId, scope, opts = {}) {
+  async listByRun(runId: string, scope: { orgId: string, userId: string }, opts: { afterSequence?: number, limit?: number } = {}) {
     const s = requireOwnerScope(scope);
     const run = await applyOwnerScope(
       this.db('runs').where({ run_id: runId }),
@@ -219,11 +220,7 @@ export class RunEventRepository {
     return rows.map(mapRunEvent);
   }
 
-  /**
-   * @param {string} eventId
-   * @param {{ orgId: string, userId: string }} scope
-   */
-  async getById(eventId, scope) {
+  async getById(eventId: string, scope: { orgId: string, userId: string }) {
     const s = requireOwnerScope(scope);
     const row = await this.db('run_events as e')
       .join('runs as r', 'r.run_id', 'e.run_id')

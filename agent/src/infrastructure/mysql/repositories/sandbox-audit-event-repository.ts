@@ -12,14 +12,14 @@ import { ConflictError, NotFoundError } from '../errors.js';
 import { assertUlid } from '../../../domain/shared/ulid.js';
 import { redactPayload } from '../../../lib/event-redaction.js';
 
+/** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
+type Loose = any;
+
 const EVENT_TYPE_MAX = 128;
 const MAX_PAYLOAD_BYTES = 64 * 1024;
 const TRACE_ID_RE = /^[0-9a-f]{32}$/i;
 
-/**
- * @param {unknown} payload
- */
-function boundPayload(payload) {
+function boundPayload(payload: unknown) {
   if (payload == null) return null;
   const redacted = redactPayload(payload);
   const raw = JSON.stringify(redacted ?? null);
@@ -31,10 +31,7 @@ function boundPayload(payload) {
   return raw;
 }
 
-/**
- * @param {string} eventType
- */
-function assertEventType(eventType) {
+function assertEventType(eventType: string) {
   if (typeof eventType !== 'string' || !eventType.trim()) {
     throw new Error('eventType is required');
   }
@@ -46,11 +43,11 @@ function assertEventType(eventType) {
 }
 
 export class SandboxAuditEventRepository {
-  /**
-   * @param {import('knex').Knex | import('knex').Knex.Transaction} db
-   * @param {{ now?: () => Date }} [opts]
-   */
-  constructor(db, opts = {}) {
+  // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
+  db: Loose;
+  now: Loose;
+
+  constructor(db: import('knex').Knex | import('knex').Knex.Transaction, opts: { now?: () => Date } = {}) {
     if (!db) {
       throw new Error('SandboxAuditEventRepository requires a knex executor');
     }
@@ -73,7 +70,7 @@ export class SandboxAuditEventRepository {
    *   payloadJson?: unknown,
    * }} input
    */
-  async append(input) {
+  async append(input: { auditId: string, orgId: string, userId: string, eventType: string, sandboxSessionId?: string | null, executionId?: string | null, processId?: string | null, traceId?: string | null, payloadJson?: unknown, }) {
     const scope = requireOwnerScope(input);
     const auditId = assertUlid(input.auditId, 'auditId');
     const eventType = assertEventType(input.eventType);
@@ -113,7 +110,7 @@ export class SandboxAuditEventRepository {
         created_at: toMysqlDateTime(now),
       });
     } catch (err) {
-      const code = /** @type {{ code?: string }} */ (err)?.code;
+      const code = (err as { code?: string })?.code;
       if (code === 'ER_DUP_ENTRY') {
         throw new ConflictError('audit event id conflict', {
           resource: 'sandbox_audit_events',
@@ -136,11 +133,7 @@ export class SandboxAuditEventRepository {
     return mapSandboxAuditEvent(row);
   }
 
-  /**
-   * @param {{ orgId: string, userId: string }} scope
-   * @param {{ eventType?: string, limit?: number, afterCreatedAt?: string }} [opts]
-   */
-  async listByOwner(scope, opts = {}) {
+  async listByOwner(scope: { orgId: string, userId: string }, opts: { eventType?: string, limit?: number, afterCreatedAt?: string } = {}) {
     const s = requireOwnerScope(scope);
     let q = applyOwnerScope(this.db('sandbox_audit_events'), s).orderBy(
       'created_at',

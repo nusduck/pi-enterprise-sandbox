@@ -15,6 +15,9 @@ import { applyOwnerScope, requireOwnerScope } from '../ownership.js';
 import { ConflictError, NotFoundError } from '../errors.js';
 import { mapInteraction, toMysqlDateTime } from '../row-mappers.js';
 
+/** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
+type Loose = any;
+
 const MAX_REQUEST_BYTES = 64 * 1024;
 const MAX_RESPONSE_BYTES = 64 * 1024;
 
@@ -41,10 +44,10 @@ function responseHash(text) {
 }
 
 /**
- * @param {Record<string, unknown>} row
+ * @param row
  * @returns {string}
  */
-function rowStatus(row) {
+function rowStatus(row: Record<string, unknown>) {
   return assertInteractionStatus(row.status);
 }
 
@@ -73,19 +76,26 @@ function assertReplayMatches(existing, expected, requestText) {
   return existing;
 }
 
+/** Owner-scoped 查询的租户边界。所有仓储方法都按它定位归属。 */
+type OwnerScope = { orgId: string; userId: string };
+
 export class InteractionRepository {
-  /**
-   * @param {import('knex').Knex | import('knex').Knex.Transaction} db
-   * @param {{ now?: () => Date }} [opts]
-   */
-  constructor(db, opts = {}) {
+  // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
+  db: Loose;
+  now: Loose;
+
+  constructor(db: import('knex').Knex | import('knex').Knex.Transaction, opts: { now?: () => Date } = {}) {
     if (!db) throw new Error('InteractionRepository requires a knex executor');
     this.db = db;
     this.now = opts.now ?? (() => new Date());
   }
 
   /** @param {string} runId @param {{orgId:string,userId:string}} scope @param {{forUpdate?:boolean}} [opts] */
-  async requireOwnedRun(runId, scope, opts = {}) {
+  async requireOwnedRun(
+    runId: string,
+    scope: OwnerScope,
+    opts: { forUpdate?: boolean } = {},
+  ) {
     const s = requireOwnerScope(scope);
     const id = assertUlid(runId, 'runId');
     let q = applyOwnerScope(this.db('runs').where({ run_id: id }), s);
@@ -100,7 +110,7 @@ export class InteractionRepository {
     return row;
   }
 
-  #ownedQuery(scope, opts = {}) {
+  #ownedQuery(scope: OwnerScope, opts: { forUpdate?: boolean } = {}) {
     const s = requireOwnerScope(scope);
     let q = this.db('run_interactions as i')
       .join('runs as r', 'i.run_id', 'r.run_id')
@@ -129,7 +139,11 @@ export class InteractionRepository {
   }
 
   /** @param {string} runId @param {{orgId:string,userId:string}} scope @param {{forUpdate?:boolean}} [opts] */
-  async listByRunId(runId, scope, opts = {}) {
+  async listByRunId(
+    runId: string,
+    scope: OwnerScope,
+    opts: { forUpdate?: boolean } = {},
+  ) {
     const id = assertUlid(runId, 'runId');
     await this.requireOwnedRun(id, scope, { forUpdate: opts.forUpdate === true });
     const rows = await this.#ownedQuery(scope, opts)
@@ -147,9 +161,9 @@ export class InteractionRepository {
 
   /**
    * Idempotently create one pending interaction for a Pi tool call.
-   * @param {{interactionId:string,orgId:string,userId:string,runId:string,agentSessionId:string,toolExecutionId:string,toolCallId:string,interactionType:string,requestJson:unknown}} input
+   * @param input
    */
-  async getOrCreatePending(input) {
+  async getOrCreatePending(input: {interactionId:string,orgId:string,userId:string,runId:string,agentSessionId:string,toolExecutionId:string,toolCallId:string,interactionType:string,requestJson:unknown}) {
     const scope = requireOwnerScope(input);
     const interactionId = assertUlid(input.interactionId, 'interactionId');
     const runId = assertUlid(input.runId, 'runId');
@@ -259,7 +273,7 @@ export class InteractionRepository {
         resolved_at: null,
       });
     } catch (err) {
-      if (/** @type {{code?:string}} */ (err)?.code === 'ER_DUP_ENTRY') {
+      if ((err as {code?:string})?.code === 'ER_DUP_ENTRY') {
         const adopted = await this.#ownedQuery(scope)
           .andWhere('i.run_id', runId)
           .andWhere('i.tool_call_id', toolCallId)
@@ -297,9 +311,9 @@ export class InteractionRepository {
   /**
    * CAS a pending request to RESOLVED. Repeating the same response is an
    * idempotent no-op; a different response is a conflict.
-   * @param {{interactionId:string,orgId:string,userId:string,responseJson:unknown,respondedBy:string}} input
+   * @param input
    */
-  async resolveIfPending(input) {
+  async resolveIfPending(input: {interactionId:string,orgId:string,userId:string,responseJson:unknown,respondedBy:string}) {
     const scope = requireOwnerScope(input);
     const id = assertUlid(input.interactionId, 'interactionId');
     const respondedBy = assertUlid(input.respondedBy, 'respondedBy');

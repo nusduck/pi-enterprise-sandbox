@@ -28,6 +28,9 @@ import {
   DEFAULT_MAX_JSONL_BYTES,
 } from '../../../application/session-json-codec.js';
 
+/** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
+type Loose = any;
+
 /** Supported snapshot payload format identifiers. */
 export const SNAPSHOT_FORMAT = Object.freeze({
   PI_JSONL_V3: 'pi_jsonl_v3',
@@ -39,10 +42,7 @@ export const SUPPORTED_SNAPSHOT_FORMATS = Object.freeze(
 
 export const DEFAULT_MAX_SNAPSHOT_BYTES = DEFAULT_MAX_JSONL_BYTES;
 
-/**
- * @param {{ orgId: string, userId: string }} scope
- */
-function requireOwnerUlids(scope) {
+function requireOwnerUlids(scope: { orgId: string, userId: string }) {
   const s = requireOwnerScope(scope);
   return {
     orgId: assertUlid(s.orgId, 'orgId'),
@@ -50,11 +50,7 @@ function requireOwnerUlids(scope) {
   };
 }
 
-/**
- * @param {string} format
- * @param {string} [field]
- */
-export function assertSnapshotFormat(format, field = 'snapshotFormat') {
+export function assertSnapshotFormat(format: string, field: string = 'snapshotFormat') {
   // @ts-expect-error 未校验string传入闭合联合，运行时需窄化守卫，存活代码先用expect-error收敛 —— TS2345: Argument of type 'string' is not assignable to parameter of 
   if (typeof format !== 'string' || !SUPPORTED_SNAPSHOT_FORMATS.includes(format)) {
     throw new SessionSnapshotError(
@@ -69,10 +65,10 @@ export function assertSnapshotFormat(format, field = 'snapshotFormat') {
  * Exact equality only for this revision. Future compatibility requires an
  * explicit migrator — never same-major/minor soft matching.
  *
- * @param {string} stored
- * @param {string} runtime
+ * @param stored
+ * @param runtime
  */
-export function assertPiSdkVersionCompatible(stored, runtime) {
+export function assertPiSdkVersionCompatible(stored: string, runtime: string) {
   const a = String(stored || '').trim();
   const b = String(runtime || '').trim();
   if (!a || !b) {
@@ -90,12 +86,12 @@ export function assertPiSdkVersionCompatible(stored, runtime) {
 }
 
 /**
- * @param {unknown} err
+ * @param err
  * @returns {boolean}
  */
-function isDuplicateKeyError(err) {
-  const code = /** @type {{ code?: string, errno?: number }} */ (err)?.code;
-  const errno = /** @type {{ errno?: number }} */ (err)?.errno;
+function isDuplicateKeyError(err: unknown) {
+  const code = (err as { code?: string, errno?: number })?.code;
+  const errno = (err as { errno?: number })?.errno;
   return code === 'ER_DUP_ENTRY' || errno === 1062;
 }
 
@@ -108,15 +104,21 @@ export {
 };
 
 export class AgentSessionSnapshotRepository {
+  // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
+  db: Loose;
+  now: Loose;
+  runtimePiSdkVersion: Loose;
+  maxSnapshotBytes: Loose;
+
   /**
-   * @param {import('knex').Knex | import('knex').Knex.Transaction} db
+   * @param db
    * @param {{
    *   now?: () => Date,
    *   runtimePiSdkVersion?: string,
    *   maxSnapshotBytes?: number,
    * }} [opts]
    */
-  constructor(db, opts = {}) {
+  constructor(db: import('knex').Knex | import('knex').Knex.Transaction, opts: { now?: () => Date, runtimePiSdkVersion?: string, maxSnapshotBytes?: number, } = {}) {
     if (!db) {
       throw new Error('AgentSessionSnapshotRepository requires a knex executor');
     }
@@ -126,13 +128,7 @@ export class AgentSessionSnapshotRepository {
     this.maxSnapshotBytes = opts.maxSnapshotBytes ?? DEFAULT_MAX_SNAPSHOT_BYTES;
   }
 
-  /**
-   * @param {import('knex').Knex | import('knex').Knex.Transaction} db
-   * @param {string} agentSessionId
-   * @param {{ orgId: string, userId: string }} scope
-   * @param {{ forUpdate?: boolean }} [opts]
-   */
-  async #requireOwnedSessionOn(db, agentSessionId, scope, opts = {}) {
+  async #requireOwnedSessionOn(db: import('knex').Knex | import('knex').Knex.Transaction, agentSessionId: string, scope: { orgId: string, userId: string }, opts: { forUpdate?: boolean } = {}) {
     const s = requireOwnerUlids(scope);
     const id = assertUlid(agentSessionId, 'agentSessionId');
     let q = applyOwnerScope(
@@ -183,7 +179,7 @@ export class AgentSessionSnapshotRepository {
    *   createdAt?: Date | string,
    * }} input
    */
-  async appendAndAdvance(input) {
+  async appendAndAdvance(input: { snapshotId: string, agentSessionId: string, orgId: string, userId: string, snapshotVersion: number, expectedPiSessionVersion: number, expectedExecutionFenceToken: number, snapshotFormat?: string, snapshotJson: Record<string, any>, workspacePath?: string | null, piSdkVersion?: string, checksum?: string, createdAt?: Date | string, }) {
     const run = async (trx) => this.#appendAndAdvanceOn(trx, input);
 
     if (this.db.isTransaction === true) {
@@ -197,11 +193,10 @@ export class AgentSessionSnapshotRepository {
     return this.db.transaction(run);
   }
 
-  /**
-   * @param {import('knex').Knex.Transaction | import('knex').Knex} trx
-   * @param {object} input
-   */
-  async #appendAndAdvanceOn(trx, input) {
+  async #appendAndAdvanceOn(
+    trx: import('knex').Knex.Transaction | import('knex').Knex,
+    input: Record<string, any> & { orgId: string; userId: string },
+  ) {
     const scope = requireOwnerUlids(input);
     const snapshotId = assertUlid(input.snapshotId, 'snapshotId');
     const session = await this.#requireOwnedSessionOn(
@@ -339,11 +334,7 @@ export class AgentSessionSnapshotRepository {
     return mapAgentSessionSnapshot(row);
   }
 
-  /**
-   * @param {string} snapshotId
-   * @param {{ orgId: string, userId: string }} scope
-   */
-  async getById(snapshotId, scope) {
+  async getById(snapshotId: string, scope: { orgId: string, userId: string }) {
     const s = requireOwnerUlids(scope);
     const id = assertUlid(snapshotId, 'snapshotId');
     const row = await this.db('agent_session_snapshots')
@@ -359,11 +350,7 @@ export class AgentSessionSnapshotRepository {
     return mapAgentSessionSnapshot(row);
   }
 
-  /**
-   * @param {string} snapshotId
-   * @param {{ orgId: string, userId: string }} scope
-   */
-  async requireById(snapshotId, scope) {
+  async requireById(snapshotId: string, scope: { orgId: string, userId: string }) {
     const row = await this.getById(snapshotId, scope);
     if (!row) {
       throw new NotFoundError('Agent session snapshot not found', {
@@ -382,11 +369,11 @@ export class AgentSessionSnapshotRepository {
    * - pointer > 0 and row missing / checksum / format / SDK invalid → typed recovery error
    * - never silently picks another version (stray higher rows are ignored)
    *
-   * @param {string} agentSessionId
-   * @param {{ orgId: string, userId: string }} scope
-   * @param {{ verifyChecksum?: boolean, requireCompatible?: boolean }} [opts]
+   * @param agentSessionId
+   * @param scope
+   * @param [opts]
    */
-  async loadLatest(agentSessionId, scope, opts = {}) {
+  async loadLatest(agentSessionId: string, scope: { orgId: string, userId: string }, opts: { verifyChecksum?: boolean, requireCompatible?: boolean } = {}) {
     const s = requireOwnerUlids(scope);
     const sid = assertUlid(agentSessionId, 'agentSessionId');
     const session = await this.#requireOwnedSessionOn(this.db, sid, s);
@@ -439,12 +426,12 @@ export class AgentSessionSnapshotRepository {
    * Load a specific version under owner scope (explicit; not the current pointer).
    * Missing row returns null. Prefer {@link loadLatest} for recovery of current.
    *
-   * @param {string} agentSessionId
-   * @param {number} snapshotVersion
-   * @param {{ orgId: string, userId: string }} scope
-   * @param {{ verifyChecksum?: boolean, requireCompatible?: boolean }} [opts]
+   * @param agentSessionId
+   * @param snapshotVersion
+   * @param scope
+   * @param [opts]
    */
-  async loadVersion(agentSessionId, snapshotVersion, scope, opts = {}) {
+  async loadVersion(agentSessionId: string, snapshotVersion: number, scope: { orgId: string, userId: string }, opts: { verifyChecksum?: boolean, requireCompatible?: boolean } = {}) {
     const s = requireOwnerUlids(scope);
     const sid = assertUlid(agentSessionId, 'agentSessionId');
     await this.#requireOwnedSessionOn(this.db, sid, s);
@@ -463,13 +450,7 @@ export class AgentSessionSnapshotRepository {
     return this.#mapAndVerify(mapAgentSessionSnapshot(row), sid, version, opts);
   }
 
-  /**
-   * @param {ReturnType<typeof mapAgentSessionSnapshot>} mapped
-   * @param {string} sid
-   * @param {number} expectedVersion
-   * @param {{ verifyChecksum?: boolean, requireCompatible?: boolean }} opts
-   */
-  #mapAndVerify(mapped, sid, expectedVersion, opts) {
+  #mapAndVerify(mapped: ReturnType<typeof mapAgentSessionSnapshot>, sid: string, expectedVersion: number, opts: { verifyChecksum?: boolean, requireCompatible?: boolean }) {
     if (opts.verifyChecksum !== false) {
       if (!verifySnapshotChecksum(mapped)) {
         throw new SessionSnapshotError(

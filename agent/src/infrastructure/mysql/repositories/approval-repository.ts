@@ -27,6 +27,9 @@ import {
 import { redactPayload } from '../../../lib/event-redaction.js';
 import { TOOL_EXECUTION_CHILD_SELECT } from './tool-execution-repository.js';
 
+/** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
+type Loose = any;
+
 const MAX_REQUEST_JSON_BYTES = 64 * 1024;
 
 /** Child-only select for owner-joined approvals (avoid Run column collisions). */
@@ -35,10 +38,7 @@ export const APPROVAL_CHILD_SELECT = Object.freeze(['a.*']);
 export const APPROVAL_LIST_DEFAULT_LIMIT = 50;
 export const APPROVAL_LIST_MAX_LIMIT = 200;
 
-/**
- * @param {unknown} value
- */
-function boundRequestJson(value) {
+function boundRequestJson(value: unknown) {
   const redacted = redactPayload(value ?? {});
   const raw = JSON.stringify(redacted ?? {});
   if (Buffer.byteLength(raw, 'utf8') > MAX_REQUEST_JSON_BYTES) {
@@ -50,22 +50,17 @@ function boundRequestJson(value) {
 }
 
 export class ApprovalRepository {
-  /**
-   * @param {import('knex').Knex | import('knex').Knex.Transaction} db
-   * @param {{ now?: () => Date }} [opts]
-   */
-  constructor(db, opts = {}) {
+  // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
+  db: Loose;
+  now: Loose;
+
+  constructor(db: import('knex').Knex | import('knex').Knex.Transaction, opts: { now?: () => Date } = {}) {
     if (!db) throw new Error('ApprovalRepository requires a knex executor');
     this.db = db;
     this.now = opts.now ?? (() => new Date());
   }
 
-  /**
-   * @param {string} runId
-   * @param {{ orgId: string, userId: string }} scope
-   * @param {{ forUpdate?: boolean }} [opts]
-   */
-  async requireOwnedRun(runId, scope, opts = {}) {
+  async requireOwnedRun(runId: string, scope: { orgId: string, userId: string }, opts: { forUpdate?: boolean } = {}) {
     const s = requireOwnerScope(scope);
     const id = assertUlid(runId, 'runId');
     let q = applyOwnerScope(this.db('runs').where({ run_id: id }), s);
@@ -82,10 +77,10 @@ export class ApprovalRepository {
 
   /**
    * Owner-scoped approvals join runs.
-   * @param {{ orgId: string, userId: string }} scope
-   * @param {{ forUpdate?: boolean }} [opts]
+   * @param scope
+   * @param [opts]
    */
-  #ownedApprovalQuery(scope, opts = {}) {
+  #ownedApprovalQuery(scope: { orgId: string, userId: string }, opts: { forUpdate?: boolean } = {}) {
     const s = requireOwnerScope(scope);
     let q = this.db('approvals as a')
       .join('runs as r', 'a.run_id', 'r.run_id')
@@ -100,10 +95,10 @@ export class ApprovalRepository {
 
   /**
    * Owner-scoped tool_executions join runs (child columns only).
-   * @param {{ orgId: string, userId: string }} scope
-   * @param {{ forUpdate?: boolean }} [opts]
+   * @param scope
+   * @param [opts]
    */
-  #ownedToolQuery(scope, opts = {}) {
+  #ownedToolQuery(scope: { orgId: string, userId: string }, opts: { forUpdate?: boolean } = {}) {
     const s = requireOwnerScope(scope);
     let q = this.db('tool_executions as te')
       .join('runs as r', 'te.run_id', 'r.run_id')
@@ -114,12 +109,7 @@ export class ApprovalRepository {
     return q;
   }
 
-  /**
-   * @param {string} approvalId
-   * @param {{ orgId: string, userId: string }} scope
-   * @param {{ forUpdate?: boolean }} [opts]
-   */
-  async getById(approvalId, scope, opts = {}) {
+  async getById(approvalId: string, scope: { orgId: string, userId: string }, opts: { forUpdate?: boolean } = {}) {
     const s = requireOwnerScope(scope);
     const id = assertUlid(approvalId, 'approvalId');
     // Owner join first — foreign approval never selected alone.
@@ -138,10 +128,10 @@ export class ApprovalRepository {
   /**
    * List approvals visible to an owner. The Run join is intentional: an
    * approval's org_id alone is not sufficient to prove user ownership.
-   * @param {{ orgId: string, userId: string }} scope
-   * @param {{ status?: string, limit?: number }} [opts]
+   * @param scope
+   * @param [opts]
    */
-  async listForOwner(scope, opts = {}) {
+  async listForOwner(scope: { orgId: string, userId: string }, opts: { status?: string, limit?: number } = {}) {
     const s = requireOwnerScope(scope);
     const rawLimit = opts.limit == null ? APPROVAL_LIST_DEFAULT_LIMIT : Number(opts.limit);
     if (!Number.isInteger(rawLimit) || rawLimit < 1 || rawLimit > APPROVAL_LIST_MAX_LIMIT) {
@@ -161,11 +151,11 @@ export class ApprovalRepository {
 
   /**
    * List every approval for one owned Run in lifecycle order.
-   * @param {string} runId
-   * @param {{ orgId: string, userId: string }} scope
-   * @param {{ forUpdate?: boolean }} [opts]
+   * @param runId
+   * @param scope
+   * @param [opts]
    */
-  async listByRunId(runId, scope, opts = {}) {
+  async listByRunId(runId: string, scope: { orgId: string, userId: string }, opts: { forUpdate?: boolean } = {}) {
     const s = requireOwnerScope(scope);
     const id = assertUlid(runId, 'runId');
     await this.requireOwnedRun(id, s, { forUpdate: opts.forUpdate === true });
@@ -175,12 +165,7 @@ export class ApprovalRepository {
     return (rows || []).map(mapApproval);
   }
 
-  /**
-   * @param {string} toolExecutionId
-   * @param {{ orgId: string, userId: string }} scope
-   * @param {{ forUpdate?: boolean }} [opts]
-   */
-  async listByToolExecutionId(toolExecutionId, scope, opts = {}) {
+  async listByToolExecutionId(toolExecutionId: string, scope: { orgId: string, userId: string }, opts: { forUpdate?: boolean } = {}) {
     const s = requireOwnerScope(scope);
     const teId = assertUlid(toolExecutionId, 'toolExecutionId');
 
@@ -215,7 +200,7 @@ export class ApprovalRepository {
    *   expiresAt?: Date | string | null,
    * }} input
    */
-  async getOrCreatePending(input) {
+  async getOrCreatePending(input: { approvalId: string, orgId: string, userId: string, runId: string, toolExecutionId: string, requestedBy: string, requestJson: unknown, expiresAt?: Date | string | null, }) {
     const scope = requireOwnerScope(input);
     const approvalId = assertUlid(input.approvalId, 'approvalId');
     const runId = assertUlid(input.runId, 'runId');
@@ -278,7 +263,7 @@ export class ApprovalRepository {
         decided_at: null,
       });
     } catch (err) {
-      const code = /** @type {{ code?: string }} */ (err)?.code;
+      const code = (err as { code?: string })?.code;
       if (code === 'ER_DUP_ENTRY') {
         const again = await this.getById(approvalId, scope).catch(() => null);
         if (again) return { created: false, approval: again };
@@ -319,7 +304,7 @@ export class ApprovalRepository {
    *   decisionReason?: string | null,
    * }} input
    */
-  async decideIf(input) {
+  async decideIf(input: { approvalId: string, orgId: string, userId: string, fromStatus?: string, toStatus: string, decisionBy: string, decisionReason?: string | null, }) {
     const scope = requireOwnerScope(input);
     const id = assertUlid(input.approvalId, 'approvalId');
     const toStatus = assertApprovalStatus(input.toStatus);
