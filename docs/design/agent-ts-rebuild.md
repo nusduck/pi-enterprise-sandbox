@@ -13,7 +13,14 @@
 > | B 装配收进 runtime | ✅ 完成，清单改为类型化单一事实源 |
 > | G 清 pi-agent-home 死配置 | ✅ 完成 |
 > | **C bootstrap/ + presentation/ 转 TS** | ✅ 完成，两个目录已无 `.js` |
-> | D–F 语言迁移（剩余约 55k 行） | 未开始 |
+> | **D application/ 转 TS**（21,769 行，5 轮） | ✅ 完成，规则 1 已验证 |
+> | **E infrastructure/ + 其余 转 TS**（约 29k 行，6 轮） | ✅ 完成，仅 migrations 保留 `.js` |
+> | **F runtime 并入 src/runtime** | ✅ 完成，P3 按构造消解 |
+>
+> **`agent/src/` 现在只有 21 个文件是 JavaScript**：`mysql/migrations/`（knex
+> 运行时按目录扫描加载的纯 DDL）。`strict` 仍关着，是**已知待办**：实测
+> `strict: true` 964 error（隐式 any 形参 646），只开 `strictNullChecks`
+> 290 error。`src/runtime/**` 已单独用 `tsconfig.runtime.json` 保住 strict。
 >
 > **阶段 0 的真因比预想严重**：不是路径拼错，是 `dsh-app-boot` 把 patch 的
 > `name` 当**断言**——在已有行上改 `name` 会让整条 patch 被静默跳过。后果是
@@ -264,26 +271,74 @@ runtime/src/plugins/
 `McpDiscoveryState` 的四个可变字段只被那三个方法读写；health/ready 只读探针
 拼运维快照；mapping 是不闭包 `deps` 的纯查表。
 
-### 阶段 D：`application/` 转 TS（21,773 行，多轮）
+### 阶段 D：`application/` 转 TS（21,769 行，5 轮）—— ✅ 完成
 
-**规则 1 在这一步落地**：转换过程中逐文件确认 application 里没有 cordis 依赖。
-如果发现有，那是需要单独修的架构违规，不是顺手改的类型问题。
+**规则 1 已验证**：`application/` 里没有任何 cordis / `@pi/runtime` / dsh 依赖，
+唯一命中的 "runtime/" 是 `pi-run-executor` 里一句英文注释。这条约束目前成立。
 
-按子域分批：Run 执行 → 会话与恢复 → 审批与治理 → A2A → SSE 投影。
+没有按子域分批，而是按**内部依赖分层**（脚本算出 6 层 + 一个 4 文件的环），
+叶子优先。好处是每一轮结束后，已转的部分不再被未转的部分引用。
 
-### 阶段 E：`infrastructure/` 转 TS（28,413 行，多轮）
+发现的问题几乎都是同一形状——**同一件事被描述了两遍，然后对不上**：
 
-按子目录：`mysql/` → `redis/` → `outbox/` → `mcp/` → `dsh/` → 其余。
-`dsh/` 这一层在阶段 B 之后应当已经很薄（装配搬进 runtime 了）。
+| 发现 | 两边的说法 |
+|---|---|
+| `PiRunExecutor` 的 deps | 构造器一份、工厂一份，工厂那份已退化成 `any`，`toolBudget` 少了 `runDeadlineMs` |
+| `skillRootsForRun` | container 声明返回 `unknown`，实际必须返回 `string[]` |
+| `auth` | 六个服务写成 `object`，解析器要三个具体字段 |
+| `RecoveryAction` | run-recovery 又抄了一遍字面量联合，D2 时已经因此对不上过一次 |
+| `CancelRunService` 的仓储包 | 声明五个，实际透传出去要七个 |
+| outbox 的 `bindings` | 声明 `unknown[]`，实际只 push string——三处 `@ts-expect-error` 的共同根因 |
 
-### 阶段 F：`runtime/` 并入 `agent/src/runtime/`（P3 自然消解）
+#### 三条翻译陷阱（写下来，因为每一轮都会遇到）
 
-agent 全 TS、单一 `tsc -b` 之后，`@pi/runtime` 不再需要是独立 npm 包：
-`agent/runtime/` → `agent/src/runtime/`，删掉那份 `package.json` /
-`tsconfig.json` / `dist/`，`agent/` 下只剩 `src/ tests/ Dockerfile package.json
-tsconfig.json` 与两个入口。
+1. **`@param {object} x` 不能直译成 TS 的 `object`。** JSDoc 里它是「某个
+   对象」，TS 里它禁止一切属性访问——直译会让每个 `x.foo` 报 TS2339，看起来
+   像发现了几十个 bug，其实一个都不是。映射成 `Record<string, any>`。
+2. **`new Map(any)` / `new Set(any)` 会塌成 `Map<unknown, unknown>`。**
+   上游是 any 时元素类型不会传播，必须显式给类型参数。
+3. **对象字面量的可选字段不会被推断出来。** `const body = {a, b}` 之后
+   `body.c = x` 直接报错——这不是错误，是字面量类型确实没有 c。
 
-**这一步不能提前做**：agent 还是 JS 的时候，TS 的 runtime 必须是独立包。
+### 阶段 E：`infrastructure/` + 其余 转 TS（约 29k 行，6 轮）—— ✅ 完成
+
+按子目录推进：核心 + `mysql/` → `mysql/repositories/` → `outbox/` + `redis/`
+→ `sandbox/` + `mcp/` → `dsh/`，最后补上计划里没写的 `domain/` `skills/`
+`lib/` `config/` 与三个入口——留着它们迁移就不算完成。
+
+**`mysql/migrations/` 刻意保持 `.js`**：knex 在运行时按目录扫描加载它们，
+且它们是纯 DDL，转 TS 拿不到任何类型收益。连带的约束是 migrate CLI 也不能
+用 plain node 跑源码——开发期走 tsx，容器里走 `dist/`。
+
+两个值得单独记的发现：
+
+- **一处 `never` 消掉了 internal-hmac 的全部 7 个错误。** `fail()` 永远抛出，
+  JSDoc 也写了 `@returns {never}`，但那行没搬过去。TS 于是认为它可能正常
+  返回，所有「校验失败就 fail(...)」的守卫一个都不收窄。
+- **企业系统提示里的 skill 路径是错的。** `workspaceRoot` / `skillRoot` 从
+  container 穿过三层调用传到 `resolveEnterpriseSystemPrompt`，然后被丢掉——
+  条款里的路径写死在常量里，其中 `/home/sandbox/skills` 与实际挂载的
+  `/home/sandbox/skill`（单数）对不上，模型照着去列 skill 会扑空。修法是把
+  **已经存在的管道接上**，不是删掉死参数。
+
+### 阶段 F：`runtime/` 并入 `agent/src/runtime/`（P3 消解）—— ✅ 完成
+
+`agent/runtime/` 这个独立 npm 包没有了，agent/ 顶层只剩一棵源码树。
+
+两处不明显但必须处理的：
+
+- **cordis patch 的路径语义跟着布局变了。** 插件 `name` 相对 patch 文件所在
+  目录解析；patch 与 provider 现在同在 `<out>/runtime/` 下，所以是
+  `../providers/`。build 因此多一步把 `bundle/*.yml` 拷进 dist——tsc 不搬
+  非 TS 文件，而 patch 必须与编译后的 `boot.js` 同处一棵树。
+- **并入主树会让组合层丢掉 strict。** runtime 原本有自己的严格 tsconfig，
+  落到 agent 的宽松规则下当天就有一处联合收窄失效（布尔判别式的收窄依赖
+  `strictNullChecks`）。用 `tsconfig.runtime.json` 单独保住，接进
+  `npm run typecheck`。
+
+**这一步按 ADR 0007 规则 2 做了实测**：从编译产物真启动插件树，确认挂上的是
+自建实现（`EnvCredentialsProvider` / `RemoteFileSystem` / `RemoteShell` /
+`RemoteJobs`）而不是出厂实现。
 
 ### 阶段 G：清理死配置（P2）—— ✅ 完成
 
@@ -331,6 +386,13 @@ tsconfig.json` 与两个入口。
 5. **（阶段 C 补充）语言迁移中，`tsc` 通过不等于行为不变。** `strict: false`
    下 `undefined` 可赋给任何类型，搬运代码时的 `return` / 早退 / 空值分支要
    人工逐处核对。凡是"原样搬出去"的代码块，先读一遍它的所有出口。
+6. **（阶段 E 补充）批量转换必须验字面量。** 转换脚本的块注释正则没要求
+   `/**` 出现在行首，于是从字符串 `'redis://***'` 中间（含 `/**` 子串）开始
+   匹配，一路吃到后面某个真 JSDoc 的 `*/`，把中间的代码改坏——**类型检查
+   照过，1043 个测试照绿**，因为坏掉的只是脱敏结果里多了个换行。此后每轮都
+   跑一道字面量不变性检查（剥注释后提取字符串，原文有的必须仍在树里，按整棵
+   树比对以容纳有意的拆分）。静默、无报错、测试不覆盖——这是语言迁移最危险
+   的一类损坏。
 
 ---
 
