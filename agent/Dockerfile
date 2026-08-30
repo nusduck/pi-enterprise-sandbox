@@ -1,23 +1,18 @@
 # Node major pin: runtime-versions.json → node.docker_image
-# Compose context is the repo root so `@pi/contract` (file:../../contract from
-# agent/runtime) is installable. The HTTP process and worker both import it.
+# Compose context is the repo root so `@pi/contract` (file:../contract) is
+# installable. The HTTP process and worker both import it.
 FROM node:22-slim
 WORKDIR /app
 
 COPY tsconfig.base.json ./
 COPY contract ./contract
-COPY agent/runtime ./agent/runtime
 COPY agent/package.json agent/package-lock.json ./agent/
 
 WORKDIR /app/contract
 RUN npm ci --ignore-scripts && npx tsc
 
-# `@pi/runtime` is agent-private (file:./runtime) and must be compiled before
-# the agent install resolves it. `dist/` is dockerignored, so the later
-# `COPY agent ./agent` cannot clobber what this stage builds.
-WORKDIR /app/agent/runtime
-RUN npm ci --ignore-scripts && npx tsc
-
+# 阶段 F 之后不再有独立的 agent/runtime 包：DSH 组合层就是 agent/src/runtime/，
+# 与其余源码同一次 tsc 编译，依赖也在 agent/package.json 里。
 WORKDIR /app/agent
 RUN npm ci --ignore-scripts
 
@@ -25,9 +20,10 @@ WORKDIR /app
 COPY agent ./agent
 
 WORKDIR /app/agent
-# agent 正在从 JS 迁到 TS（agent-ts-rebuild.md 阶段 C）。`allowJs` 让 tsc 把
-# 尚未转换的 .js 一并搬进 dist/，所以 dist/ 是一棵完整可跑的树，入口也在里面。
-RUN npx tsc -p tsconfig.build.json
+# `allowJs` 只为 mysql/migrations/ 那 21 个纯 DDL 文件（knex 运行时按目录扫描
+# 加载）。`build` 在 tsc 之后还会把 src/runtime/bundle/*.yml 拷进 dist——
+# cordis 的 overlay patch 必须和编译后的 boot.js 同处一棵树。
+RUN npm run build
 
 # Logical workspace cwd. The directory is intentionally empty in this image:
 # all workspace bytes stay owned by exec and are reached over the signed RPC.

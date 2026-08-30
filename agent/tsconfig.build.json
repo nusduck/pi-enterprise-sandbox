@@ -6,7 +6,11 @@
     "完整可跑的树——迁移期间不需要维护「哪些文件从 src 跑、哪些从 dist 跑」这种",
     "分叉。入口 `server.js` / `worker.js` 与 `config.js` 也一起进去。",
     "",
-    "`declaration` 关掉：agent 是应用不是库，没有消费者需要它的 .d.ts。"
+    "`declaration` 关掉：agent 是应用不是库，没有消费者需要它的 .d.ts。",
+    "",
+    "tsc 不搬非 TS 文件，而 `src/runtime/bundle/*.yml` 必须与编译后的 boot.js",
+    "同处一棵树（boot 用 `join(here, 'bundle/...')` 定位 patch）。所以 build",
+    "脚本在 tsc 之后多一步拷贝，见 package.json 的 `build`。"
   ],
   "extends": "./tsconfig.json",
   "compilerOptions": {

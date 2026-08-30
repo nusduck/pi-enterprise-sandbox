@@ -11,10 +11,10 @@ import { Context } from '@deepseek-ai/cordis';
 import { bootEnterpriseRuntime, createRemoteProviders, createSessionBackend ,
   assertOverlayPatchResolvable,
   resolvePathRelativeTo,
-} from '../src/boot.js';
-import { InMemorySessionStore } from '../src/providers/mysql-session-store.js';
+} from '../../src/runtime/boot.js';
+import { InMemorySessionStore } from '../../src/runtime/providers/mysql-session-store.js';
 
-const patchPath = join(dirname(fileURLToPath(import.meta.url)), '../bundle/cordis.patch.yml');
+const patchPath = join(dirname(fileURLToPath(import.meta.url)), '../../src/runtime/bundle/cordis.patch.yml');
 
 test('cordis.patch.yml：凭据只读 env，网关走 LLMIO_BASE_URL，本机执行族 disabled', () => {
   const yaml = readFileSync(patchPath, 'utf8');
@@ -41,11 +41,11 @@ test('cordis.patch.yml：凭据只读 env，网关走 LLMIO_BASE_URL，本机执
     assert.match(block, /disabled:\s*true/, `expected ${id} disabled`);
   }
   assert.match(yaml, /id: remote-fs/);
-  assert.match(yaml, /dist\/providers\/remote-fs\.js/);
+  assert.match(yaml, /\.\.\/providers\/remote-fs\.js/);
   assert.match(yaml, /id: remote-shell/);
-  assert.match(yaml, /dist\/providers\/remote-shell\.js/);
+  assert.match(yaml, /\.\.\/providers\/remote-shell\.js/);
   assert.match(yaml, /id: remote-jobs/);
-  assert.match(yaml, /dist\/providers\/remote-jobs\.js/);
+  assert.match(yaml, /\.\.\/providers\/remote-jobs\.js/);
   assert.equal(yaml.includes('id: tool-bash\n  disabled: true'), false);
   assert.equal(yaml.includes('id: tool-fs\n  disabled: true'), false);
   assert.match(yaml, /id: subagent-spawn-in-process/);
@@ -148,7 +148,7 @@ test('真实的 bundle/cordis.patch.yml 全部可解析', async () => {
   const { fileURLToPath } = await import('node:url');
   const { loadOverlayPatches } = await import('@deepseek-ai/dsh-app-boot');
   const here = dirname(fileURLToPath(import.meta.url));
-  const overlayFile = join(here, '../bundle/cordis.patch.yml');
+  const overlayFile = join(here, '../../src/runtime/bundle/cordis.patch.yml');
   const entries = loadOverlayPatches('pi-runtime', overlayFile);
   // 这条守的是"自建插件真的装得上"。它红过一次：credentials 与
   // subagent-spawn-in-process 曾指向 ../src/*.js（源码是 .ts），于是

@@ -13,11 +13,11 @@ import { mkdtemp, realpath, writeFile, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Context } from '@deepseek-ai/cordis';
-import { RemoteFileSystem } from '../src/providers/remote-fs.js';
-import { RemoteShell } from '../src/providers/remote-shell.js';
-import { RemoteJobs } from '../src/providers/remote-jobs.js';
-import { guardIterable, fromWireError, runWithExecRpc } from '../src/providers/exec-rpc.js';
-import type { ExecRpcConfig } from '../src/providers/exec-rpc.js';
+import { RemoteFileSystem } from '../../src/runtime/providers/remote-fs.js';
+import { RemoteShell } from '../../src/runtime/providers/remote-shell.js';
+import { RemoteJobs } from '../../src/runtime/providers/remote-jobs.js';
+import { guardIterable, fromWireError, runWithExecRpc } from '../../src/runtime/providers/exec-rpc.js';
+import type { ExecRpcConfig } from '../../src/runtime/providers/exec-rpc.js';
 import { FsError } from '@deepseek-ai/dsh-fs';
 import { toWireError } from '@pi/contract/errors.js';
 

@@ -5,7 +5,7 @@
  * 这份证明"在真的 DSH 上下文里，装配这一步不会被静默跳过"。两者缺一不可——
  * 2026-08-30 之前 policy/ 的纯函数测试全绿，而装配根本不存在。
  */
-import { bootEnterpriseRuntime, installEnterprisePolicy, InMemoryApprovalStore } from '../../src/index.js';
+import { bootEnterpriseRuntime, installEnterprisePolicy, InMemoryApprovalStore } from '../../../src/runtime/index.js';
 
 process.env['LLMIO_API_KEY'] ??= 'policy-probe-key';
 process.env['SANDBOX_INTERNAL_HMAC_KEYRING'] ??=

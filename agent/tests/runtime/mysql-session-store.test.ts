@@ -18,7 +18,7 @@ import {
   decodeStorageRecord,
   packChunkRuns,
   toSessionStoreError,
-} from '../src/providers/mysql-session-store.js';
+} from '../../src/runtime/providers/mysql-session-store.js';
 
 function header(id: string, extra: Record<string, unknown> = {}): SessionHeader {
   return {

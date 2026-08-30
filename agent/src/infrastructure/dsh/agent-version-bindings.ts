@@ -11,7 +11,7 @@
  * No SDK import and no I/O — everything here is deterministic on its inputs.
  */
 
-import { assembleSystemPrompt } from '@pi/runtime';
+import { assembleSystemPrompt } from '../../runtime/index.js';
 import { DshRuntimeFactoryError as PiRuntimeFactoryError } from './errors.js';
 import {
   LOGICAL_SKILL_ROOT,

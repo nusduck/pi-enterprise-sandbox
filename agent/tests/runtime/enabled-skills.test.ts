@@ -3,7 +3,7 @@
  */
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { createEnabledSkillsProvider, InMemoryEnabledSkillStore, filterCandidatesByEnabled, isSkillVisible } from '../src/providers/enabled-skills.js';
+import { createEnabledSkillsProvider, InMemoryEnabledSkillStore, filterCandidatesByEnabled, isSkillVisible } from '../../src/runtime/providers/enabled-skills.js';
 import type { SkillCandidate } from '@deepseek-ai/dsh-skill';
 
 function candidate(name: string): SkillCandidate {

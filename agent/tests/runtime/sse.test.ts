@@ -6,7 +6,7 @@ import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
-import { encodeSseStream, projectToSse, type SseEvent } from '../src/projection/sse.js';
+import { encodeSseStream, projectToSse, type SseEvent } from '../../src/runtime/projection/sse.js';
 
 const fixturePath = join(
   dirname(fileURLToPath(import.meta.url)),

@@ -77,7 +77,6 @@ def test_package_engines_match_pins(pins: dict, rel: str) -> None:
     "rel",
     [
         "agent/package.json",
-        "agent/runtime/package.json",
         "exec/package.json",
         "contract/package.json",
     ],
@@ -95,10 +94,16 @@ def test_no_earendil_direct_deps(pins: dict, rel: str) -> None:
 
 
 def test_runtime_is_agent_private(pins: dict) -> None:
-    """`@pi/runtime` 只有 agent 一个消费者，所以它住在 agent/runtime/。"""
+    """DSH 组合层只有 agent 一个消费者，所以它就住在 agent/src/runtime/。
+
+    阶段 F 之前它是个独立包 `@pi/runtime`（agent/runtime，file:./runtime），
+    与 src/ 平级——这正是「结构里的两棵源码树」那条问题。现在它是 agent 源码
+    的一个子目录，与其余源码同一次 tsc 编译。
+    """
     deps = _read_json("agent/package.json").get("dependencies") or {}
-    assert deps.get("@pi/runtime") == "file:./runtime"
-    assert (REPO_ROOT / "agent" / "runtime" / "package.json").is_file()
+    assert "@pi/runtime" not in deps, "组合层已并入 src/runtime/，不该再是依赖"
+    assert (REPO_ROOT / "agent" / "src" / "runtime" / "boot.ts").is_file()
+    assert not (REPO_ROOT / "agent" / "runtime").exists()
     assert not (REPO_ROOT / "runtime").exists()
 
 

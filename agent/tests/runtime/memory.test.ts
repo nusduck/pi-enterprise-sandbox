@@ -3,7 +3,7 @@
  */
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { MemoryService, InMemoryMemoryStore, normalizeMemoryText, memoryMatches } from '../src/providers/memory.js';
+import { MemoryService, InMemoryMemoryStore, normalizeMemoryText, memoryMatches } from '../../src/runtime/providers/memory.js';
 
 test('normalizeMemoryText 去空白与截断', () => {
   assert.equal(normalizeMemoryText('  a   b \n c  '), 'a b c');

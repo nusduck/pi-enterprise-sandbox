@@ -3,12 +3,12 @@
  */
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { makePolicyDecision } from '../src/policy/decision.js';
-import { runGuards } from '../src/policy/guards.js';
-import { evaluatePreExecute, InMemoryApprovalStore } from '../src/policy/pre-execute.js';
-import { recordLedger } from '../src/policy/post-execute.js';
-import { RunBudget, wrapExecute } from '../src/policy/run-budget.js';
-import { digestArgs } from '../src/policy/source-digest.js';
+import { makePolicyDecision } from '../../src/runtime/policy/decision.js';
+import { runGuards } from '../../src/runtime/policy/guards.js';
+import { evaluatePreExecute, InMemoryApprovalStore } from '../../src/runtime/policy/pre-execute.js';
+import { recordLedger } from '../../src/runtime/policy/post-execute.js';
+import { RunBudget, wrapExecute } from '../../src/runtime/policy/run-budget.js';
+import { digestArgs } from '../../src/runtime/policy/source-digest.js';
 
 test('pre-execute：高风险拦截 → 持久 PENDING → WAITING_APPROVAL', async () => {
   const store = new InMemoryApprovalStore();

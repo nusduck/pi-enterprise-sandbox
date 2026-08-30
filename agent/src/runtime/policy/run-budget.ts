@@ -13,7 +13,15 @@ export interface RunBudgetConfig {
   readonly startedAt: number;
 }
 
-export type BudgetVerdict = { ok: true } | { ok: false; reason: string };
+/**
+ * 预算判定。`ok: true` 那一支显式写出 `reason?: undefined`——不是冗余：
+ * **布尔判别式的联合收窄依赖 `strictNullChecks`**，agent 主程序目前关着它，
+ * 不写的话 `if (!v.ok) v.reason` 在主程序里会报「属性不存在」。
+ * 写上之后两种模式下都成立（严格模式仍收窄到 `string`）。
+ */
+export type BudgetVerdict =
+  | { ok: true; reason?: undefined }
+  | { ok: false; reason: string };
 
 export function resolveRunBudget(env: NodeJS.ProcessEnv = process.env, now = Date.now()): RunBudgetConfig {
   return {

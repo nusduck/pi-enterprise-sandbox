@@ -3,7 +3,7 @@
  */
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { buildDurableJobSpec, createDurableSubagentProvider, InMemoryDurableSubagentQueue, InMemoryDurableSubagentStore } from '../src/providers/durable-subagent.js';
+import { buildDurableJobSpec, createDurableSubagentProvider, InMemoryDurableSubagentQueue, InMemoryDurableSubagentStore } from '../../src/runtime/providers/durable-subagent.js';
 
 function fakeSignal(aborted = false): AbortSignal {
   const c = new AbortController();

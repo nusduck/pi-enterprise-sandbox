@@ -1,13 +1,13 @@
 /**
  * 组合根——取代 `agent/src/infrastructure/pi/pi-runtime-factory.js`。
  *
- * 这是什么：叠在 `@deepseek-ai/dsh-base` 之上的第 1 层组合（`runtime/bundle/cordis.patch.yml`），
+ * 这是什么：叠在 `@deepseek-ai/dsh-base` 之上的第 1 层组合（`src/runtime/bundle/cordis.patch.yml`），
  * 把自建 provider/策略挂载点挂到 DSH 的原生能力上。能用原生的（`dsh-tool-fs`/`dsh-compaction` 等）
  * 直接用原生；必须自建的（`ctx.fs/shell/jobs` 的 RPC 代理、`ctx.sessionPersistence` 的 MySQL 后端、
  * `ctx.subagents` 的 durable、`ctx.skills` 的启用集、memory、凭据只读 env、预算/审计/脱敏/SSE）
  * 在这里一次性注册，避免分散注册导致“同一件事两处各算一遍”。
  *
- * 为什么单独一层：`dsh-base` 是上游冻结的基线，`runtime/bundle/cordis.patch.yml` 的
+ * 为什么单独一层：`dsh-base` 是上游冻结的基线，`src/runtime/bundle/cordis.patch.yml` 的
  * patch 就在它之上增量声明——`boot()` 按 patch 顺序挂载，最后写入获胜。
  * 凭据必须在 LLM 之前就位（适配器每请求都经 `ctx.credentials.resolve(apiKeyEnv)`），
  * 因此 `EnvCredentialsProvider` 放在 `credentials` id 上直接替换 `dsh-credentials-local`。
@@ -67,7 +67,7 @@ export async function assertBootReady(ctx: Context): Promise<void> {
 
 /**
  * Cordis 插件入口——仅导出凭证提供方，其余能力由 bundle patch 声明。
- * `runtime/bundle/cordis.patch.yml` 会把本文件的 `EnvCredentialsProvider`
+ * `src/runtime/bundle/cordis.patch.yml` 会把本文件的 `EnvCredentialsProvider`
  * 挂在 `credentials` id 上，从而替换 `dsh-credentials-local`。
  */
 export default EnvCredentialsProvider;
@@ -144,6 +144,11 @@ export function readProcessExecRpcConfig(env: NodeJS.ProcessEnv = process.env): 
  *
  * `name` 相对 patch 文件所在目录解析（cordis 的 `bareModuleBaseUrl` 语义），
  * 裸模块名（不以 `.` 开头）交给 Node 解析，不在这里判定。
+ *
+ * **`.js` 也接受同名 `.ts`**：源码是 TS，产物是 JS，patch 里写的一律是运行时
+ * 路径（`.js`）。从 dist 启动时物理文件就是 `.js`；从源码启动（tsx / dev）时
+ * tsx 会把 `.js` 解析到同名 `.ts`，此时物理上只有 `.ts`。只认 `.js` 会让
+ * 从源码启动必然误报——而这一条的目的是抓「插件路径写错」，不是抓「你在跑源码」。
  */
 export function assertOverlayPatchResolvable(
   patchFile: string,
@@ -159,7 +164,12 @@ export function assertOverlayPatchResolvable(
     const name = rec['name'];
     if (typeof name !== 'string' || !name.startsWith('.')) return;
     const resolved = resolvePathRelativeTo(patchFile, name);
-    if (!fileExists(resolved)) bad.push(`${String(rec['id'] ?? '<no id>')} → ${name}`);
+    const tsSibling = resolved.endsWith('.js')
+      ? `${resolved.slice(0, -3)}.ts`
+      : null;
+    if (!fileExists(resolved) && !(tsSibling && fileExists(tsSibling))) {
+      bad.push(`${String(rec['id'] ?? '<no id>')} → ${name}`);
+    }
   };
   for (const entry of entries) visit(entry);
   if (bad.length > 0) {
@@ -193,8 +203,8 @@ export async function bootEnterpriseRuntime(
   const require = createRequire(import.meta.url);
   const basePatchFile = require.resolve('@deepseek-ai/dsh-base/cordis.patch.yml');
   const here = dirname(fileURLToPath(import.meta.url));
-  const overlayFile = join(here, '../bundle/cordis.patch.yml');
-  const emptyConfig = join(here, '../bundle/cordis.yml');
+  const overlayFile = join(here, 'bundle/cordis.patch.yml');
+  const emptyConfig = join(here, 'bundle/cordis.yml');
   const { existsSync } = await import('node:fs');
   const overlayPatches = loadOverlayPatches('pi-runtime', overlayFile);
   // fail-closed：本包 patch 里引用不到的文件会让插件静默退回出厂实现。

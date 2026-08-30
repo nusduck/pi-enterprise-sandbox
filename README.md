@@ -54,8 +54,8 @@ pi-sandbox/
 ├── agent/                ← 独立 Agent（DeepSeek Harness）
 │   ├── server.js         ← 内部 Run API / health
 │   ├── src/application/  ← Run、Session、审批、A2A 应用服务
-│   ├── src/infrastructure/dsh/ ← 与 @pi/runtime 的接线
-│   ├── runtime/          ← @pi/runtime：DSH 组合层（provider / policy / projection）
+│   ├── src/infrastructure/dsh/ ← 与组合层的接线
+│   ├── src/runtime/      ← DSH 组合层（provider / policy / projection）
 │   │                        agent 私有，不是独立服务
 │   └── Dockerfile
 ├── contract/             ← @pi/contract：exec ↔ runtime 的 RPC 信封、HMAC、错误码
@@ -233,7 +233,6 @@ Skill ZIP，或与 Agent 交互生成 Skill；安装、生成、编辑和卸载�
 uv sync --extra test          # 只为跑 tests/ 的仓库卫生检查
 npm ci --prefix contract
 npm ci --prefix exec
-npm ci --prefix agent/runtime
 npm ci --prefix api-server
 npm ci --prefix agent
 npm ci --prefix frontend

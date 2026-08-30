@@ -16,7 +16,7 @@ import {
   runWithExecRpc,
   installEnterprisePolicy,
   InMemoryApprovalStore,
-} from '@pi/runtime';
+} from '../../runtime/index.js';
 import { DshRuntimeFactoryError } from './errors.js';
 import { PINNED_DSH_VERSION } from './constants.js';
 

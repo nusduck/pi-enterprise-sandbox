@@ -4,7 +4,7 @@
  * 为什么是独立进程：boot() 起的插件树没有便捷的 dispose 接口，留在测试进程里
  * 会让事件循环不空、`node:test` 挂住。组合断言本来也是进程级的事实。
  */
-import { bootEnterpriseRuntime } from '../../src/boot.js';
+import { bootEnterpriseRuntime } from '../../../src/runtime/boot.js';
 
 process.env['LLMIO_API_KEY'] ??= 'boot-probe-key';
 process.env['SANDBOX_INTERNAL_HMAC_KEYRING'] ??=

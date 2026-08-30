@@ -16,9 +16,9 @@ import { execFileSync } from 'node:child_process';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
-import { installEnterprisePolicy } from '../src/policy/install.js';
-import { InMemoryApprovalStore } from '../src/policy/pre-execute.js';
-import type { GuardListener } from '../src/policy/guards.js';
+import { installEnterprisePolicy } from '../../src/runtime/policy/install.js';
+import { InMemoryApprovalStore } from '../../src/runtime/policy/pre-execute.js';
+import type { GuardListener } from '../../src/runtime/policy/guards.js';
 
 type Listener = (...args: unknown[]) => unknown;
 

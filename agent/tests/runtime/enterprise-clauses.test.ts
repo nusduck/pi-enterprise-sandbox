@@ -4,7 +4,7 @@ import {
   assembleSystemPrompt,
   DEFAULT_SKILL_ROOT,
   ENTERPRISE_CLAUSES,
-} from '../src/prompt/enterprise-clauses.js';
+} from '../../src/runtime/prompt/enterprise-clauses.js';
 
 test('无 lead 时条款原样出现', () => {
   assert.equal(assembleSystemPrompt(), ENTERPRISE_CLAUSES);

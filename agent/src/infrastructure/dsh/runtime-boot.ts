@@ -11,4 +11,4 @@ export {
   createSessionBackend,
   assembleSystemPrompt,
   ENTERPRISE_CLAUSES,
-} from '@pi/runtime';
+} from '../../runtime/index.js';

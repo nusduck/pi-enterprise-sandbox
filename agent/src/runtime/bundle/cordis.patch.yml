@@ -18,7 +18,7 @@
 
 - insert:
     - id: enterprise-credentials
-      name: '../dist/providers/env-credentials.js'
+      name: '../providers/env-credentials.js'
       config: {}
 
 # 模型目录：固定路由名 deepseek-official（包自占），指向自有网关，协议与官方一致。
@@ -93,13 +93,13 @@
 # boot 时等到 fs/shell/jobs 并激活。本机执行族全部关闭（下方 DISABLED）。
 - insert:
     - id: remote-fs
-      name: '../dist/providers/remote-fs.js'
+      name: '../providers/remote-fs.js'
       config: {}
     - id: remote-shell
-      name: '../dist/providers/remote-shell.js'
+      name: '../providers/remote-shell.js'
       config: {}
     - id: remote-jobs
-      name: '../dist/providers/remote-jobs.js'
+      name: '../providers/remote-jobs.js'
       config: {}
 
 # 子 Agent：原生 trusted same-process 对不上，退回 durable 队列面。
@@ -108,7 +108,7 @@
 
 - insert:
     - id: enterprise-durable-subagent
-      name: '../dist/providers/durable-subagent.js'
+      name: '../providers/durable-subagent.js'
       config:
         providerName: spawn
 

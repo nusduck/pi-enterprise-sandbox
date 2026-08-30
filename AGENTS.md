@@ -19,8 +19,10 @@
 | `exec/` | TypeScript 执行面（`dist/main.js`） | **工作区与 /tmp 的字节、进程、Bubblewrap 隔离、产物快照** | 不存 Run 账本（`/agent-runs` 已删，勿重建） |
 | `exec/`（第二入口 `dist/mcp-main.js`） | 对外的 MCP facade，compose 里叫 `sandbox-mcp` | 外部 `context_id` → 沙箱身份的映射（Redis） | **够不到 `/internal/v1/*`**；只走 `/internal/mcp/v1/*` 窄桥 |
 
-> **`agent/runtime/`** 是 agent 私有的 DSH 组合层（`@pi/runtime`），不是第六个服务：
-> 只有 `agent/` 消费它。`contract/` 是 exec 与 runtime 共用的 RPC 契约包。
+> **`agent/src/runtime/`** 是 agent 私有的 DSH 组合层（provider / policy / projection），
+> 不是第六个服务：只有 `agent/` 消费它。阶段 F 之前它是与 `src/` 平级的独立包
+> `@pi/runtime`，现在是 agent 源码的一个子目录，与其余源码同一次 tsc 编译。
+> `contract/` 是 exec 与 agent 共用的 RPC 契约包。
 
 推论（都踩过坑）：
 
@@ -81,12 +83,13 @@ TypeScript 侧还要过类型检查，**它不在 `npm test` 里**：
 ```bash
 npx tsc --noEmit -p exec/tsconfig.json
 npx tsc --noEmit -p contract/tsconfig.json
-npx tsc --noEmit -p agent/runtime/tsconfig.json
-exec/node_modules/.bin/tsc -p agent/tsconfig.json   # agent 的 JS 开了 checkJs
+npm --prefix agent run typecheck   # 主程序（宽松）+ src/runtime（strict）两道
 ```
 
-`agent/runtime/` 的用例要**逐文件**跑（`npx tsx --test test/<name>.test.ts`）：
-四个并行跑全量会超时，见 `docs/design/waves/HANDOFF.md` 的已知坑。
+组合层的用例已并入 agent 的主测试套件（`npm --prefix agent test`，1123 条）。
+其中 `tests/runtime/boot.test.ts` 会**起真实插件树**（子进程），改动
+`src/runtime/bundle/cordis.patch.yml` 或 provider 路径后必须跑它——
+cordis 的 patch 装不上插件时不报错，只是出厂实现留在原位。
 
 **什么时候必须重建容器并跑真实链路**：改了 `agent/`、`api-server/`、`exec/` 的运行
 路径，或删除了任何生产代码。镜像**不挂载源码**，不重建就是在验证旧代码：

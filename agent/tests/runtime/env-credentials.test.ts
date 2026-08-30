@@ -4,8 +4,8 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { Context } from '@deepseek-ai/cordis';
-import { EnvCredentialsProvider } from '../src/providers/env-credentials.js';
-import { assertBootReady } from '../src/boot.js';
+import { EnvCredentialsProvider } from '../../src/runtime/providers/env-credentials.js';
+import { assertBootReady } from '../../src/runtime/boot.js';
 
 test('resolve：缺配或空串返回 undefined（fail-closed）', async () => {
   const prev = process.env['LLMIO_API_KEY'];

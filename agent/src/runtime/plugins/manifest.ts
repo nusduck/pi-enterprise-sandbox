@@ -10,12 +10,12 @@
  *    `if (name && name !== target.name) { warn("name mismatch … skipping") }`
  *    ——整条 patch 被跳过，于是 `ctx.credentials` 一直是出厂的
  *    `LocalCredentialProvider`，正是 ADR 0007 点名不得组合的那个。
- * 2. `name` 指向 `../src/*.js`，而源码是 `.ts`、产物在 `dist/`。
+ * 2. `name` 指向源码路径，而运行时加载的是编译产物。
  *
  * 这个模块让**这两种错都写不出来**：
  * - 替换出厂插件只有 `replaceFactory()` 一个入口，它自动展开成
  *   "disabled 出厂行 + insert 自建行"，没有"改 name"这个选项。
- * - 自建插件的路径由 `ownModule()` 统一加 `../dist/` 前缀，调用方给的是模块名。
+ * - 自建插件的路径由 `ownModule()` 统一加 `../providers/` 前缀，调用方给的是模块名。
  *
  * ## 新增一个插件怎么做
  *
@@ -29,9 +29,13 @@
  * 会让测试红，而不是让线上静默跑错配置。
  */
 
-/** 自建插件的模块路径。统一由 `dist/` 解析——源码是 .ts，运行时加载编译产物。 */
+/**
+ * 自建插件的模块路径，相对 **patch 文件所在目录**解析（cordis 的
+ * bareModuleBaseUrl 语义）。patch 在 `<out>/runtime/bundle/`，provider 在
+ * `<out>/runtime/providers/`，所以是 `../providers/`。
+ */
 function ownModule(name: string): string {
-  return `../dist/providers/${name}.js`;
+  return `../providers/${name}.js`;
 }
 
 export interface PatchEntry {

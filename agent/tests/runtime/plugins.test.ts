@@ -11,11 +11,11 @@ import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
-import { PLUGIN_MANIFEST, ownModulePaths, type PatchEntry } from '../src/plugins/manifest.js';
-import { renderPatchYaml } from '../src/plugins/render.js';
+import { PLUGIN_MANIFEST, ownModulePaths, type PatchEntry } from '../../src/runtime/plugins/manifest.js';
+import { renderPatchYaml } from '../../src/runtime/plugins/render.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
-const patchPath = join(here, '../bundle/cordis.patch.yml');
+const patchPath = join(here, '../../src/runtime/bundle/cordis.patch.yml');
 
 test('仓库里的 cordis.patch.yml 与清单生成结果逐字节一致', () => {
   const onDisk = readFileSync(patchPath, 'utf8');
@@ -40,10 +40,13 @@ test('没有任何条目用"改 name"的方式替换出厂插件', () => {
   assert.deepEqual(offenders, [], '顶层条目不得同时带 id 与 name');
 });
 
-test('自建插件一律指向 dist/，不指向 src/', () => {
-  // 源码是 .ts，运行时加载编译产物。指向 src/*.js 的文件根本不存在。
+test('自建插件一律指向 patch 同树的 providers/，不指向别处', () => {
+  // 原始 bug 是 name 写成了 `../src/providers/*.js`（源码是 .ts，文件不存在），
+  // 插件于是静默退回出厂实现。阶段 F 之后 patch 与 provider 同在
+  // `<out>/runtime/` 下，所以正确形态是 `../providers/`——任何别的前缀都
+  // 意味着指到了源码目录或别的包。
   for (const path of ownModulePaths()) {
-    assert.ok(path.startsWith('../dist/'), `${path} 必须在 dist/ 下`);
+    assert.ok(path.startsWith('../providers/'), `${path} 必须是 ../providers/ 下`);
     assert.ok(!path.includes('/src/'), `${path} 不得指向 src/`);
   }
   assert.ok(ownModulePaths().length >= 5, '至少 5 个自建插件（credentials/subagent/fs/shell/jobs）');
@@ -99,9 +102,9 @@ test('新增一个自建插件只需要改 manifest 一处', () => {
   // 且不需要碰渲染器、boot、或 YAML 本身。
   const extended: PatchEntry[] = [
     ...PLUGIN_MANIFEST,
-    { insert: [{ id: 'demo-plugin', name: '../dist/providers/demo.js', config: {} }] },
+    { insert: [{ id: 'demo-plugin', name: '../providers/demo.js', config: {} }] },
   ];
   const yaml = renderPatchYaml(extended);
   assert.match(yaml, /id: demo-plugin/);
-  assert.match(yaml, /'\.\.\/dist\/providers\/demo\.js'/);
+  assert.match(yaml, /'\.\.\/providers\/demo\.js'/);
 });
