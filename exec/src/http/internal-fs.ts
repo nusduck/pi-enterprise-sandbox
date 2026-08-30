@@ -18,6 +18,7 @@ import type { FsTarget, FsVersion, FsWriteIntent } from '@deepseek-ai/dsh-fs';
 import { ContractError, toWireError } from '@pi/contract/errors.js';
 import { parseEnvelope } from '@pi/contract/envelope.js';
 import { WorkspaceFileSystem } from '../fs/workspace-fs.js';
+import { makeWorkspaceFs } from '../fs/make-workspace-fs.js';
 import type { WorkspaceContext } from '../types.js';
 import type { WorkspaceManager } from '../workspace/manager.js';
 import { redactPhysicalRoots } from '../fs/redact.js';
@@ -68,7 +69,7 @@ function makeFs(ctx: WorkspaceContext, _deps: InternalFsDeps): WorkspaceFileSyst
   // FileSystem registers as ctx.fs; reuse of one Cordis Context across HTTP
   // requests throws on the second resolve. Each call gets a fresh tree.
   void _deps.cordisContext;
-  return new WorkspaceFileSystem(new CordisContext() as never, ctx);
+  return makeWorkspaceFs(ctx);
 }
 
 /** 通用 handler 包装：信封校验 + 错误脱敏 + 物理Roots 无条件传递。 */

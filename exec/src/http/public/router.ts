@@ -17,20 +17,15 @@ import type { WorkspaceManager } from '../../workspace/manager.js';
 import type { MySqlJobRegistry } from '../../shell/job-registry.js';
 import { ArtifactService } from '../../artifact/service.js';
 import { DatasetService } from '../../dataset/service.js';
-import { WorkspaceFileSystem } from '../../fs/workspace-fs.js';
 import type { ArtifactStore } from '../../db/repositories/artifacts.js';
+import { makeWorkspaceFs } from '../../fs/make-workspace-fs.js';
 import type { DatasetStore } from '../../db/repositories/datasets.js';
-import { Context as CordisContext } from '@deepseek-ai/cordis';
-import type { WorkspaceContext } from '../../types.js';
 
 import { registerPublicFilesRoutes } from './files.js';
 import { registerPublicArtifactRoutes } from './artifacts.js';
 import { registerPublicDatasetRoutes } from './datasets.js';
 import { registerPublicProcessRoutes } from './processes.js';
 
-/** 与 `internal-fs.ts` 同一种装配：cordis Context 只是 dsh-fs 的宿主，不承载状态。 */
-const makeWorkspaceFs = (ws: WorkspaceContext): WorkspaceFileSystem =>
-  new WorkspaceFileSystem(new CordisContext() as never, ws);
 
 
 export interface PublicRouterDeps {

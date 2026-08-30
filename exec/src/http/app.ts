@@ -7,7 +7,7 @@ import { Context } from '@deepseek-ai/cordis';
 import { createInternalRouter, type InternalRouterDeps } from './router.js';
 import { registerInternalMcpRoutes } from './internal-mcp.js';
 import { ArtifactService } from '../artifact/service.js';
-import { WorkspaceFileSystem } from '../fs/workspace-fs.js';
+import { makeWorkspaceFs } from '../fs/make-workspace-fs.js';
 import { createPublicRouter, type PublicRouterDeps } from './public/router.js';
 import { WorkspaceManager } from '../workspace/manager.js';
 import { readWorkspaceLifecycleConfig } from '../workspace/env-config.js';
@@ -76,9 +76,7 @@ export function createExecApp(deps: ExecAppDeps): Hono {
     workspaceManager: deps.workspaceManager,
     systemSkillRoot: deps.systemSkillRoot,
     bwrapExecutable: deps.bwrapExecutable,
-    artifactService: new ArtifactService(
-      (ws) => new WorkspaceFileSystem(cordisContext as never, ws),
-    ),
+    artifactService: new ArtifactService(makeWorkspaceFs),
     internalToken: deps.mcpInternalToken ?? '',
   });
   return app;

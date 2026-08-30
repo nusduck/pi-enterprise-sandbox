@@ -25,8 +25,7 @@ import type { Hono } from 'hono';
 import { timingSafeEqual } from 'node:crypto';
 import { Readable } from 'node:stream';
 import path from 'node:path';
-import { Context as CordisContext } from '@deepseek-ai/cordis';
-import { WorkspaceFileSystem } from '../fs/workspace-fs.js';
+import { makeWorkspaceFs } from '../fs/make-workspace-fs.js';
 import { IsolatedShellExecutor } from '../shell/executor.js';
 import { fileSearchService } from '../search/index.js';
 import { redactPhysicalRoots } from '../fs/redact.js';
@@ -156,9 +155,7 @@ export function registerInternalMcpRoutes(app: Hono, deps: InternalMcpDeps): voi
     return [ctx.workspaceRoot, ctx.tempRoot, ctx.systemSkillRoot];
   }
 
-  function fsOf(ctx: WorkspaceContext): WorkspaceFileSystem {
-    return new WorkspaceFileSystem(new CordisContext() as never, ctx);
-  }
+  const fsOf = makeWorkspaceFs;
 
   function shellOf(ctx: WorkspaceContext): IsolatedShellExecutor {
     return new IsolatedShellExecutor({
@@ -184,6 +181,11 @@ export function registerInternalMcpRoutes(app: Hono, deps: InternalMcpDeps): voi
     // `_translate_error` 一致，不转发原始异常文本。
     const redacted = redactPhysicalRoots(raw, roots);
     const invalid = /path|escape|denied|invalid/i.test(redacted);
+    if (!invalid) {
+      // 500 是"我们这边坏了"。对外只给一句通用话，但**必须**留下脱敏后的
+      // 原文——否则运维只看得到 "Sandbox operation failed"，无从下手。
+      process.stderr.write(`exec mcp-bridge 500: ${redacted}\n`);
+    }
     return c.json({ detail: invalid ? 'Invalid request' : 'Sandbox operation failed' }, (
       invalid ? 400 : 500
     ) as never);

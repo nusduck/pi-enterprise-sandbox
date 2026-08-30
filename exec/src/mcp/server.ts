@@ -46,6 +46,27 @@ function bearerOk(headerValues: string[], expected: string): boolean {
   return timingSafeEqual(a, b);
 }
 
+/**
+ * 一个 Host/Origin 是否被允许。支持 `host:*` 尾部通配。
+ *
+ * **为什么自己做而不交给 SDK**：Python 的 `TransportSecuritySettings` 支持
+ * `localhost:*` 这类通配；TS SDK 的实现是 `allowedHosts.includes(hostHeader)`
+ * ——精确匹配。把 Python 的值原样传过去，`localhost:*` 就是死条目，而
+ * `localhost`（不带端口）几乎不会出现在真实 Host 头里，于是**所有**请求都被
+ * 403 掉。SDK 自己也把那两个选项标成 `@deprecated: use external middleware`，
+ * 所以检查放在这里，SDK 的那套不启用。
+ */
+export function matchesAllowList(value: string, allowList: readonly string[]): boolean {
+  for (const entry of allowList) {
+    if (entry === value) return true;
+    if (entry.endsWith(':*')) {
+      const prefix = entry.slice(0, -1); // 保留冒号
+      if (value.startsWith(prefix)) return true;
+    }
+  }
+  return false;
+}
+
 /** DNS 重绑定守卫的允许列表，与 Python 的 `_transport_security()` 一致。 */
 export function transportSecurity(publicBaseUrl: string): {
   allowedHosts: string[];
@@ -145,6 +166,17 @@ export function createMcpApp(settings: McpSettings, service: McpFacadeService): 
       );
     }
 
+    // DNS 重绑定守卫，语义同 Python（见 matchesAllowList 的注释）。
+    // Host 头缺失也拒——没有它无法判断请求指向谁。
+    const host = c.req.header('host') ?? '';
+    if (!matchesAllowList(host, security.allowedHosts)) {
+      return c.json({ detail: `Invalid Host header: ${host}` }, 403);
+    }
+    const origin = c.req.header('origin');
+    if (origin !== undefined && !matchesAllowList(origin, security.allowedOrigins)) {
+      return c.json({ detail: 'Invalid Origin header' }, 403);
+    }
+
     // 无状态：每请求一套 server + transport。
     const server = new McpServer(
       { name: 'Enterprise Sandbox', version: '1.0.0' },
@@ -153,9 +185,8 @@ export function createMcpApp(settings: McpSettings, service: McpFacadeService): 
     registerMcpTools(server, service);
     const transport = new WebStandardStreamableHTTPServerTransport({
       enableJsonResponse: true,
-      enableDnsRebindingProtection: true,
-      allowedHosts: security.allowedHosts,
-      allowedOrigins: security.allowedOrigins,
+      // 守卫在上面自己做了：SDK 的实现是精确匹配，表达不了 `host:*`。
+      enableDnsRebindingProtection: false,
     });
     await server.connect(transport);
     let response: Response;

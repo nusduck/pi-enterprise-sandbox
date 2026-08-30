@@ -17,6 +17,7 @@ import { Context } from '@deepseek-ai/cordis';
 import type { WorkspaceContext } from '../src/types.js';
 import { WorkspaceFileSystem } from '../src/fs/workspace-fs.js';
 import { ArtifactService, downloadMimeType } from '../src/artifact/service.js';
+import { makeWorkspaceFs } from '../src/fs/make-workspace-fs.js';
 import { DatasetService, DatasetError, sanitizeDatasetFilename } from '../src/dataset/service.js';
 import { AttachmentService } from '../src/attachment/service.js';
 import { InMemoryArtifactStore } from '../src/db/repositories/artifacts.js';
@@ -167,6 +168,35 @@ describe('W3-B artifact', () => {
     });
     assert.ok(!written.includes('..'), `sanitize 失效: ${written}`);
     assert.equal(await readFile(path.join(ctx.workspaceRoot, written), 'utf8'), 'imported bytes');
+    await cleanup();
+  });
+
+  test('同一个 service 连续提交多次都要成功', async () => {
+    // 2026-08-30 的线上表现：每个 context 的第一次 submit 成功、之后全 500，
+    // 对外只有一句 "Sandbox operation failed"。成因是 http/app.ts 把**共享**的
+    // cordis Context 传给了 fs 工厂，而 WorkspaceFileSystem 构造时会往 Context
+    // 上注册 `fs` 服务，注册第二次即抛。当时全部用例都绿——因为没有一条连着
+    // 提交两次。现在有了。
+    const { root, ctx, cleanup } = await makeWs();
+    // **必须**用真实工厂，不能传一个已建好的实例进去——那样每次调用复用同一个
+    // WorkspaceFileSystem，永远不会触发重复注册，用例就是假绿。
+    const svc = new ArtifactService(makeWorkspaceFs, new InMemoryArtifactStore(), {
+      roots: {
+        artifactsRoot: path.join(root, 'control', 'artifacts'),
+        controlRoot: path.join(root, 'control', 'root'),
+      },
+    });
+    for (let i = 0; i < 3; i += 1) {
+      await writeFile(path.join(ctx.workspaceRoot, `out${i}.txt`), `payload ${i}`);
+      const rec = await svc.submit({
+        workspace: ctx,
+        sessionId: ctx.workspaceId,
+        sourcePath: `out${i}.txt`,
+        owner,
+      });
+      assert.equal(rec.sizeBytes, Buffer.byteLength(`payload ${i}`), `第 ${i + 1} 次提交`);
+    }
+    assert.equal((await svc.list(ctx.workspaceId, owner)).length, 3);
     await cleanup();
   });
 

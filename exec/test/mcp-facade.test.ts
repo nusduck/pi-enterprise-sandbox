@@ -15,7 +15,7 @@ import { SandboxBridgeClient, safeBridgeError } from '../src/mcp/bridge-client.j
 import { ContextStore, type RedisLike } from '../src/mcp/context-store.js';
 import { McpFacadeService } from '../src/mcp/service.js';
 import { loadMcpSettings, validateRuntime, type McpSettings } from '../src/mcp/settings.js';
-import { createMcpApp, transportSecurity } from '../src/mcp/server.js';
+import { createMcpApp, matchesAllowList, transportSecurity } from '../src/mcp/server.js';
 
 function response(status: number, body: unknown): Response {
   return new Response(JSON.stringify(body), {
@@ -254,6 +254,19 @@ describe('mcp: settings and transport', () => {
     assert.equal(loadMcpSettings({}).maxTimeoutSeconds, 300);
   });
 
+  test('允许列表支持 host:* 通配——SDK 只会精确匹配，所以必须自己实现', () => {
+    const list = ['localhost', 'localhost:*', '127.0.0.1:*', 'mcp.example.test'];
+    // 带端口的真实 Host 头是常态；只有精确匹配时它们全都会被 403。
+    assert.equal(matchesAllowList('localhost:8082', list), true);
+    assert.equal(matchesAllowList('127.0.0.1:9999', list), true);
+    assert.equal(matchesAllowList('localhost', list), true);
+    assert.equal(matchesAllowList('mcp.example.test', list), true);
+    // 通配只到端口，不该把别的主机放进来。
+    assert.equal(matchesAllowList('evil.test', list), false);
+    assert.equal(matchesAllowList('localhost.evil.test', list), false);
+    assert.equal(matchesAllowList('', list), false);
+  });
+
   test('DNS 重绑定允许列表含本机与配置的公开地址', () => {
     const sec = transportSecurity('https://mcp.example.test');
     assert.ok(sec.allowedHosts.includes('mcp.example.test'));
@@ -293,11 +306,48 @@ describe('mcp: http app', () => {
     assert.equal(res.status, 401);
   });
 
+  test('带端口的 Host 头必须放行（真实客户端都带端口）', async () => {
+    const res = await app().request('/mcp', {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer outer-token',
+        host: 'localhost:8082',
+        'content-type': 'application/json',
+        accept: 'application/json, text/event-stream',
+      },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'initialize',
+        params: {
+          protocolVersion: '2025-06-18',
+          capabilities: {},
+          clientInfo: { name: 'test', version: '1' },
+        },
+      }),
+    });
+    assert.notEqual(res.status, 403, 'localhost:8082 不该被 DNS 重绑定守卫拒掉');
+  });
+
+  test('不在允许列表里的 Host → 403', async () => {
+    const res = await app().request('/mcp', {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer outer-token',
+        host: 'evil.example.com',
+        'content-type': 'application/json',
+      },
+      body: '{}',
+    });
+    assert.equal(res.status, 403);
+  });
+
   test('/mcp 带正确 bearer 不再是鉴权失败', async () => {
     const res = await app().request('/mcp', {
       method: 'POST',
       headers: {
         authorization: 'Bearer outer-token',
+        host: 'localhost:8082',
         'content-type': 'application/json',
         accept: 'application/json, text/event-stream',
       },
