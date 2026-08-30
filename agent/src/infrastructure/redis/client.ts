@@ -26,10 +26,10 @@ const destroyedClients = new WeakSet();
 
 /**
  * Classify a rejected URL for error messages without echoing credentials.
- * @param {string} normalized
+ * @param normalized
  * @returns {string}
  */
-export function describeRejectedRedisUrl(normalized) {
+export function describeRejectedRedisUrl(normalized: string) {
   const lower = normalized.toLowerCase();
   const schemeMatch = lower.match(/^([a-z][a-z0-9+.-]*):/i);
   if (schemeMatch) {
@@ -43,9 +43,9 @@ export function describeRejectedRedisUrl(normalized) {
 
 /**
  * True when the string contains C0 controls or DEL (never allowed in DSNs).
- * @param {string} s
+ * @param s
  */
-function hasControlChars(s) {
+function hasControlChars(s: string) {
   return /[\u0000-\u001f\u007f]/.test(s);
 }
 
@@ -57,10 +57,10 @@ function hasControlChars(s) {
  * Rejects empty hosts, password-only hosts, socket-style empty-host URLs, whitespace,
  * control characters, and unsupported schemes. Error messages never include credentials.
  *
- * @param {string | undefined | null} url
+ * @param url
  * @returns {string} trimmed original URL when valid
  */
-export function assertRedisConnectionUrl(url) {
+export function assertRedisConnectionUrl(url: string | undefined | null) {
   if (url == null || typeof url !== 'string') {
     throw new RedisConfigError(
       'Redis connection URL is required (set AGENT_REDIS_URL or TEST_REDIS_URL). ' +
@@ -186,23 +186,22 @@ export function loadBullmqModule() {
   }
 }
 
-/**
- * @typedef {object} RedisClientOptions
- * @property {boolean} [lazyConnect]
- * @property {null | number} [maxRetriesPerRequest]
- * @property {boolean} [enableReadyCheck]
- * @property {boolean} [enableOfflineQueue]
- * @property {string} [connectionRole] log role label (e.g. agent-redis, bullmq-worker)
- * @property {number} [connectionErrorLogIntervalMs] min interval between repeat error logs
- * @property {() => number} [now] injectable clock for error guard tests
- * @property {(level: 'error'|'info', message: string, meta?: Record<string, unknown>) => void} [connectionLog]
- */
+export type RedisClientOptions = {
+  lazyConnect?: boolean;
+  maxRetriesPerRequest?: null | number;
+  enableReadyCheck?: boolean;
+  enableOfflineQueue?: boolean;
+  connectionRole?: string;
+  connectionErrorLogIntervalMs?: number;
+  now?: () => number;
+  connectionLog?: (level: 'error'|'info', message: string, meta?: Record<string, unknown>) => void;
+};
 
 /**
  * Build an ioredis subclass that attaches the connection error guard in the
  * constructor so BullMQ `connection.duplicate()` clones also get listeners.
  *
- * @param {typeof import('ioredis').default} Redis
+ * @param Redis
  * @param {{
  *   role: string,
  *   minIntervalMs?: number,
@@ -210,14 +209,13 @@ export function loadBullmqModule() {
  *   log?: (level: 'error'|'info', message: string, meta?: Record<string, unknown>) => void,
  * }} guardOpts
  */
-export function createGuardedRedisClass(Redis, guardOpts) {
+export function createGuardedRedisClass(Redis: typeof import('ioredis').default, guardOpts: { role: string, minIntervalMs?: number, now?: () => number, log?: (level: 'error'|'info', message: string, meta?: Record<string, unknown>) => void, }) {
   class AgentGuardedRedis extends Redis {
-    /**
-     * @param {string | object} arg1
-     * @param {object} [arg2]
-     */
-    constructor(arg1, arg2) {
-      super(arg1, arg2);
+    constructor(arg1: string | Record<string, any>, arg2?: Record<string, any>) {
+      // ioredis 的构造器有 8 个重载（url / port+host / options 等各种组合）。
+      // 这个子类不挑，收到什么原样转发；联合类型选不中任何一个重载，所以
+      // 在转发处收窄——收窄的是转发动作，不是参数含义。
+      super(arg1 as string, arg2 as never);
       attachRedisConnectionErrorGuard(this, guardOpts);
     }
 
@@ -226,9 +224,9 @@ export function createGuardedRedisClass(Redis, guardOpts) {
      * subclasses. Override it explicitly so BullMQ's blocking/internal clones
      * remain guarded too.
      *
-     * @param {object} [override]
+     * @param [override]
      */
-    duplicate(override) {
+    duplicate(override?: Record<string, any>) {
       return new AgentGuardedRedis({
         ...this.options,
         ...(override || {}),
@@ -247,17 +245,16 @@ export function createGuardedRedisClass(Redis, guardOpts) {
 /**
  * Create an ioredis client for a validated redis(s):// URL.
  *
- * @param {string} connectionUrl
- * @param {RedisClientOptions} [options]
+ * @param connectionUrl
+ * @param [options]
  * @returns {import('ioredis').default}
  */
-export function createRedisClient(connectionUrl, options = {}) {
+export function createRedisClient(connectionUrl: string, options: RedisClientOptions = {}) {
   const url = assertRedisConnectionUrl(connectionUrl);
   assertIoredisInstalled();
   const Redis = loadIoredisModule();
 
-  /** @type {import('ioredis').RedisOptions} */
-  const redisOptions = {
+  const redisOptions: import('ioredis').RedisOptions = {
     lazyConnect: options.lazyConnect ?? false,
     enableOfflineQueue: options.enableOfflineQueue ?? true,
   };
@@ -274,8 +271,7 @@ export function createRedisClient(connectionUrl, options = {}) {
       ? options.connectionRole.trim().slice(0, 64)
       : 'agent-redis';
 
-  /** @type {Parameters<typeof attachRedisConnectionErrorGuard>[1]} */
-  const guardOpts = { role };
+  const guardOpts: Parameters<typeof attachRedisConnectionErrorGuard>[1] = { role };
   if (typeof options.connectionErrorLogIntervalMs === 'number') {
     guardOpts.minIntervalMs = options.connectionErrorLogIntervalMs;
   }
@@ -297,11 +293,11 @@ export function createRedisClient(connectionUrl, options = {}) {
  *
  * Callers must create separate connections for Queue vs Worker (BullMQ recommendation).
  *
- * @param {string} connectionUrl
- * @param {RedisClientOptions} [options]
+ * @param connectionUrl
+ * @param [options]
  * @returns {import('ioredis').default}
  */
-export function createBullMQConnection(connectionUrl, options = {}) {
+export function createBullMQConnection(connectionUrl: string, options: RedisClientOptions = {}) {
   return createRedisClient(connectionUrl, {
     ...options,
     maxRetriesPerRequest: null,
@@ -320,15 +316,14 @@ export function createBullMQConnection(connectionUrl, options = {}) {
  * - status never updating still yields a no-op on later calls
  * - quit throwing still falls through to disconnect once, then no-ops forever
  *
- * @param {{ quit?: () => Promise<unknown>, disconnect?: () => void, status?: string } | null | undefined} client
+ * @param client
  */
-export async function destroyRedisClient(client) {
+export async function destroyRedisClient(client: { quit?: () => Promise<unknown>, disconnect?: () => void, status?: string } | null | undefined) {
   if (client == null || (typeof client !== 'object' && typeof client !== 'function')) {
     return;
   }
 
-  /** @type {object} */
-  const obj = /** @type {object} */ (client);
+  const obj: Record<string, any> = (client as Record<string, any>);
   if (destroyedClients.has(obj)) {
     return;
   }
@@ -337,7 +332,7 @@ export async function destroyRedisClient(client) {
 
   // Detach error/ready guard before quit so shutdown races do not log as outages.
   try {
-    const cleanup = /** @type {any} */ (client)[REDIS_ERROR_GUARD_CLEANUP];
+    const cleanup = (client as any)[REDIS_ERROR_GUARD_CLEANUP];
     if (typeof cleanup === 'function') {
       cleanup();
     }

@@ -7,10 +7,7 @@ import {
   parseJsonColumn,
 } from '../mysql/row-mappers.js';
 
-/**
- * @param {Record<string, unknown>} row
- */
-export function mapDomainOutbox(row) {
+export function mapDomainOutbox(row: Record<string, unknown>) {
   return {
     outboxId: String(row.outbox_id),
     aggregateType: String(row.aggregate_type),

@@ -28,10 +28,10 @@ const EVENT_TYPE_RE = /^[\w.-]{1,128}$/;
  * Publisher must markFailed once — never schedule Redis-style retries.
  */
 export class PermanentMappingError extends Error {
-  /**
-   * @param {string} message
-   */
-  constructor(message) {
+  // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
+  permanent: true;
+
+  constructor(message: string) {
     super(message);
     this.name = 'PermanentMappingError';
     /** @type {true} */
@@ -40,18 +40,18 @@ export class PermanentMappingError extends Error {
 }
 
 /**
- * @param {unknown} value
+ * @param value
  * @returns {value is string}
  */
-export function isUlidLike(value) {
+export function isUlidLike(value: unknown) {
   return typeof value === 'string' && ULID_RE.test(value);
 }
 
 /**
- * @param {unknown} value
+ * @param value
  * @returns {value is string}
  */
-export function isIso8601Utc(value) {
+export function isIso8601Utc(value: unknown) {
   if (typeof value !== 'string' || !ISO8601_UTC_RE.test(value)) return false;
   return Number.isFinite(Date.parse(value));
 }
@@ -60,10 +60,10 @@ export function isIso8601Utc(value) {
  * Nonnegative safe integer only. Rejects negatives, fractions, NaN, unsafe ints,
  * and numeric strings that are not exact decimal integers.
  *
- * @param {unknown} value
+ * @param value
  * @returns {number | null}
  */
-export function parseNonNegativeSafeInteger(value) {
+export function parseNonNegativeSafeInteger(value: unknown) {
   if (typeof value === 'number') {
     if (!Number.isSafeInteger(value) || value < 0) return null;
     return value;
@@ -79,15 +79,15 @@ export function parseNonNegativeSafeInteger(value) {
 }
 
 /**
- * @param {unknown} err
+ * @param err
  * @returns {boolean}
  */
-export function isPermanentMappingError(err) {
+export function isPermanentMappingError(err: unknown) {
   return (
     err instanceof PermanentMappingError ||
     (Boolean(err) &&
       typeof err === 'object' &&
-      /** @type {{ permanent?: unknown }} */ (err).permanent === true)
+      (err as { permanent?: unknown }).permanent === true)
   );
 }
 
@@ -95,10 +95,10 @@ export function isPermanentMappingError(err) {
  * Stable stream event id: prefer payload.eventId when ULID, else outbox_id.
  * Throws PermanentMappingError when neither is a valid ULID.
  *
- * @param {{ outboxId: string, payloadJson?: Record<string, unknown> }} row
+ * @param row
  * @returns {string}
  */
-export function resolveStableEventId(row) {
+export function resolveStableEventId(row: { outboxId: string, payloadJson?: Record<string, unknown> }) {
   const payload =
     row.payloadJson && typeof row.payloadJson === 'object' ? row.payloadJson : {};
   const fromPayload = payload.eventId ?? payload.event_id;
@@ -124,7 +124,7 @@ export function resolveStableEventId(row) {
  * }} row
  * @returns {string}
  */
-export function resolveRunId(row) {
+export function resolveRunId(row: { aggregateType: string, aggregateId: string, payloadJson?: Record<string, unknown>, }) {
   if (String(row.aggregateType).toLowerCase() === AGGREGATE_TYPE_RUN) {
     if (isUlidLike(row.aggregateId)) {
       return String(row.aggregateId).toUpperCase();
@@ -148,10 +148,10 @@ export function resolveRunId(row) {
  * Sequence for stream field (string form of nonnegative safe integer).
  * Missing / invalid → permanent error (never coerce to 0).
  *
- * @param {{ payloadJson?: Record<string, unknown> }} row
+ * @param row
  * @returns {string}
  */
-export function resolveSequence(row) {
+export function resolveSequence(row: { payloadJson?: Record<string, unknown> }) {
   const payload =
     row.payloadJson && typeof row.payloadJson === 'object' ? row.payloadJson : {};
   const hasKey =
@@ -175,10 +175,10 @@ export function resolveSequence(row) {
 }
 
 /**
- * @param {unknown} eventType
+ * @param eventType
  * @returns {string}
  */
-export function resolveEventType(eventType) {
+export function resolveEventType(eventType: unknown) {
   if (typeof eventType !== 'string' || !EVENT_TYPE_RE.test(eventType)) {
     throw new PermanentMappingError(
       'eventType must be a non-empty string matching [\\w.-]{1,128}',
@@ -188,11 +188,11 @@ export function resolveEventType(eventType) {
 }
 
 /**
- * @param {unknown} createdAt
+ * @param createdAt
  * @returns {string}
  */
-export function resolveCreatedAt(createdAt) {
-  if (isIso8601Utc(createdAt)) return /** @type {string} */ (createdAt);
+export function resolveCreatedAt(createdAt: unknown) {
+  if (isIso8601Utc(createdAt)) return (createdAt as string);
   // Accept already-normalized ISO from mapDomainOutbox / formatDateTime.
   if (typeof createdAt === 'string' && createdAt) {
     const d = new Date(createdAt);
@@ -229,7 +229,7 @@ export function resolveCreatedAt(createdAt) {
  *   },
  * }}
  */
-export function mapOutboxToRunStreamEvent(row) {
+export function mapOutboxToRunStreamEvent(row: { outboxId: string, aggregateType: string, aggregateId: string, eventType: string, payloadJson?: Record<string, unknown>, createdAt?: string | null, }) {
   const runId = resolveRunId(row);
   const eventId = resolveStableEventId(row);
   const sequence = resolveSequence(row);

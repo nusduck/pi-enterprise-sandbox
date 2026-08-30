@@ -17,32 +17,33 @@ import {
   RUN_STREAM_PAYLOAD_MAX_BYTES,
 } from './validation.js';
 
-/**
- * @typedef {object} RunStreamEvent
- * @property {string} eventId ULID
- * @property {number | string} sequence nonnegative safe integer
- * @property {string} type bounded event type
- * @property {string | object} payload JSON string or object (serialized for Redis)
- * @property {string} createdAt UTC ISO 8601 ending in Z
- */
+/** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
+type Loose = any;
 
-/**
- * @typedef {object} ParsedRunStreamEvent
- * @property {string} streamId Redis stream entry id
- * @property {string} eventId
- * @property {string} sequence
- * @property {string} type
- * @property {string} payload
- * @property {string} createdAt
- */
+export type RunStreamEvent = {
+  eventId: string;
+  sequence: number | string;
+  type: string;
+  payload: string | Record<string, any>;
+  createdAt: string;
+};
+
+export type ParsedRunStreamEvent = {
+  streamId: string;
+  eventId: string;
+  sequence: string;
+  type: string;
+  payload: string;
+  createdAt: string;
+};
 
 /**
  * Validate and normalize a stream event for XADD.
  *
- * @param {RunStreamEvent} event
+ * @param event
  * @returns {{ eventId: string, sequence: string, type: string, payload: string, createdAt: string }}
  */
-export function validateRunStreamEvent(event) {
+export function validateRunStreamEvent(event: RunStreamEvent) {
   if (event == null || typeof event !== 'object' || Array.isArray(event)) {
     throw new RedisValidationError('event must be an object', { field: 'event' });
   }
@@ -57,12 +58,11 @@ export function validateRunStreamEvent(event) {
 }
 
 /**
- * @param {string[]} flat ioredis flat field array [k, v, k, v, ...]
+ * @param flat ioredis flat field array [k, v, k, v, ...]
  * @returns {Record<string, string>}
  */
-function fieldsToObject(flat) {
-  /** @type {Record<string, string>} */
-  const out = {};
+function fieldsToObject(flat: string[]) {
+  const out: Record<string, string> = {};
   if (!Array.isArray(flat)) return out;
   for (let i = 0; i + 1 < flat.length; i += 2) {
     out[String(flat[i])] = String(flat[i + 1]);
@@ -71,11 +71,11 @@ function fieldsToObject(flat) {
 }
 
 /**
- * @param {string} streamId
- * @param {Record<string, string> | string[]} fields
+ * @param streamId
+ * @param fields
  * @returns {ParsedRunStreamEvent}
  */
-export function parseStreamEntry(streamId, fields) {
+export function parseStreamEntry(streamId: string, fields: Record<string, string> | string[]) {
   const obj = Array.isArray(fields) ? fieldsToObject(fields) : fields ?? {};
   return {
     streamId: String(streamId),
@@ -87,20 +87,19 @@ export function parseStreamEntry(streamId, fields) {
   };
 }
 
-/**
- * @typedef {object} RedisStreamLike
- * @property {(key: string, ...args: unknown[]) => Promise<string>} xadd
- * @property {(key: string, start: string, end: string, ...args: unknown[]) => Promise<Array<[string, string[]]>>} xrange
- * @property {(key: string, start: string, end: string, ...args: unknown[]) => Promise<Array<[string, string[]]>>} [xrevrange]
- * @property {(key: string) => Promise<number>} [xlen]
- */
+export type RedisStreamLike = {
+  xadd: (key: string, ...args: unknown[]) => Promise<string>;
+  xrange: (key: string, start: string, end: string, ...args: unknown[]) => Promise<Array<[string, string[]]>>;
+  xrevrange?: (key: string, start: string, end: string, ...args: unknown[]) => Promise<Array<[string, string[]]>>;
+  xlen?: (key: string) => Promise<number>;
+};
 
 export class RunEventStream {
-  /**
-   * @param {RedisStreamLike} redis
-   * @param {{ maxLen?: number }} [options]
-   */
-  constructor(redis, options = {}) {
+  // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
+  redis: Loose;
+  maxLen: Loose;
+
+  constructor(redis: RedisStreamLike, options: { maxLen?: number } = {}) {
     if (!redis || typeof redis.xadd !== 'function' || typeof redis.xrange !== 'function') {
       throw new Error('RunEventStream requires a redis client with xadd() and xrange()');
     }
@@ -109,21 +108,21 @@ export class RunEventStream {
   }
 
   /**
-   * @param {string} runId
+   * @param runId
    * @returns {string}
    */
-  key(runId) {
+  key(runId: string) {
     return runStreamKey(runId);
   }
 
   /**
    * Append event with approximate MAXLEN trim. Returns Redis stream id.
    *
-   * @param {string} runId
-   * @param {RunStreamEvent} event
+   * @param runId
+   * @param event
    * @returns {Promise<string>}
    */
-  async append(runId, event) {
+  async append(runId: string, event: RunStreamEvent) {
     const id = assertRunId(runId);
     const fields = validateRunStreamEvent(event);
     const streamId = await this.redis.xadd(
@@ -149,31 +148,30 @@ export class RunEventStream {
   /**
    * Read a closed range [start, end] (inclusive stream ids). Empty when stream missing.
    *
-   * @param {string} runId
-   * @param {{ start?: string, end?: string, count?: number }} [opts]
+   * @param runId
+   * @param [opts]
    * @returns {Promise<ParsedRunStreamEvent[]>}
    */
-  async range(runId, opts = {}) {
+  async range(runId: string, opts: { start?: string, end?: string, count?: number } = {}) {
     const id = assertRunId(runId);
     const start = opts.start ?? '-';
     const end = opts.end ?? '+';
-    /** @type {unknown[]} */
-    const args = [this.key(id), start, end];
+    const args: unknown[] = [this.key(id), start, end];
     if (opts.count != null) {
       args.push('COUNT', opts.count);
     }
-    const rows = await this.redis.xrange(.../** @type {[string, string, string, ...unknown[]]} */ (args));
+    const rows = await this.redis.xrange(...(args as [string, string, string, ...unknown[]]));
     return normalizeXrangeResult(rows);
   }
 
   /**
    * Read entries after exclusive stream id (for live tail / resume).
    *
-   * @param {string} runId
-   * @param {{ afterId?: string, count?: number }} [opts]
+   * @param runId
+   * @param [opts]
    * @returns {Promise<ParsedRunStreamEvent[]>}
    */
-  async readAfter(runId, opts = {}) {
+  async readAfter(runId: string, opts: { afterId?: string, count?: number } = {}) {
     const afterId = opts.afterId ?? '0-0';
     // Exclusive start: Redis supports "(" prefix from 6.2; fake client also supports it.
     const start = afterId === '0-0' || afterId === '0' ? '-' : `(${afterId}`;
@@ -183,10 +181,10 @@ export class RunEventStream {
   /**
    * Stream length helper. Missing key → 0 (not a status signal).
    *
-   * @param {string} runId
+   * @param runId
    * @returns {Promise<number>}
    */
-  async length(runId) {
+  async length(runId: string) {
     const id = assertRunId(runId);
     if (typeof this.redis.xlen !== 'function') {
       const all = await this.range(id);
@@ -198,17 +196,17 @@ export class RunEventStream {
 }
 
 /**
- * @param {unknown} rows
+ * @param rows
  * @returns {ParsedRunStreamEvent[]}
  */
-function normalizeXrangeResult(rows) {
+function normalizeXrangeResult(rows: unknown) {
   if (rows == null) return [];
   if (!Array.isArray(rows)) return [];
   return rows.map((entry) => {
     if (!Array.isArray(entry) || entry.length < 2) {
       return parseStreamEntry('', {});
     }
-    return parseStreamEntry(String(entry[0]), /** @type {string[]} */ (entry[1]));
+    return parseStreamEntry(String(entry[0]), (entry[1] as string[]));
   });
 }
 

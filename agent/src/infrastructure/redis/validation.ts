@@ -33,70 +33,70 @@ export const EVENT_TYPE_MAX_LEN = 128;
 export const RUN_STREAM_PAYLOAD_MAX_BYTES = 65_536;
 
 /**
- * @param {unknown} value
+ * @param value
  * @returns {value is string}
  */
-export function isUlid(value) {
+export function isUlid(value: unknown) {
   return typeof value === 'string' && ULID_PATTERN.test(value);
 }
 
 /**
- * @param {unknown} value
- * @param {string} [field]
+ * @param value
+ * @param [field]
  * @returns {string} uppercase canonical ULID
  */
-export function assertUlid(value, field = 'id') {
+export function assertUlid(value: unknown, field: string = 'id') {
   if (!isUlid(value)) {
     throw new RedisValidationError(
       `${field} must be a 26-character Crockford ULID`,
       { field },
     );
   }
-  return /** @type {string} */ (value).toUpperCase();
+  return (value as string).toUpperCase();
 }
 
 /**
- * @param {unknown} value
- * @param {string} [field]
+ * @param value
+ * @param [field]
  * @returns {string}
  */
-export function assertRunId(value, field = 'runId') {
+export function assertRunId(value: unknown, field: string = 'runId') {
   return assertUlid(value, field);
 }
 
 /**
  * Agent session id (same ULID shape; distinct field name for lock/session APIs).
- * @param {unknown} value
- * @param {string} [field]
+ * @param value
+ * @param [field]
  * @returns {string}
  */
-export function assertAgentSessionId(value, field = 'agentSessionId') {
+export function assertAgentSessionId(value: unknown, field: string = 'agentSessionId') {
   return assertUlid(value, field);
 }
 
 /**
- * @param {unknown} value
- * @param {string} [field]
+ * @param value
+ * @param [field]
  * @returns {string}
  */
-export function assertOrgId(value, field = 'orgId') {
+export function assertOrgId(value: unknown, field: string = 'orgId') {
   return assertUlid(value, field);
 }
 
 /**
- * @param {unknown} value
- * @param {string} [field]
+ * @param value
+ * @param [field]
  * @returns {string}
  */
-export function assertEventId(value, field = 'eventId') {
+export function assertEventId(value: unknown, field: string = 'eventId') {
   return assertUlid(value, field);
 }
 
 /**
- * @param {unknown} value
+ * @param value
  * @returns {boolean}
  */
-export function isTraceId(value) {
+export function isTraceId(value: unknown) {
   if (typeof value !== 'string' || !TRACE_ID_PATTERN.test(value)) {
     return false;
   }
@@ -104,28 +104,28 @@ export function isTraceId(value) {
 }
 
 /**
- * @param {unknown} value
- * @param {string} [field]
+ * @param value
+ * @param [field]
  * @returns {string} lowercase canonical trace id
  */
-export function assertTraceId(value, field = 'traceId') {
+export function assertTraceId(value: unknown, field: string = 'traceId') {
   if (!isTraceId(value)) {
     throw new RedisValidationError(
       `${field} must be a 32-character hex W3C trace-id (not all-zero)`,
       { field },
     );
   }
-  return /** @type {string} */ (value).toLowerCase();
+  return (value as string).toLowerCase();
 }
 
 /**
  * Worker lease ownership token: nonempty, no control chars, length ≤ OWNER_TOKEN_MAX_LEN.
  *
- * @param {unknown} value
- * @param {string} [field]
+ * @param value
+ * @param [field]
  * @returns {string}
  */
-export function assertOwnerToken(value, field = 'ownerToken') {
+export function assertOwnerToken(value: unknown, field: string = 'ownerToken') {
   if (value == null || typeof value !== 'string') {
     throw new RedisValidationError(`${field} is required and must be a non-empty string`, {
       field,
@@ -151,11 +151,11 @@ export function assertOwnerToken(value, field = 'ownerToken') {
 /**
  * Nonnegative safe integer (number or decimal digit string without leading zeros except "0").
  *
- * @param {unknown} value
- * @param {string} [field]
+ * @param value
+ * @param [field]
  * @returns {string} decimal string form
  */
-export function assertSequence(value, field = 'sequence') {
+export function assertSequence(value: unknown, field: string = 'sequence') {
   if (typeof value === 'number') {
     if (!Number.isSafeInteger(value) || value < 0) {
       throw new RedisValidationError(
@@ -184,11 +184,11 @@ export function assertSequence(value, field = 'sequence') {
 /**
  * Bounded nonempty event type string.
  *
- * @param {unknown} value
- * @param {string} [field]
+ * @param value
+ * @param [field]
  * @returns {string}
  */
-export function assertEventType(value, field = 'type') {
+export function assertEventType(value: unknown, field: string = 'type') {
   if (value == null || typeof value !== 'string' || value.trim() === '') {
     throw new RedisValidationError(`${field} is required and must be a non-empty string`, {
       field,
@@ -207,10 +207,10 @@ export function assertEventType(value, field = 'type') {
 }
 
 /**
- * @param {unknown} value
+ * @param value
  * @returns {boolean}
  */
-export function isIso8601Utc(value) {
+export function isIso8601Utc(value: unknown) {
   if (typeof value !== 'string' || !ISO8601_UTC_PATTERN.test(value)) {
     return false;
   }
@@ -219,28 +219,28 @@ export function isIso8601Utc(value) {
 }
 
 /**
- * @param {unknown} value
- * @param {string} [field]
+ * @param value
+ * @param [field]
  * @returns {string}
  */
-export function assertCreatedAtUtc(value, field = 'createdAt') {
+export function assertCreatedAtUtc(value: unknown, field: string = 'createdAt') {
   if (!isIso8601Utc(value)) {
     throw new RedisValidationError(
       `${field} must be a valid UTC ISO 8601 timestamp ending in Z`,
       { field },
     );
   }
-  return /** @type {string} */ (value);
+  return (value as string);
 }
 
 /**
  * Serialize and bound stream payload (string or JSON object).
  *
- * @param {unknown} payload
- * @param {string} [field]
+ * @param payload
+ * @param [field]
  * @returns {string}
  */
-export function assertStreamPayload(payload, field = 'payload') {
+export function assertStreamPayload(payload: unknown, field: string = 'payload') {
   if (payload === undefined || payload === null) {
     throw new RedisValidationError(`${field} is required`, { field });
   }

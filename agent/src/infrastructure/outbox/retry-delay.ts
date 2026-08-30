@@ -6,11 +6,11 @@
  * Delay in ms after `attempts` completed tries (attempts is post-increment claim count).
  * attempt 1 → base, 2 → 2*base, 3 → 4*base, … capped at maxDelayMs.
  *
- * @param {number} attempts
- * @param {{ baseDelayMs?: number, maxDelayMs?: number }} [opts]
+ * @param attempts
+ * @param [opts]
  * @returns {number}
  */
-export function computeRetryDelayMs(attempts, opts = {}) {
+export function computeRetryDelayMs(attempts: number, opts: { baseDelayMs?: number, maxDelayMs?: number } = {}) {
   const base = opts.baseDelayMs ?? 1_000;
   const max = opts.maxDelayMs ?? 300_000;
   const n = Math.max(1, Math.floor(Number(attempts) || 1));

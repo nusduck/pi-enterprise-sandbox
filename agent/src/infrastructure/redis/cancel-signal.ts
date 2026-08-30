@@ -8,21 +8,23 @@
 import { CANCEL_SIGNAL_TTL_MS, runCancelKey } from './constants.js';
 import { assertRunId } from './validation.js';
 
-/**
- * @typedef {object} RedisCancelLike
- * @property {(key: string, value: string, ...args: unknown[]) => Promise<string | null>} set
- * @property {(key: string) => Promise<string | null>} get
- * @property {(key: string | string[]) => Promise<number>} del
- * @property {(key: string) => Promise<number>} [exists]
- * @property {(key: string, ms: number) => Promise<number>} [pexpire]
- */
+/** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
+type Loose = any;
+
+export type RedisCancelLike = {
+  set: (key: string, value: string, ...args: unknown[]) => Promise<string | null>;
+  get: (key: string) => Promise<string | null>;
+  del: (key: string | string[]) => Promise<number>;
+  exists?: (key: string) => Promise<number>;
+  pexpire?: (key: string, ms: number) => Promise<number>;
+};
 
 export class CancelSignal {
-  /**
-   * @param {RedisCancelLike} redis
-   * @param {{ ttlMs?: number }} [options]
-   */
-  constructor(redis, options = {}) {
+  // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
+  redis: Loose;
+  ttlMs: Loose;
+
+  constructor(redis: RedisCancelLike, options: { ttlMs?: number } = {}) {
     if (!redis || typeof redis.set !== 'function' || typeof redis.get !== 'function') {
       throw new Error('CancelSignal requires a redis client with set() and get()');
     }
@@ -31,21 +33,21 @@ export class CancelSignal {
   }
 
   /**
-   * @param {string} runId
+   * @param runId
    * @returns {string}
    */
-  key(runId) {
+  key(runId: string) {
     return runCancelKey(runId);
   }
 
   /**
    * Mark cancel requested. Overwrites previous signal and refreshes TTL.
    *
-   * @param {string} runId
-   * @param {{ reason?: string, requestedBy?: string }} [meta]
+   * @param runId
+   * @param [meta]
    * @returns {Promise<void>}
    */
-  async request(runId, meta = {}) {
+  async request(runId: string, meta: { reason?: string, requestedBy?: string } = {}) {
     const id = assertRunId(runId);
     const body = JSON.stringify({
       requested: true,
@@ -57,10 +59,10 @@ export class CancelSignal {
   }
 
   /**
-   * @param {string} runId
+   * @param runId
    * @returns {Promise<boolean>}
    */
-  async isRequested(runId) {
+  async isRequested(runId: string) {
     const id = assertRunId(runId);
     const value = await this.redis.get(this.key(id));
     return value != null && value !== '';
@@ -69,10 +71,10 @@ export class CancelSignal {
   /**
    * Remove cancel signal (e.g. after terminal handling). No-op if absent.
    *
-   * @param {string} runId
+   * @param runId
    * @returns {Promise<boolean>} true when a key was deleted
    */
-  async clear(runId) {
+  async clear(runId: string) {
     const id = assertRunId(runId);
     const n = await this.redis.del(this.key(id));
     return Number(n) > 0;

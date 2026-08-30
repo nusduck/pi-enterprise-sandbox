@@ -35,30 +35,29 @@ import {
 import { computeRetryDelayMs } from './retry-delay.js';
 import { sanitizeOutboxError } from './sanitize-error.js';
 
-/**
- * @typedef {import('knex').Knex | import('knex').Knex.Transaction} DbExecutor
- */
+/** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
+type Loose = any;
 
-/**
- * @typedef {import('./eligibility.js').ClaimEligibility} ClaimEligibility
- */
+export type DbExecutor = import('knex').Knex | import('knex').Knex.Transaction;
+
+export type ClaimEligibility = import('./eligibility.js').ClaimEligibility;
 
 /**
  * Parse rows from knex.raw SELECT result (mysql2 shapes).
- * @param {unknown} rawResult
+ * @param rawResult
  * @returns {Record<string, unknown>[]}
  */
-export function parseRawSelectRows(rawResult) {
+export function parseRawSelectRows(rawResult: unknown) {
   if (rawResult == null) return [];
   if (Array.isArray(rawResult)) {
     if (rawResult.length > 0 && Array.isArray(rawResult[0])) {
-      return /** @type {Record<string, unknown>[]} */ (rawResult[0]);
+      return (rawResult[0] as Record<string, unknown>[]);
     }
     if (
       rawResult.length === 0 ||
       (rawResult[0] && typeof rawResult[0] === 'object' && !Array.isArray(rawResult[0]))
     ) {
-      return /** @type {Record<string, unknown>[]} */ (rawResult);
+      return (rawResult as Record<string, unknown>[]);
     }
   }
   return [];
@@ -66,10 +65,10 @@ export function parseRawSelectRows(rawResult) {
 
 /**
  * Parse affectedRows from knex.raw UPDATE result.
- * @param {unknown} rawResult
+ * @param rawResult
  * @returns {number}
  */
-export function parseAffectedRows(rawResult) {
+export function parseAffectedRows(rawResult: unknown) {
   if (rawResult == null) return 0;
   if (Array.isArray(rawResult)) {
     const header = rawResult[0];
@@ -80,7 +79,7 @@ export function parseAffectedRows(rawResult) {
     }
   }
   if (typeof rawResult === 'object') {
-    const header = /** @type {Record<string, unknown>} */ (rawResult);
+    const header = (rawResult as Record<string, unknown>);
     return Number(
       header.affectedRows ?? header.affected_rows ?? header.rowCount ?? 0,
     );
@@ -89,8 +88,18 @@ export function parseAffectedRows(rawResult) {
 }
 
 export class OutboxRepository {
+  // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
+  db: Loose;
+  maxAttempts: Loose;
+  staleClaimMs: Loose;
+  baseDelayMs: Loose;
+  maxDelayMs: Loose;
+  now: Loose;
+  generateClaimToken: Loose;
+  defaultEligibility: Loose;
+
   /**
-   * @param {DbExecutor} db
+   * @param db
    * @param {{
    *   maxAttempts?: number,
    *   staleClaimMs?: number,
@@ -101,7 +110,7 @@ export class OutboxRepository {
    *   defaultEligibility?: ClaimEligibility | null,
    * }} [options]
    */
-  constructor(db, options = {}) {
+  constructor(db: DbExecutor, options: { maxAttempts?: number, staleClaimMs?: number, baseDelayMs?: number, maxDelayMs?: number, now?: () => Date, generateClaimToken?: () => string, defaultEligibility?: ClaimEligibility | null, } = {}) {
     if (!db) throw new Error('OutboxRepository requires a knex executor');
     this.db = db;
 
@@ -158,9 +167,9 @@ export class OutboxRepository {
    *   createdAt?: Date | string,
    *   nextAttemptAt?: Date | string | null,
    * }} input
-   * @param {DbExecutor} [executor]
+   * @param [executor]
    */
-  async insert(input, executor = this.db) {
+  async insert(input: { outboxId: string, aggregateType: string, aggregateId: string, eventType: string, payloadJson?: Record<string, unknown>, createdAt?: Date | string, nextAttemptAt?: Date | string | null, }, executor: DbExecutor = this.db) {
     if (!input?.outboxId) throw new Error('insert requires outboxId');
     if (!input.aggregateType) throw new Error('insert requires aggregateType');
     if (!input.aggregateId) throw new Error('insert requires aggregateId');
@@ -207,7 +216,7 @@ export class OutboxRepository {
    * }} [opts]
    * @returns {Promise<ReturnType<typeof mapDomainOutbox>[]>}
    */
-  async claimBatch(opts = {}) {
+  async claimBatch(opts: { limit?: number, now?: Date, eligibility?: ClaimEligibility | null, } = {}) {
     const limit = resolveBatchLimit(
       opts.limit,
       DEFAULT_CLAIM_BATCH_SIZE,
@@ -251,8 +260,7 @@ export class OutboxRepository {
       const locked = parseRawSelectRows(selectResult);
       if (locked.length === 0) return [];
 
-      /** @type {ReturnType<typeof mapDomainOutbox>[]} */
-      const claimed = [];
+      const claimed: ReturnType<typeof mapDomainOutbox>[] = [];
       for (const raw of locked) {
         const claimToken = this.generateClaimToken();
         const outboxId = String(raw.outbox_id);
@@ -297,7 +305,7 @@ export class OutboxRepository {
     };
 
     if (this.db.isTransaction === true) {
-      return work(/** @type {import('knex').Knex.Transaction} */ (this.db));
+      return work((this.db as import('knex').Knex.Transaction));
     }
     if (typeof this.db.transaction !== 'function') {
       throw new Error(
@@ -320,7 +328,7 @@ export class OutboxRepository {
    * }} [opts]
    * @returns {Promise<number>} rows reclaimed
    */
-  async reclaimStalePublishing(opts = {}) {
+  async reclaimStalePublishing(opts: { now?: Date, staleClaimMs?: number, executor?: DbExecutor, eligibility?: ClaimEligibility | null, } = {}) {
     const executor = opts.executor ?? this.db;
     const at = opts.now ?? this.now();
     if (!(at instanceof Date) || Number.isNaN(at.getTime())) {
@@ -369,12 +377,12 @@ export class OutboxRepository {
    * Token-guarded mark as PUBLISHED. Returns false on token/status mismatch
    * (row left unchanged). Database errors propagate (never swallowed).
    *
-   * @param {string} outboxId
-   * @param {string} claimToken
-   * @param {{ publishedAt?: Date | string }} [opts]
+   * @param outboxId
+   * @param claimToken
+   * @param [opts]
    * @returns {Promise<boolean>}
    */
-  async markPublished(outboxId, claimToken, opts = {}) {
+  async markPublished(outboxId: string, claimToken: string, opts: { publishedAt?: Date | string } = {}) {
     if (!outboxId || !claimToken) return false;
     const publishedAt = toMysqlDateTime(opts.publishedAt || this.now());
     const result = await this.db.raw(
@@ -403,13 +411,13 @@ export class OutboxRepository {
    * Token-guarded return to PENDING with exponential/bounded delay and sanitized error.
    * If attempts already reached maxAttempts, delegates to markFailed.
    *
-   * @param {string} outboxId
-   * @param {string} claimToken
-   * @param {unknown} error
-   * @param {{ attempts?: number, now?: Date }} [opts]
+   * @param outboxId
+   * @param claimToken
+   * @param error
+   * @param [opts]
    * @returns {Promise<'retry' | 'failed' | 'noop'>}
    */
-  async markPendingForRetry(outboxId, claimToken, error, opts = {}) {
+  async markPendingForRetry(outboxId: string, claimToken: string, error: unknown, opts: { attempts?: number, now?: Date } = {}) {
     if (!outboxId || !claimToken) return 'noop';
 
     const row = await this.db('domain_outbox')
@@ -459,12 +467,12 @@ export class OutboxRepository {
   /**
    * Token-guarded terminal failure (permanent mapping error or max attempts).
    *
-   * @param {string} outboxId
-   * @param {string} claimToken
-   * @param {unknown} error
+   * @param outboxId
+   * @param claimToken
+   * @param error
    * @returns {Promise<boolean>}
    */
-  async markFailed(outboxId, claimToken, error) {
+  async markFailed(outboxId: string, claimToken: string, error: unknown) {
     if (!outboxId || !claimToken) return false;
     const sanitized = sanitizeOutboxError(error, LAST_ERROR_MAX_LEN);
     const result = await this.db.raw(
@@ -491,9 +499,9 @@ export class OutboxRepository {
   /**
    * List PENDING rows due for publish (observability / recovery tools).
    *
-   * @param {{ limit?: number, now?: Date, eligibility?: ClaimEligibility | null }} [opts]
+   * @param [opts]
    */
-  async listPending(opts = {}) {
+  async listPending(opts: { limit?: number, now?: Date, eligibility?: ClaimEligibility | null } = {}) {
     const limit = resolveBatchLimit(opts.limit, 100, 1000, 'listPending.limit');
     const nowSql = toMysqlDateTime(opts.now ?? this.now());
     const eligibility =
@@ -528,7 +536,7 @@ export class OutboxRepository {
    *   eligibility?: ClaimEligibility | null,
    * }} [opts]
    */
-  async listForRecovery(opts = {}) {
+  async listForRecovery(opts: { limit?: number, now?: Date, staleClaimMs?: number, eligibility?: ClaimEligibility | null, } = {}) {
     const limit = resolveBatchLimit(
       opts.limit,
       100,
@@ -582,10 +590,7 @@ export class OutboxRepository {
     return parseRawSelectRows(result).map(mapDomainOutbox);
   }
 
-  /**
-   * @param {string} outboxId
-   */
-  async getById(outboxId) {
+  async getById(outboxId: string) {
     const row = await this.db('domain_outbox').where({ outbox_id: outboxId }).first();
     return row ? mapDomainOutbox(row) : null;
   }

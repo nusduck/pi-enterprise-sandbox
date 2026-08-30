@@ -32,45 +32,46 @@ import {
   SpanKind,
 } from '../telemetry.js';
 
+/** 过渡期宽松类型：bullmq / ioredis 侧对象仍走 JS 形状。 */
+type Loose = any;
+
 /**
  * BullMQ re-emits connection failures on Queue/Worker. Without an `error`
  * listener QueueBase falls back to console.error for every reconnect attempt.
  *
- * @param {object | null | undefined} target
+ * @param target
  */
-function disposeBullmqErrorGuard(target) {
+function disposeBullmqErrorGuard(target: Record<string, any> | null | undefined) {
   try {
-    const cleanup = target?.[REDIS_ERROR_GUARD_CLEANUP];
+    const cleanup = (target as Loose)?.[REDIS_ERROR_GUARD_CLEANUP];
     if (typeof cleanup === 'function') cleanup();
   } catch {
     // Teardown remains best-effort and idempotent.
   }
 }
 
-/**
- * @typedef {object} RunJobRef
- * @property {string} runId
- * @property {string} orgId
- * @property {string} traceId
- * @property {string} [traceparent]
- * @property {string} [tracestate]
- */
+export type RunJobRef = {
+  runId: string;
+  orgId: string;
+  traceId: string;
+  traceparent?: string;
+  tracestate?: string;
+};
 
 /**
  * Validate reference-only job payload. Rejects missing fields, extra keys, and bad ID shapes.
  *
- * @param {unknown} payload
+ * @param payload
  * @returns {RunJobRef}
  */
-export function assertRunJobRef(payload) {
+export function assertRunJobRef(payload: unknown) {
   if (payload == null || typeof payload !== 'object' || Array.isArray(payload)) {
     throw new RedisValidationError('Run job payload must be an object with runId, orgId, traceId', {
       field: 'payload',
     });
   }
 
-  /** @type {Record<string, unknown>} */
-  const obj = /** @type {Record<string, unknown>} */ (payload);
+  const obj: Record<string, unknown> = (payload as Record<string, unknown>);
   const keys = Object.keys(obj);
   const allowed = new Set([...RUN_JOB_REF_FIELDS, ...RUN_JOB_TRACE_FIELDS]);
 
@@ -92,7 +93,15 @@ export function assertRunJobRef(payload) {
     }
   }
 
-  const result = {
+  // traceparent / tracestate 只在作业带 W3C 载体时才追加，字面量推断
+  // 带不上没写出来的可选字段。
+  const result: {
+    runId: string;
+    orgId: string;
+    traceId: string;
+    traceparent?: string;
+    tracestate?: string;
+  } = {
     runId: assertRunId(obj.runId),
     orgId: assertOrgId(obj.orgId),
     traceId: assertTraceId(obj.traceId),
@@ -126,11 +135,11 @@ export function assertRunJobRef(payload) {
 /**
  * Create a BullMQ Queue for agent-runs. Lazy-imports bullmq.
  *
- * @param {string} connectionUrl
- * @param {{ queueName?: string, prefix?: string }} [options]
+ * @param connectionUrl
+ * @param [options]
  * @returns {{ queue: import('bullmq').Queue, connection: import('ioredis').default, queueName: string }}
  */
-export function createRunQueue(connectionUrl, options = {}) {
+export function createRunQueue(connectionUrl: string, options: { queueName?: string, prefix?: string } = {}) {
   assertRedisConnectionUrl(connectionUrl);
   assertBullmqInstalled();
   const { Queue } = loadBullmqModule();
@@ -141,8 +150,7 @@ export function createRunQueue(connectionUrl, options = {}) {
     connectionRole: 'bullmq-queue',
   });
 
-  /** @type {import('bullmq').QueueOptions} */
-  const queueOpts = { connection };
+  const queueOpts: import('bullmq').QueueOptions = { connection };
   if (options.prefix != null) {
     queueOpts.prefix = options.prefix;
   }
@@ -157,12 +165,12 @@ export function createRunQueue(connectionUrl, options = {}) {
 /**
  * Enqueue a run reference job. Deterministic jobId = runId (idempotent re-add).
  *
- * @param {import('bullmq').Queue} queue
- * @param {RunJobRef} ref
- * @param {import('bullmq').JobsOptions} [jobOptions]
+ * @param queue
+ * @param ref
+ * @param [jobOptions]
  * @returns {Promise<import('bullmq').Job>}
  */
-export async function enqueueRunJob(queue, ref, jobOptions = {}) {
+export async function enqueueRunJob(queue: import('bullmq').Queue, ref: RunJobRef, jobOptions: import('bullmq').JobsOptions = {}) {
   if (!queue || typeof queue.add !== 'function') {
     throw new Error('enqueueRunJob requires a BullMQ Queue');
   }
@@ -233,19 +241,17 @@ export async function enqueueRunJob(queue, ref, jobOptions = {}) {
   });
 }
 
-/**
- * @typedef {(ref: RunJobRef, job: import('bullmq').Job) => Promise<unknown>} RunJobProcessor
- */
+export type RunJobProcessor = (ref: RunJobRef, job: import('bullmq').Job) => Promise<unknown>;
 
 /**
  * Create a BullMQ Worker. Processor receives validated refs only (not full conversation payloads).
  *
- * @param {string} connectionUrl
- * @param {RunJobProcessor} processor
- * @param {{ queueName?: string, prefix?: string, concurrency?: number, lockDuration?: number, stalledInterval?: number, maxStalledCount?: number }} [options]
+ * @param connectionUrl
+ * @param processor
+ * @param [options]
  * @returns {{ worker: import('bullmq').Worker, connection: import('ioredis').default, queueName: string }}
  */
-export function createRunWorker(connectionUrl, processor, options = {}) {
+export function createRunWorker(connectionUrl: string, processor: RunJobProcessor, options: { queueName?: string, prefix?: string, concurrency?: number, lockDuration?: number, stalledInterval?: number, maxStalledCount?: number } = {}) {
   assertRedisConnectionUrl(connectionUrl);
   assertBullmqInstalled();
   if (typeof processor !== 'function') {
@@ -258,8 +264,7 @@ export function createRunWorker(connectionUrl, processor, options = {}) {
     connectionRole: 'bullmq-worker',
   });
 
-  /** @type {import('bullmq').WorkerOptions} */
-  const workerOpts = {
+  const workerOpts: import('bullmq').WorkerOptions = {
     connection,
     concurrency: options.concurrency ?? 1,
   };
@@ -319,9 +324,9 @@ export function createRunWorker(connectionUrl, processor, options = {}) {
 /**
  * Close queue and its dedicated connection (idempotent).
  *
- * @param {{ queue?: { close?: () => Promise<void> } | null, connection?: Parameters<typeof destroyRedisClient>[0] }} handles
+ * @param handles
  */
-export async function destroyRunQueue(handles) {
+export async function destroyRunQueue(handles: { queue?: { close?: () => Promise<void> } | null, connection?: Parameters<typeof destroyRedisClient>[0] }) {
   if (!handles) return;
   if (handles.queue && typeof handles.queue.close === 'function') {
     disposeBullmqErrorGuard(handles.queue);
@@ -337,9 +342,9 @@ export async function destroyRunQueue(handles) {
 /**
  * Close worker and its dedicated connection (idempotent).
  *
- * @param {{ worker?: { close?: () => Promise<void> } | null, connection?: Parameters<typeof destroyRedisClient>[0] }} handles
+ * @param handles
  */
-export async function destroyRunWorker(handles) {
+export async function destroyRunWorker(handles: { worker?: { close?: () => Promise<void> } | null, connection?: Parameters<typeof destroyRedisClient>[0] }) {
   if (!handles) return;
   if (handles.worker && typeof handles.worker.close === 'function') {
     disposeBullmqErrorGuard(handles.worker);

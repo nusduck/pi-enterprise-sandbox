@@ -7,11 +7,11 @@ import { redactSecretText } from '../../lib/text-redaction.js';
 import { LAST_ERROR_MAX_LEN } from './outbox-status.js';
 
 /**
- * @param {unknown} err
- * @param {number} [maxLen]
+ * @param err
+ * @param [maxLen]
  * @returns {string}
  */
-export function sanitizeOutboxError(err, maxLen = LAST_ERROR_MAX_LEN) {
+export function sanitizeOutboxError(err: unknown, maxLen: number = LAST_ERROR_MAX_LEN) {
   const limit = Number.isFinite(maxLen) && maxLen > 0 ? Math.floor(maxLen) : LAST_ERROR_MAX_LEN;
   let text = '';
   if (err == null) {
@@ -21,7 +21,7 @@ export function sanitizeOutboxError(err, maxLen = LAST_ERROR_MAX_LEN) {
   } else if (err instanceof Error) {
     text = err.message || err.name || 'Error';
   } else if (typeof err === 'object' && err !== null && 'message' in err) {
-    text = String(/** @type {{ message?: unknown }} */ (err).message ?? 'error');
+    text = String((err as { message?: unknown }).message ?? 'error');
   } else {
     text = String(err);
   }

@@ -3,12 +3,12 @@
  */
 
 /**
- * @param {string} name
- * @param {unknown} value
- * @param {{ min?: number, max?: number, allowZero?: boolean }} [opts]
+ * @param name
+ * @param value
+ * @param [opts]
  * @returns {number}
  */
-export function requirePositiveInteger(name, value, opts = {}) {
+export function requirePositiveInteger(name: string, value: unknown, opts: { min?: number, max?: number, allowZero?: boolean } = {}) {
   const min = opts.allowZero ? 0 : (opts.min ?? 1);
   const max = opts.max;
   if (typeof value !== 'number' || !Number.isInteger(value) || value < min) {
@@ -23,12 +23,12 @@ export function requirePositiveInteger(name, value, opts = {}) {
 }
 
 /**
- * @param {string} name
- * @param {unknown} value
- * @param {{ min?: number, max?: number }} [opts]
+ * @param name
+ * @param value
+ * @param [opts]
  * @returns {number}
  */
-export function requirePositiveDurationMs(name, value, opts = {}) {
+export function requirePositiveDurationMs(name: string, value: unknown, opts: { min?: number, max?: number } = {}) {
   const min = opts.min ?? 1;
   const max = opts.max;
   if (typeof value !== 'number' || !Number.isFinite(value) || value < min) {
@@ -46,12 +46,12 @@ export function requirePositiveDurationMs(name, value, opts = {}) {
 /**
  * Clamp claim/list limit after validating positive integer.
  *
- * @param {unknown} limit
- * @param {number} defaultLimit
- * @param {number} maxLimit
- * @param {string} [name]
+ * @param limit
+ * @param defaultLimit
+ * @param maxLimit
+ * @param [name]
  */
-export function resolveBatchLimit(limit, defaultLimit, maxLimit, name = 'limit') {
+export function resolveBatchLimit(limit: unknown, defaultLimit: number, maxLimit: number, name: string = 'limit') {
   if (limit === undefined || limit === null) {
     return defaultLimit;
   }

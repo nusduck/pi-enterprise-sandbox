@@ -20,8 +20,7 @@
 
 import { redactSecretText } from '../../lib/text-redaction.js';
 
-/** @type {WeakSet<object>} */
-const attachedClients = new WeakSet();
+const attachedClients: WeakSet<Record<string, any>> = new WeakSet();
 
 /** @type {symbol} */
 export const REDIS_ERROR_GUARD_CLEANUP = Symbol.for(
@@ -30,15 +29,15 @@ export const REDIS_ERROR_GUARD_CLEANUP = Symbol.for(
 
 /**
  * Strip credentials / redis URLs from free-form error text.
- * @param {unknown} err
+ * @param err
  * @returns {{ category: string, message: string, stack: string | null }}
  */
-export function classifyRedisConnectionError(err) {
+export function classifyRedisConnectionError(err: unknown) {
   const code =
     err && typeof err === 'object' && 'code' in err && err.code != null
-      ? String(/** @type {{ code: unknown }} */ (err).code)
+      ? String((err as { code: unknown }).code)
       : err && typeof err === 'object' && 'errno' in err && err.errno != null
-        ? String(/** @type {{ errno: unknown }} */ (err).errno)
+        ? String((err as { errno: unknown }).errno)
         : 'UNKNOWN';
 
   let message =
@@ -48,7 +47,7 @@ export function classifyRedisConnectionError(err) {
         ? String(err)
         : typeof err === 'string'
           ? err
-          : String(/** @type {{ message?: unknown }} */ (err).message ?? err);
+          : String((err as { message?: unknown }).message ?? err);
 
   message = sanitizeRedisLogText(message);
 
@@ -65,10 +64,10 @@ export function classifyRedisConnectionError(err) {
 }
 
 /**
- * @param {string} text
+ * @param text
  * @returns {string}
  */
-export function sanitizeRedisLogText(text) {
+export function sanitizeRedisLogText(text: string) {
   // Shared secret patterns first (Bearer, access_token=, sk-*, URI userinfo).
   let s = redactSecretText(String(text));
   // Collapse any remaining redis URLs (including non-credential forms).
@@ -84,9 +83,6 @@ export function sanitizeRedisLogText(text) {
 }
 
 /**
- * @typedef {'ok' | 'degraded'} ConnectionHealthState
- *
- * @typedef {{
  *   onError: (err: unknown) => void,
  *   onReady: () => void,
  *   dispose: () => void,
@@ -99,6 +95,7 @@ export function sanitizeRedisLogText(text) {
  *   },
  * }} ConnectionErrorGuard
  */
+export type ConnectionHealthState = 'ok' | 'degraded';
 
 /**
  * Pure rate-limit / state machine (injectable clock + logger for tests).
@@ -111,7 +108,7 @@ export function sanitizeRedisLogText(text) {
  * }} [opts]
  * @returns {ConnectionErrorGuard}
  */
-export function createConnectionErrorGuard(opts = {}) {
+export function createConnectionErrorGuard(opts: { role?: string, minIntervalMs?: number, now?: () => number, log?: (level: 'error' | 'info', message: string, meta?: Record<string, unknown>) => void, } = {}) {
   const role = String(opts.role || 'redis').slice(0, 64);
   const minIntervalMs =
     typeof opts.minIntervalMs === 'number' && opts.minIntervalMs >= 0
@@ -123,12 +120,9 @@ export function createConnectionErrorGuard(opts = {}) {
       ? opts.log
       : defaultConnectionLog;
 
-  /** @type {ConnectionHealthState} */
-  let state = 'ok';
-  /** @type {number | null} null = never logged / reset after recovery (not wall-clock 0). */
-  let lastErrorLogAt = null;
-  /** @type {string | null} */
-  let lastCategory = null;
+  let state: ConnectionHealthState = 'ok';
+  let lastErrorLogAt: number | null = null;
+  let lastCategory: string | null = null;
   let suppressedCount = 0;
   let disposed = false;
 
@@ -151,8 +145,7 @@ export function createConnectionErrorGuard(opts = {}) {
         lastCategory = category;
         state = 'degraded';
 
-        /** @type {Record<string, unknown>} */
-        const meta = {
+        const meta: Record<string, unknown> = {
           role,
           category,
           detail: message,
@@ -187,8 +180,7 @@ export function createConnectionErrorGuard(opts = {}) {
       // Next outage's first error logs immediately (enteringDegraded).
       lastErrorLogAt = null;
 
-      /** @type {Record<string, unknown>} */
-      const meta = { role };
+      const meta: Record<string, unknown> = { role };
       if (suppressed > 0) meta.suppressed = suppressed;
 
       log(
@@ -217,11 +209,11 @@ export function createConnectionErrorGuard(opts = {}) {
 
 /**
  * Default logger — no DSN; stack only when provided in meta.
- * @param {'error' | 'info'} level
- * @param {string} message
- * @param {Record<string, unknown>} [meta]
+ * @param level
+ * @param message
+ * @param [meta]
  */
-export function defaultConnectionLog(level, message, meta = {}) {
+export function defaultConnectionLog(level: 'error' | 'info', message: string, meta: Record<string, unknown> = {}) {
   const safe = {
     role: meta.role,
     category: meta.category,
@@ -230,8 +222,8 @@ export function defaultConnectionLog(level, message, meta = {}) {
   };
   // Drop undefined keys for compact logs
   for (const k of Object.keys(safe)) {
-    if (safe[/** @type {keyof typeof safe} */ (k)] === undefined) {
-      delete safe[/** @type {keyof typeof safe} */ (k)];
+    if (safe[(k as keyof typeof safe)] === undefined) {
+      delete safe[(k as keyof typeof safe)];
     }
   }
   if (level === 'error') {
@@ -248,7 +240,7 @@ export function defaultConnectionLog(level, message, meta = {}) {
 /**
  * Attach guard listeners once per client. Safe on EventEmitter-like fakes.
  *
- * @param {object} client
+ * @param client
  * @param {{
  *   role?: string,
  *   minIntervalMs?: number,
@@ -257,7 +249,7 @@ export function defaultConnectionLog(level, message, meta = {}) {
  * }} [opts]
  * @returns {(() => void) | null} dispose/remove listeners; null if already attached or invalid
  */
-export function attachRedisConnectionErrorGuard(client, opts = {}) {
+export function attachRedisConnectionErrorGuard(client: Record<string, any>, opts: { role?: string, minIntervalMs?: number, now?: () => number, log?: (level: 'error' | 'info', message: string, meta?: Record<string, unknown>) => void, } = {}) {
   if (client == null || typeof client !== 'object') return null;
   if (typeof client.on !== 'function') return null;
   if (attachedClients.has(client)) return null;
@@ -289,7 +281,7 @@ export function attachRedisConnectionErrorGuard(client, opts = {}) {
         typeof client === 'object' &&
         REDIS_ERROR_GUARD_CLEANUP in client
       ) {
-        delete /** @type {any} */ (client)[REDIS_ERROR_GUARD_CLEANUP];
+        delete (client as any)[REDIS_ERROR_GUARD_CLEANUP];
       }
     } catch {
       // ignore non-configurable
@@ -297,7 +289,7 @@ export function attachRedisConnectionErrorGuard(client, opts = {}) {
   };
 
   try {
-    /** @type {any} */ (client)[REDIS_ERROR_GUARD_CLEANUP] = dispose;
+    (client as any)[REDIS_ERROR_GUARD_CLEANUP] = dispose;
   } catch {
     // If symbol attach fails, dispose still works via returned function.
   }
@@ -305,12 +297,7 @@ export function attachRedisConnectionErrorGuard(client, opts = {}) {
   return dispose;
 }
 
-/**
- * @param {object} client
- * @param {string} event
- * @param {(...args: any[]) => void} fn
- */
-function removeListener(client, event, fn) {
+function removeListener(client: Record<string, any>, event: string, fn: (...args: any[]) => void) {
   if (typeof client.off === 'function') {
     client.off(event, fn);
     return;
@@ -322,8 +309,8 @@ function removeListener(client, event, fn) {
 
 /**
  * Whether this client already has the production error guard attached.
- * @param {object | null | undefined} client
+ * @param client
  */
-export function hasRedisConnectionErrorGuard(client) {
+export function hasRedisConnectionErrorGuard(client: Record<string, any> | null | undefined) {
   return client != null && typeof client === 'object' && attachedClients.has(client);
 }

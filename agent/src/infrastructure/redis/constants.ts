@@ -42,26 +42,26 @@ export const RUN_JOB_REF_FIELDS = Object.freeze([
 export const RUN_JOB_TRACE_FIELDS = Object.freeze(['traceparent', 'tracestate']);
 
 /**
- * @param {string} runId Crockford ULID
+ * @param runId Crockford ULID
  * @returns {string}
  */
-export function runLeaseKey(runId) {
+export function runLeaseKey(runId: string) {
   return `run:lease:${assertRunId(runId)}`;
 }
 
 /**
- * @param {string} runId Crockford ULID
+ * @param runId Crockford ULID
  * @returns {string}
  */
-export function runCancelKey(runId) {
+export function runCancelKey(runId: string) {
   return `run:cancel:${assertRunId(runId)}`;
 }
 
 /**
- * @param {string} runId Crockford ULID
+ * @param runId Crockford ULID
  * @returns {string}
  */
-export function runStreamKey(runId) {
+export function runStreamKey(runId: string) {
   return `run:stream:${assertRunId(runId)}`;
 }
 
@@ -75,9 +75,9 @@ export const SESSION_LOCK_RENEW_INTERVAL_MS = 10_000;
  * Canonical session lock key (PR-05).
  * Absence/busy must never be interpreted as Agent Session status.
  *
- * @param {string} agentSessionId Crockford ULID
+ * @param agentSessionId Crockford ULID
  * @returns {string}
  */
-export function sessionLockKey(agentSessionId) {
+export function sessionLockKey(agentSessionId: string) {
   return `agent:session-lock:${assertAgentSessionId(agentSessionId)}`;
 }

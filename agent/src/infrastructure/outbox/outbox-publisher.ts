@@ -35,47 +35,33 @@ import {
 } from './stream-mapper.js';
 import { DEFAULT_CLAIM_BATCH_SIZE } from './outbox-status.js';
 
-/**
- * @typedef {{
- *   append: (
- *     runId: string,
- *     fields: {
- *       eventId: string,
- *       sequence: string,
- *       type: string,
- *       payload: string,
- *       createdAt: string,
- *     },
- *   ) => Promise<unknown>,
- * }} RunEventStreamLike
- */
+/** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
+type Loose = any;
 
-/**
- * @typedef {import('./eligibility.js').ClaimEligibility} ClaimEligibility
- */
+export type RunEventStreamLike = { append: ( runId: string, fields: { eventId: string, sequence: string, type: string, payload: string, createdAt: string, }, ) => Promise<unknown>, };
 
-/**
- * @typedef {{
- *   claimBatch: (opts?: {
- *     limit?: number,
- *     eligibility?: ClaimEligibility | null,
- *   }) => Promise<any[]>,
- *   markPublished: (outboxId: string, claimToken: string) => Promise<boolean>,
- *   markPendingForRetry: (
- *     outboxId: string,
- *     claimToken: string,
- *     error: unknown,
- *     opts?: { attempts?: number },
- *   ) => Promise<'retry' | 'failed' | 'noop'>,
- *   markFailed: (
- *     outboxId: string,
- *     claimToken: string,
- *     error: unknown,
- *   ) => Promise<boolean>,
- * }} OutboxRepositoryLike
- */
+export type ClaimEligibility = import('./eligibility.js').ClaimEligibility;
+
+export type OutboxRepositoryLike = {
+  claimBatch: (opts?: { limit?: number, eligibility?: ClaimEligibility | null, }) => Promise<any[]>;
+  markPublished: (outboxId: string, claimToken: string) => Promise<boolean>;
+  markPendingForRetry: ( outboxId: string, claimToken: string, error: unknown, opts?: { attempts?: number }, ) => Promise<'retry' | 'failed' | 'noop'>;
+  markFailed: ( outboxId: string, claimToken: string, error: unknown, ) => Promise<boolean>;
+};
 
 export class OutboxPublisher {
+  // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
+  repository: Loose;
+  stream: Loose;
+  batchSize: Loose;
+  maxPasses: Loose;
+  idleDelayMs: Loose;
+  eligibility: Loose;
+  sleep: Loose;
+  _lifecycle: AbortController | null;
+  _loopPromise: Promise<{ passes: number, totals: PublishTotals }> | null;
+  _passInFlight: boolean;
+
   /**
    * @param {{
    *   repository: OutboxRepositoryLike,
@@ -87,7 +73,7 @@ export class OutboxPublisher {
    *   sleep?: (ms: number, signal?: AbortSignal) => Promise<void>,
    * }} deps
    */
-  constructor(deps) {
+  constructor(deps: { repository: OutboxRepositoryLike, stream: RunEventStreamLike, batchSize?: number, maxPasses?: number, idleDelayMs?: number, eligibility?: ClaimEligibility | null, sleep?: (ms: number, signal?: AbortSignal) => Promise<void>, }) {
     if (!deps?.repository) {
       throw new Error('OutboxPublisher requires repository');
     }
@@ -130,10 +116,10 @@ export class OutboxPublisher {
   /**
    * Single claim → map → append → settle pass.
    *
-   * @param {{ limit?: number, eligibility?: ClaimEligibility | null }} [opts]
+   * @param [opts]
    * @returns {Promise<PassResult>}
    */
-  async publishOnce(opts = {}) {
+  async publishOnce(opts: { limit?: number, eligibility?: ClaimEligibility | null } = {}) {
     const limit =
       opts.limit !== undefined
         ? resolveBatchLimit(opts.limit, this.batchSize, 500, 'publishOnce.limit')
@@ -143,8 +129,7 @@ export class OutboxPublisher {
 
     const claimed = await this.repository.claimBatch({ limit, eligibility });
 
-    /** @type {PassResult} */
-    const result = {
+    const result: PassResult = {
       claimed: claimed.length,
       published: 0,
       retried: 0,
@@ -244,7 +229,7 @@ export class OutboxPublisher {
    * }} [opts]
    * @returns {Promise<{ passes: number, totals: PublishTotals }>}
    */
-  async runLoop(opts = {}) {
+  async runLoop(opts: { maxPasses?: number, continueOnIdle?: boolean, limit?: number, } = {}) {
     if (this._loopPromise) {
       throw new Error('OutboxPublisher loop already running');
     }
@@ -261,8 +246,7 @@ export class OutboxPublisher {
     this._lifecycle = lifecycle;
 
     this._loopPromise = (async () => {
-      /** @type {PublishTotals} */
-      const totals = {
+      const totals: PublishTotals = {
         claimed: 0,
         published: 0,
         retried: 0,
@@ -328,27 +312,19 @@ export class OutboxPublisher {
   }
 }
 
-/**
- * @typedef {{
- *   claimed: number,
- *   published: number,
- *   retried: number,
- *   failed: number,
- *   skipped: number,
- *   noop: number,
- *   ackMissed: number,
- * }} PassResult
- */
+export type PassResult = {
+  claimed: number;
+  published: number;
+  retried: number;
+  failed: number;
+  skipped: number;
+  noop: number;
+  ackMissed: number;
+};
 
-/**
- * @typedef {PassResult} PublishTotals
- */
+export type PublishTotals = PassResult;
 
-/**
- * @param {PublishTotals} totals
- * @param {PassResult} pass
- */
-function accumulate(totals, pass) {
+function accumulate(totals: PublishTotals, pass: PassResult) {
   totals.claimed += pass.claimed;
   totals.published += pass.published;
   totals.retried += pass.retried;
@@ -360,13 +336,11 @@ function accumulate(totals, pass) {
 
 /**
  * Abortable sleep; no uncleared timer when aborted.
- * @param {number} ms
- * @param {AbortSignal} [signal]
- * @returns {Promise<void>}
+ * @param ms
  */
-export function defaultSleep(ms, signal) {
+export function defaultSleep(ms: number, signal?: AbortSignal): Promise<void> {
   if (signal?.aborted) return Promise.resolve();
-  return new Promise((resolve) => {
+  return new Promise<void>((resolve) => {
     const timer = setTimeout(() => {
       if (signal) signal.removeEventListener('abort', onAbort);
       resolve();

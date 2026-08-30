@@ -7,13 +7,11 @@
  * All SQL fragments are parameterized (no string-concat of user values).
  */
 
-/**
- * @typedef {{
- *   aggregateTypes?: string[],
- *   eventTypes?: string[],
- *   includePayloadRunId?: boolean,
- * }} ClaimEligibility
- */
+export type ClaimEligibility = {
+  aggregateTypes?: string[];
+  eventTypes?: string[];
+  includePayloadRunId?: boolean;
+};
 
 /**
  * Default eligibility for the RunEventStream outbox publisher:
@@ -22,7 +20,6 @@
  *
  * @type {Readonly<ClaimEligibility>}
  */
-// @ts-expect-error Function宽松类型与精确签名不匹配，JSDoc形状待补，先用expect-error收敛 —— TS2322: Type 'Readonly<{ aggregateTypes: readonly string[]; includeP
 export const RUN_STREAM_CLAIM_ELIGIBILITY = Object.freeze({
   aggregateTypes: Object.freeze(['run']),
   includePayloadRunId: true,
@@ -32,17 +29,16 @@ export const RUN_STREAM_CLAIM_ELIGIBILITY = Object.freeze({
  * Normalize and validate an eligibility object.
  * Empty / omitted filters mean "no eligibility restriction" (claim any due row).
  *
- * @param {ClaimEligibility | null | undefined} eligibility
+ * @param eligibility
  * @returns {ClaimEligibility}
  */
-export function normalizeClaimEligibility(eligibility) {
+export function normalizeClaimEligibility(eligibility: ClaimEligibility | null | undefined) {
   if (eligibility == null) return {};
   if (typeof eligibility !== 'object' || Array.isArray(eligibility)) {
     throw new Error('claim eligibility must be an object when provided');
   }
 
-  /** @type {ClaimEligibility} */
-  const out = {};
+  const out: ClaimEligibility = {};
 
   if (eligibility.aggregateTypes !== undefined) {
     if (!Array.isArray(eligibility.aggregateTypes)) {
@@ -84,9 +80,9 @@ export function normalizeClaimEligibility(eligibility) {
 /**
  * Whether eligibility adds any SQL predicate (false = claim all due rows).
  *
- * @param {ClaimEligibility} eligibility
+ * @param eligibility
  */
-export function hasEligibilityFilter(eligibility) {
+export function hasEligibilityFilter(eligibility: ClaimEligibility) {
   const e = normalizeClaimEligibility(eligibility);
   return Boolean(
     (e.aggregateTypes && e.aggregateTypes.length > 0) ||
@@ -99,18 +95,16 @@ export function hasEligibilityFilter(eligibility) {
  * Build parameterized SQL fragment + bindings for AND ( ... ).
  * Returns empty sql when no filter (caller must not append AND).
  *
- * @param {ClaimEligibility | null | undefined} eligibility
+ * @param eligibility
  * @returns {{ sql: string, bindings: string[] }}
  */
-export function buildEligibilitySql(eligibility) {
+export function buildEligibilitySql(eligibility: ClaimEligibility | null | undefined) {
   const e = normalizeClaimEligibility(eligibility);
-  /** @type {string[]} */
-  const parts = [];
+  const parts: string[] = [];
   // 只 push aggregateTypes / eventTypes 的元素，两者都是 string[]。
   // 写成 unknown[] 会让调用方把它 spread 进 knex.raw 的 bindings 时
   // 匹配不上任何重载——那处的 @ts-expect-error 就是这么来的。
-  /** @type {string[]} */
-  const bindings = [];
+  const bindings: string[] = [];
 
   if (e.aggregateTypes && e.aggregateTypes.length > 0) {
     if (e.aggregateTypes.length === 1) {
@@ -192,10 +186,10 @@ export function buildEligibilitySql(eligibility) {
 /**
  * In-memory eligibility check (unit tests / fake knex).
  *
- * @param {Record<string, unknown>} row
- * @param {ClaimEligibility | null | undefined} eligibility
+ * @param row
+ * @param eligibility
  */
-export function rowMatchesEligibility(row, eligibility) {
+export function rowMatchesEligibility(row: Record<string, unknown>, eligibility: ClaimEligibility | null | undefined) {
   const e = normalizeClaimEligibility(eligibility);
   if (!hasEligibilityFilter(e)) return true;
 
@@ -228,13 +222,13 @@ export function rowMatchesEligibility(row, eligibility) {
 }
 
 /**
- * @param {unknown} value
+ * @param value
  * @returns {Record<string, unknown>}
  */
-function parsePayload(value) {
+function parsePayload(value: unknown) {
   if (value == null) return {};
   if (typeof value === 'object' && !Buffer.isBuffer(value)) {
-    return /** @type {Record<string, unknown>} */ (value);
+    return (value as Record<string, unknown>);
   }
   if (typeof value === 'string') {
     try {
