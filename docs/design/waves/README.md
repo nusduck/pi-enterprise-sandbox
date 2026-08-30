@@ -101,6 +101,12 @@ Wave 3 标 ✅ 时，搜索、产物、数据集三块是占位实现。补齐�
 | W7-E | MCP facade 移植进 `exec/src/mcp/` + 窄桥八条路由；`sandbox/` 删除 | ✅ |
 | W7-F | 文档收口：AGENTS / README / architecture / module-layout / api / development；ADR 转 Accepted；STATUS 逐行重审 | ✅ |
 
+> **Wave 7 之后仍未完成的 agent 内部整理**，另立方案：
+> [`../agent-ts-rebuild.md`](../agent-ts-rebuild.md)。W6-A 声称删除了
+> `infrastructure/pi/` 与 `extensions/`，但**没有删 `infrastructure/sandbox/`**——
+> 那 17 个 `internal-*-http.js` 与 `runtime/src/providers/remote-*.ts` 是同一件事
+> 的两份实现，且两条都在跑。这是 Wave 6 验收时漏掉的一层。
+
 **起栈后才发现、299 个绿测试没抓到的两个 bug**（详见 [HANDOFF](HANDOFF.md) 的坑表）：
 共享 cordis Context 导致每进程只有第一次产物提交成功；把 Python 的 `host:*` 通配
 语法搬进只做精确匹配的 TS SDK，导致 MCP 面拒绝所有带端口的 Host。
