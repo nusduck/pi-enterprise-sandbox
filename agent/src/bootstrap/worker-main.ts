@@ -21,7 +21,7 @@ import { startRunWorkerRuntime } from './run-worker.js';
 import { startTelemetry } from '../infrastructure/telemetry.js';
 import { CronScheduler } from '../application/cron-job-service.js';
 
-function optionalSafeInteger(value, minimum) {
+function optionalSafeInteger(value: unknown, minimum: number): number | undefined {
   if (value == null || String(value).trim() === '') return undefined;
   const parsed = Number(value);
   return Number.isSafeInteger(parsed) && parsed >= minimum
@@ -29,14 +29,16 @@ function optionalSafeInteger(value, minimum) {
     : undefined;
 }
 
-/**
- * @param {NodeJS.ProcessEnv} [env]
- * @param {{
- *   createContainer?: typeof createServiceContainer,
- *   createRunWorker?: Function,
- * }} [hooks] - DI seams for tests
- */
-export async function startWorkerMain(env = process.env, hooks = {}) {
+/** 测试用的注入缝。生产不传，走真实实现。 */
+export interface WorkerMainHooks {
+  readonly createContainer?: typeof createServiceContainer;
+  readonly createRunWorker?: (...args: any[]) => any;
+}
+
+export async function startWorkerMain(
+  env: NodeJS.ProcessEnv = process.env,
+  hooks: WorkerMainHooks = {},
+) {
   const telemetry = await startTelemetry(env, {
     serviceName: 'pi-enterprise-agent-worker',
   });

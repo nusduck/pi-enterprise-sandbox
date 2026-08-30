@@ -35,11 +35,23 @@ import { createStubRunExecutor } from '../application/run-executor.js';
 import { PINNED_PI_SDK_VERSION } from '../infrastructure/dsh/constants.js';
 import * as skillPathsModule from '../skills/paths.js';
 
+/** 一个调用者的 Skill 作用域：系统层 + 他自己的用户层。 */
+export interface SkillScope {
+  readonly skillRoots: string[];
+  readonly userSkillRoot: string | null;
+}
+
+/** 身份来自不可信来源，两个字段都可能缺；解析失败时降级到系统层。 */
+export interface IdentityLike {
+  readonly orgId?: unknown;
+  readonly userId?: unknown;
+}
+
 /**
  * Fail-closed: worker Sandbox calls need service API token when not stub.
  * @param {NodeJS.ProcessEnv | Record<string, string|undefined>} env
  */
-export function assertWorkerSandboxServiceToken(env = process.env) {
+export function assertWorkerSandboxServiceToken(env: NodeJS.ProcessEnv | Record<string, string | undefined> = process.env): string {
   const token = String(env.SANDBOX_API_TOKEN || '').trim();
   if (token) return token;
   const deployment = String(
@@ -74,7 +86,10 @@ export function assertWorkerSandboxServiceToken(env = process.env) {
  * @param {{ orgId?: unknown, userId?: unknown } | null} identity
  * @returns {string[]}
  */
-export function resolveSkillRootsForRun(env, identity) {
+export function resolveSkillRootsForRun(
+  env: NodeJS.ProcessEnv | Record<string, string | undefined>,
+  identity: IdentityLike | null,
+): string[] {
   const {
     SYSTEM_SKILL_ROOT,
     USER_SKILL_ROOT,
@@ -110,10 +125,11 @@ export function resolveSkillScopeForIdentity(env, identity) {
   const userRootBase = String(
     env?.SKILLS_USER_ROOT || env?.AGENT_SKILLS_USER_ROOT || USER_SKILL_ROOT,
   ).trim();
-  let userSkillRoot = null;
+  let userSkillRoot: string | null = null;
   try {
-    // @ts-expect-error 未校验string传入闭合联合，运行时需窄化守卫，存活代码先用expect-error收敛 —— TS2345: Argument of type '{ orgId?: unknown; userId?: unknown; }' is
-    userSkillRoot = userSkillRootFor(identity, userRootBase);
+    // 身份形状由 userSkillRootFor 自己校验并在非法时抛——这里不重复判断，
+    // 只负责把"抛了就降级到系统层"这条策略写清楚。
+    userSkillRoot = userSkillRootFor(identity as never, userRootBase);
   } catch {
     // Malformed identity: system tier only, same degradation as the Run path.
     userSkillRoot = null;
@@ -124,7 +140,7 @@ export function resolveSkillScopeForIdentity(env, identity) {
 /**
  * @param {NodeJS.ProcessEnv | Record<string, string|undefined>} [env]
  */
-export function resolveMysqlUrlFromEnv(env = process.env) {
+export function resolveMysqlUrlFromEnv(env: NodeJS.ProcessEnv | Record<string, string | undefined> = process.env) {
   const url =
     env.AGENT_DATABASE_URL ||
     env.MYSQL_URL ||
@@ -136,7 +152,7 @@ export function resolveMysqlUrlFromEnv(env = process.env) {
 /**
  * @param {NodeJS.ProcessEnv | Record<string, string|undefined>} [env]
  */
-export function resolveRedisUrlFromEnv(env = process.env) {
+export function resolveRedisUrlFromEnv(env: NodeJS.ProcessEnv | Record<string, string | undefined> = process.env) {
   const url =
     env.AGENT_REDIS_URL ||
     env.REDIS_URL ||
@@ -145,10 +161,20 @@ export function resolveRedisUrlFromEnv(env = process.env) {
 }
 
 /**
- * @param {import('knex').Knex | import('knex').Knex.Transaction} db
- * @param {{ now?: () => Date }} [opts]
+ * 仓储 opts。原来的 JSDoc 只声明了 `now`，而三个仓储实际还收
+ * `runtimePiSdkVersion` / `generateId`——那正是这里曾经三处
+ * `@ts-expect-error` 的全部原因：声明少了字段，不是类型系统的问题。
  */
-export function createRepositoryBundle(db, opts = {}) {
+export interface RepositoryBundleOptions {
+  readonly now?: () => Date;
+  readonly runtimePiSdkVersion?: string;
+  readonly generateId?: () => string;
+}
+
+export function createRepositoryBundle(
+  db: import('knex').Knex | import('knex').Knex.Transaction,
+  opts: RepositoryBundleOptions = {},
+) {
   const now = opts.now ?? (() => new Date());
   const traceSpans = new TraceSpanRepository(db, { now });
   return {
@@ -160,14 +186,12 @@ export function createRepositoryBundle(db, opts = {}) {
     /** PR-05 acceleration snapshots (not sole truth). */
     sessionSnapshots: new AgentSessionSnapshotRepository(db, {
       now,
-      // @ts-expect-error 遗留JS占位类型object未展开，访问runtimePiSdkVersion需收窄，存活代码先用expect-error收敛 —— TS2339: Property 'runtimePiSdkVersion' does not exist on type '{ now
       runtimePiSdkVersion: opts.runtimePiSdkVersion ?? PINNED_PI_SDK_VERSION,
     }),
     messages: new MessageRepository(db),
     /** PR-05 long-term Pi JSONL journal (messages-backed). */
     journal: new PiSessionJournalRepository(db, {
       now,
-      // @ts-expect-error 遗留JS占位类型object未展开，访问generateId需收窄，存活代码先用expect-error收敛 —— TS2339: Property 'generateId' does not exist on type '{ now?: () => 
       generateId: opts.generateId,
     }),
     runs: new RunRepository(db, { now }),
@@ -181,7 +205,6 @@ export function createRepositoryBundle(db, opts = {}) {
     /** Agent working memory: session todo list + owner-scoped note log. */
     taskState: new TaskStateRepository(db, {
       now,
-      // @ts-expect-error 遗留JS占位类型object未展开，访问generateId需收窄，存活代码先用expect-error收敛 —— TS2339: Property 'generateId' does not exist on type '{ now?: () => 
       generateId: opts.generateId,
     }),
     sandboxAudit: new SandboxAuditEventRepository(db, { now }),
@@ -201,7 +224,7 @@ export function createRepositoryBundle(db, opts = {}) {
  * @param {NodeJS.ProcessEnv | Record<string, string|undefined>} env
  * @param {{ runExecutorFactory?: Function|null }} opts
  */
-export function resolveWorkerExecutorFactory(env, opts = {}) {
+export function resolveWorkerExecutorFactory(env: NodeJS.ProcessEnv | Record<string, string | undefined>, opts: Record<string, any> = {}) {
   if (typeof opts.runExecutorFactory === 'function') {
     return opts.runExecutorFactory;
   }

@@ -18,14 +18,11 @@ import { SessionRecoveryService } from '../application/session-recovery-service.
 import { mkdirSync } from 'node:fs';
 import path from 'node:path';
 
-/**
- * Parse a positive-integer env value with fallback (invalid/absent → default).
- *
- * @param {string | undefined} raw
- * @param {number} fallback
- * @returns {number}
- */
-function positiveIntEnv(raw, fallback) {
+/** 过渡期宽松类型：容器与应用服务仍是 JS。 */
+type Loose = any;
+
+/** Parse a positive-integer env value with fallback (invalid/absent → default). */
+function positiveIntEnv(raw: string | undefined, fallback: number): number {
   if (raw == null || String(raw).trim() === '') return fallback;
   const n = parseInt(String(raw), 10);
   return Number.isFinite(n) && n > 0 ? n : fallback;
@@ -39,10 +36,8 @@ function positiveIntEnv(raw, fallback) {
  * can be assembled before that. Construction is cheap (repositories are made
  * per transaction anyway); the durable state lives entirely in MySQL.
  *
- * @param {import('./container.js').ServiceContainer} container
- * @returns {{ spawn: Function, getStatuses: Function }}
  */
-function createSubagentSpawnPort(container) {
+function createSubagentSpawnPort(container: Loose): { spawn: Loose; getStatuses: Loose } {
   const build = async () => {
     const { SubagentSpawnService } = await import(
       '../application/subagent-spawn-service.js'
@@ -98,39 +93,53 @@ function createTaskStateStore(container) {
  * resource configuration for the runtime). Production workers call this via
  * {@link ensureWorkerRunExecutorFactory} with default resolvers; callers may
  * still inject a custom factory on the container constructor.
- *
- * @param {{
- *   modelResolver: (agentVersion: object) => object | Promise<object>,
- *   workspaceResolver: (agentSession: object) => string | Promise<string>,
- *   extensionFactories?: unknown[],
- *   extensionBundleFactory?: (runContext: object, deps: object) => unknown[],
- *   eventProjectionMode?: 'session-subscribe' | 'observability' | 'both',
- *   sessionLockManager?: any,
- *   piRuntimeFactory?: any,
- *   sessionAdapter?: any,
- *   projector?: any,
- *   recoveryService?: SessionRecoveryService,
- *   sandboxSessionProvisioner?: any,
- *   promptImageLoader?: (input: object) => Promise<Array<{ type: 'image', data: string, mimeType: string }>>,
- *   sessionLockRenewIntervalMs?: number,
- *   steerPollIntervalMs?: number,
- *   mcpResolver?: Function | object | null,
- *   mcpSecretResolver?: Function,
- *   mcpRuntimeRoot?: string,
- *   subagentSpawnPort?: { spawn: Function, getStatuses: Function },
- *   taskStateStore?: object,
- *   otelToolSpans?: boolean,
- *   sandboxTransport?: any,
- *   toolRiskPolicy?: any,
- *   skillManagerFactory?: any,
- *   deltaTruncateLimit?: number,
- *   thinkingTruncateLimit?: number,
- *   requestAuthResolver?: (model: object, agentVersion: object) => object | Promise<object>,
- *   skillRootsForRun?: (identity: object) => unknown,
- * }} opts
- * @returns {Promise<import('../application/run-executor.js').RunExecutorFactory>}
  */
-export async function buildPiRunExecutorFactory(container, opts) {
+
+/**
+ * `buildPiRunExecutorFactory` 的选项。由 JSDoc 转成真接口。
+ *
+ * 大部分字段仍是 `Loose`：它们承载的对象（容器、仓储、应用服务）都还是 JS，
+ * 给它们编造精确类型会谎报现状。等 application/ 与 infrastructure/ 转完，
+ * 这里会自然收紧。
+ */
+export interface PiRunExecutorFactoryOptions {
+  readonly modelResolver: (agentVersion: object) => object | Promise<object>;
+  readonly workspaceResolver: (agentSession: object) => string | Promise<string>;
+  readonly extensionFactories?: unknown[];
+  readonly extensionBundleFactory?: (runContext: object, deps: object) => unknown[];
+  readonly eventProjectionMode?: 'session-subscribe' | 'observability' | 'both';
+  readonly sessionLockManager?: Loose;
+  readonly piRuntimeFactory?: Loose;
+  readonly sessionAdapter?: Loose;
+  readonly projector?: Loose;
+  readonly recoveryService?: Loose;
+  readonly sandboxSessionProvisioner?: Loose;
+  /** 入参携带 trace 与归属信息；这里不收紧成具体接口，它由 Run 上下文拼出。 */
+  readonly promptImageLoader?: (
+    input: Loose,
+  ) => Promise<Array<{ type: 'image'; data: string; mimeType: string }>>;
+  readonly sessionLockRenewIntervalMs?: number;
+  readonly steerPollIntervalMs?: number;
+  readonly mcpResolver?: Loose;
+  readonly mcpSecretResolver?: Loose;
+  readonly mcpRuntimeRoot?: string;
+  readonly subagentSpawnPort?: { spawn: Loose; getStatuses: Loose };
+  readonly taskStateStore?: object;
+  readonly otelToolSpans?: boolean;
+  readonly sandboxTransport?: Loose;
+  readonly toolRiskPolicy?: Loose;
+  readonly skillManagerFactory?: Loose;
+  readonly deltaTruncateLimit?: number;
+  readonly thinkingTruncateLimit?: number;
+  /** model 带 provider/id 等字段，形状由模型目录决定，暂不收紧。 */
+  readonly requestAuthResolver?: (model: Loose, agentVersion: Loose) => object | Promise<object>;
+  readonly skillRootsForRun?: (identity: object) => unknown;
+}
+
+export async function buildPiRunExecutorFactory(
+  container: Loose,
+  opts: PiRunExecutorFactoryOptions,
+) {
   if (typeof opts?.modelResolver !== 'function') {
     throw new Error(
       'createPiRunExecutorFactory requires modelResolver(agentVersion)',

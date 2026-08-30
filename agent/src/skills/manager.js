@@ -132,8 +132,8 @@ export async function readSkillArchiveDownload(response) {
  *   identity?: { orgId: unknown, userId: unknown } | null,
  *   skillRoots?: string[],
  *   userSkillRoot?: string | null,
- *   downloadArchive?: ((input: { attachmentId: string }) => Promise<unknown>) | null,
- *   downloadWorkspaceArchive?: ((input: { path: string }) => Promise<unknown>) | null,
+ *   downloadArchive?: ((input: { attachmentId: string, signal?: AbortSignal }) => Promise<unknown>) | null,
+ *   downloadWorkspaceArchive?: ((input: { path: string, signal?: AbortSignal }) => Promise<unknown>) | null,
  *   auditLogPath?: string | null,
  *   auditSink?: ((event: object) => void) | null,
  *   getMeta?: () => object,
@@ -272,11 +272,15 @@ export function createSkillManager(options = {}) {
         }, SKILL_INSTALL_TIMEOUT_MS);
         let downloaded;
         try {
+          // 两条分支各自的形状已由上面的守卫保证：fromSandbox 时 sourcePath
+          // 非空，否则 attachmentId 非空。fetchArchive 的两个实现各只认自己
+          // 那一种，所以这里断言成联合而不是让 JSDoc 去表达"取决于分支"。
           const response = await fetchArchive(
-            fromSandbox
-              // @ts-expect-error 未校验string传入闭合联合，运行时需窄化守卫，存活代码先用expect-error收敛 —— TS2345: Argument of type '{ path: string; signal: AbortSignal; } | {
-              ? { path: sourcePath, signal: controller.signal }
-              : { attachmentId, signal: controller.signal },
+            /** @type {any} */ (
+              fromSandbox
+                ? { path: sourcePath, signal: controller.signal }
+                : { attachmentId, signal: controller.signal }
+            ),
           );
           downloaded = await readSkillArchiveDownload(response);
         } catch (error) {

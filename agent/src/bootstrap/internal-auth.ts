@@ -11,17 +11,31 @@
  */
 
 import { timingSafeEqual } from 'node:crypto';
+import type { ServerResponse } from 'node:http';
 
-/**
- * @param {{ AGENT_INTERNAL_TOKEN?: string, ALLOW_UNAUTHENTICATED_INTERNAL?: boolean } | null | undefined} config
- * @param {(res: import('node:http').ServerResponse, status: number, body: object) => void} json
- * @param {{ warn?: (message: string) => void }} [opts]
- * @returns {(req: import('node:http').IncomingMessage, res: import('node:http').ServerResponse) => boolean}
- */
-export function createInternalAuthGate(config, json, opts = {}) {
+export interface InternalAuthConfig {
+  readonly AGENT_INTERNAL_TOKEN?: string;
+  readonly ALLOW_UNAUTHENTICATED_INTERNAL?: boolean;
+}
+
+/** 只需要读头的请求形状。 */
+interface TokenCarrier {
+  readonly headers: Record<string, string | string[] | undefined>;
+}
+
+type JsonResponder = (res: ServerResponse, status: number, body: object) => void;
+
+/** 返回 true 表示放行；返回 false 时**已经写过响应**，调用方不要再写。 */
+export type InternalAuthGate = (req: TokenCarrier, res: ServerResponse) => boolean;
+
+export function createInternalAuthGate(
+  config: InternalAuthConfig | null | undefined,
+  json: JsonResponder,
+  opts: { warn?: (message: string) => void } = {},
+): InternalAuthGate {
   const token = config?.AGENT_INTERNAL_TOKEN || '';
   const allowUnauthenticated = config?.ALLOW_UNAUTHENTICATED_INTERNAL === true;
-  const warn = opts.warn ?? ((message) => console.warn(message));
+  const warn = opts.warn ?? ((message: string) => console.warn(message));
 
   if (!token) {
     warn(
@@ -35,7 +49,7 @@ export function createInternalAuthGate(config, json, opts = {}) {
     );
   }
 
-  return function enforceInternalAuth(req, res) {
+  return function enforceInternalAuth(req: TokenCarrier, res: ServerResponse): boolean {
     if (!token) {
       if (allowUnauthenticated) return true;
       json(res, 401, {

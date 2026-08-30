@@ -549,7 +549,6 @@ export class ServiceContainer {
     if (!executor) throw new Error('ServiceContainer MySQL not started');
     return createRepositoryBundle(executor, {
       now: this.now,
-      // @ts-expect-error 对象字面量存在未知属性，类型定义待对齐 —— TS2353: Object literal may only specify known properties, and 'gener
       generateId: this.generateId,
     });
   }

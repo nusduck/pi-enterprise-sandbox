@@ -35,17 +35,21 @@ export class NeedsReconciliationError extends Error {
   /**
    * @param {string} runId
    * @param {string} [status]
-   * @param {string} [detail]
    */
-  constructor(runId, status = 'UNKNOWN', detail = '') {
+  // 这四个字段原本是构造器里动态赋的属性。转 TS 时声明出来——BullMQ 的重试
+  // 逻辑靠 `code` 与 `delayMs` 决策，它们是这个错误的契约，不是附带信息。
+  readonly code = 'NEEDS_RECONCILIATION';
+  readonly runId: string;
+  readonly status: string;
+  readonly delayMs = 5_000;
+
+  constructor(runId: string, status = 'UNKNOWN', detail = '') {
     super(
       `Run ${runId} needs reconciliation (status=${status})${detail ? `: ${detail}` : ''}`,
     );
     this.name = 'NeedsReconciliationError';
-    this.code = 'NEEDS_RECONCILIATION';
     this.runId = runId;
     this.status = status;
-    this.delayMs = 5_000;
   }
 }
 
@@ -64,29 +68,36 @@ export class NeedsReconciliationError extends Error {
  */
 
 /**
+ * 过渡期宽松类型：`ExecuteRunService` / `RunRecoveryService` 仍是 JS，
+ * 它们的 JSDoc 期待精确的函数签名，而这里的 deps 原本声明成裸 `Function`
+ * ——那正是这个文件曾经六处 `@ts-expect-error` 的全部原因。用 `Loose` 把
+ * "两边都还没有真类型"这件事说清楚，比逐个压制诚实。
+ */
+type Loose = any;
+
+export interface RunWorkerDeps {
+  readonly transactionManager: { run: Loose };
+  readonly createRepositories: Loose;
+  readonly leaseManager: Loose;
+  readonly runQueue: { enqueue: Loose };
+  readonly cancelSignal?: Loose;
+  readonly runExecutor?: Loose;
+  readonly runExecutorFactory?: Loose;
+  readonly allowStubExecutor?: boolean;
+  readonly generateId: () => string;
+  readonly workerId?: string;
+  readonly now?: () => Date;
+  readonly cancelPollIntervalMs?: number;
+  readonly leaseRenewIntervalMs?: number;
+  readonly onStart?: (runtime: object) => Promise<void> | void;
+  readonly onShutdown?: (runtime: object) => Promise<void> | void;
+}
+
+/**
  * Build a worker runtime from already-constructed infrastructure deps.
  * No I/O on construction.
- *
- * @param {{
- *   transactionManager: { run: Function },
- *   createRepositories: Function,
- *   leaseManager: object,
- *   runQueue: { enqueue: Function },
- *   cancelSignal?: object | null,
- *   runExecutor?: object,
- *   runExecutorFactory?: Function,
- *   allowStubExecutor?: boolean,
- *   generateId: () => string,
- *   workerId?: string,
- *   now?: () => Date,
- *   cancelPollIntervalMs?: number,
- *   leaseRenewIntervalMs?: number,
- *   onStart?: (runtime: object) => Promise<void> | void,
- *   onShutdown?: (runtime: object) => Promise<void> | void,
- * }} deps
- * @returns {RunWorkerRuntime}
  */
-export function createRunWorkerRuntime(deps) {
+export function createRunWorkerRuntime(deps: RunWorkerDeps) {
   if (!deps?.transactionManager || typeof deps.createRepositories !== 'function') {
     throw new Error('createRunWorkerRuntime requires transactionManager + createRepositories');
   }
@@ -103,7 +114,7 @@ export function createRunWorkerRuntime(deps) {
 
   // Prefer explicit factory. Shared runExecutor only for concurrency=1 tests.
   // Never silently invent a stub here for production paths.
-  let runExecutorFactory = deps.runExecutorFactory;
+  let runExecutorFactory: Loose = deps.runExecutorFactory;
   if (!runExecutorFactory && deps.runExecutor) {
     runExecutorFactory = undefined; // use shared instance
   }
@@ -111,24 +122,24 @@ export function createRunWorkerRuntime(deps) {
     if (deps.allowStubExecutor === true) {
       runExecutorFactory = () => createStubRunExecutor();
     } else {
-      const err = new Error(
-        'createRunWorkerRuntime requires runExecutor or runExecutorFactory; set allowStubExecutor=true only in explicit test/dev wiring',
+      // 装配期缺执行器是部署错误，不是运行时状况：带上稳定的 code 让上层
+      // 能区分"没配"与"跑挂了"。
+      const err = Object.assign(
+        new Error(
+          'createRunWorkerRuntime requires runExecutor or runExecutorFactory; set allowStubExecutor=true only in explicit test/dev wiring',
+        ),
+        { code: 'RUN_EXECUTOR_NOT_CONFIGURED' },
       );
-      // @ts-expect-error 遗留JS占位类型object未展开，访问code需收窄，存活代码先用expect-error收敛 —— TS2339: Property 'code' does not exist on type 'Error'.
-      err.code = 'RUN_EXECUTOR_NOT_CONFIGURED';
       throw err;
     }
   }
 
   const executeRunService = new ExecuteRunService({
-    // @ts-expect-error Function宽松类型与精确签名不匹配，JSDoc形状待补，先用expect-error收敛 —— TS2322: Type '{ run: Function; }' is not assignable to type '{ run: 
     transactionManager: deps.transactionManager,
-    // @ts-expect-error Function宽松类型与精确签名不匹配，JSDoc形状待补，先用expect-error收敛 —— TS2322: Type 'Function' is not assignable to type '(db: any) => { ru
     createRepositories: deps.createRepositories,
     leaseManager: deps.leaseManager,
     cancelSignal: deps.cancelSignal ?? null,
     runExecutor: deps.runExecutor,
-    // @ts-expect-error Function宽松类型与精确签名不匹配，JSDoc形状待补，先用expect-error收敛 —— TS2322: Type 'Function' is not assignable to type '(job: { runId: st
     runExecutorFactory,
     generateId: deps.generateId,
     now: deps.now,
@@ -137,11 +148,8 @@ export function createRunWorkerRuntime(deps) {
   });
 
   const recoveryService = new RunRecoveryService({
-    // @ts-expect-error Function宽松类型与精确签名不匹配，JSDoc形状待补，先用expect-error收敛 —— TS2322: Type '{ run: Function; }' is not assignable to type '{ run: 
     transactionManager: deps.transactionManager,
-    // @ts-expect-error Function宽松类型与精确签名不匹配，JSDoc形状待补，先用expect-error收敛 —— TS2322: Type 'Function' is not assignable to type '(db: any) => { ru
     createRepositories: deps.createRepositories,
-    // @ts-expect-error Function宽松类型与精确签名不匹配，JSDoc形状待补，先用expect-error收敛 —— TS2322: Type '{ enqueue: Function; }' is not assignable to type '{ e
     runQueue: deps.runQueue,
     generateId: deps.generateId,
     now: deps.now,
@@ -272,7 +280,7 @@ export function createRunWorkerRuntime(deps) {
  * Explicit start helper (not invoked on import).
  * @param {RunWorkerRuntime} runtime
  */
-export async function startRunWorkerRuntime(runtime) {
+export async function startRunWorkerRuntime(runtime: Loose) {
   if (!runtime || typeof runtime.start !== 'function') {
     throw new Error('startRunWorkerRuntime requires a runtime from createRunWorkerRuntime');
   }
