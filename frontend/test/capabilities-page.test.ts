@@ -26,22 +26,29 @@ describe('CapabilitiesPage diagnostics and MCP status contracts', () => {
     );
   });
 
-  it('projects configured capabilities from the first-party extension runtime', () => {
+  // 这条用例**在 2026-08-31 之前就是红的**：它读
+  // `agent/src/extensions/constants.js`，而那个目录在 Wave 6 删除 Pi Extension
+  // 时就没了；`extension-diagnostics-service` 也早已从 `.js` 转成 `.ts`。
+  // 也就是说它守的是一份已经不存在的名单。
+  //
+  // 改成守现在真正成立的事（ADR 0009 D11 / 计划 H8.5）：诊断投影的是 DSH 的
+  // host 工具面，来源标注不再是那批已删除的 Extension。
+  it('projects the DSH host tool surface, not the deleted Pi extension list', () => {
     const diagnosticsSrc = readFileSync(
-      join(__dirname, '../../agent/src/application/extension-diagnostics-service.js'),
-      'utf8',
-    );
-    const extensionSrc = readFileSync(
-      join(__dirname, '../../agent/src/extensions/constants.js'),
+      join(__dirname, '../../agent/src/application/extension-diagnostics-service.ts'),
       'utf8',
     );
     assert.match(diagnosticsSrc, /Per-Run live authority/);
-    assert.match(extensionSrc, /sandbox-bridge/);
-    assert.match(extensionSrc, /enterprise-policy/);
-    assert.match(extensionSrc, /observability/);
-    assert.match(extensionSrc, /user-interaction/);
-    assert.match(extensionSrc, /skill-lifecycle/);
+    assert.match(
+      diagnosticsSrc,
+      /dsh-host-tools/,
+      '来源必须标成 DSH host 工具面——sandbox-bridge 那批 Extension 已经不存在了',
+    );
+    assert.doesNotMatch(diagnosticsSrc, /sandbox-bridge/);
     assert.doesNotMatch(diagnosticsSrc, /packages\/enterprise-agent-kit/);
+    // 名单来自 runtime/policy/tool-names.ts 的唯一事实源（ADR 0009 D4），
+    // 而它与 boot 后 `ctx.tools.schemas()` 的集合由 agent 侧 boot.test.ts 断言恰好相等。
+    assert.match(diagnosticsSrc, /ENTERPRISE_DEFAULT_TOOLS/);
   });
 
   it('renders extension statuses and registry session scope on diagnostics tab', () => {

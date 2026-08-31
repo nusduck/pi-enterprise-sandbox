@@ -89,7 +89,10 @@ export function toolErrorCode(result: unknown): string | null {
 }
 
 export function isSpawnSubagentToolName(name: string | null | undefined): boolean {
-  return String(name || '').trim() === 'spawn_subagent';
+  const n = String(name || '').trim();
+  // 出厂 `dsh-tool-subagent` 注册的是 `subagent`（ADR 0009 D4，one-shot 形态）。
+  // 旧名留着只为历史会话。
+  return n === 'subagent' || n === 'spawn_subagent';
 }
 
 export function isCheckSubagentToolName(name: string | null | undefined): boolean {

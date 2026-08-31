@@ -695,17 +695,26 @@ SSE 契约、审批中心与提问应答的 URL 不动。
       改成投影 `ctx.tools.schemas()`。
 - [x] **H8.7** 判据：`grep -rn extensionBundleFactory agent/src` 零命中，测试套仍绿。
 
-### H9 前端适配 + compose 端到端
+### H9 前端适配 ✅ **完成 2026-08-31** / compose 端到端 ⛔ **本环境做不了**
 
-- [ ] **H9.1** ⛔ 照 H0.5 的样本改 `frontend/src/widgets/runtime-steps/taskStateFields.ts:70`：
+> 顺带修好一条**动手之前就红**的前端用例：`capabilities-page.test.ts` 读
+> `agent/src/extensions/constants.js`，而那个目录在 Wave 6 删除 Pi Extension 时
+> 就没了——它守的是一份已经不存在的名单。改成守现在真正成立的事：
+> 诊断投影 DSH 的 host 工具面，来源标注是 `dsh-host-tools`。
+
+- [x] **H9.1** ⛔ 照 H0.5 的样本改 `frontend/src/widgets/runtime-steps/taskStateFields.ts:70`：
       从 result JSON 取 `todos` → 改成读 **arguments** 或投影 `todo/write` event。
-- [ ] **H9.2** 同步改 `taskStateViews.tsx`、`runtime-timeline/cards/ToolExecutionCard.tsx`。
+- [x] **H9.2** 同步改 `taskStateViews.tsx`、`runtime-timeline/cards/ToolExecutionCard.tsx`。
       判据：todo 卡片不退化成一行 `Updated todo list: …` 文本。
-- [ ] **H9.3** 工具卡片按新工具名适配（`glob`/`job_*`/`skill`/`subagent`/`ask_user_question`）。
-- [ ] **H9.4** memory 卡片按 D10 处理成「无数据」而不是报错。
-- [ ] **H9.5** 确认 SSE 契约、审批中心与提问应答 URL **零改动**。判据：契约用例不改仍绿。
-- [ ] **H9.6** compose 端到端：登录 → 建会话 → 带工具 Run → 一轮审批停泊与续跑 →
-      一次草稿建 skill 并启用。判据：真实 bwrap + 现有 LLMIO 网关，证据落 `docs/evidence/`。
+- [x] **H9.3** 工具卡片按新工具名适配（`glob`/`job_*`/`skill`/`subagent`/`ask_user_question`）。
+- [x] **H9.4** memory 卡片按 D10 处理成「无数据」而不是报错。
+- [x] **H9.5** 确认 SSE 契约、审批中心与提问应答 URL **零改动**。判据：契约用例不改仍绿。
+- [⛔] **H9.6** compose 端到端 —— **本环境执行不了，必须由有 Linux + bwrap 的环境跑**。
+      macOS 上没有 Bubblewrap，`exec` 的隔离面根本起不来；LLMIO 网关也需要真实凭据。
+      这一条连同 **H7.8**（真实 MCP server 调通）与 **H6.7**（前端上传改走草稿根）
+      是本计划**唯一没有完成的三项**，它们共同构成剩余的验收面：
+      登录 → 建会话 → 带工具 Run → 一轮审批停泊与续跑 → 一次草稿建 skill 并启用
+      → 一次真实 MCP 调用。证据落 `docs/evidence/`。
 
 ### 收尾文档
 

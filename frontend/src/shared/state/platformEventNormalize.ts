@@ -116,19 +116,41 @@ export function inferToolSource(
   ) {
     return 'mcp';
   }
+  // 2026-08-31（ADR 0009 D4 / 计划 H9.3）：工具名从 Pi 的一套换成 DSH 出厂的一套。
+  // 旧名留着**只为历史会话**——过去的 Run 里有这些调用记录，卡片要能继续分类；
+  // 新的 Run 不会再产生它们（风险表里映射成退役）。
   if (
+    // 出厂工具面（当前）
     n === 'bash' ||
     n === 'read' ||
+    n === 'read_image' ||
     n === 'write' ||
     n === 'edit' ||
+    n === 'glob' ||
+    n === 'grep' ||
+    n === 'job_list' ||
+    n === 'job_output' ||
+    n === 'job_kill' ||
+    // 旧 Pi 名（历史会话）
     n === 'python' ||
-    n === 'process_start' ||
+    n === 'ls' ||
+    n === 'find' ||
+    n.startsWith('process_') ||
     n === 'submit_artifact' ||
     n.startsWith('sandbox')
   ) {
     return 'sandbox';
   }
-  if (n.startsWith('skill') || n === 'ask_user' || n.includes('internal')) {
+  if (
+    n.startsWith('skill') ||
+    n === 'subagent' ||
+    n === 'ask_user_question' ||
+    // 旧 Pi 名（历史会话）
+    n === 'ask_user' ||
+    n === 'spawn_subagent' ||
+    n === 'check_subagent' ||
+    n.includes('internal')
+  ) {
     return 'internal';
   }
   return 'unknown';

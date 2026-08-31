@@ -49,6 +49,13 @@ export function isTodoToolName(name: string | null | undefined): boolean {
   return n === 'todo_write' || n === 'todo_read';
 }
 
+/**
+ * memory 工具（ADR 0009 D10：**本阶段不做**）。
+ *
+ * 名字留着是为了历史会话：2026-08-31 之前的 Run 里有 `memory_write` /
+ * `memory_search` 的调用记录，卡片要能继续渲染它们。新的 Run 不会再产生这两个
+ * 工具——它们在风险表里被映射成退役（理由码 `TOOL_RETIRED`），根本调不动。
+ */
 export function isMemoryToolName(name: string | null | undefined): boolean {
   const n = String(name || '').trim();
   return n === 'memory_write' || n === 'memory_search';
@@ -59,8 +66,23 @@ export function isTaskStateToolName(name: string | null | undefined): boolean {
 }
 
 /**
- * Todo items, preferring the stored result (authoritative, carries positions)
- * and falling back to the arguments so a still-running write still renders.
+ * Todo items.
+ *
+ * ## 2026-08-31（ADR 0009 / 计划 H9.1）：清单在 **arguments** 里，不在 result 里
+ *
+ * 出厂 `dsh-tool-todo` 的 tool result 只有一句
+ * `Updated todo list: <n> pending, <m> in progress, <k> completed.`，
+ * canonical value 是 `{ counts: {...} }` —— **不含 todos 数组**。清单在
+ * `arguments.todos` 与 `todo/write` 这个 session event 里
+ * （证据：`docs/evidence/2026-08-31-dsh-tool-registry.md` 附录 H0.5）。
+ *
+ * 所以取值顺序改成 **arguments 优先**。旧的「result 优先」在换到出厂工具之后
+ * 会取到 `undefined`，卡片静默退化成一行文本——没有报错，只是清单没了。
+ *
+ * 三个来源都留着，因为历史会话里三种形状都存在：
+ * - `arguments.todos`  出厂 `tool-todo`（当前）
+ * - `arguments.items`  旧 Pi `task-state` extension
+ * - `result.todos`     旧 Pi 的结果形状
  *
  * @param input `todo_write` arguments
  * @param result the tool result, when it has arrived
@@ -68,8 +90,14 @@ export function isTaskStateToolName(name: string | null | undefined): boolean {
 export function parseTodoFields(input: unknown, result?: unknown): TodoFields {
   const payload = parseToolResultJson(result);
   const stored = payload && Array.isArray(payload.todos) ? payload.todos : null;
-  const args = isPlainObject(input) && Array.isArray(input.items) ? input.items : null;
-  const source = stored ?? args ?? [];
+  const args = isPlainObject(input)
+    ? Array.isArray(input.todos)
+      ? input.todos
+      : Array.isArray(input.items)
+        ? input.items
+        : null
+    : null;
+  const source = args ?? stored ?? [];
 
   const todos: TodoItem[] = source.flatMap((raw, index) => {
     if (!isPlainObject(raw)) return [];
