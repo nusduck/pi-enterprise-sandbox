@@ -493,3 +493,47 @@ test('沙箱能看到模型的 Python venv，且 PATH 与挂载同出一源', as
     await cleanup();
   }
 });
+
+// ── 草稿根的挂载（ADR 0009 D7 / 计划 H6.2）─────────────────────────────────
+
+test('草稿根：workspace-write 下是可写 bind，read-only 下退成 ro_bind', async () => {
+  const ws = await makeTestWorkspace();
+  try {
+    const context = { ...ws.context, draftSkillRoot: `${ws.root}/skill-draft` };
+    for (const mode of ['workspace-write', 'read-only'] as const) {
+      const profile = buildIsolationProfile({ context, mode, command: ['bash', '-c', 'pwd'] });
+      const draft = profile.mounts.find((m) => m.target === '/home/sandbox/skill-draft');
+      assert.ok(draft, `mode=${mode}: 草稿根必须在 MountPlan 里`);
+      // 可写性**完全跟随 writableRoots()**，这里不自己判一次（ADR 0008 D2）。
+      const expected = writableRoots(context, mode).includes(context.draftSkillRoot)
+        ? 'bind'
+        : 'ro_bind';
+      assert.equal(draft?.kind, expected, `mode=${mode}: 可写性必须与 writableRoots() 一致`);
+    }
+  } finally {
+    await ws.cleanup();
+  }
+});
+
+test('三个 skill 根职责分开：只有草稿是可写的', async () => {
+  const ws = await makeTestWorkspace({ enabledPackages: ['pkg'] });
+  try {
+    const context = { ...ws.context, draftSkillRoot: `${ws.root}/skill-draft` };
+    const profile = buildIsolationProfile({
+      context,
+      mode: 'workspace-write',
+      command: ['bash', '-c', 'pwd'],
+    });
+    const byTarget = new Map(profile.mounts.map((m) => [m.target, m]));
+    // 系统 skill：永远只读。ADR 0009 D7 引的原话是「an installed skill must never
+    // be able to shadow or overwrite one the platform vouches for」。
+    assert.equal(byTarget.get('/home/sandbox/skill')?.kind, 'ro_bind');
+    // 已启用包：逐包只读（ADR 0008 D4）。模型改草稿动不了它——
+    // 这正是 ADR 0006 P1 (B) 点名的那条绕过被消掉的地方。
+    assert.equal(byTarget.get('/home/sandbox/skill-user/pkg')?.kind, 'ro_bind');
+    // 草稿：唯一可写的那个。
+    assert.equal(byTarget.get('/home/sandbox/skill-draft')?.kind, 'bind');
+  } finally {
+    await ws.cleanup();
+  }
+});

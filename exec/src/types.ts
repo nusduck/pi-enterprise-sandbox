@@ -17,6 +17,15 @@ export interface WorkspaceContext {
   readonly tempRoot: string;
   /** 只读的系统 Skill 根。 */
   readonly systemSkillRoot: string;
+  /**
+   * 用户侧 Skill 的**草稿根**（ADR 0009 D7）：每用户一个持久目录，可写。
+   *
+   * 模型用 `write` / `bash` 在这里造包——和它在 workspace 里干活是同一组工具、
+   * 同一套围栏。**不进发现、不进 system prompt**：进了就等于没有闸门。
+   *
+   * 省略表示这个部署还没开草稿面；那时它既不可写也不挂载。
+   */
+  readonly draftSkillRoot?: string;
   /** 该用户已启用的 Skill 包，逐包绑定（ADR 0008 D4）。 */
   readonly enabledSkillPackages: readonly EnabledSkillPackage[];
 }

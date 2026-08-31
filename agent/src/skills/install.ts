@@ -477,94 +477,13 @@ export function normalizeGeneratedFilePath(raw) {
 }
 
 /**
- * Atomically create or replace an Agent-generated Skill package.
- * @param {{
- *   name: string,
- *   description: string,
- *   instructions: string,
- *   files?: Array<{ path: string, content: string }>,
- *   skillRoot: string,
- *   timeoutMs?: number,
- *   systemSkillNames?: Iterable<string>,
- * }} opts
+ * `createGeneratedSkill()`（`skill_create`）已退役（ADR 0009 D7 / 计划 H6.10）。
+ *
+ * 「让模型生成一个包」现在就是「模型往草稿根里写文件」——不需要一个专门的
+ * 原子创建入口，因为草稿根本来就不进发现、不进 prompt，写到一半也不会有人看见。
+ * 原子性真正重要的地方是**启用**，那一步用 `atomicReplaceDir()`
+ * （见 `skills/enablement.ts`）。
  */
-export async function createGeneratedSkill(opts: { name: string, description: string, instructions: string, files?: Array<{ path: string, content: string }>, skillRoot: string, timeoutMs?: number, systemSkillNames?: Iterable<string>, }) {
-  const name = validateSkillName(opts.name);
-  const description = normalizeDescription(opts.description);
-  const instructions = String(opts.instructions ?? '').trim();
-  if (!instructions) throw new Error('Skill instructions are required');
-  const files = Array.isArray(opts.files) ? opts.files : [];
-  if (files.length > SKILL_GENERATED_MAX_FILES) {
-    throw new Error(`Generated Skill may contain at most ${SKILL_GENERATED_MAX_FILES} extra files`);
-  }
-  assertDoesNotShadowSystem(name, opts.systemSkillNames);
-
-  const normalizedFiles = [];
-  const seen = new Set(['skill.md']);
-  let totalBytes = Buffer.byteLength(instructions, 'utf8');
-  for (const raw of files) {
-    const relative = normalizeGeneratedFilePath(raw?.path);
-    const collisionKey = relative.toLocaleLowerCase('en-US');
-    if (seen.has(collisionKey)) {
-      throw new Error(`Generated Skill contains a duplicate file path: ${relative}`);
-    }
-    seen.add(collisionKey);
-    const content = String(raw?.content ?? '');
-    totalBytes += Buffer.byteLength(content, 'utf8');
-    normalizedFiles.push({ relative, content });
-  }
-  if (totalBytes > SKILL_GENERATED_MAX_BYTES) {
-    throw new Error(
-      `Generated Skill content is ${totalBytes} bytes; maximum is ${SKILL_GENERATED_MAX_BYTES}`,
-    );
-  }
-
-  const skillRoot = resolveUserSkillRoot(opts.skillRoot);
-  const timeoutMs = Number.isFinite(opts.timeoutMs)
-    ? Math.max(1, Number(opts.timeoutMs))
-    : SKILL_INSTALL_TIMEOUT_MS;
-  const deadlineAt = Date.now() + timeoutMs;
-  const token = `${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-  const stagingRoot = path.join(skillRoot, `.tmp-create-${token}`);
-  const packageSource = path.join(stagingRoot, '_generated');
-  const stagingPackage = path.join(stagingRoot, '_package');
-
-  try {
-    await ensureTraversableUserSkillRoot(skillRoot);
-    await fsp.mkdir(packageSource, { recursive: true, mode: 0o700 });
-    const skillMd =
-      `---\nname: ${name}\ndescription: ${JSON.stringify(description)}\n---\n\n` +
-      `${instructions}\n`;
-    await fsp.writeFile(path.join(packageSource, 'SKILL.md'), skillMd, {
-      encoding: 'utf8',
-      mode: 0o644,
-    });
-    for (const file of normalizedFiles) {
-      assertBeforeDeadline(deadlineAt);
-      const destination = path.join(packageSource, file.relative);
-      await fsp.mkdir(path.dirname(destination), { recursive: true, mode: 0o755 });
-      await fsp.writeFile(destination, file.content, { encoding: 'utf8', mode: 0o644 });
-    }
-
-    const installed = await installPreparedPackage({
-      packageSource,
-      stagingPackage,
-      skillRoot,
-      deadlineAt,
-      systemSkillNames: opts.systemSkillNames,
-    });
-    await rmrf(stagingRoot);
-    return {
-      ...installed,
-      source_type: 'agent_generated',
-      generated_files: normalizedFiles.length + 1,
-      generated_bytes: totalBytes,
-    };
-  } catch (error) {
-    await rmrf(stagingRoot);
-    throw error;
-  }
-}
 
 /** @param {{ name: string, skillRoot: string }} opts */
 export async function uninstallSkill(opts) {
@@ -581,183 +500,22 @@ export async function uninstallSkill(opts) {
 }
 
 /**
- * Edit one file in an existing user Skill. This function cannot create a new
- * package; new packages must go through approved install/create operations.
- * @param raw
- * @param ctx
- */
-function prepareSkillEdit(raw: { skillRoot?: string, path?: string, content?: unknown }, ctx: { resolveSkillPath: Function, skillRoot: string, maxBytes: number }) {
-  const { absolute, relative } = ctx.resolveSkillPath(raw?.path, ctx.skillRoot);
-  const normalized = relative.replace(/\\/g, '/');
-  const [packageName] = normalized.split('/');
-  const name = validateSkillName(packageName);
-  if (normalized.split('/').some((segment) => segment.toLowerCase() === '.git')) {
-    throw new Error('skill_edit cannot write VCS metadata');
-  }
-  const packageDir = skillPackageDir(ctx.skillRoot, name);
-  validateSkillPackage(packageDir, { expectedName: name });
-  if (path.resolve(absolute) === path.resolve(packageDir)) {
-    throw new Error('skill_edit path must name a file inside an installed Skill');
-  }
-
-  const content =
-    typeof raw?.content === 'string' ? raw.content : String(raw?.content ?? '');
-  const bytes = Buffer.byteLength(content, 'utf8');
-  if (bytes > ctx.maxBytes) {
-    throw new Error(
-      `skill_edit content for ${normalized} is ${bytes} bytes; maximum is ${ctx.maxBytes}. ` +
-        'Upload a replacement Skill ZIP for larger changes.',
-    );
-  }
-  if (path.basename(absolute) === 'SKILL.md') {
-    const metadata = parseSkillMdFrontmatter(content);
-    if (metadata.name !== name) {
-      throw new Error(
-        `SKILL.md name "${metadata.name}" must match installed package "${name}"`,
-      );
-    }
-  }
-  return { name, absolute, relative: normalized, content, bytes, temporary: null };
-}
-
-/**
- * Replace one or more files inside a single installed user Skill.
+ * ## `skill_edit` 的整套校验已退役（ADR 0009 D7 / 计划 H6.10）
  *
- * A batch is all-or-nothing. Every mutation here costs one approval, so a
- * coherent change to a package has to be proposable as one call — splitting it
- * into one call per file would either spend N approvals on one edit or let the
- * user approve a package into a half-written state. Validation runs over the
- * whole batch first, the writes land in temporaries, and only then are the
- * files swapped in; a failure part-way restores what was already swapped.
+ * 这里原本有约 170 行：`prepareSkillEdit()` 的路径 / 字节上限 / 文件数上限 /
+ * 单包约束 / 去重 / 超时，以及 `editSkillFiles()` / `editSkillFile()`。
+ * 它们只服务于 `skill_edit` 这个工具，而 D7 取消了整套 skill 变更工具——
+ * 模型改用 `write` / `bash` 在**草稿根**里直接改，和它在 workspace 里干活是
+ * 同一组工具、同一套围栏。
  *
- * @param {{
- *   skillRoot: string,
- *   files?: Array<{ path: string, content: string }>,
- *   path?: string,
- *   content?: string,
- *   maxBytes?: number,
- *   timeoutMs?: number,
- * }} opts
+ * 那些校验想守的东西现在由别的地方守，而且守得更靠前：
+ * - 「不能写到包外面」→ 由 exec 的 fs 围栏 + bwrap 挂载守（草稿根之外根本不可写）；
+ * - 「不能碰 VCS 元数据 / 符号链接」→ 由**启用**时的 `inspectDraftPackage()` 守，
+ *   而且那一刻才是真正重要的时刻（进只读挂载与 prompt 之前）；
+ * - 「大小与文件数」→ 同上，`SKILL_ENABLE_MAX_BYTES` / `SKILL_ENABLE_MAX_FILES`。
+ *
+ * 换句话说：闸门从「每次写都校验一遍」搬到了「进入上下文之前校验一次」。
  */
-export async function editSkillFiles(opts: { skillRoot: string, files?: Array<{ path: string, content: string }>, path?: string, content?: string, maxBytes?: number, timeoutMs?: number, }) {
-  const { resolveSkillPath } = await import('./paths.js');
-  const skillRoot = resolveUserSkillRoot(opts.skillRoot);
-  const entries =
-    Array.isArray(opts.files) && opts.files.length > 0
-      ? opts.files
-      : [{ path: opts.path, content: opts.content }];
-  if (entries.every((entry) => !String(entry?.path ?? '').trim())) {
-    throw new Error(
-      'skill_edit requires files: [{ path, content }] naming at least one file',
-    );
-  }
-  if (entries.length > SKILL_EDIT_MAX_FILES) {
-    throw new Error(
-      `skill_edit accepts at most ${SKILL_EDIT_MAX_FILES} files per call (got ${entries.length})`,
-    );
-  }
-
-  const maxBytes = Number.isFinite(opts.maxBytes)
-    ? Math.max(1, Number(opts.maxBytes))
-    : SKILL_EDIT_MAX_BYTES;
-  const ctx = { skillRoot, maxBytes, resolveSkillPath };
-
-  const prepared = [];
-  const seen = new Set();
-  let packageName = null;
-  for (const raw of entries) {
-    const item = prepareSkillEdit(raw, ctx);
-    if (packageName == null) {
-      packageName = item.name;
-    } else if (item.name !== packageName) {
-      throw new Error(
-        `skill_edit must stay inside one Skill package (got "${packageName}" and "${item.name}")`,
-      );
-    }
-    const collisionKey = item.relative.toLocaleLowerCase('en-US');
-    if (seen.has(collisionKey)) {
-      throw new Error(`skill_edit lists ${item.relative} twice`);
-    }
-    seen.add(collisionKey);
-    prepared.push(item);
-  }
-
-  const timeoutMs = Number.isFinite(opts.timeoutMs)
-    ? Math.max(1, Number(opts.timeoutMs))
-    : SKILL_EDIT_TIMEOUT_MS;
-  const token = `${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  const swapped: Array<{ absolute: string, backup: string | null }> = [];
-  try {
-    for (const item of prepared) {
-      await fsp.mkdir(path.dirname(item.absolute), { recursive: true, mode: 0o755 });
-      item.temporary = `${item.absolute}.tmp-${token}`;
-      await fsp.writeFile(item.temporary, item.content, {
-        encoding: 'utf8',
-        mode: 0o644,
-        signal: controller.signal,
-      });
-      if (controller.signal.aborted) {
-        throw new Error(
-          `skill_edit timed out after ${timeoutMs}ms while writing ${item.relative}`,
-        );
-      }
-    }
-    for (const item of prepared) {
-      const backup = fs.existsSync(item.absolute) ? `${item.absolute}.bak-${token}` : null;
-      if (backup) await fsp.rename(item.absolute, backup);
-      await fsp.rename(item.temporary, item.absolute);
-      item.temporary = null;
-      swapped.push({ absolute: item.absolute, backup });
-    }
-  } catch (error) {
-    for (const done of swapped.reverse()) {
-      try {
-        if (done.backup) await fsp.rename(done.backup, done.absolute);
-        else await rmrf(done.absolute);
-      } catch {
-        // Surface the original failure; a restore that fails leaves the
-        // backup beside the file for an operator to inspect.
-      }
-    }
-    for (const item of prepared) {
-      if (item.temporary) await rmrf(item.temporary);
-    }
-    if (controller.signal.aborted || error?.name === 'AbortError') {
-      throw new Error(`skill_edit timed out after ${timeoutMs}ms`);
-    }
-    throw error;
-  } finally {
-    clearTimeout(timer);
-  }
-  for (const done of swapped) {
-    if (done.backup) await rmrf(done.backup);
-  }
-
-  const files = prepared.map((item) => ({
-    path: item.relative,
-    absolute: item.absolute,
-    bytes: item.bytes,
-  }));
-  return {
-    skill_name: packageName,
-    files,
-    // Single-file shape kept so existing callers and recorded tool results
-    // keep reading the same fields.
-    path: files[0].path,
-    absolute: files[0].absolute,
-    bytes: files.reduce((total, file) => total + file.bytes, 0),
-  };
-}
-
-/**
- * Single-file edit. Thin wrapper over {@link editSkillFiles}.
- * @param opts
- */
-export async function editSkillFile(opts: { skillRoot: string, path: string, content: string, maxBytes?: number, timeoutMs?: number }) {
-  return editSkillFiles(opts);
-}
 
 /** @param {string} skillRoot */
 export function listInstalledSkills(skillRoot) {

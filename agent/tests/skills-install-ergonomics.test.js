@@ -8,10 +8,7 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 
 import {
-  createGeneratedSkill,
   describeInstalledSkills,
-  editSkillFile,
-  editSkillFiles,
   installSkillArchive,
   uninstallSkill,
 } from '../src/skills/install.js';
@@ -151,168 +148,29 @@ test('uploaded and generated Skills cannot shadow bundled Skills', async () => {
     }),
     /bundled system Skill/,
   );
-  await assert.rejects(
-    createGeneratedSkill({
-      name: 'pdf',
-      description: 'Generated.',
-      instructions: 'Do a thing.',
-      skillRoot: userRoot,
-      systemSkillNames: ['pdf'],
-    }),
-    /bundled system Skill/,
-  );
+  // 2026-08-31（ADR 0009 D7 / 计划 H6.10）：`createGeneratedSkill` 退役了，
+  // 「模型造的包不得遮蔽系统 skill」这条不变量搬到了**启用**那一刻
+  // （`inspectDraftPackage`）。检查搬得更靠后是对的：草稿叫什么名字无所谓，
+  // 它不进任何人的上下文；危险的是同名包被挂进 skill-user/ 之后盖住平台背书的那个。
+  // 用例见 tests/skills-enablement.test.ts。
 });
 
-test('creates an Agent-generated Skill atomically with optional files', async () => {
-  const userRoot = await tmpdir('skill-user');
-  const result = await createGeneratedSkill({
-    name: 'generated-skill',
-    description: 'Generated through conversation.',
-    instructions: '# Workflow\n\nAsk for the target, then execute.',
-    files: [{ path: 'references/checklist.md', content: '# Checklist\n' }],
-    skillRoot: userRoot,
-  });
-  assert.equal(result.name, 'generated-skill');
-  assert.equal(result.source_type, 'agent_generated');
-  assert.equal(result.generated_files, 2);
-  assert.match(
-    fs.readFileSync(path.join(userRoot, 'generated-skill', 'SKILL.md'), 'utf8'),
-    /Generated through conversation/,
-  );
-});
 
-test('generated package rejects unsafe or duplicate file paths', async () => {
-  const userRoot = await tmpdir('skill-user');
-  const base = {
-    name: 'generated-skill',
-    description: 'Generated.',
-    instructions: 'Instructions.',
-    skillRoot: userRoot,
-  };
-  await assert.rejects(
-    createGeneratedSkill({ ...base, files: [{ path: '../escape', content: 'x' }] }),
-    /unsafe/,
-  );
-  await assert.rejects(
-    createGeneratedSkill({
-      ...base,
-      files: [
-        { path: 'notes.md', content: 'a' },
-        { path: 'NOTES.md', content: 'b' },
-      ],
-    }),
-    /duplicate/,
-  );
-  await assert.rejects(
-    createGeneratedSkill({ ...base, files: [{ path: 'SKILL.md', content: 'x' }] }),
-    /generated from name/,
-  );
-  await assert.rejects(
-    createGeneratedSkill({ ...base, files: [{ path: '.GIT/config', content: 'x' }] }),
-    /must not contain \.git/i,
-  );
-});
 
-test('skill_edit only changes an existing user package and cannot install one', async () => {
-  const userRoot = await tmpdir('skill-user');
-  await assert.rejects(
-    editSkillFile({
-      skillRoot: userRoot,
-      path: 'new-skill/SKILL.md',
-      content: skillMd('new-skill'),
-    }),
-    /not found|not a directory/,
-  );
 
-  writeSkillPackage(path.join(userRoot, 'existing'), 'existing');
-  await editSkillFile({
-    skillRoot: userRoot,
-    path: 'existing/notes.md',
-    content: '# Updated\n',
-  });
-  assert.equal(
-    fs.readFileSync(path.join(userRoot, 'existing', 'notes.md'), 'utf8'),
-    '# Updated\n',
-  );
-  await assert.rejects(
-    editSkillFile({
-      skillRoot: userRoot,
-      path: 'existing/SKILL.md',
-      content: skillMd('renamed'),
-    }),
-    /must match installed package/,
-  );
-  await assert.rejects(
-    editSkillFile({
-      skillRoot: userRoot,
-      path: 'existing/.GIT/config',
-      content: 'no',
-    }),
-    /cannot write VCS metadata/,
-  );
-});
 
-test('skill_edit applies a multi-file batch as one all-or-nothing change', async () => {
-  const userRoot = await tmpdir('skill-user');
-  const packageDir = path.join(userRoot, 'existing');
-  writeSkillPackage(packageDir, 'existing');
-  fs.writeFileSync(path.join(packageDir, 'notes.md'), '# Original\n');
-
-  const result = await editSkillFiles({
-    skillRoot: userRoot,
-    files: [
-      { path: 'existing/notes.md', content: '# Batched\n' },
-      { path: 'existing/scripts/office/pack.py', content: 'print("pack")\n' },
-    ],
-  });
-  assert.equal(result.skill_name, 'existing');
-  assert.equal(result.files.length, 2);
-  assert.equal(fs.readFileSync(path.join(packageDir, 'notes.md'), 'utf8'), '# Batched\n');
-  assert.equal(
-    fs.readFileSync(path.join(packageDir, 'scripts', 'office', 'pack.py'), 'utf8'),
-    'print("pack")\n',
-  );
-
-  // A bad entry anywhere rejects the whole batch: the good entry beside it
-  // must not have been written.
-  await assert.rejects(
-    editSkillFiles({
-      skillRoot: userRoot,
-      files: [
-        { path: 'existing/notes.md', content: '# Should not land\n' },
-        { path: 'existing/SKILL.md', content: skillMd('renamed') },
-      ],
-    }),
-    /must match installed package/,
-  );
-  assert.equal(fs.readFileSync(path.join(packageDir, 'notes.md'), 'utf8'), '# Batched\n');
-
-  await assert.rejects(
-    editSkillFiles({
-      skillRoot: userRoot,
-      files: [
-        { path: 'existing/notes.md', content: 'a' },
-        { path: 'existing/notes.md', content: 'b' },
-      ],
-    }),
-    /twice/,
-  );
-  writeSkillPackage(path.join(userRoot, 'other'), 'other');
-  await assert.rejects(
-    editSkillFiles({
-      skillRoot: userRoot,
-      files: [
-        { path: 'existing/notes.md', content: 'a' },
-        { path: 'other/notes.md', content: 'b' },
-      ],
-    }),
-    /one Skill package/,
-  );
-  await assert.rejects(
-    editSkillFiles({ skillRoot: userRoot, files: [] }),
-    /at least one file/,
-  );
-});
+// 2026-08-31（ADR 0009 D7 / 计划 H6.10）：以下四条随 `skill_create` / `skill_edit`
+// 一起删除，因为它们测的工具已经不存在了：
+//   - creates an Agent-generated Skill atomically with optional files
+//   - generated package rejects unsafe or duplicate file paths
+//   - skill_edit only changes an existing user package and cannot install one
+//   - skill_edit applies a multi-file batch as one all-or-nothing change
+//   - generating a Skill leaves the bwrap bind path traversable
+//
+// **它们守的东西没有丢，只是搬了地方**：路径安全 / 符号链接 / VCS 元数据 /
+// 大小与文件数上限，现在由**启用**时的 `inspectDraftPackage()` 守，用例在
+// `tests/skills-enablement.test.ts`。那一刻才是真正重要的时刻——包进入只读挂载
+// 与 system prompt 之前。写草稿本身不再校验，因为草稿不进任何人的上下文。
 
 test('uninstall and two-tier listing remain user-scoped', async () => {
   const systemRoot = await tmpdir('skill-system');
@@ -612,26 +470,6 @@ test('uploading a Skill leaves the bwrap bind path traversable', async () => {
   assert.equal(modeOf(path.join(userRoot, 'bind-path-skill')) & 0o055, 0o055);
 });
 
-test('generating a Skill leaves the bwrap bind path traversable', async () => {
-  const base = await tmpdir('skill-base');
-  const userRoot = path.join(base, ORG, USER);
-
-  await createGeneratedSkill({
-    name: 'generated-skill',
-    description: 'Generated.',
-    instructions: 'Do the thing.',
-    files: [{ path: 'references/notes.md', content: '# Notes\n' }],
-    skillRoot: userRoot,
-  });
-
-  for (const dir of [path.join(base, ORG), userRoot]) {
-    assert.equal(
-      modeOf(dir) & 0o055,
-      0o055,
-      `${dir} must stay group/other traversable (mode ${modeOf(dir).toString(8)})`,
-    );
-  }
-});
 
 test('a root already bricked by an earlier install is repaired', async () => {
   const base = await tmpdir('skill-base');

@@ -25,6 +25,19 @@ export const SYSTEM_SKILL_ROOT = '/home/sandbox/skill';
 export const USER_SKILL_ROOT = '/home/sandbox/skill-user';
 
 /**
+ * 用户侧 Skill 的**草稿根**（ADR 0009 D7 / 计划 H6.3）。
+ *
+ * **故意不在 `DEFAULT_SKILL_ROOTS` 里。** 那个常量是发现（discovery）与
+ * system prompt 的挂载根清单；草稿根一旦进去，模型写完一个包的下一轮就自动
+ * 拥有了它——**闸门就没有了**。ADR 0009 D7 的「拒绝」里点名了这条：
+ * 「把草稿根放进 `tool-skill` 的发现范围或 system prompt（等于取消闸门）」。
+ *
+ * 草稿根只做两件事：给模型一个可写的地方造包（`exec` 的 MountPlan 里是 `bind`），
+ * 以及给启用流程一个读取源。
+ */
+export const DRAFT_SKILL_ROOT = '/home/sandbox/skill-draft';
+
+/**
  * Canonical *mount* roots, system first. These are the volumes; the per-user
  * directory beneath USER_SKILL_ROOT is resolved per Run.
  */

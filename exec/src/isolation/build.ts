@@ -20,6 +20,7 @@ import {
   AGENT_TEMP_PATH,
   AGENT_USER_SKILL_PATH,
   AGENT_WORKSPACE_PATH,
+  AGENT_DRAFT_SKILL_PATH,
   IsolationConfigError,
   type IsolationProfile,
   type Mount,
@@ -201,6 +202,19 @@ function buildRootMounts(
       sessionSpecific: true,
     },
   ];
+  // 草稿根（ADR 0009 D7 / 计划 H6.2）。是否可写**完全由 `writableRoots()` 决定**
+  // ——这里不自己判一次，否则就是两处各算一遍（ADR 0008 D2）。
+  // `ensureDir: true`：每用户一个持久目录，第一次用时还不存在。
+  if (ctx.draftSkillRoot !== undefined && ctx.draftSkillRoot !== '') {
+    mounts.push({
+      kind: writable.has(ctx.draftSkillRoot) ? 'bind' : 'ro_bind',
+      source: ctx.draftSkillRoot,
+      target: AGENT_DRAFT_SKILL_PATH,
+      required: false,
+      ensureDir: true,
+      sessionSpecific: true,
+    });
+  }
   return { mounts, tempWritable };
 }
 

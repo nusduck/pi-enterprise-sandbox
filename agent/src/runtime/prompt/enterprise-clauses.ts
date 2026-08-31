@@ -10,12 +10,28 @@
 /** 默认根目录。与 skills/paths.ts 的 SYSTEM_SKILL_ROOT、compose 的挂载一致。 */
 export const DEFAULT_WORKSPACE_ROOT = '/home/sandbox/workspace';
 export const DEFAULT_SKILL_ROOT = '/home/sandbox/skill';
+/**
+ * 用户侧 skill 的草稿根（ADR 0009 D7 / 计划 H6.12）。与 skills/paths.ts 的
+ * `DRAFT_SKILL_ROOT` 一致。
+ *
+ * 提示词里的默认值不直接用这个常量，而是从调用方给的 `skillRoot` 派生
+ * （`${skillRoot}-draft`）——见 `enterpriseClauses()` 里的理由。
+ */
+export const DEFAULT_DRAFT_SKILL_ROOT = '/home/sandbox/skill-draft';
 
 export interface EnterpriseClauseRoots {
   /** 可读写的用户工作区。相对路径在它下面解析。 */
   workspaceRoot?: string;
   /** 只读的 skill 安装根目录。 */
   skillRoot?: string;
+  /**
+   * 可写的 skill 草稿根。省略时用默认值。
+   *
+   * 必须写进提示词：模型现在没有 `skill_create` / `skill_install` 这类工具了
+   * （ADR 0009 D7 取消了整套），它**只能靠这段话知道包该建在哪**。
+   * 不说的话，最可能的失败是它去写只读的 skill 根然后报错。
+   */
+  draftSkillRoot?: string;
 }
 
 /** 提示词里那段「路径硬规则」。标题行用于幂等判断，不要改。 */
@@ -24,9 +40,14 @@ export const PATHS_HEADING = '## Paths (hard rules)';
 export function enterpriseClauses(roots: EnterpriseClauseRoots = {}): string {
   const workspaceRoot = (roots.workspaceRoot || '').trim() || DEFAULT_WORKSPACE_ROOT;
   const skillRoot = (roots.skillRoot || '').trim() || DEFAULT_SKILL_ROOT;
+  // 默认值**从 skillRoot 派生**，不是写死的常量：调用方一旦给了自定义根
+  // （测试、非标准部署），草稿根必须跟着走。回落到写死的 /home/sandbox/skill-draft
+  // 会让提示词同时出现两套根——模型照着写会扑空，而且那种不一致没人会报错。
+  const draftSkillRoot = (roots.draftSkillRoot || '').trim() || `${skillRoot}-draft`;
   return `${PATHS_HEADING}
 - **User project / workspace**: \`${workspaceRoot}\` — read and write here. Relative paths resolve under this root.
-- **Skills (read-only)**: \`${skillRoot}\` — installed skill packages. Never write here.
+- **Skills (read-only)**: \`${skillRoot}\` and \`${skillRoot}-user\` — available skill packages. Never write here.
+- **Skill drafts (writable)**: \`${draftSkillRoot}\` — build new skill packages here with ordinary \`write\`/\`bash\`. A draft is not available to you until a human enables it; you cannot enable one yourself.
 - Do **not** search or read host install trees such as \`/app\`, \`node_modules\`, or agent home.
 
 ## Policy

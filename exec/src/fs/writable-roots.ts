@@ -14,14 +14,23 @@ import { canonicalizePath } from './path-policy.js';
  * 返回该模式下允许写入的物理根，顺序稳定。
  *
  * - `read-only`          → 空
- * - `workspace-write`    → [workspaceRoot, tempRoot]
+ * - `workspace-write`    → [workspaceRoot, tempRoot, draftSkillRoot?]
+ *
+ * **草稿根（ADR 0009 D7 / 计划 H6.1）只加在这一处。** fs 围栏与 bwrap 的
+ * MountPlan 都从这里派生（ADR 0008 D2），所以「哪些地方能写」永远只有一个答案。
+ * 在 build.ts 里另外判一次「草稿根要不要 bind」就是让两处各算一遍——
+ * 那正是 ADR 0008 D2 立这条规矩要防的事。
  */
 export function writableRoots(
   ctx: WorkspaceContext,
   mode: SandboxMode,
 ): readonly string[] {
   if (mode === 'read-only') return [];
-  return [ctx.workspaceRoot, ctx.tempRoot];
+  const roots = [ctx.workspaceRoot, ctx.tempRoot];
+  if (ctx.draftSkillRoot !== undefined && ctx.draftSkillRoot !== '') {
+    roots.push(ctx.draftSkillRoot);
+  }
+  return roots;
 }
 
 /**

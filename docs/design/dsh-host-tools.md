@@ -564,30 +564,47 @@ SSE 契约、审批中心与提问应答的 URL 不动。
       **真正的跨进程恢复留到 H9 的 compose 端到端**——单测证明的是接线与语义，
       「杀掉进程另一个结算」要真 MySQL + 真 BullMQ。
 
-### H6 Skill 草稿根 + 启用闸门（只依赖 H1，可与 H2 并行）
+### H6 Skill 草稿根 + 启用闸门 ✅ **除 H6.7 外完成 2026-08-31**
 
-- [ ] **H6.1** ⛔ `exec/src/fs/writable-roots.ts:20-25` —— `workspace-write` 增加草稿根。
+> **实施中抓到一个自己引入的缺口**：第一版 `enableDraftPackage()` 没有挡「与系统
+> skill 同名」。是 `skills-install-ergonomics.test.js` 里那条既有用例
+> （"uploaded and generated Skills cannot shadow bundled Skills"）在删 `skill_create`
+> 时失败才暴露的——ADR 0009 D7 明确引了这条不变量（"an installed skill must never
+> be able to shadow or overwrite one the platform vouches for"），差点跟着旧工具
+> 一起被删掉。检查搬到**启用**那一刻是对的：草稿叫什么名字无所谓，它不进任何人的
+> 上下文；危险的是同名包被挂进 `skill-user/` 之后盖住平台背书的那一个。
+
+- [x] **H6.1** ⛔ `exec/src/fs/writable-roots.ts:20-25` —— `workspace-write` 增加草稿根。
       **只改这一处**（fs 围栏与 bwrap MountPlan 都从它派生，ADR 0008 D2）。
       判据：搜不到第二处各算一遍的地方。
-- [ ] **H6.2** 草稿根 `/home/sandbox/skill-draft`：`bind` 读写、**每用户一个**持久目录、进 MountPlan。
-- [ ] **H6.3** ⛔ `constants.ts:9-13` 的 `LOGICAL_SKILL_ROOTS` **不得**包含草稿根。
+- [x] **H6.2** 草稿根 `/home/sandbox/skill-draft`：`bind` 读写、**每用户一个**持久目录、进 MountPlan。
+- [x] **H6.3** ⛔ `constants.ts:9-13` 的 `LOGICAL_SKILL_ROOTS` **不得**包含草稿根。
       判据：用例断言 `tool-skill` 发现结果里没有草稿包、system prompt 里也没有。
-- [ ] **H6.4** 启用闸门：复用 `skills/manager.ts` 的结构与大小校验，输入从 zip 换成草稿目录。
-- [ ] **H6.5** 启用时**把字节复制成只读的已发布副本**（不是挂载草稿目录）。
+- [x] **H6.4** 启用闸门：复用 `skills/manager.ts` 的结构与大小校验，输入从 zip 换成草稿目录。
+- [x] **H6.5** 启用时**把字节复制成只读的已发布副本**（不是挂载草稿目录）。
       判据：用例——改草稿后重跑，已启用包内容不变。
-- [ ] **H6.6** 启用态与内容摘要落 owner-scoped MySQL 表（ADR 0006 P1 (C)）。
-- [ ] **H6.7** 前端 skill 上传改为解包直接写草稿根，走同一条启用路径。
+- [x] **H6.6** 启用态与内容摘要落 owner-scoped MySQL 表（ADR 0006 P1 (C)）。
+- [→] **H6.7** ⚠️ **未做**：前端上传仍走 `installSkillArchive` 直接写已启用根。
+      改成「解包进草稿根 → 走同一条启用路径」要动 Capabilities HTTP 与前端上传流，
+      与 H9 的前端改动是同一批，**并入 H9**。
+      现状不是不安全（上传本来就是人的动作），但它绕过了新的启用闸门，
+      所以两条路径的语义暂时不一致——这一点必须在 H9 收口。
 - [x] **H6.8** ⚠️ **ADR D7 的「一并退役 `source-digest.ts`」写宽了，只退役了一半**：
       `assertSourceDigest()`（`skill_install(source=sandbox)` 专用）已删；
       但 `digestArgs()` 与 `rejectMismatchedDigest()` **必须留着**——它们是 D5 审批续跑的
       承重件（`pre-execute` 铸 PENDING 时记的 `sourceDigest` 就是它算的，重放时靠它挡住
       「批准的是 A、落地的是 B」）。整个删掉等于把 D5 的指纹校验一起删了。
 - [x] **H6.9** 退役 `risk-table.ts:55` 的 `skill_install: 'high'` + `tool-risk.json` 对应条目。
-- [ ] **H6.10** 退役 `skills/install.ts:595-728` 的 `skill_edit` 整套校验（约 200 行）。
-- [ ] **H6.11** 改 `skills/manager.ts:317` 的 digest 重试文案（不再提 `skill_install`）。
-- [ ] **H6.12** `skills/skill-creator` 补写用户侧 skill 的目录形状 / 写在哪 / 怎么自测 / 怎么让用户启用；
+- [x] **H6.10** 退役 `skill_edit`（约 170 行校验）与 `skill_create`（`createGeneratedSkill`），
+      连同 `manager.edit()` / `manager.create()`——**它们没有任何生产调用方**，
+      唯一通路 `skillManagerFactory` 只喂给已删除的 extension bundle。
+      删掉的 5 条用例逐条在文件里注明了「它守的东西搬去了哪」：
+      路径安全 / 符号链接 / VCS 元数据 / 大小与文件数上限现在由**启用时**的
+      `inspectDraftPackage()` 守，用例在 `tests/skills-enablement.test.ts`。
+- [x] **H6.11** 改 `skills/manager.ts:317` 的 digest 重试文案（不再提 `skill_install`）。
+- [x] **H6.12** `skills/skill-creator` 补写用户侧 skill 的目录形状 / 写在哪 / 怎么自测 / 怎么让用户启用；
       企业条款 prompt 的路径指到草稿根。
-- [ ] **H6.13** 用例：系统 skill 在任何模式下都写不了（`ro_bind` 仍在）。
+- [x] **H6.13** 用例：系统 skill 在任何模式下都写不了（`ro_bind` 仍在）。
 
 ### H7 MCP 换出厂包 ✅ **完成 2026-08-31**（H7.8/H7.9 的真实服务器取证留到 H9）
 

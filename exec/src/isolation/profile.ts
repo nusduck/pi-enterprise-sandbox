@@ -155,6 +155,18 @@ export class IsolationConfigError extends Error {
 export const AGENT_SKILL_PATH = '/home/sandbox/skill';
 export const AGENT_USER_SKILL_PATH = '/home/sandbox/skill-user';
 export const AGENT_WORKSPACE_PATH = '/home/sandbox/workspace';
+/**
+ * 用户侧 skill 的**草稿根**（ADR 0009 D7 / 计划 H6.2）。
+ *
+ * 三个 skill 根职责分开，这是唯一可写的那个：
+ * - `AGENT_SKILL_PATH`（系统）      `ro_bind`，没人能写，永远进发现与 prompt
+ * - `AGENT_USER_SKILL_PATH`（已启用）逐包 `ro_bind`，没人能写，进发现与 prompt
+ * - `AGENT_DRAFT_SKILL_PATH`（草稿）  `bind` 可写，**不进发现、不进 prompt**
+ *
+ * 「可写」与「进上下文」被这三个根彻底分开，这是本条能同时做到「放松」
+ * （模型直接用 write/bash 造包）和「不塌」（闸门只剩人在 UI 上按的那一下）的原因。
+ */
+export const AGENT_DRAFT_SKILL_PATH = '/home/sandbox/skill-draft';
 export const AGENT_TEMP_PATH = '/tmp';
 
 /**

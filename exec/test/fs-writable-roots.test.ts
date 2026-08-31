@@ -69,3 +69,35 @@ describe('canonicalWritableRoots', () => {
     assert.deepEqual(await canonicalWritableRoots(ctx, 'read-only'), []);
   });
 });
+
+// ── 草稿根（ADR 0009 D7 / 计划 H6.1）───────────────────────────────────────
+
+describe('skill 草稿根', () => {
+  const ctx = (draftSkillRoot?: string): WorkspaceContext => ({
+    orgId: 'org1',
+    userId: 'user1',
+    workspaceId: 'ws1',
+    workspaceRoot: '/var/w/ws1',
+    tempRoot: '/var/t/ws1',
+    systemSkillRoot: '/opt/skills/system',
+    enabledSkillPackages: [],
+    ...(draftSkillRoot !== undefined ? { draftSkillRoot } : {}),
+  });
+
+  test('workspace-write 下草稿根可写', () => {
+    assert.deepEqual(writableRoots(ctx('/var/d/user1'), 'workspace-write'), [
+      '/var/w/ws1',
+      '/var/t/ws1',
+      '/var/d/user1',
+    ]);
+  });
+
+  test('read-only 下草稿根同样不可写——不留隐藏的可写角落', () => {
+    assert.deepEqual(writableRoots(ctx('/var/d/user1'), 'read-only'), []);
+  });
+
+  test('没有配草稿根的部署不受影响', () => {
+    assert.deepEqual(writableRoots(ctx(), 'workspace-write'), ['/var/w/ws1', '/var/t/ws1']);
+    assert.deepEqual(writableRoots(ctx(''), 'workspace-write'), ['/var/w/ws1', '/var/t/ws1']);
+  });
+});

@@ -36,3 +36,27 @@ test('默认 skill 根目录与真实挂载点一致（单数 skill，不是 ski
   assert.match(assembleSystemPrompt(), /`\/home\/sandbox\/skill`/);
   assert.doesNotMatch(assembleSystemPrompt(), /home\/sandbox\/skills/);
 });
+
+test('ADR 0009 D7 / H6.12：提示词必须写明可写的草稿根', () => {
+  const prompt = assembleSystemPrompt();
+  // 模型现在没有 skill_create / skill_install 这类工具了（D7 取消了整套），
+  // 它**只能靠这段话知道包该建在哪**。不说的话，最可能的失败是它去写只读的
+  // skill 根然后报错。
+  assert.match(prompt, /`\/home\/sandbox\/skill-draft`/);
+  // 而且必须说清「草稿不等于可用」——闸门只剩人按的那一下。
+  assert.match(prompt, /until a human enables it/);
+  assert.match(prompt, /cannot enable one yourself/);
+});
+
+test('H6.12 草稿根跟随调用方给的 skillRoot，不回落到写死的常量', () => {
+  const prompt = assembleSystemPrompt('', {
+    workspaceRoot: '/srv/ws',
+    skillRoot: '/srv/skills',
+  });
+  assert.match(prompt, /`\/srv\/skills-draft`/);
+  assert.doesNotMatch(
+    prompt,
+    /home\/sandbox/,
+    '同时出现两套根会让模型照着写扑空，而那种不一致没有人会报错',
+  );
+});
