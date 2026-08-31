@@ -262,6 +262,19 @@ answerer 插件不存在；resume 是 application 侧重放。
 
 `application/` **不再 `registerTool`。**
 
+> ## ⚠️ 2026-09-01 实施后的两处如实记录
+>
+> 1. **启用闸门还没有 HTTP 路由。** 上表「启用态与校验（`skills/manager` +
+>    Capabilities HTTP）」里的前半已实现并在真环境验证过
+>    （`skills/enablement.ts` + `manager.enable()/disable()`，见
+>    [`../evidence/2026-08-31-compose-e2e-adr0009.md`](../evidence/2026-08-31-compose-e2e-adr0009.md)），
+>    **后半没有**：还没有给人点的那个按钮接出去。在它接出来之前，「人在 UI 上启用」
+>    这条闸门只能由运维手工调用，不要当成已交付。
+> 2. **停泊有一个固有边界**：并发工具里若有一个撞审批，D5 采用的
+>    `agent.cancel()` 会中止整轮，当时**在飞**的另一个工具会留在
+>    `tool_executions` 的 `RUNNING` 上。不是数据丢失（字节该落的都落了），
+>    但那些行需要一个收尾者。本 ADR 未处理。
+
 **现状差距**：整表未接线。
 
 ### D7：模型直接操作用户侧 skill；不注册任何 skill 变更工具；闸门只剩「启用」

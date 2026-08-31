@@ -323,11 +323,17 @@ SSE 契约、审批中心与提问应答的 URL 不动。
 | `tool-todo` 的 result 真实形状？ | `Updated todo list: …` 文本 + `{counts}`；清单在 arguments 与 `todo/write` event | ADR 判断成立，H9.1 照此改 |
 | 注册表与 ADR D4 表是否一致？ | **不一致**：多 8 个、少 4 类、`submit_artifact` 不存在 | H1.1 以 dump 为准；新增 H2.0、H1.1b |
 
-### 由 H0 新长出来的两个待决策（不要默默二选一）
+### 由 H0 新长出来的两个待决策 —— **都已定案**
 
-1. **H2.0 的 8 个工具**：默认全 `disabled`，理由逐条写在 H2.0 表里。翻转任意一条都只改
-   `manifest.ts` 一行 + H1.1 常量一行。
-2. **H1.1b 的 `submit_artifact`**：补一个自建 tool 插件，还是承认「产物提交不再是模型工具」。
+1. **H2.0 的 8 个工具**：✅ 按本 ADR 自身的原则**一律 `disabled`**，理由逐条写在
+   `manifest.ts` 的 `DISABLED` 里。**每一条都可单独翻转**：删掉那行 `disable()`
+   + 把工具名加进 `runtime/policy/tool-names.ts`，两处而已。
+   翻转任意一条前请重读 H2.0 表里的理由——它们不是「暂时关掉」，是各有具体的
+   冲突（出网面、本机执行面、无预算约束的自主循环、与 durable 子 Agent 对不上、
+   功能重复）。
+2. **H1.1b 的 `submit_artifact`**：✅ **补回工具**，不是承认能力消失。
+   见 H1.1b 那一条：这个能力在 DSH 重建之后一直是缺的，而 exec 侧
+   `/internal/v1/artifacts/submit` 一直都在，补一个自建 tool 插件是更小的代价。
 
 ---
 
