@@ -106,6 +106,25 @@ console.log(`    ${b.llmCalls === 1 ? '✅ 循环停了 —— 这是可用的�
 const c = await scenario('conclude-body', () => {}, true);
 console.log(`\n[C] 工具体内 exec.concludeTurn() → 循环 LLM 请求 ${c.llmCalls} 次（${c.note}）`);
 console.log(`    ${c.llmCalls === 1 ? '✅ 循环停了 —— 这是可用的停泊原语' : '❌ 循环没停'}`);
+// —— 场景 E：本仓采用的形状 —— answerer 返回 rejected + park guard 锁死后续工具 ——
+// 这一条是 H4 的实现验证：turn 仍然会多走一步（场景 A 已证），但那一步里
+// 模型碰不到任何工具，所以不会产生别的副作用。
+const e = await scenario('park-guard', (ctx: any) => {
+  let parked = false;
+  ctx.on('tools/pre-execute', async (exec: any, next: any) => {
+    if (exec.name !== TOOL) return next();
+    parked = true;
+    return { kind: 'ask', reason: 'enterprise policy: needs approval' };
+  });
+  ctx.on('approval/request', async () => 'rejected');
+  ctx.inject(['tools'], (scoped: any) => {
+    scoped.tools.guard((exec: any) =>
+      parked && exec.name !== TOOL ? 'RUN_PARKED_AWAITING_APPROVAL' : undefined);
+  });
+});
+console.log(`\n[E] rejected + park guard → 循环 LLM 请求 ${e.llmCalls} 次（${e.note}）`);
+console.log(`    ${e.note.includes('0x') ? '✅ 工具体一次都没跑' : '❌ 工具落地了'}；多走的那一步里模型无工具可用`);
+
 // —— 场景 D：answerer 写 PENDING 后由外部 agent.cancel() 中止 turn ——
 const d = await scenario('cancel', (ctx: any, late) => {
   let target: any = null;

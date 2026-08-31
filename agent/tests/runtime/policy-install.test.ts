@@ -81,6 +81,22 @@ class FakeCtx {
     assert.ok(fn, 'tools/post-execute 未注册');
     return await (fn(exec, result, next) as Promise<unknown>);
   }
+
+  /** 驱动一次 approval/request，`next` 默认落到出厂的 fail-closed 结果。 */
+  async approval(req: object, next = async (): Promise<unknown> => 'unavailable'): Promise<unknown> {
+    const fn = (this.listeners.get('approval/request') ?? [])[0];
+    assert.ok(fn, 'approval/request answerer 未注册');
+    return await (fn(req, next) as Promise<unknown>);
+  }
+
+  /** 跑一遍所有 guard，返回第一条拒绝理由。 */
+  guardReason(exec: object): string | undefined {
+    for (const g of this.guards) {
+      const hit = g(exec);
+      if (hit !== undefined) return hit;
+    }
+    return undefined;
+  }
 }
 
 function installOn(ctx: FakeCtx, extra: Partial<Parameters<typeof installEnterprisePolicy>[1]> = {}) {
@@ -90,7 +106,7 @@ function installOn(ctx: FakeCtx, extra: Partial<Parameters<typeof installEnterpr
   });
 }
 
-test('四个挂载点全部注册——这正是 Wave 5 到 2026-08-30 之间缺的那一步', () => {
+test('五个挂载点全部注册——这正是 Wave 5 到 2026-08-30 之间缺的那一步', () => {
   const ctx = new FakeCtx();
   const guards: GuardListener[] = [() => null];
   installOn(ctx, { guards });
@@ -99,6 +115,143 @@ test('四个挂载点全部注册——这正是 Wave 5 到 2026-08-30 之间缺
   assert.equal(ctx.count('tools/execute'), 1, 'execute 环绕必须注册');
   assert.equal(ctx.count('tools/post-execute'), 1, 'post-execute 必须注册');
   assert.equal(ctx.guards.length, 1, 'ctx.tools.guard() 必须注册');
+  // 2026-08-31（ADR 0009 D5）：审批 answerer。seam 本身没有 answerer，
+  // 缺了它 `ask` 会 fail-closed 到 unavailable——审批功能整体不工作。
+  assert.equal(ctx.count('approval/request'), 1, 'approval answerer 必须注册');
+});
+
+// ── 停泊（ADR 0009 D5 的实测修正形状，计划 H4）────────────────────────────
+
+test('H4.7 停泊之后本轮任何工具都被 guard 拒，模型没有工具可用', async () => {
+  const ctx = new FakeCtx();
+  const store = new InMemoryApprovalStore();
+  const installed = installOn(ctx, { approvalStore: store, riskOverrides: { bash: 'high' } });
+
+  // 停泊前：低风险工具正常放行。
+  assert.equal(installed.park.parked, false);
+  assert.equal(ctx.guardReason({ name: 'read', arguments: {}, id: 'c0' }), undefined);
+
+  // 高风险工具撞到审批 → 铸 PENDING → 停泊。
+  const decision = (await ctx.pre({ name: 'bash', arguments: { command: 'x' }, id: 'c1' })) as {
+    kind: string;
+  };
+  assert.equal(decision.kind, 'ask');
+  assert.equal(installed.park.parked, true, '铸出 PENDING 的同一刻必须停泊');
+  assert.equal(installed.park.pending?.callId, 'c1');
+  assert.equal(installed.park.pending?.toolName, 'bash');
+
+  // 触发停泊的那一次**不**在 guard 这里被拒——它走的是审批 seam 那条路。
+  assert.equal(ctx.guardReason({ name: 'bash', arguments: {}, id: 'c1' }), undefined);
+
+  // 之后的每一次都被拒，理由码稳定。这是本条的要害：
+  // 实测（scripts/probe-approval-park.ts 场景 A）turn 不会因为一次拒绝而结束，
+  // 模型会拿着错误结果继续走一步。没有这道闸门，它那一步能干任何事。
+  for (const name of ['read', 'write', 'glob', 'todo_write']) {
+    const reason = ctx.guardReason({ name, arguments: {}, id: `after-${name}` });
+    assert.match(
+      String(reason),
+      /RUN_PARKED_AWAITING_APPROVAL/,
+      `${name} 在停泊后必须被拒——否则模型可以在等审批时继续产生副作用`,
+    );
+  }
+});
+
+test('H4.7 停泊是幂等的：并发撞审批时，重放的是当初真正问人的那一次', async () => {
+  const ctx = new FakeCtx();
+  const installed = installOn(ctx, { riskOverrides: { bash: 'high' } });
+  await ctx.pre({ name: 'bash', arguments: { command: 'first' }, id: 'first' });
+  await ctx.pre({ name: 'bash', arguments: { command: 'second' }, id: 'second' });
+  assert.equal(
+    installed.park.pending?.callId,
+    'first',
+    '第一个赢；后来的只是被 guard 拒，不得覆盖停泊记录',
+  );
+});
+
+test('H4.1 answerer：有 APPROVED 记录才放行，PENDING 与 DENIED 都拒', async () => {
+  const ctx = new FakeCtx();
+  const store = new InMemoryApprovalStore();
+  installOn(ctx, { approvalStore: store });
+
+  // 没有记录 → 交回瀑布（可能还有别的 answerer），最终由出厂 fail-closed 兜底。
+  assert.equal(await ctx.approval({ toolName: 'bash', callId: 'none' }), 'unavailable');
+
+  await store.persistPending({
+    id: 'appr_c9',
+    toolName: 'bash',
+    sourceDigest: 'd',
+    argsCanonical: '{}',
+    status: 'PENDING',
+    runStatusHint: 'WAITING_APPROVAL',
+  });
+  assert.equal(
+    await ctx.approval({ toolName: 'bash', callId: 'c9' }),
+    'rejected',
+    'PENDING = 人还没看，这次不许跑。**绝不能挂 promise 等人**——那会堵住 Worker，' +
+      '而且上游明写请求必须处在一个 open turn 内。',
+  );
+
+  await store.persistPending({
+    id: 'appr_c9',
+    toolName: 'bash',
+    sourceDigest: 'd',
+    argsCanonical: '{}',
+    status: 'APPROVED',
+    runStatusHint: 'WAITING_APPROVAL',
+  });
+  assert.equal(
+    await ctx.approval({ toolName: 'bash', callId: 'c9' }),
+    'allowed-once',
+    '续跑重放时，已批准的那次必须放行',
+  );
+});
+
+test('H4.1 停泊时主动中止本轮，且保住排队中的用户消息', async () => {
+  const ctx = new FakeCtx();
+  const store = new InMemoryApprovalStore();
+  installOn(ctx, { approvalStore: store, riskOverrides: { bash: 'high' } });
+
+  // 先撞审批，铸出 PENDING 并停泊。
+  await ctx.pre({ name: 'bash', arguments: { command: 'x' }, id: 'c1' });
+
+  const cancels: Array<{ cause: unknown; opts: unknown }> = [];
+  const agent = { cancel: (cause: unknown, opts: unknown) => cancels.push({ cause, opts }) };
+  const outcome = await ctx.approval({ toolName: 'bash', callId: 'c1', agent });
+
+  assert.equal(outcome, 'rejected', '这次调用不许落地');
+  assert.equal(cancels.length, 1, '必须主动中止本轮——否则模型会多走一步（实测场景 A）');
+  assert.deepEqual(cancels[0]?.cause, {
+    kind: 'hook',
+    reason: 'RUN_PARKED_AWAITING_APPROVAL',
+  });
+  assert.deepEqual(
+    cancels[0]?.opts,
+    { keepInbox: true },
+    'cancel 默认会清掉排队中的用户消息，而续跑要用它们',
+  );
+});
+
+test('H4.1 中止失败不改变判定（工具照样不许落地）', async () => {
+  const ctx = new FakeCtx();
+  const store = new InMemoryApprovalStore();
+  installOn(ctx, { approvalStore: store, riskOverrides: { bash: 'high' } });
+  await ctx.pre({ name: 'bash', arguments: { command: 'x' }, id: 'c1' });
+  const agent = {
+    cancel: () => {
+      throw new Error('agent already disposed');
+    },
+  };
+  assert.equal(await ctx.approval({ toolName: 'bash', callId: 'c1', agent }), 'rejected');
+});
+
+test('H4.1 answerer 没有 callId 时 fail-closed', async () => {
+  const ctx = new FakeCtx();
+  installOn(ctx);
+  assert.equal(
+    await ctx.approval({ toolName: 'bash' }),
+    'rejected',
+    '没有 callId 就绑不到具体那次调用；与其猜，不如拒',
+  );
 });
 
 test('低风险工具放行，且把决定权交回瀑布（不抢别人的拒绝权）', async () => {

@@ -188,10 +188,18 @@ turn 中途放开），否则 provider 拿不到本 Run 的 RPC 上下文。验�
 > **本条其余部分不受影响**：seam + 自建 answerer、风险表留在 `pre-execute`、
 > digest 校验、重建会话重放续跑——全部照旧。改的只是「怎么让 turn 停下来」。
 >
-> 实施采用的替代形状见 [`design/dsh-host-tools.md`](../design/dsh-host-tools.md) H4：
-> 写完 PENDING 的同时在该 Run 的 agent scope 上装一个 park guard，
-> 此后本轮任何工具调用一律拒（`guard()` 单调 fail-closed），模型没有工具可用，
-> 一步文本后 turn 结束。**代价：每次停泊多一次模型往返。**
+> **实施采用的形状（已落地）**：answerer 判定 PENDING 时**同步**调
+> `req.agent.cancel({kind:'hook', reason:'RUN_PARKED_AWAITING_APPROVAL'},
+> {keepInbox:true})`——turn 立刻结束，**不多走模型往返**（实测 1 次循环请求，
+> 稳定 3/3）；同时在该 Run 的 agent scope 上装一个 **park guard**，此后本轮任何
+> 工具调用一律拒（`guard()` 单调 fail-closed）。
+>
+> 两者叠加不是重复：cancel 中止的是「活动中的 turn」，若循环已经把下一次请求
+> 发出去，guard 保证那一步里模型碰不到任何工具。少了任何一个，都有一条路径能让
+> 模型在等审批期间继续动手。
+>
+> 一个必须记住的细节：cancel **必须同步调**。初次实测用 `setTimeout(…, 0)` 延后，
+> 结果 turn 照样多走一步。
 
 **改写 [ADR 0007](0007-agent-runtime-rebuild-on-dsh.md) D4 的「不组合
 `dsh-user-approval`」。** 但组合的方式不是「把审批交给原生」：

@@ -182,7 +182,11 @@ AGENT_ENABLE_FAKE_LLM=1 npx tsx scripts/probe-approval-park.ts
 | **A** | `tools/pre-execute` 判 `ask` + answerer 返回 `rejected`（**ADR 0009 D5 第 1 步的原样**） | **2** | 0 次 | ❌ **turn 没有结束** |
 | **B** | `tools/execute` around-wrapper 返回 `{isError:false, concludesTurn:true}` | **2** | 0 次 | ❌ wrapper 写的 `concludesTurn` 被规范化掉了 |
 | **C** | 工具**体内**调 `exec.concludeTurn()` | **1** | 1 次 | ✅ **循环停了** |
-| **D** | answerer 同步调 `agent.cancel({kind:'hook'})` 后返回 `rejected` | **2** | 0 次 | ❌ 中止没能阻止这一步 |
+| **D** | answerer **同步**调 `agent.cancel({kind:'hook'})` 后返回 `rejected` | **1** | 0 次 | ✅ turn 立刻结束（稳定复现 3/3） |
+| **E** | `rejected` + park guard 锁死后续工具 | **2** | 0 次 | ✅ 多走一步，但那一步无工具可用 |
+
+> 初次跑 D 时用的是 `setTimeout(…, 0)` 延后 cancel，结果是 2 次——**必须同步调**，
+> 否则循环已经把下一次请求发出去了。这条差别写在这里，免得日后改成异步而不自知。
 
 ## 结论：ADR 0009 D5 的停泊第 1 步被证伪
 
@@ -213,7 +217,7 @@ committing this successful result batch"）。但它**只对我们自己写的�
 1. **给每个需审批的工具自己写一份工具体** —— 违反 ADR 0007 D2「能用原生用原生」，且要
    重新实现 `read`/`bash` 的全部语义。否决。
 2. **等上游给一个 out-of-turn 审批工作流** —— 上游明写 "deferred"。不能等。
-3. **接受「多走一步」，用 `guard()` 把这一步锁死**（推荐）：
+3. **同步 `agent.cancel()` + park guard 兜底**（**已采用**，见下）：
    - answerer 写 durable PENDING → 返回 `rejected`（工具不落地，这一步实测有效）；
    - **同时在该 Run 的 agent scope 上装一个 park guard**：本轮之后**任何**工具调用一律拒，
      理由码固定（`RUN_PARKED_AWAITING_APPROVAL`）。`guard()` 是单调 fail-closed 的
@@ -222,8 +226,19 @@ committing this successful result batch"）。但它**只对我们自己写的�
    - executor 观察到 PENDING → Run 转 `WAITING_APPROVAL` → 释放 Worker；
    - 续跑仍按 D5 的**重建会话 + 重放**，那一半不受影响。
 
-**代价写在明处**：每次停泊多一次模型往返（一步文本）。**换来的是**park guard 保证
-这一步里模型碰不到任何工具，不会趁机产生别的副作用——这正是场景 A 裸奔时的风险。
+### 最终采用的形状（H4 实现）
+
+**两者叠加，不是二选一**：
+
+- answerer 判定为 PENDING 时**同步**调 `req.agent.cancel({kind:'hook',
+  reason:'RUN_PARKED_AWAITING_APPROVAL'}, {keepInbox:true})` —— turn 立刻结束，
+  **不多走那一次模型往返**（场景 D）。`keepInbox` 是必须的：cancel 的默认语义会
+  清掉排队中的用户消息，而续跑要用它们。
+- **park guard 仍然留着**：cancel 中止的是「活动中的 turn」，若循环已经把下一次
+  请求发出去，guard 保证那一步里模型碰不到任何工具（场景 E）。
+
+少了任何一个，都有一条路径能让模型在等审批期间继续动手。这不是重复，是两道不同
+位置的闸门。
 
 ---
 

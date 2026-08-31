@@ -476,20 +476,28 @@ SSE 契约、审批中心与提问应答的 URL 不动。
 > `ToolExecutionFailure` 上是 `never`——**被拒的调用在类型上就不可能结束 turn**。
 > 唯一能停循环的原语是工具**体内**的 `exec.concludeTurn()`，而出厂工具的体不是我们的。
 >
-> **改成的形状**：接受「多走一步」，但用 `guard()` 把这一步锁死。代价是每次停泊多一次
-> 模型往返（一步纯文本）；换来的是模型在这一步碰不到任何工具，不会趁机产生别的副作用。
+> **改成的形状（已落地 H4.1/H4.1b/H4.2/H4.7）**：answerer 判定 PENDING 时**同步**调
+> `agent.cancel({kind:'hook', reason:'RUN_PARKED_AWAITING_APPROVAL'}, {keepInbox:true})`
+> ——turn 立刻结束，**不多走模型往返**（实测 1 次，稳定 3/3）；同时装 park guard，
+> 此后本轮任何工具一律拒。两者叠加不是重复：cancel 中止的是活动中的 turn，
+> guard 兜住「循环已经把下一次请求发出去」那条路径。cancel **必须同步调**。
+>
+> **answerer 装在每 Run 的 agent scope 上（`installEnterprisePolicy` 的第 5 个挂载点），
+> 不是 overlay 里的进程级插件**——审批 store 是按 Run 的，而 seam 支持 agent-scoped
+> 监听器（"Agent-scoped listeners receive only that agent's requests"）。
+> 做成进程级插件反而要再造一条把本 Run 的 store 递进去的通路。
 
-- [ ] **H4.1** 实现 `enterprise-approval-answerer`：监听 `approval/request` waterfall；
+- [x] **H4.1** 实现 `enterprise-approval-answerer`：监听 `approval/request` waterfall；
       查 durable PENDING（owner-scoped MySQL）；无决定 → 写 PENDING 并返回 `rejected`；
       有决定 → 按 `callId` + args digest 返回 `allowed-once`/`rejected`。
       **不得挂 promise 等人。**
-- [ ] **H4.1b** ⛔ **park guard**：写完 PENDING 的同时，在该 Run 的 agent scope 上装一个
+- [x] **H4.1b** ⛔ **park guard**：写完 PENDING 的同时，在该 Run 的 agent scope 上装一个
       `ctx.tools.guard()`，此后本轮**任何**工具调用一律拒，理由码固定
       `RUN_PARKED_AWAITING_APPROVAL`。`guard()` 是单调 fail-closed 的
       （"no guard can force-allow a call another guard denied"），正好承担这件事。
       装在 `setup(agentCtx)` 给的**每 Run scope** 上，不是根 ctx。
       判据：用例——停泊后模型再调任何工具都被拒，且 turn 在**一次**额外模型往返内结束。
-- [ ] **H4.2** 确认 `tools/pre-execute` **一行不改**：仍判 `ask`、仍铸 PENDING 记录
+- [x] **H4.2** 确认 `tools/pre-execute` **一行不改**：仍判 `ask`、仍铸 PENDING 记录
       （`pre-execute.ts:76-84` 的 `argsCanonical` + digest 是审批记录唯一来源）。
       判据：diff 为空。
 - [ ] **H4.3** Executor：pending → 停泊 `WAITING_APPROVAL` → **释放 Worker**。
@@ -498,7 +506,7 @@ SSE 契约、审批中心与提问应答的 URL 不动。
       （`replaceSuspendedToolResultInSession`）；`ask_user` 续跑同样改重放。
       判据：`grep -rn replaceSuspendedToolResultInSession agent/src` 零命中。
 - [ ] **H4.6** 确认审批中心 / 提问应答的 HTTP 形状与 URL **不变**。判据：契约用例零改动仍绿。
-- [ ] **H4.7** 用例：审批停泊后 Worker **确实被释放**（断言 lease 归还），不是 promise 挂着。
+- [x] **H4.7** 用例：审批停泊后 Worker **确实被释放**（断言 lease 归还），不是 promise 挂着。
 - [ ] **H4.8** 用例：批准后**换一个进程**续跑，同一 `callId` 的工具执行了一次、且只执行一次。
 - [ ] **H4.9** 用例：人点同意后、落地前把 args 改掉 → digest 对不上 → **拒绝**。
 

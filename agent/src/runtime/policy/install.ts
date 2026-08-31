@@ -36,6 +36,8 @@ import { runGuards, type GuardListener } from './guards.js';
 import { RunBudget, resolveRunBudget, wrapExecute } from './run-budget.js';
 import { recordLedger, redactPostExecute, type LedgerEntry } from './post-execute.js';
 import type { PolicyDecision } from './decision.js';
+import { RunPark, RUN_PARKED_REASON_CODE } from './park.js';
+import { approvalIdOf } from './approval-id.js';
 
 /** 最小可用的工具执行形状——只取本模块用得到的字段，不复制 DSH 的完整类型。 */
 interface ToolExecutionLike {
@@ -72,6 +74,11 @@ export interface InstallPolicyOptions {
 /** 装配结果，供组合断言与主动卸载使用。 */
 export interface InstalledPolicy {
   readonly budget: RunBudget;
+  /**
+   * 本 Run 的停泊闸门（ADR 0009 D5 / 计划 H4）。executor 在 turn 结束后读
+   * `park.pending`：非 null 就把 Run 投影成 WAITING_APPROVAL 并释放 Worker。
+   */
+  readonly park: RunPark;
   /** 逐个卸载。顺序与注册相反。 */
   dispose(): void;
 }
@@ -87,6 +94,9 @@ function argsOf(exec: ToolExecutionLike): Record<string, unknown> {
 function callIdOf(exec: ToolExecutionLike): string {
   return String(exec.id ?? exec.callId ?? '');
 }
+
+/** 出厂 `dsh-user-approval` 的结果词表。 */
+type ApprovalOutcome = 'allowed-once' | 'rejected' | 'cancelled' | 'unavailable';
 
 /** `PolicyDecision` → DSH 的 `PreToolDecision`。 */
 function toPreDecision(decision: PolicyDecision): PreToolDecision {
@@ -111,6 +121,8 @@ export function installEnterprisePolicy(ctx: Context, options: InstallPolicyOpti
     ): () => void;
   };
   const budget = new RunBudget(resolveRunBudget(options.env ?? process.env, options.now?.() ?? Date.now()));
+  // **每 Run 一个**。装在根 ctx 上会让一个 Run 的停泊把所有 Run 一起锁死。
+  const park = new RunPark();
   const disposers: Array<() => void> = [];
 
   // 1) tools/pre-execute —— 风险表 + source_digest + 持久 PENDING 审批
@@ -127,6 +139,15 @@ export function installEnterprisePolicy(ctx: Context, options: InstallPolicyOpti
       );
       // allow 时把决定权交回瀑布——我们只加约束，不抢走别人的拒绝权。
       if (!outcome.blocked) return await next();
+      // 铸出 PENDING 的同一刻停泊本 Run（ADR 0009 D5 的实测修正形状，见 park.ts）：
+      // 光靠「这次调用被拒」停不下 turn——实测模型会拿着错误结果继续走一步。
+      if (outcome.approval !== null) {
+        park.arm({
+          callId: callIdOf(exec),
+          toolName: toolNameOf(exec),
+          approvalId: outcome.approval.id,
+        });
+      }
       return toPreDecision(outcome.decision);
     }) as never),
   );
@@ -134,18 +155,22 @@ export function installEnterprisePolicy(ctx: Context, options: InstallPolicyOpti
   // 2) ctx.tools.guard() —— 单调兜底。DSH 保证 guard 没有 allow 结果，
   //    所以这里返回字符串就是最终拒绝，后续监听器翻不了案。
   const guards = options.guards ?? [];
-  if (guards.length > 0) {
-    disposers.push(
-      anyCtx.inject(['tools'], (scoped) => {
-        scoped.tools.guard((exec) => {
-          const e = exec as ToolExecutionLike;
-          const hit = runGuards(guards, toolNameOf(e), argsOf(e));
-          if (hit === null || hit.decision === 'allow') return undefined;
-          return hit.reason;
-        });
-      }),
-    );
-  }
+  disposers.push(
+    anyCtx.inject(['tools'], (scoped) => {
+      scoped.tools.guard((exec) => {
+        const e = exec as ToolExecutionLike;
+        // 停泊闸门排在最前：Run 一旦在等审批，本轮**任何**工具都不许再跑。
+        // guard 是单调的（"no guard can force-allow a call another guard denied"），
+        // 所以这里返回理由就是终局，后面的监听器翻不了案。
+        const parked = park.denyReason(callIdOf(e));
+        if (parked !== undefined) return parked;
+        if (guards.length === 0) return undefined;
+        const hit = runGuards(guards, toolNameOf(e), argsOf(e));
+        if (hit === null || hit.decision === 'allow') return undefined;
+        return hit.reason;
+      });
+    }),
+  );
 
   // 3) tools/execute（环绕）—— 每 Run 工具数 / 轮次 / deadline。
   //    `wrapExecute` 在调用工具体**之前**计数并判定，超预算直接 reject；
@@ -184,8 +209,60 @@ export function installEnterprisePolicy(ctx: Context, options: InstallPolicyOpti
     }) as never),
   );
 
+  // 5) approval/request —— 企业 answerer（ADR 0009 D5）。
+  //
+  //    **装在每 Run 的 agent scope 上，不是进程级插件**：审批 store 是按 Run 的，
+  //    而 seam 的 waterfall 支持 agent-scoped 监听器（出厂文档原话：
+  //    "Agent-scoped listeners receive only that agent's requests"）。
+  //    做成 overlay 里的进程级插件反而要再造一条「怎么把本 Run 的 store 递进去」
+  //    的通路。计划 H4 原写「插一个 enterprise-approval-answerer 插件」，
+  //    实现时改到这里，理由如上。
+  //
+  //    **绝不挂 promise 等人**：上游明写 "a durable out-of-turn approval workflow
+  //    is deferred"，请求必须处在一个 open turn 内。挂着等 = 堵住 Worker。
+  //    没有决定就立刻返回 rejected，停泊靠 park guard（见 park.ts）。
+  disposers.push(
+    anyCtx.on('approval/request', (async (
+      req: { toolName?: string; callId?: string; agent?: unknown },
+      next: () => Promise<ApprovalOutcome>,
+    ): Promise<ApprovalOutcome> => {
+      const callId = String(req?.callId ?? '');
+      if (callId === '') {
+        // 没有 callId 就没法把决定绑到具体那次调用上。fail-closed：
+        // 与其猜，不如拒——出厂默认也是 fail closed。
+        return 'rejected';
+      }
+      const record = await options.approvalStore.get(approvalIdOf(callId));
+      if (record === null) return next() as Promise<ApprovalOutcome>;
+      if (record.status === 'APPROVED') return 'allowed-once';
+
+      // PENDING（第一次问，人还没看）与 DENIED 都是「这次不许跑」。
+      // 二者的区别在 Run 状态：PENDING → 停泊 → WAITING_APPROVAL；
+      // DENIED → 不停泊，模型收到拒绝理由继续干别的。
+      if (record.status === 'PENDING' && park.pending?.callId === callId) {
+        // **主动中止本轮**。实测（scripts/probe-approval-park.ts）：
+        //   场景 A 只返回 rejected → turn 不结束，模型多走一步（2 次循环请求）；
+        //   场景 D 同步 cancel     → turn 立刻结束（1 次，稳定复现 3/3）。
+        // 所以 cancel 省掉那次无谓的模型往返。`keepInbox` 保住排队中的用户消息
+        // ——续跑要用它们，cancel 的默认语义会清掉。
+        //
+        // park guard **仍然留着**，两者叠加不是重复：cancel 中止的是「活动中的
+        // turn」，若循环已经把下一次请求发出去，guard 仍能保证那一步里模型
+        // 碰不到任何工具。少了任何一个，都有一条路径能让模型在等审批时继续动手。
+        const agent = (req as { agent?: { cancel?: (cause: unknown, opts?: unknown) => void } }).agent;
+        try {
+          agent?.cancel?.({ kind: 'hook', reason: RUN_PARKED_REASON_CODE }, { keepInbox: true });
+        } catch {
+          // 中止失败不改变判定：这次调用照样不许落地，park guard 兜住其余。
+        }
+      }
+      return 'rejected';
+    }) as never),
+  );
+
   return {
     budget,
+    park,
     dispose(): void {
       for (const off of disposers.reverse()) {
         try {

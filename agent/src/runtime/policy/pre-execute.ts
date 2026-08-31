@@ -9,6 +9,7 @@ import { makePolicyDecision, mergePolicyDecisions, type PolicyDecision } from '.
 import type { PolicyRiskLevel } from './decision.js';
 import { decideFromRiskTable } from './risk-table.js';
 import { digestArgs, rejectMismatchedDigest } from './source-digest.js';
+import { approvalIdOf } from './approval-id.js';
 
 export type ApprovalStatus = 'PENDING' | 'APPROVED' | 'DENIED';
 
@@ -53,7 +54,7 @@ export interface PreExecuteResult {
 export async function evaluatePreExecute(
   input: PreExecuteInput,
   store: ApprovalStore,
-  idFactory: () => string = () => `appr_${input.callId}`,
+  idFactory: () => string = () => approvalIdOf(input.callId),
   /** 运维可配的风险覆盖（`TOOL_RISK_POLICY_JSON` / `TOOL_RISK_POLICY_PATH`）。
    *  不传就只用平台默认表——但那样运维配的东西就静默失效了，所以装配处必须传。 */
   riskOverrides: Readonly<Record<string, PolicyRiskLevel>> = {},
