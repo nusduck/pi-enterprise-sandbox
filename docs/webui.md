@@ -189,7 +189,9 @@ render → security.isAllowedApiUrl 校验后生成 <a class="dl" href="/api/...
   **默认折叠**——它在回合顶端，展开会把回答本身顶到屏幕外；折叠态的摘要行仍显示
   步骤数与耗时
 - Timeline、Context Inspector、Approval 与 Deliverables widgets 按实体 id 更新，不维护第二份 runtime state
-- 子代理 fan-out：`spawn_subagent` / `check_subagent` 工具卡片渲染为结构化任务视图（子 Run 状态聚合），而不是裸 wire JSON；`todo_write` / `memory_write`（task-state extension）同理
+- 子代理 fan-out：`subagent` 工具卡片渲染为结构化任务视图（子 Run 状态聚合），而不是裸 wire JSON；`todo_write` 同理。
+
+  **2026-08-31（ADR 0009 D4/D10）**：工具名换成 DSH 出厂的一套——`spawn_subagent` → `subagent`、`ask_user` → `ask_user_question`；旧名在前端仍被识别，**只为渲染历史会话**。`todo_write` 的清单在 **arguments** 与 `todo/write` 事件里，**不在 result 里**（出厂结果只有一句 `Updated todo list: …` 与 `{counts}`）——按 result 解析会让卡片静默退化成一行文本。`memory_write` / `memory_search` 本阶段不做（D10），新 Run 不会再产生它们，卡片保留只为历史会话。
 - Markdown 通过 `react-markdown` + `rehype-sanitize` 渲染；下载链接仍经 URL allowlist 过滤
 
 ## 测试

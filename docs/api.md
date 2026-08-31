@@ -123,7 +123,9 @@ data: {"sequence":18,"event":{...},"ts":...,"eventId":"01K..."}
 `GET /api/runs/{id}` 还返回 `started_at`、`completed_at`（兼容字段
 `finished_at`）、`error`、`last_event_id` 与可用时的 `model_id` / `usage`；时间字段统一为 ISO 8601。Run 列表同样可包含模型与 token usage 的轻量投影，来源是 durable 事件，不是进程内计数器。
 
-`GET /api/extensions/diagnostics` 返回 Extension Package、Agent Profile、Tool/MCP allowlist 和供应链审计状态，不含凭据。启用的 MCP Server 会在 Agent 进程启动时执行一次 `tools/list`；连接成功的工具以 `mcp__{serverId}__{toolName}` 出现在 `tools` / `registry.mcp_tools`，配置变更须重启 Agent 才会生效。响应在兼容既有 `extensions` / `tools` / `skills` / `mcp_servers` 字段的同时，增加：
+`GET /api/extensions/diagnostics` 返回 Extension Package、Agent Profile、Tool/MCP allowlist 和供应链审计状态，不含凭据。MCP 工具以 `mcp__{serverName}__{toolName}` 出现在 `tools` / `registry.mcp_tools`。
+
+**2026-08-31（ADR 0009 D9）起，这份就绪度是 DSH 工具注册表的投影**，不再是自建 adapter 的探测快照：一台 MCP 服务器 = overlay 里一个 `@deepseek-ai/dsh-mcp-client` 实例，它注册到 `ctx.tools` 上的东西就是模型看得见的东西，所以 `/ready` 与模型工具面不可能不一致。连接、退避重连与 `notifications/tools/list_changed` 重新同步由该插件负责；**配置变更（`MCP_SERVERS_JSON`）须重跑 `npm run gen:patch` 并重启 Agent** 才会生效。工具名超长或含非法字符时出厂包会规范化并追加 12 位十六进制哈希，风险表因此必须有 `mcp__<server>__*` 前缀条目——漏配会落到 `high`（要审批），不会落到放行。响应在兼容既有 `extensions` / `tools` / `skills` / `mcp_servers` 字段的同时，增加：
 
 | 字段 | 说明 |
 |------|------|
@@ -134,7 +136,9 @@ data: {"sequence":18,"event":{...},"ts":...,"eventId":"01K..."}
 
 `GET /api/capabilities/{skills,mcp,tools,models}` 仍从 diagnostics 投影列表；字段可附加 `status` / `dynamic`。
 
-`skills` 是**按调用者投影**的：Agent 用 `X-Acting-User-Id` / `X-Acting-Organization-Id` 解析出与该用户下一次 Run 相同的 skill 根（系统层 + 该用户自己的 `<orgId>/<userId>` 目录），每项以 `source` 标明层级——`shared-skill-root`（内置只读）或 `user-skill-root`（该用户已安装）。请求不带身份时只投影系统层；用户层基目录**永远不整根扫描**，否则会跨租户列出他人已安装的 Skill。
+`skills` 是**按调用者投影**的：Agent 用 `X-Acting-User-Id` / `X-Acting-Organization-Id` 解析出与该用户下一次 Run 相同的 skill 根（系统层 + 该用户自己的 `<orgId>/<userId>` 目录），每项以 `source` 标明层级——`shared-skill-root`（内置只读）或 `user-skill-root`（该用户**已启用**）。
+
+**2026-08-31（ADR 0009 D7）起，用户侧 Skill 有三个根**：系统根（只读，永远进 prompt）、已启用根（逐包只读，进 prompt）、**草稿根 `/home/sandbox/skill-draft`**（每用户一个，模型可写，**不进发现也不进 prompt**）。模型用 `write` / `bash` 在草稿根里造包——`skill_install` / `skill_create` / `skill_edit` / `skill_uninstall` 这四个工具**已整体取消**。闸门只剩一处：人在 UI 上按「启用」，那一刻平台校验结构、**把字节复制成一份只读的已发布副本**、记内容摘要与启用态（`user_skill_enablements`，owner-scoped）。因为是两份字节，模型之后改草稿动不了已启用的包，所以不需要每 Run 重算摘要。请求不带身份时只投影系统层；用户层基目录**永远不整根扫描**，否则会跨租户列出他人已安装的 Skill。
 
 `GET /api/runs/{run_id}/trace` 返回 owner-scoped durable span 树：
 

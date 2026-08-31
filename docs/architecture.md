@@ -134,34 +134,70 @@ Agent（DeepSeek Harness）运行在独立 `agent/` 服务中，而非浏览器�
 
 ### 4c. 企业工具面与策略挂载
 
-Pi 的 first-party Extension 包（`agent/src/extensions/`）已随 ADR 0007 删除。
-`REQUIRED_EXTENSION_NAMES` / `REGISTERED_EXTENSION_NAMES` 现在是空名单
-（`agent/src/infrastructure/dsh/constants.ts`），只留给 diagnostics 投影兼容
-BFF `/api/extensions/diagnostics` 的字段形状。能力本身还在，挂载点换了：
+**2026-08-31（ADR 0009）重写。** 模型侧的工具面现在是 **DSH 出厂工具挂在 host 上**
+（overlay/bundle），不是自建 Extension，也不是 per-Run preset。
+
+Pi 的 first-party Extension 包（`agent/src/extensions/`）已随 ADR 0007 删除；
+把它们接到运行时的 `extensionBundleFactory` 也已随 ADR 0009 删除
+（它终止在一个被 `runtime-factory.create()` 忽略的参数上，而喂给它的三样依赖
+各自断链——详见 `design/dsh-host-tools.md` H8）。
+
+#### 模型看得见什么
+
+boot 之后 `ctx.tools.schemas()` 恰好等于 `runtime/policy/tool-names.ts` 的
+`ENTERPRISE_DEFAULT_TOOLS`（由 `tests/runtime/boot.test.ts` 在**子进程起全树**后断言
+「多一个少一个都红」）：
+
+| 工具 | 来源 |
+|---|---|
+| `read` `write` `edit` `read_image` | 出厂 `dsh-tool-fs` |
+| `glob` `grep` | 自建 `remote-fs-search`，**注册名与出厂 `dsh-tool-fs-search` 逐字一致** |
+| `bash` | 出厂 `dsh-tool-bash` |
+| `job_list` `job_output` `job_kill` | 出厂 `dsh-tool-jobs` |
+| `todo_write` | 出厂 `dsh-tool-todo` |
+| `skill` | 出厂 `dsh-tool-skill` |
+| `subagent` | 出厂 `dsh-tool-subagent`（one-shot） |
+| `ask_user_question` | 出厂 `dsh-tool-ask-user` |
+| `mcp__<server>__<tool>` | 出厂 `dsh-mcp-client`，**一台服务器一个插件实例** |
+
+`ctx.fs` / `ctx.shell` / `ctx.jobs` 是 RPC 代理（`remote-fs` / `remote-shell` /
+`remote-jobs`），所以出厂工具的字节操作全部落在 exec 容器里——agent 进程里没有执行面。
+
+**dsh-base 里另外 8 组工具被显式关掉**（`web_search` / `workflow` / `ralph` /
+`subagent_fork` / subagent-control 三件 / goal 三件 / `exit_plan_mode` /
+`str_replace_editor`），理由逐条写在 `runtime/plugins/manifest.ts` 的 `DISABLED` 里。
+它们在 base 里本来就是激活的，起栈实测才发现——patch 里一个字都没提到，所以
+只匹配 YAML 的断言永远抓不到。
+
+#### 能力挂在哪
 
 | 能力 | 现在在哪 | 角色 |
 |------|----------|------|
-| 工作区工具（原 `sandbox-bridge`） | DSH remote provider：`ctx.fs` / `ctx.shell` / `ctx.jobs` | 注册 `SANDBOX_TOOL_NAMES` 的 13 个工具，全部 RPC 到 exec internal plane |
-| 企业策略（原 `enterprise-policy`） | `agent/src/runtime/policy/` 四个挂载点 | 纯拦截器；对每次 tool_call 给出 allow / require_approval / deny |
-| 可观测性（原 `observability`） | 账本 + OTel：`fenced-tool-governance-recorder` 等 | 记录工具结果与审计事件 |
-| 用户提问（原 `user-interaction`） | application `interaction-response-service` + 策略面 | 注册 `ask_user`。名字不叫 `interaction`，因为那是必须持续拒绝的 legacy 包名 |
+| 工作区工具（原 `sandbox-bridge`） | 出厂 `tool-fs`/`tool-bash`/`tool-jobs` + `ctx.fs/shell/jobs` RPC 代理 | 字节在 exec，agent 进程零文件/进程 |
+| 企业策略（原 `enterprise-policy`） | `agent/src/runtime/policy/` 的**五个**挂载点 | `tools/pre-execute`（风险表 + 铸 PENDING + 停泊）、`ctx.tools.guard()`（单调 fail-closed + park guard）、`tools/execute`（每 Run 预算）、`tools/post-execute`（脱敏 + 账本）、`approval/request`（企业 answerer） |
+| 可观测性（原 `observability`） | 账本 + OTel：`fenced-tool-governance-recorder` | 记录工具结果与审计事件 |
+| 用户提问（原 `user-interaction`） | 出厂 `ask_user_question` + application 的 `interaction-response-service` | 停泊 `WAITING_INPUT` + 现有应答 API |
+| Skill 变更（原 `skill-lifecycle`） | **不再有工具层**：`skill` 负责发现与调用，变更由模型直接写草稿根 | 闸门只剩人在 UI 上按的「启用」（`skills/enablement.ts`） |
+| 子 Agent（原 `subagent-spawn`） | 出厂 `subagent` + durable `ctx.subagents` | 队列/结果按 Run 经 ALS 交给 `SubagentSpawnService` |
+| todo（原 `task-state` 的一半） | 出厂 `tool-todo` | 清单在 arguments 与 `todo/write` 事件里，不在 result 里 |
+| memory（原 `task-state` 的另一半） | **本阶段不做**（ADR 0009 D10） | 旧名映射成退役，理由码 `TOOL_RETIRED` |
 
-可选能力仍要求容器注入对应的持久化端口——端口缺失时装配期直接报错，而不是
-让模型在第一次调用时才拿到一个永远失败的工具。
+#### 按 Run 的差异走两层，不走 preset
 
-装载规则：AgentVersion **显式列出** extensions 时，那份列表仍是 diagnostics
-与 AgentVersion 校验的权威投影。列表为空时（`defaultAgentConfigJson()` 的默认
-形态），`skill-lifecycle` 与 `task-state` 在各自依赖就绪的前提下自动装载；
-`subagent-spawn` 仍需显式列出。
+`dsh-agent-presets` 是 process-level、无租户维度的，承载不了 AgentVersion 的差异
+（ADR 0002 实测结论）。所以是 **host 挂全量 + 按 Run 过滤**：
 
-| Extension | 角色 | 必需依赖 |
-|-----------|------|----------|
-| `skill-lifecycle` | 用户态 Skill 的安装、Agent 生成、编辑与卸载 | 可写的 per-user Skill 根 |
-| `subagent-spawn` | `spawn_subagent` / `check_subagent`：创建并轮询子 Run | `subagentSpawnPort`（MySQL + Run Queue） |
-| `task-state` | `todo_write` / `todo_read` / `memory_write` / `memory_search` | `taskStateStore`（`task_todos` / `task_memories`）；**依赖就绪时默认装载** |
+1. **可见性**：`ctx.tools.restrict({ allow })` 按 agent scope 过滤继承来的工具面
+   （省上下文、少诱发必然被拒的调用）；
+2. **权威**：`tools/pre-execute` + `ctx.tools.guard()` 逐调用拒绝，理由码稳定。
 
-新增可选 Extension 必须同时为它注册的每个工具补 tool-risk-classifier 条目，否则
-这些工具会以 `UNKNOWN_TOOL_DENIED` 被拒（有守卫测试）。
+两层都要在——只做可见性等于把闸门交给模型的自觉。
+
+工具名是**契约面**：唯一事实源在 `agent/src/runtime/policy/tool-names.ts`，
+风险表与分类器引用它，`config/agent/tool-risk.json` 由启动期断言校验每个 key
+都在其中（分类器 fail-closed，一个拼错的 key 的唯一症状是「那个工具被静默拒绝」）。
+存量 AgentVersion 快照里的旧名由 `LEGACY_TOOL_NAME_ALIASES` 在**读取时**投影一次，
+不迁移、不回写。
 
 #### 子 Run（sub-agent）
 
