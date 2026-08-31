@@ -52,15 +52,19 @@ export interface PiRunExecutorDeps {
   recoveryService?: SessionRecoveryService;
   sessionLockRenewIntervalMs?: number;
   skillRootsForRun?: (identity: Record<string, any>) => string[];
+  /**
+   * 运维层风险表（`config/agent/tool-risk.json` / `TOOL_RISK_POLICY_*` 经
+   * `resolveToolRiskPolicy` 解析）。2026-08-31 之前这个字段被设在这里，
+   * 而 `runtime-factory` 读的是**它自己的** opts——两边不是同一个对象，
+   * 于是整张表零效果且无人报错（计划 H8）。现在由 executor 合并租户层之后
+   * 按 Run 传进 `create()`。
+   */
+  riskOverrides?: unknown;
   /** 子 Agent 的 durable 面（ADR 0009 D6 / 计划 H5）。 */
   subagentSpawnPort?: {
     spawn: (input: Record<string, unknown>) => Promise<unknown>;
     getStatuses: (input: Record<string, unknown>) => Promise<Array<Record<string, unknown>>>;
   };
-  extensionBundleFactory?: (
-    runContext: Record<string, any>,
-    deps: Record<string, any>,
-  ) => unknown[];
   eventProjectionMode?: 'session-subscribe' | 'observability' | 'both';
   steerPollIntervalMs?: number;
   toolBudget?: {

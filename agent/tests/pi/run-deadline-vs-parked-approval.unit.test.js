@@ -75,9 +75,13 @@ describe('run deadline vs a durably parked approval', () => {
   function executorParkingAfter(parkKind) {
     const generateId = nextId;
     /** @type {object | null} */
-    let suspensionPort = null;
+    let executor = null;
     const factory = slowRuntimeFactory(async () => {
-      assert.ok(suspensionPort, 'extension bundle must expose the suspension port');
+      // 2026-08-31（计划 H8）：停泊端口以前经 `extensionBundleFactory` 的 deps
+      // 拿，那个形参删了。现在从 executor 实例上取——本用例要的时序是
+      // 「prompt 还在展开时 Run 就被 durable 停泊」，所以必须在 prompt 里驱动它。
+      const suspensionPort = executor?._runSuspensionPort;
+      assert.ok(suspensionPort, 'executor must expose the per-Run suspension port');
       if (parkKind === 'approval') {
         suspensionPort.onDurableApprovalPending({
           kind: 'DURABLE_APPROVAL_PENDING',
@@ -96,7 +100,7 @@ describe('run deadline vs a durably parked approval', () => {
         });
       }
     });
-    return new PiRunExecutor({
+    executor = new PiRunExecutor({
       transactionManager: { run: (fn) => knex.transaction(fn) },
       createRepositories: (db) =>
         createRepositoryBundle(db, { now: () => new Date(), generateId }),
@@ -113,11 +117,8 @@ describe('run deadline vs a durably parked approval', () => {
       sessionLockRenewIntervalMs: 60_000,
       // Deadline expires while prompt() is still unwinding the park.
       toolBudget: { runDeadlineMs: 20 },
-      extensionBundleFactory: (_ctx, opts) => {
-        suspensionPort = opts.runSuspensionPort;
-        return [];
-      },
     });
+    return executor;
   }
 
   const run = () => ({

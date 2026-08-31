@@ -611,17 +611,50 @@ SSE 契约、审批中心与提问应答的 URL 不动。
 - [ ] **H7.9** 用例：AgentVersion 没引用的 server 的工具被 `pre-execute` 拒，理由码稳定。
 - [ ] **H7.10** `STATUS.md` A3 翻转。
 
-### H8 死装配删除（spawn 侧依赖 H5 完成）
+### H8 死装配删除 ✅ **完成 2026-08-31**
 
-- [ ] **H8.1** 删 `pi-run-executor.ts:138/240/495/576/594` 的 `extensionBundleFactory`。
-- [ ] **H8.2** 删 `pi-run-executor-deps.ts:55`、`container-run-executor.ts:109/165/284`、
+> **删之前先把它带的三样依赖接回真正的消费者**——否则「删干净了」只是把断链
+> 变成没链。`extensionBundleFactory` 终止在一个被 `runtime-factory.create()`
+> 忽略的参数上，而喂给它的三样各自断着：
+>
+> | 依赖 | 断在哪 | 接到哪 |
+> |---|---|---|
+> | `governanceRecorder` | 审批判定不落库、不停泊 | H4.3 的 `GovernanceApprovalStore` |
+> | `subagentSpawnPort` | 子 Run 走进程内队列，Worker 重启即丢 | H5 的 `durable-subagent-port` |
+> | `toolRiskPolicy` + 租户 `toolPolicy` | **整张运维风险表零效果** | H8 的 `buildRunRiskResolver` |
+>
+> **第三样是这一步顺手查出来的第四处缺陷**：`riskOverrides` 被设在 **executor
+> 工厂**的选项上，而 `runtime-factory` 读的是**它自己的** opts——两个不同的对象。
+> 于是 `config/agent/tool-risk.json` 与 `TOOL_RISK_POLICY_*` 配了等于没配，
+> 而且没有任何人报错。租户层更彻底：整段算在 `if (extensionBundleFactory)` 里面，
+> 生产根本不执行；唯一会因此 fail-closed 的 `resolveAgentVersionBindings()`
+> 又没有任何调用方。这正是 ADR 0009 D3 记的「`toolPolicy` → 闸门的过滤未接线」。
+>
+> 顺带暴露并修掉：`buildMcpPolicyBindings` 在对象没有 `configJson` 键时，会把
+> 传进去的整个 AgentVersion 当成一份 mcp 配置解析并抛错——以前藏在 bundle
+> 分支后面（生产不走），提出来才暴露。按语义收敛在调用处。
+
+- [x] **H8.1** 删 `pi-run-executor.ts:138/240/495/576/594` 的 `extensionBundleFactory`。
+- [x] **H8.2** 删 `pi-run-executor-deps.ts:55`、`container-run-executor.ts:109/165/284`、
       `container.ts:680` 注释里的同名转发。
-- [ ] **H8.3** 改写 `tests/bootstrap/container.unit.test.js:364-416` 等 5 处断言转发的用例。
-      判据：**测试绿不是因为被删掉**——改写后的用例要断言新的装配语义。
-- [ ] **H8.4** 删无人调用的 `createTaskStateStore` 与未接线的 spawn 工厂。
-- [ ] **H8.5** diagnostics 改投影 DSH tool 注册表，不再投影空的 Extension 名单。
-- [ ] **H8.6** `getAllTools()` 不再把 `fs`/`shell`/`jobs` 三个 provider 当工具列。
-- [ ] **H8.7** 判据：`grep -rn extensionBundleFactory agent/src` 零命中，测试套仍绿。
+- [x] **H8.3** 改写了 5 处断言转发的用例。**每一条都改成断言新的装配语义，不是删掉**：
+      - 「forwards extensionBundleFactory」→ 断言风险表与 spawn 端口到达 executor，
+        且死形参不再出现；
+      - 「omits toolPolicyBinding when no bundle」→ 它守的是「一个不会开火的守卫」加
+        「一段生产不执行的代码」，改成断言租户层风险等级**真的生效**
+        （`riskOverrides('bash') === 'critical'`）；
+      - 「fails closed when bundle set but sandboxSessionId missing」→ 那条 fail-closed
+        的触发条件是 bundle 存在，生产从来没有过。改成「有值才校验格式」：
+        保住「格式不对就别往下走」，不改变哪些 Run 能跑（改成无条件是超范围的行为变更）；
+      - fence token 那条 → 删掉 bundle 观察面，**停泊标记的生命周期**改成直接断言；
+      - deadline 那两条 → 停泊端口改从 `executor._runSuspensionPort` 取
+        （顺便让它在排查线上问题时也拿得到）。
+- [x] **H8.4** 删无人调用的 `createTaskStateStore` 与未接线的 spawn 工厂。
+- [x] **H8.5** diagnostics 改投影 DSH tool 注册表，不再投影空的 Extension 名单。
+- [x] **H8.6** `getAllTools()` 以前返回 `[providers.fs, providers.shell, providers.jobs]`
+      ——那是三个**能力 provider**，不是工具：模型看不见它们，它们也没有工具名。
+      改成投影 `ctx.tools.schemas()`。
+- [x] **H8.7** 判据：`grep -rn extensionBundleFactory agent/src` 零命中，测试套仍绿。
 
 ### H9 前端适配 + compose 端到端
 

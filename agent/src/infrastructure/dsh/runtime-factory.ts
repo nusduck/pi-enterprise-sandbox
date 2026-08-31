@@ -245,7 +245,12 @@ export function createDshRuntimeFactory(opts: Record<string, any> = {}) {
             ...(opts.ledger ? { ledger: opts.ledger } : {}),
             // 运维可配的风险覆盖。以前这份配置解析出来后喂给了一个返回 []
             // 的 extension bundle，等于没配。
-            ...(opts.riskOverrides ? { riskOverrides: opts.riskOverrides } : {}),
+            // **按 Run 取**：租户层来自 AgentVersion，工厂是进程级单例。
+            // 2026-08-31 之前只读工厂级 opts，而调用方设的是 executor 工厂的
+            // 同名字段——两个不同对象，于是整张运维风险表零效果（计划 H8）。
+            ...(input.riskOverrides ?? opts.riskOverrides
+              ? { riskOverrides: input.riskOverrides ?? opts.riskOverrides }
+              : {}),
             physicalRoots: rpc.physicalRoots ?? [],
             env: opts.env ?? process.env,
           });
@@ -341,8 +346,22 @@ export function createDshRuntimeFactory(opts: Record<string, any> = {}) {
           }
           agent.steer(toUserMessage(text));
         },
+        /**
+         * 模型可见的工具面。
+         *
+         * 2026-08-31（ADR 0009 D11 / 计划 H8.6）之前这里返回的是
+         * `[providers.fs, providers.shell, providers.jobs]`——那是三个**能力
+         * provider**，不是工具：模型看不见它们，它们也没有工具名。
+         * 拿它当工具清单，任何基于它的诊断/投影都是错的。
+         *
+         * 真正的清单在 DSH 的注册表里，按 scope 投影（`ctx.tools.schemas()`）。
+         */
         getAllTools() {
-          return [providers.fs, providers.shell, providers.jobs].filter(Boolean);
+          const tools = (ctx as Record<string, any>)?.get?.('tools');
+          if (tools === undefined || typeof tools.schemas !== 'function') return [];
+          return tools.schemas().map((schema: { name?: unknown }) => ({
+            name: String(schema?.name ?? ''),
+          }));
         },
       };
       return {

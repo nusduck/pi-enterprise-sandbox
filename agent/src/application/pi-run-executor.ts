@@ -110,6 +110,7 @@ import {
 } from './pi-run-resume.js';
 import { GovernanceApprovalStore } from './governance-approval-store.js';
 import { buildRunServices } from './durable-subagent-port.js';
+import { buildRunRiskResolver } from './tool-risk-resolver.js';
 
 /** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
 type Loose = any;
@@ -137,7 +138,8 @@ export class PiRunExecutor {
   recoveryService: Loose;
   sessionLockRenewIntervalMs: Loose;
   skillRootsForRun: Loose;
-  extensionBundleFactory: Loose;
+  /** 运维层风险表（`config/agent/tool-risk.json` / `TOOL_RISK_POLICY_*`）。 */
+  riskOverrides: Loose;
   /** 子 Agent 的 durable 面（ADR 0009 D6 / 计划 H5）。 */
   subagentSpawnPort: Loose;
   eventProjectionMode: Loose;
@@ -153,6 +155,8 @@ export class PiRunExecutor {
   _eventRecorder: FencedRunEventRecorder | null;
   _governanceRecorder: FencedToolGovernanceRecorder | null;
   _pendingInteractionToolCallIds: Set<string>;
+  /** 本 Run 的停泊端口。每次 execute() 重建；未开跑时为 null。 */
+  _runSuspensionPort: Loose;
   _steerController: DurableSteerController | null;
   _disposed: boolean;
   _lockLost: boolean;
@@ -181,8 +185,7 @@ export class PiRunExecutor {
    *   recoveryService?: SessionRecoveryService,
    *   sessionLockRenewIntervalMs?: number,
    *   skillRootsForRun?: (identity: object) => string[],
-   *   extensionBundleFactory?: (runContext: object, deps: object) => unknown[],
-   *   eventProjectionMode?: 'session-subscribe' | 'observability' | 'both',
+     *   eventProjectionMode?: 'session-subscribe' | 'observability' | 'both',
    *   steerPollIntervalMs?: number,
    *   toolBudget?: { maxToolCalls?: number, maxIdenticalToolCalls?: number, maxModelTurns?: number, runDeadlineMs?: number },
    * }} deps
@@ -241,7 +244,7 @@ export class PiRunExecutor {
      */
     this.skillRootsForRun =
       typeof deps.skillRootsForRun === 'function' ? deps.skillRootsForRun : null;
-    this.extensionBundleFactory = deps.extensionBundleFactory ?? null;
+    this.riskOverrides = deps.riskOverrides ?? null;
     this.subagentSpawnPort = deps.subagentSpawnPort ?? null;
     /**
      * When 'observability', session.subscribe projector is disabled (Extension owns
@@ -272,6 +275,7 @@ export class PiRunExecutor {
     this._governanceRecorder = null;
     /** @type {Set<string>} */
     this._pendingInteractionToolCallIds = new Set();
+    this._runSuspensionPort = null;
     /** @type {DurableSteerController | null} */
     this._steerController = null;
     /** @type {boolean} */
@@ -493,6 +497,24 @@ export class PiRunExecutor {
       let extensionFactories;
       let projectionMode = this.eventProjectionMode;
       let sandboxSessionIdForCtx = session.sandboxSessionId ?? null;
+      // 2026-08-31（计划 H8）：这里原来有一条 fail-closed 断言，条件是
+      // `if (typeof this.extensionBundleFactory === 'function')`。生产从来没有
+      // 接过 bundle，所以那条断言**只在测试里跑过**。删掉 bundle 之后它的触发
+      // 条件不复存在。
+      //
+      // 不把它改成无条件——那会让「会话没有 sandboxSessionId」的 Run 从此起不来，
+      // 是超出 H8 范围的行为变更。改成**有值才校验**：保住「格式不对就别往下走」
+      // 这一半，不改变哪些 Run 能跑。
+      if (sandboxSessionIdForCtx != null) {
+        try {
+          sandboxSessionIdForCtx = assertUlid(sandboxSessionIdForCtx, 'sandboxSessionId');
+        } catch {
+          return {
+            outcome: RUN_STATUS.FAILED,
+            statusReason: 'sandboxSessionId is present but not a valid ULID',
+          };
+        }
+      }
       let runtimeSession: any = null;
       let pendingApproval: Record<string, any> | null = null;
 
@@ -504,7 +526,10 @@ export class PiRunExecutor {
        * 另一个是接 durable 审批面的 `GovernanceApprovalStore`——审批判定发生在
        * DSH 的策略挂载点上，那条路不经过 extension bundle。
        */
-      const runSuspensionPort = {
+      // 挂到实例上：停泊端口以前只能经 `extensionBundleFactory` 的 deps 拿到，
+      // 那个形参 2026-08-31（计划 H8）删了。用例要驱动「Run 在 prompt 展开期间
+      // 被 durable 停泊」这个时序，就必须能拿到它；排查线上问题时同理。
+      const runSuspensionPort = this._runSuspensionPort = {
         onDurableApprovalPending: (pending: Record<string, any>) => {
           if (
             !pending ||
@@ -541,23 +566,6 @@ export class PiRunExecutor {
         },
       };
       let pendingInteraction: Record<string, any> | null = null;
-
-      if (typeof this.extensionBundleFactory === 'function') {
-        // plan: runtime sandboxSessionId must exist when enterprise extensions run.
-        // Bundle assert allows null for unit tests / create-phase; executor fails closed.
-        try {
-          sandboxSessionIdForCtx = assertUlid(
-            sandboxSessionIdForCtx,
-            'sandboxSessionId',
-          );
-        } catch {
-          return {
-            outcome: RUN_STATUS.FAILED,
-            statusReason:
-              'sandboxSessionId is required when extensionBundleFactory is enabled (PR-07 provisions sandbox)',
-          };
-        }
-      }
 
       const eventContext = {
         orgId: scope.orgId,
@@ -623,71 +631,40 @@ export class PiRunExecutor {
        */
       let toolPolicyBinding = null;
 
-      if (typeof this.extensionBundleFactory === 'function') {
-        const { mcpServerPolicies, mcpToolRiskPolicy } =
-          buildMcpPolicyBindings(agentVersion);
-        // AgentVersion is the lower policy layer: it may raise a tool's risk or
-        // tighten what a risk level costs, never the reverse.
-        const { agentVersionToolPolicy, agentVersionToolRiskPolicy } =
-          buildAgentVersionToolRiskBindings(agentVersion, { mcpToolRiskPolicy });
-        const agentVersionExtensions = readAgentVersionExtensions(agentVersion);
-        const subagentSpawn = readAgentVersionSubagentPolicy(agentVersion);
-        // Keyed off the raw config, not the projection: a structurally present
-        // but empty policy (`{ tools: {} }`) is still a field we honoured.
-        if (Object.keys(readAgentVersionToolPolicy(agentVersion)).length > 0) {
-          toolPolicyBinding = Object.freeze({
-            appliedBy: 'enterprise-policy',
-            tools: agentVersionToolPolicy ?? null,
-            riskPolicy: agentVersionToolRiskPolicy ?? null,
-          });
-        }
-          extensionFactories = this.extensionBundleFactory(eventContext, {
-            recorder: this._eventRecorder,
-            governanceRecorder: this._governanceRecorder,
-            currentTurnAttachments,
-            // The bundle is built before Pi creates its Session. Keep a lazy
-            // accessor so lifecycle tools can refresh that exact Session after
-            // an approved mutation instead of reporting a synthetic reload.
-            getAgentSession: () => runtimeSession,
-            observability: {
-              modelId:
-                typeof model.id === 'string'
-                  ? model.id
-                  : typeof model.modelId === 'string'
-                    ? model.modelId
-                    : null,
-              provider: typeof model.provider === 'string' ? model.provider : null,
-            },
-            mcpServerPolicies,
-            ...(agentVersionToolPolicy ? { agentVersionToolPolicy } : {}),
-            ...(agentVersionToolRiskPolicy ? { agentVersionToolRiskPolicy } : {}),
-            ...(Object.keys(subagentSpawn).length > 0 ? { subagentSpawn } : {}),
-            // pi-runtime-factory validates the factory list against
-            // AgentVersion.extensions exactly, so the bundle must build the
-            // same set the AgentVersion asks for.
-            ...(agentVersionExtensions.length > 0
-              ? { extensions: agentVersionExtensions }
-              : {}),
-            isDurableInteractionPending: (toolCallId) => {
-              const normalized = String(toolCallId ?? '').trim();
-              return (
-                normalized.length > 0 &&
-                this._pendingInteractionToolCallIds.has(normalized)
-              );
-            },
-          runSuspensionPort,
-          // Callers may merge sandboxTransport / policy config in their factory.
+      // 租户层策略（ADR 0009 D3「toolPolicy → 闸门的过滤」/ 计划 H8）。
+      //
+      // 2026-08-31 之前这整段算在 `if (extensionBundleFactory)` 里面，也就是
+      // **只有测试注入 bundle 时才会算**。生产没有 bundle，于是 AgentVersion 的
+      // toolPolicy / riskPolicy 算都不算。而唯一会因此 fail-closed 的
+      // `resolveAgentVersionBindings()` 又没有任何调用方，所以连报错都没有。
+      //
+      // 现在无条件算，并合进本 Run 的风险解析函数交给策略装配。
+      // 租户层只能收紧不能放松（`mergeToolRiskPolicies` 取最大风险 / 更严决定）：
+      // 一个 org 不能靠发新版本把平台的审批闸门关掉。
+      // `buildMcpPolicyBindings` 在对象**没有** `configJson` / `config_json` 键时，
+      // 会把传进去的整个对象当成一份 mcp 配置去解析——于是一个不带配置的
+      // AgentVersion 会撞上 "mcp config must be an array or { mcpServers: [] }"。
+      // 这个坑以前藏在 `if (extensionBundleFactory)` 后面（生产不走），把这段
+      // 提出来之后才暴露。按语义收敛在调用处：**没有配置就是没有 MCP 策略**。
+      // （`pi-mcp-adapter-factory` 整体在 H7 退役，不在这里做深度手术。）
+      const hasVersionConfig =
+        agentVersion != null &&
+        typeof agentVersion === 'object' &&
+        (Object.hasOwn(agentVersion as object, 'configJson') ||
+          Object.hasOwn(agentVersion as object, 'config_json'));
+      const { mcpToolRiskPolicy } = hasVersionConfig
+        ? buildMcpPolicyBindings(agentVersion)
+        : { mcpToolRiskPolicy: undefined };
+      const { agentVersionToolPolicy, agentVersionToolRiskPolicy } =
+        buildAgentVersionToolRiskBindings(agentVersion, { mcpToolRiskPolicy });
+      if (Object.keys(readAgentVersionToolPolicy(agentVersion)).length > 0) {
+        toolPolicyBinding = Object.freeze({
+          appliedBy: 'enterprise-policy',
+          tools: agentVersionToolPolicy ?? null,
+          riskPolicy: agentVersionToolRiskPolicy ?? null,
         });
-        // Observability extension (deleted in Wave 6) used to own this feed.
-        // An empty bundle must keep session-subscribe or the Run emits nothing.
-        if (
-          projectionMode === 'session-subscribe' &&
-          Array.isArray(extensionFactories) &&
-          extensionFactories.length > 0
-        ) {
-          projectionMode = 'observability';
-        }
       }
+      const runRiskResolver = buildRunRiskResolver(this.riskOverrides, agentVersion);
 
       // 8) Create Pi runtime (bindExtensions happens inside factory when extensions present)
       const piSnapshot =
@@ -718,6 +695,9 @@ export class PiRunExecutor {
         context: eventContext,
         extensionFactories,
         runEventRecorder: this._eventRecorder,
+        // 本 Run 的风险解析函数（平台层 + 租户层合并）。**必须按 Run 传**：
+        // 租户层来自 AgentVersion，而工厂是进程级单例。
+        riskOverrides: runRiskResolver,
         // 把 runtime 侧的审批判定接到 durable 面（ADR 0009 D5 / 计划 H4.3）。
         // 少了这一步，策略挂载点用的是进程内的 InMemoryApprovalStore：判定是
         // 对的，但不落库、不发事件、不停泊 Run、不释放 Worker——审批链条从
@@ -1501,7 +1481,6 @@ export class PiRunExecutor {
  *   projector?: PlatformEventProjector,
  *   recoveryService?: SessionRecoveryService,
  *   extensionFactories?: unknown[],
- *   extensionBundleFactory?: (runContext: object, deps: object) => unknown[],
  *   eventProjectionMode?: 'session-subscribe' | 'observability' | 'both',
  *   sessionLockRenewIntervalMs?: number,
  *   steerPollIntervalMs?: number,
@@ -1553,7 +1532,11 @@ export function createPiRunExecutorFactory(opts: PiRunExecutorFactoryOptions) {
       sessionLockRenewIntervalMs: opts.sessionLockRenewIntervalMs,
       steerPollIntervalMs: opts.steerPollIntervalMs,
       toolBudget: opts.toolBudget,
-      extensionBundleFactory: opts.extensionBundleFactory,
+      // 运维层风险表与子 Agent 的 durable 面。2026-08-31（计划 H8）之前这两样
+      // 只喂给 `extensionBundleFactory`，各自断链——前者让
+      // `config/agent/tool-risk.json` 零效果，后者让子 Run 走进程内队列。
+      riskOverrides: opts.riskOverrides,
+      subagentSpawnPort: opts.subagentSpawnPort,
       eventProjectionMode: opts.eventProjectionMode,
     });
   };

@@ -282,7 +282,6 @@ describe('PiRunExecutor', () => {
       },
       agentDir: '/tmp/agent-dir',
       sessionLockRenewIntervalMs: 60_000,
-      extensionBundleFactory: factoryOpts.extensionBundleFactory,
     });
   }
 
@@ -324,7 +323,6 @@ describe('PiRunExecutor', () => {
 
   it('keeps session-subscribe projection when the extension bundle is empty', async () => {
     const exec = makeExecutor({
-      extensionBundleFactory: () => [],
     });
     const result = await exec.execute({
       run: {
@@ -823,8 +821,13 @@ describe('PiRunExecutor', () => {
     await exec.dispose();
   });
 
-  it('fails closed when extensionBundleFactory set but sandboxSessionId missing', async () => {
-    state.tables.agent_sessions[0].sandbox_session_id = null;
+  // 2026-08-31（计划 H8）：这条以前断言的是「注入 bundle 且 sandboxSessionId 为空
+  // 时 fail closed」。那条 fail-closed 的**触发条件是 bundle 存在**，而生产从来
+  // 没有接过 bundle——所以它只在测试里跑过。bundle 形参删掉之后，改成
+  // 「有值才校验格式」：保住「格式不对就别往下走」这一半，不改变哪些 Run 能跑
+  // （把它改成无条件会让没有 sandboxSessionId 的 Run 从此起不来，超出 H8 范围）。
+  it('fails closed when sandboxSessionId is present but malformed', async () => {
+    state.tables.agent_sessions[0].sandbox_session_id = 'not-a-ulid';
     const generateId = nextId;
     const exec = new PiRunExecutor({
       transactionManager: { run: (fn) => knex.transaction(fn) },
@@ -840,9 +843,6 @@ describe('PiRunExecutor', () => {
       generateId,
       agentDir: '/tmp/agent-dir',
       sessionLockRenewIntervalMs: 60_000,
-      extensionBundleFactory: () => {
-        throw new Error('bundle must not be called without sandboxSessionId');
-      },
     });
     const result = await exec.execute({
       run: {
@@ -862,12 +862,8 @@ describe('PiRunExecutor', () => {
     await exec.dispose().catch(() => {});
   });
 
-  it('propagates acquired executionFenceToken into eventContext for bundle and runtime', async () => {
+  it('propagates acquired executionFenceToken into the runtime eventContext', async () => {
     const generateId = nextId;
-    /** @type {object[]} */
-    const bundleContexts = [];
-    /** @type {object[]} */
-    const bundleDeps = [];
     /** @type {object[]} */
     const runtimeContexts = [];
     const generateIdFn = generateId;
@@ -894,11 +890,6 @@ describe('PiRunExecutor', () => {
       generateId: generateIdFn,
       agentDir: '/tmp/agent-dir',
       sessionLockRenewIntervalMs: 60_000,
-      extensionBundleFactory: (eventContext, deps) => {
-        bundleContexts.push(eventContext);
-        bundleDeps.push(deps);
-        return [];
-      },
       sessionAdapter: {
         captureSnapshotPayload(sm) {
           return { header: sm.getHeader(), entries: sm.getEntries() };
@@ -919,47 +910,32 @@ describe('PiRunExecutor', () => {
       signal: new AbortController().signal,
     });
     assert.equal(result.outcome, RUN_STATUS.SUCCEEDED);
-    assert.equal(bundleContexts.length, 1);
     assert.equal(runtimeContexts.length, 1);
     // acquire advances 0 → 1
-    assert.equal(bundleContexts[0].executionFenceToken, 1);
-    assert.equal(typeof bundleContexts[0].executionFenceToken, 'number');
     assert.equal(runtimeContexts[0].executionFenceToken, 1);
+    assert.equal(typeof runtimeContexts[0].executionFenceToken, 'number');
     assert.equal(runtimeContexts[0].runId, RUN);
     assert.equal(runtimeContexts[0].sandboxSessionId, SBX);
-    assert.equal(bundleDeps[0].observability.modelId, fullModel.id);
-    assert.equal(bundleDeps[0].observability.provider, fullModel.provider);
-    assert.equal(typeof bundleDeps[0].getAgentSession, 'function');
-    assert.ok(bundleDeps[0].getAgentSession(), 'runtime Session is available lazily');
+    // 2026-08-31（计划 H8）：以下这些以前是**经 extensionBundleFactory 的 deps**
+    // 观察的（observability / getAgentSession / isDurableInteractionPending /
+    // runSuspensionPort）。bundle 形参删掉之后，前两样随之消失（那是给已删除的
+    // Pi Extension 用的），而**停泊标记的生命周期是真实不变量**，改成直接断言。
+    //
+    // 标记本身由 `onDurableInteractionPending` 写入（ask_user 落 durable 请求时），
+    // 这里只验它的两端：写入前是空的、dispose 之后被清掉。中间那一段的写入由
+    // `prepareInteractionResume` 的用例覆盖。
     assert.equal(
-      typeof bundleDeps[0].isDurableInteractionPending,
-      'function',
+      exec._pendingInteractionToolCallIds.size,
+      0,
+      '这一轮没有 ask_user 停泊，标记集合应当是空的',
     );
-    assert.equal(
-      bundleDeps[0].isDurableInteractionPending('ask-user-pending-1'),
-      false,
-    );
-    bundleDeps[0].runSuspensionPort.onDurableInteractionPending({
-      kind: 'DURABLE_INTERACTION_PENDING',
-      interactionId: '01K0G2PAV8FPMVC9QHJG7JPN61',
-      toolExecutionId: '01K0G2PAV8FPMVC9QHJG7JPN62',
-      toolCallId: 'ask-user-pending-1',
-      runId: RUN,
-      status: 'PENDING',
-    });
-    assert.equal(
-      bundleDeps[0].isDurableInteractionPending('ask-user-pending-1'),
-      true,
-    );
-    assert.equal(
-      bundleDeps[0].isDurableInteractionPending('ask-user-ordinary-1'),
-      false,
-    );
+    exec._pendingInteractionToolCallIds.add('ask-user-pending-1');
     await exec.dispose();
     assert.equal(
-      bundleDeps[0].isDurableInteractionPending('ask-user-pending-1'),
-      false,
-      'dispose must clear the ephemeral pending marker',
+      exec._pendingInteractionToolCallIds.size,
+      0,
+      'dispose 必须清掉这个**临时**标记——它只在本 Run 内有意义，' +
+        '留着会让同一个 executor 实例的下一轮误判为「已停泊」',
     );
   });
 
@@ -997,7 +973,6 @@ describe('PiRunExecutor', () => {
       generateId,
       agentDir: '/tmp/agent-dir',
       sessionLockRenewIntervalMs: 60_000,
-      extensionBundleFactory: () => [],
       sessionAdapter: {
         captureSnapshotPayload: (sm) => ({
           header: sm.getHeader(),
@@ -1030,11 +1005,18 @@ describe('PiRunExecutor', () => {
     await exec.dispose();
   });
 
-  it('omits toolPolicyBinding when no extension bundle can enforce it', async () => {
-    // Without enterprise-policy nothing enforces the field, so the factory's
-    // fail-closed guard must still fire rather than be papered over.
+  it('AgentVersion 的 toolPolicy 真的到达策略装配（不再只在有 bundle 时才算）', async () => {
+    // 2026-08-31（计划 H8）：这条以前叫「没有 bundle 就省掉 toolPolicyBinding，
+    // 让工厂的 fail-closed 守卫开火」。两个前提都不成立了：
+    //   1) 那个守卫在 `resolveAgentVersionBindings()` 里，而它**没有任何调用方**；
+    //   2) 整段租户层策略算在 `if (extensionBundleFactory)` 里面，也就是只有
+    //      测试注入 bundle 时才会算——生产里 AgentVersion 的 toolPolicy 算都不算。
+    // 也就是说旧断言守的是「一个不会开火的守卫」加「一段生产不会执行的代码」。
+    //
+    // 现在断言的是 ADR 0009 D3 真正要的那件事：租户层策略到达按 Run 的风险解析
+    // 函数，并且**只能收紧**。
     state.tables.agent_versions[0].config_json = JSON.stringify({
-      toolPolicy: { tools: { bash: 'deny' } },
+      toolPolicy: { tools: { bash: 'deny' }, riskLevels: { bash: 'critical' } },
     });
     /** @type {object[]} */
     const createInputs = [];
@@ -1059,13 +1041,26 @@ describe('PiRunExecutor', () => {
       signal: new AbortController().signal,
     });
     assert.equal(createInputs.length, 1);
-    assert.equal(createInputs[0].toolPolicyBinding, undefined);
+    assert.notEqual(
+      createInputs[0].toolPolicyBinding,
+      undefined,
+      'configJson.toolPolicy 非空时必须给出绑定',
+    );
+    assert.equal(
+      typeof createInputs[0].riskOverrides,
+      'function',
+      '风险解析函数必须按 Run 传给运行时——传扁平 map 表达不了 mcp__x__* 这类前缀规则',
+    );
+    assert.equal(
+      createInputs[0].riskOverrides('bash'),
+      'critical',
+      '租户层配的风险等级必须真的生效；只算不用正是 2026-08-31 之前的病',
+    );
     await exec.dispose();
   });
 
   it('fails closed on invalid acquired fence before extension/runtime', async () => {
     const generateId = nextId;
-    let bundleCalled = 0;
     let runtimeCalled = 0;
     const generateIdFn = generateId;
     const baseCreateRepos = (db) =>
@@ -1106,10 +1101,6 @@ describe('PiRunExecutor', () => {
       generateId: generateIdFn,
       agentDir: '/tmp/agent-dir',
       sessionLockRenewIntervalMs: 60_000,
-      extensionBundleFactory: () => {
-        bundleCalled += 1;
-        throw new Error('bundle must not be called');
-      },
     });
     const result = await exec.execute({
       run: {
@@ -1126,7 +1117,6 @@ describe('PiRunExecutor', () => {
     });
     assert.equal(result.outcome, RUN_STATUS.FAILED);
     assert.match(String(result.statusReason), /executionFenceToken|positive/i);
-    assert.equal(bundleCalled, 0);
     assert.equal(runtimeCalled, 0);
     await exec.dispose().catch(() => {});
   });

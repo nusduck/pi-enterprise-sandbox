@@ -86,9 +86,20 @@ export async function evaluatePreExecute(
   input: PreExecuteInput,
   store: ApprovalStore,
   idFactory: () => string = () => approvalIdOf(input.callId),
-  /** 运维可配的风险覆盖（`TOOL_RISK_POLICY_JSON` / `TOOL_RISK_POLICY_PATH`）。
-   *  不传就只用平台默认表——但那样运维配的东西就静默失效了，所以装配处必须传。 */
-  riskOverrides: Readonly<Record<string, PolicyRiskLevel>> = {},
+  /**
+   * 风险覆盖。两种形态：
+   * - **扁平 map**（`{ bash: 'high' }`）——单测与简单场景用。
+   * - **解析函数**（`(toolName) => level | undefined`）——生产用。表达得了
+   *   `mcp__github__*` 这类前缀规则与 `mcpServers` 的分层，扁平 map 表达不了。
+   *
+   * 不传就只用平台默认表——但那样运维配的东西就静默失效了。
+   * 2026-08-31 之前就是这样：`riskOverrides` 被设在 **executor 工厂**的选项上，
+   * 而 `runtime-factory` 从**它自己的** opts 读，两边根本不是同一个对象，
+   * 于是 `config/agent/tool-risk.json` 零效果，而且没有任何人报错。
+   */
+  riskOverrides:
+    | Readonly<Record<string, PolicyRiskLevel>>
+    | ((toolName: string) => PolicyRiskLevel | undefined) = {},
 ): Promise<PreExecuteResult> {
   const digest = digestArgs(input.args);
   const pieces: PolicyDecision[] = [decideFromRiskTable(input.toolName, riskOverrides)];

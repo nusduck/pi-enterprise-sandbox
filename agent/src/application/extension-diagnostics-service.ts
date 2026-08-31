@@ -175,7 +175,10 @@ export function getExtensionDiagnostics(options: { profileId?: string, skillRoot
     enabled: true,
     status: 'configured',
     category: toolCategory(name),
-    source: 'sandbox-bridge',
+    // 2026-08-31（计划 H8.5）：来源不再是那批已删除的 Pi Extension。
+    // 这批名字来自 `runtime/policy/tool-names.ts` 的唯一事实源，
+    // 与 boot 之后 `ctx.tools.schemas()` 的集合由 boot.test.ts 断言恰好相等。
+    source: 'dsh-host-tools',
     ...describeRisk(name, { class: 'local_low' }),
     dynamic: false,
   })).concat(

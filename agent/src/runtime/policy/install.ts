@@ -68,7 +68,9 @@ export interface InstallPolicyOptions {
    * **不传等于把这个配置面静默丢掉**——它以前就是这么丢的：解析出来喂给了一个
    * 返回 [] 的 extension bundle。
    */
-  readonly riskOverrides?: Readonly<Record<string, 'low' | 'medium' | 'high' | 'critical'>>;
+  readonly riskOverrides?:
+    | Readonly<Record<string, 'low' | 'medium' | 'high' | 'critical'>>
+    | ((toolName: string) => 'low' | 'medium' | 'high' | 'critical' | undefined);
 }
 
 /** 装配结果，供组合断言与主动卸载使用。 */

@@ -361,16 +361,17 @@ describe('ServiceContainer', () => {
     );
   });
 
-  it('createPiRunExecutorFactory forwards extensionBundleFactory (no network)', async () => {
+  it('createPiRunExecutorFactory forwards the live per-Run ports (no network)', async () => {
     const knex = { raw: async () => [[{}]], transaction: async (fn) => fn({}) };
     const redis = { status: 'ready' };
     const c = createServiceContainer(
       {
         AGENT_DATABASE_URL: 'mysql://u:p@h/db',
         AGENT_REDIS_URL: 'redis://localhost:6379/0',
-        // 内部面 HMAC 现在是**无条件**要求：通往 exec 的唯一路径是 RPC，
-        // 它必须签名。以前这个检查在"没有注入 extensionBundleFactory"的分支里，
-        // 注入一个就能绕过——那是旧 extension bundle 时代的遗留。
+        // 内部面 HMAC 是**无条件**要求：通往 exec 的唯一路径是 RPC，它必须签名。
+        // 这个检查以前在"没有注入 extensionBundleFactory"的分支里，注入一个就能
+        // 绕过——那是旧 extension bundle 时代的遗留，2026-08-31（计划 H8）
+        // 连同那个形参一起删了。
         SANDBOX_INTERNAL_HMAC_KEYRING: '{"k1":"a2tra2tra2tra2tra2tra2tra2tra2tra2tra2tra2s"}',
         SANDBOX_INTERNAL_HMAC_ACTIVE_KID: 'k1',
       },
@@ -385,14 +386,9 @@ describe('ServiceContainer', () => {
     );
     await c.start();
 
-    function sentinelExtensionBundleFactory() {
-      return [];
-    }
-
     const factory = await c.createPiRunExecutorFactory({
       modelResolver: () => ({ id: 'm' }),
       workspaceResolver: () => '/tmp/ws',
-      extensionBundleFactory: sentinelExtensionBundleFactory,
       // Inject fakes so no Redis lock / Pi / recovery connections are needed.
       sessionLockManager: {
         acquire: async () => true,
@@ -410,10 +406,26 @@ describe('ServiceContainer', () => {
 
     assert.equal(typeof factory, 'function');
     const executor = factory({ runId: 'job-1' });
+
+    // 这条用例以前断言的是「sentinel bundle 函数原样到达 executor」。那个形参
+    // 2026-08-31（计划 H8）删了——它终止在一个被 runtime-factory.create() 忽略
+    // 的参数上，而它带的三样依赖（风险表 / 子 Agent spawn / 治理记录器）
+    // 因此各自断链。现在断言的是**接回真正消费者的那几条**：
+    // 光删不断言，回归就是「配了没用且没人报错」，正是原来的病。
+    assert.notEqual(
+      executor.riskOverrides,
+      null,
+      '运维层风险表必须到达 executor——它按 Run 合并租户层后传给策略装配',
+    );
     assert.equal(
-      executor.extensionBundleFactory,
-      sentinelExtensionBundleFactory,
-      'exact same extensionBundleFactory function must reach PiRunExecutor',
+      typeof executor.subagentSpawnPort?.spawn,
+      'function',
+      '子 Agent 的 durable spawn 面必须到达 executor（计划 H5）',
+    );
+    assert.equal(
+      'extensionBundleFactory' in executor,
+      false,
+      '死形参不该再出现在 executor 上',
     );
   });
 

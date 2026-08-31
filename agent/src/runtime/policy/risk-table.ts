@@ -52,7 +52,9 @@ const DEFAULT_TOOL_OVERRIDES: Readonly<Record<string, PolicyRiskLevel>> = {};
 
 export function decideFromRiskTable(
   toolName: string,
-  overrides: Readonly<Record<string, PolicyRiskLevel>> = {},
+  overrides:
+    | Readonly<Record<string, PolicyRiskLevel>>
+    | ((toolName: string) => PolicyRiskLevel | undefined) = {},
 ): PolicyDecision {
   if (isRetiredToolName(toolName)) {
     return makePolicyDecision({
@@ -73,7 +75,9 @@ export function decideFromRiskTable(
       riskLevel: 'critical',
     });
   }
-  const riskLevel = overrides[toolName] ?? DEFAULT_TOOL_OVERRIDES[toolName] ?? DEFAULT_CLASS_RISK[cls];
+  const override =
+    typeof overrides === 'function' ? overrides(toolName) : overrides[toolName];
+  const riskLevel = override ?? DEFAULT_TOOL_OVERRIDES[toolName] ?? DEFAULT_CLASS_RISK[cls];
   const decision = DEFAULT_RISK_APPROVAL[riskLevel];
   return makePolicyDecision({
     decision,

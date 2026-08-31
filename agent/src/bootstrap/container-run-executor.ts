@@ -62,29 +62,6 @@ function createSubagentSpawnPort(container: Loose): { spawn: Loose; getStatuses:
 }
 
 /**
- * Durable task-state store (session todo list + owner-scoped notes).
- *
- * Each call runs in its own transaction: `replaceTodos` deletes the old list
- * before inserting the new one, so a crash between the two must not leave the
- * session with no plan at all.
- *
- * @param {import('./container.js').ServiceContainer} container
- * @returns {{ replaceTodos: Function, getTodos: Function, appendMemory: Function, searchMemory: Function }}
- */
-function createTaskStateStore(container) {
-  const inTx = (fn) =>
-    container
-      .getTransactionManager()
-      .run(async (trx) => fn(container.createRepositories(trx).taskState));
-  return {
-    replaceTodos: (input) => inTx((repo) => repo.replaceTodos(input)),
-    getTodos: (input) => inTx((repo) => repo.getTodos(input)),
-    appendMemory: (input) => inTx((repo) => repo.appendMemory(input)),
-    searchMemory: (input) => inTx((repo) => repo.searchMemory(input)),
-  };
-}
-
-/**
  * Explicit PiRunExecutor factory (PR-05 slice B).
  *
  * @param {import('./container.js').ServiceContainer} container
@@ -106,7 +83,6 @@ export interface PiRunExecutorFactoryOptions {
   readonly modelResolver: (agentVersion: object) => object | Promise<object>;
   readonly workspaceResolver: (agentSession: object) => string | Promise<string>;
   readonly extensionFactories?: unknown[];
-  readonly extensionBundleFactory?: (runContext: object, deps: object) => unknown[];
   readonly eventProjectionMode?: 'session-subscribe' | 'observability' | 'both';
   readonly sessionLockManager?: Loose;
   readonly piRuntimeFactory?: Loose;
@@ -162,7 +138,7 @@ export async function buildPiRunExecutorFactory(
 
 
   // Worker Sandbox tools need service token + acting headers (not anonymous).
-  if (typeof opts.extensionBundleFactory !== 'function' && !opts.sandboxTransport) {
+  if (!opts.sandboxTransport) {
     assertWorkerSandboxServiceToken(container.env);
   }
 
@@ -193,12 +169,14 @@ export async function buildPiRunExecutorFactory(
   // 这里曾经**并行**构造第二套：5 个 `internal-*-http` 传输 →
   // `createRunScopedSandboxBridgeTransport` → `createSandboxBridgeExtensionBundleFactory`
   // → `createEnterpriseExtensionBundle()`，而最后那个函数在 W6-A 删除
-  // `extensions/` 之后就是 `return []`。整条链路（约 170 行、连同
-  // toolRiskPolicy / skillManagerFactory / subagentSpawnPort / taskStateStore
-  // 这些只喂给它的依赖）终止在一个被 `runtime-factory.create()` 忽略的参数上。
+  // `extensions/` 之后就是 `return []`。整条链路终止在一个被
+  // `runtime-factory.create()` 忽略的参数上。
   //
-  // 唯一有实际作用的是 `toolRiskPolicy`：它被解析出来却同样丢掉了，现在改为
-  // 直接传给策略装配（`InstallPolicyOptions.riskOverrides`）。
+  // 2026-08-31（计划 H8）`extensionBundleFactory` 这个形参本身也删掉了，
+  // 连同它带的那批依赖一起接回真正的消费者：
+  //   toolRiskPolicy    → executor 合并租户层后按 Run 传给策略装配
+  //   subagentSpawnPort → durable 子 Agent 的队列/结果存储（H5）
+  //   governanceRecorder→ durable 审批（H4.3）
   const { resolveToolRiskPolicy } = await import('../../config.js');
   const toolRiskPolicy = opts.toolRiskPolicy ?? resolveToolRiskPolicy(container.env);
 
@@ -284,12 +262,6 @@ export async function buildPiRunExecutorFactory(
     // `durable-subagent.ts` 的 provider 用的是进程内队列：Worker 一重启子 Run 全丢，
     // 正是那个 provider 文件头说要避免的事。
     subagentSpawnPort: opts.subagentSpawnPort ?? createSubagentSpawnPort(container),
-    // 生产不再构造 extension bundle（见上方注释）。保留这个形参只为测试注入：
-    // 若哪天又有人在生产接上非空 bundle，`runtime-factory.create()` 仍然忽略它，
-    // 所以真要恢复扩展机制得先在那边接收。
-    ...(typeof opts.extensionBundleFactory === 'function'
-      ? { extensionBundleFactory: opts.extensionBundleFactory }
-      : {}),
     eventProjectionMode: opts.eventProjectionMode,
   };
   return createPiRunExecutorFactory(factoryOpts);
