@@ -12,13 +12,19 @@ export const LOGICAL_SKILL_ROOTS = Object.freeze([
   '/home/sandbox/skill-user',
 ]);
 
-export const SANDBOX_TOOL_NAMES = Object.freeze([
-  'read', 'ls', 'find', 'grep', 'write', 'edit', 'bash', 'python',
-  'process_start', 'process_status', 'process_read', 'process_kill',
-  'submit_artifact',
-]);
-
-export const ENTERPRISE_DEFAULT_TOOLS = SANDBOX_TOOL_NAMES;
+/**
+ * 工具名的事实源在 `src/runtime/policy/tool-names.ts`（ADR 0009 D4）。
+ * 这里只做转出，保住既有 import 路径不变。**不要在本文件里再列一份工具名。**
+ */
+export {
+  SANDBOX_TOOL_NAMES,
+  ASK_USER_TOOL_NAME,
+  ENTERPRISE_DEFAULT_TOOLS,
+  LEGACY_TOOL_NAME_ALIASES,
+  RETIRED_TOOL_REASON_CODE,
+  resolveToolNameAlias,
+  isRetiredToolName,
+} from '../../runtime/policy/tool-names.js';
 
 export const REQUIRED_EXTENSION_NAMES = Object.freeze([]);
 export const REGISTERED_EXTENSION_NAMES = Object.freeze([]);

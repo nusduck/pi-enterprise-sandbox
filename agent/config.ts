@@ -347,13 +347,24 @@ export const DEFAULT_TOOL_RISK_POLICY_PATH = fileURLToPath(
  * throws at startup — a silently empty risk table would downgrade every
  * configured approval gate to its built-in default.
  *
+ * The platform layer also asserts every tool key names a REGISTERED tool
+ * (`assertKnownNames`, ADR 0009 D4). The classifier is fail-closed, so a key
+ * that matches no tool is dead config whose only symptom is "that tool is
+ * denied at runtime" — with nobody reporting it. Tenant layers
+ * (AgentVersion.toolPolicy) do NOT get this assertion: their `configJson` is a
+ * frozen snapshot that may legitimately carry pre-2026-08-31 tool names, which
+ * `resolveToolNameAlias()` projects on read.
+ *
  * @param [env]
  */
 export function resolveToolRiskPolicy(env: NodeJS.ProcessEnv | Record<string, string|undefined> = process.env) {
   const inline = env.TOOL_RISK_POLICY_JSON;
   if (inline != null && String(inline).trim() !== '') {
     try {
-      return loadToolRiskPolicy(String(inline), { field: 'TOOL_RISK_POLICY_JSON' });
+      return loadToolRiskPolicy(String(inline), {
+        field: 'TOOL_RISK_POLICY_JSON',
+        assertKnownNames: true,
+      });
     } catch (error) {
       throw new Error(`Invalid TOOL_RISK_POLICY_JSON: ${error.message}`);
     }
@@ -368,7 +379,10 @@ export function resolveToolRiskPolicy(env: NodeJS.ProcessEnv | Record<string, st
     return loadToolRiskPolicy(null);
   }
   try {
-    return loadToolRiskPolicy(readFileSync(filePath, 'utf8'), { field: filePath });
+    return loadToolRiskPolicy(readFileSync(filePath, 'utf8'), {
+      field: filePath,
+      assertKnownNames: true,
+    });
   } catch (error) {
     throw new Error(`Invalid tool risk policy at ${filePath}: ${error.message}`);
   }

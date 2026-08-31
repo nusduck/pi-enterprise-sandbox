@@ -20,6 +20,7 @@
  */
 
 import { loadToolRiskPolicy } from '../infrastructure/dsh/tool-risk-policy.js';
+import { resolveToolNameAlias } from '../infrastructure/dsh/constants.js';
 import { parseAgentVersionConfigJson } from '../infrastructure/mcp/mcp-config-loader.js';
 
 /** Risk-table fields inside toolPolicy; everything else is a decision entry. */
@@ -100,6 +101,45 @@ export function readAgentVersionToolPolicy(agentVersion: unknown) {
 }
 
 /**
+ * 把一张按工具名索引的表投影到当前工具名（ADR 0009 D4 的存量处置 / 计划 H1.6）。
+ *
+ * `AgentVersion.configJson` 是 Run 创建时冻结的**不可变快照**，2026-08-31 之前建的
+ * 那些里面存的是旧 Pi 工具名。不迁移、不回写——只在**读取**时投影一次。
+ * 不处置的后果不是「少一条策略」，而是老 Run 静默全拒：分类器 fail-closed，
+ * 旧名在新工具面上一个都命中不了。
+ *
+ * 三条规矩：
+ * - `mcp__*` / `server::tool` / 前缀式 key 原样保留（它们不由我们命名）。
+ * - 退役能力（`memory_*` 等）投影成 `null`，这里直接丢掉该条——风险表会在
+ *   `decideFromRiskTable` 里给稳定的 `TOOL_RETIRED`，不需要 toolPolicy 再说一遍。
+ * - **新名优先**：快照里同时写了旧名和新名时，新名赢，旧名不覆盖它。
+ */
+function projectLegacyToolNames(table: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  const explicit = new Set<string>();
+  // 先放新名（或不由我们命名的 key），它们不该被旧名的投影覆盖。
+  for (const [key, value] of Object.entries(table)) {
+    if (key.startsWith('mcp__') || key.includes('::') || key.endsWith('*')) {
+      out[key] = value;
+      explicit.add(key);
+      continue;
+    }
+    if (resolveToolNameAlias(key) === key) {
+      out[key] = value;
+      explicit.add(key);
+    }
+  }
+  for (const [key, value] of Object.entries(table)) {
+    if (explicit.has(key)) continue;
+    const projected = resolveToolNameAlias(key);
+    if (projected === null) continue; // 退役能力，交给风险表给理由码
+    if (explicit.has(projected)) continue; // 新名已显式给过，不覆盖
+    out[projected] = value;
+  }
+  return out;
+}
+
+/**
  * @param agentVersion
  * @returns {Record<string, unknown>}
  */
@@ -135,15 +175,19 @@ export function buildAgentVersionToolRiskBindings(agentVersion: unknown, mcpBind
     typeof toolPolicy.tools === 'object' &&
     !Array.isArray(toolPolicy.tools)
   ) {
-    Object.assign(decisions, toolPolicy.tools);
+    Object.assign(decisions, projectLegacyToolNames(toolPolicy.tools as Record<string, unknown>));
   }
+  const flat: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(toolPolicy)) {
     if (key === 'tools' || RISK_FIELDS.includes(key)) continue;
-    decisions[key] = value;
+    flat[key] = value;
   }
+  Object.assign(decisions, projectLegacyToolNames(flat));
 
   const riskRaw: Record<string, unknown> = {};
-  if (toolPolicy.riskLevels != null) riskRaw.tools = toolPolicy.riskLevels;
+  if (toolPolicy.riskLevels != null) {
+    riskRaw.tools = projectLegacyToolNames(toolPolicy.riskLevels as Record<string, unknown>);
+  }
   if (toolPolicy.riskApproval != null) riskRaw.riskApproval = toolPolicy.riskApproval;
   if (toolPolicy.classRiskLevels != null) {
     riskRaw.classRiskLevels = toolPolicy.classRiskLevels;

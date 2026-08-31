@@ -5,14 +5,27 @@
     "either. Edit this file (or set TOOL_RISK_POLICY_JSON / point",
     "TOOL_RISK_POLICY_PATH elsewhere) to change which tools need approval.",
     "",
+    "2026-08-31 (ADR 0009 D4): keys are the DSH factory tool names, not the old",
+    "Pi ones. The single source for the names is",
+    "agent/src/runtime/policy/tool-names.ts (SANDBOX_TOOL_NAMES); startup asserts",
+    "every non-mcp key here exists there and throws otherwise, because the",
+    "classifier is fail-closed and a stale key's only symptom would be that its",
+    "tool is silently denied at runtime.",
+    "",
+    "Retired in this stage and therefore absent: ls, find, python, process_*,",
+    "skill_list/install/create/edit/uninstall, spawn_subagent, check_subagent,",
+    "ask_user, todo_read, memory_write, memory_search, submit_artifact.",
+    "Old AgentVersion snapshots that still name them are projected through",
+    "LEGACY_TOOL_NAME_ALIASES on read; they are not migrated.",
+    "",
     "riskApproval maps each risk level to what it costs. Approval decisions are",
     "derived from risk only — there is no separate approval switch per tool.",
     "",
     "classRiskLevels is the fallback risk for tools with no explicit entry:",
-    "  local_low            sandbox-bridge tools running inside the sandbox",
+    "  local_low            host tools running against the exec RPC seam",
     "  external_readonly    MCP tools explicitly marked read-only",
     "  external_high        every other MCP tool (external side effects)",
-    "  internal_interaction ask_user",
+    "  internal_interaction ask_user_question",
     "",
     "tools keys accept a projected tool name (read, mcp__github__create_pr),",
     "the server::tool form (github::create_pr), or a trailing-* prefix",
@@ -22,51 +35,33 @@
     "overrides, so a new tool appearing on a server inherits the server's risk",
     "instead of silently defaulting to external_high."
   ],
-
   "riskApproval": {
     "low": "allow",
     "medium": "allow",
     "high": "require_approval",
     "critical": "deny"
   },
-
   "classRiskLevels": {
     "internal_interaction": "low",
     "local_low": "low",
     "external_readonly": "medium",
     "external_high": "high"
   },
-
   "tools": {
     "read": "low",
-    "ls": "low",
-    "find": "low",
-    "grep": "low",
     "write": "low",
     "edit": "low",
+    "read_image": "low",
+    "glob": "low",
+    "grep": "low",
     "bash": "low",
-    "python": "low",
-    "process_start": "low",
-    "process_status": "low",
-    "process_read": "low",
-    "process_kill": "low",
-    "submit_artifact": "low",
-    "ask_user": "low",
-
-    "skill_list": "low",
-    "skill_install": "high",
-    "skill_create": "high",
-    "skill_edit": "high",
-    "skill_uninstall": "high",
-
-    "spawn_subagent": "medium",
-    "check_subagent": "low",
-
+    "job_list": "low",
+    "job_output": "low",
+    "job_kill": "low",
     "todo_write": "low",
-    "todo_read": "low",
-    "memory_write": "low",
-    "memory_search": "low"
+    "skill": "low",
+    "subagent": "low",
+    "ask_user_question": "low"
   },
-
   "mcpServers": {}
 }

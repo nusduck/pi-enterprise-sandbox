@@ -8,7 +8,7 @@
 import { makePolicyDecision, mergePolicyDecisions, type PolicyDecision } from './decision.js';
 import type { PolicyRiskLevel } from './decision.js';
 import { decideFromRiskTable } from './risk-table.js';
-import { assertSourceDigest, digestArgs, rejectMismatchedDigest } from './source-digest.js';
+import { digestArgs, rejectMismatchedDigest } from './source-digest.js';
 
 export type ApprovalStatus = 'PENDING' | 'APPROVED' | 'DENIED';
 
@@ -60,8 +60,6 @@ export async function evaluatePreExecute(
 ): Promise<PreExecuteResult> {
   const digest = digestArgs(input.args);
   const pieces: PolicyDecision[] = [decideFromRiskTable(input.toolName, riskOverrides)];
-  const digestDecision = assertSourceDigest(input.toolName, input.args);
-  if (digestDecision) pieces.push(digestDecision);
   if (input.replayDigest !== undefined) {
     const mismatch = rejectMismatchedDigest(input.replayDigest, digest);
     if (mismatch) pieces.push(mismatch);

@@ -18,6 +18,11 @@
  */
 
 import { DECISION_RANK, RISK_LEVELS, RISK_RANK } from './policy-decision.js';
+import {
+  ASK_USER_TOOL_NAME,
+  SANDBOX_TOOL_NAMES,
+  isRetiredToolName,
+} from './constants.js';
 
 /** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
 type Loose = any;
@@ -150,6 +155,27 @@ function assertObject(value: unknown, field: string) {
  * the `server::tool` form, or a trailing-`*` prefix pattern.
  * @param key
  */
+/**
+ * 平台层的工具名断言（ADR 0009 D4 / 计划 H1.5）。
+ *
+ * 放过三类 key：`mcp__*` 前缀式（MCP 工具名由服务端决定，且出厂包会对超长/非法名
+ * 做规范化并追加哈希，只能靠前缀兜底）、`server::tool` 形式、以及退役名
+ * （退役是显式决定，理由码稳定，不算拼写错误）。其余必须命中事实源。
+ */
+function assertKnownToolName(key: string, field: string): void {
+  if (key.endsWith('*')) return;
+  if (key.startsWith('mcp__') || key.includes('::')) return;
+  if (SANDBOX_TOOL_NAMES.includes(key) || key === ASK_USER_TOOL_NAME) return;
+  if (isRetiredToolName(key)) return;
+  throw new ToolRiskPolicyError(
+    `${field}: "${key}" is not a known tool name. The single source is ` +
+      `src/runtime/policy/tool-names.ts (SANDBOX_TOOL_NAMES). A key that names no ` +
+      `registered tool is dead config: the classifier is fail-closed, so the tool it ` +
+      `meant to cover would be denied at runtime with nobody reporting it.`,
+    { code: 'TOOL_RISK_POLICY_UNKNOWN_TOOL' },
+  );
+}
+
 function normalizeToolKey(key: string) {
   const raw = String(key ?? '').trim();
   if (!raw) {
@@ -193,7 +219,10 @@ export function defaultToolRiskPolicy() {
  * @param [opts]
  * @returns {ToolRiskPolicy}
  */
-export function loadToolRiskPolicy(raw: unknown, opts: { field?: string } = {}) {
+export function loadToolRiskPolicy(
+  raw: unknown,
+  opts: { field?: string; assertKnownNames?: boolean } = {},
+) {
   const field = opts.field || 'toolRiskPolicy';
   if (raw == null) return defaultToolRiskPolicy();
 
@@ -262,6 +291,13 @@ export function loadToolRiskPolicy(raw: unknown, opts: { field?: string } = {}) 
     for (const [key, entry] of Object.entries(table)) {
       if (key.startsWith('_')) continue; // inline comment
       const normalized = normalizeToolKey(key);
+      // ADR 0009 D4：这张表的 key 就是工具名，而分类器是 fail-closed 的
+      // （未知工具 → deny）。所以一个拼错的 key、或者一个 2026-08-31 改名之后
+      // 忘了同步的旧名，表现出来是「那个工具在运行时整片被拒」，而且**没有人报错**。
+      // 平台层因此 fail-fast：key 必须在 tool-names.ts 的唯一事实源里。
+      // 租户层（AgentVersion.toolPolicy）不开这个断言——存量 configJson 是冻结的
+      // 不可变快照，旧名由 resolveToolNameAlias() 在读取时投影。
+      if (opts.assertKnownNames === true) assertKnownToolName(normalized, `${field}.tools.${key}`);
       const riskLevel = readRiskEntry(entry, `${field}.tools.${key}`);
       if (normalized.endsWith('*')) {
         toolPatterns.push({ prefix: normalized.slice(0, -1), riskLevel });

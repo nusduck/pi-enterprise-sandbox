@@ -109,7 +109,22 @@ tool 插件是单例，问到的 `ctx.fs/shell/jobs` 必须是这次 Run 的租�
 turn 中途放开），否则 provider 拿不到本 Run 的 RPC 上下文。验收要有并发两个
 不同租户 Run 的断言。
 
-**现状差距**：出厂工具未激活；`toolPolicy` → 闸门的过滤未接线。
+**现状差距**：~~出厂工具未激活~~；`toolPolicy` → 闸门的过滤未接线。
+
+> ## ⚠️ 2026-08-31 实测修正
+>
+> 1. **「出厂工具未激活」不成立**：`cordis.patch.yml` 没有一行关掉 `tool-fs`/`tool-bash`/
+>    `tool-todo`/`tool-skill`/`tool-subagent`/`tool-jobs`。起栈实测 **23 个模型可见工具**，
+>    其中 **8 个是本 ADR 完全没提的**（`web_search`、`workflow`、`ralph`、`subagent_fork`、
+>    `interrupt_agent`/`list_agents`/`send_message`、goal 三件套、`exit_plan_mode`、
+>    `str_replace_editor`）。fail-closed 之下它们会整片被拒。处置见
+>    [`design/dsh-host-tools.md`](../design/dsh-host-tools.md) H2.0。
+> 2. **`submit_artifact` 不存在**：D4 写「我们自建的，保留」，但今天没有任何插件注册它。
+> 3. **「不得 `rebind` 共享 provider」这条约束，代码里已经违反了**：
+>    `runtime-factory.ts:170-174` 每个 Run 对同一份 provider 实例调 `rebind()`
+>    （`ensureCtx` 是全进程 `bootOnce`）。这是现存的跨租户缺陷，不是待补的断言。
+> 4. **收窄机制有**：`ctx.tools.restrict({allow, deny})` 按 agent scope 过滤继承来的工具面
+>    ——这同时回答了 D9 §4 的悬念，**不需要 preset**。
 
 ### D4：工具名是契约面，改名是第 0 步
 
@@ -156,6 +171,27 @@ turn 中途放开），否则 provider 拿不到本 Run 的 RPC 上下文。验�
 **现状差距**：四处都还是 Pi 名单；别名映射不存在。
 
 ### D5：审批 = 组合 `ctx.approval` seam + 自建 answerer；停泊靠重放，不靠挂起
+
+> ## ⚠️ 2026-08-31 实测修正：本条的**停泊第 1 步被证伪**
+>
+> 证据：[`../evidence/2026-08-31-dsh-tool-registry.md`](../evidence/2026-08-31-dsh-tool-registry.md)
+> 附录（`agent/scripts/probe-approval-park.ts`，真实插件树 + 确定性假 LLM）。
+>
+> 下文写「返回非 allow → 该次工具调用不落地 → **turn 正常结束** → 释放 Worker」。
+> 实测：**前半对，后半错**。工具确实不落地，但 turn **不会结束**——模型拿到错误型
+> tool result，循环又发了一次请求。类型层面也是关死的：`concludesTurn` 只存在于
+> `ToolExecutionSuccess`，`ToolExecutionFailure` 上是 `never`，**被拒的调用在类型上
+> 就不可能结束 turn**。唯一能停循环的原语是工具**体内**的 `exec.concludeTurn()`，
+> 而 `read`/`bash` 这些出厂工具的体不是我们的（wrapper 自己写 `concludesTurn` 会被丢掉，
+> 场景 B 已验）。
+>
+> **本条其余部分不受影响**：seam + 自建 answerer、风险表留在 `pre-execute`、
+> digest 校验、重建会话重放续跑——全部照旧。改的只是「怎么让 turn 停下来」。
+>
+> 实施采用的替代形状见 [`design/dsh-host-tools.md`](../design/dsh-host-tools.md) H4：
+> 写完 PENDING 的同时在该 Run 的 agent scope 上装一个 park guard，
+> 此后本轮任何工具调用一律拒（`guard()` 单调 fail-closed），模型没有工具可用，
+> 一步文本后 turn 结束。**代价：每次停泊多一次模型往返。**
 
 **改写 [ADR 0007](0007-agent-runtime-rebuild-on-dsh.md) D4 的「不组合
 `dsh-user-approval`」。** 但组合的方式不是「把审批交给原生」：
@@ -381,6 +417,8 @@ RunEvent → BFF SSE、跨租户 404、A2A、trace 查询。
 - **把 MCP 密钥明文写进 overlay 的 patch YAML**（只走 secretRef，与凭据插件同规矩）。
 
 ## 现状与实施顺序（未开始）
+
+> **任务分解与验收见 [`design/dsh-host-tools.md`](../design/dsh-host-tools.md)**（2026-08-31 写，含逐条对代码的现状复核；下面这份顺序是它的 H0–H9 的依据，差别是那份在最前面多一步「起栈取证」）。
 
 0. **工具名改齐**（D4：四处 + 存量 `toolPolicy` 的别名映射）。这是第 0 步，
    因为它是 fail-closed 的，不先做则后面每一步都表现为「工具被拒」。

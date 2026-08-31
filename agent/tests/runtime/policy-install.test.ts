@@ -116,13 +116,17 @@ test('低风险工具放行，且把决定权交回瀑布（不抢别人的拒�
 test('高风险工具停在 ask，并落一条持久 PENDING 审批', async () => {
   const ctx = new FakeCtx();
   const store = new InMemoryApprovalStore();
-  installEnterprisePolicy(ctx as never, { approvalStore: store });
+  installEnterprisePolicy(ctx as never, {
+    approvalStore: store,
+    // 2026-08-31（ADR 0009 D4/D7）：`skill_install` 整套取消后，平台默认表里没有
+    // 任何 high 的本地工具了。高风险只来自**运维覆盖**或 MCP，所以这里显式覆盖，
+    // 测的仍是同一条路径。顺带把「运维覆盖真的生效」也测了。
+    riskOverrides: { bash: 'high' },
+  });
 
-  // 按真实风险表选工具：`bash` 是 local_low → allow；`require_approval` 的是
-  // `skill_install`（override 到 high）与所有 `mcp__*`（external_high）。
   let nextCalled = false;
   const decision = (await ctx.pre(
-    { name: 'skill_install', arguments: { source: 'x.zip' }, id: 'c2' },
+    { name: 'bash', arguments: { command: 'rm -rf /tmp/x' }, id: 'c2' },
     async () => {
       nextCalled = true;
       return { kind: 'allow' };
@@ -135,7 +139,7 @@ test('高风险工具停在 ask，并落一条持久 PENDING 审批', async () =
   // 审批必须**落库**，不是只返回一个决定——WAITING_APPROVAL 之后要能恢复。
   assert.equal(store.records.size, 1);
   const [approval] = [...store.records.values()];
-  assert.equal(approval?.toolName, 'skill_install');
+  assert.equal(approval?.toolName, 'bash');
   assert.equal(approval?.status, 'PENDING');
   assert.equal(approval?.runStatusHint, 'WAITING_APPROVAL');
   // source_digest 必须入账：恢复重放时靠它发现参数被换过。

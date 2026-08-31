@@ -34,6 +34,8 @@ DSH 重建的施工分解。设计依据见 [dsh-rebuild.md](../dsh-rebuild.md)�
 
 ## 进度
 
+**ADR 0009（出厂工具挂 host / application 做管家）的施工分解不在本表**，见 [`../dsh-host-tools.md`](../dsh-host-tools.md) 的 H0–H9。
+
 | 任务 | 内容 | 状态 |
 |---|---|---|
 | **Wave 0** | 地基（主控自做） | ✅ |
