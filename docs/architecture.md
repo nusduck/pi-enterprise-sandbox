@@ -2,7 +2,8 @@
 
 ## Overview
 
-Pi Enterprise Sandbox 采用**四服务架构**，前端、BFF、Agent 与沙箱执行环境各自独立容器部署。
+Pi Enterprise Sandbox 采用**五个进程、四份镜像**：前端、BFF、Agent、执行面
+（compose 服务名仍叫 `sandbox`）以及同一镜像的 MCP facade（`sandbox-mcp`）。
 
 ```
 ┌──────────────────────────────────────────────────────────┐
@@ -16,7 +17,7 @@ Pi Enterprise Sandbox 采用**四服务架构**，前端、BFF、Agent 与沙箱
 ├──────────────────────────────────────────────────────────┤
 │              Agent Service (Node.js)                      │
 │    DeepSeek Harness · Run API · policy · tools            │
-│    @pi/runtime = providers + policy + projection          │
+│    agent/src/runtime = providers + policy + projection    │
 │    host:4100 → container:4100                            │
 ├──────────────────────────────────────────────────────────┤
 │              Exec Service (Node.js / TypeScript)          │
@@ -41,7 +42,7 @@ Pi Enterprise Sandbox 采用**四服务架构**，前端、BFF、Agent 与沙箱
 |------|--------|--------|------|
 | **Frontend** | `pi-enterprise-frontend` | Vite + React → Nginx | 纯 UI 渲染，零 Agent 逻辑；Nginx 反向代理 `/api/*` |
 | **API Server (BFF)** | `pi-enterprise-api` | Node.js 22 | 认证、会话文件边缘、Run API 与 SSE relay |
-| **Agent** | `pi-enterprise-agent` | Node.js 22 + `@deepseek-ai/dsh-*` `0.1.1-rc.2` | MySQL Run/Session authority；经 `agent/runtime`（`@pi/runtime`）组合 DSH：远程 fs/shell/jobs provider、MySQL 会话持久化、策略挂载点、SSE 投影 |
+| **Agent** | `pi-enterprise-agent` | Node.js 22 + `@deepseek-ai/dsh-*` `0.1.1-rc.2` | MySQL Run/Session authority；经 `agent/src/runtime/` 组合 DSH：远程 fs/shell/jobs provider、MySQL 会话持久化、策略挂载点、SSE 投影 |
 | **Sandbox（执行面）** | `pi-enterprise-sandbox` | Node.js 22 + TypeScript + Bubblewrap | Agent 专用内部执行平面（HMAC `/internal/v1/*`）+ 对 BFF 的公共会话面；命令执行、文件、搜索、数据集、产物。compose 中无 `ports:` 段——宿主不可直连，只能从 `backend_internal` 访问 |
 | **Sandbox MCP** | `pi-enterprise-sandbox-mcp` | 同一镜像，入口 `dist/mcp-main.js` | 对外的 Streamable HTTP MCP 面。**只能走 `/internal/mcp/v1/*` 窄桥**，够不到内部面——这是它单独成进程的全部理由 |
 
@@ -69,14 +70,14 @@ Browser → Frontend → BFF (Node:4000) → Agent (Node:4100) → Exec (Node:80
 - **Agent → LLM**: HTTPS 直连，API Key 仅存 Agent 服务环境变量
 - **Browser ← API Server**: SSE (`text/event-stream`)，事件驱动渲染
 - **Artifact 下载**: 仅 `artifact_id` → control-plane snapshot；禁止 workspace path 作为交付 fallback
-- **Artifact 模块**: Sandbox 内由 `sandbox/artifact/` 聚合，通过
-  `ArtifactFacade` 暴露 submit/list/download/import；旧 service/router 路径仅兼容
+- **Artifact 模块**: 快照落 exec 控制面（`exec/src/artifact/`），通过
+  公共面 submit/list/download/import 暴露；工作区不可改已提交产物
 - **跨会话 Import**: 以 `org_id + user_id` 校验源 Artifact，将不可变 snapshot
   原子复制为目标 workspace 输入；不创建 Artifact、不发交付事件
 
 ## Key Design Decisions
 
-Sub-Agent 暂不进入运行时。启用门槛与安全边界以 `plan.md` 与代码为准（当前无 Sub-Agent 运行时路径）。
+Sub-Agent 以普通 Run 落地（`subagent-spawn`，见 §4c）。启用门槛与安全边界以 `plan.md` 与代码为准。
 
 ### 1. 独立 Node Agent 服务
 
@@ -131,23 +132,25 @@ Agent（DeepSeek Harness）运行在独立 `agent/` 服务中，而非浏览器�
 - **恢复路径**：Outbox publisher 从 `domain_outbox` 重试未发布事件；SSE/历史从 MySQL `run_events` 重放；Worker 按 MySQL Run 状态 + 幂等记录决定重试或失败
 - 生产：`REDIS_PASSWORD` 必填（compose fail-fast）；禁止无密码生产 Redis
 
-### 4c. 第一方 Extension 名单
+### 4c. 企业工具面与策略挂载
 
-`REQUIRED_EXTENSION_NAMES` 是**四个**（`agent/src/extensions/constants.js`）：
+Pi 的 first-party Extension 包（`agent/src/extensions/`）已随 ADR 0007 删除。
+`REQUIRED_EXTENSION_NAMES` / `REGISTERED_EXTENSION_NAMES` 现在是空名单
+（`agent/src/infrastructure/dsh/constants.ts`），只留给 diagnostics 投影兼容
+BFF `/api/extensions/diagnostics` 的字段形状。能力本身还在，挂载点换了：
 
-| Extension | 角色 |
-|-----------|------|
-| `sandbox-bridge` | 注册 `SANDBOX_TOOL_NAMES` 的 13 个工具，全部路由到 Sandbox internal plane |
-| `enterprise-policy` | 纯拦截器；不注册任何工具，对每次 `tool_call` 给出 allow / require_approval / deny |
-| `observability` | 记录工具结果与审计事件 |
-| `user-interaction` | 注册 `ask_user`。名字不叫 `interaction`，因为那是 registry 必须持续拒绝的 legacy enterprise-agent-kit 包名 |
+| 能力 | 现在在哪 | 角色 |
+|------|----------|------|
+| 工作区工具（原 `sandbox-bridge`） | DSH remote provider：`ctx.fs` / `ctx.shell` / `ctx.jobs` | 注册 `SANDBOX_TOOL_NAMES` 的 13 个工具，全部 RPC 到 exec internal plane |
+| 企业策略（原 `enterprise-policy`） | `agent/src/runtime/policy/` 四个挂载点 | 纯拦截器；对每次 tool_call 给出 allow / require_approval / deny |
+| 可观测性（原 `observability`） | 账本 + OTel：`fenced-tool-governance-recorder` 等 | 记录工具结果与审计事件 |
+| 用户提问（原 `user-interaction`） | application `interaction-response-service` + 策略面 | 注册 `ask_user`。名字不叫 `interaction`，因为那是必须持续拒绝的 legacy 包名 |
 
-`OPTIONAL_EXTENSION_NAMES` 有三个，都要求容器注入对应的持久化端口——端口缺失时
-bundle 在装配期直接报错，而不是让模型在第一次调用时才拿到一个永远失败的工具。
+可选能力仍要求容器注入对应的持久化端口——端口缺失时装配期直接报错，而不是
+让模型在第一次调用时才拿到一个永远失败的工具。
 
-装载规则：AgentVersion **显式列出** extensions 时，那份列表是权威的（
-`pi-runtime-factory` 会按列表逐一校验 factory，静默追加会把一个合法 AgentVersion
-变成 `PI_EXTENSIONS_COUNT` 错误）。列表为空时（`defaultAgentConfigJson()` 的默认
+装载规则：AgentVersion **显式列出** extensions 时，那份列表仍是 diagnostics
+与 AgentVersion 校验的权威投影。列表为空时（`defaultAgentConfigJson()` 的默认
 形态），`skill-lifecycle` 与 `task-state` 在各自依赖就绪的前提下自动装载；
 `subagent-spawn` 仍需显式列出。
 
@@ -169,7 +172,7 @@ bundle 在装配期直接报错，而不是让模型在第一次调用时才拿�
 - **子 Run 有自己的 Conversation 与 AgentSession**。父 Run 在整个生命周期内持有其
   AgentSession 的执行 fence 与 Redis 锁，共用会话的子 Run 永远拿不到锁——它会一直
   排队等一个正在等它的父 Run。AgentVersion 仍然继承父 Run 的版本。
-- **一次 tool call 只产生一个子 Run**。Pi 的 `toolCallId` 就是幂等键，重试认领已建
+- **一次 tool call 只产生一个子 Run**。`toolCallId` 就是幂等键，重试认领已建
   的子 Run。
 - **深度与并发在事务内复查**。父行加锁后再数存活兄弟，两个并发 spawn 不会同时读到
   "还剩一个名额"。默认 `maxDepth=2`、`maxConcurrent=5`，可由
@@ -188,7 +191,7 @@ cancel intent 并发信号。**只写 intent**——`execute-run-service` 在进
 
 子 Run **不注册 `ask_user`**：它的对话不在会话列表里，也没有任何路径把它的提问送到
 人面前，停泊在 WAITING_INPUT 就是永久卡死。停泊 Run 的取消回收也已对齐——
-WAITING_INPUT 与 WAITING_APPROVAL 现在共用 `run-recovery-parked-cancel.js`，此前只
+WAITING_INPUT 与 WAITING_APPROVAL 现在共用 `run-recovery-parked-cancel.ts`，此前只
 有后者会响应 cancel intent。
 
 子 Run 的 Conversation 带 `parent_run_id`（migration `20260822000003`），
@@ -226,7 +229,7 @@ Workspace 内的 `read`、`write`、`edit`、`bash`、Python、Node、文件删�
 3. Browser 通过 `GET /api/runs/:id/events` 消费 BFF relay 的序列化 SSE（BFF 不 import 任何 Agent SDK）
 4. Agent：
    a. 创建或复用 conversation + Agent Session，并恢复其 sandbox session（`workspace_id`）
-   b. 经 `@pi/runtime` 组合 DSH 会话（基础 tools、model、auth；per-Run scope 承载工具视图/guard/skill 层；profile skill 策略）。进程启动时已对每个启用 MCP 执行 `tools/list`，并将工具注册为 `mcp__{serverId}__{toolName}`；MCP 配置变更须重启 Agent。
+   b. 经 `agent/src/runtime/` 组合 DSH 会话（基础 tools、model、auth；per-Run scope 承载工具视图/guard/skill 层；profile skill 策略）。进程启动时已对每个启用 MCP 执行 `tools/list`（`pi-mcp-adapter`，DSH 自身没有 MCP transport），并将工具注册为 `mcp__{serverId}__{toolName}`；MCP 配置变更须重启 Agent。
    c. 绑定策略挂载点后以 DSH active tools + 启用集 skills + MCP 注入结果做权威 reconcile，并发布 diagnostics 可消费的 live snapshot
    d. 调用 session.prompt(text)；清单/数量类问题须经 `capabilities` 工具（list/search/describe）
    e. Agent 循环：
@@ -282,7 +285,7 @@ Agent Session 生命周期。
 | **Audit logging** | 每次执行记录 trace_id |
 | **Approval** | 外部副作用 Tool 由 Agent durable policy/approval ledger 控制；普通 Sandbox bash/python/node 不审批 |
 | **Internal auth** | Agent→Sandbox 使用短期 HMAC claim + body digest + replay jti；密钥仅在服务端，浏览器零接触。Agent 自身 `/internal/*` 面由 `AGENT_INTERNAL_TOKEN` 保护（常量时间比较），token 缺失即 fail-closed 关闭平面 |
-| **SDK Extension** | Agent 侧统一 `tool_call` 策略入口；异常 fail-closed |
+| **DSH 策略挂载** | Agent 侧统一 `tool_call` 策略入口（`runtime/policy`）；异常 fail-closed |
 | **Run 收敛保护** | 每个 Run 限制模型回合、总工具调用和重复的工具/参数调用；到达任一上限后移除工具并要求模型根据已有结果完成回答 |
 
 ### 双重强制（Agent Extension + Sandbox）
@@ -290,7 +293,7 @@ Agent Session 生命周期。
 安全策略在两层独立执行，**Sandbox 不信任 Extension 结论**：
 
 ```text
-Agent Host + @pi/runtime（DSH 的四个既有挂载点，不建平行体系）
+Agent Host + `agent/src/runtime/`（DSH 的四个既有挂载点，不建平行体系）
   tools/pre-execute      → 风险表、参数守卫、source_digest、持久 PENDING 审批
   ctx.tools.guard()      → 租户与 fence 的单调兜底；拒绝后监听器无法翻案
   tools/execute（环绕）  → 每 Run 工具数、轮次、deadline
@@ -325,25 +328,24 @@ Exec internal plane (TypeScript)
   glob，因此 `cd … && …`、管道、重定向、`$(...)`、`python -m`、换用别的解释器、以及用 `cat`
   读 Skill 文件都会被拒——读文件用 `read` 工具，需要更复杂的命令先把脚本复制到 workspace。
   这条规则同时写进 system prompt 的 Skills 段，模型不必靠撞墙去发现它。
-- **Enterprise system prompt** 是 Pi `customPrompt`：身份可被 AgentVersion /
-  `AGENT_SYSTEM_PROMPT` lead 整段替换，路径 / Skill 入口 / 工具契约 / `## Doing work`
-  不可被替换。`## Tools` 正文按本 run 绑定的工具现场拼接（各工具自己的
-  `promptSnippet` / `promptGuidelines`），基座不写死工具清单。`## Doing work` 只写
-  工具无关的工作纪律（本轮做完并验证、不擅自改范围、进度写在用户可见回复、密钥不进回复、
-  有交付工具就走交付工具）；todo / memory / `ask_user` / 子代理 / artifact 的用法只出现在
-  对应工具被绑定后的 guideline 里，避免没装该 extension 的 run 读到幽灵工具。
-  `AGENT_SYSTEM_PROMPT` 只替换身份 lead，不再另拼一层「平台安全」附录——那层曾经写在
-  `config.js` 的 `PLATFORM_SYSTEM_PROMPT_LAYER` 里，从未进入运行时 prompt。
-  实现：`agent/src/infrastructure/pi/enterprise-system-prompt.js`。
+- **Enterprise system prompt** 由 `agent/src/runtime/prompt/enterprise-clauses.ts`
+  装配进 DSH：身份可被 AgentVersion / `AGENT_SYSTEM_PROMPT` lead 整段替换，路径 /
+  Skill 入口 / 工具契约 / `## Doing work` 不可被替换。`## Tools` 正文按本 run
+  绑定的工具现场拼接（各工具自己的 `promptSnippet` / `promptGuidelines`），基座
+  不写死工具清单。`## Doing work` 只写工具无关的工作纪律（本轮做完并验证、不擅自
+  改范围、进度写在用户可见回复、密钥不进回复、有交付工具就走交付工具）；todo /
+  memory / `ask_user` / 子代理 / artifact 的用法只出现在对应工具被绑定后的
+  guideline 里，避免没装该能力的 run 读到幽灵工具。`AGENT_SYSTEM_PROMPT` 只替换
+  身份 lead，不再另拼一层「平台安全」附录。
 - 策略版本常量 `POLICY_VERSION`（当前 `2026-07-15.1`）写入审批响应与审计 meta，便于追溯。
 - `SANDBOX_POLICY_PROFILE=strict|balanced` 在 Agent 与 Sandbox 对称生效；`balanced` 仅在 required Bubblewrap 已通过配置校验时激活，并只放行常见包管理命令的审批前置门。`SANDBOX_NETWORK_MODE` 仍是网络权限唯一事实源，生产固定 `strict`。
 - approval key 由 durable `run_id`、Sandbox session、工具名、稳定 SDK
   `tool_call_id` 和规范化参数生成；pending/approved/rejected 与 operation
   fingerprint 由 Agent MySQL ledger 原子维护。resume 只授权完全相同的
   外部副作用操作，不把一次批准扩展成 Sandbox 通用执行权限。
-- 实现：`agent/src/extensions/enterprise-policy/`、`agent/src/extensions/sandbox-bridge/`、
-  `agent/src/infrastructure/mysql/repositories/approval-repository.js`、
-  `sandbox/security/internal_http_auth.py`、`sandbox/services/policy_checker.py`。
+- 实现：`agent/src/runtime/policy/`、`agent/src/runtime/providers/remote-*.ts`、
+  `agent/src/infrastructure/mysql/repositories/approval-repository.ts`、
+  `exec/src/security/hmac.ts`、`exec/src/shell/blocked-commands.ts`。
 
 ## Technology Stack
 

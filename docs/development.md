@@ -23,10 +23,12 @@ cp .env.example .env
 # 多用户归属（默认关闭）: SANDBOX_AUTH_ENABLED=true + AUTH_ENABLED=true + SANDBOX_JWT_SECRET
 # 关闭鉴权即回退 open 单用户模式；ownership 列与 bootstrap 回填结果保留
 
-# 1. Python（Sandbox + pytest）
+# 1. Python（只为跑 tests/ 的仓库卫生检查，不是执行面服务）
 uv sync --extra test
 
-# 2. Node BFF + Agent + Frontend（Node 22）
+# 2. Node（Node 22）
+npm ci --prefix contract
+npm ci --prefix exec
 npm ci --prefix api-server
 npm ci --prefix agent
 npm ci --prefix frontend
@@ -44,10 +46,9 @@ uv run pytest tests/ -q --tb=short
 node --test api-server/tests/*.test.js
 # 或：npm test --prefix api-server
 
-# Node Agent
+# Node Agent（测试会先 build；类型检查不在 npm test 里）
 npm test --prefix agent
-# checkJs（不在 npm test 里）：
-exec/node_modules/.bin/tsc -p agent/tsconfig.json
+npm --prefix agent run typecheck
 # SDK 精确版本：npm ls --prefix agent @deepseek-ai/dsh-base
 # 升级流程：docs/runbooks/sdk-upgrade.md · ADR：docs/adr/0007-agent-runtime-rebuild-on-dsh.md
 # SSOT：runtime-versions.json
@@ -55,10 +56,6 @@ exec/node_modules/.bin/tsc -p agent/tsconfig.json
 # 执行面 + 契约（TypeScript）
 npm test --prefix exec && npx tsc --noEmit -p exec/tsconfig.json
 npm test --prefix contract && npx tsc --noEmit -p contract/tsconfig.json
-
-# @pi/runtime —— **逐文件跑**，四个并行跑全量会超时
-for f in agent/runtime/test/*.test.ts; do (cd agent/runtime && npx tsx --test "test/$(basename $f)"); done
-npx tsc --noEmit -p agent/runtime/tsconfig.json
 
 # Frontend
 npm test --prefix frontend
@@ -68,7 +65,7 @@ npm run build --prefix frontend
 test -f .env || cp .env.example .env
 docker compose config -q
 
-# 无真实 LLM key 的四服务协议 smoke（deterministic fake OpenAI；生产禁用）
+# 无真实 LLM key 的跨服务协议 smoke（deterministic fake OpenAI；生产禁用）
 node scripts/smoke-cross-service.mjs
 ```
 
@@ -81,7 +78,6 @@ smoke/gate 临时目录。
 ```text
 .runtime/
   sandbox/{workspaces,tmp,artifacts,control}
-  agent/pi-agent-home
   smoke/
   release-gates/
   pytest-cache/
@@ -89,8 +85,8 @@ smoke/gate 临时目录。
 ```
 
 `.runtime/` 由 Git 和 Docker build context 共同忽略。容器内路径仍为
-`/var/sandbox/*` 与 `/app/pi-agent-home`，因此这一整理不改变运行协议。
-旧目录只为无损升级继续保持忽略；确认数据已迁移后可由维护者手动清理。
+`/var/sandbox/*`。`/app/pi-agent-home` 与 `AGENT_PI_AGENT_DIR` 已随 Pi 运行时
+删除（阶段 G），本地也不再生成 `.runtime/agent/pi-agent-home`。
 
 ### 运行（本地四进程）
 
@@ -163,7 +159,7 @@ prompt 的记忆。
 2. 添加 `SKILL.md`（YAML frontmatter：`name` + `description` 必填）
 3. 添加脚本到 `skills/your-skill-name/scripts/`
 4. `skills/` 默认只读挂载到 Agent / Sandbox skill 根
-5. Agent 通过 Pi ResourceLoader 发现 Skill，再应用可选的 `AgentVersion.skills` allowlist；工作区始终从空目录起步，Skill 不复制进 workspace
+5. Agent 扫描系统层与调用者自己的用户层 Skill 根，再应用可选的 `AgentVersion.skills` allowlist；工作区始终从空目录起步，Skill 不复制进 workspace
 6. 重新构建服务或创建新 session 以刷新系统层 registry
 
 **方式 B — 用户对话安装**
@@ -207,9 +203,9 @@ Worker 使用 owner-scoped Sandbox client 下载内容，在 Agent 用户 Skill 
 
 `source="sandbox"` 是给「模型自己写一个 Skill」用的：模型用普通 `write` / `bash` 在
 workspace 或 `/tmp` 里搭包、跑通、打成 ZIP，然后把**归档路径**交给 `skill_install`。
-路径先过 `sandbox-bridge` 的 `normalizeLogicalPath`（Skill 根被显式拒绝——只读挂载不能
-既是安装源又是安装目标），再由 Sandbox 的 `parse_sandbox_path` 二次限定在该 session 的
-workspace/temp 根内。取回字节走已有的 owner-scoped `GET /sessions/{id}/files/download`，
+路径先过 Agent 侧逻辑路径归一化（Skill 根被显式拒绝——只读挂载不能既是安装源又是
+安装目标），再由 exec 的路径策略二次限定在该 session 的 workspace/temp 根内。
+取回字节走已有的 owner-scoped `GET /sessions/{id}/files/download`，
 之后与上传路径**汇流到同一个** `installSkillArchive`：同样的解压、校验、原子替换。
 换句话说，这条路增加的是「够得着一个归档」的方式，不是第二条写入 Skill 根的路径。
 
@@ -226,9 +222,9 @@ digest 挡住的是**批准之后掉包**。
 
 #### Bundled Skill dependencies
 
-The Sandbox Docker image owns the runtime for bundled office Skills. Keep
-dependency installation in `sandbox/Dockerfile` and
-`sandbox/requirements.txt`; do not add first-run `npx`, `npm install`, or
+The exec Docker image owns the runtime for bundled office Skills. Keep
+dependency installation in `exec/Dockerfile` and
+`exec/requirements.txt`; do not add first-run `npx`, `npm install`, or
 `pip install` steps to a Skill that must work under production's disabled
 execution network. BaoYu's two TypeScript converters use the image-provided
 `/usr/local/bin/baoyu-format-markdown` and
@@ -336,17 +332,17 @@ AgentVersion 侧（同一份语义，只能收紧）：
 
 ### 修改 Agent 服务
 
-1. `agent/server.js` / `agent/worker.js` — HTTP 与 Worker 入口（仅装配 `src/bootstrap/*`）
+1. `agent/server.ts` / `agent/worker.ts` — HTTP 与 Worker 入口（仅装配 `src/bootstrap/*`；容器跑 `dist/`）
 2. `agent/src/bootstrap/` — ServiceContainer、HTTP factory、BullMQ worker（MySQL Create/Get/Cancel/Execute）
-3. `agent/src/application/` — Run / Session recovery / Event SSE / A2A services
-4. `agent/src/infrastructure/pi/` — Pi Runtime Factory + Session Adapter
-5. `agent/src/extensions/` — 注册表内置必需 Extension（含 sandbox、审批、审计和交互）及用户级 `skill-lifecycle`
-6. `agent/src/infrastructure/mcp/` — `pi-mcp-adapter`（禁止自研 MCP Client 主路径）
-7. `agent/src/infrastructure/sandbox/sandbox-client.js` — Sandbox 内部 HMAC HTTP（`/internal/v1/*` 执行/文件/artifact submit；**不** dual-write Run）
-8. 语法检查: `node --check agent/server.js && node --check agent/worker.js`
+3. `agent/src/application/` — Run / Session recovery / Event SSE / A2A services（不认识 cordis）
+4. `agent/src/runtime/` — DSH 组合层：plugins 清单、remote providers、policy 挂载点、SSE 投影
+5. `agent/src/infrastructure/dsh/` — 与组合层的接线（`runtime-factory`）
+6. `agent/src/infrastructure/mcp/` — `pi-mcp-adapter`（DSH 没有 MCP transport；禁止自研 MCP Client 主路径）
+7. `agent/src/infrastructure/sandbox/sandbox-client.ts` — 公共面 client（数据集下载、Skill 归档）；工具路径走 runtime remote provider，**不** dual-write Run
+8. 类型检查: `npm --prefix agent run typecheck`
 9. 单元测试: `npm test --prefix agent`
 
-> 历史的进程内 Run manager、Python Agent runtime、双写 Session runtime 和自研 MCP connection manager 均已删除；Agent 的生产实现仅位于 `agent/src/`。
+> 历史的进程内 Run manager、Python Agent runtime、Pi Extension 包、双写 Session runtime 和自研 MCP connection manager 均已删除；Agent 的生产实现仅位于 `agent/src/`。新增 plugin 只改 `src/runtime/plugins/manifest.ts`，然后 `npm run gen:patch`。
 
 ### 数据库操作
 
@@ -419,29 +415,27 @@ npm run build --prefix frontend
 
 ### 测试结构
 
+Python `tests/` 现在只做**仓库卫生**（Python 执行面的契约测试已随 `sandbox/` 删除，
+等价用例在 `exec/test/`）：
+
 | 位置 | 测试内容 |
 |------|----------|
-| `tests/test_sandbox_mysql_import.py` | MySQL-only 启动、删除模块与公开路由回归 |
-| `tests/test_formal_session_runtime.py` | 正式 Session/Workspace 运行时契约 |
-| `tests/test_formal_execution_runtime.py` | 正式 Python/命令执行运行时契约 |
-| `tests/test_file_manager.py` | 文件读写/列表/预览/二进制 |
-| `tests/test_formal_artifact_runtime.py` | Artifact 显式提交、恢复与归属 |
-| `tests/test_policy_checker.py` | 风险等级分类 |
-| `tests/test_path_validation.py` | 路径逃逸防护 |
-| `tests/test_internal_plane_lifecycle_batch_b.py` | 内部控制面生命周期 |
-| `tests/test_sandbox_mysql_unit.py` | MySQL DSN/SQL 约束与拒绝路径 |
-| `tests/test_sandbox_mysql_integration.py` | 真实 MySQL integration gate（需测试 DSN） |
-| `tests/test_mysql_topology_config.py` | MySQL 拓扑/compose/config 静态校验 |
-| `tests/test_redis_topology_config.py` | Redis 拓扑/compose/env 静态校验（PR-03） |
+| `tests/test_repository_layout.py` | 千行棘轮、文档只能放 `docs/` |
+| `tests/test_runtime_versions.py` | 版本钉 + `@earendil-works/*` 不得出现在直接依赖 |
+| `tests/test_node_entrypoints_use_dist.py` | agent / exec 入口走 `dist/` |
+| `tests/test_compose_port_publish_security.py` | compose 不把内部面发布到宿主 |
+| `tests/test_container_startup.py` | Docker entrypoint、compose 配置 |
+| `tests/test_redis_topology_config.py` | Redis 拓扑/compose/env 静态校验 |
 | `tests/test_builtin_skills.py` | 零 Skill 发行基线 |
-| `tests/test_auth.py` / `test_internal_auth*.py` | 公开路由、API key/JWT 与内部 HMAC |
-| `tests/test_python_agent_removed.py` | 确认 Python Agent Runtime 已删除 |
-| `tests/test_container_startup.py` | Docker entrypoint, compose 配置 |
+| `tests/test_skill_runtime_dependencies.py` | exec 镜像里的模型工具链 |
+| `tests/test_sse_contract.py` | `sse_events.json` 契约 |
+| `tests/test_backup_restore_scripts.py` | 备份/恢复脚本 |
+| `tests/test_a2a_edge_proxy.py` / `test_cross_service_smoke_config.py` | 边缘与 smoke 配置 |
 | `api-server/tests/*.test.js` | BFF agent-client / chat relay / listen smoke |
-| `agent/tests/*.test.js` | Run API、fake OpenAI、listen smoke |
-| `agent/runtime/test/*.test.ts` | provider、策略、SSE 投影 |
+| `agent/tests/**/*.test.js` 与 `tests/runtime/*.test.ts` | Run API、策略、组合层 boot、listen smoke |
 | `exec/test/*.test.ts` | 隔离、文件、搜索、产物、数据集、内部面、公共面、MCP |
-| `frontend/test/*.test.js` | SSE 解析、state、security/a11y |
+| `contract/test/*.test.ts` | RPC 信封、HMAC、错误码 |
+| `frontend/test/` | SSE 解析、state、security/a11y |
 | `scripts/smoke-cross-service.mjs` | 无真实 LLM key 的 BFF↔Agent↔Exec smoke |
 
 ### 编写测试
@@ -475,21 +469,16 @@ const svc = new ArtifactService(makeWorkspaceFs, undefined, {
 
 ## 代码质量
 
-### Linting
+### Linting / Type Checking
 
-推荐 `ruff`：
-
-```bash
-pip install ruff
-ruff check sandbox/ tests/
-ruff format --check sandbox/ tests/
-```
-
-### Type Checking
+服务代码是 TypeScript。Python `tests/` 只做仓库卫生，没有对应的服务源码树可
+`mypy` / `ruff`。
 
 ```bash
-pip install mypy
-mypy sandbox/ --ignore-missing-imports
+npx tsc --noEmit -p exec/tsconfig.json
+npx tsc --noEmit -p contract/tsconfig.json
+npm --prefix agent run typecheck
+npx tsc --noEmit -p frontend/tsconfig.json
 ```
 
 ### 安全扫描

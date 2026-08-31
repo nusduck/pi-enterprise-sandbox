@@ -1,6 +1,6 @@
 # Deployment Guide
 
-> 生产部署指南 — 四服务 + Nginx 反向代理 + SSL + 资源限制 + 持久化存储
+> 生产部署指南 — Frontend / BFF / Agent / Exec（含 MCP 第二入口）+ Nginx 反向代理 + SSL + 资源限制 + 持久化存储
 
 ## 快速启动（开发模式）
 

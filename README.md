@@ -1,8 +1,8 @@
 # Pi Enterprise Sandbox
 
-> 四服务安全沙箱 + AI 编程助手 · v4.0
+> 企业沙箱 + AI 智能体 · v4.0
 
-四服务架构：前端 SPA + 薄 BFF API Server + 独立 Node Agent + 安全沙箱执行环境。Agent 运行在独立服务中，浏览器零接触 LLM API Key 和工具执行细节。
+五个进程、四份镜像：前端 SPA + 薄 BFF API Server + 独立 Node Agent + TypeScript 执行面（compose 名 `sandbox`）+ 同一镜像的 MCP facade（`sandbox-mcp`）。Agent 运行在独立服务中，浏览器零接触 LLM API Key 和工具执行细节。
 
 ## 快速启动
 
@@ -21,8 +21,9 @@ open http://localhost:3000
 ## 架构
 
 ```
-  Browser → Frontend → API Server → Agent Host → Pi Extension ─┬→ Sandbox API
-                                                               └→ MCP Server
+  Browser → Frontend → API Server → Agent (DSH) → Exec HMAC API
+                                          │
+外部 MCP 客户端 ──────────────────→ sandbox-mcp ──窄桥──→ Exec
 ```
 
 | 组件 | 技术栈 | host→容器端口 |
@@ -51,16 +52,17 @@ pi-sandbox/
 │   ├── src/routes/       ← runs, files, status, conversations, capabilities...
 │   ├── src/services/     ← sandbox-client + agent-client
 │   └── Dockerfile
-├── agent/                ← 独立 Agent（DeepSeek Harness）
-│   ├── server.js         ← 内部 Run API / health
+├── agent/                ← 独立 Agent（DeepSeek Harness，TypeScript）
+│   ├── server.ts         ← 内部 Run API / health（容器跑 dist/server.js）
+│   ├── worker.ts         ← BullMQ worker
 │   ├── src/application/  ← Run、Session、审批、A2A 应用服务
 │   ├── src/infrastructure/dsh/ ← 与组合层的接线
 │   ├── src/runtime/      ← DSH 组合层（provider / policy / projection）
 │   │                        agent 私有，不是独立服务
 │   └── Dockerfile
-├── contract/             ← @pi/contract：exec ↔ runtime 的 RPC 信封、HMAC、错误码
+├── contract/             ← @pi/contract：exec ↔ agent runtime 的 RPC 信封、HMAC、错误码
 ├── exec/                 ← 执行面 + MCP facade（TypeScript，取代原 Python sandbox/）
-│   ├── src/main.js       ← 执行面入口（compose: sandbox）
+│   ├── src/main.ts       ← 执行面入口（compose: sandbox）
 │   ├── src/mcp-main.ts   ← MCP facade 入口（compose: sandbox-mcp，同镜像不同入口）
 │   ├── src/isolation/    ← Bubblewrap profile 建模为数据 + 单一 render()
 │   ├── src/fs/ shell/ search/ workspace/  ← 文件、命令与作业、搜索、工作区与配额
@@ -75,7 +77,6 @@ pi-sandbox/
 ├── docs/                 ← 活跃文档（见 docs/README.md 权威顺序）
 ├── .runtime/             ← 全部宿主机运行态（Git/Docker build 均忽略）
 │   ├── sandbox/          ← workspaces、tmp、artifacts、control
-│   ├── agent/            ← 本地 Agent 资源目录
 │   └── …                 ← smoke / release-gate 等按需创建的临时状态
 ├── docker-compose.yml           ← 开发编排（Frontend + BFF + Agent + Sandbox + MCP + MySQL 8 + Redis 7）
 ├── docker-compose.prod.yml      ← 生产 overlay（MySQL 8 + Redis 7 + Nginx + SSL）
@@ -248,7 +249,7 @@ npm run dev --prefix frontend
 uv run pytest tests/ -q --tb=short
 npm test --prefix exec && npx tsc --noEmit -p exec/tsconfig.json
 npm test --prefix contract
-npm test --prefix agent && exec/node_modules/.bin/tsc -p agent/tsconfig.json
+npm test --prefix agent && npm --prefix agent run typecheck
 node --test api-server/tests/*.test.js
 npm test --prefix frontend && npm run build --prefix frontend
 docker compose config -q
@@ -280,7 +281,7 @@ node scripts/smoke-cross-service.mjs
 | [文档地图](docs/README.md) | 权威顺序、文档角色、更新纪律 |
 | [验收状态 STATUS](docs/STATUS.md) | 相对 plan §32 的唯一进度板 |
 | [过程日志](docs/PROCESS_LOG.md) | `codex/plan-acceptance` 过程记录（追加） |
-| [架构设计](docs/architecture.md) | 四服务架构、设计决策、安全模型、数据流 |
+| [架构设计](docs/architecture.md) | 进程边界、设计决策、安全模型、数据流 |
 | [部署指南](docs/deployment.md) | 生产部署（MySQL 8 + Redis 7）、SSL、备份、监控 |
 | [开发指南](docs/development.md) | 本地开发、零 Skill、测试、调试 |
 | [API 参考](docs/api.md) | Sandbox API + MCP + SSE、workspace_id 契约 |

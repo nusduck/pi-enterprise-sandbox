@@ -1,6 +1,13 @@
 # 功能清单（换引擎前的现状盘点）
 
-**这份文档回答一个问题：现在这套系统到底会做哪些事？**
+> **这不是当前状态。** 盘点基线是换引擎前的 `main` @ `4dda7a9b`（2026-08-29）。
+> 路径里的 `extensions/`、`infrastructure/pi/`、`sandbox/` Python 面在
+> `refactor/dsh-rebuild` 上已经不存在。当前结构见
+> [`architecture.md`](./architecture.md)、[`module-layout.md`](./module-layout.md)，
+> 进度见 [`design/waves/HANDOFF.md`](./design/waves/HANDOFF.md)。
+> 保留这份清单是为了对照「换之前有什么」，不要当施工图。
+
+**这份文档当时回答的问题：换引擎前这套系统会做哪些事？**
 
 写它的原因：[ADR 0007](adr/0007-agent-runtime-rebuild-on-dsh.md) 要换掉 Agent 的引擎，
 [ADR 0008](adr/0008-sandbox-isolation-and-fs-seam-redesign.md) 要跟着改沙箱的接口。

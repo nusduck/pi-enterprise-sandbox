@@ -1,8 +1,9 @@
 # 独立部署的 Sandbox MCP
 
 `sandbox-mcp` 是与 `sandbox` 同仓库、同镜像但不同进程的 Streamable HTTP
-MCP 服务。它不依赖 Agent Runtime，也不挂载 workspace、tmp 或 Artifact
-目录；所有有状态操作都只经 Sandbox 的私有 `/internal/mcp/v1/*` 桥接完成。
+MCP 服务（实现在 `exec/src/mcp/`，入口 `dist/mcp-main.js`）。它不依赖 Agent
+Runtime，也不挂载 workspace、tmp 或 Artifact 目录；所有有状态操作都只经
+exec 的私有 `/internal/mcp/v1/*` 桥接完成。
 
 ```mermaid
 flowchart LR

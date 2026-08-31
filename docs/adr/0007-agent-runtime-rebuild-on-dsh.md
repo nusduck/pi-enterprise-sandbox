@@ -245,7 +245,18 @@ policy 的文档标准。
   按 ADR 预案退回自建工具面（`runtime/src/providers/durable-subagent.ts`）。
 - 生产网关冒烟**仍未做**，依旧是上线准入项。
 
-### 遗留：`agent/src/application/pi-run-executor.js` 等文件名
+### 4. 阶段 F：`agent/runtime/` 并进 `agent/src/runtime/`（2026-08-31）
 
-若干 `pi-` 前缀的文件名尚未改。纯改名，无行为影响，未做以免与实质改动混在一个
-变更集里。
+上面第 1 条把顶层 `runtime/` 收进 `agent/runtime/` 之后，agent 本身仍是 JS、
+没有统一构建步骤，所以组合层只能当独立包存在。阶段 C–E 把 `agent/src/` 迁到
+TypeScript 之后，这个异常按构造消失：独立 `@pi/runtime` 包没有了，源码在
+`agent/src/runtime/`，与其余模块同一次 `tsc` 出 `dist/`。`tsconfig.runtime.json`
+单独给这一棵子树开 `strict`，避免并入主树的宽松规则把联合收窄丢掉。
+
+当前路径以这份记录为准；设计文档正文里的 `runtime/` 与 `agent/runtime/`
+都读作 `agent/src/runtime/`。
+
+### 遗留：`agent/src/application/pi-run-executor.ts` 等文件名
+
+若干 `pi-` 前缀的文件名尚未改（已随源码变成 `.ts`）。纯改名，无行为影响，
+未做以免与实质改动混在一个变更集里。

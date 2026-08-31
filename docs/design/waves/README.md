@@ -4,6 +4,11 @@ DSH 重建的施工分解。设计依据见 [dsh-rebuild.md](../dsh-rebuild.md)�
 [ADR 0007](../../adr/0007-agent-runtime-rebuild-on-dsh.md)、
 [ADR 0008](../../adr/0008-sandbox-isolation-and-fs-seam-redesign.md)。
 
+**2026-08-31：** Wave 0–7 与 agent 内部整理（阶段 0 / A′–G）都已落地。
+当前进度与剩余项以 [HANDOFF.md](HANDOFF.md) 和
+[agent-ts-rebuild.md](../agent-ts-rebuild.md) 顶部的表为准。下面这张波次表
+保留施工记录；Wave 3 当年交回的是占位实现，真正补齐在 Wave 7。
+
 **每份任务书都默认继承 [`_shared.md`](_shared.md) 的全部约束**，只写自己特有的部分。
 
 ## 怎么用
@@ -45,11 +50,11 @@ DSH 重建的施工分解。设计依据见 [dsh-rebuild.md](../dsh-rebuild.md)�
 | [W2-B](w2-b.md) | `exec/src/shell/job-registry.ts`（MySQL 支撑） | ✅ |
 | [W2-C](w2-c.md) | `exec/src/workspace/`：工作区、持久 tmp、配额、锁抽象 | ✅ |
 | [W2-D](w2-d.md) | `agent/` 的 220 个 checkJs 错误 | ✅ 0 error |
-| **Wave 3** | 执行面其余（**W3-D 必须先单独跑**，接口定死再并行其余三个） | ⚠️ 部分 |
-| W3-A | `exec/src/http/internal-*` + HMAC 中间件 | ⚠️ fs/shell/jobs 真实；artifact 是占位，fs 的 find/grep 是占位 |
-| W3-B | `exec/src/artifact/` + `dataset/` + `attachment/` | ❌ 仅 attachment 可用；artifact/dataset 见 [gap-audit](gap-audit.md) |
-| W3-C | `exec/src/http/public/`：公共面，对 BFF 契约逐字节不变 | ⚠️ 形状一致、**语义不一致**：产物四条路由与数据集上传是占位 |
-| W3-D | `exec/src/db/`：仓储层 | ⚠️ 表结构缺 `sha256`/`mime_type`，产物面补实现时要改 |
+| **Wave 3** | 执行面其余（**W3-D 必须先单独跑**，接口定死再并行其余三个） | ✅ 经 Wave 7 补齐 |
+| W3-A | `exec/src/http/internal-*` + HMAC 中间件 | ✅ Wave 7：find/grep/artifact 不再是占位 |
+| W3-B | `exec/src/artifact/` + `dataset/` + `attachment/` | ✅ Wave 7：产物走控制面快照，数据集三段式流式 |
+| W3-C | `exec/src/http/public/`：公共面，对 BFF 契约逐字节不变 | ✅ 语义用例在 `exec/test/semantic-gaps.test.ts` |
+| W3-D | `exec/src/db/`：仓储层 | ✅ `exec_artifacts` / `exec_datasets` 已扩列 |
 | **Wave 4** | Agent 侧 provider | ✅ 独立验收（不看 subagent 自述） |
 | W4-A | `runtime/providers/remote-{fs,shell,jobs}.ts` | ✅ RPC 代理，本机零文件/进程 |
 | W4-B | `runtime/providers/mysql-session-store.ts`（8 个方法） | ✅ 官方 chunk-rows + seq 校验 |
@@ -76,8 +81,9 @@ DSH 重建的施工分解。设计依据见 [dsh-rebuild.md](../dsh-rebuild.md)�
   `node:22-slim`，没有 Python，"不动"实际等于"删掉它"。已按 ADR 0007 D1 一并用 TS
   重写进 `exec/src/mcp/`，作为同一镜像的第二入口
 - **`sandbox/skill-runtime/` 是运行时资产**（三个 shell 启动垫片），原样迁入 `exec/`
-- **`runtime/` 已移到 `agent/runtime/`**（2026-08-30）：只有 agent 一个消费者。
-  下表 W4/W5 行里的 `runtime/...` 路径是当时的写法，现读作 `agent/runtime/...`
+- **`runtime/` 的位置折了两层**：先从顶层挪到 `agent/runtime/`（2026-08-30），
+  再在阶段 F 并进 `agent/src/runtime/`（2026-08-31）。下表 W4/W5 行里的
+  `runtime/...` 路径现读作 `agent/src/runtime/...`。独立 `@pi/runtime` 包已经没有了。
 
 ## 待办的跨任务事项（主控负责）
 
@@ -101,11 +107,15 @@ Wave 3 标 ✅ 时，搜索、产物、数据集三块是占位实现。补齐�
 | W7-E | MCP facade 移植进 `exec/src/mcp/` + 窄桥八条路由；`sandbox/` 删除 | ✅ |
 | W7-F | 文档收口：AGENTS / README / architecture / module-layout / api / development；ADR 转 Accepted；STATUS 逐行重审 | ✅ |
 
-> **Wave 7 之后仍未完成的 agent 内部整理**，另立方案：
-> [`../agent-ts-rebuild.md`](../agent-ts-rebuild.md)。W6-A 声称删除了
-> `infrastructure/pi/` 与 `extensions/`，但**没有删 `infrastructure/sandbox/`**——
-> 那 17 个 `internal-*-http.js` 与 `runtime/src/providers/remote-*.ts` 是同一件事
-> 的两份实现，且两条都在跑。这是 Wave 6 验收时漏掉的一层。
+> **Wave 7 之后的 agent 内部整理**另立方案
+> [`../agent-ts-rebuild.md`](../agent-ts-rebuild.md)，阶段 0 / A′–G **已完成**。
+> W6-A 当时漏掉的一层（`infrastructure/sandbox/` 的 17 个 `internal-*-http`
+> 与 remote provider 双轨并行）已在阶段 A″ 删掉；工具路径只走
+> `agent/src/runtime/providers/remote-*.ts`，公共面 client 仍留在
+> `infrastructure/sandbox/`。
+>
+> 还没做的不在这张施工表里：Linux 真机、LLM 网关链路、CI 纳入 exec/contract、
+> `strict`、以及 [HANDOFF.md](HANDOFF.md)「剩下什么」列出的零碎。
 
 **起栈后才发现、299 个绿测试没抓到的两个 bug**（详见 [HANDOFF](HANDOFF.md) 的坑表）：
 共享 cordis Context 导致每进程只有第一次产物提交成功；把 Python 的 `host:*` 通配

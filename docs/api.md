@@ -1,6 +1,6 @@
 # API Reference
 
-Pi Enterprise Sandbox 四服务 API 分层：
+Pi Enterprise Sandbox API 分层：
 
 | 层 | 组件 | 说明 |
 |----|------|------|
@@ -12,7 +12,7 @@ Pi Enterprise Sandbox 四服务 API 分层：
 无 Python Agent Runtime、无双 Runtime 开关。Agent **支持零 Skill 启动**；共享 `skills/` 挂载与 package skills 由 Agent Profile 策略 + session capability registry 控制。
 
 > **Sandbox 端口 8081 仅 Docker 内网可访问；compose 里该服务没有 `ports:` 段，dev 与生产都不发布宿主端口**。Agent 调用正式执行能力使用 HMAC-authenticated `/internal/v1/*`；浏览器不能直连 Sandbox，也不能提供 Sandbox service credential。BFF `/api/*` 是唯一浏览器 API 边界。
-> MCP 由 Agent Host 的 MCP Connection Manager 直连企业 MCP Gateway/Server，不经过 Sandbox，也不向浏览器暴露凭据。
+> Agent 侧 MCP 由启动期 `tools/list`（`pi-mcp-adapter`）直连企业 MCP Gateway/Server，不经过 exec，也不向浏览器暴露凭据。对外的 Streamable HTTP MCP facade 是 exec 镜像的第二入口（compose: `sandbox-mcp`），只走 `/internal/mcp/v1/*` 窄桥。
 
 ---
 

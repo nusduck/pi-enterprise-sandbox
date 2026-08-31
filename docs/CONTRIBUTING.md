@@ -60,51 +60,31 @@ test -f .env || cp .env.example .env
 docker compose config -q
 ```
 
-Ruff/Black/Mypy 与覆盖率阈值目前**不是** CI 强制门禁。
+覆盖率阈值目前**不是** CI 强制门禁。服务代码的类型检查走各自的 `tsc`；
+Python `tests/` 只做仓库卫生。
 
 ## Project Structure
+
+权威源根见 [`module-layout.md`](./module-layout.md)。摘要：
 
 ```
 pi-enterprise-sandbox/
 ├── frontend/          # Vite + React SPA → Nginx；src/ (pure UI, no Agent SDK)
-│   ├── test/          # node:test
-│   ├── index.html
-│   ├── Dockerfile
-│   └── nginx.conf     # /api/* → api-server:4000
-├── api-server/        # Thin Node BFF (auth, files, SSE relay)
-│   ├── server.js
-│   ├── routes/        # chat.js, status.js, conversations, files, …
-│   ├── services/      # sandbox-client.js, agent-client.js
-│   ├── config.js      # AGENT_BASE_URL / auth
-│   └── tests/         # node:test
-├── agent/             # Independent pi-coding-agent runtime
-│   ├── server.js      # internal Run API + health
-│   ├── config.js
-│   ├── src/application/ # Run, Session, approval, A2A services
-│   ├── src/extensions/  # first-party sandbox, policy, observability, interaction, Skill lifecycle
-│   ├── src/infrastructure/ # MySQL, Redis, Pi, MCP, Sandbox ports
-│   ├── services/      # model registry and platform services
-│   └── tests/         # node:test + sdk-compat
-├── sandbox/           # FastAPI execution / files / datasets / artifacts (no agent loop)
-│   ├── main.py
-│   ├── routers/       # incl. health.py (/health liveness, /ready readiness)
-│   ├── services/
-│   ├── security/      # path_validation, safe_env, public_routes
-│   └── mcp/
-├── skills/            # Optional shared skill packages (profile + registry controlled)
-├── tests/             # pytest (unit + FastAPI integration)
-├── docs/              # Active docs — see docs/README.md for authority order
-│   ├── plan.md        # Frozen refactor baseline and §32 acceptance criteria
-│   ├── STATUS.md      # Only living gap board vs plan.md §32
-│   ├── PROCESS_LOG.md # Acceptance process log (append-only)
-│   └── evidence/      # Dated live-gate records
-├── config/            # Runtime config files
+├── api-server/        # Thin Node BFF (auth, files, SSE relay)；server.js
+├── agent/             # Independent DSH agent（TypeScript；容器跑 dist/）
+│   ├── server.ts / worker.ts / config.ts
+│   └── src/{application,runtime,bootstrap,infrastructure,presentation,skills,domain}
+├── exec/              # TypeScript 执行面 + MCP facade（compose: sandbox / sandbox-mcp）
+├── contract/          # exec ↔ agent runtime 的 RPC 信封、HMAC、错误码
+├── skills/            # Optional shared skill packages
+├── tests/             # pytest：结构棘轮、版本钉、compose 安全、SSE 夹具
+├── docs/              # Active docs — see docs/README.md
 ├── nginx/             # Production Nginx + SSL
 ├── scripts/           # backup/restore, development reset, cross-service smoke
-├── docker-compose.yml # Dev topology: services + MySQL 8 + Redis 7
-├── docker-compose.prod.yml # Prod overlay: MySQL 8 + Redis 7 + Nginx + secrets required
-├── .github/workflows/ # CI matrix: python / node / frontend / compose
-└── pyproject.toml
+├── docker-compose.yml
+├── docker-compose.prod.yml
+└── .github/workflows/ # CI：python / node-bff / node-agent / frontend / compose / smoke
+                       # （exec 与 contract 的 job 还没加，见 HANDOFF）
 ```
 
 **Persistence:** MySQL 8 is the sole database topology for development and

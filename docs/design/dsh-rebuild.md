@@ -2,11 +2,15 @@
 
 | 字段 | 值 |
 |---|---|
-| 状态 | 待评审 |
-| 日期 | 2026-08-29 |
+| 状态 | **已落地**（ADR 0007 / 0008 Accepted）。本文是设计原文，实施偏差见 ADR 文末与 [waves/HANDOFF.md](waves/HANDOFF.md) |
+| 日期 | 2026-08-29（设计）；2026-08-31 注明实施结果 |
 | 基线 | `main` @ `4dda7a9b` |
 | 上游基线 | `@deepseek-ai/*@0.1.1-rc.2`（本次逐包下载核实，非二手转述） |
 | 取代 | ADR 0001、0002、0005；重写 ADR 0007、0008 |
+
+> **读本文时的路径对照：** D2 写的顶层三包 `runtime/` `exec/` `contract/`，实施后
+> `runtime/` 先收到 `agent/runtime/`，再并进 `agent/src/runtime/`。当前只有
+> `contract/` 与 `exec/` 是顶层包。Python `sandbox/` 已删除。
 
 ## 0. 决策摘要
 

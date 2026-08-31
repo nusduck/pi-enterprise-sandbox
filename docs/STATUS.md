@@ -1,8 +1,8 @@
 # Refactor acceptance status
 
-**Tracks:** `main`  
-**Last audited at:** `be4a077a` (2026-08-21)  
-**Docs pass:** `0a73cf64` (2026-08-23) — reviewed commits #13–#21 for documentation impact; no §32 row status changed. #21 (internal plane fail-closed, non-root containers, bounded BFF outbound, sandbox auth fail-closed) strengthens existing rows and does not close H5/H6 ops sampling.  
+**Tracks:** `refactor/dsh-rebuild`（未合并；`main` 上的 §32 证据多数已随 Pi / Python 面删除而失效）  
+**Last audited at:** `be4a077a` (2026-08-21) on `main`  
+**Docs pass:** `2026-08-31` — 把活跃文档里的 `agent/runtime/`、`server.js`、Pi Extension、Wave 3 占位状态与代码对齐；**没有**把任何 §32 行标成 `done`。  
 **Normative source:** [`plan.md`](./plan.md) §32
 **Evidence index:** [`evidence/`](./evidence/)  
 **Process log:** [`PROCESS_LOG.md`](./PROCESS_LOG.md)
@@ -14,23 +14,20 @@
 This file is the **only** living gap board for plan acceptance.  
 A green unit-test suite alone does **not** complete a row.
 
-> ## ⚠️ 2026-08-29：DSH 重建让本板大部分证据失效
+> ## ⚠️ 2026-08-29 / 31：DSH 重建让本板大部分**旧证据**失效
 >
 > [ADR 0007](adr/0007-agent-runtime-rebuild-on-dsh.md) / [ADR 0008](adr/0008-sandbox-isolation-and-fs-seam-redesign.md)
 > 删除了 Python 执行面（`sandbox/` 36k 行）与 Pi Runtime（`agent/src/infrastructure/pi/`、
 > `agent/src/extensions/`）。**凡是以这两处为证据的行，证据文件已经不存在了**，
 > 状态不再成立——哪怕它写着 `done`。
 >
-> 已知**功能性回归**（不是"证据过期"，是功能真的没了），逐函数对照见
-> [`design/waves/gap-audit.md`](design/waves/gap-audit.md)，红色用例在
-> `exec/test/semantic-gaps.test.ts`：
+> 2026-08-29 当时的**功能性回归**（搜索 / 产物 / 数据集是占位实现）已在 Wave 7
+> 按语义补齐，见 [`design/waves/gap-audit.md`](design/waves/gap-audit.md) 的
+> 「已补」栏与 `exec/test/semantic-gaps.test.ts`。实现补上不等于验收完成：
+> C8 / E2 / E3 现为 `partial`，等 Linux 宿主 + 网关下的重新取证。
 >
-> - **搜索**：`exec/` 无 search 模块，find/grep 是 `listDir` 假实现
-> - **产物**：公共面四条路由全是占位（submit 编造 `sha256: '0'×64`，download 恒 404）
-> - **数据集**：上传不落盘；`DatasetService` 签名收整块 `Uint8Array`，撑不住 C8 的 5GiB
->
-> 本板的逐行重审尚未做。**在重审完成前，把每一行都当 `unknown` 对待**，
-> 不要引用它作为"已达成"的依据。
+> 2026-08-30 做过逐行重审（见文末）。**在重新取证完成前，不要引用旧的 `done`
+> 作为「已达成」**；以本板当前行状态为准。
 
 ### Status vocabulary
 
@@ -52,9 +49,9 @@ Change this file in the **same commit** as the implementation or evidence that j
 
 | ID | Criterion | Status | Evidence / notes |
 |----|-----------|--------|------------------|
-| A1 | Use Pi native Agent Loop | `unknown` | **证据已删除**：`agent/src/infrastructure/pi/*` 不复存在。Pi 换成 DSH（ADR 0007），本行需按 `agent/runtime/` 重新表述与取证 |
+| A1 | Use Pi native Agent Loop | `unknown` | **证据已删除**：`agent/src/infrastructure/pi/*` 不复存在。Pi 换成 DSH（ADR 0007），本行需按 `agent/src/runtime/` 重新表述与取证 |
 | A2 | Required enterprise policy layers load | `unknown` | Four required: `sandbox-bridge`, `enterprise-policy`, `observability`, `user-interaction` (the `ask_user` split, 2026-08). Three optional first-party extensions: `skill-lifecycle`, `subagent-spawn` (durable child Runs) and `task-state` (session todo list + owner-scoped notes); each only builds when its durable port/store is injected. enterprise-agent-kit removed; the 12 legacy package names stay refused. |
-| A3 | MCP 接入 | `unknown` | **证据已删除**：`agent/tests/pi/mcp-adapter.integration.test.js` 不存在，`pi-mcp-adapter` 已随 Pi 一并移除。Agent 侧 MCP 接入需按 DSH 重新表述与取证；对外的 MCP facade 是另一回事（见 `docs/sandbox-mcp.md`，已端到端验证）|
+| A3 | MCP 接入 | `unknown` | **集成证据已删除**：`agent/tests/pi/mcp-adapter.integration.test.js` 不存在。`pi-mcp-adapter@2.11.0` **仍在用**——DSH 没有 MCP transport，启动期 `tools/list` 还靠它；不要把这条理解成依赖已摘掉。对外的 MCP facade 是另一回事（见 `docs/sandbox-mcp.md`，已端到端验证）|
 | A4 | Multi-turn Session recoverable | `unknown` | Offline: session-recovery + journal units + WAITING_INPUT recovery matrix. **Live 2026-07-19:** full `agent-worker-pi-restart.release-gate.test.js` **5/5 PASS** (model SIGKILL replay, durable interaction, tool boundary, sandbox UNKNOWN) on isolated MySQL/Redis/Sandbox — Pi Session checkpoint path only. Evidence: `evidence/a4-g2-restart-matrix-2026-07-19.md`, `evidence/g6-interaction-worker-restart-2026-07-19.md`. Residual non-blocking: dedicated corrupt-journal-under-kill live gate not separate. |
 | A5 | Agent Version pinned | `done` | credential/version binding tests under `agent/tests/a2a/` |
 
@@ -80,7 +77,7 @@ Change this file in the **same commit** as the implementation or evidence that j
 | C5 | Ordinary commands no approval | `done` | policy defaults; enterprise tools only |
 | C6 | Python multi-line auto-materialize | `partial` | 逻辑已移植（`exec/src/shell/python-materialize.ts`，含单测）。镜像里的 `python3` 与运行库在 2026-08-30 前是缺失的，现已修复并有 plan 断言；**bwrap 内真实执行待 Linux 宿主验证** |
 | C7 | Long tasks via Process Handle | `unknown` | **证据已删除**：`tests/test_formal_process_handle.py` 随 Python 面移除。TS 侧有 `exec/test/shell-job-registry.test.ts`，但 orphan/identity/bwrap 的等价用例与 live gate 未重建 |
-| C8 | Dataset streams into Workspace | `open` | **回归**：`exec/src/dataset/service.ts` 的 `create(content: Uint8Array)` 整块进内存，5GiB 会打死进程；公共面上传不落盘。见 [gap-audit](design/waves/gap-audit.md#二数据集) |
+| C8 | Dataset streams into Workspace | `partial` | Wave 7 已改成三段式流式（`beginUpload` → `writeChunk` → `finishUpload`），控制面暂存后再发布到工作区。离线语义用例在 `exec/test/semantic-gaps.test.ts`。**5GiB live 未重跑**，不能标 `done` |
 
 ## D. Frontend
 
@@ -99,9 +96,9 @@ Change this file in the **same commit** as the implementation or evidence that j
 
 | ID | Criterion | Status | Evidence / notes |
 |----|-----------|--------|------------------|
-| E1 | write/edit do not auto-download | `unknown` | 设计不变，但产物面已是占位实现，未重新取证 |
-| E2 | Only `submit_artifact` creates Artifact | `open` | **回归**：`public/artifacts.ts` 的 submit 编造记录不落盘，download 恒 404。见 [gap-audit](design/waves/gap-audit.md#三产物) |
-| E3 | Download tenant/user scoped | `open` | **回归**：`ArtifactService` 只按 workspaceId 比对，缺 org/user/conversation 维度；且公共面 download 未接服务 |
+| E1 | write/edit do not auto-download | `unknown` | 设计不变（产物走 `submit_artifact` + 控制面快照）。占位实现已在 Wave 7 替换，live 未重跑 |
+| E2 | Only `submit_artifact` creates Artifact | `partial` | Wave 7：submit 写真实 sha256 与控制面快照，download 走同一份字节。离线语义用例已钉。**live 未重跑** |
+| E3 | Download tenant/user scoped | `partial` | Wave 7：公共面 download 已接服务，owner scope 在仓储层。**跨租户 live 404 未重跑** |
 
 ## F. A2A
 
@@ -173,7 +170,7 @@ Non-blocking debt remains in [`review-deferred-items.md`](./review-deferred-item
 | A1, A2, A3, A4 | `unknown` | 证据指向已删除的 `agent/src/infrastructure/pi/*`、`agent/src/extensions/`、`agent/tests/pi/mcp-adapter.integration.test.js`，以及针对真实 Pi 的 restart release gate |
 | C1, C6 | `partial` | 逻辑已移植且有离线用例，但取证对象换了（`exec_*` 表 / TS 实现），未重新取证 |
 | C4, C7 | `unknown` | 证据是 Python 执行面的 live gate 与已删除的 `tests/test_formal_process_handle.py` |
-| C8, E2, E3 | `open` | **功能性回归**，见 [gap-audit](design/waves/gap-audit.md)；已于 2026-08-30 补齐实现，待重新取证 |
+| C8, E2, E3 | `partial` | Wave 7 已补齐实现（流式数据集、控制面产物快照、owner-scoped download）；待 Linux / 网关重新取证，不是还在占位 |
 | F2 | `partial` | A2A 换 `@a2a-js/sdk`，词汇棘轮仍通过，live gate 未重跑 |
 | G2, G7 | `unknown` | 证据是针对 Pi / Python 执行面的 live gate |
 | H2, H3, H4 | `partial` | 安全性质已随 `exec/` 移植并有离线用例；live gate 未重跑 |

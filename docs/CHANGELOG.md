@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Agent 引擎从 Pi 换成 DeepSeek Harness（`@deepseek-ai/dsh-*` `0.1.1-rc.2`）**：`@earendil-works/pi-coding-agent` 不再是直接依赖。工具走 DSH 的 `ctx.fs` / `ctx.shell` / `ctx.jobs` 远程 provider（HMAC RPC 到 exec），企业策略挂在 DSH 四个既有挂载点上，不再装 Pi Extension 包。SSE 契约按 `tests/fixtures/sse_events.json` 保持逐字节不变，BFF / 前端零改动。
+- **执行面从 Python FastAPI 换成 TypeScript `exec/`**：compose 服务名仍叫 `sandbox` / `sandbox-mcp`（同一镜像两个入口），对 BFF 的会话面契约不变。搜索、产物（控制面快照）、数据集（三段式流式）按语义实现，不是占位。
+- **`agent/` 源码从 JS 迁到 TypeScript**，DSH 组合层并进 `agent/src/runtime/`。容器跑 `dist/server.js` / `dist/worker.js`。`strict` 仍关着，是已知待办。
+
+### Removed
+
+- **Python `sandbox/` 服务源码**（执行面 + MCP facade）。模型在沙箱里跑代码用的 Python 解释器还在，装在 exec 镜像里（`exec/requirements.txt`）。
+- **`/app/pi-agent-home` 与 `AGENT_PI_AGENT_DIR` / `PI_CODING_AGENT_DIR`**：Pi 资源根随引擎一起失效，配置与镜像目录一并删掉。
+
 ### Fixed
 
 - **Skill 入口脚本允许嵌套在 `scripts/` 子目录下**: 守卫要求脚本路径匹配 `/scripts/<单个文件>$`，于是仓库自带的首方包**当场就跑不了**——`xlsx/scripts/office/pack.py`、`skill-creator/scripts/` 之外的 `eval-viewer/generate_review.py` 都被 `SKILL_SCRIPT_COMMAND_DENIED` 拒绝，而这是唯一被放行的执行入口。现在 `scripts/` 下任意深度都接受；同时补上 `..` 拒绝——旧的扁平正则顺带挡住了 `…/scripts/../hidden.py` 这类「读起来像 scripts/」的路径，放开嵌套后必须显式挡。

@@ -161,17 +161,18 @@ docker compose build agent api-server sandbox sandbox-mcp && docker compose up -
 
 - `main` 是**受保护分支**：不能直推，必须走 PR，6 项检查全绿后 **squash 合并**
   （Compose config / Frontend / Python (pytest) / Node BFF / Node Agent / Cross-service smoke）。
+  **exec 与 contract 的 CI job 还没加**（见 `docs/design/waves/HANDOFF.md`），合之前要在本地跑。
 - squash 意味着分支上的中间提交不会进 main——**PR 描述与 commit message 是这批改动在
   main 上唯一的记录**，要写清「改了什么、为什么、怎么验证的」。
 - 一个 PR 一件事。文档漂移可以随行为变更一起走（§6 要求如此），但不相关的清理另开 PR。
-- 运行时版本钉（Node 22 / Python 3.11 / Pi SDK 0.80.3）只改 `runtime-versions.json`，
+- 运行时版本钉（Node 22 / Python 3.11 / DSH `0.1.1-rc.2`）只改 `runtime-versions.json`，
   由 `tests/test_runtime_versions.py` 校验全仓一致。
 
 ## 10. 提交前自检
 
 - [ ] 缺陷是否**先复现**再修的？回归测试在修复前会失败吗？
 - [ ] 触及运行路径或删除了代码 → 是否重建容器并跑过真实链路？
-- [ ] 四套测试是否全绿？失败项是否确认为 §4 的已知环境陷阱？
+- [ ] 六套测试是否全绿（pytest / exec / contract / agent / api-server / frontend）？失败项是否确认为 §4 的已知环境陷阱？
 - [ ] 本次行为变更涉及的每个活跃文档都已同步？
 - [ ] 新增/删除的环境变量在 `.env.example` 与 `deployment.md` 双侧一致？
 - [ ] 新增端点在 `api.md` 有条目？删除的端点是否已从文档移除？

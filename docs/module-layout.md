@@ -22,21 +22,21 @@
 
 | Package | Role | Production source root | Thin entry |
 |---------|------|------------------------|------------|
-| `agent/` | Agent HTTP + Worker | `agent/src/**` | `server.js`, `worker.js`, package-root `config.js` |
-| `agent/runtime/` | **agent 私有**的 DSH 组合层 `@pi/runtime`（TS） | `agent/runtime/src/**` | `src/boot.ts` |
+| `agent/` | Agent HTTP + Worker（TS） | `agent/src/**` | `server.ts`, `worker.ts`, package-root `config.ts`；容器跑 `dist/` |
 | `api-server/` | BFF | `api-server/src/**` | `server.js` |
 | `exec/` | 执行面 + MCP facade（TS） | `exec/src/**` | `src/main.ts`、`src/mcp-main.ts` |
 | `frontend/` | Vite React app | `frontend/src/**` (FSD-style) | `index.html` + Vite |
-| `contract/` | exec↔runtime 共享类型与 RPC 信封（TS） | `contract/src/**` | `src/index.ts` |
+| `contract/` | exec↔agent runtime 共享类型与 RPC 信封（TS） | `contract/src/**` | `src/index.ts` |
 
-`agent/runtime/` 为什么在 agent 底下而不是顶层：它只有 agent 一个消费者，
-既不可独立部署也不被别人复用。`contract/` 留在顶层，因为 exec 与 runtime 都用它。
+DSH 组合层是 `agent/src/runtime/`，不是独立包、也不是第六个服务。它曾经短暂
+作为 `agent/runtime/`（`@pi/runtime`），阶段 F 并进主树，与其余源码同一次
+`tsc` 编译。`contract/` 留在顶层，因为 exec 与 agent runtime 都用它。
 
 Do **not** reintroduce parallel production trees at the package root that mirror `src/` (e.g. `agent/application` next to `agent/src/application`).
 
 ---
 
-## DSH 重建的三个新包（ADR 0007 / 0008）
+## DSH 重建后的包（ADR 0007 / 0008）
 
 ```text
 contract/          Agent 与执行面之间的共享契约。两侧同为 TS，所以不手写 DTO：
@@ -44,11 +44,12 @@ contract/          Agent 与执行面之间的共享契约。两侧同为 TS，�
     envelope.ts      RPC 信封（必带 workspaceId，多实例路由的预留键）
     errors.ts        错误码 + 物理路径脱敏（脱敏参数**必填**，不给默认值）
     hmac.ts          两侧共用一份签名实现
-agent/runtime/     Agent 侧的 DSH 组合层（@pi/runtime，agent 私有）
-  bundle/            cordis.patch.yml —— 叠在 dsh-base 之上的组合层
-  src/providers/     ctx.fs / ctx.shell / ctx.jobs / sessionPersistence / skills / …
-  src/policy/        四个挂载点：pre-execute / guard / execute / post-execute
-  src/projection/    session/event → 平台 Run Event → SSE（契约逐字节不变）
+agent/src/runtime/ Agent 侧的 DSH 组合层（agent 私有，同一次 tsc）
+  bundle/            cordis.patch.yml —— 叠在 dsh-base 之上的组合层（生成物）
+  plugins/           类型化清单，`npm run gen:patch` 写出 YAML
+  providers/         ctx.fs / ctx.shell / ctx.jobs / sessionPersistence / skills / …
+  policy/            四个挂载点：pre-execute / guard / execute / post-execute
+  projection/        session/event → 平台 Run Event → SSE（契约逐字节不变）
 exec/              执行面 + MCP facade（取代 Python 版 sandbox/ 全部内容）
   src/fs/            WorkspaceFileSystem extends LocalFileSystem + 围栏
                      make-workspace-fs.ts 是**唯一**构造入口（每次新建 cordis
@@ -66,8 +67,9 @@ exec/              执行面 + MCP facade（取代 Python 版 sandbox/ 全部内
 
 **规则**
 
-- 三个新包**没有任何 hotspot 预算**：`tests/test_repository_layout.py` 已把它们纳入，
-  1000 行上限从第一天就生效。**不要把既有债务复制过来。**
+- `contract/`、`exec/` 和 `agent/src/runtime/`**没有任何 hotspot 预算**：
+  `tests/test_repository_layout.py` 已把它们纳入，1000 行上限从第一天就生效。
+  **不要把既有债务复制过来。**
 - 相对 import 必须带 `.js` 后缀（NodeNext 解析），`"type": "module"`。
 - 每个文件顶部写清楚"这是什么、为什么这样设计"，中文。
 - `exec/src/types.ts` 与 `contract/` 的导出是跨任务共享面，**改签名要先提出来**，
@@ -79,33 +81,40 @@ exec/              执行面 + MCP facade（取代 Python 版 sandbox/ 全部内
 
 ```text
 agent/
-  server.js              # re-exports + listen when main
-  worker.js              # worker process entry
-  config.js              # env / settings (package root for Docker WORKDIR)
-  Dockerfile
+  server.ts              # re-exports + listen when main
+  worker.ts              # worker process entry
+  config.ts              # env / settings (package root for Docker WORKDIR)
+  tsconfig.json          # 检查（strict 仍关着，已知待办）
+  tsconfig.build.json    # 出 dist/
+  tsconfig.runtime.json  # 只检查 src/runtime/** 且开 strict
+  Dockerfile             # CMD node dist/server.js
   package.json
   src/                   # sole production source root
     bootstrap/           # composition root, http-main, worker-main
-    application/         # use-cases / services
+    application/         # use-cases / services（不认识 cordis）
+    runtime/             # DSH 组合层：plugins / providers / policy / projection
     config/              # runtime policy data (fake-llm-policy)
     domain/              # pure domain
-    infrastructure/      # mysql, redis, pi, mcp, outbox, sandbox transports, model-registry, telemetry
-    extensions/          # first-party Pi extensions + registry (constants.js)
+    infrastructure/      # mysql, redis, dsh, mcp, outbox, sandbox public client
     presentation/        # a2a HTTP handlers
     lib/                 # shared pure helpers (text-redaction)
     skills/              # skill install/validate/paths
   tests/
     support/             # non-production harnesses and fakes
+    runtime/             # 组合层用例（含 boot 起真实插件树）
 ```
 
 **Rules**
 
-- New production modules land under `src/` only.
+- New production modules land under `src/` only. 入口是 `.ts`，容器跑 `dist/`。
+- `application/` 不 import cordis / `@pi/runtime` / `@deepseek-ai/dsh-*`。
+- 新增 plugin 只改 `src/runtime/plugins/manifest.ts`，然后 `npm run gen:patch`。
 - Obsolete approval-waiter code is deleted; do not add a package-root `legacy/` tree.
 - `tests/support/` is the only home for gates and local fakes. Production code
   may import a runtime policy, but never a test harness. There is no
-  `agent/testing/` root — CI syntax-checks every `agent/**/*.js` outside
-  `node_modules`, with no carve-out.
+  `agent/testing/` root。
+- `src/` 下仅 `infrastructure/mysql/migrations/` 保留 `.js`（knex 按目录扫描
+  加载的纯 DDL）。不要把别的生产文件以 `.js` 加回来。
 
 ---
 
@@ -186,9 +195,12 @@ Unchanged: feature-sliced style under `frontend/src/` (`pages/`, `widgets/`, `fe
 
 ## Docker / compose
 
-- Agent / API: `WORKDIR /app`, `CMD ["node", "server.js"]` (or worker) — copy entire package so `src/` is present.
+- Agent: `WORKDIR /app/agent`，`CMD ["node", "dist/server.js"]`（worker 是
+  `dist/worker.js`）。镜像**不挂载源码**，改了 `agent/` 必须重建。
+- API: `WORKDIR /app`, `CMD ["node", "server.js"]` — 仍是 JS，copy 整个包。
 - Exec: `WORKDIR /app/exec`，`CMD ["node", "dist/main.js"]`；MCP facade 是同一镜像的
-  `node dist/mcp-main.js`。**两者必须一起重建**，否则一个跑新代码一个跑旧的。
+  `node dist/mcp-main.js`。compose 服务名仍是 `sandbox` / `sandbox-mcp`。
+  **两者必须一起重建**，否则一个跑新代码一个跑旧的。
 
 ---
 
