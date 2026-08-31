@@ -109,6 +109,8 @@ import {
   prepareInteractionResume,
 } from './pi-run-resume.js';
 import { GovernanceApprovalStore } from './governance-approval-store.js';
+import { approvalIdOf } from '../runtime/policy/approval-id.js';
+import { integrityFingerprint } from '../infrastructure/mysql/repositories/tool-execution-repository.js';
 import { buildRunServices } from './durable-subagent-port.js';
 import { buildRunRiskResolver } from './tool-risk-resolver.js';
 
@@ -716,10 +718,51 @@ export class PiRunExecutor {
               }),
             }
           : {}),
+        // 工具执行的 durable 记录（ADR 0009 D11 / 计划 H9.6）。少了它，Run 跑成功、
+        // 文件真的落盘，而 `tool_executions` 一行都没有——2026-08-31 的 compose
+        // 端到端就是这么发现的。与审批、子 Agent、风险表同一族的断链：
+        // 记录器此前只经 `extensionBundleFactory` 到达运行时。
+        toolLedger: {
+          started: (i: Record<string, unknown>) =>
+            (this._governanceRecorder as never as Record<string, any>).recordToolStarted(i),
+          ended: (i: Record<string, unknown>) =>
+            (this._governanceRecorder as never as Record<string, any>).recordToolEnded(i),
+        },
         approvalStore: new GovernanceApprovalStore({
           recorder: this._governanceRecorder as never,
           onDurableApprovalPending: (pending) => {
             runSuspensionPort.onDurableApprovalPending(pending as never);
+          },
+          // 续跑路径（ADR 0009 D5 / 计划 H4.4）：模型重新发起的调用带的是
+          // **新 callId**，只能按「工具名 + 参数指纹」找那条已批准的记录。
+          // 指纹用 durable 侧的 `integrityFingerprint`——账本存的就是它；
+          // 拿策略层的 `digestArgs` 去查 MySQL 永远查不到（compose 端到端实测：
+          // 批准之后又停泊了一次，因为这一步查空、重新铸了 PENDING）。
+          findResolvedByDigest: async (toolName, _digest, args) => {
+            const found = await this.tx.run(async (trx: Loose) => {
+              const repos = this.createRepositories(trx);
+              const approvals = await repos.approvals.listByRunId(runId, scope);
+              const wanted = integrityFingerprint(args ?? {});
+              for (const approval of approvals) {
+                if (String(approval.status).toUpperCase() !== 'APPROVED') continue;
+                const exec = await repos.toolExecutions
+                  .getById(approval.toolExecutionId, scope)
+                  .catch(() => null);
+                if (exec == null || exec.toolName !== toolName) continue;
+                if (exec._argsIntegrity && exec._argsIntegrity !== wanted) continue;
+                return { approval, exec };
+              }
+              return null;
+            });
+            if (found == null) return null;
+            return {
+              id: approvalIdOf(String(found.exec.toolCallId ?? '')),
+              toolName,
+              sourceDigest: String(found.exec._argsIntegrity ?? ''),
+              argsCanonical: JSON.stringify(args ?? {}),
+              status: 'APPROVED',
+              runStatusHint: 'WAITING_APPROVAL',
+            } as never;
           },
         }),
         ...(runSkillPaths?.length ? { additionalSkillPaths: runSkillPaths } : {}),

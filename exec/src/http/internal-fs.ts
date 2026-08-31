@@ -28,17 +28,28 @@ import type { SearchRoot } from '../search/index.js';
 export interface InternalFsDeps {
   readonly workspaceManager: WorkspaceManager;
   readonly systemSkillRoot: string;
+  /** 该用户的 skill 草稿根（ADR 0009 D7 / 计划 H6.2）。按 owner 解析，每用户一个。 */
+  readonly draftSkillRootFor?: (orgId: string, userId: string) => string | null;
   readonly enabledSkillPackagesFor: (orgId: string, userId: string) => readonly { name: string; sourcePath: string }[];
   readonly cordisContext: unknown;
 }
 
 function physicalRootsOf(ctx: WorkspaceContext): readonly string[] {
-  return [ctx.workspaceRoot, ctx.tempRoot, ctx.systemSkillRoot, ...ctx.enabledSkillPackages.map((p) => p.sourcePath)];
+  return [
+    ctx.workspaceRoot,
+    ctx.tempRoot,
+    ctx.systemSkillRoot,
+    // 草稿根（ADR 0009 D7）。少了它，fs 围栏会把模型往草稿里的写当成越界——
+    // 挂载对了但写不进去，症状是「路径存在却 permission denied」。
+    ...(ctx.draftSkillRoot ? [ctx.draftSkillRoot] : []),
+    ...ctx.enabledSkillPackages.map((p) => p.sourcePath),
+  ];
 }
 
 function buildWorkspaceContext(deps: InternalFsDeps, envelope: { orgId: string; userId: string; workspaceId: string }): WorkspaceContext {
   const workspaceRoot = deps.workspaceManager.physicalWorkspacePath(envelope.workspaceId);
   const tempRoot = deps.workspaceManager.physicalTempPath(envelope.workspaceId);
+  const draft = deps.draftSkillRootFor?.(envelope.orgId, envelope.userId) ?? null;
   return {
     orgId: envelope.orgId,
     userId: envelope.userId,
@@ -47,6 +58,7 @@ function buildWorkspaceContext(deps: InternalFsDeps, envelope: { orgId: string; 
     tempRoot,
     systemSkillRoot: deps.systemSkillRoot,
     enabledSkillPackages: [...deps.enabledSkillPackagesFor(envelope.orgId, envelope.userId)],
+    ...(draft !== null && draft !== '' ? { draftSkillRoot: draft } : {}),
   };
 }
 

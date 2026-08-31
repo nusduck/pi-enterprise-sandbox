@@ -469,3 +469,56 @@ test('真实 boot + agents.create()：策略与提示词确实装到 per-Run sco
   assert.equal(result.sectionRegistered, true, '企业提示词段必须注册成功');
   assert.equal(result.policyInstalled, true, '策略必须装配成功');
 });
+
+test('H9.6 工具执行两端都记 durable 账本，且记账失败不打死调用', async () => {
+  const ctx = new FakeCtx();
+  const calls: Array<{ phase: string; toolName: string; isError?: boolean }> = [];
+  installOn(ctx, {
+    toolLedger: {
+      async started({ toolName }) {
+        calls.push({ phase: 'started', toolName });
+      },
+      async ended({ toolName, isError }) {
+        calls.push({ phase: 'ended', toolName, isError });
+      },
+    },
+  } as never);
+
+  const ok = await ctx.execute({ name: 'read', arguments: {}, id: 'c1' }, async () => ({
+    isError: false,
+  }));
+  assert.deepEqual((ok as { isError: boolean }).isError, false);
+  assert.deepEqual(calls, [
+    { phase: 'started', toolName: 'read' },
+    { phase: 'ended', toolName: 'read', isError: false },
+  ]);
+
+  // 工具体抛错时也要记结束——否则 tool_executions 会留下永远 RUNNING 的行。
+  calls.length = 0;
+  await assert.rejects(() =>
+    ctx.execute({ name: 'bash', arguments: {}, id: 'c2' }, async () => {
+      throw new Error('boom');
+    }),
+  );
+  assert.deepEqual(calls.map((c) => c.phase), ['started', 'ended']);
+  assert.equal(calls[1]?.isError, true);
+});
+
+test('H9.6 记账失败不影响工具结果——账本是外部副作用', async () => {
+  const ctx = new FakeCtx();
+  installOn(ctx, {
+    toolLedger: {
+      async started() {
+        throw new Error('mysql down');
+      },
+      async ended() {
+        throw new Error('mysql down');
+      },
+    },
+  } as never);
+  const out = await ctx.execute({ name: 'read', arguments: {}, id: 'c1' }, async () => ({
+    isError: false,
+    value: 'fine',
+  }));
+  assert.equal((out as { value: string }).value, 'fine', '记账失败把一次合法调用打死是本末倒置');
+});

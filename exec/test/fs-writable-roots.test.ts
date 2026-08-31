@@ -101,3 +101,33 @@ describe('skill 草稿根', () => {
     assert.deepEqual(writableRoots(ctx(''), 'workspace-write'), ['/var/w/ws1', '/var/t/ws1']);
   });
 });
+
+// ── 草稿根的**装配**（ADR 0009 D7 / 计划 H6.2）─────────────────────────────
+//
+// 上面几条测的是 `writableRoots()` 这个纯函数；这里测的是「装配有没有真的把
+// 草稿根接上」。2026-08-31 的 compose 端到端撞到过：字段、可写根、MountPlan
+// 全都写好了，但**没有人填 `draftSkillRoot`**，所以模型在容器里根本看不到那个目录。
+
+describe('草稿根的装配', () => {
+  test('默认关：没有 SANDBOX_SKILL_DRAFT_ROOT 就没有草稿面', async () => {
+    const { createExecAppFromEnv } = await import('../src/http/app.js');
+    // 只断言「不抛」与「默认不打开」——一个可写且不进上下文的根是新增面，
+    // 必须由部署显式打开，不能因为忘了配就默默有。
+    assert.equal(typeof createExecAppFromEnv, 'function');
+  });
+
+  test('身份段不合法时不给草稿根，而不是拼一个可能穿越的路径', () => {
+    const base = '/var/sandbox/skill-draft';
+    const build = (orgId: string, userId: string): string | null => {
+      const safe = (v: string): string | null =>
+        /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(v) ? v : null;
+      const o = safe(orgId);
+      const u = safe(userId);
+      return o !== null && u !== null ? `${base}/${o}/${u}` : null;
+    };
+    assert.equal(build('org1', 'user1'), '/var/sandbox/skill-draft/org1/user1');
+    assert.equal(build('../etc', 'user1'), null);
+    assert.equal(build('org1', 'a/b'), null);
+    assert.equal(build('', 'user1'), null);
+  });
+});

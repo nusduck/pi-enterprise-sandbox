@@ -39,6 +39,10 @@ export const SANDBOX_TOOL_NAMES = Object.freeze([
   'skill',
   // dsh-tool-subagent（one-shot，见 cordis.patch.yml）
   'subagent',
+  // 自建：把工作区文件提交成可下载产物（ADR 0009 D4）。
+  // 2026-08-31 实测发现它此前根本没有插件注册——旧 Pi Extension 删除后没补，
+  // 能力静默缺失。补回来而不是按退役处理。
+  'submit_artifact',
 ]);
 
 /** 问人。`dsh-tool-ask-user` 注册的名字，与出厂一致。 */
@@ -89,10 +93,6 @@ export const LEGACY_TOOL_NAME_ALIASES: Readonly<Record<string, string | null>> =
   // 本阶段不做 memory（ADR 0009 D10）：没有新名，读取方给 TOOL_RETIRED
   memory_write: null,
   memory_search: null,
-  // 产物提交：旧 Pi Extension 删除后没有任何插件注册它（2026-08-31 实测）。
-  // 待决策——补一个自建 tool 插件，还是承认产物提交不再是模型工具。
-  // 在决策落地前按退役处理，理由码稳定，好过静默 UNKNOWN_TOOL。
-  submit_artifact: null,
 });
 
 /** 本阶段整体退役的能力用这个理由码，区别于「没见过的工具」。 */

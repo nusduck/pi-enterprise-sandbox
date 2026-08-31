@@ -202,6 +202,7 @@ test('boot 之后实际挂载的是自建实现，不是出厂实现', () => {
     jobs: string | null;
     spawnProvider: { inheritsParentContext: boolean; capabilities: unknown } | null;
     toolNames: string[] | null;
+    badSchemas: string[];
     seams: {
       approval: boolean;
       permissionPresets: boolean;
@@ -267,6 +268,17 @@ test('boot 之后实际挂载的是自建实现，不是出厂实现', () => {
     [],
     '名单里的工具 boot 之后不存在：多半是缺依赖或 patch 里没有对应 insert' +
       '——不要靠加 preset 绕过（ADR 0009 D3）',
+  );
+
+  // 每个工具的 `parameters` 必须是合法的 object 节点。2026-08-31 的 compose
+  // 端到端第一次开 Run 就撞上：自建 `remote-fs-search` 把 `parameters` 抄成了
+  // 出厂 `defineTool()` 的简写，注册成功、名字也在，但模型提供方拒
+  // "Invalid schema for function 'glob'"，**整个 Run 失败**。
+  // 断言名字在不在，抓不到这类错误。
+  assert.deepEqual(
+    mounted.badSchemas,
+    [],
+    '这些工具的 parameters 不是合法 object 节点——注册得进去，但开一轮就会被模型提供方拒',
   );
 
   // ── seam（ADR 0009 D5/D8）────────────────────────────────────────────────

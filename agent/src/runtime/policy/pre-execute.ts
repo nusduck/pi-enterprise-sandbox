@@ -35,7 +35,11 @@ export interface ApprovalStore {
    * 指纹绑的是**字节**：人批准的是 A 这组参数，落地的必须还是 A。
    * 模型改了任何一个字符，指纹就对不上，这里查不到，于是重新走审批。
    */
-  findResolvedByDigest?(toolName: string, sourceDigest: string): Promise<PendingApproval | null>;
+  findResolvedByDigest?(
+    toolName: string,
+    sourceDigest: string,
+    args?: Record<string, unknown>,
+  ): Promise<PendingApproval | null>;
   /**
    * 消费一次性授权（ADR 0009 D5：出厂词表只有 `allowed-once`，没有 allow-always）。
    * 不实现等于同一条批准可以被重复使用——那是越权。
@@ -55,6 +59,7 @@ export class InMemoryApprovalStore implements ApprovalStore {
   async findResolvedByDigest(
     toolName: string,
     sourceDigest: string,
+    _args?: Record<string, unknown>,
   ): Promise<PendingApproval | null> {
     for (const record of this.records.values()) {
       if (record.status === 'PENDING') continue;
@@ -113,7 +118,11 @@ export async function evaluatePreExecute(
   const resolved =
     store.findResolvedByDigest === undefined
       ? null
-      : await store.findResolvedByDigest(input.toolName, digest);
+      // 把 **args 本身**也传下去：durable 那边用的是 `integrityFingerprint`
+      // （账本的算法），与我们这里的 `digestArgs` 不是同一个函数。拿我们的
+      // digest 去查 MySQL 永远查不到——2026-08-31 的 compose 端到端就是这么
+      // 发现的：批准之后续跑又停泊了一次，因为这一步查空、重新铸了 PENDING。
+      : await store.findResolvedByDigest(input.toolName, digest, input.args);
   if (resolved !== null) {
     if (resolved.status === 'APPROVED') {
       // 一次性授权：出厂词表只有 `allowed-once`，没有 allow-always。

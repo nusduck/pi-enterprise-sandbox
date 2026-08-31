@@ -24,6 +24,7 @@
  * 全部是"调 super 再脱敏"的单行委托，没有重新实现任何一条基础操作的逻辑。
  */
 import type { Context } from '@deepseek-ai/cordis';
+import type { SandboxPathScope } from './path-policy.js';
 import {
   FsError,
   FsTargetKey,
@@ -259,8 +260,21 @@ export class WorkspaceFileSystem extends LocalFileSystem {
 
   // ── 内部辅助 ────────────────────────────────────────────────────────
 
-  private physicalRootFor(scope: 'workspace' | 'temp'): string {
-    return scope === 'temp' ? this.workspace.tempRoot : this.workspace.workspaceRoot;
+  private physicalRootFor(scope: SandboxPathScope): string {
+    if (scope === 'temp') return this.workspace.tempRoot;
+    if (scope === 'skill-draft') {
+      const draft = this.workspace.draftSkillRoot;
+      if (draft === undefined || draft === '') {
+        // 部署没开草稿面时，这个逻辑前缀不该解析成任何物理根——
+        // 退回工作区会让模型以为写成功了，实际写到了别处。
+        throw new FsError(
+          'skill draft root is not enabled in this deployment',
+          'FS_SANDBOX_DENIED',
+        );
+      }
+      return draft;
+    }
+    return this.workspace.workspaceRoot;
   }
 
   /** 用继承自 `LocalFileSystem` 的 `contains()`（未覆盖，原样复用）判断

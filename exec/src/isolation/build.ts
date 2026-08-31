@@ -95,7 +95,7 @@ export interface BuildProfileInput {
   /** 相对 cwd，相对于 `cwdScope` 指向的根；默认 `"."`。不得以 `/` 开头或含 `..` 段。 */
   readonly relativeCwd?: string;
   /** 默认 `"workspace"`。 */
-  readonly cwdScope?: 'workspace' | 'temp';
+  readonly cwdScope?: 'workspace' | 'temp' | 'skill-draft';
   readonly envOverrides?: Readonly<Record<string, string>>;
   /** 默认 `"disabled"`（fail-closed：空 netns）。 */
   readonly networkMode?: NetworkMode;
@@ -111,11 +111,16 @@ export interface BuildProfileInput {
   readonly writableRootsFn?: WritableRootsFn;
 }
 
-function logicalCwd(relative: string, scope: 'workspace' | 'temp'): string {
+function logicalCwd(relative: string, scope: 'workspace' | 'temp' | 'skill-draft'): string {
   if (relative.startsWith('/') || relative.split('/').includes('..')) {
     throw new IsolationConfigError('cwd must stay within a sandbox root');
   }
-  const root = scope === 'temp' ? AGENT_TEMP_PATH : AGENT_WORKSPACE_PATH;
+  const root =
+    scope === 'temp'
+      ? AGENT_TEMP_PATH
+      : scope === 'skill-draft'
+        ? AGENT_DRAFT_SKILL_PATH
+        : AGENT_WORKSPACE_PATH;
   return relative === '' || relative === '.' ? root : `${root}/${relative}`;
 }
 

@@ -15,12 +15,20 @@ import type { WorkspaceContext } from '../types.js';
 export interface InternalShellDeps {
   readonly workspaceManager: WorkspaceManager;
   readonly systemSkillRoot: string;
+  /**
+   * 该用户的 skill 草稿根（ADR 0009 D7 / 计划 H6.2）。
+   *
+   * 与 `enabledSkillPackagesFor` 一样按 owner 解析——每用户一个目录，
+   * 一个用户造的包不会出现在另一个用户的沙箱里。
+   */
+  readonly draftSkillRootFor?: (orgId: string, userId: string) => string | null;
   readonly enabledSkillPackagesFor: (orgId: string, userId: string) => readonly { name: string; sourcePath: string }[];
   readonly bwrapExecutable: string;
   readonly modeFor: (workspaceId: string) => 'read-only' | 'workspace-write';
 }
 
 function buildContext(deps: InternalShellDeps, env: { orgId: string; userId: string; workspaceId: string }): WorkspaceContext {
+  const draft = deps.draftSkillRootFor?.(env.orgId, env.userId) ?? null;
   return {
     orgId: env.orgId,
     userId: env.userId,
@@ -29,11 +37,20 @@ function buildContext(deps: InternalShellDeps, env: { orgId: string; userId: str
     tempRoot: deps.workspaceManager.physicalTempPath(env.workspaceId),
     systemSkillRoot: deps.systemSkillRoot,
     enabledSkillPackages: [...deps.enabledSkillPackagesFor(env.orgId, env.userId)],
+    ...(draft !== null && draft !== '' ? { draftSkillRoot: draft } : {}),
   };
 }
 
 function rootsOf(ctx: WorkspaceContext): readonly string[] {
-  return [ctx.workspaceRoot, ctx.tempRoot, ctx.systemSkillRoot, ...ctx.enabledSkillPackages.map((p) => p.sourcePath)];
+  return [
+    ctx.workspaceRoot,
+    ctx.tempRoot,
+    ctx.systemSkillRoot,
+    // 草稿根必须进这份「允许的物理根」清单，否则 fs 围栏会把模型往草稿里的
+    // 写当成越界——挂载对了但写不进去，症状是「路径存在却 permission denied」。
+    ...(ctx.draftSkillRoot ? [ctx.draftSkillRoot] : []),
+    ...ctx.enabledSkillPackages.map((p) => p.sourcePath),
+  ];
 }
 
 async function parseBody(c: import('hono').Context): Promise<{ envelope: unknown; payload: unknown }> {

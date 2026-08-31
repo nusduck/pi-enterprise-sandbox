@@ -243,6 +243,8 @@ export function createDshRuntimeFactory(opts: Record<string, any> = {}) {
               input.approvalStore ?? opts.approvalStore ?? new InMemoryApprovalStore(),
             ...(opts.policyGuards ? { guards: opts.policyGuards } : {}),
             ...(opts.ledger ? { ledger: opts.ledger } : {}),
+            // **按 Run 取**：记录器绑着这个 Run 的 fence/runId/scope。
+            ...(input.toolLedger ? { toolLedger: input.toolLedger } : {}),
             // 运维可配的风险覆盖。以前这份配置解析出来后喂给了一个返回 []
             // 的 extension bundle，等于没配。
             // **按 Run 取**：租户层来自 AgentVersion，工厂是进程级单例。

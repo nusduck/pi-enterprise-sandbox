@@ -331,6 +331,13 @@ services:
       - ./skills:/home/sandbox/skill:ro
       # User Skills: writable only to Agent lifecycle operations.
       - agent_user_skills:/home/sandbox/skill-user
+      # skill 草稿目录（ADR 0009 D7）。**必须与 sandbox 指向同一份字节**：
+      # 模型在 sandbox 容器里往草稿写，人在 agent 侧按「启用」时要读它。
+      # 两边各挂各的卷会让启用永远找不到那个包。
+      #
+      # 用宿主 bind 而不是 named volume，与 workspaces / tmp 同一惯例：
+      # named volume 初始是 root 所有，而 sandbox 以非 root 运行，写不进去。
+      - ${SANDBOX_SKILL_DRAFT_MOUNT_AGENT:-./.runtime/sandbox/skill-draft:/home/sandbox/skill-draft}
       - ./config/agent:/app/config/agent:ro
     restart: unless-stopped
     depends_on:
@@ -421,6 +428,13 @@ services:
     volumes:
       - ./skills:/home/sandbox/skill:ro
       - agent_user_skills:/home/sandbox/skill-user
+      # skill 草稿目录（ADR 0009 D7）。**必须与 sandbox 指向同一份字节**：
+      # 模型在 sandbox 容器里往草稿写，人在 agent 侧按「启用」时要读它。
+      # 两边各挂各的卷会让启用永远找不到那个包。
+      #
+      # 用宿主 bind 而不是 named volume，与 workspaces / tmp 同一惯例：
+      # named volume 初始是 root 所有，而 sandbox 以非 root 运行，写不进去。
+      - ${SANDBOX_SKILL_DRAFT_MOUNT_AGENT:-./.runtime/sandbox/skill-draft:/home/sandbox/skill-draft}
       - ./config/agent:/app/config/agent:ro
     restart: unless-stopped
     depends_on:
@@ -460,11 +474,17 @@ services:
       # PR-09 control-plane roots — NOT bound into Bubblewrap workspace/tmp
       - ${SANDBOX_ARTIFACTS_MOUNT:-./.runtime/sandbox/artifacts:/var/sandbox/artifacts}
       - ${SANDBOX_CONTROL_MOUNT:-./.runtime/sandbox/control:/var/sandbox/control}
+      # 与 agent / agent-worker 指向同一份字节的 skill 草稿目录（ADR 0009 D7）。
+      - ${SANDBOX_SKILL_DRAFT_MOUNT:-./.runtime/sandbox/skill-draft:/var/sandbox/skill-draft}
     environment:
       DEPLOYMENT_ENV: ${DEPLOYMENT_ENV:-development}
       # Listen address only — does NOT authorize clients. See ALLOWED_CLIENT_CIDRS.
       SANDBOX_BIND_HOST: ${SANDBOX_BIND_HOST:-0.0.0.0}
       SANDBOX_PORT: 8081
+      # skill 草稿根（ADR 0009 D7）。**默认空 = 关**：一个可写且不进模型上下文
+      # 的根是新增面，要由部署显式打开。打开后 exec 按 <base>/<orgId>/<userId>
+      # 分目录，与已启用包同规矩——否则一个用户造的包会进另一个用户的沙箱。
+      SANDBOX_SKILL_DRAFT_ROOT: ${SANDBOX_SKILL_DRAFT_ROOT:-}
       SANDBOX_LOG_LEVEL: ${SANDBOX_LOG_LEVEL:-INFO}
       # Sandbox persistence DSN (formal: MySQL via PyMySQL dialect).
       # Keep the Compose interpolation variable separate from the canonical

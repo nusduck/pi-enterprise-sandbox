@@ -120,3 +120,34 @@ describe('toDisplayPath', () => {
     assert.equal(toDisplayPath({ scope: 'temp', relative: 'cache/a.txt' }), '/tmp/cache/a.txt');
   });
 });
+
+// ── skill 草稿根（ADR 0009 D7 / 计划 H6.2）─────────────────────────────────
+
+test('草稿根的逻辑前缀被解析成自己的 scope，不是「越界」', () => {
+  // 2026-08-31 的 compose 端到端第一次让模型往草稿里写就撞上这条：
+  // 字段、可写根、MountPlan 全都有了，但**路径围栏不认这个前缀**，
+  // 于是 write 被拒 "absolute path outside sandbox roots"。
+  assert.deepEqual(parseSandboxPath('/home/sandbox/skill-draft'), {
+    scope: 'skill-draft',
+    relative: '.',
+  });
+  assert.deepEqual(parseSandboxPath('/home/sandbox/skill-draft/greeter/SKILL.md'), {
+    scope: 'skill-draft',
+    relative: 'greeter/SKILL.md',
+  });
+});
+
+test('草稿根同样不许父目录穿越', () => {
+  assert.throws(
+    () => parseSandboxPath('/home/sandbox/skill-draft/../workspace/x'),
+    /path escape detected/,
+  );
+});
+
+test('草稿根的展示形式是它自己的绝对前缀，不退化成相对路径', () => {
+  assert.equal(
+    toDisplayPath({ scope: 'skill-draft', relative: 'greeter/SKILL.md' }),
+    '/home/sandbox/skill-draft/greeter/SKILL.md',
+  );
+  assert.equal(toDisplayPath({ scope: 'skill-draft', relative: '.' }), '/home/sandbox/skill-draft');
+});

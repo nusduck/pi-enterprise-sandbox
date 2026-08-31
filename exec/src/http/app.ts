@@ -32,6 +32,13 @@ export interface ExecAppDeps {
   readonly bwrapExecutable: string;
   readonly allowCidr?: readonly string[];
   readonly enabledSkillPackagesFor?: InternalRouterDeps['enabledSkillPackagesFor'];
+  /**
+   * 该用户的 skill 草稿根（ADR 0009 D7 / 计划 H6.2）。
+   *
+   * 省略时草稿面整体关闭：既不挂载也不可写。缺省是**关**而不是开，
+   * 因为一个可写且不进上下文的根是新增的攻击面，要由部署显式打开。
+   */
+  readonly draftSkillRootFor?: (orgId: string, userId: string) => string | null;
   readonly modeFor?: InternalRouterDeps['modeFor'];
   readonly cordisContext?: unknown;
   /** MCP 窄桥的 bearer token；空串表示该桥不可用（回 503）。 */
@@ -46,6 +53,7 @@ export function createExecApp(deps: ExecAppDeps): Hono {
     workspaceManager: deps.workspaceManager,
     systemSkillRoot: deps.systemSkillRoot,
     enabledSkillPackagesFor: skills,
+    ...(deps.draftSkillRootFor ? { draftSkillRootFor: deps.draftSkillRootFor } : {}),
     cordisContext,
     bwrapExecutable: deps.bwrapExecutable,
     modeFor,
@@ -135,6 +143,23 @@ export function createExecAppFromEnv(env: NodeJS.ProcessEnv = process.env): Exec
     jobRegistry,
     keyring,
     systemSkillRoot: env['SANDBOX_SKILLS_ROOT'] ?? AGENT_SKILL_PATH,
+    // skill 草稿根（ADR 0009 D7 / 计划 H6.2）。**默认关**：一个可写且不进上下文
+    // 的根是新增面，要由部署显式打开（`SANDBOX_SKILL_DRAFT_ROOT`）。
+    // 打开后按 owner 分目录——每用户一个，与已启用包的 `<base>/<org>/<user>` 同规矩，
+    // 否则一个用户造的包会出现在另一个用户的沙箱里。
+    ...(String(env['SANDBOX_SKILL_DRAFT_ROOT'] ?? '').trim() !== ''
+      ? {
+          draftSkillRootFor: (orgId: string, userId: string): string | null => {
+            const base = String(env['SANDBOX_SKILL_DRAFT_ROOT']).trim();
+            const safe = (v: string): string | null =>
+              /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(v) ? v : null;
+            const o = safe(orgId);
+            const u = safe(userId);
+            // 身份段不合法时**不给草稿根**，而不是拼一个可能穿越的路径。
+            return o !== null && u !== null ? `${base.replace(/\/+$/, '')}/${o}/${u}` : null;
+          },
+        }
+      : {}),
     bwrapExecutable: env['SANDBOX_BWRAP_PATH'] ?? '/usr/bin/bwrap',
     mcpInternalToken: env['SANDBOX_MCP_INTERNAL_TOKEN'] ?? '',
   });

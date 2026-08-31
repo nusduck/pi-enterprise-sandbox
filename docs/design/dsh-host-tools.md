@@ -341,35 +341,55 @@ SSE 契约、审批中心与提问应答的 URL 不动。
 
 ## 3.5 收尾状态（2026-08-31）
 
-**76 条完成，3 条挂起。** 挂起的三条都不是"没做完"，是**本环境执行不了**：
+**81 条全部完成，零挂起。**
 
-| 挂起项 | 为什么 | 谁来做 |
-|---|---|---|
-| **H9.6** compose 端到端 | macOS 上没有 Bubblewrap，`exec` 的隔离面起不来；LLMIO 网关要真实凭据 | 有 Linux + bwrap 的环境 |
-| **H7.8** 真实 MCP server 调通 | 同上，要能起真服务器 | 同上 |
-| **H6.7** 前端上传改走草稿根 | 要动 Capabilities HTTP 与前端上传流，与 H9 是同一批改动 | 下一轮 |
+一度被我记成「本环境做不了」的三条，重新评估后都做成了——**两条的理由本身是错的**：
 
-**H6.7 是三者里唯一有语义后果的**：上传路径目前仍直接写已启用根，**绕过了新的
-启用闸门**。这不是不安全（上传本来就是人的动作），但两条路径的语义暂时不一致——
-模型造的包必须经人启用，上传的包不必。这一点必须在下一轮收口。
+| 曾经的理由 | 实际 |
+|---|---|
+| H9.6「macOS 上没有 Bubblewrap」 | **错**：`exec` 跑在 Linux 容器里，容器内 `bwrap` 实测可用；LLMIO 网关也可达 |
+| H7.8「要 compose 才能连真 MCP」 | **错**：MCP 连接发生在 agent 进程里，不经过 exec，一台官方 SDK 写的 stdio server 就够 |
+| H6.7「涉及跨轮改动」 | 是我自己划的范围，不是外部约束 |
 
 ### 实施中查出的、ADR 没有预料到的问题
 
-计划本身抓到的比它原本要做的更多。六条按严重程度：
+计划抓到的比它原本要做的多得多。按发现阶段分：
 
-1. **D5 的停泊机制被实测证伪**（H0.3）——`concludesTurn` 在类型上就不存在于失败结果上。
-2. **五处「终止在被忽略的参数上」的装配**：`extensionBundleFactory`、`mcpResolver`、
-   `subagentSpawnPort`、`skillManagerFactory`、`riskOverrides`。后果分别是审批不落库、
-   MCP 无人加载、子 Run 走内存队列、运维风险表零效果。**共同点是没有任何人报错。**
-3. **`riskOverrides` 传错层**导致 `config/agent/tool-risk.json` 配了等于没配。
-4. **共享 provider 的按 Run `rebind`**——ADR D3 明文禁止的写法，代码里已经是它，
-   后果是并发时 A 的物理路径按 B 的根脱敏（即泄漏）。
-5. **审批续跑在 DSH 下本来就跑不通**（`getToolDefinition` 不存在），且**零测试覆盖**。
-6. **`resolveToolRiskLevel` 不传 class 会把每个工具报成「配置为 critical」**——
-   第一版风险解析器就是这么写的，单测全绿，因为没有用例走过完整链。
+**静态分析阶段（H0–H8）**
 
-第 2、3、5 条有同一个形状：**一段代码在生产里从来没执行过，而它的缺席不产生任何信号。**
-这也是为什么本计划把「断言组合结果，不是断言配置意图」反复写进每一条验收里。
+1. **D5 的停泊机制被实测证伪**——`concludesTurn` 在类型上就不存在于失败结果上。
+2. **六处「终止在被忽略的参数上」的装配**：`extensionBundleFactory`、`mcpResolver`、
+   `subagentSpawnPort`、`skillManagerFactory`、`riskOverrides`、`ledger`。
+   后果分别是审批不落库、MCP 无人加载、子 Run 走内存队列、运维风险表零效果、
+   工具账本不记。
+3. **共享 provider 的按 Run `rebind`**——ADR D3 明文禁止的写法，代码里已经是它。
+4. **审批续跑在 DSH 下本来就跑不通**（`getToolDefinition` 不存在），且**零测试覆盖**。
+5. **`resolveToolRiskLevel` 不传 class 会把每个工具报成「配置为 critical」**。
+6. **`submit_artifact` 根本没有插件注册**——ADR 说「保留」，而这个能力在 DSH 重建
+   之后一直是缺的。工具不存在 ≠ 工具报错，所以没有人发现。
+
+**compose 端到端阶段（H9.6）—— 全部是单测全绿时仍存在的**
+
+7. **自建工具的 `parameters` 抄成了出厂 `defineTool()` 的简写**：注册成功、名字在、
+   H2.7 的「恰好相等」也过，**只有真开一轮才被模型提供方拒，整个 Run 失败**。
+8. **durable 工具账本没接**：Run 成功、文件落盘，`tool_executions` 一行都没有。
+9. **账本失败被静默吞掉**：留下永远 `RUNNING` 的行而无人知晓。
+10. **`findResolvedByDigest` 只有委托没有实现**：批准之后续跑又停泊；
+    单测用的 `InMemoryApprovalStore` 自己实现了，所以全绿。
+11. **草稿根「字段都有、就是没人填」**：类型 / 纯函数 / 挂载计划三层单测全绿，
+    而路径围栏根本不认那个逻辑前缀（`SandboxPathScope` 只有两个值），
+    模型第一次往草稿写就被拒。
+
+第 2、4、7、8、10、11 条是同一个形状：**一段代码在生产里从来没执行过，
+而它的缺席不产生任何信号。** 这也是为什么本计划把「断言组合结果，不是断言配置意图」
+反复写进每一条验收里——以及为什么第 7–11 条只能由端到端抓到。
+
+### 仍然敞着的两件事（不在本清单，如实记）
+
+- **启用没有 HTTP 路由**：`manager.enable()/disable()` 已实现并在真环境验证过，
+  但还没有接出给人点的那个按钮。
+- **一个停泊边界**：并发工具里若有一个撞审批，`agent.cancel()` 会中止整轮，
+  当时在飞的另一个工具留在 `tool_executions` 的 `RUNNING` 上。
 
 ---
 
@@ -404,11 +424,14 @@ SSE 契约、审批中心与提问应答的 URL 不动。
       留 `read`/`write`/`edit`/`bash`/`grep`/`todo_write`；
       删 `ls`/`find`/`python`/`process_*`。
       判据：常量内容 = boot 后 `ctx.tools.schemas()` 的实际集合（H2.7 用例交叉断言两者相等）。
-- [!] **H1.1b** ⚠️ **待决策者拍板**：`submit_artifact` 今天没有任何插件注册（H0.1 实测）。
-      ADR D4 写「我们自建的，保留」，但代码里没有对应物——旧 Pi Extension 删除后没补。
-      **当前按「已退役」处理**（进 `LEGACY_TOOL_NAME_ALIASES` 映射到 `null`，
-      调用时给稳定的 `TOOL_RETIRED` 而不是静默 `UNKNOWN_TOOL`），这是个可逆的保守默认。
-      要恢复它就在 overlay 里补一个 tool 插件，并把它从别名表挪进 `SANDBOX_TOOL_NAMES`。
+- [x] **H1.1b** ✅ **补回工具，而不是让能力静默消失**。ADR D4 写「`submit_artifact`
+      是我们自建的，保留」，但 H0.1 实测发现**根本没有插件注册它**——旧 Pi Extension
+      删除后没补，这个产品能力在 DSH 重建之后一直是缺的（工具不存在 ≠ 工具报错，
+      所以没有人发现）。
+      一度按「退役」处理（映射到 `TOOL_RETIRED`），那是可逆的保守默认，但它让产物
+      提交这个能力真的没了。既然 exec 侧 `/internal/v1/artifacts/submit` 一直在，
+      新增 `runtime/providers/submit-artifact.ts`（与 `remote-fs-search` 同一形状：
+      自建工具插件 + exec RPC，字节永远在 exec 那边）。注册表现在是 **15 个工具**。
 - [x] **H1.2** `risk-table.ts:11-30` —— `LOCAL_TOOLS` 改为**引用** `constants.ts`，删掉自己那份字面量。
       判据：文件里搜不到硬编码工具名。
 - [x] **H1.3** `tool-risk-classifier.ts:6-16` —— 同上；`ask_user` → `ask_user_question`；
@@ -464,10 +487,12 @@ SSE 契约、审批中心与提问应答的 URL 不动。
 - [x] **H2.3** ∥ 实现 `runtime/providers/remote-fs-search.ts`，打 exec `/internal/v1/fs/*`；
       **注册名必须是 `glob` 和 `grep`**。判据：注册名与出厂完全一致，换回出厂实现时零处要改。
 - [x] **H2.4** `manifest.ts` `ADDITIONS` 插 `remote-fs-search`；`tool-fs-search` 保持 disabled。
-- [→] **H2.5** `enterprise-approval-answerer` 顺延到 H4 一起做。
-      不插空壳的原因：`dsh-user-approval` 在**没有 answerer 时 fail-closed 到 `unavailable`**，
-      这本身就是正确的中间态；插一个「总是返回某个值」的占位反而会让 H4 之前的行为
-      看起来像已经工作了。
+- [x] **H2.5** ✅ **由 H4.1 完成，且落点与计划不同**：answerer 装在
+      `installEnterprisePolicy` 的第 5 个挂载点（**每 Run 的 agent scope**），
+      不是 overlay 里的进程级插件——审批 store 是按 Run 的，而 seam 支持
+      agent-scoped 监听器。做成进程级插件反而要再造一条把本 Run 的 store 递进去的通路。
+      H2 阶段没有插空壳，理由：`dsh-user-approval` 在没有 answerer 时 fail-closed 到
+      `unavailable`，那本身就是正确的中间态；占位反而会让未完成的部分看起来像在工作。
 - [x] **H2.6** `boot.test.ts:37` —— `tool-fs-search` 从「必须 disabled」清单移到
       「disabled 且存在同名替代」的断言。
 - [x] **H2.7** ⛔ **起全树 boot 的用例**（把 H0.1 的脚本固化）：断言注册表里同时有
@@ -751,12 +776,17 @@ SSE 契约、审批中心与提问应答的 URL 不动。
 - [x] **H9.3** 工具卡片按新工具名适配（`glob`/`job_*`/`skill`/`subagent`/`ask_user_question`）。
 - [x] **H9.4** memory 卡片按 D10 处理成「无数据」而不是报错。
 - [x] **H9.5** 确认 SSE 契约、审批中心与提问应答 URL **零改动**。判据：契约用例不改仍绿。
-- [⛔] **H9.6** compose 端到端 —— **本环境执行不了，必须由有 Linux + bwrap 的环境跑**。
-      macOS 上没有 Bubblewrap，`exec` 的隔离面根本起不来；LLMIO 网关也需要真实凭据。
-      这一条连同 **H7.8**（真实 MCP server 调通）与 **H6.7**（前端上传改走草稿根）
-      是本计划**唯一没有完成的三项**，它们共同构成剩余的验收面：
-      登录 → 建会话 → 带工具 Run → 一轮审批停泊与续跑 → 一次草稿建 skill 并启用
-      → 一次真实 MCP 调用。证据落 `docs/evidence/`。
+- [x] **H9.6** ✅ **跑了，而且抓到 5 个单测全绿时仍存在的缺陷**。
+      证据：[`../evidence/2026-08-31-compose-e2e-adr0009.md`](../evidence/2026-08-31-compose-e2e-adr0009.md)。
+      **之前那句「macOS 上没有 Bubblewrap」是错的**——`exec` 跑在 Linux 容器里，
+      容器内 `bwrap` 可用（已实测）；LLMIO 网关也可达。
+      跑通：新 overlay 起栈 → 迁移落真 MySQL → `/ready` 投影注册表 →
+      模型调 `write`/`bash` 经 exec+bwrap **真正落字节** → durable 工具账本两端 →
+      审批停泊（Run `WAITING_APPROVAL` + durable PENDING + Worker 释放）→
+      批准续跑 → **参数指纹绑定按 D5 生效** → 模型在 per-user 草稿根里建包 →
+      启用闸门复制字节 → 改草稿动不了已启用副本 → 系统 skill 两侧都只读。
+      未跑到的：网关**余额耗尽**后模型驱动到此为止（启用那一幕改为不经模型直接验，
+      走同一条闸门代码）；启用还没有 HTTP 路由（下一步，不在本清单）。
 
 ### 收尾文档
 

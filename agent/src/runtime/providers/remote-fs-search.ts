@@ -73,17 +73,33 @@ export function* apply(ctx: Context & Record<string, any>, config: Partial<ExecR
       name: 'glob',
       description:
         'Find files whose paths match a glob pattern. Returns matching file paths — never directories — including hidden and ignored files (VCS metadata directories are excluded). This tool does not enumerate directory entries.',
+      // **完整 JSON Schema，不是出厂 `defineTool` 的简写。** 出厂
+      // `dsh-tool-fs-search` 写的是 `{ pattern: { type, required, description } }`
+      // ——那是 `defineTool()` 的入参形式，由它转换成 schema。我们直接调
+      // `ctx.tools.register()`，拿到的就是最终 schema，必须自己写成 object 节点。
+      //
+      // 抄错的后果**单测抓不到**：注册照样成功、名字照样出现在注册表里，
+      // 只有真开一轮时模型提供方才会拒 "Invalid schema for function 'glob'"，
+      // 而那时整个 Run 失败。2026-08-31 compose 端到端第一次开 Run 就撞上了。
       parameters: {
-        pattern: {
-          type: 'string',
-          required: true,
-          description:
-            'Glob pattern to match file paths against (e.g. "**/*.ts", "src/**/*.test.js"). A pattern with no "/" matches the basename at any depth, so "*" and "*.ts" both search the whole tree; include a separator to anchor the depth.',
-        },
-        path: {
-          type: 'string',
-          description:
-            'Directory to search in. Defaults to the session workspace; a relative path resolves against it.',
+        type: 'object',
+        // 必填项是**顶层的 `required` 数组**，不是属性上的 `required: true`。
+        // 后者是出厂 `defineTool()` 的入参写法，由它转换；我们直接
+        // `ctx.tools.register()`，写进去的就是最终 schema。
+        // 照抄的是出厂 `read` 注册后的真实形状（`tools.schemas()` dump 出来的），
+        // 不是照文档猜的。
+        required: ['pattern'],
+        properties: {
+          pattern: {
+            type: 'string',
+            description:
+              'Glob pattern to match file paths against (e.g. "**/*.ts", "src/**/*.test.js"). A pattern with no "/" matches the basename at any depth, so "*" and "*.ts" both search the whole tree; include a separator to anchor the depth.',
+          },
+          path: {
+            type: 'string',
+            description:
+              'Directory to search in. Defaults to the session workspace; a relative path resolves against it.',
+          },
         },
       },
       output: {
@@ -128,16 +144,23 @@ export function* apply(ctx: Context & Record<string, any>, config: Partial<ExecR
       description:
         'Search file contents with a ripgrep regular expression. Returns matching lines with line numbers, grouped by file. Use read on a matched file for surrounding context.',
       parameters: {
-        pattern: { type: 'string', required: true, description: 'Regular expression to search for (ripgrep syntax).' },
-        path: {
-          type: 'string',
-          description:
-            'File or directory to search. Defaults to the session workspace; a relative path resolves against it.',
-        },
-        include: {
-          type: 'string',
-          description:
-            'One glob filter for which files to search (e.g. "*.ts", "*.{js,jsx}"). Not a list; negation is not supported.',
+        type: 'object',
+        required: ['pattern'],
+        properties: {
+          pattern: {
+            type: 'string',
+            description: 'Regular expression to search for (ripgrep syntax).',
+          },
+          path: {
+            type: 'string',
+            description:
+              'File or directory to search. Defaults to the session workspace; a relative path resolves against it.',
+          },
+          include: {
+            type: 'string',
+            description:
+              'One glob filter for which files to search (e.g. "*.ts", "*.{js,jsx}"). Not a list; negation is not supported.',
+          },
         },
       },
       output: {

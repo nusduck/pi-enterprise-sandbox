@@ -58,6 +58,27 @@ export interface InstallPolicyOptions {
   readonly guards?: readonly GuardListener[];
   /** 账本落库。不给则丢弃——账本是可选的**外部**副作用，不是策略本身。 */
   readonly ledger?: (entry: LedgerEntry) => void;
+  /**
+   * 工具执行的 durable 记录（ADR 0009 D11 / 计划 H9.6）。
+   *
+   * 与 `ledger` 的区别：`ledger` 是**事后**的一条脱敏摘要；这两个回调对应
+   * `tool_executions` 表的两端，`tool.execution.started` / `.succeeded|failed`
+   * 事件也从这里出。
+   *
+   * 2026-08-31 之前它只经 `extensionBundleFactory` 到达运行时——与审批、
+   * 子 Agent、风险表同一族的断链。症状是 compose 里 Run 跑成功、文件真的落盘，
+   * 而 `tool_executions` 一行都没有。
+   */
+  readonly toolLedger?: {
+    started(input: { toolCallId: string; toolName: string; args?: unknown }): Promise<unknown>;
+    ended(input: {
+      toolCallId: string;
+      toolName: string;
+      isError: boolean;
+      result?: unknown;
+      args?: unknown;
+    }): Promise<unknown>;
+  };
   /** 结果脱敏要抹掉的物理根。 */
   readonly physicalRoots?: readonly string[];
   readonly env?: NodeJS.ProcessEnv;
@@ -185,14 +206,44 @@ export function installEnterprisePolicy(ctx: Context, options: InstallPolicyOpti
     }),
   );
 
-  // 3) tools/execute（环绕）—— 每 Run 工具数 / 轮次 / deadline。
+  // 3) tools/execute（环绕）—— 每 Run 工具数 / 轮次 / deadline + durable 账本两端。
   //    `wrapExecute` 在调用工具体**之前**计数并判定，超预算直接 reject；
   //    放在之后就只是事后统计，拦不住第 201 次调用。
   disposers.push(
     anyCtx.on('tools/execute', (async (
-      _exec: ToolExecutionLike,
+      exec: ToolExecutionLike,
       next: () => Promise<unknown>,
-    ): Promise<unknown> => await wrapExecute(budget, next)) as never),
+    ): Promise<unknown> => {
+      const ledger = options.toolLedger;
+      if (ledger === undefined) return await wrapExecute(budget, next);
+
+      const toolCallId = callIdOf(exec);
+      const toolName = toolNameOf(exec);
+      const args = argsOf(exec);
+      // 记账失败**不得**打死一次合法的工具调用：账本是外部副作用。
+      // 但**必须留下痕迹**——静默吞掉的后果是 `tool_executions` 里留下永远
+      // RUNNING 的行，而没有任何人知道为什么（2026-08-31 compose 端到端撞到过）。
+      const note = (phase: string, err: unknown): void => {
+        console.error(
+          `[tool-ledger] ${phase} failed for ${toolName} (${toolCallId}): ` +
+            `${err instanceof Error ? err.message : String(err)}`,
+        );
+      };
+      await ledger.started({ toolCallId, toolName, args }).catch((e) => note('started', e));
+      try {
+        const result = await wrapExecute(budget, next);
+        const isError = (result as { isError?: boolean } | null)?.isError === true;
+        await ledger
+          .ended({ toolCallId, toolName, isError, result, args })
+          .catch((e) => note('ended', e));
+        return result;
+      } catch (err) {
+        await ledger
+          .ended({ toolCallId, toolName, isError: true, result: { error: String(err) }, args })
+          .catch((e) => note('ended(after throw)', e));
+        throw err;
+      }
+    }) as never),
   );
 
   // 4) tools/post-execute —— 脱敏 + 账本。

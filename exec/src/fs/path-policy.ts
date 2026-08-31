@@ -20,9 +20,24 @@ export const AGENT_WORKSPACE_PATH = '/home/sandbox/workspace';
 
 /** 面向模型/客户端的逻辑持久 temp 根（ADR 0004）。 */
 export const AGENT_TEMP_PATH = '/tmp';
+/**
+ * skill 草稿根的逻辑路径（ADR 0009 D7 / 计划 H6.2）。
+ *
+ * 与 `isolation/profile.ts` 的 `AGENT_DRAFT_SKILL_PATH` 必须一致——一个是围栏
+ * 认的逻辑前缀，一个是 bwrap 的挂载目标，对不上的话症状是「挂载对了但写不进去」。
+ */
+export const AGENT_DRAFT_SKILL_PATH = '/home/sandbox/skill-draft';
 
 /** 一条逻辑路径落在哪个物理根里。 */
-export type SandboxPathScope = 'workspace' | 'temp';
+/**
+ * 逻辑路径的归属根。
+ *
+ * `skill-draft` 是 2026-08-31（ADR 0009 D7 / 计划 H6.2）加的第三个——它与前两个
+ * 的区别不在「能不能写」（那由 `writableRoots()` 决定），而在**它不进模型上下文**：
+ * 系统根与已启用根会进发现与 prompt，草稿根不进。可写与可见被这三个根彻底分开，
+ * 正是「模型能自由造包」与「闸门只剩人按的那一下」能同时成立的原因。
+ */
+export type SandboxPathScope = 'workspace' | 'temp' | 'skill-draft';
 
 /** 解析后的逻辑路径：作用域 + 根内相对路径（POSIX 分隔符，`.` 代表根自身）。 */
 export interface ParsedSandboxPath {
@@ -102,6 +117,14 @@ export function parseSandboxPath(userPath: string, cwd?: ParsedSandboxPath): Par
     rejectTraversal(segments, raw);
     return { scope: 'temp', relative: segments.length ? segments.join('/') : '.' };
   }
+  if (raw === AGENT_DRAFT_SKILL_PATH) {
+    return { scope: 'skill-draft', relative: '.' };
+  }
+  if (raw.startsWith(`${AGENT_DRAFT_SKILL_PATH}/`)) {
+    const segments = splitSegments(raw.slice(AGENT_DRAFT_SKILL_PATH.length + 1));
+    rejectTraversal(segments, raw);
+    return { scope: 'skill-draft', relative: segments.length ? segments.join('/') : '.' };
+  }
   if (raw.startsWith('/')) {
     throw denied(`path escape detected: absolute path outside sandbox roots: ${raw}`);
   }
@@ -123,6 +146,11 @@ export function parseSandboxPath(userPath: string, cwd?: ParsedSandboxPath): Par
 export function toDisplayPath(parsed: ParsedSandboxPath): string {
   if (parsed.scope === 'temp') {
     return parsed.relative === '.' ? AGENT_TEMP_PATH : `${AGENT_TEMP_PATH}/${parsed.relative}`;
+  }
+  if (parsed.scope === 'skill-draft') {
+    return parsed.relative === '.'
+      ? AGENT_DRAFT_SKILL_PATH
+      : `${AGENT_DRAFT_SKILL_PATH}/${parsed.relative}`;
   }
   return parsed.relative;
 }

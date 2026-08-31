@@ -27,6 +27,8 @@ import type { WorkspaceContext } from '../types.js';
 export interface InternalRouterDeps {
   readonly workspaceManager: WorkspaceManager;
   readonly systemSkillRoot: string;
+  /** 该用户的 skill 草稿根（ADR 0009 D7 / 计划 H6.2）。 */
+  readonly draftSkillRootFor?: (orgId: string, userId: string) => string | null;
   readonly enabledSkillPackagesFor: (orgId: string, userId: string) => readonly { name: string; sourcePath: string }[];
   readonly cordisContext: unknown;
   readonly bwrapExecutable: string;
@@ -88,12 +90,14 @@ export function createInternalRouter(deps: InternalRouterDeps): Hono {
     workspaceManager: deps.workspaceManager,
     systemSkillRoot: deps.systemSkillRoot,
     enabledSkillPackagesFor: deps.enabledSkillPackagesFor,
+    ...(deps.draftSkillRootFor ? { draftSkillRootFor: deps.draftSkillRootFor } : {}),
     cordisContext: deps.cordisContext,
   });
   registerInternalShellRoutes(app, {
     workspaceManager: deps.workspaceManager,
     systemSkillRoot: deps.systemSkillRoot,
     enabledSkillPackagesFor: deps.enabledSkillPackagesFor,
+    ...(deps.draftSkillRootFor ? { draftSkillRootFor: deps.draftSkillRootFor } : {}),
     bwrapExecutable: deps.bwrapExecutable,
     modeFor: deps.modeFor,
   });

@@ -67,7 +67,8 @@
     "todo_write": "low",
     "skill": "low",
     "subagent": "low",
-    "ask_user_question": "low"
+    "ask_user_question": "low",
+    "submit_artifact": "low"
   },
   "mcpServers": {}
 }

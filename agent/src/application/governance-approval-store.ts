@@ -50,6 +50,7 @@ export interface GovernanceApprovalStoreDeps {
   readonly findResolvedByDigest?: (
     toolName: string,
     sourceDigest: string,
+    args?: Record<string, unknown>,
   ) => Promise<PendingApproval | null>;
   readonly consume?: (approvalId: string) => Promise<void>;
 }
@@ -97,9 +98,10 @@ export class GovernanceApprovalStore implements ApprovalStore {
   async findResolvedByDigest(
     toolName: string,
     sourceDigest: string,
+    args?: Record<string, unknown>,
   ): Promise<PendingApproval | null> {
     if (this.deps.findResolvedByDigest === undefined) return null;
-    return this.deps.findResolvedByDigest(toolName, sourceDigest);
+    return this.deps.findResolvedByDigest(toolName, sourceDigest, args);
   }
 
   async consume(id: string): Promise<void> {
