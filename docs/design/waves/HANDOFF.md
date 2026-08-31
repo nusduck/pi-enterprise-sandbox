@@ -113,6 +113,11 @@ Wave 7 已按语义补齐。规矩仍在 [README.md](README.md) 里，请继续�
 
 ## 剩下什么
 
+循环与 `application/` 的下一步以
+[ADR 0009](../../adr/0009-dsh-host-tools-and-application-steward.md) 为准：
+出厂 tool 挂 host（不要为「挂上」去加 preset）；问人用 `dsh-user-approval`；
+application 做停泊/SSE/租户，不再 registerTool。
+
 ### 1. 真实链路（Mac 上用 Docker 就能做）
 
 - **`docker compose up` 在 Mac 上可以起执行面。** 容器里是 Linux；compose 已挂

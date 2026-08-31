@@ -80,11 +80,16 @@ prompt section，以及 `fs-observation-policy` 那套 read-before-edit 与版�
 | `tools/execute`（环绕包装） | 每 Run 工具数、轮次、deadline |
 | `tools/post-execute` | 脱敏、账本、上下文附加 |
 
-**不组合 `dsh-user-approval`、`dsh-permission-presets`、`dsh-sandbox-policy`。**
-[ADR 0002](0002-dsh-harness-evaluation.md) 判定的最硬阻塞——审批不携带工具参数——
-属于 `ctx.approval` 这一个接缝，不属于工具管线。`tools/pre-execute` 能读参数
-（其已知限制原文是不能 *rewrite*，我们也不需要改写）。
-**[ADR 0006](0006-user-skill-enablement-gate.md) 因此一行不改。**
+**不组合 `dsh-permission-presets`、`dsh-sandbox-policy`。**
+~~不组合 `dsh-user-approval`~~ — **已由 [ADR 0009](0009-dsh-host-tools-and-application-steward.md) D5
+改写**：问人走原生审批（可以不带工具参数）；`source_digest` / 租户 / fence 仍走
+本表的 `tools/pre-execute` 与 `ctx.tools.guard()`，不靠审批 UI 绑定字节。
+`dsh-permission-presets` 与本机 `dsh-sandbox-policy` 仍不组合（隔离权威是 exec /
+Bubblewrap）。
+[ADR 0002](0002-dsh-harness-evaluation.md) 判定的「审批不携带工具参数」不再视为
+阻断组合的理由。`tools/pre-execute` 能读参数（其已知限制原文是不能 *rewrite*，
+我们也不需要改写）。
+**[ADR 0006](0006-user-skill-enablement-gate.md) 的 P1 仍未实施**；0009 也不提前做启用闸门。
 
 ### D5：会话持久化（吸收 [ADR 0005](0005-pi-session-jsonl-persistence.md)）
 

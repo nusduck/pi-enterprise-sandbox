@@ -187,3 +187,9 @@ Each entry should say **what changed**, **why**, and **which STATUS IDs** it aff
 - **Why:** 下一轮按过期交接开工会去跑已经不存在的 `agent/runtime/tsconfig.json`，也会把 Wave 7 已经补上的搜索/产物/数据集重新当缺口。
 - **STATUS IDs:** C8 / E2 / E3 `open` → `partial`（不标 `done`）；A1 取证对象改为 `agent/src/runtime/`；A3 备注更正。其余行未翻转。
 - **Not done:** Linux Bubblewrap 真机、LLM 网关链路、CI 纳入 exec/contract、`strict`、`pi-` 文件名。
+
+## 2026-08-31 — ADR 0009：host 出厂工具 + application 管家
+
+- **Action:** 新增 `docs/adr/0009-dsh-host-tools-and-application-steward.md`。锁定：不采用 `dsh-web-app`；组合为 dsh-base + overlay；出厂 tool 挂 host 不用 preset；旧 Extension 的模型面用 dsh-base；组合 `dsh-user-approval`（改写 0007 D4）；memory 与模型侧 `skill_install` 本阶段不做；application 改为听 DSH、停泊 Run、对 BFF 负责。
+- **Why:** 0007 换了引擎但删 Extension 后没把 base 里的 tool 按 bundle 方式留在循环上；讨论中曾把官方 web 的 preset 误当成加插件的通则。
+- **STATUS IDs:** 无行翻转（决策尚未实施）。A2 取证对象将在实施时按 0009 改写。
