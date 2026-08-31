@@ -109,6 +109,7 @@ import {
   prepareInteractionResume,
 } from './pi-run-resume.js';
 import { GovernanceApprovalStore } from './governance-approval-store.js';
+import { buildRunServices } from './durable-subagent-port.js';
 
 /** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
 type Loose = any;
@@ -137,6 +138,8 @@ export class PiRunExecutor {
   sessionLockRenewIntervalMs: Loose;
   skillRootsForRun: Loose;
   extensionBundleFactory: Loose;
+  /** 子 Agent 的 durable 面（ADR 0009 D6 / 计划 H5）。 */
+  subagentSpawnPort: Loose;
   eventProjectionMode: Loose;
   steerPollIntervalMs: Loose;
   toolBudget: Loose;
@@ -239,6 +242,7 @@ export class PiRunExecutor {
     this.skillRootsForRun =
       typeof deps.skillRootsForRun === 'function' ? deps.skillRootsForRun : null;
     this.extensionBundleFactory = deps.extensionBundleFactory ?? null;
+    this.subagentSpawnPort = deps.subagentSpawnPort ?? null;
     /**
      * When 'observability', session.subscribe projector is disabled (Extension owns
      * message/tool/compaction/model events). Default 'session-subscribe' keeps PR-05
@@ -719,6 +723,19 @@ export class PiRunExecutor {
         // 对的，但不落库、不发事件、不停泊 Run、不释放 Worker——审批链条从
         // 判定之后就断了。2026-08-31 之前 recorder 只经 extensionBundleFactory
         // 到达运行时，而那批 Pi Extension 已经删了。
+        // 本 Run 的应用层服务，经 ALS 交给注册在进程级的 provider（计划 H5）。
+        // provider 是 boot 时注册一次的单例，而队列绑着这个 Run 的事务与租户
+        // scope，所以只能在调用时按 Run 取——与 ctx.fs/shell/jobs 走 exec-rpc
+        // ALS 是同一条纪律（ADR 0009 D3）。
+        ...(this.subagentSpawnPort
+          ? {
+              runServices: buildRunServices({
+                spawnPort: this.subagentSpawnPort,
+                parentRunId: runId,
+                tenant: { orgId: eventContext.orgId, userId: eventContext.userId },
+              }),
+            }
+          : {}),
         approvalStore: new GovernanceApprovalStore({
           recorder: this._governanceRecorder as never,
           onDurableApprovalPending: (pending) => {

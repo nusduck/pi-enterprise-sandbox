@@ -17,6 +17,9 @@ export {
   decodeStorageRecord,
 } from './providers/mysql-session-store.js';
 export { createDurableSubagentProvider, buildDurableJobSpec } from './providers/durable-subagent.js';
+export type { DurableSubagentQueue, DurableSubagentStore, DurableSubagentJobSpec } from './providers/durable-subagent.js';
+export { runWithRunServices, currentRunServices } from './providers/run-services.js';
+export type { RunServices } from './providers/run-services.js';
 export { createEnabledSkillsProvider, isSkillVisible } from './providers/enabled-skills.js';
 export { MemoryService } from './providers/memory.js';
 export { evaluatePreExecute, InMemoryApprovalStore } from './policy/pre-execute.js';

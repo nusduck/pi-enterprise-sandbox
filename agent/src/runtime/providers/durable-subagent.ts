@@ -14,6 +14,7 @@
  */
 
 import type { SubagentProvider, SubagentStartRequest, SubagentRun, ResolvedSubagentStartRequest, SubagentResult, SubagentCapabilities } from '@deepseek-ai/dsh-subagent';
+import { currentRunServices } from './run-services.js';
 
 // ── 租户与请求规整 ─────────────────────────────────────────────
 
@@ -105,6 +106,11 @@ export class InMemoryDurableSubagentStore implements DurableSubagentStore {
 /** 创建可跨 Worker 重启的 durable provider。 */
 export function createDurableSubagentProvider(opts: {
   name?: string;
+  /**
+   * 兜底队列/存储。**生产路径不该走到它**：真正的 durable 面按 Run 从
+   * `currentRunServices()` 取（计划 H5）。这里留一份进程内实现只为让单测和
+   * 「还没接上 durable 面」的启动阶段不至于起不来。
+   */
   queue: DurableSubagentQueue;
   store: DurableSubagentStore;
   tenantOf: (parent: unknown) => DurableSubagentTenant;
@@ -126,6 +132,14 @@ export function createDurableSubagentProvider(opts: {
     inheritsParentContext: false,
 
     async start(request: ResolvedSubagentStartRequest): Promise<SubagentRun> {
+      // provider 是 boot 时注册的**进程级单例**，而队列与结果存储是按 Run 的
+      // （绑着这个 Run 的事务、租户 scope 与 BullMQ 连接）。所以在**调用时**
+      // 从 ALS 取本 Run 的那一份，与 `ctx.fs/shell/jobs` 走 exec-rpc ALS 是同一条
+      // 纪律（ADR 0009 D3）。取不到就退回构造时的进程内实现——单测走这条。
+      const services = currentRunServices()?.subagents;
+      const queue = services?.queue ?? opts.queue;
+      const store = services?.store ?? opts.store;
+
       // 1) 决定：纯函数规整为可序列化规格（不触队列）
       const tenant = opts.tenantOf(request.parent);
       const spec = buildDurableJobSpec(request, tenant, {
@@ -135,7 +149,7 @@ export function createDurableSubagentProvider(opts: {
 
       // 2) 执行：入队（I/O）——失败则清理并 reject，满足“发布前提供方拥有清理”契约
       try {
-        await opts.queue.add(spec);
+        await queue.add(spec);
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         throw new Error(`durable enqueue failed: ${msg}`);
@@ -151,7 +165,7 @@ export function createDurableSubagentProvider(opts: {
       const result: Promise<SubagentResult> = (async () => {
         while (!disposed) {
           if (request.signal.aborted) return aborted;
-          const found = await opts.store.getResult(spec.jobId);
+          const found = await store.getResult(spec.jobId);
           if (found) return found;
           await new Promise<void>((resolve) => {
             wake = resolve;

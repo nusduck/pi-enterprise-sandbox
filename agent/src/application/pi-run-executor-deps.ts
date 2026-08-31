@@ -52,6 +52,11 @@ export interface PiRunExecutorDeps {
   recoveryService?: SessionRecoveryService;
   sessionLockRenewIntervalMs?: number;
   skillRootsForRun?: (identity: Record<string, any>) => string[];
+  /** 子 Agent 的 durable 面（ADR 0009 D6 / 计划 H5）。 */
+  subagentSpawnPort?: {
+    spawn: (input: Record<string, unknown>) => Promise<unknown>;
+    getStatuses: (input: Record<string, unknown>) => Promise<Array<Record<string, unknown>>>;
+  };
   extensionBundleFactory?: (
     runContext: Record<string, any>,
     deps: Record<string, any>,

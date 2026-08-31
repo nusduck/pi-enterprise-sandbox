@@ -465,8 +465,12 @@ SSE 契约、审批中心与提问应答的 URL 不动。
       租户上下文只经 `runWithExecRpc` 的 ALS 传递（`exec-rpc.ts:65` 的 `currentExecRpc`
       本来就是 ALS 优先、构造值兜底）。判据：H3.0 转绿。
 - [x] **H3.2** 用例：断言生产装配路径上**搜不到**对共享 provider 的 `rebind` 调用。
-- [ ] **H3.3** H4 改完 `runtime-factory.ts:286-289` 后**重跑 H3.0/H3.2**。
-      判据：去掉阻塞的 `whenIdle` 之后仍绿——这是 ADR D3 点名要的那条断言。
+- [x] **H3.3** ✅ **前提没有发生，风险自然消解**。ADR D3 担心的是「D5 去掉阻塞的
+      `whenIdle` 之后，工具执行会跑到 ALS 作用域外」。H4 落地的形状**没有去掉
+      `whenIdle`**：停泊靠 `agent.cancel()`，它让 `whenIdle()` 立刻返回，
+      整轮仍然完整地包在 `runWithExecRpc` 里（`runtime-factory.ts:286-289` 未动）。
+      所以「park 发生在 turn 结束时，不是 turn 中途放开」这条约束是**按构造满足**的，
+      不是靠额外断言守住的。H3.0/H3.2 在 H4 之后重跑仍绿（1150/1150）。
 
 ### H4 审批 answerer + 重放式续跑（**形状已按 H0.3 实测改写**）
 
@@ -535,11 +539,30 @@ SSE 契约、审批中心与提问应答的 URL 不动。
 - [x] **H4.9** 用例：人点同意后、落地前把 args 改掉 → 指纹对不上 → 那条批准查不到 →
       **重新走审批**（不是静默放行）。
 
-### H5 durable `ctx.subagents`
+### H5 durable `ctx.subagents` ✅ **完成 2026-08-31**
 
-- [ ] **H5.1** `durable-subagent.js` provider 接到 `SubagentSpawnService`（MySQL + 队列）。
-- [ ] **H5.2** 内存队列从生产装配里去掉。判据：装配路径上搜不到它。
-- [ ] **H5.3** 用例：子 Agent 作业**跨 Worker 可恢复**（起一个、杀掉进程、另一个进程结算）。
+> **又一条断掉的链**（与 H4.3 同形）：`SubagentSpawnService` 挂在
+> `container-run-executor.ts` 的 `subagentSpawnPort` 上，而那个 port **只喂给
+> `extensionBundleFactory`**——终止在一个被 `runtime-factory.create()` 忽略的参数上。
+> 与此同时 provider 用的是 `InMemoryDurableSubagentQueue`，Worker 一重启子 Run 全丢
+> ——正是那个 provider 文件头说要避免的事。
+>
+> **接法**：新增 `runtime/providers/run-services.ts`（第二个 ALS，与 `exec-rpc.ts`
+> 同一机制）。provider 是 boot 时注册一次的进程级单例，而队列绑着这个 Run 的事务与
+> 租户 scope，只能在**调用时**按 Run 取。`prompt()` 现在同时进两层 ALS。
+> 这也解释了 ADR D3 为什么把「ALS 罩住所有工具执行」写成硬约束——不止 fs/shell/jobs 靠它。
+>
+> 新增 `application/durable-subagent-port.ts` 把 `SubagentSpawnService` 适配成
+> 队列/存储：`add()` → 一次 durable `spawn()`（jobId 当幂等键），
+> `getResult()` → 查子 Run 终态。`putResult()` 故意留空：durable 形态下结果由子 Run
+> 自己的 executor 写，父进程写反而会和子 Run 的终态打架。
+
+- [x] **H5.1** `durable-subagent.js` provider 接到 `SubagentSpawnService`（MySQL + 队列）。
+- [x] **H5.2** 内存队列从生产装配里去掉。判据：装配路径上搜不到它。
+- [x] **H5.3** 用例：`tests/runtime/durable-subagent-port.test.ts` 3 条
+      （走 durable spawn 而非进程内队列 / 结果按子 Run 终态兑现 / ALS 外才回退）。
+      **真正的跨进程恢复留到 H9 的 compose 端到端**——单测证明的是接线与语义，
+      「杀掉进程另一个结算」要真 MySQL + 真 BullMQ。
 
 ### H6 Skill 草稿根 + 启用闸门（只依赖 H1，可与 H2 并行）
 

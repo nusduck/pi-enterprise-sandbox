@@ -278,6 +278,12 @@ export async function buildPiRunExecutorFactory(
       (Number(container.env.AGENT_STEER_POLL_INTERVAL_MS) || undefined),
     toolBudget: resolvePiRunToolBudget(container.env),
     riskOverrides: toolRiskPolicy,
+    // 子 Agent 的 durable 面（ADR 0009 D6 / 计划 H5）。2026-08-31 之前它只挂在
+    // `subagentSpawnPort` 上，而那个 port 只喂给 `extensionBundleFactory`
+    // ——一条终止在被忽略的参数上的死链（见本文件上方注释）。与此同时
+    // `durable-subagent.ts` 的 provider 用的是进程内队列：Worker 一重启子 Run 全丢，
+    // 正是那个 provider 文件头说要避免的事。
+    subagentSpawnPort: opts.subagentSpawnPort ?? createSubagentSpawnPort(container),
     // 生产不再构造 extension bundle（见上方注释）。保留这个形参只为测试注入：
     // 若哪天又有人在生产接上非空 bundle，`runtime-factory.create()` 仍然忽略它，
     // 所以真要恢复扩展机制得先在那边接收。

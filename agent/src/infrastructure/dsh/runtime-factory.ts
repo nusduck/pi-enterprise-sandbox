@@ -14,6 +14,7 @@ import {
   createSessionBackend,
   assembleSystemPrompt,
   runWithExecRpc,
+  runWithRunServices,
   installEnterprisePolicy,
   InMemoryApprovalStore,
 } from '../../runtime/index.js';
@@ -139,6 +140,7 @@ export function createDshRuntimeFactory(opts: Record<string, any> = {}) {
     assembleSystemPrompt,
     bootEnterpriseRuntime,
     runWithExecRpc,
+    runWithRunServices,
   }));
   const bootRuntime = opts.bootRuntime;
   const createAgent = opts.createAgent;
@@ -294,7 +296,12 @@ export function createDshRuntimeFactory(opts: Record<string, any> = {}) {
         promptText,
         async prompt(text, options) {
           const run = runtime.runWithExecRpc ?? ((_, fn) => fn());
-          return run(rpc, async () => {
+          // 两层 ALS 都必须罩住整轮（ADR 0009 D3 的硬约束）：
+          //   exec-rpc  —— ctx.fs/shell/jobs 的租户与脱敏根
+          //   run-services —— 子 Agent 的 durable 队列/结果存储（计划 H5）
+          // 它们服务的都是「注册在进程级、却必须按 Run 干活」的插件。
+          const withServices = runtime.runWithRunServices ?? ((_: unknown, fn: () => unknown) => fn());
+          return run(rpc, async () => withServices(input.runServices ?? {}, async () => {
             agent.followup(toUserMessage(text, options));
             if (typeof agent.whenIdle === 'function') await agent.whenIdle();
             const log = agent.session?.events;
@@ -316,7 +323,7 @@ export function createDshRuntimeFactory(opts: Record<string, any> = {}) {
               );
             }
             return { entries: [...entries] };
-          });
+          }));
         },
         subscribe(fn) {
           subs.push(fn);
