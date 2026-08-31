@@ -24,7 +24,7 @@ A green unit-test suite alone does **not** complete a row.
 > 2026-08-29 当时的**功能性回归**（搜索 / 产物 / 数据集是占位实现）已在 Wave 7
 > 按语义补齐，见 [`design/waves/gap-audit.md`](design/waves/gap-audit.md) 的
 > 「已补」栏与 `exec/test/semantic-gaps.test.ts`。实现补上不等于验收完成：
-> C8 / E2 / E3 现为 `partial`，等 Linux 宿主 + 网关下的重新取证。
+> C8 / E2 / E3 现为 `partial`，等 compose 里真实 bwrap + 现有 LLMIO 网关下的重新取证。
 >
 > 2026-08-30 做过逐行重审（见文末）。**在重新取证完成前，不要引用旧的 `done`
 > 作为「已达成」**；以本板当前行状态为准。
@@ -75,7 +75,7 @@ Change this file in the **same commit** as the implementation or evidence that j
 | C3 | No global mutable workspace symlink | `done` | lease/symlink model removed in refactor |
 | C4 | Concurrent session isolation | `unknown` | **证据针对已删除的 Python 执行面**。exec 侧有离线用例（`exec/test/isolation-*.test.ts`），live gate 未重跑 |
 | C5 | Ordinary commands no approval | `done` | policy defaults; enterprise tools only |
-| C6 | Python multi-line auto-materialize | `partial` | 逻辑已移植（`exec/src/shell/python-materialize.ts`，含单测）。镜像里的 `python3` 与运行库在 2026-08-30 前是缺失的，现已修复并有 plan 断言；**bwrap 内真实执行待 Linux 宿主验证** |
+| C6 | Python multi-line auto-materialize | `partial` | 逻辑已移植（`exec/src/shell/python-materialize.ts`，含单测）。镜像里的 `python3` 与运行库在 2026-08-30 前是缺失的，现已修复并有 plan 断言；**compose 内真实 bwrap 待跑**（Mac Docker 可以，见下） |
 | C7 | Long tasks via Process Handle | `unknown` | **证据已删除**：`tests/test_formal_process_handle.py` 随 Python 面移除。TS 侧有 `exec/test/shell-job-registry.test.ts`，但 orphan/identity/bwrap 的等价用例与 live gate 未重建 |
 | C8 | Dataset streams into Workspace | `partial` | Wave 7 已改成三段式流式（`beginUpload` → `writeChunk` → `finishUpload`），控制面暂存后再发布到工作区。离线语义用例在 `exec/test/semantic-gaps.test.ts`。**5GiB live 未重跑**，不能标 `done` |
 
@@ -176,13 +176,16 @@ Non-blocking debt remains in [`review-deferred-items.md`](./review-deferred-item
 | H2, H3, H4 | `partial` | 安全性质已随 `exec/` 移植并有离线用例；live gate 未重跑 |
 | B, D, F1/F3–F6, G1/G3–G6, H1 | 维持 | agent/BFF/frontend 侧代码未被重建影响，或证据仍成立 |
 
-**重新取证需要的两件事**，都不在本机可做：
+**重新取证需要的两件事**，都在本机 Docker + 现有 LLMIO 上可做：
 
-1. **Linux 宿主** —— macOS 的 Docker Desktop 不允许容器内创建非特权 user
-   namespace，`bwrap` 直接失败。所有涉及真实隔离执行的行（C4/C6/C7/G7/H2/H3/H4）
-   都卡在这里。
-2. **可用的 LLM 网关** —— A 组与 G2 需要真实 Run。生产网关冒烟本身也仍是
-   [ADR 0007 D6](adr/0007-agent-runtime-rebuild-on-dsh.md) 的上线准入项。
+1. **compose 里的真实 bwrap** —— Mac 的 Docker Desktop 里是 Linux VM，和 main
+   上起 sandbox 是同一条路。`No permissions to create new namespace` 不是
+   「Docker Desktop 不支持」：compose 必须带
+   `seccomp=./exec/seccomp-bubblewrap.json`，进容器验 bwrap 必须
+   `--user 10001:10001`（root + `cap_drop: ALL` 会失败）。涉及隔离执行的行
+   （C4/C6/C7/G7/H2/H3/H4）卡的是「还没在这条分支上重跑」，不是宿主机。
+2. **现有 LLMIO 网关** —— A 组与 G2 需要真实 Run，用 `LLMIO_BASE_URL` /
+   `LLMIO_API_KEY`。不要另开一套生产网关冒烟当阻塞项。
 
 已经完成的：MCP 全链路在 compose 上端到端验证（工具列表、文件往返、连续产物
 提交、签名下载的字节与 sha256 一致、篡改 token 404）。

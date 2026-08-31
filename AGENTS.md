@@ -107,10 +107,15 @@ docker compose build agent api-server sandbox sandbox-mcp && docker compose up -
 
 - 宿主机存在 `~/.pi/agent/mcp.json` 时，`agent/tests/pi/mcp-seam.unit.test.js` 的 6 个用例
   必失败（企业运行时禁止 ambient MCP 配置）。移开该文件即可确认。
-- `scripts/smoke-cross-service.mjs` 依赖 bubblewrap，**只能在 Linux/CI 跑**，macOS 上必失败。
-- 同理，macOS 的 Docker Desktop 不允许在容器里创建非特权 user namespace，
-  容器内 `bwrap` 会报 `No permissions to create new namespace`。执行链路的其余部分
-  （facade → 窄桥 → exec → 调起 bwrap）在 macOS 上可验，真正的隔离执行要 Linux 宿主。
+- `scripts/smoke-cross-service.mjs` 在**宿主机**起进程，不走 Docker。macOS 内核没有
+  bwrap 要的 user namespace，这条脚本在 Mac 上失败是预期的，应在 Linux/CI 跑。
+- **`docker compose up` 在 Mac 上可以起执行面**，和 main 上的 sandbox 一样：容器里是
+  Linux VM，seccomp 放行了 `clone`/`unshare`/`mount`（`exec/seccomp-bubblewrap.json`），
+  服务以 uid 10001 跑。曾经把 `bwrap: No permissions to create new namespace` 当成
+  「Docker Desktop 不支持」——那是误诊。常见真因有两个：compose 丢掉了那条
+  `seccomp=`（Python 面删除时掉过一次，已补回）；或 `docker compose exec` 默认进
+  成 root，`cap_drop: ALL` 下 root 反而建不了 namespace。要进容器验 bwrap 用
+  `--user 10001:10001`。
 - `tests/test_repository_layout.py` 是棘轮：生产文件默认 ≤1000 行，热点文件的预算钉在当前
   行数，只能减不能增。加行就会失败——优先按职责拆分，确需提高预算必须在 commit message
   说明理由。

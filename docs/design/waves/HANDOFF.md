@@ -113,14 +113,18 @@ Wave 7 已按语义补齐。规矩仍在 [README.md](README.md) 里，请继续�
 
 ## 剩下什么
 
-### 1. 真实链路的两半（都不在 macOS 上可做）
+### 1. 真实链路（Mac 上用 Docker 就能做）
 
-- **Bubblewrap 真实执行** —— macOS 的 Docker Desktop 不允许容器内创建非特权
-  user namespace，`bwrap` 直接报 `No permissions to create new namespace`。
-  链路的其余部分（facade → 窄桥 → exec → 调起 bwrap）已在 macOS 上验过。
-  **需要 Linux 宿主。**
+- **`docker compose up` 在 Mac 上可以起执行面。** 容器里是 Linux；compose 已挂
+  `seccomp=./exec/seccomp-bubblewrap.json`，服务 uid 是 10001。
+  `No permissions to create new namespace` 曾经被写成「Docker Desktop 不支持」，
+  实际是误诊：要么 seccomp 行被删掉，要么用 root `docker compose exec` 进了容器
+  （`cap_drop: ALL` 下 root 建不了 namespace）。验 bwrap 用
+  `docker compose exec --user 10001:10001 sandbox …`。
+- **宿主机裸跑** `node exec/dist/main.js` 才是 Linux-only（macOS 内核没有
+  user namespace）。日常开发走 compose，不要裸跑。
 - **Agent 半段** —— 登录 → 建会话 → 带工具 Run → Worker 重启恢复 → logs/signal
-  → 跨租户 404。**需要可用的 LLM 网关配置。**
+  → 跨租户 404。网关用现有 `LLMIO_BASE_URL` / `LLMIO_API_KEY`。
 
 ### 2. 生产网关冒烟（上线准入项）
 
@@ -172,6 +176,7 @@ agent 测试仍以 JS 为主（约 130 个 `.js` vs 14 个 `.ts`）。语言迁�
 | 坑 | 说明 |
 |---|---|
 | **只重建一个镜像** | `sandbox` 与 `sandbox-mcp` 是**同一镜像的两个入口**。只 build 其中一个，另一个还在跑旧代码。2026-08-30 因此追了半天一个「第一次成功、之后全 500」的假象 |
+| **root 进容器跑 bwrap** | `docker compose exec` 默认是 root。`cap_drop: ALL` 下 root 建不了 user namespace，报 `No permissions to create new namespace`，看起来像宿主机不支持。服务是 uid 10001，用 `--user 10001:10001` |
 | **共享 cordis Context** | `WorkspaceFileSystem` 构造时往 Context 注册 `fs` 服务，注册第二次即抛。**只能经 `exec/src/fs/make-workspace-fs.ts` 构造** |
 | **两处各写一份路径** | Python venv 的挂载源与子进程 `PATH` 曾各写一份 `/app/.venv`，换基础镜像后同时失效，而挂载 `required:false` 静默宽恕 → 沙箱里 `python3` 退化成裸解释器且不报错。现收敛为 `AGENT_PYTHON_VENV` |
 | **把 Python 的通配语法搬进 TS SDK** | MCP 的 DNS 重绑定允许列表，Python 支持 `localhost:*`，TS SDK 是精确匹配 → 所有带端口的 Host 全被 403。现自己实现 `matchesAllowList` |

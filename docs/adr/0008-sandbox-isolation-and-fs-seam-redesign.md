@@ -223,8 +223,10 @@ JSON 形状，而搜索、产物、数据集三块是占位实现——形状恰
 
 **第 10 条（真实链路）部分完成**：MCP 全链路已在 compose 上端到端验证（工具列表、
 文件往返、连续产物提交、签名下载的字节与 sha256 一致、篡改 token 404）。
-Bubblewrap 的真实执行需要 Linux 宿主——macOS 的 Docker Desktop 不允许在容器内
-创建非特权 user namespace。**Agent 半段的链路尚未跑**，需要可用的 LLM 网关。
+Bubblewrap 在 Mac 的 Docker 里可以跑（容器是 Linux VM；seccomp 放行 namespace
+syscall；服务 uid 10001）。曾经把 `No permissions to create new namespace`
+写成 Docker Desktop 限制，是误诊——要么丢了 `seccomp=` 行，要么以 root 进容器。
+**Agent 半段的链路尚未跑**，用现有 LLMIO 网关即可。
 
 ### 一个本 ADR 的纪律被违反后又补上的例子
 
