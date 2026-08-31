@@ -500,7 +500,15 @@ SSE 契约、审批中心与提问应答的 URL 不动。
 - [x] **H4.2** 确认 `tools/pre-execute` **一行不改**：仍判 `ask`、仍铸 PENDING 记录
       （`pre-execute.ts:76-84` 的 `argsCanonical` + digest 是审批记录唯一来源）。
       判据：diff 为空。
-- [ ] **H4.3** Executor：pending → 停泊 `WAITING_APPROVAL` → **释放 Worker**。
+- [x] **H4.3** ⚠️ **实施时发现这条链整条断着**：真正落库并把 Run 迁到
+      WAITING_APPROVAL 的是 `FencedToolGovernanceRecorder.requestApproval()`，
+      而它**只经 `extensionBundleFactory` 到达运行时**——那批 Pi Extension 在 DSH
+      重建时已经删了。于是 DSH 的策略挂载点用的是进程内 `InMemoryApprovalStore`：
+      判定对，但**不落库、不发事件、不停泊 Run、不释放 Worker**。
+      新增 `application/governance-approval-store.ts` 把两端接上，按 Run 装配
+      （store 绑着这个 Run 的 fence/runId/scope，做成进程级会把 A 的审批记到 B 的 Run）；
+      `runSuspensionPort` 从 `extensionBundleFactory(...)` 的内联字面量提成局部常量
+      ——现在有两个消费者，且 H8 删掉那个 factory 时不受影响。
 - [x] **H4.4** 续跑改成**按参数指纹认已落库的决定**。实现落在 `tools/pre-execute`
       而不是 answerer 里，理由是审批 seam 的请求**不携带 arguments**（出厂自陈的
       已知限制），拿不到指纹就绑不了字节；而 `pre-execute` 那里 args 齐全
@@ -519,7 +527,8 @@ SSE 契约、审批中心与提问应答的 URL 不动。
       由指纹核对，恢复不出只影响审计写得细不细，抛出去反而会打死一次合法续跑。
       `ask_user` 的续跑（`prepareInteractionResume`）**未动**，仍是 splice 式，
       留给后续——它停泊的是提问不是工具，不走审批那条路。
-- [ ] **H4.6** 确认审批中心 / 提问应答的 HTTP 形状与 URL **不变**。判据：契约用例零改动仍绿。
+- [x] **H4.6** 审批中心 / 提问应答的 HTTP 形状与 URL **未动**：
+      `approval-decision-service.ts` 一行没改，相关契约用例零改动仍绿（1150/1150）。
 - [x] **H4.7** 用例：审批停泊后 Worker **确实被释放**（断言 lease 归还），不是 promise 挂着。
 - [x] **H4.8** 用例：批准后换一个 callId 续跑，同一组参数放行**恰好一次**
       （第三次又回到 require_approval）。跨进程的真实续跑留到 H9 的 compose 端到端。

@@ -108,6 +108,7 @@ import {
   prepareApprovalResume,
   prepareInteractionResume,
 } from './pi-run-resume.js';
+import { GovernanceApprovalStore } from './governance-approval-store.js';
 
 /** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
 type Loose = any;
@@ -490,6 +491,51 @@ export class PiRunExecutor {
       let sandboxSessionIdForCtx = session.sandboxSessionId ?? null;
       let runtimeSession: any = null;
       let pendingApproval: Record<string, any> | null = null;
+
+      /**
+       * 停泊端口——收到 durable 信号才把 Run 停下并让 Worker 归还 lease。
+       *
+       * 2026-08-31（计划 H4.3）从 `extensionBundleFactory(...)` 的内联字面量里
+       * 提出来：现在有**两个**消费者。一个是那批 Pi Extension（H8 会删掉），
+       * 另一个是接 durable 审批面的 `GovernanceApprovalStore`——审批判定发生在
+       * DSH 的策略挂载点上，那条路不经过 extension bundle。
+       */
+      const runSuspensionPort = {
+        onDurableApprovalPending: (pending: Record<string, any>) => {
+          if (
+            !pending ||
+            pending.kind !== 'DURABLE_APPROVAL_PENDING' ||
+            pending.runId !== runId
+          ) {
+            throw new Error('durable approval signal does not match Run');
+          }
+          pendingApproval = Object.freeze({ ...pending });
+          try {
+            runtimeSession?.abort?.();
+          } catch {
+            // Run is already durably parked; prompt teardown is best-effort.
+          }
+        },
+        onDurableInteractionPending: (pending: Record<string, any>) => {
+          const toolCallId = String(pending?.toolCallId ?? '').trim();
+          if (
+            !pending ||
+            pending.kind !== DURABLE_INTERACTION_PENDING ||
+            pending.runId !== runId ||
+            !toolCallId ||
+            pending.status !== INTERACTION_STATUS.PENDING
+          ) {
+            throw new Error('durable interaction signal does not match Run');
+          }
+          this._pendingInteractionToolCallIds.add(toolCallId);
+          pendingInteraction = Object.freeze({ ...pending });
+          try {
+            runtimeSession?.abort?.();
+          } catch {
+            // Run is already durably parked; prompt teardown is best-effort.
+          }
+        },
+      };
       let pendingInteraction: Record<string, any> | null = null;
 
       if (typeof this.extensionBundleFactory === 'function') {
@@ -625,42 +671,7 @@ export class PiRunExecutor {
                 this._pendingInteractionToolCallIds.has(normalized)
               );
             },
-          runSuspensionPort: {
-            onDurableApprovalPending: (pending) => {
-              if (
-                !pending ||
-                pending.kind !== 'DURABLE_APPROVAL_PENDING' ||
-                pending.runId !== runId
-              ) {
-                throw new Error('durable approval signal does not match Run');
-              }
-              pendingApproval = Object.freeze({ ...pending });
-              try {
-                runtimeSession?.abort?.();
-              } catch {
-                // Run is already durably parked; prompt teardown is best-effort.
-              }
-            },
-            onDurableInteractionPending: (pending) => {
-              const toolCallId = String(pending?.toolCallId ?? '').trim();
-              if (
-                !pending ||
-                pending.kind !== DURABLE_INTERACTION_PENDING ||
-                pending.runId !== runId ||
-                !toolCallId ||
-                pending.status !== INTERACTION_STATUS.PENDING
-              ) {
-                throw new Error('durable interaction signal does not match Run');
-              }
-              this._pendingInteractionToolCallIds.add(toolCallId);
-              pendingInteraction = Object.freeze({ ...pending });
-              try {
-                runtimeSession?.abort?.();
-              } catch {
-                // Run is already durably parked; prompt teardown is best-effort.
-              }
-            },
-          },
+          runSuspensionPort,
           // Callers may merge sandboxTransport / policy config in their factory.
         });
         // Observability extension (deleted in Wave 6) used to own this feed.
@@ -703,6 +714,17 @@ export class PiRunExecutor {
         context: eventContext,
         extensionFactories,
         runEventRecorder: this._eventRecorder,
+        // 把 runtime 侧的审批判定接到 durable 面（ADR 0009 D5 / 计划 H4.3）。
+        // 少了这一步，策略挂载点用的是进程内的 InMemoryApprovalStore：判定是
+        // 对的，但不落库、不发事件、不停泊 Run、不释放 Worker——审批链条从
+        // 判定之后就断了。2026-08-31 之前 recorder 只经 extensionBundleFactory
+        // 到达运行时，而那批 Pi Extension 已经删了。
+        approvalStore: new GovernanceApprovalStore({
+          recorder: this._governanceRecorder as never,
+          onDurableApprovalPending: (pending) => {
+            runSuspensionPort.onDurableApprovalPending(pending as never);
+          },
+        }),
         ...(runSkillPaths?.length ? { additionalSkillPaths: runSkillPaths } : {}),
         ...(toolPolicyBinding ? { toolPolicyBinding } : {}),
       });

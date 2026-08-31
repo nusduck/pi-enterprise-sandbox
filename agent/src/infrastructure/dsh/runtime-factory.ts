@@ -234,7 +234,11 @@ export function createDshRuntimeFactory(opts: Record<string, any> = {}) {
           // 2) 四个策略挂载点。审批 store 目前是进程内的；换成 MySQL 只换这一个
           //    实参（`InstallPolicyOptions.approvalStore`）。
           const installed = installEnterprisePolicy(agentCtx, {
-            approvalStore: opts.approvalStore ?? new InMemoryApprovalStore(),
+            // **按 Run 取**：审批 store 绑着这一个 Run 的 fence / runId / scope，
+            // 工厂是进程级单例，把它放在 opts 上会让 A 的审批记到 B 的 Run 上。
+            // 兜底的 InMemoryApprovalStore 只在没接 durable 面时用（单测）。
+            approvalStore:
+              input.approvalStore ?? opts.approvalStore ?? new InMemoryApprovalStore(),
             ...(opts.policyGuards ? { guards: opts.policyGuards } : {}),
             ...(opts.ledger ? { ledger: opts.ledger } : {}),
             // 运维可配的风险覆盖。以前这份配置解析出来后喂给了一个返回 []
