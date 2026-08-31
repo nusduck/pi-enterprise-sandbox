@@ -34,6 +34,8 @@
  * bareModuleBaseUrl 语义）。patch 在 `<out>/runtime/bundle/`，provider 在
  * `<out>/runtime/providers/`，所以是 `../providers/`。
  */
+import { buildMcpPatchEntries, readMcpServersFromEnv } from './mcp-entries.js';
+
 function ownModule(name: string): string {
   return `../providers/${name}.js`;
 }
@@ -216,6 +218,30 @@ const DISABLED: readonly PatchEntry[] = [
   disable('tool-str-replace-editor', '与 read/write/edit 功能重复的第二套编辑工具。\n留着就是「同一件事两处各算一遍」，且要在风险表里维护两份条目。'),
 ];
 
+/**
+ * MCP：每台服务器一条 `dsh-mcp-client` 实例（ADR 0009 D9 / 计划 H7.1）。
+ *
+ * 条目由 `MCP_SERVERS_JSON` 生成，**在 `npm run gen:patch` 时求值**，所以生成的
+ * YAML 是那一刻配置的快照。密钥只以 `process.env.<NAME>` 占位符出现，
+ * 明文永远不进文件（D9 §3）。
+ *
+ * 改了 `MCP_SERVERS_JSON` 就要重跑生成——与改 manifest 任何其他部分同一条规矩，
+ * `plugins.test.ts` 会断言仓库里的 YAML 与清单一致。
+ */
+function mcpEntries(): PatchEntry[] {
+  const servers = readMcpServersFromEnv();
+  if (servers.length === 0) return [];
+  return [
+    {
+      comment:
+        'MCP：每台服务器一个 dsh-mcp-client 实例（ADR 0009 D9），与官方 dsh 的加载方式一致。' + '\n' +
+        'AgentVersion 之间的差异不靠装配不同的插件集，而靠逐调用闸门 + ctx.tools.restrict()' + '\n' +
+        '——host 挂全量 + 按 Run 过滤（D3）。密钥只以 process.env 占位符出现。',
+      insert: buildMcpPatchEntries(servers),
+    },
+  ];
+}
+
 /** 完整清单，顺序即 patch 应用顺序（最后写入获胜）。 */
 export const PLUGIN_MANIFEST: readonly PatchEntry[] = [
   ...REPLACEMENTS.slice(0, 2), // credentials：禁用 + 插入
@@ -224,6 +250,7 @@ export const PLUGIN_MANIFEST: readonly PatchEntry[] = [
   ...ADDITIONS,
   ...REPLACEMENTS.slice(2), // subagent：禁用 + 插入
   ...FACTORY_TUNING.slice(1), // tool-subagent
+  ...mcpEntries(),
 ];
 
 /** 清单里所有自建模块路径，供可解析性断言使用。 */

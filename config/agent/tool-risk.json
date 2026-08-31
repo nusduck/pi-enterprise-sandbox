@@ -31,6 +31,12 @@
     "the server::tool form (github::create_pr), or a trailing-* prefix",
     "(mcp__github__*). Longest matching prefix wins; exact keys beat patterns.",
     "",
+    "Every MCP server MUST have a mcp__<server>__* prefix entry under tools, not",
+    "only exact names: the factory dsh-mcp-client normalizes over-long or invalid",
+    "tool names and appends a 12-hex-char hash, and such a name matches no exact",
+    "key (ADR 0009 D9). buildRunRiskResolver also floors any unmatched mcp__* at",
+    "high, so a missing entry degrades to 'needs approval', never to 'allow'.",
+    "",
     "mcpServers sets a default risk for a whole MCP server plus per-tool",
     "overrides, so a new tool appearing on a server inherits the server's risk",
     "instead of silently defaulting to external_high."

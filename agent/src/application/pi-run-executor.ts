@@ -34,7 +34,7 @@ import {
 } from '../infrastructure/redis/session-lock-manager.js';
 import { SessionLockError } from '../infrastructure/redis/errors.js';
 import { PINNED_PI_SDK_VERSION } from '../infrastructure/dsh/constants.js';
-import { buildMcpPolicyBindings } from '../infrastructure/mcp/pi-mcp-adapter-factory.js';
+import { buildMcpPolicyBindings } from '../infrastructure/mcp/mcp-policy-bindings.js';
 import {
   buildAgentVersionToolRiskBindings,
   readAgentVersionExtensions,

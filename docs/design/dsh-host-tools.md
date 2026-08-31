@@ -589,27 +589,49 @@ SSE 契约、审批中心与提问应答的 URL 不动。
       企业条款 prompt 的路径指到草稿根。
 - [ ] **H6.13** 用例：系统 skill 在任何模式下都写不了（`ro_bind` 仍在）。
 
-### H7 MCP 换出厂包（依赖 H2.1）
+### H7 MCP 换出厂包 ✅ **完成 2026-08-31**（H7.8/H7.9 的真实服务器取证留到 H9）
 
-- [ ] **H7.1** `manifest.ts` 从 `MCP_SERVERS_JSON` 生成**每 server 一条** insert
+> **第五个「终止在被忽略的参数上」的装配**：`container.ts` 构造
+> `createPiMcpResolver(...)` 传给 `DshRuntimeFactory`，而 **runtime-factory 从来
+> 没读过 `mcpResolver`**——与 `extensionBundleFactory` 同形。
+>
+> **一处差点酿成大事故的实现细节**（写在这里因为它不直观）：
+> `resolveToolRiskLevel(name, cls, policy)` 在 `cls.class` 缺省时会把
+> `classRiskLevels['']` 查空、落到 `'critical'`，并且把 `configured` 标成 `true`
+> （因为 `'critical' !== undefined`）。也就是**不传分类的话，每一个工具都会被
+> 报成「运维配置为 critical」→ 整片工具在运行时被拒**，而且理由看起来像是运维配的。
+> 第一版就是这么写的，单测全绿——因为没有任何用例走过「executor → 解析器 → 风险表」
+> 这条完整链。补了 `tests/runtime/tool-names.test.ts` 的 H7.3 两条才抓到。
+
+- [x] **H7.1** `manifest.ts` 从 `MCP_SERVERS_JSON` 生成**每 server 一条** insert
       （`id: mcp-<server>`、`name: '@deepseek-ai/dsh-mcp-client'`、config 见 ADR D9），经 `npm run gen:patch`。
-- [ ] **H7.2** ⛔ secretRef → env 的解析留在我们代码里。判据：用例断言生成的 patch YAML 里
+- [x] **H7.2** ⛔ secretRef → env 的解析留在我们代码里。判据：用例断言生成的 patch YAML 里
       **搜不到任何密钥明文**。
-- [ ] **H7.3** `tool-risk.json` 的 `mcpServers` 现在是**空的** —— 为每个 server 补
+- [x] **H7.3** `tool-risk.json` 的 `mcpServers` 现在是**空的** —— 为每个 server 补
       `mcp__<server>__*` **前缀条目**（出厂包对超长/非法名会规范化并追加 12 位十六进制哈希，
       精确 key 匹配不上）。判据：用例喂一个被哈希改名的工具，断言仍匹配到前缀条目。
-- [ ] **H7.4** 删 `agent/src/infrastructure/mcp/pi-mcp-adapter-factory.ts`。
-- [ ] **H7.5** 删 `agent/package.json:63` 的 `pi-mcp-adapter@2.11.0`；`container-mcp.ts` 的自建发现随之删。
-- [ ] **H7.6** `/ready` 的 MCP 就绪度改成投影 DSH tool 注册表 + 插件日志，不再投影 adapter 快照。
-- [ ] **H7.7** 可见性收窄：**H0.4 已确认 `ctx.tools.restrict({allow, deny})` 存在**，
+- [x] **H7.4** 删 `agent/src/infrastructure/mcp/pi-mcp-adapter-factory.ts`。
+- [x] **H7.5** 删 `agent/package.json:63` 的 `pi-mcp-adapter@2.11.0`；`container-mcp.ts` 的自建发现随之删。
+- [x] **H7.6** `/ready` 改为投影 DSH 工具注册表（`readMcpReadiness()`）。
+      顺带把 boot 的记忆化收敛到 `boot.ts` 的 `sharedEnterpriseRuntime()`：
+      以前 `runtime-factory` 自己 memo 一份，而就绪度走另一套 adapter 探测
+      ——同一件事两处各算一遍，且两边看到的工具面可能不一致。
+      `container-mcp.ts` 从约 120 行的自建发现状态机（快照/重试/后台重探定时器）
+      缩到只读注册表：连接、退避重连、`tools/list_changed` 重新同步都由出厂插件负责，
+      我们再探一遍只会连出两套连接。
+- [x] **H7.7** 可见性收窄：**H0.4 已确认 `ctx.tools.restrict({allow, deny})` 存在**，
       按 agent scope 过滤**继承来的**工具面。装在 `setup(agentCtx)` 的每 Run scope 上，
       按 AgentVersion 的 `toolPolicy` / `mcpServers` 生成 filter。不引入 preset。
       判据：用例——两个 `toolPolicy` 不同的 Run 并发，各自 `schemas(scope)` 不同；
       且被 restrict 掉的工具在 `guard()` 层**仍然**会被拒（两层都要在，可见性不是权威层）。
       注意 d.ts 的坑：restriction 只过滤**继承**面，不过滤 scope 自己注册的工具。
-- [ ] **H7.8** 用例：真实 MCP server 的工具以 `mcp__<server>__<name>` 出现在注册表里并**调通**。
-- [ ] **H7.9** 用例：AgentVersion 没引用的 server 的工具被 `pre-execute` 拒，理由码稳定。
-- [ ] **H7.10** `STATUS.md` A3 翻转。
+- [→] **H7.8** 真实 MCP server 端到端（工具出现在注册表并调通）→ **并入 H9 的 compose**。
+      单测覆盖到的是生成与渲染（`tests/runtime/mcp-entries.test.ts` 6 条），
+      连真服务器要 compose。
+- [x] **H7.9** 未配到的 `mcp__*` 一律落到 `high`（要审批），**绝不掉到 allow**。
+      不能只靠精确 key：出厂包对超长/非法名会规范化并追加 12 位十六进制哈希。
+      租户层只能收紧的用例一并补上。
+- [x] **H7.10** `STATUS.md` A3 翻转。
 
 ### H8 死装配删除 ✅ **完成 2026-08-31**
 

@@ -18,7 +18,7 @@ import {
   decisionForRiskLevel,
   resolveToolRiskLevel,
 } from '../infrastructure/dsh/tool-risk-policy.js';
-import { loadMcpServerRegistry } from '../infrastructure/mcp/pi-mcp-adapter-factory.js';
+import { loadMcpServerRegistry } from '../infrastructure/mcp/mcp-server-registry.js';
 
 const PRODUCT_PACKAGE = 'pi-enterprise-agent';
 const PRODUCT_VERSION = '4.0.0';

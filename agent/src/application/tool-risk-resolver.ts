@@ -26,6 +26,7 @@ import {
   resolveToolRiskLevel,
 } from '../infrastructure/dsh/tool-risk-policy.js';
 import { buildAgentVersionToolRiskBindings } from './tool-risk-bindings.js';
+import { classifyTool } from '../runtime/policy/risk-table.js';
 
 type RiskLevel = 'low' | 'medium' | 'high' | 'critical';
 
@@ -62,7 +63,26 @@ export function buildRunRiskResolver(
   );
 
   return (toolName: string): RiskLevel | undefined => {
-    const hit = resolveToolRiskLevel(toolName, splitMcpName(toolName), merged as never);
+    // **必须带 class**：`resolveToolRiskLevel` 在 `cls.class` 缺省时会把
+    // `classRiskLevels['']` 查空，落到 `'critical'`，而且把 `configured` 标成
+    // true（因为 'critical' !== undefined）。也就是说不传分类的话，**每一个工具
+    // 都会被报成「配置为 critical」**——整片工具在运行时被拒，且理由看起来像是
+    // 运维配的。分类用的是风险表自己那份，两边不会漂。
+    const hit = resolveToolRiskLevel(
+      toolName,
+      { class: classifyTool(toolName), ...splitMcpName(toolName) },
+      merged as never,
+    );
+    // MCP 的地板（ADR 0009 D9 §2）：任何 `mcp__*` 名字没配到时按 high。
+    //
+    // 出厂包对超长或含非法字符的工具名会规范化并**追加 12 位十六进制哈希**，
+    // 那种名字精确 key 匹配不上，只能靠 `mcp__<server>__*` 前缀条目兜底——
+    // 而前缀条目也可能被漏配。所以这里再钉一层：漏配的后果是「要审批」，
+    // 绝不能是「放行」。
+    //
+    // 分类默认对 `mcp__` 本来也是 external_high，两者一致；显式写出来是为了
+    // **不依赖那个巧合**——哪天有人把 external_high 的默认调低，这条仍然守着。
+    if (hit?.configured !== true && toolName.startsWith('mcp__')) return 'high';
     // `configured: false` 表示这一层没配，落回风险表按分类给的默认值——
     // 返回 undefined 让 `decideFromRiskTable` 走它自己的默认，不要在这里
     // 把「没配」硬编成一个等级。

@@ -526,33 +526,16 @@ export class ServiceContainer {
       sessionAdapter?: { captureSnapshotPayload?: Loose; dispose?: Loose };
       extensionFactories?: unknown[];
       loadSdk?: () => Promise<Loose>;
-      mcpResolver?: Loose;
-      mcpSecretResolver?: Loose;
-      mcpRuntimeRoot?: string;
     } = {},
   ) {
     // Lazy class load so import of container stays free of SDK side effects.
     return import('../infrastructure/dsh/runtime-factory.js').then(
       async ({ DshRuntimeFactory }) => {
-        let mcpResolver = opts.mcpResolver;
-        if (mcpResolver === undefined) {
-          const {
-            createEnvironmentSecretResolver,
-            createPiMcpResolver,
-          } = await import('../infrastructure/mcp/pi-mcp-adapter-factory.js');
-          await this.preflightMcpServers();
-          // Live getter: background rediscovery updates mcpDiscovery and the
-          // next run sees newly connected tools without rebuilding the factory.
-          mcpResolver = createPiMcpResolver({
-            serverRegistry: this.env.MCP_SERVERS_JSON || '[]',
-            secretResolver:
-              opts.mcpSecretResolver ??
-              createEnvironmentSecretResolver(this.env),
-            runtimeRoot:
-              opts.mcpRuntimeRoot || this.env.AGENT_MCP_RUNTIME_ROOT || undefined,
-            getDefaultMcpServers: () => this.getMcpReadiness().mcpServers ?? [],
-          });
-        }
+        // 2026-08-31（ADR 0009 D9 / 计划 H7.4）：这里原本构造一个
+        // `createPiMcpResolver(...)` 传给 `DshRuntimeFactory`。那个参数
+        // **runtime-factory 从来没读过**——又一个终止在被忽略的参数上的装配
+        // （与 extensionBundleFactory 同形）。MCP 现在由 overlay 里的
+        // `dsh-mcp-client` 实例负责，一台服务器一个插件，与官方 dsh 一致。
         const { primarySkillRoot } = await import('../skills/paths.js');
         const { resolveSkillMountRoots } = await import('../skills/manager.js');
         // Process-wide default: the system tier only. The user tier is
@@ -565,7 +548,6 @@ export class ServiceContainer {
           sessionAdapter: opts.sessionAdapter,
           extensionFactories: opts.extensionFactories,
           loadSdk: opts.loadSdk,
-          mcpResolver,
           defaultCwd:
             this.env.AGENT_PI_DEFAULT_CWD ||
             this.env.AGENT_SESSION_WORKSPACE_CWD ||
@@ -687,8 +669,7 @@ export class ServiceContainer {
    *   promptImageLoader?: Function,
    *   sessionLockRenewIntervalMs?: number,
    *   steerPollIntervalMs?: number,
-   *   mcpResolver?: Function | object | null,
-   *   mcpSecretResolver?: Function,
+     *   mcpSecretResolver?: Function,
    *   mcpRuntimeRoot?: string,
    * }} opts
    * @returns {Promise<import('../application/run-executor.js').RunExecutorFactory>}

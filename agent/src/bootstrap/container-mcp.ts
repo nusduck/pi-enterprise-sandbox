@@ -1,153 +1,80 @@
 /**
- * MCP 发现状态机（从 container 抽出）。
+ * MCP 就绪度（从 container 抽出）。
  *
- * 装在自己的类里而不是留在 ServiceContainer 上，是因为它有一组只属于它的
- * 可变状态——快照、上次尝试时间、在途 promise、后台重探定时器——四个字段
- * 只被这三个方法读写。容器保留 `preflightMcpServers()` / `getMcpReadiness()`
- * 两个转发方法，外部调用点（http-main 的 /ready）不受影响。
+ * ## 2026-08-31 重写（ADR 0009 D9 / 计划 H7.6）
+ *
+ * 以前这里是一台**自建的发现状态机**：用钉死的 `pi-mcp-adapter` 连每一台 MCP
+ * 服务器、自己跑 `tools/list`、自己缓存快照、自己做冷启动重探与后台轮询
+ * （约 120 行状态：快照 / 上次尝试时间 / 在途 promise / 重探定时器）。
+ *
+ * 换成出厂 `@deepseek-ai/dsh-mcp-client` 之后这些全都不需要了：
+ * 连接、退避重连、`notifications/tools/list_changed` 重新同步、超时与 abort
+ * 都由那个插件负责，而**它注册到 `ctx.tools` 上的东西就是模型看得见的东西**。
+ * 所以就绪度改成**投影 DSH 的工具注册表**——一个事实源，不再有「adapter 快照说
+ * 连上了，循环上却没有那些工具」的可能。
+ *
+ * 后台重探也一起去掉：出厂插件自己带 supervisor 与退避预算，我们再探一遍
+ * 只会连出两套连接。
  */
+import { readMcpReadiness } from '../runtime/index.js';
 
 type Loose = any;
 
 export class McpDiscoveryState {
   readonly #env: NodeJS.ProcessEnv | Record<string, string | undefined>;
-  /**
-   * Latest MCP discovery snapshot (may be incomplete after a cold-start
-   * failure). Refreshed by {@link preflight}; incomplete results are not
-   * permanent — later force/cooldown refreshes can recover tools.
-   */
+  /** 最近一次从注册表读到的投影。 */
   snapshot: Loose = null;
-  /** epoch ms of last discovery attempt */
   attemptedAt = 0;
   inFlight: Promise<object> | null = null;
-  rediscoveryTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor(env: NodeJS.ProcessEnv | Record<string, string | undefined>) {
     this.#env = env;
   }
 
-  /** 停掉后台重探。容器 shutdown 时调用。 */
-  stop(): void {
-    if (this.rediscoveryTimer) {
-      clearInterval(this.rediscoveryTimer);
-      this.rediscoveryTimer = null;
-    }
-  }
+  /** 保留给容器 shutdown 调用；现在没有后台定时器要停。 */
+  stop(): void {}
 
   /**
-   * Connect enabled MCP_SERVERS_JSON entries and run adapter-owned tools/list
-   * discovery. Retries transient Streamable-HTTP → SSE 405 races at worker
-   * boot. Incomplete snapshots are retained for /ready diagnostics but can be
-   * refreshed (force or cooldown) so runs are not stuck without MCP forever.
+   * 读一次就绪度。
+   *
+   * 起插件树是幂等的（`sharedEnterpriseRuntime()` 全进程一次），所以这里
+   * 「preflight」实际上就是「确保那棵树起来了，然后看注册表」。
    */
-  async preflight(
-    opts: { force?: boolean; maxAttempts?: number; retryCooldownMs?: number } = {},
-  ) {
-    const force = opts.force === true;
-    const retryCooldownMs = Number.isFinite(opts.retryCooldownMs)
-      ? Math.max(0, Number(opts.retryCooldownMs))
-      : 30_000;
-    const maxAttempts = Math.max(
-      1,
-      Math.min(5, Number.isFinite(opts.maxAttempts) ? Number(opts.maxAttempts) : 3),
-    );
-
-    if (this.snapshot && !force) {
-      const complete =
-        this.snapshot.ready === true ||
-        Number(this.snapshot.serverCount ?? 0) === 0 ||
-        Number(this.snapshot.toolCount ?? 0) > 0;
-      if (complete) return this.snapshot;
-      const age = Date.now() - (this.attemptedAt || 0);
-      if (age < retryCooldownMs) return this.snapshot;
-      // Incomplete and cooldown elapsed → fall through to rediscover.
-    }
+  async preflight(opts: { force?: boolean } = {}) {
+    if (this.snapshot && opts.force !== true) return this.snapshot;
     if (this.inFlight) return this.inFlight;
 
-    this.inFlight = import(
-      '../infrastructure/mcp/pi-mcp-adapter-factory.js'
-    )
-      .then(async ({ createEnvironmentSecretResolver, discoverEnabledMcpServers }) => {
-        const secretResolver = createEnvironmentSecretResolver(this.#env);
-        const cwd =
-          this.#env.AGENT_PI_DEFAULT_CWD ||
-          this.#env.AGENT_SESSION_WORKSPACE_CWD ||
-          undefined;
-        const serverRegistry = this.#env.MCP_SERVERS_JSON || '[]';
-
-        let snapshot: Loose = null;
-        for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
-          snapshot = await discoverEnabledMcpServers({
-            serverRegistry,
-            secretResolver,
-            cwd,
-          });
-          if (
-            snapshot.ready === true ||
-            Number(snapshot.serverCount ?? 0) === 0 ||
-            Number(snapshot.toolCount ?? 0) > 0
-          ) {
-            break;
-          }
-          if (attempt < maxAttempts) {
-            const delayMs = 750 * attempt;
-            console.warn(
-              `[agent-mcp] discovery incomplete (attempt ${attempt}/${maxAttempts}); retrying in ${delayMs}ms`,
-            );
-            await new Promise((resolve) => setTimeout(resolve, delayMs));
-          }
-        }
-
+    this.inFlight = readMcpReadiness()
+      .then((snapshot) => {
         this.snapshot = snapshot;
         this.attemptedAt = Date.now();
-        for (const server of snapshot?.servers ?? []) {
-          if (server.status === 'connected') {
-            console.log(
-              `[agent-mcp] MCP Server connected id=${server.serverId} tools=${server.toolCount}`,
-            );
-          } else {
-            console.error(
-              `[agent-mcp] MCP readiness error id=${server.serverId}: ${server.error}`,
-            );
-          }
+        for (const server of snapshot.servers) {
+          console.log(
+            `[agent-mcp] MCP Server connected id=${server.server_id} tools=${server.tools.length}`,
+          );
         }
-        // Background rediscovery if still incomplete so a later run can pick
-        // up tools without a process restart.
-        this.#ensureRediscoveryLoop();
-        return snapshot;
+        return snapshot as unknown as object;
+      })
+      .catch((err) => {
+        // 起不来时**不要**把它当成「没有 MCP」——那会让 /ready 报告一个
+        // 看起来正常的空清单。留一条明确的失败快照。
+        const message = err instanceof Error ? err.message : String(err);
+        console.error('[agent-mcp] readiness projection failed:', message);
+        this.snapshot = {
+          ready: false,
+          serverCount: 0,
+          toolCount: 0,
+          servers: [],
+          mcpServers: [],
+          error: message,
+        };
+        this.attemptedAt = Date.now();
+        return this.snapshot as object;
       })
       .finally(() => {
         this.inFlight = null;
       });
     return this.inFlight;
-  }
-
-  /**
-   * When bootstrap discovery left servers unreachable, periodically re-probe
-   * so worker runs can gain MCP tools without a restart.
-   */
-  #ensureRediscoveryLoop() {
-    if (this.rediscoveryTimer) return;
-    if (this.snapshot?.ready === true) return;
-    if (Number(this.snapshot?.serverCount ?? 0) === 0) return;
-    this.rediscoveryTimer = setInterval(() => {
-      if (this.snapshot?.ready === true || Number(this.snapshot?.toolCount ?? 0) > 0) {
-        if (this.rediscoveryTimer) {
-          clearInterval(this.rediscoveryTimer);
-          this.rediscoveryTimer = null;
-        }
-        return;
-      }
-      void this.preflight({ force: true, maxAttempts: 2 }).catch((err) => {
-        console.error(
-          '[agent-mcp] background rediscovery failed:',
-          err instanceof Error ? err.message : err,
-        );
-      });
-    }, 30_000);
-    if (typeof this.rediscoveryTimer.unref === 'function') {
-      this.rediscoveryTimer.unref();
-    }
   }
 
   readiness() {
@@ -162,3 +89,5 @@ export class McpDiscoveryState {
     );
   }
 }
+
+void 0;

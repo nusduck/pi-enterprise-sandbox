@@ -96,9 +96,6 @@ export interface PiRunExecutorFactoryOptions {
   ) => Promise<Array<{ type: 'image'; data: string; mimeType: string }>>;
   readonly sessionLockRenewIntervalMs?: number;
   readonly steerPollIntervalMs?: number;
-  readonly mcpResolver?: Loose;
-  readonly mcpSecretResolver?: Loose;
-  readonly mcpRuntimeRoot?: string;
   readonly subagentSpawnPort?: { spawn: Loose; getStatuses: Loose };
   readonly taskStateStore?: object;
   readonly otelToolSpans?: boolean;
@@ -151,9 +148,6 @@ export async function buildPiRunExecutorFactory(
     (await container.createPiRuntimeFactory({
       sessionAdapter,
       extensionFactories: opts.extensionFactories,
-      mcpResolver: opts.mcpResolver,
-      mcpSecretResolver: opts.mcpSecretResolver,
-      mcpRuntimeRoot: opts.mcpRuntimeRoot,
     }));
   const projector =
     opts.projector ?? (await container.createPlatformEventProjector());

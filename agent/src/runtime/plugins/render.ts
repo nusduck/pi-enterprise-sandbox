@@ -31,11 +31,40 @@ function comment(text: string, indent = ''): string {
     .join('\n');
 }
 
+/**
+ * 环境变量名的白名单。
+ *
+ * 这个值会被**原样拼进生成的 JS 表达式**，所以必须约束字符集——否则一个精心
+ * 构造的 `MCP_SERVERS_JSON` 就能往 patch 里注入任意代码。密钥引用来自部署配置，
+ * 不是终端用户输入，但「配置也可能被写错或被污染」是同一类问题，fail-closed 更省事。
+ */
+function assertEnvName(name: string): void {
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) {
+    throw new Error(
+      `patch render: env reference "${name}" must match [A-Za-z_][A-Za-z0-9_]* ` +
+        '(it is spliced into a generated JS expression)',
+    );
+  }
+}
+
 /** 标量渲染。字符串按需加引号；`!!js:` 前缀还原成自定义标签表达式。 */
 function scalar(value: unknown): string {
   if (typeof value === 'string') {
     if (value === '!!js:LLMIO_BASE_URL') {
       return "!!js (process.env.LLMIO_BASE_URL || process.env.DEEPSEEK_BASE_URL || 'https://api.deepseek.com')";
+    }
+    // `!!js:env:NAME` —— 读一个环境变量。MCP 的密钥只走这条路
+    // （ADR 0009 D9 §3：patch YAML 里不得出现明文）。
+    if (value.startsWith('!!js:env:')) {
+      const name = value.slice('!!js:env:'.length);
+      assertEnvName(name);
+      return `!!js process.env.${name}`;
+    }
+    // `!!js:bearer:NAME` —— 拼一个 Authorization 头，同样只带变量名。
+    if (value.startsWith('!!js:bearer:')) {
+      const name = value.slice('!!js:bearer:'.length);
+      assertEnvName(name);
+      return '!!js `Bearer ${process.env.' + name + '}`';
     }
     // 需要引号的：路径、含特殊字符、或可能被当作别的类型。
     return /^[A-Za-z][A-Za-z0-9_-]*$/.test(value) ? value : `'${value.replace(/'/g, "''")}'`;

@@ -193,6 +193,70 @@ export function resolvePathRelativeTo(patchFile: string, relative: string): stri
   return `/${out.join('/')}`;
 }
 
+/**
+ * 进程内**唯一**的那棵插件树。
+ *
+ * 为什么要记忆化在这里而不是各自 memo：boot 一次要装 130+ 个插件、连 MCP
+ * 服务器。2026-08-31 之前 `runtime-factory` 自己 memo 了一份（`bootOnce`），
+ * 而 MCP 就绪度那条路走的是另一套 adapter 探测——同一件事两处各算一遍，
+ * 且两边看到的工具面可能不一致。收敛到这里之后，「模型看得见什么」只有一个答案。
+ */
+let sharedCtx: Promise<Context> | null = null;
+
+export function sharedEnterpriseRuntime(): Promise<Context> {
+  if (sharedCtx === null) sharedCtx = bootEnterpriseRuntime();
+  return sharedCtx;
+}
+
+/**
+ * 从已起的插件树里读 MCP 就绪度（ADR 0009 D9 §「/ready」/ 计划 H7.6）。
+ *
+ * 投影的是 **DSH 的工具注册表**——也就是模型真正看得见的那一份。
+ * 以前投影的是自建 adapter 的快照：那套要自己重探、自己维护缓存，
+ * 而它和循环上实际注册了什么并没有强制关系。
+ */
+export async function readMcpReadiness(): Promise<{
+  ready: boolean;
+  serverCount: number;
+  toolCount: number;
+  servers: Array<{ server_id: string; connection_status: string; tools: string[] }>;
+}> {
+  const ctx = await sharedEnterpriseRuntime();
+  const tools = (ctx as unknown as { get(n: string): any }).get('tools');
+  const names: string[] =
+    tools === undefined || typeof tools.schemas !== 'function'
+      ? []
+      : tools.schemas().map((s: { name?: unknown }) => String(s?.name ?? ''));
+
+  const byServer = new Map<string, string[]>();
+  for (const name of names) {
+    if (!name.startsWith('mcp__')) continue;
+    const rest = name.slice('mcp__'.length);
+    const sep = rest.indexOf('__');
+    if (sep <= 0) continue;
+    const server = rest.slice(0, sep);
+    const list = byServer.get(server) ?? [];
+    list.push(rest.slice(sep + 2));
+    byServer.set(server, list);
+  }
+
+  const servers = [...byServer.entries()].map(([server_id, list]) => ({
+    server_id,
+    // 注册表里有工具 = 那台服务器连上了并完成了 tools/list。
+    // 连不上的服务器在出厂默认（failOnStartupError: false）下就是没有工具，
+    // 所以它根本不会出现在这里——这正是「就绪度」想表达的事。
+    connection_status: 'connected',
+    tools: list.sort(),
+  }));
+
+  return {
+    ready: true,
+    serverCount: servers.length,
+    toolCount: servers.reduce((n, s) => n + s.tools.length, 0),
+    servers,
+  };
+}
+
 export async function bootEnterpriseRuntime(
   rpc: ExecRpcConfig = readProcessExecRpcConfig(),
 ): Promise<Context> {

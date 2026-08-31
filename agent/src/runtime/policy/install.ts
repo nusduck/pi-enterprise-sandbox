@@ -68,6 +68,17 @@ export interface InstallPolicyOptions {
    * **不传等于把这个配置面静默丢掉**——它以前就是这么丢的：解析出来喂给了一个
    * 返回 [] 的 extension bundle。
    */
+  /**
+   * 本 Run 允许模型**看见**的工具（ADR 0009 D9 §4 / 计划 H7.7）。
+   *
+   * 省略 = 不收窄。给了就调 `ctx.tools.restrict({ allow })`，把 scope 继承来的
+   * 工具面过滤成这一份。
+   *
+   * **可见性不是权威层**：真正拒绝仍由 `pre-execute` 与 `guard()` 承担
+   * （它们是单调 fail-closed 的）。收窄只是省上下文、少诱发必然被拒的调用。
+   * 两层都要在——只做可见性等于把闸门交给模型的自觉。
+   */
+  readonly visibleTools?: readonly string[];
   readonly riskOverrides?:
     | Readonly<Record<string, 'low' | 'medium' | 'high' | 'critical'>>
     | ((toolName: string) => 'low' | 'medium' | 'high' | 'critical' | undefined);
@@ -210,6 +221,28 @@ export function installEnterprisePolicy(ctx: Context, options: InstallPolicyOpti
       return { kind: 'block', feedback: [{ type: 'text', text: entry.error?.message ?? 'tool failed' }] };
     }) as never),
   );
+
+  // 4.5) ctx.tools.restrict() —— 按 Run 收窄**可见**工具面（ADR 0009 D9 §4）。
+  //
+  //     2026-08-31 起栈实测确认这个机制存在（H0.4）：`restrict` 过滤的是
+  //     scope **继承来的**那一层，不过滤 scope 自己注册的工具。我们走的正是
+  //     host 组合（工具在 global layer），所以它对我们有效——官方 preset 把工具
+  //     搬到 agent plane 之后反而失效过（出厂 d.ts 里记着这个坑）。
+  //
+  //     **不引入 preset**：预设表是 process-level、无租户维度的（ADR 0009 D3）。
+  const visible = options.visibleTools;
+  if (visible !== undefined && visible.length > 0) {
+    disposers.push(
+      anyCtx.inject(['tools'], (scoped) => {
+        const tools = scoped.tools as unknown as {
+          restrict?: (filter: { allow?: readonly string[] }) => () => void;
+        };
+        // 出厂没有这个方法时静默跳过：可见性是优化，权威层在 guard 上。
+        // 但**必须**是静默跳过而不是抛——否则一次上游版本变动会让所有 Run 起不来。
+        tools.restrict?.({ allow: [...visible] });
+      }),
+    );
+  }
 
   // 5) approval/request —— 企业 answerer（ADR 0009 D5）。
   //

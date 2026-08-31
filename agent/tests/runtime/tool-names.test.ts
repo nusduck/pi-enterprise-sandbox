@@ -130,3 +130,30 @@ test('resolveToolNameAlias 对当前名字是恒等的', () => {
     assert.equal(resolveToolNameAlias(name), name);
   }
 });
+
+test('H7.3 未配到的 mcp__* 工具落到 high，不会掉到 allow', async () => {
+  const { buildRunRiskResolver } = await import('../../src/application/tool-risk-resolver.js');
+  const resolve = buildRunRiskResolver(null, null);
+  // 出厂包对超长/非法名会规范化并追加 12 位十六进制哈希——那种名字精确 key
+  // 匹配不上。漏了不能变成放行。
+  assert.equal(resolve('mcp__github__create_pr'), 'high');
+  assert.equal(resolve('mcp__github__some_very_long_name_a1b2c3d4e5f6'), 'high');
+  // 非 mcp 工具不受这条兜底影响，仍走风险表的分类默认。
+  assert.equal(resolve('read'), undefined);
+});
+
+test('H7.3 租户层只能收紧：配 low 也不会把平台的 high 降下来', async () => {
+  const { buildRunRiskResolver } = await import('../../src/application/tool-risk-resolver.js');
+  const platform = { tools: { bash: 'high' } };
+  const version = { configJson: { toolPolicy: { riskLevels: { bash: 'low' } } } };
+  assert.equal(
+    buildRunRiskResolver(platform, version)('bash'),
+    'high',
+    '一个 org 不能靠发新 AgentVersion 把平台的审批闸门关掉',
+  );
+  assert.equal(
+    buildRunRiskResolver(platform, { configJson: { toolPolicy: { riskLevels: { bash: 'critical' } } } })('bash'),
+    'critical',
+    '收紧是允许的',
+  );
+});

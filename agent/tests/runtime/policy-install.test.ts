@@ -34,6 +34,10 @@ class FakeCtx {
         if (i >= 0) this.guards.splice(i, 1);
       };
     },
+    restrict: (filter: { allow?: readonly string[] }): (() => void) => {
+      this.restrictions.push(filter);
+      return () => undefined;
+    },
   };
 
   /**
@@ -89,6 +93,8 @@ class FakeCtx {
     return await (fn(req, next) as Promise<unknown>);
   }
 
+  readonly restrictions: Array<{ allow?: readonly string[] }> = [];
+
   /** 跑一遍所有 guard，返回第一条拒绝理由。 */
   guardReason(exec: object): string | undefined {
     for (const g of this.guards) {
@@ -121,6 +127,40 @@ test('五个挂载点全部注册——这正是 Wave 5 到 2026-08-30 之间缺
 });
 
 // ── 停泊（ADR 0009 D5 的实测修正形状，计划 H4）────────────────────────────
+
+test('H7.7 visibleTools 收窄可见面，但权威层仍在 guard 上（两层都要）', async () => {
+  const ctx = new FakeCtx();
+  const installed = installOn(ctx, {
+    visibleTools: ['read', 'glob'],
+    guards: [
+      (toolName: string) =>
+        toolName === 'bash'
+          ? { decision: 'deny', reasonCode: 'TENANT', reason: 'bash not allowed', policyId: 'g', riskLevel: 'critical' }
+          : null,
+    ] as never,
+  });
+
+  assert.deepEqual(
+    ctx.restrictions,
+    [{ allow: ['read', 'glob'] }],
+    '必须调 ctx.tools.restrict()——H0.4 实测确认它过滤 scope 继承来的工具面',
+  );
+
+  // 可见性不是权威层：被收窄掉的工具**同时**要在 guard 上被拒。
+  // 只做可见性 = 把闸门交给模型的自觉。
+  assert.match(
+    String(ctx.guardReason({ name: 'bash', arguments: {}, id: 'c1' })),
+    /bash not allowed/,
+  );
+  installed.dispose();
+});
+
+test('H7.7 出厂没有 restrict() 时静默跳过，不让所有 Run 起不来', () => {
+  const ctx = new FakeCtx();
+  // @ts-expect-error 故意抹掉这个方法，模拟上游版本变动
+  delete ctx.tools.restrict;
+  assert.doesNotThrow(() => installOn(ctx, { visibleTools: ['read'] }));
+});
 
 test('H4.7 停泊之后本轮任何工具都被 guard 拒，模型没有工具可用', async () => {
   const ctx = new FakeCtx();

@@ -10,6 +10,7 @@
 
 import {
   bootEnterpriseRuntime,
+  sharedEnterpriseRuntime,
   createRemoteProviders,
   createSessionBackend,
   assembleSystemPrompt,
@@ -139,21 +140,20 @@ export function createDshRuntimeFactory(opts: Record<string, any> = {}) {
     createSessionBackend,
     assembleSystemPrompt,
     bootEnterpriseRuntime,
+    sharedEnterpriseRuntime,
     runWithExecRpc,
     runWithRunServices,
   }));
   const bootRuntime = opts.bootRuntime;
   const createAgent = opts.createAgent;
 
-  let bootOnce: Promise<Record<string, any>> | null = null;
-
   async function ensureCtx(runtime) {
     if (typeof bootRuntime === 'function') return bootRuntime();
-    if (bootOnce == null) {
-      const boot = runtime.bootEnterpriseRuntime ?? bootEnterpriseRuntime;
-      bootOnce = Promise.resolve(boot());
-    }
-    return bootOnce;
+    // 记忆化在 `boot.ts` 的 `sharedEnterpriseRuntime()` 里——进程内只有一棵树。
+    // 以前这里自己 memo 一份，而 MCP 就绪度走的是另一套 adapter 探测：
+    // 同一件事两处各算一遍，且两边看到的工具面可能不一致（计划 H7.6）。
+    const shared = runtime.sharedEnterpriseRuntime ?? sharedEnterpriseRuntime;
+    return shared();
   }
 
   return {
