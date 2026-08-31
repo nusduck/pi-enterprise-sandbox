@@ -21,6 +21,11 @@ const subagents = get('subagents') as unknown as {
 };
 const spawn = subagents.getProvider('spawn');
 
+// 模型可见的工具面（ADR 0009 D3 / 计划 H2.7）。走出厂公开 API
+// `ToolRuntime.schemas()`——就是模型实际收到的那份清单，不是 patch 里写了什么。
+const tools = get('tools') as unknown as { schemas(): Array<{ name: string }> } | undefined;
+const toolNames = tools === undefined ? null : tools.schemas().map((t) => t.name).sort();
+
 process.stdout.write(
   `${JSON.stringify({
     credentials: get('credentials')?.constructor?.name ?? null,
@@ -31,6 +36,14 @@ process.stdout.write(
       spawn === undefined
         ? null
         : { inheritsParentContext: spawn.inheritsParentContext, capabilities: spawn.capabilities },
+    toolNames,
+    // seam 在不在：D5 要 approval 开、permission 关；subprocess 必须缺席（D8/D11）。
+    seams: {
+      approval: get('approval') !== undefined,
+      permissionPresets: get('permissionPresets') !== undefined,
+      userQuestions: get('userQuestions') !== undefined,
+      subprocess: get('subprocess') !== undefined,
+    },
   })}\n`,
 );
 process.exit(0);

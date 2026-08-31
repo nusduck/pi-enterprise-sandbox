@@ -13,6 +13,7 @@ import { bootEnterpriseRuntime, createRemoteProviders, createSessionBackend ,
   resolvePathRelativeTo,
 } from '../../src/runtime/boot.js';
 import { InMemorySessionStore } from '../../src/runtime/providers/mysql-session-store.js';
+import { ENTERPRISE_DEFAULT_TOOLS } from '../../src/runtime/policy/tool-names.js';
 
 const patchPath = join(dirname(fileURLToPath(import.meta.url)), '../../src/runtime/bundle/cordis.patch.yml');
 
@@ -31,11 +32,23 @@ test('cordis.patch.yml：凭据只读 env，网关走 LLMIO_BASE_URL，本机执
     'fs-sandbox',
     'subprocess',
     'jobs',
-    'approval',
     'permission',
     'session-persistence-jsonl',
     'tool-fs-search',
     'tool-pwsh',
+    // ADR 0009 D3 的实测补充：这些在 dsh-base 里本来就是激活的，ADR 完全没提，
+    // 起栈才发现模型能看见它们。处置理由逐条写在 manifest.ts 的 DISABLED 里。
+    'web',
+    'web-search-deepseek',
+    'tool-web',
+    'tool-workflow',
+    'tool-ralph',
+    'tool-subagent-fork',
+    'subagent-fork-in-process',
+    'tool-subagent-control',
+    'tool-goal',
+    'plan-mode',
+    'tool-str-replace-editor',
   ]) {
     const block = yaml.split(`- id: ${id}\n`)[1]?.slice(0, 80) ?? '';
     assert.match(block, /disabled:\s*true/, `expected ${id} disabled`);
@@ -48,6 +61,18 @@ test('cordis.patch.yml：凭据只读 env，网关走 LLMIO_BASE_URL，本机执
   assert.match(yaml, /\.\.\/providers\/remote-jobs\.js/);
   assert.equal(yaml.includes('id: tool-bash\n  disabled: true'), false);
   assert.equal(yaml.includes('id: tool-fs\n  disabled: true'), false);
+
+  // approval **不再** disabled（ADR 0009 D5 改写了 ADR 0007 D4）。seam 打开，
+  // answerer 自建；permission 仍然关着（上面的 disabled 清单里）。
+  assert.equal(yaml.includes('id: approval\n  disabled: true'), false);
+
+  // tool-fs-search 关着，但必须有同名替代——否则模型没有搜索工具（ADR 0009 D8）。
+  // 「关掉且没人顶上」正是 2026-08-31 之前的状态，这条断言就是为了不再回到那里。
+  assert.match(yaml, /id: remote-fs-search/);
+  assert.match(yaml, /\.\.\/providers\/remote-fs-search\.js/);
+
+  // ask_user_question：base 只带 seam 不带工具，必须显式加这个包（ADR 0009 D3）。
+  assert.match(yaml, /@deepseek-ai\/dsh-tool-ask-user/);
   assert.match(yaml, /id: subagent-spawn-in-process/);
   assert.match(yaml, /durable-subagent\.js/);
 });
@@ -176,6 +201,13 @@ test('boot 之后实际挂载的是自建实现，不是出厂实现', () => {
     shell: string | null;
     jobs: string | null;
     spawnProvider: { inheritsParentContext: boolean; capabilities: unknown } | null;
+    toolNames: string[] | null;
+    seams: {
+      approval: boolean;
+      permissionPresets: boolean;
+      userQuestions: boolean;
+      subprocess: boolean;
+    };
   };
 
   // 凭据：必须是我们的只读 env 实现。出厂的 LocalCredentialProvider 没有租户维度
@@ -197,4 +229,42 @@ test('boot 之后实际挂载的是自建实现，不是出厂实现', () => {
     toolFilter: false,
     persona: false,
   });
+
+  // ── 模型可见的工具面（ADR 0009 D3/D4，计划 H2.7）────────────────────────
+  //
+  // **断言恰好相等，不是「包含」。** 用「包含」抓不到「多出来一个」，而多出来
+  // 正是 2026-08-31 起栈实测撞到的事故形状：dsh-base 里 8 个工具（web_search /
+  // workflow / ralph / subagent_fork / subagent-control 三件 / goal 三件 /
+  // exit_plan_mode / str_replace_editor）本来就是激活的，patch 里一个字都没提，
+  // 所以上面那些 YAML 字符串断言永远抓不到它们。而分类器 fail-closed：
+  // 模型看得见、一调必被拒。上游升级后新塞进来一个工具，这条会红。
+  assert.notEqual(mounted.toolNames, null, 'ctx.tools 必须挂上');
+  const actual = new Set(mounted.toolNames ?? []);
+  const expected = new Set<string>(ENTERPRISE_DEFAULT_TOOLS);
+  assert.deepEqual(
+    [...actual].filter((n) => !expected.has(n)).sort(),
+    [],
+    '注册表里多出风险表不认识的工具（fail-closed → 一调必被拒）：' +
+      '要么在 manifest.ts 里 disable 掉，要么加进 runtime/policy/tool-names.ts',
+  );
+  assert.deepEqual(
+    [...expected].filter((n) => !actual.has(n)).sort(),
+    [],
+    '名单里的工具 boot 之后不存在：多半是缺依赖或 patch 里没有对应 insert' +
+      '——不要靠加 preset 绕过（ADR 0009 D3）',
+  );
+
+  // ── seam（ADR 0009 D5/D8）────────────────────────────────────────────────
+  assert.equal(mounted.seams.approval, true, 'ctx.approval 必须打开（D5 改写了 ADR 0007 D4）');
+  assert.equal(
+    mounted.seams.permissionPresets,
+    false,
+    'dsh-permission-presets 是 process-level、无租户维度的产品级旋钮，不得组合',
+  );
+  assert.equal(mounted.seams.userQuestions, true);
+  assert.equal(
+    mounted.seams.subprocess,
+    false,
+    '本机 subprocess 不得为了 tool-fs-search 恢复（ADR 0009 D8 的「拒绝」条）',
+  );
 });

@@ -70,11 +70,8 @@
 - id: tool-fs-search
   disabled: true
 
-# 不组合原生审批/权限预设（ADR 0007 D4）；企业策略走
-# `policy/install.ts` 的四个挂载点。
-- id: approval
-  disabled: true
-
+# 不组合 dsh-permission-presets：process-level、无租户维度；
+# 隔离权威是 Bubblewrap / exec，不是 DSH 本机围栏（ADR 0009 D5）。
 - id: permission
   disabled: true
 
@@ -89,6 +86,59 @@
 - id: session-query-sqlite
   disabled: true
 
+# 出网面不进 agent 进程：`web_search` 让模型直接联网，而
+# plan.md §12 要求业务数据只经受控的数据库 MCP。
+- id: web
+  disabled: true
+
+- id: web-search-deepseek
+  disabled: true
+
+- id: tool-web
+  disabled: true
+
+# `workflow` 在本进程 worker thread 里跑 JS 编排子 Agent
+# ——那是本机执行面，ADR 0007 D11 不挂。
+- id: tool-workflow
+  disabled: true
+
+- id: workflow-worker-thread
+  disabled: true
+
+# `ralph` 是朝一个不可变目标反复重试的自主循环，不受每 Run
+# 预算与账本约束，不在本阶段范围。
+- id: tool-ralph
+  disabled: true
+
+# 子 Agent 只有 durable one-shot 一种形态
+# （subagent-spawn-in-process 已关）。fork 与 control 面都要求可续聊的
+# same-process 子 Agent，与我们的 provider 对不上。
+- id: tool-subagent-fork
+  disabled: true
+
+- id: subagent-fork-in-process
+  disabled: true
+
+- id: tool-subagent-control
+  disabled: true
+
+- id: tool-subagent-list-agents
+  disabled: true
+
+# goal 三件套是会话内目标状态机：没有企业面、没有前端卡片、
+# 没有风险表条目。与 memory 同理（D10），本阶段不做。
+- id: tool-goal
+  disabled: true
+
+# plan mode 的交接工具同上。
+- id: plan-mode
+  disabled: true
+
+# 与 read/write/edit 功能重复的第二套编辑工具。
+# 留着就是「同一件事两处各算一遍」，且要在风险表里维护两份条目。
+- id: tool-str-replace-editor
+  disabled: true
+
 # 远程 fs/shell/jobs 以 Cordis 插件提供服务，这样 tool-bash / tool-fs 才能在
 # boot 时等到 fs/shell/jobs 并激活。本机执行族全部关闭（下方 DISABLED）。
 - insert:
@@ -100,6 +150,24 @@
       config: {}
     - id: remote-jobs
       name: '../providers/remote-jobs.js'
+      config: {}
+
+# glob / grep：注册名与出厂 dsh-tool-fs-search 逐字一致，执行改走 exec 的
+# /internal/v1/fs/{find,grep}（ADR 0009 D8）。出厂那个要本机 subprocess + ripgrep，
+# 而本机执行族一律不挂（ADR 0007 D11）——不为它单独恢复 subprocess。
+# 名字抄出厂是为了：将来若换回出厂实现，风险表 / tool-risk.json / 前端一处都不用改。
+- insert:
+    - id: remote-fs-search
+      name: '../providers/remote-fs-search.js'
+      config: {}
+
+# ask_user_question：dsh-base 只带 dsh-user-questions 这个 seam（ctx.userQuestions），
+# **没有带对应的工具**，所以模型今天问不了人。这个包是那个 seam 的 Consumer，
+# 注册名 ask_user_question（ADR 0009 D3 的两个缺口之一）。
+# 停泊/续跑仍由 application 承担：WAITING_INPUT + 现有应答 API + 重放。
+- insert:
+    - id: tool-ask-user
+      name: '@deepseek-ai/dsh-tool-ask-user'
       config: {}
 
 # 子 Agent：原生 trusted same-process 对不上，退回 durable 队列面。

@@ -149,6 +149,22 @@ const ADDITIONS: readonly PatchEntry[] = [
       { id: 'remote-jobs', name: ownModule('remote-jobs'), config: {} },
     ],
   },
+  {
+    comment:
+      'glob / grep：注册名与出厂 dsh-tool-fs-search 逐字一致，执行改走 exec 的' + '\n' +
+      '/internal/v1/fs/{find,grep}（ADR 0009 D8）。出厂那个要本机 subprocess + ripgrep，' + '\n' +
+      '而本机执行族一律不挂（ADR 0007 D11）——不为它单独恢复 subprocess。' + '\n' +
+      '名字抄出厂是为了：将来若换回出厂实现，风险表 / tool-risk.json / 前端一处都不用改。',
+    insert: [{ id: 'remote-fs-search', name: ownModule('remote-fs-search'), config: {} }],
+  },
+  {
+    comment:
+      'ask_user_question：dsh-base 只带 dsh-user-questions 这个 seam（ctx.userQuestions），\n' +
+      '**没有带对应的工具**，所以模型今天问不了人。这个包是那个 seam 的 Consumer，\n' +
+      '注册名 ask_user_question（ADR 0009 D3 的两个缺口之一）。\n' +
+      '停泊/续跑仍由 application 承担：WAITING_INPUT + 现有应答 API + 重放。',
+    insert: [{ id: 'tool-ask-user', name: '@deepseek-ai/dsh-tool-ask-user', config: {} }],
+  },
 ];
 
 // ── 明确关掉的出厂插件 ────────────────────────────────────────────────────
@@ -163,11 +179,41 @@ const DISABLED: readonly PatchEntry[] = [
   disable('jobs'),
   disable('tool-pwsh'),
   disable('tool-fs-search', 'tool-fs-search 依赖本机 subprocess + ripgrep；搜索由 exec 的 /internal/v1/fs/* 承担。'),
-  disable('approval', '不组合原生审批/权限预设（ADR 0007 D4）；企业策略走\n`policy/install.ts` 的四个挂载点。'),
-  disable('permission'),
+  // approval **不再** disabled（ADR 0009 D5 改写了 ADR 0007 D4）：
+  // dsh-user-approval 提供的是通道中立的 `ctx.approval` seam，**本身没有 answerer**，
+  // 缺 answerer 时 fail-closed 到 unavailable。企业审批的「大脑」仍在
+  // policy/install.ts 的四个挂载点（判 ask、铸 PENDING、digest、租户、预算、账本），
+  // seam 只是「嘴」。answerer 由 enterprise-approval-answerer 插件提供（下方 ADDITIONS）。
+  //
+  // permission 继续关：那是 dsh-permission-presets，一个把 sandbox-mode 与
+  // approval-policy 打包成产品级下拉的 process-level 旋钮，没有租户维度。
+  // 2026-08-31 查 registry 确认 approval 不依赖它（只依赖 schemastery）。
+  disable('permission', '不组合 dsh-permission-presets：process-level、无租户维度；' + '\n' +
+    '隔离权威是 Bubblewrap / exec，不是 DSH 本机围栏（ADR 0009 D5）。'),
   disable('session-persistence-jsonl', '关掉本机 JSONL 会话落盘。MySQL PersistenceBackend 由\nboot.createSessionBackend 按 Run 装配。'),
   disable('session-checkpoint-policy'),
   disable('session-query-sqlite'),
+
+  // ——— 以下八组是 2026-08-31 起栈实测（scripts/dump-tool-registry.ts）才发现的：
+  // 它们在 dsh-base 里就是激活的，模型能看见，而 ADR 0009 完全没提。风险表与分类器
+  // 是 fail-closed 的，所以它们的现状是「模型看得见、一调必被拒」。
+  //
+  // 默认按本 ADR 自身的原则一律关掉，理由逐条写在下面。每一条都可以单独翻转：
+  // 打开 = 删掉这里的 disable() + 把工具名加进 runtime/policy/tool-names.ts。
+  // 处置表见 docs/design/dsh-host-tools.md H2.0。
+  disable('web', '出网面不进 agent 进程：`web_search` 让模型直接联网，而\nplan.md §12 要求业务数据只经受控的数据库 MCP。'),
+  disable('web-search-deepseek'),
+  disable('tool-web'),
+  disable('tool-workflow', '`workflow` 在本进程 worker thread 里跑 JS 编排子 Agent\n——那是本机执行面，ADR 0007 D11 不挂。'),
+  disable('workflow-worker-thread'),
+  disable('tool-ralph', '`ralph` 是朝一个不可变目标反复重试的自主循环，不受每 Run\n预算与账本约束，不在本阶段范围。'),
+  disable('tool-subagent-fork', '子 Agent 只有 durable one-shot 一种形态\n（subagent-spawn-in-process 已关）。fork 与 control 面都要求可续聊的\nsame-process 子 Agent，与我们的 provider 对不上。'),
+  disable('subagent-fork-in-process'),
+  disable('tool-subagent-control'),
+  disable('tool-subagent-list-agents'),
+  disable('tool-goal', 'goal 三件套是会话内目标状态机：没有企业面、没有前端卡片、\n没有风险表条目。与 memory 同理（D10），本阶段不做。'),
+  disable('plan-mode', 'plan mode 的交接工具同上。'),
+  disable('tool-str-replace-editor', '与 read/write/edit 功能重复的第二套编辑工具。\n留着就是「同一件事两处各算一遍」，且要在风险表里维护两份条目。'),
 ];
 
 /** 完整清单，顺序即 patch 应用顺序（最后写入获胜）。 */

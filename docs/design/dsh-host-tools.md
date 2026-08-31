@@ -390,9 +390,23 @@ SSE 契约、审批中心与提问应答的 URL 不动。
       判据：原样返回的空实现过不了这条。
 - [x] **H1.9** 用例：`memory_write` 被拒且理由码是 `TOOL_RETIRED` 而非 `unknown`。
 
-### H2 Overlay：补包、开 approval、插 remote-fs-search
+### H2 Overlay：补包、开 approval、插 remote-fs-search ✅ **完成 2026-08-31**（H2.5 顺延到 H4）
 
-- [ ] **H2.0** ⛔ **处置 H0.1 查出的 8 个 ADR 没预料到的已注册工具**。它们在 fail-closed 分类器下
+> **落地结果**：boot 之后模型可见的工具面从 23 个收敛到 **14 个，与
+> `ENTERPRISE_DEFAULT_TOOLS` 精确相等**：
+> `ask_user_question bash edit glob grep job_kill job_list job_output read read_image
+> skill subagent todo_write write`。
+>
+> 两个实跑撞出来的坑，都写进了代码注释：
+> 1. `ctx.tools` **必须经 `inject` 声明**，直接取会抛 `cannot get property "tools" without inject`；
+> 2. 自建插件模块**不能有 `export default`**——加了之后 loader 取的是那个默认导出函数，
+>    看不见 `inject`，于是同样抛。
+>
+> 验证走**子进程**（沿用 `boot-composition-probe.ts` 的既有做法：boot 起的插件树
+> 没有 dispose 接口，留在测试进程里会让 `node:test` 挂住）。断言是**恰好相等**
+> 而不是「包含」——「包含」抓不到「多出来一个」，而多出来正是 H0 撞到的事故形状。
+
+- [x] **H2.0** ⛔ **处置 H0.1 查出的 8 个 ADR 没预料到的已注册工具**。它们在 fail-closed 分类器下
       全部会被拒，所以必须先定去留。**默认按 ADR 自身的原则一律 `disabled`**（理由逐条见下），
       每条都可单独翻转：
 
@@ -408,18 +422,21 @@ SSE 契约、审批中心与提问应答的 URL 不动。
       | `tool-str-replace-editor` | `str_replace_editor` | 与 `read`/`write`/`edit` 重复，「同一件事两处各算一遍」 |
 
       判据：H2.7 的 boot 用例断言 `schemas()` 的集合**恰好等于** H1.1 的常量，多一个少一个都红。
-- [ ] **H2.1** `agent/package.json` 加 `@deepseek-ai/dsh-tool-ask-user`、`@deepseek-ai/dsh-mcp-client`，
+- [x] **H2.1** `agent/package.json` 加 `@deepseek-ai/dsh-tool-ask-user`、`@deepseek-ai/dsh-mcp-client`，
       版本钉 `0.1.1-rc.2`（与 `constants.ts:4` 的 `PINNED_DSH_VERSION` 一致）。
       判据：装完 `npm ls` 无 peer 冲突。
-- [ ] **H2.2** `manifest.ts` —— `approval` 从 `DISABLED` 移出并配置；**`permission` 留在 `DISABLED`**。
+- [x] **H2.2** `manifest.ts` —— `approval` 从 `DISABLED` 移出并配置；**`permission` 留在 `DISABLED`**。
       判据：`npm run gen:patch` 后 YAML 里 `approval` 无 `disabled: true`、`permission` 有。
-- [ ] **H2.3** ∥ 实现 `runtime/providers/remote-fs-search.ts`，打 exec `/internal/v1/fs/*`；
+- [x] **H2.3** ∥ 实现 `runtime/providers/remote-fs-search.ts`，打 exec `/internal/v1/fs/*`；
       **注册名必须是 `glob` 和 `grep`**。判据：注册名与出厂完全一致，换回出厂实现时零处要改。
-- [ ] **H2.4** `manifest.ts` `ADDITIONS` 插 `remote-fs-search`；`tool-fs-search` 保持 disabled。
-- [ ] **H2.5** `manifest.ts` `ADDITIONS` 插 `enterprise-approval-answerer`（H4 实现，此处先能起栈的占位）。
-- [ ] **H2.6** `boot.test.ts:37` —— `tool-fs-search` 从「必须 disabled」清单移到
+- [x] **H2.4** `manifest.ts` `ADDITIONS` 插 `remote-fs-search`；`tool-fs-search` 保持 disabled。
+- [→] **H2.5** `enterprise-approval-answerer` 顺延到 H4 一起做。
+      不插空壳的原因：`dsh-user-approval` 在**没有 answerer 时 fail-closed 到 `unavailable`**，
+      这本身就是正确的中间态；插一个「总是返回某个值」的占位反而会让 H4 之前的行为
+      看起来像已经工作了。
+- [x] **H2.6** `boot.test.ts:37` —— `tool-fs-search` 从「必须 disabled」清单移到
       「disabled 且存在同名替代」的断言。
-- [ ] **H2.7** ⛔ **起全树 boot 的用例**（把 H0.1 的脚本固化）：断言注册表里同时有
+- [x] **H2.7** ⛔ **起全树 boot 的用例**（把 H0.1 的脚本固化）：断言注册表里同时有
       `glob`/`grep`/`ask_user_question`，且 `glob` 来源是 `remote-fs-search` 不是 `tool-fs-search`；
       断言 `ctx.approval` 存在、`ctx.permissionPresets` 不存在。
       判据：**只匹配 YAML 字符串的用例不算验收**（`boot.test.ts:74` 那种「留给真实链路」到此为止）。

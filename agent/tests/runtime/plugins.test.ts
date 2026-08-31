@@ -87,14 +87,32 @@ test('本机执行族全部关闭（ADR 0007 D11：Bubblewrap 在 exec 进程里
     'jobs',
     'tool-pwsh',
     'tool-fs-search',
-    'approval',
     'permission',
     'session-persistence-jsonl',
     'session-checkpoint-policy',
     'session-query-sqlite',
+    // 2026-08-31 起栈实测才发现的一批：它们在 dsh-base 里本来就激活，
+    // ADR 0009 完全没提，模型能看见。理由逐条在 manifest.ts 的 DISABLED 里。
+    'web',
+    'web-search-deepseek',
+    'tool-web',
+    'tool-workflow',
+    'workflow-worker-thread',
+    'tool-ralph',
+    'tool-subagent-fork',
+    'subagent-fork-in-process',
+    'tool-subagent-control',
+    'tool-subagent-list-agents',
+    'tool-goal',
+    'plan-mode',
+    'tool-str-replace-editor',
   ]) {
     assert.ok(disabled.has(id), `${id} 必须 disabled`);
   }
+
+  // approval **不在**这份清单里，而且必须不在：ADR 0009 D5 改写了 ADR 0007 D4
+  // ——组合 `ctx.approval` seam + 自建 answerer。permission 仍然关着（上面）。
+  assert.equal(disabled.has('approval'), false, 'approval seam 必须打开（ADR 0009 D5）');
 });
 
 test('新增一个自建插件只需要改 manifest 一处', () => {
