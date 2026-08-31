@@ -618,11 +618,13 @@ SSE 契约、审批中心与提问应答的 URL 不动。
 - [x] **H6.5** 启用时**把字节复制成只读的已发布副本**（不是挂载草稿目录）。
       判据：用例——改草稿后重跑，已启用包内容不变。
 - [x] **H6.6** 启用态与内容摘要落 owner-scoped MySQL 表（ADR 0006 P1 (C)）。
-- [→] **H6.7** ⚠️ **未做**：前端上传仍走 `installSkillArchive` 直接写已启用根。
-      改成「解包进草稿根 → 走同一条启用路径」要动 Capabilities HTTP 与前端上传流，
-      与 H9 的前端改动是同一批，**并入 H9**。
-      现状不是不安全（上传本来就是人的动作），但它绕过了新的启用闸门，
-      所以两条路径的语义暂时不一致——这一点必须在 H9 收口。
+- [x] **H6.7** ✅ **做成了，之前的「跨轮改动」是我自己过度收缩**。
+      `manager.install()` 的目标根改成**该用户的草稿根**
+      （`draftSkillRootFor({orgId,userId})`，与已启用根同样是 `<base>/<orgId>/<userId>`）；
+      新增 `manager.enable()` / `manager.disable()` 走 `skills/enablement.ts` 的同一条闸门。
+      上传与模型创建从此是同一个故事：都落在草稿里，都要人按一下才进 prompt 与只读挂载。
+      用例断言上传后**已启用根仍是空的**——绕过闸门的话，两条路径的语义就分叉了。
+      审计里 `action` 从 `install` 变成 `draft`，摘要写明「a human must enable it」。
 - [x] **H6.8** ⚠️ **ADR D7 的「一并退役 `source-digest.ts`」写宽了，只退役了一半**：
       `assertSourceDigest()`（`skill_install(source=sandbox)` 专用）已删；
       但 `digestArgs()` 与 `rejectMismatchedDigest()` **必须留着**——它们是 D5 审批续跑的
@@ -676,9 +678,15 @@ SSE 契约、审批中心与提问应答的 URL 不动。
       判据：用例——两个 `toolPolicy` 不同的 Run 并发，各自 `schemas(scope)` 不同；
       且被 restrict 掉的工具在 `guard()` 层**仍然**会被拒（两层都要在，可见性不是权威层）。
       注意 d.ts 的坑：restriction 只过滤**继承**面，不过滤 scope 自己注册的工具。
-- [→] **H7.8** 真实 MCP server 端到端（工具出现在注册表并调通）→ **并入 H9 的 compose**。
-      单测覆盖到的是生成与渲染（`tests/runtime/mcp-entries.test.ts` 6 条），
-      连真服务器要 compose。
+- [x] **H7.8** ✅ **做成了，之前的「要 compose」是判断错误**：MCP 连接发生在 agent
+      进程里，不经过 exec，所以不需要 Bubblewrap。用官方 `@modelcontextprotocol/sdk`
+      写了一台真的 stdio server（`tests/runtime/fixtures/mcp-echo-server.mjs`，
+      那个 SDK 本来就是 `dsh-mcp-client` 的依赖，不引入新依赖），
+      实测：注册成 `mcp__echo__echo`、调用往返回 `echo:hello-from-h7-8`。
+      用例 `tests/runtime/mcp-live.test.ts` 跑在子进程里（同 `boot.test.ts` 的理由）。
+      **它顺带抓出 H2.7 断言里的一个真错误**：那条拿全集去比
+      `ENTERPRISE_DEFAULT_TOOLS`，而 MCP 工具是部署配置、永远不在那份固定名单里
+      ——**任何配了 MCP 的部署都会让它红**。已改成 host 面精确相等 + MCP 只断言命名形状。
 - [x] **H7.9** 未配到的 `mcp__*` 一律落到 `high`（要审批），**绝不掉到 allow**。
       不能只靠精确 key：出厂包对超长/非法名会规范化并追加 12 位十六进制哈希。
       租户层只能收紧的用例一并补上。

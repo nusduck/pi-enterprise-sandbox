@@ -181,3 +181,50 @@ test('H6.13 启用不得遮蔽系统 skill（检查搬到启用这一刻，不�
     await ws.cleanup();
   }
 });
+
+// ── H6.7：上传与模型创建走同一条闸门 ───────────────────────────────────────
+
+test('H6.7 上传解包进草稿根，不直接写已启用根', async () => {
+  const ws = await scratch();
+  const { createSkillManager } = await import('../src/skills/manager.js');
+  const { createStoredZip } = await import('./support/stored-zip.js');
+
+  const manager = createSkillManager({
+    skillRoots: [path.join(ws.published, '..', 'system'), ws.published],
+    userSkillRoot: ws.published,
+    draftSkillRoot: ws.draft,
+    downloadArchive: async () => {
+      const zip = createStoredZip([
+        {
+          name: 'SKILL.md',
+          content: '---\nname: uploaded\ndescription: from a zip\n---\n\nbody\n',
+        },
+      ]) as Buffer;
+      const { createHash } = await import('node:crypto');
+      return new Response(zip, {
+        headers: {
+          'content-type': 'application/zip',
+          'content-length': String(zip.length),
+          'x-dataset-sha256': createHash('sha256').update(zip).digest('hex'),
+        },
+      });
+    },
+  });
+
+  await manager.install({ attachmentId: 'dataset-1', archiveName: 'uploaded.zip' });
+
+  // 上传后**只**落在草稿里：闸门还没过，它不该进已启用根。
+  assert.deepEqual(await fsp.readdir(ws.draft), ['uploaded']);
+  assert.deepEqual(
+    await fsp.readdir(ws.published),
+    [],
+    '上传绕过启用闸门的话，模型造的包必须经人启用、上传的包不必——两条路径语义就分叉了',
+  );
+
+  // 走同一条闸门之后才进已启用根。
+  const record = await manager.enable({ name: 'uploaded' });
+  assert.equal(record.name, 'uploaded');
+  assert.deepEqual(await fsp.readdir(ws.published), ['uploaded']);
+
+  await ws.cleanup();
+});

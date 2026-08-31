@@ -239,8 +239,23 @@ test('boot 之后实际挂载的是自建实现，不是出厂实现', () => {
   // 所以上面那些 YAML 字符串断言永远抓不到它们。而分类器 fail-closed：
   // 模型看得见、一调必被拒。上游升级后新塞进来一个工具，这条会红。
   assert.notEqual(mounted.toolNames, null, 'ctx.tools 必须挂上');
-  const actual = new Set(mounted.toolNames ?? []);
+  const all = mounted.toolNames ?? [];
+  // MCP 工具是**部署配置**（`MCP_SERVERS_JSON` → 每台服务器一个
+  // `dsh-mcp-client` 实例），永远不在 `ENTERPRISE_DEFAULT_TOOLS` 这份**固定**
+  // 名单里。拿全集去比是错的——任何配了 MCP 的部署都会让这条红。
+  // 2026-08-31 H7.8 起真实 MCP 服务器时才撞出来。
+  //
+  // 「恰好相等」的用意（抓上游 dsh-base 新塞进一个工具）对**host 工具面**保留；
+  // MCP 那部分只断言命名形状。
+  const actual = new Set(all.filter((n) => !n.startsWith('mcp__')));
   const expected = new Set<string>(ENTERPRISE_DEFAULT_TOOLS);
+  for (const name of all.filter((n) => n.startsWith('mcp__'))) {
+    assert.match(
+      name,
+      /^mcp__[A-Za-z0-9_-]{1,32}__.+$/,
+      `MCP 工具必须是 mcp__<serverName>__<rawName> 形状：${name}`,
+    );
+  }
   assert.deepEqual(
     [...actual].filter((n) => !expected.has(n)).sort(),
     [],

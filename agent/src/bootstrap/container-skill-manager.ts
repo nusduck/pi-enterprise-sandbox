@@ -43,7 +43,7 @@ export type SkillManagerFactory = (
 export async function buildSkillManagerFactory(
   env: NodeJS.ProcessEnv,
 ): Promise<SkillManagerFactory> {
-  const [{ createSkillManager, resolveSkillRoots }, { createSandboxClient }] =
+  const [{ createSkillManager, resolveSkillRoots, draftSkillRootFor }, { createSandboxClient }] =
     await Promise.all([
       import('../skills/manager.js'),
       import('../infrastructure/sandbox/sandbox-client.js'),
@@ -67,6 +67,9 @@ export async function buildSkillManagerFactory(
       manager = createSkillManager({
         identity: { orgId, userId },
         skillRoots: resolveSkillRoots(env, { orgId, userId }),
+        // 上传解包到这个用户自己的草稿根（ADR 0009 D7 / 计划 H6.7），
+        // 而不是直接写已启用根——上传与模型创建从此走同一条启用闸门。
+        draftSkillRoot: draftSkillRootFor({ orgId, userId }),
         downloadArchive: ({ attachmentId, signal }) =>
           sandboxClient.downloadDatasetContent(sandboxSessionId, attachmentId, {
             signal,

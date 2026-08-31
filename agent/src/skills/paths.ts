@@ -81,6 +81,20 @@ export function userSkillRootFor(identity: { orgId: unknown, userId: unknown }, 
 }
 
 /**
+ * 该用户的 skill **草稿根**（ADR 0009 D7 / 计划 H6.7）。
+ *
+ * 与 `userSkillRootFor` 同样是 `<base>/<orgId>/<userId>`——每用户一个，
+ * 所以一个用户造的包不会进另一个用户（或另一个 org）的上下文。
+ * 区别只在 base：草稿根是 `DRAFT_SKILL_ROOT`，且它**不进发现、不进 prompt**。
+ */
+export function draftSkillRootFor(
+  identity: { orgId: unknown; userId: unknown },
+  base: string = DRAFT_SKILL_ROOT,
+) {
+  return userSkillRootFor(identity, base);
+}
+
+/**
  * Skill roots one Run may read, in precedence order.
  * Without an identity there is no user tier — the caller sees system only.
  *

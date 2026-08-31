@@ -15,6 +15,7 @@ import {
   primarySkillRoot,
   skillRootsForIdentity,
   userSkillRootFor,
+  draftSkillRootFor,
   writableSkillRoot,
   isUnderSkillRoot,
 } from './paths.js';
@@ -27,6 +28,8 @@ import {
   SKILL_INSTALL_TIMEOUT_MS,
 } from './install.js';
 import { SKILL_ARCHIVE_MAX_BYTES } from './archive.js';
+import { disableSkillPackage, enableDraftPackage } from './enablement.js';
+import { join as joinPath } from 'node:path';
 import { emitSkillAudit } from './audit.js';
 
 /**
@@ -135,6 +138,14 @@ export interface SkillManagerOptions {
   identity?: { orgId: unknown; userId: unknown } | null;
   skillRoots?: string[];
   userSkillRoot?: string | null;
+  /**
+   * 该用户的 skill **草稿根**（ADR 0009 D7 / 计划 H6.7）。
+   *
+   * 上传现在解包到这里，而不是直接写已启用根——上传与模型创建从此是同一个故事：
+   * 都落在草稿里，都要人按一下「启用」才进 prompt 与只读挂载。
+   * 省略时回退到旧行为（直接装），并在审计里标出来。
+   */
+  draftSkillRoot?: string | null;
   downloadArchive?:
     | ((input: { attachmentId: string; signal?: AbortSignal }) => Promise<unknown>)
     | null;
@@ -163,6 +174,9 @@ export function createSkillManager(options: SkillManagerOptions = {}) {
   const userRoot = options.userSkillRoot
     ? normalizeSkillRoots([options.userSkillRoot])[0]
     : writableSkillRoot(skillRoots);
+  const draftRoot = options.draftSkillRoot
+    ? normalizeSkillRoots([options.draftSkillRoot])[0]
+    : null;
   const downloadArchive =
     typeof options.downloadArchive === 'function' ? options.downloadArchive : null;
   const downloadWorkspaceArchive =
@@ -321,12 +335,19 @@ export function createSkillManager(options: SkillManagerOptions = {}) {
               'the user to enable it again.',
           );
         }
+        // ADR 0009 D7 / 计划 H6.7：上传解包进**草稿根**，不再直接写已启用根。
+        // 上传与模型创建从此是同一个故事——都落在草稿里，都要人按一下「启用」
+        // 才进 prompt 与只读挂载。少了这一步，两条路径的语义就不一致：
+        // 模型造的包必须经人启用，上传的包不必。
+        const destinationRoot = draftRoot ?? userRoot;
         const result = await installSkillArchive({
           archiveBytes: downloaded.bytes,
           archiveName,
           sourceType,
           ...(fromSandbox ? { sourcePath } : { attachmentId }),
-          skillRoot: userRoot,
+          skillRoot: destinationRoot,
+          // 草稿根里叫什么名字都行（它不进任何人的上下文）；遮蔽检查在**启用**
+          // 那一刻做。但仍然传进去——直接装的回退路径需要它。
           systemSkillNames: systemSkillNames(),
         });
         audit({
@@ -355,6 +376,74 @@ export function createSkillManager(options: SkillManagerOptions = {}) {
     // 直接用 `write` / `bash` 往草稿根里写，闸门移到 UI 上的「启用」
     // （`skills/enablement.ts`）。这两个方法此前**没有任何生产调用方**——
     // 唯一的通路是 `skillManagerFactory`，而那个端口只喂给已删除的 extension bundle。
+
+    /**
+     * 启用一个草稿包（ADR 0009 D7 / 计划 H6.4–H6.7）。
+     *
+     * **这是整个 skill 面唯一的闸门。** 模型造的包和用户上传的包都停在草稿根里，
+     * 走到这里才进 prompt 与只读挂载。它校验结构、把**字节复制**成一份只读的
+     * 已发布副本、返回可入库的记录（`user_skill_enablements`）。
+     *
+     * 复制而不是挂草稿：两份字节之后，模型改草稿动不了已启用的包
+     * ——ADR 0006 P1 (B) 那条绕过因此在构造上消失。
+     */
+    async enable(params) {
+      if (!draftRoot) {
+        throw new Error('skill enablement requires a draft root (draftSkillRoot)');
+      }
+      if (!userRoot) {
+        throw new Error('skill enablement requires a writable user skill root');
+      }
+      const name = String(params?.name || '').trim();
+      if (!name) throw new Error('skill enablement requires a package name');
+      const draftPackageDir = joinPath(draftRoot, name);
+      try {
+        const record = await enableDraftPackage({
+          draftPackageDir,
+          publishedRoot: userRoot,
+          expectedName: name,
+          systemSkillNames: systemSkillNames(),
+        });
+        audit({
+          action: 'enable',
+          result: 'success',
+          skill_name: record.name,
+          source_type: 'draft',
+          source: `draft:${name}`,
+          summary:
+            `enabled ${record.name} digest=${record.contentDigest.slice(0, 16)} ` +
+            `files=${record.fileCount} bytes=${record.totalBytes}`,
+        });
+        return record;
+      } catch (error) {
+        audit({
+          action: 'enable',
+          result: 'failure',
+          skill_name: name,
+          source_type: 'draft',
+          source: `draft:${name}`,
+          error: error?.message || String(error),
+        });
+        throw error;
+      }
+    },
+
+    /** 停用：删掉已发布副本。**草稿不动**——停用不是删除用户的工作成果。 */
+    async disable(params) {
+      if (!userRoot) {
+        throw new Error('skill disablement requires a writable user skill root');
+      }
+      const name = String(params?.name || '').trim();
+      if (!name) throw new Error('skill disablement requires a package name');
+      const result = await disableSkillPackage({ publishedRoot: userRoot, name });
+      audit({
+        action: 'disable',
+        result: 'success',
+        skill_name: name,
+        summary: result.removed ? `disabled ${name}` : `${name} was not enabled`,
+      });
+      return result;
+    },
 
     async uninstall(params) {
       assertWritable('uninstall');
@@ -432,4 +521,5 @@ export {
   USER_SKILL_ROOT,
   skillRootsForIdentity,
   userSkillRootFor,
+  draftSkillRootFor,
 };
