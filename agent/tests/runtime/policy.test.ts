@@ -63,6 +63,101 @@ test('pre-execute：指纹一致时放行（否则上一条用例恒真）', asy
   assert.equal(result.decision.decision, 'allow');
 });
 
+// ── 续跑：按参数指纹认已落库的决定（ADR 0009 D5 / 计划 H4.4）─────────────
+
+test('H4.4 续跑：批准过的同一组参数直接放行，且换了 callId 也认', async () => {
+  const store = new InMemoryApprovalStore();
+  const args = { command: 'ls /home/sandbox/workspace' };
+
+  // 第一次：撞审批，铸 PENDING。
+  const first = await evaluatePreExecute(
+    { toolName: 'bash', args, callId: 'call-1' },
+    store,
+    undefined,
+    { bash: 'high' },
+  );
+  assert.equal(first.decision.decision, 'require_approval');
+  const approvalId = first.approval?.id ?? '';
+
+  // 人批准。
+  await store.persistPending({ ...(first.approval as never), status: 'APPROVED' });
+
+  // 续跑是**重建会话后让模型重新发起同一个调用**，callId 是新的。
+  // 只按 callId 查会查不到——ADR D5 说的「callId + digest」，跨会话时
+  // 能对上的只有 digest 这一半。
+  const replay = await evaluatePreExecute(
+    { toolName: 'bash', args, callId: 'call-2-different' },
+    store,
+    undefined,
+    { bash: 'high' },
+  );
+  assert.equal(replay.decision.decision, 'allow', '批准过的同一组参数必须放行');
+  assert.equal(replay.decision.reasonCode, 'APPROVAL_GRANTED_ONCE');
+  assert.equal(replay.blocked, false);
+  assert.equal(replay.approval, null, '不该再铸一条 PENDING');
+
+  // 一次性：出厂词表只有 allowed-once，没有 allow-always。
+  const third = await evaluatePreExecute(
+    { toolName: 'bash', args, callId: 'call-3' },
+    store,
+    undefined,
+    { bash: 'high' },
+  );
+  assert.equal(
+    third.decision.decision,
+    'require_approval',
+    '同一条批准不得被重复使用——那是越权',
+  );
+  assert.notEqual(approvalId, '');
+});
+
+test('H4.4 续跑：参数被改过就查不到那条批准，重新走审批', async () => {
+  const store = new InMemoryApprovalStore();
+  const approved = { command: 'ls /home/sandbox/workspace' };
+  const first = await evaluatePreExecute(
+    { toolName: 'bash', args: approved, callId: 'c1' },
+    store,
+    undefined,
+    { bash: 'high' },
+  );
+  await store.persistPending({ ...(first.approval as never), status: 'APPROVED' });
+
+  // 人批准的是 A 这组参数；模型落地时换成了 B。
+  const tampered = await evaluatePreExecute(
+    { toolName: 'bash', args: { command: 'rm -rf /' }, callId: 'c2' },
+    store,
+    undefined,
+    { bash: 'high' },
+  );
+  assert.equal(
+    tampered.decision.decision,
+    'require_approval',
+    '指纹绑的是字节：改一个字符就不该沿用那条批准',
+  );
+});
+
+test('H4.4 续跑：被人拒过的同一组参数直接拒，理由码稳定', async () => {
+  const store = new InMemoryApprovalStore();
+  const args = { command: 'shutdown now' };
+  const first = await evaluatePreExecute(
+    { toolName: 'bash', args, callId: 'c1' },
+    store,
+    undefined,
+    { bash: 'high' },
+  );
+  await store.persistPending({ ...(first.approval as never), status: 'DENIED' });
+
+  const again = await evaluatePreExecute(
+    { toolName: 'bash', args, callId: 'c2' },
+    store,
+    undefined,
+    { bash: 'high' },
+  );
+  assert.equal(again.decision.decision, 'deny');
+  assert.equal(again.decision.reasonCode, 'APPROVAL_REJECTED');
+  assert.equal(again.blocked, true);
+});
+
 test('guard：拒绝后后续监听器无法放行', () => {
   const deny = () =>
     makePolicyDecision({

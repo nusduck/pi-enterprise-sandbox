@@ -42,7 +42,7 @@ import {
  * @param toolExecution
  * @returns {Record<string, unknown>}
  */
-function resolveApprovedReplayArgs(replaySession: Record<string, any>, toolExecution: { toolCallId: string, toolName: string, argumentsJson?: unknown, _argsIntegrity?: string | null }) {
+function resolveApprovedReplayArgs(replaySession: Record<string, any>, toolExecution: { toolCallId: string, toolName: string, argumentsJson?: unknown, _argsIntegrity?: string | null }): Record<string, unknown> | null {
   const recovered = findToolCallArgumentsInSession(
     replaySession,
     toolExecution.toolCallId,
@@ -58,12 +58,15 @@ function resolveApprovedReplayArgs(replaySession: Record<string, any>, toolExecu
     return (ledgerArgs as Record<string, unknown>);
   }
 
-  const failure = new Error(
-    'approved tool replay cannot recover the original arguments: they are ' +
-      'absent from the session and the ledger view is redacted',
-  );
-  (failure as any).code = 'APPROVED_TOOL_ARGS_UNRECOVERABLE';
-  throw failure;
+  // 2026-08-31（ADR 0009 D5 / 计划 H4.5）：这里原来**抛**
+  // `APPROVED_TOOL_ARGS_UNRECOVERABLE`。当时必须抛——application 要亲自
+  // 拿这组参数去执行工具，拿不准就不能跑。
+  //
+  // 现在执行者是循环：application 只回一段续跑提示，参数由模型重新发出，
+  // 再由 `tools/pre-execute` 按**指纹**核对那条 APPROVED 记录。所以这里
+  // 恢复不出参数只影响**审计条目写得细不细**，不影响正确性——
+  // 而抛出去会把一次本来合法的续跑直接打死。返回 null，调用方照常继续。
+  return null;
 }
 
 /**
@@ -161,23 +164,30 @@ export async function prepareApprovalResume(executor, {
       { resource: 'tool_executions', id: toolExecution.toolExecutionId },
     );
   }
-  if (typeof runtimeSession.getToolDefinition !== 'function') {
-    throw new Error(
-      'Pi runtime cannot replay approved tool: getToolDefinition unavailable',
-    );
-  }
-  const definition = runtimeSession.getToolDefinition(toolExecution.toolName);
-  if (!definition || typeof definition.execute !== 'function') {
-    throw new Error(
-      `approved tool definition is unavailable: ${toolExecution.toolName}`,
-    );
-  }
-
-  // The ledger's argumentsJson is the redacted `$payload`, not the original:
-  // a string over DEFAULT_MAX_STRING comes back truncated, which both breaks
-  // the args-integrity replay check and would run the approved tool on
-  // truncated input. The session holds what the model actually emitted.
-  const replayArgs = resolveApprovedReplayArgs(replaySession, toolExecution);
+  // ── 2026-08-31（ADR 0009 D5 / 计划 H4.5）：重放交回循环 ─────────────────
+  //
+  // 这里原来是 application 自己认领并执行被批准的工具：
+  //   `runtimeSession.getToolDefinition(name).execute(toolCallId, args, …)`
+  //   然后把结果 splice 进会话的 tool-result 槽。
+  //
+  // **那条路在 DSH 下已经跑不通了**：DSH 的 session（`runtime-factory.ts` 里
+  // 构造的那个）根本没有 `getToolDefinition`，所以这一支只会抛
+  // "Pi runtime cannot replay approved tool"——即「审批能停泊，但批准之后
+  // 续不回去」。不是本次重构把它弄坏的，是 Pi→DSH 之后它就一直是坏的。
+  //
+  // 新形状：**application 只负责停下来和重新跑起来，执行者是循环**。
+  // 这里只回一段续跑提示；模型重新发起同一个调用，`tools/pre-execute` 按
+  // 「工具名 + 参数指纹」查到那条 APPROVED 记录，直接放行（一次性消费）。
+  // 于是预算、账本、脱敏、租户 guard 这些挂载点**照常全部生效**——
+  // 而 application 自己 execute 时它们是全被绕过去的。
+  //
+  // 指纹绑的是字节：人批准的是 A 这组参数，模型如果改了任何一个字符，
+  // 指纹对不上就查不到那条批准，于是重新走一次审批。ADR D5 要的
+  // 「同意之后、落地之前 args 指纹对不上必须拒绝」由此满足。
+  // 只为审计留一条「续跑已发起」。真正的执行与它的账本条目由循环那边的
+  // post-execute 挂载点记——那里才有真实结果、真实耗时、真实脱敏。
+  // 参数恢复不出来时记 `{}`，不阻断续跑（见 resolveApprovedReplayArgs）。
+  const replayArgs = resolveApprovedReplayArgs(replaySession, toolExecution) ?? {};
 
   await executor._governanceRecorder.recordToolStarted({
     toolCallId: toolExecution.toolCallId,
@@ -186,70 +196,11 @@ export async function prepareApprovalResume(executor, {
     approvalId,
   });
 
-  let result;
-  try {
-    result = await definition.execute(
-      toolExecution.toolCallId,
-      replayArgs,
-      signal,
-      undefined,
-      undefined,
-    );
-  } catch (err) {
-    await executor._governanceRecorder.recordToolUnknown({
-      toolCallId: toolExecution.toolCallId,
-      toolName: toolExecution.toolName,
-      args: replayArgs,
-      errorCode: 'APPROVED_TOOL_REPLAY_UNCERTAIN',
-      result: {
-        unknown: true,
-        approvalId,
-        reason: sanitizeStatusReason(err),
-      },
-    });
-    const failure: Error & { code?: string } = new Error(
-      `approved tool replay outcome is uncertain: ${sanitizeStatusReason(err) || 'unknown error'}`,
-    );
-    failure.code = 'APPROVED_TOOL_REPLAY_UNCERTAIN';
-    throw failure;
-  }
-
-  const isError = Boolean(result?.isError);
-  await executor._governanceRecorder.recordToolEnded({
-    toolCallId: toolExecution.toolCallId,
-    toolName: toolExecution.toolName,
-    args: replayArgs,
-    isError,
-    result: result ?? null,
-  });
-
-  const safeResult = redactPayload(result ?? null);
-  const fallbackText = JSON.stringify(safeResult ?? null).slice(0, 20_000);
-  const content = Array.isArray(result?.content)
-    ? result.content
-    : [{ type: 'text', text: fallbackText }];
-  const rewrote = replaceSuspendedToolResultInSession(replaySession, {
-    toolCallId: toolExecution.toolCallId,
-    toolName: toolExecution.toolName,
-    content,
-    details: {
-      ...(result?.details && typeof result.details === 'object'
-        ? result.details
-        : {}),
-      approvalId,
-      approvalReplay: true,
-    },
-    isError,
-  });
   return (
-    `[Approval resolution] Approval ${approvalId} was granted. ` +
-    `The original ${toolExecution.toolName} call ` +
-    `(toolCallId=${toolExecution.toolCallId}) was executed exactly once with ` +
-    `its approved arguments${isError ? ' and returned an error' : ''}. ` +
-    (rewrote
-      ? 'Its result is recorded in the tool result slot. '
-      : `Its redacted result is: ${fallbackText || '(empty)'}. `) +
-    'Continue from that result without issuing the same operation again.'
+    `[Approval resolution] Approval ${approvalId} was granted for ` +
+    `${toolExecution.toolName}. Re-issue exactly that call with exactly the ` +
+    `same arguments as before — it will now be allowed to run once. ` +
+    `Changing any argument revokes the approval and will ask a human again.`
   );
 }
 

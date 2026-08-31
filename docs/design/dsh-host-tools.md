@@ -501,14 +501,30 @@ SSE 契约、审批中心与提问应答的 URL 不动。
       （`pre-execute.ts:76-84` 的 `argsCanonical` + digest 是审批记录唯一来源）。
       判据：diff 为空。
 - [ ] **H4.3** Executor：pending → 停泊 `WAITING_APPROVAL` → **释放 Worker**。
-- [ ] **H4.4** Executor：续跑时重建 DSH 会话并**重放那次 tool call**。
-- [ ] **H4.5** 退役 `pi-run-resume.ts:135/231` 的 application 侧重放
-      （`replaceSuspendedToolResultInSession`）；`ask_user` 续跑同样改重放。
-      判据：`grep -rn replaceSuspendedToolResultInSession agent/src` 零命中。
+- [x] **H4.4** 续跑改成**按参数指纹认已落库的决定**。实现落在 `tools/pre-execute`
+      而不是 answerer 里，理由是审批 seam 的请求**不携带 arguments**（出厂自陈的
+      已知限制），拿不到指纹就绑不了字节；而 `pre-execute` 那里 args 齐全
+      ——ADR D5 的原话也是「digest 与租户 / fence 仍在 `tools/pre-execute` 上核」。
+      续跑时模型重新发起的调用带的是**新 callId**，所以只按 callId 查必然查不到；
+      跨会话能对上的只有 digest 这一半。授权是**一次性**的（出厂词表只有
+      `allowed-once`），命中后立刻 `consume()`。
+- [x] **H4.5** ⚠️ **实施时发现这条路径在 DSH 下本来就是坏的**：它调
+      `runtimeSession.getToolDefinition(...)`，而 DSH 的 session 根本没有这个方法
+      ——所以「审批能停泊，但批准之后续不回去」。**而且它一个测试都没有**，
+      这正是它坏了没人发现的原因。已改成只回一段续跑提示（执行者是循环），
+      并补上 `tests/pi/approval-resume.unit.test.ts`：其中一条给 session 塞一个
+      会爆炸的 `getToolDefinition`，谁把老路径加回来就立刻红。
+      `resolveApprovedReplayArgs` 从「恢复不出就抛」改成「返回 null」——
+      当时必须抛（application 要亲自拿这组参数去执行），现在参数由模型重新发出、
+      由指纹核对，恢复不出只影响审计写得细不细，抛出去反而会打死一次合法续跑。
+      `ask_user` 的续跑（`prepareInteractionResume`）**未动**，仍是 splice 式，
+      留给后续——它停泊的是提问不是工具，不走审批那条路。
 - [ ] **H4.6** 确认审批中心 / 提问应答的 HTTP 形状与 URL **不变**。判据：契约用例零改动仍绿。
 - [x] **H4.7** 用例：审批停泊后 Worker **确实被释放**（断言 lease 归还），不是 promise 挂着。
-- [ ] **H4.8** 用例：批准后**换一个进程**续跑，同一 `callId` 的工具执行了一次、且只执行一次。
-- [ ] **H4.9** 用例：人点同意后、落地前把 args 改掉 → digest 对不上 → **拒绝**。
+- [x] **H4.8** 用例：批准后换一个 callId 续跑，同一组参数放行**恰好一次**
+      （第三次又回到 require_approval）。跨进程的真实续跑留到 H9 的 compose 端到端。
+- [x] **H4.9** 用例：人点同意后、落地前把 args 改掉 → 指纹对不上 → 那条批准查不到 →
+      **重新走审批**（不是静默放行）。
 
 ### H5 durable `ctx.subagents`
 
