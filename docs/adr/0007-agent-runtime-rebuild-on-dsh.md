@@ -82,14 +82,17 @@ prompt section，以及 `fs-observation-policy` 那套 read-before-edit 与版�
 
 **不组合 `dsh-permission-presets`、`dsh-sandbox-policy`。**
 ~~不组合 `dsh-user-approval`~~ — **已由 [ADR 0009](0009-dsh-host-tools-and-application-steward.md) D5
-改写**：问人走原生审批（可以不带工具参数）；`source_digest` / 租户 / fence 仍走
-本表的 `tools/pre-execute` 与 `ctx.tools.guard()`，不靠审批 UI 绑定字节。
+改写**：组合 `ctx.approval` 这个 seam，但 answerer 是我们自建的插件（上游不提供
+answerer）；风险表与审批记录仍在本表的 `tools/pre-execute` 上铸，租户 / fence 仍走
+`ctx.tools.guard()`，不靠审批 UI 绑定字节。停泊语义是 park + 重建会话重放——
+上游的 `ctx.approval.request` 必须处在一个 open turn 内，不能挂起等人。
 `dsh-permission-presets` 与本机 `dsh-sandbox-policy` 仍不组合（隔离权威是 exec /
 Bubblewrap）。
 [ADR 0002](0002-dsh-harness-evaluation.md) 判定的「审批不携带工具参数」不再视为
-阻断组合的理由。`tools/pre-execute` 能读参数（其已知限制原文是不能 *rewrite*，
-我们也不需要改写）。
-**[ADR 0006](0006-user-skill-enablement-gate.md) 的 P1 仍未实施**；0009 也不提前做启用闸门。
+阻断组合的理由：审批记录在 `tools/pre-execute` 里铸，那里参数齐全（其已知限制原文是
+不能 *rewrite*，我们也不需要改写）。
+**[ADR 0006](0006-user-skill-enablement-gate.md) 的 P1 形状已由 0009 D7 改写**：
+用户侧 skill 不再有变更工具，模型直接写草稿根，闸门只剩「启用」。
 
 ### D5：会话持久化（吸收 [ADR 0005](0005-pi-session-jsonl-persistence.md)）
 

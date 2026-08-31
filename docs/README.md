@@ -52,17 +52,19 @@ Out-of-map directories:
 | ADR | Topic |
 |-----|-------|
 | [0001](./adr/0001-pi-coding-agent-sdk.md) | Adopt upstream `pi-coding-agent` SDK — **Superseded by 0007** |
+| [0002](./adr/0002-dsh-harness-evaluation.md) | DeepSeek Harness 评估（审批 seam / preset / 闸门的实测结论，0007 与 0009 的证据来源） |
 | [0004](./adr/0004-session-persistent-tmp.md) | Agent Session–private persistent `/tmp` |
 | [0005](./adr/0005-pi-session-jsonl-persistence.md) | Pi session JSONL persistence — **Superseded by 0007 D5** |
 | [0006](./adr/0006-user-skill-enablement-gate.md) | User skill enablement gate |
 | [0007](./adr/0007-agent-runtime-rebuild-on-dsh.md) | Rebuild agent runtime on DeepSeek Harness |
 | [0008](./adr/0008-sandbox-isolation-and-fs-seam-redesign.md) | Exec isolation and FS seam（取代 Python sandbox） |
-| [0009](./adr/0009-dsh-host-tools-and-application-steward.md) | 出厂工具挂 host；application 做 DSH 管家（改写 0007 D4 的审批组合） |
+| [0009](./adr/0009-dsh-host-tools-and-application-steward.md) | 出厂工具挂 host；application 做 DSH 管家（改写 0007 D4 的审批组合、0006 P1 的闸门形状） |
 
-**0002 and 0003 are intentionally absent.** They were 07-12 task specs
-(`0002-backend2712`, `0003-fronted0712`) whose decisions `plan.md` superseded;
-they were removed on 2026-07-19 in `7370220d`. The numbers are retired — a new
-ADR takes the next unused number (**0010**). Recover the originals from git
+**0003 is intentionally absent.** `0002-backend2712` and `0003-fronted0712` were
+07-12 task specs whose decisions `plan.md` superseded; they were removed on
+2026-07-19 in `7370220d`. **0002 was later reissued** as the DSH harness
+evaluation above; 0003 stays retired. A new ADR takes the next unused number
+(**0010**). Recover the originals from git
 history if you need the historical reasoning; do not cite them as current.
 
 ## How to close an acceptance item

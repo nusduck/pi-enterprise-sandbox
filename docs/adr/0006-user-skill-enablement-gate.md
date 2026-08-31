@@ -2,7 +2,7 @@
 
 | 字段 | 值 |
 |------|----|
-| 状态 | Proposed |
+| 状态 | Proposed —— **P1 已被 [ADR 0009](0009-dsh-host-tools-and-application-steward.md) D7 改写**（见下方「P1 的现状」） |
 | 日期 | 2026-08-28 |
 | 决策所有者 | Agent runtime / Sandbox isolation maintainers |
 | 适用范围 | `agent/` 的 skill-lifecycle 与 tool-risk 表、`sandbox/` 的 Skill 绑定、前端 Skill 管理面 |
@@ -58,6 +58,21 @@ P0 不放宽任何权限边界：`cat`、`cd &&`、管道、重定向、`$(...)`
 仍然全部拒绝。放宽这些是 P1 的结果，不是前提。
 
 ### P1（待实施）：闸门移到「启用」
+
+> **P1 的现状（2026-08-31）**：方向被 [ADR 0009](0009-dsh-host-tools-and-application-steward.md)
+> D7 采纳，形状改了——**不是**把四个变更工具降到 `low` 再加一个 `skill_enable` 工具，
+> 而是**整套变更工具取消**：模型用 `tool-fs` / `tool-bash` 直接写一个可写的草稿根，
+> 启用只在 UI 上由人做。因此：
+> - (A) 已由 [ADR 0008](0008-sandbox-isolation-and-fs-seam-redesign.md) D4 的逐包
+>   `ro_bind` 满足（`exec/src/isolation/build.ts` 的 `buildSkillPackageMounts`）。
+> - (B) 由「启用时把字节复制成只读副本」替代——草稿与已启用是两份字节，
+>   改草稿动不了已启用的包，不需要常驻摘要校验。
+> - (C) 不变：启用态在 owner-scoped MySQL 表里。
+> - 下面「拒绝」里的「直接把四个工具降到 `low` 而不引入启用态」仍然成立
+>   （0009 也没有这么做），但其中「让 `source_digest` 变成死代码」一句已经过时：
+>   0009 D7 明确退役了 `source_digest`，因为它服务的「审批后重放 zip」路径不再存在。
+>
+> 本节以下是 2026-08-28 的原文，保留以存档当时的推理。
 
 引入每个用户对每个 Skill 的**启用态**，把唯一的 `high` 风险工具变成 `skill_enable`；
 `skill_install` / `skill_create` / `skill_edit` / `skill_uninstall` 全部降到 `low` + 审计。

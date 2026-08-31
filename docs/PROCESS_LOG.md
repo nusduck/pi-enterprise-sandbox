@@ -193,3 +193,19 @@ Each entry should say **what changed**, **why**, and **which STATUS IDs** it aff
 - **Action:** 新增 `docs/adr/0009-dsh-host-tools-and-application-steward.md`。锁定：不采用 `dsh-web-app`；组合为 dsh-base + overlay；出厂 tool 挂 host 不用 preset；旧 Extension 的模型面用 dsh-base；组合 `dsh-user-approval`（改写 0007 D4）；memory 与模型侧 `skill_install` 本阶段不做；application 改为听 DSH、停泊 Run、对 BFF 负责。
 - **Why:** 0007 换了引擎但删 Extension 后没把 base 里的 tool 按 bundle 方式留在循环上；讨论中曾把官方 web 的 preset 误当成加插件的通则。
 - **STATUS IDs:** 无行翻转（决策尚未实施）。A2 取证对象将在实施时按 0009 改写。
+
+## 2026-08-31 — ADR 0009 第二版：审批 park+replay、工具名先行、skill 取消变更工具
+
+- **Action:** 重写 `docs/adr/0009-dsh-host-tools-and-application-steward.md`（决策仍未实施）；同步 `docs/adr/0006-user-skill-enablement-gate.md` 的 P1 状态、`docs/README.md` 的 ADR 索引、`docs/design/waves/HANDOFF.md` 的「剩下什么」。
+- **What:** D4 新增「工具名是契约面」并列为第 0 步（`risk-table.ts` / `tool-risk-classifier.ts` / `constants.ts` / `tool-risk.json` 四处 fail-closed，外加 AgentVersion 冻结快照里的旧工具名要别名映射）；D5 改成组合 `ctx.approval` seam + 自建 answerer，停泊语义写死为 park + 重建会话重放（上游不支持 out-of-turn 审批），application 侧重放退役；D3 换掉「所有 Run 工具一样」这个错误理由，改用 ADR 0002 实测的「preset 表 process-level 无租户维度」，AgentVersion 差异走 `pre-execute` 过滤；D7 取消 `skill_install/create/edit/uninstall` 与 `source_digest`，改为可写草稿根 + 启用时复制只读副本，`skill-creator` 承担语义；D8 自建 `remote-fs-search`；D9 新增 MCP 一节；每条 D 补「现状差距」。README 的 ADR 索引补回 0002（号已复用），并把「0002 与 0003 都不存在」更正为只有 0003 退役。
+- **Why:** 初版有三处会在起栈时直接撞墙：原生审批是没有 answerer 的 seam 且必须在 open turn 内（跨 Worker resolve 不成立）；工具名换了而 fail-closed 名单没换；`source_digest` 与「不给模型 skill 工具」同时写就是死代码。另有两处事实错误（工具面按 AgentVersion 就是不同的；前端并非零改动——todo 卡片按 `todo_write` 的 schema 解析）。
+- **STATUS IDs:** 无行翻转（决策仍未实施）。A2 取证对象仍待实施时按 0009 改写。
+- **Not done:** 实施本身一步未动；base 出厂工具的真实注册名要等 `npm i` 后从包里抄；MCP 工具怎么进 DSH 注册表未定。
+
+## 2026-08-31 — ADR 0009 按 registry 实物核对（MCP 有出厂包；工具名拿到真名单）
+
+- **Action:** 用 `npm view` / `npm pack` 直接查 `@deepseek-ai/*@0.1.1-rc.2` 的实物，改写 ADR 0009 的 D3 / D4 / D5 / D8 / D9 与「影响」。仍未开始实施。
+- **What:** ① **D9 推翻上一版**——`@deepseek-ai/dsh-mcp-client` 存在（"connects to MCP servers and registers their tools on ctx.tools"，依赖官方 `@modelcontextprotocol/sdk`），只是不在 `dsh-base` 里而在 CLI 包 `@deepseek-ai/dsh` 的依赖里；官方就是「一个 server 一个插件实例」写进 `cordis.yml`。改为组合出厂包 + 退役 `pi-mcp-adapter@2.11.0` 与自建发现。② **D4 拿到真名单**：`read/write/edit/read_image`、`glob/grep`、`bash`、`job_list/job_output/job_kill`、`todo_write`、`skill`、`subagent`、`ask_user_question`；`ls`/`find`/`process_*`/`skill_*`/`spawn_subagent`/`ask_user` 全是死条目，出厂 `tool-fs` 没有 `ls`。③ **D3 补两个缺口**：base 只有 `ctx.userQuestions` seam，问人的**工具** `dsh-tool-ask-user` 要另加依赖；MCP 同理。④ **D5 悬念查清**：`dsh-user-approval` 只依赖 schemastery，与 `dsh-permission-presets` 无关，而 base 里的 `permission` id 就是 presets——打开 `approval`、继续关 `permission`。⑤ D8 明确自建搜索必须注册成 `glob` / `grep`。⑥ 影响里更正前端：`todo_write` 名字不变但**结果形状变了**（result 是一句话，清单在 arguments 与 `todo/write` 事件里）。
+- **Why:** 上一版的 D9 建立在「DSH 没有 MCP 传输」这句代码注释上，那句只对 `dsh-base` 成立；D4 的名单是推的不是查的，而它是 fail-closed 的第 0 步，推错就是整片工具被拒。
+- **STATUS IDs:** 无行翻转。A3（`pi-mcp-adapter` 仍在用）在 D9 落地时可翻转。
+- **Not done:** 实施未动；MCP 工具的**可见性**能否按 agent/session 收窄仍要装好包后确认（执行层过滤不受影响）。

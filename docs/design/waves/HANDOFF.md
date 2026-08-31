@@ -115,8 +115,11 @@ Wave 7 已按语义补齐。规矩仍在 [README.md](README.md) 里，请继续�
 
 循环与 `application/` 的下一步以
 [ADR 0009](../../adr/0009-dsh-host-tools-and-application-steward.md) 为准：
-出厂 tool 挂 host（不要为「挂上」去加 preset）；问人用 `dsh-user-approval`；
-application 做停泊/SSE/租户，不再 registerTool。
+出厂 tool 挂 host（不要为「挂上」去加 preset）；**第 0 步是把工具名改齐**（风险表
+与分类器 fail-closed，漏一处就是整片工具被拒）；问人用 `ctx.approval` seam **加一个
+自建 answerer**，停泊靠「park + 重建会话重放」，不靠挂起 promise；用户侧 skill 没有
+变更工具，模型直接写草稿根、启用是唯一闸门；`application/` 做停泊/SSE/租户，
+不再 registerTool（`agent/src/runtime` 里的插件仍然可以注册工具）。
 
 ### 1. 真实链路（Mac 上用 Docker 就能做）
 
