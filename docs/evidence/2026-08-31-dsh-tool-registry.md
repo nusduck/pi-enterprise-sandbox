@@ -262,4 +262,24 @@ for (const p of [providers.fs, providers.shell, providers.jobs]) {
 > 并发 Run **不得**靠「`rebind` 根 ctx 上的同一份 provider」——那会串台。
 
 ADR 把它写成「要保证的约束」，但代码里**已经是**被禁止的那个写法。
-所以 H3 不是「补断言」，是**修缺陷 + 补断言**。计划已相应改写。
+所以 H3 不是「补断言」，是**修缺陷 + 补断言**。
+
+### 缺陷的实际范围（2026-08-31 修复时核准，初稿写宽了）
+
+**租户身份是安全的**：`ExecRpcClient.envelope()` 走 `currentExecRpc()`，
+ALS 优先于构造值，所以 `orgId`/`userId`/`workspaceId`/`fenceToken` 不会串。
+初稿把这条写成「跨租户串台」，范围写宽了，此处更正。
+
+**真正被 `rebind` 改坏的是 `physicalRoots`**：它不走 ALS，是 provider 上的字段，
+而它每 Run 不同（`buildExecRpcConfig` 取 `input.physicalRoots ?? [input.cwd]`，
+cwd 就是该租户的工作区）。这份根用于**路径脱敏**，且只在
+`ExecRpcClient.post()` 的「未分类错误」分支上用（网络 / 超时 / 非 JSON；
+线上回来的 `FsError`/`ContractError` 原样透传，脱敏是 exec 侧的责任）。
+
+后果具体是：并发时 B 的 `rebind` 把脱敏根换成 B 的，于是 **A 的未分类错误按 B 的根
+脱敏 → A 的真实物理路径原样漏进错误消息**。复现固定在
+`agent/tests/runtime/tenant-isolation.test.ts`（修之前红，修之后绿）。
+
+**修法**：三个 provider 的 `roots` 从字段改成 getter，调用时取
+`this.rpc.activeConfig().physicalRoots`（即 ALS）；`runtime-factory` 里那段
+`p.rebind(rpc)` 删除。租户上下文从此只有 ALS 一条通路。

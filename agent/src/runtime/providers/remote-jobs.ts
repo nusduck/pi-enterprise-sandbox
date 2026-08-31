@@ -19,7 +19,6 @@ export interface RemoteJobsOptions extends ExecRpcConfig {}
 
 export class RemoteJobs extends JobRegistry {
   private readonly rpc: ExecRpcClient;
-  private roots: readonly string[];
   private readonly doneListeners = new Set<(snap: JobSnapshot, owner: Agent | undefined) => void>();
   private readonly changedListeners = new Set<(owner: Agent | undefined) => void>();
   private readonly controllers = new Set<string>();
@@ -28,12 +27,22 @@ export class RemoteJobs extends JobRegistry {
     super(ctx as unknown as never);
     const resolved = resolveExecRpcConfig(options);
     this.rpc = new ExecRpcClient(resolved);
-    this.roots = resolved.physicalRoots;
   }
 
   rebind(options: ExecRpcConfig): void {
     this.rpc.rebind(options);
-    this.roots = options.physicalRoots;
+  }
+
+  /**
+   * 脱敏用的物理根，**每次调用时从本 Run 的 ALS 取**（ADR 0009 D3）。
+   *
+   * 2026-08-31 之前这是一个字段，由 `rebind()` 按 Run 改写。而 provider 是
+   * 全进程共享的单例（`ensureCtx` 是 `bootOnce`），所以并发的第二个 Run 会把
+   * 第一个 Run 的脱敏根换掉——A 的未分类错误按 B 的根脱敏 = A 的真实路径原样泄漏。
+   * 见 `tests/runtime/tenant-isolation.test.ts`。
+   */
+  private get roots(): readonly string[] {
+    return this.rpc.activeConfig().physicalRoots;
   }
 
   override start(spec: JobStart): JobId {

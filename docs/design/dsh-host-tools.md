@@ -441,20 +441,30 @@ SSE 契约、审批中心与提问应答的 URL 不动。
       断言 `ctx.approval` 存在、`ctx.permissionPresets` 不存在。
       判据：**只匹配 YAML 字符串的用例不算验收**（`boot.test.ts:74` 那种「留给真实链路」到此为止）。
 
-### H3 修跨租户缺陷 + ALS 作用域取证
+### H3 修跨租户缺陷 + ALS 作用域取证 ✅ **H3.0–H3.2 完成 2026-08-31**（H3.3 等 H4）
+
+> **缺陷范围比初稿窄，写清楚免得日后误引**：租户身份（org/user/workspace/fence）
+> 本来就安全，`ExecRpcClient.envelope()` 走 ALS。被 `rebind` 改坏的是
+> **`physicalRoots`**——脱敏根，每 Run 不同，且不走 ALS。后果是并发时
+> A 的未分类错误按 B 的根脱敏，**A 的真实物理路径原样漏进错误消息**。
+>
+> 修法：三个 provider 的 `roots` 从字段改成读 ALS 的 getter；
+> `runtime-factory` 里那段 `p.rebind(rpc)` 删除。租户上下文只剩 ALS 一条通路。
+> 顺带改写了 `tests/pi/dsh-runtime-factory.unit.test.js` 里那条**断言了错误行为**
+> 的用例（它原本要求「每个 Run 都 rebind 一次」）。
 
 > **H0.6 已确认这不是「补断言」而是「修缺陷」**：`runtime-factory.ts:170-174` 现在就是
 > ADR D3 明文禁止的写法——`ensureCtx` 用 `bootOnce` 全进程共用一个根 ctx，
 > `createRemoteProviders()` 在已挂载时返回**同一份实例**，然后每个 Run 对它 `rebind(rpc)`。
 > 两个并发 Run，后一个 `rebind` 覆盖前一个。
 
-- [ ] **H3.0** ⛔ 先写**会红的**用例：并发两个不同租户的 Run，各触发一次 `read`，
+- [x] **H3.0** ⛔ 先写**会红的**用例：并发两个不同租户的 Run，各触发一次 `read`，
       断言各自 RPC 出站带自己的 `orgId/userId/workspaceId/fenceToken`。
       判据：**在修之前这条必须是红的**——不红说明用例没测到真正的并发路径。
-- [ ] **H3.1** 修：provider 实例不再被 Run 改写。`rebind` 从每 Run 的装配路径上去掉，
+- [x] **H3.1** 修：provider 实例不再被 Run 改写。`rebind` 从每 Run 的装配路径上去掉，
       租户上下文只经 `runWithExecRpc` 的 ALS 传递（`exec-rpc.ts:65` 的 `currentExecRpc`
       本来就是 ALS 优先、构造值兜底）。判据：H3.0 转绿。
-- [ ] **H3.2** 用例：断言生产装配路径上**搜不到**对共享 provider 的 `rebind` 调用。
+- [x] **H3.2** 用例：断言生产装配路径上**搜不到**对共享 provider 的 `rebind` 调用。
 - [ ] **H3.3** H4 改完 `runtime-factory.ts:286-289` 后**重跑 H3.0/H3.2**。
       判据：去掉阻塞的 `whenIdle` 之后仍绿——这是 ADR D3 点名要的那条断言。
 

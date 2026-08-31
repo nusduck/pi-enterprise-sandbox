@@ -168,10 +168,16 @@ export function createDshRuntimeFactory(opts: Record<string, any> = {}) {
        * @type {Array<() => void>} */
       const disposers = [];
       const ctx = await ensureCtx(runtime);
+      // provider 是**全进程共享的单例**（`ensureCtx` 是 bootOnce），所以这里
+      // **不得**按 Run 改写它——ADR 0009 D3 原文：「并发 Run 不得靠 rebind 根 ctx 上
+      // 的同一份 provider，那会串台」。2026-08-31 之前这里有一段 `p.rebind(rpc)`，
+      // 正是被禁止的写法：并发的第二个 Run 会把第一个 Run 的脱敏根换掉，
+      // A 的未分类错误按 B 的根脱敏 = A 的真实物理路径原样泄漏。
+      //
+      // 本 Run 的租户/围栏只经 `runWithExecRpc` 的 ALS 传递：`ExecRpcClient` 的
+      // envelope 与 physicalRoots 都在**调用时**取 `currentExecRpc()`。
+      // 因此 prompt() 里的 ALS 作用域必须罩住所有工具执行（同 D3）。
       const providers = runtime.createRemoteProviders(ctx, rpc);
-      for (const p of [providers.fs, providers.shell, providers.jobs]) {
-        if (p && typeof p.rebind === 'function') p.rebind(rpc);
-      }
       const sessionStore = runtime.createSessionBackend({
         physicalRoots: rpc.physicalRoots,
       });

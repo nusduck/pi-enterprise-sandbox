@@ -152,8 +152,15 @@ describe('createDshRuntimeFactory.create', () => {
     await runtime.dispose();
   });
 
-  it('rebinds boot remotes onto the run tenant before prompt', async () => {
+  it('does NOT rebind the shared remotes; the run tenant reaches RPC through the ALS', async () => {
+    // 2026-08-31（ADR 0009 D3 / 计划 H3）：这条以前断言的是**相反**的行为
+    // ——「每个 Run 对 provider 调一次 rebind」。那正是 ADR 明文禁止的写法：
+    // `ensureCtx` 是全进程 bootOnce，provider 是所有 Run 共用的一份实例，
+    // 并发的第二个 Run 会把第一个 Run 的脱敏根换掉（A 的未分类错误按 B 的根
+    // 脱敏 = A 的真实物理路径原样泄漏）。串台的复现见
+    // tests/runtime/tenant-isolation.test.ts。
     const rebound = [];
+    const alsScopes = [];
     const factory = createDshRuntimeFactory({
       env: HMAC,
       bootRuntime: async () => ({}),
@@ -168,14 +175,23 @@ describe('createDshRuntimeFactory.create', () => {
         },
         createSessionBackend: () => ({ name: 'mem' }),
         assembleSystemPrompt: () => 'p',
+        runWithExecRpc: (cfg, fn) => {
+          alsScopes.push(cfg.workspaceId);
+          return fn();
+        },
       }),
       async createAgent() {
         return { agent: { followup() {}, async whenIdle() {}, session: { events: [] } } };
       },
     });
-    await factory.create(baseInput());
-    assert.equal(rebound.length, 3);
-    assert.equal(rebound.every((r) => r.workspaceId === 'ws1'), true);
+    const runtime = await factory.create(baseInput());
+    assert.deepEqual(rebound, [], '共享 provider 不得被按 Run 改写');
+
+    // 租户不是丢了，是换了通路：prompt 把整轮包在本 Run 的 ALS 作用域里。
+    // 这个桩 agent 不产出任何事件，prompt 最后会抛「没有 assistant 输出」——
+    // 与本条无关，我们只关心那之前 ALS 作用域是不是进对了。
+    await runtime.session.prompt('hi').catch(() => undefined);
+    assert.deepEqual(alsScopes, ['ws1'], '本 Run 的租户必须经 ALS 作用域传给 RPC');
   });
 
   it('maps enterprise llmio provider onto the DSH deepseek-official route', async () => {
