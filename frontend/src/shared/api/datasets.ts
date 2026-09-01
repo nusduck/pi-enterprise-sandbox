@@ -77,10 +77,13 @@ export async function uploadDataset(opts: {
   const idempotencyKey = String(opts.idempotencyKey || '').trim();
   if (!idempotencyKey) throw new Error('idempotencyKey is required');
 
-  const form = new FormData();
   const filename = (opts.file as File).name || 'dataset';
-  form.append('file', opts.file, filename);
   const headers = authHeaders();
+  // The BFF and Sandbox proxy the request body as the dataset bytes. A
+  // multipart wrapper makes the stored MIME type `multipart/form-data` and
+  // corrupts both CSV parsing and strict image MIME validation.
+  headers['Content-Type'] = opts.file.type || 'application/octet-stream';
+  headers['X-Filename'] = filename;
   headers['Idempotency-Key'] = idempotencyKey;
   if (opts.traceId) headers['X-Trace-Id'] = opts.traceId;
 
@@ -90,7 +93,7 @@ export async function uploadDataset(opts: {
     {
       method: 'POST',
       headers,
-      body: form,
+      body: opts.file,
       signal: opts.signal ?? undefined,
     },
   );

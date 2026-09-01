@@ -156,6 +156,7 @@ describe('startWorkerMain', () => {
     assert.equal(defaultOptions.lockDuration, undefined);
     assert.equal(defaultOptions.stalledInterval, undefined);
     assert.equal(defaultOptions.maxStalledCount, undefined);
+    assert.equal(defaultOptions.concurrency, 4);
   });
 
   it('createWorkerServices assembly fails closed without MySQL/Redis start', async () => {

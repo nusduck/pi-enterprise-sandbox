@@ -59,6 +59,25 @@ describe('PlatformEventProjector', () => {
     assert.equal(events[2].payload.text, 'safe result');
   });
 
+  it('message_end with reasoning emits thinking.completed before message.completed', () => {
+    const p = new PlatformEventProjector();
+    const events = p.project({
+      type: 'message_end',
+      message: {
+        role: 'assistant',
+        content: [
+          { type: 'reasoning', text: 'I should list the skills.' },
+          { type: 'text', text: 'Here they are.' },
+        ],
+      },
+    }, CTX);
+    assert.equal(events[0].type, 'thinking.completed');
+    assert.equal(events[0].payload.text, 'I should list the skills.');
+    assert.equal(events[1].type, 'message.completed');
+    assert.equal(events[1].payload.message.content[0].type, 'reasoning');
+    assert.equal(events[1].payload.message.content[0].text, 'I should list the skills.');
+  });
+
   it('message_end → message.completed + tool.call.proposed for toolCall blocks', () => {
     const p = new PlatformEventProjector();
     const events = p.project(

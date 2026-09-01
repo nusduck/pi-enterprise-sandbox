@@ -4,11 +4,15 @@
  */
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import {
   buildExecRpcConfig,
   createDshRuntimeFactory,
   mapDshEventToPi,
 } from '../../src/infrastructure/dsh/runtime-factory.js';
+import { validateSnapshotPayload } from '../../src/application/session-json-codec.js';
 
 const HMAC = {
   SANDBOX_INTERNAL_HMAC_KEYRING: JSON.stringify({
@@ -24,6 +28,44 @@ function freshPersistence() {
     has: async () => false,
     runAsOwner: (_owner, fn) => fn(),
   };
+}
+
+function assistantEvent(turn, step, text) {
+  return {
+    type: 'assistant/message',
+    data: {
+      turn,
+      step,
+      message: { role: 'assistant', content: [{ type: 'text', text }] },
+    },
+  };
+}
+
+function factoryEmitting(events, { recovered } = {}) {
+  const factory = createDshRuntimeFactory({
+    env: HMAC,
+    bootRuntime: async () => ({}),
+    loadRuntime: async () => ({
+      createRemoteProviders: () => ({ fs: {}, shell: {}, jobs: {} }),
+      mountSessionPersistence: () => freshPersistence(),
+      assembleSystemPrompt: () => 'p',
+      runWithExecRpc(_cfg, fn) {
+        return fn();
+      },
+    }),
+    async createAgent() {
+      return {
+        agent: {
+          followup() {},
+          async whenIdle() {
+            this.session.events.push(...events);
+          },
+          session: { events: [] },
+        },
+      };
+    },
+  });
+  return factory.create(baseInput(recovered ? { piSnapshot: { snapshotJson: recovered } } : {}));
 }
 
 function baseInput(overrides = {}) {
@@ -193,6 +235,80 @@ describe('createDshRuntimeFactory.create', () => {
     await runtime.dispose();
   });
 
+  it('persists inline prompt images as DSH attachment references', async () => {
+    const saved = [];
+    let followed;
+    const ref = {
+      attachmentId: 'sha256:image-ref',
+      mediaType: 'image/png',
+      bytes: 5,
+      width: 1,
+      height: 1,
+      name: 'icon.png',
+    };
+    const factory = createDshRuntimeFactory({
+      env: HMAC,
+      bootRuntime: async () => ({
+        get(name) {
+          if (name === 'attachments') {
+            return {
+              async saveImage(input) {
+                saved.push(input);
+                return ref;
+              },
+            };
+          }
+          return undefined;
+        },
+      }),
+      loadRuntime: async () => ({
+        createRemoteProviders: () => ({ fs: {}, shell: {}, jobs: {} }),
+        mountSessionPersistence: () => freshPersistence(),
+        assembleSystemPrompt: () => 'p',
+        runWithExecRpc(_cfg, fn) {
+          return fn();
+        },
+      }),
+      async createAgent() {
+        return {
+          agent: {
+            followup(message) {
+              followed = message;
+            },
+            async whenIdle() {
+              this.session.events.push({
+                type: 'message_end',
+                message: { role: 'assistant', content: [{ type: 'text', text: 'ok' }] },
+              });
+            },
+            session: { events: [] },
+          },
+        };
+      },
+    });
+
+    const runtime = await factory.create(baseInput());
+    await runtime.session.prompt('describe', {
+      images: [{
+        type: 'image',
+        data: Buffer.from('hello').toString('base64'),
+        mimeType: 'image/png',
+        name: 'icon.png',
+      }],
+    });
+
+    assert.deepEqual(saved, [{
+      data: Buffer.from('hello'),
+      mediaType: 'image/png',
+      name: 'icon.png',
+    }]);
+    assert.deepEqual(followed.content, [
+      { type: 'text', text: 'describe' },
+      { type: 'image', attachment: ref },
+    ]);
+    await runtime.dispose();
+  });
+
   it('does not re-emit historical session events as this turn\'s assistant output', async () => {
     const factory = createDshRuntimeFactory({
       env: HMAC,
@@ -282,6 +398,56 @@ describe('createDshRuntimeFactory.create', () => {
     }));
     assert.deepEqual(runtime.sessionManager.getHeader(), recovered.header);
     assert.deepEqual(runtime.sessionManager.getEntries(), recovered.entries);
+    await runtime.dispose();
+  });
+
+  it('records assistant journal entries with parentId null on an empty session', async () => {
+    const runtime = await factoryEmitting([assistantEvent(1, 0, 'hello')]);
+    await runtime.session.prompt('hi');
+    const entries = runtime.sessionManager.getEntries();
+    assert.equal(entries.length, 1);
+    assert.equal(Object.prototype.hasOwnProperty.call(entries[0], 'parentId'), true);
+    assert.equal(entries[0].parentId, null);
+    assert.equal(entries[0].id, 'dsh:assistant:1:0');
+    assert.equal(typeof entries[0].timestamp, 'string');
+    assert.match(entries[0].timestamp, /T/);
+    // Same gate the run checkpoint uses; missing parentId/timestamp fails the Run.
+    validateSnapshotPayload({
+      header: runtime.sessionManager.getHeader(),
+      entries,
+    });
+    await runtime.dispose();
+  });
+
+  it('chains parentId onto the recovered journal leaf and across turns in one prompt', async () => {
+    const recovered = {
+      header: {
+        type: 'session',
+        version: 3,
+        id: baseInput().agentSession.agentSessionId,
+        timestamp: '2026-07-18T00:00:00.000Z',
+        cwd: '/home/sandbox/workspace',
+      },
+      entries: [{
+        type: 'custom',
+        id: 'prior-entry',
+        parentId: null,
+        timestamp: '2026-07-18T00:00:00.000Z',
+      }],
+    };
+    const runtime = await factoryEmitting(
+      [assistantEvent(2, 0, 'one'), assistantEvent(2, 1, 'two')],
+      { recovered },
+    );
+    await runtime.session.prompt('follow up');
+    const entries = runtime.sessionManager.getEntries();
+    assert.equal(entries.length, 3);
+    assert.equal(entries[1].parentId, 'prior-entry');
+    assert.equal(entries[2].parentId, 'dsh:assistant:2:0');
+    validateSnapshotPayload({
+      header: runtime.sessionManager.getHeader(),
+      entries,
+    });
     await runtime.dispose();
   });
 
@@ -407,6 +573,85 @@ describe('createDshRuntimeFactory.create', () => {
       model: { id: 'deepseek-v4-flash', provider: 'llmio' },
     }));
     assert.equal(provider, 'deepseek-official');
+  });
+
+  it('waits for scoped system skill registration before publishing an agent', async () => {
+    let registered = false;
+    let provider;
+    const skillRoot = await mkdtemp(path.join(tmpdir(), 'dsh-system-skill-'));
+    await mkdir(path.join(skillRoot, 'docx'));
+    await writeFile(
+      path.join(skillRoot, 'docx', 'SKILL.md'),
+      '---\nname: docx\ndescription: test document skill\n---\n\nDOCX skill body\n',
+    );
+    const makeFiber = (callback) => {
+      let resolve;
+      const ready = new Promise((r) => { resolve = r; });
+      const fiber = () => undefined;
+      fiber.then = (onFulfilled, onRejected) => ready.then(onFulfilled, onRejected);
+      setTimeout(() => {
+        callback();
+        resolve();
+      }, 0);
+      return fiber;
+    };
+    const bootCtx = { get: () => undefined };
+    const agentCtx = {
+      logger: { warn() {} },
+      get(name) {
+        if (name === 'fs') {
+          return {
+            resolve: async () => {
+              throw new Error('remote workspace fs cannot resolve mounted skill roots');
+            },
+          };
+        }
+        return undefined;
+      },
+      on: () => () => undefined,
+      inject(_names, callback) {
+        return makeFiber(() => callback({
+          systemPrompt: { section() {} },
+          tools: { guard() {} },
+          skills: {
+            registerProvider(create) {
+              provider = create({ signal: new AbortController().signal, invalidate() {} });
+              registered = true;
+              return () => undefined;
+            },
+          },
+        }));
+      },
+    };
+    const factory = createDshRuntimeFactory({
+      env: HMAC,
+      bootRuntime: async () => bootCtx,
+      loadRuntime: async () => ({
+        createRemoteProviders: () => ({ fs: {}, shell: {}, jobs: {} }),
+        mountSessionPersistence: () => freshPersistence(),
+        assembleSystemPrompt: () => 'p',
+        runWithExecRpc(_cfg, fn) {
+          return fn();
+        },
+      }),
+      async createAgent(_ctx, options) {
+        await options.setup(agentCtx);
+        assert.equal(registered, true, 'setup must not resolve before the skill provider exists');
+        return { agent: { followup() {}, async whenIdle() {}, session: { events: [] } } };
+      },
+    });
+    try {
+      const runtime = await factory.create(baseInput({ additionalSkillPaths: [skillRoot] }));
+      assert.equal(registered, true, 'setup must not resolve before the skill provider exists');
+      const listed = await provider.list({ cwd: '/home/sandbox/workspace' });
+      const candidates = Array.isArray(listed) ? listed : listed.candidates;
+      assert.equal(candidates[0]?.name, 'docx');
+      const loaded = await provider.get(candidates[0], {});
+      assert.equal(loaded?.content, 'DOCX skill body');
+      await runtime.dispose();
+    } finally {
+      await rm(skillRoot, { recursive: true, force: true });
+    }
   });
 
   it('does not resolve prompt without calling followup (stub message_end is not enough)', async () => {

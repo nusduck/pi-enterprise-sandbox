@@ -64,6 +64,15 @@ function startRequest() {
   } as never;
 }
 
+function directBlockStartRequest() {
+  return {
+    parent: {},
+    prompt: [{ type: 'text', text: 'direct block task' }],
+    signal: new AbortController().signal,
+    label: 'child',
+  } as never;
+}
+
 test('H5 在 Run 作用域内，start() 走 durable spawn 而不是进程内队列', async () => {
   const { port, spawned } = fakeSpawnPort();
   const provider = providerWithFallback();
@@ -78,6 +87,19 @@ test('H5 在 Run 作用域内，start() 走 durable spawn 而不是进程内队�
   assert.equal(spawned[0]?.['orgId'], 'org-1');
   assert.equal(spawned[0]?.['task'], 'go do the thing', 'prompt 的文本要转成 durable 面要的任务串');
   assert.equal(spawned[0]?.['toolCallId'], 'job-1', 'jobId 当幂等键：重复入队只得到同一个子 Run');
+  await run.dispose();
+});
+
+test('H5 accepts DSH content blocks when converting a child prompt to a durable task', async () => {
+  const { port, spawned } = fakeSpawnPort();
+  const provider = providerWithFallback();
+
+  const run = await runWithRunServices(
+    buildRunServices({ spawnPort: port, parentRunId: 'parent-run', tenant: { orgId: 'org-1', userId: 'user-1' } }),
+    async () => provider.start(directBlockStartRequest()),
+  );
+
+  assert.equal(spawned[0]?.['task'], 'direct block task');
   await run.dispose();
 });
 
@@ -100,7 +122,7 @@ test('H5 结果按子 Run 的终态兑现，未到终态时不返回', async () 
       stopReason: string;
     } | null;
     assert.notEqual(done, null, '子 Run 到终态后必须能取到结果');
-    assert.equal(done?.stopReason, 'end_turn');
+    assert.equal(done?.stopReason, 'completed');
     assert.match(String(done?.output?.[0]?.text), /done well/);
     await run.dispose();
   });

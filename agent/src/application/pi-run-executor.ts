@@ -44,6 +44,7 @@ import {
 import { PlatformEventProjector } from '../infrastructure/dsh/event-projector.js';
 import {
   extractAssistantTextForUi,
+  extractAssistantThinkingForUi,
   redactPayload,
 } from '../lib/event-redaction.js';
 import {
@@ -111,6 +112,7 @@ import { approvalIdOf } from '../runtime/policy/approval-id.js';
 import { integrityFingerprint } from '../infrastructure/mysql/repositories/tool-execution-repository.js';
 import { buildRunServices } from './durable-subagent-port.js';
 import { buildRunRiskResolver } from './tool-risk-resolver.js';
+import { createInteractionRequester } from './interaction-requester.js';
 
 /** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
 type Loose = any;
@@ -726,6 +728,10 @@ export class PiRunExecutor {
           ended: (i: Record<string, unknown>) =>
             (this._governanceRecorder as never as Record<string, any>).recordToolEnded(i),
         },
+        interactionRequester: createInteractionRequester({
+          recorder: this._governanceRecorder,
+          runSuspensionPort,
+        }),
         approvalStore: new GovernanceApprovalStore({
           recorder: this._governanceRecorder as never,
           onDurableApprovalPending: (pending) => {
@@ -923,6 +929,7 @@ export class PiRunExecutor {
             images = await this.promptImageLoader({
               attachments: imageAttachments,
               sandboxSessionId: session.sandboxSessionId,
+              workspaceId: session.workspaceId,
               scope,
               traceId,
               traceState,
@@ -1416,7 +1423,8 @@ export class PiRunExecutor {
       const msg = entry.message;
       if (!msg || msg.role !== 'assistant') continue;
       const text = extractAssistantTextForUi(msg);
-      if (!text && !Array.isArray(msg.content)) continue;
+      const thinking = extractAssistantThinkingForUi(msg);
+      if (!text && !thinking && !Array.isArray(msg.content)) continue;
 
       const uiEntryId = `${UI_ASSISTANT_PI_ENTRY_PREFIX}${entry.id}`;
 
@@ -1450,6 +1458,7 @@ export class PiRunExecutor {
               kind: 'assistant_message',
               piEntryId: entry.id,
               text,
+              ...(thinking ? { thinking } : {}),
             },
             piEntryId: uiEntryId,
             piEntryKind: 'assistant_ui',

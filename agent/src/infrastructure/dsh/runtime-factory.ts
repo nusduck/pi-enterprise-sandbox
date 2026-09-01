@@ -18,12 +18,33 @@ import {
   runWithRunServices,
   installEnterprisePolicy,
   InMemoryApprovalStore,
+  installUserQuestionBridge,
+  runWithInteractionRequester,
 } from '../../runtime/index.js';
+import { FileSystemSkillProvider } from '@deepseek-ai/dsh-skill-filesystem';
 import { DshRuntimeFactoryError } from './errors.js';
 import { PINNED_DSH_VERSION } from './constants.js';
 
 /** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
 type Loose = any;
+
+/**
+ * Skill mounts live in the Agent container, while ctx.fs is the remote
+ * workspace filesystem exposed by Exec. Passing the latter to the filesystem
+ * skill provider makes `/home/sandbox/skill` look like a workspace path and
+ * silently hides every mounted system skill. Keep the provider on the local
+ * host filesystem; its roots are fixed, read-only mounts (system plus the
+ * already identity-scoped user directory), not arbitrary workspace paths.
+ */
+function localSkillContext(agentCtx: Loose): Loose {
+  return {
+    logger: agentCtx?.logger ?? console,
+    get(name: string) {
+      if (name === 'fs') return undefined;
+      return typeof agentCtx?.get === 'function' ? agentCtx.get(name) : undefined;
+    },
+  };
+}
 
 export { PINNED_DSH_VERSION, PINNED_PI_SDK_VERSION } from './constants.js';
 export { DshRuntimeFactoryError };
@@ -79,20 +100,58 @@ function dshProviderRoute(raw) {
   return p;
 }
 
-function toUserMessage(
+/** Null root on an empty journal; otherwise the last prior entry id. */
+export function parentIdForAppend(
+  prior: Array<{ id?: unknown }> | null | undefined,
+): string | null {
+  if (!Array.isArray(prior) || prior.length === 0) return null;
+  for (let i = prior.length - 1; i >= 0; i -= 1) {
+    const id = prior[i]?.id;
+    if (typeof id === 'string' && id.trim()) return id;
+  }
+  return null;
+}
+
+async function toUserMessage(
+  ctx: Loose,
   text: unknown,
   options?: { images?: unknown[] },
 ) {
-  // 首块是文本，后面可以追加图片块——两者形状不同，所以元素类型只约束
-  // 共有的 `type`，其余字段由各块自己带。
+  // DSH 的图片块保存的是 ctx.attachments 产生的不可变引用，而不是旧 Pi
+  // API 的 { data, mimeType } 临时块。图片 loader 在进入 DSH 前仍可用旧形状
+  // 搬运并校验字节；这里是唯一的边界适配，避免 base64 落进会话日志。
   const content: Array<{ type: string; [key: string]: unknown }> = [
     { type: 'text', text: String(text ?? '') },
   ];
   const images = options?.images;
   if (Array.isArray(images)) {
     for (const image of images) {
-      if (image && typeof image === 'object')
-        content.push(image as { type: string; [key: string]: unknown });
+      if (!image || typeof image !== 'object') continue;
+      const value = image as Record<string, unknown>;
+      if (value.type !== 'image') {
+        content.push(value as { type: string; [key: string]: unknown });
+        continue;
+      }
+      if (value.attachment && typeof value.attachment === 'object') {
+        content.push(value as { type: string; [key: string]: unknown });
+        continue;
+      }
+      const data = typeof value.data === 'string' ? value.data : '';
+      const mediaType = String(value.mimeType ?? value.mediaType ?? '').trim().toLowerCase();
+      const attachments = ctx?.get?.('attachments');
+      if (!data || !mediaType || typeof attachments?.saveImage !== 'function') {
+        throw new DshRuntimeFactoryError(
+          'DSH image prompt requires attachment bytes and a mounted attachment store',
+        );
+      }
+      const attachment = await attachments.saveImage({
+        data: Buffer.from(data, 'base64'),
+        mediaType,
+        ...(typeof value.name === 'string' && value.name.trim()
+          ? { name: value.name.trim() }
+          : {}),
+      });
+      content.push({ type: 'image', attachment });
     }
   }
   const id =
@@ -178,12 +237,13 @@ export function createDshRuntimeFactory(opts: Record<string, any> = {}) {
   const createAgent = opts.createAgent;
 
   async function ensureCtx(runtime) {
-    if (typeof bootRuntime === 'function') return bootRuntime();
-    // 记忆化在 `boot.ts` 的 `sharedEnterpriseRuntime()` 里——进程内只有一棵树。
-    // 以前这里自己 memo 一份，而 MCP 就绪度走的是另一套 adapter 探测：
-    // 同一件事两处各算一遍，且两边看到的工具面可能不一致（计划 H7.6）。
-    const shared = runtime.sharedEnterpriseRuntime ?? sharedEnterpriseRuntime;
-    return shared();
+    const ctx = typeof bootRuntime === 'function'
+      ? await bootRuntime()
+      : await (runtime.sharedEnterpriseRuntime ?? sharedEnterpriseRuntime)();
+    // `userQuestions` is a process-level service; the provider itself resolves
+    // the active Run from ALS when a tool asks a question.
+    installUserQuestionBridge(ctx);
+    return ctx;
   }
 
   return {
@@ -262,22 +322,49 @@ export function createDshRuntimeFactory(opts: Record<string, any> = {}) {
          * 系统提示词与 MySQL 会话后端算出来就丢了，四个策略挂载点一个没接。
          * Wave 5 的 policy/ 全套有单测且全绿，因为那些测的是纯函数。
          */
-        setup(agentCtx) {
+        async setup(agentCtx) {
           // 1) 企业系统提示词。order -50：在 harness 身份(-100)之后、
           //    部署 persona(0) 之前——企业条款约束 persona，不该被它盖掉。
           //
           //    服务名是 `systemPrompt`（驼峰），且**必须经 inject 取**：
           //    直接 `agentCtx.systemPrompt` 会抛 "cannot get property without
           //    inject"。这两点都是实跑探针撞出来的，不是文档里写着的。
-          disposers.push(
-            agentCtx.inject(['systemPrompt'], (scoped) => {
-              scoped.systemPrompt.section({
-                name: 'enterprise-contract',
-                order: -50,
-                text: promptText,
-              });
-            }),
-          );
+          const systemPromptFiber = agentCtx.inject(['systemPrompt'], (scoped) => {
+            scoped.systemPrompt.section({
+              name: 'enterprise-contract',
+              order: -50,
+              text: promptText,
+            });
+          });
+          disposers.push(systemPromptFiber);
+          await systemPromptFiber;
+
+          // DSH's default skill filesystem provider does not consume the
+          // resourceLoaderOptions passed by this factory. Register one in the
+          // agent scope so only this Run's system and user roots are visible.
+          const configuredSkillPaths = Array.isArray(input.additionalSkillPaths)
+            ? input.additionalSkillPaths
+            : opts.additionalSkillPaths;
+          const skillPaths = Array.isArray(configuredSkillPaths)
+            ? configuredSkillPaths.filter((path) => typeof path === 'string' && path.trim())
+            : [];
+          if (skillPaths.length > 0) {
+            const skillCtx = localSkillContext(agentCtx);
+            const skillsFiber = agentCtx.inject(['skills'], (scoped) => {
+              scoped.skills.registerProvider((control) =>
+                new FileSystemSkillProvider(skillCtx, control, {
+                  providerName: 'run-filesystem',
+                  includeDefaultRoots: false,
+                  customSkillDirs: skillPaths,
+                  dshHome: '/home/sandbox',
+                  agentsHome: '/home/sandbox',
+                  watch: false,
+                }),
+              );
+            });
+            disposers.push(skillsFiber);
+            await skillsFiber;
+          }
 
           // 2) 四个策略挂载点。审批 store 目前是进程内的；换成 MySQL 只换这一个
           //    实参（`InstallPolicyOptions.approvalStore`）。
@@ -354,6 +441,8 @@ export function createDshRuntimeFactory(opts: Record<string, any> = {}) {
         entries.push({
           type: 'message',
           id,
+          parentId: parentIdForAppend([...recoveredEntries, ...entries]),
+          timestamp: new Date().toISOString(),
           message: mapped.message,
         });
       };
@@ -397,11 +486,11 @@ export function createDshRuntimeFactory(opts: Record<string, any> = {}) {
           //   run-services —— 子 Agent 的 durable 队列/结果存储（计划 H5）
           // 它们服务的都是「注册在进程级、却必须按 Run 干活」的插件。
           const withServices = runtime.runWithRunServices ?? ((_: unknown, fn: () => unknown) => fn());
-          return sessionStore.runAsOwner(sessionOwner, () => run(rpc, async () => withServices(input.runServices ?? {}, async () => {
+          return sessionStore.runAsOwner(sessionOwner, () => run(rpc, async () => withServices(input.runServices ?? {}, async () => runWithInteractionRequester(input.interactionRequester, async () => {
             const log = agent.session?.events;
             const priorLen = Array.isArray(log) ? log.length : 0;
             const seenBefore = seenPi.length;
-            agent.followup(toUserMessage(text, options));
+            agent.followup(await toUserMessage(ctx, text, options));
             if (typeof agent.whenIdle === 'function') await agent.whenIdle();
             const liveLog = agent.session?.events;
             // 直播订阅已经在推事件时不要再 dump 整份 session log——那份 log
@@ -431,7 +520,7 @@ export function createDshRuntimeFactory(opts: Record<string, any> = {}) {
               );
             }
             return { entries: [...entries] };
-          })));
+          }))));
         },
         subscribe(fn) {
           subs.push(fn);
@@ -447,7 +536,7 @@ export function createDshRuntimeFactory(opts: Record<string, any> = {}) {
           if (typeof agent.steer !== 'function') {
             throw new Error('DSH agent.steer() is unavailable');
           }
-          agent.steer(toUserMessage(text));
+          agent.steer(await toUserMessage(ctx, text));
         },
         /**
          * 模型可见的工具面。

@@ -17,6 +17,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
 import { installEnterprisePolicy } from '../../src/runtime/policy/install.js';
+import { currentToolExecutionContext } from '../../src/runtime/providers/tool-execution-context.js';
 import { InMemoryApprovalStore } from '../../src/runtime/policy/pre-execute.js';
 import type { GuardListener } from '../../src/runtime/policy/guards.js';
 
@@ -502,6 +503,25 @@ test('H9.6 工具执行两端都记 durable 账本，且记账失败不打死调
   );
   assert.deepEqual(calls.map((c) => c.phase), ['started', 'ended']);
   assert.equal(calls[1]?.isError, true);
+});
+
+test('工具执行 ALS 暴露当前 callId/name/args，供交互桥绑定 durable 行', async () => {
+  const ctx = new FakeCtx();
+  installOn(ctx);
+  let observed;
+  await ctx.execute(
+    { name: 'ask_user_question', arguments: { questions: [] }, id: 'call-als-01' },
+    async () => {
+      await Promise.resolve();
+      observed = currentToolExecutionContext();
+      return { isError: false };
+    },
+  );
+  assert.deepEqual(observed, {
+    callId: 'call-als-01',
+    toolName: 'ask_user_question',
+    args: { questions: [] },
+  });
 });
 
 test('H9.6 记账失败不影响工具结果——账本是外部副作用', async () => {

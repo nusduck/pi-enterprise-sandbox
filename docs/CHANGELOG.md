@@ -25,6 +25,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **前台 durable 子 Agent 不再被单 Worker 并发自阻塞**：DSH 直接 content block prompt
+  现在正确转换为 durable task；Compose/Worker 默认并发提升为 4，父 Run 等待子 Run
+  时仍有可用槽位，避免子 Run 永远停在队列中。
+- **系统 Skill 在 DSH 中不再误报 unknown**：运行时为每个 Agent 安装本地只读 Skill provider，并在 setup 完成后发布能力；不再让远程 workspace FS 覆盖 Agent 容器内的 `/home/sandbox/skill*` 挂载。
 - **MCP 工具在 Docker 部署里对模型不可见**：`MCP_SERVERS_JSON` 原先在 `npm run gen:patch` 时写进提交的 YAML，镜像构建环境是空数组，compose `.env` 里的 Exa 等服务器永远装不进插件树。现在 boot 时按进程环境叠 `dsh-mcp-client`，改配置只需重启 Agent。
 - **多轮对话气泡重复上轮文本、刷新后助手回复消失**：DSH 的 `turn/end` 被当成 `message_end`，并且每一轮把整份 session log（含历史）再投影一遍。现在只映射 `assistant/chunk` / `assistant/message`，并且只在直播订阅没推事件时 dump **本轮新增** 的 log。
 - **`read /home/sandbox/skill/...` 被拒 path escape**：bash 能 ls 系统 skill，FS 围栏却不认这个逻辑前缀，resolve 还拿可写根做 containment。系统 skill 与已启用包现在是只读根。

@@ -181,6 +181,32 @@ describe('normalizeToRuntimeEvent', () => {
     assert.equal(store.messagesById.msg_thinking.thinkingStatus, 'complete');
     assert.equal(store.messagesById.msg_thinking.text, 'final answer');
   });
+
+  it('marks streaming thought complete when the run succeeds without thinking.completed', () => {
+    const runId = 'run_thought_hang';
+    const { store } = reducePlatformEventBatch(createEntityStore(), [
+      platform({ eventId: 'hang_1', sequence: 1, type: 'run.started', runId }),
+      platform({
+        eventId: 'hang_2',
+        sequence: 2,
+        type: 'thinking.delta',
+        runId,
+        data: { delta: 'planning…' },
+      }),
+      platform({
+        eventId: 'hang_3',
+        sequence: 3,
+        type: 'message.delta',
+        runId,
+        data: { delta: 'answer' },
+      }),
+      platform({ eventId: 'hang_4', sequence: 4, type: 'run.completed', runId }),
+    ]);
+    const msg = Object.values(store.messagesById)[0];
+    assert.equal(msg.thinking, 'planning…');
+    assert.equal(msg.thinkingStatus, 'complete');
+    assert.equal(msg.status, 'complete');
+  });
 });
 
 describe('unified platform reducer', () => {

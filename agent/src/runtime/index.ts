@@ -21,6 +21,15 @@ export {
 export { createDurableSubagentProvider, buildDurableJobSpec } from './providers/durable-subagent.js';
 export type { DurableSubagentQueue, DurableSubagentStore, DurableSubagentJobSpec } from './providers/durable-subagent.js';
 export { runWithRunServices, currentRunServices } from './providers/run-services.js';
+export {
+  runWithInteractionRequester,
+  currentInteractionRequester,
+  installUserQuestionBridge,
+} from './providers/user-questions.js';
+export {
+  runWithToolExecutionContext,
+  currentToolExecutionContext,
+} from './providers/tool-execution-context.js';
 export { sharedEnterpriseRuntime, readMcpReadiness } from './boot.js';
 export type { RunServices } from './providers/run-services.js';
 export { createEnabledSkillsProvider, isSkillVisible } from './providers/enabled-skills.js';

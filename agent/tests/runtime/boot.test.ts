@@ -26,6 +26,11 @@ test('cordis.patch.yml：凭据只读 env，网关走 LLMIO_BASE_URL，本机执
   assert.match(yaml, /id: llm-deepseek/);
   assert.match(yaml, /apiKeyEnv: LLMIO_API_KEY/);
   assert.match(yaml, /LLMIO_BASE_URL/);
+  assert.match(
+    yaml,
+    /id: deepseek-v4-flash-vision-exp[\s\S]*?inputModalities:[\s\S]*?- text[\s\S]*?- image/,
+    'the configured DSH route must advertise the selected vision model as image-capable',
+  );
   for (const id of [
     'sandbox',
     'sandbox-policy',

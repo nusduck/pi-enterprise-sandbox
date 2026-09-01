@@ -504,3 +504,28 @@ function normalizePayload(
 
   return p;
 }
+
+export function latestStreamingAssistantId(
+  run: { messageIds?: readonly string[] } | null | undefined,
+  messagesById: Record<string, { role?: string; status?: string } | undefined>,
+): string {
+  if (!run?.messageIds) return '';
+  for (const id of [...run.messageIds].reverse()) {
+    const candidate = messagesById[id];
+    if (candidate?.role === 'assistant' && candidate.status === 'streaming') {
+      return id;
+    }
+  }
+  return '';
+}
+
+export function latestAssistantId(
+  run: { messageIds?: readonly string[] } | null | undefined,
+  messagesById: Record<string, { role?: string; status?: string } | undefined>,
+): string {
+  if (!run?.messageIds) return '';
+  for (const id of [...run.messageIds].reverse()) {
+    if (messagesById[id]?.role === 'assistant') return id;
+  }
+  return '';
+}

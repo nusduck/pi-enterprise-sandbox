@@ -31,6 +31,40 @@ function writeJson(res, status, body, traceId) {
   res.end(JSON.stringify(payload));
 }
 
+function workspaceIdFor(sessionAccess) {
+  const workspaceId = String(
+    sessionAccess?.access?.workspace_id || sessionAccess?.access?.workspaceId || '',
+  ).trim();
+  if (!workspaceId) {
+    const err = new Error('Session workspace unavailable');
+    err.status = 503;
+    err.code = 'SESSION_WORKSPACE_UNAVAILABLE';
+    throw err;
+  }
+  return workspaceId;
+}
+
+/** Keep the public dataset contract keyed by sandbox_session_id. */
+function projectDatasetSession(data, sandboxSessionId, sessionAccess) {
+  if (!data || typeof data !== 'object') return data;
+  const agentSessionId = String(
+    sessionAccess?.access?.agent_session_id || sessionAccess?.access?.agentSessionId || '',
+  ).trim();
+  const project = (row) => {
+    if (!row || typeof row !== 'object') return row;
+    return {
+      ...row,
+      session_id: sandboxSessionId,
+      sandbox_session_id: sandboxSessionId,
+      ...(agentSessionId ? { agent_session_id: agentSessionId } : {}),
+    };
+  };
+  if (Array.isArray(data.datasets)) {
+    return { ...data, datasets: data.datasets.map(project) };
+  }
+  return project(data);
+}
+
 /**
  * Build sandbox ownership headers for dataset formal rows.
  * Tenant principals (org/user) come only from trusted server context
@@ -177,9 +211,21 @@ export async function handleDatasetUpload(conversationId, parsedUrl, req, res) {
     return;
   }
 
+  let workspaceId;
+  try {
+    workspaceId = workspaceIdFor(sessionAccess);
+  } catch (err) {
+    discardRequestBody(req, res);
+    writeJson(res, err.status || 503, { error: err.message, code: err.code }, traceId);
+    return;
+  }
+
   const headers = sandboxProxyHeaders(req, {
     'Content-Type': contentType,
     'X-Trace-Id': traceId,
+    ...(req.headers['x-filename']
+      ? { 'X-Filename': String(req.headers['x-filename']) }
+      : {}),
     ...datasetOwnershipHeaders(req, { conversationId }),
   }, sessionAccess.sandboxAuth);
   if (declared != null && Number.isSafeInteger(declared) && declared >= 0) {
@@ -207,7 +253,7 @@ export async function handleDatasetUpload(conversationId, parsedUrl, req, res) {
   const bounded = createBoundedDatasetUploadBody(req, maxBytes);
   try {
     const sanRes = await fetchSandboxBounded(
-      `${config.SANDBOX_BASE_URL}/sessions/${encodeURIComponent(sessionId)}/datasets`,
+      `${config.SANDBOX_BASE_URL}/sessions/${encodeURIComponent(workspaceId)}/datasets`,
       {
         method: 'POST',
         headers,
@@ -251,7 +297,7 @@ export async function handleDatasetUpload(conversationId, parsedUrl, req, res) {
     const successBody =
       data && typeof data === 'object'
         ? {
-            ...data,
+            ...projectDatasetSession(data, sessionId, sessionAccess),
             conversation_id: data.conversation_id || conversationId,
             trace_id: data.trace_id || sandboxTrace,
           }
@@ -314,6 +360,7 @@ export async function handleListDatasets(
       conversationId,
       traceId,
     });
+    const workspaceId = workspaceIdFor(sessionAccess);
     const headers = sandboxProxyHeaders(
       req,
       {
@@ -323,7 +370,7 @@ export async function handleListDatasets(
       sessionAccess.sandboxAuth,
     );
     const sanRes = await fetchSandboxBounded(
-      `${config.SANDBOX_BASE_URL}/sessions/${encodeURIComponent(sessionId)}/datasets`,
+      `${config.SANDBOX_BASE_URL}/sessions/${encodeURIComponent(workspaceId)}/datasets`,
       { headers },
     );
     const text = await sanRes.text();
@@ -333,7 +380,12 @@ export async function handleListDatasets(
     } catch {
       data = { error: text || 'Invalid sandbox response' };
     }
-    writeJson(res, sanRes.status, data, sanRes.headers.get('x-trace-id') || traceId);
+    writeJson(
+      res,
+      sanRes.status,
+      projectDatasetSession(data, sessionId, sessionAccess),
+      sanRes.headers.get('x-trace-id') || traceId,
+    );
   } catch (err) {
     console.error('[datasets] list:', err.message);
     const status = Number(err?.status) || 500;
@@ -351,4 +403,3 @@ export async function handleListDatasets(
     );
   }
 }
-

@@ -206,6 +206,16 @@ export function summarizeAssistantMessage(message: unknown) {
           args: summarizeToolArgs(String(p.name ?? ''), p.arguments ?? p.args),
         };
       }
+      if (p.type === 'reasoning' || p.type === 'thinking') {
+        const text = redactInlineSecrets(String(p.text ?? p.content ?? ''));
+        const sliced = safeSlice(text, DEFAULT_MAX_STRING);
+        if (sliced.truncated) textTruncated = true;
+        return {
+          type: 'reasoning',
+          text: sliced.truncated ? `${sliced.text}…` : sliced.text,
+          truncated: sliced.truncated,
+        };
+      }
       return { type: String(p.type ?? 'unknown') };
     });
   } else if (typeof m.content === 'string') {
@@ -263,4 +273,20 @@ export function extractAssistantTextForUi(message: unknown) {
     }
   }
   return parts.join('');
+}
+
+/** Provider reasoning/thinking blocks on an assistant message (never synthesized). */
+export function extractAssistantThinkingForUi(message: unknown) {
+  if (!message || typeof message !== 'object') return '';
+  const content = (message as Record<string, unknown>).content;
+  if (!Array.isArray(content)) return '';
+  const parts = [];
+  for (const part of content) {
+    if (!part || typeof part !== 'object') continue;
+    const p = part as Record<string, unknown>;
+    if (p.type !== 'reasoning' && p.type !== 'thinking') continue;
+    const text = redactInlineSecrets(String(p.text ?? p.content ?? ''));
+    if (text) parts.push(text);
+  }
+  return parts.join('\n\n');
 }

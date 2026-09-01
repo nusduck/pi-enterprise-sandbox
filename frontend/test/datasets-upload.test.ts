@@ -69,8 +69,10 @@ describe('Dataset upload API', () => {
       const headers = capturedInit?.headers as Record<string, string>;
       assert.equal(headers['Idempotency-Key'], 'idem_draft_01');
       assert.equal(headers['X-Trace-Id'], 'trace_request');
-      assert.ok(capturedInit?.body instanceof FormData);
-      assert.equal((capturedInit.body as FormData).get('file') instanceof Blob, true);
+      assert.equal(headers['Content-Type'], 'text/csv');
+      assert.equal(headers['X-Filename'], 'sales.csv');
+      assert.equal(capturedInit?.body instanceof Blob, true);
+      assert.equal(await (capturedInit?.body as Blob).text(), 'a,b\n1,2');
       assert.equal(result.dataset_id, 'dataset_01');
       assert.equal(result.trace_id, 'trace_from_response');
     } finally {

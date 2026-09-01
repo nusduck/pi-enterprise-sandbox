@@ -19,6 +19,7 @@ import {
   conversationTitleFromMessages,
   isPlaceholderConversationTitle,
 } from './conversation-title.js';
+import { extractAssistantThinkingForUi } from '../lib/event-redaction.js';
 
 /** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
 type Loose = any;
@@ -104,6 +105,10 @@ export function presentTranscriptMessage(msg) {
   if (role === 'assistant' && !String(text || '').trim()) return null;
 
   const sequenceNo = msg.sequenceNo;
+  const thinking =
+    content && typeof content === 'object' && typeof content.thinking === 'string'
+      ? content.thinking
+      : '';
   return {
     // Keep the durable message identity and ordering fields intact.  The
     // browser transcript is a projection of the append-only messages table,
@@ -119,7 +124,22 @@ export function presentTranscriptMessage(msg) {
       ? Number(sequenceNo)
       : null,
     created_at: msg.createdAt || null,
+    ...(thinking.trim() ? { thinking } : {}),
   };
+}
+
+function thinkingByJournalEntryId(messages: Record<string, any>[] = []) {
+  const map = new Map<string, string>();
+  for (const msg of messages) {
+    const content = msg?.contentJson;
+    if (!content || content.kind !== 'pi_journal_entry') continue;
+    const entry = content.entry;
+    const id = typeof entry?.id === 'string' ? entry.id : '';
+    if (!id) continue;
+    const thinking = extractAssistantThinkingForUi(entry.message);
+    if (thinking) map.set(id, thinking);
+  }
+  return map;
 }
 
 /**
@@ -134,8 +154,17 @@ export function presentTranscriptMessage(msg) {
  * @param [session]
  */
 export function presentConversation(row: Record<string, any>, messages: Record<string, any>[] = [], session: { sandboxSessionId?: string|null, workspaceId?: string|null, agentSessionId?: string|null } | null = null) {
+  const journalThinking = thinkingByJournalEntryId(messages);
   const transcript = Array.isArray(messages)
-    ? messages.map(presentTranscriptMessage).filter(Boolean)
+    ? messages.map((msg) => {
+      const presented = presentTranscriptMessage(msg);
+      if (!presented || presented.role !== 'assistant' || presented.thinking) {
+        return presented;
+      }
+      const piEntryId = msg?.contentJson?.piEntryId;
+      const thinking = typeof piEntryId === 'string' ? journalThinking.get(piEntryId) : '';
+      return thinking ? { ...presented, thinking } : presented;
+    }).filter(Boolean)
     : [];
   const agentSessionId =
     session?.agentSessionId ?? row.currentAgentSessionId ?? null;

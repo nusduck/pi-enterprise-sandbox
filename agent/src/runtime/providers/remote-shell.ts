@@ -49,6 +49,9 @@ class RemoteShellProcess implements ShellProcess {
   private doneResolver: () => void = () => undefined;
   private outputBuf = '';
   private lossy = false;
+  private cursor: string | null = null;
+  private pullInFlight: Promise<void> | null = null;
+  private settled = false;
 
   constructor(
     private readonly rpc: ExecRpcClient,
@@ -66,6 +69,7 @@ class RemoteShellProcess implements ShellProcess {
     void request
       .then((res) => {
         if (res.id !== this.id) throw new Error('exec returned a mismatched process id');
+        void this.monitor();
       })
       .catch(() => this.settleFromExec('killed', null, null));
   }
@@ -81,12 +85,13 @@ class RemoteShellProcess implements ShellProcess {
   }
 
   kill(): boolean {
-    if (this.status !== 'running') return false;
+    if (this.settled || this.status !== 'running') return false;
     void this.rpc
       .post<{ id: string }, unknown>('/internal/v1/jobs/kill', { id: this.id }, this.roots)
-      .then(() => {
-        this.status = 'killed';
-        this.doneResolver();
+      .then((data: any) => {
+        if (data?.status === 'completed' || data?.status === 'killed' || data?.status === 'failed') {
+          this.settleFromExec(data.status, data.exitCode ?? null, data.signal ?? null);
+        }
       })
       .catch(() => undefined);
     return true;
@@ -94,24 +99,64 @@ class RemoteShellProcess implements ShellProcess {
 
   /** 供 `RemoteShell.start` 收到 exec 通知后推进状态 */
   settleFromExec(status: 'completed' | 'killed' | 'failed', exitCode: number | null, signal: NodeJS.Signals | null): void {
+    if (this.settled) return;
+    this.settled = true;
     this.status = status === 'completed' ? 'completed' : 'killed';
     this.exitCode = exitCode;
     this.signal = signal;
     this.doneResolver();
   }
 
-  private async pull(): Promise<void> {
-    try {
-      const data = await this.rpc.post<{ id: string }, { text: string; lossy: boolean }>(
-        '/internal/v1/jobs/read',
-        { id: this.id },
-        this.roots,
-      );
-      if (data.text.length > 0) this.outputBuf += data.text;
-      if (data.lossy) this.lossy = true;
-    } catch {
-      // 网络抖动不抛给模型，留给下一次 readOutput
+  private async monitor(): Promise<void> {
+    while (!this.settled) {
+      try {
+        const data = await this.rpc.post<{ id: string }, any>(
+          '/internal/v1/jobs/status',
+          { id: this.id },
+          this.roots,
+        );
+        await this.pull();
+        if (data.status === 'completed' || data.status === 'killed' || data.status === 'failed') {
+          this.settleFromExec(data.status, data.exitCode ?? null, data.signal ?? null);
+          return;
+        }
+      } catch {
+        // 网络抖动不抛给模型，下一轮继续查询。
+      }
+      if (!this.settled) {
+        await new Promise<void>((resolve) => {
+          const timer = setTimeout(resolve, 200);
+          timer.unref?.();
+        });
+      }
     }
+  }
+
+  private pull(): Promise<void> {
+    if (this.pullInFlight !== null) return this.pullInFlight;
+    const payload: Record<string, unknown> = { id: this.id };
+    if (this.cursor !== null) payload.cursor = this.cursor;
+    const task = this.rpc
+      .post<Record<string, unknown>, { text?: string; lossy?: boolean; nextCursor?: string; cursor?: string }>(
+        '/internal/v1/jobs/read',
+        payload,
+        this.roots,
+      )
+      .then((data) => {
+        const text = typeof data.text === 'string' ? data.text : '';
+        if (text.length > 0) this.outputBuf += text;
+        if (data.lossy === true) this.lossy = true;
+        const nextCursor = data.nextCursor ?? data.cursor;
+        if (typeof nextCursor === 'string' && nextCursor !== '') this.cursor = nextCursor;
+      })
+      .catch(() => {
+        // 网络抖动不抛给模型，留给下一次 readOutput
+      })
+      .finally(() => {
+        this.pullInFlight = null;
+      });
+    this.pullInFlight = task;
+    return task;
   }
 }
 

@@ -422,6 +422,7 @@ describe('PiRunExecutor', () => {
     assert.equal(result.outcome, RUN_STATUS.SUCCEEDED);
     assert.equal(loaderInput.attachments[0].attachmentId, 'dataset-1');
     assert.equal(loaderInput.sandboxSessionId, SBX);
+    assert.equal(loaderInput.workspaceId, WSP);
     assert.match(promptInput.text, /^describe image/);
     assert.match(promptInput.text, /attachment_id="dataset-1"/);
     assert.deepEqual(promptInput.options, { images: [image] });

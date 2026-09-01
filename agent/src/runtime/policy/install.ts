@@ -38,6 +38,7 @@ import { recordLedger, redactPostExecute, type LedgerEntry } from './post-execut
 import type { PolicyDecision } from './decision.js';
 import { RunPark, RUN_PARKED_REASON_CODE } from './park.js';
 import { approvalIdOf } from './approval-id.js';
+import { runWithToolExecutionContext } from '../providers/tool-execution-context.js';
 
 /** 最小可用的工具执行形状——只取本模块用得到的字段，不复制 DSH 的完整类型。 */
 interface ToolExecutionLike {
@@ -214,35 +215,40 @@ export function installEnterprisePolicy(ctx: Context, options: InstallPolicyOpti
       exec: ToolExecutionLike,
       next: () => Promise<unknown>,
     ): Promise<unknown> => {
-      const ledger = options.toolLedger;
-      if (ledger === undefined) return await wrapExecute(budget, next);
-
       const toolCallId = callIdOf(exec);
       const toolName = toolNameOf(exec);
       const args = argsOf(exec);
-      // 记账失败**不得**打死一次合法的工具调用：账本是外部副作用。
-      // 但**必须留下痕迹**——静默吞掉的后果是 `tool_executions` 里留下永远
-      // RUNNING 的行，而没有任何人知道为什么（2026-08-31 compose 端到端撞到过）。
-      const note = (phase: string, err: unknown): void => {
-        console.error(
-          `[tool-ledger] ${phase} failed for ${toolName} (${toolCallId}): ` +
-            `${err instanceof Error ? err.message : String(err)}`,
-        );
-      };
-      await ledger.started({ toolCallId, toolName, args }).catch((e) => note('started', e));
-      try {
-        const result = await wrapExecute(budget, next);
-        const isError = (result as { isError?: boolean } | null)?.isError === true;
-        await ledger
-          .ended({ toolCallId, toolName, isError, result, args })
-          .catch((e) => note('ended', e));
-        return result;
-      } catch (err) {
-        await ledger
-          .ended({ toolCallId, toolName, isError: true, result: { error: String(err) }, args })
-          .catch((e) => note('ended(after throw)', e));
-        throw err;
-      }
+      return runWithToolExecutionContext(
+        { callId: toolCallId, toolName, args },
+        async () => {
+          const ledger = options.toolLedger;
+          if (ledger === undefined) return await wrapExecute(budget, next);
+
+          // 记账失败**不得**打死一次合法的工具调用：账本是外部副作用。
+          // 但**必须留下痕迹**——静默吞掉的后果是 `tool_executions` 里留下永远
+          // RUNNING 的行，而没有任何人知道为什么（2026-08-31 compose 端到端撞到过）。
+          const note = (phase: string, err: unknown): void => {
+            console.error(
+              `[tool-ledger] ${phase} failed for ${toolName} (${toolCallId}): ` +
+                `${err instanceof Error ? err.message : String(err)}`,
+            );
+          };
+          await ledger.started({ toolCallId, toolName, args }).catch((e) => note('started', e));
+          try {
+            const result = await wrapExecute(budget, next);
+            const isError = (result as { isError?: boolean } | null)?.isError === true;
+            await ledger
+              .ended({ toolCallId, toolName, isError, result, args })
+              .catch((e) => note('ended', e));
+            return result;
+          } catch (err) {
+            await ledger
+              .ended({ toolCallId, toolName, isError: true, result: { error: String(err) }, args })
+              .catch((e) => note('ended(after throw)', e));
+            throw err;
+          }
+        },
+      );
     }) as never),
   );
 

@@ -141,7 +141,14 @@ export function createDurableSubagentProvider(opts: {
       const store = services?.store ?? opts.store;
 
       // 1) 决定：纯函数规整为可序列化规格（不触队列）
-      const tenant = opts.tenantOf(request.parent);
+      const tenant = services?.tenant
+        ? {
+            orgId: services.tenant.orgId,
+            userId: services.tenant.userId,
+            parentSessionId: request.parent?.id ?? 'unknown',
+            ...(services.parentRunId ? { parentRunId: services.parentRunId } : {}),
+          }
+        : opts.tenantOf(request.parent);
       const spec = buildDurableJobSpec(request, tenant, {
         ...(opts.now !== undefined ? { now: opts.now } : {}),
         ...(opts.generateId !== undefined ? { generateId: opts.generateId } : {}),

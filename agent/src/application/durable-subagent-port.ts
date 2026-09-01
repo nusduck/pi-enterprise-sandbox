@@ -104,7 +104,7 @@ export class SpawnServiceSubagentStore implements DurableSubagentStore {
     if (row === undefined || !TERMINAL.has(row.status)) return null;
     return {
       output: [{ type: 'text', text: row.resultSummary ?? `subagent ${row.status}` }],
-      stopReason: row.status === 'SUCCEEDED' ? 'end_turn' : 'aborted',
+      stopReason: row.status === 'SUCCEEDED' ? 'completed' : 'aborted',
     } as never;
   }
 }
@@ -113,7 +113,18 @@ export class SpawnServiceSubagentStore implements DurableSubagentStore {
 function promptToTask(prompt: readonly unknown[]): string {
   const parts: string[] = [];
   for (const message of prompt) {
-    const content = (message as { content?: unknown })?.content;
+    // dsh-tool-subagent supplies content blocks directly, while the durable
+    // Run input seam historically supplied chat messages containing a
+    // `content` array. Accept both wire shapes at this boundary; treating a
+    // content block as a chat message silently produced an empty task.
+    const value = message as { content?: unknown; text?: unknown };
+    const content = Array.isArray(value?.content) || typeof value?.content === 'string'
+      ? value.content
+      : [message];
+    if (typeof content === 'string') {
+      if (content !== '') parts.push(content);
+      continue;
+    }
     if (!Array.isArray(content)) continue;
     for (const block of content) {
       const text = (block as { text?: unknown })?.text;
@@ -132,7 +143,14 @@ export function buildRunServices(input: {
   spawnPort: SpawnServiceLike;
   parentRunId: string;
   tenant: { orgId: string; userId: string };
-}): { subagents: { queue: DurableSubagentQueue; store: DurableSubagentStore } } {
+}): {
+  subagents: {
+    queue: DurableSubagentQueue;
+    store: DurableSubagentStore;
+    tenant: { orgId: string; userId: string };
+    parentRunId: string;
+  };
+} {
   const queue = new SpawnServiceSubagentQueue(input.spawnPort, input.parentRunId);
   const store = new SpawnServiceSubagentStore(
     input.spawnPort,
@@ -140,5 +158,12 @@ export function buildRunServices(input: {
     input.tenant,
     queue,
   );
-  return { subagents: { queue, store } };
+  return {
+    subagents: {
+      queue,
+      store,
+      tenant: { ...input.tenant },
+      parentRunId: input.parentRunId,
+    },
+  };
 }

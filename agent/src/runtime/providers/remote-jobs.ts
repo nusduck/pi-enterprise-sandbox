@@ -10,7 +10,15 @@
 
 import { JobRegistry } from '@deepseek-ai/dsh-jobs';
 import { randomUUID } from 'node:crypto';
-import type { JobId, JobRead, JobSnapshot, JobStart } from '@deepseek-ai/dsh-jobs';
+import type {
+  JobId,
+  JobHooks,
+  JobOutcome,
+  JobRead,
+  JobSnapshot,
+  JobStart,
+  JobStatus,
+} from '@deepseek-ai/dsh-jobs';
 import type { Context } from '@deepseek-ai/cordis';
 import type { Agent } from '@deepseek-ai/dsh-agent';
 import { ExecRpcClient, resolveExecRpcConfig, runWithExecJobId } from './exec-rpc.js';
@@ -18,8 +26,47 @@ import type { ExecRpcConfig } from './exec-rpc.js';
 
 export interface RemoteJobsOptions extends ExecRpcConfig {}
 
+interface RemoteJobEntry {
+  readonly id: JobId;
+  readonly kind: JobSnapshot['kind'];
+  readonly label: string;
+  readonly outputLimitBytes?: number;
+  readonly owner?: Agent;
+  readonly hooks: JobHooks;
+  readonly startedAt: number;
+  readonly settled: Promise<void>;
+  readonly resolveSettled: () => void;
+  status: JobStatus;
+  detail?: string;
+  finishedAt?: number;
+  reported: boolean;
+  output?: string;
+}
+
+function isTerminal(status: JobStatus): boolean {
+  return status === 'completed' || status === 'killed' || status === 'failed';
+}
+
+function snapshotOf(entry: RemoteJobEntry): JobSnapshot {
+  return {
+    id: entry.id,
+    kind: entry.kind,
+    label: entry.label,
+    ...(entry.outputLimitBytes !== undefined
+      ? { outputLimitBytes: entry.outputLimitBytes }
+      : {}),
+    ...(entry.owner?.id !== undefined ? { ownerSession: entry.owner.id } : {}),
+    status: entry.status,
+    ...(entry.detail !== undefined ? { detail: entry.detail } : {}),
+    startedAt: entry.startedAt,
+    ...(entry.finishedAt !== undefined ? { finishedAt: entry.finishedAt } : {}),
+    reported: entry.reported,
+  } as JobSnapshot;
+}
+
 export class RemoteJobs extends JobRegistry {
   private readonly rpc: ExecRpcClient;
+  private readonly entries = new Map<JobId, RemoteJobEntry>();
   private readonly doneListeners = new Set<(snap: JobSnapshot, owner: Agent | undefined) => void>();
   private readonly changedListeners = new Set<(owner: Agent | undefined) => void>();
   private readonly controllers = new Set<string>();
@@ -47,20 +94,67 @@ export class RemoteJobs extends JobRegistry {
   }
 
   override start(spec: JobStart): JobId {
+    if (!spec || typeof spec.kind !== 'string' || spec.kind.length === 0) {
+      throw new Error('invalid job kind: expected a non-empty string');
+    }
+    if (typeof spec.label !== 'string' || spec.label.length === 0) {
+      throw new Error('invalid job label: expected a non-empty string');
+    }
+    if (
+      spec.outputLimitBytes !== undefined &&
+      (!Number.isSafeInteger(spec.outputLimitBytes) || spec.outputLimitBytes <= 0)
+    ) {
+      throw new Error('invalid outputLimitBytes: expected a positive safe integer');
+    }
     const id = `${spec.kind}-${randomUUID().replace(/-/g, '')}` as JobId;
-    runWithExecJobId(id, () => spec.run());
+    const hooks = runWithExecJobId(id, () => spec.run());
+    if (!hooks || typeof hooks !== 'object' || typeof hooks.done?.then !== 'function') {
+      throw new Error('background job producer must return hooks with a done promise');
+    }
+    let resolveSettled: () => void = () => undefined;
+    const settled = new Promise<void>((resolve) => {
+      resolveSettled = resolve;
+    });
+    const entry: RemoteJobEntry = {
+      id,
+      kind: spec.kind,
+      label: spec.label,
+      ...(spec.outputLimitBytes !== undefined
+        ? { outputLimitBytes: spec.outputLimitBytes }
+        : {}),
+      ...(spec.owner !== undefined ? { owner: spec.owner } : {}),
+      hooks,
+      startedAt: Date.now(),
+      settled,
+      resolveSettled,
+      status: 'running',
+      reported: false,
+    };
+    this.entries.set(id, entry);
+    void Promise.resolve(hooks.done).then(
+      (outcome) => this.settle(entry, outcome),
+      (error) =>
+        this.settle(entry, {
+          status: 'failed',
+          detail: error instanceof Error ? error.message : String(error),
+        }),
+    );
+    this.notifyChanged(spec.owner);
     return id;
   }
 
   override list(caller?: Agent): JobSnapshot[] {
-    // 远程 list 本是异步，但 JobRegistry 契约是同步。为满足 macOS 无 exec 内存替身测试，
-    // 这里返回本地空快照；真实环境下由 controller 通过 polling 填充（见 attachController）。
-    void caller;
-    return [];
+    return [...this.entries.values()]
+      .filter((entry) => entry.owner === undefined || entry.owner.id === caller?.id)
+      .map(snapshotOf);
   }
 
   override get(id: JobId, caller?: Agent): JobSnapshot {
-    void caller;
+    const entry = this.entries.get(id);
+    if (entry !== undefined) {
+      this.assertAccess(entry, caller);
+      return snapshotOf(entry);
+    }
     // 同步契约：真实网络在后台预热，同步返回占位快照；调用方重试一次即可拿到远端权威
     void this.rpc
       .post<{ id: JobId }, JobSnapshot>('/internal/v1/jobs/status', { id }, this.roots)
@@ -76,7 +170,18 @@ export class RemoteJobs extends JobRegistry {
   }
 
   override read(id: JobId, caller?: Agent): JobRead {
-    void caller;
+    const entry = this.entries.get(id);
+    if (entry !== undefined) {
+      this.assertAccess(entry, caller);
+      const text =
+        typeof entry.hooks.readOutput === 'function'
+          ? entry.hooks.readOutput()
+          : isTerminal(entry.status)
+            ? entry.output ?? ''
+            : '';
+      if (isTerminal(entry.status)) entry.reported = true;
+      return { text, snapshot: snapshotOf(entry) } as JobRead;
+    }
     void this.rpc
       .post<{ id: JobId }, unknown>('/internal/v1/jobs/read', { id }, this.roots)
       .catch(() => undefined);
@@ -86,8 +191,20 @@ export class RemoteJobs extends JobRegistry {
     } as unknown as JobRead;
   }
 
-  override kill(id: JobId, caller?: Agent, _reason?: string): 'requested' | 'already-finished' {
-    void caller;
+  override kill(id: JobId, caller?: Agent, reason?: string): 'requested' | 'already-finished' {
+    const entry = this.entries.get(id);
+    if (entry !== undefined) {
+      this.assertAccess(entry, caller);
+      if (isTerminal(entry.status)) {
+        entry.reported = true;
+        return 'already-finished';
+      }
+      entry.hooks.cancel(reason);
+      entry.status = 'stopping';
+      entry.reported = true;
+      this.notifyChanged(entry.owner);
+      return 'requested';
+    }
     void this.rpc
       .post<{ id: JobId }, unknown>('/internal/v1/jobs/kill', { id }, this.roots)
       .catch(() => undefined);
@@ -95,6 +212,42 @@ export class RemoteJobs extends JobRegistry {
   }
 
   override async wait(id: JobId, timeoutMs: number, caller?: Agent, signal?: AbortSignal): Promise<JobSnapshot> {
+    const entry = this.entries.get(id);
+    if (entry !== undefined) {
+      this.assertAccess(entry, caller);
+      if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+        throw new Error('invalid wait timeout: expected a positive number of milliseconds');
+      }
+      if (!isTerminal(entry.status)) {
+        await new Promise<void>((resolve, reject) => {
+          let finished = false;
+          const timer = setTimeout(() => {
+            if (finished) return;
+            finished = true;
+            signal?.removeEventListener('abort', onAbort);
+            resolve();
+          }, timeoutMs);
+          const onAbort = () => {
+            if (finished) return;
+            finished = true;
+            clearTimeout(timer);
+            entry.settled.then(resolve, resolve);
+            reject(new Error('wait aborted'));
+          };
+          signal?.addEventListener('abort', onAbort, { once: true });
+          entry.settled.then(() => {
+            if (finished) return;
+            finished = true;
+            clearTimeout(timer);
+            signal?.removeEventListener('abort', onAbort);
+            resolve();
+          });
+          if (signal?.aborted) onAbort();
+        });
+      }
+      if (isTerminal(entry.status)) entry.reported = true;
+      return snapshotOf(entry);
+    }
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
       if (signal?.aborted === true) throw new Error('aborted');
@@ -132,6 +285,40 @@ export class RemoteJobs extends JobRegistry {
     return () => {
       this.controllers.delete(name);
     };
+  }
+
+  private assertAccess(entry: RemoteJobEntry, caller?: Agent): void {
+    if (entry.owner !== undefined && entry.owner.id !== caller?.id) {
+      throw new Error(`job ${entry.id} belongs to another session`);
+    }
+  }
+
+  private settle(entry: RemoteJobEntry, outcome: JobOutcome): void {
+    if (isTerminal(entry.status)) return;
+    entry.status = outcome.status;
+    if (outcome.detail !== undefined) entry.detail = outcome.detail;
+    if (outcome.output !== undefined) entry.output = outcome.output;
+    entry.finishedAt = Date.now();
+    entry.resolveSettled();
+    this.notifyChanged(entry.owner);
+    const snapshot = snapshotOf(entry);
+    for (const listener of this.doneListeners) {
+      try {
+        listener(snapshot, entry.owner);
+      } catch (error) {
+        console.warn(`remote jobs completion listener failed: ${String(error)}`);
+      }
+    }
+  }
+
+  private notifyChanged(owner?: Agent): void {
+    for (const listener of this.changedListeners) {
+      try {
+        listener(owner);
+      } catch (error) {
+        console.warn(`remote jobs change listener failed: ${String(error)}`);
+      }
+    }
   }
 }
 

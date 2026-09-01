@@ -180,6 +180,46 @@ test('remote-shell: run/start 本机零子进程，转发 exec', async () => {
   assert.match(String(proc.id), /^bash-[a-f0-9]{32}$/);
 });
 
+test('remote-shell: 后台句柄轮询 exec 结算并保留增量输出', async () => {
+  const ctx = new Context();
+  const fetchImpl = (async (url: string | URL | Request, init?: RequestInit) => {
+    const path = new URL(String(url)).pathname;
+    if (path.endsWith('/shell/start')) {
+      const body = JSON.parse(String(init?.body ?? '{}')) as { payload?: { id?: string } };
+      return new Response(JSON.stringify({ ok: true, data: { id: body.payload?.id, status: 'running' } }));
+    }
+    if (path.endsWith('/jobs/read')) {
+      return new Response(JSON.stringify({
+        ok: true,
+        data: { text: 'JOB_OK\n', lossy: false, nextCursor: '1-1' },
+      }));
+    }
+    if (path.endsWith('/jobs/status')) {
+      return new Response(JSON.stringify({
+        ok: true,
+        data: { status: 'completed', exitCode: 0, signal: null },
+      }));
+    }
+    return new Response(JSON.stringify({ ok: false, error: { code: 'INTERNAL_ERROR', message: 'unexpected' } }), { status: 500 });
+  }) as unknown as typeof fetch;
+  const shell = new RemoteShell(ctx as unknown as Context, {
+    baseUrl: 'http://exec',
+    keyring: { test: Buffer.from('0'.repeat(32)).toString('base64url') },
+    activeKid: 'test',
+    orgId: 'org-1',
+    userId: 'user-1',
+    workspaceId: 'ws-1',
+    fenceToken: 1,
+    physicalRoots: [],
+    fetchImpl,
+  });
+  const proc = shell.start(shell.resolve({ command: 'echo JOB_OK' }));
+  await proc.done;
+  assert.equal(proc.status, 'completed');
+  assert.equal(proc.exitCode, 0);
+  assert.equal(proc.readOutput().delta, 'JOB_OK\n');
+});
+
 test('remote-jobs: start/list/get/read/kill 均转发 exec 且不抛未脱敏错误', async () => {
   const ctx = new Context();
   const jobs = new RemoteJobs(ctx as unknown as Context, {
@@ -206,6 +246,7 @@ test('remote-jobs: start/list/get/read/kill 均转发 exec 且不抛未脱敏错
 
   const list = jobs.list();
   assert.equal(Array.isArray(list), true);
+  assert.equal(list.some((item) => item.id === id), true);
 
   const snap = jobs.get(id);
   assert.equal(snap.id, id);
@@ -215,6 +256,37 @@ test('remote-jobs: start/list/get/read/kill 均转发 exec 且不抛未脱敏错
 
   const killRes = jobs.kill(id);
   assert.equal(killRes === 'requested' || killRes === 'already-finished', true);
+});
+
+test('remote-jobs: 本地 registry 兑现 wait/read 与完成状态', async () => {
+  const ctx = new Context();
+  const jobs = new RemoteJobs(ctx as unknown as Context, {
+    baseUrl: 'http://exec',
+    keyring: { test: Buffer.from('0'.repeat(32)).toString('base64url') },
+    activeKid: 'test',
+    orgId: 'org-1',
+    userId: 'user-1',
+    workspaceId: 'ws-1',
+    fenceToken: 1,
+    physicalRoots: [],
+    fetchImpl: fakeFetchForFs(),
+  });
+  let finish!: (outcome: { status: 'completed'; output: string }) => void;
+  const done = new Promise<{ status: 'completed'; output: string }>((resolve) => {
+    finish = resolve;
+  });
+  const id = jobs.start({
+    kind: 'bash',
+    label: 'buffered job',
+    run() {
+      return { cancel() {}, done };
+    },
+  });
+  assert.equal(jobs.get(id).status, 'running');
+  finish({ status: 'completed', output: 'final output' });
+  const snap = await jobs.wait(id, 100);
+  assert.equal(snap.status, 'completed');
+  assert.equal(jobs.read(id).text, 'final output');
 });
 
 test('remote providers register as ctx.fs/shell/jobs (Cordis plugin contract)', () => {

@@ -15,6 +15,7 @@
  * 与 `remote-fs-search` 同一形状：自建工具插件 + exec RPC，字节永远在 exec 那边。
  */
 import type { Context } from '@deepseek-ai/cordis';
+import { basename } from 'node:path';
 import { ulid } from '../../domain/shared/ulid.js';
 import { ExecRpcClient, currentExecRpc, resolveExecRpcConfig } from './exec-rpc.js';
 import type { ExecRpcConfig } from './exec-rpc.js';
@@ -25,6 +26,27 @@ interface SubmitResponse {
   readonly mimeType: string | null;
   readonly sha256: string;
   readonly size: number;
+}
+
+export function canonicalSubmittedArtifact(
+  response: SubmitResponse,
+  args: { path?: unknown; name?: unknown } = {},
+) {
+  const fallbackName = basename(String(args.path ?? '')) || 'artifact';
+  const name =
+    (typeof response.name === 'string' && response.name.trim()) ||
+    (typeof args.name === 'string' && args.name.trim()) ||
+    fallbackName;
+  const mimeType =
+    (typeof response.mimeType === 'string' && response.mimeType.trim()) ||
+    'application/octet-stream';
+  return {
+    artifact_id: response.artifactId,
+    name,
+    mime_type: mimeType,
+    sha256: response.sha256,
+    size: response.size,
+  };
 }
 
 export const name = 'submit-artifact';
@@ -66,9 +88,11 @@ export function* apply(ctx: Context & Record<string, any>, config: Partial<ExecR
         properties: {
           artifact_id: { type: 'string' },
           name: { type: 'string' },
+          mime_type: { type: 'string' },
           sha256: { type: 'string' },
           size: { type: 'integer' },
         },
+        required: ['artifact_id', 'name', 'mime_type', 'sha256', 'size'],
       },
       render: (_args: unknown, value: any) => [
         {
@@ -97,25 +121,7 @@ export function* apply(ctx: Context & Record<string, any>, config: Partial<ExecR
         payload,
         rpc.physicalRoots,
       );
-      const name = res.name ?? '';
-      const mimeType = res.mimeType ?? 'application/octet-stream';
-      const details = {
-        artifactId: res.artifactId,
-        displayName: name,
-        mimeType,
-        size: res.size,
-        sha256: res.sha256,
-      };
-      return {
-        artifact_id: res.artifactId,
-        artifactId: res.artifactId,
-        name,
-        mime_type: mimeType,
-        mimeType,
-        sha256: res.sha256,
-        size: res.size,
-        details,
-      };
+      return canonicalSubmittedArtifact(res, args);
     },
   });
 }

@@ -7,7 +7,7 @@
 
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { mkdtemp, realpath, rm } from 'node:fs/promises';
+import { mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -211,6 +211,55 @@ test('router: happy path sessions/ensure creates workspace', async () => {
   assert.equal(res.status, 200);
   const json = (await res.json()) as Record<string, unknown>;
   assert.equal(json['ok'], true);
+  await cleanup();
+});
+
+test('router: fs search accepts the resolved FsTarget object', async () => {
+  const { manager, cleanup } = await makeTempManager();
+  const store = new InMemoryJobStore();
+  const registry = new MySqlJobRegistry(store as never);
+  await manager.initWorkspace('ws-find-target');
+  await writeFile(
+    join(manager.physicalWorkspacePath('ws-find-target'), 'needle.txt'),
+    'needle content',
+    'utf8',
+  );
+  const app = createInternalRouter({
+    workspaceManager: manager,
+    systemSkillRoot: '/tmp/skills',
+    enabledSkillPackagesFor: () => [],
+    cordisContext: new Context(),
+    bwrapExecutable: '/usr/bin/bwrap',
+    modeFor: () => 'workspace-write',
+    jobRegistry: registry,
+    keyring: KEYRING,
+    allowCidr: [],
+  });
+  const path = '/internal/v1/fs/find';
+  const body = JSON.stringify({
+    envelope: {
+      requestId: 'r-find-target',
+      workspaceId: 'ws-find-target',
+      orgId: 'org1',
+      userId: 'u1',
+      fenceToken: 1,
+    },
+    payload: {
+      target: { targetKey: 'untrusted-physical-key', displayPath: '.' },
+      pattern: '*.txt',
+      options: {},
+    },
+  });
+  const token = makeToken({ path, body });
+  const res = await app.request(path, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
+    body,
+  });
+  assert.equal(res.status, 200);
+  const json = (await res.json()) as { ok: boolean; data?: { items?: Array<{ path: string }> } };
+  assert.equal(json.ok, true);
+  assert.ok(json.data?.items?.some((item) => item.path === 'needle.txt'));
   await cleanup();
 });
 

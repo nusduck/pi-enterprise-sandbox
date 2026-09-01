@@ -204,7 +204,7 @@ export async function buildPiRunExecutorFactory(
         attachmentStore: {
           download: ({ attachmentId, sandboxSessionId, signal }) =>
             sandboxClient.downloadDatasetContent(
-              sandboxSessionId,
+              input.workspaceId || sandboxSessionId,
               attachmentId,
               { signal },
             ),

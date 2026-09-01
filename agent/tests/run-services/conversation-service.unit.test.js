@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 
 import {
   ConversationService,
+  presentConversation,
   presentTranscriptMessage,
 } from '../../src/application/conversation-service.js';
 import { CreateRunService } from '../../src/application/create-run-service.js';
@@ -45,6 +46,56 @@ describe('ConversationService MySQL authority', () => {
       sequence_no: 42,
       created_at: '2026-07-18T06:00:00.123Z',
     });
+  });
+
+  it('surfaces persisted assistant thinking on the transcript', () => {
+    const message = presentTranscriptMessage({
+      messageId: 'msg_think',
+      runId: 'run_01',
+      role: 'assistant',
+      messageType: 'text',
+      sequenceNo: 2,
+      contentJson: { text: 'answer', thinking: 'I should look at the catalog.' },
+      createdAt: '2026-07-18T06:00:00.123Z',
+    });
+    assert.equal(message.thinking, 'I should look at the catalog.');
+  });
+
+  it('recovers thinking from sibling journal entries when assistant_ui omitted it', () => {
+    const presented = presentConversation(
+      { conversationId: '01ARZ3NDEKTSV4RRFFQ69G5FAV', title: 't', status: 'active' },
+      [
+        {
+          messageId: 'j1',
+          role: 'system',
+          messageType: 'message',
+          contentJson: {
+            kind: 'pi_journal_entry',
+            entry: {
+              id: 'dsh:assistant:2:1',
+              type: 'message',
+              message: {
+                role: 'assistant',
+                content: [
+                  { type: 'reasoning', text: 'Check /home/sandbox/skill.' },
+                  { type: 'text', text: 'You have 13 skills.' },
+                ],
+              },
+            },
+          },
+        },
+        {
+          messageId: 'a1',
+          runId: 'run_01',
+          role: 'assistant',
+          messageType: 'text',
+          sequenceNo: 3,
+          contentJson: { kind: 'assistant_message', piEntryId: 'dsh:assistant:2:1', text: 'You have 13 skills.' },
+        },
+      ],
+    );
+    const assistant = presented.messages.find((m) => m.role === 'assistant');
+    assert.equal(assistant.thinking, 'Check /home/sandbox/skill.');
   });
 
   it('renders the current user turn from legacy full-context rows', () => {

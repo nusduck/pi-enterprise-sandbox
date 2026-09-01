@@ -202,7 +202,16 @@ export function registerInternalFsRoutes(app: import('hono').Hono, deps: Interna
       async (fs, ctx, payload) => {
         const p = payload as Record<string, unknown>;
         const target = p['target'] as FsTarget | undefined;
-        if (!target) throw new ContractError('ENVELOPE_INVALID', 'target required');
+        if (
+          target === undefined ||
+          target === null ||
+          typeof target !== 'object' ||
+          Array.isArray(target) ||
+          typeof target.displayPath !== 'string' ||
+          target.displayPath.trim() === ''
+        ) {
+          throw new ContractError('ENVELOPE_INVALID', 'target.displayPath required');
+        }
         const opts = (p['options'] ?? {}) as Record<string, unknown>;
         return await fileSearchService.find(await searchRootOf(fs, ctx, target), {
           pattern: typeof p['pattern'] === 'string' ? (p['pattern'] as string) : '*',
@@ -221,7 +230,16 @@ export function registerInternalFsRoutes(app: import('hono').Hono, deps: Interna
       async (fs, ctx, payload) => {
         const p = payload as Record<string, unknown>;
         const target = p['target'] as FsTarget | undefined;
-        if (!target) throw new ContractError('ENVELOPE_INVALID', 'target required');
+        if (
+          target === undefined ||
+          target === null ||
+          typeof target !== 'object' ||
+          Array.isArray(target) ||
+          typeof target.displayPath !== 'string' ||
+          target.displayPath.trim() === ''
+        ) {
+          throw new ContractError('ENVELOPE_INVALID', 'target.displayPath required');
+        }
         // `dsh-tool-fs-search` 把查询串叫 `pattern`；`search/` 内部叫 `query`。
         const query = p['pattern'];
         if (typeof query !== 'string') {
@@ -255,6 +273,18 @@ async function searchRootOf(
   ctx: WorkspaceContext,
   target: FsTarget,
 ): Promise<SearchRoot> {
-  const resolved = await fs.resolve(target as unknown as string);
+  if (
+    target === null ||
+    typeof target !== 'object' ||
+    Array.isArray(target) ||
+    typeof target.displayPath !== 'string' ||
+    target.displayPath.trim() === ''
+  ) {
+    throw new ContractError('ENVELOPE_INVALID', 'target.displayPath required');
+  }
+  // FsTarget is the resolved, model-facing envelope. Its physical targetKey is
+  // not an input path and must never be cast to a string; use the logical path
+  // so WorkspaceFileSystem applies the same fence as every other primitive.
+  const resolved = await fs.resolve(target.displayPath);
   return { root: ctx.workspaceRoot, start: resolved.targetKey, publicPrefix: null };
 }

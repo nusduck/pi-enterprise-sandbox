@@ -38,6 +38,8 @@ import {
   capSeenEventIds,
   inferToolSource,
   isExternalRiskApproval,
+  latestAssistantId,
+  latestStreamingAssistantId,
   normalizeToRuntimeEvent,
 } from './platformEventNormalize';
 
@@ -345,8 +347,13 @@ export function reduceRuntimeEvent(
       if (run) {
         for (const mid of run.messageIds) {
           const msg = next.messagesById[mid];
-          if (msg && msg.status === 'streaming') {
-            next = upsertMessage(next, { ...msg, status: 'complete', updatedAt: ts });
+          if (msg && (msg.status === 'streaming' || msg.thinkingStatus === 'streaming')) {
+            next = upsertMessage(next, {
+              ...msg,
+              status: msg.status === 'streaming' ? 'complete' : msg.status,
+              thinkingStatus: msg.thinkingStatus === 'streaming' ? 'complete' : msg.thinkingStatus,
+              updatedAt: ts,
+            });
           }
         }
       }
@@ -404,14 +411,7 @@ export function reduceRuntimeEvent(
       let messageId = str(payload.message_id || payload.id);
       const delta = str(payload.text || payload.delta);
       if (!messageId) {
-        const run = next.runsById[runId];
-        for (const id of [...(run?.messageIds || [])].reverse()) {
-          const candidate = next.messagesById[id];
-          if (candidate?.role === 'assistant' && candidate.status === 'streaming') {
-            messageId = id;
-            break;
-          }
-        }
+        messageId = latestStreamingAssistantId(next.runsById[runId], next.messagesById);
       }
       if (messageId && next.messagesById[messageId]) {
         const msg = next.messagesById[messageId];
@@ -448,13 +448,8 @@ export function reduceRuntimeEvent(
       let messageId = str(payload.message_id || payload.id);
       if (!messageId) {
         const run = next.runsById[runId];
-        for (const id of [...(run?.messageIds || [])].reverse()) {
-          const candidate = next.messagesById[id];
-          if (candidate?.role === 'assistant' && candidate.status === 'streaming') {
-            messageId = id;
-            break;
-          }
-        }
+        messageId = latestStreamingAssistantId(run, next.messagesById)
+          || latestAssistantId(run, next.messagesById);
       }
       const id = messageId || `msg_${runId}_thinking_${ev.sequence}`;
       const existing = next.messagesById[id];
@@ -496,14 +491,7 @@ export function reduceRuntimeEvent(
 
       let messageId = str(payload.message_id || payload.id);
       if (!messageId && completedRole === 'assistant') {
-        const run = next.runsById[runId];
-        for (const id of [...(run?.messageIds || [])].reverse()) {
-          const candidate = next.messagesById[id];
-          if (candidate?.role === 'assistant' && candidate.status === 'streaming') {
-            messageId = id;
-            break;
-          }
-        }
+        messageId = latestStreamingAssistantId(next.runsById[runId], next.messagesById);
       }
       if (messageId && next.messagesById[messageId]) {
         const msg = next.messagesById[messageId];
@@ -522,6 +510,7 @@ export function reduceRuntimeEvent(
           ...msg,
           text: finalText,
           status: 'complete',
+          thinkingStatus: msg.thinkingStatus === 'streaming' ? 'complete' : msg.thinkingStatus,
           updatedAt: ts,
         });
       } else {

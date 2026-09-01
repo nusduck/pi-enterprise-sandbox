@@ -66,8 +66,9 @@ describe('BrowserAuthService', () => {
     assert.equal(registered.user.organization_id, 'org_bootstrap');
     assert.equal(registered.user.role, 'admin');
     assert.equal((await service.me(`Bearer ${registered.token}`) as any).username, 'alice');
+    const alteredToken = `${registered.token.slice(0, -1)}${registered.token.endsWith('a') ? 'b' : 'a'}`;
     await assert.rejects(
-      service.me(`Bearer ${registered.token.slice(0, -1)}x`),
+      service.me(`Bearer ${alteredToken}`),
       (error: any) => error instanceof BrowserAuthError && error.status === 401,
     );
     await assert.rejects(
@@ -128,4 +129,3 @@ describe('browser auth HTTP route', () => {
     assert.equal((await me.json() as any).authorization, 'Bearer signed');
   });
 });
-

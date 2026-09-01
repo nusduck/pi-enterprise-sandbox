@@ -21,6 +21,9 @@ import { startRunWorkerRuntime } from './run-worker.js';
 import { startTelemetry } from '../infrastructure/telemetry.js';
 import { CronScheduler } from '../application/cron-job-service.js';
 
+/** Foreground durable subagents need a slot while their child Run executes. */
+export const DEFAULT_AGENT_WORKER_CONCURRENCY = 4;
+
 function optionalSafeInteger(value: unknown, minimum: number): number | undefined {
   if (value == null || String(value).trim() === '') return undefined;
   const parsed = Number(value);
@@ -152,7 +155,7 @@ export async function startWorkerMain(
       async (ref) => workerRuntime.processJob(ref),
       {
         queueName: env.AGENT_RUNS_QUEUE_NAME || undefined,
-        concurrency: Number(env.AGENT_WORKER_CONCURRENCY) || 1,
+        concurrency: Number(env.AGENT_WORKER_CONCURRENCY) || DEFAULT_AGENT_WORKER_CONCURRENCY,
         // Keep BullMQ defaults in production. These bounded knobs are useful
         // for isolated restart gates and controlled staging drills without
         // changing the normal lock/stall contract.

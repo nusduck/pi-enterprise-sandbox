@@ -19,6 +19,7 @@ export interface RunContextLike {
   readonly orgId?: unknown;
   readonly userId?: unknown;
   readonly sandboxSessionId?: unknown;
+  readonly workspaceId?: unknown;
   readonly traceId?: string | undefined;
   readonly traceState?: string | undefined;
   readonly conversationId?: unknown;
@@ -53,6 +54,7 @@ export async function buildSkillManagerFactory(
     const orgId = runContext?.orgId;
     const userId = runContext?.userId;
     const sandboxSessionId = String(runContext?.sandboxSessionId || '').trim();
+    const workspaceId = String(runContext?.workspaceId || sandboxSessionId).trim();
     if (orgId == null || userId == null || !sandboxSessionId) return null;
     let manager: Loose;
     try {
@@ -71,7 +73,7 @@ export async function buildSkillManagerFactory(
         // 而不是直接写已启用根——上传与模型创建从此走同一条启用闸门。
         draftSkillRoot: draftSkillRootFor({ orgId, userId }),
         downloadArchive: ({ attachmentId, signal }) =>
-          sandboxClient.downloadDatasetContent(sandboxSessionId, attachmentId, {
+          sandboxClient.downloadDatasetContent(workspaceId, attachmentId, {
             signal,
           }),
         // A package the model built in this session. Sandbox resolves the
@@ -79,7 +81,7 @@ export async function buildSkillManagerFactory(
         // session only, so a Skill-root path is rejected there as well as by
         // the tool's own guard.
         downloadWorkspaceArchive: ({ path: sourcePath, signal }) =>
-          sandboxClient.downloadFileStream(sandboxSessionId, sourcePath, { signal }),
+          sandboxClient.downloadFileStream(workspaceId, sourcePath, { signal }),
         getAgentSession:
           typeof lifecycleDeps.getAgentSession === 'function'
             ? lifecycleDeps.getAgentSession

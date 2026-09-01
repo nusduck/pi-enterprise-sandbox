@@ -206,6 +206,10 @@ boot 之后 `ctx.tools.schemas()` 恰好等于 `runtime/policy/tool-names.ts` �
 与恢复路径，只是多了血缘字段 `source='subagent'` / `parent_run_id` /
 `subagent_depth`（migration `20260822000001`）。三条硬约束：
 
+前台 `subagent` 调用会占住父 Run 的 Worker 槽位并等待子 Run 终态，因此
+`AGENT_WORKER_CONCURRENCY` 默认设为 4；部署若启用 durable 子 Agent，不能把它降到
+1，否则父子 Run 会互相等待。默认值也为文档中的 depth-2 链路保留并发槽位。
+
 - **子 Run 有自己的 Conversation 与 AgentSession**。父 Run 在整个生命周期内持有其
   AgentSession 的执行 fence 与 Redis 锁，共用会话的子 Run 永远拿不到锁——它会一直
   排队等一个正在等它的父 Run。AgentVersion 仍然继承父 Run 的版本。

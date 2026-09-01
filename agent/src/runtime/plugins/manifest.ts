@@ -98,6 +98,12 @@ const FACTORY_TUNING: readonly PatchEntry[] = [
         { id: 'deepseek-v4-flash', name: 'DeepSeek V4 Flash', contextWindow: 262144 },
         { id: 'deepseek-v4-pro', name: 'DeepSeek V4 Pro', contextWindow: 262144, reasoning: true },
         {
+          id: 'deepseek-v4-flash-vision-exp',
+          name: 'DeepSeek V4 Flash Vision',
+          contextWindow: 262144,
+          inputModalities: ['text', 'image'],
+        },
+        {
           id: 'private-reasoner',
           description: 'Company-hosted reasoning model',
           contextWindow: 512000,

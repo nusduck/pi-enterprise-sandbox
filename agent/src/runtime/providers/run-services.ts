@@ -24,6 +24,8 @@ export interface RunServices {
   readonly subagents?: {
     readonly queue: DurableSubagentQueue;
     readonly store: DurableSubagentStore;
+    readonly tenant?: { readonly orgId: string; readonly userId: string };
+    readonly parentRunId?: string;
   };
 }
 

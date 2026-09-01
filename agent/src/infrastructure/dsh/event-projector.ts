@@ -24,6 +24,7 @@ import {
   DEFAULT_MAX_RESULT_CHARS,
   DEFAULT_MAX_STRING,
   extractAssistantTextForUi,
+  extractAssistantThinkingForUi,
   extractToolCallBlocks,
   redactInlineSecrets,
   redactPayload,
@@ -145,16 +146,27 @@ export class PlatformEventProjector {
 
       case 'message_end': {
         const message = (ev as any).message;
-        const out: Array<{ type: string, payload: Record<string, unknown> }> = [
-          {
-            type: 'message.completed',
+        const out: Array<{ type: string, payload: Record<string, unknown> }> = [];
+        const thinking = extractAssistantThinkingForUi(message);
+        if (thinking) {
+          out.push({
+            type: 'thinking.completed',
             payload: {
               ...base,
-              role: message?.role ?? 'assistant',
-              message: summarizeAssistantMessage(message),
+              role: 'assistant',
+              text: thinking.slice(0, DEFAULT_MAX_RESULT_CHARS),
+              text_truncated: thinking.length > DEFAULT_MAX_RESULT_CHARS,
             },
+          });
+        }
+        out.push({
+          type: 'message.completed',
+          payload: {
+            ...base,
+            role: message?.role ?? 'assistant',
+            message: summarizeAssistantMessage(message),
           },
-        ];
+        });
         for (const tc of extractToolCallBlocks(message)) {
           out.push({
             type: 'tool.call.proposed',
