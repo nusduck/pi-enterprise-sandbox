@@ -9,7 +9,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { after, before, describe, test } from 'node:test';
 import type { WorkspaceContext } from '../src/types.js';
-import { canonicalWritableRoots, writableRoots } from '../src/fs/writable-roots.js';
+import { canonicalWritableRoots, readableRoots, writableRoots } from '../src/fs/writable-roots.js';
 
 function fakeWorkspace(workspaceRoot: string, tempRoot: string): WorkspaceContext {
   return {
@@ -32,6 +32,16 @@ describe('writableRoots', () => {
 
   test('workspace-write is exactly [workspaceRoot, tempRoot], in that order', () => {
     assert.deepEqual(writableRoots(ctx, 'workspace-write'), [ctx.workspaceRoot, ctx.tempRoot]);
+  });
+
+  test('readable roots include the system skill tree even though it is not writable', () => {
+    assert.deepEqual(readableRoots(ctx), [
+      ctx.workspaceRoot,
+      ctx.tempRoot,
+      ctx.systemSkillRoot,
+    ]);
+    assert.equal(readableRoots(ctx).includes(ctx.systemSkillRoot), true);
+    assert.equal(writableRoots(ctx, 'workspace-write').includes(ctx.systemSkillRoot), false);
   });
 
 });

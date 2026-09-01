@@ -62,9 +62,24 @@ describe('parseSandboxPath', () => {
   });
 
   test('rejects other absolute roots', () => {
-    for (const p of ['/etc/passwd', '/var/sandbox/workspaces/x', '/home/sandbox/skill/x']) {
+    for (const p of ['/etc/passwd', '/var/sandbox/workspaces/x', '/home/sandbox/not-a-root/x']) {
       assertDenied(() => parseSandboxPath(p));
     }
+  });
+
+  test('recognizes the read-only system skill root', () => {
+    assert.deepEqual(parseSandboxPath('/home/sandbox/skill'), { scope: 'skill', relative: '.' });
+    assert.deepEqual(parseSandboxPath('/home/sandbox/skill/README.md'), {
+      scope: 'skill',
+      relative: 'README.md',
+    });
+  });
+
+  test('recognizes enabled skill-user packages without colliding with skill', () => {
+    assert.deepEqual(parseSandboxPath('/home/sandbox/skill-user/greeter/SKILL.md'), {
+      scope: 'skill-user',
+      relative: 'greeter/SKILL.md',
+    });
   });
 
   test('rejects home expansion', () => {
@@ -150,4 +165,12 @@ test('草稿根的展示形式是它自己的绝对前缀，不退化成相对�
     '/home/sandbox/skill-draft/greeter/SKILL.md',
   );
   assert.equal(toDisplayPath({ scope: 'skill-draft', relative: '.' }), '/home/sandbox/skill-draft');
+});
+
+test('系统 skill 与已启用包的展示形式是各自的绝对前缀', () => {
+  assert.equal(toDisplayPath({ scope: 'skill', relative: 'README.md' }), '/home/sandbox/skill/README.md');
+  assert.equal(
+    toDisplayPath({ scope: 'skill-user', relative: 'greeter/SKILL.md' }),
+    '/home/sandbox/skill-user/greeter/SKILL.md',
+  );
 });

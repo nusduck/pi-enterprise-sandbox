@@ -39,6 +39,9 @@ export function buildExecRpcConfig(input: Record<string, any>, env: NodeJS.Proce
     ctx.workspaceId ?? session.workspaceId ?? input?.cwd ?? '',
   ).trim();
   const runId = String(ctx.runId ?? input.runId ?? '').trim();
+  const sandboxSessionId = String(
+    ctx.sandboxSessionId ?? session.sandboxSessionId ?? '',
+  ).trim();
   if (!orgId || !userId || !workspaceId) {
     throw new DshRuntimeFactoryError(
       'runtime factory requires orgId, userId, and workspaceId for exec RPC',
@@ -62,6 +65,7 @@ export function buildExecRpcConfig(input: Record<string, any>, env: NodeJS.Proce
     userId,
     workspaceId,
     ...(runId ? { runId } : {}),
+    ...(sandboxSessionId ? { sandboxSessionId } : {}),
     fenceToken: Number(ctx.executionFenceToken ?? ctx.fenceToken ?? 0) || 0,
     physicalRoots,
     ...(typeof input.fetchImpl === 'function' ? { fetchImpl: input.fetchImpl } : {}),
@@ -98,27 +102,51 @@ function toUserMessage(
   return { id, role: 'user', content, source: { kind: 'user' } };
 }
 
-function mapDshEventToPi(event) {
+/**
+ * DSH session/event → 现有 projector 认得的 Pi 形状。
+ *
+ * DSH 的词汇是 `assistant/chunk`、`assistant/message`、`turn/end`。把 `turn/end`
+ * 映射成 `message_end` 会给每一轮多造一条空助手气泡；把整份 session log
+ * 再 dump 一遍会把上一轮文本拼进本轮。两者叠在一起就是「气泡重复上轮文本
+ * 且被 512 字摘要截断」。
+ */
+export function mapDshEventToPi(event: Record<string, any> | null | undefined) {
   if (!event || typeof event !== 'object') return null;
   const type = String(event.type ?? '');
   const data = event.data && typeof event.data === 'object' ? event.data : event;
-  if (
-    type === 'message_end' ||
-    type === 'assistant/end' ||
-    type === 'assistant/message' ||
-    type === 'turn/end'
-  ) {
+
+  if (type === 'assistant/chunk') {
+    const chunk = data.chunk && typeof data.chunk === 'object' ? data.chunk : data;
+    const chunkType = String(chunk.type ?? '');
+    if (chunkType === 'text-delta') {
+      return {
+        type: 'message_update',
+        assistantMessageEvent: { type: 'text_delta', delta: String(chunk.text ?? '') },
+      };
+    }
+    if (chunkType === 'reasoning-delta') {
+      return {
+        type: 'message_update',
+        assistantMessageEvent: { type: 'thinking_delta', delta: String(chunk.text ?? '') },
+      };
+    }
+    return null;
+  }
+
+  if (type === 'assistant/message' || type === 'message_end' || type === 'assistant/end') {
     const message = data.message ?? data;
     return {
       type: 'message_end',
       message: {
         role: message?.role ?? 'assistant',
         content: message?.content ?? [{ type: 'text', text: String(message?.text ?? '') }],
-        stopReason: message?.stopReason ?? 'stop',
+        stopReason: message?.stopReason ?? (message?.interrupted ? 'interrupted' : 'stop'),
       },
     };
   }
-  if (type.startsWith('message') || type.startsWith('assistant')) {
+
+  // 旧 Pi 形状的透传（单测夹具仍发 message_update）。
+  if (type === 'message_update' || type.startsWith('message_')) {
     return event;
   }
   return null;
@@ -310,10 +338,35 @@ export function createDshRuntimeFactory(opts: Record<string, any> = {}) {
 
       const subs: Array<(ev: Record<string, any>) => void> = [];
       const entries = [];
+      const seenEntryIds = new Set<string>();
       const seenPi: Record<string, any>[] = [];
+      const recordAssistantEntry = (event: Record<string, any>, mapped: Record<string, any>) => {
+        if (mapped?.type !== 'message_end') return;
+        const data = event.data && typeof event.data === 'object' ? event.data : event;
+        const turn = data.turn;
+        const step = data.step;
+        const id =
+          Number.isFinite(Number(turn)) && Number.isFinite(Number(step))
+            ? `dsh:assistant:${turn}:${step}`
+            : `dsh:assistant:${seenEntryIds.size + 1}`;
+        if (seenEntryIds.has(id)) return;
+        seenEntryIds.add(id);
+        entries.push({
+          type: 'message',
+          id,
+          message: mapped.message,
+        });
+      };
       const emit = (ev) => {
         seenPi.push(ev);
         for (const fn of subs) fn(ev);
+      };
+      const emitMapped = (event: Record<string, any>) => {
+        const mapped = mapDshEventToPi(event);
+        if (!mapped) return false;
+        recordAssistantEntry(event, mapped);
+        emit(mapped);
+        return true;
       };
       let turnError: unknown = null;
       const onAgentError = (payload) => {
@@ -323,8 +376,7 @@ export function createDshRuntimeFactory(opts: Record<string, any> = {}) {
       if (typeof agent.ctx?.on === 'function') {
         agent.ctx.on('session/event', (sess, event) => {
           if (sess != null && agent.id != null && sess.id !== agent.id) return;
-          const mapped = mapDshEventToPi(event);
-          if (mapped) emit(mapped);
+          emitMapped(event);
         });
         agent.ctx.on('agent/error', onAgentError);
       } else if (typeof agent.subscribe === 'function') {
@@ -346,24 +398,36 @@ export function createDshRuntimeFactory(opts: Record<string, any> = {}) {
           // 它们服务的都是「注册在进程级、却必须按 Run 干活」的插件。
           const withServices = runtime.runWithRunServices ?? ((_: unknown, fn: () => unknown) => fn());
           return sessionStore.runAsOwner(sessionOwner, () => run(rpc, async () => withServices(input.runServices ?? {}, async () => {
+            const log = agent.session?.events;
+            const priorLen = Array.isArray(log) ? log.length : 0;
+            const seenBefore = seenPi.length;
             agent.followup(toUserMessage(text, options));
             if (typeof agent.whenIdle === 'function') await agent.whenIdle();
-            const log = agent.session?.events;
-            if (Array.isArray(log)) {
-              for (const event of log) {
-                const mapped = mapDshEventToPi(event);
-                if (mapped) emit(mapped);
+            const liveLog = agent.session?.events;
+            // 直播订阅已经在推事件时不要再 dump 整份 session log——那份 log
+            // 含历史轮次，会让本轮气泡重复上轮文本。只在本轮还没有
+            // message_end 时补：完全没直播就 dump 本轮新增；只有 delta
+            // 没有完成帧时只补 message_end。
+            const gotLiveAssistant = seenPi
+              .slice(seenBefore)
+              .some((e) => e?.type === 'message_end');
+            if (!gotLiveAssistant && Array.isArray(liveLog)) {
+              const hadLive = seenPi.length > seenBefore;
+              for (const event of liveLog.slice(priorLen)) {
+                if (hadLive && mapDshEventToPi(event)?.type !== 'message_end') continue;
+                emitMapped(event);
               }
             }
             if (turnError) {
               const msg = turnError instanceof Error ? turnError.message : String(turnError);
               throw new DshRuntimeFactoryError(`DSH agent/error: ${msg}`);
             }
-            const gotAssistant = seenPi.some((e) => e?.type === 'message_end')
-              || (Array.isArray(log) && log.some((e) => mapDshEventToPi(e)?.type === 'message_end'));
+            const gotAssistant = seenPi.slice(seenBefore).some((e) => e?.type === 'message_end')
+              || (Array.isArray(liveLog)
+                && liveLog.slice(priorLen).some((e) => mapDshEventToPi(e)?.type === 'message_end'));
             if (!gotAssistant) {
               throw new DshRuntimeFactoryError(
-                `DSH turn produced no assistant output; events=${summarizeSessionLog(log)}`,
+                `DSH turn produced no assistant output; events=${summarizeSessionLog(liveLog)}`,
               );
             }
             return { entries: [...entries] };

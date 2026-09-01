@@ -137,7 +137,7 @@ Server 在 Agent 进程启动时都会由 `@deepseek-ai/dsh-mcp-client` 连接�
 发现到的工具会自动对全部 Agent 可见，名称固定为
 `mcp__{serverId}__{toolName}`；不需要修改 AgentVersion。
 
-启动发现结果在该进程内固定，修改配置必须重启 Agent，不支持热加载。每个
+启动发现结果在该进程内固定，修改配置必须重启 Agent（boot 时读取 `MCP_SERVERS_JSON`，不必重跑 `npm run gen:patch`），不支持热加载。每个
 MCP 工具默认走 approval；一期不提供按 AgentVersion 的 MCP server/tool
 allowlist。`GET /ready` 返回每个 Server 的连接状态及总 Server/tool 数量；
 任何启用的 Server 不可达会使 readiness 返回 `503`，并打印

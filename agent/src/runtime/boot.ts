@@ -22,6 +22,7 @@ import { RemoteShell } from './providers/remote-shell.js';
 import { RemoteJobs } from './providers/remote-jobs.js';
 import { readExecRpcFromEnv } from './providers/exec-rpc.js';
 import type { ExecRpcConfig } from './providers/exec-rpc.js';
+import { buildMcpRuntimePatches } from './plugins/mcp-entries.js';
 export type { ExecRpcConfig } from './providers/exec-rpc.js';
 export { runWithExecRpc, readExecRpcFromEnv } from './providers/exec-rpc.js';
 import {
@@ -324,9 +325,13 @@ export async function bootEnterpriseRuntime(
   const overlayPatches = loadOverlayPatches('pi-runtime', overlayFile);
   // fail-closed：本包 patch 里引用不到的文件会让插件静默退回出厂实现。
   assertOverlayPatchResolvable(overlayFile, overlayPatches, existsSync);
+  // MCP 按进程环境叠，不进提交的 YAML（镜像构建时 MCP_SERVERS_JSON 是空的）。
+  const mcpPatches = buildMcpRuntimePatches();
   const patches = [
     ...loadOverlayPatches('pi-runtime', basePatchFile),
     ...overlayPatches,
+    // PatchEntry.insert 是 readonly；boot 要的 PatchOptions.insert 是可变数组。
+    ...(mcpPatches as unknown as ReturnType<typeof loadOverlayPatches>),
   ];
   const bareModuleBaseUrl = pathToFileURL(join(here, '../')).href;
   void rpc;

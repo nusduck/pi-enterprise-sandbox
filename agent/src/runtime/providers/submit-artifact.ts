@@ -15,6 +15,7 @@
  * 与 `remote-fs-search` 同一形状：自建工具插件 + exec RPC，字节永远在 exec 那边。
  */
 import type { Context } from '@deepseek-ai/cordis';
+import { ulid } from '../../domain/shared/ulid.js';
 import { ExecRpcClient, currentExecRpc, resolveExecRpcConfig } from './exec-rpc.js';
 import type { ExecRpcConfig } from './exec-rpc.js';
 
@@ -79,7 +80,14 @@ export function* apply(ctx: Context & Record<string, any>, config: Partial<ExecR
     async execute(args: any) {
       const rpc = currentExecRpc(fallback);
       const client = new ExecRpcClient(rpc);
-      const payload: Record<string, unknown> = { sourcePath: String(args?.path ?? '') };
+      const artifactId = ulid();
+      const payload: Record<string, unknown> = {
+        sourcePath: String(args?.path ?? ''),
+        externalArtifactId: artifactId,
+      };
+      if (typeof rpc.sandboxSessionId === 'string' && rpc.sandboxSessionId !== '') {
+        payload['sessionId'] = rpc.sandboxSessionId;
+      }
       if (typeof args?.name === 'string' && args.name !== '') payload['name'] = args.name;
       if (typeof args?.mime_type === 'string' && args.mime_type !== '') {
         payload['mimeType'] = args.mime_type;
@@ -89,11 +97,24 @@ export function* apply(ctx: Context & Record<string, any>, config: Partial<ExecR
         payload,
         rpc.physicalRoots,
       );
+      const name = res.name ?? '';
+      const mimeType = res.mimeType ?? 'application/octet-stream';
+      const details = {
+        artifactId: res.artifactId,
+        displayName: name,
+        mimeType,
+        size: res.size,
+        sha256: res.sha256,
+      };
       return {
         artifact_id: res.artifactId,
-        name: res.name ?? '',
+        artifactId: res.artifactId,
+        name,
+        mime_type: mimeType,
+        mimeType,
         sha256: res.sha256,
         size: res.size,
+        details,
       };
     },
   });

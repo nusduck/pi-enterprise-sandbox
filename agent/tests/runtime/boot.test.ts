@@ -226,6 +226,9 @@ test('boot 之后实际挂载的是自建实现，不是出厂实现', () => {
   const out = execFileSync('npx', ['tsx', probe], {
     encoding: 'utf8',
     cwd: join(dirname(fileURLToPath(import.meta.url)), '..'),
+    // boot 现在按 MCP_SERVERS_JSON 叠插件。组合断言要的是 host 工具面，
+    // 不能被开发机 .env 里的 Exa 等服务器拖进网络或改工具名单。
+    env: { ...process.env, MCP_SERVERS_JSON: '[]' },
   });
   const mounted = JSON.parse(out.trim().split('\n').pop() as string) as {
     credentials: string | null;

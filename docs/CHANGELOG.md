@@ -25,6 +25,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **MCP 工具在 Docker 部署里对模型不可见**：`MCP_SERVERS_JSON` 原先在 `npm run gen:patch` 时写进提交的 YAML，镜像构建环境是空数组，compose `.env` 里的 Exa 等服务器永远装不进插件树。现在 boot 时按进程环境叠 `dsh-mcp-client`，改配置只需重启 Agent。
+- **多轮对话气泡重复上轮文本、刷新后助手回复消失**：DSH 的 `turn/end` 被当成 `message_end`，并且每一轮把整份 session log（含历史）再投影一遍。现在只映射 `assistant/chunk` / `assistant/message`，并且只在直播订阅没推事件时 dump **本轮新增** 的 log。
+- **`read /home/sandbox/skill/...` 被拒 path escape**：bash 能 ls 系统 skill，FS 围栏却不认这个逻辑前缀，resolve 还拿可写根做 containment。系统 skill 与已启用包现在是只读根。
+- **`submit_artifact` 成功但前端看不到产物**：submit 把 workspaceId 当成 sessionId 落账，UI 按 sandbox_session_id 列表；工具结果又是 DSH `{value}` 包装，账本抽不出 `artifact.ready`。现在带上 sandbox session id、自铸 ULID，并认识 DSH 结果形状。
+
 - **Python exec 迁移后登录全 404**：BFF 仍把 `/api/auth/register|login|me` 转发到已删除的 exec `/auth/*`。认证凭据本来就在 Agent-owned MySQL `auth_credentials`；现在签发、校验、管理员角色收口全部由 Agent `/internal/auth/*` 承担，BFF 继续只管理 HttpOnly Cookie，并删除两侧指向 exec 的死认证客户端。生产缺少或使用弱 `SANDBOX_JWT_SECRET` 时 Agent fail-closed。
 - **跨服务 smoke 不再启动已删除的 Python 服务**：CI 脚本从 `uvicorn sandbox.main` 和不存在的 `agent/server.js`/`worker.js` 切到已构建的 exec/Agent `dist` 入口，cross-service job 显式安装并构建 contract、exec、agent。
 - Exec 镜像不再用尾部 `|| true` 吞掉 `apt-get install` 失败；隔离原语或模型工具链缺失时构建立即 fail-closed。

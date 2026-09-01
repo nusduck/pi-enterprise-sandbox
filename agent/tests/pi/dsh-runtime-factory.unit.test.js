@@ -7,6 +7,7 @@ import assert from 'node:assert/strict';
 import {
   buildExecRpcConfig,
   createDshRuntimeFactory,
+  mapDshEventToPi,
 } from '../../src/infrastructure/dsh/runtime-factory.js';
 
 const HMAC = {
@@ -48,6 +49,33 @@ function baseInput(overrides = {}) {
   };
 }
 
+describe('mapDshEventToPi', () => {
+  it('maps assistant/chunk text-delta to message_update', () => {
+    const mapped = mapDshEventToPi({
+      type: 'assistant/chunk',
+      data: { turn: 1, step: 0, chunk: { type: 'text-delta', text: 'hello' } },
+    });
+    assert.deepEqual(mapped, {
+      type: 'message_update',
+      assistantMessageEvent: { type: 'text_delta', delta: 'hello' },
+    });
+  });
+
+  it('maps assistant/message to message_end and ignores turn/end', () => {
+    const mapped = mapDshEventToPi({
+      type: 'assistant/message',
+      data: {
+        turn: 1,
+        step: 0,
+        message: { role: 'assistant', content: [{ type: 'text', text: 'done' }] },
+      },
+    });
+    assert.equal(mapped.type, 'message_end');
+    assert.equal(mapped.message.content[0].text, 'done');
+    assert.equal(mapDshEventToPi({ type: 'turn/end', data: { turn: 1, reason: 'completed' } }), null);
+  });
+});
+
 describe('buildExecRpcConfig', () => {
   it('fails closed without HMAC material', () => {
     assert.throws(
@@ -82,6 +110,13 @@ describe('buildExecRpcConfig', () => {
     assert.equal(rpc.workspaceId, 'ws1');
     assert.equal(rpc.fenceToken, 3);
     assert.equal(rpc.baseUrl, 'http://exec.test');
+  });
+
+  it('forwards sandboxSessionId so artifact submit is listed under the session the UI queries', () => {
+    const input = baseInput();
+    input.context = { ...input.context, sandboxSessionId: '01ARZ3NDEKTSV4RRFFQ69G5FAQ' };
+    const rpc = buildExecRpcConfig(input, HMAC);
+    assert.equal(rpc.sandboxSessionId, '01ARZ3NDEKTSV4RRFFQ69G5FAQ');
   });
 });
 
@@ -155,6 +190,60 @@ describe('createDshRuntimeFactory.create', () => {
     assert.equal(followups[0].content[0].text, 'hello world');
     await runtime.session.steer('nudge');
     assert.equal(followups.at(-1).steer, true);
+    await runtime.dispose();
+  });
+
+  it('does not re-emit historical session events as this turn\'s assistant output', async () => {
+    const factory = createDshRuntimeFactory({
+      env: HMAC,
+      bootRuntime: async () => ({}),
+      loadRuntime: async () => ({
+        createRemoteProviders: () => ({ fs: {}, shell: {}, jobs: {} }),
+        mountSessionPersistence: () => freshPersistence(),
+        assembleSystemPrompt: () => 'p',
+        runWithExecRpc(_cfg, fn) {
+          return fn();
+        },
+      }),
+      async createAgent() {
+        return {
+          agent: {
+            followup() {},
+            async whenIdle() {
+              this.session.events.push({
+                type: 'assistant/message',
+                data: {
+                  turn: 2,
+                  step: 0,
+                  message: { role: 'assistant', content: [{ type: 'text', text: 'current' }] },
+                },
+              });
+            },
+            session: {
+              events: [
+                {
+                  type: 'assistant/message',
+                  data: {
+                    turn: 1,
+                    step: 0,
+                    message: { role: 'assistant', content: [{ type: 'text', text: 'previous' }] },
+                  },
+                },
+              ],
+            },
+          },
+        };
+      },
+    });
+
+    const runtime = await factory.create(baseInput());
+    const seen = [];
+    runtime.session.subscribe((ev) => seen.push(ev));
+    await runtime.session.prompt('follow up');
+    const texts = seen
+      .filter((e) => e.type === 'message_end')
+      .map((e) => e.message.content[0].text);
+    assert.deepEqual(texts, ['current']);
     await runtime.dispose();
   });
 

@@ -4,9 +4,9 @@
  *
  * 背景：`dsh-fs-local` 的 `resolve()` 只把相对路径解析到一个固定的 `cwd`，
  * 绝对路径和 `..` 完全不受它管（这是它 README 里写明的限制，不是 bug）。
- * 我们的租户模型需要"同一份逻辑路径空间"同时覆盖两个物理根——会话工作区
- * 和会话私有 `/tmp`——所以在真正调用 `dsh-fs-local` 之前，必须先把外部传
- * 进来的路径字符串归一化成"选中哪个根 + 根内的相对路径"这一对值。
+ * 我们的租户模型需要"同一份逻辑路径空间"同时覆盖会话工作区、会话私有
+ * `/tmp`、系统 skill、已启用 skill 与草稿根——所以在真正调用 `dsh-fs-local`
+ * 之前，必须先把外部传进来的路径字符串归一化成"选中哪个根 + 根内的相对路径"。
  *
  * 这个文件不碰任何 dsh-fs 的 Service/Context 机制，纯字符串与文件系统元数据
  * 处理，方便单独做单元测试（同时也是 `workspace-fs.ts` 唯一依赖的路径逻辑）。
@@ -28,16 +28,21 @@ export const AGENT_TEMP_PATH = '/tmp';
  */
 export const AGENT_DRAFT_SKILL_PATH = '/home/sandbox/skill-draft';
 
+/** 系统 skill 根的逻辑路径——只读，进发现与 prompt（C2 / ADR 0008 D4）。 */
+export const AGENT_SKILL_PATH = '/home/sandbox/skill';
+
+/** 已启用 skill 包的逻辑前缀——只读，逐包映射到 owner 的发布副本。 */
+export const AGENT_USER_SKILL_PATH = '/home/sandbox/skill-user';
+
 /** 一条逻辑路径落在哪个物理根里。 */
 /**
  * 逻辑路径的归属根。
  *
- * `skill-draft` 是 2026-08-31（ADR 0009 D7 / 计划 H6.2）加的第三个——它与前两个
- * 的区别不在「能不能写」（那由 `writableRoots()` 决定），而在**它不进模型上下文**：
- * 系统根与已启用根会进发现与 prompt，草稿根不进。可写与可见被这三个根彻底分开，
- * 正是「模型能自由造包」与「闸门只剩人按的那一下」能同时成立的原因。
+ * `skill` / `skill-user` 是只读可见根（进发现与 prompt）；`skill-draft` 可写
+ * 但不进模型上下文。可写与可见被这些根彻底分开——「模型能自由造包」与
+ * 「闸门只剩人按的那一下」能同时成立。
  */
-export type SandboxPathScope = 'workspace' | 'temp' | 'skill-draft';
+export type SandboxPathScope = 'workspace' | 'temp' | 'skill-draft' | 'skill' | 'skill-user';
 
 /** 解析后的逻辑路径：作用域 + 根内相对路径（POSIX 分隔符，`.` 代表根自身）。 */
 export interface ParsedSandboxPath {
@@ -125,6 +130,23 @@ export function parseSandboxPath(userPath: string, cwd?: ParsedSandboxPath): Par
     rejectTraversal(segments, raw);
     return { scope: 'skill-draft', relative: segments.length ? segments.join('/') : '.' };
   }
+  // skill-user 必须在 skill 之前：`/home/sandbox/skill-user` 以 skill 前缀开头。
+  if (raw === AGENT_USER_SKILL_PATH) {
+    return { scope: 'skill-user', relative: '.' };
+  }
+  if (raw.startsWith(`${AGENT_USER_SKILL_PATH}/`)) {
+    const segments = splitSegments(raw.slice(AGENT_USER_SKILL_PATH.length + 1));
+    rejectTraversal(segments, raw);
+    return { scope: 'skill-user', relative: segments.length ? segments.join('/') : '.' };
+  }
+  if (raw === AGENT_SKILL_PATH) {
+    return { scope: 'skill', relative: '.' };
+  }
+  if (raw.startsWith(`${AGENT_SKILL_PATH}/`)) {
+    const segments = splitSegments(raw.slice(AGENT_SKILL_PATH.length + 1));
+    rejectTraversal(segments, raw);
+    return { scope: 'skill', relative: segments.length ? segments.join('/') : '.' };
+  }
   if (raw.startsWith('/')) {
     throw denied(`path escape detected: absolute path outside sandbox roots: ${raw}`);
   }
@@ -151,6 +173,14 @@ export function toDisplayPath(parsed: ParsedSandboxPath): string {
     return parsed.relative === '.'
       ? AGENT_DRAFT_SKILL_PATH
       : `${AGENT_DRAFT_SKILL_PATH}/${parsed.relative}`;
+  }
+  if (parsed.scope === 'skill') {
+    return parsed.relative === '.' ? AGENT_SKILL_PATH : `${AGENT_SKILL_PATH}/${parsed.relative}`;
+  }
+  if (parsed.scope === 'skill-user') {
+    return parsed.relative === '.'
+      ? AGENT_USER_SKILL_PATH
+      : `${AGENT_USER_SKILL_PATH}/${parsed.relative}`;
   }
   return parsed.relative;
 }

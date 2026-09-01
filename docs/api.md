@@ -125,7 +125,7 @@ data: {"sequence":18,"event":{...},"ts":...,"eventId":"01K..."}
 
 `GET /api/extensions/diagnostics` 返回 Extension Package、Agent Profile、Tool/MCP allowlist 和供应链审计状态，不含凭据。MCP 工具以 `mcp__{serverName}__{toolName}` 出现在 `tools` / `registry.mcp_tools`。
 
-**2026-08-31（ADR 0009 D9）起，这份就绪度是 DSH 工具注册表的投影**，不再是自建 adapter 的探测快照：一台 MCP 服务器 = overlay 里一个 `@deepseek-ai/dsh-mcp-client` 实例，它注册到 `ctx.tools` 上的东西就是模型看得见的东西，所以 `/ready` 与模型工具面不可能不一致。连接、退避重连与 `notifications/tools/list_changed` 重新同步由该插件负责；**配置变更（`MCP_SERVERS_JSON`）须重跑 `npm run gen:patch` 并重启 Agent** 才会生效。工具名超长或含非法字符时出厂包会规范化并追加 12 位十六进制哈希，风险表因此必须有 `mcp__<server>__*` 前缀条目——漏配会落到 `high`（要审批），不会落到放行。响应在兼容既有 `extensions` / `tools` / `skills` / `mcp_servers` 字段的同时，增加：
+**2026-08-31（ADR 0009 D9）起，这份就绪度是 DSH 工具注册表的投影**，不再是自建 adapter 的探测快照：一台 MCP 服务器 = overlay 里一个 `@deepseek-ai/dsh-mcp-client` 实例，它注册到 `ctx.tools` 上的东西就是模型看得见的东西，所以 `/ready` 与模型工具面不可能不一致。连接、退避重连与 `notifications/tools/list_changed` 重新同步由该插件负责；**配置变更（`MCP_SERVERS_JSON`）须重启 Agent** 才会生效（boot 时按环境叠进插件树，不必重跑 `npm run gen:patch`）。工具名超长或含非法字符时出厂包会规范化并追加 12 位十六进制哈希，风险表因此必须有 `mcp__<server>__*` 前缀条目——漏配会落到 `high`（要审批），不会落到放行。响应在兼容既有 `extensions` / `tools` / `skills` / `mcp_servers` 字段的同时，增加：
 
 | 字段 | 说明 |
 |------|------|

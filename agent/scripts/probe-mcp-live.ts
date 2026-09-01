@@ -6,7 +6,7 @@
  *
  * 用法：
  *   MCP_SERVERS_JSON='[{"serverId":"echo","command":"node","args":["<fixture>"]}]' \
- *   npm run gen:patch && npx tsx scripts/probe-mcp-live.ts
+ *   npx tsx scripts/probe-mcp-live.ts
  */
 import { bootEnterpriseRuntime } from '../src/runtime/boot.js';
 

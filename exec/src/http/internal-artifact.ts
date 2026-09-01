@@ -72,13 +72,22 @@ export function registerInternalArtifactRoutes(app: Hono, deps: InternalArtifact
       const sourcePath = typeof payload['sourcePath'] === 'string' ? payload['sourcePath'] : '';
       if (!sourcePath) throw new ContractError('ENVELOPE_INVALID', 'sourcePath required');
 
+      const sessionIdRaw = payload['sessionId'];
+      const sessionId =
+        typeof sessionIdRaw === 'string' && sessionIdRaw.trim() !== ''
+          ? sessionIdRaw.trim()
+          : env.sessionId ?? env.workspaceId;
+      const externalIdRaw = payload['externalArtifactId'];
       const record = await deps.artifactService.submit({
         workspace,
-        sessionId: env.sessionId ?? env.workspaceId,
+        sessionId,
         sourcePath,
         name: (payload['name'] as string | undefined) ?? null,
         mimeType: (payload['mimeType'] as string | undefined) ?? null,
         expectedSha256: (payload['expectedSha256'] as string | undefined) ?? null,
+        ...(typeof externalIdRaw === 'string' && externalIdRaw.trim() !== ''
+          ? { externalArtifactId: externalIdRaw.trim() }
+          : {}),
         owner: { orgId: env.orgId, userId: env.userId },
       });
       return c.json({

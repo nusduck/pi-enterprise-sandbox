@@ -19,8 +19,11 @@ export interface McpReadiness {
 /** /ready 逐条展开的单个 MCP server。原 JSDoc 只写了 `object[]`，读不到这四个字段。 */
 export interface McpServerReadiness {
   serverId?: string;
+  server_id?: string;
   status?: string;
+  connection_status?: string;
   toolCount?: number;
+  tools?: unknown[];
   error?: unknown;
 }
 
@@ -94,9 +97,11 @@ export async function handleHealthRoute(input: HealthRouteInput): Promise<boolea
         tool_count: Number(mcp.toolCount) || 0,
         servers: Array.isArray(mcp.servers)
           ? mcp.servers.map((server) => ({
-              id: server.serverId,
-              status: server.status,
-              tool_count: Number(server.toolCount) || 0,
+              id: server.serverId ?? server.server_id,
+              status: server.status ?? server.connection_status,
+              tool_count:
+                Number(server.toolCount) ||
+                (Array.isArray(server.tools) ? server.tools.length : 0),
               ...(server.error ? { error: String(server.error) } : {}),
             }))
           : [],

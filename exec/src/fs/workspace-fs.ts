@@ -24,7 +24,7 @@
  * 全部是"调 super 再脱敏"的单行委托，没有重新实现任何一条基础操作的逻辑。
  */
 import type { Context } from '@deepseek-ai/cordis';
-import type { SandboxPathScope } from './path-policy.js';
+import type { ParsedSandboxPath, SandboxPathScope } from './path-policy.js';
 import {
   FsError,
   FsTargetKey,
@@ -50,7 +50,7 @@ import {
   parseSandboxPath,
   toDisplayPath,
 } from './path-policy.js';
-import { canonicalWritableRoots } from './writable-roots.js';
+import { canonicalReadableRoots, canonicalWritableRoots } from './writable-roots.js';
 
 /** `WorkspaceFileSystem` 自己的构造配置——只暴露 `LocalFileSystem.Config` 里
  * 与租户无关的部分（`diffBasisMaxBytes`）；`cwd` 由租户根决定，不给调用方留口子。 */
@@ -98,10 +98,10 @@ export class WorkspaceFileSystem extends LocalFileSystem {
     return this.guard(async () => {
       const cwdParsed = opts?.cwd !== undefined ? parseSandboxPath(opts.cwd) : undefined;
       const parsed = parseSandboxPath(rawPath, cwdParsed);
-      const physicalRoot = this.physicalRootFor(parsed.scope);
+      const located = this.locate(parsed);
 
-      const target = await super.resolve(parsed.relative, {
-        cwd: physicalRoot,
+      const target = await super.resolve(located.relative, {
+        cwd: located.physicalRoot,
         ...(opts?.signal !== undefined ? { signal: opts.signal } : {}),
       });
 
@@ -109,7 +109,7 @@ export class WorkspaceFileSystem extends LocalFileSystem {
       // parseSandboxPath 已经挡掉了 `..`、其它绝对根等字面越界，但
       // dsh-fs-local 的 realpath 跟随符号链接可能把"看起来合法"的相对路径
       // 解析到根外——这里就是 ADR 0008 D1 说的"符号链接解析后的越界检查"。
-      const roots = await canonicalWritableRoots(this.workspace, 'workspace-write');
+      const roots = await canonicalReadableRoots(this.workspace);
       if (!this.isWithinAny(roots, target.targetKey)) {
         throw new FsError(
           `path escape detected: ${rawPath} resolves outside workspace`,
@@ -135,8 +135,8 @@ export class WorkspaceFileSystem extends LocalFileSystem {
     return this.guard(async () => {
       const cwdParsed = opts?.cwd !== undefined ? parseSandboxPath(opts.cwd) : undefined;
       const parsed = parseSandboxPath(rawPath, cwdParsed);
-      const physicalRoot = this.physicalRootFor(parsed.scope);
-      const physical = path.resolve(physicalRoot, parsed.relative);
+      const located = this.locate(parsed);
+      const physical = path.resolve(located.physicalRoot, located.relative);
 
       // lstat 按契约不跟随路径最后一段的符号链接，但路径中间的目录段仍然可能
       // 是符号链接——必须先把"到父目录为止"的部分 realpath 一次确认没有越权，
@@ -154,7 +154,7 @@ export class WorkspaceFileSystem extends LocalFileSystem {
       }
 
       const reconstructed = path.join(realDir, base);
-      const roots = await canonicalWritableRoots(this.workspace, 'workspace-write');
+      const roots = await canonicalReadableRoots(this.workspace);
       if (!this.isWithinAny(roots, reconstructed)) {
         throw new FsError(
           `path escape detected: ${rawPath} resolves outside workspace`,
@@ -262,6 +262,7 @@ export class WorkspaceFileSystem extends LocalFileSystem {
 
   private physicalRootFor(scope: SandboxPathScope): string {
     if (scope === 'temp') return this.workspace.tempRoot;
+    if (scope === 'skill') return this.workspace.systemSkillRoot;
     if (scope === 'skill-draft') {
       const draft = this.workspace.draftSkillRoot;
       if (draft === undefined || draft === '') {
@@ -274,7 +275,34 @@ export class WorkspaceFileSystem extends LocalFileSystem {
       }
       return draft;
     }
+    if (scope === 'skill-user') {
+      throw new FsError(
+        'skill-user root is per-package; address /home/sandbox/skill-user/<package>/...',
+        'FS_SANDBOX_DENIED',
+      );
+    }
     return this.workspace.workspaceRoot;
+  }
+
+  /** 逻辑路径 → 该次操作要用的物理根 + 根内相对路径。 */
+  private locate(parsed: ParsedSandboxPath): { physicalRoot: string; relative: string } {
+    if (parsed.scope !== 'skill-user') {
+      return { physicalRoot: this.physicalRootFor(parsed.scope), relative: parsed.relative };
+    }
+    if (parsed.relative === '.') {
+      throw new FsError(
+        'skill-user root is per-package; address /home/sandbox/skill-user/<package>/...',
+        'FS_SANDBOX_DENIED',
+      );
+    }
+    const slash = parsed.relative.indexOf('/');
+    const pkgName = slash < 0 ? parsed.relative : parsed.relative.slice(0, slash);
+    const rest = slash < 0 ? '.' : parsed.relative.slice(slash + 1);
+    const pkg = this.workspace.enabledSkillPackages.find((item) => item.name === pkgName);
+    if (pkg === undefined) {
+      throw new FsError(`skill package not enabled: ${pkgName}`, 'FS_SANDBOX_DENIED');
+    }
+    return { physicalRoot: pkg.sourcePath, relative: rest === '' ? '.' : rest };
   }
 
   /** 用继承自 `LocalFileSystem` 的 `contains()`（未覆盖，原样复用）判断

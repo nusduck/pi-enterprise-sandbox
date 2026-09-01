@@ -32,26 +32,13 @@ test('H7.8 真实 MCP 服务器：连上 → 注册成 mcp__<server>__<tool> →
     LLMIO_API_KEY: 'mcp-live-probe',
   };
 
-  // patch 是生成物，MCP 条目在生成时求值——所以要先按这个 MCP_SERVERS_JSON 重生成。
-  execFileSync('npm', ['run', 'gen:patch'], { cwd: agentDir, env, encoding: 'utf8' });
-
-  let out: string;
-  try {
-    out = execFileSync('npx', ['tsx', join(agentDir, 'scripts/probe-mcp-live.ts')], {
-      cwd: agentDir,
-      env,
-      encoding: 'utf8',
-      timeout: 120_000,
-    });
-  } finally {
-    // 把仓库里的 YAML 还原成「无 MCP」的形态，否则这条用例会把一个本地夹具
-    // 路径写进版本库（`plugins.test.ts` 会因此变红，而且那条路径在别人机器上不存在）。
-    execFileSync('npm', ['run', 'gen:patch'], {
-      cwd: agentDir,
-      env: { ...process.env, MCP_SERVERS_JSON: '' },
-      encoding: 'utf8',
-    });
-  }
+  // MCP 在 boot 时按 MCP_SERVERS_JSON 叠进插件树，不再改仓库里的 YAML。
+  const out = execFileSync('npx', ['tsx', join(agentDir, 'scripts/probe-mcp-live.ts')], {
+    cwd: agentDir,
+    env,
+    encoding: 'utf8',
+    timeout: 120_000,
+  });
 
   assert.match(out, /mcp__echo__echo/, '工具必须以 mcp__<serverName>__<rawName> 注册');
   assert.match(

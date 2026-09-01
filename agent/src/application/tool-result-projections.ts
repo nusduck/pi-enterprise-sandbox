@@ -34,18 +34,42 @@ export function extractStartedProcessId(result: unknown) {
   return normalizeUlid((details as Record<string, unknown>).processId);
 }
 
-export function extractSubmittedArtifact(result) {
+function unwrapSubmittedArtifact(result: unknown): Record<string, unknown> | null {
   if (!result || typeof result !== 'object' || Array.isArray(result)) return null;
-  const details = (result as Record<string, unknown>).details;
-  if (!details || typeof details !== 'object' || Array.isArray(details)) return null;
+  const root = result as Record<string, unknown>;
+  const bags: unknown[] = [root.details, root.value, root];
+  const nestedValue = root.value;
+  if (nestedValue && typeof nestedValue === 'object' && !Array.isArray(nestedValue)) {
+    bags.unshift((nestedValue as Record<string, unknown>).details);
+  }
+  for (const bag of bags) {
+    if (!bag || typeof bag !== 'object' || Array.isArray(bag)) continue;
+    const rec = bag as Record<string, unknown>;
+    if (
+      rec.artifactId != null ||
+      rec.artifact_id != null ||
+      rec.displayName != null ||
+      rec.sha256 != null
+    ) {
+      return rec;
+    }
+  }
+  return null;
+}
 
-  const metadata = (details as Record<string, unknown>);
-  const artifactId = normalizeUlid(metadata.artifactId);
+export function extractSubmittedArtifact(result) {
+  const metadata = unwrapSubmittedArtifact(result);
+  if (!metadata) return null;
+
+  const artifactId = normalizeUlid(metadata.artifactId ?? metadata.artifact_id);
   const rawName = metadata.displayName ?? metadata.name;
   const name = typeof rawName === 'string' ? rawName : '';
+  const rawMime = metadata.mimeType ?? metadata.mime_type;
   const mimeType =
-    typeof metadata.mimeType === 'string' ? metadata.mimeType : '';
-  const size = metadata.size;
+    typeof rawMime === 'string' && rawMime.trim() !== ''
+      ? rawMime
+      : 'application/octet-stream';
+  const size = metadata.size ?? metadata.sizeBytes ?? metadata.size_bytes;
   const sha256 = metadata.sha256;
   const rawDescription = metadata.description;
 

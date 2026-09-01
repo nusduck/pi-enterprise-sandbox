@@ -115,9 +115,23 @@ describe('WorkspaceFileSystem.resolve — 既有路径校验规则（移植自 t
   });
 
   test('other absolute roots are rejected', async () => {
-    for (const p of ['/etc/passwd', '/var/sandbox/workspaces/x', '/home/sandbox/skill/x']) {
+    for (const p of ['/etc/passwd', '/var/sandbox/workspaces/x', '/home/sandbox/not-a-root/x']) {
       await assertDenied(() => fx.fs.resolve(p));
     }
+  });
+
+  test('system skill files are readable via the logical /home/sandbox/skill prefix', async () => {
+    await writeFile(path.join(fx.workspace.systemSkillRoot, 'README.md'), '# skills\n');
+    const target = await fx.fs.resolve('/home/sandbox/skill/README.md');
+    assert.equal(target.displayPath, '/home/sandbox/skill/README.md');
+    assert.equal(target.targetKey, path.join(fx.workspace.systemSkillRoot, 'README.md'));
+    const text = await fx.fs.readText(target);
+    assert.equal(text, '# skills\n');
+  });
+
+  test('system skill files are not writable', async () => {
+    const target = await fx.fs.resolve('/home/sandbox/skill/README.md');
+    await assertDenied(() => fx.fs.writeText(target, 'nope'));
   });
 
   test('deeply nested relative paths resolve correctly', async () => {

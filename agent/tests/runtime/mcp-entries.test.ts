@@ -6,7 +6,11 @@
  */
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { buildMcpPatchEntries, readMcpServersFromEnv } from '../../src/runtime/plugins/mcp-entries.js';
+import {
+  buildMcpPatchEntries,
+  buildMcpRuntimePatches,
+  readMcpServersFromEnv,
+} from '../../src/runtime/plugins/mcp-entries.js';
 import { renderPatchYaml } from '../../src/runtime/plugins/render.js';
 
 test('H7.2 密钥只以 process.env 占位符出现，明文永不进 YAML', () => {
@@ -75,4 +79,28 @@ test('H7.1 MCP_SERVERS_JSON 解析 fail-closed', () => {
   assert.deepEqual(readMcpServersFromEnv({ MCP_SERVERS_JSON: '' } as never), []);
   assert.throws(() => readMcpServersFromEnv({ MCP_SERVERS_JSON: '{not json' } as never), /Invalid/);
   assert.throws(() => readMcpServersFromEnv({ MCP_SERVERS_JSON: '{}' } as never), /must be an array/);
+});
+
+test('boot 时按环境叠 MCP patch，密钥换成真实值而不是 YAML 占位符', () => {
+  const env = {
+    MCP_SERVERS_JSON: JSON.stringify([
+      { serverId: 'exa', url: 'https://mcp.exa.ai/mcp', authTokenRef: 'EXA_MCP_TOKEN' },
+    ]),
+    EXA_MCP_TOKEN: 'tok-live',
+  } as NodeJS.ProcessEnv;
+  const [layer] = buildMcpRuntimePatches(env);
+  const inserted = layer?.insert?.[0];
+  assert.equal(inserted?.name, '@deepseek-ai/dsh-mcp-client');
+  const config = inserted?.config as Record<string, unknown>;
+  assert.equal(config['url'], 'https://mcp.exa.ai/mcp');
+  assert.deepEqual(config['headers'], { Authorization: 'Bearer tok-live' });
+});
+
+test('boot 时缺密钥的 MCP 服务器被跳过，不让整个 Agent 起不来', () => {
+  const env = {
+    MCP_SERVERS_JSON: JSON.stringify([
+      { serverId: 'exa', url: 'https://mcp.exa.ai/mcp', authTokenRef: 'EXA_MCP_TOKEN' },
+    ]),
+  } as NodeJS.ProcessEnv;
+  assert.deepEqual(buildMcpRuntimePatches(env), []);
 });

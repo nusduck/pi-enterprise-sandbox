@@ -299,7 +299,7 @@ AgentVersion 侧（同一份语义，只能收紧）：
 3. `agent/src/application/` — Run / Session recovery / Event SSE / A2A services（不认识 cordis）
 4. `agent/src/runtime/` — DSH 组合层：plugins 清单、remote providers、policy 挂载点、SSE 投影
 5. `agent/src/infrastructure/dsh/` — 与组合层的接线（`runtime-factory`）
-6. `agent/src/runtime/bundle/mcp-entries.ts` — `MCP_SERVERS_JSON` 到出厂 `dsh-mcp-client` 插件条目的生成与校验
+6. `agent/src/runtime/plugins/mcp-entries.ts` — `MCP_SERVERS_JSON` 到出厂 `dsh-mcp-client` 插件条目；boot 时按环境叠进插件树，改配置只需重启 Agent
 7. `agent/src/infrastructure/sandbox/sandbox-client.ts` — 公共面 client（数据集下载、Skill 归档）；工具路径走 runtime remote provider，**不** dual-write Run
 8. 类型检查: `npm --prefix agent run typecheck`
 9. 单元测试: `npm test --prefix agent`

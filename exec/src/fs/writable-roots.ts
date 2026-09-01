@@ -48,3 +48,27 @@ export async function canonicalWritableRoots(
 ): Promise<readonly string[]> {
   return Promise.all(writableRoots(ctx, mode).map((root) => canonicalizePath(root)));
 }
+
+/**
+ * 可读根：工作区、temp、系统 skill、草稿、已启用包。
+ *
+ * `resolve()` / `lstat()` / `read` 走这里，不是 `writableRoots()`——系统 skill
+ * 只读但必须能 `read /home/sandbox/skill/README.md`。用可写根做 resolve 围栏
+ * 就是 2026-09-01 那次「bash 能 ls、read 报 path escape」的成因。
+ */
+export function readableRoots(ctx: WorkspaceContext): readonly string[] {
+  const roots = [ctx.workspaceRoot, ctx.tempRoot, ctx.systemSkillRoot];
+  if (ctx.draftSkillRoot !== undefined && ctx.draftSkillRoot !== '') {
+    roots.push(ctx.draftSkillRoot);
+  }
+  for (const pkg of ctx.enabledSkillPackages) {
+    roots.push(pkg.sourcePath);
+  }
+  return roots;
+}
+
+export async function canonicalReadableRoots(
+  ctx: WorkspaceContext,
+): Promise<readonly string[]> {
+  return Promise.all(readableRoots(ctx).map((root) => canonicalizePath(root)));
+}

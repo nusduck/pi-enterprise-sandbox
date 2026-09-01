@@ -76,7 +76,7 @@
   disabled: true
 
 # 关掉本机 JSONL 会话落盘。MySQL PersistenceBackend 由
-# boot.createSessionBackend 按 Run 装配。
+# boot.mountSessionPersistence 挂到根 ctx.sessionPersistence。
 - id: session-persistence-jsonl
   disabled: true
 

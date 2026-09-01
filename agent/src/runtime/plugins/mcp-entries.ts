@@ -12,9 +12,9 @@
  *
  * ## 密钥只走 env 占位符
  *
- * 生成的 YAML 里**不得出现任何明文**（D9 §3）。`envRefs` / `headerRefs` /
- * `authTokenRef` 携带的都是**变量名**，渲染成 `!!js process.env.<NAME>` 与
- * ``!!js `Bearer ${process.env.<NAME>}` ``。解析发生在进程里，不在文件里。
+ * `buildMcpPatchEntries` 仍产出 `!!js:env:` / `!!js:bearer:` 占位符，给 YAML
+ * 生成与密钥断言用。真正装进插件树的是 `buildMcpRuntimePatches()`：boot 时
+ * 按 `MCP_SERVERS_JSON` 求值，明文只存在于进程内存。
  */
 import type { PatchEntry } from './manifest.js';
 
@@ -122,6 +122,75 @@ export function buildMcpPatchEntries(servers: readonly McpServerInput[]): PatchE
   }
 
   return entries;
+}
+
+/**
+ * 把生成条目里的 `!!js:env:` / `!!js:bearer:` 占位符换成进程里的真实值。
+ *
+ * YAML 路径靠 dsh-app-boot 的 `!!js` 标签在加载时求值；boot 时直接插
+ * JS 对象没有这条路径，必须在这里解析。引用的环境变量为空则跳过那台
+ * 服务器（fail-closed 关能力，不让整个 Agent 起不来）。
+ */
+function resolveJsPlaceholder(
+  value: unknown,
+  env: NodeJS.ProcessEnv,
+): { ok: true; value: unknown } | { ok: false; missing: string } {
+  if (typeof value !== 'string') return { ok: true, value };
+  if (value.startsWith('!!js:env:')) {
+    const name = value.slice('!!js:env:'.length);
+    const resolved = env[name];
+    if (resolved == null || resolved === '') return { ok: false, missing: name };
+    return { ok: true, value: resolved };
+  }
+  if (value.startsWith('!!js:bearer:')) {
+    const name = value.slice('!!js:bearer:'.length);
+    const resolved = env[name];
+    if (resolved == null || resolved === '') return { ok: false, missing: name };
+    return { ok: true, value: `Bearer ${resolved}` };
+  }
+  return { ok: true, value };
+}
+
+function resolveConfig(
+  config: Record<string, unknown>,
+  env: NodeJS.ProcessEnv,
+): Record<string, unknown> | null {
+  const out: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(config)) {
+    if (value !== null && typeof value === 'object' && !Array.isArray(value)) {
+      const nested = resolveConfig(value as Record<string, unknown>, env);
+      if (nested === null) return null;
+      out[key] = nested;
+      continue;
+    }
+    const hit = resolveJsPlaceholder(value, env);
+    if (hit.ok === false) {
+      console.error(`[agent-mcp] skipping MCP server: env ${hit.missing} is not set`);
+      return null;
+    }
+    out[key] = hit.value;
+  }
+  return out;
+}
+
+/**
+ * 进程启动时按 `MCP_SERVERS_JSON` 生成要叠进 overlay 的 patch。
+ *
+ * 不写进 `cordis.patch.yml`：那份 YAML 是提交物，Docker 镜像构建时环境是空的，
+ * 运维在 compose `.env` 里配的服务器永远进不了插件树——症状就是模型看不见
+ * `mcp__*` 工具，`/ready` 报 `server_count: 0`。
+ */
+export function buildMcpRuntimePatches(env: NodeJS.ProcessEnv = process.env): PatchEntry[] {
+  const entries = buildMcpPatchEntries(readMcpServersFromEnv(env));
+  const insert: PatchEntry[] = [];
+  for (const entry of entries) {
+    const raw = entry.config && typeof entry.config === 'object' ? { ...entry.config } : {};
+    const config = resolveConfig(raw, env);
+    if (config === null) continue;
+    insert.push({ id: entry.id, name: entry.name, config });
+  }
+  if (insert.length === 0) return [];
+  return [{ insert }];
 }
 
 /** 解析 `MCP_SERVERS_JSON`；空/缺省返回空数组，坏 JSON fail-closed。 */

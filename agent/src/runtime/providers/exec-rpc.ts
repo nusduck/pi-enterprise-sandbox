@@ -32,6 +32,12 @@ export interface ExecRpcConfig {
   readonly userId: string;
   readonly workspaceId: string;
   readonly runId?: string | undefined;
+  /**
+   * Sandbox Session ULID。产物 submit 必须按这个 id 落账——workspaceId 是
+   * 另一枚 ULID，用它当 sessionId 会让前端按 sandbox_session_id 列表永远
+   * 看不到刚提交的产物。
+   */
+  readonly sandboxSessionId?: string | undefined;
   /** 当前 fence，未设置时传 0（pre-run session.ensure 特例由服务端校验）。 */
   readonly fenceToken: number;
   /** 仅用于错误脱敏的物理根列表；必填无默认值（fail-closed）。 */
