@@ -17,6 +17,7 @@
  * 每个方法都是一条参数化 SQL，不拼接调用方输入到语句文本里。
  */
 import type { Pool, RowDataPacket } from 'mysql2/promise';
+import { sqlLimit } from '../db/client.js';
 import type {
   JobOwnerScope,
   JobRecord,
@@ -167,8 +168,8 @@ export class MySqlJobStore implements JobStore {
       `SELECT * FROM ${this.table}
        WHERE org_id = ? AND user_id = ? AND workspace_id = ?
        ORDER BY created_at DESC
-       LIMIT ?`,
-      [owner.orgId, owner.userId, owner.workspaceId, limit],
+       LIMIT ${sqlLimit(limit)}`,
+      [owner.orgId, owner.userId, owner.workspaceId],
     );
     return rows.map(mapRow);
   }
@@ -178,8 +179,8 @@ export class MySqlJobStore implements JobStore {
       `SELECT * FROM ${this.table}
        WHERE run_id = ? AND org_id = ? AND user_id = ? AND workspace_id = ?
        ORDER BY created_at DESC
-       LIMIT ?`,
-      [runId, owner.orgId, owner.userId, owner.workspaceId, limit],
+       LIMIT ${sqlLimit(limit)}`,
+      [runId, owner.orgId, owner.userId, owner.workspaceId],
     );
     return rows.map(mapRow);
   }
@@ -203,8 +204,8 @@ export class MySqlJobStore implements JobStore {
       `SELECT * FROM ${this.table}
        WHERE status IN ('running', 'stopping')
        ORDER BY created_at ASC
-       LIMIT ?`,
-      [limit],
+       LIMIT ${sqlLimit(limit)}`,
+      [],
     );
     return rows.map(mapRow);
   }

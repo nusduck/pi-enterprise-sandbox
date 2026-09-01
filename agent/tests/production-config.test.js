@@ -20,6 +20,7 @@ const STRONG = 'a'.repeat(64);
 const A2A_PROD = Object.freeze({
   A2A_PUBLIC_BASE_URL: 'https://agent.example.com',
   A2A_ARTIFACT_DOWNLOAD_SECRET: STRONG,
+  SANDBOX_JWT_SECRET: STRONG,
 });
 
 describe('resolveDeploymentEnv', () => {
@@ -54,6 +55,20 @@ describe('validateProductionConfig', () => {
           LLMIO_BASE_URL: 'https://llm.example.com',
         }),
       /AGENT_INTERNAL_TOKEN|SANDBOX_API_TOKEN/,
+    );
+  });
+
+  it('rejects missing or weak browser JWT signing material in production', () => {
+    assert.throws(
+      () => validateProductionConfig({
+        DEPLOYMENT_ENV: 'production',
+        AGENT_INTERNAL_TOKEN: STRONG,
+        SANDBOX_API_TOKEN: STRONG,
+        LLMIO_BASE_URL: 'https://llm.example.com/v1',
+        A2A_PUBLIC_BASE_URL: A2A_PROD.A2A_PUBLIC_BASE_URL,
+        A2A_ARTIFACT_DOWNLOAD_SECRET: STRONG,
+      }),
+      /SANDBOX_JWT_SECRET/,
     );
   });
 

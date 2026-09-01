@@ -95,6 +95,7 @@ export function createInternalRouter(deps: InternalRouterDeps): Hono {
   });
   registerInternalShellRoutes(app, {
     workspaceManager: deps.workspaceManager,
+    jobRegistry: deps.jobRegistry,
     systemSkillRoot: deps.systemSkillRoot,
     enabledSkillPackagesFor: deps.enabledSkillPackagesFor,
     ...(deps.draftSkillRootFor ? { draftSkillRootFor: deps.draftSkillRootFor } : {}),

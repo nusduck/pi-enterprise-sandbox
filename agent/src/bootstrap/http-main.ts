@@ -11,11 +11,18 @@ import {
   effectiveConfig,
 } from '../../config.js';
 import { createServiceContainer } from './container.js';
-import { resolveSkillScopeForIdentity } from './container-env.js';
+import {
+  resolveSkillRootsForRun,
+  resolveSkillScopeForIdentity,
+} from './container-env.js';
+import { ExternalIdentityResolver } from '../application/parent/external-identity-resolver.js';
+import { createSkillManager } from '../skills/manager.js';
+import { draftSkillRootFor } from '../skills/paths.js';
+import { mutateSkillWithLedger } from '../application/skill-enablement-service.js';
 import { createAgentHttpServer } from './create-http-server.js';
-import { ProcessAccessService } from '../application/process-access-service.js';
 import { getExtensionDiagnostics as projectExtensionDiagnostics } from '../application/extension-diagnostics-service.js';
 import { startTelemetry } from '../infrastructure/telemetry.js';
+import { BrowserAuthService } from '../application/browser-auth-service.js';
 
 /**
  * Build the lightweight observability columns for the operator Run list.
@@ -195,17 +202,25 @@ export async function startHttpMain(env: NodeJS.ProcessEnv = process.env) {
   // Skills are per-caller: the bundled tier plus that user's own directory.
   // Without an identity on the request there is no user tier to project, and
   // the process-wide roots list bundled packages only.
-  const getExtensionDiagnostics = (
+  const resolveOwner = httpServices
+    ? async (auth: object) => {
+        const repos = httpServices.createRepositories(httpServices.knex);
+        return new ExternalIdentityResolver({
+          organizations: repos.organizations,
+          externalRefs: repos.externalRefs,
+        }).resolveOwner(auth as never);
+      }
+    : null;
+
+  const getExtensionDiagnostics = async (
     options: {
-      organizationId?: string | null;
-      ownerUserId?: string | null;
+      auth?: object | null;
       [key: string]: unknown;
     } = {},
   ) => {
-    const identity =
-      options.organizationId != null && options.ownerUserId != null
-        ? { orgId: options.organizationId, userId: options.ownerUserId }
-        : null;
+    const identity = options.auth && resolveOwner
+      ? await resolveOwner(options.auth)
+      : null;
     const { skillRoots, userSkillRoot } = identity
       ? resolveSkillScopeForIdentity(env, identity)
       : { skillRoots: config.SKILL_ROOTS, userSkillRoot: null };
@@ -213,11 +228,31 @@ export async function startHttpMain(env: NodeJS.ProcessEnv = process.env) {
       ...options,
       skillRoots,
       userSkillRoot,
+      draftSkillRoot: identity ? draftSkillRootFor(identity) : null,
       mcpServers: config.MCP_SERVERS,
       mcpDiscovery: container.getMcpReadiness(),
       toolRiskPolicy: config.TOOL_RISK_POLICY,
     });
   };
+
+  const mutateSkill = resolveOwner
+    ? async ({ auth, action, name }) => {
+        const owner = await resolveOwner(auth);
+        const manager = createSkillManager({
+          identity: owner,
+          skillRoots: resolveSkillRootsForRun(env, owner),
+          draftSkillRoot: draftSkillRootFor(owner),
+        });
+        const repos = httpServices.createRepositories(httpServices.knex);
+        return mutateSkillWithLedger({
+          action,
+          name,
+          owner,
+          manager,
+          ledger: repos.skillEnablements,
+        });
+      }
+    : null;
 
   const notReady = async () => {
     const err = new Error('Agent data plane not started');
@@ -309,15 +344,18 @@ export async function startHttpMain(env: NodeJS.ProcessEnv = process.env) {
       }
     : null;
 
-  let processAccessService = null;
+  let browserAuthService = null;
   if (httpServices) {
-    const { createSandboxClient } = await import(
-      '../infrastructure/sandbox/sandbox-client.js'
-    );
-    processAccessService = new ProcessAccessService({
-      createRepositories: httpServices.createRepositories,
-      db: httpServices.knex,
-      createSandboxClient,
+    const repos = httpServices.createRepositories(httpServices.knex);
+    browserAuthService = new BrowserAuthService({
+      credentials: repos.authCredentials,
+      secret: env.SANDBOX_JWT_SECRET,
+      issuer: env.SANDBOX_JWT_ISSUER,
+      audience: env.SANDBOX_JWT_AUDIENCE,
+      ttlSeconds: Number(env.SANDBOX_JWT_TTL_SECONDS),
+      allowPublicRegister:
+        String(env.SANDBOX_AUTH_ALLOW_PUBLIC_REGISTER || 'true').toLowerCase() !== 'false',
+      adminUsernames: String(env.SANDBOX_AUTH_ADMIN_USERNAMES || '').split(','),
     });
   }
 
@@ -457,13 +495,14 @@ export async function startHttpMain(env: NodeJS.ProcessEnv = process.env) {
     cronJobService: httpServices?.cronJobService ?? null,
     listRuns,
     listToolExecutions,
-    processAccessService,
+    browserAuthService,
     config,
     sandboxHealthCheck: sandboxHealthCheck || undefined,
     // /ready requires data plane (MySQL+Redis started). Health-only mode → 503.
     dataPlaneReady: () => container.isDataPlaneReady(),
     mcpReadiness: () => container.getMcpReadiness(),
     getExtensionDiagnostics,
+    mutateSkill,
     activeRunHint: () => 0,
   });
 

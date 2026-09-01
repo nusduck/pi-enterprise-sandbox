@@ -220,6 +220,8 @@ services:
       AGENT_BASE_URL: http://agent:4100
       AGENT_INTERNAL_TOKEN: ${AGENT_INTERNAL_TOKEN:-}
       AUTH_ENABLED: ${AUTH_ENABLED:-}
+      # JWT signing material belongs only to Agent, despite the legacy prefix.
+      SANDBOX_JWT_SECRET: ""
       # Stable external subjects for explicit auth-disabled local development.
       # Agent provisions owner-scoped internal ULIDs from these values.
       BFF_DEV_ACTING_USER_ID: ${BFF_DEV_ACTING_USER_ID:-local-development-user}
@@ -245,18 +247,15 @@ services:
       - backend_internal
       - dev_ingress
 
-  # ── Agent — pi-coding-agent orchestration (independent) ──
-  # Skills come in two tiers on two mounts:
+  # ── Agent — DSH orchestration (independent) ──
+  # Skills come in three tiers:
   #   /home/sandbox/skill        bundled ./skills — always read-only
-  #   /home/sandbox/skill-user   installed packages, one dir per user:
+  #   /home/sandbox/skill-draft  owner-scoped writable drafts, never discovered
+  #   /home/sandbox/skill-user   enabled packages, one dir per user:
   #                              <orgId>/<userId>/<package>/
-  # Users install current-turn ZIP attachments or ask the Agent to generate a
-  # package. Every mutation is high risk and goes through approval; URL and
-  # filesystem-path sources are not supported.
-  # The user tier is a named volume, so installs survive a container rebuild
-  # and follow the user across conversations.
-  # Sandbox mounts both tiers read-only, and binds only the calling user's own
-  # directory into each execution.
+  # The model writes drafts with normal workspace tools. A user enables or
+  # disables them from Capabilities; Agent validates and publishes the copy.
+  # Exec binds only the calling owner's enabled packages read-only.
   agent:
     build:
       context: .
@@ -280,6 +279,14 @@ services:
       AGENT_INTERNAL_TOKEN: ${AGENT_INTERNAL_TOKEN:-}
       # Dev convenience: an empty token would otherwise close /internal/*.
       AGENT_ALLOW_UNAUTHENTICATED_INTERNAL: ${AGENT_ALLOW_UNAUTHENTICATED_INTERNAL:-true}
+      # Browser credential/JWT authority lives in Agent; SANDBOX_* names are
+      # retained for deployment compatibility with the former Python service.
+      SANDBOX_JWT_SECRET: ${SANDBOX_JWT_SECRET:-}
+      SANDBOX_JWT_TTL_SECONDS: ${SANDBOX_JWT_TTL_SECONDS:-86400}
+      SANDBOX_JWT_ISSUER: ${SANDBOX_JWT_ISSUER:-pi-enterprise-sandbox}
+      SANDBOX_JWT_AUDIENCE: ${SANDBOX_JWT_AUDIENCE:-pi-enterprise-sandbox}
+      SANDBOX_AUTH_ALLOW_PUBLIC_REGISTER: ${SANDBOX_AUTH_ALLOW_PUBLIC_REGISTER:-true}
+      SANDBOX_AUTH_ADMIN_USERNAMES: ${SANDBOX_AUTH_ADMIN_USERNAMES:-}
       A2A_PUBLIC_BASE_URL: ${A2A_PUBLIC_BASE_URL:-http://127.0.0.1:${AGENT_PORT:-4100}}
       A2A_ARTIFACT_DOWNLOAD_SECRET: ${A2A_ARTIFACT_DOWNLOAD_SECRET:-dev_only_a2a_artifact_download_secret_32b}
       A2A_ALLOW_DEV_HOST_FALLBACK: ${A2A_ALLOW_DEV_HOST_FALLBACK:-true}
@@ -304,12 +311,9 @@ services:
       SANDBOX_POLICY_PROFILE: ${SANDBOX_POLICY_PROFILE:-balanced}
       SANDBOX_ISOLATION_BACKEND: ${SANDBOX_ISOLATION_BACKEND:-bubblewrap}
       SANDBOX_ISOLATION_REQUIRED: ${SANDBOX_ISOLATION_REQUIRED:-true}
-      # Pi SDK logical cwd for the workspace created by Sandbox. The Agent does
+      # DSH logical cwd for the workspace created by Sandbox. The Agent does
       # not mount or directly access the physical workspace volume.
       AGENT_SESSION_WORKSPACE_CWD: ${AGENT_SESSION_WORKSPACE_CWD:-/home/sandbox/workspace}
-      # Concrete Pi resource root (PiRuntimeFactory.create requires non-empty agentDir).
-      # pi-mcp-adapter state follows the same process-owned resource root.
-      AGENT_MCP_RUNTIME_ROOT: ${AGENT_MCP_RUNTIME_ROOT:-/tmp/pi-enterprise-mcp-runtime}
       LLMIO_BASE_URL: ${LLMIO_BASE_URL:-}
       LLMIO_API_KEY: ${LLMIO_API_KEY:-}
       MODEL_ID: ${MODEL_ID:-deepseek-v4-flash}
@@ -372,6 +376,8 @@ services:
       - ${API_ENV_FILE:-.env}
     environment:
       DEPLOYMENT_ENV: ${DEPLOYMENT_ENV:-development}
+      # Browser auth authority is Agent; override broad env_file inheritance.
+      SANDBOX_JWT_SECRET: ""
       SANDBOX_BASE_URL: http://sandbox:8081
       # Worker persistence is separate; never inherit Sandbox's DSN from
       # env_file.
@@ -407,7 +413,6 @@ services:
       SANDBOX_ISOLATION_REQUIRED: ${SANDBOX_ISOLATION_REQUIRED:-true}
       # Pi executor (same logical cwd / agentDir / model knobs as HTTP agent)
       AGENT_SESSION_WORKSPACE_CWD: ${AGENT_SESSION_WORKSPACE_CWD:-/home/sandbox/workspace}
-      AGENT_MCP_RUNTIME_ROOT: ${AGENT_MCP_RUNTIME_ROOT:-/tmp/pi-enterprise-mcp-runtime}
       LLMIO_BASE_URL: ${LLMIO_BASE_URL:-}
       LLMIO_API_KEY: ${LLMIO_API_KEY:-}
       MODEL_ID: ${MODEL_ID:-deepseek-v4-flash}
@@ -478,13 +483,15 @@ services:
       - ${SANDBOX_SKILL_DRAFT_MOUNT:-./.runtime/sandbox/skill-draft:/var/sandbox/skill-draft}
     environment:
       DEPLOYMENT_ENV: ${DEPLOYMENT_ENV:-development}
+      # Browser auth authority is Agent; override broad env_file inheritance.
+      SANDBOX_JWT_SECRET: ""
       # Listen address only — does NOT authorize clients. See ALLOWED_CLIENT_CIDRS.
       SANDBOX_BIND_HOST: ${SANDBOX_BIND_HOST:-0.0.0.0}
       SANDBOX_PORT: 8081
-      # skill 草稿根（ADR 0009 D7）。**默认空 = 关**：一个可写且不进模型上下文
-      # 的根是新增面，要由部署显式打开。打开后 exec 按 <base>/<orgId>/<userId>
+      # skill 草稿根（ADR 0009 D7）。createExecAppFromEnv 默认仍 fail-closed；
+      # Compose 在这里显式打开。exec 按 <base>/<orgId>/<userId>
       # 分目录，与已启用包同规矩——否则一个用户造的包会进另一个用户的沙箱。
-      SANDBOX_SKILL_DRAFT_ROOT: ${SANDBOX_SKILL_DRAFT_ROOT:-}
+      SANDBOX_SKILL_DRAFT_ROOT: ${SANDBOX_SKILL_DRAFT_ROOT:-/var/sandbox/skill-draft}
       SANDBOX_LOG_LEVEL: ${SANDBOX_LOG_LEVEL:-INFO}
       # Sandbox persistence DSN (formal: MySQL via PyMySQL dialect).
       # Keep the Compose interpolation variable separate from the canonical
@@ -553,17 +560,8 @@ services:
       SANDBOX_TRUSTED_PROXY_CIDRS: ${SANDBOX_TRUSTED_PROXY_CIDRS:-}
       SANDBOX_CORS_ORIGINS: ${SANDBOX_CORS_ORIGINS:-*}
       SANDBOX_CORS_ALLOW_CREDENTIALS: ${SANDBOX_CORS_ALLOW_CREDENTIALS:-true}
-      SANDBOX_AUTH_ENABLED: ${SANDBOX_AUTH_ENABLED:-false}
-      SANDBOX_JWT_SECRET: ${SANDBOX_JWT_SECRET:-}
-      SANDBOX_JWT_TTL_SECONDS: ${SANDBOX_JWT_TTL_SECONDS:-86400}
-      SANDBOX_JWT_ISSUER: ${SANDBOX_JWT_ISSUER:-pi-enterprise-sandbox}
-      SANDBOX_JWT_AUDIENCE: ${SANDBOX_JWT_AUDIENCE:-pi-enterprise-sandbox}
-      SANDBOX_AUTH_ALLOW_PUBLIC_REGISTER: ${SANDBOX_AUTH_ALLOW_PUBLIC_REGISTER:-true}
-      SANDBOX_AUTH_ADMIN_USERNAMES: ${SANDBOX_AUTH_ADMIN_USERNAMES:-}
       SANDBOX_APPROVAL_MODE: ${APPROVAL_MODE:-${SANDBOX_APPROVAL_MODE:-}}
       SANDBOX_APPROVAL_ENABLED: ${APPROVAL_ENABLED:-${SANDBOX_APPROVAL_ENABLED:-}}
-      SANDBOX_UVICORN_WORKERS: ${SANDBOX_UVICORN_WORKERS:-1}
-      SANDBOX_UVICORN_PROXY_HEADERS: true
       # Match agent/agent-worker service key (dev placeholder; prod :? override).
       SANDBOX_API_TOKEN: ${SANDBOX_API_TOKEN:-dev_only_sandbox_api_token_not_for_prod_32b}
       LANG: C.UTF-8
@@ -644,6 +642,7 @@ services:
     env_file:
       - ${SANDBOX_ENV_FILE:-.env}
     environment:
+      SANDBOX_JWT_SECRET: ""
       SANDBOX_MCP_TOKEN: ${SANDBOX_MCP_TOKEN:-dev_only_sandbox_mcp_token_not_for_prod_32b}
       SANDBOX_MCP_INTERNAL_TOKEN: ${SANDBOX_MCP_INTERNAL_TOKEN:-dev_only_sandbox_mcp_internal_token_not_for_prod_32b}
       SANDBOX_MCP_DOWNLOAD_SECRET: ${SANDBOX_MCP_DOWNLOAD_SECRET:-dev_only_sandbox_mcp_download_secret_not_for_prod_32b}

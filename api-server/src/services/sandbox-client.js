@@ -210,25 +210,53 @@ export function createSandboxClient({
       return resp.json();
     },
 
-    // ── Auth proxy ──────────────────────────────────
-    async authRegister(body) {
-      const resp = await sbFetch('/auth/register', {
-        method: 'POST',
-        body: JSON.stringify(body),
-      });
+    async listProcesses(sessionId, query = {}) {
+      const params = new URLSearchParams();
+      if (query.runId) params.set('run_id', query.runId);
+      if (query.status) params.set('status', query.status);
+      if (query.limit) params.set('limit', query.limit);
+      const qs = params.toString();
+      const resp = await sbFetch(
+        `/sessions/${encodeURIComponent(sessionId)}/processes${qs ? `?${qs}` : ''}`,
+      );
       return resp.json();
     },
 
-    async authLogin(body) {
-      const resp = await sbFetch('/auth/login', {
-        method: 'POST',
-        body: JSON.stringify(body),
-      });
+    async getProcess(sessionId, processId) {
+      const resp = await sbFetch(
+        `/sessions/${encodeURIComponent(sessionId)}/processes/${encodeURIComponent(processId)}`,
+      );
       return resp.json();
     },
 
-    async authMe() {
-      const resp = await sbFetch('/auth/me', { method: 'GET' });
+    async getProcessLogs(sessionId, processId, query = {}) {
+      const params = new URLSearchParams();
+      if (query.offset != null) params.set('offset', query.offset);
+      if (query.limit != null) params.set('limit', query.limit);
+      const qs = params.toString();
+      const resp = await sbFetch(
+        `/sessions/${encodeURIComponent(sessionId)}/processes/${encodeURIComponent(processId)}/logs${qs ? `?${qs}` : ''}`,
+      );
+      return resp.json();
+    },
+
+    async readProcess(sessionId, processId, query = {}) {
+      const params = new URLSearchParams();
+      if (query.stream) params.set('stream', query.stream);
+      if (query.cursor) params.set('cursor', query.cursor);
+      if (query.limit) params.set('limit', query.limit);
+      const qs = params.toString();
+      const resp = await sbFetch(
+        `/sessions/${encodeURIComponent(sessionId)}/processes/${encodeURIComponent(processId)}/read${qs ? `?${qs}` : ''}`,
+      );
+      return resp.json();
+    },
+
+    async processAction(sessionId, processId, action, body = {}) {
+      const resp = await sbFetch(
+        `/sessions/${encodeURIComponent(sessionId)}/processes/${encodeURIComponent(processId)}/${action}`,
+        { method: 'POST', body: JSON.stringify(body) },
+      );
       return resp.json();
     },
 
@@ -254,18 +282,6 @@ export function createSandboxClient({
 
 export function artifactDownloadPath(sessionId, artifactId) {
   return `/sessions/${sessionId}/artifacts/${encodeURIComponent(artifactId)}/download`;
-}
-
-export async function authRegister(body, options = {}) {
-  return createSandboxClient(options).authRegister(body);
-}
-
-export async function authLogin(body, options = {}) {
-  return createSandboxClient(options).authLogin(body);
-}
-
-export async function authMe(auth = null, options = {}) {
-  return createSandboxClient({ ...options, auth }).authMe();
 }
 
 export async function checkHealth() {

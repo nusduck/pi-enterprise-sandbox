@@ -89,6 +89,18 @@ export async function listSkills(): Promise<SoftListResult<SkillItem>> {
   return { items, available: true };
 }
 
+export async function setSkillEnabled(name: string, enabled: boolean): Promise<void> {
+  const action = enabled ? 'enable' : 'disable';
+  const resp = await fetch(
+    `${BASE}/capabilities/skills/${encodeURIComponent(name)}/${action}`,
+    { method: 'POST', headers: authHeaders() },
+  );
+  if (!resp.ok) {
+    const payload = await resp.json().catch(() => ({})) as { error?: unknown };
+    throw new Error(String(payload.error || `Skill ${action} failed: ${resp.status}`));
+  }
+}
+
 /**
  * GET /api/capabilities/mcp
  */

@@ -65,7 +65,8 @@ Browser → Frontend → BFF (Node:4000) → Agent (Node:4100) → Exec (Node:80
 - **Frontend → API Server**: 反向代理（Docker 内网），无需 CORS
 - **API Server → Agent**: 内部 Run API（`X-Internal-Token`），序列化 SSE 事件；Run/event 事实仅 Agent MySQL
 - **Agent → Sandbox**: HMAC-authenticated internal HTTP (`/internal/v1/*`) for execution, files, processes, datasets and artifact submit; **不** dual-write Run 状态
-- **Browser/BFF → Sandbox**: 浏览器不直连 Sandbox。用户可见的文件、Dataset、Artifact 操作只能经 BFF `/api/*`，并由 BFF/Agent 注入 owner context；旧 `/sessions/*` adapters 仅供兼容测试或受控开发代理，不是正式公共 API。
+- **BFF → Agent auth**: `/api/auth/*` 经 `AGENT_INTERNAL_TOKEN` 保护的 `/internal/auth/*` 读写 Agent MySQL `auth_credentials`；BFF 只持有 HttpOnly Cookie，exec 没有浏览器认证权威
+- **Browser/BFF → Sandbox**: 浏览器不直连 Sandbox。用户可见的文件、Dataset、Artifact、Process 操作只能经 BFF `/api/*`；Process 路由先由 Agent 授权 Session 并解析 Workspace，其余路由由 BFF/Agent 注入 owner context。exec `/sessions/*` adapters 只供 BFF 或受控测试调用，不是正式公共 API。
 - **Agent → MCP**: 直连外部 MCP（不经执行面）
 - **Agent → LLM**: HTTPS 直连，API Key 仅存 Agent 服务环境变量
 - **Browser ← API Server**: SSE (`text/event-stream`)，事件驱动渲染
@@ -116,7 +117,7 @@ Agent（DeepSeek Harness）运行在独立 `agent/` 服务中，而非浏览器�
   测试使用 connection-free fakes 或不可连接的 MySQL-shaped DSN，不安装
   SQLite compatibility runtime。MySQL import path 不加载旧 database/
   repository/router stack
-- Agent 拥有 Knex 核心 schema migration（utf8mb4 / InnoDB）：Conversation / Message / Run 与 Sandbox 执行域表（`sandbox_sessions`、`sandbox_executions`、`sandbox_audit_events`、`process_executions`、`datasets`、`artifacts`）
+- Agent 拥有 Knex 核心 schema migration（utf8mb4 / InnoDB）：Conversation / Message / Run 与跨服务执行域表（`sandbox_sessions`、`sandbox_executions`、`sandbox_audit_events`、`datasets`、`artifacts`、`exec_jobs`）。`exec_jobs` 由 exec 独占读写，是长进程事实账本；旧 `process_executions` 只保留历史 schema，不再承载生产路由
 - `agent_sessions.sandbox_session_id` 与 `sandbox_sessions.agent_session_id` 为逻辑索引引用（无循环外键）；租户列 `org_id`/`user_id` 由 SQL 谓词强制
 - 不可变 migration + checksum；失败事务回滚；重复 init 幂等
 - 需推到 Redis Stream 的持久化事件与领域状态同事务写入 `domain_outbox`（Outbox pattern）
@@ -265,7 +266,7 @@ Workspace 内的 `read`、`write`、`edit`、`bash`、Python、Node、文件删�
 3. Browser 通过 `GET /api/runs/:id/events` 消费 BFF relay 的序列化 SSE（BFF 不 import 任何 Agent SDK）
 4. Agent：
    a. 创建或复用 conversation + Agent Session，并恢复其 sandbox session（`workspace_id`）
-   b. 经 `agent/src/runtime/` 组合 DSH 会话（基础 tools、model、auth；per-Run scope 承载工具视图/guard/skill 层；profile skill 策略）。进程启动时已对每个启用 MCP 执行 `tools/list`（`pi-mcp-adapter`，DSH 自身没有 MCP transport），并将工具注册为 `mcp__{serverId}__{toolName}`；MCP 配置变更须重启 Agent。
+   b. 经 `agent/src/runtime/` 组合 DSH 会话（基础 tools、model、auth；根 ctx 上的 MySQL `sessionPersistence`；per-Run scope 承载工具视图/guard/skill 层；profile skill 策略）。已物化会话 `resume`，否则 `create`。进程启动时由 `@deepseek-ai/dsh-mcp-client` 对每个启用 MCP 执行 `tools/list`，并将工具注册为 `mcp__{serverId}__{toolName}`；MCP 配置变更须重启 Agent。
    c. 绑定策略挂载点后以 DSH active tools + 启用集 skills + MCP 注入结果做权威 reconcile，并发布 diagnostics 可消费的 live snapshot
    d. 调用 session.prompt(text)；清单/数量类问题须经 `capabilities` 工具（list/search/describe）
    e. Agent 循环：
@@ -304,6 +305,17 @@ Sandbox Session 不保存 Agent 对话，不能用 Sandbox 的会话 TTL 代替
 Agent Session 生命周期。
 ```
 
+DSH 引擎会话落在根 `ctx.sessionPersistence`：MySQL 表 `dsh_sessions` /
+`dsh_session_events`（带 org/user 作用域）。同一 Agent Session 的后续 Run 走
+`agents.resume`，不再每次 `agents.create`。企业对话账本仍是 `messages` 表；
+DSH 事件表不是第二份 Run 状态。
+
+浏览器进程控制使用 Sandbox Session id；BFF 先向 Agent 做 owner-scoped 会话授权，
+取得唯一绑定的 Workspace id，再访问 exec。exec 只认识
+`org_id + user_id + workspace_id`，进程状态写入 `exec_jobs`，不会回写 Agent Run
+账本。模型侧后台 `bash` 也在启动时预留同一个 process id 并由 exec 登记，避免
+Agent 与 exec 各自产生一份进程身份。
+
 ## 安全模型
 
 | 层级 | 防护措施 |
@@ -321,12 +333,13 @@ Agent Session 生命周期。
 | **Audit logging** | 每次执行记录 trace_id |
 | **Approval** | 外部副作用 Tool 由 Agent durable policy/approval ledger 控制；普通 Sandbox bash/python/node 不审批 |
 | **Internal auth** | Agent→Sandbox 使用短期 HMAC claim + body digest + replay jti；密钥仅在服务端，浏览器零接触。Agent 自身 `/internal/*` 面由 `AGENT_INTERNAL_TOKEN` 保护（常量时间比较），token 缺失即 fail-closed 关闭平面 |
+| **Browser auth** | Agent MySQL 是 credential 权威；密码用 PBKDF2-SHA256，JWT HMAC 比较为常量时间。`SANDBOX_JWT_SECRET` 缺失时认证能力 fail-closed，生产配置直接拒绝启动 |
 | **DSH 策略挂载** | Agent 侧统一 `tool_call` 策略入口（`runtime/policy`）；异常 fail-closed |
 | **Run 收敛保护** | 每个 Run 限制模型回合、总工具调用和重复的工具/参数调用；到达任一上限后移除工具并要求模型根据已有结果完成回答 |
 
-### 双重强制（Agent Extension + Sandbox）
+### 双重强制（Agent DSH policy + Exec）
 
-安全策略在两层独立执行，**Sandbox 不信任 Extension 结论**：
+安全策略在两层独立执行，**Exec 不信任 Agent 策略结论**：
 
 ```text
 Agent Host + `agent/src/runtime/`（DSH 的四个既有挂载点，不建平行体系）
@@ -355,8 +368,8 @@ Exec internal plane (TypeScript)
 | `require_approval` | 暂停等人审 | **明确拒绝，不创建审批** | 执行 + bypass 审计 |
 | `hard_deny` | 拒绝 | **仍拒绝** | **仍拒绝** |
 
-- 读工具（`read`/`ls`/`find`/`grep`）可并行；Workspace 写操作按 Agent Session/workspace 串行。是否审批取决于外部副作用策略，而不是 `bash` 这一工具名。
-- **Skill 树只能通过声明的入口脚本执行**：`bash` / `process_start` 的命令一旦提到任何 Skill 路径，
+- 读工具（`read`/`read_image`/`glob`/`grep`）可并行；Workspace 写操作按 Agent Session/workspace 串行。是否审批取决于外部副作用策略，而不是 `bash` 这一工具名。
+- **Skill 树只能通过声明的入口脚本执行**：`bash` 的命令一旦提到任何 Skill 路径，
   必须整条是 `python|python3 <skill>/<package>/scripts/<file>.py [args]` 或
   `bash|sh …/scripts/<file>.sh [args]`，否则 `SKILL_SCRIPT_COMMAND_DENIED`。脚本必须落在该
   package 的 `scripts/` 下，**允许再套子目录**（首方包本来就这么发，例如

@@ -65,7 +65,8 @@ function fakeFetchForFs(calls: string[] = []): typeof fetch {
     }
 
     if (u.includes('/internal/v1/shell/start')) {
-      return new Response(JSON.stringify({ ok: true, data: { id: 'shell-1', status: 'running' } }), { headers: { 'content-type': 'application/json' } });
+      const p = payload as Record<string, unknown>;
+      return new Response(JSON.stringify({ ok: true, data: { id: p['id'], status: 'running' } }), { headers: { 'content-type': 'application/json' } });
     }
 
     if (u.includes('/internal/v1/jobs/status') || u.includes('/internal/v1/jobs/read') || u.includes('/internal/v1/jobs/kill')) {
@@ -171,11 +172,12 @@ test('remote-shell: run/start 本机零子进程，转发 exec', async () => {
   const result = await shell.run(spec);
   assert.equal(result.exitCode, 0);
 
-  const proc = shell.start(spec);
+  const proc = shell.start(spec) as ReturnType<RemoteShell['start']> & { id?: string };
   assert.equal(typeof proc.readOutput, 'function');
   assert.equal(typeof proc.kill, 'function');
   // start 立即返回，不会因本机 spawn 阻塞
   assert.equal(proc.status, 'running');
+  assert.match(String(proc.id), /^bash-[a-f0-9]{32}$/);
 });
 
 test('remote-jobs: start/list/get/read/kill 均转发 exec 且不抛未脱敏错误', async () => {
@@ -200,6 +202,7 @@ test('remote-jobs: start/list/get/read/kill 均转发 exec 且不抛未脱敏错
     },
   });
   assert.equal(typeof id, 'string');
+  assert.match(String(id), /^bash-[a-f0-9]{32}$/);
 
   const list = jobs.list();
   assert.equal(Array.isArray(list), true);

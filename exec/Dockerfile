@@ -92,7 +92,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     libreoffice-writer \
     python3 \
     python3-venv \
-    && ln -sf "$(command -v fdfind || true)" /usr/local/bin/fd || true
+    && ln -sf "$(command -v fdfind)" /usr/local/bin/fd
 
 # 模型执行 Python 代码用的运行库。装在独立 venv 里，不污染系统 python3，
 # 也不与服务自身混在一起——服务是 Node，本来就不需要这些。

@@ -396,6 +396,8 @@ export class IsolatedShellExecutor {
 /** 把 `process-runner` 的 LiveProcessHandle 适配成 `dsh-shell` 的 ShellProcess。 */
 function adaptLiveHandle(handle: LiveProcessHandle, mode: SandboxMode): ShellProcess {
   return {
+    pid: handle.pid,
+    pgid: handle.pgid,
     get status() {
       return handle.status;
     },
@@ -413,5 +415,10 @@ function adaptLiveHandle(handle: LiveProcessHandle, mode: SandboxMode): ShellPro
     },
     readOutput: () => handle.readOutput(),
     kill: () => handle.kill(),
+    writeStdin: (data: string, eof: boolean) => handle.writeStdin(data, eof),
+  } as ShellProcess & {
+    pid: number | null;
+    pgid: number | null;
+    writeStdin(data: string, eof: boolean): void;
   };
 }

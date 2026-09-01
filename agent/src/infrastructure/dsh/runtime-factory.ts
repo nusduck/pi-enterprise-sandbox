@@ -12,7 +12,7 @@ import {
   bootEnterpriseRuntime,
   sharedEnterpriseRuntime,
   createRemoteProviders,
-  createSessionBackend,
+  mountSessionPersistence,
   assembleSystemPrompt,
   runWithExecRpc,
   runWithRunServices,
@@ -38,6 +38,7 @@ export function buildExecRpcConfig(input: Record<string, any>, env: NodeJS.Proce
   const workspaceId = String(
     ctx.workspaceId ?? session.workspaceId ?? input?.cwd ?? '',
   ).trim();
+  const runId = String(ctx.runId ?? input.runId ?? '').trim();
   if (!orgId || !userId || !workspaceId) {
     throw new DshRuntimeFactoryError(
       'runtime factory requires orgId, userId, and workspaceId for exec RPC',
@@ -60,6 +61,7 @@ export function buildExecRpcConfig(input: Record<string, any>, env: NodeJS.Proce
     orgId,
     userId,
     workspaceId,
+    ...(runId ? { runId } : {}),
     fenceToken: Number(ctx.executionFenceToken ?? ctx.fenceToken ?? 0) || 0,
     physicalRoots,
     ...(typeof input.fetchImpl === 'function' ? { fetchImpl: input.fetchImpl } : {}),
@@ -137,7 +139,7 @@ function summarizeSessionLog(log) {
 export function createDshRuntimeFactory(opts: Record<string, any> = {}) {
   const loadRuntime = opts.loadRuntime ?? (async () => ({
     createRemoteProviders,
-    createSessionBackend,
+    mountSessionPersistence,
     assembleSystemPrompt,
     bootEnterpriseRuntime,
     sharedEnterpriseRuntime,
@@ -180,8 +182,9 @@ export function createDshRuntimeFactory(opts: Record<string, any> = {}) {
       // envelope 与 physicalRoots 都在**调用时**取 `currentExecRpc()`。
       // 因此 prompt() 里的 ALS 作用域必须罩住所有工具执行（同 D3）。
       const providers = runtime.createRemoteProviders(ctx, rpc);
-      const sessionStore = runtime.createSessionBackend({
+      const sessionStore = runtime.mountSessionPersistence(ctx, {
         physicalRoots: rpc.physicalRoots,
+        requireMysql: true,
       });
       const promptText = runtime.assembleSystemPrompt(input.systemPrompt);
       void PINNED_DSH_VERSION;
@@ -189,6 +192,13 @@ export function createDshRuntimeFactory(opts: Record<string, any> = {}) {
       const sessionId = String(
         input.agentSession?.agentSessionId ?? input.sessionId ?? '',
       );
+      const sessionOwner = { orgId: rpc.orgId, userId: rpc.userId };
+      const releaseSessionOwner = sessionStore.bindOwner(sessionId, sessionOwner);
+      const recoveredPayload = input.piSnapshot?.snapshotJson;
+      const recoveredHeader = recoveredPayload?.header;
+      const recoveredEntries = Array.isArray(recoveredPayload?.entries)
+        ? recoveredPayload.entries
+        : [];
       const spawn =
         createAgent ??
         ((agentCtx, options) => {
@@ -199,9 +209,17 @@ export function createDshRuntimeFactory(opts: Record<string, any> = {}) {
           }
           return agentCtx.agents.create(options);
         });
-      const handle = await spawn(ctx, {
-        sessionId,
-        meta: { cwd: input.cwd },
+      const resume =
+        opts.resumeAgent ??
+        ((agentCtx, options) => {
+          if (typeof agentCtx?.agents?.resume !== 'function') {
+            throw new DshRuntimeFactoryError(
+              'DSH ctx.agents.resume is not mounted; boot @pi/runtime before resume()',
+            );
+          }
+          return agentCtx.agents.resume(options);
+        });
+      const commonAgentOptions = {
         agentOptions: {
           provider: dshProviderRoute(input.model.provider),
           model: String(input.model.id || input.model.modelId || ''),
@@ -257,15 +275,34 @@ export function createDshRuntimeFactory(opts: Record<string, any> = {}) {
             env: opts.env ?? process.env,
           });
           disposers.push(() => installed.dispose());
-
-          return {
-            commit() {
-              // 会话持久化后端必须在发布前就位，否则第一轮的事件没有落点。
-              void sessionStore;
-            },
-          };
+          // persistence 在 create/resume 之前已经挂在根 ctx 上；这里只组装本 Run 的
+          // 提示词和策略。DSH 发布前会自己 flush 到 ctx.sessionPersistence。
         },
-      });
+      };
+      let handle;
+      try {
+        const persisted = await sessionStore.runAsOwner(
+          sessionOwner,
+          () => sessionStore.has(sessionId),
+        );
+        console.info(JSON.stringify({
+          msg: persisted ? 'dsh session resume' : 'dsh session create',
+          sessionId,
+        }));
+        handle = await sessionStore.runAsOwner(
+          sessionOwner,
+          () => persisted
+            ? resume(ctx, { ...commonAgentOptions, resumeSessionId: sessionId })
+            : spawn(ctx, {
+                ...commonAgentOptions,
+                sessionId,
+                meta: { cwd: input.cwd },
+              }),
+        );
+      } catch (error) {
+        releaseSessionOwner();
+        throw error;
+      }
       const agent = handle?.agent ?? handle;
       if (!agent || typeof agent.followup !== 'function') {
         throw new DshRuntimeFactoryError('createAgent must return an agent with followup()');
@@ -308,7 +345,7 @@ export function createDshRuntimeFactory(opts: Record<string, any> = {}) {
           //   run-services —— 子 Agent 的 durable 队列/结果存储（计划 H5）
           // 它们服务的都是「注册在进程级、却必须按 Run 干活」的插件。
           const withServices = runtime.runWithRunServices ?? ((_: unknown, fn: () => unknown) => fn());
-          return run(rpc, async () => withServices(input.runServices ?? {}, async () => {
+          return sessionStore.runAsOwner(sessionOwner, () => run(rpc, async () => withServices(input.runServices ?? {}, async () => {
             agent.followup(toUserMessage(text, options));
             if (typeof agent.whenIdle === 'function') await agent.whenIdle();
             const log = agent.session?.events;
@@ -330,7 +367,7 @@ export function createDshRuntimeFactory(opts: Record<string, any> = {}) {
               );
             }
             return { entries: [...entries] };
-          }));
+          })));
         },
         subscribe(fn) {
           subs.push(fn);
@@ -369,14 +406,16 @@ export function createDshRuntimeFactory(opts: Record<string, any> = {}) {
       return {
         session,
         sessionManager: {
-          getHeader: () => ({
-            type: 'session',
-            version: 3,
-            id: sessionId,
-            timestamp: new Date().toISOString(),
-            cwd: input.cwd,
-          }),
-          getEntries: () => [...entries],
+          getHeader: () => recoveredHeader
+            ? structuredClone(recoveredHeader)
+            : {
+                type: 'session',
+                version: 3,
+                id: sessionId,
+                timestamp: new Date().toISOString(),
+                cwd: input.cwd,
+              },
+          getEntries: () => [...structuredClone(recoveredEntries), ...entries],
           getCwd: () => input.cwd,
           getSessionId: () => sessionId,
         },
@@ -390,8 +429,13 @@ export function createDshRuntimeFactory(opts: Record<string, any> = {}) {
               // 卸载失败不该盖过调用方正在处理的错误。
             }
           }
-          if (typeof handle?.dispose === 'function') await handle.dispose();
-          if (typeof sessionStore?.close === 'function') await sessionStore.close();
+          try {
+            if (typeof handle?.dispose === 'function') {
+              await sessionStore.runAsOwner(sessionOwner, () => handle.dispose());
+            }
+          } finally {
+            releaseSessionOwner();
+          }
         },
       };
     },

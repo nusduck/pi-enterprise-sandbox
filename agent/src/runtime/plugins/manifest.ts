@@ -199,7 +199,7 @@ const DISABLED: readonly PatchEntry[] = [
   // 2026-08-31 查 registry 确认 approval 不依赖它（只依赖 schemastery）。
   disable('permission', '不组合 dsh-permission-presets：process-level、无租户维度；' + '\n' +
     '隔离权威是 Bubblewrap / exec，不是 DSH 本机围栏（ADR 0009 D5）。'),
-  disable('session-persistence-jsonl', '关掉本机 JSONL 会话落盘。MySQL PersistenceBackend 由\nboot.createSessionBackend 按 Run 装配。'),
+  disable('session-persistence-jsonl', '关掉本机 JSONL 会话落盘。MySQL PersistenceBackend 由\nboot.mountSessionPersistence 挂到根 ctx.sessionPersistence。'),
   disable('session-checkpoint-policy'),
   disable('session-query-sqlite'),
 

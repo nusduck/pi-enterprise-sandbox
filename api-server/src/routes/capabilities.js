@@ -1,5 +1,8 @@
 import { resolveTrustedAuth } from '../application/run-access-service.js';
-import { getAgentExtensionDiagnostics } from '../services/agent-client.js';
+import {
+  getAgentExtensionDiagnostics,
+  mutateAgentSkill,
+} from '../services/agent-client.js';
 import { sendError } from '../http/response.js';
 
 function json(res, status, value) {
@@ -24,11 +27,35 @@ export async function handleCapabilityRegistry(kind, parsedUrl, res, req) {
     const auth = await resolveTrustedAuth(req);
     const profileId = parsedUrl.searchParams.get('profile_id') || 'coding-agent';
     const diagnostics = await getAgentExtensionDiagnostics(profileId, { auth, traceId });
-    if (kind === 'skills') json(res, 200, { skills: diagnostics.skills || [] });
+    if (kind === 'skills') {
+      json(res, 200, {
+        skills: [
+          ...(diagnostics.skills || []),
+          ...(diagnostics.skill_drafts || []),
+        ],
+      });
+    }
     else if (kind === 'mcp') json(res, 200, { servers: diagnostics.mcp_servers || [] });
     else if (kind === 'tools') json(res, 200, { tools: diagnostics.tools || [] });
     else if (kind === 'models') json(res, 200, { models: diagnostics.models || [] });
     else json(res, 404, { error: 'unknown capability registry' });
+  } catch (error) {
+    sendError(res, error, traceId);
+  }
+}
+
+export async function handleSkillMutation(encodedName, action, res, req) {
+  const traceId = req?.traceId || null;
+  try {
+    const auth = await resolveTrustedAuth(req);
+    let name;
+    try {
+      name = decodeURIComponent(encodedName);
+    } catch {
+      json(res, 400, { error: 'Invalid Skill name', code: 'SKILL_INVALID' });
+      return;
+    }
+    json(res, 200, await mutateAgentSkill(name, action, { auth, traceId }));
   } catch (error) {
     sendError(res, error, traceId);
   }

@@ -7,7 +7,8 @@
 
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { SessionId, SESSION_FORMAT_VERSION } from '@deepseek-ai/dsh-session';
+import { Context } from '@deepseek-ai/cordis';
+import { SessionId, SESSION_FORMAT_VERSION, SessionStore } from '@deepseek-ai/dsh-session';
 import type { SessionEvent, SessionHeader } from '@deepseek-ai/dsh-session';
 import {
   DSH_SESSION_EVENTS_DDL,
@@ -15,10 +16,16 @@ import {
   InMemorySessionStore,
   MAX_SESSION_BYTES,
   MysqlSessionStore,
+  MysqlSessionStoreConfigError,
+  readMysqlSessionStoreConfig,
   decodeStorageRecord,
   packChunkRuns,
   toSessionStoreError,
 } from '../../src/runtime/providers/mysql-session-store.js';
+import {
+  MysqlSessionPersistence,
+  SessionOwnerBindings,
+} from '../../src/runtime/providers/mysql-session-persistence.js';
 
 function header(id: string, extra: Record<string, unknown> = {}): SessionHeader {
   return {
@@ -51,6 +58,26 @@ function chunkEv(seq: number, text: string): SessionEvent {
     },
   } as unknown as SessionEvent;
 }
+
+test('readMysqlSessionStoreConfig prefers AGENT_DATABASE_URL and never echoes secrets', () => {
+  const cfg = readMysqlSessionStoreConfig({
+    AGENT_DATABASE_URL: 'mysql://sandbox:secret-pass@mysql:3306/sandbox',
+    MYSQL_HOST: 'ignored',
+  });
+  assert.equal(cfg.host, 'mysql');
+  assert.equal(cfg.port, 3306);
+  assert.equal(cfg.user, 'sandbox');
+  assert.equal(cfg.password, 'secret-pass');
+  assert.equal(cfg.database, 'sandbox');
+  try {
+    readMysqlSessionStoreConfig({ AGENT_DATABASE_URL: 'postgres://x' });
+    assert.fail('expected scheme refusal');
+  } catch (err) {
+    assert.equal(err instanceof MysqlSessionStoreConfigError, true);
+    assert.equal(String(err).includes('secret-pass'), false);
+    assert.equal(String(err).includes('postgres://x'), false);
+  }
+});
 
 test('DDL 常量包含租户三元组与主键', () => {
   assert.match(DSH_SESSIONS_DDL, /session_id/);
@@ -94,6 +121,34 @@ test('InMemory: name 与空状态', async () => {
   assert.equal(await s.readStoredRevision(SessionId('nope')), undefined);
   assert.equal(await s.loadStoredFrom(SessionId('nope'), 0), undefined);
   assert.deepEqual(await s.list(), []);
+});
+
+test('native DSH persistence seam materializes and prepares a resumable session', async () => {
+  const ctx = new Context();
+  new SessionStore(ctx);
+  const bindings = new SessionOwnerBindings();
+  const persistence = new MysqlSessionPersistence(ctx, new InMemorySessionStore(), bindings);
+  assert.notEqual(ctx.get('sessionPersistence'), undefined);
+  const id = SessionId('01ARZ3NDEKTSV4RRFFQ69G5FAV');
+  const owner = { orgId: '01ARZ3NDEKTSV4RRFFQ69G5FAA', userId: '01ARZ3NDEKTSV4RRFFQ69G5FAB' };
+  const release = persistence.bindOwner(id, owner);
+  await persistence.runAsOwner(owner, async () => {
+    await persistence.create(header(id));
+    await persistence.append(id, [
+      { type: 'turn/start', seq: 0, time: 1, data: { turn: 1 } },
+      { type: 'turn/end', seq: 1, time: 2, data: { turn: 1, reason: { kind: 'completed' } } },
+    ] as SessionEvent[]);
+    assert.equal(await persistence.has(id), true);
+    const prepared = await persistence.prepare(id);
+    const types = prepared.session.events.map((event) => event.type);
+    assert.deepEqual(types.filter((type) => type === 'turn/start' || type === 'turn/end'), [
+      'turn/start',
+      'turn/end',
+    ]);
+    assert.equal(types.includes('session/end-seed'), true);
+    prepared[Symbol.dispose]();
+  });
+  release();
 });
 
 test('appendBatch 懒物化、seq 连续性校验与容量判定', async () => {
@@ -206,6 +261,45 @@ test('裸 Error 含物理路径必脱敏（空 roots 也走默认前缀）', () 
   const wrapped = toSessionStoreError(leak, []);
   assert.equal(wrapped.message.includes('/var/sandbox/workspaces/secret'), false);
   assert.equal(wrapped.message.includes('<workspace>'), true);
+});
+
+test('MysqlSessionStore loadStored accepts already-parsed mysql2 JSON columns', async () => {
+  const id = SessionId('01ARZ3NDEKTSV4RRFFQ69G5FAV');
+  const storedHeader = {
+    version: SESSION_FORMAT_VERSION,
+    id,
+    createdAt: 1_700_000_000_000,
+    cwd: '/tmp/test',
+  };
+  const storedEvent = {
+    type: 'turn/start',
+    seq: 0,
+    time: 1,
+    data: { turn: 1 },
+  };
+  const pool = {
+    execute: async (sql: string) => {
+      if (String(sql).includes('FROM dsh_sessions')) {
+        return [[{
+          session_id: String(id),
+          org_id: 'default-org',
+          user_id: 'default-user',
+          header_json: storedHeader,
+          revision: 'abc',
+        }]];
+      }
+      return [[{ record_json: storedEvent, seq: 0 }]];
+    },
+    getConnection: async () => {
+      throw new Error('unused');
+    },
+    end: async () => undefined,
+  };
+  const store = new MysqlSessionStore(pool as never);
+  const loaded = await store.loadStored(id);
+  assert.equal(loaded?.meta.cwd, '/tmp/test');
+  assert.equal(loaded?.events.length, 1);
+  assert.equal(loaded?.events[0]?.type, 'turn/start');
 });
 
 test('MysqlSessionStore loadStored 对池错误脱敏', async () => {

@@ -9,11 +9,13 @@ import type { Hono } from 'hono';
 import { ContractError, toWireError } from '@pi/contract/errors.js';
 import { parseEnvelope } from '@pi/contract/envelope.js';
 import { IsolatedShellExecutor } from '../shell/executor.js';
+import type { MySqlJobRegistry } from '../shell/job-registry.js';
 import type { WorkspaceManager } from '../workspace/manager.js';
 import type { WorkspaceContext } from '../types.js';
 
 export interface InternalShellDeps {
   readonly workspaceManager: WorkspaceManager;
+  readonly jobRegistry: MySqlJobRegistry;
   readonly systemSkillRoot: string;
   /**
    * 该用户的 skill 草稿根（ADR 0009 D7 / 计划 H6.2）。
@@ -93,6 +95,7 @@ export function registerInternalShellRoutes(app: Hono, deps: InternalShellDeps):
       parseEnvelope(rawEnv);
       const env = rawEnv as { orgId: string; userId: string; workspaceId: string };
       const ctx = buildContext(deps, env);
+      const roots = rootsOf(ctx);
       const executor = new IsolatedShellExecutor({
         workspace: ctx,
         bwrapExecutable: deps.bwrapExecutable,
@@ -101,13 +104,34 @@ export function registerInternalShellRoutes(app: Hono, deps: InternalShellDeps):
       const p = payload as Record<string, unknown>;
       const command = typeof p['command'] === 'string' ? (p['command'] as string) : '';
       const spec = executor.resolve({ command });
-      const handle = executor.start(spec);
-      // 后台句柄立即返回 snapshot 形状，避免泄漏 pid 细节
-      const snapshot = {
-        id: `shell-${Date.now()}`,
-        status: handle.status,
-        sandbox: (handle as unknown as Record<string, unknown>)['sandbox'],
-      };
+      const requestedId = typeof p['id'] === 'string' ? p['id'] : undefined;
+      const runId = typeof p['runId'] === 'string' ? p['runId'] : undefined;
+      const snapshot = await deps.jobRegistry.start({
+        ...(requestedId ? { id: requestedId } : {}),
+        kind: 'bash',
+        label: command,
+        owner: { orgId: env.orgId, userId: env.userId, workspaceId: env.workspaceId, ...(runId ? { runId } : {}) },
+        physicalRoots: roots,
+        run: () => {
+          const handle = executor.start(spec) as ReturnType<IsolatedShellExecutor['start']> & {
+            pid?: number | null;
+            pgid?: number | null;
+            writeStdin?: (data: string, eof: boolean) => void;
+          };
+          return {
+            pid: handle.pid ?? null,
+            pgid: handle.pgid ?? undefined,
+            cancel: () => { void handle.kill(); },
+            done: handle.done.then(() => ({
+              status: handle.status === 'completed' ? 'completed' as const : 'killed' as const,
+              exitCode: handle.exitCode,
+              signal: handle.signal,
+            })),
+            readOutput: () => handle.readOutput(),
+            ...(handle.writeStdin ? { writeStdin: handle.writeStdin.bind(handle) } : {}),
+          };
+        },
+      });
       return c.json({ ok: true, data: snapshot });
     } catch (err) {
       const wire = toWireError(err, { physicalRoots: [] });

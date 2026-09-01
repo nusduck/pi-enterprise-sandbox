@@ -6,6 +6,7 @@ export {
   USER_EXTERNAL_SUBJECT_MAX_LEN,
 } from './organization-repository.js';
 export { ConversationRepository } from './conversation-repository.js';
+export { AuthCredentialRepository } from './auth-credential-repository.js';
 export { MessageRepository } from './message-repository.js';
 export {
   PiSessionJournalRepository,
@@ -162,3 +163,4 @@ export {
   CRON_JOB_RUN_LIST_DEFAULT_LIMIT,
   CRON_JOB_LIST_MAX_LIMIT,
 } from './cron-job-repository.js';
+export { SkillEnablementRepository } from './skill-enablement-repository.js';

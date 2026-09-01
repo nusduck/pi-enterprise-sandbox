@@ -461,4 +461,30 @@ describe('SessionRecoveryService', () => {
     // Full payload still validates (single root only)
     assert.equal(recovered.payload.entries[0].parentId, null);
   });
+
+  it('two empty checkpoints keep a single journal root', async () => {
+    const payload = basePayload([]);
+    for (let i = 0; i < 2; i += 1) {
+      await service.checkpoint({
+        agentSessionId: SESS,
+        ...scope,
+        executionFenceToken: 2,
+        runId: RUN,
+        traceId: 'a'.repeat(32),
+        payload,
+        agentVersionId: VER,
+        configHash: 'a'.repeat(64),
+        workspaceId: WSP,
+      });
+    }
+    const recovered = await service.recover({
+      agentSessionId: SESS,
+      ...scope,
+      executionFenceToken: 2,
+      workspaceId: WSP,
+      agentVersionId: VER,
+    });
+    assert.equal(recovered.payload.entries[0].parentId, null);
+    assert.equal(recovered.payload.entries[1].parentId, recovered.payload.entries[0].id);
+  });
 });

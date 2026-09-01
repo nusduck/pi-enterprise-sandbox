@@ -35,6 +35,14 @@ export class ExecDbConfigError extends Error {
   override name = 'ExecDbConfigError';
 }
 
+/** MySQL prepared statements reject numeric `LIMIT ?` on some server builds. */
+export function sqlLimit(limit: number, max = 1000): string {
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > max) {
+    throw new RangeError(`limit must be an integer from 1 to ${max}`);
+  }
+  return String(limit);
+}
+
 /**
  * 从环境变量解析配置。读取的键与 Python 版 `sandbox/config.py` 的
  * `DATABASE_URL` / `MYSQL_*` 保持概念一致，但**不复用 `DATABASE_URL` 的

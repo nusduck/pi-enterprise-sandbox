@@ -10,7 +10,7 @@
  *
  * 六决策落地：
  * 1. 日志文件只是适配器——在线权威是 MySQL，这张表不是 `.jsonl.zstd` 导出；
- * 2. 引擎事件拆到独立物理表 `session_events`（`agent_session_id + seq` 主键，带
+ * 2. 引擎事件拆到独立物理表 `dsh_session_events`（`session_id + seq` 主键，带
  *    `org_id`/`user_id` 租户三元组，不复用 `messages` 宽表）；
  * 3. 快照按阈值触发——由 `CheckpointPolicy` 统计事件数/字节数，阈值外不每 Run
  *    全量复制，避免二次写放大；
@@ -76,6 +76,13 @@ function createPool(_opts: PoolOptions): Pool {
 export function toSessionStoreError(err: unknown, physicalRoots: readonly string[]): Error {
   const wire = toWireError(err, { physicalRoots });
   return new Error(wire.message);
+}
+
+function parseJsonColumn(value: unknown, label: string): unknown {
+  if (value == null) throw new Error(`${label} is empty`);
+  if (typeof value === 'object') return value;
+  if (typeof value !== 'string') throw new Error(`${label} is not JSON`);
+  return JSON.parse(value);
 }
 
 function recordSeq(rec: unknown): number {
@@ -180,13 +187,51 @@ export interface MysqlSessionStoreConfig {
   readonly physicalRoots?: readonly string[] | undefined;
 }
 
+export interface SessionStoreOwner {
+  readonly orgId: string;
+  readonly userId: string;
+}
+
 export class MysqlSessionStoreConfigError extends Error {
   override name = 'MysqlSessionStoreConfigError';
+}
+
+function configFromDatabaseUrl(raw: string | undefined): MysqlSessionStoreConfig | undefined {
+  const trimmed = String(raw ?? '').trim();
+  if (!trimmed) return undefined;
+  if (!/^mysql2?:\/\//i.test(trimmed)) {
+    throw new MysqlSessionStoreConfigError('unsupported database URL scheme');
+  }
+  let parsed: URL;
+  try {
+    parsed = new URL(trimmed);
+  } catch {
+    throw new MysqlSessionStoreConfigError('invalid database URL');
+  }
+  const database = decodeURIComponent(parsed.pathname.replace(/^\/+/, '')).split('/')[0] ?? '';
+  if (!parsed.hostname || !parsed.username || !database) {
+    throw new MysqlSessionStoreConfigError('database URL missing host, user, or database');
+  }
+  const port = parsed.port ? Number.parseInt(parsed.port, 10) : 3306;
+  if (!Number.isFinite(port) || port <= 0 || port > 65535) {
+    throw new MysqlSessionStoreConfigError('invalid database URL port');
+  }
+  return {
+    host: parsed.hostname,
+    port,
+    user: decodeURIComponent(parsed.username),
+    password: decodeURIComponent(parsed.password),
+    database,
+  };
 }
 
 export function readMysqlSessionStoreConfig(
   env: NodeJS.ProcessEnv = process.env,
 ): MysqlSessionStoreConfig {
+  const fromUrl = configFromDatabaseUrl(
+    env['AGENT_DATABASE_URL'] ?? env['TEST_MYSQL_URL'] ?? env['MYSQL_URL'] ?? env['DATABASE_URL'],
+  );
+  if (fromUrl) return fromUrl;
   const host = env['MYSQL_HOST'] ?? env['DB_HOST'] ?? env['EXEC_DB_HOST'];
   const user = env['MYSQL_USER'] ?? env['DB_USER'] ?? env['EXEC_DB_USER'];
   const password = env['MYSQL_PASSWORD'] ?? env['DB_PASSWORD'] ?? env['EXEC_DB_PASSWORD'];
@@ -194,7 +239,7 @@ export function readMysqlSessionStoreConfig(
   const portRaw = env['MYSQL_PORT'] ?? env['DB_PORT'] ?? env['EXEC_DB_PORT'];
   if (!host || !user || password === undefined || !database) {
     throw new MysqlSessionStoreConfigError(
-      'missing MySQL config: set MYSQL_HOST/USER/PASSWORD/DATABASE',
+      'missing MySQL config: set AGENT_DATABASE_URL or MYSQL_HOST/USER/PASSWORD/DATABASE',
     );
   }
   const port = portRaw ? Number.parseInt(portRaw, 10) : 3306;
@@ -350,6 +395,8 @@ export class MysqlSessionStore implements PersistenceBackend<string> {
   private readonly physicalRoots: readonly string[];
   private readonly sessionsTable: string;
   private readonly eventsTable: string;
+  private readonly ownerForSession?: ((sessionId: string) => SessionStoreOwner) | undefined;
+  private readonly currentOwner?: (() => SessionStoreOwner) | undefined;
   private ownedPool = true;
 
   constructor(
@@ -358,6 +405,8 @@ export class MysqlSessionStore implements PersistenceBackend<string> {
       physicalRoots?: readonly string[] | undefined;
       sessionsTable?: string | undefined;
       eventsTable?: string | undefined;
+      ownerForSession?: ((sessionId: string) => SessionStoreOwner) | undefined;
+      currentOwner?: (() => SessionStoreOwner) | undefined;
     } = {},
   ) {
     if (typeof (poolOrConfig as Pool).execute === 'function') {
@@ -374,6 +423,8 @@ export class MysqlSessionStore implements PersistenceBackend<string> {
         connectionLimit: cfg.connectionLimit ?? 10,
         charset: 'utf8mb4_unicode_ci',
         timezone: 'Z',
+        dateStrings: true,
+        jsonStrings: true,
         enableKeepAlive: true,
       };
       this.pool = createPool(options);
@@ -382,33 +433,42 @@ export class MysqlSessionStore implements PersistenceBackend<string> {
     this.physicalRoots = opts.physicalRoots ?? (poolOrConfig as MysqlSessionStoreConfig).physicalRoots ?? [];
     this.sessionsTable = opts.sessionsTable ?? 'dsh_sessions';
     this.eventsTable = opts.eventsTable ?? 'dsh_session_events';
+    this.ownerForSession = opts.ownerForSession;
+    this.currentOwner = opts.currentOwner;
   }
 
-  private headerToRow(header: SessionHeader, revision: string): { orgId: string; userId: string } {
+  private tenantFor(header: SessionHeader): SessionStoreOwner {
+    if (this.ownerForSession) return this.ownerForSession(String(header.id));
     const extra = header as unknown as { orgId?: string; userId?: string };
-    // 租户三元组显式列——无则用 default，便于单测；生产由上层注入真实 org/user
+    // 仅供直接 backend 单测；生产装配总是传 ownerForSession 并 fail-closed。
     const orgId = extra.orgId ?? 'default-org';
     const userId = extra.userId ?? 'default-user';
     assertTenant(orgId, userId);
     return { orgId, userId };
   }
 
+  private tenantForId(id: SessionId): SessionStoreOwner {
+    if (this.ownerForSession) return this.ownerForSession(String(id));
+    return { orgId: 'default-org', userId: 'default-user' };
+  }
+
   async loadStored(id: SessionId): Promise<StoredPrefix<string> | undefined> {
     try {
+      const tenant = this.tenantForId(id);
       const [hRows] = await this.pool.execute(
-        `SELECT session_id, org_id, user_id, header_json, revision FROM ${this.sessionsTable} WHERE session_id = ?`,
-        [String(id)],
+        `SELECT session_id, org_id, user_id, header_json, revision FROM ${this.sessionsTable} WHERE session_id = ? AND org_id = ? AND user_id = ?`,
+        [String(id), tenant.orgId, tenant.userId],
       );
       const h = (hRows as HeaderRow[])[0];
       if (!h) return undefined;
-      const header = JSON.parse(h.header_json) as SessionHeader;
+      const header = parseJsonColumn(h.header_json, 'header_json') as SessionHeader;
       const [eRows] = await this.pool.execute(
-        `SELECT record_json, seq FROM ${this.eventsTable} WHERE session_id = ? ORDER BY seq ASC`,
-        [String(id)],
+        `SELECT record_json, seq FROM ${this.eventsTable} WHERE session_id = ? AND org_id = ? AND user_id = ? ORDER BY seq ASC`,
+        [String(id), tenant.orgId, tenant.userId],
       );
       const events: SessionEvent[] = [];
       for (const r of eRows as EventRow[]) {
-        const parsed = JSON.parse(r.record_json) as unknown;
+        const parsed = parseJsonColumn(r.record_json, 'record_json');
         events.push(...decodeStorageRecord(parsed));
       }
       // 校验连续性：DSH 要求 seq 连续
@@ -436,9 +496,10 @@ export class MysqlSessionStore implements PersistenceBackend<string> {
 
   async readStoredRevision(id: SessionId): Promise<ReturnType<typeof SessionPersistenceRevision> | undefined> {
     try {
+      const tenant = this.tenantForId(id);
       const [rows] = await this.pool.execute(
-        `SELECT revision FROM ${this.sessionsTable} WHERE session_id = ?`,
-        [String(id)],
+        `SELECT revision FROM ${this.sessionsTable} WHERE session_id = ? AND org_id = ? AND user_id = ?`,
+        [String(id), tenant.orgId, tenant.userId],
       );
       const r = (rows as HeaderRow[])[0];
       if (!r) return undefined;
@@ -475,12 +536,12 @@ export class MysqlSessionStore implements PersistenceBackend<string> {
     try {
       await conn.beginTransaction();
       // 懒物化或校验 next-seq
+      const tenant = this.tenantFor(meta);
       const [hRows] = await conn.execute(
-        `SELECT session_id, revision FROM ${this.sessionsTable} WHERE session_id = ? FOR UPDATE`,
-        [String(meta.id)],
+        `SELECT session_id, revision FROM ${this.sessionsTable} WHERE session_id = ? AND org_id = ? AND user_id = ? FOR UPDATE`,
+        [String(meta.id), tenant.orgId, tenant.userId],
       );
       const existing = (hRows as HeaderRow[])[0];
-      const tenant = this.headerToRow(meta, '');
       if (!isMaterialized && !existing) {
         const rev = revisionFor(decodeRecords(packed), meta);
         await conn.execute(
@@ -500,7 +561,7 @@ export class MysqlSessionStore implements PersistenceBackend<string> {
         await conn.rollback();
         throw new Error(`appendBatch: session not materialized: ${String(meta.id)}`);
       }
-      const already = await this.loadStoredEventsForRevision(conn, String(meta.id));
+      const already = await this.loadStoredEventsForRevision(conn, String(meta.id), tenant);
       const nextSeq = already.length > 0 ? Math.max(...already.map((e) => e.seq)) + 1 : 0;
       if (events.length > 0 && events[0]!.seq !== nextSeq) {
         await conn.rollback();
@@ -513,11 +574,11 @@ export class MysqlSessionStore implements PersistenceBackend<string> {
         );
       }
       // 更新 revision
-      const allEvents = await this.loadStoredEventsForRevision(conn, String(meta.id));
+      const allEvents = await this.loadStoredEventsForRevision(conn, String(meta.id), tenant);
       const rev = revisionFor(allEvents, meta);
       await conn.execute(
-        `UPDATE ${this.sessionsTable} SET revision = ?, header_json = ? WHERE session_id = ?`,
-        [rev, JSON.stringify(meta), String(meta.id)],
+        `UPDATE ${this.sessionsTable} SET revision = ?, header_json = ? WHERE session_id = ? AND org_id = ? AND user_id = ?`,
+        [rev, JSON.stringify(meta), String(meta.id), tenant.orgId, tenant.userId],
       );
       await conn.commit();
     } catch (err: unknown) {
@@ -530,14 +591,14 @@ export class MysqlSessionStore implements PersistenceBackend<string> {
     }
   }
 
-  private async loadStoredEventsForRevision(conn: { execute: (...args: unknown[]) => Promise<any> }, sessionId: string): Promise<SessionEvent[]> {
+  private async loadStoredEventsForRevision(conn: { execute: (...args: unknown[]) => Promise<any> }, sessionId: string, tenant: SessionStoreOwner): Promise<SessionEvent[]> {
     const [rows] = await conn.execute(
-      `SELECT record_json FROM ${this.eventsTable} WHERE session_id = ? ORDER BY seq ASC`,
-      [sessionId],
+      `SELECT record_json FROM ${this.eventsTable} WHERE session_id = ? AND org_id = ? AND user_id = ? ORDER BY seq ASC`,
+      [sessionId, tenant.orgId, tenant.userId],
     );
     const events: SessionEvent[] = [];
     for (const r of rows as EventRow[]) {
-      const parsed = JSON.parse(r.record_json) as unknown;
+      const parsed = parseJsonColumn(r.record_json, 'record_json');
       events.push(...decodeStorageRecord(parsed));
     }
     return events;
@@ -551,7 +612,8 @@ export class MysqlSessionStore implements PersistenceBackend<string> {
     const conn = await this.pool.getConnection();
     try {
       await conn.beginTransaction();
-      let events = await this.loadStoredEventsForRevision(conn, String(meta.id));
+      const tenant = this.tenantFor(meta);
+      let events = await this.loadStoredEventsForRevision(conn, String(meta.id), tenant);
       if (tornMarker !== undefined) {
         const cut = Number.parseInt(tornMarker, 10);
         if (Number.isFinite(cut)) {
@@ -561,8 +623,10 @@ export class MysqlSessionStore implements PersistenceBackend<string> {
       if (closers.length > 0) {
         events = [...events, ...closers];
       }
-      const tenant = this.headerToRow(meta, '');
-      await conn.execute(`DELETE FROM ${this.eventsTable} WHERE session_id = ?`, [String(meta.id)]);
+      await conn.execute(
+        `DELETE FROM ${this.eventsTable} WHERE session_id = ? AND org_id = ? AND user_id = ?`,
+        [String(meta.id), tenant.orgId, tenant.userId],
+      );
       const packed = packChunkRuns(events);
       for (const rec of packed) {
         await conn.execute(
@@ -572,8 +636,8 @@ export class MysqlSessionStore implements PersistenceBackend<string> {
       }
       const rev = revisionFor(events, meta);
       await conn.execute(
-        `UPDATE ${this.sessionsTable} SET revision = ? WHERE session_id = ?`,
-        [rev, String(meta.id)],
+        `UPDATE ${this.sessionsTable} SET revision = ? WHERE session_id = ? AND org_id = ? AND user_id = ?`,
+        [rev, String(meta.id), tenant.orgId, tenant.userId],
       );
       await conn.commit();
     } catch (err: unknown) {
@@ -588,10 +652,16 @@ export class MysqlSessionStore implements PersistenceBackend<string> {
 
   async list(): Promise<SessionHeader[]> {
     try {
-      const [rows] = await this.pool.execute(
-        `SELECT header_json FROM ${this.sessionsTable} ORDER BY created_at DESC`,
-      );
-      return (rows as HeaderRow[]).map((r) => JSON.parse(r.header_json) as SessionHeader);
+      const owner = this.currentOwner?.();
+      const [rows] = owner
+        ? await this.pool.execute(
+            `SELECT header_json FROM ${this.sessionsTable} WHERE org_id = ? AND user_id = ? ORDER BY created_at DESC`,
+            [owner.orgId, owner.userId],
+          )
+        : await this.pool.execute(
+            `SELECT header_json FROM ${this.sessionsTable} ORDER BY created_at DESC`,
+          );
+      return (rows as HeaderRow[]).map((r) => parseJsonColumn(r.header_json, 'header_json') as SessionHeader);
     } catch (err: unknown) {
       throw redactErr(err, this.physicalRoots);
     }

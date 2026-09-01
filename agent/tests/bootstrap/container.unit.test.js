@@ -58,6 +58,8 @@ describe('ServiceContainer', () => {
       'approvals',
       'sandboxAudit',
       'outbox',
+      'skillEnablements',
+      'authCredentials',
     ]) {
       assert.ok(bundle[k], `missing ${k}`);
     }

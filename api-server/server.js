@@ -58,6 +58,7 @@ import {
 import {
   handleCapabilityRegistry,
   handleExtensionDiagnostics,
+  handleSkillMutation,
 } from './src/routes/capabilities.js';
 import {
   handleGetA2aConfig,
@@ -256,6 +257,20 @@ const server = http.createServer(async (req, res) => {
       const capability = path.match(/^\/api\/capabilities\/(skills|mcp|tools|models)$/);
       if (req.method === 'GET' && capability) {
         await handleCapabilityRegistry(capability[1], parsedUrl, res, req);
+        return;
+      }
+    }
+    {
+      const skillMutation = path.match(
+        /^\/api\/capabilities\/skills\/([^/]+)\/(enable|disable)$/,
+      );
+      if (req.method === 'POST' && skillMutation) {
+        await handleSkillMutation(
+          skillMutation[1],
+          skillMutation[2],
+          res,
+          req,
+        );
         return;
       }
     }
@@ -527,7 +542,7 @@ const server = http.createServer(async (req, res) => {
         const processId = decodeURIComponent(processMatch[1]);
         const action = processMatch[2] || 'status';
         if (req.method === 'GET' && action === 'status') {
-          await handleGetProcess(processId, res, req);
+          await handleGetProcess(processId, parsedUrl, res, req);
           return;
         }
         if (req.method === 'GET' && action === 'logs') {

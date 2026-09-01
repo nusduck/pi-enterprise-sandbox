@@ -1,8 +1,8 @@
 # Refactor acceptance status
 
 **Tracks:** `refactor/dsh-rebuild`（未合并；`main` 上的 §32 证据多数已随 Pi / Python 面删除而失效）  
-**Last audited at:** `be4a077a` (2026-08-21) on `main`  
-**Docs pass:** `2026-08-31` — 把活跃文档里的 `agent/runtime/`、`server.js`、Pi Extension、Wave 3 占位状态与代码对齐；**没有**把任何 §32 行标成 `done`。  
+**Last audited at:** `refactor/dsh-rebuild` working tree after `83a026b7` (2026-09-01)
+**Docs pass:** `2026-09-01` — 对齐 ADR 0009、Agent 浏览器认证权威、DSH 多轮 journal、原生 session resume、Worker 重启后模型上下文、exec 长进程账本与真机收口证据。
 **Normative source:** [`plan.md`](./plan.md) §32
 **Evidence index:** [`evidence/`](./evidence/)  
 **Process log:** [`PROCESS_LOG.md`](./PROCESS_LOG.md)
@@ -50,9 +50,9 @@ Change this file in the **same commit** as the implementation or evidence that j
 | ID | Criterion | Status | Evidence / notes |
 |----|-----------|--------|------------------|
 | A1 | Use Pi native Agent Loop | `unknown` | **证据已删除**：`agent/src/infrastructure/pi/*` 不复存在。Pi 换成 DSH（ADR 0007），本行需按 `agent/src/runtime/` 重新表述与取证 |
-| A2 | Required enterprise policy layers load | `partial` | **2026-08-31（ADR 0009）：取证对象换了。** 那四个「必需 Extension」（`sandbox-bridge` / `enterprise-policy` / `observability` / `user-interaction`）与三个可选的（`skill-lifecycle` / `subagent-spawn` / `task-state`）**都已不存在**——Wave 6 删了包，ADR 0009 H8 删了把它们接到运行时的 `extensionBundleFactory`。现在要取证的是**五个策略挂载点**（`tools/pre-execute`、`ctx.tools.guard()`、`tools/execute`、`tools/post-execute`、`approval/request`）装在**每 Run 的 agent scope** 上，以及 boot 后 `ctx.tools.schemas()` 恰好等于 `ENTERPRISE_DEFAULT_TOOLS`。单测已覆盖（`tests/runtime/policy-install.test.ts` 20 条、`tests/runtime/boot.test.ts` 起子进程全树断言）；**2026-08-31 已在 compose 里跑过真实 bwrap + LLMIO 的一轮端到端**（证据 [`evidence/2026-08-31-compose-e2e-adr0009.md`](evidence/2026-08-31-compose-e2e-adr0009.md)：工具经 exec+bwrap 真正落字节、审批停泊与续跑、草稿建包与启用）。**仍是 `partial`**，差两件：启用闸门还没有 HTTP 路由；网关余额耗尽后模型驱动的场景没跑完。12 个 legacy package 名仍然拒绝。 |
-| A3 | MCP 接入 | `partial` | **2026-08-31（ADR 0009 D9 / 计划 H7）：`pi-mcp-adapter@2.11.0` 已退役**，连同 `agent/src/infrastructure/mcp/pi-mcp-adapter-factory.ts`（1266 行）一起删除。MCP 改为出厂 `@deepseek-ai/dsh-mcp-client`，overlay 里**一台服务器一个插件实例**，条目由 `MCP_SERVERS_JSON` 经 `npm run gen:patch` 生成，密钥只以 `process.env` 占位符出现。`/ready` 的就绪度改为投影 DSH 工具注册表（`readMcpReadiness()`），不再是自建 adapter 的探测快照。单测见 `tests/runtime/mcp-entries.test.ts`。**仍是 `partial`**：还差对着真实 MCP 服务器的端到端取证（H7.8/H7.9 留到 compose）。对外的 MCP facade 是另一回事（见 `docs/sandbox-mcp.md`，已端到端验证）|
-| A4 | Multi-turn Session recoverable | `unknown` | Offline: session-recovery + journal units + WAITING_INPUT recovery matrix. **Live 2026-07-19:** full `agent-worker-pi-restart.release-gate.test.js` **5/5 PASS** (model SIGKILL replay, durable interaction, tool boundary, sandbox UNKNOWN) on isolated MySQL/Redis/Sandbox — Pi Session checkpoint path only. Evidence: `evidence/a4-g2-restart-matrix-2026-07-19.md`, `evidence/g6-interaction-worker-restart-2026-07-19.md`. Residual non-blocking: dedicated corrupt-journal-under-kill live gate not separate. |
+| A2 | Required enterprise policy layers load | `done` | 七个旧 Extension 已删除；当前取证对象是五个 per-Run 策略挂载点与 `ENTERPRISE_DEFAULT_TOOLS` 精确工具面。离线 boot/policy 用例覆盖真实插件树，2026-08-31 compose 已验证真实 bwrap、审批停泊/续跑和 Skill 草稿/发布；2026-09-01 补齐 Capabilities 启用 HTTP/BFF/UI、MySQL 启用账本、exec owner-scoped 挂载与并行 ToolExecution 收尾，并由真实 LLM 完成前台及后台 `bash` ToolExecution。Evidence: [`evidence/2026-09-01-dsh-process-closure-live-chain.md`](evidence/2026-09-01-dsh-process-closure-live-chain.md)。 |
+| A3 | MCP 接入 | `done` | `pi-mcp-adapter` 已退役；`@deepseek-ai/dsh-mcp-client` 按 `MCP_SERVERS_JSON` 一 server 一插件实例，密钥只用 env 引用，`/ready` 投影 DSH 注册表。`tests/runtime/mcp-live.test.ts` 用官方 SDK 真 stdio server 验证连接 → `tools/list` 注册 → 实际调用回包；`mcp-entries.test.ts` 覆盖配置与密钥 fail-closed。对外 `sandbox-mcp` facade 是独立入口。 |
+| A4 | Multi-turn Session recoverable | `done` | DSH offline recovery/journal 用例覆盖 header 保留与空 checkpoint 单根连接。2026-09-01 compose：同一 Agent Session 原生 `create` → MySQL 落盘 → `resume`；Worker `SIGKILL` 换新 PID 后 follow-up 仍 `resume`，模型原样复述上一轮一次性口令。Evidence: [`evidence/2026-09-01-dsh-worker-restart-model-context.md`](evidence/2026-09-01-dsh-worker-restart-model-context.md)、[`evidence/2026-09-01-dsh-native-session-resume.md`](evidence/2026-09-01-dsh-native-session-resume.md)。 |
 | A5 | Agent Version pinned | `done` | credential/version binding tests under `agent/tests/a2a/` |
 
 ## B. State
@@ -70,13 +70,13 @@ Change this file in the **same commit** as the implementation or evidence that j
 
 | ID | Criterion | Status | Evidence / notes |
 |----|-----------|--------|------------------|
-| C1 | Session ↔ Workspace 1:1 | `partial` | 约束在 agent 侧 MySQL 仍成立；exec 侧改为 `exec_*` 自有表，未重新取证 |
+| C1 | Session ↔ Workspace 1:1 | `partial` | Agent 侧唯一约束仍成立；2026-09-01 真机证明 BFF 经 Agent 授权把 Sandbox Session 映射到同一 Workspace，并能查询 exec-owned 进程。尚未重跑并发创建/冲突约束 gate。 |
 | C2 | Stable Agent paths | `done` | `/home/sandbox/workspace`, `/home/sandbox/skill` |
 | C3 | No global mutable workspace symlink | `done` | lease/symlink model removed in refactor |
 | C4 | Concurrent session isolation | `unknown` | **证据针对已删除的 Python 执行面**。exec 侧有离线用例（`exec/test/isolation-*.test.ts`），live gate 未重跑 |
 | C5 | Ordinary commands no approval | `done` | policy defaults; enterprise tools only |
 | C6 | Python multi-line auto-materialize | `partial` | 逻辑已移植（`exec/src/shell/python-materialize.ts`，含单测）。镜像里的 `python3` 与运行库在 2026-08-30 前是缺失的，现已修复并有 plan 断言；**compose 内真实 bwrap 待跑**（Mac Docker 可以，见下） |
-| C7 | Long tasks via Process Handle | `unknown` | **证据已删除**：`tests/test_formal_process_handle.py` 随 Python 面移除。TS 侧有 `exec/test/shell-job-registry.test.ts`，但 orphan/identity/bwrap 的等价用例与 live gate 未重建 |
+| C7 | Long tasks via Process Handle | `partial` | exec 以 `exec_jobs` 持久化进程事实；2026-09-01 模型后台 `bash` → exec 登记 → BFF list/log/signal/cancel → 跨租户 404 真机通过。剩余缺口：模型侧同步 `job_list`/`job_output` 尚未取得异步 exec 结果；日志缓冲与活句柄不能跨 exec 重启恢复；hard-kill/orphan gate 未跑。Evidence: [`evidence/2026-09-01-dsh-process-closure-live-chain.md`](evidence/2026-09-01-dsh-process-closure-live-chain.md)。 |
 | C8 | Dataset streams into Workspace | `partial` | Wave 7 已改成三段式流式（`beginUpload` → `writeChunk` → `finishUpload`），控制面暂存后再发布到工作区。离线语义用例在 `exec/test/semantic-gaps.test.ts`。**5GiB live 未重跑**，不能标 `done` |
 
 ## D. Frontend
@@ -121,7 +121,7 @@ Change this file in the **same commit** as the implementation or evidence that j
 | G4 | Duplicate request no duplicate side effects | `done` | Offline concurrent begin (same/different hash) + FOR UPDATE. **Live 2026-07-19:** 20-way same-key CreateRun on `pi_gate_20260719_g4g5` → 1 run / 1 message / 1 accepted / 1 outbox / 1 idempotency. Evidence: `evidence/p1-g4-g5-idempotency-2026-07-19.md`. |
 | G5 | Create Run then immediate query race-free | `done` | Offline: create txn held open until commit before return + immediate GET. **Live:** every concurrent response immediately GET-able ACCEPTED\|QUEUED. Same evidence doc. |
 | G6 | Durable WAITING_INPUT / interaction resume | `done` | **Unit:** interaction HTTP respond/rehydrate, GET `pending_input`, execute-run resume, cancel races (17 pass). **Live:** `agent-worker-pi-restart.release-gate.test.js` case *continues one durable interaction after Worker restart…* PASS on isolated MySQL/Redis/Sandbox (`pi_gate_20260719_g6int`, 2026-07-19): park → SIGKILL Worker A → rehydrateWaiting+respond → Worker B SUCCEEDED / APPLIED / 2 provider calls. Evidence: `evidence/g6-interaction-worker-restart-2026-07-19.md`. |
-| G7 | Hard `SIGKILL` orphan recovery in Bubblewrap | `unknown` | **Unit:** PID-namespace init, `--as-pid-1`, CAP_KILL, `tests/test_formal_orphan_recovery.py` + identity/bubblewrap (19 pass). **Live:** `scripts/release-gates/sandbox-live-gate.mjs` with `SANDBOX_GATE_HARD_KILL=1` + managed non-privileged Bubblewrap container PASS (`2026-07-19T08:54:17Z`): orphan survived service SIGKILL; after restart process → `lost` (OS orphan gone), claim → `UNKNOWN`/`CRASH_RECOVERY_UNKNOWN`, no auto-replay. Evidence: `evidence/g7-hard-kill-orphan-2026-07-19.md`. |
+| G7 | Hard `SIGKILL` orphan recovery in Bubblewrap | `unknown` | 当前 exec 有启动期 `recoverOrphans()` 与离线 registry 用例，但旧证据针对已删除的 Python 执行面。本轮只验证正常 SIGTERM 收敛，没有硬杀 exec 服务，因此不能复用 2026-07-19 结论。 |
 
 ## H. Security
 
@@ -190,6 +190,17 @@ Non-blocking debt remains in [`review-deferred-items.md`](./review-deferred-item
 已经完成的：MCP 全链路在 compose 上端到端验证（工具列表、文件往返、连续产物
 提交、签名下载的字节与 sha256 一致、篡改 token 404）。
 
+### 2026-09-01 当前重审增量
+
+| 行 | 当前状态 | 新证据 / 剩余缺口 |
+|---|---|---|
+| A2 | `done` | 真实 LLM 模型驱动前台/后台工具 Run 已完成；策略、账本与 exec 链均生效 |
+| A4 | `partial` | 同 Session 连续 Run 已通过；仍缺原生 DSH persistence resume 与 Worker 重启上下文 gate |
+| C7 | `partial` | start/list/log/signal/cancel 与跨租户 404 已通过；仍缺模型侧 job 查询和 exec 重启恢复 |
+| G7 | `unknown` | 未执行 exec hard-SIGKILL/orphan gate |
+
+Evidence: [`evidence/2026-09-01-dsh-process-closure-live-chain.md`](evidence/2026-09-01-dsh-process-closure-live-chain.md)。
+
 ---
 
 ## Work merged after the acceptance program (2026-08-01 → 2026-08-21)
@@ -211,5 +222,5 @@ where to look:
 | `7fae4dbd` | MCP discovered schemas projected to the model | A3 |
 | `be4a077a` (#10) | Agent service ↔ Pi SDK gap closure | A1, A4 |
 
-The H5/H6 ops sampling is still the only thing between this board and
-"refactor complete", and it still needs a real deployment — no offline substitute.
+这段合并记录之后又发生了 DSH / TypeScript exec 重建；当前阻塞项以本板顶部行状态和
+“2026-09-01 当前重审增量”为准，不能再把 H5/H6 写成唯一缺口。

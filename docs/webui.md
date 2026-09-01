@@ -67,6 +67,10 @@ AgentSession 都由 `agentEventAdapter -> runReducer` 单次归约。`ChatState`
 `pendingTool`、`pendingApproval` 或 `readyFiles`，只保存服务端历史快照、选择状态、上传草稿、布局、
 认证与 transport 控制。`activeRunId` 直接从 EntityStore 读取，不维护 React 镜像 state。
 
+### Capabilities / Skills
+
+`/settings/capabilities` 的 Skills 页按当前登录用户投影三层：Drafts、My Skills、System Skills。草稿可点击 **Enable**；已启用用户 Skill 可点击 **Disable**；系统 Skill 没有变更按钮。操作经 BFF 的 `/api/capabilities/skills/{name}/enable|disable` 转发到 Agent，成功后刷新清单，失败以 `role="alert"` 显示且不会乐观改写 UI。
+
 ### 消息格式
 
 ```javascript

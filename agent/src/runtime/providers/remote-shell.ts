@@ -11,9 +11,10 @@
  */
 
 import { ShellExecutor } from '@deepseek-ai/dsh-shell';
+import { randomUUID } from 'node:crypto';
 import type { ShellExecRequest, ShellExecSpec, ShellProcess, ShellRunResult } from '@deepseek-ai/dsh-shell';
 import type { Context } from '@deepseek-ai/cordis';
-import { ExecRpcClient, resolveExecRpcConfig } from './exec-rpc.js';
+import { currentExecJobId, ExecRpcClient, resolveExecRpcConfig } from './exec-rpc.js';
 import type { ExecRpcConfig } from './exec-rpc.js';
 
 export interface RemoteShellOptions extends ExecRpcConfig {}
@@ -52,13 +53,21 @@ class RemoteShellProcess implements ShellProcess {
   constructor(
     private readonly rpc: ExecRpcClient,
     private readonly roots: readonly string[],
-    private readonly id: string,
+    readonly id: string,
   ) {
     let resolver: () => void = () => undefined;
     this.done = new Promise<void>((resolve) => {
       resolver = resolve;
     });
     this.doneResolver = resolver;
+  }
+
+  start(request: Promise<{ id: string; status: string }>): void {
+    void request
+      .then((res) => {
+        if (res.id !== this.id) throw new Error('exec returned a mismatched process id');
+      })
+      .catch(() => this.settleFromExec('killed', null, null));
   }
 
   readOutput(): { delta: string; lossy: boolean } {
@@ -167,26 +176,20 @@ export class RemoteShell extends ShellExecutor {
     };
     if (spec.stdin !== undefined) payload['stdin'] = spec.stdin;
     if (spec.env !== undefined) payload['env'] = spec.env;
+    const active = this.rpc.activeConfig();
+    const id = currentExecJobId() ?? `bash-${randomUUID().replace(/-/g, '')}`;
+    payload['id'] = id;
+    if (active.runId) payload['runId'] = active.runId;
 
     // `start` 是同步返回句柄的契约，内部异步通知通过 done Promise
     const rpc = this.rpc;
     const roots = this.roots;
-    const proc = new RemoteShellProcess(rpc, roots, `pending-${Date.now()}`);
-
-    // 后台发起，不阻塞调用方
-    void (async () => {
-      try {
-        const res = await rpc.post<Record<string, unknown>, { id: string; status: string }>(
-          '/internal/v1/shell/start',
-          payload,
-          roots,
-        );
-        // 用 exec 返回的 id 替换 pending 句柄的 id（通过私有字段重绑定）
-        (proc as unknown as Record<string, unknown>)['id'] = res.id;
-      } catch {
-        proc.settleFromExec('killed', null, null);
-      }
-    })();
+    const proc = new RemoteShellProcess(rpc, roots, id);
+    proc.start(rpc.post<Record<string, unknown>, { id: string; status: string }>(
+      '/internal/v1/shell/start',
+      payload,
+      roots,
+    ));
 
     return proc;
   }

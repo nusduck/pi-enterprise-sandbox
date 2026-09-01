@@ -17,7 +17,7 @@ const originalFetch = globalThis.fetch;
 process.env.AUTH_ENABLED = 'false';
 process.env.AGENT_BASE_URL = 'http://agent.test';
 
-const { getAgentExtensionDiagnostics } = await import(
+const { getAgentExtensionDiagnostics, mutateAgentSkill } = await import(
   `../src/services/agent-client.js?test=${Date.now()}`
 );
 
@@ -27,11 +27,39 @@ describe('capability diagnostics identity forwarding', () => {
     assert.match(capabilitiesSrc, /export async function handleCapabilityRegistry\(kind, parsedUrl, res, req\)/);
     assert.match(capabilitiesSrc, /resolveTrustedAuth\(req\)/);
     assert.match(capabilitiesSrc, /getAgentExtensionDiagnostics\(profileId, \{ auth, traceId \}\)/);
+    assert.match(capabilitiesSrc, /handleSkillMutation/);
+    assert.match(capabilitiesSrc, /mutateAgentSkill\(name, action, \{ auth, traceId \}\)/);
   });
 
   it('server passes req into capability and diagnostics handlers', () => {
     assert.match(serverSrc, /handleExtensionDiagnostics\(parsedUrl, res, req\)/);
     assert.match(serverSrc, /handleCapabilityRegistry\(capability\[1\], parsedUrl, res, req\)/);
+    assert.match(serverSrc, /handleSkillMutation/);
+  });
+
+  it('forwards trusted acting headers to Agent Skill mutation', async () => {
+    let captured = null;
+    globalThis.fetch = async (input, init) => {
+      captured = { url: String(input), headers: init?.headers || {}, method: init?.method };
+      return new Response(JSON.stringify({ name: 'draft-one', enabled: true }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    };
+    try {
+      await mutateAgentSkill('draft-one', 'enable', {
+        auth: {
+          actingUserId: 'user_a',
+          actingOrganizationId: 'org_a',
+        },
+      });
+      assert.equal(captured.url, 'http://agent.test/internal/skills/draft-one/enable');
+      assert.equal(captured.method, 'POST');
+      assert.equal(captured.headers['X-Acting-User-Id'], 'user_a');
+      assert.equal(captured.headers['X-Acting-Organization-Id'], 'org_a');
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 
   it('agent-client diagnostics uses requestHeaders for acting identity', () => {

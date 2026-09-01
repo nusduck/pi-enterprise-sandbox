@@ -129,7 +129,7 @@ export interface JobProcessChunk {
  * `job-registry.ts` 遇到未实现时返回明确的"不可用"结果，不是抛异常。
  */
 export interface JobProcessHandle {
-  readonly pid: number;
+  readonly pid: number | null;
   readonly pgid?: number | undefined;
   /**
    * 请求终止。必须同步、幂等；最终必须让 {@link done} 落定
@@ -146,6 +146,8 @@ export interface JobProcessHandle {
 
 /** `MySqlJobRegistry.start()` 的入参。 */
 export interface JobStartSpec {
+  /** Agent 侧同步返回给模型的预留 id；省略时由 exec 生成。 */
+  readonly id?: string | undefined;
   /** 生产者种类，也是 id 前缀，目前只有 `bash`（对齐 `JobKind`）。 */
   readonly kind: 'bash';
   /** 一行模型可见标签（通常就是命令本身）。 */
@@ -169,6 +171,7 @@ export interface JobStartSpec {
 /** 安全交给调用方的只读投影——每次调用现算，绝不是活的注册表状态。 */
 export interface JobSnapshot {
   readonly id: string;
+  readonly runId?: string | undefined;
   readonly kind: 'bash';
   readonly label: string;
   readonly outputLimitBytes?: number | undefined;
@@ -191,6 +194,10 @@ export interface JobRead {
   readonly text: string;
   /** 本次读取是否因为环形缓冲区回收而丢失了数据。 */
   readonly lossy: boolean;
+  readonly cursor: string;
+  readonly nextCursor: string;
+  readonly truncated: boolean;
+  readonly logTotal: number;
   /** 不透明 spill 引用；真正路径经 `resolveSpillPath()` 换取。 */
   readonly stdoutSpillRef?: string | undefined;
   readonly stderrSpillRef?: string | undefined;

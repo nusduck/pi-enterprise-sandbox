@@ -46,13 +46,11 @@ import {
   extractAssistantTextForUi,
   redactPayload,
 } from '../lib/event-redaction.js';
-import { normalizeExecutorResult } from './run-executor.js';
 import {
   assertTriggeringMessageBinding,
   looksLikeUncertainSideEffect,
   terminalOutcomeFromNewAssistantEntries,
   type PiRunExecutorDeps,
-  type PiRunExecutorFactoryOptions,
 } from './pi-run-executor-deps.js';
 import { sanitizeStatusReason } from './sanitize-status-reason.js';
 import { SessionRecoveryService } from './session-recovery-service.js';
@@ -1504,88 +1502,5 @@ export class PiRunExecutor {
   }
 }
 
-/**
- * Per-job factory. Requires modelResolver + workspaceResolver.
- * Does **not** set production worker default — inject explicitly.
- *
- * @param {{
- *   transactionManager: any,
- *   createRepositories: (db: any) => any,
- *   sessionLockManager: any,
- *   piRuntimeFactory: any,
- *   modelResolver: (agentVersion: object, selection?: { modelId?: string|null }) => object | Promise<object>,
- *   promptImageLoader?: (input: object) => Promise<Array<{ type: 'image', data: string, mimeType: string }>>,
- *   requestAuthResolver?: (model: object, agentVersion: object) => object | Promise<object>,
- *   workspaceResolver: (agentSession: object) => string | Promise<string>,
- *   sandboxSessionProvisioner?: { ensure: (input: object) => Promise<object> },
- *   generateId: () => string,
- *   now?: () => Date,
- *   sessionAdapter?: any,
- *   projector?: PlatformEventProjector,
- *   recoveryService?: SessionRecoveryService,
- *   extensionFactories?: unknown[],
- *   eventProjectionMode?: 'session-subscribe' | 'observability' | 'both',
- *   sessionLockRenewIntervalMs?: number,
- *   steerPollIntervalMs?: number,
- *   toolBudget?: { maxToolCalls?: number, maxIdenticalToolCalls?: number, maxModelTurns?: number },
- * }} opts
- * @returns {import('./run-executor.js').RunExecutorFactory}
- */
-export function createPiRunExecutorFactory(opts: PiRunExecutorFactoryOptions) {
-  if (typeof opts?.modelResolver !== 'function') {
-    throw new Error(
-      'createPiRunExecutorFactory requires modelResolver(agentVersion)',
-    );
-  }
-  if (typeof opts?.workspaceResolver !== 'function') {
-    throw new Error(
-      'createPiRunExecutorFactory requires workspaceResolver(agentSession)',
-    );
-  }
-  if (!opts.transactionManager || !opts.createRepositories) {
-    throw new Error(
-      'createPiRunExecutorFactory requires transactionManager and createRepositories',
-    );
-  }
-  if (!opts.sessionLockManager || !opts.piRuntimeFactory) {
-    throw new Error(
-      'createPiRunExecutorFactory requires sessionLockManager and piRuntimeFactory',
-    );
-  }
-  if (typeof opts.generateId !== 'function') {
-    throw new Error('createPiRunExecutorFactory requires generateId');
-  }
-
-  return function piRunExecutorFactory(_job) {
-    return new PiRunExecutor({
-      transactionManager: opts.transactionManager,
-      createRepositories: opts.createRepositories,
-      sessionLockManager: opts.sessionLockManager,
-      piRuntimeFactory: opts.piRuntimeFactory,
-      modelResolver: opts.modelResolver,
-      promptImageLoader: opts.promptImageLoader,
-      requestAuthResolver: opts.requestAuthResolver,
-      workspaceResolver: opts.workspaceResolver,
-      sandboxSessionProvisioner: opts.sandboxSessionProvisioner,
-      generateId: opts.generateId,
-      now: opts.now,
-      sessionAdapter: opts.sessionAdapter,
-      projector: opts.projector,
-      recoveryService: opts.recoveryService,
-      sessionLockRenewIntervalMs: opts.sessionLockRenewIntervalMs,
-      steerPollIntervalMs: opts.steerPollIntervalMs,
-      toolBudget: opts.toolBudget,
-      // 运维层风险表与子 Agent 的 durable 面。2026-08-31（计划 H8）之前这两样
-      // 只喂给 `extensionBundleFactory`，各自断链——前者让
-      // `config/agent/tool-risk.json` 零效果，后者让子 Run 走进程内队列。
-      riskOverrides: opts.riskOverrides,
-      subagentSpawnPort: opts.subagentSpawnPort,
-      eventProjectionMode: opts.eventProjectionMode,
-    });
-  };
-}
-
-/**
- * Normalize result helper re-export for callers.
- */
-export { normalizeExecutorResult };
+export { createPiRunExecutorFactory } from './pi-run-executor-factory.js';
+export { normalizeExecutorResult } from './run-executor.js';

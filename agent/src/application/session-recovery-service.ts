@@ -477,17 +477,9 @@ export class SessionRecoveryService {
         });
       }
 
-      // Append-only protected manifest attached to current content leaf
-      // (not a new root). Empty content → sole root parentId null.
-      const contentOnly = journalAfter.entries.filter(
-        (e) =>
-          !(
-            e &&
-            e.type === 'custom' &&
-            e.customType === PLATFORM_MANIFEST_CUSTOM_TYPE
-          ),
-      );
-      const leafId = findLeafEntryId(contentOnly);
+      // Append the manifest to the current journal leaf. Only the first entry
+      // in an entirely empty journal may be a null-parent root.
+      const leafId = findLeafEntryId(journalAfter.entries);
       const manifest = buildProtectedManifestEntry({
         id: this.generateId(),
         parentId: leafId,

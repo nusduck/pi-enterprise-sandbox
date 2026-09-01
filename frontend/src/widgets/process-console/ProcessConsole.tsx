@@ -107,10 +107,11 @@ export function ProcessConsole({
   };
 
   const loadHistory = async () => {
-    if (!process) return;
+    if (!process?.sessionId) return;
     setBusy(true);
     try {
       const logs = await getProcessLogs(process.id, {
+        sessionId: process.sessionId,
         offset: historyOffset,
         limit: 50_000,
       });
@@ -135,12 +136,12 @@ export function ProcessConsole({
   };
 
   const sendStdin = async (eof = false) => {
-    if (!process) return;
+    if (!process?.sessionId) return;
     const data = stdinText;
     if (!data && !eof) return;
     setBusy(true);
     try {
-      const r = await writeProcessStdin(process.id, data, eof);
+      const r = await writeProcessStdin(process.id, process.sessionId, data, eof);
       if (!r.ok) {
         flash(r.error || 'stdin failed');
         return;
@@ -153,11 +154,11 @@ export function ProcessConsole({
   };
 
   const sendSignal = async (sig: ProcessSignal) => {
-    if (!process) return;
+    if (!process?.sessionId) return;
     if (sig === 'SIGKILL' && !confirm(`Send ${sig} to process?`)) return;
     setBusy(true);
     try {
-      const r = await signalProcess(process.id, sig);
+      const r = await signalProcess(process.id, process.sessionId, sig);
       flash(r.ok ? `Sent ${sig}` : r.error || `${sig} failed`);
     } finally {
       setBusy(false);
@@ -165,11 +166,11 @@ export function ProcessConsole({
   };
 
   const doCancel = async () => {
-    if (!process) return;
+    if (!process?.sessionId) return;
     if (!confirm('Cancel this process?')) return;
     setBusy(true);
     try {
-      const r = await cancelProcess(process.id);
+      const r = await cancelProcess(process.id, process.sessionId);
       flash(r.ok ? 'Cancel requested' : r.error || 'Cancel failed');
     } finally {
       setBusy(false);

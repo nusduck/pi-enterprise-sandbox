@@ -27,9 +27,8 @@ process.env.SANDBOX_REQUEST_TIMEOUT_MS = '300';
 process.env.AUTH_ENABLED = 'false';
 
 const agentClient = await import(`../src/services/agent-client.js?t=${Date.now()}`);
-const { createSandboxClient } = await import(
-  `../src/services/sandbox-client.js?t=${Date.now()}`
-);
+const agentAuthClient = await import(`../src/services/agent-auth-client.js?t=${Date.now()}`);
+const sandboxClient = await import(`../src/services/sandbox-client.js?t=${Date.now()}`);
 
 const AUTH = { actingUserId: 'u', actingOrganizationId: 'o' };
 
@@ -68,9 +67,10 @@ describe('outbound calls are time-bounded', () => {
     );
   });
 
-  it('Agent process control gives up', async () => {
-    await mustSettle('signalAgentProcess', () =>
-      agentClient.signalAgentProcess('p', { signal: 'SIGTERM' }, { auth: AUTH }),
+  it('exec process control gives up', async () => {
+    await mustSettle('processAction', () =>
+      sandboxClient.createSandboxClient({ auth: AUTH })
+        .processAction('s', 'p', 'signal', { signal: 'SIGTERM' }),
     );
   });
 
@@ -80,8 +80,9 @@ describe('outbound calls are time-bounded', () => {
     );
   });
 
-  it('Sandbox calls carry a default deadline of their own', async () => {
-    const sandbox = createSandboxClient();
-    await mustSettle('sandbox.authMe', () => sandbox.authMe());
+  it('Agent browser auth gives up', async () => {
+    await mustSettle('agent.authMe', () =>
+      agentAuthClient.authMe({ authorization: 'Bearer token' }),
+    );
   });
 });

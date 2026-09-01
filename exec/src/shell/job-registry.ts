@@ -59,7 +59,13 @@ function nowDate(): Date {
   return new Date();
 }
 
-function newJobId(kind: string): string {
+function newJobId(kind: string, requested?: string): string {
+  if (requested !== undefined) {
+    if (!new RegExp(`^${kind}-[A-Za-z0-9_-]{1,160}$`).test(requested)) {
+      throw new Error('invalid requested job id');
+    }
+    return requested;
+  }
   // 用 uuid 保证唯一，前缀与 `kind` 对齐 `dsh-jobs` 的 `bash-1` 可预测风格
   // 但不照抄它的顺序 id——那在 durable 场景下会因重启而回卷。
   const short = randomUUID().replace(/-/g, '').slice(0, 12);
@@ -69,6 +75,7 @@ function newJobId(kind: string): string {
 function toSnapshot(record: JobRecord): JobSnapshot {
   return {
     id: record.id,
+    ...(record.runId ? { runId: record.runId } : {}),
     kind: record.kind,
     label: record.label,
     outputLimitBytes: record.outputLimitBytes ?? undefined,
@@ -156,7 +163,7 @@ export class MySqlJobRegistry {
       }
     }
 
-    const id = newJobId(spec.kind);
+    const id = newJobId(spec.kind, spec.id);
     const createdAt = nowDate();
     let handle: JobProcessHandle;
     try {
@@ -348,6 +355,10 @@ export class MySqlJobRegistry {
       return {
         text: res.data,
         lossy: res.dropped || res.truncated,
+        cursor: res.cursor,
+        nextCursor: res.nextCursor,
+        truncated: res.truncated,
+        logTotal: res.logTotal,
         stdoutSpillRef,
         stderrSpillRef,
         snapshot,
@@ -368,6 +379,10 @@ export class MySqlJobRegistry {
     return {
       text: '',
       lossy: false,
+      cursor: cursor || INITIAL_CURSOR,
+      nextCursor: cursor || INITIAL_CURSOR,
+      truncated: false,
+      logTotal: 0,
       snapshot: toSnapshot(record),
     };
   }

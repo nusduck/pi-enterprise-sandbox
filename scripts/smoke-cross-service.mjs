@@ -4,8 +4,8 @@
  *
  * Starts:
  *   1. Deterministic fake OpenAI-compatible provider
- *   2. Sandbox (uvicorn) on a free port, backed by MySQL
- *   3. Agent pointing at fake LLM + Sandbox + MySQL + Redis
+ *   2. TypeScript exec on a free port, backed by MySQL
+ *   3. Agent pointing at fake LLM + exec + MySQL + Redis
  *   4. Agent Worker (unless SMOKE_START_WORKER=false)
  *   5. BFF pointing at Agent + Sandbox
  *
@@ -403,60 +403,41 @@ async function main() {
 
   const smokeDir = path.join(ROOT, '.runtime', 'smoke');
   const wsPath = path.join(smokeDir, `ws-${process.pid}`);
-  const skillsPath = path.join(smokeDir, `skills-${process.pid}`);
-  const agentDir = path.join(smokeDir, `agent-${process.pid}`);
-  // The container image creates the logical /home/sandbox/workspace cwd. This
-  // smoke runs the Worker directly on the host, so give Pi an equivalent
-  // process-local cwd that is guaranteed to exist.
-  const agentCwd = path.join(smokeDir, `agent-workspace-${process.pid}`);
+  const tmpPath = path.join(smokeDir, `tmp-${process.pid}`);
+  const artifactsPath = path.join(smokeDir, `artifacts-${process.pid}`);
+  const controlPath = path.join(smokeDir, `control-${process.pid}`);
+  const userSkillsPath = path.join(smokeDir, `user-skills-${process.pid}`);
+  const draftSkillsPath = path.join(smokeDir, `draft-skills-${process.pid}`);
   await import('node:fs/promises').then((fs) =>
     Promise.all([
       fs.mkdir(smokeDir, { recursive: true }),
-      fs.mkdir(agentCwd, { recursive: true }),
+      ...[wsPath, tmpPath, artifactsPath, controlPath, userSkillsPath, draftSkillsPath]
+        .map((dir) => fs.mkdir(dir, { recursive: true })),
     ]),
   );
 
   console.log('[smoke] fake LLM', fake.baseUrl);
   console.log('[smoke] ports', { sandboxPort, agentPort, bffPort });
 
-  // Prefer venv python if present
-  const python = process.env.SMOKE_PYTHON || path.join(ROOT, '.venv', 'bin', 'python');
-  const uvicornArgs = [
-    '-m',
-    'uvicorn',
-    'sandbox.main:app',
-    '--host',
-    '127.0.0.1',
-    '--port',
-    String(sandboxPort),
-  ];
-
   spawnProc(
-    python,
-    uvicornArgs,
+    process.execPath,
+    ['dist/main.js'],
     {
       DEPLOYMENT_ENV: 'development',
+      SANDBOX_PORT: String(sandboxPort),
       SANDBOX_DATABASE_URL: sandboxMysqlUrl,
       SANDBOX_WORKSPACES_ROOT: wsPath,
-      SANDBOX_TEMP_ROOT: path.join(smokeDir, `tmp-${process.pid}`),
-      SANDBOX_ATTACHMENTS_ROOT: wsPath,
-      SANDBOX_SKILLS_ROOT: skillsPath,
-      SANDBOX_API_TOKEN: SMOKE_SANDBOX_API_TOKEN,
-      SANDBOX_AUTH_ENABLED: 'true',
-      SANDBOX_AUTH_ALLOW_PUBLIC_REGISTER: 'false',
-      SANDBOX_INTERNAL_PLANE_ENABLED: 'true',
-      SANDBOX_INTERNAL_REDIS_URL: replayRedisUrl,
+      SANDBOX_TEMP_ROOT: tmpPath,
+      SANDBOX_ARTIFACTS_ROOT: artifactsPath,
+      SANDBOX_CONTROL_ROOT: controlPath,
+      SANDBOX_SKILLS_ROOT: path.join(ROOT, 'skills'),
+      SANDBOX_USER_SKILLS_ROOT: userSkillsPath,
+      SANDBOX_SKILL_DRAFT_ROOT: draftSkillsPath,
       SANDBOX_INTERNAL_HMAC_KEYRING: internalHmacKeyring,
       SANDBOX_INTERNAL_HMAC_ACTIVE_KID: internalHmacActiveKid,
-      AGENT_REDIS_URL: '',
-      REDIS_URL: '',
-      REDIS_PASSWORD: '',
-      SANDBOX_NETWORK_MODE: 'disabled',
-      SANDBOX_BIND_HOST: '127.0.0.1',
-      SANDBOX_ALLOWED_CLIENT_CIDRS: '127.0.0.1/32,::1/128',
-      PYTHONPATH: ROOT,
     },
     'sandbox',
+    path.join(ROOT, 'exec'),
   );
 
   await waitHttp(`http://127.0.0.1:${sandboxPort}/health`);
@@ -464,7 +445,7 @@ async function main() {
 
   spawnProc(
     process.execPath,
-    ['server.js'],
+    ['dist/server.js'],
     {
       PORT: String(agentPort),
       NODE_ENV: 'test',
@@ -476,9 +457,7 @@ async function main() {
       AGENT_DATABASE_URL: agentMysqlUrl,
       AGENT_REDIS_URL: redisUrl,
       AGENT_MIGRATE_ON_START: 'false',
-      AGENT_PI_AGENT_DIR: agentDir,
-      AGENT_PI_DEFAULT_CWD: agentCwd,
-      AGENT_SESSION_WORKSPACE_CWD: agentCwd,
+      AGENT_SESSION_WORKSPACE_CWD: '/home/sandbox/workspace',
       SANDBOX_INTERNAL_HMAC_KEYRING: internalHmacKeyring,
       SANDBOX_INTERNAL_HMAC_ACTIVE_KID: internalHmacActiveKid,
       LLMIO_BASE_URL: fake.baseUrl,
@@ -495,19 +474,16 @@ async function main() {
   if (startWorker) {
     spawnProc(
       process.execPath,
-      ['worker.js'],
+      ['dist/worker.js'],
       {
         NODE_ENV: 'test',
         DEPLOYMENT_ENV: 'development',
         AGENT_DATABASE_URL: agentMysqlUrl,
         AGENT_REDIS_URL: redisUrl,
         AGENT_MIGRATE_ON_START: 'false',
-        AGENT_PI_AGENT_DIR: agentDir,
-        AGENT_PI_DEFAULT_CWD: agentCwd,
-        AGENT_SESSION_WORKSPACE_CWD: agentCwd,
+        AGENT_SESSION_WORKSPACE_CWD: '/home/sandbox/workspace',
         SANDBOX_BASE_URL: `http://127.0.0.1:${sandboxPort}`,
         SANDBOX_API_TOKEN: SMOKE_SANDBOX_API_TOKEN,
-        SANDBOX_AUTH_ENABLED: 'false',
         SANDBOX_INTERNAL_HMAC_KEYRING: internalHmacKeyring,
         SANDBOX_INTERNAL_HMAC_ACTIVE_KID: internalHmacActiveKid,
         LLMIO_BASE_URL: fake.baseUrl,

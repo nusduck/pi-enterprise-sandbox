@@ -12,6 +12,7 @@
  */
 
 import type { Pool, RowDataPacket, ResultSetHeader } from 'mysql2/promise';
+import { sqlLimit } from '../client.js';
 
 /** 与 Python `DATASET_STATUS_*` 一致。 */
 export type DatasetStatus = 'uploading' | 'ready' | 'failed';
@@ -222,8 +223,8 @@ export class MySqlDatasetStore implements DatasetStore {
     const [rows] = await this.pool.execute<Row[]>(
       `SELECT * FROM ${this.table}
         WHERE session_id = ? AND org_id = ? AND user_id = ?
-        ORDER BY created_at DESC LIMIT ?`,
-      [sessionId, scope.orgId, scope.userId, limit],
+        ORDER BY created_at DESC LIMIT ${sqlLimit(limit)}`,
+      [sessionId, scope.orgId, scope.userId],
     );
     return (rows as Row[]).map(mapRow);
   }

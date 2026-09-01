@@ -2,6 +2,7 @@
  * 公共面进程路由——对 BFF `routes/processes.js` 与 Python `routers/session_processes.py` 逐字节不变。
  *
  * Python 语义：
+ * - GET    /sessions/:id/processes                 → 200 {processes} / 404
  * - GET    /sessions/:id/processes/:pid            → 200 entry / 404
  * - GET    /sessions/:id/processes/:pid/logs?offset&limit → 200 {process_id,...logs} / 400 offset/limit /404
  * - GET    /sessions/:id/processes/:pid/read?stream&cursor&limit → 200 {text,...} /400 stream/cursor/limit /404
@@ -18,6 +19,7 @@ import { parseActingHeaders, requireOwnedSession } from './ownership.js';
 import { redactPhysicalRoots } from '../../fs/redact.js';
 import type { WorkspaceManager } from '../../workspace/manager.js';
 import type { MySqlJobRegistry } from '../../shell/job-registry.js';
+import type { JobSnapshot } from '../../shell/job-types.js';
 
 export interface PublicProcessDeps {
   readonly workspaceManager: WorkspaceManager;
@@ -38,7 +40,57 @@ function actingFrom(c: import('hono').Context): Record<string, string | undefine
   return h;
 }
 
+function publicStatus(status: JobSnapshot['status']): string {
+  if (status === 'stopping') return 'cancel_requested';
+  if (status === 'killed') return 'cancelled';
+  return status;
+}
+
+function publicProcess(entry: JobSnapshot, sessionId: string) {
+  return {
+    process_id: entry.id,
+    session_id: sessionId,
+    run_id: entry.runId ?? null,
+    command: entry.label,
+    status: publicStatus(entry.status),
+    pid: entry.pid,
+    exit_code: entry.exitCode,
+    started_at: new Date(entry.startedAt).toISOString(),
+    finished_at: entry.finishedAt == null
+      ? null
+      : new Date(entry.finishedAt).toISOString(),
+  };
+}
+
 export function registerPublicProcessRoutes(app: Hono, deps: PublicProcessDeps): void {
+  app.get('/sessions/:sessionId/processes', async (c) => {
+    const sessionId = c.req.param('sessionId') ?? '';
+    let roots: readonly string[] = [];
+    try {
+      const acting = parseActingHeaders(actingFrom(c));
+      const own = await requireOwnedSession(sessionId, deps, acting, roots);
+      roots = own.physicalRoots;
+      const url = new URL(c.req.url);
+      const limit = Number(url.searchParams.get('limit') ?? '100');
+      if (!Number.isSafeInteger(limit) || limit < 1 || limit > 1000) {
+        throw badRequest('limit must be 1..1000');
+      }
+      const owner = { orgId: own.workspace.orgId, userId: own.workspace.userId, workspaceId: own.workspace.workspaceId };
+      const runId = url.searchParams.get('run_id');
+      const status = url.searchParams.get('status');
+      const entries = runId
+        ? await deps.jobRegistry.listByRun(runId, owner, limit)
+        : await deps.jobRegistry.list(owner, limit);
+      const processes = entries
+        .map((entry) => publicProcess(entry, sessionId))
+        .filter((entry) => !status || entry.status === status);
+      return c.json({ processes });
+    } catch (err) {
+      const code = err instanceof HttpError ? err.status : 500;
+      return c.json(errorBody(err, roots), code as never);
+    }
+  });
+
   // GET single
   app.get('/sessions/:sessionId/processes/:processId', async (c) => {
     const sessionId = c.req.param('sessionId') ?? '';
@@ -51,7 +103,7 @@ export function registerPublicProcessRoutes(app: Hono, deps: PublicProcessDeps):
       const owner = { orgId: own.workspace.orgId, userId: own.workspace.userId, workspaceId: own.workspace.workspaceId };
       const entry = await deps.jobRegistry.get(processId, owner).catch(() => null);
       if (!entry) throw notFound('Process not found');
-      return c.json(entry);
+      return c.json(publicProcess(entry, sessionId));
     } catch (err) {
       const status = err instanceof HttpError ? err.status : 500;
       return c.json(errorBody(err, roots), status as never);
@@ -75,9 +127,18 @@ export function registerPublicProcessRoutes(app: Hono, deps: PublicProcessDeps):
       if (!Number.isFinite(offset) || offset < 0) throw badRequest('offset must be >= 0');
       if (limit !== undefined && (!Number.isFinite(limit) || limit <= 0)) throw badRequest('limit must be > 0');
       const owner = { orgId: own.workspace.orgId, userId: own.workspace.userId, workspaceId: own.workspace.workspaceId };
-      const logs = await deps.jobRegistry.read(processId, owner, '0-0', limit ?? 8192).catch(() => null);
+      const logs = await deps.jobRegistry.read(processId, owner, `0-${offset}`, limit ?? 8192).catch(() => null);
       if (!logs) throw notFound('Process not found');
-      return c.json({ process_id: processId, ...(logs as object) });
+      return c.json({
+        process_id: processId,
+        stdout: logs.text,
+        stderr: '',
+        next_offset: Number(logs.nextCursor.split('-')[1] ?? offset),
+        completed: !['running', 'stopping'].includes(logs.snapshot.status),
+        truncated: logs.truncated,
+        full_log_location: logs.stdoutSpillRef ?? null,
+        log_total: logs.logTotal,
+      });
     } catch (err) {
       const status = err instanceof HttpError ? err.status : 500;
       return c.json(errorBody(err, roots), status as never);

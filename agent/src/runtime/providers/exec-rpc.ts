@@ -31,6 +31,7 @@ export interface ExecRpcConfig {
   readonly orgId: string;
   readonly userId: string;
   readonly workspaceId: string;
+  readonly runId?: string | undefined;
   /** 当前 fence，未设置时传 0（pre-run session.ensure 特例由服务端校验）。 */
   readonly fenceToken: number;
   /** 仅用于错误脱敏的物理根列表；必填无默认值（fail-closed）。 */
@@ -63,6 +64,7 @@ function randomHex(len: number): string {
 }
 
 const execRpcAls = new AsyncLocalStorage<ExecRpcConfig>();
+const execJobIdAls = new AsyncLocalStorage<string>();
 
 /** 按 Run 覆盖租户/围栏；Cordis 插件在 boot 时用环境占位构造，prompt 时绑定真值。 */
 export function runWithExecRpc<T>(config: ExecRpcConfig, fn: () => T): T {
@@ -71,6 +73,15 @@ export function runWithExecRpc<T>(config: ExecRpcConfig, fn: () => T): T {
 
 export function currentExecRpc(fallback: ExecRpcConfig): ExecRpcConfig {
   return execRpcAls.getStore() ?? fallback;
+}
+
+/** Bridge the synchronous dsh-jobs start() call into the nested shell.start(). */
+export function runWithExecJobId<T>(id: string, fn: () => T): T {
+  return execJobIdAls.run(id, fn);
+}
+
+export function currentExecJobId(): string | undefined {
+  return execJobIdAls.getStore();
 }
 
 /** 组合插件在 yaml `config: {}` 下从环境装配 HMAC；完整对象则原样使用。 */

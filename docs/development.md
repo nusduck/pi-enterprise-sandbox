@@ -20,7 +20,8 @@
 # 0. 环境模板（勿提交真实 .env）
 cp .env.example .env
 # 编辑 .env：至少填入 LLMIO_BASE_URL / LLMIO_API_KEY；可选 SANDBOX_API_TOKEN
-# 多用户归属（默认关闭）: SANDBOX_AUTH_ENABLED=true + AUTH_ENABLED=true + SANDBOX_JWT_SECRET
+# 多用户归属（默认关闭）: AUTH_ENABLED=true + SANDBOX_JWT_SECRET
+# SANDBOX_AUTH_ENABLED 仅是 BFF 的旧别名；JWT 凭据由 Agent 管理，exec 不读取。
 # 关闭鉴权即回退 open 单用户模式；ownership 列与 bootstrap 回填结果保留
 
 # 1. Python（只为跑 tests/ 的仓库卫生检查，不是执行面服务）
@@ -162,63 +163,24 @@ prompt 的记忆。
 5. Agent 扫描系统层与调用者自己的用户层 Skill 根，再应用可选的 `AgentVersion.skills` allowlist；工作区始终从空目录起步，Skill 不复制进 workspace
 6. 重新构建服务或创建新 session 以刷新系统层 registry
 
-**方式 B — 用户对话安装**
+**方式 B — 用户草稿与启用**
 
-Skill 分两层：
-
-| 层 | 路径 | 可见范围 | 可写 |
-|----|------|----------|------|
-| 系统 | `/home/sandbox/skill`（仓库 `./skills`） | 所有人 | 否 |
-| 用户 | `/home/sandbox/skill-user/<orgId>/<userId>` | 仅该用户 | 是 |
-
-每个 Run 只扫描 `[系统层, 自己的用户目录]`，系统层优先。用户目录在 named volume
-上，所以装过的 skill **跨对话、跨容器重建都在**，但**不跨用户** —— 别人（哪怕同组织）
-的 agent 上下文里看不到，Sandbox 执行时也只 bind 调用者本人的目录。
-
-Skill 生命周期在所有部署环境中使用同一套行为，不读取开发/生产模式开关。安全性来自
-用户目录隔离、当前回合附件绑定、归档校验，以及所有变更工具的审批。
+用户 Skill 分成 owner-scoped 草稿与发布副本。模型用普通 `write` / `bash` 在
+`/home/sandbox/skill-draft` 创建或修改包；草稿不进发现与 prompt。用户随后在
+Settings → Capabilities → Skills 点击 Enable，Agent 校验包并复制到
+`/home/sandbox/skill-user/<orgId>/<userId>/<package>`，写入 `user_skill_enablements`。
+exec 只把当前 owner 的发布包逐个 `ro_bind` 进运行环境。Disable 删除发布副本与账本行，
+草稿保留。
 
 ```bash
 # .env
 SKILLS_ROOT=/home/sandbox/skill
 SKILLS_USER_ROOT=/home/sandbox/skill-user
+# 仅 exec 读取；缺失时草稿写面 fail-closed。Compose 已显式设置。
+SANDBOX_SKILL_DRAFT_ROOT=/var/sandbox/skill-draft
 # 可选审计文件
 # SKILLS_AUDIT_LOG=/tmp/skill-audit.jsonl
 ```
-
-注册的工具（`skill-lifecycle` 扩展，per-Run 绑定调用者身份）：
-
-| 工具 | 作用 |
-|------|------|
-| `skill_list` | 列出两层可见 package（含 tier / description / 是否可编辑） |
-| `skill_install` | 安装单个 package：当前回合上传的 `.zip`（`source="attachment"`，默认），或模型自己在沙盒里搭好并打包的 `.zip` / `.skill`（`source="sandbox"`，传 `path` 与 `source_digest`） |
-| `skill_create` | 把与用户确认后的说明和文本文件原子生成成一个 package |
-| `skill_uninstall` | 删除自己装的 package（系统层不可删） |
-| `skill_edit` | 修改已安装用户 package 里的一个或多个文件；不能用来新建 package。`files: [{path, content}]` 一次提交一组改动（同一个 package，最多 32 个文件，全成或全败），旧的单文件 `path` + `content` 形参仍然接受 |
-
-上传流程复用聊天附件：前端把 ZIP 作为 Dataset 上传到当前 Sandbox session，Run 中保留
-结构化 `attachment_id`。Agent 只把当前回合的 attachment id 交给 `skill_install`；审批通过后，
-Worker 使用 owner-scoped Sandbox client 下载内容，在 Agent 用户 Skill 卷内的临时目录安全解压、
-校验唯一 `SKILL.md`、原子替换并自动 reload。URL 不是工具参数。
-
-`source="sandbox"` 是给「模型自己写一个 Skill」用的：模型用普通 `write` / `bash` 在
-workspace 或 `/tmp` 里搭包、跑通、打成 ZIP，然后把**归档路径**交给 `skill_install`。
-路径先过 Agent 侧逻辑路径归一化（Skill 根被显式拒绝——只读挂载不能既是安装源又是
-安装目标），再由 exec 的路径策略二次限定在该 session 的 workspace/temp 根内。
-取回字节走已有的 owner-scoped `GET /sessions/{id}/files/download`，
-之后与上传路径**汇流到同一个** `installSkillArchive`：同样的解压、校验、原子替换。
-换句话说，这条路增加的是「够得着一个归档」的方式，不是第二条写入 Skill 根的路径。
-
-`source="sandbox"` 另外**必须**带 `source_digest`（归档的 sha256，64 位小写十六进制）。
-原因是两条来源锚定字节的方式不同：attachment 由用户本回合上传的 attachment id 锚定，
-而沙盒路径只是一个位置——`skill_install` 是 high risk，参数先入账本、审批通过后**重放**执行，
-而这期间 workspace 一直可写。没有 digest，用户批准的归档与最终安装的归档可以不是同一份。
-下载完成后按字节重算 sha256，不等即拒绝安装并同时给出两个摘要，不会"安装当前那一份"。
-模型自己提供摘要并不削弱这一点：想装别的包它本来就可以直接提议，审批要挡的正是那个；
-digest 挡住的是**批准之后掉包**。
-
-`skill_create` 是“和 Agent 交互生成”的安装入口：Agent 收集并确认需求后，在一次高风险
-工具调用中提交 `name`、`description`、`instructions` 与可选文件；用户批准后才落盘。
 
 #### Bundled Skill dependencies
 
@@ -240,8 +202,8 @@ normal execution still sees the read-only `/home/sandbox/skill` bind mount for
 instructions and source inspection, while the wrapper runs the corresponding
 build-time copy under `/usr/local/lib/pi-skill-runtime`.
 
-所有变更工具（install/create/edit/uninstall）默认 high risk。ZIP 解压拒绝 traversal、链接、
-特殊文件、重复路径、加密条目和 zip bomb；通用 `write` / `edit` / `bash` 不能写 Skill 根。
+旧的 `skill_install/create/edit/uninstall` 工具已经退役。安全闸门只在启用：拒绝路径穿越、
+符号链接、特殊文件、系统 Skill 同名遮蔽、超出文件数或体积上限；已发布副本只读。
 
 ### 配置工具风险等级与审批
 
@@ -302,7 +264,7 @@ AgentVersion 侧（同一份语义，只能收紧）：
 
 ### 上下文压缩（compaction）
 
-自动压缩由 Pi SDK 负责，默认开启：上下文 token 超过
+自动压缩由 DSH `dsh-compaction` 负责，默认开启：上下文 token 超过
 `contextWindow - reserveTokens` 时触发。默认 `reserveTokens=16384`、
 `keepRecentTokens=20000`。每次压缩会产生一条 `session.compacted` 事件。
 
@@ -337,7 +299,7 @@ AgentVersion 侧（同一份语义，只能收紧）：
 3. `agent/src/application/` — Run / Session recovery / Event SSE / A2A services（不认识 cordis）
 4. `agent/src/runtime/` — DSH 组合层：plugins 清单、remote providers、policy 挂载点、SSE 投影
 5. `agent/src/infrastructure/dsh/` — 与组合层的接线（`runtime-factory`）
-6. `agent/src/infrastructure/mcp/` — `pi-mcp-adapter`（DSH 没有 MCP transport；禁止自研 MCP Client 主路径）
+6. `agent/src/runtime/bundle/mcp-entries.ts` — `MCP_SERVERS_JSON` 到出厂 `dsh-mcp-client` 插件条目的生成与校验
 7. `agent/src/infrastructure/sandbox/sandbox-client.ts` — 公共面 client（数据集下载、Skill 归档）；工具路径走 runtime remote provider，**不** dual-write Run
 8. 类型检查: `npm --prefix agent run typecheck`
 9. 单元测试: `npm test --prefix agent`
@@ -395,16 +357,12 @@ docker compose exec redis redis-cli -a redis_dev_only FLUSHALL
 # Python — 快速全部（CI 同款）
 uv run pytest tests/ -q --tb=short
 
-# 详细 / 定向
-uv run pytest -v
-uv run pytest tests/test_integration.py -v
+# 定向仓库卫生检查
+uv run pytest tests/test_repository_layout.py -q
 
-# 覆盖率（可选；非 CI 强制门禁）
-uv run pytest --cov=sandbox --cov-report=term-missing
-uv run pytest --cov=sandbox --cov-report=html
-
-# Node API Server（node:test，含 sdk-compat）
-node --test api-server/tests/*.test.js
+# Node 服务
+npm test --prefix contract
+npm test --prefix exec
 npm test --prefix agent
 npm test --prefix api-server
 
@@ -557,7 +515,7 @@ cd frontend && npm run build && ls dist/
 | `/ready` 返回 503 | 检查 `SANDBOX_WORKSPACES_ROOT` 可写与 MySQL（`SANDBOX_DATABASE_URL`）可达；日志仅有 warning，不含连接串 |
 | SSE 流中断 | 检查 API Server 和 Sandbox 日志；确认客户端 abort 后执行已取消 |
 
-## 安全治理（SDK Extension + Sandbox 双重强制）
+## 安全治理（Agent DSH policy + Exec 双重强制）
 
 开发时默认开启人审：
 
@@ -566,8 +524,8 @@ cd frontend && npm run build && ls dist/
 APPROVAL_MODE=ask
 ```
 
-- **Agent 层**：`agent/src/extensions` 固定装配 sandbox、审批、审计和交互能力；用户级 `skill-lifecycle` 的所有变更工具也进入同一 MySQL durable approval ledger。普通 Workspace 工具默认不审批。
-- **Sandbox 层**：`policy_checker` 与 `/internal/v1/*` execution handlers 独立执行路径、owner、HMAC claim 和 hard-deny；普通 workspace bash/python/node 不进入审批。
+- **Agent 层**：`agent/src/runtime/policy/` 在 DSH 工具管线挂载风险表、参数守卫、审批、审计与 Run 收敛保护；外部副作用审批写入 MySQL durable ledger。
+- **Exec 层**：TypeScript `/internal/v1/*` handlers 独立校验 owner、HMAC claim、路径、hard-deny 与 Bubblewrap 隔离；普通 workspace bash/python/node 不进入审批。
 - **审批模式**：`ask`（默认）创建 durable approval 并暂停；`deny` 明确拒绝
   `approval_required` 且不创建审批；`auto_approve` 仅用于明确受控的研发旁路并写
   bypass 审计，生产配置拒绝该模式。旧 `APPROVAL_ENABLED=true|false` 分别映射到
@@ -575,8 +533,8 @@ APPROVAL_MODE=ask
 - **定向测试**：
 
 ```bash
-cd agent && node --test tests/pi/enterprise-policy-layers.unit.test.js tests/pi/enterprise-policy-fail-closed.unit.test.js
-uv run pytest tests/test_policy_checker.py tests/test_approval.py tests/test_policy_approval.py -q
+npm test --prefix agent -- tests/runtime/policy.test.ts tests/runtime/governance-approval-store.test.ts
+npm test --prefix exec -- test/internal-v1-security.test.ts test/shell-policy.test.ts
 ```
 
 详见 [architecture.md](./architecture.md)「双重强制」一节。

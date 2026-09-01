@@ -29,7 +29,12 @@ import {
   MysqlSessionStore,
   MysqlSessionStoreConfigError,
   readMysqlSessionStoreConfig,
+  type SessionStoreOwner,
 } from './providers/mysql-session-store.js';
+import {
+  MysqlSessionPersistence,
+  SessionOwnerBindings,
+} from './providers/mysql-session-persistence.js';
 import type { PersistenceBackend } from '@deepseek-ai/dsh-session-persistence';
 
 // 组合根感知全部自建 provider。策略挂载点见 runtime/policy/*（W5）。
@@ -104,21 +109,67 @@ export function createRemoteProviders(ctx: Context, config: ExecRpcConfig): {
 export function createSessionBackend(opts?: {
   physicalRoots?: readonly string[];
   requireMysql?: boolean;
+  ownerForSession?: (sessionId: string) => SessionStoreOwner;
+  currentOwner?: () => SessionStoreOwner;
 }): PersistenceBackend<string> {
   const roots = opts?.physicalRoots ?? [];
   if (opts?.requireMysql === true) {
     const cfg = readMysqlSessionStoreConfig();
-    return new MysqlSessionStore(cfg, { physicalRoots: roots });
+    return new MysqlSessionStore(cfg, {
+      physicalRoots: roots,
+      ownerForSession: opts.ownerForSession,
+      currentOwner: opts.currentOwner,
+    });
   }
   try {
     const cfg = readMysqlSessionStoreConfig();
-    return new MysqlSessionStore(cfg, { physicalRoots: roots });
+    return new MysqlSessionStore(cfg, {
+      physicalRoots: roots,
+      ownerForSession: opts?.ownerForSession,
+      currentOwner: opts?.currentOwner,
+    });
   } catch (err) {
     if (err instanceof MysqlSessionStoreConfigError) {
       return new InMemorySessionStore(roots);
     }
     throw err;
   }
+}
+
+/** Mount the one process-wide DSH persistence service; every session bind stays owner-scoped. */
+export function mountSessionPersistence(
+  ctx: Context,
+  opts: { physicalRoots?: readonly string[]; requireMysql?: boolean } = {},
+): MysqlSessionPersistence {
+  let existing: MysqlSessionPersistence | undefined;
+  try {
+    existing = ctx.get('sessionPersistence') as MysqlSessionPersistence | undefined;
+  } catch {
+    existing = undefined;
+  }
+  if (existing !== undefined) {
+    if (typeof existing.bindOwner !== 'function' || typeof existing.has !== 'function') {
+      throw new Error('boot: unexpected sessionPersistence provider is already mounted');
+    }
+    return existing;
+  }
+  let sessions: { list?: unknown } | undefined;
+  try {
+    sessions = ctx.get('sessions') as { list?: unknown } | undefined;
+  } catch {
+    sessions = undefined;
+  }
+  if (typeof sessions?.list !== 'function') {
+    throw new Error('boot: ctx.sessions must be mounted before sessionPersistence');
+  }
+  const bindings = new SessionOwnerBindings();
+  const backend = createSessionBackend({
+    physicalRoots: opts.physicalRoots,
+    requireMysql: opts.requireMysql,
+    ownerForSession: (sessionId) => bindings.ownerForSession(sessionId),
+    currentOwner: () => bindings.currentOwner(),
+  });
+  return new MysqlSessionPersistence(ctx, backend, bindings);
 }
 
 /**

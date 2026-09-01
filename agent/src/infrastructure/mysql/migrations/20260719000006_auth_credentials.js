@@ -1,8 +1,8 @@
 /**
- * Browser auth credentials (Sandbox register/login).
+ * Browser auth credentials (Agent register/login authority).
  *
  * Agent `users` rows remain platform identity (ULID + external_subject).
- * Passwords live here, keyed by external username, so Sandbox can issue JWT
+ * Passwords live here, keyed by external username, so Agent can issue JWT
  * without stuffing secrets into the platform users table.
  *
  * @param {import('knex').Knex} knex

@@ -30,6 +30,8 @@ import { A2aAuditRepository } from '../infrastructure/mysql/repositories/a2a-aud
 import { ArtifactRepository } from '../infrastructure/mysql/repositories/artifact-repository.js';
 import { ProcessExecutionRepository } from '../infrastructure/mysql/repositories/process-execution-repository.js';
 import { CronJobRepository } from '../infrastructure/mysql/repositories/cron-job-repository.js';
+import { SkillEnablementRepository } from '../infrastructure/mysql/repositories/skill-enablement-repository.js';
+import { AuthCredentialRepository } from '../infrastructure/mysql/repositories/auth-credential-repository.js';
 import { OutboxRepository } from '../infrastructure/outbox/outbox-repository.js';
 import { createStubRunExecutor } from '../application/run-executor.js';
 import { PINNED_PI_SDK_VERSION } from '../infrastructure/dsh/constants.js';
@@ -216,6 +218,11 @@ export function createRepositoryBundle(
     artifacts: new ArtifactRepository(db),
     processExecutions: new ProcessExecutionRepository(db),
     cronJobs: new CronJobRepository(db, { now }),
+    skillEnablements: new SkillEnablementRepository(db, {
+      now,
+      generateId: opts.generateId,
+    }),
+    authCredentials: new AuthCredentialRepository(db, { now }),
   };
 }
 

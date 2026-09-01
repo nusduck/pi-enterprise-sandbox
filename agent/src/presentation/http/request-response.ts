@@ -78,14 +78,27 @@ export function readIdempotencyKey(req: RequestLike): string | null {
   return value !== undefined && value.trim() ? value.trim() : null;
 }
 
-export function readBody(req: ReadableRequest): Promise<string> {
+export function readBody(req: ReadableRequest, maxBytes = 1_048_576): Promise<string> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
+    let bytes = 0;
+    let settled = false;
     req.on('data', (chunk) => {
+      if (settled) return;
+      bytes += chunk.length;
+      if (bytes > maxBytes) {
+        settled = true;
+        reject(new Error('Request body too large'));
+        return;
+      }
       chunks.push(chunk);
     });
-    req.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
-    req.on('error', reject);
+    req.on('end', () => {
+      if (!settled) resolve(Buffer.concat(chunks).toString('utf8'));
+    });
+    req.on('error', (error) => {
+      if (!settled) reject(error);
+    });
   });
 }
 

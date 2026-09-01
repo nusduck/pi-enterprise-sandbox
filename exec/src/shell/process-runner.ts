@@ -273,12 +273,15 @@ export async function runForeground(
 // ── 后台执行：start() ───────────────────────────────────────────────
 
 export interface LiveProcessHandle {
+  pid: number | null;
+  pgid: number | null;
   status: 'running' | 'completed' | 'killed';
   exitCode: number | null;
   signal: NodeJS.Signals | null;
   done: Promise<void>;
   readOutput(): { readonly delta: string; readonly lossy: boolean };
   kill(): boolean;
+  writeStdin(data: string, eof: boolean): void;
 }
 
 export interface StartBackgroundOptions {
@@ -306,12 +309,17 @@ export function startBackground(
   const tracker = new LiveOutputTracker(opts.outputMaxChars);
 
   const proc: LiveProcessHandle = {
+    pid: null,
+    pgid: null,
     status: 'running',
     exitCode: null,
     signal: null,
     done: Promise.resolve() as Promise<void>,
     readOutput: () => tracker.read(),
     kill: () => false,
+    writeStdin: () => {
+      throw new Error('process is not running');
+    },
   } as LiveProcessHandle;
 
   let child: ChildProcess;
@@ -327,6 +335,15 @@ export function startBackground(
 
   wireOutput(child, tracker.stdout, tracker.stderr);
   writeStdin(child, target.stdin);
+  proc.pid = child.pid ?? null;
+  proc.pgid = child.pid ?? null;
+  proc.writeStdin = (data, eof) => {
+    if (proc.status !== 'running' || child.stdin === null) {
+      throw new Error('process stdin is unavailable');
+    }
+    if (data.length > 0) child.stdin.write(data);
+    if (eof) child.stdin.end();
+  };
 
   let killRequested = false;
   proc.kill = () => {

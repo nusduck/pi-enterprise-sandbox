@@ -2,12 +2,15 @@
 
 | 字段 | 值 |
 |---|---|
-| 状态 | **Accepted**（2026-08-31 决策锁定；**2026-08-31 第二版重写**；实施未开始） |
+| 状态 | **Accepted / Implemented**（2026-08-31 决策锁定；2026-09-01 收口） |
 | 日期 | 2026-08-31 |
 | 决策所有者 | Agent runtime maintainers |
 | 适用范围 | `agent/` 的 DSH 组合层与 `application/` 对循环的接线；`exec/` 的可写根扩一项；skill 的闸门位置与前端 skill 面 |
 | 关联决策 | [ADR 0007](0007-agent-runtime-rebuild-on-dsh.md)（本 ADR 收窄其组合方式，并改写 D4 中「不组合 `dsh-user-approval`」）、[ADR 0008](0008-sandbox-isolation-and-fs-seam-redesign.md)（D2 的可写根集合扩一项，机制不变；D4 的逐包绑定成为 skill 闸门的执行面）、[ADR 0006](0006-user-skill-enablement-gate.md)（**本 ADR 吸收并改写它的 P1**：四个变更工具不是降级而是整体取消，闸门只剩「启用」） |
 | 上游参照 | 官方 `npx @deepseek-ai/dsh web`（`dsh-base` → `dsh-web-app` → `dsh-agent-presets`）；本仓库 **不采用** 后两层包。注意 `dsh-base` 依赖里的 `@deepseek-ai/dsh-web` 是 **web 搜索/抓取 seam**（配 `dsh-tool-web` / `dsh-web-search-deepseek`），不是那个 web app；`dsh-web-app` 只在 CLI 包 `@deepseek-ai/dsh` 的依赖里 |
+
+> 本文各节的“现状差距”记录的是 **2026-08-31 决策时快照**，用于解释施工顺序，
+> 不是当前缺口。当前实现结论见“现状与实施顺序”末尾及 `docs/STATUS.md`。
 
 ## 背景
 
@@ -262,18 +265,12 @@ answerer 插件不存在；resume 是 application 侧重放。
 
 `application/` **不再 `registerTool`。**
 
-> ## ⚠️ 2026-09-01 实施后的两处如实记录
+> ## 2026-09-01 收口
 >
-> 1. **启用闸门还没有 HTTP 路由。** 上表「启用态与校验（`skills/manager` +
->    Capabilities HTTP）」里的前半已实现并在真环境验证过
->    （`skills/enablement.ts` + `manager.enable()/disable()`，见
->    [`../evidence/2026-08-31-compose-e2e-adr0009.md`](../evidence/2026-08-31-compose-e2e-adr0009.md)），
->    **后半没有**：还没有给人点的那个按钮接出去。在它接出来之前，「人在 UI 上启用」
->    这条闸门只能由运维手工调用，不要当成已交付。
-> 2. **停泊有一个固有边界**：并发工具里若有一个撞审批，D5 采用的
->    `agent.cancel()` 会中止整轮，当时**在飞**的另一个工具会留在
->    `tool_executions` 的 `RUNNING` 上。不是数据丢失（字节该落的都落了），
->    但那些行需要一个收尾者。本 ADR 未处理。
+> 1. Capabilities HTTP/BFF/UI 已提供 owner-scoped 启用/停用；启用同时复制只读发布副本
+>    并写 `user_skill_enablements`，账本失败则撤销发布副本。
+> 2. Run 因审批停泊时，其它仍为 `RUNNING` 的并行 ToolExecution 会收敛为
+>    `UNKNOWN / RUN_PARKED_PARALLEL_TOOL_UNKNOWN`，不再留下永久运行态。
 
 **现状差距**：整表未接线。
 
@@ -437,7 +434,7 @@ RunEvent → BFF SSE、跨租户 404、A2A、trace 查询。
 - **为 MCP 的按 AgentVersion 差异引入 preset**，或每 Run 重新建 MCP 连接。
 - **把 MCP 密钥明文写进 overlay 的 patch YAML**（只走 secretRef，与凭据插件同规矩）。
 
-## 现状与实施顺序（未开始）
+## 现状与实施顺序（已完成）
 
 > **任务分解与验收见 [`design/dsh-host-tools.md`](../design/dsh-host-tools.md)**（2026-08-31 写，含逐条对代码的现状复核；下面这份顺序是它的 H0–H9 的依据，差别是那份在最前面多一步「起栈取证」）。
 
@@ -462,6 +459,9 @@ RunEvent → BFF SSE、跨租户 404、A2A、trace 查询。
    → 一次草稿建 skill 并启用。
 
 验证仍遵守：断言语义；改运行时装配必须起栈，不能只靠单测。
+
+2026-09-01 收口补齐了原清单之外的两项：Skill 启用 HTTP/BFF/UI 与并行工具停泊收尾；
+同时把 exec 的生产装配接到 owner-scoped 已发布 Skill 目录，并把 exec/contract 纳入 CI。
 
 ## 影响
 

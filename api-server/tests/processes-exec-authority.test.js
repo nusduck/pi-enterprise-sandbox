@@ -3,9 +3,11 @@ import { after, before, test } from 'node:test';
 
 const originalFetch = globalThis.fetch;
 const originalAgentUrl = process.env.AGENT_BASE_URL;
+const originalSandboxUrl = process.env.SANDBOX_BASE_URL;
 const originalAuthEnabled = process.env.AUTH_ENABLED;
 
 process.env.AGENT_BASE_URL = 'http://agent.processes.test';
+process.env.SANDBOX_BASE_URL = 'http://exec.processes.test';
 process.env.AUTH_ENABLED = 'false';
 
 const {
@@ -15,16 +17,26 @@ const {
   handleReadProcess,
 } = await import(`../src/routes/processes.js?test=${Date.now()}`);
 
-const PROCESS = '01K0G2PAV8FPMVC9QHJG7JPN5P';
+const PROCESS = 'bash-123456789abc';
+const SESSION = '01K0G2PAV8FPMVC9QHJG7JPN52';
+const WORKSPACE = '01K0G2PAV8FPMVC9QHJG7JPN53';
 const calls = [];
 
 before(() => {
   globalThis.fetch = async (input, init = {}) => {
     const url = new URL(String(input));
-    calls.push({ path: `${url.pathname}${url.search}`, init });
-    if (url.pathname.includes('01K0G2PAV8FPMVC9QHJG7JPN5X')) {
+    calls.push({ host: url.host, path: `${url.pathname}${url.search}`, init });
+    if (url.host === 'agent.processes.test') {
+      return Response.json({
+        sandbox_session_id: SESSION,
+        workspace_id: WORKSPACE,
+        org_id: '01K0G2PAV8FPMVC9QHJG7JPN4Z',
+        user_id: '01K0G2PAV8FPMVC9QHJG7JPN50',
+      });
+    }
+    if (url.pathname.includes('foreign')) {
       return Response.json(
-        { error: 'Process not found', code: 'NOT_FOUND' },
+        { error: 'Process not found', code: 'not_found' },
         { status: 404 },
       );
     }
@@ -40,19 +52,18 @@ before(() => {
     if (url.pathname.endsWith('/read')) {
       return Response.json({
         process_id: PROCESS,
-        stream: url.searchParams.get('stream'),
         cursor: url.searchParams.get('cursor'),
         next_cursor: '0-9',
-        data: 'chunk',
+        text: 'chunk',
       });
     }
     if (url.pathname.endsWith('/signal') || url.pathname.endsWith('/cancel')) {
-      return Response.json({ ok: true, status: 'running' });
+      return Response.json({ process_id: PROCESS, status: 'running' });
     }
-    if (url.pathname === '/internal/processes') {
+    if (url.pathname.endsWith('/processes')) {
       return Response.json({ processes: [{ process_id: PROCESS, status: 'running' }] });
     }
-    return Response.json({ error: 'Process not found', code: 'NOT_FOUND' }, { status: 404 });
+    return Response.json({ error: 'Process not found' }, { status: 404 });
   };
 });
 
@@ -60,6 +71,8 @@ after(() => {
   globalThis.fetch = originalFetch;
   if (originalAgentUrl === undefined) delete process.env.AGENT_BASE_URL;
   else process.env.AGENT_BASE_URL = originalAgentUrl;
+  if (originalSandboxUrl === undefined) delete process.env.SANDBOX_BASE_URL;
+  else process.env.SANDBOX_BASE_URL = originalSandboxUrl;
   if (originalAuthEnabled === undefined) delete process.env.AUTH_ENABLED;
   else process.env.AUTH_ENABLED = originalAuthEnabled;
 });
@@ -68,12 +81,8 @@ function responseCapture() {
   return {
     status: 0,
     body: '',
-    writeHead(status) {
-      this.status = status;
-    },
-    end(body = '') {
-      this.body = String(body);
-    },
+    writeHead(status) { this.status = status; },
+    end(body = '') { this.body = String(body); },
   };
 }
 
@@ -81,21 +90,28 @@ function request() {
   return { headers: {}, traceId: 'a'.repeat(32) };
 }
 
-test('BFF loads process history from Agent with trusted owner headers', async () => {
+test('BFF authorizes the session in Agent then lists exec-owned processes', async () => {
   const response = responseCapture();
-  await handleListProcesses(new URL('http://bff/api/processes?limit=20'), response, request());
+  await handleListProcesses(
+    new URL(`http://bff/api/processes?session_id=${SESSION}&limit=20`),
+    response,
+    request(),
+  );
   assert.equal(response.status, 200);
   assert.equal(JSON.parse(response.body).processes[0].process_id, PROCESS);
-  const call = calls.find((item) => item.path === '/internal/processes?limit=20');
-  assert.ok(call.init.headers['X-Acting-User-Id']);
-  assert.ok(call.init.headers['X-Acting-Organization-Id']);
+  assert.equal(JSON.parse(response.body).processes[0].session_id, SESSION);
+  assert.ok(calls.some((item) => item.host === 'agent.processes.test'));
+  const execCall = calls.find((item) => item.path === `/sessions/${WORKSPACE}/processes?limit=20`);
+  assert.ok(execCall);
+  assert.ok(execCall.init.headers['X-Acting-User-Id']);
+  assert.ok(execCall.init.headers['X-Acting-Organization-Id']);
 });
 
-test('BFF preserves log/read cursors and process control payloads', async () => {
+test('BFF preserves log/read cursors and session-scoped control payloads', async () => {
   const logsResponse = responseCapture();
   await handleGetProcessLogs(
     PROCESS,
-    new URL('http://bff/api/processes/x/logs?offset=7&limit=50'),
+    new URL(`http://bff/api/processes/x/logs?session_id=${SESSION}&offset=7&limit=50`),
     logsResponse,
     request(),
   );
@@ -105,7 +121,7 @@ test('BFF preserves log/read cursors and process control payloads', async () => 
   const readResponse = responseCapture();
   await handleReadProcess(
     PROCESS,
-    new URL('http://bff/api/processes/x/read?stream=stderr&cursor=0-7&limit=64'),
+    new URL(`http://bff/api/processes/x/read?session_id=${SESSION}&stream=stderr&cursor=0-7&limit=64`),
     readResponse,
     request(),
   );
@@ -115,7 +131,7 @@ test('BFF preserves log/read cursors and process control payloads', async () => 
   await handleProcessAction(
     PROCESS,
     'signal',
-    { signal: 'SIGKILL' },
+    { session_id: SESSION, signal: 'SIGKILL' },
     signalResponse,
     request(),
   );
@@ -123,14 +139,22 @@ test('BFF preserves log/read cursors and process control payloads', async () => 
   assert.deepEqual(JSON.parse(signalCall.init.body), { signal: 'SIGKILL' });
 });
 
-test('BFF does not soft-fail an Agent owner-scoped 404', async () => {
-  const response = responseCapture();
+test('BFF requires session scope and preserves exec owner-scoped 404', async () => {
+  const missing = responseCapture();
   await handleGetProcessLogs(
-    '01K0G2PAV8FPMVC9QHJG7JPN5X',
+    PROCESS,
     new URL('http://bff/api/processes/x/logs'),
-    response,
+    missing,
     request(),
   );
-  assert.equal(response.status, 404);
-  assert.equal(JSON.parse(response.body).code, 'NOT_FOUND');
+  assert.equal(missing.status, 400);
+
+  const foreign = responseCapture();
+  await handleGetProcessLogs(
+    'foreign',
+    new URL(`http://bff/api/processes/x/logs?session_id=${SESSION}`),
+    foreign,
+    request(),
+  );
+  assert.equal(foreign.status, 404);
 });

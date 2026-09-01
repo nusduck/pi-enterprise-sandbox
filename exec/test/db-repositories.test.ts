@@ -24,6 +24,7 @@ import {
   InMemoryDatasetStore,
   InMemorySessionEventStore,
 } from '../src/db/repositories/index.js';
+import { sqlLimit } from '../src/db/client.js';
 
 test('DDLs contain required columns and indexes', () => {
   // workspace_quota_reservations: W2-C 已给的 DDL，W3-D 固化
@@ -199,4 +200,10 @@ test('re-exports: JobStore and QuotaStore are same objects as W2 definitions', a
   const { MySqlJobStore } = await import('../src/shell/job-store-mysql.js');
   const { MySqlJobStore: ReExported } = await import('../src/db/repositories/exec-jobs.js');
   assert.equal(MySqlJobStore, ReExported);
+});
+
+test('MySQL LIMIT is validated before interpolation', () => {
+  assert.equal(sqlLimit(100), '100');
+  assert.throws(() => sqlLimit(Number.NaN), /limit must be an integer/);
+  assert.throws(() => sqlLimit(1001), /limit must be an integer/);
 });

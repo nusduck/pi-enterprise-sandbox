@@ -12,7 +12,7 @@ Pi Enterprise Sandbox API 分层：
 无 Python Agent Runtime、无双 Runtime 开关。Agent **支持零 Skill 启动**；共享 `skills/` 挂载与 package skills 由 Agent Profile 策略 + session capability registry 控制。
 
 > **Sandbox 端口 8081 仅 Docker 内网可访问；compose 里该服务没有 `ports:` 段，dev 与生产都不发布宿主端口**。Agent 调用正式执行能力使用 HMAC-authenticated `/internal/v1/*`；浏览器不能直连 Sandbox，也不能提供 Sandbox service credential。BFF `/api/*` 是唯一浏览器 API 边界。
-> Agent 侧 MCP 由启动期 `tools/list`（`pi-mcp-adapter`）直连企业 MCP Gateway/Server，不经过 exec，也不向浏览器暴露凭据。对外的 Streamable HTTP MCP facade 是 exec 镜像的第二入口（compose: `sandbox-mcp`），只走 `/internal/mcp/v1/*` 窄桥。
+> Agent 侧 MCP 由启动期 `@deepseek-ai/dsh-mcp-client` 直连企业 MCP Gateway/Server 并执行 `tools/list`，不经过 exec，也不向浏览器暴露凭据。对外的 Streamable HTTP MCP facade 是 exec 镜像的第二入口（compose: `sandbox-mcp`），只走 `/internal/mcp/v1/*` 窄桥。
 
 ---
 
@@ -136,9 +136,11 @@ data: {"sequence":18,"event":{...},"ts":...,"eventId":"01K..."}
 
 `GET /api/capabilities/{skills,mcp,tools,models}` 仍从 diagnostics 投影列表；字段可附加 `status` / `dynamic`。
 
-`skills` 是**按调用者投影**的：Agent 用 `X-Acting-User-Id` / `X-Acting-Organization-Id` 解析出与该用户下一次 Run 相同的 skill 根（系统层 + 该用户自己的 `<orgId>/<userId>` 目录），每项以 `source` 标明层级——`shared-skill-root`（内置只读）或 `user-skill-root`（该用户**已启用**）。
+`skills` 是**按调用者投影**的：Agent 用服务端写入的 `X-Acting-User-Id` / `X-Acting-Organization-Id` 解析内部 owner，列出系统层、该 owner 的已发布层和草稿层。`source` 分别为 `shared-skill-root`、`user-skill-root`、`draft-skill-root`；浏览器传入的同名 header 不会被透传。
 
 **2026-08-31（ADR 0009 D7）起，用户侧 Skill 有三个根**：系统根（只读，永远进 prompt）、已启用根（逐包只读，进 prompt）、**草稿根 `/home/sandbox/skill-draft`**（每用户一个，模型可写，**不进发现也不进 prompt**）。模型用 `write` / `bash` 在草稿根里造包——`skill_install` / `skill_create` / `skill_edit` / `skill_uninstall` 这四个工具**已整体取消**。闸门只剩一处：人在 UI 上按「启用」，那一刻平台校验结构、**把字节复制成一份只读的已发布副本**、记内容摘要与启用态（`user_skill_enablements`，owner-scoped）。因为是两份字节，模型之后改草稿动不了已启用的包，所以不需要每 Run 重算摘要。请求不带身份时只投影系统层；用户层基目录**永远不整根扫描**，否则会跨租户列出他人已安装的 Skill。
+
+启用/停用入口是 `POST /api/capabilities/skills/{name}/enable|disable`。BFF 只做代理与身份投影；Agent 校验包、更新发布副本与 MySQL 账本。启用账本写失败时会撤回发布副本，保持 fail-closed。
 
 `GET /api/runs/{run_id}/trace` 返回 owner-scoped durable span 树：
 
@@ -198,15 +200,16 @@ Agent 模型侧权威清单工具：`capabilities`（`action=list|search|describ
 | `POST` | `/api/approvals/{id}/decide` | 批准 / 拒绝 |
 | `GET` | `/api/artifacts` | Artifact 列表 |
 | `GET` | `/api/datasets` | Dataset 列表 |
-| `GET` | `/api/processes` | 长进程列表 |
-| `GET` | `/api/processes/{id}` | 进程详情 |
-| `GET` | `/api/processes/{id}/logs\|read` | 进程输出（游标读） |
-| `POST` | `/api/processes/{id}/stdin\|signal\|cancel\|kill` | 进程控制 |
+| `GET` | `/api/processes` | 长进程列表；必传 `session_id`，可按 `run_id` / `status` 筛选 |
+| `GET` | `/api/processes/{id}` | 进程详情；必传 `session_id` |
+| `GET` | `/api/processes/{id}/logs\|read` | 进程输出（游标读）；必传 `session_id` |
+| `POST` | `/api/processes/{id}/stdin\|signal\|cancel\|kill` | 进程控制；JSON body 必传 `session_id` |
 | `GET` `POST` | `/api/cron-jobs` | 列出 / 创建定时任务 |
 | `GET` `PATCH` `DELETE` | `/api/cron-jobs/{id}` | 详情 / 修改 / 删除 |
 | `GET` | `/api/cron-jobs/{id}/runs` | 该定时任务的历史 Run |
 | `POST` | `/api/cron-jobs/{id}/run` | 立即触发一次 |
 | `GET` | `/api/capabilities/{skills,mcp,tools,models}` | 从 diagnostics 投影的能力清单 |
+| `POST` | `/api/capabilities/skills/{name}/enable\|disable` | 启用草稿 / 停用用户 Skill；owner-scoped |
 | `GET` | `/api/extensions/diagnostics` | Extension / Profile / allowlist 状态 |
 | `GET` | `/api/a2a/config` | A2A 配置（**admin**） |
 | `POST` | `/api/a2a/credentials` | 签发 A2A 凭据（**admin**） |
@@ -219,10 +222,23 @@ Agent 模型侧权威清单工具：`capabilities`（`action=list|search|describ
 
 `/api/a2a/*` 要求 `actingRole === 'admin'`，否则 403 `ADMIN_REQUIRED`。
 
+进程接口的事实与控制权在 exec 的 `exec_jobs`，不在 Agent。BFF 先让 Agent
+按当前浏览器身份授权 `session_id` 并取得其 `workspace_id`，再用 owner-scoped
+exec 公共适配器查询或控制；返回给浏览器时仍投影原 `session_id`。不存在或
+跨租户访问统一返回 404。`logs` 返回 `next_offset`、`completed`、`truncated`、
+`log_total`；进程详情含 `process_id`、`run_id`、`status`、`command` 和时间字段。
+`kill` 是 `signal` 的兼容别名，默认同样发送 `SIGTERM`；需要终止升级语义使用
+`cancel`，需要指定信号则在 body 传 `signal`。Agent 不提供
+`/internal/processes*` 路由。
+
 admin 只有一个来源：`SANDBOX_AUTH_ADMIN_USERNAMES`（逗号分隔，大小写不敏感）。
 注册接口忽略客户端提交的 `role` / `organization_id`；名单内的用户名注册即为
 admin，已存在的账号在下次 login 或 `/auth/me` 时提升，移出名单则降级。
 `BFF_DEV_ACTING_ROLE` 只影响 `AUTH_ENABLED=false` 的开发身份，不会提升真实用户。
+
+认证数据与 token 的唯一权威是 Agent：BFF 的四条 `/api/auth/*` 适配器调用
+Agent `/internal/auth/*`，成功后只把 JWT 写入 HttpOnly Cookie。exec 不保存密码、
+不签发或验证浏览器 JWT，也没有 `/auth/*` 路由。
 
 ### BFF 健康检查
 
@@ -277,11 +293,11 @@ Base URL: `http://sandbox:8081`（Docker 内网）
 - 兼容适配器认证: 仅受控 BFF/测试环境可使用 `X-API-Key`；正式 Agent
   internal plane 使用短期 HMAC claim（scope、owner、run/session、body
   digest），不接受一个永不过期的全局 token 作为执行授权
-- Public 端点豁免认证: `/health`, `/ready`, `/metrics`, `/docs`, `/openapi`, `/redoc`, `/auth/*`
-- **可选用户归属**（`SANDBOX_AUTH_ENABLED=true`）:
+- exec 的 public 探针豁免认证：`/health`, `/ready`, `/metrics`；浏览器认证只存在于 BFF `/api/auth/*`
+- **可选用户归属**（BFF `AUTH_ENABLED=true`；`SANDBOX_AUTH_ENABLED` 仅保留为 BFF 的旧配置别名）:
   - 浏览器终端用户：`POST /api/auth/register|login` 后由 BFF 写入 `HttpOnly; SameSite=Lax` 会话 Cookie；JWT 不暴露给前端 JavaScript。`POST /api/auth/logout` 清理会话。
-  - 非浏览器 API 客户端仍可使用 `Authorization: Bearer <jwt>`；BFF 验证后转发可信用户上下文。
-  - 兼容 BFF→Sandbox adapters: 服务 `X-API-Key` + 用户 JWT；或服务 key + `X-Acting-User-Id` / `X-Acting-Organization-Id` / `X-Acting-Role`
+  - 非浏览器 API 客户端仍可使用 `Authorization: Bearer <jwt>`；BFF 经 Agent `/internal/auth/me` 验证后写入可信 `X-Acting-*` 上下文。
+  - BFF→exec compatibility adapters 只发送服务 `X-API-Key` + 已验证的 `X-Acting-User-Id` / `X-Acting-Organization-Id` / `X-Acting-Role`；exec 不接收浏览器 JWT。
   - 正式 Agent→Sandbox execution: `/internal/v1/*` HMAC claim（scope + owner + run/session + body digest + replay jti）；不接受浏览器 JWT 或裸 service key 作为执行授权
   - **服务 Token alone 不是终端用户**：不能替代 BFF/Agent 注入的 actor；跨用户/跨组织资源统一 fail-closed
   - 跨用户/跨组织访问 Conversation 返回 **404**（不泄露资源是否存在）
@@ -298,32 +314,24 @@ Base URL: `http://sandbox:8081`（Docker 内网）
 | 方法 | 路径 | 对应工具 |
 |------|------|----------|
 | `POST` | `/internal/v1/sessions/ensure` | Session 绑定 |
-| `POST` | `/internal/v1/files/read` | `read` |
-| `POST` | `/internal/v1/files/ls` | `ls` |
-| `POST` | `/internal/v1/files/find` | `find` |
-| `POST` | `/internal/v1/files/grep` | `grep` |
-| `POST` | `/internal/v1/files/write` | `write` |
-| `POST` | `/internal/v1/files/edit` | `edit` |
-| `POST` | `/internal/v1/skills/read` | Skill 读取（只读根） |
-| `POST` | `/internal/v1/executions/bash` | `bash` |
-| `POST` | `/internal/v1/executions/python` | `python` |
-| `POST` | `/internal/v1/processes/start` | `process_start` |
-| `POST` | `/internal/v1/processes/status` | `process_status` |
-| `POST` | `/internal/v1/processes/read` | `process_read` |
-| `POST` | `/internal/v1/processes/kill` | `process_kill` |
+| `POST` | `/internal/v1/fs/resolve\|stat\|lstat\|list` | `read` / `read_image` / `glob` 的远程 FS provider |
+| `POST` | `/internal/v1/fs/read-text\|read-bytes\|write-text\|edit-text` | `read` / `read_image` / `write` / `edit` |
+| `GET` | `/internal/v1/fs/stream-text` | 大文本流式读取 |
+| `POST` | `/internal/v1/fs/find\|grep` | `glob` / `grep` |
+| `POST` | `/internal/v1/shell/run\|start` | 前台 / 后台 `bash` |
+| `POST` | `/internal/v1/jobs/status\|read\|kill\|signal\|stdin` | exec 作业查询与控制 |
 | `POST` | `/internal/v1/artifacts/submit` | `submit_artifact` |
 | `POST` | `/internal/v1/artifacts/download` | 交付物取回 |
 | — | `/internal/mcp/v1/*` | `sandbox-mcp` facade（独立部署，见 [`sandbox-mcp.md`](./sandbox-mcp.md)） |
 
-这 13 个 sandbox-bridge 工具（`read` `ls` `find` `grep` `write` `edit` `bash`
-`python` `process_start` `process_status` `process_read` `process_kill`
-`submit_artifact`）是模型能看到的全部 Sandbox 工具面，由
-`agent/src/infrastructure/dsh/constants.js` 的 `SANDBOX_TOOL_NAMES` 固定，
-并有守卫测试断言其中不含任何 SQL/DSN 工具。
+模型默认工具面由 `agent/src/runtime/policy/tool-names.ts` 的
+`ENTERPRISE_DEFAULT_TOOLS` 唯一定义：`read` / `write` / `edit` / `read_image`、
+`glob` / `grep`、`bash`、`job_list` / `job_output` / `job_kill`、`todo_write`、
+`skill`、`subagent`、`submit_artifact`、`ask_user_question`。其中只有需要工作区
+字节或进程的工具走上述 exec provider；MCP 工具在启动时另行发现并仍受策略层控制。
 
-`ls` / `find` / `grep` 是 SDK 同名本地工具的沙箱替代品：那三个因为会读 Agent
-容器的文件系统而被永久排除（`LOCAL_FILESYSTEM_TOOL_NAMES`），此处的版本走
-internal plane、只读、有预算、可与 `read` 并行。
+本地 FS / Shell / Jobs provider 不进入生产装配；Agent 只组装远程 provider，
+因此模型不能读取或启动 Agent 容器内的文件与进程。
 
 ---
 
@@ -333,12 +341,10 @@ internal plane、只读、有预算、可与 `read` 并行。
 `/approvals` 与 `/conversations` **均已删除**。执行只存在于 `/internal/v1/*`；
 审批与 Conversation 的唯一权威是 Agent MySQL，经 BFF `/api/*` 访问。
 
-当前 Sandbox 进程实际挂载的非 internal 路由只有：
+当前 exec（compose 服务名 `sandbox`）实际挂载的非 internal 路由只有：
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| `POST` | `/auth/register` `/auth/login` | 兼容认证 |
-| `GET` | `/auth/me` | 当前用户 |
 | `DELETE` | `/sessions/{session_id}` | 按保留策略清理该 Session 的私有存储 |
 | — | `/sessions/{id}/files/*` | 见下方 Files |
 | `GET` `POST` | `/sessions/{id}/datasets` | 列出 / 创建 Dataset |

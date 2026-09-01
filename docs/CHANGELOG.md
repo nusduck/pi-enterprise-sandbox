@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **用户 Skill 改为草稿 → 人工启用 → 只读发布**：Capabilities 页可启用/停用 owner-scoped Skill；Agent 同步发布副本与 MySQL 启用账本，exec 只把当前 owner 的已发布包逐个只读挂载。旧 `skill_install/create/edit/uninstall` 工具退役。
+- **CI 纳入 `contract/` 与 `exec/`**：两包都执行独立 typecheck 与测试；Python 仓库卫生环境显式声明零 setuptools package，`uv sync` 不再因平铺目录自动发现失败。
+- **长进程事实权威迁到 exec**：DSH 后台 `bash` 预留并透传唯一 process id，exec 在 `exec_jobs` 登记和控制；BFF 先由 Agent 授权 Sandbox Session 并解析 Workspace，再直接查询 exec。Agent 的旧 `/internal/processes*` 生产路径已删除。
+- **DSH 会话走原生 MySQL persistence**：`ctx.sessionPersistence` 接到 `dsh_sessions` / `dsh_session_events`；同一会话后续 Run 调用 `agents.resume`，不再每次 `create`。出厂 JSONL 后端保持关闭。配置读 `AGENT_DATABASE_URL`；mysql2 JSON 列按字符串读取，避免 resume 时把已解析对象再次 `JSON.parse`。Worker 进程被 SIGKILL 后，新 Worker 仍能 resume 并把上一轮用户口令送回模型上下文。
+
 - **Agent 引擎从 Pi 换成 DeepSeek Harness（`@deepseek-ai/dsh-*` `0.1.1-rc.2`）**：`@earendil-works/pi-coding-agent` 不再是直接依赖。工具走 DSH 的 `ctx.fs` / `ctx.shell` / `ctx.jobs` 远程 provider（HMAC RPC 到 exec），企业策略挂在 DSH 四个既有挂载点上，不再装 Pi Extension 包。SSE 契约按 `tests/fixtures/sse_events.json` 保持逐字节不变，BFF / 前端零改动。
 - **执行面从 Python FastAPI 换成 TypeScript `exec/`**：compose 服务名仍叫 `sandbox` / `sandbox-mcp`（同一镜像两个入口），对 BFF 的会话面契约不变。搜索、产物（控制面快照）、数据集（三段式流式）按语义实现，不是占位。
 - **`agent/` 源码从 JS 迁到 TypeScript**，DSH 组合层并进 `agent/src/runtime/`。容器跑 `dist/server.js` / `dist/worker.js`。`strict` 仍关着，是已知待办。
@@ -19,6 +24,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`/app/pi-agent-home` 与 `AGENT_PI_AGENT_DIR` / `PI_CODING_AGENT_DIR`**：Pi 资源根随引擎一起失效，配置与镜像目录一并删掉。
 
 ### Fixed
+
+- **Python exec 迁移后登录全 404**：BFF 仍把 `/api/auth/register|login|me` 转发到已删除的 exec `/auth/*`。认证凭据本来就在 Agent-owned MySQL `auth_credentials`；现在签发、校验、管理员角色收口全部由 Agent `/internal/auth/*` 承担，BFF 继续只管理 HttpOnly Cookie，并删除两侧指向 exec 的死认证客户端。生产缺少或使用弱 `SANDBOX_JWT_SECRET` 时 Agent fail-closed。
+- **跨服务 smoke 不再启动已删除的 Python 服务**：CI 脚本从 `uvicorn sandbox.main` 和不存在的 `agent/server.js`/`worker.js` 切到已构建的 exec/Agent `dist` 入口，cross-service job 显式安装并构建 contract、exec、agent。
+- Exec 镜像不再用尾部 `|| true` 吞掉 `apt-get install` 失败；隔离原语或模型工具链缺失时构建立即 fail-closed。
+- **审批停泊不再留下永久 RUNNING 的并行工具账本**：同一轮其它在飞 ToolExecution 收敛为 `UNKNOWN`，错误码为 `RUN_PARKED_PARALLEL_TOOL_UNKNOWN`。
+- **同一 DSH 会话后续 Run 不再发生 journal header 冲突或多根**：runtime 重建保留恢复出的 header，空 checkpoint manifest 接到 journal 的真实 leaf。
+- **MySQL 进程/产物/数据集列表不再因 `LIMIT ?` 返回 500**：分页值先做整数上限校验，再作为 SQL 常量插入；用户数据仍使用参数绑定。
 
 - **Skill 入口脚本允许嵌套在 `scripts/` 子目录下**: 守卫要求脚本路径匹配 `/scripts/<单个文件>$`，于是仓库自带的首方包**当场就跑不了**——`xlsx/scripts/office/pack.py`、`skill-creator/scripts/` 之外的 `eval-viewer/generate_review.py` 都被 `SKILL_SCRIPT_COMMAND_DENIED` 拒绝，而这是唯一被放行的执行入口。现在 `scripts/` 下任意深度都接受；同时补上 `..` 拒绝——旧的扁平正则顺带挡住了 `…/scripts/../hidden.py` 这类「读起来像 scripts/」的路径，放开嵌套后必须显式挡。
 
@@ -83,7 +95,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **A2A 官方流式调用现在会收到终态事件**: `message/stream` 与 `tasks/resubscribe` 在 `submitted` / `working` 之后就断流——没有 `status-update(final=true)`，也没有 Agent 最终正文；而 `tasks/get` 同时报 `completed` 并能读到完整回复。只依赖流式事件的官方客户端因此永远等不到终态，只能额外轮询 `tasks/get`。根因不在 SSE 传输层，而在事件词表对不上：A2A 投影器的 `RUN_STATUS_EVENT_TYPES` 列的是 `run.succeeded` / `run.status` / `run.terminal`，**这三个名字全仓没有任何一处发出过**；Run 服务实际写进账本的是 `plan.md` §事件词表里那一套——`applyRunTransitionInTxn` 默认 `run.status.changed`，成功终态是 `run.completed`。于是终态事件在投影时被整条丢掉，流跑到 Run 终态后静默返回。现有单测没能挡住，因为它们自己也用 `run.succeeded` 造数据。修复三处：投影器认下真实词表（`run.status.changed` / `run.completed`）；`run.status.changed` 这类**名字不含目标状态**的事件只认账本 payload 里的 `status`，绝不回落到「当前 Run 行状态」——那是分页时读到的，可能已经终态，会投出过早的 `final: true`；治理面写的 `{ context, data }` 形状 payload 也纳入状态提取。**同一根因还吞掉了 Agent 的最终正文**：`message.completed` 由 observability 投影器写成 `{ context, data }` 形状，`role` / `message` / `messageId` 都在 `data` 下面一层，而投影只看 `event.*` 与 `event.payload.*`——于是**没有任何一条 message.completed 投影得出来**，官方客户端从流里拿不到回复文本。这一条是重建容器后拿真实 Run 的事件日志回放才暴露的（单测 fixture 恰好用的是扁平形状）。现在两种形状都读，`user` / `toolResult` 回合仍然不投影为 agent 消息。另外，流在 Run 终态收尾时如果一个 `final: true` 帧都没发过，现在会按权威 Run 状态补发一帧终态 `status-update`（A2A 0.3 §3.1.2 要求任务生命周期流以 final 帧收尾），并且只有在事件页确实排空后才相信「Run 行已终态」这个信号——一整页事件可能还压着后续的终态事件。回归测试 `agent/tests/a2a/a2a-terminal-event-vocabulary.unit.test.js` 用真实词表复现，并加了一条棘轮：`src/application` 里任何 `eventType: 'run.*'` 字面量若不在投影器词表内即失败。
 
-- **Sandbox 出站调用全部有超时了**: AGENTS.md §2 要求「所有出站调用有超时」，但两侧 Sandbox 公共面客户端都漏了。Agent 侧 `sandbox-client.js` 的 `sbFetch` 默认 `timeoutMs = null`，公开面**没有一个方法**传超时——会话删除时的工作区 GC（`conversation-service`）、运维进程面的 logs/read/stdin/signal/cancel（`process-access-service`）、文件与 artifact 读取，全都能被一个挂起的 Sandbox 无限期钉住；`checkHealth()` 连 AbortSignal 都没有。BFF 侧同样：`routes/files.js` 三处字节代理（文件下载、artifact 下载、上传）与 `routes/datasets.js` 两处（上传、列表）都是裸 `fetch`，而同仓 `agent-client.js` 早有 `AbortSignal.timeout` 先例，config 注释也只豁免 SSE 流。现在两侧都有默认 deadline：控制面 30s（BFF 用既有的 `SANDBOX_REQUEST_TIMEOUT_MS`），字节流只约束「到响应头」这一段，拿到 header 后清掉定时器，大文件不会被拦腰截断；上传因为要先把 body 送上去，单独给一个宽松但有界的 10 分钟上限。BFF 超时映射为 504 `SANDBOX_TIMEOUT`，浏览器自己断开仍走调用方原本的错误，不会被误报成 Sandbox 超时。未新增环境变量。
+- **Sandbox 出站调用全部有超时了**: AGENTS.md §2 要求「所有出站调用有超时」，但两侧 Sandbox 公共面客户端都漏了。Agent 侧 `sandbox-client.js` 的 `sbFetch` 默认 `timeoutMs = null`，公开面**没有一个方法**传超时——会话删除时的工作区 GC（`conversation-service`）、当时仍在 Agent 的运维进程面（现已迁到 BFF→exec）、文件与 artifact 读取，全都能被一个挂起的 Sandbox 无限期钉住；`checkHealth()` 连 AbortSignal 都没有。BFF 侧同样：`routes/files.js` 三处字节代理（文件下载、artifact 下载、上传）与 `routes/datasets.js` 两处（上传、列表）都是裸 `fetch`，而同仓 `agent-client.js` 早有 `AbortSignal.timeout` 先例，config 注释也只豁免 SSE 流。现在两侧都有默认 deadline：控制面 30s（BFF 用既有的 `SANDBOX_REQUEST_TIMEOUT_MS`），字节流只约束「到响应头」这一段，拿到 header 后清掉定时器，大文件不会被拦腰截断；上传因为要先把 body 送上去，单独给一个宽松但有界的 10 分钟上限。BFF 超时映射为 504 `SANDBOX_TIMEOUT`，浏览器自己断开仍走调用方原本的错误，不会被误报成 Sandbox 超时。未新增环境变量。
 
 - **流式 Run 不再被 trace 投影的乐观锁判失败**: 带 thinking/message delta 的长回答（数百到数千条事件）在工具和模型都成功后仍可能 `FAILED: trace span optimistic upsert did not converge`。根因是 append 事务在 InnoDB REPEATABLE READ 下用非锁定 `SELECT` 读 Run 根 span，再对 `attributes_json` + `updated_at` 做 CAS；`GET /runs/{id}/trace` 的 `materializeRunFacts` 不持有 `runs` 行锁，提交更新后 append 的 16 次重试仍读到同一份快照，几毫秒内耗尽。表现就是 8 月 23 日真实用户场景和 Run `01M0YZ6C0HZAQX1GGZ8CHAA9K5`：工具完成、回答写完，终态却是失败。事务内改为 `SELECT … FOR UPDATE`（锁定读看到最新行并串行化该 span 的写者）。投影 CAS 若仍 livelock，append **提交事件、不回滚**——事件是账本，trace 可由 `GET /trace` 重建；其它投影错误仍然随事务失败。
 

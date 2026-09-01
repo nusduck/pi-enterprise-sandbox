@@ -19,7 +19,7 @@ describe('trusted Run request identity', () => {
   before(() => {
     globalThis.fetch = async (input) => {
       const url = String(input);
-      if (url === 'http://sandbox.test/auth/me') {
+      if (url === 'http://agent.test/internal/auth/me') {
         return new Response(JSON.stringify({
           id: 'user_a',
           organization_id: 'org_a',
@@ -52,7 +52,7 @@ describe('trusted Run request identity', () => {
     globalThis.fetch = originalFetch;
   });
 
-  it('resolves actor only after sandbox token verification', async () => {
+  it('resolves actor only after Agent token verification', async () => {
     const auth = await resolveTrustedAuth(request());
     assert.equal(auth.actingUserId, 'user_a');
     assert.equal(auth.actingOrganizationId, 'org_a');

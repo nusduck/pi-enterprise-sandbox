@@ -18,11 +18,13 @@ def test_cross_service_smoke_uses_formal_mysql_redis_and_worker() -> None:
     assert "AGENT_DATABASE_URL: agentMysqlUrl" in source
     assert "AGENT_REDIS_URL: redisUrl" in source
     assert "SMOKE_SANDBOX_REPLAY_REDIS_URL" in source
-    assert "SANDBOX_INTERNAL_PLANE_ENABLED: 'true'" in source
     assert "SANDBOX_INTERNAL_HMAC_KEYRING" in source
-    assert "SANDBOX_AUTH_ENABLED: 'true'" in source
     assert source.count("SANDBOX_API_TOKEN: SMOKE_SANDBOX_API_TOKEN") >= 3
-    assert "['worker.js']" in source
+    assert "['dist/main.js']" in source
+    assert "['dist/server.js']" in source
+    assert "['dist/worker.js']" in source
+    assert "uvicorn" not in source
+    assert "sandbox.main:app" not in source
     assert "/api/chat" not in source
     assert "/api/conversations" in source
     assert "/runs" in source
@@ -43,3 +45,5 @@ def test_cross_service_ci_provisions_mysql_and_redis_services() -> None:
     assert "SMOKE_REDIS_URL: redis://" in job
     assert "SMOKE_SANDBOX_REPLAY_REDIS_URL: redis://" in job
     assert 'SMOKE_START_WORKER: "true"' in job
+    assert "npm ci --prefix exec" in job
+    assert "npm run build --prefix exec" in job

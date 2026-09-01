@@ -2,7 +2,8 @@
 
 import { config } from '../config.js';
 import { HttpError } from '../http/errors.js';
-import { authFromRequest, createSandboxClient } from '../services/sandbox-client.js';
+import { authFromRequest } from '../services/sandbox-client.js';
+import { authMe } from '../services/agent-auth-client.js';
 import {
   getAgentRun,
   resolveAgentSandboxSession,
@@ -54,13 +55,10 @@ export async function resolveTrustedAuth(req) {
   if (!forwarded.authorization) {
     throw new HttpError(401, 'AUTH_REQUIRED', 'Authentication required');
   }
-  // Still use Sandbox authMe for browser session identity (not Run status).
-  const sandbox = createSandboxClient({
-    auth: bindRequestTraceContext(forwarded, req?.traceContext),
+  const user = await authMe(forwarded, {
     traceId: req?.traceId || null,
     traceContext: req?.traceContext || null,
   });
-  const user = await sandbox.authMe();
   const userId = user?.id != null ? String(user.id) : '';
   const organizationId =
     user?.organization_id != null ? String(user.organization_id) : '';

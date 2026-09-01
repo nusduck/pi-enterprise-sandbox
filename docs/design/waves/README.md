@@ -116,8 +116,8 @@ Wave 3 标 ✅ 时，搜索、产物、数据集三块是占位实现。补齐�
 > `agent/src/runtime/providers/remote-*.ts`，公共面 client 仍留在
 > `infrastructure/sandbox/`。
 >
-> 还没做的不在这张施工表里：Linux 真机、LLM 网关链路、CI 纳入 exec/contract、
-> `strict`、以及 [HANDOFF.md](HANDOFF.md)「剩下什么」列出的零碎。
+> 2026-09-01 已把 exec/contract 纳入 CI；仍未关闭的是 `STATUS.md` 所列 live/ops 证据、
+> Agent 主树 `strict`，以及 [HANDOFF.md](HANDOFF.md) 的少量命名债务。
 
 **起栈后才发现、299 个绿测试没抓到的两个 bug**（详见 [HANDOFF](HANDOFF.md) 的坑表）：
 共享 cordis Context 导致每进程只有第一次产物提交成功；把 Python 的 `host:*` 通配

@@ -445,28 +445,6 @@ export function createSandboxClient({ traceId = null, traceState = null, auth = 
       });
     },
 
-    // ── Auth proxy ──────────────────────────────────
-    async authRegister(body) {
-      const resp = await sbFetch('/auth/register', {
-        method: 'POST',
-        body: JSON.stringify(body),
-      });
-      return resp.json();
-    },
-
-    async authLogin(body) {
-      const resp = await sbFetch('/auth/login', {
-        method: 'POST',
-        body: JSON.stringify(body),
-      });
-      return resp.json();
-    },
-
-    async authMe() {
-      const resp = await sbFetch('/auth/me', { method: 'GET' });
-      return resp.json();
-    },
-
     // ── Health ──────────────────────────────────────
     async checkHealth() {
       try {

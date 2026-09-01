@@ -241,6 +241,57 @@ describe('restart-safe MySQL-authoritative idempotency', () => {
     assert.equal(e2.filter((e) => e.type === 'approval.requested').length, 0);
   });
 
+  it('parking one parallel tool terminalizes other RUNNING tools as UNKNOWN', async () => {
+    const { gov } = makeGov(knex, nextId);
+    await gov.recordPolicyDecision({
+      toolCallId: 'tc-running-peer',
+      toolName: 'bash',
+      args: { command: 'slow-command' },
+      decision: {
+        decision: 'allow',
+        reasonCode: 'LOCAL_SANDBOX_ALLOW',
+        reason: 'ok',
+        policyId: 'p',
+        riskLevel: 'low',
+      },
+    });
+    await gov.recordToolStarted({
+      toolCallId: 'tc-running-peer',
+      toolName: 'bash',
+      args: { command: 'slow-command' },
+    });
+    await gov.recordPolicyDecision({
+      toolCallId: 'tc-needs-approval',
+      toolName: 'mcp__crm__delete',
+      args: { id: '1' },
+      decision: {
+        decision: 'require_approval',
+        reasonCode: 'EXTERNAL_HIGH_RISK',
+        reason: 'needs approval',
+        policyId: 'p',
+        riskLevel: 'high',
+      },
+    });
+    await gov.requestApproval({
+      toolCallId: 'tc-needs-approval',
+      toolName: 'mcp__crm__delete',
+      args: { id: '1' },
+      decision: {
+        decision: 'require_approval',
+        reasonCode: 'EXTERNAL_HIGH_RISK',
+        reason: 'needs approval',
+        policyId: 'p',
+        riskLevel: 'high',
+      },
+    });
+
+    const peer = state.tables.tool_executions.find(
+      (row) => row.tool_call_id === 'tc-running-peer',
+    );
+    assert.equal(peer.status, TOOL_EXECUTION_STATUS.UNKNOWN);
+    assert.equal(peer.error_code, 'RUN_PARKED_PARALLEL_TOOL_UNKNOWN');
+  });
+
   it('second recorder: start/end same result no new events; different result conflicts', async () => {
     const { gov: g1 } = makeGov(knex, nextId);
     await g1.recordPolicyDecision({

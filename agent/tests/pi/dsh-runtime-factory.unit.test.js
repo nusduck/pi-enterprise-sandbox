@@ -17,6 +17,14 @@ const HMAC = {
   SANDBOX_BASE_URL: 'http://exec.test',
 };
 
+function freshPersistence() {
+  return {
+    bindOwner: () => () => {},
+    has: async () => false,
+    runAsOwner: (_owner, fn) => fn(),
+  };
+}
+
 function baseInput(overrides = {}) {
   return {
     model: { id: 'deepseek-v4-flash', provider: 'deepseek-official' },
@@ -89,9 +97,7 @@ describe('createDshRuntimeFactory.create', () => {
           rpcCalls.push({ ctx, rpc });
           return { fs: { kind: 'fs' }, shell: { kind: 'shell' }, jobs: { kind: 'jobs' } };
         },
-        createSessionBackend() {
-          return { name: 'mysql-memory', close: async () => {} };
-        },
+        mountSessionPersistence: () => freshPersistence(),
         assembleSystemPrompt(lead) {
           return `assembled:${lead ?? ''}`;
         },
@@ -152,6 +158,99 @@ describe('createDshRuntimeFactory.create', () => {
     await runtime.dispose();
   });
 
+  it('keeps the recovered journal header and entries across runtime rebuilds', async () => {
+    const recovered = {
+      header: {
+        type: 'session',
+        version: 3,
+        id: baseInput().agentSession.agentSessionId,
+        timestamp: '2026-07-18T00:00:00.000Z',
+        cwd: '/home/sandbox/workspace',
+      },
+      entries: [{ type: 'custom', id: 'prior-entry', parentId: null }],
+    };
+    const factory = createDshRuntimeFactory({
+      env: HMAC,
+      bootRuntime: async () => ({}),
+      loadRuntime: async () => ({
+        createRemoteProviders: () => ({ fs: {}, shell: {}, jobs: {} }),
+        mountSessionPersistence: () => freshPersistence(),
+        assembleSystemPrompt: () => 'p',
+      }),
+      async createAgent() {
+        return {
+          agent: {
+            followup() {},
+            async whenIdle() {},
+            session: { events: [] },
+          },
+        };
+      },
+    });
+
+    const runtime = await factory.create(baseInput({
+      piSnapshot: { snapshotJson: recovered },
+    }));
+    assert.deepEqual(runtime.sessionManager.getHeader(), recovered.header);
+    assert.deepEqual(runtime.sessionManager.getEntries(), recovered.entries);
+    await runtime.dispose();
+  });
+
+  it('mounts owner-scoped DSH persistence and resumes an existing session', async () => {
+    const calls = [];
+    let released = false;
+    const persistence = {
+      bindOwner(sessionId, owner) {
+        calls.push({ kind: 'bind', sessionId, owner });
+        return () => { released = true; };
+      },
+      async has(sessionId) {
+        calls.push({ kind: 'has', sessionId });
+        return true;
+      },
+      runAsOwner(_owner, fn) {
+        return fn();
+      },
+    };
+    const factory = createDshRuntimeFactory({
+      env: HMAC,
+      bootRuntime: async () => ({ tag: 'root' }),
+      loadRuntime: async () => ({
+        createRemoteProviders: () => ({ fs: {}, shell: {}, jobs: {} }),
+        mountSessionPersistence(ctx, options) {
+          calls.push({ kind: 'mount', ctx, options });
+          return persistence;
+        },
+        assembleSystemPrompt: () => 'p',
+      }),
+      async createAgent() {
+        assert.fail('persisted session must use resume, not create');
+      },
+      async resumeAgent(ctx, options) {
+        calls.push({ kind: 'resume', ctx, options });
+        return {
+          agent: {
+            id: options.resumeSessionId,
+            followup() {},
+            async whenIdle() {},
+            session: { events: [] },
+          },
+          async dispose() {},
+        };
+      },
+    });
+
+    const runtime = await factory.create(baseInput());
+    assert.equal(calls[0].kind, 'mount');
+    assert.equal(calls[1].kind, 'bind');
+    assert.deepEqual(calls[1].owner, { orgId: 'org1', userId: 'user1' });
+    assert.equal(calls[2].kind, 'has');
+    assert.equal(calls[3].kind, 'resume');
+    assert.equal(calls[3].options.resumeSessionId, baseInput().agentSession.agentSessionId);
+    await runtime.dispose();
+    assert.equal(released, true);
+  });
+
   it('does NOT rebind the shared remotes; the run tenant reaches RPC through the ALS', async () => {
     // 2026-08-31（ADR 0009 D3 / 计划 H3）：这条以前断言的是**相反**的行为
     // ——「每个 Run 对 provider 调一次 rebind」。那正是 ADR 明文禁止的写法：
@@ -173,7 +272,7 @@ describe('createDshRuntimeFactory.create', () => {
           });
           return { fs: bind('fs'), shell: bind('shell'), jobs: bind('jobs') };
         },
-        createSessionBackend: () => ({ name: 'mem' }),
+        mountSessionPersistence: () => freshPersistence(),
         assembleSystemPrompt: () => 'p',
         runWithExecRpc: (cfg, fn) => {
           alsScopes.push(cfg.workspaceId);
@@ -201,7 +300,7 @@ describe('createDshRuntimeFactory.create', () => {
       bootRuntime: async () => ({}),
       loadRuntime: async () => ({
         createRemoteProviders: () => ({ fs: {}, shell: {}, jobs: {} }),
-        createSessionBackend: () => ({ name: 'mem' }),
+        mountSessionPersistence: () => freshPersistence(),
         assembleSystemPrompt: () => 'p',
       }),
       async createAgent(_ctx, options) {
@@ -228,7 +327,7 @@ describe('createDshRuntimeFactory.create', () => {
       bootRuntime: async () => ({}),
       loadRuntime: async () => ({
         createRemoteProviders: () => ({ fs: {}, shell: {}, jobs: {} }),
-        createSessionBackend: () => ({ name: 'mem' }),
+        mountSessionPersistence: () => freshPersistence(),
         assembleSystemPrompt: () => 'p',
       }),
       async createAgent() {

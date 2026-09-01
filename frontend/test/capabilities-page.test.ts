@@ -61,4 +61,11 @@ describe('CapabilitiesPage diagnostics and MCP status contracts', () => {
     assert.doesNotMatch(pageSrc, /owner_user_id/);
     assert.doesNotMatch(pageSrc, /organization_id/);
   });
+
+  it('shows owner-scoped Skill drafts with enable and disable controls', () => {
+    assert.match(pageSrc, /draft-skill-root/);
+    assert.match(pageSrc, /setSkillEnabled/);
+    assert.match(pageSrc, /'Enable' : 'Disable'/);
+    assert.match(pageSrc, /role="alert"/);
+  });
 });

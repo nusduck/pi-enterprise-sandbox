@@ -741,9 +741,9 @@ export class ServiceContainer {
       db: this.knex,
     });
     const sessionProvisioner = await this.createSandboxSessionProvisioner();
-    // Owner-scoped Sandbox HTTP client factory (X-API-Key + X-Acting-*), same
-    // transport ProcessAccessService already uses — not the internal HMAC
-    // plane (that's run-fenced; conversation delete has no run/fence token).
+    // Owner-scoped Sandbox HTTP client factory (X-API-Key + X-Acting-*).
+    // This is the browser/session public adapter, not the run-fenced HMAC plane;
+    // conversation delete has no Run or fence token.
     const { createSandboxClient } = await import(
       '../infrastructure/sandbox/sandbox-client.js'
     );

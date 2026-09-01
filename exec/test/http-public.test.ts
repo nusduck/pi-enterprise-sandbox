@@ -242,6 +242,50 @@ describe('public: byte-identical contract vs Python', () => {
 
   // ── processes (session_processes.py) ───────────────────────────────
 
+  test('GET /processes lists the exec-owned durable jobs for this session', async () => {
+    const id = 'pub_proc_list_1';
+    await initSession(id);
+    let output = 'hello\n';
+    const snap = await jobRegistry.start({
+      kind: 'bash',
+      label: 'printf hello',
+      owner: {
+        orgId: acting['x-acting-organization-id'],
+        userId: acting['x-acting-user-id'],
+        workspaceId: id,
+        runId: 'run_1',
+      },
+      physicalRoots: [],
+      run: () => ({
+        pid: 0,
+        cancel() {},
+        done: new Promise(() => {}),
+        readOutput() {
+          const delta = output;
+          output = '';
+          return { delta, lossy: false };
+        },
+      }),
+    });
+
+    const listed = await app.request(`/sessions/${id}/processes`, { headers: acting });
+    assert.equal(listed.status, 200);
+    const listBody = await listed.json() as { processes: Array<Record<string, unknown>> };
+    assert.equal(listBody.processes[0]?.process_id, snap.id);
+    assert.equal(listBody.processes[0]?.session_id, id);
+    assert.equal(listBody.processes[0]?.run_id, 'run_1');
+    assert.equal(listBody.processes[0]?.command, 'printf hello');
+
+    const logs = await app.request(
+      `/sessions/${id}/processes/${snap.id}/logs?offset=0&limit=100`,
+      { headers: acting },
+    );
+    assert.equal(logs.status, 200);
+    const logBody = await logs.json() as Record<string, unknown>;
+    assert.equal(logBody.stdout, 'hello\n');
+    assert.equal(logBody.next_offset, 6);
+  });
+
   test('GET /processes/:pid/logs — offset<0 → 400', async () => {
     const id = 'pub_proc_1';
     await initSession(id);

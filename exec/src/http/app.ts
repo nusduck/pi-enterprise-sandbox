@@ -23,6 +23,37 @@ import {
 } from '../db/client.js';
 import type { Pool } from 'mysql2/promise';
 import { AGENT_SKILL_PATH } from '../isolation/profile.js';
+import fs from 'node:fs';
+import path from 'node:path';
+
+const OWNER_SEGMENT_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
+const SKILL_NAME_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/;
+
+/** Resolve only this owner's published package directories; never scan the base root. */
+export function enabledSkillPackagesFromRoot(
+  base: string,
+  orgId: string,
+  userId: string,
+): readonly { name: string; sourcePath: string }[] {
+  if (!base || !OWNER_SEGMENT_RE.test(orgId) || !OWNER_SEGMENT_RE.test(userId)) return [];
+  const ownerRoot = path.join(path.resolve(base), orgId, userId);
+  try {
+    return fs.readdirSync(ownerRoot, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory() && SKILL_NAME_RE.test(entry.name))
+      .filter((entry) => {
+        const skillMd = path.join(ownerRoot, entry.name, 'SKILL.md');
+        try {
+          return fs.lstatSync(skillMd).isFile();
+        } catch {
+          return false;
+        }
+      })
+      .map((entry) => ({ name: entry.name, sourcePath: path.join(ownerRoot, entry.name) }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+  } catch {
+    return [];
+  }
+}
 
 export interface ExecAppDeps {
   readonly workspaceManager: WorkspaceManager;
@@ -138,11 +169,14 @@ export function createExecAppFromEnv(env: NodeJS.ProcessEnv = process.env): Exec
   }
 
   const jobRegistry = new MySqlJobRegistry(store);
+  const userSkillRoot = String(env['SANDBOX_USER_SKILLS_ROOT'] ?? '').trim();
   const app = createExecApp({
     workspaceManager,
     jobRegistry,
     keyring,
     systemSkillRoot: env['SANDBOX_SKILLS_ROOT'] ?? AGENT_SKILL_PATH,
+    enabledSkillPackagesFor: (orgId, userId) =>
+      enabledSkillPackagesFromRoot(userSkillRoot, orgId, userId),
     // skill 草稿根（ADR 0009 D7 / 计划 H6.2）。**默认关**：一个可写且不进上下文
     // 的根是新增面，要由部署显式打开（`SANDBOX_SKILL_DRAFT_ROOT`）。
     // 打开后按 owner 分目录——每用户一个，与已启用包的 `<base>/<org>/<user>` 同规矩，

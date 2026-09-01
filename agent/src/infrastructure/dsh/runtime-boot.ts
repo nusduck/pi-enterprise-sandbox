@@ -9,6 +9,7 @@ export {
   assertBootReady,
   createRemoteProviders,
   createSessionBackend,
+  mountSessionPersistence,
   assembleSystemPrompt,
   ENTERPRISE_CLAUSES,
 } from '../../runtime/index.js';

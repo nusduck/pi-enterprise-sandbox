@@ -4,7 +4,7 @@
  * 这里只验证这个函数本身的纯逻辑。
  */
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, realpath, rm, symlink } from 'node:fs/promises';
+import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { after, before, describe, test } from 'node:test';
@@ -129,5 +129,31 @@ describe('草稿根的装配', () => {
     assert.equal(build('../etc', 'user1'), null);
     assert.equal(build('org1', 'a/b'), null);
     assert.equal(build('', 'user1'), null);
+  });
+});
+
+describe('已启用 Skill 的生产装配', () => {
+  test('只列出当前 owner 下带真实 SKILL.md 的发布目录', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'pi-exec-enabled-skills-'));
+    try {
+      const owner = path.join(root, 'org1', 'user1');
+      await mkdir(path.join(owner, 'zeta'), { recursive: true });
+      await mkdir(path.join(owner, 'alpha'), { recursive: true });
+      await mkdir(path.join(owner, 'missing-manifest'), { recursive: true });
+      await mkdir(path.join(root, 'org1', 'user2', 'other-user'), { recursive: true });
+      await writeFile(path.join(owner, 'zeta', 'SKILL.md'), '---\nname: zeta\n---\n');
+      await writeFile(path.join(owner, 'alpha', 'SKILL.md'), '---\nname: alpha\n---\n');
+      await symlink('/etc/passwd', path.join(owner, 'missing-manifest', 'SKILL.md'));
+
+      const { enabledSkillPackagesFromRoot } = await import('../src/http/app.js');
+      assert.deepEqual(enabledSkillPackagesFromRoot(root, 'org1', 'user1'), [
+        { name: 'alpha', sourcePath: path.join(owner, 'alpha') },
+        { name: 'zeta', sourcePath: path.join(owner, 'zeta') },
+      ]);
+      assert.deepEqual(enabledSkillPackagesFromRoot(root, 'org1', 'user2'), []);
+      assert.deepEqual(enabledSkillPackagesFromRoot(root, '../etc', 'user1'), []);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 });

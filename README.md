@@ -118,8 +118,9 @@ SANDBOX_BASE_URL=http://localhost:8081
 
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
-| `SANDBOX_AUTH_ENABLED` / `AUTH_ENABLED` | `false` | 开启后 Sandbox 要求用户 JWT（或服务令牌 + `X-Acting-*`），会话按 owner 隔离，跨租户统一 404 |
-| `SANDBOX_AUTH_ALLOW_PUBLIC_REGISTER` | `true` | 公开自注册；生产必须 `false`（管理员预置 / 邀请制） |
+| `AUTH_ENABLED`（旧别名 `SANDBOX_AUTH_ENABLED`） | `false` | BFF 经 Agent 验证 JWT 后投影可信 owner；跨租户统一 404。exec 不读取浏览器 JWT |
+| `SANDBOX_JWT_SECRET` | _(空)_ | Agent 的浏览器 JWT 签名密钥；生产必须是强密钥 |
+| `SANDBOX_AUTH_ALLOW_PUBLIC_REGISTER` | `true` | Agent 公开自注册；生产必须 `false`（管理员预置 / 邀请制） |
 | `SANDBOX_AUTH_ADMIN_USERNAMES` | _(空)_ | 管理员用户名白名单，逗号分隔、大小写不敏感 |
 
 `SANDBOX_AUTH_ADMIN_USERNAMES` 是 admin 角色的**唯一**来源。注册接口忽略客户端提交的
@@ -203,19 +204,20 @@ Redis 只保存队列、lease、stream、取消信号等运行态；**不是** R
 
 ### Skill
 
-Agent **支持零 Skill 启动**（基础工具 read/write/edit/bash/…）。Skill 分两层，
-Agent 自动发现每个 `*/SKILL.md` 包（详见 [skills/README.md](skills/README.md)）：
+Agent **支持零 Skill 启动**（基础工具 read/write/edit/bash/…）。Skill 分三层
+（详见 [skills/README.md](skills/README.md)）：
 
 | 层 | 路径 | 内容 | 可见范围 | 可写 |
 |----|------|------|----------|------|
 | 系统 | `/home/sandbox/skill` | 本仓库 `./skills` 自带的 package | 所有人 | 否 |
-| 用户 | `/home/sandbox/skill-user/<orgId>/<userId>` | 该用户 `skill_install` 装的 package | 仅该用户本人 | 是 |
+| 草稿 | `/home/sandbox/skill-draft/<orgId>/<userId>` | 模型为当前用户编写的 package | 仅该用户本人；不进 prompt | 是 |
+| 已启用 | `/home/sandbox/skill-user/<orgId>/<userId>` | 人工启用后从草稿复制的发布副本 | 仅该用户本人 | 否 |
 
-每个 Run 先扫描系统层和调用者自己的用户层；非空
-`AgentVersion.configJson.skills` 作为 allowlist 进一步收窄模型可见的 Skill。
-模型侧的最终权威清单是 `capabilities` 工具。用户可以上传当前回合的
-Skill ZIP，或与 Agent 交互生成 Skill；安装、生成、编辑和卸载统一经过高风险
-工具审批，完成后自动刷新能力清单。
+每个 Run 只扫描系统层和调用者自己的已启用层；非空
+`AgentVersion.configJson.skills` 可进一步收窄模型可见的 Skill。模型用普通
+`write` / `bash` 修改草稿，用户在 Capabilities 页启用或停用；模型侧没有
+`skill_install/create/edit/uninstall` 变更工具。启用时 Agent 校验并写
+owner-scoped `user_skill_enablements`，exec 只读挂载发布副本。
 
 ### 其他
 
@@ -223,7 +225,6 @@ Skill ZIP，或与 Agent 交互生成 Skill；安装、生成、编辑和卸载�
 |------|--------|------|
 | `SANDBOX_LOG_LEVEL` | `INFO` | 日志级别 |
 | `MCP_SERVERS_JSON` | `[]` | Agent Runtime 管理的外部 MCP Server 列表 |
-| `SANDBOX_UVICORN_WORKERS` | `1` | Uvicorn worker 数 |
 
 ## 开发
 

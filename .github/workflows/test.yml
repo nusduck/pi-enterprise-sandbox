@@ -13,6 +13,53 @@ env:
   PYTHON_VERSION: "3.11"
 
 jobs:
+  contract:
+    name: RPC contract (test + typecheck)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: contract/package-lock.json
+
+      - name: Install, typecheck, and test
+        run: |
+          npm ci --prefix contract
+          npm --prefix contract run typecheck
+          npm test --prefix contract
+
+  exec:
+    name: TypeScript exec (test + typecheck)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: |
+            contract/package-lock.json
+            exec/package-lock.json
+
+      - name: Install and build local contract
+        run: |
+          npm ci --prefix contract
+          npm run build --prefix contract
+
+      - name: Install, typecheck, and test exec
+        run: |
+          npm ci --prefix exec
+          npm --prefix exec run typecheck
+          npm test --prefix exec
+
   python:
     name: Python (pytest)
     runs-on: ubuntu-latest
@@ -209,13 +256,22 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
           cache-dependency-path: |
+            contract/package-lock.json
+            exec/package-lock.json
             agent/package-lock.json
             api-server/package-lock.json
 
       - name: Install Node service dependencies
         run: |
+          npm ci --prefix contract
+          npm ci --prefix exec
           npm ci --prefix agent
           npm ci --prefix api-server
+
+      - name: Build TypeScript services for smoke entrypoints
+        run: |
+          npm run build --prefix exec
+          npm run build --prefix agent
 
       # docker-compose.yml gives its MySQL `--log-bin-trust-function-creators=1`
       # because Agent migrations create triggers as a non-SUPER application

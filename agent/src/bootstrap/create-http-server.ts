@@ -33,7 +33,6 @@ import {
 } from '../presentation/http/request-response.js';
 import {
   mapErrorToHttp,
-  mapProcessErrorToHttp,
 } from '../presentation/http/error-mapper.js';
 import {
   handleHealthRoute,
@@ -43,9 +42,10 @@ import {
   presentCreateRunResponse,
   presentGetRunResponse,
   presentToolExecutionResponse,
-  presentProcessResponse,
 } from '../presentation/http/run-presenters.js';
 import { handleCronRoute } from '../presentation/http/cron-routes.js';
+import { handleSkillRoute } from '../presentation/http/skill-routes.js';
+import { handleAuthRoute } from '../presentation/http/auth-routes.js';
 
 export {
   parseTraceparentContext,
@@ -62,7 +62,6 @@ export {
   presentCreateRunResponse,
   presentGetRunResponse,
   presentToolExecutionResponse,
-  presentProcessResponse,
 };
 
 /** 过渡期宽松类型：这些依赖大多还是 JS 类，形状由各自的服务模块负责。 */
@@ -90,6 +89,8 @@ export interface AgentHttpServerDeps {
   dataPlaneReady?: boolean | (() => boolean | Promise<boolean>);
   mcpReadiness?: () => McpReadiness;
   getExtensionDiagnostics?: Loose;
+  mutateSkill?: Loose;
+  browserAuthService?: Loose;
   listRuns?: Loose;
   conversationService?: Loose;
   approvalQueryService?: { list: Loose; get: Loose } | null;
@@ -98,7 +99,6 @@ export interface AgentHttpServerDeps {
   steerRunService?: { execute: Loose } | null;
   followUpService?: { execute: Loose } | null;
   listToolExecutions?: Loose;
-  processAccessService?: Loose;
   cronJobService?: import('../presentation/http/cron-routes.js').CronJobServiceLike | null;
   activeRunHint?: () => number;
   eventPollIntervalMs?: number;
@@ -123,7 +123,6 @@ export function createAgentHttpServer(deps: AgentHttpServerDeps) {
   const approvalQueryService = deps.approvalQueryService || null;
   const approvalDecisionService = deps.approvalDecisionService || null;
   const interactionResponseService = deps.interactionResponseService || null;
-  const processAccessService = deps.processAccessService || null;
   const traceQueryService = deps.traceQueryService || null;
   const cronJobService = deps.cronJobService || null;
 
@@ -168,6 +167,13 @@ export function createAgentHttpServer(deps: AgentHttpServerDeps) {
         if (!enforceInternalAuth(req, res)) return;
       }
 
+      if (await handleAuthRoute({
+        req,
+        res,
+        path,
+        browserAuthService: deps.browserAuthService,
+      })) return;
+
       if (
         a2aAdminHandler &&
         typeof a2aAdminHandler.handle === 'function' &&
@@ -177,33 +183,9 @@ export function createAgentHttpServer(deps: AgentHttpServerDeps) {
         if (handled) return;
       }
 
-      if (req.method === 'GET' && path === '/internal/extensions/diagnostics') {
-        if (typeof deps.getExtensionDiagnostics !== 'function') {
-          json(res, 501, {
-            error: 'Extension diagnostics not configured',
-            code: 'NOT_IMPLEMENTED',
-          });
-          return;
-        }
-        try {
-          const auth = authSubjectsFromRequest(req);
-          json(
-            res,
-            200,
-            deps.getExtensionDiagnostics({
-              profileId:
-                parsedUrl.searchParams.get('profile_id') || 'coding-agent',
-              ownerUserId: auth?.externalUserId || null,
-              organizationId: auth?.externalOrgId || null,
-            }),
-          );
-        } catch (error) {
-          json(res, 400, {
-            error: error instanceof Error ? error.message : 'bad request',
-          });
-        }
-        return;
-      }
+      if (await handleSkillRoute({ req, res, parsedUrl, path,
+        getExtensionDiagnostics: deps.getExtensionDiagnostics,
+        mutateSkill: deps.mutateSkill })) return;
 
       if (
         await handleCronRoute({
@@ -432,138 +414,6 @@ export function createAgentHttpServer(deps: AgentHttpServerDeps) {
             json(res, 202, presentCreateRunResponse(result));
           } catch (err) {
             const mapped = mapErrorToHttp(err);
-            json(res, mapped.status, mapped.body);
-          }
-          return;
-        }
-      }
-
-      if (path === '/internal/processes' && req.method === 'GET') {
-        if (!processAccessService) {
-          json(res, 503, { error: 'Process data plane unavailable', code: 'DEPENDENCY' });
-          return;
-        }
-        const auth = authSubjectsFromRequest(req);
-        if (!auth) {
-          json(res, 400, {
-            error: 'X-Acting-User-Id and X-Acting-Organization-Id are required',
-            code: 'AUTH_CONTEXT_REQUIRED',
-          });
-          return;
-        }
-        try {
-          const rows = await processAccessService.list({
-            auth,
-            runId: parsedUrl.searchParams.get('run_id'),
-            sandboxSessionId: parsedUrl.searchParams.get('session_id'),
-            status: parsedUrl.searchParams.get('status'),
-            limit: parsedUrl.searchParams.get('limit') || 100,
-          });
-          const processes = rows.map(presentProcessResponse);
-          json(res, 200, { processes, items: processes });
-        } catch (err) {
-          const mapped = mapProcessErrorToHttp(err);
-          json(res, mapped.status, mapped.body);
-        }
-        return;
-      }
-
-      {
-        const m = path.match(
-          /^\/internal\/processes\/([^/]+)(?:\/(logs|read|stdin|signal|cancel|kill))?$/,
-        );
-        if (m) {
-          if (!processAccessService) {
-            json(res, 503, { error: 'Process data plane unavailable', code: 'DEPENDENCY' });
-            return;
-          }
-          const auth = authSubjectsFromRequest(req);
-          if (!auth) {
-            json(res, 400, {
-              error: 'X-Acting-User-Id and X-Acting-Organization-Id are required',
-              code: 'AUTH_CONTEXT_REQUIRED',
-            });
-            return;
-          }
-          const processId = decodeURIComponent(m[1]);
-          const action = m[2] || 'status';
-          try {
-            if (req.method === 'GET' && action === 'status') {
-              json(
-                res,
-                200,
-                presentProcessResponse(
-                  await processAccessService.get({ processId, auth }),
-                ),
-              );
-              return;
-            }
-            if (req.method === 'GET' && action === 'logs') {
-              json(
-                res,
-                200,
-                await processAccessService.logs({
-                  processId,
-                  auth,
-                  offset: parsedUrl.searchParams.get('offset') || 0,
-                  limit: parsedUrl.searchParams.get('limit'),
-                }),
-              );
-              return;
-            }
-            if (req.method === 'GET' && action === 'read') {
-              json(
-                res,
-                200,
-                await processAccessService.read({
-                  processId,
-                  auth,
-                  stream: parsedUrl.searchParams.get('stream') || 'stdout',
-                  cursor: parsedUrl.searchParams.get('cursor') || '0-0',
-                  limit: parsedUrl.searchParams.get('limit') || 8192,
-                }),
-              );
-              return;
-            }
-            if (
-              req.method === 'POST' &&
-              (action === 'stdin' || action === 'signal' || action === 'kill')
-            ) {
-              const raw = await readBody(req);
-              let body: JsonBody = {};
-              try {
-                body = raw ? JSON.parse(raw) : {};
-              } catch {
-                json(res, 400, { error: 'Invalid JSON body' });
-                return;
-              }
-              const result =
-                action === 'stdin'
-                  ? await processAccessService.stdin({
-                      processId,
-                      auth,
-                      data: body.data,
-                      eof: body.eof,
-                    })
-                  : await processAccessService.signal({
-                      processId,
-                      auth,
-                      signal: body.signal || 'SIGTERM',
-                    });
-              json(res, 200, result);
-              return;
-            }
-            if (req.method === 'POST' && action === 'cancel') {
-              json(
-                res,
-                200,
-                await processAccessService.cancel({ processId, auth }),
-              );
-              return;
-            }
-            json(res, 405, { error: 'Method not allowed' });
-          } catch (err) {
-            const mapped = mapProcessErrorToHttp(err);
             json(res, mapped.status, mapped.body);
           }
           return;

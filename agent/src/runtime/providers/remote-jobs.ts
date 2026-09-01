@@ -9,10 +9,11 @@
  */
 
 import { JobRegistry } from '@deepseek-ai/dsh-jobs';
+import { randomUUID } from 'node:crypto';
 import type { JobId, JobRead, JobSnapshot, JobStart } from '@deepseek-ai/dsh-jobs';
 import type { Context } from '@deepseek-ai/cordis';
 import type { Agent } from '@deepseek-ai/dsh-agent';
-import { ExecRpcClient, resolveExecRpcConfig } from './exec-rpc.js';
+import { ExecRpcClient, resolveExecRpcConfig, runWithExecJobId } from './exec-rpc.js';
 import type { ExecRpcConfig } from './exec-rpc.js';
 
 export interface RemoteJobsOptions extends ExecRpcConfig {}
@@ -46,43 +47,9 @@ export class RemoteJobs extends JobRegistry {
   }
 
   override start(spec: JobStart): JobId {
-    const payload: Record<string, unknown> = {
-      kind: spec.kind,
-      label: spec.label,
-      ...(spec.outputLimitBytes !== undefined ? { outputLimitBytes: spec.outputLimitBytes } : {}),
-    };
-    // 同步契约：dsh-jobs 的 start 是同步返回 id 的。远程首选同步预留 id，再后台 run。
-    // 为保持同步返回，先签发本地 id 并后台通知 exec；若 exec 返回不同 id 则以 exec 为准。
-    const localId = `${spec.kind}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}` as JobId;
-
-    void this.rpc
-      .post<Record<string, unknown>, { id: JobId }>(
-        '/internal/v1/jobs/status',
-        { ...payload, op: 'start', id: localId },
-        this.roots,
-      )
-      .catch(() => undefined);
-
-    // 尝试同步调用 producer 的 run() 以满足 JobHooks.done 约束，但不持有执行资源
-    // 真实执行在 exec 侧；此处仅保留 id 供 list/get/read/kill
-    void (async () => {
-      try {
-        const hooks = spec.run();
-        // done 永不 reject，rejection 转 failed 已由 runtime 保证
-        await hooks.done.catch(() => undefined);
-      } catch {
-        // 同步抛错：按契约 leaves nothing registered——但已发 id 给 exec，需 kill 补偿
-        void this.rpc
-          .post<Record<string, unknown>, unknown>(
-            '/internal/v1/jobs/kill',
-            { id: localId },
-            this.roots,
-          )
-          .catch(() => undefined);
-      }
-    })();
-
-    return localId;
+    const id = `${spec.kind}-${randomUUID().replace(/-/g, '')}` as JobId;
+    runWithExecJobId(id, () => spec.run());
+    return id;
   }
 
   override list(caller?: Agent): JobSnapshot[] {

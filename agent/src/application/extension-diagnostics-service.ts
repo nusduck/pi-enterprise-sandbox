@@ -10,7 +10,6 @@ import { validateSkillPackage } from '../skills/validator.js';
 import { buildRegistry } from '../infrastructure/model-registry.js';
 import {
   ENTERPRISE_DEFAULT_TOOLS,
-  REGISTERED_EXTENSION_NAMES,
   REQUIRED_EXTENSION_NAMES,
 } from '../infrastructure/dsh/constants.js';
 import {
@@ -77,6 +76,16 @@ function discoverSkills(skillRoots: string[], userSkillRoot: string | null = nul
   );
 }
 
+function discoverDraftSkills(draftSkillRoot: string | null = null) {
+  if (!draftSkillRoot) return [];
+  return discoverSkills([draftSkillRoot]).map((skill) => ({
+    ...skill,
+    enabled: false,
+    status: 'draft',
+    source: 'draft-skill-root',
+  }));
+}
+
 /** 单个 MCP server 的发现结果。/ready 与诊断端点都按这几个字段展开。 */
 interface McpServerDiscovery {
   serverId?: string;
@@ -125,12 +134,13 @@ function projectMcpServers(
 /**
  * Preserve the existing capabilities UI response contract while projecting
  * only current production configuration. Per-Run live truth remains in the
- * immutable AgentVersion, Pi runtime, and durable tool ledger.
+ * immutable AgentVersion, DSH runtime, and durable tool ledger.
  *
  * @param {{
  *   profileId?: string,
  *   skillRoots?: string[],
  *   userSkillRoot?: string | null,
+ *   draftSkillRoot?: string | null,
  *   mcpServers?: object[] | string,
  *   mcpDiscovery?: { servers?: object[], ready?: boolean, toolCount?: number },
  *   models?: Iterable<object>,
@@ -138,7 +148,7 @@ function projectMcpServers(
  *   now?: () => Date,
  * }} [options]
  */
-export function getExtensionDiagnostics(options: { profileId?: string, skillRoots?: string[], userSkillRoot?: string | null, mcpServers?: Record<string, any>[] | string, mcpDiscovery?: { servers?: Record<string, any>[], ready?: boolean, toolCount?: number }, models?: Iterable<Record<string, any>>, toolRiskPolicy?: Record<string, any>, now?: () => Date, } = {}) {
+export function getExtensionDiagnostics(options: { profileId?: string, skillRoots?: string[], userSkillRoot?: string | null, draftSkillRoot?: string | null, mcpServers?: Record<string, any>[] | string, mcpDiscovery?: { servers?: Record<string, any>[], ready?: boolean, toolCount?: number }, models?: Iterable<Record<string, any>>, toolRiskPolicy?: Record<string, any>, now?: () => Date, } = {}) {
   const profileId = String(
     options.profileId || DEFAULT_PROFILE_ID,
   ).trim();
@@ -150,6 +160,7 @@ export function getExtensionDiagnostics(options: { profileId?: string, skillRoot
     options.skillRoots || [],
     options.userSkillRoot ?? null,
   );
+  const skillDrafts = discoverDraftSkills(options.draftSkillRoot ?? null);
   const mcpServers = projectMcpServers(
     options.mcpServers || [],
     options.mcpDiscovery,
@@ -198,15 +209,9 @@ export function getExtensionDiagnostics(options: { profileId?: string, skillRoot
       })),
     ),
   );
-  const requiredExtensions = new Set(REQUIRED_EXTENSION_NAMES);
-  const extensions = REGISTERED_EXTENSION_NAMES.map((name) => ({
-    name,
-    enabled: requiredExtensions.has(name),
-    required: requiredExtensions.has(name),
-    status: 'configured',
-    source: 'agent/src/extensions',
-    dynamic: false,
-  }));
+  // Compatibility field retained for existing clients. The legacy Pi
+  // Extension registry was deleted; DSH host tools are reported in `tools`.
+  const extensions = [];
 
   return {
     status: 'ok',
@@ -248,6 +253,7 @@ export function getExtensionDiagnostics(options: { profileId?: string, skillRoot
     extensions,
     tools,
     skills,
+    skill_drafts: skillDrafts,
     mcp_servers: mcpServers,
     models,
   };

@@ -13,6 +13,7 @@
 
 import type { Pool, RowDataPacket, ResultSetHeader } from 'mysql2/promise';
 import type { FileIdentity } from '../../artifact/control-plane-storage.js';
+import { sqlLimit } from '../client.js';
 
 export interface ExecArtifactRecord {
   readonly artifactId: string;
@@ -169,8 +170,8 @@ export class MySqlArtifactStore implements ArtifactStore {
     const [rows] = await this.pool.execute<Row[]>(
       `SELECT * FROM ${this.table}
         WHERE session_id = ? AND org_id = ? AND user_id = ?
-        ORDER BY created_at DESC LIMIT ?`,
-      [sessionId, scope.orgId, scope.userId, limit],
+        ORDER BY created_at DESC LIMIT ${sqlLimit(limit)}`,
+      [sessionId, scope.orgId, scope.userId],
     );
     return (rows as Row[]).map(mapRow);
   }

@@ -8,7 +8,9 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
 import { Context } from '@deepseek-ai/cordis';
+import { SessionStore } from '@deepseek-ai/dsh-session';
 import { bootEnterpriseRuntime, createRemoteProviders, createSessionBackend ,
+  mountSessionPersistence,
   assertOverlayPatchResolvable,
   resolvePathRelativeTo,
 } from '../../src/runtime/boot.js';
@@ -98,24 +100,54 @@ test('bootEnterpriseRuntime 是可调用的导出（全树 boot 留给真实链�
   assert.equal(typeof bootEnterpriseRuntime, 'function');
 });
 
-test('createSessionBackend 缺 MySQL 配回退内存，不红', () => {
-  const prev = {
-    MYSQL_HOST: process.env['MYSQL_HOST'],
-    DB_HOST: process.env['DB_HOST'],
-    EXEC_DB_HOST: process.env['EXEC_DB_HOST'],
-  };
-  delete process.env['MYSQL_HOST'];
-  delete process.env['DB_HOST'];
-  delete process.env['EXEC_DB_HOST'];
+const MYSQL_URL_KEYS = [
+  'MYSQL_HOST',
+  'DB_HOST',
+  'EXEC_DB_HOST',
+  'AGENT_DATABASE_URL',
+  'TEST_MYSQL_URL',
+  'MYSQL_URL',
+  'DATABASE_URL',
+] as const;
+
+function withoutMysqlEnv<T>(fn: () => T): T {
+  const prev: Record<string, string | undefined> = {};
+  for (const key of MYSQL_URL_KEYS) {
+    prev[key] = process.env[key];
+    delete process.env[key];
+  }
   try {
+    return fn();
+  } finally {
+    for (const key of MYSQL_URL_KEYS) {
+      if (prev[key] !== undefined) process.env[key] = prev[key];
+      else delete process.env[key];
+    }
+  }
+}
+
+test('createSessionBackend 缺 MySQL 配回退内存，不红', { concurrency: false }, () => {
+  withoutMysqlEnv(() => {
     const store = createSessionBackend({ physicalRoots: [] });
     assert.equal(store instanceof InMemorySessionStore, true);
     assert.equal(store.name, 'mysql-memory');
-  } finally {
-    if (prev.MYSQL_HOST !== undefined) process.env['MYSQL_HOST'] = prev.MYSQL_HOST;
-    if (prev.DB_HOST !== undefined) process.env['DB_HOST'] = prev.DB_HOST;
-    if (prev.EXEC_DB_HOST !== undefined) process.env['EXEC_DB_HOST'] = prev.EXEC_DB_HOST;
-  }
+  });
+});
+
+test('mountSessionPersistence 注入根 ctx 且二次挂载复用同一实例', { concurrency: false }, () => {
+  withoutMysqlEnv(() => {
+    const ctx = new Context();
+    new SessionStore(ctx);
+    const first = mountSessionPersistence(ctx, { physicalRoots: [] });
+    const second = mountSessionPersistence(ctx, { physicalRoots: [] });
+    assert.equal(typeof first.bindOwner, 'function');
+    assert.equal(typeof second.bindOwner, 'function');
+    assert.equal(typeof second.prepare, 'function');
+    assert.throws(
+      () => mountSessionPersistence(new Context(), { physicalRoots: [] }),
+      /ctx.sessions must be mounted/,
+    );
+  });
 });
 
 // ── overlay patch 可解析性 ───────────────────────────────────────────────

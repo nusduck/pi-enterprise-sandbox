@@ -35,7 +35,6 @@ RUN npm run build
 RUN mkdir -p /home/sandbox/workspace /home/sandbox/skill-user /tmp/pi-enterprise-mcp-runtime \
     && chmod 755 /home/sandbox/workspace \
     && chmod 700 /tmp/pi-enterprise-mcp-runtime
-ENV AGENT_MCP_RUNTIME_ROOT=/tmp/pi-enterprise-mcp-runtime
 
 # Drop root. Unlike the exec service — which needs Bubblewrap — the Agent
 # process never performs a privileged operation: it talks to MySQL, Redis, the

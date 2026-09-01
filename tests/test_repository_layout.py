@@ -45,9 +45,6 @@ HOTSPOT_LINE_BUDGETS = {
     # W2-D 曾抬到 1_443；Wave 6 收回。转 TS 时拆出 presentation/http/health-routes.ts
     # （/health + /ready），1_439 -> 1_399，预算收紧。
     "agent/src/bootstrap/create-http-server.ts": 1_399,
-    # 转 TS 后收回 2 行（写下 McpServerManagerLike 契约 +13，提升上去的
-    # JSDoc -15）。
-    "agent/src/infrastructure/mcp/pi-mcp-adapter-factory.ts": 1_266,
     # +6 (1_131 -> 1_137): packJsonWithIntegrity now raises a stable
     # ARGUMENT_TOO_LARGE code instead of a bare message, so callers can tell
     # "too big to store" apart from a redaction-truncated replay conflict.

@@ -8,6 +8,7 @@ import {
   listMcpServers,
   listModels,
   listSkills,
+  setSkillEnabled,
   listTools,
   getExtensionDiagnostics,
   type ExtensionDiagnostics,
@@ -69,8 +70,13 @@ function isUserSkill(item: SkillItem): boolean {
   return item.source === 'user-skill-root';
 }
 
+function isDraftSkill(item: SkillItem): boolean {
+  return item.source === 'draft-skill-root';
+}
+
 function skillSourceLabel(item: SkillItem): string {
   if (item.source === 'user-skill-root') return 'User';
+  if (item.source === 'draft-skill-root') return 'Draft';
   if (item.source === 'shared-skill-root') return 'System';
   return item.source || item.path || '—';
 }
@@ -80,11 +86,28 @@ function skillSourceLabel(item: SkillItem): string {
  * package, so an empty "My Skills" reads as "nothing installed" rather than as
  * a section that failed to load.
  */
-function SkillTiers({ items }: { items: SkillItem[] }) {
+function SkillTiers({
+  items,
+  busy,
+  onMutate,
+}: {
+  items: SkillItem[];
+  busy: string | null;
+  onMutate: (name: string, enabled: boolean) => void;
+}) {
+  const drafts = items.filter(isDraftSkill);
   const user = items.filter(isUserSkill);
-  const system = items.filter((item) => !isUserSkill(item));
+  const system = items.filter((item) => !isUserSkill(item) && !isDraftSkill(item));
   return (
     <>
+      <section className="mgmt-section">
+        <h3 className="mgmt-section-title">Drafts ({drafts.length})</h3>
+        {drafts.length === 0 ? (
+          <p className="mgmt-empty-body">No Skill drafts waiting for enablement.</p>
+        ) : (
+          <SkillCards items={drafts} busy={busy} onMutate={onMutate} />
+        )}
+      </section>
       <section className="mgmt-section">
         <h3 className="mgmt-section-title">My Skills ({user.length})</h3>
         {user.length === 0 ? (
@@ -92,7 +115,7 @@ function SkillTiers({ items }: { items: SkillItem[] }) {
             No Skills installed for your account. Install a Skill ZIP from chat.
           </p>
         ) : (
-          <SkillCards items={user} />
+          <SkillCards items={user} busy={busy} onMutate={onMutate} />
         )}
       </section>
       <section className="mgmt-section">
@@ -100,14 +123,22 @@ function SkillTiers({ items }: { items: SkillItem[] }) {
         {system.length === 0 ? (
           <p className="mgmt-empty-body">No bundled Skills.</p>
         ) : (
-          <SkillCards items={system} />
+          <SkillCards items={system} busy={busy} onMutate={onMutate} />
         )}
       </section>
     </>
   );
 }
 
-function SkillCards({ items }: { items: SkillItem[] }) {
+function SkillCards({
+  items,
+  busy,
+  onMutate,
+}: {
+  items: SkillItem[];
+  busy: string | null;
+  onMutate: (name: string, enabled: boolean) => void;
+}) {
   return (
     <ul className="mgmt-card-list">
       {items.map((s, i) => {
@@ -139,6 +170,16 @@ function SkillCards({ items }: { items: SkillItem[] }) {
                 <dd>{s.dynamic ? 'Yes' : 'No'}</dd>
               </div>
             </dl>
+            {isDraftSkill(s) || isUserSkill(s) ? (
+              <button
+                type="button"
+                className="mgmt-btn sm secondary"
+                disabled={busy === name}
+                onClick={() => onMutate(name, isDraftSkill(s))}
+              >
+                {isDraftSkill(s) ? 'Enable' : 'Disable'}
+              </button>
+            ) : null}
           </li>
         );
       })}
@@ -327,6 +368,8 @@ export function CapabilitiesPage() {
     available: false,
   });
   const [diagnostics, setDiagnostics] = useState<ExtensionDiagnostics | null>(null);
+  const [skillBusy, setSkillBusy] = useState<string | null>(null);
+  const [skillError, setSkillError] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -352,6 +395,19 @@ export function CapabilitiesPage() {
     void refresh();
   }, [refresh]);
 
+  const mutateSkill = useCallback(async (name: string, enabled: boolean) => {
+    setSkillBusy(name);
+    setSkillError(null);
+    try {
+      await setSkillEnabled(name, enabled);
+      await refresh();
+    } catch (error) {
+      setSkillError(error instanceof Error ? error.message : 'Skill mutation failed');
+    } finally {
+      setSkillBusy(null);
+    }
+  }, [refresh]);
+
   let body: ReactNode = null;
   if (loading) {
     body = <div className="mgmt-empty"><IconSparkles size={24} className="icon-pulse" /><p>Loading capability registry…</p></div>;
@@ -364,7 +420,10 @@ export function CapabilitiesPage() {
           error={skills.error}
         />
       ) : (
-        <SkillTiers items={skills.items} />
+        <>
+          {skillError ? <p className="mgmt-error" role="alert">{skillError}</p> : null}
+          <SkillTiers items={skills.items} busy={skillBusy} onMutate={(name, enabled) => void mutateSkill(name, enabled)} />
+        </>
       );
   } else if (tab === 'mcp') {
     body =

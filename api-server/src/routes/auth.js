@@ -1,14 +1,14 @@
 /**
- * Routes: auth proxy → sandbox /auth/*
+ * Routes: browser auth adapter → Agent credential authority.
  */
-import * as sb from '../services/sandbox-client.js';
 import { authFromRequest } from '../services/sandbox-client.js';
+import { authLogin, authMe, authRegister } from '../services/agent-auth-client.js';
 import { config } from '../config.js';
 import { expiredSessionCookie, sessionCookie } from '../http/cookies.js';
 import { sendError, sendJson as json } from '../http/response.js';
 
 function establishSession(res, data) {
-  if (!data?.token) throw new Error('Sandbox auth response did not include a token');
+  if (!data?.token) throw new Error('Agent auth response did not include a token');
   res.setHeader(
     'Set-Cookie',
     sessionCookie(data.token, { secure: config.DEPLOYMENT_ENV === 'production' }),
@@ -21,7 +21,7 @@ function establishSession(res, data) {
  */
 export async function handleRegister(body, res, req = null) {
   try {
-    const data = await sb.authRegister(body || {}, {
+    const data = await authRegister(body || {}, {
       traceId: req?.traceId || null,
       traceContext: req?.traceContext || null,
     });
@@ -37,7 +37,7 @@ export async function handleRegister(body, res, req = null) {
  */
 export async function handleLogin(body, res, req = null) {
   try {
-    const data = await sb.authLogin(body || {}, {
+    const data = await authLogin(body || {}, {
       traceId: req?.traceId || null,
       traceContext: req?.traceContext || null,
     });
@@ -63,7 +63,7 @@ export function handleLogout(res) {
  */
 export async function handleMe(res, req) {
   try {
-    const data = await sb.authMe(authFromRequest(req), {
+    const data = await authMe(authFromRequest(req), {
       traceId: req?.traceId || null,
       traceContext: req?.traceContext || null,
     });

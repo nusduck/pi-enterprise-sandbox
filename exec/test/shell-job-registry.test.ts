@@ -40,6 +40,7 @@ test('start inserts running snapshot and owner can read it', async () => {
   const reg = new MySqlJobRegistry(store);
   const h = fakeHandle();
   const snap = await reg.start({
+    id: 'bash-agent-1',
     kind: 'bash',
     label: 'echo hi',
     owner: ownerA,
@@ -47,6 +48,7 @@ test('start inserts running snapshot and owner can read it', async () => {
     run() { return h; },
   } satisfies JobStartSpec);
   assert.equal(snap.status, 'running');
+  assert.equal(snap.id, 'bash-agent-1');
   assert.equal(snap.ownerWorkspaceId, ownerA.workspaceId);
   const fetched = await reg.get(snap.id, ownerA);
   assert.equal(fetched.id, snap.id);
@@ -70,6 +72,7 @@ test('incremental read: continuous reads not repetitive, second read empty witho
   const r1 = await reg.read(snap.id, ownerA, '0-0', 100);
   assert.equal(r1.text, 'hello ');
   assert.equal(r1.lossy, false);
+  assert.equal(r1.nextCursor, '0-6');
   // 同一游标重复读，不应再次返回同一段增量（buffer 已消费到 nextCursor）
   const r2 = await reg.read(snap.id, ownerA, r1.snapshot ? '0-0' : r1.snapshot as any, 100);
   // 更精确：用 r1 的 nextCursor 再次读应为空
@@ -80,7 +83,7 @@ test('incremental read: continuous reads not repetitive, second read empty witho
   // 简化：第二次带 0-0 在未丢数据场景且 limit 足够，会再次返回相同内容（因为我们当前用 buffer.read('0-0') 幂等），但 Registry 的 read 在活句柄场景每次 append 后才推进。
   // 实际应测试：先推第二次输出，再读增量不重复
   h.pushOutput('world');
-  const r3 = await reg.read(snap.id, ownerA, r1.text ? '0-6' : '0-0', 100); // 6 = 'hello '.length
+  const r3 = await reg.read(snap.id, ownerA, r1.nextCursor, 100);
   assert.ok(r3.text.includes('world') || r3.text.length > 0);
 });
 

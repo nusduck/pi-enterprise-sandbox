@@ -83,6 +83,13 @@ def test_image_contains_everyday_agent_tooling() -> None:
         assert f"\n    {package} \\" in dockerfile, package
 
 
+def test_required_package_installation_cannot_be_silently_ignored() -> None:
+    """A failed apt install must stop the build, not leave a partial image."""
+    dockerfile = _dockerfile()
+    assert '$(command -v fdfind || true)' not in dockerfile
+    assert 'ln -sf "$(command -v fdfind)" /usr/local/bin/fd\n' in dockerfile
+
+
 def test_agent_workload_requirements_cover_document_workflows() -> None:
     requirements = _read("exec/requirements.txt")
     for package in ("pypdfium2", "pytesseract", "pdf2image", "reportlab", "pandas"):

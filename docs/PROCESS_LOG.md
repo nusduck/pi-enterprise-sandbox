@@ -208,4 +208,54 @@ Each entry should say **what changed**, **why**, and **which STATUS IDs** it aff
 - **What:** ① **D9 推翻上一版**——`@deepseek-ai/dsh-mcp-client` 存在（"connects to MCP servers and registers their tools on ctx.tools"，依赖官方 `@modelcontextprotocol/sdk`），只是不在 `dsh-base` 里而在 CLI 包 `@deepseek-ai/dsh` 的依赖里；官方就是「一个 server 一个插件实例」写进 `cordis.yml`。改为组合出厂包 + 退役 `pi-mcp-adapter@2.11.0` 与自建发现。② **D4 拿到真名单**：`read/write/edit/read_image`、`glob/grep`、`bash`、`job_list/job_output/job_kill`、`todo_write`、`skill`、`subagent`、`ask_user_question`；`ls`/`find`/`process_*`/`skill_*`/`spawn_subagent`/`ask_user` 全是死条目，出厂 `tool-fs` 没有 `ls`。③ **D3 补两个缺口**：base 只有 `ctx.userQuestions` seam，问人的**工具** `dsh-tool-ask-user` 要另加依赖；MCP 同理。④ **D5 悬念查清**：`dsh-user-approval` 只依赖 schemastery，与 `dsh-permission-presets` 无关，而 base 里的 `permission` id 就是 presets——打开 `approval`、继续关 `permission`。⑤ D8 明确自建搜索必须注册成 `glob` / `grep`。⑥ 影响里更正前端：`todo_write` 名字不变但**结果形状变了**（result 是一句话，清单在 arguments 与 `todo/write` 事件里）。
 - **Why:** 上一版的 D9 建立在「DSH 没有 MCP 传输」这句代码注释上，那句只对 `dsh-base` 成立；D4 的名单是推的不是查的，而它是 fail-closed 的第 0 步，推错就是整片工具被拒。
 - **STATUS IDs:** 无行翻转。A3（`pi-mcp-adapter` 仍在用）在 D9 落地时可翻转。
+
+## 2026-09-01 — ADR 0009 收口与文档对账
+
+- **Action:** 补齐 Skill 启用的 Agent HTTP / BFF / Capabilities UI、owner-scoped MySQL 账本与 exec 逐包只读挂载；审批停泊时把其它在飞工具从 `RUNNING` 收敛为 `UNKNOWN`；新增 exec/contract CI job。
+- **Root cause:** 2026-08-31 真机只直接调用了 `manager.enable()`，没有验证浏览器入口、账本写入和 exec 生产装配；并行工具停泊也只记录了症状。新增回归先在旧代码上复现 404、Promise diagnostics 与永久 `RUNNING`。
+- **Docs:** 对齐 ADR 0009、STATUS、HANDOFF、architecture/api/deployment/development/webui、env 示例与 changelog；删除旧 `pi-mcp-adapter` 运行时目录配置。
+- **STATUS IDs:** A3 `partial` → `done`（官方 SDK 真 MCP server 的连接/注册/调用测试已存在）；A2 保持 `partial`，唯一剩余原因是 LLMIO 余额导致模型驱动完整链未跑完。
 - **Not done:** 实施未动；MCP 工具的**可见性**能否按 agent/session 收窄仍要装好包后确认（执行层过滤不受影响）。
+
+## 2026-09-01 — exec 迁移后的浏览器认证断链收口
+
+- **Reproduced first:** 重建四个运行镜像后，`GET /api/auth/me` 返回 404；BFF 仍请求 exec `/auth/me`，而 TypeScript exec 从未实现 `/auth/*`。`auth_credentials` 迁移已在 Agent schema，说明这是 Python Sandbox 删除时漏迁的权威边界，不是环境配置。
+- **Action:** 将 register/login/me 迁到 Agent `/internal/auth/*`，复用 Agent Knex 与 Node crypto；BFF 保留 HttpOnly Cookie 适配，删除 BFF/Agent sandbox-client 的死 `/auth/*` 调用。生产 JWT 密钥加入 Agent fail-closed 校验，compose 只把认证变量交给 Agent。
+- **Gate repair:** `scripts/smoke-cross-service.mjs` 同样仍启动已删除的 Python `sandbox.main` 和不存在的 Agent JS 源入口；改为 exec/Agent `dist` 入口，CI 显式安装并构建 contract/exec/agent 后再运行。
+- **Docs correction:** 上一条同日记录末尾的“实施未动”是旧交接文字，与该条 Action 自相矛盾；实际 ADR 0009 实施和 Skill 收口已经完成，以本条及 STATUS 为准。PROCESS_LOG 按 append-only 规则不改写旧条目。
+- **STATUS IDs:** 暂不翻转；A2 仍须由本轮真实模型链最终结果决定。
+
+## 2026-09-01 — DSH 多轮与 exec 长进程真机收口
+
+- **Reproduced first:** 同一会话后续 Run 分别暴露 journal header conflict / multi-root；后台 `bash` 返回 Agent 本地假 id 而 `exec_jobs` 为空；真实 MySQL 对 prepared `LIMIT ?` 报 `Incorrect arguments to mysqld_stmt_execute`；BFF 又把 Sandbox Session id 直接当成 exec Workspace id，导致进程列表为空。
+- **Root cause / action:** runtime 重建保留恢复 header，checkpoint manifest 改接 journal leaf；增加 `exec_jobs` migration；DSH `RemoteJobs.start` 预留 id 并用 AsyncLocalStorage 传给 `RemoteShell.start`，exec `/shell/start` 统一经 registry 启动；分页 LIMIT 在共享 `sqlLimit` 校验后插入；BFF 经 Agent session authorization 取得 Workspace id 后访问 exec。Agent 旧进程查询/控制生产路径删除。
+- **Live:** 重建 `agent` / `api-server` / `sandbox` / `sandbox-mcp` 后均 healthy。用户 A 在同一 Conversation/Session 完成连续模型 Run；最终后台 `sleep 120` 的 ToolExecution、`exec_jobs` 与 `/api/processes` id/run 绑定一致，logs 200，SIGTERM 后 `stopping` → `cancelled`；用户 B 查询同一 session/run 为 404。
+- **Evidence:** [`evidence/2026-09-01-dsh-process-closure-live-chain.md`](evidence/2026-09-01-dsh-process-closure-live-chain.md)。
+- **STATUS IDs:** A2 `partial` → `done`；A4 `unknown` → `partial`；C7 `unknown` → `partial`；G7 保持 `unknown`。
+- **Tests:** pytest 98；exec 312 pass + 1 skip；contract 29；agent 1174；BFF 144；frontend 323；exec/contract/agent/frontend typecheck、cross-service smoke 语法检查、compose config 与 diff check 均通过。
+- **Not closed:** 原生 DSH persistence backend 尚未挂载/resume；模型侧同步 `job_list`/`job_output` 未接异步 exec 结果；日志/活句柄不能跨 exec 重启恢复；hard-SIGKILL orphan gate 未跑。
+
+## 2026-09-01 — A4 原生 DSH session persistence 接线
+
+- **Reproduced first:** `createSessionBackend()` 每轮都建了 backend，却被 `void sessionStore` 丢掉；根 ctx 没有 `sessionPersistence`；每次 Run 都走 `ctx.agents.create()`，从不 `resume()`；`dsh_sessions` / `dsh_session_events` migration 也不存在。
+- **Action:** 复用上游 `SessionPersistence` + `PersistenceCoordinator`，只补 owner-scoped MySQL `PersistenceBackend` 与 create/resume 选择。进程内一次 `mountSessionPersistence`；已物化会话 `has(sessionId)` 为真时走 `agents.resume`。
+- **Tests:** `mysql-session-store` seam（create/append/prepare）、factory resume 选择、migration 常量、`mountSessionPersistence` 幂等与缺 `ctx.sessions` fail-closed。
+- **STATUS IDs:** A4 保持 `partial`。接线与离线证明已补；compose 上原生 resume 与 Worker 重启上下文 gate 仍未取证。
+- **Not closed:** 真机 `agents.resume`；Worker 重启后模型上下文；C7 的同步 job 查询与跨 exec 重启；G7 hard-SIGKILL。
+
+## 2026-09-01 — A4 原生 DSH session resume 真机
+
+- **Reproduced first:** compose Agent 只有 `AGENT_DATABASE_URL`，`requireMysql` 却读 `MYSQL_HOST`，第一轮 Run 立刻失败。补 URL 解析后第二轮确实走 `resume`，但 mysql2 已解析的 JSON 列被再次 `JSON.parse`，报 `"[object Object]" is not valid JSON`。
+- **Action:** `readMysqlSessionStoreConfig` 解析 `AGENT_DATABASE_URL`；pool 打开 `jsonStrings`/`dateStrings`，`loadStored` 兼容已解析对象。
+- **Live:** 同一 `agent_session_id` 上 Run 1 `create` + `SUCCEEDED`（24 行事件），follow-up Run 2 `resume` + `SUCCEEDED`（43 行，含 `session/end-seed` 与两套 turn）。
+- **Evidence:** [`evidence/2026-09-01-dsh-native-session-resume.md`](evidence/2026-09-01-dsh-native-session-resume.md)。
+- **STATUS IDs:** A4 保持 `partial`。原生 resume 已取证；Worker 重启上下文 gate 未跑。
+- **Not closed:** Worker 重启后模型上下文；C7 同步 job 查询与跨 exec 重启；G7 hard-SIGKILL。
+
+## 2026-09-01 — A4 Worker 重启后模型上下文真机
+
+- **Reproduced first:** 终态 Run 之后 `docker compose kill -s SIGKILL agent-worker`，容器停在 `exited`，本机 `unless-stopped` 未自动拉起；`up -d` 后新 PID 接手。
+- **Live:** 同一 `agent_session_id` 上 Run 1 `create`/`SUCCEEDED`（口令 `OXBIRD-B7D12629`，助手可见文本 `OK`）；Worker PID 更换后 follow-up `resume`/`SUCCEEDED`，助手可见文本原样复述该口令。`dsh_session_events` 38 → 58，含 `session/end-seed`。
+- **Evidence:** [`evidence/2026-09-01-dsh-worker-restart-model-context.md`](evidence/2026-09-01-dsh-worker-restart-model-context.md)。
+- **STATUS IDs:** A4 `partial` → `done`。G2 保持 `unknown`（未测运行中 SIGKILL）。
+- **Not closed:** G2 中途回收；C7 同步 job 查询与跨 exec 重启；G7 hard-SIGKILL。

@@ -25,7 +25,7 @@ import {
  * @param {RequestInit} [init]
  * @returns {Promise<Response>}
  */
-async function agentFetch(url, init = {}) {
+export async function agentFetch(url, init = {}) {
   const timeoutMs = config.AGENT_REQUEST_TIMEOUT_MS;
   const timeout = AbortSignal.timeout(timeoutMs);
   const signal = init.signal
@@ -75,7 +75,7 @@ export function buildTraceparent(traceId32) {
   return `00-${tid}-${span}-01`;
 }
 
-function requestHeaders({
+export function requestHeaders({
   auth = null,
   traceId = null,
   traceContext = null,
@@ -137,6 +137,7 @@ function requestHeaders({
   return headers;
 }
 
+
 /**
  * @param {{ messages: unknown[], conversation_id?: string|null, trace_id?: string|null, model_id?: string|null }} body
  * @param {{ auth?: object|null, traceId?: string|null, idempotencyKey?: string|null }} [opts]
@@ -183,6 +184,35 @@ export async function getAgentExtensionDiagnostics(
     const text = await resp.text().catch(() => resp.statusText);
     const error = new Error(`Agent diagnostics failed (${resp.status}): ${text}`);
     error.status = resp.status;
+    throw error;
+  }
+  return resp.json();
+}
+
+export async function mutateAgentSkill(
+  name,
+  action,
+  { auth = null, traceId = null } = {},
+) {
+  if (action !== 'enable' && action !== 'disable') {
+    throw new Error('Skill action must be enable or disable');
+  }
+  const resp = await agentFetch(
+    `${config.AGENT_BASE_URL}/internal/skills/${encodeURIComponent(name)}/${action}`,
+    {
+      method: 'POST',
+      headers: requestHeaders({ auth, traceId }),
+    },
+  );
+  if (!resp.ok) {
+    const payload = await resp.json().catch(() => ({}));
+    const error = new Error(
+      typeof payload.error === 'string'
+        ? payload.error
+        : `Agent Skill mutation failed (${resp.status})`,
+    );
+    error.status = resp.status;
+    if (typeof payload.code === 'string') error.code = payload.code;
     throw error;
   }
   return resp.json();
@@ -746,93 +776,6 @@ export async function listAgentToolExecutions(
     throw err;
   }
   return resp.json();
-}
-
-async function requestAgentProcess(
-  path,
-  { method = 'GET', body = null, auth = null, traceId = null } = {},
-) {
-  const resp = await agentFetch(
-    `${config.AGENT_BASE_URL}/internal/processes${path}`,
-    {
-      method,
-      headers: requestHeaders({ auth, traceId }),
-      body: body == null ? undefined : JSON.stringify(body),
-    },
-  );
-  if (!resp.ok) {
-    const payload = await resp.json().catch(() => ({}));
-    const err = new Error(
-      typeof payload.error === 'string'
-        ? payload.error
-        : `Agent process request failed (${resp.status})`,
-    );
-    err.status = resp.status;
-    if (typeof payload.code === 'string') err.code = payload.code;
-    throw err;
-  }
-  return resp.json();
-}
-
-export async function listAgentProcesses(query = {}, opts = {}) {
-  const params = new URLSearchParams();
-  if (query.runId) params.set('run_id', query.runId);
-  if (query.sessionId) params.set('session_id', query.sessionId);
-  if (query.status) params.set('status', query.status);
-  if (query.limit) params.set('limit', query.limit);
-  const qs = params.toString();
-  return requestAgentProcess(qs ? `?${qs}` : '', opts);
-}
-
-export async function getAgentProcess(processId, opts = {}) {
-  return requestAgentProcess(`/${encodeURIComponent(processId)}`, opts);
-}
-
-export async function getAgentProcessLogs(processId, query = {}, opts = {}) {
-  const params = new URLSearchParams();
-  if (query.offset != null) params.set('offset', query.offset);
-  if (query.limit != null) params.set('limit', query.limit);
-  const qs = params.toString();
-  return requestAgentProcess(
-    `/${encodeURIComponent(processId)}/logs${qs ? `?${qs}` : ''}`,
-    opts,
-  );
-}
-
-export async function readAgentProcess(processId, query = {}, opts = {}) {
-  const params = new URLSearchParams();
-  if (query.stream) params.set('stream', query.stream);
-  if (query.cursor) params.set('cursor', query.cursor);
-  if (query.limit != null) params.set('limit', query.limit);
-  const qs = params.toString();
-  return requestAgentProcess(
-    `/${encodeURIComponent(processId)}/read${qs ? `?${qs}` : ''}`,
-    opts,
-  );
-}
-
-export async function writeAgentProcessStdin(processId, body, opts = {}) {
-  return requestAgentProcess(`/${encodeURIComponent(processId)}/stdin`, {
-    ...opts,
-    method: 'POST',
-    body,
-  });
-}
-
-export async function signalAgentProcess(processId, body, opts = {}) {
-  return requestAgentProcess(`/${encodeURIComponent(processId)}/signal`, {
-    ...opts,
-    method: 'POST',
-    body,
-  });
-}
-
-export async function cancelAgentProcess(processId, opts = {}) {
-  return requestAgentProcess(`/${encodeURIComponent(processId)}/cancel`, {
-    ...opts,
-    method: 'POST',
-    body: {},
-  });
 }
 
 /**

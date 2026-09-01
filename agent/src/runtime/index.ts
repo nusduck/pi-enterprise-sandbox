@@ -3,6 +3,7 @@ export {
   bootEnterpriseRuntime,
   createRemoteProviders,
   createSessionBackend,
+  mountSessionPersistence,
   runWithExecRpc,
   readExecRpcFromEnv,
 } from './boot.js';
@@ -10,6 +11,7 @@ export { EnvCredentialsProvider } from './providers/env-credentials.js';
 export { RemoteFileSystem } from './providers/remote-fs.js';
 export { RemoteShell } from './providers/remote-shell.js';
 export { RemoteJobs } from './providers/remote-jobs.js';
+export { MysqlSessionPersistence, SessionOwnerBindings } from './providers/mysql-session-persistence.js';
 export {
   InMemorySessionStore,
   MysqlSessionStore,

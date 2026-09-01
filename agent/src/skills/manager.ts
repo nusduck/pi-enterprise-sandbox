@@ -2,8 +2,8 @@
  * Per-user Skill lifecycle manager.
  *
  * System packages are read-only. Every mutation is confined to the calling
- * user's `<orgId>/<userId>` directory and is exposed only through governed
- * Agent tools. There is no development/production mode branch.
+ * user's `<orgId>/<userId>` directory. Draft publication is exposed through
+ * the trusted Capabilities route. There is no development/production branch.
  */
 import fs from 'node:fs';
 import { createHash } from 'node:crypto';
@@ -16,6 +16,7 @@ import {
   skillRootsForIdentity,
   userSkillRootFor,
   draftSkillRootFor,
+  validateSkillName,
   writableSkillRoot,
   isUnderSkillRoot,
 } from './paths.js';
@@ -394,8 +395,7 @@ export function createSkillManager(options: SkillManagerOptions = {}) {
       if (!userRoot) {
         throw new Error('skill enablement requires a writable user skill root');
       }
-      const name = String(params?.name || '').trim();
-      if (!name) throw new Error('skill enablement requires a package name');
+      const name = validateSkillName(params?.name);
       const draftPackageDir = joinPath(draftRoot, name);
       try {
         const record = await enableDraftPackage({
@@ -433,8 +433,7 @@ export function createSkillManager(options: SkillManagerOptions = {}) {
       if (!userRoot) {
         throw new Error('skill disablement requires a writable user skill root');
       }
-      const name = String(params?.name || '').trim();
-      if (!name) throw new Error('skill disablement requires a package name');
+      const name = validateSkillName(params?.name);
       const result = await disableSkillPackage({ publishedRoot: userRoot, name });
       audit({
         action: 'disable',

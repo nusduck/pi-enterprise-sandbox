@@ -51,11 +51,10 @@ import {
   DURABLE_INTERACTION_PENDING,
   INTERACTION_STATUS,
 } from '../domain/interaction/interaction-status.js';
+import { terminalizeParallelToolsForPark } from './parallel-tool-park.js';
 
 /** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
 type Loose = any;
-
-
 /**
  * Durable policy state conflict — enterprise-policy maps to block.
  * Does not claim PR-09 resume; prevents allow bypass of prior deny/pending.
@@ -79,7 +78,6 @@ export class DurablePolicyConflictError extends Error {
 export type RunEventContext = import('./fenced-run-event-recorder.js').RunEventContext;
 export type CanonicalRunEventEnvelope =
   import('./fenced-run-event-recorder.js').CanonicalRunEventEnvelope;
-
 export class FencedToolGovernanceRecorder {
   // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
   tx: Loose;
@@ -679,6 +677,7 @@ export class FencedToolGovernanceRecorder {
           await this.emit(envelope);
         }
       }
+      await terminalizeParallelToolsForPark(this, toolCallId);
       return out;
     });
   }

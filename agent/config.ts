@@ -166,6 +166,7 @@ export function validateProductionConfig(env: NodeJS.ProcessEnv | Record<string,
   const a2aDownloadSecret = String(
     env.A2A_ARTIFACT_DOWNLOAD_SECRET || '',
   ).trim();
+  const browserAuthSecret = String(env.SANDBOX_JWT_SECRET || '').trim();
 
   if (
     String(env.AGENT_ALLOW_UNAUTHENTICATED_INTERNAL || '').trim().toLowerCase() ===
@@ -189,6 +190,14 @@ export function validateProductionConfig(env: NodeJS.ProcessEnv | Record<string,
   } else if (isWeakSecret(sandboxToken)) {
     errors.push(
       `SANDBOX_API_TOKEN is weak or shorter than ${MIN_SECRET_LEN} characters`,
+    );
+  }
+
+  if (!browserAuthSecret) {
+    errors.push('SANDBOX_JWT_SECRET must be non-empty in production');
+  } else if (isWeakSecret(browserAuthSecret)) {
+    errors.push(
+      `SANDBOX_JWT_SECRET is weak or shorter than ${MIN_SECRET_LEN} characters`,
     );
   }
 

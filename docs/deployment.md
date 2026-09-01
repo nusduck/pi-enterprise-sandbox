@@ -89,7 +89,7 @@ Child monitor codes: `workspace_quota_exceeded`,
                                   │
                   ┌───────────────▼──────────────┐
                   │   exec (Node/TS:8081)          │
-                  │   Execution · Files · Auth     │
+                  │   Execution · Files · Isolation│
                   │   MySQL 8 (formal topology)    │
                   └──────────────────────────────┘
                                   │
@@ -106,7 +106,7 @@ Child monitor codes: `workspace_quota_exceeded`,
 
 图中 Redis 连接属于 Agent 的队列/lease/stream 协调；Sandbox 只使用独立
 的 replay Redis 保存 internal HMAC jti。外部 MCP 由 Agent 的
-pi-mcp-adapter 直连，不经过 Sandbox，也不与 Sandbox replay Redis 共用凭据。
+`@deepseek-ai/dsh-mcp-client` 直连，不经过 Sandbox，也不与 Sandbox replay Redis 共用凭据。
 若部署独立的 `sandbox-mcp`，它同样不经过 Agent：只使用服务 Redis 的专用
 key 前缀保存 `context_id` 映射，并通过 Sandbox 私有桥接执行。见
 [`sandbox-mcp.md`](./sandbox-mcp.md)。
@@ -121,17 +121,19 @@ key 前缀保存 `context_id` 映射，并通过 Sandbox 私有桥接执行。�
 | `SANDBOX_INTERNAL_HMAC_KEYRING` | — | 正式 Agent→Sandbox `/internal/v1/*` HMAC keyring；生产必填，密钥不得写入日志 |
 | `SANDBOX_INTERNAL_HMAC_ACTIVE_KID` | — | 当前签名 key id；必须存在于 keyring |
 | `SANDBOX_INTERNAL_REDIS_URL` | — | 独立 replay Redis，用于 HMAC jti 防重放；不得复用 Agent Redis 凭据 |
+| `SANDBOX_JWT_SECRET` | — | **Agent HTTP 进程**签发/校验浏览器 JWT 的 HMAC 密钥；变量名为迁移兼容保留，生产必须是强密钥且不会传给 exec |
+| `SANDBOX_JWT_TTL_SECONDS` / `SANDBOX_JWT_ISSUER` / `SANDBOX_JWT_AUDIENCE` | `86400` / `pi-enterprise-sandbox` | Agent 浏览器会话 token 的有效期与签发约束 |
+| `SANDBOX_AUTH_ALLOW_PUBLIC_REGISTER` | `true` | Agent 注册入口开关；生产 compose 强制 `false` |
 | `SANDBOX_AUTH_ADMIN_USERNAMES` | — | 注册即晋升 admin 的用户名列表（逗号分隔）。注册始终忽略客户端提供的 role/organization_id，这是真实部署上创建首个管理员的唯一途径 |
 | `AGENT_REQUEST_TIMEOUT_MS` | `15000` | BFF → Agent 出站调用超时（SSE 长连接除外）；防止挂起的依赖拖垮无关路由 |
 | `SANDBOX_REQUEST_TIMEOUT_MS` | `15000` | BFF → Sandbox 出站调用超时（SSE 长连接除外） |
 | `AGENT_ALLOW_UNAUTHENTICATED_INTERNAL` | dev `true` / 生产禁止 | Agent `/internal/*` 平面的鉴权开关。token 未配置且未显式设为 true 时启动即失败（fail-closed）；生产配置校验拒绝 true |
 | `MCP_SERVERS_JSON` | `[]` | Agent Runtime 外部 MCP Server registry；凭据仅通过 `authTokenRef`/`envRefs`/`headerRefs` 引用环境变量 |
-| `AGENT_MCP_RUNTIME_ROOT` | `/tmp/pi-enterprise-mcp-runtime` | 每个 Run 的私有 `pi-mcp-adapter` 配置目录；配置文件为 `0600` 并在 runtime dispose 时删除 |
 
 ### MCP 启动与可见性（一期）
 
 `MCP_SERVERS_JSON` 是一期 MCP 的唯一运维清单：其中 `enabled=true` 的每个
-Server 在 Agent 进程启动时都会由 `pi-mcp-adapter` 连接并执行 `tools/list`。
+Server 在 Agent 进程启动时都会由 `@deepseek-ai/dsh-mcp-client` 连接并执行 `tools/list`。
 发现到的工具会自动对全部 Agent 可见，名称固定为
 `mcp__{serverId}__{toolName}`；不需要修改 AgentVersion。
 
@@ -390,6 +392,8 @@ curl -f http://localhost:4000/health/ready
 | `./.runtime/sandbox/tmp` | `/var/sandbox/tmp` | Agent Session 私有持久化 `/tmp`（`tmp_{workspace_id}`） |
 | `./.runtime/sandbox/artifacts` | `/var/sandbox/artifacts` | 显式提交的 Artifact blob |
 | `./.runtime/sandbox/control` | `/var/sandbox/control` | Dataset staging 与控制面状态 |
+| `./.runtime/sandbox/skill-draft` | Agent `/home/sandbox/skill-draft` + exec `/var/sandbox/skill-draft` | owner-scoped Skill 草稿；Compose 显式打开 |
+| `agent_user_skills` | Agent `/home/sandbox/skill-user` + exec `:ro` | 已启用 Skill 的只读发布副本 |
 
 ### Skill 挂载与用户生命周期
 
@@ -397,20 +401,15 @@ curl -f http://localhost:4000/health/ready
 > （`node` 用户）运行。此前创建的 `agent_user_skills` 卷属主为 root，需重建
 > 该卷或手动 chown 一次，否则用户 Skill 上传会因权限失败。
 
-Skill 分两层，挂在两个 canonical 路径：
+Skill 分三层：
 
 | 层 | 路径 | 来源 | 可见范围 | 卷 |
 |----|------|------|----------|----|
 | 系统 | `/home/sandbox/skill` | 仓库 `./skills` | 所有人 | `:ro` |
-| 用户 | `/home/sandbox/skill-user/<orgId>/<userId>` | 上传 ZIP 或 Agent 生成 | 仅该用户 | named volume `agent_user_skills` |
+| 草稿 | `/home/sandbox/skill-draft/<orgId>/<userId>`（exec 物理根 `/var/sandbox/skill-draft`） | 模型 `write` / `bash` 或上传 | 仅该用户；不进 prompt | host bind |
+| 已启用 | `/home/sandbox/skill-user/<orgId>/<userId>/<package>` | 启用时从草稿复制 | 仅该用户；逐包 `ro_bind` | named volume `agent_user_skills` |
 
-Skill 生命周期不根据部署环境切换。Agent/Worker 对用户卷可写，Sandbox 始终以只读方式
-只绑定调用者本人的目录。`skill_install` 接受当前回合 ZIP attachment id，或模型在该 session
-的 workspace/`tmp` 内构建的归档路径（`source="sandbox"`，两侧各自限定路径，Skill 根被拒，
-并且必须带 `source_digest` 把审批绑定到具体字节而不只是路径）；
-`skill_create` 接受 Agent 生成的结构化 package。install/create/edit/uninstall 全部为 high risk，
-附件上传会先形成 Dataset；安装审批通过前，Agent 不会读取其内容、解压或写入 Skill 目录。
-系统 Skill 不能被同名覆盖。
+Compose 通过 `SANDBOX_SKILL_DRAFT_ROOT=/var/sandbox/skill-draft` 显式打开草稿写面；直接启动 exec 时变量缺失则能力关闭。模型不再拥有 Skill 变更工具，只能在自己的草稿根写文件。用户在 Capabilities 页点击启用后，Agent 校验结构与系统同名遮蔽，复制只读发布副本并写 `user_skill_enablements`；停用删除发布副本但保留草稿。exec 只解析当前 owner 的目录并逐包挂载，非法身份、符号链接或缺失 `SKILL.md` 的目录不会进入执行上下文。
 
 `validateProductionConfig` 仍然拒绝任何非 canonical 的
 `SKILLS_ROOT` / `SKILLS_USER_ROOT`（这些是 Bubblewrap profile 认识的挂载点）。
@@ -478,8 +477,15 @@ node scripts/smoke-cross-service.mjs
 4. 上传二进制文件 → 下载校验字节一致
 5. 生成中点击停止 → 流结束且无悬挂执行
 6. Agent `submit_artifact` 后出现可下载交付物（非 `write` 自动下载）
+7. 启动后台 `bash` → `/api/processes?session_id=...` 可列出、读日志、发 signal；另一租户访问同一 session/run/process 返回 404
 
-Node / Python / Pi SDK 版本钉以根目录 `runtime-versions.json` 为准：服务镜像与 CI 统一 **Node 22**（`node:22-slim`、`engines >=22.19.0 <23`）、Sandbox **Python 3.11**（`python:3.11-slim`）、Agent SDK **0.80.3** 精确钉。一致性由 `tests/test_runtime_versions.py` 校验。
+长进程元数据持久化在 MySQL `exec_jobs`，migration 仍由 Agent 启动流程统一执行。
+stdout/stderr 增量缓冲和活进程句柄只在当前 exec 进程内：重启后可以看到持久记录，
+但不能恢复旧日志字节或重新控制遗留 OS 进程；启动时 orphan recovery 会把未结束记录
+收敛为终态。需要跨 exec 重启续读/续控时，应先增加持久日志与可重附着的进程监管，
+当前不能把这项写成已支持。
+
+Node / DSH / 模型工具链版本钉以根目录 `runtime-versions.json` 为准：服务镜像与 CI 统一 **Node 22**（`node:22-slim`、`engines >=22.19.0 <23`），Agent 精确钉 DSH **0.1.1-rc.2**；Python 3.11 仅作 pytest 与 exec 镜像内的模型工具链。Pi SDK 已移除，`runtime-versions.json` 只保留其历史钉记录。一致性由 `tests/test_runtime_versions.py` 校验。
 
 ## Backup
 
