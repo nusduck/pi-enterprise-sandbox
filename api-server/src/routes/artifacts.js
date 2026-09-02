@@ -89,21 +89,31 @@ export async function handleImportArtifact(
       conversationId,
       traceId: req?.traceId || null,
     });
+    const workspaceId = String(
+      sessionAccess?.access?.workspace_id || sessionAccess?.access?.workspaceId || '',
+    ).trim();
+    if (!workspaceId) {
+      const error = new Error('Session workspace unavailable');
+      error.status = 503;
+      error.code = 'SESSION_WORKSPACE_UNAVAILABLE';
+      throw error;
+    }
     const client = createSandboxClient({
       auth: sessionAccess.sandboxAuth,
       traceId: req?.traceId || null,
       traceContext: req?.traceContext || null,
     });
     const data = await client.importArtifact(
-      sessionId,
+      workspaceId,
       artifactId,
       targetFilename,
     );
     json(res, 201, {
       ...data,
-      target_conversation_id:
-        data?.target_conversation_id || conversationId,
-      target_session_id: data?.target_session_id || sessionId,
+      target_conversation_id: data?.target_conversation_id || conversationId,
+      // The Sandbox hop is keyed by workspace_id, but the public contract
+      // remains keyed by the target sandbox session.
+      target_session_id: sessionId,
     });
   } catch (err) {
     console.error('[artifacts] import:', err.message);

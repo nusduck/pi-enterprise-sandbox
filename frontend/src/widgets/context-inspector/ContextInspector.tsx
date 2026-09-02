@@ -95,6 +95,13 @@ function pathsFromInput(input: unknown): string[] {
   return found;
 }
 
+export function shouldIncludeListedArtifact(
+  runId: string | null | undefined,
+  listedRunId: string,
+): boolean {
+  return !runId || !listedRunId || listedRunId === runId;
+}
+
 export function collectReferencedFiles(
   tools: Array<{ name: string; input: unknown }>,
   excludedPaths: Array<string | null | undefined> = [],
@@ -288,7 +295,7 @@ export function ContextInspector({
       const listedRunId = String(
         listed.run_id || listed.runId || '',
       ).trim();
-      if (runId && listedRunId !== runId) continue;
+      if (!shouldIncludeListedArtifact(runId, listedRunId)) continue;
       if (!isDurableArtifactId(id, runId || '')) continue;
       seen.add(id);
       out.push({

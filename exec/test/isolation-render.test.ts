@@ -200,6 +200,17 @@ test('env: clearenv then setenv pairs in insertion order', () => {
   assert.ok(argv.indexOf('--clearenv') < argv.indexOf('--setenv'));
 });
 
+test('env: inherited mode validates but does not put values in bwrap argv', () => {
+  const marker = 'sensitive-value-not-in-argv';
+  const argv = render(
+    baseProfile({ env: { clearEnv: true, vars: { DB_DSN: marker } } }),
+    { envMode: 'inherited' },
+  );
+  assert.ok(!argv.includes('--clearenv'));
+  assert.ok(!argv.includes('--setenv'));
+  assert.ok(!argv.includes(marker));
+});
+
 test('env: rejects invalid variable names', () => {
   assert.throws(
     () => render(baseProfile({ env: { clearEnv: true, vars: { '1BAD': 'x' } } })),

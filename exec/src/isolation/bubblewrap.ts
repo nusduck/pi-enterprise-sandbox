@@ -25,7 +25,7 @@ import {
   type ChildProcess,
   type SpawnOptionsWithoutStdio,
 } from 'node:child_process';
-import { render } from './render.js';
+import { render, type RenderOptions } from './render.js';
 import type { BindMount, IsolationProfile, Mount, MountPlan } from './profile.js';
 
 /** Bubblewrap 本身不可用（缺可执行文件、缺 `setpriv`、探针跑不通）时抛出。
@@ -220,10 +220,11 @@ export function resolveInvocation(
   profile: IsolationProfile,
   resolveOptions?: ResolveMountsOptions,
   capabilityOverrides?: CapabilityDropOverrides,
+  renderOptions?: RenderOptions,
 ): Invocation {
   const resolvedMounts = resolveEffectiveMounts(profile.mounts, resolveOptions);
   const resolvedProfile: IsolationProfile = { ...profile, mounts: resolvedMounts };
-  const bwrapArgs = render(resolvedProfile);
+  const bwrapArgs = render(resolvedProfile, renderOptions);
   const prefix = capabilityDropPrefix(capabilityOverrides);
   if (prefix.length === 0) {
     return { command: executable, args: bwrapArgs };
@@ -235,9 +236,9 @@ export function resolveInvocation(
 // ── 真正 spawn ────────────────────────────────────────────────────────
 
 /** 外层（未进入命名空间前）跑 bwrap 本身要用的环境——刻意最小化，不透传服务
- * 进程的环境变量。沙箱内部的环境由 `EnvPlan`/`--setenv` 单独控制，跟这个
- * 完全是两回事（对应今天 Python 版 `PreparedLaunch.env` 与 preflight 里
- * 传给 `subprocess.run` 的 `env=`）。 */
+ * 进程的环境变量。正式启动时会在这个最小环境上叠加已校验的 `EnvPlan`，
+ * 但不会把值渲染进 bwrap 的 argv；否则 `ps`/`/proc/<pid>/cmdline` 会暴露业务
+ * 数据库凭据。沙箱内部的环境仍只来自这份受控环境，不会继承完整宿主 env。 */
 export const OUTER_PROCESS_ENV: Readonly<Record<string, string>> = {
   PATH: '/usr/bin:/bin',
   LANG: 'C.UTF-8',
@@ -297,6 +298,13 @@ export function spawnLaunch(
   profile: IsolationProfile,
   options?: SpawnOptionsWithoutStdio,
 ): ChildProcess {
-  const { command, args } = resolveInvocation(executable, profile);
-  return spawn(command, args, { ...options, env: options?.env ?? OUTER_PROCESS_ENV });
+  const { command, args } = resolveInvocation(executable, profile, undefined, undefined, {
+    envMode: 'inherited',
+  });
+  const env = {
+    ...OUTER_PROCESS_ENV,
+    ...(options?.env ?? {}),
+    ...profile.env.vars,
+  };
+  return spawn(command, args, { ...options, env });
 }

@@ -16,7 +16,10 @@
 - `rt-20260901-report.md`：提交 Artifact 用的短报告
 - `rt-20260901-sheet.xlsx`：一张 3 行虚构表（可用系统 `xlsx` Skill 生成，不必预置二进制）
 - 可选图片：一张小于 2MiB 的 PNG，文件名 `rt-20260901-chart.png`，内容为合成柱状图
+- Skill 草稿归档：合法的 `rt-20260903-upload.zip` 与同内容的 `rt-20260903-upload.skill`，包内含 `SKILL.md` 和 `scripts/echo.sh`
+- `rt-20260903-artifact.md`：用于 Artifact 导入与刷新验证的短文件
 - 文本断言标记：`REGRESSION_PLAIN_OK`、`REGRESSION_ATTACHMENT_OK`、`REGRESSION_PROCESS_OK`、`REGRESSION_UNICODE_OK`、`REGRESSION_OFFICE_OK`、`REGRESSION_SKILL_OK`、`A2A_REGRESSION_OK`
+- 新增断言标记：`REGRESSION_AUTH_PROVISIONED_OK`、`REGRESSION_NAV_OK`、`REGRESSION_SKILL_UPLOAD_OK`、`REGRESSION_ARTIFACT_REFRESH_OK`、`REGRESSION_INPUT_RESUME_OK`
 
 ### 真实使用最小闭环（空库必跑，不可跳）
 
@@ -31,6 +34,8 @@
 7. USER-01（普通用户正向闭环 + 双人并发）
 8. SEC-01 / SEC-02 / SEC-03
 
+今天提交的增量案例按以下顺序补跑：AUTH-03 → NAV-01 → SKILL-03 → ART-02 → INPUT-02 → SEC-03B。
+
 MCP 未配置时 MCP-01 记 `阻塞`，不能拿空清单当「MCP 可用」。Vision 模型未配置时 TOOL-04 的图片分支记 `阻塞`。
 
 ## 2. 执行顺序与总览
@@ -41,8 +46,10 @@ MCP 未配置时 MCP-01 记 `阻塞`，不能拿空清单当「MCP 可用」。V
 |---|---|---|---|---|
 | ENV-01 | P0 | 重建镜像、启动和健康检查 | Compose + HTTP | 所有必需服务就绪；确认运行的是本分支镜像 |
 | ENV-02 | P0 | Browser 前端入口 | Browser | 页面可打开，无阻塞性加载错误 |
+| AUTH-03 | P0 | 普通用户首登、组织 provisioning 与初始鉴权 | Browser + HTTP | 注册后的 user 可刷新、创建资源，初始 `/me` 竞态不误报失败 |
 | AUTH-02 | P0 | 空库注册与管理员名单 | Browser | 名单内用户名注册即为 admin；客户端 `role` 不被采信 |
 | AUTH-01 | P0 | 管理员登录、刷新、登出 | Browser | `admin` 会话角色为 admin；登出后受保护资源不可用 |
+| NAV-01 | P0 | Settings 二级导航与旧路径重定向 | Browser | SettingsSubnav 在所有 Settings 页面可用；旧路径正确重定向 |
 | CHAT-01 | P0 | 新会话和无工具对话 | Browser | 流式状态、消息落库、Run 成功和标题正常 |
 | CHAT-02 | P0 | 多轮、追问、重新生成 | Browser | 顺序正确，同一会话不重复、不串会话 |
 | CHAT-03 | P0 | 模型选择按会话隔离 | Browser | 会话 A/B 的模型选择互不覆盖 |
@@ -54,10 +61,12 @@ MCP 未配置时 MCP-01 记 `阻塞`，不能拿空清单当「MCP 可用」。V
 | TOOL-03 | P0 | 系统办公 Skill 真任务 | Browser | xlsx/pdf/docx/pptx 至少两条链路产出可下载件 |
 | TOOL-04 | P0 | 中文路径、python、粘贴图片 | Browser | Unicode 文件可读写；python 经 bash；图片可分析或明确降级 |
 | ART-01 | P0 | Artifact 提交、下载和不可变快照 | Browser | 下载字节正确；提交后修改工作区不影响快照 |
+| ART-02 | P0 | Artifact 导入与刷新后的 ready 事件持久化 | Browser | 导入只复制快照；刷新后 Artifact 仍在目标会话 |
 | RUN-01 | P0 | Run 状态、取消、刷新恢复 | Browser | 状态最终收敛，无重复事件或永久 Running |
 | RUN-02 | P1 | steer、follow-up 和中断续跑 | Browser | 改向/排队/恢复语义正确 |
 | FAIL-01 | P1 | 失败 Run 与模型错误 | Browser | 明确 FAILED，可新开一轮，不丢历史 |
 | INPUT-01 | P1 | ask_user_question 等待输入与回答 | Browser | `WAITING_INPUT` 可持久化并恢复 |
+| INPUT-02 | P1 | 等待交互回答 CAS 与 Run 恢复 | Browser | 回答不再 409；工具保持可恢复状态且 Run 最终收敛 |
 | APPROVAL-01 | P1 | 高风险工具审批 | Browser | Pending → approve/reject；参数不匹配不能复用 |
 | PROC-01 | P1 | 长进程控制台、日志、stdin、信号 | Browser → exec | 增量日志、控制和终态正确 |
 | JOB-01 | P1 | DSH job_list / job_output / job_kill | Browser | 作业工具与 Process Console 对得上同一 process id |
@@ -68,6 +77,7 @@ MCP 未配置时 MCP-01 记 `阻塞`，不能拿空清单当「MCP 可用」。V
 | TRACE-01 | P2 | Trace 面板 | Browser | span 树可看，不含密钥/工具原文 |
 | CAP-01 | P1 | Capabilities 与诊断 | Browser | Skills/MCP/Tools/Models/diagnostics 与后端一致且不泄密 |
 | SKILL-02 | P0 | 模型在草稿根搭包 | Browser | 草稿不进 prompt；Enable 前模型不能当已启用 Skill 调用 |
+| SKILL-03 | P0 | Capabilities 上传 `.zip/.skill` 草稿包 | Browser | 上传解包到当前用户 Drafts，保持未启用且不越权 |
 | SKILL-01 | P1 | 用户 Skill 启用、使用、停用 | Browser | 仅启用包可被执行，停用后不可见/不可用 |
 | MCP-01 | P1 | 真实 MCP 工具调用 | Browser | 有配置则 `mcp__*` 可调用；空配置记阻塞 |
 | MCP-02 | P2 | sandbox-mcp 对外 facade | HTTP | 独立 token；够不到 `/internal/v1/*` |
@@ -82,6 +92,7 @@ MCP 未配置时 MCP-01 记 `阻塞`，不能拿空清单当「MCP 可用」。V
 | SEC-01 | P0 | 未登录和非 admin 访问 | Browser + HTTP | 受保护面 fail-closed；A2A 对普通用户 403 |
 | SEC-02 | P0 | 跨租户资源访问 | Browser 多会话 + HTTP | Conversation/Run/Artifact/Dataset/Process/Cron 统一 404 |
 | SEC-03 | P0 | 路径、命令和敏感信息安全 | Browser → Agent | 越界/危险命令拒绝；物理路径和凭据不进入输出 |
+| SEC-03B | P0 | 执行环境变量不进入 bwrap 命令行 | Browser + 容器 | 显式允许的 DB 环境仍可用，但值不出现在 bwrap argv / 模型输出 |
 | ISO-01 | P0 | Bubblewrap、非 root、网络和配额 | 容器检查 | 隔离配置生效；不满足时拒绝执行 |
 | REC-01 | P0 | Worker 重启后的会话/交互恢复 | 容器 + Browser | MySQL 权威事实保留，Run 可继续或明确终态 |
 | REC-02 | P1 | exec hard-kill 与 orphan 回收 | 容器 + HTTP | 孤儿作业可发现、清理，账本不出现假 Running |
@@ -109,6 +120,19 @@ MCP 未配置时 MCP-01 记 `阻塞`，不能拿空清单当「MCP 可用」。V
 
 **通过标准**：页面可交互；后端未启动时应显示可理解的错误/空态，不能伪装成已有数据。
 
+### AUTH-03：普通用户首登、组织 provisioning 与初始鉴权
+
+该案例覆盖 2026-09-03 的 BrowserAuth provisioning 修复和 ChatContext 初始未登录竞态。
+
+1. 在未登录的 `@Browser` 标签页打开前端，观察 `Restoring session…` 到登录页/欢迎页的过渡；不应因为初始 `/api/auth/me` 返回 401 而出现持久错误、空白页或错误的已登录状态。
+2. 注册一个不在管理员名单内的合成用户（用户名带 `rt-20260903-`），确认服务端返回角色为 `user`，而不是依赖客户端提交的 role。
+3. 注册完成后立即刷新，再打开 Chat、Settings → Capabilities、Runs 和 Approvals；确认不出现 organization/user mapping 的 400，且列表接口能稳定加载。
+4. 在该用户身份下创建一条短会话并完成一次纯文本 Run；再登出后重新登录，确认同一用户的会话仍可见。
+
+**通过标准**：普通用户注册、首次 `/me`、刷新和第一次创建资源均成功；初始未认证 401 只驱动恢复流程，不被渲染成持久业务失败；不记录密码或 Cookie。
+
+**阻塞判定**：公开注册关闭时可使用预先存在的普通用户，但必须单独记录未覆盖注册分支；不得用 admin 结果替代普通用户。
+
 ### AUTH-02：空库注册与管理员名单
 
 空库（刚 `docker compose down -v`）没有账号。管理员身份只来自 `SANDBOX_AUTH_ADMIN_USERNAMES`，注册接口忽略客户端提交的 `role`。
@@ -135,6 +159,30 @@ MCP 未配置时 MCP-01 记 `阻塞`，不能拿空清单当「MCP 可用」。V
 **通过标准**：登录成功只能以服务端返回的 admin 身份为准；浏览器 JavaScript 不得到 JWT 明文；登出会清理会话。
 
 **阻塞判定**：`admin` 不存在时先跑 AUTH-02，不要用普通账号代替管理员验收 A2A。JWT secret 缺失或管理员名单未配置时记 `AUTH-01 blocked`。
+
+### NAV-01：Settings 二级导航与旧路径重定向
+
+1. 在已登录用户下打开 Settings → Capabilities，确认顶部常驻 `SettingsSubnav`，并能切换 Capabilities、Approvals、Runs；admin 另确认 A2A 可见。
+2. 确认一级侧栏保留 Chat 与 Schedules，Runs/Approvals 不再作为一级入口；Settings 组中的入口和未决/活跃数量角标可点击。
+3. 直接访问 `/runs` 与 `/approvals`，确认分别重定向到 `/settings/runs` 与 `/settings/approvals`，页面内容和当前选中导航一致。
+4. 在 Settings 的各子页刷新，确认仍停留在当前子页且二级导航可继续使用。
+5. 在 Chat 检查附件按钮仍可用，但废弃的 `#btn-install-skill` / Composer 拼图安装入口不存在；不要把普通附件上传误判为 Skill 发布入口。
+
+**通过标准**：所有 Settings 子页都有同一套二级导航；旧链接兼容且不产生重复页面；Skill 发布入口只有 Capabilities Drafts。
+
+### SKILL-03：Capabilities 上传 `.zip/.skill` 草稿包
+
+前置：AUTH-03 或已有普通用户已登录。准备两个内容合法但名称不同的归档包，包内顶层目录各含 `SKILL.md` 和 `scripts/echo.sh`；第二个归档扩展名改为 `.skill`。
+
+1. 打开 Settings → Capabilities → Drafts，通过上传卡选择或拖入 `.zip`，确认上传期间按钮禁用/有进行中状态，完成后返回成功提示。
+2. 确认新包落入当前用户 Drafts，卡片显示 `Draft` / `enabled=false`，不自动进入 My Skills、模型 prompt 或其他用户的清单。
+3. 用同一方式上传 `.skill`，确认它和 `.zip` 都能解包并独立显示；同名/非法归档或 `.txt` 扩展名被拒绝且不产生已启用包。
+4. 刷新 Capabilities，确认草稿仍存在；在未点击 Enable 前，Chat 中不能把该包当成可用用户 Skill。
+5. 只对合成包点击一次 Enable，确认 My Skills 新增对应的已启用副本，同时原 Draft 仍保留；启用动作属于 SKILL-01 的发布/执行验证。
+
+**通过标准**：BFF 受信鉴权后以流式二进制转发；Agent 只解包到当前 org/user 草稿根；上传不等于发布，不越权、不覆盖其他用户包；前端没有乐观伪造成功状态。
+
+**阻塞判定**：当前部署没有用户草稿根或上传大小限制配置不完整时，记录明确部署阻塞，不把页面空态记为通过。
 
 ### CHAT-01：新会话和无工具对话
 
@@ -249,6 +297,17 @@ MCP 未配置时 MCP-01 记 `阻塞`，不能拿空清单当「MCP 可用」。V
 
 **通过标准**：只能通过 `artifact_id` 下载交付物；Artifact 与 owner/session 绑定；下载链接为同源 `/api/...`；中文 `filename*` 与 ASCII fallback 都有后缀。
 
+### ART-02：Artifact 导入与刷新后的 ready 事件持久化
+
+前置：ART-01 已有一个可下载的测试 Artifact；准备另一个仅用于目标会话的空测试会话。
+
+1. 在目标会话的 Deliverables 面板选择 ART-01 的 Artifact，执行 Import；确认请求按目标会话写入工作区副本，不新建第二个 Artifact，也不把源会话的其他文件带入。
+2. 在目标会话刷新页面或重新打开同一 Conversation，确认历史 `artifact.ready`/持久化事件能重新投影出 Artifact 卡片，卡片仍可下载或查看元数据。
+3. 检查导入后的目标文件内容与源 Artifact 快照一致；修改目标工作区副本后再次查看源 Artifact，确认源快照不可变。
+4. 用另一个用户的目标会话尝试直接导入该 Artifact，确认 owner 校验返回 404，不暴露源 Artifact 是否存在。
+
+**通过标准**：导入是 owner-scoped 的快照复制；刷新不丢 Artifact、不重复创建、不重复投影；目标目录不存在时由服务端创建后再写入。
+
 ### RUN-01：Run 状态、取消、刷新恢复
 
 1. 发起一个可持续数十秒的合成 Run，并在页面显示 Running 时刷新。
@@ -281,6 +340,17 @@ MCP 未配置时 MCP-01 记 `阻塞`，不能拿空清单当「MCP 可用」。V
 2. 验证 Run 为 `WAITING_INPUT`，页面显示问题、选项和输入框，侧栏有待处理标记。
 3. 切换到 Runs/Chat 或刷新页面，再回到会话，确认问题仍在。
 4. 选择一个选项或输入文本，验证 `respond` 后 Run 恢复并最终收敛。
+
+### INPUT-02：等待交互回答 CAS 与 Run 恢复
+
+前置：INPUT-01 已进入持久化 `WAITING_INPUT`，记录同一 Interaction、Run 和 ToolExecution ID。
+
+1. 在问题仍显示时刷新页面或先切到 Runs 再回到会话，确认仍能看到同一个待回答问题，而不是生成第二个 interaction。
+2. 只提交一次选项回答，观察响应 HTTP 结果和页面状态；不能出现 `409 Conflict`，也不能把原 `ask_user_question` ToolExecution 标为 FAILED。
+3. 确认 Run 从 `WAITING_INPUT` 恢复到 Running/终态，最终回复引用所选答案并包含 `REGRESSION_INPUT_RESUME_OK`。
+4. 重复点击已完成回答或用同一 interaction id 重放，确认服务端按幂等/CAS 规则拒绝重复写入且不产生第二条答案或第二个 Run。
+
+**通过标准**：停泊期间工具账本保持 RUNNING/可恢复语义；回答一次即可恢复并最终收敛；重复响应不会污染账本或消息投影。
 
 ### APPROVAL-01：高风险工具审批
 
@@ -498,6 +568,16 @@ Agent 侧的 compaction 由 DSH `dsh-compaction` 负责，当前使用其默认�
 
 **通过标准**：越界和硬拒命令在执行前被拒绝；硬拒命令不创建 Approval；错误文本不泄漏宿主机路径；模型消息、工具结果、SSE、审计和 Artifact 元数据不包含真实凭据或测试密钥原文。
 
+### SEC-03B：执行环境变量不进入 bwrap 命令行
+
+该增量案例来自 2026-09-03 的真实容器检查：`--setenv` 会把允许注入的业务数据库值放进 bwrap 的进程参数。业务 DB 的显式 allowlist 仍需可用，但值不能进入命令行或模型可见输出。
+
+1. 在 `@Browser` 中让前台 bash 只检查 `DB_DSN`、`DB_PWD`、`DB_HOST`、`DB_USER`、`DB_PORT`、`DB_NAME` 非空，并只输出 `REGRESSION_ENV_TRANSFER_OK`。
+2. 在该执行仍处于 Running 时，从 `sandbox` 容器读取 `/proc/*/cmdline`，只比较是否出现这些变量的当前值；终端只输出每个变量的 `absent/present`，绝不打印参数或值。
+3. 让 Browser 完成短命令，再用 `job_kill` 终止一个 `sleep 60` 的后台 job；检查 `exec_jobs` 为 `killed: SIGTERM`，容器内没有残留 bwrap/bash/sleep。
+
+**通过标准**：变量可在沙箱命令中使用；所有值在 bwrap argv 中均为 `absent`；模型只收到固定标记；明确的后台 job 通过 `job_kill` 回收。Run 取消本身不等同于 `job_kill`：DSH 后台 job 是独立句柄，不能把其正常存活误判为 exec orphan。
+
 ### ISO-01：Bubblewrap、非 root、网络和配额
 
 该案例不能只靠页面完成，需在已重建容器中补充检查：
@@ -705,3 +785,64 @@ Browser 测试产生的合成会话和工作区测试文件未清理。清理会
 ### 仍未宣称通过的范围
 
 `AUTH-02`、`USER-01`、`SEC-02`、`A2A-02`、`CRON-02`、`CTX-01`、`BUDGET-01`、`REC-01`、`REC-02` 以及 `ISO-01` 的 Linux/bwrap/quota/hard-kill 深测仍未执行或仅有部分只读证据。测试产生的合成会话和工作区文件也未擅自清理，因为删除会造成持久化副作用。
+
+## 8. 2026-09-03 增量案例与全量复测
+
+本节是当前提交的最新证据；§4–§7 的历史结果和失败对照保持不改写。操作主面为 `@Browser`，必要时用不带敏感输出的 HTTP/容器检查补充。测试用户均为合成账号，密码、Cookie、token、DSN 和数据库值不写入报告。
+
+### 8.1 今日新增案例
+
+| 案例 | 结果 | Browser / 容器证据 |
+|---|---|---|
+| AUTH-03 | 通过 | 普通用户注册后显示 `user`；刷新后 Capabilities、Runs、Approvals 和 Chat 均可用；完成 `REGRESSION_AUTH_PROVISIONED_OK`，登出/登录后历史仍在 |
+| NAV-01 | 通过 | Settings 二级导航可用；`/runs`、`/approvals` 分别重定向到 `/settings/runs`、`/settings/approvals`；Composer 中已移除旧安装按钮 |
+| SKILL-03 | 通过 | `.zip` 与 `.skill` 均进入当前用户 Drafts，保持未启用；`.txt` 被拒；刷新后仍在；Enable 后出现 My Skills 副本，Disable 后 My Skills 清空且 Draft 保留 |
+| ART-02 | 通过（导入/刷新） | 源 Artifact 导入目标会话后，目标 workspace 可被模型读取；刷新目标会话后再次 grep 得到 `REGRESSION_ARTIFACT_REFRESH_OK`；跨用户导入/下载均为 404 |
+| INPUT-02 | 通过 | WAITING_INPUT 刷新、切换会话后仍可回答；两个并发重复点击只产生一次 `REGRESSION_INPUT_DUPLICATE_OK`，Run 最终收敛 |
+| SEC-03B | 通过 | DB 环境变量在沙箱内仅以非空检查使用；运行期间逐项检查 bwrap cmdline 均为 `absent`，不输出值；后台 job 通过 `job_kill` 后 exec 账本为 `killed: SIGTERM`，无残留 bwrap/bash/sleep |
+
+`ART-02` 曾在修复前真实复现：BFF 把目标 Sandbox Session id 直接交给 exec，而模型执行实际按 `workspace_id` 进入工作区，导致“导入成功但模型看不到文件”。根因修复为先由 Agent 解析目标 session 的 `workspace_id`，再调用 exec；BFF 对外仍返回目标 session。API 代理测试在旧实现下失败，修复后 3 条通过。前端另补了“Artifact 列表省略 `run_id` 时仍保留 session 级条目”的回归测试。
+
+取消语义也重新核对过：Run 取消不会自动杀掉 DSH 明确创建的后台 job，后台 job 应由 `job_kill` 回收；把前者误当成 orphan 是错误前提。今日 `job_kill` 真实链路已验证通过，但这不替代 REC-02 要求的 exec hard-kill/restart 验证。
+
+### 8.2 累计案例矩阵
+
+下表把昨日 §7 的 Browser 证据与今日增量合并；“部分通过/未执行/跳过”是有意保留的缺口，不以绿色单测替代真实链路。
+
+| 状态 | 案例 |
+|---|---|
+| 通过 | ENV-01、ENV-02、AUTH-03、NAV-01、CHAT-01、CHAT-02、CHAT-03、CHAT-05、TOOL-01、TOOL-02、TOOL-03、TOOL-04、ART-01、ART-02、INPUT-01、INPUT-02、JOB-01、TODO-01、SUB-01、TRACE-01、CAP-01、SKILL-01、SKILL-02、SKILL-03、MCP-02、SEC-01、SEC-03B |
+| 部分通过 | CHAT-06（刷新 catch-up 已测，关页/断网未测）、RUN-01、RUN-02、FAIL-01、APPROVAL-01、PROC-01（stdin 未单独闭环）、MGMT-01、MGMT-02、MCP-01、USER-01（第二身份用隔离 HTTP 客户端完成跨租户检查，未形成双 Browser 并发闭环）、SEC-02（Conversation/Run/Dataset/Artifact/Process/import/download 已测，Cron/Skill 全集未测）、SEC-03（未执行破坏性命令）、ISO-01、UI-01 |
+| 未执行或按要求跳过 | AUTH-01、AUTH-02、CHAT-04、CRON-01、CRON-02、A2A-01、A2A-02、CTX-01、BUDGET-01、REC-01、REC-02 |
+
+AUTH-01/AUTH-02/A2A-01/A2A-02 的管理员管理分支按本次请求跳过；普通用户访问 A2A 的拒绝分支已在 SEC-01 验证。CHAT-04、Cron CRUD/删除和凭据撤销涉及持久化破坏或安全凭据副作用，依仓库规则未在没有操作时确认的情况下执行。CTX-01 与 BUDGET-01 当前仍分别受 256k 压缩阈值和未配置预算维度阻塞。
+
+### 8.3 SEC-03B 修复记录
+
+真实根因是 exec 原先用 bwrap `--setenv KEY VALUE` 组装执行环境；配置的业务 DB 值因此可从同容器进程参数看到。修复后：
+
+1. `render()` 增加 `inherited` 环境模式，只校验环境计划，不把值写入 argv。
+2. `spawnLaunch()` 以固定 `OUTER_PROCESS_ENV` 为基线叠加 profile 环境，通过 Node spawn 的 `env` 传给 bwrap；未恢复完整宿主环境继承。
+3. 新增 `resolveInvocation()`、`render()`、`spawnLaunch()` 三层回归断言；旧实现下的 argv 断言先失败，修复后通过。
+
+这里保留显式 allowlist 的业务 DB 环境能力，因为 `.env.example` 明确支持该用途；平台 token、JWT、服务密码仍由 safe-env 拒绝。模型只收到固定标记，不收到任何环境值。
+
+### 8.4 自动化与真机验证
+
+完成四个受影响镜像的统一重建：`agent`、`api-server`、`sandbox`、`sandbox-mcp`；两条 Sandbox 入口使用同一新镜像。重建后所有 Compose 服务 healthy/running，BFF live/ready、Sandbox health 均返回 200。
+
+六套测试和类型检查均重新执行：
+
+- `uv run pytest -q`：98 passed。
+- `npm test --prefix exec`：324 tests，323 passed，1 skipped，0 failed。
+- `npm test --prefix contract`：29 passed。
+- `npm test --prefix agent`：1209 passed，0 failed。
+- `npm test --prefix api-server`：146 passed。
+- `npm test --prefix frontend`：333 passed。
+- `npx tsc --noEmit -p exec/tsconfig.json`、`contract/tsconfig.json`、`frontend/tsconfig.json`，以及 `npm --prefix agent run typecheck`：全部通过。
+
+### 8.5 仍不能宣称的事项与测试产物
+
+- `REC-01` 未重启 Worker；`REC-02` 未 hard-kill exec，因此没有把正常 `job_kill` 结果外推为 restart/orphan recovery 通过。
+- Artifact 控制面当前为进程内存 store；本轮观察到 Sandbox 重启后源 Artifact 索引不保留。因此 ART-02 只宣称“导入与页面刷新”，不宣称 exec 重启后的 Artifact 恢复。
+- 生成的合成 Conversation、workspace 文件、Draft 和 Artifact 未删除；删除会改变持久化状态，需在 Browser 执行前再次确认。本轮不把它们当作生产数据。

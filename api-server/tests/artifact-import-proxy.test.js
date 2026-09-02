@@ -48,16 +48,17 @@ describe('artifact cross-conversation import proxy', () => {
         return jsonResponse({
           conversation_id: 'conversation_target',
           session_id: 'session_target',
+          workspace_id: 'workspace_target',
           org_id: '01ORG0000000000000000000000',
           user_id: '01USER000000000000000000000',
         });
       }
-      if (value.endsWith('/sessions/session_target/artifacts/imports')) {
+      if (value.endsWith('/sessions/workspace_target/artifacts/imports')) {
         return jsonResponse(
           {
             import_id: '01IMPORT0000000000000000000',
             artifact_id: '01ARTIFACT00000000000000000',
-            target_session_id: 'session_target',
+            target_session_id: 'workspace_target',
             target_conversation_id: 'conversation_target',
             workspace_file: {
               name: 'report.pdf',
@@ -97,7 +98,7 @@ describe('artifact cross-conversation import proxy', () => {
       assert.equal(body.workspace_file.path.endsWith('/report.pdf'), true);
 
       const sandboxCall = calls.find((call) =>
-        call.url.endsWith('/sessions/session_target/artifacts/imports'),
+        call.url.endsWith('/sessions/workspace_target/artifacts/imports'),
       );
       assert.ok(sandboxCall);
       assert.equal(
@@ -145,17 +146,19 @@ describe('artifact cross-conversation import proxy', () => {
         return jsonResponse({
           conversation_id: 'conversation_target',
           session_id: 'session_target',
+          workspace_id: 'workspace_target',
         });
       }
       if (value.endsWith('/internal/sessions/session_target')) {
         return jsonResponse({
           conversation_id: 'conversation_target',
           session_id: 'session_target',
+          workspace_id: 'workspace_target',
           org_id: '01ORG0000000000000000000000',
           user_id: '01USER000000000000000000000',
         });
       }
-      if (value.endsWith('/sessions/session_target/artifacts/imports')) {
+      if (value.endsWith('/sessions/workspace_target/artifacts/imports')) {
         return jsonResponse(
           {
             detail: {

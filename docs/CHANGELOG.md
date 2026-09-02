@@ -222,6 +222,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Bubblewrap 环境变量不再泄漏到进程参数**：显式允许的业务 DB 环境仍传入沙箱子进程，但正式 spawn 改为使用受控继承环境，不再把值拼进 `--setenv` argv；外层 bwrap 仍只接收最小环境，未恢复完整宿主环境继承。
+- **Artifact 导入按目标 workspace 写入**：BFF 现在先由 Agent 解析目标 Sandbox Session 的 `workspace_id`，再调用 exec 导入；对外仍返回目标 session 标识，避免文件写入一个模型实际不可见的路径。
+- **普通用户初始化与能力页回归**：补齐首登 provisioning/刷新竞态、Settings 二级导航、`.zip/.skill` Draft 上传，以及省略 `run_id` 的 Artifact 列表投影兼容。
 - **首个管理员无法创建**：注册忽略客户端提供的 role/organization_id（正确），而 `BFF_DEV_ACTING_ROLE` 只在关闭鉴权时生效，导致任何真实部署上 `/api/a2a/config` 等管理员面不可达。新增 `SANDBOX_AUTH_ADMIN_USERNAMES`：名单内用户名注册即晋升 admin。
 - **进程控制、取消与上传错误路径**：QA 发现的六处缺陷修复（admin bootstrap、process control、cancel 与 upload 错误处理）。
 - **Agent `/internal/*` 平面在 token 未配置时无鉴权**：这些路由直接信任 `X-Acting-*` 头，能触达端口即能冒充任意用户。现在空 token 直接关闭内部平面；无鉴权运行必须显式设置 `AGENT_ALLOW_UNAUTHENTICATED_INTERNAL=true`，生产配置校验拒绝该选项，启动日志明示当前模式；token 比较改为常量时间。

@@ -6,7 +6,7 @@
  * CI containers).
  */
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, realpath, rm } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -19,6 +19,7 @@ import {
   preflightCheck,
   resolveEffectiveMounts,
   resolveInvocation,
+  spawnLaunch,
 } from '../src/isolation/bubblewrap.js';
 import type { BindMount, Mount } from '../src/isolation/profile.js';
 import type { IsolationProfile } from '../src/isolation/profile.js';
@@ -232,6 +233,44 @@ test('resolveInvocation(): drops an inaccessible optional mount before rendering
 
 test('OUTER_PROCESS_ENV is a minimal, fixed env for the bwrap process itself (not the sandboxed environment)', () => {
   assert.deepEqual(OUTER_PROCESS_ENV, { PATH: '/usr/bin:/bin', LANG: 'C.UTF-8' });
+});
+
+test('resolveInvocation(): inherited environment mode keeps values out of bwrap argv', () => {
+  const secretMarker = 'db-dsn-must-not-be-in-argv';
+  const profile = {
+    ...minimalProfile(),
+    env: { clearEnv: true, vars: { DB_DSN: secretMarker } },
+  };
+  const { args } = resolveInvocation('/usr/bin/bwrap', profile, undefined, undefined, {
+    envMode: 'inherited',
+  });
+  assert.equal(args.includes(secretMarker), false);
+  assert.equal(args.includes('--setenv'), false);
+  assert.equal(args.includes('--clearenv'), false);
+});
+
+test('spawnLaunch(): inherited environment reaches the child without entering argv', async () => {
+  const { root, cleanup } = await scratchDir();
+  try {
+    const script = join(root, 'env-probe.sh');
+    await writeFile(script, '#!/bin/sh\nprintf "%s" "$DB_DSN"\n', 'utf8');
+    await chmod(script, 0o755);
+    const marker = 'db-dsn-transferred-without-argv';
+    const child = spawnLaunch(script, {
+      ...minimalProfile(),
+      env: { clearEnv: true, vars: { DB_DSN: marker } },
+    }, { stdio: ['ignore', 'pipe', 'ignore'] });
+    let output = '';
+    child.stdout?.setEncoding('utf8');
+    child.stdout?.on('data', (chunk: string) => { output += chunk; });
+    await new Promise<void>((resolve, reject) => {
+      child.once('error', reject);
+      child.once('close', () => resolve());
+    });
+    assert.equal(output, marker);
+  } finally {
+    await cleanup();
+  }
 });
 
 // ── preflightCheck: the "missing executable" branch needs no real bwrap ──

@@ -18,7 +18,8 @@
  *    今天 Python 版把这两个夹在挂载列表中间，这里合并成一段——bwrap 对这些
  *    flag 之间的相对顺序没有要求，调整不改变行为）
  * 2. 按 `MountPlan` 顺序逐条挂载
- * 3. `--clearenv` + 逐个 `--setenv`
+ * 3. 环境变量（默认 `--clearenv` + 逐个 `--setenv`；正式 spawn 可改为从
+ *    bwrap 的受控继承环境传入，避免敏感值出现在进程参数中）
  * 4. `--chdir`（如果 `LaunchPlan.cwd` 有值）+ `--` + （可能被 nproc 包装过的）命令
  */
 import {
@@ -78,11 +79,22 @@ function renderMount(mount: Mount): string[] {
   }
 }
 
-function renderEnv(env: EnvPlan): string[] {
+export interface RenderOptions {
+  /**
+   * `argv` 保持可审计的传统 `--setenv` 形式；`inherited` 由正式 spawn 使用，
+   * 先校验环境计划但不把值放进 bwrap 参数，调用方会把它交给 spawn 的 env。
+   */
+  readonly envMode?: 'argv' | 'inherited';
+}
+
+function renderEnv(env: EnvPlan, options: RenderOptions): string[] {
   const args: string[] = [];
-  if (env.clearEnv) args.push('--clearenv');
   for (const [key, value] of Object.entries(env.vars)) {
     assertValidEnvEntry(key, value);
+  }
+  if (options.envMode === 'inherited') return args;
+  if (env.clearEnv) args.push('--clearenv');
+  for (const [key, value] of Object.entries(env.vars)) {
     args.push('--setenv', key, value);
   }
   return args;
@@ -125,11 +137,11 @@ export function nprocWrapperApplied(profile: IsolationProfile): boolean {
 /** 把 `profile` 渲染成 bwrap 的参数列表（不含 `bwrap` 可执行文件本身，也不含
  * 服务自身的能力剥离前缀——那两者都是运行环境相关的东西，由 `bubblewrap.ts`
  * 在实际 spawn 时拼到这个返回值前面）。 */
-export function render(profile: IsolationProfile): readonly string[] {
+export function render(profile: IsolationProfile, options: RenderOptions = {}): readonly string[] {
   return [
     ...renderNamespace(profile.namespace),
     ...profile.mounts.flatMap(renderMount),
-    ...renderEnv(profile.env),
+    ...renderEnv(profile.env, options),
     ...renderCommand(profile.launch),
   ];
 }
