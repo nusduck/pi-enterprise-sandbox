@@ -3383,6 +3383,21 @@ body {
   color: var(--color-primary-tint);
   border-color: var(--color-primary-border);
 }
+.mgmt-chip-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1px 6px;
+  border-radius: var(--radius-pill);
+  font-size: 11px;
+  font-weight: 600;
+  background: var(--color-bg-subtle);
+  color: var(--color-text-muted);
+}
+.mgmt-chip.active .mgmt-chip-count {
+  background: var(--color-primary-tint);
+  color: #fff;
+}
 
 .mgmt-table-wrap {
   border-radius: var(--radius-lg);
@@ -3450,7 +3465,8 @@ body {
 }
 .mgmt-status.status-waiting_approval,
 .mgmt-status.status-waiting_input,
-.mgmt-status.status-pending {
+.mgmt-status.status-pending,
+.mgmt-status.status-draft {
   background: var(--color-warning-soft);
   color: var(--color-warning);
 }
@@ -3797,6 +3813,165 @@ body {
   .inspector-backdrop[hidden] {
     display: none !important;
   }
+}
+
+/* ── Settings Secondary Navigation (Subnav) ── */
+.settings-subnav {
+  display: flex;
+  align-items: center;
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-bg-card);
+  padding: 0 var(--space-6);
+  flex-shrink: 0;
+}
+
+.settings-subnav-inner {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.settings-subnav-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 11px 14px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--color-text-muted);
+  text-decoration: none;
+  border-bottom: 2px solid transparent;
+  transition: all var(--duration-fast) var(--ease-out);
+  white-space: nowrap;
+}
+
+.settings-subnav-link:hover {
+  color: var(--color-text);
+}
+
+.settings-subnav-link.active {
+  color: var(--color-primary-tint);
+  border-bottom-color: var(--color-primary-tint);
+  font-weight: 600;
+}
+
+.settings-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: var(--radius-pill);
+  font-size: 11px;
+  font-weight: 600;
+  background: var(--color-primary-tint);
+  color: #fff;
+}
+
+.settings-badge.warn {
+  background: var(--color-warning);
+  color: #000;
+}
+
+/* ── Skill Draft Upload Dropzone & Feedback ── */
+.mgmt-upload-card {
+  margin-bottom: var(--space-4);
+}
+
+.mgmt-upload-dropzone {
+  border: 2px dashed var(--color-border);
+  border-radius: var(--radius-lg);
+  padding: var(--space-4) var(--space-5);
+  background: var(--color-bg-card);
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  cursor: pointer;
+  transition: all var(--duration-fast) var(--ease-out);
+}
+
+.mgmt-upload-dropzone:hover,
+.mgmt-upload-dropzone.drag-over {
+  border-color: var(--color-primary-tint);
+  background: var(--color-primary-soft);
+}
+
+.mgmt-upload-dropzone.uploading {
+  opacity: 0.8;
+  cursor: wait;
+}
+
+.mgmt-upload-icon {
+  width: 42px;
+  height: 42px;
+  border-radius: var(--radius-md);
+  background: var(--color-bg-subtle);
+  color: var(--color-primary-tint);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.mgmt-upload-content {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.mgmt-upload-title {
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+.mgmt-upload-desc {
+  font-size: 12px;
+  color: var(--color-text-secondary);
+}
+
+.mgmt-upload-desc strong {
+  color: var(--color-text);
+}
+
+.mgmt-upload-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  border-radius: var(--radius-md);
+  margin-top: 8px;
+  font-size: 12.5px;
+}
+
+.mgmt-upload-banner.error {
+  background: var(--color-danger-soft);
+  color: var(--color-danger);
+  border: 1px solid var(--color-danger);
+}
+
+.mgmt-upload-banner.success {
+  background: var(--color-success-soft);
+  color: var(--color-success);
+  border: 1px solid var(--color-success);
+}
+
+.mgmt-upload-banner-close {
+  background: transparent;
+  border: none;
+  font-size: 16px;
+  line-height: 1;
+  color: inherit;
+  cursor: pointer;
+  padding: 0 4px;
+  opacity: 0.7;
+}
+
+.mgmt-upload-banner-close:hover {
+  opacity: 1;
 }
 
 @media (max-width: 768px) {

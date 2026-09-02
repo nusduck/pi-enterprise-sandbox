@@ -5,6 +5,17 @@ Each entry should say **what changed**, **why**, and **which STATUS IDs** it aff
 
 ---
 
+## 2026-09-02 — Capabilities Drafts 上传 Skill 包、UI 优化与 Settings 二级导航重构
+
+- **Action:**
+  1. 支持用户直接在 Capabilities → Skills 的 Drafts 区域上传 `.zip` / `.skill` 归档包，由 BFF 流式透传至 Agent 解包落入当前用户草稿目录（`/home/sandbox/skill-draft/<org>/<user>/<name>`），严格保持未启用（`enabled=false`），以 UI 上的「Enable」作为唯一激活闸门。
+  2. 移除 Composer 历史拼图按钮（`#btn-install-skill`），Skill 安装入口完全收敛至 Capabilities 页面。
+  3. 侧边栏一级导航收敛为 Chat 与 Schedules；将 Runs（活跃运行）与 Approvals（审批中心）移至 Settings 二级菜单，并在所有 `/settings/*` 页面顶部提供常驻 SettingsSubnav 导航栏（支持 Capabilities / Approvals / Runs / A2A 一键切换），原 `/runs` 与 `/approvals` 保持重定向兼容。
+  4. 优化 Capabilities 页面 UI：Drafts 区域新增拖拽/点击上传卡片与反馈、标签页增加数量徽标、卡片排版与状态指示器微调，并使用 Chrome DevTools 完成真机交互与视觉验证。
+- **Why:** 落实用户关于 Skill 包直传草稿、安装入口收口、Settings 二级菜单架构与 UI 体验提升的需求，且不破坏现有隔离边界与安全不变量。
+
+---
+
 ## 2026-07-22 — MCP startup discovery, Run convergence, and durable UI projections
 
 - **Action:** Added per-Run model/tool/repeated-call budgets; MCP now discovers enabled Servers at Agent startup and exposes named `mcp__{serverId}__{toolName}` tools with readiness fail-closed; durable Run list/detail gains model, token usage, lifecycle timestamps and event cursor; conversation projections retain durable message ordering and the current user turn. Artifact download headers now safely support non-ASCII filenames. Updated deployment, API, architecture, status, and changelog documentation to match these contracts.

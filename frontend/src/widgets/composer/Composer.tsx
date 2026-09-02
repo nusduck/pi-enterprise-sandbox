@@ -36,7 +36,6 @@ import {
 } from '../runtime-timeline/buildTimeline';
 import {
   IconPaperclip,
-  IconPuzzle,
   IconStop,
   IconSend,
   IconSteer,
@@ -83,7 +82,6 @@ export function Composer() {
   } = useChat();
 
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const skillFileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const [runningAction, setRunningAction] = useState<RunningAction>('steer');
   const [submitting, setSubmitting] = useState(false);
@@ -219,10 +217,6 @@ export function Composer() {
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
   }, [mode]);
-
-  function openSkillPicker() {
-    skillFileInputRef.current?.click();
-  }
 
   async function onPrimaryAction() {
     if (submitting) return;
@@ -559,32 +553,6 @@ export function Composer() {
 
         <div className="input-inner">
           <div className="composer-tools-left">
-            <button
-              className="btn btn-upload"
-              id="btn-install-skill"
-              title="Install a Skill ZIP"
-              aria-label="Install a Skill ZIP"
-              type="button"
-              onClick={openSkillPicker}
-              disabled={mode !== 'idle'}
-            >
-              <IconPuzzle size={17} />
-            </button>
-            <input
-              ref={skillFileInputRef}
-              type="file"
-              accept=".zip,application/zip"
-              hidden
-              onChange={(e) => {
-                if (e.target.files?.length) {
-                  void handleFilesSelected(e.target.files);
-                  if (!draftText.trim()) {
-                    setDraftText('Install the attached Skill ZIP for my account.');
-                  }
-                  e.target.value = '';
-                }
-              }}
-            />
             <button
               className="btn btn-upload"
               id="btn-upload"

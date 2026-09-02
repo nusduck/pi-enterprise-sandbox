@@ -3,12 +3,13 @@
  * Tabs: Skills · MCP Servers · Tools · Models · Extension Diagnostics
  * Soft-fails when registry BFF endpoints are incomplete.
  */
-import { useCallback, useEffect, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import {
   listMcpServers,
   listModels,
   listSkills,
   setSkillEnabled,
+  uploadSkillDraft,
   listTools,
   getExtensionDiagnostics,
   type ExtensionDiagnostics,
@@ -18,7 +19,7 @@ import {
   type SoftListResult,
   type ToolRegistryItem,
 } from '../../shared/api/capabilities';
-import { IconRefresh, IconSparkles, IconPuzzle, IconTerminal, IconCode, IconLayers } from '../../shared/ui/Icons';
+import { IconRefresh, IconSparkles, IconPuzzle, IconTerminal, IconCode, IconLayers, IconPlus } from '../../shared/ui/Icons';
 
 const TABS = [
   { id: 'skills', label: 'Skills' },
@@ -81,6 +82,133 @@ function skillSourceLabel(item: SkillItem): string {
   return item.source || item.path || '—';
 }
 
+function SkillDraftUpload({
+  onSuccess,
+}: {
+  onSuccess: () => void;
+}) {
+  const [dragOver, setDragOver] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [success, setSuccess] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const handleUpload = async (file: File) => {
+    const lower = file.name.toLowerCase();
+    if (!lower.endsWith('.zip') && !lower.endsWith('.skill')) {
+      setError('Please select a .zip or .skill file');
+      return;
+    }
+    if (file.size > 50 * 1024 * 1024) {
+      setError('Skill package exceeds the 50MB limit');
+      return;
+    }
+
+    setUploading(true);
+    setError(null);
+    setSuccess(null);
+    try {
+      const res = await uploadSkillDraft(file);
+      setSuccess(`Draft package "${res.name}" uploaded. Review and click Enable below to activate.`);
+      onSuccess();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Upload failed');
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  const onDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    setDragOver(false);
+    if (e.dataTransfer.files?.length) {
+      const file = e.dataTransfer.files[0];
+      if (file) void handleUpload(file);
+    }
+  };
+
+  return (
+    <div className="mgmt-upload-card">
+      <div
+        className={`mgmt-upload-dropzone${dragOver ? ' drag-over' : ''}${uploading ? ' uploading' : ''}`}
+        onDragOver={(e) => {
+          e.preventDefault();
+          setDragOver(true);
+        }}
+        onDragLeave={() => setDragOver(false)}
+        onDrop={onDrop}
+        onClick={() => !uploading && fileInputRef.current?.click()}
+        role="button"
+        tabIndex={0}
+        aria-label="Upload Skill package (.zip or .skill)"
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            fileInputRef.current?.click();
+          }
+        }}
+      >
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept=".zip,.skill,application/zip"
+          style={{ display: 'none' }}
+          onChange={(e) => {
+            if (e.target.files?.length) {
+              const file = e.target.files[0];
+              if (file) void handleUpload(file);
+              e.target.value = '';
+            }
+          }}
+        />
+        <div className="mgmt-upload-icon">
+          {uploading ? (
+            <IconRefresh size={22} className="icon-spin" />
+          ) : (
+            <IconPlus size={22} />
+          )}
+        </div>
+        <div className="mgmt-upload-content">
+          <div className="mgmt-upload-title">
+            {uploading ? 'Extracting and verifying draft package…' : 'Upload Skill Package'}
+          </div>
+          <div className="mgmt-upload-desc">
+            Drag and drop a <strong>.zip</strong> or <strong>.skill</strong> package here, or click to browse (Max 50MB).
+          </div>
+        </div>
+      </div>
+
+      {error ? (
+        <div className="mgmt-upload-banner error" role="alert">
+          <span>{error}</span>
+          <button
+            type="button"
+            className="mgmt-upload-banner-close"
+            onClick={() => setError(null)}
+            aria-label="Dismiss error"
+          >
+            &times;
+          </button>
+        </div>
+      ) : null}
+
+      {success ? (
+        <div className="mgmt-upload-banner success" role="status">
+          <span>{success}</span>
+          <button
+            type="button"
+            className="mgmt-upload-banner-close"
+            onClick={() => setSuccess(null)}
+            aria-label="Dismiss message"
+          >
+            &times;
+          </button>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 /**
  * Skills split by tier. Both sections always render when the tab has any
  * package, so an empty "My Skills" reads as "nothing installed" rather than as
@@ -90,10 +218,12 @@ function SkillTiers({
   items,
   busy,
   onMutate,
+  onUploadSuccess,
 }: {
   items: SkillItem[];
   busy: string | null;
   onMutate: (name: string, enabled: boolean) => void;
+  onUploadSuccess: () => void;
 }) {
   const drafts = items.filter(isDraftSkill);
   const user = items.filter(isUserSkill);
@@ -102,6 +232,7 @@ function SkillTiers({
     <>
       <section className="mgmt-section">
         <h3 className="mgmt-section-title">Drafts ({drafts.length})</h3>
+        <SkillDraftUpload onSuccess={onUploadSuccess} />
         {drafts.length === 0 ? (
           <p className="mgmt-empty-body">No Skill drafts waiting for enablement.</p>
         ) : (
@@ -112,7 +243,7 @@ function SkillTiers({
         <h3 className="mgmt-section-title">My Skills ({user.length})</h3>
         {user.length === 0 ? (
           <p className="mgmt-empty-body">
-            No Skills installed for your account. Install a Skill ZIP from chat.
+            No enabled Skills for your account. Upload a Skill package to Drafts above and click Enable.
           </p>
         ) : (
           <SkillCards items={user} busy={busy} onMutate={onMutate} />
@@ -173,7 +304,7 @@ function SkillCards({
             {isDraftSkill(s) || isUserSkill(s) ? (
               <button
                 type="button"
-                className="mgmt-btn sm secondary"
+                className={`mgmt-btn sm ${isDraftSkill(s) ? 'primary' : 'secondary'}`}
                 disabled={busy === name}
                 onClick={() => onMutate(name, isDraftSkill(s))}
               >
@@ -422,7 +553,12 @@ export function CapabilitiesPage() {
       ) : (
         <>
           {skillError ? <p className="mgmt-error" role="alert">{skillError}</p> : null}
-          <SkillTiers items={skills.items} busy={skillBusy} onMutate={(name, enabled) => void mutateSkill(name, enabled)} />
+          <SkillTiers
+            items={skills.items}
+            busy={skillBusy}
+            onMutate={(name, enabled) => void mutateSkill(name, enabled)}
+            onUploadSuccess={() => void refresh()}
+          />
         </>
       );
   } else if (tab === 'mcp') {
@@ -563,7 +699,7 @@ export function CapabilitiesPage() {
         <div>
           <h2 className="mgmt-title">Capabilities</h2>
           <p className="mgmt-subtitle">
-            Skills, MCP servers, tools, and models from the enterprise registry. Users can install Skill ZIP packages from chat.
+            Skills, MCP servers, tools, and models configured for your workspace. Upload packages to Drafts and enable them below.
           </p>
         </div>
         <button
@@ -578,18 +714,27 @@ export function CapabilitiesPage() {
       </header>
 
       <div className="mgmt-filters" role="tablist" aria-label="Capability sections">
-        {TABS.map((t) => (
-          <button
-            key={t.id}
-            type="button"
-            role="tab"
-            aria-selected={tab === t.id}
-            className={`mgmt-chip${tab === t.id ? ' active' : ''}`}
-            onClick={() => setTab(t.id)}
-          >
-            {t.label}
-          </button>
-        ))}
+        {TABS.map((t) => {
+          let count: number | null = null;
+          if (t.id === 'skills' && skills.available) count = skills.items.length;
+          else if (t.id === 'mcp' && mcp.available) count = mcp.items.length;
+          else if (t.id === 'tools' && tools.available) count = tools.items.length;
+          else if (t.id === 'models' && models.available) count = models.items.length;
+
+          return (
+            <button
+              key={t.id}
+              type="button"
+              role="tab"
+              aria-selected={tab === t.id}
+              className={`mgmt-chip${tab === t.id ? ' active' : ''}`}
+              onClick={() => setTab(t.id)}
+            >
+              <span>{t.label}</span>
+              {count !== null ? <span className="mgmt-chip-count">{count}</span> : null}
+            </button>
+          );
+        })}
       </div>
 
       {body}

@@ -376,7 +376,52 @@ export function createSkillManager(options: SkillManagerOptions = {}) {
     // `skill_create` / `skill_edit` 两个工具，而那套工具整体取消了。模型现在
     // 直接用 `write` / `bash` 往草稿根里写，闸门移到 UI 上的「启用」
     // （`skills/enablement.ts`）。这两个方法此前**没有任何生产调用方**——
-    // 唯一的通路是 `skillManagerFactory`，而那个端口只喂给已删除的 extension bundle。
+    /**
+     * 上传 Skill 压缩包至用户的草稿目录（ADR 0009 D7 / 计划 H6.7）。
+     *
+     * 解压并校验包结构（含 SKILL.md），落入 draftRoot（/home/sandbox/skill-draft/<org>/<user>/<name>）。
+     * 保持未启用（enabled=false），不进任何人的发现或 prompt，由人在 UI 上点击 Enable 激活。
+     */
+    async installDraftArchive(params: { archiveBytes: Buffer; archiveName: string }) {
+      if (!draftRoot) {
+        throw new Error('Skill draft upload requires a draft root (draftSkillRoot)');
+      }
+      const archiveBytes = params?.archiveBytes;
+      const archiveName = assertSkillArchiveName(params?.archiveName, 'upload');
+      try {
+        const result = await installSkillArchive({
+          archiveBytes,
+          archiveName,
+          sourceType: 'upload',
+          skillRoot: draftRoot,
+          systemSkillNames: systemSkillNames(),
+        });
+        audit({
+          action: 'draft_upload',
+          result: 'success',
+          skill_name: result.name,
+          source_type: 'upload',
+          source: `upload:${archiveName}`,
+          summary: `uploaded draft ${result.name} archive=${archiveName}`,
+        });
+        return {
+          ok: true,
+          name: result.name,
+          description: result.description,
+          summary: result.summary,
+          path: result.path,
+        };
+      } catch (error) {
+        audit({
+          action: 'draft_upload',
+          result: 'failure',
+          source_type: 'upload',
+          source: `upload:${archiveName}`,
+          error: (error as Error)?.message || String(error),
+        });
+        throw error;
+      }
+    },
 
     /**
      * 启用一个草稿包（ADR 0009 D7 / 计划 H6.4–H6.7）。

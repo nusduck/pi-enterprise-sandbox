@@ -142,6 +142,8 @@ data: {"sequence":18,"event":{...},"ts":...,"eventId":"01K..."}
 
 启用/停用入口是 `POST /api/capabilities/skills/{name}/enable|disable`。BFF 只做代理与身份投影；Agent 校验包、更新发布副本与 MySQL 账本。启用账本写失败时会撤回发布副本，保持 fail-closed。
 
+草稿包上传入口是 `POST /api/capabilities/skills/drafts`。支持通过 UI 或客户端直传 `.zip` 与 `.skill` 归档包（请求头带 `X-Filename`，流式二进制 body，单包上限 50MB）。BFF 受信鉴权后透传 Agent；Agent 校验包结构与 `SKILL.md`，解压落入当前用户的草稿根目录 `/home/sandbox/skill-draft/<org>/<user>/<skill-name>/`，状态保持为未启用（`enabled: false, status: 'draft'`）。草稿不进模型发现、不进 prompt，等待用户在 UI 上点击「Enable」正式启用。
+
 `GET /api/runs/{run_id}/trace` 返回 owner-scoped durable span 树：
 
 ```json
@@ -209,6 +211,7 @@ Agent 模型侧权威清单工具：`capabilities`（`action=list|search|describ
 | `GET` | `/api/cron-jobs/{id}/runs` | 该定时任务的历史 Run |
 | `POST` | `/api/cron-jobs/{id}/run` | 立即触发一次 |
 | `GET` | `/api/capabilities/{skills,mcp,tools,models}` | 从 diagnostics 投影的能力清单 |
+| `POST` | `/api/capabilities/skills/drafts` | 上传 Skill 草稿包（.zip / .skill）；解压至用户草稿根，保持未启用 |
 | `POST` | `/api/capabilities/skills/{name}/enable\|disable` | 启用草稿 / 停用用户 Skill；owner-scoped |
 | `GET` | `/api/extensions/diagnostics` | Extension / Profile / allowlist 状态 |
 | `GET` | `/api/a2a/config` | A2A 配置（**admin**） |

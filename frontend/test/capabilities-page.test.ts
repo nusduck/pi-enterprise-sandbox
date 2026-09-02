@@ -68,4 +68,27 @@ describe('CapabilitiesPage diagnostics and MCP status contracts', () => {
     assert.match(pageSrc, /'Enable' : 'Disable'/);
     assert.match(pageSrc, /role="alert"/);
   });
+
+  it('provides dedicated Skill draft upload dropzone supporting .zip and .skill', () => {
+    assert.match(pageSrc, /uploadSkillDraft/);
+    assert.match(pageSrc, /accept=["']\.zip,\.skill,application\/zip["']/);
+    assert.match(pageSrc, /Upload Skill Package/);
+    assert.match(pageSrc, /mgmt-upload-dropzone/);
+  });
+
+  it('renders tab chips with item counts', () => {
+    assert.match(pageSrc, /mgmt-chip-count/);
+  });
+
+  it('provides SettingsSubnav with secondary navigation for settings pages', () => {
+    const subnavSrc = readFileSync(
+      join(__dirname, '../src/app/layout/SettingsSubnav.tsx'),
+      'utf8',
+    );
+    assert.match(subnavSrc, /\/settings\/capabilities/);
+    assert.match(subnavSrc, /\/settings\/approvals/);
+    assert.match(subnavSrc, /\/settings\/runs/);
+    assert.match(subnavSrc, /settings-subnav/);
+  });
 });
+

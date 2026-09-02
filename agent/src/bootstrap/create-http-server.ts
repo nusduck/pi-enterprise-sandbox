@@ -90,6 +90,7 @@ export interface AgentHttpServerDeps {
   mcpReadiness?: () => McpReadiness;
   getExtensionDiagnostics?: Loose;
   mutateSkill?: Loose;
+  uploadSkillDraft?: Loose;
   browserAuthService?: Loose;
   listRuns?: Loose;
   conversationService?: Loose;
@@ -185,7 +186,8 @@ export function createAgentHttpServer(deps: AgentHttpServerDeps) {
 
       if (await handleSkillRoute({ req, res, parsedUrl, path,
         getExtensionDiagnostics: deps.getExtensionDiagnostics,
-        mutateSkill: deps.mutateSkill })) return;
+        mutateSkill: deps.mutateSkill,
+        uploadSkillDraft: deps.uploadSkillDraft })) return;
 
       if (
         await handleCronRoute({

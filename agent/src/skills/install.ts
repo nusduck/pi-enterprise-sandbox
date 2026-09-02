@@ -326,8 +326,8 @@ async function installPreparedPackage(input: { packageSource: string, stagingPac
  */
 const ARCHIVE_POLICY = Object.freeze({
   upload: {
-    extensions: ['.zip'],
-    message: 'Skill installation accepts ZIP attachments only',
+    extensions: ['.zip', '.skill'],
+    message: 'Skill installation accepts .zip or .skill archives',
   },
   sandbox_build: {
     extensions: ['.zip', '.skill'],
@@ -386,9 +386,6 @@ export async function installSkillArchive(opts: { archiveBytes: Buffer, archiveN
   const archiveName = assertSkillArchiveName(opts.archiveName, sourceType);
   const attachmentId = String(opts.attachmentId || '').trim();
   const sourcePath = String(opts.sourcePath || '').trim();
-  if (sourceType === 'upload' && !attachmentId) {
-    throw new Error('Skill archive attachment_id is required');
-  }
   if (sourceType === 'sandbox_build' && !sourcePath) {
     throw new Error('Skill archive sandbox path is required');
   }

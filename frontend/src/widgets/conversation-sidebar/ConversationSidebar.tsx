@@ -188,50 +188,6 @@ export function ConversationSidebar() {
             <span className="sidebar-nav-text">Chat</span>
           </NavLink>
           <NavLink
-            to="/runs"
-            className={({ isActive }) =>
-              `sidebar-nav-link${isActive ? ' active' : ''}`
-            }
-            onClick={() => {
-              if (isMobile) closeSidebar();
-            }}
-          >
-            <span className="sidebar-nav-icon" aria-hidden="true">
-              <IconRuns size={17} />
-            </span>
-            <span className="sidebar-nav-text">Runs</span>
-            {activeRuns.length > 0 ? (
-              <span
-                className="sidebar-nav-badge"
-                aria-label={`${activeRuns.length} active`}
-              >
-                {activeRuns.length}
-              </span>
-            ) : null}
-          </NavLink>
-          <NavLink
-            to="/approvals"
-            className={({ isActive }) =>
-              `sidebar-nav-link${isActive ? ' active' : ''}`
-            }
-            onClick={() => {
-              if (isMobile) closeSidebar();
-            }}
-          >
-            <span className="sidebar-nav-icon" aria-hidden="true">
-              <IconApprovals size={17} />
-            </span>
-            <span className="sidebar-nav-text">Approvals</span>
-            {pendingApprovals.length > 0 ? (
-              <span
-                className="sidebar-nav-badge warn"
-                aria-label={`${pendingApprovals.length} pending`}
-              >
-                {pendingApprovals.length}
-              </span>
-            ) : null}
-          </NavLink>
-          <NavLink
             to="/schedules"
             className={({ isActive }) =>
               `sidebar-nav-link${isActive ? ' active' : ''}`
@@ -331,6 +287,50 @@ export function ConversationSidebar() {
                 <IconSettings size={17} />
               </span>
               <span className="sidebar-nav-text">Settings</span>
+            </NavLink>
+            <NavLink
+              to="/settings/approvals"
+              className={({ isActive }) =>
+                `sidebar-nav-link${isActive ? ' active' : ''}`
+              }
+              onClick={() => {
+                if (isMobile) closeSidebar();
+              }}
+            >
+              <span className="sidebar-nav-icon" aria-hidden="true">
+                <IconApprovals size={17} />
+              </span>
+              <span className="sidebar-nav-text">Approvals</span>
+              {pendingApprovals.length > 0 ? (
+                <span
+                  className="sidebar-nav-badge warn"
+                  aria-label={`${pendingApprovals.length} pending`}
+                >
+                  {pendingApprovals.length}
+                </span>
+              ) : null}
+            </NavLink>
+            <NavLink
+              to="/settings/runs"
+              className={({ isActive }) =>
+                `sidebar-nav-link${isActive ? ' active' : ''}`
+              }
+              onClick={() => {
+                if (isMobile) closeSidebar();
+              }}
+            >
+              <span className="sidebar-nav-icon" aria-hidden="true">
+                <IconRuns size={17} />
+              </span>
+              <span className="sidebar-nav-text">Runs</span>
+              {activeRuns.length > 0 ? (
+                <span
+                  className="sidebar-nav-badge"
+                  aria-label={`${activeRuns.length} active`}
+                >
+                  {activeRuns.length}
+                </span>
+              ) : null}
             </NavLink>
             {isAdmin ? (
               <NavLink

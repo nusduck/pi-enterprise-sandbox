@@ -218,6 +218,44 @@ export async function mutateAgentSkill(
   return resp.json();
 }
 
+export async function uploadAgentSkillDraft(
+  body,
+  filename,
+  { auth = null, traceId = null, signal = null } = {},
+) {
+  const extra = {
+    'X-Filename': String(filename || 'skill.zip'),
+    'Content-Type': 'application/octet-stream',
+  };
+  const headers = requestHeaders({ auth, traceId, extra });
+  const isStream = body && typeof body.pipe === 'function';
+  const fetchOpts = {
+    method: 'POST',
+    headers,
+    body,
+    signal,
+  };
+  if (isStream) {
+    fetchOpts.duplex = 'half';
+  }
+  const resp = await agentFetch(
+    `${config.AGENT_BASE_URL}/internal/skills/drafts`,
+    fetchOpts,
+  );
+  if (!resp.ok) {
+    const payload = await resp.json().catch(() => ({}));
+    const error = new Error(
+      typeof payload.error === 'string'
+        ? payload.error
+        : `Agent Skill draft upload failed (${resp.status})`,
+    );
+    error.status = resp.status;
+    if (typeof payload.code === 'string') error.code = payload.code;
+    throw error;
+  }
+  return resp.json();
+}
+
 async function requestAgentA2aAdmin(
   path,
   { method = 'GET', body = null, auth = null, traceId = null } = {},

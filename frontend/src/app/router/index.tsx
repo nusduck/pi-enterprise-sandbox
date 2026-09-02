@@ -20,22 +20,6 @@ export function AppRouter() {
           }
         />
         <Route
-          path="/runs"
-          element={
-            <AppShell>
-              <RunsPage />
-            </AppShell>
-          }
-        />
-        <Route
-          path="/approvals"
-          element={
-            <AppShell>
-              <ApprovalsPage />
-            </AppShell>
-          }
-        />
-        <Route
           path="/schedules"
           element={
             <AppShell>
@@ -52,6 +36,22 @@ export function AppRouter() {
           }
         />
         <Route
+          path="/settings/approvals"
+          element={
+            <AppShell>
+              <ApprovalsPage />
+            </AppShell>
+          }
+        />
+        <Route
+          path="/settings/runs"
+          element={
+            <AppShell>
+              <RunsPage />
+            </AppShell>
+          }
+        />
+        <Route
           path="/settings/a2a"
           element={
             <AppShell>
@@ -59,7 +59,9 @@ export function AppRouter() {
             </AppShell>
           }
         />
-        {/* Aliases for ADR wording */}
+        {/* Backward-compatible redirects */}
+        <Route path="/runs" element={<Navigate to="/settings/runs" replace />} />
+        <Route path="/approvals" element={<Navigate to="/settings/approvals" replace />} />
         <Route
           path="/settings"
           element={<Navigate to="/settings/capabilities" replace />}

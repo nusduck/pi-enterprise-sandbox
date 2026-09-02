@@ -2,6 +2,7 @@ import { resolveTrustedAuth } from '../application/run-access-service.js';
 import {
   getAgentExtensionDiagnostics,
   mutateAgentSkill,
+  uploadAgentSkillDraft,
 } from '../services/agent-client.js';
 import { sendError } from '../http/response.js';
 
@@ -56,6 +57,37 @@ export async function handleSkillMutation(encodedName, action, res, req) {
       return;
     }
     json(res, 200, await mutateAgentSkill(name, action, { auth, traceId }));
+  } catch (error) {
+    sendError(res, error, traceId);
+  }
+}
+
+export async function handleSkillDraftUpload(parsedUrl, res, req) {
+  const traceId = req?.traceId || null;
+  try {
+    const auth = await resolveTrustedAuth(req);
+    const rawFilename = req.headers['x-filename'] || parsedUrl.searchParams.get('filename') || '';
+    let filename = Array.isArray(rawFilename) ? rawFilename[0] : rawFilename;
+    filename = filename ? decodeURIComponent(filename).trim() : 'skill.zip';
+    const lower = filename.toLowerCase();
+    if (!lower.endsWith('.zip') && !lower.endsWith('.skill')) {
+      json(res, 400, {
+        error: 'Skill draft package must be a .zip or .skill file',
+        code: 'SKILL_ARCHIVE_INVALID_EXTENSION',
+      });
+      return;
+    }
+    const maxBytes = 55 * 1024 * 1024;
+    const declared = parseInt(req.headers['content-length'] || '0', 10);
+    if (declared > maxBytes) {
+      json(res, 413, {
+        error: 'Skill archive exceeds 50MB limit',
+        code: 'SKILL_ARCHIVE_TOO_LARGE',
+      });
+      return;
+    }
+    const result = await uploadAgentSkillDraft(req, filename, { auth, traceId });
+    json(res, 201, result);
   } catch (error) {
     sendError(res, error, traceId);
   }

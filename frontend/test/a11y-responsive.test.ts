@@ -74,9 +74,8 @@ describe('F6 a11y attributes on key surfaces', () => {
     assert.match(composer, /role=["']status["']/);
     assert.match(composer, /role=["']group["']/);
     assert.match(composer, /aria-label=["']Running action["']/);
-    assert.match(composer, /aria-label=["']Install a Skill ZIP["']/);
-    assert.match(composer, /accept=["']\.zip,application\/zip["']/);
-    assert.match(composer, /Install the attached Skill ZIP for my account\./);
+    assert.match(composer, /id=["']btn-upload["']/);
+    assert.doesNotMatch(composer, /id=["']btn-install-skill["']/);
   });
 
   it('Inline runtime steps: list region and expandable rows', () => {

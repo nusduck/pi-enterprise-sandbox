@@ -67,9 +67,16 @@ AgentSession 都由 `agentEventAdapter -> runReducer` 单次归约。`ChatState`
 `pendingTool`、`pendingApproval` 或 `readyFiles`，只保存服务端历史快照、选择状态、上传草稿、布局、
 认证与 transport 控制。`activeRunId` 直接从 EntityStore 读取，不维护 React 镜像 state。
 
-### Capabilities / Skills
+### Capabilities / Skills 与 Drafts 上传
 
-`/settings/capabilities` 的 Skills 页按当前登录用户投影三层：Drafts、My Skills、System Skills。草稿可点击 **Enable**；已启用用户 Skill 可点击 **Disable**；系统 Skill 没有变更按钮。操作经 BFF 的 `/api/capabilities/skills/{name}/enable|disable` 转发到 Agent，成功后刷新清单，失败以 `role="alert"` 显示且不会乐观改写 UI。
+`/settings/capabilities` 的 Skills 页按当前登录用户投影三层：Drafts、My Skills、System Skills。
+- **Drafts 上传**：在 Drafts 区域提供专属拖拽与点击上传卡片，支持用户直传 `.zip` 与 `.skill` 归档包（单包上限 50MB）。上传成功后包自动落入用户草稿根目录并即时在 Drafts 列表中以 `Draft` 状态卡片呈现。上传瞬间**不自动启用**。
+- **人机闸门**：草稿卡片提供高亮 **Enable** 按钮；点击后平台校验结构、复制一份只读已发布副本至用户已启用根，并写入 MySQL 账本；已启用用户 Skill 显示在 My Skills 中并提供 **Disable** 按钮；系统 Skill 为只读不可变更。
+- **Composer 拼图按钮移除**：取消了聊天输入框原本的拼图安装按钮，Skill 安装全面收敛至 Capabilities 页面。
+
+### Settings 二级导航结构
+
+为优化系统功能架构，侧边栏一级主导航聚焦于核心工作流（Chat 与 Schedules）；`Runs`（活跃运行）与 `Approvals`（审批中心）收敛至 `Settings` 作用域下（位于侧边栏底部 Settings 组中，保留未决审批角标与活跃运行数计数）。同时，在所有 `/settings/*` 页面（Capabilities, Approvals, Runs, A2A Access）顶部提供统一常驻的二级导航条（SettingsSubnav），支持在各管理面板间一键平滑切换。旧路径 `/runs` 与 `/approvals` 自动重定向至对应 `/settings/*` 路径，保持外链兼容。
 
 ### 消息格式
 

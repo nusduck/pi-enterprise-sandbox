@@ -58,6 +58,7 @@ import {
 import {
   handleCapabilityRegistry,
   handleExtensionDiagnostics,
+  handleSkillDraftUpload,
   handleSkillMutation,
 } from './src/routes/capabilities.js';
 import {
@@ -273,6 +274,10 @@ const server = http.createServer(async (req, res) => {
         );
         return;
       }
+    }
+    if (req.method === 'POST' && path === '/api/capabilities/skills/drafts') {
+      await handleSkillDraftUpload(parsedUrl, res, req);
+      return;
     }
 
     if (req.method === 'GET' && path === '/api/a2a/config') {

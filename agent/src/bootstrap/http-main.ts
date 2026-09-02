@@ -254,6 +254,21 @@ export async function startHttpMain(env: NodeJS.ProcessEnv = process.env) {
       }
     : null;
 
+  const uploadSkillDraft = resolveOwner
+    ? async ({ auth, filename, archiveBytes }: { auth: any; filename: string; archiveBytes: Buffer }) => {
+        const owner = await resolveOwner(auth);
+        const manager = createSkillManager({
+          identity: owner,
+          skillRoots: resolveSkillRootsForRun(env, owner),
+          draftSkillRoot: draftSkillRootFor(owner),
+        });
+        return manager.installDraftArchive({
+          archiveBytes,
+          archiveName: filename,
+        });
+      }
+    : null;
+
   const notReady = async () => {
     const err = new Error('Agent data plane not started');
     // @ts-ignore
@@ -503,6 +518,7 @@ export async function startHttpMain(env: NodeJS.ProcessEnv = process.env) {
     mcpReadiness: () => container.getMcpReadiness(),
     getExtensionDiagnostics,
     mutateSkill,
+    uploadSkillDraft,
     activeRunHint: () => 0,
   });
 

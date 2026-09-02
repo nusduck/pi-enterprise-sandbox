@@ -9,6 +9,7 @@ import {
   type SelectedEntity,
 } from '../../widgets/runtime-timeline/buildTimeline';
 import { WorkbenchSelectionContext } from './WorkbenchSelectionContext';
+import { SettingsSubnav } from './SettingsSubnav';
 import { IconMenu, IconSun, IconMoon } from '../../shared/ui/Icons';
 import { useTheme } from '../../shared/ui/theme';
 
@@ -28,11 +29,11 @@ function isManagementPath(pathname: string): boolean {
 }
 
 function managementTitle(pathname: string): string {
-  if (pathname === '/runs') return 'Active Runs';
-  if (pathname === '/approvals') return 'Approval Center';
+  if (pathname.startsWith('/settings/runs') || pathname === '/runs') return 'Active Runs';
+  if (pathname.startsWith('/settings/approvals') || pathname === '/approvals') return 'Approval Center';
   if (pathname === '/schedules') return 'Scheduled Runs';
   if (pathname.startsWith('/settings/a2a')) return 'A2A Access';
-  if (pathname.startsWith('/settings')) return 'Capabilities';
+  if (pathname.startsWith('/settings/capabilities') || pathname === '/settings') return 'Capabilities';
   return 'UPRC Agent';
 }
 
@@ -127,6 +128,8 @@ export function AppShell({ children }: { children: ReactNode }) {
               </button>
             </header>
           ) : null}
+
+          {location.pathname.startsWith('/settings') ? <SettingsSubnav /> : null}
 
           <div className="workbench-center">{children}</div>
         </div>
