@@ -21,18 +21,9 @@ import { readMcpReadiness } from '../runtime/index.js';
 type Loose = any;
 
 export class McpDiscoveryState {
-  readonly #env: NodeJS.ProcessEnv | Record<string, string | undefined>;
   /** 最近一次从注册表读到的投影。 */
   snapshot: Loose = null;
-  attemptedAt = 0;
   inFlight: Promise<object> | null = null;
-
-  constructor(env: NodeJS.ProcessEnv | Record<string, string | undefined>) {
-    this.#env = env;
-  }
-
-  /** 保留给容器 shutdown 调用；现在没有后台定时器要停。 */
-  stop(): void {}
 
   /**
    * 读一次就绪度。
@@ -47,7 +38,6 @@ export class McpDiscoveryState {
     this.inFlight = readMcpReadiness()
       .then((snapshot) => {
         this.snapshot = snapshot;
-        this.attemptedAt = Date.now();
         for (const server of snapshot.servers) {
           console.log(
             `[agent-mcp] MCP Server connected id=${server.server_id} tools=${server.tools.length}`,
@@ -68,7 +58,6 @@ export class McpDiscoveryState {
           mcpServers: [],
           error: message,
         };
-        this.attemptedAt = Date.now();
         return this.snapshot as object;
       })
       .finally(() => {
@@ -89,5 +78,3 @@ export class McpDiscoveryState {
     );
   }
 }
-
-void 0;

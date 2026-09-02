@@ -268,13 +268,7 @@ AgentVersion 侧（同一份语义，只能收紧）：
 `contextWindow - reserveTokens` 时触发。默认 `reserveTokens=16384`、
 `keepRecentTokens=20000`。每次压缩会产生一条 `session.compacted` 事件。
 
-按 AgentVersion 覆盖：
-
-```jsonc
-{ "contextPolicy": { "autoCompact": true, "reserveTokens": 16384, "keepRecentTokens": 20000 } }
-```
-
-`autoCompact: false` 关闭自动压缩（上下文溢出时会直接失败，而不是压缩后重试）。
+当前运行时使用 DSH 的默认压缩策略；AgentVersion 不提供单独的压缩覆盖字段。
 
 ### 修改前端
 

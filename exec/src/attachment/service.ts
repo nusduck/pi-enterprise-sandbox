@@ -75,7 +75,7 @@ export class AttachmentService {
   constructor(
     private readonly fsFactory: (workspace: WorkspaceContext) => WorkspaceFileSystem,
     quotaLedger?: WorkspaceQuotaLedger,
-    private readonly opts: AttachmentServiceOptions = {},
+    opts: AttachmentServiceOptions = {},
   ) {
     this.maxFileBytes = opts.maxFileBytes ?? DEFAULT_MAX_FILE_BYTES;
     this.quotaLedger =
@@ -105,7 +105,7 @@ export class AttachmentService {
     throw new Error(redacted);
   }
 
-  private idemKey(workspace: WorkspaceContext, key: string): Map<string, AttachmentRecord> {
+  private idemKey(workspace: WorkspaceContext): Map<string, AttachmentRecord> {
     const bucketKey = workspace.workspaceId;
     let bucket = this.idem.get(bucketKey);
     if (!bucket) {
@@ -127,7 +127,7 @@ export class AttachmentService {
     const { workspace, filename, content, idempotencyKey } = req;
 
     if (idempotencyKey) {
-      const hit = this.idemKey(workspace, idempotencyKey).get(idempotencyKey);
+      const hit = this.idemKey(workspace).get(idempotencyKey);
       if (hit) return hit;
     }
 
@@ -177,7 +177,7 @@ export class AttachmentService {
       sizeBytes: content.byteLength,
     };
     if (idempotencyKey) {
-      this.idemKey(workspace, idempotencyKey).set(idempotencyKey, record);
+      this.idemKey(workspace).set(idempotencyKey, record);
     }
     return record;
   }

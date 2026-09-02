@@ -2,7 +2,7 @@
  * Typed HTTP + SSE stream client for the Sandbox API Server.
  * Typed client for API Server resources.
  */
-import { isAllowedApiUrl, safeApiUrl } from '../security/url';
+import { isAllowedApiUrl } from '../security/url';
 import {
   ApprovalDecisionSchema,
   ArtifactImportResponseSchema,

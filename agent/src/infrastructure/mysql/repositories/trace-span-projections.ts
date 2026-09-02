@@ -9,17 +9,11 @@
  */
 
 import { createHash } from 'node:crypto';
-import { applyOwnerScope, requireOwnerScope } from '../ownership.js';
 import {
   formatDateTime,
   parseJsonColumn,
-  toMysqlDateTime,
 } from '../row-mappers.js';
-import { assertUlid } from '../../../domain/shared/ulid.js';
 import { redactPayload } from '../../../lib/event-redaction.js';
-
-/** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
-type Loose = any;
 
 const TRACE_ID_RE = /^[0-9a-f]{32}$/;
 const SPAN_ID_RE = /^[0-9a-f]{16}$/;
@@ -335,6 +329,3 @@ export function usageFrom(data) {
     cost: cost == null ? null : Number(cost),
   };
 }
-
-/** Owner-scoped 查询的租户边界。所有仓储方法都按它定位归属。 */
-type OwnerScope = { orgId: string; userId: string };

@@ -21,13 +21,6 @@ export class HttpError extends Error {
   }
 }
 
-export function toHttpStatus(err: unknown): number {
-  if (err instanceof HttpError) return err.status;
-  if (err instanceof Error && /quota/i.test(err.message)) return 413;
-  if (err instanceof Error && /too large|max file size/i.test(err.message)) return 413;
-  return 500;
-}
-
 export function errorBody(
   err: unknown,
   physicalRoots: readonly string[],

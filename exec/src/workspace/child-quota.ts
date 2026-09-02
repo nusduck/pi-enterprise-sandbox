@@ -298,19 +298,6 @@ export async function evaluateChildQuota(
   return { allow: true, message: '', usage };
 }
 
-/** 准入闸门：`allow: false` 意味着拒绝启动子进程。与 `evaluateChildQuota`
- * 同义，单独导出是为了和 Python 版的两个函数名一一对应，方便调用方按语义
- * 选择调用哪一个（准入 vs 采样）即便实现相同。 */
-export async function assertChildQuotaAdmit(
-  workspacePath: string,
-  tempPath: string | null,
-  config: ChildQuotaConfig,
-  deps: MeasureUsageDeps,
-  opts: MeasureUsageOptions = {},
-): Promise<ChildQuotaDecision> {
-  return evaluateChildQuota(workspacePath, tempPath, config, deps, opts);
-}
-
 export function formatQuotaExceededMessage(usage: QuotaUsage): string {
   const parts: string[] = [];
   if (isWorkspaceOver(usage)) {
@@ -322,12 +309,6 @@ export function formatQuotaExceededMessage(usage: QuotaUsage): string {
     parts.push(`temp ${usage.tempBytes} > quota ${usage.tempQuotaBytes}`);
   }
   return `Workspace quota exceeded by child process: ${parts.join('; ')}`;
-}
-
-export function formatDecisionMessage(decision: ChildQuotaDecision): string {
-  if (decision.message) return decision.message;
-  if (decision.usage) return formatQuotaExceededMessage(decision.usage);
-  return decision.code ?? CODE_ENFORCEMENT_FAILED;
 }
 
 /**

@@ -61,7 +61,6 @@ type Pool = {
   end: () => Promise<void>;
 };
 type PoolOptions = Record<string, unknown>;
-type ResultSetHeader = { insertId: number };
 type RowDataPacket = Record<string, unknown>;
 function createPool(_opts: PoolOptions): Pool {
   try {
@@ -108,10 +107,6 @@ function decodeRecords(records: readonly unknown[]): SessionEvent[] {
 
 /** 在线会话 8 MiB 上限——写入前统一判定（决策 4）。与 `PI_MAX_JSONL_BYTES` 对齐。 */
 export const MAX_SESSION_BYTES = 8 * 1024 * 1024;
-
-/** 快照阈值：事件数或字节数其一达到即触发 checkpoint（决策 3）。 */
-export const SNAPSHOT_THRESHOLD_EVENTS = 200;
-export const SNAPSHOT_THRESHOLD_BYTES = 1 * 1024 * 1024;
 
 /** DDL——迁移权威在 `agent/`，此处仅常量化供单测与文档固化。 */
 export const DSH_SESSIONS_DDL = `
@@ -263,11 +258,6 @@ export class InMemorySessionStore implements PersistenceBackend<string> {
   readonly name = 'mysql-memory';
 
   private readonly sessions = new Map<string, MemEntry>();
-  private readonly physicalRoots: readonly string[];
-
-  constructor(physicalRoots: readonly string[] = []) {
-    this.physicalRoots = physicalRoots;
-  }
 
   private key(id: SessionId): string {
     return String(id);

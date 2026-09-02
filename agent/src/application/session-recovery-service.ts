@@ -23,7 +23,6 @@ import {
   SessionFenceConflictError,
   SessionJournalError,
 } from '../domain/session/errors.js';
-import { SESSION_STATUS } from '../domain/session/session-status.js';
 import { assertUlid } from '../domain/shared/ulid.js';
 import {
   checksumSnapshotPayload,

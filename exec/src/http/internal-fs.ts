@@ -13,7 +13,6 @@
  */
 
 import type { Context } from 'hono';
-import { Context as CordisContext } from '@deepseek-ai/cordis';
 import type { FsTarget, FsVersion, FsWriteIntent } from '@deepseek-ai/dsh-fs';
 import { ContractError, toWireError } from '@pi/contract/errors.js';
 import { parseEnvelope } from '@pi/contract/envelope.js';
@@ -21,7 +20,6 @@ import { WorkspaceFileSystem } from '../fs/workspace-fs.js';
 import { makeWorkspaceFs } from '../fs/make-workspace-fs.js';
 import type { WorkspaceContext } from '../types.js';
 import type { WorkspaceManager } from '../workspace/manager.js';
-import { redactPhysicalRoots } from '../fs/redact.js';
 import { fileSearchService } from '../search/index.js';
 import type { SearchRoot } from '../search/index.js';
 
@@ -31,7 +29,6 @@ export interface InternalFsDeps {
   /** 该用户的 skill 草稿根（ADR 0009 D7 / 计划 H6.2）。按 owner 解析，每用户一个。 */
   readonly draftSkillRootFor?: (orgId: string, userId: string) => string | null;
   readonly enabledSkillPackagesFor: (orgId: string, userId: string) => readonly { name: string; sourcePath: string }[];
-  readonly cordisContext: unknown;
 }
 
 function physicalRootsOf(ctx: WorkspaceContext): readonly string[] {
@@ -77,10 +74,7 @@ async function parseJsonBody(c: Context): Promise<{ envelope: unknown; payload: 
   return { envelope: b['envelope'], payload: b['payload'] };
 }
 
-function makeFs(ctx: WorkspaceContext, _deps: InternalFsDeps): WorkspaceFileSystem {
-  // FileSystem registers as ctx.fs; reuse of one Cordis Context across HTTP
-  // requests throws on the second resolve. Each call gets a fresh tree.
-  void _deps.cordisContext;
+function makeFs(ctx: WorkspaceContext): WorkspaceFileSystem {
   return makeWorkspaceFs(ctx);
 }
 
@@ -91,8 +85,7 @@ async function withFs<T>(c: Context, deps: InternalFsDeps, fn: (fs: WorkspaceFil
     parseEnvelope(rawEnv);
     const env = rawEnv as { workspaceId: string; orgId: string; userId: string };
     const ctx = buildWorkspaceContext(deps, env);
-    const roots = requirePhysicalRoots(ctx);
-    const fs = makeFs(ctx, deps);
+    const fs = makeFs(ctx);
     const result = await fn(fs, ctx, rawPayload as T);
     return c.json({ ok: true, data: result });
   } catch (err) {
@@ -163,7 +156,7 @@ export function registerInternalFsRoutes(app: import('hono').Hono, deps: Interna
       const env = JSON.parse(Buffer.from(envelopeParam, 'base64url').toString('utf8'));
       parseEnvelope(env);
       const ctx = buildWorkspaceContext(deps, env as never);
-      const fs = makeFs(ctx, deps);
+      const fs = makeFs(ctx);
       const target = JSON.parse(Buffer.from(targetParam, 'base64url').toString('utf8')) as FsTarget;
       const iterable = await fs.streamText(target);
       // guardIterable 已在 WorkspaceFileSystem 内包好；这里再包一层确保 HTTP 层错误也脱敏

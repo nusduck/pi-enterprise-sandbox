@@ -44,49 +44,6 @@ function readConfigJson(agentVersion: unknown) {
 }
 
 /**
- * The extension names this AgentVersion asks for, in its own order.
- * Empty means "platform default set".
- *
- * @param agentVersion
- * @returns {string[]}
- */
-export function readAgentVersionExtensions(agentVersion: unknown) {
-  const config = readConfigJson(agentVersion);
-  return Array.isArray(config?.extensions) ? [...config.extensions] : [];
-}
-
-
-/**
- * Sub-agent resource limits declared by an AgentVersion's `configJson.subagent`
- * (`{ maxDepth?, maxConcurrent? }`). Absent/invalid values are omitted so the
- * extension falls back to its own (env-tunable) defaults. This mirrors how
- * `toolPolicy`/`thinkingLevel` live on the version: per-tenant behaviour stays
- * version-scoped instead of one deployment-wide env knob.
- *
- * @param agentVersion
- * @returns {{ maxDepth?: number, maxConcurrent?: number }}
- */
-export function readAgentVersionSubagentPolicy(agentVersion: unknown) {
-  const config = readConfigJson(agentVersion);
-  const subagent =
-    config?.subagent &&
-    typeof config.subagent === 'object' &&
-    !Array.isArray(config.subagent)
-      ? config.subagent
-      : {};
-  // @ts-expect-error 遗留JS占位类型object未展开，访问maxDepth需收窄，存活代码先用expect-error收敛 —— TS2339: Property 'maxDepth' does not exist on type 'object'.
-  const maxDepth = Number(subagent.maxDepth);
-  // @ts-expect-error 遗留JS占位类型object未展开，访问maxConcurrent需收窄，存活代码先用expect-error收敛 —— TS2339: Property 'maxConcurrent' does not exist on type 'object'.
-  const maxConcurrent = Number(subagent.maxConcurrent);
-  return {
-    ...(Number.isSafeInteger(maxDepth) && maxDepth >= 0 ? { maxDepth } : {}),
-    ...(Number.isSafeInteger(maxConcurrent) && maxConcurrent >= 1
-      ? { maxConcurrent }
-      : {}),
-  };
-}
-
-/**
  * The raw `configJson.toolPolicy` object, or `{}` when absent/malformed.
  *
  * Exported so callers can tell "this AgentVersion configures tool policy at

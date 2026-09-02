@@ -37,12 +37,6 @@ import { createStubRunExecutor } from '../application/run-executor.js';
 import { PINNED_PI_SDK_VERSION } from '../infrastructure/dsh/constants.js';
 import * as skillPathsModule from '../skills/paths.js';
 
-/** 一个调用者的 Skill 作用域：系统层 + 他自己的用户层。 */
-export interface SkillScope {
-  readonly skillRoots: string[];
-  readonly userSkillRoot: string | null;
-}
-
 /** 身份来自不可信来源，两个字段都可能缺；解析失败时降级到系统层。 */
 export interface IdentityLike {
   readonly orgId?: unknown;

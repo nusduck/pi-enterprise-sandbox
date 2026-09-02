@@ -235,7 +235,7 @@ DSH 的 turn 语义与预期不符（例如它把这当成永久 deny 而不是�
 1. `exec/src/fs/writable-roots.ts:20-25` —— `workspace-write` 模式增加草稿根。
    **只改这一处**：fs 围栏与 bwrap MountPlan 都从它派生（ADR 0008 D2）。
 2. 草稿根 `/home/sandbox/skill-draft`，`bind` 读写，**每用户一个**持久目录；
-   `LOGICAL_SKILL_ROOTS`（`constants.ts:10-13`）**不包含**它——草稿根不进发现、不进 system prompt。
+   `DEFAULT_SKILL_ROOTS`（`agent/src/skills/paths.ts:44-47`）**不包含**它——草稿根不进发现、不进 system prompt。
 3. 启用闸门（UI 唯一入口）：复用 `agent/src/skills/manager.ts` 的结构与大小校验，
    输入从「上传的 zip」换成「草稿目录」；通过后**把字节复制成一份只读的已发布副本**；
    记内容摘要与启用态（owner-scoped MySQL 表）。
@@ -643,7 +643,7 @@ SSE 契约、审批中心与提问应答的 URL 不动。
       **只改这一处**（fs 围栏与 bwrap MountPlan 都从它派生，ADR 0008 D2）。
       判据：搜不到第二处各算一遍的地方。
 - [x] **H6.2** 草稿根 `/home/sandbox/skill-draft`：`bind` 读写、**每用户一个**持久目录、进 MountPlan。
-- [x] **H6.3** ⛔ `constants.ts:9-13` 的 `LOGICAL_SKILL_ROOTS` **不得**包含草稿根。
+- [x] **H6.3** ⛔ `agent/src/skills/paths.ts:44-47` 的 `DEFAULT_SKILL_ROOTS` **不得**包含草稿根。
       判据：用例断言 `tool-skill` 发现结果里没有草稿包、system prompt 里也没有。
 - [x] **H6.4** 启用闸门：复用 `skills/manager.ts` 的结构与大小校验，输入从 zip 换成草稿目录。
 - [x] **H6.5** 启用时**把字节复制成只读的已发布副本**（不是挂载草稿目录）。

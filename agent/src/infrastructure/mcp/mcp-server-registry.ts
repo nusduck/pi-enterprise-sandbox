@@ -7,23 +7,14 @@
  * import — connecting to the servers is the factory's job.
  */
 
-import path from 'node:path';
 import {
   ENV_NAME_PATTERN,
   HEADER_NAME_PATTERN,
   MCP_TRANSPORT_VALUES,
   PiMcpAdapterError,
-  RESERVED_TRACE_ENV_NAMES,
-  RESERVED_TRACE_HEADER_NAMES,
-  SECRET_REF_PATTERN,
   SENSITIVE_QUERY_KEY,
   SERVER_ID_PATTERN,
 } from './mcp-constants.js';
-
-/** @param {unknown} value */
-export function cloneJson(value) {
-  return value == null ? value : JSON.parse(JSON.stringify(value));
-}
 
 /**
  * @param raw

@@ -34,7 +34,7 @@ import type { Context } from '@deepseek-ai/cordis';
 import { evaluatePreExecute, type ApprovalStore } from './pre-execute.js';
 import { runGuards, type GuardListener } from './guards.js';
 import { RunBudget, resolveRunBudget, wrapExecute } from './run-budget.js';
-import { recordLedger, redactPostExecute, type LedgerEntry } from './post-execute.js';
+import { recordLedger, type LedgerEntry } from './post-execute.js';
 import type { PolicyDecision } from './decision.js';
 import { RunPark, RUN_PARKED_REASON_CODE } from './park.js';
 import { approvalIdOf } from './approval-id.js';

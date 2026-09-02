@@ -9,37 +9,11 @@
  */
 
 import { TransactionManager } from '../infrastructure/mysql/transaction-manager.js';
-import { OrganizationRepository } from '../infrastructure/mysql/repositories/organization-repository.js';
-import { ExternalReferenceRepository } from '../infrastructure/mysql/repositories/external-reference-repository.js';
-import { AgentCatalogRepository } from '../infrastructure/mysql/repositories/agent-catalog-repository.js';
-import { ConversationRepository } from '../infrastructure/mysql/repositories/conversation-repository.js';
-import { AgentSessionRepository } from '../infrastructure/mysql/repositories/agent-session-repository.js';
-import { AgentSessionSnapshotRepository } from '../infrastructure/mysql/repositories/agent-session-snapshot-repository.js';
-import { MessageRepository } from '../infrastructure/mysql/repositories/message-repository.js';
-import { PiSessionJournalRepository } from '../infrastructure/mysql/repositories/pi-session-journal-repository.js';
-import { RunRepository } from '../infrastructure/mysql/repositories/run-repository.js';
-import { RunEventRepository } from '../infrastructure/mysql/repositories/run-event-repository.js';
-import { TraceSpanRepository } from '../infrastructure/mysql/repositories/trace-span-repository.js';
-import { IdempotencyRepository } from '../infrastructure/mysql/repositories/idempotency-repository.js';
-import { ToolExecutionRepository } from '../infrastructure/mysql/repositories/tool-execution-repository.js';
-import { ApprovalRepository } from '../infrastructure/mysql/repositories/approval-repository.js';
-import { InteractionRepository } from '../infrastructure/mysql/repositories/interaction-repository.js';
-import { SandboxAuditEventRepository } from '../infrastructure/mysql/repositories/sandbox-audit-event-repository.js';
-import { A2aCredentialRepository } from '../infrastructure/mysql/repositories/a2a-credential-repository.js';
-import { A2aTaskRepository } from '../infrastructure/mysql/repositories/a2a-task-repository.js';
-import { A2aAuditRepository } from '../infrastructure/mysql/repositories/a2a-audit-repository.js';
-import { ArtifactRepository } from '../infrastructure/mysql/repositories/artifact-repository.js';
-import { ProcessExecutionRepository } from '../infrastructure/mysql/repositories/process-execution-repository.js';
-import { CronJobRepository } from '../infrastructure/mysql/repositories/cron-job-repository.js';
-import { OutboxRepository } from '../infrastructure/outbox/outbox-repository.js';
 import { CreateRunService } from '../application/create-run-service.js';
 import { GetRunService } from '../application/get-run-service.js';
 import { CancelRunService } from '../application/cancel-run-service.js';
 import { ExecuteRunService } from '../application/execute-run-service.js';
 import { RunRecoveryService } from '../application/run-recovery-service.js';
-import { createStubRunExecutor } from '../application/run-executor.js';
-import { createPiRunExecutorFactory } from '../application/pi-run-executor.js';
-import { resolvePiRunToolBudget } from '../application/pi-run-tool-budget.js';
 import { SessionRecoveryService } from '../application/session-recovery-service.js';
 import { RunEventQueryService } from '../application/run-event-query-service.js';
 import { TraceQueryService } from '../application/trace-query-service.js';
@@ -58,18 +32,11 @@ import { buildArtifactDownloadUri as mintArtifactDownloadUri } from '../applicat
 import { ulid } from '../domain/shared/ulid.js';
 import { createRunWorkerRuntime } from './run-worker.js';
 import { PINNED_PI_SDK_VERSION } from '../infrastructure/dsh/constants.js';
-import { mkdirSync } from 'node:fs';
-import path from 'node:path';
-// Static: skill path policy is pure path math with no SDK side effects, and
-// resolveSkillRootsForRun runs on the per-Run hot path.
-import * as skillPathsModule from '../skills/paths.js';
 import {
   createRepositoryBundle,
   resolveMysqlUrlFromEnv,
   resolveRedisUrlFromEnv,
-  resolveSkillRootsForRun,
   resolveWorkerExecutorFactory,
-  assertWorkerSandboxServiceToken,
 } from './container-env.js';
 import { buildPiRunExecutorFactory } from './container-run-executor.js';
 import { buildSkillManagerFactory } from './container-skill-manager.js';
@@ -153,15 +120,13 @@ export class ServiceContainer {
     /**
      * Latest MCP discovery snapshot (may be incomplete after a cold-start
      * failure). Refreshed by {@link preflightMcpServers}; incomplete results
-     * are not permanent — later force/cooldown refreshes can recover tools.
+     * are not permanent — later forced refreshes can recover tools.
      */
-    this.#mcp = new McpDiscoveryState(env);
+    this.#mcp = new McpDiscoveryState();
   }
 
   /** @see McpDiscoveryState.preflight */
-  async preflightMcpServers(
-    opts: { force?: boolean; maxAttempts?: number; retryCooldownMs?: number } = {},
-  ) {
+  async preflightMcpServers(opts: { force?: boolean } = {}) {
     return this.#mcp.preflight(opts);
   }
 
@@ -985,8 +950,6 @@ export class ServiceContainer {
     if (this.shutdownDone) return;
     this.shutdownDone = true;
     const errors: unknown[] = [];
-
-    this.#mcp.stop();
 
     if (this.runQueueHandle) {
       try {

@@ -131,7 +131,7 @@ export function createSessionBackend(opts?: {
     });
   } catch (err) {
     if (err instanceof MysqlSessionStoreConfigError) {
-      return new InMemorySessionStore(roots);
+      return new InMemorySessionStore();
     }
     throw err;
   }

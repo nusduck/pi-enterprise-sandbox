@@ -29,15 +29,6 @@ export function assertInteractionResumePhase(value) {
 
 export const DURABLE_INTERACTION_PENDING = 'DURABLE_INTERACTION_PENDING';
 
-export function assertInteractionStatus(value) {
-  const status = String(value || '').trim().toUpperCase();
-  // @ts-expect-error 未校验string传入闭合联合，运行时需窄化守卫，存活代码先用expect-error收敛 —— TS2345: Argument of type 'string' is not assignable to parameter of 
-  if (!Object.values(INTERACTION_STATUS).includes(status)) {
-    throw new Error(`Invalid interaction status: ${String(value)}`);
-  }
-  return status;
-}
-
 export const INTERACTION_TYPES = Object.freeze(['input', 'select', 'confirm']);
 
 export function assertInteractionType(value) {

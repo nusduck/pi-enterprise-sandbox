@@ -13,7 +13,6 @@ import {
 import {
   IconRefresh,
   IconClose,
-  IconPlus,
   IconClock,
   IconSparkles,
   IconAlertCircle,

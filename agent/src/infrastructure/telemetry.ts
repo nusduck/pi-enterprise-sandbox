@@ -2,8 +2,6 @@ import {
   ROOT_CONTEXT,
   SpanKind,
   SpanStatusCode,
-  TraceFlags,
-  createTraceState,
   context,
   propagation,
   trace,
@@ -135,41 +133,6 @@ export function formatStoredTraceCarrier(run) {
     traceparent: `00-${traceId}-${spanId}-${flags}`,
     ...(run?.traceState ? { tracestate: String(run.traceState) } : {}),
   };
-}
-
-/**
- * 从一行带 trace 字段的记录还原 OTel 上下文。
- *
- * `spanId` 与 `parentSpanId` 都收：Run 行上存的是父 span（本进程要在它下面
- * 开新 span），而 span 行上存的是自己的 id。
- */
-export function contextFromTraceFields(
-  value:
-    | {
-        traceId?: string;
-        spanId?: string;
-        parentSpanId?: string;
-        traceFlags?: string | number;
-        traceState?: string;
-      }
-    | null
-    | undefined,
-  options: { isRemote?: boolean } = {},
-) {
-  const traceId = String(value?.traceId || '').toLowerCase();
-  const spanId = String(value?.spanId || value?.parentSpanId || '').toLowerCase();
-  if (!/^[0-9a-f]{32}$/.test(traceId) || !/^[0-9a-f]{16}$/.test(spanId)) {
-    return ROOT_CONTEXT;
-  }
-  const rawFlags = String(value?.traceFlags || '01');
-  const parsedFlags = Number.parseInt(rawFlags, 16);
-  return trace.setSpanContext(ROOT_CONTEXT, {
-    traceId,
-    spanId,
-    traceFlags: Number.isFinite(parsedFlags) ? parsedFlags : TraceFlags.SAMPLED,
-    isRemote: options.isRemote !== false,
-    ...(value?.traceState ? { traceState: createTraceState(value.traceState) } : {}),
-  });
 }
 
 export function startSpan(name, options = {}, parent = context.active()) {

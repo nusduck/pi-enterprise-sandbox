@@ -69,7 +69,6 @@ export function registerInternalShellRoutes(app: Hono, deps: InternalShellDeps):
       parseEnvelope(rawEnv);
       const env = rawEnv as { orgId: string; userId: string; workspaceId: string };
       const ctx = buildContext(deps, env);
-      const roots = rootsOf(ctx);
       const executor = new IsolatedShellExecutor({
         workspace: ctx,
         bwrapExecutable: deps.bwrapExecutable,

@@ -11,9 +11,8 @@
  *    **它自己的** `opts.riskOverrides`——两个不同的对象。于是
  *    `config/agent/tool-risk.json` 与 `TOOL_RISK_POLICY_*` 零效果。
  * 2. **租户层**：`buildAgentVersionToolRiskBindings(agentVersion)` 算出来的
- *    `agentVersionToolRiskPolicy` 只喂给 `extensionBundleFactory`——那批 Pi
- *    Extension 早已删除。而唯一会校验它的 `resolveAgentVersionBindings()`
- *    **没有任何调用方**，所以连 fail-closed 都不会触发。
+ *    `agentVersionToolRiskPolicy` 现在直接合入本 Run 的风险解析函数，随策略
+ *    装配一起生效。
  *
  * ## 分层不变量
  *

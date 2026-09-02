@@ -444,39 +444,6 @@ export function verifySnapshotChecksum(snapshot: { snapshotJson?: unknown, check
   }
 }
 
-/**
- * Parse JSONL text and validate fail-closed.
- * @param jsonlText
- * @returns {{ header: object, entries: object[] }}
- */
-export function parseAndValidateJsonl(jsonlText: string) {
-  if (typeof jsonlText !== 'string' || !jsonlText.trim()) {
-    throw new PiSessionAdapterError('JSONL text is required', {
-      code: 'PI_JSONL_PARSE_ERROR',
-    });
-  }
-  const lines = jsonlText.split('\n').filter((l) => l.trim().length > 0);
-  if (!lines.length) {
-    throw new PiSessionAdapterError('JSONL has no lines', {
-      code: 'PI_JSONL_PARSE_ERROR',
-    });
-  }
-  const parsed: unknown[] = [];
-  for (let i = 0; i < lines.length; i += 1) {
-    try {
-      parsed.push(JSON.parse(lines[i]));
-    } catch (err) {
-      throw new PiSessionAdapterError(
-        `JSONL line ${i + 1} is not valid JSON`,
-        { code: 'PI_JSONL_PARSE_ERROR', cause: err },
-      );
-    }
-  }
-  const header = parsed[0];
-  const entries = parsed.slice(1);
-  return validateSnapshotPayload({ header, entries });
-}
-
 export function buildSessionHeader(opts: { id: string, cwd: string, timestamp?: string }) {
   return {
     type: 'session',

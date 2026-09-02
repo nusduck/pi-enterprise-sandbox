@@ -3,7 +3,7 @@
  *
  * 这是什么：`MySqlJobRegistry`（见 `job-registry.ts`）以及它拆分出的同目录
  * 文件共用的类型定义——记录形状、持久化接口 `JobStore`、生产者要实现的
- * `JobProcessHandle`。本文件不含任何逻辑，只有类型和纯常量。
+ * `JobProcessHandle`。本文件不含任何逻辑。
  *
  * 为什么不直接 `import` `@deepseek-ai/dsh-jobs` 的 `JobRegistry`：
  * 那个契约的 `owner` 是活的 cordis `Agent` 对象，`start()` 的准入、完成通知、
@@ -41,17 +41,6 @@
  */
 export type JobStatus = 'running' | 'stopping' | 'completed' | 'killed' | 'failed';
 
-/** 终态集合——移植自 Python 版 `PROCESS_TERMINAL_STATUSES`（去掉细分）。 */
-export const TERMINAL_JOB_STATUSES: ReadonlySet<JobStatus> = new Set([
-  'completed',
-  'killed',
-  'failed',
-]);
-
-export function isTerminalStatus(status: JobStatus): boolean {
-  return TERMINAL_JOB_STATUSES.has(status);
-}
-
 // ── 归属 ────────────────────────────────────────────────────────────────
 
 /**
@@ -70,16 +59,6 @@ export interface JobOwner {
   readonly workspaceId: string;
   /** 可选：绑定的 Run，供批量撤销（"这次 Run 下所有作业"）使用。 */
   readonly runId?: string | undefined;
-}
-
-/**
- * 两个 owner 是否是同一租户/工作区——归属校验的唯一判据。
- * 故意不比较 `runId`：一次 Run 下可以起多个作业，`runId` 只用于批量筛选，
- * 不参与"这是不是你的作业"判断（对齐 Python 版 `get_owned` 只比较
- * org/user/session 三元组，不比较 run_id）。
- */
-export function sameOwner(a: JobOwner, b: JobOwner): boolean {
-  return a.orgId === b.orgId && a.userId === b.userId && a.workspaceId === b.workspaceId;
 }
 
 // ── 生产者接口：executor.ts 要实现的那一半 ─────────────────────────────

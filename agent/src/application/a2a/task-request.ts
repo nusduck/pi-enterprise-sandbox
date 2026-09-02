@@ -7,20 +7,14 @@
  * Pure — no repositories, no Run lookups.
  */
 
-import {
-  isTerminalRunStatus,
-  RUN_STATUS,
-} from '../../domain/run/run-status.js';
+import { RUN_STATUS } from '../../domain/run/run-status.js';
 import {
   normalizeOpaqueContextId,
   A2A_CONTEXT_ID_MAX_LEN,
 } from '../../infrastructure/mysql/repositories/a2a-task-repository.js';
 import { ValidationError } from '../errors.js';
-import { A2A_RPC_ERROR, JSON_RPC_ERROR } from './json-rpc.js';
-import {
-  A2A_SUPPORTED_OUTPUT_MODES,
-  A2A_ENTERPRISE_EXTENSION_URI,
-} from './agent-card.js';
+import { A2A_RPC_ERROR } from './json-rpc.js';
+import { A2A_SUPPORTED_OUTPUT_MODES } from './agent-card.js';
 
 /** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
 type Loose = any;

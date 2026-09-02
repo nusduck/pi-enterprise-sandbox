@@ -30,7 +30,6 @@ export interface InternalRouterDeps {
   /** 该用户的 skill 草稿根（ADR 0009 D7 / 计划 H6.2）。 */
   readonly draftSkillRootFor?: (orgId: string, userId: string) => string | null;
   readonly enabledSkillPackagesFor: (orgId: string, userId: string) => readonly { name: string; sourcePath: string }[];
-  readonly cordisContext: unknown;
   readonly bwrapExecutable: string;
   readonly modeFor: (workspaceId: string) => 'read-only' | 'workspace-write';
   readonly jobRegistry: MySqlJobRegistry;
@@ -91,7 +90,6 @@ export function createInternalRouter(deps: InternalRouterDeps): Hono {
     systemSkillRoot: deps.systemSkillRoot,
     enabledSkillPackagesFor: deps.enabledSkillPackagesFor,
     ...(deps.draftSkillRootFor ? { draftSkillRootFor: deps.draftSkillRootFor } : {}),
-    cordisContext: deps.cordisContext,
   });
   registerInternalShellRoutes(app, {
     workspaceManager: deps.workspaceManager,

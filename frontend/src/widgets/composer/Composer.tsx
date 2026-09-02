@@ -61,7 +61,6 @@ export function Composer() {
     draftText,
     setDraftText,
     sendMessage,
-    cancelStream,
     handleFilesSelected,
     removeAttachmentDraft,
     retryAttachmentDraft,

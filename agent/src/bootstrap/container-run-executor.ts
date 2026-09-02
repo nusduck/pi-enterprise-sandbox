@@ -14,9 +14,6 @@ import {
 } from './container-env.js';
 import { createPiRunExecutorFactory } from '../application/pi-run-executor.js';
 import { resolvePiRunToolBudget } from '../application/pi-run-tool-budget.js';
-import { SessionRecoveryService } from '../application/session-recovery-service.js';
-import { mkdirSync } from 'node:fs';
-import path from 'node:path';
 
 /** 过渡期宽松类型：容器与应用服务仍是 JS。 */
 type Loose = any;

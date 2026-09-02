@@ -138,7 +138,6 @@ export function registerPublicDatasetRoutes(app: Hono, deps: PublicDatasetDeps):
   const handleList = async (c: import('hono').Context): Promise<Response> => {
     const url = new URL(c.req.url);
     const sessionId = c.req.param('sessionId') ?? url.searchParams.get('session_id') ?? '';
-    const conversationId = c.req.param('conversationId') ?? url.searchParams.get('conversation_id') ?? '';
     const traceId = traceIdFrom(c);
     let roots: readonly string[] = [];
     try {

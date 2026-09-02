@@ -5,7 +5,7 @@
 import { createMysqlKnex, destroyMysqlKnex, migrationsDirectory } from './client.js';
 import { MysqlConfigError } from './errors.js';
 
-function migrationConfig(knex: import('knex').Knex) {
+function migrationConfig() {
   return {
     directory: migrationsDirectory(),
     tableName: 'knex_migrations',
@@ -39,7 +39,7 @@ export async function migrateLatest(knex: import('knex').Knex) {
   // CREATE TRIGGER and should not hard-fail solely on remote managed settings.
   let pending = [];
   if (typeof knex.migrate.list === 'function') {
-    const listed = await knex.migrate.list(migrationConfig(knex));
+    const listed = await knex.migrate.list(migrationConfig());
     // knex: [completed, pending]
     pending = Array.isArray(listed?.[1]) ? listed[1] : [];
   }
@@ -50,7 +50,7 @@ export async function migrateLatest(knex: import('knex').Knex) {
     await assertMysqlTriggerMigrationCapability(knex);
   }
 
-  return knex.migrate.latest(migrationConfig(knex));
+  return knex.migrate.latest(migrationConfig());
 }
 
 /**
@@ -62,7 +62,7 @@ export async function migrateRollback(knex: import('knex').Knex) {
   if (!knex || typeof knex.migrate?.rollback !== 'function') {
     throw new Error('migrateRollback requires a knex instance');
   }
-  return knex.migrate.rollback(migrationConfig(knex));
+  return knex.migrate.rollback(migrationConfig());
 }
 
 /**
@@ -74,7 +74,7 @@ export async function migrateRollbackAll(knex: import('knex').Knex) {
   if (!knex || typeof knex.migrate?.rollback !== 'function') {
     throw new Error('migrateRollbackAll requires a knex instance');
   }
-  return knex.migrate.rollback(migrationConfig(knex), true);
+  return knex.migrate.rollback(migrationConfig(), true);
 }
 
 /**
@@ -85,7 +85,7 @@ export async function migrateStatus(knex: import('knex').Knex) {
   if (!knex || typeof knex.migrate?.list !== 'function') {
     throw new Error('migrateStatus requires a knex instance');
   }
-  return knex.migrate.list(migrationConfig(knex));
+  return knex.migrate.list(migrationConfig());
 }
 
 /**

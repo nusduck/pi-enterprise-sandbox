@@ -17,7 +17,11 @@
  * approval gate by shipping a new agent version.
  */
 
-import { DECISION_RANK, RISK_LEVELS, RISK_RANK } from './policy-decision.js';
+import {
+  DECISION_RANK,
+  RISK_LEVELS,
+  RISK_RANK,
+} from '../../runtime/policy/decision.js';
 import {
   ASK_USER_TOOL_NAME,
   SANDBOX_TOOL_NAMES,

@@ -119,20 +119,3 @@ export function presentToolExecutionResponse(tool: Loose): Record<string, unknow
     updated_at: tool.completedAt ?? tool.startedAt ?? tool.createdAt ?? null,
   };
 }
-
-export function presentProcessResponse(process: Loose): Record<string, unknown> {
-  return {
-    process_id: process.processId,
-    session_id: process.sandboxSessionId,
-    sandbox_session_id: process.sandboxSessionId,
-    run_id: process.runId,
-    execution_id: process.executionId,
-    command: process.command || '',
-    status: process.status,
-    pid: process.pid ?? null,
-    exit_code: process.exitCode ?? null,
-    started_at: process.startedAt ?? null,
-    finished_at: process.endedAt ?? null,
-    created_at: process.createdAt ?? null,
-  };
-}

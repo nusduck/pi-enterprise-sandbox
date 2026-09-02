@@ -19,18 +19,18 @@ export interface PolicyDecision {
   readonly riskLevel: PolicyRiskLevel;
 }
 
-const DECISION_RANK: Record<PolicyDecisionKind, number> = {
+export const DECISION_RANK: Readonly<Record<PolicyDecisionKind, number>> = Object.freeze({
   allow: 0,
   require_approval: 1,
   deny: 2,
-};
+});
 
-const RISK_RANK: Record<PolicyRiskLevel, number> = {
+export const RISK_RANK: Readonly<Record<PolicyRiskLevel, number>> = Object.freeze({
   low: 0,
   medium: 1,
   high: 2,
   critical: 3,
-};
+});
 
 export function makePolicyDecision(
   partial: Omit<PolicyDecision, 'riskLevel'> & { riskLevel?: PolicyRiskLevel },

@@ -40,7 +40,7 @@ import {
   redactEventData,
 } from './fenced-run-event-recorder.js';
 import { createPromiseTail } from './promise-tail.js';
-import { isLocalSandboxTool } from '../infrastructure/dsh/tool-risk-classifier.js';
+import { SANDBOX_TOOL_NAMES } from '../runtime/policy/tool-names.js';
 import { redactPayload } from '../lib/event-redaction.js';
 import {
   assertToolExecutionReplayMatch,
@@ -242,7 +242,7 @@ export class FencedToolGovernanceRecorder {
 
   #resolveToolSource(toolName: string, explicit?: unknown) {
     if (explicit) return assertToolSource(explicit);
-    if (isLocalSandboxTool(toolName)) return TOOL_SOURCE.SANDBOX;
+    if (SANDBOX_TOOL_NAMES.includes(toolName)) return TOOL_SOURCE.SANDBOX;
     if (toolName.startsWith('mcp__')) return TOOL_SOURCE.MCP;
     return TOOL_SOURCE.INTERNAL;
   }

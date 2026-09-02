@@ -99,7 +99,8 @@ function projectMcpServers(
   discovery: { servers?: McpServerDiscovery[] } | null = null,
 ) {
   const registry = loadMcpServerRegistry(rawServers || []);
-  // `new Map(any)` 会塌成 Map<unknown, unknown>，显式给出元素类型。
+  // Constructing a map from `any` would infer Map<unknown, unknown>; spell out
+  // the element types instead.
   const discovered = new Map<string | undefined, McpServerDiscovery>(
     Array.isArray(discovery?.servers)
       ? discovery.servers.map((server) => [server.serverId, server])

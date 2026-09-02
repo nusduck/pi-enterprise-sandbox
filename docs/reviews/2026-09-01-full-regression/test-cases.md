@@ -446,7 +446,7 @@ SEC-01/SEC-02 只验普通用户「够不到什么」。产品的真实主用户
 
 ### CTX-01：长会话自动压缩
 
-Agent 侧有按 AgentVersion 冻结的 compaction 策略（`application/context-policy-service.ts`，默认 `enabled=true`、`reserveTokens=16384`、`keepRecentTokens=20000`）。真实用户的会话会跑到这条线上，但目前没有任何案例碰它。
+Agent 侧的 compaction 由 DSH `dsh-compaction` 负责，当前使用其默认策略（`enabled=true`、`reserveTokens=16384`、`keepRecentTokens=20000`）。真实用户的会话会跑到这条线上，但目前没有任何案例碰它。
 
 1. 在一个测试会话开头让模型记住一个一次性口令（例如 `CTX_TOKEN_20260901`），并明确要求后续随时可复述。
 2. 用可控方式把上下文推到压缩阈值：连续多轮让模型读写/输出较长内容（例如反复 `read` 一个几百行的合成文件并摘要），或直接选 `contextWindow` 较小的模型。记录轮次与大致 token 量。

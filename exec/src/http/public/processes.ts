@@ -16,7 +16,6 @@
 import { Hono } from 'hono';
 import { badRequest, conflict, errorBody, HttpError, notFound, payloadTooLarge } from './errors.js';
 import { parseActingHeaders, requireOwnedSession } from './ownership.js';
-import { redactPhysicalRoots } from '../../fs/redact.js';
 import type { WorkspaceManager } from '../../workspace/manager.js';
 import type { MySqlJobRegistry } from '../../shell/job-registry.js';
 import type { JobSnapshot } from '../../shell/job-types.js';

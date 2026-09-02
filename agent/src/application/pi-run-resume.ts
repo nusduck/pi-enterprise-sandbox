@@ -12,8 +12,6 @@
  */
 
 import { assertUlid } from '../domain/shared/ulid.js';
-import { redactPayload } from '../lib/event-redaction.js';
-import { sanitizeStatusReason } from './sanitize-status-reason.js';
 import { ConflictError } from '../infrastructure/mysql/errors.js';
 import { integrityFingerprint } from '../infrastructure/mysql/repositories/tool-execution-repository.js';
 import { APPROVAL_STATUS } from '../domain/tool/approval-status.js';
@@ -79,7 +77,6 @@ export async function prepareApprovalResume(executor, {
   runtimeSession,
   run,
   scope,
-  signal,
 }) {
   const approvalId = assertUlid(
     approvalResume.approvalId,

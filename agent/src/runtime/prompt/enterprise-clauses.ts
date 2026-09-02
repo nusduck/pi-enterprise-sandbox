@@ -17,8 +17,6 @@ export const DEFAULT_SKILL_ROOT = '/home/sandbox/skill';
  * 提示词里的默认值不直接用这个常量，而是从调用方给的 `skillRoot` 派生
  * （`${skillRoot}-draft`）——见 `enterpriseClauses()` 里的理由。
  */
-export const DEFAULT_DRAFT_SKILL_ROOT = '/home/sandbox/skill-draft';
-
 export interface EnterpriseClauseRoots {
   /** 可读写的用户工作区。相对路径在它下面解析。 */
   workspaceRoot?: string;

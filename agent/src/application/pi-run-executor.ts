@@ -37,15 +37,12 @@ import { PINNED_PI_SDK_VERSION } from '../infrastructure/dsh/constants.js';
 import { buildMcpPolicyBindings } from '../infrastructure/mcp/mcp-policy-bindings.js';
 import {
   buildAgentVersionToolRiskBindings,
-  readAgentVersionExtensions,
-  readAgentVersionSubagentPolicy,
   readAgentVersionToolPolicy,
 } from './tool-risk-bindings.js';
 import { PlatformEventProjector } from '../infrastructure/dsh/event-projector.js';
 import {
   extractAssistantTextForUi,
   extractAssistantThinkingForUi,
-  redactPayload,
 } from '../lib/event-redaction.js';
 import {
   assertTriggeringMessageBinding,
@@ -59,9 +56,6 @@ import { captureSessionSnapshotPayload } from './session-json-codec.js';
 import { ConflictError } from '../infrastructure/mysql/errors.js';
 import { FencedRunEventRecorder } from './fenced-run-event-recorder.js';
 import { FencedToolGovernanceRecorder } from './fenced-tool-governance-recorder.js';
-import { createPromiseTail } from './promise-tail.js';
-import { APPROVAL_STATUS } from '../domain/tool/approval-status.js';
-import { TOOL_EXECUTION_STATUS } from '../domain/tool/tool-execution-status.js';
 import { DurableSteerController } from './durable-steer-controller.js';
 import { installPiRunToolBudget } from './pi-run-tool-budget.js';
 import {
@@ -73,10 +67,8 @@ import {
   appendNonVisionImageNotice,
   attachmentsFromTriggeringMessage,
   derivePromptFromTriggeringMessage,
-  generateRunLeaseOwnerToken,
   imageAttachmentsFromTriggeringMessage,
   requestedModelIdFromTriggeringMessage,
-  replaceSuspendedToolResultInSession,
   toPiPromptInvocation,
 } from './pi-run-input.js';
 
@@ -626,9 +618,8 @@ export class PiRunExecutor {
 
       /**
        * Proof for piRuntimeFactory that configJson.toolPolicy is actually
-       * enforced this Run. Only enterprise-policy enforces it, so a Run
-       * assembled without the extension bundle deliberately leaves this null
-       * and lets the factory's fail-closed guard reject the AgentVersion.
+       * enforced this Run. Only enterprise-policy enforces it, so a Run with
+       * no AgentVersion tool policy deliberately leaves this null.
        * @type {object | null}
        */
       let toolPolicyBinding = null;
@@ -637,8 +628,7 @@ export class PiRunExecutor {
       //
       // 2026-08-31 之前这整段算在 `if (extensionBundleFactory)` 里面，也就是
       // **只有测试注入 bundle 时才会算**。生产没有 bundle，于是 AgentVersion 的
-      // toolPolicy / riskPolicy 算都不算。而唯一会因此 fail-closed 的
-      // `resolveAgentVersionBindings()` 又没有任何调用方，所以连报错都没有。
+      // toolPolicy / riskPolicy 算都不算。
       //
       // 现在无条件算，并合进本 Run 的风险解析函数交给策略装配。
       // 租户层只能收紧不能放松（`mergeToolRiskPolicies` 取最大风险 / 更严决定）：
@@ -648,7 +638,6 @@ export class PiRunExecutor {
       // AgentVersion 会撞上 "mcp config must be an array or { mcpServers: [] }"。
       // 这个坑以前藏在 `if (extensionBundleFactory)` 后面（生产不走），把这段
       // 提出来之后才暴露。按语义收敛在调用处：**没有配置就是没有 MCP 策略**。
-      // （`pi-mcp-adapter-factory` 整体在 H7 退役，不在这里做深度手术。）
       const hasVersionConfig =
         agentVersion != null &&
         typeof agentVersion === 'object' &&

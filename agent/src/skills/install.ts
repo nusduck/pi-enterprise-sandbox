@@ -3,7 +3,7 @@
  *
  * New packages have exactly two trusted entry points:
  *   1. a ZIP attachment fetched by attachment id; or
- *   2. an Agent-generated package supplied as structured text files.
+ *   2. a ZIP/.skill archive built by the Agent inside the sandbox.
  *
  * No URL, Git repository or caller-provided filesystem path is accepted.
  */
@@ -20,17 +20,9 @@ import {
   parseSkillMdFrontmatter,
   validateSkillPackage,
 } from './validator.js';
-import {
-  extractSkillArchive,
-  SKILL_ARCHIVE_MAX_PATH_BYTES,
-} from './archive.js';
+import { extractSkillArchive } from './archive.js';
 
-export const SKILL_EDIT_MAX_BYTES = 16 * 1024 * 1024;
-export const SKILL_EDIT_TIMEOUT_MS = 30_000;
 export const SKILL_INSTALL_TIMEOUT_MS = 90_000;
-export const SKILL_GENERATED_MAX_BYTES = 512 * 1024;
-export const SKILL_GENERATED_MAX_FILES = 32;
-export const SKILL_EDIT_MAX_FILES = 32;
 
 const PACKAGE_SCAN_MAX_DEPTH = 3;
 const PACKAGE_SCAN_MAX_CANDIDATES = 25;
@@ -442,49 +434,6 @@ export async function installSkillArchive(opts: { archiveBytes: Buffer, archiveN
   }
 }
 
-function normalizeDescription(value) {
-  const description = String(value ?? '').replace(/\s+/g, ' ').trim();
-  if (!description) throw new Error('Skill description is required');
-  if (description.length > 500) {
-    throw new Error('Skill description must be at most 500 characters');
-  }
-  return description;
-}
-
-/** @param {string} raw */
-export function normalizeGeneratedFilePath(raw) {
-  const value = String(raw ?? '').trim();
-  if (!value || /[\x00-\x1f\x7f]/.test(value) || value.includes('\\')) {
-    throw new Error('Generated Skill file path is invalid');
-  }
-  if (Buffer.byteLength(value, 'utf8') > SKILL_ARCHIVE_MAX_PATH_BYTES) {
-    throw new Error('Generated Skill file path is too long');
-  }
-  if (path.isAbsolute(value) || /^[A-Za-z]:\//.test(value)) {
-    throw new Error(`Generated Skill file path must be relative: ${value}`);
-  }
-  const segments = value.split('/');
-  if (segments.some((segment) => !segment || segment === '.' || segment === '..')) {
-    throw new Error(`Generated Skill file path is unsafe: ${value}`);
-  }
-  if (segments.some((segment) => segment.toLowerCase() === '.git')) {
-    throw new Error(`Generated Skill file path must not contain .git: ${value}`);
-  }
-  if (segments.join('/') === 'SKILL.md') {
-    throw new Error('SKILL.md is generated from name, description and instructions');
-  }
-  return segments.join('/');
-}
-
-/**
- * `createGeneratedSkill()`（`skill_create`）已退役（ADR 0009 D7 / 计划 H6.10）。
- *
- * 「让模型生成一个包」现在就是「模型往草稿根里写文件」——不需要一个专门的
- * 原子创建入口，因为草稿根本来就不进发现、不进 prompt，写到一半也不会有人看见。
- * 原子性真正重要的地方是**启用**，那一步用 `atomicReplaceDir()`
- * （见 `skills/enablement.ts`）。
- */
-
 /** @param {{ name: string, skillRoot: string }} opts */
 export async function uninstallSkill(opts) {
   const name = validateSkillName(opts.name);
@@ -498,24 +447,6 @@ export async function uninstallSkill(opts) {
   await rmrf(destination);
   return { name, path: destination, summary: `uninstalled ${name}` };
 }
-
-/**
- * ## `skill_edit` 的整套校验已退役（ADR 0009 D7 / 计划 H6.10）
- *
- * 这里原本有约 170 行：`prepareSkillEdit()` 的路径 / 字节上限 / 文件数上限 /
- * 单包约束 / 去重 / 超时，以及 `editSkillFiles()` / `editSkillFile()`。
- * 它们只服务于 `skill_edit` 这个工具，而 D7 取消了整套 skill 变更工具——
- * 模型改用 `write` / `bash` 在**草稿根**里直接改，和它在 workspace 里干活是
- * 同一组工具、同一套围栏。
- *
- * 那些校验想守的东西现在由别的地方守，而且守得更靠前：
- * - 「不能写到包外面」→ 由 exec 的 fs 围栏 + bwrap 挂载守（草稿根之外根本不可写）；
- * - 「不能碰 VCS 元数据 / 符号链接」→ 由**启用**时的 `inspectDraftPackage()` 守，
- *   而且那一刻才是真正重要的时刻（进只读挂载与 prompt 之前）；
- * - 「大小与文件数」→ 同上，`SKILL_ENABLE_MAX_BYTES` / `SKILL_ENABLE_MAX_FILES`。
- *
- * 换句话说：闸门从「每次写都校验一遍」搬到了「进入上下文之前校验一次」。
- */
 
 /** @param {string} skillRoot */
 export function listInstalledSkills(skillRoot) {

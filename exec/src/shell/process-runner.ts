@@ -23,7 +23,7 @@
  *   仍然用 `detached: true` + 目标进程组信号作为兜底防线（万一某次调用没有
  *   经过 bwrap，比如未来测试直接 spawn 别的东西），但不是主要的安全机制。
  */
-import { spawn, type ChildProcess } from 'node:child_process';
+import { type ChildProcess } from 'node:child_process';
 import { buildIsolationProfile } from '../isolation/build.js';
 import { spawnLaunch } from '../isolation/bubblewrap.js';
 import type { IsolationProfile, NetworkMode } from '../isolation/profile.js';

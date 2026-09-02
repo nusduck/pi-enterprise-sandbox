@@ -1,9 +1,7 @@
 /** Durable owner-scoped trace-span projection over formal Agent MySQL facts. */
 
-import { createHash } from 'node:crypto';
 import { applyOwnerScope, requireOwnerScope } from '../ownership.js';
 import { assertUlid } from '../../../domain/shared/ulid.js';
-import { redactPayload } from '../../../lib/event-redaction.js';
 import { toMysqlDateTime } from '../row-mappers.js';
 import {
   TERMINAL_RUN,

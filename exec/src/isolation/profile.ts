@@ -54,9 +54,6 @@ export interface NamespacePlan {
   readonly capDrop: 'ALL';
 }
 
-/** bwrap 挂载的种类，与 bwrap 的 flag 一一对应。 */
-export type MountKind = 'ro_bind' | 'bind' | 'dir' | 'proc' | 'dev' | 'tmpfs';
-
 interface MountCommon {
   readonly target: string;
   /**

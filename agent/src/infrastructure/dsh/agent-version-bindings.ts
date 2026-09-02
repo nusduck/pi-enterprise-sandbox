@@ -1,55 +1,17 @@
 /**
- * AgentVersion binding rules for the Pi runtime factory.
+ * AgentVersion config rules used by the Pi runtime factory.
  *
  * Pure, fail-closed resolution of an immutable Agent Version config into the
- * bindings `PiRuntimeFactory` hands to the SDK:
+ * model/config values the worker hands to the SDK:
  * - Full model in config cannot be overridden by a different input.model
  * - Logical modelPolicy references constrain resolver-supplied models
- * - Non-empty extensions/skills/mcpServers/toolPolicy/sandboxPolicy require
- *   explicit bindings
+ * - model policy and execution-related limits are validated before use
  *
  * No SDK import and no I/O — everything here is deterministic on its inputs.
  */
 
-import { assembleSystemPrompt } from '../../runtime/index.js';
 import { DshRuntimeFactoryError as PiRuntimeFactoryError } from './errors.js';
-import {
-  LOGICAL_SKILL_ROOT,
-  LOGICAL_WORKSPACE_ROOT,
-  PINNED_PI_SDK_VERSION,
-} from './constants.js';
-import { primarySkillRoot, normalizeSkillRoots } from '../../skills/paths.js';
-import { config as defaultAgentConfig } from '../../../config.js';
-
-/**
- * @param names
- * @returns {{ names: readonly string[] }}
- */
-function assertEnterpriseExtensions(names: unknown) {
-  const list = Array.isArray(names) ? names.map((name) => String(name)) : [];
-  return { names: Object.freeze(list) };
-}
-
-/**
- * 企业系统提示 = AgentVersion 的 lead（没有就用产品默认 lead）+ 不可覆盖的
- * 企业条款。`workspaceRoot` / `skillRoot` 从容器一路传到这里，条款里的路径
- * 用的就是它们——写死会让提示词和真实挂载点对不上。
- */
-function resolveEnterpriseSystemPrompt(
-  agentVersionSystemPrompt: unknown,
-  opts: {
-    productSystemPrompt?: string;
-    workspaceRoot?: string;
-    skillRoot?: string;
-  } = {},
-) {
-  const agentLead = String(agentVersionSystemPrompt || '').trim();
-  const productLead = String(opts.productSystemPrompt || '').trim();
-  return assembleSystemPrompt(agentLead || productLead, {
-    workspaceRoot: opts.workspaceRoot,
-    skillRoot: opts.skillRoot,
-  });
-}
+import { PINNED_PI_SDK_VERSION } from './constants.js';
 
 /**
  * Deep-clone then freeze plain JSON-compatible structures.
@@ -196,19 +158,6 @@ function isPlainObject(value: unknown) {
 }
 
 /**
- * @param value
- * @returns {boolean}
- */
-function isNonEmptyObject(value: unknown) {
-  return (
-    value != null &&
-    typeof value === 'object' &&
-    !Array.isArray(value) &&
-    Object.keys((value as Record<string, any>)).length > 0
-  );
-}
-
-/**
  * Identity fields that pin a Model to AgentVersion policy.
  * @param a
  * @param b
@@ -289,13 +238,6 @@ export function bindAgentVersionConfig(agentVersion: Record<string, any>) {
     configJson.sandboxPolicy && typeof configJson.sandboxPolicy === 'object'
       ? (configJson.sandboxPolicy as Record<string, unknown>)
       : {};
-  // Compaction policy. Absent → Pi SDK defaults (auto-compact on, 16k reserve,
-  // 20k kept recent), which is what production has always run with.
-  const contextPolicy =
-    configJson.contextPolicy && typeof configJson.contextPolicy === 'object'
-      ? (configJson.contextPolicy as Record<string, unknown>)
-      : {};
-
   // Model parameter overrides. maxOutputTokens is applied onto the resolved
   // Model.maxTokens (the SDK caps each provider response with it). temperature
   // is validated and carried for future SDK plumbing — pi-ai StreamOptions
@@ -343,7 +285,6 @@ export function bindAgentVersionConfig(agentVersion: Record<string, any>) {
       : Object.freeze([]),
     toolPolicy: Object.freeze({ ...toolPolicy }),
     sandboxPolicy: Object.freeze({ ...sandboxPolicy }),
-    contextPolicy: Object.freeze({ ...contextPolicy }),
   });
 }
 
@@ -477,268 +418,4 @@ function optionalFiniteNumber(value: unknown, field: string) {
     );
   }
   return n;
-}
-
-/**
- * Build the Pi `skillsOverride` that realises `AgentVersion.skills`.
- *
- * The field is an allowlist: the ResourceLoader still discovers every skill
- * under the run's skill roots, and this narrows what the model is told about.
- * A requested skill that this caller cannot see (wrong tier, not installed)
- * is reported as a warning rather than failing the Run — absence is a normal
- * per-user state, not a misconfiguration.
- *
- * @param allowedSkills
- * @returns {(base: { skills?: object[], diagnostics?: object[] }) => { skills: object[], diagnostics: object[] }}
- */
-export function createSkillAllowlistOverride(allowedSkills: readonly unknown[]) {
-  const allowed = new Set(
-    (Array.isArray(allowedSkills) ? allowedSkills : [])
-      .map((entry) => {
-        if (typeof entry === 'string') return entry.trim();
-        if (entry && typeof entry === 'object' && typeof ((entry as any).name) === 'string') {
-          return String((entry as any).name).trim();
-        }
-        return '';
-      })
-      .filter(Boolean),
-  );
-
-  return function skillAllowlistOverride(base) {
-    const skills = Array.isArray(base?.skills) ? base.skills : [];
-    const diagnostics = Array.isArray(base?.diagnostics) ? [...base.diagnostics] : [];
-    const kept = skills.filter((skill) =>
-      allowed.has(String((skill as any)?.name ?? '')),
-    );
-    const seen = new Set(
-      kept.map((skill) => String((skill as any)?.name ?? '')),
-    );
-    for (const name of allowed) {
-      if (seen.has(name)) continue;
-      diagnostics.push({
-        type: 'warning',
-        message: `AgentVersion.skills requests "${name}", which is not available on this run's skill roots`,
-      });
-    }
-    return { skills: kept, diagnostics };
-  };
-}
-
-/**
- * Explicit, testable resolved bindings seam for AgentVersion config.
- * Non-empty config without a corresponding binding fails closed.
- *
- * Wired to official SDK parameters only:
- * - resourceLoaderOptions.systemPrompt / extensionFactories / skillsOverride
- * - createAgentSessionFromServices tools / customTools
- *
- * @param bound
- * @param {{
- *   extensionFactories?: unknown[],
- *   skillsOverride?: Function,
- *   customTools?: unknown[],
- *   tools?: string[],
- *   mcpResolver?: Function | object | null,
- *   toolPolicyBinding?: object | null,
- *   additionalSkillPaths?: string[],
- *   workspaceRoot?: string,
- *   skillRoot?: string,
- *   productSystemPrompt?: string,
- *   excludeTools?: string[],
- * }} [options]
- */
-export function resolveAgentVersionBindings(bound: ReturnType<typeof bindAgentVersionConfig>, options: { extensionFactories?: unknown[], skillsOverride?: Function, customTools?: unknown[], tools?: string[], mcpResolver?: Function | Record<string, any> | null, toolPolicyBinding?: Record<string, any> | null, additionalSkillPaths?: string[], workspaceRoot?: string, skillRoot?: string, productSystemPrompt?: string, excludeTools?: string[], } = {}) {
-  const extensionFactories = options.extensionFactories;
-  // AgentVersion.skills is realised here rather than by every caller: the
-  // allowlist is fully determined by the frozen config, so requiring callers
-  // to hand-build the same override made the field unusable in production.
-  // An explicit override still wins (tests, future non-allowlist semantics).
-  const skillsOverride =
-    typeof options.skillsOverride === 'function'
-      ? options.skillsOverride
-      : bound.skills.length > 0
-        ? createSkillAllowlistOverride(bound.skills)
-        : undefined;
-  const customTools = options.customTools;
-  const tools = options.tools;
-  const mcpResolver = options.mcpResolver;
-  const toolPolicyBinding = options.toolPolicyBinding;
-
-  if (bound.extensions.length > 0) {
-    // Non-empty must resolve against the first-party registry (not legacy 12).
-    // The resolved names order the factory check below; nothing carries them
-    // into the prompt any more -- the loaded set reaches the model as tool
-    // schemas, which `## Tools` is filled from at before_agent_start.
-    /** @type {{ names: readonly string[] }} */
-    let resolved;
-    try {
-      resolved = assertEnterpriseExtensions(bound.extensions);
-    } catch (err) {
-      throw new PiRuntimeFactoryError(
-        err instanceof Error ? err.message : String(err),
-        { code: 'PI_EXTENSIONS_INVALID' },
-      );
-    }
-    if (!Array.isArray(extensionFactories) || extensionFactories.length === 0) {
-      throw new PiRuntimeFactoryError(
-        'AgentVersion.extensions is non-empty but no extensionFactories binding was provided (fail closed; PR-06 supplies real factories)',
-        { code: 'PI_BINDING_REQUIRED' },
-      );
-    }
-    if (extensionFactories.length !== resolved.names.length) {
-      throw new PiRuntimeFactoryError(
-        `extensionFactories must match resolved AgentVersion.extensions (${resolved.names.join(', ')}); got ${extensionFactories.length} factories`,
-        { code: 'PI_EXTENSIONS_COUNT' },
-      );
-    }
-    // Each factory must carry extensionName in resolved load order.
-    for (let i = 0; i < resolved.names.length; i += 1) {
-      const factory = extensionFactories[i];
-      const expected = resolved.names[i];
-      if (typeof factory !== 'function') {
-        throw new PiRuntimeFactoryError(
-          `extensionFactories[${i}] must be a function (${expected})`,
-          { code: 'PI_EXTENSIONS_NAME_MISMATCH' },
-        );
-      }
-      const named = (factory as Function & { extensionName?: string });
-      const name =
-        typeof named.extensionName === 'string'
-          ? named.extensionName
-          : null;
-      if (name !== expected) {
-        throw new PiRuntimeFactoryError(
-          `extensionFactories[${i}].extensionName must be "${expected}" (got ${name == null ? 'missing' : JSON.stringify(name)}); anonymous/forged factories are rejected`,
-          { code: 'PI_EXTENSIONS_NAME_MISMATCH' },
-        );
-      }
-    }
-  }
-  if (bound.skills.length > 0 && typeof skillsOverride !== 'function') {
-    // Unreachable while the allowlist default above stands; kept so a future
-    // change to that default cannot silently drop the skill restriction.
-    throw new PiRuntimeFactoryError(
-      'AgentVersion.skills is non-empty but no skillsOverride binding was resolved (fail closed)',
-      { code: 'PI_BINDING_REQUIRED' },
-    );
-  }
-  if (bound.mcpServers.length > 0) {
-    if (mcpResolver == null) {
-      throw new PiRuntimeFactoryError(
-        'AgentVersion.mcpServers is non-empty but no mcpResolver binding was provided (fail closed; PR-06 wires pi-mcp-adapter)',
-        { code: 'PI_BINDING_REQUIRED' },
-      );
-    }
-  }
-  if (isNonEmptyObject(bound.toolPolicy)) {
-    const hasToolBinding =
-      toolPolicyBinding != null ||
-      (Array.isArray(tools) && tools.length > 0) ||
-      (Array.isArray(customTools) && customTools.length > 0);
-    if (!hasToolBinding) {
-      throw new PiRuntimeFactoryError(
-        'AgentVersion.toolPolicy is non-empty but no tools/customTools/toolPolicyBinding was provided (fail closed)',
-        { code: 'PI_BINDING_REQUIRED' },
-      );
-    }
-  }
-  if (isNonEmptyObject(bound.sandboxPolicy)) {
-    // Unconditional, unlike the bindings above. Those ask "did a caller wire
-    // the thing that enforces this field?"; here nothing in this build can
-    // enforce it at all — the Sandbox service takes its quotas from deployment
-    // env — so accepting a binding would let a caller wave through a policy
-    // that this very message says is unenforced.
-    throw new PiRuntimeFactoryError(
-      'AgentVersion.sandboxPolicy is not supported by this build: sandbox limits are ' +
-        'deployment-level (SANDBOX_* environment variables), not per-AgentVersion. ' +
-        'Remove sandboxPolicy from configJson.',
-      { code: 'PI_FEATURE_NOT_ENABLED' },
-    );
-  }
-
-  // Enterprise system prompt (mirrors pi buildSystemPrompt shape) so we never
-  // fall through to the SDK default that points at node_modules docs paths.
-  // Skills progressive disclosure: additionalSkillPaths → ResourceLoader →
-  // formatSkillsForPrompt when `read` is available.
-  const skillPathsRaw = Array.isArray(options.additionalSkillPaths)
-    ? options.additionalSkillPaths.filter(
-        (p) => typeof p === 'string' && String(p).trim(),
-      )
-    : [];
-  // Default formal skill mount so progressive disclosure works without
-  // every caller remembering to pass additionalSkillPaths.
-  const skillPaths =
-    skillPathsRaw.length > 0
-      ? skillPathsRaw
-      : normalizeSkillRoots([
-          options.skillRoot || LOGICAL_SKILL_ROOT,
-        ]);
-  const productSystemPrompt =
-    typeof options.productSystemPrompt === 'string'
-      ? options.productSystemPrompt
-      : typeof defaultAgentConfig?.PRODUCT_SYSTEM_PROMPT === 'string'
-        ? defaultAgentConfig.PRODUCT_SYSTEM_PROMPT
-        : '';
-  const enterpriseSystemPrompt = resolveEnterpriseSystemPrompt(
-    typeof bound.systemPrompt === 'string' ? bound.systemPrompt : '',
-    {
-      productSystemPrompt,
-      workspaceRoot: options.workspaceRoot || LOGICAL_WORKSPACE_ROOT,
-      skillRoot:
-        options.skillRoot || primarySkillRoot(skillPaths) || LOGICAL_SKILL_ROOT,
-    },
-  );
-
-  // Exact AgentVersion string, including '' — never collapse empty to SDK defaults.
-  // noExtensions: true prevents agentDir auto-discovery of legacy package extensions.
-  // Only explicit extensionFactories (resolved enterprise three) are loaded.
-  const resourceLoaderOptions: Record<string, unknown> = {
-    systemPrompt: enterpriseSystemPrompt,
-    noExtensions: true,
-  };
-  if (skillPaths.length) {
-    resourceLoaderOptions.additionalSkillPaths = Object.freeze([...skillPaths]);
-  }
-  if (Array.isArray(extensionFactories) && extensionFactories.length) {
-    resourceLoaderOptions.extensionFactories = extensionFactories;
-  }
-  if (typeof skillsOverride === 'function') {
-    resourceLoaderOptions.skillsOverride = skillsOverride;
-  }
-
-  return Object.freeze({
-    systemPrompt: enterpriseSystemPrompt,
-    resourceLoaderOptions: Object.freeze({ ...resourceLoaderOptions }),
-    extensionFactories: Object.freeze(
-      Array.isArray(extensionFactories) ? [...extensionFactories] : [],
-    ),
-    skillsOverride: typeof skillsOverride === 'function' ? skillsOverride : null,
-    additionalSkillPaths: Object.freeze([...skillPaths]),
-    customTools: Array.isArray(customTools)
-      ? Object.freeze([...customTools])
-      : null,
-    tools: Array.isArray(tools) ? Object.freeze([...tools]) : null,
-    // Caller-supplied denials only. `ls`/`find`/`grep` used to be pinned here,
-    // but the SDK applies excludeTools to extension tools as well, so the
-    // sandbox-bridge replacements were denied along with the built-ins they
-    // shadow. The container-filesystem boundary is enforced after bind by
-    // findUnshadowedLocalTools() instead — see pi-runtime-constants.js.
-    excludeTools: Object.freeze([
-      ...new Set(
-        Array.isArray(options.excludeTools)
-          ? options.excludeTools.filter(
-              (name) => typeof name === 'string' && name.trim(),
-            )
-          : [],
-      ),
-    ]),
-    mcpResolver: mcpResolver ?? null,
-    // null → omit the option so the SDK resolves from settings, then clamps to
-    // the model. Never coerce to a concrete level here.
-    thinkingLevel: bound.thinkingLevel ?? null,
-    toolPolicyBinding: toolPolicyBinding ?? null,
-    // Compaction policy is applied to the run's settings manager, so unlike
-    // toolPolicy/sandboxPolicy it needs no separate caller-supplied binding.
-    contextPolicy: Object.freeze({ ...(bound.contextPolicy || {}) }),
-  });
 }

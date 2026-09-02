@@ -48,7 +48,6 @@ import type {
   JobStatus,
   JobStore,
 } from './job-types.js';
-import { isTerminalStatus } from './job-types.js';
 
 const DEFAULT_MAX_ACTIVE_PER_OWNER = 20;
 const DEFAULT_MAX_OUTPUT_BYTES = 500_000;

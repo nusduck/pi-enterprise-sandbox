@@ -275,9 +275,9 @@ describe('policy profile resolution', () => {
 describe('system prompt config surface', () => {
   it('does not export a dead platform-layer composer', () => {
     // PLATFORM_SYSTEM_PROMPT_LAYER / composeSystemPrompt never reached the
-    // model: runtime uses resolveEnterpriseSystemPrompt. Re-adding them would
-    // restore a lying "always appended" comment and a stale submit_artifact
-    // inventory line.
+    // model: the DSH runtime layer owns enterprise prompt composition.
+    // Re-adding them would restore a lying "always appended" comment and a
+    // stale submit_artifact inventory line.
     assert.equal(agentConfig.composeSystemPrompt, undefined);
     assert.equal(agentConfig.PLATFORM_SYSTEM_PROMPT_LAYER, undefined);
   });

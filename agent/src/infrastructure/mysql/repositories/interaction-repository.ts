@@ -2,7 +2,6 @@
 
 import { assertUlid } from '../../../domain/shared/ulid.js';
 import {
-  assertInteractionStatus,
   assertInteractionType,
   INTERACTION_STATUS,
   assertInteractionResumePhase,
@@ -41,14 +40,6 @@ function serializeJson(value, maxBytes, label) {
 
 function responseHash(text) {
   return sha256Hex(text);
-}
-
-/**
- * @param row
- * @returns {string}
- */
-function rowStatus(row: Record<string, unknown>) {
-  return assertInteractionStatus(row.status);
 }
 
 function assertReplayMatches(existing, expected, requestText) {

@@ -4,10 +4,6 @@
   "private": true,
   "description": "执行面：Bubblewrap 隔离、文件、命令、作业、产物。取代 Python 版 sandbox/。",
   "type": "module",
-  "exports": {
-    ".": "./dist/index.js"
-  },
-  "types": "./dist/index.d.ts",
   "engines": {
     "node": ">=22.19.0 <23"
   },

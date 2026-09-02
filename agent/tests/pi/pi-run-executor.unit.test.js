@@ -1009,8 +1009,7 @@ describe('PiRunExecutor', () => {
   it('AgentVersion 的 toolPolicy 真的到达策略装配（不再只在有 bundle 时才算）', async () => {
     // 2026-08-31（计划 H8）：这条以前叫「没有 bundle 就省掉 toolPolicyBinding，
     // 让工厂的 fail-closed 守卫开火」。两个前提都不成立了：
-    //   1) 那个守卫在 `resolveAgentVersionBindings()` 里，而它**没有任何调用方**；
-    //   2) 整段租户层策略算在 `if (extensionBundleFactory)` 里面，也就是只有
+    //   1) 整段租户层策略算在 `if (extensionBundleFactory)` 里面，也就是只有
     //      测试注入 bundle 时才会算——生产里 AgentVersion 的 toolPolicy 算都不算。
     // 也就是说旧断言守的是「一个不会开火的守卫」加「一段生产不会执行的代码」。
     //

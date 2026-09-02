@@ -10,7 +10,6 @@ import { RUN_STATUS } from '../domain/run/run-status.js';
 import type { PlatformEventProjector } from '../infrastructure/dsh/event-projector.js';
 import type { SessionRecoveryService } from './session-recovery-service.js';
 import { sanitizeStatusReason } from './sanitize-status-reason.js';
-import { UI_ASSISTANT_PI_ENTRY_PREFIX } from './pi-run-executor.js';
 
 /**
  * PiRunExecutor 的依赖面。

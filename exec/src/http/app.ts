@@ -3,7 +3,6 @@
  * main.ts 只负责从环境装配依赖并 listen。
  */
 import { Hono } from 'hono';
-import { Context } from '@deepseek-ai/cordis';
 import { createInternalRouter, type InternalRouterDeps } from './router.js';
 import { registerInternalMcpRoutes } from './internal-mcp.js';
 import { ArtifactService } from '../artifact/service.js';
@@ -71,7 +70,6 @@ export interface ExecAppDeps {
    */
   readonly draftSkillRootFor?: (orgId: string, userId: string) => string | null;
   readonly modeFor?: InternalRouterDeps['modeFor'];
-  readonly cordisContext?: unknown;
   /** MCP 窄桥的 bearer token；空串表示该桥不可用（回 503）。 */
   readonly mcpInternalToken?: string;
 }
@@ -79,13 +77,11 @@ export interface ExecAppDeps {
 export function createExecApp(deps: ExecAppDeps): Hono {
   const skills = deps.enabledSkillPackagesFor ?? (() => []);
   const modeFor = deps.modeFor ?? (() => 'workspace-write' as const);
-  const cordisContext = deps.cordisContext ?? new Context();
   const internal: InternalRouterDeps = {
     workspaceManager: deps.workspaceManager,
     systemSkillRoot: deps.systemSkillRoot,
     enabledSkillPackagesFor: skills,
     ...(deps.draftSkillRootFor ? { draftSkillRootFor: deps.draftSkillRootFor } : {}),
-    cordisContext,
     bwrapExecutable: deps.bwrapExecutable,
     modeFor,
     jobRegistry: deps.jobRegistry,

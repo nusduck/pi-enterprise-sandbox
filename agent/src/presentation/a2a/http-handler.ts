@@ -12,12 +12,10 @@
  * SSE: every data line is JSON-RPC; heartbeat is SSE comment.
  */
 
-import { isUlid, assertUlid } from '../../domain/shared/ulid.js';
+import { isUlid } from '../../domain/shared/ulid.js';
 import { A2A_SCOPES, hasScope } from '../../domain/a2a/scopes.js';
 import { A2aAuthError } from '../../application/a2a/credential-service.js';
 import {
-  A2aTaskError,
-  A2aAuditError,
   requireStableIdempotencyKey,
 } from '../../application/a2a/task-service.js';
 import {

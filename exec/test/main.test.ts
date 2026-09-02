@@ -12,7 +12,6 @@ import { createExecApp, createExecAppFromEnv } from '../src/http/app.js';
 import { WorkspaceManager } from '../src/workspace/manager.js';
 import { MySqlJobRegistry } from '../src/shell/job-registry.js';
 import { InMemoryJobStore } from '../src/shell/job-store-memory.js';
-import { Context } from '@deepseek-ai/cordis';
 
 const TEST_KID = 'test-kid-1';
 const TEST_KEY_B64URL = Buffer.from('0'.repeat(32), 'utf8').toString('base64url');
@@ -42,7 +41,6 @@ describe('createExecApp mounts health + internal + public routers', () => {
       keyring: KEYRING_JSON,
       systemSkillRoot: join(root, 'skills'),
       bwrapExecutable: '/usr/bin/bwrap',
-      cordisContext: new Context(),
       allowCidr: [],
     });
     workspaceId = '01ARZ3NDEKTSV4RRFFQ69G5FAV';

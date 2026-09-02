@@ -25,7 +25,7 @@ import { TracePanel } from '../trace-panel/TracePanel';
 import { ToolCallPanel } from '../tool-call-panel/ToolCallPanel';
 import { ProcessPanel } from '../process-panel/ProcessPanel';
 import { useWorkbenchSelection } from '../../app/layout/WorkbenchSelectionContext';
-import { IconClose, IconCopy, IconCheck, IconLayers, IconSparkles } from '../../shared/ui/Icons';
+import { IconClose, IconCopy, IconCheck, IconLayers } from '../../shared/ui/Icons';
 
 type TabDef = {
   id: InspectorTabId;
@@ -522,7 +522,6 @@ export function ContextInspector({
               agentSession={agentSession}
               sessionId={activeSessionId}
               conversationId={state.conversationId}
-              traceId={activeTraceId}
             />
           ) : null}
         </div>
@@ -765,7 +764,6 @@ function SessionPanel({
   agentSession,
   sessionId,
   conversationId,
-  traceId,
 }: {
   run: ReturnType<typeof getActiveRunEntity>;
   agentSession: {
@@ -779,7 +777,6 @@ function SessionPanel({
   } | null;
   sessionId: string | null;
   conversationId: string | null;
-  traceId: string | null;
 }) {
   if (!run && !agentSession && !sessionId && !conversationId) {
     return (

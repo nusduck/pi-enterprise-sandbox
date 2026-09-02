@@ -20,7 +20,6 @@ import { redactPhysicalRoots } from '../src/fs/redact.js';
 import { WorkspaceManager } from '../src/workspace/manager.js';
 import { MySqlJobRegistry } from '../src/shell/job-registry.js';
 import { InMemoryJobStore } from '../src/shell/job-store-memory.js';
-import { Context } from '@deepseek-ai/cordis';
 
 // ── helpers ──────────────────────────────────────────────────────────
 
@@ -164,7 +163,6 @@ test('envelope: workspaceId required, missing fails via router', async () => {
     workspaceManager: manager,
     systemSkillRoot: '/tmp/skills',
     enabledSkillPackagesFor: () => [],
-    cordisContext: new Context(),
     bwrapExecutable: '/usr/bin/bwrap',
     modeFor: () => 'workspace-write',
     jobRegistry: registry,
@@ -192,7 +190,6 @@ test('router: happy path sessions/ensure creates workspace', async () => {
     workspaceManager: manager,
     systemSkillRoot: '/tmp/skills',
     enabledSkillPackagesFor: () => [],
-    cordisContext: new Context(),
     bwrapExecutable: '/usr/bin/bwrap',
     modeFor: () => 'workspace-write',
     jobRegistry: registry,
@@ -228,7 +225,6 @@ test('router: fs search accepts the resolved FsTarget object', async () => {
     workspaceManager: manager,
     systemSkillRoot: '/tmp/skills',
     enabledSkillPackagesFor: () => [],
-    cordisContext: new Context(),
     bwrapExecutable: '/usr/bin/bwrap',
     modeFor: () => 'workspace-write',
     jobRegistry: registry,
@@ -271,7 +267,6 @@ test('router: CIDR deny returns 403 before HMAC', async () => {
     workspaceManager: manager,
     systemSkillRoot: '/tmp/skills',
     enabledSkillPackagesFor: () => [],
-    cordisContext: new Context(),
     bwrapExecutable: '/usr/bin/bwrap',
     modeFor: () => 'workspace-write',
     jobRegistry: registry,
@@ -302,7 +297,6 @@ test('router: tampered body_sha256 returns 401', async () => {
     workspaceManager: manager,
     systemSkillRoot: '/tmp/skills',
     enabledSkillPackagesFor: () => [],
-    cordisContext: new Context(),
     bwrapExecutable: '/usr/bin/bwrap',
     modeFor: () => 'workspace-write',
     jobRegistry: registry,

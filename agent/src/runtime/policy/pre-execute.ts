@@ -174,13 +174,3 @@ export async function evaluatePreExecute(
   await store.persistPending(approval);
   return { decision, approval, blocked: true };
 }
-
-export function approvalRequiredDecision(toolName: string): PolicyDecision {
-  return makePolicyDecision({
-    decision: 'require_approval',
-    reasonCode: 'RISK_HIGH',
-    reason: `${toolName} requires approval`,
-    policyId: 'platform:risk-table',
-    riskLevel: 'high',
-  });
-}

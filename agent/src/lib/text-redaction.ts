@@ -20,7 +20,7 @@ export function redactSecretText(value) {
   for (const pattern of SECRET_PATTERNS) {
     // Patterns without a capture group pass the match offset as the 2nd
     // callback arg (a number). Only treat a string capture as a field name.
-    text = text.replace(pattern, (match, key) =>
+    text = text.replace(pattern, (_match, key) =>
       typeof key === 'string' ? `${key}=[REDACTED]` : '[REDACTED]',
     );
   }

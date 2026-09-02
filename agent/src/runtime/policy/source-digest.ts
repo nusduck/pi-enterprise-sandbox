@@ -16,8 +16,6 @@
 import { createHash } from 'node:crypto';
 import { makePolicyDecision, type PolicyDecision } from './decision.js';
 
-export const SOURCE_DIGEST_RE = /^[a-f0-9]{64}$/;
-
 export function canonicalJson(value: unknown): string {
   return JSON.stringify(sortValue(value));
 }

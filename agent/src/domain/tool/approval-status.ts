@@ -43,20 +43,4 @@ export function isTerminalApprovalStatus(status: string) {
   return TERMINAL.has(status);
 }
 
-/**
- * Typed durable pending signal for PiRunExecutor (not an in-process waiter).
- * Policy returns block + this signal after the same transaction has moved the
- * Run to WAITING_APPROVAL. PiRunExecutor uses it to stop the current model loop
- * only after the durable pause exists.
- */
-export type DurableApprovalPendingSignal = {
-  kind: 'DURABLE_APPROVAL_PENDING';
-  approvalId: string;
-  toolExecutionId: string;
-  toolCallId: string;
-  toolName: string;
-  runId: string;
-  status: 'PENDING';
-};
-
 export const DURABLE_APPROVAL_PENDING = 'DURABLE_APPROVAL_PENDING';

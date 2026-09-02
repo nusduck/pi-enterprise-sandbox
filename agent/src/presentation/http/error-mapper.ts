@@ -116,32 +116,3 @@ export function mapErrorToHttp(error: unknown): HttpErrorResponse {
   console.error('[agent-http] unmapped error →500:', error);
   return { status: 500, body: { error: 'Internal server error' } };
 }
-
-export function mapProcessErrorToHttp(error: unknown): HttpErrorResponse {
-  const mapped = mapErrorToHttp(error);
-  if (mapped.status !== 500) return mapped;
-  const err = (error ?? {}) as ErrorLike;
-  const status = Number(err.status ?? err.httpStatus);
-  if (status === 400 || status === 422) {
-    return {
-      status: 400,
-      body: { error: 'Invalid process request', code: 'INVALID_PROCESS_REQUEST' },
-    };
-  }
-  if (status === 404) {
-    return { status: 404, body: { error: 'Process not found', code: 'NOT_FOUND' } };
-  }
-  if (status === 409) {
-    return {
-      status: 409,
-      body: { error: 'Process operation conflict', code: 'PROCESS_CONFLICT' },
-    };
-  }
-  if (status === 503) {
-    return {
-      status: 503,
-      body: { error: 'Process service unavailable', code: 'DEPENDENCY' },
-    };
-  }
-  return mapped;
-}

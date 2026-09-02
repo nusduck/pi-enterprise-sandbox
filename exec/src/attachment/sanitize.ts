@@ -61,10 +61,3 @@ export function sanitizeFilename(name: string): string {
   }
   return base;
 }
-
-export function newAttachmentId(): string {
-  // 与 Python 版 `att_{uuid.hex}` 对齐
-  const hex = [...Array(16)].map(() => Math.floor(Math.random() * 256).toString(16).padStart(2, '0')).join('');
-  // 用 crypto 随机避免可预测，但测试只检查前缀
-  return `att_${hex}`;
-}
