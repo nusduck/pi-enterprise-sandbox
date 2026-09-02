@@ -74,6 +74,7 @@ describe('PlatformEventProjector', () => {
     assert.equal(events[0].type, 'thinking.completed');
     assert.equal(events[0].payload.text, 'I should list the skills.');
     assert.equal(events[1].type, 'message.completed');
+    assert.equal(events[1].payload.text, 'Here they are.');
     assert.equal(events[1].payload.message.content[0].type, 'reasoning');
     assert.equal(events[1].payload.message.content[0].text, 'I should list the skills.');
   });

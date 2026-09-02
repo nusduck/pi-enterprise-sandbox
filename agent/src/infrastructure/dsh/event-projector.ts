@@ -159,11 +159,18 @@ export class PlatformEventProjector {
             },
           });
         }
+        const assistantText = extractAssistantTextForUi(message);
         out.push({
           type: 'message.completed',
           payload: {
             ...base,
             role: message?.role ?? 'assistant',
+            ...(assistantText
+              ? {
+                  text: assistantText.slice(0, DEFAULT_MAX_RESULT_CHARS),
+                  text_truncated: assistantText.length > DEFAULT_MAX_RESULT_CHARS,
+                }
+              : {}),
             message: summarizeAssistantMessage(message),
           },
         });

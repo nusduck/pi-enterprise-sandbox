@@ -133,6 +133,48 @@ describe('normalizeToRuntimeEvent', () => {
     assert.equal(store.messagesById.msg_preview.status, 'complete');
   });
 
+  it('does not copy reasoning blocks into the assistant bubble on message.completed', () => {
+    const runId = 'run_reason_leak';
+    const { store } = reducePlatformEventBatch(createEntityStore(), [
+      platform({ eventId: 'leak_1', sequence: 1, type: 'run.started', runId }),
+      platform({
+        eventId: 'leak_2',
+        sequence: 2,
+        type: 'thinking.delta',
+        runId,
+        data: { messageId: 'msg_leak', delta: 'The user says that is not what they meant.' },
+      }),
+      platform({
+        eventId: 'leak_3',
+        sequence: 3,
+        type: 'message.delta',
+        runId,
+        data: { messageId: 'msg_leak', delta: '明白了，我来确认一下。' },
+      }),
+      platform({
+        eventId: 'leak_4',
+        sequence: 4,
+        type: 'message.completed',
+        runId,
+        data: {
+          messageId: 'msg_leak',
+          message: {
+            role: 'assistant',
+            content: [
+              { type: 'reasoning', text: 'The user says that is not what they meant.' },
+              { type: 'text', text: '明白了，我来确认一下。' },
+            ],
+          },
+        },
+      }),
+    ]);
+    assert.equal(store.messagesById.msg_leak.text, '明白了，我来确认一下。');
+    assert.equal(
+      store.messagesById.msg_leak.thinking,
+      'The user says that is not what they meant.',
+    );
+  });
+
   it('streams provider thinking separately from final answer text', () => {
     const runId = 'run_thinking';
     const { store } = reducePlatformEventBatch(createEntityStore(), [

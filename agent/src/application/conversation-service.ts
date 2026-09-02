@@ -19,7 +19,10 @@ import {
   conversationTitleFromMessages,
   isPlaceholderConversationTitle,
 } from './conversation-title.js';
-import { extractAssistantThinkingForUi } from '../lib/event-redaction.js';
+import {
+  extractAssistantTextForUi,
+  extractAssistantThinkingForUi,
+} from '../lib/event-redaction.js';
 
 /** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
 type Loose = any;
@@ -75,29 +78,11 @@ export function presentTranscriptMessage(msg) {
       if (current) {
         if (typeof current.content === 'string') text = current.content;
         else if (Array.isArray(current.content)) {
-          text = current.content
-            .map((p) =>
-              typeof p === 'string'
-                ? p
-                : p && typeof p === 'object' && typeof p.text === 'string'
-                  ? p.text
-                  : '',
-            )
-            .filter(Boolean)
-            .join('');
+          text = extractAssistantTextForUi(current);
         }
       }
     } else if (Array.isArray(content.content)) {
-      text = content.content
-        .map((p) =>
-          typeof p === 'string'
-            ? p
-            : p && typeof p === 'object' && typeof p.text === 'string'
-              ? p.text
-              : '',
-        )
-        .filter(Boolean)
-        .join('');
+      text = extractAssistantTextForUi(content);
     }
   }
   // Empty assistant placeholders (tool-only turns) still surface as empty bubbles

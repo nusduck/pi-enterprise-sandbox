@@ -15,6 +15,23 @@ export interface InteractionRequester {
   }): Promise<unknown>;
 }
 
+/**
+ * Thrown after the durable WAITING_INPUT row is committed. DSH must not
+ * fabricate an answers value; the tool ledger must not record this throw as
+ * a FAILED execution — that 409s the later human response.
+ */
+export class DurableInteractionPendingError extends Error {
+  constructor() {
+    super('user interaction pending');
+    this.name = 'DurableInteractionPendingError';
+  }
+}
+
+export function isDurableInteractionPendingError(error: unknown): boolean {
+  if (error instanceof DurableInteractionPendingError) return true;
+  return error instanceof Error && error.message === 'user interaction pending';
+}
+
 const requesterAls = new AsyncLocalStorage<InteractionRequester | null>();
 const installedContexts = new WeakSet<object>();
 

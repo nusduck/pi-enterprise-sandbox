@@ -25,6 +25,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`ask_user_question` 选项无法点选（409 CONFLICT）**：停泊时故意抛 `user interaction pending` 防止 DSH 伪造答案，但 `tools/execute` 环绕把它记成 FAILED。人点选项时 CAS 要求工具仍是 RUNNING，于是 409。停泊抛错现在不再关账本。
+- **助手气泡有时把 reasoning 当正文**：`message.completed` 把 `reasoning` 块和 `text` 拼在一起；短 CoT 不超过截断阈值时会盖住已流式的中文回复。正文只取 `text` 块，reasoning 仍走 Thought Process。
+
 - **前台 durable 子 Agent 不再被单 Worker 并发自阻塞**：DSH 直接 content block prompt
   现在正确转换为 durable task；Compose/Worker 默认并发提升为 4，父 Run 等待子 Run
   时仍有可用槽位，避免子 Run 永远停在队列中。

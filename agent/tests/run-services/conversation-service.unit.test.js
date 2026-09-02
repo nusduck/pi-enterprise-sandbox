@@ -48,6 +48,25 @@ describe('ConversationService MySQL authority', () => {
     });
   });
 
+  it('does not put reasoning parts into the assistant bubble text', () => {
+    const message = presentTranscriptMessage({
+      messageId: 'msg_reason',
+      runId: 'run_01',
+      role: 'assistant',
+      messageType: 'text',
+      sequenceNo: 2,
+      contentJson: {
+        content: [
+          { type: 'reasoning', text: 'The user says that is not what they meant.' },
+          { type: 'text', text: '明白了，我来确认一下。' },
+        ],
+      },
+      createdAt: '2026-07-18T06:00:00.123Z',
+    });
+    assert.equal(message.content[0].text, '明白了，我来确认一下。');
+    assert.equal(message.thinking, undefined);
+  });
+
   it('surfaces persisted assistant thinking on the transcript', () => {
     const message = presentTranscriptMessage({
       messageId: 'msg_think',

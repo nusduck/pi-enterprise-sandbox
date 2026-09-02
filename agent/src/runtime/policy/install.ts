@@ -39,6 +39,7 @@ import type { PolicyDecision } from './decision.js';
 import { RunPark, RUN_PARKED_REASON_CODE } from './park.js';
 import { approvalIdOf } from './approval-id.js';
 import { runWithToolExecutionContext } from '../providers/tool-execution-context.js';
+import { isDurableInteractionPendingError } from '../providers/user-questions.js';
 
 /** 最小可用的工具执行形状——只取本模块用得到的字段，不复制 DSH 的完整类型。 */
 interface ToolExecutionLike {
@@ -242,9 +243,15 @@ export function installEnterprisePolicy(ctx: Context, options: InstallPolicyOpti
               .catch((e) => note('ended', e));
             return result;
           } catch (err) {
-            await ledger
-              .ended({ toolCallId, toolName, isError: true, result: { error: String(err) }, args })
-              .catch((e) => note('ended(after throw)', e));
+            // Parking ask_user_question throws after the WAITING_INPUT row is
+            // committed so DSH cannot fabricate an answer. Recording that throw
+            // as FAILED leaves the tool un-respondable (CAS: have FAILED,
+            // expected RUNNING) — compose 2026-09-02, 409 CONFLICT.
+            if (!isDurableInteractionPendingError(err)) {
+              await ledger
+                .ended({ toolCallId, toolName, isError: true, result: { error: String(err) }, args })
+                .catch((e) => note('ended(after throw)', e));
+            }
             throw err;
           }
         },

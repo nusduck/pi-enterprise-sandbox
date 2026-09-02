@@ -524,6 +524,33 @@ test('工具执行 ALS 暴露当前 callId/name/args，供交互桥绑定 durabl
   });
 });
 
+test('ask_user 停泊抛错不得记 FAILED——否则人答 409', async () => {
+  const ctx = new FakeCtx();
+  const calls: Array<{ phase: string; isError?: boolean }> = [];
+  installOn(ctx, {
+    toolLedger: {
+      async started() {
+        calls.push({ phase: 'started' });
+      },
+      async ended({ isError }) {
+        calls.push({ phase: 'ended', isError });
+      },
+    },
+  } as never);
+
+  await assert.rejects(
+    () =>
+      ctx.execute(
+        { name: 'ask_user_question', arguments: { questions: [] }, id: 'call-park' },
+        async () => {
+          throw new Error('user interaction pending');
+        },
+      ),
+    /user interaction pending/,
+  );
+  assert.deepEqual(calls, [{ phase: 'started' }]);
+});
+
 test('H9.6 记账失败不影响工具结果——账本是外部副作用', async () => {
   const ctx = new FakeCtx();
   installOn(ctx, {

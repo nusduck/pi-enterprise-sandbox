@@ -1,4 +1,6 @@
 /** Turn a DSH ask_user request into one durable WAITING_INPUT suspension. */
+import { DurableInteractionPendingError } from '../runtime/providers/user-questions.js';
+
 type Loose = any;
 
 export function createInteractionRequester(input: {
@@ -36,6 +38,6 @@ export function createInteractionRequester(input: {
     input.runSuspensionPort.onDurableInteractionPending(pending.durablePending);
     // The durable row is the result of this call. Throwing prevents DSH from
     // fabricating an answers value while the executor tears down the prompt.
-    throw new Error('user interaction pending');
+    throw new DurableInteractionPendingError();
   };
 }

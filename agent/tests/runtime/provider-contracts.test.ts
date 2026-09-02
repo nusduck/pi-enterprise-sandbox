@@ -115,7 +115,10 @@ test('interaction requester durably parks the Run instead of fabricating an answ
         options: [{ label: '快速' }, { label: '稳妥' }],
       }],
     }),
-    /user interaction pending/,
+    (error: unknown) =>
+      error instanceof Error &&
+      error.name === 'DurableInteractionPendingError' &&
+      error.message === 'user interaction pending',
   );
   assert.deepEqual(recorded, {
     toolCallId: 'call-02',

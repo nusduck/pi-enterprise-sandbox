@@ -60,15 +60,25 @@ function pickStr(...vals: unknown[]): string {
   return '';
 }
 
+function isReasoningPart(part: Record<string, unknown>): boolean {
+  const type = String(part.type || '');
+  return type === 'reasoning' || type === 'thinking';
+}
+
 function messageText(value: unknown): string {
   if (typeof value === 'string') return value;
   if (!isPlainObject(value)) return '';
-  if (typeof value.text === 'string') return value.text;
-  if (!Array.isArray(value.content)) return '';
+  if (typeof value.text === 'string' && !Array.isArray(value.content)) return value.text;
+  if (!Array.isArray(value.content)) {
+    return typeof value.text === 'string' ? value.text : '';
+  }
   return value.content
     .map((part) => {
       if (typeof part === 'string') return part;
-      return isPlainObject(part) && typeof part.text === 'string' ? part.text : '';
+      if (!isPlainObject(part) || typeof part.text !== 'string') return '';
+      if (isReasoningPart(part)) return '';
+      const type = String(part.type || 'text');
+      return type === 'text' ? part.text : '';
     })
     .filter(Boolean)
     .join('');

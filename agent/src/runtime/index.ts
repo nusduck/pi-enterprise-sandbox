@@ -25,6 +25,8 @@ export {
   runWithInteractionRequester,
   currentInteractionRequester,
   installUserQuestionBridge,
+  DurableInteractionPendingError,
+  isDurableInteractionPendingError,
 } from './providers/user-questions.js';
 export {
   runWithToolExecutionContext,
