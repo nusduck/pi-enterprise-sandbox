@@ -418,7 +418,7 @@ test('SkillManager rejects malformed install inputs before downloading bytes', a
   );
   await assert.rejects(
     manager.install({ attachmentId: 'dataset-1', archiveName: 'skill.tar.gz' }),
-    /ZIP attachments only/,
+    /(ZIP attachments only|\.zip or \.skill archives)/,
   );
   assert.equal(downloads, 0);
 });

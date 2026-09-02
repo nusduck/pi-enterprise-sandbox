@@ -6,6 +6,7 @@ import { Hono } from 'hono';
 import { createInternalRouter, type InternalRouterDeps } from './router.js';
 import { registerInternalMcpRoutes } from './internal-mcp.js';
 import { ArtifactService } from '../artifact/service.js';
+import { DatasetService } from '../dataset/service.js';
 import { makeWorkspaceFs } from '../fs/make-workspace-fs.js';
 import { createPublicRouter, type PublicRouterDeps } from './public/router.js';
 import { WorkspaceManager } from '../workspace/manager.js';
@@ -70,6 +71,8 @@ export interface ExecAppDeps {
    */
   readonly draftSkillRootFor?: (orgId: string, userId: string) => string | null;
   readonly modeFor?: InternalRouterDeps['modeFor'];
+  readonly artifactService?: ArtifactService;
+  readonly datasetService?: DatasetService;
   /** MCP 窄桥的 bearer token；空串表示该桥不可用（回 503）。 */
   readonly mcpInternalToken?: string;
 }
@@ -77,6 +80,9 @@ export interface ExecAppDeps {
 export function createExecApp(deps: ExecAppDeps): Hono {
   const skills = deps.enabledSkillPackagesFor ?? (() => []);
   const modeFor = deps.modeFor ?? (() => 'workspace-write' as const);
+  const artifactService = deps.artifactService ?? new ArtifactService(makeWorkspaceFs);
+  const datasetService = deps.datasetService ?? new DatasetService(makeWorkspaceFs);
+
   const internal: InternalRouterDeps = {
     workspaceManager: deps.workspaceManager,
     systemSkillRoot: deps.systemSkillRoot,
@@ -87,12 +93,15 @@ export function createExecApp(deps: ExecAppDeps): Hono {
     jobRegistry: deps.jobRegistry,
     keyring: deps.keyring,
     ...(deps.allowCidr !== undefined ? { allowCidr: deps.allowCidr } : {}),
+    artifactService,
   };
   const pub: PublicRouterDeps = {
     workspaceManager: deps.workspaceManager,
     systemSkillRoot: deps.systemSkillRoot,
     enabledSkillPackagesFor: skills,
     jobRegistry: deps.jobRegistry,
+    artifactService,
+    datasetService,
   };
 
   const app = new Hono();
@@ -111,7 +120,7 @@ export function createExecApp(deps: ExecAppDeps): Hono {
     workspaceManager: deps.workspaceManager,
     systemSkillRoot: deps.systemSkillRoot,
     bwrapExecutable: deps.bwrapExecutable,
-    artifactService: new ArtifactService(makeWorkspaceFs),
+    artifactService,
     internalToken: deps.mcpInternalToken ?? '',
   });
   return app;

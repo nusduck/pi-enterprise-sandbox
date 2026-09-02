@@ -551,6 +551,32 @@ test('ask_user 停泊抛错不得记 FAILED——否则人答 409', async () => 
   assert.deepEqual(calls, [{ phase: 'started' }]);
 });
 
+test('ask_user_question 返回 user interaction pending 结果时不写 ended(isError: true) 账本', async () => {
+  const ctx = new FakeCtx();
+  const calls: Array<{ phase: string; isError?: boolean }> = [];
+  installOn(ctx, {
+    toolLedger: {
+      async started() {
+        calls.push({ phase: 'started' });
+      },
+      async ended({ isError }) {
+        calls.push({ phase: 'ended', isError });
+      },
+    },
+  } as never);
+
+  const out = await ctx.execute(
+    { name: 'ask_user_question', arguments: { questions: [] }, id: 'call-park-2' },
+    async () => ({
+      isError: true,
+      error: { message: 'user interaction pending' },
+      content: [{ type: 'text', text: 'user interaction pending' }],
+    }),
+  );
+  assert.equal((out as any)?.isError, true);
+  assert.deepEqual(calls, [{ phase: 'started' }]);
+});
+
 test('H9.6 记账失败不影响工具结果——账本是外部副作用', async () => {
   const ctx = new FakeCtx();
   installOn(ctx, {

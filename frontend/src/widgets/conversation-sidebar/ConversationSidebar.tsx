@@ -386,6 +386,7 @@ export function ConversationSidebar() {
                   type="text"
                   name="username"
                   placeholder="Username"
+                  autoComplete="username"
                   minLength={2}
                   required
                   value={username}
@@ -395,6 +396,7 @@ export function ConversationSidebar() {
                   type="password"
                   name="password"
                   placeholder="Password"
+                  autoComplete="current-password"
                   minLength={6}
                   required
                   value={password}

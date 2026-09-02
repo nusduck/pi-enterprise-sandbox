@@ -199,6 +199,47 @@ describe('public: byte-identical contract vs Python', () => {
     assert.equal(res.status, 400);
   });
 
+  test('POST /artifacts/imports — returns complete import response', async () => {
+    const id = 'pub_art_import_1';
+    await initSession(id);
+    const ws = workspaceManager.physicalWorkspacePath(id);
+    const fs = await import('node:fs/promises');
+    const path = await import('node:path');
+    await fs.writeFile(path.join(ws, 'out.txt'), 'artifact-content');
+
+    const reg = await app.request(`/sessions/${id}/artifacts/submit`, {
+      method: 'POST',
+      headers: { ...acting, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: 'out.txt' }),
+    });
+    assert.equal(reg.status, 201);
+    const registered = (await reg.json()) as { artifact_id: string };
+
+    const res = await app.request(`/sessions/${id}/artifacts/imports`, {
+      method: 'POST',
+      headers: { ...acting, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ artifact_id: registered.artifact_id, target_filename: 'imported.txt' }),
+    });
+    assert.equal(res.status, 201);
+    const imported = (await res.json()) as {
+      import_id: string;
+      artifact_id: string;
+      target_session_id: string;
+      workspace_file: {
+        name: string;
+        path: string;
+        mime_type: string;
+        size: number;
+      };
+    };
+    assert.ok(imported.import_id);
+    assert.equal(imported.artifact_id, registered.artifact_id);
+    assert.equal(imported.target_session_id, id);
+    assert.equal(imported.workspace_file.name, 'imported.txt');
+    assert.equal(imported.workspace_file.path, 'imported.txt');
+    assert.equal(imported.workspace_file.size, 16);
+  });
+
   test('GET /artifacts/:id/download — 无存储时 404 (Python ArtifactError 404)', async () => {
     const id = 'pub_art_4';
     await initSession(id);

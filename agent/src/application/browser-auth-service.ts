@@ -5,6 +5,8 @@ import {
   timingSafeEqual,
 } from 'node:crypto';
 import { promisify } from 'node:util';
+import { formatUserExternalSubject } from '../infrastructure/mysql/repositories/organization-repository.js';
+import { ulid } from '../domain/shared/ulid.js';
 
 const pbkdf2 = promisify(pbkdf2Callback);
 const USERNAME = /^[A-Za-z0-9_./@+-]{2,64}$/;
@@ -75,6 +77,9 @@ export async function verifyPassword(password: string, stored: string) {
 
 export class BrowserAuthService {
   credentials: CredentialStore;
+  organizations?: any;
+  externalRefs?: any;
+  generateId?: () => string;
   secret: string;
   issuer: string;
   audience: string;
@@ -85,6 +90,9 @@ export class BrowserAuthService {
 
   constructor(input: {
     credentials: CredentialStore;
+    organizations?: any;
+    externalRefs?: any;
+    generateId?: () => string;
     secret?: string;
     issuer?: string;
     audience?: string;
@@ -94,6 +102,9 @@ export class BrowserAuthService {
     now?: () => Date;
   }) {
     this.credentials = input.credentials;
+    this.organizations = input.organizations;
+    this.externalRefs = input.externalRefs;
+    this.generateId = input.generateId;
     this.secret = String(input.secret || '').trim();
     this.issuer = String(input.issuer || 'pi-enterprise-sandbox');
     this.audience = String(input.audience || 'pi-enterprise-sandbox');
@@ -103,6 +114,58 @@ export class BrowserAuthService {
       (input.adminUsernames || []).map((name) => name.trim().toLowerCase()).filter(Boolean),
     );
     this.now = input.now || (() => new Date());
+  }
+
+  private async ensureUserProvisioned(entry: Credential): Promise<void> {
+    if (!this.organizations || !this.externalRefs) return;
+    try {
+      const provider = 'bff';
+      const externalOrgId = entry.organizationId || BOOTSTRAP_ORG_ID;
+      let orgRef = await this.externalRefs.getOrganizationRef(provider, externalOrgId);
+      let orgId: string;
+      if (orgRef?.orgId) {
+        orgId = orgRef.orgId;
+      } else {
+        const newOrgId = this.generateId ? this.generateId() : ulid();
+        try {
+          await this.organizations.createOrganization({
+            orgId: newOrgId,
+            name: externalOrgId,
+            status: 'active',
+          });
+        } catch {
+          // Organization might already exist
+        }
+        orgRef = await this.externalRefs.getOrCreateOrganizationRef({
+          provider,
+          externalSubject: externalOrgId,
+          orgId: newOrgId,
+        });
+        orgId = orgRef.orgId;
+      }
+
+      const encodedUser = formatUserExternalSubject(provider, entry.id);
+      let user = await this.organizations.getUserByExternalSubject(encodedUser);
+      if (!user) {
+        const newUserId = this.generateId ? this.generateId() : ulid();
+        user = await this.organizations.createUserIfAbsent({
+          userId: newUserId,
+          externalSubject: encodedUser,
+          displayName: entry.displayName || entry.username,
+          email: entry.email,
+          status: 'active',
+        });
+      }
+
+      await this.organizations.addMembershipIfAbsent({
+        orgId,
+        userId: user.userId,
+        role: entry.role || 'user',
+        status: 'active',
+      });
+    } catch (err) {
+      console.error('[browser-auth] Failed to provision user in organizations:', err);
+    }
   }
 
   private requireSecret() {
@@ -214,6 +277,7 @@ export class BrowserAuthService {
         role: this.roleFor(username),
       });
       if (!entry) throw new Error('credential insert did not persist');
+      await this.ensureUserProvisioned(entry);
       return { token: this.createToken(entry), user: this.publicUser(entry) };
     } catch (error) {
       if (error instanceof BrowserAuthError) throw error;
@@ -243,6 +307,7 @@ export class BrowserAuthService {
     try {
       entry = await this.reconcileRole(entry);
       await this.credentials.touchLogin(entry.id);
+      await this.ensureUserProvisioned(entry);
     } catch {
       throw new BrowserAuthError(503, 'AUTH_STORE_UNAVAILABLE', 'Authentication unavailable');
     }
@@ -265,6 +330,7 @@ export class BrowserAuthService {
     if (!entry?.isActive) {
       throw new BrowserAuthError(401, 'INVALID_TOKEN', 'Invalid or expired token');
     }
+    await this.ensureUserProvisioned(entry);
     return this.publicUser(entry);
   }
 }

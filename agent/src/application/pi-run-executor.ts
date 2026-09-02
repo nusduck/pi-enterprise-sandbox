@@ -714,8 +714,13 @@ export class PiRunExecutor {
         toolLedger: {
           started: (i: Record<string, unknown>) =>
             (this._governanceRecorder as never as Record<string, any>).recordToolStarted(i),
-          ended: (i: Record<string, unknown>) =>
-            (this._governanceRecorder as never as Record<string, any>).recordToolEnded(i),
+          ended: (i: Record<string, unknown>) => {
+            const toolCallId = String(i?.toolCallId ?? '').trim();
+            if (toolCallId && this._pendingInteractionToolCallIds.has(toolCallId)) {
+              return;
+            }
+            return (this._governanceRecorder as never as Record<string, any>).recordToolEnded(i);
+          },
         },
         interactionRequester: createInteractionRequester({
           recorder: this._governanceRecorder,

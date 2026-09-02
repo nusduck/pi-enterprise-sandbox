@@ -39,7 +39,10 @@ import type { PolicyDecision } from './decision.js';
 import { RunPark, RUN_PARKED_REASON_CODE } from './park.js';
 import { approvalIdOf } from './approval-id.js';
 import { runWithToolExecutionContext } from '../providers/tool-execution-context.js';
-import { isDurableInteractionPendingError } from '../providers/user-questions.js';
+import {
+  isDurableInteractionPendingError,
+  isDurableInteractionPendingResult,
+} from '../providers/user-questions.js';
 
 /** 最小可用的工具执行形状——只取本模块用得到的字段，不复制 DSH 的完整类型。 */
 interface ToolExecutionLike {
@@ -237,10 +240,12 @@ export function installEnterprisePolicy(ctx: Context, options: InstallPolicyOpti
           await ledger.started({ toolCallId, toolName, args }).catch((e) => note('started', e));
           try {
             const result = await wrapExecute(budget, next);
-            const isError = (result as { isError?: boolean } | null)?.isError === true;
-            await ledger
-              .ended({ toolCallId, toolName, isError, result, args })
-              .catch((e) => note('ended', e));
+            if (!isDurableInteractionPendingResult(result)) {
+              const isError = (result as { isError?: boolean } | null)?.isError === true;
+              await ledger
+                .ended({ toolCallId, toolName, isError, result, args })
+                .catch((e) => note('ended', e));
+            }
             return result;
           } catch (err) {
             // Parking ask_user_question throws after the WAITING_INPUT row is

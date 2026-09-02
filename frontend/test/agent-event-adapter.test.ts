@@ -207,4 +207,32 @@ describe('Agent event adapter', () => {
     assert.ok(out.some((e) => e.type === 'message.delta'));
     assert.equal(st.sessionId, 's');
   });
+
+  it('adapts durable artifact.ready event with camelCase fields', () => {
+    const { events } = adaptAgentEventStream('run_art', [
+      {
+        type: 'artifact.ready',
+        artifactId: '01M1HB102F1WTANKD5Y0C4W17X',
+        name: 'report.txt',
+        path: '/artifacts/01M1HB102F1WTANKD5Y0C4W17X/report.txt',
+        mimeType: 'text/plain',
+        sizeBytes: 123,
+        sha256: 'deadbeef',
+        targetSessionId: 'sess_1',
+      },
+    ]);
+    const artEvent = events.find((e) => e.type === 'artifact.created');
+    assert.ok(artEvent);
+    const payload = artEvent.payload as Record<string, unknown>;
+    assert.equal(payload.artifact_id, '01M1HB102F1WTANKD5Y0C4W17X');
+    assert.equal(payload.name, 'report.txt');
+    assert.equal(payload.mime_type, 'text/plain');
+    assert.equal(payload.size, 123);
+    assert.equal(payload.sha256, 'deadbeef');
+    assert.equal(payload.session_id, 'sess_1');
+
+    const { store } = reduceRuntimeEventBatch(createEntityStore(), events);
+    assert.ok(store.artifactsById['01M1HB102F1WTANKD5Y0C4W17X']);
+    assert.equal(store.artifactsById['01M1HB102F1WTANKD5Y0C4W17X'].name, 'report.txt');
+  });
 });

@@ -364,6 +364,9 @@ export async function startHttpMain(env: NodeJS.ProcessEnv = process.env) {
     const repos = httpServices.createRepositories(httpServices.knex);
     browserAuthService = new BrowserAuthService({
       credentials: repos.authCredentials,
+      organizations: repos.organizations,
+      externalRefs: repos.externalRefs,
+      generateId: container.generateId,
       secret: env.SANDBOX_JWT_SECRET,
       issuer: env.SANDBOX_JWT_ISSUER,
       audience: env.SANDBOX_JWT_AUDIENCE,

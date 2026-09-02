@@ -20,6 +20,8 @@
 
 import { randomUUID } from 'node:crypto';
 import { createWriteStream } from 'node:fs';
+import { mkdir } from 'node:fs/promises';
+import path from 'node:path';
 import { pipeline } from 'node:stream/promises';
 import type { WorkspaceContext } from '../types.js';
 import { redactPhysicalRoots } from '../fs/redact.js';
@@ -269,6 +271,7 @@ export class ArtifactService {
       const target = await fs.resolve(safeName);
 
       // 流式落盘。产物上限 512MiB，整读进内存再写会让一次导入就吃掉半个 G。
+      await mkdir(path.dirname(target.targetKey), { recursive: true });
       const sink = createWriteStream(target.targetKey);
       await pipeline(this.openSnapshot(record), sink);
 

@@ -1213,14 +1213,21 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     async (username: string, password: string) => {
       sessionGenerationRef.current += 1;
       const data = await apiRegister({ username, password });
-      setState((s) =>
-        update(s, { authReady: true, authUser: data.user || { username } }),
-      );
+      clearPersistedChat();
+      bridge.reset();
+      setState((s) => update(s, {
+        authReady: true,
+        authUser: data.user || { username },
+        conversationId: null,
+        sessionId: null,
+        messages: [],
+        attachments: [],
+      }));
       setStatus(`Registered as ${data.user?.username || username}`);
       await refreshConversations();
       await refreshModels();
     },
-    [setStatus, refreshConversations, refreshModels],
+    [setStatus, refreshConversations, refreshModels, bridge],
   );
 
   const logout = useCallback(async () => {
@@ -1231,9 +1238,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
 
       const previous = stateRef.current;
       previous.abortCtrl?.abort();
-      for (const attachment of previous.attachments) {
-        attachment.abortCtrl?.abort();
-      }
+      for (const attachment of previous.attachments) attachment.abortCtrl?.abort();
 
       // A logout is an identity boundary. Disconnect and discard all runtime
       // entities before the next account can render this provider.
@@ -1282,27 +1287,19 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     async function boot() {
       const loadGeneration = ++conversationLoadGenerationRef.current;
       // Auth
+      let authedUser: Awaited<ReturnType<typeof apiMe>> | null = null;
       try {
         const user = await apiMe();
-        if (!cancelled) {
-          setState((s) => update(s, { authReady: true, authUser: user }));
-        }
+        authedUser = user;
+        if (!cancelled) setState((s) => update(s, { authReady: true, authUser: user }));
       } catch (error) {
-        // Remove a stale/expired BFF cookie so the next login starts from a
-        // clean session instead of repeatedly surfacing the same token error.
         if (error instanceof ApiError && error.status === 401) {
-          try {
-            await apiLogout();
-          } catch {
-            /* Anonymous logout is best-effort. */
-          }
+          try { await apiLogout(); } catch { /* Anonymous logout is best-effort. */ }
         }
-        if (!cancelled) {
-          // A missing/expired cookie is an anonymous session, not a reason to
-          // expose a transient signed-out shell while the check is pending.
-          setState((s) => update(s, { authReady: true, authUser: null }));
-        }
+        if (!cancelled) setState((s) => update(s, { authReady: true, authUser: null }));
       }
+
+      if (!authedUser || cancelled) return;
 
       try {
         await refreshConversations();

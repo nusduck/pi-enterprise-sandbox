@@ -84,6 +84,43 @@ describe('BrowserAuthService', () => {
       (error: any) => error.code === 'AUTH_CONFIG_UNAVAILABLE' && error.status === 503,
     );
   });
+
+  it('provisions user and membership into organizations on register and login', async () => {
+    const credentials = memoryCredentials();
+    const createdUsers: any[] = [];
+    const createdMemberships: any[] = [];
+    const organizations = {
+      async createOrganization() {},
+      async getUserByExternalSubject() { return null; },
+      async createUserIfAbsent(u: any) {
+        createdUsers.push(u);
+        return u;
+      },
+      async addMembershipIfAbsent(m: any) {
+        createdMemberships.push(m);
+        return m;
+      },
+    };
+    const externalRefs = {
+      async getOrganizationRef() { return null; },
+      async getOrCreateOrganizationRef(ref: any) { return { orgId: ref.orgId }; },
+    };
+    const service = new BrowserAuthService({
+      credentials,
+      organizations,
+      externalRefs,
+      generateId: () => '01M1GENID00000000000000000',
+      secret: 'a'.repeat(32),
+    });
+    await service.register({ username: 'bob', password: 'password123' });
+    assert.equal(createdUsers.length, 1);
+    assert.equal(createdUsers[0].displayName, 'bob');
+    assert.equal(createdMemberships.length, 1);
+    assert.equal(createdMemberships[0].role, 'user');
+
+    await service.login({ username: 'bob', password: 'password123' });
+    assert.equal(createdMemberships.length, 2);
+  });
 });
 
 describe('browser auth HTTP route', () => {

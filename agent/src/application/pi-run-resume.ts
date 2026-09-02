@@ -288,7 +288,7 @@ export async function prepareInteractionResume(executor, {
   );
   return (
     `[User interaction resolved] The user answered the ${interaction.interactionType} ` +
-    `request ${interactionId}. Continue the task using the answer already ` +
-    'recorded in the tool result; do not ask the same question again.'
+    `request ${interactionId} with: "${responseText}". Continue the task using this answer; ` +
+    'do not ask the same question again.'
   );
 }

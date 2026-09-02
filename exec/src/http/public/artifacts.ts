@@ -26,6 +26,7 @@ import type { WorkspaceManager } from '../../workspace/manager.js';
 import type { ArtifactService } from '../../artifact/service.js';
 import { ArtifactError, downloadMimeType } from '../../artifact/service.js';
 import type { ExecArtifactRecord } from '../../db/repositories/artifacts.js';
+import { newUlid } from '../../mcp/ulid.js';
 
 export interface PublicArtifactDeps {
   readonly workspaceManager: WorkspaceManager;
@@ -186,7 +187,7 @@ export function registerPublicArtifactRoutes(app: Hono, deps: PublicArtifactDeps
         throw new HttpError(401, redactPhysicalRoots('Artifact owner unavailable', roots));
       }
 
-      const { path: written } = await deps.artifactService.importToWorkspace({
+      const { record, path: written } = await deps.artifactService.importToWorkspace({
         artifactId,
         workspace: own.workspace,
         owner: { orgId: own.workspace.orgId, userId: own.workspace.userId },
@@ -194,9 +195,17 @@ export function registerPublicArtifactRoutes(app: Hono, deps: PublicArtifactDeps
       });
       return c.json(
         {
+          import_id: newUlid(),
           artifact_id: artifactId,
           target_session_id: sessionId,
           target_conversation_id: null,
+          workspace_file: {
+            name: path.basename(written),
+            path: written,
+            mime_type: record.mimeType,
+            size: record.sizeBytes,
+            sha256: record.sha256,
+          },
           path: written,
         },
         201 as never,

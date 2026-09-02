@@ -250,26 +250,78 @@ export function agentEventToRuntime(
       break;
     }
 
-    case 'file_ready': {
+    case 'file_ready':
+    case 'artifact.ready': {
       const seq = nextSeq(state, ev);
+      const data = (ev.data && typeof ev.data === 'object' ? ev.data : {}) as Record<string, unknown>;
       const artifactId =
         ev.artifact_id != null
           ? String(ev.artifact_id)
-          : `art_${state.runId}_${seq}`;
+          : ev.artifactId != null
+            ? String(ev.artifactId)
+            : data.artifactId != null
+              ? String(data.artifactId)
+              : data.artifact_id != null
+                ? String(data.artifact_id)
+                : `art_${state.runId}_${seq}`;
+      const name =
+        ev.name != null
+          ? String(ev.name)
+          : data.name != null
+            ? String(data.name)
+            : undefined;
+      const path =
+        ev.path != null
+          ? String(ev.path)
+          : data.path != null
+            ? String(data.path)
+            : undefined;
+      const mimeType =
+        ev.mime_type != null
+          ? String(ev.mime_type)
+          : ev.mimeType != null
+            ? String(ev.mimeType)
+            : data.mimeType != null
+              ? String(data.mimeType)
+              : data.mime_type != null
+                ? String(data.mime_type)
+                : undefined;
+      const size =
+        typeof ev.size === 'number'
+          ? ev.size
+          : typeof ev.sizeBytes === 'number'
+            ? ev.sizeBytes
+            : typeof data.sizeBytes === 'number'
+              ? data.sizeBytes
+              : typeof data.size === 'number'
+                ? data.size
+                : undefined;
+      const sha256 =
+        ev.sha256 != null
+          ? String(ev.sha256)
+          : data.sha256 != null
+            ? String(data.sha256)
+            : undefined;
+      const sessionId =
+        (ev.session_id != null ? String(ev.session_id) : undefined) ||
+        (ev.targetSessionId != null ? String(ev.targetSessionId) : undefined) ||
+        (data.targetSessionId != null ? String(data.targetSessionId) : undefined) ||
+        state.sessionId;
       out.push(
         makeRuntimeEvent({
           ...base,
           event_id: eventId(state, seq, ev),
           sequence: seq,
-          session_id: state.sessionId,
+          session_id: sessionId,
           type: 'artifact.created',
           payload: {
             artifact_id: artifactId,
-            name: ev.name != null ? String(ev.name) : undefined,
-            path: ev.path != null ? String(ev.path) : undefined,
-            mime_type: ev.mime_type != null ? String(ev.mime_type) : undefined,
-            size: typeof ev.size === 'number' ? ev.size : undefined,
-            session_id: state.sessionId,
+            name,
+            path,
+            mime_type: mimeType,
+            size,
+            sha256,
+            session_id: sessionId,
           },
         }),
       );
