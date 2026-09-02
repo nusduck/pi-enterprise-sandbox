@@ -18,6 +18,7 @@ import {
   IconAlertCircle,
   IconRuns,
 } from '../../shared/ui/Icons';
+import { hasSelectedSchedule } from './scheduleHelpers';
 
 function defaultTimeZone(): string {
   try {
@@ -76,13 +77,20 @@ export function SchedulesPage() {
   const refresh = useCallback(async () => {
     setLoading(true);
     try {
-      setJobs(await listCronJobs());
+      const nextJobs = await listCronJobs();
+      setJobs(nextJobs);
+      if (selectedId && hasSelectedSchedule(nextJobs, selectedId)) {
+        setRuns(await listCronJobRuns(selectedId));
+      } else if (selectedId) {
+        setSelectedId(null);
+        setRuns([]);
+      }
     } catch (error) {
       setBanner((error as Error).message || 'Unable to load scheduled runs.');
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [selectedId]);
 
   useEffect(() => { void refresh(); }, [refresh]);
 

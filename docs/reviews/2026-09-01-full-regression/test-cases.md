@@ -846,3 +846,53 @@ AUTH-01/AUTH-02/A2A-01/A2A-02 的管理员管理分支按本次请求跳过；�
 - `REC-01` 未重启 Worker；`REC-02` 未 hard-kill exec，因此没有把正常 `job_kill` 结果外推为 restart/orphan recovery 通过。
 - Artifact 控制面当前为进程内存 store；本轮观察到 Sandbox 重启后源 Artifact 索引不保留。因此 ART-02 只宣称“导入与页面刷新”，不宣称 exec 重启后的 Artifact 恢复。
 - 生成的合成 Conversation、workspace 文件、Draft 和 Artifact 未删除；删除会改变持久化状态，需在 Browser 执行前再次确认。本轮不把它们当作生产数据。
+
+## 9. 2026-09-03 后续非管理员实测与修复
+
+本节继续追加在 §8 之后，不改写历史结论。今日主操作面仍为 `@Browser`，账号为新建的合成普通用户；管理员专属路径按请求跳过。所有本轮创建的四个测试定时任务均已暂停，合成会话、文件、Draft 和 Artifact 仍未删除。
+
+### 9.1 新增与升级案例
+
+| 案例 | 结果 | 证据 |
+|---|---|---|
+| CHAT-06 | 通过 | 正在运行时刷新页面后，Run 最终显示 `Succeeded` 并出现 `CHAT06_RECOVERY_OK`；关闭页面、从 Recent conversation 重新打开后，`CHAT06_CLOSE_OK` 仍可见。 |
+| RUN-01 | 通过 | 前台 `sleep` 运行中点击 Stop，页面收敛为 `Cancelled`，没有 `RUN01_FOREGROUND_SHOULD_NOT_COMPLETE`；此前也用容器内进程表确认 SIGTERM 后进程消失。 |
+| RUN-02 | 部分通过 | Running 状态提交 Follow-up 后，基础输出和 `RUN02_FOLLOWUP_OK` 均出现；Steer/Resume 的完整语义仍未形成独立通过证据。 |
+| CRON-01 | 部分通过 | 普通用户完成创建、编辑、Run now、暂停、History 和刷新；删除按钮涉及持久化破坏，本轮没有在未获即时确认时点击。 |
+| CRON-02 | 通过 | 验证 `Asia/Singapore`/`America/New_York` 时区、`MISFIRE_SKIPPED`、`fire_once` 补跑、`CONCURRENCY_FORBID` 跳过，以及 `allow` 两次并发 Run 均为 `SUCCEEDED`。 |
+| REC-01 | 通过 | Run 进入 `Waiting input` 后重启 `agent-worker`；刷新页面仍保留选项，回答后 Run 成功完成。 |
+| REC-02 | 通过 | Run 创建后台 job 后 hard-kill `sandbox` 并重启；容器以 uid 10001 恢复，进程表没有残留 bwrap/bash/sleep，恢复后的无工具 Run 成功。 |
+| PROC-01 | 部分通过 | 前台长命令在执行中被 DSH abort 并产生工具错误，页面随后收敛；尚未证明“完整 stdin 关闭/外部进程控制”契约。 |
+| ISO-01 | 部分通过 | `sandbox`/`sandbox-mcp` 为 uid 10001、`cap_drop=ALL`，sandbox 使用 seccomp，exec PID 1 `CapEff` 全零，bwrap/setpriv 存在，内部网络为 `Internal=true`；compose 未配置 memory/pids quota，故不升级为全通过。 |
+
+这里有一个需要纠正的测试前提：Run 取消不会自动杀掉由 DSH 明确创建的后台 job；该 job 应通过 `job_kill` 回收。今日已验证 `job_kill` 后 exec 账本为 `killed: SIGTERM` 且无残留，这不能替代 REC-02 的 sandbox hard-kill/restart 验证。
+
+### 9.2 真实复现的前端回归与修复
+
+在定时任务 History 面板打开时点击页面主 Refresh，Browser 中旧的 `QUEUED`/`RUNNING` 投影会停留；关闭并重新打开 History 才显示服务端最终状态。根因是 `SchedulesPage.refresh` 只重新拉取任务列表，没有同步刷新当前选中任务的 execution history。
+
+修复已落在 `frontend/src/pages/schedules/SchedulesPage.tsx`：刷新任务列表后，若当前任务仍存在则重新调用 `listCronJobRuns(selectedId)`；若任务已不存在则清空选中项和旧历史。新增 `scheduleHelpers.ts` 单测覆盖“选中任务存在/不存在/空选择”三种边界。该回归测试在修复前对应的行为缺失，修复后通过。
+
+### 9.3 累计矩阵
+
+| 状态 | 案例 |
+|---|---|
+| 通过 | ENV-01、ENV-02、AUTH-03、NAV-01、CHAT-01、CHAT-02、CHAT-03、CHAT-05、CHAT-06、TOOL-01、TOOL-02、TOOL-03、TOOL-04、ART-01、ART-02、RUN-01、INPUT-01、INPUT-02、JOB-01、TODO-01、SUB-01、TRACE-01、CAP-01、SKILL-01、SKILL-02、SKILL-03、MCP-02、SEC-01、SEC-03B、CRON-02、REC-01、REC-02 |
+| 部分通过 | RUN-02、FAIL-01、APPROVAL-01、CRON-01、PROC-01、MGMT-01、MGMT-02、MCP-01、USER-01（第二身份用隔离 HTTP 客户端完成跨租户检查，未形成双 Browser 并发闭环）、SEC-02、SEC-03、ISO-01、UI-01 |
+| 跳过/未执行 | AUTH-01、AUTH-02、CHAT-04、A2A-01、A2A-02、CTX-01、BUDGET-01 |
+
+AUTH-01/AUTH-02 和 A2A 管理/凭据路径按本次“不测 admin”范围跳过；CHAT-04 与 CRON-01 的删除动作需要操作时确认，因此只记录其余正向路径。CTX-01、BUDGET-01、完整 PROC-01 stdin、Steer/Resume、双 Browser 并发和 ISO quota 仍是未关闭缺口，不用自动化绿灯替代。
+
+### 9.4 自动化与真机验证
+
+在前一个提交 `fe9ab5f9` 已完成四个受影响镜像的统一重建和真机链路验证；本次前端修复后重新执行六套测试、类型检查和前端构建：
+
+- `uv run pytest -q`：98 passed。
+- `npm test --prefix exec`：324 tests，323 passed，1 skipped，0 failed。
+- `npm test --prefix contract`：29 passed。
+- `npm test --prefix agent`：1209 passed，0 failed。
+- `npm test --prefix api-server`：146 passed，0 failed。
+- `npm test --prefix frontend`：334 passed，0 failed。
+- `exec`、`contract`、`frontend` 的 TypeScript 检查、`npm --prefix agent run typecheck` 和 `npm run build --prefix frontend`：全部通过。
+
+没有在报告、日志或命令输出中写入密码、Cookie、token、DSN、API key 或数据库值。
