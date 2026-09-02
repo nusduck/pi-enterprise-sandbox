@@ -22,7 +22,9 @@
 > **`agent/src/runtime/`** 是 agent 私有的 DSH 组合层（provider / policy / projection），
 > 不是第六个服务：只有 `agent/` 消费它。阶段 F 之前它是与 `src/` 平级的独立包
 > `@pi/runtime`，现在是 agent 源码的一个子目录，与其余源码同一次 tsc 编译。
-> `contract/` 是 exec 与 agent 共用的 RPC 契约包。
+> `contract/` 是 exec 与 agent 共用的 RPC 契约包。模型侧 MCP 由出厂
+> `@deepseek-ai/dsh-mcp-client` 承担（ADR 0009 H7 退役了自建的 `pi-mcp-adapter`），
+> server 清单**只来自进程环境变量 `MCP_SERVERS_JSON`**，不进提交的 YAML。
 
 推论（都踩过坑）：
 
@@ -63,7 +65,7 @@
 2. **定位根因**——不要止步于症状。示例：「取消返回 500」的根因是未分类的 MySQL 瞬时
    失败，而不是取消逻辑本身。
 3. **修复 + 回归测试**——新增的测试必须在修复前失败、修复后通过。
-4. **真机验证**——见 §4。删除代码或改动运行路径时**必须**做，四套单测全绿不代表链路可用。
+4. **真机验证**——见 §4。删除代码或改动运行路径时**必须**做，六套单测全绿不代表链路可用。
 
 ## 4. 验证清单
 
@@ -86,10 +88,13 @@ npx tsc --noEmit -p contract/tsconfig.json
 npm --prefix agent run typecheck   # 主程序（宽松）+ src/runtime（strict）两道
 ```
 
-组合层的用例已并入 agent 的主测试套件（`npm --prefix agent test`，1123 条）。
+组合层的用例已并入 agent 的主测试套件（`npm --prefix agent test`，2026-09-02 为 1206 条）。
 其中 `tests/runtime/boot.test.ts` 会**起真实插件树**（子进程），改动
 `src/runtime/bundle/cordis.patch.yml` 或 provider 路径后必须跑它——
 cordis 的 patch 装不上插件时不报错，只是出厂实现留在原位。
+同理，`tests/runtime/mcp-live.test.ts` 会**起一台真的 stdio MCP server**（子进程），
+证明 `dsh-mcp-client` 连得上、注册成 `mcp__<server>__<tool>`、调得通；
+`mcp-entries.test.ts` 只证 patch 条目的形状，用假数据也能全绿，两者不可互相替代。
 
 **什么时候必须重建容器并跑真实链路**：改了 `agent/`、`api-server/`、`exec/` 的运行
 路径，或删除了任何生产代码。镜像**不挂载源码**，不重建就是在验证旧代码：
@@ -105,8 +110,9 @@ docker compose build agent api-server sandbox sandbox-mcp && docker compose up -
 
 **已知环境陷阱**（撞上先别怀疑自己的改动）：
 
-- 宿主机存在 `~/.pi/agent/mcp.json` 时，`agent/tests/pi/mcp-seam.unit.test.js` 的 6 个用例
-  必失败（企业运行时禁止 ambient MCP 配置）。移开该文件即可确认。
+- 宿主机的 `~/.pi/agent/mcp.json` **已不再影响测试**：ADR 0009 H7 换成出厂
+  `dsh-mcp-client` 后，agent 不读任何 ambient MCP 配置文件，`tests/pi/mcp-seam.unit.test.js`
+  随 `pi-mcp-adapter` 一起删除。看到旧笔记说"移开该文件"时不必再照做。
 - `scripts/smoke-cross-service.mjs` 在**宿主机**起进程，不走 Docker。macOS 内核没有
   bwrap 要的 user namespace，这条脚本在 Mac 上失败是预期的，应在 Linux/CI 跑。
 - **`docker compose up` 在 Mac 上可以起执行面**，和 main 上的 sandbox 一样：容器里是
@@ -119,15 +125,20 @@ docker compose build agent api-server sandbox sandbox-mcp && docker compose up -
 - `tests/test_repository_layout.py` 是棘轮：生产文件默认 ≤1000 行，热点文件的预算钉在当前
   行数，只能减不能增。加行就会失败——优先按职责拆分，确需提高预算必须在 commit message
   说明理由。
-- 同一测试还要求项目文档只能放在 `docs/`（`README.md` 与本文件例外）。
+- 同一测试还要求项目文档只能放在 `docs/`（只有 `README.md`、本文件和 `CLAUDE.md` 例外）。
 - `git ls-files agent/pi-agent-home frontend/dist .runtime pi_enterprise_sandbox.egg-info .claude`
   必须是空输出。
 
 ## 5. docs/ 的权威顺序（发生冲突时）
 
 1. **`docs/plan.md`** — 冻结的架构基线 + §32 验收标准。除非产品重新划定范围，否则视为只读。
-2. **`docs/adr/*`** — 与 plan 兼容的已锁定决策。新 ADR 从 0005 起编号（0002/0003 已退役，勿引用）。
-3. **描述性活跃文档** — `architecture.md`、`api.md`、`deployment.md`、`development.md`、`webui.md`、`module-layout.md`。
+2. **`docs/adr/*`** — 与 plan 兼容的已锁定决策。当前最新是 **0009**（Accepted/Implemented，
+   2026-09-01 收口），**新 ADR 从 0010 起编号**。0003 已删除，勿引用；0001/0002/0005 标着
+   "Superseded by 0007"，但它们不是废纸——0002 的 DSH 调研与 seam 限制被 0007/0009 直接复用，
+   引用时说明是"被取代文档中仍然有效的那部分"。
+3. **描述性活跃文档** — `architecture.md`、`api.md`、`deployment.md`、`development.md`、
+   `webui.md`、`module-layout.md`、`sandbox-mcp.md`、`artifact-module.md`。
+   （`feature-inventory.md` 是换引擎前的历史盘点，**不是当前状态**，按 §7 第一条对待。）
 4. **`docs/STATUS.md`** — 唯一的 §32 验收缺口看板，必须与代码现实一致。
 5. **`docs/evidence/*`** — 带日期的验收证据，支持 STATUS 但不能替代它。
 6. **代码本身** — 若 STATUS 与代码冲突，以代码为准，并在同一变更集中修复 STATUS。
@@ -164,9 +175,12 @@ docker compose build agent api-server sandbox sandbox-mcp && docker compose up -
 
 ## 9. 提交与 PR
 
-- `main` 是**受保护分支**：不能直推，必须走 PR，6 项检查全绿后 **squash 合并**
-  （Compose config / Frontend / Python (pytest) / Node BFF / Node Agent / Cross-service smoke）。
-  **exec 与 contract 的 CI job 还没加**（见 `docs/design/waves/HANDOFF.md`），合之前要在本地跑。
+- `main` 是**受保护分支**：不能直推，必须走 PR，**6 项必需检查**全绿后 **squash 合并**
+  （Compose config / Frontend (test + build) / Python (pytest) / Node BFF / Node Agent /
+  Cross-service smoke）。
+  `.github/workflows/test.yml` 现在共 **8 个 job**——`RPC contract (test + typecheck)` 与
+  `TypeScript exec (test + typecheck)` 已补齐（HANDOFF 第 4 项已完成），但**还没进分支保护的
+  必需清单**：它们失败不会拦住合并，所以要自己看 PR 页面的结果，别只看那 6 个红绿灯。
 - squash 意味着分支上的中间提交不会进 main——**PR 描述与 commit message 是这批改动在
   main 上唯一的记录**，要写清「改了什么、为什么、怎么验证的」。
 - 一个 PR 一件事。文档漂移可以随行为变更一起走（§6 要求如此），但不相关的清理另开 PR。

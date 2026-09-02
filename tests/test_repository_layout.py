@@ -142,7 +142,10 @@ def test_project_markdown_lives_under_docs_except_readmes() -> None:
         if (
             # AGENTS.md is read from the repository root by convention — the
             # agent working spec has to sit where an agent looks for it.
-            path.name in {"README.md", "AGENTS.md"}
+            # CLAUDE.md sits beside it for the same reason: Claude Code reads
+            # CLAUDE.md and not AGENTS.md, so the root file is a one-line
+            # `@AGENTS.md` import, never a second copy of the spec.
+            path.name in {"README.md", "AGENTS.md", "CLAUDE.md"}
             or relative.parts[0] in {"docs", "skills"}
             or any(part in LOCAL_GENERATED_DIRECTORIES for part in relative.parts)
         ):
