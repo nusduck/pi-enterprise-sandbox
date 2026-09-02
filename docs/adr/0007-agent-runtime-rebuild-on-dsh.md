@@ -132,10 +132,14 @@ sandboxes or authority boundaries.**" 因此 org/user 隔离继续完全由 `app
 与 MySQL 仓储的显式 scope 谓词承担。`ctx.scope` 只用于**注册可见性**：每个 Run 一个
 scope，承载该 Run 的工具视图、guard 与 skill 层。
 
-### D8：A2A 换用官方 SDK
+### D8：A2A 换用官方 SDK（已由 ADR 0010 撤销）
 
 `@a2a-js/sdk@1.1.0`。现有 12 个手写协议文件作废，只保留"把我们的 Run 事件翻译成
 SDK 类型"的适配层。DSH 里没有任何 A2A 组件——这是另一个生态的 SDK。
+
+> **2026-09-02 更新**：该条已由 [ADR 0010](0010-retain-custom-a2a-server-layer.md) **明确撤销**。
+> 经实测判定（`docs/design/a2a-sdk-server.md`），`@a2a-js/sdk/server` 的 `ExecutionEventBus`
+> 与 `resubscribe` 终态报错机制无法承载本仓库跨 Worker 异步执行与断线恢复语义，自建协议面完整保留。
 
 ### D9：追踪保留自建 span，另挂 OTel 导出
 

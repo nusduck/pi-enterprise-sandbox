@@ -68,7 +68,7 @@ DSH 重建的施工分解。设计依据见 [dsh-rebuild.md](../dsh-rebuild.md)�
 | W5-C | `runtime/prompt/enterprise-clauses.ts` | ✅ |
 | **Wave 6** | 接线与收敛 | ✅ |
 | W6-A | `agent/` 接线；删除 `infrastructure/pi/` 与 `extensions/` | ✅ |
-| W6-B | A2A 换 `@a2a-js/sdk` + 适配层 | ⚠️ **仅帧编码** —— 见下方更正 |
+| W6-B | A2A 换 `@a2a-js/sdk` + 适配层 | ⚠️ **仅帧编码；ADR 0010 保留自建** —— 见下方更正 |
 | W6-C | 追踪：保留自建 span，挂 OTel 导出 | ✅ 既有 OTel 保留 |
 | W6-D | 删除 `sandbox/` 执行面；文档与 `runtime-versions.json` 同步 | ✅ mcp 保留 |
 | W6-E | 去掉 `agent/tsconfig` exclude、`@ts-nocheck`、W2-D 四条抬预算 | ✅ checkJs 0；四条预算已收回 |
@@ -82,6 +82,15 @@ DSH 重建的施工分解。设计依据见 [dsh-rebuild.md](../dsh-rebuild.md)�
 > 凭据、Task↔Run、SSE 投影仍是自建的 5669 行，`@a2a-js/sdk/server` 在全仓没有任何
 > import。ADR 0007 D8 因此**尚未执行**。工单见
 > [`docs/design/a2a-sdk-server.md`](../a2a-sdk-server.md)。
+>
+> **2026-09-02 当日闭环**：按该工单 §10 做完判定，结论是**不该执行** D8——
+> `@a2a-js/sdk/server` 的 `DefaultRequestHandler.resubscribe` 遇终态任务直接抛
+> `UnsupportedOperationError`，且无活跃事件总线时只发一个快照就 `return`，
+> 承载不了本仓库跨 Worker + 跨重启的 `tasks/resubscribe`。已由
+> [ADR 0010](../../adr/0010-retain-custom-a2a-server-layer.md) 明确撤销 D8，
+> 正式保留自建协议面（13 个模块），并设立反向完整性棘轮
+> `agent/tests/a2a/a2a-custom-protocol-integrity.unit.test.ts`。
+> **W6-B 这一格保持 ⚠️**：它记录的是"当时声称做了而没做"，不因为后来决定不做而变成 ✅。
 
 ## 已定的决策（施工时不要再问）
 

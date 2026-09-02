@@ -259,3 +259,11 @@ Each entry should say **what changed**, **why**, and **which STATUS IDs** it aff
 - **Evidence:** [`evidence/2026-09-01-dsh-worker-restart-model-context.md`](evidence/2026-09-01-dsh-worker-restart-model-context.md)。
 - **STATUS IDs:** A4 `partial` → `done`。G2 保持 `unknown`（未测运行中 SIGKILL）。
 - **Not closed:** G2 中途回收；C7 同步 job 查询与跨 exec 重启；G7 hard-SIGKILL。
+
+## 2026-09-02 — ADR 0007 D8 判定：撤销，保留自建 A2A 协议面
+
+- **Reproduced first:** 先证明 D8 从未执行。`git show --stat --diff-filter=D 2a1462fa | grep -i a2a` 输出为空——该 commit 的 message 声称「A2A drops the 12 hand-written protocol files」，但对 `agent/src/{application,presentation}/a2a` 只有 9 个文件 +48/-17，零删除。`2a1462fa^` 的 12 个模块今天全在（转成 `.ts`），另加第 13 个 `sdk-adapter.ts`（23 行，只调 `formatSSEEvent`）。`@a2a-js/sdk/server` 全仓零 import。W6-B 的 ✅ 是照 commit message 打的。
+- **Action:** 按工单 [`design/a2a-sdk-server.md`](design/a2a-sdk-server.md) §10 走退出路径而不是硬做迁移。判定依据（均在 `agent/node_modules/@a2a-js/sdk/dist/` 核实）：`DefaultRequestHandler.resubscribe` 遇终态任务直接抛 `UnsupportedOperationError`（`dist/server/index.js:3109`）；无活跃事件总线时只 `yield` 一个快照即 `return`；`ExecutionEventBusManager` 三个方法全同步（`dist/server/index.d.ts:142-146`），无处注入 `afterSequence`/`Last-Event-ID`；v1 JSON-RPC 只认 PascalCase，`compat/v0_3` 只认 slash，本仓库双轨别名两边都落不下。立 [ADR 0010](adr/0010-retain-custom-a2a-server-layer.md) 撤销 D8，并加反向完整性棘轮 `agent/tests/a2a/a2a-custom-protocol-integrity.unit.test.ts`（含一条真调 SDK 的 spike，不只是文件存在性断言）。
+- **STATUS IDs:** F2 保持 `partial`——缺口是 live gate 未重跑，与协议面由谁实现无关，本次只改 Evidence 文字。F1/F3–F6 维持。`review-deferred-items.md` 的 "ADR 0007 D8 未执行" 行改为 Closed。
+- **Tests:** pytest 98；agent 1211 pass / 0 fail（含新增 5 条）；`agent/tests/a2a/` 15 个文件 125 用例全绿；`npm --prefix agent run typecheck` 干净。纯文档 + 一个新测试文件，未触及运行路径，未重建容器。
+- **Not closed:** F2 的 live gate 仍未重跑。`design/waves/README.md` 的 W6-B 保持 ⚠️：那一格记录的是"当时声称做了而没做"，不因为后来决定不做而变成 ✅。

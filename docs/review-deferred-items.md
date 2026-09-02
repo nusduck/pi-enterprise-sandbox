@@ -12,9 +12,10 @@ Non-blocking follow-ups. Each row states what exists today, what the residual
 risk is, and what decision would close it — so a reader can act without
 re-deriving the context.
 
-**Last audited:** `93f8af56` (2026-09-02) — the A2A SDK-server row was added
-from a fresh check of `2a1462fa`; the pre-existing rows were last re-checked
-at `bd66cd6f` (2026-08-21), when every row below was re-checked
+**Last audited:** 2026-09-02 — the A2A row was opened from a fresh check of
+`2a1462fa` and closed the same day by [ADR 0010](./adr/0010-retain-custom-a2a-server-layer.md);
+the pre-existing rows were last re-checked at `bd66cd6f` (2026-08-21), when
+every row below was re-checked
 against the tree. Rows whose only remaining proof needs a live deployment are
 marked **(live gate)**; they cannot be closed from code and were left as-is.
 
@@ -58,7 +59,7 @@ scope was narrowed, in
 | Trace panel span tree completeness | Spans projected from tool/model/artifact events only; no OpenTelemetry backend yet | Low | Full distributed trace UI | Wire when observability exports span trees |
 | Dataset delete/replace controls | Panel is read-only status + path; upload still via composer/attachments | Low | Full §19.7 ops | Product UX when DELETE dataset API is productized |
 | Approval decision reason input field | Approve/Reject buttons only; no free-text reason box in card | Low | Auditability of deny reasons | Optional form control |
-| ADR 0007 D8 未执行：A2A server 未接 `@a2a-js/sdk/server` | `2a1462fa` 声称删除 12 个手写协议文件，diff 显示零删除；今天 `agent/src/{application,presentation}/a2a` 仍是 5669 行自建，SDK 只用到 `formatSSEEvent`（23 行适配层） | Low（对外行为由 F1–F6 的用例与 live gate 守着，不是正确性缺口） | 协议演进跟随上游；少维护 ~5.6k 行 | 独立一轮重构；先判 `ExecutionEventBus`（进程内 EventEmitter）能否承载跨 Worker + 跨重启的 `tasks/resubscribe`。工单 `design/a2a-sdk-server.md` |
+| ADR 0007 D8 判定收口：保留自建 A2A 协议面（Closed） | 经实测判定（工单 `design/a2a-sdk-server.md` 与测试 `agent/tests/a2a/a2a-custom-protocol-integrity.unit.test.ts`），`@a2a-js/sdk/server` 无法承载跨 Worker 异步执行及终态 `tasks/resubscribe` 重连 | None（自建 13 个模块完整且经 15 套单测全覆盖，加设反向完整性棘轮） | 维持跨进程异步执行、断线续传与多租户 404 隔离 | 已由 [ADR 0010](adr/0010-retain-custom-a2a-server-layer.md) 明确撤销 ADR 0007 D8 并收口 |
 | A2A blocking SendMessage (return_immediately=false) | Always non-blocking create + optional stream | Low | Spec default blocking mode | Optional wait-for-terminal path |
 | Live Redis XREAD BLOCK on A2A stream | Same as BFF SSE: poll + readAfter | Low | Lower latency | Share duplex Redis client work |
 | GetTask artifact scan safety ceiling | Hard fail over 10k events / 500 artifacts (no silent truncate) | Low for typical runs | Streaming artifact index | Raise limits or dedicated index table |

@@ -378,4 +378,5 @@ docker compose build agent api-server sandbox sandbox-mcp && docker compose up -
 
 | 日期 | 结论 | 证据 |
 |---|---|---|
-| | | |
+| 2026-09-02 | **走 §10 退出路径**：撤销 ADR 0007 D8，保留自建 A2A 协议面（13 个模块），建立完整性反向棘轮并立 ADR 0010。 | 1. `DefaultRequestHandler.resubscribe` 在任务终态时显式 throw `UnsupportedOperationError`，破坏断线后重连获取终态帧（`status-update(final=true)`）的验收性质；<br>2. `ExecutionEventBus` 为进程内 `EventEmitter`（`on`/`off`/`once`/`removeAllListeners` 均返回 `this`），无法支撑多进程异步架构（`server.js` + `worker.js`）及跨重启/游标补发（`afterSequence`/`Last-Event-ID`）；<br>3. Spike 测试 `agent/tests/a2a/a2a-custom-protocol-integrity.unit.test.ts` 实测通过；<br>4. ADR 见 `docs/adr/0010-retain-custom-a2a-server-layer.md`。 |
+
