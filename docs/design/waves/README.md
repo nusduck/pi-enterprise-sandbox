@@ -68,10 +68,20 @@ DSH 重建的施工分解。设计依据见 [dsh-rebuild.md](../dsh-rebuild.md)�
 | W5-C | `runtime/prompt/enterprise-clauses.ts` | ✅ |
 | **Wave 6** | 接线与收敛 | ✅ |
 | W6-A | `agent/` 接线；删除 `infrastructure/pi/` 与 `extensions/` | ✅ |
-| W6-B | A2A 换 `@a2a-js/sdk` + 适配层 | ✅ |
+| W6-B | A2A 换 `@a2a-js/sdk` + 适配层 | ⚠️ **仅帧编码** —— 见下方更正 |
 | W6-C | 追踪：保留自建 span，挂 OTel 导出 | ✅ 既有 OTel 保留 |
 | W6-D | 删除 `sandbox/` 执行面；文档与 `runtime-versions.json` 同步 | ✅ mcp 保留 |
 | W6-E | 去掉 `agent/tsconfig` exclude、`@ts-nocheck`、W2-D 四条抬预算 | ✅ checkJs 0；四条预算已收回 |
+
+> **W6-B 的 ✅ 是错的（2026-09-02 更正）。** 实现 commit `2a1462fa` 的
+> message 写着「A2A drops the 12 hand-written protocol files」，但同一个 commit
+> 对 `agent/src/application/a2a/` 是 9 个文件 +48/-17，**一个文件都没删**
+> （`git show --stat --diff-filter=D 2a1462fa | grep a2a` 为空）。当时的 12 个手写
+> 协议文件今天全部还在（只是转成了 `.ts`），另外新增了第 13 个 `sdk-adapter.ts`。
+> 实际接进来的只有 `formatSSEEvent` 一个函数：SSE 帧编码换成了 SDK 的，JSON-RPC、
+> 凭据、Task↔Run、SSE 投影仍是自建的 5669 行，`@a2a-js/sdk/server` 在全仓没有任何
+> import。ADR 0007 D8 因此**尚未执行**。工单见
+> [`docs/design/a2a-sdk-server.md`](../a2a-sdk-server.md)。
 
 ## 已定的决策（施工时不要再问）
 

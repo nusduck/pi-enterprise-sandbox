@@ -105,7 +105,7 @@ Change this file in the **same commit** as the implementation or evidence that j
 | ID | Criterion | Status | Evidence / notes |
 |----|-----------|--------|------------------|
 | F1 | Agent Card reachable | `done` | A2A surface + live gate |
-| F2 | Streaming | `partial` | A2A 已换 `@a2a-js/sdk`（ADR 0007 D8），词汇棘轮仍在并通过；live gate 未重跑。历史记录：**2026-08-26:** the live gate never checked the terminal frame — `message/stream` / `tasks/resubscribe` ended after `working` with no `status-update(final=true)` because the A2A projector's run-status vocabulary (`run.succeeded`) did not match what the Run services emit (`run.status.changed` / `run.completed`, per plan.md §event vocabulary). Fixed, plus a ratchet that fails when a `run.*` eventType in `src/application` is not projectable: `agent/tests/a2a/a2a-terminal-event-vocabulary.unit.test.js`. |
+| F2 | Streaming | `partial` | SSE 帧编码走 `@a2a-js/sdk` 的 `formatSSEEvent`；**协议面仍是自建的**——ADR 0007 D8「手写协议文件作废」未执行，`@a2a-js/sdk/server` 零 import（2026-09-02 复核，工单 `design/a2a-sdk-server.md`）。词汇棘轮仍在并通过；live gate 未重跑。历史记录：**2026-08-26:** the live gate never checked the terminal frame — `message/stream` / `tasks/resubscribe` ended after `working` with no `status-update(final=true)` because the A2A projector's run-status vocabulary (`run.succeeded`) did not match what the Run services emit (`run.status.changed` / `run.completed`, per plan.md §event vocabulary). Fixed, plus a ratchet that fails when a `run.*` eventType in `src/application` is not projectable: `agent/tests/a2a/a2a-terminal-event-vocabulary.unit.test.js`. |
 | F3 | Task query / cancel / resubscribe | `done` | live gate |
 | F4 | A2A Task ↔ Run mapping | `done` | task service + repos |
 | F5 | A2A SSE disconnect does not cancel Run | `done` | protocol design + gate notes |
@@ -171,7 +171,7 @@ Non-blocking debt remains in [`review-deferred-items.md`](./review-deferred-item
 | C1, C6 | `partial` | 逻辑已移植且有离线用例，但取证对象换了（`exec_*` 表 / TS 实现），未重新取证 |
 | C4, C7 | `unknown` | 证据是 Python 执行面的 live gate 与已删除的 `tests/test_formal_process_handle.py` |
 | C8, E2, E3 | `partial` | Wave 7 已补齐实现（流式数据集、控制面产物快照、owner-scoped download）；待 Linux / 网关重新取证，不是还在占位 |
-| F2 | `partial` | A2A 换 `@a2a-js/sdk`，词汇棘轮仍通过，live gate 未重跑 |
+| F2 | `partial` | A2A 只有 SSE 帧编码走 `@a2a-js/sdk`，协议面仍自建（D8 未执行）；词汇棘轮仍通过，live gate 未重跑 |
 | G2, G7 | `unknown` | 证据是针对 Pi / Python 执行面的 live gate |
 | H2, H3, H4 | `partial` | 安全性质已随 `exec/` 移植并有离线用例；live gate 未重跑 |
 | B, D, F1/F3–F6, G1/G3–G6, H1 | 维持 | agent/BFF/frontend 侧代码未被重建影响，或证据仍成立 |
