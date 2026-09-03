@@ -82,6 +82,26 @@ describe('buildCanonicalEnvelope / redactEventData', () => {
     assert.match(String(r.note), /redacted/i);
     assert.equal(r.ok, true);
   });
+
+  it('preserves text_truncated=true and does not overwrite it when original object had text_truncated=false', () => {
+    const r = redactEventData({
+      role: 'assistant',
+      text: 'a'.repeat(3000),
+      text_truncated: false,
+    });
+    assert.equal(r.text_truncated, true);
+  });
+
+  it('allows text up to DEFAULT_MAX_RESULT_CHARS without premature 512 truncation', () => {
+    const text886 = 'a'.repeat(886);
+    const r = redactEventData({
+      role: 'assistant',
+      text: text886,
+      text_truncated: false,
+    });
+    assert.equal(r.text, text886);
+    assert.equal(r.text_truncated, false);
+  });
 });
 
 describe('FencedRunEventRecorder', () => {

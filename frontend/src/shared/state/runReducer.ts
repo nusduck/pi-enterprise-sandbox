@@ -502,9 +502,14 @@ export function reduceRuntimeEvent(
         // A message.completed event is a bounded, redacted observability
         // projection. It must not replace a complete live token buffer with
         // its shortened preview.
+        const previewStr = payload.text != null ? str(payload.text) : '';
+        const isTruncated =
+          payload.text_truncated === true ||
+          payload.textTruncated === true ||
+          (Boolean(msg.text) && Boolean(previewStr) && msg.text.length > previewStr.length && previewStr.endsWith('…'));
         const finalText =
-          payload.text != null && payload.text_truncated !== true
-            ? str(payload.text)
+          payload.text != null && !isTruncated
+            ? previewStr
             : msg.text;
         next = upsertMessage(next, {
           ...msg,

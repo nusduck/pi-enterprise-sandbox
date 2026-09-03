@@ -79,8 +79,9 @@ export function redactInlineSecrets(text: string) {
  * @param [opts]
  * @returns {unknown}
  */
-export function redactPayload(value: unknown, opts: { maxString?: number, depth?: number } = {}) {
+export function redactPayload(value: unknown, opts: { maxString?: number, maxResultChars?: number, depth?: number } = {}) {
   const maxString = opts.maxString ?? DEFAULT_MAX_STRING;
+  const maxResultChars = opts.maxResultChars ?? (opts.maxString !== undefined ? opts.maxString : DEFAULT_MAX_RESULT_CHARS);
   const depth = opts.depth ?? 0;
   if (depth > 6) return '[omitted]';
   if (value == null) return value;
@@ -93,7 +94,7 @@ export function redactPayload(value: unknown, opts: { maxString?: number, depth?
   if (Array.isArray(value)) {
     return value
       .slice(0, 50)
-      .map((v) => redactPayload(v, { maxString, depth: depth + 1 }));
+      .map((v) => redactPayload(v, { maxString, maxResultChars, depth: depth + 1 }));
   }
   if (!isPlainObject(value)) {
     return String(value).slice(0, maxString);
@@ -125,7 +126,9 @@ export function redactPayload(value: unknown, opts: { maxString?: number, depth?
     }
     if (typeof v === 'string') {
       const s = redactInlineSecrets(v);
-      const sliced = safeSlice(s, maxString);
+      const isResultText = k === 'text' || k === 'thinking' || k === 'preview' || k === 'content';
+      const limit = isResultText ? maxResultChars : maxString;
+      const sliced = safeSlice(s, limit);
       if (sliced.truncated) {
         out[k] = `${sliced.text}…`;
         out[`${k}_bytes`] = Buffer.byteLength(v, 'utf8');
@@ -136,7 +139,13 @@ export function redactPayload(value: unknown, opts: { maxString?: number, depth?
       }
       continue;
     }
-    out[k] = redactPayload(v, { maxString, depth: depth + 1 });
+    if (k.endsWith('_truncated') || k.endsWith('Truncated')) {
+      if (out[k] === true || v === true) {
+        out[k] = true;
+        continue;
+      }
+    }
+    out[k] = redactPayload(v, { maxString, maxResultChars, depth: depth + 1 });
   }
   return out;
 }

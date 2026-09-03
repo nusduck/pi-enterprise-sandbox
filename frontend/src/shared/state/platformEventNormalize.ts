@@ -456,7 +456,11 @@ function normalizePayload(
   if (type.startsWith('message.')) {
     const message = isPlainObject(p.message) ? p.message : null;
     if (p.role == null && message?.role != null) p.role = message.role;
-    if (p.text_truncated == null && messageTextWasTruncated(message)) {
+    if (
+      p.text_truncated === true ||
+      p.textTruncated === true ||
+      messageTextWasTruncated(message)
+    ) {
       p.text_truncated = true;
     }
     if (p.text == null) {
