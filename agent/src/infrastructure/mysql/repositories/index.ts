@@ -9,6 +9,7 @@ export { ConversationRepository } from './conversation-repository.js';
 export { AuthCredentialRepository } from './auth-credential-repository.js';
 export { MessageRepository } from './message-repository.js';
 export {
+  SessionJournalRepository,
   PiSessionJournalRepository,
   hashJournalPayload,
   assertJournalEntryShape,
@@ -20,7 +21,7 @@ export {
   JOURNAL_HEADER_KIND,
   JOURNAL_DEFAULT_PAGE_SIZE,
   JOURNAL_MAX_PAGE_SIZE,
-} from './pi-session-journal-repository.js';
+} from './session-journal-repository.js';
 export {
   AgentSessionRepository,
   assertSessionStatus,

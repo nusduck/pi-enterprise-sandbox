@@ -14,7 +14,7 @@ import { ConversationRepository } from '../infrastructure/mysql/repositories/con
 import { AgentSessionRepository } from '../infrastructure/mysql/repositories/agent-session-repository.js';
 import { AgentSessionSnapshotRepository } from '../infrastructure/mysql/repositories/agent-session-snapshot-repository.js';
 import { MessageRepository } from '../infrastructure/mysql/repositories/message-repository.js';
-import { PiSessionJournalRepository } from '../infrastructure/mysql/repositories/pi-session-journal-repository.js';
+import { SessionJournalRepository } from '../infrastructure/mysql/repositories/session-journal-repository.js';
 import { RunRepository } from '../infrastructure/mysql/repositories/run-repository.js';
 import { RunEventRepository } from '../infrastructure/mysql/repositories/run-event-repository.js';
 import { TraceSpanRepository } from '../infrastructure/mysql/repositories/trace-span-repository.js';
@@ -186,7 +186,7 @@ export function createRepositoryBundle(
     }),
     messages: new MessageRepository(db),
     /** PR-05 long-term Pi JSONL journal (messages-backed). */
-    journal: new PiSessionJournalRepository(db, {
+    journal: new SessionJournalRepository(db, {
       now,
       generateId: opts.generateId,
     }),

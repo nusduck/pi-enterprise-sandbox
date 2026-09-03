@@ -20,7 +20,7 @@ import { INTERACTION_STATUS } from '../domain/interaction/interaction-status.js'
 import {
   findToolCallArgumentsInSession,
   replaceSuspendedToolResultInSession,
-} from './pi-run-input.js';
+} from './dsh-run-input.js';
 
 /**
  * The arguments an approved tool must be re-executed with.

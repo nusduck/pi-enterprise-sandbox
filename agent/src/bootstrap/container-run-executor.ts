@@ -12,8 +12,14 @@ import {
   assertWorkerSandboxServiceToken,
   resolveSkillRootsForRun,
 } from './container-env.js';
-import { createPiRunExecutorFactory } from '../application/pi-run-executor.js';
-import { resolvePiRunToolBudget } from '../application/pi-run-tool-budget.js';
+import {
+  createDshRunExecutorFactory,
+  createPiRunExecutorFactory,
+} from '../application/dsh-run-executor.js';
+import {
+  resolveDshRunToolBudget,
+  resolvePiRunToolBudget,
+} from '../application/dsh-run-tool-budget.js';
 
 /** 过渡期宽松类型：容器与应用服务仍是 JS。 */
 type Loose = any;
@@ -76,7 +82,7 @@ function createSubagentSpawnPort(container: Loose): { spawn: Loose; getStatuses:
  * 给它们编造精确类型会谎报现状。等 application/ 与 infrastructure/ 转完，
  * 这里会自然收紧。
  */
-export interface PiRunExecutorFactoryOptions {
+export interface DshRunExecutorFactoryOptions {
   readonly modelResolver: (agentVersion: object) => object | Promise<object>;
   readonly workspaceResolver: (agentSession: object) => string | Promise<string>;
   readonly extensionFactories?: unknown[];
@@ -105,28 +111,30 @@ export interface PiRunExecutorFactoryOptions {
   readonly requestAuthResolver?: (model: Loose, agentVersion: Loose) => object | Promise<object>;
   /**
    * 每个 Run 的 skill 根目录。返回 `string[]`——写 `unknown` 会让
-   * PiRunExecutor 的依赖声明对不上（它要的就是路径数组）。
+   * DshRunExecutor 的依赖声明对不上（它要的就是路径数组）。
    */
   readonly skillRootsForRun?: (identity: object) => string[];
 }
 
-export async function buildPiRunExecutorFactory(
+export type PiRunExecutorFactoryOptions = DshRunExecutorFactoryOptions;
+
+export async function buildDshRunExecutorFactory(
   container: Loose,
-  opts: PiRunExecutorFactoryOptions,
+  opts: DshRunExecutorFactoryOptions,
 ) {
   if (typeof opts?.modelResolver !== 'function') {
     throw new Error(
-      'createPiRunExecutorFactory requires modelResolver(agentVersion)',
+      'createDshRunExecutorFactory requires modelResolver(agentVersion)',
     );
   }
   if (typeof opts?.workspaceResolver !== 'function') {
     throw new Error(
-      'createPiRunExecutorFactory requires workspaceResolver(agentSession)',
+      'createDshRunExecutorFactory requires workspaceResolver(agentSession)',
     );
   }
   if (!container.knex || !container.redis) {
     throw new Error(
-      'ServiceContainer must be started with MySQL and Redis before createPiRunExecutorFactory',
+      'ServiceContainer must be started with MySQL and Redis before createDshRunExecutorFactory',
     );
   }
 
@@ -245,7 +253,7 @@ export async function buildPiRunExecutorFactory(
     steerPollIntervalMs:
       opts.steerPollIntervalMs ??
       (Number(container.env.AGENT_STEER_POLL_INTERVAL_MS) || undefined),
-    toolBudget: resolvePiRunToolBudget(container.env),
+    toolBudget: resolveDshRunToolBudget(container.env),
     riskOverrides: toolRiskPolicy,
     // 子 Agent 的 durable 面（ADR 0009 D6 / 计划 H5）。2026-08-31 之前它只挂在
     // `subagentSpawnPort` 上，而那个 port 只喂给 `extensionBundleFactory`
@@ -255,5 +263,8 @@ export async function buildPiRunExecutorFactory(
     subagentSpawnPort: opts.subagentSpawnPort ?? createSubagentSpawnPort(container),
     eventProjectionMode: opts.eventProjectionMode,
   };
-  return createPiRunExecutorFactory(factoryOpts);
+  return createDshRunExecutorFactory(factoryOpts);
 }
+
+export const buildPiRunExecutorFactory = buildDshRunExecutorFactory;
+

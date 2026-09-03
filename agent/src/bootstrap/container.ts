@@ -38,7 +38,10 @@ import {
   resolveRedisUrlFromEnv,
   resolveWorkerExecutorFactory,
 } from './container-env.js';
-import { buildPiRunExecutorFactory } from './container-run-executor.js';
+import {
+  buildDshRunExecutorFactory,
+  buildPiRunExecutorFactory,
+} from './container-run-executor.js';
 import { buildSkillManagerFactory } from './container-skill-manager.js';
 import { McpDiscoveryState } from './container-mcp.js';
 
@@ -377,7 +380,7 @@ export class ServiceContainer {
     }
     if (!this.knex || !this.redis) {
       const err = new Error(
-        'ServiceContainer must be started with MySQL and Redis before wiring the worker Pi RunExecutor factory',
+        'ServiceContainer must be started with MySQL and Redis before wiring the worker DSH RunExecutor factory',
       );
       // @ts-ignore
       err.code = 'RUN_EXECUTOR_NOT_CONFIGURED';
@@ -482,11 +485,11 @@ export class ServiceContainer {
   }
 
   /**
-   * Pi runtime factory constructor/factory (PR-05 slice A).
+   * DSH runtime factory constructor/factory.
    * Does **not** enable production RunExecutor — worker still fail-fast without
-   * an explicit runExecutorFactory (slice B wires the executor).
+   * an explicit runExecutorFactory.
    */
-  createPiRuntimeFactory(
+  createDshRuntimeFactory(
     opts: {
       sessionAdapter?: { captureSnapshotPayload?: Loose; dispose?: Loose };
       extensionFactories?: unknown[];
@@ -531,10 +534,17 @@ export class ServiceContainer {
   }
 
   /**
-   * Pi session adapter (JSONL materialize + SessionManager.open).
+   * Backward-compatible alias for createDshRuntimeFactory.
+   */
+  createPiRuntimeFactory(opts: any = {}) {
+    return this.createDshRuntimeFactory(opts);
+  }
+
+  /**
+   * DSH session adapter (JSONL materialize + SessionManager.open).
    * @param {object} [deps]
    */
-  createPiSessionAdapter(deps = {}) {
+  createDshSessionAdapter(deps = {}) {
     void deps;
     return Promise.resolve({
       captureSnapshotPayload(sm, opts) {
@@ -542,6 +552,14 @@ export class ServiceContainer {
       },
       async dispose() {},
     });
+  }
+
+  /**
+   * Backward-compatible alias for createDshSessionAdapter.
+   * @param {object} [deps]
+   */
+  createPiSessionAdapter(deps = {}) {
+    return this.createDshSessionAdapter(deps);
   }
 
   /**
@@ -639,8 +657,17 @@ export class ServiceContainer {
    * }} opts
    * @returns {Promise<import('../application/run-executor.js').RunExecutorFactory>}
    */
+  async createDshRunExecutorFactory(opts) {
+    return buildDshRunExecutorFactory(this, opts);
+  }
+
+  /**
+   * Backward-compatible alias for createDshRunExecutorFactory.
+   * @param {any} opts
+   * @returns {Promise<import('../application/run-executor.js').RunExecutorFactory>}
+   */
   async createPiRunExecutorFactory(opts) {
-    return buildPiRunExecutorFactory(this, opts);
+    return this.createDshRunExecutorFactory(opts);
   }
 
   /**

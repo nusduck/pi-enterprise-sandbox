@@ -1,26 +1,26 @@
-import type { PiRunExecutorFactoryOptions } from './pi-run-executor-deps.js';
-import { PiRunExecutor } from './pi-run-executor.js';
+import type { DshRunExecutorFactoryOptions } from './dsh-run-executor-deps.js';
+import { DshRunExecutor } from './dsh-run-executor.js';
 
 /** Per-job factory. Production still injects all authority-bearing dependencies. */
-export function createPiRunExecutorFactory(opts: PiRunExecutorFactoryOptions) {
+export function createDshRunExecutorFactory(opts: DshRunExecutorFactoryOptions) {
   if (typeof opts?.modelResolver !== 'function') {
-    throw new Error('createPiRunExecutorFactory requires modelResolver(agentVersion)');
+    throw new Error('createDshRunExecutorFactory requires modelResolver(agentVersion)');
   }
   if (typeof opts?.workspaceResolver !== 'function') {
-    throw new Error('createPiRunExecutorFactory requires workspaceResolver(agentSession)');
+    throw new Error('createDshRunExecutorFactory requires workspaceResolver(agentSession)');
   }
   if (!opts.transactionManager || !opts.createRepositories) {
-    throw new Error('createPiRunExecutorFactory requires transactionManager and createRepositories');
+    throw new Error('createDshRunExecutorFactory requires transactionManager and createRepositories');
   }
   if (!opts.sessionLockManager || !opts.piRuntimeFactory) {
-    throw new Error('createPiRunExecutorFactory requires sessionLockManager and piRuntimeFactory');
+    throw new Error('createDshRunExecutorFactory requires sessionLockManager and piRuntimeFactory');
   }
   if (typeof opts.generateId !== 'function') {
-    throw new Error('createPiRunExecutorFactory requires generateId');
+    throw new Error('createDshRunExecutorFactory requires generateId');
   }
 
-  return function piRunExecutorFactory() {
-    return new PiRunExecutor({
+  return function dshRunExecutorFactory() {
+    return new DshRunExecutor({
       transactionManager: opts.transactionManager,
       createRepositories: opts.createRepositories,
       sessionLockManager: opts.sessionLockManager,
@@ -44,3 +44,6 @@ export function createPiRunExecutorFactory(opts: PiRunExecutorFactoryOptions) {
     });
   };
 }
+
+export const createPiRunExecutorFactory = createDshRunExecutorFactory;
+

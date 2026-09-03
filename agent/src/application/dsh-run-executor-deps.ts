@@ -19,7 +19,7 @@ import { sanitizeStatusReason } from './sanitize-status-reason.js';
  * piRuntimeFactory / sessionAdapter 退化成 `any`，toolBudget 少了
  * runDeadlineMs。工厂只是把 opts 原样转给构造器，两份声明本就该是同一份。
  */
-export interface PiRunExecutorDeps {
+export interface DshRunExecutorDeps {
   transactionManager: { run: (fn: (trx: any) => Promise<any>) => Promise<any> };
   createRepositories: (db: any) => any;
   sessionLockManager: {
@@ -74,10 +74,14 @@ export interface PiRunExecutorDeps {
   };
 }
 
+export type PiRunExecutorDeps = DshRunExecutorDeps;
+
 /** 工厂比构造器多收一个 extensionFactories，其余完全一致。 */
-export type PiRunExecutorFactoryOptions = PiRunExecutorDeps & {
+export type DshRunExecutorFactoryOptions = DshRunExecutorDeps & {
   extensionFactories?: unknown[];
 };
+
+export type PiRunExecutorFactoryOptions = DshRunExecutorFactoryOptions;
 
 export function looksLikeUncertainSideEffect(err: unknown) {
   const msg = String((err as Error)?.message || err || '');

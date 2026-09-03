@@ -2,9 +2,11 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
+  installDshRunToolBudget,
   installPiRunToolBudget,
+  resolveDshRunToolBudget,
   resolvePiRunToolBudget,
-} from '../../src/application/pi-run-tool-budget.js';
+} from '../../src/application/dsh-run-tool-budget.js';
 
 function createSession() {
   const policyCalls = [];

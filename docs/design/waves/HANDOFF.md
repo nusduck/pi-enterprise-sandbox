@@ -57,8 +57,7 @@ docker compose up -d
 - A2 已由 2026-09-01 compose 模型驱动工具 Run 关闭。A4 已由同日 Worker `SIGKILL` 后的模型口令复述关闭。G2 仍是 `unknown`（本轮没有中途杀死正在跑的 Run）。
 - C7 仍是 `partial`：浏览器侧 start/list/log/signal/cancel 已真机通过，但模型侧同步 `job_list` / `job_output` 仍未接上异步 exec 查询，且日志与活句柄不能跨 exec 重启恢复。G7 的 hard-SIGKILL gate 未跑。
 - C1/C4/C6/C8、E1–E3、F2、G2/G7、H2–H6 等其余行仍按 `STATUS.md` 的 live/ops 证据缺口处理；绿色单测不自动翻行。
-- `agent/tsconfig.json` 的主树 `strict` 仍关闭；`agent/src/runtime/**` 继续由 `tsconfig.runtime.json` 严格检查。主树 strict 仍是独立的大型存量债务，不应夹进功能 PR。
-- `pi-run-*` 文件名前缀是纯命名债务，不影响运行。
+- `pi-run-*` 与 `tests/pi/` 命名债务已于 2026-09-03 清理收口：文件重命名为 `dsh-run-*`，类名规范为 `DshRunExecutor`，测试目录规范为 `tests/executor/`，保留同名兼容导出。
 
 ## 已知环境陷阱
 

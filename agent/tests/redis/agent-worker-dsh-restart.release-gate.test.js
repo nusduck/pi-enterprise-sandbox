@@ -41,7 +41,7 @@ import { startFakeOpenAIProvider } from '../support/fake-openai-provider.js';
 
 const execFileAsync = promisify(execFile);
 const FIXTURE = fileURLToPath(
-  new URL('../fixtures/agent-worker-pi-process.js', import.meta.url),
+  new URL('../fixtures/agent-worker-dsh-process.js', import.meta.url),
 );
 
 const TEST_MYSQL_URL = String(process.env.TEST_MYSQL_URL || '').trim();

@@ -15,7 +15,7 @@ import {
   toThinkingLevelMap,
   supportedThinkingLevels,
 } from '../../src/infrastructure/model-registry.js';
-import { installPiRunToolBudget } from '../../src/application/pi-run-tool-budget.js';
+import { installDshRunToolBudget, installPiRunToolBudget } from '../../src/application/dsh-run-tool-budget.js';
 
 describe('model registry: default-model fallback path', () => {
   it('exports buildCachedRegistry and accepts an env object directly', () => {

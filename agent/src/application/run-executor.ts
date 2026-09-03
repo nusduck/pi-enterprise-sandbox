@@ -2,7 +2,7 @@
  * RunExecutor / RuntimeAdapter seam (PR-04 T3 → PR-05 Pi Factory).
  *
  * T3 defines the injectable interface and a no-op / stub executor only.
- * PR-05 slice B implements {@link import('./pi-run-executor.js').PiRunExecutor}
+ * PR-05 slice B implements {@link import('./dsh-run-executor.js').DshRunExecutor}
  * behind this contract (not production default — inject via factory).
  *
  * ## emit seam

@@ -29,7 +29,7 @@ import {
   createStubRunExecutor,
   normalizeExecutorResult,
 } from './run-executor.js';
-import { generateRunLeaseOwnerToken } from './pi-run-executor.js';
+import { generateRunLeaseOwnerToken } from './dsh-run-executor.js';
 import { applyRunTransitionInTxn } from './run-transition.js';
 import { sanitizeStatusReason } from './sanitize-status-reason.js';
 import { ValidationError } from './errors.js';

@@ -268,7 +268,6 @@ TypeScript 之后，这个异常按构造消失：独立 `@pi/runtime` 包没有
 当前路径以这份记录为准；设计文档正文里的 `runtime/` 与 `agent/runtime/`
 都读作 `agent/src/runtime/`。
 
-### 遗留：`agent/src/application/pi-run-executor.ts` 等文件名
+### 遗留收口：`agent/src/application/dsh-run-executor.ts` 等文件名（2026-09-03）
 
-若干 `pi-` 前缀的文件名尚未改（已随源码变成 `.ts`）。纯改名，无行为影响，
-未做以免与实质改动混在一个变更集里。
+原 `pi-run-executor.ts` 等 6 个 `pi-run-*` 文件及 `pi-session-journal-repository.ts` 已重命名为 `dsh-run-*` 与 `session-journal-repository.ts`，核心类名与方法规范为 `DshRunExecutor` / `createDshRunExecutorFactory`，测试目录由 `agent/tests/pi/` 规范迁移至 `agent/tests/executor/`，原标识符均保留同名兼容别名导出。

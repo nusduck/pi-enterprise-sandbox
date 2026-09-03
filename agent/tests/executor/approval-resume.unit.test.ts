@@ -11,7 +11,7 @@
  */
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { prepareApprovalResume } from '../../src/application/pi-run-resume.js';
+import { prepareApprovalResume } from '../../src/application/dsh-run-resume.js';
 
 const APPROVAL_ID = '01ARZ3NDEKTSV4RRFFQ69G5FAV';
 const TOOL_EXEC_ID = '01ARZ3NDEKTSV4RRFFQ69G5FAW';

@@ -115,7 +115,9 @@ export {
 } from './run-executor.js';
 
 export {
+  DshRunExecutor,
   PiRunExecutor,
+  createDshRunExecutorFactory,
   createPiRunExecutorFactory,
   generateRunLeaseOwnerToken,
   derivePromptFromTriggeringMessage,
@@ -124,7 +126,7 @@ export {
   FencedToolGovernanceRecorder,
   buildCanonicalEnvelope,
   redactEventData,
-} from './pi-run-executor.js';
+} from './dsh-run-executor.js';
 
 export {
   DurablePolicyConflictError,

@@ -16,7 +16,7 @@ import assert from 'node:assert/strict';
 import { createFakeKnex, createFakeState } from '../mysql/fake-knex.js';
 import { createFakeRedis } from '../redis/fake-redis.js';
 import { createRepositoryBundle } from '../../src/bootstrap/container.js';
-import { PiRunExecutor } from '../../src/application/pi-run-executor.js';
+import { DshRunExecutor, PiRunExecutor } from '../../src/application/dsh-run-executor.js';
 import { SessionLockManager } from '../../src/infrastructure/redis/session-lock-manager.js';
 import { createUlidGenerator } from '../../src/domain/shared/ulid.js';
 import { RUN_STATUS } from '../../src/domain/run/run-status.js';

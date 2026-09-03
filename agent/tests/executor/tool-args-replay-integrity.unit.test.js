@@ -23,7 +23,7 @@ import {
   assertToolExecutionReplayMatch,
   MAX_ARGS_JSON_BYTES,
 } from '../../src/infrastructure/mysql/repositories/tool-execution-repository.js';
-import { findToolCallArgumentsInSession } from '../../src/application/pi-run-input.js';
+import { findToolCallArgumentsInSession } from '../../src/application/dsh-run-input.js';
 
 const TOOL = { toolName: 'bash', toolSource: 'sandbox' };
 const TOOL_CALL_ID = 'call_abc123';

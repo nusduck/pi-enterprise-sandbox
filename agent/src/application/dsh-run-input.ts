@@ -179,7 +179,7 @@ export function appendNonVisionImageNotice(prompt: string | Array<{ type: string
  * @param prompt
  * @returns {{ text: string, options?: { images: object[] } }}
  */
-export function toPiPromptInvocation(prompt: string | Array<{ type: string, text?: string, [k: string]: unknown }>) {
+export function toDshPromptInvocation(prompt: string | Array<{ type: string, text?: string, [k: string]: unknown }>) {
   if (typeof prompt === 'string') return { text: prompt };
 
   const text = prompt
@@ -192,6 +192,8 @@ export function toPiPromptInvocation(prompt: string | Array<{ type: string, text
 
   return images.length > 0 ? { text, options: { images } } : { text };
 }
+
+export const toPiPromptInvocation = toDshPromptInvocation;
 
 /**
  * Recover the arguments the model actually emitted for `toolCallId`.

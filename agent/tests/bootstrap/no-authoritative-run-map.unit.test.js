@@ -78,7 +78,7 @@ const TRANSIENT_MAP_WHITELIST = Object.freeze([
     scope: 'local',
   },
   {
-    rel: 'application/pi-run-tool-budget.ts',
+    rel: 'application/dsh-run-tool-budget.ts',
     match: /const\s+seen\s*=\s*new\s+Map\s*\(/,
     purpose:
       'Per-run tool-and-argument call counter for convergence limits; discarded with the live SDK session and not durable authority',

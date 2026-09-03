@@ -8,16 +8,19 @@ import { createFakeKnex, createFakeState } from '../mysql/fake-knex.js';
 import { createFakeRedis } from '../redis/fake-redis.js';
 import { createRepositoryBundle } from '../../src/bootstrap/container.js';
 import {
+  DshRunExecutor,
   PiRunExecutor,
   appendCurrentTurnAttachmentContext,
   attachmentsFromTriggeringMessage,
+  createDshRunExecutorFactory,
   createPiRunExecutorFactory,
   generateRunLeaseOwnerToken,
   derivePromptFromTriggeringMessage,
   imageAttachmentsFromTriggeringMessage,
   requestedModelIdFromTriggeringMessage,
+  toDshPromptInvocation,
   toPiPromptInvocation,
-} from '../../src/application/pi-run-executor.js';
+} from '../../src/application/dsh-run-executor.js';
 import { SessionLockManager } from '../../src/infrastructure/redis/session-lock-manager.js';
 import { LeaseManager } from '../../src/infrastructure/redis/lease-manager.js';
 import { ExecuteRunService } from '../../src/application/execute-run-service.js';
@@ -1287,7 +1290,7 @@ describe('PiRunExecutor', () => {
     });
     // Note: payloadHash for header alone may not match full checksum — use real hash helper
     const { hashJournalPayload } = await import(
-      '../../src/infrastructure/mysql/repositories/pi-session-journal-repository.js'
+      '../../src/infrastructure/mysql/repositories/session-journal-repository.js'
     );
     state.tables.messages[state.tables.messages.length - 1].content_json =
       JSON.stringify({
@@ -1789,7 +1792,7 @@ describe('PiRunExecutor', () => {
       '../../src',
     );
     const files = [
-      'application/pi-run-executor.js',
+      'application/dsh-run-executor.js',
       'application/session-recovery-service.js',
       'infrastructure/dsh/runtime-factory.js',
     ];

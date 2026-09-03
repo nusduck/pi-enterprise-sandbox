@@ -38,8 +38,8 @@ HOTSPOT_LINE_BUDGETS = {
     # 文件，阶段 D 收尾时应当拆。
     "agent/src/application/fenced-tool-governance-recorder.ts": 1_654,
     # 转 TS 时拆出 pi-run-executor-deps.ts（依赖面类型 + 三个不读 this 的
-    # 纯判定），1_597 -> 1_526，预算收紧。
-    "agent/src/application/pi-run-executor.ts": 1_526,
+    # 纯判定），1_597 -> 1_526，预算收紧。改名 dsh-run-executor.ts。
+    "agent/src/application/dsh-run-executor.ts": 1_526,
     # 转 TS 时拆出 container-mcp.ts（MCP 发现状态机），1_178 -> 1_065，预算收紧。
     "agent/src/bootstrap/container.ts": 1_065,
     # W2-D 曾抬到 1_443；Wave 6 收回。转 TS 时拆出 presentation/http/health-routes.ts

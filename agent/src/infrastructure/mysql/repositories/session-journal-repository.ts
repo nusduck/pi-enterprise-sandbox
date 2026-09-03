@@ -238,7 +238,7 @@ export function unwrapJournalContent(msg: ReturnType<typeof mapMessage>) {
   };
 }
 
-export class PiSessionJournalRepository {
+export class SessionJournalRepository {
   // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
   db: Loose;
   now: Loose;
@@ -246,7 +246,7 @@ export class PiSessionJournalRepository {
 
   constructor(db: import('knex').Knex | import('knex').Knex.Transaction, opts: { now?: () => Date, generateId?: () => string } = {}) {
     if (!db) {
-      throw new Error('PiSessionJournalRepository requires a knex executor');
+      throw new Error('SessionJournalRepository requires a knex executor');
     }
     this.db = db;
     this.now = opts.now ?? (() => new Date());
@@ -711,3 +711,7 @@ export class PiSessionJournalRepository {
     return row ? mapMessage(row) : null;
   }
 }
+
+export const PiSessionJournalRepository = SessionJournalRepository;
+export type PiSessionJournalRepository = SessionJournalRepository;
+

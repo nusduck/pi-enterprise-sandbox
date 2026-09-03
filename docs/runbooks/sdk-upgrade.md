@@ -5,8 +5,8 @@ Use this when bumping the pinned DeepSeek Harness packages in `agent/`. Do
 must **not** depend on DSH.
 
 Pi (`@earendil-works/pi-coding-agent`) 已移除。相关决策见
-[ADR 0007](../adr/0007-agent-runtime-rebuild-on-dsh.md)，兼容套件在
-`agent/tests/runtime/` 与 `agent/tests/sdk-compat/`，版本 SSOT 是
+[ADR 0007](../adr/0007-agent-runtime-rebuild-on-dsh.md)，测试套件在
+`agent/tests/runtime/`，版本 SSOT 是
 `runtime-versions.json` → `dsh.packages`。
 
 ## Preconditions

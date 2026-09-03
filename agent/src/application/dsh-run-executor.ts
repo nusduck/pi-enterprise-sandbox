@@ -48,8 +48,9 @@ import {
   assertTriggeringMessageBinding,
   looksLikeUncertainSideEffect,
   terminalOutcomeFromNewAssistantEntries,
+  type DshRunExecutorDeps,
   type PiRunExecutorDeps,
-} from './pi-run-executor-deps.js';
+} from './dsh-run-executor-deps.js';
 import { sanitizeStatusReason } from './sanitize-status-reason.js';
 import { SessionRecoveryService } from './session-recovery-service.js';
 import { captureSessionSnapshotPayload } from './session-json-codec.js';
@@ -57,7 +58,10 @@ import { ConflictError } from '../infrastructure/mysql/errors.js';
 import { FencedRunEventRecorder } from './fenced-run-event-recorder.js';
 import { FencedToolGovernanceRecorder } from './fenced-tool-governance-recorder.js';
 import { DurableSteerController } from './durable-steer-controller.js';
-import { installPiRunToolBudget } from './pi-run-tool-budget.js';
+import {
+  installDshRunToolBudget,
+  installPiRunToolBudget,
+} from './dsh-run-tool-budget.js';
 import {
   DURABLE_INTERACTION_PENDING,
   INTERACTION_STATUS,
@@ -69,8 +73,9 @@ import {
   derivePromptFromTriggeringMessage,
   imageAttachmentsFromTriggeringMessage,
   requestedModelIdFromTriggeringMessage,
+  toDshPromptInvocation,
   toPiPromptInvocation,
-} from './pi-run-input.js';
+} from './dsh-run-input.js';
 
 export { createPromiseTail } from './promise-tail.js';
 export {
@@ -91,14 +96,15 @@ export {
   imageAttachmentsFromTriggeringMessage,
   requestedModelIdFromTriggeringMessage,
   replaceSuspendedToolResultInSession,
+  toDshPromptInvocation,
   toPiPromptInvocation,
-} from './pi-run-input.js';
+} from './dsh-run-input.js';
 
-/** Ordinary UI assistant message pi_entry_id prefix — never collides with journal entry ids. */
+/** Ordinary UI assistant message entry_id prefix — never collides with journal entry ids. */
 import {
   prepareApprovalResume,
   prepareInteractionResume,
-} from './pi-run-resume.js';
+} from './dsh-run-resume.js';
 import { GovernanceApprovalStore } from './governance-approval-store.js';
 import { approvalIdOf } from '../runtime/policy/approval-id.js';
 import { integrityFingerprint } from '../infrastructure/mysql/repositories/tool-execution-repository.js';
@@ -109,12 +115,10 @@ import { createInteractionRequester } from './interaction-requester.js';
 /** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
 type Loose = any;
 
-export const UI_ASSISTANT_PI_ENTRY_PREFIX = 'ui:assistant:';
+export const UI_ASSISTANT_ENTRY_PREFIX = 'ui:assistant:';
+export const UI_ASSISTANT_PI_ENTRY_PREFIX = UI_ASSISTANT_ENTRY_PREFIX;
 
-
-
-
-export class PiRunExecutor {
+export class DshRunExecutor {
   // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
   tx: Loose;
   createRepositories: Loose;
@@ -179,32 +183,32 @@ export class PiRunExecutor {
    *   recoveryService?: SessionRecoveryService,
    *   sessionLockRenewIntervalMs?: number,
    *   skillRootsForRun?: (identity: object) => string[],
-     *   eventProjectionMode?: 'session-subscribe' | 'observability' | 'both',
+   *   eventProjectionMode?: 'session-subscribe' | 'observability' | 'both',
    *   steerPollIntervalMs?: number,
    *   toolBudget?: { maxToolCalls?: number, maxIdenticalToolCalls?: number, maxModelTurns?: number, runDeadlineMs?: number },
    * }} deps
    */
-  constructor(deps: PiRunExecutorDeps) {
+  constructor(deps: DshRunExecutorDeps) {
     if (!deps?.transactionManager?.run) {
-      throw new Error('PiRunExecutor requires transactionManager');
+      throw new Error('DshRunExecutor requires transactionManager');
     }
     if (typeof deps.createRepositories !== 'function') {
-      throw new Error('PiRunExecutor requires createRepositories');
+      throw new Error('DshRunExecutor requires createRepositories');
     }
-    if (!deps.sessionLockManager?.acquire) {
-      throw new Error('PiRunExecutor requires sessionLockManager');
+    if (!deps.sessionLockManager) {
+      throw new Error('DshRunExecutor requires sessionLockManager');
     }
     if (!deps.piRuntimeFactory?.create) {
-      throw new Error('PiRunExecutor requires piRuntimeFactory');
+      throw new Error('DshRunExecutor requires piRuntimeFactory');
     }
     if (typeof deps.modelResolver !== 'function') {
-      throw new Error('PiRunExecutor requires modelResolver(agentVersion)');
+      throw new Error('DshRunExecutor requires modelResolver(agentVersion)');
     }
     if (typeof deps.workspaceResolver !== 'function') {
-      throw new Error('PiRunExecutor requires workspaceResolver(agentSession)');
+      throw new Error('DshRunExecutor requires workspaceResolver(agentSession)');
     }
     if (typeof deps.generateId !== 'function') {
-      throw new Error('PiRunExecutor requires generateId');
+      throw new Error('DshRunExecutor requires generateId');
     }
 
     this.tx = deps.transactionManager;
@@ -881,7 +885,7 @@ export class PiRunExecutor {
       // message and never dump accumulated history into a fresh prompt.
       let prompt;
       if (interactionResume) {
-        prompt = toPiPromptInvocation(
+        prompt = toDshPromptInvocation(
           await this.#prepareInteractionResume({
             interactionResume,
             runtimeSession,
@@ -891,7 +895,7 @@ export class PiRunExecutor {
           }),
         );
       } else if (approvalResume) {
-        prompt = toPiPromptInvocation(
+        prompt = toDshPromptInvocation(
           await this.#prepareApprovalResume({
             approvalResume,
             runtimeSession,
@@ -901,7 +905,7 @@ export class PiRunExecutor {
           }),
         );
       } else {
-        prompt = toPiPromptInvocation(
+        prompt = toDshPromptInvocation(
           appendNonVisionImageNotice(
             appendCurrentTurnAttachmentContext(
               derivePromptFromTriggeringMessage(triggering),
@@ -953,10 +957,10 @@ export class PiRunExecutor {
       // Worker are separate processes; MySQL events are the hand-off channel.
       let promptError = null;
       let promptPromise = null;
-      // Pi's native loop deliberately has no Run-level tool budget. This
+      // DSH's native loop deliberately has no Run-level tool budget. This
       // temporary guard keeps the normal governance hooks intact and restores
       // the session after this Run completes.
-      const toolBudgetGuard = installPiRunToolBudget(
+      const toolBudgetGuard = installDshRunToolBudget(
         runtimeSession,
         this.toolBudget ?? undefined,
       );
@@ -1270,7 +1274,7 @@ export class PiRunExecutor {
       if (this._cleanupErrors.length) {
         throw this._cleanupErrors.length === 1
           ? this._cleanupErrors[0]
-          : new AggregateError(this._cleanupErrors, 'PiRunExecutor dispose failures');
+          : new AggregateError(this._cleanupErrors, 'DshRunExecutor dispose failures');
       }
       return;
     }
@@ -1345,7 +1349,7 @@ export class PiRunExecutor {
     this._cleanupErrors = errors;
     if (errors.length === 1) throw errors[0];
     if (errors.length > 1) {
-      throw new AggregateError(errors, 'PiRunExecutor dispose failures');
+      throw new AggregateError(errors, 'DshRunExecutor dispose failures');
     }
   }
 
@@ -1420,7 +1424,7 @@ export class PiRunExecutor {
       const thinking = extractAssistantThinkingForUi(msg);
       if (!text && !thinking && !Array.isArray(msg.content)) continue;
 
-      const uiEntryId = `${UI_ASSISTANT_PI_ENTRY_PREFIX}${entry.id}`;
+      const uiEntryId = `${UI_ASSISTANT_ENTRY_PREFIX}${entry.id}`;
 
       await this.tx.run(async (trx) => {
         const repos = this.createRepositories(trx);
@@ -1505,5 +1509,12 @@ export class PiRunExecutor {
   }
 }
 
-export { createPiRunExecutorFactory } from './pi-run-executor-factory.js';
+export const PiRunExecutor = DshRunExecutor;
+export type PiRunExecutor = DshRunExecutor;
+
+export {
+  createDshRunExecutorFactory,
+  createPiRunExecutorFactory,
+} from './dsh-run-executor-factory.js';
 export { normalizeExecutorResult } from './run-executor.js';
+

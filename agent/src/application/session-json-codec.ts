@@ -16,7 +16,8 @@
  */
 
 import { createHash } from 'node:crypto';
-import { DshSessionAdapterError as PiSessionAdapterError } from '../infrastructure/dsh/errors.js';
+import { DshSessionAdapterError } from '../infrastructure/dsh/errors.js';
+const PiSessionAdapterError = DshSessionAdapterError;
 
 /** Matches CURRENT_SESSION_VERSION from @earendil-works/pi-coding-agent@0.80.3. */
 export const PI_SESSION_JSONL_VERSION = 3;

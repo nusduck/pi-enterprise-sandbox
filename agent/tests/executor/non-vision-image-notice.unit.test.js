@@ -10,7 +10,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { appendNonVisionImageNotice } from '../../src/application/pi-run-input.js';
+import { appendNonVisionImageNotice } from '../../src/application/dsh-run-input.js';
 
 const IMAGES = [
   { attachmentId: 'a1', mimeType: 'image/png', name: 'invoice.png', size: 100 },

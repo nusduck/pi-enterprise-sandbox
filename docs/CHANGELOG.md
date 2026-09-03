@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **全面清理 Pi SDK 遗留命名与测试残留**：将 `agent/src/application/` 下的 6 个 `pi-run-*` 模块重命名为 `dsh-run-*`，核心执行器规范为 `DshRunExecutor`；`pi-session-journal-repository.ts` 重命名为 `session-journal-repository.ts`；测试目录 `agent/tests/pi/` 统一迁移规范为 `agent/tests/executor/`；清理废弃的 `agent/tests/sdk-compat/` 目录；所有对外符号均保留兼容别名，MySQL 字段与持久化层保持平滑兼容。
 - **保留自建 A2A 服务端协议面并撤销 ADR 0007 D8（ADR 0010）**：经架构实测评估（工单 `docs/design/a2a-sdk-server.md`），`@a2a-js/sdk/server` 的 `ExecutionEventBus` 与终态 `resubscribe` 报错行为无法支持多进程异步架构（`server.js` + `worker.js`）与断线重连补发。正式保留自建的 13 个 A2A 协议与应用模块，继续使用 `@a2a-js/sdk` 编码 SSE 帧，并建立反向完整性测试棘轮（`a2a-custom-protocol-integrity.unit.test.ts`）。
 - **用户 Skill 改为草稿 → 人工启用 → 只读发布**：Capabilities 页可启用/停用 owner-scoped Skill；Agent 同步发布副本与 MySQL 启用账本，exec 只把当前 owner 的已发布包逐个只读挂载。旧 `skill_install/create/edit/uninstall` 工具退役。
 - **CI 纳入 `contract/` 与 `exec/`**：两包都执行独立 typecheck 与测试；Python 仓库卫生环境显式声明零 setuptools package，`uv sync` 不再因平铺目录自动发现失败。

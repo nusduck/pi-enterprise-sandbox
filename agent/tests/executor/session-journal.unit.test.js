@@ -6,12 +6,13 @@ import { describe, it, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { createFakeKnex, createFakeState } from '../mysql/fake-knex.js';
 import {
+  SessionJournalRepository,
   PiSessionJournalRepository,
   hashJournalPayload,
   JOURNAL_HEADER_ENTRY_ID,
   JOURNAL_MESSAGE_TYPE,
   JOURNAL_ORDER_INDEX,
-} from '../../src/infrastructure/mysql/repositories/pi-session-journal-repository.js';
+} from '../../src/infrastructure/mysql/repositories/session-journal-repository.js';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import nodePath from 'node:path';
