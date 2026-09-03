@@ -42,9 +42,11 @@ describe('api-server import/listen smoke', () => {
 
   it('listens and serves GET /health/ready', async () => {
     const port = 20000 + Math.floor(Math.random() * 1000);
-    const serverEntry = fs.existsSync(path.join(BFF_ROOT, 'dist/server.js'))
-      ? 'dist/server.js'
-      : 'server.js';
+    const serverEntry = 'dist/server.js';
+    assert.ok(
+      fs.existsSync(path.join(BFF_ROOT, serverEntry)),
+      'dist/server.js must exist; run npm run build first',
+    );
     const child = spawn(process.execPath, [serverEntry], {
 
       cwd: BFF_ROOT,

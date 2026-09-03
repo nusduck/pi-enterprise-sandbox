@@ -12,7 +12,7 @@
     "start": "node dist/server.js",
     "dev": "tsx watch server.ts",
     "test": "npm run build && tsx --test tests/*.test.js",
-    "smoke": "tsx --test tests/listen-smoke.test.js"
+    "smoke": "npm run build && tsx --test tests/listen-smoke.test.js"
   },
   "dependencies": {
     "@opentelemetry/api": "^1.9.0",

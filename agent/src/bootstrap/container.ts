@@ -40,7 +40,6 @@ import {
 } from './container-env.js';
 import {
   buildDshRunExecutorFactory,
-  buildPiRunExecutorFactory,
 } from './container-run-executor.js';
 import { buildSkillManagerFactory } from './container-skill-manager.js';
 import { McpDiscoveryState } from './container-mcp.js';
@@ -386,7 +385,7 @@ export class ServiceContainer {
       err.code = 'RUN_EXECUTOR_NOT_CONFIGURED';
       throw err;
     }
-    const factory = await this.createPiRunExecutorFactory({
+    const factory = await this.createDshRunExecutorFactory({
       modelResolver: this.createDefaultModelResolver(),
       workspaceResolver: this.createDefaultWorkspaceResolver(),
     });
@@ -659,15 +658,6 @@ export class ServiceContainer {
    */
   async createDshRunExecutorFactory(opts) {
     return buildDshRunExecutorFactory(this, opts);
-  }
-
-  /**
-   * Backward-compatible alias for createDshRunExecutorFactory.
-   * @param {any} opts
-   * @returns {Promise<import('../application/run-executor.js').RunExecutorFactory>}
-   */
-  async createPiRunExecutorFactory(opts) {
-    return this.createDshRunExecutorFactory(opts);
   }
 
   /**

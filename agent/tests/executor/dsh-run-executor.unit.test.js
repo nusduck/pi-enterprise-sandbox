@@ -9,17 +9,14 @@ import { createFakeRedis } from '../redis/fake-redis.js';
 import { createRepositoryBundle } from '../../src/bootstrap/container.js';
 import {
   DshRunExecutor,
-  PiRunExecutor,
   appendCurrentTurnAttachmentContext,
   attachmentsFromTriggeringMessage,
   createDshRunExecutorFactory,
-  createPiRunExecutorFactory,
   generateRunLeaseOwnerToken,
   derivePromptFromTriggeringMessage,
   imageAttachmentsFromTriggeringMessage,
   requestedModelIdFromTriggeringMessage,
   toDshPromptInvocation,
-  toPiPromptInvocation,
 } from '../../src/application/dsh-run-executor.js';
 import { SessionLockManager } from '../../src/infrastructure/redis/session-lock-manager.js';
 import { LeaseManager } from '../../src/infrastructure/redis/lease-manager.js';
@@ -162,7 +159,7 @@ describe('derivePromptFromTriggeringMessage', () => {
   });
 
   it('adapts stored content parts to the Pi prompt(text, { images }) API', () => {
-    const invocation = toPiPromptInvocation([
+    const invocation = toDshPromptInvocation([
       { type: 'text', text: 'first' },
       { type: 'text', text: 'second' },
       { type: 'image', data: 'base64-data', mimeType: 'image/png' },
@@ -185,7 +182,7 @@ describe('derivePromptFromTriggeringMessage', () => {
       },
     });
 
-    assert.deepEqual(toPiPromptInvocation(durable), {
+    assert.deepEqual(toDshPromptInvocation(durable), {
       text: 'browser prompt',
     });
   });
@@ -241,7 +238,7 @@ describe('generateRunLeaseOwnerToken', () => {
   });
 });
 
-describe('PiRunExecutor', () => {
+describe('DshRunExecutor', () => {
   /** @type {ReturnType<typeof createFakeState>} */
   let state;
   /** @type {ReturnType<typeof createFakeKnex>} */
@@ -260,7 +257,7 @@ describe('PiRunExecutor', () => {
 
   function makeExecutor(factoryOpts = {}) {
     const generateId = nextId;
-    return new PiRunExecutor({
+    return new DshRunExecutor({
       transactionManager: { run: (fn) => knex.transaction(fn) },
       createRepositories: (db) =>
         createRepositoryBundle(db, { now: () => new Date(), generateId }),
@@ -744,7 +741,7 @@ describe('PiRunExecutor', () => {
 
   it('records two assistant message.completed events in the same run (no role-only dedupe)', async () => {
     const generateId = nextId;
-    const exec = new PiRunExecutor({
+    const exec = new DshRunExecutor({
       transactionManager: { run: (fn) => knex.transaction(fn) },
       createRepositories: (db) =>
         createRepositoryBundle(db, { now: () => new Date(), generateId }),
@@ -833,7 +830,7 @@ describe('PiRunExecutor', () => {
   it('fails closed when sandboxSessionId is present but malformed', async () => {
     state.tables.agent_sessions[0].sandbox_session_id = 'not-a-ulid';
     const generateId = nextId;
-    const exec = new PiRunExecutor({
+    const exec = new DshRunExecutor({
       transactionManager: { run: (fn) => knex.transaction(fn) },
       createRepositories: (db) =>
         createRepositoryBundle(db, { now: () => new Date(), generateId }),
@@ -871,7 +868,7 @@ describe('PiRunExecutor', () => {
     /** @type {object[]} */
     const runtimeContexts = [];
     const generateIdFn = generateId;
-    const exec = new PiRunExecutor({
+    const exec = new DshRunExecutor({
       transactionManager: { run: (fn) => knex.transaction(fn) },
       createRepositories: (db) =>
         createRepositoryBundle(db, {
@@ -958,7 +955,7 @@ describe('PiRunExecutor', () => {
     const generateId = nextId;
     /** @type {object[]} */
     const createInputs = [];
-    const exec = new PiRunExecutor({
+    const exec = new DshRunExecutor({
       transactionManager: { run: (fn) => knex.transaction(fn) },
       createRepositories: (db) =>
         createRepositoryBundle(db, { now: () => new Date(), generateId }),
@@ -1071,7 +1068,7 @@ describe('PiRunExecutor', () => {
         now: () => new Date(),
         generateId: generateIdFn,
       });
-    const exec = new PiRunExecutor({
+    const exec = new DshRunExecutor({
       transactionManager: { run: (fn) => knex.transaction(fn) },
       createRepositories: (db) => {
         const repos = baseCreateRepos(db);
@@ -1380,7 +1377,7 @@ describe('PiRunExecutor', () => {
         },
       };
     };
-    const exec = new PiRunExecutor({
+    const exec = new DshRunExecutor({
       transactionManager: { run: (fn) => knex.transaction(fn) },
       createRepositories: wrapRepos,
       sessionLockManager: new SessionLockManager(redis, {
@@ -1432,7 +1429,7 @@ describe('PiRunExecutor', () => {
     redis = createFakeRedis();
     const emitLog2 = [];
     outboxCtrl.fail = true;
-    const exec2 = new PiRunExecutor({
+    const exec2 = new DshRunExecutor({
       transactionManager: { run: (fn) => knex.transaction(fn) },
       createRepositories: wrapRepos,
       sessionLockManager: new SessionLockManager(redis, {
@@ -1501,7 +1498,7 @@ describe('PiRunExecutor', () => {
         return baseLocks.renew(id, tok);
       },
     };
-    const exec = new PiRunExecutor({
+    const exec = new DshRunExecutor({
       transactionManager: { run: (fn) => knex.transaction(fn) },
       createRepositories: (db) =>
         createRepositoryBundle(db, { now: () => new Date(), generateId }),
@@ -1570,7 +1567,7 @@ describe('PiRunExecutor', () => {
 
     let resolvedVersionId = null;
     const generateId = nextId;
-    const exec = new PiRunExecutor({
+    const exec = new DshRunExecutor({
       transactionManager: { run: (fn) => knex.transaction(fn) },
       createRepositories: (db) =>
         createRepositoryBundle(db, { now: () => new Date(), generateId }),
@@ -1645,7 +1642,7 @@ describe('PiRunExecutor', () => {
       },
     });
     const generateId = nextId;
-    const broken = new PiRunExecutor({
+    const broken = new DshRunExecutor({
       transactionManager: { run: (fn) => knex.transaction(fn) },
       createRepositories: (db) =>
         createRepositoryBundle(db, { now: () => new Date(), generateId }),
@@ -1729,7 +1726,7 @@ describe('PiRunExecutor', () => {
     };
     const generateId = nextId;
     const locks = new SessionLockManager(redis, { ttlMs: 30_000 });
-    const exec = new PiRunExecutor({
+    const exec = new DshRunExecutor({
       transactionManager: { run: (fn) => knex.transaction(fn) },
       createRepositories: (db) =>
         createRepositoryBundle(db, { now: () => new Date(), generateId }),
@@ -1769,17 +1766,33 @@ describe('PiRunExecutor', () => {
     assert.equal(await locks.acquire(SESS, 'w1:postdisposeaaaaaaaaaaaaaaaaaa'), true);
   });
 
-  it('createPiRunExecutorFactory requires resolvers and is not auto-default', () => {
+  it('createDshRunExecutorFactory requires resolvers and is not auto-default', () => {
     assert.throws(
-      () => createPiRunExecutorFactory({}),
+      () => createDshRunExecutorFactory({}),
       /modelResolver/,
     );
     assert.throws(
       () =>
-        createPiRunExecutorFactory({
+        createDshRunExecutorFactory({
           modelResolver: () => fullModel,
         }),
       /workspaceResolver/,
+    );
+  });
+
+  it('requires sessionLockManager.acquire at construction', () => {
+    assert.throws(
+      () =>
+        new DshRunExecutor({
+          transactionManager: { run: async (fn) => fn({}) },
+          createRepositories: () => ({}),
+          sessionLockManager: {},
+          piRuntimeFactory: { create: async () => ({}) },
+          modelResolver: () => fullModel,
+          workspaceResolver: () => '/tmp',
+          generateId: () => '1',
+        }),
+      /DshRunExecutor requires sessionLockManager/,
     );
   });
 

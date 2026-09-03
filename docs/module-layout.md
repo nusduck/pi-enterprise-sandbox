@@ -201,7 +201,7 @@ Unchanged: feature-sliced style under `frontend/src/` (`pages/`, `widgets/`, `fe
 
 - Agent: `WORKDIR /app/agent`，`CMD ["node", "dist/server.js"]`（worker 是
   `dist/worker.js`）。镜像**不挂载源码**，改了 `agent/` 必须重建。
-- API: `WORKDIR /app`, `CMD ["node", "server.js"]` — 仍是 JS，copy 整个包。
+- API: `WORKDIR /app`, `CMD ["node", "dist/server.js"]` — TypeScript 构建产物，镜像**不挂载源码**，改了 `api-server/` 必须重建。
 - Exec: `WORKDIR /app/exec`，`CMD ["node", "dist/main.js"]`；MCP facade 是同一镜像的
   `node dist/mcp-main.js`。compose 服务名仍是 `sandbox` / `sandbox-mcp`。
   **两者必须一起重建**，否则一个跑新代码一个跑旧的。

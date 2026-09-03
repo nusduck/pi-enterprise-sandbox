@@ -45,5 +45,3 @@ export function createDshRunExecutorFactory(opts: DshRunExecutorFactoryOptions) 
   };
 }
 
-export const createPiRunExecutorFactory = createDshRunExecutorFactory;
-

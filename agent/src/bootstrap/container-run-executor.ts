@@ -14,11 +14,9 @@ import {
 } from './container-env.js';
 import {
   createDshRunExecutorFactory,
-  createPiRunExecutorFactory,
 } from '../application/dsh-run-executor.js';
 import {
   resolveDshRunToolBudget,
-  resolvePiRunToolBudget,
 } from '../application/dsh-run-tool-budget.js';
 
 /** 过渡期宽松类型：容器与应用服务仍是 JS。 */
@@ -115,8 +113,6 @@ export interface DshRunExecutorFactoryOptions {
    */
   readonly skillRootsForRun?: (identity: object) => string[];
 }
-
-export type PiRunExecutorFactoryOptions = DshRunExecutorFactoryOptions;
 
 export async function buildDshRunExecutorFactory(
   container: Loose,
@@ -265,6 +261,4 @@ export async function buildDshRunExecutorFactory(
   };
   return createDshRunExecutorFactory(factoryOpts);
 }
-
-export const buildPiRunExecutorFactory = buildDshRunExecutorFactory;
 

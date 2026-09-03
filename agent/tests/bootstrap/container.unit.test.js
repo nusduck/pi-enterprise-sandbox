@@ -74,7 +74,7 @@ describe('ServiceContainer', () => {
     assert.equal(typeof c.createPiRuntimeFactory, 'function');
     assert.equal(typeof c.createPiSessionAdapter, 'function');
     assert.equal(typeof c.createPlatformEventProjector, 'function');
-    assert.equal(typeof c.createPiRunExecutorFactory, 'function');
+    assert.equal(typeof c.createDshRunExecutorFactory, 'function');
     assert.equal(typeof c.createSessionRecoveryService, 'function');
     assert.throws(
       () => c.requireWorkerExecutorFactory(),
@@ -233,7 +233,7 @@ describe('ServiceContainer', () => {
     let piFactoryCalls = 0;
     /** @type {unknown} */
     let capturedOpts = null;
-    c.createPiRunExecutorFactory = async (opts) => {
+    c.createDshRunExecutorFactory = async (opts) => {
       piFactoryCalls += 1;
       capturedOpts = opts;
       assert.equal(typeof opts.modelResolver, 'function');
@@ -260,7 +260,7 @@ describe('ServiceContainer', () => {
     });
 
     const services = await c.createWorkerServices();
-    assert.equal(piFactoryCalls, 1, 'must call createPiRunExecutorFactory once');
+    assert.equal(piFactoryCalls, 1, 'must call createDshRunExecutorFactory once');
     assert.equal(typeof services.runExecutorFactory, 'function');
     assert.equal(
       services.runExecutorFactory().kind,
@@ -300,7 +300,7 @@ describe('ServiceContainer', () => {
     await c.start();
     await assert.rejects(
       () =>
-        c.createPiRunExecutorFactory({
+        c.createDshRunExecutorFactory({
           modelResolver: () => ({ id: 'm', name: 'm', api: 'openai-completions', provider: 'x', baseUrl: 'http://x', reasoning: false, input: ['text'], cost: {}, contextWindow: 1, maxTokens: 1 }),
           workspaceResolver: () => '/home/sandbox/workspace',
           sessionLockManager: { acquire: async () => true, renew: async () => true, release: async () => true },
@@ -331,7 +331,7 @@ describe('ServiceContainer', () => {
     );
     await c.start();
     let piFactoryCalls = 0;
-    c.createPiRunExecutorFactory = async () => {
+    c.createDshRunExecutorFactory = async () => {
       piFactoryCalls += 1;
       throw new Error('must not build Pi factory when stub allowed');
     };
@@ -363,7 +363,7 @@ describe('ServiceContainer', () => {
     );
   });
 
-  it('createPiRunExecutorFactory forwards the live per-Run ports (no network)', async () => {
+  it('createDshRunExecutorFactory forwards the live per-Run ports (no network)', async () => {
     const knex = { raw: async () => [[{}]], transaction: async (fn) => fn({}) };
     const redis = { status: 'ready' };
     const c = createServiceContainer(
@@ -388,7 +388,7 @@ describe('ServiceContainer', () => {
     );
     await c.start();
 
-    const factory = await c.createPiRunExecutorFactory({
+    const factory = await c.createDshRunExecutorFactory({
       modelResolver: () => ({ id: 'm' }),
       workspaceResolver: () => '/tmp/ws',
       // Inject fakes so no Redis lock / Pi / recovery connections are needed.

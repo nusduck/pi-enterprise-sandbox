@@ -48,7 +48,7 @@ pi-sandbox/
 │   ├── Dockerfile        ← Nginx 静态服务
 │   └── nginx.conf        ← /api/* 反向代理到 api-server
 ├── api-server/           ← 薄 BFF（auth / files / SSE relay）
-│   ├── server.js         ← HTTP 入口（Run API、SSE、health）
+│   ├── server.ts         ← HTTP 入口（Run API、SSE、health，容器跑 dist/server.js）
 │   ├── src/routes/       ← runs, files, status, conversations, capabilities...
 │   ├── src/services/     ← sandbox-client + agent-client
 │   └── Dockerfile

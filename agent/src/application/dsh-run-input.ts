@@ -193,8 +193,6 @@ export function toDshPromptInvocation(prompt: string | Array<{ type: string, tex
   return images.length > 0 ? { text, options: { images } } : { text };
 }
 
-export const toPiPromptInvocation = toDshPromptInvocation;
-
 /**
  * Recover the arguments the model actually emitted for `toolCallId`.
  *

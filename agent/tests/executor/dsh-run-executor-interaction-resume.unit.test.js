@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { DshRunExecutor, PiRunExecutor } from '../../src/application/dsh-run-executor.js';
+import { DshRunExecutor } from '../../src/application/dsh-run-executor.js';
 import { PINNED_PI_SDK_VERSION } from '../../src/infrastructure/dsh/runtime-factory.js';
 import { createUlidGenerator } from '../../src/domain/shared/ulid.js';
 import { RUN_STATUS } from '../../src/domain/run/run-status.js';
@@ -263,10 +263,10 @@ function makeDeps(observed) {
   };
 }
 
-describe('PiRunExecutor interaction continuation', () => {
+describe('DshRunExecutor interaction continuation', () => {
   it('replaces the parked ask_user result and continues without issuing the question again', async () => {
     const observed = { prompts: [], branches: [] };
-    const executor = new PiRunExecutor(makeDeps(observed));
+    const executor = new DshRunExecutor(makeDeps(observed));
     const result = await executor.execute({
       run: {
         runId: RUN,
@@ -307,7 +307,7 @@ describe('PiRunExecutor interaction continuation', () => {
   it('fails closed when the durable response hash no longer matches the worker resume context', async () => {
     const observed = { prompts: [], branches: [] };
     const deps = makeDeps(observed);
-    const executor = new PiRunExecutor(deps);
+    const executor = new DshRunExecutor(deps);
     const result = await executor.execute({
       run: {
         runId: RUN,

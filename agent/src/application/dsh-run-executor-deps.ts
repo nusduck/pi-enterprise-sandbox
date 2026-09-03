@@ -74,14 +74,10 @@ export interface DshRunExecutorDeps {
   };
 }
 
-export type PiRunExecutorDeps = DshRunExecutorDeps;
-
 /** 工厂比构造器多收一个 extensionFactories，其余完全一致。 */
 export type DshRunExecutorFactoryOptions = DshRunExecutorDeps & {
   extensionFactories?: unknown[];
 };
-
-export type PiRunExecutorFactoryOptions = DshRunExecutorFactoryOptions;
 
 export function looksLikeUncertainSideEffect(err: unknown) {
   const msg = String((err as Error)?.message || err || '');

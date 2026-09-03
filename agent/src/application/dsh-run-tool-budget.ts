@@ -231,6 +231,3 @@ export function installDshRunToolBudget(session: Record<string, any>, limits: { 
     }),
   };
 }
-
-export const resolvePiRunToolBudget = resolveDshRunToolBudget;
-export const installPiRunToolBudget = installDshRunToolBudget;

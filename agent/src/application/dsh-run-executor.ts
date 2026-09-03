@@ -49,7 +49,6 @@ import {
   looksLikeUncertainSideEffect,
   terminalOutcomeFromNewAssistantEntries,
   type DshRunExecutorDeps,
-  type PiRunExecutorDeps,
 } from './dsh-run-executor-deps.js';
 import { sanitizeStatusReason } from './sanitize-status-reason.js';
 import { SessionRecoveryService } from './session-recovery-service.js';
@@ -60,7 +59,6 @@ import { FencedToolGovernanceRecorder } from './fenced-tool-governance-recorder.
 import { DurableSteerController } from './durable-steer-controller.js';
 import {
   installDshRunToolBudget,
-  installPiRunToolBudget,
 } from './dsh-run-tool-budget.js';
 import {
   DURABLE_INTERACTION_PENDING,
@@ -74,7 +72,6 @@ import {
   imageAttachmentsFromTriggeringMessage,
   requestedModelIdFromTriggeringMessage,
   toDshPromptInvocation,
-  toPiPromptInvocation,
 } from './dsh-run-input.js';
 
 export { createPromiseTail } from './promise-tail.js';
@@ -97,7 +94,6 @@ export {
   requestedModelIdFromTriggeringMessage,
   replaceSuspendedToolResultInSession,
   toDshPromptInvocation,
-  toPiPromptInvocation,
 } from './dsh-run-input.js';
 
 /** Ordinary UI assistant message entry_id prefix — never collides with journal entry ids. */
@@ -195,7 +191,7 @@ export class DshRunExecutor {
     if (typeof deps.createRepositories !== 'function') {
       throw new Error('DshRunExecutor requires createRepositories');
     }
-    if (!deps.sessionLockManager) {
+    if (!deps.sessionLockManager?.acquire) {
       throw new Error('DshRunExecutor requires sessionLockManager');
     }
     if (!deps.piRuntimeFactory?.create) {
@@ -1509,12 +1505,8 @@ export class DshRunExecutor {
   }
 }
 
-export const PiRunExecutor = DshRunExecutor;
-export type PiRunExecutor = DshRunExecutor;
-
 export {
   createDshRunExecutorFactory,
-  createPiRunExecutorFactory,
 } from './dsh-run-executor-factory.js';
 export { normalizeExecutorResult } from './run-executor.js';
 

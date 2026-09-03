@@ -116,9 +116,7 @@ export {
 
 export {
   DshRunExecutor,
-  PiRunExecutor,
   createDshRunExecutorFactory,
-  createPiRunExecutorFactory,
   generateRunLeaseOwnerToken,
   derivePromptFromTriggeringMessage,
   createPromiseTail,

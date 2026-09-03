@@ -43,9 +43,8 @@ npm ci --prefix frontend
 # Python (includes runtime version consistency)
 uv run pytest tests/ -q --tb=short
 
-# Node API Server
-node --test api-server/tests/*.test.js
-# or: npm test --prefix api-server
+# Node API Server（先构建再测试）
+npm test --prefix api-server
 
 # Node Agent（全部层级测试）
 node --test agent/tests/*.test.js agent/tests/**/*.test.js

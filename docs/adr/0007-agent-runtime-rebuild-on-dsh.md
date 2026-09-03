@@ -270,4 +270,4 @@ TypeScript 之后，这个异常按构造消失：独立 `@pi/runtime` 包没有
 
 ### 遗留收口：`agent/src/application/dsh-run-executor.ts` 等文件名（2026-09-03）
 
-原 `pi-run-executor.ts` 等 6 个 `pi-run-*` 文件及 `pi-session-journal-repository.ts` 已重命名为 `dsh-run-*` 与 `session-journal-repository.ts`，核心类名与方法规范为 `DshRunExecutor` / `createDshRunExecutorFactory`，测试目录由 `agent/tests/pi/` 规范迁移至 `agent/tests/executor/`，原标识符均保留同名兼容别名导出。
+原 `pi-run-executor.ts` 等 6 个 `pi-run-*` 文件及 `pi-session-journal-repository.ts` 已重命名为 `dsh-run-*` 与 `session-journal-repository.ts`，核心类名与方法规范为 `DshRunExecutor` / `createDshRunExecutorFactory`，测试目录由 `agent/tests/pi/` 规范迁移至 `agent/tests/executor/`。历史 `Pi*` 兼容别名已全量移除，全仓内部调用统一收口为 DSH 执行器与预算。

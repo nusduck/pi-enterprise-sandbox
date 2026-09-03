@@ -15,7 +15,7 @@ import {
   toThinkingLevelMap,
   supportedThinkingLevels,
 } from '../../src/infrastructure/model-registry.js';
-import { installDshRunToolBudget, installPiRunToolBudget } from '../../src/application/dsh-run-tool-budget.js';
+import { installDshRunToolBudget } from '../../src/application/dsh-run-tool-budget.js';
 
 describe('model registry: default-model fallback path', () => {
   it('exports buildCachedRegistry and accepts an env object directly', () => {
@@ -93,7 +93,7 @@ describe('run wall-clock deadline', () => {
   it('blocks further tool calls once the deadline passes', async () => {
     const session = fakeSession();
     let clock = 1_000;
-    const budget = installPiRunToolBudget(session, {
+    const budget = installDshRunToolBudget(session, {
       runDeadlineMs: 500,
       now: () => clock,
     });

@@ -3,9 +3,7 @@ import assert from 'node:assert/strict';
 
 import {
   installDshRunToolBudget,
-  installPiRunToolBudget,
   resolveDshRunToolBudget,
-  resolvePiRunToolBudget,
 } from '../../src/application/dsh-run-tool-budget.js';
 
 function createSession() {
@@ -30,11 +28,11 @@ function toolContext(name, args) {
   return { toolCall: { name }, args };
 }
 
-describe('Pi Run tool budget', () => {
+describe('DSH Run tool budget', () => {
   it('keeps existing policy hooks, then forces a no-tool final turn at the cap', async () => {
     const { session, agent, policyCalls } = createSession();
     const originalBefore = agent.beforeToolCall;
-    const guard = installPiRunToolBudget(session, {
+    const guard = installDshRunToolBudget(session, {
       maxToolCalls: 2,
       maxIdenticalToolCalls: 2,
       maxModelTurns: 8,
@@ -62,7 +60,7 @@ describe('Pi Run tool budget', () => {
 
   it('blocks repeated equivalent calls even when object key order differs', async () => {
     const { session, agent } = createSession();
-    const guard = installPiRunToolBudget(session, {
+    const guard = installDshRunToolBudget(session, {
       maxToolCalls: 10,
       maxIdenticalToolCalls: 1,
       maxModelTurns: 10,
@@ -90,7 +88,7 @@ describe('Pi Run tool budget', () => {
     const { session, agent } = createSession();
     const originalBefore = agent.beforeToolCall;
     const originalPrepare = agent.prepareNextTurnWithContext;
-    const guard = installPiRunToolBudget(session, {
+    const guard = installDshRunToolBudget(session, {
       maxToolCalls: 10,
       maxIdenticalToolCalls: 2,
       maxModelTurns: 1,
@@ -108,18 +106,18 @@ describe('Pi Run tool budget', () => {
   });
 
   it('uses safe defaults and rejects invalid deployment configuration', () => {
-    assert.deepEqual(resolvePiRunToolBudget({}), {
+    assert.deepEqual(resolveDshRunToolBudget({}), {
       maxToolCalls: 200,
       maxIdenticalToolCalls: 6,
       maxModelTurns: 120,
       runDeadlineMs: 30 * 60 * 1000,
     });
     assert.throws(
-      () => resolvePiRunToolBudget({ AGENT_RUN_MAX_TOOL_CALLS: '0' }),
+      () => resolveDshRunToolBudget({ AGENT_RUN_MAX_TOOL_CALLS: '0' }),
       /AGENT_RUN_MAX_TOOL_CALLS/,
     );
     assert.throws(
-      () => resolvePiRunToolBudget({ AGENT_RUN_DEADLINE_MS: '0' }),
+      () => resolveDshRunToolBudget({ AGENT_RUN_DEADLINE_MS: '0' }),
       /AGENT_RUN_DEADLINE_MS/,
     );
   });

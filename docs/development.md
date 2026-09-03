@@ -280,11 +280,11 @@ AgentVersion 侧（同一份语义，只能收紧）：
 
 ### 修改 API Server（BFF）
 
-1. `api-server/server.js` — HTTP 入口与路由分派
-2. `api-server/src/routes/runs.js` — Run 创建、控制与序列化 SSE relay
-3. `api-server/src/services/agent-client.js` — BFF → Agent HTTP 客户端
-4. `api-server/src/config.js` — `AGENT_BASE_URL` / 内部令牌等
-5. 语法检查: `node --check api-server/server.js`
+1. `api-server/server.ts` — HTTP 入口与路由分派（容器跑 `dist/server.js`）
+2. `api-server/src/routes/runs.ts` — Run 创建、控制与序列化 SSE relay
+3. `api-server/src/services/agent-client.ts` — BFF → Agent HTTP 客户端
+4. `api-server/src/config.ts` — `AGENT_BASE_URL` / 内部令牌等
+5. 类型检查: `npm --prefix api-server run typecheck`
 6. 单元测试: `npm test --prefix api-server`
 
 ### 修改 Agent 服务

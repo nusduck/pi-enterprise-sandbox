@@ -278,3 +278,25 @@ Each entry should say **what changed**, **why**, and **which STATUS IDs** it aff
 - **STATUS IDs:** F2 保持 `partial`——缺口是 live gate 未重跑，与协议面由谁实现无关，本次只改 Evidence 文字。F1/F3–F6 维持。`review-deferred-items.md` 的 "ADR 0007 D8 未执行" 行改为 Closed。
 - **Tests:** pytest 98；agent 1211 pass / 0 fail（含新增 5 条）；`agent/tests/a2a/` 15 个文件 125 用例全绿；`npm --prefix agent run typecheck` 干净。纯文档 + 一个新测试文件，未触及运行路径，未重建容器。
 - **Not closed:** F2 的 live gate 仍未重跑。`design/waves/README.md` 的 W6-B 保持 ⚠️：那一格记录的是"当时声称做了而没做"，不因为后来决定不做而变成 ✅。
+
+## 2026-09-03 — TypeScript 迁移与 DSH 命名收口真机验证
+
+- **Reproduced first:**
+  1. `api-server` 移开 `dist/` 后执行 `npm run smoke --prefix api-server`，因缺失前置构建且回退到已删除的 `server.js`，复现 `ECONNREFUSED` 崩溃。
+  2. `DshRunExecutor` 构造函数接收 `{ ...deps, sessionLockManager: {} }`（空对象无 `acquire` 方法），未抛出预期 TypeError，复现运行时校验弱化。
+  3. `import('./agent/dist/src/application/pi-run-executor.js')` 复现 `ERR_MODULE_NOT_FOUND`，证明深层导入兼容性失效。
+- **Action:**
+  1. `api-server/package.json` 的 `smoke` 脚本前置追加 `npm run build &&`，`tests/listen-smoke.test.js` 直接检查并拉起 `dist/server.js`。
+  2. `agent/src/application/dsh-run-executor.ts` 恢复严格的前置 `!deps.sessionLockManager?.acquire` 检查，并补充单测断言。
+  3. 按照用户决策不做兼容，彻底移除 `PiRunExecutor`、`createPiRunExecutorFactory`、`PiRunExecutorDeps` 等全部 `Pi*` 历史遗留别名与死导入，全仓统一收口为 `Dsh*` 命名。
+  4. 同步修正 `docs/development.md`、`docs/module-layout.md`、`README.md`、`docs/CONTRIBUTING.md`、`docs/runbooks/sdk-upgrade.md`、`docs/adr/0007-agent-runtime-rebuild-on-dsh.md` 及 `docs/CHANGELOG.md` 中过时文件名与测试命令。
+  5. 重建 `agent`、`api-server`、`sandbox`、`sandbox-mcp` 四个服务镜像，拉起 Docker compose 栈并执行完整真实链路验证（登录 → 会话 → 工具 Run → 后台进程与 SIGTERM → 跨租户 404 隔离）。
+- **Live:** 四个镜像重建并进入 `healthy`；用户 A 注册并验证 `/api/auth/me`；创建 Conversation；提交带 `bash pwd` 的 Run，实时收集 87 个 SSE 事件帧并在沙箱内成功执行输出 `/home/sandbox/workspace`，Run 终态 `SUCCEEDED`；启动后台 `sleep 60` 并在 `/api/processes` 查得进程，成功读取 logs 并发送 `SIGTERM` 成功；用户 B 请求用户 A 的 Run / Conversation / Processes 均严格返回 404。
+- **Evidence:** [`evidence/2026-09-03-ts-migration-and-dsh-cleanup-live-chain.md`](evidence/2026-09-03-ts-migration-and-dsh-cleanup-live-chain.md)。
+- **Tests:** 全量 6 套单测与类型检查全部通过：
+  - `uv run pytest -q`：98 passed
+  - `exec`：323 passed, 1 skipped, 0 fail; typecheck clean
+  - `contract`：29 passed; typecheck clean
+  - `agent`：1210 passed; typecheck (tsc + tsc.runtime) clean
+  - `api-server`：146 passed; typecheck clean; smoke clean
+  - `frontend`：334 passed; typecheck clean
