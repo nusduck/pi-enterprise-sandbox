@@ -1,4 +1,5 @@
-import { resolveTrustedAuth } from '../application/run-access-service.js';
+import type { ServerResponse } from 'node:http';
+import { resolveTrustedAuth, type ReqWithTrace, type TrustedAuthContext } from '../application/run-access-service.js';
 import { HttpError } from '../http/errors.js';
 import { sendError, sendJson } from '../http/response.js';
 import {
@@ -8,7 +9,7 @@ import {
   revokeAgentA2aCredential,
 } from '../services/agent-client.js';
 
-async function resolveAdmin(req) {
+async function resolveAdmin(req: ReqWithTrace | null | undefined): Promise<TrustedAuthContext> {
   const auth = await resolveTrustedAuth(req);
   if (String(auth.actingRole || '').toLowerCase() !== 'admin') {
     throw new HttpError(403, 'ADMIN_REQUIRED', 'Administrator role is required');
@@ -16,7 +17,7 @@ async function resolveAdmin(req) {
   return auth;
 }
 
-export async function handleGetA2aConfig(parsedUrl, res, req) {
+export async function handleGetA2aConfig(parsedUrl: URL, res: ServerResponse, req: ReqWithTrace | null = null): Promise<void> {
   const traceId = req?.traceId || null;
   try {
     const auth = await resolveAdmin(req);
@@ -31,7 +32,7 @@ export async function handleGetA2aConfig(parsedUrl, res, req) {
   }
 }
 
-export async function handleIssueA2aCredential(body, res, req) {
+export async function handleIssueA2aCredential(body: any, res: ServerResponse, req: ReqWithTrace | null = null): Promise<void> {
   const traceId = req?.traceId || null;
   try {
     const auth = await resolveAdmin(req);
@@ -45,7 +46,7 @@ export async function handleIssueA2aCredential(body, res, req) {
   }
 }
 
-export async function handleRotateA2aCredential(id, body, res, req) {
+export async function handleRotateA2aCredential(id: string, body: any, res: ServerResponse, req: ReqWithTrace | null = null): Promise<void> {
   const traceId = req?.traceId || null;
   try {
     const auth = await resolveAdmin(req);
@@ -59,7 +60,7 @@ export async function handleRotateA2aCredential(id, body, res, req) {
   }
 }
 
-export async function handleRevokeA2aCredential(id, res, req) {
+export async function handleRevokeA2aCredential(id: string, res: ServerResponse, req: ReqWithTrace | null = null): Promise<void> {
   const traceId = req?.traceId || null;
   try {
     const auth = await resolveAdmin(req);
@@ -72,3 +73,4 @@ export async function handleRevokeA2aCredential(id, res, req) {
     sendError(res, error, traceId);
   }
 }
+

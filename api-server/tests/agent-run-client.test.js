@@ -16,15 +16,16 @@ import {
 } from '../src/services/agent-client.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const clientSrc = readFileSync(join(__dirname, '../src/services/sandbox-client.js'), 'utf8');
-const agentClientSrc = readFileSync(join(__dirname, '../src/services/agent-client.js'), 'utf8');
-const runsSrc = readFileSync(join(__dirname, '../src/routes/runs.js'), 'utf8');
-const serverSrc = readFileSync(join(__dirname, '../server.js'), 'utf8');
-const convSrc = readFileSync(join(__dirname, '../src/routes/conversations.js'), 'utf8');
+const clientSrc = readFileSync(join(__dirname, '../src/services/sandbox-client.ts'), 'utf8');
+const agentClientSrc = readFileSync(join(__dirname, '../src/services/agent-client.ts'), 'utf8');
+const runsSrc = readFileSync(join(__dirname, '../src/routes/runs.ts'), 'utf8');
+const serverSrc = readFileSync(join(__dirname, '../server.ts'), 'utf8');
+const convSrc = readFileSync(join(__dirname, '../src/routes/conversations.ts'), 'utf8');
 const timelineSrc = readFileSync(
-  join(__dirname, '../src/application/conversation-timeline-service.js'),
+  join(__dirname, '../src/application/conversation-timeline-service.ts'),
   'utf8',
 );
+
 const pkg = JSON.parse(readFileSync(join(__dirname, '../package.json'), 'utf8'));
 
 describe('thin BFF agent relay', () => {

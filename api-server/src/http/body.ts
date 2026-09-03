@@ -1,6 +1,14 @@
+import type { IncomingMessage } from 'node:http';
 import { HttpError } from './errors.js';
 
-export async function readJsonBody(req, { maxBytes = 1024 * 1024 } = {}) {
+export interface ReadJsonBodyOptions {
+  maxBytes?: number;
+}
+
+export async function readJsonBody(
+  req: IncomingMessage,
+  { maxBytes = 1024 * 1024 }: ReadJsonBodyOptions = {},
+): Promise<any> {
   const declared = Number(req.headers['content-length'] || 0);
   if (Number.isFinite(declared) && declared > maxBytes) {
     req.resume();
@@ -8,7 +16,7 @@ export async function readJsonBody(req, { maxBytes = 1024 * 1024 } = {}) {
   }
 
   return new Promise((resolve, reject) => {
-    const chunks = [];
+    const chunks: Buffer[] = [];
     let total = 0;
     let settled = false;
 
@@ -17,14 +25,14 @@ export async function readJsonBody(req, { maxBytes = 1024 * 1024 } = {}) {
       req.off('end', onEnd);
       req.off('error', onError);
     };
-    const fail = (error) => {
+    const fail = (error: unknown) => {
       if (settled) return;
       settled = true;
       cleanup();
       req.resume();
       reject(error);
     };
-    const onData = (chunk) => {
+    const onData = (chunk: Buffer | string) => {
       const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
       total += buffer.length;
       if (total > maxBytes) {
@@ -48,10 +56,11 @@ export async function readJsonBody(req, { maxBytes = 1024 * 1024 } = {}) {
         reject(new HttpError(400, 'INVALID_JSON', 'Request body must be valid JSON'));
       }
     };
-    const onError = (error) => fail(error);
+    const onError = (error: Error) => fail(error);
 
     req.on('data', onData);
     req.on('end', onEnd);
     req.on('error', onError);
   });
 }
+

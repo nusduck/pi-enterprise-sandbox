@@ -4,13 +4,8 @@
  * Prefer `createSandboxClient({ traceId, traceContext, auth })` for request-scoped usage.
  * Module-level helpers use ephemeral clients so concurrent requests never share
  * mutable trace state.
- *
- * Auth model:
- * - Always send service X-API-Key when configured.
- * - Forward browser `Authorization: Bearer <jwt>` so sandbox resolves the actor.
- * - Never trust browser-supplied X-Acting-* headers (stripped via authFromRequest).
- * - Server code may set acting headers after validating the user.
  */
+import type { IncomingMessage } from 'node:http';
 import { config, AUTH_HEADER } from '../config.js';
 import { readCookie } from '../http/cookies.js';
 import {
@@ -19,6 +14,7 @@ import {
   normalizeTracestate,
   resolveRequestTraceContext,
   traceCarrierHeaders,
+  type RequestTraceContext,
 } from '../application/trace-context.js';
 
 const BASE = config.SANDBOX_BASE_URL;
@@ -26,7 +22,7 @@ const BASE = config.SANDBOX_BASE_URL;
 /** Readiness probe deadline — matches the Agent-client probe in agent-client.js. */
 const SANDBOX_HEALTH_TIMEOUT_MS = 3_000;
 
-function createClientTraceContext(traceId, traceState) {
+function createClientTraceContext(traceId: string, traceState?: string | null): RequestTraceContext {
   const context = resolveRequestTraceContext({
     'X-Trace-Id': String(traceId),
   });
@@ -37,7 +33,17 @@ function createClientTraceContext(traceId, traceState) {
 }
 
 export class SandboxError extends Error {
-  constructor(status, message, path, { code = null, detail = null } = {}) {
+  status: number;
+  path: string;
+  code: string | null;
+  detail: any;
+
+  constructor(
+    status: number,
+    message: string,
+    path: string,
+    { code = null, detail = null }: { code?: string | null; detail?: any } = {},
+  ) {
     super(message);
     this.name = 'SandboxError';
     this.status = status;
@@ -47,56 +53,71 @@ export class SandboxError extends Error {
   }
 }
 
+export interface SandboxAuthContext {
+  authorization?: string;
+  actingUserId?: string;
+  actingOrganizationId?: string;
+  actingRole?: string;
+  requestId?: string | null;
+  [key: string]: unknown;
+}
+
 /**
  * Extract sandbox-forwardable auth from an incoming HTTP request.
  * Browser sessions use the BFF HttpOnly cookie; API clients may use Bearer.
  * Strips client X-Acting-* (untrusted from browser).
- * @param {import('node:http').IncomingMessage | null | undefined} req
- * @returns {{ authorization?: string, actingUserId?: string, actingOrganizationId?: string, actingRole?: string }}
  */
-export function authFromRequest(req) {
+export function authFromRequest(req: IncomingMessage | { headers?: Record<string, string | string[] | undefined> } | null | undefined): SandboxAuthContext {
   if (!req || !req.headers) return {};
-  const out = {};
-  const auth = req.headers.authorization || req.headers.Authorization;
-  if (typeof auth === 'string' && auth.toLowerCase().startsWith('bearer ')) {
-    out.authorization = auth;
+  const out: SandboxAuthContext = {};
+  const auth = req.headers['authorization'] || req.headers['Authorization'];
+  const authStr = Array.isArray(auth) ? auth[0] : auth;
+  if (typeof authStr === 'string' && authStr.toLowerCase().startsWith('bearer ')) {
+    out.authorization = authStr;
   } else {
-    const sessionToken = readCookie(req);
+    const sessionToken = readCookie(req as IncomingMessage);
     if (sessionToken) out.authorization = `Bearer ${sessionToken}`;
   }
   // Do NOT copy X-Acting-* from browser. Callers may set acting* only after server auth.
   return out;
 }
 
+export interface SandboxClientOptions {
+  traceId?: string | null;
+  traceState?: string | null;
+  traceContext?: RequestTraceContext | null;
+  auth?: SandboxAuthContext | null;
+}
+
+export interface SandboxClient {
+  listArtifacts(sessionId: string): Promise<any>;
+  importArtifact(sessionId: string, artifactId: string, targetFilename?: string | null): Promise<any>;
+  listProcesses(sessionId: string, query?: Record<string, any>): Promise<any>;
+  getProcess(sessionId: string, processId: string): Promise<any>;
+  getProcessLogs(sessionId: string, processId: string, query?: Record<string, any>): Promise<any>;
+  readProcess(sessionId: string, processId: string, query?: Record<string, any>): Promise<any>;
+  processAction(sessionId: string, processId: string, action: string, body?: Record<string, any>): Promise<any>;
+  checkHealth(): Promise<any>;
+}
+
 /**
  * Create a request-scoped sandbox client.
- * @param {{
- *   traceId?: string|null,
- *   traceState?: string|null,
- *   traceContext?: object|null,
- *   auth?: {
- *     authorization?: string,
- *     actingUserId?: string,
- *     actingOrganizationId?: string,
- *     actingRole?: string,
- *   } | null,
- * }} [options]
  */
 export function createSandboxClient({
   traceId = null,
   traceState = null,
   traceContext = null,
   auth = null,
-} = {}) {
+}: SandboxClientOptions = {}): SandboxClient {
   let clientTraceId = traceId || null;
   const authCtx = auth || {};
-  let clientTraceContext =
+  let clientTraceContext: RequestTraceContext | null =
     traceContext || boundRequestTraceContext(authCtx) || null;
   if (!clientTraceContext && traceId) {
     clientTraceContext = createClientTraceContext(traceId, traceState);
   }
 
-  function headers(extra = {}) {
+  function headers(extra: Record<string, string> = {}): Record<string, string> {
     // Drop any client-supplied acting headers from extra (defense in depth)
     const safeExtra = { ...extra };
     delete safeExtra['X-Acting-User-Id'];
@@ -106,13 +127,13 @@ export function createSandboxClient({
     delete safeExtra['x-acting-organization-id'];
     delete safeExtra['x-acting-role'];
 
-    const h = {
+    const h: Record<string, string> = {
       'Content-Type': 'application/json',
       ...AUTH_HEADER,
       ...safeExtra,
     };
     if (authCtx.authorization) {
-      h.Authorization = authCtx.authorization;
+      h['Authorization'] = authCtx.authorization;
     }
     // Only server-provided acting context (never from browser extra)
     if (authCtx.actingUserId && authCtx.actingOrganizationId) {
@@ -138,20 +159,17 @@ export function createSandboxClient({
     return h;
   }
 
-  async function sbFetch(path, opts = {}) {
+  async function sbFetch(path: string, opts: RequestInit & { timeoutMs?: number } = {}): Promise<Response> {
     const url = `${BASE}${path}`;
     const {
       headers: extraHeaders,
       signal: externalSignal,
-      // Per-call override; otherwise the configured deadline. There is no
-      // "wait forever" any more — an unbounded call is how a stalled Sandbox
-      // used to hold BFF requests open until the browser gave up.
       timeoutMs,
       ...rest
     } = opts;
     const deadlineMs =
-      Number.isFinite(timeoutMs) && timeoutMs > 0
-        ? timeoutMs
+      Number.isFinite(timeoutMs) && (timeoutMs as number) > 0
+        ? (timeoutMs as number)
         : config.SANDBOX_REQUEST_TIMEOUT_MS;
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), deadlineMs);
@@ -161,10 +179,10 @@ export function createSandboxClient({
       const resp = await fetch(url, {
         ...rest,
         signal: controller.signal,
-        headers: headers(extraHeaders || {}),
+        headers: headers((extraHeaders || {}) as Record<string, string>),
       });
       if (!resp.ok) {
-        const detail = await resp.json().catch(() => ({ detail: resp.statusText }));
+        const detail = (await resp.json().catch(() => ({ detail: resp.statusText }))) as any;
         const raw = detail?.detail ?? detail?.error ?? resp.statusText;
         const message =
           typeof raw === 'string'
@@ -180,7 +198,7 @@ export function createSandboxClient({
         throw new SandboxError(resp.status, message, path, { code, detail });
       }
       return resp;
-    } catch (err) {
+    } catch (err: any) {
       if (controller.signal.aborted && !externalSignal?.aborted) {
         throw new Error(`Sandbox request timed out after ${deadlineMs}ms: ${path}`);
       }
@@ -192,17 +210,14 @@ export function createSandboxClient({
   }
 
   return {
-    // PR-13 severe: Sandbox does not expose /agent-runs, /agent-sessions, or
-    // /tool-executions. Run/tool ledger authority is Agent MySQL.
-
-    async listArtifacts(sessionId) {
+    async listArtifacts(sessionId: string) {
       const resp = await sbFetch(`/sessions/${sessionId}/artifacts`);
       return resp.json();
     },
 
-    async importArtifact(sessionId, artifactId, targetFilename = null) {
-      const payload = { artifact_id: artifactId };
-      if (targetFilename) payload.target_filename = targetFilename;
+    async importArtifact(sessionId: string, artifactId: string, targetFilename: string | null = null) {
+      const payload: Record<string, string> = { artifact_id: artifactId };
+      if (targetFilename) payload['target_filename'] = targetFilename;
       const resp = await sbFetch(`/sessions/${sessionId}/artifacts/imports`, {
         method: 'POST',
         body: JSON.stringify(payload),
@@ -210,11 +225,11 @@ export function createSandboxClient({
       return resp.json();
     },
 
-    async listProcesses(sessionId, query = {}) {
+    async listProcesses(sessionId: string, query: Record<string, any> = {}) {
       const params = new URLSearchParams();
-      if (query.runId) params.set('run_id', query.runId);
-      if (query.status) params.set('status', query.status);
-      if (query.limit) params.set('limit', query.limit);
+      if (query['runId']) params.set('run_id', query['runId']);
+      if (query['status']) params.set('status', query['status']);
+      if (query['limit']) params.set('limit', query['limit']);
       const qs = params.toString();
       const resp = await sbFetch(
         `/sessions/${encodeURIComponent(sessionId)}/processes${qs ? `?${qs}` : ''}`,
@@ -222,17 +237,17 @@ export function createSandboxClient({
       return resp.json();
     },
 
-    async getProcess(sessionId, processId) {
+    async getProcess(sessionId: string, processId: string) {
       const resp = await sbFetch(
         `/sessions/${encodeURIComponent(sessionId)}/processes/${encodeURIComponent(processId)}`,
       );
       return resp.json();
     },
 
-    async getProcessLogs(sessionId, processId, query = {}) {
+    async getProcessLogs(sessionId: string, processId: string, query: Record<string, any> = {}) {
       const params = new URLSearchParams();
-      if (query.offset != null) params.set('offset', query.offset);
-      if (query.limit != null) params.set('limit', query.limit);
+      if (query['offset'] != null) params.set('offset', query['offset']);
+      if (query['limit'] != null) params.set('limit', query['limit']);
       const qs = params.toString();
       const resp = await sbFetch(
         `/sessions/${encodeURIComponent(sessionId)}/processes/${encodeURIComponent(processId)}/logs${qs ? `?${qs}` : ''}`,
@@ -240,11 +255,11 @@ export function createSandboxClient({
       return resp.json();
     },
 
-    async readProcess(sessionId, processId, query = {}) {
+    async readProcess(sessionId: string, processId: string, query: Record<string, any> = {}) {
       const params = new URLSearchParams();
-      if (query.stream) params.set('stream', query.stream);
-      if (query.cursor) params.set('cursor', query.cursor);
-      if (query.limit) params.set('limit', query.limit);
+      if (query['stream']) params.set('stream', query['stream']);
+      if (query['cursor']) params.set('cursor', query['cursor']);
+      if (query['limit']) params.set('limit', query['limit']);
       const qs = params.toString();
       const resp = await sbFetch(
         `/sessions/${encodeURIComponent(sessionId)}/processes/${encodeURIComponent(processId)}/read${qs ? `?${qs}` : ''}`,
@@ -252,7 +267,7 @@ export function createSandboxClient({
       return resp.json();
     },
 
-    async processAction(sessionId, processId, action, body = {}) {
+    async processAction(sessionId: string, processId: string, action: string, body: Record<string, any> = {}) {
       const resp = await sbFetch(
         `/sessions/${encodeURIComponent(sessionId)}/processes/${encodeURIComponent(processId)}/${action}`,
         { method: 'POST', body: JSON.stringify(body) },
@@ -260,13 +275,10 @@ export function createSandboxClient({
       return resp.json();
     },
 
-    // ── Health ──────────────────────────────────────
     async checkHealth() {
       try {
         const resp = await fetch(`${BASE}/health`, {
           headers: AUTH_HEADER,
-          // AGENTS.md §2: bounded like the agent-client probe — a hung Sandbox
-          // must not stall readiness behind a socket that never answers.
           signal: AbortSignal.timeout(SANDBOX_HEALTH_TIMEOUT_MS),
         });
         if (!resp.ok) return null;
@@ -278,12 +290,11 @@ export function createSandboxClient({
   };
 }
 
-// ── Module-level helpers (ephemeral client per call — no shared request state) ──
-
-export function artifactDownloadPath(sessionId, artifactId) {
+export function artifactDownloadPath(sessionId: string, artifactId: string): string {
   return `/sessions/${sessionId}/artifacts/${encodeURIComponent(artifactId)}/download`;
 }
 
-export async function checkHealth() {
+export async function checkHealth(): Promise<any> {
   return createSandboxClient().checkHealth();
 }
+

@@ -12,24 +12,20 @@
 /** Crockford ULID (event id) or pure decimal sequence for Last-Event-ID. */
 const ULID_RE = /^[0-9A-HJKMNP-TV-Z]{26}$/i;
 
-/**
- * @typedef {{ afterSequence: number, lastEventId: string|null }} SseResumeCursor
- */
+export interface SseResumeCursor {
+  afterSequence: number;
+  lastEventId: string | null;
+}
+
+export interface ParseSseResumeCursorInput {
+  searchParams?: URLSearchParams | { get: (k: string) => string | null };
+  headers?: Record<string, string | string[] | undefined>;
+}
 
 /**
  * Parse resume cursor from query + headers.
- *
- * Supported:
- *   ?afterSequence=N | ?after_sequence=N | ?after=N
- *   Last-Event-ID: <sequence> | <event ULID>
- *
- * @param {{
- *   searchParams?: URLSearchParams | { get: (k: string) => string|null },
- *   headers?: Record<string, string|string[]|undefined>,
- * }} input
- * @returns {SseResumeCursor}
  */
-export function parseSseResumeCursor(input = {}) {
+export function parseSseResumeCursor(input: ParseSseResumeCursorInput = {}): SseResumeCursor {
   const params = input.searchParams;
   const headers = input.headers || {};
 
@@ -68,14 +64,8 @@ export function parseSseResumeCursor(input = {}) {
 
 /**
  * Present the Agent create-run response on the public wire contract.
- *
- * The Agent already emits one snake_case spelling per field; this only fills
- * `events_url` when absent so the browser never has to build the SSE path.
- *
- * @param {object} result
- * @returns {object}
  */
-export function presentCreateRunAccepted(result) {
+export function presentCreateRunAccepted(result: any): Record<string, unknown> {
   const runId = result?.run_id || null;
   const sandboxSessionId =
     result?.sandbox_session_id || result?.session_id || null;
@@ -94,3 +84,4 @@ export function presentCreateRunAccepted(result) {
       result?.events_url || (runId ? `/api/runs/${runId}/events` : null),
   };
 }
+

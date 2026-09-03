@@ -10,6 +10,7 @@
  * Agent MySQL is Run/event fact source; Redis is live notify only.
  * Sandbox is not Run authority.
  */
+import type { IncomingMessage, ServerResponse } from 'node:http';
 import {
   createAgentRun,
   openAgentRunEvents,
@@ -23,7 +24,7 @@ import {
   listAgentRuns,
   listAgentToolExecutions,
 } from '../services/agent-client.js';
-import { authorizeRunRequest, resolveTrustedAuth } from '../application/run-access-service.js';
+import { authorizeRunRequest, resolveTrustedAuth, type ReqWithTrace } from '../application/run-access-service.js';
 import {
   parseSseResumeCursor,
   presentCreateRunAccepted,
@@ -34,10 +35,8 @@ import { sendError, sendJson as json } from '../http/response.js';
  * Coerce a timestamp to an ISO 8601 string for the public wire contract.
  * Accepts epoch milliseconds (Agent live runs), ISO strings, or Date.
  * Returns null when the value is missing or unusable.
- * @param {unknown} value
- * @returns {string|null}
  */
-export function toIsoTimestamp(value) {
+export function toIsoTimestamp(value: unknown): string | null {
   if (value == null || value === '') return null;
   if (typeof value === 'number') {
     if (!Number.isFinite(value)) return null;
@@ -60,48 +59,44 @@ export function toIsoTimestamp(value) {
  * Present the Agent live Run snapshot on the public wire contract.
  * Ensures created_at / updated_at are always ISO strings or null so the
  * frontend RunDetailSchema never sees Agent epoch-ms numbers.
- * @param {object|null|undefined} live
- * @param {boolean} runtimeAvailable
  */
-export function presentRunDetail(live, runtimeAvailable) {
+export function presentRunDetail(live: any, runtimeAvailable: boolean): any {
   const liveObj = live && typeof live === 'object' ? live : null;
-  const body = liveObj
+  const body: Record<string, any> = liveObj
     ? { ...liveObj, runtime_available: runtimeAvailable }
     : { runtime_available: runtimeAvailable };
-  body.created_at = toIsoTimestamp(liveObj?.created_at);
-  body.updated_at = toIsoTimestamp(liveObj?.updated_at);
-  body.started_at = toIsoTimestamp(liveObj?.started_at);
+  body['created_at'] = toIsoTimestamp(liveObj?.created_at);
+  body['updated_at'] = toIsoTimestamp(liveObj?.updated_at);
+  body['started_at'] = toIsoTimestamp(liveObj?.started_at);
   const completedAt =
     toIsoTimestamp(liveObj?.completed_at) ?? toIsoTimestamp(liveObj?.finished_at);
-  body.completed_at = completedAt;
-  body.finished_at = completedAt;
+  body['completed_at'] = completedAt;
+  body['finished_at'] = completedAt;
   // Map status_reason → error only for terminal failed-like outcomes.
   // Parked waits (WAITING_APPROVAL / WAITING_INPUT) carry reasons like
   // "approval pending" that must NOT become chat `[Error: …]` text.
-  const statusRaw = String(body.status ?? '').trim().toUpperCase();
+  const statusRaw = String(body['status'] ?? '').trim().toUpperCase();
   const terminalFailedLike = new Set([
     'FAILED',
     'CANCELLED',
     'ERROR',
     'REJECTED',
   ]);
-  const explicitError = body.error ?? null;
+  const explicitError = body['error'] ?? null;
   if (explicitError != null && String(explicitError).trim() !== '') {
-    body.error = explicitError;
+    body['error'] = explicitError;
   } else if (terminalFailedLike.has(statusRaw)) {
-    body.error = liveObj?.status_reason ?? null;
+    body['error'] = liveObj?.status_reason ?? null;
   } else {
-    body.error = null;
+    body['error'] = null;
   }
   return body;
 }
 
 /**
  * Read Idempotency-Key from request headers (required for create/cancel).
- * @param {import('node:http').IncomingMessage | null} req
- * @returns {string|null}
  */
-export function readIdempotencyKeyHeader(req) {
+export function readIdempotencyKeyHeader(req: IncomingMessage | ReqWithTrace | null | undefined): string | null {
   // Node lowercases inbound header names, so the lowercase key is the only
   // reachable spelling regardless of how the client cased it.
   const h = req?.headers?.['idempotency-key'] ?? null;
@@ -110,15 +105,23 @@ export function readIdempotencyKeyHeader(req) {
   return s || null;
 }
 
+export interface CreateRunBody {
+  messages?: any[];
+  message?: any;
+  conversation_id?: string | null;
+  agent_profile_id?: string;
+  agentProfileId?: string;
+  model_id?: string;
+  modelId?: string;
+  budget?: any;
+  [key: string]: any;
+}
+
 /**
  * Normalize create body. Supports plan §18.3 `message.content[]` and legacy
  * `messages[]`. Optional conversationId binds the run to a conversation.
- *
- * @param {object} body
- * @param {{ conversationId?: string|null }} [opts]
- * @returns {{ messages: unknown[], conversation_id: string|null, agent_profile_id?: string, model_id?: string, budget?: unknown } | { error: string }}
  */
-export function normalizeCreateRunBody(body, opts = {}) {
+export function normalizeCreateRunBody(body: CreateRunBody, opts: { conversationId?: string | null } = {}): any {
   let messages = body?.messages;
   if ((!Array.isArray(messages) || messages.length === 0) && body?.message) {
     const msg = body.message;
@@ -130,8 +133,8 @@ export function normalizeCreateRunBody(body, opts = {}) {
         messages = [{ role: 'user', content: content.trim() }];
       } else if (Array.isArray(content) && content.length > 0) {
         const textParts = content
-          .filter((p) => p && (p.type === 'text' || typeof p.text === 'string'))
-          .map((p) => String(p.text || ''))
+          .filter((p: any) => p && (p.type === 'text' || typeof p.text === 'string'))
+          .map((p: any) => String(p.text || ''))
           .filter(Boolean);
         const text = textParts.join('\n').trim();
         if (text) messages = [{ role: 'user', content: text }];
@@ -151,7 +154,12 @@ export function normalizeCreateRunBody(body, opts = {}) {
   };
 }
 
-export async function handleCreateRun(body, res, req = null, routeOpts = {}) {
+export async function handleCreateRun(
+  body: any,
+  res: ServerResponse,
+  req: ReqWithTrace | null = null,
+  routeOpts: { conversationId?: string | null } = {},
+): Promise<void> {
   const normalized = normalizeCreateRunBody(body, routeOpts);
   if (normalized.error) {
     json(res, 400, { error: normalized.error });
@@ -186,12 +194,12 @@ export async function handleCreateRun(body, res, req = null, routeOpts = {}) {
     if (traceId) res.setHeader('X-Trace-Id', traceId);
     // Agent persists before 202 — never 201 (run not yet durable). plan §18.3
     json(res, 202, presentCreateRunAccepted(result));
-  } catch (err) {
+  } catch (err: any) {
     sendError(res, err, traceId);
   }
 }
 
-export async function handleListRuns(parsedUrl, res, req = null) {
+export async function handleListRuns(parsedUrl: URL, res: ServerResponse, req: ReqWithTrace | null = null): Promise<void> {
   const conversationId = parsedUrl.searchParams.get('conversation_id') || undefined;
   const status = parsedUrl.searchParams.get('status') || undefined;
   try {
@@ -202,10 +210,11 @@ export async function handleListRuns(parsedUrl, res, req = null) {
       { auth, traceId: req?.traceId },
     );
     json(res, 200, result);
-  } catch (err) {
+  } catch (err: any) {
     sendError(res, err, req?.traceId);
   }
 }
+
 
 /**
  * Abort-aware wait for Node HTTP response drain.
@@ -215,18 +224,21 @@ export async function handleListRuns(parsedUrl, res, req = null) {
  * @param {{ signal?: AbortSignal | null, isClosed?: () => boolean }} [opts]
  * @returns {Promise<'drained' | 'closed' | 'aborted'>}
  */
-export function waitForResponseDrain(res, opts = {}) {
+export function waitForResponseDrain(
+  res: ServerResponse,
+  opts: { signal?: AbortSignal | null; isClosed?: () => boolean } = {},
+): Promise<'drained' | 'closed' | 'aborted'> {
   const signal = opts.signal ?? null;
   const isClosed =
     opts.isClosed ??
-    (() => Boolean(res.writableEnded || res.destroyed || res.closed));
+    (() => Boolean(res.writableEnded || res.destroyed || (res as any).closed));
 
   if (signal?.aborted) return Promise.resolve('aborted');
   if (isClosed()) return Promise.resolve('closed');
 
   return new Promise((resolve) => {
     let settled = false;
-    const finish = (result) => {
+    const finish = (result: 'drained' | 'closed' | 'aborted') => {
       if (settled) return;
       settled = true;
       res.off('drain', onDrain);
@@ -257,17 +269,18 @@ export function waitForResponseDrain(res, opts = {}) {
  * only cancels this HTTP subscription's body reader.
  *
  * Exported for unit tests.
- *
- * @param {{
- *   reader: { read: Function, cancel?: Function, releaseLock?: Function },
- *   res: import('node:http').ServerResponse,
- *   signal?: AbortSignal | null,
- * }} opts
- * @returns {Promise<void>}
  */
-export async function proxySseUpstream({ reader, res, signal = null }) {
+export async function proxySseUpstream({
+  reader,
+  res,
+  signal = null,
+}: {
+  reader: any;
+  res: ServerResponse;
+  signal?: AbortSignal | null;
+}): Promise<void> {
   const isClosed = () =>
-    Boolean(res.writableEnded || res.destroyed || res.closed || signal?.aborted);
+    Boolean(res.writableEnded || res.destroyed || (res as any).closed || signal?.aborted);
 
   try {
     while (true) {
@@ -308,7 +321,12 @@ export async function proxySseUpstream({ reader, res, signal = null }) {
  * Cursor: afterSequence / after_sequence / after + Last-Event-ID (seq or ULID).
  * Disconnect aborts only the proxy — never cancels the Run (plan §12.4).
  */
-export async function handleRunEvents(runId, parsedUrl, res, req = null) {
+export async function handleRunEvents(
+  runId: string,
+  parsedUrl: URL,
+  res: ServerResponse,
+  req: ReqWithTrace | null = null,
+): Promise<void> {
   const cursor = parseSseResumeCursor({
     searchParams: parsedUrl.searchParams,
     headers: req?.headers || {},
@@ -321,12 +339,11 @@ export async function handleRunEvents(runId, parsedUrl, res, req = null) {
       /* ignore */
     }
   };
-  req?.on('close', onClose);
+  req?.on?.('close', onClose);
   res?.on?.('close', onClose);
   res?.on?.('error', onClose);
 
-  /** @type {{ read: Function, cancel?: Function, releaseLock?: Function } | null} */
-  let reader = null;
+  let reader: any = null;
   try {
     // Fail-closed ownership before any stream headers (403/404 via Agent).
     const { auth } = await authorizeRunRequest(runId, req);
@@ -342,7 +359,7 @@ export async function handleRunEvents(runId, parsedUrl, res, req = null) {
       Connection: 'keep-alive',
       'X-Accel-Buffering': 'no',
     });
-    reader = upstream.body.getReader();
+    reader = upstream.body?.getReader?.();
     await proxySseUpstream({
       reader,
       res,
@@ -350,7 +367,7 @@ export async function handleRunEvents(runId, parsedUrl, res, req = null) {
     });
     reader = null; // proxySseUpstream already cancelled/released
     if (!res.writableEnded) res.end();
-  } catch (err) {
+  } catch (err: any) {
     if (err?.name === 'AbortError') return;
     if (!res.headersSent) sendError(res, err, req?.traceId);
     else if (!res.writableEnded) res.end();
@@ -376,7 +393,12 @@ export async function handleRunEvents(runId, parsedUrl, res, req = null) {
 /**
  * POST /api/runs/:id/steer  body: { text, conversation_id? }
  */
-export async function handleSteerRun(runId, body, res, req = null) {
+export async function handleSteerRun(
+  runId: string,
+  body: any,
+  res: ServerResponse,
+  req: ReqWithTrace | null = null,
+): Promise<void> {
   const text = body?.text;
   if (!runId) {
     json(res, 400, { error: 'run id is required' });
@@ -401,7 +423,7 @@ export async function handleSteerRun(runId, body, res, req = null) {
       conversation_id: body.conversation_id || null,
     }, { auth, traceId: req?.traceId, idempotencyKey });
     json(res, 202, result);
-  } catch (err) {
+  } catch (err: any) {
     console.error('[runs] steer:', err.message);
     sendError(res, err, req?.traceId);
   }
@@ -409,11 +431,11 @@ export async function handleSteerRun(runId, body, res, req = null) {
 
 /** POST /api/conversations/:id/follow-ups — canonical plan §18.7 path. */
 export async function handleConversationFollowUp(
-  conversationId,
-  body,
-  res,
-  req = null,
-) {
+  conversationId: string,
+  body: any,
+  res: ServerResponse,
+  req: ReqWithTrace | null = null,
+): Promise<void> {
   const text = body?.text;
   if (!conversationId) {
     json(res, 400, { error: 'conversation id is required' });
@@ -443,16 +465,21 @@ export async function handleConversationFollowUp(
       },
     );
     json(res, 202, result);
-  } catch (err) {
+  } catch (err: any) {
     console.error('[runs] conversation follow-up:', err.message);
     sendError(res, err, req?.traceId);
   }
 }
 
+
 /**
  * POST /api/runs/:id/cancel
  */
-export async function handleCancelRun(runId, res, req = null) {
+export async function handleCancelRun(
+  runId: string,
+  res: ServerResponse,
+  req: ReqWithTrace | null = null,
+): Promise<void> {
   if (!runId) {
     json(res, 400, { error: 'run id is required' });
     return;
@@ -476,7 +503,7 @@ export async function handleCancelRun(runId, res, req = null) {
       idempotencyKey,
     });
     json(res, 200, result);
-  } catch (err) {
+  } catch (err: any) {
     console.error('[runs] cancel:', err.message);
     sendError(res, err, req?.traceId);
   }
@@ -486,7 +513,11 @@ export async function handleCancelRun(runId, res, req = null) {
  * GET /api/runs/:id
  * Agent MySQL is the fact source (owner-scoped). Sandbox is not consulted for status.
  */
-export async function handleGetRun(runId, res, req = null) {
+export async function handleGetRun(
+  runId: string,
+  res: ServerResponse,
+  req: ReqWithTrace | null = null,
+): Promise<void> {
   if (!runId) {
     json(res, 400, { error: 'run id is required' });
     return;
@@ -495,7 +526,7 @@ export async function handleGetRun(runId, res, req = null) {
     const { auth } = await authorizeRunRequest(runId, req);
     const live = await getAgentRun(runId, { auth, traceId: req?.traceId });
     json(res, 200, presentRunDetail(live, true));
-  } catch (err) {
+  } catch (err: any) {
     console.error('[runs] get:', err.message);
     sendError(res, err, req?.traceId);
   }
@@ -505,7 +536,11 @@ export async function handleGetRun(runId, res, req = null) {
  * GET /api/runs/:id/trace — owner-scoped durable trace tree.
  * Agent MySQL materializes the projection from restart-safe Run facts.
  */
-export async function handleGetRunTrace(runId, res, req = null) {
+export async function handleGetRunTrace(
+  runId: string,
+  res: ServerResponse,
+  req: (IncomingMessage & ReqWithTrace) | null = null,
+): Promise<void> {
   if (!runId) {
     json(res, 400, { error: 'run id is required' });
     return;
@@ -514,7 +549,7 @@ export async function handleGetRunTrace(runId, res, req = null) {
   try {
     const { auth } = await authorizeRunRequest(runId, req);
     let limit = 1000;
-    let cursor = null;
+    let cursor: string | null = null;
     if (req?.url) {
       const query = new URL(req.url, 'http://bff.invalid').searchParams;
       const requestedLimit = Number(query.get('limit'));
@@ -530,7 +565,7 @@ export async function handleGetRunTrace(runId, res, req = null) {
       cursor,
     });
     json(res, 200, result);
-  } catch (err) {
+  } catch (err: any) {
     console.error('[runs] trace:', err.message);
     sendError(res, err, req?.traceId);
   }
@@ -541,7 +576,11 @@ export async function handleGetRunTrace(runId, res, req = null) {
  * Used after SSE reconnect exhaustion; unlike a closed stream this endpoint
  * never infers success from transport state.
  */
-export async function handleListRunTools(runId, res, req = null) {
+export async function handleListRunTools(
+  runId: string,
+  res: ServerResponse,
+  req: ReqWithTrace | null = null,
+): Promise<void> {
   if (!runId) {
     json(res, 400, { error: 'run id is required' });
     return;
@@ -553,7 +592,7 @@ export async function handleListRunTools(runId, res, req = null) {
       traceId: req?.traceId,
     });
     json(res, 200, result);
-  } catch (err) {
+  } catch (err: any) {
     console.error('[runs] list tools:', err.message);
     sendError(res, err, req?.traceId);
   }
@@ -563,7 +602,12 @@ export async function handleListRunTools(runId, res, req = null) {
  * POST /api/runs/:id/resume-approval  body: { decision, reason? }
  * Usually triggered automatically after approve/reject; exposed for recovery.
  */
-export async function handleResumeApproval(runId, body, res, req = null) {
+export async function handleResumeApproval(
+  runId: string,
+  body: any,
+  res: ServerResponse,
+  req: ReqWithTrace | null = null,
+): Promise<void> {
   if (!runId) {
     json(res, 400, { error: 'run id is required' });
     return;
@@ -575,13 +619,19 @@ export async function handleResumeApproval(runId, body, res, req = null) {
       traceId: req?.traceId,
     });
     json(res, 200, result);
-  } catch (err) {
+  } catch (err: any) {
     console.error('[runs] resume-approval:', err.message);
     sendError(res, err, req?.traceId);
   }
 }
 
-export async function handleInteractionResponse(runId, interactionId, body, res, req = null) {
+export async function handleInteractionResponse(
+  runId: string,
+  interactionId: string,
+  body: any,
+  res: ServerResponse,
+  req: ReqWithTrace | null = null,
+): Promise<void> {
   if (!Object.prototype.hasOwnProperty.call(body || {}, 'response')) {
     json(res, 400, { error: 'response is required' });
     return;
@@ -593,8 +643,9 @@ export async function handleInteractionResponse(runId, interactionId, body, res,
       traceId: req?.traceId,
     });
     json(res, 200, result);
-  } catch (err) {
+  } catch (err: any) {
     console.error('[runs] interaction response:', err.message);
     sendError(res, err, req?.traceId);
   }
 }
+

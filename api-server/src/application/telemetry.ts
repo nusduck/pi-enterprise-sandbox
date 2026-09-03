@@ -7,6 +7,8 @@ import {
   context,
   propagation,
   trace,
+  type Context,
+  type Span,
 } from '@opentelemetry/api';
 import { W3CTraceContextPropagator } from '@opentelemetry/core';
 import { OTLPTraceExporter } from '@opentelemetry/exporter-trace-otlp-proto';
@@ -15,9 +17,12 @@ import { NodeSDK } from '@opentelemetry/sdk-node';
 import {
   BatchSpanProcessor,
   NoopSpanProcessor,
+  type SpanProcessor,
 } from '@opentelemetry/sdk-trace-base';
 import { UndiciInstrumentation } from '@opentelemetry/instrumentation-undici';
 import { ATTR_SERVICE_NAME, ATTR_SERVICE_VERSION } from '@opentelemetry/semantic-conventions';
+import type { IncomingMessage } from 'node:http';
+import type { RequestTraceContext } from './trace-context.js';
 
 const INSTRUMENTATION_NAME = 'pi-enterprise-bff';
 const DEFAULT_EXPORT_TIMEOUT_MS = 10_000;
@@ -25,21 +30,35 @@ const DEFAULT_SCHEDULE_DELAY_MS = 5_000;
 const DEFAULT_MAX_QUEUE_SIZE = 2_048;
 const DEFAULT_MAX_EXPORT_BATCH_SIZE = 512;
 
-let telemetry = null;
+export interface TelemetryHandle {
+  readonly enabled: boolean;
+  readonly endpoint?: string | null;
+  shutdown(): Promise<void>;
+}
 
-function positiveInteger(value, fallback) {
+export interface HttpServerSpanHandle {
+  span: Span;
+  activeContext: Context;
+  end: (error?: unknown, statusCodeValue?: number) => void;
+}
+
+let telemetry: TelemetryHandle | null = null;
+
+function positiveInteger(value: unknown, fallback: number): number {
   const parsed = Number(value);
   return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : fallback;
 }
 
-function configuredEndpoint(env) {
+function configuredEndpoint(env: NodeJS.ProcessEnv | Record<string, string | undefined>): string | null {
   const traces = String(env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT || '').trim();
   if (traces) return traces;
   const base = String(env.OTEL_EXPORTER_OTLP_ENDPOINT || '').trim().replace(/\/$/, '');
   return base ? `${base}/v1/traces` : null;
 }
 
-export async function startTelemetry(env = process.env) {
+export async function startTelemetry(
+  env: NodeJS.ProcessEnv | Record<string, string | undefined> = process.env,
+): Promise<TelemetryHandle> {
   if (telemetry) return telemetry;
   const endpoint = configuredEndpoint(env);
   propagation.setGlobalPropagator(new W3CTraceContextPropagator());
@@ -48,7 +67,7 @@ export async function startTelemetry(env = process.env) {
     return telemetry;
   }
 
-  const spanProcessor = endpoint
+  const spanProcessor: SpanProcessor = endpoint
     ? new BatchSpanProcessor(
         new OTLPTraceExporter({
           url: endpoint,
@@ -111,8 +130,8 @@ export async function startTelemetry(env = process.env) {
   return telemetry;
 }
 
-export function requestCarrier(headers = {}) {
-  const carrier = {};
+export function requestCarrier(headers: Record<string, unknown> = {}): Record<string, string> {
+  const carrier: Record<string, string> = {};
   for (const name of ['traceparent', 'tracestate']) {
     const value = headers[name] ?? headers[name.toLowerCase()];
     if (typeof value === 'string' && value) carrier[name] = value;
@@ -120,7 +139,7 @@ export function requestCarrier(headers = {}) {
   return carrier;
 }
 
-export function contextFromTraceContext(value) {
+export function contextFromTraceContext(value: RequestTraceContext | null | undefined): Context {
   const traceId = String(value?.traceId || '').toLowerCase();
   const spanId = String(value?.parentSpanId || value?.spanId || '').toLowerCase();
   if (!/^[0-9a-f]{32}$/.test(traceId) || !/^[0-9a-f]{16}$/.test(spanId)) {
@@ -136,8 +155,11 @@ export function contextFromTraceContext(value) {
   });
 }
 
-export function startHttpServerSpan(req, resolvedTraceContext) {
-  const parent = propagation.extract(ROOT_CONTEXT, requestCarrier(req?.headers));
+export function startHttpServerSpan(
+  req: IncomingMessage | { method?: string; url?: string; headers?: Record<string, unknown> } | null | undefined,
+  resolvedTraceContext: RequestTraceContext | null | undefined,
+): HttpServerSpanHandle {
+  const parent = propagation.extract(ROOT_CONTEXT, requestCarrier(req?.headers as Record<string, unknown> | undefined));
   const parentContext = trace.getSpanContext(parent)
     ? parent
     : contextFromTraceContext(resolvedTraceContext);
@@ -155,7 +177,7 @@ export function startHttpServerSpan(req, resolvedTraceContext) {
   );
   const activeContext = trace.setSpan(parentContext, span);
   let ended = false;
-  const end = (error, statusCodeValue) => {
+  const end = (error?: unknown, statusCodeValue?: number) => {
     if (ended) return;
     ended = true;
     const statusCode = Number(statusCodeValue || 0);
@@ -174,6 +196,7 @@ export function startHttpServerSpan(req, resolvedTraceContext) {
   return { span, activeContext, end };
 }
 
-export async function withActiveContext(activeContext, fn) {
+export async function withActiveContext<T>(activeContext: Context, fn: () => Promise<T> | T): Promise<T> {
   return context.with(activeContext, fn);
 }
+

@@ -3,15 +3,16 @@
  * dependency readiness. Readiness answers 503 when a dependency is down, which
  * is what container health checks and the cross-service smoke test rely on.
  */
+import type { ServerResponse } from 'node:http';
 import { checkHealth } from '../services/sandbox-client.js';
 import { checkAgentHealth } from '../services/agent-client.js';
 import { sendJson } from '../http/response.js';
 
 async function dependencyHealth() {
   let sandboxStatus = 'unknown';
-  let sandboxInfo = {};
+  let sandboxInfo: Record<string, any> = {};
   let agentStatus = 'unknown';
-  let agentInfo = {};
+  let agentInfo: Record<string, any> = {};
 
   try {
     const health = await checkHealth();
@@ -46,11 +47,12 @@ async function dependencyHealth() {
   };
 }
 
-export function handleLiveness(res) {
+export function handleLiveness(res: ServerResponse): void {
   sendJson(res, 200, { status: 'ok', service: 'api-server' });
 }
 
-export async function handleReadiness(res) {
+export async function handleReadiness(res: ServerResponse): Promise<void> {
   const body = await dependencyHealth();
   sendJson(res, body.status === 'ok' ? 200 : 503, body);
 }
+

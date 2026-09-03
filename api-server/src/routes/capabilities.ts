@@ -1,4 +1,5 @@
-import { resolveTrustedAuth } from '../application/run-access-service.js';
+import type { ServerResponse } from 'node:http';
+import { resolveTrustedAuth, type ReqWithTrace } from '../application/run-access-service.js';
 import {
   getAgentExtensionDiagnostics,
   mutateAgentSkill,
@@ -6,12 +7,12 @@ import {
 } from '../services/agent-client.js';
 import { sendError } from '../http/response.js';
 
-function json(res, status, value) {
+function json(res: ServerResponse, status: number, value: unknown) {
   res.writeHead(status, { 'Content-Type': 'application/json' });
   res.end(JSON.stringify(value));
 }
 
-export async function handleExtensionDiagnostics(parsedUrl, res, req) {
+export async function handleExtensionDiagnostics(parsedUrl: URL, res: ServerResponse, req: ReqWithTrace | null = null): Promise<void> {
   const traceId = req?.traceId || null;
   try {
     const auth = await resolveTrustedAuth(req);
@@ -22,7 +23,7 @@ export async function handleExtensionDiagnostics(parsedUrl, res, req) {
   }
 }
 
-export async function handleCapabilityRegistry(kind, parsedUrl, res, req) {
+export async function handleCapabilityRegistry(kind: string, parsedUrl: URL, res: ServerResponse, req: ReqWithTrace | null = null): Promise<void> {
   const traceId = req?.traceId || null;
   try {
     const auth = await resolveTrustedAuth(req);
@@ -45,11 +46,11 @@ export async function handleCapabilityRegistry(kind, parsedUrl, res, req) {
   }
 }
 
-export async function handleSkillMutation(encodedName, action, res, req) {
+export async function handleSkillMutation(encodedName: string, action: string, res: ServerResponse, req: ReqWithTrace | null = null): Promise<void> {
   const traceId = req?.traceId || null;
   try {
     const auth = await resolveTrustedAuth(req);
-    let name;
+    let name: string;
     try {
       name = decodeURIComponent(encodedName);
     } catch {
@@ -62,7 +63,7 @@ export async function handleSkillMutation(encodedName, action, res, req) {
   }
 }
 
-export async function handleSkillDraftUpload(parsedUrl, res, req) {
+export async function handleSkillDraftUpload(parsedUrl: URL, res: ServerResponse, req: ReqWithTrace): Promise<void> {
   const traceId = req?.traceId || null;
   try {
     const auth = await resolveTrustedAuth(req);
@@ -78,7 +79,7 @@ export async function handleSkillDraftUpload(parsedUrl, res, req) {
       return;
     }
     const maxBytes = 55 * 1024 * 1024;
-    const declared = parseInt(req.headers['content-length'] || '0', 10);
+    const declared = parseInt(String(req.headers['content-length'] || '0'), 10);
     if (declared > maxBytes) {
       json(res, 413, {
         error: 'Skill archive exceeds 50MB limit',
@@ -92,3 +93,4 @@ export async function handleSkillDraftUpload(parsedUrl, res, req) {
     sendError(res, error, traceId);
   }
 }
+

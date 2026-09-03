@@ -4,14 +4,14 @@
  * Upload streams the inbound request (or a temp-file spill) to Sandbox so large
  * multipart bodies are never held fully in the Node heap.
  */
+import type { IncomingMessage, ServerResponse } from 'node:http';
 import { createReadStream, createWriteStream } from 'node:fs';
 import { mkdtemp, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import * as sb from '../services/sandbox-client.js';
-import { authFromRequest } from '../services/sandbox-client.js';
 import { config, AUTH_HEADER } from '../config.js';
-import { authorizeSandboxSession } from '../application/run-access-service.js';
+import { authorizeSandboxSession, type ReqWithTrace } from '../application/run-access-service.js';
 import {
   boundRequestTraceContext,
   createTraceId,
@@ -32,34 +32,31 @@ export const UPLOAD_RESPONSE_TIMEOUT_MS = 10 * 60 * 1000;
  * The deadline covers everything up to the response headers, then is cleared:
  * a stalled Sandbox can no longer pin a browser request and a BFF socket open,
  * while a large body still streams for as long as it needs.
- *
- * @param {string} url
- * @param {RequestInit} [init]
- * @param {number} [deadlineMs]
- * @returns {Promise<Response>}
  */
 export async function fetchSandboxBounded(
-  url,
-  init = {},
-  deadlineMs = config.SANDBOX_REQUEST_TIMEOUT_MS,
-) {
+  url: string,
+  init: RequestInit = {},
+  deadlineMs: number = config.SANDBOX_REQUEST_TIMEOUT_MS,
+): Promise<Response> {
   const { signal: externalSignal, ...rest } = init;
   const controller = new AbortController();
-  let timer = setTimeout(() => controller.abort(), deadlineMs);
+  let timer: NodeJS.Timeout | null = setTimeout(() => controller.abort(), deadlineMs);
   const onAbort = () => controller.abort();
   if (externalSignal?.aborted) controller.abort();
   else externalSignal?.addEventListener('abort', onAbort, { once: true });
   try {
     const resp = await fetch(url, { ...rest, signal: controller.signal });
-    clearTimeout(timer);
-    timer = null;
+    if (timer !== null) {
+      clearTimeout(timer);
+      timer = null;
+    }
     return resp;
   } catch (err) {
     // A caller-driven abort (browser hung up) keeps its own error.
     if (controller.signal.aborted && !externalSignal?.aborted) {
       const timeout = new Error(
         `Sandbox request timed out after ${deadlineMs}ms`,
-      );
+      ) as Error & { code: string; status: number };
       timeout.code = 'SANDBOX_TIMEOUT';
       timeout.status = 504;
       throw timeout;
@@ -73,11 +70,8 @@ export async function fetchSandboxBounded(
 
 /**
  * Write a 504 for a Sandbox proxy deadline; rethrow anything else.
- * @param {unknown} err
- * @param {import('node:http').ServerResponse} res
- * @param {string} message
  */
-function handleSandboxProxyError(err, res, message) {
+function handleSandboxProxyError(err: any, res: ServerResponse, message: string): void {
   if (err?.code !== 'SANDBOX_TIMEOUT') throw err;
   if (!res.headersSent) {
     res.writeHead(504, { 'Content-Type': 'application/json' });
@@ -89,11 +83,12 @@ function handleSandboxProxyError(err, res, message) {
 
 /**
  * Headers for sandbox file proxies: service key + browser Bearer (never acting*).
- * @param {import('node:http').IncomingMessage | null | undefined} req
- * @param {Record<string, string>} [extra]
- * @param {{ actingUserId?: string, actingOrganizationId?: string, actingRole?: string } | null} [trustedAuth]
  */
-export function sandboxProxyHeaders(req, extra = {}, trustedAuth = null) {
+export function sandboxProxyHeaders(
+  req: IncomingMessage | ReqWithTrace | null | undefined,
+  extra: Record<string, string> = {},
+  trustedAuth: any = null,
+): Record<string, string> {
   // Never copy acting headers from the browser. The optional third argument is
   // populated only after BFF-side identity resolution and is therefore safe to
   // use for Sandbox's owner-scoped public adapters.
@@ -108,7 +103,7 @@ export function sandboxProxyHeaders(req, extra = {}, trustedAuth = null) {
   ]) {
     delete safeExtra[key];
   }
-  const h = { ...AUTH_HEADER, ...safeExtra };
+  const h: Record<string, string> = { ...AUTH_HEADER, ...safeExtra };
   // Once Agent has resolved the formal owner, use only the service token plus
   // acting headers. Forwarding a browser JWT here would take precedence in
   // Sandbox actor resolution and reintroduce the external/internal ID-domain
@@ -125,22 +120,19 @@ export function sandboxProxyHeaders(req, extra = {}, trustedAuth = null) {
   // Forward the BFF's current W3C span, including opaque tracestate. Direct
   // route-unit callers get a fresh valid context instead of a UUID-shaped id.
   const context =
-    req?.traceContext ||
+    (req as ReqWithTrace)?.traceContext ||
     boundRequestTraceContext(trustedAuth) ||
     resolveRequestTraceContext(req?.headers || {
       'X-Trace-Id': safeExtra['X-Trace-Id'],
-      traceparent: safeExtra.traceparent,
-      tracestate: safeExtra.tracestate,
+      traceparent: safeExtra['traceparent'],
+      tracestate: safeExtra['tracestate'],
     });
   Object.assign(h, traceCarrierHeaders(context));
   return h;
 }
 
-/**
- * Resolve a stable X-Trace-Id for an upload request (browser → BFF → sandbox).
- * @param {import('node:http').IncomingMessage | null | undefined} req
- */
-export function resolveUploadTraceId(req) {
+
+export function resolveUploadTraceId(req: IncomingMessage | ReqWithTrace | null | undefined): string {
   const fromReq =
     (req && (req.headers['x-trace-id'] || req.headers['X-Trace-Id'])) || null;
   if (fromReq) return String(fromReq);
@@ -150,12 +142,9 @@ export function resolveUploadTraceId(req) {
 /**
  * Map sandbox error body into a stable BFF envelope.
  * Preserves structured `{code, message}` detail when present.
- * @param {number} status
- * @param {any} data
- * @param {string} [traceId]
  */
-export function mapUploadErrorBody(status, data, traceId) {
-  const withTrace = (obj) => {
+export function mapUploadErrorBody(status: number, data: any, traceId?: string | null): any {
+  const withTrace = (obj: any) => {
     if (traceId && obj && obj.trace_id == null) obj.trace_id = traceId;
     return obj;
   };
@@ -193,20 +182,8 @@ export function mapUploadErrorBody(status, data, traceId) {
 /**
  * Stop reading the inbound body so early error responses do not leave the
  * socket half-open while the client keeps sending multipart data.
- *
- * Draining is not the same as destroying: `req.destroy()` tears down the
- * whole TCP connection, and on an early reject (auth failure, 413, missing
- * header) that races the error response out of the socket — the client sees
- * a reset connection instead of the JSON body explaining what went wrong.
- * So drain now, and only destroy once the response has actually been
- * flushed, and only if the client is still uploading.
- *
- * @param {import('node:http').IncomingMessage | null | undefined} req
- * @param {import('node:http').ServerResponse | null} [res]
- *   Response the caller is about to write the rejection to. When given, the
- *   socket is closed after that response is on the wire.
  */
-export function discardRequestBody(req, res = null) {
+export function discardRequestBody(req: IncomingMessage | null | undefined, res: ServerResponse | null = null): void {
   if (!req) return;
   try {
     req.resume?.();
@@ -222,25 +199,19 @@ export function discardRequestBody(req, res = null) {
     destroy();
     return;
   }
-  // `finish` fires once the response has been handed to the socket; `close`
-  // covers a client that gave up before that.
   res.once('finish', destroy);
   res.once('close', destroy);
 }
 
 /**
  * Write a JSON response with X-Trace-Id for upload correlation.
- * @param {import('node:http').ServerResponse} res
- * @param {number} status
- * @param {object} body
- * @param {string} [traceId]
  */
-function writeUploadJson(res, status, body, traceId) {
-  const headers = { 'Content-Type': 'application/json' };
+function writeUploadJson(res: ServerResponse, status: number, body: unknown, traceId?: string | null): void {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
   if (traceId) headers['X-Trace-Id'] = traceId;
   const payload =
-    traceId && body && typeof body === 'object' && body.trace_id == null
-      ? { ...body, trace_id: traceId }
+    traceId && body && typeof body === 'object' && (body as any).trace_id == null
+      ? { ...(body as any), trace_id: traceId }
       : body;
   res.writeHead(status, headers);
   res.end(JSON.stringify(payload));
@@ -248,20 +219,20 @@ function writeUploadJson(res, status, body, traceId) {
 
 /**
  * Spill an IncomingMessage body to a temp file (streaming, not heap buffer).
- * @param {import('node:http').IncomingMessage} req
- * @param {number} [maxBytes]
- * @returns {Promise<{ dir: string, filePath: string, size: number }>}
  */
-export async function spillRequestToTempFile(req, maxBytes = 60 * 1024 * 1024) {
+export async function spillRequestToTempFile(
+  req: IncomingMessage,
+  maxBytes: number = 60 * 1024 * 1024,
+): Promise<{ dir: string; filePath: string; size: number }> {
   const dir = await mkdtemp(join(tmpdir(), 'pi-upload-'));
   const filePath = join(dir, 'body.bin');
   let size = 0;
   const out = createWriteStream(filePath);
 
   try {
-    await new Promise((resolve, reject) => {
+    await new Promise<void>((resolve, reject) => {
       let settled = false;
-      const fail = (err) => {
+      const fail = (err: any) => {
         if (settled) return;
         settled = true;
         try {
@@ -272,10 +243,10 @@ export async function spillRequestToTempFile(req, maxBytes = 60 * 1024 * 1024) {
         out.destroy();
         reject(err);
       };
-      const onData = (chunk) => {
+      const onData = (chunk: Buffer) => {
         size += chunk.length;
         if (size > maxBytes) {
-          const err = new Error('Payload too large');
+          const err = new Error('Payload too large') as Error & { code: string; status: number };
           err.code = 'attachment_too_large';
           err.status = 413;
           try { req.destroy?.(); } catch { /* ignore */ }
@@ -296,7 +267,7 @@ export async function spillRequestToTempFile(req, maxBytes = 60 * 1024 * 1024) {
           }
         });
       };
-      const onErr = (err) => fail(err);
+      const onErr = (err: any) => fail(err);
       req.on('data', onData);
       req.on('end', onEnd);
       req.on('error', onErr);
@@ -309,12 +280,17 @@ export async function spillRequestToTempFile(req, maxBytes = 60 * 1024 * 1024) {
   return { dir, filePath, size };
 }
 
+
 /**
  * GET /api/files/download?session_id=xxx&path=yyy
  * Stream a raw workspace file from sandbox (e.g. user uploads inspection).
  * Agent deliverables should use handleArtifactDownload instead.
  */
-export async function handleFileDownload(parsedUrl, res, req = null) {
+export async function handleFileDownload(
+  parsedUrl: URL,
+  res: ServerResponse,
+  req: (IncomingMessage & ReqWithTrace) | null = null,
+): Promise<void> {
   const sessionId = parsedUrl.searchParams.get('session_id');
   const filePath = parsedUrl.searchParams.get('path');
 
@@ -329,7 +305,7 @@ export async function handleFileDownload(parsedUrl, res, req = null) {
     sessionAccess = await authorizeSandboxSession(sessionId, req, {
       traceId: req?.traceId || null,
     });
-  } catch (err) {
+  } catch (err: any) {
     const status = Number(err?.status) || 500;
     res.writeHead(status, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({
@@ -340,7 +316,7 @@ export async function handleFileDownload(parsedUrl, res, req = null) {
   }
 
   const sanUrl = `${config.SANDBOX_BASE_URL}/sessions/${encodeURIComponent(sessionId)}/files/download?path=${encodeURIComponent(filePath)}`;
-  let sanRes;
+  let sanRes: Response;
   try {
     sanRes = await fetchSandboxBounded(sanUrl, {
       headers: sandboxProxyHeaders(req, {}, sessionAccess.sandboxAuth),
@@ -366,24 +342,26 @@ export async function handleFileDownload(parsedUrl, res, req = null) {
     'X-Trace-Id': sanRes.headers.get('x-trace-id') || '',
   });
 
-  for await (const chunk of sanRes.body) {
-    res.write(chunk);
+  if (sanRes.body) {
+    for await (const chunk of sanRes.body as any) {
+      res.write(chunk);
+    }
   }
   res.end();
 }
 
-function isAsciiHeaderValue(value) {
+function isAsciiHeaderValue(value: unknown): boolean {
   return typeof value === 'string' && value.length > 0 && /^[\x20-\x7E]+$/.test(value) && !/[\r\n]/.test(value);
 }
 
-function asciiFilenameFallback(name) {
+function asciiFilenameFallback(name: string): string {
   const base = String(name || 'download').split(/[/\\]/).pop() || 'download';
   const match = base.match(/(\.[A-Za-z0-9]{1,8})$/);
-  const ext = match ? match[1].toLowerCase() : '';
+  const ext = match ? match[1]!.toLowerCase() : '';
   const body = ext ? base.slice(0, -ext.length) : base;
   let ascii = '';
   for (const ch of body) {
-    const code = ch.codePointAt(0);
+    const code = ch.codePointAt(0)!;
     ascii += code >= 0x20 && code <= 0x7e ? ch : '_';
   }
   ascii = ascii.replace(/[_\s.]+/g, '_').replace(/^[._]+|[._]+$/g, '') || 'download';
@@ -393,13 +371,12 @@ function asciiFilenameFallback(name) {
 /**
  * Prefer Sandbox Content-Disposition. Never fall back to the ULID artifact_id —
  * that name has no extension, so browsers save as `artifact-download`.
- * @param {Headers | Record<string, string> | null | undefined} headers
  */
-export function artifactDownloadDisposition(headers) {
-  const get = (name) => {
+export function artifactDownloadDisposition(headers: Headers | Record<string, string> | null | undefined): string {
+  const get = (name: string) => {
     if (!headers) return '';
-    if (typeof headers.get === 'function') return headers.get(name) || '';
-    return headers[name] || headers[name.toLowerCase()] || '';
+    if (typeof (headers as Headers).get === 'function') return (headers as Headers).get(name) || '';
+    return (headers as Record<string, string>)[name] || (headers as Record<string, string>)[name.toLowerCase()] || '';
   };
   const disposition = get('content-disposition');
   if (disposition && /filename\s*\*?=/i.test(disposition) && isAsciiHeaderValue(disposition)) {
@@ -419,6 +396,7 @@ export function artifactDownloadDisposition(headers) {
   return 'attachment; filename="download"';
 }
 
+
 /**
  * GET /api/files/artifact-download?session_id=xxx&artifact_id=yyy
  * Stream a registered artifact (P7 / PR-09 deliverable path).
@@ -427,7 +405,11 @@ export function artifactDownloadDisposition(headers) {
  * arbitrary workspace path as an artifact — only artifact_id.
  * Streams with backpressure; client disconnect stops the pipe.
  */
-export async function handleArtifactDownload(parsedUrl, res, req = null) {
+export async function handleArtifactDownload(
+  parsedUrl: URL,
+  res: ServerResponse,
+  req: (IncomingMessage & ReqWithTrace) | null = null,
+): Promise<void> {
   const sessionId = parsedUrl.searchParams.get('session_id');
   const artifactId = parsedUrl.searchParams.get('artifact_id');
 
@@ -442,7 +424,7 @@ export async function handleArtifactDownload(parsedUrl, res, req = null) {
     sessionAccess = await authorizeSandboxSession(sessionId, req, {
       traceId: req?.traceId || null,
     });
-  } catch (err) {
+  } catch (err: any) {
     const status = Number(err?.status) || 500;
     res.writeHead(status, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({
@@ -454,7 +436,7 @@ export async function handleArtifactDownload(parsedUrl, res, req = null) {
 
   const sanPath = sb.artifactDownloadPath(sessionId, artifactId);
   const sanUrl = `${config.SANDBOX_BASE_URL}${sanPath}`;
-  let sanRes;
+  let sanRes: Response;
   try {
     sanRes = await fetchSandboxBounded(sanUrl, {
       headers: sandboxProxyHeaders(req, {}, sessionAccess.sandboxAuth),
@@ -477,7 +459,7 @@ export async function handleArtifactDownload(parsedUrl, res, req = null) {
       ? 'application/octet-stream'
       : contentType;
 
-  const headers = {
+  const headers: Record<string, string> = {
     'Content-Type': safeType,
     'Content-Disposition': artifactDownloadDisposition(sanRes.headers),
     'X-Content-Type-Options': 'nosniff',
@@ -499,7 +481,7 @@ export async function handleArtifactDownload(parsedUrl, res, req = null) {
   const onClose = () => {
     aborted = true;
     try {
-      sanRes.body?.cancel?.();
+      (sanRes.body as any)?.cancel?.();
     } catch { /* ignore */ }
   };
   if (req) req.on('close', onClose);
@@ -509,7 +491,7 @@ export async function handleArtifactDownload(parsedUrl, res, req = null) {
       res.end();
       return;
     }
-    for await (const chunk of sanRes.body) {
+    for await (const chunk of sanRes.body as any) {
       if (aborted || res.writableEnded || res.destroyed) break;
       const ok = res.write(chunk);
       if (!ok) {
@@ -525,12 +507,12 @@ export async function handleArtifactDownload(parsedUrl, res, req = null) {
 /**
  * POST /api/files/upload?session_id=xxx
  * Stream multipart body to sandbox (temp-file spill; no full heap buffer).
- *
- * @param {URL} parsedUrl
- * @param {import('node:http').IncomingMessage} req
- * @param {import('node:http').ServerResponse} res
  */
-export async function handleFileUpload(parsedUrl, req, res) {
+export async function handleFileUpload(
+  parsedUrl: URL,
+  req: IncomingMessage & ReqWithTrace,
+  res: ServerResponse,
+): Promise<void> {
   const sessionId = parsedUrl.searchParams.get('session_id');
   const traceId = resolveUploadTraceId(req);
 
@@ -546,7 +528,7 @@ export async function handleFileUpload(parsedUrl, req, res) {
 
   // Prefer Content-Length based limit (~50MB file + multipart overhead)
   const maxBytes = 55 * 1024 * 1024;
-  const declared = parseInt(req.headers['content-length'] || '0', 10);
+  const declared = parseInt(String(req.headers['content-length'] || '0'), 10);
   if (declared > maxBytes) {
     // Drain/destroy so the client is not stuck sending a rejected body.
     discardRequestBody(req, res);
@@ -562,7 +544,7 @@ export async function handleFileUpload(parsedUrl, req, res) {
   let sessionAccess;
   try {
     sessionAccess = await authorizeSandboxSession(sessionId, req, { traceId });
-  } catch (err) {
+  } catch (err: any) {
     discardRequestBody(req, res);
     const status = Number(err?.status) || 500;
     writeUploadJson(
@@ -577,11 +559,11 @@ export async function handleFileUpload(parsedUrl, req, res) {
     return;
   }
 
-  let spill = null;
+  let spill: { dir: string; filePath: string; size: number } | null = null;
   try {
     // Stream inbound body to temp file (not heap Buffer.concat)
     spill = await spillRequestToTempFile(req, maxBytes);
-  } catch (err) {
+  } catch (err: any) {
     if (err && (err.status === 413 || err.code === 'attachment_too_large')) {
       writeUploadJson(
         res,
@@ -624,12 +606,12 @@ export async function handleFileUpload(parsedUrl, req, res) {
         headers,
         body: bodyStream,
         duplex: 'half',
-      },
+      } as RequestInit,
       UPLOAD_RESPONSE_TIMEOUT_MS,
     );
 
     const text = await sanRes.text();
-    let data;
+    let data: any;
     try {
       data = text ? JSON.parse(text) : {};
     } catch {
@@ -667,7 +649,7 @@ export async function handleFileUpload(parsedUrl, req, res) {
         ? { ...data, trace_id: data.trace_id || sandboxTrace }
         : data;
     writeUploadJson(res, status === 200 ? 201 : status, successBody, sandboxTrace);
-  } catch (err) {
+  } catch (err: any) {
     console.error('[files] upload proxy failed:', err);
     writeUploadJson(
       res,
@@ -681,3 +663,4 @@ export async function handleFileUpload(parsedUrl, req, res) {
     }
   }
 }
+

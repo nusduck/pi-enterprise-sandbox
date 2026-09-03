@@ -23,7 +23,8 @@
 | Package | Role | Production source root | Thin entry |
 |---------|------|------------------------|------------|
 | `agent/` | Agent HTTP + Worker（TS） | `agent/src/**` | `server.ts`, `worker.ts`, package-root `config.ts`；容器跑 `dist/` |
-| `api-server/` | BFF | `api-server/src/**` | `server.js` |
+| `api-server/` | BFF（TS） | `api-server/src/**` | `server.ts`；容器跑 `dist/server.js` |
+
 | `exec/` | 执行面 + MCP facade（TS） | `exec/src/**` | `src/main.ts`、`src/mcp-main.ts` |
 | `frontend/` | Vite React app | `frontend/src/**` (FSD-style) | `index.html` + Vite |
 | `contract/` | exec↔agent runtime 共享类型与 RPC 信封（TS） | `contract/src/**` | `src/index.ts` |
@@ -122,16 +123,19 @@ agent/
 
 ```text
 api-server/
-  server.js              # HTTP entry; imports from ./src/**
+  server.ts              # HTTP entry; imports from ./src/**
   Dockerfile
   package.json
+  tsconfig.json
+  tsconfig.build.json
   src/
-    config.js
+    config.ts
     application/
     http/
     routes/
     services/
   tests/
+
 ```
 
 **Rules**

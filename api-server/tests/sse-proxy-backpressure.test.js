@@ -204,8 +204,9 @@ describe('proxySseUpstream backpressure', () => {
 
 describe('handleRunEvents source contract (backpressure wiring)', () => {
   it('uses waitForResponseDrain and proxySseUpstream with cancel', () => {
-    const src = readFileSync(join(__dirname, '../src/routes/runs.js'), 'utf8');
+    const src = readFileSync(join(__dirname, '../src/routes/runs.ts'), 'utf8');
     assert.match(src, /export function waitForResponseDrain/);
+
     assert.match(src, /export async function proxySseUpstream/);
     assert.match(src, /waitForResponseDrain/);
     assert.match(src, /reader\.cancel/);

@@ -1,17 +1,18 @@
 /** BFF process routes: Agent authorizes the session; exec owns process facts. */
 
-import { authorizeSandboxSession } from '../application/run-access-service.js';
-import { createSandboxClient } from '../services/sandbox-client.js';
+import type { ServerResponse } from 'node:http';
+import { authorizeSandboxSession, type ReqWithTrace } from '../application/run-access-service.js';
+import { createSandboxClient, type SandboxClient } from '../services/sandbox-client.js';
 import { HttpError } from '../http/errors.js';
 import { sendError, sendJson as json } from '../http/response.js';
 
-function requiredSessionId(value) {
+function requiredSessionId(value: unknown): string {
   const sessionId = String(value || '').trim();
   if (!sessionId) throw new HttpError(400, 'SESSION_REQUIRED', 'session_id required');
   return sessionId;
 }
 
-async function clientFor(sessionId, req) {
+async function clientFor(sessionId: string, req: ReqWithTrace | null | undefined): Promise<{ workspaceId: string; client: SandboxClient }> {
   const access = await authorizeSandboxSession(sessionId, req, {
     traceId: req?.traceId || null,
   });
@@ -31,7 +32,7 @@ async function clientFor(sessionId, req) {
   };
 }
 
-export async function handleListProcesses(parsedUrl, res, req = null) {
+export async function handleListProcesses(parsedUrl: URL, res: ServerResponse, req: ReqWithTrace | null = null): Promise<void> {
   try {
     const sessionId = requiredSessionId(parsedUrl.searchParams.get('session_id'));
     const { client, workspaceId } = await clientFor(sessionId, req);
@@ -43,26 +44,26 @@ export async function handleListProcesses(parsedUrl, res, req = null) {
     json(res, 200, {
       ...result,
       processes: Array.isArray(result?.processes)
-        ? result.processes.map((entry) => ({ ...entry, session_id: sessionId }))
+        ? result.processes.map((entry: any) => ({ ...entry, session_id: sessionId }))
         : [],
     });
-  } catch (err) {
+  } catch (err: any) {
     sendError(res, err, req?.traceId);
   }
 }
 
-export async function handleGetProcess(processId, parsedUrl, res, req = null) {
+export async function handleGetProcess(processId: string, parsedUrl: URL, res: ServerResponse, req: ReqWithTrace | null = null): Promise<void> {
   try {
     const sessionId = requiredSessionId(parsedUrl.searchParams.get('session_id'));
     const { client, workspaceId } = await clientFor(sessionId, req);
     const result = await client.getProcess(workspaceId, processId);
     json(res, 200, { ...result, session_id: sessionId });
-  } catch (err) {
+  } catch (err: any) {
     sendError(res, err, req?.traceId);
   }
 }
 
-export async function handleGetProcessLogs(processId, parsedUrl, res, req = null) {
+export async function handleGetProcessLogs(processId: string, parsedUrl: URL, res: ServerResponse, req: ReqWithTrace | null = null): Promise<void> {
   try {
     const sessionId = requiredSessionId(parsedUrl.searchParams.get('session_id'));
     const { client, workspaceId } = await clientFor(sessionId, req);
@@ -70,12 +71,12 @@ export async function handleGetProcessLogs(processId, parsedUrl, res, req = null
       offset: parsedUrl.searchParams.get('offset'),
       limit: parsedUrl.searchParams.get('limit'),
     }));
-  } catch (err) {
+  } catch (err: any) {
     sendError(res, err, req?.traceId);
   }
 }
 
-export async function handleReadProcess(processId, parsedUrl, res, req = null) {
+export async function handleReadProcess(processId: string, parsedUrl: URL, res: ServerResponse, req: ReqWithTrace | null = null): Promise<void> {
   try {
     const sessionId = requiredSessionId(parsedUrl.searchParams.get('session_id'));
     const { client, workspaceId } = await clientFor(sessionId, req);
@@ -84,22 +85,22 @@ export async function handleReadProcess(processId, parsedUrl, res, req = null) {
       cursor: parsedUrl.searchParams.get('cursor'),
       limit: parsedUrl.searchParams.get('limit'),
     }));
-  } catch (err) {
+  } catch (err: any) {
     sendError(res, err, req?.traceId);
   }
 }
 
 export async function handleProcessAction(
-  processId,
-  action,
-  body,
-  res,
-  req = null,
-) {
+  processId: string,
+  action: string,
+  body: any,
+  res: ServerResponse,
+  req: ReqWithTrace | null = null,
+): Promise<void> {
   try {
     const sessionId = requiredSessionId(body?.session_id);
     const { client, workspaceId } = await clientFor(sessionId, req);
-    let result;
+    let result: any;
     if (action === 'stdin') {
       result = await client.processAction(workspaceId, processId, 'stdin', {
         data: body?.data || '',
@@ -116,7 +117,8 @@ export async function handleProcessAction(
       return;
     }
     json(res, 200, result);
-  } catch (err) {
+  } catch (err: any) {
     sendError(res, err, req?.traceId);
   }
 }
+

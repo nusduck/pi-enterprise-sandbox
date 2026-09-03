@@ -9,9 +9,9 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const capabilitiesSrc = readFileSync(join(__dirname, '../src/routes/capabilities.js'), 'utf8');
-const serverSrc = readFileSync(join(__dirname, '../server.js'), 'utf8');
-const agentClientSrc = readFileSync(join(__dirname, '../src/services/agent-client.js'), 'utf8');
+const capabilitiesSrc = readFileSync(join(__dirname, '../src/routes/capabilities.ts'), 'utf8');
+const serverSrc = readFileSync(join(__dirname, '../server.ts'), 'utf8');
+const agentClientSrc = readFileSync(join(__dirname, '../src/services/agent-client.ts'), 'utf8');
 
 const originalFetch = globalThis.fetch;
 process.env.AUTH_ENABLED = 'false';
@@ -23,8 +23,8 @@ const { getAgentExtensionDiagnostics, mutateAgentSkill, uploadAgentSkillDraft } 
 
 describe('capability diagnostics identity forwarding', () => {
   it('handlers accept req and resolve trusted auth before agent call', () => {
-    assert.match(capabilitiesSrc, /export async function handleExtensionDiagnostics\(parsedUrl, res, req\)/);
-    assert.match(capabilitiesSrc, /export async function handleCapabilityRegistry\(kind, parsedUrl, res, req\)/);
+    assert.match(capabilitiesSrc, /export async function handleExtensionDiagnostics\(/);
+    assert.match(capabilitiesSrc, /export async function handleCapabilityRegistry\(/);
     assert.match(capabilitiesSrc, /resolveTrustedAuth\(req\)/);
     assert.match(capabilitiesSrc, /getAgentExtensionDiagnostics\(profileId, \{ auth, traceId \}\)/);
     assert.match(capabilitiesSrc, /handleSkillMutation/);
@@ -35,10 +35,11 @@ describe('capability diagnostics identity forwarding', () => {
 
   it('server passes req into capability and diagnostics handlers', () => {
     assert.match(serverSrc, /handleExtensionDiagnostics\(parsedUrl, res, req\)/);
-    assert.match(serverSrc, /handleCapabilityRegistry\(capability\[1\], parsedUrl, res, req\)/);
+    assert.match(serverSrc, /handleCapabilityRegistry\(capability\[1\]!?, parsedUrl, res, req\)/);
     assert.match(serverSrc, /handleSkillMutation/);
     assert.match(serverSrc, /handleSkillDraftUpload\(parsedUrl, res, req\)/);
   });
+
 
   it('forwards trusted acting headers to Agent Skill mutation', async () => {
     let captured = null;
@@ -96,10 +97,11 @@ describe('capability diagnostics identity forwarding', () => {
   it('agent-client diagnostics uses requestHeaders for acting identity', () => {
     assert.match(
       agentClientSrc,
-      /export async function getAgentExtensionDiagnostics\([\s\S]*?\{ auth = null, traceId = null \} = \{\}\)/,
+      /export async function getAgentExtensionDiagnostics\([\s\S]*?\{ auth = null, traceId = null \}/,
     );
     assert.match(agentClientSrc, /headers: requestHeaders\(\{ auth, traceId \}\)/);
   });
+
 
   it('forwards trusted acting headers to Agent diagnostics', async () => {
     let captured = null;

@@ -43,9 +43,10 @@ npm ci --prefix frontend
 uv run pytest tests/ -q --tb=short
 # 仅版本钉：uv run pytest tests/test_runtime_versions.py -q
 
-# Node BFF（含 import/listen smoke）
-node --test api-server/tests/*.test.js
-# 或：npm test --prefix api-server
+# Node BFF（含测试、构建与类型检查）
+npm test --prefix api-server
+npm --prefix api-server run typecheck
+
 
 # Node Agent（测试会先 build；类型检查不在 npm test 里）
 npm test --prefix agent

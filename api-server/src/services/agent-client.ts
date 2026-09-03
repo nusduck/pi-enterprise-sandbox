@@ -25,7 +25,7 @@ import {
  * @param {RequestInit} [init]
  * @returns {Promise<Response>}
  */
-export async function agentFetch(url, init = {}) {
+export async function agentFetch(url: string | URL, init: RequestInit = {}): Promise<Response> {
   const timeoutMs = config.AGENT_REQUEST_TIMEOUT_MS;
   const timeout = AbortSignal.timeout(timeoutMs);
   const signal = init.signal
@@ -35,7 +35,7 @@ export async function agentFetch(url, init = {}) {
     return await fetch(url, { ...init, signal });
   } catch (err) {
     if (timeout.aborted && !init.signal?.aborted) {
-      const error = new Error(
+      const error: any = new Error(
         `Agent request timed out after ${timeoutMs}ms: ${new URL(String(url)).pathname}`,
       );
       error.status = 504;
@@ -47,8 +47,8 @@ export async function agentFetch(url, init = {}) {
   }
 }
 
-function internalHeaders(extra = {}) {
-  const h = {
+function internalHeaders(extra: Record<string, string> = {}): Record<string, string> {
+  const h: Record<string, string> = {
     'Content-Type': 'application/json',
     ...extra,
   };
@@ -58,13 +58,14 @@ function internalHeaders(extra = {}) {
   return h;
 }
 
+
 /**
  * Build a W3C traceparent with non-zero random span-id (8 bytes / 16 hex).
  * All-zero span-id is illegal per W3C Trace Context.
  * @param {string} traceId32 — lowercase 32-hex non-zero
  * @returns {string}
  */
-export function buildTraceparent(traceId32) {
+export function buildTraceparent(traceId32: string): string {
   const tid = String(traceId32).toLowerCase();
   if (!/^[0-9a-f]{32}$/.test(tid) || tid === '0'.repeat(32)) {
     throw new Error('traceId must be 32 non-zero hex chars');
@@ -75,6 +76,16 @@ export function buildTraceparent(traceId32) {
   return `00-${tid}-${span}-01`;
 }
 
+export interface RequestHeadersOptions {
+  auth?: any;
+  traceId?: string | null;
+  traceContext?: any;
+  traceparent?: string | null;
+  tracestate?: string | null;
+  idempotencyKey?: string | null;
+  extra?: Record<string, string>;
+}
+
 export function requestHeaders({
   auth = null,
   traceId = null,
@@ -83,7 +94,7 @@ export function requestHeaders({
   tracestate = null,
   idempotencyKey = null,
   extra = {},
-} = {}) {
+}: RequestHeadersOptions = {}): Record<string, string> {
   const headers = internalHeaders(extra);
   if (auth?.authorization) headers.Authorization = auth.authorization;
   if (auth?.actingUserId) headers['X-Acting-User-Id'] = auth.actingUserId;
@@ -143,9 +154,9 @@ export function requestHeaders({
  * @param {{ auth?: object|null, traceId?: string|null, idempotencyKey?: string|null }} [opts]
  */
 export async function createAgentRun(
-  body,
-  { auth = null, traceId = null, idempotencyKey = null } = {},
-) {
+  body: any,
+  { auth = null, traceId = null, idempotencyKey = null }: { auth?: any; traceId?: string | null; idempotencyKey?: string | null } = {},
+): Promise<any> {
   const headers = requestHeaders({ auth, traceId, idempotencyKey });
 
   const resp = await agentFetch(`${config.AGENT_BASE_URL}/internal/agent-runs`, {
@@ -165,7 +176,7 @@ export async function createAgentRun(
       typeof body?.error === 'string'
         ? body.error
         : `Agent create run failed (${resp.status}): ${text}`;
-    const err = new Error(message);
+    const err = new Error(message) as Error & { status?: number; code?: string };
     err.status = resp.status;
     if (typeof body?.code === 'string' && body.code) err.code = body.code;
     throw err;
@@ -174,15 +185,15 @@ export async function createAgentRun(
 }
 
 export async function getAgentExtensionDiagnostics(
-  profileId = 'coding-agent',
-  { auth = null, traceId = null } = {},
-) {
+  profileId: string = 'coding-agent',
+  { auth = null, traceId = null }: { auth?: any; traceId?: string | null } = {},
+): Promise<any> {
   const url = new URL(`${config.AGENT_BASE_URL}/internal/extensions/diagnostics`);
   url.searchParams.set('profile_id', profileId);
   const resp = await agentFetch(url, { headers: requestHeaders({ auth, traceId }) });
   if (!resp.ok) {
     const text = await resp.text().catch(() => resp.statusText);
-    const error = new Error(`Agent diagnostics failed (${resp.status}): ${text}`);
+    const error = new Error(`Agent diagnostics failed (${resp.status}): ${text}`) as Error & { status?: number; code?: string };
     error.status = resp.status;
     throw error;
   }
@@ -190,10 +201,10 @@ export async function getAgentExtensionDiagnostics(
 }
 
 export async function mutateAgentSkill(
-  name,
-  action,
-  { auth = null, traceId = null } = {},
-) {
+  name: string,
+  action: string,
+  { auth = null, traceId = null }: { auth?: any; traceId?: string | null } = {},
+): Promise<any> {
   if (action !== 'enable' && action !== 'disable') {
     throw new Error('Skill action must be enable or disable');
   }
@@ -205,8 +216,8 @@ export async function mutateAgentSkill(
     },
   );
   if (!resp.ok) {
-    const payload = await resp.json().catch(() => ({}));
-    const error = new Error(
+    const payload: any = await resp.json().catch(() => ({}));
+    const error: any = new Error(
       typeof payload.error === 'string'
         ? payload.error
         : `Agent Skill mutation failed (${resp.status})`,
@@ -219,32 +230,32 @@ export async function mutateAgentSkill(
 }
 
 export async function uploadAgentSkillDraft(
-  body,
-  filename,
-  { auth = null, traceId = null, signal = null } = {},
-) {
+  body: any,
+  filename: string,
+  { auth = null, traceId = null, signal = null }: { auth?: any; traceId?: string | null; signal?: AbortSignal | null } = {},
+): Promise<any> {
   const extra = {
     'X-Filename': String(filename || 'skill.zip'),
     'Content-Type': 'application/octet-stream',
   };
   const headers = requestHeaders({ auth, traceId, extra });
   const isStream = body && typeof body.pipe === 'function';
-  const fetchOpts = {
+  const fetchOpts: RequestInit = {
     method: 'POST',
     headers,
     body,
     signal,
   };
   if (isStream) {
-    fetchOpts.duplex = 'half';
+    (fetchOpts as any).duplex = 'half';
   }
   const resp = await agentFetch(
     `${config.AGENT_BASE_URL}/internal/skills/drafts`,
     fetchOpts,
   );
   if (!resp.ok) {
-    const payload = await resp.json().catch(() => ({}));
-    const error = new Error(
+    const payload: any = await resp.json().catch(() => ({}));
+    const error: any = new Error(
       typeof payload.error === 'string'
         ? payload.error
         : `Agent Skill draft upload failed (${resp.status})`,
@@ -257,9 +268,9 @@ export async function uploadAgentSkillDraft(
 }
 
 async function requestAgentA2aAdmin(
-  path,
-  { method = 'GET', body = null, auth = null, traceId = null } = {},
-) {
+  path: string,
+  { method = 'GET', body = null, auth = null, traceId = null }: { method?: string; body?: any; auth?: any; traceId?: string | null } = {},
+): Promise<any> {
   const resp = await agentFetch(
     `${config.AGENT_BASE_URL}/internal/a2a/${path.replace(/^\/+/, '')}`,
     {
@@ -269,8 +280,8 @@ async function requestAgentA2aAdmin(
     },
   );
   if (!resp.ok) {
-    const payload = await resp.json().catch(() => ({}));
-    const err = new Error(
+    const payload: any = await resp.json().catch(() => ({}));
+    const err: any = new Error(
       typeof payload.error === 'string'
         ? payload.error
         : `Agent A2A admin request failed (${resp.status})`,
@@ -282,10 +293,11 @@ async function requestAgentA2aAdmin(
   return resp.json();
 }
 
+
 export async function getAgentA2aConfig(
-  agentId = null,
-  { auth = null, traceId = null } = {},
-) {
+  agentId: string | null = null,
+  { auth = null, traceId = null }: { auth?: any; traceId?: string | null } = {},
+): Promise<any> {
   const query = agentId
     ? `config?agent_id=${encodeURIComponent(agentId)}`
     : 'config';
@@ -293,9 +305,9 @@ export async function getAgentA2aConfig(
 }
 
 export async function issueAgentA2aCredential(
-  body,
-  { auth = null, traceId = null } = {},
-) {
+  body: any,
+  { auth = null, traceId = null }: { auth?: any; traceId?: string | null } = {},
+): Promise<any> {
   return requestAgentA2aAdmin('credentials', {
     method: 'POST',
     body,
@@ -305,10 +317,10 @@ export async function issueAgentA2aCredential(
 }
 
 export async function rotateAgentA2aCredential(
-  credentialId,
-  body,
-  { auth = null, traceId = null } = {},
-) {
+  credentialId: string,
+  body: any,
+  { auth = null, traceId = null }: { auth?: any; traceId?: string | null } = {},
+): Promise<any> {
   return requestAgentA2aAdmin(
     `credentials/${encodeURIComponent(credentialId)}/rotate`,
     { method: 'POST', body, auth, traceId },
@@ -316,9 +328,9 @@ export async function rotateAgentA2aCredential(
 }
 
 export async function revokeAgentA2aCredential(
-  credentialId,
-  { auth = null, traceId = null } = {},
-) {
+  credentialId: string,
+  { auth = null, traceId = null }: { auth?: any; traceId?: string | null } = {},
+): Promise<any> {
   return requestAgentA2aAdmin(
     `credentials/${encodeURIComponent(credentialId)}/revoke`,
     { method: 'POST', body: {}, auth, traceId },
@@ -326,9 +338,9 @@ export async function revokeAgentA2aCredential(
 }
 
 async function requestAgentConversation(
-  path,
-  { method = 'GET', body = null, auth = null, traceId = null } = {},
-) {
+  path: string,
+  { method = 'GET', body = null, auth = null, traceId = null }: { method?: string; body?: any; auth?: any; traceId?: string | null } = {},
+): Promise<any> {
   const resp = await agentFetch(
     `${config.AGENT_BASE_URL}/internal/conversations${path}`,
     {
@@ -338,8 +350,8 @@ async function requestAgentConversation(
     },
   );
   if (!resp.ok) {
-    const payload = await resp.json().catch(() => ({}));
-    const err = new Error(
+    const payload: any = await resp.json().catch(() => ({}));
+    const err: any = new Error(
       typeof payload.error === 'string'
         ? payload.error
         : `Agent conversation request failed (${resp.status})`,
@@ -353,15 +365,15 @@ async function requestAgentConversation(
 }
 
 export async function listAgentConversations(
-  { auth = null, traceId = null } = {},
-) {
+  { auth = null, traceId = null }: { auth?: any; traceId?: string | null } = {},
+): Promise<any> {
   return requestAgentConversation('', { auth, traceId });
 }
 
 export async function getAgentConversation(
-  conversationId,
-  { auth = null, traceId = null } = {},
-) {
+  conversationId: string,
+  { auth = null, traceId = null }: { auth?: any; traceId?: string | null } = {},
+): Promise<any> {
   return requestAgentConversation(`/${encodeURIComponent(conversationId)}`, {
     auth,
     traceId,
@@ -369,9 +381,9 @@ export async function getAgentConversation(
 }
 
 export async function createAgentConversation(
-  body,
-  { auth = null, traceId = null } = {},
-) {
+  body: any,
+  { auth = null, traceId = null }: { auth?: any; traceId?: string | null } = {},
+): Promise<any> {
   return requestAgentConversation('', {
     method: 'POST',
     body,
@@ -381,9 +393,9 @@ export async function createAgentConversation(
 }
 
 export async function deleteAgentConversation(
-  conversationId,
-  { auth = null, traceId = null } = {},
-) {
+  conversationId: string,
+  { auth = null, traceId = null }: { auth?: any; traceId?: string | null } = {},
+): Promise<void> {
   await requestAgentConversation(`/${encodeURIComponent(conversationId)}`, {
     method: 'DELETE',
     auth,
@@ -392,9 +404,9 @@ export async function deleteAgentConversation(
 }
 
 export async function ensureAgentSession(
-  conversationId = null,
-  { auth = null, traceId = null } = {},
-) {
+  conversationId: string | null = null,
+  { auth = null, traceId = null }: { auth?: any; traceId?: string | null } = {},
+): Promise<any> {
   const body = conversationId ? { conversation_id: conversationId } : {};
   const resp = await agentFetch(`${config.AGENT_BASE_URL}/internal/sessions/ensure`, {
     method: 'POST',
@@ -402,8 +414,8 @@ export async function ensureAgentSession(
     body: JSON.stringify(body),
   });
   if (!resp.ok) {
-    const payload = await resp.json().catch(() => ({}));
-    const err = new Error(
+    const payload: any = await resp.json().catch(() => ({}));
+    const err: any = new Error(
       typeof payload.error === 'string'
         ? payload.error
         : `Agent session ensure failed (${resp.status})`,
@@ -420,16 +432,16 @@ export async function ensureAgentSession(
  * The response contains internal owner ULIDs and must remain server-side.
  */
 export async function resolveAgentSandboxSession(
-  sandboxSessionId,
-  { auth = null, traceId = null } = {},
-) {
+  sandboxSessionId: string,
+  { auth = null, traceId = null }: { auth?: any; traceId?: string | null } = {},
+): Promise<any> {
   const resp = await agentFetch(
     `${config.AGENT_BASE_URL}/internal/sessions/${encodeURIComponent(sandboxSessionId)}`,
     { headers: requestHeaders({ auth, traceId }) },
   );
   if (!resp.ok) {
-    const payload = await resp.json().catch(() => ({}));
-    const err = new Error(
+    const payload: any = await resp.json().catch(() => ({}));
+    const err: any = new Error(
       typeof payload.error === 'string'
         ? payload.error
         : `Agent session access failed (${resp.status})`,
@@ -447,9 +459,9 @@ export async function resolveAgentSandboxSession(
  * @param {{ auth?: object|null, traceId?: string|null }} [opts]
  */
 export async function listAgentRuns(
-  query = {},
-  { auth = null, traceId = null } = {},
-) {
+  query: Record<string, any> = {},
+  { auth = null, traceId = null }: { auth?: any; traceId?: string | null } = {},
+): Promise<any> {
   const url = new URL(`${config.AGENT_BASE_URL}/internal/agent-runs`);
   if (query.conversationId) {
     url.searchParams.set('conversation_id', query.conversationId);
@@ -461,7 +473,7 @@ export async function listAgentRuns(
   });
   if (!resp.ok) {
     const text = await resp.text().catch(() => resp.statusText);
-    const err = new Error(`Agent list runs failed (${resp.status}): ${text}`);
+    const err = new Error(`Agent list runs failed (${resp.status}): ${text}`) as Error & { status?: number; code?: string };
     err.status = resp.status;
     throw err;
   }
@@ -469,9 +481,9 @@ export async function listAgentRuns(
 }
 
 async function requestAgentCron(
-  path,
-  { method = 'GET', body = null, auth = null, traceId = null } = {},
-) {
+  path: string,
+  { method = 'GET', body = null, auth = null, traceId = null }: { method?: string; body?: any; auth?: any; traceId?: string | null } = {},
+): Promise<any> {
   const resp = await agentFetch(
     `${config.AGENT_BASE_URL}/internal/cron-jobs${path}`,
     {
@@ -481,8 +493,8 @@ async function requestAgentCron(
     },
   );
   if (!resp.ok) {
-    const payload = await resp.json().catch(() => ({}));
-    const error = new Error(
+    const payload: any = await resp.json().catch(() => ({}));
+    const error: any = new Error(
       typeof payload.error === 'string'
         ? payload.error
         : `Agent cron request failed (${resp.status})`,
@@ -495,45 +507,46 @@ async function requestAgentCron(
   return resp.json();
 }
 
+
 export async function listAgentCronJobs(
-  { limit } = {},
-  { auth = null, traceId = null } = {},
-) {
+  { limit }: { limit?: number | string } = {},
+  { auth = null, traceId = null }: { auth?: any; traceId?: string | null } = {},
+): Promise<any> {
   const query = limit ? `?limit=${encodeURIComponent(String(limit))}` : '';
   return requestAgentCron(query, { auth, traceId });
 }
 
-export async function createAgentCronJob(body, { auth = null, traceId = null } = {}) {
+export async function createAgentCronJob(body: any, { auth = null, traceId = null }: { auth?: any; traceId?: string | null } = {}): Promise<any> {
   return requestAgentCron('', { method: 'POST', body, auth, traceId });
 }
 
-export async function getAgentCronJob(cronJobId, { auth = null, traceId = null } = {}) {
+export async function getAgentCronJob(cronJobId: string, { auth = null, traceId = null }: { auth?: any; traceId?: string | null } = {}): Promise<any> {
   return requestAgentCron(`/${encodeURIComponent(cronJobId)}`, { auth, traceId });
 }
 
-export async function updateAgentCronJob(cronJobId, body, { auth = null, traceId = null } = {}) {
+export async function updateAgentCronJob(cronJobId: string, body: any, { auth = null, traceId = null }: { auth?: any; traceId?: string | null } = {}): Promise<any> {
   return requestAgentCron(`/${encodeURIComponent(cronJobId)}`, {
     method: 'PATCH', body, auth, traceId,
   });
 }
 
-export async function deleteAgentCronJob(cronJobId, { auth = null, traceId = null } = {}) {
+export async function deleteAgentCronJob(cronJobId: string, { auth = null, traceId = null }: { auth?: any; traceId?: string | null } = {}): Promise<void> {
   await requestAgentCron(`/${encodeURIComponent(cronJobId)}`, {
     method: 'DELETE', auth, traceId,
   });
 }
 
-export async function runAgentCronJob(cronJobId, { auth = null, traceId = null } = {}) {
+export async function runAgentCronJob(cronJobId: string, { auth = null, traceId = null }: { auth?: any; traceId?: string | null } = {}): Promise<any> {
   return requestAgentCron(`/${encodeURIComponent(cronJobId)}/run`, {
     method: 'POST', body: {}, auth, traceId,
   });
 }
 
 export async function listAgentCronJobRuns(
-  cronJobId,
-  { limit } = {},
-  { auth = null, traceId = null } = {},
-) {
+  cronJobId: string,
+  { limit }: { limit?: number | string } = {},
+  { auth = null, traceId = null }: { auth?: any; traceId?: string | null } = {},
+): Promise<any> {
   const query = limit ? `?limit=${encodeURIComponent(String(limit))}` : '';
   return requestAgentCron(`/${encodeURIComponent(cronJobId)}/runs${query}`, {
     auth, traceId,
@@ -545,9 +558,9 @@ export async function listAgentCronJobRuns(
  * @param {{ auth?: object|null, traceId?: string|null, idempotencyKey?: string|null }} [opts]
  */
 export async function cancelAgentRun(
-  runId,
-  { auth = null, traceId = null, idempotencyKey = null } = {},
-) {
+  runId: string,
+  { auth = null, traceId = null, idempotencyKey = null }: { auth?: any; traceId?: string | null; idempotencyKey?: string | null } = {},
+): Promise<any> {
   const resp = await agentFetch(
     `${config.AGENT_BASE_URL}/internal/agent-runs/${encodeURIComponent(runId)}/cancel`,
     {
@@ -557,7 +570,7 @@ export async function cancelAgentRun(
   );
   if (!resp.ok) {
     const text = await resp.text().catch(() => resp.statusText);
-    const err = new Error(`Agent cancel failed (${resp.status}): ${text}`);
+    const err = new Error(`Agent cancel failed (${resp.status}): ${text}`) as Error & { status?: number; code?: string };
     err.status = resp.status;
     throw err;
   }
@@ -570,10 +583,10 @@ export async function cancelAgentRun(
  * @param {{ text: string, conversation_id?: string|null }} body
  */
 export async function steerAgentRun(
-  runId,
-  body,
-  { auth = null, traceId = null, idempotencyKey = null } = {},
-) {
+  runId: string,
+  body: any,
+  { auth = null, traceId = null, idempotencyKey = null }: { auth?: any; traceId?: string | null; idempotencyKey?: string | null } = {},
+): Promise<any> {
   const resp = await agentFetch(
     `${config.AGENT_BASE_URL}/internal/agent-runs/${encodeURIComponent(runId)}/steer`,
     {
@@ -584,7 +597,7 @@ export async function steerAgentRun(
   );
   if (!resp.ok) {
     const text = await resp.text().catch(() => resp.statusText);
-    const err = new Error(`Agent steer failed (${resp.status}): ${text}`);
+    const err = new Error(`Agent steer failed (${resp.status}): ${text}`) as Error & { status?: number; code?: string };
     err.status = resp.status;
     throw err;
   }
@@ -597,10 +610,10 @@ export async function steerAgentRun(
  * @param {{ text: string, agent_id?: string|null }} body
  */
 export async function createConversationFollowUp(
-  conversationId,
-  body,
-  { auth = null, traceId = null, idempotencyKey = null } = {},
-) {
+  conversationId: string,
+  body: any,
+  { auth = null, traceId = null, idempotencyKey = null }: { auth?: any; traceId?: string | null; idempotencyKey?: string | null } = {},
+): Promise<any> {
   const resp = await agentFetch(
     `${config.AGENT_BASE_URL}/internal/conversations/${encodeURIComponent(conversationId)}/follow-ups`,
     {
@@ -611,12 +624,13 @@ export async function createConversationFollowUp(
   );
   if (!resp.ok) {
     const text = await resp.text().catch(() => resp.statusText);
-    const err = new Error(
+    const err: any = new Error(
       `Agent conversation follow-up failed (${resp.status}): ${text}`,
     );
     err.status = resp.status;
     throw err;
   }
+
   return resp.json();
 }
 
@@ -626,10 +640,10 @@ export async function createConversationFollowUp(
  * @param {object} body
  */
 export async function resumeAgentRunApproval(
-  runId,
-  body = {},
-  { auth = null, traceId = null } = {},
-) {
+  runId: string,
+  body: any = {},
+  { auth = null, traceId = null }: { auth?: any; traceId?: string | null } = {},
+): Promise<any> {
   const headers = requestHeaders({ auth, traceId });
   const resp = await agentFetch(
     `${config.AGENT_BASE_URL}/internal/agent-runs/${encodeURIComponent(runId)}/resume-approval`,
@@ -641,7 +655,7 @@ export async function resumeAgentRunApproval(
   );
   if (!resp.ok) {
     const text = await resp.text().catch(() => resp.statusText);
-    const err = new Error(`Agent resume-approval failed (${resp.status}): ${text}`);
+    const err = new Error(`Agent resume-approval failed (${resp.status}): ${text}`) as Error & { status?: number; code?: string };
     err.status = resp.status;
     throw err;
   }
@@ -649,11 +663,11 @@ export async function resumeAgentRunApproval(
 }
 
 export async function respondAgentInteraction(
-  runId,
-  interactionId,
-  body,
-  { auth = null, traceId = null } = {},
-) {
+  runId: string,
+  interactionId: string,
+  body: any,
+  { auth = null, traceId = null }: { auth?: any; traceId?: string | null } = {},
+): Promise<any> {
   const headers = requestHeaders({ auth, traceId });
   const resp = await agentFetch(
     `${config.AGENT_BASE_URL}/internal/agent-runs/${encodeURIComponent(runId)}` +
@@ -666,7 +680,7 @@ export async function respondAgentInteraction(
   );
   if (!resp.ok) {
     const text = await resp.text().catch(() => resp.statusText);
-    const err = new Error(`Agent interaction response failed (${resp.status}): ${text}`);
+    const err = new Error(`Agent interaction response failed (${resp.status}): ${text}`) as Error & { status?: number; code?: string };
     err.status = resp.status;
     throw err;
   }
@@ -679,10 +693,10 @@ export async function respondAgentInteraction(
  * @param {{ decision: string, run_id?: string, reason?: string }} body
  */
 export async function decideAgentApproval(
-  approvalId,
-  body,
-  { auth = null, traceId = null } = {},
-) {
+  approvalId: string,
+  body: any,
+  { auth = null, traceId = null }: { auth?: any; traceId?: string | null } = {},
+): Promise<any> {
   const headers = requestHeaders({ auth, traceId });
   const resp = await agentFetch(
     `${config.AGENT_BASE_URL}/internal/approvals/${encodeURIComponent(approvalId)}/decide`,
@@ -694,7 +708,7 @@ export async function decideAgentApproval(
   );
   if (!resp.ok) {
     const text = await resp.text().catch(() => resp.statusText);
-    const err = new Error(`Agent approval decide failed (${resp.status}): ${text}`);
+    const err = new Error(`Agent approval decide failed (${resp.status}): ${text}`) as Error & { status?: number; code?: string };
     err.status = resp.status;
     throw err;
   }
@@ -702,16 +716,16 @@ export async function decideAgentApproval(
 }
 
 async function requestAgentApproval(
-  path,
-  { auth = null, traceId = null } = {},
-) {
+  path: string,
+  { auth = null, traceId = null }: { auth?: any; traceId?: string | null } = {},
+): Promise<any> {
   const resp = await agentFetch(
     `${config.AGENT_BASE_URL}/internal/approvals${path}`,
     { headers: requestHeaders({ auth, traceId }) },
   );
   if (!resp.ok) {
-    const payload = await resp.json().catch(() => ({}));
-    const err = new Error(
+    const payload: any = await resp.json().catch(() => ({}));
+    const err: any = new Error(
       typeof payload.error === 'string'
         ? payload.error
         : `Agent approval request failed (${resp.status})`,
@@ -725,9 +739,9 @@ async function requestAgentApproval(
 
 /** List owner-scoped durable approvals from Agent MySQL. */
 export async function listAgentApprovals(
-  { status = null, limit = null } = {},
-  { auth = null, traceId = null } = {},
-) {
+  { status = null, limit = null }: { status?: string | null; limit?: number | string | null } = {},
+  { auth = null, traceId = null }: { auth?: any; traceId?: string | null } = {},
+): Promise<any> {
   const query = new URLSearchParams();
   if (status) query.set('status', String(status));
   if (limit != null) query.set('limit', String(limit));
@@ -737,9 +751,9 @@ export async function listAgentApprovals(
 
 /** Load one owner-scoped durable approval from Agent MySQL. */
 export async function getAgentApproval(
-  approvalId,
-  { auth = null, traceId = null } = {},
-) {
+  approvalId: string,
+  { auth = null, traceId = null }: { auth?: any; traceId?: string | null } = {},
+): Promise<any> {
   return requestAgentApproval(`/${encodeURIComponent(approvalId)}`, {
     auth,
     traceId,
@@ -749,14 +763,14 @@ export async function getAgentApproval(
 /**
  * @param {string} runId
  */
-export async function getAgentRun(runId, { auth = null, traceId = null } = {}) {
+export async function getAgentRun(runId: string, { auth = null, traceId = null }: { auth?: any; traceId?: string | null } = {}): Promise<any> {
   const resp = await agentFetch(
     `${config.AGENT_BASE_URL}/internal/agent-runs/${encodeURIComponent(runId)}`,
     { headers: requestHeaders({ auth, traceId }) },
   );
   if (!resp.ok) {
     const text = await resp.text().catch(() => resp.statusText);
-    const err = new Error(`Agent get run failed (${resp.status}): ${text}`);
+    const err = new Error(`Agent get run failed (${resp.status}): ${text}`) as Error & { status?: number; code?: string };
     err.status = resp.status;
     throw err;
   }
@@ -765,9 +779,9 @@ export async function getAgentRun(runId, { auth = null, traceId = null } = {}) {
 
 /** Load the owner-scoped durable trace projection for one Run. */
 export async function getAgentRunTrace(
-  runId,
-  { auth = null, traceId = null, limit = null, cursor = null } = {},
-) {
+  runId: string,
+  { auth = null, traceId = null, limit = null, cursor = null }: { auth?: any; traceId?: string | null; limit?: number | string | null; cursor?: string | null } = {},
+): Promise<any> {
   const url = new URL(
     `${config.AGENT_BASE_URL}/internal/agent-runs/${encodeURIComponent(runId)}/trace`,
   );
@@ -779,8 +793,8 @@ export async function getAgentRunTrace(
     headers: requestHeaders({ auth, traceId }),
   });
   if (!resp.ok) {
-    const payload = await resp.json().catch(() => ({}));
-    const err = new Error(
+    const payload: any = await resp.json().catch(() => ({}));
+    const err: any = new Error(
       typeof payload.error === 'string'
         ? payload.error
         : `Agent trace request failed (${resp.status})`,
@@ -798,16 +812,16 @@ export async function getAgentRunTrace(
  * @param {{ auth?: object|null, traceId?: string|null }} [opts]
  */
 export async function listAgentToolExecutions(
-  runId,
-  { auth = null, traceId = null } = {},
-) {
+  runId: string,
+  { auth = null, traceId = null }: { auth?: any; traceId?: string | null } = {},
+): Promise<any> {
   const resp = await agentFetch(
     `${config.AGENT_BASE_URL}/internal/agent-runs/${encodeURIComponent(runId)}/tools`,
     { headers: requestHeaders({ auth, traceId }) },
   );
   if (!resp.ok) {
     const text = await resp.text().catch(() => resp.statusText);
-    const err = new Error(
+    const err: any = new Error(
       `Agent list tool executions failed (${resp.status}): ${text}`,
     );
     err.status = resp.status;
@@ -825,10 +839,10 @@ export async function listAgentToolExecutions(
  * @param {{ auth?: object|null, traceId?: string|null }} [opts]
  */
 export async function listAgentEvents(
-  runId,
-  query = {},
-  { auth = null, traceId = null } = {},
-) {
+  runId: string,
+  query: { afterSequence?: number; limit?: number } = {},
+  { auth = null, traceId = null }: { auth?: any; traceId?: string | null } = {},
+): Promise<any> {
   const url = new URL(
     `${config.AGENT_BASE_URL}/internal/agent-runs/${encodeURIComponent(runId)}/events`,
   );
@@ -848,11 +862,11 @@ export async function listAgentEvents(
   const resp = await agentFetch(url, { headers: requestHeaders({ auth, traceId }) });
   if (!resp.ok) {
     const text = await resp.text().catch(() => resp.statusText);
-    const err = new Error(`Agent list events failed (${resp.status}): ${text}`);
+    const err = new Error(`Agent list events failed (${resp.status}): ${text}`) as Error & { status?: number; code?: string };
     err.status = resp.status;
     throw err;
   }
-  const page = await resp.json();
+  const page: any = await resp.json();
   // Normalize to array for timeline consumers (page.events or raw array).
   if (Array.isArray(page)) return page;
   if (Array.isArray(page?.events)) return page.events;
@@ -874,10 +888,10 @@ export async function listAgentEvents(
  * @returns {Promise<Response>}
  */
 export async function openAgentRunEvents(
-  runId,
-  after = 0,
-  { signal, auth = null, traceId = null, lastEventId = null } = {},
-) {
+  runId: string,
+  after: number = 0,
+  { signal, auth = null, traceId = null, lastEventId = null }: { signal?: AbortSignal; auth?: any; traceId?: string | null; lastEventId?: string | null } = {},
+): Promise<Response> {
   const qs = new URLSearchParams();
   const afterSeq = Math.max(0, Number(after) || 0);
   if (afterSeq > 0) {
@@ -888,7 +902,7 @@ export async function openAgentRunEvents(
   const url =
     `${config.AGENT_BASE_URL}/internal/agent-runs/${encodeURIComponent(runId)}/events` +
     (q ? `?${q}` : '');
-  const extra = { Accept: 'text/event-stream' };
+  const extra: Record<string, string> = { Accept: 'text/event-stream' };
   if (lastEventId && String(lastEventId).trim()) {
     extra['Last-Event-ID'] = String(lastEventId).trim();
   }
@@ -898,9 +912,10 @@ export async function openAgentRunEvents(
     extra,
   });
   const resp = await fetch(url, { headers, signal });
+
   if (!resp.ok || !resp.body) {
     const text = await resp.text().catch(() => resp.statusText);
-    const err = new Error(`Agent events failed (${resp.status}): ${text}`);
+    const err = new Error(`Agent events failed (${resp.status}): ${text}`) as Error & { status?: number; code?: string };
     err.status = resp.status;
     throw err;
   }
@@ -911,7 +926,7 @@ export async function openAgentRunEvents(
  * Agent service liveness probe.
  * @returns {Promise<object|null>}
  */
-export async function checkAgentHealth() {
+export async function checkAgentHealth(): Promise<any> {
   try {
     const resp = await fetch(`${config.AGENT_BASE_URL}/health`, {
       signal: AbortSignal.timeout(3000),

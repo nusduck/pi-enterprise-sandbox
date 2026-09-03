@@ -85,8 +85,10 @@ TypeScript 侧还要过类型检查，**它不在 `npm test` 里**：
 ```bash
 npx tsc --noEmit -p exec/tsconfig.json
 npx tsc --noEmit -p contract/tsconfig.json
-npm --prefix agent run typecheck   # 主程序（宽松）+ src/runtime（strict）两道
+npm --prefix api-server run typecheck  # BFF
+npm --prefix agent run typecheck       # 主程序（宽松）+ src/runtime（strict）两道
 ```
+
 
 组合层的用例已并入 agent 的主测试套件（`npm --prefix agent test`，2026-09-02 为 1206 条）。
 其中 `tests/runtime/boot.test.ts` 会**起真实插件树**（子进程），改动

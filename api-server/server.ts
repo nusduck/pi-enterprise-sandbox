@@ -91,17 +91,19 @@ import {
   withActiveContext,
 } from './src/application/telemetry.js';
 
+import type { ReqWithTrace } from './src/application/run-access-service.js';
+
 // Production fail-fast before bind.
 try {
   validateProductionConfig(process.env);
-} catch (err) {
+} catch (err: any) {
   console.error(`[server] ${err.message}`);
   process.exit(1);
 }
 
 // ── Startup health check ────────────────────────
 
-async function startupCheck() {
+async function startupCheck(): Promise<void> {
   const MAX_RETRIES = 10;
   for (let i = 0; i < MAX_RETRIES; i++) {
     const health = await checkHealth();
@@ -121,7 +123,7 @@ async function startupCheck() {
 
 // ── Router ──────────────────────────────────────
 
-function setCommonHeaders(req, res) {
+function setCommonHeaders(req: http.IncomingMessage, res: http.ServerResponse): void {
   const origin = String(req.headers.origin || '');
   const allowed = config.CORS_ALLOWED_ORIGINS;
   if (allowed.includes(origin)) {
@@ -142,7 +144,7 @@ function setCommonHeaders(req, res) {
   );
 }
 
-function jsonError(res, status, message) {
+function jsonError(res: http.ServerResponse, status: number, message: string): void {
   res.writeHead(status, { 'Content-Type': 'application/json' });
   res.end(JSON.stringify({ error: message }));
 }
@@ -150,12 +152,8 @@ function jsonError(res, status, message) {
 /**
  * When AUTH_ENABLED, require Bearer on protected user-facing routes.
  * Does not re-verify JWT (sandbox validates); only checks presence.
- * @param {import('node:http').IncomingMessage} req
- * @param {import('node:http').ServerResponse} res
- * @param {string} path
- * @returns {boolean} true if request may proceed
  */
-function enforceBffAuth(req, res, path) {
+function enforceBffAuth(req: http.IncomingMessage, res: http.ServerResponse, path: string): boolean {
   if (!config.AUTH_ENABLED) return true;
   if (!isProtectedApiPath(path)) return true;
   const auth = authFromRequest(req).authorization || '';
@@ -168,7 +166,8 @@ function enforceBffAuth(req, res, path) {
 
 await startTelemetry(process.env);
 
-const server = http.createServer(async (req, res) => {
+const server = http.createServer(async (rawReq, res) => {
+  const req = rawReq as http.IncomingMessage & ReqWithTrace;
   const traceContext = resolveRequestTraceContext(req.headers);
   const requestSpan = startHttpServerSpan(req, traceContext);
   const spanContext = requestSpan.span.spanContext();
@@ -213,12 +212,13 @@ const server = http.createServer(async (req, res) => {
   }
 
   try {
-    const parsedUrl = new URL(req.url, `http://${req.headers.host}`);
+    const parsedUrl = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
     const path = parsedUrl.pathname;
 
     if (!enforceBffAuth(req, res, path)) {
       return;
     }
+
 
     // ── Auth proxy (public) ──
     if (req.method === 'POST' && path === '/api/auth/register') {
@@ -257,7 +257,7 @@ const server = http.createServer(async (req, res) => {
     {
       const capability = path.match(/^\/api\/capabilities\/(skills|mcp|tools|models)$/);
       if (req.method === 'GET' && capability) {
-        await handleCapabilityRegistry(capability[1], parsedUrl, res, req);
+        await handleCapabilityRegistry(capability[1]!, parsedUrl, res, req);
         return;
       }
     }
@@ -267,8 +267,8 @@ const server = http.createServer(async (req, res) => {
       );
       if (req.method === 'POST' && skillMutation) {
         await handleSkillMutation(
-          skillMutation[1],
-          skillMutation[2],
+          skillMutation[1]!,
+          skillMutation[2]!,
           res,
           req,
         );
@@ -296,7 +296,7 @@ const server = http.createServer(async (req, res) => {
         /^\/api\/a2a\/credentials\/([^/]+)\/(rotate|revoke)$/,
       );
       if (req.method === 'POST' && credentialAction) {
-        const id = decodeURIComponent(credentialAction[1]);
+        const id = decodeURIComponent(credentialAction[1]!);
         if (credentialAction[2] === 'rotate') {
           const parsed = await readJsonBody(req, {
             maxBytes: config.JSON_BODY_LIMIT_BYTES,
@@ -323,18 +323,18 @@ const server = http.createServer(async (req, res) => {
       const cronJobRuns = path.match(/^\/api\/cron-jobs\/([^/]+)\/runs$/);
       if (req.method === 'GET' && cronJobRuns) {
         await handleListCronJobRuns(
-          decodeURIComponent(cronJobRuns[1]), parsedUrl, res, req,
+          decodeURIComponent(cronJobRuns[1]!), parsedUrl, res, req,
         );
         return;
       }
       const cronJobRun = path.match(/^\/api\/cron-jobs\/([^/]+)\/run$/);
       if (req.method === 'POST' && cronJobRun) {
-        await handleRunCronJob(decodeURIComponent(cronJobRun[1]), res, req);
+        await handleRunCronJob(decodeURIComponent(cronJobRun[1]!), res, req);
         return;
       }
       const cronJob = path.match(/^\/api\/cron-jobs\/([^/]+)$/);
       if (cronJob) {
-        const id = decodeURIComponent(cronJob[1]);
+        const id = decodeURIComponent(cronJob[1]!);
         if (req.method === 'GET') {
           await handleGetCronJob(id, res, req);
           return;
@@ -364,7 +364,7 @@ const server = http.createServer(async (req, res) => {
     {
       const convEventsMatch = path.match(/^\/api\/conversations\/([^/]+)\/events$/);
       if (convEventsMatch && req.method === 'GET') {
-        const id = decodeURIComponent(convEventsMatch[1]);
+        const id = decodeURIComponent(convEventsMatch[1]!);
         const query = Object.fromEntries(parsedUrl.searchParams.entries());
         await handleGetConversationEvents(id, res, req, query);
         return;
@@ -373,7 +373,7 @@ const server = http.createServer(async (req, res) => {
         /^\/api\/conversations\/([^/]+)\/artifact-imports$/,
       );
       if (artifactImportsMatch && req.method === 'POST') {
-        const id = decodeURIComponent(artifactImportsMatch[1]);
+        const id = decodeURIComponent(artifactImportsMatch[1]!);
         const parsed = await readJsonBody(req, {
           maxBytes: config.JSON_BODY_LIMIT_BYTES,
         });
@@ -382,7 +382,7 @@ const server = http.createServer(async (req, res) => {
       }
       const convMatch = path.match(/^\/api\/conversations\/([^/]+)$/);
       if (convMatch) {
-        const id = decodeURIComponent(convMatch[1]);
+        const id = decodeURIComponent(convMatch[1]!);
         if (req.method === 'GET') {
           await handleGetConversation(id, res, req);
           return;
@@ -408,7 +408,7 @@ const server = http.createServer(async (req, res) => {
     {
       const dsMatch = path.match(/^\/api\/conversations\/([^/]+)\/datasets$/);
       if (dsMatch) {
-        const conversationId = decodeURIComponent(dsMatch[1]);
+        const conversationId = decodeURIComponent(dsMatch[1]!);
         if (req.method === 'GET') {
           await handleListDatasets(parsedUrl, res, req, conversationId);
           return;
@@ -428,7 +428,7 @@ const server = http.createServer(async (req, res) => {
     {
       const apprMatch = path.match(/^\/api\/approvals\/([^/]+)\/decide$/);
       if (req.method === 'POST' && apprMatch) {
-        const approvalId = decodeURIComponent(apprMatch[1]);
+        const approvalId = decodeURIComponent(apprMatch[1]!);
         const parsed = await readJsonBody(req, { maxBytes: config.JSON_BODY_LIMIT_BYTES });
         await handleDecideApproval(approvalId, parsed, res, req);
         return;
@@ -436,7 +436,7 @@ const server = http.createServer(async (req, res) => {
       const apprDetailMatch = path.match(/^\/api\/approvals\/([^/]+)$/);
       if (req.method === 'GET' && apprDetailMatch) {
         await handleGetApproval(
-          decodeURIComponent(apprDetailMatch[1]),
+          decodeURIComponent(apprDetailMatch[1]!),
           res,
           req,
         );
@@ -449,7 +449,7 @@ const server = http.createServer(async (req, res) => {
       // plan §18.3 — POST /api/conversations/{id}/runs
       const convRuns = path.match(/^\/api\/conversations\/([^/]+)\/runs$/);
       if (req.method === 'POST' && convRuns) {
-        const conversationId = decodeURIComponent(convRuns[1]);
+        const conversationId = decodeURIComponent(convRuns[1]!);
         const parsed = await readJsonBody(req, { maxBytes: config.JSON_BODY_LIMIT_BYTES });
         await handleCreateRun(parsed, res, req, { conversationId });
         return;
@@ -458,7 +458,7 @@ const server = http.createServer(async (req, res) => {
         /^\/api\/conversations\/([^/]+)\/follow-ups$/,
       );
       if (req.method === 'POST' && convFollowUps) {
-        const conversationId = decodeURIComponent(convFollowUps[1]);
+        const conversationId = decodeURIComponent(convFollowUps[1]!);
         const parsed = await readJsonBody(req, {
           maxBytes: config.JSON_BODY_LIMIT_BYTES,
         });
@@ -481,29 +481,29 @@ const server = http.createServer(async (req, res) => {
       }
       const runEvents = path.match(/^\/api\/runs\/([^/]+)\/events$/);
       if (req.method === 'GET' && runEvents) {
-        await handleRunEvents(decodeURIComponent(runEvents[1]), parsedUrl, res, req);
+        await handleRunEvents(decodeURIComponent(runEvents[1]!), parsedUrl, res, req);
         return;
       }
       const runTrace = path.match(/^\/api\/runs\/([^/]+)\/trace$/);
       if (req.method === 'GET' && runTrace) {
-        await handleGetRunTrace(decodeURIComponent(runTrace[1]), res, req);
+        await handleGetRunTrace(decodeURIComponent(runTrace[1]!), res, req);
         return;
       }
       const runSteer = path.match(/^\/api\/runs\/([^/]+)\/steer$/);
       if (req.method === 'POST' && runSteer) {
-        const runId = decodeURIComponent(runSteer[1]);
+        const runId = decodeURIComponent(runSteer[1]!);
         const parsed = await readJsonBody(req, { maxBytes: config.JSON_BODY_LIMIT_BYTES });
         await handleSteerRun(runId, parsed, res, req);
         return;
       }
       const runCancel = path.match(/^\/api\/runs\/([^/]+)\/cancel$/);
       if (req.method === 'POST' && runCancel) {
-        await handleCancelRun(decodeURIComponent(runCancel[1]), res, req);
+        await handleCancelRun(decodeURIComponent(runCancel[1]!), res, req);
         return;
       }
       const runResume = path.match(/^\/api\/runs\/([^/]+)\/resume-approval$/);
       if (req.method === 'POST' && runResume) {
-        const runId = decodeURIComponent(runResume[1]);
+        const runId = decodeURIComponent(runResume[1]!);
         const parsed = await readJsonBody(req, { maxBytes: config.JSON_BODY_LIMIT_BYTES });
         await handleResumeApproval(runId, parsed, res, req);
         return;
@@ -514,8 +514,8 @@ const server = http.createServer(async (req, res) => {
       if (req.method === 'POST' && runInteraction) {
         const parsed = await readJsonBody(req, { maxBytes: config.JSON_BODY_LIMIT_BYTES });
         await handleInteractionResponse(
-          decodeURIComponent(runInteraction[1]),
-          decodeURIComponent(runInteraction[2]),
+          decodeURIComponent(runInteraction[1]!),
+          decodeURIComponent(runInteraction[2]!),
           parsed,
           res,
           req,
@@ -524,12 +524,12 @@ const server = http.createServer(async (req, res) => {
       }
       const runGet = path.match(/^\/api\/runs\/([^/]+)$/);
       if (req.method === 'GET' && runGet) {
-        await handleGetRun(decodeURIComponent(runGet[1]), res, req);
+        await handleGetRun(decodeURIComponent(runGet[1]!), res, req);
         return;
       }
       const runTools = path.match(/^\/api\/runs\/([^/]+)\/tools$/);
       if (req.method === 'GET' && runTools) {
-        await handleListRunTools(decodeURIComponent(runTools[1]), res, req);
+        await handleListRunTools(decodeURIComponent(runTools[1]!), res, req);
         return;
       }
     }
@@ -544,7 +544,7 @@ const server = http.createServer(async (req, res) => {
         /^\/api\/processes\/([^/]+)(?:\/(logs|read|stdin|signal|cancel|kill))?$/,
       );
       if (processMatch) {
-        const processId = decodeURIComponent(processMatch[1]);
+        const processId = decodeURIComponent(processMatch[1]!);
         const action = processMatch[2] || 'status';
         if (req.method === 'GET' && action === 'status') {
           await handleGetProcess(processId, parsedUrl, res, req);
@@ -558,6 +558,7 @@ const server = http.createServer(async (req, res) => {
           await handleReadProcess(processId, parsedUrl, res, req);
           return;
         }
+
         if (
           req.method === 'POST' &&
           (action === 'stdin' || action === 'signal' || action === 'cancel' || action === 'kill')
@@ -621,7 +622,7 @@ server.listen(config.PORT, async () => {
 });
 
 let shuttingDown = false;
-async function shutdown(signal) {
+async function shutdown(signal: string): Promise<void> {
   if (shuttingDown) return;
   shuttingDown = true;
   console.log(`[server] ${signal} — shutting down`);
@@ -638,3 +639,4 @@ async function shutdown(signal) {
 }
 process.once('SIGTERM', () => void shutdown('SIGTERM'));
 process.once('SIGINT', () => void shutdown('SIGINT'));
+

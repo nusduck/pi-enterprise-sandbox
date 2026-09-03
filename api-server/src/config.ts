@@ -17,12 +17,19 @@ const WEAK_SECRET_MARKERS = [
   'xxx',
 ];
 
+export interface DevelopmentActingIdentity {
+  actingUserId: string;
+  actingOrganizationId: string;
+  actingRole: 'admin' | 'user';
+}
+
 /**
  * Whether BFF should require browser Authorization on user-facing routes.
  * Aligns with SANDBOX_AUTH_ENABLED when AUTH_ENABLED is unset.
- * @param {NodeJS.ProcessEnv} [env]
  */
-export function resolveAuthEnabled(env = process.env) {
+export function resolveAuthEnabled(
+  env: NodeJS.ProcessEnv | Record<string, string | undefined> = process.env,
+): boolean {
   if (env.AUTH_ENABLED != null && String(env.AUTH_ENABLED).trim() !== '') {
     return String(env.AUTH_ENABLED).toLowerCase() === 'true';
   }
@@ -36,9 +43,10 @@ export function resolveAuthEnabled(env = process.env) {
  * Maximum multipart request size accepted by the Dataset streaming proxy.
  * Invalid values fail closed to the documented default instead of disabling
  * the limit through NaN/negative configuration.
- * @param {NodeJS.ProcessEnv | Record<string, string|undefined>} [env]
  */
-export function resolveDatasetUploadMaxBytes(env = process.env) {
+export function resolveDatasetUploadMaxBytes(
+  env: NodeJS.ProcessEnv | Record<string, string | undefined> = process.env,
+): number {
   const raw = String(env.DATASET_UPLOAD_MAX_BYTES || '').trim();
   if (!raw) return DEFAULT_DATASET_UPLOAD_MAX_BYTES;
   const value = Number(raw);
@@ -51,15 +59,16 @@ export function resolveDatasetUploadMaxBytes(env = process.env) {
  * Stable external subjects used only by the explicit auth-disabled development
  * mode. Agent maps these subjects to internal ULIDs on first use. Production
  * rejects AUTH_ENABLED=false before the BFF starts.
- * @param {NodeJS.ProcessEnv | Record<string, string|undefined>} [env]
  */
-export function resolveDevelopmentActingIdentity(env = process.env) {
+export function resolveDevelopmentActingIdentity(
+  env: NodeJS.ProcessEnv | Record<string, string | undefined> = process.env,
+): Readonly<DevelopmentActingIdentity> {
   const requestedRole = String(env.BFF_DEV_ACTING_ROLE || 'user')
     .trim()
     .toLowerCase();
   // Development-only convenience for exercising the A2A admin surface. The
   // authenticated production path resolves role from Sandbox instead.
-  const actingRole = requestedRole === 'admin' ? 'admin' : 'user';
+  const actingRole: 'admin' | 'user' = requestedRole === 'admin' ? 'admin' : 'user';
   return Object.freeze({
     actingUserId:
       String(env.BFF_DEV_ACTING_USER_ID || '').trim() || 'local-development-user',
@@ -75,14 +84,19 @@ export const APPROVAL_MODES = Object.freeze({
   ASK: 'ask',
   AUTO_APPROVE: 'auto_approve',
   DENY: 'deny',
-});
+} as const);
 
-function nonEmptyEnv(env, key) {
+export type ApprovalMode = typeof APPROVAL_MODES[keyof typeof APPROVAL_MODES];
+
+function nonEmptyEnv(
+  env: NodeJS.ProcessEnv | Record<string, unknown>,
+  key: string,
+): string | null {
   const value = env?.[key];
   return value != null && String(value).trim() !== '' ? String(value).trim() : null;
 }
 
-function parseLegacyApprovalEnabled(value) {
+function parseLegacyApprovalEnabled(value: unknown): boolean {
   if (typeof value === 'boolean') return value;
   const raw = String(value).trim().toLowerCase();
   if (raw === 'true') return true;
@@ -94,13 +108,14 @@ function parseLegacyApprovalEnabled(value) {
  * Resolve the global approval policy. Default is ask. Legacy booleans map
  * true → ask and false → deny, so disabling the ask switch never broadens
  * permissions. auto_approve is explicit and intended only for development.
- * @param {NodeJS.ProcessEnv | Record<string, string|boolean|undefined>} [env]
  */
-export function resolveApprovalMode(env = process.env) {
+export function resolveApprovalMode(
+  env: NodeJS.ProcessEnv | Record<string, unknown> = process.env,
+): string {
   const explicit = nonEmptyEnv(env, 'APPROVAL_MODE') || nonEmptyEnv(env, 'SANDBOX_APPROVAL_MODE');
   if (explicit) {
     const mode = explicit.toLowerCase().replaceAll('-', '_');
-    if (Object.values(APPROVAL_MODES).includes(mode)) return mode;
+    if ((Object.values(APPROVAL_MODES) as readonly string[]).includes(mode)) return mode;
     throw new Error(
       `Invalid APPROVAL_MODE=${explicit}; expected ask|auto_approve|deny`,
     );
@@ -115,16 +130,15 @@ export function resolveApprovalMode(env = process.env) {
   return APPROVAL_MODES.ASK;
 }
 
-/** @param {NodeJS.ProcessEnv | Record<string, string|boolean|undefined>} [env] */
-export function resolveApprovalEnabled(env = process.env) {
+export function resolveApprovalEnabled(
+  env: NodeJS.ProcessEnv | Record<string, unknown> = process.env,
+): boolean {
   return resolveApprovalMode(env) !== APPROVAL_MODES.DENY;
 }
 
-/**
- * @param {NodeJS.ProcessEnv | Record<string, string|undefined>} [env]
- * @returns {'development' | 'production'}
- */
-export function resolveDeploymentEnv(env = process.env) {
+export function resolveDeploymentEnv(
+  env: NodeJS.ProcessEnv | Record<string, string | undefined> = process.env,
+): 'development' | 'production' {
   const raw = String(env.DEPLOYMENT_ENV || env.NODE_ENV || 'development')
     .trim()
     .toLowerCase();
@@ -132,24 +146,31 @@ export function resolveDeploymentEnv(env = process.env) {
   return 'development';
 }
 
-/**
- * @param {string | undefined | null} value
- */
-export function isWeakSecret(value) {
+export function isWeakSecret(value: string | undefined | null): boolean {
   const text = String(value || '').trim();
   if (text.length < MIN_SECRET_LEN) return true;
   const lower = text.toLowerCase();
   return WEAK_SECRET_MARKERS.some((m) => lower.includes(m));
 }
 
+export class ProductionConfigError extends Error {
+  errors: string[];
+  constructor(message: string, errors: string[]) {
+    super(message);
+    this.name = 'ProductionConfigError';
+    this.errors = errors;
+  }
+}
+
 /**
  * Production fail-fast for BFF. Call before listen.
- * @param {NodeJS.ProcessEnv | Record<string, string|undefined>} [env]
  */
-export function validateProductionConfig(env = process.env) {
+export function validateProductionConfig(
+  env: NodeJS.ProcessEnv | Record<string, string | undefined> = process.env,
+): void {
   if (resolveDeploymentEnv(env) !== 'production') return;
 
-  const errors = [];
+  const errors: string[] = [];
   const internal = String(env.AGENT_INTERNAL_TOKEN || '').trim();
   const sandboxToken = String(env.SANDBOX_API_TOKEN || '').trim();
   const authEnabled = resolveAuthEnabled(env);
@@ -179,20 +200,17 @@ export function validateProductionConfig(env = process.env) {
   }
 
   if (errors.length) {
-    const err = new Error(
+    throw new ProductionConfigError(
       `Production configuration is unsafe (${errors.length} issue(s)): ${errors.join('; ')}`,
+      errors,
     );
-    err.name = 'ProductionConfigError';
-    err.errors = errors;
-    throw err;
   }
 }
 
 /**
  * Redacted effective config for INFO logs.
- * @param {typeof config} [cfg]
  */
-export function effectiveConfig(cfg = config) {
+export function effectiveConfig(cfg: typeof config = config): Record<string, unknown> {
   return {
     PORT: cfg.PORT,
     NODE_ENV: cfg.NODE_ENV,
@@ -211,7 +229,11 @@ export function effectiveConfig(cfg = config) {
 }
 
 /** Bounded positive-integer millisecond setting with a documented default. */
-export function resolveTimeoutMs(env, key, fallback) {
+export function resolveTimeoutMs(
+  env: NodeJS.ProcessEnv | Record<string, string | undefined>,
+  key: string,
+  fallback: number,
+): number {
   const raw = String(env[key] || '').trim();
   if (!raw) return fallback;
   const value = Number(raw);
@@ -219,7 +241,7 @@ export function resolveTimeoutMs(env, key, fallback) {
 }
 
 export const config = {
-  PORT: parseInt(process.env.PORT, 10) || 4000,
+  PORT: parseInt(process.env.PORT || '4000', 10) || 4000,
   SANDBOX_BASE_URL: process.env.SANDBOX_BASE_URL || 'http://sandbox:8081',
   SANDBOX_API_TOKEN: process.env.SANDBOX_API_TOKEN || '',
   /**
@@ -233,12 +255,6 @@ export const config = {
   AGENT_INTERNAL_TOKEN: process.env.AGENT_INTERNAL_TOKEN || '',
   /**
    * Deadline for a single BFF → Agent / Sandbox request.
-   *
-   * A downstream that accepts the connection and then stops answering must
-   * not pin a browser request, its socket and the Node handles behind it for
-   * as long as it feels like: without a bound, one stuck dependency drains
-   * the BFF's sockets and takes down routes that never touched it. Long-lived
-   * SSE streams are excluded — they are bounded by the client connection.
    */
   AGENT_REQUEST_TIMEOUT_MS: resolveTimeoutMs(
     process.env,
@@ -261,15 +277,11 @@ export const config = {
   /**
    * Approval behavior for high-risk tools. Default ask. Legacy false maps to deny;
    * auto_approve requires an explicit mode and is rejected in production.
-   *
-   * The BFF neither enforces nor serves this — Agent + Sandbox own enforcement,
-   * and the UI reads the mode from the capability registry. It is kept here for
-   * the production guardrail above and the startup config echo.
    */
   APPROVAL_MODE: resolveApprovalMode(),
   APPROVAL_ENABLED: resolveApprovalEnabled(),
   JSON_BODY_LIMIT_BYTES:
-    parseInt(process.env.JSON_BODY_LIMIT_BYTES, 10) || 1024 * 1024,
+    parseInt(process.env.JSON_BODY_LIMIT_BYTES || '1048576', 10) || 1024 * 1024,
   DATASET_UPLOAD_MAX_BYTES: resolveDatasetUploadMaxBytes(),
   CORS_ALLOWED_ORIGINS: String(process.env.CORS_ALLOWED_ORIGINS || '')
     .split(',')
@@ -277,15 +289,14 @@ export const config = {
     .filter(Boolean),
 };
 
-export const AUTH_HEADER = config.SANDBOX_API_TOKEN
+export const AUTH_HEADER: Record<string, string> = config.SANDBOX_API_TOKEN
   ? { 'X-API-Key': config.SANDBOX_API_TOKEN }
   : {};
 
 /**
  * Paths that remain public when AUTH_ENABLED (health probes + auth proxy).
- * @param {string} path
  */
-export function isPublicApiPath(path) {
+export function isPublicApiPath(path: string): boolean {
   if (path === '/health/live' || path === '/health/ready') return true;
   if (path.startsWith('/api/auth/')) return true;
   return false;
@@ -293,9 +304,8 @@ export function isPublicApiPath(path) {
 
 /**
  * Whether *path* requires browser Authorization when AUTH_ENABLED.
- * @param {string} path
  */
-export function isProtectedApiPath(path) {
+export function isProtectedApiPath(path: string): boolean {
   if (!path.startsWith('/api/')) return false;
   if (isPublicApiPath(path)) return false;
   return (
@@ -313,3 +323,4 @@ export function isProtectedApiPath(path) {
     path.startsWith('/api/processes')
   );
 }
+

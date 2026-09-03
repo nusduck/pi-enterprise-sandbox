@@ -8,9 +8,24 @@
  * GET  /api/conversations/:conversationId/datasets?session_id=
  * GET  /api/datasets?session_id=
  */
+/**
+ * Dataset streaming proxy (PR-09 / plan §17).
+ *
+ * POST /api/conversations/:conversationId/datasets?session_id=
+ *   Streams multipart body to Sandbox without holding the full file in the
+ *   Node heap or writing a BFF-side temp file.
+ *
+ * GET  /api/conversations/:conversationId/datasets?session_id=
+ * GET  /api/datasets?session_id=
+ */
+import type { IncomingMessage, ServerResponse } from 'node:http';
 import { Transform } from 'node:stream';
 import { config } from '../config.js';
-import { authorizeSandboxSession } from '../application/run-access-service.js';
+import {
+  authorizeSandboxSession,
+  type AuthorizeSandboxSessionResult,
+  type ReqWithTrace,
+} from '../application/run-access-service.js';
 import {
   discardRequestBody,
   fetchSandboxBounded,
@@ -20,23 +35,23 @@ import {
   UPLOAD_RESPONSE_TIMEOUT_MS,
 } from './files.js';
 
-function writeJson(res, status, body, traceId) {
-  const headers = { 'Content-Type': 'application/json' };
+function writeJson(res: ServerResponse, status: number, body: unknown, traceId?: string | null) {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
   if (traceId) headers['X-Trace-Id'] = traceId;
   const payload =
-    traceId && body && typeof body === 'object' && body.trace_id == null
-      ? { ...body, trace_id: traceId }
+    traceId && body && typeof body === 'object' && (body as any).trace_id == null
+      ? { ...(body as any), trace_id: traceId }
       : body;
   res.writeHead(status, headers);
   res.end(JSON.stringify(payload));
 }
 
-function workspaceIdFor(sessionAccess) {
+function workspaceIdFor(sessionAccess: AuthorizeSandboxSessionResult | null | undefined): string {
   const workspaceId = String(
     sessionAccess?.access?.workspace_id || sessionAccess?.access?.workspaceId || '',
   ).trim();
   if (!workspaceId) {
-    const err = new Error('Session workspace unavailable');
+    const err = new Error('Session workspace unavailable') as Error & { status: number; code: string };
     err.status = 503;
     err.code = 'SESSION_WORKSPACE_UNAVAILABLE';
     throw err;
@@ -45,12 +60,12 @@ function workspaceIdFor(sessionAccess) {
 }
 
 /** Keep the public dataset contract keyed by sandbox_session_id. */
-function projectDatasetSession(data, sandboxSessionId, sessionAccess) {
+function projectDatasetSession(data: any, sandboxSessionId: string, sessionAccess: AuthorizeSandboxSessionResult | null | undefined): any {
   if (!data || typeof data !== 'object') return data;
   const agentSessionId = String(
     sessionAccess?.access?.agent_session_id || sessionAccess?.access?.agentSessionId || '',
   ).trim();
-  const project = (row) => {
+  const project = (row: any) => {
     if (!row || typeof row !== 'object') return row;
     return {
       ...row,
@@ -69,11 +84,12 @@ function projectDatasetSession(data, sandboxSessionId, sessionAccess) {
  * Build sandbox ownership headers for dataset formal rows.
  * Tenant principals (org/user) come only from trusted server context
  * (resolveTrustedAuth / session) — never from browser X-Org-Id / X-User-Id.
- * @param {import('node:http').IncomingMessage | null | undefined} req
- * @param {{ conversationId?: string, orgId?: string, userId?: string }} [ctx]
  */
-export function datasetOwnershipHeaders(req, ctx = {}) {
-  const h = {};
+export function datasetOwnershipHeaders(
+  req?: ReqWithTrace | IncomingMessage | null,
+  ctx: { conversationId?: string | null; orgId?: string; userId?: string } = {},
+): Record<string, string> {
+  const h: Record<string, string> = {};
   const conv =
     ctx.conversationId ||
     (req && (req.headers['x-conversation-id'] || req.headers['X-Conversation-Id'])) ||
@@ -85,17 +101,20 @@ export function datasetOwnershipHeaders(req, ctx = {}) {
   return h;
 }
 
+export interface BoundedUploadBody {
+  stream: Transform;
+  readonly bytesRead: number;
+  readonly limitError: any;
+}
+
 /**
  * Bound an inbound upload without buffering it. `IncomingMessage.pipe()` and
  * this Transform's high-water marks propagate downstream fetch backpressure
  * to the browser socket.
- *
- * @param {import('node:stream').Readable} req
- * @param {number} maxBytes
  */
-export function createBoundedDatasetUploadBody(req, maxBytes) {
+export function createBoundedDatasetUploadBody(req: IncomingMessage, maxBytes: number): BoundedUploadBody {
   let bytesRead = 0;
-  let limitError = null;
+  let limitError: any = null;
   const stream = new Transform({
     readableHighWaterMark: 64 * 1024,
     writableHighWaterMark: 64 * 1024,
@@ -128,6 +147,7 @@ export function createBoundedDatasetUploadBody(req, maxBytes) {
   };
 }
 
+
 /**
  * POST dataset upload — stream to sandbox /sessions/:id/datasets
  *
@@ -136,7 +156,12 @@ export function createBoundedDatasetUploadBody(req, maxBytes) {
  * @param {import('node:http').IncomingMessage} req
  * @param {import('node:http').ServerResponse} res
  */
-export async function handleDatasetUpload(conversationId, parsedUrl, req, res) {
+export async function handleDatasetUpload(
+  conversationId: string,
+  parsedUrl: URL,
+  req: IncomingMessage & ReqWithTrace,
+  res: ServerResponse,
+): Promise<void> {
   const sessionId = parsedUrl.searchParams.get('session_id');
   const traceId = resolveUploadTraceId(req);
 
@@ -176,7 +201,7 @@ export async function handleDatasetUpload(conversationId, parsedUrl, req, res) {
   const maxBytes = config.DATASET_UPLOAD_MAX_BYTES;
   const declaredRaw = req.headers['content-length'];
   const declared = declaredRaw == null ? null : Number(declaredRaw);
-  if (declared > maxBytes) {
+  if (declared != null && declared > maxBytes) {
     discardRequestBody(req, res);
     writeJson(
       res,
@@ -187,7 +212,7 @@ export async function handleDatasetUpload(conversationId, parsedUrl, req, res) {
     return;
   }
 
-  let sessionAccess;
+  let sessionAccess: AuthorizeSandboxSessionResult;
   try {
     // Resolve the formal owner before any byte is read or forwarded to
     // Sandbox. Agent maps the external browser subject to internal ULIDs.
@@ -195,7 +220,7 @@ export async function handleDatasetUpload(conversationId, parsedUrl, req, res) {
       conversationId,
       traceId,
     });
-  } catch (err) {
+  } catch (err: any) {
     discardRequestBody(req, res);
     const status = Number(err?.status) || 500;
     const message =
@@ -211,10 +236,10 @@ export async function handleDatasetUpload(conversationId, parsedUrl, req, res) {
     return;
   }
 
-  let workspaceId;
+  let workspaceId: string;
   try {
     workspaceId = workspaceIdFor(sessionAccess);
-  } catch (err) {
+  } catch (err: any) {
     discardRequestBody(req, res);
     writeJson(res, err.status || 503, { error: err.message, code: err.code }, traceId);
     return;
@@ -241,7 +266,7 @@ export async function handleDatasetUpload(conversationId, parsedUrl, req, res) {
   };
   const onRequestAborted = () => abortUpstream();
   const onRequestClose = () => {
-    if (req.aborted || req.complete === false) abortUpstream();
+    if ((req as any).aborted || req.complete === false) abortUpstream();
   };
   const onResponseClose = () => {
     if (!res.writableEnded) abortUpstream();
@@ -260,12 +285,12 @@ export async function handleDatasetUpload(conversationId, parsedUrl, req, res) {
         body: bounded.stream,
         duplex: 'half',
         signal: upstreamAbort.signal,
-      },
+      } as RequestInit,
       UPLOAD_RESPONSE_TIMEOUT_MS,
     );
 
     const text = await sanRes.text();
-    let data;
+    let data: any;
     try {
       data = text ? JSON.parse(text) : {};
     } catch {
@@ -308,7 +333,7 @@ export async function handleDatasetUpload(conversationId, parsedUrl, req, res) {
       successBody,
       sandboxTrace,
     );
-  } catch (err) {
+  } catch (err: any) {
     if (bounded.limitError || err?.cause?.code === 'dataset_too_large') {
       req.unpipe?.(bounded.stream);
       req.resume?.();
@@ -339,16 +364,13 @@ export async function handleDatasetUpload(conversationId, parsedUrl, req, res) {
 
 /**
  * GET list datasets for a session.
- * @param {URL} parsedUrl
- * @param {import('node:http').ServerResponse} res
- * @param {import('node:http').IncomingMessage} [req]
  */
 export async function handleListDatasets(
-  parsedUrl,
-  res,
-  req = null,
-  conversationId = null,
-) {
+  parsedUrl: URL,
+  res: ServerResponse,
+  req: (IncomingMessage & ReqWithTrace) | null = null,
+  conversationId: string | null = null,
+): Promise<void> {
   const sessionId = parsedUrl.searchParams.get('session_id');
   const traceId = resolveUploadTraceId(req);
   if (!sessionId) {
@@ -374,7 +396,7 @@ export async function handleListDatasets(
       { headers },
     );
     const text = await sanRes.text();
-    let data;
+    let data: any;
     try {
       data = text ? JSON.parse(text) : {};
     } catch {
@@ -386,7 +408,7 @@ export async function handleListDatasets(
       projectDatasetSession(data, sessionId, sessionAccess),
       sanRes.headers.get('x-trace-id') || traceId,
     );
-  } catch (err) {
+  } catch (err: any) {
     console.error('[datasets] list:', err.message);
     const status = Number(err?.status) || 500;
     writeJson(
@@ -403,3 +425,4 @@ export async function handleListDatasets(
     );
   }
 }
+

@@ -1,16 +1,17 @@
 /**
  * Approval API. Agent MySQL is the only read/write authority.
  */
+import type { ServerResponse } from 'node:http';
 import {
   decideAgentApproval,
   getAgentApproval,
   listAgentApprovals,
 } from '../services/agent-client.js';
-import { resolveTrustedAuth } from '../application/run-access-service.js';
+import { resolveTrustedAuth, type ReqWithTrace } from '../application/run-access-service.js';
 import { sendError, sendJson as json } from '../http/response.js';
 
 /** GET /api/approvals — Agent MySQL is the approval read authority. */
-export async function handleListApprovals(parsedUrl, res, req = null) {
+export async function handleListApprovals(parsedUrl: URL, res: ServerResponse, req: ReqWithTrace | null = null): Promise<void> {
   try {
     const auth = await resolveTrustedAuth(req);
     const result = await listAgentApprovals(
@@ -21,14 +22,14 @@ export async function handleListApprovals(parsedUrl, res, req = null) {
       { auth, traceId: req?.traceId },
     );
     json(res, 200, result);
-  } catch (err) {
+  } catch (err: any) {
     console.error('[approvals] list:', err.message);
     sendError(res, err, req?.traceId);
   }
 }
 
 /** GET /api/approvals/:id — owner-scoped Agent MySQL detail. */
-export async function handleGetApproval(approvalId, res, req = null) {
+export async function handleGetApproval(approvalId: string, res: ServerResponse, req: ReqWithTrace | null = null): Promise<void> {
   try {
     const auth = await resolveTrustedAuth(req);
     const result = await getAgentApproval(approvalId, {
@@ -36,7 +37,7 @@ export async function handleGetApproval(approvalId, res, req = null) {
       traceId: req?.traceId,
     });
     json(res, 200, result);
-  } catch (err) {
+  } catch (err: any) {
     console.error('[approvals] get:', err.message);
     sendError(res, err, req?.traceId);
   }
@@ -45,7 +46,7 @@ export async function handleGetApproval(approvalId, res, req = null) {
 /**
  * POST /api/approvals/:id/decide  body: { decision: 'approve' | 'reject', run_id? }
  */
-export async function handleDecideApproval(approvalId, body, res, req = null) {
+export async function handleDecideApproval(approvalId: string, body: any, res: ServerResponse, req: ReqWithTrace | null = null): Promise<void> {
   const decision = body?.decision;
   if (!approvalId) {
     json(res, 400, { error: 'approval id is required' });
@@ -89,8 +90,9 @@ export async function handleDecideApproval(approvalId, body, res, req = null) {
       agent_resume: { queued: outcome.queued === true },
       agent_resume_status: outcome.queued ? 'queued' : 'not_required',
     });
-  } catch (err) {
+  } catch (err: any) {
     console.error('[approvals] decide:', err.message);
     sendError(res, err, req?.traceId);
   }
 }
+

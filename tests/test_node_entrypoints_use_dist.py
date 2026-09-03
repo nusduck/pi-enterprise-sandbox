@@ -24,7 +24,9 @@ FILES = [
     ROOT / "docker-compose.yml",
     ROOT / "docker-compose.prod.yml",
     ROOT / "agent" / "Dockerfile",
+    ROOT / "api-server" / "Dockerfile",
 ]
+
 
 # `node -e '...'` 是内联脚本（healthcheck 用），不指向文件，跳过。
 NODE_INVOCATION = re.compile(r'"node",\s*"(?P<arg>[^"]+)"')

@@ -1,5 +1,6 @@
 /** Cron job BFF routes: auth/trace boundary only; Agent owns all facts. */
 
+import type { ServerResponse } from 'node:http';
 import {
   createAgentCronJob,
   deleteAgentCronJob,
@@ -9,10 +10,10 @@ import {
   runAgentCronJob,
   updateAgentCronJob,
 } from '../services/agent-client.js';
-import { resolveTrustedAuth } from '../application/run-access-service.js';
+import { resolveTrustedAuth, type ReqWithTrace } from '../application/run-access-service.js';
 import { sendError, sendJson as json } from '../http/response.js';
 
-export async function handleListCronJobs(parsedUrl, res, req) {
+export async function handleListCronJobs(parsedUrl: URL, res: ServerResponse, req: ReqWithTrace | null = null): Promise<void> {
   try {
     const auth = await resolveTrustedAuth(req);
     const limit = parsedUrl.searchParams.get('limit') || undefined;
@@ -23,7 +24,7 @@ export async function handleListCronJobs(parsedUrl, res, req) {
   }
 }
 
-export async function handleCreateCronJob(body, res, req) {
+export async function handleCreateCronJob(body: any, res: ServerResponse, req: ReqWithTrace | null = null): Promise<void> {
   try {
     const auth = await resolveTrustedAuth(req);
     const result = await createAgentCronJob(body, { auth, traceId: req?.traceId });
@@ -33,7 +34,7 @@ export async function handleCreateCronJob(body, res, req) {
   }
 }
 
-export async function handleGetCronJob(cronJobId, res, req) {
+export async function handleGetCronJob(cronJobId: string, res: ServerResponse, req: ReqWithTrace | null = null): Promise<void> {
   try {
     const auth = await resolveTrustedAuth(req);
     json(res, 200, await getAgentCronJob(cronJobId, { auth, traceId: req?.traceId }));
@@ -42,7 +43,7 @@ export async function handleGetCronJob(cronJobId, res, req) {
   }
 }
 
-export async function handleUpdateCronJob(cronJobId, body, res, req) {
+export async function handleUpdateCronJob(cronJobId: string, body: any, res: ServerResponse, req: ReqWithTrace | null = null): Promise<void> {
   try {
     const auth = await resolveTrustedAuth(req);
     json(res, 200, await updateAgentCronJob(cronJobId, body, { auth, traceId: req?.traceId }));
@@ -51,7 +52,7 @@ export async function handleUpdateCronJob(cronJobId, body, res, req) {
   }
 }
 
-export async function handleDeleteCronJob(cronJobId, res, req) {
+export async function handleDeleteCronJob(cronJobId: string, res: ServerResponse, req: ReqWithTrace | null = null): Promise<void> {
   try {
     const auth = await resolveTrustedAuth(req);
     await deleteAgentCronJob(cronJobId, { auth, traceId: req?.traceId });
@@ -62,7 +63,7 @@ export async function handleDeleteCronJob(cronJobId, res, req) {
   }
 }
 
-export async function handleRunCronJob(cronJobId, res, req) {
+export async function handleRunCronJob(cronJobId: string, res: ServerResponse, req: ReqWithTrace | null = null): Promise<void> {
   try {
     const auth = await resolveTrustedAuth(req);
     json(res, 202, await runAgentCronJob(cronJobId, { auth, traceId: req?.traceId }));
@@ -71,7 +72,7 @@ export async function handleRunCronJob(cronJobId, res, req) {
   }
 }
 
-export async function handleListCronJobRuns(cronJobId, parsedUrl, res, req) {
+export async function handleListCronJobRuns(cronJobId: string, parsedUrl: URL, res: ServerResponse, req: ReqWithTrace | null = null): Promise<void> {
   try {
     const auth = await resolveTrustedAuth(req);
     const limit = parsedUrl.searchParams.get('limit') || undefined;
@@ -82,3 +83,4 @@ export async function handleListCronJobRuns(cronJobId, parsedUrl, res, req) {
     sendError(res, error, req?.traceId);
   }
 }
+

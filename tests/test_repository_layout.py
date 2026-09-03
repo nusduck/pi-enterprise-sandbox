@@ -75,6 +75,8 @@ def _production_sources() -> list[Path]:
         *ROOT.joinpath("frontend", "src").rglob("*.ts"),
         *ROOT.joinpath("frontend", "src").rglob("*.tsx"),
         *ROOT.joinpath("api-server", "src").rglob("*.js"),
+        *ROOT.joinpath("api-server", "src").rglob("*.ts"),
+
         # DSH 重建的三个新 TS 包（ADR 0007 / 0008）。刻意**不给任何 hotspot
         # 预算**：新代码从第一天就守 1000 行上限，不把既有债务复制过去。
         *ROOT.joinpath("contract", "src").rglob("*.ts"),
@@ -83,6 +85,8 @@ def _production_sources() -> list[Path]:
     ]
     sources.extend(ROOT.joinpath("agent").glob("*.js"))
     sources.extend(ROOT.joinpath("api-server").glob("*.js"))
+    sources.extend(ROOT.joinpath("api-server").glob("*.ts"))
+
     return sorted(
         path
         for path in sources

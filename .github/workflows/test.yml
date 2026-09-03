@@ -82,7 +82,7 @@ jobs:
         run: uv run pytest tests/ -q --tb=short
 
   node-bff:
-    name: Node BFF (tests + smoke)
+    name: Node BFF (tests + typecheck)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -98,16 +98,12 @@ jobs:
       - name: Install API Server dependencies
         run: npm ci --prefix api-server
 
+      - name: Typecheck API Server
+        run: npm --prefix api-server run typecheck
+
       - name: Run API Server unit tests
-        run: node --test api-server/tests/*.test.js
+        run: npm test --prefix api-server
 
-      - name: Syntax-check API Server sources
-        run: |
-          find api-server -name '*.js' -type f ! -path '*/node_modules/*' -print0 \
-            | xargs -0 -n1 node --check
-
-      - name: Import/listen smoke
-        run: node --test api-server/tests/listen-smoke.test.js
 
   node-agent:
     name: Node Agent (tests + smoke)

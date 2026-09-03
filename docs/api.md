@@ -172,8 +172,9 @@ Agent 模型侧权威清单工具：`capabilities`（`action=list|search|describ
 
 ### 完整路由表
 
-浏览器唯一的 API 边界。以下是 `api-server/server.js` 当前分发的全部路由；
+浏览器唯一的 API 边界。以下是 `api-server/server.ts` 当前分发的全部路由；
 未列出的路径返回 404。
+
 
 | 方法 | 路径 | 说明 |
 |------|------|------|

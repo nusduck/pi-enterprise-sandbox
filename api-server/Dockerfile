@@ -6,6 +6,7 @@ COPY package.json package-lock.json ./
 RUN npm ci --ignore-scripts
 
 COPY . .
+RUN npm run build
 
 # Drop root. The BFF terminates browser traffic and proxies uploads, so a
 # defect here is reachable from outside; it needs no privileged port (4000)
@@ -14,4 +15,5 @@ RUN chown -R node:node /app
 USER node
 
 EXPOSE 4000
-CMD ["node", "server.js"]
+CMD ["node", "dist/server.js"]
+

@@ -16,15 +16,16 @@ import { config } from '../src/config.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const agentClient = readFileSync(
-  join(__dirname, '../src/services/agent-client.js'),
+  join(__dirname, '../src/services/agent-client.ts'),
   'utf8',
 );
-const runsSrc = readFileSync(join(__dirname, '../src/routes/runs.js'), 'utf8');
+const runsSrc = readFileSync(join(__dirname, '../src/routes/runs.ts'), 'utf8');
 const accessSrc = readFileSync(
-  join(__dirname, '../src/application/run-access-service.js'),
+  join(__dirname, '../src/application/run-access-service.ts'),
   'utf8',
 );
-const serverSrc = readFileSync(join(__dirname, '../server.js'), 'utf8');
+const serverSrc = readFileSync(join(__dirname, '../server.ts'), 'utf8');
+
 
 const TRACE = 'a'.repeat(32);
 

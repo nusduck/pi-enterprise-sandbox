@@ -1,5 +1,6 @@
 /** Resolve and authorize trusted browser identity for Run operations (PR-04 T4). */
 
+import type { IncomingMessage } from 'node:http';
 import { config } from '../config.js';
 import { HttpError } from '../http/errors.js';
 import { authFromRequest } from '../services/sandbox-client.js';
@@ -8,23 +9,52 @@ import {
   getAgentRun,
   resolveAgentSandboxSession,
 } from '../services/agent-client.js';
-import { bindRequestTraceContext } from './trace-context.js';
+import { bindRequestTraceContext, type RequestTraceContext } from './trace-context.js';
 
-export const DURABLE_RUN_READ_RETRY_DELAYS_MS = Object.freeze([5, 15]);
+export const DURABLE_RUN_READ_RETRY_DELAYS_MS: readonly number[] = Object.freeze([5, 15]);
 
-function wait(ms) {
+function wait(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
+
+export interface TrustedAuthContext {
+  authorization?: string | null;
+  actingUserId: string;
+  actingOrganizationId: string;
+  actingRole: string;
+  requestId?: string | null;
+  callerType?: string;
+  [key: string]: unknown;
+}
+
+export interface AuthorizeSandboxSessionResult {
+  auth: TrustedAuthContext;
+  access: any;
+  sandboxAuth: {
+    actingUserId: string;
+    actingOrganizationId: string;
+    actingRole: string;
+  };
+}
+
+export type ReqWithTrace = IncomingMessage & {
+  requestId?: string | null;
+  traceId?: string | null;
+  traceContext?: RequestTraceContext | null;
+  traceparent?: string | null;
+  tracestate?: string | null;
+};
+
 
 /**
  * Read the durable run from **Agent MySQL** (owner-scoped).
  * Sandbox agent_runs is no longer the status/ownership fact source.
- *
- * First arg may be:
- * - trusted auth context `{ actingUserId, ... }` (production), or
- * - a client with `getAgentRun(runId)` (unit-test fake / legacy shape).
  */
-export async function getDurableRun(authOrClient, runId, traceId = null) {
+export async function getDurableRun(
+  authOrClient: any,
+  runId: string,
+  traceId: string | null = null,
+): Promise<any> {
   const load =
     authOrClient && typeof authOrClient.getAgentRun === 'function'
       ? () => authOrClient.getAgentRun(runId)
@@ -33,16 +63,16 @@ export async function getDurableRun(authOrClient, runId, traceId = null) {
   for (let attempt = 0; ; attempt += 1) {
     try {
       return await load();
-    } catch (err) {
+    } catch (err: any) {
       if (err?.status !== 404 || attempt >= DURABLE_RUN_READ_RETRY_DELAYS_MS.length) {
         throw err;
       }
-      await wait(DURABLE_RUN_READ_RETRY_DELAYS_MS[attempt]);
+      await wait(DURABLE_RUN_READ_RETRY_DELAYS_MS[attempt]!);
     }
   }
 }
 
-export async function resolveTrustedAuth(req) {
+export async function resolveTrustedAuth(req: ReqWithTrace | null | undefined): Promise<TrustedAuthContext> {
   const forwarded = authFromRequest(req);
   if (!config.AUTH_ENABLED) {
     return bindRequestTraceContext({
@@ -81,19 +111,12 @@ export async function resolveTrustedAuth(req) {
 
 /**
  * Resolve a formal Sandbox session through Agent's owner mapping.
- *
- * Browser identities and formal Sandbox owner ids are different domains. The
- * BFF must resolve the latter before touching any session-owned Sandbox route;
- * forwarding a browser JWT alone would make Sandbox resolve the external
- * subject and reject an otherwise valid formal binding. The returned
- * `sandboxAuth` is intentionally limited to the server-to-server acting
- * headers and must never be serialized into a public response.
- *
- * @param {string} sessionId
- * @param {import('node:http').IncomingMessage | null | undefined} req
- * @param {{ conversationId?: string|null, traceId?: string|null }} [opts]
  */
-export async function authorizeSandboxSession(sessionId, req, opts = {}) {
+export async function authorizeSandboxSession(
+  sessionId: string,
+  req: ReqWithTrace | null | undefined,
+  opts: { conversationId?: string | null; traceId?: string | null } = {},
+): Promise<AuthorizeSandboxSessionResult> {
   const id = String(sessionId || '').trim();
   if (!id) {
     throw new HttpError(400, 'SESSION_REQUIRED', 'session_id required');
@@ -134,15 +157,14 @@ export async function authorizeSandboxSession(sessionId, req, opts = {}) {
 
 /**
  * Authorize run access via Agent owner-scoped GET (MySQL).
- *
- * Defense-in-depth: Agent maps external X-Acting subjects → internal ULIDs and
- * scopes the load. BFF must **not** compare external UUID/subjects to Agent
- * response ULID userId/orgId (different ID domains). Foreign/unknown runs are
- * already 404 from Agent GET.
  */
-export async function authorizeRunRequest(runId, req) {
+export async function authorizeRunRequest(
+  runId: string,
+  req: ReqWithTrace | null | undefined,
+): Promise<{ auth: TrustedAuthContext; run: any }> {
   const auth = await resolveTrustedAuth(req);
   // Owner scope is enforced inside Agent GetRunService.
   const run = await getDurableRun(auth, runId, req?.traceId);
   return { auth, run };
 }
+

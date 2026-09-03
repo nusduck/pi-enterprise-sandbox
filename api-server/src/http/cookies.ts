@@ -1,6 +1,8 @@
+import type { IncomingMessage } from 'node:http';
+
 const SESSION_COOKIE = 'pi_enterprise_session';
 
-export function readCookie(req, name = SESSION_COOKIE) {
+export function readCookie(req: IncomingMessage | { headers?: { cookie?: string } } | null | undefined, name: string = SESSION_COOKIE): string {
   const header = String(req?.headers?.cookie || '');
   for (const part of header.split(';')) {
     const index = part.indexOf('=');
@@ -15,7 +17,7 @@ export function readCookie(req, name = SESSION_COOKIE) {
   return '';
 }
 
-export function sessionCookie(token, { secure = false } = {}) {
+export function sessionCookie(token: string, { secure = false }: { secure?: boolean } = {}): string {
   const attributes = [
     `${SESSION_COOKIE}=${encodeURIComponent(token)}`,
     'Path=/',
@@ -26,8 +28,9 @@ export function sessionCookie(token, { secure = false } = {}) {
   return attributes.join('; ');
 }
 
-export function expiredSessionCookie({ secure = false } = {}) {
+export function expiredSessionCookie({ secure = false }: { secure?: boolean } = {}): string {
   return `${sessionCookie('', { secure })}; Max-Age=0`;
 }
 
 export { SESSION_COOKIE };
+

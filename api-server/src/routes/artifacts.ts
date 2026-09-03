@@ -1,12 +1,14 @@
 /** Artifact list and cross-conversation Import routes. */
+import type { ServerResponse } from 'node:http';
 import { createSandboxClient } from '../services/sandbox-client.js';
 import {
   authorizeSandboxSession,
   resolveTrustedAuth,
+  type ReqWithTrace,
 } from '../application/run-access-service.js';
 import { ensureAgentSession } from '../services/agent-client.js';
 
-function json(res, status, data) {
+function json(res: ServerResponse, status: number, data: unknown) {
   res.writeHead(status, { 'Content-Type': 'application/json' });
   res.end(JSON.stringify(data));
 }
@@ -14,7 +16,7 @@ function json(res, status, data) {
 /**
  * GET /api/artifacts?session_id=
  */
-export async function handleListArtifacts(parsedUrl, res, req = null) {
+export async function handleListArtifacts(parsedUrl: URL, res: ServerResponse, req: ReqWithTrace | null = null): Promise<void> {
   const sessionId = parsedUrl.searchParams.get('session_id');
   if (!sessionId) {
     json(res, 400, { error: 'session_id is required' });
@@ -27,7 +29,7 @@ export async function handleListArtifacts(parsedUrl, res, req = null) {
     const client = createSandboxClient({ auth: sessionAccess.sandboxAuth });
     const data = await client.listArtifacts(sessionId);
     json(res, 200, data);
-  } catch (err) {
+  } catch (err: any) {
     console.error('[artifacts] list:', err.message);
     const status = Number(err?.status) || 500;
     json(res, status, {
@@ -42,11 +44,11 @@ export async function handleListArtifacts(parsedUrl, res, req = null) {
  * Body: { artifact_id, target_filename? }
  */
 export async function handleImportArtifact(
-  conversationId,
-  body,
-  res,
-  req = null,
-) {
+  conversationId: string,
+  body: any,
+  res: ServerResponse,
+  req: ReqWithTrace | null = null,
+): Promise<void> {
   const artifactId = String(body?.artifact_id || body?.artifactId || '').trim();
   const targetFilenameRaw =
     body?.target_filename ?? body?.targetFilename ?? null;
@@ -76,7 +78,7 @@ export async function handleImportArtifact(
     });
     const sessionId = String(target?.session_id || '').trim();
     if (!sessionId) {
-      const error = new Error('Target session unavailable');
+      const error = new Error('Target session unavailable') as Error & { status: number; code: string };
       error.status = 503;
       error.code = 'target_session_unavailable';
       throw error;
@@ -93,7 +95,7 @@ export async function handleImportArtifact(
       sessionAccess?.access?.workspace_id || sessionAccess?.access?.workspaceId || '',
     ).trim();
     if (!workspaceId) {
-      const error = new Error('Session workspace unavailable');
+      const error = new Error('Session workspace unavailable') as Error & { status: number; code: string };
       error.status = 503;
       error.code = 'SESSION_WORKSPACE_UNAVAILABLE';
       throw error;
@@ -115,7 +117,7 @@ export async function handleImportArtifact(
       // remains keyed by the target sandbox session.
       target_session_id: sessionId,
     });
-  } catch (err) {
+  } catch (err: any) {
     console.error('[artifacts] import:', err.message);
     const status = Number(err?.status) || 500;
     json(res, status, {
@@ -127,3 +129,4 @@ export async function handleImportArtifact(
     });
   }
 }
+
