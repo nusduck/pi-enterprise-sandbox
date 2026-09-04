@@ -349,7 +349,7 @@ Base URL: `http://sandbox:8081`（Docker 内网）
 - 所有请求/响应为 JSON
 - 错误返回 `{ "detail": "message" }`
 - `X-Trace-Id` header 回显 + 关联审计日志
-- 兼容适配器认证: 仅受控 BFF/测试环境可使用 `X-API-Key`；正式 Agent
+- 兼容适配器认证: exec 公共会话面校验 `X-API-Key`（常量时间比较，不匹配 401），调用方只有 BFF 与 agent；正式 Agent
   internal plane 使用短期 HMAC claim（scope、owner、run/session、body
   digest），不接受一个永不过期的全局 token 作为执行授权
 - exec 的 public 探针豁免认证：`/health`, `/ready`, `/metrics`；浏览器认证只存在于 BFF `/api/auth/*`

@@ -14,6 +14,8 @@ import { readWorkspaceLifecycleConfig } from '../workspace/env-config.js';
 import { MySqlJobRegistry } from '../shell/job-registry.js';
 import { InMemoryJobStore } from '../shell/job-store-memory.js';
 import { MySqlJobStore } from '../shell/job-store-mysql.js';
+import { MySqlArtifactStore } from '../db/repositories/artifacts.js';
+import { MySqlDatasetStore } from '../db/repositories/datasets.js';
 import type { JobStore } from '../shell/job-types.js';
 import {
   createExecDbPool,
@@ -75,6 +77,12 @@ export interface ExecAppDeps {
   readonly datasetService?: DatasetService;
   /** MCP 窄桥的 bearer token；空串表示该桥不可用（回 503）。 */
   readonly mcpInternalToken?: string;
+  /**
+   * 公共面的服务间令牌（`SANDBOX_API_TOKEN`）。**必填**，因为"要不要做服务间
+   * 鉴权"是一个必须显式做的决定：省略默认关掉的话，正是 exec 从 Python 换到
+   * TS 时丢掉这道校验的原因。`null` = 本装配显式不做（单测/本地直连）。
+   */
+  readonly publicApiToken: string | null;
 }
 
 export function createExecApp(deps: ExecAppDeps): Hono {
@@ -96,6 +104,7 @@ export function createExecApp(deps: ExecAppDeps): Hono {
     artifactService,
   };
   const pub: PublicRouterDeps = {
+    apiToken: deps.publicApiToken,
     workspaceManager: deps.workspaceManager,
     systemSkillRoot: deps.systemSkillRoot,
     enabledSkillPackagesFor: skills,
@@ -146,7 +155,7 @@ export interface ExecRuntime {
 
 /**
  * 从环境装配生产依赖。HMAC keyring 缺失则 fail-closed。
- * MySQL 配得上就用 durable JobStore；否则仅非 production 回退内存。
+ * MySQL 配得上就用 durable 的 Job/Artifact/Dataset 仓储；否则仅非 production 回退内存。
  */
 export function createExecAppFromEnv(env: NodeJS.ProcessEnv = process.env): ExecRuntime {
   const keyring = String(env['SANDBOX_INTERNAL_HMAC_KEYRING'] ?? '').trim();
@@ -156,14 +165,27 @@ export function createExecAppFromEnv(env: NodeJS.ProcessEnv = process.env): Exec
       'SANDBOX_INTERNAL_HMAC_KEYRING and SANDBOX_INTERNAL_HMAC_ACTIVE_KID are required',
     );
   }
+  // 公共面的服务令牌与 HMAC keyring 同等对待：缺了就起不来，而不是开着一个
+  // 谁都能调的会话面。compose 与 `.env.example` 两侧一直都配了这个值。
+  const publicApiToken = String(env['SANDBOX_API_TOKEN'] ?? '').trim();
+  if (!publicApiToken) {
+    throw new Error('SANDBOX_API_TOKEN is required (public session plane would be unauthenticated)');
+  }
 
   const workspaceManager = new WorkspaceManager(readWorkspaceLifecycleConfig(env));
   let pool: Pool | undefined;
   let store: JobStore;
+  // 产物/数据集的元数据和作业账本走**同一个池、同一次 fail-closed 判定**：
+  // 三者要么一起落库，要么一起留在内存。曾经只接了 JobStore，产物与数据集
+  // 静默回退内存实现，容器一重启 `GET /sessions/:id/artifacts` 就整片变空。
+  let artifactService: ArtifactService | undefined;
+  let datasetService: DatasetService | undefined;
   try {
     const cfg = readExecDbConfigFromSandboxEnv(env);
     pool = createExecDbPool(cfg);
     store = new MySqlJobStore(pool);
+    artifactService = new ArtifactService(makeWorkspaceFs, new MySqlArtifactStore(pool));
+    datasetService = new DatasetService(makeWorkspaceFs, new MySqlDatasetStore(pool));
   } catch (err) {
     if (!(err instanceof ExecDbConfigError)) throw err;
     const deployment = String(env['DEPLOYMENT_ENV'] ?? env['NODE_ENV'] ?? '').toLowerCase();
@@ -201,6 +223,9 @@ export function createExecAppFromEnv(env: NodeJS.ProcessEnv = process.env): Exec
       : {}),
     bwrapExecutable: env['SANDBOX_BWRAP_PATH'] ?? '/usr/bin/bwrap',
     mcpInternalToken: env['SANDBOX_MCP_INTERNAL_TOKEN'] ?? '',
+    publicApiToken,
+    ...(artifactService !== undefined ? { artifactService } : {}),
+    ...(datasetService !== undefined ? { datasetService } : {}),
   });
 
   return {

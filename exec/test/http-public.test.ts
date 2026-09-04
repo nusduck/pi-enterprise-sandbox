@@ -53,6 +53,7 @@ describe('public: byte-identical contract vs Python', () => {
       new WorkspaceFileSystem(new CordisContext() as never, ws);
     artifactService = new ArtifactService(makeFs, undefined, { roots: controlRoots });
     app = createPublicRouter({
+      apiToken: null,
       workspaceManager,
       systemSkillRoot: path.join(base, 'skills'),
       enabledSkillPackagesFor: () => [],

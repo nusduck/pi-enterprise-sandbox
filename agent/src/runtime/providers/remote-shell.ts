@@ -14,10 +14,37 @@ import { ShellExecutor } from '@deepseek-ai/dsh-shell';
 import { randomUUID } from 'node:crypto';
 import type { ShellExecRequest, ShellExecSpec, ShellProcess, ShellRunResult } from '@deepseek-ai/dsh-shell';
 import type { Context } from '@deepseek-ai/cordis';
+import { ContractError } from '@pi/contract/errors.js';
 import { currentExecJobId, ExecRpcClient, resolveExecRpcConfig } from './exec-rpc.js';
 import type { ExecRpcConfig } from './exec-rpc.js';
 
-export interface RemoteShellOptions extends ExecRpcConfig {}
+/** 后台作业监控的节奏。仅测试注入——生产用下面那三个常量。 */
+export interface MonitorTuning {
+  readonly minDelayMs?: number;
+  readonly maxDelayMs?: number;
+  readonly failureDeadlineMs?: number;
+}
+
+export interface RemoteShellOptions extends ExecRpcConfig {
+  /** 仅测试注入：覆盖后台作业监控的轮询节奏与失败截止。 */
+  readonly monitor?: MonitorTuning;
+}
+
+// 后台作业监控的轮询节奏。成功一次就回到最小间隔；连续失败时指数退避，
+// 并且有一个总的失败截止时间——没有截止的话，一个查不到的作业会让 Worker
+// 以 5 次/秒的频率永远空转下去（`settled` 永远不会变成 true）。
+const MONITOR_MIN_DELAY_MS = 200;
+const MONITOR_MAX_DELAY_MS = 2_000;
+const MONITOR_FAILURE_DEADLINE_MS = 60_000;
+
+/**
+ * exec 说"这个作业不存在"——`internal-jobs.ts` 把 `JobNotFoundError` 映射成
+ * `WORKSPACE_NOT_FOUND`。这是终态而不是抖动：句柄没了、账本里也查不到，
+ * 再问一万次也是同一个答案。
+ */
+function isJobGone(err: unknown): boolean {
+  return err instanceof ContractError && err.code === 'WORKSPACE_NOT_FOUND';
+}
 
 function defaultWorkdir(_request: ShellExecRequest): string {
   return '/home/sandbox/workspace';
@@ -57,6 +84,7 @@ class RemoteShellProcess implements ShellProcess {
     private readonly rpc: ExecRpcClient,
     private readonly roots: readonly string[],
     readonly id: string,
+    private readonly tuning: MonitorTuning = {},
   ) {
     let resolver: () => void = () => undefined;
     this.done = new Promise<void>((resolve) => {
@@ -108,6 +136,11 @@ class RemoteShellProcess implements ShellProcess {
   }
 
   private async monitor(): Promise<void> {
+    const minDelayMs = this.tuning.minDelayMs ?? MONITOR_MIN_DELAY_MS;
+    const maxDelayMs = this.tuning.maxDelayMs ?? MONITOR_MAX_DELAY_MS;
+    const failureDeadlineMs = this.tuning.failureDeadlineMs ?? MONITOR_FAILURE_DEADLINE_MS;
+    let delayMs = minDelayMs;
+    let firstFailureAt: number | null = null;
     while (!this.settled) {
       try {
         const data = await this.rpc.post<{ id: string }, any>(
@@ -116,16 +149,33 @@ class RemoteShellProcess implements ShellProcess {
           this.roots,
         );
         await this.pull();
+        firstFailureAt = null;
+        delayMs = minDelayMs;
         if (data.status === 'completed' || data.status === 'killed' || data.status === 'failed') {
           this.settleFromExec(data.status, data.exitCode ?? null, data.signal ?? null);
           return;
         }
-      } catch {
-        // 网络抖动不抛给模型，下一轮继续查询。
+      } catch (err) {
+        // 作业已经不存在：立刻结算，不再轮询。
+        if (isJobGone(err)) {
+          this.settleFromExec('killed', null, null);
+          return;
+        }
+        // 其余错误按抖动处理，但要退避、而且有截止时间——不抛给模型不等于
+        // 可以无限重试。连续失败超过 deadline 就当作 failed 结算，让上层
+        // 看到一个终态，而不是一个永远 running 的幽灵进程。
+        const now = Date.now();
+        if (firstFailureAt === null) {
+          firstFailureAt = now;
+        } else if (now - firstFailureAt >= failureDeadlineMs) {
+          this.settleFromExec('failed', null, null);
+          return;
+        }
+        delayMs = Math.min(delayMs * 2, maxDelayMs);
       }
       if (!this.settled) {
         await new Promise<void>((resolve) => {
-          const timer = setTimeout(resolve, 200);
+          const timer = setTimeout(resolve, delayMs);
           timer.unref?.();
         });
       }
@@ -162,11 +212,13 @@ class RemoteShellProcess implements ShellProcess {
 
 export class RemoteShell extends ShellExecutor {
   private readonly rpc: ExecRpcClient;
+  private readonly monitorTuning: MonitorTuning;
 
   constructor(ctx: Context, options: Partial<RemoteShellOptions> = {}) {
     super(ctx as unknown as never);
     const resolved = resolveExecRpcConfig(options);
     this.rpc = new ExecRpcClient(resolved);
+    this.monitorTuning = options.monitor ?? {};
   }
 
   rebind(options: ExecRpcConfig): void {
@@ -229,7 +281,7 @@ export class RemoteShell extends ShellExecutor {
     // `start` 是同步返回句柄的契约，内部异步通知通过 done Promise
     const rpc = this.rpc;
     const roots = this.roots;
-    const proc = new RemoteShellProcess(rpc, roots, id);
+    const proc = new RemoteShellProcess(rpc, roots, id, this.monitorTuning);
     proc.start(rpc.post<Record<string, unknown>, { id: string; status: string }>(
       '/internal/v1/shell/start',
       payload,

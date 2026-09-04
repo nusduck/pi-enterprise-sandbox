@@ -325,13 +325,40 @@ export class ExecRpcClient {
       }
 
       // 将 ReadableStream 转为 AsyncIterable<string>（按 UTF-8 解码，已由 exec 侧保证 text）
+      //
+      // 超时分两段：上面那个 `timer` 是**连接**截止（拿到响应头就该清掉，
+      // 见 finally），这里再给**每一块**装一个空闲截止。只有连接超时的话，
+      // exec 在传输途中挂起会让这个异步生成器永远挂着——`finally` 早就把
+      // 定时器清了，没有任何东西会再唤醒它。整体不设上限是有意的：大文件
+      // 可以慢慢传，但"停着不动"必须有尽头。
       const reader = res.body.getReader();
       const decoder = new TextDecoder('utf-8');
+      const readChunk = async (): Promise<Awaited<ReturnType<typeof reader.read>>> => {
+        let idle: ReturnType<typeof setTimeout> | undefined;
+        try {
+          return await new Promise<Awaited<ReturnType<typeof reader.read>>>((resolve, reject) => {
+            idle = setTimeout(() => {
+              // abort 让底层连接真正断开，否则 socket 会一直挂着。
+              controller.abort();
+              reject(
+                new ContractError(
+                  'INTERNAL_ERROR',
+                  `exec stream stalled: no data for ${timeoutMs}ms`,
+                ),
+              );
+            }, timeoutMs);
+            idle.unref?.();
+            reader.read().then(resolve, reject);
+          });
+        } finally {
+          if (idle !== undefined) clearTimeout(idle);
+        }
+      };
       const iterable: AsyncIterable<string> = {
         [Symbol.asyncIterator](): AsyncIterator<string> {
           return {
             async next(): Promise<IteratorResult<string>> {
-              const { done, value } = await reader.read();
+              const { done, value } = await readChunk();
               if (done) return { done: true, value: undefined as unknown as string };
               const chunk = decoder.decode(value, { stream: true });
               return { done: false, value: chunk };

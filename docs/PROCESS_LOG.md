@@ -371,3 +371,51 @@ Each entry should say **what changed**, **why**, and **which STATUS IDs** it aff
     都由 exec 的部署级配置决定，不按 Agent 分。要接需要定义 schema、扩 contract 的 shell RPC、
     改 exec 的 isolation/build——那是在动 AGENTS.md §2 的容器隔离不变量，应当单开一件事并起
     新 ADR（下一个可用编号 **0011**）。
+
+## 2026-09-04（下午）— exec 产物持久化 + 四项稳健性修复
+
+- **Context:** 对全仓做了一次外部 review，逐条复核（不是照单全收——其中若干条的定性、
+  归因或严重性需要修正）。本次落地其中五条。
+- **Action（按严重性）:**
+  1. **P0，用户可见的数据丢失**：`exec/src/db/repositories/{artifacts,datasets}.ts` 的
+     `MySql*Store` 与 DDL 常量早就写好，但**既没有迁移，也没有在 `createExecAppFromEnv`
+     里接上**，`ArtifactService`/`DatasetService` 一直跑在构造函数默认的内存实现上。
+     六套单测全绿，容器一重启 `GET /api/artifacts` 就返回空列表、下载全部 404。
+     新增迁移 `20260904000001_exec_artifacts_datasets.js`，两个 Store 与 `MySqlJobStore`
+     共用同一个池与同一次 fail-closed 判定。
+  2. `MySqlJobRegistry.lives` 只增不减——结算路径的 `finally` 里只有一句"活句柄用完即丢"
+     的注释，实际什么都没丢。改为打结算时间戳 + `pruneSettled()`（5 分钟保留窗口 +
+     512 条硬上限），运行中的作业永不回收。
+  3. `RemoteShellProcess.monitor` 固定 200ms 轮询且把一切错误当抖动：`WORKSPACE_NOT_FOUND`
+     现在立刻结算，其余错误指数退避（200ms→2s）并有 60s 失败截止。
+  4. `ExecRpcClient.getStream` 的超时定时器在拿到响应头时就被清掉，之后逐 chunk 读流
+     没有任何截止。新增每块的空闲超时。
+  5. exec 公共会话面从不校验 `SANDBOX_API_TOKEN`（compose / `.env.example` / `deployment.md`
+     三处都要求它，BFF 与 agent 也一直在发 `X-API-Key`）。现在常量时间比较，不匹配 401；
+     `ExecAppDeps.publicApiToken` 是必填字段，`createExecAppFromEnv` 缺它拒绝启动。
+- **Verification:** 六套单测 + 五处类型检查全绿；重建四个镜像后在 compose 上跑真实链路
+  15/15 PASS，含**重启 sandbox 容器后产物列表与下载字节仍在**这条 P0 断言。
+  证据：`docs/evidence/exec-durable-artifacts-and-hardening-2026-09-04.md`。
+- **STATUS IDs:** 没有关闭任何 §32 行。G7 那行补了一句复现结论：
+  `scripts/release-gates/sandbox-live-gate.mjs` import 的三个模块在 DSH 重建里已删除，
+  脚本 `ERR_MODULE_NOT_FOUND`，要按 `runtime/providers/exec-rpc` 的新接缝重写才能重跑。
+- **Not closed（本次刻意没做）:**
+  - `exec_workspaces` / `exec_executions` / `session_events` / `workspace_quota_reservations`
+    四张表同样只有 DDL、没有迁移，但它们**没有任何运行时消费者**——接它们是新功能，
+    不是修 bug。新增的 `tests/test_exec_schema_migrations.py` 只要求"已接线的表必须有迁移"，
+    这四张一旦被接进 `createExecAppFromEnv` 就会立刻要求补迁移。
+  - 产物/数据集的配额账本仍是 `InMemoryQuotaStore`（`MySqlQuotaStore` 存在但没接、没迁移）：
+    重启会让配额计数归零，是"多放行"而不是"丢数据"，与本次的 P0 不同级别，另开一件事。
+  - `agent/src/infrastructure/sandbox/internal-hmac.ts`（980 行）与 `contract/src/hmac.ts`
+    （816 行）是两套都活着的实现，`internal-session-http.ts` 与
+    `internal-artifact-download-http.ts` 仍在用前者。收口要迁调用方 + 迁 fixture 单测，
+    风险不小，单开一件事。
+  - `agent/src/runtime/providers/memory.ts` 对应的工具已按 ADR 0009 D10 退役
+    （`tool-names.ts` 给 `TOOL_RETIRED`），实现与导出仍在，属于可删的死代码。
+  - 契约层 `htm` 仍硬编码 `'POST'`，exec 侧靠 `!(expectedHtm === 'POST' && method === 'GET')`
+    这条例外放行 `GET /internal/v1/fs/stream-text`；同一处还有一个空 if 块与三行自相矛盾的注释。
+  - `ExecRpcClient.issueToken` 对所有 RPC 写死 `tool_name: 'fs'` / `scope: ['internal:fs']`。
+    今天 exec 侧**根本不校验 scope**，所以这枚 claim 是装饰性的——补 scope 校验时会一次性
+    发现所有调用方都在冒充 `fs`。
+  - `exec/src/http/router.ts` 的 `getClientIp` 盲信 `X-Forwarded-For` 且兜底 `127.0.0.1`；
+    CIDR 只是 HMAC 之前的一道纵深，且 sandbox 在 compose 里不发布端口，故未在本批处理。

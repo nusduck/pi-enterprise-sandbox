@@ -117,7 +117,7 @@ Agent（DeepSeek Harness）运行在独立 `agent/` 服务中，而非浏览器�
   测试使用 connection-free fakes 或不可连接的 MySQL-shaped DSN，不安装
   SQLite compatibility runtime。MySQL import path 不加载旧 database/
   repository/router stack
-- Agent 拥有 Knex 核心 schema migration（utf8mb4 / InnoDB）：Conversation / Message / Run 与跨服务执行域表（`sandbox_sessions`、`sandbox_executions`、`sandbox_audit_events`、`datasets`、`artifacts`、`exec_jobs`）。`exec_jobs` 由 exec 独占读写，是长进程事实账本；旧 `process_executions` 只保留历史 schema，不再承载生产路由
+- Agent 拥有 Knex 核心 schema migration（utf8mb4 / InnoDB）：Conversation / Message / Run 与跨服务执行域表（`sandbox_sessions`、`sandbox_executions`、`sandbox_audit_events`、`datasets`、`artifacts`、`exec_jobs`、`exec_artifacts`、`exec_datasets`）。`exec_jobs`/`exec_artifacts`/`exec_datasets` 由 exec 独占读写，分别是长进程、产物快照与上传数据集的事实账本；旧 `process_executions` 只保留历史 schema，不再承载生产路由
 - `agent_sessions.sandbox_session_id` 与 `sandbox_sessions.agent_session_id` 为逻辑索引引用（无循环外键）；租户列 `org_id`/`user_id` 由 SQL 谓词强制
 - 不可变 migration + checksum；失败事务回滚；重复 init 幂等
 - 需推到 Redis Stream 的持久化事件与领域状态同事务写入 `domain_outbox`（Outbox pattern）

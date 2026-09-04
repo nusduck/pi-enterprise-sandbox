@@ -399,3 +399,124 @@ test('rebind updates HMAC envelope without ALS', async () => {
   assert.match(bodies[0]!, /"orgId":"org-live"/);
   assert.equal(bodies[0]!.includes('placeholder-ws'), false);
 });
+
+/** 有界等待：修复前这些循环永不结束，用它把"挂死"变成一条可断言的失败。 */
+async function settledWithin(proc: { done: Promise<void> }, ms: number): Promise<boolean> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<boolean>((resolve) => {
+    timer = setTimeout(() => resolve(false), ms);
+    timer.unref?.();
+  });
+  try {
+    return await Promise.race([proc.done.then(() => true), timeout]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
+function shellWith(fetchImpl: typeof fetch, monitor: Record<string, number> = {}) {
+  return new RemoteShell(new Context() as unknown as Context, {
+    baseUrl: 'http://exec',
+    keyring: { test: Buffer.from('0'.repeat(32)).toString('base64url') },
+    activeKid: 'test',
+    orgId: 'org-1',
+    userId: 'user-1',
+    workspaceId: 'ws-1',
+    fenceToken: 1,
+    physicalRoots: [],
+    fetchImpl,
+    monitor,
+  });
+}
+
+test('remote-shell: exec 说作业不存在时立刻结算，不再空转轮询', async () => {
+  // 回归：monitor 的 catch 把一切错误都当成"网络抖动，下一轮继续"，于是一个
+  // 查不到的作业会让 Worker 以 5 次/秒的频率永远轮询下去，`done` 永不 resolve。
+  let statusCalls = 0;
+  const fetchImpl = (async (url: string | URL | Request, init?: RequestInit) => {
+    const path = new URL(String(url)).pathname;
+    if (path.endsWith('/shell/start')) {
+      const body = JSON.parse(String(init?.body ?? '{}')) as { payload?: { id?: string } };
+      return new Response(JSON.stringify({ ok: true, data: { id: body.payload?.id, status: 'running' } }));
+    }
+    if (path.endsWith('/jobs/status')) {
+      statusCalls += 1;
+      return new Response(
+        JSON.stringify({ ok: false, error: { code: 'WORKSPACE_NOT_FOUND', message: 'job not found' } }),
+        { status: 404 },
+      );
+    }
+    return new Response(JSON.stringify({ ok: true, data: { text: '', lossy: false } }));
+  }) as unknown as typeof fetch;
+
+  const proc = shellWith(fetchImpl).start({ command: 'sleep 1' } as never);
+  assert.equal(await settledWithin(proc, 3_000), true, 'a vanished job must settle, not poll forever');
+  assert.equal(proc.status, 'killed');
+  assert.ok(statusCalls <= 2, `expected to stop polling immediately, got ${statusCalls} status calls`);
+});
+
+test('remote-shell: 传输持续失败时退避并在截止时间后结算为终态', async () => {
+  // 回归：没有截止时间的话，exec 长时间不可用会让这个 while 循环永远转下去。
+  let statusCalls = 0;
+  const fetchImpl = (async (url: string | URL | Request, init?: RequestInit) => {
+    const path = new URL(String(url)).pathname;
+    if (path.endsWith('/shell/start')) {
+      const body = JSON.parse(String(init?.body ?? '{}')) as { payload?: { id?: string } };
+      return new Response(JSON.stringify({ ok: true, data: { id: body.payload?.id, status: 'running' } }));
+    }
+    if (path.endsWith('/jobs/status')) {
+      statusCalls += 1;
+      return new Response(
+        JSON.stringify({ ok: false, error: { code: 'INTERNAL_ERROR', message: 'exec is down' } }),
+        { status: 500 },
+      );
+    }
+    return new Response(JSON.stringify({ ok: true, data: { text: '', lossy: false } }));
+  }) as unknown as typeof fetch;
+
+  const shell = shellWith(fetchImpl, { minDelayMs: 5, maxDelayMs: 20, failureDeadlineMs: 120 });
+  const proc = shell.start({ command: 'sleep 1' } as never);
+  assert.equal(await settledWithin(proc, 3_000), true, 'persistent transport failure must reach a terminal state');
+  assert.equal(proc.status, 'killed');
+  // 退避生效：120ms 的截止窗口里不该出现几十次调用。
+  assert.ok(statusCalls < 20, `expected backoff to throttle polling, got ${statusCalls} calls`);
+});
+
+test('exec-rpc: getStream 在响应头之后卡住也会超时，而不是永远挂着', async () => {
+  // 回归：连接超时的定时器在 `finally` 里被清掉，之后逐 chunk 读流没有任何
+  // 截止；exec 在传输途中挂起，这个异步生成器就永远不会再被唤醒。
+  const stalled = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode('first chunk'));
+      // 之后再不产出，也不 close —— 模拟传输中途挂起。
+    },
+  });
+  const fetchImpl = (async (url: string | URL | Request) => {
+    const path = new URL(String(url)).pathname;
+    if (path.endsWith('/fs/stream-text')) {
+      return new Response(stalled, { headers: { 'content-type': 'text/plain' } });
+    }
+    return new Response(JSON.stringify({ ok: true, data: {} }));
+  }) as unknown as typeof fetch;
+
+  const fs = new RemoteFileSystem(new Context() as unknown as Context, {
+    baseUrl: 'http://exec',
+    keyring: { test: Buffer.from('0'.repeat(32)).toString('base64url') },
+    activeKid: 'test',
+    orgId: 'org-1',
+    userId: 'user-1',
+    workspaceId: 'ws-1',
+    fenceToken: 1,
+    physicalRoots: [],
+    fetchImpl,
+    timeoutMs: 150,
+  } as unknown as Partial<ExecRpcConfig>);
+
+  const started = Date.now();
+  const chunks: string[] = [];
+  await assert.rejects(async () => {
+    for await (const chunk of await fs.streamText('notes.txt')) chunks.push(chunk);
+  }, /stalled|abort/i);
+  assert.deepEqual(chunks, ['first chunk'], 'the chunk that did arrive is still delivered');
+  assert.ok(Date.now() - started < 3_000, 'must give up soon after the stall deadline');
+});

@@ -12,6 +12,7 @@
  */
 
 import { Hono } from 'hono';
+import { timingSafeEqual } from 'node:crypto';
 import { toWireError } from '@pi/contract/errors.js';
 import type { WorkspaceManager } from '../../workspace/manager.js';
 import type { MySqlJobRegistry } from '../../shell/job-registry.js';
@@ -40,10 +41,42 @@ export interface PublicRouterDeps {
   readonly artifactStore?: ArtifactStore;
   readonly datasetService?: DatasetService;
   readonly datasetStore?: DatasetStore;
+  /**
+   * 服务间令牌（`SANDBOX_API_TOKEN`）。BFF 每次代理都带 `X-API-Key`——
+   * compose 与 `.env.example` 一直要求两侧配同一个值，但 exec 这边从来没有
+   * 校验过：调用方以为有门，服务方根本没开。非空即启用校验；`null` 是
+   * **显式**声明"这个装配不做服务间鉴权"（单测与本地直连用），
+   * `createExecAppFromEnv` 永远给非空值。
+   */
+  readonly apiToken: string | null;
+}
+
+/** 常量时间比较（AGENTS.md §2：令牌比较必须常量时间）。 */
+function tokenMatches(provided: string | undefined, expected: string): boolean {
+  if (provided === undefined || provided === '') return false;
+  const a = Buffer.from(provided, 'utf8');
+  const b = Buffer.from(expected, 'utf8');
+  return a.length === b.length && timingSafeEqual(a, b);
 }
 
 export function createPublicRouter(deps: PublicRouterDeps): Hono {
   const app = new Hono();
+
+  // 服务间鉴权。放在归属校验之前：没有服务令牌的请求连"这个会话存不存在"
+  // 都不该问出来。会话归属仍由各路由的 `requireOwnedSession` 再判一次——
+  // 这枚令牌只证明"你是 BFF"，不证明"这个会话是你的"。
+  const apiToken = deps.apiToken;
+  if (typeof apiToken === 'string' && apiToken !== '') {
+    for (const prefix of ['/sessions/*', '/conversations/*', '/datasets', '/datasets/*']) {
+      app.use(prefix, async (c, next) => {
+        if (!tokenMatches(c.req.header('x-api-key'), apiToken)) {
+          const wire = toWireError(new Error('service token required'), { physicalRoots: [] });
+          return c.json({ ok: false, error: { ...wire, message: 'service token required' } }, 401);
+        }
+        await next();
+      });
+    }
+  }
 
   registerPublicFilesRoutes(app, {
     workspaceManager: deps.workspaceManager,

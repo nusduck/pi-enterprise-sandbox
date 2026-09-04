@@ -117,7 +117,7 @@ key 前缀保存 `context_id` 映射，并通过 Sandbox 私有桥接执行。�
 
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
-| `SANDBOX_API_TOKEN` | — | 旧 BFF compatibility adapters 的 service key；不是正式 Agent execution authorization，也不能代表终端用户 |
+| `SANDBOX_API_TOKEN` | — | exec 公共会话面（`/sessions/*`、`/conversations/*`、`/datasets`）的 service key，BFF 与 agent 都以 `X-API-Key` 发送；**exec 启动时必填**，缺失即拒绝启动（fail-closed，否则会话面完全无鉴权）。它不是正式 Agent execution authorization，也不能代表终端用户 |
 | `SANDBOX_INTERNAL_HMAC_KEYRING` | — | 正式 Agent→Sandbox `/internal/v1/*` HMAC keyring；生产必填，密钥不得写入日志 |
 | `SANDBOX_INTERNAL_HMAC_ACTIVE_KID` | — | 当前签名 key id；必须存在于 keyring |
 | `SANDBOX_INTERNAL_REDIS_URL` | — | 独立 replay Redis，用于 HMAC jti 防重放；不得复用 Agent Redis 凭据 |

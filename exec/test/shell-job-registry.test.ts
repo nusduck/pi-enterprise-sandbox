@@ -171,3 +171,67 @@ test('invalid cursor throws', async () => {
   const snap = await reg.start({ kind: 'bash', label: 'cur', owner: ownerA, physicalRoots: [], run() { return h; } });
   await assert.rejects(() => reg.read(snap.id, ownerA, 'bad-cursor', 100), /cursor/);
 });
+
+test('settled jobs are evicted from the live map instead of accumulating forever', async () => {
+  // 回归：`lives` 从进程启动起只增不减——每个条目挂着一个子进程句柄和一个
+  // 最长 500KB 的环形缓冲，结算路径只把 `settled` 置真就完事了。长跑的 exec
+  // 每跑一条命令就多一份，内存与句柄一路涨。
+  const store = new InMemoryJobStore();
+  const reg = new MySqlJobRegistry(store, { settledRetentionMs: 0 });
+  for (let i = 0; i < 5; i += 1) {
+    const h = fakeHandle();
+    const snap = await reg.start({
+      kind: 'bash', label: `job-${i}`, owner: ownerA, physicalRoots: [], run() { return h; },
+    });
+    h.triggerDone({ status: 'completed', exitCode: 0, signal: null });
+    await new Promise((r) => setImmediate(r));
+    assert.equal((await reg.get(snap.id, ownerA)).status, 'completed');
+  }
+  assert.equal(reg.liveEntryCount(), 0, 'settled entries must not accumulate');
+});
+
+test('running jobs are never evicted, however long they run', async () => {
+  const store = new InMemoryJobStore();
+  const reg = new MySqlJobRegistry(store, { settledRetentionMs: 0, maxSettledEntries: 0 });
+  const alive = fakeHandle();
+  const running = await reg.start({
+    kind: 'bash', label: 'tail -f', owner: ownerA, physicalRoots: [], run() { return alive; },
+  });
+  alive.pushOutput('still here\n');
+  for (let i = 0; i < 3; i += 1) {
+    const h = fakeHandle();
+    await reg.start({ kind: 'bash', label: `short-${i}`, owner: ownerA, physicalRoots: [], run() { return h; } });
+    h.triggerDone({ status: 'completed', exitCode: 0, signal: null });
+    await new Promise((r) => setImmediate(r));
+  }
+  assert.equal(reg.liveEntryCount(), 1, 'only the running job stays live');
+  const read = await reg.read(running.id, ownerA, null, 1000);
+  assert.match(read.text, /still here/);
+});
+
+test('within the retention window a settled job still serves its buffered tail', async () => {
+  const store = new InMemoryJobStore();
+  const reg = new MySqlJobRegistry(store, { settledRetentionMs: 60_000 });
+  const h = fakeHandle();
+  const snap = await reg.start({
+    kind: 'bash', label: 'echo', owner: ownerA, physicalRoots: [], run() { return h; },
+  });
+  h.pushOutput('final line\n');
+  h.triggerDone({ status: 'completed', exitCode: 0, signal: null });
+  await new Promise((r) => setImmediate(r));
+  const read = await reg.read(snap.id, ownerA, null, 1000);
+  assert.match(read.text, /final line/);
+  assert.equal(reg.liveEntryCount(), 1);
+});
+
+test('the settled-entry cap bounds the live map even inside the retention window', async () => {
+  const store = new InMemoryJobStore();
+  const reg = new MySqlJobRegistry(store, { settledRetentionMs: 60_000, maxSettledEntries: 2 });
+  for (let i = 0; i < 6; i += 1) {
+    const h = fakeHandle();
+    await reg.start({ kind: 'bash', label: `job-${i}`, owner: ownerA, physicalRoots: [], run() { return h; } });
+    h.triggerDone({ status: 'completed', exitCode: 0, signal: null });
+    await new Promise((r) => setImmediate(r));
+  }
+  assert.ok(reg.liveEntryCount() <= 2, `expected <= 2 live entries, got ${reg.liveEntryCount()}`);
+});

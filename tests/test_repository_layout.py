@@ -71,16 +71,17 @@ def _production_sources() -> list[Path]:
         # 一个文件转成 TS 就会静悄悄退出这条棘轮——http-handler 正是这样在转换里
         # 从 993 长到 1009 而没人发现。
         *ROOT.joinpath("agent", "src").rglob("*.ts"),
-        *ROOT.joinpath("sandbox").rglob("*.py"),
         *ROOT.joinpath("frontend", "src").rglob("*.ts"),
         *ROOT.joinpath("frontend", "src").rglob("*.tsx"),
         *ROOT.joinpath("api-server", "src").rglob("*.js"),
         *ROOT.joinpath("api-server", "src").rglob("*.ts"),
 
-        # DSH 重建的三个新 TS 包（ADR 0007 / 0008）。刻意**不给任何 hotspot
+        # DSH 重建的新 TS 包（ADR 0007 / 0008）。刻意**不给任何 hotspot
         # 预算**：新代码从第一天就守 1000 行上限，不把既有债务复制过去。
+        # `sandbox/**.py`（Python 执行面）与 `agent/runtime/src/**.ts`（阶段 F 之前
+        # 的独立 `@pi/runtime` 包）两条 glob 已随目录一起删除，留着只会让人以为
+        # 还有东西在扫——组合层现在在 `agent/src/runtime/`，由上面 agent/src 那条覆盖。
         *ROOT.joinpath("contract", "src").rglob("*.ts"),
-        *ROOT.joinpath("agent", "runtime", "src").rglob("*.ts"),
         *ROOT.joinpath("exec", "src").rglob("*.ts"),
     ]
     sources.extend(ROOT.joinpath("agent").glob("*.js"))

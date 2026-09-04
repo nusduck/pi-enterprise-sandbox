@@ -28,6 +28,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **启用后的 Skill 草稿不再重复列在 Drafts**：启用是复制字节、草稿不删，所以 `skill_drafts` 里会一直有它。Agent 给这类条目打 `published: true` / `status: 'published'`，UI 的 Drafts 区只列待启用的。三层 Skill 卡片统一结构，操作按钮收进卡片底部的动作行，不再被拉成整行宽的色块。
 ### Fixed
 
+- **exec 公共会话面现在真的校验 `SANDBOX_API_TOKEN`**：compose、`.env.example`
+  与 `deployment.md` 三处都要求这枚服务令牌，BFF 与 agent 也一直在发
+  `X-API-Key`——但 exec 换成 TS 之后公共面从来没有校验过它，`/sessions/*` 只看
+  `X-Acting-*` 两个头存不存在。现在按常量时间比较，不匹配 401；`ExecAppDeps`
+  的 `publicApiToken` 是**必填**字段（`null` 表示显式关闭，仅单测/本地直连），
+  `createExecAppFromEnv` 缺这枚令牌直接拒绝启动。健康探针不受影响。
+- **后台作业不再无限空转，流式读取不再永久挂起**：`RemoteShellProcess.monitor`
+  过去以固定 200ms 轮询、把所有错误都当成"网络抖动，下一轮继续"，于是 exec 说
+  "这个作业不存在"时它会 5 次/秒地永远问下去，`done` 永不 resolve。现在
+  `WORKSPACE_NOT_FOUND` 立刻结算，其余错误指数退避（200ms→2s）并有 60s 的失败
+  截止。`ExecRpcClient.getStream` 的超时定时器过去在拿到响应头时就被清掉，之后
+  逐 chunk 读流完全没有截止——现在每块另有一个空闲超时，传输中途挂起会 abort
+  连接并抛错，而不是把 Worker 协程永久挂住。
+- **exec 的作业登记表不再只增不减**：`MySqlJobRegistry.lives` 里每个条目挂着一个
+  子进程句柄和一个最大 500KB 的环形缓冲，结算路径的 `finally` 只写了一句"活句柄
+  用完即丢"的注释，实际什么都没丢——长跑的 exec 每执行一条命令就多占一份。现在
+  结算时打上时间戳，由 `pruneSettled()` 在保留窗口（默认 5 分钟）之后回收，并有
+  512 条的硬上限；仍在运行的作业永不回收，窗口内的已结算作业仍能读到缓冲的尾部输出。
+- **产物与数据集的元数据现在真的落库，重启不再整片消失**：`exec_artifacts` /
+  `exec_datasets` 的仓储类和 DDL 常量早就写好了，却既没有迁移、也没有在
+  `createExecAppFromEnv` 里接上——`ArtifactService` / `DatasetService` 一直跑在
+  构造函数默认的 `InMemory*Store` 上。六套单测全绿，但 sandbox 容器一重启，
+  `GET /api/artifacts` 就返回空列表、已有产物的下载全部 404。现在两张表随
+  `20260904000001_exec_artifacts_datasets` 迁移建出，两个 Store 与 `MySqlJobStore`
+  共用同一个池和同一次 fail-closed 判定（production 缺库直接拒绝启动）。
+  新增 `tests/test_exec_schema_migrations.py`：exec 生产装配里接的每一个
+  `MySql*Store`，它的表都必须有 agent 侧迁移，堵住"定义了表却没落地"这条路。
 - **AgentVersion 里配的 `systemPrompt` 现在真的会送到模型**：`DshRunExecutor` 过去
   只把整个 `agentVersion` 对象交给运行时工厂，而工厂读的是 `input.systemPrompt`，
   于是它永远是 `undefined`——Agent 选对了、版本也钉对了，配置的人格一个字也到不了

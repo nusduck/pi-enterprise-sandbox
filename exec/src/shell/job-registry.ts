@@ -51,6 +51,13 @@ import type {
 
 const DEFAULT_MAX_ACTIVE_PER_OWNER = 20;
 const DEFAULT_MAX_OUTPUT_BYTES = 500_000;
+// 结算后 live 条目的保留窗口。留一段时间是为了让调用方把最后那点增量读完
+// （`settle()` 已经把残留输出刷进 buffer）；过了窗口就整条丢掉，read 退化成
+// 与"Worker 重启后"完全相同的那条路径——快照终态 + 空增量。
+const DEFAULT_SETTLED_RETENTION_MS = 5 * 60_000;
+// 保留窗口之外再加一道硬上限：短命作业密集时（每个都带一个最大 500KB 的
+// 环形缓冲和一个子进程句柄）光靠时间窗口收得不够快。
+const DEFAULT_MAX_SETTLED_ENTRIES = 512;
 
 // ── 工具 ────────────────────────────────────────────────────────────────
 
@@ -105,6 +112,8 @@ interface LiveEntry {
   readonly physicalRoots: readonly string[];
   // first-wins 结算：一个作业只能被结算一次（完成/被杀/孤儿回收三条路径并发时）
   settled: boolean;
+  // 结算时刻（毫秒）。`null` 表示还在跑。清理只看这个字段——活作业永不被回收。
+  settledAt: number | null;
   // spill 引用 → 物理路径的映射（只在内存有效，重启后 spill 引用即失效，
   // 调用方拿着旧引用再来读会得到 lossy=true + 空增量，不会泄漏旧路径）。
   spillPaths: Map<string, string>;
@@ -113,6 +122,10 @@ interface LiveEntry {
 export interface JobRegistryOptions {
   readonly maxActivePerOwner?: number;
   readonly maxOutputBytes?: number;
+  /** 结算后 live 条目的保留窗口（毫秒），默认 5 分钟。0 表示结算即回收。 */
+  readonly settledRetentionMs?: number;
+  /** 同时保留的已结算条目上限，默认 512。超出时按结算时间从旧到新丢弃。 */
+  readonly maxSettledEntries?: number;
   /** 仅测试注入：覆盖默认的身份捕获实现。 */
   readonly captureIdentity?: (pid: number) => Promise<string | null>;
 }
@@ -130,12 +143,16 @@ export class MySqlJobRegistry {
   private readonly maxActivePerOwner: number;
   private readonly maxOutputBytes: number;
   private readonly lives = new Map<string, LiveEntry>();
+  private readonly settledRetentionMs: number;
+  private readonly maxSettledEntries: number;
   private readonly captureIdentityFn: (pid: number) => Promise<string | null>;
 
   constructor(store: JobStore, options: JobRegistryOptions = {}) {
     this.store = store;
     this.maxActivePerOwner = Math.max(0, options.maxActivePerOwner ?? DEFAULT_MAX_ACTIVE_PER_OWNER);
     this.maxOutputBytes = Math.max(1, options.maxOutputBytes ?? DEFAULT_MAX_OUTPUT_BYTES);
+    this.settledRetentionMs = Math.max(0, options.settledRetentionMs ?? DEFAULT_SETTLED_RETENTION_MS);
+    this.maxSettledEntries = Math.max(0, options.maxSettledEntries ?? DEFAULT_MAX_SETTLED_ENTRIES);
     this.captureIdentityFn = options.captureIdentity ?? ((pid) => captureStartIdentity(pid));
   }
 
@@ -216,9 +233,12 @@ export class MySqlJobRegistry {
       buffer,
       physicalRoots: [...spec.physicalRoots],
       settled: false,
+      settledAt: null,
       spillPaths: new Map(),
     };
     this.lives.set(id, entry);
+    // 新作业进来时顺手收一次：不起后台定时器，回收永远发生在有请求的时候。
+    this.pruneSettled();
 
     // 结算钩子：first-wins。
     handle.done
@@ -278,8 +298,36 @@ export class MySqlJobRegistry {
       // 结算写 MySQL 失败：内存里仍标记为 settled，防止重复尝试无限重试；
       // 下一次启动时的 `recoverOrphans` 会把仍为 running 的记录再次标记为终态。
     } finally {
-      // 活句柄用完即丢，避免长期持有已结束进程的资源。
-      // buffer 保留，供后续 read 消费剩余增量。
+      // 这条 live 条目从此只对 read 有用（buffer 里可能还有没被消费的增量），
+      // 句柄本身已经没有进程可控。打上结算时间，交给 `pruneSettled()` 回收——
+      // 以前这里只有一句"活句柄用完即丢"的注释，实际什么都没丢：`lives` 里
+      // 的条目（子进程句柄 + 最大 500KB 环形缓冲）从进程启动起只增不减。
+      entry.settledAt = Date.now();
+      this.pruneSettled();
+    }
+  }
+
+  /**
+   * 回收已结算的 live 条目：超过保留窗口的先丢，仍超上限时按结算时间从旧到新
+   * 继续丢。**只碰 `settledAt !== null` 的条目**——还在跑的作业永远不动。
+   *
+   * 不用定时器：那要么阻止进程退出（不 unref），要么在空闲时不触发（unref）。
+   * 回收挂在 `start()` 与 `settle()` 上，作业越密集收得越勤，正是需要的。
+   */
+  private pruneSettled(now: number = Date.now()): void {
+    const settled: { id: string; at: number }[] = [];
+    for (const [id, entry] of this.lives) {
+      if (entry.settledAt === null) continue;
+      if (now - entry.settledAt >= this.settledRetentionMs) {
+        this.lives.delete(id);
+        continue;
+      }
+      settled.push({ id, at: entry.settledAt });
+    }
+    if (settled.length <= this.maxSettledEntries) return;
+    settled.sort((a, b) => a.at - b.at);
+    for (const { id } of settled.slice(0, settled.length - this.maxSettledEntries)) {
+      this.lives.delete(id);
     }
   }
 
@@ -533,6 +581,11 @@ export class MySqlJobRegistry {
       }
     }
     return recovered;
+  }
+
+  /** 仅测试用：当前内存里的 live 条目数（含尚未回收的已结算条目）。 */
+  liveEntryCount(): number {
+    return this.lives.size;
   }
 
   /**

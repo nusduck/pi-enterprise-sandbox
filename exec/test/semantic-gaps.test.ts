@@ -73,6 +73,7 @@ describe('semantic gaps: search / artifact / dataset (expected red until impleme
       },
     );
     app = createPublicRouter({
+      apiToken: null,
       workspaceManager,
       systemSkillRoot: path.join(base, 'skills'),
       enabledSkillPackagesFor: () => [],

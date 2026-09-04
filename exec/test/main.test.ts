@@ -16,6 +16,7 @@ import { InMemoryJobStore } from '../src/shell/job-store-memory.js';
 const TEST_KID = 'test-kid-1';
 const TEST_KEY_B64URL = Buffer.from('0'.repeat(32), 'utf8').toString('base64url');
 const KEYRING_JSON = JSON.stringify({ [TEST_KID]: TEST_KEY_B64URL });
+const TEST_API_TOKEN = 'exec-test-service-token-32-bytes-long';
 
 function sha256Hex(data: Uint8Array | string): string {
   const buf = typeof data === 'string' ? Buffer.from(data, 'utf8') : Buffer.from(data);
@@ -36,6 +37,7 @@ describe('createExecApp mounts health + internal + public routers', () => {
     });
     const registry = new MySqlJobRegistry(new InMemoryJobStore());
     app = createExecApp({
+      publicApiToken: null,
       workspaceManager: manager,
       jobRegistry: registry,
       keyring: KEYRING_JSON,
@@ -323,11 +325,127 @@ describe('createExecAppFromEnv fail-closed without HMAC', () => {
       DEPLOYMENT_ENV: 'development',
       SANDBOX_INTERNAL_HMAC_KEYRING: KEYRING_JSON,
       SANDBOX_INTERNAL_HMAC_ACTIVE_KID: TEST_KID,
+      SANDBOX_API_TOKEN: TEST_API_TOKEN,
       SANDBOX_WORKSPACES_ROOT: join(tmpdir(), 'exec-env-ws'),
       SANDBOX_TEMP_ROOT: join(tmpdir(), 'exec-env-tmp'),
     } as NodeJS.ProcessEnv);
     const res = await runtime.app.request('/health');
     assert.equal(res.status, 200);
     await runtime.dispose();
+  });
+});
+
+describe('createExecAppFromEnv wires durable artifact/dataset stores', () => {
+  // 回归：曾经只有 JobStore 接了 MySQL，ArtifactService/DatasetService 落回
+  // 构造函数默认的内存实现——容器一重启，`GET /sessions/:id/artifacts`
+  // 就返回空列表，下载全部 404。这里把库指向一个没人监听的端口：
+  // 接了 MySQL 就必然连不上（5xx），没接就会安静地返回 200 空列表。
+  const workspaceId = '01ARZ3NDEKTSV4RRFFQ69G5FAV';
+  const dbEnv = {
+    DEPLOYMENT_ENV: 'development',
+    SANDBOX_INTERNAL_HMAC_KEYRING: KEYRING_JSON,
+    SANDBOX_INTERNAL_HMAC_ACTIVE_KID: TEST_KID,
+    SANDBOX_API_TOKEN: TEST_API_TOKEN,
+    SANDBOX_WORKSPACES_ROOT: join(tmpdir(), 'exec-env-db-ws'),
+    SANDBOX_TEMP_ROOT: join(tmpdir(), 'exec-env-db-tmp'),
+    EXEC_DATABASE_URL: 'mysql://exec:secret@127.0.0.1:1/execdb',
+  } as NodeJS.ProcessEnv;
+  const acting = {
+    'X-Acting-Organization-Id': '01ARZ3NDEKTSV4RRFFQ69G5FAW',
+    'X-Acting-User-Id': '01ARZ3NDEKTSV4RRFFQ69G5FAX',
+    'X-API-Key': TEST_API_TOKEN,
+  };
+
+  test('artifact list goes to MySQL instead of an in-memory map', async () => {
+    const runtime = createExecAppFromEnv(dbEnv);
+    try {
+      const res = await runtime.app.request(`/sessions/${workspaceId}/artifacts`, {
+        headers: acting,
+      });
+      assert.notEqual(res.status, 200);
+      assert.ok(res.status >= 500, `expected a DB failure, got ${res.status}`);
+      // 脱敏不变量：DSN / 口令绝不能出现在错误体里。
+      const body = await res.text();
+      assert.ok(!body.includes('secret'), 'DB password leaked into the error body');
+    } finally {
+      await runtime.dispose();
+    }
+  });
+
+  test('dataset list goes to MySQL instead of an in-memory map', async () => {
+    const runtime = createExecAppFromEnv(dbEnv);
+    try {
+      const res = await runtime.app.request(`/sessions/${workspaceId}/datasets`, {
+        headers: acting,
+      });
+      assert.notEqual(res.status, 200);
+      assert.ok(res.status >= 500, `expected a DB failure, got ${res.status}`);
+    } finally {
+      await runtime.dispose();
+    }
+  });
+});
+
+describe('public session plane requires the service token', () => {
+  // 回归：`SANDBOX_API_TOKEN` 一直被 compose、`.env.example` 与 BFF（`X-API-Key`）
+  // 两侧要求，但 exec 换成 TS 之后公共面从来没校验过它——调用方以为有门，
+  // 服务方根本没开。
+  const workspaceId = '01ARZ3NDEKTSV4RRFFQ69G5FAV';
+  const acting = {
+    'X-Acting-Organization-Id': '01ARZ3NDEKTSV4RRFFQ69G5FAW',
+    'X-Acting-User-Id': '01ARZ3NDEKTSV4RRFFQ69G5FAX',
+  };
+
+  function appWithToken() {
+    const manager = new WorkspaceManager({
+      workspacesBaseRoot: join(tmpdir(), 'exec-token-ws'),
+      tempBaseRoot: join(tmpdir(), 'exec-token-tmp'),
+    });
+    return createExecApp({
+      workspaceManager: manager,
+      jobRegistry: new MySqlJobRegistry(new InMemoryJobStore()),
+      keyring: KEYRING_JSON,
+      systemSkillRoot: join(tmpdir(), 'exec-token-skills'),
+      bwrapExecutable: '/usr/bin/bwrap',
+      allowCidr: [],
+      publicApiToken: TEST_API_TOKEN,
+    });
+  }
+
+  test('a request without X-API-Key is rejected before ownership is even considered', async () => {
+    const res = await appWithToken().request(`/sessions/${workspaceId}/artifacts`, { headers: acting });
+    assert.equal(res.status, 401);
+  });
+
+  test('a wrong X-API-Key is rejected', async () => {
+    const res = await appWithToken().request(`/sessions/${workspaceId}/artifacts`, {
+      headers: { ...acting, 'X-API-Key': 'exec-test-service-token-32-bytes-WRONG' },
+    });
+    assert.equal(res.status, 401);
+  });
+
+  test('the correct X-API-Key gets through to the session-scoped routes', async () => {
+    const res = await appWithToken().request(`/sessions/${workspaceId}/artifacts`, {
+      headers: { ...acting, 'X-API-Key': TEST_API_TOKEN },
+    });
+    assert.notEqual(res.status, 401);
+  });
+
+  test('health probes stay open — they are not part of the session plane', async () => {
+    for (const path of ['/health', '/ready', '/health/live', '/health/ready']) {
+      assert.equal((await appWithToken().request(path)).status, 200, path);
+    }
+  });
+
+  test('createExecAppFromEnv refuses to start without SANDBOX_API_TOKEN', () => {
+    assert.throws(
+      () =>
+        createExecAppFromEnv({
+          DEPLOYMENT_ENV: 'development',
+          SANDBOX_INTERNAL_HMAC_KEYRING: KEYRING_JSON,
+          SANDBOX_INTERNAL_HMAC_ACTIVE_KID: TEST_KID,
+        } as NodeJS.ProcessEnv),
+      /SANDBOX_API_TOKEN/,
+    );
   });
 });
