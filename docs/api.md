@@ -383,6 +383,21 @@ Base URL: `http://sandbox:8081`（Docker 内网）
 | `POST` | `/internal/v1/artifacts/download` | 交付物取回 |
 | — | `/internal/mcp/v1/*` | `sandbox-mcp` facade（独立部署，见 [`sandbox-mcp.md`](./sandbox-mcp.md)） |
 
+令牌的 `htm` / `htu` / `scope` / `tool_name` 四项都**逐字绑定**这张表（2026-09-04 起）：
+
+- `htm` 必须与实际方法相等。以前 contract 把它钉死为 `'POST'`，而
+  `GET /internal/v1/fs/stream-text` 也要签，于是校验侧写了一条「htm 是 POST 但
+  方法是 GET 就放行」的例外——任何一枚 POST 令牌都能拿去打 GET 端点。现在
+  `htm` 允许 `'GET'`，例外删除。
+- `scope` / `tool_name` 按路由族校验，表在 `@pi/contract` 的
+  `internalBindingForHtu()`，签发与校验两侧共用：`fs/*` → `sandbox.fs` / `fs`，
+  `shell/*` → `sandbox.shell` / `shell`，`jobs/*` → `sandbox.jobs` / `jobs`，
+  `artifacts/submit` → `sandbox.artifacts.submit` / `artifact.submit`，
+  `artifacts/download` → `sandbox.artifacts.download` / `artifact.download`，
+  `sessions/ensure` → `sandbox.sessions.ensure` / `session.ensure`。
+  以前这两项谁都不看，`ExecRpcClient` 对所有 RPC 都写死 `fs` / `internal:fs`——
+  一枚「文件」令牌可以拿去起进程。**未登记的内部路径一律拒**，新端点不会默认免检。
+
 模型默认工具面由 `agent/src/runtime/policy/tool-names.ts` 的
 `ENTERPRISE_DEFAULT_TOOLS` 唯一定义：`read` / `write` / `edit` / `read_image`、
 `glob` / `grep`、`bash`、`job_list` / `job_output` / `job_kill`、`todo_write`、

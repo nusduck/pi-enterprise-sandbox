@@ -474,3 +474,46 @@ Each entry should say **what changed**, **why**, and **which STATUS IDs** it aff
   `kill -9` 它容器立刻 restarting。这一条写进了新门禁的文件头注释。
   旧门禁里另外三块断言（20 并发执行、5 GiB 流式 Dataset 的有界 RSS、跨租户内部面隔离）
   **没有**随之重写——它们对应的是 C4/C6/H2 等其它行，不在 G7 范围内，应各自单开一件事。
+
+## 2026-09-04（续三）— 配额落库、内部面收紧、死代码清理
+
+一次把上两条 Not closed 里剩下的可控项做完。
+
+- **配额落库**：`workspace_quota_reservations` 只有 DDL 没有迁移，
+  `ArtifactService` / `DatasetService` 各自默认装配一个 `InMemoryQuotaStore`——
+  既重启即忘，又**互相看不见**（同一个工作区的产物与数据集各算各的，1024MB
+  能被用掉两份）。新增迁移 `20260904000002_workspace_quota_reservations`，
+  生产装配用 `MySqlQuotaStore`，两个服务共用一个 `WorkspaceQuotaLedger`。
+  `tests/test_exec_schema_migrations.py` 的 ratchet 自动把它纳入了覆盖。
+- **内部面 htm/scope/tool_name 逐字绑定**：contract 的 `htm` 放开到 `'POST' | 'GET'`
+  （**不是放松**——正因为钉死 POST，exec 侧才不得不写「POST 令牌打 GET 端点也放行」
+  的例外），exec 侧改为逐字相等并删掉那条例外；新增 `internalBindingForHtu()`
+  作为两侧共用的 scope/tool_name 绑定表，未登记路径一律拒。
+- **对端 IP 不再采信 `X-Forwarded-For`**：监听器把 socket 的 `remoteAddress` 注入成
+  `x-exec-peer-ip`（同名头先剥后写），`getClientIp` 只认它；取不到返回空串而不是
+  兜底 `127.0.0.1`。新增 `EXEC_INTERNAL_ALLOW_CIDR` / `EXEC_HTTP_LOG` 两个变量的
+  文档（`.env.example` 与 `deployment.md` 双侧）。
+- **请求行日志**：两行裸 `process.stdout.write` 改成一个默认关闭、由 `EXEC_HTTP_LOG=1`
+  打开的 JSON 单行。
+- **删除 `runtime/providers/memory.ts`**（+ 单测 + `runtime/index.ts` 的导出）：
+  ADR 0009 D10 早把这两个工具标成 `TOOL_RETIRED`。Map 白名单 27 → 26。
+- **中途自己引入又抓住的一个 bug**：给 `issueToken` 加 method 参数时，`post()` 与
+  `getStream()` 两处调用签反了——POST 请求带着 `htm: 'GET'` 的令牌，真实链路上
+  exec 全线 401。单测没抓住是因为假 fetch 不校验 HMAC。补了
+  `remote-providers.test.ts` 里一条**解开令牌**比对 htm/htu/scope/tool_name 与真实
+  请求的用例；把两处再签反一次，这条立刻失败。
+- **Verification:** 六套单测 + 五处类型检查全绿。重建后真实链路 15/15 PASS，
+  G7 门禁 8/8 PASS。配额落库另做了一次针对性验证：往
+  `workspace_quota_reservations` 直接插一条 1GiB 的预留，随后的 `artifacts/submit`
+  被拒并回显 `reserved 1073741824`——证明 exec 读的是 MySQL 而不是进程内的 Map。
+- **STATUS IDs:** 无 §32 行状态改变。
+- **Not closed:**
+  - `exec_workspaces` / `exec_executions` / `session_events` 三张表仍然只有 DDL、
+    没有消费者；接它们是新功能。
+  - 旧 G7 门禁里的另外三块断言（20 并发执行、5 GiB 流式 Dataset 的有界 RSS、
+    跨租户内部面隔离）没有重写，对应 C4/C6/H2 等行。
+  - `WorkspaceQuotaLedger` 用的仍是 `InProcessWorkspaceLock`：单实例 exec 够用，
+    多实例要换成 DB 级锁。今天只有一个 exec 实例，先记在这里。
+  - `exec-rpc.ts` 里那个只去尾斜杠的私有 `normalizeBaseUrl` 仍未与
+    `transport-base-url.ts` 的策略函数合并（前者的 baseUrl 来自进程环境）。
+  - 十个超千行文件仍在棘轮里记着账，本轮没有拆分。

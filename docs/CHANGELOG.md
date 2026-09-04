@@ -28,6 +28,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **启用后的 Skill 草稿不再重复列在 Drafts**：启用是复制字节、草稿不删，所以 `skill_drafts` 里会一直有它。Agent 给这类条目打 `published: true` / `status: 'published'`，UI 的 Drafts 区只列待启用的。三层 Skill 卡片统一结构，操作按钮收进卡片底部的动作行，不再被拉成整行宽的色块。
 ### Fixed
 
+- **内部面的令牌现在真的绑定方法与能力**：`htm` 以前在 contract 里钉死 `'POST'`，
+  而 `GET /internal/v1/fs/stream-text` 也要签，于是 exec 侧写了一条「htm 是 POST
+  但方法是 GET 就放行」的例外——任何一枚 POST 令牌都能拿去打 GET 端点。现在
+  `htm` 允许 `'GET'`，例外删除，方法逐字相等。`scope` / `tool_name` 从来没人校验
+  （`ExecRpcClient` 对所有 RPC 都写死 `fs` / `internal:fs`，一枚「文件」令牌可以
+  拿去起进程），现在按路由族校验，绑定表 `internalBindingForHtu()` 放在
+  `@pi/contract`，签发与校验共用一张表；**未登记的内部路径一律拒**，新端点不会
+  默认免检。
+- **产物与数据集的配额账本落库，并且共用同一本账**：`workspace_quota_reservations`
+  只有 DDL、没有迁移，两个服务各自在构造函数里默认装配一个 `InMemoryQuotaStore`
+  ——既重启即忘（配额计数归零 = 多放行），又互相看不见（同一个工作区的产物与
+  数据集各算各的，1024MB 的额度实际能被用掉两份）。现在建表、生产装配用
+  `MySqlQuotaStore`，两个服务共用一个 `WorkspaceQuotaLedger`。
+- **exec 内部面的 IP 判定不再采信 `X-Forwarded-For`**：CIDR 白名单的唯一输入以前
+  是 `X-Forwarded-For` / `X-Real-IP`（谁都能伪造），两个都取不到还兜底成
+  `127.0.0.1`——等于给任何拿不到对端地址的路径发通行证。现在对端地址由监听器从
+  TCP socket 注入（同名头先剥后写），取不到即空串：白名单为空时照常放行，配了
+  白名单就一律拒。
+- **`memory_write` / `memory_search` 的实现随工具一起退役**：ADR 0009 D10 已把这
+  两个工具标成 `TOOL_RETIRED`，但 `runtime/providers/memory.ts` 与它的单测还在，
+  并且仍从 `runtime/index.ts` 对外导出。已删除。
 - **exec 重启后不再留下永远 `running` 的僵尸作业行（§32 G7）**：
   `MySqlJobRegistry.recoverOrphans()` 的注释从第一天就写着「启动期调用（用户路由
   挂载之前）」，但**从来没有任何调用点**——只有一条单测在调。exec 每重启一次，

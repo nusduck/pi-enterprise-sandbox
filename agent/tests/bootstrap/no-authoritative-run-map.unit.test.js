@@ -162,13 +162,6 @@ const TRANSIENT_MAP_WHITELIST = Object.freeze([
     scope: 'instance',
   },
   {
-    rel: 'runtime/providers/memory.ts',
-    match: /private\s+readonly\s+buckets\s*=\s*new\s+Map/,
-    purpose:
-      'Explicit in-memory provider implementation keyed by owner; selected only where the memory provider is configured',
-    scope: 'instance',
-  },
-  {
     rel: 'runtime/providers/enabled-skills.ts',
     match: /private\s+readonly\s+map\s*=\s*new\s+Map/,
     purpose:
@@ -408,12 +401,13 @@ describe('no authoritative in-process Run Map (B3)', () => {
     // Inventory size sanity: every residual Map is explicitly classified.
     // The inventory follows the current TypeScript source tree; obsolete
     // JavaScript-era entries are intentionally not kept as evidence.
-    // 2026-09-04: 28 → 27，`infrastructure/sandbox/internal-hmac.ts` 随 HMAC
-    // 实现收口到 `@pi/contract/hmac.js` 一起删除，它那条 keyring 解码的
-    // function-local Map 也就不在 agent/src 里了。
+    // 2026-09-04: 28 → 26。少的两条分别是
+    // `infrastructure/sandbox/internal-hmac.ts`（HMAC 实现收口到
+    // `@pi/contract/hmac.js`，整文件删除）与 `runtime/providers/memory.ts`
+    // （memory 工具按 ADR 0009 D10 退役，实现是死代码，一并删除）。
     assert.equal(
       TRANSIENT_MAP_WHITELIST.length,
-      27,
+      26,
       'whitelist size drift — update STATUS B3 inventory evidence if intentional',
     );
   });

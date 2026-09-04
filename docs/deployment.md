@@ -120,6 +120,8 @@ key 前缀保存 `context_id` 映射，并通过 Sandbox 私有桥接执行。�
 | `SANDBOX_API_TOKEN` | — | exec 公共会话面（`/sessions/*`、`/conversations/*`、`/datasets`）的 service key，BFF 与 agent 都以 `X-API-Key` 发送；**exec 启动时必填**，缺失即拒绝启动（fail-closed，否则会话面完全无鉴权）。它不是正式 Agent execution authorization，也不能代表终端用户 |
 | `SANDBOX_INTERNAL_HMAC_KEYRING` | — | 正式 Agent→Sandbox `/internal/v1/*` HMAC keyring；生产必填，密钥不得写入日志 |
 | `SANDBOX_INTERNAL_HMAC_ACTIVE_KID` | — | 当前签名 key id；必须存在于 keyring |
+| `EXEC_INTERNAL_ALLOW_CIDR` | 空 | exec 内部面的 CIDR 白名单（逗号分隔）；留空不限 IP。判定用的对端地址取自 TCP socket，**不再采信 `X-Forwarded-For` / `X-Real-IP`**（内部面前面没有反向代理，这两个头谁都能伪造；且以前取不到时会兜底成 `127.0.0.1`）|
+| `EXEC_HTTP_LOG` | 空 | 设为 `1` 打开 exec 内部面的请求行日志（JSON 一行：方法/路径/状态码，不含 query）|
 | `SANDBOX_INTERNAL_REDIS_URL` | — | 独立 replay Redis，用于 HMAC jti 防重放；不得复用 Agent Redis 凭据 |
 | `SANDBOX_JWT_SECRET` | — | **Agent HTTP 进程**签发/校验浏览器 JWT 的 HMAC 密钥；变量名为迁移兼容保留，生产必须是强密钥且不会传给 exec |
 | `SANDBOX_JWT_TTL_SECONDS` / `SANDBOX_JWT_ISSUER` / `SANDBOX_JWT_AUDIENCE` | `86400` / `pi-enterprise-sandbox` | Agent 浏览器会话 token 的有效期与签发约束 |

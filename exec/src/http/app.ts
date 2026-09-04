@@ -16,6 +16,10 @@ import { InMemoryJobStore } from '../shell/job-store-memory.js';
 import { MySqlJobStore } from '../shell/job-store-mysql.js';
 import { MySqlArtifactStore } from '../db/repositories/artifacts.js';
 import { MySqlDatasetStore } from '../db/repositories/datasets.js';
+import { MySqlQuotaStore, InMemoryQuotaStore } from '../workspace/quota-store.js';
+import type { QuotaStore } from '../workspace/quota-store.js';
+import { WorkspaceQuotaLedger } from '../workspace/quota-ledger.js';
+import { InProcessWorkspaceLock } from '../workspace/lock.js';
 import type { JobStore } from '../shell/job-types.js';
 import {
   createExecDbPool,
@@ -75,6 +79,11 @@ export interface ExecAppDeps {
   readonly modeFor?: InternalRouterDeps['modeFor'];
   readonly artifactService?: ArtifactService;
   readonly datasetService?: DatasetService;
+  /**
+   * 配额预留账本的存储。不传则用内存实现（单测/本地）。产物与数据集共用
+   * 同一个账本，所以这里只有一处，不是每个服务一份。
+   */
+  readonly quotaStore?: QuotaStore;
   /** MCP 窄桥的 bearer token；空串表示该桥不可用（回 503）。 */
   readonly mcpInternalToken?: string;
   /**
@@ -88,8 +97,18 @@ export interface ExecAppDeps {
 export function createExecApp(deps: ExecAppDeps): Hono {
   const skills = deps.enabledSkillPackagesFor ?? (() => []);
   const modeFor = deps.modeFor ?? (() => 'workspace-write' as const);
-  const artifactService = deps.artifactService ?? new ArtifactService(makeWorkspaceFs);
-  const datasetService = deps.datasetService ?? new DatasetService(makeWorkspaceFs);
+  // 产物与数据集共用**同一个**配额账本。以前它们各自在构造函数里默认装配一个
+  // `InMemoryQuotaStore`，于是同一个工作区的两类写入各算各的——1024MB 的额度
+  // 实际能被用掉两份；再加上内存实现重启即忘，配额只是个摆设。
+  const quotaLedger = new WorkspaceQuotaLedger(
+    deps.quotaStore ?? new InMemoryQuotaStore(),
+    new InProcessWorkspaceLock(),
+    { defaultQuotaMb: 1024 },
+  );
+  const artifactService =
+    deps.artifactService ?? new ArtifactService(makeWorkspaceFs, undefined, { quotaLedger });
+  const datasetService =
+    deps.datasetService ?? new DatasetService(makeWorkspaceFs, undefined, { quotaLedger });
 
   const internal: InternalRouterDeps = {
     workspaceManager: deps.workspaceManager,
@@ -188,12 +207,21 @@ export function createExecAppFromEnv(env: NodeJS.ProcessEnv = process.env): Exec
   // 静默回退内存实现，容器一重启 `GET /sessions/:id/artifacts` 就整片变空。
   let artifactService: ArtifactService | undefined;
   let datasetService: DatasetService | undefined;
+  let quotaStore: QuotaStore | undefined;
   try {
     const cfg = readExecDbConfigFromSandboxEnv(env);
     pool = createExecDbPool(cfg);
     store = new MySqlJobStore(pool);
-    artifactService = new ArtifactService(makeWorkspaceFs, new MySqlArtifactStore(pool));
-    datasetService = new DatasetService(makeWorkspaceFs, new MySqlDatasetStore(pool));
+    quotaStore = new MySqlQuotaStore(pool);
+    const quotaLedger = new WorkspaceQuotaLedger(quotaStore, new InProcessWorkspaceLock(), {
+      defaultQuotaMb: 1024,
+    });
+    artifactService = new ArtifactService(makeWorkspaceFs, new MySqlArtifactStore(pool), {
+      quotaLedger,
+    });
+    datasetService = new DatasetService(makeWorkspaceFs, new MySqlDatasetStore(pool), {
+      quotaLedger,
+    });
   } catch (err) {
     if (!(err instanceof ExecDbConfigError)) throw err;
     const deployment = String(env['DEPLOYMENT_ENV'] ?? env['NODE_ENV'] ?? '').toLowerCase();
@@ -234,6 +262,7 @@ export function createExecAppFromEnv(env: NodeJS.ProcessEnv = process.env): Exec
     publicApiToken,
     ...(artifactService !== undefined ? { artifactService } : {}),
     ...(datasetService !== undefined ? { datasetService } : {}),
+    ...(quotaStore !== undefined ? { quotaStore } : {}),
   });
 
   return {

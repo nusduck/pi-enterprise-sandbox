@@ -22,6 +22,9 @@ import { DatasetService, DatasetError, sanitizeDatasetFilename } from '../src/da
 import { AttachmentService } from '../src/attachment/service.js';
 import { InMemoryArtifactStore } from '../src/db/repositories/artifacts.js';
 import { InMemoryDatasetStore } from '../src/db/repositories/datasets.js';
+import { InMemoryQuotaStore } from '../src/workspace/quota-store.js';
+import { WorkspaceQuotaLedger } from '../src/workspace/quota-ledger.js';
+import { InProcessWorkspaceLock } from '../src/workspace/lock.js';
 
 async function makeWs(): Promise<{ root: string; ctx: WorkspaceContext; fs: WorkspaceFileSystem; cleanup: () => Promise<void> }> {
   const raw = await mkdtemp(path.join(await realpath(tmpdir()), 'pi-w3b-'));
@@ -384,5 +387,54 @@ describe('W3-B attachment', () => {
       return true;
     });
     await cleanup();
+  });
+});
+
+describe('产物与数据集共用同一个配额账本', () => {
+  // 回归：两个服务各自在构造函数里默认装配一个 `InMemoryQuotaStore`，同一个
+  // 工作区的产物与数据集因此各算各的额度——1024MB 能被用掉两份。生产装配
+  // （`createExecApp` / `createExecAppFromEnv`）现在只建一个账本传给两边。
+  let ws: Awaited<ReturnType<typeof makeWs>>;
+
+  before(async () => { ws = await makeWs(); });
+  after(async () => { await ws.cleanup(); });
+
+  test('一边的预留会算进另一边的额度', async () => {
+    const store = new InMemoryQuotaStore();
+    const ledger = new WorkspaceQuotaLedger(store, new InProcessWorkspaceLock(), {
+      defaultQuotaMb: 1024,
+    });
+
+    // 直接对账本下手，语义与两个服务内部调用的是同一个方法。
+    const half = 600 * 1024 * 1024;
+    await ledger.reserve(ws.ctx.workspaceRoot, ws.ctx.workspaceId, half);
+    assert.equal(await store.sumReserved(ws.ctx.workspaceId), half);
+
+    // 共用账本时，第二笔 600MB 会超出 1024MB 而被拒。各用各的账本则两笔都过。
+    await assert.rejects(
+      () => ledger.reserve(ws.ctx.workspaceRoot, ws.ctx.workspaceId, half),
+      (err: Error) => /quota/i.test(err.name + err.message),
+    );
+
+    const separate = new WorkspaceQuotaLedger(
+      new InMemoryQuotaStore(), new InProcessWorkspaceLock(), { defaultQuotaMb: 1024 },
+    );
+    await separate.reserve(ws.ctx.workspaceRoot, ws.ctx.workspaceId, half);
+    assert.equal(
+      await store.sumReserved(ws.ctx.workspaceId), half,
+      '独立账本看不见彼此——这正是修复前的行为',
+    );
+  });
+
+  test('createExecApp 只建一个账本，两个服务拿到的是同一个', async () => {
+    // 结构性断言：装配入口里 `new WorkspaceQuotaLedger(` 只能出现一次，
+    // 且 artifact / dataset 都是用 `{ quotaLedger }` 装配的。
+    const source = await readFile(
+      new URL('../src/http/app.ts', import.meta.url), 'utf8',
+    );
+    const perApp = source.match(/new WorkspaceQuotaLedger\(/g) ?? [];
+    assert.equal(perApp.length, 2, 'createExecApp 与 createExecAppFromEnv 各一个，不该更多');
+    assert.match(source, /new ArtifactService\(makeWorkspaceFs, undefined, \{ quotaLedger \}\)/);
+    assert.match(source, /new DatasetService\(makeWorkspaceFs, undefined, \{ quotaLedger \}\)/);
   });
 });

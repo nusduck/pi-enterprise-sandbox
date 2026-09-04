@@ -10,9 +10,9 @@ import { createHash } from 'node:crypto';
 import { mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { test } from 'node:test';
+import { describe, test } from 'node:test';
 import { Hono } from 'hono';
-import { issueInternalToken } from '@pi/contract/hmac.js';
+import { issueInternalToken , internalBindingForHtu } from '@pi/contract/hmac.js';
 import { createInternalRouter } from '../src/http/router.js';
 import { isIpAllowed } from '../src/security/cidr.js';
 import { hashBodySha256, verifyInternalRequest } from '../src/security/hmac.js';
@@ -31,6 +31,29 @@ function sha256Hex(data: Uint8Array | string): string {
 const TEST_KID = 'test-kid-1';
 const TEST_KEY_B64URL = Buffer.from('0'.repeat(32), 'utf8').toString('base64url'); // 32 bytes
 const KEYRING = { [TEST_KID]: TEST_KEY_B64URL };
+const KEYRING_JSON = JSON.stringify(KEYRING);
+
+/** 一组"其余字段都合法"的 claim，让用例只需要改自己关心的那一两个。 */
+function baseClaims(path: string) {
+  const binding = internalBindingForHtu(path);
+  return {
+    org_id: 'org_test',
+    user_id: 'user_test',
+    conversation_id: 'conv_test',
+    agent_session_id: 'as_test',
+    sandbox_session_id: 'ss_test',
+    run_id: 'run_test',
+    tool_execution_id: 'te_test',
+    tool_call_id: 'tc_test',
+    tool_name: binding?.toolName ?? 'fs',
+    scope: [binding?.scope ?? 'sandbox.fs'] as [string],
+    request_hash: 'a'.repeat(64),
+    execution_fence_token: 1,
+    trace_id: 'trace_test',
+    htm: 'POST' as 'POST' | 'GET',
+    htu: path,
+  };
+}
 
 function makeToken(opts: {
   method?: string;
@@ -54,8 +77,8 @@ function makeToken(opts: {
       run_id: 'run_test',
       tool_execution_id: 'te_test',
       tool_call_id: 'tc_test',
-      tool_name: 'fs.resolve',
-      scope: ['sandbox.fs.resolve'],
+      tool_name: internalBindingForHtu(opts.path)?.toolName ?? 'fs',
+      scope: [internalBindingForHtu(opts.path)?.scope ?? 'sandbox.fs'],
       request_hash: 'a'.repeat(64),
       execution_fence_token: 1,
       trace_id: 'trace_test',
@@ -314,4 +337,111 @@ test('router: tampered body_sha256 returns 401', async () => {
   });
   assert.equal(res.status, 401);
   await cleanup();
+});
+
+describe('内部面：方法与能力都必须逐字绑定', () => {
+  // 回归三条：
+  // 1. `htm` 曾在 contract 里钉死 'POST'，exec 侧于是写了一条「htm 是 POST 但
+  //    方法是 GET 就放行」的例外——任何一枚 POST 令牌都能拿去打 GET 端点。
+  // 2. `scope` / `tool_name` 从来没人校验，`ExecRpcClient` 对所有 RPC 都写死
+  //    `fs` / `internal:fs`——一枚「文件」令牌可以拿去起进程。
+  // 3. 未登记的路径不能默认免检。
+  test('POST 令牌打不了 GET 端点', async () => {
+    const path = '/internal/v1/fs/stream-text';
+    const token = issueInternalToken({
+      keyring: KEYRING_JSON,
+      activeKid: TEST_KID,
+      claims: {
+        ...baseClaims(path),
+        htm: 'POST',
+        body_sha256: sha256Hex(''),
+      },
+    });
+    assert.throws(
+      () => verifyInternalRequest(`Bearer ${token}`, {
+        keyring: KEYRING_JSON, rawBody: new Uint8Array(0), method: 'GET', path,
+      }),
+      /htm mismatch/,
+    );
+  });
+
+  test('GET 令牌配 GET 请求可以过', () => {
+    const path = '/internal/v1/fs/stream-text';
+    const token = issueInternalToken({
+      keyring: KEYRING_JSON,
+      activeKid: TEST_KID,
+      claims: { ...baseClaims(path), htm: 'GET', body_sha256: sha256Hex('') },
+    });
+    const claims = verifyInternalRequest(`Bearer ${token}`, {
+      keyring: KEYRING_JSON, rawBody: new Uint8Array(0), method: 'GET', path,
+    });
+    assert.equal(claims.htm, 'GET');
+  });
+
+  test('文件 scope 打不了 shell 端点', () => {
+    const path = '/internal/v1/shell/run';
+    const body = JSON.stringify({});
+    const token = issueInternalToken({
+      keyring: KEYRING_JSON,
+      activeKid: TEST_KID,
+      claims: {
+        ...baseClaims(path),
+        tool_name: 'fs',
+        scope: ['sandbox.fs'],
+        body_sha256: sha256Hex(body),
+      },
+    });
+    assert.throws(
+      () => verifyInternalRequest(`Bearer ${token}`, {
+        keyring: KEYRING_JSON,
+        rawBody: new TextEncoder().encode(body),
+        method: 'POST',
+        path,
+      }),
+      /scope mismatch/,
+    );
+  });
+
+  test('scope 对但 tool_name 冒充也拒', () => {
+    const path = '/internal/v1/shell/run';
+    const body = JSON.stringify({});
+    const token = issueInternalToken({
+      keyring: KEYRING_JSON,
+      activeKid: TEST_KID,
+      claims: {
+        ...baseClaims(path),
+        tool_name: 'fs',
+        scope: ['sandbox.shell'],
+        body_sha256: sha256Hex(body),
+      },
+    });
+    assert.throws(
+      () => verifyInternalRequest(`Bearer ${token}`, {
+        keyring: KEYRING_JSON,
+        rawBody: new TextEncoder().encode(body),
+        method: 'POST',
+        path,
+      }),
+      /tool_name mismatch/,
+    );
+  });
+
+  test('没有登记绑定的内部路径一律拒，不是默认放行', () => {
+    const path = '/internal/v1/brand-new/thing';
+    const body = JSON.stringify({});
+    const token = issueInternalToken({
+      keyring: KEYRING_JSON,
+      activeKid: TEST_KID,
+      claims: { ...baseClaims(path), body_sha256: sha256Hex(body) },
+    });
+    assert.throws(
+      () => verifyInternalRequest(`Bearer ${token}`, {
+        keyring: KEYRING_JSON,
+        rawBody: new TextEncoder().encode(body),
+        method: 'POST',
+        path,
+      }),
+      /no scope binding/,
+    );
+  });
 });

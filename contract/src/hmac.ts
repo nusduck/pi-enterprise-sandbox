@@ -110,6 +110,9 @@ const UTF8_FATAL_DECODER = new TextDecoder('utf-8', { fatal: true });
 /** 令牌单元素 scope（本 schema 只允许恰好一个）。 */
 export type InternalTokenScope = readonly [string];
 
+/** 令牌能绑定的 HTTP 方法。内部面只有这两种。 */
+export type InternalTokenMethod = 'POST' | 'GET';
+
 /** 调用方提供的签发字段。 */
 export interface InternalTokenIssueClaims {
   readonly org_id: string;
@@ -125,7 +128,12 @@ export interface InternalTokenIssueClaims {
   readonly request_hash: string;
   readonly execution_fence_token: number | null;
   readonly trace_id: string;
-  readonly htm: 'POST';
+  /**
+   * 绑定的 HTTP 方法。**必须与实际请求一致**——2026-09-04 之前这里钉死
+   * `'POST'`，而 `GET /internal/v1/fs/stream-text` 也得签，于是校验侧只能写
+   * 一条 "htm 是 POST 但方法是 GET 就放行" 的例外，方法绑定形同虚设。
+   */
+  readonly htm: InternalTokenMethod;
   readonly htu: string;
   readonly body_sha256: string;
 }
@@ -498,6 +506,37 @@ function assertScope(value: unknown): InternalTokenScope {
   ]) as InternalTokenScope;
 }
 
+/**
+ * 路由族 → 该族要求的 scope / tool_name。**两侧共用这一张表**：agent 按它签发，
+ * exec 按它校验。
+ *
+ * 为什么需要它：`scope` 与 `tool_name` 从一开始就在 claim 里，但没有任何一方
+ * 拿它们做判断——`ExecRpcClient` 对所有 RPC 都写死 `tool_name: 'fs'` /
+ * `scope: ['internal:fs']`，exec 侧压根不看。一枚"文件"令牌因此能拿去起进程。
+ * 词汇沿用 contract 已有的 `sandbox.*`（`sandbox.sessions.ensure` /
+ * `sandbox.artifacts.download` 早就在用），不再引入第二套 `internal:*`。
+ */
+const HTU_BINDINGS: readonly { readonly prefix: string; readonly scope: string; readonly toolName: string }[] = [
+  { prefix: '/internal/v1/fs/', scope: 'sandbox.fs', toolName: 'fs' },
+  { prefix: '/internal/v1/shell/', scope: 'sandbox.shell', toolName: 'shell' },
+  { prefix: '/internal/v1/jobs/', scope: 'sandbox.jobs', toolName: 'jobs' },
+  { prefix: '/internal/v1/artifacts/submit', scope: 'sandbox.artifacts.submit', toolName: 'artifact.submit' },
+  { prefix: '/internal/v1/artifacts/download', scope: 'sandbox.artifacts.download', toolName: 'artifact.download' },
+  { prefix: '/internal/v1/sessions/ensure', scope: 'sandbox.sessions.ensure', toolName: 'session.ensure' },
+];
+
+/** 该 htu 要求的 claim 绑定；未登记的路径返回 `null`（调用方自行决定是否放行）。 */
+export function internalBindingForHtu(
+  htu: string,
+): { readonly scope: string; readonly toolName: string } | null {
+  for (const binding of HTU_BINDINGS) {
+    if (htu === binding.prefix || htu.startsWith(binding.prefix)) {
+      return { scope: binding.scope, toolName: binding.toolName };
+    }
+  }
+  return null;
+}
+
 /** 判断这是不是 `session.ensure` 的特例（此时 run_id / fence 允许为 null）。 */
 function isPreRunSessionEnsureProfile(fields: {
   readonly toolName: string;
@@ -550,8 +589,8 @@ export function validateInternalTokenClaims(input: unknown): InternalTokenClaims
   });
 
   const htm = claims.htm;
-  if (htm !== 'POST') {
-    fail('INTERNAL_TOKEN_CLAIM_INVALID', 'htm must equal POST');
+  if (htm !== 'POST' && htm !== 'GET') {
+    fail('INTERNAL_TOKEN_CLAIM_INVALID', 'htm must be POST or GET');
   }
 
   const iat = assertPositiveSafeInteger(claims.iat, 'iat');
@@ -595,7 +634,7 @@ export function validateInternalTokenClaims(input: unknown): InternalTokenClaims
       ? null
       : assertPositiveSafeInteger(claims.execution_fence_token, 'execution_fence_token'),
     trace_id: assertAsciiIdentifier(claims.trace_id, 'trace_id'),
-    htm: 'POST',
+    htm,
     htu: assertHtu(claims.htu),
     body_sha256: assertSha256(claims.body_sha256, 'body_sha256'),
     iat,
@@ -622,8 +661,9 @@ function validateIssueClaims(input: unknown): InternalTokenIssueClaims {
     runId: claims.run_id,
     executionFenceToken: claims.execution_fence_token,
   });
-  if (claims.htm !== 'POST') {
-    fail('INTERNAL_TOKEN_CLAIM_INVALID', 'htm must equal POST');
+  const htm = claims.htm;
+  if (htm !== 'POST' && htm !== 'GET') {
+    fail('INTERNAL_TOKEN_CLAIM_INVALID', 'htm must be POST or GET');
   }
   return Object.freeze({
     org_id: assertAsciiIdentifier(claims.org_id, 'org_id'),
@@ -641,7 +681,7 @@ function validateIssueClaims(input: unknown): InternalTokenIssueClaims {
       ? null
       : assertPositiveSafeInteger(claims.execution_fence_token, 'execution_fence_token'),
     trace_id: assertAsciiIdentifier(claims.trace_id, 'trace_id'),
-    htm: 'POST',
+    htm,
     htu: assertHtu(claims.htu),
     body_sha256: assertSha256(claims.body_sha256, 'body_sha256'),
   });

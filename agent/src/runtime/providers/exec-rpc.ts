@@ -19,7 +19,7 @@ import { FsError } from '@deepseek-ai/dsh-fs';
 import { ContractError, toWireError } from '@pi/contract/errors.js';
 import type { RpcEnvelope } from '@pi/contract/envelope.js';
 import type { WireError } from '@pi/contract/errors.js';
-import { issueInternalToken } from '@pi/contract/hmac.js';
+import { issueInternalToken, internalBindingForHtu } from '@pi/contract/hmac.js';
 import type { InternalHmacKeyringInput } from '@pi/contract/hmac.js';
 
 /** 客户端必需的身份与签名材料——由 `runtime` 启动时从服务端环境变量注入，不落盘。 */
@@ -292,7 +292,7 @@ export class ExecRpcClient {
     const envelope = this.envelope();
     // GET 的 body 为空，body_sha256 为空串的 sha256
     const bodySha = sha256Hex(new Uint8Array(0));
-    const token = this.issueToken(htu, bodySha, envelope);
+    const token = this.issueToken(htu, bodySha, envelope, 'GET');
     const url = new URL(`${this.baseUrl}${htu}`);
     // envelope 与业务 query 一并带上（base64url，便于 GET）
     url.searchParams.set('envelope', Buffer.from(JSON.stringify(envelope), 'utf8').toString('base64url'));
@@ -381,9 +381,22 @@ export class ExecRpcClient {
     }
   }
 
-  private issueToken(htu: string, bodySha: string, envelope: RpcEnvelope): string {
+  private issueToken(
+    htu: string,
+    bodySha: string,
+    envelope: RpcEnvelope,
+    method: 'POST' | 'GET' = 'POST',
+  ): string {
     // 复用 contract/hmac 的严格 schema；此处用最小可用 claim 集合
     // conversation_id / sandbox_session_id 等在 pre-run 以外为必填，取 envelope 映射
+    //
+    // scope / tool_name 按 htu 从 contract 的绑定表取，**不再对所有 RPC 写死
+    // `fs`**：写死意味着一枚"文件"令牌可以拿去起进程，而 exec 侧从 2026-09-04
+    // 起会按同一张表校验，写死的那套直接过不去。
+    const binding = internalBindingForHtu(htu);
+    if (binding === null) {
+      throw new ContractError('ENVELOPE_INVALID', `no scope binding for ${htu}`);
+    }
     const conversationId = `conv-${envelope.workspaceId.slice(0, 12)}`;
     const sandboxSessionId = envelope.workspaceId;
     const agentSessionId = envelope.workspaceId;
@@ -400,12 +413,12 @@ export class ExecRpcClient {
         run_id: envelope.requestId,
         tool_execution_id: `tool-${randomHex(4)}`,
         tool_call_id: `call-${randomHex(6)}`,
-        tool_name: 'fs',
-        scope: ['internal:fs'] as const,
+        tool_name: binding.toolName,
+        scope: [binding.scope] as const,
         request_hash: sha256Hex(new TextEncoder().encode(`${htu}:${bodySha}`)),
         execution_fence_token: envelope.fenceToken,
         trace_id: envelope.requestId,
-        htm: 'POST',
+        htm: method,
         htu,
         body_sha256: bodySha,
       },

@@ -16,6 +16,7 @@ import {
   verifyInternalToken,
   type InternalHmacError,
   type InternalHmacKeyringInput,
+  internalBindingForHtu,
 } from '@pi/contract/hmac.js';
 import { ContractError } from '@pi/contract/errors.js';
 
@@ -76,18 +77,29 @@ export function verifyInternalRequest(
     throw new ContractError('AUTH_FAILED', `internal token invalid: ${e.code ?? 'unknown'}`);
   }
 
-  // 绑定方法/路径：token 里的 htm 必须是 POST，htu 必须是当前路径（不含 query）
-  if (options.method !== 'POST' && options.method !== 'GET') {
-    // GET 仅用于 stream-text，其它一律 POST；这里宽松到允许 GET，路径仍要绑定
-  }
-  // htm 在 contract 里固定为 POST，但 stream-text 用 GET，所以放宽为只要 claims.htm 与实际方法一致或 claims.htm 为 POST 且实际为 GET 的兼容？
-  // 按 contract，htu 不含 query，htm 恒为 POST，为保持与 Python 内部面一致，这里严格要求 htm===实际方法 或 实际为 GET 且 htm 为 POST 时放行（stream-text 例外）。
-  const expectedHtm = claims.htm;
-  if (expectedHtm !== options.method && !(expectedHtm === 'POST' && options.method === 'GET')) {
+  // 绑定方法/路径。**方法必须逐字相等**——contract 从 2026-09-04 起允许
+  // `htm: 'GET'`（`GET /internal/v1/fs/stream-text` 需要），所以这里不再有
+  // 「htm 是 POST 但方法是 GET 就放行」那条例外；有那条例外时，任何一枚 POST
+  // 令牌都能拿去打 GET 端点，方法绑定形同虚设。
+  if (claims.htm !== options.method) {
     throw new ContractError('AUTH_FAILED', 'htm mismatch');
   }
   if (claims.htu !== options.path) {
     throw new ContractError('AUTH_FAILED', 'htu mismatch');
+  }
+
+  // 绑定能力：scope / tool_name 必须与这条路由所属的族一致。表在 contract 里，
+  // 签发侧按同一张表写。缺了这一步，`scope` 与 `tool_name` 只是装饰——一枚
+  // 「文件」令牌可以拿去起进程。未登记的路径不放行，避免新端点默认免检。
+  const binding = internalBindingForHtu(options.path);
+  if (binding === null) {
+    throw new ContractError('AUTH_FAILED', 'route has no scope binding');
+  }
+  if (claims.scope[0] !== binding.scope) {
+    throw new ContractError('AUTH_FAILED', 'scope mismatch');
+  }
+  if (claims.tool_name !== binding.toolName) {
+    throw new ContractError('AUTH_FAILED', 'tool_name mismatch');
   }
 
   const bodyHash = hashBodySha256(options.rawBody);

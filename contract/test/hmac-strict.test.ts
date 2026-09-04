@@ -312,11 +312,22 @@ describe('strict Agent -> Sandbox HS256 internal token', () => {
     }
   });
 
-  it('enforces POST and an ASCII absolute query-free fragment-free path', () => {
-    expectCode(
-      () => issue({ htm: 'GET' }),
-      'INTERNAL_TOKEN_CLAIM_INVALID',
+  it('enforces POST/GET and an ASCII absolute query-free fragment-free path', () => {
+    // 2026-09-04：`htm` 由「只能是 POST」放宽到「POST 或 GET」，这**不是**放松
+    // 方法绑定，恰恰相反。以前钉死 POST，而 `GET /internal/v1/fs/stream-text`
+    // 也得签，于是校验侧（exec/src/security/hmac.ts）只能写一条「htm 是 POST
+    // 但方法是 GET 就放行」的例外——任何一枚 POST 令牌都能拿去打 GET 端点。
+    // 现在 GET 可以被诚实地签出来，那条例外已经删除，校验侧要求逐字相等。
+    assert.equal(
+      verifyInternalToken(issue({ htm: 'GET' }), { keyring: KEYRING, clock: () => NOW }).htm,
+      'GET',
     );
+    for (const htm of ['PUT', 'DELETE', 'post', 'get', '', 'POST GET']) {
+      expectCode(
+        () => issue({ htm }),
+        'INTERNAL_TOKEN_CLAIM_INVALID',
+      );
+    }
     for (const htu of [
       'internal/v1/bash',
       '/internal/v1/bash?x=1',

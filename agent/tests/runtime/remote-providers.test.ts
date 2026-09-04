@@ -20,6 +20,7 @@ import { guardIterable, fromWireError, runWithExecRpc } from '../../src/runtime/
 import type { ExecRpcConfig } from '../../src/runtime/providers/exec-rpc.js';
 import { FsError } from '@deepseek-ai/dsh-fs';
 import { toWireError } from '@pi/contract/errors.js';
+import { verifyInternalToken, internalBindingForHtu } from '@pi/contract/hmac.js';
 
 function fakeFetchForFs(calls: string[] = []): typeof fetch {
   return (async (url: string | URL | Request, init?: RequestInit) => {
@@ -519,4 +520,44 @@ test('exec-rpc: getStream 在响应头之后卡住也会超时，而不是永远
   }, /stalled|abort/i);
   assert.deepEqual(chunks, ['first chunk'], 'the chunk that did arrive is still delivered');
   assert.ok(Date.now() - started < 3_000, 'must give up soon after the stall deadline');
+});
+
+test('exec-rpc: 令牌的 htm/scope/tool_name 与真实请求逐字一致', async () => {
+  // 回归：`issueToken` 拿到 method 参数之后，`post()` 与 `getStream()` 两处调用
+  // 一度签反了——POST 请求带着 htm=GET 的令牌，exec 全线 401 `htm mismatch`。
+  // 单测里的假 fetch 不校验 HMAC，所以这类错误只有解开令牌才看得见。
+  const seen: { method: string; path: string; claims: Record<string, unknown> }[] = [];
+  const keyring = { test: Buffer.from('0'.repeat(32)).toString('base64url') };
+  const fetchImpl = (async (url: string | URL | Request, init?: RequestInit) => {
+    const u = new URL(String(url));
+    const auth = new Headers(init?.headers as HeadersInit).get('authorization') ?? '';
+    const claims = verifyInternalToken(auth.replace(/^Bearer /, ''), { keyring });
+    seen.push({ method: init?.method ?? 'GET', path: u.pathname, claims: claims as never });
+    if (u.pathname.endsWith('/fs/stream-text')) {
+      return new Response(new ReadableStream({
+        start(c) { c.enqueue(new TextEncoder().encode('body')); c.close(); },
+      }));
+    }
+    return new Response(JSON.stringify({ ok: true, data: { targetKey: 'k', displayPath: 'p' } }));
+  }) as unknown as typeof fetch;
+
+  const cfg = {
+    baseUrl: 'http://exec', keyring, activeKid: 'test',
+    orgId: 'org-1', userId: 'user-1', workspaceId: 'ws-1',
+    fenceToken: 1, physicalRoots: [], fetchImpl,
+  };
+  const fs = new RemoteFileSystem(new Context() as unknown as Context, cfg as unknown as Partial<ExecRpcConfig>);
+  await fs.resolve('notes.txt');
+  for await (const _chunk of await fs.streamText('notes.txt')) { /* drain */ }
+
+  assert.ok(seen.length >= 2, `expected two calls, got ${seen.length}`);
+  for (const call of seen) {
+    assert.equal(call.claims['htm'], call.method,
+      `${call.path}: token htm ${String(call.claims['htm'])} != request method ${call.method}`);
+    assert.equal(call.claims['htu'], call.path);
+    const binding = internalBindingForHtu(call.path);
+    assert.ok(binding, `${call.path} must have a scope binding`);
+    assert.deepEqual(call.claims['scope'], [binding!.scope]);
+    assert.equal(call.claims['tool_name'], binding!.toolName);
+  }
 });

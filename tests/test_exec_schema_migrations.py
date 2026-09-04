@@ -87,9 +87,14 @@ def test_wired_exec_stores_have_migrations() -> None:
 
 
 def test_artifact_and_dataset_stores_stay_wired() -> None:
-    """产物/数据集是用户可见的那条线，退回内存实现不能再悄悄发生。"""
+    """产物/数据集/配额是用户可见的那条线，退回内存实现不能再悄悄发生。"""
     wiring = EXEC_WIRING.read_text(encoding="utf-8")
-    for store_class in ("MySqlArtifactStore", "MySqlDatasetStore", "MySqlJobStore"):
+    for store_class in (
+        "MySqlArtifactStore",
+        "MySqlDatasetStore",
+        "MySqlJobStore",
+        "MySqlQuotaStore",
+    ):
         assert f"new {store_class}(" in wiring, (
             f"{store_class} is no longer wired in createExecAppFromEnv; "
             "the service would silently fall back to its in-memory default"

@@ -35,7 +35,6 @@ export {
 export { sharedEnterpriseRuntime, readMcpReadiness } from './boot.js';
 export type { RunServices } from './providers/run-services.js';
 export { createEnabledSkillsProvider, isSkillVisible } from './providers/enabled-skills.js';
-export { MemoryService } from './providers/memory.js';
 export { evaluatePreExecute, InMemoryApprovalStore } from './policy/pre-execute.js';
 export { installEnterprisePolicy } from './policy/install.js';
 export type { InstallPolicyOptions, InstalledPolicy } from './policy/install.js';

@@ -11,6 +11,7 @@ import { ContractError, toWireError } from '@pi/contract/errors.js';
 import type { InternalHmacKeyringInput } from '@pi/contract/hmac.js';
 import { isIpAllowed, readInternalAllowCidr } from '../security/cidr.js';
 import { verifyInternalRequest } from '../security/hmac.js';
+import { PEER_IP_HEADER } from './node-listener.js';
 import { internalClaimsByRequest } from './internal-claims.js';
 import { registerInternalFsRoutes } from './internal-fs.js';
 import { registerInternalShellRoutes } from './internal-shell.js';
@@ -39,13 +40,29 @@ export interface InternalRouterDeps {
   readonly artifactService?: ArtifactService;
 }
 
+/**
+ * 请求的对端地址。**只认监听器注入的 `x-exec-peer-ip`**，不看
+ * `X-Forwarded-For` / `X-Real-IP`：内部面前面没有反向代理，这两个头谁都能伪造，
+ * 而它们是 CIDR 白名单的唯一输入。以前还会在两个头都取不到时兜底成
+ * `127.0.0.1`——等于给任何拿不到对端地址的路径发一张通行证。
+ *
+ * 取不到时返回空串：白名单为空（默认）时 `isIpAllowed` 照样放行，配了白名单
+ * 就一律拒——fail-closed。
+ */
 function getClientIp(c: import('hono').Context): string {
-  const forwarded = c.req.header('x-forwarded-for');
-  if (forwarded) return forwarded.split(',')[0]!.trim();
-  const realIp = c.req.header('x-real-ip');
-  if (realIp) return realIp.trim();
-  // Hono 未直接暴露 remoteAddr，取 header 兜底；取不到时用 127.0.0.1 放行本地测试
-  return '127.0.0.1';
+  return (c.req.header(PEER_IP_HEADER) ?? '').trim();
+}
+
+/**
+ * 内部面的请求行日志。**默认关闭**（`EXEC_HTTP_LOG=1` 打开）：它以前是两行裸
+ * `process.stdout.write`，既没有结构、也没有开关，还会把单测控制台刷满。
+ * 只输出方法/路径/状态码——路径里不含 query，不会带出参数。
+ */
+function logRequest(method: string, path: string, status: number): void {
+  if (process.env['EXEC_HTTP_LOG'] !== '1') return;
+  process.stdout.write(
+    `${JSON.stringify({ svc: 'exec', method, path, status })}\n`,
+  );
 }
 
 export function createInternalRouter(deps: InternalRouterDeps): Hono {
@@ -78,11 +95,11 @@ export function createInternalRouter(deps: InternalRouterDeps): Hono {
       internalClaimsByRequest.set(c.req.raw, claims);
     } catch (err) {
       const wire = toWireError(err, { physicalRoots: [] });
-      process.stdout.write(`exec ${method} ${path} 401\n`);
+      logRequest(method, path, 401);
       return c.json({ ok: false, error: wire }, 401 as never);
     }
     await next();
-    process.stdout.write(`exec ${method} ${path} ${c.res.status}\n`);
+    logRequest(method, path, c.res.status);
   });
 
   registerInternalFsRoutes(app, {
