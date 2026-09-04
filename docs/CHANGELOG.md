@@ -28,6 +28,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **启用后的 Skill 草稿不再重复列在 Drafts**：启用是复制字节、草稿不删，所以 `skill_drafts` 里会一直有它。Agent 给这类条目打 `published: true` / `status: 'published'`，UI 的 Drafts 区只列待启用的。三层 Skill 卡片统一结构，操作按钮收进卡片底部的动作行，不再被拉成整行宽的色块。
 ### Fixed
 
+- **删掉的生产代码不再继续进镜像**：`.dockerignore` 的 `dist/` / `node_modules/`
+  不带 `**/`，而 Docker 只把它们当作上下文根下的那一个目录——每个包各自的
+  `agent/dist`、`exec/dist` 照样被 `COPY agent ./agent` 整个塞进镜像，而
+  `npm run build` 的 tsc 只覆盖自己编译出的文件、不清理别人留下的。结果是当天
+  刚删掉的 `internal-hmac.js`（980 行）与 `memory.js` 仍躺在**运行中的** agent
+  镜像的 dist 里。模式改成 `**/dist/` / `**/node_modules/` 后重建，两个文件消失。
+  新增 `tests/test_dockerignore_excludes_host_build_output.py` 守住这条。
 - **内部面的令牌现在真的绑定方法与能力**：`htm` 以前在 contract 里钉死 `'POST'`，
   而 `GET /internal/v1/fs/stream-text` 也要签，于是 exec 侧写了一条「htm 是 POST
   但方法是 GET 就放行」的例外——任何一枚 POST 令牌都能拿去打 GET 端点。现在

@@ -1,12 +1,20 @@
 # Never send runtime data or local env into image builds
+#
+# **模式必须带 `**/`**：Docker 的 .dockerignore 把不含斜杠前缀的 `dist/` 只当作
+# 上下文根下的 `./dist`，`agent/dist`、`exec/dist`、`*/node_modules` 一概不匹配。
+# 2026-09-04 在运行中的 agent 镜像里查到宿主机的 `agent/dist` 被整个 COPY 进去：
+# 当天刚删掉的 `internal-hmac.js`（980 行）与 `memory.js` 仍躺在镜像的 dist 里——
+# tsc 只覆盖它编译出的文件，不清理别人留下的。`node_modules/` 同理会被带进去
+# （宿主机的原生二进制随之进 Linux 镜像），这条是同一个模式错误，一并改掉。
 .git/
 .venv/
 .runtime/
-node_modules/
+**/node_modules/
 # Build outputs: every image compiles its own. Shipping the host's would let a
 # stale local `dist/` silently win over the in-image build.
-dist/
+**/dist/
 *.tsbuildinfo
+**/*.tsbuildinfo
 *.egg-info/
 .pytest_cache/
 .smoke-tmp/

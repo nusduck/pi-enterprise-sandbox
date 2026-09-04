@@ -517,3 +517,26 @@ Each entry should say **what changed**, **why**, and **which STATUS IDs** it aff
   - `exec-rpc.ts` 里那个只去尾斜杠的私有 `normalizeBaseUrl` 仍未与
     `transport-base-url.ts` 的策略函数合并（前者的 baseUrl 来自进程环境）。
   - 十个超千行文件仍在棘轮里记着账，本轮没有拆分。
+
+## 2026-09-04（续四）— 删掉的代码还在镜像里
+
+- **Context:** 上一条收尾时顺手核对"运行中的镜像是否含本批全部改动"，反过来发现
+  镜像里还留着**当天刚删掉**的文件。
+- **Finding:** `.dockerignore` 里的 `dist/` 与 `node_modules/` 不带 `**/`。Docker 的
+  语义是：不含斜杠前缀的 `dist/` 只匹配上下文根下的 `./dist`。本仓库的构建上下文
+  是仓库根，每个包各有自己的 dist，Dockerfile 又是 `COPY agent ./agent` 整目录拷贝，
+  于是宿主机的 `agent/dist` 被完整塞进镜像；`npm run build` 的 tsc 只覆盖它自己
+  编译出的文件，不清理别人留下的。实测运行中的 agent 镜像里有：
+  `dist/src/infrastructure/sandbox/internal-hmac.js`（当天删的 980 行）与
+  `dist/src/runtime/providers/memory.js`（当天删的退役 provider）。
+  这个文件的注释原本就写着这个意图（"Shipping the host's would let a stale local
+  dist/ silently win over the in-image build"），只是模式没写对。
+- **Action:** 改成 `**/dist/` / `**/node_modules/` / `**/*.tsbuildinfo`，新增
+  `tests/test_dockerignore_excludes_host_build_output.py`。重建四个镜像后两个残留
+  文件均已消失，§4 真实链路 15/15、G7 门禁 8/8 仍全过。
+- **一处自我更正：** 最初还怀疑宿主机的 `node_modules` 把 macOS 原生二进制带进了
+  Linux 镜像（镜像里确有 `@img/sharp-darwin-*`）。改完 `.dockerignore` 重建后它们
+  **仍然在**——说明那是 npm 按 optionalDependencies 自己装的，不是宿主机泄漏。
+  已证实的只有 dist 那一条，文档与测试里只写这一条。`node_modules/` 的模式仍然
+  一并改掉，因为它是同一个错误。
+- **STATUS IDs:** 无 §32 行状态改变。
