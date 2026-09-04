@@ -25,6 +25,7 @@ import { InteractionResponseService } from '../application/interaction-response-
 import { SteerRunService } from '../application/steer-run-service.js';
 import { FollowUpService } from '../application/follow-up-service.js';
 import { CronJobService } from '../application/cron-job-service.js';
+import { AgentCatalogService } from '../application/agent-catalog-service.js';
 import { A2aCredentialService } from '../application/a2a/credential-service.js';
 import { A2aTaskService } from '../application/a2a/task-service.js';
 import { A2aStreamService } from '../application/a2a/stream-service.js';
@@ -695,6 +696,15 @@ export class ServiceContainer {
       generateId: this.generateId,
       now: this.now,
     });
+    // Agent 目录（definitions + versions）的唯一写入面：一个 org 下并列多个
+    // 可选智能体。只有 HTTP 面需要它，worker 不消费目录写入。
+    const agentCatalogService = new AgentCatalogService({
+      transactionManager: tx,
+      createRepositories,
+      db: this.knex,
+      generateId: this.generateId,
+      now: this.now,
+    });
     const getRunService = new GetRunService({
       createRepositories,
       db: this.knex,
@@ -834,6 +844,7 @@ export class ServiceContainer {
     return {
       createRunService,
       cronJobService,
+      agentCatalogService,
       getRunService,
       cancelRunService,
       steerRunService,

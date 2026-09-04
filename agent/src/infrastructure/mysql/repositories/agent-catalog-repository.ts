@@ -187,6 +187,34 @@ export class AgentCatalogRepository {
     return this.getDefinitionById(agentId);
   }
 
+  /**
+   * Version line of one Agent, newest first. Callers scope by agent ownership
+   * before calling: this repository does not know about orgs.
+   */
+  async listVersionsByAgent(agentId: string, opts: { limit?: number } = {}) {
+    const aid = assertUlid(agentId, 'agentId');
+    const limit = Math.min(Math.max(Number(opts.limit) || 50, 1), 100);
+    const rows = await this.db('agent_versions')
+      .where({ agent_id: aid })
+      .orderBy('version_no', 'desc')
+      .limit(limit);
+    return rows.map(mapAgentVersion);
+  }
+
+  /**
+   * Next `version_no` for an Agent. Racy by itself — the caller relies on
+   * uk_agent_version (agent_id, version_no) to reject a lost race, which is
+   * why createVersion surfaces ConflictError instead of overwriting.
+   */
+  async nextVersionNo(agentId: string) {
+    const aid = assertUlid(agentId, 'agentId');
+    const row = await this.db('agent_versions')
+      .where({ agent_id: aid })
+      .orderBy('version_no', 'desc')
+      .first();
+    return row ? Number(row.version_no) + 1 : 1;
+  }
+
   async getVersionById(agentVersionId: string) {
     const id = assertUlid(agentVersionId, 'agentVersionId');
     const row = await this.db('agent_versions')

@@ -30,6 +30,7 @@ import {
   type RunningAction,
 } from './composerMode';
 import { ModelPicker } from './ModelPicker';
+import { AgentPicker } from './AgentPicker';
 import {
   formatRunStatusLabel,
   getActiveRunEntity,
@@ -79,6 +80,9 @@ export function Composer() {
     models,
     selectedModelId,
     setSelectedModelId,
+    agents,
+    selectedAgentId,
+    setSelectedAgentId,
   } = useChat();
 
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -549,6 +553,15 @@ export function Composer() {
             onSelect={setSelectedModelId}
             disabled={mode !== 'idle' || models.length === 0}
           />
+          {/* 单 Agent 的 org 完全看不到这个控件，体验与多 Agent 上线前一致。 */}
+          {agents.length > 1 && !state.conversationId ? (
+            <AgentPicker
+              agents={agents}
+              selectedAgentId={selectedAgentId}
+              onSelect={setSelectedAgentId}
+              disabled={mode !== 'idle'}
+            />
+          ) : null}
         </div>
 
         <div className="input-inner">

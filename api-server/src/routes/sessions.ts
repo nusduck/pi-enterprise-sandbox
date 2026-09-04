@@ -17,7 +17,7 @@ function json(res: ServerResponse, status: number, body: unknown, traceId?: stri
 
 /**
  * POST /api/sessions/ensure
- * Body: { conversation_id?: string }
+ * Body: { conversation_id?: string, agent_id?: string }
  * Returns: { conversation_id, session_id, workspace_id, reused_session, trace_id }
  */
 export async function handleEnsureSession(
@@ -34,6 +34,7 @@ export async function handleEnsureSession(
     const resolved = await ensureAgentSession(conversationId, {
       auth,
       traceId: String(traceId),
+      agentId: body?.agent_id || body?.agentId || null,
     });
     json(res, 200, {
       conversation_id: resolved.conversation_id,

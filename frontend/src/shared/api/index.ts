@@ -5,3 +5,4 @@ export * from './approvals';
 export * from './capabilities';
 export * from './datasets';
 export * from './a2a';
+export * from './agents';

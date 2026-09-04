@@ -26,6 +26,7 @@ export function ConversationHeader() {
     toggleSidebar,
     inspectorOpen,
     toggleInspector,
+    agentNameById,
   } = useChat();
 
   const [theme, toggleTheme] = useTheme();
@@ -90,6 +91,12 @@ export function ConversationHeader() {
       )) ||
     null;
 
+  // 这个会话绑在哪个 Agent 上（D2：建会话时钉死）。只有 org 里确实存在多个
+  // Agent 时 `agentNameById` 才解析得出名字，单 Agent 的 org 看不到这个 chip。
+  const agentName = agentNameById(
+    typeof conv?.agent_id === 'string' ? conv.agent_id : null,
+  );
+
   const model =
     run?.modelId ||
     agentSession?.modelId ||
@@ -118,6 +125,11 @@ export function ConversationHeader() {
             {title}
           </h1>
           <div className="conv-header-meta">
+            {agentName ? (
+              <span className="conv-chip agent-chip" title={`Agent · ${agentName}`}>
+                {agentName}
+              </span>
+            ) : null}
             {model ? (
               <span className="conv-chip model-chip" title={model}>
                 {model}

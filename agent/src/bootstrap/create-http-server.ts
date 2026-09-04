@@ -9,6 +9,7 @@
  *   POST/GET /internal/conversations
  *   GET/DELETE /internal/conversations/:id
  *   POST /internal/sessions/ensure
+ *   GET/POST /internal/agents  +  /:id/versions  +  /:id/active-version
  *   GET  /internal/agent-runs/:id
  *   GET  /internal/agent-runs/:id/events  (MySQL history + Redis live SSE, PR-10)
  *   POST /internal/agent-runs/:id/cancel
@@ -44,6 +45,7 @@ import {
   presentToolExecutionResponse,
 } from '../presentation/http/run-presenters.js';
 import { handleCronRoute } from '../presentation/http/cron-routes.js';
+import { handleAgentCatalogRoute } from '../presentation/http/agents-routes.js';
 import { handleSkillRoute } from '../presentation/http/skill-routes.js';
 import { handleAuthRoute } from '../presentation/http/auth-routes.js';
 
@@ -101,6 +103,7 @@ export interface AgentHttpServerDeps {
   followUpService?: { execute: Loose } | null;
   listToolExecutions?: Loose;
   cronJobService?: import('../presentation/http/cron-routes.js').CronJobServiceLike | null;
+  agentCatalogService?: import('../presentation/http/agents-routes.js').AgentCatalogServiceLike | null;
   activeRunHint?: () => number;
   eventPollIntervalMs?: number;
   eventHeartbeatMs?: number;
@@ -126,6 +129,7 @@ export function createAgentHttpServer(deps: AgentHttpServerDeps) {
   const interactionResponseService = deps.interactionResponseService || null;
   const traceQueryService = deps.traceQueryService || null;
   const cronJobService = deps.cronJobService || null;
+  const agentCatalogService = deps.agentCatalogService || null;
 
   const server = http.createServer(async (req, res) => {
     const requestId = resolveRequestId(req);
@@ -196,6 +200,18 @@ export function createAgentHttpServer(deps: AgentHttpServerDeps) {
           parsedUrl,
           path,
           cronJobService,
+        })
+      ) {
+        return;
+      }
+
+      if (
+        await handleAgentCatalogRoute({
+          req,
+          res,
+          parsedUrl,
+          path,
+          agentCatalogService,
         })
       ) {
         return;
@@ -275,6 +291,8 @@ export function createAgentHttpServer(deps: AgentHttpServerDeps) {
           const result = await conversationService.ensureSession(auth, {
             conversationId:
               body.conversation_id || body.conversationId || null,
+            // 只在没有 conversation_id（即这一次要新建会话）时生效。
+            agent_id: body.agent_id || body.agentId || null,
             traceId,
           });
           res.setHeader('X-Trace-Id', traceId);
@@ -619,6 +637,9 @@ export function createAgentHttpServer(deps: AgentHttpServerDeps) {
               ? { traceState: traceContext.traceState }
               : {}),
             idempotencyKey,
+            // 首轮消息就是"建会话"：浏览器在这里选 Agent，服务端在事务内解析
+            // 它的活跃版本并钉进 AgentSession（multi-agent-selection.md D1/D2）。
+            agentId: body.agent_id || body.agentId || null,
             agentProfileId: body.agent_profile_id || body.agentProfileId || null,
             modelId: body.model_id || body.modelId || null,
             budget: body.budget || null,

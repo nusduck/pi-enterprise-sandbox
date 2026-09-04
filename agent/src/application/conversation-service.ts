@@ -46,6 +46,21 @@ function normalizeTitle(value) {
   return normalized;
 }
 
+/**
+ * 建会话时选中的 Agent。空值 = 用租户默认 Agent（向后兼容：不传 `agent_id`
+ * 的调用方行为与多 Agent 上线前完全一致）。
+ *
+ * 只在这里判形状；**归属判定属于 provisioner 的事务内**——在事务外先查一次
+ * 会留下 TOCTOU 窗口，而且会多出一处 org 判定的状态源。
+ */
+function normalizeSelectedAgentId(value) {
+  if (value == null || value === '') return null;
+  if (!isUlid(value)) {
+    throw new ValidationError('agent_id must be a ULID');
+  }
+  return assertUlid(value, 'agentId');
+}
+
 function isArchived(row) {
   return row?.archivedAt != null || String(row?.status || '').toLowerCase() === 'archived';
 }
@@ -163,6 +178,9 @@ export function presentConversation(row: Record<string, any>, messages: Record<s
   return {
     id: row.conversationId,
     title: row.title || 'New chat',
+    // 会话绑定的 Agent（D2：建会话时钉死，此后不可变）。前端用它在会话头部
+    // 显示当前 Agent，让"换 Agent 要新建会话"这条约束在 UI 上说得通。
+    agent_id: row.agentId ?? null,
     sandbox_session_id: sandboxSessionId,
     agent_session_id: agentSessionId,
     workspace_id: workspaceId,
@@ -328,6 +346,10 @@ export class ConversationService {
     }
     // @ts-expect-error 遗留JS占位类型object未展开，访问title需收窄，存活代码先用expect-error收敛 —— TS2339: Property 'title' does not exist on type 'object'.
     const title = normalizeTitle(input.title);
+    const selectedAgentId = normalizeSelectedAgentId(
+      // @ts-expect-error 遗留JS占位类型object未展开，访问agent_id需收窄，存活代码先用expect-error收敛 —— TS2339: Property 'agent_id' does not exist on type 'object'.
+      input.agent_id ?? input.agentId ?? null,
+    );
     let lastRace = null;
     for (let attempt = 0; attempt < MAX_CREATE_ATTEMPTS; attempt += 1) {
       try {
@@ -347,10 +369,13 @@ export class ConversationService {
               db: trx,
             },
           );
-          const parents = await provisioner.provision({
-            ...auth,
-            externalConversationId: null,
-          });
+          const parents = await provisioner.provision(
+            {
+              ...auth,
+              externalConversationId: null,
+            },
+            { agentId: selectedAgentId },
+          );
           const scope = { orgId: parents.orgId, userId: parents.userId };
           const row = await repos.conversations.updateMeta(
             parents.conversationId,
@@ -467,7 +492,12 @@ export class ConversationService {
       // @ts-expect-error 遗留JS占位类型object未展开，访问conversationId需收窄，存活代码先用expect-error收敛 —— TS2339: Property 'conversationId' does not exist on type 'object'.
       input.conversationId ?? input.conversation_id ?? null;
     let conversationId = null;
-    let selectedAgentId = null;
+    // 既有会话：Agent 由会话本身决定（D2 不可变），请求体里的 agent_id 不参与。
+    // 新会话：这里就是"建会话"的时刻，按请求选 Agent。
+    let selectedAgentId = normalizeSelectedAgentId(
+      // @ts-expect-error 遗留JS占位类型object未展开，访问agent_id需收窄，存活代码先用expect-error收敛 —— TS2339: Property 'agent_id' does not exist on type 'object'.
+      input.agent_id ?? input.agentId ?? null,
+    );
     if (rawConversationId != null && rawConversationId !== '') {
       if (!isUlid(rawConversationId)) {
         throw new ValidationError('conversationId must be a ULID');

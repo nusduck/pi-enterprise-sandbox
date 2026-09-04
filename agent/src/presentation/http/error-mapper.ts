@@ -7,6 +7,7 @@
  *   一句 "Internal server error"，Agent 的输出里连栈都没有
  */
 import {
+  AdminRoleRequiredError,
   OwnerScopedNotFoundError,
   IdempotencyInProgressError,
   IdempotencyConflictError,
@@ -27,6 +28,8 @@ const NOT_FOUND_NOUNS: Readonly<Record<string, string>> = Object.freeze({
   interactions: 'Interaction',
   cron_jobs: 'Cron job',
   cron_job_runs: 'Cron job run',
+  agent_definitions: 'Agent',
+  agent_versions: 'Agent version',
 });
 
 /** 对外响应：状态码 + 响应体。 */
@@ -47,6 +50,9 @@ interface ErrorLike {
 export function mapErrorToHttp(error: unknown): HttpErrorResponse {
   if (error instanceof ValidationError || error instanceof CanonicalJsonError) {
     return { status: 400, body: { error: error.message, code: error.code } };
+  }
+  if (error instanceof AdminRoleRequiredError) {
+    return { status: 403, body: { error: error.message, code: error.code } };
   }
   if (error instanceof OwnerScopedNotFoundError) {
     // 转 TS 时顺手去掉了这里的 @ts-expect-error：把 NOT_FOUND_NOUNS 声明成

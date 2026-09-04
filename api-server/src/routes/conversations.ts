@@ -54,14 +54,18 @@ export async function handleGetConversation(id: string, res: ServerResponse, req
 }
 
 /**
- * POST /api/conversations  body: { title? }
+ * POST /api/conversations  body: { title?, agent_id? }
+ *
+ * `agent_id` 只透传，不校验：Agent 是否属于本 org、是否活跃、活跃版本是哪一个，
+ * 全部由 agent/ 在事务内判定（AGENTS.md §1「不要在 BFF 里补状态」）。
+ * 与 `runs.ts` follow-up 的既有写法保持一致。
  */
 export async function handleCreateConversation(body: any, res: ServerResponse, req: ReqWithTrace | null = null): Promise<void> {
   try {
     const title = body?.title || 'New chat';
     const auth = await resolveTrustedAuth(req);
     const conv = await createAgentConversation(
-      { title },
+      { title, agent_id: body?.agent_id || null },
       { auth, traceId: req?.traceId },
     );
     json(res, 201, conv);

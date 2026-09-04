@@ -2,7 +2,7 @@ import { useMemo } from 'react';
 import { NavLink } from 'react-router-dom';
 import { useChat } from '../../features/chat/ChatContext';
 import { listActiveRuns } from '../../entities';
-import { IconPuzzle, IconApprovals, IconRuns, IconA2a } from '../../shared/ui/Icons';
+import { IconPuzzle, IconApprovals, IconRuns, IconA2a, IconSubagent } from '../../shared/ui/Icons';
 
 export function SettingsSubnav() {
   const { state, entityStore } = useChat();
@@ -62,6 +62,18 @@ export function SettingsSubnav() {
             </span>
           ) : null}
         </NavLink>
+
+        {isAdmin ? (
+          <NavLink
+            to="/settings/agents"
+            className={({ isActive }) =>
+              `settings-subnav-link${isActive ? ' active' : ''}`
+            }
+          >
+            <IconSubagent size={15} />
+            <span>Agents</span>
+          </NavLink>
+        ) : null}
 
         {isAdmin ? (
           <NavLink

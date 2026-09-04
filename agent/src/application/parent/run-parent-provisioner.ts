@@ -131,6 +131,37 @@ export class RunParentProvisioner {
   }
 
   /**
+   * 已存在会话绑定的 Agent（D2：建会话时钉死，此后不可变）。
+   *
+   * 会话不存在 / 已归档 / 映射还没建时返回 null——那意味着"这次要新建会话"，
+   * 由上层决定用显式选择还是租户默认。这里**只读不判权**：归属由
+   * `getById` 的 owner scope 保证。
+   */
+  async #conversationAgentId(input: {
+    orgId: string,
+    userId: string,
+    provider: string,
+    externalConversationId: string,
+  }) {
+    const scope = { orgId: input.orgId, userId: input.userId };
+    let conversationId = null;
+    if (isUlid(input.externalConversationId)) {
+      conversationId = input.externalConversationId;
+    } else {
+      const ref = await this.repos.externalRefs.getConversationRef({
+        ...scope,
+        provider: input.provider,
+        externalSubject: input.externalConversationId,
+      });
+      conversationId = ref?.conversationId ?? null;
+    }
+    if (!conversationId || !isUlid(conversationId)) return null;
+    const row = await this.repos.conversations.getById(conversationId, scope);
+    if (!row || String(row.status || '').toLowerCase() === 'archived') return null;
+    return row.agentId ?? null;
+  }
+
+  /**
    * Lock organization row (required for concurrent default-agent creation).
    * @param orgId
    */
@@ -273,22 +304,55 @@ export class RunParentProvisioner {
     });
     created.membership = !membershipBefore;
 
+    const externalConversationId =
+      auth.externalConversationId != null &&
+      String(auth.externalConversationId).trim()
+        ? requireExternalSubject(
+            auth.externalConversationId,
+            'externalConversationId',
+          )
+        : null;
+
     // --- Agent definition + immutable version ---
-    // A2A credentials select an explicit Agent. Resolve its active version in
-    // this transaction so a Run can never silently fall back to tenant default.
+    // A2A credentials and the browser's new-conversation flow select an
+    // explicit Agent. Resolve its active version in this transaction so a Run
+    // can never silently fall back to tenant default.
+    //
+    // 没有显式选择时，**已存在的会话自己决定 Agent**（D2：绑定在建会话时钉死）。
+    // 少了这一步，绑在非默认 Agent 上的会话在下一轮 follow-up 就会撞上
+    // "Conversation is bound to a different agent"——调用方没选 Agent 并不等于
+    // "改用租户默认"。
+    const explicitAgentId = selection.agentId ?? null;
+    const boundAgentId =
+      explicitAgentId ??
+      (externalConversationId
+        ? await this.#conversationAgentId({
+          orgId,
+          userId,
+          provider,
+          externalConversationId,
+        })
+        : null);
+
     let definition;
     let version;
-    if (selection.agentId) {
-      const requestedAgentId = assertUlid(selection.agentId, 'agentId');
+    if (boundAgentId) {
+      const requestedAgentId = assertUlid(boundAgentId, 'agentId');
       definition = await this.repos.catalog.getDefinitionById(requestedAgentId);
+      // 显式选择要求 status=active；会话**已经**绑定的 Agent 即便之后被停用也
+      // 继续用它——换掉等于让同一个会话前后跑在两套配置上。
       if (
         !definition ||
         definition.orgId !== orgId ||
-        String(definition.status).toLowerCase() !== 'active'
+        (explicitAgentId != null &&
+          String(definition.status).toLowerCase() !== 'active')
       ) {
-        throw new ValidationError(
-          'Selected agent is not active for this organization',
-        );
+        // 不存在、属于别的 org、已停用——三者返回同一个 404。存在性本身
+        // 不能泄漏（AGENTS.md §2），所以这里不能用 403，也不能分开报错。
+        throw new OwnerScopedNotFoundError('Agent not found', {
+          resource: 'agent_definitions',
+          id: requestedAgentId,
+        });
       }
       if (!definition.activeVersionId) {
         throw new ValidationError('Selected agent has no active version');
@@ -324,14 +388,6 @@ export class RunParentProvisioner {
     // --- Conversation ---
     const scope = { orgId, userId };
     let conversationId;
-    const externalConversationId =
-      auth.externalConversationId != null &&
-      String(auth.externalConversationId).trim()
-        ? requireExternalSubject(
-            auth.externalConversationId,
-            'externalConversationId',
-          )
-        : null;
 
     if (externalConversationId) {
       if (isUlid(externalConversationId)) {

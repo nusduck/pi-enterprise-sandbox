@@ -817,6 +817,14 @@ body {
   border-color: var(--color-primary-border);
 }
 
+/* 会话绑定的 Agent。换 Agent 要新建会话，所以它是只读展示，不是控件。 */
+.conv-chip.agent-chip {
+  color: var(--color-text);
+  background: var(--color-bg-hover);
+  border-color: var(--color-border);
+  font-weight: 600;
+}
+
 .wb-toolbar-center {
   flex: 0 1 auto;
   display: flex;
@@ -2195,8 +2203,38 @@ body {
 .composer-model-row {
   display: flex;
   align-items: center;
+  gap: 10px;
   margin-bottom: 6px;
 }
+
+/* AgentPicker — 只在新会话且 org 有多个 Agent 时出现 */
+.agent-picker {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.agent-picker-label {
+  font-size: 10.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+}
+.agent-picker-select {
+  height: 28px;
+  padding: 0 8px;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--color-border);
+  background: var(--color-bg-card);
+  color: var(--color-text-secondary);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+}
+.agent-picker-select:hover:not(:disabled) {
+  border-color: var(--color-primary-border);
+  color: var(--color-text);
+}
+.agent-picker-select:disabled { opacity: 0.5; cursor: default; }
 
 /* ModelPicker */
 .model-picker {
@@ -3669,6 +3707,31 @@ body {
   overflow-x: auto;
   max-height: 22rem;
 }
+
+/* Agents 页：成功提示、说明段、JSON 编辑框、当前编辑中的行 */
+.mgmt-notice {
+  color: var(--color-primary-tint);
+  font-size: 12.5px;
+  background: var(--color-primary-soft);
+  padding: 6px 12px;
+  border-radius: var(--radius-sm);
+}
+
+.mgmt-hint {
+  font-size: 12px;
+  color: var(--color-text-muted);
+  line-height: 1.6;
+  margin: 0;
+}
+
+.mgmt-code-input {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.5;
+  resize: vertical;
+}
+
+.mgmt-table tr.is-selected td { background: var(--color-primary-soft); }
 
 .mgmt-error {
   color: var(--color-danger-text);

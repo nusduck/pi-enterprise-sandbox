@@ -32,6 +32,7 @@ function managementTitle(pathname: string): string {
   if (pathname.startsWith('/settings/runs') || pathname === '/runs') return 'Active Runs';
   if (pathname.startsWith('/settings/approvals') || pathname === '/approvals') return 'Approval Center';
   if (pathname === '/schedules') return 'Scheduled Runs';
+  if (pathname.startsWith('/settings/agents')) return 'Agents';
   if (pathname.startsWith('/settings/a2a')) return 'A2A Access';
   if (pathname.startsWith('/settings/capabilities') || pathname === '/settings') return 'Capabilities';
   return 'UPRC Agent';

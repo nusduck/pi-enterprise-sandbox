@@ -209,6 +209,10 @@ Agent 模型侧权威清单工具：`capabilities`（`action=list|search|describ
 | `GET` | `/api/processes/{id}` | 进程详情；必传 `session_id` |
 | `GET` | `/api/processes/{id}/logs\|read` | 进程输出（游标读）；必传 `session_id` |
 | `POST` | `/api/processes/{id}/stdin\|signal\|cancel\|kill` | 进程控制；JSON body 必传 `session_id` |
+| `GET` | `/api/agents` | org 内可选的智能体（Agent 目录） |
+| `POST` | `/api/agents` | 新建智能体，自带 v1 并指向它（**admin**） |
+| `GET` `POST` | `/api/agents/{id}/versions` | 版本线 / 建新版本（**admin**） |
+| `POST` | `/api/agents/{id}/active-version` | 切活跃版本，也是回滚（**admin**） |
 | `GET` `POST` | `/api/cron-jobs` | 列出 / 创建定时任务 |
 | `GET` `PATCH` `DELETE` | `/api/cron-jobs/{id}` | 详情 / 修改 / 删除 |
 | `GET` | `/api/cron-jobs/{id}/runs` | 该定时任务的历史 Run |
@@ -227,6 +231,38 @@ Agent 模型侧权威清单工具：`capabilities`（`action=list|search|describ
 | `GET` | `/health/live` `/health/ready` | 探针 |
 
 `/api/a2a/*` 要求 `actingRole === 'admin'`，否则 403 `ADMIN_REQUIRED`。
+
+#### Agent 目录（多 Agent 选择）
+
+一个 org 下可以并列存在多个智能体，普通用户在**建会话**时选其中一个。
+
+- **两张表的语义不同**：`agent_definitions` 的一行 = 一个可选的智能体；
+  `agent_versions` 的一行 = 该智能体的一次不可变配置快照。「多一个可选的智能体」
+  是新增一行 definition（自带 v1），不是往已有智能体下加 version——
+  `active_version_id` 是单值的，加 version 只会产生历史。
+- **写目录要求 `actingRole === 'admin'`**，否则 403 `ADMIN_REQUIRED`；
+  `GET /api/agents` 对 org 内所有成员开放。角色解析不出来时一律拒绝。
+- **改配置 = 建新版本**，永不原地改写。`POST .../versions` 默认 `activate: true`；
+  传 `activate: false` 只建不切。回滚就是把 `active_version_id` 指回旧版本。
+- **切活跃版本只影响新建的会话**：正在跑的 Run 与已存在的 AgentSession
+  继续使用它们钉住的版本。
+- **写入即校验**：`config` 在建版本时就跑一遍 AgentVersion 绑定规则，非法配置
+  （`toolPolicy` 不是对象、model 内嵌 `apiKey` 等）当场 400，不会落库后在 Run 期爆炸。
+- **跨租户一律 404**：用别的 org 的 `agent_id` 或不属于该 Agent 的
+  `agent_version_id` 调用，与"不存在"返回同一个响应，不泄漏存在性。
+
+选择 Agent 的入口有三个，都只接受 `agent_id`（ULID），不接受 `agent_version_id`：
+
+| 入口 | 何时生效 |
+|------|---------|
+| `POST /api/runs` / `/api/conversations/{id}/runs` | `conversation_id` 为空时——首轮消息就是"建会话" |
+| `POST /api/conversations` | 显式建会话 |
+| `POST /api/sessions/ensure` | 不带 `conversation_id` 时 |
+
+**一个会话绑定一个 Agent，绑定在建会话时完成，此后不可变**：换 Agent 要新建会话。
+已存在的会话即使不传 `agent_id`，后续 Run 也继续用它绑定的那个 Agent，不会回落到
+租户默认。不传 `agent_id` 建新会话时的行为与多 Agent 上线前完全一致（租户默认 Agent）。
+`GET /api/conversations{,/id}` 的响应带 `agent_id`，即该会话绑定的智能体。
 
 进程接口的事实与控制权在 exec 的 `exec_jobs`，不在 Agent。BFF 先让 Agent
 按当前浏览器身份授权 `session_id` 并取得其 `workspace_id`，再用 owner-scoped

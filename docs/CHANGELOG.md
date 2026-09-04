@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **一个 org 可以有多个可选的智能体**：新增 Agent 目录写入面（`POST /api/agents`
+  建智能体、`POST /api/agents/{id}/versions` 改配置、`POST /api/agents/{id}/active-version`
+  切活跃版本 / 回滚，均要求 admin），并把 `agent_id` 接到建会话的三个入口
+  （`POST /api/runs` 首轮、`POST /api/conversations`、`POST /api/sessions/ensure`）。
+  前端在**新会话**且 org 内多于一个智能体时出现 Agent 选择器，会话头部显示当前
+  会话绑定的智能体。一个会话绑定一个智能体，绑定在建会话时完成、此后不可变——
+  换智能体要新建会话。org 只有一个智能体时 UI 与行为与本次改动前完全一致。
+  改配置是建新版本而非原地改写，切换活跃版本只影响**新建**的会话；正在跑的 Run
+  与已存在的会话继续用它们钉住的版本。非法配置在建版本时即被拒。
+
 ### Changed
 
 - **全面清理 Pi SDK 遗留命名与测试残留**：将 `agent/src/application/` 下的 6 个 `pi-run-*` 模块重命名为 `dsh-run-*`，核心执行器规范为 `DshRunExecutor`；`pi-session-journal-repository.ts` 重命名为 `session-journal-repository.ts`；测试目录 `agent/tests/pi/` 统一迁移规范为 `agent/tests/executor/`；清理废弃的 `agent/tests/sdk-compat/` 目录；彻底移除历史 `Pi*` 兼容别名导出，全仓内部调用统一切换至 DSH 执行器与预算。
@@ -16,6 +28,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **启用后的 Skill 草稿不再重复列在 Drafts**：启用是复制字节、草稿不删，所以 `skill_drafts` 里会一直有它。Agent 给这类条目打 `published: true` / `status: 'published'`，UI 的 Drafts 区只列待启用的。三层 Skill 卡片统一结构，操作按钮收进卡片底部的动作行，不再被拉成整行宽的色块。
 ### Fixed
 
+- **绑定在非默认智能体上的会话，后续 Run 不再报 "Conversation is bound to a
+  different agent"**：不带 `agent_id` 的 follow-up 过去会先解析成租户默认智能体，
+  再与会话已绑定的那个比对而失败。现在没有显式选择时由**会话自己**决定智能体
+  （A2A 建出来的会话在浏览器里追问即属此列）。
 - **修复 Run 完成时 Agent 消息截断回退问题**：
   - 修复 `agent/src/lib/event-redaction.ts` 中 `redactPayload` 遍历属性时 `text_truncated` 标志位被原对象 `false` 覆盖的问题，并将 `text`/`thinking` 正文字段的脱敏长度上限提升至 `DEFAULT_MAX_RESULT_CHARS` (2048)；
   - 加固前端 `frontend/src/shared/state/runReducer.ts` 与 `platformEventNormalize.ts`：当消息内部标记截断或已有的流式缓冲区长度大于带省略号的预览时，严禁覆盖前端实时累积的正文，彻底解决运行完成时气泡回退截断为 512 字符的现象。

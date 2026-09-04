@@ -109,6 +109,8 @@ export interface CreateRunBody {
   messages?: any[];
   message?: any;
   conversation_id?: string | null;
+  agent_id?: string | null;
+  agentId?: string | null;
   agent_profile_id?: string;
   agentProfileId?: string;
   model_id?: string;
@@ -148,6 +150,9 @@ export function normalizeCreateRunBody(body: CreateRunBody, opts: { conversation
   return {
     messages,
     conversation_id: conversationId,
+    // 首轮消息就是"建会话"，所以 Agent 的选择在这条路上透传。归属与活跃版本
+    // 由 agent/ 判定，BFF 不校验（AGENTS.md §1）。
+    agent_id: body.agent_id || body.agentId || undefined,
     agent_profile_id: body.agent_profile_id || body.agentProfileId || undefined,
     model_id: body.model_id || body.modelId || undefined,
     budget: body.budget || undefined,
@@ -181,6 +186,7 @@ export async function handleCreateRun(
         messages: normalized.messages,
         conversation_id: normalized.conversation_id,
         trace_id: traceId,
+        agent_id: normalized.agent_id,
         agent_profile_id: normalized.agent_profile_id,
         model_id: normalized.model_id,
         budget: normalized.budget,

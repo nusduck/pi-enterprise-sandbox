@@ -29,7 +29,7 @@ frontend/
 │       ├── runs/            ← Run 列表与取消
 │       ├── approvals/       ← 待审批列表
 │       ├── schedules/       ← Cron 任务管理
-│       └── settings/        ← Capabilities 与 A2A 管理
+│       └── settings/        ← Capabilities、Agents 与 A2A 管理
 ├── test/                    ← node:test + tsx
 ├── index.html
 ├── nginx.conf               ← /api/* 反代，SSE buffering off
@@ -76,9 +76,45 @@ AgentSession 都由 `agentEventAdapter -> runReducer` 单次归约。`ChatState`
 - **三层卡片同构**：Drafts / My Skills / System Skills 共用 `SkillCards`，同一张 meta 表（Source / Enabled / Dynamic），操作按钮统一收在卡片底部的 `.mgmt-card-actions` 行里靠右对齐。卡片是 flex-column，直接把 `<button>` 放进去会被拉伸成整行宽的大色块，草稿卡因此和系统卡不是一个形状。
 - **Composer 拼图按钮移除**：取消了聊天输入框原本的拼图安装按钮，Skill 安装全面收敛至 Capabilities 页面。
 
+### 多 Agent 选择
+
+一个 org 下可以并列存在多个智能体，用户在**建会话**时选一个。
+
+- **选择器只在两个条件同时成立时渲染**：org 内多于一个智能体，且当前还没有
+  `conversationId`（即下一条消息会新建会话）。单智能体的 org 完全看不到它，
+  体验与多 Agent 上线前一致。位置在 Composer 的模型行（`widgets/composer/AgentPicker.tsx`），
+  用原生 `<select>`——选项是短名字，没有每项的价格/上下文窗口要排版。
+- **会话开始后选择器消失**，会话头部改为显示一个只读的 Agent chip
+  （`widgets/conversation-header/ConversationHeader.tsx`）。这是刻意的：一个会话
+  绑定一个智能体，绑定在建会话时完成、此后不可变，换智能体要**新建会话**。
+  留着一个中途可点的控件只会让用户以为能换。
+- **前端只记 `agentId`，不记 `agentVersionId`**。哪个版本活跃由服务端在建会话的
+  事务内解析；前端缓存 versionId 会在 admin 切版本的瞬间过期。
+- `features/chat/useAgentSelection.ts` 持有目录与选择，`shared/api/agents.ts` 是
+  `/api/agents` 的封装。目录拉不到时静默降级为空列表——单智能体的既有流程不能
+  因为一个新面板的失败而中断。
+- 同一次拆分把模型选择挪进了 `features/chat/useModelSelection.ts`：`ChatContext.tsx`
+  贴着结构棘轮的行数预算，新增能力要先按职责拆分而不是把它继续撑大。
+
+**`/settings/agents`（仅 admin）** — `pages/settings/AgentsPage.tsx`，与 A2A Access
+一样只在 `actingRole === 'admin'` 时出现在二级导航里。四块：org 内的智能体列表、
+新建、配置编辑、版本历史。
+
+- 页面反复说明的一件事是**保存 = 建新版本**：`agent_versions` 不可变，编辑配置
+  产生下一个版本，旧版本保留；切换活跃版本**只影响新建的会话**，正在跑的 Run 与
+  已存在的会话继续用它们钉住的版本。只写"保存"而不解释，用户会以为是原地修改，
+  然后困惑于"为什么改了配置老会话没变"。两个按钮因此分开：
+  *Save as new active version* 与 *Save without activating*。
+- 「回滚」不是一个单独功能，就是在版本历史里激活一个旧版本——无需数据修复。
+- config 是 JSON 文本框。解析规则在 `pages/settings/agentHelpers.ts`（纯函数，可测）：
+  空文本 = 空配置而不是错误；数组与标量被拒；比较的是**解析后重新序列化**的结果，
+  所以只改缩进不会被当成"改了配置"，否则每次打开页面都会诱导用户建一个内容完全
+  相同的新版本。服务端仍会把同一份 config 再校验一遍（写入即校验），前端这层解析
+  只是让用户在按下按钮之前就看到 JSON 错在哪。
+
 ### Settings 二级导航结构
 
-为优化系统功能架构，侧边栏一级主导航聚焦于核心工作流（Chat 与 Schedules）；`Runs`（活跃运行）与 `Approvals`（审批中心）收敛至 `Settings` 作用域下（位于侧边栏底部 Settings 组中，保留未决审批角标与活跃运行数计数）。同时，在所有 `/settings/*` 页面（Capabilities, Approvals, Runs, A2A Access）顶部提供统一常驻的二级导航条（SettingsSubnav），支持在各管理面板间一键平滑切换。旧路径 `/runs` 与 `/approvals` 自动重定向至对应 `/settings/*` 路径，保持外链兼容。
+为优化系统功能架构，侧边栏一级主导航聚焦于核心工作流（Chat 与 Schedules）；`Runs`（活跃运行）与 `Approvals`（审批中心）收敛至 `Settings` 作用域下（位于侧边栏底部 Settings 组中，保留未决审批角标与活跃运行数计数）。同时，在所有 `/settings/*` 页面（Capabilities, Approvals, Runs, Agents, A2A Access）顶部提供统一常驻的二级导航条（SettingsSubnav），支持在各管理面板间一键平滑切换。旧路径 `/runs` 与 `/approvals` 自动重定向至对应 `/settings/*` 路径，保持外链兼容。
 
 ### 消息格式
 
@@ -110,6 +146,8 @@ AgentSession 都由 `agentEventAdapter -> runReducer` 单次归约。`ChatState`
 sendMessage(text)
   ├── 添加 user 消息
   ├── POST /api/runs，取得服务端 canonical run_id
+  │     首轮（conversation_id 为空）同时带上所选的 agent_id——那一轮就是"建会话"
+
   ├── EntityBridge.beginRun(run_id) + 注册 per-run AbortController
   ├── React 更新 user message / transport UI
   ├── GET /api/runs/:run_id/events（支持 sequence 续传）

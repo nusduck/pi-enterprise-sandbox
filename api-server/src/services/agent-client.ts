@@ -405,9 +405,15 @@ export async function deleteAgentConversation(
 
 export async function ensureAgentSession(
   conversationId: string | null = null,
-  { auth = null, traceId = null }: { auth?: any; traceId?: string | null } = {},
+  { auth = null, traceId = null, agentId = null }: { auth?: any; traceId?: string | null; agentId?: string | null } = {},
 ): Promise<any> {
-  const body = conversationId ? { conversation_id: conversationId } : {};
+  // agent_id 只在没有 conversation_id（这一次要新建会话）时被 Agent 采纳；
+  // 既有会话的 Agent 已经钉死，服务端会忽略它。
+  const body = conversationId
+    ? { conversation_id: conversationId }
+    : agentId
+      ? { agent_id: agentId }
+      : {};
   const resp = await agentFetch(`${config.AGENT_BASE_URL}/internal/sessions/ensure`, {
     method: 'POST',
     headers: requestHeaders({ auth, traceId }),

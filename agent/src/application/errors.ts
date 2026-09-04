@@ -70,6 +70,20 @@ export class IdempotencyConflictError extends ApplicationError {
   }
 }
 
+/**
+ * 调用方通过了鉴权，但角色不足以执行这个写操作。
+ *
+ * 与 404 分开：Agent 目录对 org 内所有成员**可见**，只是不可写——把它压成
+ * 404 会让管理员误以为自己建的 Agent 消失了。角色解析不出来（`role` 为 null）
+ * 时也走这条路：fail-closed，不回退到"默认允许"。
+ */
+export class AdminRoleRequiredError extends ApplicationError {
+  constructor(message = 'Administrator role is required', details?: ErrorDetails) {
+    super(message, { code: 'ADMIN_REQUIRED', retryable: false, details });
+    this.name = 'AdminRoleRequiredError';
+  }
+}
+
 /** Owner-scoped resource missing (never leak cross-tenant existence). */
 export class OwnerScopedNotFoundError extends ApplicationError {
   readonly resource: string | null;

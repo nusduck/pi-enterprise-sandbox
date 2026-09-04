@@ -46,6 +46,8 @@ export const ConversationSchema = z
     created_at: z.string().optional().nullable(),
     updated_at: z.string().optional().nullable(),
     sandbox_session_id: z.string().optional().nullable(),
+    // 会话绑定的 Agent（建会话时钉死，此后不可变）。
+    agent_id: z.string().optional().nullable(),
     messages: z.array(ConversationMessageSchema).optional(),
   })
   .passthrough();

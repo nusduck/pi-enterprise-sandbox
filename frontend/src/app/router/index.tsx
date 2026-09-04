@@ -5,6 +5,7 @@ import { RunsPage } from '../../pages/runs/RunsPage';
 import { ApprovalsPage } from '../../pages/approvals/ApprovalsPage';
 import { CapabilitiesPage } from '../../pages/settings/CapabilitiesPage';
 import { A2aPage } from '../../pages/settings/A2aPage';
+import { AgentsPage } from '../../pages/settings/AgentsPage';
 import { SchedulesPage } from '../../pages/schedules/SchedulesPage';
 
 export function AppRouter() {
@@ -48,6 +49,14 @@ export function AppRouter() {
           element={
             <AppShell>
               <RunsPage />
+            </AppShell>
+          }
+        />
+        <Route
+          path="/settings/agents"
+          element={
+            <AppShell>
+              <AgentsPage />
             </AppShell>
           }
         />

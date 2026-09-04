@@ -76,6 +76,13 @@ import {
   handleRunCronJob,
   handleUpdateCronJob,
 } from './src/routes/cron-jobs.js';
+import {
+  handleCreateAgent,
+  handleCreateAgentVersion,
+  handleListAgentVersions,
+  handleListAgents,
+  handleSetAgentActiveVersion,
+} from './src/routes/agents.js';
 import { authFromRequest, checkHealth } from './src/services/sandbox-client.js';
 import { checkAgentHealth } from './src/services/agent-client.js';
 import { readJsonBody } from './src/http/body.js';
@@ -348,6 +355,40 @@ const server = http.createServer(async (rawReq, res) => {
           await handleDeleteCronJob(id, res, req);
           return;
         }
+      }
+    }
+
+    // ── Agent catalog（目录事实归 agent/，这里只转发 + 身份投影） ──
+    if (req.method === 'GET' && path === '/api/agents') {
+      await handleListAgents(parsedUrl, res, req);
+      return;
+    }
+    if (req.method === 'POST' && path === '/api/agents') {
+      const parsed = await readJsonBody(req, { maxBytes: config.JSON_BODY_LIMIT_BYTES });
+      await handleCreateAgent(parsed, res, req);
+      return;
+    }
+    {
+      const agentVersions = path.match(/^\/api\/agents\/([^/]+)\/versions$/);
+      if (agentVersions) {
+        const id = decodeURIComponent(agentVersions[1]!);
+        if (req.method === 'GET') {
+          await handleListAgentVersions(id, parsedUrl, res, req);
+          return;
+        }
+        if (req.method === 'POST') {
+          const parsed = await readJsonBody(req, { maxBytes: config.JSON_BODY_LIMIT_BYTES });
+          await handleCreateAgentVersion(id, parsed, res, req);
+          return;
+        }
+      }
+      const agentActive = path.match(/^\/api\/agents\/([^/]+)\/active-version$/);
+      if (req.method === 'POST' && agentActive) {
+        const parsed = await readJsonBody(req, { maxBytes: config.JSON_BODY_LIMIT_BYTES });
+        await handleSetAgentActiveVersion(
+          decodeURIComponent(agentActive[1]!), parsed, res, req,
+        );
+        return;
       }
     }
 

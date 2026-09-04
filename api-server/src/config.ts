@@ -317,6 +317,7 @@ export function isProtectedApiPath(path: string): boolean {
     path.startsWith('/api/approvals') ||
     path.startsWith('/api/runs') ||
     path.startsWith('/api/cron-jobs') ||
+    path.startsWith('/api/agents') ||
     path.startsWith('/api/extensions') ||
     path.startsWith('/api/capabilities') ||
     path.startsWith('/api/a2a') ||
