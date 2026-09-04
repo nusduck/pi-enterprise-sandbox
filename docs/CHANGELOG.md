@@ -28,6 +28,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **启用后的 Skill 草稿不再重复列在 Drafts**：启用是复制字节、草稿不删，所以 `skill_drafts` 里会一直有它。Agent 给这类条目打 `published: true` / `status: 'published'`，UI 的 Drafts 区只列待启用的。三层 Skill 卡片统一结构，操作按钮收进卡片底部的动作行，不再被拉成整行宽的色块。
 ### Fixed
 
+- **exec 重启后不再留下永远 `running` 的僵尸作业行（§32 G7）**：
+  `MySqlJobRegistry.recoverOrphans()` 的注释从第一天就写着「启动期调用（用户路由
+  挂载之前）」，但**从来没有任何调用点**——只有一条单测在调。exec 每重启一次，
+  上一轮 `running`/`stopping` 的行就永远留在那个状态；开发栈上实测到 6 条僵尸行
+  （最老的两天前），而容器里一个对应进程都没有。这不只是脏数据：
+  `countActiveForOwner` 把 `running`/`stopping` 都算进每 owner 的并发上限（默认 20），
+  僵尸行攒够就再也起不了新作业，随重启次数单调恶化。现在 `exec/src/main.ts` 在
+  `listen` 之前 `await` 回收（顺序是硬要求：回收扫描不带租户过滤，不能和用户请求
+  并发），回收失败即拒绝启动。
 - **内部 HMAC 只剩一份实现**：`agent/src/infrastructure/sandbox/internal-hmac.ts`（980 行）
   与 `contract/src/hmac.ts`（816 行）长期并存，两个生产模块还在用前者。收口到
   `@pi/contract/hmac.js` 之前先补齐了 contract 少的两条校验，**没有靠放宽来"统一"**：

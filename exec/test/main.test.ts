@@ -449,3 +449,47 @@ describe('public session plane requires the service token', () => {
     );
   });
 });
+
+describe('startup orphan recovery is wired, not just defined', () => {
+  // 回归：`MySqlJobRegistry.recoverOrphans()` 的注释从第一天就写着「启动期调用
+  // （用户路由挂载之前）」，但 2026-09-04 之前**没有任何调用点**——只有一条单测
+  // 调它。后果不是脏数据而已：`countActiveForOwner` 把 running/stopping 都算进
+  // 每 owner 的并发上限，exec 每重启一次就多攒几条僵尸行，攒够 20 条这个 owner
+  // 再也起不了新作业。开发栈上实测到过 5 条 running（最老的两天前），而容器里
+  // 一个对应进程都没有。
+  test('createExecAppFromEnv exposes a recoverOrphans bound to the real registry', async () => {
+    const runtime = createExecAppFromEnv({
+      DEPLOYMENT_ENV: 'development',
+      SANDBOX_INTERNAL_HMAC_KEYRING: KEYRING_JSON,
+      SANDBOX_INTERNAL_HMAC_ACTIVE_KID: TEST_KID,
+      SANDBOX_API_TOKEN: TEST_API_TOKEN,
+      SANDBOX_WORKSPACES_ROOT: join(tmpdir(), 'exec-recover-ws'),
+      SANDBOX_TEMP_ROOT: join(tmpdir(), 'exec-recover-tmp'),
+    } as NodeJS.ProcessEnv);
+    try {
+      assert.equal(typeof runtime.recoverOrphans, 'function');
+      // 内存 store：没有历史行，回收 0 条且不抛。
+      assert.equal(await runtime.recoverOrphans(), 0);
+    } finally {
+      await runtime.dispose();
+    }
+  });
+
+  test('recovery failure propagates so the entrypoint can refuse to start', async () => {
+    // 库连不上时 recoverOrphans 必须抛，main.ts 才有机会 fail-closed 退出。
+    const runtime = createExecAppFromEnv({
+      DEPLOYMENT_ENV: 'development',
+      SANDBOX_INTERNAL_HMAC_KEYRING: KEYRING_JSON,
+      SANDBOX_INTERNAL_HMAC_ACTIVE_KID: TEST_KID,
+      SANDBOX_API_TOKEN: TEST_API_TOKEN,
+      SANDBOX_WORKSPACES_ROOT: join(tmpdir(), 'exec-recover-db-ws'),
+      SANDBOX_TEMP_ROOT: join(tmpdir(), 'exec-recover-db-tmp'),
+      EXEC_DATABASE_URL: 'mysql://exec:secret@127.0.0.1:1/execdb',
+    } as NodeJS.ProcessEnv);
+    try {
+      await assert.rejects(() => runtime.recoverOrphans());
+    } finally {
+      await runtime.dispose();
+    }
+  });
+});

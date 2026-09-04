@@ -442,3 +442,35 @@ Each entry should say **what changed**, **why**, and **which STATUS IDs** it aff
   故意没有合并；要不要收到同一条策略下是单独一件事。
   上一条列出的其余 Not closed 项（G7 门禁重写、配额落库、`memory.ts` 死代码、
   `htm` 硬编码、`issueToken` 写死 scope、`getClientIp` 信 XFF）仍然未做。
+
+## 2026-09-04（续二）— G7：先修根因，再重写门禁
+
+- **Context:** 上一条 Not closed 的第一项是「重写 G7 门禁」。动手前先看门禁到底
+  想断言什么，结果发现被断言的那件事**根本没实现**。
+- **Action:**
+  1. **根因**：`MySqlJobRegistry.recoverOrphans()` 自写出来就没有任何调用点
+     （`exec/src/main.ts` 里没有，只有一条单测在调）。开发栈上直接查到 6 条
+     `running`/`stopping` 僵尸行、最老的两天前，而容器里一个对应进程都没有。
+     `countActiveForOwner` 统计的正是这两个状态，是每 owner 并发上限的依据——
+     僵尸行攒够 20 条该 owner 就再也起不了作业，随重启次数单调恶化。
+     修复：`main.ts` 在 `listenHono()` 之前 `await runtime.recoverOrphans()`，
+     失败即 `process.exit(1)`。顺序是硬要求（回收扫描无租户过滤，不能和用户请求并发）。
+  2. **旧门禁不是「修一修」**：`sandbox-live-gate.mjs`（932 行）除了 import 三个
+     已删除的 agent transport，整个 harness 针对的是 Python 执行面
+     （`grep uvicorn sandbox.main:app` 找 PID、`SANDBOX_GATE_RSS_ARG=sandbox.main:app`、
+     旧 `/internal/v1/*` 的 claim 模型）。已删除，换成
+     `scripts/release-gates/exec-orphan-recovery-gate.mjs`（照当前接缝写，约 170 行）。
+- **Verification:** 重建 sandbox/sandbox-mcp 后第一次启动即打印
+  `exec recovered 6 orphaned job(s) at startup`，僵尸行清零。新门禁在真实栈上
+  8/8 PASS（`docker compose kill -s KILL sandbox` → 重启 → 作业收成
+  `killed` / `orphaned: worker restarted`、全表无残留）。六套单测 + 五处类型检查全绿。
+  新增两条 pytest 守卫（`tests/test_exec_startup_orphan_recovery.py`）：入口必须在
+  listen 之前 await 回收、回收失败必须 fail-closed；把 `main.ts` 退回旧样子两条都失败。
+  证据：`docs/evidence/g7-exec-orphan-recovery-2026-09-04.md`。
+- **STATUS IDs:** **G7 由 `unknown` 改为 `done`**（上表与 2026-09-01 重审增量表两处同时改，
+  看板内部不留矛盾）。
+- **Not closed:** 门禁只查账本、不查残留进程，因为当前拓扑下「容器还活着但 bwrap 子进程
+  成了孤儿」不成立——exec 是 `init: true` 下 docker-init 唯一监管的子进程，实测
+  `kill -9` 它容器立刻 restarting。这一条写进了新门禁的文件头注释。
+  旧门禁里另外三块断言（20 并发执行、5 GiB 流式 Dataset 的有界 RSS、跨租户内部面隔离）
+  **没有**随之重写——它们对应的是 C4/C6/H2 等其它行，不在 G7 范围内，应各自单开一件事。

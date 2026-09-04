@@ -150,6 +150,14 @@ export function readExecDbConfigFromSandboxEnv(env: NodeJS.ProcessEnv = process.
 
 export interface ExecRuntime {
   readonly app: Hono;
+  /**
+   * 启动期孤儿回收。**必须在 listen 之前 await**——`MySqlJobRegistry.recoverOrphans()`
+   * 的注释从第一天就写着"启动期调用（用户路由挂载之前）"，但在 2026-09-04 之前
+   * 没有任何人调它：exec 每重启一次，上一轮 `running`/`stopping` 的行就永远留在
+   * 那个状态。它们不只是脏数据——`countActiveForOwner` 把 `running`/`stopping`
+   * 都算进每 owner 的并发上限，僵尸行攒够 20 条，这个 owner 就再也起不了新作业。
+   */
+  recoverOrphans(): Promise<number>;
   dispose(): Promise<void>;
 }
 
@@ -230,6 +238,7 @@ export function createExecAppFromEnv(env: NodeJS.ProcessEnv = process.env): Exec
 
   return {
     app,
+    recoverOrphans: () => jobRegistry.recoverOrphans(),
     async dispose() {
       if (pool !== undefined) await pool.end();
     },

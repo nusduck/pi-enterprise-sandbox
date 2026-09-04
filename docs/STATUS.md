@@ -121,7 +121,7 @@ Change this file in the **same commit** as the implementation or evidence that j
 | G4 | Duplicate request no duplicate side effects | `done` | Offline concurrent begin (same/different hash) + FOR UPDATE. **Live 2026-07-19:** 20-way same-key CreateRun on `pi_gate_20260719_g4g5` → 1 run / 1 message / 1 accepted / 1 outbox / 1 idempotency. Evidence: `evidence/p1-g4-g5-idempotency-2026-07-19.md`. |
 | G5 | Create Run then immediate query race-free | `done` | Offline: create txn held open until commit before return + immediate GET. **Live:** every concurrent response immediately GET-able ACCEPTED\|QUEUED. Same evidence doc. |
 | G6 | Durable WAITING_INPUT / interaction resume | `done` | **Unit:** interaction HTTP respond/rehydrate, GET `pending_input`, execute-run resume, cancel races (17 pass). **Live:** `agent-worker-pi-restart.release-gate.test.js` case *continues one durable interaction after Worker restart…* PASS on isolated MySQL/Redis/Sandbox (`pi_gate_20260719_g6int`, 2026-07-19): park → SIGKILL Worker A → rehydrateWaiting+respond → Worker B SUCCEEDED / APPLIED / 2 provider calls. Evidence: `evidence/g6-interaction-worker-restart-2026-07-19.md`. |
-| G7 | Hard `SIGKILL` orphan recovery in Bubblewrap | `unknown` | 当前 exec 有启动期 `recoverOrphans()` 与离线 registry 用例，但旧证据针对已删除的 Python 执行面。本轮只验证正常 SIGTERM 收敛，没有硬杀 exec 服务，因此不能复用 2026-07-19 结论。**门禁脚本本身已跑不起来**（2026-09-04 复现）：`scripts/release-gates/sandbox-live-gate.mjs` import 的 `internal-execution-http` / `internal-process-http` / `internal-artifact-submit-http` 三个模块在 DSH 重建里已删除，`node` 直接 `ERR_MODULE_NOT_FOUND`。关掉这一行之前要先照新的 `runtime/providers/exec-rpc` 接缝重写这个 gate——别再照着 `evidence/g7-hard-kill-orphan-2026-07-19.md` 的命令跑。 |
+| G7 | Hard `SIGKILL` orphan recovery in Bubblewrap | `done` | **2026-09-04：先修了根因，再重写了门禁。** 根因是 `MySqlJobRegistry.recoverOrphans()` 自写出来就没有任何调用点——exec 每重启一次，上一轮 `running`/`stopping` 的行就永远留在那个状态（开发栈上实测到 6 条僵尸行，最老的两天前，容器里一个对应进程都没有），而 `countActiveForOwner` 把它们算进每 owner 的并发上限。现在 `exec/src/main.ts` 在 listen 之前 await 回收，失败即拒绝启动。旧门禁 `sandbox-live-gate.mjs`（932 行）是 Python 执行面时代的产物（靠 `grep uvicorn sandbox.main:app` 找 PID、依赖三个已删除的 agent internal transport），已删除，换成照当前接缝写的 `scripts/release-gates/exec-orphan-recovery-gate.mjs`：真实栈上 `docker compose kill -s KILL sandbox` → 重启 → 断言作业收成 `killed`/`orphaned: worker restarted`、全表无 running/stopping 残留，8/8 PASS。Evidence: [`evidence/g7-exec-orphan-recovery-2026-09-04.md`](evidence/g7-exec-orphan-recovery-2026-09-04.md)。 |
 
 ## H. Security
 
@@ -197,7 +197,7 @@ Non-blocking debt remains in [`review-deferred-items.md`](./review-deferred-item
 | A2 | `done` | 真实 LLM 模型驱动前台/后台工具 Run 已完成；策略、账本与 exec 链均生效 |
 | A4 | `partial` | 同 Session 连续 Run 已通过；仍缺原生 DSH persistence resume 与 Worker 重启上下文 gate |
 | C7 | `partial` | start/list/log/signal/cancel 与跨租户 404 已通过；仍缺模型侧 job 查询和 exec 重启恢复 |
-| G7 | `unknown` | 未执行 exec hard-SIGKILL/orphan gate |
+| G7 | `done` | 2026-09-04 已执行：见上表 G7 行与 `evidence/g7-exec-orphan-recovery-2026-09-04.md` |
 
 Evidence: [`evidence/2026-09-01-dsh-process-closure-live-chain.md`](evidence/2026-09-01-dsh-process-closure-live-chain.md)。
 
