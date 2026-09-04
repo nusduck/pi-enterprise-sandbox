@@ -300,3 +300,74 @@ Each entry should say **what changed**, **why**, and **which STATUS IDs** it aff
   - `agent`：1210 passed; typecheck (tsc + tsc.runtime) clean
   - `api-server`：146 passed; typecheck clean; smoke clean
   - `frontend`：334 passed; typecheck clean
+
+## 2026-09-04 — 一个 org 多个可选智能体（P0/P1），以及 AgentVersion.systemPrompt 的消费缺口
+
+两个 commit：`057a4622`（P0+P1 实现）与 `410e9137`（前者上线后才可观测到的运行时缺口）。
+
+- **Reproduced first:**
+  1. P0/P1 的六条回归项按 `design/multi-agent-selection.md` §11 先写后修，
+     `agent/tests/run-services/agent-catalog-service.unit.test.js` 在实现前全红
+     （含用两个真实 org 验证跨租户 404）。
+  2. 顺带复现出一个**已存在**的缺陷：不带 `agent_id` 的 follow-up 会先解析成租户默认
+     Agent、再与会话已绑定的 Agent 比对，抛 `Conversation is bound to a different agent`
+     ——绑在非默认 Agent 上的会话（A2A 建的早就如此）下一轮就跑不起来。
+  3. `410e9137` 由一条真实 trace（`55e02176046cd296503915dc42ad27ac`）暴露：会话绑定的
+     Agent 与 `runs.agent_version_id` 都是对的，但该版本 `config_json` 里的 `systemPrompt`
+     在发给模型的 system prompt 里一个字也没有。回归测试
+     「hands the AgentVersion systemPrompt to the runtime factory」先失败后通过。
+- **Action:**
+  1. `agent/`：新增 `application/agent-catalog-service.ts`（建 Agent = definition + v1 +
+     活跃指针单事务；建版本；切活跃版本；列目录与版本线）与
+     `presentation/http/agents-routes.ts`（`/internal/agents` 五条路由，
+     `create-http-server.ts` 只加一次委派）。角色闸门与归属判定放在服务层而不是 handler。
+     新增 `AdminRoleRequiredError` → 403，`agent_definitions` / `agent_versions` 进 404 名词表。
+     `conversation-service` 的 create / ensureSession 与 `/internal/agent-runs` 接收 `agent_id`。
+  2. `api-server/`：`routes/agents.ts` + `services/agent-catalog-client.ts`（单开 client 文件是
+     因为 `agent-client.ts` 会顶破 1000 行结构棘轮）；只转发，不做目录状态判断。
+  3. `frontend/`：`AgentPicker`（仅新会话且 org 多于一个 Agent 时渲染）、会话头部只读 Agent chip、
+     `settings/AgentsPage.tsx`（admin）。`ChatContext.tsx` 行数预算钉死，按职责把模型选择抽成
+     `useModelSelection.ts`，Agent 选择作为同级 hook 加入（1443/1456）。
+  4. `410e9137`：`DshRunExecutor` 在加载 AgentVersion 后经 `bindAgentVersionConfig()` 取
+     `systemPrompt` 传给运行时工厂（工厂读的是 `input.systemPrompt`，此前无人接线，
+     `assembleSystemPrompt(undefined)` 只返回企业条款）。不直接读 `configJson`——那里是唯一
+     定义「这份 config 怎么读」的地方。企业条款位置不变，租户自定义段在前、条款追加在后，
+     覆盖不掉。缺口不是本次多 Agent 改动引入的：换引擎起就在，此前 org 只有一个 Agent、
+     `systemPrompt` 一直是空串，没有可观测后果。
+- **Live:** 按 AGENTS.md §4 重建 `agent` / `api-server` / `sandbox` / `sandbox-mcp` 四个镜像后跑
+  真实链路，**18 条断言全过**：登录 → 建 Agent（admin）→ 建会话并指定该 Agent → 一轮带工具的
+  run（`SUCCEEDED`，1 个工具）→ 后台进程 logs/signal → 未知 `agent_id` 一律 404 且响应体不回显
+  该 id → 切版本后老会话仍用 v1、新会话用 v2 → 非法 config 400 → 非 admin 写目录 403。
+  `410e9137` 另行重建 `agent` 镜像后跑了 6 条断言：直接查 `dsh_session_events` 的 request/header，
+  确认自定义提示词进入 system（1/1）、企业条款仍在场（1/1）、自定义段排在条款之前
+  （custom@56 < clauses@76）、`systemPrompt` 为空的 Agent 行为不变（0 命中）。
+- **Evidence:** [`evidence/multi-agent-selection-p0-p1-2026-09-04.md`](evidence/multi-agent-selection-p0-p1-2026-09-04.md)。
+  `410e9137` 的真机验证**没有单独的证据文件**，细节只在该 commit message 里。
+- **Tests:** `057a4622` 时点六套全绿：pytest 98 / exec 326 / contract 29 / agent 1224 /
+  api-server 154 / frontend 350，全部类型检查（含 `src/runtime` strict）干净。
+  `410e9137` 时点：agent 1233 / pytest 98，typecheck 干净。
+  行数棘轮：`create-http-server.ts` 1272/1399，`ChatContext.tsx` 1443/1456，
+  `dsh-run-executor.ts` 1523/1526（为此把新增注释压到 4 行，**没有抬预算**）。
+- **Docs:** `docs/api.md` 新增 `/internal/agents` 与 `/api/agents` 条目，并补一张「config 里哪些
+  字段真的生效」的逐字段表——`systemPrompt` / `modelPolicy`（含 `maxOutputTokens`）/ `toolPolicy`
+  生效；`temperature`、`thinkingLevel`、`skills`、`mcpServers`、`extensions`、`sandboxPolicy`、
+  `a2a`、`contextPolicy` 不生效，各自注明原因。此前没有任何地方说明这件事。
+  `docs/webui.md` 随 P1 的 UI 结构变化更新；`docs/CHANGELOG.md` `[Unreleased]` 已记；
+  `design/multi-agent-selection.md` §13 记录实施状态、与原计划的五处偏差，以及 §0
+  「运行时消费面已经建好了」这句前提是错的。
+- **STATUS IDs:** 无 §32 行状态改变，`STATUS.md` 未动。A5（Agent Version pinned）维持 `done`
+  ——版本钉本来就是对的，`410e9137` 修的是「钉对了但内容没被消费」，不属于 A5 的断言范围；
+  D8 维持 `done`，`A2aPage` 的 agents 本就来自同一张 `agent_definitions`，不存在两套列表。
+- **Not closed:**
+  - 设计文档 P2 三项：SSO 的 org claim 替代 `BOOTSTRAP_ORG_ID`（claim 缺失须拒签，不回落默认
+    org）、Run 详情 / TracePanel 展示本次 Run 绑定的 Agent 名与 `version_no`、复核
+    `BFF_DEV_ACTING_ORGANIZATION_ID` 在生产镜像中够不到。均依赖尚不存在的 IdP 接入。
+  - **真正的跨 org 隔离未在浏览器面复现**：所有浏览器用户目前共用 `BOOTSTRAP_ORG_ID`，
+    真实链路第 11/12 条用的是本 org 不存在的 `agent_id`，与「属于别的 org」走同一分支。
+    跨 org 分支判定目前只由单测用两个真实 org 覆盖，P2 接上 SSO 后应在真实栈上补。
+  - 版本不漂移那几条（第 7/14/15 断言）是直接查 `runs.agent_version_id` 账本，不是读 API
+    ——Run 详情还没把绑定的 Agent 名与 `version_no` 投影出来，即 P2 第 2 项。
+  - `sandboxPolicy` 明确不做：它从 ADR 0002 起就没有执行路径，沙箱模式 / 网络模式 / 可写根
+    都由 exec 的部署级配置决定，不按 Agent 分。要接需要定义 schema、扩 contract 的 shell RPC、
+    改 exec 的 isolation/build——那是在动 AGENTS.md §2 的容器隔离不变量，应当单开一件事并起
+    新 ADR（下一个可用编号 **0011**）。
