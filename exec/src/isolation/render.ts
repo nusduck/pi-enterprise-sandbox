@@ -81,8 +81,13 @@ function renderMount(mount: Mount): string[] {
 
 export interface RenderOptions {
   /**
-   * `argv` 保持可审计的传统 `--setenv` 形式；`inherited` 由正式 spawn 使用，
-   * 先校验环境计划但不把值放进 bwrap 参数，调用方会把它交给 spawn 的 env。
+   * `argv` 保持可审计的传统 `--clearenv` + `--setenv` 形式；`inherited` 由正式
+   * spawn 使用，先校验环境计划但不把值放进 bwrap 参数（`ps` / `/proc/<pid>/cmdline`
+   * 是全局可读的，凭据不能出现在那里）。
+   *
+   * **`inherited` 连 `--clearenv` 也不发**——bwrap 于是把自己的环境原样传给
+   * 子进程。用它的调用方**必须**自己把 spawn 的 `env` 收成受控集合，否则
+   * 整个宿主环境会进沙箱。目前唯一的调用方是 `bubblewrap.ts` 的 `spawnLaunch`。
    */
   readonly envMode?: 'argv' | 'inherited';
 }

@@ -74,25 +74,41 @@ export function SchedulesPage() {
   const [runs, setRuns] = useState<CronJobRun[]>([]);
   const [runsLoading, setRunsLoading] = useState(false);
 
+  // 只拉任务列表，**不带** selectedId 依赖：把执行历史塞进来会让 `refresh` 的
+  // 身份随选中项变化，于是"选中一条"就整表重拉一遍，删掉的那条还要再触发一轮。
   const refresh = useCallback(async () => {
     setLoading(true);
     try {
-      const nextJobs = await listCronJobs();
-      setJobs(nextJobs);
-      if (selectedId && hasSelectedSchedule(nextJobs, selectedId)) {
-        setRuns(await listCronJobRuns(selectedId));
-      } else if (selectedId) {
-        setSelectedId(null);
-        setRuns([]);
-      }
+      setJobs(await listCronJobs());
     } catch (error) {
       setBanner((error as Error).message || 'Unable to load scheduled runs.');
     } finally {
       setLoading(false);
     }
-  }, [selectedId]);
+  }, []);
 
   useEffect(() => { void refresh(); }, [refresh]);
+
+  // 执行历史跟着「选中项 + 最新的任务列表」走：列表刷新后历史也刷新；选中的
+  // 任务如果已经不在列表里（别处删了），详情面板自己关掉。
+  useEffect(() => {
+    if (!selectedId) return;
+    if (!hasSelectedSchedule(jobs, selectedId)) {
+      setSelectedId(null);
+      setRuns([]);
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      try {
+        const history = await listCronJobRuns(selectedId);
+        if (!cancelled) setRuns(history);
+      } catch (error) {
+        if (!cancelled) setBanner((error as Error).message || 'Unable to load execution history.');
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [jobs, selectedId]);
 
   const selectedJob = useMemo(
     () => jobs.find((job) => job.cron_job_id === selectedId) || null,

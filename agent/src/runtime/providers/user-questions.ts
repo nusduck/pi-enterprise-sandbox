@@ -32,42 +32,6 @@ export function isDurableInteractionPendingError(error: unknown): boolean {
   return error instanceof Error && error.message === 'user interaction pending';
 }
 
-export function isDurableInteractionPendingResult(result: unknown): boolean {
-  if (!result || typeof result !== 'object') return false;
-  const res = result as Record<string, unknown>;
-  if (res.isError !== true) return false;
-  const err = res.error;
-  if (isDurableInteractionPendingError(err)) return true;
-  if (
-    typeof err === 'object' &&
-    err !== null &&
-    (err as Record<string, unknown>).message === 'user interaction pending'
-  ) {
-    return true;
-  }
-  if (typeof err === 'string' && err.includes('user interaction pending')) {
-    return true;
-  }
-  if (Array.isArray(res.content)) {
-    for (const item of res.content) {
-      if (
-        typeof item === 'object' &&
-        item !== null &&
-        typeof (item as Record<string, unknown>).text === 'string'
-      ) {
-        if (
-          ((item as Record<string, unknown>).text as string).includes(
-            'user interaction pending',
-          )
-        ) {
-          return true;
-        }
-      }
-    }
-  }
-  return false;
-}
-
 const requesterAls = new AsyncLocalStorage<InteractionRequester | null>();
 const installedContexts = new WeakSet<object>();
 

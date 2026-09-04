@@ -142,6 +142,8 @@ data: {"sequence":18,"event":{...},"ts":...,"eventId":"01K..."}
 
 启用/停用入口是 `POST /api/capabilities/skills/{name}/enable|disable`。BFF 只做代理与身份投影；Agent 校验包、更新发布副本与 MySQL 账本。启用账本写失败时会撤回发布副本，保持 fail-closed。
 
+草稿在**启用之后不会消失**——启用是复制字节，草稿留在原地当可编辑的源，停用只删已发布的那份副本。所以 `skill_drafts` 里会一直有它；这类条目带 `published: true` 与 `status: 'published'`，与还等着人按「Enable」的 `published: false` / `status: 'draft'` 区分。UI 的 Drafts 区只列后者，否则同一个名字会在页面上出现两次。要重新发布一份改过的草稿，先在 My Skills 里 Disable，草稿会回到 Drafts。
+
 草稿包上传入口是 `POST /api/capabilities/skills/drafts`。支持通过 UI 或客户端直传 `.zip` 与 `.skill` 归档包（请求头带 `X-Filename`，流式二进制 body，单包上限 50MB）。BFF 受信鉴权后透传 Agent；Agent 校验包结构与 `SKILL.md`，解压落入当前用户的草稿根目录 `/home/sandbox/skill-draft/<org>/<user>/<skill-name>/`，状态保持为未启用（`enabled: false, status: 'draft'`）。草稿不进模型发现、不进 prompt，等待用户在 UI 上点击「Enable」正式启用。
 
 `GET /api/runs/{run_id}/trace` 返回 owner-scoped durable span 树：
@@ -488,12 +490,22 @@ Agent 工具 `ls` / `find` / `grep` 覆盖 SDK 本地同名工具，全部转发
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
+| `GET` | `/sessions/{id}/artifacts` | 列举本工作区的产物 |
 | `POST` | `/sessions/{id}/artifacts/register` | 注册产物（旧端点） |
 | **`POST`** | **`/sessions/{id}/artifacts/submit`** | **显式提交产物（推荐）** |
 | `POST` | `/sessions/{id}/artifacts/imports` | 将 owner-scoped Artifact 导入本 Session workspace（BFF 上游兼容端点） |
 | `GET` | `/sessions/{id}/artifacts/{aid}/download` | 下载产物 |
 
-Sandbox 侧**没有**产物列表路由；列表由 Agent MySQL 提供，经 BFF `GET /api/artifacts` 访问。
+> **公共面这几条路由里的 `{id}` 是 `workspace_id`，不是 `sandbox_session_id`。**
+> exec 的 `requireOwnedSession()` 拿它派生物理工作区路径，产物的归属判定也按
+> `workspace_id`。浏览器只认 sandbox session id，所以 BFF 在每次 Sandbox 跳转前
+> 都会先经 Agent 的 `GET /internal/sessions/{sid}` 换成 `workspace_id`；换不出来
+> 一律 **503 `SESSION_WORKSPACE_UNAVAILABLE`**，不退化成拿 session id 顶替
+> （那会静默落到一个不存在的工作区：列表恒空、导入写进错的目录）。
+>
+> 记录里的 `session_id` 列**不是**列表键：内部面的 `submit_artifact` 往里写
+> sandbox session id，MCP facade 写的是 workspace id（facade 够不到 session 概念）。
+> 两个写入方唯一一致的键是 `workspace_id`，所以列表与下载都按它判。
 
 > **核心设计（P7）**：系统**不会自动扫描** workspace。`write` / `edit` / `bash` 只改私有工作区，**不会**注册 artifact，也**不会**触发 `file_ready`。只有通过 `submit_artifact`（或等价 `POST .../artifacts/submit`）显式提交的文件才会出现在 artifact 列表并可供用户下载。
 

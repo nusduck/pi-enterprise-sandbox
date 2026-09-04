@@ -20,6 +20,12 @@ import {
   type ToolRegistryItem,
 } from '../../shared/api/capabilities';
 import { IconRefresh, IconSparkles, IconPuzzle, IconTerminal, IconCode, IconLayers, IconPlus } from '../../shared/ui/Icons';
+import {
+  isDraftSkill,
+  isUserSkill,
+  skillSourceLabel,
+  splitSkillTiers,
+} from './skillHelpers';
 
 const TABS = [
   { id: 'skills', label: 'Skills' },
@@ -64,22 +70,6 @@ function statusLabel(item: {
   if (item.status) return item.status;
   if (item.connection_status) return item.connection_status;
   return item.enabled === false ? 'disabled' : 'configured';
-}
-
-/** Bundled packages come from the shared root; user packages from the caller's own. */
-function isUserSkill(item: SkillItem): boolean {
-  return item.source === 'user-skill-root';
-}
-
-function isDraftSkill(item: SkillItem): boolean {
-  return item.source === 'draft-skill-root';
-}
-
-function skillSourceLabel(item: SkillItem): string {
-  if (item.source === 'user-skill-root') return 'User';
-  if (item.source === 'draft-skill-root') return 'Draft';
-  if (item.source === 'shared-skill-root') return 'System';
-  return item.source || item.path || '—';
 }
 
 function SkillDraftUpload({
@@ -225,9 +215,7 @@ function SkillTiers({
   onMutate: (name: string, enabled: boolean) => void;
   onUploadSuccess: () => void;
 }) {
-  const drafts = items.filter(isDraftSkill);
-  const user = items.filter(isUserSkill);
-  const system = items.filter((item) => !isUserSkill(item) && !isDraftSkill(item));
+  const { drafts, user, system, publishedFromDraft } = splitSkillTiers(items);
   return (
     <>
       <section className="mgmt-section">
@@ -246,7 +234,12 @@ function SkillTiers({
             No enabled Skills for your account. Upload a Skill package to Drafts above and click Enable.
           </p>
         ) : (
-          <SkillCards items={user} busy={busy} onMutate={onMutate} />
+          <SkillCards
+            items={user}
+            busy={busy}
+            onMutate={onMutate}
+            fromDraft={publishedFromDraft}
+          />
         )}
       </section>
       <section className="mgmt-section">
@@ -265,28 +258,36 @@ function SkillCards({
   items,
   busy,
   onMutate,
+  fromDraft,
 }: {
   items: SkillItem[];
   busy: string | null;
   onMutate: (name: string, enabled: boolean) => void;
+  fromDraft?: Set<string | undefined>;
 }) {
   return (
     <ul className="mgmt-card-list">
       {items.map((s, i) => {
         const name = s.name || s.id || `skill-${i}`;
         const status = statusLabel(s);
+        const draft = isDraftSkill(s);
+        const actionable = draft || isUserSkill(s);
         return (
           <li key={name} className="mgmt-card">
             <header className="mgmt-card-head">
               <div className="mgmt-card-title-row">
                 <IconPuzzle size={16} className="mgmt-card-icon" />
                 <h3 className="mgmt-card-title">{name}</h3>
+                {fromDraft?.has(s.name) ? (
+                  <span className="mgmt-tag">from draft</span>
+                ) : null}
               </div>
               <span className={`mgmt-status status-${status}`}><span className="mgmt-status-dot" />{status}</span>
             </header>
             {s.description ? (
               <p className="mgmt-card-reason">{s.description}</p>
             ) : null}
+            {/* 三层用同一张 meta 表，卡片高度和字段位置才对得齐。 */}
             <dl className="mgmt-meta-grid">
               <div>
                 <dt>Source</dt>
@@ -301,15 +302,19 @@ function SkillCards({
                 <dd>{s.dynamic ? 'Yes' : 'No'}</dd>
               </div>
             </dl>
-            {isDraftSkill(s) || isUserSkill(s) ? (
-              <button
-                type="button"
-                className={`mgmt-btn sm ${isDraftSkill(s) ? 'primary' : 'secondary'}`}
-                disabled={busy === name}
-                onClick={() => onMutate(name, isDraftSkill(s))}
-              >
-                {isDraftSkill(s) ? 'Enable' : 'Disable'}
-              </button>
+            {/* 动作区固定在卡片底部并右对齐。直接把 button 放进 flex-column 的
+                卡片里会被拉成整行宽的大色块，草稿卡因此和 System 卡长得完全不一样。 */}
+            {actionable ? (
+              <div className="mgmt-card-actions">
+                <button
+                  type="button"
+                  className={`mgmt-btn sm ${draft ? 'primary' : 'secondary'}`}
+                  disabled={busy === name}
+                  onClick={() => onMutate(name, draft)}
+                >
+                  {busy === name ? '…' : draft ? 'Enable' : 'Disable'}
+                </button>
+              </div>
             ) : null}
           </li>
         );

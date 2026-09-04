@@ -273,6 +273,37 @@ test('spawnLaunch(): inherited environment reaches the child without entering ar
   }
 });
 
+test('spawnLaunch(): a caller-supplied env never reaches the sandboxed child', async () => {
+  // 2026-09-03 起 `spawnLaunch` 不再发 `--clearenv`，"沙箱不继承宿主 env" 这条
+  // 不变量因此只剩这一行代码在守。一次 `env: process.env` 的手滑就会把服务进程
+  // 的全部凭据送进沙箱，所以这里钉死：调用方给的 env 一律被剥掉。
+  const { root, cleanup } = await scratchDir();
+  try {
+    const script = join(root, 'env-leak-probe.sh');
+    await writeFile(script, '#!/bin/sh\nprintf "%s|%s" "$DB_DSN" "$LEAKED"\n', 'utf8');
+    await chmod(script, 0o755);
+    const child = spawnLaunch(
+      script,
+      { ...minimalProfile(), env: { clearEnv: true, vars: { DB_DSN: 'from-env-plan' } } },
+      {
+        stdio: ['ignore', 'pipe', 'ignore'],
+        // @ts-expect-error `SpawnLaunchOptions` 故意不接受 env；这里模拟手滑。
+        env: { LEAKED: 'host-secret', DB_DSN: 'overridden-by-caller' },
+      },
+    );
+    let output = '';
+    child.stdout?.setEncoding('utf8');
+    child.stdout?.on('data', (chunk: string) => { output += chunk; });
+    await new Promise<void>((resolve, reject) => {
+      child.once('error', reject);
+      child.once('close', () => resolve());
+    });
+    assert.equal(output, 'from-env-plan|');
+  } finally {
+    await cleanup();
+  }
+});
+
 // ── preflightCheck: the "missing executable" branch needs no real bwrap ──
 
 test('preflightCheck(): throws IsolationUnavailable when the executable does not exist', () => {

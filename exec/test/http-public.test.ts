@@ -31,6 +31,7 @@ describe('public: byte-identical contract vs Python', () => {
   let base: string;
   let workspaceManager: WorkspaceManager;
   let jobRegistry: MySqlJobRegistry;
+  let artifactService: ArtifactService;
   let app: Hono;
 
   before(async () => {
@@ -50,12 +51,13 @@ describe('public: byte-identical contract vs Python', () => {
     };
     const makeFs = (ws: WorkspaceContext) =>
       new WorkspaceFileSystem(new CordisContext() as never, ws);
+    artifactService = new ArtifactService(makeFs, undefined, { roots: controlRoots });
     app = createPublicRouter({
       workspaceManager,
       systemSkillRoot: path.join(base, 'skills'),
       enabledSkillPackagesFor: () => [],
       jobRegistry,
-      artifactService: new ArtifactService(makeFs, undefined, { roots: controlRoots }),
+      artifactService,
       datasetService: new DatasetService(makeFs, undefined, { roots: controlRoots }),
     });
     await mkdir(path.join(base, 'skills'), { recursive: true });
@@ -238,6 +240,96 @@ describe('public: byte-identical contract vs Python', () => {
     assert.equal(imported.workspace_file.name, 'imported.txt');
     assert.equal(imported.workspace_file.path, 'imported.txt');
     assert.equal(imported.workspace_file.size, 16);
+  });
+
+  test('GET /artifacts + download — session_id 与 workspace 不同的记录也必须可见', async () => {
+    // `exec_artifacts.session_id` 不是稳定的列表键：内部面的 `submit_artifact`
+    // 写的是 **sandbox session id**，MCP facade 写的是 **workspace id**。
+    // 公共面的路径参数解析出来的是 workspace，所以列表/下载都必须按 workspace 判，
+    // 否则总有一半写入方的产物在 UI 上凭空消失（2026-09-03 的"刷新后产物没了"）。
+    const id = 'pub_art_ws_key';
+    await initSession(id);
+    const ws = workspaceManager.physicalWorkspacePath(id);
+    const fs = await import('node:fs/promises');
+    const path = await import('node:path');
+    await fs.writeFile(path.join(ws, 'from-internal.txt'), 'internal-plane-bytes');
+
+    const record = await artifactService.submit({
+      workspace: {
+        orgId: 'org_test',
+        userId: 'user_test',
+        workspaceId: id,
+        workspaceRoot: ws,
+        tempRoot: workspaceManager.physicalTempPath(id),
+        systemSkillRoot: path.join(base, 'skills'),
+        enabledSkillPackages: [],
+      },
+      // 内部面传的是 sandbox session id，和 workspaceId 不是一个值。
+      sessionId: '01SANDBOXSESSION0000000000',
+      sourcePath: 'from-internal.txt',
+      name: null,
+      mimeType: null,
+      expectedSha256: null,
+      owner: { orgId: 'org_test', userId: 'user_test' },
+    });
+    assert.notEqual(record.sessionId, record.workspaceId);
+
+    const listed = await app.request(`/sessions/${id}/artifacts`, { headers: acting });
+    assert.equal(listed.status, 200);
+    const body = (await listed.json()) as { artifacts: Array<{ artifact_id: string }> };
+    assert.deepEqual(
+      body.artifacts.map((a) => a.artifact_id),
+      [record.artifactId],
+    );
+
+    const download = await app.request(
+      `/sessions/${id}/artifacts/${record.artifactId}/download`,
+      { headers: acting },
+    );
+    assert.equal(download.status, 200);
+    assert.equal(await download.text(), 'internal-plane-bytes');
+
+    // 跨租户仍然 404，不因为改判据而放松。
+    const foreign = await app.request(
+      `/sessions/${id}/artifacts/${record.artifactId}/download`,
+      { headers: otherActing },
+    );
+    assert.equal(foreign.status, 404);
+  });
+
+  test('POST /artifacts/imports — 工作区未初始化时 404，不凭空建目录', async () => {
+    // 以前这里有一条 `mkdir -p`，于是任何形状合法的 id 都能把工作区造出来，
+    // 也把"路径参数传错了"这类 bug 一起盖住（2026-09-03：拿 session id 当
+    // workspace 用，全靠这条 mkdir 撑着）。
+    const host = 'pub_art_import_src';
+    await initSession(host);
+    const ws = workspaceManager.physicalWorkspacePath(host);
+    const fs = await import('node:fs/promises');
+    const path = await import('node:path');
+    await fs.writeFile(path.join(ws, 'src.txt'), 'bytes');
+    const reg = await app.request(`/sessions/${host}/artifacts/submit`, {
+      method: 'POST',
+      headers: { ...acting, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: 'src.txt' }),
+    });
+    assert.equal(reg.status, 201);
+    const registered = (await reg.json()) as { artifact_id: string };
+
+    const uninitialized = 'pub_art_never_created';
+    const res = await app.request(`/sessions/${uninitialized}/artifacts/imports`, {
+      method: 'POST',
+      headers: { ...acting, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ artifact_id: registered.artifact_id }),
+    });
+    assert.equal(res.status, 404);
+    assert.equal(
+      await fs
+        .stat(workspaceManager.physicalWorkspacePath(uninitialized))
+        .then(() => true)
+        .catch(() => false),
+      false,
+      '失败的导入不得留下一个凭空创建的工作区目录',
+    );
   });
 
   test('GET /artifacts/:id/download — 无存储时 404 (Python ArtifactError 404)', async () => {

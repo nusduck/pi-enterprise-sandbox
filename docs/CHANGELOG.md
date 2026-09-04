@@ -11,7 +11,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **全面清理 Pi SDK 遗留命名与测试残留**：将 `agent/src/application/` 下的 6 个 `pi-run-*` 模块重命名为 `dsh-run-*`，核心执行器规范为 `DshRunExecutor`；`pi-session-journal-repository.ts` 重命名为 `session-journal-repository.ts`；测试目录 `agent/tests/pi/` 统一迁移规范为 `agent/tests/executor/`；清理废弃的 `agent/tests/sdk-compat/` 目录；彻底移除历史 `Pi*` 兼容别名导出，全仓内部调用统一切换至 DSH 执行器与预算。
 - **BFF 服务从 JS 全面迁移至 TypeScript**：`api-server` 源码完成 TypeScript 化，统一编译至 `dist/server.js`。
-
+- **`/internal/auth/me` 不再每次调用都补建 org/user**：它挂在 BFF 每请求的 `resolveTrustedAuth()` 上，不做记忆等于每个请求 3~4 次 MySQL 往返。改成每进程每 credential 记一次；register / login 仍强制重新对账。
+- **沙箱环境隔离由 `spawnLaunch` 代码强制**：`envMode: 'inherited'` 不发 `--clearenv`，"沙箱不继承宿主 env" 这条不变量因此只剩调用方一处在守。`spawnLaunch` 的选项类型排除 `env` 并在运行时剥掉，沙箱内环境只能来自 `OUTER_PROCESS_ENV` + 已校验的 `EnvPlan`。
+- **启用后的 Skill 草稿不再重复列在 Drafts**：启用是复制字节、草稿不删，所以 `skill_drafts` 里会一直有它。Agent 给这类条目打 `published: true` / `status: 'published'`，UI 的 Drafts 区只列待启用的。三层 Skill 卡片统一结构，操作按钮收进卡片底部的动作行，不再被拉成整行宽的色块。
 ### Fixed
 
 - **修复 Run 完成时 Agent 消息截断回退问题**：
@@ -36,7 +38,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **定时任务历史刷新**：Schedules 页主 Refresh 在当前选中任务仍存在时同步重新拉取 execution history，避免旧的 `QUEUED`/`RUNNING` 投影停留在页面。
+- **产物列表/下载按 workspace 判定，MCP facade 提交的产物不再消失**：`exec_artifacts.session_id` 取决于是谁写的——内部面的 `submit_artifact` 写 sandbox session id，MCP facade 写 workspace id。公共面用它当列表键与下载门禁，于是总有一半写入方的产物在 UI 上凭空消失。列表与下载改按 `workspace_id`（两个写入方唯一一致的键），BFF 的 `GET /api/artifacts` 与 artifact 下载也先把 sandbox session id 换成 `workspace_id` 再跳 Sandbox，换不出来 503 fail-closed。
+- **导入不再凭空创建工作区**：`importToWorkspace` 里那条 `mkdir -p` 会让任何形状合法的 id 把工作区造出来，也掩盖了"路径参数传错"这类 bug。改成工作区根不存在即 404。
+- **`ask_user_question` 停泊判定改成结构化**：此前靠在工具结果里搜 `user interaction pending` 这句话来决定要不要写账本终态，任何回显了这串字的失败结果都会被误判，那条工具就永远停在 RUNNING。改成由 executor 在铸 PENDING 的同一刻登记 toolCallId，策略层按 id 询问（`InstallPolicyOptions.isInteractionPending`）。
+- **续跑提示词里的用户回答做转义与截断**：原文里的引号/换行会把提示撕成两半，超长回答会在每轮提示里再复制一遍。
+- **定时任务历史刷新**：Schedules 页刷新任务列表后同步重拉当前选中任务的 execution history，避免旧的 `QUEUED`/`RUNNING` 投影停留在页面；选中项被别处删掉时详情面板自动关闭。拉列表与拉历史拆成两个 effect——把历史塞进 `refresh` 会让它的身份随选中项变化，于是"选中一条"就整表重拉一遍。
 - **`ask_user_question` 选项无法点选（409 CONFLICT）**：停泊时故意抛 `user interaction pending` 防止 DSH 伪造答案，但 `tools/execute` 环绕把它记成 FAILED。人点选项时 CAS 要求工具仍是 RUNNING，于是 409。停泊抛错现在不再关账本。
 - **助手气泡有时把 reasoning 当正文**：`message.completed` 把 `reasoning` 块和 `text` 拼在一起；短 CoT 不超过截断阈值时会盖住已流式的中文回复。正文只取 `text` 块，reasoning 仍走 Thought Process。
 

@@ -76,13 +76,30 @@ function discoverSkills(skillRoots: string[], userSkillRoot: string | null = nul
   );
 }
 
-function discoverDraftSkills(draftSkillRoot: string | null = null) {
+/**
+ * 草稿包。**草稿在启用之后不会消失**——`enableDraftPackage()` 复制字节到已发布
+ * 根，草稿留在原地当可编辑的源（停用只删副本，不删草稿，见 skills/enablement.ts）。
+ *
+ * 所以这里要把「已经发布过的草稿」标出来：否则同一个名字会在 UI 上出现两次，
+ * 草稿那张卡还带着一个按了也没有新效果的「Enable」。
+ *
+ * @param draftSkillRoot 调用者自己的草稿根
+ * @param publishedNames 已经挂载生效的包名（系统 + 用户两层）
+ */
+function discoverDraftSkills(
+  draftSkillRoot: string | null = null,
+  publishedNames: Iterable<string> = [],
+) {
   if (!draftSkillRoot) return [];
+  const published = new Set(publishedNames);
   return discoverSkills([draftSkillRoot]).map((skill) => ({
     ...skill,
     enabled: false,
-    status: 'draft',
+    status: published.has(skill.name) ? 'published' : 'draft',
     source: 'draft-skill-root',
+    // 已发布 = 这份草稿有一个同名的已启用副本在跑。两者可能已经不是同一份
+    // 字节（模型可以继续改草稿），所以这只说明"发布过"，不说明"内容一致"。
+    published: published.has(skill.name),
   }));
 }
 
@@ -161,7 +178,10 @@ export function getExtensionDiagnostics(options: { profileId?: string, skillRoot
     options.skillRoots || [],
     options.userSkillRoot ?? null,
   );
-  const skillDrafts = discoverDraftSkills(options.draftSkillRoot ?? null);
+  const skillDrafts = discoverDraftSkills(
+    options.draftSkillRoot ?? null,
+    skills.map((skill) => skill.name),
+  );
   const mcpServers = projectMcpServers(
     options.mcpServers || [],
     options.mcpDiscovery,

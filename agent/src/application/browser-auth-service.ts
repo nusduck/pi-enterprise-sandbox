@@ -24,6 +24,46 @@ type Credential = {
   isActive: boolean;
 };
 
+/**
+ * Provisioning 只用得到这几个方法。写成显式端口而不是 `any`：这是把浏览器
+ * 身份翻译成正式 org/user 的那一跳，签名写错在 `any` 下不会有任何提示。
+ */
+type OrganizationStore = {
+  createOrganization(input: {
+    orgId: string;
+    name: string;
+    status: string;
+  }): Promise<unknown>;
+  getUserByExternalSubject(
+    externalSubject: string,
+  ): Promise<{ userId: string } | null>;
+  createUserIfAbsent(input: {
+    userId: string;
+    externalSubject: string;
+    displayName?: string | null;
+    email?: string | null;
+    status: string;
+  }): Promise<{ userId: string }>;
+  addMembershipIfAbsent(input: {
+    orgId: string;
+    userId: string;
+    role: string;
+    status: string;
+  }): Promise<unknown>;
+};
+
+type ExternalRefStore = {
+  getOrganizationRef(
+    provider: string,
+    externalSubject: string,
+  ): Promise<{ orgId: string } | null>;
+  getOrCreateOrganizationRef(input: {
+    provider: string;
+    externalSubject: string;
+    orgId: string;
+  }): Promise<{ orgId: string }>;
+};
+
 type CredentialStore = {
   create(input: Record<string, unknown>): Promise<Credential | null>;
   getByUsername(username: string): Promise<Credential | null>;
@@ -77,9 +117,17 @@ export async function verifyPassword(password: string, stored: string) {
 
 export class BrowserAuthService {
   credentials: CredentialStore;
-  organizations?: any;
-  externalRefs?: any;
-  generateId?: () => string;
+  organizations?: OrganizationStore | undefined;
+  externalRefs?: ExternalRefStore | undefined;
+  generateId?: (() => string) | undefined;
+  /**
+   * 本进程内已经确认 provisioned 的 credential id。
+   *
+   * `me()` 挂在 BFF 的 `resolveTrustedAuth()` 上，**每一个**已认证请求都会走一次；
+   * 不记住就是每请求 3~4 次 MySQL 往返。补建本身是幂等的一次性修复
+   * （register/login 之后正常不会缺），所以每进程每用户做一次就够。
+   */
+  private readonly provisioned = new Set<string>();
   secret: string;
   issuer: string;
   audience: string;
@@ -90,8 +138,8 @@ export class BrowserAuthService {
 
   constructor(input: {
     credentials: CredentialStore;
-    organizations?: any;
-    externalRefs?: any;
+    organizations?: OrganizationStore;
+    externalRefs?: ExternalRefStore;
     generateId?: () => string;
     secret?: string;
     issuer?: string;
@@ -116,8 +164,17 @@ export class BrowserAuthService {
     this.now = input.now || (() => new Date());
   }
 
-  private async ensureUserProvisioned(entry: Credential): Promise<void> {
+  /**
+   * 把一个浏览器凭据补成正式的 org / user / membership。
+   *
+   * 失败只记日志不抛：这一步是**补建**，它缺席的后果是下游 400，而不是让
+   * 登录本身失败——把它变成硬失败会让一次 MySQL 抖动直接锁死所有人登录。
+   *
+   * @param force register/login 走 true：那两条路上凭据刚变过，必须重新对账。
+   */
+  private async ensureUserProvisioned(entry: Credential, force = false): Promise<void> {
     if (!this.organizations || !this.externalRefs) return;
+    if (!force && this.provisioned.has(entry.id)) return;
     try {
       const provider = 'bff';
       const externalOrgId = entry.organizationId || BOOTSTRAP_ORG_ID;
@@ -163,6 +220,7 @@ export class BrowserAuthService {
         role: entry.role || 'user',
         status: 'active',
       });
+      this.provisioned.add(entry.id);
     } catch (err) {
       console.error('[browser-auth] Failed to provision user in organizations:', err);
     }
@@ -277,7 +335,7 @@ export class BrowserAuthService {
         role: this.roleFor(username),
       });
       if (!entry) throw new Error('credential insert did not persist');
-      await this.ensureUserProvisioned(entry);
+      await this.ensureUserProvisioned(entry, true);
       return { token: this.createToken(entry), user: this.publicUser(entry) };
     } catch (error) {
       if (error instanceof BrowserAuthError) throw error;
@@ -307,7 +365,7 @@ export class BrowserAuthService {
     try {
       entry = await this.reconcileRole(entry);
       await this.credentials.touchLogin(entry.id);
-      await this.ensureUserProvisioned(entry);
+      await this.ensureUserProvisioned(entry, true);
     } catch {
       throw new BrowserAuthError(503, 'AUTH_STORE_UNAVAILABLE', 'Authentication unavailable');
     }

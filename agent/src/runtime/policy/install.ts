@@ -39,10 +39,7 @@ import type { PolicyDecision } from './decision.js';
 import { RunPark, RUN_PARKED_REASON_CODE } from './park.js';
 import { approvalIdOf } from './approval-id.js';
 import { runWithToolExecutionContext } from '../providers/tool-execution-context.js';
-import {
-  isDurableInteractionPendingError,
-  isDurableInteractionPendingResult,
-} from '../providers/user-questions.js';
+import { isDurableInteractionPendingError } from '../providers/user-questions.js';
 
 /** 最小可用的工具执行形状——只取本模块用得到的字段，不复制 DSH 的完整类型。 */
 interface ToolExecutionLike {
@@ -84,6 +81,17 @@ export interface InstallPolicyOptions {
       args?: unknown;
     }): Promise<unknown>;
   };
+  /**
+   * 这次调用是不是**已经**durable 停泊在等人回答（ask_user_question）。
+   *
+   * 停泊时 WAITING_INPUT 行已经落库，账本再写一次 `ended` 就把它推成终态，
+   * 人回答时 CAS 失败 → 409（compose 2026-09-02 实测）。
+   *
+   * 判据必须是**结构化**的：executor 在铸 PENDING 的同一刻记下 toolCallId，
+   * 这里按 id 问它。别去嗅结果里有没有 "user interaction pending" 这句话——
+   * 任何回显了这串字的失败工具结果都会被误判，那条工具就永远停在 RUNNING。
+   */
+  readonly isInteractionPending?: (toolCallId: string) => boolean;
   /** 结果脱敏要抹掉的物理根。 */
   readonly physicalRoots?: readonly string[];
   readonly env?: NodeJS.ProcessEnv;
@@ -240,7 +248,7 @@ export function installEnterprisePolicy(ctx: Context, options: InstallPolicyOpti
           await ledger.started({ toolCallId, toolName, args }).catch((e) => note('started', e));
           try {
             const result = await wrapExecute(budget, next);
-            if (!isDurableInteractionPendingResult(result)) {
+            if (options.isInteractionPending?.(toolCallId) !== true) {
               const isError = (result as { isError?: boolean } | null)?.isError === true;
               await ledger
                 .ended({ toolCallId, toolName, isError, result, args })

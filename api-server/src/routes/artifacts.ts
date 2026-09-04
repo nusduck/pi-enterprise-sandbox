@@ -4,6 +4,7 @@ import { createSandboxClient } from '../services/sandbox-client.js';
 import {
   authorizeSandboxSession,
   resolveTrustedAuth,
+  type AuthorizeSandboxSessionResult,
   type ReqWithTrace,
 } from '../application/run-access-service.js';
 import { ensureAgentSession } from '../services/agent-client.js';
@@ -11,6 +12,29 @@ import { ensureAgentSession } from '../services/agent-client.js';
 function json(res: ServerResponse, status: number, data: unknown) {
   res.writeHead(status, { 'Content-Type': 'application/json' });
   res.end(JSON.stringify(data));
+}
+
+/**
+ * Sandbox 的 `/sessions/:id/...` 公共面里那个 `:id` 是 **workspace_id**——
+ * exec 的 `requireOwnedSession()` 用它派生物理工作区路径，产物记录也按它归档。
+ * 浏览器只认 sandbox session id，所以每一次 Sandbox 跳转前都要在这里换一次。
+ * 换不出来必须 fail-closed：拿 session id 当 workspace 用会静默落到一个不存在
+ * 的工作区（列表恒空、导入写进错的目录）。
+ */
+function requireWorkspaceId(sessionAccess: AuthorizeSandboxSessionResult): string {
+  const workspaceId = String(
+    sessionAccess?.access?.workspace_id || sessionAccess?.access?.workspaceId || '',
+  ).trim();
+  if (!workspaceId) {
+    const error = new Error('Session workspace unavailable') as Error & {
+      status: number;
+      code: string;
+    };
+    error.status = 503;
+    error.code = 'SESSION_WORKSPACE_UNAVAILABLE';
+    throw error;
+  }
+  return workspaceId;
 }
 
 /**
@@ -27,7 +51,7 @@ export async function handleListArtifacts(parsedUrl: URL, res: ServerResponse, r
       traceId: req?.traceId || null,
     });
     const client = createSandboxClient({ auth: sessionAccess.sandboxAuth });
-    const data = await client.listArtifacts(sessionId);
+    const data = await client.listArtifacts(requireWorkspaceId(sessionAccess));
     json(res, 200, data);
   } catch (err: any) {
     console.error('[artifacts] list:', err.message);
@@ -91,15 +115,7 @@ export async function handleImportArtifact(
       conversationId,
       traceId: req?.traceId || null,
     });
-    const workspaceId = String(
-      sessionAccess?.access?.workspace_id || sessionAccess?.access?.workspaceId || '',
-    ).trim();
-    if (!workspaceId) {
-      const error = new Error('Session workspace unavailable') as Error & { status: number; code: string };
-      error.status = 503;
-      error.code = 'SESSION_WORKSPACE_UNAVAILABLE';
-      throw error;
-    }
+    const workspaceId = requireWorkspaceId(sessionAccess);
     const client = createSandboxClient({
       auth: sessionAccess.sandboxAuth,
       traceId: req?.traceId || null,

@@ -72,6 +72,8 @@ AgentSession 都由 `agentEventAdapter -> runReducer` 单次归约。`ChatState`
 `/settings/capabilities` 的 Skills 页按当前登录用户投影三层：Drafts、My Skills、System Skills。
 - **Drafts 上传**：在 Drafts 区域提供专属拖拽与点击上传卡片，支持用户直传 `.zip` 与 `.skill` 归档包（单包上限 50MB）。上传成功后包自动落入用户草稿根目录并即时在 Drafts 列表中以 `Draft` 状态卡片呈现。上传瞬间**不自动启用**。
 - **人机闸门**：草稿卡片提供高亮 **Enable** 按钮；点击后平台校验结构、复制一份只读已发布副本至用户已启用根，并写入 MySQL 账本；已启用用户 Skill 显示在 My Skills 中并提供 **Disable** 按钮；系统 Skill 为只读不可变更。
+- **启用后草稿不再重复列出**：启用是**复制字节**，草稿本身留在草稿根（停用只删已发布的副本）。Agent 因此给已发布过的草稿打 `published: true`，Drafts 区只列 `published !== true` 的那些——否则同一个包名会在页面上出现两次，而且草稿那张卡还带着一个按了也没有新效果的 Enable。My Skills 里对应的卡片显示 `from draft` 小标签；要重新发布改过的草稿，先 Disable，草稿会回到 Drafts。分层规则在 `pages/settings/skillHelpers.ts`（纯函数，可测）。
+- **三层卡片同构**：Drafts / My Skills / System Skills 共用 `SkillCards`，同一张 meta 表（Source / Enabled / Dynamic），操作按钮统一收在卡片底部的 `.mgmt-card-actions` 行里靠右对齐。卡片是 flex-column，直接把 `<button>` 放进去会被拉伸成整行宽的大色块，草稿卡因此和系统卡不是一个形状。
 - **Composer 拼图按钮移除**：取消了聊天输入框原本的拼图安装按钮，Skill 安装全面收敛至 Capabilities 页面。
 
 ### Settings 二级导航结构

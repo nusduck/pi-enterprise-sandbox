@@ -124,6 +124,18 @@ export interface ArtifactStore {
   insert(rec: ExecArtifactInsert): Promise<void>;
   getOwned(artifactId: string, scope: OwnerScope): Promise<ExecArtifactRecord | null>;
   listBySession(sessionId: string, scope: OwnerScope, limit?: number): Promise<ExecArtifactRecord[]>;
+  /**
+   * 按**工作区**列举。公共面的 `/sessions/:id/artifacts` 用它，不用
+   * `listBySession`——`session_id` 列取决于是谁写的这条记录：
+   * `submit_artifact`（内部面）写的是 sandbox session id，MCP facade 写的是
+   * workspace id（facade 够不到 session 概念）。用 `session_id` 过滤会让
+   * facade 提交的产物在列表里彻底消失。`workspace_id` 两个写入方都是同一个值。
+   */
+  listByWorkspace(
+    workspaceId: string,
+    scope: OwnerScope,
+    limit?: number,
+  ): Promise<ExecArtifactRecord[]>;
 }
 
 export class MySqlArtifactStore implements ArtifactStore {
@@ -175,6 +187,20 @@ export class MySqlArtifactStore implements ArtifactStore {
     );
     return (rows as Row[]).map(mapRow);
   }
+
+  async listByWorkspace(
+    workspaceId: string,
+    scope: OwnerScope,
+    limit = 100,
+  ): Promise<ExecArtifactRecord[]> {
+    const [rows] = await this.pool.execute<Row[]>(
+      `SELECT * FROM ${this.table}
+        WHERE workspace_id = ? AND org_id = ? AND user_id = ?
+        ORDER BY created_at DESC LIMIT ${sqlLimit(limit)}`,
+      [workspaceId, scope.orgId, scope.userId],
+    );
+    return (rows as Row[]).map(mapRow);
+  }
 }
 
 export class InMemoryArtifactStore implements ArtifactStore {
@@ -198,10 +224,24 @@ export class InMemoryArtifactStore implements ArtifactStore {
     scope: OwnerScope,
     limit = 100,
   ): Promise<ExecArtifactRecord[]> {
+    return this.#list((r) => r.sessionId === sessionId, scope, limit);
+  }
+
+  async listByWorkspace(
+    workspaceId: string,
+    scope: OwnerScope,
+    limit = 100,
+  ): Promise<ExecArtifactRecord[]> {
+    return this.#list((r) => r.workspaceId === workspaceId, scope, limit);
+  }
+
+  #list(
+    match: (rec: ExecArtifactRecord) => boolean,
+    scope: OwnerScope,
+    limit: number,
+  ): ExecArtifactRecord[] {
     return [...this.map.values()]
-      .filter(
-        (r) => r.sessionId === sessionId && r.orgId === scope.orgId && r.userId === scope.userId,
-      )
+      .filter((r) => match(r) && r.orgId === scope.orgId && r.userId === scope.userId)
       .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
       .slice(0, limit);
   }

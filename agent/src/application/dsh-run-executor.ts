@@ -714,14 +714,15 @@ export class DshRunExecutor {
         toolLedger: {
           started: (i: Record<string, unknown>) =>
             (this._governanceRecorder as never as Record<string, any>).recordToolStarted(i),
-          ended: (i: Record<string, unknown>) => {
-            const toolCallId = String(i?.toolCallId ?? '').trim();
-            if (toolCallId && this._pendingInteractionToolCallIds.has(toolCallId)) {
-              return;
-            }
-            return (this._governanceRecorder as never as Record<string, any>).recordToolEnded(i);
-          },
+          ended: (i: Record<string, unknown>) =>
+            (this._governanceRecorder as never as Record<string, any>).recordToolEnded(i),
         },
+        // ask_user_question 停泊之后**不能**再写 `ended`——WAITING_INPUT 行已经
+        // 落库，再推一次终态会让人回答时 CAS 失败（409，compose 2026-09-02）。
+        // 判据是这个集合，不是结果文本：铸 PENDING 的那一刻记下 toolCallId
+        // （见 `onDurableInteractionPending`），策略层按 id 来问。
+        isInteractionPending: (toolCallId: string) =>
+          this._pendingInteractionToolCallIds.has(toolCallId),
         interactionRequester: createInteractionRequester({
           recorder: this._governanceRecorder,
           runSuspensionPort,

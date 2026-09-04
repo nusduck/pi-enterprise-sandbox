@@ -244,6 +244,12 @@ export const OUTER_PROCESS_ENV: Readonly<Record<string, string>> = {
   LANG: 'C.UTF-8',
 };
 
+/**
+ * `spawnLaunch` 的选项。**故意排除 `env`**：沙箱内的环境只能来自 `EnvPlan`，
+ * 调用方不得从外面注入（见 `spawnLaunch` 里的说明）。
+ */
+export type SpawnLaunchOptions = Omit<SpawnOptionsWithoutStdio, 'env'>;
+
 const DEFAULT_PREFLIGHT_TIMEOUT_MS = 10_000;
 
 /**
@@ -296,15 +302,18 @@ export function preflightCheck(
 export function spawnLaunch(
   executable: string,
   profile: IsolationProfile,
-  options?: SpawnOptionsWithoutStdio,
+  options?: SpawnLaunchOptions,
 ): ChildProcess {
   const { command, args } = resolveInvocation(executable, profile, undefined, undefined, {
     envMode: 'inherited',
   });
-  const env = {
-    ...OUTER_PROCESS_ENV,
-    ...(options?.env ?? {}),
-    ...profile.env.vars,
-  };
-  return spawn(command, args, { ...options, env });
+  // 沙箱内进程的环境**只有**这两个来源：最小外层环境 + 已校验的 `EnvPlan`。
+  //
+  // `envMode: 'inherited'` 不发 `--clearenv`，于是 bwrap 把自己的环境原样传给
+  // 子进程——"不继承宿主 env" 这条不变量因此从 bwrap 的 argv 挪到了这一行。
+  // 调用方给的 `env` 在类型上被排除，运行时再剥一次：漏一个 `env: process.env`
+  // 进来，整个服务进程的环境（含 DB 凭据）就进沙箱了。
+  const { env: _rejected, ...safeOptions } = (options ?? {}) as SpawnOptionsWithoutStdio;
+  const env: Record<string, string> = { ...OUTER_PROCESS_ENV, ...profile.env.vars };
+  return spawn(command, args, { ...safeOptions, env });
 }

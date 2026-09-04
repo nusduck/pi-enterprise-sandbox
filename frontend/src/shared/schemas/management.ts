@@ -77,6 +77,11 @@ export const SkillItemSchema = z
     status: z.string().optional().nullable(),
     dynamic: z.boolean().optional(),
     registry_id: z.string().optional().nullable(),
+    /**
+     * 仅 `skill_drafts` 上出现：这份草稿已经有一个同名的已启用副本。
+     * 启用是复制字节、草稿不删，所以列表里必须能区分"待启用"和"已发布"。
+     */
+    published: z.boolean().optional(),
   })
   .passthrough();
 

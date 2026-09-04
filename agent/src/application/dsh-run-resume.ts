@@ -205,6 +205,9 @@ export async function prepareApprovalResume(executor, {
  * Recover a durable ask_user answer into the parked tool-result slot, then
  * continue the existing Pi session with a short continuation prompt.
  */
+/** 续跑提示词里内联回答的长度上限；超过就截断，完整值仍在 tool result 里。 */
+const INTERACTION_ANSWER_PROMPT_MAX = 2000;
+
 export async function prepareInteractionResume(executor, {
   interactionResume,
   runtimeSession,
@@ -286,9 +289,17 @@ export async function prepareInteractionResume(executor, {
       appendIfMissing: true,
     },
   );
+  // 答案已经作为 tool result 回填进会话了；这里再带一份是为了让续跑的那一轮
+  // 一定看得见它。**必须转义**——原文里的引号/换行会把这段提示撕成两半；
+  // 也必须截断，一份几十 KB 的回答不该在每轮提示词里再复制一遍。
+  const quotedAnswer = JSON.stringify(
+    responseText.length > INTERACTION_ANSWER_PROMPT_MAX
+      ? `${responseText.slice(0, INTERACTION_ANSWER_PROMPT_MAX)}…（已截断，完整回答见工具结果）`
+      : responseText,
+  );
   return (
     `[User interaction resolved] The user answered the ${interaction.interactionType} ` +
-    `request ${interactionId} with: "${responseText}". Continue the task using this answer; ` +
+    `request ${interactionId} with: ${quotedAnswer}. Continue the task using this answer; ` +
     'do not ask the same question again.'
   );
 }

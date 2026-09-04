@@ -117,10 +117,16 @@ export function registerPublicArtifactRoutes(app: Hono, deps: PublicArtifactDeps
     try {
       const own = await requireOwnedSession(sessionId, deps, acting, roots);
       roots = own.physicalRoots;
-      const artifacts = await deps.artifactService.list(sessionId, {
-        orgId: own.workspace.orgId,
-        userId: own.workspace.userId,
-      });
+      // 路径参数解析出来的是 workspace（`requireOwnedSession` 就是这么用的），
+      // 所以列表也按 workspace 查——按 `session_id` 查会漏掉 MCP facade 提交的
+      // 那一半产物，它写进 `session_id` 的是 workspace id。
+      const artifacts = await deps.artifactService.listByWorkspace(
+        own.workspace.workspaceId,
+        {
+          orgId: own.workspace.orgId,
+          userId: own.workspace.userId,
+        },
+      );
       return c.json({ artifacts: artifacts.map(toResponse), total: artifacts.length });
     } catch (err) {
       const mapped = mapError(err, roots);
@@ -231,7 +237,12 @@ export function registerPublicArtifactRoutes(app: Hono, deps: PublicArtifactDeps
         userId: own.workspace.userId,
       });
       // 归属不符与不存在给同一个 404：存在性本身不能泄漏。
-      if (record === null || record.sessionId !== sessionId) throw notFound('Artifact not found');
+      // 按 **workspace** 比，不按 `session_id` 比：后者取决于是谁写的这条记录
+      // （内部面写 sandbox session id，MCP facade 写 workspace id），拿它当门禁
+      // 会让 facade 提交的产物永远下载不到。
+      if (record === null || record.workspaceId !== own.workspace.workspaceId) {
+        throw notFound('Artifact not found');
+      }
 
       const filename = displayFilename(record);
       const stream = Readable.from(deps.artifactService.openSnapshot(record));

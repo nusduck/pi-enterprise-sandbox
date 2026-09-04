@@ -253,60 +253,33 @@ export function agentEventToRuntime(
     case 'file_ready':
     case 'artifact.ready': {
       const seq = nextSeq(state, ev);
+      // 同一件事有三种线上形状：老的扁平 `file_ready`、durable 的
+      // `artifact.ready`（字段在 `data` 里），以及两种命名风格（snake / camel）。
+      // 逐字段写三元套三元的话，加一个字段就多一座金字塔——收成两个取值器。
       const data = (ev.data && typeof ev.data === 'object' ? ev.data : {}) as Record<string, unknown>;
-      const artifactId =
-        ev.artifact_id != null
-          ? String(ev.artifact_id)
-          : ev.artifactId != null
-            ? String(ev.artifactId)
-            : data.artifactId != null
-              ? String(data.artifactId)
-              : data.artifact_id != null
-                ? String(data.artifact_id)
-                : `art_${state.runId}_${seq}`;
-      const name =
-        ev.name != null
-          ? String(ev.name)
-          : data.name != null
-            ? String(data.name)
-            : undefined;
-      const path =
-        ev.path != null
-          ? String(ev.path)
-          : data.path != null
-            ? String(data.path)
-            : undefined;
-      const mimeType =
-        ev.mime_type != null
-          ? String(ev.mime_type)
-          : ev.mimeType != null
-            ? String(ev.mimeType)
-            : data.mimeType != null
-              ? String(data.mimeType)
-              : data.mime_type != null
-                ? String(data.mime_type)
-                : undefined;
-      const size =
-        typeof ev.size === 'number'
-          ? ev.size
-          : typeof ev.sizeBytes === 'number'
-            ? ev.sizeBytes
-            : typeof data.sizeBytes === 'number'
-              ? data.sizeBytes
-              : typeof data.size === 'number'
-                ? data.size
-                : undefined;
-      const sha256 =
-        ev.sha256 != null
-          ? String(ev.sha256)
-          : data.sha256 != null
-            ? String(data.sha256)
-            : undefined;
+      const pickString = (...keys: string[]): string | undefined => {
+        for (const key of keys) {
+          const raw = (ev as Record<string, unknown>)[key] ?? data[key];
+          if (raw != null) return String(raw);
+        }
+        return undefined;
+      };
+      const pickNumber = (...keys: string[]): number | undefined => {
+        for (const key of keys) {
+          const raw = (ev as Record<string, unknown>)[key] ?? data[key];
+          if (typeof raw === 'number') return raw;
+        }
+        return undefined;
+      };
+
+      const artifactId = pickString('artifact_id', 'artifactId') ?? `art_${state.runId}_${seq}`;
+      const name = pickString('name');
+      const path = pickString('path');
+      const mimeType = pickString('mime_type', 'mimeType');
+      const size = pickNumber('size', 'sizeBytes');
+      const sha256 = pickString('sha256');
       const sessionId =
-        (ev.session_id != null ? String(ev.session_id) : undefined) ||
-        (ev.targetSessionId != null ? String(ev.targetSessionId) : undefined) ||
-        (data.targetSessionId != null ? String(data.targetSessionId) : undefined) ||
-        state.sessionId;
+        pickString('session_id', 'targetSessionId', 'target_session_id') ?? state.sessionId;
       out.push(
         makeRuntimeEvent({
           ...base,

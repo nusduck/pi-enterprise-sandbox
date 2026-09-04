@@ -121,6 +121,50 @@ describe('BrowserAuthService', () => {
     await service.login({ username: 'bob', password: 'password123' });
     assert.equal(createdMemberships.length, 2);
   });
+
+  it('me() 不得每次调用都打一遍 organizations —— 它挂在 BFF 的每请求鉴权上', async () => {
+    // `resolveTrustedAuth()` 每个已认证请求调一次 `/internal/auth/me`。
+    // provisioning 是一次性补建，放在这条路上不做记忆 = 每请求 3~4 次 MySQL 往返。
+    const credentials = memoryCredentials();
+    let orgRefLookups = 0;
+    let membershipWrites = 0;
+    const organizations = {
+      async createOrganization() {},
+      async getUserByExternalSubject() { return null; },
+      async createUserIfAbsent(u: any) { return u; },
+      async addMembershipIfAbsent(m: any) {
+        membershipWrites += 1;
+        return m;
+      },
+    };
+    const externalRefs = {
+      async getOrganizationRef() {
+        orgRefLookups += 1;
+        return null;
+      },
+      async getOrCreateOrganizationRef(ref: any) { return { orgId: ref.orgId }; },
+    };
+    const service = new BrowserAuthService({
+      credentials,
+      organizations,
+      externalRefs,
+      generateId: () => '01M1GENID00000000000000000',
+      secret: 'a'.repeat(32),
+    });
+    const registered: any = await service.register({ username: 'carol', password: 'password123' });
+    const afterRegister = { orgRefLookups, membershipWrites };
+    assert.equal(afterRegister.membershipWrites, 1);
+
+    for (let i = 0; i < 5; i += 1) {
+      assert.equal((await service.me(`Bearer ${registered.token}`) as any).username, 'carol');
+    }
+    assert.equal(orgRefLookups, afterRegister.orgRefLookups, 'me() 不该再查 org ref');
+    assert.equal(membershipWrites, afterRegister.membershipWrites, 'me() 不该再写 membership');
+
+    // 但 login 必须重新对账：那条路上凭据刚变过。
+    await service.login({ username: 'carol', password: 'password123' });
+    assert.equal(membershipWrites, afterRegister.membershipWrites + 1);
+  });
 });
 
 describe('browser auth HTTP route', () => {

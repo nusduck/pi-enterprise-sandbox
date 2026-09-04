@@ -20,7 +20,7 @@
 
 import { randomUUID } from 'node:crypto';
 import { createWriteStream } from 'node:fs';
-import { mkdir } from 'node:fs/promises';
+import { stat } from 'node:fs/promises';
 import path from 'node:path';
 import { pipeline } from 'node:stream/promises';
 import type { WorkspaceContext } from '../types.js';
@@ -230,6 +230,20 @@ export class ArtifactService {
     return await this.store.listBySession(sessionId, owner);
   }
 
+  /**
+   * 按工作区列举——公共面的列表走这条。
+   *
+   * `session_id` 列不是稳定的列表键：内部面的 `submit_artifact` 写 sandbox
+   * session id，MCP facade 写 workspace id。公共面的路径参数解析出来的是
+   * workspace，所以按 workspace 查两个写入方都覆盖得到。
+   */
+  async listByWorkspace(
+    workspaceId: string,
+    owner: OwnerScope,
+  ): Promise<ExecArtifactRecord[]> {
+    return await this.store.listByWorkspace(workspaceId, owner);
+  }
+
   /** 取产物元数据；归属不符返回 null（调用方一律翻成 404，不泄漏存在性）。 */
   async get(artifactId: string, owner: OwnerScope): Promise<ExecArtifactRecord | null> {
     return await this.store.getOwned(artifactId, owner);
@@ -270,8 +284,17 @@ export class ArtifactService {
       const fs = this.fsFactory(input.workspace);
       const target = await fs.resolve(safeName);
 
+      // 工作区根必须已经由控制面建好。这里**不 mkdir -p**：`requireOwnedSession`
+      // 只校验 workspaceId 的形状、不查存在性，补建目录等于让任何形状合法的 id
+      // 凭一次导入把工作区凭空造出来，也会掩盖"路径参数传错了"这类 bug
+      // （2026-09-03 就是拿 sandbox session id 当 workspace 用，靠这条 mkdir 撑住的）。
+      const workspaceRoot = path.dirname(target.targetKey);
+      const rootStat = await stat(workspaceRoot).catch(() => null);
+      if (!rootStat?.isDirectory()) {
+        throw new ArtifactError('artifact_not_found', 'Artifact not found', 404);
+      }
+
       // 流式落盘。产物上限 512MiB，整读进内存再写会让一次导入就吃掉半个 G。
-      await mkdir(path.dirname(target.targetKey), { recursive: true });
       const sink = createWriteStream(target.targetKey);
       await pipeline(this.openSnapshot(record), sink);
 

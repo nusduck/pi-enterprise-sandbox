@@ -551,21 +551,23 @@ test('ask_user 停泊抛错不得记 FAILED——否则人答 409', async () => 
   assert.deepEqual(calls, [{ phase: 'started' }]);
 });
 
-test('ask_user_question 返回 user interaction pending 结果时不写 ended(isError: true) 账本', async () => {
+test('停泊中的 toolCallId 不写 ended 账本——判据是结构化谓词，不是结果文本', async () => {
   const ctx = new FakeCtx();
-  const calls: Array<{ phase: string; isError?: boolean }> = [];
+  const calls: Array<{ id: string; phase: string }> = [];
+  const parked = new Set<string>(['call-park-2']);
   installOn(ctx, {
+    isInteractionPending: (toolCallId: string) => parked.has(toolCallId),
     toolLedger: {
-      async started() {
-        calls.push({ phase: 'started' });
+      async started({ toolCallId }) {
+        calls.push({ id: toolCallId, phase: 'started' });
       },
-      async ended({ isError }) {
-        calls.push({ phase: 'ended', isError });
+      async ended({ toolCallId }) {
+        calls.push({ id: toolCallId, phase: 'ended' });
       },
     },
   } as never);
 
-  const out = await ctx.execute(
+  const parkedResult = await ctx.execute(
     { name: 'ask_user_question', arguments: { questions: [] }, id: 'call-park-2' },
     async () => ({
       isError: true,
@@ -573,8 +575,20 @@ test('ask_user_question 返回 user interaction pending 结果时不写 ended(is
       content: [{ type: 'text', text: 'user interaction pending' }],
     }),
   );
-  assert.equal((out as any)?.isError, true);
-  assert.deepEqual(calls, [{ phase: 'started' }]);
+  assert.equal((parkedResult as any)?.isError, true);
+  assert.deepEqual(calls, [{ id: 'call-park-2', phase: 'started' }]);
+
+  // 反面：一个**没有**停泊的工具，哪怕结果里原样回显了那句话，也必须记 ended。
+  // 旧实现在这里会漏记，于是 tool_executions 里留下一行永远 RUNNING。
+  calls.length = 0;
+  await ctx.execute({ name: 'bash', arguments: {}, id: 'call-echo' }, async () => ({
+    isError: true,
+    content: [{ type: 'text', text: 'bash: user interaction pending' }],
+  }));
+  assert.deepEqual(calls, [
+    { id: 'call-echo', phase: 'started' },
+    { id: 'call-echo', phase: 'ended' },
+  ]);
 });
 
 test('H9.6 记账失败不影响工具结果——账本是外部副作用', async () => {

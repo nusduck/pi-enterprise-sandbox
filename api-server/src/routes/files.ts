@@ -434,7 +434,21 @@ export async function handleArtifactDownload(
     return;
   }
 
-  const sanPath = sb.artifactDownloadPath(sessionId, artifactId);
+  // Sandbox 公共面的 `:id` 是 workspace_id，不是 sandbox session id
+  // （见 routes/artifacts.js 的 requireWorkspaceId）。
+  const workspaceId = String(
+    sessionAccess?.access?.workspace_id || sessionAccess?.access?.workspaceId || '',
+  ).trim();
+  if (!workspaceId) {
+    res.writeHead(503, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({
+      error: 'Session workspace unavailable',
+      code: 'SESSION_WORKSPACE_UNAVAILABLE',
+    }));
+    return;
+  }
+
+  const sanPath = sb.artifactDownloadPath(workspaceId, artifactId);
   const sanUrl = `${config.SANDBOX_BASE_URL}${sanPath}`;
   let sanRes: Response;
   try {

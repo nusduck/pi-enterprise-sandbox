@@ -3540,6 +3540,32 @@ body {
 .mgmt-meta-grid dt { color: var(--color-text-muted); }
 .mgmt-meta-grid dd { color: var(--color-text); font-weight: 500; }
 
+/* 卡片底部的动作区。
+   `.mgmt-card` 是 flex-column，直接塞一个 <button> 会被 stretch 成整行宽的
+   大色块——草稿卡因此和 System 卡完全不是一个形状（2026-09-04 截图）。
+   统一收进这一行：靠底、右对齐、按钮保持自身宽度。 */
+.mgmt-card-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: auto;
+  padding-top: 2px;
+}
+
+/* 卡片标题旁的小标签（如 "from draft"）。 */
+.mgmt-tag {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 7px;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--color-border);
+  background: var(--color-bg-subtle);
+  color: var(--color-text-muted);
+  font-size: 11px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
 .mgmt-schedule-form, .mgmt-form {
   padding: var(--space-5);
   border-radius: var(--radius-lg);

@@ -211,17 +211,22 @@ export function createSandboxClient({
 
   return {
     async listArtifacts(sessionId: string) {
-      const resp = await sbFetch(`/sessions/${sessionId}/artifacts`);
+      const resp = await sbFetch(
+        `/sessions/${encodeURIComponent(sessionId)}/artifacts`,
+      );
       return resp.json();
     },
 
     async importArtifact(sessionId: string, artifactId: string, targetFilename: string | null = null) {
       const payload: Record<string, string> = { artifact_id: artifactId };
       if (targetFilename) payload['target_filename'] = targetFilename;
-      const resp = await sbFetch(`/sessions/${sessionId}/artifacts/imports`, {
-        method: 'POST',
-        body: JSON.stringify(payload),
-      });
+      const resp = await sbFetch(
+        `/sessions/${encodeURIComponent(sessionId)}/artifacts/imports`,
+        {
+          method: 'POST',
+          body: JSON.stringify(payload),
+        },
+      );
       return resp.json();
     },
 
@@ -290,8 +295,8 @@ export function createSandboxClient({
   };
 }
 
-export function artifactDownloadPath(sessionId: string, artifactId: string): string {
-  return `/sessions/${sessionId}/artifacts/${encodeURIComponent(artifactId)}/download`;
+export function artifactDownloadPath(workspaceId: string, artifactId: string): string {
+  return `/sessions/${encodeURIComponent(workspaceId)}/artifacts/${encodeURIComponent(artifactId)}/download`;
 }
 
 export async function checkHealth(): Promise<any> {

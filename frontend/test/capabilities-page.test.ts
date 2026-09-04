@@ -4,6 +4,11 @@
  */
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import {
+  isPendingDraft,
+  skillSourceLabel,
+  splitSkillTiers,
+} from '../src/pages/settings/skillHelpers.ts';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
@@ -63,10 +68,14 @@ describe('CapabilitiesPage diagnostics and MCP status contracts', () => {
   });
 
   it('shows owner-scoped Skill drafts with enable and disable controls', () => {
-    assert.match(pageSrc, /draft-skill-root/);
+    // 分层规则本身由下面的 `skill tiers` 用例按行为验；这里只守页面确实
+    // 接了 enable/disable 这条通路和它的报错出口。
     assert.match(pageSrc, /setSkillEnabled/);
-    assert.match(pageSrc, /'Enable' : 'Disable'/);
+    assert.match(pageSrc, /draft \? 'Enable' : 'Disable'/);
     assert.match(pageSrc, /role="alert"/);
+    // 动作按钮必须在动作区里——直接落在 flex-column 的卡片上会被拉成整行宽，
+    // 草稿卡因此和 System 卡不是一个形状（2026-09-04）。
+    assert.match(pageSrc, /mgmt-card-actions/);
   });
 
   it('provides dedicated Skill draft upload dropzone supporting .zip and .skill', () => {
@@ -92,3 +101,39 @@ describe('CapabilitiesPage diagnostics and MCP status contracts', () => {
   });
 });
 
+describe('skill tiers', () => {
+  const draft = (name: string, published?: boolean) =>
+    ({ name, source: 'draft-skill-root', enabled: false, ...(published === undefined ? {} : { published }) }) as never;
+  const user = (name: string) =>
+    ({ name, source: 'user-skill-root', enabled: true }) as never;
+  const system = (name: string) =>
+    ({ name, source: 'shared-skill-root', enabled: true }) as never;
+
+  it('启用后的草稿不再列进 Drafts —— 否则同一个名字出现两次', () => {
+    // 启用是复制字节，草稿不删（skills/enablement.ts），所以后端一直会返回它。
+    const split = splitSkillTiers([
+      draft('weather-query', true),
+      user('weather-query'),
+      draft('not-yet-enabled', false),
+      system('pdf'),
+    ]);
+    assert.deepEqual(split.drafts.map((s) => s.name), ['not-yet-enabled']);
+    assert.deepEqual(split.user.map((s) => s.name), ['weather-query']);
+    assert.deepEqual(split.system.map((s) => s.name), ['pdf']);
+    assert.equal(split.publishedFromDraft.has('weather-query'), true);
+    assert.equal(split.publishedFromDraft.has('not-yet-enabled'), false);
+  });
+
+  it('老后端没有 published 字段时，草稿仍按待启用处理', () => {
+    assert.equal(isPendingDraft(draft('legacy')), true);
+    assert.equal(isPendingDraft(draft('legacy', false)), true);
+    assert.equal(isPendingDraft(draft('legacy', true)), false);
+    assert.equal(isPendingDraft(user('legacy')), false);
+  });
+
+  it('来源列按层给出稳定文案', () => {
+    assert.equal(skillSourceLabel(draft('a')), 'Draft');
+    assert.equal(skillSourceLabel(user('a')), 'User');
+    assert.equal(skillSourceLabel(system('a')), 'System');
+  });
+});
