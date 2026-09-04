@@ -9,7 +9,7 @@ import {
   createInternalArtifactDownloadTransport,
   InternalArtifactDownloadError,
 } from '../../src/infrastructure/sandbox/internal-artifact-download-http.js';
-import { verifyInternalToken } from '../../src/infrastructure/sandbox/internal-hmac.js';
+import { verifyInternalToken } from '@pi/contract/hmac.js';
 
 const KEYRING = Object.freeze({
   current: Buffer.from(Array.from({ length: 32 }, (_, i) => i + 1)).toString(

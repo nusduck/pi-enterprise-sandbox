@@ -5,9 +5,9 @@ import { createHash } from 'node:crypto';
 import { assertUlid } from '../../domain/shared/ulid.js';
 import {
   issueInternalToken,
-  normalizeBaseUrl,
   validateInternalHmacKeyring,
-} from './internal-hmac.js';
+} from '@pi/contract/hmac.js';
+import { normalizeBaseUrl } from './transport-base-url.js';
 import { createTraceHeaders } from './trace-context.js';
 
 /** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */

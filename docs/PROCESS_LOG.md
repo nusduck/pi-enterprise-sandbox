@@ -419,3 +419,26 @@ Each entry should say **what changed**, **why**, and **which STATUS IDs** it aff
     发现所有调用方都在冒充 `fs`。
   - `exec/src/http/router.ts` 的 `getClientIp` 盲信 `X-Forwarded-For` 且兜底 `127.0.0.1`；
     CIDR 只是 HMAC 之前的一道纵深，且 sandbox 在 compose 里不发布端口，故未在本批处理。
+
+## 2026-09-04（续）— 内部 HMAC 实现收口到 `@pi/contract`
+
+- **Context:** 上一条 Not closed 的第三项。`agent/src/infrastructure/sandbox/internal-hmac.ts`
+  （980 行）与 `contract/src/hmac.ts`（816 行）是两套都活着的实现，两个生产模块用前者。
+- **Action:** 先证明两份**不等价**再收口，没有靠放宽来"统一"。把 agent 那套 599 行严格性
+  套件原样指向 contract：21 条里 2 条失败——contract 会放行 (a) keyring 值是 getter
+  的 accessor 属性，(b) `scope` 数组挂了额外自有属性。两条都补进 contract 后 21/21。
+  随后两个生产模块改指 `@pi/contract/hmac.js`；`normalizeBaseUrl`（与签名无关，管的是
+  baseUrl 能不能用）抽到新的 `transport-base-url.ts` 并自带
+  `SandboxTransportConfigError`（原先借用 `InternalHmacError` 携带一个不在其码枚举里的
+  code）；删除 agent 那份 980 行；严格性套件随实现移到 `contract/test/hmac-strict.test.ts`。
+- **Verification:** 六套单测 + 五处类型检查全绿（contract 29→50，agent 1240→1219，
+  数目变化正是套件迁移）。重建四个镜像后真实链路 15/15 PASS，其中 sandbox 侧记录到两次
+  `POST /internal/v1/sessions/ensure 200`——contract 实现签发的令牌被 exec 验证器接受。
+  另在生产镜像内直接构造 artifact-download transport，确认新补的 getter-keyring 拒绝
+  在镜像里生效。证据：`docs/evidence/internal-hmac-consolidation-2026-09-04.md`。
+- **STATUS IDs:** 无 §32 行状态改变。
+- **Not closed:** `exec-rpc.ts` 里还有一个同名但只做去尾斜杠的私有 `normalizeBaseUrl`，
+  与本次抽出的策略函数不是重复实现（它的 baseUrl 来自进程环境而非用户输入），
+  故意没有合并；要不要收到同一条策略下是单独一件事。
+  上一条列出的其余 Not closed 项（G7 门禁重写、配额落库、`memory.ts` 死代码、
+  `htm` 硬编码、`issueToken` 写死 scope、`getClientIp` 信 XFF）仍然未做。

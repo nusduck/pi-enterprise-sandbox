@@ -120,13 +120,6 @@ const TRANSIENT_MAP_WHITELIST = Object.freeze([
     scope: 'local',
   },
   {
-    rel: 'infrastructure/sandbox/internal-hmac.ts',
-    match: /const\s+decoded\s*=\s*new\s+Map\s*\(/,
-    purpose:
-      'Function-local HMAC keyring decode (kid → key bytes); auth material, not Run state',
-    scope: 'local',
-  },
-  {
     rel: 'infrastructure/dsh/tool-risk-policy.ts',
     match: /const\s+patterns\b.*=\s*new\s+Map\s*\(/,
     purpose:
@@ -415,9 +408,12 @@ describe('no authoritative in-process Run Map (B3)', () => {
     // Inventory size sanity: every residual Map is explicitly classified.
     // The inventory follows the current TypeScript source tree; obsolete
     // JavaScript-era entries are intentionally not kept as evidence.
+    // 2026-09-04: 28 → 27，`infrastructure/sandbox/internal-hmac.ts` 随 HMAC
+    // 实现收口到 `@pi/contract/hmac.js` 一起删除，它那条 keyring 解码的
+    // function-local Map 也就不在 agent/src 里了。
     assert.equal(
       TRANSIENT_MAP_WHITELIST.length,
-      28,
+      27,
       'whitelist size drift — update STATUS B3 inventory evidence if intentional',
     );
   });

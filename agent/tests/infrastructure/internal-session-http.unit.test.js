@@ -7,7 +7,7 @@ import {
   SESSION_ENSURE_SCOPE,
   SESSION_ENSURE_TOOL_NAME,
 } from '../../src/infrastructure/sandbox/internal-session-http.js';
-import { verifyInternalToken } from '../../src/infrastructure/sandbox/internal-hmac.js';
+import { verifyInternalToken } from '@pi/contract/hmac.js';
 
 const KEYRING = { 'kid-1': Buffer.alloc(32, 7).toString('base64url') };
 const NOW = 1_700_000_000;

@@ -44,7 +44,10 @@ contract/          Agent 与执行面之间的共享契约。两侧同为 TS，�
   src/               直接复用 @deepseek-ai/dsh-fs / dsh-shell 的类型，本包只加
     envelope.ts      RPC 信封（必带 workspaceId，多实例路由的预留键）
     errors.ts        错误码 + 物理路径脱敏（脱敏参数**必填**，不给默认值）
-    hmac.ts          两侧共用一份签名实现
+    hmac.ts          两侧共用的**唯一**一份签名实现。2026-09-04 起 agent 的
+                     `infrastructure/sandbox/internal-hmac.ts` 已删除（它与本文件
+                     是两套并存的实现），agent/exec 都从这里取；baseUrl 策略不属于
+                     签名，留在 agent 的 `sandbox/transport-base-url.ts`
 agent/src/runtime/ Agent 侧的 DSH 组合层（agent 私有，同一次 tsc）
   bundle/            cordis.patch.yml —— 叠在 dsh-base 之上的组合层（生成物）
   plugins/           类型化清单，`npm run gen:patch` 写出 YAML

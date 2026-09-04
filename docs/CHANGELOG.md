@@ -28,6 +28,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **启用后的 Skill 草稿不再重复列在 Drafts**：启用是复制字节、草稿不删，所以 `skill_drafts` 里会一直有它。Agent 给这类条目打 `published: true` / `status: 'published'`，UI 的 Drafts 区只列待启用的。三层 Skill 卡片统一结构，操作按钮收进卡片底部的动作行，不再被拉成整行宽的色块。
 ### Fixed
 
+- **内部 HMAC 只剩一份实现**：`agent/src/infrastructure/sandbox/internal-hmac.ts`（980 行）
+  与 `contract/src/hmac.ts`（816 行）长期并存，两个生产模块还在用前者。收口到
+  `@pi/contract/hmac.js` 之前先补齐了 contract 少的两条校验，**没有靠放宽来"统一"**：
+  keyring 的值必须是可枚举的字符串**数据属性**（getter 可以在校验与取用之间返回
+  不同字节，也会在校验期间跑任意代码），`scope` 数组不得携带额外自有属性
+  （`['x']` 上挂个 `.extra` 仍然 `length === 1`，但它已不是那个被约束住的一元 scope）。
+  补齐后，agent 那套 599 行严格性套件（含跨语言 golden fixture）对着 contract 实现
+  21/21 通过，该套件已随实现移到 `contract/test/hmac-strict.test.ts`。
+  `normalizeBaseUrl` 与签名无关，抽到 `agent/src/infrastructure/sandbox/transport-base-url.ts`。
 - **exec 公共会话面现在真的校验 `SANDBOX_API_TOKEN`**：compose、`.env.example`
   与 `deployment.md` 三处都要求这枚服务令牌，BFF 与 agent 也一直在发
   `X-API-Key`——但 exec 换成 TS 之后公共面从来没有校验过它，`/sessions/*` 只看

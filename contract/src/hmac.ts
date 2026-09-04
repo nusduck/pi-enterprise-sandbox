@@ -380,11 +380,27 @@ function decodeKeyring(input: unknown): Map<string, Buffer> {
       );
     }
     object = input;
-    for (const [, value] of Object.entries(object)) {
-      if (typeof value !== 'string') {
+    // 只接受可枚举的字符串**数据属性**。getter 会在校验和取用之间返回不同的
+    // 字节（校验一份、签名另一份），也会在校验期间跑任意代码——密钥来源不能
+    // 是一段可执行逻辑。`Reflect.ownKeys` 而不是 `Object.entries`：symbol 键
+    // 不会被 entries 看到，但会被后面的序列化路径看到。
+    for (const key of Reflect.ownKeys(object)) {
+      if (typeof key !== 'string') {
         fail(
           'INTERNAL_TOKEN_KEYRING_INVALID',
-          'keyring values must be strings',
+          'keyring cannot contain symbol keys',
+        );
+      }
+      const descriptor = Object.getOwnPropertyDescriptor(object, key);
+      if (
+        !descriptor ||
+        !descriptor.enumerable ||
+        !Object.hasOwn(descriptor, 'value') ||
+        typeof descriptor.value !== 'string'
+      ) {
+        fail(
+          'INTERNAL_TOKEN_KEYRING_INVALID',
+          'keyring values must be enumerable string data properties',
         );
       }
     }
@@ -468,6 +484,13 @@ function assertHtu(value: unknown): string {
 function assertScope(value: unknown): InternalTokenScope {
   if (!Array.isArray(value) || value.length !== 1) {
     fail('INTERNAL_TOKEN_CLAIM_INVALID', 'scope must contain exactly one element');
+  }
+  // "恰好一个元素"要连自有属性一起算：`['x']` 上再挂一个 `.extra` 仍然
+  // `length === 1`，但它已经不是那个被约束住的一元 scope 了。允许的自有键
+  // 只有下标 "0" 和 "length"。
+  const ownKeys = Reflect.ownKeys(value);
+  if (ownKeys.length !== 2 || !ownKeys.includes('0') || !ownKeys.includes('length')) {
+    fail('INTERNAL_TOKEN_CLAIM_INVALID', 'scope must not carry extra own properties');
   }
   const first: unknown = value[0];
   return Object.freeze([

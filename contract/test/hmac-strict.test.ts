@@ -19,13 +19,13 @@ import {
   validateInternalHmacKeyring,
   validateInternalTokenClaims,
   verifyInternalToken,
-} from '../../src/infrastructure/sandbox/internal-hmac.js';
+} from '../src/hmac.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-// agent/tests/infrastructure → repo root is ../../../
+// contract/test → repo root is ../../
 const GOLDEN_FIXTURE_PATH = path.join(
   __dirname,
-  '../../../tests/fixtures/contracts/agent-sandbox-internal-hmac-hs256-v1.json',
+  '../../tests/fixtures/contracts/agent-sandbox-internal-hmac-hs256-v1.json',
 );
 
 const KEY_BYTES = Buffer.from(Array.from({ length: 32 }, (_, index) => index));

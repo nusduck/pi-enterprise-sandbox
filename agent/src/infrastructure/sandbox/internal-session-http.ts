@@ -3,7 +3,8 @@
 import { createHash } from 'node:crypto';
 
 import { assertUlid } from '../../domain/shared/ulid.js';
-import { issueInternalToken, normalizeBaseUrl } from './internal-hmac.js';
+import { issueInternalToken } from '@pi/contract/hmac.js';
+import { normalizeBaseUrl } from './transport-base-url.js';
 
 import {
   assertW3cTraceId,
