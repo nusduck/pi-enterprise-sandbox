@@ -198,7 +198,10 @@ const DISABLED: readonly PatchEntry[] = [
   // dsh-user-approval 提供的是通道中立的 `ctx.approval` seam，**本身没有 answerer**，
   // 缺 answerer 时 fail-closed 到 unavailable。企业审批的「大脑」仍在
   // policy/install.ts 的四个挂载点（判 ask、铸 PENDING、digest、租户、预算、账本），
-  // seam 只是「嘴」。answerer 由 enterprise-approval-answerer 插件提供（下方 ADDITIONS）。
+  // seam 只是「嘴」。answerer **不是**进程级插件：它由 policy/install.ts 在每个 Run 的
+  // agent scope 上注册 `approval/request` 监听器提供（审批 store 是按 Run 的，做成
+  // overlay 插件反而要再造一条把 store 递进去的通路）。计划 H4 原写的
+  // 「enterprise-approval-answerer 插件」没有实现，别在这份清单里找它。
   //
   // permission 继续关：那是 dsh-permission-presets，一个把 sandbox-mode 与
   // approval-policy 打包成产品级下拉的 process-level 旋钮，没有租户维度。
