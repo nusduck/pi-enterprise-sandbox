@@ -429,6 +429,33 @@ P2 未做——它依赖尚不存在的 IdP 接入，属于产品决策而非本
 加不进 Agent 选择。按 AGENTS.md「优先按职责拆分」把模型选择抽成
 `features/chat/useModelSelection.ts`，再把 Agent 选择作为同级 hook 加入。
 
+### 2026-09-04 补：§0 的前提是错的
+
+本文 §0 写着「运行时消费面已经建好了——`bindAgentVersionConfig()` 能把
+`config_json` **完整**投影成 model / systemPrompt / skills / mcpServers /
+toolPolicy / sandboxPolicy，executor 每个 Run 都按 `run.agentVersionId` 加载它」。
+**这句只有一半成立**，而它没有出现在 §2 的「已核实的事实」里，所以实施时没有被
+复现验证过。P0 上线后由一条真实 trace（`55e02176…`）暴露：Agent 选对了、
+`runs.agent_version_id` 也钉对了，但配置的 `systemPrompt` 没有生效。
+
+根因：`bindAgentVersionConfig()` 确实**算得出**这些字段，但全仓只有
+`container.ts` 的 `createDefaultModelResolver` 调它，而那里只取 `bound.model`
+与 `bound.modelPolicy`；`DshRunExecutor` 把整个 `agentVersion` 传给运行时工厂，
+工厂读的却是 `input.systemPrompt`——没有人把两者接起来。
+
+已修：executor 经 `bindAgentVersionConfig()` 取出 `systemPrompt` 传给工厂
+（回归测试 `tests/executor/dsh-run-executor.unit.test.js` 的
+「hands the AgentVersion systemPrompt to the runtime factory」，修复前失败）。
+逐字段的生效情况见 [`../api.md`](../api.md) 的「`config` 里哪些字段真的生效」。
+
+`sandboxPolicy` 本轮**明确不做**：它从 ADR 0002 起就没有执行路径，沙箱模式、
+网络模式与可写根都是 exec 的部署级配置，不按 Agent 分。要做需要定义 schema、
+扩 `contract/` 的 shell RPC、改 exec 的 `isolation/build`——那是在动 AGENTS.md §2
+的容器隔离不变量，应当单开一件事并起新 ADR。
+
+**教训**：验证只覆盖到「版本钉对了」，没有覆盖「版本里的内容真的生效了」。
+真实链路脚本已补上对 `request/header` 里 system 文本的断言。
+
 ### §11 回归项对照
 
 | 回归项 | 位置 |

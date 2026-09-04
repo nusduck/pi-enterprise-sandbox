@@ -251,6 +251,23 @@ Agent 模型侧权威清单工具：`capabilities`（`action=list|search|describ
 - **跨租户一律 404**：用别的 org 的 `agent_id` 或不属于该 Agent 的
   `agent_version_id` 调用，与"不存在"返回同一个响应，不泄漏存在性。
 
+**`config` 里哪些字段真的生效**（2026-09-04 逐字段核过一遍；不生效的字段写进去
+不报错但**没有任何执行路径**，别指望它约束行为）：
+
+| 字段 | 生效？ | 落在哪 |
+|------|-------|--------|
+| `systemPrompt` | ✅ | 作为租户自定义段进入发给模型的 system prompt，排在 harness 身份之后、企业条款之前；企业条款始终追加在它后面且**不可被租户覆盖** |
+| `modelPolicy`（含内嵌 `model`） | ✅ | `modelResolver` 解析出本次 Run 的具体模型；内嵌完整 model 时 `input.model` 不能改身份 |
+| `modelPolicy.maxOutputTokens` | ✅ | 覆盖解析出的 `Model.maxTokens` |
+| `toolPolicy` | ✅ | 逐调用闸门（`tools/pre-execute`）与风险表 |
+| `modelPolicy.temperature` | ❌ | 校验后携带，SDK 侧尚未接线 |
+| `modelPolicy.thinkingLevel` | ❌ | 同上 |
+| `skills` | ❌ | 运行时的 skill 只来自**调用者自己的 skill 目录**；这里的值仅用于 A2A agent card 展示 |
+| `mcpServers` | ❌ | **按设计如此**：server 清单只来自进程环境变量 `MCP_SERVERS_JSON`（AGENTS.md §1） |
+| `extensions` | ❌ | Pi Extension 机制已随 ADR 0009 H7 退役 |
+| `sandboxPolicy` | ❌ | **保留字段，没有执行路径**。沙箱模式、网络模式、可写根都由 exec 的部署级配置决定，不按 Agent 分（ADR 0002 起就是如此） |
+| `a2a` / `contextPolicy` | ❌ | 无读取方 |
+
 选择 Agent 的入口有三个，都只接受 `agent_id`（ULID），不接受 `agent_version_id`：
 
 | 入口 | 何时生效 |

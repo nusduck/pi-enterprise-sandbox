@@ -79,6 +79,7 @@ function createFakePiRuntimeFactory(opts = {}) {
     async create(input) {
       assert.ok(input.model);
       assert.ok(input.cwd);
+      opts.captureCreateInput?.(input);
       /** @type {Array<(ev: object) => void>} */
       const subs = [];
       let aborted = false;
@@ -318,6 +319,38 @@ describe('DshRunExecutor', () => {
     );
     assert.ok(uiAssistant, 'UI assistant message persisted for history');
     assert.notEqual(uiAssistant.message_type, 'pi_journal_entry');
+    await exec.dispose();
+  });
+
+  it('hands the AgentVersion systemPrompt to the runtime factory', async () => {
+    // 回归：executor 过去只把 agentVersion 整个对象传给工厂，从不取它的
+    // systemPrompt；工厂读的是 input.systemPrompt，于是永远是 undefined，
+    // AgentVersion 里配的提示词一个字也到不了模型。2026-09-04 由一条真实
+    // trace（55e02176…）暴露：Agent 选对了、版本钉对了，人格没生效。
+    let seen = null;
+    const exec = makeExecutor({
+      captureCreateInput: (input) => {
+        seen = input;
+      },
+    });
+    const result = await exec.execute({
+      run: {
+        runId: RUN,
+        agentSessionId: SESS,
+        conversationId: CONV,
+        agentVersionId: VER,
+        triggeringMessageId: TRIG,
+        traceId: 'c'.repeat(32),
+        orgId: ORG,
+        userId: USER,
+      },
+      scope,
+      workerId: 'w1',
+      signal: new AbortController().signal,
+    });
+    assert.equal(result.outcome, RUN_STATUS.SUCCEEDED);
+    // seedExecutorWorld 里这个版本的 config_json 是 { systemPrompt: 'hi' }。
+    assert.equal(seen.systemPrompt, 'hi');
     await exec.dispose();
   });
 

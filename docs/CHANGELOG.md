@@ -28,6 +28,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **启用后的 Skill 草稿不再重复列在 Drafts**：启用是复制字节、草稿不删，所以 `skill_drafts` 里会一直有它。Agent 给这类条目打 `published: true` / `status: 'published'`，UI 的 Drafts 区只列待启用的。三层 Skill 卡片统一结构，操作按钮收进卡片底部的动作行，不再被拉成整行宽的色块。
 ### Fixed
 
+- **AgentVersion 里配的 `systemPrompt` 现在真的会送到模型**：`DshRunExecutor` 过去
+  只把整个 `agentVersion` 对象交给运行时工厂，而工厂读的是 `input.systemPrompt`，
+  于是它永远是 `undefined`——Agent 选对了、版本也钉对了，配置的人格一个字也到不了
+  模型。现在经 `bindAgentVersionConfig()` 取出后传入。企业条款仍由
+  `assembleSystemPrompt` 追加在租户提示词之后，且不可被租户覆盖。
 - **绑定在非默认智能体上的会话，后续 Run 不再报 "Conversation is bound to a
   different agent"**：不带 `agent_id` 的 follow-up 过去会先解析成租户默认智能体，
   再与会话已绑定的那个比对而失败。现在没有显式选择时由**会话自己**决定智能体

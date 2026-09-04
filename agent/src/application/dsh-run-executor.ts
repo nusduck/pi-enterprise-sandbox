@@ -34,6 +34,7 @@ import {
 } from '../infrastructure/redis/session-lock-manager.js';
 import { SessionLockError } from '../infrastructure/redis/errors.js';
 import { PINNED_PI_SDK_VERSION } from '../infrastructure/dsh/constants.js';
+import { bindAgentVersionConfig } from '../infrastructure/dsh/agent-version-bindings.js';
 import { buildMcpPolicyBindings } from '../infrastructure/mcp/mcp-policy-bindings.js';
 import {
   buildAgentVersionToolRiskBindings,
@@ -434,6 +435,12 @@ export class DshRunExecutor {
       });
       void PINNED_PI_SDK_VERSION;
 
+      // 经 bindAgentVersionConfig 读，不直接读 configJson：那是唯一定义"这份
+      // config 怎么读"的地方（深冻结、凭据字段拒绝、SDK 版本钉）。2026-09-04
+      // 之前这一步不存在，工厂读的 `input.systemPrompt` 永远是 undefined——
+      // 版本钉对了，配的人格一个字也到不了模型。
+      const boundVersion = bindAgentVersionConfig(agentVersion);
+
       const triggering = await this.tx.run(async (trx) => {
         const repos = this.createRepositories(trx);
         return repos.messages.getById(run.triggeringMessageId, scope);
@@ -678,6 +685,9 @@ export class DshRunExecutor {
 
       this._runtime = await this.piRuntimeFactory.create({
         agentVersion,
+        // 企业条款由 `assembleSystemPrompt` 追加在它之后且不可被覆盖，所以这里
+        // 传的是"租户自定义的那一段"，不是最终提示词。
+        systemPrompt: boundVersion.systemPrompt,
         agentSession: session,
         piSnapshot,
         cwd,
