@@ -3,6 +3,7 @@ import type { ServerResponse } from 'node:http';
 import { createSandboxClient } from '../services/sandbox-client.js';
 import {
   authorizeSandboxSession,
+  requireSessionWorkspaceId as requireWorkspaceId,
   resolveTrustedAuth,
   type AuthorizeSandboxSessionResult,
   type ReqWithTrace,
@@ -14,28 +15,6 @@ function json(res: ServerResponse, status: number, data: unknown) {
   res.end(JSON.stringify(data));
 }
 
-/**
- * Sandbox 的 `/sessions/:id/...` 公共面里那个 `:id` 是 **workspace_id**——
- * exec 的 `requireOwnedSession()` 用它派生物理工作区路径，产物记录也按它归档。
- * 浏览器只认 sandbox session id，所以每一次 Sandbox 跳转前都要在这里换一次。
- * 换不出来必须 fail-closed：拿 session id 当 workspace 用会静默落到一个不存在
- * 的工作区（列表恒空、导入写进错的目录）。
- */
-function requireWorkspaceId(sessionAccess: AuthorizeSandboxSessionResult): string {
-  const workspaceId = String(
-    sessionAccess?.access?.workspace_id || sessionAccess?.access?.workspaceId || '',
-  ).trim();
-  if (!workspaceId) {
-    const error = new Error('Session workspace unavailable') as Error & {
-      status: number;
-      code: string;
-    };
-    error.status = 503;
-    error.code = 'SESSION_WORKSPACE_UNAVAILABLE';
-    throw error;
-  }
-  return workspaceId;
-}
 
 /**
  * GET /api/artifacts?session_id=

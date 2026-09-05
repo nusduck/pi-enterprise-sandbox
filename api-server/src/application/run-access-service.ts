@@ -156,6 +156,29 @@ export async function authorizeSandboxSession(
 }
 
 /**
+ * Sandbox 公共面 `/sessions/:id/...` 里的 `:id` 是 **workspace_id**，不是浏览器
+ * 手里的 sandbox session id——两者是各自独立生成的 ULID（见 run-parent-provisioner）。
+ * 每次 Sandbox 跳转前都要在这里换一次；换不出来必须 fail-closed 503，绝不能拿
+ * session id 顶替：exec 会照着它派生出一个不存在的物理工作区，读恒 404，写则
+ * 静默落进一个没有任何人读的目录（AGENTS.md §2）。
+ */
+export function requireSessionWorkspaceId(
+  sessionAccess: AuthorizeSandboxSessionResult | null | undefined,
+): string {
+  const workspaceId = String(
+    sessionAccess?.access?.workspace_id || sessionAccess?.access?.workspaceId || '',
+  ).trim();
+  if (!workspaceId) {
+    throw new HttpError(
+      503,
+      'SESSION_WORKSPACE_UNAVAILABLE',
+      'Session workspace unavailable',
+    );
+  }
+  return workspaceId;
+}
+
+/**
  * Authorize run access via Agent owner-scoped GET (MySQL).
  */
 export async function authorizeRunRequest(

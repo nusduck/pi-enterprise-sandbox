@@ -28,6 +28,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **启用后的 Skill 草稿不再重复列在 Drafts**：启用是复制字节、草稿不删，所以 `skill_drafts` 里会一直有它。Agent 给这类条目打 `published: true` / `status: 'published'`，UI 的 Drafts 区只列待启用的。三层 Skill 卡片统一结构，操作按钮收进卡片底部的动作行，不再被拉成整行宽的色块。
 ### Fixed
 
+- **`/api/files/download` 与 `/api/files/upload` 走错了工作区**：exec 公共面
+  `/sessions/{id}/files/*` 里的 `{id}` 是 `workspace_id`，这两条代理却直接把浏览器
+  的 `sandbox_session_id` 塞进 URL（两者是各自独立的 ULID）。结果是下载恒 404、
+  上传静默写进一个按 session id 派生出来的幽灵工作区，Agent 的工具永远看不见那个
+  文件。两条路径改为与 artifacts / datasets / processes 一样，先经 Agent 换成
+  `workspace_id`；换不出来 fail-closed 返回 503 `SESSION_WORKSPACE_UNAVAILABLE`，
+  不再拿 session id 顶替。四处重复的换算收口成
+  `run-access-service.requireSessionWorkspaceId()`。
+
 - **删掉的生产代码不再继续进镜像**：`.dockerignore` 的 `dist/` / `node_modules/`
   不带 `**/`，而 Docker 只把它们当作上下文根下的那一个目录——每个包各自的
   `agent/dist`、`exec/dist` 照样被 `COPY agent ./agent` 整个塞进镜像，而

@@ -1,7 +1,11 @@
 /** BFF process routes: Agent authorizes the session; exec owns process facts. */
 
 import type { ServerResponse } from 'node:http';
-import { authorizeSandboxSession, type ReqWithTrace } from '../application/run-access-service.js';
+import {
+  authorizeSandboxSession,
+  requireSessionWorkspaceId,
+  type ReqWithTrace,
+} from '../application/run-access-service.js';
 import { createSandboxClient, type SandboxClient } from '../services/sandbox-client.js';
 import { HttpError } from '../http/errors.js';
 import { sendError, sendJson as json } from '../http/response.js';
@@ -16,12 +20,7 @@ async function clientFor(sessionId: string, req: ReqWithTrace | null | undefined
   const access = await authorizeSandboxSession(sessionId, req, {
     traceId: req?.traceId || null,
   });
-  const workspaceId = String(
-    access.access?.workspace_id || access.access?.workspaceId || '',
-  ).trim();
-  if (!workspaceId) {
-    throw new HttpError(503, 'SESSION_WORKSPACE_UNAVAILABLE', 'Session workspace unavailable');
-  }
+  const workspaceId = requireSessionWorkspaceId(access);
   return {
     workspaceId,
     client: createSandboxClient({

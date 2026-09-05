@@ -325,7 +325,8 @@ Agent `/internal/auth/*`，成功后只把 JWT 写入 HttpOnly Cookie。exec 不
 | `POST /api/conversations/{id}/artifact-imports` | 将当前用户已有 Artifact 导入目标会话 workspace；不创建新 Artifact |
 
 - Artifact 下载代理到 `GET /sessions/{id}/artifacts/{aid}/download`
-- 路径下载 / 上传代理到 `/sessions/{id}/files/download` 与 `/sessions/{id}/files/upload`
+- 路径下载 / 上传代理到 `/sessions/{id}/files/download` 与 `/sessions/{id}/files/upload`；
+  三条代理都先把 `session_id` 换成 `workspace_id` 再跳转（见下节公共面的 `{id}` 说明）
 - 上传支持 `Idempotency-Key` 与 `X-Trace-Id` 请求头；BFF 流式落盘后转发，不整包进堆内存
 - 超限返回 **413**，业务码见下方 Attachment 约定
 
@@ -343,6 +344,12 @@ Base URL: `http://sandbox:8081`（Docker 内网）
 这一层已经删除。生产环境不发布 Sandbox 宿主端口。新的集成必须添加对应的
 `/api/*` BFF 路由或 Agent internal contract，不能把 `X-API-Key`
 当作终端用户身份。
+
+> **这些路径里的 `{id}` 一律是 `workspace_id`，不是浏览器持有的
+> `sandbox_session_id`**——exec 的 `requireOwnedSession()` 拿它派生物理工作区路径。
+> BFF 在每次跳转前经 Agent `GET /internal/sessions/{sid}` 换一次，
+> `files` / `datasets` / `artifacts` / `processes` 四组代理同一条规则；换不出来一律
+> **503 `SESSION_WORKSPACE_UNAVAILABLE`**，不退化成拿 session id 顶替。
 
 ### 通用约定
 

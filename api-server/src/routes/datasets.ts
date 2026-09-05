@@ -23,6 +23,7 @@ import { Transform } from 'node:stream';
 import { config } from '../config.js';
 import {
   authorizeSandboxSession,
+  requireSessionWorkspaceId,
   type AuthorizeSandboxSessionResult,
   type ReqWithTrace,
 } from '../application/run-access-service.js';
@@ -46,18 +47,6 @@ function writeJson(res: ServerResponse, status: number, body: unknown, traceId?:
   res.end(JSON.stringify(payload));
 }
 
-function workspaceIdFor(sessionAccess: AuthorizeSandboxSessionResult | null | undefined): string {
-  const workspaceId = String(
-    sessionAccess?.access?.workspace_id || sessionAccess?.access?.workspaceId || '',
-  ).trim();
-  if (!workspaceId) {
-    const err = new Error('Session workspace unavailable') as Error & { status: number; code: string };
-    err.status = 503;
-    err.code = 'SESSION_WORKSPACE_UNAVAILABLE';
-    throw err;
-  }
-  return workspaceId;
-}
 
 /** Keep the public dataset contract keyed by sandbox_session_id. */
 function projectDatasetSession(data: any, sandboxSessionId: string, sessionAccess: AuthorizeSandboxSessionResult | null | undefined): any {
@@ -238,7 +227,7 @@ export async function handleDatasetUpload(
 
   let workspaceId: string;
   try {
-    workspaceId = workspaceIdFor(sessionAccess);
+    workspaceId = requireSessionWorkspaceId(sessionAccess);
   } catch (err: any) {
     discardRequestBody(req, res);
     writeJson(res, err.status || 503, { error: err.message, code: err.code }, traceId);
@@ -382,7 +371,7 @@ export async function handleListDatasets(
       conversationId,
       traceId,
     });
-    const workspaceId = workspaceIdFor(sessionAccess);
+    const workspaceId = requireSessionWorkspaceId(sessionAccess);
     const headers = sandboxProxyHeaders(
       req,
       {

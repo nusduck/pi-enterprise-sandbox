@@ -11,7 +11,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import * as sb from '../services/sandbox-client.js';
 import { config, AUTH_HEADER } from '../config.js';
-import { authorizeSandboxSession, type ReqWithTrace } from '../application/run-access-service.js';
+import {
+  authorizeSandboxSession,
+  requireSessionWorkspaceId,
+  type ReqWithTrace,
+} from '../application/run-access-service.js';
 import {
   boundRequestTraceContext,
   createTraceId,
@@ -301,10 +305,12 @@ export async function handleFileDownload(
   }
 
   let sessionAccess;
+  let workspaceId: string;
   try {
     sessionAccess = await authorizeSandboxSession(sessionId, req, {
       traceId: req?.traceId || null,
     });
+    workspaceId = requireSessionWorkspaceId(sessionAccess);
   } catch (err: any) {
     const status = Number(err?.status) || 500;
     res.writeHead(status, { 'Content-Type': 'application/json' });
@@ -315,7 +321,7 @@ export async function handleFileDownload(
     return;
   }
 
-  const sanUrl = `${config.SANDBOX_BASE_URL}/sessions/${encodeURIComponent(sessionId)}/files/download?path=${encodeURIComponent(filePath)}`;
+  const sanUrl = `${config.SANDBOX_BASE_URL}/sessions/${encodeURIComponent(workspaceId)}/files/download?path=${encodeURIComponent(filePath)}`;
   let sanRes: Response;
   try {
     sanRes = await fetchSandboxBounded(sanUrl, {
@@ -420,30 +426,18 @@ export async function handleArtifactDownload(
   }
 
   let sessionAccess;
+  let workspaceId: string;
   try {
     sessionAccess = await authorizeSandboxSession(sessionId, req, {
       traceId: req?.traceId || null,
     });
+    workspaceId = requireSessionWorkspaceId(sessionAccess);
   } catch (err: any) {
     const status = Number(err?.status) || 500;
     res.writeHead(status, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({
       error: status >= 500 ? 'Artifact service unavailable' : err.message,
       code: err?.code,
-    }));
-    return;
-  }
-
-  // Sandbox 公共面的 `:id` 是 workspace_id，不是 sandbox session id
-  // （见 routes/artifacts.js 的 requireWorkspaceId）。
-  const workspaceId = String(
-    sessionAccess?.access?.workspace_id || sessionAccess?.access?.workspaceId || '',
-  ).trim();
-  if (!workspaceId) {
-    res.writeHead(503, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({
-      error: 'Session workspace unavailable',
-      code: 'SESSION_WORKSPACE_UNAVAILABLE',
     }));
     return;
   }
@@ -556,8 +550,10 @@ export async function handleFileUpload(
   }
 
   let sessionAccess;
+  let workspaceId: string;
   try {
     sessionAccess = await authorizeSandboxSession(sessionId, req, { traceId });
+    workspaceId = requireSessionWorkspaceId(sessionAccess);
   } catch (err: any) {
     discardRequestBody(req, res);
     const status = Number(err?.status) || 500;
@@ -614,7 +610,7 @@ export async function handleFileUpload(
     // Stream file to sandbox via fetch (Readable stream body)
     const bodyStream = createReadStream(spill.filePath);
     const sanRes = await fetchSandboxBounded(
-      `${config.SANDBOX_BASE_URL}/sessions/${sessionId}/files/upload`,
+      `${config.SANDBOX_BASE_URL}/sessions/${encodeURIComponent(workspaceId)}/files/upload`,
       {
         method: 'POST',
         headers,
