@@ -333,20 +333,18 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       // F2: do NOT abort background runs / SSE managers on conversation switch.
       // Only detach UI focus. EntityStore continues receiving events for
       // in-flight background runs.
-      if (cur.isStreaming || cur.abortCtrl) {
-        setState((s) => {
-          // Detach UI without aborting the underlying AbortController —
-          // the stream fetch keeps running so the server run is not cancelled.
-          const n = update(s, {
-            isStreaming: false,
-            // EntityBridge keeps the per-run controller while focus detaches.
-            abortCtrl: null,
-            streamGeneration: (s.streamGeneration || 0) + 1,
-          });
-          activeStreamGenRef.current = n.streamGeneration;
-          return n;
+      // Optimistically focus the target conversation ID for instant feedback.
+      setState((s) => {
+        const n = update(s, {
+          conversationId: id,
+          isStreaming: false,
+          // EntityBridge keeps the per-run controller while focus detaches.
+          abortCtrl: null,
+          streamGeneration: (s.streamGeneration || 0) + 1,
         });
-      }
+        activeStreamGenRef.current = n.streamGeneration;
+        return n;
+      });
 
       try {
         setStatus('Loading…', '#94a3b8');

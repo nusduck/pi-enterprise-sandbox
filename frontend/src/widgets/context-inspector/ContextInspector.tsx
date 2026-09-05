@@ -1,4 +1,4 @@
-import { useMemo, useState, type ReactNode } from 'react';
+import { useMemo, useState, useEffect, type ReactNode } from 'react';
 import { useChat } from '../../features/chat/ChatContext';
 import {
   getRunApprovals,
@@ -202,12 +202,17 @@ function StatPill({
 function EmptyState({
   title,
   body,
+  icon,
 }: {
   title: string;
   body?: string;
+  icon?: ReactNode;
 }) {
   return (
     <div className="insp-empty">
+      <div className="insp-empty-icon" aria-hidden="true">
+        {icon || <IconLayers size={22} />}
+      </div>
       <p className="insp-empty-title">{title}</p>
       {body ? <p className="insp-empty-body">{body}</p> : null}
     </div>
@@ -238,6 +243,18 @@ export function ContextInspector({
   const { openProcessConsole } = useWorkbenchSelection();
   const runId = activeRunId;
   const run = getActiveRunEntity(entityStore, runId);
+
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        onClose();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [open, onClose]);
 
   const tools = useMemo(
     () => (runId ? getRunToolExecutions(entityStore, runId) : []),
@@ -363,22 +380,20 @@ export function ContextInspector({
   );
 
   const tabs: TabDef[] = [
-    { id: 'overview', label: 'Overview' },
-    { id: 'tools', label: 'Tools', count: tools.length || undefined },
-    { id: 'processes', label: 'Processes', count: processes.length || undefined },
-    {
-      id: 'files',
-      label: 'Files',
-      count: referencedFiles.length || undefined,
-    },
     {
       id: 'artifacts',
       label: 'Artifacts',
       count: importableArtifacts.length || undefined,
     },
+    {
+      id: 'files',
+      label: 'Files',
+      count: referencedFiles.length || undefined,
+    },
+    { id: 'tools', label: 'Tools', count: tools.length || undefined },
+    { id: 'processes', label: 'Processes', count: processes.length || undefined },
     { id: 'datasets', label: 'Datasets', count: datasets.length || undefined },
-    { id: 'trace', label: 'Trace', count: traceSpans.length || undefined },
-    { id: 'session', label: 'Session' },
+    { id: 'overview', label: 'Overview' },
   ];
 
   const panelClass = [
@@ -450,22 +465,24 @@ export function ContextInspector({
           </div>
         ) : null}
 
-        <div className="inspector-tabs" role="tablist" aria-label="Detail sections">
-          {tabs.map((t) => (
-            <button
-              key={t.id}
-              type="button"
-              role="tab"
-              aria-selected={tab === t.id}
-              className={`inspector-tab${tab === t.id ? ' active' : ''}`}
-              onClick={() => onTabChange(t.id)}
-            >
-              <span>{t.label}</span>
-              {t.count != null && t.count > 0 ? (
-                <span className="inspector-tab-count">{t.count}</span>
-              ) : null}
-            </button>
-          ))}
+        <div className="inspector-tabs">
+          <div className="inspector-tabs-track" role="tablist" aria-label="Detail sections">
+            {tabs.map((t) => (
+              <button
+                key={t.id}
+                type="button"
+                role="tab"
+                aria-selected={tab === t.id}
+                className={`inspector-tab${tab === t.id ? ' active' : ''}`}
+                onClick={() => onTabChange(t.id)}
+              >
+                <span>{t.label}</span>
+                {t.count != null && t.count > 0 ? (
+                  <span className="inspector-tab-count">{t.count}</span>
+                ) : null}
+              </button>
+            ))}
+          </div>
         </div>
 
         <div className="inspector-body" role="tabpanel">

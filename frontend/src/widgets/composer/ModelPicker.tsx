@@ -206,6 +206,11 @@ export function ModelPicker({
         onKeyDown={onTriggerKeyDown}
       >
         <span className="model-picker-trigger-name">{selectedLabel}</span>
+        {selected?.context_window ? (
+          <span className="model-picker-badge" title={limits}>
+            {formatTokenK(selected.context_window)}
+          </span>
+        ) : null}
         <svg
           className="model-picker-chevron"
           width="12"
@@ -223,12 +228,6 @@ export function ModelPicker({
           />
         </svg>
       </button>
-
-      {limits ? (
-        <span className="model-picker-limits" title={limits}>
-          {limits}
-        </span>
-      ) : null}
 
       {open ? (
         <div

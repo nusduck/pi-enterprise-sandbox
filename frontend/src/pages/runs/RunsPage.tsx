@@ -3,11 +3,17 @@
  * Filter by status; open conversation, cancel, view logs/detail.
  * Soft-fails when list API is incomplete; falls back to entity store.
  */
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState, Fragment } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useChat } from '../../features/chat/ChatContext';
-import { listRuns, cancelRun, getRun } from '../../shared/api/runs';
+import { listRuns, cancelRun, getRun, getRunTraceSpans } from '../../shared/api/runs';
+import {
+  createTraceSpan,
+  getRunTraceSpans as getStoreTraceSpans,
+  type TraceSpanEntity,
+} from '../../entities';
 import { formatRunStatusLabel } from '../../widgets/runtime-timeline/buildTimeline';
+import { TracePanel } from '../../widgets/trace-panel/TracePanel';
 import {
   RUN_STATUS_FILTERS,
   canCancelRun,
@@ -25,6 +31,9 @@ import {
   IconChat,
   IconAlertCircle,
   IconSparkles,
+  IconLayers,
+  IconCopy,
+  IconCheck,
 } from '../../shared/ui/Icons';
 
 export function RunsPage() {
@@ -35,8 +44,14 @@ export function RunsPage() {
   const [apiAvailable, setApiAvailable] = useState<boolean | null>(null);
   const [loading, setLoading] = useState(true);
   const [busyId, setBusyId] = useState<string | null>(null);
-  const [selected, setSelected] = useState<RunRow | null>(null);
+  const [expandedRowId, setExpandedRowId] = useState<string | null>(null);
+  const [expandedTab, setExpandedTab] = useState<'logs' | 'trace'>('logs');
   const [detailLog, setDetailLog] = useState<string | null>(null);
+  const [traceSpans, setTraceSpans] = useState<TraceSpanEntity[]>([]);
+  const [traceId, setTraceId] = useState<string | null>(null);
+  const [traceLoading, setTraceLoading] = useState(false);
+  const [traceError, setTraceError] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
   const [banner, setBanner] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
@@ -89,7 +104,6 @@ export function RunsPage() {
   }
 
   async function onViewLogs(row: RunRow) {
-    setSelected(row);
     setDetailLog(null);
     try {
       const detail = await getRun(row.id);
@@ -133,6 +147,90 @@ export function RunsPage() {
       }
     } catch (err) {
       setDetailLog(`Failed to load logs: ${(err as Error).message}`);
+    }
+  }
+
+  async function loadTrace(runId: string) {
+    setTraceLoading(true);
+    setTraceError(null);
+    try {
+      const resp = await getRunTraceSpans(runId);
+      const spans: TraceSpanEntity[] = (resp.spans || []).map((wire) => {
+        const id = String(wire.id || wire.spanId || wire.span_id || '');
+        const parentId = (wire.parentId || wire.parent_id || null) as string | null;
+        const kind = (wire.kind || 'other') as TraceSpanEntity['kind'];
+        const rawStatus = String(wire.status || '').toLowerCase();
+        const status =
+          rawStatus === 'ok' || rawStatus === 'error' || rawStatus === 'cancelled'
+            ? rawStatus
+            : 'running';
+        return createTraceSpan({
+          id: id || `${runId}-${Math.random()}`,
+          runId,
+          orgId: String(wire.orgId || wire.org_id || '') || null,
+          userId: String(wire.userId || wire.user_id || '') || null,
+          parentId,
+          kind,
+          name: String(wire.name || kind),
+          status,
+          spanId: (wire.spanId || wire.span_id || null) as string | null,
+          durationMs:
+            typeof wire.durationMs === 'number'
+              ? wire.durationMs
+              : typeof wire.duration_ms === 'number'
+                ? wire.duration_ms
+                : null,
+          tokens: typeof wire.tokens === 'number' ? wire.tokens : null,
+          cost: typeof wire.cost === 'number' ? wire.cost : null,
+          error: wire.error ? String(wire.error) : null,
+          metadata: (wire.metadata as Record<string, unknown>) || null,
+          startedAt: (wire.startedAt || wire.started_at || null) as string | null,
+          finishedAt: (wire.finishedAt || wire.finished_at || null) as string | null,
+        });
+      });
+      setTraceSpans(spans);
+      setTraceId(resp.traceId || resp.trace_id || null);
+    } catch {
+      const storeSpans = getStoreTraceSpans(entityStore, runId);
+      setTraceSpans(storeSpans);
+      const run = entityStore.runsById[runId];
+      setTraceId(run?.traceId || null);
+      if (!storeSpans || storeSpans.length === 0) {
+        setTraceError('No trace spans found for this run.');
+      }
+    } finally {
+      setTraceLoading(false);
+    }
+  }
+
+  async function onToggleLogs(row: RunRow) {
+    if (expandedRowId === row.id && expandedTab === 'logs') {
+      setExpandedRowId(null);
+      return;
+    }
+    setExpandedRowId(row.id);
+    setExpandedTab('logs');
+    await onViewLogs(row);
+  }
+
+  async function onToggleTrace(row: RunRow) {
+    if (expandedRowId === row.id && expandedTab === 'trace') {
+      setExpandedRowId(null);
+      return;
+    }
+    setExpandedRowId(row.id);
+    setExpandedTab('trace');
+    await loadTrace(row.id);
+  }
+
+  async function handleCopyLogs() {
+    if (!detailLog) return;
+    try {
+      await navigator.clipboard.writeText(detailLog);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 2000);
+    } catch {
+      // ignore
     }
   }
 
@@ -219,94 +317,162 @@ export function RunsPage() {
               </tr>
             </thead>
             <tbody>
-              {rows.map((row) => (
-                <tr
-                  key={row.id}
-                  className={selected?.id === row.id ? 'selected' : ''}
-                >
-                  <td>
-                    <code className="mgmt-id-code" title={row.id}>{shortId(row.id, 12)}</code>
-                  </td>
-                  <td>
-                    {row.conversationId ? (
-                      <code className="mgmt-id-code" title={row.conversationId}>
-                        {shortId(row.conversationId, 10)}
-                      </code>
-                    ) : (
-                      '—'
-                    )}
-                  </td>
-                  <td>
-                    <span className={`mgmt-status status-${row.status}`}>
-                      <span className="mgmt-status-dot" />
-                      {formatRunStatusLabel(row.status)}
-                    </span>
-                  </td>
-                  <td className="mgmt-muted">
-                    {row.currentStep || '—'}
-                    {row.currentTool ? ` · ${row.currentTool}` : ''}
-                  </td>
-                  <td>{formatRunDuration(row.startedAt, row.finishedAt)}</td>
-                  <td className="mgmt-muted">{row.model || '—'}</td>
-                  <td className="mgmt-muted">{row.tokenUsage || '—'}</td>
-                  <td>
-                    <div className="mgmt-row-actions">
-                      <button
-                        type="button"
-                        className="mgmt-btn sm"
-                        onClick={() => void onOpen(row)}
-                        title="Open conversation"
-                      >
-                        <IconChat size={12} /> Open
-                      </button>
-                      <button
-                        type="button"
-                        className="mgmt-btn sm secondary"
-                        onClick={() => void onViewLogs(row)}
-                        title="View logs / detail"
-                      >
-                        <IconTerminal size={12} /> Logs
-                      </button>
-                      {canCancelRun(row.status) ? (
-                        <button
-                          type="button"
-                          className="mgmt-btn sm danger"
-                          disabled={busyId === row.id}
-                          onClick={() => void onCancel(row)}
-                        >
-                          {busyId === row.id ? '…' : 'Cancel'}
-                        </button>
-                      ) : null}
-                    </div>
-                  </td>
-                </tr>
-              ))}
+              {rows.map((row) => {
+                const isExpanded = expandedRowId === row.id;
+                return (
+                  <Fragment key={row.id}>
+                    <tr className={isExpanded ? 'selected is-expanded' : ''}>
+                      <td>
+                        <code className="mgmt-id-code" title={row.id}>{shortId(row.id, 12)}</code>
+                      </td>
+                      <td>
+                        {row.conversationId ? (
+                          <code className="mgmt-id-code" title={row.conversationId}>
+                            {shortId(row.conversationId, 10)}
+                          </code>
+                        ) : (
+                          '—'
+                        )}
+                      </td>
+                      <td>
+                        <span className={`mgmt-status status-${row.status}`}>
+                          <span className="mgmt-status-dot" />
+                          {formatRunStatusLabel(row.status)}
+                        </span>
+                      </td>
+                      <td className="mgmt-muted">
+                        {row.currentStep || '—'}
+                        {row.currentTool ? ` · ${row.currentTool}` : ''}
+                      </td>
+                      <td>{formatRunDuration(row.startedAt, row.finishedAt)}</td>
+                      <td className="mgmt-muted">{row.model || '—'}</td>
+                      <td className="mgmt-muted">{row.tokenUsage || '—'}</td>
+                      <td>
+                        <div className="mgmt-row-actions">
+                          <button
+                            type="button"
+                            className="mgmt-btn sm"
+                            onClick={() => void onOpen(row)}
+                            title="Open conversation"
+                          >
+                            <IconChat size={12} /> Open
+                          </button>
+                          <button
+                            type="button"
+                            className={`mgmt-btn sm secondary${isExpanded && expandedTab === 'logs' ? ' active' : ''}`}
+                            onClick={() => void onToggleLogs(row)}
+                            title="View logs"
+                          >
+                            <IconTerminal size={12} /> Logs
+                          </button>
+                          <button
+                            type="button"
+                            className={`mgmt-btn sm secondary${isExpanded && expandedTab === 'trace' ? ' active' : ''}`}
+                            onClick={() => void onToggleTrace(row)}
+                            title="View trace spans"
+                          >
+                            <IconLayers size={12} /> Trace
+                          </button>
+                          {canCancelRun(row.status) ? (
+                            <button
+                              type="button"
+                              className="mgmt-btn sm danger"
+                              disabled={busyId === row.id}
+                              onClick={() => void onCancel(row)}
+                            >
+                              {busyId === row.id ? '…' : 'Cancel'}
+                            </button>
+                          ) : null}
+                        </div>
+                      </td>
+                    </tr>
+                    {isExpanded ? (
+                      <tr key={`${row.id}-expand`} className="mgmt-expand-row">
+                        <td colSpan={8}>
+                          <div className="mgmt-inline-drawer" aria-label="Run detail">
+                            <div className="mgmt-inline-head">
+                              <div className="mgmt-inline-nav">
+                                <span className="mgmt-inline-title">Run {shortId(row.id, 12)}</span>
+                                <div className="mgmt-inline-tabs" role="tablist">
+                                  <button
+                                    type="button"
+                                    role="tab"
+                                    aria-selected={expandedTab === 'logs'}
+                                    className={`mgmt-inline-tab${expandedTab === 'logs' ? ' active' : ''}`}
+                                    onClick={() => void onToggleLogs(row)}
+                                  >
+                                    <IconTerminal size={13} />
+                                    <span>Logs</span>
+                                  </button>
+                                  <button
+                                    type="button"
+                                    role="tab"
+                                    aria-selected={expandedTab === 'trace'}
+                                    className={`mgmt-inline-tab${expandedTab === 'trace' ? ' active' : ''}`}
+                                    onClick={() => void onToggleTrace(row)}
+                                  >
+                                    <IconLayers size={13} />
+                                    <span>Trace</span>
+                                  </button>
+                                </div>
+                              </div>
+                              <div className="mgmt-inline-actions">
+                                {expandedTab === 'logs' && detailLog ? (
+                                  <button
+                                    type="button"
+                                    className="mgmt-btn sm secondary"
+                                    onClick={() => void handleCopyLogs()}
+                                    title="Copy logs"
+                                  >
+                                    {copied ? <IconCheck size={12} /> : <IconCopy size={12} />}
+                                    <span>{copied ? 'Copied' : 'Copy'}</span>
+                                  </button>
+                                ) : null}
+                                <button
+                                  type="button"
+                                  className="mgmt-btn sm secondary"
+                                  onClick={() => setExpandedRowId(null)}
+                                  title="Close detail"
+                                >
+                                  <IconClose size={12} />
+                                  <span>Close</span>
+                                </button>
+                              </div>
+                            </div>
+                            <div className="mgmt-inline-content">
+                              {expandedTab === 'logs' ? (
+                                <div>
+                                  {row.error ? (
+                                    <p className="mgmt-error">Failure: {row.error}</p>
+                                  ) : null}
+                                  <pre className="mgmt-log">{detailLog || 'Loading logs…'}</pre>
+                                </div>
+                              ) : (
+                                <div className="mgmt-inline-trace-wrap">
+                                  {traceLoading ? (
+                                    <div className="mgmt-trace-loading">
+                                      <IconSparkles size={18} className="icon-pulse" />
+                                      <p>Loading trace spans…</p>
+                                    </div>
+                                  ) : traceError ? (
+                                    <p className="mgmt-error">{traceError}</p>
+                                  ) : (
+                                    <TracePanel spans={traceSpans} traceId={traceId} />
+                                  )}
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        </td>
+                      </tr>
+                    ) : null}
+                  </Fragment>
+                );
+              })}
             </tbody>
           </table>
         </div>
       )}
-
-      {selected ? (
-        <aside className="mgmt-detail" aria-label="Run detail">
-          <header className="mgmt-detail-head">
-            <h3>Run {shortId(selected.id, 16)}</h3>
-            <button
-              type="button"
-              className="mgmt-btn sm secondary"
-              onClick={() => {
-                setSelected(null);
-                setDetailLog(null);
-              }}
-            >
-              <IconClose size={13} /> Close
-            </button>
-          </header>
-          {selected.error ? (
-            <p className="mgmt-error">Failure: {selected.error}</p>
-          ) : null}
-          <pre className="mgmt-log">{detailLog || 'Loading…'}</pre>
-        </aside>
-      ) : null}
     </div>
   );
 }

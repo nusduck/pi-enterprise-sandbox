@@ -540,3 +540,27 @@ Each entry should say **what changed**, **why**, and **which STATUS IDs** it aff
   已证实的只有 dist 那一条，文档与测试里只写这一条。`node_modules/` 的模式仍然
   一并改掉，因为它是同一个错误。
 - **STATUS IDs:** 无 §32 行状态改变。
+
+## 2026-09-05 — 全量回归案例改为真实用户任务
+
+- **Context:** 原回归清单大量使用固定回显与小型合成文件，不能证明用户最终得到正确、可用的工作成果；同时缺少当前多 Agent 与版本管理等能力。
+- **Action:** 重写 `reviews/2026-09-01-full-regression/test-cases.md` §1–§3，保留全部原案例 ID 与 §4–§9 历史原文；以冻结项目资料、官方公开数据和独立验算为基础，补齐办公四格式、系统 Skill 逐包、Agent 发布/回滚、Dataset/Artifact 重启、完整恢复与容量/安全分支。新增资料规范和页面/工具/API/STATUS 覆盖矩阵，更新 README。
+- **Evidence boundary:** 本次只更新测试设计，没有执行新的产品回归，也没有生成真实业务数据或继承历史通过结论；合成数据仅用于明确标识的边界/故障夹具。
+- **STATUS IDs:** 覆盖映射 A1–A5、B1–B6、C1–C8、D1–D8、E1–E3、F1–F6、G1–G7、H1–H6；无任何行状态改变。
+- **Verification:** 仓库布局测试 5 passed；案例 ID、覆盖引用、相对链接及历史段落一致性另做文档检查。本轮没有改生产代码，不需要为文档改动重建运行栈。
+
+## 2026-09-05 — 前端 UI/UX 体验重构：现代卡片输入框、Grok 风格设置、Runs 行内展开与 Details 弹窗稳固化
+
+- **Context:** 前端页面存在多处影响体验与视觉一致性的问题：输入框模型选择与参数裸露悬浮于输入框上方，上下割裂；Details 弹窗高度在不同 Tab 间剧烈跳动（250px~800px），且 Tab 按钮长短不一；Runs 记录的 Logs 在表格最末尾展开而非当条记录下方；设置中心二级导航存在多余重叠与对齐错位。
+- **Action:**
+  1. 重构 `Composer.tsx` 与 `app.css`：对标 ChatGPT/Claude 3.5 采用一体化卡片容器（`.input-inner.composer-card`），自适应 Textarea 居中，底部工具栏集成回形针上传、内嵌 `256k` 徽章的模型选择器（向上呼出）与状态圆形发送按钮；
+  2. 重构 `ContextInspector.tsx`：将弹窗尺寸锁定为 `740px × 620px` 消除高度跳跃（0px 抖动），引入均等宽度（113.67px）的分段控制音轨（`.inspector-tabs-track`），并优化空状态图文居中排版；
+  3. 改造 `SettingsSubnav.tsx` 与 `AppShell.tsx`：采用对标 Grok Web 的两栏式设置中心，侧栏分类垂直左对齐；
+  4. 改造 `RunsPage.tsx`：使用行内 `<tr className="mgmt-expand-row">` 替代末尾渲染，点击单条记录的 Logs 或 Trace 直接在当前行下方就地平滑展开；
+  5. 修复 `ChatContext.tsx` 与 `ConversationSidebar.tsx`：点击历史会话即刻高亮并切换上下文；
+  6. 同步更新 `docs/webui.md` 描述最新 UI 架构规范。
+- **STATUS IDs:** 无 §32 行状态改变。
+- **Verification:**
+  - Chrome DevTools MCP 实机测量：6 项 Tab 宽度严格锁定 113.67px，Modal 宽高严格锁定 740px × 620px；
+  - 自动化测试与检查全绿：`pytest` (104)、`exec` (346)、`contract` (50)、`api-server` (157)、`agent` (1219)、`frontend` (350) 全数通过；
+  - 镜像与容器：`docker compose build frontend && docker compose up -d frontend` 重建并生效。

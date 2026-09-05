@@ -1,5 +1,5 @@
 import { useMemo, useState, type FormEvent } from 'react';
-import { NavLink, useNavigate } from 'react-router-dom';
+import { NavLink, useNavigate, useLocation } from 'react-router-dom';
 import { useChat } from '../../features/chat/ChatContext';
 import { conversationTitle } from '../../shared/state';
 import {
@@ -10,11 +10,8 @@ import {
 import { listActiveRuns } from '../../entities';
 import {
   IconChat,
-  IconRuns,
-  IconApprovals,
   IconSchedules,
   IconSettings,
-  IconA2a,
   IconClose,
   IconPlus,
   IconTrash,
@@ -40,6 +37,7 @@ function runMarkerLabel(status: string | null, hasApproval: boolean): string {
 
 export function ConversationSidebar() {
   const navigate = useNavigate();
+  const location = useLocation();
   const {
     state,
     entityStore,
@@ -73,8 +71,6 @@ export function ConversationSidebar() {
   );
 
   const signedIn = Boolean(state.authUser?.username);
-  const isAdmin =
-    String(state.authUser?.role || '').toLowerCase() === 'admin';
   const conversations = useMemo(
     () =>
       [...(state.conversations || [])].sort((a, b) => {
@@ -131,6 +127,12 @@ export function ConversationSidebar() {
   function onNewChat() {
     void startNewChat();
     navigate('/');
+    if (isMobile) closeSidebar();
+  }
+
+  function onSelectConv(convId: string) {
+    navigate('/');
+    void selectConversation(convId);
     if (isMobile) closeSidebar();
   }
 
@@ -228,15 +230,11 @@ export function ConversationSidebar() {
                   className={`conv-item${conv.id === state.conversationId ? ' active' : ''}${hasApproval ? ' needs-approval' : ''}${hasRun && !hasApproval ? ' has-active-run' : ''}`}
                   role="listitem"
                   tabIndex={0}
-                  onClick={() => {
-                    void selectConversation(conv.id);
-                    if (isMobile) closeSidebar();
-                  }}
+                  onClick={() => onSelectConv(conv.id)}
                   onKeyDown={(e) => {
                     if (e.key === 'Enter' || e.key === ' ') {
                       e.preventDefault();
-                      void selectConversation(conv.id);
-                      if (isMobile) closeSidebar();
+                      onSelectConv(conv.id);
                     }
                   }}
                 >
@@ -277,7 +275,7 @@ export function ConversationSidebar() {
             <NavLink
               to="/settings/capabilities"
               className={({ isActive }) =>
-                `sidebar-nav-link${isActive ? ' active' : ''}`
+                `sidebar-nav-link${isActive || location.pathname.startsWith('/settings') ? ' active' : ''}`
               }
               onClick={() => {
                 if (isMobile) closeSidebar();
@@ -287,67 +285,24 @@ export function ConversationSidebar() {
                 <IconSettings size={17} />
               </span>
               <span className="sidebar-nav-text">Settings</span>
-            </NavLink>
-            <NavLink
-              to="/settings/approvals"
-              className={({ isActive }) =>
-                `sidebar-nav-link${isActive ? ' active' : ''}`
-              }
-              onClick={() => {
-                if (isMobile) closeSidebar();
-              }}
-            >
-              <span className="sidebar-nav-icon" aria-hidden="true">
-                <IconApprovals size={17} />
-              </span>
-              <span className="sidebar-nav-text">Approvals</span>
               {pendingApprovals.length > 0 ? (
                 <span
                   className="sidebar-nav-badge warn"
                   aria-label={`${pendingApprovals.length} pending`}
+                  title={`${pendingApprovals.length} pending approval(s)`}
                 >
                   {pendingApprovals.length}
                 </span>
-              ) : null}
-            </NavLink>
-            <NavLink
-              to="/settings/runs"
-              className={({ isActive }) =>
-                `sidebar-nav-link${isActive ? ' active' : ''}`
-              }
-              onClick={() => {
-                if (isMobile) closeSidebar();
-              }}
-            >
-              <span className="sidebar-nav-icon" aria-hidden="true">
-                <IconRuns size={17} />
-              </span>
-              <span className="sidebar-nav-text">Runs</span>
-              {activeRuns.length > 0 ? (
+              ) : activeRuns.length > 0 ? (
                 <span
                   className="sidebar-nav-badge"
                   aria-label={`${activeRuns.length} active`}
+                  title={`${activeRuns.length} active run(s)`}
                 >
                   {activeRuns.length}
                 </span>
               ) : null}
             </NavLink>
-            {isAdmin ? (
-              <NavLink
-                to="/settings/a2a"
-                className={({ isActive }) =>
-                  `sidebar-nav-link${isActive ? ' active' : ''}`
-                }
-                onClick={() => {
-                  if (isMobile) closeSidebar();
-                }}
-              >
-                <span className="sidebar-nav-icon" aria-hidden="true">
-                  <IconA2a size={17} />
-                </span>
-                <span className="sidebar-nav-text">A2A</span>
-              </NavLink>
-            ) : null}
           </nav>
 
           <div className="sidebar-auth" id="auth-panel">

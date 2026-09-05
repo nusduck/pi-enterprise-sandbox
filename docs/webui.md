@@ -112,9 +112,15 @@ AgentSession 都由 `agentEventAdapter -> runReducer` 单次归约。`ChatState`
   相同的新版本。服务端仍会把同一份 config 再校验一遍（写入即校验），前端这层解析
   只是让用户在按下按钮之前就看到 JSON 错在哪。
 
-### Settings 二级导航结构
+### Settings 二级导航结构与 Grok 风格布局
 
-为优化系统功能架构，侧边栏一级主导航聚焦于核心工作流（Chat 与 Schedules）；`Runs`（活跃运行）与 `Approvals`（审批中心）收敛至 `Settings` 作用域下（位于侧边栏底部 Settings 组中，保留未决审批角标与活跃运行数计数）。同时，在所有 `/settings/*` 页面（Capabilities, Approvals, Runs, Agents, A2A Access）顶部提供统一常驻的二级导航条（SettingsSubnav），支持在各管理面板间一键平滑切换。旧路径 `/runs` 与 `/approvals` 自动重定向至对应 `/settings/*` 路径，保持外链兼容。
+为优化系统功能架构，侧边栏一级主导航聚焦于核心工作流（Chat 与 Schedules）；侧边栏底部仅保留单一简洁的 **Settings** 入口与用户 Profile（当存在未决审批或运行中任务时统一展示聚合角标）。
+点击 Settings 进入 `/settings/*` 后，界面采用对标 **Grok Web** 的经典两栏式设置中心：
+- **左侧垂直分类导航（Settings Sidebar）**：常驻提供 `Capabilities`、`Approvals`（未决警告角标）、`Runs`（活跃角标）、`Agents`（管理员可见）与 `A2A Access`（管理员可见），顶部提供快捷返回聊天的「Chat」按钮。
+- **右侧配置面板（Settings Content）**：承载当前分类的内容。
+- **Runs 行内展开控制台**：在 `Runs` 表格中，点击单条记录的 `Logs` 或 `Trace` 直接在当前行下方平滑展开行内抽屉（`<tr className="mgmt-expand-row">`），提供终端日志查看、复制与分布式 Span 树检查，避免滚动到页面底部的体验断层。
+- **Workbench Details 精简化**：聊天主界面右侧 Details 抽屉对标 ChatGPT Canvas / Artifacts 模式，聚焦于「产物预览（Artifacts）」、「关联文件（Files）」与「执行概览（Overview）」，将研发向 Trace 链路跟踪全面收拢至 Runs 页面。
+旧路径 `/runs` 与 `/approvals` 自动重定向至对应 `/settings/*` 路径，保持外链与收藏兼容。
 
 ### 消息格式
 

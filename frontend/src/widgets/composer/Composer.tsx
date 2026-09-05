@@ -476,162 +476,165 @@ export function Composer() {
           </div>
         ) : null}
 
-        <div
-          id="attachment-drafts"
-          className="attachment-drafts"
-          hidden={attachments.length === 0}
-          aria-live="polite"
-        >
-          {attachments.map((a) => (
-            <div
-              key={a.localId}
-              className={`att-chip att-${a.status}`}
-              data-local-id={a.localId}
-            >
-              <span
-                className={`file-type-tile${a.status === 'uploading' || a.status === 'queued' ? ' is-loading' : ''}${a.status === 'failed' ? ' is-error' : ''}`}
-                aria-hidden="true"
+        <div className="input-inner composer-card">
+          <div
+            id="attachment-drafts"
+            className="attachment-drafts"
+            hidden={attachments.length === 0}
+            aria-live="polite"
+          >
+            {attachments.map((a) => (
+              <div
+                key={a.localId}
+                className={`att-chip att-${a.status}`}
+                data-local-id={a.localId}
               >
-                {a.status === 'failed'
-                  ? '!'
-                  : fileTypeLabel(a.name, a.mimeType)}
-              </span>
-              <span className="att-meta">
-                <span className="att-name" title={a.path || a.name || ''}>
-                  {a.name || 'file'}
+                <span
+                  className={`file-type-tile${a.status === 'uploading' || a.status === 'queued' ? ' is-loading' : ''}${a.status === 'failed' ? ' is-error' : ''}`}
+                  aria-hidden="true"
+                >
+                  {a.status === 'failed'
+                    ? '!'
+                    : fileTypeLabel(a.name, a.mimeType)}
                 </span>
-                {a.status === 'failed' && a.error ? (
-                  <span
-                    className="att-error"
-                    title={
-                      a.errorCode ? `${a.errorCode}: ${a.error}` : a.error
-                    }
-                  >
-                    {a.error}
-                    {a.traceId ? ` (trace ${a.traceId.slice(0, 8)})` : ''}
+                <span className="att-meta">
+                  <span className="att-name" title={a.path || a.name || ''}>
+                    {a.name || 'file'}
                   </span>
-                ) : a.status === 'uploading' || a.status === 'queued' ? (
-                  <span className="att-status">
-                    {a.status === 'queued' ? 'Waiting to upload' : 'Uploading…'}
-                  </span>
-                ) : (
-                  <span className="att-size">
-                    {[formatSize(a.size), 'Ready'].filter(Boolean).join(' · ')}
-                  </span>
-                )}
-              </span>
-              <span className="att-actions">
-                {a.status === 'failed' ? (
+                  {a.status === 'failed' && a.error ? (
+                    <span
+                      className="att-error"
+                      title={
+                        a.errorCode ? `${a.errorCode}: ${a.error}` : a.error
+                      }
+                    >
+                      {a.error}
+                      {a.traceId ? ` (trace ${a.traceId.slice(0, 8)})` : ''}
+                    </span>
+                  ) : a.status === 'uploading' || a.status === 'queued' ? (
+                    <span className="att-status">
+                      {a.status === 'queued' ? 'Waiting to upload' : 'Uploading…'}
+                    </span>
+                  ) : (
+                    <span className="att-size">
+                      {[formatSize(a.size), 'Ready'].filter(Boolean).join(' · ')}
+                    </span>
+                  )}
+                </span>
+                <span className="att-actions">
+                  {a.status === 'failed' ? (
+                    <button
+                      type="button"
+                      className="att-btn att-retry"
+                      title="Retry upload"
+                      aria-label={`Retry ${a.name}`}
+                      onClick={() => void retryAttachmentDraft(a.localId)}
+                    >
+                      <IconRefresh size={13} />
+                    </button>
+                  ) : null}
                   <button
                     type="button"
-                    className="att-btn att-retry"
-                    title="Retry upload"
-                    aria-label={`Retry ${a.name}`}
-                    onClick={() => void retryAttachmentDraft(a.localId)}
+                    className="att-btn att-remove"
+                    title="Remove attachment"
+                    aria-label={`Remove ${a.name}`}
+                    onClick={() => removeAttachmentDraft(a.localId)}
                   >
-                    <IconRefresh size={13} />
+                    <IconClose size={13} />
                   </button>
-                ) : null}
-                <button
-                  type="button"
-                  className="att-btn att-remove"
-                  title="Remove attachment"
-                  aria-label={`Remove ${a.name}`}
-                  onClick={() => removeAttachmentDraft(a.localId)}
-                >
-                  <IconClose size={13} />
-                </button>
-              </span>
-            </div>
-          ))}
-        </div>
+                </span>
+              </div>
+            ))}
+          </div>
 
-        <div className="composer-model-row">
-          <ModelPicker
-            models={models}
-            selectedModelId={selectedModelId}
-            onSelect={setSelectedModelId}
-            disabled={mode !== 'idle' || models.length === 0}
-          />
-          {/* 单 Agent 的 org 完全看不到这个控件，体验与多 Agent 上线前一致。 */}
-          {agents.length > 1 && !state.conversationId ? (
-            <AgentPicker
-              agents={agents}
-              selectedAgentId={selectedAgentId}
-              onSelect={setSelectedAgentId}
-              disabled={mode !== 'idle'}
-            />
-          ) : null}
-        </div>
-
-        <div className="input-inner">
-          <div className="composer-tools-left">
-            <button
-              className="btn btn-upload"
-              id="btn-upload"
-              title="Attach files (Ctrl+U)"
-              type="button"
-              onClick={openFilePicker}
-              disabled={mode === 'running'}
-            >
-              <IconPaperclip size={17} />
-            </button>
-            <input
-              ref={fileInputRef}
-              type="file"
-              multiple
-              hidden
-              onChange={(e) => {
-                if (e.target.files?.length) {
-                  void handleFilesSelected(e.target.files);
-                  e.target.value = '';
-                }
-              }}
+          <div className="composer-input-area">
+            <textarea
+              id="input"
+              ref={textareaRef}
+              rows={1}
+              placeholder={composerPlaceholder(mode, runningAction)}
+              value={draftText}
+              disabled={false}
+              onChange={onInput}
+              onKeyDown={onKeyDown}
+              onPaste={onPaste}
             />
           </div>
 
-          <textarea
-            id="input"
-            ref={textareaRef}
-            rows={1}
-            placeholder={composerPlaceholder(mode, runningAction)}
-            value={draftText}
-            disabled={false}
-            onChange={onInput}
-            onKeyDown={onKeyDown}
-            onPaste={onPaste}
-          />
-
-          <div className="composer-tools-right">
-            {canStop(mode) ? (
+          <div className="composer-toolbar">
+            <div className="composer-tools-left">
               <button
-                className="btn btn-stop"
-                id="btn-stop"
+                className="btn btn-upload composer-tool-btn"
+                id="btn-upload"
+                title="Attach files (Ctrl+U)"
                 type="button"
-                title="Stop run"
-                aria-label="Stop generating"
-                onClick={onStop}
+                onClick={openFilePicker}
+                disabled={mode === 'running'}
               >
-                <IconStop size={13} />
+                <IconPaperclip size={16} />
               </button>
-            ) : null}
-            <button
-              className={`btn ${mode === 'idle' ? 'btn-send' : 'btn-action'}`}
-              id="btn-send"
-              type="button"
-              title={primaryTitle}
-              aria-label={primaryLabel}
-              disabled={primaryDisabled}
-              onClick={() => void onPrimaryAction()}
-            >
-              {mode === 'idle' ? (
-                <IconSend size={15} />
-              ) : primaryLabel === 'Steer' ? (
-                <IconSteer size={15} />
-              ) : (
-                <IconPlus size={15} />
-              )}
-            </button>
+              <input
+                ref={fileInputRef}
+                type="file"
+                multiple
+                hidden
+                onChange={(e) => {
+                  if (e.target.files?.length) {
+                    void handleFilesSelected(e.target.files);
+                    e.target.value = '';
+                  }
+                }}
+              />
+
+              <ModelPicker
+                models={models}
+                selectedModelId={selectedModelId}
+                onSelect={setSelectedModelId}
+                disabled={mode !== 'idle' || models.length === 0}
+              />
+
+              {/* 单 Agent 的 org 完全看不到这个控件，体验与多 Agent 上线前一致。 */}
+              {agents.length > 1 && !state.conversationId ? (
+                <AgentPicker
+                  agents={agents}
+                  selectedAgentId={selectedAgentId}
+                  onSelect={setSelectedAgentId}
+                  disabled={mode !== 'idle'}
+                />
+              ) : null}
+            </div>
+
+            <div className="composer-tools-right">
+              {canStop(mode) ? (
+                <button
+                  className="btn btn-stop"
+                  id="btn-stop"
+                  type="button"
+                  title="Stop run"
+                  aria-label="Stop generating"
+                  onClick={onStop}
+                >
+                  <IconStop size={13} />
+                </button>
+              ) : null}
+              <button
+                className={`btn ${mode === 'idle' ? 'btn-send' : 'btn-action'}`}
+                id="btn-send"
+                type="button"
+                title={primaryTitle}
+                aria-label={primaryLabel}
+                disabled={primaryDisabled}
+                onClick={() => void onPrimaryAction()}
+              >
+                {mode === 'idle' ? (
+                  <IconSend size={15} />
+                ) : primaryLabel === 'Steer' ? (
+                  <IconSteer size={15} />
+                ) : (
+                  <IconPlus size={15} />
+                )}
+              </button>
+            </div>
           </div>
         </div>
       </div>

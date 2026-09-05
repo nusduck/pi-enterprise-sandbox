@@ -9,7 +9,7 @@ import {
   type SelectedEntity,
 } from '../../widgets/runtime-timeline/buildTimeline';
 import { WorkbenchSelectionContext } from './WorkbenchSelectionContext';
-import { SettingsSubnav } from './SettingsSubnav';
+import { SettingsLayout } from './SettingsSubnav';
 import { IconMenu, IconSun, IconMoon } from '../../shared/ui/Icons';
 import { useTheme } from '../../shared/ui/theme';
 
@@ -130,9 +130,11 @@ export function AppShell({ children }: { children: ReactNode }) {
             </header>
           ) : null}
 
-          {location.pathname.startsWith('/settings') ? <SettingsSubnav /> : null}
-
-          <div className="workbench-center">{children}</div>
+          {location.pathname.startsWith('/settings') ? (
+            <SettingsLayout>{children}</SettingsLayout>
+          ) : (
+            <div className="workbench-center">{children}</div>
+          )}
         </div>
 
         {!management ? (
