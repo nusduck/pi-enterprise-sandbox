@@ -106,11 +106,36 @@ AgentSession 都由 `agentEventAdapter -> runReducer` 单次归约。`ChatState`
   然后困惑于"为什么改了配置老会话没变"。两个按钮因此分开：
   *Save as new active version* 与 *Save without activating*。
 - 「回滚」不是一个单独功能，就是在版本历史里激活一个旧版本——无需数据修复。
-- config 是 JSON 文本框。解析规则在 `pages/settings/agentHelpers.ts`（纯函数，可测）：
-  空文本 = 空配置而不是错误；数组与标量被拒；比较的是**解析后重新序列化**的结果，
-  所以只改缩进不会被当成"改了配置"，否则每次打开页面都会诱导用户建一个内容完全
-  相同的新版本。服务端仍会把同一份 config 再校验一遍（写入即校验），前端这层解析
-  只是让用户在按下按钮之前就看到 JSON 错在哪。
+- 配置编辑器同时提供常用字段和 Advanced JSON：两者写入同一份草稿，结构化控件
+  只修改它负责的字段，未知字段、旧字段和旧格式仍留在 JSON 中。`modelPolicy`、
+  `toolPolicy` 与 `mcpServers` 的形状不合法时，结构化控件暂停，避免一次点击把
+  无法理解的配置覆盖掉；当前能力目录不可达时保留已知草稿值，并阻止依赖该目录
+  的发布。平台管理的 `skills`、`extensions`、`sandboxPolicy` 与 `a2a` 只显示
+  为继承状态，不提供保存后不会影响运行时的假开关。
+- 配置校验由 Agent 服务的 `config/options` 与 `config/validate` 提供：选项 DTO 使用
+  `schemaVersion`、`fieldSupport`、`platformConstraints`、`capabilityRevision`，
+  校验结果必须带 `valid`、字段级 `errors`/`warnings`；有效结果还带
+  `normalizedConfig` 与 `effectiveSummary`。警告只提示，不会被当作错误；服务端
+  归一化差异会在发布前展开显示。前端仍把写入即校验作为最终权威。
+- 前端为目录、版本请求和草稿校验做了请求代次保护；React StrictMode 的开发期重复
+  effect 不会把页面留在 Loading。切换 Agent 或刷新期间，晚到的响应不会覆盖当前
+  选择；未提交的草稿按 Agent 暂存。发布和激活携带当前活跃版本的期望值，遇到
+  `409` 并发冲突时刷新版本线、保留草稿并要求重新检查。
+- 「读不到」和「是空的」在界面上是两件事：MCP 目录 `unknown` 时明说不可用并挡住
+  依赖它的修改，不渲染成"零授权"。草稿里启用了、但当前目录已经没有的 MCP 工具仍
+  会渲染成一行并标注「not in the current directory」，否则那条
+  `mcpServers[i].enabledTools[j]` 的错误就没有可以落脚的控件。
+- Thinking level 只列**当前适配器真的接受**的 reasoning effort（`deepseek-official`
+  是 `off|low|high|max`）。历史配置里存着不再支持的值时保留原值并标为 unsupported，
+  要求改掉后才能发布，不静默降级到别的档位。
+- legacy 配置升级到 `schemaVersion: 1` 时，无法映射的模型引用和非空的
+  `skills`/`extensions`/`sandboxPolicy`/`a2a` 会阻止发布并列出待处理字段：
+  表单与 JSON 往返都不会把它们悄悄删掉。
+- config 仍可直接编辑 JSON。解析规则在 `pages/settings/agentHelpers.ts`（纯函数，
+  可测）：空文本 = 空配置而不是错误；数组与标量被拒；比较的是**解析后的 JSON
+  语义**，对象键顺序不会诱导创建相同内容的新版本，数组顺序仍算配置变化。服务端
+  仍会把同一份 config 再校验一遍，前端这层解析只是让用户在按下按钮之前看到语法
+  与字段错误。
 
 ### Settings 二级导航结构与 Grok 风格布局
 

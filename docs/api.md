@@ -213,6 +213,8 @@ Agent 模型侧权威清单工具：`capabilities`（`action=list|search|describ
 | `POST` | `/api/agents` | 新建智能体，自带 v1 并指向它（**admin**） |
 | `GET` `POST` | `/api/agents/{id}/versions` | 版本线 / 建新版本（**admin**） |
 | `POST` | `/api/agents/{id}/active-version` | 切活跃版本，也是回滚（**admin**） |
+| `GET` | `/api/agents/config/options` | 配置 schema、字段支持情况、平台约束与 capability revision（**admin**） |
+| `POST` | `/api/agents/config/validate` | 只解析不落库的配置校验（**admin**） |
 | `GET` `POST` | `/api/cron-jobs` | 列出 / 创建定时任务 |
 | `GET` `PATCH` `DELETE` | `/api/cron-jobs/{id}` | 详情 / 修改 / 删除 |
 | `GET` | `/api/cron-jobs/{id}/runs` | 该定时任务的历史 Run |
@@ -258,15 +260,56 @@ Agent 模型侧权威清单工具：`capabilities`（`action=list|search|describ
 |------|-------|--------|
 | `systemPrompt` | ✅ | 作为租户自定义段进入发给模型的 system prompt，排在 harness 身份之后、企业条款之前；企业条款始终追加在它后面且**不可被租户覆盖** |
 | `modelPolicy`（含内嵌 `model`） | ✅ | `modelResolver` 解析出本次 Run 的具体模型；内嵌完整 model 时 `input.model` 不能改身份 |
-| `modelPolicy.maxOutputTokens` | ✅ | 覆盖解析出的 `Model.maxTokens` |
+| `modelPolicy.maxOutputTokens` | ✅ | 作为 `AgentOptions.maxTokens` 出现在**主对话请求**上；标题/压缩等辅助请求不受影响 |
+| `modelPolicy.thinkingLevel` | ✅ | 作为 agent scope 的 `ModelSelection.reasoningEffort` 出现在主对话请求上。取值必须是当前适配器接受的 effort ID（`deepseek-official`：`off|low|high|max`），否则保存时 400、起 Run 时 fail-closed |
 | `toolPolicy` | ✅ | 逐调用闸门（`tools/pre-execute`）与风险表 |
-| `modelPolicy.temperature` | ❌ | 校验后携带，SDK 侧尚未接线 |
-| `modelPolicy.thinkingLevel` | ❌ | 同上 |
+| `toolPolicy.tools` | ✅ | 显式 `allow` / `require_approval` / `deny`；deny 在真实工具管线拦在工具体之前 |
+| `toolPolicy.riskLevels` / `classRiskLevels` / `riskApproval` | ✅ | 平台层与版本层**各自解析后取更严**；租户只能收紧，不能放松 |
+| `mcpServers` | ✅（授权面） | 引用哪台 server、`enabledTools` 授权哪些工具。**连接配置仍只来自 `MCP_SERVERS_JSON`**：版本里不接收地址、密钥引用、超时。省略或 `[]` = 不授权任何 MCP 工具 |
+| `modelPolicy.temperature` | ❌ | 当前 DSH loop 没有 temperature call-config seam；写进去保存时 400，不静默接受 |
 | `skills` | ❌ | 运行时的 skill 只来自**调用者自己的 skill 目录**；这里的值仅用于 A2A agent card 展示 |
-| `mcpServers` | ❌ | **按设计如此**：server 清单只来自进程环境变量 `MCP_SERVERS_JSON`（AGENTS.md §1） |
 | `extensions` | ❌ | Pi Extension 机制已随 ADR 0009 H7 退役 |
 | `sandboxPolicy` | ❌ | **保留字段，没有执行路径**。沙箱模式、网络模式、可写根都由 exec 的部署级配置决定，不按 Agent 分（ADR 0002 起就是如此） |
 | `a2a` / `contextPolicy` | ❌ | 无读取方 |
+
+##### 配置契约（`schemaVersion: 1`）与配置面接口
+
+新写入的配置带 `schemaVersion: 1`；没有该字段的历史记录按 legacy 读取，**不原地迁移**，
+历史 JSON 与 `config_hash` 永不改写。
+
+- `GET /api/agents/config/options` 返回 `{ schemaVersion, fieldSupport, platformConstraints,
+  capabilityRevision }`。`platformConstraints` 只描述能力：模型目录及其可选 effort、工具名、
+  MCP server/工具清单与 `mcpReadiness`，以及大小上限。**不返回**连接地址、密钥引用、
+  宿主物理路径或别的用户的技能。
+- `POST /api/agents/config/validate` 接收 `{ config, agent_id? }`，返回
+  `{ valid, errors, warnings, normalizedConfig?, effectiveSummary, capabilityRevision }`。
+  它只解析：不跑工具、不调模型、不建会话、不装 MCP。`agent_id` 按同一条跨租户 404 规则校验。
+- **状态码语义**：body 结构错误（不是对象、`config` 缺失）是 400；**字段级校验结果是
+  合法请求的正常结果，返回 200 + `valid:false`**，`errors` 每条形如
+  `{ path, code, message }`，`path` 精确到 `modelPolicy.thinkingLevel`、
+  `mcpServers[0].enabledTools[1]`，UI 据此把错误标到具体控件上。
+- `valid:true` 必然带 `normalizedConfig`，`valid:false` 必然不带。创建/发布版本时服务端
+  **重新校验**，不信任浏览器回传的 `normalizedConfig` / `valid` / `capabilityRevision`。
+- `mcpReadiness.status` 区分三种事实：`ready`（清单已知）、`not_configured`（部署没有声明
+  任何 server）、`unknown`（还问不到）。`unknown` 时引用 MCP 一律拒绝
+  （`MCP_CATALOG_UNAVAILABLE`），**不能把"读不到"渲染成"空清单"**。
+- legacy 记录升级到 v1 时，`modelPolicy` 里的旧模型引用必须能映射到当前模型目录，
+  否则 `LEGACY_MODEL_UNMAPPABLE` 阻止升级；非空的 `skills` / `extensions` / `sandboxPolicy`
+  / `a2a` 与未识别键返回 `LEGACY_FIELD_REQUIRES_MIGRATION`，要求管理员显式处理，
+  **不会在表单/JSON 往返中被静默丢掉**。`effectiveSummary.migration.blockedPaths` 列出待处理项。
+
+##### 激活的乐观并发
+
+`POST .../versions`（`activate` 为真时）与 `POST .../active-version` 接受可选的
+`expected_active_version_id`：
+
+- **不传** = 跳过检查（旧客户端兼容窗口），行为与上线前一致。
+- 传 `null` = 断言"我读到的是还没有活跃版本"，与不传**不是**一回事。
+- 与当前指针不一致时返回 409 `ACTIVE_VERSION_CONFLICT`，响应带 `active_version_id`
+  （当前真实指针），供 UI 展示差异后再提交，而不是盲目重试覆盖别人的激活结果。
+- `activate: false` 的保存**不做**这项检查：它不与别人的激活竞争。
+
+版本号仍由 MySQL 事务决定。
 
 选择 Agent 的入口有三个，都只接受 `agent_id`（ULID），不接受 `agent_version_id`：
 

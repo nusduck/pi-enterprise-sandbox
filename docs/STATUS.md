@@ -1,7 +1,7 @@
 # Refactor acceptance status
 
 **Tracks:** `refactor/dsh-rebuild`（未合并；`main` 上的 §32 证据多数已随 Pi / Python 面删除而失效）  
-**Last audited at:** `refactor/dsh-rebuild` working tree after `83a026b7` (2026-09-01)
+**Last audited at:** `refactor/dsh-rebuild` working tree after `d3870cae` (2026-09-06; 本次定向复核 A2/A3/A5，非全表重新验收)
 **Docs pass:** `2026-09-01` — 对齐 ADR 0009、Agent 浏览器认证权威、DSH 多轮 journal、原生 session resume、Worker 重启后模型上下文、exec 长进程账本与真机收口证据。
 **Normative source:** [`plan.md`](./plan.md) §32
 **Evidence index:** [`evidence/`](./evidence/)  
@@ -50,10 +50,10 @@ Change this file in the **same commit** as the implementation or evidence that j
 | ID | Criterion | Status | Evidence / notes |
 |----|-----------|--------|------------------|
 | A1 | Use Pi native Agent Loop | `unknown` | **证据已删除**：`agent/src/infrastructure/pi/*` 不复存在。Pi 换成 DSH（ADR 0007），本行需按 `agent/src/runtime/` 重新表述与取证 |
-| A2 | Required enterprise policy layers load | `done` | 七个旧 Extension 已删除；当前取证对象是五个 per-Run 策略挂载点与 `ENTERPRISE_DEFAULT_TOOLS` 精确工具面。离线 boot/policy 用例覆盖真实插件树，2026-08-31 compose 已验证真实 bwrap、审批停泊/续跑和 Skill 草稿/发布；2026-09-01 补齐 Capabilities 启用 HTTP/BFF/UI、MySQL 启用账本、exec owner-scoped 挂载与并行 ToolExecution 收尾，并由真实 LLM 完成前台及后台 `bash` ToolExecution。Evidence: [`evidence/2026-09-01-dsh-process-closure-live-chain.md`](evidence/2026-09-01-dsh-process-closure-live-chain.md)。 |
-| A3 | MCP 接入 | `done` | `pi-mcp-adapter` 已退役；`@deepseek-ai/dsh-mcp-client` 按 `MCP_SERVERS_JSON` 一 server 一插件实例，密钥只用 env 引用，`/ready` 投影 DSH 注册表。`tests/runtime/mcp-live.test.ts` 用官方 SDK 真 stdio server 验证连接 → `tools/list` 注册 → 实际调用回包；`mcp-entries.test.ts` 覆盖配置与密钥 fail-closed。对外 `sandbox-mcp` facade 是独立入口。 |
+| A2 | Required enterprise policy layers load | `partial` | 插件树、基础策略与 exec 工具链已有[既往取证](evidence/2026-09-01-dsh-process-closure-live-chain.md)。2026-09-06：AgentVersion 显式 deny、MCP 精确引用、风险跨具体性取更严已在**真实插件树 + `tools.execute`** 验证（含正向对照：被授权工具体执行一次），见[接入证据 §2](evidence/2026-09-06-agent-version-runtime-integration.md)。2026-09-06 P5：重建容器后以 admin 走完真机链——deny 版本使工具从模型侧消失且无 `tool_executions` 行、无 deny 对照版本工具执行成功（[证据 §5](evidence/2026-09-06-agent-version-runtime-integration.md)，开发栈）。审批停泊→批准→放行一次的浏览器专项仍待补。 |
+| A3 | MCP 接入 | `partial` | `@deepseek-ai/dsh-mcp-client` 连接、发现与调用已有真实 stdio 测试，外部 facade 仍为独立入口。2026-09-06：AgentVersion 引用现在**限制执行权限**——未引用 server/tool 一律拒、空引用零 MCP 权限、被引用工具经真实管线放行一次，见[接入证据 §2](evidence/2026-09-06-agent-version-runtime-integration.md)。目录不可读（`unknown`）与空目录已在校验面区分。2026-09-06 真机链证 config/options 的 `mcpReadiness=ready` 且不泄漏连接材料（[证据 §5.1](evidence/2026-09-06-agent-version-runtime-integration.md)）。合法引用调用一次的容器内工具链仍待补。 |
 | A4 | Multi-turn Session recoverable | `done` | DSH offline recovery/journal 用例覆盖 header 保留与空 checkpoint 单根连接。2026-09-01 compose：同一 Agent Session 原生 `create` → MySQL 落盘 → `resume`；Worker `SIGKILL` 换新 PID 后 follow-up 仍 `resume`，模型原样复述上一轮一次性口令。Evidence: [`evidence/2026-09-01-dsh-worker-restart-model-context.md`](evidence/2026-09-01-dsh-worker-restart-model-context.md)、[`evidence/2026-09-01-dsh-native-session-resume.md`](evidence/2026-09-01-dsh-native-session-resume.md)。 |
-| A5 | Agent Version pinned | `done` | credential/version binding tests under `agent/tests/a2a/` |
+| A5 | Agent Version pinned | `partial` | 版本 ID 与会话绑定已有实现和 `agent/tests/a2a/` 回归。2026-09-06：模型生成参数（maxTokens/effort）、persona 字面量与企业 section、逻辑路径的实际消费面已在**真实 wire request** 验证，配置契约（v1/legacy、字段校验、乐观并发激活）与配置面接口已落地并有单元/HTTP/BFF/前端回归，见[接入证据](evidence/2026-09-06-agent-version-runtime-integration.md)。2026-09-06 真机链证：旧会话追加轮次钉在其绑定版本（active 指针已后移仍不受影响）、新会话用当前 active 版本、激活乐观并发 409 回传当前指针（[证据 §5.2/§5.3](evidence/2026-09-06-agent-version-runtime-integration.md)，开发栈）；未改写历史 JSON/hash。 |
 
 ## B. State
 

@@ -36,10 +36,15 @@ HOTSPOT_LINE_BUDGETS = {
     # W2-D 曾抬到 1_672；去掉 expect-error 后收回 1_663；转 TS 又收回 9 行
     # （提升上去的 JSDoc @param 块比加上的类型声明更长）。仍是全仓最长的
     # 文件，阶段 D 收尾时应当拆。
-    "agent/src/application/fenced-tool-governance-recorder.ts": 1_654,
+    # 2026-09-06 拆出 durable-policy-replay.ts（DurablePolicyConflictError +
+    # assertCompatiblePolicyReplay，不碰仓储/事务/围栏的纯判定），
+    # 1_654 -> 1_558，预算收紧。
+    "agent/src/application/fenced-tool-governance-recorder.ts": 1_558,
     # 转 TS 时拆出 pi-run-executor-deps.ts（依赖面类型 + 三个不读 this 的
     # 纯判定），1_597 -> 1_526，预算收紧。改名 dsh-run-executor.ts。
-    "agent/src/application/dsh-run-executor.ts": 1_526,
+    # 2026-09-06 又拆出 approved-replay-claim.ts（已批准调用的续跑查找与
+    # 一次性消费 CAS），1_526 -> 1_505，预算继续收紧。
+    "agent/src/application/dsh-run-executor.ts": 1_505,
     # 转 TS 时拆出 container-mcp.ts（MCP 发现状态机），1_178 -> 1_065，预算收紧。
     "agent/src/bootstrap/container.ts": 1_065,
     # W2-D 曾抬到 1_443；Wave 6 收回。转 TS 时拆出 presentation/http/health-routes.ts
@@ -57,7 +62,9 @@ HOTSPOT_LINE_BUDGETS = {
     # review): AGENTS.md §3 applies to every production file, but only
     # agent/ and sandbox/ were pinned, so these three grew past 1000 lines
     # unnoticed. Pinned at their current length — split, do not raise.
-    "frontend/src/features/chat/ChatContext.tsx": 1_456,
+    # 2026-09-06 拆出 conversationProjection.ts（会话列表的两个纯投影），
+    # 1_456 -> 1_454，预算收紧。
+    "frontend/src/features/chat/ChatContext.tsx": 1_454,
     "frontend/src/features/chat/entityBridge.ts": 1_176,
     "frontend/src/shared/state/runReducer.ts": 1_492,
     "frontend/src/widgets/runtime-steps/InlineRuntimeSteps.tsx": 1_011,

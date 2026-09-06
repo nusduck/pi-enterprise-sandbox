@@ -564,3 +564,39 @@ Each entry should say **what changed**, **why**, and **which STATUS IDs** it aff
   - Chrome DevTools MCP 实机测量：6 项 Tab 宽度严格锁定 113.67px，Modal 宽高严格锁定 740px × 620px；
   - 自动化测试与检查全绿：`pytest` (104)、`exec` (346)、`contract` (50)、`api-server` (157)、`agent` (1219)、`frontend` (350) 全数通过；
   - 镜像与容器：`docker compose build frontend && docker compose up -d frontend` 重建并生效。
+
+## 2026-09-06 — AgentVersion 接入前置复核与工作规范优化
+
+- **Context:** 配置目录已能保存版本，但独立 DSH 探针发现版本权限、模型参数与 prompt 消费不完整；基础插件挂载的历史证据不足以证明整条配置链正确。
+- **Action:** 按用户要求优化 `AGENTS.md`，修正进程与版本权威描述，明确阶段/最终验证、前后端 DTO、协作所有权及证据边界。继续按 `design/agent-version-runtime-integration-plan.md` 实施，由 Luna 负责代码、主任务独立审查。
+- **Evidence:** 新增 `evidence/2026-09-06-agent-version-preflight.md`。对本地 MySQL 只读盘点得到 2 个 legacy 版本，均无 MCP 引用，共绑定 118 个历史 AgentSession；无配置/密钥原文输出、无历史配置回写，不外推生产影响。
+- **STATUS IDs:** A2/A3/A5 改为 `partial` 并注明具体缺口；H5/H6 保持 `partial`。本轮为实施中的阶段记录，完整审批/模型/浏览器/容器验收尚未完成，未宣称 P5 通过。
+
+## 2026-09-06 — AgentVersion 配置真正接到运行时（P1–P4 实施 + 阶段验证）
+
+- **Context:** 前置盘点（同日）确认配置目录能保存版本，但独立 DSH 探针证明版本的
+  工具授权、MCP 引用、风险/审批、模型参数与 persona 的**实际消费面**不完整——写进去
+  不报错却没有执行路径。按 `design/agent-version-runtime-integration-plan.md` 接手实施。
+- **Action:**
+  - P1 授权：`toolPolicy` 显式 deny、`mcpServers` 精确引用、风险跨具体性取更严、
+    空 allowlist 真正零工具、已批准调用的续跑查找+一次性消费 CAS（拆到
+    `application/approved-replay-claim.ts`）。
+  - P2/P4 配置契约：新增 `application/agent-config-validator.ts`（v1/legacy 契约、字段级
+    错误、MCP fail-closed、legacy 模型映射、reasoning effort 按适配器投影）与配置面接口
+    `GET /api/agents/config/options`、`POST /api/agents/config/validate`（Agent 语义权威、
+    BFF 纯代理）；激活加 `expected_active_version_id` 乐观并发（409 带当前指针，
+    `application/durable-policy-replay.ts` 拆出纯判定）。前端拆出 `AgentConfigEditor`/
+    `AgentValidationPanel`、`conversationProjection.ts`，会话头/模型选择器读版本固定模型。
+  - P3 prompt/模型：prompt 拆成企业 section + 字面量 persona 变量（移除正文标题幂等），
+    roots 用服务端逻辑根；`maxOutputTokens`→`AgentOptions.maxTokens`、`thinkingLevel`→
+    agent scope `ModelSelection.reasoningEffort`（`infrastructure/dsh/reasoning-efforts.ts`
+    按路由适配器投影 effort，纠正退役的 pi-ai `medium` 枚举）。
+  - 按职责拆分让三个热点文件回到行数预算之下并收紧棘轮。
+- **Evidence:** [`evidence/2026-09-06-agent-version-runtime-integration.md`](evidence/2026-09-06-agent-version-runtime-integration.md)：
+  六套测试 + 全部类型检查 + 前端 build 绿；真实插件树 `tools.execute` 授权链（含正向对照）；
+  真实 `llm/stream` wire request（maxTokens/effort/字面量 persona/逻辑路径）；容器重建后
+  以测试账号 admin 走完 P5 真机全链（配置面→发布/激活→乐观并发 409→跨租户 404→运行链的
+  版本绑定、deny 端到端、旧会话版本钉住）。均为开发栈，不外推生产。
+- **STATUS IDs:** A2/A3/A5 保持 `partial` 并更新证据链接与已闭合缺口；H5/H6 不变。
+  本轮完成 P1–P5 的运行证据（P5 为开发栈真机链）；生产迁移与专项审批浏览器用例仍待补，
+  未据此翻绿 §32 行。

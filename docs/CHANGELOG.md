@@ -19,6 +19,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   改配置是建新版本而非原地改写，切换活跃版本只影响**新建**的会话；正在跑的 Run
   与已存在的会话继续用它们钉住的版本。非法配置在建版本时即被拒。
 
+- **AgentVersion 配置真正接到运行时**：管理员在版本里配的东西现在**实际生效**，
+  不再是写进去不报错却没有执行路径。`toolPolicy` 的显式 `deny` 拦在真实工具体之前；
+  `mcpServers` 的引用成为执行授权（未引用的 server/tool 一律拒绝，空引用 = 零 MCP 权限）；
+  风险策略平台层与版本层各自解析后取更严，租户只能收紧；`systemPrompt` 作为字面量
+  persona 注入（`{{...}}`、代码块、中文原样送达），企业条款恰好一份、不可覆盖；
+  `modelPolicy.maxOutputTokens` 与 `thinkingLevel` 出现在真实主对话请求上，辅助请求
+  各自策略不变；prompt 里的路径用服务端解析的逻辑根，不泄漏宿主物理根。
+- **新增只解析、不落库的配置面**：`GET /api/agents/config/options`（能力 schema 与
+  平台约束）与 `POST /api/agents/config/validate`（字段级校验，200+`valid:false`），
+  均为 admin。管理页拆出结构化编辑器与校验面板：表单与 JSON 共用一份草稿、字段级错误
+  可定位、能力目录不可达与"空清单"区分开、不支持字段不提供假开关。
+- **激活加乐观并发**：发布/激活可带 `expected_active_version_id`，与当前指针不一致返回
+  409 并回传当前指针，防止两位管理员互相覆盖。不传该字段保持旧客户端兼容。
+
 ### Changed
 
 - **全面清理 Pi SDK 遗留命名与测试残留**：将 `agent/src/application/` 下的 6 个 `pi-run-*` 模块重命名为 `dsh-run-*`，核心执行器规范为 `DshRunExecutor`；`pi-session-journal-repository.ts` 重命名为 `session-journal-repository.ts`；测试目录 `agent/tests/pi/` 统一迁移规范为 `agent/tests/executor/`；清理废弃的 `agent/tests/sdk-compat/` 目录；彻底移除历史 `Pi*` 兼容别名导出，全仓内部调用统一切换至 DSH 执行器与预算。
@@ -27,6 +41,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **沙箱环境隔离由 `spawnLaunch` 代码强制**：`envMode: 'inherited'` 不发 `--clearenv`，"沙箱不继承宿主 env" 这条不变量因此只剩调用方一处在守。`spawnLaunch` 的选项类型排除 `env` 并在运行时剥掉，沙箱内环境只能来自 `OUTER_PROCESS_ENV` + 已校验的 `EnvPlan`。
 - **启用后的 Skill 草稿不再重复列在 Drafts**：启用是复制字节、草稿不删，所以 `skill_drafts` 里会一直有它。Agent 给这类条目打 `published: true` / `status: 'published'`，UI 的 Drafts 区只列待启用的。三层 Skill 卡片统一结构，操作按钮收进卡片底部的动作行，不再被拉成整行宽的色块。
 ### Fixed
+
+- **模型推理档位对齐真实适配器**：模型目录的 `thinking_levels` 曾沿用已退役的 pi-ai
+  枚举（含 `medium`），而当前 `deepseek-official` 适配器只接受 `off|low|high|max`。
+  改为按路由适配器投影可选 effort，保存不支持的档位时报错、起 Run 时 fail-closed，
+  不再静默降级到别的档位。
 
 - **`/api/files/download` 与 `/api/files/upload` 走错了工作区**：exec 公共面
   `/sessions/{id}/files/*` 里的 `{id}` 是 `workspace_id`，这两条代理却直接把浏览器
