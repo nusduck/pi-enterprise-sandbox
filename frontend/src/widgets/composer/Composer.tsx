@@ -79,6 +79,7 @@ export function Composer() {
     displayMessages,
     models,
     selectedModelId,
+    fixedModelId,
     setSelectedModelId,
     agents,
     selectedAgentId,
@@ -590,6 +591,7 @@ export function Composer() {
                 models={models}
                 selectedModelId={selectedModelId}
                 onSelect={setSelectedModelId}
+                fixedModelId={fixedModelId}
                 disabled={mode !== 'idle' || models.length === 0}
               />
 

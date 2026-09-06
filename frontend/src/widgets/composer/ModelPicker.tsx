@@ -62,6 +62,8 @@ export type ModelPickerProps = {
   models: ModelItem[];
   selectedModelId: string | null;
   onSelect: (modelId: string | null) => void;
+  /** A conversation AgentVersion fixed this model on the server. */
+  fixedModelId?: string | null;
   disabled?: boolean;
 };
 
@@ -69,6 +71,7 @@ export function ModelPicker({
   models,
   selectedModelId,
   onSelect,
+  fixedModelId = null,
   disabled = false,
 }: ModelPickerProps) {
   const listId = useId();
@@ -84,9 +87,7 @@ export function ModelPicker({
 
   const selectedLabel = selected
     ? modelNameOf(selected)
-    : models.length
-      ? 'Select model'
-      : 'No models';
+    : fixedModelId || selectedModelId || (models.length ? 'Select model' : 'No models');
 
   const limits = modelLimitsLine(selected);
 
@@ -189,7 +190,7 @@ export function ModelPicker({
 
   return (
     <div
-      className={`model-picker${open ? ' is-open' : ''}${disabled ? ' is-disabled' : ''}`}
+      className={`model-picker${open ? ' is-open' : ''}${disabled || fixedModelId ? ' is-disabled' : ''}`}
       ref={rootRef}
     >
       <button
@@ -197,16 +198,19 @@ export function ModelPicker({
         type="button"
         className="model-picker-trigger"
         id="composer-model"
-        disabled={disabled || models.length === 0}
+        disabled={disabled || Boolean(fixedModelId) || models.length === 0}
         aria-haspopup="listbox"
         aria-expanded={open}
         aria-controls={listId}
-        aria-label="Select model"
+        aria-label={fixedModelId ? 'Model fixed by Agent version' : 'Select model'}
+        title={fixedModelId ? `Model fixed by Agent version · ${fixedModelId}` : undefined}
         onClick={toggle}
         onKeyDown={onTriggerKeyDown}
       >
         <span className="model-picker-trigger-name">{selectedLabel}</span>
-        {selected?.context_window ? (
+        {fixedModelId ? (
+          <span className="model-picker-badge model-picker-fixed-badge">Fixed</span>
+        ) : selected?.context_window ? (
           <span className="model-picker-badge" title={limits}>
             {formatTokenK(selected.context_window)}
           </span>

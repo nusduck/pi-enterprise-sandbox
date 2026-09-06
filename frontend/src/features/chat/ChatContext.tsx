@@ -64,6 +64,7 @@ import { projectConversationMessages } from './projections/conversationMessages'
 import { runUploadQueue } from './uploads/runUploadQueue';
 import { useRunControls } from './controllers/useRunControls';
 import { useModelSelection } from './useModelSelection';
+import { fixedModelIdOf, mergeConversation } from './conversationProjection';
 import { useAgentSelection } from './useAgentSelection';
 import { resolveApprovalDecision } from './approvalDecision';
 
@@ -74,6 +75,8 @@ export type ChatController = {
   dropzoneVisible: boolean;
   models: ModelItem[];
   selectedModelId: string | null;
+  /** Model pinned by the bound AgentVersion for the focused conversation. */
+  fixedModelId: string | null;
   setSelectedModelId: (modelId: string | null) => void;
   /** org 内可选的智能体；只有一个时 UI 不渲染选择器（D2：一会话一 Agent）。 */
   agents: Agent[];
@@ -224,14 +227,20 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     () => stateRef.current.conversationId,
     [],
   );
+  const fixedModelIdForConversation = useCallback(
+    (conversationId: string | null | undefined) =>
+      fixedModelIdOf(stateRef.current.conversations, conversationId),
+    [],
+  );
   const {
     models,
     selectedModelId,
+    fixedModelId,
     setSelectedModelId,
     refreshModels,
     applyModelForConversation,
     resetModels,
-  } = useModelSelection(bridge, currentConversationId);
+  } = useModelSelection(bridge, currentConversationId, fixedModelIdForConversation);
   const {
     agents,
     selectedAgentId,
@@ -357,10 +366,12 @@ export function ChatProvider({ children }: { children: ReactNode }) {
 
         setState((s) => {
           // Focus switch without aborting abortCtrl (background run continues)
+          const conversations = mergeConversation(s.conversations, conv);
           const n = update(s, {
             conversationId: conv.id,
             messages,
             sessionId,
+            conversations,
             artifacts: [],
             attachments: [],
             traceId: null,
@@ -1309,6 +1320,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
               conversationId: conv.id,
               messages,
               sessionId: conv.sandbox_session_id || null,
+              conversations: mergeConversation(s.conversations, conv),
             }),
           );
           persistConversationId(conv.id);
@@ -1397,6 +1409,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     dropzoneVisible,
     models,
     selectedModelId,
+    fixedModelId,
     setSelectedModelId,
     agents,
     selectedAgentId,

@@ -81,6 +81,18 @@ describe('conversation model preference', () => {
     );
   });
 
+  it('always uses the server-bound AgentVersion model, even if it is absent from the catalog', () => {
+    assert.equal(
+      resolveConversationModelId({
+        fixedModelId: 'agent-pinned-model',
+        stored: 'user-choice',
+        lastRunModelId: 'previous-model',
+        enabledIds: ['user-choice', 'previous-model'],
+      }),
+      'agent-pinned-model',
+    );
+  });
+
   it('falls back to the latest run model when this chat has no picker pref', () => {
     const modelId = lastRunModelIdForConversation(
       {

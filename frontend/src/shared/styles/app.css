@@ -2272,6 +2272,8 @@ body {
   color: var(--color-text-dim);
   letter-spacing: -0.2px;
 }
+.model-picker-fixed-badge { color: var(--color-primary-tint); }
+.model-picker.is-disabled .model-picker-trigger { cursor: default; opacity: 0.65; }
 
 .model-picker-limits { font-size: 11px; color: var(--color-text-dim); font-family: var(--font-mono); }
 
@@ -3905,6 +3907,182 @@ body {
   background: var(--color-bg-card);
   border-bottom-color: transparent;
 }
+
+/* AgentVersion configuration editor. The form and JSON textarea intentionally
+   share one draft; these styles keep the structured projection scannable while
+   retaining the existing management page vocabulary. */
+.agent-config-editor {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+.agent-config-block {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-app);
+}
+.agent-config-block-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.agent-config-block-head h4 {
+  margin: 0;
+  color: var(--color-text);
+  font-size: 13px;
+}
+.agent-search-field { max-width: 360px; }
+.agent-permission-list,
+.agent-mcp-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.agent-permission-row,
+.agent-mcp-server-row,
+.agent-mcp-tool-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 36px;
+  padding: 7px 9px;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-sm);
+  color: var(--color-text);
+  font-size: 12px;
+}
+.agent-permission-row > span:first-child,
+.agent-mcp-server-row > span:nth-child(2) {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.agent-permission-row small,
+.agent-mcp-server-row small,
+.agent-mcp-card small {
+  color: var(--color-text-muted);
+  font-size: 11px;
+  font-weight: 400;
+}
+.agent-permission-row select { min-width: 150px; }
+.agent-permission-row-unknown {
+  justify-content: space-between;
+  background: var(--color-warning-soft);
+}
+.agent-mcp-card {
+  margin: 0;
+  padding: 8px;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-sm);
+}
+.agent-mcp-server-row {
+  padding: 0 0 7px;
+  border: 0;
+  border-bottom: 1px solid var(--color-border-subtle);
+  border-radius: 0;
+}
+.agent-mcp-tools {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 4px;
+  padding-top: 7px;
+}
+.agent-mcp-tool-row { min-height: 30px; border: 0; padding: 4px; }
+.agent-mcp-card-stale {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  background: var(--color-warning-soft);
+}
+.agent-mcp-card-stale small { flex-basis: 100%; }
+.agent-catalog-warning,
+.agent-editor-locked,
+.agent-field-error {
+  color: var(--color-warning);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.agent-catalog-warning,
+.agent-editor-locked {
+  margin: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--color-warning);
+  border-radius: var(--radius-sm);
+  background: var(--color-warning-soft);
+}
+.agent-field-error { color: var(--color-danger); }
+.agent-editor-locked ul { margin: 5px 0; padding-left: 20px; }
+.agent-editor-locked span { display: block; color: var(--color-text-muted); }
+.agent-managed-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 6px 14px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 12px;
+}
+.agent-managed-list li {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--color-text);
+}
+.agent-managed-list span { color: var(--color-text-muted); }
+.agent-validation-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.agent-validation-status,
+.agent-validation-errors,
+.agent-validation-warnings,
+.agent-normalization-diff,
+.agent-effective-summary,
+.agent-version-preview {
+  margin: 0;
+  padding: 9px 11px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  color: var(--color-text);
+  font-size: 12px;
+}
+.agent-validation-status.valid { color: var(--color-success); background: var(--color-success-soft); }
+.agent-validation-status.pending { color: var(--color-text-secondary); background: var(--material-fill-secondary); }
+.agent-validation-status.unavailable,
+.agent-validation-errors { color: var(--color-danger); background: var(--color-danger-soft); }
+.agent-validation-warnings { color: var(--color-warning); background: var(--color-warning-soft); }
+.agent-validation-panel ul { margin: 5px 0 0; padding-left: 19px; }
+.agent-validation-panel code { font-family: var(--font-mono); font-size: 11px; }
+.agent-validation-panel pre,
+.agent-version-preview pre {
+  max-height: 20rem;
+  margin: 8px 0 0;
+  padding: 9px;
+  overflow: auto;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg-input);
+  color: var(--color-text);
+  font: 11px/1.5 var(--font-mono);
+  white-space: pre-wrap;
+}
+.agent-validation-panel summary { cursor: pointer; font-weight: 600; }
+.agent-diff-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+.agent-diff-grid > div > span { color: var(--color-text-muted); font-size: 11px; }
+.agent-version-preview { background: var(--color-bg-app); }
 .mgmt-expand-row td {
   padding: 0 14px 14px !important;
   background: var(--color-bg-card);

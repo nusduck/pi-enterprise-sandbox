@@ -78,9 +78,14 @@ export type AttachmentManifestItem = {
 
 export type ConversationSummary = {
   id: string;
-  title?: string;
-  updated_at?: string;
-  created_at?: string;
+  title?: string | null;
+  updated_at?: string | null;
+  created_at?: string | null;
+  /** Server-resolved Agent identity for this conversation (immutable). */
+  agent_id?: string | null;
+  agent_version_id?: string | null;
+  agent_version_no?: number | null;
+  model_policy?: { fixed_model_id: string | null } | null;
   sandbox_session_id?: string | null;
   messages?: Array<{
     role?: string;

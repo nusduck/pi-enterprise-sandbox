@@ -48,6 +48,14 @@ export const ConversationSchema = z
     sandbox_session_id: z.string().optional().nullable(),
     // 会话绑定的 Agent（建会话时钉死，此后不可变）。
     agent_id: z.string().optional().nullable(),
+    // Agent 服务在建会话时解析出的不可变版本。前端只读展示，绝不从
+    // Agent 目录当前 active_version 推测旧会话使用的版本。
+    agent_version_id: z.string().optional().nullable(),
+    agent_version_no: z.number().optional().nullable(),
+    model_policy: z
+      .object({ fixed_model_id: z.string().nullable() })
+      .optional()
+      .nullable(),
     messages: z.array(ConversationMessageSchema).optional(),
   })
   .passthrough();

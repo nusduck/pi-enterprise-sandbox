@@ -112,10 +112,14 @@ export function lastRunModelIdForConversation(
 }
 
 export function resolveConversationModelId(opts: {
+  /** Server-bound AgentVersion model; takes precedence over local preferences. */
+  fixedModelId?: string | null;
   stored: string | null | undefined;
   lastRunModelId?: string | null;
   enabledIds: Iterable<string>;
 }): string | null {
+  const fixed = String(opts.fixedModelId || '').trim();
+  if (fixed) return fixed;
   const enabled = [...opts.enabledIds]
     .map((id) => String(id || '').trim())
     .filter(Boolean);

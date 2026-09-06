@@ -110,6 +110,9 @@ export const McpServerSchema = z
     last_refreshed_at: z.string().optional().nullable(),
     dynamic: z.boolean().optional(),
     registry_id: z.string().optional().nullable(),
+    /** Bare names discovered from the currently reachable server. */
+    tools: z.array(z.unknown()).optional(),
+    tool_names: z.array(z.string()).optional(),
   })
   .passthrough();
 
@@ -170,6 +173,9 @@ export const ModelItemSchema = z
     max_output_tokens: z.number().optional().nullable(),
     supports_tool_call: z.boolean().optional(),
     supports_reasoning: z.boolean().optional(),
+    supports_temperature: z.boolean().optional(),
+    temperature_min: z.number().optional().nullable(),
+    temperature_max: z.number().optional().nullable(),
     input_modalities: z.array(z.string()).optional(),
     output_modalities: z.array(z.string()).optional(),
     thinking_levels: z.array(z.string()).optional(),

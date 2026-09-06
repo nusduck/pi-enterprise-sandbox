@@ -7,30 +7,87 @@
  * （`docs/design/multi-agent-selection.md` D4）。把它写成"保存"而不解释，用户
  * 会以为是原地修改，然后困惑于"为什么改了配置老会话没变"。
  */
-import { useCallback, useEffect, useState, type FormEvent } from 'react';
+import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
 import {
   createAgent,
   createAgentVersion,
+  getAgentConfigOptions,
   listAgentVersions,
   listAgents,
+  validateAgentConfig,
   setAgentActiveVersion,
   type Agent,
+  type AgentConfigOptions,
+  type AgentConfigValidation,
   type AgentVersion,
+  type ConfigDiagnostic,
 } from '../../shared/api';
 import {
+  listMcpServers,
+  listModels,
+  listTools,
+  type McpServerItem,
+  type ModelItem,
+  type SoftListResult,
+  type ToolRegistryItem,
+} from '../../shared/api/capabilities';
+import {
   activeVersionOf,
+  configNeedsCapability,
   formatAgentConfig,
   isConfigDraftChanged,
   parseAgentConfigDraft,
   sortAgentsForDisplay,
+  type AgentConfigValidationState,
 } from './agentHelpers';
+import { AgentConfigEditor, type CatalogState } from './AgentConfigEditor';
+import { AgentValidationPanel } from './AgentValidationPanel';
 import { IconRefresh, IconSparkles } from '../../shared/ui/Icons';
 
-const NEW_AGENT_CONFIG_PLACEHOLDER = `{
-  "systemPrompt": "你是数据分析助手",
-  "skills": [],
-  "toolPolicy": {}
-}`;
+const EMPTY_VALIDATION: AgentConfigValidationState = {
+  status: 'idle',
+  errors: [],
+  warnings: [],
+};
+
+function loadingCatalog<T>(): CatalogState<T> {
+  return { items: [], available: false, loading: true, error: null };
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error || 'Unknown error');
+}
+
+function conflictError(error: unknown): boolean {
+  return Boolean(error && typeof error === 'object' && 'status' in error && (error as { status?: number }).status === 409);
+}
+
+function validationState(result: AgentConfigValidation): AgentConfigValidationState {
+  const errors = Array.isArray(result.errors) ? result.errors : [];
+  const warnings = Array.isArray(result.warnings) ? result.warnings : [];
+  return {
+    status: result.valid && errors.length === 0 ? 'valid' : 'invalid',
+    errors,
+    warnings,
+    normalizedConfig: result.normalizedConfig,
+    effectiveSummary: result.effectiveSummary,
+    capabilityRevision: result.capabilityRevision,
+  };
+}
+
+export function catalogFromResult<T>(result: SoftListResult<T>, previous: CatalogState<T>): CatalogState<T> {
+  // `softGet` marks a non-404 endpoint as available so older capability pages
+  // can distinguish "not implemented" from "temporarily failed". For an
+  // editor, an HTTP failure is still unusable: never turn it into an empty
+  // directory that could make a referenced capability look safe to publish.
+  const usable = result.available && !result.error;
+  if (usable) {
+    return { items: result.items, available: true, loading: false, error: result.error || null };
+  }
+  // A failed refresh must never replace a previously known directory with an
+  // empty list. Empty is a valid response only when the endpoint was reachable.
+  return { ...previous, loading: false, available: false, error: result.error || null };
+}
 
 export function AgentsPage() {
   const [agents, setAgents] = useState<Agent[]>([]);
@@ -39,34 +96,114 @@ export function AgentsPage() {
   const [configDraft, setConfigDraft] = useState('');
   const [newName, setNewName] = useState('');
   const [newDescription, setNewDescription] = useState('');
-  const [newConfig, setNewConfig] = useState('');
+  const [newConfig, setNewConfig] = useState(() => formatAgentConfig({ schemaVersion: 1 }));
+  const [newValidation, setNewValidation] = useState<AgentConfigValidationState>(EMPTY_VALIDATION);
+  const [validation, setValidation] = useState<AgentConfigValidationState>(EMPTY_VALIDATION);
+  const [configOptions, setConfigOptions] = useState<AgentConfigOptions | null>(null);
+  const [catalogs, setCatalogs] = useState<{
+    models: CatalogState<ModelItem>;
+    tools: CatalogState<ToolRegistryItem>;
+    mcpServers: CatalogState<McpServerItem>;
+  }>({ models: loadingCatalog(), tools: loadingCatalog(), mcpServers: loadingCatalog() });
+  const [viewVersionId, setViewVersionId] = useState<string | null>(null);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [loading, setLoading] = useState(true);
   const [mutating, setMutating] = useState(false);
+  const versionsRequestRef = useRef(0);
+  const refreshRequestRef = useRef(0);
+  const catalogsRequestRef = useRef(0);
+  const validationRequestRef = useRef(0);
+  const validationAbortRef = useRef<AbortController | null>(null);
+  const draftByAgentRef = useRef(new Map<string, string>());
+  const mutationRef = useRef(0);
+  const configDraftRef = useRef(configDraft);
+  const newConfigRef = useRef(newConfig);
+  const selectedAgentRef = useRef<Agent | null>(null);
+  const selectedAgentIdRef = useRef(selectedAgentId);
+  const mountedRef = useRef(true);
+  configDraftRef.current = configDraft;
+  newConfigRef.current = newConfig;
+  selectedAgentIdRef.current = selectedAgentId;
 
   const selectedAgent = agents.find((agent) => agent.agent_id === selectedAgentId) ?? null;
+  selectedAgentRef.current = selectedAgent;
   const activeVersion = activeVersionOf(selectedAgent, versions);
+  const viewedVersion = versions.find((version) => version.agent_version_id === viewVersionId) ?? null;
   const configChanged = isConfigDraftChanged(configDraft, activeVersion?.config);
+  const parsedDraft = parseAgentConfigDraft(configDraft);
 
-  const loadVersions = useCallback(async (agentId: string) => {
-    if (!agentId) {
-      setVersions([]);
-      setConfigDraft('');
-      return;
-    }
-    const detail = await listAgentVersions(agentId);
-    setVersions(detail.versions);
-    const active = activeVersionOf(detail.agent, detail.versions);
-    setConfigDraft(formatAgentConfig(active?.config));
+  const loadCatalogs = useCallback(async () => {
+    const requestId = ++catalogsRequestRef.current;
+    const results = await Promise.allSettled([
+      getAgentConfigOptions(),
+      listModels(),
+      listTools(),
+      listMcpServers(),
+    ]);
+    if (requestId !== catalogsRequestRef.current) return;
+    const [optionsResult, modelsResult, toolsResult, mcpResult] = results;
+    if (optionsResult.status === 'fulfilled') setConfigOptions(optionsResult.value);
+    else setConfigOptions(null);
+    setCatalogs((previous) => ({
+      models: modelsResult.status === 'fulfilled'
+        ? catalogFromResult(modelsResult.value, previous.models)
+        : { ...previous.models, loading: false, available: false, error: errorMessage(modelsResult.reason) },
+      tools: toolsResult.status === 'fulfilled'
+        ? catalogFromResult(toolsResult.value, previous.tools)
+        : { ...previous.tools, loading: false, available: false, error: errorMessage(toolsResult.reason) },
+      mcpServers: mcpResult.status === 'fulfilled'
+        ? catalogFromResult(mcpResult.value, previous.mcpServers)
+        : { ...previous.mcpServers, loading: false, available: false, error: errorMessage(mcpResult.reason) },
+    }));
   }, []);
 
-  const refresh = useCallback(async (preferAgentId?: string) => {
+  const loadVersions = useCallback(async (
+    agentId: string,
+    preserveDraft = false,
+    expectedSelectedAgentId?: string,
+  ): Promise<boolean> => {
+    const requestId = ++versionsRequestRef.current;
+    if (!agentId) {
+      setVersions([]);
+      if (!preserveDraft) setConfigDraft('');
+      return true;
+    }
+    const detail = await listAgentVersions(agentId);
+    if (
+      requestId !== versionsRequestRef.current ||
+      (expectedSelectedAgentId && selectedAgentIdRef.current !== expectedSelectedAgentId)
+    ) return false;
+    setVersions(detail.versions);
+    setAgents((current) => current.map((agent) =>
+      agent.agent_id === agentId ? { ...agent, ...detail.agent } : agent,
+    ));
+    const active = activeVersionOf(detail.agent, detail.versions);
+    if (!preserveDraft) {
+      setConfigDraft(formatAgentConfig(active?.config));
+      setViewVersionId(active?.agent_version_id ?? null);
+      setValidation(EMPTY_VALIDATION);
+    }
+    return true;
+  }, []);
+
+  const refresh = useCallback(async (
+    preferAgentId?: string,
+    preserveDraft = false,
+    expectedSelectedAgentId?: string,
+  ) => {
+    const requestId = ++refreshRequestRef.current;
     setLoading(true);
     setError('');
     try {
-      const list = sortAgentsForDisplay(await listAgents());
+      const [agentList] = await Promise.all([listAgents(), loadCatalogs()]);
+      if (requestId !== refreshRequestRef.current) return;
+      const list = sortAgentsForDisplay(agentList);
       setAgents(list);
+      if (
+        expectedSelectedAgentId &&
+        selectedAgentIdRef.current !== expectedSelectedAgentId
+      ) return;
       const next =
         (preferAgentId && list.some((a) => a.agent_id === preferAgentId)
           ? preferAgentId
@@ -74,98 +211,295 @@ export function AgentsPage() {
         list[0]?.agent_id ??
         '';
       setSelectedAgentId(next);
-      await loadVersions(next);
+      await loadVersions(next, preserveDraft, expectedSelectedAgentId);
     } catch (err) {
-      setError((err as Error).message || 'Failed to load agents');
+      if (requestId === refreshRequestRef.current && mountedRef.current) {
+        setError(errorMessage(err) || 'Failed to load agents');
+      }
     } finally {
-      setLoading(false);
+      if (requestId === refreshRequestRef.current && mountedRef.current) setLoading(false);
     }
-  }, [loadVersions]);
+  }, [loadCatalogs, loadVersions]);
 
   useEffect(() => {
+    // StrictMode runs effect setup → cleanup → setup in development. Reset the
+    // liveness flag during setup so the second (real) setup can still publish
+    // refresh/validation results; the final cleanup marks the component dead.
+    mountedRef.current = true;
     void refresh();
+    return () => {
+      mountedRef.current = false;
+      validationAbortRef.current?.abort();
+    };
   }, [refresh]);
 
+  useEffect(() => {
+    const requestId = ++validationRequestRef.current;
+    validationAbortRef.current?.abort();
+    const parsed = parseAgentConfigDraft(configDraft);
+    if (!selectedAgentId) {
+      setValidation(EMPTY_VALIDATION);
+      return;
+    }
+    if (!parsed.ok) {
+      setValidation({ status: 'invalid', errors: [{ path: '', code: 'JSON_INVALID', message: parsed.error }], warnings: [] });
+      return;
+    }
+    const controller = new AbortController();
+    validationAbortRef.current = controller;
+    setValidation({ ...EMPTY_VALIDATION, status: 'pending' });
+    const timer = window.setTimeout(() => {
+      void validateAgentConfig(parsed.config, {
+        agentId: selectedAgentId,
+        signal: controller.signal,
+      }).then((result) => {
+        if (requestId !== validationRequestRef.current) return;
+        setValidation(validationState(result));
+      }).catch((err: unknown) => {
+        if (controller.signal.aborted || requestId !== validationRequestRef.current) return;
+        setValidation({ status: 'unavailable', errors: [], warnings: [], message: errorMessage(err) });
+      });
+    }, 300);
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
+    };
+  }, [configDraft, configOptions?.capabilityRevision, selectedAgentId]);
+
   async function selectAgent(agentId: string) {
+    const previousAgentId = selectedAgentId;
+    if (previousAgentId && configChanged) draftByAgentRef.current.set(previousAgentId, configDraft);
     setSelectedAgentId(agentId);
     setError('');
     setNotice('');
     try {
-      await loadVersions(agentId);
+      const savedDraft = draftByAgentRef.current.get(agentId);
+      const loaded = await loadVersions(agentId, Boolean(savedDraft));
+      // The user may have selected another Agent while this request was in
+      // flight. A late response must not move that newer page back to A.
+      if (loaded && selectedAgentIdRef.current === agentId && savedDraft) {
+        setConfigDraft(savedDraft);
+        setValidation(EMPTY_VALIDATION);
+      }
     } catch (err) {
-      setError((err as Error).message || 'Failed to load version history');
+      setError(errorMessage(err) || 'Failed to load version history');
     }
+  }
+
+  async function validateForWrite(
+    config: Record<string, unknown>,
+    agentId?: string,
+  ): Promise<AgentConfigValidation | null> {
+    try {
+      const result = await validateAgentConfig(config, {
+        agentId: agentId || null,
+      });
+      return result;
+    } catch (err) {
+      if (mountedRef.current) setError(`Could not validate this configuration: ${errorMessage(err)}`);
+      return null;
+    }
+  }
+
+  function hasUnavailableDependency(config: Record<string, unknown>): boolean {
+    return (
+      (configNeedsCapability(config, 'models') && !catalogs.models.available) ||
+      (configNeedsCapability(config, 'tools') && !catalogs.tools.available) ||
+      (configNeedsCapability(config, 'mcp') && !catalogs.mcpServers.available)
+    );
   }
 
   async function submitNewAgent(event: FormEvent) {
     event.preventDefault();
+    if (mutationRef.current) return;
+    const operationId = mutationRef.current + 1;
+    mutationRef.current = operationId;
+    setMutating(true);
+    const draftSnapshot = newConfig;
+    const nameSnapshot = newName.trim();
+    const descriptionSnapshot = newDescription.trim() || null;
     const parsed = parseAgentConfigDraft(newConfig);
     if (!parsed.ok) {
-      setError(parsed.error);
+      setNewValidation({ status: 'invalid', errors: [{ path: '', code: 'JSON_INVALID', message: parsed.error }], warnings: [] });
+      mutationRef.current = 0;
+      setMutating(false);
       return;
     }
-    setMutating(true);
     setError('');
     setNotice('');
     try {
+      if (!configOptions) {
+        setNewValidation({ status: 'unavailable', errors: [], warnings: [], message: 'Configuration options are unavailable' });
+        return;
+      }
+      if (hasUnavailableDependency(parsed.config)) {
+        setNewValidation({ status: 'unavailable', errors: [], warnings: [], message: 'A referenced capability directory is unavailable' });
+        return;
+      }
+      const checked = await validateForWrite(parsed.config);
+      if (!checked) {
+        setNewValidation({ status: 'unavailable', errors: [], warnings: [], message: 'Validation request failed' });
+        return;
+      }
+      const checkedState = validationState(checked);
+      if (!mountedRef.current || mutationRef.current !== operationId) return;
+      if (newConfigRef.current !== draftSnapshot) {
+        setNewValidation({ status: 'unavailable', errors: [], warnings: [], message: 'The draft changed while validation was running. Review the new draft before publishing.' });
+        return;
+      }
+      setNewValidation(checkedState);
+      if (checkedState.status !== 'valid') return;
       const created = await createAgent({
-        name: newName.trim(),
-        description: newDescription.trim() || null,
+        name: nameSnapshot,
+        description: descriptionSnapshot,
         config: parsed.config,
       });
+      if (!mountedRef.current || mutationRef.current !== operationId) return;
       setNewName('');
       setNewDescription('');
-      setNewConfig('');
+      setNewConfig(formatAgentConfig({ schemaVersion: 1 }));
+      setNewValidation(EMPTY_VALIDATION);
       setNotice(`Created "${created.agent.name}" with version 1.`);
-      await refresh(created.agent.agent_id);
+      if (mountedRef.current) await refresh(created.agent.agent_id);
     } catch (err) {
-      setError((err as Error).message || 'Failed to create agent');
+      if (mountedRef.current) setError(errorMessage(err) || 'Failed to create agent');
     } finally {
-      setMutating(false);
+      if (mutationRef.current === operationId) mutationRef.current = 0;
+      if (mountedRef.current) setMutating(false);
     }
   }
 
   async function saveAsNewVersion(activate: boolean) {
+    if (mutationRef.current) return;
+    const operationId = mutationRef.current + 1;
+    mutationRef.current = operationId;
+    setMutating(true);
+    const draftSnapshot = configDraft;
+    const agentSnapshot = selectedAgentId;
+    const expectedActiveVersionId = selectedAgent?.active_version_id ?? null;
     const parsed = parseAgentConfigDraft(configDraft);
     if (!parsed.ok) {
-      setError(parsed.error);
+      setValidation({ status: 'invalid', errors: [{ path: '', code: 'JSON_INVALID', message: parsed.error }], warnings: [] });
+      mutationRef.current = 0;
+      setMutating(false);
       return;
     }
-    setMutating(true);
     setError('');
     setNotice('');
     try {
+      if (!configOptions) {
+        setValidation({ status: 'unavailable', errors: [], warnings: [], message: 'Configuration options are unavailable' });
+        return;
+      }
+      if (hasUnavailableDependency(parsed.config)) {
+        setValidation({ status: 'unavailable', errors: [], warnings: [], message: 'A referenced capability directory is unavailable' });
+        return;
+      }
+      const checked = await validateForWrite(parsed.config, agentSnapshot);
+      if (!checked) {
+        setValidation({ status: 'unavailable', errors: [], warnings: [], message: 'Validation request failed' });
+        return;
+      }
+      const checkedState = validationState(checked);
+      if (!mountedRef.current || mutationRef.current !== operationId) return;
+      if (
+        configDraftRef.current !== draftSnapshot ||
+        selectedAgentIdRef.current !== agentSnapshot ||
+        selectedAgentRef.current?.active_version_id !== expectedActiveVersionId
+      ) {
+        setValidation({ status: 'unavailable', errors: [], warnings: [], message: 'The Agent or draft changed while validation was running. Review the current draft before publishing.' });
+        return;
+      }
+      setValidation(checkedState);
+      if (checkedState.status !== 'valid') return;
       const result = await createAgentVersion(selectedAgentId, {
         config: parsed.config,
         activate,
+        expected_active_version_id: expectedActiveVersionId,
       });
-      setNotice(
-        activate
-          ? `Created version ${result.version.version_no} and made it active. New conversations use it; existing ones keep their pinned version.`
-          : `Created version ${result.version.version_no} without activating it.`,
-      );
-      await refresh(selectedAgentId);
+      if (!mountedRef.current || mutationRef.current !== operationId) return;
+      if (configDraftRef.current === draftSnapshot && selectedAgentIdRef.current === agentSnapshot) {
+        draftByAgentRef.current.delete(selectedAgentId);
+        setConfigDraft(formatAgentConfig(result.version.config || parsed.config));
+        setViewVersionId(result.version.agent_version_id);
+      }
+      if (mountedRef.current && selectedAgentIdRef.current === agentSnapshot) {
+        setNotice(
+          activate
+            ? `Created version ${result.version.version_no} and made it active. New conversations use it; existing ones keep their pinned version.`
+            : `Created version ${result.version.version_no} without activating it.`,
+        );
+        await refresh(agentSnapshot, true, agentSnapshot);
+      }
     } catch (err) {
-      setError((err as Error).message || 'Failed to create version');
+      if (conflictError(err)) {
+        if (selectedAgentIdRef.current !== agentSnapshot) {
+          // A late response for Agent A must not navigate away from the Agent B
+          // the user selected while the write was in flight. Keep A's draft in
+          // its per-agent cache; selecting A later will reload its version line.
+          draftByAgentRef.current.set(agentSnapshot, draftSnapshot);
+          if (mountedRef.current) {
+            setError('A version conflict occurred for another Agent. Its draft was preserved.');
+          }
+        } else {
+          const preserved = configDraftRef.current === draftSnapshot ? draftSnapshot : configDraftRef.current;
+          await refresh(agentSnapshot, true, agentSnapshot);
+          if (mountedRef.current && selectedAgentIdRef.current === agentSnapshot) setConfigDraft(preserved);
+          if (mountedRef.current && selectedAgentIdRef.current === agentSnapshot) {
+            setValidation({ status: 'unavailable', errors: [], warnings: [], message: 'The active version changed. Review the refreshed version line before publishing this draft again.' });
+            setError('Activation conflict: another administrator changed the active version. Your draft was preserved.');
+          }
+        }
+      } else {
+        if (mountedRef.current) setError(errorMessage(err) || 'Failed to create version');
+      }
     } finally {
-      setMutating(false);
+      if (mutationRef.current === operationId) mutationRef.current = 0;
+      if (mountedRef.current) setMutating(false);
     }
   }
 
   async function activate(agentVersionId: string, versionNo: number) {
+    if (mutationRef.current) return;
+    const operationId = mutationRef.current + 1;
+    mutationRef.current = operationId;
     setMutating(true);
+    const agentSnapshot = selectedAgentId;
+    const draftSnapshot = configDraftRef.current;
+    const expectedActiveVersionId = selectedAgent?.active_version_id ?? null;
     setError('');
     setNotice('');
     try {
-      await setAgentActiveVersion(selectedAgentId, agentVersionId);
-      setNotice(
-        `Version ${versionNo} is now active. Only new conversations pick it up.`,
-      );
-      await refresh(selectedAgentId);
+      await setAgentActiveVersion(agentSnapshot, agentVersionId, expectedActiveVersionId);
+      if (!mountedRef.current || mutationRef.current !== operationId) return;
+      if (mountedRef.current && selectedAgentIdRef.current === agentSnapshot) {
+        setNotice(
+          `Version ${versionNo} is now active. Only new conversations pick it up.`,
+        );
+        await refresh(agentSnapshot, true, agentSnapshot);
+      }
     } catch (err) {
-      setError((err as Error).message || 'Failed to activate version');
+      if (conflictError(err)) {
+        if (selectedAgentIdRef.current !== agentSnapshot) {
+          draftByAgentRef.current.set(agentSnapshot, draftSnapshot);
+          if (mountedRef.current) {
+            setError('A version conflict occurred for another Agent. Its draft was preserved.');
+          }
+        } else {
+          const preserved = configDraftRef.current === draftSnapshot ? draftSnapshot : configDraftRef.current;
+          await refresh(agentSnapshot, true, agentSnapshot);
+          if (mountedRef.current && selectedAgentIdRef.current === agentSnapshot) setConfigDraft(preserved);
+          if (mountedRef.current && selectedAgentIdRef.current === agentSnapshot) {
+            setValidation({ status: 'unavailable', errors: [], warnings: [], message: 'The active version changed. Review the refreshed version line before activating again.' });
+            setError('Activation conflict: another administrator changed the active version. Your draft was preserved.');
+          }
+        }
+      } else {
+        if (mountedRef.current) setError(errorMessage(err) || 'Failed to activate version');
+      }
     } finally {
-      setMutating(false);
+      if (mutationRef.current === operationId) mutationRef.current = 0;
+      if (mountedRef.current) setMutating(false);
     }
   }
 
@@ -179,10 +513,10 @@ export function AgentsPage() {
             conversation; the choice is fixed for that conversation's lifetime.
           </p>
         </div>
-        <button
-          type="button"
-          className="mgmt-btn"
-          onClick={() => void refresh(selectedAgentId)}
+          <button
+            type="button"
+            className="mgmt-btn"
+          onClick={() => void refresh(selectedAgentId, configChanged, selectedAgentId)}
           disabled={loading}
         >
           <IconRefresh size={14} className={loading ? 'icon-spin' : ''} />
@@ -279,16 +613,17 @@ export function AgentsPage() {
                   />
                 </label>
               </div>
-              <label className="mgmt-field">
-                <span>Config JSON (Optional)</span>
-                <textarea
-                  className="mgmt-code-input"
-                  rows={8}
-                  value={newConfig}
-                  placeholder={NEW_AGENT_CONFIG_PLACEHOLDER}
-                  onChange={(event) => setNewConfig(event.target.value)}
-                />
-              </label>
+              <AgentConfigEditor
+                value={newConfig}
+                onChange={setNewConfig}
+                models={catalogs.models}
+                tools={catalogs.tools}
+                mcpServers={catalogs.mcpServers}
+                options={configOptions}
+                errors={newValidation.errors}
+                disabled={mutating}
+              />
+              <AgentValidationPanel state={newValidation} draft={newConfig} />
               <div className="mgmt-form-actions">
                 <button
                   type="submit"
@@ -313,31 +648,51 @@ export function AgentsPage() {
                   Existing conversations keep the version they were created with;
                   only new conversations pick up the change.
                 </p>
-                <label className="mgmt-field">
-                  <span>
-                    Config JSON
-                    {activeVersion ? ` (from v${activeVersion.version_no})` : ''}
-                  </span>
-                  <textarea
-                    className="mgmt-code-input"
-                    rows={16}
-                    value={configDraft}
-                    onChange={(event) => setConfigDraft(event.target.value)}
-                  />
-                </label>
+                <AgentConfigEditor
+                  value={configDraft}
+                  onChange={setConfigDraft}
+                  models={catalogs.models}
+                  tools={catalogs.tools}
+                  mcpServers={catalogs.mcpServers}
+                  options={configOptions}
+                  errors={validation.errors}
+                  disabled={mutating}
+                />
+                <AgentValidationPanel state={validation} draft={configDraft} />
+                {viewedVersion ? (
+                  <div className="agent-version-preview">
+                    <div className="agent-config-block-head">
+                      <h4>Viewing v{viewedVersion.version_no}</h4>
+                      <div className="mgmt-row-actions">
+                        <button
+                          type="button"
+                          className="mgmt-btn secondary sm"
+                          onClick={() => {
+                            setConfigDraft(formatAgentConfig(viewedVersion.config));
+                            setViewVersionId(viewedVersion.agent_version_id);
+                            setNotice(`Copied v${viewedVersion.version_no} into the draft. Publish it as a new version when ready.`);
+                          }}
+                        >
+                          Copy to draft
+                        </button>
+                      </div>
+                    </div>
+                    <pre>{formatAgentConfig(viewedVersion.config)}</pre>
+                  </div>
+                ) : null}
                 <div className="mgmt-form-actions">
                   <button
                     type="button"
                     className="mgmt-btn"
-                    disabled={mutating || !configChanged}
+                    disabled={mutating || !configChanged || !parsedDraft.ok || validation.status !== 'valid'}
                     onClick={() => void saveAsNewVersion(true)}
                   >
-                    Save as new active version
+                    Save and activate new version
                   </button>
                   <button
                     type="button"
                     className="mgmt-btn secondary"
-                    disabled={mutating || !configChanged}
+                    disabled={mutating || !configChanged || !parsedDraft.ok || validation.status !== 'valid'}
                     onClick={() => void saveAsNewVersion(false)}
                   >
                     Save without activating
@@ -381,6 +736,26 @@ export function AgentsPage() {
                             <td>{version.created_at || '—'}</td>
                             <td>
                               <div className="mgmt-row-actions">
+                                <button
+                                  type="button"
+                                  className="mgmt-btn secondary sm"
+                                  disabled={mutating}
+                                  onClick={() => setViewVersionId(version.agent_version_id)}
+                                >
+                                  View
+                                </button>
+                                <button
+                                  type="button"
+                                  className="mgmt-btn secondary sm"
+                                  disabled={mutating}
+                                  onClick={() => {
+                                    setConfigDraft(formatAgentConfig(version.config));
+                                    setViewVersionId(version.agent_version_id);
+                                    setNotice(`Copied v${version.version_no} into the draft. Publish it as a new version when ready.`);
+                                  }}
+                                >
+                                  Copy
+                                </button>
                                 <button
                                   type="button"
                                   className="mgmt-btn secondary sm"

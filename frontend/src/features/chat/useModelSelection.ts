@@ -21,6 +21,8 @@ import type { EntityBridge } from './entityBridge';
 export interface ModelSelection {
   models: ModelItem[];
   selectedModelId: string | null;
+  /** Server-bound model for the focused conversation, if its AgentVersion pins one. */
+  fixedModelId: string | null;
   /** 用户显式换模型；写入当前会话的偏好。 */
   setSelectedModelId: (modelId: string | null) => void;
   /** 拉取启用的模型清单，并按当前会话重算选中项。 */
@@ -39,6 +41,9 @@ export interface ModelSelection {
 export function useModelSelection(
   bridge: EntityBridge,
   currentConversationId: () => string | null,
+  fixedModelIdForConversation: (
+    conversationId: string | null | undefined,
+  ) => string | null,
 ): ModelSelection {
   const [models, setModels] = useState<ModelItem[]>([]);
   const [selectedModelId, setSelectedModelIdState] = useState<string | null>(() => {
@@ -58,24 +63,33 @@ export function useModelSelection(
         bridge.getStore().runsById,
         conversationId,
       );
+      const fixed = fixedModelIdForConversation(conversationId);
       const next = resolveConversationModelId({
+        fixedModelId: fixed,
         stored,
         lastRunModelId: lastRun,
         enabledIds,
       });
       setSelectedModelIdState(next);
-      if (next !== stored) writeConversationModelId(conversationId, next);
+      // The AgentVersion is server authority. Do not overwrite the user's
+      // per-conversation preference with a temporary fixed model value.
+      if (!fixed && next !== stored) writeConversationModelId(conversationId, next);
     },
-    [bridge],
+    [bridge, fixedModelIdForConversation],
   );
 
   const setSelectedModelId = useCallback(
     (modelId: string | null) => {
+      const fixed = fixedModelIdForConversation(currentConversationId());
+      if (fixed) {
+        setSelectedModelIdState(fixed);
+        return;
+      }
       const normalized = String(modelId || '').trim() || null;
       setSelectedModelIdState(normalized);
       writeConversationModelId(currentConversationId(), normalized);
     },
-    [currentConversationId],
+    [currentConversationId, fixedModelIdForConversation],
   );
 
   const refreshModels = useCallback(async () => {
@@ -95,9 +109,12 @@ export function useModelSelection(
     modelsRef.current = [];
   }, []);
 
+  const fixedModelId = fixedModelIdForConversation(currentConversationId());
+
   return {
     models,
     selectedModelId,
+    fixedModelId,
     setSelectedModelId,
     refreshModels,
     applyModelForConversation,
