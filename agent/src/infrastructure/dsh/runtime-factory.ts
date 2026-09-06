@@ -14,6 +14,7 @@ import {
   createRemoteProviders,
   mountSessionPersistence,
   assembleSystemPrompt,
+  buildPromptPlan,
   runWithExecRpc,
   runWithRunServices,
   installEnterprisePolicy,
@@ -22,8 +23,11 @@ import {
   runWithInteractionRequester,
 } from '../../runtime/index.js';
 import { FileSystemSkillProvider } from '@deepseek-ai/dsh-skill-filesystem';
+import { installModelSelection } from '@deepseek-ai/dsh-agent';
 import { DshRuntimeFactoryError } from './errors.js';
 import { PINNED_DSH_VERSION } from './constants.js';
+import { bindAgentVersionConfig } from './agent-version-bindings.js';
+import { dshProviderRoute, reasoningEffortsForRoute } from './reasoning-efforts.js';
 
 /** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
 type Loose = any;
@@ -94,10 +98,23 @@ export function buildExecRpcConfig(input: Record<string, any>, env: NodeJS.Proce
 }
 
 /** 企业目录仍写 llmio；DSH 组合里唯一挂上的路由名是 deepseek-official。 */
-function dshProviderRoute(raw) {
-  const p = String(raw ?? '').trim();
-  if (!p || p === 'llmio' || p === 'openai' || p === 'deepseek') return 'deepseek-official';
-  return p;
+/**
+ * 供应商路由与「该路由接受哪些 reasoning effort」是同一件事的两面，
+ * 所以都放在 `reasoning-efforts.ts`，避免这里再留一份会漂的副本。
+ */
+function resolveReasoningEffort(providerRoute: string, level: string | null) {
+  if (!level) return null;
+  const accepted = reasoningEffortsForRoute(providerRoute);
+  if (!accepted.includes(level)) {
+    // 不猜映射：版本钉的 effort 在当前适配器上不存在时拒绝起 Run，
+    // 而不是悄悄降到一个别的档位（AGENTS.md §2 fail-closed）。
+    throw new DshRuntimeFactoryError(
+      `AgentVersion thinkingLevel "${level}" is not a reasoning effort accepted by ` +
+        `provider route "${providerRoute}" (${accepted.join(', ') || 'none'})`,
+      { code: 'PI_THINKING_LEVEL_UNSUPPORTED' },
+    );
+  }
+  return level;
 }
 
 /** Null root on an empty journal; otherwise the last prior entry id. */
@@ -228,6 +245,7 @@ export function createDshRuntimeFactory(opts: Record<string, any> = {}) {
     createRemoteProviders,
     mountSessionPersistence,
     assembleSystemPrompt,
+    buildPromptPlan,
     bootEnterpriseRuntime,
     sharedEnterpriseRuntime,
     runWithExecRpc,
@@ -255,6 +273,13 @@ export function createDshRuntimeFactory(opts: Record<string, any> = {}) {
         throw new DshRuntimeFactoryError('runtime factory requires cwd');
       }
       const runtime = await loadRuntime();
+      // Bind the immutable version at the factory boundary as well as in the
+      // executor. This keeps direct factory callers on the same authorization
+      // contract and prevents an unused `toolPolicyBinding` from being the
+      // only evidence that a version was considered.
+      const boundAgentVersion = input.agentVersion
+        ? bindAgentVersionConfig(input.agentVersion)
+        : null;
       const rpc = buildExecRpcConfig(input, opts.env ?? process.env);
       /** per-Run 装配的卸载器。Run 结束时必须逐个调用——监听器与 guard 都是有主的。
        * @type {Array<() => void>} */
@@ -274,7 +299,21 @@ export function createDshRuntimeFactory(opts: Record<string, any> = {}) {
         physicalRoots: rpc.physicalRoots,
         requireMysql: true,
       });
-      const promptText = runtime.assembleSystemPrompt(input.systemPrompt);
+      // AV-06：逻辑路径来自服务端已有的解析入口（container 传进来的
+      // workspaceRoot/skillRoot，或本 Run 解析出的 cwd），**不是**写死的默认值，
+      // 也**不是** `rpc.physicalRoots`——宿主物理根不进提示词。
+      const promptRoots = {
+        ...(input.cwd || opts.workspaceRoot
+          ? { workspaceRoot: String(input.cwd || opts.workspaceRoot) }
+          : {}),
+        ...(input.skillRoot || opts.skillRoot
+          ? { skillRoot: String(input.skillRoot || opts.skillRoot) }
+          : {}),
+      };
+      const promptPlan = (runtime.buildPromptPlan ?? buildPromptPlan)(
+        input.systemPrompt,
+        promptRoots,
+      );
       void PINNED_DSH_VERSION;
 
       const sessionId = String(
@@ -307,10 +346,29 @@ export function createDshRuntimeFactory(opts: Record<string, any> = {}) {
           }
           return agentCtx.agents.resume(options);
         });
+      // AV-05：AgentVersion 的生成参数必须出现在**真实的对话请求**上。
+      // `AgentOptions.maxTokens` 的契约就是「每次 conversation-model 请求的
+      // 输出上限」，reasoning effort 走 agent scope 的 ModelSelection——
+      // 两者都只作用于主对话，标题/压缩等辅助请求仍按各自插件的策略走。
+      const providerRoute = dshProviderRoute(input.model.provider);
+      const versionMaxTokens = boundAgentVersion?.maxOutputTokens ?? null;
+      const versionEffort = resolveReasoningEffort(
+        providerRoute,
+        boundAgentVersion?.thinkingLevel ?? null,
+      );
+      const modelSelection = {
+        current: {
+          provider: providerRoute,
+          model: String(input.model.id || input.model.modelId || ''),
+          ...(versionEffort ? { reasoningEffort: versionEffort } : {}),
+        },
+        assembled: undefined,
+      };
       const commonAgentOptions = {
         agentOptions: {
-          provider: dshProviderRoute(input.model.provider),
+          provider: providerRoute,
           model: String(input.model.id || input.model.modelId || ''),
+          ...(versionMaxTokens != null ? { maxTokens: versionMaxTokens } : {}),
         },
         /**
          * per-Run 装配。`setup` 拿到的是**未发布的 agent scope**——正是
@@ -329,12 +387,26 @@ export function createDshRuntimeFactory(opts: Record<string, any> = {}) {
           //    服务名是 `systemPrompt`（驼峰），且**必须经 inject 取**：
           //    直接 `agentCtx.systemPrompt` 会抛 "cannot get property without
           //    inject"。这两点都是实跑探针撞出来的，不是文档里写着的。
+          // reasoning effort 只能经 agent scope 的 ModelSelection 生效：
+          // `AgentOptions` 上没有这个字段，装在根 ctx 上会串到别的 Run。
+          if (versionEffort) {
+            disposers.push(
+              (opts.installModelSelection ?? installModelSelection)(agentCtx, modelSelection),
+            );
+          }
+
           const systemPromptFiber = agentCtx.inject(['systemPrompt'], (scoped) => {
-            scoped.systemPrompt.section({
-              name: 'enterprise-contract',
-              order: -50,
-              text: promptText,
-            });
+            scoped.systemPrompt.section(promptPlan.enterprise);
+            if (promptPlan.persona) {
+              // persona 原文经**变量**注入。`renderPrompt` 对 `{{name}}` 是严格的
+              // （未知/格式错的引用直接抛），而替换进去的值不会被再次扫描——
+              // 这是 DSH 给的字面量安全路径。直接把 persona 放进 section 正文，
+              // 管理员写一句 `{{customer_name}}` 就会让整个 Run 起不来。
+              for (const [name, value] of Object.entries(promptPlan.variables)) {
+                scoped.systemPrompt.variable(name, () => value);
+              }
+              scoped.systemPrompt.section(promptPlan.persona);
+            }
           });
           disposers.push(systemPromptFiber);
           await systemPromptFiber;
@@ -390,6 +462,17 @@ export function createDshRuntimeFactory(opts: Record<string, any> = {}) {
             ...(input.riskOverrides ?? opts.riskOverrides
               ? { riskOverrides: input.riskOverrides ?? opts.riskOverrides }
               : {}),
+            ...(input.policyResolver ?? opts.policyResolver
+              ? { policyResolver: input.policyResolver ?? opts.policyResolver }
+              : {}),
+            ...(
+              boundAgentVersion?.authorization ?? input.authorization
+                ? {
+                    authorization:
+                      boundAgentVersion?.authorization ?? input.authorization,
+                  }
+                : {}
+            ),
             physicalRoots: rpc.physicalRoots ?? [],
             env: opts.env ?? process.env,
           });
@@ -482,7 +565,9 @@ export function createDshRuntimeFactory(opts: Record<string, any> = {}) {
       const session = {
         providers,
         sessionStore,
-        promptText,
+        // 观测用：这一 Run 实际注册的两节提示词（企业条款 + persona 槽位）。
+        // persona 原文在 `variables` 里，不在 section 正文里——见 buildPromptPlan。
+        promptPlan,
         async prompt(text, options) {
           const run = runtime.runWithExecRpc ?? ((_, fn) => fn());
           // 两层 ALS 都必须罩住整轮（ADR 0009 D3 的硬约束）：
@@ -553,7 +638,10 @@ export function createDshRuntimeFactory(opts: Record<string, any> = {}) {
          * 真正的清单在 DSH 的注册表里，按 scope 投影（`ctx.tools.schemas()`）。
          */
         getAllTools() {
-          const tools = (ctx as Record<string, any>)?.get?.('tools');
+          // The root registry is process-wide. A Run's restrict/authorization
+          // projection lives on the agent scope, so read the same scope DSH
+          // uses for guidance and schemas.
+          const tools = agent?.ctx?.get?.('tools') ?? (ctx as Record<string, any>)?.get?.('tools');
           if (tools === undefined || typeof tools.schemas !== 'function') return [];
           return tools.schemas().map((schema: { name?: unknown }) => ({
             name: String(schema?.name ?? ''),

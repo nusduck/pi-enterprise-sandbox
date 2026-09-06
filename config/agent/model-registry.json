@@ -37,9 +37,10 @@
       "supports_developer_role": false,
       "supports_reasoning": true,
       "thinking_levels": [
+        "off",
         "low",
-        "medium",
-        "high"
+        "high",
+        "max"
       ],
       "pricing": {
         "input_per_mtok": 1.25,

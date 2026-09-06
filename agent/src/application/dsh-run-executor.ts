@@ -103,11 +103,10 @@ import {
   prepareInteractionResume,
 } from './dsh-run-resume.js';
 import { GovernanceApprovalStore } from './governance-approval-store.js';
-import { approvalIdOf } from '../runtime/policy/approval-id.js';
-import { integrityFingerprint } from '../infrastructure/mysql/repositories/tool-execution-repository.js';
 import { buildRunServices } from './durable-subagent-port.js';
-import { buildRunRiskResolver } from './tool-risk-resolver.js';
+import { buildRunPolicyResolver, buildRunRiskResolver } from './tool-risk-resolver.js';
 import { createInteractionRequester } from './interaction-requester.js';
+import { createApprovedReplayClaim } from './approved-replay-claim.js';
 
 /** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
 type Loose = any;
@@ -663,6 +662,7 @@ export class DshRunExecutor {
         });
       }
       const runRiskResolver = buildRunRiskResolver(this.riskOverrides, agentVersion);
+      const runPolicyResolver = buildRunPolicyResolver(this.riskOverrides, agentVersion);
 
       // 8) Create Pi runtime (bindExtensions happens inside factory when extensions present)
       const piSnapshot =
@@ -699,6 +699,11 @@ export class DshRunExecutor {
         // 本 Run 的风险解析函数（平台层 + 租户层合并）。**必须按 Run 传**：
         // 租户层来自 AgentVersion，而工厂是进程级单例。
         riskOverrides: runRiskResolver,
+        // Complete risk decision (including custom riskApproval and nested MCP
+        // policy) is kept alongside the legacy level callback. The runtime
+        // policy merges this with AgentVersion authorization before lookup of
+        // any durable approval.
+        policyResolver: runPolicyResolver,
         // 把 runtime 侧的审批判定接到 durable 面（ADR 0009 D5 / 计划 H4.3）。
         // 少了这一步，策略挂载点用的是进程内的 InMemoryApprovalStore：判定是
         // 对的，但不落库、不发事件、不停泊 Run、不释放 Worker——审批链条从
@@ -742,37 +747,15 @@ export class DshRunExecutor {
           onDurableApprovalPending: (pending) => {
             runSuspensionPort.onDurableApprovalPending(pending as never);
           },
-          // 续跑路径（ADR 0009 D5 / 计划 H4.4）：模型重新发起的调用带的是
-          // **新 callId**，只能按「工具名 + 参数指纹」找那条已批准的记录。
-          // 指纹用 durable 侧的 `integrityFingerprint`——账本存的就是它；
-          // 拿策略层的 `digestArgs` 去查 MySQL 永远查不到（compose 端到端实测：
-          // 批准之后又停泊了一次，因为这一步查空、重新铸了 PENDING）。
-          findResolvedByDigest: async (toolName, _digest, args) => {
-            const found = await this.tx.run(async (trx: Loose) => {
-              const repos = this.createRepositories(trx);
-              const approvals = await repos.approvals.listByRunId(runId, scope);
-              const wanted = integrityFingerprint(args ?? {});
-              for (const approval of approvals) {
-                if (String(approval.status).toUpperCase() !== 'APPROVED') continue;
-                const exec = await repos.toolExecutions
-                  .getById(approval.toolExecutionId, scope)
-                  .catch(() => null);
-                if (exec == null || exec.toolName !== toolName) continue;
-                if (exec._argsIntegrity && exec._argsIntegrity !== wanted) continue;
-                return { approval, exec };
-              }
-              return null;
-            });
-            if (found == null) return null;
-            return {
-              id: approvalIdOf(String(found.exec.toolCallId ?? '')),
-              toolName,
-              sourceDigest: String(found.exec._argsIntegrity ?? ''),
-              argsCanonical: JSON.stringify(args ?? {}),
-              status: 'APPROVED',
-              runStatusHint: 'WAITING_APPROVAL',
-            } as never;
-          },
+          // 续跑认领（查 + 一次性消费）拆到 `approved-replay-claim.ts`：
+          // 这里只做接线，判定规则和 fail-closed 纪律在那个模块里。
+          ...createApprovedReplayClaim({
+            tx: this.tx,
+            createRepositories: this.createRepositories,
+            runId,
+            scope,
+            recorder: this._governanceRecorder as never,
+          }),
         }),
         ...(runSkillPaths?.length ? { additionalSkillPaths: runSkillPaths } : {}),
         ...(toolPolicyBinding ? { toolPolicyBinding } : {}),
@@ -1520,4 +1503,3 @@ export {
   createDshRunExecutorFactory,
 } from './dsh-run-executor-factory.js';
 export { normalizeExecutorResult } from './run-executor.js';
-

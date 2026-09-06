@@ -216,7 +216,12 @@ describe('createDshRuntimeFactory.create', () => {
     assert.equal(rpcCalls[0].rpc.workspaceId, 'ws1');
     assert.equal(runtime.session.providers.fs.kind, 'fs');
     assert.equal(runtime.session.providers.shell.kind, 'shell');
-    assert.match(runtime.session.promptText, /assembled/);
+    // 企业条款恰好一节；persona 原文走变量，不进 section 正文。
+    assert.equal(runtime.session.promptPlan.enterprise.name, 'enterprise-contract');
+    assert.match(runtime.session.promptPlan.enterprise.text, /## Paths \(hard rules\)/);
+    assert.equal(runtime.session.promptPlan.persona.name, 'deployment:persona');
+    assert.equal(runtime.session.promptPlan.persona.text, '{{agent_version_persona}}');
+    assert.equal(runtime.session.promptPlan.variables.agent_version_persona, 'lead');
     const header = runtime.sessionManager.getHeader();
     assert.equal(header.type, 'session');
     assert.equal(header.version, 3);
@@ -611,7 +616,7 @@ describe('createDshRuntimeFactory.create', () => {
       on: () => () => undefined,
       inject(_names, callback) {
         return makeFiber(() => callback({
-          systemPrompt: { section() {} },
+          systemPrompt: { section() {}, variable() { return () => {}; } },
           tools: { guard() {} },
           skills: {
             registerProvider(create) {

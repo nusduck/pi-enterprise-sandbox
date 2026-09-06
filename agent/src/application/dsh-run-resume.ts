@@ -184,13 +184,17 @@ export async function prepareApprovalResume(executor, {
   // 只为审计留一条「续跑已发起」。真正的执行与它的账本条目由循环那边的
   // post-execute 挂载点记——那里才有真实结果、真实耗时、真实脱敏。
   // 参数恢复不出来时记 `{}`，不阻断续跑（见 resolveApprovedReplayArgs）。
-  const replayArgs = resolveApprovedReplayArgs(replaySession, toolExecution) ?? {};
+  const replayArgs = resolveApprovedReplayArgs(replaySession, toolExecution);
 
   await executor._governanceRecorder.recordToolStarted({
     toolCallId: toolExecution.toolCallId,
     toolName: toolExecution.toolName,
-    args: replayArgs,
+    ...(replayArgs !== null ? { args: replayArgs } : {}),
     approvalId,
+    // Validate the approved WAITING_APPROVAL row here, but leave the durable
+    // one-time RUNNING claim to tools/pre-execute immediately before DSH
+    // dispatches the re-issued call.
+    preflight: true,
   });
 
   return (

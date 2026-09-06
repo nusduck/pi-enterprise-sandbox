@@ -43,6 +43,10 @@ import { createPromiseTail } from './promise-tail.js';
 import { SANDBOX_TOOL_NAMES } from '../runtime/policy/tool-names.js';
 import { redactPayload } from '../lib/event-redaction.js';
 import {
+  DurablePolicyConflictError,
+  assertCompatiblePolicyReplay,
+} from './durable-policy-replay.js';
+import {
   assertToolExecutionReplayMatch,
   policyDecisionFingerprint,
 } from '../infrastructure/mysql/repositories/tool-execution-repository.js';
@@ -55,25 +59,12 @@ import { terminalizeParallelToolsForPark } from './parallel-tool-park.js';
 
 /** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
 type Loose = any;
-/**
- * Durable policy state conflict — enterprise-policy maps to block.
- * Does not claim PR-09 resume; prevents allow bypass of prior deny/pending.
- */
-export class DurablePolicyConflictError extends Error {
-  // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
-  name: string;
-  code: string;
-  reasonCode: Loose;
-  toolExecution: Loose;
-
-  constructor(message: string, meta: { reasonCode?: string, toolExecution?: Record<string, any> } = {}) {
-    super(message);
-    this.name = 'DurablePolicyConflictError';
-    this.code = 'POLICY_DURABLE_CONFLICT';
-    this.reasonCode = meta.reasonCode || 'POLICY_DURABLE_CONFLICT';
-    this.toolExecution = meta.toolExecution ?? null;
-  }
-}
+// 纯判定拆到 `durable-policy-replay.ts`。这里保留再导出：既有调用方
+// （`dsh-run-executor.ts`、`application/index.ts`）的导入路径不必改动。
+export {
+  DurablePolicyConflictError,
+  assertCompatiblePolicyReplay,
+} from './durable-policy-replay.js';
 
 export type RunEventContext = import('./fenced-run-event-recorder.js').RunEventContext;
 export type CanonicalRunEventEnvelope =
@@ -881,7 +872,7 @@ export class FencedToolGovernanceRecorder {
    *
    * @param input
    */
-  async recordToolStarted(input: { toolCallId: string, toolName: string, args?: unknown, toolSource?: string, approvalId?: string }) {
+  async recordToolStarted(input: { toolCallId: string, toolName: string, args?: unknown, toolSource?: string, approvalId?: string, preflight?: boolean }) {
     this.#assertLock();
     const toolCallId = String(input.toolCallId || '').trim();
     if (!toolCallId) throw new Error('recordToolStarted requires toolCallId');
@@ -924,7 +915,9 @@ export class FencedToolGovernanceRecorder {
           assertToolExecutionReplayMatch(existing, {
             toolName,
             toolSource: expectedSource,
-            argumentsJson: input.args ?? {},
+            ...(input.preflight === true && input.args === undefined
+              ? {}
+              : { argumentsJson: input.args ?? {} }),
           });
           if (existing.status === TOOL_EXECUTION_STATUS.WAITING_APPROVAL) {
             if (!input.approvalId) {
@@ -954,14 +947,39 @@ export class FencedToolGovernanceRecorder {
                 { resource: 'approvals', id: approval.approvalId },
               );
             }
+            // Approval resume validates the durable row here, then lets the
+            // next DSH model call pass through tools/pre-execute. The durable
+            // one-time CAS is performed there immediately before dispatch;
+            // transitioning to RUNNING during this preflight would make that
+            // CAS look already consumed and could never prove the replay's
+            // arguments at the actual execution boundary.
+            if (input.preflight === true) {
+              toolExecution = existing;
+              return;
+            }
           }
           if (isTerminalToolExecutionStatus(existing.status)) {
+            if (input.approvalId) {
+              throw new ConflictError(
+                'approved replay has already reached a terminal tool state',
+                { resource: 'tool_executions', id: existing.toolExecutionId },
+              );
+            }
             // Already finished — no start event on restart.
             toolExecution = existing;
             return;
           }
           toolExecution = existing;
         } else {
+          if (input.approvalId) {
+            // An approval is a claim on one already parked ToolExecution. Do
+            // not create a fresh PROPOSED row when the binding is missing;
+            // that would let an arbitrary approvalId authorize new bytes.
+            throw new ConflictError(
+              'approved replay requires an existing waiting tool execution',
+              { resource: 'tool_executions', id: toolCallId },
+            );
+          }
           const got = await repos.toolExecutions.getOrCreate({
             toolExecutionId: assertUlid(this.generateId(), 'toolExecutionId'),
             runId: this.context.runId,
@@ -1005,6 +1023,15 @@ export class FencedToolGovernanceRecorder {
             statusChanged = tr.changed;
           }
         } else if (toolExecution.status === TOOL_EXECUTION_STATUS.RUNNING) {
+          if (input.approvalId) {
+            // A second worker may observe the same APPROVED row after the
+            // first worker's claim committed. RUNNING is the durable one-time
+            // consume marker; it must not be treated as an idempotent replay.
+            throw new ConflictError(
+              'approved replay was already claimed for this tool execution',
+              { resource: 'tool_executions', id: toolExecution.toolExecutionId },
+            );
+          }
           statusChanged = false;
         } else {
           throw new ConflictError(
@@ -1528,126 +1555,4 @@ export class FencedToolGovernanceRecorder {
       return out;
     });
   }
-}
-
-/**
- * Enforce durable prior policy state vs a freshly evaluated decision.
- *
- * Exact policy fingerprint required (no broad POLICY/DENIED matching).
- * Fresh `allow` may proceed while PROPOSED. RUNNING is replay-compatible only
- * before a Sandbox request claim exists; claimed/terminal states cannot re-enter.
- *
- * @param toolExecution
- * @param {{
- *   decision: string,
- *   desiredStatus: string,
- *   errorCode?: string | null,
- *   policyFingerprint: string,
- * }} next
- */
-export function assertCompatiblePolicyReplay(toolExecution: Record<string, any>, next: { decision: string, desiredStatus: string, errorCode?: string | null, policyFingerprint: string, }) {
-  const status = toolExecution.status;
-  const decision = next.decision;
-  const nextPf = next.policyFingerprint
-    ? String(next.policyFingerprint).toLowerCase()
-    : '';
-  const havePf = toolExecution._policyFingerprint
-    ? String(toolExecution._policyFingerprint).toLowerCase()
-    : '';
-
-  if (!nextPf || !/^[0-9a-f]{64}$/.test(nextPf)) {
-    throw new DurablePolicyConflictError(
-      'POLICY_FINGERPRINT_REQUIRED: policy replay requires exact decision fingerprint',
-      { reasonCode: 'POLICY_FINGERPRINT_REQUIRED', toolExecution },
-    );
-  }
-  // Legacy rows without stored fingerprint: fail closed for policy path.
-  if (!havePf) {
-    throw new DurablePolicyConflictError(
-      'POLICY_FINGERPRINT_MISSING: durable ToolExecution has no policy fingerprint',
-      { reasonCode: 'POLICY_FINGERPRINT_MISSING', toolExecution },
-    );
-  }
-  if (havePf !== nextPf) {
-    throw new DurablePolicyConflictError(
-      'POLICY_FINGERPRINT_MISMATCH: changed decision/reasonCode/reason/policyId/riskLevel',
-      { reasonCode: 'POLICY_FINGERPRINT_MISMATCH', toolExecution },
-    );
-  }
-
-  // Fingerprints match — status-specific compatibility for tool_call gate.
-  if (decision === 'allow') {
-    // Exact-policy PROPOSED, or the brief pre-claim RUNNING window, is safe to
-    // replay. The toolCall id remains unique and transport binding is atomic.
-    if (status === TOOL_EXECUTION_STATUS.PROPOSED) {
-      return;
-    }
-    if (
-      status === TOOL_EXECUTION_STATUS.RUNNING &&
-      !toolExecution.requestHash
-    ) {
-      return;
-    }
-    if (
-      status === TOOL_EXECUTION_STATUS.RUNNING ||
-      status === TOOL_EXECUTION_STATUS.SUCCEEDED
-    ) {
-      throw new DurablePolicyConflictError(
-        `durable ToolExecution is ${status}; refuse re-execution (no transport idempotency yet)`,
-        {
-          reasonCode: 'POLICY_DURABLE_ALREADY_EXECUTED',
-          toolExecution,
-        },
-      );
-    }
-    if (status === TOOL_EXECUTION_STATUS.FAILED) {
-      throw new DurablePolicyConflictError(
-        'durable ToolExecution is FAILED; refuse re-execution under allow',
-        { reasonCode: 'POLICY_DURABLE_ALREADY_EXECUTED', toolExecution },
-      );
-    }
-    if (status === TOOL_EXECUTION_STATUS.WAITING_APPROVAL) {
-      throw new DurablePolicyConflictError(
-        'durable ToolExecution is WAITING_APPROVAL; fresh allow cannot bypass',
-        { reasonCode: 'POLICY_DURABLE_PENDING', toolExecution },
-      );
-    }
-    throw new DurablePolicyConflictError(
-      `durable ToolExecution is ${status}; refuse allow replay`,
-      { reasonCode: 'POLICY_DURABLE_CONFLICT', toolExecution },
-    );
-  }
-
-  if (decision === 'deny') {
-    // Exact same deny on FAILED: idempotent block (no new audit).
-    if (status === TOOL_EXECUTION_STATUS.FAILED) {
-      return;
-    }
-    // PROPOSED may still transition to FAILED (same fingerprint) — rare.
-    if (status === TOOL_EXECUTION_STATUS.PROPOSED) {
-      return;
-    }
-    throw new DurablePolicyConflictError(
-      `durable ToolExecution is ${status}; conflicting deny replay`,
-      { reasonCode: 'POLICY_DURABLE_CONFLICT', toolExecution },
-    );
-  }
-
-  if (decision === 'require_approval') {
-    if (status === TOOL_EXECUTION_STATUS.WAITING_APPROVAL) {
-      return;
-    }
-    if (status === TOOL_EXECUTION_STATUS.PROPOSED) {
-      return;
-    }
-    throw new DurablePolicyConflictError(
-      `durable ToolExecution is ${status}; conflicting require_approval replay`,
-      { reasonCode: 'POLICY_DURABLE_CONFLICT', toolExecution },
-    );
-  }
-
-  throw new DurablePolicyConflictError(
-    `unrecognized policy decision for durable replay: ${decision}`,
-    { reasonCode: 'POLICY_DURABLE_CONFLICT', toolExecution },
-  );
 }

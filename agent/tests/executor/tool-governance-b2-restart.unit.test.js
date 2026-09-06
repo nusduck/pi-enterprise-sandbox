@@ -241,6 +241,86 @@ describe('restart-safe MySQL-authoritative idempotency', () => {
     assert.equal(e2.filter((e) => e.type === 'approval.requested').length, 0);
   });
 
+  it('approved replay is a one-time claim on WAITING_APPROVAL', async () => {
+    const { gov: g1 } = makeGov(knex, nextId);
+    await g1.recordPolicyDecision({
+      toolCallId: 'tc-claim-once',
+      toolName: 'mcp__crm__delete',
+      args: { id: '1' },
+      decision: {
+        decision: 'require_approval',
+        reasonCode: 'EXTERNAL_HIGH_RISK',
+        reason: 'needs approval',
+        policyId: 'p',
+        riskLevel: 'high',
+      },
+    });
+    const pending = await g1.requestApproval({
+      toolCallId: 'tc-claim-once',
+      toolName: 'mcp__crm__delete',
+      args: { id: '1' },
+      decision: {
+        decision: 'require_approval',
+        reasonCode: 'EXTERNAL_HIGH_RISK',
+        reason: 'needs approval',
+        policyId: 'p',
+        riskLevel: 'high',
+      },
+    });
+    const approvalRow = state.tables.approvals.find(
+      (row) => row.approval_id === pending.approval.approvalId,
+    );
+    assert.ok(approvalRow);
+    approvalRow.status = APPROVAL_STATUS.APPROVED;
+
+    const preflight = await g1.recordToolStarted({
+      toolCallId: 'tc-claim-once',
+      toolName: 'mcp__crm__delete',
+      args: { id: '1' },
+      approvalId: pending.approval.approvalId,
+      preflight: true,
+    });
+    assert.equal(preflight.toolExecution.status, TOOL_EXECUTION_STATUS.WAITING_APPROVAL);
+
+    const first = await g1.recordToolStarted({
+      toolCallId: 'tc-claim-once',
+      toolName: 'mcp__crm__delete',
+      args: { id: '1' },
+      approvalId: pending.approval.approvalId,
+    });
+    assert.equal(first.toolExecution.status, TOOL_EXECUTION_STATUS.RUNNING);
+
+    const { gov: g2 } = makeGov(knex, createUlidGenerator({ now: () => 1_721_278_800_300 }));
+    await assert.rejects(
+      () => g2.recordToolStarted({
+        toolCallId: 'tc-claim-once',
+        toolName: 'mcp__crm__delete',
+        args: { id: '1' },
+        approvalId: pending.approval.approvalId,
+      }),
+      /already claimed|terminal|Conflict/i,
+    );
+    assert.equal(
+      state.tables.run_events.filter((row) => row.event_type === 'tool.execution.started').length,
+      1,
+      'a concurrent/retried approved claim cannot emit a second started event',
+    );
+  });
+
+  it('approved replay cannot create a ToolExecution when its binding is missing', async () => {
+    const { gov } = makeGov(knex, nextId);
+    await assert.rejects(
+      () => gov.recordToolStarted({
+        toolCallId: 'tc-missing-claim',
+        toolName: 'bash',
+        args: { command: 'true' },
+        approvalId: '01K0G2PAV8FPMVC9QHJG7JPN5Q',
+      }),
+      /existing waiting|Conflict/i,
+    );
+    assert.equal(state.tables.tool_executions.length, 0);
+  });
+
   it('parking one parallel tool terminalizes other RUNNING tools as UNKNOWN', async () => {
     const { gov } = makeGov(knex, nextId);
     await gov.recordPolicyDecision({

@@ -37,6 +37,15 @@ interface GovernanceRecorderLike {
   }): Promise<{ durablePending?: unknown; approval?: { approvalId?: string; status?: string } } | null>;
 }
 
+export interface GovernanceApprovalConsumeInput {
+  readonly approvalId: string;
+  readonly toolExecutionId?: string;
+  readonly toolCallId: string;
+  readonly toolName: string;
+  readonly args: Record<string, unknown>;
+  readonly argsIntegrity?: string | null;
+}
+
 /** executor 的停泊端口。收到信号才会把 Run 停下并释放 Worker。 */
 type SuspensionSink = (pending: unknown) => void;
 
@@ -52,7 +61,8 @@ export interface GovernanceApprovalStoreDeps {
     sourceDigest: string,
     args?: Record<string, unknown>,
   ) => Promise<PendingApproval | null>;
-  readonly consume?: (approvalId: string) => Promise<void>;
+  /** Atomic durable claim performed immediately before tool dispatch. */
+  readonly consume?: (input: GovernanceApprovalConsumeInput) => Promise<void>;
 }
 
 export class GovernanceApprovalStore implements ApprovalStore {
@@ -85,6 +95,22 @@ export class GovernanceApprovalStore implements ApprovalStore {
     });
     const pending = out?.durablePending;
     if (pending !== undefined && pending !== null) {
+      const durableApprovalId = String(
+        (out?.approval as { approvalId?: unknown } | undefined)?.approvalId ??
+          (pending as { approvalId?: unknown }).approvalId ??
+          '',
+      ).trim();
+      const toolExecutionId = String(
+        (pending as { toolExecutionId?: unknown }).toolExecutionId ?? '',
+      ).trim();
+      if (durableApprovalId || toolExecutionId) {
+        this.local.set(record.id, {
+          ...record,
+          ...(durableApprovalId ? { durableApprovalId } : {}),
+          ...(toolExecutionId ? { toolExecutionId } : {}),
+          toolCallId: callId,
+        });
+      }
       // executor 收到这个信号才会停泊。**不能吞掉**——吞掉的后果是审批落了库，
       // Run 却继续跑到超时，人在审批中心点同意也无处可续。
       this.deps.onDurableApprovalPending(pending);
@@ -101,11 +127,44 @@ export class GovernanceApprovalStore implements ApprovalStore {
     args?: Record<string, unknown>,
   ): Promise<PendingApproval | null> {
     if (this.deps.findResolvedByDigest === undefined) return null;
-    return this.deps.findResolvedByDigest(toolName, sourceDigest, args);
+    const found = await this.deps.findResolvedByDigest(toolName, sourceDigest, args);
+    if (found !== null) this.local.set(found.id, found);
+    return found;
   }
 
-  async consume(id: string): Promise<void> {
-    await this.deps.consume?.(id);
+  async consume(
+    id: string,
+    expected?: {
+      toolName: string;
+      args: Record<string, unknown>;
+      argsIntegrity?: string | null;
+    },
+  ): Promise<void> {
+    if (typeof this.deps.consume !== 'function') {
+      throw new Error('durable approval consumer is not configured');
+    }
+    const record = this.local.get(id);
+    if (record === undefined) {
+      throw new Error(`durable approval metadata is unavailable for ${id}`);
+    }
+    const approvalId = String(record.durableApprovalId ?? '').trim();
+    const toolCallId = String(record.toolCallId ?? deriveToolCallId(record.id)).trim();
+    if (!approvalId || !toolCallId) {
+      throw new Error(`durable approval binding is incomplete for ${id}`);
+    }
+    const args = expected?.args ?? safeParse(record.argsCanonical);
+    await this.deps.consume({
+      approvalId,
+      ...(record.toolExecutionId ? { toolExecutionId: record.toolExecutionId } : {}),
+      toolCallId,
+      toolName: expected?.toolName ?? record.toolName,
+      args,
+      ...(expected?.argsIntegrity !== undefined
+        ? { argsIntegrity: expected.argsIntegrity }
+        : record.argsIntegrity !== undefined
+          ? { argsIntegrity: record.argsIntegrity }
+          : {}),
+    });
   }
 }
 
@@ -117,4 +176,8 @@ function safeParse(text: string): Record<string, unknown> {
   } catch {
     return {};
   }
+}
+
+function deriveToolCallId(id: string): string {
+  return id.startsWith('appr_') ? id.slice('appr_'.length) : id;
 }

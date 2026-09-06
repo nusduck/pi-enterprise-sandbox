@@ -11,6 +11,8 @@
 /** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
 type Loose = any;
 
+import { publicMcpToolName } from './public-tool-name.js';
+
 export class McpConfigError extends Error {
   // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
   code: Loose;
@@ -41,7 +43,7 @@ const MCP_RISK_LEVELS = Object.freeze(['low', 'medium', 'high', 'critical']);
  * @param toolName
  */
 export function mcpToolName(serverName: string, toolName: string) {
-  return `mcp__${serverName}__${toolName}`;
+  return publicMcpToolName(serverName, toolName);
 }
 
 /**
@@ -195,7 +197,7 @@ export function loadMcpConfig(raw: unknown) {
     }
     seen.add(serverId);
 
-    let enabledTools = [];
+    let enabledTools: string[] = [];
     if (e.enabledTools != null) {
       if (!Array.isArray(e.enabledTools)) {
         throw new McpConfigError(

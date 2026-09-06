@@ -91,7 +91,10 @@ export const SEED_MODELS = Object.freeze([
     supports_tool_call: true,
     supports_developer_role: false,
     supports_reasoning: true,
-    thinking_levels: Object.freeze(['low', 'medium', 'high']),
+    // Effort ids the routed adapter accepts (`dsh-llm-deepseek`:
+    // off|low|high|max). `medium` was inherited from the retired pi-ai enum
+    // and the wire never accepted it; see infrastructure/dsh/reasoning-efforts.ts.
+    thinking_levels: Object.freeze(['off', 'low', 'high', 'max']),
     pricing: Object.freeze({
       input_per_mtok: 1.25,
       output_per_mtok: 5.0,

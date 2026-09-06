@@ -21,11 +21,18 @@
  */
 import {
   coerceToolRiskPolicy,
-  mergeToolRiskPolicies,
+  decisionForRiskLevel,
   resolveToolRiskLevel,
+  type ToolRiskPolicy,
 } from '../infrastructure/dsh/tool-risk-policy.js';
 import { buildAgentVersionToolRiskBindings } from './tool-risk-bindings.js';
 import { classifyTool } from '../runtime/policy/risk-table.js';
+import {
+  RISK_RANK,
+  makePolicyDecision,
+  mergePolicyDecisions,
+  type PolicyDecision,
+} from '../runtime/policy/decision.js';
 
 type RiskLevel = 'low' | 'medium' | 'high' | 'critical';
 
@@ -56,21 +63,27 @@ export function buildRunRiskResolver(
 ): (toolName: string) => RiskLevel | undefined {
   const base = coerceToolRiskPolicy(platformPolicy, { field: 'platform.toolRiskPolicy' });
   const { agentVersionToolRiskPolicy } = buildAgentVersionToolRiskBindings(agentVersion);
-  const merged = mergeToolRiskPolicies(
-    base as never,
-    (agentVersionToolRiskPolicy ?? null) as never,
-  );
+  const tenant = agentVersionToolRiskPolicy ?? null;
 
   return (toolName: string): RiskLevel | undefined => {
-    // **必须带 class**：`resolveToolRiskLevel` 在 `cls.class` 缺省时会把
-    // `classRiskLevels['']` 查空，落到 `'critical'`，而且把 `configured` 标成
-    // true（因为 'critical' !== undefined）。也就是说不传分类的话，**每一个工具
-    // 都会被报成「配置为 critical」**——整片工具在运行时被拒，且理由看起来像是
-    // 运维配的。分类用的是风险表自己那份，两边不会漂。
-    const hit = resolveToolRiskLevel(
-      toolName,
-      { class: classifyTool(toolName), ...splitMcpName(toolName) },
-      merged as never,
+    const cls = { class: classifyTool(toolName), ...splitMcpName(toolName) };
+    const baseHit = resolveToolRiskLevel(toolName, cls, base as never);
+    const tenantHit = tenant
+      ? resolveToolRiskLevel(toolName, cls, tenant as never)
+      : null;
+    // The high floor applies only when the platform has not explicitly
+    // classified this exact MCP call (or a matching server/pattern) as a
+    // lower-risk operation. A deliberate platform readonly-low entry is a
+    // valid override; a tenant low entry alone cannot lower the unconfigured
+    // platform external-high baseline.
+    const mcpFloor =
+      toolName.startsWith('mcp__') && baseHit.configured !== true
+        ? 'high' as RiskLevel
+        : null;
+    const effective = maxRiskLevel(
+      baseHit.riskLevel as RiskLevel,
+      tenantHit?.configured === true ? tenantHit.riskLevel as RiskLevel : null,
+      mcpFloor,
     );
     // MCP 的地板（ADR 0009 D9 §2）：任何 `mcp__*` 名字没配到时按 high。
     //
@@ -81,10 +94,82 @@ export function buildRunRiskResolver(
     //
     // 分类默认对 `mcp__` 本来也是 external_high，两者一致；显式写出来是为了
     // **不依赖那个巧合**——哪天有人把 external_high 的默认调低，这条仍然守着。
-    if (hit?.configured !== true && toolName.startsWith('mcp__')) return 'high';
+    if (
+      baseHit.configured !== true &&
+      tenantHit?.configured !== true &&
+      toolName.startsWith('mcp__')
+    ) return 'high';
     // `configured: false` 表示这一层没配，落回风险表按分类给的默认值——
     // 返回 undefined 让 `decideFromRiskTable` 走它自己的默认，不要在这里
     // 把「没配」硬编成一个等级。
-    return hit?.configured === true ? (hit.riskLevel as RiskLevel) : undefined;
+    if (baseHit.configured === true || tenantHit?.configured === true) {
+      return effective;
+    }
+    return undefined;
   };
+}
+
+function maxRiskLevel(...levels: Array<RiskLevel | null | undefined>): RiskLevel {
+  return levels.reduce<RiskLevel>((best, candidate) => {
+    if (candidate == null) return best;
+    return RISK_RANK[candidate] > RISK_RANK[best] ? candidate : best;
+  }, 'low');
+}
+
+/**
+ * Resolve the complete decision for one Run. Each policy layer is resolved
+ * independently before the stricter decision is selected. Resolving a merged
+ * map by key is unsafe: a tenant exact `low` entry could shadow a platform
+ * wildcard `high` entry even though the tenant is only allowed to tighten.
+ */
+export function buildRunPolicyResolver(
+  platformPolicy: unknown,
+  agentVersion: unknown,
+): (toolName: string) => PolicyDecision {
+  const base = coerceToolRiskPolicy(platformPolicy, { field: 'platform.toolRiskPolicy' });
+  const { agentVersionToolRiskPolicy } = buildAgentVersionToolRiskBindings(agentVersion);
+  const tenant = agentVersionToolRiskPolicy ?? null;
+
+  return (toolName: string): PolicyDecision => {
+    const cls = { class: classifyTool(toolName), ...splitMcpName(toolName) };
+    const baseHit = resolveToolRiskLevel(toolName, cls, base as never);
+    const tenantHit = tenant
+      ? resolveToolRiskLevel(toolName, cls, tenant as never)
+      : null;
+    const effectiveRisk = maxRiskLevel(
+      baseHit.riskLevel as RiskLevel,
+      tenantHit?.configured === true ? tenantHit.riskLevel as RiskLevel : null,
+      toolName.startsWith('mcp__') && baseHit.configured !== true ? 'high' : null,
+    );
+    const decisions: PolicyDecision[] = [
+      makeRiskDecision(toolName, baseHit, effectiveRisk, base, 'platform'),
+    ];
+    if (tenant) {
+      // Applying the tenant's riskApproval table to the effective risk preserves
+      // explicit approval tightening even when it did not set a level for this
+      // particular tool. The merge below prevents it from ever lowering the
+      // platform decision.
+      decisions.push(
+        makeRiskDecision(toolName, tenantHit ?? baseHit, effectiveRisk, tenant, 'agent-version'),
+      );
+    }
+    return mergePolicyDecisions(decisions);
+  };
+}
+
+function makeRiskDecision(
+  toolName: string,
+  hit: { riskLevel: string, source: string },
+  effectiveRisk: RiskLevel,
+  policy: ToolRiskPolicy,
+  layer: string,
+): PolicyDecision {
+  const decision = decisionForRiskLevel(effectiveRisk, policy);
+  return makePolicyDecision({
+    decision,
+    reasonCode: `RISK_${effectiveRisk.toUpperCase()}`,
+    reason: `${toolName} resolved ${effectiveRisk} by ${layer} (${hit.source})`,
+    policyId: `${layer}:risk-policy`,
+    riskLevel: effectiveRisk,
+  });
 }

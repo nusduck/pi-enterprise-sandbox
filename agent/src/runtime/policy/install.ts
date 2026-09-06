@@ -35,11 +35,18 @@ import { evaluatePreExecute, type ApprovalStore } from './pre-execute.js';
 import { runGuards, type GuardListener } from './guards.js';
 import { RunBudget, resolveRunBudget, wrapExecute } from './run-budget.js';
 import { recordLedger, type LedgerEntry } from './post-execute.js';
-import type { PolicyDecision } from './decision.js';
+import {
+  makePolicyDecision,
+  mergePolicyDecisions,
+  type PolicyDecision,
+} from './decision.js';
+import type { AgentVersionAuthorization, AgentToolDecision } from '../../infrastructure/dsh/agent-version-bindings.js';
 import { RunPark, RUN_PARKED_REASON_CODE } from './park.js';
 import { approvalIdOf } from './approval-id.js';
 import { runWithToolExecutionContext } from '../providers/tool-execution-context.js';
 import { isDurableInteractionPendingError } from '../providers/user-questions.js';
+import { mcpToolName } from '../../infrastructure/mcp/mcp-config-loader.js';
+import { decideFromRiskTable } from './risk-table.js';
 
 /** 最小可用的工具执行形状——只取本模块用得到的字段，不复制 DSH 的完整类型。 */
 interface ToolExecutionLike {
@@ -113,6 +120,13 @@ export interface InstallPolicyOptions {
    * 两层都要在——只做可见性等于把闸门交给模型的自觉。
    */
   readonly visibleTools?: readonly string[];
+  /** AgentVersion authorization projected at Run creation. */
+  readonly authorization?: AgentVersionAuthorization;
+  /** Complete platform risk decision resolver for this Run. */
+  readonly policyResolver?: (
+    toolName: string,
+    args: Record<string, unknown>,
+  ) => PolicyDecision;
   readonly riskOverrides?:
     | Readonly<Record<string, 'low' | 'medium' | 'high' | 'critical'>>
     | ((toolName: string) => 'low' | 'medium' | 'high' | 'critical' | undefined);
@@ -140,6 +154,107 @@ function argsOf(exec: ToolExecutionLike): Record<string, unknown> {
 
 function callIdOf(exec: ToolExecutionLike): string {
   return String(exec.id ?? exec.callId ?? '');
+}
+
+function findMcpAuthorization(
+  authorization: AgentVersionAuthorization,
+  publicName: string,
+): {
+  serverId: string;
+  toolName: string;
+  server: AgentVersionAuthorization['mcpServers'][string];
+} | null {
+  const indexed = authorization.mcpTools?.[publicName];
+  if (indexed) {
+    const server = authorization.mcpServers[indexed.serverId];
+    if (server && server.enabledTools.includes(indexed.toolName)) {
+      return { ...indexed, server };
+    }
+  }
+
+  // Older in-memory callers may construct the projection by hand. Resolve
+  // those entries with the complete public-name function, never by splitting
+  // on `__` (server/raw names can contain that sequence).
+  for (const [serverId, server] of Object.entries(authorization.mcpServers)) {
+    const mapped = server.publicToolNames?.[publicName];
+    if (mapped && server.enabledTools.includes(mapped)) {
+      return { serverId, toolName: mapped, server };
+    }
+    for (const rawName of server.enabledTools) {
+      if (mcpToolName(serverId, rawName) === publicName) {
+        return { serverId, toolName: rawName, server };
+      }
+    }
+  }
+  return null;
+}
+
+function authorizationDecision(
+  authorization: AgentVersionAuthorization,
+  toolName: string,
+): PolicyDecision | null {
+  if (toolName.startsWith('mcp__')) {
+    if (authorization.mcpConfigured !== true) {
+      return makeAuthorizationDecision(
+        'deny',
+        'AGENT_VERSION_MCP_NOT_CONFIGURED',
+        `${toolName} is not authorized by this AgentVersion`,
+      );
+    }
+    const binding = findMcpAuthorization(authorization, toolName);
+    if (binding === null) {
+      return makeAuthorizationDecision(
+        'deny',
+        'AGENT_VERSION_MCP_SERVER_NOT_BOUND',
+        `${toolName} server is not bound to this AgentVersion`,
+      );
+    }
+    const nested = binding.server.decisions[binding.toolName] ?? binding.server.defaultDecision ?? 'allow';
+    const decisions = [
+      makeAuthorizationDecision(
+        nested,
+        `AGENT_VERSION_MCP_TOOL_${nested.toUpperCase()}`,
+        `${toolName} has an AgentVersion MCP tool decision of ${nested}`,
+      ),
+    ];
+    const fullName = authorization.decisions[toolName];
+    if (fullName !== undefined) {
+      decisions.push(
+        makeAuthorizationDecision(
+          fullName,
+          `AGENT_VERSION_TOOL_${fullName.toUpperCase()}`,
+          `${toolName} has an AgentVersion tool decision of ${fullName}`,
+        ),
+      );
+    }
+    return mergePolicyDecisions(decisions);
+  }
+  const decision = authorization.decisions[toolName];
+  if (decision === undefined) return null;
+  return makeAuthorizationDecision(
+    decision,
+    `AGENT_VERSION_TOOL_${decision.toUpperCase()}`,
+    `${toolName} has an AgentVersion decision of ${decision}`,
+  );
+}
+
+function makeAuthorizationDecision(
+  decision: AgentToolDecision,
+  reasonCode: string,
+  reason: string,
+): PolicyDecision {
+  return makePolicyDecision({
+    decision,
+    reasonCode,
+    reason,
+    policyId: 'agent-version:authorization',
+    riskLevel:
+      decision === 'deny'
+        ? 'critical'
+        : decision === 'require_approval'
+          ? 'high'
+          : 'low',
+  });
 }
 
 /** 出厂 `dsh-user-approval` 的结果词表。 */
@@ -172,6 +287,25 @@ export function installEnterprisePolicy(ctx: Context, options: InstallPolicyOpti
   const park = new RunPark();
   const disposers: Array<() => void> = [];
 
+  const resolveInstalledPolicy = (
+    toolName: string,
+    args: Record<string, unknown>,
+  ): PolicyDecision | null => {
+    // `evaluatePreExecute` treats a non-null resolver result as the complete
+    // risk decision. Preserve the legacy fixed risk table when only an
+    // AgentVersion authorization map is installed; otherwise an explicit
+    // MCP allowlist entry would accidentally turn external-high into allow.
+    const decisions: PolicyDecision[] = [
+      options.policyResolver?.(toolName, args) ??
+        decideFromRiskTable(toolName, options.riskOverrides ?? {}),
+    ];
+    const versionDecision = options.authorization
+      ? authorizationDecision(options.authorization, toolName)
+      : null;
+    if (versionDecision !== null) decisions.push(versionDecision);
+    return mergePolicyDecisions(decisions);
+  };
+
   // 1) tools/pre-execute —— 风险表 + source_digest + 持久 PENDING 审批
   disposers.push(
     anyCtx.on('tools/pre-execute', (async (
@@ -183,6 +317,7 @@ export function installEnterprisePolicy(ctx: Context, options: InstallPolicyOpti
         options.approvalStore,
         undefined,
         options.riskOverrides ?? {},
+        resolveInstalledPolicy,
       );
       // allow 时把决定权交回瀑布——我们只加约束，不抢走别人的拒绝权。
       if (!outcome.blocked) return await next();
@@ -211,6 +346,10 @@ export function installEnterprisePolicy(ctx: Context, options: InstallPolicyOpti
         // 所以这里返回理由就是终局，后面的监听器翻不了案。
         const parked = park.denyReason(callIdOf(e));
         if (parked !== undefined) return parked;
+        const installedDecision = resolveInstalledPolicy(toolNameOf(e), argsOf(e));
+        if (installedDecision !== null && installedDecision.decision === 'deny') {
+          return installedDecision.reason;
+        }
         if (guards.length === 0) return undefined;
         const hit = runGuards(guards, toolNameOf(e), argsOf(e));
         if (hit === null || hit.decision === 'allow') return undefined;
@@ -285,11 +424,17 @@ export function installEnterprisePolicy(ctx: Context, options: InstallPolicyOpti
       const roots = options.physicalRoots ?? [];
       const failure = (result as { isError?: boolean; error?: unknown } | null) ?? null;
       const ok = failure?.isError !== true;
+      const failureError =
+        failure?.error &&
+        typeof failure.error === 'object' &&
+        typeof (failure.error as { message?: unknown }).message === 'string'
+          ? (failure.error as { message: string }).message
+          : failure?.error;
       const entry = recordLedger({
         callId: callIdOf(exec),
         toolName: toolNameOf(exec),
         ok,
-        ...(ok ? {} : { error: failure?.error ?? new Error('tool failed') }),
+        ...(ok ? {} : { error: failureError ?? new Error('tool failed') }),
         physicalRoots: roots,
       });
       options.ledger?.(entry);
@@ -308,15 +453,35 @@ export function installEnterprisePolicy(ctx: Context, options: InstallPolicyOpti
   //
   //     **不引入 preset**：预设表是 process-level、无租户维度的（ADR 0009 D3）。
   const visible = options.visibleTools;
-  if (visible !== undefined && visible.length > 0) {
+  if (visible !== undefined || options.authorization !== undefined) {
     disposers.push(
       anyCtx.inject(['tools'], (scoped) => {
         const tools = scoped.tools as unknown as {
           restrict?: (filter: { allow?: readonly string[] }) => () => void;
+          schemas?: () => Array<{ name?: unknown }>;
         };
+        let allowed = visible === undefined ? null : [...visible];
+        // When no explicit list is supplied, derive the model-visible list
+        // from the same scoped registry that DSH will use for guidance. An
+        // unavailable registry is left untouched; the execution guard remains
+        // authoritative and an infrastructure lookup failure must not become
+        // an accidental empty permission set.
+        if (allowed === null && options.authorization !== undefined) {
+          const schemas = tools.schemas?.();
+          if (Array.isArray(schemas)) {
+            allowed = schemas
+              .map((schema) => String(schema?.name ?? ''))
+              .filter((name) => {
+                if (!name) return false;
+                const decision = authorizationDecision(options.authorization!, name);
+                return decision === null || decision.decision !== 'deny';
+              });
+          }
+        }
+        if (allowed === null) return;
         // 出厂没有这个方法时静默跳过：可见性是优化，权威层在 guard 上。
         // 但**必须**是静默跳过而不是抛——否则一次上游版本变动会让所有 Run 起不来。
-        tools.restrict?.({ allow: [...visible] });
+        tools.restrict?.({ allow: allowed });
       }),
     );
   }

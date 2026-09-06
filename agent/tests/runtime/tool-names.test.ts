@@ -101,12 +101,12 @@ test('H1.8 存量 toolPolicy 的旧名被投影成新名', () => {
   assert.equal('ls' in policy, false, '旧名不该留在投影结果里');
 });
 
-test('H1.8 新名优先：快照同时写了旧名和新名时，旧名不覆盖新名', () => {
+test('H1.8 新旧名字冲突时取更严的决定，旧名不能放松新名', () => {
   const bindings = buildAgentVersionToolRiskBindings(
     versionWith({ tools: { glob: 'allow', ls: 'deny' } }),
   );
   const policy = bindings.agentVersionToolPolicy as Record<string, unknown>;
-  assert.equal(policy['glob'], 'allow', '显式写的新名必须赢');
+  assert.equal(policy['glob'], 'deny', '旧名不能把新名的禁止放松成允许');
 });
 
 test('H1.8 退役能力不进投影结果（理由码由风险表给）', () => {

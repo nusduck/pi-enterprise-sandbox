@@ -11,24 +11,53 @@
  */
 
 import { DshRuntimeFactoryError as PiRuntimeFactoryError } from './errors.js';
-import { PINNED_PI_SDK_VERSION } from './constants.js';
+import { PINNED_PI_SDK_VERSION, resolveToolNameAlias } from './constants.js';
+import {
+  loadMcpConfigFromAgentVersion,
+  mcpToolName,
+  parseAgentVersionConfigJson,
+} from '../mcp/mcp-config-loader.js';
+
+export type AgentToolDecision = 'allow' | 'require_approval' | 'deny';
+
+export interface AgentVersionMcpAuthorization {
+  readonly enabledTools: readonly string[];
+  /** DSH public name → raw MCP tool name; never recover this by splitting. */
+  readonly publicToolNames?: Readonly<Record<string, string>>;
+  readonly decisions: Readonly<Record<string, AgentToolDecision>>;
+  readonly defaultDecision: AgentToolDecision;
+}
+
+/**
+ * The execution authorization projected from one immutable AgentVersion.
+ * `mcpConfigured` deliberately remains true for an empty/omitted MCP list:
+ * an AgentVersion is an allowlist boundary, so legacy empty MCP config cannot
+ * inherit whatever servers happen to be registered in the process.
+ */
+export interface AgentVersionAuthorization {
+  readonly mcpConfigured: true;
+  readonly decisions: Readonly<Record<string, AgentToolDecision>>;
+  readonly mcpServers: Readonly<Record<string, AgentVersionMcpAuthorization>>;
+  /** DSH public name → stable server/raw identity. */
+  readonly mcpTools?: Readonly<Record<string, { serverId: string; toolName: string }>>;
+}
 
 /**
  * Deep-clone then freeze plain JSON-compatible structures.
  * @param value
  * @returns {unknown}
  */
-export function deepFreezeClone(value: unknown) {
+export function deepFreezeClone<T>(value: T): T {
   if (value === null || typeof value !== 'object') return value;
   if (Array.isArray(value)) {
-    const arr = value.map((v) => deepFreezeClone(v));
-    return Object.freeze(arr);
+    const arr: unknown[] = (value as unknown[]).map((v) => deepFreezeClone(v));
+    return Object.freeze(arr) as T;
   }
   const out: Record<string, unknown> = {};
-  for (const [k, v] of Object.entries((value as Record<string, any>))) {
+  for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
     out[k] = deepFreezeClone(v);
   }
-  return Object.freeze(out);
+  return Object.freeze(out) as T;
 }
 
 /**
@@ -153,8 +182,181 @@ export function normalizeThinkingLevel(value: unknown) {
  * @param value
  * @returns {boolean}
  */
-function isPlainObject(value: unknown) {
+function isPlainObject(value: unknown): value is Record<string, unknown> {
   return value != null && typeof value === 'object' && !Array.isArray(value);
+}
+
+const AGENT_DECISIONS = Object.freeze(['allow', 'require_approval', 'deny']);
+const AGENT_DECISION_RANK: Readonly<Record<AgentToolDecision, number>> = Object.freeze({
+  allow: 0,
+  require_approval: 1,
+  deny: 2,
+});
+const AUTH_RISK_FIELDS = Object.freeze([
+  'riskLevels',
+  'riskApproval',
+  'classRiskLevels',
+]);
+
+function normalizeAgentDecision(value: unknown, field: string): AgentToolDecision {
+  const candidate =
+    isPlainObject(value) && Object.hasOwn(value as object, 'decision')
+      ? (value as Record<string, unknown>).decision
+      : value;
+  const decision = String(candidate ?? '').trim().toLowerCase();
+  if (!AGENT_DECISIONS.includes(decision)) {
+    throw new PiRuntimeFactoryError(
+      `${field} must be allow|require_approval|deny`,
+      { code: 'PI_TOOL_POLICY_INVALID' },
+    );
+  }
+  return decision as AgentToolDecision;
+}
+
+/**
+ * Merge two explicit decisions without allowing a legacy spelling to loosen a
+ * canonical one.  AgentVersion snapshots predating schema v1 may contain both
+ * `toolPolicy.tools` and flat entries, or both a current name and an old alias.
+ * Those are one logical rule after alias projection, so the stricter value is
+ * the only safe deterministic result.
+ */
+function putStrictestDecision(
+  table: Record<string, AgentToolDecision>,
+  toolName: string,
+  decision: AgentToolDecision,
+) {
+  const current = table[toolName];
+  if (
+    current === undefined ||
+    AGENT_DECISION_RANK[decision] > AGENT_DECISION_RANK[current]
+  ) {
+    table[toolName] = decision;
+  }
+}
+
+/**
+ * Preserve the read-time aliases used by old snapshots without changing the
+ * frozen config or its hash. When multiple spellings resolve to one current
+ * name, the stricter decision wins.
+ */
+function projectAuthorizationToolNames(table: Record<string, unknown>) {
+  const out: Record<string, AgentToolDecision> = {};
+  for (const [rawKey, rawValue] of Object.entries(table)) {
+    const key = String(rawKey).trim();
+    if (key.includes('::') || key.endsWith('*')) {
+      throw new PiRuntimeFactoryError(
+        `toolPolicy.tools.${rawKey} must be an exact tool name; wildcard and server::tool entries belong in riskLevels`,
+        { code: 'PI_TOOL_POLICY_INVALID' },
+      );
+    }
+    const projected = key.startsWith('mcp__') ? key : resolveToolNameAlias(key);
+    if (projected === null) continue;
+    putStrictestDecision(
+      out,
+      projected,
+      normalizeAgentDecision(rawValue, `toolPolicy.tools.${rawKey}`),
+    );
+  }
+  return out;
+}
+
+function buildAgentVersionAuthorization(
+  configJson: Record<string, unknown>,
+): AgentVersionAuthorization {
+  const rawPolicy = configJson.toolPolicy;
+  if (rawPolicy != null && !isPlainObject(rawPolicy)) {
+    // bindAgentVersionConfig performs the same shape check for its model path;
+    // keep this local check so direct authorization callers fail closed too.
+    throw new PiRuntimeFactoryError('AgentVersion.toolPolicy must be an object', {
+      code: 'PI_TOOL_POLICY_INVALID',
+    });
+  }
+  const policy = (rawPolicy as Record<string, unknown> | undefined) ?? {};
+  const decisions: Record<string, AgentToolDecision> = {};
+  if (policy.tools != null && !isPlainObject(policy.tools)) {
+    throw new PiRuntimeFactoryError('AgentVersion.toolPolicy.tools must be an object', {
+      code: 'PI_TOOL_POLICY_INVALID',
+    });
+  }
+  if (isPlainObject(policy.tools)) {
+    Object.assign(
+      decisions,
+      projectAuthorizationToolNames(policy.tools as Record<string, unknown>),
+    );
+  }
+  // Legacy snapshots also used flat toolName → decision entries. Risk-table
+  // fields are deliberately excluded; they are consumed by the risk resolver.
+  const flat: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(policy)) {
+    if (key === 'tools' || AUTH_RISK_FIELDS.includes(key)) continue;
+    flat[key] = value;
+  }
+  for (const [toolName, decision] of Object.entries(
+    projectAuthorizationToolNames(flat),
+  )) {
+    putStrictestDecision(decisions, toolName, decision);
+  }
+
+  const mcpServers: Record<string, AgentVersionMcpAuthorization> = {};
+  const mcpTools: Record<string, { serverId: string; toolName: string }> = {};
+  for (const server of loadMcpConfigFromAgentVersion({ configJson })) {
+    const nested = server.toolPolicy as Record<string, unknown>;
+    const nestedDecisions: Record<string, AgentToolDecision> = {};
+    const nestedTools = nested.tools;
+    if (nestedTools != null && !isPlainObject(nestedTools)) {
+      throw new PiRuntimeFactoryError(
+        `mcpServers.${server.serverId}.toolPolicy.tools must be an object`,
+        { code: 'PI_TOOL_POLICY_INVALID' },
+      );
+    }
+    if (isPlainObject(nestedTools)) {
+      for (const [tool, value] of Object.entries(nestedTools)) {
+        if (!/^[A-Za-z0-9._-]+$/.test(tool)) {
+          throw new PiRuntimeFactoryError(
+            `mcpServers.${server.serverId}.toolPolicy.tools.${tool} must be a bare tool name`,
+            { code: 'PI_TOOL_POLICY_INVALID' },
+          );
+        }
+        nestedDecisions[tool] = normalizeAgentDecision(
+          value,
+          `mcpServers.${server.serverId}.toolPolicy.tools.${tool}`,
+        );
+      }
+    }
+    const publicToolNames: Record<string, string> = {};
+    for (const toolName of server.enabledTools) {
+      const publicName = mcpToolName(server.serverId, toolName);
+      publicToolNames[publicName] = toolName;
+      mcpTools[publicName] = { serverId: server.serverId, toolName };
+      // Project nested defaults/decisions into the complete DSH public name
+      // map. Explicit top-level toolPolicy entries are applied below by the
+      // execution resolver and remain the stricter layer when both exist.
+      putStrictestDecision(
+        decisions,
+        publicName,
+        normalizeAgentDecision(
+          nestedDecisions[toolName] ?? nested.default ?? 'allow',
+          `mcpServers.${server.serverId}.toolPolicy.${toolName}`,
+        ),
+      );
+    }
+    mcpServers[server.serverId] = {
+      enabledTools: Object.freeze([...server.enabledTools]),
+      publicToolNames: Object.freeze(publicToolNames),
+      decisions: Object.freeze(nestedDecisions),
+      defaultDecision: normalizeAgentDecision(
+        nested.default ?? 'allow',
+        `mcpServers.${server.serverId}.toolPolicy.default`,
+      ),
+    };
+  }
+
+  return Object.freeze({
+    mcpConfigured: true,
+    decisions: Object.freeze(decisions),
+    mcpServers: Object.freeze(mcpServers),
+    mcpTools: Object.freeze(mcpTools),
+  });
 }
 
 /**
@@ -190,10 +392,10 @@ export function bindAgentVersionConfig(agentVersion: Record<string, any>) {
     });
   }
   const rawConfig =
-    v.configJson && typeof v.configJson === 'object'
-      ? (v.configJson as Record<string, unknown>)
-      : v.config_json && typeof v.config_json === 'object'
-        ? (v.config_json as Record<string, unknown>)
+    v.configJson != null
+      ? parseAgentVersionConfigJson(v.configJson, 'configJson')
+      : v.config_json != null
+        ? parseAgentVersionConfigJson(v.config_json, 'config_json')
         : {};
   // Never re-embed runtime credentials into frozen Agent Version config.
   const configJson = /** @type {Record<string, unknown>} */ (
@@ -283,6 +485,7 @@ export function bindAgentVersionConfig(agentVersion: Record<string, any>) {
     mcpServers: Array.isArray(configJson.mcpServers)
       ? Object.freeze([...configJson.mcpServers])
       : Object.freeze([]),
+    authorization: buildAgentVersionAuthorization(configJson),
     toolPolicy: Object.freeze({ ...toolPolicy }),
     sandboxPolicy: Object.freeze({ ...sandboxPolicy }),
   });

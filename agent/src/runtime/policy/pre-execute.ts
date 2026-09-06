@@ -18,6 +18,12 @@ export interface PendingApproval {
   readonly toolName: string;
   readonly sourceDigest: string;
   readonly argsCanonical: string;
+  /** Durable tool-execution fingerprint. Present on MySQL-backed replay rows. */
+  readonly argsIntegrity?: string | null;
+  /** Durable ids used by the MySQL-backed one-time claim path. */
+  readonly durableApprovalId?: string;
+  readonly toolExecutionId?: string;
+  readonly toolCallId?: string;
   readonly status: ApprovalStatus;
   readonly runStatusHint: 'WAITING_APPROVAL';
 }
@@ -44,7 +50,14 @@ export interface ApprovalStore {
    * 消费一次性授权（ADR 0009 D5：出厂词表只有 `allowed-once`，没有 allow-always）。
    * 不实现等于同一条批准可以被重复使用——那是越权。
    */
-  consume?(id: string): Promise<void>;
+  consume?(
+    id: string,
+    expected?: {
+      toolName: string;
+      args: Record<string, unknown>;
+      argsIntegrity?: string | null;
+    },
+  ): Promise<void>;
 }
 
 export class InMemoryApprovalStore implements ApprovalStore {
@@ -68,7 +81,14 @@ export class InMemoryApprovalStore implements ApprovalStore {
     }
     return null;
   }
-  async consume(id: string): Promise<void> {
+  async consume(
+    id: string,
+    _expected?: {
+      toolName: string;
+      args: Record<string, unknown>;
+      argsIntegrity?: string | null;
+    },
+  ): Promise<void> {
     this.consumed.add(id);
   }
 }
@@ -105,9 +125,35 @@ export async function evaluatePreExecute(
   riskOverrides:
     | Readonly<Record<string, PolicyRiskLevel>>
     | ((toolName: string) => PolicyRiskLevel | undefined) = {},
+  /** Additional complete policy layer (AgentVersion authorization + risk). */
+  decisionResolver?: (
+    toolName: string,
+    args: Record<string, unknown>,
+  ) => PolicyDecision | null,
 ): Promise<PreExecuteResult> {
   const digest = digestArgs(input.args);
-  const pieces: PolicyDecision[] = [decideFromRiskTable(input.toolName, riskOverrides)];
+  const resolvedPolicy = decisionResolver?.(input.toolName, input.args) ?? null;
+  // A complete resolver already includes the platform risk table and all
+  // AgentVersion layers. Combining it with the legacy fixed table would let a
+  // default `high → require_approval` decision override an explicit platform
+  // `riskApproval.high = allow`. Keep the fixed table only for callers that do
+  // not provide the complete resolver.
+  const pieces: PolicyDecision[] = [
+    resolvedPolicy ?? decideFromRiskTable(input.toolName, riskOverrides),
+  ];
+  if (input.replayDigest !== undefined) {
+    const mismatch = rejectMismatchedDigest(input.replayDigest, digest);
+    if (mismatch) pieces.push(mismatch);
+  }
+  const currentDecision = mergePolicyDecisions(pieces);
+
+  // A durable approval can satisfy a current require_approval decision. It can
+  // never resurrect a call that the current platform/version policy denies.
+  // Returning before the lookup also prevents a stale approval from being
+  // consumed as a side effect of a now-denied call.
+  if (currentDecision.decision === 'deny') {
+    return { decision: currentDecision, approval: null, blocked: true };
+  }
 
   // 续跑路径（ADR 0009 D5）：这次调用的参数指纹如果对上了一条**已解决**的决定，
   // 就按那条决定走，不再问第二次人。
@@ -125,9 +171,25 @@ export async function evaluatePreExecute(
       : await store.findResolvedByDigest(input.toolName, digest, input.args);
   if (resolved !== null) {
     if (resolved.status === 'APPROVED') {
+      if (
+        Object.hasOwn(resolved, 'argsIntegrity') &&
+        (typeof resolved.argsIntegrity !== 'string' ||
+          !/^[0-9a-f]{64}$/i.test(resolved.argsIntegrity))
+      ) {
+        throw new Error(
+          'approved replay lacks a valid durable args integrity fingerprint',
+        );
+      }
       // 一次性授权：出厂词表只有 `allowed-once`，没有 allow-always。
       // 不消费掉，同一条批准就能被反复使用。
-      await store.consume?.(resolved.id);
+      if (typeof store.consume !== 'function') {
+        throw new Error('approved replay has no durable one-time consumer');
+      }
+      await store.consume(resolved.id, {
+        toolName: input.toolName,
+        args: input.args,
+        argsIntegrity: resolved.argsIntegrity,
+      });
       return {
         decision: makePolicyDecision({
           decision: 'allow',
@@ -152,11 +214,7 @@ export async function evaluatePreExecute(
       blocked: true,
     };
   }
-  if (input.replayDigest !== undefined) {
-    const mismatch = rejectMismatchedDigest(input.replayDigest, digest);
-    if (mismatch) pieces.push(mismatch);
-  }
-  const decision = mergePolicyDecisions(pieces);
+  const decision = currentDecision;
   if (decision.decision === 'allow') {
     return { decision, approval: null, blocked: false };
   }

@@ -66,7 +66,7 @@ function fakeExecutor(overrides: Record<string, unknown> = {}) {
 const dshRuntimeSession = { agent: {}, sessionManager: {} } as never;
 
 test('H4.5 已批准的续跑不再需要 getToolDefinition（DSH session 上根本没有这个方法）', async () => {
-  const { executor } = fakeExecutor();
+  const { executor, recorded } = fakeExecutor();
   const text = await prepareApprovalResume(executor, {
     approvalResume: { approvalId: APPROVAL_ID, toolExecutionId: TOOL_EXEC_ID, status: 'APPROVED' },
     runtimeSession: dshRuntimeSession,
@@ -81,6 +81,11 @@ test('H4.5 已批准的续跑不再需要 getToolDefinition（DSH session 上根
     String(text),
     /same arguments/,
     '必须明确要求参数原样——改了就查不到那条批准，会重新问人',
+  );
+  assert.equal(
+    recorded[0]?.preflight,
+    true,
+    'resume 只预检 WAITING_APPROVAL；一次性 RUNNING claim 留给重新发出的工具调用',
   );
 });
 
