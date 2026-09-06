@@ -29,6 +29,20 @@ const SRC_ROOT = path.join(root, 'src');
  */
 const TRANSIENT_MAP_WHITELIST = Object.freeze([
   {
+    rel: 'application/agent-config-validator.ts',
+    match: /const\s+rank\s*=\s*new\s+Map\s*\(/,
+    purpose:
+      'Function-local key-order index while canonicalizing one config object; discarded with the call frame',
+    scope: 'local',
+  },
+  {
+    rel: 'application/agent-config-validator.ts',
+    match: /const\s+platformServers\s*=\s*new\s+Map\s*\(/,
+    purpose:
+      'Function-local lookup over the process MCP inventory during one validate() call; not Run state',
+    scope: 'local',
+  },
+  {
     rel: 'bootstrap/http-main.ts',
     match: /const\s+sessionByAgentId\s*=\s*new\s+Map\s*\(/,
     purpose:
@@ -405,9 +419,11 @@ describe('no authoritative in-process Run Map (B3)', () => {
     // `infrastructure/sandbox/internal-hmac.ts`（HMAC 实现收口到
     // `@pi/contract/hmac.js`，整文件删除）与 `runtime/providers/memory.ts`
     // （memory 工具按 ADR 0009 D10 退役，实现是死代码，一并删除）。
+    // 2026-09-06: 26 → 28。新增的两条都在 `application/agent-config-validator.ts`，
+    // 是同一次 validate()/构造调用内的函数局部索引，不跨请求、不跨进程存活。
     assert.equal(
       TRANSIENT_MAP_WHITELIST.length,
-      26,
+      28,
       'whitelist size drift — update STATUS B3 inventory evidence if intentional',
     );
   });

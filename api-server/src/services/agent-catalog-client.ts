@@ -28,6 +28,13 @@ async function requestAgentCatalog(
     );
     error.status = resp.status;
     if (typeof payload.code === 'string') error.code = payload.code;
+    // 只放行明确列出的结构化字段：激活冲突要让 UI 看见当前指针，
+    // 但 BFF 不能把 agent/ 的任意错误载荷原样转出去。
+    const details: Record<string, unknown> = {};
+    if (Object.hasOwn(payload, 'active_version_id')) {
+      details.active_version_id = payload.active_version_id ?? null;
+    }
+    if (Object.keys(details).length > 0) error.details = details;
     throw error;
   }
   if (resp.status === 204) return null;
@@ -77,6 +84,25 @@ export async function setAgentDefinitionActiveVersion(
   { auth = null, traceId = null }: { auth?: any; traceId?: string | null } = {},
 ): Promise<any> {
   return requestAgentCatalog(`/${encodeURIComponent(agentId)}/active-version`, {
+    method: 'POST', body, auth, traceId,
+  });
+}
+
+/**
+ * 配置面：`options` 是能力投影，`validate` 只解析不落库。
+ * BFF 在这两条上仍然只做限时转发与身份投影——语义权威在 agent/。
+ */
+export async function getAgentConfigOptions(
+  { auth = null, traceId = null }: { auth?: any; traceId?: string | null } = {},
+): Promise<any> {
+  return requestAgentCatalog('/config/options', { auth, traceId });
+}
+
+export async function validateAgentConfig(
+  body: any,
+  { auth = null, traceId = null }: { auth?: any; traceId?: string | null } = {},
+): Promise<any> {
+  return requestAgentCatalog('/config/validate', {
     method: 'POST', body, auth, traceId,
   });
 }

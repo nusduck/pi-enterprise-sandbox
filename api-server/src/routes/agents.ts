@@ -4,9 +4,11 @@ import type { ServerResponse } from 'node:http';
 import {
   createAgentDefinition,
   createAgentDefinitionVersion,
+  getAgentConfigOptions,
   listAgentDefinitionVersions,
   listAgentDefinitions,
   setAgentDefinitionActiveVersion,
+  validateAgentConfig,
 } from '../services/agent-catalog-client.js';
 import { resolveTrustedAuth, type ReqWithTrace } from '../application/run-access-service.js';
 import { sendError, sendJson as json } from '../http/response.js';
@@ -79,6 +81,31 @@ export async function handleSetAgentActiveVersion(
     json(res, 200, await setAgentDefinitionActiveVersion(
       agentId, body, { auth, traceId: req?.traceId },
     ));
+  } catch (error) {
+    sendError(res, error, req?.traceId);
+  }
+}
+
+/** GET /api/agents/config/options — 配置 schema 与平台约束（admin，由 agent/ 判定）。 */
+export async function handleAgentConfigOptions(res: ServerResponse, req: ReqWithTrace | null = null): Promise<void> {
+  try {
+    const auth = await resolveTrustedAuth(req);
+    json(res, 200, await getAgentConfigOptions({ auth, traceId: req?.traceId }));
+  } catch (error) {
+    sendError(res, error, req?.traceId);
+  }
+}
+
+/**
+ * POST /api/agents/config/validate — 只解析不落库。
+ *
+ * 字段级校验结果是合法请求的正常结果，所以 200 + `valid:false`；
+ * 这里不复制任何校验逻辑，BFF 依旧只是转发。
+ */
+export async function handleAgentConfigValidate(body: any, res: ServerResponse, req: ReqWithTrace | null = null): Promise<void> {
+  try {
+    const auth = await resolveTrustedAuth(req);
+    json(res, 200, await validateAgentConfig(body, { auth, traceId: req?.traceId }));
   } catch (error) {
     sendError(res, error, req?.traceId);
   }

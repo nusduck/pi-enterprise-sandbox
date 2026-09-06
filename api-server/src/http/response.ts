@@ -11,6 +11,7 @@ export function sendError(res: ServerResponse, error: unknown, traceId: string |
   sendJson(res, normalized.status, {
     error: normalized.message,
     code: normalized.code,
+    ...(normalized.details ?? {}),
     ...(traceId ? { trace_id: traceId } : {}),
   });
 }

@@ -7,6 +7,7 @@
  *   一句 "Internal server error"，Agent 的输出里连栈都没有
  */
 import {
+  ActiveVersionConflictError,
   AdminRoleRequiredError,
   OwnerScopedNotFoundError,
   IdempotencyInProgressError,
@@ -69,6 +70,18 @@ export function mapErrorToHttp(error: unknown): HttpErrorResponse {
   }
   if (error instanceof IdempotencyConflictError) {
     return { status: 409, body: { error: error.message, code: error.code } };
+  }
+  if (error instanceof ActiveVersionConflictError) {
+    // The current pointer travels with the 409 so the client can show the
+    // difference instead of retrying blind over someone else's activation.
+    return {
+      status: 409,
+      body: {
+        error: error.message,
+        code: error.code,
+        active_version_id: error.currentActiveVersionId,
+      },
+    };
   }
   if (error instanceof ParentProvisioningRaceError) {
     return {

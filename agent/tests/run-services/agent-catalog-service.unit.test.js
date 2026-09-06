@@ -327,3 +327,145 @@ describe('会话与 Agent 的绑定', () => {
     );
   });
 });
+
+describe('AgentCatalogService — 配置面与激活并发', () => {
+  it('config options / validate 都是 admin 面，member 一律拒绝', async () => {
+    const world = createFakeRunWorld();
+    await provisionOwner(world);
+    const catalog = createCatalog(world);
+
+    await assert.rejects(
+      () => catalog.configOptions(MEMBER_AUTH),
+      (err) => err instanceof AdminRoleRequiredError,
+    );
+    await assert.rejects(
+      () => catalog.validateConfig(MEMBER_AUTH, { config: { schemaVersion: 1 } }),
+      (err) => err instanceof AdminRoleRequiredError,
+    );
+
+    const options = await catalog.configOptions(ADMIN_AUTH);
+    assert.equal(options.schemaVersion, 1);
+    assert.ok(options.capabilityRevision.length > 0);
+    // 能力投影里不能出现连接材料或宿主路径。
+    const serialized = JSON.stringify(options);
+    for (const forbidden of ['secretRef', 'command', 'args', 'headers', 'MCP_SERVERS_JSON']) {
+      assert.equal(serialized.includes(forbidden), false, `options leaked ${forbidden}`);
+    }
+  });
+
+  it('validate 只解析：合法请求的字段错误是 valid=false，而不是抛异常', async () => {
+    const world = createFakeRunWorld();
+    await provisionOwner(world);
+    const catalog = createCatalog(world);
+
+    const ok = await catalog.validateConfig(ADMIN_AUTH, {
+      config: { schemaVersion: 1, systemPrompt: 'persona' },
+    });
+    assert.equal(ok.valid, true);
+    assert.ok(ok.normalizedConfig);
+
+    const bad = await catalog.validateConfig(ADMIN_AUTH, {
+      config: { schemaVersion: 1, modelPolicy: { modelId: 'not-a-real-model' } },
+    });
+    assert.equal(bad.valid, false);
+    assert.equal(bad.normalizedConfig, undefined);
+    assert.ok(bad.errors.some((error) => error.path === 'modelPolicy.modelId'));
+
+    // 结构性问题仍然是 400（ValidationError），不是 200 + valid=false。
+    await assert.rejects(
+      () => catalog.validateConfig(ADMIN_AUTH, { config: 'nope' }),
+      (err) => err instanceof ValidationError,
+    );
+  });
+
+  it('validate 带别的 org 的 agent_id 时按 404 处理，不泄漏存在性', async () => {
+    const world = createFakeRunWorld();
+    await provisionOwner(world);
+    await provisionOwner(world, OTHER_ORG_AUTH);
+    const catalog = createCatalog(world);
+    const mine = await catalog.createAgent(ADMIN_AUTH, { name: '我的' });
+
+    // 自己的 agent_id 可以带。
+    const ok = await catalog.validateConfig(ADMIN_AUTH, {
+      config: { schemaVersion: 1 },
+      agentId: mine.agent.agent_id,
+    });
+    assert.equal(ok.valid, true);
+
+    await assert.rejects(
+      () => catalog.validateConfig(OTHER_ORG_AUTH, {
+        config: { schemaVersion: 1 },
+        agentId: mine.agent.agent_id,
+      }),
+      (err) => err instanceof OwnerScopedNotFoundError,
+    );
+  });
+
+  it('expected_active_version_id 过期时 409，并带上当前指针；一致时正常激活', async () => {
+    const world = createFakeRunWorld();
+    await provisionOwner(world);
+    const catalog = createCatalog(world);
+    const created = await catalog.createAgent(ADMIN_AUTH, { name: '并发' });
+    const agentId = created.agent.agent_id;
+    const v1 = created.version.agent_version_id;
+
+    // 另一位 admin 抢先发布并激活了 v2。
+    const v2 = await catalog.createVersion(ADMIN_AUTH, agentId, {
+      config: { systemPrompt: 'v2' },
+    });
+    assert.equal(v2.agent.active_version_id, v2.version.agent_version_id);
+
+    // 拿着 v1 快照的管理员再保存并激活 → 冲突，且不落新版本。
+    await assert.rejects(
+      () => catalog.createVersion(ADMIN_AUTH, agentId, {
+        config: { systemPrompt: 'v3' },
+        expectedActiveVersionId: v1,
+      }),
+      (err) => {
+        assert.equal(err.code, 'ACTIVE_VERSION_CONFLICT');
+        assert.equal(err.currentActiveVersionId, v2.version.agent_version_id);
+        return true;
+      },
+    );
+    const afterConflict = await catalog.listVersions(ADMIN_AUTH, agentId);
+    assert.equal(afterConflict.versions.length, 2);
+
+    // 回滚到 v1 也要带对当前指针。
+    await assert.rejects(
+      () => catalog.setActiveVersion(ADMIN_AUTH, agentId, v1, {
+        expectedActiveVersionId: v1,
+      }),
+      (err) => err.code === 'ACTIVE_VERSION_CONFLICT',
+    );
+    const rolledBack = await catalog.setActiveVersion(ADMIN_AUTH, agentId, v1, {
+      expectedActiveVersionId: v2.version.agent_version_id,
+    });
+    assert.equal(rolledBack.agent.active_version_id, v1);
+  });
+
+  it('不激活的保存不受活跃指针影响；旧客户端不传该字段时行为不变', async () => {
+    const world = createFakeRunWorld();
+    await provisionOwner(world);
+    const catalog = createCatalog(world);
+    const created = await catalog.createAgent(ADMIN_AUTH, { name: '兼容窗口' });
+    const agentId = created.agent.agent_id;
+    const v1 = created.version.agent_version_id;
+
+    await catalog.createVersion(ADMIN_AUTH, agentId, { config: { systemPrompt: 'v2' } });
+
+    // activate:false + 过期的 expected → 不冲突：它不与别人的激活竞争。
+    const draft = await catalog.createVersion(ADMIN_AUTH, agentId, {
+      config: { systemPrompt: 'v3' },
+      activate: false,
+      expectedActiveVersionId: v1,
+    });
+    assert.equal(draft.version.version_no, 3);
+    assert.equal(draft.agent.active_version_id !== draft.version.agent_version_id, true);
+
+    // 完全不传该字段 → 跳过检查（兼容窗口）。
+    const legacyClient = await catalog.createVersion(ADMIN_AUTH, agentId, {
+      config: { systemPrompt: 'v4' },
+    });
+    assert.equal(legacyClient.agent.active_version_id, legacyClient.version.agent_version_id);
+  });
+});

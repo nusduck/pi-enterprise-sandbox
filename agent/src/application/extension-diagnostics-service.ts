@@ -17,6 +17,7 @@ import {
   decisionForRiskLevel,
   resolveToolRiskLevel,
 } from '../infrastructure/dsh/tool-risk-policy.js';
+import { selectableReasoningEfforts } from '../infrastructure/dsh/reasoning-efforts.js';
 import { loadMcpServerRegistry } from '../infrastructure/mcp/mcp-server-registry.js';
 
 const PRODUCT_PACKAGE = 'pi-enterprise-agent';
@@ -186,9 +187,14 @@ export function getExtensionDiagnostics(options: { profileId?: string, skillRoot
     options.mcpServers || [],
     options.mcpDiscovery,
   );
-  const models = options.models
-    ? [...options.models]
-    : [...buildRegistry().values()];
+  // `thinking_levels` is projected through the routed adapter's effort ids, so
+  // the capabilities view offers exactly what a version may pin and a Run may
+  // send. A registry file can narrow that list, never widen it.
+  const models = (options.models ? [...options.models] : [...buildRegistry().values()])
+    .map((model) => ({
+      ...model,
+      thinking_levels: [...selectableReasoningEfforts(model as never)],
+    }));
   // Report the risk level and approval outcome the policy engine will actually
   // produce, so the capabilities view is a readback of the configured risk
   // table rather than a second hardcoded opinion.

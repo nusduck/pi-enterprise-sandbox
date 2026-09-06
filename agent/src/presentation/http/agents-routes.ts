@@ -33,6 +33,12 @@ export interface AgentCatalogServiceLike {
     auth: AuthSubjects,
     agentId: string,
     agentVersionId: unknown,
+    opts?: { expectedActiveVersionId?: unknown },
+  ): Promise<unknown>;
+  configOptions(auth: AuthSubjects): Promise<unknown>;
+  validateConfig(
+    auth: AuthSubjects,
+    body: { config?: unknown, agentId?: unknown },
   ): Promise<unknown>;
 }
 
@@ -101,6 +107,20 @@ function readLimit(parsedUrl: URL): number | undefined {
   return Number(parsedUrl.searchParams.get('limit')) || undefined;
 }
 
+/**
+ * 把可选的乐观并发字段投影成 camelCase，**并保留「键不存在」这个状态**——
+ * 返回空对象（而不是 `{ expectedActiveVersionId: undefined }`）才能让服务层用
+ * `=== undefined` 区分「旧客户端没传」和「新客户端断言当前没有活跃版本」。
+ */
+function expectedActiveVersionOf(
+  body: Record<string, unknown>,
+): { expectedActiveVersionId?: unknown } {
+  for (const key of ['expected_active_version_id', 'expectedActiveVersionId']) {
+    if (Object.hasOwn(body, key)) return { expectedActiveVersionId: body[key] };
+  }
+  return {};
+}
+
 /** 处理 Agent 目录面。返回 true 表示这个请求已由本模块处理。 */
 export async function handleAgentCatalogRoute({
   req,
@@ -129,6 +149,36 @@ export async function handleAgentCatalogRoute({
     return true;
   }
 
+  // 配置面在版本路由之前匹配：`config` 是保留段，不会被当成 agentId。
+  if (path === '/internal/agents/config/options' && req.method === 'GET') {
+    const ctx = requireCatalogContext(req, res, agentCatalogService);
+    if (!ctx) return true;
+    try {
+      json(res, 200, await ctx.service.configOptions(ctx.auth));
+    } catch (error) {
+      respondWithMappedError(res, error);
+    }
+    return true;
+  }
+
+  if (path === '/internal/agents/config/validate' && req.method === 'POST') {
+    const ctx = requireCatalogContext(req, res, agentCatalogService);
+    if (!ctx) return true;
+    try {
+      const parsed = await parseJsonBody(req, res);
+      if (!parsed.ok) return true;
+      // 字段级校验结果是**合法请求的正常结果**，所以是 200 + valid=false；
+      // 只有结构性问题（body 不是对象、config 缺失）才是 400。
+      json(res, 200, await ctx.service.validateConfig(ctx.auth, {
+        config: parsed.body['config'],
+        agentId: parsed.body['agent_id'] ?? parsed.body['agentId'],
+      }));
+    } catch (error) {
+      respondWithMappedError(res, error);
+    }
+    return true;
+  }
+
   const versionsMatch = path.match(/^\/internal\/agents\/([^/]+)\/versions$/);
   if (versionsMatch && (req.method === 'GET' || req.method === 'POST')) {
     const ctx = requireCatalogContext(req, res, agentCatalogService);
@@ -143,7 +193,12 @@ export async function handleAgentCatalogRoute({
       }
       const parsed = await parseJsonBody(req, res);
       if (!parsed.ok) return true;
-      json(res, 201, await ctx.service.createVersion(ctx.auth, agentId, parsed.body));
+      json(res, 201, await ctx.service.createVersion(ctx.auth, agentId, {
+        ...parsed.body,
+        // 「没传」与「传了 null」语义不同：前者跳过乐观并发检查（旧客户端），
+        // 后者断言「我读到的是没有活跃版本」。展开成 camelCase 时必须保住这个区别。
+        ...expectedActiveVersionOf(parsed.body),
+      }));
     } catch (error) {
       respondWithMappedError(res, error);
     }
@@ -162,6 +217,7 @@ export async function handleAgentCatalogRoute({
       ctx.auth,
       agentId,
       parsed.body['agent_version_id'] ?? parsed.body['agentVersionId'] ?? null,
+      expectedActiveVersionOf(parsed.body),
     ));
   } catch (error) {
     respondWithMappedError(res, error);

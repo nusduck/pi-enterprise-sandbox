@@ -13,8 +13,11 @@ import { normalizeCreateRunBody } from '../src/routes/runs.js';
 import {
   listAgentDefinitions,
   createAgentDefinition,
+  getAgentConfigOptions,
   setAgentDefinitionActiveVersion,
+  validateAgentConfig,
 } from '../src/services/agent-catalog-client.js';
+import { asHttpError } from '../src/http/errors.js';
 
 const AUTH = {
   actingUserId: 'user-1',
@@ -43,6 +46,60 @@ describe('/api/agents is an authenticated surface', () => {
     assert.equal(isProtectedApiPath('/api/agents'), true);
     assert.equal(isProtectedApiPath('/api/agents/AGENT/versions'), true);
     assert.equal(isProtectedApiPath('/api/agents/AGENT/active-version'), true);
+    assert.equal(isProtectedApiPath('/api/agents/config/options'), true);
+    assert.equal(isProtectedApiPath('/api/agents/config/validate'), true);
+  });
+});
+
+describe('Agent config plane stays a pure proxy', () => {
+  it('forwards options and validate with the projected identity, not a browser claim', async (t) => {
+    const seen = [];
+    const restore = stubFetch(async (url, init) => {
+      seen.push({ url: String(url), init });
+      return jsonResponse(200, { valid: true, errors: [], warnings: [], capabilityRevision: 'r' });
+    });
+    t.after(restore);
+
+    await getAgentConfigOptions({ auth: AUTH });
+    await validateAgentConfig(
+      { config: { schemaVersion: 1 }, agent_id: 'A', valid: true, normalizedConfig: { evil: 1 } },
+      { auth: AUTH },
+    );
+
+    assert.match(seen[0].url, /\/internal\/agents\/config\/options$/);
+    assert.match(seen[1].url, /\/internal\/agents\/config\/validate$/);
+    for (const call of seen) {
+      assert.equal(call.init.headers['X-Acting-User-Id'], 'user-1');
+      assert.equal(call.init.headers['X-Acting-Role'], 'admin');
+    }
+    // BFF 不裁剪也不相信 body：agent/ 才判断哪些字段有效。
+    assert.deepEqual(JSON.parse(seen[1].init.body), {
+      config: { schemaVersion: 1 },
+      agent_id: 'A',
+      valid: true,
+      normalizedConfig: { evil: 1 },
+    });
+  });
+
+  it('carries the 409 current pointer through, and nothing else from the payload', async (t) => {
+    const restore = stubFetch(async () => jsonResponse(409, {
+      error: 'Active version changed since it was read',
+      code: 'ACTIVE_VERSION_CONFLICT',
+      active_version_id: 'V2',
+      internal_hint: 'do not forward me',
+    }));
+    t.after(restore);
+
+    await assert.rejects(
+      () => setAgentDefinitionActiveVersion('A', { agent_version_id: 'V1' }, { auth: AUTH }),
+      (err) => {
+        const http = asHttpError(err);
+        assert.equal(http.status, 409);
+        assert.equal(http.code, 'ACTIVE_VERSION_CONFLICT');
+        assert.deepEqual(http.details, { active_version_id: 'V2' });
+        return true;
+      },
+    );
   });
 });
 

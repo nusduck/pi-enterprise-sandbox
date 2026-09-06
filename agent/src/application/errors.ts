@@ -101,6 +101,27 @@ export class OwnerScopedNotFoundError extends ApplicationError {
   }
 }
 
+/**
+ * 另一位 admin 已经把活跃指针换掉了。
+ *
+ * 与 404 / 400 分开：调用方有权限、Agent 也存在，只是它看到的活跃版本已经过期。
+ * 这条错误必须带上**当前**的活跃版本 ID，否则 UI 只能盲目重试——而盲目重试正好
+ * 就是这条乐观并发检查要拦住的「互相覆盖」。
+ */
+export class ActiveVersionConflictError extends ApplicationError {
+  readonly currentActiveVersionId: string | null;
+
+  constructor(currentActiveVersionId: string | null, details?: ErrorDetails) {
+    super('Active version changed since it was read', {
+      code: 'ACTIVE_VERSION_CONFLICT',
+      retryable: false,
+      details,
+    });
+    this.name = 'ActiveVersionConflictError';
+    this.currentActiveVersionId = currentActiveVersionId;
+  }
+}
+
 /** Input validation failure (messages, trace, sizes, etc.). */
 export class ValidationError extends ApplicationError {
   constructor(message: string, details?: ErrorDetails) {

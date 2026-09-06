@@ -77,6 +77,8 @@ import {
   handleUpdateCronJob,
 } from './src/routes/cron-jobs.js';
 import {
+  handleAgentConfigOptions,
+  handleAgentConfigValidate,
   handleCreateAgent,
   handleCreateAgentVersion,
   handleListAgentVersions,
@@ -366,6 +368,16 @@ const server = http.createServer(async (rawReq, res) => {
     if (req.method === 'POST' && path === '/api/agents') {
       const parsed = await readJsonBody(req, { maxBytes: config.JSON_BODY_LIMIT_BYTES });
       await handleCreateAgent(parsed, res, req);
+      return;
+    }
+    // 配置面在 `:id` 路由之前：`config` 是保留段，不能被当成 agentId。
+    if (req.method === 'GET' && path === '/api/agents/config/options') {
+      await handleAgentConfigOptions(res, req);
+      return;
+    }
+    if (req.method === 'POST' && path === '/api/agents/config/validate') {
+      const parsed = await readJsonBody(req, { maxBytes: config.JSON_BODY_LIMIT_BYTES });
+      await handleAgentConfigValidate(parsed, res, req);
       return;
     }
     {

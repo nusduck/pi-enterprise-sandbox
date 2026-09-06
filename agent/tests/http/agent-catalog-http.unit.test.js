@@ -10,6 +10,7 @@ import { after, before, describe, it } from 'node:test';
 
 import { createAgentHttpServer } from '../../src/bootstrap/create-http-server.js';
 import {
+  ActiveVersionConflictError,
   AdminRoleRequiredError,
   OwnerScopedNotFoundError,
 } from '../../src/application/errors.js';
@@ -66,9 +67,29 @@ describe('Agent catalog HTTP', () => {
         calls.push(['createVersion', agentId, body.activate]);
         return { agent: { agent_id: agentId }, version: { version_no: 2 } };
       },
-      async setActiveVersion(_auth, agentId, agentVersionId) {
-        calls.push(['setActiveVersion', agentId, agentVersionId]);
+      async setActiveVersion(_auth, agentId, agentVersionId, opts) {
+        calls.push(['setActiveVersion', agentId, agentVersionId, opts]);
+        if (Object.hasOwn(opts ?? {}, 'expectedActiveVersionId')
+          && opts.expectedActiveVersionId !== 'V0') {
+          throw new ActiveVersionConflictError('V0');
+        }
         return { agent: { agent_id: agentId }, version: { version_no: 1 } };
+      },
+      async configOptions(auth) {
+        calls.push(['configOptions', auth.role]);
+        if (auth.role !== 'admin') throw new AdminRoleRequiredError();
+        return { schemaVersion: 1, fieldSupport: {}, platformConstraints: {}, capabilityRevision: 'rev' };
+      },
+      async validateConfig(auth, body) {
+        calls.push(['validateConfig', auth.role, body.agentId ?? null]);
+        if (auth.role !== 'admin') throw new AdminRoleRequiredError();
+        return {
+          valid: false,
+          errors: [{ path: 'modelPolicy.modelId', code: 'MODEL_NOT_FOUND', message: 'no' }],
+          warnings: [],
+          effectiveSummary: {},
+          capabilityRevision: 'rev',
+        };
       },
     };
     ({ server, port } = await listen(baseDeps(service)));
@@ -147,7 +168,62 @@ describe('Agent catalog HTTP', () => {
       body: JSON.stringify({ agent_version_id: 'V1' }),
     });
     assert.equal(activated.status, 200);
-    assert.deepEqual(calls.at(-1), ['setActiveVersion', 'owned', 'V1']);
+    assert.deepEqual(calls.at(-1), ['setActiveVersion', 'owned', 'V1', {}]);
+  });
+
+  it('serves the config options and validate plane under the admin gate', async () => {
+    const denied = await fetch(url('/internal/agents/config/options'), {
+      headers: { ...HEADERS, 'X-Acting-Role': 'user' },
+    });
+    assert.equal(denied.status, 403);
+    assert.equal((await denied.json()).code, 'ADMIN_REQUIRED');
+
+    const options = await fetch(url('/internal/agents/config/options'), {
+      headers: { ...HEADERS, 'X-Acting-Role': 'admin' },
+    });
+    assert.equal(options.status, 200);
+    assert.equal((await options.json()).capabilityRevision, 'rev');
+
+    // A field-level rejection is the normal outcome of a well-formed request:
+    // 200 + valid:false, never 400 — the UI has to render the paths.
+    const validated = await fetch(url('/internal/agents/config/validate'), {
+      method: 'POST',
+      headers: { ...HEADERS, 'X-Acting-Role': 'admin' },
+      body: JSON.stringify({ config: { schemaVersion: 1 }, agent_id: 'owned' }),
+    });
+    assert.equal(validated.status, 200);
+    const body = await validated.json();
+    assert.equal(body.valid, false);
+    assert.equal(body.errors[0].path, 'modelPolicy.modelId');
+    assert.deepEqual(calls.at(-1), ['validateConfig', 'admin', 'owned']);
+  });
+
+  it('passes the optimistic activation field through and surfaces 409 with the current pointer', async () => {
+    const stale = await fetch(url('/internal/agents/owned/active-version'), {
+      method: 'POST',
+      headers: { ...HEADERS, 'X-Acting-Role': 'admin' },
+      body: JSON.stringify({ agent_version_id: 'V1', expected_active_version_id: 'V9' }),
+    });
+    assert.equal(stale.status, 409);
+    const body = await stale.json();
+    assert.equal(body.code, 'ACTIVE_VERSION_CONFLICT');
+    assert.equal(body.active_version_id, 'V0');
+
+    const fresh = await fetch(url('/internal/agents/owned/active-version'), {
+      method: 'POST',
+      headers: { ...HEADERS, 'X-Acting-Role': 'admin' },
+      body: JSON.stringify({ agent_version_id: 'V1', expected_active_version_id: 'V0' }),
+    });
+    assert.equal(fresh.status, 200);
+
+    // 显式 null 与「没传」必须区分开：前者断言当前没有活跃版本。
+    const explicitNull = await fetch(url('/internal/agents/owned/active-version'), {
+      method: 'POST',
+      headers: { ...HEADERS, 'X-Acting-Role': 'admin' },
+      body: JSON.stringify({ agent_version_id: 'V1', expected_active_version_id: null }),
+    });
+    assert.equal(explicitNull.status, 409);
+    assert.deepEqual(calls.at(-1), ['setActiveVersion', 'owned', 'V1', { expectedActiveVersionId: null }]);
   });
 
   it('rejects a malformed JSON body before reaching the service', async () => {

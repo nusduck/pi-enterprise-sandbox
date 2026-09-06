@@ -17,10 +17,16 @@
  */
 
 import {
+  ActiveVersionConflictError,
   AdminRoleRequiredError,
   OwnerScopedNotFoundError,
   ValidationError,
 } from './errors.js';
+import {
+  AgentConfigValidator,
+  type AgentConfigOptions,
+  type AgentConfigValidation,
+} from './agent-config-validator.js';
 import {
   ExternalIdentityResolver,
   type ExternalAuth,
@@ -111,6 +117,7 @@ export class AgentCatalogService {
   db: Loose;
   generateId: Loose;
   now: Loose;
+  configValidator: AgentConfigValidator;
 
   constructor(deps: {
     transactionManager: Loose,
@@ -118,6 +125,11 @@ export class AgentCatalogService {
     db: Loose,
     generateId: () => string,
     now?: () => Date,
+    /**
+     * 配置契约的唯一解析入口。保存、预览、options 共用同一个实例，
+     * 保证「校验通过的东西」和「保存下去的东西」是同一套语义。
+     */
+    configValidator?: AgentConfigValidator,
   }) {
     if (!deps?.transactionManager?.run || typeof deps.createRepositories !== 'function') {
       throw new Error('AgentCatalogService requires transactionManager and createRepositories');
@@ -130,6 +142,7 @@ export class AgentCatalogService {
     this.db = deps.db;
     this.generateId = deps.generateId;
     this.now = deps.now ?? (() => new Date());
+    this.configValidator = deps.configValidator ?? new AgentConfigValidator();
   }
 
   async #resolveOwner(auth: CatalogAuth, repos: Loose) {
@@ -171,6 +184,22 @@ export class AgentCatalogService {
   }
 
   /**
+   * 活跃指针的乐观并发检查。
+   *
+   * `expected` 省略（`undefined`）时跳过——旧客户端的兼容窗口，见 `api.md`。
+   * 显式传 `null` 表示「我读到的是还没有活跃版本」，与「我没传」不是一回事，
+   * 所以两者必须分开判断，不能用 `?? null` 抹平。
+   */
+  #assertExpectedActiveVersion(definition: Loose, expected: unknown) {
+    if (expected === undefined) return;
+    const current = definition.activeVersionId ?? null;
+    const wanted = expected === null || expected === '' ? null : String(expected);
+    if (current !== wanted) {
+      throw new ActiveVersionConflictError(current);
+    }
+  }
+
+  /**
    * 写入即校验：非法 config 在这里失败，不允许落库后在 Run 期爆炸。
    * `agentVersionId` 只是让 binding 的必填校验成立，并不落库。
    */
@@ -198,6 +227,49 @@ export class AgentCatalogService {
       );
     }
     return configJson;
+  }
+
+  /**
+   * 配置面的能力投影（admin）。只描述「这个部署支持什么、上限在哪」，
+   * 不返回连接地址、密钥引用、宿主物理路径或别的用户的技能。
+   */
+  async configOptions(auth: CatalogAuth): Promise<AgentConfigOptions> {
+    this.#requireAdmin(auth);
+    // 归属仍要解析：没有 provision 的调用方不该拿到平台目录。
+    const repos = this.createRepositories(this.db);
+    await this.#resolveOwner(auth, repos);
+    return this.configValidator.options();
+  }
+
+  /**
+   * 只解析、不落库的配置校验（admin）。**不跑工具、不调模型、不建会话、
+   * 不临时装 MCP**——它的唯一副作用是读一次进程能力投影。
+   *
+   * 带 `agentId` 时按同一条 404 规则确认归属：跨 org 的 agentId 不能靠这个
+   * 端点探测存在性。
+   */
+  async validateConfig(
+    auth: CatalogAuth,
+    input: { config?: unknown, agentId?: unknown } = {},
+  ): Promise<AgentConfigValidation> {
+    this.#requireAdmin(auth);
+    const repos = this.createRepositories(this.db);
+    const owner = await this.#resolveOwner(auth, repos);
+    if (input.agentId != null && input.agentId !== '') {
+      await this.#requireOwnedAgent(repos, owner, input.agentId);
+    }
+    if (input.config == null || typeof input.config !== 'object' || Array.isArray(input.config)) {
+      throw new ValidationError('config must be an object');
+    }
+    try {
+      return this.configValidator.validate(input.config);
+    } catch (err) {
+      // 结构性问题（非 JSON 可序列化等）是 400；字段级语义结果走 200 + valid=false。
+      throw new ValidationError(
+        (err as Error)?.message || 'Agent config is invalid',
+        { code: 'AGENT_CONFIG_INVALID' },
+      );
+    }
   }
 
   /**
@@ -311,7 +383,11 @@ export class AgentCatalogService {
   async createVersion(
     auth: CatalogAuth,
     agentId: string,
-    input: { config?: unknown, activate?: unknown } = {},
+    input: {
+      config?: unknown,
+      activate?: unknown,
+      expectedActiveVersionId?: unknown,
+    } = {},
   ) {
     this.#requireAdmin(auth);
     const configJson = this.#validateConfig(input.config);
@@ -324,6 +400,11 @@ export class AgentCatalogService {
           const repos = this.createRepositories(trx);
           const owner = await this.#resolveOwner(auth, repos);
           let definition = await this.#requireOwnedAgent(repos, owner, agentId);
+          // 只有会改活跃指针的保存才做这项检查：保存一个不激活的版本不与
+          // 别人的激活结果竞争，不该因为指针变了就失败。
+          if (activate) {
+            this.#assertExpectedActiveVersion(definition, input.expectedActiveVersionId);
+          }
           const versionNo = await repos.catalog.nextVersionNo(definition.agentId);
           const version = await repos.catalog.createVersion({
             agentVersionId: this.generateId(),
@@ -358,12 +439,18 @@ export class AgentCatalogService {
   /**
    * 切活跃版本（也是回滚：把指针指回旧版本即可，无需任何数据修复）。
    */
-  async setActiveVersion(auth: CatalogAuth, agentId: string, agentVersionId: unknown) {
+  async setActiveVersion(
+    auth: CatalogAuth,
+    agentId: string,
+    agentVersionId: unknown,
+    opts: { expectedActiveVersionId?: unknown } = {},
+  ) {
     this.#requireAdmin(auth);
     return this.tx.run(async (trx: Loose) => {
       const repos = this.createRepositories(trx);
       const owner = await this.#resolveOwner(auth, repos);
       const definition = await this.#requireOwnedAgent(repos, owner, agentId);
+      this.#assertExpectedActiveVersion(definition, opts.expectedActiveVersionId);
       if (!isUlid(agentVersionId)) {
         throw new OwnerScopedNotFoundError('Agent version not found', {
           resource: 'agent_versions',
