@@ -29,6 +29,7 @@ documentation checklist summarized below.
 Out-of-map directories:
 
 - `deliverables/` — gitignored local deliverables; not part of this repo's doc set.
+- `ref/` — gitignored local copies of third-party vendor manuals (UPDRDB, DBPM). Not part of this repo's doc set and not redistributed; keep them locally when you need to verify a vendor claim.
 
 ## Document roles
 
@@ -60,12 +61,13 @@ Out-of-map directories:
 | [0008](./adr/0008-sandbox-isolation-and-fs-seam-redesign.md) | Exec isolation and FS seam（取代 Python sandbox） |
 | [0009](./adr/0009-dsh-host-tools-and-application-steward.md) | 出厂工具挂 host；application 做 DSH 管家（改写 0007 D4 的审批组合、0006 P1 的闸门形状） |
 | [0010](./adr/0010-retain-custom-a2a-server-layer.md) | 保留自建 A2A 服务端协议面（**撤销 0007 D8**） |
+| [0011](./adr/0011-updrdb-upredis-dbpm-migration.md) | 持久化／协调拓扑迁移至 UPDRDB / UPRedis，口令改由 DBPM 下发 |
 
 **0003 is intentionally absent.** `0002-backend2712` and `0003-fronted0712` were
 07-12 task specs whose decisions `plan.md` superseded; they were removed on
 2026-07-19 in `7370220d`. **0002 was later reissued** as the DSH harness
 evaluation above; 0003 stays retired. A new ADR takes the next unused number
-(**0011**). Recover the originals from git
+(**0012**). Recover the originals from git
 history if you need the historical reasoning; do not cite them as current.
 
 ## How to close an acceptance item

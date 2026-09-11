@@ -2,8 +2,19 @@
 
 ## Overview
 
-Pi Enterprise Sandbox 采用**五个进程、四份镜像**：前端、BFF、Agent、执行面
-（compose 服务名仍叫 `sandbox`）以及同一镜像的 MCP facade（`sandbox-mcp`）。
+Pi Enterprise Sandbox 采用**六个进程、四份镜像**：前端、BFF、Agent HTTP 面、
+Agent Worker、执行面（compose 服务名仍叫 `sandbox`）以及 MCP facade（`sandbox-mcp`）。
+
+**两份镜像各跑两个进程**——同镜像、不同入口、**各自独立的容器与生命周期**，
+不是一个容器里跑两个进程：
+
+| 镜像 | 进程 | 入口 |
+|------|------|------|
+| `pi-enterprise-agent` | `agent` / `agent-worker` | `dist/server.js` / `dist/worker.js` |
+| `enterprise-sandbox` | `sandbox` / `sandbox-mcp` | `dist/main.js` / `dist/mcp-main.js` |
+
+部署时必须**分别创建工作负载**：只起 `agent` 不起 `agent-worker`，
+请求能被接收并入队，但 **Run 永远不会执行**。
 
 ```
 ┌──────────────────────────────────────────────────────────┐
@@ -19,6 +30,10 @@ Pi Enterprise Sandbox 采用**五个进程、四份镜像**：前端、BFF、Age
 │    DeepSeek Harness · Run API · policy · tools            │
 │    agent/src/runtime = providers + policy + projection    │
 │    host:4100 → container:4100                            │
+├──────────────────────────────────────────────────────────┤
+│              Agent Worker (Node.js · 同镜像)             │
+│    队列消费 · Run 执行 · 恢复 · Outbox publisher         │
+│    dist/worker.js — 无 HTTP 面，不暴露端口               │
 ├──────────────────────────────────────────────────────────┤
 │              Exec Service (Node.js / TypeScript)          │
 │    Internal execution plane: files · execution · process │
@@ -43,6 +58,7 @@ Pi Enterprise Sandbox 采用**五个进程、四份镜像**：前端、BFF、Age
 | **Frontend** | `pi-enterprise-frontend` | Vite + React → Nginx | 纯 UI 渲染，零 Agent 逻辑；Nginx 反向代理 `/api/*` |
 | **API Server (BFF)** | `pi-enterprise-api` | Node.js 22 | 认证、会话文件边缘、Run API 与 SSE relay |
 | **Agent** | `pi-enterprise-agent` | Node.js 22 + `@deepseek-ai/dsh-*` `0.1.1-rc.2` | MySQL Run/Session authority；经 `agent/src/runtime/` 组合 DSH：远程 fs/shell/jobs provider、MySQL 会话持久化、策略挂载点、SSE 投影 |
+| **Agent Worker** | `pi-enterprise-agent-worker` | 同 Agent 镜像，入口 `dist/worker.js` | 消费 BullMQ `agent-runs` 队列并真正执行 Run；Worker Lease 续约、会话恢复、Outbox publisher。**无 HTTP 面、不暴露端口**；可独立于 Agent HTTP 面横向扩缩容 |
 | **Sandbox（执行面）** | `pi-enterprise-sandbox` | Node.js 22 + TypeScript + Bubblewrap | Agent 专用内部执行平面（HMAC `/internal/v1/*`）+ 对 BFF 的公共会话面；命令执行、文件、搜索、数据集、产物。compose 中无 `ports:` 段——宿主不可直连，只能从 `backend_internal` 访问 |
 | **Sandbox MCP** | `pi-enterprise-sandbox-mcp` | 同一镜像，入口 `dist/mcp-main.js` | 对外的 Streamable HTTP MCP 面。**只能走 `/internal/mcp/v1/*` 窄桥**，够不到内部面——这是它单独成进程的全部理由 |
 
@@ -53,13 +69,31 @@ Pi Enterprise Sandbox 采用**五个进程、四份镜像**：前端、BFF、Age
 
 ## 通信协议
 
-```
-Browser → Frontend → BFF (Node:4000) → Agent (Node:4100) → Exec (Node:8081)
-                       │ SSE relay      │ DSH loop + LLM     │ HMAC 内部面
+两条相互独立的入口链路，唯一交汇点是 Exec：
 
+```
+链路 A —— 浏览器主链路
+Browser → Frontend → BFF (Node:4000) → Agent (Node:4100) ──入队──→ Redis
+                       │ SSE relay      │ Run API / 状态权威          │
+                       │                                            ↓
+                       │                        Agent Worker ──→ Exec (Node:8081)
+                       │                         DSH loop + LLM   HMAC /internal/v1/*
+                       │
+                       └──────────────────────────────→ Exec (Node:8081)
+                          文件 / 数据集字节流，走会话作用域公共面（不经 Agent）
+
+链路 B —— 对外 MCP（外部客户端，不经 Agent）
 外部 MCP 客户端 → Sandbox MCP (Node:8082) ──窄桥──→ Exec (Node:8081)
                    只持有 SANDBOX_MCP_INTERNAL_TOKEN，只认 /internal/mcp/v1/*
 ```
+
+同样是访问 Exec:8081，**三个调用方走三个互不替代的面**（见 AGENTS.md §1）：
+
+| 调用方 | 面 | 凭据 |
+|--------|----|------|
+| BFF | 公共会话面 | 会话作用域（浏览器侧运维操作，无 fence token） |
+| Agent / Agent Worker | `/internal/v1/*` HMAC 面 | claim + fence token + 防重放 |
+| Sandbox MCP | `/internal/mcp/v1/*` 窄桥 | 只有窄桥 token，**够不到内部面** |
 
 - **Browser → Frontend**: HTTP，静态文件服务 + `/api/*` 反向代理
 - **Frontend → API Server**: 反向代理（Docker 内网），无需 CORS

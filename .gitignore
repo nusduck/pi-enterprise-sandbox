@@ -37,5 +37,9 @@ agent/.a2a-live-agent-workspace/
 # Keep it local, or move it somewhere private before tracking it.
 docs/deliverables/
 
+# Third-party vendor manuals kept as local copies (UPDRDB, DBPM). Copyright
+# belongs to the vendor and this repository is public — do not redistribute.
+docs/ref/
+
 # Local Claude Code settings (per-developer permissions, never shared).
 .claude/
