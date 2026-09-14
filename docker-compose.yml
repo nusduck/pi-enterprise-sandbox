@@ -247,6 +247,18 @@ services:
       - backend_internal
       - dev_ingress
 
+  # The Agent (uid 1000) and Sandbox (uid 10001) both write the shared draft
+  # tree. A root-owned bind source is otherwise created as 0755 by Compose and
+  # makes the first upload fail with EACCES before Node can create <org>/<user>.
+  skill-draft-init:
+    image: node:22-slim
+    user: "0:0"
+    entrypoint: ["/bin/sh", "-c"]
+    command: ["mkdir -p /mnt/skill-draft && chmod 0777 /mnt/skill-draft"]
+    volumes:
+      - ${SANDBOX_SKILL_DRAFT_MOUNT_AGENT:-./.runtime/sandbox/skill-draft:/mnt/skill-draft}
+    restart: "no"
+
   # ── Agent — DSH orchestration (independent) ──
   # Skills come in three tiers:
   #   /home/sandbox/skill        bundled ./skills — always read-only
@@ -353,6 +365,8 @@ services:
         condition: service_completed_successfully
       redis:
         condition: service_healthy
+      skill-draft-init:
+        condition: service_completed_successfully
     healthcheck:
       test: ["CMD", "node", "-e", "require('http').get('http://localhost:4100/health',r=>{process.exit(r.statusCode===200?0:1)}).on('error',()=>process.exit(1))"]
       interval: 30s
@@ -451,6 +465,8 @@ services:
         condition: service_healthy
       agent:
         condition: service_healthy
+      skill-draft-init:
+        condition: service_completed_successfully
     # No ports — worker is not an HTTP public service.
     command: ["node", "dist/worker.js"]
     networks:
@@ -571,6 +587,9 @@ services:
       mysql:
         condition: service_healthy
       agent-migrate:
+        condition: service_completed_successfully
+      # Shared Agent/Sandbox draft root must be writable before this service starts.
+      skill-draft-init:
         condition: service_completed_successfully
       # Independent replay Redis (not Agent redis / REDIS_PASSWORD).
       sandbox-replay-redis:

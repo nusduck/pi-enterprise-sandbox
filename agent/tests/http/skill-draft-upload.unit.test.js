@@ -94,6 +94,11 @@ describe('Skill draft upload HTTP (/internal/skills/drafts)', () => {
     );
     const stat = await fsp.stat(draftFile);
     assert.ok(stat.isFile());
+    const ownerRoot = path.join(tempDraftRoot, 'external-org', 'external-user');
+    const packageRoot = path.join(ownerRoot, 'test-draft');
+    assert.equal((await fsp.stat(ownerRoot)).mode & 0o777, 0o777);
+    assert.equal((await fsp.stat(packageRoot)).mode & 0o777, 0o777);
+    assert.equal((await fsp.stat(draftFile)).mode & 0o777, 0o666);
   });
 
   it('unpacks a valid .skill archive into the user draft root', async () => {
