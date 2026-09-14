@@ -19,6 +19,25 @@ import {
   internalBindingForHtu,
 } from '@pi/contract/hmac.js';
 import { ContractError } from '@pi/contract/errors.js';
+import { canonicalQueryBytes } from '@pi/contract/skill-manifest.js';
+
+/**
+ * GET 请求参与 `body_sha256` 的字节：规范化后的 query（design §3.3 S1）。
+ *
+ * GET 没有请求体，以前摘要是空串，query 里的信封、目标都不受签名覆盖。现在与签发侧
+ * 用同一个 `canonicalQueryBytes`。同名参数出现多次直接拒绝：否则签名覆盖的是一个值，
+ * 路由读到的可能是另一个值。
+ */
+export function signedQueryBytes(searchParams: URLSearchParams): Uint8Array {
+  const params: Record<string, string> = {};
+  for (const key of searchParams.keys()) {
+    if (Object.hasOwn(params, key) || searchParams.getAll(key).length > 1) {
+      throw new ContractError('AUTH_FAILED', 'duplicate query parameter');
+    }
+    params[key] = searchParams.get(key) ?? '';
+  }
+  return canonicalQueryBytes(params);
+}
 
 export interface HmacVerifyOptions {
   readonly keyring: InternalHmacKeyringInput;

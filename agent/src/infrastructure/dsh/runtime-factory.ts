@@ -23,6 +23,7 @@ import {
   runWithInteractionRequester,
 } from '../../runtime/index.js';
 import { FileSystemSkillProvider } from '@deepseek-ai/dsh-skill-filesystem';
+import { createPublishedSkillsProvider, isPublishedSkillVersion } from './published-skills-provider.js';
 import { installModelSelection } from '@deepseek-ai/dsh-agent';
 import { DshRuntimeFactoryError } from './errors.js';
 import { PINNED_DSH_VERSION } from './constants.js';
@@ -82,6 +83,10 @@ export function buildExecRpcConfig(input: Record<string, any>, env: NodeJS.Proce
   const physicalRoots = Array.isArray(input.physicalRoots)
     ? input.physicalRoots.map(String)
     : [String(input.cwd)];
+  // 本 Run 的启用清单（design §3.3 S1）：随每个 exec 请求进入签名覆盖的请求体 / query。
+  const enabledSkills = (Array.isArray(input.additionalSkillPaths) ? input.additionalSkillPaths : [])
+    .filter(isPublishedSkillVersion)
+    .map((version) => ({ name: version.name, contentDigest: version.contentDigest }));
   return {
     baseUrl: String(env.SANDBOX_BASE_URL || 'http://sandbox:8081').replace(/\/+$/, ''),
     keyring,
@@ -93,6 +98,7 @@ export function buildExecRpcConfig(input: Record<string, any>, env: NodeJS.Proce
     ...(sandboxSessionId ? { sandboxSessionId } : {}),
     fenceToken: Number(ctx.executionFenceToken ?? ctx.fenceToken ?? 0) || 0,
     physicalRoots,
+    ...(enabledSkills.length > 0 ? { enabledSkills } : {}),
     ...(typeof input.fetchImpl === 'function' ? { fetchImpl: input.fetchImpl } : {}),
   };
 }
@@ -413,27 +419,36 @@ export function createDshRuntimeFactory(opts: Record<string, any> = {}) {
           await systemPromptFiber;
 
           // DSH's default skill filesystem provider does not consume the
-          // resourceLoaderOptions passed by this factory. Register one in the
-          // agent scope so only this Run's system and user roots are visible.
+          // resourceLoaderOptions passed by this factory. Register this Run's
+          // providers in the agent scope: the system tier by directory, the
+          // user tier from ledger-verified published versions (design §3.3 S1),
+          // which the published provider exposes at exec's logical mount path.
           const configuredSkillPaths = Array.isArray(input.additionalSkillPaths)
             ? input.additionalSkillPaths
             : opts.additionalSkillPaths;
-          const skillPaths = Array.isArray(configuredSkillPaths)
-            ? configuredSkillPaths.filter((path) => typeof path === 'string' && path.trim())
-            : [];
-          if (skillPaths.length > 0) {
+          const configuredSkills = Array.isArray(configuredSkillPaths) ? configuredSkillPaths : [];
+          const skillPaths = configuredSkills.filter((path) => typeof path === 'string' && path.trim());
+          const publishedSkills = configuredSkills.filter(isPublishedSkillVersion);
+          if (skillPaths.length > 0 || publishedSkills.length > 0) {
             const skillCtx = localSkillContext(agentCtx);
             const skillsFiber = agentCtx.inject(['skills'], (scoped) => {
-              scoped.skills.registerProvider((control) =>
-                new FileSystemSkillProvider(skillCtx, control, {
-                  providerName: 'run-filesystem',
-                  includeDefaultRoots: false,
-                  customSkillDirs: skillPaths,
-                  dshHome: '/home/sandbox',
-                  agentsHome: '/home/sandbox',
-                  watch: false,
-                }),
-              );
+              if (skillPaths.length > 0) {
+                scoped.skills.registerProvider((control) =>
+                  new FileSystemSkillProvider(skillCtx, control, {
+                    providerName: 'run-filesystem',
+                    includeDefaultRoots: false,
+                    customSkillDirs: skillPaths,
+                    dshHome: '/home/sandbox',
+                    agentsHome: '/home/sandbox',
+                    watch: false,
+                  }),
+                );
+              }
+              if (publishedSkills.length > 0) {
+                scoped.skills.registerProvider((control) =>
+                  createPublishedSkillsProvider(skillCtx, control, publishedSkills),
+                );
+              }
             });
             disposers.push(skillsFiber);
             await skillsFiber;

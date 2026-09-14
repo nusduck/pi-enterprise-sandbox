@@ -168,10 +168,11 @@ prompt 的记忆。
 
 用户 Skill 分成 owner-scoped 草稿与发布副本。模型用普通 `write` / `bash` 在
 `/home/sandbox/skill-draft` 创建或修改包；草稿不进发现与 prompt。用户随后在
-Settings → Capabilities → Skills 点击 Enable，Agent 校验包并复制到
-`/home/sandbox/skill-user/<orgId>/<userId>/<package>`，写入 `user_skill_enablements`。
-exec 只把当前 owner 的发布包逐个 `ro_bind` 进运行环境。Disable 删除发布副本与账本行，
-草稿保留。
+Settings → Capabilities → Skills 点击 Enable，Agent 在锁住 owner 的事务里校验包、按摘要发布到
+`/home/sandbox/skill-user/<orgId>/<userId>/<package>/.v/<digest>/<package>`（侧车 `.v/<digest>.json`），
+写入 `user_skill_enablements`。Worker 按账本核对后把清单随内部请求交给 exec，exec 只把清单点名的
+版本逐个 `ro_bind` 到 `/home/sandbox/skill-user/<package>`，模型看到的也是这个路径。Disable 只删账本行，
+字节过 `SKILL_VERSION_GC_GRACE_MS`（默认 24 小时）后回收；草稿保留。
 
 ```bash
 # .env

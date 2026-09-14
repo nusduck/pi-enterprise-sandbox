@@ -12,6 +12,7 @@
  * - `endpoint-failover.ts` 多端点建连的纯策略（粘主/拉黑/预算），无驱动依赖
  * - `dbpm.ts`      启动时向 DBPM 取口令的 TCP 客户端
  * - `dbpm-config.ts` 各进程取哪些口令、配置来源与「连接串不许夹口令」的启动约束
+ * - `skill-manifest.ts` 已启用用户 Skill 清单、GET 规范化签名字节与版本目录规则
  */
 
 export {
@@ -134,6 +135,18 @@ export {
   SchemaDriftError,
 } from './schema-manifest.js';
 export type { SchemaDrift, SchemaDriftKind, SchemaManifest } from './schema-manifest.js';
+
+export {
+  canonicalQueryBytes,
+  ENABLED_SKILLS_MAX,
+  parseEnabledSkills,
+  parseSkillVersionSidecar,
+  SKILL_DIGEST_PATTERN,
+  SKILL_NAME_PATTERN,
+  SKILL_VERSIONS_DIRNAME,
+  skillVersionPaths,
+} from './skill-manifest.js';
+export type { EnabledSkillRef, SkillVersionPaths, SkillVersionSidecar } from './skill-manifest.js';
 
 // DSH `ctx.fs` 的类型直接复用，不手写 DTO——见包顶部说明。
 export { FileSystem } from '@deepseek-ai/dsh-fs';

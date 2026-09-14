@@ -13,6 +13,7 @@
     "./dbpm.js": "./dist/dbpm.js",
     "./dbpm-config.js": "./dist/dbpm-config.js",
     "./schema-manifest.js": "./dist/schema-manifest.js",
+    "./skill-manifest.js": "./dist/skill-manifest.js",
     "./schema/schema-manifest.json": "./schema/schema-manifest.json",
     "./errors": "./dist/errors.js",
     "./envelope": "./dist/envelope.js",

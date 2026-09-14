@@ -10,7 +10,7 @@
 
 import {
   assertWorkerSandboxServiceToken,
-  resolveSkillRootsForRun,
+  resolveRunSkillPaths,
 } from './container-env.js';
 import {
   createDshRunExecutorFactory,
@@ -111,7 +111,7 @@ export interface DshRunExecutorFactoryOptions {
    * 每个 Run 的 skill 根目录。返回 `string[]`——写 `unknown` 会让
    * DshRunExecutor 的依赖声明对不上（它要的就是路径数组）。
    */
-  readonly skillRootsForRun?: (identity: object) => string[];
+  readonly skillRootsForRun?: (identity: object) => unknown[] | Promise<unknown[]>;
 }
 
 export async function buildDshRunExecutorFactory(
@@ -236,10 +236,15 @@ export async function buildDshRunExecutorFactory(
             apiKey: String(container.env.LLMIO_API_KEY).trim(),
           })
         : undefined),
-    // Per-Run skill roots: system tier + this caller's own directory.
+    // Per-Run skills: system tier + this caller's ledger-verified published
+    // versions (design §3.3 S1). The user tier is never discovered by scanning.
     skillRootsForRun:
       opts.skillRootsForRun ??
-      ((identity) => resolveSkillRootsForRun(container.env, identity)),
+      ((identity) =>
+        resolveRunSkillPaths(container.env, identity, {
+          listEnabled: (owner) =>
+            container.createRepositories(container.knex).skillEnablements.listForOwner(owner),
+        })),
     generateId: container.generateId,
     now: container.now,
     projector,

@@ -138,11 +138,13 @@ data: {"sequence":18,"event":{...},"ts":...,"eventId":"01K..."}
 
 `skills` 是**按调用者投影**的：Agent 用服务端写入的 `X-Acting-User-Id` / `X-Acting-Organization-Id` 解析内部 owner，列出系统层、该 owner 的已发布层和草稿层。`source` 分别为 `shared-skill-root`、`user-skill-root`、`draft-skill-root`；浏览器传入的同名 header 不会被透传。
 
-**2026-08-31（ADR 0009 D7）起，用户侧 Skill 有三个根**：系统根（只读，永远进 prompt）、已启用根（逐包只读，进 prompt）、**草稿根 `/home/sandbox/skill-draft`**（每用户一个，模型可写，**不进发现也不进 prompt**）。模型用 `write` / `bash` 在草稿根里造包——`skill_install` / `skill_create` / `skill_edit` / `skill_uninstall` 这四个工具**已整体取消**。闸门只剩一处：人在 UI 上按「启用」，那一刻平台校验结构、**把字节复制成一份只读的已发布副本**、记内容摘要与启用态（`user_skill_enablements`，owner-scoped）。因为是两份字节，模型之后改草稿动不了已启用的包，所以不需要每 Run 重算摘要。请求不带身份时只投影系统层；用户层基目录**永远不整根扫描**，否则会跨租户列出他人已安装的 Skill。
+**2026-08-31（ADR 0009 D7）起，用户侧 Skill 有三个根**：系统根（只读，永远进 prompt）、已启用根（逐包只读，进 prompt）、**草稿根 `/home/sandbox/skill-draft`**（每用户一个，模型可写，**不进发现也不进 prompt**）。模型用 `write` / `bash` 在草稿根里造包——`skill_install` / `skill_create` / `skill_edit` / `skill_uninstall` 这四个工具**已整体取消**。闸门只剩一处：人在 UI 上按「启用」，那一刻平台校验结构、**把字节复制成一份只读的已发布版本**、记内容摘要与启用态（`user_skill_enablements`，owner-scoped）。因为是两份字节，模型之后改草稿动不了已启用的包，所以不需要每 Run 重算摘要。请求不带身份时只投影系统层；用户层基目录**永远不整根扫描**，否则会跨租户列出他人已安装的 Skill。
 
-启用/停用入口是 `POST /api/capabilities/skills/{name}/enable|disable`。BFF 只做代理与身份投影；Agent 校验包、更新发布副本与 MySQL 账本。启用账本写失败时会撤回发布副本，保持 fail-closed。
+**2026-09-14（design §3.3 S1）起，启用账本是用户层发现的唯一依据**：已发布字节按摘要分版本存放（`<name>/.v/<digest>/<name>/` + 侧车 `<name>/.v/<digest>.json`），摘要按复制后的字节计算。Run 开始时 Worker 按账本逐条核对版本目录与侧车，得到本 Run 的清单；模型看到的 Skill 路径是 exec 的挂载路径 `/home/sandbox/skill-user/<name>`。清单随每个内部请求进入签名覆盖的请求体（GET 为规范化 query），exec 只挂载清单点名的版本：缺版本或侧车不符返回 `SKILL_PACKAGE_UNAVAILABLE`，存储不可读返回 `SKILL_STORE_UNAVAILABLE`，不再当成「没有 Skill」。
 
-草稿在**启用之后不会消失**——启用是复制字节，草稿留在原地当可编辑的源，停用只删已发布的那份副本。所以 `skill_drafts` 里会一直有它；这类条目带 `published: true` 与 `status: 'published'`，与还等着人按「Enable」的 `published: false` / `status: 'draft'` 区分。UI 的 Drafts 区只列后者，否则同一个名字会在页面上出现两次。要重新发布一份改过的草稿，先在 My Skills 里 Disable，草稿会回到 Drafts。
+启用/停用入口是 `POST /api/capabilities/skills/{name}/enable|disable`。BFF 只做代理与身份投影；Agent 在一个 MySQL 事务里锁住该 owner 的 membership 行，校验并发布版本、写或删账本行，再回收旧版本。**停用只删账本行，不删字节**：仍在运行、清单里点着该版本的 Run 继续可用；不再被账本引用且超过 `SKILL_VERSION_GC_GRACE_MS`（默认 24 小时）的版本在同名包下次启停时回收。
+
+草稿在**启用之后不会消失**——启用是复制字节，草稿留在原地当可编辑的源，停用只撤销启用。所以 `skill_drafts` 里会一直有它；这类条目带 `published: true` 与 `status: 'published'`，与还等着人按「Enable」的 `published: false` / `status: 'draft'` 区分。UI 的 Drafts 区只列后者，否则同一个名字会在页面上出现两次。要重新发布一份改过的草稿，先在 My Skills 里 Disable，草稿会回到 Drafts。
 
 草稿包上传入口是 `POST /api/capabilities/skills/drafts`。支持通过 UI 或客户端直传 `.zip` 与 `.skill` 归档包（请求头带 `X-Filename`，流式二进制 body，单包上限 50MB）。BFF 受信鉴权后透传 Agent；Agent 校验包结构与 `SKILL.md`，解压落入当前用户的草稿根目录 `/home/sandbox/skill-draft/<org>/<user>/<skill-name>/`，状态保持为未启用（`enabled: false, status: 'draft'`）。草稿不进模型发现、不进 prompt，等待用户在 UI 上点击「Enable」正式启用。
 

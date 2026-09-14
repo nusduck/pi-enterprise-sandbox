@@ -28,6 +28,10 @@ export { FsError };
  * - `TENANT_MISMATCH`     信封携带的租户（org/user）与凭据或路由目标不符
  * - `FENCE_EXPIRED`       execution fence token 已经不是当前 Run 的最新值
  * - `WORKSPACE_NOT_FOUND` 信封里的 workspaceId 找不到对应工作区
+ * - `SKILL_PACKAGE_UNAVAILABLE` 清单点名的已发布 Skill 版本缺失或侧车不符
+ *                         （design §3.3：拒绝并报出，不静默丢弃）
+ * - `SKILL_STORE_UNAVAILABLE`   用户 Skill 存储不可读（挂载掉线、权限、未配置），
+ *                         不能当成「没有 Skill」放行
  * - `INTERNAL_ERROR`      未归类的兜底错误（不应该常态出现；出现说明调用
  *                         方抛出的不是 FsError / ContractError，需要补分类）
  */
@@ -37,6 +41,8 @@ export type TransportErrorCode =
   | 'TENANT_MISMATCH'
   | 'FENCE_EXPIRED'
   | 'WORKSPACE_NOT_FOUND'
+  | 'SKILL_PACKAGE_UNAVAILABLE'
+  | 'SKILL_STORE_UNAVAILABLE'
   | 'INTERNAL_ERROR';
 
 /** 契约错误码 = DSH 的 `FS_*` 错误码 ∪ 我们自己的传输层错误码。 */

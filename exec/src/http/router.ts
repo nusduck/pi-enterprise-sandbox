@@ -10,7 +10,7 @@ import { Hono } from 'hono';
 import { ContractError, toWireError } from '@pi/contract/errors.js';
 import type { InternalHmacKeyringInput } from '@pi/contract/hmac.js';
 import { isIpAllowed, readInternalAllowCidr } from '../security/cidr.js';
-import { verifyInternalRequest } from '../security/hmac.js';
+import { signedQueryBytes, verifyInternalRequest } from '../security/hmac.js';
 import { PEER_IP_HEADER } from './node-listener.js';
 import { internalClaimsByRequest } from './internal-claims.js';
 import { registerInternalFsRoutes } from './internal-fs.js';
@@ -23,14 +23,14 @@ import type { MySqlJobRegistry } from '../shell/job-registry.js';
 import { ArtifactService } from '../artifact/service.js';
 import { WorkspaceFileSystem } from '../fs/workspace-fs.js';
 import { Context as CordisContext } from '@deepseek-ai/cordis';
-import type { WorkspaceContext } from '../types.js';
+import type { EnabledSkillPackagesResolver, WorkspaceContext } from '../types.js';
 
 export interface InternalRouterDeps {
   readonly workspaceManager: WorkspaceManager;
   readonly systemSkillRoot: string;
   /** 该用户的 skill 草稿根（ADR 0009 D7 / 计划 H6.2）。 */
   readonly draftSkillRootFor?: (orgId: string, userId: string) => string | null;
-  readonly enabledSkillPackagesFor: (orgId: string, userId: string) => readonly { name: string; sourcePath: string }[];
+  readonly enabledSkillPackagesFor: EnabledSkillPackagesResolver;
   readonly bwrapExecutable: string;
   readonly modeFor: (workspaceId: string) => 'read-only' | 'workspace-write';
   readonly jobRegistry: MySqlJobRegistry;
@@ -81,16 +81,21 @@ export function createInternalRouter(deps: InternalRouterDeps): Hono {
     const method = c.req.method;
     const url = new URL(c.req.url);
     const path = url.pathname;
-    // 用 clone 读取 rawBody，避免消费原始请求体导致下游 c.req.json() 读不到
-    let rawBody: Uint8Array;
-    try {
-      const clone = c.req.raw.clone();
-      rawBody = new Uint8Array(await clone.arrayBuffer());
-    } catch {
-      rawBody = new Uint8Array(0);
-    }
     const auth = c.req.header('authorization');
     try {
+      // GET 没有请求体：签名覆盖规范化后的 query（信封、目标、启用清单都在 query 里）。
+      // POST 用 clone 读取 rawBody，避免消费原始请求体导致下游 c.req.json() 读不到。
+      let rawBody: Uint8Array;
+      if (method === 'GET') {
+        rawBody = signedQueryBytes(url.searchParams);
+      } else {
+        try {
+          const clone = c.req.raw.clone();
+          rawBody = new Uint8Array(await clone.arrayBuffer());
+        } catch {
+          rawBody = new Uint8Array(0);
+        }
+      }
       const claims = verifyInternalRequest(auth, { keyring: deps.keyring, rawBody, method, path });
       internalClaimsByRequest.set(c.req.raw, claims);
     } catch (err) {

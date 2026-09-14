@@ -446,7 +446,7 @@ curl -f http://localhost:4000/health/ready
 | `./.runtime/sandbox/artifacts` | `/var/sandbox/artifacts` | 显式提交的 Artifact blob |
 | `./.runtime/sandbox/control` | `/var/sandbox/control` | Dataset staging 与控制面状态 |
 | `./.runtime/sandbox/skill-draft` | Agent `/home/sandbox/skill-draft` + exec `/var/sandbox/skill-draft` | owner-scoped Skill 草稿；Compose 显式打开 |
-| `agent_user_skills` | Agent `/home/sandbox/skill-user` + exec `:ro` | 已启用 Skill 的只读发布副本 |
+| `agent_user_skills` | Agent `/home/sandbox/skill-user` + exec `:ro` | 已启用 Skill 的只读发布版本（按摘要分目录） |
 
 ### Skill 挂载与用户生命周期
 
@@ -460,9 +460,11 @@ Skill 分三层：
 |----|------|------|----------|----|
 | 系统 | `/home/sandbox/skill` | 仓库 `./skills` | 所有人 | `:ro` |
 | 草稿 | `/home/sandbox/skill-draft/<orgId>/<userId>`（exec 物理根 `/var/sandbox/skill-draft`） | 模型 `write` / `bash` 或上传 | 仅该用户；不进 prompt | host bind |
-| 已启用 | `/home/sandbox/skill-user/<orgId>/<userId>/<package>` | 启用时从草稿复制 | 仅该用户；逐包 `ro_bind` | named volume `agent_user_skills` |
+| 已启用 | `/home/sandbox/skill-user/<orgId>/<userId>/<package>/.v/<digest>/<package>`（侧车 `.v/<digest>.json`）；模型侧路径 `/home/sandbox/skill-user/<package>` | 启用时从草稿复制 | 仅该用户；按启用清单逐包 `ro_bind` | named volume `agent_user_skills` |
 
-Compose 通过 `SANDBOX_SKILL_DRAFT_ROOT=/var/sandbox/skill-draft` 显式打开草稿写面；直接启动 exec 时变量缺失则能力关闭。模型不再拥有 Skill 变更工具，只能在自己的草稿根写文件。用户在 Capabilities 页点击启用后，Agent 校验结构与系统同名遮蔽，复制只读发布副本并写 `user_skill_enablements`；停用删除发布副本但保留草稿。exec 只解析当前 owner 的目录并逐包挂载，非法身份、符号链接或缺失 `SKILL.md` 的目录不会进入执行上下文。
+Compose 通过 `SANDBOX_SKILL_DRAFT_ROOT=/var/sandbox/skill-draft` 显式打开草稿写面；直接启动 exec 时变量缺失则能力关闭。模型不再拥有 Skill 变更工具，只能在自己的草稿根写文件。用户在 Capabilities 页点击启用后，Agent 在一个事务里锁住该 owner 的 membership 行，校验结构与系统同名遮蔽，按复制后字节的摘要发布只读版本并写 `user_skill_enablements`；停用只删账本行，字节保留给仍在运行的 Run。旧版本在同名包下次启停时回收：既不被事务前后的账本引用、又超过 `SKILL_VERSION_GC_GRACE_MS`（Agent HTTP 读取，非负整数毫秒，默认 `86400000` 即 24 小时）才删除。
+
+Worker 在 Run 开始时按账本逐条核对版本目录与侧车，核对不过的包不进该 Run 并记告警。exec **不扫描目录**：只挂载内部请求清单点名、且版本目录与侧车一致的包；缺版本或侧车不符返回 `SKILL_PACKAGE_UNAVAILABLE`，用户 Skill 存储不可读或未配置返回 `SKILL_STORE_UNAVAILABLE`。2026-09-14 之前按 `<package>/SKILL.md` 平铺发布的已启用包不再被识别，需要重新启用（开发数据已按用户决定清理）。
 
 `validateProductionConfig` 仍然拒绝任何非 canonical 的
 `SKILLS_ROOT` / `SKILLS_USER_ROOT`（这些是 Bubblewrap profile 认识的挂载点）。

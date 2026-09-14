@@ -16,9 +16,10 @@ import type { Context } from 'hono';
 import type { FsTarget, FsVersion, FsWriteIntent } from '@deepseek-ai/dsh-fs';
 import { ContractError, toWireError } from '@pi/contract/errors.js';
 import { parseEnvelope } from '@pi/contract/envelope.js';
+import { parseEnabledSkills, type EnabledSkillRef } from '@pi/contract/skill-manifest.js';
 import { WorkspaceFileSystem } from '../fs/workspace-fs.js';
 import { makeWorkspaceFs } from '../fs/make-workspace-fs.js';
-import type { WorkspaceContext } from '../types.js';
+import type { EnabledSkillPackagesResolver, WorkspaceContext } from '../types.js';
 import type { WorkspaceManager } from '../workspace/manager.js';
 import { fileSearchService } from '../search/index.js';
 import type { SearchRoot } from '../search/index.js';
@@ -28,7 +29,7 @@ export interface InternalFsDeps {
   readonly systemSkillRoot: string;
   /** 该用户的 skill 草稿根（ADR 0009 D7 / 计划 H6.2）。按 owner 解析，每用户一个。 */
   readonly draftSkillRootFor?: (orgId: string, userId: string) => string | null;
-  readonly enabledSkillPackagesFor: (orgId: string, userId: string) => readonly { name: string; sourcePath: string }[];
+  readonly enabledSkillPackagesFor: EnabledSkillPackagesResolver;
 }
 
 function physicalRootsOf(ctx: WorkspaceContext): readonly string[] {
@@ -43,7 +44,11 @@ function physicalRootsOf(ctx: WorkspaceContext): readonly string[] {
   ];
 }
 
-function buildWorkspaceContext(deps: InternalFsDeps, envelope: { orgId: string; userId: string; workspaceId: string }): WorkspaceContext {
+function buildWorkspaceContext(
+  deps: InternalFsDeps,
+  envelope: { orgId: string; userId: string; workspaceId: string },
+  enabledSkills: readonly EnabledSkillRef[],
+): WorkspaceContext {
   const workspaceRoot = deps.workspaceManager.physicalWorkspacePath(envelope.workspaceId);
   const tempRoot = deps.workspaceManager.physicalTempPath(envelope.workspaceId);
   const draft = deps.draftSkillRootFor?.(envelope.orgId, envelope.userId) ?? null;
@@ -54,7 +59,7 @@ function buildWorkspaceContext(deps: InternalFsDeps, envelope: { orgId: string; 
     workspaceRoot,
     tempRoot,
     systemSkillRoot: deps.systemSkillRoot,
-    enabledSkillPackages: [...deps.enabledSkillPackagesFor(envelope.orgId, envelope.userId)],
+    enabledSkillPackages: [...deps.enabledSkillPackagesFor(envelope.orgId, envelope.userId, enabledSkills)],
     ...(draft !== null && draft !== '' ? { draftSkillRoot: draft } : {}),
   };
 }
@@ -67,11 +72,25 @@ function jsonError(c: Context, status: number, code: string, message: string): R
   return c.json({ ok: false, error: { code, message } }, status as never);
 }
 
-async function parseJsonBody(c: Context): Promise<{ envelope: unknown; payload: unknown }> {
+async function parseJsonBody(
+  c: Context,
+): Promise<{ envelope: unknown; payload: unknown; enabledSkills: readonly EnabledSkillRef[] }> {
   const body = await c.req.json().catch(() => null);
   if (!body || typeof body !== 'object') throw new ContractError('ENVELOPE_INVALID', 'body must be object');
   const b = body as Record<string, unknown>;
-  return { envelope: b['envelope'], payload: b['payload'] };
+  return { envelope: b['envelope'], payload: b['payload'], enabledSkills: parseEnabledSkills(b['enabledSkills']) };
+}
+
+/** GET 的清单放在 query 里（base64url JSON），同样经规范化 query 进入签名。 */
+function enabledSkillsFromQuery(raw: string | undefined): readonly EnabledSkillRef[] {
+  if (raw === undefined || raw === '') return parseEnabledSkills(undefined);
+  let decoded: unknown;
+  try {
+    decoded = JSON.parse(Buffer.from(raw, 'base64url').toString('utf8'));
+  } catch {
+    throw new ContractError('ENVELOPE_INVALID', 'enabledSkills query is not valid JSON');
+  }
+  return parseEnabledSkills(decoded);
 }
 
 function makeFs(ctx: WorkspaceContext): WorkspaceFileSystem {
@@ -81,10 +100,10 @@ function makeFs(ctx: WorkspaceContext): WorkspaceFileSystem {
 /** 通用 handler 包装：信封校验 + 错误脱敏 + 物理Roots 无条件传递。 */
 async function withFs<T>(c: Context, deps: InternalFsDeps, fn: (fs: WorkspaceFileSystem, ctx: WorkspaceContext, payload: T) => Promise<unknown>): Promise<Response> {
   try {
-    const { envelope: rawEnv, payload: rawPayload } = await parseJsonBody(c);
+    const { envelope: rawEnv, payload: rawPayload, enabledSkills } = await parseJsonBody(c);
     parseEnvelope(rawEnv);
     const env = rawEnv as { workspaceId: string; orgId: string; userId: string };
-    const ctx = buildWorkspaceContext(deps, env);
+    const ctx = buildWorkspaceContext(deps, env, enabledSkills);
     const fs = makeFs(ctx);
     const result = await fn(fs, ctx, rawPayload as T);
     return c.json({ ok: true, data: result });
@@ -155,7 +174,7 @@ export function registerInternalFsRoutes(app: import('hono').Hono, deps: Interna
       if (!targetParam || !envelopeParam) throw new ContractError('ENVELOPE_INVALID', 'target and envelope query required');
       const env = JSON.parse(Buffer.from(envelopeParam, 'base64url').toString('utf8'));
       parseEnvelope(env);
-      const ctx = buildWorkspaceContext(deps, env as never);
+      const ctx = buildWorkspaceContext(deps, env as never, enabledSkillsFromQuery(c.req.query('enabledSkills')));
       const fs = makeFs(ctx);
       const target = JSON.parse(Buffer.from(targetParam, 'base64url').toString('utf8')) as FsTarget;
       const iterable = await fs.streamText(target);

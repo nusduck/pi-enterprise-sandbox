@@ -11,18 +11,16 @@
 import type { Hono } from 'hono';
 import { ContractError, toWireError } from '@pi/contract/errors.js';
 import { parseEnvelope } from '@pi/contract/envelope.js';
+import { parseEnabledSkills, type EnabledSkillRef } from '@pi/contract/skill-manifest.js';
 import type { ArtifactService } from '../artifact/service.js';
 import { ArtifactError } from '../artifact/service.js';
 import type { WorkspaceManager } from '../workspace/manager.js';
-import type { WorkspaceContext } from '../types.js';
+import type { EnabledSkillPackagesResolver, WorkspaceContext } from '../types.js';
 
 export interface InternalArtifactDeps {
   readonly workspaceManager: WorkspaceManager;
   readonly systemSkillRoot: string;
-  readonly enabledSkillPackagesFor: (
-    orgId: string,
-    userId: string,
-  ) => readonly { name: string; sourcePath: string }[];
+  readonly enabledSkillPackagesFor: EnabledSkillPackagesResolver;
   readonly artifactService: ArtifactService;
 }
 
@@ -33,7 +31,11 @@ interface Envelope {
   sessionId?: string;
 }
 
-function buildContext(deps: InternalArtifactDeps, env: Envelope): WorkspaceContext {
+function buildContext(
+  deps: InternalArtifactDeps,
+  env: Envelope,
+  enabledSkills: readonly EnabledSkillRef[],
+): WorkspaceContext {
   return {
     orgId: env.orgId,
     userId: env.userId,
@@ -41,19 +43,23 @@ function buildContext(deps: InternalArtifactDeps, env: Envelope): WorkspaceConte
     workspaceRoot: deps.workspaceManager.physicalWorkspacePath(env.workspaceId),
     tempRoot: deps.workspaceManager.physicalTempPath(env.workspaceId),
     systemSkillRoot: deps.systemSkillRoot,
-    enabledSkillPackages: [...deps.enabledSkillPackagesFor(env.orgId, env.userId)],
+    enabledSkillPackages: [...deps.enabledSkillPackagesFor(env.orgId, env.userId, enabledSkills)],
   };
 }
 
 async function parseBody(
   c: import('hono').Context,
-): Promise<{ envelope: unknown; payload: Record<string, unknown> }> {
+): Promise<{ envelope: unknown; payload: Record<string, unknown>; enabledSkills: readonly EnabledSkillRef[] }> {
   const body = await c.req.json().catch(() => null);
   if (!body || typeof body !== 'object') {
     throw new ContractError('ENVELOPE_INVALID', 'body must be object');
   }
   const b = body as Record<string, unknown>;
-  return { envelope: b['envelope'], payload: (b['payload'] ?? {}) as Record<string, unknown> };
+  return {
+    envelope: b['envelope'],
+    payload: (b['payload'] ?? {}) as Record<string, unknown>,
+    enabledSkills: parseEnabledSkills(b['enabledSkills']),
+  };
 }
 
 function statusFor(err: unknown): number {
@@ -65,10 +71,10 @@ function statusFor(err: unknown): number {
 export function registerInternalArtifactRoutes(app: Hono, deps: InternalArtifactDeps): void {
   app.post('/internal/v1/artifacts/submit', async (c) => {
     try {
-      const { envelope: rawEnv, payload } = await parseBody(c);
+      const { envelope: rawEnv, payload, enabledSkills } = await parseBody(c);
       parseEnvelope(rawEnv);
       const env = rawEnv as Envelope;
-      const workspace = buildContext(deps, env);
+      const workspace = buildContext(deps, env, enabledSkills);
       const sourcePath = typeof payload['sourcePath'] === 'string' ? payload['sourcePath'] : '';
       if (!sourcePath) throw new ContractError('ENVELOPE_INVALID', 'sourcePath required');
 

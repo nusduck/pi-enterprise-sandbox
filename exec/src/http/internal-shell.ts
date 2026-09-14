@@ -8,10 +8,11 @@
 import type { Hono } from 'hono';
 import { ContractError, toWireError } from '@pi/contract/errors.js';
 import { parseEnvelope } from '@pi/contract/envelope.js';
+import { parseEnabledSkills, type EnabledSkillRef } from '@pi/contract/skill-manifest.js';
 import { IsolatedShellExecutor } from '../shell/executor.js';
 import type { MySqlJobRegistry } from '../shell/job-registry.js';
 import type { WorkspaceManager } from '../workspace/manager.js';
-import type { WorkspaceContext } from '../types.js';
+import type { EnabledSkillPackagesResolver, WorkspaceContext } from '../types.js';
 
 export interface InternalShellDeps {
   readonly workspaceManager: WorkspaceManager;
@@ -24,12 +25,16 @@ export interface InternalShellDeps {
    * 一个用户造的包不会出现在另一个用户的沙箱里。
    */
   readonly draftSkillRootFor?: (orgId: string, userId: string) => string | null;
-  readonly enabledSkillPackagesFor: (orgId: string, userId: string) => readonly { name: string; sourcePath: string }[];
+  readonly enabledSkillPackagesFor: EnabledSkillPackagesResolver;
   readonly bwrapExecutable: string;
   readonly modeFor: (workspaceId: string) => 'read-only' | 'workspace-write';
 }
 
-function buildContext(deps: InternalShellDeps, env: { orgId: string; userId: string; workspaceId: string }): WorkspaceContext {
+function buildContext(
+  deps: InternalShellDeps,
+  env: { orgId: string; userId: string; workspaceId: string },
+  enabledSkills: readonly EnabledSkillRef[],
+): WorkspaceContext {
   const draft = deps.draftSkillRootFor?.(env.orgId, env.userId) ?? null;
   return {
     orgId: env.orgId,
@@ -38,7 +43,7 @@ function buildContext(deps: InternalShellDeps, env: { orgId: string; userId: str
     workspaceRoot: deps.workspaceManager.physicalWorkspacePath(env.workspaceId),
     tempRoot: deps.workspaceManager.physicalTempPath(env.workspaceId),
     systemSkillRoot: deps.systemSkillRoot,
-    enabledSkillPackages: [...deps.enabledSkillPackagesFor(env.orgId, env.userId)],
+    enabledSkillPackages: [...deps.enabledSkillPackagesFor(env.orgId, env.userId, enabledSkills)],
     ...(draft !== null && draft !== '' ? { draftSkillRoot: draft } : {}),
   };
 }
@@ -55,20 +60,22 @@ function rootsOf(ctx: WorkspaceContext): readonly string[] {
   ];
 }
 
-async function parseBody(c: import('hono').Context): Promise<{ envelope: unknown; payload: unknown }> {
+async function parseBody(
+  c: import('hono').Context,
+): Promise<{ envelope: unknown; payload: unknown; enabledSkills: readonly EnabledSkillRef[] }> {
   const body = await c.req.json().catch(() => null);
   if (!body || typeof body !== 'object') throw new ContractError('ENVELOPE_INVALID', 'body must be object');
   const b = body as Record<string, unknown>;
-  return { envelope: b['envelope'], payload: b['payload'] };
+  return { envelope: b['envelope'], payload: b['payload'], enabledSkills: parseEnabledSkills(b['enabledSkills']) };
 }
 
 export function registerInternalShellRoutes(app: Hono, deps: InternalShellDeps): void {
   app.post('/internal/v1/shell/run', async (c) => {
     try {
-      const { envelope: rawEnv, payload } = await parseBody(c);
+      const { envelope: rawEnv, payload, enabledSkills } = await parseBody(c);
       parseEnvelope(rawEnv);
       const env = rawEnv as { orgId: string; userId: string; workspaceId: string };
-      const ctx = buildContext(deps, env);
+      const ctx = buildContext(deps, env, enabledSkills);
       const executor = new IsolatedShellExecutor({
         workspace: ctx,
         bwrapExecutable: deps.bwrapExecutable,
@@ -90,10 +97,10 @@ export function registerInternalShellRoutes(app: Hono, deps: InternalShellDeps):
 
   app.post('/internal/v1/shell/start', async (c) => {
     try {
-      const { envelope: rawEnv, payload } = await parseBody(c);
+      const { envelope: rawEnv, payload, enabledSkills } = await parseBody(c);
       parseEnvelope(rawEnv);
       const env = rawEnv as { orgId: string; userId: string; workspaceId: string };
-      const ctx = buildContext(deps, env);
+      const ctx = buildContext(deps, env, enabledSkills);
       const roots = rootsOf(ctx);
       const executor = new IsolatedShellExecutor({
         workspace: ctx,

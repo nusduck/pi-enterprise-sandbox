@@ -32,36 +32,70 @@ import type { ExecDbPool as Pool } from '../db/failover-pool.js';
 import { assertExecDbConfigWithoutPassword } from '../startup-credentials.js';
 import { assertSchemaMatchesManifest } from '../db/schema-verify.js';
 import { AGENT_SKILL_PATH } from '../isolation/profile.js';
+import { ContractError } from '@pi/contract/errors.js';
+import {
+  parseSkillVersionSidecar,
+  skillVersionPaths,
+  type EnabledSkillRef,
+} from '@pi/contract/skill-manifest.js';
+import type { EnabledSkillPackage } from '../types.js';
 import fs from 'node:fs';
 import path from 'node:path';
 
 const OWNER_SEGMENT_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
-const SKILL_NAME_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/;
 
-/** Resolve only this owner's published package directories; never scan the base root. */
-export function enabledSkillPackagesFromRoot(
+function packageUnavailable(name: string): ContractError {
+  return new ContractError('SKILL_PACKAGE_UNAVAILABLE', `skill package unavailable: ${name}`);
+}
+
+/** 缺失类错误归到「这个包不可用」；其余（权限、I/O、挂载掉线）归到「存储不可用」。 */
+function classifySkillStoreError(err: unknown, name: string): ContractError {
+  if (err instanceof ContractError) return err;
+  const code = (err as { code?: unknown } | null)?.code;
+  if (code === 'ENOENT' || code === 'ENOTDIR') return packageUnavailable(name);
+  return new ContractError('SKILL_STORE_UNAVAILABLE', 'user skill store is unavailable');
+}
+
+/**
+ * 按请求携带的启用清单解析这个 owner 要挂载的包（design §3.3 S1）。
+ *
+ * 只核对清单点名的版本目录与侧车，**从不扫目录**；清单为空时不触碰存储。
+ * 以前这里扫 owner 目录并在任何异常时返回 `[]`：挂载掉线被当成「用户没有 Skill」，
+ * 目录里有什么就挂什么，与 Agent 账本无关。现在：
+ * - 版本目录不是普通目录（含符号链接）、缺 SKILL.md、侧车缺失或与清单不符
+ *   → `SKILL_PACKAGE_UNAVAILABLE`；
+ * - 存储未配置、无权限或 I/O 失败 → `SKILL_STORE_UNAVAILABLE`。
+ */
+export function enabledSkillPackagesFromManifest(
   base: string,
   orgId: string,
   userId: string,
-): readonly { name: string; sourcePath: string }[] {
-  if (!base || !OWNER_SEGMENT_RE.test(orgId) || !OWNER_SEGMENT_RE.test(userId)) return [];
-  const ownerRoot = path.join(path.resolve(base), orgId, userId);
-  try {
-    return fs.readdirSync(ownerRoot, { withFileTypes: true })
-      .filter((entry) => entry.isDirectory() && SKILL_NAME_RE.test(entry.name))
-      .filter((entry) => {
-        const skillMd = path.join(ownerRoot, entry.name, 'SKILL.md');
-        try {
-          return fs.lstatSync(skillMd).isFile();
-        } catch {
-          return false;
-        }
-      })
-      .map((entry) => ({ name: entry.name, sourcePath: path.join(ownerRoot, entry.name) }))
-      .sort((a, b) => a.name.localeCompare(b.name));
-  } catch {
-    return [];
+  manifest: readonly EnabledSkillRef[] = [],
+): readonly EnabledSkillPackage[] {
+  if (manifest.length === 0) return [];
+  if (!base) throw new ContractError('SKILL_STORE_UNAVAILABLE', 'user skill store is not configured');
+  if (!OWNER_SEGMENT_RE.test(orgId) || !OWNER_SEGMENT_RE.test(userId)) {
+    throw new ContractError('ENVELOPE_INVALID', 'owner identity is invalid');
   }
+  const ownerRoot = path.join(path.resolve(base), orgId, userId);
+  const packages = manifest.map((ref) => {
+    const paths = skillVersionPaths(ownerRoot, ref.name, ref.contentDigest);
+    let sidecarText: string;
+    try {
+      const pkg = fs.lstatSync(paths.packageDir);
+      const skillMd = fs.lstatSync(path.join(paths.packageDir, 'SKILL.md'));
+      if (!pkg.isDirectory() || !skillMd.isFile()) throw packageUnavailable(ref.name);
+      sidecarText = fs.readFileSync(paths.sidecar, 'utf8');
+    } catch (err) {
+      throw classifySkillStoreError(err, ref.name);
+    }
+    const sidecar = parseSkillVersionSidecar(sidecarText);
+    if (sidecar === null || sidecar.name !== ref.name || sidecar.contentDigest !== ref.contentDigest) {
+      throw packageUnavailable(ref.name);
+    }
+    return { name: ref.name, sourcePath: paths.packageDir };
+  });
+  return packages.sort((a, b) => a.name.localeCompare(b.name));
 }
 
 export interface ExecAppDeps {
@@ -257,8 +291,8 @@ export function createExecAppFromEnv(
     jobRegistry,
     keyring,
     systemSkillRoot: env['SANDBOX_SKILLS_ROOT'] ?? AGENT_SKILL_PATH,
-    enabledSkillPackagesFor: (orgId, userId) =>
-      enabledSkillPackagesFromRoot(userSkillRoot, orgId, userId),
+    enabledSkillPackagesFor: (orgId, userId, manifest) =>
+      enabledSkillPackagesFromManifest(userSkillRoot, orgId, userId, manifest),
     // skill 草稿根（ADR 0009 D7 / 计划 H6.2）。**默认关**：一个可写且不进上下文
     // 的根是新增面，要由部署显式打开（`SANDBOX_SKILL_DRAFT_ROOT`）。
     // 打开后按 owner 分目录——每用户一个，与已启用包的 `<base>/<org>/<user>` 同规矩，

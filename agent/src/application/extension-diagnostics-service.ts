@@ -78,7 +78,39 @@ function discoverSkills(skillRoots: string[], userSkillRoot: string | null = nul
 }
 
 /**
- * 草稿包。**草稿在启用之后不会消失**——`enableDraftPackage()` 复制字节到已发布
+ * 用户层：来自启用账本、已核对的已发布版本（design §3.3 S1），不扫目录。
+ * 与系统层同名时系统层优先（启用时已拒绝遮蔽，这里是展示层的同一条规则）。
+ *
+ * @param systemSkills 系统层发现结果
+ * @param userSkills 每项是账本核对通过的包目录
+ */
+function mergePublishedUserSkills(
+  systemSkills: Record<string, any>[],
+  userSkills: ReadonlyArray<{ name: string, packageDir: string }>,
+) {
+  const byName = new Map(systemSkills.map((skill) => [skill.name, skill]));
+  for (const pkg of userSkills) {
+    if (byName.has(pkg.name)) continue;
+    try {
+      const metadata = validateSkillPackage(pkg.packageDir, { expectedName: pkg.name });
+      byName.set(pkg.name, {
+        name: metadata.name,
+        description: metadata.description,
+        enabled: true,
+        status: 'configured',
+        source: 'user-skill-root',
+        path: null,
+        dynamic: true,
+      });
+    } catch {
+      // Invalid packages are not executable and must not be advertised.
+    }
+  }
+  return [...byName.values()].sort((a, b) => a.name.localeCompare(b.name));
+}
+
+/**
+ * 草稿包。**草稿在启用之后不会消失**——`publishDraftVersion()` 复制字节到已发布
  * 根，草稿留在原地当可编辑的源（停用只删副本，不删草稿，见 skills/enablement.ts）。
  *
  * 所以这里要把「已经发布过的草稿」标出来：否则同一个名字会在 UI 上出现两次，
@@ -167,7 +199,7 @@ function projectMcpServers(
  *   now?: () => Date,
  * }} [options]
  */
-export function getExtensionDiagnostics(options: { profileId?: string, skillRoots?: string[], userSkillRoot?: string | null, draftSkillRoot?: string | null, mcpServers?: Record<string, any>[] | string, mcpDiscovery?: { servers?: Record<string, any>[], ready?: boolean, toolCount?: number }, models?: Iterable<Record<string, any>>, toolRiskPolicy?: Record<string, any>, now?: () => Date, } = {}) {
+export function getExtensionDiagnostics(options: { profileId?: string, skillRoots?: string[], userSkillRoot?: string | null, userSkills?: ReadonlyArray<{ name: string, packageDir: string }>, draftSkillRoot?: string | null, mcpServers?: Record<string, any>[] | string, mcpDiscovery?: { servers?: Record<string, any>[], ready?: boolean, toolCount?: number }, models?: Iterable<Record<string, any>>, toolRiskPolicy?: Record<string, any>, now?: () => Date, } = {}) {
   const profileId = String(
     options.profileId || DEFAULT_PROFILE_ID,
   ).trim();
@@ -175,9 +207,9 @@ export function getExtensionDiagnostics(options: { profileId?: string, skillRoot
     throw new Error(`Unknown diagnostics profile: ${profileId}`);
   }
 
-  const skills = discoverSkills(
-    options.skillRoots || [],
-    options.userSkillRoot ?? null,
+  const skills = mergePublishedUserSkills(
+    discoverSkills(options.skillRoots || [], options.userSkillRoot ?? null),
+    options.userSkills ?? [],
   );
   const skillDrafts = discoverDraftSkills(
     options.draftSkillRoot ?? null,

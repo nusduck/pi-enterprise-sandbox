@@ -37,6 +37,16 @@ export interface EnabledSkillPackage {
 }
 
 /**
+ * 按 owner 与请求携带的启用清单解析要挂载的包（design §3.3 S1）。
+ * 清单缺省即空：公共面与 MCP 窄桥不带清单，因此不挂任何用户包。
+ */
+export type EnabledSkillPackagesResolver = (
+  orgId: string,
+  userId: string,
+  manifest?: readonly { readonly name: string; readonly contentDigest: string }[],
+) => readonly EnabledSkillPackage[];
+
+/**
  * 沙箱模式词汇，采用 DSH 的命名（ADR 0008 D3）。文件效果，不含网络。
  *
  * **故意不含 DSH 的 `danger-full-access`。** 那个模式在 DSH 里成立，因为它是

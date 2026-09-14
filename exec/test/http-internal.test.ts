@@ -13,6 +13,7 @@ import { join } from 'node:path';
 import { describe, test } from 'node:test';
 import { Hono } from 'hono';
 import { issueInternalToken , internalBindingForHtu } from '@pi/contract/hmac.js';
+import { canonicalQueryBytes } from '@pi/contract/skill-manifest.js';
 import { createInternalRouter } from '../src/http/router.js';
 import { isIpAllowed } from '../src/security/cidr.js';
 import { hashBodySha256, verifyInternalRequest } from '../src/security/hmac.js';
@@ -376,6 +377,47 @@ describe('内部面：方法与能力都必须逐字绑定', () => {
       keyring: KEYRING_JSON, rawBody: new Uint8Array(0), method: 'GET', path,
     });
     assert.equal(claims.htm, 'GET');
+  });
+
+  test('GET 的签名覆盖规范化 query：改目标、加清单、重复参数都被 401', async () => {
+    // 2026-09-14 之前 GET 的 body_sha256 是空串摘要，query 里的信封与目标不在签名里：
+    // 同一枚令牌可以换一个 target 去读别的文件。现在与签发侧同用 canonicalQueryBytes。
+    const { manager, cleanup } = await makeTempManager();
+    const app = createInternalRouter({
+      workspaceManager: manager,
+      systemSkillRoot: '/tmp/skills',
+      enabledSkillPackagesFor: () => [],
+      bwrapExecutable: '/usr/bin/bwrap',
+      modeFor: () => 'workspace-write',
+      jobRegistry: new MySqlJobRegistry(new InMemoryJobStore() as never),
+      keyring: KEYRING,
+      allowCidr: [],
+    });
+    const path = '/internal/v1/fs/stream-text';
+    const b64 = (value: unknown): string => Buffer.from(JSON.stringify(value), 'utf8').toString('base64url');
+    const envelope = b64({ requestId: 'r1', workspaceId: 'ws1', orgId: 'org_test', userId: 'user_test', fenceToken: 1 });
+    const target = b64({ targetKey: 'k', displayPath: 'notes.txt' });
+    const params = { envelope, target };
+    const token = issueInternalToken({
+      keyring: KEYRING,
+      activeKid: TEST_KID,
+      claims: { ...baseClaims(path), htm: 'GET', body_sha256: sha256Hex(canonicalQueryBytes(params)) },
+    });
+    const call = (query: string) => app.request(`${path}?${query}`, { headers: { authorization: `Bearer ${token}` } });
+    try {
+      const signed = await call(new URLSearchParams(params).toString());
+      assert.notEqual(signed.status, 401, 'a correctly signed query must pass authentication');
+
+      const otherTarget = b64({ targetKey: 'k2', displayPath: 'secret.txt' });
+      assert.equal((await call(new URLSearchParams({ envelope, target: otherTarget }).toString())).status, 401);
+      assert.equal(
+        (await call(new URLSearchParams({ ...params, enabledSkills: b64([]) }).toString())).status,
+        401,
+      );
+      assert.equal((await call(`${new URLSearchParams(params).toString()}&target=${target}`)).status, 401);
+    } finally {
+      await cleanup();
+    }
   });
 
   test('文件 scope 打不了 shell 端点', () => {

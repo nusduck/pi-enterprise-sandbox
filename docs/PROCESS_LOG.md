@@ -732,3 +732,18 @@ Each entry should say **what changed**, **why**, and **which STATUS IDs** it aff
 - **验证：** 回归用例修复前失败、修复后通过；容器内 agent typecheck 通过、1298 pass / 3 cancelled（已知组）；重建 agent
   镜像后真实链路 `skill` 加载用户 Skill 成功；`uv run pytest` 123 passed。详见
   [证据](evidence/skill-discovery-fix-2026-09-14.md)。
+
+## 2026-09-14 — S1：用户 Skill 账本发现、按摘要分版本、exec 按清单挂载
+
+- **Context：** design §3.3 S1 接口检查点。实施前在真实链路复现模型可见 Skill 路径与 exec 挂载不一致；静态核对 exec 扫目录并吞异常、
+  启用无锁非事务。实施中发现内部面 GET 的 query 不在签名内。
+- **Decision：** 用户确认推荐方案（S1-Q1 摘要分版本目录、S1-Q2 宽限期默认 24 小时可配置、S1-Q3 草稿根共写）；历史数据直接清理，
+  不做平铺布局迁移。清单放在请求体顶层 `enabledSkills`；GET 签名改为覆盖规范化 query；版本目录内再套包名以复用出厂 provider。
+- **Action：** contract `skill-manifest.ts` 与两个传输错误码；exec 按清单核对版本与侧车、GET 规范化验签；agent 发布存储重写、
+  owner membership 行锁事务、Worker 按账本核对、Run 内逻辑路径 provider、exec RPC 携带清单、能力投影按账本、
+  `SKILL_VERSION_GC_GRACE_MS`；api / webui / deployment / development / `.env.example` / design / CHANGELOG 同步。
+- **STATUS IDs：** 不改变状态值；B3 行按门禁更新清单计数 18 → 31（关联 A2、H1/H3；多副本与共享存储目标环境验收未做）。
+- **验证：** 容器内 Node 22：contract 109/109、exec 374/374（非 root + bwrap + seccomp）、agent 1303 pass / 3 cancelled（已知组）、
+  各包 typecheck；锁集成测试在开发栈 MySQL 4/4；`uv run pytest` 123 passed。重建镜像后真实链路：启用得 `.v/<digest>` 版本、
+  模型按 `/home/sandbox/skill-user/path-probe` 读到资源、停用后不可见且草稿回到未发布、字节保留。详见
+  [证据](evidence/s1-skill-ledger-2026-09-14.md)。

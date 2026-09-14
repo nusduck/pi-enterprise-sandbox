@@ -1,5 +1,5 @@
 /**
- * 用户侧 Skill 的**启用闸门**（ADR 0009 D7 / 计划 H6.4–H6.6）。
+ * 用户侧 Skill 的**启用闸门**（ADR 0009 D7 / 计划 H6.4–H6.6）与发布存储（design §3.3 S1）。
  *
  * ## 闸门只剩这一处
  *
@@ -17,19 +17,30 @@
  * ## 为什么是「复制字节」而不是「挂草稿目录」
  *
  * ADR 0006 P1 (B) 点名的绕过是：模型在包被批准之后再改它的内容。
- * 如果已启用的包和草稿是**同一份字节**，那条绕过就还在——批准的是 A，
- * 运行的是模型随后改成的 B。
+ * 复制之后两者是两份字节：模型改草稿动不了已启用的副本。
  *
- * 复制之后两者是两份字节：模型改草稿动不了已启用的副本。于是
- * **不需要每 Run 重算摘要**，也不需要「摘要变了自动落回未启用」这类常驻校验。
- * 停用 / 重新启用就是删掉或替换那份副本。
+ * ## 按摘要分版本（design §3.3 S1）
+ *
+ * 发布布局见 `@pi/contract/skill-manifest.js`：`<name>/.v/<digest>/<name>/` 加侧车
+ * `<name>/.v/<digest>.json`。启用不再原地替换：新摘要写进新目录，旧版本留给仍在
+ * 运行、清单里点着它的 Run，过了宽限期、且账本不再引用时才回收。
+ *
+ * 摘要**按复制出来的暂存字节计算**，不按草稿计算：草稿根模型可写，校验与复制之间
+ * 草稿可能被改，按草稿算出的摘要就会和发布出去的字节对不上。
  */
-import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
+import {
+  parseSkillVersionSidecar,
+  skillVersionPaths,
+  SKILL_DIGEST_PATTERN,
+  SKILL_VERSIONS_DIRNAME,
+  type SkillVersionPaths,
+  type SkillVersionSidecar,
+} from '@pi/contract/skill-manifest.js';
 import { validateSkillPackage } from './validator.js';
-import { atomicReplaceDir, ensureTraversableUserSkillRoot } from './install.js';
+import { ensureTraversableUserSkillRoot } from './install.js';
 
 /** 一个已启用副本的上限。与上传的 zip 同量级，防止一次启用吃光磁盘。 */
 export const SKILL_ENABLE_MAX_BYTES = 50 * 1024 * 1024;
@@ -41,8 +52,10 @@ export interface EnabledSkillRecord {
   readonly contentDigest: string;
   readonly fileCount: number;
   readonly totalBytes: number;
-  /** 已发布副本的物理路径。 */
+  /** 已发布版本的包目录（挂载源）。 */
   readonly publishedPath: string;
+  /** 同一摘要此前已发布且完整，本次未重写字节。 */
+  readonly reused: boolean;
 }
 
 interface ScannedFile {
@@ -144,67 +157,180 @@ export async function inspectDraftPackage(
   return { name: meta.name, description: meta.description, files, totalBytes, contentDigest: hash.digest('hex') };
 }
 
+/** 一个已发布版本的核对结果。 */
+export type PublishedVersionCheck =
+  | { readonly ok: true; readonly paths: SkillVersionPaths; readonly sidecar: SkillVersionSidecar }
+  | { readonly ok: false; readonly paths: SkillVersionPaths; readonly reason: 'missing' | 'mismatch' };
+
+function isMissing(err: unknown): boolean {
+  const code = (err as { code?: unknown } | null)?.code;
+  return code === 'ENOENT' || code === 'ENOTDIR';
+}
+
 /**
- * 启用：校验草稿 → **把字节复制成一份只读的已发布副本** → 返回可入库的记录。
- *
- * 复制先落到一个同父目录下的临时目录，再 `atomicReplaceDir` 换上去——
- * 半个包被挂进 `ro_bind` 比没有包更糟。
+ * 核对 owner 根下某个名字 + 摘要是否是完整的已发布版本：包目录是普通目录、含普通文件
+ * SKILL.md、侧车存在且与名字/摘要一致。缺失类返回 `ok: false`；权限、I/O 等其它错误
+ * 原样抛出——存储不可读不能被当成「没有这个包」。
  */
-export async function enableDraftPackage(input: {
+export async function readPublishedVersion(
+  publishedRoot: string,
+  name: string,
+  contentDigest: string,
+): Promise<PublishedVersionCheck> {
+  const paths = skillVersionPaths(publishedRoot, name, contentDigest);
+  let sidecarText: string;
+  try {
+    const pkg = await fsp.lstat(paths.packageDir);
+    const skillMd = await fsp.lstat(path.join(paths.packageDir, 'SKILL.md'));
+    if (!pkg.isDirectory() || !skillMd.isFile()) return { ok: false, paths, reason: 'mismatch' };
+    sidecarText = await fsp.readFile(paths.sidecar, 'utf8');
+  } catch (err) {
+    if (isMissing(err)) return { ok: false, paths, reason: 'missing' };
+    throw err;
+  }
+  const sidecar = parseSkillVersionSidecar(sidecarText);
+  if (sidecar === null || sidecar.name !== name || sidecar.contentDigest !== contentDigest) {
+    return { ok: false, paths, reason: 'mismatch' };
+  }
+  return { ok: true, paths, sidecar };
+}
+
+/**
+ * 启用：校验草稿 → 复制到暂存目录 → **按暂存字节算摘要** → 改名为 `.v/<digest>` →
+ * 最后写侧车。侧车在版本目录之后写，所以任何中断都只会留下「无侧车」的目录，
+ * 不会被核对为已发布；同一摘要已完整发布时直接复用。
+ *
+ * 并发由调用方的 owner 行锁串行化（`skill-enablement-service.ts`），这里不再加锁。
+ */
+export async function publishDraftVersion(input: {
   draftPackageDir: string;
+  /** owner 根 `<base>/<orgId>/<userId>`。 */
   publishedRoot: string;
   expectedName?: string;
   /** 平台背书的系统 skill 名；与之同名的包不得启用。 */
   systemSkillNames?: Iterable<string>;
+  now?: () => Date;
 }): Promise<EnabledSkillRecord> {
-  const inspected = await inspectDraftPackage(
-    input.draftPackageDir,
-    input.expectedName,
-    input.systemSkillNames ?? [],
-  );
+  const systemNames = [...(input.systemSkillNames ?? [])];
+  const draft = await inspectDraftPackage(input.draftPackageDir, input.expectedName, systemNames);
 
   await ensureTraversableUserSkillRoot(input.publishedRoot);
-  const destination = path.join(input.publishedRoot, inspected.name);
-  const staging = path.join(
-    input.publishedRoot,
-    `.staging-${inspected.name}-${process.pid}-${Date.now()}`,
-  );
+  const versionsDir = path.join(input.publishedRoot, draft.name, SKILL_VERSIONS_DIRNAME);
+  await fsp.mkdir(versionsDir, { recursive: true, mode: 0o755 });
+  const staging = path.join(versionsDir, `.staging-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
+  const stagedPackage = path.join(staging, draft.name);
 
   try {
-    for (const file of inspected.files) {
-      const target = path.join(staging, file.relative);
+    for (const file of draft.files) {
+      const target = path.join(stagedPackage, file.relative);
       await fsp.mkdir(path.dirname(target), { recursive: true });
       await fsp.copyFile(file.absolute, target);
       // 已发布副本是只读的：模型改草稿动不了它，而它自己也不该在容器里被改。
       // 真正的只读由 `ro_bind` 保证（ADR 0008 D4），这里的权限位是第二道。
       await fsp.chmod(target, 0o444);
     }
-    await atomicReplaceDir(staging, destination);
+    // 摘要以暂存字节为准，并重新套用结构、大小与系统名校验。
+    const staged = await inspectDraftPackage(stagedPackage, draft.name, systemNames);
+    const existing = await readPublishedVersion(input.publishedRoot, staged.name, staged.contentDigest);
+    if (existing.ok) {
+      await fsp.rm(staging, { recursive: true, force: true });
+      return {
+        name: staged.name,
+        contentDigest: staged.contentDigest,
+        fileCount: staged.files.length,
+        totalBytes: staged.totalBytes,
+        publishedPath: existing.paths.packageDir,
+        reused: true,
+      };
+    }
+    const paths = existing.paths;
+    // 无侧车或侧车不符的同名目录是中断的发布：整个替换掉。
+    await fsp.rm(paths.sidecar, { force: true });
+    await fsp.rm(paths.versionRoot, { recursive: true, force: true });
+    await fsp.rename(staging, paths.versionRoot);
+    const sidecar: SkillVersionSidecar = {
+      name: staged.name,
+      contentDigest: staged.contentDigest,
+      fileCount: staged.files.length,
+      totalBytes: staged.totalBytes,
+      publishedAt: (input.now ?? (() => new Date()))().toISOString(),
+    };
+    const tmp = `${paths.sidecar}.tmp-${process.pid}-${Date.now()}`;
+    await fsp.writeFile(tmp, JSON.stringify(sidecar), { mode: 0o444 });
+    await fsp.rename(tmp, paths.sidecar);
+    return {
+      name: staged.name,
+      contentDigest: staged.contentDigest,
+      fileCount: staged.files.length,
+      totalBytes: staged.totalBytes,
+      publishedPath: paths.packageDir,
+      reused: false,
+    };
   } catch (error) {
     await fsp.rm(staging, { recursive: true, force: true }).catch(() => undefined);
     throw error;
   }
+}
 
-  return {
-    name: inspected.name,
-    contentDigest: inspected.contentDigest,
-    fileCount: inspected.files.length,
-    totalBytes: inspected.totalBytes,
-    publishedPath: destination,
-  };
+async function entryTime(file: string, sidecarFile?: string): Promise<number> {
+  if (sidecarFile !== undefined) {
+    try {
+      const sidecar = parseSkillVersionSidecar(await fsp.readFile(sidecarFile, 'utf8'));
+      if (sidecar !== null) return Date.parse(sidecar.publishedAt);
+    } catch {
+      // 侧车缺失或不可读：退回目录时间。
+    }
+  }
+  return (await fsp.lstat(file)).mtimeMs;
 }
 
 /**
- * 停用：删掉那份已发布副本。
+ * 回收一个包名下不再需要的版本（design §3.3 第 5 条）。
  *
- * 草稿**不动**——停用不是删除用户的工作成果，只是把它从模型的上下文里拿走。
+ * 只删除**不在保留集合里且早于宽限期**的版本目录（连同侧车）、过期的暂存目录与孤立侧车。
+ * 保留集合由调用方在 owner 行锁内给出：至少包含事务前账本引用的摘要与本次写入的摘要，
+ * 这样即使事务随后回滚，账本也不会指向已被删掉的字节。不新增后台定时器。
  */
-export async function disableSkillPackage(input: {
+export async function collectStaleSkillVersions(input: {
   publishedRoot: string;
   name: string;
-}): Promise<{ removed: boolean }> {
-  const destination = path.join(input.publishedRoot, input.name);
-  if (!fs.existsSync(destination)) return { removed: false };
-  await fsp.rm(destination, { recursive: true, force: true });
-  return { removed: true };
+  keepDigests: Iterable<string>;
+  graceMs: number;
+  now?: () => Date;
+}): Promise<string[]> {
+  const versionsDir = path.join(input.publishedRoot, input.name, SKILL_VERSIONS_DIRNAME);
+  let entries;
+  try {
+    entries = await fsp.readdir(versionsDir, { withFileTypes: true });
+  } catch (err) {
+    if (isMissing(err)) return [];
+    throw err;
+  }
+  const keep = new Set(input.keepDigests);
+  const cutoff = (input.now ?? (() => new Date()))().getTime() - Math.max(0, input.graceMs);
+  const versionDirs = new Set(
+    entries.filter((e) => e.isDirectory() && SKILL_DIGEST_PATTERN.test(e.name)).map((e) => e.name),
+  );
+  const removed: string[] = [];
+  for (const entry of entries) {
+    const full = path.join(versionsDir, entry.name);
+    if (entry.isDirectory() && SKILL_DIGEST_PATTERN.test(entry.name)) {
+      if (keep.has(entry.name)) continue;
+      const sidecar = path.join(versionsDir, `${entry.name}.json`);
+      if ((await entryTime(full, sidecar)) > cutoff) continue;
+      await fsp.rm(sidecar, { force: true });
+      await fsp.rm(full, { recursive: true, force: true });
+      removed.push(entry.name);
+      continue;
+    }
+    if (entry.isDirectory() && entry.name.startsWith('.staging-')) {
+      if ((await entryTime(full)) <= cutoff) await fsp.rm(full, { recursive: true, force: true });
+      continue;
+    }
+    const digest = entry.name.endsWith('.json') ? entry.name.slice(0, -'.json'.length) : '';
+    if (entry.isFile() && SKILL_DIGEST_PATTERN.test(digest) && !versionDirs.has(digest) && !keep.has(digest)) {
+      if ((await entryTime(full)) <= cutoff) await fsp.rm(full, { force: true });
+    }
+  }
+  return removed;
 }

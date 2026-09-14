@@ -105,6 +105,49 @@ export function resolveSkillRootsForRun(
 }
 
 /**
+ * 一个 Run 可见的 Skill（design §3.3 S1）：系统层目录 + 按启用账本逐条核对通过的
+ * 用户已发布版本。
+ *
+ * 用户层不再扫目录。核对不过（版本缺失、侧车不符）的包不进本 Run 并记告警——单个坏包
+ * 不拒绝整个 Run；存储不可读（权限、I/O）则抛出，不能当成「没有 Skill」。身份不合法时
+ * 只给系统层，与 `resolveSkillRootsForRun` 同样降级。
+ */
+export async function resolveRunSkillPaths(
+  env: NodeJS.ProcessEnv | Record<string, string | undefined>,
+  identity: IdentityLike | null,
+  deps: {
+    listEnabled: (owner: { orgId: string; userId: string }) => Promise<
+      ReadonlyArray<{ name: string; contentDigest: string }>
+    >;
+    logger?: { warn: (...args: unknown[]) => void };
+  },
+): Promise<unknown[]> {
+  const roots = resolveSkillRootsForRun(env, identity);
+  if (roots.length < 2 || !identity) return [roots[0]];
+  const [systemRoot, userRoot] = roots;
+  const owner = { orgId: String(identity.orgId), userId: String(identity.userId) };
+  const { readPublishedVersion } = await import('../skills/enablement.js');
+  const versions: unknown[] = [];
+  for (const row of await deps.listEnabled(owner)) {
+    const check = await readPublishedVersion(userRoot, row.name, row.contentDigest);
+    if (!check.ok) {
+      const reason = (check as { reason: 'missing' | 'mismatch' }).reason;
+      (deps.logger ?? console).warn(
+        `[skills] enabled skill "${row.name}" is ${reason} in the published store; excluded from this Run`,
+      );
+      continue;
+    }
+    versions.push({
+      name: row.name,
+      contentDigest: row.contentDigest,
+      versionRoot: check.paths.versionRoot,
+      packageDir: check.paths.packageDir,
+    });
+  }
+  return [systemRoot, ...versions];
+}
+
+/**
  * Skill roots for the capability projection, plus the caller's own writable
  * directory so the projection can label each package's tier.
  *

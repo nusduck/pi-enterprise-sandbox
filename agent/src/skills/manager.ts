@@ -29,7 +29,7 @@ import {
   SKILL_INSTALL_TIMEOUT_MS,
 } from './install.js';
 import { SKILL_ARCHIVE_MAX_BYTES } from './archive.js';
-import { disableSkillPackage, enableDraftPackage } from './enablement.js';
+import { collectStaleSkillVersions, publishDraftVersion } from './enablement.js';
 import { join as joinPath } from 'node:path';
 import { emitSkillAudit } from './audit.js';
 
@@ -443,7 +443,7 @@ export function createSkillManager(options: SkillManagerOptions = {}) {
       const name = validateSkillName(params?.name);
       const draftPackageDir = joinPath(draftRoot, name);
       try {
-        const record = await enableDraftPackage({
+        const record = await publishDraftVersion({
           draftPackageDir,
           publishedRoot: userRoot,
           expectedName: name,
@@ -457,7 +457,7 @@ export function createSkillManager(options: SkillManagerOptions = {}) {
           source: `draft:${name}`,
           summary:
             `enabled ${record.name} digest=${record.contentDigest.slice(0, 16)} ` +
-            `files=${record.fileCount} bytes=${record.totalBytes}`,
+            `files=${record.fileCount} bytes=${record.totalBytes}${record.reused ? ' reused' : ''}`,
         });
         return record;
       } catch (error) {
@@ -473,20 +473,47 @@ export function createSkillManager(options: SkillManagerOptions = {}) {
       }
     },
 
-    /** 停用：删掉已发布副本。**草稿不动**——停用不是删除用户的工作成果。 */
+    /**
+     * 停用。账本行由 `skill-enablement-service` 在事务里删除；这里**不删字节**——
+     * 仍在运行、清单里点着这个版本的 Run 还要用，字节由 `collectVersions` 过了宽限期再回收
+     * （design §3.3 S1）。草稿同样不动：停用不是删除用户的工作成果。
+     */
     async disable(params) {
-      if (!userRoot) {
-        throw new Error('skill disablement requires a writable user skill root');
-      }
       const name = validateSkillName(params?.name);
-      const result = await disableSkillPackage({ publishedRoot: userRoot, name });
       audit({
         action: 'disable',
         result: 'success',
         skill_name: name,
-        summary: result.removed ? `disabled ${name}` : `${name} was not enabled`,
+        summary: `disabled ${name}`,
       });
-      return result;
+      return { name };
+    },
+
+    /** 回收一个包名下不再需要的已发布版本（design §3.3 第 5 条）。 */
+    async collectVersions(params) {
+      if (!userRoot) {
+        throw new Error('skill version collection requires a writable user skill root');
+      }
+      const name = validateSkillName(params?.name);
+      const graceMs = Number(params?.graceMs);
+      if (!Number.isFinite(graceMs) || graceMs < 0) {
+        throw new Error('skill version collection requires a non-negative graceMs');
+      }
+      const removed = await collectStaleSkillVersions({
+        publishedRoot: userRoot,
+        name,
+        keepDigests: Array.isArray(params?.keepDigests) ? params.keepDigests : [],
+        graceMs,
+      });
+      if (removed.length > 0) {
+        audit({
+          action: 'disable',
+          result: 'success',
+          skill_name: name,
+          summary: `collected ${removed.length} stale published version(s) of ${name}`,
+        });
+      }
+      return removed;
     },
 
     async uninstall(params) {

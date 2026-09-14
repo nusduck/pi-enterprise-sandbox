@@ -29,6 +29,27 @@ const SRC_ROOT = path.join(root, 'src');
  */
 const TRANSIENT_MAP_WHITELIST = Object.freeze([
   {
+    rel: 'infrastructure/dsh/published-skills-provider.ts',
+    match: /const\s+byName\s*=\s*new\s+Map\s*\(/,
+    purpose:
+      "One Run provider's name -> ledger-verified version index, built from that Run's manifest; the enablement ledger is authoritative",
+    scope: 'local',
+  },
+  {
+    rel: 'infrastructure/dsh/published-skills-provider.ts',
+    match: /const\s+originals\s*=\s*new\s+Map\s*(?:<[^;\n(){}]*>)?\s*\(/,
+    purpose:
+      "One Run provider's last-listed physical candidates so get() never trusts a model-facing path; discarded with the Run",
+    scope: 'local',
+  },
+  {
+    rel: 'application/extension-diagnostics-service.ts',
+    match: /const\s+byName\s*=\s*new\s+Map\s*\(/,
+    purpose:
+      'Function-local merge index of system and ledger-verified user skills for one capabilities projection',
+    scope: 'local',
+  },
+  {
     rel: 'application/agent-config-validator.ts',
     match: /const\s+rank\s*=\s*new\s+Map\s*\(/,
     purpose:
@@ -421,9 +442,12 @@ describe('no authoritative in-process Run Map (B3)', () => {
     // （memory 工具按 ADR 0009 D10 退役，实现是死代码，一并删除）。
     // 2026-09-06: 26 → 28。新增的两条都在 `application/agent-config-validator.ts`，
     // 是同一次 validate()/构造调用内的函数局部索引，不跨请求、不跨进程存活。
+    // 2026-09-14: 28 → 31（design §3.3 S1）。`published-skills-provider.ts` 两条是单个 Run
+    // 的 provider 内索引（清单名 → 版本、最近一次 list 的原始候选），
+    // `extension-diagnostics-service.ts` 一条是单次能力投影的合并索引；权威在启用账本。
     assert.equal(
       TRANSIENT_MAP_WHITELIST.length,
-      28,
+      31,
       'whitelist size drift — update STATUS B3 inventory evidence if intentional',
     );
   });

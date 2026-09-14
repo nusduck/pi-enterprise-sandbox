@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **破坏性：用户 Skill 以启用账本为发现依据，已发布字节按摘要分版本，exec 按清单挂载**（design §3.3 S1）：
+  启用时 Agent 在一个 MySQL 事务里锁住 owner 的 membership 行，把草稿复制到暂存目录并**按暂存字节**算摘要，
+  发布到 `<owner>/<name>/.v/<digest>/<name>/`（侧车 `.v/<digest>.json`），再写 `user_skill_enablements`。
+  **停用只删账本行，不删字节**；不再被账本引用且超过新配置 `SKILL_VERSION_GC_GRACE_MS`（默认 24 小时）的旧版本
+  在同名包下次启停时回收。Worker 在 Run 开始时按账本逐条核对版本，模型看到的 Skill 路径改为 exec 的挂载路径
+  `/home/sandbox/skill-user/<name>`（此前是 Agent 本地 `<base>/<org>/<user>/<name>`，`read` 资源文件被
+  `FS_SANDBOX_DENIED`）。清单随每个内部请求进入签名覆盖的请求体，exec 不再扫目录，只挂清单点名且侧车一致的版本；
+  缺版本或侧车不符返回新错误码 `SKILL_PACKAGE_UNAVAILABLE`，存储不可读返回 `SKILL_STORE_UNAVAILABLE`（此前一律当作
+  「没有 Skill」）。能力页 My Skills 同样按账本列出。2026-09-14 之前平铺发布的已启用包不再被识别，需要重新启用。
+- **内部面 GET 请求的签名覆盖规范化 query**：`GET /internal/v1/fs/stream-text` 的 `body_sha256` 此前是空串摘要，
+  query 里的信封与读取目标不受签名覆盖，同一枚令牌可以换目标读取。现在签发与验签共用 `canonicalQueryBytes`，
+  同名参数重复直接 401。Agent 与 exec 必须同时升级。
+
 - **破坏性：BullMQ 队列 key 改用带 hash tag 的前缀 `{bull}`，Redis 基线降到 5.0.14**：
   新增 `AGENT_RUN_QUEUE_PREFIX`（空值 = `{bull}`），HTTP 投递与 Worker 消费共用；不含非空 hash tag
   （如旧的默认 `bull`）在建 Queue/Worker 前拒绝启动。原因是 UPRedis Proxy 按 key 路由，BullMQ 的多 key

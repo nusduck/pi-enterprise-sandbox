@@ -11,9 +11,10 @@ import path from 'node:path';
 import { tmpdir } from 'node:os';
 import { test } from 'node:test';
 import {
-  disableSkillPackage,
-  enableDraftPackage,
+  collectStaleSkillVersions,
   inspectDraftPackage,
+  publishDraftVersion,
+  readPublishedVersion,
 } from '../src/skills/enablement.js';
 
 async function scratch(): Promise<{ draft: string; published: string; cleanup: () => Promise<void> }> {
@@ -45,7 +46,7 @@ test('H6.5 启用是复制字节：改草稿动不了已启用副本', async () 
   const ws = await scratch();
   try {
     const pkg = await writeDraft(ws.draft, 'demo', 'v1 body', { 'scripts/run.sh': 'echo v1\n' });
-    const enabled = await enableDraftPackage({ draftPackageDir: pkg, publishedRoot: ws.published });
+    const enabled = await publishDraftVersion({ draftPackageDir: pkg, publishedRoot: ws.published });
 
     const publishedScript = path.join(enabled.publishedPath, 'scripts/run.sh');
     assert.equal(await fsp.readFile(publishedScript, 'utf8'), 'echo v1\n');
@@ -117,41 +118,112 @@ test('H6.4 草稿根是模型可写的：符号链接与 VCS 元数据必须拒'
   }
 });
 
-test('H6 停用删掉已发布副本，但**不动草稿**', async () => {
+// ── design §3.3 S1：按摘要分版本、侧车、回收 ─────────────────────────────────
+
+test('S1 同摘要复用、改内容得新版本，旧版本保留给仍在运行的 Run；侧车与核对一致', async () => {
   const ws = await scratch();
   try {
     const pkg = await writeDraft(ws.draft, 'demo', 'v1');
-    await enableDraftPackage({ draftPackageDir: pkg, publishedRoot: ws.published });
+    const first = await publishDraftVersion({ draftPackageDir: pkg, publishedRoot: ws.published });
+    assert.equal(first.reused, false);
+    assert.equal(
+      first.publishedPath,
+      path.join(ws.published, 'demo', '.v', first.contentDigest, 'demo'),
+    );
+    const again = await publishDraftVersion({ draftPackageDir: pkg, publishedRoot: ws.published });
+    assert.equal(again.reused, true);
+    assert.equal(again.contentDigest, first.contentDigest);
 
-    assert.deepEqual(await disableSkillPackage({ publishedRoot: ws.published, name: 'demo' }), {
-      removed: true,
-    });
-    assert.deepEqual(await fsp.readdir(ws.published), []);
-    // 草稿还在：停用不是删除用户的工作成果，只是把它从模型上下文里拿走。
+    await fsp.writeFile(path.join(pkg, 'SKILL.md'), '---\nname: demo\ndescription: a test skill\n---\n\nv2\n');
+    const second = await publishDraftVersion({ draftPackageDir: pkg, publishedRoot: ws.published });
+    assert.notEqual(second.contentDigest, first.contentDigest);
+
+    const checkFirst = await readPublishedVersion(ws.published, 'demo', first.contentDigest);
+    const checkSecond = await readPublishedVersion(ws.published, 'demo', second.contentDigest);
+    assert.equal(checkFirst.ok, true, '旧版本不能在重新启用时被删掉');
+    assert.equal(checkSecond.ok, true);
+    assert.equal((await readPublishedVersion(ws.published, 'demo', 'c'.repeat(64))).ok, false);
+    // 草稿还在：启用不是移动用户的工作成果。
     assert.equal((await fsp.stat(pkg)).isDirectory(), true);
-
-    // 幂等：停用一个没启用的包不该抛。
-    assert.deepEqual(await disableSkillPackage({ publishedRoot: ws.published, name: 'demo' }), {
-      removed: false,
-    });
   } finally {
     await ws.cleanup();
   }
 });
 
-test('H6.5 重新启用是整份替换，不是叠加', async () => {
+test('S1 新版本是整份字节，不与旧版本叠加', async () => {
   const ws = await scratch();
   try {
     const pkg = await writeDraft(ws.draft, 'demo', 'v1', { 'scripts/old.sh': 'old\n' });
-    const first = await enableDraftPackage({ draftPackageDir: pkg, publishedRoot: ws.published });
+    const first = await publishDraftVersion({ draftPackageDir: pkg, publishedRoot: ws.published });
     assert.equal(first.fileCount, 2);
 
     await fsp.rm(path.join(pkg, 'scripts/old.sh'));
     await fsp.writeFile(path.join(pkg, 'scripts/new.sh'), 'new\n', 'utf8');
-    const second = await enableDraftPackage({ draftPackageDir: pkg, publishedRoot: ws.published });
+    const second = await publishDraftVersion({ draftPackageDir: pkg, publishedRoot: ws.published });
 
     const files = await fsp.readdir(path.join(second.publishedPath, 'scripts'));
     assert.deepEqual(files, ['new.sh'], '旧文件必须消失——叠加会让停用过的能力偷偷留着');
+  } finally {
+    await ws.cleanup();
+  }
+});
+
+test('S1 回收只删不在保留集合且超过宽限期的版本', async () => {
+  const ws = await scratch();
+  try {
+    const pkg = await writeDraft(ws.draft, 'demo', 'v1');
+    const v1 = await publishDraftVersion({
+      draftPackageDir: pkg,
+      publishedRoot: ws.published,
+      now: () => new Date('2026-09-13T00:00:00.000Z'),
+    });
+    await fsp.writeFile(path.join(pkg, 'SKILL.md'), '---\nname: demo\ndescription: a test skill\n---\n\nv2\n');
+    const v2 = await publishDraftVersion({
+      draftPackageDir: pkg,
+      publishedRoot: ws.published,
+      now: () => new Date('2026-09-14T00:00:00.000Z'),
+    });
+    const now = () => new Date('2026-09-14T00:30:00.000Z');
+    const hour = 60 * 60 * 1000;
+
+    // 保留集合里的版本永远不删，哪怕早已过期。
+    assert.deepEqual(
+      await collectStaleSkillVersions({ publishedRoot: ws.published, name: 'demo', keepDigests: [v1.contentDigest, v2.contentDigest], graceMs: 0, now }),
+      [],
+    );
+    // v2 不在保留集合但仍在宽限期内；v1 已超期。
+    assert.deepEqual(
+      await collectStaleSkillVersions({ publishedRoot: ws.published, name: 'demo', keepDigests: [], graceMs: hour, now }),
+      [v1.contentDigest],
+    );
+    assert.equal((await readPublishedVersion(ws.published, 'demo', v1.contentDigest)).ok, false);
+    assert.equal((await readPublishedVersion(ws.published, 'demo', v2.contentDigest)).ok, true);
+    // 没发布过的名字回收是空操作。
+    assert.deepEqual(
+      await collectStaleSkillVersions({ publishedRoot: ws.published, name: 'never', keepDigests: [], graceMs: 0, now }),
+      [],
+    );
+  } finally {
+    await ws.cleanup();
+  }
+});
+
+test('S1 中断的发布（无侧车）不算已发布，重新发布时被整份替换', async () => {
+  const ws = await scratch();
+  try {
+    const pkg = await writeDraft(ws.draft, 'demo', 'v1');
+    const record = await publishDraftVersion({ draftPackageDir: pkg, publishedRoot: ws.published });
+    const sidecar = path.join(ws.published, 'demo', '.v', `${record.contentDigest}.json`);
+    await fsp.rm(sidecar, { force: true });
+    await fsp.writeFile(path.join(path.dirname(record.publishedPath), 'leftover.txt'), 'partial\n');
+
+    const check = await readPublishedVersion(ws.published, 'demo', record.contentDigest);
+    assert.equal(check.ok, false);
+
+    const republished = await publishDraftVersion({ draftPackageDir: pkg, publishedRoot: ws.published });
+    assert.equal(republished.reused, false);
+    assert.equal((await readPublishedVersion(ws.published, 'demo', record.contentDigest)).ok, true);
+    assert.deepEqual(await fsp.readdir(path.dirname(republished.publishedPath)), ['demo']);
   } finally {
     await ws.cleanup();
   }
@@ -169,7 +241,7 @@ test('H6.13 启用不得遮蔽系统 skill（检查搬到启用这一刻，不�
     // able to shadow or overwrite one the platform vouches for」。
     await assert.rejects(
       () =>
-        enableDraftPackage({
+        publishDraftVersion({
           draftPackageDir: pkg,
           publishedRoot: ws.published,
           systemSkillNames: ['pdf'],

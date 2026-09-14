@@ -142,28 +142,136 @@ describe('草稿根的装配', () => {
   });
 });
 
-describe('已启用 Skill 的生产装配', () => {
-  test('只列出当前 owner 下带真实 SKILL.md 的发布目录', async () => {
-    const root = await mkdtemp(path.join(tmpdir(), 'pi-exec-enabled-skills-'));
-    try {
-      const owner = path.join(root, 'org1', 'user1');
-      await mkdir(path.join(owner, 'zeta'), { recursive: true });
-      await mkdir(path.join(owner, 'alpha'), { recursive: true });
-      await mkdir(path.join(owner, 'missing-manifest'), { recursive: true });
-      await mkdir(path.join(root, 'org1', 'user2', 'other-user'), { recursive: true });
-      await writeFile(path.join(owner, 'zeta', 'SKILL.md'), '---\nname: zeta\n---\n');
-      await writeFile(path.join(owner, 'alpha', 'SKILL.md'), '---\nname: alpha\n---\n');
-      await symlink('/etc/passwd', path.join(owner, 'missing-manifest', 'SKILL.md'));
+// ── 已启用 Skill 的生产装配：按请求清单核对版本目录（design §3.3 S1）────────
+//
+// 2026-09-14 之前这里扫 owner 目录、任何异常都返回 `[]`：目录里有什么就挂什么，
+// 挂载掉线被当成「没有 Skill」。现在只认清单点名、侧车一致的版本。
 
-      const { enabledSkillPackagesFromRoot } = await import('../src/http/app.js');
-      assert.deepEqual(enabledSkillPackagesFromRoot(root, 'org1', 'user1'), [
-        { name: 'alpha', sourcePath: path.join(owner, 'alpha') },
-        { name: 'zeta', sourcePath: path.join(owner, 'zeta') },
-      ]);
-      assert.deepEqual(enabledSkillPackagesFromRoot(root, 'org1', 'user2'), []);
-      assert.deepEqual(enabledSkillPackagesFromRoot(root, '../etc', 'user1'), []);
+describe('已启用 Skill 的生产装配（按清单）', () => {
+  const A = 'a'.repeat(64);
+  const B = 'b'.repeat(64);
+
+  async function publish(
+    owner: string,
+    name: string,
+    digest: string,
+    opts: { sidecar?: 'ok' | 'missing' | 'wrong-digest' } = {},
+  ): Promise<string> {
+    const versions = path.join(owner, name, '.v');
+    const pkg = path.join(versions, digest, name);
+    await mkdir(pkg, { recursive: true });
+    await writeFile(path.join(pkg, 'SKILL.md'), `---\nname: ${name}\ndescription: d\n---\n`);
+    const mode = opts.sidecar ?? 'ok';
+    if (mode !== 'missing') {
+      await writeFile(
+        path.join(versions, `${digest}.json`),
+        JSON.stringify({
+          name,
+          contentDigest: mode === 'wrong-digest' ? B : digest,
+          fileCount: 1,
+          totalBytes: 10,
+          publishedAt: '2026-09-14T00:00:00.000Z',
+        }),
+      );
+    }
+    return pkg;
+  }
+
+  async function withRoot(fn: (root: string) => Promise<void>): Promise<void> {
+    const root = await mkdtemp(path.join(await realpath(tmpdir()), 'pi-exec-enabled-skills-'));
+    try {
+      await fn(root);
     } finally {
       await rm(root, { recursive: true, force: true });
     }
+  }
+
+  function codeOf(fn: () => unknown): string | undefined {
+    try {
+      fn();
+    } catch (err) {
+      return (err as { code?: string }).code;
+    }
+    return undefined;
+  }
+
+  test('只挂载清单点名且侧车一致的版本；清单外的包不挂', async () => {
+    await withRoot(async (root) => {
+      const owner = path.join(root, 'org1', 'user1');
+      const alpha = await publish(owner, 'alpha', A);
+      const zeta = await publish(owner, 'zeta', B);
+      await publish(owner, 'unlisted', A);
+      const { enabledSkillPackagesFromManifest } = await import('../src/http/app.js');
+      assert.deepEqual(
+        enabledSkillPackagesFromManifest(root, 'org1', 'user1', [
+          { name: 'zeta', contentDigest: B },
+          { name: 'alpha', contentDigest: A },
+        ]),
+        [
+          { name: 'alpha', sourcePath: alpha },
+          { name: 'zeta', sourcePath: zeta },
+        ],
+      );
+    });
+  });
+
+  test('清单为空时不触碰存储，未配置存储也不报错', async () => {
+    const { enabledSkillPackagesFromManifest } = await import('../src/http/app.js');
+    assert.deepEqual(enabledSkillPackagesFromManifest('', 'org1', 'user1', []), []);
+    assert.deepEqual(enabledSkillPackagesFromManifest('', 'org1', 'user1'), []);
+  });
+
+  test('版本缺失、侧车缺失或不符、版本目录是符号链接、跨 owner：一律 SKILL_PACKAGE_UNAVAILABLE', async () => {
+    await withRoot(async (root) => {
+      const owner = path.join(root, 'org1', 'user1');
+      await publish(owner, 'nosidecar', A, { sidecar: 'missing' });
+      await publish(owner, 'mismatch', A, { sidecar: 'wrong-digest' });
+      const real = await publish(owner, 'real', A);
+      await mkdir(path.join(owner, 'linked', '.v', A), { recursive: true });
+      await symlink(real, path.join(owner, 'linked', '.v', A, 'linked'));
+      await publish(path.join(root, 'org1', 'user2'), 'theirs', A);
+      const { enabledSkillPackagesFromManifest } = await import('../src/http/app.js');
+      for (const ref of [
+        { name: 'absent', contentDigest: A },
+        { name: 'real', contentDigest: B },
+        { name: 'nosidecar', contentDigest: A },
+        { name: 'mismatch', contentDigest: A },
+        { name: 'linked', contentDigest: A },
+        { name: 'theirs', contentDigest: A },
+      ]) {
+        assert.equal(
+          codeOf(() => enabledSkillPackagesFromManifest(root, 'org1', 'user1', [ref])),
+          'SKILL_PACKAGE_UNAVAILABLE',
+          `expected ${ref.name} to be rejected`,
+        );
+      }
+    });
+  });
+
+  test('存储未配置或不可读时报 SKILL_STORE_UNAVAILABLE，而不是当成没有 Skill', async (t) => {
+    const { enabledSkillPackagesFromManifest } = await import('../src/http/app.js');
+    const ref = [{ name: 'alpha', contentDigest: A }];
+    assert.equal(codeOf(() => enabledSkillPackagesFromManifest('', 'org1', 'user1', ref)), 'SKILL_STORE_UNAVAILABLE');
+    if (typeof process.getuid === 'function' && process.getuid() === 0) {
+      t.skip('root bypasses permission bits');
+      return;
+    }
+    await withRoot(async (root) => {
+      const owner = path.join(root, 'org1', 'user1');
+      await publish(owner, 'alpha', A);
+      const { chmod } = await import('node:fs/promises');
+      await chmod(owner, 0o000);
+      try {
+        assert.equal(codeOf(() => enabledSkillPackagesFromManifest(root, 'org1', 'user1', ref)), 'SKILL_STORE_UNAVAILABLE');
+      } finally {
+        await chmod(owner, 0o755);
+      }
+    });
+  });
+
+  test('owner 段不合法时拒绝，不拼可能穿越的路径', async () => {
+    const { enabledSkillPackagesFromManifest } = await import('../src/http/app.js');
+    const ref = [{ name: 'alpha', contentDigest: A }];
+    assert.equal(codeOf(() => enabledSkillPackagesFromManifest('/base', '../etc', 'user1', ref)), 'ENVELOPE_INVALID');
   });
 });

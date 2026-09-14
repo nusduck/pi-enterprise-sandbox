@@ -20,6 +20,7 @@ import { ContractError, toWireError } from '@pi/contract/errors.js';
 import type { RpcEnvelope } from '@pi/contract/envelope.js';
 import type { WireError } from '@pi/contract/errors.js';
 import { issueInternalToken, internalBindingForHtu } from '@pi/contract/hmac.js';
+import { canonicalQueryBytes, type EnabledSkillRef } from '@pi/contract/skill-manifest.js';
 import type { InternalHmacKeyringInput } from '@pi/contract/hmac.js';
 
 /** 客户端必需的身份与签名材料——由 `runtime` 启动时从服务端环境变量注入，不落盘。 */
@@ -42,6 +43,11 @@ export interface ExecRpcConfig {
   readonly fenceToken: number;
   /** 仅用于错误脱敏的物理根列表；必填无默认值（fail-closed）。 */
   readonly physicalRoots: readonly string[];
+  /**
+   * 本 Run 的已启用用户 Skill 清单（design §3.3 S1）。随每个请求进入受签名覆盖的请求体
+   * 或规范化 query；exec 只挂载清单点名的版本。缺省即空。
+   */
+  readonly enabledSkills?: readonly EnabledSkillRef[] | undefined;
   /** 单次 fetch 超时毫秒，默认 15000。 */
   readonly timeoutMs?: number | undefined;
   /** 可注入的 fetch，便于 macOS 无 exec 的内存替身测试。 */
@@ -158,6 +164,8 @@ export function fromWireError(wire: WireError): Error {
     code === 'TENANT_MISMATCH' ||
     code === 'FENCE_EXPIRED' ||
     code === 'WORKSPACE_NOT_FOUND' ||
+    code === 'SKILL_PACKAGE_UNAVAILABLE' ||
+    code === 'SKILL_STORE_UNAVAILABLE' ||
     code === 'INTERNAL_ERROR'
   ) {
     return new ContractError(code, wire.message);
@@ -227,14 +235,15 @@ export class ExecRpcClient {
     physicalRoots: readonly string[],
   ): Promise<TData> {
     const envelope = this.envelope();
-    const bodyObj = { envelope, payload };
+    const cfg = this.activeConfig();
+    const enabledSkills = cfg.enabledSkills ?? [];
+    const bodyObj = enabledSkills.length > 0 ? { envelope, payload, enabledSkills } : { envelope, payload };
     const bodyText = JSON.stringify(bodyObj);
     const bodyBytes = new TextEncoder().encode(bodyText);
     const bodySha = sha256Hex(bodyBytes);
 
     const token = this.issueToken(htu, bodySha, envelope);
     const url = `${this.baseUrl}${htu}`;
-    const cfg = this.activeConfig();
     const timeoutMs = cfg.timeoutMs ?? this.config.timeoutMs ?? 15000;
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -290,15 +299,23 @@ export class ExecRpcClient {
     physicalRoots: readonly string[],
   ): Promise<AsyncIterable<string>> {
     const envelope = this.envelope();
-    // GET 的 body 为空，body_sha256 为空串的 sha256
-    const bodySha = sha256Hex(new Uint8Array(0));
+    const cfg = this.activeConfig();
+    // envelope、业务 query 与启用清单一并放进 query（base64url，便于 GET）。
+    const params: Record<string, string> = {
+      ...query,
+      envelope: Buffer.from(JSON.stringify(envelope), 'utf8').toString('base64url'),
+    };
+    const enabledSkills = cfg.enabledSkills ?? [];
+    if (enabledSkills.length > 0) {
+      params['enabledSkills'] = Buffer.from(JSON.stringify(enabledSkills), 'utf8').toString('base64url');
+    }
+    // GET 没有请求体：body_sha256 覆盖规范化后的 query，与 exec `signedQueryBytes` 同一规则。
+    // 以前这里是空串摘要，query 里的信封与目标都不在签名范围内。
+    const bodySha = sha256Hex(canonicalQueryBytes(params));
     const token = this.issueToken(htu, bodySha, envelope, 'GET');
     const url = new URL(`${this.baseUrl}${htu}`);
-    // envelope 与业务 query 一并带上（base64url，便于 GET）
-    url.searchParams.set('envelope', Buffer.from(JSON.stringify(envelope), 'utf8').toString('base64url'));
-    for (const [k, v] of Object.entries(query)) url.searchParams.set(k, v);
+    for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v);
 
-    const cfg = this.activeConfig();
     const timeoutMs = cfg.timeoutMs ?? this.config.timeoutMs ?? 15000;
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);

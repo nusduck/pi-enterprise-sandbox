@@ -12,13 +12,16 @@ import {
 } from '../../config.js';
 import { createServiceContainer } from './container.js';
 import {
+  resolveRunSkillPaths,
   resolveSkillRootsForRun,
-  resolveSkillScopeForIdentity,
 } from './container-env.js';
 import { ExternalIdentityResolver } from '../application/parent/external-identity-resolver.js';
 import { createSkillManager } from '../skills/manager.js';
 import { draftSkillRootFor } from '../skills/paths.js';
-import { mutateSkillWithLedger } from '../application/skill-enablement-service.js';
+import {
+  mutateSkillWithLedger,
+  resolveSkillVersionGcGraceMs,
+} from '../application/skill-enablement-service.js';
 import { createAgentHttpServer } from './create-http-server.js';
 import { getExtensionDiagnostics as projectExtensionDiagnostics } from '../application/extension-diagnostics-service.js';
 import { startTelemetry } from '../infrastructure/telemetry.js';
@@ -222,13 +225,25 @@ export async function startHttpMain(env: NodeJS.ProcessEnv = process.env) {
     const identity = options.auth && resolveOwner
       ? await resolveOwner(options.auth)
       : null;
-    const { skillRoots, userSkillRoot } = identity
-      ? resolveSkillScopeForIdentity(env, identity)
-      : { skillRoots: config.SKILL_ROOTS, userSkillRoot: null };
+    // The user tier comes from the enablement ledger, verified against the
+    // published store — the same set a Run would load (design §3.3 S1).
+    const runSkills = identity
+      ? await resolveRunSkillPaths(env, identity, {
+          listEnabled: (owner) =>
+            httpServices.createRepositories(httpServices.knex).skillEnablements.listForOwner(owner),
+        })
+      : null;
+    const skillRoots = runSkills
+      ? runSkills.filter((entry): entry is string => typeof entry === 'string')
+      : config.SKILL_ROOTS;
+    const userSkills = runSkills
+      ? runSkills.filter((entry): entry is { name: string; packageDir: string } =>
+          typeof entry === 'object' && entry !== null)
+      : [];
     return projectExtensionDiagnostics({
       ...options,
       skillRoots,
-      userSkillRoot,
+      userSkills,
       draftSkillRoot: identity ? draftSkillRootFor(identity) : null,
       mcpServers: config.MCP_SERVERS,
       mcpDiscovery: container.getMcpReadiness(),
@@ -244,13 +259,14 @@ export async function startHttpMain(env: NodeJS.ProcessEnv = process.env) {
           skillRoots: resolveSkillRootsForRun(env, owner),
           draftSkillRoot: draftSkillRootFor(owner),
         });
-        const repos = httpServices.createRepositories(httpServices.knex);
         return mutateSkillWithLedger({
           action,
           name,
           owner,
           manager,
-          ledger: repos.skillEnablements,
+          transactionManager: httpServices.transactionManager,
+          ledgerFor: (trx) => httpServices.createRepositories(trx).skillEnablements,
+          graceMs: resolveSkillVersionGcGraceMs(env),
         });
       }
     : null;

@@ -677,7 +677,7 @@ export class DshRunExecutor {
       // directory. Resolved here (not at factory construction) so one Run's
       // prompt can never list another tenant's installed skills.
       const runSkillPaths = this.skillRootsForRun
-        ? this.skillRootsForRun({
+        ? await this.skillRootsForRun({
             orgId: eventContext.orgId,
             userId: eventContext.userId,
           })
