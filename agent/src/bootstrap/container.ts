@@ -26,6 +26,7 @@ import { SteerRunService } from '../application/steer-run-service.js';
 import { FollowUpService } from '../application/follow-up-service.js';
 import { CronJobService } from '../application/cron-job-service.js';
 import { AgentCatalogService } from '../application/agent-catalog-service.js';
+import { AgentConfigValidator } from '../application/agent-config-validator.js';
 import { A2aCredentialService } from '../application/a2a/credential-service.js';
 import { A2aTaskService } from '../application/a2a/task-service.js';
 import { A2aStreamService } from '../application/a2a/stream-service.js';
@@ -704,6 +705,13 @@ export class ServiceContainer {
       db: this.knex,
       generateId: this.generateId,
       now: this.now,
+      // The runtime MCP preflight is the authoritative live tool inventory.
+      // Do not let AgentConfigValidator fall back to MCP_SERVERS_JSON here:
+      // deployment config has server metadata but no discovered tool names.
+      configValidator: new AgentConfigValidator({
+        env: this.env,
+        mcpDiscovery: this.getMcpReadiness(),
+      }),
     });
     const getRunService = new GetRunService({
       createRepositories,

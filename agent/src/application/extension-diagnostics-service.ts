@@ -112,6 +112,36 @@ interface McpServerDiscovery {
   toolNames?: string[];
 }
 
+/**
+ * 运行时 `readMcpReadiness()` 用的是蛇形投影
+ * （`server_id` / `connection_status` / `tools`），而 AgentVersion 校验那条链路
+ * 用驼峰（`serverId` / `toolNames`）。两个形状都读，否则这里会静默回落到
+ * 「已配置但零工具」，前端目录就会显示 "No live tool list is available"。
+ */
+function normalizeDiscovery(value: unknown): McpServerDiscovery | null {
+  if (value === null || typeof value !== 'object') return null;
+  const entry = value as Record<string, unknown>;
+  const serverId = String(
+    entry.serverId ?? entry.server_id ?? entry.id ?? '',
+  ).trim();
+  if (!serverId) return null;
+  const rawTools = entry.toolNames ?? entry.tools ?? entry.tool_names;
+  const toolNames = Array.isArray(rawTools)
+    ? rawTools.map((item) => String(item)).filter((item) => item.length > 0)
+    : undefined;
+  const status = entry.status ?? entry.connection_status;
+  return {
+    serverId,
+    ...(typeof status === 'string' && status ? { status } : {}),
+    ...(Number.isFinite(Number(entry.toolCount ?? entry.tool_count))
+      ? { toolCount: Number(entry.toolCount ?? entry.tool_count) }
+      : toolNames
+        ? { toolCount: toolNames.length }
+        : {}),
+    ...(toolNames ? { toolNames } : {}),
+  };
+}
+
 function projectMcpServers(
   rawServers: unknown,
   discovery: { servers?: McpServerDiscovery[] } | null = null,
@@ -121,7 +151,10 @@ function projectMcpServers(
   // the element types instead.
   const discovered = new Map<string | undefined, McpServerDiscovery>(
     Array.isArray(discovery?.servers)
-      ? discovery.servers.map((server) => [server.serverId, server])
+      ? discovery.servers
+          .map((server) => normalizeDiscovery(server))
+          .filter((server): server is McpServerDiscovery => server !== null)
+          .map((server) => [server.serverId, server])
       : [],
   );
   return [...registry.values()]
