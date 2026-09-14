@@ -48,6 +48,9 @@ contract/          Agent 与执行面之间的共享契约。两侧同为 TS，�
                      `infrastructure/sandbox/internal-hmac.ts` 已删除（它与本文件
                      是两套并存的实现），agent/exec 都从这里取；baseUrl 策略不属于
                      签名，留在 agent 的 `sandbox/transport-base-url.ts`
+    endpoint-failover.ts  多端点建连纯策略（粘主、拉黑 180s、不回切、总预算）。
+                     只放无驱动依赖的部分；mysql2/Knex 接线留在各包基础设施层
+    dbpm.ts          启动时向 DBPM 取口令的 TCP 客户端（ADR 0011 D10）
 agent/src/runtime/ Agent 侧的 DSH 组合层（agent 私有，同一次 tsc）
   bundle/            cordis.patch.yml —— 叠在 dsh-base 之上的组合层（生成物）
   plugins/           类型化清单，`npm run gen:patch` 写出 YAML

@@ -9,6 +9,8 @@
  * - `envelope.ts` RPC 信封（含 workspaceId 多实例路由预留键）与统一响应包装
  * - `errors.ts`   FS_* 错误码复用 + 传输层错误码 + 脱敏错误映射
  * - `hmac.ts`      Agent -> Exec 内部调用令牌，两侧共用同一份实现
+ * - `endpoint-failover.ts` 多端点建连的纯策略（粘主/拉黑/预算），无驱动依赖
+ * - `dbpm.ts`      启动时向 DBPM 取口令的 TCP 客户端
  */
 
 export {
@@ -68,6 +70,45 @@ export type {
   SignInternalTokenOptions,
   VerifyInternalTokenOptions,
 } from './hmac.js';
+
+export {
+  acquireWithFailover,
+  DEFAULT_ENDPOINT_BLACKLIST_MS,
+  EndpointConfigError,
+  EndpointSelector,
+  errorCode,
+  FailoverError,
+  isNetworkError,
+  parseEndpointList,
+} from './endpoint-failover.js';
+export type {
+  ConnectFailureKind,
+  Endpoint,
+  EndpointPlan,
+  FailoverAttemptContext,
+  FailoverAttemptRecord,
+  FailoverErrorCode,
+  FailoverOptions,
+} from './endpoint-failover.js';
+
+export {
+  buildDbpmRequest,
+  DBPM_BUDGET_MS,
+  DBPM_CONNECT_TIMEOUT_MS,
+  DBPM_MAX_FRAME_BYTES,
+  DBPM_REQUEST_HEADER,
+  DBPM_REQUEST_TIMEOUT_MS,
+  DbpmAttemptError,
+  DbpmError,
+  fetchDbpmPassword,
+  parseDbpmResponseLine,
+} from './dbpm.js';
+export type {
+  DbpmEntry,
+  DbpmErrorCode,
+  DbpmFailureCode,
+  FetchDbpmPasswordOptions,
+} from './dbpm.js';
 
 // DSH `ctx.fs` 的类型直接复用，不手写 DTO——见包顶部说明。
 export { FileSystem } from '@deepseek-ai/dsh-fs';

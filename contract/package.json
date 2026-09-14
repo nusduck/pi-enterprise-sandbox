@@ -9,9 +9,13 @@
     "./errors.js": "./dist/errors.js",
     "./envelope.js": "./dist/envelope.js",
     "./hmac.js": "./dist/hmac.js",
+    "./endpoint-failover.js": "./dist/endpoint-failover.js",
+    "./dbpm.js": "./dist/dbpm.js",
     "./errors": "./dist/errors.js",
     "./envelope": "./dist/envelope.js",
-    "./hmac": "./dist/hmac.js"
+    "./hmac": "./dist/hmac.js",
+    "./endpoint-failover": "./dist/endpoint-failover.js",
+    "./dbpm": "./dist/dbpm.js"
   },
   "types": "./dist/index.d.ts",
   "engines": { "node": ">=22.19.0 <23" },
