@@ -36,6 +36,7 @@ export function createDshRunExecutorFactory(opts: DshRunExecutorFactoryOptions) 
       projector: opts.projector,
       recoveryService: opts.recoveryService,
       sessionLockRenewIntervalMs: opts.sessionLockRenewIntervalMs,
+      skillRootsForRun: opts.skillRootsForRun,
       steerPollIntervalMs: opts.steerPollIntervalMs,
       toolBudget: opts.toolBudget,
       riskOverrides: opts.riskOverrides,

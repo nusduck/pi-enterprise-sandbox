@@ -719,3 +719,16 @@ Each entry should say **what changed**, **why**, and **which STATUS IDs** it aff
   api-server 159/159、frontend 367/367 + build、各包 typecheck 通过；agent 1297 pass / 3 cancelled（与 D2b 同一组，不记为通过）；
   `uv run pytest` 123 passed。重建 agent / sandbox 镜像并换新容器后真实链路通过，sandbox 日志 `INTERNAL_ERROR` 归零。
   `agent-worker-dsh-restart` gate 未跑。详见 [证据](evidence/release-gates-docker-2026-09-14.md)。
+
+## 2026-09-14 — 修复：已启用用户 Skill 对模型不可见
+
+- **Context：** S1 实施前按 design §3.3 核对模型可见 Skill 路径，真实链路复现出更前一层的缺陷：UI 启用成功的用户
+  Skill 在 `skill` 工具中报 unknown，系统 Skill 正常。
+- **Decision：** 先单独修复并提交，再在其上实施 S1；模型可见路径与 exec 挂载不一致（同次复现确认）归入 S1 第 6 条。
+  用户确认 S1 按推荐方案：按摘要分版本目录、回收宽限期默认 24 小时（可配置）、草稿根保持共写。
+- **Action：** 运行时探针定位到 `createDshRunExecutorFactory` 漏转发 `skillRootsForRun`；补转发与回归测试；
+  CHANGELOG；design §3.3 补充两条已复现事实与决策记录。
+- **STATUS IDs：** 不改变任何 STATUS 行（关联 A2、H1/H3）。
+- **验证：** 回归用例修复前失败、修复后通过；容器内 agent typecheck 通过、1298 pass / 3 cancelled（已知组）；重建 agent
+  镜像后真实链路 `skill` 加载用户 Skill 成功；`uv run pytest` 123 passed。详见
+  [证据](evidence/skill-discovery-fix-2026-09-14.md)。

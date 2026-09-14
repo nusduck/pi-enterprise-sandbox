@@ -1813,6 +1813,28 @@ describe('DshRunExecutor', () => {
     );
   });
 
+  it('createDshRunExecutorFactory forwards skillRootsForRun to the executor', () => {
+    // The factory copies deps field by field. Until 2026-09-14 it dropped
+    // skillRootsForRun, so every Run fell back to the system-only default and
+    // user-enabled Skills were never visible to the model.
+    const skillRootsForRun = () => ['/home/sandbox/skill', '/home/sandbox/skill-user/o/u'];
+    const makeExecutor = createDshRunExecutorFactory({
+      transactionManager: { run: async (fn) => fn({}) },
+      createRepositories: () => ({}),
+      sessionLockManager: {
+        acquire: async () => true,
+        renew: async () => true,
+        release: async () => true,
+      },
+      piRuntimeFactory: { create: async () => ({}) },
+      modelResolver: () => fullModel,
+      workspaceResolver: () => '/tmp',
+      generateId: () => '1',
+      skillRootsForRun,
+    });
+    assert.equal(makeExecutor().skillRootsForRun, skillRootsForRun);
+  });
+
   it('requires sessionLockManager.acquire at construction', () => {
     assert.throws(
       () =>

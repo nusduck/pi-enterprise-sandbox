@@ -123,7 +123,7 @@ K8s 用两集群各自的 PVC/CSI 挂载**同一后端 export**；RWX 声明或�
 
 R1 的**存储落点已确定**，发布一致性子项仍是实施前检查点，不能以本文完成就关闭。最少实测：VM 写草稿 → 集群 A 上传/启用 → 集群 B Worker 发现 → VM 执行；随后替换 Pod、并发启停、注入 DB/存储失败、跨 owner 拒绝。
 
-### 3.3 S1 接口检查点（2026-09-14 草案，待用户确认后实施）
+### 3.3 S1 接口检查点（2026-09-14；用户已确认按推荐方案实施）
 
 #### 现状（基线 `ecda592e`，只读核对）
 
@@ -137,6 +137,8 @@ R1 的**存储落点已确定**，发布一致性子项仍是实施前检查点�
 | exec 公共面（BFF 转发） | 同一解析器只用于拼 `physicalRoots` 做**路径脱敏**，不读 Skill 字节 | 公共面不需要启用清单 |
 | sandbox-mcp 窄桥 | `enabledSkillPackages: []` | 保持不变 |
 | Agent → exec | 信封五字段 + payload，整个 body 受 HMAC `body_sha256` 覆盖；exec 没有回调 Agent 的客户端 | payload 可以承载经 Agent 鉴权的清单 |
+| Worker 发现（**已复现并修复**） | `createDshRunExecutorFactory` 漏转发 `skillRootsForRun`，Run 的 provider 只有系统根，已启用用户 Skill 在 `skill` 工具中报 unknown | 2026-09-14 修复，见 CHANGELOG |
+| 模型可见路径（**已复现，未修**） | `skill` 工具给出的基础目录是 Agent 本地 `/home/sandbox/skill-user/<org>/<user>/<name>`；exec 把第一段当包名，`read` 返回 `FS_SANDBOX_DENIED`，bash 报不存在；实际挂载在 `/home/sandbox/skill-user/<name>` | 由下文第 6 条修正 |
 
 #### 提议的接口
 
@@ -146,15 +148,15 @@ R1 的**存储落点已确定**，发布一致性子项仍是实施前检查点�
 3. **存储不可用 fail-closed**：owner 根不可读（挂载掉线、权限、超时）→ 内部请求失败，返回 `SKILL_STORE_UNAVAILABLE`，不返回空集；公共面脱敏改用 owner 根前缀，不再依赖目录扫描结果。
 4. **并发串行化**：启用 / 停用在一个 MySQL 事务内完成：`SELECT … FROM users WHERE user_id=? FOR UPDATE`（锁 owner 既有身份行，不用全局锁）→ 读当前行 → 复制到 `.staging-*`（不在任何发现路径上）→ 写侧车并 `rename` 为 `.v/<digest>`（同 digest 已存在且侧车一致则复用）→ upsert / delete 账本行 → commit。文件复制计入锁等待预算。
 5. **失败恢复与回收**：commit 前崩溃 → 只留未被引用的版本目录；commit 后崩溃 → 已一致。停用只删账本行，字节保留；同一 owner/name 下次启停时，在同一把锁内回收「未被账本引用且超过宽限期」的版本目录，不新增后台定时器。「有行无字节」由发现/执行报告为待修复，不自动改写账本；从草稿重新启用即修复。
-6. **Agent 侧发现**：Worker 与 UI 投影改为「账本 ∩ 校验通过的版本目录」，不再扫 owner 目录。模型在 prompt 中看到的 Skill 路径与 exec 挂载目标 `/home/sandbox/skill-user/<name>` 是否一致，**实施前须核对 `FileSystemSkillProvider` 产出的路径**，本草案不预设结论。
+6. **Agent 侧发现**：Worker 与 UI 投影改为「账本 ∩ 校验通过的版本目录」，不再扫 owner 目录。Run 内注册一个按账本构造的 provider：列出时 `path` / `resourceBase` 给模型逻辑路径 `/home/sandbox/skill-user/<name>`（与 exec 挂载目标一致），加载时按本 Run 的 name → 版本目录映射回物理路径读取；映射外的名字一律不可见。
 7. **存量兼容**：提供一次性 CLI，把旧的扁平 `<name>/` 目录按账本 digest 校验后迁入 `.v/<digest>/`，不一致的只报告不改。无生产存量（§1），开发数据由用户决定是否迁移。
 
-#### 待确认的决策
+#### 决策（用户 2026-09-14 确认按推荐方案）
 
-| 编号 | 问题 | 草案默认 |
+| 编号 | 问题 | 决定 |
 |---|---|---|
 | S1-Q1 | 字节绑定方式 | 按摘要分版本目录（第 2 条） |
-| S1-Q2 | 版本回收宽限期 | 大于单个 Run 的最长运行时间，具体值由配置给出 |
+| S1-Q2 | 版本回收宽限期 | 新增配置，默认 24 小时：需覆盖单个 Run 截止时间（默认 30 分钟）之外的后台进程与等待审批后续跑 |
 | S1-Q3 | 草稿根是否仍由 Agent 与 VM 共写 | 保持 §3.1：共享 `draft/` RW |
 
 #### 回归测试（实施时先写，修复前应失败）

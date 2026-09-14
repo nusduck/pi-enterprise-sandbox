@@ -98,6 +98,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **启用后的 Skill 草稿不再重复列在 Drafts**：启用是复制字节、草稿不删，所以 `skill_drafts` 里会一直有它。Agent 给这类条目打 `published: true` / `status: 'published'`，UI 的 Drafts 区只列待启用的。三层 Skill 卡片统一结构，操作按钮收进卡片底部的动作行，不再被拉成整行宽的色块。
 ### Fixed
 
+- **用户启用的 Skill 终于对模型可见**：`createDshRunExecutorFactory` 逐项转发依赖时漏掉了
+  `skillRootsForRun`，每个 Run 都退回进程级默认的系统根，UI 上「启用」成功的用户 Skill 在
+  `skill` 工具里一律报 `unknown or no longer available`（exec 侧挂载正常）。补上转发并加回归测试。
 - **exec 的文件系统错误码不再被抹成 `INTERNAL_ERROR`**：exec / agent 与 contract 各装一份
   `@deepseek-ai/dsh-fs`，`toWireError` 对调用方抛出的 `FsError` 做 `instanceof` 为假，
   `FS_NOT_FOUND`、`FS_SANDBOX_DENIED` 等一律以 `INTERNAL_ERROR` 返回给模型（sandbox 日志
