@@ -4,6 +4,7 @@ This directory is the **active** documentation set for Pi Enterprise Sandbox.
 `plan.md` is the frozen refactor baseline and final acceptance criteria.
 
 - [`module-layout.md`](./module-layout.md) — conventional source roots per service (agent / api-server / exec / frontend / contract)
+- [`design/updrdb-dbpm-deployment.md`](./design/updrdb-dbpm-deployment.md) — UPDRDB / DBPM 与双集群 + VM 的统一迁移设计（未实施；共享 Skill 存储、HTTPS 入口及验收门槛）
 - [`design/waves/HANDOFF.md`](./design/waves/HANDOFF.md) — `refactor/dsh-rebuild` 当前进度与剩余项
 - [`artifact-module.md`](./artifact-module.md) — Artifact domain boundary, frozen contracts, and cross-conversation Import MVP
 - [`sandbox-mcp.md`](./sandbox-mcp.md) — independently deployed Sandbox Streamable HTTP MCP facade
