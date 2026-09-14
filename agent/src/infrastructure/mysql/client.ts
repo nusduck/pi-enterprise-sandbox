@@ -128,6 +128,32 @@ export function migrationsDirectory() {
   return path.join(__dirname, 'migrations');
 }
 
+/** 每条物理连接交付前必须执行的会话初始化语句。 */
+export const SESSION_UTC_SQL = "SET SESSION time_zone = '+00:00'";
+
+/**
+ * knex 池的 afterCreate：会话时区与建连视为同一个操作。
+ *
+ * 驱动侧的 `timezone=Z` 只影响 DATETIME 的编解码，不改服务端会话时区——
+ * `NOW()`、`CURRENT_TIMESTAMP` 默认值仍按服务端时区取值。UPDRDB 目标环境的
+ * 全局时区是 +08:00，漏掉这一步会写入偏移 8 小时的时间戳。
+ *
+ * 初始化失败必须让 create 失败：把错误交回 done()，连接不会进池，
+ * 也就不会有「已交付但会话没初始化」的连接。
+ *
+ * @param connection
+ * @param done
+ */
+export function initMysqlSession(connection: { query: (sql: string, cb: (err?: unknown) => void) => void }, done: (err?: unknown, conn?: unknown) => void) {
+  connection.query(SESSION_UTC_SQL, (err) => {
+    if (err) {
+      done(err);
+      return;
+    }
+    done(null, connection);
+  });
+}
+
 /**
  * @param connectionUrl
  * @param [options]
@@ -144,6 +170,8 @@ export function createMysqlKnex(connectionUrl: string, options: { pool?: { min?:
     pool: {
       min: options.pool?.min ?? 0,
       max: options.pool?.max ?? 10,
+      // knex 用 promisify 等待这个回调；新建、扩容、重连都会走到。
+      afterCreate: initMysqlSession,
     },
     migrations: {
       directory: migrationsDirectory(),

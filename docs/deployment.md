@@ -90,7 +90,7 @@ Child monitor codes: `workspace_quota_exceeded`,
                   ┌───────────────▼──────────────┐
                   │   exec (Node/TS:8081)          │
                   │   Execution · Files · Isolation│
-                  │   MySQL 8 (formal topology)    │
+                  │   MySQL (formal topology)      │
                   └──────────────────────────────┘
                                   │
                   ┌───────────────▼──────────────┐
@@ -226,7 +226,7 @@ Compose 拓扑：`backend_internal`（`internal: true`）供 mysql/redis/sandbox
 | `NGINX_HTTP_PORT` | `80` | HTTP 端口 |
 | `NGINX_HTTPS_PORT` | `443` | HTTPS 端口 |
 
-### Database（MySQL 8）
+### Database（开发 MySQL 5.7 / 生产 overlay MySQL 8）
 
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
@@ -238,7 +238,11 @@ Compose 拓扑：`backend_internal`（`internal: true`）供 mysql/redis/sandbox
 | `SANDBOX_DATABASE_URL` | `mysql+pymysql://…@mysql:3306/sandbox` | Sandbox 持久化（`mysql+pymysql://` 或 `mysql://`） |
 | `SANDBOX_COMPOSE_DATABASE_URL` | 未设置（默认 MySQL compose DSN） | 仅开发 Compose 的显式 Sandbox DSN override；旧 `.env` 中的 `SANDBOX_DATABASE_URL` 不参与默认插值 |
 
-**开发:** `docker compose up` 启动 `mysql:8.0`；DSN 默认指向 compose 网络内 `mysql` 服务。占位密码仅用于本地，勿用于共享/生产环境。
+**开发:** `docker compose up` 启动 `mysql:5.7`（对齐 UPDRDB 的 UPSQL 5.7 内核，见 [ADR 0011](adr/0011-updrdb-upredis-dbpm-migration.md)）；DSN 默认指向 compose 网络内 `mysql` 服务。占位密码仅用于本地，勿用于共享/生产环境。
+
+5.7 使用独立数据卷 `mysql57_dev_data`。MySQL 官方[不支持 8.0 降级到 5.7](https://dev.mysql.com/doc/refman/8.0/en/downgrading.html)：把旧的 `mysql_dev_data` 挂给 5.7 会在 InnoDB 数据字典校验处崩溃退出。旧卷保留作为 8.0 回退点，不要复用，也不要用 `down -v` 清空。若本地 `.env` 显式设过 `MYSQL_DATA_VOLUME`，必须同步改成新卷名。
+
+官方 `mysql:5.7` 镜像只有 amd64；Apple Silicon 上通过 `MYSQL_PLATFORM`（默认 `linux/amd64`）模拟运行，可用但比原生慢。
 
 **生产:** `docker-compose.prod.yml` 内置 MySQL 8、healthcheck、持久 volume，以及 Sandbox/Agent 对 MySQL 的健康依赖。启动前必须设置强 `MYSQL_PASSWORD` 与 `MYSQL_ROOT_PASSWORD`；production overlay **不**回退 SQLite 或 PostgreSQL。Sandbox 生产配置校验拒绝非 MySQL DSN。
 
@@ -571,7 +575,7 @@ docker exec pi-enterprise-nginx nginx -s reload
 
 | 场景 | 推荐方案 |
 |------|----------|
-| 单实例开发 | MySQL 8 + Redis 7 + Docker Compose |
+| 单实例开发 | MySQL 5.7 + Redis 7 + Docker Compose |
 | 生产 | MySQL 8 + Redis 7 + Compose prod overlay（强制 secrets） |
 | 多实例 | MySQL + Redis + 共享工作区存储 (NFS/EFS) |
 | 高可用 | 负载均衡器 + MySQL 复制 / 托管 MySQL + 托管 Redis |

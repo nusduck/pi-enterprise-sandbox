@@ -15,7 +15,7 @@
 # is not used; NET_ADMIN/NET_RAW are never granted.
 
 services:
-  # ── MySQL 8 (sole formal DB topology for dev/prod) ────────
+  # ── MySQL 5.7 (dev/CI 兼容基线，对齐 UPDRDB 的 UPSQL 内核) ────────
   # Credentials and DSNs come from env (.env / shell). Dev-only
   # placeholder passwords are intentional non-secrets; never use
   # them outside local development.
@@ -26,7 +26,11 @@ services:
   #   AGENT_DATABASE_URL=mysql://sandbox:…@mysql:3306/sandbox
   #   SANDBOX_DATABASE_URL=mysql+pymysql://sandbox:…@mysql:3306/sandbox
   mysql:
-    image: mysql:8.0
+    # 开发/CI 兼容基线跟随 UPDRDB 的 UPSQL 5.7 内核（ADR 0011 / design §4.1）。
+    # 官方 mysql:5.7 只有 amd64 镜像：Apple Silicon 上靠模拟运行，慢但可用；
+    # amd64 宿主机上这行是空操作。
+    image: mysql:5.7
+    platform: ${MYSQL_PLATFORM:-linux/amd64}
     container_name: ${MYSQL_CONTAINER:-pi-enterprise-mysql}
     # Dev-only host publish: loopback only (not 0.0.0.0). Prod overlay uses
     # ports: !reset [] so these do not survive compose merge.
@@ -38,17 +42,19 @@ services:
       MYSQL_PASSWORD: ${MYSQL_PASSWORD:-sandbox_dev_only}
       MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-sandbox_root_dev_only}
     # Instance flags (mysqld). App MYSQL_USER stays without SUPER privilege.
-    # MySQL 8 images often enable binary logging; CREATE TRIGGER then requires
-    # SUPER *or* log_bin_trust_function_creators=1. We set the latter only —
-    # never elevate the application account. External/managed MySQL
-    # must be configured by operators (Agent preflight fail-closes; no auto-SET).
+    # 开了 binlog 的实例上 CREATE TRIGGER 需要 SUPER 或
+    # log_bin_trust_function_creators=1，这里只设后者，绝不给应用账户提权。
+    # 5.7 默认不开 binlog，这行仍保留：外部/托管实例（含 UPDRDB）由运维配置，
+    # Agent 预检 fail-closed，不会自动 SET。
     command:
       - --character-set-server=utf8mb4
       - --collation-server=utf8mb4_unicode_ci
       - --default-authentication-plugin=mysql_native_password
       - --log-bin-trust-function-creators=1
     volumes:
-      - ${MYSQL_DATA_VOLUME:-mysql_dev_data}:/var/lib/mysql
+      # 5.7 用独立新卷：MySQL 官方不支持 8.0 → 5.7 原地降级，旧 mysql_dev_data
+      # 保留作为回退点，不要 down -v，也不要把 8.0 的数据目录喂给 5.7。
+      - ${MYSQL_DATA_VOLUME:-mysql57_dev_data}:/var/lib/mysql
     healthcheck:
       test:
         [
@@ -698,6 +704,8 @@ networks:
 
 volumes:
   agent_user_skills:
+  # 8.0 时代的开发数据卷：当前不再挂载，保留声明以免被 compose 当作孤儿清理。
   mysql_dev_data:
+  mysql57_dev_data:
   redis_dev_data:
   sandbox_replay_redis_dev_data:

@@ -211,7 +211,7 @@ export class CronJobRepository {
    */
   async updateScheduleState(
     cronJobId: string,
-    patch: { nextRunAt?: Date | string | null; lastRunAt?: Date | string | null; enabled?: boolean },
+    patch: { nextRunAt?: Date | string | null; lastRunAt?: Date | string | null; enabled?: boolean; claimToken?: string | null },
   ) {
     // 按列增量拼的 UPDATE 补丁：哪些列出现取决于 patch 里有哪些键，
     // 字面量推断不会带上没写出来的列。
@@ -225,6 +225,10 @@ export class CronJobRepository {
       update.last_run_at = patch.lastRunAt == null ? null : toMysqlDateTime(patch.lastRunAt);
     }
     if ('enabled' in patch) update.enabled = Boolean(patch.enabled);
+    // 批次标记只活在 claimDue 的事务内，推进调度状态时一并清空。
+    if ('claimToken' in patch) {
+      update.claim_token = patch.claimToken == null ? null : String(patch.claimToken);
+    }
     const count = await this.db('cron_jobs')
       .where({ cron_job_id: assertUlid(cronJobId, 'cronJobId') })
       .whereNull('deleted_at')
@@ -254,22 +258,50 @@ export class CronJobRepository {
     }
   }
 
-  /** Lock due jobs inside a transaction. */
-  async listDueForUpdate(now, limit) {
+  /**
+   * 抢占到期计划：条件 UPDATE 打上批次 token，返回命中行数。
+   *
+   * UPSQL 5.7 没有 SKIP LOCKED，改为只命中 `claim_token IS NULL` 的行；并发调度
+   * 器不是「跳过」而是「等锁」，由 innodb_lock_wait_timeout 兜底。必须与
+   * {@link listByClaimToken} 在同一事务内使用，行锁保持到 commit。
+   */
+  async claimDueBatch(now, limit, claimToken) {
     const count = requireLimit(limit, 25);
-    let query = this.db('cron_jobs')
+    const token = assertUlid(claimToken, 'claimToken');
+    return this.db('cron_jobs')
       .where({ enabled: true })
       .whereNull('deleted_at')
+      .whereNull('claim_token')
       .whereNotNull('next_run_at')
       .where('next_run_at', '<=', toMysqlDateTime(now))
-      .orderBy('next_run_at', 'asc')
+      .orderBy([
+        { column: 'next_run_at', order: 'asc' },
+        { column: 'cron_job_id', order: 'asc' },
+      ])
       .limit(count)
-      .forUpdate();
-    // MySQL 8 supports SKIP LOCKED. Keep the call feature-detectable for
-    // lightweight Knex fakes used by unit tests.
-    if (typeof query.skipLocked === 'function') query = query.skipLocked();
-    const rows = await query;
+      .update({ claim_token: token, updated_at: toMysqlDateTime(this.now()) });
+  }
+
+  /** 回读本批次抢到的行（同事务、同连接）。 */
+  async listByClaimToken(claimToken) {
+    const token = assertUlid(claimToken, 'claimToken');
+    const rows = await this.db('cron_jobs')
+      .where({ claim_token: token })
+      .orderBy([
+        { column: 'next_run_at', order: 'asc' },
+        { column: 'cron_job_id', order: 'asc' },
+      ]);
     return rows.map(mapCronJob);
+  }
+
+  /** commit 前的残留校验：本批 token 必须已被逐行清空。 */
+  async countByClaimToken(claimToken) {
+    const token = assertUlid(claimToken, 'claimToken');
+    const row = await this.db('cron_jobs')
+      .where({ claim_token: token })
+      .count({ total: '*' })
+      .first();
+    return Number(row?.total ?? 0);
   }
 
   async createExecutionClaim(input) {

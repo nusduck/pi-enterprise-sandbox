@@ -600,3 +600,31 @@ Each entry should say **what changed**, **why**, and **which STATUS IDs** it aff
 - **STATUS IDs:** A2/A3/A5 保持 `partial` 并更新证据链接与已闭合缺口；H5/H6 不变。
   本轮完成 P1–P5 的运行证据（P5 为开发栈真机链）；生产迁移与专项审批浏览器用例仍待补，
   未据此翻绿 §32 行。
+
+## 2026-09-12 — UPDRDB / DBPM 与双集群部署设计修订
+
+- **范围：** 仅 review / design 文档；分支 `refactor/updrdb-dbpm`，基线 `57b9b6a1`，未实施迁移、未改生产代码、未提交。保留已有 full-regression 目录四个未提交文件。
+- **Action：** 新增 [统一 design](design/updrdb-dbpm-deployment.md)，按 R1–R7 补齐共享 Skill 存储、HTTPS 入口、抢占事务、完整 schema 校验、新数据卷、VM 工具链与 Redis 放行设计；旧方案标记为已被取代，ADR 0011 补充证据边界。用户确认共享存储可提供；HTTPS 资源待落实。Skill 发布一致性接口仍为多副本上线前检查点。
+- **STATUS IDs：** 验收计划关联 A2、B1/B2/B4、C4/C6/C7、D1/D4、G1/G2/G3/G4/G7、H1/H3/H4/H5；本次不改变任何 STATUS 状态，不以设计替代运行证据。
+- **验证：** Python 3.11.15；`uv run pytest -q tests/test_repository_layout.py tests/test_runtime_versions.py`：28 passed；文档相对链接路径检查及 `git diff --check` 通过。纯文档修改，不跑六套业务测试、不重建容器；未连接目标 UPDRDB / UPRedis / DBPM、双集群或 VM，目标验收待实施后执行。
+
+## 2026-09-12 — D1：抢占去 SKIP LOCKED、会话 UTC、开发基线切 MySQL 5.7
+
+- **范围：** 实施 [统一 design](design/updrdb-dbpm-deployment.md) 的 D1 阶段；分支
+  `refactor/updrdb-dbpm`，基线 `57b9b6a1`。改动落在 `agent/`（outbox / cron 抢占、knex
+  afterCreate、DSH 裸池）、`exec/`（裸池会话初始化）、compose / CI / `.env.example` 与相关文档。
+  未触及 D2（DBPM、双 Proxy）、D3（手工 DDL）、D4（UPRedis）。
+- **Action：** outbox 与 cron 改为「条件 UPDATE 打批次 token → 同事务按 token 回读」，
+  新增迁移 `20260912000001_claim_without_skip_locked`（`cron_jobs.claim_token` + 两张表的
+  非唯一回读索引）；cron 的 token 是事务内标记，commit 前逐行清空并校验无残留。
+  三个连接点统一 `SET SESSION time_zone = '+00:00'`，初始化失败不交付连接。
+  开发/CI 数据库切 `mysql:5.7` + **新卷 `mysql57_dev_data`**，旧 8.0 卷保留不复用。
+  另在锁定版本上验证了 Knex 多端点故障切换的扩展点，结论写入 design §4.2。
+- **STATUS IDs：** 不改变任何 STATUS 行。G3/G4 保持 `done`——其 live 证据来自 MySQL 8，
+  本轮在 5.7 上重跑了同键并发 CreateRun 与 outbox 集成用例作为补充对照，未据此改状态。
+- **验证：** 六套测试全绿、四项类型检查通过、前端 build 通过、`docker compose config` 通过；
+  重建 agent / agent-worker / sandbox / sandbox-mcp 镜像后在 MySQL 5.7.44 上跑通真实链路
+  （登录 → 建会话 → 带工具 Run → 进程 logs/signal → 跨租户 404 带正对照），
+  live 集成 21 例全绿，含两个真重叠事务用例与 errno 1205 锁等待超时用例。
+  详见 [证据](evidence/d1-claim-utc-mysql57-2026-09-12.md)，其中记录了 `.env` 覆盖数据卷
+  导致 5.7 起在 8.0 数据目录的实际事故，以及尚未验证的 8.0 回退点。

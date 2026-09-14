@@ -195,7 +195,7 @@ jobs:
     runs-on: ubuntu-latest
     services:
       mysql:
-        image: mysql:8.0
+        image: mysql:5.7
         env:
           MYSQL_DATABASE: sandbox
           MYSQL_USER: sandbox
@@ -279,7 +279,7 @@ jobs:
           # Run the client from the same image as the service: the runner image
           # does not reliably ship a mysql client.
           for i in $(seq 1 30); do
-            if docker run --rm --network host mysql:8.0 \
+            if docker run --rm --network host mysql:5.7 \
                  mysql -h 127.0.0.1 -P 3306 -uroot -pci_mysql_root_password_0123456789 \
                  -e "SET GLOBAL log_bin_trust_function_creators = 1;" 2>/dev/null; then
               echo "log_bin_trust_function_creators=1 set"

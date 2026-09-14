@@ -4,7 +4,8 @@
  * Authority: MySQL only. No Redis, no Run status mutations.
  *
  * insert(executor) is intended for the same transaction as durable domain writes.
- * claimBatch uses SELECT … FOR UPDATE SKIP LOCKED for concurrent publishers.
+ * claimBatch 用「条件 UPDATE 打批次 token → 按 token 回读」抢占：UPSQL 5.7 没有
+ * SKIP LOCKED，两条语句在同一事务内，行锁保持到 commit。
  *
  * Eligibility (aggregate/event/payload filters) is required so a RunEventStream
  * publisher never claims unrelated domain_outbox rows.
@@ -206,8 +207,11 @@ export class OutboxRepository {
   /**
    * Claim up to `limit` due PENDING rows matching eligibility (then mark PUBLISHING).
    *
-   * Transactional: SELECT … FOR UPDATE SKIP LOCKED with parameterized filters.
+   * Transactional: conditional UPDATE + claim-token readback, parameterized filters.
    * Unrelated aggregates are never locked by this claim.
+   *
+   * 竞争行为不再是「跳过被锁的行」而是「等待锁」：并发发布者会在条件 UPDATE 上
+   * 互相等待，由短事务、idx_outbox_claim 索引和 innodb_lock_wait_timeout 约束影响。
    *
    * @param {{
    *   limit?: number,
@@ -243,65 +247,48 @@ export class OutboxRepository {
       const elig = buildEligibilitySql(eligibility);
       const eligibilitySql = elig.sql ? ` AND ${elig.sql}` : '';
 
+      // 一个批次一个 token。后续 markPublished / markPendingForRetry /
+      // markFailed 仍同时匹配 outbox_id 与 token，所以共享批次 token 不会让
+      // 过期发布者确认到别人的行；换批必换 token。
+      const claimToken = this.generateClaimToken();
+
+      const updateResult = await trx.raw(
+        `UPDATE domain_outbox
+         SET status = ?,
+             claim_token = ?,
+             claimed_at = ?,
+             attempts = attempts + 1,
+             next_attempt_at = NULL
+         WHERE status = ?
+           AND (next_attempt_at IS NULL OR next_attempt_at <= ?)
+           ${eligibilitySql}
+         ORDER BY created_at ASC, outbox_id ASC
+         LIMIT ?`,
+        [
+          OUTBOX_STATUS.PUBLISHING,
+          claimToken,
+          nowSql,
+          OUTBOX_STATUS.PENDING,
+          nowSql,
+          ...elig.bindings,
+          limit,
+        ],
+      );
+
+      if (parseAffectedRows(updateResult) === 0) return [];
+
       const selectResult = await trx.raw(
         `SELECT outbox_id, aggregate_type, aggregate_id, event_type, payload_json,
                 status, attempts, claim_token, claimed_at, next_attempt_at,
                 last_error, created_at, published_at
          FROM domain_outbox
-         WHERE status = ?
-           AND (next_attempt_at IS NULL OR next_attempt_at <= ?)
-           ${eligibilitySql}
-         ORDER BY created_at ASC
-         LIMIT ?
-         FOR UPDATE SKIP LOCKED`,
-        [OUTBOX_STATUS.PENDING, nowSql, ...elig.bindings, limit],
+         WHERE claim_token = ?
+           AND status = ?
+         ORDER BY created_at ASC, outbox_id ASC`,
+        [claimToken, OUTBOX_STATUS.PUBLISHING],
       );
 
-      const locked = parseRawSelectRows(selectResult);
-      if (locked.length === 0) return [];
-
-      const claimed: ReturnType<typeof mapDomainOutbox>[] = [];
-      for (const raw of locked) {
-        const claimToken = this.generateClaimToken();
-        const outboxId = String(raw.outbox_id);
-        const prevAttempts = Number(raw.attempts ?? 0);
-        const nextAttempts = prevAttempts + 1;
-
-        const updateResult = await trx.raw(
-          `UPDATE domain_outbox
-           SET status = ?,
-               claim_token = ?,
-               claimed_at = ?,
-               attempts = ?,
-               next_attempt_at = NULL
-           WHERE outbox_id = ?
-             AND status = ?`,
-          [
-            OUTBOX_STATUS.PUBLISHING,
-            claimToken,
-            nowSql,
-            nextAttempts,
-            outboxId,
-            OUTBOX_STATUS.PENDING,
-          ],
-        );
-
-        if (parseAffectedRows(updateResult) !== 1) {
-          continue;
-        }
-
-        claimed.push(
-          mapDomainOutbox({
-            ...raw,
-            status: OUTBOX_STATUS.PUBLISHING,
-            claim_token: claimToken,
-            claimed_at: nowSql,
-            attempts: nextAttempts,
-            next_attempt_at: null,
-          }),
-        );
-      }
-      return claimed;
+      return parseRawSelectRows(selectResult).map(mapDomainOutbox);
     };
 
     if (this.db.isTransaction === true) {

@@ -62,13 +62,47 @@ type Pool = {
 };
 type PoolOptions = Record<string, unknown>;
 type RowDataPacket = Record<string, unknown>;
+/** 每条物理连接交付前必须执行的会话初始化语句。 */
+export const SESSION_UTC_SQL = "SET SESSION time_zone = '+00:00'";
+
+/**
+ * 给 mysql2 池挂上 UTC 会话初始化。
+ *
+ * 驱动的 `timezone: 'Z'` 只管 DATETIME 编解码，不改服务端会话时区；目标
+ * UPDRDB 环境全局时区是 +08:00，少这一句会让 `NOW()` 和列默认值偏 8 小时。
+ *
+ * mysql2 的连接命令队列是 FIFO，`connection` 事件里发出的 SET 一定排在调用
+ * 方的第一条 SQL 之前。**初始化失败必须销毁连接**，让排在后面的业务 SQL 以
+ * 连接错误失败，而不是在会话时区不对的连接上执行。
+ */
+export function attachUtcSessionInit(pool: {
+  on: (event: string, listener: (connection: {
+    query: (sql: string, cb: (err?: unknown) => void) => void;
+    destroy: () => void;
+  }) => void) => unknown;
+}): void {
+  pool.on('connection', (connection) => {
+    connection.query(SESSION_UTC_SQL, (err) => {
+      if (!err) return;
+      try {
+        connection.destroy();
+      } catch {
+        // 连接可能已经没了，忽略。
+      }
+    });
+  });
+}
+
 function createPool(_opts: PoolOptions): Pool {
+  let driver: { createPool: (o: PoolOptions) => Pool };
   try {
-    const m = require('mysql2/promise') as { createPool: (o: PoolOptions) => Pool };
-    return m.createPool(_opts) as Pool;
+    driver = require('mysql2/promise') as { createPool: (o: PoolOptions) => Pool };
   } catch {
     throw new Error('mysql2 not installed: pool creation requires mysql2');
   }
+  const pool = driver.createPool(_opts) as Pool;
+  attachUtcSessionInit(pool as unknown as Parameters<typeof attachUtcSessionInit>[0]);
+  return pool;
 }
 
 /** 任何抛出物无条件脱敏——空 roots 仍走 contract 的默认物理前缀，不能静默放行。 */

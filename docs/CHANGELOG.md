@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **抢占改用「条件 UPDATE + token 回读」，开发/CI 基线降到 MySQL 5.7**：Outbox 与
+  Cron 的批量抢占不再使用 `SELECT … FOR UPDATE SKIP LOCKED`（UPDRDB 的 UPSQL 5.7
+  内核没有这个语法），改为一条带 eligibility 条件的 `UPDATE` 打上批次 token、再按
+  token 在同一事务内回读。语义变化是**并发调度器从「跳过被锁的行」变成「等待行锁」**，
+  由短事务、既有索引和 `innodb_lock_wait_timeout` 约束影响；对外的投递语义、幂等键、
+  发布 CAS、misfire/并发策略均不变。`cron_jobs` 新增可空 `claim_token` 列，它只是
+  事务内批次标记，claimDue 提交前逐行清空并校验无残留，因此没有新增租约回收器。
+  每条 MySQL 物理连接在交付前执行 `SET SESSION time_zone = '+00:00'`，初始化失败
+  的连接直接丢弃（此前只有驱动侧 `timezone=Z`，服务端会话时区仍是 `SYSTEM`）。
+  Compose 的开发数据库切到 `mysql:5.7` 与**新数据卷** `mysql57_dev_data`；旧的
+  `mysql_dev_data` 保留作为 8.0 回退点，不可复用（官方不支持 8.0→5.7 降级）。
+  本地 `.env` 若显式设过 `MYSQL_DATA_VOLUME` 必须同步改名。见
+  [ADR 0011](adr/0011-updrdb-upredis-dbpm-migration.md) 与
+  [统一 design](design/updrdb-dbpm-deployment.md) §5。
+
 ### Added
 
 - **一个 org 可以有多个可选的智能体**：新增 Agent 目录写入面（`POST /api/agents`

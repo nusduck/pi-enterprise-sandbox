@@ -133,7 +133,7 @@ describe('OutboxRepository unit (fake knex)', () => {
     assert.equal(state.tables.domain_outbox[0].status, 'PENDING');
   });
 
-  it('claimBatch emits SKIP LOCKED SQL and marks PUBLISHING with token + attempts', async () => {
+  it('claimBatch 用条件 UPDATE + token 回读抢占，不再依赖 SKIP LOCKED', async () => {
     seedOutboxRow(state, { outbox_id: OB1 });
     seedOutboxRow(state, {
       outbox_id: OB2,
@@ -149,17 +149,34 @@ describe('OutboxRepository unit (fake knex)', () => {
     assert.equal(claimed[0].attempts, 1);
     assert.ok(claimed[0].claimToken);
     assert.equal(claimed[1].attempts, 1);
+    // 同一批共用一个 token；后续 CAS 仍按 (outbox_id, token) 收敛。
+    assert.equal(claimed[0].claimToken, claimed[1].claimToken);
 
-    const claimSql = state.rawCalls.find((c) =>
-      /FOR UPDATE SKIP LOCKED/i.test(c.sql),
+    assert.ok(
+      !state.rawCalls.some((c) => /SKIP LOCKED/i.test(c.sql)),
+      'UPSQL 5.7 没有 SKIP LOCKED，抢占路径不得再发出它',
     );
-    assert.ok(claimSql, 'must use SELECT … FOR UPDATE SKIP LOCKED');
-    assert.equal(claimSql.bindings[0], 'PENDING');
-    assert.ok(claimSql.bindings.includes('run'));
-    assert.equal(claimSql.bindings[claimSql.bindings.length - 1], 10);
-    for (const b of claimSql.bindings) {
+
+    const claimUpdate = state.rawCalls.find(
+      (c) => /^\s*UPDATE domain_outbox/i.test(c.sql) && /attempts = attempts \+ 1/i.test(c.sql),
+    );
+    assert.ok(claimUpdate, 'must claim with a conditional UPDATE');
+    assert.match(claimUpdate.sql, /ORDER BY created_at ASC, outbox_id ASC/i);
+    assert.equal(claimUpdate.bindings[0], OUTBOX_STATUS.PUBLISHING);
+    assert.equal(claimUpdate.bindings[1], claimed[0].claimToken);
+    assert.equal(claimUpdate.bindings[3], 'PENDING');
+    assert.ok(claimUpdate.bindings.includes('run'));
+    assert.equal(claimUpdate.bindings[claimUpdate.bindings.length - 1], 10);
+    for (const b of claimUpdate.bindings) {
       assert.ok(b !== undefined);
     }
+
+    const readback = state.rawCalls.find(
+      (c) => /^\s*SELECT/i.test(c.sql) && /WHERE claim_token = \?/i.test(c.sql),
+    );
+    assert.ok(readback, 'must read the batch back by claim token');
+    assert.equal(readback.bindings[0], claimed[0].claimToken);
+    assert.equal(readback.bindings[1], OUTBOX_STATUS.PUBLISHING);
   });
 
   it('claimBatch with run-stream eligibility neither claims nor touches unrelated rows', async () => {
@@ -210,7 +227,9 @@ describe('OutboxRepository unit (fake knex)', () => {
     assert.equal(conv.attempts, 0);
   });
 
-  it('simulates concurrent claim: second publisher skips already-locked rows', async () => {
+  // 假 knex 没有 MVCC 与行锁：这里只证明「已抢占的行不会被第二个发布者再抢」
+  // 这一条件更新语义，不能当作并发互斥验证。真重叠事务见 outbox.integration.test.js。
+  it('顺序对照：已被抢占的行不会被第二个发布者重复抢占', async () => {
     seedOutboxRow(state, { outbox_id: OB1 });
     seedOutboxRow(state, {
       outbox_id: OB2,

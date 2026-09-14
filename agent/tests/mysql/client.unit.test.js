@@ -1,8 +1,10 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  SESSION_UTC_SQL,
   createMysqlKnex,
   destroyMysqlKnex,
+  initMysqlSession,
   normalizeMysqlConnectionUrl,
 } from '../../src/infrastructure/mysql/client.js';
 import { toMysqlDateTime } from '../../src/infrastructure/mysql/row-mappers.js';
@@ -113,6 +115,51 @@ describe('mysql client value boundary', () => {
     } finally {
       if (originalTz == null) delete process.env.TZ;
       else process.env.TZ = originalTz;
+    }
+  });
+});
+
+describe('mysql 会话 UTC 初始化', () => {
+  it('afterCreate 先发 SET SESSION time_zone 再交付连接', async () => {
+    const sent = [];
+    const connection = {
+      query(sql, cb) {
+        sent.push(sql);
+        cb(null);
+      },
+    };
+    const delivered = await new Promise((resolve, reject) => {
+      initMysqlSession(connection, (err, conn) => (err ? reject(err) : resolve(conn)));
+    });
+    assert.deepEqual(sent, [SESSION_UTC_SQL]);
+    assert.equal(delivered, connection);
+  });
+
+  it('初始化失败时 create 失败，不交付连接', async () => {
+    const boom = new Error('time_zone rejected');
+    const connection = {
+      query(_sql, cb) {
+        cb(boom);
+      },
+    };
+    await assert.rejects(
+      () =>
+        new Promise((resolve, reject) => {
+          initMysqlSession(connection, (err, conn) => (err ? reject(err) : resolve(conn)));
+        }),
+      (err) => {
+        assert.equal(err, boom);
+        return true;
+      },
+    );
+  });
+
+  it('工厂把 afterCreate 接到池上（不是只在 DSN 里写 timezone）', () => {
+    const knex = createMysqlKnex('mysql://u:p@127.0.0.1:3306/db', { pool: { max: 1 } });
+    try {
+      assert.equal(knex.client.config.pool.afterCreate, initMysqlSession);
+    } finally {
+      void destroyMysqlKnex(knex);
     }
   });
 });

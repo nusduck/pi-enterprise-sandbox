@@ -1,7 +1,7 @@
 /**
  * In-memory knex-like fake for OutboxRepository unit tests.
  * Supports parameterized raw SQL used by claim/reclaim/publish paths,
- * including concurrent claim semantics via FOR UPDATE SKIP LOCKED simulation
+ * including claim-then-read 抢占（条件 UPDATE 打批次 token → 按 token 回读）
  * and claim eligibility filters.
  */
 
@@ -180,26 +180,7 @@ export function createFakeOutboxKnex(state = createFakeState()) {
     const trx = createFakeOutboxKnex(state);
     trx.isTransaction = true;
     trx.transaction = undefined;
-    const held = new Set();
-    const baseRaw = trx.raw;
-    trx.raw = async (sql, bindings = []) => {
-      const result = await baseRaw(sql, bindings);
-      const n = normSql(sql);
-      if (/FOR UPDATE SKIP LOCKED/i.test(n) && Array.isArray(result?.[0])) {
-        for (const row of result[0]) {
-          held.add(String(row.outbox_id));
-        }
-      }
-      return result;
-    };
-    try {
-      const out = await fn(trx);
-      for (const id of held) state.lockedOutboxIds.delete(id);
-      return out;
-    } catch (err) {
-      for (const id of held) state.lockedOutboxIds.delete(id);
-      throw err;
-    }
+    return fn(trx);
   };
 
   knex.raw = async (sql, bindings = []) => {
@@ -207,33 +188,65 @@ export function createFakeOutboxKnex(state = createFakeState()) {
     const n = normSql(sql);
     const table = state.tables.domain_outbox || (state.tables.domain_outbox = []);
 
-    // claim SELECT … FOR UPDATE SKIP LOCKED
-    // bindings: status, now, ...elig, limit
-    if (/FOR UPDATE SKIP LOCKED/i.test(n) && /^SELECT /i.test(n)) {
+    // claim UPDATE：SET status/claim_token/claimed_at, attempts = attempts + 1
+    // bindings: PUBLISHING, token, now, PENDING, now, ...elig, limit
+    if (
+      /^UPDATE domain_outbox/i.test(n) &&
+      /attempts = attempts \+ 1/i.test(n)
+    ) {
       state.claimSelectCalls += 1;
-      const status = bindings[0];
-      const now = bindings[1];
+      const publishingStatus = bindings[0];
+      const claimToken = bindings[1];
+      const claimedAt = bindings[2];
+      const pendingStatus = bindings[3];
+      const now = bindings[4];
       const limit = Number(bindings[bindings.length - 1] ?? 50);
-      const elig = inferEligibilityFromSql(n, bindings, 2);
+      const elig = inferEligibilityFromSql(n, bindings, 5);
       state.lastClaimEligibility = elig;
 
       const due = table
         .filter((row) => {
-          if (row.status !== status) return false;
-          if (state.lockedOutboxIds.has(String(row.outbox_id))) return false;
+          if (row.status !== pendingStatus) return false;
           if (row.next_attempt_at != null && String(row.next_attempt_at) > String(now)) {
             return false;
           }
           if (elig && !rowMatchesEligibility(row, elig)) return false;
           return true;
         })
-        .sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)))
+        .sort(
+          (a, b) =>
+            String(a.created_at).localeCompare(String(b.created_at)) ||
+            String(a.outbox_id).localeCompare(String(b.outbox_id)),
+        )
         .slice(0, limit);
 
       for (const row of due) {
-        state.lockedOutboxIds.add(String(row.outbox_id));
+        row.status = publishingStatus;
+        row.claim_token = claimToken;
+        row.claimed_at = claimedAt;
+        row.attempts = Number(row.attempts ?? 0) + 1;
+        row.next_attempt_at = null;
       }
-      return [due.map((r) => ({ ...r })), []];
+      return [{ affectedRows: due.length }, undefined];
+    }
+
+    // claim 回读：WHERE claim_token = ? AND status = ?
+    if (
+      /^SELECT /i.test(n) &&
+      /FROM domain_outbox/i.test(n) &&
+      /WHERE claim_token = \?/i.test(n)
+    ) {
+      const claimToken = bindings[0];
+      const status = bindings[1];
+      const rows = table
+        .filter((row) => row.claim_token === claimToken && row.status === status)
+        .sort(
+          (a, b) =>
+            String(a.created_at).localeCompare(String(b.created_at)) ||
+            String(a.outbox_id).localeCompare(String(b.outbox_id)),
+        )
+        .map((r) => ({ ...r }));
+      return [rows, []];
     }
 
     // listPending / listForRecovery SELECT

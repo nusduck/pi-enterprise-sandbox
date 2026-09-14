@@ -101,6 +101,34 @@ function parseDsn(dsn: string): ExecDbConfig | null {
   }
 }
 
+/** 每条物理连接交付前必须执行的会话初始化语句。 */
+export const SESSION_UTC_SQL = "SET SESSION time_zone = '+00:00'";
+
+/**
+ * 给 mysql2 池挂上 UTC 会话初始化。
+ *
+ * 驱动的 `timezone: 'Z'` 只管 DATETIME 编解码，不改服务端会话时区；目标
+ * UPDRDB 环境全局时区是 +08:00，少这一句会让 `NOW()` 和列默认值偏 8 小时。
+ *
+ * mysql2 的连接命令队列是 FIFO：在 `connection` 事件里发出的 SET 一定排在
+ * 调用方的第一条 SQL 之前。**初始化失败必须销毁连接**，否则排在后面的业务
+ * SQL 会在一条会话时区不对的连接上执行——这里是 fail-closed 的关键，不是
+ * 一个可以忽略回调错误的日志监听器。
+ */
+export function attachUtcSessionInit(pool: Pool): void {
+  pool.on('connection', (connection) => {
+    connection.query(SESSION_UTC_SQL, (err: unknown) => {
+      if (!err) return;
+      // 销毁后，已排队的业务 SQL 会以连接错误失败，而不是静默用错时区。
+      try {
+        connection.destroy();
+      } catch {
+        // 连接可能已经没了，忽略。
+      }
+    });
+  });
+}
+
 /**
  * 建池。**所有仓储必须经此建池**，不要在 repositories 里各自 `createPool()`——
  * 否则连接数会按仓储数线性放大，且关闭时漏关某一个池会悬空连接。
@@ -126,6 +154,7 @@ export function createExecDbPool(config: ExecDbConfig): Pool {
   };
 
   const pool = createPool(options);
+  attachUtcSessionInit(pool);
 
   // 包装 `pool.execute` 的错误脱敏（可选的轻量 AOP，不改驱动行为）。
   const originalExecute = pool.execute.bind(pool) as Pool['execute'];

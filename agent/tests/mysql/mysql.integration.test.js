@@ -705,4 +705,31 @@ describeMysql('mysql integration (TEST_MYSQL_URL)', () => {
       else process.env.TZ = originalTz;
     }
   });
+
+  /**
+   * 服务端会话时区，不是驱动的 timezone=Z。UPDRDB 目标环境全局时区为 +08:00，
+   * 这条断言在那里才有区分度；本地 MySQL 通常是 UTC，仍然保留为回归对照。
+   */
+  it('每条池连接的会话时区都是 +00:00（含扩容出来的连接）', async () => {
+    const [[single]] = await knex.raw('SELECT @@session.time_zone AS tz');
+    assert.equal(single.tz, '+00:00');
+
+    // 并发把池撑开，扩容出来的连接同样要经过 afterCreate。
+    const parallel = await Promise.all(
+      Array.from({ length: 8 }, () =>
+        knex.raw('SELECT @@session.time_zone AS tz, CONNECTION_ID() AS cid'),
+      ),
+    );
+    const zones = new Set(parallel.map(([rows]) => rows[0].tz));
+    assert.deepEqual([...zones], ['+00:00']);
+    assert.ok(
+      new Set(parallel.map(([rows]) => String(rows[0].cid))).size > 1,
+      '并发应当真的用到多条物理连接，否则这条断言没有覆盖扩容路径',
+    );
+
+    // NOW() 取的是会话时区：与 UTC 时钟的偏差不应达到小时级。
+    const [[serverNow]] = await knex.raw('SELECT UNIX_TIMESTAMP(NOW(3)) AS epoch');
+    const skewMs = Math.abs(Number(serverNow.epoch) * 1000 - Date.now());
+    assert.ok(skewMs < 60_000, `NOW() 与 UTC 偏差过大：${skewMs}ms`);
+  });
 });

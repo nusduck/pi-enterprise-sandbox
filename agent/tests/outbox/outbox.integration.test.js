@@ -280,7 +280,7 @@ describeLive('outbox integration (TEST_MYSQL_URL + TEST_REDIS_URL)', () => {
     }
   });
 
-  it('claimBatch uses live SKIP LOCKED and publisher appends stable event to Redis', async () => {
+  it('claimBatch + publisher appends stable event to Redis (live)', async () => {
     const { OutboxRepository, OutboxPublisher, OUTBOX_STATUS } = outboxMod;
     const outboxId = `01TEST${randomBytes(10).toString('hex')}`.slice(0, 26).toUpperCase();
     const eventId = `01EVT${randomBytes(10).toString('hex')}`.slice(0, 26).toUpperCase();
@@ -361,5 +361,101 @@ describeLive('outbox integration (TEST_MYSQL_URL + TEST_REDIS_URL)', () => {
     assert.equal(ok, true);
     const row = await repo.getById(obId);
     assert.equal(row.status, OUTBOX_STATUS.PUBLISHED);
+  });
+
+  /**
+   * 真正重叠的两个事务：B 在 A 未提交时进入同一竞争区。
+   * 顺序执行（A 提交后再跑 B）证明不了这一点，见 review R3。
+   */
+  it('两个重叠事务竞争同一批：后到者等锁，A 提交后拿不到同一行', async () => {
+    const { OutboxRepository } = outboxMod;
+    const mysql = await import('../../src/infrastructure/mysql/index.js');
+    const pad26 = (s2) => (s2 + 'ABCDEFGHJKMNPQRSTVWXYZ012345').slice(0, 26);
+    const obId = pad26(`01CC${randomBytes(8).toString('hex')}`.toUpperCase());
+
+    await knex('domain_outbox').del();
+    const seed = new OutboxRepository(knex);
+    await seed.insert({
+      outboxId: obId,
+      aggregateType: 'run',
+      aggregateId: RUN,
+      eventType: 'run.started',
+      payloadJson: { eventId: obId, sequence: 3, runId: RUN },
+    });
+
+    const knexB = mysql.createMysqlKnex(TEST_MYSQL_URL, { pool: { min: 0, max: 2 } });
+    try {
+      const trxA = await knex.transaction();
+      const claimedA = await new OutboxRepository(trxA).claimBatch({ limit: 10 });
+      assert.equal(claimedA.length, 1);
+      assert.equal(claimedA[0].outboxId, obId);
+
+      const trxB = await knexB.transaction();
+      // 有界等待：卡住时按 5.7 的锁等待超时失败，而不是把测试挂死。
+      await trxB.raw('SET SESSION innodb_lock_wait_timeout = 10');
+      let settled = false;
+      const claimB = new OutboxRepository(trxB)
+        .claimBatch({ limit: 10 })
+        .then((rows) => {
+          settled = true;
+          return rows;
+        });
+
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      assert.equal(settled, false, 'A 未提交前 B 必须仍被行锁挡住');
+
+      await trxA.commit();
+      const claimedB = await claimB;
+      await trxB.commit();
+
+      assert.deepEqual(
+        claimedB.map((r) => r.outboxId),
+        [],
+        'A 已抢占的行不能被 B 再次抢到',
+      );
+
+      const row = await seed.getById(obId);
+      assert.equal(row.attempts, 1, 'attempts 只能被抢占方加一次');
+      assert.equal(row.claimToken, claimedA[0].claimToken);
+    } finally {
+      await knexB.destroy();
+    }
+  });
+
+  it('锁等待超时是可分类的失败，不是静默空批次', async () => {
+    const { OutboxRepository } = outboxMod;
+    const mysql = await import('../../src/infrastructure/mysql/index.js');
+    const pad26 = (s2) => (s2 + 'ABCDEFGHJKMNPQRSTVWXYZ012345').slice(0, 26);
+    const obId = pad26(`01LW${randomBytes(8).toString('hex')}`.toUpperCase());
+
+    await knex('domain_outbox').del();
+    const seed = new OutboxRepository(knex);
+    await seed.insert({
+      outboxId: obId,
+      aggregateType: 'run',
+      aggregateId: RUN,
+      eventType: 'run.started',
+      payloadJson: { eventId: obId, sequence: 4, runId: RUN },
+    });
+
+    const knexB = mysql.createMysqlKnex(TEST_MYSQL_URL, { pool: { min: 0, max: 2 } });
+    const trxA = await knex.transaction();
+    try {
+      await new OutboxRepository(trxA).claimBatch({ limit: 10 });
+
+      const trxB = await knexB.transaction();
+      await trxB.raw('SET SESSION innodb_lock_wait_timeout = 1');
+      await assert.rejects(
+        () => new OutboxRepository(trxB).claimBatch({ limit: 10 }),
+        (err) => {
+          assert.equal(err.errno ?? err.cause?.errno, 1205);
+          return true;
+        },
+      );
+      await trxB.rollback().catch(() => {});
+    } finally {
+      await trxA.rollback().catch(() => {});
+      await knexB.destroy();
+    }
   });
 });

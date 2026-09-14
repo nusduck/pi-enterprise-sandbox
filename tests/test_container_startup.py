@@ -19,7 +19,7 @@ def test_compose_parameterizes_runtime_defaults() -> None:
     expected_fragments = [
         "MCP_SERVERS_JSON: ${MCP_SERVERS_JSON:-[]}",
         "AGENT_DATABASE_URL: ${AGENT_DATABASE_URL:-mysql://sandbox:sandbox_dev_only@mysql:3306/sandbox}",
-        "image: mysql:8.0",
+        "image: mysql:5.7",
         "image: redis:7.2",
         "AGENT_REDIS_URL: ${AGENT_REDIS_URL:-redis://:redis_dev_only@redis:6379/0}",
         "REDIS_URL: ${REDIS_URL:-redis://:redis_dev_only@redis:6379/0}",

@@ -9,6 +9,7 @@
 import { randomBytes } from 'node:crypto';
 import { ExternalIdentityResolver } from './parent/external-identity-resolver.js';
 import { OwnerScopedNotFoundError, ValidationError } from './errors.js';
+import { ConflictError } from '../infrastructure/mysql/errors.js';
 import { assertUlid, isUlid } from '../domain/shared/ulid.js';
 import {
   assertTimeZone,
@@ -296,13 +297,20 @@ export class CronJobService {
    * Claim due schedules atomically. The later Run creation is deliberately
    * outside this transaction; its deterministic key makes a post-commit crash
    * recoverable without creating a second Agent Run.
+   *
+   * UPSQL 5.7 没有 SKIP LOCKED：抢占改为「条件 UPDATE 打批次 token → 按 token
+   * 回读」。token 只是事务内标记，逐行推进调度状态时清空，commit 前校验无残留，
+   * 因此进程崩溃由事务回滚兜底，不需要 claim 过期回收器。
    */
   async claimDue(limit = 25) {
     const now = this.now();
     const claims = [];
     await this.tx.run(async (trx) => {
       const repos = this.createRepositories(trx);
-      const due = await repos.cronJobs.listDueForUpdate(now, limit);
+      const claimToken = assertUlid(this.generateId(), 'claimToken');
+      const claimedRows = await repos.cronJobs.claimDueBatch(now, limit, claimToken);
+      if (!claimedRows) return;
+      const due = await repos.cronJobs.listByClaimToken(claimToken);
       for (const job of due) {
         const scheduledAt = new Date(job.nextRunAt);
         const nextRunAt = this.#nextAfter(job, scheduledAt);
@@ -328,14 +336,30 @@ export class CronJobService {
           idempotencyKey: executionIdempotencyKey(job.cronJobId, scheduledAt),
           errorMessage: reason,
         });
-        // A unique (job, scheduled_at) conflict means another worker won.
-        if (!execution) continue;
+        // 批次 token 已经独占了这一行，(job, scheduled_at) 仍冲突说明存在
+        // 「执行记录已在、next_run_at 却没推进」的不一致状态：回滚并诊断，
+        // 不盲目推进，也不换一个 scheduledAt 重算。
+        if (!execution) {
+          throw new ConflictError(
+            'Cron execution already exists for a schedule slot that was not advanced',
+            { resource: 'cron_job_runs', id: job.cronJobId },
+          );
+        }
         await repos.cronJobs.updateScheduleState(job.cronJobId, {
           nextRunAt,
           lastRunAt: scheduledAt,
           enabled: onceFinished ? false : job.enabled,
+          claimToken: null,
         });
         if (status === 'CLAIMED') claims.push({ job, execution });
+      }
+      // 批次标记不得越过 commit：残留意味着上面漏了一条推进路径。
+      const residual = await repos.cronJobs.countByClaimToken(claimToken);
+      if (residual !== 0) {
+        throw new ConflictError(
+          `Cron claim batch left ${residual} row(s) marked after scheduling`,
+          { resource: 'cron_jobs' },
+        );
       }
     });
     return claims;

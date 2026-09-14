@@ -13,6 +13,8 @@ import {
   ExecDbConfigError,
   createExecDbPool,
   closeExecDbPool,
+  attachUtcSessionInit,
+  SESSION_UTC_SQL,
 } from '../src/db/client.js';
 
 test('readExecDbConfig: accepts mysql+pymysql DSN from Compose', () => {
@@ -91,4 +93,55 @@ test('createExecDbPool: close is idempotent', async () => {
   });
   await closeExecDbPool(pool);
   await closeExecDbPool(pool);
+});
+
+test('attachUtcSessionInit: 每条新连接先发 SET SESSION time_zone', () => {
+  const sent: string[] = [];
+  let destroyed = false;
+  let listener: ((c: unknown) => void) | null = null;
+  const fakePool = {
+    on(event: string, fn: (c: unknown) => void) {
+      if (event === 'connection') listener = fn;
+      return this;
+    },
+  };
+
+  attachUtcSessionInit(fakePool as never);
+  assert.ok(listener, 'must subscribe to the pool connection event');
+
+  listener!({
+    query(sql: string, cb: (err?: unknown) => void) {
+      sent.push(sql);
+      cb(undefined);
+    },
+    destroy() {
+      destroyed = true;
+    },
+  });
+
+  assert.deepEqual(sent, [SESSION_UTC_SQL]);
+  assert.equal(destroyed, false, '初始化成功的连接不该被销毁');
+});
+
+test('attachUtcSessionInit: 初始化失败销毁连接，不放行错时区的会话', () => {
+  let destroyed = false;
+  let listener: ((c: unknown) => void) | null = null;
+  const fakePool = {
+    on(event: string, fn: (c: unknown) => void) {
+      if (event === 'connection') listener = fn;
+      return this;
+    },
+  };
+
+  attachUtcSessionInit(fakePool as never);
+  listener!({
+    query(_sql: string, cb: (err?: unknown) => void) {
+      cb(new Error('time_zone rejected'));
+    },
+    destroy() {
+      destroyed = true;
+    },
+  });
+
+  assert.equal(destroyed, true);
 });

@@ -303,7 +303,7 @@ AgentVersion 侧（同一份语义，只能收紧）：
 
 ### 数据库操作
 
-正式拓扑为 **MySQL 8**（`AGENT_DATABASE_URL` / `SANDBOX_DATABASE_URL`）。启动时 persistence 在单事务中应用不可变 migration，并在 `schema_migrations` 记录 version/checksum。不升级或回填研发阶段的旧数据库；需要清空旧状态时遵循 [Development reset runbook](runbooks/development-reset.md)。
+开发/CI 基线为 **MySQL 5.7**（`AGENT_DATABASE_URL` / `SANDBOX_DATABASE_URL`），对齐 UPDRDB 的 UPSQL 内核；生产 overlay 目前仍是 MySQL 8。5.7 用独立数据卷 `mysql57_dev_data`，不要复用 8.0 的 `mysql_dev_data`（官方不支持降级，会启动崩溃）。启动时 persistence 在单事务中应用不可变 migration，并在 `schema_migrations` 记录 version/checksum。不升级或回填研发阶段的旧数据库；需要清空旧状态时遵循 [Development reset runbook](runbooks/development-reset.md)。
 
 正式服务的事实状态在 Agent-owned MySQL 中。Sandbox 不再包含 SQLite
 `database`/repository 兼容层，也不拥有 Run/Conversation；调试 durable 状态

@@ -36,7 +36,7 @@ def test_cross_service_ci_provisions_mysql_and_redis_services() -> None:
 
     assert "    services:\n" in job
     assert "      mysql:\n" in job
-    assert "        image: mysql:8.0\n" in job
+    assert "        image: mysql:5.7\n" in job
     assert "      redis:\n" in job
     assert "        image: redis:7.2\n" in job
     assert "      sandbox-replay-redis:\n" in job
