@@ -94,7 +94,9 @@ services:
       # This one-shot Node service owns only the Agent schema; never inherit
       # a stale Sandbox DSN from env_file.
       SANDBOX_DATABASE_URL: ""
-      AGENT_DATABASE_URL: ${AGENT_DATABASE_URL:-mysql://sandbox:sandbox_dev_only@mysql:3306/sandbox}
+      # 迁移 CLI 是开发/DBA 工具，需要 DDL 权限，仍用带口令的 DSN；它不是应用服务，
+      # 不走 DBPM。与应用的 AGENT_DATABASE_URL 分开取值，避免把口令带进应用容器。
+      AGENT_DATABASE_URL: ${AGENT_MIGRATE_DATABASE_URL:-mysql://sandbox:sandbox_dev_only@mysql:3306/sandbox}
     depends_on:
       mysql:
         condition: service_healthy
@@ -183,6 +185,39 @@ services:
       retries: 20
       start_period: 10s
     restart: unless-stopped
+    networks:
+      - backend_internal
+
+  # ── Fake DBPM — development-only credential stub (ADR 0011 D10) ──
+  # 真协议的假服务端。应用代码只有一条取密路径；开发环境只是把 DBPM_URL 指到这里。
+  # 一个容器监听 7000/7001 模拟主备两台；FAKE_DBPM_FAIL_PORTS 可让某台返回错误。
+  # 口令就是本文件里 mysql / redis 已用的开发占位值。生产 overlay 禁用本服务，
+  # 并要求真实 DBPM_URL；脚本自身在 DEPLOYMENT_ENV=production 时拒绝运行。
+  dbpm-fake:
+    image: ${DBPM_FAKE_IMAGE:-node:22-slim}
+    container_name: ${DBPM_FAKE_CONTAINER:-pi-enterprise-dbpm-fake}
+    user: node
+    command: ["node", "/opt/fake-dbpm/fake-dbpm.mjs"]
+    environment:
+      DEPLOYMENT_ENV: ${DEPLOYMENT_ENV:-development}
+      FAKE_DBPM_PORTS: "7000,7001"
+      FAKE_DBPM_FAIL_PORTS: ${FAKE_DBPM_FAIL_PORTS:-}
+      FAKE_DBPM_ENTRIES: "${DBPM_DB_NAME:-sandbox}:${MYSQL_USER:-sandbox}:${MYSQL_PASSWORD:-sandbox_dev_only};${DBPM_REDIS_DB_NAME:-redis}:${DBPM_REDIS_DB_USER_NAME:-default}:${REDIS_PASSWORD:-redis_dev_only}"
+    volumes:
+      - ./scripts/dev/fake-dbpm.mjs:/opt/fake-dbpm/fake-dbpm.mjs:ro
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('net').connect(7001,'127.0.0.1').on('connect',()=>process.exit(0)).on('error',()=>process.exit(1))"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 5s
+    restart: unless-stopped
+    # No host publish; reachable only on the internal backend fabric.
     networks:
       - backend_internal
 
@@ -298,16 +333,32 @@ services:
       A2A_ALLOW_DEV_HOST_FALLBACK: ${A2A_ALLOW_DEV_HOST_FALLBACK:-true}
       AGENT_RUN_INIT_TIMEOUT_MS: ${AGENT_RUN_INIT_TIMEOUT_MS:-15000}
       # Agent MySQL fact store (mysql:// | mysql2:// only; see agent mysql client).
-      # Dev default uses non-secret placeholder credentials; override via .env.
-      AGENT_DATABASE_URL: ${AGENT_DATABASE_URL:-mysql://sandbox:sandbox_dev_only@mysql:3306/sandbox}
+      # 连接串不带口令：口令启动时向 DBPM 取（ADR 0011 D10），带口令会拒绝启动。
+      # 用 AGENT_COMPOSE_* 取值而不是 AGENT_DATABASE_URL：宿主 .env 里旧的带口令 DSN
+      # 不应该经 Compose 插值进容器。
+      AGENT_DATABASE_URL: ${AGENT_COMPOSE_DATABASE_URL:-mysql://sandbox@mysql:3306/sandbox}
       # UPDRDB 两个 Proxy（host:port,host:port）。空 = 使用 DSN 单端点。
       UPDRDB_ENDPOINTS: ${UPDRDB_ENDPOINTS:-}
       # Compose migration ownership belongs exclusively to agent-migrate.
       AGENT_MIGRATE_ON_START: "false"
       # Agent Redis coordination (redis:// | rediss:// only). Agent-only authority.
       # REDIS_URL is the plan/generic alias; AGENT_REDIS_URL is the Agent client name.
-      REDIS_URL: ${REDIS_URL:-redis://:redis_dev_only@redis:6379/0}
-      AGENT_REDIS_URL: ${AGENT_REDIS_URL:-redis://:redis_dev_only@redis:6379/0}
+      REDIS_URL: ${AGENT_COMPOSE_REDIS_URL:-redis://redis:6379/0}
+      AGENT_REDIS_URL: ${AGENT_COMPOSE_REDIS_URL:-redis://redis:6379/0}
+      # DBPM 取密：UPDRDB + 服务 Redis 两个条目。开发默认指向 dbpm-fake。
+      DBPM_URL: ${DBPM_URL:-dbpm-fake:7000,dbpm-fake:7001}
+      DBPM_DB_NAME: ${DBPM_DB_NAME:-sandbox}
+      DBPM_DB_USER_NAME: ${MYSQL_USER:-sandbox}
+      DBPM_REDIS_DB_NAME: ${DBPM_REDIS_DB_NAME:-redis}
+      DBPM_REDIS_DB_USER_NAME: ${DBPM_REDIS_DB_USER_NAME:-default}
+      # env_file 会把宿主 .env 整体注入。应用口令只来自 DBPM（ADR 0011 D10），这里清空
+      # 服务端口令与其他服务的带口令连接串，不让它们出现在进程环境 / docker inspect 里。
+      MYSQL_PASSWORD: ""
+      MYSQL_ROOT_PASSWORD: ""
+      REDIS_PASSWORD: ""
+      SANDBOX_INTERNAL_REDIS_PASSWORD: ""
+      SANDBOX_INTERNAL_REDIS_URL: ""
+      SANDBOX_MCP_REDIS_URL: ""
       # Queue / lease / stream settings (plan §9 defaults; code may hard-pin until wired).
       AGENT_RUNS_QUEUE_NAME: ${AGENT_RUNS_QUEUE_NAME:-agent-runs}
       AGENT_RUN_LEASE_TTL_MS: ${AGENT_RUN_LEASE_TTL_MS:-30000}
@@ -361,6 +412,8 @@ services:
         condition: service_completed_successfully
       redis:
         condition: service_healthy
+      dbpm-fake:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "node", "-e", "require('http').get('http://localhost:4100/health',r=>{process.exit(r.statusCode===200?0:1)}).on('error',()=>process.exit(1))"]
       interval: 30s
@@ -397,11 +450,24 @@ services:
       AGENT_INTERNAL_TOKEN: ${AGENT_INTERNAL_TOKEN:-}
       # Dev convenience: an empty token would otherwise close /internal/*.
       AGENT_ALLOW_UNAUTHENTICATED_INTERNAL: ${AGENT_ALLOW_UNAUTHENTICATED_INTERNAL:-true}
-      AGENT_DATABASE_URL: ${AGENT_DATABASE_URL:-mysql://sandbox:sandbox_dev_only@mysql:3306/sandbox}
+      # 与 agent 相同：连接串不带口令，口令启动时向 DBPM 取。
+      AGENT_DATABASE_URL: ${AGENT_COMPOSE_DATABASE_URL:-mysql://sandbox@mysql:3306/sandbox}
       UPDRDB_ENDPOINTS: ${UPDRDB_ENDPOINTS:-}
       AGENT_MIGRATE_ON_START: "false"
-      REDIS_URL: ${REDIS_URL:-redis://:redis_dev_only@redis:6379/0}
-      AGENT_REDIS_URL: ${AGENT_REDIS_URL:-redis://:redis_dev_only@redis:6379/0}
+      REDIS_URL: ${AGENT_COMPOSE_REDIS_URL:-redis://redis:6379/0}
+      AGENT_REDIS_URL: ${AGENT_COMPOSE_REDIS_URL:-redis://redis:6379/0}
+      DBPM_URL: ${DBPM_URL:-dbpm-fake:7000,dbpm-fake:7001}
+      DBPM_DB_NAME: ${DBPM_DB_NAME:-sandbox}
+      DBPM_DB_USER_NAME: ${MYSQL_USER:-sandbox}
+      DBPM_REDIS_DB_NAME: ${DBPM_REDIS_DB_NAME:-redis}
+      DBPM_REDIS_DB_USER_NAME: ${DBPM_REDIS_DB_USER_NAME:-default}
+      # 与 agent 相同：清空 env_file 带进来的口令与其他服务的连接串。
+      MYSQL_PASSWORD: ""
+      MYSQL_ROOT_PASSWORD: ""
+      REDIS_PASSWORD: ""
+      SANDBOX_INTERNAL_REDIS_PASSWORD: ""
+      SANDBOX_INTERNAL_REDIS_URL: ""
+      SANDBOX_MCP_REDIS_URL: ""
       AGENT_RUNS_QUEUE_NAME: ${AGENT_RUNS_QUEUE_NAME:-agent-runs}
       AGENT_RUN_LEASE_TTL_MS: ${AGENT_RUN_LEASE_TTL_MS:-30000}
       AGENT_RUN_LEASE_RENEW_INTERVAL_MS: ${AGENT_RUN_LEASE_RENEW_INTERVAL_MS:-10000}
@@ -460,6 +526,8 @@ services:
         condition: service_healthy
       agent:
         condition: service_healthy
+      dbpm-fake:
+        condition: service_healthy
     # No ports — worker is not an HTTP public service.
     command: ["node", "dist/worker.js"]
     networks:
@@ -508,9 +576,22 @@ services:
       # never override the formal MySQL default. Set
       # SANDBOX_COMPOSE_DATABASE_URL for a deliberate dev override; production
       # overlay supplies SANDBOX_DATABASE_URL explicitly.
-      SANDBOX_DATABASE_URL: ${SANDBOX_COMPOSE_DATABASE_URL:-mysql+pymysql://sandbox:sandbox_dev_only@mysql:3306/sandbox}
+      # 不带口令：exec 启动时向 DBPM 取 UPDRDB 口令，带口令会拒绝启动。
+      SANDBOX_DATABASE_URL: ${SANDBOX_COMPOSE_DATABASE_URL:-mysql+pymysql://sandbox@mysql:3306/sandbox}
       # UPDRDB 两个 Proxy；空 = 使用 DSN 单端点。与 Agent 读同一个变量。
       UPDRDB_ENDPOINTS: ${UPDRDB_ENDPOINTS:-}
+      # DBPM 取密：exec 只取 UPDRDB 条目（replay Redis 已无消费方，不取）。
+      DBPM_URL: ${DBPM_URL:-dbpm-fake:7000,dbpm-fake:7001}
+      DBPM_DB_NAME: ${DBPM_DB_NAME:-sandbox}
+      DBPM_DB_USER_NAME: ${MYSQL_USER:-sandbox}
+      # env_file 仍需保留（SANDBOX_EXEC_ENV_* 透传），但口令与 Agent 侧连接串不进 exec 进程。
+      MYSQL_PASSWORD: ""
+      MYSQL_ROOT_PASSWORD: ""
+      REDIS_PASSWORD: ""
+      AGENT_DATABASE_URL: ""
+      AGENT_REDIS_URL: ""
+      REDIS_URL: ""
+      SANDBOX_MCP_REDIS_URL: ""
       # Internal plane (Agent HMAC tools): optional in development (default off).
       # Dedicated sandbox-replay-redis + independent password (DB 0). Never REDIS_PASSWORD.
       SANDBOX_INTERNAL_PLANE_ENABLED: ${SANDBOX_INTERNAL_PLANE_ENABLED:-false}
@@ -585,6 +666,8 @@ services:
         condition: service_completed_successfully
       # Independent replay Redis (not Agent redis / REDIS_PASSWORD).
       sandbox-replay-redis:
+        condition: service_healthy
+      dbpm-fake:
         condition: service_healthy
     healthcheck:
       test:
@@ -661,7 +744,21 @@ services:
       SANDBOX_MCP_PUBLIC_BASE_URL: ${SANDBOX_MCP_PUBLIC_BASE_URL:-http://127.0.0.1:${SANDBOX_MCP_HOST_PORT:-8082}}
       # Context/artifact metadata uses the existing durable service Redis, not
       # the Agent runtime and not the Sandbox HMAC replay Redis.
-      SANDBOX_MCP_REDIS_URL: ${SANDBOX_MCP_REDIS_URL:-redis://:redis_dev_only@redis:6379/0}
+      # 不带口令：facade 启动时只向 DBPM 取服务 Redis 口令（拿不到 UPDRDB 口令）。
+      SANDBOX_MCP_REDIS_URL: ${SANDBOX_MCP_COMPOSE_REDIS_URL:-redis://redis:6379/0}
+      DBPM_URL: ${DBPM_URL:-dbpm-fake:7000,dbpm-fake:7001}
+      DBPM_REDIS_DB_NAME: ${DBPM_REDIS_DB_NAME:-redis}
+      DBPM_REDIS_DB_USER_NAME: ${DBPM_REDIS_DB_USER_NAME:-default}
+      # 对外 facade 凭据面最窄：清空 env_file 带进来的口令与其他服务的连接串。
+      MYSQL_PASSWORD: ""
+      MYSQL_ROOT_PASSWORD: ""
+      REDIS_PASSWORD: ""
+      SANDBOX_INTERNAL_REDIS_PASSWORD: ""
+      SANDBOX_INTERNAL_REDIS_URL: ""
+      AGENT_DATABASE_URL: ""
+      AGENT_REDIS_URL: ""
+      REDIS_URL: ""
+      SANDBOX_DATABASE_URL: ""
       SANDBOX_MCP_CLIENT_ID: ${SANDBOX_MCP_CLIENT_ID:-upagent}
       SANDBOX_MCP_TENANT_ID: ${SANDBOX_MCP_TENANT_ID:-default}
       SANDBOX_MCP_CONTEXT_TTL_SECONDS: ${SANDBOX_MCP_CONTEXT_TTL_SECONDS:-604800}
@@ -680,6 +777,8 @@ services:
       redis:
         condition: service_healthy
       sandbox:
+        condition: service_healthy
+      dbpm-fake:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8082/health"]

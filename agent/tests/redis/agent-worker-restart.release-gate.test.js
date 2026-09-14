@@ -30,8 +30,11 @@ import {
   destroyRunQueue,
 } from '../../src/infrastructure/redis/run-queue.js';
 import { runLeaseKey } from '../../src/infrastructure/redis/constants.js';
+import { startDbpmForUrls, stripUrlPassword } from '../support/fake-dbpm-env.js';
 
 const execFileAsync = promisify(execFile);
+/** 被测 Worker 与生产一样经 DBPM 取密；before() 里起本机假 DBPM。 */
+let dbpm = null;
 const FIXTURE = fileURLToPath(
   new URL('../fixtures/agent-worker-side-effect-process.js', import.meta.url),
 );
@@ -116,8 +119,10 @@ function createWorkerHarness(workerLabel, opts = {}) {
       ...process.env,
       NODE_ENV: 'test',
       DEPLOYMENT_ENV: 'test',
-      AGENT_DATABASE_URL: TEST_MYSQL_URL,
-      AGENT_REDIS_URL: TEST_REDIS_URL,
+      AGENT_DATABASE_URL: stripUrlPassword(TEST_MYSQL_URL),
+      AGENT_REDIS_URL: stripUrlPassword(TEST_REDIS_URL),
+      TEST_FIXTURE_DATABASE_URL: TEST_MYSQL_URL,
+      ...dbpm.env,
       AGENT_RUNS_QUEUE_NAME: QUEUE,
       AGENT_MIGRATE_ON_START: 'false',
       AGENT_WORKER_CONCURRENCY: '1',
@@ -448,6 +453,7 @@ describeLive('Agent Worker SIGKILL checkpoint-aware recovery', () => {
     assert.equal(image, 'redis:7.2');
     assert.equal(running, 'true');
 
+    dbpm = await startDbpmForUrls({ mysqlUrl: TEST_MYSQL_URL, redisUrl: TEST_REDIS_URL });
     knex = createMysqlKnex(TEST_MYSQL_URL, { pool: { min: 0, max: 10 } });
     await knex.schema.dropTableIfExists(SIDE_EFFECT_TABLE);
     await migrateRollbackAll(knex);
@@ -472,6 +478,10 @@ describeLive('Agent Worker SIGKILL checkpoint-aware recovery', () => {
     const cleanupErrors = [];
     for (const worker of workers) {
       await worker.terminate('SIGKILL').catch((error) => cleanupErrors.push(error));
+    }
+    if (dbpm) {
+      await dbpm.close().catch((error) => cleanupErrors.push(error));
+      dbpm = null;
     }
     if (queueHandles) {
       await queueHandles.queue

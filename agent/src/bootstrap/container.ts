@@ -69,6 +69,11 @@ export interface ServiceContainerOptions {
   readonly destroyMysqlKnex?: Loose;
   readonly destroyRedisClient?: Loose;
   readonly destroyRunQueue?: Loose;
+  /** 启动取密。生产走 DBPM；测试注入固定值。 */
+  readonly resolveCredentials?: (
+    env: NodeJS.ProcessEnv | Record<string, string | undefined>,
+    need: { mysql: boolean; redis: boolean },
+  ) => Promise<{ mysql?: string | undefined; redis?: string | undefined }>;
 }
 
 export class ServiceContainer {
@@ -83,6 +88,8 @@ export class ServiceContainer {
   runExecutorFactory: Loose;
   _opts: ServiceContainerOptions;
   knex: import('knex').Knex | null = null;
+  /** DBPM 下发的口令，只在内存里；worker 建 BullMQ 消费者与 DSH 会话存储要用。 */
+  credentials: { mysql?: string | undefined; redis?: string | undefined } = {};
   redis: Loose = null;
   runQueueHandle: Loose = null;
   started = false;
@@ -180,13 +187,26 @@ export class ServiceContainer {
   async #startOnce(opts) {
     const connectMysql = opts.connectMysql !== false;
     const connectRedis = opts.connectRedis !== false;
+    if (connectMysql && !this.mysqlUrl) {
+      throw new Error(
+        'AGENT_DATABASE_URL (mysql:// or mysql2://) is required to start the Agent data plane',
+      );
+    }
+    if (connectRedis && !this.redisUrl) {
+      throw new Error(
+        'AGENT_REDIS_URL or REDIS_URL (redis:// or rediss://) is required to start Agent coordination',
+      );
+    }
+    // 先取密再建连：口令只来自 DBPM（ADR 0011 D10），连接串夹口令或缺配置在这里拒启。
+    const resolveCredentials =
+      this._opts.resolveCredentials ||
+      (await import('./startup-credentials.js')).resolveAgentCredentials;
+    this.credentials = await resolveCredentials(this.env, {
+      mysql: connectMysql,
+      redis: connectRedis,
+    });
 
     if (connectMysql) {
-      if (!this.mysqlUrl) {
-        throw new Error(
-          'AGENT_DATABASE_URL (mysql:// or mysql2://) is required to start the Agent data plane',
-        );
-      }
       const createMysqlKnex =
         this._opts.createMysqlKnex ||
         (
@@ -199,6 +219,7 @@ export class ServiceContainer {
       // UPDRDB 两个 Proxy；未设置时就是 DSN 的单端点。格式错误在这里抛出，启动失败。
       this.knex = createMysqlKnex(this.mysqlUrl, {
         endpoints: readUpdrdbEndpoints(this.env),
+        password: this.credentials.mysql,
       });
       await this.knex.raw('SELECT 1');
 
@@ -211,20 +232,16 @@ export class ServiceContainer {
     }
 
     if (connectRedis) {
-      if (!this.redisUrl) {
-        throw new Error(
-          'AGENT_REDIS_URL or REDIS_URL (redis:// or rediss://) is required to start Agent coordination',
-        );
-      }
       const redisMod = await import('../infrastructure/redis/index.js');
       const createRedisClient =
         this._opts.createRedisClient || redisMod.createRedisClient;
       const createRunQueue =
         this._opts.createRunQueue || redisMod.createRunQueue;
       redisMod.assertRedisConnectionUrl(this.redisUrl);
-      this.redis = createRedisClient(this.redisUrl);
+      this.redis = createRedisClient(this.redisUrl, { password: this.credentials.redis });
       this.runQueueHandle = createRunQueue(this.redisUrl, {
         queueName: this.env.AGENT_RUNS_QUEUE_NAME || undefined,
+        password: this.credentials.redis,
       });
     }
 
@@ -516,6 +533,8 @@ export class ServiceContainer {
         const { systemRoot } = resolveSkillMountRoots(this.env);
         const skillRoots = [systemRoot];
         return new DshRuntimeFactory({
+          // DSH 会话存储的 MySQL 口令同样来自 DBPM，不从连接串读。
+          mysqlPassword: this.credentials.mysql,
           sessionAdapter: opts.sessionAdapter,
           extensionFactories: opts.extensionFactories,
           loadSdk: opts.loadSdk,

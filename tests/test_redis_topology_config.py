@@ -49,7 +49,10 @@ class TestComposeRedisTopology:
         # Agent gets Redis authority + queue/lease/stream settings
         assert "AGENT_REDIS_URL:" in agent
         assert "REDIS_URL:" in agent
-        assert "redis://:redis_dev_only@redis:6379/0" in agent
+        # Redis URL 不带口令；口令由 DBPM 下发（ADR 0011 D10）。
+        assert "redis://redis:6379/0" in agent
+        assert "redis_dev_only@" not in agent
+        assert "DBPM_REDIS_DB_NAME:" in agent
         assert "AGENT_RUNS_QUEUE_NAME:" in agent
         assert "agent-runs" in agent
         assert "AGENT_RUN_LEASE_TTL_MS:" in agent
@@ -70,8 +73,9 @@ class TestComposeRedisTopology:
         assert re.search(r"^\s+redis:\s*$", api, re.M) is None
         # Sandbox uses dedicated sandbox-replay-redis (independent secret), never
         # Agent REDIS_URL / AGENT_REDIS_URL / shared REDIS_PASSWORD authority.
-        assert re.search(r"^\s+AGENT_REDIS_URL:", sandbox, re.M) is None
-        assert re.search(r"^\s+REDIS_URL:", sandbox, re.M) is None
+        # 显式清空（值为 ""）是允许的：那是在挡住 env_file 注入，不是授予权威。
+        assert re.search(r'^\s+AGENT_REDIS_URL:(?!\s*""\s*$)', sandbox, re.M) is None
+        assert re.search(r'^\s+REDIS_URL:(?!\s*""\s*$)', sandbox, re.M) is None
         assert "SANDBOX_INTERNAL_REDIS_URL" in sandbox
         assert "SANDBOX_INTERNAL_PLANE_ENABLED" in sandbox
         assert "sandbox-replay-redis:6379/0" in sandbox
@@ -100,7 +104,10 @@ class TestComposeRedisTopology:
         agent = _service_block(text, "agent")
         assert "AGENT_REDIS_URL:" in agent
         assert "REDIS_URL:" in agent
-        assert "REDIS_PASSWORD:?Set REDIS_PASSWORD for production" in agent
+        # Redis 服务端仍强制口令（上面的 text 断言）；Agent 的 URL 不再夹口令，
+        # 改为必须向真实 DBPM 取密。
+        assert "REDIS_PASSWORD" not in agent
+        assert "DBPM_URL: ${DBPM_URL:?" in agent
         assert "redis:" in agent
         assert "condition: service_healthy" in agent
         assert "AGENT_RUNS_QUEUE_NAME:" in agent
@@ -147,7 +154,9 @@ class TestEnvRedisCatalog:
         ]
         for fragment in required:
             assert fragment in text, f"missing {fragment!r} in .env.example"
-        assert "redis://:redis_dev_only@redis:6379/0" in text
+        # 应用用的 Redis URL 不带口令（口令来自 DBPM）；Redis 服务端口令仍在 REDIS_PASSWORD。
+        assert "AGENT_REDIS_URL=redis://redis:6379/0" in text
+        assert "AGENT_REDIS_URL=redis://:" not in text
         # Sandbox replay-only plane (independent secret; no real prod values)
         assert "SANDBOX_INTERNAL_REDIS_URL=" in text
         assert "SANDBOX_INTERNAL_REDIS_PASSWORD=" in text

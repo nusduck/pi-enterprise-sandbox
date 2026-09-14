@@ -11,6 +11,7 @@
  * - `hmac.ts`      Agent -> Exec 内部调用令牌，两侧共用同一份实现
  * - `endpoint-failover.ts` 多端点建连的纯策略（粘主/拉黑/预算），无驱动依赖
  * - `dbpm.ts`      启动时向 DBPM 取口令的 TCP 客户端
+ * - `dbpm-config.ts` 各进程取哪些口令、配置来源与「连接串不许夹口令」的启动约束
  */
 
 export {
@@ -109,6 +110,20 @@ export type {
   DbpmFailureCode,
   FetchDbpmPasswordOptions,
 } from './dbpm.js';
+
+export {
+  assertUrlUser,
+  assertUrlWithoutPassword,
+  DbpmConfigError,
+  fetchDbpmCredentials,
+  readDbpmSettings,
+} from './dbpm-config.js';
+export type {
+  DbpmCredentialRole,
+  DbpmCredentials,
+  DbpmSettings,
+  FetchDbpmCredentialsOptions,
+} from './dbpm-config.js';
 
 // DSH `ctx.fs` 的类型直接复用，不手写 DTO——见包顶部说明。
 export { FileSystem } from '@deepseek-ai/dsh-fs';

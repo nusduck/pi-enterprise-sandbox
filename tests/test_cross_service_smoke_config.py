@@ -15,8 +15,13 @@ def test_cross_service_smoke_uses_formal_mysql_redis_and_worker() -> None:
     assert "SANDBOX_LEGACY_TEST_RUNTIME" not in source
     assert "prepareDataPlane(agentMysqlUrl, redisUrl, replayRedisUrl)" in source
     assert "migrateLatest(knex)" in source
-    assert "AGENT_DATABASE_URL: agentMysqlUrl" in source
-    assert "AGENT_REDIS_URL: redisUrl" in source
+    # 服务进程与生产一致：无口令连接串 + 经 DBPM 取密（ADR 0011 D10）。
+    assert "startDbpmForUrls({ mysqlUrl: agentMysqlUrl, redisUrl })" in source
+    assert "AGENT_DATABASE_URL: appMysqlUrl" in source
+    assert "AGENT_REDIS_URL: appRedisUrl" in source
+    assert "SANDBOX_DATABASE_URL: appSandboxMysqlUrl" in source
+    assert source.count("...dbpmHandle.env") >= 3
+    assert "AGENT_DATABASE_URL: agentMysqlUrl" not in source
     assert "SMOKE_SANDBOX_REPLAY_REDIS_URL" in source
     assert "SANDBOX_INTERNAL_HMAC_KEYRING" in source
     assert source.count("SANDBOX_API_TOKEN: SMOKE_SANDBOX_API_TOKEN") >= 3

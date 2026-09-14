@@ -12,7 +12,11 @@ import { createMysqlKnex } from '../../src/infrastructure/mysql/client.js';
 import { createServiceContainer } from '../../src/bootstrap/container.js';
 import { startWorkerMain } from '../../src/bootstrap/worker-main.js';
 
-const databaseUrl = String(process.env.AGENT_DATABASE_URL || '').trim();
+// 夹具自己直连数据库写副作用表，用测试给的带口令连接串；被测的 Worker 本身
+// 走 AGENT_DATABASE_URL（无口令）+ DBPM 取密，与生产一致。
+const databaseUrl = String(
+  process.env.TEST_FIXTURE_DATABASE_URL || process.env.AGENT_DATABASE_URL || '',
+).trim();
 const workerLabel = String(process.env.TEST_WORKER_LABEL || '').trim();
 const sideEffectTable = String(
   process.env.TEST_SIDE_EFFECT_TABLE || '',

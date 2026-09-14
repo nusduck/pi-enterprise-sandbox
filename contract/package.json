@@ -11,11 +11,13 @@
     "./hmac.js": "./dist/hmac.js",
     "./endpoint-failover.js": "./dist/endpoint-failover.js",
     "./dbpm.js": "./dist/dbpm.js",
+    "./dbpm-config.js": "./dist/dbpm-config.js",
     "./errors": "./dist/errors.js",
     "./envelope": "./dist/envelope.js",
     "./hmac": "./dist/hmac.js",
     "./endpoint-failover": "./dist/endpoint-failover.js",
-    "./dbpm": "./dist/dbpm.js"
+    "./dbpm": "./dist/dbpm.js",
+    "./dbpm-config": "./dist/dbpm-config.js"
   },
   "types": "./dist/index.d.ts",
   "engines": { "node": ">=22.19.0 <23" },

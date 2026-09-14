@@ -298,6 +298,7 @@ export function createDshRuntimeFactory(opts: Record<string, any> = {}) {
       const sessionStore = runtime.mountSessionPersistence(ctx, {
         physicalRoots: rpc.physicalRoots,
         requireMysql: true,
+        password: opts.mysqlPassword,
       });
       // AV-06：逻辑路径来自服务端已有的解析入口（container 传进来的
       // workspaceRoot/skillRoot，或本 Run 解析出的 cwd），**不是**写死的默认值，

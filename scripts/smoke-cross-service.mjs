@@ -28,6 +28,7 @@ import { createServer } from 'node:net';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { startFakeOpenAIProvider } from '../agent/tests/support/fake-openai-provider.js';
+import { startDbpmForUrls, stripUrlPassword } from '../agent/tests/support/fake-dbpm-env.js';
 import { assertFakeLlmAllowed } from '../agent/src/config/fake-llm-policy.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -277,7 +278,13 @@ async function waitForExit(child, name) {
   }
 }
 
+let dbpmHandle = null;
+
 async function shutdown() {
+  if (dbpmHandle) {
+    await dbpmHandle.close().catch(() => {});
+    dbpmHandle = null;
+  }
   for (const child of children.splice(0).reverse()) {
     if (!child.killed) child.kill('SIGTERM');
     await Promise.race([once(child, 'exit'), new Promise((r) => setTimeout(r, 2000))]);
@@ -389,6 +396,14 @@ async function main() {
   ]);
   await prepareDataPlane(agentMysqlUrl, redisUrl, replayRedisUrl);
 
+  // 服务进程与生产一样：连接串不带口令，启动时向 DBPM 取（ADR 0011 D10）。
+  // 预检与迁移（上一行）是 smoke 自己直连，仍用带口令的原始连接串。
+  dbpmHandle = await startDbpmForUrls({ mysqlUrl: agentMysqlUrl, redisUrl });
+  const appMysqlUrl = stripUrlPassword(agentMysqlUrl);
+  const appRedisUrl = stripUrlPassword(redisUrl);
+  const appSandboxMysqlUrl = stripUrlPassword(sandboxMysqlUrl);
+  console.log('[smoke] fake DBPM', dbpmHandle.env.DBPM_URL);
+
   const internalHmacKeyring = JSON.stringify({
     'smoke-v1': 'MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY',
   });
@@ -425,7 +440,8 @@ async function main() {
     {
       DEPLOYMENT_ENV: 'development',
       SANDBOX_PORT: String(sandboxPort),
-      SANDBOX_DATABASE_URL: sandboxMysqlUrl,
+      SANDBOX_DATABASE_URL: appSandboxMysqlUrl,
+      ...dbpmHandle.env,
       SANDBOX_WORKSPACES_ROOT: wsPath,
       SANDBOX_TEMP_ROOT: tmpPath,
       SANDBOX_ARTIFACTS_ROOT: artifactsPath,
@@ -454,8 +470,9 @@ async function main() {
       SANDBOX_BASE_URL: `http://127.0.0.1:${sandboxPort}`,
       SANDBOX_API_TOKEN: SMOKE_SANDBOX_API_TOKEN,
       AGENT_INTERNAL_TOKEN: SMOKE_AGENT_INTERNAL_TOKEN,
-      AGENT_DATABASE_URL: agentMysqlUrl,
-      AGENT_REDIS_URL: redisUrl,
+      AGENT_DATABASE_URL: appMysqlUrl,
+      AGENT_REDIS_URL: appRedisUrl,
+      ...dbpmHandle.env,
       AGENT_MIGRATE_ON_START: 'false',
       AGENT_SESSION_WORKSPACE_CWD: '/home/sandbox/workspace',
       SANDBOX_INTERNAL_HMAC_KEYRING: internalHmacKeyring,
@@ -478,8 +495,9 @@ async function main() {
       {
         NODE_ENV: 'test',
         DEPLOYMENT_ENV: 'development',
-        AGENT_DATABASE_URL: agentMysqlUrl,
-        AGENT_REDIS_URL: redisUrl,
+        AGENT_DATABASE_URL: appMysqlUrl,
+        AGENT_REDIS_URL: appRedisUrl,
+        ...dbpmHandle.env,
         AGENT_MIGRATE_ON_START: 'false',
         AGENT_SESSION_WORKSPACE_CWD: '/home/sandbox/workspace',
         SANDBOX_BASE_URL: `http://127.0.0.1:${sandboxPort}`,

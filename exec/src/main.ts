@@ -1,12 +1,26 @@
 /**
  * Exec HTTP 入口。Wave 6 起取代 Python sandbox 服务进程。
  * 挂载内部 HMAC 面与公共会话面；健康检查保持 /health 与 /ready。
+ *
+ * 启动顺序（design §9.2）：取密 → 装配（建池）→ 孤儿回收 → listen。任何一步失败都退出，
+ * 不先对外提供服务。
  */
-import { createExecAppFromEnv } from './http/app.js';
+import { createExecAppFromEnv, readExecDbConfigFromSandboxEnv } from './http/app.js';
 import { listenHono } from './http/node-listener.js';
+import { resolveExecDbPassword } from './startup-credentials.js';
 
 const port = Number.parseInt(process.env['EXEC_PORT'] ?? process.env['SANDBOX_PORT'] ?? '8081', 10);
-const runtime = createExecAppFromEnv();
+
+let dbPassword: string | undefined;
+try {
+  dbPassword = await resolveExecDbPassword(process.env, readExecDbConfigFromSandboxEnv);
+} catch (err) {
+  const message = err instanceof Error ? err.message : String(err);
+  process.stderr.write(`exec credential fetch failed, refusing to start: ${message}\n`);
+  process.exit(1);
+}
+
+const runtime = createExecAppFromEnv(process.env, { dbPassword });
 
 // 先收孤儿，再 listen。顺序是硬要求：`recoverOrphans()` 用 `listActiveForRecovery`
 // 做**无租户过滤**的全表扫描，只有在还没有任何用户请求进来的时候才是安全的；

@@ -166,6 +166,7 @@ Agent（DeepSeek Harness）运行在独立 `agent/` 服务中，而非浏览器�
 - **清空 Redis 的后果**：仅丢失运行态协调（queue job、lease、live stream 游标、短期 cache）；MySQL 中 Conversation / Run / `run_events` / 审计事实保留
 - **恢复路径**：Outbox publisher 从 `domain_outbox` 重试未发布事件；SSE/历史从 MySQL `run_events` 重放；Worker 按 MySQL Run 状态 + 幂等记录决定重试或失败
 - 生产：`REDIS_PASSWORD` 必填（compose fail-fast）；禁止无密码生产 Redis
+- **应用口令只来自 DBPM**（ADR 0011 D10，2026-09-14 起）：Agent / Agent Worker 取 UPDRDB 与服务 Redis 口令，exec 只取 UPDRDB，sandbox-mcp 只取服务 Redis；启动时取一次、只放内存，连接串带口令或 DBPM 不可用即拒绝启动。`REDIS_PASSWORD` / `MYSQL_PASSWORD` 只配置服务端自身。开发由 `dbpm-fake` 真协议假服务端提供。上面提到的 replay Redis 当前没有代码消费方（ADR 0008 D8 已去掉 jti 防重放），不取密；其去留另行处理
 
 ### 4c. 企业工具面与策略挂载
 

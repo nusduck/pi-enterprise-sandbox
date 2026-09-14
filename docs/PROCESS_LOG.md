@@ -650,3 +650,21 @@ Each entry should say **what changed**, **why**, and **which STATUS IDs** it aff
   agent 27 例、exec 20 例全绿。宿主 Node v23.11.0；本机 3306 被宿主 mysqld 占用，容器
   MySQL 改映射 3307。详见 [证据](evidence/d2b-updrdb-failover-2026-09-14.md)，其中记录了
   未定位的 sandbox `fs-error` 日志与只由假驱动覆盖的握手超时分支。
+
+## 2026-09-14 — D2c：启动经 DBPM 取密，开发默认假 DBPM，本地 Docker 模拟双 Proxy
+
+- **范围：** [统一 design](design/updrdb-dbpm-deployment.md) §7 / ADR 0011 D10；分支 `refactor/updrdb-dbpm`，
+  基线 `2fefd531`。改动落在 `contract/`（`dbpm-config.ts`）、`agent/`（容器取密接线、Knex / Redis / BullMQ /
+  DSH 会话存储口令注入）、`exec/`（exec 与 sandbox-mcp 入口取密）、开发与生产 Compose、CI、smoke、
+  release-gate 测试与文档。
+- **Decision：** 用户选择「全部强制」：没有环境变量口令回退，连接串带口令拒绝启动，生产 overlay 要求真实
+  `DBPM_URL`。核对实际消费方后，replay Redis 无读取方，只取 UPDRDB 与服务 Redis 两类口令（design §7 与
+  ADR 0011 已加 2026-09-14 细化说明）。`agent-migrate` 作为 DBA 工具保留带口令 DSN（`AGENT_MIGRATE_DATABASE_URL`）。
+- **Action：** 新增 `dbpm-fake`（真协议假服务端）与本地双 Proxy 模拟 overlay；应用容器清空 `env_file`
+  带进来的服务端口令；CI smoke 与 release-gate 在测试内起假 DBPM；新增 DBPM Compose 棘轮测试。
+- **STATUS IDs：** 不改变任何 STATUS 行（关联 H5、G2/G4；真实 DBPM / Proxy 目标环境验收未做）。
+- **验证：** 六套测试、四包类型检查、前端 build、开发 / 模拟 / 生产 Compose 渲染与生产配置校验通过；
+  agent 3 例、api-server 2 例 cancelled 与 D2b 记录相同，未记为通过。重建镜像后在 Docker 模拟栈上跑通真实链路，
+  并完成主 Proxy 故障、主 DBPM 故障、双 DBPM 故障拒启、连接串带口令拒启四项演练，日志口令出现 0 次。
+  live 集成改用独立库 `pi_d2c_it`（agent 27、exec 29 全绿）。两个 release-gate 未实跑。详见
+  [证据](evidence/d2c-dbpm-credentials-2026-09-14.md)。

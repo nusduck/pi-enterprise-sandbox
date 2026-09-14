@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **破坏性：应用口令只从 DBPM 取，连接串带口令会拒绝启动**：agent、agent-worker、
+  sandbox（exec）、sandbox-mcp 启动时各自向 DBPM 取所需口令（UPDRDB / 服务 Redis），
+  只取一次、只放内存。`AGENT_DATABASE_URL`、`AGENT_REDIS_URL`、`SANDBOX_DATABASE_URL`、
+  `SANDBOX_MCP_REDIS_URL` 必须**不带口令**；`DBPM_URL` 缺失、DSN 用户名与 DBPM 条目不一致、
+  两台 DBPM 都取不到时进程直接退出，没有环境变量口令回退。开发 Compose 新增默认启用的
+  `dbpm-fake`（真协议假服务端，只挂内部网络），并改用 `AGENT_COMPOSE_*` /
+  `SANDBOX_MCP_COMPOSE_REDIS_URL` 插值，宿主 `.env` 里旧的带口令连接串不会被带进容器；
+  宿主机直接起服务进程时需要自己提供 `DBPM_URL`。生产 overlay 禁用 `dbpm-fake`，
+  `DBPM_URL` 等条目必填。`agent-migrate` 作为 DBA 工具改读 `AGENT_MIGRATE_DATABASE_URL`。
+  replay Redis 目前无代码消费方，不取密。另附 `scripts/dev/docker-compose.updrdb-sim.yml`
+  在本地用两个转发容器演练双 Proxy 故障切换。见 [统一 design](design/updrdb-dbpm-deployment.md) §7。
 - **MySQL 建连支持 UPDRDB 两个 Proxy 的故障切换**：新增可选配置 `UPDRDB_ENDPOINTS`
   （恰好两个 `host:port`）。Agent Knex、Agent DSH 会话存储、exec 三处取连接时粘住当前
   主用、网络故障拉黑 180s 换另一个、拉黑过期不主动回切；单次握手 3s、一次取连接总预算

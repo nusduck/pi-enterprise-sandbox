@@ -114,6 +114,8 @@ type KnexMysql2ClientCtor = new (config: unknown) => KnexMysql2ClientInstance;
 export interface FailoverKnexClientOptions {
   /** 不传则使用 DSN 里的 host:port 单端点。 */
   readonly endpoints?: readonly Endpoint[] | undefined;
+  /** DBPM 下发的口令；给了就覆盖 DSN 里的（DSN 本身不应带口令）。 */
+  readonly password?: string | undefined;
   readonly role: string;
   readonly blacklistMs?: number | undefined;
   readonly budgetMs?: number | undefined;
@@ -132,6 +134,7 @@ function destroyQuietly(connection: { destroy(): void } | undefined): void {
 function sessionSettings(
   base: Record<string, unknown>,
   endpoint: Endpoint,
+  password: string | undefined,
 ): Record<string, unknown> {
   const configured = Number(base['connectTimeout']);
   const settings: Record<string, unknown> = {
@@ -144,7 +147,10 @@ function sessionSettings(
         : MYSQL_CONNECT_TIMEOUT_MS,
   };
   // 展开复制拿不到不可枚举的 password；补回时保持不可枚举，别让口令进入快照/日志。
-  Object.defineProperty(settings, 'password', { enumerable: false, value: base['password'] });
+  Object.defineProperty(settings, 'password', {
+    enumerable: false,
+    value: password ?? base['password'],
+  });
   return settings;
 }
 
@@ -171,7 +177,8 @@ export function createFailoverKnexClient(opts: FailoverKnexClientOptions): KnexM
       );
       return acquireWithFailover<RawMysqlConnection>(
         selector,
-        ({ endpoint, signal }) => this.connectEndpoint(sessionSettings(base, endpoint), signal),
+        ({ endpoint, signal }) =>
+          this.connectEndpoint(sessionSettings(base, endpoint, opts.password), signal),
         {
           role: opts.role,
           budgetMs: opts.budgetMs ?? MYSQL_ACQUIRE_BUDGET_MS,

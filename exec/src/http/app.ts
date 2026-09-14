@@ -28,6 +28,7 @@ import {
   type ExecDbConfig,
 } from '../db/client.js';
 import type { ExecDbPool as Pool } from '../db/failover-pool.js';
+import { assertExecDbConfigWithoutPassword } from '../startup-credentials.js';
 import { AGENT_SKILL_PATH } from '../isolation/profile.js';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -184,7 +185,13 @@ export interface ExecRuntime {
  * 从环境装配生产依赖。HMAC keyring 缺失则 fail-closed。
  * MySQL 配得上就用 durable 的 Job/Artifact/Dataset 仓储；否则仅非 production 回退内存。
  */
-export function createExecAppFromEnv(env: NodeJS.ProcessEnv = process.env): ExecRuntime {
+export function createExecAppFromEnv(
+  env: NodeJS.ProcessEnv = process.env,
+  opts: {
+    /** DBPM 下发的 UPDRDB 口令（`resolveExecDbPassword()`）。配了数据库就必须给。 */
+    readonly dbPassword?: string | undefined;
+  } = {},
+): ExecRuntime {
   const keyring = String(env['SANDBOX_INTERNAL_HMAC_KEYRING'] ?? '').trim();
   const activeKid = String(env['SANDBOX_INTERNAL_HMAC_ACTIVE_KID'] ?? '').trim();
   if (!keyring || !activeKid) {
@@ -210,7 +217,12 @@ export function createExecAppFromEnv(env: NodeJS.ProcessEnv = process.env): Exec
   let quotaStore: QuotaStore | undefined;
   try {
     const cfg = readExecDbConfigFromSandboxEnv(env);
-    pool = createExecDbPool(cfg);
+    // 口令只来自 DBPM：配置里夹口令或没取到口令都直接失败，不回退内存仓储。
+    assertExecDbConfigWithoutPassword(cfg);
+    if (opts.dbPassword === undefined) {
+      throw new Error('exec database password must be fetched from DBPM before assembly');
+    }
+    pool = createExecDbPool({ ...cfg, password: opts.dbPassword });
     store = new MySqlJobStore(pool);
     quotaStore = new MySqlQuotaStore(pool);
     const quotaLedger = new WorkspaceQuotaLedger(quotaStore, new InProcessWorkspaceLock(), {

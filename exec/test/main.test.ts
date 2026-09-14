@@ -348,8 +348,10 @@ describe('createExecAppFromEnv wires durable artifact/dataset stores', () => {
     SANDBOX_API_TOKEN: TEST_API_TOKEN,
     SANDBOX_WORKSPACES_ROOT: join(tmpdir(), 'exec-env-db-ws'),
     SANDBOX_TEMP_ROOT: join(tmpdir(), 'exec-env-db-tmp'),
-    EXEC_DATABASE_URL: 'mysql://exec:secret@127.0.0.1:1/execdb',
+    // 连接串不带口令（ADR 0011 D10）；口令由启动取密提供，这里直接注入。
+    EXEC_DATABASE_URL: 'mysql://exec@127.0.0.1:1/execdb',
   } as NodeJS.ProcessEnv;
+  const fromDbpm = { dbPassword: 'secret' };
   const acting = {
     'X-Acting-Organization-Id': '01ARZ3NDEKTSV4RRFFQ69G5FAW',
     'X-Acting-User-Id': '01ARZ3NDEKTSV4RRFFQ69G5FAX',
@@ -357,7 +359,7 @@ describe('createExecAppFromEnv wires durable artifact/dataset stores', () => {
   };
 
   test('artifact list goes to MySQL instead of an in-memory map', async () => {
-    const runtime = createExecAppFromEnv(dbEnv);
+    const runtime = createExecAppFromEnv(dbEnv, fromDbpm);
     try {
       const res = await runtime.app.request(`/sessions/${workspaceId}/artifacts`, {
         headers: acting,
@@ -373,7 +375,7 @@ describe('createExecAppFromEnv wires durable artifact/dataset stores', () => {
   });
 
   test('dataset list goes to MySQL instead of an in-memory map', async () => {
-    const runtime = createExecAppFromEnv(dbEnv);
+    const runtime = createExecAppFromEnv(dbEnv, fromDbpm);
     try {
       const res = await runtime.app.request(`/sessions/${workspaceId}/datasets`, {
         headers: acting,
@@ -484,8 +486,8 @@ describe('startup orphan recovery is wired, not just defined', () => {
       SANDBOX_API_TOKEN: TEST_API_TOKEN,
       SANDBOX_WORKSPACES_ROOT: join(tmpdir(), 'exec-recover-db-ws'),
       SANDBOX_TEMP_ROOT: join(tmpdir(), 'exec-recover-db-tmp'),
-      EXEC_DATABASE_URL: 'mysql://exec:secret@127.0.0.1:1/execdb',
-    } as NodeJS.ProcessEnv);
+      EXEC_DATABASE_URL: 'mysql://exec@127.0.0.1:1/execdb',
+    } as NodeJS.ProcessEnv, { dbPassword: 'secret' });
     try {
       await assert.rejects(() => runtime.recoverOrphans());
     } finally {

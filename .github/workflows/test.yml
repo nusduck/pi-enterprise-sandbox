@@ -184,6 +184,11 @@ jobs:
           SANDBOX_INTERNAL_HMAC_ACTIVE_KID: ci-key
           A2A_PUBLIC_BASE_URL: https://agent.example.com
           A2A_ARTIFACT_DOWNLOAD_SECRET: dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd
+          # Production overlay requires a real DBPM (ADR 0011 D10); placeholders only.
+          DBPM_URL: dbpm-a.example.internal:7000,dbpm-b.example.internal:7000
+          DBPM_DB_NAME: ci_updrdb_entry
+          DBPM_REDIS_DB_NAME: ci_redis_entry
+          DBPM_REDIS_DB_USER_NAME: ci_redis_user
         run: |
           docker compose -f docker-compose.yml -f docker-compose.prod.yml config \
             --format json --output "$RUNNER_TEMP/pi-enterprise-prod-compose.json"

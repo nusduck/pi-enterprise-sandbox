@@ -38,8 +38,11 @@ import { createUlidGenerator } from '../../src/domain/shared/ulid.js';
 import { enqueueRunJob, createRunQueue, destroyRunQueue } from '../../src/infrastructure/redis/run-queue.js';
 import { runLeaseKey } from '../../src/infrastructure/redis/constants.js';
 import { startFakeOpenAIProvider } from '../support/fake-openai-provider.js';
+import { startDbpmForUrls, stripUrlPassword } from '../support/fake-dbpm-env.js';
 
 const execFileAsync = promisify(execFile);
+/** 被测 Worker 与生产一样经 DBPM 取密；before() 里起本机假 DBPM。 */
+let dbpm = null;
 const FIXTURE = fileURLToPath(
   new URL('../fixtures/agent-worker-dsh-process.js', import.meta.url),
 );
@@ -214,8 +217,9 @@ function createWorkerHarness(workerLabel, ids) {
       TEST_RUN_IDS: ids.runId,
       TEST_WORKER_LABEL: workerLabel,
       TEST_EMIT_RECOVERY_SCANS: 'true',
-      AGENT_DATABASE_URL: TEST_MYSQL_URL,
-      AGENT_REDIS_URL: TEST_REDIS_URL,
+      AGENT_DATABASE_URL: stripUrlPassword(TEST_MYSQL_URL),
+      AGENT_REDIS_URL: stripUrlPassword(TEST_REDIS_URL),
+      ...dbpm.env,
       AGENT_RUNS_QUEUE_NAME: QUEUE,
       AGENT_MIGRATE_ON_START: 'false',
       AGENT_WORKER_CONCURRENCY: '1',
@@ -588,6 +592,7 @@ describeLive(
     tempRoot = mkdtempSync(path.join(os.tmpdir(), 'pi-real-restart-gate-'));
     await fs.mkdir(tempRoot, { recursive: true });
     fakeProvider = await startFakeOpenAIProvider({ reply: 'unused' });
+    dbpm = await startDbpmForUrls({ mysqlUrl: TEST_MYSQL_URL, redisUrl: TEST_REDIS_URL });
     agentKnex = createMysqlKnex(TEST_MYSQL_URL, { pool: { min: 0, max: 10 } });
     sandboxKnex = createMysqlKnex(TEST_SANDBOX_MYSQL_URL, {
       pool: { min: 0, max: 10 },
@@ -623,6 +628,10 @@ describeLive(
     if (sandboxKnex) {
       await destroyMysqlKnex(sandboxKnex).catch((error) => errors.push(error));
       sandboxKnex = null;
+    }
+    if (dbpm) {
+      await dbpm.close().catch((error) => errors.push(error));
+      dbpm = null;
     }
     if (fakeProvider) {
       await fakeProvider.close().catch((error) => errors.push(error));

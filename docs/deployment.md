@@ -294,13 +294,40 @@ the Agent fail-closes with `MYSQL_TRIGGER_BINLOG_BLOCKED` and will **not**
 
 研发阶段不可逆的空环境切换见 [Development reset runbook](runbooks/development-reset.md)。该流程明确不备份、不迁移、不恢复旧数据。
 
+### DBPM 取密（ADR 0011 D10）
+
+应用进程的数据库 / Redis 口令**只来自 DBPM**，启动时取一次、只放内存，不写进程环境、不打印。连接串**不带口令**；带口令、`DBPM_URL` 缺失、DSN 用户名与 DBPM 条目不一致、两台 DBPM 都取不到，都直接拒绝启动——没有环境变量口令回退。
+
+启动顺序：校验配置 → 按角色取密 → 建连（含 UTC 会话初始化、Proxy 故障切换）→ 预检 → 就绪。
+
+| 进程 | UPDRDB 条目 | 服务 Redis 条目 |
+|------|-------------|-----------------|
+| agent / agent-worker | ✔ | ✔ |
+| sandbox（exec） | ✔ | — |
+| sandbox-mcp | — | ✔（对外 facade，拿不到 UPDRDB 口令） |
+
+replay Redis（`SANDBOX_INTERNAL_REDIS_URL`）目前没有代码消费方，不取密；该实例与配置的去留另行处理。
+
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `DBPM_URL` | 开发：`dbpm-fake:7000,dbpm-fake:7001`；生产无默认 | 恰好两个 `host:port`。连接 3s、每台 5s、两台总预算 10s；第一台任何失败都切第二台 |
+| `DBPM_DB_NAME` / `DBPM_DB_USER_NAME` | 开发：`sandbox` / `MYSQL_USER` | UPDRDB 条目；用户名必须与 DSN 用户名一致 |
+| `DBPM_REDIS_DB_NAME` / `DBPM_REDIS_DB_USER_NAME` | 开发：`redis` / `default` | 服务 Redis 条目 |
+| `AGENT_COMPOSE_DATABASE_URL` / `AGENT_COMPOSE_REDIS_URL` / `SANDBOX_MCP_COMPOSE_REDIS_URL` | 无口令的 compose 内默认 | 仅开发 Compose 插值用；宿主 `.env` 里旧的带口令 `AGENT_DATABASE_URL` 等不会被带进容器 |
+| `AGENT_MIGRATE_DATABASE_URL` | 带开发占位口令的 DSN | 仅 `agent-migrate`（开发/DBA 迁移工具，需要 DDL 权限），不走 DBPM，不进应用容器 |
+| `FAKE_DBPM_FAIL_PORTS` | 未设置 | 仅开发：让假 DBPM 的某个端口返回错误，演练主备切换 |
+
+**开发:** `docker compose up` 启动 `dbpm-fake`（`scripts/dev/fake-dbpm.mjs`，真协议假服务端，只挂 `backend_internal`、不发布端口），口令即 `MYSQL_PASSWORD` / `REDIS_PASSWORD` 的开发占位值；应用服务等它 healthy 后启动。宿主机直接起服务进程时，同样需要一个 DBPM 地址（可 `node scripts/dev/fake-dbpm.mjs` 起本机假服务端）。
+
+**生产:** `docker-compose.prod.yml` 把 `dbpm-fake` 放进永不启用的 profile（并强制 production，脚本会拒绝运行），四个应用服务的 `depends_on` 用 `!override` 去掉它；`DBPM_URL`、`DBPM_DB_NAME`、`DBPM_REDIS_DB_NAME`、`DBPM_REDIS_DB_USER_NAME` 必填（`:?`，无默认）。`MYSQL_PASSWORD` / `REDIS_PASSWORD` 只用于数据库 / Redis 服务端自身与 `agent-migrate`。口令变更需要重启取密进程；没有双口令重叠窗口时安排维护窗口。
+
 ### Redis 7（Agent-only 运行态协调）
 
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
-| `REDIS_PASSWORD` | 开发占位 `redis_dev_only`；生产无默认 | Redis `requirepass`（生产必填强 secret，fail-fast） |
-| `REDIS_URL` | `redis://:…@redis:6379/0` | 通用 / plan 别名 DSN |
-| `AGENT_REDIS_URL` | 同 `REDIS_URL` 形 | Agent 客户端主 DSN（仅 `redis://` / `rediss://`） |
+| `REDIS_PASSWORD` | 开发占位 `redis_dev_only`；生产无默认 | Redis 服务端 `requirepass`（生产必填强 secret，fail-fast）；应用口令经 DBPM 下发 |
+| `REDIS_URL` | `redis://redis:6379/0`（不带口令） | 通用 / plan 别名 DSN |
+| `AGENT_REDIS_URL` | 同 `REDIS_URL` 形 | Agent 客户端主 DSN（仅 `redis://` / `rediss://`；带口令拒绝启动） |
 | `TEST_REDIS_URL` | _(可选)_ | 集成测试 DSN |
 | `AGENT_RUNS_QUEUE_NAME` | `agent-runs` | BullMQ Run Queue |
 | `AGENT_RUN_LEASE_TTL_MS` | `30000` | Worker lease TTL（ms） |
@@ -336,7 +363,7 @@ the Agent fail-closes with `MYSQL_TRIGGER_BINLOG_BLOCKED` and will **not**
 - 未成功发布到 Redis Stream 的事件保留在 MySQL `domain_outbox`，Outbox publisher 可在 Redis 恢复后重试。
 - 完整事件历史与 SSE 重放以 MySQL `run_events` 为准；Redis Stream 可按长度裁剪。
 
-已提交文档中的 DSN 示例仅使用开发占位或省略密码（`redis://:…@host:6379/0`）；勿把真实生产密码写进仓库。
+已提交文档中的应用 DSN 示例一律不带口令（口令经 DBPM 下发）；测试用 `TEST_*` 连接串只使用开发占位口令。勿把真实生产密码写进仓库。
 
 ### 资源限制
 

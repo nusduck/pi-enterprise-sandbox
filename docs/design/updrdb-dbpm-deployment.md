@@ -255,6 +255,8 @@ schema manifest 覆盖实际 migrations 的全部表，包括后续 DSH/exec/cro
 | 服务 UPRedis | Agent、Worker、sandbox-mcp |
 | replay UPRedis | 仅 VM exec |
 
+> **2026-09-14 实施细化（D2c）**：按「逐项追到实际工厂」核对后，`SANDBOX_INTERNAL_REDIS_URL` 在 `exec/src` 与 `agent/src` 中**没有任何读取方**（ADR 0008 D8 已去掉 jti 防重放实例），因此 replay UPRedis 这一行**不实施取密**，只保留 UPDRDB 与服务 Redis 两类；该实例与 Compose 配置的去留另行处理。用户确认「全部强制」：开发 Compose、CI smoke、release-gate 测试都经（假）DBPM 取密，生产 overlay 要求真实 `DBPM_URL`。`agent-migrate` 作为 DBA 工具保留带口令 DSN（单独变量 `AGENT_MIGRATE_DATABASE_URL`），不进应用容器。
+
 DBPM 纯 TCP 客户端可共享在 `contract/`，按既有协议发送请求并收至换行；拒绝名称中的空白、换行/控制字符，校验响应前缀，限制单帧大小（设计值 4KiB）。连接超时 3s，每端点请求 5s，两端点一轮总预算 10s；EOF、半帧超时、过大帧和错误响应均失败并销毁 socket。返回类型只含口令，不包含整个原始响应。
 
 保留启动只取一次；认证错误不触发运行期重取。生产口令变更前确认重启顺序与双口令重叠窗口是否存在。没有重叠窗口时采用维护窗口，不能承诺零中断；单 VM 重启必需 drain/停止执行，不能称“所有服务都可滚动重启”。

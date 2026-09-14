@@ -17,11 +17,15 @@
 #
 # Required env (no empty defaults for secrets):
 #   MYSQL_PASSWORD, MYSQL_ROOT_PASSWORD, REDIS_PASSWORD,
-#   SANDBOX_API_TOKEN, AGENT_INTERNAL_TOKEN, SANDBOX_JWT_SECRET
+#   SANDBOX_API_TOKEN, AGENT_INTERNAL_TOKEN, SANDBOX_JWT_SECRET,
+#   DBPM_URL, DBPM_DB_NAME, DBPM_REDIS_DB_NAME, DBPM_REDIS_DB_USER_NAME
 # Optional but recommended:
 #   SANDBOX_CORS_ORIGINS, DOMAIN
-# Optional Agent DSN/Redis overrides (otherwise built from MYSQL_* /
-# REDIS_PASSWORD): AGENT_DATABASE_URL, AGENT_REDIS_URL, REDIS_URL.
+# Application DSNs/Redis URLs carry NO password (ADR 0011 D10): agent,
+# agent-worker, sandbox and sandbox-mcp fetch credentials from a real DBPM at
+# startup and refuse to start if a URL embeds one. MYSQL_PASSWORD /
+# REDIS_PASSWORD here only configure the database/Redis servers themselves and
+# the DBA-side agent-migrate CLI. The development dbpm-fake stub is disabled.
 # Sandbox production DSN is always built from MYSQL_* below so a stale
 # SANDBOX_DATABASE_URL in a host .env cannot select a legacy backend.
 
@@ -146,6 +150,15 @@ services:
     networks:
       - backend_internal
 
+  # The development credential stub never runs in production: it is moved to a
+  # profile that is never enabled, and forced to production mode so the script
+  # refuses to start even if someone enables that profile by hand. Consumers
+  # below drop it from depends_on via !override.
+  dbpm-fake:
+    profiles: ["dev-only-fake-dbpm"]
+    environment:
+      DEPLOYMENT_ENV: production
+
   frontend:
     # SPA is only reached via nginx on the compose networks — never host-published.
     ports: !reset []
@@ -196,8 +209,11 @@ services:
   sandbox:
     environment:
       DEPLOYMENT_ENV: production
-      # Built from MYSQL_* secrets; do not embed live passwords in compose files.
-      SANDBOX_DATABASE_URL: mysql+pymysql://${MYSQL_USER:-sandbox}:${MYSQL_PASSWORD:?Set MYSQL_PASSWORD for production}@mysql:3306/${MYSQL_DATABASE:-sandbox}
+      # No password in the DSN: exec fetches the UPDRDB password from DBPM.
+      SANDBOX_DATABASE_URL: mysql+pymysql://${MYSQL_USER:-sandbox}@mysql:3306/${MYSQL_DATABASE:-sandbox}
+      DBPM_URL: ${DBPM_URL:?Set DBPM_URL for production (real DBPM endpoints, never dbpm-fake)}
+      DBPM_DB_NAME: ${DBPM_DB_NAME:?Set DBPM_DB_NAME for production}
+      DBPM_DB_USER_NAME: ${MYSQL_USER:-sandbox}
       SANDBOX_API_TOKEN: ${SANDBOX_API_TOKEN:?Set SANDBOX_API_TOKEN for production}
       SANDBOX_APPROVAL_MODE: ${APPROVAL_MODE:-${SANDBOX_APPROVAL_MODE:-}}
       SANDBOX_APPROVAL_ENABLED: ${APPROVAL_ENABLED:-${SANDBOX_APPROVAL_ENABLED:-}}
@@ -221,7 +237,7 @@ services:
       SANDBOX_CORS_ORIGINS: ${SANDBOX_CORS_ORIGINS:?Set SANDBOX_CORS_ORIGINS for production (no wildcard)}
       SANDBOX_CORS_ALLOW_CREDENTIALS: ${SANDBOX_CORS_ALLOW_CREDENTIALS:-true}
       SANDBOX_DEBUG: "false"
-    depends_on:
+    depends_on: !override
       mysql:
         condition: service_healthy
       agent-migrate:
@@ -266,8 +282,12 @@ services:
       SANDBOX_MCP_DOWNLOAD_SECRET: ${SANDBOX_MCP_DOWNLOAD_SECRET:?Set SANDBOX_MCP_DOWNLOAD_SECRET for production}
       SANDBOX_MCP_SANDBOX_BASE_URL: http://sandbox:8081
       SANDBOX_MCP_PUBLIC_BASE_URL: ${SANDBOX_MCP_PUBLIC_BASE_URL:?Set SANDBOX_MCP_PUBLIC_BASE_URL for production}
-      SANDBOX_MCP_REDIS_URL: redis://:${REDIS_PASSWORD:?Set REDIS_PASSWORD for production}@redis:6379/0
-    depends_on:
+      # No password in the URL: the facade fetches only the service Redis password.
+      SANDBOX_MCP_REDIS_URL: redis://redis:6379/0
+      DBPM_URL: ${DBPM_URL:?Set DBPM_URL for production (real DBPM endpoints, never dbpm-fake)}
+      DBPM_REDIS_DB_NAME: ${DBPM_REDIS_DB_NAME:?Set DBPM_REDIS_DB_NAME for production}
+      DBPM_REDIS_DB_USER_NAME: ${DBPM_REDIS_DB_USER_NAME:?Set DBPM_REDIS_DB_USER_NAME for production}
+    depends_on: !override
       redis:
         condition: service_healthy
       sandbox:
@@ -324,13 +344,17 @@ services:
       A2A_PUBLIC_BASE_URL: ${A2A_PUBLIC_BASE_URL:?Set A2A_PUBLIC_BASE_URL for production}
       A2A_ARTIFACT_DOWNLOAD_SECRET: ${A2A_ARTIFACT_DOWNLOAD_SECRET:?Set A2A_ARTIFACT_DOWNLOAD_SECRET for production}
       A2A_ALLOW_DEV_HOST_FALLBACK: "false"
-      AGENT_DATABASE_URL: mysql://${MYSQL_USER:-sandbox}:${MYSQL_PASSWORD:?Set MYSQL_PASSWORD for production}@mysql:3306/${MYSQL_DATABASE:-sandbox}
+      # No passwords in DSN / Redis URL: fetched from DBPM at startup.
+      AGENT_DATABASE_URL: mysql://${MYSQL_USER:-sandbox}@mysql:3306/${MYSQL_DATABASE:-sandbox}
       # The one-shot agent-migrate service is the sole migration owner.
       AGENT_MIGRATE_ON_START: "false"
-      # Built from REDIS_PASSWORD; do not embed live passwords in compose files.
-      # Fail-fast when REDIS_PASSWORD is unset (no empty/auth-less production Redis).
-      REDIS_URL: redis://:${REDIS_PASSWORD:?Set REDIS_PASSWORD for production}@redis:6379/0
-      AGENT_REDIS_URL: redis://:${REDIS_PASSWORD:?Set REDIS_PASSWORD for production}@redis:6379/0
+      REDIS_URL: redis://redis:6379/0
+      AGENT_REDIS_URL: redis://redis:6379/0
+      DBPM_URL: ${DBPM_URL:?Set DBPM_URL for production (real DBPM endpoints, never dbpm-fake)}
+      DBPM_DB_NAME: ${DBPM_DB_NAME:?Set DBPM_DB_NAME for production}
+      DBPM_DB_USER_NAME: ${MYSQL_USER:-sandbox}
+      DBPM_REDIS_DB_NAME: ${DBPM_REDIS_DB_NAME:?Set DBPM_REDIS_DB_NAME for production}
+      DBPM_REDIS_DB_USER_NAME: ${DBPM_REDIS_DB_USER_NAME:?Set DBPM_REDIS_DB_USER_NAME for production}
       AGENT_RUNS_QUEUE_NAME: ${AGENT_RUNS_QUEUE_NAME:-agent-runs}
       AGENT_RUN_LEASE_TTL_MS: ${AGENT_RUN_LEASE_TTL_MS:-30000}
       AGENT_RUN_LEASE_RENEW_INTERVAL_MS: ${AGENT_RUN_LEASE_RENEW_INTERVAL_MS:-10000}
@@ -353,12 +377,14 @@ services:
       - ./skills:/home/sandbox/skill:ro
       - agent_user_skills:/home/sandbox/skill-user
       - ./config/agent:/app/config/agent:ro
-    depends_on:
+    depends_on: !override
       mysql:
         condition: service_healthy
       agent-migrate:
         condition: service_completed_successfully
       redis:
+        condition: service_healthy
+      sandbox:
         condition: service_healthy
     deploy:
       resources:
@@ -385,10 +411,15 @@ services:
       SANDBOX_INTERNAL_HMAC_KEYRING: ${SANDBOX_INTERNAL_HMAC_KEYRING:?Set SANDBOX_INTERNAL_HMAC_KEYRING for production}
       SANDBOX_INTERNAL_HMAC_ACTIVE_KID: ${SANDBOX_INTERNAL_HMAC_ACTIVE_KID:?Set SANDBOX_INTERNAL_HMAC_ACTIVE_KID for production}
       AGENT_INTERNAL_TOKEN: ${AGENT_INTERNAL_TOKEN:?Set AGENT_INTERNAL_TOKEN for production}
-      AGENT_DATABASE_URL: mysql://${MYSQL_USER:-sandbox}:${MYSQL_PASSWORD:?Set MYSQL_PASSWORD for production}@mysql:3306/${MYSQL_DATABASE:-sandbox}
+      AGENT_DATABASE_URL: mysql://${MYSQL_USER:-sandbox}@mysql:3306/${MYSQL_DATABASE:-sandbox}
       AGENT_MIGRATE_ON_START: "false"
-      REDIS_URL: redis://:${REDIS_PASSWORD:?Set REDIS_PASSWORD for production}@redis:6379/0
-      AGENT_REDIS_URL: redis://:${REDIS_PASSWORD:?Set REDIS_PASSWORD for production}@redis:6379/0
+      REDIS_URL: redis://redis:6379/0
+      AGENT_REDIS_URL: redis://redis:6379/0
+      DBPM_URL: ${DBPM_URL:?Set DBPM_URL for production (real DBPM endpoints, never dbpm-fake)}
+      DBPM_DB_NAME: ${DBPM_DB_NAME:?Set DBPM_DB_NAME for production}
+      DBPM_DB_USER_NAME: ${MYSQL_USER:-sandbox}
+      DBPM_REDIS_DB_NAME: ${DBPM_REDIS_DB_NAME:?Set DBPM_REDIS_DB_NAME for production}
+      DBPM_REDIS_DB_USER_NAME: ${DBPM_REDIS_DB_USER_NAME:?Set DBPM_REDIS_DB_USER_NAME for production}
       AGENT_RUNS_QUEUE_NAME: ${AGENT_RUNS_QUEUE_NAME:-agent-runs}
       AGENT_RUN_MAX_TOOL_CALLS: ${AGENT_RUN_MAX_TOOL_CALLS:-200}
       AGENT_RUN_MAX_IDENTICAL_TOOL_CALLS: ${AGENT_RUN_MAX_IDENTICAL_TOOL_CALLS:-6}
@@ -405,7 +436,7 @@ services:
       - ./skills:/home/sandbox/skill:ro
       - agent_user_skills:/home/sandbox/skill-user
       - ./config/agent:/app/config/agent:ro
-    depends_on:
+    depends_on: !override
       mysql:
         condition: service_healthy
       agent-migrate:

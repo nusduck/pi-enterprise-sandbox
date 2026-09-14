@@ -110,12 +110,17 @@ export function createRemoteProviders(ctx: Context, config: ExecRpcConfig): {
 export function createSessionBackend(opts?: {
   physicalRoots?: readonly string[];
   requireMysql?: boolean;
+  /** DBPM 下发的口令。requireMysql 路径必填：连接串不带口令，也不回退到环境变量。 */
+  password?: string | undefined;
   ownerForSession?: (sessionId: string) => SessionStoreOwner;
   currentOwner?: () => SessionStoreOwner;
 }): PersistenceBackend<string> {
   const roots = opts?.physicalRoots ?? [];
   if (opts?.requireMysql === true) {
-    const cfg = readMysqlSessionStoreConfig();
+    if (opts.password === undefined) {
+      throw new Error('boot: session store requires the DBPM-issued MySQL password');
+    }
+    const cfg = { ...readMysqlSessionStoreConfig(), password: opts.password };
     return new MysqlSessionStore(cfg, {
       physicalRoots: roots,
       ownerForSession: opts.ownerForSession,
@@ -140,7 +145,7 @@ export function createSessionBackend(opts?: {
 /** Mount the one process-wide DSH persistence service; every session bind stays owner-scoped. */
 export function mountSessionPersistence(
   ctx: Context,
-  opts: { physicalRoots?: readonly string[]; requireMysql?: boolean } = {},
+  opts: { physicalRoots?: readonly string[]; requireMysql?: boolean; password?: string | undefined } = {},
 ): MysqlSessionPersistence {
   let existing: MysqlSessionPersistence | undefined;
   try {
@@ -167,6 +172,7 @@ export function mountSessionPersistence(
   const backend = createSessionBackend({
     physicalRoots: opts.physicalRoots,
     requireMysql: opts.requireMysql,
+    password: opts.password,
     ownerForSession: (sessionId) => bindings.ownerForSession(sessionId),
     currentOwner: () => bindings.currentOwner(),
   });

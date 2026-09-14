@@ -303,7 +303,7 @@ AgentVersion 侧（同一份语义，只能收紧）：
 
 ### 数据库操作
 
-开发/CI 基线为 **MySQL 5.7**（`AGENT_DATABASE_URL` / `SANDBOX_DATABASE_URL`），对齐 UPDRDB 的 UPSQL 内核；生产 overlay 目前仍是 MySQL 8。5.7 用独立数据卷 `mysql57_dev_data`，不要复用 8.0 的 `mysql_dev_data`（官方不支持降级，会启动崩溃）。启动时 persistence 在单事务中应用不可变 migration，并在 `schema_migrations` 记录 version/checksum。不升级或回填研发阶段的旧数据库；需要清空旧状态时遵循 [Development reset runbook](runbooks/development-reset.md)。
+开发/CI 基线为 **MySQL 5.7**（`AGENT_DATABASE_URL` / `SANDBOX_DATABASE_URL`），对齐 UPDRDB 的 UPSQL 内核；生产 overlay 目前仍是 MySQL 8。5.7 用独立数据卷 `mysql57_dev_data`，不要复用 8.0 的 `mysql_dev_data`（官方不支持降级，会启动崩溃）。应用 DSN **不带口令**：Agent / Worker / exec 启动时向 DBPM 取口令（ADR 0011 D10），开发 Compose 默认由 `dbpm-fake` 提供；宿主机直接起服务进程时同样要给 `DBPM_URL`（可 `node scripts/dev/fake-dbpm.mjs` 起本机假服务端）。迁移 CLI（`agent-migrate`）是例外，用 `AGENT_MIGRATE_DATABASE_URL` 的带口令 DSN。启动时 persistence 在单事务中应用不可变 migration，并在 `schema_migrations` 记录 version/checksum。不升级或回填研发阶段的旧数据库；需要清空旧状态时遵循 [Development reset runbook](runbooks/development-reset.md)。
 
 正式服务的事实状态在 Agent-owned MySQL 中。Sandbox 不再包含 SQLite
 `database`/repository 兼容层，也不拥有 Run/Conversation；调试 durable 状态
@@ -327,7 +327,7 @@ docker compose up -d mysql
 
 ### Redis 操作（Agent-only 协调）
 
-正式协调拓扑为 **Redis 7**（`redis:7.2`；`AGENT_REDIS_URL` / `REDIS_URL`；可选 `TEST_REDIS_URL`）。Agent 依赖 Redis health；BFF 不持有 Redis 权威配置。Sandbox 另起 **sandbox-replay-redis**（独立密码/volume，DB0）仅作 internal HMAC jti 防重放，**不得**复用 Agent Redis 凭据。
+正式协调拓扑为 **Redis 7**（`redis:7.2`；`AGENT_REDIS_URL` / `REDIS_URL`；可选 `TEST_REDIS_URL`）。Agent 依赖 Redis health；BFF 不持有 Redis 权威配置。`REDIS_PASSWORD` 只配置 Redis 服务端，Agent / sandbox-mcp 的连接口令由 DBPM 下发，URL 不带口令。Sandbox 另起 **sandbox-replay-redis**（独立密码/volume，DB0）仅作 internal HMAC jti 防重放，**不得**复用 Agent Redis 凭据。
 
 - 默认 AOF + `redis_dev_data` volume：容器重建后协调数据仍在。
 - **清空 Redis**（`FLUSHALL` 或删 volume）只丢失 queue/lease/stream 等运行态，**不**删除 MySQL 事实。
@@ -504,8 +504,9 @@ cd frontend && npm run build && ls dist/
 | 问题 | 解决方案 |
 |------|----------|
 | `port already in use` | 修改 `FRONTEND_PORT`、`API_PORT`、`AGENT_PORT`，或 `SANDBOX_MCP_HOST_PORT`（Sandbox 本身不映射宿主端口） |
-| MySQL 连接失败 / `Can't connect` | 确认 `mysql` 服务 healthy；检查 `AGENT_DATABASE_URL` / `SANDBOX_DATABASE_URL` 与 `MYSQL_*` 一致；勿在日志中打印完整 DSN |
-| Redis 连接失败 / `NOAUTH` | 确认 `redis` 服务 healthy 与 `REDIS_PASSWORD`；检查 `AGENT_REDIS_URL` / `REDIS_URL` 与密码一致；勿在日志中打印完整 URL |
+| MySQL 连接失败 / `Can't connect` | 确认 `mysql` 服务 healthy；检查 `AGENT_DATABASE_URL` / `SANDBOX_DATABASE_URL` 的用户名与 `MYSQL_USER` 一致（DSN 不带口令）；`ER_ACCESS_DENIED_ERROR` 多为 `dbpm-fake` 条目口令与 `MYSQL_PASSWORD` 不一致；勿在日志中打印完整 DSN |
+| Redis 连接失败 / `NOAUTH` | 确认 `redis` 服务 healthy；DBPM 下发的 Redis 口令须等于 `REDIS_PASSWORD`；URL 不带口令；勿在日志中打印完整 URL |
+| 启动报 `DBPM_URL is required` / `must not embed a password` / `DBPM credential fetch failed` | 取密护栏生效：配置 `DBPM_URL` 与条目名；去掉连接串里的口令（宿主 `.env` 里旧的带口令 `AGENT_DATABASE_URL` 不会经 Compose 进容器，但宿主机直接起进程会读到）；确认 `dbpm-fake` healthy |
 | `Connection refused` 访问 Sandbox | 先确认 liveness: `docker compose exec sandbox curl -fsS localhost:8081/health`，再确认 readiness: `docker compose exec sandbox curl -fsS localhost:8081/ready` |
 | `/ready` 返回 503 | 检查 `SANDBOX_WORKSPACES_ROOT` 可写与 MySQL（`SANDBOX_DATABASE_URL`）可达；日志仅有 warning，不含连接串 |
 | SSE 流中断 | 检查 API Server 和 Sandbox 日志；确认客户端 abort 后执行已取消 |

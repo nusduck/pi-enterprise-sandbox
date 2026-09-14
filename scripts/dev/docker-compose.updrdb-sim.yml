@@ -1,0 +1,74 @@
+# ── 本地模拟 UPDRDB 双 Proxy（仅开发）──────────────────────────────
+# 叠加在开发 compose 之上：
+#   docker compose -f docker-compose.yml -f scripts/dev/docker-compose.updrdb-sim.yml up -d
+#
+# 在 mysql 前面放两个字节转发容器，并把三个 MySQL 接入点（agent / agent-worker 的
+# Knex 与 DSH 会话存储、sandbox 的 exec 池）的 UPDRDB_ENDPOINTS 指向它们。
+# 演练故障切换：
+#   docker compose -f docker-compose.yml -f scripts/dev/docker-compose.updrdb-sim.yml stop updrdb-proxy-a
+# 演练 DBPM 主节点故障：FAKE_DBPM_FAIL_PORTS=7000 重建 dbpm-fake。
+#
+# 不用于生产：生产的两个 Proxy 由 UPDRDB 提供，本文件不进 prod overlay。
+
+x-updrdb-proxy: &updrdb-proxy
+  image: ${DBPM_FAKE_IMAGE:-node:22-slim}
+  user: node
+  command: ["node", "/opt/dev/tcp-proxy.mjs"]
+  environment:
+    DEPLOYMENT_ENV: ${DEPLOYMENT_ENV:-development}
+    TCP_PROXY_LISTEN: "3306"
+    TCP_PROXY_TARGET: mysql:3306
+  volumes:
+    - ./scripts/dev/tcp-proxy.mjs:/opt/dev/tcp-proxy.mjs:ro
+  read_only: true
+  cap_drop:
+    - ALL
+  security_opt:
+    - no-new-privileges:true
+  depends_on:
+    mysql:
+      condition: service_healthy
+  healthcheck:
+    test: ["CMD", "node", "-e", "require('net').connect(3306,'127.0.0.1').on('connect',()=>process.exit(0)).on('error',()=>process.exit(1))"]
+    interval: 5s
+    timeout: 3s
+    retries: 20
+  restart: "no"
+  networks:
+    - backend_internal
+
+services:
+  updrdb-proxy-a:
+    <<: *updrdb-proxy
+    container_name: pi-enterprise-updrdb-proxy-a
+
+  updrdb-proxy-b:
+    <<: *updrdb-proxy
+    container_name: pi-enterprise-updrdb-proxy-b
+
+  agent:
+    environment:
+      UPDRDB_ENDPOINTS: updrdb-proxy-a:3306,updrdb-proxy-b:3306
+    depends_on:
+      updrdb-proxy-a:
+        condition: service_healthy
+      updrdb-proxy-b:
+        condition: service_healthy
+
+  agent-worker:
+    environment:
+      UPDRDB_ENDPOINTS: updrdb-proxy-a:3306,updrdb-proxy-b:3306
+    depends_on:
+      updrdb-proxy-a:
+        condition: service_healthy
+      updrdb-proxy-b:
+        condition: service_healthy
+
+  sandbox:
+    environment:
+      UPDRDB_ENDPOINTS: updrdb-proxy-a:3306,updrdb-proxy-b:3306
+    depends_on:
+      updrdb-proxy-a:
+        condition: service_healthy
+      updrdb-proxy-b:
+        condition: service_healthy

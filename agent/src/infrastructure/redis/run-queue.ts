@@ -139,7 +139,7 @@ export function assertRunJobRef(payload: unknown) {
  * @param [options]
  * @returns {{ queue: import('bullmq').Queue, connection: import('ioredis').default, queueName: string }}
  */
-export function createRunQueue(connectionUrl: string, options: { queueName?: string, prefix?: string } = {}) {
+export function createRunQueue(connectionUrl: string, options: { queueName?: string, prefix?: string, password?: string } = {}) {
   assertRedisConnectionUrl(connectionUrl);
   assertBullmqInstalled();
   const { Queue } = loadBullmqModule();
@@ -148,6 +148,7 @@ export function createRunQueue(connectionUrl: string, options: { queueName?: str
   // (and on BullMQ duplicate() clones via GuardedRedis subclass).
   const connection = createBullMQConnection(connectionUrl, {
     connectionRole: 'bullmq-queue',
+    ...(options.password !== undefined ? { password: options.password } : {}),
   });
 
   const queueOpts: import('bullmq').QueueOptions = { connection };
@@ -251,7 +252,7 @@ export type RunJobProcessor = (ref: RunJobRef, job: import('bullmq').Job) => Pro
  * @param [options]
  * @returns {{ worker: import('bullmq').Worker, connection: import('ioredis').default, queueName: string }}
  */
-export function createRunWorker(connectionUrl: string, processor: RunJobProcessor, options: { queueName?: string, prefix?: string, concurrency?: number, lockDuration?: number, stalledInterval?: number, maxStalledCount?: number } = {}) {
+export function createRunWorker(connectionUrl: string, processor: RunJobProcessor, options: { queueName?: string, prefix?: string, password?: string, concurrency?: number, lockDuration?: number, stalledInterval?: number, maxStalledCount?: number } = {}) {
   assertRedisConnectionUrl(connectionUrl);
   assertBullmqInstalled();
   if (typeof processor !== 'function') {
@@ -262,6 +263,7 @@ export function createRunWorker(connectionUrl: string, processor: RunJobProcesso
   const queueName = options.queueName ?? AGENT_RUNS_QUEUE_NAME;
   const connection = createBullMQConnection(connectionUrl, {
     connectionRole: 'bullmq-worker',
+    ...(options.password !== undefined ? { password: options.password } : {}),
   });
 
   const workerOpts: import('bullmq').WorkerOptions = {

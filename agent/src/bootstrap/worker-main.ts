@@ -155,6 +155,10 @@ export async function startWorkerMain(
       async (ref) => workerRuntime.processJob(ref),
       {
         queueName: env.AGENT_RUNS_QUEUE_NAME || undefined,
+        // 容器启动时已向 DBPM 取到；消费者连接不从 URL 读口令。
+        ...(container.credentials?.redis !== undefined
+          ? { password: container.credentials.redis }
+          : {}),
         concurrency: Number(env.AGENT_WORKER_CONCURRENCY) || DEFAULT_AGENT_WORKER_CONCURRENCY,
         // Keep BullMQ defaults in production. These bounded knobs are useful
         // for isolated restart gates and controlled staging drills without

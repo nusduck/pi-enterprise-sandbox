@@ -172,13 +172,14 @@ Compose：`backend_internal`（`internal: true`）与 `service_egress`；Sandbox
 
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
-| `AGENT_DATABASE_URL` | `mysql://sandbox:…@mysql:3306/sandbox` | Agent 事实库 DSN（`mysql://` / `mysql2://`） |
-| `SANDBOX_DATABASE_URL` | `mysql+pymysql://sandbox:…@mysql:3306/sandbox` | Sandbox 持久化 DSN |
+| `AGENT_DATABASE_URL` | `mysql://sandbox@mysql:3306/sandbox`（不带口令） | Agent 事实库 DSN（`mysql://` / `mysql2://`）；口令经 DBPM 下发 |
+| `SANDBOX_DATABASE_URL` | `mysql+pymysql://sandbox@mysql:3306/sandbox`（不带口令） | Sandbox 持久化 DSN；口令经 DBPM 下发 |
+| `DBPM_URL` 等 | 开发指向 `dbpm-fake`；生产必填 | 启动取密，见 [deployment.md](docs/deployment.md#dbpm-取密adr-0011-d10)；连接串带口令拒绝启动 |
 | `SANDBOX_COMPOSE_DATABASE_URL` | 未设置（默认 MySQL compose DSN） | 仅开发 Compose 的显式 Sandbox DSN override；避免旧 `.env` 的 `SANDBOX_DATABASE_URL` 覆盖正式默认 |
 | `MYSQL_PASSWORD` | 开发占位；生产无默认 | 生产必填强 secret |
 | `MYSQL_ROOT_PASSWORD` | 开发占位；生产无默认 | 生产必填强 secret |
 
-**dev/prod 唯一正式拓扑为 MySQL 8**；生产配置校验拒绝 SQLite / PostgreSQL。凭据一律来自环境变量，勿硬编码真实密钥。研发清库见 [docs/runbooks/development-reset.md](docs/runbooks/development-reset.md)。
+**dev/prod 唯一正式拓扑为 MySQL**（开发/CI 5.7，生产 overlay 8）；生产配置校验拒绝 SQLite / PostgreSQL。应用口令只来自 DBPM（ADR 0011 D10）；`MYSQL_PASSWORD` 只配置数据库服务端与 `agent-migrate`，勿硬编码真实密钥。研发清库见 [docs/runbooks/development-reset.md](docs/runbooks/development-reset.md)。
 
 Compose 由一次性 `agent-migrate` 服务独占 Knex migration；`sandbox`、
 `agent`、`agent-worker` 只在 migration 成功退出后启动，长期进程自身不再执行 migration。
@@ -187,7 +188,7 @@ Compose 由一次性 `agent-migrate` 服务独占 Knex migration；`sandbox`、
 
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
-| `AGENT_REDIS_URL` / `REDIS_URL` | `redis://:…@redis:6379/0` | Agent 协调 DSN（仅 `redis://` / `rediss://`） |
+| `AGENT_REDIS_URL` / `REDIS_URL` | `redis://redis:6379/0`（不带口令） | Agent 协调 DSN（仅 `redis://` / `rediss://`）；口令经 DBPM 下发 |
 | `TEST_REDIS_URL` | _(可选)_ | 集成测试用 Redis DSN |
 | `REDIS_PASSWORD` | 开发占位；生产无默认 | 生产必填强 secret（fail-fast） |
 | `AGENT_RUNS_QUEUE_NAME` | `agent-runs` | BullMQ Run Queue 名 |

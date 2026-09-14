@@ -187,6 +187,8 @@ export function loadBullmqModule() {
 }
 
 export type RedisClientOptions = {
+  /** DBPM 下发的口令；覆盖 URL（URL 本身不应带口令）。 */
+  password?: string;
   lazyConnect?: boolean;
   maxRetriesPerRequest?: null | number;
   enableReadyCheck?: boolean;
@@ -259,6 +261,10 @@ export function createRedisClient(connectionUrl: string, options: RedisClientOpt
     enableOfflineQueue: options.enableOfflineQueue ?? true,
   };
 
+  if (options.password !== undefined) {
+    // 放进 options 而不是拼回 URL：duplicate() 复制的是 options，BullMQ 的克隆连接一样带上。
+    redisOptions.password = options.password;
+  }
   if (options.maxRetriesPerRequest !== undefined) {
     redisOptions.maxRetriesPerRequest = options.maxRetriesPerRequest;
   }

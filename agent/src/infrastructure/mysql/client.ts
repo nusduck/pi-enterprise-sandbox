@@ -155,6 +155,8 @@ export function createMysqlKnex(
   options: {
     pool?: { min?: number, max?: number },
     endpoints?: readonly Endpoint[] | undefined,
+    /** DBPM 下发的口令；给了就覆盖 DSN（DSN 本身不应带口令）。 */
+    password?: string | undefined,
     role?: string,
     /** 仅测试：替换 mysql2 驱动。 */
     driver?: RawMysqlDriver,
@@ -167,6 +169,7 @@ export function createMysqlKnex(
   return knex({
     client: createFailoverKnexClient({
       endpoints: options.endpoints,
+      password: options.password,
       role: options.role ?? 'agent-knex',
       driver: options.driver,
     }),

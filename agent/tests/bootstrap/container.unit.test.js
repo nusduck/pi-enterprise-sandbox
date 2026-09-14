@@ -16,6 +16,9 @@ import {
   assertWorkerSandboxServiceToken,
 } from '../../src/bootstrap/container.js';
 
+/** 单测不连 DBPM：注入空口令。取密本身的规则见 startup-credentials.unit.test.js。 */
+const NO_DBPM = async () => ({});
+
 describe('ServiceContainer', () => {
   it('constructs without connecting', () => {
     const c = createServiceContainer({
@@ -103,6 +106,7 @@ describe('ServiceContainer', () => {
       },
       {
         createMysqlKnex: () => knex,
+        resolveCredentials: NO_DBPM,
         destroyMysqlKnex: async () => {
           destroyed += 1;
         },
@@ -139,6 +143,7 @@ describe('ServiceContainer', () => {
         createRedisClient: () => redis,
         createRunQueue: () => ({ queue: { add: async () => ({}) } }),
         destroyMysqlKnex: async () => {},
+        resolveCredentials: NO_DBPM,
         destroyRedisClient: async () => {},
         destroyRunQueue: async () => {},
       },
@@ -147,6 +152,75 @@ describe('ServiceContainer', () => {
     assert.equal(creates, 1);
     assert.equal(c.started, true);
     assert.equal(c.isDataPlaneReady(), true);
+  });
+
+  it('start fetches DBPM credentials first and hands the passwords to every connection', async () => {
+    const seen = [];
+    const c = createServiceContainer(
+      {
+        AGENT_DATABASE_URL: 'mysql://agentap@h/db',
+        AGENT_REDIS_URL: 'redis://localhost:6379/0',
+      },
+      {
+        resolveCredentials: async (_env, need) => {
+          seen.push(['credentials', need]);
+          return { mysql: 'db-from-dbpm', redis: 'redis-from-dbpm' };
+        },
+        createMysqlKnex: (_url, opts) => {
+          seen.push(['knex', opts.password]);
+          return { raw: async () => [[{}]] };
+        },
+        createRedisClient: (_url, opts) => {
+          seen.push(['redis', opts?.password]);
+          return { status: 'ready' };
+        },
+        createRunQueue: (_url, opts) => {
+          seen.push(['queue', opts.password]);
+          return { queue: { add: async () => ({}) } };
+        },
+        destroyMysqlKnex: async () => {},
+        destroyRedisClient: async () => {},
+        destroyRunQueue: async () => {},
+      },
+    );
+    await c.start();
+    assert.deepEqual(seen, [
+      ['credentials', { mysql: true, redis: true }],
+      ['knex', 'db-from-dbpm'],
+      ['redis', 'redis-from-dbpm'],
+      ['queue', 'redis-from-dbpm'],
+    ]);
+    assert.equal(c.credentials.redis, 'redis-from-dbpm', 'worker 需要从容器拿 Redis 口令');
+  });
+
+  it('a credential failure aborts start before any connection is opened', async () => {
+    let connections = 0;
+    const c = createServiceContainer(
+      {
+        AGENT_DATABASE_URL: 'mysql://agentap@h/db',
+        AGENT_REDIS_URL: 'redis://localhost:6379/0',
+      },
+      {
+        resolveCredentials: async () => {
+          throw new Error('DBPM credential fetch failed for agent-updrdb: ALL_ENDPOINTS_FAILED (#1=CONNECT_FAILED, #2=CONNECT_FAILED)');
+        },
+        createMysqlKnex: () => {
+          connections += 1;
+          return { raw: async () => [[{}]] };
+        },
+        createRedisClient: () => {
+          connections += 1;
+          return { status: 'ready' };
+        },
+        createRunQueue: () => {
+          connections += 1;
+          return { queue: {} };
+        },
+      },
+    );
+    await assert.rejects(() => c.start(), /ALL_ENDPOINTS_FAILED/);
+    assert.equal(connections, 0);
+    assert.equal(c.started, false);
   });
 
   it('worker executor factory required in production', () => {
@@ -224,6 +298,7 @@ describe('ServiceContainer', () => {
         createRedisClient: () => redis,
         createRunQueue: () => ({ queue: { add: async () => ({}) } }),
         destroyMysqlKnex: async () => {},
+        resolveCredentials: NO_DBPM,
         destroyRedisClient: async () => {},
         destroyRunQueue: async () => {},
       },
@@ -293,6 +368,7 @@ describe('ServiceContainer', () => {
         createRedisClient: () => ({ status: 'ready' }),
         createRunQueue: () => ({ queue: { add: async () => ({}) } }),
         destroyMysqlKnex: async () => {},
+        resolveCredentials: NO_DBPM,
         destroyRedisClient: async () => {},
         destroyRunQueue: async () => {},
       },
@@ -325,6 +401,7 @@ describe('ServiceContainer', () => {
         createRedisClient: () => redis,
         createRunQueue: () => ({ queue: { add: async () => ({}) } }),
         destroyMysqlKnex: async () => {},
+        resolveCredentials: NO_DBPM,
         destroyRedisClient: async () => {},
         destroyRunQueue: async () => {},
       },
@@ -382,6 +459,7 @@ describe('ServiceContainer', () => {
         createRedisClient: () => redis,
         createRunQueue: () => ({ queue: { add: async () => ({}) } }),
         destroyMysqlKnex: async () => {},
+        resolveCredentials: NO_DBPM,
         destroyRedisClient: async () => {},
         destroyRunQueue: async () => {},
       },
@@ -453,6 +531,7 @@ describe('ServiceContainer', () => {
           createRedisClient: () => ({ status: 'ready' }),
           createRunQueue: () => ({ queue: { add: async () => ({}) } }),
           destroyMysqlKnex: async () => {},
+        resolveCredentials: NO_DBPM,
           destroyRedisClient: async () => {},
           destroyRunQueue: async () => {},
         },

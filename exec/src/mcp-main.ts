@@ -4,6 +4,8 @@
  * 为什么不合成一个：facade 是整个系统里唯一对外暴露的面，它只该持有走窄桥的
  * 那枚 token。跟执行面同进程意味着一次 RCE 就直接拿到内部面的全部能力。
  * 同一个镜像是为了少维护一份 Dockerfile——镜像相同，入口与凭据不同。
+ *
+ * Redis 口令启动时向 DBPM 取（只取服务 Redis 这一项），不从连接串读。
  */
 import { Redis } from 'ioredis';
 import { listenHono } from './http/node-listener.js';
@@ -12,17 +14,24 @@ import { ContextStore, type RedisLike } from './mcp/context-store.js';
 import { McpFacadeService } from './mcp/service.js';
 import { createMcpApp } from './mcp/server.js';
 import { loadMcpSettings } from './mcp/settings.js';
+import { resolveMcpRedisPassword } from './startup-credentials.js';
 
 const settings = loadMcpSettings();
 const port = Number.parseInt(process.env['SANDBOX_MCP_PORT'] ?? '8082', 10);
 
+let redisPassword: string | undefined;
 const contextStore = new ContextStore(settings, null, async () => {
+  if (redisPassword === undefined) {
+    throw new Error('sandbox-mcp Redis password was not fetched from DBPM');
+  }
   // `ioredis` 的接口比 `RedisLike` 宽；这里只用到窄接口里的那几个方法。
-  return new Redis(settings.redisUrl, { lazyConnect: false }) as unknown as RedisLike;
+  return new Redis(settings.redisUrl, { lazyConnect: false, password: redisPassword }) as unknown as RedisLike;
 });
 const service = new McpFacadeService(settings, contextStore, new SandboxBridgeClient(settings));
 
 async function main(): Promise<void> {
+  // 取密在 start() 之前：start() 可能立即建 Redis 连接。
+  redisPassword = await resolveMcpRedisPassword(process.env, settings.redisUrl);
   // `start()` 里 `validateRuntime` 会在四个必需密钥缺任何一个时抛——
   // fail-closed：宁可起不来，也不要带着空 token 起来。
   await service.start();
