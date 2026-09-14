@@ -179,10 +179,11 @@ Compose：`backend_internal`（`internal: true`）与 `service_egress`；Sandbox
 | `MYSQL_PASSWORD` | 开发占位；生产无默认 | 生产必填强 secret |
 | `MYSQL_ROOT_PASSWORD` | 开发占位；生产无默认 | 生产必填强 secret |
 
-**dev/prod 唯一正式拓扑为 MySQL**（开发/CI 5.7，生产 overlay 8）；生产配置校验拒绝 SQLite / PostgreSQL。应用口令只来自 DBPM（ADR 0011 D10）；`MYSQL_PASSWORD` 只配置数据库服务端与 `agent-migrate`，勿硬编码真实密钥。研发清库见 [docs/runbooks/development-reset.md](docs/runbooks/development-reset.md)。
+**dev/prod 唯一正式拓扑为 MySQL**（开发/CI 5.7，生产 overlay 8）；生产配置校验拒绝 SQLite / PostgreSQL。应用口令只来自 DBPM（ADR 0011 D10）；`MYSQL_PASSWORD` 只配置数据库服务端与 schema 工具，勿硬编码真实密钥。研发清库见 [docs/runbooks/development-reset.md](docs/runbooks/development-reset.md)。
 
-Compose 由一次性 `agent-migrate` 服务独占 Knex migration；`sandbox`、
-`agent`、`agent-worker` 只在 migration 成功退出后启动，长期进程自身不再执行 migration。
+**任何服务启动时都不迁移**（ADR 0011 D6）：开发先 `docker compose up -d mysql` 再
+`scripts/dev/schema-apply.sh` 导出发布包并逐段建表；生产由 DBA 执行发布包。`sandbox`、
+`agent`、`agent-worker` 启动时按随包 schema 清单只读核对，结构不一致即拒绝启动。
 
 ### Redis 7（Agent-only 运行态协调）
 

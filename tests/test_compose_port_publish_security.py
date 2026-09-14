@@ -30,7 +30,6 @@ CANONICAL_SKILL_VOLUME = {
 # Services that must never publish host ports after base+prod merge.
 INTERNAL_NO_HOST_PORTS = (
     "mysql",
-    "agent-migrate",
     "redis",
     "frontend",
     "api-server",
@@ -65,22 +64,25 @@ COMPOSE_CONFIG_GATE = (
 
 
 def _valid_rendered_prod_config() -> dict:
-    migration_dependency = {"condition": "service_completed_successfully"}
+    # No migration service (ADR 0011 D6); password-free URLs + real DBPM (D10).
+    healthy = {"condition": "service_healthy"}
+    dbpm = "dbpm-a.example.internal:7000,dbpm-b.example.internal:7000"
+    agent_environment = {
+        "AGENT_DATABASE_URL": "mysql://sandbox@mysql:3306/sandbox",
+        "AGENT_REDIS_URL": "redis://redis:6379/0",
+        "REDIS_URL": "redis://redis:6379/0",
+        "DBPM_URL": dbpm,
+        "SKILLS_ROOT": "/home/sandbox/skill",
+    }
     return {
         "services": {
             "nginx": {"ports": [{"target": 80}, {"target": 443}]},
             "mysql": {},
-            "agent-migrate": {
-                "depends_on": {"mysql": {"condition": "service_healthy"}},
-                "networks": {"backend_internal": None},
-                "restart": "no",
-            },
             "sandbox": {
-                "depends_on": {"agent-migrate": migration_dependency},
+                "depends_on": {"mysql": healthy},
                 "environment": {
-                    "SANDBOX_DATABASE_URL": (
-                        "mysql+pymysql://sandbox:example@mysql:3306/sandbox"
-                    ),
+                    "SANDBOX_DATABASE_URL": "mysql+pymysql://sandbox@mysql:3306/sandbox",
+                    "DBPM_URL": dbpm,
                     "SANDBOX_INTERNAL_PLANE_ENABLED": "true",
                     "SANDBOX_INTERNAL_REDIS_URL": (
                         "redis://:example@sandbox-replay-redis:6379/0"
@@ -89,20 +91,20 @@ def _valid_rendered_prod_config() -> dict:
                 },
                 "volumes": [dict(CANONICAL_SKILL_VOLUME)],
             },
-            "agent": {
-                "depends_on": {"agent-migrate": migration_dependency},
+            "sandbox-mcp": {
                 "environment": {
-                    "AGENT_MIGRATE_ON_START": "false",
-                    "SKILLS_ROOT": "/home/sandbox/skill",
+                    "SANDBOX_MCP_REDIS_URL": "redis://redis:6379/0",
+                    "DBPM_URL": dbpm,
                 },
+            },
+            "agent": {
+                "depends_on": {"mysql": healthy},
+                "environment": dict(agent_environment),
                 "volumes": [dict(CANONICAL_SKILL_VOLUME)],
             },
             "agent-worker": {
-                "depends_on": {"agent-migrate": migration_dependency},
-                "environment": {
-                    "AGENT_MIGRATE_ON_START": "false",
-                    "SKILLS_ROOT": "/home/sandbox/skill",
-                },
+                "depends_on": {"mysql": healthy},
+                "environment": dict(agent_environment),
                 "volumes": [dict(CANONICAL_SKILL_VOLUME)],
             },
         }
@@ -381,12 +383,45 @@ class TestRenderedProductionConfigVerifier:
         with pytest.raises(SystemExit, match="unexpected services"):
             verify_rendered_prod_config(config)
 
-    def test_rejects_migration_dependency_cycle(self):
+    def test_rejects_a_reintroduced_migration_service(self):
         config = _valid_rendered_prod_config()
-        config["services"]["agent-migrate"]["depends_on"]["sandbox"] = {
-            "condition": "service_started"
-        }
-        with pytest.raises(SystemExit, match="depend only on mysql"):
+        config["services"]["agent-migrate"] = {"depends_on": {"mysql": {}}}
+        with pytest.raises(SystemExit, match="agent-migrate must not exist"):
+            verify_rendered_prod_config(config)
+
+    def test_rejects_a_runtime_migration_switch(self):
+        config = _valid_rendered_prod_config()
+        config["services"]["agent"]["environment"]["AGENT_MIGRATE_ON_START"] = "false"
+        with pytest.raises(SystemExit, match="runtime migration switch"):
+            verify_rendered_prod_config(config)
+
+    def test_rejects_the_dev_credential_stub(self):
+        config = _valid_rendered_prod_config()
+        config["services"]["dbpm-fake"] = {}
+        with pytest.raises(SystemExit, match="dbpm-fake"):
+            verify_rendered_prod_config(config)
+
+    @pytest.mark.parametrize("dbpm_url", ["", "dbpm-fake:7000,dbpm-fake:7001"])
+    def test_rejects_missing_or_stub_dbpm_url(self, dbpm_url):
+        config = _valid_rendered_prod_config()
+        config["services"]["sandbox-mcp"]["environment"]["DBPM_URL"] = dbpm_url
+        with pytest.raises(SystemExit, match="real DBPM_URL"):
+            verify_rendered_prod_config(config)
+
+    @pytest.mark.parametrize(
+        ("service", "key"),
+        [
+            ("agent", "AGENT_DATABASE_URL"),
+            ("agent-worker", "AGENT_REDIS_URL"),
+            ("sandbox", "SANDBOX_DATABASE_URL"),
+            ("sandbox-mcp", "SANDBOX_MCP_REDIS_URL"),
+        ],
+    )
+    def test_rejects_password_in_application_urls(self, service, key):
+        config = _valid_rendered_prod_config()
+        scheme = "redis://:secret@redis:6379/0" if "REDIS" in key else "mysql://sandbox:secret@mysql:3306/sandbox"
+        config["services"][service]["environment"][key] = scheme
+        with pytest.raises(SystemExit, match="must not embed a password"):
             verify_rendered_prod_config(config)
 
     @pytest.mark.parametrize(

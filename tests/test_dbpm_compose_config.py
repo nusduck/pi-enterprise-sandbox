@@ -89,12 +89,13 @@ def test_dev_fake_dbpm_is_internal_only_and_hardened() -> None:
     assert "./scripts/dev/fake-dbpm.mjs:/opt/fake-dbpm/fake-dbpm.mjs:ro" in block
 
 
-def test_migration_cli_keeps_its_own_dba_dsn_out_of_app_containers() -> None:
-    text = COMPOSE.read_text()
-    migrate = _service_block(text, "agent-migrate")
-    assert "AGENT_DATABASE_URL: ${AGENT_MIGRATE_DATABASE_URL:-" in migrate
-    for service in ("agent", "agent-worker"):
-        assert "AGENT_MIGRATE_DATABASE_URL" not in _service_block(text, service)
+def test_no_service_migrates_on_startup() -> None:
+    # ADR 0011 D6：开发与生产都不再有自动迁移服务或启动迁移开关；schema 由发布包执行。
+    for compose in (COMPOSE, COMPOSE_PROD):
+        text = compose.read_text()
+        assert re.search(r"^\s+agent-migrate:\s*$", text, re.M) is None, compose.name
+        assert "AGENT_MIGRATE_ON_START" not in text, compose.name
+        assert "AGENT_MIGRATE_DATABASE_URL" not in text, compose.name
 
 
 def test_prod_requires_real_dbpm_and_disables_the_stub() -> None:

@@ -38,6 +38,7 @@
 ### 2026-09-14 实施细化（D2）
 
 - D5：已实施（`2fefd531`）。选择器粘主/拉黑/不回切，只在建连阶段切换；Knex 走按实例覆写的 `acquireRawConnection()`，而非本文原写的函数式 `connection`。
+- D6：已实施。`agent-migrate` 在开发与生产 Compose 中都已删除（用户决定开发也不自动迁移）；`migrate:sql` / `migrate:verify` 落为 `schema:sql` / `schema:replay` / `schema:verify` / `schema:manifest`。启动核对接进 Agent HTTP、Worker 与 exec 三个进程，而不止 Agent；依据是提交进仓库、由真实迁移生成的 `contract/schema/schema-manifest.json`，不是 `schema-tables.ts`。`migrate-trigger-preflight` 保留在迁移工具链里（DBA 建触发器同样受 binlog 参数约束），并未因本决策消失。
 - D10：「共取 3 组凭据」修正为 **2 组**（UPDRDB、服务 Redis）。replay Redis 已无代码消费方，不为其取密。其余不变：只在启动取一次、应用内取密、无环境变量口令回退、开发用真协议假服务端；四个取密进程在连接串夹口令时拒绝启动。`dbpm_egress` 窄网络暂未新增，开发 `dbpm-fake` 只挂 `backend_internal`。
 
 ---

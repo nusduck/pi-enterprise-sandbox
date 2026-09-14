@@ -78,32 +78,10 @@ services:
       # loopback-bound development access; production removes it per service.
       - dev_ingress
 
-  # ── Agent schema migration — one-shot owner ─────────────────
-  # Empty-database startup must complete Agent Knex migrations before Sandbox
-  # probes the formal schema or long-running Agent processes open DB pools.
-  agent-migrate:
-    build:
-      context: .
-      dockerfile: agent/Dockerfile
-    image: ${AGENT_IMAGE:-pi-enterprise-agent:latest}
-    container_name: ${AGENT_MIGRATE_CONTAINER:-pi-enterprise-agent-migrate}
-    env_file:
-      - ${API_ENV_FILE:-.env}
-    environment:
-      DEPLOYMENT_ENV: ${DEPLOYMENT_ENV:-development}
-      # This one-shot Node service owns only the Agent schema; never inherit
-      # a stale Sandbox DSN from env_file.
-      SANDBOX_DATABASE_URL: ""
-      # 迁移 CLI 是开发/DBA 工具，需要 DDL 权限，仍用带口令的 DSN；它不是应用服务，
-      # 不走 DBPM。与应用的 AGENT_DATABASE_URL 分开取值，避免把口令带进应用容器。
-      AGENT_DATABASE_URL: ${AGENT_MIGRATE_DATABASE_URL:-mysql://sandbox:sandbox_dev_only@mysql:3306/sandbox}
-    depends_on:
-      mysql:
-        condition: service_healthy
-    restart: "no"
-    command: ["node", "dist/src/infrastructure/mysql/cli-migrate.js", "latest"]
-    networks:
-      - backend_internal
+  # ── Schema：任何服务启动时都不迁移（ADR 0011 D6）─────────────────
+  # 开发与生产一致：先导出发布包并逐段执行（开发：scripts/dev/schema-apply.sh；
+  # 生产：DBA 按发布包执行），agent / agent-worker / sandbox 启动时只按随包清单
+  # 只读核对，结构不对即拒绝启动。空库上直接 up 会让它们重启等待，直到 schema 就绪。
 
   # ── Redis 7 (Agent-only runtime coordination) ─────────────
   # Holds queues, leases, streams, cancel signals, short-lived
@@ -339,8 +317,6 @@ services:
       AGENT_DATABASE_URL: ${AGENT_COMPOSE_DATABASE_URL:-mysql://sandbox@mysql:3306/sandbox}
       # UPDRDB 两个 Proxy（host:port,host:port）。空 = 使用 DSN 单端点。
       UPDRDB_ENDPOINTS: ${UPDRDB_ENDPOINTS:-}
-      # Compose migration ownership belongs exclusively to agent-migrate.
-      AGENT_MIGRATE_ON_START: "false"
       # Agent Redis coordination (redis:// | rediss:// only). Agent-only authority.
       # REDIS_URL is the plan/generic alias; AGENT_REDIS_URL is the Agent client name.
       REDIS_URL: ${AGENT_COMPOSE_REDIS_URL:-redis://redis:6379/0}
@@ -408,8 +384,6 @@ services:
         condition: service_healthy
       mysql:
         condition: service_healthy
-      agent-migrate:
-        condition: service_completed_successfully
       redis:
         condition: service_healthy
       dbpm-fake:
@@ -453,7 +427,6 @@ services:
       # 与 agent 相同：连接串不带口令，口令启动时向 DBPM 取。
       AGENT_DATABASE_URL: ${AGENT_COMPOSE_DATABASE_URL:-mysql://sandbox@mysql:3306/sandbox}
       UPDRDB_ENDPOINTS: ${UPDRDB_ENDPOINTS:-}
-      AGENT_MIGRATE_ON_START: "false"
       REDIS_URL: ${AGENT_COMPOSE_REDIS_URL:-redis://redis:6379/0}
       AGENT_REDIS_URL: ${AGENT_COMPOSE_REDIS_URL:-redis://redis:6379/0}
       DBPM_URL: ${DBPM_URL:-dbpm-fake:7000,dbpm-fake:7001}
@@ -520,8 +493,6 @@ services:
     depends_on:
       mysql:
         condition: service_healthy
-      agent-migrate:
-        condition: service_completed_successfully
       redis:
         condition: service_healthy
       agent:
@@ -662,8 +633,6 @@ services:
     depends_on:
       mysql:
         condition: service_healthy
-      agent-migrate:
-        condition: service_completed_successfully
       # Independent replay Redis (not Agent redis / REDIS_PASSWORD).
       sandbox-replay-redis:
         condition: service_healthy

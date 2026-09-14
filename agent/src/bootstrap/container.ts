@@ -74,6 +74,8 @@ export interface ServiceContainerOptions {
     env: NodeJS.ProcessEnv | Record<string, string | undefined>,
     need: { mysql: boolean; redis: boolean },
   ) => Promise<{ mysql?: string | undefined; redis?: string | undefined }>;
+  /** 启动时的 schema 核对。生产读随包清单；测试注入空实现。 */
+  readonly verifySchema?: (knex: Loose, opts: { role: string }) => Promise<void>;
 }
 
 export class ServiceContainer {
@@ -179,7 +181,7 @@ export class ServiceContainer {
 
   /**
    * @param {{
-   *   migrate?: boolean,
+   *   role?: string,
    *   connectMysql?: boolean,
    *   connectRedis?: boolean,
    * }} opts
@@ -222,13 +224,10 @@ export class ServiceContainer {
         password: this.credentials.mysql,
       });
       await this.knex.raw('SELECT 1');
-
-      if (opts.migrate === true) {
-        const { migrateLatest } = await import(
-          '../infrastructure/mysql/migrate.js'
-        );
-        await migrateLatest(this.knex);
-      }
+      // 服务进程从不执行 DDL（ADR 0011 D6）：按随包清单只读核对，不一致在消费/服务前拒启。
+      const verifySchema = this._opts.verifySchema ||
+        (await import('../infrastructure/mysql/schema-verify.js')).assertSchemaMatchesManifest;
+      await verifySchema(this.knex, { role: opts.role || 'agent' });
     }
 
     if (connectRedis) {

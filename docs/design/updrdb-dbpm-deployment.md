@@ -245,6 +245,12 @@ schema manifest 覆盖实际 migrations 的全部表，包括后续 DSH/exec/cro
 
 验收故意保留完整版本记录、分别移除后续表/列/唯一键/触发器，三个进程应在相关能力启用前拒绝；再恢复正确 schema，证明合法写入成功、append-only 非法写入被拒。
 
+> **2026-09-14 实施细化（D3）**：用户决定开发 Compose 也去掉自动迁移，与生产同一流程（`scripts/dev/schema-apply.sh`）。
+> - 清单 `contract/schema/schema-manifest.json` **提交进仓库**，作为随镜像分发、运行时核对的规范文件；它仍由 `schema:manifest` 从空影子库真实迁移生成，不手写，并由 `schema-manifest.integration` 测试防漂移（改迁移不重新生成即红）。这修正了上文「生成物不提交」的表述：发布包 SQL 是构建产物不提交，清单是规范要提交。
+> - 核对器的比较规则放在 contract（纯函数），Agent（Knex）与 exec（mysql2）各自执行元数据查询。只抹平已实测的 5.7 / 8.0 表示差异：整数显示宽度、`DEFAULT_GENERATED`、外键 `NO ACTION`≡`RESTRICT`；触发器不比 definer / sql_mode。Knex 记账表 `knex_migrations(_lock)` 只核对存在——其列定义随 `explicit_defaults_for_timestamp` 变化，迁移是否齐全由迁移记录逐条核对。
+> - 导出器实测 Knex 事件形状后按迁移分段：丢弃 `knex_migrations*`、`information_schema` 探测与 `BEGIN/COMMIT`；首装单列 `0000` 记账段；增量用 `--from`。当前迁移中只有 `auth_credentials` 的 `hasTable` 按状态分支，导出结果仅适用于首装或声明的基线。
+> - 元数据可见性：本地应用账号（库级 ALL）能读四个触发器正文；生产最小权限下是否可见仍需 DBA 确认，读不到按缺失处理（拒启），不是放行。
+
 ## 7. DBPM 取密与配置契约
 
 取密顺序：校验配置 → 按角色取所需凭据 → 创建/验证连接 → schema/文件/隔离预检 → 就绪。配置中的 DB/Redis URL 不带密码；不写 process.env，不落盘、不打印 DBPM 响应或拼出的 DSN。应用无环境变量密码回退路径。

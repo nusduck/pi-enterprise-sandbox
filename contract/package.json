@@ -12,6 +12,8 @@
     "./endpoint-failover.js": "./dist/endpoint-failover.js",
     "./dbpm.js": "./dist/dbpm.js",
     "./dbpm-config.js": "./dist/dbpm-config.js",
+    "./schema-manifest.js": "./dist/schema-manifest.js",
+    "./schema/schema-manifest.json": "./schema/schema-manifest.json",
     "./errors": "./dist/errors.js",
     "./envelope": "./dist/envelope.js",
     "./hmac": "./dist/hmac.js",

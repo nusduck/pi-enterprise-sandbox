@@ -274,21 +274,33 @@ builds must be performed in CI or an internal mirror with access to the
 configured Debian, PyPI, and npm registries; deployed containers do not need
 those registries for the bundled Skills themselves.
 
-**Compose migration order:** `agent-migrate` is the only migration owner. It
-waits for MySQL health, runs `migrate:latest` once, and exits. `sandbox`,
-`agent`, and `agent-worker` all require
-`service_completed_successfully`; the long-running Agent processes force
-`AGENT_MIGRATE_ON_START=false`, so they cannot race the one-shot job. A failed
-migration intentionally blocks the data plane. Inspect with
-`docker compose logs agent-migrate`, correct the schema/configuration issue,
-then rerun `docker compose up agent-migrate` (or the full `up` command).
+**Schema 发布（ADR 0011 D6）：任何服务启动时都不迁移，开发与生产同一流程。**
+Knex migrations 仍是唯一 schema 权威，但生产账号没有 DDL 权限，建表改为执行导出的发布包：
+
+1. 在**空的专用影子库**上导出：`SCHEMA_SHADOW_DATABASE_URL=… npm run schema:sql --prefix agent -- --out DIR`
+   （增量加 `--from <已上线的最后一个迁移>`）。发布包包含 `0000_knex_bookkeeping.sql`（仅首装）、
+   按迁移分段的 `NNNN_<migration>.sql`、`schema-manifest.json` 与 `release.json`（起止迁移、迁移文件
+   与每段 SQL 的 sha256、执行说明）。导出时影子库结构必须与随包清单一致，否则拒绝产出。
+2. 交付前在第二个空库/基线库重放核对：`SCHEMA_REPLAY_DATABASE_URL=… npm run schema:replay --prefix agent -- --dir DIR`。
+3. DBA 用 mysql 客户端**按顺序逐段**执行，首个错误即停，禁止 `--force`；每段最后一句才写
+   `knex_migrations`，失败段不会被记成已完成。失败处理见
+   [部分迁移恢复 runbook](runbooks/mysql-partial-migration-recovery.md)。
+4. 执行后只读核对：`SCHEMA_VERIFY_DATABASE_URL=… npm run schema:verify --prefix agent`。
+
+`agent`、`agent-worker`、`sandbox` 启动时都会按随镜像分发的 `contract/schema/schema-manifest.json`
+核对真实元数据（表、列类型/可空/默认值、索引、外键动作、四个 append-only 触发器正文、迁移记录），
+任何差异都以 `SCHEMA_DRIFT` 拒绝启动——Agent 在连 Redis 之前，Worker 在消费任务之前，exec 在孤儿回收之前。
+应用账号必须能读 `information_schema` 中这些对象（含 `TRIGGERS`）；读不到按「缺失」处理，不视为无差异，
+生产最小权限需要 DBA 确认。开发环境：`docker compose up -d mysql` 后执行 `scripts/dev/schema-apply.sh`；
+空库上直接 `up` 时三个服务会重启等待，建表完成后自动通过核对。备份恢复（`scripts/restore.sh`）同样只做核对，不迁移。
 
 **Triggers / binary log (migration gate):** Agent migrations issue `CREATE TRIGGER`
 as the non-SUPER application user. Compose-managed `mysql` services set
 `--log-bin-trust-function-creators=1` (dev + prod overlay). Do **not** grant
 `SUPER` to `MYSQL_USER`. If `AGENT_DATABASE_URL` points at **external/managed**
-MySQL, operators must enable the equivalent platform flag before first migrate;
-the Agent fail-closes with `MYSQL_TRIGGER_BINLOG_BLOCKED` and will **not**
+MySQL, operators must enable the equivalent platform flag before applying the
+schema release (the DBA account creates the triggers); migration tooling
+fail-closes with `MYSQL_TRIGGER_BINLOG_BLOCKED` and will **not**
 `SET GLOBAL` on remote hosts. See
 [mysql-partial-migration-recovery.md § Triggers and binary logging](runbooks/mysql-partial-migration-recovery.md#triggers-and-binary-logging).
 
@@ -314,12 +326,12 @@ replay Redis（`SANDBOX_INTERNAL_REDIS_URL`）目前没有代码消费方，不�
 | `DBPM_DB_NAME` / `DBPM_DB_USER_NAME` | 开发：`sandbox` / `MYSQL_USER` | UPDRDB 条目；用户名必须与 DSN 用户名一致 |
 | `DBPM_REDIS_DB_NAME` / `DBPM_REDIS_DB_USER_NAME` | 开发：`redis` / `default` | 服务 Redis 条目 |
 | `AGENT_COMPOSE_DATABASE_URL` / `AGENT_COMPOSE_REDIS_URL` / `SANDBOX_MCP_COMPOSE_REDIS_URL` | 无口令的 compose 内默认 | 仅开发 Compose 插值用；宿主 `.env` 里旧的带口令 `AGENT_DATABASE_URL` 等不会被带进容器 |
-| `AGENT_MIGRATE_DATABASE_URL` | 带开发占位口令的 DSN | 仅 `agent-migrate`（开发/DBA 迁移工具，需要 DDL 权限），不走 DBPM，不进应用容器 |
+| `SCHEMA_SHADOW_DATABASE_URL` / `SCHEMA_REPLAY_DATABASE_URL` / `SCHEMA_VERIFY_DATABASE_URL` | 未设置 | 仅 schema 工具（开发/DBA）：带口令的完整 DSN，口令也可用对应 `SCHEMA_*_PASSWORD` 单独传入；不走 DBPM，不进应用容器 |
 | `FAKE_DBPM_FAIL_PORTS` | 未设置 | 仅开发：让假 DBPM 的某个端口返回错误，演练主备切换 |
 
 **开发:** `docker compose up` 启动 `dbpm-fake`（`scripts/dev/fake-dbpm.mjs`，真协议假服务端，只挂 `backend_internal`、不发布端口），口令即 `MYSQL_PASSWORD` / `REDIS_PASSWORD` 的开发占位值；应用服务等它 healthy 后启动。宿主机直接起服务进程时，同样需要一个 DBPM 地址（可 `node scripts/dev/fake-dbpm.mjs` 起本机假服务端）。
 
-**生产:** `docker-compose.prod.yml` 把 `dbpm-fake` 放进永不启用的 profile（并强制 production，脚本会拒绝运行），四个应用服务的 `depends_on` 用 `!override` 去掉它；`DBPM_URL`、`DBPM_DB_NAME`、`DBPM_REDIS_DB_NAME`、`DBPM_REDIS_DB_USER_NAME` 必填（`:?`，无默认）。`MYSQL_PASSWORD` / `REDIS_PASSWORD` 只用于数据库 / Redis 服务端自身与 `agent-migrate`。口令变更需要重启取密进程；没有双口令重叠窗口时安排维护窗口。
+**生产:** `docker-compose.prod.yml` 把 `dbpm-fake` 放进永不启用的 profile（并强制 production，脚本会拒绝运行），四个应用服务的 `depends_on` 用 `!override` 去掉它；`DBPM_URL`、`DBPM_DB_NAME`、`DBPM_REDIS_DB_NAME`、`DBPM_REDIS_DB_USER_NAME` 必填（`:?`，无默认）。`MYSQL_PASSWORD` / `REDIS_PASSWORD` 只用于数据库 / Redis 服务端自身。口令变更需要重启取密进程；没有双口令重叠窗口时安排维护窗口。
 
 ### Redis 7（Agent-only 运行态协调）
 

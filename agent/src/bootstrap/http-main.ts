@@ -179,10 +179,11 @@ export async function startHttpMain(env: NodeJS.ProcessEnv = process.env) {
   > | null = null;
 
   if (requireDataPlane) {
+    // 不再支持启动时自动迁移：schema 由 DBA 按发布包执行，这里只做只读核对。
     await container.start({
+      role: 'agent-http',
       connectMysql: true,
       connectRedis: true,
-      migrate: env.AGENT_MIGRATE_ON_START === 'true',
     });
     httpServices = await container.createHttpServices();
   } else {

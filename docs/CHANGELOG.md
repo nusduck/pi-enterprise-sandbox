@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **破坏性：任何服务启动时都不再迁移，schema 改为执行导出的发布包 + 启动只读核对**：
+  开发与生产 Compose 都删除了 `agent-migrate` 服务与 `AGENT_MIGRATE_ON_START`。新增
+  `npm run schema:sql|schema:replay|schema:verify|schema:manifest --prefix agent`：在空影子库上
+  跑 Knex migrations，导出按迁移分段的 SQL 发布包（每段最后一句才写 `knex_migrations`，首个错误即停），
+  可在另一个库重放核对。`contract/schema/schema-manifest.json` 是从真实迁移生成的 schema 清单
+  （表/列/索引/外键/四个 append-only 触发器/迁移记录），agent、agent-worker、sandbox 启动时按它核对，
+  任何差异以 `SCHEMA_DRIFT` 拒绝启动（Agent 在连 Redis 前、Worker 在消费前、exec 在孤儿回收前）。
+  开发空库先 `docker compose up -d mysql` 再 `scripts/dev/schema-apply.sh`；改了迁移要重新生成清单。
+  `scripts/restore.sh` 恢复后只核对不迁移；生产配置校验改为拒绝重新出现迁移服务。见
+  [统一 design](design/updrdb-dbpm-deployment.md) §6。
 - **破坏性：应用口令只从 DBPM 取，连接串带口令会拒绝启动**：agent、agent-worker、
   sandbox（exec）、sandbox-mcp 启动时各自向 DBPM 取所需口令（UPDRDB / 服务 Redis），
   只取一次、只放内存。`AGENT_DATABASE_URL`、`AGENT_REDIS_URL`、`SANDBOX_DATABASE_URL`、

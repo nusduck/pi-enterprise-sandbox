@@ -40,4 +40,6 @@ def test_restore_is_guarded_and_targets_mysql() -> None:
     assert "exec mysql" in source
     assert "sqlite" not in source
     assert "postgres" not in source
-    assert "agent-migrate" in source
+    # ADR 0011 D6: restore verifies the schema read-only; it never migrates.
+    assert "agent-migrate" not in source
+    assert "cli-schema.js verify" in source

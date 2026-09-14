@@ -477,6 +477,40 @@ describe('startup orphan recovery is wired, not just defined', () => {
     }
   });
 
+  test('schema verification is a no-op in development memory mode', async () => {
+    const runtime = createExecAppFromEnv({
+      DEPLOYMENT_ENV: 'development',
+      SANDBOX_INTERNAL_HMAC_KEYRING: KEYRING_JSON,
+      SANDBOX_INTERNAL_HMAC_ACTIVE_KID: TEST_KID,
+      SANDBOX_API_TOKEN: TEST_API_TOKEN,
+      SANDBOX_WORKSPACES_ROOT: join(tmpdir(), 'exec-schema-mem-ws'),
+      SANDBOX_TEMP_ROOT: join(tmpdir(), 'exec-schema-mem-tmp'),
+    } as NodeJS.ProcessEnv);
+    try {
+      await runtime.verifySchema();
+    } finally {
+      await runtime.dispose();
+    }
+  });
+
+  test('schema verification against a configured database fails closed when it cannot read metadata', async () => {
+    // 连不上 = 证明不了 schema 正确，main.ts 据此在孤儿回收之前退出。
+    const runtime = createExecAppFromEnv({
+      DEPLOYMENT_ENV: 'development',
+      SANDBOX_INTERNAL_HMAC_KEYRING: KEYRING_JSON,
+      SANDBOX_INTERNAL_HMAC_ACTIVE_KID: TEST_KID,
+      SANDBOX_API_TOKEN: TEST_API_TOKEN,
+      SANDBOX_WORKSPACES_ROOT: join(tmpdir(), 'exec-schema-db-ws'),
+      SANDBOX_TEMP_ROOT: join(tmpdir(), 'exec-schema-db-tmp'),
+      EXEC_DATABASE_URL: 'mysql://exec@127.0.0.1:1/execdb',
+    } as NodeJS.ProcessEnv, { dbPassword: 'secret' });
+    try {
+      await assert.rejects(() => runtime.verifySchema());
+    } finally {
+      await runtime.dispose();
+    }
+  });
+
   test('recovery failure propagates so the entrypoint can refuse to start', async () => {
     // 库连不上时 recoverOrphans 必须抛，main.ts 才有机会 fail-closed 退出。
     const runtime = createExecAppFromEnv({

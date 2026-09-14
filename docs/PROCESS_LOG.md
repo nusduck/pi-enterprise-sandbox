@@ -668,3 +668,22 @@ Each entry should say **what changed**, **why**, and **which STATUS IDs** it aff
   并完成主 Proxy 故障、主 DBPM 故障、双 DBPM 故障拒启、连接串带口令拒启四项演练，日志口令出现 0 次。
   live 集成改用独立库 `pi_d2c_it`（agent 27、exec 29 全绿）。两个 release-gate 未实跑。详见
   [证据](evidence/d2c-dbpm-credentials-2026-09-14.md)。
+
+## 2026-09-14 — D3：手工 DDL 发布包、三进程启动 schema 核对、删除自动迁移
+
+- **范围：** [统一 design](design/updrdb-dbpm-deployment.md) §6 / ADR 0011 D6；分支 `refactor/updrdb-dbpm`，基线
+  `0392d0e3`。改动落在 `contract/`（schema 清单与比对）、`agent/`（schema 导出/重放/核对 CLI、容器启动核对、
+  去掉启动迁移）、`exec/`（启动核对先于孤儿回收）、两份 Compose、恢复脚本、生产配置校验、卫生测试与文档。
+- **Decision：** 用户决定开发 Compose 也去掉自动迁移，与生产同一流程。schema 清单
+  `contract/schema/schema-manifest.json` 作为规范提交进仓库（由真实迁移生成、有防漂移测试），发布包 SQL 不提交。
+  归一化只抹平实测的 5.7 / 8.0 表示差异；Knex 记账表只核对存在。
+- **Action：** 新增 `schema:manifest|sql|replay|verify`、`scripts/dev/schema-apply.sh`；agent / agent-worker / sandbox
+  启动时按清单核对，差异即 `SCHEMA_DRIFT` 拒启；删除 `agent-migrate` 与 `AGENT_MIGRATE_ON_START`；`restore.sh`
+  改为只读核对；生产配置校验改为拒绝迁移服务回归并校验 DBPM 与无口令连接串。
+- **STATUS IDs：** 不改变任何 STATUS 行（关联 B1/B4；目标 UPDRDB 上的 DBA 执行与元数据权限验收未做）。
+- **验证：** 六套测试、四包类型检查、前端 build、开发 / 模拟 / 生产 Compose 渲染与生产配置校验通过；agent 3 例、
+  api-server 2 例 cancelled 同前，未记为通过。清单在 MySQL 8.0 临时库与 5.7 运行库上均零差异。live 集成
+  agent 37、exec 31 全绿（含首装/增量重放零差异、中途失败不记账、缺触发器/列/索引/未知表/迁移记录被报出）。
+  Docker 演练：空库三进程拒启 → `schema-apply.sh` 建表 → 自动恢复并跑通真实链路 → append-only UPDATE/DELETE
+  被拒 → 删触发器后 agent-http / agent-worker / exec 均以 `missing_trigger` 拒启 → 恢复后零差异。最终镜像在新空库复验通过。
+  详见 [证据](evidence/d3-schema-release-2026-09-14.md)。

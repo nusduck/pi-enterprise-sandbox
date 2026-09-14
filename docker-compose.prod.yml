@@ -24,8 +24,11 @@
 # Application DSNs/Redis URLs carry NO password (ADR 0011 D10): agent,
 # agent-worker, sandbox and sandbox-mcp fetch credentials from a real DBPM at
 # startup and refuse to start if a URL embeds one. MYSQL_PASSWORD /
-# REDIS_PASSWORD here only configure the database/Redis servers themselves and
-# the DBA-side agent-migrate CLI. The development dbpm-fake stub is disabled.
+# REDIS_PASSWORD here only configure the database/Redis servers themselves.
+# The development dbpm-fake stub is disabled.
+# Schema (ADR 0011 D6): no service migrates. The DBA applies the exported
+# schema release segment by segment; agent, agent-worker and sandbox verify the
+# live schema against the bundled manifest and refuse to start on any drift.
 # Sandbox production DSN is always built from MYSQL_* below so a stale
 # SANDBOX_DATABASE_URL in a host .env cannot select a legacy backend.
 
@@ -69,23 +72,6 @@ services:
     # Drop the base development-only ingress network. Database access remains
     # exclusively on the internal backend fabric in production.
     networks: !override
-      - backend_internal
-
-  agent-migrate:
-    environment:
-      DEPLOYMENT_ENV: production
-      AGENT_DATABASE_URL: mysql://${MYSQL_USER:-sandbox}:${MYSQL_PASSWORD:?Set MYSQL_PASSWORD for production}@mysql:3306/${MYSQL_DATABASE:-sandbox}
-    depends_on:
-      mysql:
-        condition: service_healthy
-    restart: "no"
-    ports: !reset []
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "10m"
-        max-file: "3"
-    networks:
       - backend_internal
 
   redis:
@@ -240,8 +226,6 @@ services:
     depends_on: !override
       mysql:
         condition: service_healthy
-      agent-migrate:
-        condition: service_completed_successfully
       sandbox-replay-redis:
         condition: service_healthy
     # No host port publish — Sandbox API only on backend_internal.
@@ -346,8 +330,6 @@ services:
       A2A_ALLOW_DEV_HOST_FALLBACK: "false"
       # No passwords in DSN / Redis URL: fetched from DBPM at startup.
       AGENT_DATABASE_URL: mysql://${MYSQL_USER:-sandbox}@mysql:3306/${MYSQL_DATABASE:-sandbox}
-      # The one-shot agent-migrate service is the sole migration owner.
-      AGENT_MIGRATE_ON_START: "false"
       REDIS_URL: redis://redis:6379/0
       AGENT_REDIS_URL: redis://redis:6379/0
       DBPM_URL: ${DBPM_URL:?Set DBPM_URL for production (real DBPM endpoints, never dbpm-fake)}
@@ -380,8 +362,6 @@ services:
     depends_on: !override
       mysql:
         condition: service_healthy
-      agent-migrate:
-        condition: service_completed_successfully
       redis:
         condition: service_healthy
       sandbox:
@@ -412,7 +392,6 @@ services:
       SANDBOX_INTERNAL_HMAC_ACTIVE_KID: ${SANDBOX_INTERNAL_HMAC_ACTIVE_KID:?Set SANDBOX_INTERNAL_HMAC_ACTIVE_KID for production}
       AGENT_INTERNAL_TOKEN: ${AGENT_INTERNAL_TOKEN:?Set AGENT_INTERNAL_TOKEN for production}
       AGENT_DATABASE_URL: mysql://${MYSQL_USER:-sandbox}@mysql:3306/${MYSQL_DATABASE:-sandbox}
-      AGENT_MIGRATE_ON_START: "false"
       REDIS_URL: redis://redis:6379/0
       AGENT_REDIS_URL: redis://redis:6379/0
       DBPM_URL: ${DBPM_URL:?Set DBPM_URL for production (real DBPM endpoints, never dbpm-fake)}
@@ -439,8 +418,6 @@ services:
     depends_on: !override
       mysql:
         condition: service_healthy
-      agent-migrate:
-        condition: service_completed_successfully
       redis:
         condition: service_healthy
     restart: always

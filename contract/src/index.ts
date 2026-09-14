@@ -125,6 +125,16 @@ export type {
   FetchDbpmCredentialsOptions,
 } from './dbpm-config.js';
 
+export {
+  buildSchemaManifest,
+  diffSchemaManifest,
+  loadSchemaManifest,
+  SCHEMA_METADATA_QUERIES,
+  SCHEMA_MIGRATIONS_QUERY,
+  SchemaDriftError,
+} from './schema-manifest.js';
+export type { SchemaDrift, SchemaDriftKind, SchemaManifest } from './schema-manifest.js';
+
 // DSH `ctx.fs` 的类型直接复用，不手写 DTO——见包顶部说明。
 export { FileSystem } from '@deepseek-ai/dsh-fs';
 export type {

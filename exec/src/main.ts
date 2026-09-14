@@ -2,7 +2,7 @@
  * Exec HTTP 入口。Wave 6 起取代 Python sandbox 服务进程。
  * 挂载内部 HMAC 面与公共会话面；健康检查保持 /health 与 /ready。
  *
- * 启动顺序（design §9.2）：取密 → 装配（建池）→ 孤儿回收 → listen。任何一步失败都退出，
+ * 启动顺序（design §9.2）：取密 → 装配（建池）→ schema 核对 → 孤儿回收 → listen。任何一步失败都退出，
  * 不先对外提供服务。
  */
 import { createExecAppFromEnv, readExecDbConfigFromSandboxEnv } from './http/app.js';
@@ -21,6 +21,16 @@ try {
 }
 
 const runtime = createExecAppFromEnv(process.env, { dbPassword });
+
+// schema 核对先于孤儿回收：回收要写 exec_jobs，结构不对时一行都不能动。
+try {
+  await runtime.verifySchema();
+} catch (err) {
+  const message = err instanceof Error ? err.message : String(err);
+  process.stderr.write(`exec schema verification failed, refusing to start: ${message}\n`);
+  await runtime.dispose().catch(() => undefined);
+  process.exit(1);
+}
 
 // 先收孤儿，再 listen。顺序是硬要求：`recoverOrphans()` 用 `listActiveForRecovery`
 // 做**无租户过滤**的全表扫描，只有在还没有任何用户请求进来的时候才是安全的；

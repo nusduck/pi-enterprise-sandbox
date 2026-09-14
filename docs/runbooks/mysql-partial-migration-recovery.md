@@ -17,7 +17,35 @@ Agent container / migrate fails with one of:
    `You do not have the SUPER privilege and binary logging is enabled` /
    `log_bin_trust_function_creators`.
 
+6. A service refuses to start with `SCHEMA_DRIFT` (`database schema does not match the release manifest — …`).
+   Services never migrate (ADR 0011 D6); the listed objects are missing, extra or different.
+7. The DBA's `mysql < NNNN_<migration>.sql` stopped on an error while applying a schema release.
+
 MySQL DDL is **not** transactional. Knex only inserts into `knex_migrations` after a successful `up`. A mid-migration failure can leave a **partial schema** that blocks every restart.
+
+## Schema release applied by the DBA (current flow)
+
+Production and development both apply the exported release segment by segment
+(`docs/deployment.md` → Schema 发布). Each segment ends with its
+`knex_migrations` insert, so a failed segment is **never** recorded.
+
+1. **Stop.** Do not continue with later segments, do not use `--force`, do not
+   insert `knex_migrations` rows by hand, and do not re-run the whole release.
+2. Identify the failed segment and statement from the mysql client error.
+3. Inspect what that segment already created (`SHOW TABLES`, `SHOW CREATE TABLE …`,
+   `SHOW TRIGGERS`) — statements before the failing one did run.
+4. Choose one, under change control:
+   - **Clean up this segment's partial objects** (only objects named in that segment
+     file), fix the cause (privileges, instance flags), then re-run **that segment** and continue;
+   - or, if nothing in the database holds data yet, rebuild empty (section A) and re-apply the release.
+5. Verify read-only before starting services:
+
+   ```bash
+   SCHEMA_VERIFY_DATABASE_URL='mysql://<app_user>@<host>:3306/<db>' SCHEMA_VERIFY_PASSWORD='<pw>' \
+     npm run schema:verify --prefix agent
+   ```
+
+   `drifts: []` is required. A `SCHEMA_DRIFT` at service start lists the same objects.
 
 ## Fail-closed policy
 
@@ -35,7 +63,7 @@ SHOW TABLES;
 
 | State | Meaning | Action |
 | --- | --- | --- |
-| Empty DB, no app tables | Healthy empty | `migrate:latest` |
+| Empty DB, no app tables | Healthy empty | apply the schema release (dev: `scripts/dev/schema-apply.sh`) |
 | Full schema + migration rows present | Healthy | no recovery |
 | Some/all app tables exist, **missing** `20260718000001_core_platform_schema.js` (or later create migration) in `knex_migrations` | **Orphan / half-migration** | recover below |
 | Migration row present, app tables missing | Manual corruption | restore from backup or rebuild empty |
@@ -52,7 +80,8 @@ DROP DATABASE IF EXISTS agent_dev;
 CREATE DATABASE agent_dev CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 ```
 
-Then restart Agent with `migrate:latest` / container migrate-on-start.
+Then apply the schema release to the empty database (dev: `scripts/dev/schema-apply.sh <db>`)
+and restart the services; they verify the schema at startup.
 
 ### Option A2 — FK-safe drop of known app tables only
 
@@ -112,8 +141,9 @@ DROP TRIGGER IF EXISTS trg_agent_session_snapshots_forbid_delete;
 Then run:
 
 ```bash
-cd agent && npm run migrate:latest
-# or restart the Agent container with migrate-on-start
+# dev: exports the release and applies it to the (now empty) database
+scripts/dev/schema-apply.sh <db>
+# production: the DBA applies the release files in order, then runs schema:verify
 ```
 
 ## B) Production or shared schema with unknown data
@@ -189,8 +219,9 @@ then fix instance flags, then re-run migrate.
 ## Verify after recovery
 
 ```bash
-cd agent && npm run migrate:status
-# expect core + later migrations listed as applied
+SCHEMA_VERIFY_DATABASE_URL='mysql://<app_user>@<host>:3306/<db>' SCHEMA_VERIFY_PASSWORD='<pw>' \
+  npm run schema:verify --prefix agent
+# expect {"ok": true, "drifts": []}
 ```
 
-Smoke: Agent starts, `SELECT 1`, health checks pass, create a throwaway org/conversation in non-prod.
+Smoke: agent, agent-worker and sandbox start (no `SCHEMA_DRIFT`), health checks pass, create a throwaway org/conversation in non-prod.

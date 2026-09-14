@@ -18,6 +18,8 @@ import {
 
 /** 单测不连 DBPM：注入空口令。取密本身的规则见 startup-credentials.unit.test.js。 */
 const NO_DBPM = async () => ({});
+/** 单测不连真库：schema 核对注入空实现。核对本身见 schema-manifest.integration.test.js。 */
+const NO_SCHEMA_CHECK = async () => {};
 
 describe('ServiceContainer', () => {
   it('constructs without connecting', () => {
@@ -107,6 +109,7 @@ describe('ServiceContainer', () => {
       {
         createMysqlKnex: () => knex,
         resolveCredentials: NO_DBPM,
+        verifySchema: NO_SCHEMA_CHECK,
         destroyMysqlKnex: async () => {
           destroyed += 1;
         },
@@ -144,6 +147,7 @@ describe('ServiceContainer', () => {
         createRunQueue: () => ({ queue: { add: async () => ({}) } }),
         destroyMysqlKnex: async () => {},
         resolveCredentials: NO_DBPM,
+        verifySchema: NO_SCHEMA_CHECK,
         destroyRedisClient: async () => {},
         destroyRunQueue: async () => {},
       },
@@ -166,6 +170,7 @@ describe('ServiceContainer', () => {
           seen.push(['credentials', need]);
           return { mysql: 'db-from-dbpm', redis: 'redis-from-dbpm' };
         },
+        verifySchema: NO_SCHEMA_CHECK,
         createMysqlKnex: (_url, opts) => {
           seen.push(['knex', opts.password]);
           return { raw: async () => [[{}]] };
@@ -191,6 +196,41 @@ describe('ServiceContainer', () => {
       ['queue', 'redis-from-dbpm'],
     ]);
     assert.equal(c.credentials.redis, 'redis-from-dbpm', 'worker 需要从容器拿 Redis 口令');
+  });
+
+  it('schema drift aborts start after MySQL connects and before Redis/queue are opened', async () => {
+    const seen = [];
+    let destroyedKnex = 0;
+    const knex = { raw: async () => [[{}]] };
+    const c = createServiceContainer(
+      {
+        AGENT_DATABASE_URL: 'mysql://agentap@h/db',
+        AGENT_REDIS_URL: 'redis://localhost:6379/0',
+      },
+      {
+        resolveCredentials: NO_DBPM,
+        createMysqlKnex: () => knex,
+        destroyMysqlKnex: async () => {
+          destroyedKnex += 1;
+        },
+        verifySchema: async (k, opts) => {
+          seen.push([k === knex, opts.role]);
+          throw Object.assign(new Error('agent-worker: database schema does not match the release manifest — missing_trigger trg_messages_forbid_delete'), { code: 'SCHEMA_DRIFT' });
+        },
+        createRedisClient: () => {
+          seen.push('redis');
+          return { status: 'ready' };
+        },
+        createRunQueue: () => {
+          seen.push('queue');
+          return { queue: {} };
+        },
+      },
+    );
+    await assert.rejects(() => c.start({ role: 'agent-worker' }), (err) => err.code === 'SCHEMA_DRIFT');
+    assert.deepEqual(seen, [[true, 'agent-worker']], '核对拿到的是刚建好的 Knex；Redis/队列都没打开');
+    assert.equal(destroyedKnex, 1, '失败启动要回收 MySQL 句柄');
+    assert.equal(c.started, false);
   });
 
   it('a credential failure aborts start before any connection is opened', async () => {
@@ -299,6 +339,7 @@ describe('ServiceContainer', () => {
         createRunQueue: () => ({ queue: { add: async () => ({}) } }),
         destroyMysqlKnex: async () => {},
         resolveCredentials: NO_DBPM,
+        verifySchema: NO_SCHEMA_CHECK,
         destroyRedisClient: async () => {},
         destroyRunQueue: async () => {},
       },
@@ -369,6 +410,7 @@ describe('ServiceContainer', () => {
         createRunQueue: () => ({ queue: { add: async () => ({}) } }),
         destroyMysqlKnex: async () => {},
         resolveCredentials: NO_DBPM,
+        verifySchema: NO_SCHEMA_CHECK,
         destroyRedisClient: async () => {},
         destroyRunQueue: async () => {},
       },
@@ -402,6 +444,7 @@ describe('ServiceContainer', () => {
         createRunQueue: () => ({ queue: { add: async () => ({}) } }),
         destroyMysqlKnex: async () => {},
         resolveCredentials: NO_DBPM,
+        verifySchema: NO_SCHEMA_CHECK,
         destroyRedisClient: async () => {},
         destroyRunQueue: async () => {},
       },
@@ -460,6 +503,7 @@ describe('ServiceContainer', () => {
         createRunQueue: () => ({ queue: { add: async () => ({}) } }),
         destroyMysqlKnex: async () => {},
         resolveCredentials: NO_DBPM,
+        verifySchema: NO_SCHEMA_CHECK,
         destroyRedisClient: async () => {},
         destroyRunQueue: async () => {},
       },
@@ -532,6 +576,7 @@ describe('ServiceContainer', () => {
           createRunQueue: () => ({ queue: { add: async () => ({}) } }),
           destroyMysqlKnex: async () => {},
         resolveCredentials: NO_DBPM,
+        verifySchema: NO_SCHEMA_CHECK,
           destroyRedisClient: async () => {},
           destroyRunQueue: async () => {},
         },

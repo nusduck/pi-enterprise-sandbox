@@ -22,6 +22,7 @@ import { WorkspaceQuotaLedger } from '../workspace/quota-ledger.js';
 import { InProcessWorkspaceLock } from '../workspace/lock.js';
 import type { JobStore } from '../shell/job-types.js';
 import {
+  closeExecDbPool,
   createExecDbPool,
   readExecDbConfig,
   ExecDbConfigError,
@@ -29,6 +30,7 @@ import {
 } from '../db/client.js';
 import type { ExecDbPool as Pool } from '../db/failover-pool.js';
 import { assertExecDbConfigWithoutPassword } from '../startup-credentials.js';
+import { assertSchemaMatchesManifest } from '../db/schema-verify.js';
 import { AGENT_SKILL_PATH } from '../isolation/profile.js';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -178,6 +180,11 @@ export interface ExecRuntime {
    * 都算进每 owner 的并发上限，僵尸行攒够 20 条，这个 owner 就再也起不了新作业。
    */
   recoverOrphans(): Promise<number>;
+  /**
+   * 启动期 schema 只读核对（ADR 0011 D6）。**必须在 `recoverOrphans()` 之前 await**：
+   * 回收会写 `exec_jobs`，结构不对时不能先动账本。未配数据库（非生产内存模式）时为空操作。
+   */
+  verifySchema(): Promise<void>;
   dispose(): Promise<void>;
 }
 
@@ -280,8 +287,13 @@ export function createExecAppFromEnv(
   return {
     app,
     recoverOrphans: () => jobRegistry.recoverOrphans(),
+    async verifySchema() {
+      if (pool === undefined) return;
+      await assertSchemaMatchesManifest(pool, { role: 'exec' });
+    },
     async dispose() {
-      if (pool !== undefined) await pool.end();
+      // 尽力而为：关池时 mysql2 会把未建成连接的错误再抛一次，不能让它盖过真正的启动失败。
+      if (pool !== undefined) await closeExecDbPool(pool);
     },
   };
 }

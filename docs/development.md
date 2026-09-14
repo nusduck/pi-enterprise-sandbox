@@ -303,7 +303,7 @@ AgentVersion 侧（同一份语义，只能收紧）：
 
 ### 数据库操作
 
-开发/CI 基线为 **MySQL 5.7**（`AGENT_DATABASE_URL` / `SANDBOX_DATABASE_URL`），对齐 UPDRDB 的 UPSQL 内核；生产 overlay 目前仍是 MySQL 8。5.7 用独立数据卷 `mysql57_dev_data`，不要复用 8.0 的 `mysql_dev_data`（官方不支持降级，会启动崩溃）。应用 DSN **不带口令**：Agent / Worker / exec 启动时向 DBPM 取口令（ADR 0011 D10），开发 Compose 默认由 `dbpm-fake` 提供；宿主机直接起服务进程时同样要给 `DBPM_URL`（可 `node scripts/dev/fake-dbpm.mjs` 起本机假服务端）。迁移 CLI（`agent-migrate`）是例外，用 `AGENT_MIGRATE_DATABASE_URL` 的带口令 DSN。启动时 persistence 在单事务中应用不可变 migration，并在 `schema_migrations` 记录 version/checksum。不升级或回填研发阶段的旧数据库；需要清空旧状态时遵循 [Development reset runbook](runbooks/development-reset.md)。
+开发/CI 基线为 **MySQL 5.7**（`AGENT_DATABASE_URL` / `SANDBOX_DATABASE_URL`），对齐 UPDRDB 的 UPSQL 内核；生产 overlay 目前仍是 MySQL 8。5.7 用独立数据卷 `mysql57_dev_data`，不要复用 8.0 的 `mysql_dev_data`（官方不支持降级，会启动崩溃）。应用 DSN **不带口令**：Agent / Worker / exec 启动时向 DBPM 取口令（ADR 0011 D10），开发 Compose 默认由 `dbpm-fake` 提供；宿主机直接起服务进程时同样要给 `DBPM_URL`（可 `node scripts/dev/fake-dbpm.mjs` 起本机假服务端）。**服务启动时不迁移**（ADR 0011 D6，开发与生产同一流程）：空库先执行 `scripts/dev/schema-apply.sh`——在 `pi_schema_shadow` 上跑迁移导出分段 SQL 发布包到 `.runtime/schema-release`，再用 mysql 客户端逐段执行（首个错误即停），最后按 `contract/schema/schema-manifest.json` 只读核对；在此之前 agent / agent-worker / sandbox 会因 `SCHEMA_DRIFT` 重启等待。改了迁移必须重新生成清单：`SCHEMA_SHADOW_DATABASE_URL=… npm run schema:manifest --prefix agent`（影子库必须为空），否则 `schema-manifest.integration` 测试会红。`schema:sql` / `schema:replay` / `schema:verify` 是开发/DBA 工具，用带口令的完整 DSN（口令可用 `SCHEMA_*_PASSWORD` 单独传入）。不升级或回填研发阶段的旧数据库；需要清空旧状态时遵循 [Development reset runbook](runbooks/development-reset.md)。
 
 正式服务的事实状态在 Agent-owned MySQL 中。Sandbox 不再包含 SQLite
 `database`/repository 兼容层，也不拥有 Run/Conversation；调试 durable 状态

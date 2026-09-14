@@ -47,10 +47,11 @@ export async function startWorkerMain(
   });
   const createContainer = hooks.createContainer || createServiceContainer;
   const container = createContainer(env);
+  // schema 只读核对在 container.start 里，先于消费任务、恢复扫描与 outbox 发布。
   await container.start({
+    role: 'agent-worker',
     connectMysql: true,
     connectRedis: true,
-    migrate: env.AGENT_MIGRATE_ON_START === 'true',
   });
 
   let workerRuntime;
