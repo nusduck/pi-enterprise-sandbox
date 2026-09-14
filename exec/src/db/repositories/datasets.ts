@@ -11,7 +11,8 @@
  * 无处存它。
  */
 
-import type { Pool, RowDataPacket, ResultSetHeader } from 'mysql2/promise';
+import type { RowDataPacket, ResultSetHeader } from 'mysql2/promise';
+import type { ExecDbPool as Pool } from '../failover-pool.js';
 import { sqlLimit } from '../client.js';
 
 /** 与 Python `DATASET_STATUS_*` 一致。 */

@@ -30,7 +30,6 @@
  */
 
 import { createHash } from 'node:crypto';
-import { createRequire } from 'node:module';
 import {
   decodeStorageRecord,
   isJsonValue,
@@ -43,67 +42,25 @@ import type {
   StoredPrefix,
   StoredSuffix,
 } from '@deepseek-ai/dsh-session-persistence';
+import type { Endpoint } from '@pi/contract/endpoint-failover.js';
 import { toWireError } from '@pi/contract/errors.js';
+import {
+  createFailoverMysqlPool,
+  readUpdrdbEndpoints,
+  type FailoverMysqlPool,
+  type FailoverPoolConnection,
+} from '../../infrastructure/mysql/failover.js';
 
 // 官方 codec 从本模块再导出，测试必须驱动这条路径而不是自己抄一份。
 export { decodeStorageRecord, packChunkRuns };
 
-const require = createRequire(import.meta.url);
-type Pool = {
-  execute: (...args: unknown[]) => Promise<any>;
-  getConnection: () => Promise<{
-    beginTransaction: () => Promise<void>;
-    commit: () => Promise<void>;
-    rollback: () => Promise<void>;
-    execute: (...args: unknown[]) => Promise<any>;
-    release: () => void;
-  }>;
-  end: () => Promise<void>;
-};
+/**
+ * 本存储用到的池接口。生产实现是 `createFailoverMysqlPool()`：按 UPDRDB 端点故障
+ * 切换，并在交付连接前完成 UTC 会话初始化（design §4.2 / §4.3）。
+ */
+type Pool = Pick<FailoverMysqlPool, 'execute' | 'getConnection' | 'end'>;
 type PoolOptions = Record<string, unknown>;
 type RowDataPacket = Record<string, unknown>;
-/** 每条物理连接交付前必须执行的会话初始化语句。 */
-export const SESSION_UTC_SQL = "SET SESSION time_zone = '+00:00'";
-
-/**
- * 给 mysql2 池挂上 UTC 会话初始化。
- *
- * 驱动的 `timezone: 'Z'` 只管 DATETIME 编解码，不改服务端会话时区；目标
- * UPDRDB 环境全局时区是 +08:00，少这一句会让 `NOW()` 和列默认值偏 8 小时。
- *
- * mysql2 的连接命令队列是 FIFO，`connection` 事件里发出的 SET 一定排在调用
- * 方的第一条 SQL 之前。**初始化失败必须销毁连接**，让排在后面的业务 SQL 以
- * 连接错误失败，而不是在会话时区不对的连接上执行。
- */
-export function attachUtcSessionInit(pool: {
-  on: (event: string, listener: (connection: {
-    query: (sql: string, cb: (err?: unknown) => void) => void;
-    destroy: () => void;
-  }) => void) => unknown;
-}): void {
-  pool.on('connection', (connection) => {
-    connection.query(SESSION_UTC_SQL, (err) => {
-      if (!err) return;
-      try {
-        connection.destroy();
-      } catch {
-        // 连接可能已经没了，忽略。
-      }
-    });
-  });
-}
-
-function createPool(_opts: PoolOptions): Pool {
-  let driver: { createPool: (o: PoolOptions) => Pool };
-  try {
-    driver = require('mysql2/promise') as { createPool: (o: PoolOptions) => Pool };
-  } catch {
-    throw new Error('mysql2 not installed: pool creation requires mysql2');
-  }
-  const pool = driver.createPool(_opts) as Pool;
-  attachUtcSessionInit(pool as unknown as Parameters<typeof attachUtcSessionInit>[0]);
-  return pool;
-}
 
 /** 任何抛出物无条件脱敏——空 roots 仍走 contract 的默认物理前缀，不能静默放行。 */
 export function toSessionStoreError(err: unknown, physicalRoots: readonly string[]): Error {
@@ -212,6 +169,8 @@ export interface MysqlSessionStoreConfig {
   readonly user: string;
   readonly password: string;
   readonly database: string;
+  /** UPDRDB 两个 Proxy。给了就覆盖 host/port；不给就用 host/port 单端点。 */
+  readonly endpoints?: readonly Endpoint[] | undefined;
   readonly connectionLimit?: number | undefined;
   readonly physicalRoots?: readonly string[] | undefined;
 }
@@ -257,10 +216,15 @@ function configFromDatabaseUrl(raw: string | undefined): MysqlSessionStoreConfig
 export function readMysqlSessionStoreConfig(
   env: NodeJS.ProcessEnv = process.env,
 ): MysqlSessionStoreConfig {
+  // 格式错误抛 EndpointConfigError（不是 MysqlSessionStoreConfigError），
+  // 所以不会被 createSessionBackend 当成「缺配」静默换成内存后端。
+  const endpoints = readUpdrdbEndpoints(env);
+  const withEndpoints = (cfg: MysqlSessionStoreConfig): MysqlSessionStoreConfig =>
+    endpoints === undefined ? cfg : { ...cfg, endpoints };
   const fromUrl = configFromDatabaseUrl(
     env['AGENT_DATABASE_URL'] ?? env['TEST_MYSQL_URL'] ?? env['MYSQL_URL'] ?? env['DATABASE_URL'],
   );
-  if (fromUrl) return fromUrl;
+  if (fromUrl) return withEndpoints(fromUrl);
   const host = env['MYSQL_HOST'] ?? env['DB_HOST'] ?? env['EXEC_DB_HOST'];
   const user = env['MYSQL_USER'] ?? env['DB_USER'] ?? env['EXEC_DB_USER'];
   const password = env['MYSQL_PASSWORD'] ?? env['DB_PASSWORD'] ?? env['EXEC_DB_PASSWORD'];
@@ -275,7 +239,7 @@ export function readMysqlSessionStoreConfig(
   if (!Number.isFinite(port) || port <= 0 || port > 65535) {
     throw new MysqlSessionStoreConfigError('invalid MYSQL_PORT');
   }
-  return { host, port, user, password, database };
+  return withEndpoints({ host, port, user, password, database });
 }
 
 // ---------------------------------------------------------------------------
@@ -439,8 +403,6 @@ export class MysqlSessionStore implements PersistenceBackend<string> {
     } else {
       const cfg = poolOrConfig as MysqlSessionStoreConfig;
       const options: PoolOptions = {
-        host: cfg.host,
-        port: cfg.port,
         user: cfg.user,
         password: cfg.password,
         database: cfg.database,
@@ -451,7 +413,11 @@ export class MysqlSessionStore implements PersistenceBackend<string> {
         jsonStrings: true,
         enableKeepAlive: true,
       };
-      this.pool = createPool(options);
+      this.pool = createFailoverMysqlPool({
+        base: options,
+        endpoints: cfg.endpoints ?? [{ host: cfg.host, port: cfg.port }],
+        role: 'agent-dsh-session-store',
+      });
       this.ownedPool = true;
     }
     this.physicalRoots = opts.physicalRoots ?? (poolOrConfig as MysqlSessionStoreConfig).physicalRoots ?? [];
@@ -615,7 +581,7 @@ export class MysqlSessionStore implements PersistenceBackend<string> {
     }
   }
 
-  private async loadStoredEventsForRevision(conn: { execute: (...args: unknown[]) => Promise<any> }, sessionId: string, tenant: SessionStoreOwner): Promise<SessionEvent[]> {
+  private async loadStoredEventsForRevision(conn: Pick<FailoverPoolConnection, 'execute'>, sessionId: string, tenant: SessionStoreOwner): Promise<SessionEvent[]> {
     const [rows] = await conn.execute(
       `SELECT record_json FROM ${this.eventsTable} WHERE session_id = ? AND org_id = ? AND user_id = ? ORDER BY seq ASC`,
       [sessionId, tenant.orgId, tenant.userId],

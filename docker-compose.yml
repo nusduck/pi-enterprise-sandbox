@@ -52,8 +52,8 @@ services:
       - --default-authentication-plugin=mysql_native_password
       - --log-bin-trust-function-creators=1
     volumes:
-      # 5.7 用独立新卷：MySQL 官方不支持 8.0 → 5.7 原地降级，旧 mysql_dev_data
-      # 保留作为回退点，不要 down -v，也不要把 8.0 的数据目录喂给 5.7。
+      # 5.7 用独立新卷：MySQL 官方不支持 8.0 → 5.7 原地降级，不要把 8.0 的数据目录
+      # 喂给 5.7。旧 mysql_dev_data 已于 2026-09-14 作废，不再是回退点。
       - ${MYSQL_DATA_VOLUME:-mysql57_dev_data}:/var/lib/mysql
     healthcheck:
       test:
@@ -300,6 +300,8 @@ services:
       # Agent MySQL fact store (mysql:// | mysql2:// only; see agent mysql client).
       # Dev default uses non-secret placeholder credentials; override via .env.
       AGENT_DATABASE_URL: ${AGENT_DATABASE_URL:-mysql://sandbox:sandbox_dev_only@mysql:3306/sandbox}
+      # UPDRDB 两个 Proxy（host:port,host:port）。空 = 使用 DSN 单端点。
+      UPDRDB_ENDPOINTS: ${UPDRDB_ENDPOINTS:-}
       # Compose migration ownership belongs exclusively to agent-migrate.
       AGENT_MIGRATE_ON_START: "false"
       # Agent Redis coordination (redis:// | rediss:// only). Agent-only authority.
@@ -396,6 +398,7 @@ services:
       # Dev convenience: an empty token would otherwise close /internal/*.
       AGENT_ALLOW_UNAUTHENTICATED_INTERNAL: ${AGENT_ALLOW_UNAUTHENTICATED_INTERNAL:-true}
       AGENT_DATABASE_URL: ${AGENT_DATABASE_URL:-mysql://sandbox:sandbox_dev_only@mysql:3306/sandbox}
+      UPDRDB_ENDPOINTS: ${UPDRDB_ENDPOINTS:-}
       AGENT_MIGRATE_ON_START: "false"
       REDIS_URL: ${REDIS_URL:-redis://:redis_dev_only@redis:6379/0}
       AGENT_REDIS_URL: ${AGENT_REDIS_URL:-redis://:redis_dev_only@redis:6379/0}
@@ -506,6 +509,8 @@ services:
       # SANDBOX_COMPOSE_DATABASE_URL for a deliberate dev override; production
       # overlay supplies SANDBOX_DATABASE_URL explicitly.
       SANDBOX_DATABASE_URL: ${SANDBOX_COMPOSE_DATABASE_URL:-mysql+pymysql://sandbox:sandbox_dev_only@mysql:3306/sandbox}
+      # UPDRDB 两个 Proxy；空 = 使用 DSN 单端点。与 Agent 读同一个变量。
+      UPDRDB_ENDPOINTS: ${UPDRDB_ENDPOINTS:-}
       # Internal plane (Agent HMAC tools): optional in development (default off).
       # Dedicated sandbox-replay-redis + independent password (DB 0). Never REDIS_PASSWORD.
       SANDBOX_INTERNAL_PLANE_ENABLED: ${SANDBOX_INTERNAL_PLANE_ENABLED:-false}

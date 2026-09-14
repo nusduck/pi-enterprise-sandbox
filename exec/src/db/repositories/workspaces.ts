@@ -12,7 +12,8 @@
  * 依赖本机目录是否存在的"隐式存在"，重启后丢。
  */
 
-import type { Pool, RowDataPacket, ResultSetHeader } from 'mysql2/promise';
+import type { RowDataPacket, ResultSetHeader } from 'mysql2/promise';
+import type { ExecDbPool as Pool } from '../failover-pool.js';
 
 export interface ExecWorkspaceRecord {
   readonly workspaceId: string;

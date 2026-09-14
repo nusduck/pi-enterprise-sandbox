@@ -1,20 +1,21 @@
 /**
- * exec/src/db/client.ts 单测——连接池创建与错误脱敏。
+ * exec/src/db/client.ts 单测——配置解析、连接池创建与错误脱敏。
  *
  * 没有对应的 Python 用例需要改写：这是 exec 侧新增的 DB 底座，
  * Python 版的等价物是 `sandbox/app/persistence/database.py` 的
  * `create_engine()`，但那一层直接把 DSN 拼进错误文本，本测试
  * 验证"不泄漏 DSN/物理根"是新增的硬约束。
+ *
+ * 端点故障切换与会话初始化的行为见 `db-failover.test.ts`。
  */
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { EndpointConfigError } from '@pi/contract/endpoint-failover.js';
 import {
   readExecDbConfig,
   ExecDbConfigError,
   createExecDbPool,
   closeExecDbPool,
-  attachUtcSessionInit,
-  SESSION_UTC_SQL,
 } from '../src/db/client.js';
 
 test('readExecDbConfig: accepts mysql+pymysql DSN from Compose', () => {
@@ -24,6 +25,7 @@ test('readExecDbConfig: accepts mysql+pymysql DSN from Compose', () => {
   assert.equal(cfg.host, 'mysql');
   assert.equal(cfg.user, 'sandbox');
   assert.equal(cfg.database, 'sandbox');
+  assert.equal(cfg.endpoints, undefined, '未配 UPDRDB_ENDPOINTS 时沿用 DSN 单端点');
 });
 
 test('readExecDbConfig: prefers DATABASE_URL', () => {
@@ -66,9 +68,31 @@ test('readExecDbConfig: invalid DATABASE_URL throws', () => {
   );
 });
 
+test('readExecDbConfig: UPDRDB_ENDPOINTS 覆盖 DSN 的 host/port', () => {
+  const cfg = readExecDbConfig({
+    DATABASE_URL: 'mysql://bob:s3cret@db.example.com:3307/mydb',
+    UPDRDB_ENDPOINTS: 'proxy-a:3306, proxy-b:3307',
+  } as unknown as NodeJS.ProcessEnv);
+  assert.deepEqual(cfg.endpoints, [
+    { host: 'proxy-a', port: 3306 },
+    { host: 'proxy-b', port: 3307 },
+  ]);
+  assert.equal(cfg.user, 'bob');
+});
+
+test('readExecDbConfig: 配错的 UPDRDB_ENDPOINTS 不是「缺配」，不能被回退成内存仓储', () => {
+  assert.throws(
+    () =>
+      readExecDbConfig({
+        DATABASE_URL: 'mysql://bob:s3cret@db.example.com:3307/mydb',
+        UPDRDB_ENDPOINTS: 'proxy-a:3306',
+      } as unknown as NodeJS.ProcessEnv),
+    (e: unknown) => e instanceof EndpointConfigError && !(e instanceof ExecDbConfigError),
+  );
+});
+
 test('createExecDbPool: returns a pool with execute and end', async () => {
-  // 不连真实 DB，只验证返回对象形状；用一个注定连不上的地址，
-  // 但 createPool 本身是同步的，不会立即抛。
+  // 不连真实 DB，只验证返回对象形状；mysql2 建池是惰性的，不会立即连。
   const pool = createExecDbPool({
     host: '127.0.0.1',
     port: 1,
@@ -78,6 +102,7 @@ test('createExecDbPool: returns a pool with execute and end', async () => {
     connectionLimit: 1,
   });
   assert.equal(typeof pool.execute, 'function');
+  assert.equal(typeof pool.getConnection, 'function');
   assert.equal(typeof pool.end, 'function');
   await closeExecDbPool(pool);
 });
@@ -93,55 +118,4 @@ test('createExecDbPool: close is idempotent', async () => {
   });
   await closeExecDbPool(pool);
   await closeExecDbPool(pool);
-});
-
-test('attachUtcSessionInit: 每条新连接先发 SET SESSION time_zone', () => {
-  const sent: string[] = [];
-  let destroyed = false;
-  let listener: ((c: unknown) => void) | null = null;
-  const fakePool = {
-    on(event: string, fn: (c: unknown) => void) {
-      if (event === 'connection') listener = fn;
-      return this;
-    },
-  };
-
-  attachUtcSessionInit(fakePool as never);
-  assert.ok(listener, 'must subscribe to the pool connection event');
-
-  listener!({
-    query(sql: string, cb: (err?: unknown) => void) {
-      sent.push(sql);
-      cb(undefined);
-    },
-    destroy() {
-      destroyed = true;
-    },
-  });
-
-  assert.deepEqual(sent, [SESSION_UTC_SQL]);
-  assert.equal(destroyed, false, '初始化成功的连接不该被销毁');
-});
-
-test('attachUtcSessionInit: 初始化失败销毁连接，不放行错时区的会话', () => {
-  let destroyed = false;
-  let listener: ((c: unknown) => void) | null = null;
-  const fakePool = {
-    on(event: string, fn: (c: unknown) => void) {
-      if (event === 'connection') listener = fn;
-      return this;
-    },
-  };
-
-  attachUtcSessionInit(fakePool as never);
-  listener!({
-    query(_sql: string, cb: (err?: unknown) => void) {
-      cb(new Error('time_zone rejected'));
-    },
-    destroy() {
-      destroyed = true;
-    },
-  });
-
-  assert.equal(destroyed, true);
 });

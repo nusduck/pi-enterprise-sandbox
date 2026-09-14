@@ -1,10 +1,8 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  SESSION_UTC_SQL,
   createMysqlKnex,
   destroyMysqlKnex,
-  initMysqlSession,
   normalizeMysqlConnectionUrl,
 } from '../../src/infrastructure/mysql/client.js';
 import { toMysqlDateTime } from '../../src/infrastructure/mysql/row-mappers.js';
@@ -119,47 +117,17 @@ describe('mysql client value boundary', () => {
   });
 });
 
-describe('mysql 会话 UTC 初始化', () => {
-  it('afterCreate 先发 SET SESSION time_zone 再交付连接', async () => {
-    const sent = [];
-    const connection = {
-      query(sql, cb) {
-        sent.push(sql);
-        cb(null);
-      },
-    };
-    const delivered = await new Promise((resolve, reject) => {
-      initMysqlSession(connection, (err, conn) => (err ? reject(err) : resolve(conn)));
-    });
-    assert.deepEqual(sent, [SESSION_UTC_SQL]);
-    assert.equal(delivered, connection);
-  });
-
-  it('初始化失败时 create 失败，不交付连接', async () => {
-    const boom = new Error('time_zone rejected');
-    const connection = {
-      query(_sql, cb) {
-        cb(boom);
-      },
-    };
-    await assert.rejects(
-      () =>
-        new Promise((resolve, reject) => {
-          initMysqlSession(connection, (err, conn) => (err ? reject(err) : resolve(conn)));
-        }),
-      (err) => {
-        assert.equal(err, boom);
-        return true;
-      },
-    );
-  });
-
-  it('工厂把 afterCreate 接到池上（不是只在 DSN 里写 timezone）', () => {
+describe('mysql 会话 UTC 初始化接线', () => {
+  // 行为细节（等待完成、失败致命、切端点）在 failover.unit.test.js；这里只钉住
+  // 生产工厂确实换成了故障切换 client，而不是回到只挂 afterCreate 的旧形态。
+  it('工厂使用故障切换 client，会话初始化不依赖 afterCreate', async () => {
     const knex = createMysqlKnex('mysql://u:p@127.0.0.1:3306/db', { pool: { max: 1 } });
     try {
-      assert.equal(knex.client.config.pool.afterCreate, initMysqlSession);
+      assert.equal(knex.client.constructor.name, 'FailoverMysql2Client');
+      assert.equal(knex.client.config.pool.afterCreate, undefined);
+      assert.equal(knex.client.driverName, 'mysql2');
     } finally {
-      void destroyMysqlKnex(knex);
+      await destroyMysqlKnex(knex);
     }
   });
 });

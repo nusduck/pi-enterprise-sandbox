@@ -237,10 +237,13 @@ Compose 拓扑：`backend_internal`（`internal: true`）供 mysql/redis/sandbox
 | `AGENT_DATABASE_URL` | `mysql://…@mysql:3306/sandbox` | Agent 事实库（仅 `mysql://` / `mysql2://`） |
 | `SANDBOX_DATABASE_URL` | `mysql+pymysql://…@mysql:3306/sandbox` | Sandbox 持久化（`mysql+pymysql://` 或 `mysql://`） |
 | `SANDBOX_COMPOSE_DATABASE_URL` | 未设置（默认 MySQL compose DSN） | 仅开发 Compose 的显式 Sandbox DSN override；旧 `.env` 中的 `SANDBOX_DATABASE_URL` 不参与默认插值 |
+| `UPDRDB_ENDPOINTS` | 未设置（使用 DSN 的 host:port 单端点） | UPDRDB 两个 Proxy，恰好两个 `host:port` 逗号分隔。Agent / Agent Worker（Knex 与 DSH 会话存储）和 Sandbox 执行面读取；设置后按端点故障切换，DSN 只提供 user/database/参数。格式错误拒绝启动 |
 
 **开发:** `docker compose up` 启动 `mysql:5.7`（对齐 UPDRDB 的 UPSQL 5.7 内核，见 [ADR 0011](adr/0011-updrdb-upredis-dbpm-migration.md)）；DSN 默认指向 compose 网络内 `mysql` 服务。占位密码仅用于本地，勿用于共享/生产环境。
 
-5.7 使用独立数据卷 `mysql57_dev_data`。MySQL 官方[不支持 8.0 降级到 5.7](https://dev.mysql.com/doc/refman/8.0/en/downgrading.html)：把旧的 `mysql_dev_data` 挂给 5.7 会在 InnoDB 数据字典校验处崩溃退出。旧卷保留作为 8.0 回退点，不要复用，也不要用 `down -v` 清空。若本地 `.env` 显式设过 `MYSQL_DATA_VOLUME`，必须同步改成新卷名。
+5.7 使用独立数据卷 `mysql57_dev_data`。MySQL 官方[不支持 8.0 降级到 5.7](https://dev.mysql.com/doc/refman/8.0/en/downgrading.html)：把旧的 `mysql_dev_data` 挂给 5.7 会在 InnoDB 数据字典校验处崩溃退出。旧 8.0 卷**已于 2026-09-14 决定作废**，不再作为回退点，也不要挂给 5.7；需要回收磁盘时手工删除该卷。若本地 `.env` 显式设过 `MYSQL_DATA_VOLUME`，必须同步改成新卷名。
+
+**UPDRDB 双 Proxy 建连**（ADR 0011 D5，design §4.2/§4.3）：设置 `UPDRDB_ENDPOINTS` 后，三个 MySQL 接入点（Agent Knex、Agent DSH 会话存储、exec 裸池）每次取连接时按「粘住当前主用 → 网络故障拉黑 180s 并试另一个 → 拉黑过期不主动回切」选择端点；单次握手 3s，一次取连接（含会话初始化）总预算 10s。认证失败、库不存在、会话初始化失败不换端点，直接报错。**已发出的 SQL 一律不重试**（包括 commit 响应丢失），由既有幂等键与回读判定。每条物理连接交付前执行 `SET SESSION time_zone = '+00:00'`，失败的连接丢弃。
 
 官方 `mysql:5.7` 镜像只有 amd64；Apple Silicon 上通过 `MYSQL_PLATFORM`（默认 `linux/amd64`）模拟运行，可用但比原生慢。
 

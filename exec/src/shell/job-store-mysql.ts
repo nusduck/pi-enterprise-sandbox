@@ -16,7 +16,8 @@
  *
  * 每个方法都是一条参数化 SQL，不拼接调用方输入到语句文本里。
  */
-import type { Pool, RowDataPacket } from 'mysql2/promise';
+import type { RowDataPacket } from 'mysql2/promise';
+import type { ExecDbPool as Pool } from '../db/failover-pool.js';
 import { sqlLimit } from '../db/client.js';
 import type {
   JobOwnerScope,

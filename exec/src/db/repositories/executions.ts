@@ -11,7 +11,8 @@
  * 审计回溯用。`command` 存原文 `label`，`status` 与 `JobStatus` 同步。
  */
 
-import type { Pool, RowDataPacket, ResultSetHeader } from 'mysql2/promise';
+import type { RowDataPacket, ResultSetHeader } from 'mysql2/promise';
+import type { ExecDbPool as Pool } from '../failover-pool.js';
 
 export type ExecExecutionStatus = 'running' | 'completed' | 'failed' | 'killed';
 

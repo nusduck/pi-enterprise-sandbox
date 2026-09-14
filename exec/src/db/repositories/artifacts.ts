@@ -11,7 +11,8 @@
  * `list_by_session` 与跨租户 404 有依据，不必拿 workspaceId 凑。
  */
 
-import type { Pool, RowDataPacket, ResultSetHeader } from 'mysql2/promise';
+import type { RowDataPacket, ResultSetHeader } from 'mysql2/promise';
+import type { ExecDbPool as Pool } from '../failover-pool.js';
 import type { FileIdentity } from '../../artifact/control-plane-storage.js';
 import { sqlLimit } from '../client.js';
 

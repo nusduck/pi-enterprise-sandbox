@@ -628,3 +628,25 @@ Each entry should say **what changed**, **why**, and **which STATUS IDs** it aff
   live 集成 21 例全绿，含两个真重叠事务用例与 errno 1205 锁等待超时用例。
   详见 [证据](evidence/d1-claim-utc-mysql57-2026-09-12.md)，其中记录了 `.env` 覆盖数据卷
   导致 5.7 起在 8.0 数据目录的实际事故，以及尚未验证的 8.0 回退点。
+
+## 2026-09-14 — D2a/D2b：UPDRDB 双 Proxy 故障切换与等待式 UTC 初始化
+
+- **范围：** [统一 design](design/updrdb-dbpm-deployment.md) D2 阶段的接线部分；分支
+  `refactor/updrdb-dbpm`。D2a（`037fccf4`）在 `contract/` 新增无驱动依赖的端点选择策略与
+  DBPM TCP 客户端；D2b 把 Agent Knex、Agent DSH 会话存储、exec 三处 MySQL 接入点接上故障
+  切换，并把会话 UTC 初始化改为交付连接前等待完成。未做 D2c（DBPM 启动取密、假 DBPM 默认
+  启用、Redis 口令）。
+- **Decision：** 用户决定旧 8.0 开发卷 `mysql_dev_data` 作废（不删除、不再作为回退点），
+  D1 证据中「回退点未验证」一项据此关闭为不适用；compose / `.env.example` / deployment /
+  CHANGELOG 的表述同步。用户决定假 DBPM 在开发环境默认启用，落在 D2c。
+- **Action：** 新增可选 `UPDRDB_ENDPOINTS`；Knex 按实例继承 mysql2 方言覆写
+  `acquireRawConnection()`，裸池按端点建池并外包 acquire；认证/初始化失败不换端点，
+  已发出 SQL 不重试。exec 仓储池类型收窄为 `ExecDbPool`。
+- **STATUS IDs：** 不改变任何 STATUS 行（关联 H5、G2/G4，目标环境 Proxy/DBPM 验收未做）。
+- **验证：** 六套测试、四包类型检查、前端 build、compose config 通过；agent 3 例与 api-server
+  2 例 `cancelled` 在不含本次改动的 `037fccf4` 上同样复现，未记为通过。重建 agent /
+  agent-worker / api-server / sandbox / sandbox-mcp 镜像后在 MySQL 5.7.44 上跑通真实链路
+  （登录 → 建会话 → 带工具 Run → 进程 logs/signal → 跨租户 404 带正对照），live 集成
+  agent 27 例、exec 20 例全绿。宿主 Node v23.11.0；本机 3306 被宿主 mysqld 占用，容器
+  MySQL 改映射 3307。详见 [证据](evidence/d2b-updrdb-failover-2026-09-14.md)，其中记录了
+  未定位的 sandbox `fs-error` 日志与只由假驱动覆盖的握手超时分支。

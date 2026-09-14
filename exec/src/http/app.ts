@@ -27,7 +27,7 @@ import {
   ExecDbConfigError,
   type ExecDbConfig,
 } from '../db/client.js';
-import type { Pool } from 'mysql2/promise';
+import type { ExecDbPool as Pool } from '../db/failover-pool.js';
 import { AGENT_SKILL_PATH } from '../isolation/profile.js';
 import fs from 'node:fs';
 import path from 'node:path';

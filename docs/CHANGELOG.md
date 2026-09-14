@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **MySQL 建连支持 UPDRDB 两个 Proxy 的故障切换**：新增可选配置 `UPDRDB_ENDPOINTS`
+  （恰好两个 `host:port`）。Agent Knex、Agent DSH 会话存储、exec 三处取连接时粘住当前
+  主用、网络故障拉黑 180s 换另一个、拉黑过期不主动回切；单次握手 3s、一次取连接总预算
+  10s，两个都不可达时有界失败而不是挂到 Knex 默认的 60s。认证失败等非网络错误不换端点。
+  **已发出的 SQL 不重试**。会话 UTC 初始化从「连接事件里发出、失败销毁」改为交付连接前
+  等待完成，失败即丢弃连接。不设置时行为与此前相同（DSN 单端点）。见
+  [统一 design](design/updrdb-dbpm-deployment.md) §4。
 - **抢占改用「条件 UPDATE + token 回读」，开发/CI 基线降到 MySQL 5.7**：Outbox 与
   Cron 的批量抢占不再使用 `SELECT … FOR UPDATE SKIP LOCKED`（UPDRDB 的 UPSQL 5.7
   内核没有这个语法），改为一条带 eligibility 条件的 `UPDATE` 打上批次 token、再按
@@ -19,7 +26,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   每条 MySQL 物理连接在交付前执行 `SET SESSION time_zone = '+00:00'`，初始化失败
   的连接直接丢弃（此前只有驱动侧 `timezone=Z`，服务端会话时区仍是 `SYSTEM`）。
   Compose 的开发数据库切到 `mysql:5.7` 与**新数据卷** `mysql57_dev_data`；旧的
-  `mysql_dev_data` 保留作为 8.0 回退点，不可复用（官方不支持 8.0→5.7 降级）。
+  `mysql_dev_data` 不可复用（官方不支持 8.0→5.7 降级），已于 2026-09-14 决定作废。
   本地 `.env` 若显式设过 `MYSQL_DATA_VOLUME` 必须同步改名。见
   [ADR 0011](adr/0011-updrdb-upredis-dbpm-migration.md) 与
   [统一 design](design/updrdb-dbpm-deployment.md) §5。

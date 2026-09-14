@@ -192,11 +192,14 @@ export class ServiceContainer {
         (
           await import('../infrastructure/mysql/client.js')
         ).createMysqlKnex;
-      const { assertMysqlConnectionUrl } = await import(
+      const { assertMysqlConnectionUrl, readUpdrdbEndpoints } = await import(
         '../infrastructure/mysql/client.js'
       );
       assertMysqlConnectionUrl(this.mysqlUrl);
-      this.knex = createMysqlKnex(this.mysqlUrl);
+      // UPDRDB 两个 Proxy；未设置时就是 DSN 的单端点。格式错误在这里抛出，启动失败。
+      this.knex = createMysqlKnex(this.mysqlUrl, {
+        endpoints: readUpdrdbEndpoints(this.env),
+      });
       await this.knex.raw('SELECT 1');
 
       if (opts.migrate === true) {
