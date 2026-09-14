@@ -368,6 +368,15 @@ npm test --prefix frontend
 npm run build --prefix frontend
 ```
 
+需要真实 Redis 5.0.14 / MySQL 5.7 的放行测试与 release gate 在 Docker 里跑，不在宿主机起进程（宿主 Node 版本与原生模块不一定匹配，macOS 尤其如此）：
+
+```bash
+docker compose up -d mysql          # 开发栈 MySQL 需已 healthy
+scripts/dev/release-gates.sh
+```
+
+脚本按当前工作树构建 `scripts/dev/release-gate-runner.Dockerfile`（Node 22 + docker CLI，依赖与源码在镜像内，不挂宿主目录），在开发栈网络里运行，任一项失败即非零退出；自带专用 Redis 容器 `pi-release-gate-redis-dev` 与测试库 `pi_gate_dev` / `pi_gate_dev_side`，结束后删除。依次覆盖：UPRedis 队列放行测试（直连、经路由模拟代理）、Redis 重启、BullMQ Worker 重启、Agent Worker 重启。Agent Worker gate 的副作用表放在 `_side` 兄弟库，因为被测 Worker 启动时按发布清单核对自己的库。`agent-worker-dsh-restart` 需要独立 sandbox 与 HMAC 资源，不在脚本内。
+
 ### 测试结构
 
 Python `tests/` 现在只做**仓库卫生**（Python 执行面的契约测试已随 `sandbox/` 删除，

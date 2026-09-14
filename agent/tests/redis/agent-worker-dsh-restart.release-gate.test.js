@@ -207,7 +207,8 @@ async function waitForPromise(promise, message, timeoutMs = 20_000) {
 }
 
 function createWorkerHarness(workerLabel, ids) {
-  const child = spawn(process.execPath, [FIXTURE], {
+  // The fixture imports TypeScript sources; a bare `node` child has no tsx loader.
+  const child = spawn(process.execPath, ['--import', import.meta.resolve('tsx'), FIXTURE], {
     cwd: fileURLToPath(new URL('../../', import.meta.url)),
     env: {
       ...process.env,

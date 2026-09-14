@@ -703,3 +703,19 @@ Each entry should say **what changed**, **why**, and **which STATUS IDs** it aff
   立即 / 延迟 / 重试 / stalled / 取消 / 状态查询 / 单 key CAS，逐 key 无遗留）。Docker 演练按 runbook 盘点 → 停服务 → 切到
   5.0.14 + 模拟代理，真实链路（带工具 Run、进程 signal、跨租户 404）通过，`bull` 前缀 worker 拒启后恢复。
   详见 [证据](evidence/d4-upredis-queue-prefix-2026-09-14.md)。
+
+## 2026-09-14 — D4 复验：release gate 修复、容器内运行器、FsError 错误码映射
+
+- **Context：** 换一台 macOS 开发机重建到 `ecda592e` 复验 D4。D2c–D4 证据均记录 release gate 未实跑；实跑后三个 gate 失败，
+  另定位了 D2b 证据中未定位的 `exec fs-error … INTERNAL_ERROR`。用户要求测试在 Docker 中运行、旧数据直接清理。
+- **Decision：** gate 不放宽 schema 核对，副作用表移到兄弟库；`WAITAOF` 改为 5.0 可用的 `BGREWRITEAOF` 完成判定；
+  新增容器内运行器取代宿主机起进程。FsError 分类改为结构判断但只认 dsh-fs 声明的错误码，不透传任意 `code`。
+- **Action：** 修改三个 gate、worker fixture 与 dsh gate 的子进程加载；新增 `scripts/dev/release-gates.sh` 与运行器 Dockerfile；
+  contract `isFsError` 与回归测试；exec 真实 bwrap 用例改用 `buildPreflightProfile()`；`development.md`、CHANGELOG；
+  design §3.3 补 S1 接口草案（待用户确认，未实施）。删除旧 8.0 / 7.2 数据卷与临时测试库。
+- **STATUS IDs：** 不改变任何 STATUS 行（关联 B1/B2、G2/G3；目标环境验收未做）。
+- **验证：** 容器内 Node 22.23.2：release gate 运行器全绿（UPRedis 直连 6 pass / 1 skip、经代理 7 pass、redis-restart 4/4、
+  bullmq-worker-restart 2/2、agent-worker-restart 3/3）；contract 99/99、exec 369/369（带 bwrap + seccomp、非 root）、
+  api-server 159/159、frontend 367/367 + build、各包 typecheck 通过；agent 1297 pass / 3 cancelled（与 D2b 同一组，不记为通过）；
+  `uv run pytest` 123 passed。重建 agent / sandbox 镜像并换新容器后真实链路通过，sandbox 日志 `INTERNAL_ERROR` 归零。
+  `agent-worker-dsh-restart` gate 未跑。详见 [证据](evidence/release-gates-docker-2026-09-14.md)。

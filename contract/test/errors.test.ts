@@ -94,6 +94,31 @@ describe('toWireError', () => {
     assert.ok(!wire.message.includes(PHYSICAL_ROOT));
   });
 
+  it('maps an FsError thrown by a second copy of dsh-fs, preserving its FS_* code', () => {
+    // exec and contract each install @deepseek-ai/dsh-fs, so exec's FsError is
+    // not `instanceof` contract's FsError. Before 2026-09-14 every such error
+    // went out as INTERNAL_ERROR (sandbox log: `exec fs-error … INTERNAL_ERROR`).
+    class ForeignFsError extends Error {
+      readonly code: string;
+      constructor(message: string, code: string) {
+        super(message);
+        this.code = code;
+      }
+    }
+    const error = new ForeignFsError(`ENOENT: ${PHYSICAL_ROOT}/AGENTS.md`, 'FS_NOT_FOUND');
+    assert.equal(error instanceof FsError, false);
+    const wire = toWireError(error, { physicalRoots: [PHYSICAL_ROOT] });
+    assert.equal(wire.code, 'FS_NOT_FOUND');
+    assert.ok(!wire.message.includes(PHYSICAL_ROOT));
+  });
+
+  it('does not trust an arbitrary code carried by a plain Error', () => {
+    for (const code of ['ENOENT', 'AUTH_FAILED', 'FS_MADE_UP', 42]) {
+      const error = Object.assign(new Error('x'), { code });
+      assert.equal(toWireError(error, { physicalRoots: [] }).code, 'INTERNAL_ERROR');
+    }
+  });
+
   it('falls back to INTERNAL_ERROR for a plain Error, still redacted', () => {
     const error = new Error(`boom at ${PHYSICAL_ROOT}`);
     const wire = toWireError(error, { physicalRoots: [PHYSICAL_ROOT] });

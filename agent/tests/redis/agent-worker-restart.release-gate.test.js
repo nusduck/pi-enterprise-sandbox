@@ -60,6 +60,10 @@ function databaseNameFromUrl(value) {
 
 const databaseName = databaseNameFromUrl(TEST_MYSQL_URL);
 const safeDatabase = /^pi_gate_[a-z0-9_]+$/.test(databaseName);
+// The Worker verifies its database against the release manifest before it
+// consumes jobs (ADR 0011 D6), so the fixture's side-effect table lives in a
+// sibling schema instead of adding an unknown table to the verified one.
+const SIDE_EFFECT_SCHEMA = `${databaseName}_side`;
 const runLive =
   explicitlyEnabled &&
   safeContainer &&
@@ -113,7 +117,8 @@ async function docker(...args) {
 
 function createWorkerHarness(workerLabel, opts = {}) {
   const ids = opts.ids ?? SAFE_IDS;
-  const child = spawn(process.execPath, [FIXTURE], {
+  // The fixture imports TypeScript sources; a bare `node` child has no tsx loader.
+  const child = spawn(process.execPath, ['--import', import.meta.resolve('tsx'), FIXTURE], {
     cwd: fileURLToPath(new URL('../../', import.meta.url)),
     env: {
       ...process.env,
@@ -130,6 +135,7 @@ function createWorkerHarness(workerLabel, opts = {}) {
       AGENT_RUN_LEASE_TTL_MS: String(LEASE_TTL_MS),
       AGENT_RUN_LEASE_RENEW_INTERVAL_MS: '500',
       TEST_WORKER_LABEL: workerLabel,
+      TEST_SIDE_EFFECT_SCHEMA: SIDE_EFFECT_SCHEMA,
       TEST_SIDE_EFFECT_TABLE: SIDE_EFFECT_TABLE,
       TEST_TOOL_CALL_ID: ids.toolCallId,
       TEST_RUN_ID: ids.runId,
@@ -361,7 +367,9 @@ async function seedQueuedRun(knex, ids, opts = {}) {
 }
 
 async function readSideEffect(knex, toolCallId) {
-  return knex(SIDE_EFFECT_TABLE)
+  return knex
+    .withSchema(SIDE_EFFECT_SCHEMA)
+    .table(SIDE_EFFECT_TABLE)
     .where({ tool_call_id: toolCallId })
     .first();
 }
@@ -453,10 +461,10 @@ describeLive('Agent Worker SIGKILL checkpoint-aware recovery', () => {
 
     dbpm = await startDbpmForUrls({ mysqlUrl: TEST_MYSQL_URL, redisUrl: TEST_REDIS_URL });
     knex = createMysqlKnex(TEST_MYSQL_URL, { pool: { min: 0, max: 10 } });
-    await knex.schema.dropTableIfExists(SIDE_EFFECT_TABLE);
+    await knex.schema.withSchema(SIDE_EFFECT_SCHEMA).dropTableIfExists(SIDE_EFFECT_TABLE);
     await migrateRollbackAll(knex);
     await migrateLatest(knex);
-    await knex.schema.createTable(SIDE_EFFECT_TABLE, (table) => {
+    await knex.schema.withSchema(SIDE_EFFECT_SCHEMA).createTable(SIDE_EFFECT_TABLE, (table) => {
       table.string('tool_call_id', 128).primary();
       table.specificType('run_id', 'CHAR(26)').notNullable();
       table.integer('invocation_count').notNullable();
@@ -491,6 +499,7 @@ describeLive('Agent Worker SIGKILL checkpoint-aware recovery', () => {
     }
     if (knex) {
       await knex.schema
+        .withSchema(SIDE_EFFECT_SCHEMA)
         .dropTableIfExists(SIDE_EFFECT_TABLE)
         .catch((error) => cleanupErrors.push(error));
       await migrateRollbackAll(knex).catch((error) => cleanupErrors.push(error));

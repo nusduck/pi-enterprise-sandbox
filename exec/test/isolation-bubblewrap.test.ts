@@ -21,6 +21,7 @@ import {
   resolveInvocation,
   spawnLaunch,
 } from '../src/isolation/bubblewrap.js';
+import { buildPreflightProfile } from '../src/isolation/preflight.js';
 import type { BindMount, Mount } from '../src/isolation/profile.js';
 import type { IsolationProfile } from '../src/isolation/profile.js';
 import { neverExists } from './helpers.js';
@@ -312,6 +313,14 @@ test('preflightCheck(): throws IsolationUnavailable when the executable does not
 
 // ── Real spawn: only when bwrap is actually installed ───────────────────
 
-test('preflightCheck(): a real bwrap accepts the preflight profile', { skip: !bwrapAvailable }, () => {
-  preflightCheck(bwrapPath as string, minimalProfile());
+// preflightCheck() is documented to take the probe profile from preflight.ts.
+// `minimalProfile()` binds nothing, so `/usr/bin/true` cannot exist inside the
+// sandbox; this only surfaced once the test ran where bwrap is installed.
+test('preflightCheck(): a real bwrap accepts the preflight profile', { skip: !bwrapAvailable }, async () => {
+  const { root, cleanup } = await scratchDir();
+  try {
+    preflightCheck(bwrapPath as string, buildPreflightProfile({ systemSkillRoot: root }));
+  } finally {
+    await cleanup();
+  }
 });

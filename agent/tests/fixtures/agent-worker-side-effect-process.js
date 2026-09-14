@@ -31,6 +31,10 @@ const toolExecutionStatus = String(
 const executorMode = String(
   process.env.TEST_EXECUTOR_MODE || 'hang-after-side-effect',
 ).trim();
+// 副作用表放在兄弟库：被测 Worker 启动时按发布清单核对自己的库，多一张表就会拒启（ADR 0011 D6）。
+const sideEffectSchema = String(
+  process.env.TEST_SIDE_EFFECT_SCHEMA || '',
+).trim();
 
 function emit(message) {
   process.stdout.write(
@@ -42,7 +46,8 @@ if (
   !databaseUrl ||
   !workerLabel ||
   !expectedRunId ||
-  !/^release_gate_[a-z0-9_]+$/.test(sideEffectTable)
+  !/^release_gate_[a-z0-9_]+$/.test(sideEffectTable) ||
+  !/^pi_gate_[a-z0-9_]+$/.test(sideEffectSchema)
 ) {
   emit({ type: 'fatal', message: 'invalid Agent Worker fixture configuration' });
   process.exit(2);
@@ -83,7 +88,7 @@ const runExecutorFactory = ({ runId }) => ({
       });
     }
 
-    await sideEffectDb(sideEffectTable)
+    await sideEffectDb.withSchema(sideEffectSchema).table(sideEffectTable)
       .insert({
         tool_call_id: toolCallId,
         run_id: runId,
@@ -100,7 +105,7 @@ const runExecutorFactory = ({ runId }) => ({
         updated_at: sideEffectDb.fn.now(3),
       });
 
-    const row = await sideEffectDb(sideEffectTable)
+    const row = await sideEffectDb.withSchema(sideEffectSchema).table(sideEffectTable)
       .where({ tool_call_id: toolCallId })
       .first();
     emit({

@@ -123,6 +123,46 @@ K8s 用两集群各自的 PVC/CSI 挂载**同一后端 export**；RWX 声明或�
 
 R1 的**存储落点已确定**，发布一致性子项仍是实施前检查点，不能以本文完成就关闭。最少实测：VM 写草稿 → 集群 A 上传/启用 → 集群 B Worker 发现 → VM 执行；随后替换 Pod、并发启停、注入 DB/存储失败、跨 owner 拒绝。
 
+### 3.3 S1 接口检查点（2026-09-14 草案，待用户确认后实施）
+
+#### 现状（基线 `ecda592e`，只读核对）
+
+| 位置 | 事实 | 与 §3.2 的差距 |
+|---|---|---|
+| `agent/src/application/skill-enablement-service.ts` | 启用 = 先 `copyFile` + `atomicReplaceDir` 改发布字节，再 upsert `user_skill_enablements`；失败时删字节。停用 = 先删字节再删行 | 无锁、非事务；两步之间崩溃会留下「有字节无行」或「有行无字节」 |
+| `user_skill_enablements` | **只有写入方**：全仓无读取；`createEnabledSkillsProvider` / `EnabledSkillStore` 只有内存实现且未接线 | 账本不是发现的依据，目录才是 |
+| Worker（`dsh-run-executor.ts:679` → `runtime-factory.ts:423`） | `FileSystemSkillProvider` 在 Agent 本地扫 system 根 + `skill-user/<org>/<user>` | 发现 = 扫目录 |
+| exec `enabledSkillPackagesFromRoot`（`exec/src/http/app.ts:42`） | 同步扫 owner 目录，**任何异常 `catch {}` 返回 `[]`** | 挂载失败被当成「没有 Skill」 |
+| exec 内部面 fs / shell / artifact | 按信封 owner 调上面的解析器，逐包 `ro_bind` 到 `/home/sandbox/skill-user/<name>` | 挂载内容与账本无绑定 |
+| exec 公共面（BFF 转发） | 同一解析器只用于拼 `physicalRoots` 做**路径脱敏**，不读 Skill 字节 | 公共面不需要启用清单 |
+| sandbox-mcp 窄桥 | `enabledSkillPackages: []` | 保持不变 |
+| Agent → exec | 信封五字段 + payload，整个 body 受 HMAC `body_sha256` 覆盖；exec 没有回调 Agent 的客户端 | payload 可以承载经 Agent 鉴权的清单 |
+
+#### 提议的接口
+
+1. **权威与载体**：`user_skill_enablements` 是唯一启用权威。Worker 在 Run 开始时按 owner 读账本得到清单 `[{ name, contentDigest }]`，随该 Run 的 exec RPC 配置下发；内部面 fs / shell / artifact 的 **payload** 增加 `enabledSkills` 字段（受 `body_sha256` 签名），不改信封五字段，不让 exec 直读 Agent 账本，不新增 exec→Agent 回调。一次 Run 内清单固定，运行中重新发布只影响下一次 Run。
+2. **摘要与字节绑定（推荐：按摘要分版本目录）**：发布路径由 `published/<org>/<user>/<name>/` 改为 `published/<org>/<user>/<name>/.v/<contentDigest>/`，同级写只读侧车 `<contentDigest>.json`（name、digest、fileCount、totalBytes）。模型侧挂载目标仍是 `/home/sandbox/skill-user/<name>`，UI 语义不变。exec 只绑定清单点名的版本目录；目录或侧车缺失、侧车 digest 不符 → 该包拒绝并以 `SKILL_PACKAGE_UNAVAILABLE` 报出，不静默丢弃。完整重算摘要只在发布时和核对 CLI 中做，不在每次请求中做。
+   - 备选：保留原地替换布局，每次挂载前重算摘要。实现改动小，但 50MB / 512 文件的包每个请求都要全量读，且原地替换仍与正在运行的 Run 竞争。
+3. **存储不可用 fail-closed**：owner 根不可读（挂载掉线、权限、超时）→ 内部请求失败，返回 `SKILL_STORE_UNAVAILABLE`，不返回空集；公共面脱敏改用 owner 根前缀，不再依赖目录扫描结果。
+4. **并发串行化**：启用 / 停用在一个 MySQL 事务内完成：`SELECT … FROM users WHERE user_id=? FOR UPDATE`（锁 owner 既有身份行，不用全局锁）→ 读当前行 → 复制到 `.staging-*`（不在任何发现路径上）→ 写侧车并 `rename` 为 `.v/<digest>`（同 digest 已存在且侧车一致则复用）→ upsert / delete 账本行 → commit。文件复制计入锁等待预算。
+5. **失败恢复与回收**：commit 前崩溃 → 只留未被引用的版本目录；commit 后崩溃 → 已一致。停用只删账本行，字节保留；同一 owner/name 下次启停时，在同一把锁内回收「未被账本引用且超过宽限期」的版本目录，不新增后台定时器。「有行无字节」由发现/执行报告为待修复，不自动改写账本；从草稿重新启用即修复。
+6. **Agent 侧发现**：Worker 与 UI 投影改为「账本 ∩ 校验通过的版本目录」，不再扫 owner 目录。模型在 prompt 中看到的 Skill 路径与 exec 挂载目标 `/home/sandbox/skill-user/<name>` 是否一致，**实施前须核对 `FileSystemSkillProvider` 产出的路径**，本草案不预设结论。
+7. **存量兼容**：提供一次性 CLI，把旧的扁平 `<name>/` 目录按账本 digest 校验后迁入 `.v/<digest>/`，不一致的只报告不改。无生产存量（§1），开发数据由用户决定是否迁移。
+
+#### 待确认的决策
+
+| 编号 | 问题 | 草案默认 |
+|---|---|---|
+| S1-Q1 | 字节绑定方式 | 按摘要分版本目录（第 2 条） |
+| S1-Q2 | 版本回收宽限期 | 大于单个 Run 的最长运行时间，具体值由配置给出 |
+| S1-Q3 | 草稿根是否仍由 Agent 与 VM 共写 | 保持 §3.1：共享 `draft/` RW |
+
+#### 回归测试（实施时先写，修复前应失败）
+
+- exec：owner 根不可读返回 `SKILL_STORE_UNAVAILABLE` 而非空集；清单点名的版本缺失 / 侧车不符被拒；清单外的包不挂载；跨 owner 的清单被拒（对照：本 owner 合法清单可挂载）。
+- Agent：两个真实事务并发启用 / 停用同一 owner/name 时串行，不同 owner 不互相阻塞；commit 前注入失败不留账本行；「有行无字节」被报告而非启用。
+- 链路：Run 进行中重新发布，当前 Run 仍用旧版本，下一次 Run 用新版本；替换 Pod 后仍可发现。
+
 ## 4. UPDRDB 接入与连接生命周期
 
 ### 4.1 基线与职责

@@ -84,6 +84,34 @@ async function waitForRedis(client, timeoutMs = 15_000) {
   });
 }
 
+function parseInfo(text) {
+  return Object.fromEntries(
+    String(text)
+      .split(/\r?\n/)
+      .filter((line) => line.includes(':'))
+      .map((line) => [line.slice(0, line.indexOf(':')), line.slice(line.indexOf(':') + 1)]),
+  );
+}
+
+async function waitForAofRewrite(client, timeoutMs = 15_000) {
+  const deadline = Date.now() + timeoutMs;
+  let info = {};
+  while (Date.now() < deadline) {
+    info = parseInfo(await client.call('INFO', 'persistence'));
+    assertStrict.equal(info.aof_enabled, '1', 'dedicated Redis must run with appendonly yes');
+    if (
+      info.aof_rewrite_in_progress === '0' &&
+      info.aof_rewrite_scheduled === '0' &&
+      info.aof_last_rewrite_time_sec !== '-1'
+    ) {
+      assertStrict.equal(info.aof_last_bgrewrite_status, 'ok');
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  throw new Error(`AOF rewrite did not finish before deadline: ${JSON.stringify(info)}`);
+}
+
 describe('redis restart release gate safety', () => {
   it('requires explicit opt-in and dedicated resource names', () => {
     if (!explicitlyEnabled) {
@@ -194,8 +222,10 @@ describeLive('redis restart + outbox retry + SSE fallback (dedicated live resour
       createdAt: new Date().toISOString(),
     });
 
-    const waitAof = await client.call('WAITAOF', '1', '0', '5000');
-    assertStrict.deepEqual(waitAof.map(Number), [1, 0]);
+    // WAITAOF needs Redis 7.2; the baseline is 5.0.14 (ADR 0011 D9). A completed
+    // BGREWRITEAOF has written and fsynced an AOF that contains the entry above.
+    await client.call('BGREWRITEAOF');
+    await waitForAofRewrite(client);
 
     await docker('restart', '--time', '1', TEST_REDIS_CONTAINER);
     await waitForRedis(client);

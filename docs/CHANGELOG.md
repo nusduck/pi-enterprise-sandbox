@@ -98,6 +98,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **启用后的 Skill 草稿不再重复列在 Drafts**：启用是复制字节、草稿不删，所以 `skill_drafts` 里会一直有它。Agent 给这类条目打 `published: true` / `status: 'published'`，UI 的 Drafts 区只列待启用的。三层 Skill 卡片统一结构，操作按钮收进卡片底部的动作行，不再被拉成整行宽的色块。
 ### Fixed
 
+- **exec 的文件系统错误码不再被抹成 `INTERNAL_ERROR`**：exec / agent 与 contract 各装一份
+  `@deepseek-ai/dsh-fs`，`toWireError` 对调用方抛出的 `FsError` 做 `instanceof` 为假，
+  `FS_NOT_FOUND`、`FS_SANDBOX_DENIED` 等一律以 `INTERNAL_ERROR` 返回给模型（sandbox 日志
+  `exec fs-error … INTERNAL_ERROR`）。改为按 dsh-fs 声明的错误码做结构判断，任意 `code` 不透传。
 - **模型推理档位对齐真实适配器**：模型目录的 `thinking_levels` 曾沿用已退役的 pi-ai
   枚举（含 `medium`），而当前 `deepseek-official` 适配器只接受 `off|low|high|max`。
   改为按路由适配器投影可选 effort，保存不支持的档位时报错、起 Run 时 fail-closed，

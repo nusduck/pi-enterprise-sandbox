@@ -112,8 +112,36 @@ export function redactPhysicalPaths(
   return redacted;
 }
 
+/**
+ * dsh-fs 的全部 `FS_*` 错误码。写成 `Record<FsErrorCode, true>`：dsh-fs 增删错误码时
+ * 这里编译不过，而不是悄悄把新码当成 INTERNAL_ERROR。
+ */
+const FS_ERROR_CODES: Readonly<Record<FsErrorCode, true>> = Object.freeze({
+  FS_ABORTED: true,
+  FS_AMBIGUOUS_EDIT: true,
+  FS_EDIT_NOT_FOUND: true,
+  FS_IO_ERROR: true,
+  FS_NOT_DIRECTORY: true,
+  FS_NOT_FOUND: true,
+  FS_NOT_OBSERVED: true,
+  FS_NOT_REGULAR_FILE: true,
+  FS_NOT_TEXT: true,
+  FS_PERMISSION_DENIED: true,
+  FS_SANDBOX_DENIED: true,
+  FS_STALE_VERSION: true,
+  FS_TOO_LARGE: true,
+});
+
+/**
+ * 不能只靠 `instanceof`：exec / agent 与 contract 各自安装一份 `@deepseek-ai/dsh-fs`，
+ * 调用方抛出的 FsError 对这里导入的类做 `instanceof` 为假，2026-09-14 之前因此全部
+ * 降级成 INTERNAL_ERROR。结构判断只认 dsh-fs 声明过的错误码，任意 `code` 不会被透传。
+ */
 function isFsError(value: unknown): value is FsError {
-  return value instanceof FsError;
+  if (value instanceof FsError) return true;
+  if (!(value instanceof Error)) return false;
+  const code = (value as { code?: unknown }).code;
+  return typeof code === 'string' && Object.hasOwn(FS_ERROR_CODES, code);
 }
 
 function isContractError(value: unknown): value is ContractError {
