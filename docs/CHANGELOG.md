@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **破坏性：BullMQ 队列 key 改用带 hash tag 的前缀 `{bull}`，Redis 基线降到 5.0.14**：
+  新增 `AGENT_RUN_QUEUE_PREFIX`（空值 = `{bull}`），HTTP 投递与 Worker 消费共用；不含非空 hash tag
+  （如旧的默认 `bull`）在建 Queue/Worker 前拒绝启动。原因是 UPRedis Proxy 按 key 路由，BullMQ 的多 key
+  脚本必须落在同一节点。旧 `bull:agent-runs:*` 里的作业不会被新消费者看到，升级前按
+  [队列 prefix 切换 runbook](runbooks/run-queue-prefix-switch.md) 停准入、drain，由 Worker 启动恢复扫描按
+  MySQL 账本重投。开发 / 生产 overlay 的 `redis` 与 `sandbox-replay-redis` 改为 `redis:5.0.14` 并显式
+  `maxmemory-policy noeviction`；5.0 读不了 7.x 数据文件，数据卷改名为 `redis5_dev_data` /
+  `sandbox_replay_redis5_dev_data`（生产 `redis5_data` / `sandbox_replay_redis5_data`），旧卷保留不挂载，
+  本地 `.env` 里的旧卷名需要改掉。CI 服务 Redis 同步 5.0.14。新增开发用 UPRedis 路由模拟代理
+  （`scripts/dev/docker-compose.upredis-sim.yml`）与队列放行测试 `agent/tests/redis/upredis-queue.integration.test.js`。
+
 - **破坏性：任何服务启动时都不再迁移，schema 改为执行导出的发布包 + 启动只读核对**：
   开发与生产 Compose 都删除了 `agent-migrate` 服务与 `AGENT_MIGRATE_ON_START`。新增
   `npm run schema:sql|schema:replay|schema:verify|schema:manifest --prefix agent`：在空影子库上

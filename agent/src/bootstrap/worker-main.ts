@@ -156,6 +156,8 @@ export async function startWorkerMain(
       async (ref) => workerRuntime.processJob(ref),
       {
         queueName: env.AGENT_RUNS_QUEUE_NAME || undefined,
+        // 必须与 HTTP 进程的 Queue 同一 prefix，否则投递与消费落在两个 key 空间。
+        prefix: env.AGENT_RUN_QUEUE_PREFIX || undefined,
         // 容器启动时已向 DBPM 取到；消费者连接不从 URL 读口令。
         ...(container.credentials?.redis !== undefined
           ? { password: container.credentials.redis }

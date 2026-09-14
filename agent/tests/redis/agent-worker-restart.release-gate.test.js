@@ -448,7 +448,7 @@ describeLive('Agent Worker SIGKILL checkpoint-aware recovery', () => {
     );
     const [name, image, running] = inspected.stdout.trim().split('|');
     assert.equal(name, `/${TEST_REDIS_CONTAINER}`);
-    assert.equal(image, 'redis:7.2');
+    assert.equal(image, 'redis:5.0.14');
     assert.equal(running, 'true');
 
     dbpm = await startDbpmForUrls({ mysqlUrl: TEST_MYSQL_URL, redisUrl: TEST_REDIS_URL });

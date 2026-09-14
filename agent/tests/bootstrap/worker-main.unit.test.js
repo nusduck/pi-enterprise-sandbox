@@ -118,6 +118,7 @@ describe('startWorkerMain', () => {
             AGENT_BULLMQ_LOCK_DURATION_MS: '3000',
             AGENT_BULLMQ_STALLED_INTERVAL_MS: '500',
             AGENT_BULLMQ_MAX_STALLED_COUNT: '2',
+            AGENT_RUN_QUEUE_PREFIX: '{pi-test-bull}',
           },
           {
             createContainer: () => fakeContainer,
@@ -132,6 +133,7 @@ describe('startWorkerMain', () => {
     assert.equal(options.lockDuration, 3000);
     assert.equal(options.stalledInterval, 500);
     assert.equal(options.maxStalledCount, 2);
+    assert.equal(options.prefix, '{pi-test-bull}');
 
     let defaultOptions;
     await assert.rejects(
@@ -156,6 +158,7 @@ describe('startWorkerMain', () => {
     assert.equal(defaultOptions.lockDuration, undefined);
     assert.equal(defaultOptions.stalledInterval, undefined);
     assert.equal(defaultOptions.maxStalledCount, undefined);
+    assert.equal(defaultOptions.prefix, undefined);
     assert.equal(defaultOptions.concurrency, 4);
   });
 

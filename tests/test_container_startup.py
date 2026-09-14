@@ -21,7 +21,7 @@ def test_compose_parameterizes_runtime_defaults() -> None:
         # 应用连接串不带口令（ADR 0011 D10）；口令启动时向 DBPM 取。
         "AGENT_DATABASE_URL: ${AGENT_COMPOSE_DATABASE_URL:-mysql://sandbox@mysql:3306/sandbox}",
         "image: mysql:5.7",
-        "image: redis:7.2",
+        "image: redis:5.0.14",
         "AGENT_REDIS_URL: ${AGENT_COMPOSE_REDIS_URL:-redis://redis:6379/0}",
         "REDIS_URL: ${AGENT_COMPOSE_REDIS_URL:-redis://redis:6379/0}",
         "DBPM_URL: ${DBPM_URL:-dbpm-fake:7000,dbpm-fake:7001}",

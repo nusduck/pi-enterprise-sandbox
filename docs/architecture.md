@@ -42,7 +42,7 @@ Agent Worker、执行面（compose 服务名仍叫 `sandbox`）以及 MCP facade
 │    MySQL 8 (sole formal DB topology, dev + prod)         │
 │    container:8081 only — no host port in dev or prod     │
 ├──────────────────────────────────────────────────────────┤
-│    Redis 7 (Agent-only runtime coordination)             │
+│    Redis 5.0.14 (Agent-only runtime coordination)        │
 │    Queue · Lease · Stream · cancel · Outbox wakeup       │
 │    (not fact authority — MySQL + Outbox recover)         │
 ├──────────────────────────────────────────────────────────┤
@@ -156,9 +156,10 @@ Agent（DeepSeek Harness）运行在独立 `agent/` 服务中，而非浏览器�
 - 不可变 migration + checksum；失败事务回滚；重复 init 幂等
 - 需推到 Redis Stream 的持久化事件与领域状态同事务写入 `domain_outbox`（Outbox pattern）
 
-### 4b. Redis 7 Agent-only 运行态协调拓扑
+### 4b. Redis 5.0.14 Agent-only 运行态协调拓扑
 
-- **dev / prod 均使用 Redis 7**（`redis:7.2`；AOF + 命名 volume 默认持久协调数据）
+- **dev / prod 均使用 Redis 5.0.14**（`redis:5.0.14`，与 UPRedis 同版本；AOF + `noeviction` + 命名 volume 默认持久协调数据）
+- **BullMQ key 前缀带 hash tag**：`AGENT_RUN_QUEUE_PREFIX` 默认 `{bull}`，HTTP 投递与 Worker 消费共用；不带 tag 拒绝启动。UPRedis Proxy 按 key 路由，BullMQ 多 key 脚本必须落在同一节点（ADR 0011 D9）；其余脚本（lease / 会话锁 / MCP 锁）都是单 key
 - **Agent 独占 Redis 权威**：`AGENT_REDIS_URL` / `REDIS_URL`（仅 `redis://` / `rediss://`）、`TEST_REDIS_URL`（测试）
 - BFF **不**注入 Redis 连接权威配置（PR-03 边界）。Sandbox internal plane 使用**独立** `sandbox-replay-redis` + `SANDBOX_INTERNAL_REDIS_PASSWORD`（replay jti 防重放；与 Agent `REDIS_PASSWORD` / queue/lease/stream **凭据隔离**，DB 索引不算隔离）
 - 职责边界（plan §7.2 / §9）：BullMQ Run Queue（`agent-runs`）、Worker Lease（TTL 30s / 续约 10s）、Run Stream（`MAXLEN ~ 10000`）、取消信号、短期 cache/presence、Outbox wakeup
@@ -441,7 +442,7 @@ Exec internal plane (TypeScript)
 |------|------|
 | Exec / Sandbox | **Node.js 22 / TypeScript** + Bubblewrap；镜像内另带 Python 3.11 venv 供模型执行代码 |
 | Persistence | **MySQL 8**（dev/prod 唯一正式拓扑；`AGENT_DATABASE_URL` / `EXEC_DATABASE_URL`）；Agent Knex migrations + exec 自有 `exec_*` 表 |
-| Runtime coordination | **Redis 7**（Agent-only；`AGENT_REDIS_URL` / `REDIS_URL`；queue/lease/stream；非事实权威） |
+| Runtime coordination | **Redis 5.0.14**（Agent-only；队列 prefix `{bull}`；`AGENT_REDIS_URL` / `REDIS_URL`；queue/lease/stream；非事实权威） |
 | API Server (BFF) | **Node.js 22** — 薄 BFF，不托管 Agent SDK |
 | Frontend | Vite + React 19 + TypeScript SPA（`frontend/src/*.tsx`/`*.ts`），构建镜像 Node 22 |
 | Agent Harness | 独立 Node 22 服务（`@deepseek-ai/dsh-*` `0.1.1-rc.2`，逐包 exact pin） |

@@ -240,6 +240,7 @@ export class ServiceContainer {
       this.redis = createRedisClient(this.redisUrl, { password: this.credentials.redis });
       this.runQueueHandle = createRunQueue(this.redisUrl, {
         queueName: this.env.AGENT_RUNS_QUEUE_NAME || undefined,
+        prefix: this.env.AGENT_RUN_QUEUE_PREFIX || undefined,
         password: this.credentials.redis,
       });
     }

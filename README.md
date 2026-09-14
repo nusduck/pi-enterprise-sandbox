@@ -78,8 +78,8 @@ pi-sandbox/
 ├── .runtime/             ← 全部宿主机运行态（Git/Docker build 均忽略）
 │   ├── sandbox/          ← workspaces、tmp、artifacts、control
 │   └── …                 ← smoke / release-gate 等按需创建的临时状态
-├── docker-compose.yml           ← 开发编排（Frontend + BFF + Agent + Sandbox + MCP + MySQL 8 + Redis 7）
-├── docker-compose.prod.yml      ← 生产 overlay（MySQL 8 + Redis 7 + Nginx + SSL）
+├── docker-compose.yml           ← 开发编排（Frontend + BFF + Agent + Sandbox + MCP + MySQL 5.7 + Redis 5.0.14）
+├── docker-compose.prod.yml      ← 生产 overlay（MySQL 5.7 + Redis 5.0.14 + Nginx + SSL）
 └── .env.example          ← 环境变量模板（与部署文档一致）
 ```
 
@@ -185,7 +185,7 @@ Compose：`backend_internal`（`internal: true`）与 `service_egress`；Sandbox
 `scripts/dev/schema-apply.sh` 导出发布包并逐段建表；生产由 DBA 执行发布包。`sandbox`、
 `agent`、`agent-worker` 启动时按随包 schema 清单只读核对，结构不一致即拒绝启动。
 
-### Redis 7（Agent-only 运行态协调）
+### Redis 5.0.14（Agent-only 运行态协调，UPRedis 基线）
 
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
@@ -193,6 +193,7 @@ Compose：`backend_internal`（`internal: true`）与 `service_egress`；Sandbox
 | `TEST_REDIS_URL` | _(可选)_ | 集成测试用 Redis DSN |
 | `REDIS_PASSWORD` | 开发占位；生产无默认 | 生产必填强 secret（fail-fast） |
 | `AGENT_RUNS_QUEUE_NAME` | `agent-runs` | BullMQ Run Queue 名 |
+| `AGENT_RUN_QUEUE_PREFIX` | 空 = `{bull}` | BullMQ key 前缀，必须含 hash tag；改值先按 [runbook](docs/runbooks/run-queue-prefix-switch.md) drain |
 | `AGENT_RUN_LEASE_TTL_MS` | `30000` | Worker lease TTL |
 | `AGENT_RUN_LEASE_RENEW_INTERVAL_MS` | `10000` | Lease 续约间隔 |
 | `AGENT_RUN_STREAM_MAXLEN` | `10000` | Run stream 近似保留长度 |
@@ -287,7 +288,7 @@ node scripts/smoke-cross-service.mjs
 | [验收状态 STATUS](docs/STATUS.md) | 相对 plan §32 的唯一进度板 |
 | [过程日志](docs/PROCESS_LOG.md) | `codex/plan-acceptance` 过程记录（追加） |
 | [架构设计](docs/architecture.md) | 进程边界、设计决策、安全模型、数据流 |
-| [部署指南](docs/deployment.md) | 生产部署（MySQL 8 + Redis 7）、SSL、备份、监控 |
+| [部署指南](docs/deployment.md) | 生产部署（MySQL 5.7 + Redis 5.0.14）、SSL、备份、监控 |
 | [开发指南](docs/development.md) | 本地开发、零 Skill、测试、调试 |
 | [API 参考](docs/api.md) | Sandbox API + MCP + SSE、workspace_id 契约 |
 | [前端指南](docs/webui.md) | 前端 SPA 架构、SSE 消费、扩展 |

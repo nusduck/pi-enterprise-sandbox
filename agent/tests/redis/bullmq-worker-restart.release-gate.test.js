@@ -38,7 +38,7 @@ const RUN = '01K0G2PAV8FPMVC9QHJG7JPN53';
 const ORG = '01K0G2PAV8FPMVC9QHJG7JPN4Z';
 const TRACE = 'e'.repeat(32);
 const QUEUE = 'release-gate-worker-restart';
-const PREFIX = 'release-gate-bullmq-20260719';
+const PREFIX = '{release-gate-bullmq-20260719}';
 
 async function docker(...args) {
   return execFileAsync('docker', args, {
@@ -203,7 +203,7 @@ describeLive('BullMQ Worker process restart and stalled Job recovery', () => {
     );
     const [name, image, running] = inspected.stdout.trim().split('|');
     assert.equal(name, `/${TEST_REDIS_CONTAINER}`);
-    assert.equal(image, 'redis:7.2');
+    assert.equal(image, 'redis:5.0.14');
     assert.equal(running, 'true');
 
     queueHandles = createRunQueue(TEST_REDIS_URL, {

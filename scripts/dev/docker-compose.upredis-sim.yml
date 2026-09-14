@@ -1,0 +1,63 @@
+# ── 本地模拟 UPRedis Proxy（仅开发）──────────────────────────────
+# 叠加在开发 compose 之上（可与 UPDRDB 双 Proxy 模拟同时叠加）：
+#   COMPOSE_FILE=docker-compose.yml:scripts/dev/docker-compose.updrdb-sim.yml:scripts/dev/docker-compose.upredis-sim.yml
+#
+# 在 redis（redis:5.0.14）前放一个按 key 路由规则拒绝命令的 RESP 代理，并把服务 Redis 的
+# 三个消费者（agent / agent-worker 的 BullMQ + 锁 + 流，sandbox-mcp 的 context 映射）指向它。
+# 规则只模拟真机探针确认过的两条：零 key EVAL 被拒、同一命令/事务的 key 不在同一 slot 被拒。
+# 负对照：AGENT_RUN_QUEUE_PREFIX 在应用侧就拒绝无 hash tag 的值；绕过应用校验的探针见
+# agent/tests/redis/upredis-queue.integration.test.js。
+#
+# 不用于生产：生产的 Proxy 由 UPRedis 提供，本文件不进 prod overlay。
+
+services:
+  upredis-proxy:
+    image: ${DBPM_FAKE_IMAGE:-node:22-slim}
+    container_name: pi-enterprise-upredis-proxy
+    user: node
+    command: ["node", "/opt/dev/upredis-sim-proxy.mjs"]
+    environment:
+      DEPLOYMENT_ENV: ${DEPLOYMENT_ENV:-development}
+      UPREDIS_SIM_LISTEN: "6379"
+      UPREDIS_SIM_TARGET: redis:6379
+    volumes:
+      - ./scripts/dev/upredis-sim-proxy.mjs:/opt/dev/upredis-sim-proxy.mjs:ro
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('net').connect(6379,'127.0.0.1').on('connect',()=>process.exit(0)).on('error',()=>process.exit(1))"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: "no"
+    networks:
+      - backend_internal
+
+  agent:
+    environment:
+      REDIS_URL: redis://upredis-proxy:6379/0
+      AGENT_REDIS_URL: redis://upredis-proxy:6379/0
+    depends_on:
+      upredis-proxy:
+        condition: service_healthy
+
+  agent-worker:
+    environment:
+      REDIS_URL: redis://upredis-proxy:6379/0
+      AGENT_REDIS_URL: redis://upredis-proxy:6379/0
+    depends_on:
+      upredis-proxy:
+        condition: service_healthy
+
+  sandbox-mcp:
+    environment:
+      SANDBOX_MCP_REDIS_URL: redis://upredis-proxy:6379/0
+    depends_on:
+      upredis-proxy:
+        condition: service_healthy

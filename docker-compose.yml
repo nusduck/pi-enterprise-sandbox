@@ -97,7 +97,8 @@ services:
   # BFF / Sandbox must not take Redis authority in this topology.
   # Agent coordination Redis (queue / lease / stream). Not for Sandbox replay.
   redis:
-    image: redis:7.2
+    # 与 UPRedis 同版本基线（ADR 0011 D9）：BullMQ 在 6.0.6 以下自动改用无 LPOS 的脚本。
+    image: redis:5.0.14
     container_name: ${REDIS_CONTAINER:-pi-enterprise-redis}
     ports:
       - "127.0.0.1:${REDIS_HOST_PORT:-6379}:6379"
@@ -108,13 +109,17 @@ services:
       - redis-server
       - --appendonly
       - "yes"
+      # 队列与锁数据不能被淘汰：满内存拒写按依赖故障处理，而不是静默丢 Run。
+      - --maxmemory-policy
+      - noeviction
       - --requirepass
       - ${REDIS_PASSWORD:-redis_dev_only}
     volumes:
       # AOF + named volume: coordination data survives container recreate.
       # Ephemeral alternative: omit volume and accept empty Redis on recreate
       # (MySQL facts + Outbox still recover durable events).
-      - ${REDIS_DATA_VOLUME:-redis_dev_data}:/data
+      # 5.0.14 读不了 7.x 写出的 RDB/多文件 AOF：用新卷，旧 redis_dev_data 保留不删。
+      - ${REDIS_DATA_VOLUME:-redis5_dev_data}:/data
     healthcheck:
       test:
         [
@@ -136,7 +141,7 @@ services:
   # Sandbox internal-replay Redis ONLY (jti SET NX). Independent password + volume.
   # Never inject AGENT_REDIS_URL / REDIS_PASSWORD here — DB index is not isolation.
   sandbox-replay-redis:
-    image: redis:7.2
+    image: redis:5.0.14
     container_name: ${SANDBOX_REPLAY_REDIS_CONTAINER:-pi-enterprise-sandbox-replay-redis}
     # No host publish — Sandbox reaches it on backend_internal only.
     environment:
@@ -145,10 +150,12 @@ services:
       - redis-server
       - --appendonly
       - "yes"
+      - --maxmemory-policy
+      - noeviction
       - --requirepass
       - ${SANDBOX_INTERNAL_REDIS_PASSWORD:-sandbox_replay_dev_only}
     volumes:
-      - ${SANDBOX_REPLAY_REDIS_DATA_VOLUME:-sandbox_replay_redis_dev_data}:/data
+      - ${SANDBOX_REPLAY_REDIS_DATA_VOLUME:-sandbox_replay_redis5_dev_data}:/data
     healthcheck:
       test:
         [
@@ -337,6 +344,8 @@ services:
       SANDBOX_MCP_REDIS_URL: ""
       # Queue / lease / stream settings (plan §9 defaults; code may hard-pin until wired).
       AGENT_RUNS_QUEUE_NAME: ${AGENT_RUNS_QUEUE_NAME:-agent-runs}
+      # 空值由应用取默认 {bull}；compose 默认值里写不了右花括号。
+      AGENT_RUN_QUEUE_PREFIX: ${AGENT_RUN_QUEUE_PREFIX:-}
       AGENT_RUN_LEASE_TTL_MS: ${AGENT_RUN_LEASE_TTL_MS:-30000}
       AGENT_RUN_LEASE_RENEW_INTERVAL_MS: ${AGENT_RUN_LEASE_RENEW_INTERVAL_MS:-10000}
       AGENT_RUN_STREAM_MAXLEN: ${AGENT_RUN_STREAM_MAXLEN:-10000}
@@ -442,6 +451,8 @@ services:
       SANDBOX_INTERNAL_REDIS_URL: ""
       SANDBOX_MCP_REDIS_URL: ""
       AGENT_RUNS_QUEUE_NAME: ${AGENT_RUNS_QUEUE_NAME:-agent-runs}
+      # 空值由应用取默认 {bull}；compose 默认值里写不了右花括号。
+      AGENT_RUN_QUEUE_PREFIX: ${AGENT_RUN_QUEUE_PREFIX:-}
       AGENT_RUN_LEASE_TTL_MS: ${AGENT_RUN_LEASE_TTL_MS:-30000}
       AGENT_RUN_LEASE_RENEW_INTERVAL_MS: ${AGENT_RUN_LEASE_RENEW_INTERVAL_MS:-10000}
       AGENT_RUN_STREAM_MAXLEN: ${AGENT_RUN_STREAM_MAXLEN:-10000}
@@ -780,5 +791,5 @@ volumes:
   # 8.0 时代的开发数据卷：当前不再挂载，保留声明以免被 compose 当作孤儿清理。
   mysql_dev_data:
   mysql57_dev_data:
-  redis_dev_data:
-  sandbox_replay_redis_dev_data:
+  redis5_dev_data:
+  sandbox_replay_redis5_dev_data:

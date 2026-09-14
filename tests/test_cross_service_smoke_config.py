@@ -43,7 +43,7 @@ def test_cross_service_ci_provisions_mysql_and_redis_services() -> None:
     assert "      mysql:\n" in job
     assert "        image: mysql:5.7\n" in job
     assert "      redis:\n" in job
-    assert "        image: redis:7.2\n" in job
+    assert "        image: redis:5.0.14\n" in job
     assert "      sandbox-replay-redis:\n" in job
     assert "        image: bitnamilegacy/redis:7.2\n" in job
     assert "SMOKE_MYSQL_URL: mysql://" in job

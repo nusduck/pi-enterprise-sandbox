@@ -181,6 +181,7 @@ describe('ServiceContainer', () => {
         },
         createRunQueue: (_url, opts) => {
           seen.push(['queue', opts.password]);
+          seen.push(['prefix', opts.prefix]);
           return { queue: { add: async () => ({}) } };
         },
         destroyMysqlKnex: async () => {},
@@ -194,6 +195,8 @@ describe('ServiceContainer', () => {
       ['knex', 'db-from-dbpm'],
       ['redis', 'redis-from-dbpm'],
       ['queue', 'redis-from-dbpm'],
+      // 未配 AGENT_RUN_QUEUE_PREFIX 时交给工厂取默认 {bull}，不在容器里另写一份默认值。
+      ['prefix', undefined],
     ]);
     assert.equal(c.credentials.redis, 'redis-from-dbpm', 'worker 需要从容器拿 Redis 口令');
   });

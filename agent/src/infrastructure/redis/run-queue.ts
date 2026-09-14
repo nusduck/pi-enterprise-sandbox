@@ -22,7 +22,7 @@ import {
   attachRedisConnectionErrorGuard,
   REDIS_ERROR_GUARD_CLEANUP,
 } from './redis-connection-error-guard.js';
-import { RedisValidationError } from './errors.js';
+import { RedisConfigError, RedisValidationError } from './errors.js';
 import { assertOrgId, assertRunId, assertTraceId } from './validation.js';
 import {
   contextFromRunJob,
@@ -34,6 +34,31 @@ import {
 
 /** 过渡期宽松类型：bullmq / ioredis 侧对象仍走 JS 形状。 */
 type Loose = any;
+
+/** 队列 key 前缀默认值：hash tag 让同一队列的全部 key 落到同一 slot（ADR 0011 D9）。 */
+export const DEFAULT_AGENT_RUN_QUEUE_PREFIX = '{bull}';
+
+/**
+ * 解析并校验 BullMQ prefix。UPRedis Proxy 按 key 路由，BullMQ 的多 key 脚本要求
+ * 同一队列的 key 落同一节点，所以 prefix 必须以非空 hash tag 开头的位置含 `{…}`；
+ * 不带 tag 的旧值（如 `bull`）在建 Queue/Worker 前就拒绝，而不是等到脚本被代理拒。
+ *
+ * @param raw 未设置或空串时取默认 `{bull}`
+ * @returns {string}
+ */
+export function resolveRunQueuePrefix(raw?: string | null) {
+  const prefix = raw == null || String(raw).trim() === ''
+    ? DEFAULT_AGENT_RUN_QUEUE_PREFIX
+    : String(raw).trim();
+  const open = prefix.indexOf('{');
+  const close = open < 0 ? -1 : prefix.indexOf('}', open + 1);
+  if (!/^[\x21-\x7e]{3,64}$/.test(prefix) || open < 0 || close <= open + 1) {
+    throw new RedisConfigError(
+      'AGENT_RUN_QUEUE_PREFIX must contain a non-empty Redis hash tag such as {bull} (printable ASCII, 3-64 chars)',
+    );
+  }
+  return prefix;
+}
 
 /**
  * BullMQ re-emits connection failures on Queue/Worker. Without an `error`
@@ -141,6 +166,7 @@ export function assertRunJobRef(payload: unknown) {
  */
 export function createRunQueue(connectionUrl: string, options: { queueName?: string, prefix?: string, password?: string } = {}) {
   assertRedisConnectionUrl(connectionUrl);
+  const prefix = resolveRunQueuePrefix(options.prefix);
   assertBullmqInstalled();
   const { Queue } = loadBullmqModule();
   const queueName = options.queueName ?? AGENT_RUNS_QUEUE_NAME;
@@ -151,16 +177,13 @@ export function createRunQueue(connectionUrl: string, options: { queueName?: str
     ...(options.password !== undefined ? { password: options.password } : {}),
   });
 
-  const queueOpts: import('bullmq').QueueOptions = { connection };
-  if (options.prefix != null) {
-    queueOpts.prefix = options.prefix;
-  }
+  const queueOpts: import('bullmq').QueueOptions = { connection, prefix };
 
   const queue = new Queue(queueName, queueOpts);
   attachRedisConnectionErrorGuard(queue, {
     role: 'bullmq-queue-runtime',
   });
-  return { queue, connection, queueName };
+  return { queue, connection, queueName, prefix };
 }
 
 /**
@@ -254,6 +277,7 @@ export type RunJobProcessor = (ref: RunJobRef, job: import('bullmq').Job) => Pro
  */
 export function createRunWorker(connectionUrl: string, processor: RunJobProcessor, options: { queueName?: string, prefix?: string, password?: string, concurrency?: number, lockDuration?: number, stalledInterval?: number, maxStalledCount?: number } = {}) {
   assertRedisConnectionUrl(connectionUrl);
+  const prefix = resolveRunQueuePrefix(options.prefix);
   assertBullmqInstalled();
   if (typeof processor !== 'function') {
     throw new Error('createRunWorker requires a processor function');
@@ -268,6 +292,7 @@ export function createRunWorker(connectionUrl: string, processor: RunJobProcesso
 
   const workerOpts: import('bullmq').WorkerOptions = {
     connection,
+    prefix,
     concurrency: options.concurrency ?? 1,
   };
   if (Number.isFinite(options.lockDuration) && options.lockDuration > 0) {
@@ -282,10 +307,6 @@ export function createRunWorker(connectionUrl: string, processor: RunJobProcesso
   ) {
     workerOpts.maxStalledCount = options.maxStalledCount;
   }
-  if (options.prefix != null) {
-    workerOpts.prefix = options.prefix;
-  }
-
   const worker = new Worker(
     queueName,
     async (job) => {
@@ -320,7 +341,7 @@ export function createRunWorker(connectionUrl: string, processor: RunJobProcesso
     role: 'bullmq-worker-runtime',
   });
 
-  return { worker, connection, queueName };
+  return { worker, connection, queueName, prefix };
 }
 
 /**

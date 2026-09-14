@@ -215,7 +215,7 @@ jobs:
           --health-retries=30
           --health-start-period=20s
       redis:
-        image: redis:7.2
+        image: redis:5.0.14
         ports:
           - 6379:6379
         options: >-

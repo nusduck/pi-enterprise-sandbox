@@ -158,6 +158,13 @@ knex 走 `pool.afterCreate`，两处裸 mysql2 池走 `pool.pool.on('connection'
 
 我们自己的 3 个锁模块全是 `numkeys=1`，不受影响。
 
+> 实施细化（2026-09-14，D4）：配置入口为 `AGENT_RUN_QUEUE_PREFIX`（空值 = `{bull}`），
+> 在建 Queue/Worker 前校验必须含非空 hash tag。探针列为阻塞项的 `LPOS` 不需要升级 Redis：
+> BullMQ 5.80.7 读 `INFO` 版本，低于 6.0.6 时自动改用不含 `LPOS` 的脚本（`getState` / `isJobInList`），
+> 在 Redis 5.0.14 直连与本地路由模拟代理上的放行测试均通过；前提是代理放行 `INFO`。
+> 开发 / 生产 overlay 的本地 Redis 同步降到 5.0.14、显式 `noeviction`，换新数据卷。
+> 切换步骤见 [runbook](../runbooks/run-queue-prefix-switch.md)。
+
 ### D10 DBPM 只在启动取一次口令，开发用假服务端挡板
 
 - **进程启动时取一次，运行期不轮换、不重取**；口令变更通过滚动重启生效。

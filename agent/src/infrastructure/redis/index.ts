@@ -94,6 +94,8 @@ export { CancelSignal } from './cancel-signal.js';
 
 export {
   assertRunJobRef,
+  DEFAULT_AGENT_RUN_QUEUE_PREFIX,
+  resolveRunQueuePrefix,
   createRunQueue,
   createRunWorker,
   enqueueRunJob,

@@ -75,17 +75,20 @@ services:
       - backend_internal
 
   redis:
-    image: redis:7.2
+    image: redis:5.0.14
     environment:
       REDIS_PASSWORD: ${REDIS_PASSWORD:?Set REDIS_PASSWORD for production}
     command:
       - redis-server
       - --appendonly
       - "yes"
+      - --maxmemory-policy
+      - noeviction
       - --requirepass
       - ${REDIS_PASSWORD:?Set REDIS_PASSWORD for production}
     volumes:
-      - redis_data:/data
+      # 5.0.14 读不了 7.x 写出的数据文件：新卷；旧 redis_data 按队列切换 runbook 处置前保留。
+      - redis5_data:/data
     healthcheck:
       test:
         [
@@ -107,17 +110,19 @@ services:
 
   # Sandbox jti-replay only — independent secret + volume (never REDIS_PASSWORD).
   sandbox-replay-redis:
-    image: redis:7.2
+    image: redis:5.0.14
     environment:
       SANDBOX_INTERNAL_REDIS_PASSWORD: ${SANDBOX_INTERNAL_REDIS_PASSWORD:?Set SANDBOX_INTERNAL_REDIS_PASSWORD for production}
     command:
       - redis-server
       - --appendonly
       - "yes"
+      - --maxmemory-policy
+      - noeviction
       - --requirepass
       - ${SANDBOX_INTERNAL_REDIS_PASSWORD:?Set SANDBOX_INTERNAL_REDIS_PASSWORD for production}
     volumes:
-      - sandbox_replay_redis_data:/data
+      - sandbox_replay_redis5_data:/data
     healthcheck:
       test:
         [
@@ -338,6 +343,8 @@ services:
       DBPM_REDIS_DB_NAME: ${DBPM_REDIS_DB_NAME:?Set DBPM_REDIS_DB_NAME for production}
       DBPM_REDIS_DB_USER_NAME: ${DBPM_REDIS_DB_USER_NAME:?Set DBPM_REDIS_DB_USER_NAME for production}
       AGENT_RUNS_QUEUE_NAME: ${AGENT_RUNS_QUEUE_NAME:-agent-runs}
+      # 空值由应用取默认 {bull}；同一 Redis 被多环境复用时改成环境独立的 tag。
+      AGENT_RUN_QUEUE_PREFIX: ${AGENT_RUN_QUEUE_PREFIX:-}
       AGENT_RUN_LEASE_TTL_MS: ${AGENT_RUN_LEASE_TTL_MS:-30000}
       AGENT_RUN_LEASE_RENEW_INTERVAL_MS: ${AGENT_RUN_LEASE_RENEW_INTERVAL_MS:-10000}
       AGENT_RUN_STREAM_MAXLEN: ${AGENT_RUN_STREAM_MAXLEN:-10000}
@@ -400,6 +407,8 @@ services:
       DBPM_REDIS_DB_NAME: ${DBPM_REDIS_DB_NAME:?Set DBPM_REDIS_DB_NAME for production}
       DBPM_REDIS_DB_USER_NAME: ${DBPM_REDIS_DB_USER_NAME:?Set DBPM_REDIS_DB_USER_NAME for production}
       AGENT_RUNS_QUEUE_NAME: ${AGENT_RUNS_QUEUE_NAME:-agent-runs}
+      # 空值由应用取默认 {bull}；同一 Redis 被多环境复用时改成环境独立的 tag。
+      AGENT_RUN_QUEUE_PREFIX: ${AGENT_RUN_QUEUE_PREFIX:-}
       AGENT_RUN_MAX_TOOL_CALLS: ${AGENT_RUN_MAX_TOOL_CALLS:-200}
       AGENT_RUN_MAX_IDENTICAL_TOOL_CALLS: ${AGENT_RUN_MAX_IDENTICAL_TOOL_CALLS:-6}
       AGENT_RUN_MAX_MODEL_TURNS: ${AGENT_RUN_MAX_MODEL_TURNS:-120}
@@ -428,9 +437,9 @@ services:
 volumes:
   mysql_data:
     driver: local
-  redis_data:
+  redis5_data:
     driver: local
-  sandbox_replay_redis_data:
+  sandbox_replay_redis5_data:
     driver: local
   nginx_ssl:
     driver: local

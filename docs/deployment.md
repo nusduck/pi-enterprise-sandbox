@@ -333,7 +333,7 @@ replay Redis（`SANDBOX_INTERNAL_REDIS_URL`）目前没有代码消费方，不�
 
 **生产:** `docker-compose.prod.yml` 把 `dbpm-fake` 放进永不启用的 profile（并强制 production，脚本会拒绝运行），四个应用服务的 `depends_on` 用 `!override` 去掉它；`DBPM_URL`、`DBPM_DB_NAME`、`DBPM_REDIS_DB_NAME`、`DBPM_REDIS_DB_USER_NAME` 必填（`:?`，无默认）。`MYSQL_PASSWORD` / `REDIS_PASSWORD` 只用于数据库 / Redis 服务端自身。口令变更需要重启取密进程；没有双口令重叠窗口时安排维护窗口。
 
-### Redis 7（Agent-only 运行态协调）
+### Redis 5.0.14（Agent-only 运行态协调，UPRedis 基线）
 
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
@@ -342,6 +342,7 @@ replay Redis（`SANDBOX_INTERNAL_REDIS_URL`）目前没有代码消费方，不�
 | `AGENT_REDIS_URL` | 同 `REDIS_URL` 形 | Agent 客户端主 DSN（仅 `redis://` / `rediss://`；带口令拒绝启动） |
 | `TEST_REDIS_URL` | _(可选)_ | 集成测试 DSN |
 | `AGENT_RUNS_QUEUE_NAME` | `agent-runs` | BullMQ Run Queue |
+| `AGENT_RUN_QUEUE_PREFIX` | 空 = `{bull}` | BullMQ key 前缀，HTTP 与 Worker 必须一致；必须含非空 hash tag，否则拒绝启动。Redis 被多环境复用时用环境独立值（如 `{pi-test-bull}`）。改值前按 [队列 prefix 切换 runbook](runbooks/run-queue-prefix-switch.md) 停准入、drain |
 | `AGENT_RUN_LEASE_TTL_MS` | `30000` | Worker lease TTL（ms） |
 | `AGENT_RUN_LEASE_RENEW_INTERVAL_MS` | `10000` | Lease 续约间隔（ms） |
 | `AGENT_RUN_STREAM_MAXLEN` | `10000` | Run stream 近似 `MAXLEN` |
@@ -350,9 +351,11 @@ replay Redis（`SANDBOX_INTERNAL_REDIS_URL`）目前没有代码消费方，不�
 | `AGENT_RUN_MAX_IDENTICAL_TOOL_CALLS` | `6` | 同一工具与规范化参数组合的最多执行次数 |
 | `AGENT_RUN_MAX_MODEL_TURNS` | `120` | 单个 Run 最多模型回合数；达到后下一轮禁用工具并要求作答 |
 
-**开发:** `docker compose up` 启动 `redis:7.2`（AOF + `redis_dev_data` volume）。Agent 依赖 Redis health；默认 DSN 指向 compose 网络内 `redis` 服务。占位密码仅用于本地。
+**开发:** `docker compose up` 启动 `redis:5.0.14`（AOF + `maxmemory-policy noeviction` + `redis5_dev_data` volume；7.2 写出的旧卷 5.0 读不了，不复用）。Agent 依赖 Redis health；默认 DSN 指向 compose 网络内 `redis` 服务。占位密码仅用于本地。要在本地复现 UPRedis Proxy 的路由限制（零 key `EVAL` 被拒、同一命令/事务的 key 必须同一节点），再叠加 `scripts/dev/docker-compose.upredis-sim.yml`，服务 Redis 的三个消费者会改连模拟代理。
 
-**生产:** `docker-compose.prod.yml` 要求 `REDIS_PASSWORD` 已设置（`${REDIS_PASSWORD:?…}` fail-fast），启用 `requirepass`、healthcheck、持久 `redis_data` volume，Agent 对 Redis `service_healthy` 依赖；**不**对外发布 Redis 端口。BFF **不**获得 Redis 权威环境变量。
+**UPRedis 放行:** 目标 Redis 的全部后端节点与切换候选须持久配置 `noeviction`（两套 Redis 分别核验）。上线前用生产 prefix 跑 `agent/tests/redis/upredis-queue.integration.test.js`（`TEST_UPREDIS_URL` / `TEST_UPREDIS_PASSWORD` / `TEST_UPREDIS_PREFIX`，代理目标加 `TEST_UPREDIS_EXPECT_ROUTING=1`）：立即/延迟/重试/stalled/取消与状态查询、单 key CAS，逐 key 核对无遗留。
+
+**生产:** `docker-compose.prod.yml` 要求 `REDIS_PASSWORD` 已设置（`${REDIS_PASSWORD:?…}` fail-fast），启用 `requirepass`、healthcheck、持久 `redis5_data` volume（旧 `redis_data` 为 7.2 数据，按[队列 prefix 切换 runbook](runbooks/run-queue-prefix-switch.md) drain 后保留，不挂载）、`noeviction`，Agent 对 Redis `service_healthy` 依赖；**不**对外发布 Redis 端口。BFF **不**获得 Redis 权威环境变量。
 
 **Sandbox internal plane（PR-07 replay-only）:**
 

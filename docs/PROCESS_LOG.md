@@ -687,3 +687,19 @@ Each entry should say **what changed**, **why**, and **which STATUS IDs** it aff
   Docker 演练：空库三进程拒启 → `schema-apply.sh` 建表 → 自动恢复并跑通真实链路 → append-only UPDATE/DELETE
   被拒 → 删触发器后 agent-http / agent-worker / exec 均以 `missing_trigger` 拒启 → 恢复后零差异。最终镜像在新空库复验通过。
   详见 [证据](evidence/d3-schema-release-2026-09-14.md)。
+
+## 2026-09-14 — D4：BullMQ `{bull}` prefix、Redis 5.0.14 基线与 UPRedis 路由模拟
+
+- **Context：** UPDRDB/UPRedis/DBPM 迁移 §11 的 D4。UPRedis Proxy 按 key 路由，BullMQ 多 key 脚本要求同队列 key 同节点；
+  探针另把 Redis 5.0 缺 `LPOS`、`volatile-lru` 淘汰策略列为阻塞项。触及 `agent/`（队列工厂、容器、worker 入口）、两份 Compose、CI 与文档。
+- **Decision：** 新增 `AGENT_RUN_QUEUE_PREFIX`（空值 = `{bull}`），HTTP 与 Worker 共用，不含非空 hash tag 拒绝启动；
+  开发 / 生产 overlay 本地 Redis 降到 5.0.14、显式 `noeviction`，因 5.0 读不了 7.x 数据文件而换新卷、旧卷保留。
+  核对 bullmq 5.80.7 源码后确认低于 6.0.6 时自动改用无 `LPOS` 脚本，`LPOS` 不再作为升级 Redis 的理由（ADR D9 已补实施细化）。
+- **Action：** prefix 校验与接线；Compose / CI / 卫生棘轮；开发用 RESP 路由模拟代理与 overlay；放行测试
+  `upredis-queue.integration.test.js`；三个 release gate 断言同步；runbook `run-queue-prefix-switch.md`；文档与 CHANGELOG。
+- **STATUS IDs：** 不改变任何 STATUS 行（关联 B2、G2/G3；真实 UPRedis Proxy 放行与节点 `noeviction` 核验未做）。
+- **验证：** 六套测试、四包类型检查、前端 build、开发 / 模拟 / 生产 Compose 渲染与生产配置校验通过；agent 3 例、api-server 2 例
+  cancelled 同前，未记为通过。放行测试直连 5.0.14 6 pass / 1 skip、经模拟代理 7 pass（含零 key EVAL 与无 tag 前缀被拒负对照，
+  立即 / 延迟 / 重试 / stalled / 取消 / 状态查询 / 单 key CAS，逐 key 无遗留）。Docker 演练按 runbook 盘点 → 停服务 → 切到
+  5.0.14 + 模拟代理，真实链路（带工具 Run、进程 signal、跨租户 404）通过，`bull` 前缀 worker 拒启后恢复。
+  详见 [证据](evidence/d4-upredis-queue-prefix-2026-09-14.md)。

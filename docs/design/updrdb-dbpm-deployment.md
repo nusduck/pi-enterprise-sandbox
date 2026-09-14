@@ -278,7 +278,7 @@ DBPM 纯 TCP 客户端可共享在 `contract/`，按既有协议发送请求并�
 | `DBPM_REDIS_DB_NAME` / `DBPM_REDIS_DB_USER_NAME` | 服务 Redis 条目 |
 | `DBPM_REPLAY_REDIS_DB_NAME` / `DBPM_REPLAY_REDIS_DB_USER_NAME` | replay Redis 条目 |
 | `UPDRDB_ENDPOINTS` | 两个数据库 Proxy `host:port`；DSN 提供 user/database/options；用户名须与 DBPM 角色匹配，不静默覆盖 |
-| `AGENT_RUN_QUEUE_PREFIX` | 拟新增应用配置入口，必须接到全部 Queue/Worker/QueueEvents/清理消费者；值见 §8 |
+| `AGENT_RUN_QUEUE_PREFIX` | 已实现（D4）：HTTP 的 Queue 与 Worker 共用，空值取 `{bull}`，不含非空 hash tag 拒绝启动；当前代码没有 QueueEvents 与独立清理消费者；值见 §8 |
 | `API_UPSTREAM` | frontend nginx 上游地址 |
 
 既有 `AGENT_DATABASE_URL`、exec 数据库 URL、`AGENT_REDIS_URL`、`SANDBOX_MCP_REDIS_URL`、replay URL 仍按各进程配置解析，实施必须逐项追到实际工厂；上述新名字不能只出现在 YAML 中。迁移 CLI 的 DBA凭据单独受控输入，不复用生产应用账户。

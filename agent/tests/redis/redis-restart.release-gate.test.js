@@ -133,7 +133,7 @@ describeLive('redis restart + outbox retry + SSE fallback (dedicated live resour
     );
     const [name, image, running] = inspected.stdout.trim().split('|');
     assertStrict.equal(name, `/${TEST_REDIS_CONTAINER}`);
-    assertStrict.equal(image, 'redis:7.2');
+    assertStrict.equal(image, 'redis:5.0.14');
     assertStrict.equal(running, 'true');
 
     mysql = await import('../../src/infrastructure/mysql/index.js');

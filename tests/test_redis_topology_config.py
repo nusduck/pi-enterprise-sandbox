@@ -28,14 +28,22 @@ def _service_block(compose_text: str, name: str) -> str:
 
 
 class TestComposeRedisTopology:
-    def test_dev_compose_pinned_redis_7_with_healthcheck(self):
+    def test_dev_compose_pinned_redis_5_with_healthcheck(self):
         text = COMPOSE.read_text()
-        assert "image: redis:7.2" in text
+        assert "image: redis:5.0.14" in text
+        assert "image: redis:7" not in text
         assert "  redis:" in text
         assert "requirepass" in text
         assert "appendonly" in text
-        assert "redis_dev_data" in text
+        # 7.x 写出的数据文件 5.0 读不了：必须是新卷名，不能回到旧卷。
+        assert "redis5_dev_data" in text
+        # 注释里可以提旧卷名（说明保留不删），非注释行不能再挂载或声明它。
+        assert re.search(r"^[^#\n]*\bredis_dev_data\b", text, re.M) is None
+        assert re.search(r"^[^#\n]*\bsandbox_replay_redis_dev_data\b", text, re.M) is None
         redis = _service_block(text, "redis")
+        assert "- --maxmemory-policy\n      - noeviction\n" in redis
+        replay = _service_block(text, "sandbox-replay-redis")
+        assert "- --maxmemory-policy\n      - noeviction\n" in replay
         assert "redis-cli" in redis
         assert "ping" in redis
         assert "healthcheck:" in redis
@@ -55,6 +63,10 @@ class TestComposeRedisTopology:
         assert "DBPM_REDIS_DB_NAME:" in agent
         assert "AGENT_RUNS_QUEUE_NAME:" in agent
         assert "agent-runs" in agent
+        # HTTP 与 Worker 读同一个 prefix 变量（空值由应用取 {bull}）；compose 默认值写不了 `}`。
+        worker = _service_block(text, "agent-worker")
+        for block in (agent, worker):
+            assert "AGENT_RUN_QUEUE_PREFIX: ${AGENT_RUN_QUEUE_PREFIX:-}\n" in block
         assert "AGENT_RUN_LEASE_TTL_MS:" in agent
         assert "30000" in agent
         assert "AGENT_RUN_LEASE_RENEW_INTERVAL_MS:" in agent
@@ -92,14 +104,21 @@ class TestComposeRedisTopology:
 
     def test_prod_compose_redis_requires_password_and_agent_wiring(self):
         text = COMPOSE_PROD.read_text()
-        assert "image: redis:7.2" in text
+        assert "image: redis:5.0.14" in text
         assert "REDIS_PASSWORD:?Set REDIS_PASSWORD for production" in text
         assert "requirepass" in text
-        assert "redis_data" in text
+        assert "image: redis:7" not in text
+        assert "redis5_data" in text
+        assert re.search(r"^[^#\n]*\bredis_data\b", text, re.M) is None
+        assert re.search(r"^[^#\n]*\bsandbox_replay_redis_data\b", text, re.M) is None
         redis = _service_block(text, "redis")
         # Compose merge may use ports: [] or ports: !reset []
         assert "ports:" in redis and ("[]" in redis or "!reset" in redis)
         assert "healthcheck:" in redis
+        assert "- --maxmemory-policy\n      - noeviction\n" in redis
+        assert "- --maxmemory-policy\n      - noeviction\n" in _service_block(text, "sandbox-replay-redis")
+        for name in ("agent", "agent-worker"):
+            assert "AGENT_RUN_QUEUE_PREFIX: ${AGENT_RUN_QUEUE_PREFIX:-}\n" in _service_block(text, name)
 
         agent = _service_block(text, "agent")
         assert "AGENT_REDIS_URL:" in agent
@@ -129,7 +148,7 @@ class TestComposeRedisTopology:
         # Must not wire Agent REDIS_PASSWORD into Sandbox internal URL.
         assert "REDIS_PASSWORD:?Set REDIS_PASSWORD for production}@redis:6379/2" not in sandbox
         assert "sandbox-replay-redis:" in text
-        assert "sandbox_replay_redis_data" in text
+        assert "sandbox_replay_redis5_data" in text
 
         assert "image: postgres" not in text
         assert "POSTGRES_" not in text
