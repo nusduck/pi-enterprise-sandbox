@@ -403,9 +403,10 @@ Worker SIGTERM：先停止新 claim/调度/消费，再 drain 或按既有可恢
 > **2026-09-15 实施细化（S2f，exec release 与 systemd；工具链安装未做）**：
 > - release 由 `scripts/vm/build-exec-release.sh` 在目标架构 Linux 容器内构建（依赖含 koffi 原生模块）；布局 `contract/{dist,schema,node_modules}`、`exec/{dist,node_modules}`、`vm/`、`release-manifest.json`、`SHA256SUMS`。安装到 `/opt/pi-exec/releases/<id>`（root 所有、运行用户只读），`current` 符号链接原子切换；数据在 `/var/lib/pi-exec/*`（0700），配置 `/etc/pi-exec/exec.env`。
 > - Node 固定 `/usr/local/bin/node`：exec 的 bwrap 静态只读挂载只有 `/usr /bin /sbin /lib /lib64`，子进程 PATH / NODE_PATH 也指向 `/usr/local`。本节表格中「装到 /opt 时处理真实二进制 bind」因此改为不支持 /opt。
-> - unit：ExecStartPre 部署检查 → exec 自身启动链；`KillMode=mixed`，停止后 cgroup 内 bwrap 子进程被清理、账本由下次启动孤儿回收收口（容器演练实测）。加固项逐项实测：`RestrictNamespaces`、`ProcSubset=pid` 使 bwrap 失败、exec 拒启；`ProtectKernelTunables`、`ProtectKernelLogs`、`ProtectProc=invisible` 兼容并启用。结果来自特权 Debian 容器，麒麟内核需复测。
+> - unit：ExecStartPre 部署检查 → exec 自身启动链；`KillMode=mixed`，停止后 cgroup 内 bwrap 子进程被清理、账本由下次启动孤儿回收收口（容器演练实测）。加固项逐项实测：`RestrictNamespaces`、`ProcSubset=pid` 使 bwrap 失败、exec 拒启；`ProtectKernelTunables`、`ProtectKernelLogs` 在 Debian systemd 252 上兼容，但 openEuler 24.03 systemd 255 上任一项单独开启即让 bwrap 挂不上 procfs、exec 拒启（S2f-2 实测，已从 unit 移除）；`ProtectProc=invisible` 两者均兼容并启用。结果来自特权容器，麒麟上需复测。
 > - **发现与决定**：exec 曾在 `EXEC_INTERNAL_ALLOW_CIDR` 为空时不限制内部面来源，而开发 Compose 传入的 `SANDBOX_ALLOWED_CLIENT_CIDRS` 是 Python 执行面时代的变量、TS exec 不读，内部面实际只靠 HMAC。用户 2026-09-15 决定改为空值拒绝：非法 CIDR 拒启，IPv4-mapped IPv6 按 IPv4 匹配，开发 Compose 给默认私网白名单，生产 overlay 必填（见 CHANGELOG）。
-> - 未做：VM 工具链（Python venv、办公 JS、bun / BaoYu、麒麟 Chromium wrapper）安装与完整工具 smoke、麒麟 / KySec / SELinux 实机、release 在 x86_64 上实际运行（本机只验证了 amd64 产物的清单与原生模块架构）、sandbox-mcp 与 Agent / BFF 指向 VM exec 的真实链路。
+> - **工具链（S2f-2）**：`vm/toolchain/install-toolchain.sh` + `toolchain-sources.json`。openEuler 24.03 LTS 官方源（OS / everything / EPOL / update，`repoquery --whatprovides` 核对）没有 ripgrep、fd、pandoc、LibreOffice、Chromium；用户 2026-09-15 决定用上游官方包钉版本 + SHA256（LibreOffice 验 TDF 签名后钉、Chromium 用 Playwright 分发的 Chrome for Testing 并按下载钉）。本节表格「Chromium wrapper 指向麒麟真实二进制」改为指向脚本安装的 `/usr/local/lib/pi-chromium/chrome/chrome`；LibreOffice 官方 RPM 默认 `/opt` 在沙箱中不可见，解包搬到 `/usr/local/lib`。既有问题：`exec/requirements.txt` 未钉版本（镜像同样），VM 安装记录实际版本但不可复现。openEuler 仓库只有 nodejs 20，Node 用官方 tarball。
+> - 未做（S2f 当时）：VM 工具链（Python venv、办公 JS、bun / BaoYu、麒麟 Chromium wrapper）安装与完整工具 smoke、麒麟 / KySec / SELinux 实机、release 在 x86_64 上实际运行（本机只验证了 amd64 产物的清单与原生模块架构）、sandbox-mcp 与 Agent / BFF 指向 VM exec 的真实链路。
 
 ## 10. 开发切换、部署与回退（R5）
 

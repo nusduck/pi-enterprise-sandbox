@@ -1,0 +1,119 @@
+{
+  "schema": 1,
+  "notes": "exec VM 工具链制品清单（design §9.1）。install-toolchain.sh 只使用这里的文件名 / URL / SHA256，先核对再安装。sha256_source 说明哈希来自哪里：publisher = 发布方公布的摘要；gpg_verified_then_pinned = 先用发布方签名验证再记录摘要；pinned_at_retrieval = 发布方无摘要，按首次下载记录（2026-09-15）。dnf 包名来自 openEuler 24.03 LTS 仓库 repoquery，麒麟上需复核。",
+  "target": "openEuler 24.03 LTS / Kylin (dnf), x86_64 and aarch64",
+  "dnf_packages": [
+    "bubblewrap", "util-linux", "findutils", "cpio", "rpm", "tar", "xz", "gzip", "coreutils", "curl", "ca-certificates", "python3",
+    "git", "jq", "zip", "unzip", "file", "less", "poppler-utils", "qpdf",
+    "tesseract", "tesseract-langpack-eng", "tesseract-langpack-chi_sim",
+    "fontconfig", "freetype", "harfbuzz", "liberation-fonts", "google-noto-cjk-fonts", "wqy-zenhei-fonts",
+    "libX11", "libxcb", "libXext", "libXfixes", "libXcomposite", "libXdamage", "libXrandr", "libXrender", "libXinerama", "libICE", "libSM", "libxkbcommon",
+    "mesa-libgbm", "atk", "at-spi2-atk", "at-spi2-core", "cairo", "cairo-gobject", "pango", "gdk-pixbuf2",
+    "cups-libs", "dbus-libs", "avahi-libs", "nss", "nss-util", "nspr", "alsa-lib"
+  ],
+  "npm_globals": {
+    "bun": "1.4.0",
+    "docx": "9.7.1",
+    "pptxgenjs": "4.0.1"
+  },
+  "artifacts": {
+    "node": {
+      "version": "22.23.2",
+      "sha256_source": "publisher: https://nodejs.org/dist/v22.23.2/SHASUMS256.txt",
+      "x86_64": {
+        "file": "node-v22.23.2-linux-x64.tar.xz",
+        "url": "https://nodejs.org/dist/v22.23.2/node-v22.23.2-linux-x64.tar.xz",
+        "sha256": "d60acfe00a2932254bb0ad20e01b0d74397a0875595de719654b214f4b03f307"
+      },
+      "aarch64": {
+        "file": "node-v22.23.2-linux-arm64.tar.xz",
+        "url": "https://nodejs.org/dist/v22.23.2/node-v22.23.2-linux-arm64.tar.xz",
+        "sha256": "fff4078c5def658577f92c88db7db3bc0072924bfb93fe52c1e744a54e94abb8"
+      }
+    },
+    "uv": {
+      "version": "0.12.14",
+      "sha256_source": "publisher: PyPI file digests for uv 0.12.14",
+      "x86_64": {
+        "file": "uv-0.12.14-py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
+        "url": "https://files.pythonhosted.org/packages/72/dd/7b73e723a1a1a1771e7b266c05190869db34ea7df87330da296bfa401063/uv-0.12.14-py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
+        "sha256": "40a7bf0c79168692cb136dff50d7016093a608940bd9a059582d788494ad716b"
+      },
+      "aarch64": {
+        "file": "uv-0.12.14-py3-none-manylinux_2_28_aarch64.whl",
+        "url": "https://files.pythonhosted.org/packages/45/a4/052bc7e9a3e0d32d979ee44fffce1a2b325346f470fc15727dc8deea5b10/uv-0.12.14-py3-none-manylinux_2_28_aarch64.whl",
+        "sha256": "42d7f3d8bec37cc32711df400e61fbd92cc433a1092e02ffa012923ecf984db8"
+      }
+    },
+    "ripgrep": {
+      "version": "15.2.0",
+      "sha256_source": "publisher: GitHub release asset digest (BurntSushi/ripgrep 15.2.0)",
+      "x86_64": {
+        "file": "ripgrep-15.2.0-x86_64-unknown-linux-musl.tar.gz",
+        "url": "https://github.com/BurntSushi/ripgrep/releases/download/15.2.0/ripgrep-15.2.0-x86_64-unknown-linux-musl.tar.gz",
+        "sha256": "33e15bcf1624b25cdd2a55813a47a2f95dbe126268203e76aa6a585d1e7b149c"
+      },
+      "aarch64": {
+        "file": "ripgrep-15.2.0-aarch64-unknown-linux-musl.tar.gz",
+        "url": "https://github.com/BurntSushi/ripgrep/releases/download/15.2.0/ripgrep-15.2.0-aarch64-unknown-linux-musl.tar.gz",
+        "sha256": "800b1e7206afe799dfb5a6901f23147cfaabe0e52210538100f61e86e1740915"
+      }
+    },
+    "fd": {
+      "version": "10.5.0",
+      "sha256_source": "publisher: GitHub release asset digest (sharkdp/fd v10.5.0)",
+      "x86_64": {
+        "file": "fd-v10.5.0-x86_64-unknown-linux-musl.tar.gz",
+        "url": "https://github.com/sharkdp/fd/releases/download/v10.5.0/fd-v10.5.0-x86_64-unknown-linux-musl.tar.gz",
+        "sha256": "761c72dc8e120d85b22292063be8a796e2eeb20eb3e4f38b8fa2343ccf3514a7"
+      },
+      "aarch64": {
+        "file": "fd-v10.5.0-aarch64-unknown-linux-musl.tar.gz",
+        "url": "https://github.com/sharkdp/fd/releases/download/v10.5.0/fd-v10.5.0-aarch64-unknown-linux-musl.tar.gz",
+        "sha256": "d76c4317f7d5dba69f8a2a15856c90c777e7f0dd4e85f0de8c76de6992c374d4"
+      }
+    },
+    "pandoc": {
+      "version": "3.11",
+      "sha256_source": "publisher: GitHub release asset digest (jgm/pandoc 3.11)",
+      "x86_64": {
+        "file": "pandoc-3.11-linux-amd64.tar.gz",
+        "url": "https://github.com/jgm/pandoc/releases/download/3.11/pandoc-3.11-linux-amd64.tar.gz",
+        "sha256": "37edb3bbcf722f921a009941bf5874e2e0c09263226c9b4a2d980788cb062ab6"
+      },
+      "aarch64": {
+        "file": "pandoc-3.11-linux-arm64.tar.gz",
+        "url": "https://github.com/jgm/pandoc/releases/download/3.11/pandoc-3.11-linux-arm64.tar.gz",
+        "sha256": "56ed5566ec41d22ec9ee0704e6ac0b98ba102e92384efd5306173a22d314c79a"
+      }
+    },
+    "libreoffice": {
+      "version": "26.8.0",
+      "sha256_source": "gpg_verified_then_pinned: Good signature from LibreOffice Build Team (CODE SIGNING KEY) <build@documentfoundation.org>, primary key fingerprint C2839ECAD9408FBE9531C3E9F434A1EFAFEEAEA3 (key fetched from keyserver.ubuntu.com, 2026-09-15)",
+      "x86_64": {
+        "file": "LibreOffice_26.8.0_Linux_x86-64_rpm.tar.gz",
+        "url": "https://download.documentfoundation.org/libreoffice/stable/26.8.0/rpm/x86_64/LibreOffice_26.8.0_Linux_x86-64_rpm.tar.gz",
+        "sha256": "24f08911b8c938a3318bd699e71bef034a5b4708499646d2d367e3c922d95137"
+      },
+      "aarch64": {
+        "file": "LibreOffice_26.8.0_Linux_aarch64_rpm.tar.gz",
+        "url": "https://download.documentfoundation.org/libreoffice/stable/26.8.0/rpm/aarch64/LibreOffice_26.8.0_Linux_aarch64_rpm.tar.gz",
+        "sha256": "ce54df10771d8a4ed76e7c5955b403f3f8fe5569659ba6dc259d787bfff08542"
+      }
+    },
+    "chromium": {
+      "version": "153.0.8010.12",
+      "sha256_source": "pinned_at_retrieval: Chrome for Testing build distributed by Playwright 1.63.0 (chromium revision 1243); the CDN publishes no checksum, sizes match what the Playwright installer downloaded (2026-09-15)",
+      "x86_64": {
+        "file": "chrome-for-testing-153.0.8010.12-linux-x64.zip",
+        "url": "https://cdn.playwright.dev/builds/cft/153.0.8010.12/linux64/chrome-linux64.zip",
+        "sha256": "8aac35011c18f6e2d10696154af89a5728ac2ddd6dc6fad24ffdf243c3fcfd5a"
+      },
+      "aarch64": {
+        "file": "chrome-for-testing-153.0.8010.12-linux-arm64.zip",
+        "url": "https://cdn.playwright.dev/builds/cft/153.0.8010.12/linux-arm64/chrome-linux-arm64.zip",
+        "sha256": "7d8a4b4ff289efe44a06501a519df142c4c18fff7aaf1c1401a3fbb12b3bd069"
+      }
+    }
+  }
+}

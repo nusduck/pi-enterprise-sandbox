@@ -110,6 +110,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **VM 模型工具链安装脚本**（design §9.1，S2f-2）：release 新增 `vm/toolchain/install-toolchain.sh` 与制品清单
+  `toolchain-sources.json`，以及脚本读取的 `toolchain/`（`requirements.txt`、三个 wrapper、两套 BaoYu 脚本与锁文件）。面向 dnf 系
+  （openEuler / 麒麟）：dnf 装隔离原语、办公 / OCR / 字体与浏览器运行库；Node 22.23.2、uv、ripgrep、fd、pandoc、LibreOffice、Chromium
+  按清单钉版本与 SHA256，**先核对再使用**，默认只用离线缓存（`--allow-download` 才下载）。openEuler 24.03 官方源缺的 ripgrep / fd / pandoc /
+  LibreOffice / Chromium 使用上游官方包（LibreOffice 先验 GPG 签名、Chromium 为 Playwright 分发的 Chrome for Testing）。全部装到 Bubblewrap
+  可见的 `/usr/local` 与 `/opt/pi-python/venv`（官方 LibreOffice RPM 解包后搬离 `/opt`），`baoyu-chromium` 改写为 VM 路径。新增开发用
+  `scripts/vm/openeuler-systemd-sim.Dockerfile` 与 `tests/test_vm_toolchain_assets.py`。
+
 - **Agent Worker 依赖不可用时暂停取任务**（design §9.2）：新增依赖守卫，每 `AGENT_WORKER_DEPENDENCY_CHECK_INTERVAL_MS`
   （默认 5000，非法值拒绝启动）用与 `/ready` 相同的 ping 探测 MySQL / Redis；连续 2 次失败调用 `worker.pause(true)` 停止从 BullMQ
   取新任务（不等待、不打断在跑任务），连续 2 次成功后 `resume()`，只恢复自己造成的暂停。暂停期间 `/ready` 返回 503、`consumer: paused`。

@@ -4,9 +4,11 @@
 # 单 VM 单实例：不要复制成多个实例（exec 也会以 EXEC_CONCURRENCY 拒绝多实例）。
 #
 # 加固项与 Bubblewrap 的兼容性以 exec 启动期隔离预检为准：不兼容时 exec 拒绝启动，不会带病运行。
-# 2026-09-15 在带 systemd 的 Debian 容器里逐项实测（不是目标 VM，麒麟内核上需复测）：
-#   已启用且实测兼容：ProtectKernelTunables、ProtectKernelLogs、ProtectProc=invisible
+# 2026-09-15 在容器里逐项实测（不是目标 VM，麒麟上需复测）：
+#   已启用：ProtectProc=invisible —— Debian systemd 252 与 openEuler 24.03 systemd 255 均兼容
 #   刻意不启用：
+#     ProtectKernelTunables / ProtectKernelLogs —— systemd 252 兼容，但 openEuler systemd 255 上任一项单独开启
+#                          bwrap 都报 "Can't mount proc on /newroot/proc: Operation not permitted"，exec 拒启
 #     RestrictNamespaces   —— 实测 bwrap "No permissions to create new namespace"，exec 拒启
 #     ProcSubset=pid       —— 实测 bwrap 读不到 /proc/sys/kernel/overflowuid，exec 拒启
 #     PrivateUsers         —— 实测可启动，但会改变服务所见的 uid 映射，与共享 Skill 存储的属主/ACL 冲突风险未评估
@@ -53,8 +55,6 @@ RestrictSUIDSGID=yes
 LockPersonality=yes
 RestrictRealtime=yes
 ProtectClock=yes
-ProtectKernelTunables=yes
-ProtectKernelLogs=yes
 ProtectProc=invisible
 
 [Install]

@@ -121,9 +121,12 @@ def test_unit_runs_non_root_with_preflight_and_cgroup_cleanup() -> None:
 @pytest.mark.parametrize(
     "directive",
     [
-        # 实测让 bwrap 失败、exec 拒启（见 docs/evidence/s2f-vm-release-*.md）
+        # 实测让 bwrap 失败、exec 拒启（见 docs/evidence/s2f-*.md）
         "RestrictNamespaces",
         "ProcSubset",
+        # systemd 252 兼容，openEuler 24.03 systemd 255 上任一项单独开启即让 bwrap 挂不上 procfs
+        "ProtectKernelTunables",
+        "ProtectKernelLogs",
         # 未评估或已知不适用
         "PrivateUsers",
         "SystemCallFilter",
@@ -136,8 +139,6 @@ def test_unit_avoids_directives_that_break_bubblewrap(directive: str) -> None:
 
 def test_unit_keeps_hardening_measured_compatible_with_bubblewrap() -> None:
     d = _unit_directives()
-    assert d.get("ProtectKernelTunables") == ["yes"]
-    assert d.get("ProtectKernelLogs") == ["yes"]
     assert d.get("ProtectProc") == ["invisible"]
     assert d.get("CapabilityBoundingSet") == [""]
 

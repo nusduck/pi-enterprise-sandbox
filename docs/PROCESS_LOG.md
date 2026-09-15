@@ -854,3 +854,15 @@ Each entry should say **what changed**, **why**, and **which STATUS IDs** it aff
   停双 UPDRDB Proxy 约 11s 后暂停、`/ready` 503 `consumer: paused`；暂停中入队作业先被在途取任务拿到、随即放回，20s 内持续 `delayed`；
   恢复约 7s 后继续，作业才被执行（失败原因由修复前的数据库不可达变为虚构 Run 的 `Run not found`）；真实链路通过。
   详见 [证据](evidence/worker-dependency-guard-2026-09-15.md)。
+
+## 2026-09-15 — S2f-2：VM 工具链安装脚本（openEuler 24.03 容器演练，未完成）
+
+- **Context：** S2f 未覆盖 VM 上的模型工具链。用户决定先用 openEuler 官方镜像演练安装脚本与 release。
+- **Decision：** openEuler 24.03 官方源核对后缺 ripgrep / fd / pandoc / LibreOffice / Chromium，用户选择上游官方包钉版本 + SHA256；
+  LibreOffice 验 TDF 签名后钉，Chromium 用 Playwright 分发的 Chrome for Testing 按下载钉。全部装到 bwrap 可见的 `/usr/local` 与 venv。
+- **Action：** `deploy/vm/toolchain/`（安装脚本、制品清单）、release 构建器带工具链资产、openEuler 演练镜像、卫生测试；演练中修复 tesseract
+  语言数据路径（openEuler 打包不一致）与校验函数 SIGPIPE 误报两处；exec 在 systemd 255 上因 `ProtectKernelTunables` / `ProtectKernelLogs`
+  挂不上 procfs 而拒启，逐项实测后从 unit 移除。
+- **STATUS IDs：** 不改变任何 STATUS 行（关联 G7、T6；目标 VM 未验证）。
+- **验证：** 14 个制品文件按清单核对通过；openEuler 容器内 release 安装、工具链安装与校验通过；加固项逐项实测。`uv run pytest` 199 passed。
+  **bwrap 内完整工具 smoke 尚未在修正后的 unit 下跑通**。详见 [证据](evidence/s2f2-openeuler-toolchain-2026-09-15.md)。

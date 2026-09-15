@@ -106,18 +106,32 @@ cgroup 里剩余的 bwrap 子进程一律 SIGKILL；被中断作业的账本由�
 unit 进入 failed。修好配置后需 `systemctl reset-failed pi-exec` 再启动。
 
 **加固项**：unit 启用 `NoNewPrivileges`、空 capability、`ProtectSystem=strict`、`ProtectHome`、`PrivateTmp`、
-`ProtectKernelTunables`、`ProtectKernelLogs`、`ProtectProc=invisible` 等，`ReadWritePaths` 只放 `/var/lib/pi-exec`
-与共享草稿根。兼容性以 exec 启动期 bwrap 预检为准，2026-09-15 在带 systemd 的 Debian 容器中逐项实测：
+`ProtectProc=invisible` 等，`ReadWritePaths` 只放 `/var/lib/pi-exec` 与共享草稿根。兼容性以 exec 启动期 bwrap 预检为准，
+2026-09-15 在 Debian bookworm（systemd 252）与 openEuler 24.03 LTS（systemd 255）容器中逐项实测：
 
 | 指令 | 结果 | unit |
 |---|---|---|
-| `ProtectKernelTunables=yes` / `ProtectKernelLogs=yes` / `ProtectProc=invisible` | 可启动，`/ready` 隔离 ok | 启用 |
+| `ProtectProc=invisible` | 两个环境均可启动，`/ready` 隔离 ok | 启用 |
+| `ProtectKernelTunables=yes` / `ProtectKernelLogs=yes` | systemd 252 可启动；**systemd 255 上任一项单独开启**，bwrap `Can't mount proc on /newroot/proc: Operation not permitted`，exec 拒启 | 不启用 |
 | `RestrictNamespaces=yes` | bwrap `No permissions to create new namespace`，exec 拒启 | 不启用 |
 | `ProcSubset=pid` | bwrap 读不到 `/proc/sys/kernel/overflowuid`，exec 拒启 | 不启用 |
 | `PrivateUsers=yes` | 可启动，但改变服务所见 uid 映射，与共享存储属主 / ACL 的影响未评估 | 不启用 |
 | `SystemCallFilter` / `MemoryDenyWriteExecute` | 未测；前者需审计 bwrap 系统调用，后者与 Node JIT 冲突 | 不启用 |
 
 目标 VM 内核（麒麟、KySec）上的结果可能不同，上线前按同一方式复测；不兼容时 exec 拒绝启动而不是降级运行。
+
+**模型工具链**（dnf 系：openEuler / 麒麟，root 运行，脚本随 release 在 `vm/toolchain/`）：
+
+```bash
+vm/toolchain/install-toolchain.sh --cache /srv/pi-toolchain-cache            # 离线：缓存里必须已有全部制品
+vm/toolchain/install-toolchain.sh --cache /srv/pi-toolchain-cache --allow-download   # 缺的按清单 URL 下载
+```
+
+- 制品清单 `vm/toolchain/toolchain-sources.json` 钉住 Node、uv、ripgrep、fd、pandoc、LibreOffice、Chromium 两种架构的文件名 / URL / SHA256，并写明哈希来源（发布方摘要、签名验证后记录、首次下载记录）。脚本**先核对 SHA256 再使用**，不匹配或未钉版即失败，从不 `curl | sh`。
+- openEuler 24.03 LTS 官方源（OS / everything / EPOL / update）不提供 ripgrep、fd、pandoc、LibreOffice、Chromium，按决定使用上游官方包：ripgrep / fd / pandoc 为 GitHub release（musl 静态版 / 官方 tar 包），LibreOffice 为 TDF 官方 RPM（GPG 签名验证后钉 SHA256），Chromium 为 Playwright 1.63.0 分发的 Chrome for Testing 构建（发布方无摘要，按下载记录）。是否允许在目标 VM 使用这些第三方二进制需另行确认。
+- 其余来自 dnf 源（清单 `dnf_packages`，包名按 openEuler 24.03 核对，麒麟上需复核）、PyPI（`requirements.txt`，未钉版本，安装后把实际版本写入 `/usr/local/share/pi-toolchain/python-freeze.txt`）与 npm（bun / docx / pptxgenjs 与 BaoYu 锁文件，版本同 `runtime-versions.json`）；可用 `UV_INDEX_URL`、`npm_config_registry` 指向内网镜像。
+- 安装位置全部在 Bubblewrap 可见的 `/usr/local` 与 `/opt/pi-python/venv`：官方 LibreOffice RPM 默认装到 `/opt`，脚本解包后搬到 `/usr/local/lib/libreofficeX.Y`；`baoyu-chromium` 改写为指向 `/usr/local/lib/pi-chromium/chrome/chrome`。
+- 结束时核对各工具版本、Python / Node 文档库可导入、`soffice.bin` 与 `chrome` 无缺失共享库，失败即非零退出。重复运行跳过已装的同版本组件。
 
 **本仓库的演练范围**：release 在带 systemd 的 Debian 容器中验证过安装、负对照、启动、停止清理、孤儿回收与回滚；
 麒麟 VM、KySec / SELinux、真实 user namespace 限制与完整办公工具链 smoke 仍需在目标 VM 上做（design §12 T6）。
