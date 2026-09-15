@@ -140,6 +140,25 @@ export class SandboxBridgeClient {
     return `${this.#settings.sandboxBaseUrl.replace(/\/+$/, '')}${path}`;
   }
 
+  /**
+   * 就绪探针用：执行面公开的 `/ready` 是否 200。**不带桥 token**——`/ready`
+   * 本来就是公开路由，探针不该让凭据多出现在一条请求里。它只证明执行面可达，
+   * 不证明桥 token 被接受（窄桥没有无副作用的探测路由，也不为此新增一条）。
+   */
+  async sandboxReady(timeoutMs: number): Promise<boolean> {
+    if (!this.#started) return false;
+    try {
+      const response = await this.#fetch(this.#url('/ready'), {
+        method: 'GET',
+        signal: AbortSignal.timeout(timeoutMs),
+      });
+      await response.body?.cancel();
+      return response.status === 200;
+    } catch {
+      return false;
+    }
+  }
+
   async post(path: string, payload: Record<string, unknown>): Promise<Record<string, unknown>> {
     if (!this.#started) throw new SandboxBridgeError('Sandbox bridge is unavailable');
     let response: Response;

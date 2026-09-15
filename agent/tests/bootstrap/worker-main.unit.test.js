@@ -53,6 +53,7 @@ describe('startWorkerMain', () => {
           },
           {
             createContainer: () => fakeContainer,
+            startProbeServer: async () => ({ listening: false }),
             createRunWorker: () => {
               throw new Error('bullmq missing');
             },
@@ -122,6 +123,7 @@ describe('startWorkerMain', () => {
           },
           {
             createContainer: () => fakeContainer,
+            startProbeServer: async () => ({ listening: false }),
             createRunWorker: (_url, _processor, workerOptions) => {
               options = workerOptions;
               throw new Error('stop after option capture');
@@ -147,6 +149,7 @@ describe('startWorkerMain', () => {
           },
           {
             createContainer: () => fakeContainer,
+            startProbeServer: async () => ({ listening: false }),
             createRunWorker: (_url, _processor, workerOptions) => {
               defaultOptions = workerOptions;
               throw new Error('stop after default option capture');

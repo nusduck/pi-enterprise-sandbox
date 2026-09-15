@@ -98,7 +98,27 @@ export function createMcpApp(settings: McpSettings, service: McpFacadeService): 
   const app = new Hono();
   const security = transportSecurity(settings.publicBaseUrl);
 
+  // liveness：进程活着就 200，不查依赖。
   app.get('/health', (c) => c.json({ status: 'ok', service: 'sandbox-mcp' }));
+
+  // readiness：服务 Redis 与执行面都可达才 200。只回 ok/unavailable，不带错误详情。
+  app.get('/ready', async (c) => {
+    let result = { ready: false, redis: false, sandbox: false };
+    try {
+      result = await service.readiness();
+    } catch {
+      // 探针本身出错按未就绪处理。
+    }
+    return c.json(
+      {
+        status: result.ready ? 'ready' : 'not_ready',
+        service: 'sandbox-mcp',
+        redis: result.redis ? 'ok' : 'unavailable',
+        sandbox: result.sandbox ? 'ok' : 'unavailable',
+      },
+      result.ready ? 200 : 503,
+    );
+  });
 
   // 运维常把客户端指到 http://host:8082/ —— MCP 在 /mcp。
   app.on(['GET', 'POST', 'HEAD'], '/', (c) =>
@@ -109,6 +129,7 @@ export function createMcpApp(settings: McpSettings, service: McpFacadeService): 
           '(Authorization: Bearer <SANDBOX_MCP_TOKEN>). ' +
           'Use http://<host>:8082/mcp — not the service root.',
         health: '/health',
+        ready: '/ready',
         mcp: '/mcp',
       },
       404,

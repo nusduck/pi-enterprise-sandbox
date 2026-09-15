@@ -78,6 +78,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Agent Worker 探针 listener**（design §9.2，S2）：Worker 新增只含 `GET /health`（事件循环活性，不查依赖）与
+  `GET /ready`（启动完成、BullMQ 消费者在跑、未关停，且 MySQL `SELECT 1` / Redis `PING` 在 2s 内成功）的内部 listener，
+  端口 `AGENT_WORKER_PROBE_PORT`（默认 `4101`，非法值拒绝启动），其余路径 404。listener 先于容器启动，SIGTERM 时先摘除就绪
+  再停消费。开发 Compose 的 `agent-worker` 增加基于 `/health` 的 healthcheck，端口只 `expose` 不发布。
+- **sandbox-mcp 新增 `GET /ready`**（design §9.2，S2）：服务 Redis `PING` 与执行面 `GET /ready` 都在 2s 内成功才 200，
+  否则 503，只回各项 ok/unavailable。探针不带窄桥 token。`/health` 仍只表示进程存活。
+
 - **一个 org 可以有多个可选的智能体**：新增 Agent 目录写入面（`POST /api/agents`
   建智能体、`POST /api/agents/{id}/versions` 改配置、`POST /api/agents/{id}/active-version`
   切活跃版本 / 回滚，均要求 admin），并把 `agent_id` 接到建会话的三个入口

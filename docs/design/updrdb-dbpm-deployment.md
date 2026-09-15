@@ -387,6 +387,11 @@ VM 使用不可变 release 目录，包含 `exec/dist`、`contract/dist`、对�
 
 数据库临时不可用影响 readiness，不直接让 liveness 把所有 Pod 同时重启；startup probe 给有限启动预算。Worker readiness=false 本身不会停止 BullMQ，应用还必须暂停取得新任务，失去 lease 时按现有 fence 停止推进。依据 [Kubernetes 探针语义](https://kubernetes.io/docs/tasks/configure-pod-container/configure-liveness-readiness-startup-probes/)。
 
+> **2026-09-15 实施细化（S2a / S2b）**：
+> - Worker：`AGENT_WORKER_PROBE_PORT`（默认 4101）上只有 `/health`、`/ready`，listener 先于容器启动；`/ready` 看启动完成、BullMQ `isRunning()`、未关停，及 MySQL `SELECT 1` / Redis `PING`（各 2s）。SIGTERM 时先置未就绪。**尚未实现**「readiness=false 时暂停取新任务」：依赖故障期间仍由既有 lease/fence 兜底，是否在依赖探测失败时 `worker.pause()` 待定。
+> - facade：新增 `/ready` = 服务 Redis `PING` + 执行面 `GET /ready`（不带桥 token）。窄桥没有无副作用探测路由，本次不新增，因此 readiness 不证明桥 token 有效。
+> - **已复现的偏差**：执行面 `/ready` 与 `/health` 是同一个恒返回 `{"status":"ok"}` 的处理器（开发栈实测 200），`deployment.md` 所述的 workspace / 数据库 / bwrap 预检 503 并不存在，可追溯到删除 Python 执行面（`f49a5226`）。facade 与 LB 对执行面的就绪判断在修复前都只等于进程可达；修复归入 S2c。
+
 Worker SIGTERM：先停止新 claim/调度/消费，再 drain 或按既有可恢复边界中止，最后释放 lease 与连接；宽限时间经真机测试确定。VM 升级先维护窗口、停准入、drain/停止进程再切 release；单 VM 不运行两个 exec 同时争夺本地字节和孤儿回收。
 
 ## 10. 开发切换、部署与回退（R5）

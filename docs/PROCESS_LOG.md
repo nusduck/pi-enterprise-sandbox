@@ -747,3 +747,18 @@ Each entry should say **what changed**, **why**, and **which STATUS IDs** it aff
   各包 typecheck；锁集成测试在开发栈 MySQL 4/4；`uv run pytest` 123 passed。重建镜像后真实链路：启用得 `.v/<digest>` 版本、
   模型按 `/home/sandbox/skill-user/path-probe` 读到资源、停用后不可见且草稿回到未发布、字节保留。详见
   [证据](evidence/s1-skill-ledger-2026-09-14.md)。
+
+## 2026-09-15 — S2a / S2b：Worker 探针 listener 与 sandbox-mcp 就绪探针
+
+- **Context：** design §11 S2 中不依赖目标环境的两项（§9.2 探针表）。HTTPS 域名、K8s NetworkPolicy、LB 注册依赖 S0 平台信息，
+  不在本次猜测。实施中在运行栈复现：执行面 `/ready` 与 `/health` 是同一个恒 ok 处理器，`deployment.md` 描述的预检不存在。
+- **Decision：** Worker 独立 listener 只开 `/health`（不查依赖）与 `/ready`（启动完成 + 消费者在跑 + 未关停 + MySQL / Redis 2s 内可达），
+  端口非法拒启、先于容器启动、SIGTERM 先摘除就绪。facade `/ready` = 服务 Redis PING + 执行面 `/ready`，探针不带桥 token，
+  不为探测新增窄桥路由。执行面 `/ready` 的修复拆为 S2c，本次只把文档改成现状。「readiness=false 时暂停取任务」暂不实现，记为待定。
+- **Action：** agent `worker-probe.ts` 与 `worker-main.ts` 接线；exec facade `ContextStore.ping` / `sandboxReady` / `readiness` / `GET /ready`；
+  Compose `agent-worker` healthcheck；`deployment.md`、`.env.example`、design §9.2、CHANGELOG。
+- **STATUS IDs：** 不改变任何 STATUS 行（关联 G1；目标环境部署验收未做）。
+- **验证：** 探针单测 Worker 12/12、facade 23/23；agent 1311 pass / 3 cancelled、api-server 157 pass / 2 cancelled（已知组，不记为通过）；
+  exec 376 / 1 skip、contract 109/109、frontend 0 fail + build、四包类型检查、`uv run pytest` 123 passed，均在宿主 Node v23.11.0。
+  重建 agent / sandbox 镜像并换新容器：停 UPRedis 代理时 Worker 与 facade `/ready` 503、`/health` 200，停 sandbox 时 facade `/ready` 503，恢复后 200；
+  真实链路（带工具 Run、进程 logs / SIGTERM、跨租户 404 带正对照）通过。详见 [证据](evidence/s2ab-probes-2026-09-15.md)。

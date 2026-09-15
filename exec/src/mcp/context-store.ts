@@ -98,6 +98,25 @@ export class ContextStore {
     }
   }
 
+  /** 就绪探针用：未启动、PING 失败或超时都返回 false，不抛、不带错误详情。 */
+  async ping(timeoutMs: number): Promise<boolean> {
+    const client = this.#redis;
+    if (client === null) return false;
+    let timer: NodeJS.Timeout | undefined;
+    try {
+      return await Promise.race([
+        client.ping().then((reply) => reply === 'PONG'),
+        new Promise<boolean>((resolve) => {
+          timer = setTimeout(() => resolve(false), timeoutMs);
+        }),
+      ]);
+    } catch {
+      return false;
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
+
   #require(): RedisLike {
     if (this.#redis === null) throw new ContextStoreError('MCP context store is unavailable');
     return this.#redis;

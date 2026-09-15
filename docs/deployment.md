@@ -347,6 +347,8 @@ replay Redis（`SANDBOX_INTERNAL_REDIS_URL`）目前没有代码消费方，不�
 | `AGENT_RUN_LEASE_RENEW_INTERVAL_MS` | `10000` | Lease 续约间隔（ms） |
 | `AGENT_RUN_STREAM_MAXLEN` | `10000` | Run stream 近似 `MAXLEN` |
 | `AGENT_WORKER_CONCURRENCY` | `4` | BullMQ Worker 并发；前台 durable 子 Agent 至少需要 `2`，默认值为文档深度 2 链路预留槽位 |
+| `AGENT_WORKER_PROBE_PORT` | `4101` | Worker 探针 listener 端口（`/health`、`/ready`，见 [Health Checks](#health-checks)）；非 1–65535 整数拒绝启动 |
+| `AGENT_WORKER_PROBE_HOST` | `0.0.0.0` | Worker 探针监听地址；K8s 探针打 Pod IP，不要改成 loopback |
 | `AGENT_RUN_MAX_TOOL_CALLS` | `200` | 单个 Run 最多执行的工具调用数；达到后下一轮只能基于已有结果作答 |
 | `AGENT_RUN_MAX_IDENTICAL_TOOL_CALLS` | `6` | 同一工具与规范化参数组合的最多执行次数 |
 | `AGENT_RUN_MAX_MODEL_TURNS` | `120` | 单个 Run 最多模型回合数；达到后下一轮禁用工具并要求作答 |
@@ -485,8 +487,12 @@ AgentVersion 的 `configJson.toolPolicy` 是下层，**只能收紧**。
 | 探针 | 端点 | 成功 | 失败含义 |
 |------|------|------|----------|
 | Sandbox liveness | `GET /health` | 200 | 进程无响应 |
-| Sandbox readiness | `GET /ready` | 200 | **503** = workspace/`/tmp` 不可写、数据库/internal plane 不可用或 Bubblewrap preflight 失败；响应含 `internal_plane_status` |
+| Sandbox readiness | `GET /ready` | 200 | **当前与 `/health` 是同一个恒返回 `{"status":"ok"}` 的处理器，不做 workspace / 数据库 / Bubblewrap 预检，也没有 `internal_plane_status`**（2026-09-15 开发栈实测）。启动期的 schema 核对与孤儿回收失败会让进程退出，但运行期依赖故障不会反映到这里；按设计补齐预检前（design §9.2，S2c），不要把它当作可接流量的依据 |
 | Agent readiness | `GET /ready`（Agent port） | 200 | **503** = Agent data plane、Sandbox，或任一 `enabled` MCP Server 不可用；响应含 MCP Server/tool 数量与状态 |
+| Agent Worker liveness | `GET /health`（`AGENT_WORKER_PROBE_PORT`，默认 4101） | 200 | Worker 事件循环无响应；不查依赖 |
+| Agent Worker readiness | `GET /ready`（同上） | 200 | **503** = 未完成启动（含 schema 核对、恢复扫描、消费者创建）、已进入关停、BullMQ 消费者未运行，或 MySQL `SELECT 1` / Redis `PING` 在 2s 内失败；响应只含各项 ok/unavailable，不含错误详情 |
+| sandbox-mcp liveness | `GET /health`（8082） | 200 | facade 进程无响应；不查依赖 |
+| sandbox-mcp readiness | `GET /ready`（8082） | 200 | **503** = 未启动或已关停、服务 Redis `PING` 失败，或执行面 `GET /ready` 非 200（各 2s 超时）；探针请求不带桥 token，只证明执行面可达，不证明窄桥 token 被接受 |
 | API Server liveness | `GET /health/live` | 200 | BFF 进程不可用 |
 | API Server readiness | `GET /health/ready` | 200 | Agent 或 Sandbox 未就绪（503） |
 | Frontend | `GET /` | 200 | 静态站/反代不可用 |
@@ -512,6 +518,12 @@ curl -f https://localhost/nginx/status
 ```
 
 容器 `healthcheck` 当前使用 `/health`（liveness）。编排侧若需“可接流量”语义，应对 Sandbox 使用 `/ready`。
+
+Agent Worker 不发布业务 HTTP 面，探针 listener（`AGENT_WORKER_PROBE_PORT`，默认 `4101`；`AGENT_WORKER_PROBE_HOST` 默认 `0.0.0.0`）只有上表两条路由，其余一律 404，端口不发布到宿主，K8s 中也不应注册到任何 LB。端口值非法时 Worker 拒绝启动。listener 先于容器启动，启动期间 `/ready` 为 503；收到 SIGTERM 后先置为未就绪，再停调度与消费，最后关闭 listener。readiness=false 本身**不会**暂停 BullMQ 取任务，失去 lease 时由既有 fence 停止推进。
+
+```bash
+docker compose exec agent-worker node -e "fetch('http://127.0.0.1:4101/ready').then(async r=>console.log(r.status, await r.text()))"
+```
 
 ### Compose smoke path（多轮 / 审批 / 二进制 / 取消 / 产物）
 

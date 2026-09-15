@@ -20,6 +20,11 @@ import { createServiceContainer } from './container.js';
 import { startRunWorkerRuntime } from './run-worker.js';
 import { startTelemetry } from '../infrastructure/telemetry.js';
 import { CronScheduler } from '../application/cron-job-service.js';
+import {
+  closeWorkerProbeServer,
+  resolveWorkerProbePort,
+  startWorkerProbeServer,
+} from './worker-probe.js';
 
 /** Foreground durable subagents need a slot while their child Run executes. */
 export const DEFAULT_AGENT_WORKER_CONCURRENCY = 4;
@@ -36,17 +41,53 @@ function optionalSafeInteger(value: unknown, minimum: number): number | undefine
 export interface WorkerMainHooks {
   readonly createContainer?: typeof createServiceContainer;
   readonly createRunWorker?: (...args: any[]) => any;
+  readonly startProbeServer?: typeof startWorkerProbeServer;
 }
 
 export async function startWorkerMain(
   env: NodeJS.ProcessEnv = process.env,
   hooks: WorkerMainHooks = {},
 ) {
+  // 端口非法在任何连接之前拒绝启动。
+  const probePort = resolveWorkerProbePort(env.AGENT_WORKER_PROBE_PORT);
+  const probe = {
+    started: false,
+    shuttingDown: false,
+    container: null as any,
+    workerHandle: null as any,
+  };
+  // 探针先于容器启动：启动期间 liveness 可达、readiness 为 503。
+  const server = await (hooks.startProbeServer || startWorkerProbeServer)(
+    {
+      started: () => probe.started,
+      shuttingDown: () => probe.shuttingDown,
+      consumerRunning: () => probe.workerHandle?.worker?.isRunning?.() === true,
+      pingMysql: () => probe.container.knex.raw('select 1'),
+      pingRedis: () => probe.container.redis.ping(),
+    },
+    { port: probePort, host: env.AGENT_WORKER_PROBE_HOST || undefined },
+  );
+  try {
+    return await runWorkerMain(env, hooks, probe, server);
+  } catch (err) {
+    probe.shuttingDown = true;
+    await closeWorkerProbeServer(server).catch(() => {});
+    throw err;
+  }
+}
+
+async function runWorkerMain(
+  env: NodeJS.ProcessEnv,
+  hooks: WorkerMainHooks,
+  probe: { started: boolean; shuttingDown: boolean; container: any; workerHandle: any },
+  probeServer: Awaited<ReturnType<typeof startWorkerProbeServer>>,
+) {
   const telemetry = await startTelemetry(env, {
     serviceName: 'pi-enterprise-agent-worker',
   });
   const createContainer = hooks.createContainer || createServiceContainer;
   const container = createContainer(env);
+  probe.container = container;
   // schema 只读核对在 container.start 里，先于消费任务、恢复扫描与 outbox 发布。
   await container.start({
     role: 'agent-worker',
@@ -180,6 +221,8 @@ export async function startWorkerMain(
         ),
       },
     );
+    probe.workerHandle = workerHandle;
+    probe.started = true;
     console.log(
       `[agent-worker] BullMQ consumer started queue=${workerHandle.queueName} recovery=${recoveryOk ? 'ok' : 'degraded'}`,
     );
@@ -205,6 +248,8 @@ export async function startWorkerMain(
   const shutdown = async (signal) => {
     if (shuttingDown) return;
     shuttingDown = true;
+    // 先摘除就绪，再停调度与消费；探针 listener 最后关，关停期间 liveness 仍可答。
+    probe.shuttingDown = true;
     console.log(`[agent-worker] ${signal} — shutting down`);
     clearInterval(recoveryTimer);
     await cronScheduler?.shutdown().catch(() => {});
@@ -239,12 +284,13 @@ export async function startWorkerMain(
     } catch {
       /* ignore */
     }
+    await closeWorkerProbeServer(probeServer).catch(() => {});
     process.exit(0);
   };
   process.once('SIGTERM', () => void shutdown('SIGTERM'));
   process.once('SIGINT', () => void shutdown('SIGINT'));
 
-  return { container, workerRuntime, recoveryService, cronScheduler, workerHandle };
+  return { container, workerRuntime, recoveryService, cronScheduler, workerHandle, probeServer };
 }
 
 const isMain =

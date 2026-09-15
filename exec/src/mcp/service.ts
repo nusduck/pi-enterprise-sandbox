@@ -68,10 +68,13 @@ function guessMimeType(name: string): string | null {
   return MIME_BY_EXT[name.slice(dot).toLowerCase()] ?? null;
 }
 
+export const READINESS_CHECK_TIMEOUT_MS = 2000;
+
 export class McpFacadeService {
   readonly #settings: McpSettings;
   readonly #contextStore: ContextStore;
   readonly #bridge: SandboxBridgeClient;
+  #closing = false;
 
   constructor(settings: McpSettings, contextStore: ContextStore, bridge: SandboxBridgeClient) {
     this.#settings = settings;
@@ -86,8 +89,21 @@ export class McpFacadeService {
   }
 
   async close(): Promise<void> {
+    this.#closing = true;
     this.#bridge.close();
     await this.#contextStore.close();
+  }
+
+  /** 就绪 = 未关停，且服务 Redis PING 与执行面 `/ready` 都在超时内成功。 */
+  async readiness(
+    timeoutMs = READINESS_CHECK_TIMEOUT_MS,
+  ): Promise<{ ready: boolean; redis: boolean; sandbox: boolean }> {
+    if (this.#closing) return { ready: false, redis: false, sandbox: false };
+    const [redis, sandbox] = await Promise.all([
+      this.#contextStore.ping(timeoutMs),
+      this.#bridge.sandboxReady(timeoutMs),
+    ]);
+    return { ready: redis && sandbox, redis, sandbox };
   }
 
   static #contextPayload(record: ContextRecord): Json {
