@@ -807,3 +807,20 @@ Each entry should say **what changed**, **why**, and **which STATUS IDs** it aff
   `uv run pytest` 150 passed（宿主 Node v23.11.0）。镜像构建首次因 OrbStack 代理 EOF 失败，重试通过：facade 302MB、uid 10001、无 bwrap / Python /
   curl / `mysql2` / dsh-*、发布文件只读。换新容器后 facade healthy、`/ready` 200；经 slim facade 的真实 MCP 调用（写文件 → Python 读回、
   错误 / 缺失 token 401）与经 BFF 的真实链路通过。详见 [证据](evidence/s2e-slim-facade-2026-09-15.md)。
+
+## 2026-09-15 — S2f：VM exec release 与 systemd 部署资产
+
+- **Context：** design §9 要求执行面在单 VM 上以不可变 release + systemd 运行。用户确认本阶段范围：release 包、unit、启动前检查、
+  安装 / 切换 / 回滚脚本，在 Linux 容器中验证；工具链安装与目标 VM 验收不在范围。
+- **Decision：** 在目标架构 Linux 容器内构建（依赖含 koffi 原生模块），manifest + `SHA256SUMS` 支撑完整性核对；Node 固定
+  `/usr/local/bin/node`（bwrap 只暴露 `/usr` 等路径）。env 模板只列 exec 实际读取的变量。安装脚本不自动重启。加固项以 exec 启动期
+  bwrap 预检为准逐项实测后取舍；初稿「`/proc` 相关项会使 bwrap 失败」的判断经实测错误，已改为启用实测兼容的三项。
+  发现 `EXEC_INTERNAL_ALLOW_CIDR` 为空时内部面不限来源、Compose 的 `SANDBOX_ALLOWED_CLIENT_CIDRS` 无读取方，本次只在 VM 预检要求非空，应用默认值待决定。
+- **Action：** `scripts/vm/`（构建脚本、构建器、manifest 生成、开发用 systemd 容器）、`deploy/vm/`（unit、env 模板、预检、安装脚本）、
+  `tests/test_vm_release_assets.py`；`deployment.md`（VM exec release 小节）、`module-layout.md`（同时修正 S2e 遗留的「facade 同镜像」表述）、
+  design §9、CHANGELOG。
+- **STATUS IDs：** 不改变任何 STATUS 行（关联 G7、C4/C6/C7、H4；T6 目标 VM 验收未做）。
+- **验证：** 首轮演练因 `/tmp` noexec 引导失败作废；重跑后两处判定（`ss` 缺失、`pgrep` 自匹配）写错，已用 `curl` 与 `ps` 复核。
+  特权 systemd 容器内：负对照（缺配置、篡改文件、数据根权限）均在 ExecStartPre 拒绝且未监听；正常启动 uid 997、`/ready` 200；
+  最终 unit 下后台作业 `systemctl stop` 无残留进程，重启后孤儿回收收口账本；切换、同 id 拒绝重装、回滚通过；加固项逐项实测。
+  amd64 产物只核对清单与原生模块架构。`uv run pytest` 166 passed。详见 [证据](evidence/s2f-vm-release-2026-09-15.md)。

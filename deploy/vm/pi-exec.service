@@ -1,0 +1,61 @@
+# Pi Enterprise Sandbox exec（执行面）的 systemd unit（design §9.1 / §9.2）。
+#
+# 由 install-release.sh activate 安装到 /etc/systemd/system/pi-exec.service。
+# 单 VM 单实例：不要复制成多个实例（exec 也会以 EXEC_CONCURRENCY 拒绝多实例）。
+#
+# 加固项与 Bubblewrap 的兼容性以 exec 启动期隔离预检为准：不兼容时 exec 拒绝启动，不会带病运行。
+# 2026-09-15 在带 systemd 的 Debian 容器里逐项实测（不是目标 VM，麒麟内核上需复测）：
+#   已启用且实测兼容：ProtectKernelTunables、ProtectKernelLogs、ProtectProc=invisible
+#   刻意不启用：
+#     RestrictNamespaces   —— 实测 bwrap "No permissions to create new namespace"，exec 拒启
+#     ProcSubset=pid       —— 实测 bwrap 读不到 /proc/sys/kernel/overflowuid，exec 拒启
+#     PrivateUsers         —— 实测可启动，但会改变服务所见的 uid 映射，与共享 Skill 存储的属主/ACL 冲突风险未评估
+#     SystemCallFilter     —— 需要单独审计 bwrap 的 clone/unshare/mount 等调用
+#     MemoryDenyWriteExecute —— Node 的 JIT 需要可写可执行内存
+
+[Unit]
+Description=Pi Enterprise Sandbox exec (execution plane)
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=pi-exec
+Group=pi-exec
+EnvironmentFile=/etc/pi-exec/exec.env
+WorkingDirectory=/opt/pi-exec/current/exec
+# 部署检查：非 root、Node 版本与位置、release 完整且只读、必需配置、数据目录属主与权限。
+ExecStartPre=/opt/pi-exec/current/vm/exec-preflight.sh
+# 应用自身再按 取密 → schema 核对 → 存储与 bwrap 预检 → 孤儿回收 → listen 启动。
+ExecStart=/usr/local/bin/node dist/main.js
+Restart=on-failure
+RestartSec=5s
+TimeoutStartSec=120
+# SIGTERM 只发给主进程（先置未就绪、关 listener）；超时或主进程退出后，
+# cgroup 里剩下的 bwrap 子进程一律 SIGKILL，不留孤儿进程。账本由下次启动的孤儿回收收口。
+KillMode=mixed
+KillSignal=SIGTERM
+TimeoutStopSec=60
+UMask=0077
+LimitNOFILE=65536
+TasksMax=4096
+
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/pi-exec -/mnt/pi-skill/draft
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RestrictRealtime=yes
+ProtectClock=yes
+ProtectKernelTunables=yes
+ProtectKernelLogs=yes
+ProtectProc=invisible
+
+[Install]
+WantedBy=multi-user.target

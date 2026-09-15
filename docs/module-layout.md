@@ -208,9 +208,18 @@ Unchanged: feature-sliced style under `frontend/src/` (`pages/`, `widgets/`, `fe
 - Agent: `WORKDIR /app/agent`，`CMD ["node", "dist/server.js"]`（worker 是
   `dist/worker.js`）。镜像**不挂载源码**，改了 `agent/` 必须重建。
 - API: `WORKDIR /app`, `CMD ["node", "dist/server.js"]` — TypeScript 构建产物，镜像**不挂载源码**，改了 `api-server/` 必须重建。
-- Exec: `WORKDIR /app/exec`，`CMD ["node", "dist/main.js"]`；MCP facade 是同一镜像的
-  `node dist/mcp-main.js`。compose 服务名仍是 `sandbox` / `sandbox-mcp`。
-  **两者必须一起重建**，否则一个跑新代码一个跑旧的。
+- Exec: `WORKDIR /app/exec`，`CMD ["node", "dist/main.js"]`；MCP facade 是同一份
+  `exec/Dockerfile` 的 slim `facade` 阶段（独立镜像 `enterprise-sandbox-mcp`，`node dist/mcp-main.js`）。
+  compose 服务名仍是 `sandbox` / `sandbox-mcp`。**改了 `exec/` 两者必须一起重建**，否则一个跑新代码一个跑旧的。
+
+## VM release（exec 裸装）
+
+- `deploy/vm/`：随 release 分发的部署资产——`pi-exec.service`、`exec.env.example`、`exec-preflight.sh`
+  （ExecStartPre）、`install-release.sh`（init / install / activate / list）。release 内位于 `vm/`。
+- `scripts/vm/`：仓库侧工具——`build-exec-release.sh` + `release-builder.Dockerfile`（在目标架构 Linux 容器里
+  构建，产物写到 `.runtime/vm-release/`）、`write-release-manifest.mjs`、开发用 `systemd-sim.Dockerfile`。
+- release 目录布局：`release-manifest.json`、`SHA256SUMS`、`contract/{dist,schema,node_modules}`、
+  `exec/{dist,node_modules}`、`vm/`。不含源码与开发依赖。
 
 ---
 

@@ -101,6 +101,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **VM exec release 与 systemd 部署资产**（design §9，S2）：`scripts/vm/build-exec-release.sh --arch amd64|arm64` 在目标架构的
+  Linux 容器里构建不可变 release 包（`release-manifest.json` 记录提交、架构、构建用 Node 与 glibc、schema 清单哈希、原生模块；
+  `SHA256SUMS` 覆盖全部文件；有未提交改动时拒绝构建）。`deploy/vm/` 随包分发：`pi-exec.service`（非 root、ExecStartPre 预检、
+  `KillMode=mixed` 清理 bwrap 子进程、`ProtectSystem=strict` 等加固，逐项实测与 bwrap 兼容）、只列 exec 实际读取变量的
+  `exec.env.example`、`exec-preflight.sh`（Node 位置与版本、release 完整且只读、必需配置、数据根 0700 等）与
+  `install-release.sh`（init / install / activate / list，校验哈希，同 id 不可重装，从不自动重启）。部署步骤见 `deployment.md`
+  「VM exec release」。VM 上的系统工具链安装与完整工具 smoke 不在本次范围。
+
 - **Agent Worker 探针 listener**（design §9.2，S2）：Worker 新增只含 `GET /health`（事件循环活性，不查依赖）与
   `GET /ready`（启动完成、BullMQ 消费者在跑、未关停，且 MySQL `SELECT 1` / Redis `PING` 在 2s 内成功）的内部 listener，
   端口 `AGENT_WORKER_PROBE_PORT`（默认 `4101`，非法值拒绝启动），其余路径 404。listener 先于容器启动，SIGTERM 时先摘除就绪

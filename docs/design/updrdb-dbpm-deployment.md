@@ -400,6 +400,13 @@ VM 使用不可变 release 目录，包含 `exec/dist`、`contract/dist`、对�
 
 Worker SIGTERM：先停止新 claim/调度/消费，再 drain 或按既有可恢复边界中止，最后释放 lease 与连接；宽限时间经真机测试确定。VM 升级先维护窗口、停准入、drain/停止进程再切 release；单 VM 不运行两个 exec 同时争夺本地字节和孤儿回收。
 
+> **2026-09-15 实施细化（S2f，exec release 与 systemd；工具链安装未做）**：
+> - release 由 `scripts/vm/build-exec-release.sh` 在目标架构 Linux 容器内构建（依赖含 koffi 原生模块）；布局 `contract/{dist,schema,node_modules}`、`exec/{dist,node_modules}`、`vm/`、`release-manifest.json`、`SHA256SUMS`。安装到 `/opt/pi-exec/releases/<id>`（root 所有、运行用户只读），`current` 符号链接原子切换；数据在 `/var/lib/pi-exec/*`（0700），配置 `/etc/pi-exec/exec.env`。
+> - Node 固定 `/usr/local/bin/node`：exec 的 bwrap 静态只读挂载只有 `/usr /bin /sbin /lib /lib64`，子进程 PATH / NODE_PATH 也指向 `/usr/local`。本节表格中「装到 /opt 时处理真实二进制 bind」因此改为不支持 /opt。
+> - unit：ExecStartPre 部署检查 → exec 自身启动链；`KillMode=mixed`，停止后 cgroup 内 bwrap 子进程被清理、账本由下次启动孤儿回收收口（容器演练实测）。加固项逐项实测：`RestrictNamespaces`、`ProcSubset=pid` 使 bwrap 失败、exec 拒启；`ProtectKernelTunables`、`ProtectKernelLogs`、`ProtectProc=invisible` 兼容并启用。结果来自特权 Debian 容器，麒麟内核需复测。
+> - **发现（未修改）**：exec 在 `EXEC_INTERNAL_ALLOW_CIDR` 为空时不限制内部面来源；开发 Compose 传入的 `SANDBOX_ALLOWED_CLIENT_CIDRS` 是 Python 执行面时代的变量，TS exec 不读，内部面目前只靠 HMAC。VM 由 `exec-preflight.sh` 要求非空；是否把应用默认改为拒绝属于跨部署的行为变更，待决定。
+> - 未做：VM 工具链（Python venv、办公 JS、bun / BaoYu、麒麟 Chromium wrapper）安装与完整工具 smoke、麒麟 / KySec / SELinux 实机、release 在 x86_64 上实际运行（本机只验证了 amd64 产物的清单与原生模块架构）、sandbox-mcp 与 Agent / BFF 指向 VM exec 的真实链路。
+
 ## 10. 开发切换、部署与回退（R5）
 
 MySQL 5.7 使用新命名数据卷，例如 `mysql57_dev_data`，不复用 `mysql_dev_data`。部署前解析实际 `MYSQL_DATA_VOLUME` 并核对旧实例/卷归属；旧 8.0 卷和镜像保留。MySQL 官方不支持 [8.0 降级到 5.7](https://dev.mysql.com/doc/refman/8.0/en/downgrading.html)，因此不做原地换镜像，不执行 `down -v`。

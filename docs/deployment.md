@@ -62,6 +62,66 @@ disk isolation. Production validation requires **both**:
 Child monitor codes: `workspace_quota_exceeded`,
 `workspace_inode_limit_exceeded`, `workspace_quota_enforcement_failed`.
 
+### VM exec release（单 VM 裸装，design §9）
+
+目标拓扑里执行面是单 VM、单实例、systemd 托管。仓库提供不可变 release 包与部署资产（`deploy/vm/`），
+**不**提供 VM 上的系统工具链安装（bwrap、Python venv、办公工具、Chromium 等由运维按 design §9.1 装好，
+`docs/reviews/2026-09-07-updrdb-dbpm/probe/vm_preflight.sh` 做装机前体检）。
+
+**构建**（在目标架构的 Linux 容器里编译并安装依赖，原生模块不跨平台搬运）：
+
+```bash
+scripts/vm/build-exec-release.sh --arch amd64      # 产物：.runtime/vm-release/exec-<sha12>-amd64.tar.gz + .sha256
+```
+
+工作区有未提交改动时拒绝构建（`--allow-dirty` 只用于本地验证，id 带 `-dirty-<时间>`）。release 内含
+`release-manifest.json`（提交、架构、构建用 Node 与 glibc、schema 清单哈希、原生模块、符号链接）与
+`SHA256SUMS`，不含源码与开发依赖。Node 必须是 `/usr/local/bin/node`（满足 `>=22.19.0 <23`）：
+Bubblewrap 只暴露 `/usr /bin /sbin /lib /lib64`，装在 `/opt` 的 Node 在沙箱里不可见。
+
+**安装与切换**（root，脚本在 release 的 `vm/` 下）：
+
+```bash
+vm/install-release.sh init                              # 建 pi-exec 系统用户、/var/lib/pi-exec/*（0700）、/etc/pi-exec
+vm/install-release.sh install exec-<id>.tar.gz          # 校验 .sha256 与 SHA256SUMS，解包为 root 所有的只读目录
+install -m 0640 -o root -g pi-exec exec.env /etc/pi-exec/exec.env   # 由 vm/exec.env.example 填写
+vm/install-release.sh activate exec-<id>                # 原子切换 /opt/pi-exec/current，安装 unit，daemon-reload
+systemctl enable pi-exec                                # 首次
+systemctl restart pi-exec                               # 在维护窗口内：先停准入、drain 或停止执行
+```
+
+脚本从不自动重启服务；同一 release id 不能重复安装。回滚 = `activate <旧 id>` 后在维护窗口内重启。
+
+**`exec.env`**：只列 exec 实际读取的变量（开发 Compose 里的大量 `SANDBOX_*` 是 Python 执行面时代的，TS 执行面不读）。
+`EXEC_INTERNAL_ALLOW_CIDR` 为空时 exec 不限制内部面来源，VM 上由启动前检查要求非空，按实测的 LB SNAT / 源地址填写。
+
+**启动链**：`ExecStartPre=vm/exec-preflight.sh`（非 root；Node 位置与版本；release 完整、架构匹配且对运行用户只读；
+必需配置非空且不是模板占位符；四个数据根属主为运行用户且 0700；系统 Skill 根可读；bwrap 存在且非 setuid）→
+exec 自身按 取密 → schema 核对 → 存储与 bwrap 预检 → 孤儿回收 → listen 启动。任一步失败服务不监听。
+
+**停止**：`KillMode=mixed`——SIGTERM 只发给主进程（先置未就绪、关 listener），主进程退出或 `TimeoutStopSec` 到期后，
+cgroup 里剩余的 bwrap 子进程一律 SIGKILL；被中断作业的账本由下次启动的孤儿回收收口。
+
+**启动失败的重试**：`Restart=on-failure` 同样作用于 ExecStartPre 与 exec 启动期检查失败——每 5 秒重试，300 秒内 5 次后
+unit 进入 failed。修好配置后需 `systemctl reset-failed pi-exec` 再启动。
+
+**加固项**：unit 启用 `NoNewPrivileges`、空 capability、`ProtectSystem=strict`、`ProtectHome`、`PrivateTmp`、
+`ProtectKernelTunables`、`ProtectKernelLogs`、`ProtectProc=invisible` 等，`ReadWritePaths` 只放 `/var/lib/pi-exec`
+与共享草稿根。兼容性以 exec 启动期 bwrap 预检为准，2026-09-15 在带 systemd 的 Debian 容器中逐项实测：
+
+| 指令 | 结果 | unit |
+|---|---|---|
+| `ProtectKernelTunables=yes` / `ProtectKernelLogs=yes` / `ProtectProc=invisible` | 可启动，`/ready` 隔离 ok | 启用 |
+| `RestrictNamespaces=yes` | bwrap `No permissions to create new namespace`，exec 拒启 | 不启用 |
+| `ProcSubset=pid` | bwrap 读不到 `/proc/sys/kernel/overflowuid`，exec 拒启 | 不启用 |
+| `PrivateUsers=yes` | 可启动，但改变服务所见 uid 映射，与共享存储属主 / ACL 的影响未评估 | 不启用 |
+| `SystemCallFilter` / `MemoryDenyWriteExecute` | 未测；前者需审计 bwrap 系统调用，后者与 Node JIT 冲突 | 不启用 |
+
+目标 VM 内核（麒麟、KySec）上的结果可能不同，上线前按同一方式复测；不兼容时 exec 拒绝启动而不是降级运行。
+
+**本仓库的演练范围**：release 在带 systemd 的 Debian 容器中验证过安装、负对照、启动、停止清理、孤儿回收与回滚；
+麒麟 VM、KySec / SELinux、真实 user namespace 限制与完整办公工具链 smoke 仍需在目标 VM 上做（design §12 T6）。
+
 
 
 ### 生产架构
