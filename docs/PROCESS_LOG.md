@@ -777,3 +777,18 @@ Each entry should say **what changed**, **why**, and **which STATUS IDs** it aff
   重建 sandbox 镜像并换新容器：停双 UPDRDB Proxy → exec `/ready` 503 `database`、facade 503，`/health` 200；`chmod 000` control 根 → 503 `storage.control`；
   恢复后 200；缺失 bwrap 的一次性容器以 preflight 失败拒启（退出码 1）；真实链路通过。agent / api-server / contract / frontend 无改动未重跑。
   详见 [证据](evidence/s2c-exec-readiness-2026-09-15.md)。
+
+## 2026-09-15 — S2d：frontend nginx 上游 `API_UPSTREAM` 模板化
+
+- **Context：** design §2.2 / §7 要求 frontend 上游可配置（K8s 中指向 api-server 内部 LB），且 envsubst 只替换明确允许的变量。
+  此前 `frontend/nginx.conf` 写死 `http://api-server:4000`。
+- **Decision：** 复用官方 nginx 镜像的 templates + `NGINX_ENVSUBST_FILTER`，不自写渲染。只接受 `http://host[:port]`；
+  官方渲染在 `conf.d` 不可写时只记日志继续，因此加渲染前校验、渲染后核对两个钩子并删除官方 `default.conf`，失败拒启。
+  BFF 不读取客户端转发头，暂保留 `$proxy_add_x_forwarded_for`。生产 Compose 边缘 nginx 不在范围。
+- **Action：** 模板、Dockerfile、两个钩子、开发 Compose、`tests/test_frontend_nginx_template.py`；`.env.example`、`deployment.md`
+  （新增 frontend 上游小节，删除不存在的 exec Prometheus 指标）、`architecture.md`、`webui.md`、README、design §2.2、CHANGELOG。
+- **STATUS IDs：** 不改变任何 STATUS 行（关联 G1；目标环境 LB / HTTPS 未验证）。
+- **验证：** 卫生测试 150 passed（首轮模板注释导致核对误报，已修）；重建 frontend 镜像：非法值 / https / 注入 / 非 root 下 `conf.d`
+  不可写均退出码 1，合法自定义上游 `nginx -T` 正确且 nginx 变量保留；开发栈经 3000 端口 `/`、SPA fallback、`/api` 与直连一致；
+  经 `frontend:80` 的真实链路（含 SSE 首块、进程 logs / SIGTERM、跨租户 404）通过。SSE 为 Run 结束后的回放，未测进行中推送。
+  详见 [证据](evidence/s2d-frontend-api-upstream-2026-09-15.md)。

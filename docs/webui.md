@@ -32,7 +32,7 @@ frontend/
 │       └── settings/        ← Capabilities、Agents 与 A2A 管理
 ├── test/                    ← node:test + tsx
 ├── index.html
-├── nginx.conf               ← /api/* 反代，SSE buffering off
+├── nginx/                   ← /api/* 反代模板（`API_UPSTREAM`，SSE buffering off）+ 启动前后校验脚本
 ├── vite.config.ts           ← dev proxy → localhost:4000
 ├── package.json
 ├── Dockerfile

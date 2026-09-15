@@ -90,6 +90,8 @@ TLS 由现有入口终止，frontend 仍可监听 80。入口及 nginx 禁止 SS
 
 frontend 将上游模板化为 `API_UPSTREAM`；使用 nginx envsubst 时仅替换明确允许的变量，保留 `$host`、`$remote_addr` 等 nginx 变量。平台重写而非透传客户端自报的转发头；BFF 的 `X-Acting-*` 仍由认证结果生成。VM CIDR 校验按实测的 LB SNAT/源地址保留方式配置，不能盲目填 Pod CIDR 或信任任意 `X-Forwarded-For`。
 
+> **2026-09-15 实施细化（S2d）**：用官方 nginx 镜像自带的 `/etc/nginx/templates` + `NGINX_ENVSUBST_FILTER=^API_UPSTREAM$`，不自写模板引擎。暂只接受 `http://host[:port]`（内部 LB 按 HTTP；https 上游需另配 SNI 与证书校验，出现需求时再定）。官方渲染脚本在 `conf.d` 不可写时只记日志继续启动，因此加了渲染前校验与渲染后核对两个钩子并删除官方 `default.conf`，二者失败都拒启。frontend 模板仍透传 `$proxy_add_x_forwarded_for`：BFF 当前不读取 `X-Forwarded-For` / `X-Real-IP`（静态核对），客户端 IP 不参与鉴权；若将来 BFF 使用客户端 IP，需要先按平台 LB 行为改为覆盖。生产 Compose 的边缘 `nginx/` 镜像是另一套配置，未改。只读根文件系统所需的 nginx 临时目录（§2.1）只写进部署文档，未在目标环境验证。
+
 ## 3. 共享 Skill 文件设计（R1）
 
 ### 3.1 数据布局与挂载

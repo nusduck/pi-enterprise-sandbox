@@ -9,9 +9,12 @@ server {
     client_max_body_size 55m;
     client_body_timeout 300s;
 
-    # API proxy to backend
+    # API proxy to backend. The upstream comes from the API_UPSTREAM env var,
+    # rendered by the nginx image's envsubst hook at container start (filtered to
+    # that one variable) and checked by 05-validate-api-upstream.sh before and
+    # 25-verify-rendered-config.sh after rendering.
     location /api/ {
-        proxy_pass http://api-server:4000;
+        proxy_pass ${API_UPSTREAM};
         proxy_http_version 1.1;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;

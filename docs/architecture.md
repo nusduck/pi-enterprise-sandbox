@@ -302,7 +302,7 @@ Workspace 内的 `read`、`write`、`edit`、`bash`、Python、Node、文件删�
 
 ```
 1. 用户输入 → Browser 发送 `POST /api/runs`，取得 canonical `run_id`
-2. Frontend Nginx 反向代理到 api-server:4000
+2. Frontend Nginx 反向代理到 `API_UPSTREAM`（Compose 默认 `http://api-server:4000`，K8s 中为 api-server 内部 LB）
 3. Browser 通过 `GET /api/runs/:id/events` 消费 BFF relay 的序列化 SSE（BFF 不 import 任何 Agent SDK）
 4. Agent：
    a. 创建或复用 conversation + Agent Session，并恢复其 sandbox session（`workspace_id`）

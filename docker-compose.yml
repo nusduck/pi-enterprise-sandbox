@@ -213,6 +213,9 @@ services:
       dockerfile: Dockerfile
     image: ${FRONTEND_IMAGE:-pi-enterprise-frontend:latest}
     container_name: ${FRONTEND_CONTAINER:-pi-enterprise-frontend}
+    environment:
+      # frontend nginx 的 /api/ 上游（design §2.2）；启动时校验，只接受 http://host[:port]。
+      API_UPSTREAM: ${API_UPSTREAM:-http://api-server:4000}
     ports:
       - "127.0.0.1:${FRONTEND_PORT:-3000}:80"
     restart: unless-stopped

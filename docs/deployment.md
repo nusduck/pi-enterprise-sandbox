@@ -226,6 +226,14 @@ Compose 拓扑：`backend_internal`（`internal: true`）供 mysql/redis/sandbox
 | `NGINX_HTTP_PORT` | `80` | HTTP 端口 |
 | `NGINX_HTTPS_PORT` | `443` | HTTPS 端口 |
 
+### Frontend nginx 上游
+
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `API_UPSTREAM` | `http://api-server:4000`（镜像 `ENV` 与开发 Compose） | frontend 容器 `/api/` 的转发目标；K8s 中填 api-server 内部 LB。只接受 `http://host[:port]`：带路径、query、空白、换行、`;`、`$`、`https://` 或端口越界时容器在 nginx 启动前退出 |
+
+frontend 镜像把 `nginx/default.conf.template` 放进官方镜像的 `/etc/nginx/templates/`，启动时由 `20-envsubst-on-templates.sh` 渲染到 `conf.d/default.conf`，`NGINX_ENVSUBST_FILTER=^API_UPSTREAM$` 保证 `$host`、`$remote_addr` 等 nginx 变量不被替换。镜像删除了官方自带的 `conf.d/default.conf`，并在渲染前后各跑一个校验钩子：`05-validate-api-upstream.sh` 拒绝不安全的值；`25-verify-rendered-config.sh` 要求渲染文件存在、无残留占位符且确实指向本次上游——官方渲染脚本在 `conf.d` 不可写（如只读根文件系统）时只打日志继续启动，这里改为拒启。若平台要求只读根文件系统，需给 `/etc/nginx/conf.d`、`/var/cache/nginx`、`/var/run` 挂可写 `emptyDir`（design §2.1 的 nginx 临时目录，尚未在目标环境验证）。
+
 ### Database（开发 MySQL 5.7 / 生产 overlay MySQL 8）
 
 | 变量 | 默认值 | 说明 |
@@ -580,18 +588,9 @@ credential。MySQL 使用 `--single-transaction`；需要数据库与运行文�
 
 ## Monitoring
 
-### Prometheus Metrics
+### 指标
 
-Sandbox 暴露 `/metrics` 端点：
-
-| Metric | Type | 说明 |
-|--------|------|------|
-| `sandbox_execution_total` | Counter | 按状态统计的执行总数 |
-| `sandbox_execution_failed_total` | Counter | 失败执行数 |
-| `sandbox_execution_timeout_total` | Counter | 超时执行数 |
-| `sandbox_active_sessions` | Gauge | 活跃会话数 |
-| `sandbox_workspace_bytes` | Gauge | 工作区磁盘使用量 |
-| `sandbox_rate_limited_total` | Counter | 速率限制触发数 |
+执行面（exec）当前**没有** `/metrics` 端点；旧 Python 执行面的 Prometheus 指标已随其删除。可观测性目前依赖 [Health Checks](#health-checks) 中各进程的 `/ready`、容器日志与下文容器监控。
 
 ### 容器监控
 

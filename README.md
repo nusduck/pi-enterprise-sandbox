@@ -46,7 +46,7 @@ pi-sandbox/
 ├── frontend/             ← SPA 前端（Vite + React；纯 UI，零 Agent SDK）
 │   ├── src/main.tsx      ← 前端入口
 │   ├── Dockerfile        ← Nginx 静态服务
-│   └── nginx.conf        ← /api/* 反向代理到 api-server
+│   └── nginx/            ← /api/* 反向代理模板（上游由 API_UPSTREAM 渲染）与启动校验脚本
 ├── api-server/           ← 薄 BFF（auth / files / SSE relay）
 │   ├── server.ts         ← HTTP 入口（Run API、SSE、health，容器跑 dist/server.js）
 │   ├── src/routes/       ← runs, files, status, conversations, capabilities...

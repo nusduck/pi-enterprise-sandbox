@@ -76,6 +76,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   [ADR 0011](adr/0011-updrdb-upredis-dbpm-migration.md) 与
   [统一 design](design/updrdb-dbpm-deployment.md) §5。
 
+### Changed
+
+- **frontend nginx 的 `/api/` 上游改由 `API_UPSTREAM` 渲染**（design §2.2，S2）：`frontend/nginx.conf` 改为
+  `frontend/nginx/default.conf.template`，由官方 nginx 镜像的 envsubst 钩子在启动时渲染，过滤器只放行 `API_UPSTREAM`。
+  镜像默认值与开发 Compose 均为 `http://api-server:4000`，现有部署无需改动。值只接受 `http://host[:port]`，带路径、query、
+  空白、换行、`;`、`$`、`https://` 或端口越界时容器在 nginx 启动前退出；渲染文件缺失、残留占位符或上游不符（例如 `conf.d` 不可写）
+  同样拒启，而不是带着空配置或官方欢迎页启动。镜像不再保留官方 `conf.d/default.conf`。
+
 ### Fixed
 
 - **执行面 `GET /ready` 真正做就绪判定**（design §9.2，S2c）：此前 `/ready`、`/health/ready` 与 `/health` 是同一个恒返回
