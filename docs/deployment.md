@@ -137,6 +137,7 @@ vm/toolchain/install-toolchain.sh --cache /srv/pi-toolchain-cache --allow-downlo
 在 openEuler 24.03（systemd 255）特权容器中验证过工具链离线安装、当前 unit 下启动就绪，以及 Bubblewrap 内的工具 smoke
 （文档生成与读回、soffice 转换、pdftotext / qpdf、pandoc、OCR、rg / fd、BaoYu wrapper、Chromium 经 CDP 渲染 mermaid）。
 Chrome for Testing 的一次性 `--screenshot` 模式在该环境挂起，产品内 Chromium 只经 CDP 使用。
+同一容器接替开发栈执行面后，Agent / Worker / BFF / sandbox-mcp 经它跑通了登录 → 带工具 Run → 进程 logs/signal → 跨租户 404。
 麒麟 VM、KySec / SELinux、真实 user namespace 限制、x86_64 与目标 VM 上的工具链 smoke 仍需在目标环境做（design §12 T6）。
 
 

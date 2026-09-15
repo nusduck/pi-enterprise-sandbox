@@ -878,3 +878,15 @@ Each entry should say **what changed**, **why**, and **which STATUS IDs** it aff
   bwrap 内 rg / fd、Python 与 Node 文档生成读回、soffice 转换、pdftotext / qpdf、pandoc、tesseract OCR、两个 BaoYu wrapper、mermaid 经 CDP 渲染全部通过；
   Debian 镜像同一 smoke 作对照。发现沙箱 `/etc` 白名单缺 fontconfig、旧 Debian 镜像 soffice 转换 abort，均未修改。
   详见 [证据](evidence/s2f2-openeuler-toolchain-smoke-2026-09-15.md)。
+
+## 2026-09-15 — VM exec 真实链路（Agent / Worker / BFF / sandbox-mcp 指向 openEuler 容器内 exec）
+
+- **Context：** S2f 与 S2f-2 只用 RPC 客户端直连 VM exec，真实链路未经 VM exec。用户选择先做这一项，并同意临时替换开发栈执行面。
+- **Decision：** 不改 Compose：停开发栈 `sandbox`，演练容器以网络别名 `sandbox` 接入；VM exec 改用与 Agent 同一账本库 `sandbox`；
+  服务间凭据用演练现生成值同时覆盖消费者与 VM（不复用开发栈凭据）。消费者先按 HEAD 重建镜像。
+- **Action：** 无代码改动；新增证据文件，design §9 与 `deployment.md` 演练范围同步。
+- **STATUS IDs：** 不改变任何 STATUS 行（关联 G7、T6；目标 VM 未验证）。
+- **验证：** 经 BFF：注册 / 登录、`sessions/ensure`、真实模型带工具 Run `SUCCEEDED`（`bash:succeeded` × 3）、进程 logs 有 TICK、SIGTERM 后 `cancelled`、
+  B 访问 A 的 run / conversation / tools / sessions.ensure / process 全 404、A 对照 200；工作区落在 VM 数据根、开发 `sandbox` 容器全程停止。
+  驱动「输出含 openEuler」判定因沙箱看不到 openEuler 的 `/etc/os-release` 未通过，改以工作区位置等证据判定。
+  发现：openEuler 的 `/etc/ssl/certs` 链到 `/etc/pki`，沙箱白名单不含 `/etc/pki`，沙箱内 CA 证书不可读（放开网络后 HTTPS 校验会失败）；网络重连后 exec `/ready` 短暂报数据库不可用（未定位）。详见 [证据](evidence/s2f2-vm-exec-real-chain-2026-09-15.md)。
