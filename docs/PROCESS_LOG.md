@@ -866,3 +866,15 @@ Each entry should say **what changed**, **why**, and **which STATUS IDs** it aff
 - **STATUS IDs：** 不改变任何 STATUS 行（关联 G7、T6；目标 VM 未验证）。
 - **验证：** 14 个制品文件按清单核对通过；openEuler 容器内 release 安装、工具链安装与校验通过；加固项逐项实测。`uv run pytest` 199 passed。
   **bwrap 内完整工具 smoke 尚未在修正后的 unit 下跑通**。详见 [证据](evidence/s2f2-openeuler-toolchain-2026-09-15.md)。
+
+## 2026-09-15 — S2f-2 续：修正 unit 下的 exec 启动与 bwrap 内工具链 smoke
+
+- **Context：** 上一条 S2f-2 记录留下「修正 unit 后未启动、bwrap 内完整工具 smoke 未跑通」。上一轮演练环境（缓存、release、容器）不在本机，按提交的资产重建。
+- **Decision：** 演练用专用库 `pi_vm_sim` 与专用假 DBPM，不碰开发栈 `sandbox` 库；服务间凭据现生成，不复用开发栈凭据。Chromium 按产品实际消费者
+  `baoyu-chrome-cdp` 的 CDP 路径验收；一次性 `--screenshot` 模式在 bwrap 外同样挂起，记为非产品路径的环境问题，不改 wrapper。
+- **Action：** 无代码改动；新增证据文件，同步 `deployment.md` 演练范围、design §9 S2f-2 细化、CHANGELOG。
+- **STATUS IDs：** 不改变任何 STATUS 行（关联 G7、T6；目标 VM 未验证）。
+- **验证：** 7 个 arm64 制品 SHA256 核对 OK；HEAD release 在全新 openEuler 24.03 容器离线缓存安装、工具链校验通过；exec 在修正 unit 下 `/ready` 全 ok；
+  bwrap 内 rg / fd、Python 与 Node 文档生成读回、soffice 转换、pdftotext / qpdf、pandoc、tesseract OCR、两个 BaoYu wrapper、mermaid 经 CDP 渲染全部通过；
+  Debian 镜像同一 smoke 作对照。发现沙箱 `/etc` 白名单缺 fontconfig、旧 Debian 镜像 soffice 转换 abort，均未修改。
+  详见 [证据](evidence/s2f2-openeuler-toolchain-smoke-2026-09-15.md)。

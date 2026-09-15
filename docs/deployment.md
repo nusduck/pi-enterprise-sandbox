@@ -134,7 +134,10 @@ vm/toolchain/install-toolchain.sh --cache /srv/pi-toolchain-cache --allow-downlo
 - 结束时核对各工具版本、Python / Node 文档库可导入、`soffice.bin` 与 `chrome` 无缺失共享库，失败即非零退出。重复运行跳过已装的同版本组件。
 
 **本仓库的演练范围**：release 在带 systemd 的 Debian 容器中验证过安装、负对照、启动、停止清理、孤儿回收与回滚；
-麒麟 VM、KySec / SELinux、真实 user namespace 限制与完整办公工具链 smoke 仍需在目标 VM 上做（design §12 T6）。
+在 openEuler 24.03（systemd 255）特权容器中验证过工具链离线安装、当前 unit 下启动就绪，以及 Bubblewrap 内的工具 smoke
+（文档生成与读回、soffice 转换、pdftotext / qpdf、pandoc、OCR、rg / fd、BaoYu wrapper、Chromium 经 CDP 渲染 mermaid）。
+Chrome for Testing 的一次性 `--screenshot` 模式在该环境挂起，产品内 Chromium 只经 CDP 使用。
+麒麟 VM、KySec / SELinux、真实 user namespace 限制、x86_64 与目标 VM 上的工具链 smoke 仍需在目标环境做（design §12 T6）。
 
 
 

@@ -116,7 +116,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   按清单钉版本与 SHA256，**先核对再使用**，默认只用离线缓存（`--allow-download` 才下载）。openEuler 24.03 官方源缺的 ripgrep / fd / pandoc /
   LibreOffice / Chromium 使用上游官方包（LibreOffice 先验 GPG 签名、Chromium 为 Playwright 分发的 Chrome for Testing）。全部装到 Bubblewrap
   可见的 `/usr/local` 与 `/opt/pi-python/venv`（官方 LibreOffice RPM 解包后搬离 `/opt`），`baoyu-chromium` 改写为 VM 路径。新增开发用
-  `scripts/vm/openeuler-systemd-sim.Dockerfile` 与 `tests/test_vm_toolchain_assets.py`。
+  `scripts/vm/openeuler-systemd-sim.Dockerfile` 与 `tests/test_vm_toolchain_assets.py`。openEuler 24.03 容器中，当前 unit 下 exec 启动就绪，
+  Bubblewrap 内文档 / 转换 / OCR / 检索 / BaoYu / Chromium（CDP）工具 smoke 通过；目标 VM 与 x86_64 未验证。
 
 - **Agent Worker 依赖不可用时暂停取任务**（design §9.2）：新增依赖守卫，每 `AGENT_WORKER_DEPENDENCY_CHECK_INTERVAL_MS`
   （默认 5000，非法值拒绝启动）用与 `/ready` 相同的 ping 探测 MySQL / Redis；连续 2 次失败调用 `worker.pause(true)` 停止从 BullMQ
