@@ -26,7 +26,7 @@
  * 4. 强制 `--unshare-net`（fail-closed 探针，不跟随任何调用方的网络模式选择）
  *
  * 静态部分（命名空间策略、`/proc` `/dev`、七条 `--dir`、六条 runtime ro-bind、
- * `.venv`、九条 `/etc/*`、系统 skill 树）**逐字来自同一次 `buildIsolationProfile()`
+ * `.venv`、`/etc` 白名单、系统 skill 树）**逐字来自同一次 `buildIsolationProfile()`
  * 调用**——不是重新列一遍，分叉因此在构造层面就不可能发生。
  */
 import type { SandboxMode, WorkspaceContext } from '../types.js';

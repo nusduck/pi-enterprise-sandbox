@@ -87,7 +87,7 @@ test('preflight profile keeps every static mount build.ts produces — including
     for (const path of ['/usr', '/bin', '/sbin', '/lib', '/lib64', '/usr/local']) {
       assert.ok(targets.has(path), `missing static runtime mount: ${path}`);
     }
-    // Python venv 与 9 条 /etc/* 文件：今天 Python 版 preflight 完全没有。
+    // Python venv 与 /etc 白名单：今天 Python 版 preflight 完全没有。
     // 引用常量而不是再抄一遍字符串——两处各写一份正是 2026-08-30 那个
     // "挂载与 PATH 同时指向已不存在的 /app/.venv" 的成因。
     assert.ok(targets.has(AGENT_PYTHON_VENV), `missing venv mount: ${AGENT_PYTHON_VENV}`);
@@ -101,6 +101,11 @@ test('preflight profile keeps every static mount build.ts produces — including
       '/etc/ca-certificates',
       '/etc/ld.so.cache',
       '/etc/localtime',
+      '/etc/fonts',
+      '/etc/pki/tls/certs',
+      '/etc/pki/tls/cert.pem',
+      '/etc/pki/tls/openssl.cnf',
+      '/etc/pki/ca-trust/extracted',
     ]) {
       assert.ok(targets.has(path), `missing static /etc file mount: ${path}`);
     }

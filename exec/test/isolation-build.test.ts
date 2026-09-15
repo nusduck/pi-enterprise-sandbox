@@ -24,6 +24,51 @@ function bindMounts(mounts: readonly Mount[]): BindMount[] {
   return mounts.filter((m): m is BindMount => m.kind === 'ro_bind' || m.kind === 'bind');
 }
 
+// ── /etc 白名单：字体配置与 RHEL 系 CA 信任库 ─────────────────────────────
+
+test('/etc 白名单：带上 fontconfig 配置与 RHEL 系（openEuler / 麒麟）CA 信任库，且都是可缺省的只读挂载', async () => {
+  // 2026-09-15 复现：沙箱里 soffice / tesseract 报 "Fontconfig error: Cannot load default config file"
+  // （Debian 镜像与 openEuler VM 都有）；openEuler 的 /etc/ssl/certs -> ../pki/tls/certs，
+  // 白名单没有 /etc/pki，沙箱内 CA 证书全部不可读、Python 默认校验路径为 None。
+  const ws = await makeTestWorkspace();
+  try {
+    const profile = buildIsolationProfile({ context: ws.context, mode: 'workspace-write', command: ['true'] });
+    const byTarget = new Map(bindMounts(profile.mounts).map((m) => [m.target, m]));
+    for (const path of [
+      '/etc/fonts',
+      '/etc/pki/tls/certs',
+      '/etc/pki/tls/cert.pem',
+      '/etc/pki/tls/openssl.cnf',
+      '/etc/pki/ca-trust/extracted',
+    ]) {
+      const mount = byTarget.get(path);
+      assert.ok(mount, `missing /etc allowlist mount: ${path}`);
+      assert.equal(mount.kind, 'ro_bind', `${path} must be read-only`);
+      assert.equal(mount.source, path, `${path} must bind the same host path`);
+      assert.equal(mount.required, false, `${path} is distro-specific and must be optional`);
+      assert.equal(mount.sessionSpecific, false, `${path} is static and must survive into the preflight profile`);
+    }
+  } finally {
+    await ws.cleanup();
+  }
+});
+
+test('/etc 白名单：不整体暴露 /etc/pki——私钥、NSS 库、RPM 签名密钥不进沙箱', async () => {
+  const ws = await makeTestWorkspace();
+  try {
+    const profile = buildIsolationProfile({ context: ws.context, mode: 'workspace-write', command: ['true'] });
+    const sources = bindMounts(profile.mounts).map((m) => m.source);
+    for (const forbidden of ['/etc/pki', '/etc/pki/tls', '/etc/pki/tls/private', '/etc/pki/nssdb', '/etc/pki/rpm-gpg', '/etc/pki/ca-trust']) {
+      assert.ok(!sources.includes(forbidden), `must not bind ${forbidden}`);
+    }
+    for (const source of sources) {
+      assert.ok(!isPathWithin(source, '/etc/pki/tls/private'), `must not bind anything under /etc/pki/tls/private: ${source}`);
+    }
+  } finally {
+    await ws.cleanup();
+  }
+});
+
 // ── ADR 0008 验证要求 1：plan 断言 ────────────────────────────────────────
 
 test('plan assertion: the root-level writable mounts (workspace, temp) are exactly writableRoots() — not more, not fewer', async () => {

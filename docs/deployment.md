@@ -130,6 +130,7 @@ vm/toolchain/install-toolchain.sh --cache /srv/pi-toolchain-cache --allow-downlo
 - 制品清单 `vm/toolchain/toolchain-sources.json` 钉住 Node、uv、ripgrep、fd、pandoc、LibreOffice、Chromium 两种架构的文件名 / URL / SHA256，并写明哈希来源（发布方摘要、签名验证后记录、首次下载记录）。脚本**先核对 SHA256 再使用**，不匹配或未钉版即失败，从不 `curl | sh`。
 - openEuler 24.03 LTS 官方源（OS / everything / EPOL / update）不提供 ripgrep、fd、pandoc、LibreOffice、Chromium，按决定使用上游官方包：ripgrep / fd / pandoc 为 GitHub release（musl 静态版 / 官方 tar 包），LibreOffice 为 TDF 官方 RPM（GPG 签名验证后钉 SHA256），Chromium 为 Playwright 1.63.0 分发的 Chrome for Testing 构建（发布方无摘要，按下载记录）。是否允许在目标 VM 使用这些第三方二进制需另行确认。
 - 其余来自 dnf 源（清单 `dnf_packages`，包名按 openEuler 24.03 核对，麒麟上需复核）、PyPI（`requirements.txt`，未钉版本，安装后把实际版本写入 `/usr/local/share/pi-toolchain/python-freeze.txt`）与 npm（bun / docx / pptxgenjs 与 BaoYu 锁文件，版本同 `runtime-versions.json`）；可用 `UV_INDEX_URL`、`npm_config_registry` 指向内网镜像。
+- 沙箱另外只读挂入 `/etc/fonts` 与 CA 信任库（Debian 的 `/etc/ssl`、`/etc/ca-certificates`；RHEL 系的 `/etc/pki/tls/certs`、`/etc/pki/tls/cert.pem`、`/etc/pki/tls/openssl.cnf`、`/etc/pki/ca-trust/extracted`，不含 `/etc/pki/tls/private` 等），系统自带的字体配置与 CA 包无需复制到 `/usr/local`。
 - 安装位置全部在 Bubblewrap 可见的 `/usr/local` 与 `/opt/pi-python/venv`：官方 LibreOffice RPM 默认装到 `/opt`，脚本解包后搬到 `/usr/local/lib/libreofficeX.Y`；`baoyu-chromium` 改写为指向 `/usr/local/lib/pi-chromium/chrome/chrome`。
 - 结束时核对各工具版本、Python / Node 文档库可导入、`soffice.bin` 与 `chrome` 无缺失共享库，失败即非零退出。重复运行跳过已装的同版本组件。
 

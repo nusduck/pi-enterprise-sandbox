@@ -890,3 +890,14 @@ Each entry should say **what changed**, **why**, and **which STATUS IDs** it aff
   B 访问 A 的 run / conversation / tools / sessions.ensure / process 全 404、A 对照 200；工作区落在 VM 数据根、开发 `sandbox` 容器全程停止。
   驱动「输出含 openEuler」判定因沙箱看不到 openEuler 的 `/etc/os-release` 未通过，改以工作区位置等证据判定。
   发现：openEuler 的 `/etc/ssl/certs` 链到 `/etc/pki`，沙箱白名单不含 `/etc/pki`，沙箱内 CA 证书不可读（放开网络后 HTTPS 校验会失败）；网络重连后 exec `/ready` 短暂报数据库不可用（未定位）。详见 [证据](evidence/s2f2-vm-exec-real-chain-2026-09-15.md)。
+
+## 2026-09-15 — 沙箱 /etc 白名单补字体配置与 RHEL 系 CA 信任库
+
+- **Context：** 前两条 VM 演练记录发现：沙箱内 fontconfig 缺配置（镜像与 VM 均有）；openEuler 上 `/etc/ssl/certs` 链到 `/etc/pki`，沙箱内 CA 证书不可读。用户决定先修白名单。
+- **Decision：** 按需逐条挂载，不整体挂 `/etc/pki`，避免 `tls/private` 私钥、`nssdb`、`rpm-gpg` 进沙箱；全部 `required: false`，Debian 上不存在即跳过。
+- **Action：** `exec/src/isolation/build.ts` 的 `STATIC_ETC_FILES` 追加 `/etc/fonts`、`/etc/pki/tls/certs`、`/etc/pki/tls/cert.pem`、`/etc/pki/tls/openssl.cnf`、
+  `/etc/pki/ca-trust/extracted`；`preflight.ts` 注释；三处 isolation 测试；`deployment.md`、design §9、CHANGELOG。
+- **STATUS IDs：** 不改变任何 STATUS 行（关联 T6）。
+- **验证：** Linux 容器（真实 bwrap，安全选项同 Compose）中新测试修复前失败（`fonts=missing` 等 3 项）、修复后 exec 402/402；重建 sandbox / sandbox-mcp 并换新容器，
+  Debian 执行面与 openEuler VM exec（新 release）沙箱内字体配置、CA 文件可读、Python 加载 CA、`tls/private` / `nssdb` 不可见，VM 上 soffice 嵌入 CJK 字体；
+  开发栈真实链路通过。Debian 镜像 soffice abort 修复前后均在，另行处理。详见 [证据](evidence/sandbox-etc-allowlist-fonts-ca-2026-09-15.md)。

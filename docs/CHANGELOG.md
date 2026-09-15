@@ -102,6 +102,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **沙箱内可读系统字体配置与 RHEL 系 CA 证书**：Bubblewrap 的 `/etc` 白名单此前不含 `/etc/fonts`，沙箱内 soffice / tesseract 报
+  `Fontconfig error: Cannot load default config file`；openEuler / 麒麟的 `/etc/ssl/certs` 链到 `/etc/pki`，沙箱内 CA 证书全部不可读，
+  放开网络后 HTTPS 校验会失败。现只读挂入 `/etc/fonts` 与 `/etc/pki/tls/certs`、`/etc/pki/tls/cert.pem`、`/etc/pki/tls/openssl.cnf`、
+  `/etc/pki/ca-trust/extracted`（不存在即跳过）；**不整体挂 `/etc/pki`**，`tls/private`、`nssdb`、`rpm-gpg` 仍不可见。
 - **执行面 `GET /ready` 真正做就绪判定**（design §9.2，S2c）：此前 `/ready`、`/health/ready` 与 `/health` 是同一个恒返回
   `{"status":"ok"}` 的处理器，部署文档所说的预检并不存在。现在 `/ready` 在数据库 `SELECT 1` 失败或超时、workspaces / tmp /
   artifacts / control 任一根不可读写、启动期 Bubblewrap 预检未通过，或进程已进入关停时返回 503，响应只含各项 ok / unavailable。

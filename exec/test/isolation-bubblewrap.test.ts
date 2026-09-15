@@ -24,7 +24,8 @@ import {
 import { buildPreflightProfile } from '../src/isolation/preflight.js';
 import type { BindMount, Mount } from '../src/isolation/profile.js';
 import type { IsolationProfile } from '../src/isolation/profile.js';
-import { neverExists } from './helpers.js';
+import { buildIsolationProfile } from '../src/isolation/build.js';
+import { makeTestWorkspace, neverExists } from './helpers.js';
 
 const bwrapPath = spawnSync('which', ['bwrap'], { encoding: 'utf-8' }).stdout?.trim();
 const bwrapAvailable = Boolean(bwrapPath) && existsSync(bwrapPath ?? '');
@@ -316,6 +317,39 @@ test('preflightCheck(): throws IsolationUnavailable when the executable does not
 // preflightCheck() is documented to take the probe profile from preflight.ts.
 // `minimalProfile()` binds nothing, so `/usr/bin/true` cannot exist inside the
 // sandbox; this only surfaced once the test ran where bwrap is installed.
+// 2026-09-15 复现：真实沙箱里 soffice / tesseract 报 "Fontconfig error: Cannot load default config file"——
+// 生产 profile 的 /etc 白名单没有 /etc/fonts。宿主存在字体配置时，沙箱内必须能读到同一份。
+test('real bwrap: the production profile exposes the host fontconfig and CA bundle read-only', { skip: !bwrapAvailable || !existsSync('/etc/fonts/fonts.conf') }, async () => {
+  const ws = await makeTestWorkspace();
+  try {
+    const probe = [
+      'test -r /etc/fonts/fonts.conf && echo fonts=ok || echo fonts=missing',
+      'for f in /etc/ssl/certs/ca-certificates.crt /etc/pki/tls/certs/ca-bundle.crt; do if [ -e "$f" ]; then test -r "$f" && echo "ca=ok $f" || echo "ca=unreadable $f"; fi; done',
+      'test -e /etc/pki/tls/private && echo private=visible || echo private=absent',
+      'touch /etc/fonts/probe 2>/dev/null && echo fonts-writable || echo fonts-readonly',
+    ].join('\n');
+    const profile = buildIsolationProfile({ context: ws.context, mode: 'workspace-write', command: ['/bin/sh', '-c', probe] });
+    const child = spawnLaunch(bwrapPath as string, profile, { stdio: ['ignore', 'pipe', 'pipe'] });
+    let output = '';
+    let errors = '';
+    child.stdout?.setEncoding('utf8');
+    child.stderr?.setEncoding('utf8');
+    child.stdout?.on('data', (chunk: string) => { output += chunk; });
+    child.stderr?.on('data', (chunk: string) => { errors += chunk; });
+    const code = await new Promise<number | null>((resolve, reject) => {
+      child.once('error', reject);
+      child.once('close', (c) => resolve(c));
+    });
+    assert.equal(code, 0, `sandbox probe failed: ${errors}`);
+    assert.match(output, /^fonts=ok$/m, output);
+    assert.doesNotMatch(output, /ca=unreadable/, output);
+    assert.match(output, /^private=absent$/m, output);
+    assert.match(output, /^fonts-readonly$/m, output);
+  } finally {
+    await ws.cleanup();
+  }
+});
+
 test('preflightCheck(): a real bwrap accepts the preflight profile', { skip: !bwrapAvailable }, async () => {
   const { root, cleanup } = await scratchDir();
   try {

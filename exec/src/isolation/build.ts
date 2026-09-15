@@ -73,6 +73,16 @@ const STATIC_ETC_FILES: readonly string[] = [
   '/etc/ca-certificates',
   '/etc/ld.so.cache',
   '/etc/localtime',
+  // fontconfig 的配置：没有它 soffice / tesseract / Chromium 报 "Cannot load default config file"，
+  // 字体回退与 CJK 字形选择不按系统配置走（Debian 镜像与 openEuler VM 均复现，2026-09-15）。
+  '/etc/fonts',
+  // RHEL 系（openEuler / 麒麟）的 CA 信任库：/etc/ssl/certs 是指向 ../pki/tls/certs 的符号链接，
+  // 链接目标又指向 ca-trust/extracted。只挂这几条，**不整体挂 /etc/pki**——
+  // tls/private（私钥）、nssdb、rpm-gpg 不进沙箱。Debian 上这些路径不存在，按可缺省挂载跳过。
+  '/etc/pki/tls/certs',
+  '/etc/pki/tls/cert.pem',
+  '/etc/pki/tls/openssl.cnf',
+  '/etc/pki/ca-trust/extracted',
 ];
 
 /** 新命名空间内部要有的空目录（`--dir`）。今天 `preflight()` 漏了后五个，
