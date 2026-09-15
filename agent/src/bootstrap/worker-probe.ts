@@ -23,6 +23,8 @@ export interface WorkerProbeState {
   readonly shuttingDown: () => boolean;
   /** BullMQ 消费者当前在跑（未关闭）。 */
   readonly consumerRunning: () => boolean;
+  /** 消费者被依赖守卫暂停（不取新任务）。省略视为未暂停。 */
+  readonly consumerPaused?: () => boolean;
   readonly pingMysql: () => Promise<unknown>;
   readonly pingRedis: () => Promise<unknown>;
 }
@@ -62,29 +64,39 @@ async function withinTimeout(check: () => Promise<unknown>, timeoutMs: number): 
   }
 }
 
+/** MySQL `SELECT 1` 与 Redis `PING`，各自超时。`/ready` 与依赖守卫共用，判定口径一致。 */
+export async function pingDependencies(
+  pings: Pick<WorkerProbeState, 'pingMysql' | 'pingRedis'>,
+  checkTimeoutMs = DEFAULT_AGENT_WORKER_PROBE_CHECK_TIMEOUT_MS,
+): Promise<{ mysql: boolean; redis: boolean }> {
+  const [mysql, redis] = await Promise.all([
+    withinTimeout(pings.pingMysql, checkTimeoutMs),
+    withinTimeout(pings.pingRedis, checkTimeoutMs),
+  ]);
+  return { mysql, redis };
+}
+
 export async function evaluateWorkerReadiness(
   state: WorkerProbeState,
   checkTimeoutMs = DEFAULT_AGENT_WORKER_PROBE_CHECK_TIMEOUT_MS,
 ) {
   const started = safeFlag(state.started);
   const shuttingDown = safeFlag(state.shuttingDown);
-  const consumer = safeFlag(state.consumerRunning);
+  const running = safeFlag(state.consumerRunning);
+  const paused = state.consumerPaused ? safeFlag(state.consumerPaused) : false;
   // 未启动或关停中不再打依赖，避免关停时对已关闭的连接发查询。
   const probeDeps = started && !shuttingDown;
-  const [mysql, redis] = probeDeps
-    ? await Promise.all([
-        withinTimeout(state.pingMysql, checkTimeoutMs),
-        withinTimeout(state.pingRedis, checkTimeoutMs),
-      ])
-    : [false, false];
-  const ready = started && !shuttingDown && consumer && mysql && redis;
+  const { mysql, redis } = probeDeps
+    ? await pingDependencies(state, checkTimeoutMs)
+    : { mysql: false, redis: false };
+  const ready = started && !shuttingDown && running && !paused && mysql && redis;
   return {
     ready,
     body: {
       status: ready ? 'ready' : 'not_ready',
       started,
       shutting_down: shuttingDown,
-      consumer: consumer ? 'running' : 'stopped',
+      consumer: paused ? 'paused' : running ? 'running' : 'stopped',
       mysql: mysql ? 'ok' : 'unavailable',
       redis: redis ? 'ok' : 'unavailable',
     },

@@ -22,9 +22,14 @@ import { startTelemetry } from '../infrastructure/telemetry.js';
 import { CronScheduler } from '../application/cron-job-service.js';
 import {
   closeWorkerProbeServer,
+  pingDependencies,
   resolveWorkerProbePort,
   startWorkerProbeServer,
 } from './worker-probe.js';
+import {
+  resolveDependencyCheckInterval,
+  startWorkerDependencyGuard,
+} from './worker-dependency-guard.js';
 
 /** Foreground durable subagents need a slot while their child Run executes. */
 export const DEFAULT_AGENT_WORKER_CONCURRENCY = 4;
@@ -42,14 +47,18 @@ export interface WorkerMainHooks {
   readonly createContainer?: typeof createServiceContainer;
   readonly createRunWorker?: (...args: any[]) => any;
   readonly startProbeServer?: typeof startWorkerProbeServer;
+  readonly startDependencyGuard?: typeof startWorkerDependencyGuard;
 }
 
 export async function startWorkerMain(
   env: NodeJS.ProcessEnv = process.env,
   hooks: WorkerMainHooks = {},
 ) {
-  // 端口非法在任何连接之前拒绝启动。
+  // 端口 / 探测间隔非法在任何连接之前拒绝启动。
   const probePort = resolveWorkerProbePort(env.AGENT_WORKER_PROBE_PORT);
+  const dependencyCheckIntervalMs = resolveDependencyCheckInterval(
+    env.AGENT_WORKER_DEPENDENCY_CHECK_INTERVAL_MS,
+  );
   const probe = {
     started: false,
     shuttingDown: false,
@@ -62,13 +71,14 @@ export async function startWorkerMain(
       started: () => probe.started,
       shuttingDown: () => probe.shuttingDown,
       consumerRunning: () => probe.workerHandle?.worker?.isRunning?.() === true,
+      consumerPaused: () => probe.workerHandle?.worker?.isPaused?.() === true,
       pingMysql: () => probe.container.knex.raw('select 1'),
       pingRedis: () => probe.container.redis.ping(),
     },
     { port: probePort, host: env.AGENT_WORKER_PROBE_HOST || undefined },
   );
   try {
-    return await runWorkerMain(env, hooks, probe, server);
+    return await runWorkerMain(env, hooks, probe, server, dependencyCheckIntervalMs);
   } catch (err) {
     probe.shuttingDown = true;
     await closeWorkerProbeServer(server).catch(() => {});
@@ -81,6 +91,7 @@ async function runWorkerMain(
   hooks: WorkerMainHooks,
   probe: { started: boolean; shuttingDown: boolean; container: any; workerHandle: any },
   probeServer: Awaited<ReturnType<typeof startWorkerProbeServer>>,
+  dependencyCheckIntervalMs: number,
 ) {
   const telemetry = await startTelemetry(env, {
     serviceName: 'pi-enterprise-agent-worker',
@@ -204,6 +215,9 @@ async function runWorkerMain(
           ? { password: container.credentials.redis }
           : {}),
         concurrency: Number(env.AGENT_WORKER_CONCURRENCY) || DEFAULT_AGENT_WORKER_CONCURRENCY,
+        // 依赖守卫暂停后，在途的阻塞取任务仍可能拿到作业：执行前再看一次，暂停中放回 delayed。
+        shouldDefer: () => workerHandle?.worker?.isPaused?.() === true,
+        deferDelayMs: dependencyCheckIntervalMs,
         // Keep BullMQ defaults in production. These bounded knobs are useful
         // for isolated restart gates and controlled staging drills without
         // changing the normal lock/stall contract.
@@ -244,12 +258,27 @@ async function runWorkerMain(
     throw err;
   }
 
+  // 依赖不可用时暂停取新任务（design §9.2）。与 /ready 共用同一套 ping。
+  const dependencyGuard = (hooks.startDependencyGuard || startWorkerDependencyGuard)({
+    intervalMs: dependencyCheckIntervalMs,
+    check: () =>
+      pingDependencies({
+        pingMysql: () => container.knex.raw('select 1'),
+        pingRedis: () => container.redis.ping(),
+      }),
+    pause: () => workerHandle.worker.pause(true),
+    resume: () => workerHandle.worker.resume(),
+    log: (level, message) =>
+      (level === 'warn' ? console.warn : console.log)(`[agent-worker] ${message}`),
+  });
+
   let shuttingDown = false;
   const shutdown = async (signal) => {
     if (shuttingDown) return;
     shuttingDown = true;
-    // 先摘除就绪，再停调度与消费；探针 listener 最后关，关停期间 liveness 仍可答。
+    // 先摘除就绪，再停守卫、调度与消费；探针 listener 最后关，关停期间 liveness 仍可答。
     probe.shuttingDown = true;
+    await dependencyGuard.stop().catch(() => {});
     console.log(`[agent-worker] ${signal} — shutting down`);
     clearInterval(recoveryTimer);
     await cronScheduler?.shutdown().catch(() => {});
@@ -290,7 +319,15 @@ async function runWorkerMain(
   process.once('SIGTERM', () => void shutdown('SIGTERM'));
   process.once('SIGINT', () => void shutdown('SIGINT'));
 
-  return { container, workerRuntime, recoveryService, cronScheduler, workerHandle, probeServer };
+  return {
+    container,
+    workerRuntime,
+    recoveryService,
+    cronScheduler,
+    workerHandle,
+    probeServer,
+    dependencyGuard,
+  };
 }
 
 const isMain =

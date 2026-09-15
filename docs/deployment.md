@@ -417,6 +417,7 @@ replay Redis（`SANDBOX_INTERNAL_REDIS_URL`）目前没有代码消费方，不�
 | `AGENT_WORKER_CONCURRENCY` | `4` | BullMQ Worker 并发；前台 durable 子 Agent 至少需要 `2`，默认值为文档深度 2 链路预留槽位 |
 | `AGENT_WORKER_PROBE_PORT` | `4101` | Worker 探针 listener 端口（`/health`、`/ready`，见 [Health Checks](#health-checks)）；非 1–65535 整数拒绝启动 |
 | `AGENT_WORKER_PROBE_HOST` | `0.0.0.0` | Worker 探针监听地址；K8s 探针打 Pod IP，不要改成 loopback |
+| `AGENT_WORKER_DEPENDENCY_CHECK_INTERVAL_MS` | `5000` | Worker 依赖守卫探测间隔（500–600000，非法值拒绝启动）；连续 2 次失败暂停取任务、连续 2 次成功恢复，见 [Health Checks](#health-checks) |
 | `AGENT_RUN_MAX_TOOL_CALLS` | `200` | 单个 Run 最多执行的工具调用数；达到后下一轮只能基于已有结果作答 |
 | `AGENT_RUN_MAX_IDENTICAL_TOOL_CALLS` | `6` | 同一工具与规范化参数组合的最多执行次数 |
 | `AGENT_RUN_MAX_MODEL_TURNS` | `120` | 单个 Run 最多模型回合数；达到后下一轮禁用工具并要求作答 |
@@ -558,7 +559,7 @@ AgentVersion 的 `configJson.toolPolicy` 是下层，**只能收紧**。
 | Sandbox readiness | `GET /ready`（同 `/health/ready`） | 200 | **503** = 已进入关停；数据库 `SELECT 1` 失败或 2s 超时；workspaces / tmp / artifacts / control 任一根不是可读写目录；或启动期 Bubblewrap 预检未通过（`isolation: unchecked / unavailable`）。响应只含 `database`、`storage.<名>`、`isolation` 的 ok / unavailable，不含路径与错误文本。bwrap 不在每次请求中重跑，只读启动期结果 |
 | Agent readiness | `GET /ready`（Agent port） | 200 | **503** = Agent data plane、Sandbox，或任一 `enabled` MCP Server 不可用；响应含 MCP Server/tool 数量与状态 |
 | Agent Worker liveness | `GET /health`（`AGENT_WORKER_PROBE_PORT`，默认 4101） | 200 | Worker 事件循环无响应；不查依赖 |
-| Agent Worker readiness | `GET /ready`（同上） | 200 | **503** = 未完成启动（含 schema 核对、恢复扫描、消费者创建）、已进入关停、BullMQ 消费者未运行，或 MySQL `SELECT 1` / Redis `PING` 在 2s 内失败；响应只含各项 ok/unavailable，不含错误详情 |
+| Agent Worker readiness | `GET /ready`（同上） | 200 | **503** = 未完成启动（含 schema 核对、恢复扫描、消费者创建）、已进入关停、BullMQ 消费者未运行或被依赖守卫暂停（`consumer: paused`），或 MySQL `SELECT 1` / Redis `PING` 在 2s 内失败；响应只含各项 ok/unavailable，不含错误详情 |
 | sandbox-mcp liveness | `GET /health`（8082） | 200 | facade 进程无响应；不查依赖 |
 | sandbox-mcp readiness | `GET /ready`（8082） | 200 | **503** = 未启动或已关停、服务 Redis `PING` 失败，或执行面 `GET /ready` 非 200（各 2s 超时）；探针请求不带桥 token，只证明执行面可达，不证明窄桥 token 被接受 |
 | API Server liveness | `GET /health/live` | 200 | BFF 进程不可用 |
@@ -588,7 +589,7 @@ curl -f https://localhost/nginx/status
 
 容器 `healthcheck` 当前使用 `/health`（liveness）。编排侧若需“可接流量”语义，应对 Sandbox 使用 `/ready`。
 
-Agent Worker 不发布业务 HTTP 面，探针 listener（`AGENT_WORKER_PROBE_PORT`，默认 `4101`；`AGENT_WORKER_PROBE_HOST` 默认 `0.0.0.0`）只有上表两条路由，其余一律 404，端口不发布到宿主，K8s 中也不应注册到任何 LB。端口值非法时 Worker 拒绝启动。listener 先于容器启动，启动期间 `/ready` 为 503；收到 SIGTERM 后先置为未就绪，再停调度与消费，最后关闭 listener。readiness=false 本身**不会**暂停 BullMQ 取任务，失去 lease 时由既有 fence 停止推进。
+Agent Worker 不发布业务 HTTP 面，探针 listener（`AGENT_WORKER_PROBE_PORT`，默认 `4101`；`AGENT_WORKER_PROBE_HOST` 默认 `0.0.0.0`）只有上表两条路由，其余一律 404，端口不发布到宿主，K8s 中也不应注册到任何 LB。端口值非法时 Worker 拒绝启动。listener 先于容器启动，启动期间 `/ready` 为 503；收到 SIGTERM 后先置为未就绪，再停调度与消费，最后关闭 listener。readiness=false 只会让编排摘流量，因此 Worker 另有依赖守卫：每 `AGENT_WORKER_DEPENDENCY_CHECK_INTERVAL_MS`（默认 5s）用与 `/ready` 相同的 ping 探测 MySQL / Redis，**连续 2 次失败**即 `worker.pause(true)` 停止取新任务（不等待、不打断在跑的任务，在跑的 Run 由既有 lease / fence 兜底），**连续 2 次成功**后 `resume()`，只恢复自己造成的暂停。暂停与恢复各打一行 `[agent-worker]` 日志。`pause(true)` 不会打断 BullMQ 已发出的阻塞取任务，暂停后到达的作业仍可能被取到，因此处理器在执行前再检查一次：消费者暂停中就把作业 `moveToDelayed` 回队列（延后一个探测间隔，不计失败、不消耗 attempts），恢复后再执行。Cron 调度、outbox 发布与恢复扫描不暂停：它们不从队列取任务，依赖故障时单轮失败、下一轮重试。
 
 ```bash
 docker compose exec agent-worker node -e "fetch('http://127.0.0.1:4101/ready').then(async r=>console.log(r.status, await r.text()))"

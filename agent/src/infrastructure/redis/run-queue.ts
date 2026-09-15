@@ -275,7 +275,60 @@ export type RunJobProcessor = (ref: RunJobRef, job: import('bullmq').Job) => Pro
  * @param [options]
  * @returns {{ worker: import('bullmq').Worker, connection: import('ioredis').default, queueName: string }}
  */
-export function createRunWorker(connectionUrl: string, processor: RunJobProcessor, options: { queueName?: string, prefix?: string, password?: string, concurrency?: number, lockDuration?: number, stalledInterval?: number, maxStalledCount?: number } = {}) {
+/**
+ * 作业处理外壳：校验引用 → 暂停期间延后 → 追踪 → 调用处理器。抽出来是为了不连 Redis 也能测。
+ *
+ * 为什么需要「暂停期间延后」：`worker.pause(true)` 只置本地标志，不打断主循环里已经发出的
+ * 阻塞取任务（bzpopmin）。暂停后到达的作业仍会被这次在途的取任务拿到并交给处理器——
+ * 2026-09-15 在开发栈实测：MySQL 不可用、消费者已暂停时入队的作业被立即执行并以
+ * `needs reconciliation` 失败。这里在执行前再看一次暂停状态，暂停中就原样放回 delayed，
+ * 恢复后再取；`DelayedError` 由 BullMQ 识别为非失败，不消耗 attempts。
+ */
+export function createRunJobHandler(
+  processor: RunJobProcessor,
+  options: {
+    queueName: string;
+    DelayedError: new (message?: string) => Error;
+    shouldDefer?: (() => boolean) | undefined;
+    deferDelayMs?: number | undefined;
+    now?: (() => number) | undefined;
+  },
+) {
+  const deferDelayMs = options.deferDelayMs ?? 5000;
+  const now = options.now ?? Date.now;
+  return async (job: import('bullmq').Job, token?: string) => {
+    const ref = assertRunJobRef(job.data);
+    if (options.shouldDefer?.() === true) {
+      await job.moveToDelayed(now() + deferDelayMs, token);
+      throw new options.DelayedError();
+    }
+    const receiveSpan = startSpan(
+      'agent.queue.process',
+      {
+        kind: SpanKind.CONSUMER,
+        attributes: {
+          'messaging.system': 'bullmq',
+          'messaging.destination.name': options.queueName,
+          'app.run_id': ref.runId,
+        },
+      },
+      contextFromRunJob(ref),
+    );
+    return withActiveContext(receiveSpan.activeContext, async () => {
+      try {
+        // Processor owns MySQL load / Run state transitions — not this factory.
+        const result = await processor(ref, job);
+        receiveSpan.end(null, 200);
+        return result;
+      } catch (error) {
+        receiveSpan.end(error, 500);
+        throw error;
+      }
+    });
+  };
+}
+
+export function createRunWorker(connectionUrl: string, processor: RunJobProcessor, options: { queueName?: string, prefix?: string, password?: string, concurrency?: number, lockDuration?: number, stalledInterval?: number, maxStalledCount?: number, shouldDefer?: () => boolean, deferDelayMs?: number } = {}) {
   assertRedisConnectionUrl(connectionUrl);
   const prefix = resolveRunQueuePrefix(options.prefix);
   assertBullmqInstalled();
@@ -283,7 +336,7 @@ export function createRunWorker(connectionUrl: string, processor: RunJobProcesso
     throw new Error('createRunWorker requires a processor function');
   }
 
-  const { Worker } = loadBullmqModule();
+  const { Worker, DelayedError } = loadBullmqModule();
   const queueName = options.queueName ?? AGENT_RUNS_QUEUE_NAME;
   const connection = createBullMQConnection(connectionUrl, {
     connectionRole: 'bullmq-worker',
@@ -309,32 +362,12 @@ export function createRunWorker(connectionUrl: string, processor: RunJobProcesso
   }
   const worker = new Worker(
     queueName,
-    async (job) => {
-      const ref = assertRunJobRef(job.data);
-      const receiveSpan = startSpan(
-        'agent.queue.process',
-        {
-          kind: SpanKind.CONSUMER,
-          attributes: {
-            'messaging.system': 'bullmq',
-            'messaging.destination.name': queueName,
-            'app.run_id': ref.runId,
-          },
-        },
-        contextFromRunJob(ref),
-      );
-      return withActiveContext(receiveSpan.activeContext, async () => {
-        try {
-          // Processor owns MySQL load / Run state transitions — not this factory.
-          const result = await processor(ref, job);
-          receiveSpan.end(null, 200);
-          return result;
-        } catch (error) {
-          receiveSpan.end(error, 500);
-          throw error;
-        }
-      });
-    },
+    createRunJobHandler(processor, {
+      queueName,
+      DelayedError,
+      shouldDefer: options.shouldDefer,
+      deferDelayMs: options.deferDelayMs,
+    }),
     workerOpts,
   );
   attachRedisConnectionErrorGuard(worker, {

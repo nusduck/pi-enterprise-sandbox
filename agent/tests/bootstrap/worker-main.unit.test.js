@@ -163,6 +163,10 @@ describe('startWorkerMain', () => {
     assert.equal(defaultOptions.maxStalledCount, undefined);
     assert.equal(defaultOptions.prefix, undefined);
     assert.equal(defaultOptions.concurrency, 4);
+    // 暂停期间在途取到的作业放回 delayed：谓词接到消费者暂停状态，延后时长等于依赖探测间隔。
+    assert.equal(typeof defaultOptions.shouldDefer, 'function');
+    assert.equal(defaultOptions.shouldDefer(), false, 'no consumer yet means not paused');
+    assert.equal(defaultOptions.deferDelayMs, 5000);
   });
 
   it('createWorkerServices assembly fails closed without MySQL/Redis start', async () => {

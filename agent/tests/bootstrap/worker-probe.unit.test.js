@@ -53,6 +53,7 @@ describe('evaluateWorkerReadiness', () => {
       notStarted: { started: () => false },
       shuttingDown: { shuttingDown: () => true },
       consumerStopped: { consumerRunning: () => false },
+      consumerPaused: { consumerPaused: () => true },
       mysqlDown: { pingMysql: async () => { throw new Error('ECONNREFUSED'); } },
       redisDown: { pingRedis: async () => { throw new Error('ECONNREFUSED'); } },
       mysqlHangs: { pingMysql: () => new Promise(() => {}) },
@@ -63,6 +64,16 @@ describe('evaluateWorkerReadiness', () => {
       assert.equal(result.ready, false, name);
       assert.equal(result.body.status, 'not_ready', name);
     }
+  });
+
+  it('reports a paused consumer distinctly from a stopped one', async () => {
+    const paused = await evaluateWorkerReadiness(readyState({ consumerPaused: () => true }), 50);
+    assert.equal(paused.ready, false);
+    assert.equal(paused.body.consumer, 'paused');
+    const running = await evaluateWorkerReadiness(readyState({ consumerPaused: () => false }), 50);
+    assert.equal(running.body.consumer, 'running');
+    const stopped = await evaluateWorkerReadiness(readyState({ consumerRunning: () => false }), 50);
+    assert.equal(stopped.body.consumer, 'stopped');
   });
 
   it('does not ping dependencies before start or during shutdown', async () => {

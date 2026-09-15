@@ -840,3 +840,17 @@ Each entry should say **what changed**, **why**, and **which STATUS IDs** it aff
   占位环境渲染：设置值通过、缺失被 compose 拒绝、`/0` 被校验器拒绝。重建 sandbox 并换新容器：默认白名单下 agent 内部面调用成功，
   排除 agent 网段时 `ip not allowed`，空白名单一次性实例告警且拒绝，非法 CIDR 拒启；经 BFF 的真实链路通过。
   详见 [证据](evidence/exec-internal-cidr-fail-closed-2026-09-15.md)。
+
+## 2026-09-15 — Agent Worker 依赖不可用时暂停取任务
+
+- **Context：** design §9.2 要求 readiness=false 时应用自己暂停取新任务。S2a 只做了探针，用户决定补上暂停。
+- **Decision：** 依赖守卫复用 `/ready` 的 ping，连续 2 次失败 `worker.pause(true)`（不等待在跑任务）、连续 2 次成功 `resume()`，只恢复自己造成的暂停。
+  第一版在开发栈实测发现 `pause(true)` 不打断在途的阻塞取任务，暂停中入队的作业仍在 MySQL 不可用时被执行；读 bullmq 5.80.7 源码确认根因后，
+  没有改用会等待全部在跑任务的 `pause()`，而是在作业处理外壳执行前检查暂停状态，暂停中 `moveToDelayed` + `DelayedError` 放回队列。
+- **Action：** `worker-dependency-guard.ts`、`worker-probe.ts`、`worker-main.ts`、`run-queue.ts`（抽出 `createRunJobHandler`）与单测；
+  `deployment.md`、`.env.example`、design §9.2、CHANGELOG。
+- **STATUS IDs：** 不改变任何 STATUS 行（关联 B2、G2）。
+- **验证：** 单测 30/30；agent 1325 pass / 3 cancelled（已知组，不记为通过）、typecheck（宿主 Node v23.11.0）。重建 agent 镜像并换新容器：
+  停双 UPDRDB Proxy 约 11s 后暂停、`/ready` 503 `consumer: paused`；暂停中入队作业先被在途取任务拿到、随即放回，20s 内持续 `delayed`；
+  恢复约 7s 后继续，作业才被执行（失败原因由修复前的数据库不可达变为虚构 Run 的 `Run not found`）；真实链路通过。
+  详见 [证据](evidence/worker-dependency-guard-2026-09-15.md)。

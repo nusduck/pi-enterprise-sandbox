@@ -110,6 +110,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Agent Worker 依赖不可用时暂停取任务**（design §9.2）：新增依赖守卫，每 `AGENT_WORKER_DEPENDENCY_CHECK_INTERVAL_MS`
+  （默认 5000，非法值拒绝启动）用与 `/ready` 相同的 ping 探测 MySQL / Redis；连续 2 次失败调用 `worker.pause(true)` 停止从 BullMQ
+  取新任务（不等待、不打断在跑任务），连续 2 次成功后 `resume()`，只恢复自己造成的暂停。暂停期间 `/ready` 返回 503、`consumer: paused`。
+  由于 `pause(true)` 不打断在途的阻塞取任务，处理器执行前再检查暂停状态，暂停中取到的作业放回 delayed（不计失败），恢复后执行。
+  此前依赖故障时 Worker 仍会继续取任务，只靠 lease / fence 兜底。
+
 - **VM exec release 与 systemd 部署资产**（design §9，S2）：`scripts/vm/build-exec-release.sh --arch amd64|arm64` 在目标架构的
   Linux 容器里构建不可变 release 包（`release-manifest.json` 记录提交、架构、构建用 Node 与 glibc、schema 清单哈希、原生模块；
   `SHA256SUMS` 覆盖全部文件；有未提交改动时拒绝构建）。`deploy/vm/` 随包分发：`pi-exec.service`（非 root、ExecStartPre 预检、

@@ -392,7 +392,7 @@ VM 使用不可变 release 目录，包含 `exec/dist`、`contract/dist`、对�
 数据库临时不可用影响 readiness，不直接让 liveness 把所有 Pod 同时重启；startup probe 给有限启动预算。Worker readiness=false 本身不会停止 BullMQ，应用还必须暂停取得新任务，失去 lease 时按现有 fence 停止推进。依据 [Kubernetes 探针语义](https://kubernetes.io/docs/tasks/configure-pod-container/configure-liveness-readiness-startup-probes/)。
 
 > **2026-09-15 实施细化（S2a / S2b）**：
-> - Worker：`AGENT_WORKER_PROBE_PORT`（默认 4101）上只有 `/health`、`/ready`，listener 先于容器启动；`/ready` 看启动完成、BullMQ `isRunning()`、未关停，及 MySQL `SELECT 1` / Redis `PING`（各 2s）。SIGTERM 时先置未就绪。**尚未实现**「readiness=false 时暂停取新任务」：依赖故障期间仍由既有 lease/fence 兜底，是否在依赖探测失败时 `worker.pause()` 待定。
+> - Worker：`AGENT_WORKER_PROBE_PORT`（默认 4101）上只有 `/health`、`/ready`，listener 先于容器启动；`/ready` 看启动完成、BullMQ `isRunning()`、未关停，及 MySQL `SELECT 1` / Redis `PING`（各 2s）。SIGTERM 时先置未就绪。「readiness=false 时暂停取新任务」由用户 2026-09-15 决定实施：依赖守卫按 `AGENT_WORKER_DEPENDENCY_CHECK_INTERVAL_MS`（默认 5s）复用 `/ready` 的 ping，连续 2 次失败 `worker.pause(true)`（不等待在跑任务，BullMQ 的 pause 只改本地标志、不依赖 Redis），连续 2 次成功 `resume()`；`/ready` 报 `consumer: paused`。开发栈实测 `pause(true)` 不打断在途的阻塞取任务（暂停后入队的作业仍被执行并以 `needs reconciliation` 失败），因此处理器执行前再检查暂停状态，暂停中 `moveToDelayed` + `DelayedError` 放回队列。Cron / outbox / 恢复扫描不暂停。
 > - facade：新增 `/ready` = 服务 Redis `PING` + 执行面 `GET /ready`（不带桥 token）。窄桥没有无副作用探测路由，本次不新增，因此 readiness 不证明桥 token 有效。
 > - **已复现的偏差**：执行面 `/ready` 与 `/health` 是同一个恒返回 `{"status":"ok"}` 的处理器（开发栈实测 200），`deployment.md` 所述的 workspace / 数据库 / bwrap 预检 503 并不存在，可追溯到删除 Python 执行面（`f49a5226`）。facade 与 LB 对执行面的就绪判断在修复前都只等于进程可达；修复归入 S2c。
 >
