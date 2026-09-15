@@ -683,43 +683,34 @@ Agent Runtime 的 MCP Connection Manager 仍直接连接外部 MCP Gateway/Serve
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| `GET` | `/health` | **Liveness** — 进程存活。只要服务能应答即 **200**（不因依赖失败而 503） |
-| `GET` | `/ready` | **Readiness** — 依赖就绪（工作区可写 + 数据库可 `SELECT 1`）。未就绪返回 **503** |
-| `GET` | `/metrics` | Prometheus 指标 (文本格式) |
+执行面（exec，8081）：
 
-两者均为 public 路由（无需 `X-API-Key` / JWT）。响应**不**包含密钥、连接串、绝对路径或环境变量 dump。
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| `GET` | `/health`、`/health/live` | **Liveness** — 进程能应答即 **200**，不查依赖 |
+| `GET` | `/ready`、`/health/ready` | **Readiness** — 数据库、四个数据根与启动期 Bubblewrap 预检都通过才 **200**，否则 **503** |
+
+均为 public 路由（无需 `X-API-Key` / HMAC）。响应**不**包含密钥、连接串、路径或错误文本。
 
 ```json
-// GET /health — Response (200)  进程存活
-// GET /ready  — Response (200)  依赖就绪；未就绪时 HTTP 503 且 status="not_ready"
+// GET /health — 200
+{ "status": "ok" }
+
+// GET /ready — 200 就绪；未就绪时 503 且 status="not_ready"
 {
-  "status": "ok",
-  "version": "0.1.0",
-  "sessions_active": 3,
-  "executions_total": 42,
-  "workspace_available": true,
-  "disk_free_mb": 15200.5,
-  "runtimes": { "python": true, "bash": true, "node": true },
-  "internal_plane_status": "ready"
+  "status": "ready",
+  "shutting_down": false,
+  "database": "ok",
+  "storage": { "workspaces": "ok", "tmp": "ok", "artifacts": "ok", "control": "ok" },
+  "isolation": "ok"
 }
 ```
 
-| 字段 | `/health` | `/ready` |
-|------|-----------|----------|
-| `status` | 始终 `"ok"`（能应答即存活） | `"ok"` 或 `"not_ready"` |
-| HTTP | 200 | 200 就绪 / **503** 未就绪 |
-| `workspace_available` | 尽力探测；失败不影响 liveness 状态码 | 工作区根目录存在且可写 |
-| 数据库 | 不检查 | 必须 `SELECT 1` 成功 |
-| `internal_plane_status` | `disabled` 或 `not_checked` | `disabled`、`ready` 或 `not_ready` |
+| 字段 | 取值 | 说明 |
+|------|------|------|
+| `database` | `ok` / `unavailable` / `not_configured` | 每次请求 `SELECT 1`，2s 超时；`not_configured` 只出现在非生产内存模式，不算失败 |
+| `storage.<名>` | `ok` / `unavailable` | `SANDBOX_WORKSPACES_ROOT`、`SANDBOX_TEMP_ROOT`、`SANDBOX_ARTIFACTS_ROOT`、`SANDBOX_CONTROL_ROOT` 是可读写目录，各 2s 超时 |
+| `isolation` | `ok` / `unchecked` / `unavailable` | 启动期真跑一次 bwrap 探针的结果，请求时不重跑；预检失败时进程本身拒绝启动 |
+| `shutting_down` | `true` 时只返回 `status` 与该字段 | 收到 SIGTERM 后立即 503 |
 
-#### Prometheus Metrics
-
-| Metric | Type | Labels | 说明 |
-|--------|------|--------|------|
-| `sandbox_execution_total` | Counter | `session_id`, `status` | 执行总数 |
-| `sandbox_execution_failed_total` | Counter | — | 失败执行数 |
-| `sandbox_execution_timeout_total` | Counter | — | 超时执行数 |
-| `sandbox_execution_duration_seconds` | Gauge | — | 执行耗时 |
-| `sandbox_active_sessions` | Gauge | — | 活跃会话数 |
-| `sandbox_workspace_bytes` | Gauge | — | 工作区磁盘使用量 |
-| `sandbox_rate_limited_total` | Counter | `caller_id` | 速率限制触发数 |
+执行面没有 `/metrics` 端点（旧 Python 执行面的 Prometheus 指标已随其删除）。

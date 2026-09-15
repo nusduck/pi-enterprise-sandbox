@@ -391,6 +391,8 @@ VM 使用不可变 release 目录，包含 `exec/dist`、`contract/dist`、对�
 > - Worker：`AGENT_WORKER_PROBE_PORT`（默认 4101）上只有 `/health`、`/ready`，listener 先于容器启动；`/ready` 看启动完成、BullMQ `isRunning()`、未关停，及 MySQL `SELECT 1` / Redis `PING`（各 2s）。SIGTERM 时先置未就绪。**尚未实现**「readiness=false 时暂停取新任务」：依赖故障期间仍由既有 lease/fence 兜底，是否在依赖探测失败时 `worker.pause()` 待定。
 > - facade：新增 `/ready` = 服务 Redis `PING` + 执行面 `GET /ready`（不带桥 token）。窄桥没有无副作用探测路由，本次不新增，因此 readiness 不证明桥 token 有效。
 > - **已复现的偏差**：执行面 `/ready` 与 `/health` 是同一个恒返回 `{"status":"ok"}` 的处理器（开发栈实测 200），`deployment.md` 所述的 workspace / 数据库 / bwrap 预检 503 并不存在，可追溯到删除 Python 执行面（`f49a5226`）。facade 与 LB 对执行面的就绪判断在修复前都只等于进程可达；修复归入 S2c。
+>
+> **2026-09-15 实施细化（S2c）**：执行面启动链改为 取密 → 建池 → schema 核对 → **存储根建出 + bwrap 探针（失败拒启）** → 孤儿回收 → listen。`/ready` 每次实时检查数据库 `SELECT 1` 与 workspaces / tmp / artifacts / control 四个根（各 2s），隔离只读启动期结果、不在每次探针中 spawn bwrap；SIGTERM 先置未就绪。共享 Skill 挂载的就绪核对不在本次：用户 Skill 根按清单逐请求核对（S1），挂载标记 / 发布 ID 的启动验证要等 §3.1 共享存储落地后再定。存储检查在挂起的 NFS 上靠超时返回，但 libuv 线程仍可能被占住，目标环境需实测。
 
 Worker SIGTERM：先停止新 claim/调度/消费，再 drain 或按既有可恢复边界中止，最后释放 lease 与连接；宽限时间经真机测试确定。VM 升级先维护窗口、停准入、drain/停止进程再切 release；单 VM 不运行两个 exec 同时争夺本地字节和孤儿回收。
 

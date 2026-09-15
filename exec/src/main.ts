@@ -2,7 +2,7 @@
  * Exec HTTP 入口。Wave 6 起取代 Python sandbox 服务进程。
  * 挂载内部 HMAC 面与公共会话面；健康检查保持 /health 与 /ready。
  *
- * 启动顺序（design §9.2）：取密 → 装配（建池）→ schema 核对 → 孤儿回收 → listen。任何一步失败都退出，
+ * 启动顺序（design §9.2）：取密 → 装配（建池）→ schema 核对 → 存储与 bwrap 预检 → 孤儿回收 → listen。任何一步失败都退出，
  * 不先对外提供服务。
  */
 import { createExecAppFromEnv, readExecDbConfigFromSandboxEnv } from './http/app.js';
@@ -32,6 +32,16 @@ try {
   process.exit(1);
 }
 
+// 存储与隔离预检在孤儿回收之前：bwrap 跑不起来的执行面不该动账本，也不该对外开门。
+try {
+  await runtime.preflight();
+} catch (err) {
+  const message = err instanceof Error ? err.message : String(err);
+  process.stderr.write(`exec storage/isolation preflight failed, refusing to start: ${message}\n`);
+  await runtime.dispose().catch(() => undefined);
+  process.exit(1);
+}
+
 // 先收孤儿，再 listen。顺序是硬要求：`recoverOrphans()` 用 `listActiveForRecovery`
 // 做**无租户过滤**的全表扫描，只有在还没有任何用户请求进来的时候才是安全的；
 // 而且没收干净就开门的话，上一轮遗留的 `running` 行会一直占着 owner 的并发额度。
@@ -52,6 +62,8 @@ try {
 const server = listenHono(runtime.app, port);
 
 const shutdown = (): void => {
+  // 先摘除就绪，LB 不再派新请求；在途请求由 server.close 等待结束。
+  runtime.markShuttingDown();
   server.close(() => {
     void runtime.dispose().finally(() => process.exit(0));
   });

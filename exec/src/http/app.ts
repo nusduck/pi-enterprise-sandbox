@@ -39,7 +39,17 @@ import {
   type EnabledSkillRef,
 } from '@pi/contract/skill-manifest.js';
 import type { EnabledSkillPackage } from '../types.js';
+import { preflightCheck } from '../isolation/bubblewrap.js';
+import { buildPreflightProfile } from '../isolation/preflight.js';
+import { readControlPlaneRoots } from '../artifact/control-plane-storage.js';
+import {
+  evaluateExecReadiness,
+  type ExecReadiness,
+  type IsolationState,
+  type StorageRoot,
+} from './readiness.js';
 import fs from 'node:fs';
+import { mkdir } from 'node:fs/promises';
 import path from 'node:path';
 
 const OWNER_SEGMENT_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
@@ -129,6 +139,11 @@ export interface ExecAppDeps {
    * TS 时丢掉这道校验的原因。`null` = 本装配显式不做（单测/本地直连）。
    */
   readonly publicApiToken: string | null;
+  /**
+   * `/ready` 与 `/health/ready` 的判定。省略时这两条路由返回 503——没接预检的装配
+   * 不能自称可接流量（fail-closed）。`/health`、`/health/live` 不受影响。
+   */
+  readonly readiness?: (() => Promise<ExecReadiness>) | undefined;
 }
 
 export function createExecApp(deps: ExecAppDeps): Hono {
@@ -170,11 +185,25 @@ export function createExecApp(deps: ExecAppDeps): Hono {
   };
 
   const app = new Hono();
+  // liveness：进程活着就 200，不查依赖。
   const health = (c: { json: (body: unknown) => Response }) => c.json({ status: 'ok' });
   app.get('/health', health);
-  app.get('/ready', health);
   app.get('/health/live', health);
-  app.get('/health/ready', health);
+  // readiness：见 readiness.ts。
+  const ready = async (c: { json: (body: unknown, status: 200 | 503) => Response }) => {
+    if (deps.readiness === undefined) {
+      return c.json({ status: 'not_ready', reason: 'readiness_not_configured' }, 503);
+    }
+    let result: ExecReadiness;
+    try {
+      result = await deps.readiness();
+    } catch {
+      result = { ready: false, body: { status: 'not_ready' } };
+    }
+    return c.json(result.body, result.ready ? 200 : 503);
+  };
+  app.get('/ready', ready);
+  app.get('/health/ready', ready);
   app.route('/', createInternalRouter(internal));
   app.route('/', createPublicRouter(pub));
 
@@ -219,6 +248,14 @@ export interface ExecRuntime {
    * 回收会写 `exec_jobs`，结构不对时不能先动账本。未配数据库（非生产内存模式）时为空操作。
    */
   verifySchema(): Promise<void>;
+  /**
+   * 启动期存储与隔离预检（design §9.2）。**在 `verifySchema()` 之后、`recoverOrphans()`
+   * 之前 await**：建出（或确认）四个数据根，再用探针 profile 真跑一次 bwrap。任何一步
+   * 失败都抛出、`/ready` 保持 503；从未调用时 `/ready` 也是 503（`isolation: unchecked`）。
+   */
+  preflight(): Promise<void>;
+  /** 收到关停信号时调用：`/ready` 立即变 503，不再探测依赖。 */
+  markShuttingDown(): void;
   dispose(): Promise<void>;
 }
 
@@ -247,7 +284,17 @@ export function createExecAppFromEnv(
     throw new Error('SANDBOX_API_TOKEN is required (public session plane would be unauthenticated)');
   }
 
-  const workspaceManager = new WorkspaceManager(readWorkspaceLifecycleConfig(env));
+  const lifecycle = readWorkspaceLifecycleConfig(env);
+  const workspaceManager = new WorkspaceManager(lifecycle);
+  const controlRoots = readControlPlaneRoots(env);
+  const storageRoots: readonly StorageRoot[] = [
+    { name: 'workspaces', path: lifecycle.workspacesBaseRoot },
+    { name: 'tmp', path: lifecycle.tempBaseRoot },
+    { name: 'artifacts', path: controlRoots.artifactsRoot },
+    { name: 'control', path: controlRoots.controlRoot },
+  ];
+  let isolation: IsolationState = 'unchecked';
+  let shuttingDown = false;
   let pool: Pool | undefined;
   let store: JobStore;
   // 产物/数据集的元数据和作业账本走**同一个池、同一次 fail-closed 判定**：
@@ -286,11 +333,21 @@ export function createExecAppFromEnv(
 
   const jobRegistry = new MySqlJobRegistry(store);
   const userSkillRoot = String(env['SANDBOX_USER_SKILLS_ROOT'] ?? '').trim();
+  const systemSkillRoot = env['SANDBOX_SKILLS_ROOT'] ?? AGENT_SKILL_PATH;
+  const bwrapExecutable = env['SANDBOX_BWRAP_PATH'] ?? '/usr/bin/bwrap';
+  const dbPool = pool;
   const app = createExecApp({
+    readiness: () =>
+      evaluateExecReadiness({
+        pingDatabase: dbPool === undefined ? undefined : () => dbPool.query('SELECT 1'),
+        storageRoots,
+        isolation: () => isolation,
+        shuttingDown: () => shuttingDown,
+      }),
     workspaceManager,
     jobRegistry,
     keyring,
-    systemSkillRoot: env['SANDBOX_SKILLS_ROOT'] ?? AGENT_SKILL_PATH,
+    systemSkillRoot,
     enabledSkillPackagesFor: (orgId, userId, manifest) =>
       enabledSkillPackagesFromManifest(userSkillRoot, orgId, userId, manifest),
     // skill 草稿根（ADR 0009 D7 / 计划 H6.2）。**默认关**：一个可写且不进上下文
@@ -310,7 +367,7 @@ export function createExecAppFromEnv(
           },
         }
       : {}),
-    bwrapExecutable: env['SANDBOX_BWRAP_PATH'] ?? '/usr/bin/bwrap',
+    bwrapExecutable,
     mcpInternalToken: env['SANDBOX_MCP_INTERNAL_TOKEN'] ?? '',
     publicApiToken,
     ...(artifactService !== undefined ? { artifactService } : {}),
@@ -324,6 +381,23 @@ export function createExecAppFromEnv(
     async verifySchema() {
       if (pool === undefined) return;
       await assertSchemaMatchesManifest(pool, { role: 'exec' });
+    },
+    async preflight() {
+      // 已存在的根不改权限；新建的按 0700。只读挂载或无权限在这里就失败，不等到第一个请求。
+      for (const root of storageRoots) {
+        await mkdir(root.path, { recursive: true, mode: 0o700 });
+      }
+      isolation = 'unchecked';
+      try {
+        preflightCheck(bwrapExecutable, buildPreflightProfile({ systemSkillRoot }));
+        isolation = 'ok';
+      } catch (err) {
+        isolation = 'unavailable';
+        throw err;
+      }
+    },
+    markShuttingDown() {
+      shuttingDown = true;
     },
     async dispose() {
       // 尽力而为：关池时 mysql2 会把未建成连接的错误再抛一次，不能让它盖过真正的启动失败。

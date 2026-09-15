@@ -52,12 +52,16 @@ describe('createExecApp mounts health + internal + public routers', () => {
     await rm(root, { recursive: true, force: true });
   });
 
-  test('GET /health and /ready', async () => {
+  test('GET /health is liveness; /ready without readiness wiring is 503', async () => {
     const health = await app.request('/health');
     assert.equal(health.status, 200);
     assert.deepEqual(await health.json(), { status: 'ok' });
-    const ready = await app.request('/ready');
-    assert.equal(ready.status, 200);
+    // 回归：/ready 曾与 /health 共用恒 ok 的处理器。没接预检的装配不能自称就绪。
+    for (const path of ['/ready', '/health/ready']) {
+      const ready = await app.request(path);
+      assert.equal(ready.status, 503, path);
+      assert.deepEqual(await ready.json(), { status: 'not_ready', reason: 'readiness_not_configured' });
+    }
   });
 
   test('POST /internal/v1/sessions/ensure is mounted (not the health-only 404)', async () => {
@@ -434,8 +438,12 @@ describe('public session plane requires the service token', () => {
   });
 
   test('health probes stay open — they are not part of the session plane', async () => {
-    for (const path of ['/health', '/ready', '/health/live', '/health/ready']) {
+    for (const path of ['/health', '/health/live']) {
       assert.equal((await appWithToken().request(path)).status, 200, path);
+    }
+    // 就绪探针同样不要求服务令牌：未接预检是 503，而不是 401。
+    for (const path of ['/ready', '/health/ready']) {
+      assert.equal((await appWithToken().request(path)).status, 503, path);
     }
   });
 

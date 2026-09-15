@@ -487,7 +487,7 @@ AgentVersion 的 `configJson.toolPolicy` 是下层，**只能收紧**。
 | 探针 | 端点 | 成功 | 失败含义 |
 |------|------|------|----------|
 | Sandbox liveness | `GET /health` | 200 | 进程无响应 |
-| Sandbox readiness | `GET /ready` | 200 | **当前与 `/health` 是同一个恒返回 `{"status":"ok"}` 的处理器，不做 workspace / 数据库 / Bubblewrap 预检，也没有 `internal_plane_status`**（2026-09-15 开发栈实测）。启动期的 schema 核对与孤儿回收失败会让进程退出，但运行期依赖故障不会反映到这里；按设计补齐预检前（design §9.2，S2c），不要把它当作可接流量的依据 |
+| Sandbox readiness | `GET /ready`（同 `/health/ready`） | 200 | **503** = 已进入关停；数据库 `SELECT 1` 失败或 2s 超时；workspaces / tmp / artifacts / control 任一根不是可读写目录；或启动期 Bubblewrap 预检未通过（`isolation: unchecked / unavailable`）。响应只含 `database`、`storage.<名>`、`isolation` 的 ok / unavailable，不含路径与错误文本。bwrap 不在每次请求中重跑，只读启动期结果 |
 | Agent readiness | `GET /ready`（Agent port） | 200 | **503** = Agent data plane、Sandbox，或任一 `enabled` MCP Server 不可用；响应含 MCP Server/tool 数量与状态 |
 | Agent Worker liveness | `GET /health`（`AGENT_WORKER_PROBE_PORT`，默认 4101） | 200 | Worker 事件循环无响应；不查依赖 |
 | Agent Worker readiness | `GET /ready`（同上） | 200 | **503** = 未完成启动（含 schema 核对、恢复扫描、消费者创建）、已进入关停、BullMQ 消费者未运行，或 MySQL `SELECT 1` / Redis `PING` 在 2s 内失败；响应只含各项 ok/unavailable，不含错误详情 |
@@ -507,11 +507,12 @@ curl -f http://localhost:4000/health/ready
 
 # Sandbox liveness（进程存活；公开路由，无需 API key）
 docker compose exec sandbox curl -fsS http://localhost:8081/health
-# {"status":"ok","version":"…","workspace_available":true,…}
+# {"status":"ok"}
 
 # Sandbox readiness（依赖就绪；未就绪时 curl -f 因 503 失败）
 docker compose exec sandbox curl -fsS http://localhost:8081/ready
-# {"status":"ok","workspace_available":true,…}  或 HTTP 503 status=not_ready
+# {"status":"ready","shutting_down":false,"database":"ok","storage":{"workspaces":"ok","tmp":"ok","artifacts":"ok","control":"ok"},"isolation":"ok"}
+# 或 HTTP 503 status=not_ready（对应项为 unavailable / unchecked）
 
 # Nginx (生产)
 curl -f https://localhost/nginx/status

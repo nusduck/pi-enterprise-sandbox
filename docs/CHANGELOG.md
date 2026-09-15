@@ -76,6 +76,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   [ADR 0011](adr/0011-updrdb-upredis-dbpm-migration.md) 与
   [统一 design](design/updrdb-dbpm-deployment.md) §5。
 
+### Fixed
+
+- **执行面 `GET /ready` 真正做就绪判定**（design §9.2，S2c）：此前 `/ready`、`/health/ready` 与 `/health` 是同一个恒返回
+  `{"status":"ok"}` 的处理器，部署文档所说的预检并不存在。现在 `/ready` 在数据库 `SELECT 1` 失败或超时、workspaces / tmp /
+  artifacts / control 任一根不可读写、启动期 Bubblewrap 预检未通过，或进程已进入关停时返回 503，响应只含各项 ok / unavailable。
+  **启动顺序新增一步**：schema 核对之后、孤儿回收之前建出四个数据根并真跑一次 bwrap 探针，失败即拒绝启动（此前 bwrap 不可用只在
+  第一次执行时暴露）。`/health`、`/health/live` 仍只表示进程存活；Agent 与 BFF 的依赖检查打的是 `/health`，不受影响。
+
 ### Added
 
 - **Agent Worker 探针 listener**（design §9.2，S2）：Worker 新增只含 `GET /health`（事件循环活性，不查依赖）与

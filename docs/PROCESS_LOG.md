@@ -762,3 +762,18 @@ Each entry should say **what changed**, **why**, and **which STATUS IDs** it aff
   exec 376 / 1 skip、contract 109/109、frontend 0 fail + build、四包类型检查、`uv run pytest` 123 passed，均在宿主 Node v23.11.0。
   重建 agent / sandbox 镜像并换新容器：停 UPRedis 代理时 Worker 与 facade `/ready` 503、`/health` 200，停 sandbox 时 facade `/ready` 503，恢复后 200；
   真实链路（带工具 Run、进程 logs / SIGTERM、跨租户 404 带正对照）通过。详见 [证据](evidence/s2ab-probes-2026-09-15.md)。
+
+## 2026-09-15 — S2c：执行面 `/ready` 就绪判定与启动期隔离预检
+
+- **Context：** S2a/S2b 中在运行栈复现执行面 `/ready` 与 `/health` 共用恒 ok 的处理器；`preflightCheck()` 只有测试调用，
+  生产启动链没有隔离预检。design §9.2 要求 VM exec 的 LB 用 `/ready` 或同等预检状态。用户确认按「S2c → nginx 模板 → slim facade → VM release」顺序推进。
+- **Decision：** `/ready` 每次实时检查数据库与四个数据根（各 2s），隔离只读启动期结果、不按请求 spawn bwrap；未接线的装配 503（fail-closed）。
+  启动链在 schema 核对后、孤儿回收前建出数据根并真跑 bwrap 探针，失败拒启（exec 没有「隔离可选」开关，与既有 fail-closed 一致）。
+  Agent / BFF 依赖检查继续打 `/health`，不随之收紧。删除 `api.md` 中不存在的 `/metrics` 与 Prometheus 指标描述。
+- **Action：** exec `http/readiness.ts`、`app.ts` 接线与 `ExecRuntime.preflight` / `markShuttingDown`、`main.ts` 启动顺序；
+  `main.test.ts` 两处断言按新语义修改并新增 `readiness.test.ts`；`api.md`、`deployment.md`、design §9.2、CHANGELOG。
+- **STATUS IDs：** 不改变任何 STATUS 行（关联 G1、G7；VM 与 LB 目标环境验收未做）。
+- **验证：** 修改后的回归断言在还原的修复前代码上 2 例失败；就绪单测 27/27、exec 384 / 1 skip、tsc、`uv run pytest` 123 passed（宿主 Node v23.11.0）。
+  重建 sandbox 镜像并换新容器：停双 UPDRDB Proxy → exec `/ready` 503 `database`、facade 503，`/health` 200；`chmod 000` control 根 → 503 `storage.control`；
+  恢复后 200；缺失 bwrap 的一次性容器以 preflight 失败拒启（退出码 1）；真实链路通过。agent / api-server / contract / frontend 无改动未重跑。
+  详见 [证据](evidence/s2c-exec-readiness-2026-09-15.md)。
