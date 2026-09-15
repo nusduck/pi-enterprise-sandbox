@@ -43,8 +43,10 @@
   浏览器侧的运维操作走会话作用域的公共适配器。**两者不可互相替代**——浏览器请求
   没有 fence token，内部面也不认它。
 - BFF 只做转发与鉴权投影；它的 `X-Acting-*` 必须由服务端解析后写入，永远不能透传浏览器的。
-- MCP facade 与执行面**同镜像、不同入口、不同凭据**。对外 MCP 入口只持有窄桥 token，
-  不能因共用镜像获得完整内部面凭据；具体端口暴露以 Compose 与部署配置为准。
+- MCP facade 与执行面**同一份 `exec/Dockerfile`、不同镜像、不同入口、不同凭据**。facade 是
+  slim 的 `facade` 阶段，只含 `mcp-main.ts` 的 import 图（`exec/test/mcp-import-boundary.test.ts`
+  守着），不带执行面代码、数据库驱动、bwrap 与模型工具链。对外 MCP 入口只持有窄桥 token，
+  不能获得完整内部面凭据；具体端口暴露以 Compose 与部署配置为准。
 
 源码根与分层约定见 [`docs/module-layout.md`](docs/module-layout.md)。
 
@@ -136,7 +138,8 @@ docker compose build agent agent-worker api-server sandbox sandbox-mcp
 docker compose up -d
 ```
 
-> `agent` / `agent-worker`、`sandbox` / `sandbox-mcp` 分别共享镜像。
+> `agent` / `agent-worker` 共享镜像；`sandbox` 与 `sandbox-mcp` 是同一 Dockerfile 的两个镜像
+> （默认 target 与 `facade`），改了 `exec/` 两个都要 build。
 > 构建后确认所有消费者都已更新容器；镜像重建成功不代表运行容器已经换新。
 > 若验证部署版前端，另执行 `docker compose build frontend` 并更新前端容器。
 

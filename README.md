@@ -63,7 +63,7 @@ pi-sandbox/
 ├── contract/             ← @pi/contract：exec ↔ agent runtime 的 RPC 信封、HMAC、错误码
 ├── exec/                 ← 执行面 + MCP facade（TypeScript，取代原 Python sandbox/）
 │   ├── src/main.ts       ← 执行面入口（compose: sandbox）
-│   ├── src/mcp-main.ts   ← MCP facade 入口（compose: sandbox-mcp，同镜像不同入口）
+│   ├── src/mcp-main.ts   ← MCP facade 入口（compose: sandbox-mcp，同 Dockerfile 的 slim `facade` 镜像）
 │   ├── src/isolation/    ← Bubblewrap profile 建模为数据 + 单一 render()
 │   ├── src/fs/ shell/ search/ workspace/  ← 文件、命令与作业、搜索、工作区与配额
 │   ├── src/artifact/ dataset/ attachment/ ← 产物（控制面快照）、数据集、附件

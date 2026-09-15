@@ -1,9 +1,10 @@
 /**
- * `sandbox-mcp` 进程入口。与 `main.ts`（执行面）是**两个进程、同一个镜像**。
+ * `sandbox-mcp` 进程入口。与 `main.ts`（执行面）是**两个进程、同一份 Dockerfile、两个镜像**。
  *
  * 为什么不合成一个：facade 是整个系统里唯一对外暴露的面，它只该持有走窄桥的
  * 那枚 token。跟执行面同进程意味着一次 RCE 就直接拿到内部面的全部能力。
- * 同一个镜像是为了少维护一份 Dockerfile——镜像相同，入口与凭据不同。
+ * 镜像是 Dockerfile 的 `facade` 阶段（slim）：不带模型工具链、bwrap、执行面代码与
+ * 数据库驱动，只含本入口的 import 图（`test/mcp-import-boundary.test.ts` 守着）。
  *
  * Redis 口令启动时向 DBPM 取（只取服务 Redis 这一项），不从连接串读。
  */
@@ -14,7 +15,7 @@ import { ContextStore, type RedisLike } from './mcp/context-store.js';
 import { McpFacadeService } from './mcp/service.js';
 import { createMcpApp } from './mcp/server.js';
 import { loadMcpSettings } from './mcp/settings.js';
-import { resolveMcpRedisPassword } from './startup-credentials.js';
+import { resolveMcpRedisPassword } from './mcp/startup-credentials.js';
 
 const settings = loadMcpSettings();
 const port = Number.parseInt(process.env['SANDBOX_MCP_PORT'] ?? '8082', 10);

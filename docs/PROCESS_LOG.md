@@ -792,3 +792,18 @@ Each entry should say **what changed**, **why**, and **which STATUS IDs** it aff
   不可写均退出码 1，合法自定义上游 `nginx -T` 正确且 nginx 变量保留；开发栈经 3000 端口 `/`、SPA fallback、`/api` 与直连一致；
   经 `frontend:80` 的真实链路（含 SSE 首块、进程 logs / SIGTERM、跨租户 404）通过。SSE 为 Run 结束后的回放，未测进行中推送。
   详见 [证据](evidence/s2d-frontend-api-upstream-2026-09-15.md)。
+
+## 2026-09-15 — S2e：sandbox-mcp slim 镜像
+
+- **Context：** design §2.1 要求对外 facade 使用 slim 镜像。此前 facade 与执行面共用 2.84GB 镜像（含 bwrap、chromium、Python、
+  curl、`mysql2`、dsh-*），且静态 import 图显示 facade 入口经 `startup-credentials.ts` 间接加载 `db/client.ts` 与 `mysql2`。
+- **Decision：** 同一份 `exec/Dockerfile` 新增 `facade` 阶段而不是新 Dockerfile；只复制 facade import 图里的文件，依赖按 lockfile
+  `npm ci --omit=dev` 后移除执行面包。拆出 `mcp/startup-credentials.ts` 切断 facade → db 的依赖，并用测试同时约束 import 图与
+  Dockerfile 复制清单，防止两者漂移。基础镜像不换。
+- **Action：** 新文件与测试、Dockerfile 两阶段、Compose `sandbox-mcp` target / image / healthcheck；AGENTS.md §1 / §4、`architecture.md`、
+  `sandbox-mcp.md`、`development.md`、README、`.env.example`、design §2.1、CHANGELOG。
+- **STATUS IDs：** 不改变任何 STATUS 行（关联 G1；K8s 部署与镜像扫描未做）。
+- **验证：** 边界测试在改动前代码上失败（`db/client.ts`、contract `endpoint-failover`）；facade 相关 38/38、exec 390 / 1 skip、tsc、
+  `uv run pytest` 150 passed（宿主 Node v23.11.0）。镜像构建首次因 OrbStack 代理 EOF 失败，重试通过：facade 302MB、uid 10001、无 bwrap / Python /
+  curl / `mysql2` / dsh-*、发布文件只读。换新容器后 facade healthy、`/ready` 200；经 slim facade 的真实 MCP 调用（写文件 → Python 读回、
+  错误 / 缺失 token 401）与经 BFF 的真实链路通过。详见 [证据](evidence/s2e-slim-facade-2026-09-15.md)。

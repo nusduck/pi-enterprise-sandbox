@@ -78,6 +78,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **sandbox-mcp 改用独立 slim 镜像**（design §2.1，S2）：`exec/Dockerfile` 新增 `facade` 阶段，Compose `sandbox-mcp` 以
+  `target: facade` 构建为 `enterprise-sandbox-mcp:latest`（新变量 `SANDBOX_MCP_IMAGE`），不再复用 2.84GB 的执行面镜像。
+  slim 镜像约 302MB，只含 `mcp-main.js` 的 import 图与所需生产依赖：没有模型工具链、Bubblewrap、Python、curl、执行面代码、
+  `mysql2` 与 `@deepseek-ai/dsh-*`，发布文件对 uid 10001 只读。为此把 facade 的 Redis 取密从 `startup-credentials.ts` 拆到
+  `mcp/startup-credentials.ts`——此前 facade 入口经它间接加载了 `db/client.ts` 与 `mysql2`；新增 `mcp-import-boundary` 测试核对
+  import 图与 Dockerfile 复制清单一致。sandbox-mcp 的 healthcheck 改为 node（镜像无 curl）。**改了 `exec/` 需要同时 build
+  `sandbox` 与 `sandbox-mcp`**，自定义过 `SANDBOX_IMAGE` 给 facade 用的部署需改为 `SANDBOX_MCP_IMAGE`。
 - **frontend nginx 的 `/api/` 上游改由 `API_UPSTREAM` 渲染**（design §2.2，S2）：`frontend/nginx.conf` 改为
   `frontend/nginx/default.conf.template`，由官方 nginx 镜像的 envsubst 钩子在启动时渲染，过滤器只放行 `API_UPSTREAM`。
   镜像默认值与开发 Compose 均为 `http://api-server:4000`，现有部署无需改动。值只接受 `http://host[:port]`，带路径、query、

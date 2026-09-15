@@ -2,16 +2,18 @@
 
 ## Overview
 
-Pi Enterprise Sandbox 采用**六个进程、四份镜像**：前端、BFF、Agent HTTP 面、
+Pi Enterprise Sandbox 采用**六个进程、五份镜像**：前端、BFF、Agent HTTP 面、
 Agent Worker、执行面（compose 服务名仍叫 `sandbox`）以及 MCP facade（`sandbox-mcp`）。
 
-**两份镜像各跑两个进程**——同镜像、不同入口、**各自独立的容器与生命周期**，
-不是一个容器里跑两个进程：
+Agent 镜像跑两个进程——同镜像、不同入口、**各自独立的容器与生命周期**，
+不是一个容器里跑两个进程。执行面与 MCP facade 出自同一份 `exec/Dockerfile` 的两个阶段：
+facade 是 slim 镜像，不带模型工具链、Bubblewrap、执行面代码与数据库驱动：
 
 | 镜像 | 进程 | 入口 |
 |------|------|------|
 | `pi-enterprise-agent` | `agent` / `agent-worker` | `dist/server.js` / `dist/worker.js` |
-| `enterprise-sandbox` | `sandbox` / `sandbox-mcp` | `dist/main.js` / `dist/mcp-main.js` |
+| `enterprise-sandbox`（`exec/Dockerfile` 默认 target） | `sandbox` | `dist/main.js` |
+| `enterprise-sandbox-mcp`（`exec/Dockerfile --target facade`） | `sandbox-mcp` | `dist/mcp-main.js` |
 
 部署时必须**分别创建工作负载**：只起 `agent` 不起 `agent-worker`，
 请求能被接收并入队，但 **Run 永远不会执行**。
@@ -38,7 +40,7 @@ Agent Worker、执行面（compose 服务名仍叫 `sandbox`）以及 MCP facade
 │              Exec Service (Node.js / TypeScript)          │
 │    Internal execution plane: files · execution · process │
 │    search · datasets · artifacts · resource limits       │
-│    + MCP facade as a second entrypoint (same image)      │
+│    + MCP facade: same Dockerfile, separate slim image    │
 │    MySQL 8 (sole formal DB topology, dev + prod)         │
 │    container:8081 only — no host port in dev or prod     │
 ├──────────────────────────────────────────────────────────┤

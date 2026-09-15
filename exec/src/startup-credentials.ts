@@ -1,15 +1,14 @@
 /**
- * exec / sandbox-mcp 启动取密（design `updrdb-dbpm-deployment.md` §7，ADR 0011 D10）。
+ * exec 启动取密（design `updrdb-dbpm-deployment.md` §7，ADR 0011 D10）。
  *
- * - exec 只取 UPDRDB 口令。replay Redis 已无消费方（`SANDBOX_INTERNAL_REDIS_URL` 没有
- *   任何代码读取），不为它取密。
- * - sandbox-mcp 只取服务 Redis 口令；它是对外 facade，拿不到 UPDRDB 口令。
+ * exec 只取 UPDRDB 口令。replay Redis 已无消费方（`SANDBOX_INTERNAL_REDIS_URL` 没有
+ * 任何代码读取），不为它取密。sandbox-mcp 的取密在 `mcp/startup-credentials.ts`：
+ * facade 入口不能依赖本文件引入的 `db/` 模块。
  *
  * 连接配置里带口令直接拒绝，`DBPM_URL` 缺失直接拒绝——没有环境变量口令回退。
  */
 
 import {
-  assertUrlWithoutPassword,
   DbpmConfigError,
   fetchDbpmCredentials,
   readDbpmSettings,
@@ -51,19 +50,4 @@ export function assertExecDbConfigWithoutPassword(cfg: ExecDbConfig): void {
       'exec database config must not embed a password; credentials come from DBPM',
     );
   }
-}
-
-/** 取 sandbox-mcp 的服务 Redis 口令。 */
-export async function resolveMcpRedisPassword(
-  env: NodeJS.ProcessEnv,
-  redisUrl: string,
-  opts: FetchOptions = {},
-): Promise<string> {
-  assertUrlWithoutPassword(redisUrl, 'SANDBOX_MCP_REDIS_URL');
-  const settings = readDbpmSettings(env, ['redis']);
-  const credentials = await fetchDbpmCredentials(settings, ['redis'], { ...opts, process: 'sandbox-mcp' });
-  if (credentials.redis === undefined) {
-    throw new DbpmConfigError('DBPM redis credential missing');
-  }
-  return credentials.redis;
 }

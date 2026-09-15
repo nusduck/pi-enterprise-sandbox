@@ -8,7 +8,8 @@ import { DbpmConfigError } from '@pi/contract/dbpm-config.js';
 import type { DbpmEntry } from '@pi/contract/dbpm.js';
 
 import { createExecAppFromEnv, readExecDbConfigFromSandboxEnv } from '../src/http/app.js';
-import { resolveExecDbPassword, resolveMcpRedisPassword } from '../src/startup-credentials.js';
+import { resolveExecDbPassword } from '../src/startup-credentials.js';
+import { resolveMcpRedisPassword } from '../src/mcp/startup-credentials.js';
 
 const DBPM = {
   DBPM_URL: 'dbpm-a:7000,dbpm-b:7001',

@@ -121,7 +121,7 @@ docker compose up --build
 
 # 仅执行面（用于 Agent / BFF 本地开发）
 docker compose up --build sandbox -d
-# 需要对外 MCP 面时再加一个（同镜像第二入口，必须一起 build）
+# 需要对外 MCP 面时再加一个（同一 Dockerfile 的 slim facade 镜像；改了 exec/ 两个都要 build）
 docker compose up --build sandbox sandbox-mcp -d
 # 然后本地运行 Agent + BFF：
 SANDBOX_BASE_URL=http://localhost:8081 npm run dev --prefix agent

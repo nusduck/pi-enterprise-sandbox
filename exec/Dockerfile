@@ -56,7 +56,47 @@ COPY exec ./exec
 WORKDIR /app/exec
 RUN npx tsc
 
-# ── 终态镜像 ───────────────────────────────────────────────────────
+# ── MCP facade（slim，design §2.1）─────────────────────────────────
+# facade 是对外进程：不带模型工具链、bwrap、Python，也不带执行面代码与数据库驱动。
+# 只复制 `mcp-main.ts` import 图里的文件；`test/mcp-import-boundary.test.ts` 核对
+# 这张图与下面的 COPY 清单一致。构建：`docker build --target facade`（compose 已配）。
+# 本阶段必须放在执行面终态之前，默认 target 仍是执行面。
+FROM node:22-slim AS facade-deps
+COPY --from=ts-build /app/contract/package.json /app/contract/package.json
+WORKDIR /app/exec
+COPY exec/package.json exec/package-lock.json ./
+RUN --mount=type=cache,target=/root/.npm,sharing=locked \
+    npm ci --omit=dev --ignore-scripts && \
+    npm uninstall --no-save --ignore-scripts \
+        mysql2 @deepseek-ai/dsh-fs @deepseek-ai/dsh-fs-local @deepseek-ai/dsh-shell && \
+    rm -rf node_modules/mysql2 node_modules/@deepseek-ai
+
+FROM node:22-slim AS facade
+RUN groupadd --gid 10001 sandbox && \
+    useradd --uid 10001 --gid 10001 --no-create-home --home-dir /nonexistent \
+        --shell /usr/sbin/nologin sandbox
+# 发布文件归 root、对运行用户只读。
+COPY --from=ts-build /app/contract/package.json /app/contract/package.json
+COPY --from=ts-build \
+    /app/contract/dist/dbpm-config.js \
+    /app/contract/dist/dbpm.js \
+    /app/contract/dist/endpoint-failover.js \
+    /app/contract/dist/
+WORKDIR /app/exec
+COPY exec/package.json ./package.json
+COPY --from=facade-deps /app/exec/node_modules ./node_modules
+COPY --from=ts-build /app/exec/dist/mcp-main.js ./dist/mcp-main.js
+COPY --from=ts-build /app/exec/dist/mcp/ ./dist/mcp/
+COPY --from=ts-build /app/exec/dist/http/node-listener.js ./dist/http/node-listener.js
+USER 10001:10001
+ENV NODE_ENV=production \
+    SANDBOX_MCP_PORT=8082
+EXPOSE 8082
+HEALTHCHECK --interval=15s --timeout=5s --retries=3 --start-period=10s \
+    CMD ["node", "-e", "fetch('http://127.0.0.1:8082/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+CMD ["node", "dist/mcp-main.js"]
+
+# ── 执行面终态镜像（默认 target）──────────────────────────────────
 FROM node:22-slim
 
 # 系统依赖：隔离原语 + 模型日常要用的工具（文档、办公、git、文本处理）。
