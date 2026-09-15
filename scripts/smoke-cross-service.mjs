@@ -451,6 +451,8 @@ async function main() {
       SANDBOX_SKILL_DRAFT_ROOT: draftSkillsPath,
       SANDBOX_INTERNAL_HMAC_KEYRING: internalHmacKeyring,
       SANDBOX_INTERNAL_HMAC_ACTIVE_KID: internalHmacActiveKid,
+      // 空值会拒绝全部内部面请求；Agent 与 Worker 在同机经回环访问。
+      EXEC_INTERNAL_ALLOW_CIDR: '127.0.0.1/32,::1/128',
     },
     'sandbox',
     path.join(ROOT, 'exec'),

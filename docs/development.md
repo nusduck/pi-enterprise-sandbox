@@ -97,9 +97,9 @@ smoke/gate 临时目录。
 
 ```bash
 # Terminal 1: 执行面（exec）
-# Inbound allowlist defaults to loopback + private ranges; see SANDBOX_ALLOWED_CLIENT_CIDRS.
+# 内部面来源白名单必须显式给：空值会拒绝全部 /internal/v1 请求（见 deployment.md）。
 npm run build --prefix contract && npm run build --prefix exec
-node exec/dist/main.js
+EXEC_INTERNAL_ALLOW_CIDR=127.0.0.1/32 node exec/dist/main.js
 
 # Terminal 2: Agent（需要 Sandbox + LLM 配置）
 SANDBOX_BASE_URL=http://localhost:8081 npm run dev --prefix agent

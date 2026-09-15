@@ -43,7 +43,8 @@ describe('createExecApp mounts health + internal + public routers', () => {
       keyring: KEYRING_JSON,
       systemSkillRoot: join(root, 'skills'),
       bwrapExecutable: '/usr/bin/bwrap',
-      allowCidr: [],
+      // 空白名单拒绝全部内部面请求；用例请求带监听器注入的对端地址 127.0.0.1。
+      allowCidr: ['127.0.0.1/32'],
     });
     workspaceId = '01ARZ3NDEKTSV4RRFFQ69G5FAV';
   });
@@ -102,6 +103,7 @@ describe('createExecApp mounts health + internal + public routers', () => {
       headers: {
         'content-type': 'application/json',
         authorization: `Bearer ${token}`,
+        'x-exec-peer-ip': '127.0.0.1',
       },
       body,
     });
@@ -140,6 +142,7 @@ describe('createExecApp mounts health + internal + public routers', () => {
       headers: {
         'content-type': 'application/json',
         authorization: `Bearer ${token}`,
+        'x-exec-peer-ip': '127.0.0.1',
       },
       body,
     });
@@ -196,6 +199,7 @@ describe('createExecApp mounts health + internal + public routers', () => {
       headers: {
         'content-type': 'application/json',
         authorization: `Bearer ${token}`,
+        'x-exec-peer-ip': '127.0.0.1',
       },
       body,
     });
@@ -248,6 +252,7 @@ describe('createExecApp mounts health + internal + public routers', () => {
         headers: {
           'content-type': 'application/json',
           authorization: `Bearer ${token}`,
+          'x-exec-peer-ip': '127.0.0.1',
         },
         body,
       });
@@ -296,6 +301,7 @@ describe('createExecApp mounts health + internal + public routers', () => {
       headers: {
         'content-type': 'application/json',
         authorization: `Bearer ${listToken}`,
+        'x-exec-peer-ip': '127.0.0.1',
       },
       body: listBody,
     });
@@ -321,6 +327,43 @@ describe('createExecAppFromEnv fail-closed without HMAC', () => {
           DEPLOYMENT_ENV: 'development',
         } as NodeJS.ProcessEnv),
       /SANDBOX_INTERNAL_HMAC_KEYRING/,
+    );
+  });
+
+  test('internal allowlist comes from the env argument; invalid entries refuse assembly', async () => {
+    const base = {
+      DEPLOYMENT_ENV: 'development',
+      SANDBOX_INTERNAL_HMAC_KEYRING: KEYRING_JSON,
+      SANDBOX_INTERNAL_HMAC_ACTIVE_KID: TEST_KID,
+      SANDBOX_API_TOKEN: TEST_API_TOKEN,
+      SANDBOX_WORKSPACES_ROOT: join(tmpdir(), 'exec-env-cidr-ws'),
+      SANDBOX_TEMP_ROOT: join(tmpdir(), 'exec-env-cidr-tmp'),
+    } as NodeJS.ProcessEnv;
+    // 回归：此前 router 读 process.env，createExecAppFromEnv 收到的 env 被忽略。
+    const previous = process.env['EXEC_INTERNAL_ALLOW_CIDR'];
+    process.env['EXEC_INTERNAL_ALLOW_CIDR'] = '0.0.0.0/0';
+    try {
+      const configured = createExecAppFromEnv({ ...base, EXEC_INTERNAL_ALLOW_CIDR: '10.0.0.0/8, 192.168.0.0/16' });
+      assert.deepEqual(configured.internalAllowCidr, ['10.0.0.0/8', '192.168.0.0/16']);
+      await configured.dispose();
+
+      const empty = createExecAppFromEnv(base);
+      assert.deepEqual(empty.internalAllowCidr, []);
+      const res = await empty.app.request('/internal/v1/sessions/ensure', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-exec-peer-ip': '127.0.0.1' },
+        body: '{}',
+      });
+      assert.equal(res.status, 403, 'empty allowlist must reject before HMAC is even checked');
+      await empty.dispose();
+    } finally {
+      if (previous === undefined) delete process.env['EXEC_INTERNAL_ALLOW_CIDR'];
+      else process.env['EXEC_INTERNAL_ALLOW_CIDR'] = previous;
+    }
+
+    assert.throws(
+      () => createExecAppFromEnv({ ...base, EXEC_INTERNAL_ALLOW_CIDR: '10.0.0.0/8,10.0.0.0/33' }),
+      /EXEC_INTERNAL_ALLOW_CIDR contains invalid CIDR entries: 10\.0\.0\.0\/33/,
     );
   });
 

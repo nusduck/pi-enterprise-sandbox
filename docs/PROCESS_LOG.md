@@ -824,3 +824,19 @@ Each entry should say **what changed**, **why**, and **which STATUS IDs** it aff
   特权 systemd 容器内：负对照（缺配置、篡改文件、数据根权限）均在 ExecStartPre 拒绝且未监听；正常启动 uid 997、`/ready` 200；
   最终 unit 下后台作业 `systemctl stop` 无残留进程，重启后孤儿回收收口账本；切换、同 id 拒绝重装、回滚通过；加固项逐项实测。
   amd64 产物只核对清单与原生模块架构。`uv run pytest` 166 passed。详见 [证据](evidence/s2f-vm-release-2026-09-15.md)。
+
+## 2026-09-15 — exec 内部面来源白名单空值改为拒绝
+
+- **Context：** S2f 发现 exec 在 `EXEC_INTERNAL_ALLOW_CIDR` 为空时不限制内部面来源，而各部署从未传入该变量（Compose 传的是
+  无读取方的 Python 时代变量），内部面实际只靠 HMAC。用户决定空值改为拒绝，同时决定 Worker 未就绪时暂停取任务（另一提交）。
+- **Decision：** 空列表与取不到对端地址一律拒绝，放行全部须显式 `0.0.0.0/0,::/0`；非法条目拒启（不静默跳过）；空白名单不拒启但启动告警
+  （公共面、窄桥与探针仍可用）。开发 Compose 给默认私网白名单，生产 overlay 必填并由校验器拒绝 `/0`。顺带修正
+  `createExecAppFromEnv` 忽略传入 env、IPv4-mapped IPv6 不匹配与畸形 IPv6 被接受三处相邻缺陷。
+- **Action：** `exec/src/security/cidr.ts`、`http/app.ts`、`main.ts`、`router.ts` 注释；exec 测试；Compose / prod overlay / CI /
+  `verify_compose_prod_config.py` 与其测试 / `smoke-cross-service.mjs`；`deployment.md`、`architecture.md`、`development.md`、
+  `.env.example`、`deploy/vm/exec.env.example`、design §9、CHANGELOG。
+- **STATUS IDs：** 不改变任何 STATUS 行（关联 C1 内部面鉴权、G1）。
+- **验证：** exec CIDR / 路由单测 44/44、exec 398 / 1 skip、tsc、`uv run pytest` 171 passed（宿主 Node v23.11.0）；prod overlay 以 CI
+  占位环境渲染：设置值通过、缺失被 compose 拒绝、`/0` 被校验器拒绝。重建 sandbox 并换新容器：默认白名单下 agent 内部面调用成功，
+  排除 agent 网段时 `ip not allowed`，空白名单一次性实例告警且拒绝，非法 CIDR 拒启；经 BFF 的真实链路通过。
+  详见 [证据](evidence/exec-internal-cidr-fail-closed-2026-09-15.md)。

@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **破坏性：exec 内部面来源白名单空值改为拒绝全部**：`EXEC_INTERNAL_ALLOW_CIDR` 为空（或取不到对端地址）时，
+  `/internal/v1/*` 一律 403 `AUTH_FAILED`，启动日志告警；非法 CIDR 条目让 exec 拒绝启动；放行全部必须显式写
+  `0.0.0.0/0,::/0`。此前空值直接放行，而开发 / 生产 Compose 从未传入这个变量（传的是 TS exec 不读取的 Python 时代变量
+  `SANDBOX_ALLOWED_CLIENT_CIDRS` / `SANDBOX_TRUSTED_PROXY_CIDRS`），内部面实际只靠 HMAC。现在开发 Compose 默认
+  `127.0.0.1/32,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16`，**生产 overlay 必填**，`verify_compose_prod_config.py`
+  拒绝缺失与 `/0`。**升级时自建部署需要设置该变量**，否则 Agent / Worker 调不通执行面。同时：IPv4-mapped IPv6 对端
+  （`::ffff:10.0.0.1`）按 IPv4 匹配；含点分段等畸形 IPv6 不再被当成十六进制段解析；`createExecAppFromEnv(env)` 改从
+  传入的 `env` 读白名单（此前读 `process.env`）。
+
 - **破坏性：用户 Skill 以启用账本为发现依据，已发布字节按摘要分版本，exec 按清单挂载**（design §3.3 S1）：
   启用时 Agent 在一个 MySQL 事务里锁住 owner 的 membership 行，把草稿复制到暂存目录并**按暂存字节**算摘要，
   发布到 `<owner>/<name>/.v/<digest>/<name>/`（侧车 `.v/<digest>.json`），再写 `user_skill_enablements`。

@@ -42,6 +42,7 @@ import type { EnabledSkillPackage } from '../types.js';
 import { preflightCheck } from '../isolation/bubblewrap.js';
 import { buildPreflightProfile } from '../isolation/preflight.js';
 import { readControlPlaneRoots } from '../artifact/control-plane-storage.js';
+import { assertValidAllowCidrList, readInternalAllowCidr } from '../security/cidr.js';
 import {
   evaluateExecReadiness,
   type ExecReadiness,
@@ -256,6 +257,8 @@ export interface ExecRuntime {
   preflight(): Promise<void>;
   /** 收到关停信号时调用：`/ready` 立即变 503，不再探测依赖。 */
   markShuttingDown(): void;
+  /** 生效的内部面来源白名单（`EXEC_INTERNAL_ALLOW_CIDR`）。空 = 拒绝全部内部面请求。 */
+  readonly internalAllowCidr: readonly string[];
   dispose(): Promise<void>;
 }
 
@@ -284,6 +287,10 @@ export function createExecAppFromEnv(
     throw new Error('SANDBOX_API_TOKEN is required (public session plane would be unauthenticated)');
   }
 
+  // 内部面来源白名单从传入的 env 读（此前由 router 读 process.env，忽略了这里的 env）。
+  // 非法条目拒绝启动；空列表不拒启，但内部面拒绝全部请求（main.ts 会告警）。
+  const internalAllowCidr = readInternalAllowCidr(env);
+  assertValidAllowCidrList(internalAllowCidr);
   const lifecycle = readWorkspaceLifecycleConfig(env);
   const workspaceManager = new WorkspaceManager(lifecycle);
   const controlRoots = readControlPlaneRoots(env);
@@ -368,6 +375,7 @@ export function createExecAppFromEnv(
         }
       : {}),
     bwrapExecutable,
+    allowCidr: internalAllowCidr,
     mcpInternalToken: env['SANDBOX_MCP_INTERNAL_TOKEN'] ?? '',
     publicApiToken,
     ...(artifactService !== undefined ? { artifactService } : {}),
@@ -399,6 +407,7 @@ export function createExecAppFromEnv(
     markShuttingDown() {
       shuttingDown = true;
     },
+    internalAllowCidr,
     async dispose() {
       // 尽力而为：关池时 mysql2 会把未建成连接的错误再抛一次，不能让它盖过真正的启动失败。
       if (pool !== undefined) await closeExecDbPool(pool);

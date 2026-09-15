@@ -20,7 +20,20 @@ try {
   process.exit(1);
 }
 
-const runtime = createExecAppFromEnv(process.env, { dbPassword });
+let runtime: ReturnType<typeof createExecAppFromEnv>;
+try {
+  runtime = createExecAppFromEnv(process.env, { dbPassword });
+} catch (err) {
+  const message = err instanceof Error ? err.message : String(err);
+  process.stderr.write(`exec configuration invalid, refusing to start: ${message}\n`);
+  process.exit(1);
+}
+if (runtime.internalAllowCidr.length === 0) {
+  // 空白名单 = 拒绝全部内部面请求。不拒启（公共面、窄桥、探针仍可用），但必须显眼。
+  process.stderr.write(
+    'exec WARNING: EXEC_INTERNAL_ALLOW_CIDR is empty; every /internal/v1 request will be rejected with 403\n',
+  );
+}
 
 // schema 核对先于孤儿回收：回收要写 exec_jobs，结构不对时一行都不能动。
 try {

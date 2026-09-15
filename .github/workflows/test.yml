@@ -182,6 +182,7 @@ jobs:
           SANDBOX_CORS_ORIGINS: https://app.example.com
           SANDBOX_INTERNAL_HMAC_KEYRING: '{"ci-key":"a2tra2tra2tra2tra2tra2tra2tra2tra2tra2tra2s"}'
           SANDBOX_INTERNAL_HMAC_ACTIVE_KID: ci-key
+          EXEC_INTERNAL_ALLOW_CIDR: 10.20.0.0/16
           A2A_PUBLIC_BASE_URL: https://agent.example.com
           A2A_ARTIFACT_DOWNLOAD_SECRET: dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd
           # Production overlay requires a real DBPM (ADR 0011 D10); placeholders only.

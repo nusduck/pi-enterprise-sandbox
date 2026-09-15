@@ -122,6 +122,13 @@ def verify(config: dict[str, Any]) -> None:
         _fail("sandbox internal plane must be enabled in production")
     if sandbox_environment.get("SANDBOX_SKILLS_ROOT") != CANONICAL_SKILL_TARGET:
         _fail("sandbox SANDBOX_SKILLS_ROOT must use the canonical Skill path")
+    # exec 内部面来源白名单：空值会拒绝全部内部面请求，放行全部等于没有这道闸。
+    allow_cidr = str(sandbox_environment.get("EXEC_INTERNAL_ALLOW_CIDR") or "").strip()
+    allow_entries = [entry.strip() for entry in allow_cidr.split(",") if entry.strip()]
+    if not allow_entries:
+        _fail("sandbox EXEC_INTERNAL_ALLOW_CIDR must be set in production")
+    if any(entry.endswith("/0") for entry in allow_entries):
+        _fail("sandbox EXEC_INTERNAL_ALLOW_CIDR must not allow every source (/0) in production")
     replay_url = sandbox_environment.get("SANDBOX_INTERNAL_REDIS_URL")
     if not isinstance(replay_url, str) or "sandbox-replay-redis:6379/0" not in replay_url:
         _fail("sandbox internal Redis must use the dedicated replay service DB0")

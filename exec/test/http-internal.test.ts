@@ -15,7 +15,7 @@ import { Hono } from 'hono';
 import { issueInternalToken , internalBindingForHtu } from '@pi/contract/hmac.js';
 import { canonicalQueryBytes } from '@pi/contract/skill-manifest.js';
 import { createInternalRouter } from '../src/http/router.js';
-import { isIpAllowed } from '../src/security/cidr.js';
+import { assertValidAllowCidrList, isIpAllowed } from '../src/security/cidr.js';
 import { hashBodySha256, verifyInternalRequest } from '../src/security/hmac.js';
 import { redactPhysicalRoots } from '../src/fs/redact.js';
 import { WorkspaceManager } from '../src/workspace/manager.js';
@@ -102,9 +102,44 @@ async function makeTempManager(): Promise<{ manager: WorkspaceManager; cleanup: 
 
 // ── CIDR ─────────────────────────────────────────────────────────────
 
-test('cidr: empty allowlist allows any ip', () => {
-  assert.equal(isIpAllowed('10.0.0.1', []), true);
-  assert.equal(isIpAllowed('::1', []), true);
+/** 路由用例的内部面来源：显式白名单 + 监听器注入的对端地址（`app.request` 没有 socket）。 */
+const TEST_ALLOW_CIDR = ['127.0.0.1/32'];
+const PEER_LOOPBACK = { 'x-exec-peer-ip': '127.0.0.1' };
+
+test('cidr: empty allowlist denies every ip (fail-closed)', () => {
+  // 回归：此前空列表直接放行，而部署配置从未传入 EXEC_INTERNAL_ALLOW_CIDR，内部面实际不限来源。
+  assert.equal(isIpAllowed('10.0.0.1', []), false);
+  assert.equal(isIpAllowed('::1', []), false);
+  assert.equal(isIpAllowed('127.0.0.1', []), false);
+});
+
+test('cidr: missing peer address is denied even with an allowlist', () => {
+  assert.equal(isIpAllowed('', ['0.0.0.0/0', '::/0']), false);
+});
+
+test('cidr: explicit allow-all must be written out', () => {
+  assert.equal(isIpAllowed('203.0.113.7', ['0.0.0.0/0', '::/0']), true);
+  assert.equal(isIpAllowed('2001:db8::1', ['0.0.0.0/0', '::/0']), true);
+});
+
+test('cidr: IPv4-mapped IPv6 peers match IPv4 ranges', () => {
+  assert.equal(isIpAllowed('::ffff:10.1.2.3', ['10.0.0.0/8']), true);
+  assert.equal(isIpAllowed('::FFFF:192.168.148.6', ['192.168.0.0/16']), true);
+  assert.equal(isIpAllowed('::ffff:11.1.2.3', ['10.0.0.0/8']), false);
+});
+
+test('cidr: malformed IPv6 groups are rejected instead of parsed as garbage', () => {
+  // parseInt('172.18.0.5', 16) 会得到 0x172——以前就这样被当成合法段。
+  assert.equal(isIpAllowed('1:2:3:4:5:6:7:1.2', ['::/0']), false);
+  assert.equal(isIpAllowed('fe80::1%eth0', ['::/0']), false);
+});
+
+test('cidr: assertValidAllowCidrList rejects typos at startup', () => {
+  assert.doesNotThrow(() => assertValidAllowCidrList(['10.0.0.0/8', '::1/128', ' 192.168.0.0/16 ']));
+  assert.doesNotThrow(() => assertValidAllowCidrList([]));
+  for (const bad of ['10.0.0.0/33', '10.0.0.0', '10.0.0/8', 'abc/8', '::1/129', '10.0.0.0/8x']) {
+    assert.throws(() => assertValidAllowCidrList(['10.0.0.0/8', bad]), /EXEC_INTERNAL_ALLOW_CIDR/, bad);
+  }
 });
 
 test('cidr: exact match and subnet', () => {
@@ -191,14 +226,14 @@ test('envelope: workspaceId required, missing fails via router', async () => {
     modeFor: () => 'workspace-write',
     jobRegistry: registry,
     keyring: KEYRING,
-    allowCidr: [],
+    allowCidr: TEST_ALLOW_CIDR,
   });
   const body = JSON.stringify({ envelope: { requestId: 'r1', orgId: 'o1', userId: 'u1', fenceToken: 1 }, payload: {} });
   const token = makeToken({ path: '/internal/v1/sessions/ensure', body, workspaceId: undefined as unknown as string });
   // token 仍签了 workspace，但 envelope 故意缺 workspaceId
   const res = await app.request('/internal/v1/sessions/ensure', {
     method: 'POST',
-    headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${token}`, ...PEER_LOOPBACK },
     body,
   });
   const json = (await res.json()) as Record<string, unknown>;
@@ -218,7 +253,7 @@ test('router: happy path sessions/ensure creates workspace', async () => {
     modeFor: () => 'workspace-write',
     jobRegistry: registry,
     keyring: KEYRING,
-    allowCidr: [],
+    allowCidr: TEST_ALLOW_CIDR,
   });
   const envelope = { requestId: 'r2', workspaceId: 'ws-happy-1', orgId: 'org1', userId: 'u1', fenceToken: 1 };
   const bodyObj = { envelope, payload: {} };
@@ -226,7 +261,7 @@ test('router: happy path sessions/ensure creates workspace', async () => {
   const token = makeToken({ path: '/internal/v1/sessions/ensure', body });
   const res = await app.request('/internal/v1/sessions/ensure', {
     method: 'POST',
-    headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${token}`, ...PEER_LOOPBACK },
     body,
   });
   assert.equal(res.status, 200);
@@ -253,7 +288,7 @@ test('router: fs search accepts the resolved FsTarget object', async () => {
     modeFor: () => 'workspace-write',
     jobRegistry: registry,
     keyring: KEYRING,
-    allowCidr: [],
+    allowCidr: TEST_ALLOW_CIDR,
   });
   const path = '/internal/v1/fs/find';
   const body = JSON.stringify({
@@ -273,7 +308,7 @@ test('router: fs search accepts the resolved FsTarget object', async () => {
   const token = makeToken({ path, body });
   const res = await app.request(path, {
     method: 'POST',
-    headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${token}`, ...PEER_LOOPBACK },
     body,
   });
   assert.equal(res.status, 200);
@@ -305,11 +340,68 @@ test('router: CIDR deny returns 403 before HMAC', async () => {
     headers: {
       'content-type': 'application/json',
       authorization: `Bearer ${token}`,
-      'x-forwarded-for': '192.168.1.1',
+      // 伪造的转发头落在白名单内也不算数：只认监听器注入的对端地址。
+      'x-forwarded-for': '10.0.0.9',
+      'x-exec-peer-ip': '192.168.1.1',
     },
     body,
   });
   assert.equal(res.status, 403);
+  await cleanup();
+});
+
+test('router: empty allowlist rejects even a correctly signed request from loopback', async () => {
+  const { manager, cleanup } = await makeTempManager();
+  const app = createInternalRouter({
+    workspaceManager: manager,
+    systemSkillRoot: '/tmp/skills',
+    enabledSkillPackagesFor: () => [],
+    bwrapExecutable: '/usr/bin/bwrap',
+    modeFor: () => 'workspace-write',
+    jobRegistry: new MySqlJobRegistry(new InMemoryJobStore() as never),
+    keyring: KEYRING,
+    allowCidr: [],
+  });
+  const envelope = { requestId: 'r-empty', workspaceId: 'ws-empty-cidr', orgId: 'org1', userId: 'u1', fenceToken: 1 };
+  const body = JSON.stringify({ envelope, payload: {} });
+  const token = makeToken({ path: '/internal/v1/sessions/ensure', body });
+  const request = (headers: Record<string, string>) =>
+    app.request('/internal/v1/sessions/ensure', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${token}`, ...headers },
+      body,
+    });
+  assert.equal((await request(PEER_LOOPBACK)).status, 403);
+  assert.equal((await request({})).status, 403);
+  await cleanup();
+});
+
+test('router: allowlisted peer passes the CIDR gate (control)', async () => {
+  const { manager, cleanup } = await makeTempManager();
+  const app = createInternalRouter({
+    workspaceManager: manager,
+    systemSkillRoot: '/tmp/skills',
+    enabledSkillPackagesFor: () => [],
+    bwrapExecutable: '/usr/bin/bwrap',
+    modeFor: () => 'workspace-write',
+    jobRegistry: new MySqlJobRegistry(new InMemoryJobStore() as never),
+    keyring: KEYRING,
+    allowCidr: ['10.0.0.0/8'],
+  });
+  const envelope = { requestId: 'r-mapped', workspaceId: 'ws-mapped-cidr', orgId: 'org1', userId: 'u1', fenceToken: 1 };
+  const body = JSON.stringify({ envelope, payload: {} });
+  const token = makeToken({ path: '/internal/v1/sessions/ensure', body });
+  const res = await app.request('/internal/v1/sessions/ensure', {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      authorization: `Bearer ${token}`,
+      // 双栈监听下的对端形态
+      'x-exec-peer-ip': '::ffff:10.1.2.3',
+    },
+    body,
+  });
+  assert.equal(res.status, 200);
   await cleanup();
 });
 
@@ -325,7 +417,7 @@ test('router: tampered body_sha256 returns 401', async () => {
     modeFor: () => 'workspace-write',
     jobRegistry: registry,
     keyring: KEYRING,
-    allowCidr: [],
+    allowCidr: TEST_ALLOW_CIDR,
   });
   const envelope = { requestId: 'r4', workspaceId: 'ws-tamper', orgId: 'org1', userId: 'u1', fenceToken: 1 };
   const body = JSON.stringify({ envelope, payload: {} });
@@ -333,7 +425,7 @@ test('router: tampered body_sha256 returns 401', async () => {
   const tamperedBody = body + ' ';
   const res = await app.request('/internal/v1/sessions/ensure', {
     method: 'POST',
-    headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${token}`, ...PEER_LOOPBACK },
     body: tamperedBody,
   });
   assert.equal(res.status, 401);
@@ -391,7 +483,7 @@ describe('内部面：方法与能力都必须逐字绑定', () => {
       modeFor: () => 'workspace-write',
       jobRegistry: new MySqlJobRegistry(new InMemoryJobStore() as never),
       keyring: KEYRING,
-      allowCidr: [],
+      allowCidr: TEST_ALLOW_CIDR,
     });
     const path = '/internal/v1/fs/stream-text';
     const b64 = (value: unknown): string => Buffer.from(JSON.stringify(value), 'utf8').toString('base64url');
@@ -403,7 +495,8 @@ describe('内部面：方法与能力都必须逐字绑定', () => {
       activeKid: TEST_KID,
       claims: { ...baseClaims(path), htm: 'GET', body_sha256: sha256Hex(canonicalQueryBytes(params)) },
     });
-    const call = (query: string) => app.request(`${path}?${query}`, { headers: { authorization: `Bearer ${token}` } });
+    const call = (query: string) =>
+      app.request(`${path}?${query}`, { headers: { authorization: `Bearer ${token}`, ...PEER_LOOPBACK } });
     try {
       const signed = await call(new URLSearchParams(params).toString());
       assert.notEqual(signed.status, 401, 'a correctly signed query must pass authentication');

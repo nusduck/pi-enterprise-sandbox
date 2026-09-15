@@ -637,13 +637,11 @@ services:
       # Default disabled → Bubblewrap --unshare-net (real isolation).
       # Production forbids allowlist/unrestricted until a per-child egress proxy exists.
       # Dev may set unrestricted explicitly (.env); never a production default.
-      # Independent of inbound SANDBOX_ALLOWED_CLIENT_CIDRS.
       SANDBOX_NETWORK_MODE: ${SANDBOX_NETWORK_MODE:-disabled}
-      # Inbound client allowlist for the Sandbox HTTP API (not execution egress).
-      # Empty string denies all clients.
-      SANDBOX_ALLOWED_CLIENT_CIDRS: ${SANDBOX_ALLOWED_CLIENT_CIDRS:-127.0.0.1/32,::1/128,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16}
-      # Trusted reverse proxies only (default empty → ignore X-Forwarded-For).
-      SANDBOX_TRUSTED_PROXY_CIDRS: ${SANDBOX_TRUSTED_PROXY_CIDRS:-}
+      # /internal/v1/* 来源白名单（按监听器看到的 TCP 对端地址匹配，不看转发头）。
+      # 空值 = 拒绝全部内部面请求；非法 CIDR = 拒绝启动。开发默认放行回环与私网段
+      # （Compose 网络在 Docker Desktop 为 172.x，在 OrbStack 为 192.168.x）。
+      EXEC_INTERNAL_ALLOW_CIDR: ${EXEC_INTERNAL_ALLOW_CIDR:-127.0.0.1/32,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16}
       SANDBOX_CORS_ORIGINS: ${SANDBOX_CORS_ORIGINS:-*}
       SANDBOX_CORS_ALLOW_CREDENTIALS: ${SANDBOX_CORS_ALLOW_CREDENTIALS:-true}
       SANDBOX_APPROVAL_MODE: ${APPROVAL_MODE:-${SANDBOX_APPROVAL_MODE:-}}

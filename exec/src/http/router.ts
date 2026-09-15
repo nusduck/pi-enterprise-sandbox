@@ -46,8 +46,8 @@ export interface InternalRouterDeps {
  * 而它们是 CIDR 白名单的唯一输入。以前还会在两个头都取不到时兜底成
  * `127.0.0.1`——等于给任何拿不到对端地址的路径发一张通行证。
  *
- * 取不到时返回空串：白名单为空（默认）时 `isIpAllowed` 照样放行，配了白名单
- * 就一律拒——fail-closed。
+ * 取不到时返回空串，`isIpAllowed` 一律拒绝。白名单为空同样拒绝全部（2026-09-15 起）——
+ * 放行全部来源必须显式配置 `0.0.0.0/0,::/0`。
  */
 function getClientIp(c: import('hono').Context): string {
   return (c.req.header(PEER_IP_HEADER) ?? '').trim();

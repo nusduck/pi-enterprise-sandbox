@@ -6,10 +6,11 @@
  * 拼出正确 HMAC 的内部服务也只能从固定网段进来）。这是 D9 保留的
  * "入站 CIDR 白名单"。
  *
- * 设计：纯函数，不读环境，不碰网络。输入是文本 IP + 文本 CIDR 列表，
- * 输出是是否允许。空列表 = 不限制（与 Python 版 `internal_allow_cidr` 为空
- * 时直接放行的语义一致），否则必须命中至少一个 CIDR。
- * IPv4/IPv6 都支持；用 Node 自带 `node:net` 的 isIP 解析。
+ * 设计：纯函数，不读环境（`readInternalAllowCidr` 除外），不碰网络。输入是文本 IP +
+ * 文本 CIDR 列表，输出是是否允许。**空列表 = 拒绝全部**（2026-09-15 起；此前沿用
+ * Python 版「为空直接放行」，而部署配置从未真正传入这个变量，内部面实际只靠 HMAC）。
+ * 要放行全部来源必须显式写 `0.0.0.0/0,::/0`。
+ * IPv4/IPv6 都支持；IPv4-mapped IPv6（`::ffff:10.0.0.1`，双栈监听时的对端形态）按 IPv4 匹配。
  */
 
 import { isIP } from 'node:net';
@@ -21,7 +22,11 @@ interface ParsedCidr {
   readonly prefix: number;
 }
 
+const IPV4_MAPPED_RE = /^::ffff:(\d{1,3}(?:\.\d{1,3}){3})$/i;
+
 function parseIpToBytes(ip: string): { family: 4 | 6; bytes: Uint8Array } | null {
+  const mapped = IPV4_MAPPED_RE.exec(ip);
+  if (mapped) return parseIpToBytes(mapped[1] as string);
   const family = isIP(ip);
   if (family === 4) {
     const parts = ip.split('.').map(Number);
@@ -29,6 +34,8 @@ function parseIpToBytes(ip: string): { family: 4 | 6; bytes: Uint8Array } | null
     return { family: 4, bytes: new Uint8Array(parts) };
   }
   if (family === 6) {
+    // 其余内嵌点分十进制的写法不展开，直接拒绝，免得被当成十六进制段误解析。
+    if (ip.includes('.') || ip.includes('%')) return null;
     // 展开 :: 缩写，逐段解析为 16 字节。
     const halves = ip.split('::');
     if (halves.length > 2) return null;
@@ -40,8 +47,9 @@ function parseIpToBytes(ip: string): { family: 4 | 6; bytes: Uint8Array } | null
     if (groups.length !== 8) return null;
     const bytes = new Uint8Array(16);
     for (let i = 0; i < 8; i += 1) {
-      const val = Number.parseInt(groups[i] as string, 16);
-      if (!Number.isInteger(val) || val < 0 || val > 0xffff) return null;
+      const group = groups[i] as string;
+      if (!/^[0-9a-f]{1,4}$/i.test(group)) return null;
+      const val = Number.parseInt(group, 16);
       bytes[i * 2] = (val >> 8) & 0xff;
       bytes[i * 2 + 1] = val & 0xff;
     }
@@ -55,8 +63,8 @@ function parseCidr(cidr: string): ParsedCidr | null {
   if (slash === -1) return null;
   const ipPart = cidr.slice(0, slash);
   const prefixPart = cidr.slice(slash + 1);
+  if (!/^\d{1,3}$/.test(prefixPart)) return null;
   const prefix = Number.parseInt(prefixPart, 10);
-  if (!Number.isInteger(prefix) || prefix < 0) return null;
   const ip = parseIpToBytes(ipPart);
   if (!ip) return null;
   if (ip.family === 4 && prefix > 32) return null;
@@ -89,9 +97,9 @@ function ipInCidr(ipBytes: Uint8Array, cidr: ParsedCidr): boolean {
   return true;
 }
 
-/** 判断 `ip` 是否命中 `cidrs` 中至少一个。空列表 = 放行。 */
+/** 判断 `ip` 是否命中 `cidrs` 中至少一个。空列表 = 拒绝；取不到对端地址（空串）= 拒绝。 */
 export function isIpAllowed(ip: string, cidrs: readonly string[]): boolean {
-  if (cidrs.length === 0) return true;
+  if (cidrs.length === 0) return false;
   const parsedIp = parseIpToBytes(ip);
   if (!parsedIp) return false;
   for (const cidr of cidrs) {
@@ -101,6 +109,17 @@ export function isIpAllowed(ip: string, cidrs: readonly string[]): boolean {
     if (ipInCidr(parsedIp.bytes, parsed)) return true;
   }
   return false;
+}
+
+/**
+ * 启动期校验白名单：任何一条解析不了就抛错（拒绝启动）。此前非法条目在匹配时被静默跳过，
+ * 一个笔误就变成「悄悄拒绝全部」或「悄悄少放行一段」，只能从 403 倒推。
+ */
+export function assertValidAllowCidrList(cidrs: readonly string[]): void {
+  const invalid = cidrs.filter((cidr) => parseCidr(cidr.trim()) === null);
+  if (invalid.length > 0) {
+    throw new Error(`EXEC_INTERNAL_ALLOW_CIDR contains invalid CIDR entries: ${invalid.join(', ')}`);
+  }
 }
 
 /** 从环境解析 CIDR 白名单：`EXEC_INTERNAL_ALLOW_CIDR` 逗号分隔。 */

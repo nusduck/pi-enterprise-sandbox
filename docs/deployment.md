@@ -93,7 +93,7 @@ systemctl restart pi-exec                               # 在维护窗口内：�
 脚本从不自动重启服务；同一 release id 不能重复安装。回滚 = `activate <旧 id>` 后在维护窗口内重启。
 
 **`exec.env`**：只列 exec 实际读取的变量（开发 Compose 里的大量 `SANDBOX_*` 是 Python 执行面时代的，TS 执行面不读）。
-`EXEC_INTERNAL_ALLOW_CIDR` 为空时 exec 不限制内部面来源，VM 上由启动前检查要求非空，按实测的 LB SNAT / 源地址填写。
+`EXEC_INTERNAL_ALLOW_CIDR` 为空时 exec 拒绝全部内部面请求；VM 上启动前检查另外要求它非空，避免服务起来却全部 403，按实测的 LB SNAT / 源地址填写。
 
 **启动链**：`ExecStartPre=vm/exec-preflight.sh`（非 root；Node 位置与版本；release 完整、架构匹配且对运行用户只读；
 必需配置非空且不是模板占位符；四个数据根属主为运行用户且 0700；系统 Skill 根可读；bwrap 存在且非 setuid）→
@@ -180,7 +180,7 @@ key 前缀保存 `context_id` 映射，并通过 Sandbox 私有桥接执行。�
 | `SANDBOX_API_TOKEN` | — | exec 公共会话面（`/sessions/*`、`/conversations/*`、`/datasets`）的 service key，BFF 与 agent 都以 `X-API-Key` 发送；**exec 启动时必填**，缺失即拒绝启动（fail-closed，否则会话面完全无鉴权）。它不是正式 Agent execution authorization，也不能代表终端用户 |
 | `SANDBOX_INTERNAL_HMAC_KEYRING` | — | 正式 Agent→Sandbox `/internal/v1/*` HMAC keyring；生产必填，密钥不得写入日志 |
 | `SANDBOX_INTERNAL_HMAC_ACTIVE_KID` | — | 当前签名 key id；必须存在于 keyring |
-| `EXEC_INTERNAL_ALLOW_CIDR` | 空 | exec 内部面的 CIDR 白名单（逗号分隔）；留空不限 IP。判定用的对端地址取自 TCP socket，**不再采信 `X-Forwarded-For` / `X-Real-IP`**（内部面前面没有反向代理，这两个头谁都能伪造；且以前取不到时会兜底成 `127.0.0.1`）|
+| `EXEC_INTERNAL_ALLOW_CIDR` | 开发 Compose：`127.0.0.1/32,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16`；生产 overlay：必填 | exec 内部面（`/internal/v1/*`）的来源 CIDR 白名单（逗号分隔）。**空值 = 拒绝全部内部面请求**（启动日志告警），非法 CIDR = 拒绝启动，放行全部须显式写 `0.0.0.0/0,::/0`。判定用的对端地址取自 TCP socket（IPv4-mapped IPv6 按 IPv4 匹配），**不采信 `X-Forwarded-For` / `X-Real-IP`**，取不到对端地址一律拒绝 |
 | `EXEC_HTTP_LOG` | 空 | 设为 `1` 打开 exec 内部面的请求行日志（JSON 一行：方法/路径/状态码，不含 query）|
 | `SANDBOX_INTERNAL_REDIS_URL` | — | 独立 replay Redis，用于 HMAC jti 防重放；不得复用 Agent Redis 凭据 |
 | `SANDBOX_JWT_SECRET` | — | **Agent HTTP 进程**签发/校验浏览器 JWT 的 HMAC 密钥；变量名为迁移兼容保留，生产必须是强密钥且不会传给 exec |
@@ -229,30 +229,30 @@ metadata/link-local 目的地阻断始终开启。
 
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
-| `SANDBOX_BIND_HOST` | `0.0.0.0` | **仅控制监听接口**。`0.0.0.0` 不等于允许任意来源。旧名 `SANDBOX_HOST` 仍可用 |
-| `SANDBOX_ALLOWED_CLIENT_CIDRS` | loopback + Docker 私网 | Sandbox HTTP 来源 CIDR 白名单。空列表 = 拒绝全部（失败关闭） |
-| `SANDBOX_TRUSTED_PROXY_CIDRS` | _(空)_ | 可信反向代理。默认忽略 `X-Forwarded-For`；仅当 TCP peer 属于此列表时，才从右向左剥离可信代理解析真实客户端 |
+exec 固定监听 `0.0.0.0:${EXEC_PORT|SANDBOX_PORT}`（IPv4），没有监听地址开关，也不支持「可信代理」解析转发头。
+三个面各自鉴权，互不替代：
 
-**默认 allowlist（compose / 本地容器）:**
-`127.0.0.1/32,::1/128,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16`
+| 面 | 来源限制 | 鉴权 |
+|----|----------|------|
+| 内部面 `/internal/v1/*`（Agent / Worker） | `EXEC_INTERNAL_ALLOW_CIDR`：空值拒绝全部，非法值拒启 | HMAC（`SANDBOX_INTERNAL_HMAC_*`） |
+| 公共会话面 `/sessions/*` 等（BFF / Agent） | 无 | `SANDBOX_API_TOKEN`（`X-API-Key`） |
+| MCP 窄桥 `/internal/mcp/v1/*`（sandbox-mcp） | 无 | `SANDBOX_MCP_INTERNAL_TOKEN` |
 
-**本机非 Docker 更严示例（仅 loopback）:**
+**本机非 Docker 示例（Agent 在同机）：**
 ```env
-SANDBOX_BIND_HOST=127.0.0.1
-SANDBOX_ALLOWED_CLIENT_CIDRS=127.0.0.1/32,::1/128
-SANDBOX_TRUSTED_PROXY_CIDRS=
+EXEC_INTERNAL_ALLOW_CIDR=127.0.0.1/32
 ```
 
-**反向代理示例（nginx 在 Docker 网桥，业务来源为办公网）:**
+**VM / 负载均衡示例：** 按实测的 LB SNAT 或源地址保留方式填写 Agent / Worker 实际到达 exec 的源地址段，不要照抄 Pod CIDR：
 ```env
-SANDBOX_BIND_HOST=0.0.0.0
-SANDBOX_ALLOWED_CLIENT_CIDRS=10.0.0.0/8,172.16.0.0/12
-SANDBOX_TRUSTED_PROXY_CIDRS=172.16.0.0/12
+EXEC_INTERNAL_ALLOW_CIDR=10.20.30.0/24
 ```
+
+`SANDBOX_BIND_HOST`、`SANDBOX_ALLOWED_CLIENT_CIDRS`、`SANDBOX_TRUSTED_PROXY_CIDRS` 属于已删除的 Python 执行面，TS exec 不读取。
 
 外部 MCP 由 Agent Runtime 直接连接，不经过 Sandbox。凭据由 `authTokenRef` 指向的环境变量注入。
 
-**命名分离：** `SANDBOX_ALLOWED_CLIENT_CIDRS` 只约束 **入站** HTTP 客户端；
+**命名分离：** `EXEC_INTERNAL_ALLOW_CIDR` 只约束 **入站** 内部面来源；
 `SANDBOX_NETWORK_MODE` 只约束 **出站执行** 策略。已移除 container-wide iptables
 与 `SANDBOX_ALLOWED_CIDRS` / 端口 union allowlist 作为隔离权威的设计。
 

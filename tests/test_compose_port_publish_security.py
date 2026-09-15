@@ -88,6 +88,7 @@ def _valid_rendered_prod_config() -> dict:
                         "redis://:example@sandbox-replay-redis:6379/0"
                     ),
                     "SANDBOX_SKILLS_ROOT": "/home/sandbox/skill",
+                    "EXEC_INTERNAL_ALLOW_CIDR": "10.20.0.0/16",
                 },
                 "volumes": [dict(CANONICAL_SKILL_VOLUME)],
             },
@@ -399,6 +400,25 @@ class TestRenderedProductionConfigVerifier:
         config = _valid_rendered_prod_config()
         config["services"]["dbpm-fake"] = {}
         with pytest.raises(SystemExit, match="dbpm-fake"):
+            verify_rendered_prod_config(config)
+
+    @pytest.mark.parametrize("allow_cidr", [None, "", " , "])
+    def test_rejects_missing_internal_allowlist(self, allow_cidr):
+        # exec 对空白名单拒绝全部内部面请求：生产上等于 Agent 调不通执行面。
+        config = _valid_rendered_prod_config()
+        environment = config["services"]["sandbox"]["environment"]
+        if allow_cidr is None:
+            del environment["EXEC_INTERNAL_ALLOW_CIDR"]
+        else:
+            environment["EXEC_INTERNAL_ALLOW_CIDR"] = allow_cidr
+        with pytest.raises(SystemExit, match="EXEC_INTERNAL_ALLOW_CIDR must be set"):
+            verify_rendered_prod_config(config)
+
+    @pytest.mark.parametrize("allow_cidr", ["0.0.0.0/0", "10.0.0.0/8,::/0"])
+    def test_rejects_allow_all_internal_allowlist(self, allow_cidr):
+        config = _valid_rendered_prod_config()
+        config["services"]["sandbox"]["environment"]["EXEC_INTERNAL_ALLOW_CIDR"] = allow_cidr
+        with pytest.raises(SystemExit, match="must not allow every source"):
             verify_rendered_prod_config(config)
 
     @pytest.mark.parametrize("dbpm_url", ["", "dbpm-fake:7000,dbpm-fake:7001"])
