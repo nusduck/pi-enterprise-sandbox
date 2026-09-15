@@ -106,6 +106,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `Fontconfig error: Cannot load default config file`；openEuler / 麒麟的 `/etc/ssl/certs` 链到 `/etc/pki`，沙箱内 CA 证书全部不可读，
   放开网络后 HTTPS 校验会失败。现只读挂入 `/etc/fonts` 与 `/etc/pki/tls/certs`、`/etc/pki/tls/cert.pem`、`/etc/pki/tls/openssl.cnf`、
   `/etc/pki/ca-trust/extracted`（不存在即跳过）；**不整体挂 `/etc/pki`**，`tls/private`、`nssdb`、`rpm-gpg` 仍不可见。
+- **执行面镜像内 soffice 在沙箱里启动即崩溃**：Debian 打包的 LibreOffice 把配置注册表放在 `/etc/libreoffice/registry`，
+  `/usr/lib/libreoffice/share/registry` 是指向它的符号链接；沙箱没有挂这条路径，soffice 抛 `uno::RuntimeException` 后 abort（exit 134），
+  docx / xlsx / pptx 转 PDF 全部失败。现只读挂入 `/etc/libreoffice/registry` 与 `/etc/libreoffice/psprint.conf`（VM 上的 TDF 官方包自带注册表，
+  不存在即跳过），不整体挂 `/etc/libreoffice`。
 - **执行面 `GET /ready` 真正做就绪判定**（design §9.2，S2c）：此前 `/ready`、`/health/ready` 与 `/health` 是同一个恒返回
   `{"status":"ok"}` 的处理器，部署文档所说的预检并不存在。现在 `/ready` 在数据库 `SELECT 1` 失败或超时、workspaces / tmp /
   artifacts / control 任一根不可读写、启动期 Bubblewrap 预检未通过，或进程已进入关停时返回 503，响应只含各项 ok / unavailable。

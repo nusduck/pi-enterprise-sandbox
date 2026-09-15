@@ -69,6 +69,30 @@ test('/etc 白名单：不整体暴露 /etc/pki——私钥、NSS 库、RPM 签�
   }
 });
 
+test('/etc 白名单：带上 Debian LibreOffice 的配置注册表，缺了它 soffice 在沙箱内启动即 abort', async () => {
+  // 2026-09-15 复现：开发栈 Debian 执行面里 soffice 在 bwrap 内 exit 134（uno::RuntimeException），
+  // bwrap 外同一容器转换成功。/usr/lib/libreoffice/share/registry -> /etc/libreoffice/registry 在沙箱内悬空。
+  const ws = await makeTestWorkspace();
+  try {
+    const profile = buildIsolationProfile({ context: ws.context, mode: 'workspace-write', command: ['true'] });
+    const byTarget = new Map(bindMounts(profile.mounts).map((m) => [m.target, m]));
+    for (const path of ['/etc/libreoffice/registry', '/etc/libreoffice/psprint.conf']) {
+      const mount = byTarget.get(path);
+      assert.ok(mount, `missing /etc allowlist mount: ${path}`);
+      assert.equal(mount.kind, 'ro_bind', `${path} must be read-only`);
+      assert.equal(mount.source, path, `${path} must bind the same host path`);
+      assert.equal(mount.required, false, `${path} only exists with distro-packaged LibreOffice`);
+      assert.equal(mount.sessionSpecific, false, `${path} is static`);
+    }
+    // 只挂 LibreOffice 真正经符号链接读取的两条；/etc/libreoffice 整体与 /etc/environment 不进沙箱。
+    const sources = bindMounts(profile.mounts).map((m) => m.source);
+    assert.ok(!sources.includes('/etc/libreoffice'), 'must not bind the whole /etc/libreoffice');
+    assert.ok(!sources.includes('/etc/environment'), 'must not bind /etc/environment');
+  } finally {
+    await ws.cleanup();
+  }
+});
+
 // ── ADR 0008 验证要求 1：plan 断言 ────────────────────────────────────────
 
 test('plan assertion: the root-level writable mounts (workspace, temp) are exactly writableRoots() — not more, not fewer', async () => {

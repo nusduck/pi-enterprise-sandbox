@@ -83,6 +83,11 @@ const STATIC_ETC_FILES: readonly string[] = [
   '/etc/pki/tls/cert.pem',
   '/etc/pki/tls/openssl.cnf',
   '/etc/pki/ca-trust/extracted',
+  // Debian 打包的 LibreOffice 把配置注册表放在 /etc：/usr/lib/libreoffice/share/registry 与
+  // share/psprint/psprint.conf 是指向这里的符号链接。缺了注册表，soffice 在沙箱内启动即抛
+  // com::sun::star::uno::RuntimeException 并 abort（exit 134，2026-09-15 复现）。TDF 官方包自带注册表，不存在即跳过。
+  '/etc/libreoffice/registry',
+  '/etc/libreoffice/psprint.conf',
 ];
 
 /** 新命名空间内部要有的空目录（`--dir`）。今天 `preflight()` 漏了后五个，

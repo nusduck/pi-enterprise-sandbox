@@ -106,6 +106,8 @@ test('preflight profile keeps every static mount build.ts produces — including
       '/etc/pki/tls/cert.pem',
       '/etc/pki/tls/openssl.cnf',
       '/etc/pki/ca-trust/extracted',
+      '/etc/libreoffice/registry',
+      '/etc/libreoffice/psprint.conf',
     ]) {
       assert.ok(targets.has(path), `missing static /etc file mount: ${path}`);
     }

@@ -901,3 +901,14 @@ Each entry should say **what changed**, **why**, and **which STATUS IDs** it aff
 - **验证：** Linux 容器（真实 bwrap，安全选项同 Compose）中新测试修复前失败（`fonts=missing` 等 3 项）、修复后 exec 402/402；重建 sandbox / sandbox-mcp 并换新容器，
   Debian 执行面与 openEuler VM exec（新 release）沙箱内字体配置、CA 文件可读、Python 加载 CA、`tls/private` / `nssdb` 不可见，VM 上 soffice 嵌入 CJK 字体；
   开发栈真实链路通过。Debian 镜像 soffice abort 修复前后均在，另行处理。详见 [证据](evidence/sandbox-etc-allowlist-fonts-ca-2026-09-15.md)。
+
+## 2026-09-15 — 执行面镜像内 soffice 在沙箱里启动即崩溃
+
+- **Context：** VM 演练的 Debian 对照中 soffice 在沙箱内 exit 134，`/etc` 白名单修复前后均出现。用户要求修复。
+- **Decision：** 复现为沙箱专属（bwrap 外同一容器转换成功）；根因是 Debian LibreOffice 的注册表在 `/etc/libreoffice/registry`，经 `/usr` 下符号链接读取，
+  沙箱内悬空。只挂 LibreOffice 实际经链接读取的两条，不整体挂 `/etc/libreoffice`；同一扫描发现的 `/etc/environment`、system Python sitecustomize、X11 rgb.txt 刻意不挂。
+- **Action：** `exec/src/isolation/build.ts` 追加 `/etc/libreoffice/registry`、`/etc/libreoffice/psprint.conf`；isolation-build / preflight 测试；CHANGELOG。
+- **STATUS IDs：** 不改变任何 STATUS 行。
+- **验证：** 新测试修复前失败 2 项、修复后 exec 403/403（Linux 容器真实 bwrap）；contract 109/109、agent 1325 pass / 3 cancelled（已知组，不记为通过）、
+  api-server 159/159、frontend 367/367 + build、各包类型检查（Node 22 容器）。重建 sandbox / sandbox-mcp 并换新容器后沙箱内 docx / xlsx / pptx 转 PDF 成功并读回；
+  openEuler VM exec 装新 release 同样成功（挂载跳过）；开发栈真实链路通过。详见 [证据](evidence/sandbox-soffice-libreoffice-registry-2026-09-15.md)。
