@@ -26,7 +26,15 @@ import { timingSafeEqual } from 'node:crypto';
 import { Readable } from 'node:stream';
 import path from 'node:path';
 import { makeWorkspaceFs } from '../fs/make-workspace-fs.js';
-import { IsolatedShellExecutor } from '../shell/executor.js';
+import type { ShellRunResult } from '@deepseek-ai/dsh-shell';
+import { deniedRunResult, type IsolatedShellExecutor } from '../shell/executor.js';
+import {
+  effectiveResourceLimits,
+  makeLimitedExecutor,
+  quotaGateFor,
+  runGuardedForeground,
+  type GuardedExecutionDeps,
+} from '../shell/guarded-execution.js';
 import { fileSearchService } from '../search/index.js';
 import { redactPhysicalRoots } from '../fs/redact.js';
 import { ArtifactError } from '../artifact/service.js';
@@ -34,10 +42,13 @@ import type { ArtifactService } from '../artifact/service.js';
 import type { WorkspaceManager } from '../workspace/manager.js';
 import type { WorkspaceContext } from '../types.js';
 
-export interface InternalMcpDeps {
+/**
+ * 执行相关的限额/配额（`GuardedExecutionDeps`）与内部 Shell 路由**同一份**
+ * 装配值：外部 MCP 命令走这条桥，不能比 Agent 的工具调用更宽松（复核 F1）。
+ */
+export interface InternalMcpDeps extends GuardedExecutionDeps {
   readonly workspaceManager: WorkspaceManager;
   readonly systemSkillRoot: string;
-  readonly bwrapExecutable: string;
   readonly artifactService: ArtifactService;
   /** 空串表示未配置——那时整条桥回 503，而不是用空 token 比对。 */
   readonly internalToken: string;
@@ -99,7 +110,8 @@ function requireString(value: unknown, field: string, max = 4096): string {
 }
 
 function clampTimeout(value: unknown, max: number): number {
-  const n = value === undefined || value === null ? 120 : Number(value);
+  // 缺省 120 秒，但不超过服务端上限——上限被配得更小时，缺省值不能自己越界。
+  const n = value === undefined || value === null ? Math.min(120, max) : Number(value);
   if (!Number.isInteger(n) || n < 1 || n > max) {
     throw new BridgeError('PATH_INVALID', 'timeout_seconds exceeds MCP limit', 400);
   }
@@ -121,6 +133,12 @@ function guessMime(p: string): string {
 
 export function registerInternalMcpRoutes(app: Hono, deps: InternalMcpDeps): void {
   const limits = { ...DEFAULTS, ...deps };
+  // 桥自己的秒级上限与执行面前台预算取小：`SANDBOX_EXECUTION_TIMEOUT_SECONDS`
+  // 调小之后，超出的请求在这里 400，而不是被执行器悄悄夹短。
+  const maxTimeoutSeconds = Math.max(
+    1,
+    Math.min(limits.maxTimeoutSeconds, Math.floor(effectiveResourceLimits(deps).executionTimeoutMs / 1000)),
+  );
 
   app.use('/internal/mcp/v1/*', async (c, next) => {
     const expected = deps.internalToken.trim();
@@ -158,11 +176,28 @@ export function registerInternalMcpRoutes(app: Hono, deps: InternalMcpDeps): voi
   const fsOf = makeWorkspaceFs;
 
   function shellOf(ctx: WorkspaceContext): IsolatedShellExecutor {
-    return new IsolatedShellExecutor({
-      workspace: ctx,
-      bwrapExecutable: deps.bwrapExecutable,
-      mode: 'workspace-write',
+    return makeLimitedExecutor(deps, ctx, 'workspace-write');
+  }
+
+  /**
+   * 前台执行 + 配额准入/采样 + 请求断开取消，与内部 Shell 路由同一份编排。
+   * 被配额拒绝时回一个 `sandbox.denied` 的结果（exit 126，原因进 stderr），
+   * 响应形状不变，facade 照常翻译成 `failed`。
+   */
+  async function guarded(
+    c: import('hono').Context,
+    ctx: WorkspaceContext,
+    executor: IsolatedShellExecutor,
+    timeoutMs: number,
+    run: (signal: AbortSignal) => Promise<ShellRunResult>,
+  ): Promise<ShellRunResult> {
+    const outcome = await runGuardedForeground({
+      gate: quotaGateFor(deps, ctx),
+      clientSignal: c.req.raw.signal,
+      run,
     });
+    if (outcome.kind === 'ran') return outcome.result;
+    return deniedRunResult(ctx, executor.mode, outcome.message, timeoutMs);
   }
 
   /** 统一错误出口：形状是 facade 那张封闭表的输入，绝不带物理路径。 */
@@ -218,13 +253,13 @@ export function registerInternalMcpRoutes(app: Hono, deps: InternalMcpDeps): voi
       const ctx = await contextOf(payload);
       roots = rootsOf(ctx);
       const code = requireString(payload['code'], 'code', limits.maxCodeLength);
-      const timeoutSeconds = clampTimeout(payload['timeout_seconds'], limits.maxTimeoutSeconds);
+      const timeoutSeconds = clampTimeout(payload['timeout_seconds'], maxTimeoutSeconds);
       const executionId = `exec_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}`;
-      const result = await shellOf(ctx).runPython({
-        code,
-        executionId,
-        timeoutMs: timeoutSeconds * 1000,
-      });
+      const executor = shellOf(ctx);
+      const timeoutMs = timeoutSeconds * 1000;
+      const result = await guarded(c, ctx, executor, timeoutMs, (signal) =>
+        executor.runPython({ code, executionId, timeoutMs, signal }),
+      );
       return c.json({
         status: result.timedOut ? 'timeout' : result.exitCode === 0 ? 'succeeded' : 'failed',
         exit_code: result.exitCode,
@@ -248,10 +283,12 @@ export function registerInternalMcpRoutes(app: Hono, deps: InternalMcpDeps): voi
       const ctx = await contextOf(payload);
       roots = rootsOf(ctx);
       const command = requireString(payload['command'], 'command', limits.maxCommandLength);
-      const timeoutSeconds = clampTimeout(payload['timeout_seconds'], limits.maxTimeoutSeconds);
+      const timeoutSeconds = clampTimeout(payload['timeout_seconds'], maxTimeoutSeconds);
       const executor = shellOf(ctx);
       const spec = executor.resolve({ command, timeoutMs: timeoutSeconds * 1000 });
-      const result = await executor.run(spec);
+      const result = await guarded(c, ctx, executor, spec.timeoutMs, (signal) =>
+        executor.run({ ...spec, signal }),
+      );
       const executionId = `exec_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}`;
       return c.json({
         status: result.timedOut ? 'timeout' : result.exitCode === 0 ? 'succeeded' : 'failed',

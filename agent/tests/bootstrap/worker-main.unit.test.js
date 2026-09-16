@@ -7,16 +7,29 @@ import assert from 'node:assert/strict';
 import { startWorkerMain } from '../../src/bootstrap/worker-main.js';
 import { createStubRunExecutor } from '../../src/application/run-executor.js';
 
+/**
+ * 缩深闸门（worker-drain-gate）会读 `runs` 账本；这些用例只关心闸门之后的
+ * 消费者装配，所以给一个「没有超深非终态 Run」的最小 knex 替身。
+ */
+function emptyLedger() {
+  const builder = {
+    then: (resolve, reject) => Promise.resolve([]).then(resolve, reject),
+  };
+  for (const op of ['whereIn', 'where', 'groupBy', 'select', 'count']) builder[op] = () => builder;
+  const knex = () => builder;
+  knex.raw = async () => [[{}]];
+  return knex;
+}
+
 describe('startWorkerMain', () => {
   it('fails fatally when BullMQ consumer cannot start and cleans up', async () => {
-    const knex = { raw: async () => [[{}]] };
-    const redis = {};
     let shutdowns = 0;
     const fakeContainer = {
       env: {},
-      // `assertNoStrandedRunQueues` 只在配置**不服务**的层上查 key；
-      // 这里拓扑只有一层，探测会扫 d1..d8，全部返回「不存在」。
+      // 缩深闸门只在配置**不服务**的层上查 key，探测会扫到 d8，全部返回「不存在」；
+      // 账本里也没有超深的非终态 Run。
       redis: { type: async () => 'none' },
+      knex: emptyLedger(),
       // 分层拓扑（ADR 0012）：消费者按层建，容器必须把拓扑交出来。
       runQueueTopology: {
         maxDepth: 0,
@@ -94,9 +107,10 @@ describe('startWorkerMain', () => {
   it('forwards isolated BullMQ stall knobs without changing defaults', async () => {
     const fakeContainer = {
       env: {},
-      // `assertNoStrandedRunQueues` 只在配置**不服务**的层上查 key；
-      // 这里拓扑只有一层，探测会扫 d1..d8，全部返回「不存在」。
+      // 缩深闸门只在配置**不服务**的层上查 key，探测会扫到 d8，全部返回「不存在」；
+      // 账本里也没有超深的非终态 Run。
       redis: { type: async () => 'none' },
+      knex: emptyLedger(),
       // 生产默认拓扑（ADR 0012）：maxDepth=2、总预算 4 → 2 / 1 / 1。
       runQueueTopology: {
         maxDepth: 2,

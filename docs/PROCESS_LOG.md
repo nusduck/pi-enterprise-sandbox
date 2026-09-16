@@ -1021,3 +1021,30 @@ Each entry should say **what changed**, **why**, and **which STATUS IDs** it aff
   投递方共用路径导致 HTTP 面拒启的设计错误——已拆成「路由」与「槽位分配」两步，
   两处都记在证据里。详见
   [证据](evidence/run-queue-depth-layering-2026-09-16.md)。
+
+## 2026-09-16 — 修复后复核 F1–F3：MCP 执行入口接限额；缩深闸门读失败拒启并查账本
+
+- **Context：** [修复后复核](reviews/2026-09-16-agent-worker-sandbox/follow-up-review.md)确认三处
+  阻塞缺口：R1/R2 只接到了内部 Shell 路由，外部 MCP 的 `shell/execute`、`python/execute` 仍是
+  裸执行器（F1）；R3 的 Worker 缩深闸门把 Redis 读失败当成空队列（F2），且只查 Redis、不查
+  MySQL 中停在 WAITING_APPROVAL / WAITING_INPUT 的超深子 Run（F3）。另有四条口径问题：
+  `SANDBOX_MAX_MEMORY_MB` 被写成「内存上限」、「提到 6 维持原吞吐」、旧镜像回滚依赖不存在的闸门、
+  缩深步骤里「先把 `AGENT_SUBAGENT_MAX_DEPTH` 降到 0」会同时改掉消费拓扑。
+- **Decision：** 限额 / 配额准入与采样 / 取消融合下沉到 `exec/src/shell/guarded-execution.ts`，
+  两个执行入口共用，鉴权仍各自独立；窄桥 `timeout_seconds` 上限取桥上限与执行预算的较小者。
+  闸门拆到 `agent/src/bootstrap/worker-drain-gate.ts`：只有 key 不存在才算 0，读异常 / 不认识的
+  key 类型 / 查库失败一律拒启；同时查 `runs` 中超出目标深度的非终态 Run；前移到恢复扫描、
+  cron、outbox 与消费者之前。决策（分层 + 保留槽）不变，ADR 0012 追加修订记录而非改写正文。
+- **Action：** exec `internal-shell.ts` / `internal-mcp.ts` / `app.ts`；agent `worker-main.ts`；
+  新增 `exec/test/internal-mcp-limits.test.ts`、`agent/tests/bootstrap/worker-drain-gate.unit.test.js`；
+  `deployment.md`、`sandbox-mcp.md`、ADR 0012、README、CHANGELOG、STATUS（C4 备注）、复核文档状态说明。
+- **STATUS IDs：** C4 只补备注（MCP 入口同步接线），状态仍 `unknown`；R3 无对应 §32 条目。
+- **验证：** 新增回归修复前失败（exec 7 例、agent 4 例）、修复后通过。pytest 206、contract 118、
+  api-server 160、frontend 367 + build、各包类型检查通过；exec 4 例、agent 5 例失败，在同一
+  容器环境的 `a309874a` 干净 worktree 上同样失败（无 bwrap / root capabilities / 插件树加载），
+  不记为通过。重建 agent、sandbox、sandbox-mcp 镜像并核对运行容器已换新。真机：外部 MCP
+  路径 9/9（rlimit 生效、nproc 拒绝 + 额度内对照、Python 入口、超时拒绝 + 对照、断开后无写入
+  无残留进程 + 不断开对照）；真实账本上插入 depth 2 的 WAITING_APPROVAL 子 Run，Redis 队列为空
+  时缩深拒启、Run 终态后同配置放行，探针数据已清理；经 BFF 完整链路 12/12。本机 `.env` 的
+  `MODEL_ID=deepseek-v4-flash` 已不在模型目录，链路验证期间临时覆盖、验证后恢复。详见
+  [证据](evidence/follow-up-f1-f3-2026-09-16.md)。

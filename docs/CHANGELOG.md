@@ -17,11 +17,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   保留槽；投递路由只看 MySQL 里的权威 `subagent_depth`。
   - **`AGENT_WORKER_CONCURRENCY` 的含义变了**：它现在是**总预算**，按「每个
     深度 ≥ 1 的层保留 1 个槽、其余给深度 0」切分。默认 `4` + `maxDepth=2` →
-    **2 / 1 / 1**，根任务的同时执行量从 4 降到 2。要维持原吞吐请提到 `6`。
+    **2 / 1 / 1**，根任务的同时执行量从 4 降到 2。提到 `6` 恢复的是根任务槽数 4，
+    吞吐是否相同以压测为准。
     预算 < `maxDepth + 1` 时**拒绝启动**。
-  - **升级不需要排空**（深度 0 沿用旧队列名）；**回滚必须先排空**分层队列——
-    Worker 启动时会检查「本配置不服务的层里是否还有存量」，有就拒绝启动并点名
-    队列与条数。步骤见 deployment.md。
+  - **升级不需要排空**（深度 0 沿用旧队列名）；**缩深 / 回滚必须先收敛**——
+    Worker 在恢复扫描与消费者启动之前检查「本配置不服务的深度」在 Redis 队列与
+    MySQL `runs` 账本（非终态 Run）里是否还有存量，有就拒绝启动并点名；**读不到
+    也拒启**。换回分层前的旧镜像没有这道闸门，须按 deployment.md 在外部确认分层
+    队列为空。
   - 就绪判定收紧：任何一个必需层的消费者不在跑，`/ready` 即不就绪；依赖守卫的
     暂停 / 恢复对全部层生效。
 
@@ -50,6 +53,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   轮询从 50 ms 定频改为 200 ms 起、最多 2 s 的有界退避，取消立刻唤醒。
 - **后台命令的输出不再在 Agent 侧无限累积**（审查 R6）：`RemoteShellProcess` 未被
   读取的缓冲有上限（保留尾部，截断置 `lossy`）。
+- **外部 MCP 的命令执行不再绕过资源限额与配额**（修复后复核 F1）：R1/R2 的修复只接到
+  了 Agent 走的 `/internal/v1/shell/run`，MCP 窄桥的 `shell/execute` 与 `python/execute`
+  仍然是裸执行器——没有 nproc/NOFILE/CPU/FSIZE rlimit、没有子进程配额准入与采样、
+  请求断开也停不掉命令。现在两个入口共用 `exec/src/shell/guarded-execution.ts`；
+  超额时 MCP 返回 `failed`（exit 126，原因在 stderr），`timeout_seconds` 超过
+  `SANDBOX_EXECUTION_TIMEOUT_SECONDS` 回 400。
+- **Worker 缩深闸门不再把「读不到」当成「已排空」，也不再漏掉等待审批的子 Run**
+  （修复后复核 F2 / F3）：Redis 读失败曾按 0 放行，之后无人重做检查；只查 Redis 时，
+  停在 `WAITING_APPROVAL` / `WAITING_INPUT` 的超深子 Run 队列里没有作业，缩深后恢复
+  入队会被越界拒绝。闸门现在同时查 MySQL 账本、读失败即拒启，并前移到任何副作用之前。
+- **`SANDBOX_MAX_MEMORY_MB` 的文档不再暗示它是生效的内存上限**：它只进启动日志；
+  生产硬限额是 `SANDBOX_MEM_LIMIT`，开发 Compose 没有容器内存限制。
 
 ### Changed
 

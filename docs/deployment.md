@@ -111,12 +111,29 @@ Child monitor codes: `workspace_quota_exceeded`,
 
 值不是整数或落在范围外时 exec **拒绝启动**，不静默换成默认值。
 
-`SANDBOX_MAX_MEMORY_MB` **不会**被翻译成逐任务 rlimit，它是容器/部署层的兜底
-声明。原因：rlimit 里唯一沾边的是 `RLIMIT_AS`（虚拟地址空间），而地址空间不等于
-进程树常驻内存——Python/numpy 这类运行时预留的虚拟地址空间远大于实际使用量，
-按 512 MB 收紧会让正常命令直接起不来。进程树的内存总量只有 cgroup 管得住，
-那是 Compose/systemd 的事。声明了它而没有开 `SANDBOX_MAX_ADDRESS_SPACE_MB` 时，
-exec 启动日志会打一条 `exec NOTICE:` 说明这条声明的实际归属。
+这些限额与配额准入/采样、请求断开取消对**两个执行入口一视同仁**：Agent 走的
+`/internal/v1/shell/run`，以及外部 MCP 客户端经 facade 走的
+`/internal/mcp/v1/shell/execute`、`/internal/mcp/v1/python/execute`（共用
+`exec/src/shell/guarded-execution.ts`）。MCP 请求的 `timeout_seconds` 超过
+`SANDBOX_EXECUTION_TIMEOUT_SECONDS` 时回 400，不静默夹短。
+
+`SANDBOX_MAX_MEMORY_MB` **不会**被翻译成逐任务 rlimit，**也不设置任何内存限额**：
+exec 只读它来打启动日志。原因：rlimit 里唯一沾边的是 `RLIMIT_AS`（虚拟地址空间），
+而地址空间不等于进程树常驻内存——Python/numpy 这类运行时预留的虚拟地址空间远大于
+实际使用量，按 512 MB 收紧会让正常命令直接起不来。进程树的内存总量只有 cgroup
+管得住，那是 Compose/systemd 的事。声明了它而没有开 `SANDBOX_MAX_ADDRESS_SPACE_MB`
+时，exec 启动日志会打一条 `exec NOTICE:`——**日志里的数字不是已生效的额度**。
+
+实际的内存硬限额在哪里：
+
+| 部署 | 真正生效的内存限额 | 说明 |
+|---|---|---|
+| `docker-compose.prod.yml` | `SANDBOX_MEM_LIMIT`（默认 `1g`，`deploy.resources.limits.memory`） | 整个 sandbox 容器共用，不是逐任务 |
+| `docker-compose.yml`（开发） | **无** | 没有设容器内存限制，不能据 `SANDBOX_MAX_MEMORY_MB` 声称有兜底 |
+| VM / systemd | 由 unit 的 `MemoryMax=` 决定 | 仓库不替运维设置 |
+
+需要内存兜底的部署，上线前用 `docker inspect --format '{{.HostConfig.Memory}}' <容器>`
+或 `systemctl show -p MemoryMax <unit>` 核对 cgroup 上确实有值。
 
 ### VM exec release（单 VM 裸装，design §9）
 
@@ -519,16 +536,46 @@ exec 不取任何 Redis 口令：它不连 Redis（replay 实例已于 2026-09-1
 | 4 | 0 | 4（只有一层） |
 
 **升级注意：根任务的同时执行量会下降。** 同样是 `4`，分层前根任务并发是 4，
-分层后是 2。要维持原吞吐，把 `AGENT_WORKER_CONCURRENCY` 提到 `6`，或降低
-`AGENT_SUBAGENT_MAX_DEPTH`。
+分层后是 2。把 `AGENT_WORKER_CONCURRENCY` 提到 `6` 恢复的是**根任务槽数 4**，
+不等于已证明吞吐与分层前相同（深层各只有一个槽，总进程负载也变了）；也可以降低
+`AGENT_SUBAGENT_MAX_DEPTH`。容量以压测为准。
 
 **升级不需要排空**：深度 0 沿用 `agent-runs`，旧队列里的存量（含升级前按旧规则
 投进去的子 Run）仍由深度 0 的消费者处理。
 
-**回滚必须先排空**：换回旧镜像或调小 `AGENT_SUBAGENT_MAX_DEPTH` 之后没有人消费
-`agent-runs-d1/d2`。Worker 启动时会反向检查——**本配置不服务的层里还有存量就
-拒绝启动**，并点名队列与条数。回滚顺序：停止投递新子任务 → 等分层队列排空
-（启动闸门不再报错即为排空）→ 换镜像。禁止新旧消费者同时在跑。
+**缩深 / 回滚必须先收敛**：调小 `AGENT_SUBAGENT_MAX_DEPTH` 或换回旧镜像之后，
+没有人消费超出目标深度的层。新镜像的 Worker 在**任何恢复扫描、cron、outbox 与
+消费者启动之前**检查两处，任一处有存量就拒绝启动并点名：
+
+- **Redis**：本配置不服务的队列（探测到 `agent-runs-d8`）里 wait / paused / active /
+  delayed / prioritized 的作业数；
+- **MySQL 权威账本**：`runs` 里 `subagent_depth` 超过目标深度的**非终态** Run。
+  只看 Redis 不够——等待审批 / 用户输入的子 Run 在队列里没有作业，但审批或应答
+  之后恢复入队会因越界被拒。
+
+**读不到也拒启**：Redis 读取异常、不认识的 key 类型、MySQL 查询失败都按「无法证明
+已收敛」处理，不当作空（只有 key 不存在才算 0）。拒启交给编排器重启重试。
+
+缩深顺序：停止产生超深子任务（暂停接新 Run，或用 AgentVersion `configJson.subagent`
+收紧深度——**不要**先改 `AGENT_SUBAGENT_MAX_DEPTH`，它同时决定消费拓扑）→ 原拓扑继续
+运行，让超深的 Run 走到终态（含处理完挂起的审批 / 输入）→ 以新配置启动，闸门不再
+报错即为收敛。禁止新旧消费者同时在跑。
+
+**换回旧镜像时闸门不存在**——旧镜像不做上述检查，它「启动不报错」不代表已收敛。
+旧镜像只有 `agent-runs` 一个队列、按单队列投递，所以超深的非终态 Run 恢复时仍会
+投进它消费的队列；会被落下的是**已经躺在分层队列里的作业**。切换前在外部确认
+每个分层队列都为 0 再换（prefix 取 `AGENT_RUN_QUEUE_PREFIX`，默认 `{bull}`）：
+
+```bash
+for q in agent-runs-d1 agent-runs-d2; do
+  for s in wait paused active; do redis-cli LLEN "{bull}:$q:$s"; done
+  for s in delayed prioritized; do redis-cli ZCARD "{bull}:$q:$s"; done
+done
+```
+
+若回滚目标是**另一个带分层的新镜像**但深度更小，按上面的缩深顺序走，闸门会同时查账本：
+等价的外部查询是
+`SELECT subagent_depth, COUNT(*) FROM runs WHERE status NOT IN ('SUCCEEDED','FAILED','CANCELLED') AND subagent_depth > <目标深度> GROUP BY subagent_depth`。
 
 就绪判定随之收紧：**任何一个必需层的消费者不在跑，`/ready` 就不就绪**；
 依赖守卫的暂停 / 恢复对全部层生效。

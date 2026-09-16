@@ -29,6 +29,13 @@ flowchart LR
 | `sandbox_file_list` | 有深度上限的文件列表 |
 | `sandbox_artifact_submit` | 对已生成文件做不可变快照并返回临时下载 URL |
 
+两个执行工具与 Agent 的 shell 工具**同一套**限额：exec 端的 `SANDBOX_MAX_PROCESS_COUNT` /
+`SANDBOX_MAX_OPEN_FILES` / `SANDBOX_MAX_CPU_TIME_SECONDS` / `SANDBOX_MAX_FILE_SIZE_MB`
+（命名空间内 `ulimit`）、子进程磁盘配额准入与采样，以及请求断开即终止命令
+（见 [deployment.md](deployment.md#per-execution-resource-limits)）。配额超额时结果为
+`failed`（exit 126，原因在 stderr）；`timeout_seconds` 超过 `SANDBOX_EXECUTION_TIMEOUT_SECONDS`
+时桥接回 400。
+
 每个调用可传 `context_id`。`sandbox-mcp` 把它映射为 Redis 中的
 `(sandbox_session_id, workspace_id)`，首次使用会在短锁下创建工作区；同一
 `context_id` 的后续调用复用该工作区。未传 `context_id` 时会返回生成的 ID，

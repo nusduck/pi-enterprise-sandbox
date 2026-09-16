@@ -1,5 +1,12 @@
 # 修复后复核：仍有阻塞缺口
 
+> **状态（2026-09-16 补记）**：F1–F3 与「结论口径」已处理，正文保持复核当时的快照不改。
+> F1 → `exec/src/shell/guarded-execution.ts`（两个执行入口共用）；F2/F3 →
+> `agent/src/bootstrap/worker-drain-gate.ts`（读失败拒启、查 MySQL 非终态 Run、先于副作用）；
+> 口径 → deployment.md、ADR 0012「修订记录」、README、CHANGELOG。真机记录见
+> [证据](../../evidence/follow-up-f1-f3-2026-09-16.md)。分层拓扑下 Worker 重启 / 恢复的
+> release gate 仍未重跑，未列为完成。
+
 2026-09-16，基线 `ab200782`，开始时工作区干净。本轮只读生产代码，核对修复提交及两份验收记录；没有重复执行记录中的 Docker/数据库验收，历史测试数字不作为本轮亲自复现。
 
 ## F1 / P1：R1 修复遗漏 MCP 执行入口

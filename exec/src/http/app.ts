@@ -239,6 +239,10 @@ export function createExecApp(deps: ExecAppDeps): Hono {
     bwrapExecutable: deps.bwrapExecutable,
     artifactService,
     internalToken: deps.mcpInternalToken ?? '',
+    // 与内部 Shell 路由同一份限额/配额：外部 MCP 命令不能绕过（复核 F1）。
+    ...(deps.resourceLimits !== undefined ? { resourceLimits: deps.resourceLimits } : {}),
+    ...(deps.childQuota !== undefined ? { childQuota: deps.childQuota } : {}),
+    ...(deps.quotaStore !== undefined ? { quotaStore: deps.quotaStore } : {}),
   });
   return app;
 }

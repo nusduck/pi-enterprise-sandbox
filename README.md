@@ -139,7 +139,7 @@ SANDBOX_BASE_URL=http://localhost:8081
 | `SANDBOX_MAX_PROCESS_COUNT` | `20` | 最大子进程数 |
 | `SANDBOX_MAX_OPEN_FILES` | `256` | 子进程最大打开文件描述符数（RLIMIT_NOFILE） |
 | `SANDBOX_MAX_CPU_TIME_SECONDS` | `300` | CPU 时间上限 |
-| `SANDBOX_MAX_MEMORY_MB` | `512` | 内存上限 |
+| `SANDBOX_MAX_MEMORY_MB` | `512` | 仅声明并打启动日志，**不设置任何内存限额**；生产硬限额是 `SANDBOX_MEM_LIMIT`，见 deployment.md |
 | `SANDBOX_MAX_FILE_SIZE_MB` | `50` | 单文件大小上限 |
 | `SANDBOX_WORKSPACE_QUOTA_MB` | `500` | 工作区总空间上限 |
 | `SANDBOX_TEMP_QUOTA_MB` | `500` | Agent Session 私有持久化 `/tmp` 空间上限 |

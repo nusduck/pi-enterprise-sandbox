@@ -2,8 +2,9 @@
  * 内部 Shell 端点——对应 `dsh-shell` 的 run/start（dsh-rebuild 5.6）。
  *
  * 每个 spawn 必经 `IsolatedShellExecutor` → `process-runner` → `render`
- * （W2-A 硬要求），本文件只做 HTTP 层：信封校验 + 参数解析 + 配额准入与
- * 监控编排 + 结果脱敏。
+ * （W2-A 硬要求），本文件只做 HTTP 层：信封校验 + 参数解析 + 结果脱敏。
+ * 限额、配额准入/采样与取消融合在 `shell/guarded-execution.ts`，MCP 窄桥
+ * 调同一份（修复后复核 F1：最初只接在这里，窄桥漏掉了）。
  *
  * 2026-09-16 的审查在这里发现三个接线断点（R1/R2/R4），本文件是三者的
  * 汇合点，所以修复也集中在这里：
@@ -36,25 +37,20 @@ import {
   type ShellPayload,
   type ShellPayloadLimits,
 } from '@pi/contract/shell-payload.js';
-import {
-  deniedProcessHandle,
-  deniedRunResult,
-  IsolatedShellExecutor,
-} from '../shell/executor.js';
+import { deniedProcessHandle, deniedRunResult } from '../shell/executor.js';
 import type { MySqlJobRegistry } from '../shell/job-registry.js';
 import type { ShellResourceLimits } from '../shell/resource-limits.js';
-import { DEFAULT_SHELL_RESOURCE_LIMITS } from '../shell/resource-limits.js';
 import {
-  ChildWorkspaceQuotaWatch,
-  evaluateChildQuota,
-  type ChildQuotaConfig,
-  type ChildQuotaDecision,
-} from '../workspace/child-quota.js';
-import { InMemoryQuotaStore, type QuotaStore } from '../workspace/quota-store.js';
+  effectiveResourceLimits,
+  makeLimitedExecutor,
+  quotaGateFor,
+  runGuardedForeground,
+  type GuardedExecutionDeps,
+} from '../shell/guarded-execution.js';
 import type { WorkspaceManager } from '../workspace/manager.js';
 import type { EnabledSkillPackagesResolver, WorkspaceContext } from '../types.js';
 
-export interface InternalShellDeps {
+export interface InternalShellDeps extends GuardedExecutionDeps {
   readonly workspaceManager: WorkspaceManager;
   readonly jobRegistry: MySqlJobRegistry;
   readonly systemSkillRoot: string;
@@ -66,14 +62,7 @@ export interface InternalShellDeps {
    */
   readonly draftSkillRootFor?: (orgId: string, userId: string) => string | null;
   readonly enabledSkillPackagesFor: EnabledSkillPackagesResolver;
-  readonly bwrapExecutable: string;
   readonly modeFor: (workspaceId: string) => 'read-only' | 'workspace-write';
-  /** 执行面限额（超时预算、输出上限、命名空间内部 rlimit）。缺省即内置默认值。 */
-  readonly resourceLimits?: ShellResourceLimits;
-  /** 子进程磁盘配额监控配置。`enforcement: false` 时准入与采样都不做。 */
-  readonly childQuota?: ChildQuotaConfig;
-  /** 配额账本（读预留量）。不传则用进程内实现——只适合单测与本地开发。 */
-  readonly quotaStore?: QuotaStore;
 }
 
 function buildContext(
@@ -132,61 +121,8 @@ function workdirString(payload: ShellPayload): string {
   return payload.workdir.relative === '' ? root : `${root}/${payload.workdir.relative}`;
 }
 
-function makeExecutor(deps: InternalShellDeps, ctx: WorkspaceContext, workspaceId: string): IsolatedShellExecutor {
-  const limits = deps.resourceLimits ?? DEFAULT_SHELL_RESOURCE_LIMITS;
-  return new IsolatedShellExecutor({
-    workspace: ctx,
-    bwrapExecutable: deps.bwrapExecutable,
-    mode: deps.modeFor(workspaceId),
-    defaultTimeoutMs: limits.executionTimeoutMs,
-    outputCapChars: limits.maxOutputChars,
-    maxProcessCount: limits.maxProcessCount,
-    rlimits: limits.rlimits,
-  });
-}
-
-// ── 子进程配额：准入 + 采样 ────────────────────────────────────────
-
-interface QuotaGate {
-  /** 准入判定。`allow: false` 时调用方必须**不** spawn。 */
-  admit(): Promise<ChildQuotaDecision>;
-  /** spawn 之后开始采样；返回一个必须在每条出口调用的停止函数。 */
-  watch(onViolation: (decision: ChildQuotaDecision) => void): () => Promise<void>;
-}
-
-function quotaGateFor(deps: InternalShellDeps, ctx: WorkspaceContext): QuotaGate {
-  const config = deps.childQuota;
-  if (config === undefined || !config.enforcement) {
-    return {
-      admit: async () => ({ allow: true, message: 'monitoring disabled' }),
-      watch: () => async () => undefined,
-    };
-  }
-  const quotaDeps = { quotaStore: deps.quotaStore ?? new InMemoryQuotaStore() };
-  return {
-    admit: () =>
-      evaluateChildQuota(ctx.workspaceRoot, ctx.tempRoot, config, quotaDeps, {
-        workspaceId: ctx.workspaceId,
-      }),
-    watch: (onViolation) => {
-      const watch = new ChildWorkspaceQuotaWatch({
-        workspacePath: ctx.workspaceRoot,
-        tempPath: ctx.tempRoot,
-        workspaceId: ctx.workspaceId,
-        config,
-        deps: quotaDeps,
-        onViolation,
-      });
-      watch.start();
-      // 幂等：每条出口（正常结束、取消、spawn 失败）都会调一次。
-      let stopped: Promise<void> | undefined;
-      return () => (stopped ??= watch.stop());
-    },
-  };
-}
-
 export function registerInternalShellRoutes(app: Hono, deps: InternalShellDeps): void {
-  const limits = deps.resourceLimits ?? DEFAULT_SHELL_RESOURCE_LIMITS;
+  const limits = effectiveResourceLimits(deps);
   const payloadLimits = payloadLimitsOf(limits);
 
   app.post('/internal/v1/shell/run', async (c) => {
@@ -195,11 +131,9 @@ export function registerInternalShellRoutes(app: Hono, deps: InternalShellDeps):
       parseEnvelope(rawEnv);
       const env = rawEnv as { orgId: string; userId: string; workspaceId: string };
       const ctx = buildContext(deps, env, enabledSkills);
-      const executor = makeExecutor(deps, ctx, env.workspaceId);
+      const executor = makeLimitedExecutor(deps, ctx, deps.modeFor(env.workspaceId));
       const parsed = parseShellRunPayload(payload, payloadLimits);
 
-      const gate = quotaGateFor(deps, ctx);
-      const admission = await gate.admit();
       const spec = executor.resolve({
         command: parsed.command,
         workdir: workdirString(parsed),
@@ -208,42 +142,21 @@ export function registerInternalShellRoutes(app: Hono, deps: InternalShellDeps):
         ...(parsed.stdin !== undefined ? { stdin: parsed.stdin } : {}),
         ...(parsed.env !== undefined ? { env: { ...parsed.env } } : {}),
       });
-      if (!admission.allow) {
-        // 超额/测量失败一律 fail-closed：不 spawn，把原因如实交给模型。
+      // 准入、采样与取消融合（客户端断开 + 配额报警）在共享编排里，
+      // MCP 窄桥走同一份（复核 F1）。超额/测量失败一律 fail-closed：不 spawn，
+      // 把原因如实交给模型。
+      const outcome = await runGuardedForeground({
+        gate: quotaGateFor(deps, ctx),
+        clientSignal: c.req.raw.signal,
+        run: (signal) => executor.run({ ...spec, signal }),
+      });
+      if (outcome.kind === 'denied') {
         return c.json({
           ok: true,
-          data: deniedRunResult(ctx, executor.mode, admission.message, spec.timeoutMs),
+          data: deniedRunResult(ctx, executor.mode, outcome.message, spec.timeoutMs),
         });
       }
-
-      // 取消的三个来源融合成一个信号：客户端断开、配额监控报警、
-      // 以及执行器内部的超时定时器（后者在 `runForeground` 里另行融合）。
-      const controller = new AbortController();
-      let quotaViolation: ChildQuotaDecision | undefined;
-      const stopWatch = gate.watch((decision) => {
-        quotaViolation = decision;
-        controller.abort();
-      });
-      const clientSignal = c.req.raw.signal;
-      const onClientAbort = (): void => controller.abort();
-      if (clientSignal !== undefined && clientSignal !== null) {
-        if (clientSignal.aborted) controller.abort();
-        else clientSignal.addEventListener('abort', onClientAbort, { once: true });
-      }
-
-      try {
-        const result = await executor.run({ ...spec, signal: controller.signal });
-        if (quotaViolation !== undefined) {
-          return c.json({
-            ok: true,
-            data: deniedRunResult(ctx, executor.mode, quotaViolation.message, spec.timeoutMs),
-          });
-        }
-        return c.json({ ok: true, data: result });
-      } finally {
-        clientSignal?.removeEventListener('abort', onClientAbort);
-        await stopWatch();
-      }
+      return c.json({ ok: true, data: outcome.result });
     } catch (err) {
       return failure(c, err);
     }
@@ -256,7 +169,7 @@ export function registerInternalShellRoutes(app: Hono, deps: InternalShellDeps):
       const env = rawEnv as { orgId: string; userId: string; workspaceId: string };
       const ctx = buildContext(deps, env, enabledSkills);
       const roots = rootsOf(ctx);
-      const executor = makeExecutor(deps, ctx, env.workspaceId);
+      const executor = makeLimitedExecutor(deps, ctx, deps.modeFor(env.workspaceId));
       const parsed = parseShellStartPayload(payload, payloadLimits);
       const spec = executor.resolve({
         command: parsed.command,

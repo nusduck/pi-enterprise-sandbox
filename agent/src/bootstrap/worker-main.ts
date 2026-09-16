@@ -30,6 +30,7 @@ import {
   resolveDependencyCheckInterval,
   startWorkerDependencyGuard,
 } from './worker-dependency-guard.js';
+import { assertWorkerTopologyDrained } from './worker-drain-gate.js';
 
 /** Foreground durable subagents need a slot while their child Run executes. */
 export const DEFAULT_AGENT_WORKER_CONCURRENCY = 4;
@@ -40,54 +41,6 @@ function optionalSafeInteger(value: unknown, minimum: number): number | undefine
   return Number.isSafeInteger(parsed) && parsed >= minimum
     ? parsed
     : undefined;
-}
-
-/**
- * 回滚 / 缩容的安全闸门：本配置**不服务**的 Run 队列里还有存量作业就拒绝启动。
- *
- * 升级方向不需要排空——深度 0 沿用 `agent-runs`，旧队列里按旧规则投进去的
- * 子 Run 仍由深度 0 的消费者处理（处理器与深度无关）。危险的是**回滚**：
- * 换回旧镜像或调小 `AGENT_SUBAGENT_MAX_DEPTH` 之后，没有人消费
- * `agent-runs-d1/d2`，里面的作业会永远躺着。这里在启动时反向数一遍，
- * 有存量就 fail-closed 并点名队列与条数，让运维先排空再切。
- *
- * 数不到（队列 key 还不存在、Redis 瞬时失败）按 0 处理：这是一条**额外**的
- * 保护，不该让它自己成为启动的新故障点；真正的连接可用性由依赖守卫与
- * `/ready` 负责。
- */
-async function assertNoStrandedRunQueues(container: any, topology: any): Promise<void> {
-  const { assertNoStrandedLayers, queueNamesToProbe, MAX_PROBE_DEPTH } = await import(
-    '../infrastructure/redis/run-queue-topology.js'
-  );
-  const { resolveRunQueuePrefix } = await import(
-    '../infrastructure/redis/run-queue.js'
-  );
-  const served = new Set(topology.layers.map((l: any) => l.queueName));
-  const base = topology.layers.find((l: any) => l.depth === 0)?.queueName;
-  const prefix = resolveRunQueuePrefix(container.env?.AGENT_RUN_QUEUE_PREFIX);
-  // BullMQ 各状态的底层类型不一样（wait/paused/active 是 list，
-  // delayed/prioritized 是 zset），而且跨版本改过。按 key 的实际类型来数，
-  // 不把版本细节写死在这里。
-  const countKey = async (key: string): Promise<number> => {
-    try {
-      const type = await container.redis.type(key);
-      if (type === 'list') return Number(await container.redis.llen(key)) || 0;
-      if (type === 'zset') return Number(await container.redis.zcard(key)) || 0;
-      return 0;
-    } catch {
-      return 0;
-    }
-  };
-  const counts: Record<string, number> = {};
-  for (const queueName of queueNamesToProbe(MAX_PROBE_DEPTH, base)) {
-    if (served.has(queueName)) continue;
-    let total = 0;
-    for (const state of ['wait', 'paused', 'active', 'delayed', 'prioritized']) {
-      total += await countKey(`${prefix}:${queueName}:${state}`);
-    }
-    counts[queueName] = total;
-  }
-  assertNoStrandedLayers(topology, counts);
 }
 
 /** 测试用的注入缝。生产不传，走真实实现。 */
@@ -167,6 +120,21 @@ async function runWorkerMain(
     connectMysql: true,
     connectRedis: true,
   });
+
+  // 缩深 / 回滚闸门（ADR 0012，复核 F2/F3）：本配置不服务的深度在 Redis 队列
+  // 与 MySQL 账本里都已收敛才放行；读不到也拒启。必须先于恢复扫描、cron、
+  // outbox 与消费者——拒启时不能已经产生副作用。
+  try {
+    await assertWorkerTopologyDrained({
+      redis: container.redis,
+      knex: container.knex,
+      topology: container.runQueueTopology,
+      queuePrefix: env.AGENT_RUN_QUEUE_PREFIX,
+    });
+  } catch (err) {
+    await container.shutdown().catch(() => {});
+    throw err;
+  }
 
   let workerRuntime;
   let recoveryService;
@@ -278,9 +246,6 @@ async function runWorkerMain(
       container.runQueueTopology,
       resolveWorkerConcurrency(env),
     );
-    // 回滚/缩容的安全闸门：本配置不服务的层里还有存量作业就拒绝启动，
-    // 并点名队列与条数——不让作业静默躺在没人消费的队列里。
-    await assertNoStrandedRunQueues(container, topology);
     const commonOptions = {
       // 必须与 HTTP 进程的 Queue 同一 prefix，否则投递与消费落在两个 key 空间。
       prefix: env.AGENT_RUN_QUEUE_PREFIX || undefined,
