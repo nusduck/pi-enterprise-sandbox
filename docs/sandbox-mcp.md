@@ -116,5 +116,11 @@ rebinding 保护只接受 loopback、服务名，以及这个配置的公共 hos
 - `SANDBOX_MCP_INTERNAL_TOKEN`：`sandbox-mcp` 到 Sandbox 私有桥
 - `SANDBOX_MCP_DOWNLOAD_SECRET`：Artifact 下载 URL 签名
 
+容器里**只有**这三项凭据：`sandbox-mcp` 不挂 `env_file`，Compose 只把 `environment`
+里显式列出的变量交给它（`${VAR}` 插值仍从 `.env` 取值）。新增 facade 配置要在
+`docker-compose.yml` 的 `sandbox-mcp.environment` 里逐项透传，不要恢复 `env_file`——
+2026-09-16 之前它把整份 `.env`（内部面 HMAC keyring、模型 API key、业务库口令等）
+带进了这个唯一对外暴露的进程。`tests/test_dbpm_compose_config.py` 守着这条。
+
 `SANDBOX_MCP_REDIS_URL` 使用服务 Redis 的专用 key 前缀
 `sandbox:mcp:v1`，与 Agent 的队列 / lease / stream key 空间分开。

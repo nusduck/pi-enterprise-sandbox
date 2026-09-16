@@ -1048,3 +1048,23 @@ Each entry should say **what changed**, **why**, and **which STATUS IDs** it aff
   时缩深拒启、Run 终态后同配置放行，探针数据已清理；经 BFF 完整链路 12/12。本机 `.env` 的
   `MODEL_ID=deepseek-v4-flash` 已不在模型目录，链路验证期间临时覆盖、验证后恢复。详见
   [证据](evidence/follow-up-f1-f3-2026-09-16.md)。
+
+## 2026-09-16 — 对外 MCP facade 不再继承整份 `.env`
+
+- **Context：** 验证 F1 时发现开发 Compose 的 `sandbox-mcp` 挂着 `env_file: .env`，只逐项清空了
+  MySQL/Redis 口令与几条连接串。运行容器里实际非空的有 `SANDBOX_INTERNAL_HMAC_KEYRING`（内部面
+  签名密钥）、`LLMIO_API_KEY`、`EXA_MCP_TOKEN`、`A2A_ARTIFACT_DOWNLOAD_SECRET`、
+  `SANDBOX_EXEC_ENV_DB_PWD/DSN` 等，违背 AGENTS.md §1「对外 MCP 入口只持有窄桥 token」。
+  生产 overlay 渲染结果本身不含这些键，但开发栈与沿用开发 Compose 的部署会泄漏。
+- **Decision：** 黑名单式逐项清空漏一个泄漏一个，改为 facade 不挂 `env_file`，只透传
+  `environment` 中显式列出的变量；补透传 facade 实际读取但未列出的 `SANDBOX_MCP_MAX_COMMAND_LENGTH`。
+  原有的清空行保留（有测试钉住，且防止将来有人恢复 env_file）。
+- **Action：** `docker-compose.yml`；`tests/test_dbpm_compose_config.py` 新增
+  `test_facade_does_not_inherit_env_file`（开发与生产两份文件）；`sandbox-mcp.md`、CHANGELOG。
+- **STATUS IDs：** 无对应 §32 条目。
+- **验证：** 新测试在旧 compose 上失败、修改后通过；pytest 207 passed；`docker compose config -q`
+  通过；按 CI 占位值渲染生产 overlay，`verify_compose_prod_config.py` 通过，facade 环境里凭据类
+  键只剩 `SANDBOX_MCP_TOKEN` / `SANDBOX_MCP_INTERNAL_TOKEN` / `SANDBOX_MCP_DOWNLOAD_SECRET`。
+  重建开发栈 `sandbox-mcp` 容器后核对同样只剩这三项，healthy；外部 MCP 路径探针 9/9。
+  同时把本机（未入库的）`.env` 中过期的 `MODEL_ID` / `PI_MODEL=deepseek-v4-flash` 改为
+  `deepseek-flash`，按 `.env` 重建 agent 后经 BFF 完整链路 12/12。

@@ -78,6 +78,30 @@ def test_dev_roles_only_get_the_entries_they_consume() -> None:
     assert "DBPM_DB_USER_NAME:" not in facade
 
 
+def test_facade_does_not_inherit_env_file() -> None:
+    """对外 facade 只拿显式列出的变量（2026-09-16）。
+
+    `env_file: .env` 曾把内部面 HMAC keyring、模型 API key、业务库口令等整份带进
+    sandbox-mcp 容器——逐个清空是黑名单，漏一个就泄漏一个，所以直接不挂 env_file。
+    """
+    for compose in (COMPOSE, COMPOSE_PROD):
+        text = compose.read_text()
+        if "\n  sandbox-mcp:\n" not in text:
+            continue
+        facade = _service_block(text, "sandbox-mcp")
+        assert "env_file:" not in facade, f"{compose.name}: sandbox-mcp must not use env_file"
+        for key in (
+            "SANDBOX_INTERNAL_HMAC_KEYRING",
+            "SANDBOX_INTERNAL_HMAC_ACTIVE_KID",
+            "SANDBOX_API_TOKEN",
+            "AGENT_INTERNAL_TOKEN",
+            "LLMIO_API_KEY",
+            "A2A_ARTIFACT_DOWNLOAD_SECRET",
+        ):
+            value = _env_value(facade, key)
+            assert value in (None, '""'), f"{compose.name}: sandbox-mcp must not receive {key}"
+
+
 def test_dev_fake_dbpm_is_internal_only_and_hardened() -> None:
     block = _service_block(COMPOSE.read_text(), "dbpm-fake")
     assert "ports:" not in block

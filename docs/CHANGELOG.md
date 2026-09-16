@@ -63,6 +63,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   （修复后复核 F2 / F3）：Redis 读失败曾按 0 放行，之后无人重做检查；只查 Redis 时，
   停在 `WAITING_APPROVAL` / `WAITING_INPUT` 的超深子 Run 队列里没有作业，缩深后恢复
   入队会被越界拒绝。闸门现在同时查 MySQL 账本、读失败即拒启，并前移到任何副作用之前。
+- **对外 MCP facade 不再拿到整份 `.env`**（安全）：开发 Compose 的 `sandbox-mcp` 挂着
+  `env_file: .env`，只逐项清空了几个口令，于是内部面 HMAC keyring、`LLMIO_API_KEY`、
+  `EXA_MCP_TOKEN`、`A2A_ARTIFACT_DOWNLOAD_SECRET`、业务库口令等都进了这个唯一对外暴露的
+  容器，违背「facade 只持有窄桥 token」。现在不挂 `env_file`，只透传显式列出的变量
+  （新增透传 `SANDBOX_MCP_MAX_COMMAND_LENGTH`）。**升级注意**：若曾靠 `.env` 给 facade
+  传未列出的 `SANDBOX_MCP_*` 变量（如 `SANDBOX_MCP_REDIS_PREFIX`），需在 Compose 里显式加上。
 - **`SANDBOX_MAX_MEMORY_MB` 的文档不再暗示它是生效的内存上限**：它只进启动日志；
   生产硬限额是 `SANDBOX_MEM_LIMIT`，开发 Compose 没有容器内存限制。
 
