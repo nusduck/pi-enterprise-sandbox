@@ -106,11 +106,37 @@ function renderEnv(env: EnvPlan, options: RenderOptions): string[] {
 }
 
 /**
- * >0 时把命令包进一层命名空间内部执行的 ulimit 包装器。
- * 字符串逐字保留今天 Python 版的 shell 片段，行为不变。
+ * 在命名空间**内部**执行的 rlimit 包装器。
+ *
+ * 形状：`bash -c <SCRIPT> -- <flag> <value> [<flag> <value> ...] -- <argv...>`。
+ * 第一个 `--` 之后是成对的 `ulimit` 选项与取值，第二个 `--` 之后是真正的命令。
+ * 每一对都用软硬两次 `ulimit` 落实，与今天 Python 版对 nproc 的做法一致。
+ *
+ * 为什么要在里面设而不是在宿主侧设：`RLIMIT_NPROC` 按 **UID** 计数，而不是
+ * 按命名空间——在 bwrap 之前收紧它，计的是宿主上共享该 UID 的全部无关进程
+ * （exec 服务自身的线程也算），可能直接让命名空间建不起来。`RLIMIT_NOFILE`
+ * 同理会把 bwrap 自己要打开的挂载 fd 一起限住。进了用户命名空间之后，
+ * uid 已经被映射成沙箱内的身份，计数范围才是这一次执行的进程树。
  */
-const NPROC_WRAPPER_SCRIPT =
-  'set -eu; limit="$1"; shift; ulimit -S -u "$limit"; ulimit -H -u "$limit"; exec "$@"';
+const RLIMIT_WRAPPER_SCRIPT =
+  'set -eu; while [ "$1" != "--" ]; do f="$1"; v="$2"; shift 2; ' +
+  'ulimit -S "$f" "$v"; ulimit -H "$f" "$v"; done; shift; exec "$@"';
+
+/** `LaunchPlan` → 包装器要下发的 `ulimit` 选项对。空数组 = 不需要包装器。 */
+function rlimitPairs(launch: LaunchPlan): string[] {
+  const pairs: string[] = [];
+  const push = (flag: string, value: number | undefined): void => {
+    if (value !== undefined && Number.isFinite(value) && value > 0) {
+      pairs.push(flag, String(Math.trunc(value)));
+    }
+  };
+  push('-u', launch.maxProcessCount);
+  push('-n', launch.rlimits?.maxOpenFiles);
+  push('-t', launch.rlimits?.cpuSeconds);
+  push('-f', launch.rlimits?.fileSizeKb);
+  push('-v', launch.rlimits?.addressSpaceKb);
+  return pairs;
+}
 
 function renderCommand(launch: LaunchPlan): string[] {
   const args: string[] = [];
@@ -118,25 +144,19 @@ function renderCommand(launch: LaunchPlan): string[] {
     args.push('--chdir', launch.cwd);
   }
   args.push('--');
-  if (launch.maxProcessCount > 0) {
-    args.push(
-      '/bin/bash',
-      '-c',
-      NPROC_WRAPPER_SCRIPT,
-      '--',
-      String(launch.maxProcessCount),
-      ...launch.argv,
-    );
+  const pairs = rlimitPairs(launch);
+  if (pairs.length > 0) {
+    args.push('/bin/bash', '-c', RLIMIT_WRAPPER_SCRIPT, '--', ...pairs, '--', ...launch.argv);
   } else {
     args.push(...launch.argv);
   }
   return args;
 }
 
-/** 是否会给命令套上 nproc 包装器——纯粹由 `LaunchPlan.maxProcessCount` 决定，
+/** 是否会给命令套上 rlimit 包装器——由 `LaunchPlan` 上的全部限额共同决定，
  * 调用方（如 `bubblewrap.ts`）不需要重新解析 argv 就能知道这件事。 */
 export function nprocWrapperApplied(profile: IsolationProfile): boolean {
-  return profile.launch.maxProcessCount > 0;
+  return rlimitPairs(profile.launch).length > 0;
 }
 
 /** 把 `profile` 渲染成 bwrap 的参数列表（不含 `bwrap` 可执行文件本身，也不含

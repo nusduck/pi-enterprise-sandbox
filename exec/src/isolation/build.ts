@@ -25,6 +25,7 @@ import {
   type IsolationProfile,
   type Mount,
   type NetworkMode,
+  type ResourceLimitPlan,
 } from './profile.js';
 
 /** 计算可写根集合的函数签名，与 `writableRoots()` 完全一致。
@@ -120,6 +121,8 @@ export interface BuildProfileInput {
   readonly asPid1?: boolean;
   /** 默认 `0`（不限制）。 */
   readonly maxProcessCount?: number;
+  /** 命名空间内部的其余 rlimit；缺省即不限制。见 `profile.ts` 的单位说明。 */
+  readonly rlimits?: ResourceLimitPlan;
   readonly uid?: number;
   readonly gid?: number;
   /** 见上方 `WritableRootsFn` 的文档——生产路径不要传。 */
@@ -307,6 +310,7 @@ export function buildIsolationProfile(input: BuildProfileInput): IsolationProfil
       argv: input.command,
       cwd,
       maxProcessCount: input.maxProcessCount ?? 0,
+      ...(input.rlimits !== undefined ? { rlimits: input.rlimits } : {}),
     },
   };
 }

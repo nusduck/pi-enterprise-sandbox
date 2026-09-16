@@ -2,15 +2,55 @@
  * 内部 Shell 端点——对应 `dsh-shell` 的 run/start（dsh-rebuild 5.6）。
  *
  * 每个 spawn 必经 `IsolatedShellExecutor` → `process-runner` → `render`
- * （W2-A 硬要求），本文件只做 HTTP 层：信封校验 + 参数透传 + 结果脱敏。
+ * （W2-A 硬要求），本文件只做 HTTP 层：信封校验 + 参数解析 + 配额准入与
+ * 监控编排 + 结果脱敏。
+ *
+ * 2026-09-16 的审查在这里发现三个接线断点（R1/R2/R4），本文件是三者的
+ * 汇合点，所以修复也集中在这里：
+ *
+ * 1. **参数被静默丢弃**（R4）：以前只挑 `command`/`timeoutMs`，Agent 发的
+ *    `workdir`/`stdin`/`env`/`stdoutMaxBytes` 一律丢掉，HTTP 仍然 200。现在
+ *    整个请求体走 `@pi/contract/shell-payload.js` 的共用解析器，非法字段在
+ *    执行前拒绝（400），合法字段原样传到执行器。
+ * 2. **资源限额从未生效**（R1）：`SANDBOX_MAX_PROCESS_COUNT` 等变量在
+ *    `exec/src` 里一个消费者都没有。现在装配层把 `ShellResourceLimits`
+ *    传进来，逐条落到 `IsolatedShellExecutor`。
+ * 3. **子进程配额监控从未启动**（R1）：`evaluateChildQuota` /
+ *    `ChildWorkspaceQuotaWatch` 只存在于定义链里。现在前台与后台两条路径
+ *    都做准入 + 采样，超额就终止这次执行（及其后代），并在结束/取消/
+ *    spawn 失败的每一条出口停掉采样器。
+ * 4. **取消到不了执行面**（R2）：前台路由把 `c.req.raw.signal` 融合进
+ *    执行的 AbortSignal，客户端断开连接时 bwrap 进程树跟着被终止，不再
+ *    留下一个仍在写文件的孤儿命令。
  */
 
 import type { Hono } from 'hono';
 import { ContractError, toWireError } from '@pi/contract/errors.js';
 import { parseEnvelope } from '@pi/contract/envelope.js';
 import { parseEnabledSkills, type EnabledSkillRef } from '@pi/contract/skill-manifest.js';
-import { IsolatedShellExecutor } from '../shell/executor.js';
+import {
+  parseShellRunPayload,
+  parseShellStartPayload,
+  SANDBOX_TEMP_PATH,
+  SANDBOX_WORKSPACE_PATH,
+  type ShellPayload,
+  type ShellPayloadLimits,
+} from '@pi/contract/shell-payload.js';
+import {
+  deniedProcessHandle,
+  deniedRunResult,
+  IsolatedShellExecutor,
+} from '../shell/executor.js';
 import type { MySqlJobRegistry } from '../shell/job-registry.js';
+import type { ShellResourceLimits } from '../shell/resource-limits.js';
+import { DEFAULT_SHELL_RESOURCE_LIMITS } from '../shell/resource-limits.js';
+import {
+  ChildWorkspaceQuotaWatch,
+  evaluateChildQuota,
+  type ChildQuotaConfig,
+  type ChildQuotaDecision,
+} from '../workspace/child-quota.js';
+import { InMemoryQuotaStore, type QuotaStore } from '../workspace/quota-store.js';
 import type { WorkspaceManager } from '../workspace/manager.js';
 import type { EnabledSkillPackagesResolver, WorkspaceContext } from '../types.js';
 
@@ -28,6 +68,12 @@ export interface InternalShellDeps {
   readonly enabledSkillPackagesFor: EnabledSkillPackagesResolver;
   readonly bwrapExecutable: string;
   readonly modeFor: (workspaceId: string) => 'read-only' | 'workspace-write';
+  /** 执行面限额（超时预算、输出上限、命名空间内部 rlimit）。缺省即内置默认值。 */
+  readonly resourceLimits?: ShellResourceLimits;
+  /** 子进程磁盘配额监控配置。`enforcement: false` 时准入与采样都不做。 */
+  readonly childQuota?: ChildQuotaConfig;
+  /** 配额账本（读预留量）。不传则用进程内实现——只适合单测与本地开发。 */
+  readonly quotaStore?: QuotaStore;
 }
 
 function buildContext(
@@ -69,29 +115,137 @@ async function parseBody(
   return { envelope: b['envelope'], payload: b['payload'], enabledSkills: parseEnabledSkills(b['enabledSkills']) };
 }
 
+/** 服务端上限：请求里的 `timeoutMs`/`stdoutMaxBytes` 只能要更小的值。 */
+function payloadLimitsOf(limits: ShellResourceLimits): ShellPayloadLimits {
+  return {
+    maxTimeoutMs: limits.executionTimeoutMs,
+    // 字符上限 → 字节天花板，换算规则与 `IsolatedShellExecutor.outputCapBytes` 同源。
+    maxStdoutBytes: limits.maxOutputChars * 4,
+    maxStdinBytes: 1_000_000,
+    maxEnvEntries: 64,
+  };
+}
+
+/** 逻辑 workdir 还原成执行器认识的字符串形态（executor 内部会再解析一次）。 */
+function workdirString(payload: ShellPayload): string {
+  const root = payload.workdir.scope === 'temp' ? SANDBOX_TEMP_PATH : SANDBOX_WORKSPACE_PATH;
+  return payload.workdir.relative === '' ? root : `${root}/${payload.workdir.relative}`;
+}
+
+function makeExecutor(deps: InternalShellDeps, ctx: WorkspaceContext, workspaceId: string): IsolatedShellExecutor {
+  const limits = deps.resourceLimits ?? DEFAULT_SHELL_RESOURCE_LIMITS;
+  return new IsolatedShellExecutor({
+    workspace: ctx,
+    bwrapExecutable: deps.bwrapExecutable,
+    mode: deps.modeFor(workspaceId),
+    defaultTimeoutMs: limits.executionTimeoutMs,
+    outputCapChars: limits.maxOutputChars,
+    maxProcessCount: limits.maxProcessCount,
+    rlimits: limits.rlimits,
+  });
+}
+
+// ── 子进程配额：准入 + 采样 ────────────────────────────────────────
+
+interface QuotaGate {
+  /** 准入判定。`allow: false` 时调用方必须**不** spawn。 */
+  admit(): Promise<ChildQuotaDecision>;
+  /** spawn 之后开始采样；返回一个必须在每条出口调用的停止函数。 */
+  watch(onViolation: (decision: ChildQuotaDecision) => void): () => Promise<void>;
+}
+
+function quotaGateFor(deps: InternalShellDeps, ctx: WorkspaceContext): QuotaGate {
+  const config = deps.childQuota;
+  if (config === undefined || !config.enforcement) {
+    return {
+      admit: async () => ({ allow: true, message: 'monitoring disabled' }),
+      watch: () => async () => undefined,
+    };
+  }
+  const quotaDeps = { quotaStore: deps.quotaStore ?? new InMemoryQuotaStore() };
+  return {
+    admit: () =>
+      evaluateChildQuota(ctx.workspaceRoot, ctx.tempRoot, config, quotaDeps, {
+        workspaceId: ctx.workspaceId,
+      }),
+    watch: (onViolation) => {
+      const watch = new ChildWorkspaceQuotaWatch({
+        workspacePath: ctx.workspaceRoot,
+        tempPath: ctx.tempRoot,
+        workspaceId: ctx.workspaceId,
+        config,
+        deps: quotaDeps,
+        onViolation,
+      });
+      watch.start();
+      // 幂等：每条出口（正常结束、取消、spawn 失败）都会调一次。
+      let stopped: Promise<void> | undefined;
+      return () => (stopped ??= watch.stop());
+    },
+  };
+}
+
 export function registerInternalShellRoutes(app: Hono, deps: InternalShellDeps): void {
+  const limits = deps.resourceLimits ?? DEFAULT_SHELL_RESOURCE_LIMITS;
+  const payloadLimits = payloadLimitsOf(limits);
+
   app.post('/internal/v1/shell/run', async (c) => {
     try {
       const { envelope: rawEnv, payload, enabledSkills } = await parseBody(c);
       parseEnvelope(rawEnv);
       const env = rawEnv as { orgId: string; userId: string; workspaceId: string };
       const ctx = buildContext(deps, env, enabledSkills);
-      const executor = new IsolatedShellExecutor({
-        workspace: ctx,
-        bwrapExecutable: deps.bwrapExecutable,
-        mode: deps.modeFor(env.workspaceId),
+      const executor = makeExecutor(deps, ctx, env.workspaceId);
+      const parsed = parseShellRunPayload(payload, payloadLimits);
+
+      const gate = quotaGateFor(deps, ctx);
+      const admission = await gate.admit();
+      const spec = executor.resolve({
+        command: parsed.command,
+        workdir: workdirString(parsed),
+        ...(parsed.timeoutMs !== undefined ? { timeoutMs: parsed.timeoutMs } : {}),
+        ...(parsed.stdoutMaxBytes !== undefined ? { stdoutMaxBytes: parsed.stdoutMaxBytes } : {}),
+        ...(parsed.stdin !== undefined ? { stdin: parsed.stdin } : {}),
+        ...(parsed.env !== undefined ? { env: { ...parsed.env } } : {}),
       });
-      const p = payload as Record<string, unknown>;
-      const command = typeof p['command'] === 'string' ? (p['command'] as string) : '';
-      const timeoutMs = typeof p['timeoutMs'] === 'number' ? (p['timeoutMs'] as number) : undefined;
-      const spec = executor.resolve({ command, ...(timeoutMs !== undefined ? { timeoutMs } : {}) });
-      const result = await executor.run(spec);
-      return c.json({ ok: true, data: result });
+      if (!admission.allow) {
+        // 超额/测量失败一律 fail-closed：不 spawn，把原因如实交给模型。
+        return c.json({
+          ok: true,
+          data: deniedRunResult(ctx, executor.mode, admission.message, spec.timeoutMs),
+        });
+      }
+
+      // 取消的三个来源融合成一个信号：客户端断开、配额监控报警、
+      // 以及执行器内部的超时定时器（后者在 `runForeground` 里另行融合）。
+      const controller = new AbortController();
+      let quotaViolation: ChildQuotaDecision | undefined;
+      const stopWatch = gate.watch((decision) => {
+        quotaViolation = decision;
+        controller.abort();
+      });
+      const clientSignal = c.req.raw.signal;
+      const onClientAbort = (): void => controller.abort();
+      if (clientSignal !== undefined && clientSignal !== null) {
+        if (clientSignal.aborted) controller.abort();
+        else clientSignal.addEventListener('abort', onClientAbort, { once: true });
+      }
+
+      try {
+        const result = await executor.run({ ...spec, signal: controller.signal });
+        if (quotaViolation !== undefined) {
+          return c.json({
+            ok: true,
+            data: deniedRunResult(ctx, executor.mode, quotaViolation.message, spec.timeoutMs),
+          });
+        }
+        return c.json({ ok: true, data: result });
+      } finally {
+        clientSignal?.removeEventListener('abort', onClientAbort);
+        await stopWatch();
+      }
     } catch (err) {
-      const wire = toWireError(err, { physicalRoots: [] });
-      // IsolatedShellExecutor 内部已做脱敏，这里兜底再脱一次
-      const status = wire.code === 'ENVELOPE_INVALID' ? 400 : 500;
-      return c.json({ ok: false, error: wire }, status as never);
+      return failure(c, err);
     }
   });
 
@@ -102,47 +256,74 @@ export function registerInternalShellRoutes(app: Hono, deps: InternalShellDeps):
       const env = rawEnv as { orgId: string; userId: string; workspaceId: string };
       const ctx = buildContext(deps, env, enabledSkills);
       const roots = rootsOf(ctx);
-      const executor = new IsolatedShellExecutor({
-        workspace: ctx,
-        bwrapExecutable: deps.bwrapExecutable,
-        mode: deps.modeFor(env.workspaceId),
+      const executor = makeExecutor(deps, ctx, env.workspaceId);
+      const parsed = parseShellStartPayload(payload, payloadLimits);
+      const spec = executor.resolve({
+        command: parsed.command,
+        workdir: workdirString(parsed),
+        ...(parsed.stdoutMaxBytes !== undefined ? { stdoutMaxBytes: parsed.stdoutMaxBytes } : {}),
+        ...(parsed.stdin !== undefined ? { stdin: parsed.stdin } : {}),
+        ...(parsed.env !== undefined ? { env: { ...parsed.env } } : {}),
       });
-      const p = payload as Record<string, unknown>;
-      const command = typeof p['command'] === 'string' ? (p['command'] as string) : '';
-      const spec = executor.resolve({ command });
-      const requestedId = typeof p['id'] === 'string' ? p['id'] : undefined;
-      const runId = typeof p['runId'] === 'string' ? p['runId'] : undefined;
+
+      const gate = quotaGateFor(deps, ctx);
+      const admission = await gate.admit();
+
       const snapshot = await deps.jobRegistry.start({
-        ...(requestedId ? { id: requestedId } : {}),
+        ...(parsed.id !== undefined ? { id: parsed.id } : {}),
         kind: 'bash',
-        label: command,
-        owner: { orgId: env.orgId, userId: env.userId, workspaceId: env.workspaceId, ...(runId ? { runId } : {}) },
+        label: parsed.command,
+        owner: {
+          orgId: env.orgId,
+          userId: env.userId,
+          workspaceId: env.workspaceId,
+          ...(parsed.runId !== undefined ? { runId: parsed.runId } : {}),
+        },
         physicalRoots: roots,
         run: () => {
-          const handle = executor.start(spec) as ReturnType<IsolatedShellExecutor['start']> & {
+          // 准入不通过就不 spawn：句柄立刻结算成 killed，原因进 stderr。
+          const handle = admission.allow
+            ? executor.start(spec)
+            : deniedProcessHandle(ctx, executor.mode, admission.message);
+          const stopWatch = admission.allow
+            ? gate.watch(() => {
+                void handle.kill();
+              })
+            : async (): Promise<void> => undefined;
+          const live = handle as typeof handle & {
             pid?: number | null;
             pgid?: number | null;
             writeStdin?: (data: string, eof: boolean) => void;
           };
           return {
-            pid: handle.pid ?? null,
-            pgid: handle.pgid ?? undefined,
-            cancel: () => { void handle.kill(); },
-            done: handle.done.then(() => ({
-              status: handle.status === 'completed' ? 'completed' as const : 'killed' as const,
-              exitCode: handle.exitCode,
-              signal: handle.signal,
-            })),
+            pid: live.pid ?? null,
+            pgid: live.pgid ?? undefined,
+            cancel: () => {
+              void handle.kill();
+            },
+            done: handle.done
+              // 采样器必须跟着作业收尾——不论正常结束、被杀还是 spawn 失败。
+              .finally(() => stopWatch())
+              .then(() => ({
+                status: handle.status === 'completed' ? ('completed' as const) : ('killed' as const),
+                exitCode: handle.exitCode,
+                signal: handle.signal,
+              })),
             readOutput: () => handle.readOutput(),
-            ...(handle.writeStdin ? { writeStdin: handle.writeStdin.bind(handle) } : {}),
+            ...(live.writeStdin ? { writeStdin: live.writeStdin.bind(handle) } : {}),
           };
         },
       });
       return c.json({ ok: true, data: snapshot });
     } catch (err) {
-      const wire = toWireError(err, { physicalRoots: [] });
-      const status = wire.code === 'ENVELOPE_INVALID' ? 400 : 500;
-      return c.json({ ok: false, error: wire }, status as never);
+      return failure(c, err);
     }
   });
+}
+
+/** 统一的失败响应：`toWireError` 兜底脱敏；请求体非法归 400，其余 500。 */
+function failure(c: import('hono').Context, err: unknown): Response {
+  const wire = toWireError(err, { physicalRoots: [] });
+  const status = wire.code === 'ENVELOPE_INVALID' ? 400 : 500;
+  return c.json({ ok: false, error: wire }, status as never);
 }

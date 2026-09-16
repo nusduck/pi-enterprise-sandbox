@@ -591,7 +591,12 @@ services:
       SANDBOX_MAX_PROCESS_COUNT: ${SANDBOX_MAX_PROCESS_COUNT:-20}
       SANDBOX_MAX_OPEN_FILES: ${SANDBOX_MAX_OPEN_FILES:-256}
       SANDBOX_MAX_CPU_TIME_SECONDS: ${SANDBOX_MAX_CPU_TIME_SECONDS:-300}
+      # Container-level backstop declaration only; exec does NOT translate it
+      # into a per-task rlimit (address space != resident set — see
+      # docs/deployment.md "Per-execution resource limits"). Set
+      # SANDBOX_MAX_ADDRESS_SPACE_MB to enforce `ulimit -v` per process.
       SANDBOX_MAX_MEMORY_MB: ${SANDBOX_MAX_MEMORY_MB:-512}
+      SANDBOX_MAX_ADDRESS_SPACE_MB: ${SANDBOX_MAX_ADDRESS_SPACE_MB:-}
       SANDBOX_MAX_FILE_SIZE_MB: ${SANDBOX_MAX_FILE_SIZE_MB:-50}
       # Positive quotas require child monitoring + operator hard-backend assertion
       # in production (see sandbox/config.py validate_production_settings).

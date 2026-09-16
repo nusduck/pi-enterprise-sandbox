@@ -18,13 +18,20 @@
  */
 
 import type { ShellExecRequest, ShellExecSpec, ShellProcess, ShellRunResult } from '@deepseek-ai/dsh-shell';
+import { parseShellWorkdir, type ShellWorkdir } from '@pi/contract/shell-payload.js';
+import type { ResourceLimitPlan } from '../isolation/profile.js';
 import type { SandboxMode, WorkspaceContext } from '../types.js';
 import { redactPhysicalRoots } from '../fs/redact.js';
 import { isBlockedCommand } from './blocked-commands.js';
 import { buildSafeEnvOverrides } from './safe-env.js';
 import { DEFAULT_OUTPUT_CAP_CHARS } from './output-capture.js';
 import { planPythonLaunch, shouldMaterialize } from './python-materialize.js';
-import { runForeground, startBackground, type LiveProcessHandle } from './process-runner.js';
+import {
+  runForeground,
+  startBackground,
+  type LiveProcessHandle,
+  type SpawnTarget,
+} from './process-runner.js';
 
 /** 默认前台超时（毫秒），与 Python 版 `execution_timeout_seconds=120` 对齐。 */
 const DEFAULT_TIMEOUT_MS = 120_000;
@@ -37,8 +44,28 @@ export interface IsolatedShellExecutorOptions {
   readonly mode: SandboxMode;
   readonly defaultTimeoutMs?: number;
   readonly outputCapChars?: number;
+  /**
+   * 命名空间内部的 RLIMIT_NPROC 上限（`SANDBOX_MAX_PROCESS_COUNT`）。
+   * 缺省 0 = 不限制。**生产装配必须传**——2026-09-16 之前这里从来没有
+   * 调用方传值，Compose 声明的 20 从未生效（审查 R1）。
+   */
+  readonly maxProcessCount?: number;
+  /** 其余命名空间内部 rlimit（NOFILE / CPU / FSIZE / AS）。 */
+  readonly rlimits?: ResourceLimitPlan;
   /** 测试注入：覆盖 process.env。 */
   readonly processEnv?: Readonly<Record<string, string | undefined>>;
+}
+
+/**
+ * `ShellExecSpec.workdir`（沙箱逻辑路径）→ runner 的 `relativeCwd` + `cwdScope`。
+ *
+ * 2026-09-16 之前 `workdir` 在这一层被彻底忽略：executor 从不把它传给
+ * `process-runner`，模型指定的子目录一律退化成工作区根（审查 R4）。
+ * 越界路径在这里抛错（`parseShellWorkdir` 的 `ENVELOPE_INVALID`），
+ * 不静默退回根目录——"悄悄换个目录执行"比"拒绝执行"危险得多。
+ */
+function resolveWorkdir(workdir: string | undefined): ShellWorkdir {
+  return parseShellWorkdir(workdir);
 }
 
 /** 便于测试的 bwrap 路径解析器注入。 */
@@ -67,7 +94,26 @@ function blockedRunResult(
   command: string,
   timeoutMs: number,
 ): ShellRunResult {
-  const message = `blocked: dangerous command denied: ${command.slice(0, 200)}`;
+  return deniedRunResult(
+    workspace,
+    mode,
+    `blocked: dangerous command denied: ${command.slice(0, 200)}`,
+    timeoutMs,
+  );
+}
+
+/**
+ * 「这次执行被拒绝」的统一结果形状。与 {@link blockedRunResult} 同一契约
+ * （resolve 而非 reject，`sandbox.denied` 为 true），但消息由调用方给——
+ * HTTP 层的配额准入用它把「工作区超额」这件事如实交到模型手上，而不是
+ * 变成一个没有原因的 500。
+ */
+export function deniedRunResult(
+  workspace: WorkspaceContext,
+  mode: SandboxMode,
+  message: string,
+  timeoutMs: number,
+): ShellRunResult {
   return {
     exitCode: 126,
     signal: null,
@@ -86,7 +132,19 @@ function blockedProcessHandle(
   mode: SandboxMode,
   command: string,
 ): ShellProcess {
-  const message = `blocked: dangerous command denied: ${command.slice(0, 200)}`;
+  return deniedProcessHandle(
+    workspace,
+    mode,
+    `blocked: dangerous command denied: ${command.slice(0, 200)}`,
+  );
+}
+
+/** 与 {@link deniedRunResult} 对应的后台形态：立刻结算成 killed，消息进 stderr。 */
+export function deniedProcessHandle(
+  workspace: WorkspaceContext,
+  mode: SandboxMode,
+  message: string,
+): ShellProcess {
   const redacted = redact(message, workspace);
   // 手写一个最小 ShellProcess：status killed，readOutput 能读到错误，done 已 settle。
   let delivered = false;
@@ -120,6 +178,8 @@ export class IsolatedShellExecutor {
   readonly mode: SandboxMode;
   readonly defaultTimeoutMs: number;
   readonly outputCapChars: number;
+  readonly maxProcessCount: number;
+  readonly rlimits: ResourceLimitPlan | undefined;
   readonly processEnv: Readonly<Record<string, string | undefined>> | undefined;
 
   constructor(options: IsolatedShellExecutorOptions) {
@@ -128,11 +188,44 @@ export class IsolatedShellExecutor {
     this.mode = options.mode;
     this.defaultTimeoutMs = options.defaultTimeoutMs ?? DEFAULT_TIMEOUT_MS;
     this.outputCapChars = options.outputCapChars ?? DEFAULT_OUTPUT_CAP_CHARS;
+    this.maxProcessCount = options.maxProcessCount ?? 0;
+    this.rlimits = options.rlimits;
     this.processEnv = options.processEnv;
   }
 
   get sandboxMode(): SandboxMode {
     return this.mode;
+  }
+
+  /** 输出上限的字节天花板。见 `resolve()` 里对单位换算的说明。 */
+  get outputCapBytes(): number {
+    return this.outputCapChars * 4;
+  }
+
+  /**
+   * `ShellExecSpec` → `process-runner` 的 `SpawnTarget`。**run 与 start 共用**，
+   * 这样「workdir / stdin / env / 资源限额有没有真的传下去」只有一处需要核对。
+   *
+   * 2026-09-16 之前这两条路径各拼各的，而且两边都没传 `relativeCwd` 与
+   * `maxProcessCount`——模型指定的子目录与 Compose 声明的进程数上限同时失效
+   * （审查 R1/R4），却没有任何一层报错。
+   */
+  spawnTargetFor(argv: readonly string[], spec: ShellExecSpec): SpawnTarget {
+    const cwd = resolveWorkdir(spec.workdir);
+    return {
+      workspace: this.workspace,
+      mode: this.mode,
+      argv,
+      envOverrides: buildSafeEnvOverrides({
+        ...(spec.env !== undefined ? { overrides: spec.env } : {}),
+        ...(this.processEnv !== undefined ? { processEnv: this.processEnv } : {}),
+      }),
+      relativeCwd: cwd.relative,
+      cwdScope: cwd.scope,
+      maxProcessCount: this.maxProcessCount,
+      ...(this.rlimits !== undefined ? { rlimits: this.rlimits } : {}),
+      ...(spec.stdin !== undefined ? { stdin: spec.stdin } : {}),
+    };
   }
 
   /**
@@ -141,9 +234,20 @@ export class IsolatedShellExecutor {
    */
   resolve(request: ShellExecRequest): ShellExecSpec {
     const command = (request.command ?? '').trim();
+    // 上限是**本执行面的预算**，不是一个与配置无关的 24 小时常数：
+    // `SANDBOX_EXECUTION_TIMEOUT_SECONDS` 说了前台最多跑多久，超出的请求
+    // 在 HTTP 层已被拒绝，这里再夹一次作为直接调用方的兜底。
     const timeoutRaw = request.timeoutMs ?? this.defaultTimeoutMs;
-    const timeoutMs = Math.max(1, Math.min(timeoutRaw, 86_400_000));
-    const stdoutMaxBytes = request.stdoutMaxBytes ?? this.outputCapChars * 4;
+    const timeoutMs = Math.max(1, Math.min(timeoutRaw, this.defaultTimeoutMs));
+    // `stdoutMaxBytes` 是**字节**。执行面的配置 `SANDBOX_MAX_OUTPUT_CHARS`
+    // 是字符数，两者不能直接互换：一个 UTF-16 code unit 最多占 3 个 UTF-8
+    // 字节，所以字节天花板取 `outputCapChars * 4`（留一档余量，与本文件
+    // 以前的默认值一致），而**缺省预算**取字符数本身当字节用——同一个数字
+    // 按字节解释永远比按字符解释更紧，不会因为接线而放宽现有上限。
+    const stdoutMaxBytes = Math.max(
+      1,
+      Math.min(request.stdoutMaxBytes ?? this.outputCapChars, this.outputCapBytes),
+    );
     return {
       command,
       workdir: request.workdir ?? '.',
@@ -180,29 +284,24 @@ export class IsolatedShellExecutor {
       return blockedRunResult(this.workspace, this.mode, command, spec.timeoutMs);
     }
 
-    const envOverrides = buildSafeEnvOverrides({
-      ...(spec.env !== undefined ? { overrides: spec.env } : {}),
-      ...(this.processEnv !== undefined ? { processEnv: this.processEnv } : {}),
-    });
-
-    // 绝不 shell-quote：目标命令永远是 `bash -c <command>` 的 argv 数组。
-    const argv: readonly string[] = ['bash', '-c', command];
+    // 调用方给了字节预算就按字节算；没给就退回执行面自己的字符上限。
+    // 两者单位不同，混用会在非 ASCII 输出上差出一倍，所以显式带上单位。
+    const outputBudget =
+      spec.stdoutMaxBytes !== undefined && spec.stdoutMaxBytes > 0
+        ? { limit: spec.stdoutMaxBytes, unit: 'bytes' as const }
+        : { limit: this.outputCapChars, unit: 'chars' as const };
 
     try {
       const outcome = await runForeground(
-        {
-          workspace: this.workspace,
-          mode: this.mode,
-          argv,
-          envOverrides,
-          ...(spec.stdin !== undefined ? { stdin: spec.stdin } : {}),
-        },
+        // 绝不 shell-quote：目标命令永远是 `bash -c <command>` 的 argv 数组。
+        this.spawnTargetFor(['bash', '-c', command], spec),
         { bwrapExecutable: this.bwrapExecutable },
         {
           timeoutMs: spec.timeoutMs,
           ...(spec.signal !== undefined ? { signal: spec.signal } : {}),
-          stdoutMaxChars: this.outputCapChars,
-          stderrMaxChars: this.outputCapChars,
+          stdoutMaxChars: outputBudget.limit,
+          stderrMaxChars: outputBudget.limit,
+          outputUnit: outputBudget.unit,
         },
       );
 
@@ -236,21 +335,8 @@ export class IsolatedShellExecutor {
       return blockedProcessHandle(this.workspace, this.mode, command);
     }
 
-    const envOverrides = buildSafeEnvOverrides({
-      ...(spec.env !== undefined ? { overrides: spec.env } : {}),
-      ...(this.processEnv !== undefined ? { processEnv: this.processEnv } : {}),
-    });
-
-    const argv: readonly string[] = ['bash', '-c', command];
-
     const handle = startBackground(
-      {
-        workspace: this.workspace,
-        mode: this.mode,
-        argv,
-        envOverrides,
-        ...(spec.stdin !== undefined ? { stdin: spec.stdin } : {}),
-      },
+      this.spawnTargetFor(['bash', '-c', command], spec),
       { bwrapExecutable: this.bwrapExecutable },
       {
         ...(spec.signal !== undefined ? { signal: spec.signal } : {}),
@@ -301,6 +387,8 @@ export class IsolatedShellExecutor {
           mode: this.mode,
           argv: launch.argv,
           envOverrides,
+          maxProcessCount: this.maxProcessCount,
+          ...(this.rlimits !== undefined ? { rlimits: this.rlimits } : {}),
         },
         { bwrapExecutable: this.bwrapExecutable },
         {
@@ -375,6 +463,8 @@ export class IsolatedShellExecutor {
           mode: this.mode,
           argv: inlineArgv,
           envOverrides,
+          maxProcessCount: this.maxProcessCount,
+          ...(this.rlimits !== undefined ? { rlimits: this.rlimits } : {}),
         },
         { bwrapExecutable: this.bwrapExecutable },
         {

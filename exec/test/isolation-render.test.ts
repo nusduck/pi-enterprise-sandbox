@@ -72,7 +72,7 @@ test('render() uses a private procfs, never binds the outer container /proc', ()
   assert.deepEqual(pairs(argv, '--bind').filter(([, dest]) => dest === '/proc'), []);
 });
 
-test('in-namespace nproc wrapper: applied when maxProcessCount > 0', () => {
+test('in-namespace rlimit wrapper: applied when maxProcessCount > 0', () => {
   const argv = render(
     baseProfile({
       launch: { argv: ['bash', '-c', 'printf ok'], cwd: '/home/sandbox/workspace', maxProcessCount: 20 },
@@ -80,11 +80,48 @@ test('in-namespace nproc wrapper: applied when maxProcessCount > 0', () => {
   );
   const command = argv.slice(argv.indexOf('--') + 1);
   assert.deepEqual(command.slice(0, 2), ['/bin/bash', '-c']);
-  assert.match(command[2] ?? '', /ulimit -S -u/);
-  assert.match(command[2] ?? '', /ulimit -H -u/);
-  assert.equal(command[3], '--');
-  assert.equal(command[4], '20');
-  assert.deepEqual(command.slice(5), ['bash', '-c', 'printf ok']);
+  assert.match(command[2] ?? '', /ulimit -S "\$f" "\$v"/);
+  assert.match(command[2] ?? '', /ulimit -H "\$f" "\$v"/);
+  // `--` <pairs...> `--` <argv...>
+  assert.deepEqual(command.slice(3), ['--', '-u', '20', '--', 'bash', '-c', 'printf ok']);
+});
+
+test('in-namespace rlimit wrapper: carries every configured limit, in bash ulimit flags', () => {
+  const argv = render(
+    baseProfile({
+      launch: {
+        argv: ['bash', '-c', 'printf ok'],
+        cwd: '/home/sandbox/workspace',
+        maxProcessCount: 20,
+        rlimits: { maxOpenFiles: 256, cpuSeconds: 300, fileSizeKb: 51_200, addressSpaceKb: 524_288 },
+      },
+    }),
+  );
+  const command = argv.slice(argv.indexOf('--') + 1);
+  assert.deepEqual(command.slice(3), [
+    '--',
+    '-u', '20',
+    '-n', '256',
+    '-t', '300',
+    '-f', '51200',
+    '-v', '524288',
+    '--',
+    'bash', '-c', 'printf ok',
+  ]);
+});
+
+test('in-namespace rlimit wrapper: applied for rlimits even when maxProcessCount is 0', () => {
+  const profile = baseProfile({
+    launch: {
+      argv: ['bash', '-c', 'printf ok'],
+      cwd: '/home/sandbox/workspace',
+      maxProcessCount: 0,
+      rlimits: { cpuSeconds: 30 },
+    },
+  });
+  const command = render(profile).slice(render(profile).indexOf('--') + 1);
+  assert.deepEqual(command.slice(3), ['--', '-t', '30', '--', 'bash', '-c', 'printf ok']);
+  assert.equal(nprocWrapperApplied(profile), true);
 });
 
 test('in-namespace nproc wrapper: absent when maxProcessCount is 0', () => {

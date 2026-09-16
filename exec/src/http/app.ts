@@ -10,7 +10,19 @@ import { DatasetService } from '../dataset/service.js';
 import { makeWorkspaceFs } from '../fs/make-workspace-fs.js';
 import { createPublicRouter, type PublicRouterDeps } from './public/router.js';
 import { WorkspaceManager } from '../workspace/manager.js';
-import { readWorkspaceLifecycleConfig } from '../workspace/env-config.js';
+import {
+  assertProductionQuotaBackend,
+  readChildQuotaConfig,
+  readHardBackendAsserted,
+  readQuotaLedgerConfig,
+  readWorkspaceLifecycleConfig,
+} from '../workspace/env-config.js';
+import type { ChildQuotaConfig } from '../workspace/child-quota.js';
+import {
+  readShellResourceLimits,
+  unenforcedLimitDiagnostics,
+  type ShellResourceLimits,
+} from '../shell/resource-limits.js';
 import { MySqlJobRegistry } from '../shell/job-registry.js';
 import { InMemoryJobStore } from '../shell/job-store-memory.js';
 import { MySqlJobStore } from '../shell/job-store-mysql.js';
@@ -145,6 +157,13 @@ export interface ExecAppDeps {
    * 不能自称可接流量（fail-closed）。`/health`、`/health/live` 不受影响。
    */
   readonly readiness?: (() => Promise<ExecReadiness>) | undefined;
+  /**
+   * 执行面限额（前台预算、输出上限、命名空间内部 rlimit）。**生产装配必须传**：
+   * 不传时 shell 路由退回 `DEFAULT_SHELL_RESOURCE_LIMITS`，那只适合单测。
+   */
+  readonly resourceLimits?: ShellResourceLimits;
+  /** 子进程磁盘配额监控配置。不传即不做准入与采样。 */
+  readonly childQuota?: ChildQuotaConfig;
 }
 
 export function createExecApp(deps: ExecAppDeps): Hono {
@@ -174,6 +193,9 @@ export function createExecApp(deps: ExecAppDeps): Hono {
     keyring: deps.keyring,
     ...(deps.allowCidr !== undefined ? { allowCidr: deps.allowCidr } : {}),
     artifactService,
+    ...(deps.resourceLimits !== undefined ? { resourceLimits: deps.resourceLimits } : {}),
+    ...(deps.childQuota !== undefined ? { childQuota: deps.childQuota } : {}),
+    ...(deps.quotaStore !== undefined ? { quotaStore: deps.quotaStore } : {}),
   };
   const pub: PublicRouterDeps = {
     apiToken: deps.publicApiToken,
@@ -291,6 +313,23 @@ export function createExecAppFromEnv(
   // 非法条目拒绝启动；空列表不拒启，但内部面拒绝全部请求（main.ts 会告警）。
   const internalAllowCidr = readInternalAllowCidr(env);
   assertValidAllowCidrList(internalAllowCidr);
+
+  // 资源限额与配额：在建任何依赖之前读，配错就不要启动。
+  // `readShellResourceLimits` 对范围外的值抛错，不静默换成默认值——
+  // 「配置写错了但服务照常启动」是 R1 那一类问题最难发现的形态。
+  const resourceLimits = readShellResourceLimits(env);
+  const childQuota = readChildQuotaConfig(env);
+  const ledgerConfig = readQuotaLedgerConfig(env);
+  const deployment = String(env['DEPLOYMENT_ENV'] ?? env['NODE_ENV'] ?? '').toLowerCase();
+  if (deployment === 'production') {
+    // 正数配额 = 对外的多租户磁盘隔离声明。声明了就必须同时开监控并由运维
+    // 确认外部硬配额；两者缺一不可，缺了就 fail-closed 拒启，不降级放行。
+    assertProductionQuotaBackend(childQuota, readHardBackendAsserted(env));
+  }
+  for (const note of unenforcedLimitDiagnostics(resourceLimits)) {
+    process.stderr.write(`exec NOTICE: ${note}\n`);
+  }
+
   const lifecycle = readWorkspaceLifecycleConfig(env);
   const workspaceManager = new WorkspaceManager(lifecycle);
   const controlRoots = readControlPlaneRoots(env);
@@ -320,8 +359,10 @@ export function createExecAppFromEnv(
     pool = createExecDbPool({ ...cfg, password: opts.dbPassword });
     store = new MySqlJobStore(pool);
     quotaStore = new MySqlQuotaStore(pool);
+    // 额度来自 `SANDBOX_WORKSPACE_QUOTA_MB`（Compose 默认 500），不是一个
+    // 与配置无关的 1024——写死的那个值让控制面账本与运维声明长期对不上（R1）。
     const quotaLedger = new WorkspaceQuotaLedger(quotaStore, new InProcessWorkspaceLock(), {
-      defaultQuotaMb: 1024,
+      defaultQuotaMb: ledgerConfig.defaultQuotaMb,
     });
     artifactService = new ArtifactService(makeWorkspaceFs, new MySqlArtifactStore(pool), {
       quotaLedger,
@@ -331,7 +372,6 @@ export function createExecAppFromEnv(
     });
   } catch (err) {
     if (!(err instanceof ExecDbConfigError)) throw err;
-    const deployment = String(env['DEPLOYMENT_ENV'] ?? env['NODE_ENV'] ?? '').toLowerCase();
     if (deployment === 'production') {
       throw new Error('exec requires DATABASE_URL / EXEC_DB_* in production');
     }
@@ -378,6 +418,8 @@ export function createExecAppFromEnv(
     allowCidr: internalAllowCidr,
     mcpInternalToken: env['SANDBOX_MCP_INTERNAL_TOKEN'] ?? '',
     publicApiToken,
+    resourceLimits,
+    childQuota,
     ...(artifactService !== undefined ? { artifactService } : {}),
     ...(datasetService !== undefined ? { datasetService } : {}),
     ...(quotaStore !== undefined ? { quotaStore } : {}),

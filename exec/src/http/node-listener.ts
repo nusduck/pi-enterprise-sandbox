@@ -14,7 +14,28 @@ import type { Hono } from 'hono';
  */
 export const PEER_IP_HEADER = 'x-exec-peer-ip';
 
-function incomingToRequest(req: IncomingMessage): Request {
+/**
+ * 客户端提前断开 → `AbortSignal`。
+ *
+ * **必须监听 `res` 的 `'close'` 而不是 `req` 的**：`IncomingMessage` 在请求体
+ * 正常读完之后也会触发 `'close'`，拿它当取消信号会把每一个正常请求都判成
+ * 取消。`ServerResponse` 的 `'close'` 只在响应结束或连接断掉时触发，用
+ * `writableFinished` 就能把两者分开——响应已经写完是正常收尾，没写完就是
+ * 对端走了。
+ *
+ * 这条线是 2026-09-16 审查 R2 的另一半：路由拿到这个 signal 之后，取消才
+ * 真的能到达 bwrap 进程树；在此之前 Agent 侧 RPC 超时只是让客户端不再等，
+ * sandbox 那边的命令仍在继续写文件。
+ */
+function clientAbortSignal(res: ServerResponse): AbortSignal {
+  const controller = new AbortController();
+  res.on('close', () => {
+    if (!res.writableFinished) controller.abort();
+  });
+  return controller.signal;
+}
+
+function incomingToRequest(req: IncomingMessage, signal: AbortSignal): Request {
   const host = req.headers.host ?? '127.0.0.1';
   const url = new URL(req.url ?? '/', `http://${host}`);
   const method = req.method ?? 'GET';
@@ -26,7 +47,7 @@ function incomingToRequest(req: IncomingMessage): Request {
   }
   const peer = req.socket?.remoteAddress ?? '';
   if (peer) headers.set(PEER_IP_HEADER, peer);
-  const init: RequestInit & { duplex?: 'half' } = { method, headers };
+  const init: RequestInit & { duplex?: 'half' } = { method, headers, signal };
   if (method !== 'GET' && method !== 'HEAD') {
     init.body = Readable.toWeb(req) as ReadableStream;
     init.duplex = 'half';
@@ -51,9 +72,11 @@ export function listenHono(app: Hono, port: number, host = '0.0.0.0'): Server {
   const server = createServer((req, res) => {
     void (async () => {
       try {
-        const response = await app.fetch(incomingToRequest(req));
+        const response = await app.fetch(incomingToRequest(req, clientAbortSignal(res)));
         await sendResponse(response, res);
       } catch (err) {
+        // 对端已经走了：没有人在等这个响应，也不该把断连记成服务端错误。
+        if (res.destroyed || res.writableEnded) return;
         if (!res.headersSent) {
           res.statusCode = 500;
           res.setHeader('content-type', 'application/json');

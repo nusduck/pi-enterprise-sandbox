@@ -28,6 +28,8 @@ export interface MonitorTuning {
 export interface RemoteShellOptions extends ExecRpcConfig {
   /** 仅测试注入：覆盖后台作业监控的轮询节奏与失败截止。 */
   readonly monitor?: MonitorTuning;
+  /** 仅测试注入：后台句柄未被读取的输出缓冲上限（字符）。 */
+  readonly outputMaxChars?: number;
 }
 
 // 后台作业监控的轮询节奏。成功一次就回到最小间隔；连续失败时指数退避，
@@ -36,6 +38,43 @@ export interface RemoteShellOptions extends ExecRpcConfig {
 const MONITOR_MIN_DELAY_MS = 200;
 const MONITOR_MAX_DELAY_MS = 2_000;
 const MONITOR_FAILURE_DEADLINE_MS = 60_000;
+
+/**
+ * 前台执行的**回传余量**：执行预算之外再给多少时间收响应。
+ *
+ * exec 在命令结束之后还要收尾输出、组装 JSON、写回连接；余量太小会把
+ * 「刚好跑满预算的命令」判成传输失败，太大又让断网的感知变慢。
+ */
+const RUN_RETURN_MARGIN_MS = 15_000;
+
+/** 前台单次 RPC 的传输截止。 */
+function runDeadlineMs(timeoutMs: number): number {
+  const budget = Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : 120_000;
+  return budget + RUN_RETURN_MARGIN_MS;
+}
+
+/**
+ * 后台作业在 Agent 侧未被读取的输出上限（字符）。
+ *
+ * R6：`monitor()` 每轮主动 pull，把新输出追加进 `outputBuf`，而只有模型调用
+ * `readOutput()` 才会清空。exec 单次响应有界并不能限制 Agent 跨批次的累计量——
+ * 一个持续输出、长时间没人读的后台命令会让 Worker 内存随输出量线性增长。
+ *
+ * 语义选择是**保留尾部**（与 exec 侧保留前缀相反）：这个缓冲服务的是
+ * 「进程现在在干什么」，最近的输出比最早的有用。一旦丢过东西就置 `lossy`，
+ * 并且在下一次 `readOutput()` 之前一直保持——截断是必须让上层看见的事实。
+ */
+const OUTPUT_BUFFER_MAX_CHARS = 64 * 1024;
+
+/** 取末尾 `maxChars` 个字符；切点落在代理对中间时往后挪一位。 */
+function sliceTail(text: string, maxChars: number): string {
+  let start = text.length - maxChars;
+  if (start <= 0) return text;
+  const code = text.charCodeAt(start);
+  // 低位代理（DC00–DFFF）说明切点正好在一对代理对中间。
+  if (code >= 0xdc00 && code <= 0xdfff) start += 1;
+  return text.slice(start);
+}
 
 /**
  * exec 说"这个作业不存在"——`internal-jobs.ts` 把 `JobNotFoundError` 映射成
@@ -76,6 +115,7 @@ class RemoteShellProcess implements ShellProcess {
   private doneResolver: () => void = () => undefined;
   private outputBuf = '';
   private lossy = false;
+  private readonly outputMaxChars: number;
   private cursor: string | null = null;
   private pullInFlight: Promise<void> | null = null;
   private settled = false;
@@ -85,7 +125,9 @@ class RemoteShellProcess implements ShellProcess {
     private readonly roots: readonly string[],
     readonly id: string,
     private readonly tuning: MonitorTuning = {},
+    outputMaxChars: number = OUTPUT_BUFFER_MAX_CHARS,
   ) {
+    this.outputMaxChars = Math.max(1, Math.trunc(outputMaxChars));
     let resolver: () => void = () => undefined;
     this.done = new Promise<void>((resolve) => {
       resolver = resolve;
@@ -100,6 +142,23 @@ class RemoteShellProcess implements ShellProcess {
         void this.monitor();
       })
       .catch(() => this.settleFromExec('killed', null, null));
+  }
+
+  /**
+   * 有界追加：超出上限时丢**最早**的部分，保留尾部，并置 `lossy`。
+   *
+   * 单次增量本身就超过上限时同样只保留尾部——不按字符边界之外的规则再切，
+   * `slice` 以 UTF-16 code unit 为单位，可能切开一对代理对；这里用
+   * `sliceTail` 把切点往后挪一位，避免产出半个字符。
+   */
+  private appendOutput(text: string): void {
+    const combined = this.outputBuf + text;
+    if (combined.length <= this.outputMaxChars) {
+      this.outputBuf = combined;
+      return;
+    }
+    this.outputBuf = sliceTail(combined, this.outputMaxChars);
+    this.lossy = true;
   }
 
   readOutput(): { delta: string; lossy: boolean } {
@@ -194,7 +253,7 @@ class RemoteShellProcess implements ShellProcess {
       )
       .then((data) => {
         const text = typeof data.text === 'string' ? data.text : '';
-        if (text.length > 0) this.outputBuf += text;
+        if (text.length > 0) this.appendOutput(text);
         if (data.lossy === true) this.lossy = true;
         const nextCursor = data.nextCursor ?? data.cursor;
         if (typeof nextCursor === 'string' && nextCursor !== '') this.cursor = nextCursor;
@@ -213,12 +272,14 @@ class RemoteShellProcess implements ShellProcess {
 export class RemoteShell extends ShellExecutor {
   private readonly rpc: ExecRpcClient;
   private readonly monitorTuning: MonitorTuning;
+  private readonly outputMaxChars: number;
 
   constructor(ctx: Context, options: Partial<RemoteShellOptions> = {}) {
     super(ctx as unknown as never);
     const resolved = resolveExecRpcConfig(options);
     this.rpc = new ExecRpcClient(resolved);
     this.monitorTuning = options.monitor ?? {};
+    this.outputMaxChars = options.outputMaxChars ?? OUTPUT_BUFFER_MAX_CHARS;
   }
 
   rebind(options: ExecRpcConfig): void {
@@ -253,7 +314,9 @@ export class RemoteShell extends ShellExecutor {
       timeoutMs: spec.timeoutMs,
       stdoutMaxBytes: spec.stdoutMaxBytes,
     };
-    if (spec.signal !== undefined) payload['signal'] = true;
+    // `signal` **不序列化**。以前这里发的是 `signal: true`——一个布尔值既不能
+    // 表达取消、也不会被 exec 读取，真正的取消靠的是把连接断掉（见下面
+    // 传给 `post` 的 signal）。审查 R2 的契约表对这一条有明确要求。
     if (spec.stdin !== undefined) payload['stdin'] = spec.stdin;
     if (spec.env !== undefined) payload['env'] = spec.env;
     // dshEnv/sandboxPolicy 透传由 exec 侧隔离层决定，这里只转发 command/timeout/workdir 基础集
@@ -262,6 +325,13 @@ export class RemoteShell extends ShellExecutor {
       '/internal/v1/shell/run',
       payload,
       this.roots,
+      {
+        // 传输截止 = 执行预算 + 有界回传余量。用固定的 15 秒当整条边界的
+        // 上限，正是 R2 的成因：payload 说 120 秒、客户端 15 秒就 abort，
+        // 而 sandbox 那边的命令还在继续写文件。
+        deadlineMs: runDeadlineMs(spec.timeoutMs),
+        ...(spec.signal !== undefined ? { signal: spec.signal } : {}),
+      },
     );
     return data;
   }
@@ -281,7 +351,7 @@ export class RemoteShell extends ShellExecutor {
     // `start` 是同步返回句柄的契约，内部异步通知通过 done Promise
     const rpc = this.rpc;
     const roots = this.roots;
-    const proc = new RemoteShellProcess(rpc, roots, id, this.monitorTuning);
+    const proc = new RemoteShellProcess(rpc, roots, id, this.monitorTuning, this.outputMaxChars);
     proc.start(rpc.post<Record<string, unknown>, { id: string; status: string }>(
       '/internal/v1/shell/start',
       payload,

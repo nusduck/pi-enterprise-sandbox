@@ -129,6 +129,32 @@ export interface LaunchPlan {
    * 文档字符串专门强调的事）。
    */
   readonly maxProcessCount: number;
+  /**
+   * 命名空间**内部**生效的其余 rlimit（`ulimit -n/-t/-f/-v`）。
+   *
+   * 与 `maxProcessCount` 一样必须在命名空间内部设：在 bwrap 之前收紧
+   * `RLIMIT_NOFILE` 会连 bwrap 自己要打开的挂载 fd 一起限住。省略即不限制。
+   *
+   * 单位与语义逐条写明，避免"数字对了、单位错了"这类只在生产才暴露的偏差：
+   * - `maxOpenFiles`     `ulimit -n`，RLIMIT_NOFILE，逐进程的 fd 上限
+   * - `cpuSeconds`       `ulimit -t`，RLIMIT_CPU，**逐进程**的 CPU 秒（不是墙钟，
+   *                      也不是整棵进程树的总和）
+   * - `fileSizeKb`       `ulimit -f`，RLIMIT_FSIZE，单个文件可写的最大长度，
+   *                      以 1024 字节块计
+   * - `addressSpaceKb`   `ulimit -v`，RLIMIT_AS，**逐进程的虚拟地址空间**，
+   *                      以 1024 字节块计。它**不是**整棵进程树的内存总量——
+   *                      树总量只有 cgroup 能管，那是容器/部署层的兜底，
+   *                      不要把这一条当成逐任务内存额度宣传。
+   */
+  readonly rlimits?: ResourceLimitPlan;
+}
+
+/** 命名空间内部的 rlimit 计划。0 或缺省 = 该项不限制。 */
+export interface ResourceLimitPlan {
+  readonly maxOpenFiles?: number;
+  readonly cpuSeconds?: number;
+  readonly fileSizeKb?: number;
+  readonly addressSpaceKb?: number;
 }
 
 /** 一次 Bubblewrap 启动的完整计划。 */

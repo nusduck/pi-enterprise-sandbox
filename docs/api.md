@@ -450,6 +450,32 @@ Base URL: `http://sandbox:8081`（Docker 内网）
   以前这两项谁都不看，`ExecRpcClient` 对所有 RPC 都写死 `fs` / `internal:fs`——
   一枚「文件」令牌可以拿去起进程。**未登记的内部路径一律拒**，新端点不会默认免检。
 
+#### `shell/run` 与 `shell/start` 的请求体
+
+两侧共用 `@pi/contract` 的 `parseShellRunPayload()` / `parseShellStartPayload()`；
+**越界或类型非法在执行前拒绝**（`ENVELOPE_INVALID` → 400），不静默退回默认值。
+2026-09-16 之前路由只挑 `command` 与 `timeoutMs`，其余字段丢掉仍返回 200——
+「指定了子目录却在工作区根执行」不会报错，只会写错文件。
+
+| 字段 | run | start | 规则 |
+|---|---|---|---|
+| `command` | 必填 | 必填 | 字符串 |
+| `workdir` | 可选 | 可选 | 沙箱**逻辑**路径，只认 `/home/sandbox/workspace[/…]` 与 `/tmp[/…]`；必须已规范化（无 `..`、无空段）。缺省为工作区根 |
+| `stdin` | 可选 | 可选 | spawn 时一次性写入并关闭 fd 0。`""` 表示「有输入、内容为空」，与缺省的「无输入」不同 |
+| `env` | 可选 | 可选 | 合法变量名 → 字符串；最多 64 条。再经执行面 safe-env 过滤，宿主服务凭据不会透传 |
+| `stdoutMaxBytes` | 可选 | 可选 | **字节**，上限 `SANDBOX_MAX_OUTPUT_CHARS × 4`。截断按字符边界，不会切出半个字符，并置 `truncated` |
+| `timeoutMs` | 可选 | **拒绝** | 有限正整数，上限 `SANDBOX_EXECUTION_TIMEOUT_SECONDS × 1000`。后台作业按异步进程契约运行，没有前台预算，带了这个字段直接 400 |
+| `id` / `runId` | — | 可选 | 作业账本标识 |
+
+取消与截止：
+
+- Agent 侧 `ExecRpcClient.post()` 的传输截止 = 执行预算 + 15 秒有界回传余量
+  （不再是与 payload 无关的固定 15 秒），并与调用方的 `AbortSignal` 融合；
+- exec 的监听器把「客户端提前断开」转成请求的 `AbortSignal`，路由再把它接到
+  执行面，bwrap 进程树随之终止——取消不再只是让客户端不等了；
+- `signal` **不进** payload。以前 Agent 发 `signal: true`，一个既表达不了取消、
+  也没人读的布尔值。
+
 模型默认工具面由 `agent/src/runtime/policy/tool-names.ts` 的
 `ENTERPRISE_DEFAULT_TOOLS` 唯一定义：`read` / `write` / `edit` / `read_image`、
 `glob` / `grep`、`bash`、`job_list` / `job_output` / `job_kill`、`todo_write`、

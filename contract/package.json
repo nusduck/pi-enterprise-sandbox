@@ -14,13 +14,15 @@
     "./dbpm-config.js": "./dist/dbpm-config.js",
     "./schema-manifest.js": "./dist/schema-manifest.js",
     "./skill-manifest.js": "./dist/skill-manifest.js",
+    "./shell-payload.js": "./dist/shell-payload.js",
     "./schema/schema-manifest.json": "./schema/schema-manifest.json",
     "./errors": "./dist/errors.js",
     "./envelope": "./dist/envelope.js",
     "./hmac": "./dist/hmac.js",
     "./endpoint-failover": "./dist/endpoint-failover.js",
     "./dbpm": "./dist/dbpm.js",
-    "./dbpm-config": "./dist/dbpm-config.js"
+    "./dbpm-config": "./dist/dbpm-config.js",
+    "./shell-payload": "./dist/shell-payload.js"
   },
   "types": "./dist/index.d.ts",
   "engines": { "node": ">=22.19.0 <23" },

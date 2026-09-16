@@ -48,7 +48,15 @@ export interface ExecRpcConfig {
    * 或规范化 query；exec 只挂载清单点名的版本。缺省即空。
    */
   readonly enabledSkills?: readonly EnabledSkillRef[] | undefined;
-  /** 单次 fetch 超时毫秒，默认 15000。 */
+  /**
+   * 单次 fetch 的**默认**超时毫秒，默认 15000。
+   *
+   * 这是「一次普通 RPC 该等多久」，不是「一条命令可以跑多久」：前台 shell
+   * 的预算由调用方按 `ShellExecSpec.timeoutMs` 逐次给（见 `post()` 的
+   * `deadlineMs`）。2026-09-16 之前两者被混成一个值——Agent 把 120000 ms 放进
+   * payload，客户端却在 15000 ms 就 abort，sandbox 那边的命令还在继续跑
+   * （审查 R2）。
+   */
   readonly timeoutMs?: number | undefined;
   /** 可注入的 fetch，便于 macOS 无 exec 的内存替身测试。 */
   readonly fetchImpl?: typeof fetch | undefined;
@@ -73,6 +81,25 @@ function randomHex(len: number): string {
   return Array.from(bytes)
     .map((b) => b.toString(16).padStart(2, '0'))
     .join('');
+}
+
+/** 默认的单次 RPC 传输超时。 */
+export const EXEC_RPC_DEFAULT_TIMEOUT_MS = 15_000;
+
+/**
+ * 传输截止的硬上界。即使调用方给了一个很大的执行预算，一条 HTTP 请求也不
+ * 允许无限期挂着——断网没有被及时感知时，这是最后那道有界上限。
+ */
+export const EXEC_RPC_MAX_DEADLINE_MS = 24 * 60 * 60 * 1_000;
+
+/** 逐次截止的归一化：非有限值/非正数一律退回默认，超上界夹到上界。 */
+export function resolveDeadlineMs(
+  requested: number | undefined,
+  fallback: number | undefined,
+): number {
+  const base = requested ?? fallback ?? EXEC_RPC_DEFAULT_TIMEOUT_MS;
+  if (!Number.isFinite(base) || base <= 0) return EXEC_RPC_DEFAULT_TIMEOUT_MS;
+  return Math.min(Math.trunc(base), EXEC_RPC_MAX_DEADLINE_MS);
 }
 
 const execRpcAls = new AsyncLocalStorage<ExecRpcConfig>();
@@ -228,11 +255,19 @@ export class ExecRpcClient {
     };
   }
 
-  /** POST /internal/v1/<path> 带信封与 HMAC。 */
+  /**
+   * POST /internal/v1/<path> 带信封与 HMAC。
+   *
+   * `opts.deadlineMs` 覆盖这一次调用的传输截止（前台 shell 用「执行预算 +
+   * 有界回传余量」）；`opts.signal` 是调用方自己的取消信号，与截止定时器
+   * **融合**成一个 AbortSignal 交给 fetch——连接随之断开，exec 侧的路由再
+   * 把它接到执行面。两者都省略时退回配置里的默认超时。
+   */
   async post<TPayload, TData>(
     htu: string,
     payload: TPayload,
     physicalRoots: readonly string[],
+    opts: { deadlineMs?: number | undefined; signal?: AbortSignal | undefined } = {},
   ): Promise<TData> {
     const envelope = this.envelope();
     const cfg = this.activeConfig();
@@ -244,9 +279,16 @@ export class ExecRpcClient {
 
     const token = this.issueToken(htu, bodySha, envelope);
     const url = `${this.baseUrl}${htu}`;
-    const timeoutMs = cfg.timeoutMs ?? this.config.timeoutMs ?? 15000;
+    const timeoutMs = resolveDeadlineMs(opts.deadlineMs, cfg.timeoutMs ?? this.config.timeoutMs);
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
+    // 调用方取消要立刻断连，不等截止定时器——否则「模型取消了工具调用」
+    // 与「沙箱还在跑」之间会留一个最长等于预算的窗口。
+    const onCallerAbort = (): void => controller.abort();
+    if (opts.signal !== undefined) {
+      if (opts.signal.aborted) controller.abort();
+      else opts.signal.addEventListener('abort', onCallerAbort, { once: true });
+    }
 
     try {
       const fetchImpl: typeof fetch = cfg.fetchImpl ?? this.config.fetchImpl ?? globalThis.fetch;
@@ -289,6 +331,7 @@ export class ExecRpcClient {
       throw fromWireError(wire);
     } finally {
       clearTimeout(timer);
+      opts.signal?.removeEventListener('abort', onCallerAbort);
     }
   }
 
@@ -316,7 +359,7 @@ export class ExecRpcClient {
     const url = new URL(`${this.baseUrl}${htu}`);
     for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v);
 
-    const timeoutMs = cfg.timeoutMs ?? this.config.timeoutMs ?? 15000;
+    const timeoutMs = resolveDeadlineMs(undefined, cfg.timeoutMs ?? this.config.timeoutMs);
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
 

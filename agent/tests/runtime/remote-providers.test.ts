@@ -401,9 +401,27 @@ test('rebind updates HMAC envelope without ALS', async () => {
   assert.equal(bodies[0]!.includes('placeholder-ws'), false);
 });
 
-/** 有界等待：修复前这些循环永不结束，用它把"挂死"变成一条可断言的失败。 */
+/**
+ * 有界等待：修复前这些循环永不结束，用它把"挂死"变成一条可断言的失败。
+ *
+ * 心跳定时器**不 unref**：`remote-shell` 的监控循环刻意 unref 了自己的
+ * 定时器（一个后台作业不该阻止进程退出），于是在 `node --test` 里「只剩
+ * 监控在跑」时事件循环会直接排空，用例被判成 `cancelledByParent` 而不是
+ * 真的跑完——2026-09-16 之前这个文件里三条用例一直是这个状态，既不算通过
+ * 也不算失败。超时那一路仍然 unref，它只是兜底，不该自己把循环撑活。
+ */
+async function withHeartbeat<T>(body: () => Promise<T>): Promise<T> {
+  const heartbeat = setInterval(() => undefined, 20);
+  try {
+    return await body();
+  } finally {
+    clearInterval(heartbeat);
+  }
+}
+
 async function settledWithin(proc: { done: Promise<void> }, ms: number): Promise<boolean> {
   let timer: ReturnType<typeof setTimeout> | undefined;
+  const heartbeat = setInterval(() => undefined, 20);
   const timeout = new Promise<boolean>((resolve) => {
     timer = setTimeout(() => resolve(false), ms);
     timer.unref?.();
@@ -412,6 +430,7 @@ async function settledWithin(proc: { done: Promise<void> }, ms: number): Promise
     return await Promise.race([proc.done.then(() => true), timeout]);
   } finally {
     if (timer !== undefined) clearTimeout(timer);
+    clearInterval(heartbeat);
   }
 }
 
@@ -515,9 +534,13 @@ test('exec-rpc: getStream 在响应头之后卡住也会超时，而不是永远
 
   const started = Date.now();
   const chunks: string[] = [];
-  await assert.rejects(async () => {
-    for await (const chunk of await fs.streamText('notes.txt')) chunks.push(chunk);
-  }, /stalled|abort/i);
+  // 空闲截止定时器是 unref 的（不该让一条卡住的流阻止进程退出），
+  // 测试里要自己把事件循环撑住，否则会被判成 cancelledByParent。
+  await withHeartbeat(() =>
+    assert.rejects(async () => {
+      for await (const chunk of await fs.streamText('notes.txt')) chunks.push(chunk);
+    }, /stalled|abort/i),
+  );
   assert.deepEqual(chunks, ['first chunk'], 'the chunk that did arrive is still delivered');
   assert.ok(Date.now() - started < 3_000, 'must give up soon after the stall deadline');
 });

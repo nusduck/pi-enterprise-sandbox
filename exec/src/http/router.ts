@@ -23,6 +23,9 @@ import type { MySqlJobRegistry } from '../shell/job-registry.js';
 import { ArtifactService } from '../artifact/service.js';
 import { WorkspaceFileSystem } from '../fs/workspace-fs.js';
 import { Context as CordisContext } from '@deepseek-ai/cordis';
+import type { ShellResourceLimits } from '../shell/resource-limits.js';
+import type { ChildQuotaConfig } from '../workspace/child-quota.js';
+import type { QuotaStore } from '../workspace/quota-store.js';
 import type { EnabledSkillPackagesResolver, WorkspaceContext } from '../types.js';
 
 export interface InternalRouterDeps {
@@ -38,6 +41,12 @@ export interface InternalRouterDeps {
   readonly allowCidr?: readonly string[];
   /** 产物服务；不传则进程内默认装配（与公共面共用同一份控制面存储）。 */
   readonly artifactService?: ArtifactService;
+  /** 执行面限额（超时预算、输出上限、命名空间内部 rlimit）。 */
+  readonly resourceLimits?: ShellResourceLimits;
+  /** 子进程磁盘配额监控配置。 */
+  readonly childQuota?: ChildQuotaConfig;
+  /** 配额账本（读预留量）。 */
+  readonly quotaStore?: QuotaStore;
 }
 
 /**
@@ -121,6 +130,9 @@ export function createInternalRouter(deps: InternalRouterDeps): Hono {
     ...(deps.draftSkillRootFor ? { draftSkillRootFor: deps.draftSkillRootFor } : {}),
     bwrapExecutable: deps.bwrapExecutable,
     modeFor: deps.modeFor,
+    ...(deps.resourceLimits !== undefined ? { resourceLimits: deps.resourceLimits } : {}),
+    ...(deps.childQuota !== undefined ? { childQuota: deps.childQuota } : {}),
+    ...(deps.quotaStore !== undefined ? { quotaStore: deps.quotaStore } : {}),
   });
   registerInternalJobsRoutes(app, { jobRegistry: deps.jobRegistry });
   registerInternalArtifactRoutes(app, {

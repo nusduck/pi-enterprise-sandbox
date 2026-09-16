@@ -13,6 +13,7 @@
  * - `dbpm.ts`      启动时向 DBPM 取口令的 TCP 客户端
  * - `dbpm-config.ts` 各进程取哪些口令、配置来源与「连接串不许夹口令」的启动约束
  * - `skill-manifest.ts` 已启用用户 Skill 清单、GET 规范化签名字节与版本目录规则
+ * - `shell-payload.ts` 内部 shell run/start 请求体的两侧共用解析与边界校验
  */
 
 export {
@@ -147,6 +148,21 @@ export {
   skillVersionPaths,
 } from './skill-manifest.js';
 export type { EnabledSkillRef, SkillVersionPaths, SkillVersionSidecar } from './skill-manifest.js';
+export {
+  DEFAULT_SHELL_PAYLOAD_LIMITS,
+  parseShellRunPayload,
+  parseShellStartPayload,
+  parseShellWorkdir,
+  SANDBOX_TEMP_PATH,
+  SANDBOX_WORKSPACE_PATH,
+} from './shell-payload.js';
+export type {
+  ShellPayload,
+  ShellPayloadLimits,
+  ShellStartPayload,
+  ShellWorkdir,
+  ShellWorkdirScope,
+} from './shell-payload.js';
 
 // DSH `ctx.fs` 的类型直接复用，不手写 DTO——见包顶部说明。
 export { FileSystem } from '@deepseek-ai/dsh-fs';

@@ -26,10 +26,16 @@
 import { type ChildProcess } from 'node:child_process';
 import { buildIsolationProfile } from '../isolation/build.js';
 import { spawnLaunch } from '../isolation/bubblewrap.js';
-import type { IsolationProfile, NetworkMode } from '../isolation/profile.js';
+import type { IsolationProfile, NetworkMode, ResourceLimitPlan } from '../isolation/profile.js';
 import type { SandboxMode, WorkspaceContext } from '../types.js';
 import { fuseDeadline } from './deadline.js';
-import { BoundedTextCapture, LiveOutputTracker, finalizeCapture, type CollectedOutputLike } from './output-capture.js';
+import {
+  BoundedTextCapture,
+  LiveOutputTracker,
+  finalizeCapture,
+  type BoundedCaptureUnit,
+  type CollectedOutputLike,
+} from './output-capture.js';
 
 /** SIGTERM → SIGKILL 升级前的默认宽限期（毫秒）。与 `dsh-bash-local` 的
  * `DEFAULT_GRACE_MS` 对齐（其注释："matches OpenCode's 3s"）。 */
@@ -54,10 +60,14 @@ export interface SpawnTarget {
   /** 沙箱内要跑的目标命令，未净化，例如 `['bash', '-c', cmd]`。 */
   readonly argv: readonly string[];
   readonly relativeCwd?: string | undefined;
+  /** `relativeCwd` 相对哪个沙箱根；缺省 `workspace`。 */
+  readonly cwdScope?: 'workspace' | 'temp' | 'skill-draft' | undefined;
   /** 已经过 `safe-env.ts` 洗过的环境变量表。 */
   readonly envOverrides: Readonly<Record<string, string>>;
   readonly networkMode?: NetworkMode | undefined;
   readonly maxProcessCount?: number;
+  /** 命名空间内部的其余 rlimit（NOFILE / CPU / FSIZE / AS）。 */
+  readonly rlimits?: ResourceLimitPlan | undefined;
   readonly uid?: number;
   readonly gid?: number;
   readonly stdin?: string | undefined;
@@ -75,8 +85,10 @@ function buildProfile(target: SpawnTarget): IsolationProfile {
     command: target.argv,
     envOverrides: target.envOverrides,
     ...(target.relativeCwd !== undefined ? { relativeCwd: target.relativeCwd } : {}),
+    ...(target.cwdScope !== undefined ? { cwdScope: target.cwdScope } : {}),
     ...(target.networkMode !== undefined ? { networkMode: target.networkMode } : {}),
     ...(target.maxProcessCount !== undefined ? { maxProcessCount: target.maxProcessCount } : {}),
+    ...(target.rlimits !== undefined ? { rlimits: target.rlimits } : {}),
     ...(target.uid !== undefined ? { uid: target.uid } : {}),
     ...(target.gid !== undefined ? { gid: target.gid } : {}),
   });
@@ -217,6 +229,12 @@ export interface RunForegroundOptions {
   readonly signal?: AbortSignal | undefined;
   readonly stdoutMaxChars: number;
   readonly stderrMaxChars: number;
+  /**
+   * 上面两个上限的计量单位，缺省 `chars`。调用方按 `ShellExecSpec.stdoutMaxBytes`
+   * 给预算时传 `bytes`——那个字段在 dsh-shell 里是**字节**，用 UTF-16 长度
+   * 冒充它会在非 ASCII 输出上少留一半左右的内容。
+   */
+  readonly outputUnit?: BoundedCaptureUnit | undefined;
   readonly graceMs?: number | undefined;
 }
 
@@ -235,8 +253,9 @@ export async function runForeground(
 ): Promise<ForegroundOutcome> {
   const { child } = spawnConfined(target, config);
 
-  const stdoutCap = new BoundedTextCapture(opts.stdoutMaxChars);
-  const stderrCap = new BoundedTextCapture(opts.stderrMaxChars);
+  const unit = opts.outputUnit ?? 'chars';
+  const stdoutCap = new BoundedTextCapture(opts.stdoutMaxChars, unit);
+  const stderrCap = new BoundedTextCapture(opts.stderrMaxChars, unit);
   wireOutput(child, stdoutCap, stderrCap);
   writeStdin(child, target.stdin);
 

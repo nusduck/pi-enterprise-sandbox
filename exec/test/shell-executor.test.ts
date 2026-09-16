@@ -72,11 +72,13 @@ test('resolve fills defaults and caps timeout', async () => {
     const spec = exec.resolve({ command: 'echo hi' });
     assert.equal(spec.command, 'echo hi');
     assert.equal(spec.workdir, '.');
-    assert.ok(spec.timeoutMs >= 1 && spec.timeoutMs <= 86_400_000);
+    assert.ok(spec.timeoutMs >= 1 && spec.timeoutMs <= exec.defaultTimeoutMs);
     assert.ok(spec.stdoutMaxBytes > 0);
 
+    // 上限是**本执行面的预算**（`SANDBOX_EXECUTION_TIMEOUT_SECONDS`），
+    // 不是一个与配置无关的 24 小时常数——R2 就是从这个缺口开始的。
     const capped = exec.resolve({ command: 'echo hi', timeoutMs: 999_999_999 });
-    assert.equal(capped.timeoutMs, 86_400_000);
+    assert.equal(capped.timeoutMs, exec.defaultTimeoutMs);
 
     const floored = exec.resolve({ command: 'echo hi', timeoutMs: 0 });
     assert.equal(floored.timeoutMs, 1);

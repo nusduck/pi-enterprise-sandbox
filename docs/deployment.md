@@ -75,6 +75,49 @@ disk isolation. Production validation requires **both**:
 Child monitor codes: `workspace_quota_exceeded`,
 `workspace_inode_limit_exceeded`, `workspace_quota_enforcement_failed`.
 
+从 2026-09-16 起这两条声明**真的接线了**（此前 `evaluateChildQuota` /
+`ChildWorkspaceQuotaWatch` / `assertProductionQuotaBackend` 只存在于定义链里，
+没有任何调用方）：
+
+- 内部 shell 的 `run` 与 `start` 在 spawn **之前**做一次准入判定，超额或测量
+  失败一律不启动进程，原因如实写进结果的 stderr（`exitCode: 126`，
+  `sandbox.denied: true`）；
+- spawn 之后按 `SANDBOX_WORKSPACE_CHILD_QUOTA_SAMPLE_INTERVAL_S` 采样，越线就
+  终止这次执行及其后代；正常结束、取消、spawn 失败三条出口都会停掉采样器；
+- `DEPLOYMENT_ENV`/`NODE_ENV` 为 `production` 且配置了正数配额时，exec 在装配
+  阶段调用 `assertProductionQuotaBackend()`——缺监控或缺硬配额声明直接拒绝启动。
+
+控制面账本（产物/数据集预留）的默认额度以前写死 1024 MB，与运维声明无关；
+现在取 `SANDBOX_WORKSPACE_QUOTA_MB`（Compose 默认 500）。**升级注意**：既有
+工作区可能已经用掉超过 500 MB。超额工作区不会被删数据，走与其它超额工作区
+相同的策略——只限制新增写入，读取与清理不受影响。切换前先盘点各工作区已用量。
+
+### Per-execution resource limits
+
+`.env.example` 与 Compose 一直声明的这几个变量，2026-09-16 之前在 `exec/src`
+里**一个消费者都没有**。现在逐条落到命名空间**内部**的 `ulimit` 包装器
+（必须在 bwrap 之内设：`RLIMIT_NPROC` 按 UID 计数，在宿主侧收紧会把 exec 自己
+的线程算进去，可能直接让命名空间建不起来）：
+
+| 变量 | 落到 | 语义 | 允许范围 |
+|---|---|---|---|
+| `SANDBOX_MAX_PROCESS_COUNT` | `ulimit -u` | 命名空间内的进程数上限 | 4–4096，`0`=不限制 |
+| `SANDBOX_MAX_OPEN_FILES` | `ulimit -n` | **逐进程** fd 上限 | 16–65536，`0`=不限制 |
+| `SANDBOX_MAX_CPU_TIME_SECONDS` | `ulimit -t` | **逐进程** CPU 秒（不是墙钟，也不是进程树总和） | 1–86400，`0`=不限制 |
+| `SANDBOX_MAX_FILE_SIZE_MB` | `ulimit -f` | 单个文件的最大长度 | 1–1048576，`0`=不限制 |
+| `SANDBOX_MAX_ADDRESS_SPACE_MB` | `ulimit -v` | **逐进程虚拟地址空间**（默认关） | 256–1048576，`0`=不下发 |
+| `SANDBOX_EXECUTION_TIMEOUT_SECONDS` | 前台执行预算 | 请求里的 `timeoutMs` 不得超过它，超了 400 | 1–86400 |
+| `SANDBOX_MAX_OUTPUT_CHARS` | 输出上限 | 同时决定 `stdoutMaxBytes` 的天花板（×4） | 1000–5000000 |
+
+值不是整数或落在范围外时 exec **拒绝启动**，不静默换成默认值。
+
+`SANDBOX_MAX_MEMORY_MB` **不会**被翻译成逐任务 rlimit，它是容器/部署层的兜底
+声明。原因：rlimit 里唯一沾边的是 `RLIMIT_AS`（虚拟地址空间），而地址空间不等于
+进程树常驻内存——Python/numpy 这类运行时预留的虚拟地址空间远大于实际使用量，
+按 512 MB 收紧会让正常命令直接起不来。进程树的内存总量只有 cgroup 管得住，
+那是 Compose/systemd 的事。声明了它而没有开 `SANDBOX_MAX_ADDRESS_SPACE_MB` 时，
+exec 启动日志会打一条 `exec NOTICE:` 说明这条声明的实际归属。
+
 ### VM exec release（单 VM 裸装，design §9）
 
 目标拓扑里执行面是单 VM、单实例、systemd 托管。仓库提供不可变 release 包与部署资产（`deploy/vm/`），

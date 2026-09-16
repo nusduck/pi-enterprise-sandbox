@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **沙箱资源限额与子进程磁盘配额真的接线了**（审查 R1）：`SANDBOX_MAX_PROCESS_COUNT`
+  / `SANDBOX_MAX_OPEN_FILES` / `SANDBOX_MAX_CPU_TIME_SECONDS` / `SANDBOX_MAX_FILE_SIZE_MB`
+  / `SANDBOX_EXECUTION_TIMEOUT_SECONDS` / `SANDBOX_MAX_OUTPUT_CHARS` 此前在 `exec/src`
+  里没有任何消费者——声明了 20 个进程上限，最终 profile 里那一项恒为 0（不限制）。
+  现在逐条落到命名空间内部的 `ulimit` 包装器；配置越界直接拒绝启动。
+  `evaluateChildQuota` / `ChildWorkspaceQuotaWatch` / `assertProductionQuotaBackend`
+  同样从「只存在于定义链里」变成 spawn 前准入 + 执行中采样 + 生产启动闸门。
+  控制面配额账本的默认额度不再写死 1024 MB，改取 `SANDBOX_WORKSPACE_QUOTA_MB`。
+  新增 `SANDBOX_MAX_ADDRESS_SPACE_MB`（默认关）；`SANDBOX_MAX_MEMORY_MB` 明确为
+  容器兜底声明，不再被当作逐任务额度。
+- **超过 15 秒的前台命令不再「客户端放弃、沙箱继续跑」**（审查 R2）：`ExecRpcClient`
+  的传输截止改为「执行预算 + 15 秒有界回传余量」，并与调用方的 `AbortSignal` 融合；
+  exec 的监听器把客户端提前断开转成请求的 `AbortSignal`，路由接到执行面，
+  bwrap 进程树随之终止。`signal` 不再被序列化成一个没人读的布尔值。
+- **`workdir` / `stdin` / `env` / `stdoutMaxBytes` 不再被跨服务静默丢弃**（审查 R4）：
+  两侧共用 `@pi/contract` 的 shell payload 解析器，越界路径与非法字段在执行前
+  拒绝（400），合法字段一路传到 bwrap 的 `--chdir` 与子进程环境。
+  `stdoutMaxBytes` 按**字节**解释，截断落在字符边界上。
+- **子任务轮询不再积累 abort 监听器、也不再定频打数据库**（审查 R5）：每一轮等待
+  退出时摘监听器（`{ once: true }` 只在 abort 真的发生时才摘，正常轮询不会）；
+  轮询从 50 ms 定频改为 200 ms 起、最多 2 s 的有界退避，取消立刻唤醒。
+- **后台命令的输出不再在 Agent 侧无限累积**（审查 R6）：`RemoteShellProcess` 未被
+  读取的缓冲有上限（保留尾部，截断置 `lossy`）。
+
 ### Changed
 
 - **模型目录改为 `deepseek-flash`（默认）与 `qwen3.8-27b`**：LLMIO 网关实测

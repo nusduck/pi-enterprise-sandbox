@@ -154,10 +154,9 @@ test('[py: test_bwrap_defers_nproc_until_after_user_namespace] max_process_count
     const argv = render(profile);
     const command = argv.slice(argv.indexOf('--') + 1);
     assert.deepEqual(command.slice(0, 2), ['/bin/bash', '-c']);
-    assert.match(command[2] ?? '', /ulimit -S -u/);
-    assert.match(command[2] ?? '', /ulimit -H -u/);
-    assert.equal(command[4], '20');
-    assert.deepEqual(command.slice(5), ['bash', '-c', 'printf ok']);
+    assert.match(command[2] ?? '', /ulimit -S "\$f" "\$v"/);
+    assert.match(command[2] ?? '', /ulimit -H "\$f" "\$v"/);
+    assert.deepEqual(command.slice(3), ['--', '-u', '20', '--', 'bash', '-c', 'printf ok']);
   } finally {
     await ws.cleanup();
   }

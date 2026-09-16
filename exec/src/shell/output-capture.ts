@@ -24,6 +24,9 @@ const DEFAULT_MAX_CHARS = 50_000;
 /** 与 `execution_manager.py` 的 50K 字符上限保持一致的默认值。 */
 export const DEFAULT_OUTPUT_CAP_CHARS = DEFAULT_MAX_CHARS;
 
+/** 上限的计量单位：`chars` 为 UTF-16 code unit，`bytes` 为 UTF-8 字节。 */
+export type BoundedCaptureUnit = 'chars' | 'bytes';
+
 export interface BoundedCaptureStats {
   readonly maxChars: number;
   readonly retainedChars: number;
@@ -36,14 +39,43 @@ export interface BoundedCaptureStats {
  */
 export class BoundedTextCapture {
   readonly maxChars: number;
+  /** 上限的计量单位。`bytes` 用于调用方按 `stdoutMaxBytes` 指定预算的前台
+   * 执行——dsh-shell 的这个字段是**字节**，用 UTF-16 长度冒充它会在
+   * 非 ASCII 输出上少留一半左右的内容。 */
+  readonly unit: BoundedCaptureUnit;
   private readonly parts: string[] = [];
   private readonly decoder = new TextDecoder('utf-8', { fatal: false });
   private retained = 0;
   private totalSeen = 0;
   private truncatedFlag = false;
 
-  constructor(maxChars: number) {
-    this.maxChars = Math.max(0, Math.trunc(maxChars));
+  constructor(limit: number, unit: BoundedCaptureUnit = 'chars') {
+    this.maxChars = Math.max(0, Math.trunc(limit));
+    this.unit = unit;
+  }
+
+  /** 这段文本在当前计量单位下的长度。 */
+  private measure(text: string): number {
+    return this.unit === 'bytes' ? Buffer.byteLength(text, 'utf8') : text.length;
+  }
+
+  /**
+   * 返回 `text` 中长度不超过 `budget` 的最长**字符边界**前缀。
+   *
+   * 字节模式下不能直接按字节切——切在多字节序列中间会产出半个字符。
+   * 用 `for...of` 按 code point 走，正好也让代理对（surrogate pair）保持完整。
+   */
+  private prefixWithin(text: string, budget: number): string {
+    if (this.unit !== 'bytes') return text.slice(0, budget);
+    let used = 0;
+    let end = 0;
+    for (const ch of text) {
+      const cost = Buffer.byteLength(ch, 'utf8');
+      if (used + cost > budget) break;
+      used += cost;
+      end += ch.length;
+    }
+    return text.slice(0, end);
   }
 
   /** 喂入原始字节（子进程管道读到的 chunk），返回本次新增的、真正被保留
@@ -61,21 +93,23 @@ export class BoundedTextCapture {
 
   private feedText(text: string): string {
     if (!text) return '';
-    this.totalSeen += text.length;
+    const size = this.measure(text);
+    this.totalSeen += size;
     if (this.retained >= this.maxChars) {
       this.truncatedFlag = true;
       return '';
     }
     const remaining = this.maxChars - this.retained;
-    if (text.length <= remaining) {
+    if (size <= remaining) {
       this.parts.push(text);
-      this.retained += text.length;
+      this.retained += size;
       return text;
     }
-    const piece = text.slice(0, remaining);
-    this.parts.push(piece);
-    this.retained += piece.length;
+    const piece = this.prefixWithin(text, remaining);
     this.truncatedFlag = true;
+    if (piece === '') return '';
+    this.parts.push(piece);
+    this.retained += this.measure(piece);
     return piece;
   }
 

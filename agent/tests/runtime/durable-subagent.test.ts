@@ -99,3 +99,91 @@ test('trusted same-process 差异：请求被序列化为平面 jobSpec，不含
   assert.equal(run.localAgent, undefined);
   await run.dispose();
 });
+
+// ── R5 回归：轮询的监听器基线与退避（2026-09-16 审查） ───────────────
+//
+// 审查时的现象：每一轮等待都新增一个 `{ once: true }` 的 abort 监听器，
+// 而 `once` 只在 abort 真的发生时才摘——正常轮询完成、dispose 都不清理。
+// 探针跑五轮后仍留着 5 个监听器；等一分钟约积累 1200 个。同时 50 ms 的
+// 定频轮询让每个等待中的父任务恒定产生约 20 次/秒的数据库事务。
+
+function pollingProvider(resolveAfter: number, opts: { onQuery?: () => void } = {}) {
+  let reads = 0;
+  return createDurableSubagentProvider({
+    queue: { add: async () => undefined },
+    store: {
+      putResult: async () => undefined,
+      getResult: async () => {
+        reads += 1;
+        opts.onQuery?.();
+        return reads >= resolveAfter ? ({ output: [], stopReason: 'completed' } as never) : null;
+      },
+    },
+    tenantOf: () => ({ orgId: 'o', userId: 'u', parentSessionId: 's' }),
+  });
+}
+
+test('R5: 轮询结束后 abort 监听器回到基线', async () => {
+  const { getEventListeners } = await import('node:events');
+  const controller = new AbortController();
+  const provider = pollingProvider(4);
+  const before = getEventListeners(controller.signal, 'abort').length;
+  const run = await provider.start({
+    parent: { id: 'p' } as never,
+    prompt: [{ type: 'text', text: 'probe' } as never],
+    signal: controller.signal,
+  } as never);
+  const result = await run.result;
+  await run.dispose();
+  assert.equal(result.stopReason, 'completed');
+  assert.equal(
+    getEventListeners(controller.signal, 'abort').length,
+    before,
+    'every poll must remove the abort listener it registered',
+  );
+});
+
+test('R5: 取消立刻唤醒，不等下一个轮询周期，并且不留监听器', async () => {
+  const { getEventListeners } = await import('node:events');
+  const controller = new AbortController();
+  // 永远不返回结果：唯一的出口是取消。
+  const provider = pollingProvider(Number.MAX_SAFE_INTEGER, {
+    onQuery: () => {
+      // 第一次查询之后就取消——此时 provider 正准备进入 200 ms 的等待。
+      queueMicrotask(() => controller.abort());
+    },
+  });
+  const started = Date.now();
+  const run = await provider.start({
+    parent: { id: 'p' } as never,
+    prompt: [{ type: 'text', text: 'probe' } as never],
+    signal: controller.signal,
+  } as never);
+  const result = await run.result;
+  await run.dispose();
+  assert.equal(result.stopReason, 'aborted');
+  assert.ok(Date.now() - started < 1_000, 'cancellation must not wait out the backoff');
+  assert.equal(getEventListeners(controller.signal, 'abort').length, 0);
+});
+
+test('R5: 轮询有界退避——固定等待时长内的查询次数远低于定频', async () => {
+  const controller = new AbortController();
+  let queries = 0;
+  const provider = pollingProvider(Number.MAX_SAFE_INTEGER, {
+    onQuery: () => {
+      queries += 1;
+    },
+  });
+  const run = await provider.start({
+    parent: { id: 'p' } as never,
+    prompt: [{ type: 'text', text: 'probe' } as never],
+    signal: controller.signal,
+  } as never);
+  await new Promise((r) => setTimeout(r, 1_000));
+  controller.abort();
+  await run.result;
+  await run.dispose();
+  // 改前：50 ms 定频 → 1 秒约 20 次。改后：200/400/800/1600… → ≤4 次。
+  assert.ok(queries <= 6, `expected bounded backoff, got ${queries} store queries in 1s`);
+  assert.ok(queries >= 2, `provider must actually poll, got ${queries}`);
+});
