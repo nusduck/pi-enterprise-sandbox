@@ -78,10 +78,13 @@ class TestComposeRedisTopology:
         text = COMPOSE.read_text()
         api = _service_block(text, "api-server")
         sandbox = _service_block(text, "sandbox")
-        # BFF never holds Redis coordination authority.
-        assert re.search(r"^\s+AGENT_REDIS_URL:", api, re.M) is None
-        assert re.search(r"^\s+REDIS_URL:", api, re.M) is None
-        assert re.search(r"^\s+TEST_REDIS_URL:", api, re.M) is None
+        # BFF never holds Redis coordination authority. As with the sandbox
+        # block below, an explicit empty value ("") is allowed: that blanks an
+        # env_file-injected DSN so it never reaches the process environment,
+        # which is the opposite of granting authority.
+        assert re.search(r'^\s+AGENT_REDIS_URL:(?!\s*""\s*$)', api, re.M) is None
+        assert re.search(r'^\s+REDIS_URL:(?!\s*""\s*$)', api, re.M) is None
+        assert re.search(r'^\s+TEST_REDIS_URL:(?!\s*""\s*$)', api, re.M) is None
         assert re.search(r"^\s+redis:\s*$", api, re.M) is None
         # exec 从不持有 Agent Redis 权威；内部面的闸门只有 HMAC keyring。
         # 显式清空（值为 ""）是允许的：那是在挡住 env_file 注入，不是授予权威。
