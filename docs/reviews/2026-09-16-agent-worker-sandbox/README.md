@@ -1,5 +1,7 @@
 # Agent / Worker / Sandbox 实现审查
 
+修复后的新增阻塞发现见 [2026-09-16 复核](follow-up-review.md)，原验收记录不覆盖这些缺口。
+
 审查日期：2026-09-16。对象：`agent` HTTP/运行时装配、`agent-worker` 的消费与子任务等待链、`exec` sandbox 的内部 Shell、隔离与配额接线。
 
 基线：分支 `refactor/updrdb-dbpm`，HEAD `01230b876c6d8e5aee217c4c228e16af670503f0`，以当前工作区为准。开始审查时已有 15 个修改文件，涉及模型注册表、模型配置、runtime manifest/patch、Compose、测试及文档；这些文件没有被本次审查修改。本次仅新增本目录的报告和 [隔离探针](probe.mjs)。
